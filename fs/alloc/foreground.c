@@ -45,7 +45,6 @@
 #include "sb/counters.h"
 #include "sb/errors.h"
 
-#include "util/clock.h"
 
 #include <linux/math64.h>
 #include <linux/rculist.h>

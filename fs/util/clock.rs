@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! The io clocks - c->io_clock[READ] and [WRITE] - and waiting on them. A
-//! clock's time is sectors of IO done: bch2_increment_clock() - an inline in
-//! clock.h, for the IO paths in C - adds to a per-CPU batch, and every
-//! IO_CLOCK_PCPU_SECTORS a CPU's batch goes to the clock, by
+//! clock's time is sectors of IO done: increment() adds to a per-CPU batch,
+//! and every IO_CLOCK_PCPU_SECTORS a CPU's batch goes to the clock, by
 //! __bch2_increment_clock(); an IO that big goes to it at once. So it's
-//! approximate: up to that many sectors a CPU behind.
+//! approximate: up to that many sectors a CPU behind. Clocks are only moved
+//! from task context, IO submission, so the batch's add is a load and a store
+//! with preemption off.
 //!
 //! A waiter - wait_until() - sleeps until the clock reaches its time, or its
 //! own condition says otherwise. While it waits it has a Timer on the clock:
@@ -28,14 +29,17 @@
 //! an increment, and the task state and the wake order its recheck after one.
 
 use crate::c;
+use crate::fs::Fs;
 use crate::locking::Lock;
 use crate::{new_lock, prt};
 use crate::types::{rust_only, RustOnly};
 use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
 use crate::util::kernel::HZ;
-use crate::util::percpu::PerCpu;
+use crate::util::ffi::Opaque;
+use crate::util::percpu::{CpuGuard, PerCpu};
 use crate::util::sleep::{sleep_until, task_waker, Sleep, SleepEnd, SleepError};
 use crate::util::{Printbuf, ToText};
+use core::ffi::c_int;
 use core::panic::Location;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicI64, Ordering::Relaxed};
@@ -161,8 +165,35 @@ impl io_clock {
     }
 }
 
+impl io_clock {
+    /// @sectors of IO done, from task context: into this CPU's batch, or the
+    /// clock at once - past a batch, which is a u16, a bucket would wrap it.
+    pub fn increment(&self, sectors: u64) {
+        let batch = u64::from(IO_CLOCK_PCPU_SECTORS);
+        if sectors >= batch {
+            return __bch2_increment_clock(self, sectors);
+        }
+
+        let v = {
+            let cpu = CpuGuard::new();
+            let b = self.pcpu_buf.this_cpu(&cpu);
+            let v = u64::from(b.get()) + sectors;
+            b.set(if v >= batch { 0 } else { v as u16 });
+            v
+        };
+        if v >= batch {
+            __bch2_increment_clock(self, v);
+        }
+    }
+}
+
+#[c_export]
+pub fn bch2_increment_clock(c: &Opaque<c::bch_fs>, sectors: u64, rw: c_int) {
+    Fs::from_c(c).io_clock[rw as usize].increment(sectors)
+}
+
 /// The clock moving on @sectors - a CPU's batch, or one IO bigger than a
-/// batch, from bch2_increment_clock(): wakes the waiters it's passed.
+/// batch, from increment(): wakes the waiters it's passed.
 #[c_export]
 pub fn __bch2_increment_clock(clock: &c::io_clock, sectors: u64) {
     let now = (clock.now.fetch_add(sectors as i64, Relaxed) as u64).wrapping_add(sectors);

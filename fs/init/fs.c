@@ -74,7 +74,6 @@
 #include "vfs/buffered.h"
 #include "vfs/direct.h"
 
-#include "util/clock.h"
 #include "util/enumerated_ref.h"
 #include "util/futex_gen.h"
 #ifdef __KERNEL__

@@ -51,7 +51,6 @@
 
 #include "snapshots/subvolume.h"
 
-#include "util/clock.h"
 #include "util/enumerated_ref.h"
 
 #include <linux/moduleparam.h>

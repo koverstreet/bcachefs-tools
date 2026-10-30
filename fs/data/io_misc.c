@@ -19,7 +19,6 @@
 
 #include "init/error.h"
 
-#include "util/clock.h"
 
 /* Overwrites whatever was present with zeroes: */
 int bch2_extent_fallocate(struct btree_trans *trans,

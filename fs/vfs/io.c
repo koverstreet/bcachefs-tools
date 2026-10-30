@@ -28,7 +28,6 @@
 
 #include "init/error.h"
 
-#include "util/clock.h"
 #include "util/enumerated_ref.h"
 
 #include <linux/aio.h>
