@@ -54,6 +54,8 @@ c_extern! {
                                           p: *const c::fsck_damaged_path);
     pub fn bch2_inum_offset_err_msg_trans_norestart(trans: *mut c::btree_trans, out: *mut c::printbuf,
                                                     subvol: u32, pos: c::bpos) -> c_int;
+    pub fn bch2_inum_offset_err_msg_trans(trans: *mut c::btree_trans, out: *mut c::printbuf,
+                                          subvol: u32, pos: c::bpos);
     #[c_printf(2, 3)]
     pub fn bch2_fs_inconsistent(c: *mut c::bch_fs, fmt: *const c_char, ...) -> bool;
     #[c_printf(2, 3)]

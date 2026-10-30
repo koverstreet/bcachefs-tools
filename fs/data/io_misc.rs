@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! fpunch, truncate, finsert/fcollapse: data/io_misc.c, but for fallocate,
-//! which is C still.
+//! fallocate, fpunch, truncate, finsert/fcollapse: data/io_misc.c.
+//!
+//! fallocate overwrites a range with zeroes a piece at a time: a reservation,
+//! the space reserved - or on a nocow inode, an unwritten extent, the space
+//! allocated now - as much as one reservation and one allocation give.
 //!
 //! fpunch deletes a range of an inode's extents in a loop of its own: a
 //! transaction restart from fpunch_at() means it had to drop locks along the
@@ -26,10 +29,14 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
 use crate::util::ffi::Opaque;
+use crate::util::closure::StackClosure;
+use crate::util::kernel::WRITE;
+use crate::util::log::should_print_err;
 use crate::util::{max_of, Printbuf};
-use crate::{bch_err_fn, inode, logged_ops};
+use crate::{bch_err_fn, bch_err_ratelimited, inode, logged_ops};
 use core::ffi::c_int;
 use cstruct_macros::c_export;
+use pin_init::stack_pin_init;
 
 /// MAX_LFS_FILESIZE: as far as the page cache indexes - a 32 bit kernel's
 /// ULONG_MAX pages, else LLONG_MAX.
@@ -37,6 +44,103 @@ use cstruct_macros::c_export;
 const MAX_LFS_FILESIZE: u64 = (usize::MAX as u64) << kernel::page::PAGE_SHIFT;
 #[cfg(not(all(kernel, target_pointer_width = "32")))]
 const MAX_LFS_FILESIZE: u64 = i64::MAX as u64;
+
+// ── fallocate ────────────────────────────────────────────────────────────
+
+/// From @iter's position, zeroes over up to @sectors - of one key, the slot
+/// there cut to @sectors - as a reservation, or unwritten extents of space
+/// allocated now; @i_sectors_delta has what it added, @iter's past it after.
+/// Space short of a block per replica is ENOSPC.
+pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter: &mut BtreeIter<'t>,
+                            sectors: u64, opts: &c::bch_inode_opts, i_sectors_delta: &mut i64,
+                            write_point: c::write_point_specifier) -> Result<(), BchError> {
+    let fs = t.fs();
+    let unwritten = opts.nocow != 0 &&
+        fs.version() >= c::bcachefs_metadata_version::bcachefs_metadata_version_unwritten_extents;
+
+    // the slot, trimmed whatever @iter's flags
+    let (mut sectors, nr_overwritable) = {
+        let mut slot = iter.copy();
+        slot.set_flags(BtreeIterFlags::TRIM);
+        let end = pos(iter.pos().inode, iter.pos().offset + sectors);
+        let k = slot.peek_slot_max(t, end)?.expect("a slot");
+        (u64::from(k.k.size), k.durability_safe(fs).nr_overwritable)
+    };
+
+    // Reserved before the allocator runs. PARTIAL takes whatever's left, which
+    // on a full filesystem may be less than a block per replica: the key is
+    // cut to what's reserved, rounded down to a block.
+    let new_replicas = u32::from(opts.data_replicas).saturating_sub(nr_overwritable.into());
+    let res = DiskReservation::new(fs);
+    let _ = res.add(sectors, new_replicas, c::bch_reservation_flags::BCH_DISK_RESERVATION_PARTIAL);
+    if res.sectors() == 0 && new_replicas != 0 {
+        return Err(fs.err(bch_errcode::BCH_ERR_ENOSPC_disk_reservation));
+    }
+    // write_degraded may have reserved fewer copies than asked for
+    let shortfall = new_replicas - res.nr_replicas.get();
+    let nr_replicas = u32::from(opts.data_replicas) - shortfall;
+    if new_replicas != 0 {
+        sectors = (res.sectors() / u64::from(res.nr_replicas.get())) >> fs.block_bits() << fs.block_bits();
+        if sectors == 0 {
+            return Err(fs.err(bch_errcode::BCH_ERR_ENOSPC_disk_reservation));
+        }
+    }
+
+    stack_pin_init!(let cl = StackClosure::new());
+    let mut obs = c::open_buckets::default();
+    let mut sectors_allocated = 0;
+
+    let ret = (|| {
+        if !unwritten {
+            let mut r = t.bkey_alloc_init::<c::Reservation>(1, iter.pos())?;
+            r.k_mut().resize(sectors as u32);
+            r.v_mut().nr_replicas = nr_replicas as u8;
+            return t.extent_update(inum, iter, &mut r, &res, 0, Some(&mut *i_sectors_delta), true);
+        }
+
+        let mut e = t.bkey_alloc(c::BKEY_EXTENT_U64s_MAX as u32)?;
+        let mut devs_have = c::bch_devs_list::default();
+        let mut req = t.alloc_request(opts.foreground_target.into(), false, &mut devs_have,
+                                      nr_replicas, nr_replicas, c::bch_watermark::BCH_WATERMARK_normal,
+                                      c::bch_write_flags::empty(), cl.as_ptr())?;
+        let wp = match t.alloc_sectors(&mut req, write_point) {
+            Ok(wp) => wp,
+            Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {
+                t.wait_on_allocator(&mut req, e, &cl)?;
+                return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested));
+            }
+            Err(e) => return Err(e),
+        };
+        // SAFETY: room for the most pointers
+        let got = unsafe { wp.unwritten_extent(e.as_ptr(), iter.pos(), sectors as u32, &mut obs) };
+        sectors_allocated = got.into();
+        t.extent_update(inum, iter, &mut e, &res, 0, Some(&mut *i_sectors_delta), true)
+    })();
+
+    match &ret {
+        Ok(()) if sectors_allocated != 0 => fs.io_clock[WRITE].increment(sectors_allocated),
+        Err(e) if should_print_err(e) => {
+            let mut buf = Printbuf::new();
+            unsafe { c::bch2_inum_offset_err_msg_trans(t.raw(), buf.as_raw(), inum.subvol as u32, iter.pos()) };
+            write!(buf, "fallocate error: {e}");
+            bch_err_ratelimited!(fs, "{}", buf.as_str());
+        }
+        _ => {}
+    }
+    drop(obs.drain(fs));
+    ret
+}
+
+/// # Safety
+/// @trans is in an attempt, @iter in it.
+#[c_export]
+pub unsafe fn bch2_extent_fallocate<'t>(trans: &'t BtreeTrans<'t>, inum: c::subvol_inum, iter: &mut BtreeIter<'t>,
+                                        sectors: u64, opts: c::bch_inode_opts, i_sectors_delta: &mut i64,
+                                        write_point: c::write_point_specifier) -> c_int {
+    // SAFETY: the caller's
+    let t = unsafe { trans.attempt_in_progress() };
+    ret_to_c(extent_fallocate(&t, inum, iter, sectors, &opts, i_sectors_delta, write_point))
+}
 
 // ── fpunch ───────────────────────────────────────────────────────────────
 

@@ -88,7 +88,6 @@ bcachefs-y		:=			\
 	data/ec/trigger.o			\
 	data/extents.o				\
 	data/extent_update.o			\
-	data/io_misc.o				\
 	data/move.o				\
 	data/read.o				\
 	data/reconcile/trigger.o		\
