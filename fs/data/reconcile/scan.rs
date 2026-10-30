@@ -17,6 +17,7 @@
 //! covers anything narrower: a downgrade loses no scan.
 
 use crate::alloc::backpointers::{backpointer_get_key, BpScanIter};
+use crate::alloc::buckets::bucket_to_u64;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bpos_ge, pos, BkeyI, BkeySC, POS_MIN};
@@ -383,8 +384,8 @@ fn scan_indirect(trans: &BtreeTrans<'_>, scan: &c::reconcile_scan, res: &DiskRes
     })
 }
 
-/// Device @dev's data, through its backpointers: what a change to its state
-/// or durability changes.
+/// Device @dev's data, through its backpointers, and its stripes: what a
+/// change to its state or durability changes.
 fn scan_device(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, dev: u32, last_flushed: &mut WbMaybeFlush)
     -> Result<(), BchError>
 {
@@ -397,7 +398,37 @@ fn scan_device(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, dev: u32, last_f
         stop(fs)?;
         scan_bp(t, scan, bp, last_flushed)?;
         t.commit(Some(&DiskReservation::new(fs)), NO_ENOSPC)
-    })
+    })?;
+
+    scan_device_stripes(ctxt, scan, dev)
+}
+
+/// Device @dev's stripes, by its buckets' bucket_to_stripe entries, as
+/// dev_remove_stripes() finds them. Their backpointers aren't enough: a
+/// stripe reuse carries a block forward in place, and deleting the old
+/// stripe used to delete the backpointer the two share, so a stripe can be
+/// missing one. Flagging the stripe rewrites its block backpointers.
+fn scan_device_stripes(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, dev: u32) -> Result<(), BchError> {
+    let trans = ctxt.trans();
+    let fs = trans.fs();
+    let dev = u64::from(dev);
+    let (start, end) = (pos(bucket_to_u64(pos(dev, 0)), 0), pos(bucket_to_u64(pos(dev, u64::MAX)), u64::MAX));
+
+    BtreeIter::new(trans, c::btree_id::bucket_to_stripe, start, BtreeIterFlags::PREFETCH)
+        .for_each_max_commit(trans, end, BtreeIterFlags::empty(), None, NO_ENOSPC, |t, iter, r| {
+            ctxt.stats().set_pos(c::bbpos { btree: c::btree_id::bucket_to_stripe, pos: iter.pos() });
+            stop(fs)?;
+
+            let mut iter = BtreeIter::new(t, c::btree_id::stripes, pos(0, r.k.p.offset), BtreeIterFlags::INTENT);
+            let (iter, k) = iter.peek_slot_shared(t)?;
+            // deleted since its entry was read
+            if k.arm::<c::Stripe>().is_none() {
+                return Ok(());
+            }
+
+            let opts = get_io_opts(t, None, k)?;
+            update_opts(t, None, &opts, iter, 0, k, scan)
+        })
 }
 
 /// What backpointer @bp points to - not an erasure coded extent: it's
