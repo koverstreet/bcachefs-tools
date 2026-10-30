@@ -35,9 +35,10 @@
 //! - CpuCopy<'a, T> is one CPU's, from cpus(), read volatile: to sum part of
 //!   a T - percpu_field!() of each - in one sweep over the CPUs, where a sum
 //!   of each part would be a sweep apiece and sum() reads all of T.
-//! - ThisCpu<'g, T> is this CPU's copy, while a CpuGuard - preemption off -
-//!   keeps it this CPU: a place, as util/projections.rs's are, or add() of a
-//!   delta to a struct of counters; a slot's, its Volatile.
+//! - ThisCpu<'g, T> is this CPU's copy, while a Pinned guard keeps it this
+//!   CPU: a place, as util/projections.rs's are, or add() of a delta to a
+//!   struct of counters; a slot's, its Volatile. Pinned is a CpuGuard -
+//!   preemption off.
 //!
 //! What's atomic is C's contract and no more: a this_cpu operation is whole
 //! against this CPU - its interrupts and preemption - not against another CPU
@@ -45,6 +46,8 @@
 //! lean on it. ThisCpu's read-modify-write is a load and a store, as C's
 //! under preempt_disable() are: an interrupt adding to the same copy between
 //! them is lost, so a counter interrupts add to goes through PerCpuRef::add().
+//! And it's whole against this CPU's other tasks only as far as the guard
+//! keeps them out: a CpuGuard keeps them all out.
 //! Another CPU's copy is only read volatile, never through a reference: it
 //! may be being written.
 //!
@@ -101,7 +104,7 @@ c_extern! {
 
 #[cfg(all(kernel, target_arch = "x86_64"))]
 mod arch {
-    use super::{bch2_this_cpu_ptr, CpuGuard};
+    use super::{bch2_this_cpu_ptr, Pinned};
 
     include!(concat!(env!("OUT_DIR"), "/percpu_asm.rs"));
 
@@ -124,7 +127,7 @@ mod arch {
     }
 
     #[inline(always)]
-    pub(super) unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &CpuGuard) -> *mut T {
+    pub(super) unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &impl Pinned) -> *mut T {
         unsafe { bch2_this_cpu_ptr(pcp.cast()).cast() }
     }
 
@@ -151,7 +154,7 @@ mod arch {
 
 #[cfg(all(kernel, target_arch = "aarch64"))]
 mod arch {
-    use super::CpuGuard;
+    use super::{CpuGuard, Pinned};
     use core::sync::atomic::{AtomicU64, Ordering};
 
     include!(concat!(env!("OUT_DIR"), "/percpu_asm.rs"));
@@ -182,7 +185,7 @@ mod arch {
     }
 
     #[inline(always)]
-    pub(super) unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &CpuGuard) -> *mut T {
+    pub(super) unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &impl Pinned) -> *mut T {
         my_cpu(pcp)
     }
 
@@ -205,7 +208,7 @@ mod arch {
 #[cfg(not(all(kernel, any(target_arch = "x86_64", target_arch = "aarch64"))))]
 mod arch {
     use super::{bch2_this_cpu_add_u64, bch2_this_cpu_cmpxchg_u64, bch2_this_cpu_ptr,
-                bch2_this_cpu_xchg_u64, CpuGuard};
+                bch2_this_cpu_xchg_u64, Pinned};
 
     pub(super) unsafe fn this_cpu_read(pcp: *mut u64) -> u64 {
         unsafe { core::ptr::read_volatile(bch2_this_cpu_ptr(pcp.cast()).cast::<u64>()) }
@@ -215,7 +218,7 @@ mod arch {
         unsafe { bch2_this_cpu_add_u64(pcp, val) }
     }
 
-    pub(super) unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &CpuGuard) -> *mut T {
+    pub(super) unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &impl Pinned) -> *mut T {
         unsafe { bch2_this_cpu_ptr(pcp.cast()).cast() }
     }
 
@@ -230,8 +233,19 @@ mod arch {
 
 use arch::{this_cpu_add, this_cpu_cmpxchg, this_cpu_ptr, this_cpu_read, this_cpu_xchg};
 
+/// The task held to this CPU while it lives: for this CPU's copy, which
+/// is the copy of whatever CPU the task is on.
+///
+/// # Safety
+/// While a value lives the task doesn't migrate. Not Send or Sync: it's
+/// this CPU's.
+pub unsafe trait Pinned {}
+
 /// Preemption off while it lives. Not Send or Sync: it's this CPU's.
 pub struct CpuGuard(PhantomData<*const ()>);
+
+// SAFETY: preemption's off
+unsafe impl Pinned for CpuGuard {}
 
 impl CpuGuard {
     #[allow(clippy::new_without_default)]
@@ -326,7 +340,7 @@ impl<T> PerCpu<T> {
         PerCpuRef(self.0, PhantomData)
     }
 
-    pub fn this_cpu<'g>(&'g self, g: &'g CpuGuard) -> ThisCpu<'g, T> {
+    pub fn this_cpu<'g>(&'g self, g: &'g impl Pinned) -> ThisCpu<'g, T> {
         self.get().this_cpu(g)
     }
 }
@@ -378,7 +392,7 @@ impl<'a, T> PerCpuRef<'a, T> {
         possible_cpus().map(move |cpu| CpuCopy(unsafe { bch2_per_cpu_ptr(self.0.cast(), cpu) }.cast(), PhantomData))
     }
 
-    pub fn this_cpu<'g>(self, g: &'g CpuGuard) -> ThisCpu<'g, T>
+    pub fn this_cpu<'g>(self, g: &'g impl Pinned) -> ThisCpu<'g, T>
         where 'a: 'g
     {
         ThisCpu(unsafe { this_cpu_ptr(self.0, g) }, PhantomData)
@@ -505,7 +519,8 @@ impl<T: Copy> CpuCopy<'_, T> {
 }
 
 /// This CPU's copy, as a place: see the top of the file.
-pub struct ThisCpu<'g, T>(*mut T, PhantomData<&'g CpuGuard>);
+/// Not Send or Sync, as its guard isn't.
+pub struct ThisCpu<'g, T>(*mut T, PhantomData<(&'g (), *const ())>);
 
 impl<T> Clone for ThisCpu<'_, T> {
     fn clone(&self) -> Self {
