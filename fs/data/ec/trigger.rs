@@ -30,6 +30,7 @@ use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{cold_path, unlikely};
 use crate::util::log::LogMsg;
+use crate::util::rcu::read_lock;
 use crate::util::vstructs::plain_bytes;
 use crate::{accounting, bch_err, fs_inconsistent, fsck_err_on, prt};
 use arrayvec::ArrayVec;
@@ -322,7 +323,52 @@ fn mark_stripe_bp(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, insert: bool
     }
 
     let mut bp = extent_ptr_to_bp(fs, c::btree_id::stripes, 0, s.untyped(), &d);
-    bucket_backpointer_mod(t, s.untyped(), &mut bp, insert)
+    bucket_backpointer_mod(t, s.untyped(), &mut bp, insert)?;
+
+    if !insert {
+        stripe_bp_restore_shared(t, s, &d.p.ptr)?;
+    }
+    Ok(())
+}
+
+/// The backpointer just deleted for block @ptr of @s, put back for another
+/// stripe in its bucket - by bucket_to_stripe - that has the same block.
+///
+/// A stripe's backpointer is at its block's position alone - device, offset
+/// and the stripe's size - so two stripes with one block share it: a reuse
+/// or a repair carries a block forward in place, and the new stripe is
+/// committed before the old one is deleted. Deleting the old one's deletes
+/// the new one's. This update comes after the deletion, so it wins.
+fn stripe_bp_restore_shared(t: &TransAttempt<'_, '_>, s: StripeK<'_>, ptr: &c::bch_extent_ptr)
+    -> Result<(), BchError>
+{
+    let fs = t.fs();
+    let bucket = {
+        let rcu = read_lock();
+        let Some(ca) = fs.dev_rcu(ptr.dev().into(), &rcu) else { return Ok(()) };
+        ca.ptr_bucket_pos(ptr)
+    };
+    let b = bucket_to_u64(bucket);
+    let idx = s.k.p.offset;
+
+    BtreeIter::new(t, c::btree_id::bucket_to_stripe, pos(b, 0), BtreeIterFlags::empty())
+        .for_each_max_norestart(t, pos(b, u64::MAX), |_, r| {
+            if r.k.p.offset == idx {
+                return Ok(ControlFlow::Continue(()));
+            }
+
+            // with this transaction's updates: a stripe it deletes is a hole
+            let mut iter = BtreeIter::new(t, c::btree_id::stripes, pos(0, r.k.p.offset), BtreeIterFlags::empty());
+            let k = iter.peek_slot(t)?.expect("a slot always has a key");
+            let Some(other) = stripe_of(k) else { return Ok(ControlFlow::Continue(())) };
+            let Some(j) = other.v().block_ptrs().iter().position(|p| plain_bytes(p) == plain_bytes(ptr)) else {
+                return Ok(ControlFlow::Continue(()));
+            };
+
+            mark_stripe_bp(t, other, j as u32, true)?;
+            Ok(ControlFlow::Break(()))
+        })?;
+    Ok(())
 }
 
 /// Each block whose pointer changed: its bucket - the new one's in, the old
