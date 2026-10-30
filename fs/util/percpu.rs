@@ -21,7 +21,9 @@
 //!   xchg or cmpxchg, and at most reset by another. A slot is a Volatile:
 //!   every access a relaxed atomic, so another CPU's reset is a store like
 //!   any other - each_cpu() reaches every CPU's - and one racing this CPU's
-//!   read-modify-write may be lost, which is what a slot is for.
+//!   read-modify-write may be lost, which is what a slot is for. A struct of
+//!   slots is CpuShared: every part another CPU writes a Volatile, or
+//!   Opaque - a local_lock_t, which its CPU's lockers change.
 //!
 //! The types:
 //!
@@ -471,12 +473,26 @@ impl PerCpuRef<'_, u64> {
     }
 }
 
-impl<'a, T: AtomicWord, const N: usize> PerCpuRef<'a, [Volatile<T>; N]> {
-    /// Each possible CPU's slots: Volatiles, anyone's to load and store.
-    pub fn each_cpu(self) -> impl Iterator<Item = &'a [Volatile<T>; N]> {
-        // SAFETY: a live CPU's copy, for 'a; a Volatile's every access is
-        // atomic, so a shared reference races nothing
-        possible_cpus().map(move |cpu| unsafe { &*bch2_per_cpu_ptr(self.0.cast(), cpu).cast::<[Volatile<T>; N]>() })
+/// A per-CPU T any CPU may hold a shared reference to: every part another
+/// CPU writes atomic - a Volatile - or behind an UnsafeCell - Opaque.
+///
+/// # Safety
+/// A &T races nothing another CPU does to its copy.
+pub unsafe trait CpuShared {}
+
+// SAFETY: every access atomic
+unsafe impl<T: AtomicWord> CpuShared for Volatile<T> {}
+// SAFETY: each element's
+unsafe impl<T: CpuShared, const N: usize> CpuShared for [T; N] {}
+// SAFETY: an UnsafeCell's
+unsafe impl<T> CpuShared for crate::util::ffi::Opaque<T> {}
+
+impl<'a, T: CpuShared> PerCpuRef<'a, T> {
+    /// Each possible CPU's copy: slots, anyone's to load and store.
+    pub fn each_cpu(self) -> impl Iterator<Item = &'a T> {
+        // SAFETY: a live CPU's copy, for 'a; CpuShared, so a shared
+        // reference races nothing
+        possible_cpus().map(move |cpu| unsafe { &*bch2_per_cpu_ptr(self.0.cast(), cpu).cast::<T>() })
     }
 }
 
@@ -540,12 +556,12 @@ impl<'g, T> ThisCpu<'g, T> {
     }
 }
 
-impl<'g, T: AtomicWord> core::ops::Deref for ThisCpu<'g, Volatile<T>> {
-    type Target = Volatile<T>;
+impl<'g, T: CpuShared> core::ops::Deref for ThisCpu<'g, T> {
+    type Target = T;
 
-    fn deref(&self) -> &Volatile<T> {
-        // SAFETY: this CPU's copy, live while the guard is; a Volatile's
-        // every access is atomic
+    fn deref(&self) -> &T {
+        // SAFETY: this CPU's copy, live while the guard is; CpuShared, so a
+        // shared reference races nothing
         unsafe { &*self.0 }
     }
 }
