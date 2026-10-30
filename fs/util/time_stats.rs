@@ -34,7 +34,7 @@ use crate::{percpu_field, warn_on_once};
 use core::pin::Pin;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use cstruct_macros::c_export;
-use pin_init::{pinned_drop, PinnedDrop};
+use pin_init::pinned_drop;
 
 // ── Time units ───────────────────────────────────────────────────────────
 
