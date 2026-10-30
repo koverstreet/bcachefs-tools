@@ -19,18 +19,22 @@
 //! frees one up and tries again.
 //!
 //! The write point's lock is held for the write: a LockedWritePoint, whose
-//! append_ptrs() gives the write its pointers and whose drop - as
-//! alloc_sectors_done() - keeps what's left of the buckets for the next
-//! write. C's callers have it locked by bch2_alloc_sectors_req() and use
-//! foreground.h's own append_ptrs and done, until they convert.
+//! append_ptrs() gives the write its pointers - or unwritten_extent(), for
+//! fallocate and data updates, an extent of space not written yet - and
+//! whose drop - as alloc_sectors_done() - keeps what's left of the buckets
+//! for the next write. C's callers have it locked by bch2_alloc_sectors_req()
+//! and use foreground.h's own append_ptrs and done, until they convert.
 
 use crate::alloc::disk_groups::Target;
 use crate::alloc::foreground::OpenBucket;
 use crate::alloc::write_point::{WritePointGuard, WritePointSpec};
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{BkeyI, BkeyS};
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::extents::bkey_append_ptr;
+use crate::data::ptrs::PtrsMut;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::opts::data_type_str;
@@ -385,6 +389,33 @@ impl LockedWritePoint<'_> {
             assert!(sectors <= free, "{sectors} sectors from open bucket {} with {free} free", ob.idx().get());
             ob.sectors_free.set(free - sectors);
         }
+    }
+
+    /// Builds at @k an unwritten extent from @pos: up to @sectors, as many as
+    /// are free, its buckets pinned in @ptrs for the index update. Returns
+    /// its size.
+    ///
+    /// # Safety
+    /// @k has room for an extent with a pointer per bucket.
+    pub unsafe fn unwritten_extent(mut self, k: *mut c::bkey_i, pos: c::bpos, sectors: u32,
+                                   ptrs: &mut c::open_buckets) -> u32 {
+        let sectors = sectors.min(self.sectors_free());
+        // SAFETY: the caller's
+        unsafe {
+            (*k).k = c::bkey { type_: c::bch_bkey_type::KEY_TYPE_extent.0 as u8, p: pos, ..c::bkey::new() };
+            (*k).k.resize(sectors);
+        }
+
+        self.open_buckets_get(ptrs);
+        // SAFETY: an extent with no pointers yet, and the caller's room
+        unsafe { self.append_ptrs(k, sectors) };
+
+        // SAFETY: the whole key, ours
+        let k = unsafe { &mut *BkeyI::from_raw_mut(k) };
+        if let Some(mut e) = BkeyS::from(k).arm::<PtrsMut>() {
+            e.ptrs_mut(self.fs).for_each(|p| p.set_unwritten(1));
+        }
+        sectors
     }
 }
 

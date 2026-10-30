@@ -20,7 +20,7 @@
 
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::disk_groups::Target;
-use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyV};
+use crate::btree::bkey::{BkeyS, BkeySC, BkeyV};
 use crate::btree::iter::{is_restart, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
@@ -425,12 +425,6 @@ impl c::data_update {
                 }
                 drop(iter);
 
-                let e = self.op.insert_keys.top();
-                // SAFETY: the keylist's room for the next key
-                unsafe {
-                    (*e).k = c::bkey { type_: c::bch_bkey_type::KEY_TYPE_extent.0 as u8, p: self.op.pos, ..c::bkey::new() }
-                };
-
                 let t = trans.begin();
                 let op = &mut self.op;
                 let nr = op.bits.nr_replicas().into();
@@ -438,7 +432,7 @@ impl c::data_update {
                                         c::bch_watermark::from_bits(op.bits.watermark().into()),
                                         c::bch_write_flags::from_bits_retain(op.flags.into()), cl.as_ptr())
                     .and_then(|mut req| t.alloc_sectors(&mut req, op.write_point));
-                let mut wp = match r {
+                let wp = match r {
                     Ok(wp) => wp,
                     Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {
                         trans.unlock();
@@ -453,21 +447,13 @@ impl c::data_update {
                         return Err(e);
                     }
                 };
-                let sectors = ((end.offset - op.pos.offset) as u32).min(wp.sectors_free());
-                // SAFETY: the keylist's room for the key, at top()
-                unsafe { (*e).k.resize(sectors) };
-                wp.open_buckets_get(&mut op.open_buckets);
-                // SAFETY: the op's inline keys hold an extent of any width
-                unsafe { wp.append_ptrs(e, sectors) };
-                drop(wp);
-
+                // SAFETY: the keylist's room for the next key, at top(): the
+                // op's inline keys hold an extent of any width
+                let sectors = unsafe {
+                    wp.unwritten_extent(op.insert_keys.top(), op.pos, (end.offset - op.pos.offset) as u32,
+                                        &mut op.open_buckets)
+                };
                 op.pos.offset += u64::from(sectors);
-
-                // SAFETY: the whole key at top()
-                let ek = unsafe { &mut *BkeyI::from_raw_mut(e) };
-                if let Some(mut ek) = BkeyS::from(ek).arm::<PtrsMut>() {
-                    ek.ptrs_mut(fs).for_each(|ptr| ptr.set_unwritten(1));
-                }
                 // SAFETY: as above
                 unsafe { op.insert_keys.push() };
 
