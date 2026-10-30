@@ -57,6 +57,17 @@ pub struct ReadGuard {
     _not_send: PhantomData<*mut ()>,
 }
 
+/// Freed a grace period on, past the readers that may still be in it -
+/// kvfree_rcu(), its rcu_head over the first bytes.
+///
+/// # Safety
+/// @p is kmalloc()'d or kvmalloc()'d, already dropped, and reached after
+/// only by readers under the RCU read lock - none of them reading its first
+/// bytes.
+pub unsafe fn kvfree_rcu<T>(p: *mut T) {
+    unsafe { c::rust_kvfree_rcu(p.cast()) };
+}
+
 /// rcu_read_lock(), until the guard drops.
 pub fn read_lock() -> ReadGuard {
     #[cfg(not(kernel))]
@@ -215,7 +226,7 @@ impl<T: ?Sized + RcuPointee> RcuBuf<T> {
         if !old.is_null() {
             // SAFETY: its Head starts with an rcu_head; readers still in it
             // are what the grace period waits out
-            unsafe { c::rust_kvfree_rcu(old.cast()) };
+            unsafe { kvfree_rcu(old) };
         }
     }
 
@@ -226,7 +237,7 @@ impl<T: ?Sized + RcuPointee> RcuBuf<T> {
     pub unsafe fn clear(&self) {
         let old = self.p.swap(core::ptr::null_mut(), Ordering::Release);
         if !old.is_null() {
-            unsafe { c::rust_kvfree_rcu(old.cast()) };
+            unsafe { kvfree_rcu(old) };
         }
     }
 

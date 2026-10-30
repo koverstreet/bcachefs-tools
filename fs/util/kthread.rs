@@ -1,9 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A kthread Rust owns: made stopped, woken, stopped - kthread_create(),
-//! wake_up_process(), kthread_stop() - for a long-lived thread, a daemon: the
-//! reconcile thread, copygc, journal reclaim. Jobs fanned out and joined are
-//! util::par's.
+//! KthreadRef is a kthread by a ref on its task_struct: made stopped, woken,
+//! stopped - kthread_create(), wake_up_process(), kthread_stop() - to run a
+//! closure. The closure is the thread's data pointer, by value: no bigger
+//! than one, and nothing to drop - what it uses, its creator keeps for it.
+//! So its trampoline, run_raw::<F>(), is one function, the closure inlined
+//! into it. Its drop only puts the ref, as a thread that exits by itself - a
+//! task's, util::task - may be the one dropping it.
+//!
+//! Kthread is a kthread Rust owns, stopped by its drop: for a long-lived
+//! thread, a daemon: the reconcile thread, copygc, journal reclaim. Jobs
+//! fanned out and joined are util::par's.
 //!
 //! The thread's closure is in an allocation the Kthread owns, freed once the
 //! thread's stopped - not the thread's to free: stopped before it first ran,
@@ -21,26 +28,81 @@
 
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
-use crate::util::alloc::{alloc_pinned, free_pinned, AllocError};
+use crate::util::alloc::{kbox_pin_init, AllocError, KBox};
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
 use core::ffi::{c_int, c_void};
 use core::fmt;
+use core::mem::{align_of, needs_drop, size_of, ManuallyDrop};
+use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-/// What the thread runs, until it takes it; and its kicks, which outlive it.
-struct Thread<F> {
-    kicks: AtomicU32,
-    f:     UnsafeCell<Option<F>>,
+unsafe extern "C" fn run_raw<F: FnOnce()>(data: *mut c_void) -> c_int {
+    // SAFETY: create() wrote an F here
+    let f = unsafe { (&raw const data).cast::<F>().read() };
+    f();
+    0
 }
 
-pub struct Kthread {
-    task:   NonNull<c::task_struct>,
-    thread: *mut c_void,
-    /// The Thread's, which lives as long as we do
-    kicks:  NonNull<AtomicU32>,
-    free:   unsafe fn(*mut c_void),
+/// A kthread, by a ref on its task_struct.
+pub struct KthreadRef(NonNull<c::task_struct>);
+
+// SAFETY: a ref any thread may put, on a thread any thread may wake or stop
+unsafe impl Send for KthreadRef {}
+unsafe impl Sync for KthreadRef {}
+
+impl KthreadRef {
+    /// Created stopped, to run @f once it's woken - or, in userspace, once
+    /// it's stopped, if it's stopped first: @f checks Kthread::should_stop().
+    ///
+    /// # Safety
+    /// What @f uses lives until it returns, or the thread's stopped.
+    pub unsafe fn create<F: FnOnce() + Send>(name: fmt::Arguments<'_>, f: F) -> Result<Self, BchError> {
+        // the data pointer: in-kernel, a thread stopped before it ran never
+        // calls @f, so it mustn't need dropping
+        const {
+            assert!(size_of::<F>() <= size_of::<*mut c_void>()
+                    && align_of::<F>() <= align_of::<*mut c_void>()
+                    && !needs_drop::<F>())
+        };
+        let mut data = core::ptr::null_mut::<c_void>();
+        // SAFETY: it fits
+        unsafe { (&raw mut data).cast::<F>().write(f) };
+
+        let mut name_buf = Printbuf::new();
+        write!(name_buf, "{name}");
+
+        let task = unsafe {
+            c::bch2_kthread_create(Some(run_raw::<F>), data, name_buf.as_c_str().as_ptr().cast())
+        };
+        let task = errptr_to_result(NonNull::new(task).expect("kthread_create() gives a task or an error"))?;
+        // so it can be stopped after it's exited
+        unsafe { c::get_task_struct(task.as_ptr()) };
+        Ok(Self(task))
+    }
+
+    /// Start it, or wake it from a sleep: wake_up_process().
+    pub fn wake(&self) {
+        unsafe { c::wake_up_process(self.0.as_ptr()) };
+    }
+
+    /// The task, for C that wakes it by pointer.
+    pub fn as_ptr(&self) -> *mut c::task_struct {
+        self.0.as_ptr()
+    }
+
+    /// Tell it to stop, and wait for it to: never from the thread itself. It
+    /// may have returned already, or never have run.
+    pub fn stop(self) {
+        unsafe { c::bch2_kthread_stop(self.0.as_ptr()) };
+    }
+}
+
+impl Drop for KthreadRef {
+    fn drop(&mut self) {
+        unsafe { c::put_task_struct(self.0.as_ptr()) };
+    }
 }
 
 /// The thread's side of its Kthread, handed to its closure: the kicks it's
@@ -61,11 +123,24 @@ impl KthreadSelf<'_> {
     }
 }
 
-// SAFETY: a task ref, which any thread may wake, stop and put; the closure,
-// Send, touched by its thread until it's stopped and by drop() after; the
-// kicks, an atomic
-unsafe impl Send for Kthread {}
-unsafe impl Sync for Kthread {}
+/// What the thread runs, until it takes it - an Option<F>, erased in the
+/// Kthread - and its kicks, which outlive it.
+struct Thread<T: ?Sized> {
+    kicks: AtomicU32,
+    f:     UnsafeCell<T>,
+}
+
+// SAFETY: @f is touched by the thread, once, and otherwise only by its drop,
+// after the thread's stopped
+unsafe impl<T: ?Sized + Send> Sync for Thread<T> {}
+
+pub struct Kthread {
+    task:   ManuallyDrop<KthreadRef>,
+    /// Dropped after the stop, and never moved out of: the thread holds a
+    /// reference into it. Not a Pin<KBox>: the kernel's Box coerces to the
+    /// dyn, but not in a Pin - it has no PinCoerceUnsized
+    thread: KBox<Thread<dyn Send>>,
+}
 
 impl Kthread {
     /// Thread @name, to run @f once woken - created stopped, as
@@ -73,39 +148,28 @@ impl Kthread {
     pub fn create<F: FnOnce(&KthreadSelf<'_>) + Send + 'static>(name: fmt::Arguments<'_>, f: F)
         -> Result<Self, BchError>
     {
-        let thread = alloc_pinned::<Thread<F>, AllocError>(Ok(Thread {
+        let thread = kbox_pin_init::<_, AllocError>(Ok(Thread {
             kicks: AtomicU32::new(0),
             f:     UnsafeCell::new(Some(f)),
         }))?;
-
-        let mut name_buf = Printbuf::new();
-        write!(name_buf, "{name}");
-
-        // SAFETY: @thread is run::<F>'s, until we free it after stopping it
-        let task = unsafe {
-            c::bch2_kthread_create(Some(run::<F>), thread.cast(), name_buf.as_c_str().as_ptr().cast())
-        };
-        let task = match errptr_to_result(NonNull::new(task).expect("kthread_create() gives a task or an error")) {
-            Ok(task) => task,
-            Err(e) => {
-                // SAFETY: the thread wasn't made, so nothing else has it
-                unsafe { free_pinned(thread) };
-                return Err(e);
+        // SAFETY: in a KBox the Kthread never moves it out of
+        let thread = unsafe { Pin::into_inner_unchecked(thread) };
+        let t: &Thread<Option<F>> = &thread;
+        let run = move || {
+            if !Kthread::should_stop() {
+                // SAFETY: the thread's, once
+                let f = unsafe { (*t.f.get()).take() }.expect("a kthread's closure run twice");
+                f(&KthreadSelf { kicks: &t.kicks });
             }
         };
-
-        // Ours, so it can be stopped after it's exited
-        // SAFETY: a task just made
-        unsafe { c::get_task_struct(task.as_ptr()) };
-        // SAFETY: the allocation's, which lives until drop() frees it
-        let kicks = unsafe { NonNull::from(&(*thread).kicks) };
-        Ok(Kthread { task, thread: thread.cast(), kicks, free: free_thread::<F> })
+        // SAFETY: @thread outlives it: it's dropped after the stop
+        let task = unsafe { KthreadRef::create(name, run) }?;
+        Ok(Kthread { task: ManuallyDrop::new(task), thread })
     }
 
     /// Start it, or wake it from a sleep: wake_up_process().
     pub fn wake(&self) {
-        // SAFETY: our task ref
-        unsafe { c::wake_up_process(self.task.as_ptr()) };
+        self.task.wake();
     }
 
     /// Kick it: its kicks bumped, then woken from whatever it's sleeping in.
@@ -114,8 +178,7 @@ impl Kthread {
     /// The bump comes first, so a sleep checking after it sees it, and one
     /// that checked before is woken.
     pub fn kick(&self) {
-        // SAFETY: the Thread's, which lives as long as we do
-        unsafe { self.kicks.as_ref() }.fetch_add(1, Ordering::Release);
+        self.thread.kicks.fetch_add(1, Ordering::Release);
         self.wake();
     }
 
@@ -164,42 +227,11 @@ impl Kthread {
         let f = false;
         f
     }
-
-    /// Tell it to stop, and wait for it to: kthread_stop(). It may have
-    /// returned already, or never have run.
-    pub fn stop(self) {}
 }
 
 impl Drop for Kthread {
     fn drop(&mut self) {
-        // SAFETY: our task ref, put once it's exited; then nothing runs its
-        // closure, so it's ours to free
-        unsafe {
-            c::bch2_kthread_stop(self.task.as_ptr());
-            c::put_task_struct(self.task.as_ptr());
-            (self.free)(self.thread);
-        }
+        // SAFETY: taken once, here; @thread's dropped after
+        unsafe { ManuallyDrop::take(&mut self.task) }.stop();
     }
-}
-
-/// The thread's function: @f, unless it's been told to stop before it ran.
-unsafe extern "C" fn run<F: FnOnce(&KthreadSelf<'_>) + Send + 'static>(data: *mut c_void) -> c_int {
-    if Kthread::should_stop() {
-        return 0;
-    }
-    // SAFETY: the Kthread's, which frees it only once we've exited; ours to
-    // take from, as nothing else touches it while we run
-    let thread = unsafe { &*data.cast::<Thread<F>>() };
-    let f = unsafe { (*thread.f.get()).take() };
-    if let Some(f) = f {
-        f(&KthreadSelf { kicks: &thread.kicks });
-    }
-    0
-}
-
-/// # Safety
-/// @p is a Thread<F> from Kthread::create(), its thread exited.
-unsafe fn free_thread<F>(p: *mut c_void) {
-    // SAFETY: the caller's
-    unsafe { free_pinned(p.cast::<Thread<F>>()) };
 }

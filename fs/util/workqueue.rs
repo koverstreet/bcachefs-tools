@@ -148,6 +148,23 @@ impl Queue {
 
 pub type WorkFn = unsafe extern "C" fn(*mut c::work_struct);
 
+/// A work_struct at a fixed place in Self, running Self::run(): new_work!()
+/// with run_raw::<Self>, the trampoline, which run() is inlined into.
+pub trait RawWork {
+    /// offset_of!() the work_struct
+    const WORK: usize;
+
+    /// # Safety
+    /// @this was queued, as its queuer's contract says.
+    unsafe fn run(this: NonNull<Self>);
+}
+
+#[doc(hidden)]
+pub unsafe extern "C" fn run_raw<T: RawWork>(work: *mut c::work_struct) {
+    // SAFETY: T's work_struct, at T::WORK
+    unsafe { T::run(NonNull::new_unchecked(work.byte_sub(T::WORK).cast())) }
+}
+
 /// INIT_WORK(): a C work_struct, in place, running C's @func - with a lockdep
 /// class of its own, @key, named @name: new_work!()'s.
 #[cfg(kernel)]
