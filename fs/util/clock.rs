@@ -10,20 +10,19 @@
 //!
 //! A waiter - wait_until() - sleeps until the clock reaches its time, or its
 //! own condition says otherwise. While it waits it has a Timer on the clock:
-//! its time, a Waker for its task, and where it waits from, for the debug
-//! output. The clock's timers are a vec, sorted latest first, under
-//! timer_lock: the next to expire is the last, so expiring is a pop. There
-//! are a few - copygc's and reconcile's - so an insert's shift is nothing.
-//! The vec grows on demand: a waiter that finds it full makes it room with
-//! the lock dropped, and if that fails, checks the clock once a second,
-//! trying again each time.
+//! its time, its thread, and where it waits from, for the debug output. The
+//! clock's timers are a vec, sorted latest first, under timer_lock: the next
+//! to expire is the last, so expiring is a pop. There are a few - copygc's
+//! and reconcile's - so an insert's shift is nothing. The vec grows on
+//! demand: a waiter that finds it full makes it room with the lock dropped,
+//! and if that fails, checks the clock once a second, trying again each time.
 //!
 //! A clock moving on wakes - and drops - the timers it's passed, under the
 //! lock, from IO submission. The waiter, its condition true or not, takes its
-//! timer off on the way out - if it's still there - under the same lock. A
-//! Timer's Waker is a clone of the waiter's own, so its drop is never the
-//! task's last ref; a task waits on one clock at a time, so its task names
-//! its Timer.
+//! timer off on the way out - if it's still there - under the same lock. So
+//! a Timer holds its thread with no ref, as a wait_queue_entry does: it's
+//! woken under the lock its waiter takes before it returns. A thread waits on
+//! one clock at a time, so its task_struct names its Timer.
 //!
 //! now is read and added to Relaxed: the lock orders a waiter's add against
 //! an increment, and the task state and the wake order its recheck after one.
@@ -37,13 +36,12 @@ use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
 use crate::util::kernel::HZ;
 use crate::util::ffi::Opaque;
 use crate::util::percpu::{CpuGuard, PerCpu};
-use crate::util::sleep::{sleep_until, task_waker, Sleep, SleepEnd, SleepError};
+use crate::util::sleep::{sleep_until, Sleep, SleepEnd, SleepError};
 use crate::util::{Printbuf, ToText};
 use core::ffi::c_int;
 use core::panic::Location;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicI64, Ordering::Relaxed};
-use core::task::Waker;
 use cstruct_macros::{c_const, c_export, CStruct, Init};
 use pin_init::{pin_data, pinned_drop};
 
@@ -69,12 +67,16 @@ pub struct io_clock {
     timers: rust_only!(Lock<c::spinlock_t, KVVec<Timer>>),
 }
 
-/// A waiter on a clock: wakes @waker when the clock reaches @expire.
+/// A waiter on a clock: wakes @task when the clock reaches @expire.
 pub(crate) struct Timer {
     expire: u64,
-    waker:  Waker,
+    task:   *mut c::task_struct,
     caller: &'static Location<'static>,
 }
+
+// SAFETY: @task is only woken under timer_lock, which its waiter takes to
+// take its Timer off before it returns
+unsafe impl Send for Timer {}
 
 /// time_after_eq64(now, t): wrapping, where the timers' order is plain u64,
 /// as C's heap's was
@@ -128,9 +130,9 @@ impl io_clock {
         Ok(())
     }
 
-    /// Takes @waker's timer off the clock, if it's still on.
-    fn del(&self, waker: &Waker) {
-        self.timers.lock().retain(|t| t.waker.data() != waker.data());
+    /// Takes @task's timer off the clock, if it's still on.
+    fn del(&self, task: *mut c::task_struct) {
+        self.timers.lock().retain(|t| t.task != task);
     }
 
     /// Sleep, as @how says, until the clock reaches @until - None - or
@@ -149,11 +151,12 @@ impl io_clock {
             None    => reached(self.now(), until).then_some(None),
         };
 
-        let waker = task_waker();
+        // SAFETY: of the current thread
+        let task = unsafe { c::bch2_current() };
         loop {
-            if self.add(Timer { expire: until, waker: waker.clone(), caller }).is_ok() {
+            if self.add(Timer { expire: until, task, caller }).is_ok() {
                 let ret = sleep_until(how, &mut done);
-                self.del(&waker);
+                self.del(task);
                 return ret;
             }
 
@@ -201,7 +204,8 @@ pub fn __bch2_increment_clock(clock: &c::io_clock, sectors: u64) {
     let mut timers = clock.timers.lock();
     while timers.last().is_some_and(|t| reached(now, t.expire)) {
         let Some(t) = timers.pop() else { break };
-        t.waker.wake();
+        // SAFETY: under the lock: its waiter's still there - see Timer
+        unsafe { c::wake_up_process(t.task) };
     }
 }
 

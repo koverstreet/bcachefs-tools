@@ -24,25 +24,22 @@
 //! whose memory is gone is fine: whatever's there now is woken spuriously,
 //! and every waiter rechecks.
 //!
-//! A waiter's entry is on its stack, on its bucket's list while it sleeps.
-//! The waker takes it off and marks it woken, under the bucket lock, and
-//! wakes it once the lock is dropped. The waiter, woken or not - a signal, a
-//! timeout - takes the lock once more on its way out, and takes its entry off
-//! if it's still on: so the waker is done with it before it goes, as List
-//! requires, and a wake meant for one waiter that it took is a wake it
-//! reports.
-//!
-//! The waiter is a Waker: for now always a blocking wait's task_waker(). A
-//! task awaiting would queue an entry holding its own, woken the same way.
+//! A waiter's entry is on its stack, on its bucket's list while it sleeps,
+//! and holds the waiting thread, as a wait_queue_entry's private does. The
+//! waker takes it off, marks it woken and wakes the thread, all under the
+//! bucket lock, as kernel/wait.c's wake_up() does. The waiter, woken or not -
+//! a signal, a timeout - takes the lock once more on its way out, and takes
+//! its entry off if it's still on: so the waker is done with it, and with the
+//! thread, before it goes - no ref on the thread - and a wake meant for one
+//! waiter that it took is a wake it reports.
 
+use crate::c;
 use crate::list;
 use crate::locking::{spinlock_t, Lock};
 use core::sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use crate::util::list::ListLinks;
-use crate::util::sleep::{sleep_until, task_waker, Sleep, SleepEnd};
-use core::cell::UnsafeCell;
+use crate::util::sleep::{sleep_until, Sleep, SleepEnd};
 use core::ptr;
-use core::task::Waker;
 use cstruct_macros::c_export;
 
 /// A word futex_wait() can wait on.
@@ -104,13 +101,13 @@ pub fn bch2_futex_init() {
 struct Entry {
     links:  ListLinks,
     addr:   usize,
-    /// Off the list by the waker: set last, under the lock
+    /// Off the list by the waker, under the lock
     woken:  AtomicBool,
-    /// Whoever takes the entry off the list owns it
-    waker:  UnsafeCell<Option<Waker>>,
+    task:   *mut c::task_struct,
 }
 
-// SAFETY: its waker is touched only by whoever took it off the list - once
+// SAFETY: the task is woken only under the bucket lock, which its waiter
+// takes before it returns
 unsafe impl Sync for Entry {}
 
 /// Sleep, as @how says, while *@w == @expected, until a futex_wake() on @w.
@@ -136,11 +133,13 @@ pub fn futex_wait_or<W: FutexWord, E: SleepEnd>(w: &W, expected: W::Val, how: Sl
     b.waiters.fetch_add(1, Ordering::Relaxed);
     fence(Ordering::SeqCst);
 
+    let task = unsafe { c::bch2_current() };
+    assert!(!task.is_null(), "a blocking wait needs a task - a kthread, in userspace");
     let entry = Entry {
         links:  ListLinks::new(),
         addr,
         woken:  AtomicBool::new(false),
-        waker:  UnsafeCell::new(Some(task_waker())),
+        task,
     };
 
     let mut ret = Ok(());
@@ -177,42 +176,21 @@ pub fn futex_wake(addr: *const (), n: usize) -> usize {
         return 0;
     }
 
-    // Woken a batch at a time, after the lock's dropped
-    const BATCH: usize = 8;
     let mut woken = 0;
-    loop {
-        let mut batch: [Option<Waker>; BATCH] = [const { None }; BATCH];
-        let mut nr = 0;
-        let mut more = false;
-        {
-            let mut list = b.list.lock();
-            let mut c = list.cursor_mut();
-            while let Some(e) = c.current() {
-                if nr == BATCH || woken + nr == n {
-                    more = woken + nr < n;
-                    break;
-                }
-                if e.addr != addr {
-                    c.move_next();
-                    continue;
-                }
-                c.remove_current();
-                // SAFETY: we took it off: its waker is ours
-                batch[nr] = unsafe { (*e.waker.get()).take() };
-                e.woken.store(true, Ordering::Release);
-                nr += 1;
-            }
+    let mut list = b.list.lock();
+    let mut cur = list.cursor_mut();
+    while woken < n {
+        let Some(e) = cur.current() else { break };
+        if e.addr != addr {
+            cur.move_next();
+            continue;
         }
-
-        for w in batch.iter_mut().take(nr) {
-            w.take().expect("a queued futex waiter without its Waker").wake();
-        }
-        woken += nr;
-
-        if !more {
-            return woken;
-        }
+        cur.remove_current();
+        e.woken.store(true, Ordering::Release);
+        unsafe { c::wake_up_process(e.task) };
+        woken += 1;
     }
+    woken
 }
 
 /// wait_event(), on a futex: for a condition over state that isn't a futex
