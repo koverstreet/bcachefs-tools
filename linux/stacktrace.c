@@ -246,9 +246,21 @@ static const char *dw_addr_to_src(unsigned long addr, int *lineno)
 	return dw.lineinfo(line, NULL, lineno, NULL, NULL, NULL);
 }
 
+/*
+ * unw_get_proc_name_by_ip() is libunwind 1.7's. Older libunwind (Ubuntu 24.04
+ * has 1.6.2) and LLVM's, which has no UNW_VERSION_* at all - and an #if on an
+ * undefined function-like macro doesn't compile - get dladdr(): the binary is
+ * linked -rdynamic
+ */
+#if defined(UNW_VERSION_CODE) && defined(UNW_VERSION_MAJOR)
+#if UNW_VERSION_CODE(UNW_VERSION_MAJOR, UNW_VERSION_MINOR) >= UNW_VERSION_CODE(1, 7)
+#define HAVE_UNW_GET_PROC_NAME_BY_IP
+#endif
+#endif
+
 void bch2_prt_symbol(struct printbuf *out, unsigned long addr)
 {
-#if UNW_VERSION_CODE(UNW_VERSION_MAJOR, UNW_VERSION_MINOR) >= UNW_VERSION_CODE(1, 7)
+#ifdef HAVE_UNW_GET_PROC_NAME_BY_IP
 	char name[512];
 	unw_word_t off;
 
@@ -258,7 +270,6 @@ void bch2_prt_symbol(struct printbuf *out, unsigned long addr)
 	else
 		prt_printf(out, "0x%lx", addr);
 #else
-	/* libunwind < 1.7 (e.g. Ubuntu 24.04) has no unw_get_proc_name_by_ip() */
 	Dl_info info;
 
 	if (dladdr((void *) addr, &info) && info.dli_sname)
