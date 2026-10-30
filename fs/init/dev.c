@@ -253,21 +253,6 @@ static int bch2_dev_may_add(struct bch_sb *sb, struct bch_fs *c)
 	return 0;
 }
 
-struct bch_fs *bch2_dev_to_fs(dev_t dev)
-{
-	guard(mutex)(&bch2_fs_list_lock);
-	guard(rcu)();
-
-	struct bch_fs *c;
-	list_for_each_entry(c, &bch2_fs_list, list)
-		for_each_member_device_rcu(c, ca, NULL)
-			if (ca->disk_sb.bdev && ca->disk_sb.bdev->bd_dev == dev) {
-				closure_get(&c->cl);
-				return c;
-			}
-	return NULL;
-}
-
 /* Device startup/shutdown: */
 
 void bch2_dev_io_ref_stop(struct bch_dev *ca, int rw)
@@ -1077,20 +1062,6 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 		bch2_disk_path_to_text_sb(&label, sb.sb, BCH_MEMBER_GROUP(&dev_mi) - 1);
 		if (label.allocation_failure)
 			return -ENOMEM;
-	}
-
-	if (list_empty(&c->list)) {
-		scoped_guard(mutex, &bch2_fs_list_lock) {
-			if (__bch2_uuid_to_fs(c->sb.uuid))
-				ret = bch_err_throw(c, filesystem_uuid_already_open);
-			else
-				list_add(&c->list, &bch2_fs_list);
-		}
-
-		if (ret) {
-			prt_printf(err, "cannot go multidevice: filesystem UUID already open\n");
-			return ret;
-		}
 	}
 
 	try(bch2_dev_may_add(sb.sb, c));

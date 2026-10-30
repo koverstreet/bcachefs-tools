@@ -32,12 +32,6 @@ extern const char * const bch2_write_refs[];
 extern const char * const bch2_dev_read_refs[];
 extern const char * const bch2_dev_write_refs[];
 
-extern struct list_head bch2_fs_list;
-extern struct mutex bch2_fs_list_lock;
-
-struct bch_fs *__bch2_uuid_to_fs(__uuid_t uuid);
-struct bch_fs *bch2_uuid_to_fs(__uuid_t);
-
 bool bch2_fs_emergency_read_only_locked(struct bch_fs *, struct printbuf *out);
 
 int bch2_fs_read_write(struct bch_fs *);

@@ -588,7 +588,6 @@ c_enum! {
 pub struct Fs {
     pub cl: c::closure,
 
-    pub list: c::list_head,
     pub kobj: c::kobject,
     pub counters_kobj: c::kobject,
     pub internal: c::kobject,

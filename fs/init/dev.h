@@ -2,8 +2,6 @@
 #ifndef _BCACHEFS_INIT_DEV_H
 #define _BCACHEFS_INIT_DEV_H
 
-struct bch_fs *bch2_dev_to_fs(dev_t);
-
 void bch2_dev_io_ref_stop(struct bch_dev *, int);
 void bch2_dev_unlink(struct bch_dev *);
 void bch2_dev_free(struct bch_dev *);

@@ -75,6 +75,7 @@
 #include "vfs/direct.h"
 
 #include "util/enumerated_ref.h"
+#include "init/registry_gen.h"
 #include "util/futex_gen.h"
 #ifdef __KERNEL__
 #include "util/thread_with_file_gen.h"
@@ -233,33 +234,7 @@ static struct kobject bcachefs_kobj;
 
 static DECLARE_WAIT_QUEUE_HEAD(bch2_read_only_wait);
 
-LIST_HEAD(bch2_fs_list);
-DEFINE_MUTEX(bch2_fs_list_lock);
-
 static bool bch2_fs_will_resize_on_mount(struct bch_fs *);
-
-struct bch_fs *__bch2_uuid_to_fs(__uuid_t uuid)
-{
-	struct bch_fs *c;
-
-	lockdep_assert_held(&bch2_fs_list_lock);
-
-	list_for_each_entry(c, &bch2_fs_list, list)
-		if (!memcmp(&c->disk_sb.sb->uuid, &uuid, sizeof(uuid)))
-			return c;
-
-	return NULL;
-}
-
-struct bch_fs *bch2_uuid_to_fs(__uuid_t uuid)
-{
-	guard(mutex)(&bch2_fs_list_lock);
-
-	struct bch_fs *c = __bch2_uuid_to_fs(uuid);
-	if (c)
-		closure_get(&c->cl);
-	return c;
-}
 
 /* Filesystem RO/RW: */
 
@@ -727,8 +702,7 @@ int bch2_fs_stop(struct bch_fs *c)
 
 static void bch2_fs_free(struct bch_fs *c)
 {
-	scoped_guard(mutex, &bch2_fs_list_lock)
-		list_del(&c->list);
+	bch2_fs_deregister(c);
 
 	closure_sync(&c->cl);
 	closure_debug_destroy(&c->cl);
@@ -758,12 +732,6 @@ int bch2_fs_exit(struct bch_fs *c)
 
 static int bch2_fs_online(struct bch_fs *c)
 {
-	lockdep_assert_held(&bch2_fs_list_lock);
-
-	if (c->sb.multi_device &&
-	    __bch2_uuid_to_fs(c->sb.uuid))
-		return bch_err_throw(c, filesystem_uuid_already_open);
-
 	try(bch2_fs_chardev_init(c));
 
 	bch2_fs_debug_init(c);
@@ -788,8 +756,6 @@ static int bch2_fs_online(struct bch_fs *c)
 		if (bch2_dev_sysfs_online(c, ca))
 			return bch_err_throw(c, sysfs_init_error);
 
-	BUG_ON(!list_empty(&c->list));
-	list_add(&c->list, &bch2_fs_list);
 	return 0;
 }
 
@@ -1111,8 +1077,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	bch2_fs_journal_init_early(&c->journal);
 	bch2_fs_move_init(c);
 
-	INIT_LIST_HEAD(&c->list);
-
 	mutex_init(&c->bio_bounce_pages_lock);
 
 	spin_lock_init(&c->write_error_lock);
@@ -1279,8 +1243,9 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG))
 		prt_printf(out, "*** DEBUG BUILD ***\n");
 
-	scoped_guard(mutex, &bch2_fs_list_lock)
-		try(bch2_fs_online(c));
+	/* first: a UUID already open fails as that, not as a sysfs name taken */
+	try(bch2_fs_register(c));
+	try(bch2_fs_online(c));
 
 	return 0;
 }
@@ -1377,6 +1342,7 @@ static int __init bcachefs_init(void)
 
 	bch2_futex_init();
 	bch2_dirent_init();
+	bch2_fs_registry_init();
 
 	kobject_init(&bcachefs_kobj, &bcachefs_ktype);
 

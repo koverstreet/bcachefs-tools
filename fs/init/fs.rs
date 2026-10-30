@@ -528,61 +528,33 @@ impl OpenFs {
     /// @key unwraps the superblock's key, instead of the keyring
     pub fn open<'a>(devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut c::bch_opts,
                     key: Option<&c::bch_key>) -> Result<OpenFs, BchError> {
+        Self::claim(devs, opts, &Holder::new()?)?.open(opts, key)
+    }
+
+    /// The open's first half: @devs claimed for @holder, and read
+    pub fn claim<'a>(devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut c::bch_opts,
+                     holder: &Arc<Holder>) -> Result<Claimed, BchError> {
         let mut out = Printbuf::new();
         out.indent_add_nextline(2);
 
-        let ret = Self::open_to(devs, opts, key, &mut out);
-        match &ret {
-            Err(e) => {
-                prt!(&mut out, "error starting filesystem: {}", e.msg());
-                print_lines(&LogLevel::ERR.prefix(), out.as_bytes());
-            }
-            Ok(fs) if !out.as_bytes().is_empty() => {
-                LogMsg::with_level(fs, LogLevel::INFO).write_bytes(out.as_bytes());
-            }
-            Ok(_) => {}
+        match Self::claim_to(devs, opts, holder, &mut out) {
+            Ok(sbs) => Ok(Claimed { sbs, holder: holder.clone(), out }),
+            Err(e) => Err(open_failed(e, &mut out)),
         }
-        ret
     }
 
-    fn open_to<'a>(devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut c::bch_opts,
-                   key: Option<&c::bch_key>, out: &mut Printbuf) -> Result<OpenFs, BchError> {
+    fn claim_to<'a>(devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut c::bch_opts,
+                    holder: &Arc<Holder>, out: &mut Printbuf) -> Result<KVVec<c::bch_sb_handle>, BchError> {
         if devs.len() == 0 {
             return Err(c::EINVAL.into());
         }
 
-        let holder = Holder::new()?;
         let mut sbs = KVVec::with_capacity(devs.len(), GFP_KERNEL)?;
         for path in devs {
-            sbs.push(read_super(path, opts, Some(&holder))?, GFP_KERNEL)?;
+            sbs.push(read_super(path, opts, Some(holder))?, GFP_KERNEL)?;
         }
         filter_dead(&mut sbs, opts, Some(out))?;
-
-        // bch2_fs_alloc() takes the handles it attaches, leaving them zeroed
-        let best = sbs[0].io.buf.sb;
-        let mut lent = c::bch_sb_handles { nr: sbs.len(), size: sbs.capacity(), data: sbs.as_mut_ptr(),
-                                           preallocated: [] };
-        let key = key.map_or(core::ptr::null(), |k| k);
-        // SAFETY: the handles stay sbs', which frees them; the holder ref is
-        // the filesystem's
-        let fs = unsafe {
-            c::bch2_fs_alloc(best, opts, &mut lent, Arc::into_raw(holder).cast(), key, out.as_raw())
-        };
-        let fs = errptr_to_result(NonNull::new(fs).expect("bch2_fs_alloc(): a filesystem or an error"))?;
-        // SAFETY: bch2_fs_alloc()'s, ours to exit
-        let fs = unsafe { OpenFs::from_raw(fs.cast()) };
-        fs.holder().fs.store(fs.as_ptr(), core::sync::atomic::Ordering::Release);
-
-        // opt_version_init()'s messages, before startup's
-        if !out.as_bytes().is_empty() {
-            print_str(&fs, LogLevel::INFO, out);
-            out.reset();
-        }
-
-        if fs.opts().nostart.get() == 0 {
-            fs.start_to(out)?;
-        }
-        Ok(fs)
+        Ok(sbs)
     }
 
     pub fn into_raw(self) -> core::ptr::NonNull<Fs> {
@@ -594,6 +566,72 @@ impl OpenFs {
         let ret = unsafe { c::bch2_fs_exit(self.0.as_ptr()) };
         core::mem::forget(self);
         ret
+    }
+}
+
+fn open_failed(e: BchError, out: &mut Printbuf) -> BchError {
+    prt!(out, "error starting filesystem: {}", e.msg());
+    print_lines(&LogLevel::ERR.prefix(), out.as_bytes());
+    e
+}
+
+/// An open's first half: its devices claimed and read, the dead ones dropped
+pub struct Claimed {
+    sbs:    KVVec<c::bch_sb_handle>,
+    holder: Arc<Holder>,
+    out:    Printbuf,
+}
+
+impl Claimed {
+    /// A multi-device filesystem's UUID
+    pub fn uuid(&self) -> Option<[u8; 16]> {
+        let sb = self.sbs[0].io.buf.sb();
+        sb.multi_device().then_some(sb.uuid.b)
+    }
+
+    /// @key unwraps the superblock's key, instead of the keyring
+    pub fn open(mut self, opts: &mut c::bch_opts, key: Option<&c::bch_key>) -> Result<OpenFs, BchError> {
+        match self.open_to(opts, key) {
+            Err(e) => Err(open_failed(e, &mut self.out)),
+            Ok(fs) => {
+                if !self.out.as_bytes().is_empty() {
+                    LogMsg::with_level(&fs, LogLevel::INFO).write_bytes(self.out.as_bytes());
+                }
+                Ok(fs)
+            }
+        }
+    }
+
+    fn open_to(&mut self, opts: &mut c::bch_opts, key: Option<&c::bch_key>) -> Result<OpenFs, BchError> {
+        let out = &mut self.out;
+        let sbs = &mut self.sbs;
+
+        // bch2_fs_alloc() takes the handles it attaches, leaving them zeroed
+        let best = sbs[0].io.buf.sb;
+        let mut lent = c::bch_sb_handles { nr: sbs.len(), size: sbs.capacity(), data: sbs.as_mut_ptr(),
+                                           preallocated: [] };
+        let key = key.map_or(core::ptr::null(), |k| k);
+        // SAFETY: the handles stay sbs', which frees them; the holder ref is
+        // the filesystem's
+        let fs = unsafe {
+            c::bch2_fs_alloc(best, opts, &mut lent, Arc::into_raw(self.holder.clone()).cast(), key,
+                             out.as_raw())
+        };
+        let fs = errptr_to_result(NonNull::new(fs).expect("bch2_fs_alloc(): a filesystem or an error"))?;
+        // SAFETY: bch2_fs_alloc()'s, ours to exit
+        let fs = unsafe { OpenFs::from_raw(fs.cast()) };
+        self.holder.fs.store(fs.as_ptr(), core::sync::atomic::Ordering::Release);
+
+        // opt_version_init()'s messages, before startup's
+        if !out.as_bytes().is_empty() {
+            print_str(&fs, LogLevel::INFO, out);
+            out.reset();
+        }
+
+        if fs.opts().nostart.get() == 0 {
+            fs.start_to(out)?;
+        }
+        Ok(fs)
     }
 }
 

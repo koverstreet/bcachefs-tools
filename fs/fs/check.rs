@@ -873,6 +873,7 @@ impl Fs {
 pub mod ioctl {
     use super::*;
     use crate::fs::{OpenFs, RoRef};
+    use crate::init::registry::{self, Claim, FsHandle, Opener};
     use crate::init::passes::{bch2_recovery_passes, passes_match, run_passes};
     use crate::opts::parse_mount_opts_cstr;
     use crate::util::kernel::{capable, Capability};
@@ -915,7 +916,16 @@ pub mod ioctl {
         // We need request_key() to be called before we punt to kthread:
         opts.set_nostart(true);
 
-        let fs = OpenFs::open(devs.iter().map(UserStr::as_cstr), &mut opts, None);
+        // held until it's open: a mount meanwhile gets EBUSY
+        let fs = registry::devs(devs.iter().map(UserStr::as_cstr))
+            .and_then(|d| FsHandle::get(&d, Opener::Fsck))
+            .and_then(|handle| {
+                let FsHandle::Opening(opening) = handle else { return Err(c::EBUSY.into()) };
+                let Claim::Ours(_opening, claimed) = opening.claim(devs.iter().map(UserStr::as_cstr), &mut opts)? else {
+                    return Err(c::EBUSY.into());
+                };
+                claimed.open(&mut opts, None)
+            });
 
         if let Ok(fs) = &fs {
             if fs.opts.errors() == c::bch_error_actions::BCH_ON_ERROR_panic {

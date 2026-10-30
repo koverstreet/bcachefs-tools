@@ -6,9 +6,10 @@
 //! util/super_block.rs. This file is bcachefs's policy on top of it.
 //!
 //! A mount (get_tree):
-//! - The devices it names, to the running filesystem they belong to if they
-//!   all belong to one, and that filesystem's superblock if it has one: a
-//!   mount of a filesystem already mounted.
+//! - The FsHandle for its devices (init/registry.rs): a filesystem already
+//!   open is mounted through its superblock; one another mount is opening is
+//!   waited for, then mounted the same way. So is one its devices' superblocks
+//!   say is, by its UUID.
 //! - Otherwise, open and start the filesystem - recovery - while no
 //!   superblock exists, so nothing waits on one while recovery runs (sync()
 //!   waits on every superblock not yet born). Then create its superblock,
@@ -30,7 +31,8 @@ use core::ptr::NonNull;
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
-use crate::fs::OpenFs;
+use crate::fs::{Claimed, OpenFs};
+use crate::init::registry::{self, Claim, FsHandle, Key, Opener, Opening};
 use crate::opt_id;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::fs_context::{FsContext, FsParam, ParamValue};
@@ -38,17 +40,13 @@ use crate::util::fs_type::{FsType, FsTypeTable, SuperData};
 use crate::util::printbuf::Printbuf;
 use crate::util::super_block::{ReconfSuper, Root};
 use crate::util::vstructs::plain_bytes_mut;
-use cstruct_macros::{c_export, c_extern};
+use cstruct_macros::c_export;
 use kernel::sync::aref::ARef;
 use pin_init::{init, Init};
 
 use super::inode::InodeInfo;
 use super::status_fd::StatusFile;
 use super::vfs_inode::VfsInode;
-
-c_extern! {
-    fn bch2_dev_to_fs(dev: c::dev_t) -> *mut c::bch_fs;
-}
 
 pub(crate) struct Bcachefs;
 
@@ -69,13 +67,13 @@ unsafe impl SuperData for OpenFs {
 /// fc->fs_private, from new_context() until the context's free.
 pub(crate) struct MountParams {
     opts:        c::bch_opts,
-    /// The options that can't be parsed until the filesystem is open: open()
-    /// parses them, after OpenFs::open().
+    /// The options that can't be parsed until the filesystem is open: start()
+    /// parses them, after Claimed::open().
     parse_later: Printbuf,
     /// The devices, from however many "source" parameters.
     devs:        KVVec<DevPath>,
     /// "status_fd"'s channel, for as long as the filesystem might still print
-    /// there: see open() and status_fd.rs.
+    /// there: see start() and status_fd.rs.
     status:      Option<StatusFile>,
     user_key:    Option<UserKey>,
 }
@@ -121,51 +119,28 @@ fn set_mount_opts(fs: &Fs, opts: &c::bch_opts) {
     }
 }
 
-/// The running filesystem @path is a device of, if there is one: unpinned,
-/// for comparing with the superblocks' - which pin theirs.
-fn dev_to_fs(path: &CStr) -> Option<NonNull<Fs>> {
-    let mut dev: c::dev_t = 0;
-    if unsafe { c::lookup_bdev(path.as_ptr().cast(), &mut dev) } != 0 {
-        return None;
-    }
-
-    let fs = NonNull::new(unsafe { bch2_dev_to_fs(dev) })?;
-    unsafe { c::closure_put(&raw mut (*fs.as_ptr()).cl) };
-    Some(fs.cast())
-}
-
-/// The running filesystem every device in @p is in, if they're all in one:
-/// dev_to_fs()'s, unpinned.
-fn devs_fs(p: &MountParams) -> Option<NonNull<Fs>> {
-    let mut fs = None;
-    for d in p.devs.iter() {
-        let dev_fs = dev_to_fs(d.as_cstr())?;
-        if fs.is_some_and(|fs| fs != dev_fs) {
-            return None;
-        }
-        fs = Some(dev_fs);
-    }
-    fs
-}
-
 const ROOT_SUBVOL_INUM: c::subvol_inum = c::subvol_inum {
     subvol: c::BCACHEFS_ROOT_SUBVOL as u64,
     inum:   c::BCACHEFS_ROOT_INO as u64,
 };
 
 impl Bcachefs {
-    /// A mount of a filesystem already mounted: the one every device named is
-    /// in, if they're all in one and it has a superblock.
-    fn mounted(fc: &mut FsContext<Self>) -> Result<Option<Root<Self>>, BchError> {
-        let Some(fs) = devs_fs(fc.ctx()) else { return Ok(None) };
-        let Some(sb) = fc.find_super(fs.as_ptr())? else { return Ok(None) };
-
-        // @fs was unpinned until a superblock pinned it: in between it may
-        // have been stopped, and another filesystem made at its address. The
-        // one found can't go now, so the devices are asked again.
-        if devs_fs(fc.ctx()) != Some(NonNull::from(sb.sb().data())) {
+    /// Mount @fs, already open, through its superblock; None if @fs has gone
+    /// away and @key should be looked up again.
+    fn mounted(fc: &mut FsContext<Self>, fs: NonNull<Fs>, key: Key<'_>)
+        -> Result<Option<Root<Self>>, BchError>
+    {
+        // @fs isn't pinned until we have its superblock: it may have been
+        // freed and another filesystem allocated at the same address, so
+        // check that @key still finds it
+        let sb = fc.find_super(fs.as_ptr())?;
+        if registry::find(key) != Some(fs) {
             return Ok(None);
         }
+        let Some(sb) = sb else {
+            fc.errorfc(format_args!("filesystem {key} open but not mounted - by an offline fsck?"));
+            return Err(c::EBUSY.into());
+        };
 
         // Don't summarily change the RO/RW state
         if fc.rdonly() != sb.sb().rdonly() {
@@ -174,22 +149,33 @@ impl Bcachefs {
         Ok(Some(sb.into_root()))
     }
 
-    /// Open and start the filesystem, no superblock existing yet.
-    fn open(fc: &mut FsContext<Self>) -> Result<OpenFs, BchError> {
-        let rdonly = fc.rdonly();
-        let p = fc.ctx();
-        let mut opts = p.opts;
-
-        opts.set_read_only(rdonly);
+    /// Open the filesystem and mount it, no superblock existing yet; None if
+    /// another mount was opening it, to look again.
+    fn open(fc: &mut FsContext<Self>, opening: Opening) -> Result<Option<Root<Self>>, BchError> {
+        let mut opts = fc.ctx().opts;
+        opts.set_read_only(fc.rdonly());
         opts.set_nostart(true);
 
-        let fs = OpenFs::open(p.devs.iter().map(DevPath::as_cstr), &mut opts,
-                              p.user_key.as_ref().map(|k| &k.0))?;
+        match opening.claim(fc.ctx().devs.iter().map(DevPath::as_cstr), &mut opts)? {
+            Claim::Open(fs, uuid) => Self::mounted(fc, fs, Key::Uuid(uuid)),
+            Claim::Retry => Ok(None),
+            // the Opening held until the superblock exists, for other mounts to share
+            Claim::Ours(_opening, claimed) => {
+                let fs = Self::start(fc, claimed, &mut opts)?;
+                Self::new_super(fc, fs).map(Some)
+            }
+        }
+    }
+
+    /// Open and start the filesystem, no superblock existing yet.
+    fn start(fc: &mut FsContext<Self>, claimed: Claimed, opts: &mut c::bch_opts) -> Result<OpenFs, BchError> {
+        let p = fc.ctx();
+        let fs = claimed.open(opts, p.user_key.as_ref().map(|k| &k.0))?;
 
         if opts.defined(opt_id::Opt_discard) {
             fs.set_flag(c::bch_fs_flags::BCH_FS_discard_mount_opt_set);
         }
-        set_mount_opts(&fs, &opts);
+        set_mount_opts(&fs, opts);
 
         // Some options can't be parsed until after the fs is started:
         let mut later: c::bch_opts = Default::default();
@@ -421,11 +407,15 @@ impl FsType for Bcachefs {
 
         fc.set_sb_flags(c::SB_NOSEC as u32);
 
-        let ret = match Self::mounted(fc) {
-            Ok(Some(root)) => Ok(root),
-            Ok(None) => Self::open(fc).and_then(|fs| Self::new_super(fc, fs)),
-            Err(e) => Err(e),
-        };
+        let ret = registry::devs(fc.ctx().devs.iter().map(DevPath::as_cstr)).and_then(|devs| loop {
+            let mounted = FsHandle::get(&devs, Opener::Mount).and_then(|handle| match handle {
+                FsHandle::Open(fs) => Self::mounted(fc, fs, Key::Devs(&devs)),
+                FsHandle::Opening(opening) => Self::open(fc, opening),
+            });
+            if let Some(ret) = mounted.transpose() {
+                break ret;
+            }
+        });
 
         ret.map_err(|e| {
             // errorfc(): logfc() falls back to printk with no fs_context log,
