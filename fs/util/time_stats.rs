@@ -58,8 +58,8 @@ const TIME_UNITS: [TimeUnit; 10] = {
         u("h",   NSEC_PER_SEC * 3600),
         u("d",   NSEC_PER_SEC * 3600 * 24),
         u("w",   NSEC_PER_SEC * 3600 * 24 * 7),
-        /* C's: 365.25 days, times 7 */
-        u("y",   NSEC_PER_SEC * ((3600 * 24 * 7 * 365) + (3600 * (24 / 4) * 7))),
+        /* 365.25 days */
+        u("y",   NSEC_PER_SEC * ((3600 * 24 * 365) + (3600 * 24 / 4))),
         u("eon", u64::MAX),
     ]
 };
