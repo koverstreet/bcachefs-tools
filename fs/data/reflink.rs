@@ -1025,26 +1025,23 @@ pub fn remap_range(
             }
 
             let src_p = src.as_ref().arm::<c::ReflinkP>().expect("a reflink_p");
-            let mut dst_p = BkeyI::<c::ReflinkP>::new();
+            let mut dst_p = t.bkey_alloc_typed::<c::ReflinkP>()?;
 
-            dst_p.v.set_idx(src_p.v.idx() + (src_want.offset - src_p.k.start_offset()));
+            dst_p.v_mut().set_idx(src_p.v.idx() + (src_want.offset - src_p.k.start_offset()));
 
             if reflink_p_may_update_opts_field &&
                may_change_src_io_path_opts &&
                src_p.v.may_update_options() {
-                dst_p.v.set_may_update_options(true);
+                dst_p.v_mut().set_may_update_options(true);
             }
 
-            dst_p.k.p = dst_iter.pos();
-            dst_p.k.resize((src_p.k.p.offset - src_want.offset)
-                           .min(dst_end.offset - dst_iter.pos().offset) as u32);
+            dst_p.k_mut().p = dst_iter.pos();
+            dst_p.k_mut().resize((src_p.k.p.offset - src_want.offset)
+                                 .min(dst_end.offset - dst_iter.pos().offset) as u32);
 
             let res = DiskReservation::new(fs);
-            t.result(unsafe {
-                c::bch2_extent_update(t.raw(), dst_inum, dst_iter.raw_mut(), dst_p.as_ffi_mut(),
-                                      dst_p.k.u64s as u32, res.as_mut_ptr(), new_i_size, i_sectors_delta,
-                                      true, 0, core::ptr::null_mut())
-            })
+            t.extent_update(dst_inum, &mut dst_iter, &mut dst_p, &res, new_i_size,
+                            Some(&mut *i_sectors_delta), true)
         })();
     }
 

@@ -106,12 +106,7 @@ pub fn fpunch_at<'t>(
             let mut delete = t.bkey_alloc_init::<c::Deleted>(0, start)?;
             delete.k_mut().resize(sectors);
 
-            let delta = i_sectors_delta.as_deref_mut().map_or(core::ptr::null_mut(), core::ptr::from_mut);
-            t.result(unsafe {
-                c::bch2_extent_update(t.raw(), inum, iter.raw_mut(), delete.as_ptr(),
-                                      delete.k().u64s as u32, res.as_mut_ptr(), 0, delta, false,
-                                      0, core::ptr::null_mut())
-            })?;
+            t.extent_update(inum, iter, &mut delete, &res, 0, i_sectors_delta.as_deref_mut(), false)?;
             Ok(false)
         })();
 

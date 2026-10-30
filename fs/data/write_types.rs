@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::bkey::BkeyI;
-use crate::btree::iter::{BtreeIter, TransAttempt};
+use crate::btree::iter::{BtreeIter, TransAttempt, TransBkey};
 use crate::cstructs::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -219,11 +219,11 @@ c_extern! {
                                       new: *mut c::bkey_i, usage_increasing: *mut bool,
                                       i_sectors_delta: *mut i64, disk_sectors_delta: *mut i64,
                                       new_nr_replicas: *mut c_uint) -> c_int;
-    pub fn bch2_extent_update(trans: *mut c::btree_trans, inum: c::subvol_inum,
-                              iter: *mut c::btree_iter, k: *mut c::bkey_i, k_buf_u64s: c_uint,
-                              disk_res: *mut c::disk_reservation, new_i_size: u64,
-                              i_sectors_delta_total: *mut i64, check_enospc: bool,
-                              change_cookie: u32, flush: *mut c::closure) -> c_int;
+    fn bch2_extent_update(trans: *mut c::btree_trans, inum: c::subvol_inum,
+                          iter: *mut c::btree_iter, k: *mut c::bkey_i, k_buf_u64s: c_uint,
+                          disk_res: *mut c::disk_reservation, new_i_size: u64,
+                          i_sectors_delta_total: *mut i64, check_enospc: bool,
+                          change_cookie: u32, flush: *mut c::closure) -> c_int;
     #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
     pub fn bch2_latency_acct(ca: *mut c::bch_dev, submit_time: u64, rw: c_int);
 }
@@ -295,5 +295,30 @@ impl TransAttempt<'_, '_> {
                                        &mut s.i_sectors_delta, &mut s.disk_sectors_delta, &mut s.new_nr_replicas)
         };
         self.result(ret).map(|()| s)
+    }
+
+    /// @k written at @iter and committed, with the inode's update: i_size
+    /// raised to @new_i_size - no further than @k reaches - and i_sectors by
+    /// what @k adds, which @i_sectors_delta gets too. @k is cut to what one
+    /// commit takes, @iter moved to its end, and it may grow into its room
+    /// for a reconcile entry. @res is topped up for the space @k takes; that
+    /// fails for want of space only if @check_enospc and @k takes space what
+    /// it overwrites doesn't give back.
+    ///
+    /// bch2_extent_update(), less a data update's change cookie and a write's
+    /// flush, which no Rust caller has.
+    pub fn extent_update<V: ?Sized>(&self, inum: c::subvol_inum, iter: &mut BtreeIter<'_>,
+                                    k: &mut TransBkey<'_, '_, V>, res: &c::DiskReservation<'_>, new_i_size: u64,
+                                    i_sectors_delta: Option<&mut i64>, check_enospc: bool)
+        -> Result<(), BchError>
+    {
+        let buf = k.as_mut_u64s();
+        let delta = i_sectors_delta.map_or(core::ptr::null_mut(), core::ptr::from_mut);
+        // SAFETY: @k's whole buffer, ours to grow it into while it's borrowed
+        let ret = unsafe {
+            bch2_extent_update(self.raw(), inum, iter.raw_mut(), buf.as_mut_ptr().cast(), buf.len() as u32,
+                               res.as_mut_ptr(), new_i_size, delta, check_enospc, 0, core::ptr::null_mut())
+        };
+        self.result(ret)
     }
 }
