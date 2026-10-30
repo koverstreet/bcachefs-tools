@@ -11,6 +11,10 @@ export DEB_BUILD_MAINT_OPTIONS += optimize=-lto
 export DEB_BUILD_MAINT_OPTIONS += hardening=+all
 
 include /usr/share/dpkg/default.mk
+# default.mk includes buildtools.mk only at dpkg-build-api >= 1: without it
+# DPKG_EXPORT_BUILDTOOLS exports nothing, and a cross build gets the host's
+# ld, objcopy and ar.
+include /usr/share/dpkg/buildtools.mk
 include /usr/share/rustc/architecture.mk
 
 export DEB_HOST_RUST_TYPE
