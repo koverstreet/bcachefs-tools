@@ -411,10 +411,12 @@ static struct fsck_err_state *count_fsck_err_locked(struct bch_fs *c,
 
 		if (c->opts.ratelimit_errors &&
 		    s->nr >= FSCK_ERR_RATELIMIT_NR) {
-			if (s->nr == FSCK_ERR_RATELIMIT_NR)
+			if (s->nr == FSCK_ERR_RATELIMIT_NR) {
 				*suppress = true;
-			else
+				s->ratelimited = true;
+			} else {
 				*print = false;
+			}
 		}
 
 		s->nr++;
