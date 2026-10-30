@@ -646,10 +646,7 @@ fn disk_set_state(fs: &Fs, a: c::bch_ioctl_disk_set_state, msg: ErrMsg, bad_args
     let ca = dev_lookup_outer(fs, a.dev, a.flags)?;
 
     let mut err = Printbuf::new();
-    let ret = ret_to_result_void(unsafe {
-        c::bch2_dev_set_state(fs.as_ptr().cast(), ca.as_mut_ptr(),
-                              c::bch_member_state(a.new_state.into()), a.flags as c_int, err.as_raw())
-    });
+    let ret = fs.dev_set_state(&ca, c::bch_member_state(a.new_state.into()), a.flags, Some(&mut err));
     msg.report(&mut err, ret, |ret, _| bch_err_msg_dev!(&ca, ret, "setting device state"))
 }
 

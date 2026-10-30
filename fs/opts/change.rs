@@ -13,9 +13,7 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::{Guard, Lock};
 use crate::sb::io::SbFieldOps;
-use crate::sb::members::dev_ptr;
 use crate::util::printbuf::Printbuf;
-use core::ffi::c_int;
 
 impl Fs {
     /// Before setting option @id to @v, for device @ca or the filesystem,
@@ -94,10 +92,7 @@ fn opt_hook_pre_set(fs: &Fs, ca: Option<&c::bch_dev>, inum: u64, id: opt_id, v: 
     match id {
         opt_id::Opt_state => {
             if let Some(ca) = ca {
-                return crate::errcode::ret_to_result_void(unsafe {
-                    c::bch2_dev_set_state(fs.as_ptr(), dev_ptr(Some(ca)), c::bch_member_state(v as u32),
-                                          c::BCH_FORCE_IF_DEGRADED as c_int, core::ptr::null_mut())
-                });
+                return fs.dev_set_state(ca, c::bch_member_state(v as u32), c::BCH_FORCE_IF_DEGRADED, None);
             }
         }
         opt_id::Opt_compression | opt_id::Opt_background_compression => {

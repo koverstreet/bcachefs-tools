@@ -2,16 +2,19 @@
 
 //! Devices: dev.c's, as it converts.
 //!
-//! So far devs_list_to_text(), its congestion, and a bch_dev's memory: Rust
-//! allocates it, as bch_fs's, so its Rust-typed fields have initializers - the bucket bitmaps' Locks - and it's
-//! dropped whole when it's freed: after C's teardown, which leaves what it
-//! freed nulled for those fields' Drops to find.
+//! So far devs_list_to_text(), its congestion, its state set through C's
+//! dev_set_state(), and a bch_dev's memory: Rust allocates it, as bch_fs's,
+//! so its Rust-typed fields have initializers - the bucket bitmaps' Locks -
+//! and it's dropped whole when it's freed: after C's teardown, which leaves
+//! what it freed nulled for those fields' Drops to find.
 
 use crate::c;
+use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::prt;
 use crate::util::rcu::read_lock;
 use crate::util::{Nsecs, Printbuf};
+use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
 
@@ -34,6 +37,17 @@ pub unsafe fn bch2_dev_free_mem(ca: *mut c::bch_dev) {
 }
 
 impl Fs {
+    /// @ca set to @state - dirty pagecache written back first if it's leaving
+    /// the allocator, then under the state lock; why not, if it can't be, in @err.
+    pub fn dev_set_state(&self, ca: &c::bch_dev, state: c::bch_member_state, flags: u32,
+                         err: Option<&mut Printbuf>) -> Result<(), BchError>
+    {
+        let ca = core::ptr::from_ref(ca).cast_mut();
+        let err = err.map_or(core::ptr::null_mut(), |e| e.as_raw());
+        // SAFETY: a device of the filesystem
+        ret_to_result_void(unsafe { c::bch2_dev_set_state(self.as_ptr(), ca, state, flags as c_int, err) })
+    }
+
     /// @devs by name, space separated; one there isn't, by its number.
     #[cold]
     pub fn devs_list_to_text(&self, out: &mut Printbuf, devs: &c::bch_devs_list) {

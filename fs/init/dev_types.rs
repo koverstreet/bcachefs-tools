@@ -161,6 +161,9 @@ c_extern! {
     pub fn bch2_dev_set_state(c: *mut c::bch_fs, ca: *mut c::bch_dev,
                               new_state: c::bch_member_state, flags: c_int,
                               err: *mut c::printbuf) -> c_int;
+    pub fn __bch2_dev_set_state(c: *mut c::bch_fs, ca: *mut c::bch_dev,
+                                new_state: c::bch_member_state, flags: c_int,
+                                err: *mut c::printbuf) -> c_int;
     pub fn bch2_dev_lookup(c: *mut c::bch_fs, name: *const c_char) -> *mut c::bch_dev;
     pub static bch2_sb_handle_bdev_ops: c::blk_holder_ops;
     pub fn bch2_dev_read_identity(bdev: *mut c::block_device,

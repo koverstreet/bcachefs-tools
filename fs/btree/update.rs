@@ -38,9 +38,16 @@ pub fn bch2_extent_whiteout_type(c: &Opaque<c::bch_fs>, btree: c::btree_id, k: &
     extent_whiteout_type(Fs::from_c(c), btree, k)
 }
 
-// ── Log entries, with a transaction's commit ─────────────────────────────
+// ── A transaction's updates, and log entries with its commit ────────────
 
 impl TransAttempt<'_, '_> {
+    /// The updates queued, for an error message.
+    #[cold]
+    pub fn updates_to_text(&self, out: &mut Printbuf) {
+        // SAFETY: the transaction's, read
+        unsafe { c::bch2_trans_updates_to_text(out.as_raw(), self.raw()) }
+    }
+
     /// @u64s of journal entries to go in with this transaction's commit, for
     /// one to be written into. The entries are a sub-buffer of transaction
     /// memory, which grows by moving there; this is the attempt's, as the

@@ -289,10 +289,8 @@ impl TransAttempt<'_, '_> {
                                        c::bch_run_recovery_pass_flags::from_bits_retain(0));
 
         let ret = if fatal {
-            unsafe {
-                c::bch2_trans_updates_to_text(buf.as_raw(), self.raw());
-                c::__bch2_inconsistent_error(fs.as_ptr(), buf.as_raw());
-            }
+            self.updates_to_text(&mut buf);
+            unsafe { c::__bch2_inconsistent_error(fs.as_ptr(), buf.as_raw()) };
             // a recovery in progress can have it go back a pass instead
             ret.and_then(|()| fs.throw(bch_errcode::BCH_ERR_bucket_ref_update))
         } else {
