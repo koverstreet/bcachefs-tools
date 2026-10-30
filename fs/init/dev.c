@@ -490,9 +490,6 @@ void bch2_dev_free(struct bch_dev *ca)
 	bch2_dev_buckets_free(ca);
 	kfree(ca->sb_read_scratch);
 
-	bch2_time_stats_quantiles_exit(&ca->io_latency[WRITE]);
-	bch2_time_stats_quantiles_exit(&ca->io_latency[READ]);
-
 	enumerated_ref_exit(&ca->io_ref[WRITE]);
 	enumerated_ref_exit(&ca->io_ref[READ]);
 #ifndef CONFIG_BCACHEFS_DEBUG

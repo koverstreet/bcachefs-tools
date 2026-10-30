@@ -74,9 +74,4 @@ static inline bool track_event_change(struct bch2_time_stats *stats, bool v)
 	return false;
 }
 
-static inline void bch2_time_stats_quantiles_exit(struct bch2_time_stats_quantiles *statq)
-{
-	bch2_time_stats_exit(&statq->stats);
-}
-
 #endif /* _BCACHEFS_TIME_STATS_H */

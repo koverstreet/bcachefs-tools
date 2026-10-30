@@ -31,8 +31,10 @@ use crate::util::kernel::{local_clock, time_after64};
 use crate::util::percpu::{PerCpu, PerCpuRef};
 use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{percpu_field, warn_on_once};
+use core::pin::Pin;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use cstruct_macros::c_export;
+use pin_init::{pinned_drop, PinnedDrop};
 
 // ── Time units ───────────────────────────────────────────────────────────
 
@@ -218,8 +220,8 @@ impl c::bch2_time_stats {
     fn buffer(&self) -> Option<PerCpuRef<'_, c::time_stat_buffer>> {
         // update_at()'s release: the buffer zeroed, its locks initialized
         let p = self.buffer.load(Acquire) as *mut c::time_stat_buffer;
-        // SAFETY: installed by update_at() and freed by exit() alone, after
-        // which nothing uses the stats
+        // SAFETY: installed by update_at(), and freed only when the stats
+        // drop
         (!p.is_null()).then(|| unsafe { PerCpuRef::from_raw(p) })
     }
 }
@@ -464,6 +466,18 @@ fn mean_and_stddev(out: &mut Printbuf, all: &c::mean_and_variance, recent: &c::m
     out.newline();
 }
 
+#[pinned_drop]
+impl PinnedDrop for c::bch2_time_stats {
+    fn drop(self: Pin<&mut Self>) {
+        let p = self.buffer.load(Relaxed) as *mut core::ffi::c_void;
+        if !p.is_null() {
+            // SAFETY: alloc_percpu()'d by update_at(), and ours: the stats
+            // are going
+            unsafe { c::free_percpu(p) };
+        }
+    }
+}
+
 // ── For C ────────────────────────────────────────────────────────────────
 
 #[c_export]
@@ -484,15 +498,4 @@ pub fn __bch2_time_stats_update(stats: &c::bch2_time_stats, start: u64, end: u64
 #[c_export]
 pub fn __bch2_time_stats_quantiles_update(statq: &c::bch2_time_stats_quantiles, start: u64, end: u64) {
     statq.update_at(start, end)
-}
-
-/// # Safety
-/// No one else is using @stats, nor will.
-#[c_export]
-pub unsafe fn bch2_time_stats_exit(stats: &c::bch2_time_stats) {
-    let p = stats.buffer.swap(0, Relaxed) as *mut core::ffi::c_void;
-    if !p.is_null() {
-        // SAFETY: the caller's; alloc_percpu()'d by update_at()
-        unsafe { c::free_percpu(p) };
-    }
 }

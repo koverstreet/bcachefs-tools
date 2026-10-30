@@ -88,7 +88,7 @@ pub struct TimeStatsLocked {
 }
 c_default!(TimeStatsLocked);
 
-#[pin_data]
+#[pin_data(PinnedDrop)]
 #[repr(C)]
 #[derive(CStruct, Init)]
 pub struct bch2_time_stats {
@@ -97,7 +97,8 @@ pub struct bch2_time_stats {
     #[c_lock("spinlock_t lock")]
     pub lock: Lock<c::spinlock_t, TimeStatsLocked>,
     /* the per-cpu buffer, once events come fast enough: installed under the
-     * lock, read without it - released and acquired, for what's in it */
+     * lock, read without it - released and acquired, for what's in it - and
+     * freed when the stats drop */
     #[c("struct time_stat_buffer __percpu *buffer")]
     pub buffer: AtomicUsize,
     /* a state change event in progress since: track_event_change()'s, unlocked */
