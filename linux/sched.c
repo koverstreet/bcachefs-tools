@@ -16,10 +16,14 @@
 
 __thread struct task_struct *current;
 
+/*
+ * RCU-freed, as the kernel's delayed_put_task_struct(): a waker may hold a
+ * task_struct with no ref under rcu_read_lock() - rcuwait does.
+ */
 void __put_task_struct(struct task_struct *t)
 {
 	pthread_join(t->thread, NULL);
-	free(t);
+	rcu_free_ptr(t);
 }
 
 /* returns true if process was woken up, false if it was already running */
