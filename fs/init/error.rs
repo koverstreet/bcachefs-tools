@@ -526,8 +526,8 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&BtreeTrans<'_>>, pos: c::bpos, m
         let ret = 'print: {
             let ret = if flags.contains(f::FSCK_AUTOFIX) &&
                          (errors == a::BCH_ON_ERROR_continue || errors == a::BCH_ON_ERROR_fix_safe) {
-                write!(out, ", ");
                 break 'print if flags.contains(f::FSCK_CAN_FIX) {
+                    write!(out, ", ");
                     prt_actioning(&mut out, action);
                     fs.err(e::BCH_ERR_fsck_fix)
                 } else {
