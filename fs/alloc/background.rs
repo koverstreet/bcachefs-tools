@@ -911,6 +911,13 @@ impl c::AllocV4 {
         }
     }
 
+    /// Whether it holds data copygc moves, room or not.
+    pub fn has_movable_data(&self) -> bool {
+        self.data_type < c::BCH_DATA_NR as u8 &&
+            data_type_movable(self.data_type()) &&
+            self.sectors_dirty() != 0
+    }
+
     /// Its time in @ca's fragmentation lru, 0 for none - how full it is, as a
     /// fraction of 1 << 31, for movable data with room it isn't using:
     /// alloc_lru_idx_fragmentation().

@@ -353,7 +353,8 @@ impl<'f, 'w> Copygc<'f, 'w> {
     /// The bucket's generation, if it can be evacuated: on a device we can
     /// write, not being written, its backpointers checked, and still as
     /// fragmented as its lru entry at @time says - U64_MAX, a stripe's
-    /// block, any. Why not is counted, each reason an error thrown.
+    /// block, any with movable data in it. Why not is counted, each reason
+    /// an error thrown.
     ///
     /// XXX: we should kill the LRU entry here if the bucket's not valid.
     fn bucket_is_movable(t: &TransAttempt<'_, '_>, bucket: c::bpos, time: u64)
@@ -382,9 +383,18 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let mut iter = BtreeIter::new(t, c::btree_id::alloc, bucket, BtreeIterFlags::CACHED);
         let k = iter.peek_slot(t)?.expect("a slot always has a key");
         let a = alloc_to_v4(k);
-        let lru_idx = a.lru_idx_fragmentation(&ca);
 
-        if lru_idx == 0 || lru_idx > time {
+        // A stripe's block is moved to empty the stripe, however full it
+        // is: a full bucket has no fragmentation lru position (0), and the
+        // blocks a sparse stripe has left are typically full buckets
+        let movable = if time == u64::MAX {
+            a.has_movable_data()
+        } else {
+            let lru_idx = a.lru_idx_fragmentation(&ca);
+            lru_idx != 0 && lru_idx <= time
+        };
+
+        if !movable {
             let _ = fs.err(bch_errcode::BCH_ERR_bucket_not_moveable_lru_race);
             return Ok(None);
         }
