@@ -501,10 +501,7 @@ static inline int btree_key_can_insert_cached(struct btree_trans *trans,
 {
 	struct bkey_cached *ck = (void *) path->l[0].b;
 
-	/*
-	 * bch2_varint_decode can read past the end of the buffer by at most 7
-	 * bytes (it won't be used):
-	 */
+	/* Slack for varint::decode_fast(), which reads up to 7 bytes past the end: */
 	u64s += 1;
 
 	return likely(u64s <= ck->u64s && test_bit(BKEY_CACHED_DIRTY, &ck->flags))

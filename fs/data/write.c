@@ -921,10 +921,7 @@ static inline int bch2_extent_update_i_size_sectors(struct btree_trans *trans,
 				BTREE_ITER_cached);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
-	/*
-	 * varint_decode_fast(), in the inode .invalid method, reads up to 7
-	 * bytes past the end of the buffer:
-	 */
+	/* Slack for varint::decode_fast(), which reads up to 7 bytes past the end: */
 	struct bkey_i *k_mut = errptr_try(bch2_trans_kmalloc_nomemzero(trans, bkey_bytes(k.k) + 8));
 	bkey_reassemble(k_mut, k);
 

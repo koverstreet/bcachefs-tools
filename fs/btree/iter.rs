@@ -1129,7 +1129,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// bkey_reassemble() into one it allocated: the key as long as it was,
     /// with room for a callee to grow it, of the type it's read as, as
     /// bkey_reassemble()'s copy is. A u64 more is allocated past the end, for
-    /// varint_decode_fast().
+    /// varint::decode_fast().
     pub fn bkey_reassemble_room<V: MutBkey<Mut = V> + ?Sized>(&self, k: BkeySC<'_, V>, min_bytes: usize)
         -> Result<TransBkey<'a, 't, V>, BchError>
     {

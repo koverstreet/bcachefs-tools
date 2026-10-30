@@ -218,10 +218,7 @@ static int btree_key_cache_create(struct btree_trans *trans,
 	struct bch_fs_btree_key_cache *bc = &c->btree.key_cache;
 	int ret = 0;
 
-	/*
-	 * bch2_varint_decode can read past the end of the buffer by at
-	 * most 7 bytes (it won't be used):
-	 */
+	/* Slack for varint::decode_fast(), which reads up to 7 bytes past the end: */
 	unsigned key_u64s = k.k->u64s + 1;
 
 	/*

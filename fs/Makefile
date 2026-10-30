@@ -119,7 +119,6 @@ bcachefs-y		:=			\
 	util/six.o				\
 	util/two_state_shared_lock.o		\
 	util/util.o				\
-	util/varint.o				\
 	vendor/bio_iov_iter.o			\
 	vendor/closure.o			\
 	vendor/min_heap.o			\

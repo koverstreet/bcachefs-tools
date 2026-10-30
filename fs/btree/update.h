@@ -331,7 +331,7 @@ static __always_inline struct bkey_i *__bch2_bkey_make_mut_noupdate(struct btree
 	if (type && k.k->type != type)
 		return ERR_PTR(-ENOENT);
 
-	/* extra padding for varint_decode_fast... */
+	/* Slack for varint::decode_fast(): */
 	mut = bch2_trans_kmalloc_nomemzero(trans, bytes + 8);
 	if (!IS_ERR(mut)) {
 		bkey_reassemble(mut, k);

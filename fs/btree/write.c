@@ -418,7 +418,7 @@ do_write:
 
 	BUG_ON(b->written && !seq);
 
-	/* bch2_varint_decode may read up to 7 bytes past the end of the buffer: */
+	/* Slack for varint::decode_fast(), which reads up to 7 bytes past the end: */
 	bytes += 8;
 
 	/* buffer must be a multiple of the block size */

@@ -168,7 +168,7 @@ static inline ssize_t __bch2_btree_u64s_remaining(struct btree *b, void *end)
 		b->whiteout_u64s;
 	ssize_t total = btree_buf_bytes(b) >> 3;
 
-	/* Always leave one extra u64 for bch2_varint_decode: */
+	/* Always leave one extra u64, slack for varint::decode_fast(): */
 	used++;
 
 	return total - used;
@@ -240,8 +240,8 @@ static inline bool bch2_btree_node_insert_fits(struct btree *b, unsigned u64s)
  * a follow-on bset to land the new key, and the insert path will immediately
  * trigger another btree_split. Caller must split in that case.
  *
- * +8 in each term matches the bch2_varint_decode read-past-end slack the
- * write path adds before round_up.
+ * +8 in each term matches the varint::decode_fast() slack the write path
+ * adds before round_up.
  */
 static inline bool bch2_btree_node_compact_fits(struct bch_fs *c,
 						struct btree *b,
