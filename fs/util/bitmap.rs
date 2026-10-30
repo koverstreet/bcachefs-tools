@@ -294,6 +294,11 @@ impl<const W: usize> AtomicBitArray<W> {
 // SAFETY: atomic integers; all zeroes is empty
 unsafe impl<const W: usize> ::pin_init::Zeroable for AtomicBitArray<W> {}
 
+// SAFETY: its writes are atomic, so its writer is itself
+unsafe impl<const W: usize> crate::util::projections::Publish for AtomicBitArray<W> {
+    type Writer = Self;
+}
+
 impl<const W: usize> Default for AtomicBitArray<W> {
     fn default() -> Self {
         Self([const { AtomicUsize::new(0) }; W])

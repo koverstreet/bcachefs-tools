@@ -338,6 +338,12 @@ impl c::bch_opts_mask {
         let (i, bits) = (id.0 as usize, core::ffi::c_ulong::BITS as usize);
         self.d[i / bits] |= 1 << (i % bits);
     }
+
+    /// A copy of @mask, a word at a time.
+    pub fn load(mask: &c::AtomicOptsMask) -> Self {
+        let words = mask.load();
+        Self { d: core::array::from_fn(|i| words.words()[i] as _) }
+    }
 }
 
 // ── Parsing ──────────────────────────────────────────────────────────────

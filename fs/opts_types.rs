@@ -89,6 +89,10 @@ pub struct bch_opts_mask {
     pub d: [c_ulong; bits_to_longs(c::BCH_OPTS_MAX as usize)],
 }
 
+/// A bch_opts_mask that changes while it's read: PublishedOpts', and
+/// c->mount_opts.
+pub type AtomicOptsMask = crate::util::bitmap::AtomicBitArray<{ bits_to_longs(c::BCH_OPTS_MAX as usize) }>;
+
 /*
  * The options, a field each: its #[opt] - its type, when it may be set, its
  * superblock field, its default - and its doc comment, its help.

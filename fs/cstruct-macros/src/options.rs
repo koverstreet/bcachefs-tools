@@ -28,6 +28,11 @@
 //!                          string option's as its enum - and setting it,
 //!                          defined
 //! name_or_default()        its value, or its default if it isn't defined
+//! PublishedOpts            bch_opts laid out the same, each option a Volatile:
+//!                          the filesystem's, c->opts, which anyone reads an
+//!                          option at a time and its lock's holder writes -
+//!                          the readers above, and load(), a bch_opts copy
+//! PublishedOptsWriter      it, as its writer has it: the writers above
 //! ```
 //!
 //! A field without #[opt] isn't an option: `defined`.
@@ -253,6 +258,18 @@ fn accessor_type(args: &[Vec<TokenTree>]) -> Accessor {
     }
 }
 
+/// What option @f's accessors take and give; that from the field's value, an
+/// expression @x; and the field's value from one of it, `v`.
+fn accessor(f: &Field, args: &[Vec<TokenTree>]) -> (String, Box<dyn Fn(&str) -> String>, String) {
+    let field_ty = f.ty.clone();
+    match accessor_type(args) {
+        Accessor::Bool    => ("bool".into(), Box::new(|x| format!("{x} != 0")), format!("v as {field_ty}")),
+        Accessor::Enum(e) => (format!("c::{e}"), Box::new(move |x| format!("c::{e}::from_bits({x} as _)")),
+                              format!("v.into_bits() as {field_ty}")),
+        Accessor::Field   => (field_ty, Box::new(|x| x.to_string()), "v".into()),
+    }
+}
+
 /// The option's default, from its #[opt]: 0 without one.
 fn default(f: &Field, args: &[Vec<TokenTree>]) -> String {
     args[1..].iter()
@@ -277,41 +294,100 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
     let arms = |body: &dyn Fn(&Field) -> String| -> String {
         opts.iter().map(|(f, _)| format!("bch_opt_id::Opt_{} => {},\n", f.name, body(f))).collect()
     };
-    let get = arms(&|f| format!("self.{} as u64", f.name));
-    let set = arms(&|f| format!("self.{} = v as {}", f.name, f.ty));
-    let apply: String = opts.iter().map(|(f, _)| format!(
-        "if src.defined.test(bch_opt_id::Opt_{0}) {{\n\
-             self.{0} = src.{0};\n\
-             self.defined.set(bch_opt_id::Opt_{0});\n\
-         }}\n", f.name)).collect();
-    let accessors: String = opts.iter().map(|(f, a)| {
-        // what the accessors take and give, and the field from and to it
-        let acc = accessor_type(a);
-        let ty = match &acc {
-            Accessor::Bool    => "bool".to_string(),
-            Accessor::Enum(e) => format!("c::{e}"),
-            Accessor::Field   => f.ty.clone(),
-        };
-        let get = |x: &str| match &acc {
-            Accessor::Bool    => format!("{x} != 0"),
-            Accessor::Enum(e) => format!("c::{e}::from_bits({x} as _)"),
-            Accessor::Field   => x.to_string(),
-        };
-        let set = match &acc {
-            Accessor::Bool    => format!("v as {}", f.ty),
-            Accessor::Enum(_) => format!("v.into_bits() as {}", f.ty),
-            Accessor::Field   => "v".to_string(),
-        };
-        let n = &f.name;
-        format!("pub fn {n}(&self) -> {ty} {{ {} }}\n\
-                 pub fn {n}_or_default(&self) -> {ty} {{\n\
-                     if self.defined(bch_opt_id::Opt_{n}) {{ self.{n}() }} else {{ {} }}\n\
+
+    // What reads and writes a value of each option, generic over how a
+    // field's loaded and stored: the plain struct's fields, or its published
+    // mirror's Volatiles. @load(n) is field n's value; @store(n, v) sets it;
+    // @defined(id) and @define(id) test and set the defined bit of option id,
+    // an expression.
+    struct Place<'a> {
+        load:    &'a dyn Fn(&str) -> String,
+        store:   &'a dyn Fn(&str, &str) -> String,
+        defined: &'a dyn Fn(&str) -> String,
+        define:  &'a dyn Fn(&str) -> String,
+        recv:    &'a str,
+    }
+
+    let readers = |p: &Place| -> String {
+        let get = arms(&|f| format!("{} as u64", (p.load)(&f.name)));
+        let accessors: String = opts.iter().map(|(f, a)| {
+            let (ty, conv, _) = accessor(f, a);
+            let n = &f.name;
+            format!("pub fn {n}(&self) -> {ty} {{ {} }}\n\
+                     pub fn {n}_or_default(&self) -> {ty} {{\n\
+                         if self.defined(bch_opt_id::Opt_{n}) {{ self.{n}() }} else {{ {} }}\n\
+                     }}\n", conv(&(p.load)(n)), conv(&format!("{name}::DEFAULTS.{n}")))
+        }).collect();
+        format!("/// Its value for @id - defined or not.\n\
+                 pub fn get(&self, id: bch_opt_id) -> u64 {{\n\
+                     match id {{\n\
+                         {get}\
+                         _ => panic!(\"not an option: {{}}\", id.0),\n\
+                     }}\n\
                  }}\n\
-                 pub fn set_{n}(&mut self, v: {ty}) {{\n\
-                     self.{n} = {set};\n\
-                     self.defined.set(bch_opt_id::Opt_{n});\n\
-                 }}\n", get(&format!("self.{n}")), get(&format!("Self::DEFAULTS.{n}")))
-    }).collect();
+                 \n\
+                 pub fn defined(&self, id: bch_opt_id) -> bool {{\n\
+                     {}\n\
+                 }}\n\
+                 \n\
+                 {accessors}", (p.defined)("id"))
+    };
+
+    let writers = |p: &Place| -> String {
+        let set = arms(&|f| (p.store)(&f.name, &format!("v as {}", f.ty)));
+        let apply: String = opts.iter().map(|(f, _)| format!(
+            "if src.defined.test(bch_opt_id::Opt_{0}) {{\n\
+                 {1};\n\
+                 {2};\n\
+             }}\n", f.name, (p.store)(&f.name, &format!("src.{}", f.name)),
+            (p.define)(&format!("bch_opt_id::Opt_{}", f.name)))).collect();
+        let setters: String = opts.iter().map(|(f, a)| {
+            let (ty, _, back) = accessor(f, a);
+            let n = &f.name;
+            format!("pub fn set_{n}({}, v: {ty}) {{\n\
+                         {};\n\
+                         {};\n\
+                     }}\n", p.recv, (p.store)(n, &back),
+                     (p.define)(&format!("bch_opt_id::Opt_{n}")))
+        }).collect();
+        format!("/// Set, and defined.\n\
+                 pub fn set({}, id: bch_opt_id, v: u64) {{\n\
+                     match id {{\n\
+                         {set}\
+                         _ => panic!(\"not an option: {{}}\", id.0),\n\
+                     }}\n\
+                     {};\n\
+                 }}\n\
+                 \n\
+                 /// Those @src defines, set: bch2_opts_apply().\n\
+                 pub fn apply({}, src: &{name}) {{\n\
+                     {apply}\
+                 }}\n\
+                 \n\
+                 {setters}", p.recv, (p.define)("id"), p.recv)
+    };
+
+    let plain = Place {
+        load:    &|n| format!("self.{n}"),
+        store:   &|n, v| format!("self.{n} = {v}"),
+        defined: &|id| format!("self.defined.test({id})"),
+        define:  &|id| format!("self.defined.set({id})"),
+        recv:    "&mut self",
+    };
+    let published = Place {
+        load:    &|n| format!("self.{n}.get()"),
+        store:   &|n, v| format!("self.{n}.set({v})"),
+        defined: &|id| format!("self.defined.test({id}.0 as usize)"),
+        define:  &|id| format!("self.defined.set({id}.0 as usize)"),
+        recv:    "&self",
+    };
+    let (plain_readers, plain_writers) = (readers(&plain), writers(&plain));
+    let (pub_readers, pub_writers) = (readers(&published), writers(&published));
+
+    let mirror: String = opts.iter()
+        .map(|(f, _)| format!("pub {}: crate::util::projections::Volatile<{}>,\n", f.name, f.ty))
+        .collect();
+    let load_fields: String = opts.iter().map(|(f, _)| format!("{0}: self.{0}.get(),\n", f.name)).collect();
     let nr = opts.len();
 
     Ok(tokens(&format!(
@@ -342,32 +418,42 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
                  opts\n\
              }};\n\
          \n\
-             /// Its value for @id - defined or not.\n\
-             pub fn get(&self, id: bch_opt_id) -> u64 {{\n\
-                 match id {{\n\
-                     {get}\
-                     _ => panic!(\"not an option: {{}}\", id.0),\n\
+             {plain_readers}\
+             {plain_writers}\
+         }}\n\
+         \n\
+         crate::published! {{\n\
+             /// {name}, read an option at a time while its lock's holder writes it,\n\
+             /// through PublishedOptsWriter. Laid out as {name} is: to C, one.\n\
+             pub struct PublishedOpts {{\n\
+                 {mirror}\
+                 pub defined: AtomicOptsMask,\n\
+             }}\n\
+         }}\n\
+         \n\
+         // SAFETY: Volatile words: zeroes are options, none defined\n\
+         unsafe impl ::pin_init::Zeroable for PublishedOpts {{}}\n\
+         \n\
+         // Field for field as {name}, each Volatile its type's size: checked\n\
+         const _: () = {{\n\
+             assert!(core::mem::size_of::<{name}>() == core::mem::size_of::<PublishedOpts>());\n\
+             assert!(core::mem::align_of::<{name}>() == core::mem::align_of::<PublishedOpts>());\n\
+         }};\n\
+         \n\
+         impl PublishedOpts {{\n\
+             /// A copy: each option as it was when it was read, not all as of one\n\
+             /// moment.\n\
+             pub fn load(&self) -> {name} {{\n\
+                 {name} {{\n\
+                     {load_fields}\
+                     defined: bch_opts_mask::load(&self.defined),\n\
                  }}\n\
              }}\n\
          \n\
-             /// Set, and defined.\n\
-             pub fn set(&mut self, id: bch_opt_id, v: u64) {{\n\
-                 match id {{\n\
-                     {set}\
-                     _ => panic!(\"not an option: {{}}\", id.0),\n\
-                 }}\n\
-                 self.defined.set(id);\n\
-             }}\n\
+             {pub_readers}\
+         }}\n\
          \n\
-             pub fn defined(&self, id: bch_opt_id) -> bool {{\n\
-                 self.defined.test(id)\n\
-             }}\n\
-         \n\
-             /// Those @src defines, set: bch2_opts_apply().\n\
-             pub fn apply(&mut self, src: &Self) {{\n\
-                 {apply}\
-             }}\n\
-         \n\
-             {accessors}\
+         impl PublishedOptsWriter {{\n\
+             {pub_writers}\
          }}\n")))
 }
