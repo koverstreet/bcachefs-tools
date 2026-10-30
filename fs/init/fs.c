@@ -725,8 +725,6 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_fs_counters_exit(c);
 	free_percpu(c->counters.now);
 	bch2_fs_copygc_exit(c);
-	bch2_io_clock_exit(&c->io_clock[WRITE]);
-	bch2_io_clock_exit(&c->io_clock[READ]);
 	bch2_fs_btree_exit(c);
 	bch2_fs_accounting_exit(c);
 
@@ -1320,8 +1318,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	try(bch2_fs_io_read_init(c));
 	try(bch2_fs_journal_init(&c->journal));
 	try(bch2_fs_vfs_init(c));
-	try(bch2_io_clock_init(&c->io_clock[READ]));
-	try(bch2_io_clock_init(&c->io_clock[WRITE]));
 
 #if IS_ENABLED(CONFIG_UNICODE)
 	if (!bch2_fs_casefold_enabled(c)) {

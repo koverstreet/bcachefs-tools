@@ -9,8 +9,8 @@
 //! bitmask accessors and C not yet converted are macros there too: c_enum!,
 //! c_const!, c_typedef!, c_xmacro!, c_bitmask!, c_verbatim!.
 //!
-//! And C's container types, which the types hold: DArray, GenRadix, Fifo,
-//! MinHeap - and c_opaque!, for the types C has only behind pointers.
+//! And C's container types, which the types hold: DArray, GenRadix, Fifo -
+//! and c_opaque!, for the types C has only behind pointers.
 //!
 //! Only rustc knows a Rust type's layout, and only for the target it compiles
 //! for - so the C is written from what the target build of this crate says.
@@ -423,20 +423,6 @@ macro_rules! typeinfo_opaque {
 typeinfo_opaque!(DArray<T, N>, T, const N: usize);
 typeinfo_opaque!(GenRadix<T>, T);
 typeinfo_opaque!(Fifo<T, I>, T, I: crate::util::fifo::FifoIdx);
-typeinfo_opaque!(MinHeap<T, N>, T, const N: usize);
-
-/// DEFINE_MIN_HEAP(T, name) - linux/min_heap.h: laid out as a darray, but a
-/// heap - its own type. Not Clone or Copy: it owns its allocation.
-#[repr(C)]
-pub struct MinHeap<T, const N: usize = 0> {
-    pub nr:           usize,
-    pub size:         usize,
-    pub data:         *mut T,
-    pub preallocated: [T; N],
-}
-
-// SAFETY: as DArray's: zeroed is empty, nothing allocated
-unsafe impl<T: ::pin_init::Zeroable, const N: usize> ::pin_init::Zeroable for MinHeap<T, N> {}
 
 /// FIFO(T), FIFO_U16_IDX(T)... - util/fifo.h: __FIFO(T, I). Its methods are
 /// util/fifo.rs's.

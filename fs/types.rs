@@ -758,6 +758,8 @@ pub struct Fs {
     /* Promotes in flight, against their limit: data/promote.rs */
     pub promotes_in_flight: core::sync::atomic::AtomicU32,
 
+    #[pin]
+    #[init(::pin_init::pin_init_array_from_fn(|_| c::io_clock::init()))]
     pub io_clock: [c::io_clock; 2],
     pub clock_journal_res: c::journal_entry_res,
     pub rewind_limit_res: c::journal_entry_res,

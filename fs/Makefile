@@ -109,7 +109,6 @@ bcachefs-y		:=			\
 	journal/write.o				\
 	locking/locking.o			\
 	sb/members.o				\
-	util/clock.o				\
 	util/darray.o				\
 	util/enumerated_ref.o			\
 	util/eytzinger.o			\

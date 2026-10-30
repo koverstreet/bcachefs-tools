@@ -76,7 +76,8 @@ impl Sleep<SleepError> {
 }
 
 /// SleepError, or Infallible: a sleep that can't end early never makes one.
-pub trait SleepEnd: sealed::Sealed {
+/// Copy, so a Sleep is.
+pub trait SleepEnd: sealed::Sealed + Copy {
     fn early(e: SleepError) -> Self;
 }
 

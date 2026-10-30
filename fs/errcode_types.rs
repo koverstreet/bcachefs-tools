@@ -98,7 +98,6 @@ c_xmacro! {
         (ENOMEM, ENOMEM_fs_btree_key_cache_init, 49),
         (ENOMEM, ENOMEM_fs_counters_init, 50),
         (ENOMEM, ENOMEM_fs_btree_write_buffer_init, 51),
-        (ENOMEM, ENOMEM_io_clock_init, 52),
         (ENOMEM, ENOMEM_blacklist_table_init, 53),
         (ENOMEM, ENOMEM_sb_realloc_injected, 54),
         (ENOMEM, ENOMEM_sb_bio_realloc, 55),

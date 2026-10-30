@@ -108,7 +108,6 @@
 #[path = "snapshots/format.rs"] pub mod snapshots_format;
 #[path = "snapshots/types.rs"] pub mod snapshots_types;
 #[path = "types.rs"] pub mod types;
-#[path = "util/clock_types.rs"] pub mod util_clock_types;
 #[path = "util/enumerated_ref_types.rs"] pub mod util_enumerated_ref_types;
 #[path = "util/fast_list_types.rs"] pub mod util_fast_list_types;
 #[path = "util/mean_and_variance_types.rs"] pub mod util_mean_and_variance_types;
@@ -279,7 +278,7 @@ pub mod c {
     pub use super::snapshots_format::*;
     pub use super::snapshots_types::*;
     pub use super::types::*;
-    pub use super::util_clock_types::*;
+    pub use crate::util::clock::{io_clock, IO_CLOCK_PCPU_SECTORS};
     pub use super::util_enumerated_ref_types::*;
     pub use super::util_fast_list_types::*;
     pub use crate::locking::{mutex_noio, percpu_rwsem_noio};

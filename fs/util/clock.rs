@@ -1,68 +1,195 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Waiting on an io clock - util/clock.c's clocks of sectors of IO done: a
-//! timer on the clock that wakes the waiter when the clock reaches its
-//! time, and sleep_until() on that or the waiter's own condition, as
-//! bch2_kthread_io_clock_wait_once() and its caller's recheck are in C.
+//! The io clocks - c->io_clock[READ] and [WRITE] - and waiting on them. A
+//! clock's time is sectors of IO done: bch2_increment_clock() - an inline in
+//! clock.h, for the IO paths in C - adds to a per-CPU batch, and every
+//! IO_CLOCK_PCPU_SECTORS a CPU's batch goes to the clock, by
+//! __bch2_increment_clock(). So it's approximate: up to that many sectors a
+//! CPU behind.
 //!
-//! The timer's on the waiter's stack, in the clock's heap while it waits: a
-//! guard takes it out on the way out, however that is. It fires from the IO
-//! path - __bch2_increment_clock(), any context - so all it does is set a
-//! flag and wake the task; and it fires under the clock's timer_lock, which
-//! taking it out takes too, so once it's out it isn't firing.
+//! A waiter - wait_until() - sleeps until the clock reaches its time, or its
+//! own condition says otherwise. While it waits it has a Timer on the clock:
+//! its time, a Waker for its task, and where it waits from, for the debug
+//! output. The clock's timers are a vec, sorted latest first, under
+//! timer_lock: the next to expire is the last, so expiring is a pop. There
+//! are a few - copygc's and reconcile's - so an insert's shift is nothing.
+//! The vec grows on demand: a waiter that finds it full makes it room with
+//! the lock dropped, and if that fails, checks the clock once a second,
+//! trying again each time.
+//!
+//! A clock moving on wakes - and drops - the timers it's passed, under the
+//! lock, from IO submission. The waiter, its condition true or not, takes its
+//! timer off on the way out - if it's still there - under the same lock. A
+//! Timer's Waker is a clone of the waiter's own, so its drop is never the
+//! task's last ref; a task waits on one clock at a time, so its task names
+//! its Timer.
+//!
+//! now is read and added to Relaxed: the lock orders a waiter's add against
+//! an increment, and the task state and the wake order its recheck after one.
 
 use crate::c;
-use crate::util::sleep::{sleep_until, task_waker, Sleep, SleepEnd};
-use core::ffi::c_void;
-use core::sync::atomic::{AtomicBool, Ordering};
+use crate::locking::Lock;
+use crate::{new_lock, prt};
+use crate::types::{rust_only, RustOnly};
+use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
+use crate::util::kernel::HZ;
+use crate::util::percpu::PerCpu;
+use crate::util::sleep::{sleep_until, task_waker, Sleep, SleepEnd, SleepError};
+use crate::util::{Printbuf, ToText};
+use core::panic::Location;
+use core::pin::Pin;
+use core::sync::atomic::{AtomicI64, Ordering::Relaxed};
 use core::task::Waker;
+use cstruct_macros::{c_const, c_export, CStruct, Init};
+use pin_init::{pin_data, pinned_drop};
 
-/// A waiter's timer: io_timer first, so the timer's address is its.
+c_const! {
+    /* Amount to buffer up on a percpu counter */
+    #[c_int]
+    pub const IO_CLOCK_PCPU_SECTORS: u32 = 128;
+}
+
+#[allow(non_camel_case_types)]
+#[pin_data(PinnedDrop)]
 #[repr(C)]
-struct Wait {
-    timer:   c::io_timer,
-    expired: AtomicBool,
-    waker:   Waker,
+#[derive(CStruct, Init)]
+pub struct io_clock {
+    pub now: AtomicI64,
+    #[c("u16 __percpu *pcpu_buf")]
+    #[init(PerCpu::init())]
+    pub pcpu_buf: PerCpu<u16>,
+
+    /// The waiters, latest first: Rust's alone.
+    #[pin]
+    #[init(RustOnly::new(new_lock!(KVVec::new(), (), "&clock->timer_lock")))]
+    timers: rust_only!(Lock<c::spinlock_t, KVVec<Timer>>),
 }
 
-unsafe extern "C" fn wait_expired(timer: *mut c::io_timer) {
-    // SAFETY: a Wait's timer, alive while it's on the clock - and it's
-    // taken off before the Wait goes
-    let w = unsafe { &*timer.cast::<Wait>() };
-    w.expired.store(true, Ordering::Release);
-    w.waker.wake_by_ref();
+/// A waiter on a clock: wakes @waker when the clock reaches @expire.
+pub(crate) struct Timer {
+    expire: u64,
+    waker:  Waker,
+    caller: &'static Location<'static>,
 }
 
-/// Takes the timer off the clock, if it hasn't fired.
-struct OnClock<'a>(&'a c::io_clock, &'a Wait);
+/// time_after_eq64(now, t): wrapping, where the timers' order is plain u64,
+/// as C's heap's was
+fn reached(now: u64, t: u64) -> bool {
+    now.wrapping_sub(t) as i64 >= 0
+}
 
-impl Drop for OnClock<'_> {
-    fn drop(&mut self) {
-        // SAFETY: the clock's, changed by C under its timer_lock
-        unsafe { c::bch2_io_timer_del(core::ptr::from_ref(self.0).cast_mut(),
-                                      core::ptr::from_ref(&self.1.timer).cast_mut()) };
+impl io_clock {
+    fn now(&self) -> u64 {
+        self.now.load(Relaxed) as u64
     }
-}
 
-impl c::io_clock {
+    /// Puts @t on the clock - unless the clock's already reached its time,
+    /// which the waiter's next check sees - making room if it's full.
+    fn add(&self, mut t: Timer) -> Result<(), AllocError> {
+        loop {
+            let mut timers = self.timers.lock();
+            if reached(self.now(), t.expire) {
+                return Ok(());
+            }
+
+            let i = timers.partition_point(|x| x.expire >= t.expire);
+            match timers.push_within_capacity(t) {
+                Ok(()) => {
+                    timers[i..].rotate_right(1);
+                    return Ok(());
+                }
+                Err(full) => t = full.0,
+            }
+
+            let cap = timers.capacity();
+            drop(timers);
+            self.grow(cap)?;
+        }
+    }
+
+    /// Room for twice @cap timers, unless another waiter's made it since:
+    /// allocated unlocked, swapped in under the lock, and the old buffer -
+    /// empty - freed once the lock's dropped.
+    fn grow(&self, cap: usize) -> Result<(), AllocError> {
+        let mut new = KVVec::with_capacity((cap * 2).max(4), GFP_KERNEL)?;
+        let mut timers = self.timers.lock();
+        if timers.capacity() == cap {
+            for t in timers.drain_all() {
+                // no more than @cap of them
+                let pushed = new.push_within_capacity(t).is_ok();
+                debug_assert!(pushed);
+            }
+            core::mem::swap(&mut *timers, &mut new);
+        }
+        Ok(())
+    }
+
+    /// Takes @waker's timer off the clock, if it's still on.
+    fn del(&self, waker: &Waker) {
+        self.timers.lock().retain(|t| t.waker.data() != waker.data());
+    }
+
     /// Sleep, as @how says, until the clock reaches @until - None - or
     /// @cond() says otherwise, checked after every wake: kthread_should_stop()
     /// say. @cond runs in the sleep's task state, so it mustn't sleep.
+    ///
+    /// With no room for a timer, and none to be had, it sleeps a second at a
+    /// time, trying again after each: a timeout in @how, which no caller
+    /// gives, is a second's, each time.
+    #[track_caller]
     pub fn wait_until<T, E: SleepEnd>(&self, until: u64, how: Sleep<E>,
                                       mut cond: impl FnMut() -> Option<T>) -> Result<Option<T>, E> {
-        let w = Wait {
-            timer:   c::io_timer { fn_: Some(wait_expired), fn2: wait_expired as *mut c_void, expire: until },
-            expired: AtomicBool::new(false),
-            waker:   task_waker(),
-        };
-        // SAFETY: as OnClock's: w stays put, and off the clock before it goes
-        unsafe { c::bch2_io_timer_add(core::ptr::from_ref(self).cast_mut(),
-                                      core::ptr::from_ref(&w.timer).cast_mut()) };
-        let _on_clock = OnClock(self, &w);
-
-        sleep_until(how, || match cond() {
+        let caller = Location::caller();
+        let mut done = || match cond() {
             Some(v) => Some(Some(v)),
-            None    => w.expired.load(Ordering::Acquire).then_some(None),
-        })
+            None    => reached(self.now(), until).then_some(None),
+        };
+
+        let waker = task_waker();
+        loop {
+            if self.add(Timer { expire: until, waker: waker.clone(), caller }).is_ok() {
+                let ret = sleep_until(how, &mut done);
+                self.del(&waker);
+                return ret;
+            }
+
+            match sleep_until(how.timeout(HZ), &mut done) {
+                Err(SleepError::Timeout) => {}
+                r => return r.map_err(E::early),
+            }
+        }
+    }
+}
+
+/// The clock moving on @sectors - a CPU's batch, from bch2_increment_clock():
+/// wakes the waiters it's passed.
+#[c_export]
+pub fn __bch2_increment_clock(clock: &c::io_clock, sectors: u64) {
+    let now = (clock.now.fetch_add(sectors as i64, Relaxed) as u64).wrapping_add(sectors);
+
+    let mut timers = clock.timers.lock();
+    while timers.last().is_some_and(|t| reached(now, t.expire)) {
+        let Some(t) = timers.pop() else { break };
+        t.waker.wake();
+    }
+}
+
+impl ToText for io_clock {
+    /// The clock, and its waiters, soonest first.
+    fn to_text(&self, out: &mut Printbuf) {
+        out.tabstop_push(40);
+        prt!(out, "current time:\t{}\n", self.now());
+
+        let mut out = out.atomic();
+        for t in self.timers.lock().iter().rev() {
+            prt!(out, "{}:\t{}\n", t.caller, t.expire);
+        }
+    }
+}
+
+#[pinned_drop]
+impl PinnedDrop for io_clock {
+    fn drop(self: Pin<&mut Self>) {
+        self.project().pcpu_buf.free();
     }
 }
