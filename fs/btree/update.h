@@ -32,23 +32,6 @@ static inline int bch2_btree_delete_at_buffered(struct btree_trans *trans,
 	return bch2_btree_bit_mod_buffered(trans, btree, pos, false);
 }
 
-static inline enum bch_bkey_type extent_whiteout_type(struct bch_fs *c, enum btree_id btree,
-						      const struct bkey *k)
-{
-	/*
-	 * KEY_TYPE_extent_whiteout indicates that there isn't a real extent
-	 * present at that position: key start positions inclusive of
-	 * KEY_TYPE_extent_whiteout (but not KEY_TYPE_whiteout) are
-	 * monotonically increasing
-	 */
-	return btree_id_is_extents_snapshots(btree) &&
-		bkey_deleted(k) &&
-		bch2_snapshot_is_leaf(c, k->p.snapshot) &&
-		!bch2_request_incompat_feature(c, bcachefs_metadata_version_extent_snapshot_whiteouts)
-		? KEY_TYPE_extent_whiteout
-		: KEY_TYPE_whiteout;
-}
-
 static inline int __must_check
 bch2_trans_update_buf(struct btree_trans *trans, struct btree_iter *iter,
 		      struct bkey_i *k, unsigned k_buf_u64s,

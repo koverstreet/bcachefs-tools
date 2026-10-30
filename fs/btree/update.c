@@ -223,7 +223,7 @@ static noinline int extent_overwrite_splits(struct btree_trans *trans,
 
 			bkey_init(&update->k);
 			update->k.p = new.k->p;
-			update->k.type = extent_whiteout_type(c, btree_id, new.k);
+			update->k.type = bch2_extent_whiteout_type(c, btree_id, new.k);
 
 			try(bch2_btree_insert_nonextent(trans, btree_id, update,
 							update->k.u64s,
@@ -282,7 +282,7 @@ int bch2_trans_update_extent_overwrite(struct btree_trans *trans,
 			if (ret < 0)
 				return ret;
 			if (ret)
-				update->k.type = extent_whiteout_type(trans->c, iter->btree_id, new.k);
+				update->k.type = bch2_extent_whiteout_type(trans->c, iter->btree_id, new.k);
 		}
 
 		try(bch2_btree_insert_nonextent(trans, btree_id, update, update->k.u64s,
@@ -327,7 +327,7 @@ static int bch2_trans_update_extent(struct btree_trans *trans,
 		bool done = k.k->type != KEY_TYPE_whiteout && bkey_lt(insert->k.p, k.k->p);
 
 		if (bkey_extent_whiteout(k.k)) {
-			enum bch_bkey_type whiteout_type = extent_whiteout_type(trans->c, btree_id, &insert->k);
+			enum bch_bkey_type whiteout_type = bch2_extent_whiteout_type(trans->c, btree_id, &insert->k);
 
 			if (bkey_le(k.k->p, insert->k.p) &&
 			    k.k->type != whiteout_type) {

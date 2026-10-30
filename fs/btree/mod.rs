@@ -10,6 +10,7 @@ pub mod iter;
 pub mod locking;
 pub mod read;
 pub mod types;
+pub mod update;
 pub mod write_buffer;
 
 pub use bkey::BkeySC;

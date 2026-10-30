@@ -144,7 +144,7 @@ int bch2_extent_trim_atomic(struct btree_trans *trans,
 
 		if (bkey_extent_whiteout(k.k)) {
 			if (!whiteout_type)
-				whiteout_type = extent_whiteout_type(trans->c, iter->btree_id, &insert->k);
+				whiteout_type = bch2_extent_whiteout_type(trans->c, iter->btree_id, &insert->k);
 
 			if (bpos_gt(k.k->p, insert->k.p)) {
 				if (k.k->type == KEY_TYPE_extent_whiteout)

@@ -1124,7 +1124,21 @@ c_enum! {
     }
 }
 
+/// BCH_BTREE_IDS()' rows, selected, as a mask by id.
+macro_rules! btree_ids_mask {
+    ($(($name:ident, $nr:literal $(, $($rest:tt)*)?)),* $(,)?) => { 0u64 $(| 1 << $nr)* };
+}
+
 impl c::btree_id {
+    /// Whether it's an extents btree with snapshots:
+    /// btree_id_is_extents_snapshots().
+    pub const fn is_extents_snapshots(self) -> bool {
+        const MASK: u64 =
+            c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_extents => btree_ids_mask]) &
+            c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_snapshots => btree_ids_mask]);
+        self.0 < 64 && MASK & (1 << self.0) != 0
+    }
+
     /// Convert from raw u32. Returns None for unknown built-in btree IDs.
     pub fn from_raw(id: u32) -> Option<Self> {
         crate::BTREE_IDS_KNOWN.get(id as usize).copied()
