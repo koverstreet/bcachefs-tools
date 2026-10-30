@@ -253,8 +253,6 @@ tags:
 # Not the kernel-only C: fs/vendor/kernel-rust (the vendored kernel Rust
 # stack's helpers) and dkms/ (module-version.c).
 SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' ! -path './vendor/*' ! -path './fs/vendor/kernel-rust/*' ! -path './dkms/*' ! -path './debian/*' ! -path './target/*' ! -path './build/*' ! -path './ktest-out/*' -iname '*.c'))
-# KUnit test — kernel-only, no userspace equivalent for <kunit/test.h>
-SRCS:=$(filter-out %/mean_and_variance_test.c, $(SRCS))
 # Strip find(1)'s leading './' so objects land at build/<path>, not build/./<path>.
 SRCS:=$(patsubst ./%,%,$(SRCS))
 

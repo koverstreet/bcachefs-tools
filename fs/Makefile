@@ -113,7 +113,6 @@ bcachefs-y		:=			\
 	util/enumerated_ref.o			\
 	util/eytzinger.o			\
 	util/fast_list.o			\
-	util/mean_and_variance.o		\
 	util/printbuf.o				\
 	util/rcu.o				\
 	util/rcu_pending.o			\
@@ -143,8 +142,6 @@ else
 # with "no rule to make target".
 $(warning bcachefs: $(src)/module-version.c missing - module will carry no MODULE_VERSION)
 endif
-else
-	obj-$(CONFIG_MEAN_AND_VARIANCE_UNIT_TEST)   += util/mean_and_variance_test.o
 endif
 
 # A prebuilt module builds nothing, so none of Rust's requirements apply - its
