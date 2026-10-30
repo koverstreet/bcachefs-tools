@@ -10,9 +10,11 @@
 //!
 //! Each step of its life has a type:
 //! - spawn() makes the task, with the update zeroed: Spawned.
-//! - init() sets the update up in the spawner's transaction: Ready. The
-//!   spawner issues the read, then start()s the task with its body - or
-//!   abandon()s it, if the read didn't issue.
+//! - init() sets the update up in the spawner's transaction: Ready - or, on
+//!   error, the task's dropped unstarted. The spawner start()s the task with
+//!   its body. A mover's body issues the read itself, Body::issue_read(); a
+//!   promote's waits on the one C issues once the promote's made, its Done
+//!   made first, by start_read().
 //! - The body holds the update as a Body.
 //!
 //! Body derefs to the data_update, and Ready to its Body. While an IO is in flight C writes
@@ -148,8 +150,8 @@ impl<'q, B: Future<Output = ()> + Send> Spawned<'q, B> {
     }
 }
 
-/// An update that's set up, in a task not started yet: the spawner issues
-/// its read, then start()s it.
+/// An update that's set up, in a task not started yet: the spawner start()s
+/// it.
 pub struct Ready<'q, B: Future<Output = ()>> {
     task: TaskBox<'q, UpdateTask<B>>,
     body: Body,
@@ -165,25 +167,12 @@ impl<B: Future<Output = ()> + Send> Ready<'_, B> {
         self.body.read = Some(Completion::new(slot, waiter));
     }
 
-    /// Starts the task, @body running the update. Its read has been issued.
+    /// Starts the task, @body running the update.
     pub fn start(self, body: impl FnOnce(Body) -> B) {
         let Ready { mut task, body: b } = self;
         task.get().future().project().body.set(Some(body(b)));
         // SAFETY: spawn()'s: its queue, and what the body borrows, outlive it
         unsafe { task.start_unchecked() };
-    }
-
-    /// For a read that failed to issue: exit()s the update, and drops the task
-    /// unstarted.
-    pub fn abandon(self, ret: c_int) {
-        let Ready { task, mut body } = self;
-        // ended at submit: completed before the drop, which waits for it
-        if let Some(read) = body.read.take() {
-            body.update().read.as_ref().expect("a data update's read, abandoned unissued").complete();
-            drop(read);
-        }
-        body.exit(ret);
-        drop(task);
     }
 }
 
@@ -296,6 +285,25 @@ impl Body {
     pub fn turn(&self) -> Pin<&Gather<(), waiter::Async>> {
         // SAFETY: @turn is structurally pinned
         unsafe { Pin::new_unchecked(&self.update().turn) }
+    }
+
+    /// Issues the read, from the task, and waits for it: @issue submits it, or
+    /// fails before it touches the rbio, so it never went out.
+    pub async fn issue_read(&mut self, issue: impl FnOnce(&mut c::data_update) -> Result<(), BchError>)
+        -> Result<(), BchError>
+    {
+        let waiter = waiter::Async::current().await;
+        // SAFETY: not tied to the Body, which the read is lent
+        let read = Completion::new(unsafe { &mut (*self.up.as_ptr()).read }, waiter);
+        if let Err(e) = issue(self) {
+            // ended at submit: completed, as its endio would, so the drop
+            // doesn't wait
+            unsafe { (*self.up.as_ptr()).read.as_ref() }.expect("the read's Done, just made").complete();
+            drop(read);
+            return Err(e);
+        }
+        read.resume_on(Resume::Spawned).await;
+        Ok(())
     }
 
     /// Waits for the read the spawner issued.

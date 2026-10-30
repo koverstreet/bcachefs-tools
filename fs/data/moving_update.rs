@@ -18,6 +18,7 @@
 
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIter, TransAttempt};
+use crate::btree::iter::lockrestart_do;
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::moving::{Moving, MovingIo};
@@ -67,12 +68,35 @@ fn read_error_stats(u: &c::data_update, moving: &Moving<'_>, size: u32) {
     }
 }
 
-/// The body: waits for the read, counted in the context as @read_io, then for
-/// its turn, then writes. @bucket counts the update against the bucket it's
-/// moving data off, until it's done.
+/// The body: issues the read, in a transaction of its own, and waits for it,
+/// counted in the context as @read_io; then waits for its turn, then writes.
+/// @bucket counts the update against the bucket it's moving data off, until
+/// it's done. What could fail allocating is done before it's spawned, so a
+/// read that fails to issue - __bch2_read_extent() fails synchronously only
+/// before it touches the rbio - ends the update.
 async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_bucket>>) {
-    u.read().await;
+    let issued = u.issue_read(|d| {
+        let trans = crate::btree_trans!(d.op.fs());
+        let key = BkeySC::from(d.k.key());
+        let (btree, opts) = (d.btree_id, d.opts);
+        lockrestart_do(&trans, |t| {
+            // SAFETY: we're in the attempt, and init() set the read bio up
+            let ret = t.result(unsafe {
+                __bch2_read_extent(t.raw(), &mut d.rbio, d.rbio.bio.bi_iter, key.k.start_pos(), btree, key.into(), 0,
+                                   core::ptr::null_mut(), opts.read_flags | c::bch_read_flags::BCH_READ_last_fragment,
+                                   opts.read_dev as c_int)
+            });
+            // the read's error messages begin transactions of their own
+            t.restarts_handled();
+            ret
+        })
+    }).await;
     drop(read_io);
+    if let Err(e) = issued {
+        u.exit(crate::errcode::ret_to_c(Err::<(), _>(e)));
+        drop(bucket);
+        return;
+    }
 
     u.turn().wait(Resume::Spawned).await;
 
@@ -110,7 +134,7 @@ unsafe extern "C" fn move_read_endio(bio: *mut c::bio) {
     }
 }
 
-/// Starts moving extent @k, returning once the read is issued - or at once if
+/// Starts moving extent @k: its task, which issues the read - or nothing, if
 /// there's nothing to read.
 pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_in_flight: Option<&c::move_bucket>,
                           iter: &BtreeIter<'_>, k: BkeySC<'_>, io_opts: &c::bch_inode_opts,
@@ -133,27 +157,10 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
     u.rbio.bio.bi_end_io = Some(move_read_endio);
     u.rbio.bio.bi_ioprio = IOPRIO_IDLE;
     u.io_seq = moving.update_issue(u.turn().get());
-    u.start_read();
 
-    let d = &mut **u;
-    let key = BkeySC::from(d.k.key());
-    let size = key.k.size;
+    let size = BkeySC::from(u.k.key()).k.size;
     let read_io = moving.io_start(false, size);
     let bucket = bucket_in_flight.map(Refcount::get);
-
-    // SAFETY: we're in the attempt, and init() set the read bio up
-    let ret = unsafe {
-        __bch2_read_extent(t.raw(), &mut d.rbio, d.rbio.bio.bi_iter, key.k.start_pos(), btree, key.into(), 0,
-                           core::ptr::null_mut(), data_opts.read_flags | c::bch_read_flags::BCH_READ_last_fragment,
-                           data_opts.read_dev as c_int)
-    };
-    if let Err(e) = t.result(ret) {
-        // __bch2_read_extent() fails synchronously only before it touches the
-        // rbio - a restart, or ENOMEM setting up a promote - so the endio won't
-        // run
-        u.abandon(ret);
-        return Err(e);
-    }
 
     u.start(|b| run(b, read_io, bucket));
 
