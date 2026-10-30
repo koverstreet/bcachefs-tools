@@ -4,6 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{DArray, NeBytes, c_default};
+use crate::util::gap_buffer::GapBuffer;
 use crate::util::vstructs::Head;
 use cstruct_macros::{bitfield, c_extern, CStruct};
 use nestify::nest;
@@ -78,17 +79,9 @@ c_default!(journal_key);
 #[repr(C)]
 #[derive(CStruct)]
 pub struct journal_keys {
-    /* must match DArray's layout: nr, size, data, preallocated */
-    pub nr: usize,
-    pub size: usize,
-    pub data: *mut c::journal_key,
-    pub preallocated: [c::journal_key; 0],
-    /*
-     * Gap buffer: instead of all the empty space in the array being at the
-     * end of the buffer - from @nr to @size - the empty space is at @gap.
-     * This means that sequential insertions are O(n) instead of O(n^2).
-     */
-    pub gap: usize,
+    /* The keys, a gap buffer: util/gap_buffer.rs. C reads its fields as its own */
+    #[c_anon("size_t nr; size_t size; struct journal_key *data; struct journal_key preallocated[0]; size_t gap")]
+    pub keys: GapBuffer<c::journal_key>,
     pub ref_: AtomicI32,
     pub initial_ref_held: bool,
 
