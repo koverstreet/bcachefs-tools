@@ -784,7 +784,7 @@ use_clean:
 		bch2_journal_meta(&c->journal);
 	}
 
-	if (c->errors.msgs.nr) {
+	if (bch2_fsck_errs_seen(c)) {
 		CLASS(bch_log_msg, msg)(c);
 		prt_printf(&msg.m, "errors this recovery:\n");
 		bch2_fsck_err_counts_to_text(&msg.m, c);

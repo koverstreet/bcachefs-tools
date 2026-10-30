@@ -99,6 +99,15 @@ impl Printbuf {
         }
     }
 
+    /// What's written, cut back to @len bytes - C's out->pos = len.
+    pub fn truncate(&mut self, len: usize) {
+        if len < self.0.pos as usize {
+            self.0.pos = len as core::ffi::c_uint;
+            // SAFETY: inside what's written, which the buffer holds
+            unsafe { *self.0.buf.add(len) = 0 };
+        }
+    }
+
     /// What's been written, as bytes - which needn't be UTF-8, after
     /// write_bytes().
     pub fn as_bytes(&self) -> &[u8] {

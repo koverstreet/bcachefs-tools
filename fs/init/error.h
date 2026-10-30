@@ -7,8 +7,6 @@
 #include "btree/bkey_gen.h"
 #include "sb/errors.h"
 
-#include "init/error_defs_gen.h"
-
 /*
  * XXX: separate out errors that indicate on disk data is inconsistent, and flag
  * superblock as such
@@ -58,11 +56,14 @@ int bch2_fs_topology_error(struct bch_fs *, const char *, ...);
 #define bch2_count_fsck_err(_c, _err, ...)				\
 	__bch2_count_fsck_err(_c, BCH_FSCK_ERR_##_err, __VA_ARGS__)
 
-void bch2_fsck_err_counts_to_text(struct printbuf *, struct bch_fs *);
+__printf(6, 7)
+int __bch2_fsck_err(struct bch_fs *, struct btree_trans *, struct bpos,
+		    enum bch_fsck_flags, enum bch_sb_error_id, const char *, ...);
 
-int bch2_fsck_err_opt(struct bch_fs *,
-		      enum bch_fsck_flags,
-		      enum bch_sb_error_id);
+__printf(5, 6)
+int __bch2_bkey_fsck_err(struct bch_fs *, struct bkey_s_c,
+			 const struct bkey_validate_context *,
+			 enum bch_sb_error_id, const char *, ...);
 
 #define bch2_fsck_err(c, _flags, _err_type, ...)				\
 	__bch2_fsck_err(type_is(c, struct bch_fs *) ? (struct bch_fs *) c : NULL,\
@@ -77,13 +78,6 @@ int bch2_fsck_err_opt(struct bch_fs *,
  * fsck_damaged_paths debugfs file.
  */
 int bch2_damage_record(struct btree_trans *, struct bpos, enum bch_sb_error_id);
-void bch2_fsck_damaged(struct btree_trans *, struct bpos, enum bch_sb_error_id);
-void bch2_fsck_damaged_path_to_text(struct printbuf *, struct btree_trans *,
-				    const struct fsck_damaged_path *);
-void bch2_fsck_damaged_paths_to_text(struct printbuf *, struct bch_fs *);
-
-void bch2_flush_fsck_errs(struct bch_fs *);
-void bch2_free_fsck_errs(struct bch_fs *);
 
 #define fsck_err_wrap(_do)						\
 ({									\
@@ -295,10 +289,5 @@ static inline void bch2_account_io_completion(struct bch_dev *ca,
 	bch2_account_io_success_fail(ca, type, success);
 }
 
-void bch2_inum_offset_err_msg_trans(struct btree_trans *, struct printbuf *, u32, struct bpos);
-
-void bch2_fs_errors_exit(struct bch_fs *);
-void bch2_fs_errors_init_early(struct bch_fs *);
-int bch2_fs_errors_init(struct bch_fs *);
 
 #endif /* _BCACHEFS_INIT_ERROR_H */

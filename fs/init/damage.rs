@@ -24,7 +24,7 @@
 //! together. check_damage deletes a key without one: left by a kernel
 //! without the damage btree, it would claim a reused inum's history.
 //!
-//! The in-memory fsck damage report, bch2_fsck_damaged()'s, dies with the
+//! The in-memory fsck damage report, error::fsck_damaged()'s, dies with the
 //! mount; this is its durable counterpart. Extents lost with a btree node
 //! are stashed, by range, where the node's lost, and attributed to inodes
 //! later, when the inodes btree can be walked: lost extents below.
@@ -148,7 +148,7 @@ pub fn accumulate(t: &TransAttempt<'_, '_>, inum: u64, mut snapshot: u32)
 pub fn record(t: &TransAttempt<'_, '_>, pos: c::bpos, err: c::bch_sb_error_id) -> Result<(), BchError> {
     let at = spos(0, if pos.inode != 0 { pos.inode } else { pos.offset }, pos.snapshot);
 
-    unsafe { c::bch2_fsck_damaged(t.raw(), pos, err) };
+    crate::init::error::fsck_damaged(t.fs(), pos, err);
 
     let mut iter = BtreeIter::new(t, c::btree_id::damage, at,
                                   BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::INTENT);

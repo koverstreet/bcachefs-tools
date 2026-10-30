@@ -8,9 +8,9 @@ use crate::c;
 use crate::errcode::{bch_errcode, errptr_to_result, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::journal::entries::EntryWriter;
-use crate::util::ffi::{c_char, Opaque};
+use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
-use core::ffi::{c_int, c_uint, CStr};
+use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
 use core::ptr::NonNull;
 use core::slice;
@@ -102,15 +102,6 @@ impl TransAttempt<'_, '_> {
         let bytes = unsafe { slice::from_raw_parts(k.as_ffi().cast::<u8>(), k.k.bytes()) };
         self.journal_entry_add(c::bch_jset_entry_type::BCH_JSET_ENTRY_log_bkey, btree.0 as u8, level as u8, bytes)
     }
-}
-
-/// # Safety
-/// @trans is in an attempt; @str a string.
-#[c_export]
-pub unsafe fn bch2_trans_log_str(trans: &BtreeTrans<'_>, str: *const c_char) -> c_int {
-    // SAFETY: the caller's
-    let (t, s) = unsafe { (trans.attempt_in_progress(), CStr::from_ptr(str.cast())) };
-    ret_to_c(t.log_str(s.to_bytes()))
 }
 
 /// # Safety

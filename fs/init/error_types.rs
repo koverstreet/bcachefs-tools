@@ -5,11 +5,10 @@
 use crate::cstructs::c;
 use crate::locking::Lock;
 use crate::new_lock;
-use crate::types::{DArray, RustOnly, rust_only};
+use crate::errcode::BchError;
+use crate::types::{RustOnly, rust_only};
 use crate::util::alloc::KVVec;
-use crate::util::ffi::c_char;
-use core::ffi::c_int;
-use cstruct_macros::{CStruct, c_extern, Init, TypeInfo};
+use cstruct_macros::{CStruct, Init, TypeInfo};
 use pin_init::pin_data;
 
 /*
@@ -30,40 +29,58 @@ pub struct fsck_damaged_path {
     pub errors: [u16; 7],
 }
 
+/// One kind of fsck error's state this mount: how often it's been seen, the
+/// last message - a restart reports it again, and replays the verdict - and
+/// a Y or N for all of its kind: init/error.rs.
+pub(crate) struct FsckErrState {
+    pub(crate) id:          c::bch_sb_error_id,
+    pub(crate) nr:          u64,
+    /// Past FSCK_ERR_RATELIMIT_NR, the rest unprinted
+    pub(crate) ratelimited: bool,
+    /// The verdict, once there's been one
+    pub(crate) ret:         Option<BchError>,
+    /// FSCK_FIX_yes or FSCK_FIX_no for all of them: a Y or N answer
+    pub(crate) fix:         Option<c::fsck_err_opts>,
+    pub(crate) last_msg:    Option<KVVec<u8>>,
+}
+
+impl FsckErrState {
+    pub(crate) fn new(id: c::bch_sb_error_id) -> Self {
+        FsckErrState { id, nr: 0, ratelimited: false, ret: None, fix: None, last_msg: None }
+    }
+}
+
+/// The error paths' state, under the errors lock: each fsck error's, and the
+/// paths fsck damaged, for its summary.
+pub(crate) struct ErrorsLocked {
+    pub(crate) msgs:                    KVVec<FsckErrState>,
+    pub(crate) msgs_alloc_err:          bool,
+    pub(crate) damaged_paths:           KVVec<c::fsck_damaged_path>,
+    pub(crate) damaged_paths_alloc_err: bool,
+}
+
+impl ErrorsLocked {
+    fn new() -> Self {
+        ErrorsLocked {
+            msgs:                    KVVec::new(),
+            msgs_alloc_err:          false,
+            damaged_paths:           KVVec::new(),
+            damaged_paths_alloc_err: false,
+        }
+    }
+}
+
 #[pin_data]
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_errors {
-    pub msgs: DArray<*mut c::fsck_err_state>,
-    pub msgs_lock: c::mutex,
-    pub msgs_alloc_err: bool,
-
-    pub damaged_paths: DArray<c::fsck_damaged_path>,
-    pub damaged_paths_alloc_err: bool,
+    /* What the error paths keep: init/error.rs */
+    #[pin]
+    #[init(RustOnly::new(new_lock!(ErrorsLocked::new())))]
+    pub(crate) state: rust_only!(Lock<c::mutex, ErrorsLocked>),
 
     /* The superblock's error counts, by id: sb/errors.rs */
     #[pin]
     #[init(RustOnly::new(new_lock!(KVVec::new())))]
     pub(crate) counts: rust_only!(Lock<c::mutex, KVVec<c::bch_sb_error_entry_cpu>>),
-}
-
-c_extern! {
-    pub fn bch2_fsck_damaged(trans: *mut c::btree_trans, pos: c::bpos, err: c::bch_sb_error_id);
-    pub fn bch2_fsck_damaged_path_to_text(out: *mut c::printbuf, trans: *mut c::btree_trans,
-                                          p: *const c::fsck_damaged_path);
-    pub fn bch2_inum_offset_err_msg_trans_norestart(trans: *mut c::btree_trans, out: *mut c::printbuf,
-                                                    subvol: u32, pos: c::bpos) -> c_int;
-    pub fn bch2_inum_offset_err_msg_trans(trans: *mut c::btree_trans, out: *mut c::printbuf,
-                                          subvol: u32, pos: c::bpos);
-    pub fn __bch2_count_fsck_err(c: *mut c::bch_fs, id: c::bch_sb_error_id,
-                                 msg: *mut c::printbuf) -> bool;
-    #[c_printf(6, 7)]
-    #[cold]
-    pub fn __bch2_fsck_err(c: *mut c::bch_fs, trans: *mut c::btree_trans, pos: c::bpos,
-                           flags: c::bch_fsck_flags, err: c::bch_sb_error_id, fmt: *const c_char,
-                           ...) -> c_int;
-    #[c_printf(5, 6)]
-    pub fn __bch2_bkey_fsck_err(c: *mut c::bch_fs, k: c::bkey_s_c,
-                                from: *const c::bkey_validate_context, err: c::bch_sb_error_id,
-                                fmt: *const c_char, ...) -> c_int;
 }

@@ -636,7 +636,6 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_fs_journal_exit(&c->journal);
 	bch2_fs_io_write_exit(c);
 	bch2_fs_io_read_exit(c);
-	bch2_fs_errors_exit(c);
 	bch2_fs_ec_exit(c);
 	bch2_fs_move_exit(c);
 	bch2_fs_counters_exit(c);
@@ -1107,7 +1106,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	bch2_fs_allocator_foreground_init(c);
 	bch2_fs_btree_gc_init_early(c);
 	bch2_fs_btree_init_early(c);
-	bch2_fs_errors_init_early(c);
 	bch2_fs_journal_init_early(&c->journal);
 	bch2_fs_journal_keys_init(c);
 	bch2_fs_move_init(c);
@@ -1227,7 +1225,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	try(bch2_fs_btree_init(c));
 	try(bch2_fs_compress_init(c));
 	try(bch2_fs_counters_init(c));
-	try(bch2_fs_errors_init(c));
 	try(bch2_fs_encryption_init(c, user_key));
 	try(bch2_fs_io_read_init(c));
 	try(bch2_fs_journal_init(&c->journal));

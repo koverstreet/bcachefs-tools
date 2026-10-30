@@ -121,7 +121,10 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
         Ok(()) if sectors_allocated != 0 => fs.io_clock[WRITE].increment(sectors_allocated),
         Err(e) if should_print_err(e) => {
             let mut buf = Printbuf::new();
-            unsafe { c::bch2_inum_offset_err_msg_trans(t.raw(), buf.as_raw(), inum.subvol as u32, iter.pos()) };
+            let pos = iter.pos();
+            let _ = lockrestart_do(t.trans(), |t| {
+                crate::init::error::inum_offset_err_msg(t, &mut buf, inum.subvol as u32, pos)
+            });
             write!(buf, "fallocate error: {e}");
             bch_err_ratelimited!(fs, "{}", buf.as_str());
         }

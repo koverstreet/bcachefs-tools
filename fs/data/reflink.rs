@@ -582,7 +582,7 @@ fn indirect_extent_missing_error(
 
     let mut buf = Printbuf::new();
     write!(buf, "pointer to missing indirect extent in ");
-    t.result(unsafe { c::bch2_inum_offset_err_msg_trans_norestart(t.raw(), buf.as_raw(), 0, missing_pos) })?;
+    crate::init::error::inum_offset_err_msg(t, &mut buf, 0, missing_pos)?;
 
     write!(buf, "-{}\n", missing_pos.offset.wrapping_add(missing.end - missing.start) << 9);
     prt!(&mut buf, "{}", p.to_text(fs));

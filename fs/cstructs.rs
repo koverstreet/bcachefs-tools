@@ -83,7 +83,6 @@
 #[path = "fs/xattr_format.rs"] pub mod fs_xattr_format;
 #[path = "init/damage_format.rs"] pub mod init_damage_format;
 #[path = "init/dev_types.rs"] pub mod init_dev_types;
-#[path = "init/error_defs.rs"] pub mod init_error_defs;
 #[path = "init/error_types.rs"] pub mod init_error_types;
 #[path = "init/passes_defs.rs"] pub mod init_passes_defs;
 #[path = "init/passes_format.rs"] pub mod init_passes_format;
@@ -251,7 +250,6 @@ pub mod c {
     pub use super::fs_xattr_format::*;
     pub use super::init_damage_format::*;
     pub use super::init_dev_types::*;
-    pub use super::init_error_defs::*;
     pub use super::init_error_types::*;
     pub use super::init_passes_defs::*;
     pub use super::init_passes_format::*;

@@ -377,17 +377,13 @@ impl DebugFile for FsckDamagedPaths {
         let trans = btree_trans!(fs);
         out.print_each(|out| {
             // Copied under the lock, resolved outside it: resolving takes
-            // btree locks, and fsck's error paths take msgs_lock under those
-            let entry = {
-                let _lock = Lock::from_c(&fs.errors.msgs_lock).lock();
-                let paths = &fs.errors.damaged_paths;
-                (self.next < paths.nr).then(|| unsafe { *paths.data.add(self.next) })
-            };
+            // btree locks, and fsck's error paths take the errors lock under those
+            let entry = fs.errors.state.lock().damaged_paths.get(self.next).copied();
             let Some(entry) = entry else {
                 return Ok(false);
             };
 
-            unsafe { c::bch2_fsck_damaged_path_to_text(out.as_raw(), trans.raw(), &entry) };
+            crate::init::error::damaged_path_to_text(out, &trans, &entry);
             self.next += 1;
 
             // Before the flush: it relocks, via lockrestart_do()

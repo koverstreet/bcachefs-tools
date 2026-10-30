@@ -193,7 +193,7 @@ const PRINTK_LIMIT: usize = 1024;
 /// the person running the fsck, which a mount that only wants those gets -
 /// and if this is the task it's for.
 #[cfg(kernel)]
-fn stdio_redirect(fs: &Fs, user: bool) -> Option<&crate::util::thread_with_file::StdioRedirect> {
+pub(crate) fn stdio_redirect(fs: &Fs, user: bool) -> Option<&crate::util::thread_with_file::StdioRedirect> {
     if fs.stdio.is_null() ||
        (!user && fs.stdio_user_only) ||
        (!fs.stdio_filter.is_null() && fs.stdio_filter != unsafe { c::get_current() }) {
@@ -334,15 +334,6 @@ pub unsafe fn bch2_print_str(c: &Opaque<c::bch_fs>, prefix: *const c_char, str: 
     if let Some(s) = unsafe { c_bytes(str) } {
         let level = prefix_level(unsafe { c_bytes(prefix) }.unwrap_or_default());
         print_bytes(Fs::from_c(c), level, s)
-    }
-}
-
-/// # Safety
-/// @str is NULL or a string.
-#[c_export]
-pub unsafe fn bch2_print_str_user(c: &Opaque<c::bch_fs>, str: *const c_char) {
-    if let Some(s) = unsafe { c_bytes(str) } {
-        print_user(Fs::from_c(c), s)
     }
 }
 

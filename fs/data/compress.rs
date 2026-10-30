@@ -684,10 +684,7 @@ fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: ty, pos: c::bpos) -> b
     let mut msg = LogMsg::new(fs);
     write!(msg, "Decompressing compressed data did not produce the same result ({})", t);
     let trans = btree_trans!(fs);
-    let _ = lockrestart_do(&trans, |t| {
-        // SAFETY: the transaction's, and the message's
-        t.result(unsafe { c::bch2_inum_offset_err_msg_trans_norestart(t.raw(), msg.as_raw(), 0, pos) })
-    });
+    let _ = lockrestart_do(&trans, |t| crate::init::error::inum_offset_err_msg(t, &mut msg, 0, pos));
     drop(trans);
     writeln!(msg, " len {src_len}");
     let suppress = count_fsck_err(fs, id::compression_error, &mut msg);
