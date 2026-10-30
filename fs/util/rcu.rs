@@ -23,6 +23,14 @@
 //! Buffers are kvmalloc()'d and freed through C - a kvfree_rcu()'d buffer
 //! has to come from C's allocator - and freed as bytes: what they hold has no
 //! Drop.
+//!
+//! FreeAnytime is what may be freed without waiting out RCU readers - an
+//! auto trait, as Unpin is: a type is unless it has a member that isn't.
+//! What RCU readers may hold - a task, as a task_struct - has an RcuMember,
+//! and so everything it's in needs freeing a grace period on, kvfree_rcu(),
+//! without having to say so. It follows pointers as well as members: a
+//! Box frees what it points to, but a borrow or a handle doesn't, and says
+//! so with an unsafe impl.
 
 use core::ffi::c_int;
 use core::marker::PhantomData;
@@ -67,6 +75,17 @@ impl Drop for ReadGuard {
         unsafe { urcu_memb_read_unlock() };
     }
 }
+
+/// See the top of the file.
+///
+/// # Safety
+/// An impl says that what an RCU reader may hold isn't freed with Self.
+pub unsafe auto trait FreeAnytime {}
+
+/// A member that makes what it's in need freeing a grace period on.
+pub struct RcuMember;
+
+impl !FreeAnytime for RcuMember {}
 
 c_extern! {
     pub fn rust_srcu_read_lock(ssp: *mut c::srcu_struct) -> c_int;

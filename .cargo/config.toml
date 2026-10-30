@@ -1,0 +1,5 @@
+# fs/ uses unstable features (util/rcu.rs's FreeAnytime, an auto trait), as
+# the kernel build lets it: kbuild exports RUSTC_BOOTSTRAP=1. Here it's for
+# that crate alone, by name, so no dependency builds as if on nightly.
+[env]
+RUSTC_BOOTSTRAP = "bcachefs_kernel"
