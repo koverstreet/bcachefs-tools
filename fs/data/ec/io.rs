@@ -19,7 +19,7 @@ use crate::util::bio::{Bio, BioBox, BioOwner, Endio, RawBio};
 use crate::util::gather::{Fold, Gather, GatherRef};
 use crate::util::kernel::{local_clock, PAGE_SIZE, WRITE};
 use crate::util::rcu::read_lock;
-use crate::util::task::{Resumable, Resume};
+use crate::util::task::{waiter, Resume, Waiter};
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use crate::{log_msg_ratelimited, prt};
@@ -81,7 +81,7 @@ pub struct EcBio {
     /// Its block's device, kept by the bio's io ref on it, for the endio
     ca:          Option<BlockDev>,
     /// A ref on the round's Gather, for the endio to put
-    done:        Option<GatherRef<BlockErrs>>,
+    done:        Option<BlockRef>,
     /// The block's pointer, for the endio's staleness check
     ptr:         c::bch_extent_ptr,
     submit_time: u64,
@@ -107,6 +107,34 @@ impl From<DevIoRef<c::bch_dev_read_ref>> for BlockDev {
 impl From<DevIoRef<c::bch_dev_write_ref>> for BlockDev {
     fn from(ca: DevIoRef<c::bch_dev_write_ref>) -> Self {
         BlockDev::Write(ca)
+    }
+}
+
+/// A bio's ref on its round's Gather, waited on by a thread or a task: one
+/// EcBio, the bioset's, for either - as BlockDev is for a read or a write.
+pub(crate) enum BlockRef {
+    Sync(GatherRef<BlockErrs, waiter::Sync>),
+    Async(GatherRef<BlockErrs, waiter::Async>),
+}
+
+impl From<GatherRef<BlockErrs, waiter::Sync>> for BlockRef {
+    fn from(r: GatherRef<BlockErrs, waiter::Sync>) -> Self {
+        BlockRef::Sync(r)
+    }
+}
+
+impl From<GatherRef<BlockErrs, waiter::Async>> for BlockRef {
+    fn from(r: GatherRef<BlockErrs, waiter::Async>) -> Self {
+        BlockRef::Async(r)
+    }
+}
+
+impl BlockRef {
+    fn put(self, errs: BlockErrs) {
+        match self {
+            BlockRef::Sync(r)  => r.put(errs),
+            BlockRef::Async(r) => r.put(errs),
+        }
     }
 }
 
@@ -154,32 +182,40 @@ fn block_done<R: IoRefIdx>(ca: DevIoRef<R>, ptr: &c::bch_extent_ptr, submit_time
     }
 }
 
-/// A round of block IO on @buf: reads, or writes, as @R's io ref is.
+/// A round of block IO on @buf: reads, or writes, as @R's io ref is; waited
+/// on by @Wt.
 #[pin_data]
-pub(crate) struct BlockIo<'a, R: IoRefIdx> {
+pub(crate) struct BlockIo<'a, R: IoRefIdx, Wt: Waiter> {
     /// Waited on, or its drop waits, before the buffer's had back
     #[pin]
-    done:    Gather<BlockErrs>,
+    done:    Gather<BlockErrs, Wt>,
     fs:      &'a Fs,
     buf:     &'a mut StripeBuf,
     _r:      PhantomData<fn() -> R>,
 }
 
-impl<'a> BlockIo<'a, c::bch_dev_read_ref> {
+impl<'a, Wt: Waiter> BlockIo<'a, c::bch_dev_read_ref, Wt>
+where
+    GatherRef<BlockErrs, Wt>: Into<BlockRef>,
+{
     pub(crate) fn read(fs: &'a Fs, buf: &'a mut StripeBuf) -> impl PinInit<Self> + 'a {
         Self::new(fs, buf)
     }
 }
 
-impl<'a> BlockIo<'a, c::bch_dev_write_ref> {
+impl<'a, Wt: Waiter> BlockIo<'a, c::bch_dev_write_ref, Wt>
+where
+    GatherRef<BlockErrs, Wt>: Into<BlockRef>,
+{
     pub(crate) fn write(fs: &'a Fs, buf: &'a mut StripeBuf) -> impl PinInit<Self> + 'a {
         Self::new(fs, buf)
     }
 }
 
-impl<'a, R: IoRefIdx> BlockIo<'a, R>
+impl<'a, R: IoRefIdx, Wt: Waiter> BlockIo<'a, R, Wt>
 where
     DevIoRef<R>: Into<BlockDev>,
+    GatherRef<BlockErrs, Wt>: Into<BlockRef>,
 {
     fn new(fs: &'a Fs, buf: &'a mut StripeBuf) -> impl PinInit<Self> + 'a {
         pin_init!(Self { done <- Gather::new(), fs, buf, _r: PhantomData })
@@ -234,7 +270,7 @@ where
         let mut offset = 0;
         while offset < bytes {
             let b = (bytes - offset).min(nr_vecs * PAGE_SIZE);
-            let done = Some(this.done.get());
+            let done = Some(this.done.get().into());
             let dev = Some(ca.clone().into());
             let mut bio = set.alloc::<BchError, _>(ca.disk_sb.bdev, nr_vecs as u16, opf, |at| pin_init!(EcBio {
                 ca: dev,
@@ -253,33 +289,36 @@ where
             offset += b;
         }
     }
+}
 
-    fn record(buf: &mut StripeBuf, errs: BlockErrs) {
-        for (i, e) in errs.0.into_iter().enumerate() {
-            if e.is_some() {
-                buf.err[PRE][i] = e;
-            }
-        }
-    }
-
+impl<R: IoRefIdx> BlockIo<'_, R, waiter::Sync> {
     /// Every bio done, and each block's error in the buffer.
     pub(crate) fn wait_sync(self: Pin<&mut Self>) {
         let this = self.project();
-        let errs = this.done.wait_sync();
-        Self::record(this.buf, errs);
+        record(this.buf, this.done.wait_sync());
     }
+}
 
+impl<R: IoRefIdx> BlockIo<'_, R, waiter::Async> {
     /// As wait_sync(), awaited: resumed @at.
     pub(crate) async fn wait(self: Pin<&mut Self>, at: Resume<'_>) {
         let this = self.project();
-        let errs = this.done.wait().resume_on(at).await;
-        Self::record(this.buf, errs);
+        let errs = this.done.wait(at).await;
+        record(this.buf, errs);
+    }
+}
+
+fn record(buf: &mut StripeBuf, errs: BlockErrs) {
+    for (i, e) in errs.0.into_iter().enumerate() {
+        if e.is_some() {
+            buf.err[PRE][i] = e;
+        }
     }
 }
 
 /// The blocks of @s in @blocks read into @buf, waited on.
 pub(crate) fn read_sync(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBuf, blocks: u32) {
-    stack_pin_init!(let io = BlockIo::read(fs, buf));
+    stack_pin_init!(let io = BlockIo::<_, waiter::Sync>::read(fs, buf));
     for i in blocks_in(blocks & ((1u64 << s.v().nr_blocks) - 1) as u32) {
         io.as_mut().submit(s, i);
     }

@@ -214,6 +214,8 @@ fn promote_new(t: &TransAttempt<'_, '_>, btree: c::btree_id, k: BkeySC<'_>,
     u.rbio.bits_mut().set_bounce(1);
     u.rbio.bits_mut().set_promote(1);
 
+    // C issues the read into it next
+    u.start_read();
     let rbio = NonNull::from(&mut u.rbio);
     u.start(move |b| run(b, in_flight, start_time));
     Ok(rbio)

@@ -27,7 +27,7 @@ use crate::errcode::BchError;
 use crate::data::update_task::{Body, Update, UpdateTask};
 use crate::util::refcount::{RefGuard, Refcount};
 use crate::util::alloc::gfp_flags;
-use crate::util::task::{Resumable, Resume, Spawn};
+use crate::util::task::{Resume, Spawn};
 use core::ffi::{c_int, c_uint};
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_extern;
@@ -74,7 +74,7 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
     u.read().await;
     drop(read_io);
 
-    u.turn().wait().resume_on(Resume::Spawned).await;
+    u.turn().wait(Resume::Spawned).await;
 
     let write_io = {
         let (moving, size) = moving_size(&u);
@@ -133,6 +133,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
     u.rbio.bio.bi_end_io = Some(move_read_endio);
     u.rbio.bio.bi_ioprio = IOPRIO_IDLE;
     u.io_seq = moving.update_issue(u.turn().get());
+    u.start_read();
 
     let d = &mut **u;
     let key = BkeySC::from(d.k.key());

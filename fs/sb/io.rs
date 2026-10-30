@@ -152,6 +152,7 @@ use core::ffi::{c_int, c_uint, CStr};
 use crate::util::alloc::KVVec;
 use crate::util::bio::{Bio, BioBuf, BioBufPtr, BioOwner};
 use crate::util::gather::Gather;
+use crate::util::task::waiter;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::NSEC_PER_SEC;
 use crate::util::time_stats::TimeStats;
@@ -2072,7 +2073,7 @@ struct Frozen<'a> {
 pub struct SbIos<'a> {
     // first: it waits for the IOs before what they're on is handed back
     #[pin]
-    gather: Gather<()>,
+    gather: Gather<(), waiter::Sync>,
     frozen: KVVec<Frozen<'a>>,
 }
 

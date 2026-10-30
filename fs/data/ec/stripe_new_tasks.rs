@@ -25,7 +25,7 @@ use crate::util::alloc::KBox;
 use crate::util::backref::BackRef;
 use crate::util::rcu::read_lock;
 use crate::util::refcount::Refcount;
-use crate::util::task::{Resumable, Resume};
+use crate::util::task::{waiter, Resume};
 use crate::util::vstructs::Validated;
 use crate::{bch_err, btree_trans, fs_inconsistent, inode_opts, logged_ops, prt};
 use arrayvec::ArrayVec;
@@ -52,7 +52,7 @@ pub(crate) async fn stripe_task(fs: &Fs, p: BackRef<StripeNew>) {
     let to_read = s.lock().reuse.as_ref().is_some_and(|r| r.read == OldRead::ToRead);
     let fold = if to_read { old_stripe_fold(fs, s, w, at).await } else { Ok(()) };
 
-    s.in_flight.wait().resume_on(at).await;
+    s.in_flight.wait(at).await;
 
     // As C's, whatever state writes are in: a stripe goes in flight while
     // they're stopped too - bch2_open_buckets_stop(), in
@@ -63,7 +63,7 @@ pub(crate) async fn stripe_task(fs: &Fs, p: BackRef<StripeNew>) {
     let ret = create(fs, s, w, fold, at).await;
     create_done(fs, s, ret);
     // SAFETY: in flight
-    unsafe { teardown(fs, p) };
+    unsafe { teardown(p) };
 }
 
 /// Only the blocks we carry forward have to be good - everything else in the
@@ -126,7 +126,7 @@ async fn old_stripe_read(fs: &Fs, old: &StripeKey, buf: &mut StripeBuf, required
     let all = ((1u64 << old.stripe().v().nr_blocks) - 1) as u32;
 
     {
-        stack_pin_init!(let io = BlockIo::read(fs, buf));
+        stack_pin_init!(let io = BlockIo::<_, waiter::Async>::read(fs, buf));
         for i in blocks_in(required) {
             io.as_mut().submit(old.stripe(), i);
         }
@@ -135,7 +135,7 @@ async fn old_stripe_read(fs: &Fs, old: &StripeKey, buf: &mut StripeBuf, required
 
     if !blocks_good(old.stripe(), buf, required) {
         {
-            stack_pin_init!(let io = BlockIo::read(fs, buf));
+            stack_pin_init!(let io = BlockIo::<_, waiter::Async>::read(fs, buf));
             for i in blocks_in(all & !required) {
                 io.as_mut().submit(old.stripe(), i);
             }
@@ -301,7 +301,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
     let Working { new_stripe, new_buf, reuse, moving, old_block_map, allocated, watermark, res } = w;
     let buf = new_buf.as_mut().expect("a new stripe's buffer");
 
-    stack_pin_init!(let io = BlockIo::write(fs, buf));
+    stack_pin_init!(let io = BlockIo::<_, waiter::Async>::write(fs, buf));
 
     // the rest of each data bucket zeroed: zero_out_rest_of_ec_bucket()
     for i in old_block_map.len()..nr_data {
@@ -430,18 +430,26 @@ fn create_done(fs: &Fs, s: &StripeNew, ret: Result<(), BchError>) {
 }
 
 /// What it holds given back - its writers done: the blocks they claimed
-/// closed, the rest put; a repair's writes done with it - and it out of
-/// new_stripes, then the flushes woken. Its memory goes with this task's last
-/// run. @p is the task's, given up: what borrowed the stripe from it can't be
-/// used after.
+/// closed, the rest put; a repair's writes done with it. @p is the task's,
+/// given up: what borrowed the stripe from it can't be used after. Out of
+/// new_stripes it goes in the task's done.
 ///
 /// # Safety
 /// It's in flight: every writer's io ref put, so nothing else has it.
-unsafe fn teardown(fs: &Fs, p: BackRef<StripeNew>) {
+unsafe fn teardown(p: BackRef<StripeNew>) {
     p.release();
-
-    let s = NonNull::from(&*p);
     drop(p);
+}
+
+/// The task's done: the stripe out of new_stripes and freed, its task with
+/// it, then the flushes woken.
+///
+/// # Safety
+/// @s is the stripe of a task that's done.
+pub(crate) unsafe fn stripe_done(s: NonNull<StripeNew>) {
+    // the filesystem outlives the stripe's box: see stripe_new.rs
+    let fs: *const Fs = &**unsafe { s.as_ref() }.fs_ref();
+    let fs = unsafe { &*fs };
     drop(new_stripes_take(fs, s));
     fs.ec.new_stripes_changed.wake();
 }

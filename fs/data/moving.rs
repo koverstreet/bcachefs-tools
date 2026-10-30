@@ -39,7 +39,7 @@ use crate::util::ffi::Opaque;
 use crate::util::{HumanReadable, Printbuf, ToText};
 use crate::util::refcount::Refcount;
 use crate::util::kthread::Kthread;
-use crate::util::task::RunQueue;
+use crate::util::task::{waiter, RunQueue};
 use crate::util::sleep::Sleep;
 use crate::types::Fifo;
 use crate::util::gather::GatherRef;
@@ -134,7 +134,7 @@ pub struct IoMark(u64);
 pub struct InFlightUpdate {
     /// What holds its turn to write, till every update issued before it has
     /// started its write
-    turn:    Option<GatherRef<()>>,
+    turn:    Option<GatherRef<(), waiter::Async>>,
     started: bool,
     done:    bool,
 }
@@ -367,7 +367,7 @@ impl<'a> Moving<'a> {
 
     /// An update issued: its seq. @turn holds its turn to write till every
     /// update issued before it has started its write.
-    pub(crate) fn update_issue(&self, turn: GatherRef<()>) -> u64 {
+    pub(crate) fn update_issue(&self, turn: GatherRef<(), waiter::Async>) -> u64 {
         let w = self.0.write_next.get();
         self.with_updates(|f| {
             let seq = f.back_idx();

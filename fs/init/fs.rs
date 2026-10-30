@@ -654,11 +654,13 @@ impl Fs {
         // SAFETY: going read-only waits for the task's write ref: the
         // filesystem and its write_ref_wq outlive it
         let (fs, wq) = unsafe { (BackRef::new(self), Queue::from_raw(self.write_ref_wq)) };
-        crate::util::task::spawn(wq, move || async move {
-            let _w = w;
-            make(fs).await
-        })?;
-        Ok(())
+        // SAFETY: what the future has is 'static, or the BackRef above's
+        unsafe {
+            crate::util::task::spawn_detached(crate::util::task::Spawn::Queue(wq), async move {
+                let _w = w;
+                make(fs).await
+            }, crate::util::alloc::flags::GFP_KERNEL)
+        }
     }
 }
 

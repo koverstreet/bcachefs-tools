@@ -71,6 +71,7 @@ use crate::util::ffi::Opaque;
 use crate::util::time_stats::TimeStats;
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::gather::{Gather, GatherRef};
+use crate::util::task::waiter;
 use crate::util::kernel::{bdev_max_discard_sectors, local_clock, unlikely, READ};
 use crate::util::place::Placed;
 use crate::util::log::LogMsg;
@@ -128,7 +129,7 @@ pub(crate) struct Discard {
 }
 
 /// A worker's discards: those in flight, and those done, to reap.
-type Discards = Gather<KVVec<Discard>>;
+type Discards = Gather<KVVec<Discard>, waiter::Sync>;
 
 enum NotAdded {
     /// One is in flight for the bucket already.
@@ -151,7 +152,7 @@ struct Worker<'a> {
 #[pin_data]
 #[repr(C)]
 pub(crate) struct DiscardBio {
-    done:    Option<GatherRef<KVVec<Discard>>>,
+    done:    Option<GatherRef<KVVec<Discard>, waiter::Sync>>,
     discard: Option<Discard>,
     #[pin]
     bio:     Bio,
@@ -352,7 +353,7 @@ impl Endio<BioBox<DiscardBio>> for DiscardEndio {
 
 impl Discard {
     /// Issue it, to be put to its worker's Discards by @done.
-    fn submit(self, fs: &Fs, done: GatherRef<KVVec<Discard>>) {
+    fn submit(self, fs: &Fs, done: GatherRef<KVVec<Discard>, waiter::Sync>) {
         let ca = &self.ca;
         let bdev = ca.disk_sb.bdev;
         let sector = ca.bucket_to_sector(u64_to_bucket(self.dev_bucket).offset);

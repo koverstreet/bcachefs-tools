@@ -42,6 +42,7 @@ use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::prt;
 use crate::util::gather::GatherRef;
+use crate::util::task::waiter;
 use crate::util::{Printbuf, ToText};
 use crate::util::volatile::VolatileSlice;
 
@@ -293,7 +294,7 @@ impl<O: BioOwner, B> Mapped<'_, O, B> {
     /// Nothing touches the bio, or the buffer it's mapped to, until @r's
     /// Gather has been waited on; nor walks or submits the bio until its next
     /// reset().
-    pub unsafe fn submit_gathered(self, r: GatherRef<()>) {
+    pub unsafe fn submit_gathered(self, r: GatherRef<(), waiter::Sync>) {
         let mut this = core::mem::ManuallyDrop::new(self);
         let bio = this.owner.bio_mut().raw_mut();
         bio.bi_private = r.into_raw().cast_mut().cast();
@@ -306,7 +307,7 @@ impl<O: BioOwner, B> Mapped<'_, O, B> {
 
 unsafe extern "C" fn gathered_endio(bio: *mut c::bio) {
     // SAFETY: submit_gathered()'s, whose ref is bi_private
-    drop(unsafe { GatherRef::<()>::from_raw((*bio).bi_private.cast()) })
+    drop(unsafe { GatherRef::<(), waiter::Sync>::from_raw((*bio).bi_private.cast()) })
 }
 
 impl<O: BioOwner, B> Drop for Mapped<'_, O, B> {

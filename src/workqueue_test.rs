@@ -20,23 +20,31 @@
 //! - `max_active` forced to 1 -> `a_blocking_task_does_not_own_the_queue`
 //!   times out
 //! - a wake in a poll dispatching the task rather than marking it NOTIFIED
-//!   -> `a_task_woken_inline_is_never_polled_concurrently` fails - the
-//!   poll's own state assert, before any overlap; the queued variant passes,
-//!   the shim's non-reentrancy covering for it - which is why there are both
+//!   -> passes: the shim's non-reentrancy covers for it. An inline wake,
+//!   which bypasses the workqueue, made it fail; that test goes until
+//!   Resume::Inline is implemented again.
 //!
 //! Both share `Queue::system_dfl()`, so a task wedged by one can starve the
 //! other: a single fault can show up as two failures.
 
-use bcachefs_kernel::util::task::{spawn, Resumable, Resume};
+use bcachefs_kernel::util::alloc::flags::GFP_KERNEL;
+use bcachefs_kernel::util::task::{waiter, Completion, Done, Resumable, Spawn};
+use bcachefs_kernel::util::task::spawn_detached;
 use bcachefs_kernel::util::workqueue::Queue;
 
-use std::future::Future;
+use std::future::{poll_fn, Future};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
+
+/// @f as a task on @q, nothing joining it.
+fn spawn<F: Future<Output = ()> + Send + 'static>(q: &'static Queue, f: F) {
+    // SAFETY: 'static: it borrows nothing
+    unsafe { spawn_detached(Spawn::Queue(q), f, GFP_KERNEL) }.unwrap();
+}
 
 /// Run `f` on a helper thread and fail rather than hang if it wedges.
 ///
@@ -69,16 +77,14 @@ fn a_blocking_task_does_not_own_the_queue() {
 
         // A synchronous wait inside the poll, deliberately: work items are
         // allowed to block, and this executor's tasks are work items.
-        spawn(q, move || async move {
+        spawn(q, async move {
             blocked.recv().unwrap();
             finish.send(()).unwrap();
-        })
-        .unwrap();
+        });
 
-        spawn(q, move || async move {
+        spawn(q, async move {
             release.send(()).unwrap();
-        })
-        .unwrap();
+        });
 
         finished.recv().unwrap();
     });
@@ -90,59 +96,30 @@ fn a_blocking_task_does_not_own_the_queue() {
 /// The wake finds it RUNNING, and marks it NOTIFIED: the poll in progress
 /// repolls when it's done. Were it dispatched instead - queued again, with
 /// this run still going - only workqueue non-reentrancy would keep a second
-/// worker off it, and an inline wake doesn't go through the workqueue at
-/// all. The state word is what makes the future's `UnsafeCell` sound, so it
-/// deserves a test that fails loudly rather than a comment that reads
-/// plausibly.
+/// worker off it. The state word is what makes the future's `UnsafeCell`
+/// sound, so it deserves a test that fails loudly rather than a comment that
+/// reads plausibly.
 #[test]
 fn a_task_is_never_polled_concurrently() {
-    never_polled_concurrently(false)
-}
-
-/// The same, woken inline: the wake runs where it is - inside the poll - so
-/// nothing but the state word keeps it from polling the task re-entrantly.
-#[test]
-fn a_task_woken_inline_is_never_polled_concurrently() {
-    never_polled_concurrently(true)
-}
-
-fn never_polled_concurrently(inline: bool) {
-    struct SelfWaking {
-        polls: u32,
+    /// @inner, counting polls that overlap.
+    struct Measured<F> {
+        inner: Pin<Box<F>>,
         inside: Arc<AtomicBool>,
         overlaps: Arc<AtomicUsize>,
-        finish: mpsc::Sender<()>,
     }
 
-    impl Future for SelfWaking {
-        type Output = ();
+    impl<F: Future> Future for Measured<F> {
+        type Output = F::Output;
 
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
             if self.inside.swap(true, Ordering::SeqCst) {
                 self.overlaps.fetch_add(1, Ordering::SeqCst);
             }
-
-            self.polls += 1;
-            let again = self.polls < 100;
-
-            // Wake from inside the poll: the re-enqueue lands while this run is
-            // still in progress, which is the whole point. Not on the last one
-            // though - a wake that outlives `Ready` buys one more poll, after
-            // the waiter has gone.
-            if again {
-                cx.waker().wake_by_ref();
-            }
-
+            let r = self.inner.as_mut().poll(cx);
             // Widen the window a second poll would have to land in.
             std::thread::sleep(Duration::from_millis(1));
             self.inside.store(false, Ordering::SeqCst);
-
-            if again {
-                Poll::Pending
-            } else {
-                self.finish.send(()).unwrap();
-                Poll::Ready(())
-            }
+            r
         }
     }
 
@@ -152,17 +129,29 @@ fn never_polled_concurrently(inline: bool) {
     within(30, move || {
         let (finish, finished) = mpsc::channel::<()>();
 
-        let task = SelfWaking {
-            polls: 0,
-            inside: Arc::new(AtomicBool::new(false)),
-            overlaps,
-            finish,
+        let body = async move {
+            for _ in 0..99 {
+                // Woken from inside the poll: the wake lands while this run is
+                // still in progress, which is the whole point.
+                let mut slot = None;
+                let done = AtomicPtr::<Option<Done>>::new(&raw mut slot);
+                let mut c = Completion::new(&mut slot, waiter::Async::current().await);
+                let mut woken = false;
+                poll_fn(|cx| {
+                    if woken {
+                        return Poll::Ready(());
+                    }
+                    woken = true;
+                    let _ = Pin::new(&mut c).poll_resume(cx);
+                    // SAFETY: by its address, as an endio completes one
+                    unsafe { (*done.load(Ordering::Relaxed)).as_ref() }.unwrap().complete();
+                    Poll::Pending
+                })
+                .await;
+            }
+            finish.send(()).unwrap();
         };
-        if inline {
-            spawn(Queue::system_dfl(), move || async move { task.resume_on(Resume::Inline).await }).unwrap();
-        } else {
-            spawn(Queue::system_dfl(), move || task).unwrap();
-        }
+        spawn(Queue::system_dfl(), Measured { inner: Box::pin(body), inside: Arc::new(AtomicBool::new(false)), overlaps });
 
         finished.recv().unwrap();
     });
