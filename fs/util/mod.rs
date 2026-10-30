@@ -21,6 +21,7 @@ pub mod fs_context;
 #[cfg(kernel)]
 pub mod fs_type;
 pub mod futex;
+pub mod gap_buffer;
 pub mod gather;
 pub mod genradix;
 pub mod hash;
