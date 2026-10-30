@@ -12,6 +12,7 @@ pub mod debugfs;
 pub mod demangle;
 pub mod enumerated_ref;
 pub mod eytzinger;
+pub mod fast_list;
 pub mod ffi;
 pub mod fifo;
 pub mod file;

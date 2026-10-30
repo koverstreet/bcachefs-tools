@@ -111,7 +111,9 @@ impl<T: Zeroable> GenRadix<T> {
 /// several threads at once: genradix_ptr_alloc() is safe against concurrent
 /// allocation and lookup, and a node never moves. Its entries aren't its to
 /// lend, then - it hands out pointers, for whatever serializes access to
-/// them to make references of. Rust's own: not Copy, and freed on drop.
+/// them to make references of. Rust's own: not Copy, and freed on drop. A
+/// GENRADIX(T) to C, where C shares one - a fast_list's.
+#[repr(transparent)]
 pub struct SharedGenRadix<T>(UnsafeCell<GenRadix<T>>);
 
 // SAFETY: allocation and lookup are C's, safe from any thread; the entries

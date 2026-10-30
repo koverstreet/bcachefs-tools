@@ -30,7 +30,7 @@ pub struct bch_inum_hash_entry {
 c_default!(bch_inum_hash_entry);
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo)]
 pub struct bch_fs_vfs {
     pub inodes: c::fast_list,
     pub inodes_table: c::rhashtable,

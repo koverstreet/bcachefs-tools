@@ -51,6 +51,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "crypto/poly1305.h",		// and MACs
     "linux/fs_context.h",		// struct fs_context, logfc(): util/fs_context.rs's - the kernel crate's is opaque
     "linux/percpu-refcount.h",		// percpu_ref_get(), _put(): a DevRef's ca->ref, static inlines
+    "linux/idr.h",			// ida_init(), ida_find_first(): fast_list.rs's slots - static inlines
 ];
 
 /// Headers under fs/ bound, by path - which the clang args have as an -I:
@@ -101,6 +102,7 @@ const UNBLOCKLISTED: &[&str] = &[
     "crypto/poly1305.h",
     "linux/percpu-refcount.h",
     "linux/fs_context.h",
+    "linux/idr.h",
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
@@ -152,6 +154,8 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "logfc", "super_set_uuid", "super_set_sysfs_name_uuid",
     // static inlines: a DevRef's ca->ref
     "percpu_ref_get", "percpu_ref_put",
+    // util/fast_list.rs: static inlines; the rest of the ida the kernel crate binds
+    "ida_init", "ida_find_first",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",
                                   "xattr_handler", "kstatfs", "export_operations", "fid_type",
@@ -165,7 +169,7 @@ const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "
 const BLOCKLIST_TYPE: &[&str] = &["inode", "file", "dir_context", "user_namespace", "kqid",
                                      "fiemap_extent_info", "address_space", "vm_fault",
                                      "vm_operations_struct", "vm_area_struct", "vm_area_desc", "kiocb",
-                                     "super_block", "super_operations", "percpu_ref"];
+                                     "super_block", "super_operations", "percpu_ref", "ida"];
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
                                  "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*",
                                  "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*",

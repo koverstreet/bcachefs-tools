@@ -46,12 +46,6 @@ pub unsafe extern "C" fn obj_to_text<T: AsyncObj>(out: *mut c::printbuf, c: *mut
     unsafe { (*obj.cast::<T>()).to_text(Printbuf::borrow_raw(out), Fs::borrow_raw(c)) }
 }
 
-#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
-cstruct_macros::c_extern! {
-    fn fast_list_add(l: *mut c::fast_list, item: *mut c_void) -> core::ffi::c_int;
-    fn fast_list_remove(l: *mut c::fast_list, idx: core::ffi::c_uint);
-}
-
 /// An object's place on its list; empty without the lists configured.
 pub struct AsyncObjSlot {
     #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
@@ -86,11 +80,9 @@ impl AsyncObjSlot {
     pub unsafe fn new<T: AsyncObj>(fs: &Fs, obj: &T) -> Self {
         #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
         {
-            let list = (&raw const fs.async_objs[T::LIST as usize].list).cast_mut();
-            // SAFETY: the filesystem's list; @obj the caller's
-            let ret = unsafe { fast_list_add(list, core::ptr::from_ref(obj).cast_mut().cast()) };
-            if ret > 0 {
-                return AsyncObjSlot { list: NonNull::new(list), idx: ret as core::ffi::c_uint };
+            let list = &fs.async_objs[T::LIST as usize].list;
+            if let Ok(idx) = list.add(NonNull::from(obj).cast()) {
+                return AsyncObjSlot { list: Some(NonNull::from(list)), idx };
             }
         }
         Self::none()
@@ -101,8 +93,9 @@ impl Drop for AsyncObjSlot {
     fn drop(&mut self) {
         #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
         if let Some(list) = self.list {
-            // SAFETY: new()'s slot on the filesystem's list, which outlives us
-            unsafe { fast_list_remove(list.as_ptr(), self.idx) };
+            // SAFETY: the filesystem's list, which the caller of new() said
+            // outlives us
+            unsafe { list.as_ref() }.remove(self.idx);
         }
     }
 }
@@ -114,12 +107,8 @@ impl Drop for AsyncObjSlot {
 /// @idx is the object's, from async_object_list_add() on that list.
 #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
 pub unsafe fn list_del(fs: &Fs, list: c::bch_async_obj_lists, idx: &mut core::ffi::c_uint) {
-    if *idx != 0 {
-        let l = (&raw const fs.async_objs[list as usize].list).cast_mut();
-        // SAFETY: the caller's slot on the filesystem's list
-        unsafe { fast_list_remove(l, *idx) };
-        *idx = 0;
-    }
+    fs.async_objs[list as usize].list.remove(*idx);
+    *idx = 0;
 }
 
 // ── The debugfs files ────────────────────────────────────────────────────

@@ -30,11 +30,4 @@ static inline void fast_list_set(struct fast_list *l, unsigned idx, void *item)
 	*genradix_ptr_inlined(&l->items, idx) = item;
 }
 
-int fast_list_get_idx(struct fast_list *l, gfp_t gfp);
-void fast_list_put_idx(struct fast_list *l, unsigned idx);
-int fast_list_add(struct fast_list *l, void *item);
-void fast_list_remove(struct fast_list *l, unsigned idx);
-void fast_list_exit(struct fast_list *l);
-int fast_list_init(struct fast_list *l);
-
 #endif /* _LINUX_FAST_LIST_H */
