@@ -20,10 +20,11 @@
 //! - Mapping a buffer adds it to the bvecs, until the bio's next reset().
 //!   Mapped ties that to a borrow of the buffer, resetting the bio on drop.
 //! - In flight: submitted, until its endio. An async submit consumes the
-//!   owner, and its endio is given it back (RawBio::submit()), so nothing
-//!   reaches a bio in flight - but submit_gathered(), the superblock's,
-//!   which is why it's unsafe. Those states are what make reading a bio's
-//!   fields through &Bio safe.
+//!   owner, and its endio is given it back (RawBio::submit()); or borrows it
+//!   for submit()'s wait, which yields the status. Either way nothing
+//!   reaches a bio in flight - but submit_gathered(), the superblock's, which
+//!   is why it's unsafe. Those states are what make reading a bio's fields
+//!   through &Bio safe.
 //! - Pinned: inline bvecs make a bio self-referential, so it's never moved,
 //!   and changed only through Pin<&mut Bio> - its own methods, given one by
 //!   its owner's bio_mut().
@@ -34,15 +35,18 @@
 //! it's over c::bio here, in both builds - the shim's bio_vec laid out as the
 //! kernel's.
 
+use core::future::Future;
 use core::marker::{PhantomData, PhantomPinned};
 use core::pin::Pin;
 use core::ptr::NonNull;
+use core::task::{ready, Context, Poll};
 
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::prt;
+use crate::util::task::{waiter, Completion, Done};
 use crate::util::gather::GatherRef;
-use crate::util::task::waiter;
+use crate::util::task::Resumable;
 use crate::util::{Printbuf, ToText};
 use crate::util::volatile::VolatileSlice;
 
@@ -247,6 +251,24 @@ pub unsafe trait BioOwner {
         ret_to_result_void(unsafe { c::submit_bio_wait(self.bio_mut().raw_mut()) })
     }
 
+    fn submit(&mut self) -> impl Future<Output = Submitted<'_>> + Send
+    where
+        Self: Send,
+    {
+        async move {
+            let waiter = waiter::Async::current().await;
+            // SAFETY: the owner's, borrowed by the wait; bi_private is a Done
+            // till done_endio()
+            let wait = unsafe { Completion::init_at((&raw mut (*self.bio_mut().raw_mut()).bi_private).cast(), waiter) };
+            let bio: *mut c::bio = self.bio_mut().raw_mut();
+            unsafe {
+                (*bio).bi_end_io = Some(done_endio);
+                c::submit_bio(bio);
+                Submitted { wait, bio: NonNull::new_unchecked(bio.cast()) }
+            }
+        }
+    }
+
     /// Panics if the bio isn't a read, or hasn't the bvecs for @buf.
     fn map_read<'a>(&'a mut self, buf: &'a mut [u8]) -> Mapped<'a, Self, &'a mut [u8]>
     where
@@ -303,6 +325,31 @@ impl<O: BioOwner, B> Mapped<'_, O, B> {
         // the buffer, from being touched until it's done
         unsafe { c::submit_bio(bio) };
     }
+}
+
+#[must_use = "a submitted bio's wait is awaited, or its drop waits for the IO"]
+pub struct Submitted<'a> {
+    wait: Completion<'a>,
+    bio:  NonNull<Bio>,
+}
+
+// SAFETY: the Bio's Send, and read only once it's done
+unsafe impl Send for Submitted<'_> {}
+
+impl Resumable for Submitted<'_> {
+    type Output = Result<(), BchError>;
+
+    fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        ready!(Pin::new(&mut this.wait).poll_resume(cx));
+        // SAFETY: done, and still borrowed
+        Poll::Ready(unsafe { this.bio.as_ref() }.status())
+    }
+}
+
+unsafe extern "C" fn done_endio(bio: *mut c::bio) {
+    // SAFETY: submit()'s
+    unsafe { Done::<waiter::Async>::from_ptr((&raw mut (*bio).bi_private).cast()) }.complete();
 }
 
 unsafe extern "C" fn gathered_endio(bio: *mut c::bio) {
