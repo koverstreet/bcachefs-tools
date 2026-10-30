@@ -70,8 +70,7 @@ impl c::bch_dev {
     pub fn congested_read(&self, now: u64) -> u32 {
         let mut congested = i64::from(self.congested.load(Relaxed));
         let last = self.congested_last.load(Relaxed);
-        // now is after last, allowing for wrap
-        if (last.wrapping_sub(now) as i64) < 0 {
+        if crate::util::kernel::time_after64(now, last) {
             congested -= (now.wrapping_sub(last) >> 12) as i64;
         }
         congested.clamp(0, c::CONGESTED_MAX.into()) as u32

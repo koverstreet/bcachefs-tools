@@ -127,6 +127,11 @@ pub fn time_after(a: core::ffi::c_ulong, b: core::ffi::c_ulong) -> bool {
     (b.wrapping_sub(a) as core::ffi::c_long) < 0
 }
 
+/// time_after(), of u64 times - local_clock()'s: time_after64().
+pub fn time_after64(a: u64, b: u64) -> bool {
+    (b.wrapping_sub(a) as i64) < 0
+}
+
 /// The kernel's binding returns its own c_ulong, usize; the same width as
 /// core's.
 pub fn nsecs_to_jiffies(ns: u64) -> core::ffi::c_ulong {
