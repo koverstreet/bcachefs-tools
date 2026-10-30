@@ -124,10 +124,6 @@ bcachefs-y		:=			\
 	vfs/direct.o				\
 	vfs/pagecache.o
 
-ifdef CONFIG_DEBUG_FS
-	bcachefs-y += debug/async_objs.o
-endif
-
 ifdef BCACHEFS_DKMS
 ifneq ($(wildcard $(src)/module-version.c),)
 	bcachefs-y += module-version.o

@@ -9,7 +9,7 @@ use cstruct_macros::{c_enum, c_xmacro};
 use {
     crate::cstructs::c,
     crate::fs::Fs,
-    core::ffi::{c_uint, c_void},
+    core::ffi::c_uint,
     cstruct_macros::{placed, CStruct, Init},
     pin_init::pin_data,
 };
@@ -39,5 +39,4 @@ c_enum! {
 #[derive(CStruct, Init)]
 pub struct async_obj_list {
     pub list: c::fast_list,
-    pub obj_to_text: Option<unsafe extern "C" fn(*mut c::printbuf, *mut c::bch_fs, *mut c_void)>,
 }

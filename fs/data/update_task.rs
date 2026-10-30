@@ -36,7 +36,7 @@ use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::c;
 use crate::data::moving::Moving;
 use crate::data::update::Held;
-use crate::debug::async_objs::{obj_to_text, AsyncObj, AsyncObjSlot};
+use crate::debug::async_objs::{AsyncObj, AsyncObjSlot};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::alloc::gfp_flags;
@@ -46,8 +46,7 @@ use crate::util::task::{waiter, Resumable, Resume, Spawn};
 use crate::util::task::TaskBox;
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
-use core::ffi::{c_int, c_void};
-use cstruct_macros::c_export;
+use core::ffi::c_int;
 use core::future::Future;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
@@ -252,13 +251,6 @@ unsafe impl AsyncObj for Update {
             crate::data::update::bch2_data_update_inflight_to_text(out, u)
         }
     }
-}
-
-#[cold]
-#[c_export]
-pub unsafe fn bch2_data_update_obj_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, obj: *mut c_void) {
-    // SAFETY: the caller's
-    unsafe { obj_to_text::<Update>(out, c, obj) }
 }
 
 // ── Body ─────────────────────────────────────────────────────────────────
