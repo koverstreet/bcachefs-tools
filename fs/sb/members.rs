@@ -1268,10 +1268,8 @@ impl Fs {
         crate::util::log::log_msg_start(&mut buf, self.name());
         write!(buf, "pointer to {} device {dev}\n",
                if self.devs_removed.test(dev as usize) { "removed" } else { "nonexistent" });
-        unsafe {
-            c::bch2_prt_current_backtrace(buf.as_raw(), 1, c::GFP_ATOMIC);
-            c::__bch2_inconsistent_error(self.as_ptr(), buf.as_raw());
-        }
+        unsafe { c::bch2_prt_current_backtrace(buf.as_raw(), 1, c::GFP_ATOMIC) };
+        self.inconsistent_error(&mut buf);
         print_str(self, LogLevel::ERR, &mut buf);
     }
 }
@@ -1396,6 +1394,14 @@ impl DevOuterRef {
     /// The ref, for a C function that puts it: bch2_dev_remove().
     pub fn into_raw(self) -> *mut c::bch_dev {
         core::mem::ManuallyDrop::new(self).0
+    }
+
+    /// A ref into_raw() gave up, back to put.
+    ///
+    /// # Safety
+    /// @ca holds an outer ref no one else will put.
+    pub unsafe fn from_raw(ca: *mut c::bch_dev) -> Self {
+        DevOuterRef(ca)
     }
 }
 
@@ -1596,13 +1602,6 @@ impl c::bch_dev {
     pub fn removing(&self) -> bool {
         // SAFETY: read once, volatile
         unsafe { core::ptr::read_volatile(&self.removing) }
-    }
-
-    /// An IO error of type @ty, counted against the device - which may set it
-    /// read-only, past its error threshold.
-    pub fn io_error(&self, ty: c::bch_member_error_type) {
-        // SAFETY: a device
-        unsafe { c::bch2_io_error(core::ptr::from_ref(self).cast_mut(), ty) };
     }
 
     /// A write completed that the device may still have in its volatile

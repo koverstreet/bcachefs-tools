@@ -19,97 +19,35 @@
 
 #define FSCK_ERR_RATELIMIT_NR	10
 
-void __bch2_log_msg_start(const char *fs_or_dev_name, struct printbuf *out)
-{
-	printbuf_indent_add_nextline(out, 2);
-
-#ifdef BCACHEFS_LOG_PREFIX
-	prt_printf(out, "bcachefs (%s): ", fs_or_dev_name);
-#endif
-}
-
-bool __bch2_inconsistent_error(struct bch_fs *c, struct printbuf *out)
-{
-	set_bit(BCH_FS_error, &c->flags);
-
-	switch (c->opts.errors) {
-	case BCH_ON_ERROR_continue:
-		return false;
-	case BCH_ON_ERROR_fix_safe:
-	case BCH_ON_ERROR_ro:
-		bch2_fs_emergency_read_only(c, out);
-		return true;
-	case BCH_ON_ERROR_panic:
-		bch2_print_str(c, KERN_ERR, out->buf);
-		panic(bch2_fmt(c, "panic after error"));
-		return true;
-	default:
-		BUG();
-	}
-}
-
-bool bch2_inconsistent_error(struct bch_fs *c)
-{
-	CLASS(printbuf, buf)();
-	guard(printbuf_atomic)(&buf);
-
-	printbuf_indent_add_nextline(&buf, 2);
-
-	bool ret = __bch2_inconsistent_error(c, &buf);
-	if (ret)
-		bch_err(c, "%s", buf.buf);
-	return ret;
-}
-
-__printf(3, 0)
-static bool bch2_fs_trans_inconsistent(struct bch_fs *c, struct btree_trans *trans,
-				       const char *fmt, va_list args)
-{
-	CLASS(printbuf, buf)();
-	guard(printbuf_atomic)(&buf);
-
-	bch2_log_msg_start(c, &buf);
-
-	prt_vprintf(&buf, fmt, args);
-	prt_newline(&buf);
-
-	if (trans)
-		bch2_trans_updates_to_text(&buf, trans);
-	bool ret = __bch2_inconsistent_error(c, &buf);
-	bch2_print_str(c, KERN_ERR, buf.buf);
-	return ret;
-}
+/*
+ * The printf-style entry points: the message formatted here, everything
+ * else init/error.rs's.
+ */
 
 bool bch2_fs_inconsistent(struct bch_fs *c, const char *fmt, ...)
 {
+	CLASS(printbuf, buf)();
+	guard(printbuf_atomic)(&buf);
+
 	va_list args;
 	va_start(args, fmt);
-	bool ret = bch2_fs_trans_inconsistent(c, NULL, fmt, args);
+	prt_vprintf(&buf, fmt, args);
 	va_end(args);
-	return ret;
+
+	return bch2_fs_trans_inconsistent_str(c, NULL, &buf);
 }
 
 bool bch2_trans_inconsistent(struct btree_trans *trans, const char *fmt, ...)
 {
+	CLASS(printbuf, buf)();
+	guard(printbuf_atomic)(&buf);
+
 	va_list args;
 	va_start(args, fmt);
-	bool ret = bch2_fs_trans_inconsistent(trans->c, trans, fmt, args);
+	prt_vprintf(&buf, fmt, args);
 	va_end(args);
-	return ret;
-}
 
-int __bch2_topology_error(struct bch_fs *c, struct printbuf *out)
-{
-	prt_printf(out, "btree topology error: ");
-
-	set_bit(BCH_FS_topology_error, &c->flags);
-	if (!test_bit(BCH_FS_in_recovery, &c->flags)) {
-		__bch2_inconsistent_error(c, out);
-		return bch_err_throw(c, btree_need_topology_repair);
-	} else {
-		return bch2_run_explicit_recovery_pass(c, out, BCH_RECOVERY_PASS_check_topology, 0) ?:
-			bch_err_throw(c, btree_need_topology_repair);
-	}
+	return bch2_fs_trans_inconsistent_str(trans->c, trans, &buf);
 }
 
 int bch2_fs_topology_error(struct bch_fs *c, const char *fmt, ...)
@@ -126,84 +64,14 @@ int bch2_fs_topology_error(struct bch_fs *c, const char *fmt, ...)
 
 void bch2_fatal_error(struct bch_fs *c, const char *func, const char *fmt, ...)
 {
-	CLASS(bch_log_msg, msg)(c);
-	msg.m.suppress = true; /* only print if this message caused us to go RO */
-
-	prt_printf(&msg.m, "%s(): fatal error ", func);
+	CLASS(printbuf, buf)();
 
 	va_list args;
 	va_start(args, fmt);
-	prt_vprintf(&msg.m, fmt, args);
+	prt_vprintf(&buf, fmt, args);
 	va_end(args);
 
-	prt_newline(&msg.m);
-
-	bch2_fs_emergency_read_only(c, &msg.m);
-	prt_printf(&msg.m, "fatal error - emergency read only");
-}
-
-void bch2_io_error_work(struct work_struct *work)
-{
-	struct bch_dev *ca = container_of(work, struct bch_dev, io_error_work);
-	struct bch_fs *c = ca->fs;
-
-	/* XXX: if it's reads or checksums that are failing, set it to failed */
-
-	unsigned long write_errors_start = READ_ONCE(ca->write_errors_start);
-
-	if (write_errors_start &&
-	    time_after(jiffies,
-		       write_errors_start + c->opts.write_error_timeout * HZ)) {
-		guard(rwsem_write)(&c->state_lock);
-
-		/*
-		 * We hold ref_outer, not ca->ref: device removal may have
-		 * completed while we waited for state_lock, and the member
-		 * slot is no longer ours to touch. Same if the fs is
-		 * shutting down - don't flip member states mid-teardown.
-		 * Never cancelled: we own a ref, so teardown drains us
-		 * instead (bch2_dev_free()) and we always run and put:
-		 */
-		if (!READ_ONCE(ca->removing) &&
-		    !test_bit(BCH_FS_stopping, &c->flags) &&
-		    ca->mi.state < BCH_MEMBER_STATE_ro) {
-			bool print = true;
-			CLASS(printbuf, buf)();
-			__bch2_log_msg_start(ca->name, &buf);
-
-			prt_printf(&buf, "writes erroring for %u seconds\n",
-				c->opts.write_error_timeout);
-
-			bool dev = !__bch2_dev_set_state(c, ca, BCH_MEMBER_STATE_ro,
-							 BCH_FORCE_IF_DEGRADED, &buf);
-
-			prt_printf(&buf, "setting %s ro", dev ? "device" : "filesystem");
-			if (!dev)
-				print = bch2_fs_emergency_read_only(c, &buf);
-
-			if (print)
-				bch2_print_str(c, KERN_ERR, buf.buf);
-		}
-	}
-
-	bch2_dev_put_outer(ca);
-}
-
-void bch2_io_error(struct bch_dev *ca, enum bch_member_error_type type)
-{
-	atomic64_inc(&ca->errors[type]);
-
-	if (type == BCH_MEMBER_ERROR_write && !ca->write_errors_start)
-		ca->write_errors_start = jiffies;
-
-	/*
-	 * The work blocks on state_lock, which device removal holds while
-	 * draining ca->ref - so it owns a ref_outer (memory lifetime only),
-	 * never a ca->ref. One ref per queued instance:
-	 */
-	bch2_dev_get_outer(ca);
-	if (!queue_work(system_long_wq, &ca->io_error_work))
-		bch2_dev_put_outer(ca);
+	bch2_fatal_error_str(c, func, &buf);
 }
 
 enum ask_yn {

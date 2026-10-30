@@ -10,7 +10,7 @@
 
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
-use crate::fs::Fs;
+use crate::fs::{Fs, StateLockWrite};
 use crate::prt;
 use crate::util::rcu::read_lock;
 use crate::util::{Nsecs, Printbuf};
@@ -34,6 +34,19 @@ pub fn bch2_dev_alloc_mem(c: &crate::util::ffi::Opaque<c::bch_fs>) -> *mut c::bc
 #[c_export]
 pub unsafe fn bch2_dev_free_mem(ca: *mut c::bch_dev) {
     unsafe { crate::util::alloc::free_pinned(ca) }
+}
+
+impl StateLockWrite<'_> {
+    /// @ca set to @state, the state lock held; why not, if it can't be, in @err.
+    pub fn dev_set_state(&self, ca: &c::bch_dev, state: c::bch_member_state, flags: u32, err: &mut Printbuf)
+        -> Result<(), BchError>
+    {
+        let ca = core::ptr::from_ref(ca).cast_mut();
+        // SAFETY: a device of the filesystem, its state lock held
+        ret_to_result_void(unsafe {
+            c::__bch2_dev_set_state(self.fs().as_ptr(), ca, state, flags as c_int, err.as_raw())
+        })
+    }
 }
 
 impl Fs {

@@ -27,8 +27,12 @@
  * BCH_ON_ERROR_CONTINUE mode
  */
 
-bool __bch2_inconsistent_error(struct bch_fs *, struct printbuf *);
-bool bch2_inconsistent_error(struct bch_fs *);
+__printf(2, 3)
+bool bch2_fs_inconsistent(struct bch_fs *, const char *, ...);
+__printf(2, 3)
+bool bch2_trans_inconsistent(struct btree_trans *, const char *, ...);
+__printf(3, 4)
+void bch2_fatal_error(struct bch_fs *, const char *, const char *, ...);
 
 #define bch2_fs_inconsistent_on(cond, ...)				\
 ({									\
@@ -46,7 +50,6 @@ bool bch2_inconsistent_error(struct bch_fs *);
 	_ret;								\
 })
 
-int __bch2_topology_error(struct bch_fs *, struct printbuf *);
 __printf(2, 3)
 int bch2_fs_topology_error(struct bch_fs *, const char *, ...);
 
@@ -253,11 +256,6 @@ do {									\
  * IO - we need to log it and print out a message, but we don't (necessarily)
  * want to shut down the fs:
  */
-
-void bch2_io_error_work(struct work_struct *);
-
-/* Does the error handling without logging a message */
-void bch2_io_error(struct bch_dev *, enum bch_member_error_type);
 
 #ifndef CONFIG_BCACHEFS_NO_LATENCY_ACCT
 void bch2_latency_acct(struct bch_dev *, u64, int);

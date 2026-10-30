@@ -48,7 +48,6 @@ pub struct bch_fs_errors {
 }
 
 c_extern! {
-    pub fn bch2_io_error(ca: *mut c::bch_dev, ty: c::bch_member_error_type);
     pub fn bch2_fsck_damaged(trans: *mut c::btree_trans, pos: c::bpos, err: c::bch_sb_error_id);
     pub fn bch2_fsck_damaged_path_to_text(out: *mut c::printbuf, trans: *mut c::btree_trans,
                                           p: *const c::fsck_damaged_path);
@@ -56,15 +55,8 @@ c_extern! {
                                                     subvol: u32, pos: c::bpos) -> c_int;
     pub fn bch2_inum_offset_err_msg_trans(trans: *mut c::btree_trans, out: *mut c::printbuf,
                                           subvol: u32, pos: c::bpos);
-    #[c_printf(2, 3)]
-    pub fn bch2_fs_inconsistent(c: *mut c::bch_fs, fmt: *const c_char, ...) -> bool;
-    #[c_printf(2, 3)]
-    pub fn bch2_trans_inconsistent(trans: *mut c::btree_trans, fmt: *const c_char, ...) -> bool;
-    #[c_printf(3, 4)]
-    pub fn bch2_fatal_error(c: *mut c::bch_fs, func: *const c_char, fmt: *const c_char, ...);
     pub fn __bch2_count_fsck_err(c: *mut c::bch_fs, id: c::bch_sb_error_id,
                                  msg: *mut c::printbuf) -> bool;
-    pub fn __bch2_inconsistent_error(c: *mut c::bch_fs, out: *mut c::printbuf) -> bool;
     #[c_printf(6, 7)]
     #[cold]
     pub fn __bch2_fsck_err(c: *mut c::bch_fs, trans: *mut c::btree_trans, pos: c::bpos,

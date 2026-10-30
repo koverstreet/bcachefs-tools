@@ -337,6 +337,13 @@ impl Printbuf {
                               bytes.len() as core::ffi::c_uint);
         }
     }
+
+    /// Write @bytes as text - newlines indented, tabs to tabstops: as
+    /// prt_bytes_indented(), what write!() goes through.
+    pub fn write_bytes_indented(&mut self, bytes: &[u8]) {
+        // SAFETY: the bytes, by their length
+        unsafe { c::bch2_prt_bytes_indented(&mut self.0, bytes.as_ptr().cast(), bytes.len() as core::ffi::c_uint) }
+    }
 }
 
 /// @bdev's name: as the kernel's %pg prints it, its disk's and partition's;
@@ -381,13 +388,7 @@ impl fmt::Write for Printbuf {
             None => {}
         }
 
-        unsafe {
-            c::bch2_prt_bytes_indented(
-                &mut self.0,
-                s.as_ptr() as *const crate::util::ffi::c_char,
-                s.len() as core::ffi::c_uint,
-            );
-        }
+        self.write_bytes_indented(s.as_bytes());
         Ok(())
     }
 }
@@ -635,6 +636,14 @@ impl<T: ToText + ?Sized> ToText for &T {
 impl<T: ToText + ?Sized> ToText for &mut T {
     fn to_text(&self, out: &mut Printbuf) {
         (**self).to_text(out)
+    }
+}
+
+/// What's been written, as a message - C's, formatted before Rust gets it -
+/// indented as @out is, as if formatted there.
+impl ToText for Printbuf {
+    fn to_text(&self, out: &mut Printbuf) {
+        out.write_bytes_indented(self.as_bytes())
     }
 }
 

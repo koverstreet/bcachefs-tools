@@ -48,6 +48,13 @@ impl Drop for StateLockRead<'_> {
     }
 }
 
+impl<'a> StateLockWrite<'a> {
+    /// The filesystem whose state is held.
+    pub(crate) fn fs(&self) -> &'a Fs {
+        self.0
+    }
+}
+
 impl StateLockRead<'_> {
     /// Recompute the filesystem's capacity from its devices.
     pub fn recalc_capacity(&self) {

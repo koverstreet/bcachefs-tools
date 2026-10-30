@@ -56,7 +56,6 @@ c_extern! {
     pub fn bch2_ratelimit_suppress(c: *mut c::bch_fs, rs: *mut c::ratelimit_state,
                                    func: *const c_char) -> bool;
     pub fn bch2_rust_warn(file: *const c_char, line: c_uint);
-    pub fn __bch2_log_msg_start(fs_or_dev_name: *const c_char, out: *mut c::printbuf);
 }
 
 /// A printk loglevel: KERN_SOH followed by the level, as C's KERN_* strings.
@@ -371,7 +370,18 @@ pub struct LogMsg<'a> {
 
 /// @name's prefix, in-kernel, and the continuation indent.
 pub fn log_msg_start(out: &mut Printbuf, name: &CStr) {
-    unsafe { __bch2_log_msg_start(name.as_ptr().cast(), out.as_raw()) }
+    out.indent_add_nextline(2);
+    #[cfg(kernel)]
+    write!(out, "bcachefs ({}): ", name.to_str().unwrap_or("?"));
+    #[cfg(not(kernel))]
+    let _ = name;
+}
+
+/// # Safety
+/// @fs_or_dev_name is a string.
+#[c_export]
+pub unsafe fn __bch2_log_msg_start(fs_or_dev_name: *const c_char, out: &mut Printbuf) {
+    log_msg_start(out, unsafe { CStr::from_ptr(fs_or_dev_name.cast()) })
 }
 
 impl<'a> LogMsg<'a> {

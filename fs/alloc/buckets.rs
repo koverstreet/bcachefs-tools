@@ -290,7 +290,7 @@ impl TransAttempt<'_, '_> {
 
         let ret = if fatal {
             self.updates_to_text(&mut buf);
-            unsafe { c::__bch2_inconsistent_error(fs.as_ptr(), buf.as_raw()) };
+            fs.inconsistent_error(&mut buf);
             // a recovery in progress can have it go back a pass instead
             ret.and_then(|()| fs.throw(bch_errcode::BCH_ERR_bucket_ref_update))
         } else {
