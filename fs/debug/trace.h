@@ -23,15 +23,8 @@ DECLARE_EVENT_CLASS(fs_str,
 	TP_printk("%s: %s", __entry->fs, __get_str(str))
 );
 
-#define BCH_NOCOUNTER_TRACEPOINTS()					\
-	x(accounting_mem_insert)					\
-	x(journal_entry_close)						\
-	x(extent_trim_atomic)						\
-	x(path_downgrade)						\
-	x(btree_iter_peek_slot)						\
-	x(__btree_iter_peek)						\
-	x(btree_iter_peek_max)						\
-	x(btree_iter_peek_prev_min)
+/* BCH_NOCOUNTER_TRACEPOINTS(): debug/trace_types.rs */
+#include "debug/trace_gen.h"
 
 #define __BCH_PATH_TRACEPOINTS()					\
 	x(update_by_path)						\

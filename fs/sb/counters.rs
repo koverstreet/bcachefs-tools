@@ -8,7 +8,10 @@
 //! the same name every counter has (debug/trace.h). Its type, events::<name>,
 //! carries what the counter counts - occurrences (TYPE_COUNTER) or sectors
 //! (TYPE_SECTORS) - so event_inc() takes the one and event_add() the other,
-//! as C's counter_typecheck() checks.
+//! as C's counter_typecheck() checks. Or it's one of the tracepoints with no
+//! counter, BCH_NOCOUNTER_TRACEPOINTS() (debug/trace_types.rs): an
+//! events::<name> too, but only a TraceEvent - event_trace()'s - and not an
+//! Event, so nothing can count it.
 //!
 //! Counters are util/percpu.rs's PerCpu, added to on this CPU. A tracepoint is
 //! checked as C's trace_<name>_enabled() is, a static branch on its key -
@@ -50,13 +53,9 @@ pub enum Sectors {}
 impl Kind for Count {}
 impl Kind for Sectors {}
 
-/// One of BCH_PERSISTENT_COUNTERS(): its counter, and its tracepoint.
-pub trait Event: Copy {
-    type Kind: Kind;
-
-    /// Its counter's index in counters.now[]: BCH_COUNTER_<name>.
-    const IDX: usize;
-
+/// A tracepoint - one of BCH_PERSISTENT_COUNTERS()'s, or of debug/trace.h's
+/// that have no counter, BCH_NOCOUNTER_TRACEPOINTS().
+pub trait TraceEvent: Copy {
     /// Whether its tracepoint is on: trace_<name>_enabled().
     fn trace_enabled() -> bool;
 
@@ -64,28 +63,41 @@ pub trait Event: Copy {
     fn trace(fs: &Fs, msg: &Printbuf);
 }
 
+/// One of BCH_PERSISTENT_COUNTERS(): its tracepoint, and its counter.
+pub trait Event: TraceEvent {
+    type Kind: Kind;
+
+    /// Its counter's index in counters.now[]: BCH_COUNTER_<name>.
+    const IDX: usize;
+}
+
 macro_rules! event_kind {
     (TYPE_COUNTER) => { Count };
     (TYPE_SECTORS) => { Sectors };
 }
 
-macro_rules! events {
-    ($(($name:ident, $id:tt, $ty:tt $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        /// The events of BCH_PERSISTENT_COUNTERS(), each a type.
-        #[allow(non_camel_case_types)]
-        pub mod events {
-            $(
-                #[derive(Clone, Copy)]
-                pub struct $name;
-            )*
-        }
-
+/// Each event a type: both lists' entries start with the name.
+macro_rules! event_types {
+    ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => {
         $(
-            impl Event for events::$name {
-                type Kind = event_kind!($ty);
+            #[derive(Clone, Copy)]
+            pub struct $name;
+        )*
+    };
+}
 
-                const IDX: usize = c::[<BCH_COUNTER_ $name>] as usize;
+/// The events, each a type: events::<name>.
+#[allow(non_camel_case_types)]
+pub mod events {
+    use crate::c;
+    c::BCH_PERSISTENT_COUNTERS!(event_types);
+    c::BCH_NOCOUNTER_TRACEPOINTS!(event_types);
+}
 
+macro_rules! trace_events {
+    ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
+        $(
+            impl TraceEvent for events::$name {
                 #[cfg(all(kernel, CONFIG_TRACEPOINTS))]
                 #[inline(always)]
                 fn trace_enabled() -> bool {
@@ -115,22 +127,42 @@ macro_rules! events {
                 fn trace(_fs: &Fs, _msg: &Printbuf) {}
             }
         )*
+    } };
+}
+c::BCH_PERSISTENT_COUNTERS!(trace_events);
+c::BCH_NOCOUNTER_TRACEPOINTS!(trace_events);
 
-        /// The tracepoints, C's: debug/trace.c's.
-        #[cfg(all(kernel, CONFIG_TRACEPOINTS))]
-        mod tracepoints {
-            use crate::c;
+macro_rules! counter_events {
+    ($(($name:ident, $id:tt, $ty:tt $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
+        $(
+            impl Event for events::$name {
+                type Kind = event_kind!($ty);
 
+                const IDX: usize = c::[<BCH_COUNTER_ $name>] as usize;
+            }
+        )*
+    } };
+}
+c::BCH_PERSISTENT_COUNTERS!(counter_events);
+
+/// The tracepoints, C's: debug/trace.c's.
+#[cfg(all(kernel, CONFIG_TRACEPOINTS))]
+mod tracepoints {
+    use crate::c;
+
+    macro_rules! tracepoint_externs {
+        ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
             extern "C" {
                 $(
                     pub(super) static [<__tracepoint_ $name>]: c::tracepoint;
                     pub(super) fn [<rust_do_trace_ $name>](c: *mut c::bch_fs, str: *const ::core::ffi::c_char);
                 )*
             }
-        }
-    } };
+        } };
+    }
+    c::BCH_PERSISTENT_COUNTERS!(tracepoint_externs);
+    c::BCH_NOCOUNTER_TRACEPOINTS!(tracepoint_externs);
 }
-c::BCH_PERSISTENT_COUNTERS!(events);
 
 pub struct CounterInfo {
     pub name: &'static str,
@@ -174,7 +206,7 @@ impl Fs {
     /// Fire @e's tracepoint, if it's on, with the message @msg writes - its
     /// lines after the first indented by 2: event_trace().
     #[inline(always)]
-    pub fn event_trace<E: Event>(&self, e: E, msg: impl FnOnce(&mut Printbuf)) {
+    pub fn event_trace<E: TraceEvent>(&self, e: E, msg: impl FnOnce(&mut Printbuf)) {
         if E::trace_enabled() {
             self.event_trace_on(e, msg);
         }
@@ -182,7 +214,7 @@ impl Fs {
 
     #[cold]
     #[inline(never)]
-    fn event_trace_on<E: Event>(&self, _e: E, msg: impl FnOnce(&mut Printbuf)) {
+    fn event_trace_on<E: TraceEvent>(&self, _e: E, msg: impl FnOnce(&mut Printbuf)) {
         let mut buf = Printbuf::new();
         buf.indent_add_nextline(2);
         msg(&mut buf);

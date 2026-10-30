@@ -69,6 +69,7 @@
 #[path = "data/write_types.rs"] pub mod data_write_types;
 #[path = "debug/async_objs_types.rs"] pub mod debug_async_objs_types;
 #[path = "debug/debug_types.rs"] pub mod debug_debug_types;
+#[path = "debug/trace_types.rs"] pub mod debug_trace_types;
 #[path = "errcode_types.rs"] pub mod errcode_types;
 #[path = "fs/acl_format.rs"] pub mod fs_acl_format;
 #[path = "fs/dirent_types.rs"] pub mod fs_dirent_types;
@@ -238,6 +239,7 @@ pub mod c {
     pub use super::data_write_types::*;
     pub use super::debug_async_objs_types::*;
     pub use super::debug_debug_types::*;
+    pub(crate) use super::debug_trace_types::*;
     pub use super::errcode_types::*;
     pub use super::fs_acl_format::*;
     pub use super::fs_dirent_types::*;
