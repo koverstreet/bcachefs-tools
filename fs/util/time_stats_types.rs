@@ -5,6 +5,9 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::ffi::c_char;
+use crate::util::ffi::Opaque;
+use crate::util::percpu::CpuShared;
+use crate::util::projections::Volatile;
 use crate::util::{Printbuf, ToText};
 use core::ffi::c_uint;
 use cstruct_macros::{CStruct, c_const, c_extern};
@@ -42,27 +45,33 @@ pub struct quantiles {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(CStruct)]
 pub struct time_stat_buffer_entry {
-    pub start: u64,
-    pub end: u64,
+    pub start: Volatile<u64>,
+    pub end: Volatile<u64>,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct time_stat_buffer {
     /*
      * Protects nr/entries on the owning cpu: irq/preempt disable on
      * !PREEMPT_RT, a real per-cpu lock on RT - which is what makes
      * taking stats->lock (sleeping on RT) from the buffer-full flush
      * legal there. Cross-cpu readers (to_seq_buf, reset) don't take
-     * it; they race the owner by design, bounded by nr.
+     * it; they race the owner by design, bounded by nr: so nr and the
+     * entries are Volatile, and the lock - which its lockers change -
+     * Opaque.
      */
-    pub lock: c::local_lock_t,
-    pub nr: c_uint,
+    #[c("local_lock_t lock")]
+    pub lock: Opaque<c::local_lock_t>,
+    pub nr: Volatile<c_uint>,
     pub entries: [c::time_stat_buffer_entry; 31],
 }
-c_default!(time_stat_buffer);
+
+// SAFETY: Volatiles, and the lock Opaque
+unsafe impl CpuShared for time_stat_buffer_entry {}
+unsafe impl CpuShared for time_stat_buffer {}
 
 c_const! {
     /* default weight for streaming median+MAD: half-life ≈ 2^N samples */
@@ -85,7 +94,7 @@ pub struct bch2_time_stats {
     pub min_freq: u64,
     pub last_event: u64,
     /* a state change event in progress since: track_event_change()'s, unlocked */
-    pub last_event_start: crate::util::projections::Volatile<u64>,
+    pub last_event_start: Volatile<u64>,
     pub start_time: u64,
 
     pub duration_stats: c::mean_and_variance,
