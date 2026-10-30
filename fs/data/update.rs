@@ -632,9 +632,16 @@ impl c::data_update {
             }
             self.op.bits.set_nr_replicas(nr as u8);
 
+            // A self-heal from the read path - no @iter - that kills only
+            // pointers without durability, a cached copy that failed its
+            // checksum, has nothing to write either; but those pointers still
+            // have to go. It runs, and read_done() drops them, through
+            // index_update_nowrite()
+            let drop_only = nr == 0 && iter.is_none() && type_ == Type::BCH_DATA_UPDATE_self_heal;
+
             // No new replicas needed: the settings changed since it was
             // written
-            if nr == 0 {
+            if nr == 0 && !drop_only {
                 // without @iter, it's a promote
                 if let Some(iter) = iter {
                     extent_drop_ptrs(t, iter, k, io_opts, &self.opts)?;
@@ -644,8 +651,9 @@ impl c::data_update {
 
             // Check that the write can allocate, rather than failing in
             // bch2_write() after a useless read: alloc_nowait (promotes), a
-            // full or offline target, too little durability on it
-            if type_ != Type::BCH_DATA_UPDATE_copygc {
+            // full or offline target, too little durability on it. Not for a
+            // drop: it doesn't write.
+            if type_ != Type::BCH_DATA_UPDATE_copygc && !drop_only {
                 fs.data_update_write_feasible(io_opts, &self.opts, &self.op.devs_have, k, None)?;
             }
 
