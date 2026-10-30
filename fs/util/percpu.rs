@@ -54,6 +54,10 @@
 //! Another CPU's copy is only read volatile, never through a reference: it
 //! may be being written.
 //!
+//! But a T only its own CPU ever touches - a cache, under an IrqGuard - is
+//! had by reference, as_mut(), unsafely: this CPU's while the guard keeps out
+//! the rest of this CPU, and each CPU's, CpuCopy's, at teardown.
+//!
 //! A per-CPU pointer isn't an address - on x86 it's an offset from %gs - so
 //! nothing projects through one: a field's offset is taken in a T on the
 //! stack, and a CPU's copy is found by its CPU's offset.
@@ -597,6 +601,15 @@ impl<'a, T> CpuCopy<'a, T> {
     pub unsafe fn field<U>(self, f: impl FnOnce(*const T) -> *const U) -> CpuCopy<'a, U> {
         CpuCopy(self.0.wrapping_byte_add(field_offset(f)).cast(), PhantomData)
     }
+
+    /// Its CPU's copy, by reference: for its owner while no CPU uses it - its
+    /// teardown.
+    ///
+    /// # Safety
+    /// Nothing else reaches it while 'a lasts, here or on any CPU.
+    pub unsafe fn as_mut(self) -> &'a mut T {
+        unsafe { &mut *self.0.cast_mut() }
+    }
 }
 
 impl<T: Copy> CpuCopy<'_, T> {
@@ -626,6 +639,17 @@ impl<'g, T> ThisCpu<'g, T> {
     /// @f only projects @t to a field of it, reading nothing.
     pub unsafe fn field<U>(self, f: impl FnOnce(*const T) -> *const U) -> ThisCpu<'g, U> {
         ThisCpu(self.0.wrapping_byte_add(field_offset(f)).cast(), PhantomData)
+    }
+
+    /// This CPU's copy, by reference: for a T only its own CPU touches, which
+    /// the guard keeps the rest of this CPU out of - an IrqGuard, for one
+    /// interrupt handlers change.
+    ///
+    /// # Safety
+    /// Nothing else reaches it while 'g lasts: no other CPU, nothing the guard
+    /// lets in on this one, and no other ThisCpu of it.
+    pub unsafe fn as_mut(self) -> &'g mut T {
+        unsafe { &mut *self.0 }
     }
 }
 
