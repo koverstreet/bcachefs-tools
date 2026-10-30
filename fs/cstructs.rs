@@ -293,6 +293,9 @@ pub mod c {
     pub use super::util_time_stats_types::*;
     pub use super::util_two_state_shared_lock_types::*;
     pub use super::util_util_types::*;
+    // Before 6.19 the kernel's bindings have these too: ours, the same
+    // prototype, linking to the kernel's then and to util.c's after.
+    pub use super::util_util_types::{mempool_kvfree, mempool_kvmalloc};
     #[cfg(not(NO_BCACHEFS_FS))]
     pub use super::vfs_buffered_types::*;
     #[cfg(not(NO_BCACHEFS_FS))]
