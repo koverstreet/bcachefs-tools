@@ -154,9 +154,6 @@ static inline int __must_check bch2_trans_update_buffered(struct btree_trans *tr
 	return 0;
 }
 
-int bch2_trans_log_str(struct btree_trans *, const char *);
-int bch2_trans_log_bkey(struct btree_trans *, enum btree_id, unsigned, struct bkey_i *);
-
 __printf(2, 3) int bch2_fs_log_msg(struct bch_fs *, const char *, ...);
 __printf(2, 3) int bch2_journal_log_msg(struct bch_fs *, const char *, ...);
 

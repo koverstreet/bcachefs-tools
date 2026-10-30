@@ -933,41 +933,6 @@ int bch2_btree_bit_mod_buffered(struct btree_trans *trans, enum btree_id btree,
 	return bch2_trans_update_buffered(trans, btree, &k);
 }
 
-static int __bch2_trans_log_str(struct btree_trans *trans, const char *str, unsigned len, ulong ip)
-{
-	unsigned u64s = DIV_ROUND_UP(len, sizeof(u64));
-
-	struct jset_entry *e = errptr_try(bch2_trans_jset_entry_alloc_ip(trans, jset_u64s(u64s), ip));
-
-	struct jset_entry_log *l = container_of(e, struct jset_entry_log, entry);
-	journal_entry_init(e, BCH_JSET_ENTRY_log, 0, 1, u64s);
-	memcpy_and_pad(l->d, u64s * sizeof(u64), str, len, 0);
-	return 0;
-}
-
-int bch2_trans_log_str(struct btree_trans *trans, const char *str)
-{
-	return __bch2_trans_log_str(trans, str, strlen(str), _RET_IP_);
-}
-
-int bch2_trans_log_msg(struct btree_trans *trans, struct printbuf *buf)
-{
-	try(buf->allocation_failure ? -BCH_ERR_ENOMEM_trans_log_msg : 0);
-
-	return __bch2_trans_log_str(trans, buf->buf, buf->pos, _RET_IP_);
-}
-
-int bch2_trans_log_bkey(struct btree_trans *trans, enum btree_id btree,
-			unsigned level, struct bkey_i *k)
-{
-	struct jset_entry *e = errptr_try(bch2_trans_jset_entry_alloc_ip(trans,
-						jset_u64s(k->k.u64s), _RET_IP_));
-
-	journal_entry_init(e, BCH_JSET_ENTRY_log_bkey, btree, level, k->k.u64s);
-	bkey_copy(e->start, k);
-	return 0;
-}
-
 __printf(3, 0)
 static int
 __bch2_fs_log_msg(struct bch_fs *c, unsigned commit_flags, const char *fmt,

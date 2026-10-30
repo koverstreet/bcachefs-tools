@@ -41,10 +41,8 @@ c_enum! {
 c_extern! {
     #[c_printf(2, 3)]
     pub fn bch2_fs_log_msg(c: *mut c::bch_fs, fmt: *const core::ffi::c_char, ...) -> c_int;
-    pub fn bch2_trans_log_msg(trans: *mut c::btree_trans, buf: *mut c::printbuf) -> c_int;
-    pub fn bch2_trans_log_str(trans: *mut c::btree_trans, str: *const core::ffi::c_char) -> c_int;
-    pub fn bch2_trans_log_bkey(trans: *mut c::btree_trans, btree: c::btree_id, level: c_uint,
-                               k: *mut c::bkey_i) -> c_int;
+    pub fn __bch2_trans_subbuf_alloc(trans: *mut c::btree_trans, buf: *mut c::btree_trans_subbuf, u64s: c_uint,
+                                     ip: core::ffi::c_ulong) -> *mut core::ffi::c_void;
     pub fn rust_bch2_trans_update_buffered(trans: *mut c::btree_trans, btree: c::btree_id, k: *mut c::bkey_i) -> c_int;
     pub fn bch2_trigger_get_mutable_new(trans: *mut c::btree_trans, op: c::btree_trigger_op, needed_u64s: c_uint,
                                         out: *mut c::bkey_s) -> c_int;

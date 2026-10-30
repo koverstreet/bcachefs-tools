@@ -745,29 +745,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.trans.commit(disk_res, flags)
     }
 
-    /// @msg into the journal, with this transaction's commit: as
-    /// bch2_trans_log_msg(). ENOMEM_trans_log_msg if building @msg ran out of
-    /// memory.
-    pub fn log_msg(&self, msg: &mut crate::util::Printbuf) -> Result<(), BchError> {
-        let ret = unsafe { c::bch2_trans_log_msg(self.raw(), msg.as_raw()) };
-        self.result(ret)
-    }
-
-    /// @s into the journal, with this transaction's commit: as
-    /// bch2_trans_log_str().
-    pub fn log_str(&self, s: &core::ffi::CStr) -> Result<(), BchError> {
-        let ret = unsafe { c::bch2_trans_log_str(self.raw(), s.as_ptr()) };
-        self.result(ret)
-    }
-
-    /// @k, a key of @btree at @level, into the journal with this
-    /// transaction's commit: as bch2_trans_log_bkey().
-    pub fn log_bkey(&self, btree: c::btree_id, level: u32, k: &BkeyI) -> Result<(), BchError> {
-        // SAFETY: @k only copied
-        let ret = unsafe { c::bch2_trans_log_bkey(self.raw(), btree, level, k.as_ffi().cast_mut()) };
-        self.result(ret)
-    }
-
     /// Commit what's queued, if anything - and having committed, return
     /// transaction_restart_commit, so the caller's loop re-runs against the
     /// committed state.
