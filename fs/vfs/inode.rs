@@ -46,7 +46,7 @@ use crate::errcode::{errptr_to_result, ret_to_c, ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::inode;
 use crate::inode_opts::InodeOpt;
-use crate::locking::{Guard, Lock};
+use crate::locking::{Guard, Locked};
 use crate::quota;
 use crate::util::ffi::Opaque;
 use cstruct_macros::{c_export, c_extern};
@@ -253,7 +253,7 @@ impl InodeInfo {
     }
 
     pub fn update_lock(&self) -> UpdateLock<'_> {
-        UpdateLock { inode: self, _guard: Lock::from_c(&self.ei_update_lock).lock() }
+        UpdateLock { inode: self, _guard: Locked::from_c(&self.ei_update_lock).lock() }
     }
 
     /// Take the update locks of @inodes, together: in address order, each
@@ -268,7 +268,7 @@ impl InodeInfo {
                 continue;
             }
             // C's subclasses start at 1
-            let guard = Lock::from_c(&inode.ei_update_lock).lock_nested(i as u32 + 1);
+            let guard = Locked::from_c(&inode.ei_update_lock).lock_nested(i as u32 + 1);
             locks.push(UpdateLock { inode, _guard: guard });
         }
         UpdateLocks(locks)
@@ -304,7 +304,7 @@ impl<'i> UpdateLock<'i> {
     /// # Safety
     /// The caller holds @inode's ei_update_lock for 'i.
     pub unsafe fn held(inode: &'i InodeInfo) -> Self {
-        UpdateLock { inode, _guard: unsafe { Lock::from_c(&inode.ei_update_lock).held() } }
+        UpdateLock { inode, _guard: unsafe { Locked::from_c(&inode.ei_update_lock).held() } }
     }
 
     /// Move the inode's quota charges - its usage, i_blocks +

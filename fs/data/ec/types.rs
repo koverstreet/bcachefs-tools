@@ -7,7 +7,7 @@ use crate::data::ec::delete::delete_empty_stripes;
 use crate::data::ec::io::EcBio;
 use crate::data::ec::stripe_new::NewStripes;
 use crate::fs::Fs;
-use crate::locking::{ByteLock, Lock};
+use crate::locking::{ByteLock, Locked};
 use crate::new_lock;
 use crate::types::{rust_only, RustOnly};
 use crate::util::alloc::{KBox, KVVec};
@@ -28,7 +28,7 @@ use pin_init::pin_data;
 #[derive(CStruct)]
 pub struct gc_stripe {
     #[c_lock("u8 lock")]
-    pub lock: Lock<ByteLock, GcStripeData>,
+    pub lock: Locked<ByteLock, GcStripeData>,
 }
 
 nest! {
@@ -64,7 +64,7 @@ pub struct bch_fs_ec {
     /// alone.
     #[pin]
     #[init(RustOnly::new(new_lock!(0)))]
-    pub(crate) stripe_buf_bytes: rust_only!(Lock<c::spinlock_t, usize>),
+    pub(crate) stripe_buf_bytes: rust_only!(Locked<c::spinlock_t, usize>),
     /// Who waits for it, woken together as it's freed: the write path's
     /// closures, until it converts, and Rust's waiters.
     pub stripe_buf_wait: c::closure_waitlist,
@@ -83,13 +83,13 @@ pub struct bch_fs_ec {
     /// without this lock: Rust's alone.
     #[pin]
     #[init(RustOnly::new(new_lock!(KVVec::new())))]
-    pub(crate) stripe_heads: rust_only!(Lock<c::mutex, KVVec<Pin<KBox<c::ec_stripe_head>>>>),
+    pub(crate) stripe_heads: rust_only!(Locked<c::mutex, KVVec<Pin<KBox<c::ec_stripe_head>>>>),
 
     /// Each disk label's ec_dev_stripe_state, made on first use - boxed, as
     /// stripe heads point at them: Rust's alone.
     #[pin]
     #[init(RustOnly::new(new_lock!(KVVec::new())))]
-    pub(crate) dev_stripe_states: rust_only!(Lock<c::mutex, KVVec<Pin<KBox<c::ec_dev_stripe_state>>>>),
+    pub(crate) dev_stripe_states: rust_only!(Locked<c::mutex, KVVec<Pin<KBox<c::ec_dev_stripe_state>>>>),
 
     /// The stripes being made, once their heads or repairs hand them on,
     /// until their task is done with them; and room for those held. Boxed,
@@ -97,7 +97,7 @@ pub struct bch_fs_ec {
     /// stripe_new.rs.
     #[pin]
     #[init(RustOnly::new(new_lock!(NewStripes::new())))]
-    pub(crate) new_stripes: rust_only!(Lock<c::mutex, NewStripes>),
+    pub(crate) new_stripes: rust_only!(Locked<c::mutex, NewStripes>),
     /// Woken as a stripe goes in flight, and as one's freed: for the flushes.
     pub(crate) new_stripes_changed: EventCount,
     pub stripe_new_seq: AtomicI64,

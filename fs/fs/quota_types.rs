@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::new_lock;
 use crate::util::genradix::SharedGenRadix;
 use core::sync::atomic::AtomicU32;
@@ -59,12 +59,12 @@ pub struct QuotaLimit {
 pub struct MemquotaType {
     pub limits:       [QuotaLimit; c::Q_COUNTERS as usize],
     #[pin]
-    pub(crate) lock:  Lock<c::mutex>,
+    pub(crate) lock:  Locked<c::mutex>,
     pub(crate) table: SharedGenRadix<Memquota>,
 }
 
 impl MemquotaType {
-    fn new(lock: impl PinInit<Lock<c::mutex>>) -> impl PinInit<Self> {
+    fn new(lock: impl PinInit<Locked<c::mutex>>) -> impl PinInit<Self> {
         pin_init!(Self {
             limits:  Default::default(),
             lock    <- lock,

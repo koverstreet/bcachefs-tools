@@ -7,7 +7,7 @@
 //! Each is C's struct in an Opaque - an UnsafeCell, so it's written through
 //! a shared reference: by whoever takes it, Rust or C. c::mutex and the rest
 //! are these, over the bindings' (cstructs.rs), so the structs C shares hold
-//! them as written - and Lock::from_c() borrows one soundly.
+//! them as written - and Locked::from_c() borrows one soundly.
 //!
 //! What C has as a macro or a static inline in one build or the other -
 //! initializing in a lockdep class, lockdep's asserts, spin_lock_irqsave() -

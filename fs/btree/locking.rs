@@ -5,9 +5,9 @@
 
 use crate::btree::iter::TransAttempt;
 use crate::errcode::BchError;
-use crate::locking::{Guard, Lock, RawTryLock};
+use crate::locking::{Guard, Locked, RawTryLock};
 
-impl<R: RawTryLock, G, P> Lock<R, G, P> {
+impl<R: RawTryLock, G, P> Locked<R, G, P> {
     /// lock(), in attempt @t: if it isn't free, the btree locks are dropped
     /// to wait for it - bch2_trans_mutex_lock(). An error is drop_locks_do()'s
     /// relock, the lock not held: a restart.

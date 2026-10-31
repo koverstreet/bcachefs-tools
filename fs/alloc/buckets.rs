@@ -19,7 +19,7 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, fs_inconsistent, id};
 use crate::init::passes;
 use crate::opts::data_type_str;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::types::{bits_to_longs, Le64};
 use crate::util::ffi::Opaque;
 use crate::util::kernel::unlikely;
@@ -903,7 +903,7 @@ impl c::bch_dev {
         let old = unsafe { self.bucket_gens.get_head_locked() }.map(|(_, gens)| gens);
 
         if old.is_some() {
-            Lock::from_c(&fs.state_lock).assert_held_any();
+            Locked::from_c(&fs.state_lock).assert_held_any();
             if !self.buckets_nouse.load(Ordering::Relaxed).is_null() {
                 return fs.throw(bch_errcode::BCH_ERR_no_resize_with_buckets_nouse);
             }

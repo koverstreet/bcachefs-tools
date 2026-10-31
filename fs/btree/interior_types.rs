@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::fs::Fs;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::new_lock;
 use crate::types::c_default;
 use crate::util::Printbuf;
@@ -52,7 +52,7 @@ pub struct bch_fs_btree_reserve_cache {
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), (), "&c->btree.reserve_cache.lock"))]
     #[c_lock("struct mutex lock")]
-    pub lock: Lock<c::mutex, BtreeReserveCache>,
+    pub lock: Locked<c::mutex, BtreeReserveCache>,
 }
 
 #[repr(C)]

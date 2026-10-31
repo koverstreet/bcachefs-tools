@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! What exists because C owns the lock, or holds it calling in - to go as the
-//! C does: a C struct's lock borrowed as a Lock, a Lock whose caller already
-//! holds it, and a Lock C carries held from one Rust call to another.
+//! C does: a C struct's lock borrowed as a Locked, a Locked whose caller already
+//! holds it, and a Locked C carries held from one Rust call to another.
 
-use super::{Guard, Lock, RawLock};
+use super::{Guard, Locked, RawLock};
 use core::mem::{align_of, size_of};
 
-impl<R: RawLock> Lock<R> {
-    /// A lock in a C struct - C's to initialize and free - as a Lock over
+impl<R: RawLock> Locked<R> {
+    /// A lock in a C struct - C's to initialize and free - as a Locked over
     /// nothing, taken as C takes it.
     pub fn from_c(raw: &R) -> &Self {
         const { assert!(size_of::<Self>() == size_of::<R>() && align_of::<Self>() == align_of::<R>()) };
@@ -18,7 +18,7 @@ impl<R: RawLock> Lock<R> {
     }
 }
 
-impl<R: RawLock, G, P> Lock<R, G, P> {
+impl<R: RawLock, G, P> Locked<R, G, P> {
     /// The lock, as a caller holds it - C's, calling in: its guard isn't ours
     /// to release.
     ///

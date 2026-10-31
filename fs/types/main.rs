@@ -49,7 +49,7 @@ struct Layout {
     align:  u64,
     /// Each field's offset, size and alignment, in order.
     fields: Vec<(u64, u64, u64)>,
-    /// Each #[c_lock] field's lock size, and the offsets in its Lock of what
+    /// Each #[c_lock] field's lock size, and the offsets in its Locked of what
     /// it protects and what it publishes, in order.
     locks:  Vec<(u64, u64, u64)>,
 }

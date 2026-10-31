@@ -16,7 +16,7 @@ use core::ptr::NonNull;
 
 use crate::c;
 use crate::fs::Fs;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::PAGE_SIZE;
@@ -56,7 +56,7 @@ pub fn alloc_pages(bio: &mut c::bio, bs: u32, size: usize, gfp: c::gfp_t) -> Res
 #[c_export]
 pub fn __bch2_bio_alloc_pages_pool(c: &Opaque<c::bch_fs>, bio: &mut c::bio, _bs: c_uint, size: usize, gfp: c::gfp_t) {
     let fs = Fs::from_c(c);
-    let _lock = Lock::from_c(&fs.bio_bounce_pages_lock).lock();
+    let _lock = Locked::from_c(&fs.bio_bounce_pages_lock).lock();
 
     while (bio.bi_iter.bi_size as usize) < size {
         // SAFETY: the filesystem's pool; an element is POOL_LEN bytes, the

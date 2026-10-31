@@ -24,7 +24,7 @@ use crate::btree::BtreeIter;
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::util::debugfs::{self, DebugFile, DebugOut};
 use crate::util::eytzinger::Eytzinger0;
 use crate::util::ffi::Opaque;
@@ -298,7 +298,7 @@ impl DebugFile for TransactionStats {
 
             let s = &fs.btree.trans.stats[self.idx];
             let mut out = out.indent(2);
-            let _lock = Lock::from_c(&s.lock).lock();
+            let _lock = Locked::from_c(&s.lock).lock();
 
             prt!(out, "Max mem used: {}\n", s.max_mem);
             #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
@@ -342,7 +342,7 @@ impl DebugFile for BtreeNodeScan {
     fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
         let f = &fs.btree.node_scan;
         out.print_each(|out| {
-            let _lock = Lock::from_c(&f.lock).lock();
+            let _lock = Locked::from_c(&f.lock).lock();
             let nr = f.nodes.nr;
             if self.next >= nr {
                 return Ok(false);

@@ -6,7 +6,7 @@ use crate::c;
 use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
 use crate::errcode::{bch_errcode, BchError};
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::types::{CacheAligned, DArray, NeBytes, bits_to_longs, c_default};
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
@@ -328,7 +328,7 @@ pub struct bch_fs_btree_cache {
     #[pin]
     #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&bc->root_lock"))]
     #[c_lock("struct mutex root_lock")]
-    pub roots: Lock<cs::mutex, BtreeRoots, BtreeRootsLive>,
+    pub roots: Locked<cs::mutex, BtreeRoots, BtreeRootsLive>,
 
     pub table: cs::rhashtable,
     pub table_init_done: bool,

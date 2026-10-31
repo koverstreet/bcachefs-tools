@@ -37,7 +37,7 @@ use crate::c::bch_errcode;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::trans_inconsistent;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::percpu_field;
 use crate::sb::counters::events;
 use crate::util::backtrace::prt_symbol;
@@ -80,7 +80,7 @@ fn dev_reserved_sectors(ca: &c::bch_dev, gc_reserve: u64, capacity: u64) -> u64 
 }
 
 pub(crate) fn recalc_capacity(fs: &Fs) {
-    Lock::from_c(&fs.state_lock).assert_held_any();
+    Locked::from_c(&fs.state_lock).assert_held_any();
 
     let rcu = read_lock();
 
@@ -202,7 +202,7 @@ fn dev_has_open_write_point(fs: &Fs, ca: &c::bch_dev) -> bool {
 #[c_export]
 pub fn bch2_dev_allocator_remove(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {
     let fs = Fs::from_c(c);
-    Lock::from_c(&fs.state_lock).assert_held_any();
+    Locked::from_c(&fs.state_lock).assert_held_any();
 
     dev_allocator_set_rw(fs, ca, false);
     recalc_capacity(fs);
@@ -223,7 +223,7 @@ pub fn bch2_dev_allocator_remove(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {
 #[c_export]
 pub fn bch2_dev_allocator_add(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {
     let fs = Fs::from_c(c);
-    Lock::from_c(&fs.state_lock).assert_held_any();
+    Locked::from_c(&fs.state_lock).assert_held_any();
     dev_allocator_set_rw(fs, ca, true);
 }
 

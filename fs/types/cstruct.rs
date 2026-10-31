@@ -31,10 +31,10 @@
 //   fields are asserted as name.field; #[c_struct_group] for the kernel's
 //   struct_group(name, ...), its members both name's and the struct's own.
 //
-//   #[c_lock("u8 lock")] on a Lock<R, G, P> (locking/lock.rs): C gets the
+//   #[c_lock("u8 lock")] on a Locked<R, G, P> (locking/lock.rs): C gets the
 //   lock's declaration, then G and P - CStructs of the same file, unless ()
-//   - each an anonymous member, as Lock lays them out. The record carries
-//   R's size and Lock's offsets of G and P, so the lock and their fields are
+//   - each an anonymous member, as Locked lays them out. The record carries
+//   R's size and Locked's offsets of G and P, so the lock and their fields are
 //   asserted where Rust has them, as the struct's own.
 //
 //   #[c_name(NAME)] on the struct: C's name for it, where Rust's differs - a
@@ -288,7 +288,7 @@ pub struct CFieldDef {
     /// its members C's directly too.
     #[allow(dead_code)]
     pub group:    bool,
-    /// #[c_lock("...")], on a Lock<R, G, P>: the lock's C declaration, which
+    /// #[c_lock("...")], on a Locked<R, G, P>: the lock's C declaration, which
     /// G's and P's members follow, written in its place.
     pub lock:     Option<String>,
     /// #[c_bitfield]: its type is a bitfield-struct type, whose members C
@@ -1447,7 +1447,7 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
                 return Err(format!("{name}.{field}: #[c_lock] is the field's C, alone"));
             }
             if lock_args(&ty)?.is_none() {
-                return Err(format!("{name}.{field}: #[c_lock] is for a Lock<R, G, P>, not {ty}"));
+                return Err(format!("{name}.{field}: #[c_lock] is for a Locked<R, G, P>, not {ty}"));
             }
             if lock_name(decl).is_none() {
                 return Err(format!("{name}.{field}: #[c_lock(\"{decl}\")] must end with the lock's name"));
@@ -2828,10 +2828,10 @@ fn in_place(f: &CFieldDef) -> bool {
     f.inline || f.group || (f.anon && f.c_decl.is_none())
 }
 
-/// A Lock<R, G, P>, as @ty, Rust source: R, G and P - G and P (), as Lock's
+/// A Locked<R, G, P>, as @ty, Rust source: R, G and P - G and P (), as Locked's
 /// defaults, when they're left out.
 pub fn lock_args(ty: &str) -> Result<Option<[String; 3]>, String> {
-    Ok(match container_args(ty, "Lock")?.as_deref() {
+    Ok(match container_args(ty, "Locked")?.as_deref() {
         Some([r, rest @ ..]) if rest.len() <= 2 => {
             let arg = |n: usize| rest.get(n).cloned().unwrap_or_else(|| "()".into());
             Some([r.clone(), arg(0), arg(1)])
@@ -2840,10 +2840,10 @@ pub fn lock_args(ty: &str) -> Result<Option<[String; 3]>, String> {
     })
 }
 
-/// What #[c_lock] field @f's Lock protects and publishes, G and P: structs of
+/// What #[c_lock] field @f's Locked protects and publishes, G and P: structs of
 /// @items, which C writes in its place, after the lock - None for ().
 pub fn lock_defs<'a>(f: &CFieldDef, items: &'a [CItem]) -> Result<[Option<&'a CStructDef>; 2], String> {
-    let [_, g, p] = lock_args(&f.ty)?.ok_or_else(|| format!("{}: #[c_lock] is for a Lock, not {}", f.name, f.ty))?;
+    let [_, g, p] = lock_args(&f.ty)?.ok_or_else(|| format!("{}: #[c_lock] is for a Locked, not {}", f.name, f.ty))?;
     let def = |ty: &str| -> Result<_, String> {
         if ty == "()" {
             return Ok(None);
@@ -2923,7 +2923,7 @@ pub fn in_place_types(items: &[CItem]) -> Vec<&str> {
         })
         .flat_map(|d| d.fields.iter());
     let in_place = fields.clone().filter_map(|f| in_place_def(f, items));
-    // what a #[c_lock]'s Lock protects and publishes, written after the lock
+    // what a #[c_lock]'s Locked protects and publishes, written after the lock
     let locked = fields
         .filter(|f| f.lock.is_some())
         .flat_map(|f| lock_defs(f, items).into_iter().flatten().flatten());
@@ -3060,7 +3060,7 @@ fn emit_members(def: &CStructDef, items: &[CItem],
             emit_bitfield(bf, kind)?
         } else if let Some(lock) = &f.lock {
             // the lock, then what it protects, then what it publishes: as
-            // Lock lays them out
+            // Locked lays them out
             let mut text = format!("\t{lock};\n");
             for inner in lock_defs(f, items).map_err(|e| format!("{}.{e}", def.name))?.into_iter().flatten() {
                 let members = nested(f, "c_lock", inner)?;

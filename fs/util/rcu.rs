@@ -16,7 +16,7 @@
 //! it, and the old buffer is freed with kvfree_rcu() once the readers that
 //! might hold it are gone. RcuArray<T> is an RcuBuf of C's
 //! `{ rcu_head rcu; size_t nr; T s[]; }`, read as a &[T], and grown by copy
-//! and replace. Published by a Lock (locking/), it's the lock that
+//! and replace. Published by a Locked (locking/), it's the lock that
 //! serializes its writers, and its guard's published() an RcuArrayWriter, which
 //! replaces it safely.
 //!

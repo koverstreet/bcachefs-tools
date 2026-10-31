@@ -13,7 +13,7 @@
 
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::new_lock;
 use crate::util::alloc::{kbox_pin_init, KBox};
 use crate::util::ffi::Opaque;
@@ -88,7 +88,7 @@ impl DerefMut for DebugOut<'_> {
 struct Open<F: DebugFile> {
     obj: NonNull<F::Obj>,
     #[pin]
-    state: Lock<c::mutex, (F, Printbuf)>,
+    state: Locked<c::mutex, (F, Printbuf)>,
 }
 
 // SAFETY: readers share @obj, as C's do; the state's under its lock

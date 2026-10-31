@@ -15,7 +15,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::chardev::{fs_ioctl, ioctl_ret};
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::new_lock;
 use crate::util::ioctl::Ioctl;
 use crate::util::thread_with_file::{Stdio, StdioFile, ThreadWithFile};
@@ -38,7 +38,7 @@ struct StatusFd {
     /// tear it down underneath it. The only waiter is that thread, once, at
     /// the end of the mount.
     #[pin]
-    fs: Lock<c::mutex, Option<NonNull<Fs>>>,
+    fs: Locked<c::mutex, Option<NonNull<Fs>>>,
 }
 
 // SAFETY: the filesystem's every thread's, and only touched under @fs's lock

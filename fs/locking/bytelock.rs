@@ -25,7 +25,7 @@
 //! to the word's other bytes only makes the LL/SC or CAS retry. C, while it
 //! still takes them, does so through bch2_byte_lock() and bch2_byte_unlock().
 
-use super::{Lock, RawLock, RawTryLock};
+use super::{Locked, RawLock, RawTryLock};
 use core::sync::atomic::{AtomicU8, Ordering};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::sleep::Sleep;
@@ -43,9 +43,9 @@ pub struct ByteLock(AtomicU8);
 
 // SAFETY: zeroed is unlocked
 unsafe impl Zeroable for ByteLock {}
-// SAFETY: zeroed, a Lock over a ByteLock is unlocked and initialized - if
+// SAFETY: zeroed, a Locked over a ByteLock is unlocked and initialized - if
 // what it holds is valid zeroed
-unsafe impl<G: Zeroable, P: Zeroable> Zeroable for Lock<ByteLock, G, P> {}
+unsafe impl<G: Zeroable, P: Zeroable> Zeroable for Locked<ByteLock, G, P> {}
 
 impl ByteLock {
     fn try_take(&self) -> bool {

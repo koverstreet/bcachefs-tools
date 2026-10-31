@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::fs::Fs;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::new_lock;
 use crate::snapshots::subvolume::delete_unlinked;
 use crate::types::{DArray, RustOnly, bits_to_longs, rust_only};
@@ -108,7 +108,7 @@ pub struct bch_fs_snapshots {
     /// The table's writers' lock: taken by table_write(), in snapshot.rs.
     #[pin]
     #[init(RustOnly::new(new_lock!(())))]
-    pub(crate) table_lock: rust_only!(Lock<c::mutex>),
+    pub(crate) table_lock: rust_only!(Locked<c::mutex>),
     /* a topology repair invalidated descendants' is_ancestor bitmaps: */
     #[c("bool need_table_rebuild")]
     #[init(AtomicBool::new(false))]
@@ -116,7 +116,7 @@ pub struct bch_fs_snapshots {
     #[c("struct percpu_rw_semaphore create_lock")]
     #[pin]
     #[init(new_lock!((), "&c->snapshots.create_lock"))]
-    pub create_lock: Lock<c::percpu_rw_semaphore>,
+    pub create_lock: Locked<c::percpu_rw_semaphore>,
     /// Snapshot deletion's state: Rust's alone - snapshots/delete.rs.
     #[pin]
     #[init(RustOnly::new(crate::snapshots::delete::SnapshotDelete::init()))]
@@ -127,7 +127,7 @@ pub struct bch_fs_snapshots {
     /// Subvolumes unlinked and waiting for the delete work: Rust's alone.
     #[pin]
     #[init(RustOnly::new(new_lock!(KVVec::new())))]
-    pub(crate) unlinked: rust_only!(Lock<c::mutex, KVVec<u32>>),
+    pub(crate) unlinked: rust_only!(Locked<c::mutex, KVVec<u32>>),
 }
 
 #[repr(C)]

@@ -4,7 +4,7 @@
 //!
 //! A struct C shares is a normal #[repr(C)] Rust struct, #[derive(CStruct)]
 //! (fs/cstruct-macros); its fields with a C rendering are C's too, and the
-//! others - a Lock<c::mutex, KVVec<u32>>, say - Rust's alone, which C
+//! others - a Locked<c::mutex, KVVec<u32>>, say - Rust's alone, which C
 //! reserves opaque storage for. Enums, constants, typedefs, x-macro lists,
 //! bitmask accessors and C not yet converted are macros there too: c_enum!,
 //! c_const!, c_typedef!, c_xmacro!, c_bitmask!, c_verbatim!.
@@ -214,7 +214,7 @@ impl<T> Default for DArray<T> {
 
 // ---- Rust's own, in C's structs ---------------------------------------------
 
-/// A field of a struct C shares that's Rust's alone - a Lock<c::mutex,
+/// A field of a struct C shares that's Rust's alone - a Locked<c::mutex,
 /// KVVec<u32>>, say: C reserves its storage, as opaque bytes of its size and
 /// alignment, and never looks inside; Rust reaches it as a @T, by Deref.
 /// Declared with rust_only!(T), which sizes and aligns it.

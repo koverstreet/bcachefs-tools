@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::data::ec::stripe_new::StripeNewBox;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::types::{bits_to_longs, c_opaque};
 use crate::util::bitmap::BitArray;
 use core::ffi::{c_uint, c_ulong};
@@ -20,7 +20,7 @@ use pin_init::pin_data;
 pub struct ec_dev_stripe_state {
     #[c_lock("struct mutex lock")]
     #[pin]
-    pub lock: Lock<c::mutex, DevStripes>,
+    pub lock: Locked<c::mutex, DevStripes>,
 
     pub disk_label: c_uint,
 }
@@ -82,7 +82,7 @@ c_opaque!(ec_stripe_new);
 pub struct ec_stripe_head {
     #[c_lock("struct mutex lock")]
     #[pin]
-    pub lock: Lock<c::mutex, HeadState>,
+    pub lock: Locked<c::mutex, HeadState>,
 
     pub disk_label: c_uint,
     pub algo: c_uint,

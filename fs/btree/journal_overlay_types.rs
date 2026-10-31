@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::types::{DArray, c_default};
 use crate::util::gap_buffer::GapBuffer;
 use crate::util::rcu::{RcuArray, RcuElement};
@@ -143,5 +143,5 @@ pub struct journal_keys {
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&keys->overwrite_lock"))]
     #[c_lock("struct mutex overwrite_lock")]
-    pub overwrites: Lock<c::mutex, OverwriteRanges, OverwriteRangesLive>,
+    pub overwrites: Locked<c::mutex, OverwriteRanges, OverwriteRangesLive>,
 }

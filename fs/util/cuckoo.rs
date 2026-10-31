@@ -89,7 +89,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{fence, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize};
 use core::sync::atomic::Ordering::{self, Acquire, Relaxed, Release};
 
-use crate::locking::{ByteLock, Guard, Lock};
+use crate::locking::{ByteLock, Guard, Locked};
 use crate::types::CacheAligned;
 use crate::util::alloc::AllocError;
 use crate::util::backref::BackRef;
@@ -427,7 +427,7 @@ pub struct Cuckoo<I: CuckooItem = u64, S = SipHash13Key, const W: usize = 2> {
     faults:  Faults,
     _writer: CacheAligned,
     /// The writers'
-    lock:    Lock<ByteLock>,
+    lock:    Locked<ByteLock>,
     /// Items moved by inserts, ever: read only by a lookup that misses.
     moves:   AtomicU64,
     /// Items, for when to grow.

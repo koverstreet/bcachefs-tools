@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::alloc::discard::{do_discards_work, DiscardBio, DiscardState};
 use crate::util::alloc::KVVec;
-use crate::locking::{Lock, SeqLock};
+use crate::locking::{Locked, SeqLock};
 use crate::{new_lock, new_work};
 use crate::types::{CacheAligned, RustOnly, c_default, rust_only};
 use crate::util::bio::BioSet;
@@ -194,7 +194,7 @@ nest! {
         #[pin]
         #[init(new_lock!((), ::pin_init::zeroed(), "&ob->lock"))]
         #[c_lock("spinlock_t lock")]
-        pub lock: Lock<c::spinlock_t, (), OpenBucketIdentity>,
+        pub lock: Locked<c::spinlock_t, (), OpenBucketIdentity>,
         pub pin: AtomicI32,
         pub sectors_free: Volatile<u32>,
         #[c("struct ec_stripe_new *ec")]
@@ -337,7 +337,7 @@ pub struct write_point_alloc {
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&wp->lock"))]
     #[c_lock("struct mutex lock")]
-    pub lock: Lock<c::mutex, WritePointLocked, WritePointId>,
+    pub lock: Locked<c::mutex, WritePointLocked, WritePointId>,
 }
 
 #[pin_data]
@@ -407,7 +407,7 @@ pub struct write_point_io {
     #[pin]
     #[init(new_lock!(<- WritePointWrites::init(), ::pin_init::zeroed(), "&wp->writes_lock"))]
     #[c_lock("spinlock_t writes_lock")]
-    pub writes_lock: Lock<c::spinlock_t, WritePointWrites, WritePointState>,
+    pub writes_lock: Locked<c::spinlock_t, WritePointWrites, WritePointState>,
 }
 
 #[repr(C)]
@@ -476,7 +476,7 @@ pub struct bch_fs_capacity {
     #[pin]
     #[init(new_lock!((), ::pin_init::zeroed(), "&c->capacity.sectors_available_lock"))]
     #[c_lock("spinlock_t sectors_available_lock")]
-    pub sectors_available_lock: Lock<c::spinlock_t, (), Placement>,
+    pub sectors_available_lock: Locked<c::spinlock_t, (), Placement>,
 
     #[c("struct bch_fs_capacity_pcpu __percpu *pcpu")]
     #[init(PerCpu::init())]
@@ -506,7 +506,7 @@ pub struct bch_fs_allocator {
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&c->allocator.freelist_lock"))]
     #[c_lock("spinlock_t freelist_lock")]
-    pub freelist_lock: Lock<c::spinlock_t, OpenBucketsFree, OpenBucketsFreeNr>,
+    pub freelist_lock: Locked<c::spinlock_t, OpenBucketsFree, OpenBucketsFreeNr>,
     pub freelist_wait: c::closure_waitlist,
     /* jiffies at the last allocator stuck dump; claimed by cmpxchg */
     pub last_stuck: crate::util::bitmap::AtomicULong,
@@ -524,7 +524,7 @@ pub struct bch_fs_allocator {
     #[pin]
     #[init(new_lock!((), ::pin_init::zeroed(), "&c->allocator.write_points_hash_lock"))]
     #[c_lock("struct mutex write_points_hash_lock")]
-    pub write_points_hash_lock: Lock<c::mutex, (), WritePointsHash>,
+    pub write_points_hash_lock: Locked<c::mutex, (), WritePointsHash>,
 
     #[pin]
     #[init(c::write_point::init(c::bch_data_type::BCH_DATA_btree))]
@@ -585,7 +585,7 @@ pub struct bch_fs_discards {
     /// Buckets with a discard issued, by any worker, not yet marked free.
     #[pin]
     #[init(RustOnly::new(new_lock!(KVVec::new())))]
-    pub(crate) in_flight: rust_only!(Lock<c::mutex, KVVec<u64>>),
+    pub(crate) in_flight: rust_only!(Locked<c::mutex, KVVec<u64>>),
 
     /// The worker's progress, for sysfs and the allocator's stuck report.
     #[pin]

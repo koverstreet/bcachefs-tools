@@ -52,7 +52,7 @@
 
 use crate::c;
 use crate::errcode::{BchError, FirstErr};
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::new_lock;
 use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
 use crate::util::sleep::{sleep_until, Sleep};
@@ -130,7 +130,7 @@ impl Fold for Result<(), BchError> {
 /// put pushes before its ref's dropped from the count.
 impl<T: Send> Fold for KVVec<T> {
     type Item = T;
-    type Acc = Lock<c::spinlock_t, KVVec<T>>;
+    type Acc = Locked<c::spinlock_t, KVVec<T>>;
 
     const RESERVES: bool = true;
 

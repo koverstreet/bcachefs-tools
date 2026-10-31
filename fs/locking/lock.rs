@@ -74,14 +74,14 @@ pub unsafe trait RawRwLock: RawLock {
     unsafe fn assert_held_any(&self);
 }
 
-/// Lock @R, over two things: @G, protected - reached only with it held, its
+/// Two things locked by @R: @G, protected - reached only with it held, its
 /// guard derefs to it - and @P, published: anyone's, the lock derefs to it,
 /// held or not; written through the guard's published(), so the lock a
 /// writer holds is the one it's in. Laid out as C's members, the lock then G
 /// then P, so a struct C shares can declare it as them:
 /// #[c_lock("struct mutex lock")].
 #[repr(C)]
-pub struct Lock<R: RawLock, G = (), P = ()> {
+pub struct Locked<R: RawLock, G = (), P = ()> {
     raw:       R,
     protected: UnsafeCell<G>,
     published: P,
@@ -92,10 +92,10 @@ pub struct Lock<R: RawLock, G = (), P = ()> {
 
 // G is had by one thread at a time, as a std Mutex's; P is every thread's.
 // read() shares G, so it wants G: Sync.
-unsafe impl<R: RawLock, G: Send, P: Send> Send for Lock<R, G, P> {}
-unsafe impl<R: RawLock, G: Send, P: Sync> Sync for Lock<R, G, P> {}
+unsafe impl<R: RawLock, G: Send, P: Send> Send for Locked<R, G, P> {}
+unsafe impl<R: RawLock, G: Send, P: Sync> Sync for Locked<R, G, P> {}
 
-impl<R: RawLock, G, P> Lock<R, G, P> {
+impl<R: RawLock, G, P> Locked<R, G, P> {
     /// new_lock!()'s, which has a static lockdep key per call site.
     ///
     /// # Safety
@@ -138,7 +138,7 @@ impl<R: RawLock, G, P> Lock<R, G, P> {
         }
     }
 
-    /// For a Lock in zeroed memory that new() can't reach - a static: its
+    /// For a Locked in zeroed memory that new() can't reach - a static: its
     /// raw lock initialized in place, G and P as zeroed.
     ///
     /// # Safety
@@ -177,7 +177,7 @@ impl<R: RawLock, G, P> Lock<R, G, P> {
         unsafe { self.raw.assert_held() }
     }
 
-    /// Where the G is in a Lock: for C's container_of() from it.
+    /// Where the G is in a Locked: for C's container_of() from it.
     pub const PROTECTED_OFFSET: usize = core::mem::offset_of!(Self, protected);
 
     /// Where the P is: for #[c_lock]'s asserts.
@@ -188,7 +188,7 @@ impl<R: RawLock, G, P> Lock<R, G, P> {
     }
 }
 
-impl<R: RawLock, G, P> Deref for Lock<R, G, P> {
+impl<R: RawLock, G, P> Deref for Locked<R, G, P> {
     type Target = P;
 
     fn deref(&self) -> &P {
@@ -196,7 +196,7 @@ impl<R: RawLock, G, P> Deref for Lock<R, G, P> {
     }
 }
 
-impl<R: RawRwLock, G: Sync, P> Lock<R, G, P> {
+impl<R: RawRwLock, G: Sync, P> Locked<R, G, P> {
     pub fn read(&self) -> ReadGuard<'_, R, G, P> {
         let state = unsafe { self.raw.lock_shared() };
         ReadGuard { lock: self, state: Some(state), _not_send: PhantomData }
@@ -211,18 +211,18 @@ impl<R: RawRwLock, G: Sync, P> Lock<R, G, P> {
     }
 }
 
-impl<R: RawLock, G, P> Drop for Lock<R, G, P> {
+impl<R: RawLock, G, P> Drop for Locked<R, G, P> {
     fn drop(&mut self) {
         unsafe { self.raw.destroy() }
     }
 }
 
-/// A held Lock: released when dropped, if lock() took it. Not Send: released
+/// A held Locked: released when dropped, if lock() took it. Not Send: released
 /// by the task that took it, as lockdep checks - and a spin_lock_irqsave()'s
 /// interrupt state is its CPU's.
 #[must_use = "the lock is released as soon as the guard is dropped"]
 pub struct Guard<'a, R: RawLock, G = (), P = ()> {
-    lock:      &'a Lock<R, G, P>,
+    lock:      &'a Locked<R, G, P>,
     /// None for a lock held by its caller - compat.rs's held(): not ours to
     /// release
     state:     Option<R::GuardState>,
@@ -233,11 +233,11 @@ impl<'a, R: RawLock, G, P> Guard<'a, R, G, P> {
     /// # Safety
     /// @lock is held exclusively: taken with @state, or by our caller for as
     /// long as the guard lives, if None.
-    pub(super) unsafe fn from_held(lock: &'a Lock<R, G, P>, state: Option<R::GuardState>) -> Self {
+    pub(super) unsafe fn from_held(lock: &'a Locked<R, G, P>, state: Option<R::GuardState>) -> Self {
         Guard { lock, state, _not_send: PhantomData }
     }
 
-    pub(crate) fn lock(&self) -> &'a Lock<R, G, P> {
+    pub(crate) fn lock(&self) -> &'a Locked<R, G, P> {
         self.lock
     }
 }
@@ -294,7 +294,7 @@ impl<R: RawLock, G, P> Drop for Guard<'_, R, G, P> {
 
 #[must_use = "the lock is released as soon as the guard is dropped"]
 pub struct ReadGuard<'a, R: RawRwLock, G = (), P = ()> {
-    lock:      &'a Lock<R, G, P>,
+    lock:      &'a Locked<R, G, P>,
     // an Option only to be taken in drop()
     state:     Option<R::GuardState>,
     _not_send: PhantomData<*mut ()>,
@@ -326,18 +326,18 @@ impl<R: RawRwLock, G, P> Drop for ReadGuard<'_, R, G, P> {
     }
 }
 
-/// Lock's two halves, for data that can't live in its lock: @G, reached only
+/// Locked's two halves, for data that can't live in its lock: @G, reached only
 /// with that lock held, and @P, published - anyone's, it derefs to it. Which
 /// lock that is, only the owner of both knows: G is reached through the
 /// owner's methods, which check - here, only unsafely. Laid out as G then P,
-/// as Lock's are.
+/// as Locked's are.
 #[repr(C)]
 pub struct LockedBy<G, P = ()> {
     protected: UnsafeCell<G>,
     published: P,
 }
 
-// As Lock's.
+// As Locked's.
 unsafe impl<G: Send, P: Send> Send for LockedBy<G, P> {}
 unsafe impl<G: Send, P: Sync> Sync for LockedBy<G, P> {}
 
@@ -394,11 +394,11 @@ impl<G, P> crate::typeinfo::TypeInfo for LockedBy<G, P> {
     };
 }
 
-/// A Lock initializer - new_lock!(g), new_lock!(g, p), either with a "name"
+/// A Locked initializer - new_lock!(g), new_lock!(g, p), either with a "name"
 /// last - over @g, publishing @p or nothing, with a lockdep class of its own,
 /// named @name or for the call site. new_lock!(<- init), and
 /// new_lock!(<- init, p, "name"), initialize @g in place, by @init:
-/// Lock::new_init().
+/// Locked::new_init().
 #[macro_export]
 macro_rules! new_lock {
     (@key) => {{
@@ -413,14 +413,14 @@ macro_rules! new_lock {
         let g = $g;
         let p = $p;
         let name = unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked($name.as_bytes()) };
-        unsafe { $crate::locking::Lock::new(g, p, name, key) }
+        unsafe { $crate::locking::Locked::new(g, p, name, key) }
     }};
     (@init_in_place $g:expr, $p:expr, $name:expr) => {{
         let key = $crate::new_lock!(@key);
         let g = $g;
         let p = $p;
         let name = unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked($name.as_bytes()) };
-        unsafe { $crate::locking::Lock::new_init(g, p, name, key) }
+        unsafe { $crate::locking::Locked::new_init(g, p, name, key) }
     }};
     (<- $g:expr $(,)?) => {
         $crate::new_lock!(@init_in_place $g, (), ::core::concat!(::core::file!(), ":", ::core::line!(), "\0"))

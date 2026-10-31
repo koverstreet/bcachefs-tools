@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::new_lock;
 use crate::types::c_default;
 use crate::util::ffi::Opaque;
@@ -95,7 +95,7 @@ pub struct bch2_time_stats {
     #[pin]
     #[init(new_lock!(c::TimeStatsLocked::new(), "&stats->lock"))]
     #[c_lock("spinlock_t lock")]
-    pub lock: Lock<c::spinlock_t, TimeStatsLocked>,
+    pub lock: Locked<c::spinlock_t, TimeStatsLocked>,
     /* the per-cpu buffer, once events come fast enough: installed under the
      * lock, read without it - released and acquired, for what's in it - and
      * freed when the stats drop */

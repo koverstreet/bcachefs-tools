@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::new_lock;
 use crate::types::{RustOnly, rust_only};
 use crate::util::futex::EventCount;
@@ -20,7 +20,7 @@ pub struct bch_fs_copygc {
     /* The thread, from start to stop: data/copygc.rs */
     #[pin]
     #[init(RustOnly::new(new_lock!(None)))]
-    pub(crate) thread: rust_only!(Lock<c::spinlock_t, Option<Kthread>>),
+    pub(crate) thread: rust_only!(Locked<c::spinlock_t, Option<Kthread>>),
     #[pin]
     #[init(c::write_point::init(c::bch_data_type::BCH_DATA_user))]
     pub write_point: c::write_point,

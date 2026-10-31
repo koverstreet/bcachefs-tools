@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::fs::Fs;
-use crate::locking::{ByteLock, Lock};
+use crate::locking::{ByteLock, Locked};
 use crate::util::percpu::Counters;
 use core::cell::Cell;
 use core::ffi::c_uint;
@@ -29,7 +29,7 @@ c_const! {
 #[derive(CStruct)]
 pub struct bucket {
     #[c_lock("u8 lock")]
-    pub lock: Lock<ByteLock, BucketData>,
+    pub lock: Locked<ByteLock, BucketData>,
 }
 
 nest! {

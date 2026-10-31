@@ -208,7 +208,7 @@ macro_rules! one_item {
 /// a C declaration that doesn't name it. A bare `#[c_anon]` is the field's
 /// type written in its place, unnamed - C's anonymous struct or union - and
 /// `#[c_inline]` the same, named; `#[c_struct_group]` as the kernel's
-/// struct_group(); `#[c_lock("u8 lock")]` on a Lock<R, G, P>, the lock's C
+/// struct_group(); `#[c_lock("u8 lock")]` on a Locked<R, G, P>, the lock's C
 /// declaration, G's members and P's after it. `#[c_bitfield]` marks a field of a
 /// #[bitfield] type, whose members C declares in its place. `#[counted_by(FIELD)]` on a trailing
 /// `[T; 0]`: FIELD is its length - the struct's FlexArray (vstructs.rs).
@@ -307,7 +307,7 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         nums.push(format!("crate::types::field_align({proj})"));
     }
     // a #[c_lock] field's, after every field's: the lock's size, and where
-    // in the Lock what it protects and what it publishes are
+    // in the Locked what it protects and what it publishes are
     for f in def.fields.iter().filter(|f| f.lock.is_some()) {
         let [r, ..] = cstruct::lock_args(&f.ty)?.expect("checked when parsed");
         nums.push(format!("::core::mem::size_of::<{r}>() as u64"));

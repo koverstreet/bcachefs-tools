@@ -29,7 +29,7 @@
 
 use crate::c;
 use crate::fs::Fs;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::{new_lock, prt};
 use crate::types::{rust_only, RustOnly};
 use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
@@ -64,7 +64,7 @@ pub struct io_clock {
     /// The waiters, latest first: Rust's alone.
     #[pin]
     #[init(RustOnly::new(new_lock!(KVVec::new(), (), "&clock->timer_lock")))]
-    timers: rust_only!(Lock<c::spinlock_t, KVVec<Timer>>),
+    timers: rust_only!(Locked<c::spinlock_t, KVVec<Timer>>),
 }
 
 /// A waiter on a clock: wakes @task when the clock reaches @expire.

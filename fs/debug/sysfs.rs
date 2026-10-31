@@ -34,7 +34,7 @@ use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, WriteRef};
 use crate::init::passes;
-use crate::locking::{Lock, MemallocFlags};
+use crate::locking::{Locked, MemallocFlags};
 use crate::opts::{self, OptChange, OptType};
 use crate::sb::counters::COUNTERS;
 use crate::sb::members;
@@ -228,7 +228,7 @@ unsafe extern "C" fn trans_stats_json_read(_file: *mut c::file, kobj: *mut c::ko
     // SAFETY: internal/'s kobject, which has this file
     let c = unsafe { sysfs::obj_of::<InternalDir>(kobj) };
 
-    let _lock = Lock::from_c(&c.btree.trans.stats_json_lock).lock();
+    let _lock = Locked::from_c(&c.btree.trans.stats_json_lock).lock();
     // SAFETY: the buffer is the lock's
     let out = unsafe { Printbuf::borrow_raw(&raw mut (*c.as_ptr()).btree.trans.stats_json_buf) };
 
@@ -258,7 +258,7 @@ unsafe extern "C" fn trans_stats_json_write(_file: *mut c::file, kobj: *mut c::k
     let c = unsafe { sysfs::obj_of::<InternalDir>(kobj) };
 
     for (_, s) in trans_stats(c) {
-        let _lock = Lock::from_c(&s.lock).lock();
+        let _lock = Locked::from_c(&s.lock).lock();
         s.duration.reset();
         s.lock_hold_times.reset();
         s.lock_wait_times.reset();

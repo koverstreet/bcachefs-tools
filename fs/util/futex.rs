@@ -35,7 +35,7 @@
 
 use crate::c;
 use crate::list;
-use crate::locking::{spinlock_t, Lock};
+use crate::locking::{spinlock_t, Locked};
 use core::sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use crate::util::list::ListLinks;
 use crate::util::sleep::{sleep_until, Sleep, SleepEnd};
@@ -66,7 +66,7 @@ const BUCKET_BITS: u32 = 8;
 #[repr(align(64))]
 struct Bucket {
     waiters: AtomicUsize,
-    list:    Lock<spinlock_t, list!(Entry, links)>,
+    list:    Locked<spinlock_t, list!(Entry, links)>,
 }
 
 struct Table([Bucket; 1 << BUCKET_BITS]);

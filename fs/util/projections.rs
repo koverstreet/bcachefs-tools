@@ -23,7 +23,7 @@
 //!   traits are for what's generic over places, FakePlaceRef first.
 //!
 //! - Publishing: Publish and published!(), projection faked by a mirror, for
-//!   what a Lock publishes (locking/): a struct and its Writer,
+//!   what a Locked publishes (locking/): a struct and its Writer,
 //!   laid out the same, so the guard's published() is the &P::Writer of its
 //!   own P, and field syntax reaches each leaf as its writer has it. The
 //!   mirror goes; the lock stays.
@@ -96,7 +96,7 @@ pub trait FakePlaceWrite: FakePlaceRead {
 /// A statement's worth, not a binding's: one held across another store to
 /// the same place stores its stale copy over it when it drops. The borrow
 /// checker doesn't see that - both borrow the place shared - so writers had
-/// through &mut of what they're in, as a Lock's guard's published(),
+/// through &mut of what they're in, as a Locked's guard's published(),
 /// keep the window to one writer reference.
 #[must_use = "a FakePlaceRef stores when it drops - assign through it, *p += 1"]
 pub struct FakePlaceRef<'a, P: FakePlaceWrite> {
@@ -130,7 +130,7 @@ impl<P: FakePlaceWrite> Drop for FakePlaceRef<'_, P> {
 
 // ── Publishing ───────────────────────────────────────────────────────────
 
-/// What a Lock publishes: read through &Self by anyone, held or not
+/// What a Locked publishes: read through &Self by anyone, held or not
 /// - and written through &Self::Writer, which only its lock's guard hands
 /// out: the same bytes, its leaves able to write. A struct of them is
 /// published!(); its leaves are Volatile words and RcuArrays.
@@ -153,7 +153,7 @@ unsafe impl<T: Publish, const N: usize> Publish for [T; N] {
     type Writer = [T::Writer; N];
 }
 
-/// A struct a Lock publishes, and its writer: the struct as declared,
+/// A struct a Locked publishes, and its writer: the struct as declared,
 /// #[repr(C)], and NameWriter - each field as its writer has it, the Publish
 /// Writer of its type - which the lock's guard hands out. Fields are Publish
 /// types: Volatile words, RcuArrays, arrays of them, other published!()
@@ -354,7 +354,7 @@ macro_rules! tear_safe {
 /// readers. set() is a store, for a field with one writer - a thread's own
 /// state, published - and a read-modify-write is a load and a store - place()
 /// - not an atomic one, so it's a VolatileWriter's: had where writing is
-/// serialized, a Lock's guard. A word several writers change at once is an
+/// serialized, a Locked's guard. A word several writers change at once is an
 /// atomic, written with its fetch_add()s, and never a FakePlaceWrite: a
 /// place's load and store would lose another writer's update between them.
 #[repr(transparent)]

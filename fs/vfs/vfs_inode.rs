@@ -23,7 +23,7 @@ use {
     crate::errcode::{ret_to_result_void as ret_to_result, BchError},
     kernel::sync::aref::AlwaysRefCounted,
     super::super_block::SuperBlock,
-    crate::locking::Lock,
+    crate::locking::Locked,
 };
 
 /// A struct inode of ours - one InodeInfo's - referenced while this is
@@ -146,7 +146,7 @@ impl VfsInode {
     pub fn assert_locked(&self) {
         // SAFETY: c::rw_semaphore is the kernel's, i_rwsem one
         let l = unsafe { &*(&raw const (*self.as_ptr()).i_rwsem).cast::<c::rw_semaphore>() };
-        Lock::from_c(l).assert_held();
+        Locked::from_c(l).assert_held();
     }
 
     // ── ACLs ─────────────────────────────────────────────────────────────

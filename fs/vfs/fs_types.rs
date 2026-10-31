@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::types::c_default;
 use crate::util::bitmap::AtomicULong;
 use crate::vfs::vfs_inode::VfsInode;
@@ -18,8 +18,8 @@ use cstruct_macros::{c_extern, c_typedef};
  * The VFS's inode, and what we keep beside it. Shared - the kernel and C use it
  * while Rust has a &InodeInfo - so what Rust touches is typed for that: @v,
  * the struct inode the kernel writes, a VfsInode; ei_inode a
- * VolatileInodeUnpacked; ei_update_lock C's mutex, borrowed as a Lock;
- * ei_quota_lock a Lock over what it protects.
+ * VolatileInodeUnpacked; ei_update_lock C's mutex, borrowed as a Locked;
+ * ei_quota_lock a Locked over what it protects.
  */
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
@@ -70,7 +70,7 @@ pub struct InodeInfo {
      * under either.
      */
     #[c_lock("struct mutex ei_quota_lock")]
-    pub ei_quota: Lock<c::mutex, InodeQuota>,
+    pub ei_quota: Locked<c::mutex, InodeQuota>,
 
     /*
      * When we've been doing nocow writes we'll need to issue flushes to the

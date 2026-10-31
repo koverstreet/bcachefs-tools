@@ -17,7 +17,7 @@
 //! What's safe, and why:
 //!
 //! - Holding the list is holding a &List or &mut List: one lives in a
-//!   Lock<R, List<T, OFFSET>>, and from_c() asserts C's is locked. Walking it
+//!   Locked<R, List<T, OFFSET>>, and from_c() asserts C's is locked. Walking it
 //!   with a cursor, and reordering it - sort() - are safe.
 //! - An item is live, and doesn't move, while it's on the list, and after
 //!   it's taken off until the list's lock is next released: its owner takes

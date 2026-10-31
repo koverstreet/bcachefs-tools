@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::init::passes::async_runner;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::new_lock;
 use crate::published;
 use crate::types::c_default;
@@ -84,13 +84,13 @@ pub struct bch_fs_recovery {
     #[pin]
     #[init(new_lock!(Default::default(), ::pin_init::zeroed(), "&c->recovery.lock"))]
     #[c_lock("spinlock_t lock")]
-    pub runner: Lock<c::spinlock_t, bch_recovery_runner, RecoveryWords>,
+    pub runner: Locked<c::spinlock_t, bch_recovery_runner, RecoveryWords>,
 
     /* passes run under it - and what runs as a pass, it serializes */
     #[pin]
     #[init(new_lock!((), "&c->recovery.run_lock"))]
     #[c("struct mutex run_lock")]
-    pub run_lock: Lock<c::mutex>,
+    pub run_lock: Locked<c::mutex>,
 
     /* the async runner: run_async() */
     #[pin]

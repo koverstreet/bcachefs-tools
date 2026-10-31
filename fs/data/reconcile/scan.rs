@@ -31,7 +31,7 @@ use crate::errcode::{ret_to_c, BchError};
 use crate::namei::inum_snapshot_to_path;
 use crate::fs::Fs;
 use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::sb::counters::events;
 use crate::util::kthread::Kthread;
 use crate::util::Printbuf;
@@ -223,7 +223,7 @@ impl Fs {
     /// then requested, so writers re-derive against the new option as it
     /// lands.
     pub fn opt_change_scan_pre(&self, scan: c::reconcile_scan) -> Result<(), BchError> {
-        Lock::from_c(&self.opt_change_lock).assert_held();
+        Locked::from_c(&self.opt_change_lock).assert_held();
         {
             let mut s = self.reconcile.opt_change_scans.lock();
             assert!(s.nr < OPT_CHANGE_SCANS_MAX, "an option change requesting more than {OPT_CHANGE_SCANS_MAX} scans");

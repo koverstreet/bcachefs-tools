@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::new_lock;
 use crate::errcode::BchError;
 use crate::types::{RustOnly, rust_only};
@@ -77,10 +77,10 @@ pub struct bch_fs_errors {
     /* What the error paths keep: init/error.rs */
     #[pin]
     #[init(RustOnly::new(new_lock!(ErrorsLocked::new())))]
-    pub(crate) state: rust_only!(Lock<c::mutex, ErrorsLocked>),
+    pub(crate) state: rust_only!(Locked<c::mutex, ErrorsLocked>),
 
     /* The superblock's error counts, by id: sb/errors.rs */
     #[pin]
     #[init(RustOnly::new(new_lock!(KVVec::new())))]
-    pub(crate) counts: rust_only!(Lock<c::mutex, KVVec<c::bch_sb_error_entry_cpu>>),
+    pub(crate) counts: rust_only!(Locked<c::mutex, KVVec<c::bch_sb_error_entry_cpu>>),
 }

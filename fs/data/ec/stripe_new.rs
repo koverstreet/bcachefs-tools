@@ -147,7 +147,7 @@ use crate::data::ec::stripe_new_tasks::{stripe_done, stripe_task};
 use crate::data::moving::MovingIo;
 use crate::errcode::{bch_errcode, BchError, FirstErr};
 use crate::fs::Fs;
-use crate::locking::{Guard, Lock};
+use crate::locking::{Guard, Locked};
 use crate::util::alloc::{AllocError, KBox, KVVec};
 use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::backref::BackRef;
@@ -197,7 +197,7 @@ pub struct StripeNew {
     state:                AtomicU32,
 
     #[pin]
-    internal:             Lock<c::mutex, Internal, BlockDevs>,
+    internal:             Locked<c::mutex, Internal, BlockDevs>,
 }
 
 published! {

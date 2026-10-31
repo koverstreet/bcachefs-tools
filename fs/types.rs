@@ -8,7 +8,7 @@ use crate::new_lock;
 use crate::util::alloc::KVVec;
 use crate::util::kernel::WRITE;
 use crate::util::workqueue::ReffedWork;
-use crate::locking::{Lock, LockedBy, MutexNoio, PercpuRwsemNoio};
+use crate::locking::{Locked, LockedBy, MutexNoio, PercpuRwsemNoio};
 use crate::util::percpu::{Counters, PerCpu};
 use crate::util::vstructs::Head;
 use crate::types::{GenRadix, RustOnly, bits_to_longs, rust_only};
@@ -288,7 +288,7 @@ pub struct bucket_bitmap {
     #[c_lock("struct mutex lock")]
     #[pin]
     #[init(crate::new_lock!((), ::pin_init::zeroed(), "&ca->bucket_bitmap.lock"))]
-    pub bits: Lock<c::mutex, (), BucketBits>,
+    pub bits: Locked<c::mutex, (), BucketBits>,
 }
 
 c_xmacro! {
@@ -457,7 +457,7 @@ pub struct bch_dev {
     /// Buckets queued for fast discard: alloc/discard.rs's alone.
     #[pin]
     #[init(RustOnly::new(new_lock!(KVVec::new())))]
-    pub(crate) discard_fast: rust_only!(Lock<c::mutex, KVVec<u64>>),
+    pub(crate) discard_fast: rust_only!(Locked<c::mutex, KVVec<u64>>),
     /// Discards in flight on it, by every worker: a futex word, a worker at
     /// the limit sleeping on it.
     #[pin]
@@ -807,7 +807,7 @@ pub struct Fs {
     /* Extents btree ranges from lost btree nodes, awaiting attribution: init/damage.rs */
     #[pin]
     #[init(RustOnly::new(crate::new_lock!(crate::util::alloc::KVVec::new())))]
-    pub(crate) lost_extents_ranges: rust_only!(Lock<c::mutex, crate::util::alloc::KVVec<core::ops::Range<c::bpos>>>),
+    pub(crate) lost_extents_ranges: rust_only!(Locked<c::mutex, crate::util::alloc::KVVec<core::ops::Range<c::bpos>>>),
 
     #[pin]
     #[init(RustOnly::new(::pin_init::zeroed::<crate::data::compress::Compress>()))]

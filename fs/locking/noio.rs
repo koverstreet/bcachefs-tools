@@ -23,7 +23,7 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{Lock, RawLock, RawRwLock, RawTryLock};
+use super::{Locked, RawLock, RawRwLock, RawTryLock};
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::{c_uint, c_void, CStr};
@@ -120,8 +120,8 @@ c_default!(percpu_rwsem_noio);
 
 /// Locks over @G held in a NOIO scope: C's mutex_noio and percpu_rwsem_noio,
 /// and what they protect.
-pub type MutexNoio<G = (), P = ()> = Lock<mutex_noio, G, P>;
-pub type PercpuRwsemNoio<G = (), P = ()> = Lock<percpu_rwsem_noio, G, P>;
+pub type MutexNoio<G = (), P = ()> = Locked<mutex_noio, G, P>;
+pub type PercpuRwsemNoio<G = (), P = ()> = Locked<percpu_rwsem_noio, G, P>;
 
 c_verbatim!(r#"
 /*

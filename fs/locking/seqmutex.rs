@@ -7,7 +7,7 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{Guard, Lock, RawLock, RawTryLock};
+use super::{Guard, Locked, RawLock, RawTryLock};
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::convert::Infallible;
@@ -53,7 +53,7 @@ unsafe impl RawLock for seqmutex {
 /// What relock() takes: the count at an unlock.
 pub struct SeqMutexSeq(u32);
 
-impl<G, P> Lock<seqmutex, G, P> {
+impl<G, P> Locked<seqmutex, G, P> {
     /// Held again, if no one has taken it since the unlock that gave @at.
     pub fn relock(&self, at: SeqMutexSeq) -> Option<Guard<'_, seqmutex, G, P>> {
         let l = self.raw();

@@ -50,7 +50,7 @@
 
 use crate::c;
 use crate::errcode::BchError;
-use crate::locking::{Guard, Lock};
+use crate::locking::{Guard, Locked};
 use crate::new_lock;
 use crate::types::Fifo;
 use crate::util::alloc::{flags, kbox_pin_init, KBox, KVVec};
@@ -149,7 +149,7 @@ struct Buf {
 #[pin_data]
 struct StdioBuf {
     #[pin]
-    buf:  Lock<c::spinlock_t, Buf, Volatile<usize>>,
+    buf:  Locked<c::spinlock_t, Buf, Volatile<usize>>,
     events: EventCount,
     #[pin]
     poll: PollQueue,

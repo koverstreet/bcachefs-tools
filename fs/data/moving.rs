@@ -30,7 +30,7 @@ use crate::data::copygc::bch2_copygc_wait_not_running;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::function_name;
-use crate::locking::Lock;
+use crate::locking::Locked;
 use crate::prt;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError, Flags};
 use crate::util::list::List;
@@ -218,7 +218,7 @@ impl Fs {
     /// The moving contexts, @f's alone - under moving_context_lock - while it
     /// runs.
     fn moving_contexts<R>(&self, f: impl FnOnce(&mut ContextList) -> R) -> R {
-        let _lock = Lock::from_c(&self.moving_context_lock).lock();
+        let _lock = Locked::from_c(&self.moving_context_lock).lock();
         // SAFETY: the list, locked, and no other borrow of it in Rust: they're
         // all here, and @f can't reenter, as the lock isn't
         f(unsafe { ContextList::from_c((&raw const self.moving_context_list).cast_mut()) })
