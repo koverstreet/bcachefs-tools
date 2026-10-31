@@ -164,6 +164,11 @@ bch-rust-gc-flags := -Zfunction-sections=y
 # crate (userspace has bcachefs-shim), and __KERNEL__, as C does.
 RUSTFLAGS_mod.o += --cfg kernel --cfg __KERNEL__ $(bch-rust-gc-flags)
 
+# Our crate is edition 2024; kbuild's flags have the kernel's, 2021, and rustc
+# takes one --edition.
+RUSTFLAGS_REMOVE_mod.o += --edition=2021
+RUSTFLAGS_mod.o += --edition=2024
+
 # mod.rs's cfi_encoding, auto_traits, negative_impls, context_ext, local_waker
 # and const_type_name, which kbuild's -Zallow-features doesn't list - and it's
 # after RUSTFLAGS_mod.o, the last one being what rustc takes. So another, its

@@ -1347,8 +1347,8 @@ fn bucket_do_discard_index(t: &TransAttempt<'_, '_>, bucket: Bpos, a: &c::AllocV
     t.bit_mod_buffered(Btree::need_discard, NeedDiscardPos::new(bucket, a).to_bpos(), set)
 }
 
-/// Bucket @bucket's generation in the bucket_gens btree, made @gen.
-fn bucket_gen_update(t: &TransAttempt<'_, '_>, bucket: Bpos, gen: u8) -> Result<(), BchError> {
+/// Bucket @bucket's generation in the bucket_gens btree, made @generation.
+fn bucket_gen_update(t: &TransAttempt<'_, '_>, bucket: Bpos, generation: u8) -> Result<(), BchError> {
     let pos = BucketGensPos::new(bucket);
     let mut iter = BtreeIter::new(t, Btree::bucket_gens, pos.key, BtreeIterFlags::INTENT);
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
@@ -1361,7 +1361,7 @@ fn bucket_gen_update(t: &TransAttempt<'_, '_>, bucket: Bpos, gen: u8) -> Result<
             g
         }
     };
-    g.v_mut().gens[pos.idx] = gen;
+    g.v_mut().gens[pos.idx] = generation;
     t.update(&iter, &g, UpdateTriggerFlags::empty())
 }
 
@@ -1608,10 +1608,10 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
 
         if new_a.generation != old_a.generation {
             let rcu = read_lock();
-            let Some(gen) = ca.bucket_gen_ref(b, &rcu) else {
+            let Some(generation) = ca.bucket_gen_ref(b, &rcu) else {
                 return inval_bucket_key(fs, as_sc(&new_key(new_a)));
             };
-            gen.store(new_a.generation, Ordering::Relaxed);
+            generation.store(new_a.generation, Ordering::Relaxed);
         }
 
         if became(is(data_type::free), &old_a, new_a) {

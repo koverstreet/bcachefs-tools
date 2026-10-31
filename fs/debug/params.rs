@@ -20,7 +20,7 @@ macro_rules! debug_params {
         #[doc = concat!($($desc),*)]
         #[inline(always)]
         pub fn $name() -> bool {
-            extern "C" {
+            unsafe extern "C" {
                 static [<bch2_ $name>]: Key;
             }
             // SAFETY: a static key, which C defines and only C writes

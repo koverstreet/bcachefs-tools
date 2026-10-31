@@ -274,10 +274,10 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
         g.generation = ptr_gen;
     }
 
-    let gen = g.lock.lock().generation;
+    let generation = g.lock.lock().generation;
 
-    if fsck_err_on!(t, gen_cmp(ptr_gen, gen) > 0, id::ptr_gen_newer_than_bucket_gen,
-                    "bucket {dev}:{b} data type {ptr_type} ptr gen in the future: {ptr_gen} > {gen}\n\
+    if fsck_err_on!(t, gen_cmp(ptr_gen, generation) > 0, id::ptr_gen_newer_than_bucket_gen,
+                    "bucket {dev}:{b} data type {ptr_type} ptr gen in the future: {ptr_gen} > {generation}\n\
                      while marking {marking}")? {
         if cached {
             return Ok(PtrFix::DROP);
@@ -288,26 +288,26 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
     }
 
     if !cached {
-        if fsck_err_on!(t, gen_cmp(ptr_gen, gen) < 0, id::stale_dirty_ptr,
-                        "bucket {dev}:{b} data type {ptr_type} stale dirty ptr: {ptr_gen} < {gen}\n\
+        if fsck_err_on!(t, gen_cmp(ptr_gen, generation) < 0, id::stale_dirty_ptr,
+                        "bucket {dev}:{b} data type {ptr_type} stale dirty ptr: {ptr_gen} < {generation}\n\
                          while marking {marking}")? {
             // XXX: if it's a data pointer, read it and see if it's good
             fix |= PtrFix::RESET_GEN;
         }
-    } else if fsck_err_on!(t, i32::from(gen_cmp(gen, ptr_gen)) > c::BUCKET_GC_GEN_MAX as i32,
+    } else if fsck_err_on!(t, i32::from(gen_cmp(generation, ptr_gen)) > c::BUCKET_GC_GEN_MAX as i32,
                            id::ptr_gen_newer_than_bucket_gen,
-                           "bucket {dev}:{b} gen {gen} data type {ptr_type}: ptr gen {ptr_gen} too stale\n\
+                           "bucket {dev}:{b} gen {generation} data type {ptr_type}: ptr gen {ptr_gen} too stale\n\
                             while marking {marking}")? {
         return Ok(PtrFix::DROP);
     }
 
-    if data_type != dt::BCH_DATA_btree && ptr_gen != gen {
+    if data_type != dt::BCH_DATA_btree && ptr_gen != generation {
         return Ok(fix);
     }
 
     let bucket_type = data_type_from_u8(g.lock.lock().data_type());
     if fsck_err_on!(t, bucket_data_type_mismatch(bucket_type, data_type), id::ptr_bucket_data_type_mismatch,
-                    "bucket {dev}:{b} gen {gen} different types of data in same bucket: {}, {}\n\
+                    "bucket {dev}:{b} gen {generation} different types of data in same bucket: {}, {}\n\
                      while marking {marking}", data_type_str(bucket_type), data_type_str(data_type))? {
         if bucket_type == dt::BCH_DATA_journal {
             // SAFETY: a device we have a ref on

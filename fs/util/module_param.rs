@@ -186,7 +186,7 @@ macro_rules! module_param {
             use $crate::util::module_param::{modinfo, modinfo_len, verify_perm, KernelParam,
                                              ParamType, MODINFO_PREFIX};
 
-            #[link_section = "__param"]
+            #[unsafe(link_section = "__param")]
             #[used(compiler)]
             static PARAM: KernelParam = KernelParam(::kernel::bindings::kernel_param {
                 #[cfg(MODULE)]
@@ -208,13 +208,13 @@ macro_rules! module_param {
 
             const PARMTYPE: &[&str] =
                 &[MODINFO_PREFIX, "parmtype=", ::core::stringify!($name), ":", <$t as ParamType>::C_NAME];
-            #[link_section = ".modinfo"]
+            #[unsafe(link_section = ".modinfo")]
             #[used(compiler)]
             static PARMTYPE_INFO: [u8; modinfo_len(PARMTYPE)] = modinfo(PARMTYPE);
 
             const PARM: &[&str] =
                 &[MODINFO_PREFIX, "parm=", ::core::stringify!($name), ":", $desc];
-            #[link_section = ".modinfo"]
+            #[unsafe(link_section = ".modinfo")]
             #[used(compiler)]
             static PARM_INFO: [u8; modinfo_len(PARM)] = modinfo(PARM);
         };

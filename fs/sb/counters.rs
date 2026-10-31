@@ -169,7 +169,7 @@ mod tracepoints {
 
     macro_rules! tracepoint_externs {
         ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-            extern "C" {
+            unsafe extern "C" {
                 $(
                     pub(super) static [<__tracepoint_ $name>]: c::tracepoint;
                     pub(super) fn [<rust_do_trace_ $name>](c: *mut c::bch_fs, str: *const ::core::ffi::c_char);

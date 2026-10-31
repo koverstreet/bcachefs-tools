@@ -643,7 +643,7 @@ fn passphrase_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
     use core::ffi::{c_char, CStr};
 
     // c_src/crypto.h's
-    extern "C" {
+    unsafe extern "C" {
         fn read_passphrase(prompt: *const c_char) -> *mut c_char;
         fn bch2_passphrase_check(sb: *const Head<c::bch_sb>, passphrase: *const c_char,
                                  passphrase_key: *mut c::bch_key, sb_key: *mut c::bch_encrypted_key) -> bool;

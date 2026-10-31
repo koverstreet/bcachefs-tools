@@ -501,11 +501,11 @@ fn mark_pointer(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, k: BkeySC<'_>, p: &c:
                 sectors: i64, ptr_data_type: c::bch_data_type, a: &mut c::AllocV4, insert: bool)
     -> Result<(), BchError>
 {
-    let (gen, mut bucket_data_type) = (a.generation, a.data_type);
+    let (generation, mut bucket_data_type) = (a.generation, a.data_type);
     let dst = if p.has_ec                { &mut a.stripe_sectors }
               else if p.ptr.cached() == 0 { &mut a.dirty_sectors }
               else                         { &mut a.cached_sectors };
-    let ret = t.bucket_ref_update(ca, k, &p.ptr, sectors, ptr_data_type, gen, &mut bucket_data_type, dst);
+    let ret = t.bucket_ref_update(ca, k, &p.ptr, sectors, ptr_data_type, generation, &mut bucket_data_type, dst);
     // as C's, even on error: a mismatch it let through is BCH_DATA_multiple
     a.data_type = bucket_data_type;
     ret?;
