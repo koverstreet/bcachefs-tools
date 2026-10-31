@@ -228,6 +228,8 @@ pub mod data {
     pub mod update_index;
 }
 pub mod errcode;
+/// The on-disk format: bcachefs_format.h's types.
+pub mod format;
 pub mod opts;
 
 pub use paste::paste;

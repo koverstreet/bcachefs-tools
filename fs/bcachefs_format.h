@@ -4,9 +4,8 @@
 
 /*
  * bcachefs on disk data structures: the types are defined in Rust, in
- * bcachefs_format_types.rs, which has the overview, and generated into
- * bcachefs_format_gen.h. This is what C has for them besides - its macros and
- * inline functions.
+ * format.rs, which has the overview, and generated into format_gen.h. This
+ * is what C has for them besides - its macros and inline functions.
  */
 
 #include "enum_kind.h"
@@ -62,7 +61,7 @@ static inline void SET_##name(type *k, __u64 v)				\
 #define __nonstring
 #endif
 
-#include "bcachefs_format_gen.h"
+#include "format_gen.h"
 
 #define KEY_INODE_MAX			((__u64)~0ULL)
 #define KEY_OFFSET_MAX			((__u64)~0ULL)

@@ -10,7 +10,6 @@
 #[path = "alloc/lru_format.rs"] pub mod alloc_lru_format;
 #[path = "alloc/replicas_format.rs"] pub mod alloc_replicas_format;
 #[path = "alloc/types.rs"] pub mod alloc_types;
-#[path = "bcachefs_format_types.rs"] pub mod bcachefs_format_types;
 #[path = "bcachefs_ioctl.rs"] pub mod bcachefs_ioctl;
 #[path = "bcachefs_types.rs"] pub mod bcachefs_types;
 #[path = "btree/bkey_defs.rs"] pub mod btree_bkey_defs;
@@ -125,7 +124,7 @@ pub mod c {
     pub use super::alloc_replicas_format::*;
     pub use crate::alloc::replicas::{bch_replicas_padded};
     pub use super::alloc_types::*;
-    pub use super::bcachefs_format_types::*;
+    pub use crate::format::*;
     pub use super::bcachefs_ioctl::*;
     pub use super::bcachefs_types::*;
     pub use crate::btree::bbpos::{bbpos, blbpos, blbpos_bits};
