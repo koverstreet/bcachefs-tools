@@ -29,6 +29,7 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicI32, Ordering};
 use cstruct_macros::c_export;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
+use crate::format::Btree;
 
 // ── Block IO ─────────────────────────────────────────────────────────────
 //
@@ -398,7 +399,7 @@ fn read_extent(trans: &BtreeTrans<'_>, rbio: &mut c::bch_read_bio, msg: &mut Pri
     let mut key = BkeyBuf::new();
     let idx = rbio.pick.ec.idx();
     let found = lockrestart_do(trans, |t| {
-        let mut iter = BtreeIter::new(t, c::btree_id::stripes, pos(0, idx), BtreeIterFlags::SLOTS);
+        let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, idx), BtreeIterFlags::SLOTS);
         let k = iter.peek_slot(t)?.expect("a slot always has a key");
         Ok(k.arm::<c::Stripe>().map(|s| key.reassemble(s.untyped())).is_some())
     });

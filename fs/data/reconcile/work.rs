@@ -88,7 +88,7 @@ use core::ffi::{c_int, c_uint};
 use core::ops::ControlFlow;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_export, CStruct, TypeInfo, c_enum, c_typedef, c_xmacro, tagged_union};
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 c_xmacro! {
     RECONCILE_SCAN_TYPES(x) {
@@ -174,7 +174,7 @@ impl PhaseKind {
 pub struct Phase {
     kind:     PhaseKind,
     priority: c::reconcile_work_id,
-    btree:    c::btree_id,
+    btree:    Btree,
     start:    Bpos,
     end:      Bpos,
 }
@@ -188,31 +188,31 @@ impl Phase {
 
 /// Work id @priority's btree node backpointers, in reconcile_scan.
 const fn btree_phase(priority: c::reconcile_work_id) -> Phase {
-    Phase { kind: PhaseKind::Btree, priority, btree: c::btree_id::reconcile_scan,
+    Phase { kind: PhaseKind::Btree, priority, btree: Btree::reconcile_scan,
             start: pos(priority.0 as u64, 0), end: pos(priority.0 as u64, u64::MAX) }
 }
 
-const fn walk_phase(kind: PhaseKind, priority: c::reconcile_work_id, btree: c::btree_id) -> Phase {
+const fn walk_phase(kind: PhaseKind, priority: c::reconcile_work_id, btree: Btree) -> Phase {
     Phase { kind, priority, btree, start: POS_MIN, end: SPOS_MAX }
 }
 
 static PHASES: [Phase; 9] = [
     // scan cookies, at inode 0
-    Phase { kind: PhaseKind::Scan, priority: w::RECONCILE_WORK_hipri, btree: c::btree_id::reconcile_scan,
+    Phase { kind: PhaseKind::Scan, priority: w::RECONCILE_WORK_hipri, btree: Btree::reconcile_scan,
             start: POS_MIN, end: pos(0, u64::MAX) },
 
     btree_phase(w::RECONCILE_WORK_hipri),
     // work in the phys btrees is in the logical ones too: phys first, then
     // what's left, data on SSDs
-    walk_phase(PhaseKind::Phys,   w::RECONCILE_WORK_hipri,  c::btree_id::reconcile_hipri_phys),
-    walk_phase(PhaseKind::Normal, w::RECONCILE_WORK_hipri,  c::btree_id::reconcile_hipri),
+    walk_phase(PhaseKind::Phys,   w::RECONCILE_WORK_hipri,  Btree::reconcile_hipri_phys),
+    walk_phase(PhaseKind::Normal, w::RECONCILE_WORK_hipri,  Btree::reconcile_hipri),
 
     btree_phase(w::RECONCILE_WORK_normal),
-    walk_phase(PhaseKind::Phys,   w::RECONCILE_WORK_normal, c::btree_id::reconcile_work_phys),
-    walk_phase(PhaseKind::Normal, w::RECONCILE_WORK_normal, c::btree_id::reconcile_work),
+    walk_phase(PhaseKind::Phys,   w::RECONCILE_WORK_normal, Btree::reconcile_work_phys),
+    walk_phase(PhaseKind::Normal, w::RECONCILE_WORK_normal, Btree::reconcile_work),
 
     btree_phase(w::RECONCILE_WORK_pending),
-    walk_phase(PhaseKind::Normal, w::RECONCILE_WORK_pending, c::btree_id::reconcile_pending),
+    walk_phase(PhaseKind::Normal, w::RECONCILE_WORK_pending, Btree::reconcile_pending),
 ];
 
 // ── Status ───────────────────────────────────────────────────────────────
@@ -294,7 +294,7 @@ impl WorkBuf {
 
 /// The first key in @btree from @start to @end that @decode takes - a key at
 /// a time, as what's done to one changes the next - and its position.
-fn next_key<T>(trans: &BtreeTrans<'_>, btree: c::btree_id, start: Bpos, end: Bpos,
+fn next_key<T>(trans: &BtreeTrans<'_>, btree: Btree, start: Bpos, end: Bpos,
                mut decode: impl FnMut(BkeySC<'_>) -> Option<T>) -> Result<Option<(Bpos, T)>, BchError>
 {
     let mut iter = BtreeIter::new(trans, btree, start, BtreeIterFlags::PREFETCH);
@@ -422,8 +422,8 @@ type Moved = Option<(c::bch_inode_opts, c::data_update_opts)>;
 /// The iterator flags for reconciling a key in @btree: getting a stripe's
 /// handle needs it intent locked, so the stripe trigger can't delete the
 /// stripe meanwhile.
-fn stripe_intent(btree: c::btree_id) -> BtreeIterFlags {
-    if btree == c::btree_id::stripes { BtreeIterFlags::INTENT } else { BtreeIterFlags::empty() }
+fn stripe_intent(btree: Btree) -> BtreeIterFlags {
+    if btree == Btree::stripes { BtreeIterFlags::INTENT } else { BtreeIterFlags::empty() }
 }
 
 /// The trace a key's done with, @what for the event's message.
@@ -462,7 +462,7 @@ impl<'a, 'f> Walker<'a, 'f> {
             }
 
             lockrestart_do(ctxt.trans(), |t| {
-                let mut iter = BtreeIter::new(t, c::btree_id::stripes, pos(0, r.idx),
+                let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, r.idx),
                                               BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
                 let k = iter.peek_slot(t)?.expect("a slot");
                 // SAFETY: the key's in the btree - the key cache - not in
@@ -521,7 +521,7 @@ impl<'a, 'f> Walker<'a, 'f> {
             d.read_flags = c::bch_read_flags::BCH_READ_soft_require_read_device;
         }
 
-        if work.btree == c::btree_id::reconcile_pending {
+        if work.btree == Btree::reconcile_pending {
             match t.can_do_data_update(&opts, &d, k, None) {
                 Ok(()) => {}
                 // still can't: it stays parked
@@ -586,7 +586,7 @@ impl<'a, 'f> Walker<'a, 'f> {
     /// work.pos.inode: do_reconcile_extent_phys().
     fn extent_phys(&mut self, t: &TransAttempt<'_, '_>, work: c::bbpos) -> Result<(), BchError> {
         let fs = t.fs();
-        let mut bp_iter = BtreeIter::new(t, c::btree_id::backpointers, work.pos, BtreeIterFlags::empty());
+        let mut bp_iter = BtreeIter::new(t, Btree::backpointers, work.pos, BtreeIterFlags::empty());
         // none: a write buffer race
         let Some(bp) = bp_iter.peek_slot(t)?.and_then(BkeyI::<c::Backpointer>::from_key) else { return Ok(()) };
 
@@ -1149,7 +1149,7 @@ impl Fs {
         }
 
         let trans = crate::btree_trans!(self);
-        let mut iter = BtreeIter::new(&trans, c::btree_id::reconcile_scan, POS_MIN, BtreeIterFlags::empty());
+        let mut iter = BtreeIter::new(&trans, Btree::reconcile_scan, POS_MIN, BtreeIterFlags::empty());
         let _ = lockrestart_do(&trans, |t| iter.peek(t).map(|_| ()));
         write!(out, "{}\n", u32::from(iter.pos().inode == 0));
     }

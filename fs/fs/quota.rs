@@ -31,6 +31,8 @@ use crate::new_lock;
 use crate::util::genradix::SharedGenRadix;
 use core::sync::atomic::AtomicU32;
 use pin_init::{pin_data, pin_init, PinInit};
+#[cfg(CONFIG_BCACHEFS_QUOTA)]
+use crate::format::Btree;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -703,12 +705,12 @@ mod vfs {
     fn read_keys(fs: &Fs) -> Result<(), BchError> {
         let trans = crate::btree_trans!(fs);
 
-        let mut iter = BtreeIter::new(&trans, c::btree_id::quotas, POS_MIN, BtreeIterFlags::PREFETCH);
+        let mut iter = BtreeIter::new(&trans, Btree::quotas, POS_MIN, BtreeIterFlags::PREFETCH);
         iter.for_each(&trans, |_, _, k| set(fs, k, None))?;
 
         // An inode is charged once, for its first snapshot version: the
         // rest are skipped
-        let mut iter = BtreeIter::new(&trans, c::btree_id::inodes, POS_MIN,
+        let mut iter = BtreeIter::new(&trans, Btree::inodes, POS_MIN,
                                       BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
         iter.for_each(&trans, |t, _, k| {
             read_inode(t, k)?;
@@ -823,7 +825,7 @@ mod vfs {
                 return fs.throw(err);
             }
 
-            fs.btree_delete_range(c::btree_id::quotas, pos(qtype.0 as u64, 0),
+            fs.btree_delete_range(Btree::quotas, pos(qtype.0 as u64, 0),
                                   pos(qtype.0 as u64, u64::MAX), BtreeIterFlags::empty(),
                                   UpdateTriggerFlags::empty())?;
         }
@@ -977,7 +979,7 @@ mod vfs {
     fn set_quota_trans(t: &TransAttempt<'_, '_>, new_quota: &mut BkeyI<c::Quota>, qdq: &c::qc_dqblk)
         -> Result<(), BchError>
     {
-        let mut iter = BtreeIter::new(t, c::btree_id::quotas, new_quota.k.p,
+        let mut iter = BtreeIter::new(t, Btree::quotas, new_quota.k.p,
                                       BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT);
         let k = iter.peek_slot(t)?.expect("a slot always has a key");
 

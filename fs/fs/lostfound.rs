@@ -30,7 +30,7 @@ use crate::util::Printbuf;
 use crate::util::log::{LogLevel, LogMsg};
 use crate::{bch_err, bch_err_msg, bch_info, bch_verbose};
 use core::ops::ControlFlow;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 const LOSTFOUND: &[u8] = b"lost+found";
 
@@ -65,7 +65,7 @@ fn lostfound_dirent(
 
 /// Any subvolume in @tree: master_subvol may have been deleted.
 fn find_snapshot_tree_subvol(t: &TransAttempt<'_, '_>, tree: u32) -> Result<u32, BchError> {
-    let mut iter = BtreeIter::new(t, c::btree_id::snapshots, POS_MIN, BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(t, Btree::snapshots, POS_MIN, BtreeIterFlags::empty());
     iter.for_each_norestart(t, |_, k| Ok(
         match k.arm::<c::Snapshot>().map(|k| k.v()) {
             Some(s) if s.tree.get() == tree && s.subvol.get() != 0 =>
@@ -288,7 +288,7 @@ pub fn inode_should_reattach(inode: &c::bch_inode_unpacked) -> bool {
 fn maybe_delete_dirent(t: &TransAttempt<'_, '_>, d_pos: Bpos, snapshot: u32)
     -> Result<(), BchError>
 {
-    let mut iter = BtreeIter::new(t, c::btree_id::dirents,
+    let mut iter = BtreeIter::new(t, Btree::dirents,
                                   spos(d_pos.inode, d_pos.offset, snapshot),
                                   BtreeIterFlags::INTENT);
     let visible = iter.peek_slot(t)?.expect("a slot always has a key").k.p == d_pos;
@@ -314,7 +314,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
     if inode.bi_subvol != 0 {
         inode.bi_parent_subvol = c::BCACHEFS_ROOT_SUBVOL;
 
-        let mut s = t.bkey_get_mut::<c::Subvolume>(c::btree_id::subvolumes,
+        let mut s = t.bkey_get_mut::<c::Subvolume>(Btree::subvolumes,
                                                    pos(0, inode.bi_subvol as u64),
                                                    BtreeIterFlags::empty(),
                                                    UpdateTriggerFlags::empty())?;
@@ -415,7 +415,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
     }
 
     let mut whiteouts_done: KVVec<u32> = KVVec::new();
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes,
+    let mut iter = BtreeIter::new(t, Btree::inodes,
                                   spos(0, inode.bi_inum, inode.bi_snapshot - 1),
                                   BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::INTENT);
     while let Some(k) = iter.peek_prev_min(t, pos(0, inode.bi_inum))? {

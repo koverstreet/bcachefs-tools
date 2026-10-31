@@ -90,7 +90,7 @@ use crate::locking::Locked;
 use crate::new_lock;
 use crate::util::futex::EventCount;
 use crate::util::projections::Volatile;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 #[pin_data]
 #[repr(C)]
@@ -428,7 +428,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
             return Ok(None);
         }
 
-        let mut iter = BtreeIter::new(t, c::btree_id::alloc, bucket, BtreeIterFlags::CACHED);
+        let mut iter = BtreeIter::new(t, Btree::alloc, bucket, BtreeIterFlags::CACHED);
         let k = iter.peek_slot(t)?.expect("a slot always has a key");
         let a = alloc_to_v4(k);
         let lru_idx = a.lru_idx_fragmentation(&ca);
@@ -467,7 +467,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
     fn dev_get_bucket(&self, batch: &mut Batch<'f>, d: &mut CopygcDev) -> Result<(), BchError> {
         let trans = self.trans();
         let end = fragmentation_lru(d.dev).end().to_bpos();
-        let mut iter = BtreeIter::new(trans, c::btree_id::lru, d.pos, BtreeIterFlags::empty());
+        let mut iter = BtreeIter::new(trans, Btree::lru, d.pos, BtreeIterFlags::empty());
 
         let added = iter.for_each_max(trans, end, |t, _, k| {
             let lru = LruPos::from_bpos(k.k.p);
@@ -535,10 +535,10 @@ impl<'f, 'w> Copygc<'f, 'w> {
     fn get_stripe_buckets(&self, batch: &mut Batch<'f>) -> Result<(), BchError> {
         let trans = self.trans();
         let lru = LruPos::range(LruId::Stripes);
-        let mut iter = BtreeIter::new(trans, c::btree_id::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
+        let mut iter = BtreeIter::new(trans, Btree::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
 
         iter.for_each_max(trans, lru.end().to_bpos(), |t, _, lru_k| {
-            let mut s_iter = BtreeIter::new(t, c::btree_id::stripes, Bpos::default(), BtreeIterFlags::empty());
+            let mut s_iter = BtreeIter::new(t, Btree::stripes, Bpos::default(), BtreeIterFlags::empty());
             let Some(s) = Self::lru_stripe(t, &mut s_iter, lru_k.k.p)? else { return Ok(LoopFlow::Continue) };
 
             for b in s.data_blocks().filter(|b| b.sectors() != 0) {
@@ -567,10 +567,10 @@ impl<'f, 'w> Copygc<'f, 'w> {
     fn should_do_ec(&self, devs: &KVVec<CopygcDev>) -> bool {
         let trans = self.trans();
         let lru = LruPos::range(LruId::Stripes);
-        let mut iter = BtreeIter::new(trans, c::btree_id::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
+        let mut iter = BtreeIter::new(trans, Btree::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
 
         let stripe_frag_ratio = iter.for_each_max(trans, lru.end().to_bpos(), |t, _, lru_k| {
-            let mut s_iter = BtreeIter::new(t, c::btree_id::stripes, Bpos::default(), BtreeIterFlags::empty());
+            let mut s_iter = BtreeIter::new(t, Btree::stripes, Bpos::default(), BtreeIterFlags::empty());
             let Some(s) = Self::lru_stripe(t, &mut s_iter, lru_k.k.p)? else { return Ok(LoopFlow::Continue) };
 
             let v = s.v();
@@ -598,7 +598,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         for d in devs.iter() {
             let lru = fragmentation_lru(d.dev);
             let end = lru.end().to_bpos();
-            let mut iter = BtreeIter::new(trans, c::btree_id::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
+            let mut iter = BtreeIter::new(trans, Btree::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
 
             if let Ok(Some(p)) = lockrestart_do(trans, |t| Ok(iter.peek_max(t, end)?.map(|k| k.k.p))) {
                 let time = LruPos::from_bpos(p).time;

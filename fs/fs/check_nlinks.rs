@@ -28,6 +28,7 @@ use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::{bch_err, bch_err_fn};
 use core::cmp::max;
 use core::ops::ControlFlow;
+use crate::format::Btree;
 
 #[derive(Clone, Copy)]
 struct Nlink {
@@ -91,7 +92,7 @@ fn check_nlinks_find_hardlinks(
     end:   &mut u64,
 ) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::inodes, pos(0, start), iter_flags());
+    let mut iter = BtreeIter::new(&trans, Btree::inodes, pos(0, start), iter_flags());
 
     let ret = iter.for_each(&trans, |_, _, k| {
         if !inode::bkey_is_inode(k.k) {
@@ -132,7 +133,7 @@ fn check_nlinks_walk_dirents(
 ) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     let mut s = SnapshotsSeen::new();
-    let mut iter = BtreeIter::new(&trans, c::btree_id::dirents, POS_MIN, iter_flags());
+    let mut iter = BtreeIter::new(&trans, Btree::dirents, POS_MIN, iter_flags());
 
     let ret = iter.for_each(&trans, |t, _, k| {
         s.update(k.k.p)?;
@@ -197,7 +198,7 @@ fn check_nlinks_update_hardlinks(
 ) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     let mut idx = 0;
-    let mut iter = BtreeIter::new(&trans, c::btree_id::inodes, pos(0, range_start), iter_flags());
+    let mut iter = BtreeIter::new(&trans, Btree::inodes, pos(0, range_start), iter_flags());
 
     // range_end is past range_start, so this ends with its last inode:
     let end = spos(0, range_end - 1, u32::MAX);

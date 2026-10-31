@@ -13,7 +13,7 @@
 //! yet - Rust has no unvalidated keys to give them.
 
 use crate::c;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 impl Bpos {
     /// Byte-swapped, as written by a machine of the other endianness: every
@@ -30,14 +30,14 @@ impl Bpos {
     /// A position, in @btree, as @version on a machine @big_endian or not
     /// wrote it, made this one's - or this one's made that, to write: it's
     /// its own inverse. compat_bpos().
-    pub fn compat(&mut self, btree: c::btree_id, version: c::bcachefs_metadata_version,
+    pub fn compat(&mut self, btree: Btree, version: c::bcachefs_metadata_version,
                   big_endian: bool) {
         if big_endian != cfg!(target_endian = "big") {
             self.swab();
         }
 
         if version < c::bcachefs_metadata_version::inode_btree_change &&
-           btree == c::btree_id::BTREE_ID_inodes {
+           btree == Btree::BTREE_ID_inodes {
             (self.inode, self.offset) = (self.offset, self.inode);
         }
     }

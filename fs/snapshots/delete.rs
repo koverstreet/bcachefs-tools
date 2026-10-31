@@ -78,7 +78,7 @@ use crate::{bch_err, bch_err_msg, bch_info, bch_notice, fs_inconsistent, fsck_er
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
 use pin_init::{pin_data, pin_init, PinInit};
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 crate::module_param! {
     /// Stop the key sweep after the extents/dirents/xattrs/damage pass and
@@ -204,7 +204,7 @@ impl Fs {
 fn get_mut_node<'a, 't>(t: &TransAttempt<'a, 't>, id: u32)
     -> Result<TransBkey<'a, 't, c::Snapshot>, BchError>
 {
-    t.bkey_get_mut(c::btree_id::snapshots, pos(0, id as u64), BtreeIterFlags::empty(),
+    t.bkey_get_mut(Btree::snapshots, pos(0, id as u64), BtreeIterFlags::empty(),
                    UpdateTriggerFlags::empty())
         .inspect_err(|e| if e.matches(c::ENOENT) {
             fs_inconsistent!(t.fs(), "missing snapshot {id}");
@@ -256,10 +256,10 @@ pub fn node_set_deleted(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchErro
 fn schedule_content_passes(fs: &Fs, msg: &mut Printbuf, btrees: u64) -> Result<(), BchError> {
     let mut ret = Ok(());
 
-    for (btree, pass) in [(c::btree_id::extents, BCH_RECOVERY_PASS_check_extents),
-                          (c::btree_id::inodes,  BCH_RECOVERY_PASS_check_inodes),
-                          (c::btree_id::dirents, BCH_RECOVERY_PASS_check_dirents),
-                          (c::btree_id::xattrs,  BCH_RECOVERY_PASS_check_xattrs)] {
+    for (btree, pass) in [(Btree::extents, BCH_RECOVERY_PASS_check_extents),
+                          (Btree::inodes,  BCH_RECOVERY_PASS_check_inodes),
+                          (Btree::dirents, BCH_RECOVERY_PASS_check_dirents),
+                          (Btree::xattrs,  BCH_RECOVERY_PASS_check_xattrs)] {
         if btrees & (1u64 << btree.0) != 0 {
             let r = passes::run_explicit(fs, msg, pass, c::bch_run_recovery_pass_flags::empty());
             if r.is_err() {
@@ -386,7 +386,7 @@ impl fmt::Display for NodesData<'_> {
 fn snapshot_content_empty(fs: &Fs, id: u32, msg: &mut Printbuf, bad_btrees: &mut u64) {
     let acct = fs.snapshots.accounting(id);
 
-    let btrees = acct.btrees() & !(1u64 << c::btree_id::inodes.0);
+    let btrees = acct.btrees() & !(1u64 << Btree::inodes.0);
     if btrees == 0 {
         return;
     }
@@ -477,7 +477,7 @@ fn check_deletable(t: &TransAttempt<'_, '_>, id: u32, delete_interior: bool, run
 
     if v.subvol() != 0 {
         // Raw lookup, as in check_should_delete_leaf()
-        let subvol: c::Subvolume = t.bkey_get_val(c::btree_id::subvolumes, pos(0, v.subvol() as u64),
+        let subvol: c::Subvolume = t.bkey_get_val(Btree::subvolumes, pos(0, v.subvol() as u64),
                                                   BtreeIterFlags::CACHED)?;
 
         if v.children()[0] != 0 ||
@@ -531,7 +531,7 @@ fn node_delete(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     let mut s = get_mut_node(t, id)?;
 
     if s.v().subvol() != 0 {
-        t.delete(c::btree_id::subvolumes, pos(0, s.v().subvol() as u64),
+        t.delete(Btree::subvolumes, pos(0, s.v().subvol() as u64),
                  UpdateTriggerFlags::empty())?;
     }
 
@@ -560,7 +560,7 @@ fn node_delete(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
         // snapshot_tree entry to point to the new root, or delete it if this
         // is the last snapshot ID in this tree:
         let mut s_t: TransBkey<'_, '_, c::SnapshotTree> =
-            t.bkey_get_mut(c::btree_id::snapshot_trees, pos(0, s.v().tree() as u64),
+            t.bkey_get_mut(Btree::snapshot_trees, pos(0, s.v().tree() as u64),
                            BtreeIterFlags::empty(), UpdateTriggerFlags::empty())?;
 
         if child_id != 0 {
@@ -638,7 +638,7 @@ fn relink_target(t: &TransAttempt<'_, '_>, mut child_id: u32) -> Result<u32, Bch
 fn get_mut_node_opt<'a, 't>(t: &TransAttempt<'a, 't>, id: u32)
     -> Result<Option<TransBkey<'a, 't, c::Snapshot>>, BchError>
 {
-    match t.bkey_get_mut(c::btree_id::snapshots, pos(0, id as u64),
+    match t.bkey_get_mut(Btree::snapshots, pos(0, id as u64),
                          BtreeIterFlags::empty(), UpdateTriggerFlags::empty()) {
         Err(e) if e.matches(c::ENOENT) => Ok(None),
         r => r.map(Some),
@@ -746,7 +746,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::
         }
     } else if child.v().tree() != 0 {
         match t.bkey_get_mut::<c::SnapshotTree>(
-                c::btree_id::snapshot_trees, pos(0, child.v().tree() as u64),
+                Btree::snapshot_trees, pos(0, child.v().tree() as u64),
                 BtreeIterFlags::empty(), UpdateTriggerFlags::empty()) {
             Err(e) if e.matches(c::ENOENT) => {}
             Err(e) => return Err(e),
@@ -835,7 +835,7 @@ pub fn delete_dead_key<'a, 't>(
         let damage = c::bch_bkey_type::KEY_TYPE_damage;
 
         match dst_iter.peek_slot(t)? {
-            Some(dst_k) if btree == c::btree_id::damage &&
+            Some(dst_k) if btree == Btree::damage &&
                            k.k.key_type() == damage && dst_k.k.key_type() == damage => {
                 // Damage entries merge instead of dropping: the dying key can
                 // hold counts recorded after the descendant's key was created,
@@ -872,7 +872,7 @@ fn process_key<'a>(t: &TransAttempt<'a, '_>, iter: &BtreeIter<'a>, k: BkeySC<'_>
     delete_dead_key(t, iter, k, dying.live_child)
 }
 
-fn delete_dead_snapshot_keys_v1_btree(trans: &BtreeTrans<'_>, btree: c::btree_id, run: &Run<'_>)
+fn delete_dead_snapshot_keys_v1_btree(trans: &BtreeTrans<'_>, btree: Btree, run: &Run<'_>)
     -> Result<(), BchError>
 {
     let fs = trans.fs();
@@ -895,7 +895,7 @@ fn delete_dead_snapshot_keys_v1(trans: &BtreeTrans<'_>, run: &Run<'_>) -> Result
     fs.snapshots.delete.start_sweep(fs, c"delete_dead_snapshot_keys_v1",
                                     crate::BTREE_HAS_SNAPSHOTS_MASK, 1);
 
-    let inodes = c::btree_id::inodes;
+    let inodes = Btree::inodes;
     for btree in crate::btrees_in(crate::BTREE_HAS_SNAPSHOTS_MASK & !(1u64 << inodes.0)) {
         delete_dead_snapshot_keys_v1_btree(trans, btree, run)?;
     }
@@ -907,7 +907,7 @@ fn delete_dead_snapshot_keys_v1(trans: &BtreeTrans<'_>, run: &Run<'_>) -> Result
 fn delete_dead_snapshot_keys_range(
     trans: &BtreeTrans<'_>,
     res:   &DiskReservation<'_>,
-    btree: c::btree_id,
+    btree: Btree,
     start: Bpos,
     end:   Bpos,
     run:   &Run<'_>,
@@ -925,9 +925,9 @@ fn delete_dead_snapshot_keys_v2(trans: &BtreeTrans<'_>, run: &Run<'_>) -> Result
     let d = &fs.snapshots.delete;
     let res = DiskReservation::new(fs);
 
-    d.start_sweep(fs, c"delete_dead_snapshot_keys_v2", 1u64 << c::btree_id::inodes.0, 2);
+    d.start_sweep(fs, c"delete_dead_snapshot_keys_v2", 1u64 << Btree::inodes.0, 2);
 
-    let mut iter = BtreeIter::new(trans, c::btree_id::inodes, POS_MIN,
+    let mut iter = BtreeIter::new(trans, Btree::inodes, POS_MIN,
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
 
     // First, delete extents/dirents/xattrs and damage keys
@@ -950,10 +950,10 @@ fn delete_dead_snapshot_keys_v2(trans: &BtreeTrans<'_>, run: &Run<'_>) -> Result
             let start = pos(p.offset, 0);
             let end   = pos(p.offset, u64::MAX);
 
-            delete_dead_snapshot_keys_range(trans, &res, c::btree_id::extents, start, end, run)?;
-            delete_dead_snapshot_keys_range(trans, &res, c::btree_id::dirents, start, end, run)?;
-            delete_dead_snapshot_keys_range(trans, &res, c::btree_id::xattrs, start, end, run)?;
-            delete_dead_snapshot_keys_range(trans, &res, c::btree_id::damage,
+            delete_dead_snapshot_keys_range(trans, &res, Btree::extents, start, end, run)?;
+            delete_dead_snapshot_keys_range(trans, &res, Btree::dirents, start, end, run)?;
+            delete_dead_snapshot_keys_range(trans, &res, Btree::xattrs, start, end, run)?;
+            delete_dead_snapshot_keys_range(trans, &res, Btree::damage,
                                             pos(0, p.offset), spos(0, p.offset, u32::MAX), run)?;
 
             iter.set_pos(pos(0, p.offset + 1));
@@ -1015,7 +1015,7 @@ fn delete_dead_snapshot_keys_v2(trans: &BtreeTrans<'_>, run: &Run<'_>) -> Result
 
     /* Then the inodes */
 
-    let mut iter = BtreeIter::new(trans, c::btree_id::inodes, POS_MIN,
+    let mut iter = BtreeIter::new(trans, Btree::inodes, POS_MIN,
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
     iter.for_each_commit(trans, Some(&res), CommitFlags::NO_ENOSPC, |t, iter, k| {
         res.put();
@@ -1056,7 +1056,7 @@ fn check_should_delete_leaf(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, v: &c::Snap
             // Raw lookup, not subvolume::get(): this is the deletion path,
             // the one caller that must see the deleted tombstone rather than
             // have it reported as ENOENT.
-            let subvol: c::Subvolume = t.bkey_get_val(c::btree_id::subvolumes,
+            let subvol: c::Subvolume = t.bkey_get_val(Btree::subvolumes,
                                                       pos(0, v.subvol() as u64),
                                                       BtreeIterFlags::CACHED)?;
 
@@ -1280,7 +1280,7 @@ fn delete_dead_snapshots_locked(fs: &Fs) -> Result<(), BchError> {
     // otherwise never commit, only be dropped at the next trans_begin (the
     // iter.c dropped-updates WARN):
     let mut coll = Collection::default();
-    let mut iter = BtreeIter::new(&trans, c::btree_id::snapshots, POS_MIN, BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(&trans, Btree::snapshots, POS_MIN, BtreeIterFlags::empty());
     iter.for_each_commit(&trans, None, CommitFlags::empty(), |t, _, k| {
         check_should_delete_snapshot(t, k, &mut coll)
     })?;
@@ -1418,7 +1418,7 @@ fn get_dead_interior_snapshots(k: BkeySC<'_>, delete: &mut KVVec<InteriorDelete>
 
 fn collect_dead_interior_snapshots(trans: &BtreeTrans<'_>) -> Result<KVVec<InteriorDelete>, BchError> {
     let mut delete = KVVec::new();
-    let mut iter = BtreeIter::new(trans, c::btree_id::snapshots, POS_MIN, BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(trans, Btree::snapshots, POS_MIN, BtreeIterFlags::empty());
     iter.for_each(trans, |_, _, k| get_dead_interior_snapshots(k, &mut delete))?;
     Ok(delete)
 }
@@ -1473,7 +1473,7 @@ fn delete_dead_interior_snapshots(fs: &Fs) -> Result<(), BchError> {
         // a child carries its new depth and its old parent pointer: depth !=
         // parent's depth + 1 is a state this pass passes through, not an
         // invariant.
-        let mut iter = BtreeIter::new(&trans, c::btree_id::snapshots, POS_MIN, BtreeIterFlags::INTENT);
+        let mut iter = BtreeIter::new(&trans, Btree::snapshots, POS_MIN, BtreeIterFlags::INTENT);
         iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, k| {
             fix_child_of_deleted_snapshot(t, iter, k, &delete)
         })?;

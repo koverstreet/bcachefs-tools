@@ -46,7 +46,7 @@ use crate::c::bch_errcode;
 use crate::c::bch_fsck_flags as F;
 use core::ffi::c_int;
 use cstruct_macros::c_export;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 const KEY_TYPE_SET: u8 = c::bch_bkey_type::KEY_TYPE_set.0 as u8;
 
@@ -181,9 +181,9 @@ pub(crate) fn need_discard_or_freespace_err(
 ) -> Result<bool, BchError> {
     let flags = F::FSCK_CAN_IGNORE | if repair { F::FSCK_CAN_FIX } else { F::empty() };
     let (err, btree) = if discard {
-        (id::need_discard_key_wrong, c::btree_id::need_discard)
+        (id::need_discard_key_wrong, Btree::need_discard)
     } else {
-        (id::freespace_key_wrong, c::btree_id::freespace)
+        (id::freespace_key_wrong, Btree::freespace)
     };
 
     match fsck_err_flags!(t, POS_MIN, flags, err, "bucket incorrectly {}set in {} btree\n{}",
@@ -229,7 +229,7 @@ fn check_alloc_key<'t>(
             if !need_discard_or_freespace_err(t, alloc_k, false, true, true)? {
                 return Ok(());
             }
-            t.bit_mod_buffered(c::btree_id::need_discard, discard_iter.pos(), true)?;
+            t.bit_mod_buffered(Btree::need_discard, discard_iter.pos(), true)?;
         }
     }
 
@@ -403,14 +403,14 @@ fn check_btree_alloc_iter<'t>(
 /// Every alloc key and hole, against need_discard, freespace and bucket_gens:
 /// check_btree_alloc().
 fn check_btree_alloc(fs: &Fs, trans: &BtreeTrans<'_>) -> Result<(), BchError> {
-    let progress = Progress::recovery(fs, c"check_btree_alloc", &[c::btree_id::alloc], &[]);
+    let progress = Progress::recovery(fs, c"check_btree_alloc", &[Btree::alloc], &[]);
 
-    let mut iter = BtreeIter::new(trans, c::btree_id::alloc, POS_MIN, BtreeIterFlags::PREFETCH);
+    let mut iter = BtreeIter::new(trans, Btree::alloc, POS_MIN, BtreeIterFlags::PREFETCH);
     let mut iters = DerivedIters {
-        discard:     BtreeIter::new(trans, c::btree_id::need_discard, POS_MIN, BtreeIterFlags::PREFETCH),
-        freespace:   BtreeIter::new(trans, c::btree_id::freespace, POS_MIN,
+        discard:     BtreeIter::new(trans, Btree::need_discard, POS_MIN, BtreeIterFlags::PREFETCH),
+        freespace:   BtreeIter::new(trans, Btree::freespace, POS_MIN,
                                     BtreeIterFlags::PREFETCH | BtreeIterFlags::TRIM),
-        bucket_gens: BtreeIter::new(trans, c::btree_id::bucket_gens, POS_MIN, BtreeIterFlags::PREFETCH),
+        bucket_gens: BtreeIter::new(trans, Btree::bucket_gens, POS_MIN, BtreeIterFlags::PREFETCH),
     };
 
     let mut last_flushed = WbMaybeFlush::new()?;
@@ -438,12 +438,12 @@ fn check_discard_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, last_flushe
         if fsck_err!(t, id::need_discard_freespace_key_to_invalid_dev_bucket,
                      "entry in {} btree for nonexistant dev:bucket {}:{}",
                      iter.btree(), { bucket.inode }, { bucket.offset })? {
-            t.bit_mod_buffered(c::btree_id::need_discard, iter.pos(), false)?;
+            t.bit_mod_buffered(Btree::need_discard, iter.pos(), false)?;
         }
         return Ok(());
     }
 
-    let mut alloc_iter = BtreeIter::new(t, c::btree_id::alloc, bucket, BtreeIterFlags::empty());
+    let mut alloc_iter = BtreeIter::new(t, Btree::alloc, bucket, BtreeIterFlags::empty());
     let alloc_k = alloc_iter.peek_slot(t)?.expect("a slot always has a key");
     let a = alloc_to_v4(alloc_k);
 
@@ -453,7 +453,7 @@ fn check_discard_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, last_flushe
 
         if fsck_err!(t, id::need_discard_freespace_key_bad, "{}\nincorrectly set at {}:{}:{}:0",
                      alloc_k.to_text(fs), iter.btree(), { iter.pos().inode }, { iter.pos().offset })? {
-            t.bit_mod_buffered(c::btree_id::need_discard, iter.pos(), false)?;
+            t.bit_mod_buffered(Btree::need_discard, iter.pos(), false)?;
         }
     }
     Ok(())
@@ -501,7 +501,7 @@ pub(crate) fn check_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
         fs.err(bch_errcode::BCH_ERR_bucket_not_allocatable)
     });
 
-    let mut alloc_iter = BtreeIter::new(t, c::btree_id::alloc, pos.bucket, match who {
+    let mut alloc_iter = BtreeIter::new(t, Btree::alloc, pos.bucket, match who {
         FreespaceCheck::Allocator => BtreeIterFlags::CACHED | BtreeIterFlags::COMMITTED,
         _                         => BtreeIterFlags::empty(),
     });
@@ -630,7 +630,7 @@ fn check_alloc_info(fs: &Fs) -> Result<(), BchError> {
 
     {
         let mut last_flushed = WbMaybeFlush::new()?;
-        let mut iter = BtreeIter::new(&trans, c::btree_id::need_discard, POS_MIN, BtreeIterFlags::PREFETCH);
+        let mut iter = BtreeIter::new(&trans, Btree::need_discard, POS_MIN, BtreeIterFlags::PREFETCH);
         iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, _| {
             passes::cancelled(fs)?;
             check_discard_key(t, iter, &mut last_flushed)
@@ -639,7 +639,7 @@ fn check_alloc_info(fs: &Fs) -> Result<(), BchError> {
 
     // The freespace btree, every position of its keys:
     {
-        let mut iter = BtreeIter::new(&trans, c::btree_id::freespace, POS_MIN,
+        let mut iter = BtreeIter::new(&trans, Btree::freespace, POS_MIN,
                                       BtreeIterFlags::PREFETCH | BtreeIterFlags::TRIM);
         loop {
             passes::cancelled(fs)?;
@@ -667,7 +667,7 @@ fn check_alloc_info(fs: &Fs) -> Result<(), BchError> {
         }
     }
 
-    let mut iter = BtreeIter::new(&trans, c::btree_id::bucket_gens, POS_MIN, BtreeIterFlags::PREFETCH);
+    let mut iter = BtreeIter::new(&trans, Btree::bucket_gens, POS_MIN, BtreeIterFlags::PREFETCH);
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, k| {
         passes::cancelled(fs)?;
         check_bucket_gens_key(t, iter, k)
@@ -727,10 +727,10 @@ fn check_alloc_to_lru_ref<'t>(
 
 fn check_alloc_to_lru_refs(fs: &Fs) -> Result<(), BchError> {
     let mut last_flushed = WbMaybeFlush::new()?;
-    let progress = Progress::recovery(fs, c"bch2_check_alloc_to_lru_refs", &[c::btree_id::alloc], &[]);
+    let progress = Progress::recovery(fs, c"bch2_check_alloc_to_lru_refs", &[Btree::alloc], &[]);
 
     let trans = crate::btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::alloc, POS_MIN, BtreeIterFlags::PREFETCH);
+    let mut iter = BtreeIter::new(&trans, Btree::alloc, POS_MIN, BtreeIterFlags::PREFETCH);
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, k| {
         progress.update(t, iter)?;
         last_flushed.inc();
@@ -762,7 +762,7 @@ fn dev_freespace_init_iter<'t>(t: &TransAttempt<'_, 't>, ca: &c::bch_dev, iter: 
             freespace.k_mut().p = end;
             freespace.k_mut().size = (end.offset - start.offset) as u32;
 
-            t.insert(c::btree_id::freespace, freespace, UpdateTriggerFlags::empty())?;
+            t.insert(Btree::freespace, freespace, UpdateTriggerFlags::empty())?;
             t.commit(None, CommitFlags::NO_ENOSPC)?;
 
             iter.set_pos(end);
@@ -782,7 +782,7 @@ fn dev_freespace_init(fs: &Fs, ca: &c::bch_dev, bucket_start: u64, bucket_end: u
     assert!(bucket_end <= ca.mi.get().nbuckets, "bucket {bucket_end} past {} buckets", ca.mi.get().nbuckets);
 
     let trans = crate::btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::alloc,
+    let mut iter = BtreeIter::new(&trans, Btree::alloc,
                                   pos(dev.into(), bucket_start.max(ca.mi.get().first_bucket.into())),
                                   BtreeIterFlags::PREFETCH);
 

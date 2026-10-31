@@ -33,6 +33,7 @@ use crate::util::kernel::{capable, Capability};
 use crate::util::os_str::OsStrExt;
 use crate::util::vstructs::{plain_bytes, Plain};
 use kernel::uaccess::{UserPtr, UserSlice};
+use crate::format::Btree;
 
 /// FS_IOC_GETFSLABEL's: the label, without its NUL - and if it fills its
 /// field, without its last byte, as C had it.
@@ -182,7 +183,7 @@ fn readdir_plain(fs: &Fs, dir: c::subvol_inum, flags: u32, out: &mut Entries, po
     let view = lockrestart_do(&trans, |t| subvolume::get_snapshot(t, dir.subvol as u32))?;
 
     let mut cursor = pos;
-    let mut iter = BtreeIter::new(&trans, c::btree_id::dirents, bkey::pos(dir.inum, pos),
+    let mut iter = BtreeIter::new(&trans, Btree::dirents, bkey::pos(dir.inum, pos),
                                   BtreeIterFlags::empty());
     subvolume::for_each_in_subvolume_max_in_trans(&trans, &mut iter, bkey::pos(dir.inum, u64::MAX),
                                                   dir.subvol as u32, BtreeIterFlags::empty(), |t, _, k| {
@@ -268,7 +269,7 @@ where
 
         let mut cursor = bkey::spos(0, pos[0], pos[1] as u32);
         let mut last_handled = 0;
-        let mut iter = BtreeIter::new(&trans, c::btree_id::damage, cursor,
+        let mut iter = BtreeIter::new(&trans, Btree::damage, cursor,
                                       BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
         iter.for_each(&trans, |t, _, k| {
             let (p, inum) = (k.k.p, k.k.p.offset);
@@ -306,7 +307,7 @@ where
         })?;
 
         let mut cursor = pos;
-        let mut iter = BtreeIter::new(&trans, c::btree_id::subvolumes, bkey::pos(0, pos),
+        let mut iter = BtreeIter::new(&trans, Btree::subvolumes, bkey::pos(0, pos),
                                       BtreeIterFlags::PREFETCH);
         iter.for_each(&trans, |t, _, k| {
             let subvol = k.k.p.offset;
@@ -396,7 +397,7 @@ where
     {
         let trans = btree_trans!(fs);
         let mut path = Printbuf::new();
-        let mut iter = BtreeIter::new(&trans, c::btree_id::subvolume_children,
+        let mut iter = BtreeIter::new(&trans, Btree::subvolume_children,
                                       bkey::pos(parent.into(), arg.pos.into()), BtreeIterFlags::PREFETCH);
         iter.for_each(&trans, |t, _, k| {
             if k.k.p.inode != u64::from(parent) {
@@ -510,7 +511,7 @@ fn snapshot_tree(fs: &Fs, subvol: u32, tree_id: u32, size: u32, node_size: usize
     let mut r = SnapshotTreeReply { tree, nr: 0, total: 0 };
     {
         let trans = btree_trans!(fs);
-        let mut iter = BtreeIter::new(&trans, c::btree_id::snapshots, bkey::POS_MIN,
+        let mut iter = BtreeIter::new(&trans, Btree::snapshots, bkey::POS_MIN,
                                       BtreeIterFlags::PREFETCH);
         iter.for_each(&trans, |t, _, k| {
             let Some(s) = snapshot::val(k) else { return Ok(()) };
@@ -624,7 +625,7 @@ fn propagate_to_reflink_v(fs: &Fs, trans: &BtreeTrans<'_>, opts: &c::bch_inode_o
 {
     let res = DiskReservation::new(fs);
     let flags = BtreeIterFlags::INTENT | BtreeIterFlags::NOT_EXTENTS;
-    let mut iter = BtreeIter::new(trans, c::btree_id::reflink, bkey::pos(0, range.start), flags);
+    let mut iter = BtreeIter::new(trans, Btree::reflink, bkey::pos(0, range.start), flags);
     iter.for_each_max_commit(trans, bkey::SPOS_MAX, flags, Some(&res), CommitFlags::NO_ENOSPC, |t, iter, k| {
         res.put();
         if bkey::bpos_ge(k.k.start_pos(), bkey::pos(0, range.end)) {
@@ -646,7 +647,7 @@ pub fn reflink_p_set_may_update_opts(fs: &Fs, inum: c::subvol_inum) -> Result<()
     let trans = btree_trans!(fs);
     let res = DiskReservation::new(fs);
     let flags = BtreeIterFlags::INTENT | BtreeIterFlags::TRIM;
-    let mut iter = BtreeIter::new(&trans, c::btree_id::extents, bkey::pos(inum.inum, 0), flags);
+    let mut iter = BtreeIter::new(&trans, Btree::extents, bkey::pos(inum.inum, 0), flags);
     subvolume::for_each_in_subvolume_max_in_trans(&trans, &mut iter, bkey::pos(inum.inum, u64::MAX),
                                                   inum.subvol as u32, flags, |t, iter, k| {
         res.put();
@@ -672,7 +673,7 @@ pub fn reflink_p_set_may_update_opts(fs: &Fs, inum: c::subvol_inum) -> Result<()
 pub fn reflink_p_propagate_opts(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
     let trans = btree_trans!(fs);
     let flags = BtreeIterFlags::TRIM;
-    let mut iter = BtreeIter::new(&trans, c::btree_id::extents, bkey::pos(inum.inum, 0), flags);
+    let mut iter = BtreeIter::new(&trans, Btree::extents, bkey::pos(inum.inum, 0), flags);
     subvolume::for_each_in_subvolume_max_in_trans(&trans, &mut iter, bkey::pos(inum.inum, u64::MAX),
                                                   inum.subvol as u32, flags, |t, _, k| {
         let Some(p) = k.arm::<c::ReflinkP>() else { return Ok(()) };
@@ -710,7 +711,7 @@ fn unpoison_extent(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_>
 /// unpoison_extent() each indirect extent reflink_p @p maps.
 fn unpoison_reflink(t: &TransAttempt<'_, '_>, p: BkeySC<'_, c::ReflinkP>) -> Result<(), BchError> {
     let live = p.live();
-    let mut iter = BtreeIter::new(t, c::btree_id::reflink, bkey::pos(0, live.start), BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(t, Btree::reflink, bkey::pos(0, live.start), BtreeIterFlags::INTENT);
     iter.for_each_norestart(t, |iter, k| {
         if bkey::bpos_ge(k.k.start_pos(), bkey::pos(0, live.end)) {
             return Ok(ControlFlow::Break(()));
@@ -744,7 +745,7 @@ pub fn unpoison(fs: &Fs, inum: c::subvol_inum, owner: impl FnOnce() -> bool, arg
 
     let trans = btree_trans!(fs);
     let res = DiskReservation::new(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::extents, start, BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(&trans, Btree::extents, start, BtreeIterFlags::INTENT);
     subvolume::for_each_in_subvolume_max_in_trans(&trans, &mut iter, end, inum.subvol as u32,
                                                   BtreeIterFlags::INTENT, |t, iter, k| {
         res.put();

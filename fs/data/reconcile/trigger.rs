@@ -25,7 +25,7 @@ use crate::util::{Printbuf, ToText};
 use core::mem::size_of;
 use cstruct_macros::{c_export, c_enum, CStruct};
 use crate::types::DArray;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 c_enum! {
     #[closed]
@@ -72,12 +72,12 @@ pub fn rb_work_id(r: Option<&c::bch_extent_reconcile>) -> c::reconcile_work_id {
 
 impl c::reconcile_work_id {
     /// The btree this work is tracked in, none for none: reconcile_work_btree[].
-    pub fn btree(self) -> Option<c::btree_id> {
+    pub fn btree(self) -> Option<Btree> {
         use c::reconcile_work_id as w;
         Some(match self {
-            w::RECONCILE_WORK_hipri   => c::btree_id::reconcile_hipri,
-            w::RECONCILE_WORK_normal  => c::btree_id::reconcile_work,
-            w::RECONCILE_WORK_pending => c::btree_id::reconcile_pending,
+            w::RECONCILE_WORK_hipri   => Btree::reconcile_hipri,
+            w::RECONCILE_WORK_normal  => Btree::reconcile_work,
+            w::RECONCILE_WORK_pending => Btree::reconcile_pending,
             _ => return None,
         })
     }
@@ -90,11 +90,11 @@ impl c::reconcile_work_id {
 
     /// The phys btree work with this id is tracked in, by bucket position:
     /// reconcile_work_phys_btree[].
-    pub fn phys_btree(self) -> Option<c::btree_id> {
+    pub fn phys_btree(self) -> Option<Btree> {
         use c::reconcile_work_id as w;
         Some(match self {
-            w::RECONCILE_WORK_hipri  => c::btree_id::reconcile_hipri_phys,
-            w::RECONCILE_WORK_normal => c::btree_id::reconcile_work_phys,
+            w::RECONCILE_WORK_hipri  => Btree::reconcile_hipri_phys,
+            w::RECONCILE_WORK_normal => Btree::reconcile_work_phys,
             _ => return None,
         })
     }
@@ -103,8 +103,8 @@ impl c::reconcile_work_id {
 /// Where a key at @p in @btree is in the work btrees: stripes at inode 0,
 /// reflink at 1 - its inode 0, moved up - and extents, whose inodes start at
 /// BCACHEFS_ROOT_INO, after them. data_to_rb_work_pos().
-pub fn data_to_rb_work_pos(btree: c::btree_id, mut p: Bpos) -> Bpos {
-    use c::btree_id as b;
+pub fn data_to_rb_work_pos(btree: Btree, mut p: Bpos) -> Bpos {
+    use Btree as b;
     if btree == b::reflink || btree == b::stripes {
         p = bpos_min(p, pos(0, u64::MAX));
     }
@@ -121,12 +121,12 @@ pub fn data_to_rb_work_pos(btree: c::btree_id, mut p: Bpos) -> Bpos {
 /// data_to_rb_work_pos() backwards.
 pub fn rb_work_to_data_pos(mut p: Bpos) -> c::bbpos {
     let btree = if p.inode == 0 {
-        c::btree_id::stripes
+        Btree::stripes
     } else if p.inode < c::BCACHEFS_ROOT_INO as u64 {
         p.inode -= 1;
-        c::btree_id::reflink
+        Btree::reflink
     } else {
-        c::btree_id::extents
+        Btree::extents
     };
     c::bbpos { btree, pos: p }
 }
@@ -208,17 +208,17 @@ impl TransBkey<'_, '_, PtrsMut> {
 
 /// The reconcile backpointer btree node pointer @k, in @btree at @level, has:
 /// rb_bp().
-pub(crate) fn rb_bp(btree: c::btree_id, level: u32, k: BkeySC<'_>) -> c::Backpointer {
+pub(crate) fn rb_bp(btree: Btree, level: u32, k: BkeySC<'_>) -> c::Backpointer {
     c::Backpointer { btree_id: btree.0 as u8, level: level as u8, pos: k.k.p, ..Default::default() }
 }
 
 /// Delete btree node pointer @k's reconcile backpointer at @bp_pos - if it is
 /// @k's; else that's reported, and there's nothing to delete:
 /// reconcile_bp_del().
-fn del_reconcile_bp(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: BkeySC<'_>,
+fn del_reconcile_bp(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeySC<'_>,
                     bp_pos: Bpos) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut iter = BtreeIter::new(t, c::btree_id::reconcile_scan, bp_pos, BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(t, Btree::reconcile_scan, bp_pos, BtreeIterFlags::INTENT);
     let bp_k = iter.peek_slot(t)?.expect("a slot");
     let want = rb_bp(btree, level, k);
 
@@ -232,10 +232,10 @@ fn del_reconcile_bp(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k:
 
 /// A reconcile backpointer to btree node pointer @k, in the first empty slot
 /// of work id @work's: where it went. reconcile_bp_add().
-pub(crate) fn add_reconcile_bp(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: BkeySC<'_>,
+pub(crate) fn add_reconcile_bp(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeySC<'_>,
                     work: u64) -> Result<Bpos, BchError> {
     let mut iter = BtreeIter::uninit();
-    t.bkey_get_empty_slot(&mut iter, c::btree_id::reconcile_scan, pos(work, 1), pos(work, u64::MAX))?;
+    t.bkey_get_empty_slot(&mut iter, Btree::reconcile_scan, pos(work, 1), pos(work, u64::MAX))?;
 
     let mut bp = t.bkey_alloc_typed::<c::Backpointer>()?;
     bp.k_mut().p = iter.pos();
@@ -454,7 +454,7 @@ pub(crate) fn reconcile_bp_get_key<'t>(t: &TransAttempt<'t, '_>, iter: &mut Btre
                                        bp: BkeySC<'_, c::Backpointer>) -> Result<Option<BkeyBuf>, BchError> {
     let fs = t.fs();
     let v = *bp.v();
-    let btree = c::btree_id(v.btree_id.into());
+    let btree = Btree(v.btree_id.into());
 
     if v.level == 0 {
         if fsck_err!(t, id::reconcile_bp_to_leaf_node_key, "reconcile bp to leaf node key\n{}",
@@ -490,7 +490,7 @@ pub(crate) fn reconcile_bp_get_key<'t>(t: &TransAttempt<'t, '_>, iter: &mut Btre
 }
 
 fn delete_bp(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Backpointer>) -> Result<(), BchError> {
-    t.delete(c::btree_id::reconcile_scan, bp.k.p, UpdateTriggerFlags::empty())?;
+    t.delete(Btree::reconcile_scan, bp.k.p, UpdateTriggerFlags::empty())?;
     t.commit(None, CommitFlags::NO_ENOSPC)
 }
 

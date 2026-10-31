@@ -37,7 +37,7 @@ use crate::{bch_err_fn, bch_err_ratelimited, inode, logged_ops};
 use core::ffi::c_int;
 use cstruct_macros::c_export;
 use pin_init::stack_pin_init;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /// MAX_LFS_FILESIZE: as far as the page cache indexes - a 32 bit kernel's
 /// ULONG_MAX pages, else LLONG_MAX.
@@ -157,7 +157,7 @@ pub unsafe fn bch2_extent_fallocate<'t>(trans: &'t BtreeTrans<'t>, inum: c::subv
 pub fn fpunch_snapshot(trans: &BtreeTrans<'_>, start: Bpos, end: Bpos) -> Result<(), BchError> {
     let fs = trans.fs();
     let res = DiskReservation::new(fs);
-    let mut iter = BtreeIter::new(trans, c::btree_id::extents, start, BtreeIterFlags::TRIM);
+    let mut iter = BtreeIter::new(trans, Btree::extents, start, BtreeIterFlags::TRIM);
 
     iter.for_each_max_commit(trans, end, BtreeIterFlags::empty(), Some(&res), CommitFlags::NO_ENOSPC,
                              |t, iter, _| {
@@ -244,7 +244,7 @@ pub fn fpunch(fs: &Fs, inum: c::subvol_inum, start: u64, end: u64, i_sectors_del
     -> Result<(), BchError>
 {
     let trans = crate::btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::extents, pos(inum.inum, start), BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(&trans, Btree::extents, pos(inum.inum, start), BtreeIterFlags::INTENT);
 
     match fpunch_at(&trans, &mut iter, inum, end, Some(i_sectors_delta)) {
         Err(e) if is_restart(&e) => Ok(()),
@@ -305,7 +305,7 @@ fn __resume_truncate(
 
         // An i_size within a block of U64_MAX has nothing past its block
         let from = new_i_size.checked_next_multiple_of(fs.block_bytes()).unwrap_or(u64::MAX) >> 9;
-        let mut fpunch_iter = BtreeIter::new(trans, c::btree_id::extents, pos(inum.inum, from),
+        let mut fpunch_iter = BtreeIter::new(trans, Btree::extents, pos(inum.inum, from),
                                              BtreeIterFlags::INTENT);
 
         match fpunch_at(trans, &mut fpunch_iter, inum, u64::MAX, i_sectors_delta) {
@@ -424,7 +424,7 @@ fn finsert_take_ancestor_extent<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>)
     let reflink_p_may_update_opts = fs.request_incompat_feature(
         c::bcachefs_metadata_version::bcachefs_metadata_version_reflink_p_may_update_opts).is_ok();
 
-    let mut src_iter = BtreeIter::new(t, c::btree_id::extents, k.k.p,
+    let mut src_iter = BtreeIter::new(t, Btree::extents, k.k.p,
                                       BtreeIterFlags::INTENT |
                                       BtreeIterFlags::ALL_SNAPSHOTS |
                                       BtreeIterFlags::NOT_EXTENTS);
@@ -481,7 +481,7 @@ fn __resume_finsert(
     lockrestart_do(trans, |t| subvolume::__get_snapshot(t, inum.subvol as u32, warn_errors))?;
 
     let ret = (|| {
-        let mut iter = BtreeIter::new(trans, c::btree_id::extents, pos(inum.inum, 0), BtreeIterFlags::INTENT);
+        let mut iter = BtreeIter::new(trans, Btree::extents, pos(inum.inum, 0), BtreeIterFlags::INTENT);
         let state = S(op.v.state as u32);
         if !matches!(state, S::LOGGED_OP_FINSERT_start | S::LOGGED_OP_FINSERT_shift_extents) {
             return Ok(());
@@ -576,8 +576,8 @@ fn __resume_finsert(
 
                 op.v.pos = if insert { delete.k().start_offset() } else { delete.k().p.offset }.into();
 
-                t.insert(c::btree_id::extents, delete, UpdateTriggerFlags::empty())?;
-                t.insert(c::btree_id::extents, copy, UpdateTriggerFlags::empty())?;
+                t.insert(Btree::extents, delete, UpdateTriggerFlags::empty())?;
+                t.insert(Btree::extents, copy, UpdateTriggerFlags::empty())?;
                 logged_ops::update(&t, op.as_ref())?;
                 t.commit(Some(&disk_res), CommitFlags::NO_ENOSPC)?;
                 Ok(false)

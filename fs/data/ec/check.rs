@@ -25,7 +25,7 @@ use crate::init::error::id;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;
 use crate::{fsck_err, fsck_err_flags, fsck_err_on};
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 const KEY_TYPE_SET: u8 = c::bch_bkey_type::KEY_TYPE_set.0 as u8;
 
@@ -39,7 +39,7 @@ fn bucket_stripe_ref_mod(t: &TransAttempt<'_, '_>, bucket: Bpos, stripe: u64, se
     let r = &mut a.v_mut().stripe_refcount;
     *r = if set { r.wrapping_add(1) } else { r.wrapping_sub(1) };
 
-    t.bit_mod(c::btree_id::bucket_to_stripe, pos(bucket_to_u64(bucket), stripe), set)
+    t.bit_mod(Btree::bucket_to_stripe, pos(bucket_to_u64(bucket), stripe), set)
 }
 
 /// Stripe @k's lru entry and its blocks' buckets' refs to it.
@@ -60,7 +60,7 @@ fn check_stripe_refs_one(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, last_flushed: 
         let Some(ca) = fs.dev_get(ptr.dev().into()) else { continue };
         let bucket = ca.ptr_bucket_pos(ptr);
 
-        let mut iter = BtreeIter::new(t, c::btree_id::bucket_to_stripe, pos(bucket_to_u64(bucket), idx),
+        let mut iter = BtreeIter::new(t, Btree::bucket_to_stripe, pos(bucket_to_u64(bucket), idx),
                                       BtreeIterFlags::empty());
         let missing = iter.peek_slot(t)?.expect("a slot always has a key").k.type_ != KEY_TYPE_SET;
         if fsck_err_on!(t, missing, id::stripe_to_missing_bucket_ref,
@@ -90,7 +90,7 @@ fn check_bucket_to_stripe_ref(t: &TransAttempt<'_, '_>, r: Bpos) -> Result<(), B
     let bucket = u64_to_bucket(r.inode);
     let stripe = r.offset;
 
-    let mut iter = BtreeIter::new(t, c::btree_id::stripes, pos(0, stripe), BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, stripe), BtreeIterFlags::empty());
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
 
     let Some(s) = k.arm::<c::Stripe>() else {
@@ -113,9 +113,9 @@ fn check_bucket_to_stripe_ref(t: &TransAttempt<'_, '_>, r: Bpos) -> Result<(), B
 pub fn check_stripe_refs(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     let mut last_flushed = WbMaybeFlush::new()?;
 
-    BtreeIter::new(trans, c::btree_id::stripes, POS_MIN, BtreeIterFlags::PREFETCH)
+    BtreeIter::new(trans, Btree::stripes, POS_MIN, BtreeIterFlags::PREFETCH)
         .for_each_commit(trans, None, CommitFlags::NO_ENOSPC, |t, _, k| check_stripe_refs_one(t, k, &mut last_flushed))?;
 
-    BtreeIter::new(trans, c::btree_id::bucket_to_stripe, POS_MIN, BtreeIterFlags::PREFETCH)
+    BtreeIter::new(trans, Btree::bucket_to_stripe, POS_MIN, BtreeIterFlags::PREFETCH)
         .for_each_commit(trans, None, CommitFlags::NO_ENOSPC, |t, _, k| check_bucket_to_stripe_ref(t, k.k.p))
 }

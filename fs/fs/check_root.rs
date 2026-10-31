@@ -24,10 +24,11 @@ use crate::inode;
 use crate::snapshots::subvolume;
 use crate::{bch_err_msg, mustfix_fsck_err, mustfix_fsck_err_on};
 use core::ops::ControlFlow;
+use crate::format::Btree;
 
 /// The leaf snapshot claiming the root subvolume, if any: 0 if none does.
 fn root_snapshot_from_snapshots(t: &TransAttempt<'_, '_>) -> Result<u32, BchError> {
-    let mut iter = BtreeIter::new(t, c::btree_id::snapshots, POS_MIN,
+    let mut iter = BtreeIter::new(t, Btree::snapshots, POS_MIN,
                                   BtreeIterFlags::empty());
 
     iter.for_each_norestart(t, |_, k| Ok(
@@ -63,7 +64,7 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
             v.inode    = inum.into();
             v.set_state(c::bch_subvolume_state::SUBVOLUME_STATE_live);
 
-            t.insert(c::btree_id::subvolumes, k, UpdateTriggerFlags::empty())?;
+            t.insert(Btree::subvolumes, k, UpdateTriggerFlags::empty())?;
             (snapshot, inum)
         }
     };

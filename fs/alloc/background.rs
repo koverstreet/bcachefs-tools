@@ -501,7 +501,7 @@ use core::ffi::{c_int, c_uint};
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::Ordering;
 use cstruct_macros::{c_export, c_const};
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 c_const! {
     /// How far a bucket's generation may get past its oldest pointer's before
@@ -701,7 +701,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn start_alloc_update(&self, pos: Bpos, flags: UpdateTriggerFlags)
         -> Result<TransBkey<'a, 't, c::AllocV4>, BchError>
     {
-        let mut iter = BtreeIter::new(self, c::btree_id::alloc, pos,
+        let mut iter = BtreeIter::new(self, Btree::alloc, pos,
                                       BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
         let k = iter.peek_slot(self)?.expect("a slot always has a key");
 
@@ -1104,10 +1104,10 @@ fn bucket_gens_init(fs: &Fs) -> Result<(), BchError> {
         let mut k = t.bkey_alloc_typed::<c::BucketGens>()?;
         k.k_mut().p = p;
         *k.v_mut() = gens;
-        t.insert(c::btree_id::bucket_gens, k, UpdateTriggerFlags::empty())
+        t.insert(Btree::bucket_gens, k, UpdateTriggerFlags::empty())
     }
 
-    let mut iter = BtreeIter::new(&trans, c::btree_id::alloc, POS_MIN, BtreeIterFlags::PREFETCH);
+    let mut iter = BtreeIter::new(&trans, Btree::alloc, POS_MIN, BtreeIterFlags::PREFETCH);
     iter.for_each(&trans, |t, _, k| {
         // Not a fsck error: check_alloc_key(), later, checks it
         if fs.dev_bucket_tryget_noerror(k.k.p).is_none() {
@@ -1144,7 +1144,7 @@ fn alloc_read(fs: &Fs) -> Result<(), BchError> {
 
     let ver = fs.version_upgrade_complete().0;
     if ver >= c::bcachefs_metadata_version::bcachefs_metadata_version_bucket_gens.0 {
-        let mut iter = BtreeIter::new(&trans, c::btree_id::bucket_gens, POS_MIN, BtreeIterFlags::PREFETCH);
+        let mut iter = BtreeIter::new(&trans, Btree::bucket_gens, POS_MIN, BtreeIterFlags::PREFETCH);
         iter.for_each(&trans, |_, _, k| {
             let Some(g) = k.arm::<c::BucketGens>() else { return Ok(LoopFlow::Continue) };
 
@@ -1162,7 +1162,7 @@ fn alloc_read(fs: &Fs) -> Result<(), BchError> {
             Ok(LoopFlow::Continue)
         })
     } else {
-        let mut iter = BtreeIter::new(&trans, c::btree_id::alloc, POS_MIN, BtreeIterFlags::PREFETCH);
+        let mut iter = BtreeIter::new(&trans, Btree::alloc, POS_MIN, BtreeIterFlags::PREFETCH);
         iter.for_each(&trans, |_, _, k| {
             // Not a fsck error: check_alloc_key(), later, checks it
             fs.dev_iterate(&mut ca, k.k.p.inode as u32);
@@ -1325,7 +1325,7 @@ pub(crate) fn bucket_do_freespace_index(t: &TransAttempt<'_, '_>, ca: &c::bch_de
     }
 
     let pos = FreespacePos::new(alloc_k.k.p, a).to_bpos();
-    let mut iter = BtreeIter::new(t, c::btree_id::freespace, pos, BtreeIterFlags::INTENT | BtreeIterFlags::TRIM);
+    let mut iter = BtreeIter::new(t, Btree::freespace, pos, BtreeIterFlags::INTENT | BtreeIterFlags::TRIM);
     let old = iter.peek_slot(t)?.expect("a slot always has a key");
 
     if ca.mi.get().freespace_initialized != 0 && (old.k.type_ == 0) != set &&
@@ -1344,13 +1344,13 @@ fn bucket_do_discard_index(t: &TransAttempt<'_, '_>, bucket: Bpos, a: &c::AllocV
     if a.data_type() != data_type::need_discard {
         return Ok(());
     }
-    t.bit_mod_buffered(c::btree_id::need_discard, NeedDiscardPos::new(bucket, a).to_bpos(), set)
+    t.bit_mod_buffered(Btree::need_discard, NeedDiscardPos::new(bucket, a).to_bpos(), set)
 }
 
 /// Bucket @bucket's generation in the bucket_gens btree, made @gen.
 fn bucket_gen_update(t: &TransAttempt<'_, '_>, bucket: Bpos, gen: u8) -> Result<(), BchError> {
     let pos = BucketGensPos::new(bucket);
-    let mut iter = BtreeIter::new(t, c::btree_id::bucket_gens, pos.key, BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(t, Btree::bucket_gens, pos.key, BtreeIterFlags::INTENT);
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
 
     let mut g = match k.arm::<c::BucketGens>() {
@@ -1426,7 +1426,7 @@ fn inval_bucket_key(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
 fn alloc_check_no_stripe_refs(t: &TransAttempt<'_, '_>, old: BkeySC<'_>, new: BkeySC<'_>) -> Result<(), BchError> {
     let fs = t.fs();
     let b = bucket_to_u64(new.k.p);
-    let mut iter = BtreeIter::new(t, c::btree_id::bucket_to_stripe, pos(b, 0), BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(t, Btree::bucket_to_stripe, pos(b, 0), BtreeIterFlags::empty());
 
     if let Some(k) = iter.peek_max(t, pos(b, u64::MAX))? {
         let buf = transition_text(fs, format_args!("bucket stripe_refcount went to 0 in {}, but stripe {} still references it",
@@ -1690,7 +1690,7 @@ crate::key_trigger!(bch2_trigger_alloc => trigger_alloc);
 /// scanning.
 fn dev_remove_need_discard(fs: &Fs, dev: u64) -> Result<(), BchError> {
     let trans = btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::need_discard, POS_MIN,
+    let mut iter = BtreeIter::new(&trans, Btree::need_discard, POS_MIN,
                                   BtreeIterFlags::INTENT | BtreeIterFlags::PREFETCH);
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, k| {
         if u64_to_bucket(k.k.p.offset).inode == dev {
@@ -1708,7 +1708,7 @@ fn dev_remove_alloc(fs: &Fs, ca: &c::bch_dev) -> Result<(), BchError> {
 
     dev_remove_lrus(fs, ca)?;
     dev_remove_need_discard(fs, dev)?;
-    for btree in [c::btree_id::freespace, c::btree_id::backpointers, c::btree_id::bucket_gens, c::btree_id::alloc] {
+    for btree in [Btree::freespace, Btree::backpointers, Btree::bucket_gens, Btree::alloc] {
         fs.btree_delete_range(btree, pos(dev, 0), pos(dev, u64::MAX), BtreeIterFlags::empty(),
                               UpdateTriggerFlags::NORUN)?;
     }
@@ -1725,7 +1725,7 @@ pub fn bch2_dev_remove_alloc(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) -> c_int {
 /// @bucket's io_time for @rw, made now: a read of its cached data, so its
 /// place in the read lru is as recently used.
 fn bucket_io_time_reset(t: &TransAttempt<'_, '_>, bucket: Bpos, rw: usize) -> Result<(), BchError> {
-    let mut iter = BtreeIter::new(t, c::btree_id::alloc, bucket, BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(t, Btree::alloc, bucket, BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
     let mut a = t.alloc_to_v4_mut(k)?;
 

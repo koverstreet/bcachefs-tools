@@ -26,7 +26,7 @@ use crate::{bch_err, inode_fsck_err};
 use crate::dirent::Dirent;
 use crate::{inode, namei};
 use core::ops::ControlFlow;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /// Whether this inum is a subvolume root, from the first version seen.
 ///
@@ -56,7 +56,7 @@ fn find_oldest_inode_needs_reattach(
 
     let fs = t.fs();
     let inum = inode.bi_inum;
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, start),
+    let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum, start),
                                   BtreeIterFlags::ALL_SNAPSHOTS);
 
     iter.for_each_max_norestart(t, spos(0, inum, u32::MAX), |_, k| {
@@ -139,7 +139,7 @@ fn attached_descendant_version(
     let fs = t.fs();
     let inum = inode.bi_inum;
     let mut child = None;
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, 0),
+    let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum, 0),
                                   BtreeIterFlags::ALL_SNAPSHOTS);
 
     iter.for_each_max_norestart(t, spos(0, inum, end), |_, k| {
@@ -176,14 +176,14 @@ fn dst_slot(
     inode: &c::bch_inode_unpacked,
     flags: BtreeIterFlags,
 ) -> Result<DstSlot, BchError> {
-    let mut vis_iter = BtreeIter::new(t, c::btree_id::dirents, pos, flags);
+    let mut vis_iter = BtreeIter::new(t, Btree::dirents, pos, flags);
     let vis = vis_iter.peek_slot(t)?.expect("a slot always has a key");
 
     if let Some(vis) = Dirent::new(vis) {
         return Ok(if namei::dirent_points_to_inode(vis, inode) { DstSlot::Ours } else { DstSlot::Taken });
     }
 
-    let mut dst_iter = BtreeIter::new(t, c::btree_id::dirents, pos,
+    let mut dst_iter = BtreeIter::new(t, Btree::dirents, pos,
                                       flags | BtreeIterFlags::ALL_SNAPSHOTS);
     Ok(if dst_iter.peek_slot(t)?.expect("a slot always has a key").k.is_deleted() {
         DstSlot::Empty
@@ -207,7 +207,7 @@ fn reattach_via_descendant_dirent<'a, 't>(
     match dst_slot(t, pos, inode, BtreeIterFlags::INTENT)? {
         DstSlot::Ours  => {}
         DstSlot::Empty => {
-            let mut iter = BtreeIter::new(t, c::btree_id::dirents, pos,
+            let mut iter = BtreeIter::new(t, Btree::dirents, pos,
                                           BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::INTENT);
             t.iter_traverse(&mut iter)?;
             t.update(&iter, &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
@@ -279,10 +279,10 @@ fn check_unreachable_inode(
 fn check_unreachable_inodes(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     let progress = Progress::recovery(fs, c"bch2_check_unreachable_inodes",
-                                      &[c::btree_id::inodes], &[]);
+                                      &[Btree::inodes], &[]);
     let mut seen = SubvolRootSeen::default();
 
-    let mut iter = BtreeIter::new(&trans, c::btree_id::inodes, POS_MIN,
+    let mut iter = BtreeIter::new(&trans, Btree::inodes, POS_MIN,
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
 
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, k| {

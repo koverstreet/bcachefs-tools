@@ -36,6 +36,7 @@ use core::ffi::{c_int, CStr};
 use core::mem::MaybeUninit;
 use core::ops::ControlFlow;
 use cstruct_macros::{c_export, CStruct};
+use crate::format::Btree;
 
 /*
  * What changing an inode's options leaves for after the commit: an inode
@@ -401,7 +402,7 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_o
                     // norestart: callers - fsck repair paths - may have
                     // updates queued, which an internal trans_begin() would
                     // clobber
-                    let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, 0),
+                    let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum, 0),
                                                   BtreeIterFlags::ALL_SNAPSHOTS);
                     iter.for_each_max_norestart(t, spos(0, inum, u32::MAX), |_, inode_k| {
                         if inode::bkey_is_inode(inode_k.k) {
@@ -487,7 +488,7 @@ fn claimed_off_path(t: &TransAttempt<'_, '_>, inum: u64, ancestor: u32, origin_s
     let fs = t.fs();
     let mut claimed = [0; NR];
 
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, 0), BtreeIterFlags::ALL_SNAPSHOTS);
+    let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum, 0), BtreeIterFlags::ALL_SNAPSHOTS);
     iter.for_each_max_norestart(t, spos(0, inum, u32::MAX), |_, k| {
         let snapshot = k.k.p.snapshot;
 
@@ -596,13 +597,13 @@ fn propagate_one(
     ancestor:        u32,
     fsck_repaired:   Option<&mut bool>,
 ) -> Result<ControlFlow<()>, BchError> {
-    let mut src_iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, origin_snapshot),
+    let mut src_iter = BtreeIter::new(t, Btree::inodes, spos(0, inum, origin_snapshot),
                                       BtreeIterFlags::ALL_SNAPSHOTS);
     let Some(src) = peek_inode(t, &mut src_iter)? else {
         return Ok(ControlFlow::Break(()));
     };
 
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, ancestor),
+    let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum, ancestor),
                                   BtreeIterFlags::INTENT | BtreeIterFlags::ALL_SNAPSHOTS);
     let Some(mut ancestor_inode) = peek_inode(t, &mut iter)? else {
         return Ok(ControlFlow::Continue(()));

@@ -50,7 +50,7 @@ use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, bch_err_ratelimited, fsck_err_on, inode_fsck_err, prt};
 use crate::namei;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /// Where the last extent seen in a snapshot ended.
 struct ExtentEnd {
@@ -92,7 +92,7 @@ struct CheckExtents<'f> {
 /// them.
 fn count_inode_sectors(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<u64, BchError> {
     let mut sectors = 0;
-    let mut iter = BtreeIter::new(t, c::btree_id::extents, spos(inum, 0, snapshot),
+    let mut iter = BtreeIter::new(t, Btree::extents, spos(inum, 0, snapshot),
                                   BtreeIterFlags::TRIM);
 
     iter.for_each_max_norestart(t, pos(inum, u64::MAX), |_, k| {
@@ -201,7 +201,7 @@ fn overlapping_extents_found(
 
     assert!(bpos_gt(pos1, pos2.start_pos()));
 
-    let mut iter1 = BtreeIter::new(t, c::btree_id::extents, pos1,
+    let mut iter1 = BtreeIter::new(t, Btree::extents, pos1,
                                    BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::NOT_EXTENTS);
     let mut iter2 = iter1.copy();
 
@@ -428,7 +428,7 @@ fn check_extents(fs: &Fs) -> Result<(), BchError> {
     damage::record_lost_extents(fs);
 
     let trans = crate::btree_trans!(fs);
-    let progress = Progress::recovery(fs, c"bch2_check_extents", &[c::btree_id::extents], &[]);
+    let progress = Progress::recovery(fs, c"bch2_check_extents", &[Btree::extents], &[]);
     let mut st = CheckExtents {
         res:         DiskReservation::new(fs),
         s:           SnapshotsSeen::new(),
@@ -436,7 +436,7 @@ fn check_extents(fs: &Fs) -> Result<(), BchError> {
         extent_ends: ExtentEnds::default(),
     };
 
-    let mut iter = BtreeIter::new(&trans, c::btree_id::extents,
+    let mut iter = BtreeIter::new(&trans, Btree::extents,
                                   pos(c::BCACHEFS_ROOT_INO as u64, 0),
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
 
@@ -456,9 +456,9 @@ fn check_indirect_extents(fs: &Fs) -> Result<(), BchError> {
     let res = DiskReservation::new(fs);
     let trans = crate::btree_trans!(fs);
     let progress = Progress::recovery(fs, c"bch2_check_indirect_extents",
-                                      &[c::btree_id::reflink], &[]);
+                                      &[Btree::reflink], &[]);
 
-    let mut iter = BtreeIter::new(&trans, c::btree_id::reflink, POS_MIN,
+    let mut iter = BtreeIter::new(&trans, Btree::reflink, POS_MIN,
                                   BtreeIterFlags::PREFETCH);
 
     iter.for_each_commit(&trans, Some(&res), CommitFlags::NO_ENOSPC, |t, iter, k| {

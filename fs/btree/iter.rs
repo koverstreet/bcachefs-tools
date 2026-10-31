@@ -36,7 +36,7 @@ use crate::data::ptrs::BtreePtrs;
 use crate::util::vstructs::{State, Validated};
 use crate::types::c_default;
 use cstruct_macros::{CStruct, c_extern};
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -65,7 +65,7 @@ c_extern! {
     pub fn bch2_trans_kmalloc_trace_to_text(out: *mut c::printbuf,
                                             trace: *mut c::darray_trans_kmalloc_trace);
     pub fn bch2_path_put(trans: *mut c::btree_trans, path_idx: c::btree_path_idx_t, intent: bool);
-    pub fn bch2_btree_iter_peek_root(trans: *mut c::btree_trans, iter: *mut c::btree_iter, btree: c::btree_id,
+    pub fn bch2_btree_iter_peek_root(trans: *mut c::btree_trans, iter: *mut c::btree_iter, btree: Btree,
                                      level: c_uint) -> c::bkey_s_c;
     pub fn __bch2_trans_relock(trans: *mut c::btree_trans, trace: bool) -> c_int;
     pub fn bch2_trans_relock_notrace(trans: *mut c::btree_trans) -> c_int;
@@ -73,7 +73,7 @@ c_extern! {
                                 ip: c_ulong) -> *mut c_void;
     pub fn bch2_trans_unlock(trans: *mut c::btree_trans);
     pub fn bch2_trans_unlock_long(trans: *mut c::btree_trans);
-    pub fn __bch2_assert_pos_locked(trans: *mut c::btree_trans, id: c::btree_id, pos: Bpos);
+    pub fn __bch2_assert_pos_locked(trans: *mut c::btree_trans, id: Btree, pos: Bpos);
     pub fn bch2_trans_restart_error(trans: *mut c::btree_trans, restart_count: u32) -> !;
     pub fn bch2_trans_restart_ip(trans: *mut c::btree_trans, err: c_int, ip: c_ulong) -> c_int;
     #[must_use]
@@ -86,16 +86,16 @@ c_extern! {
     pub fn bch2_set_btree_iter_dontneed(iter: *mut c::btree_iter);
     pub fn bch2_btree_iter_prev_slot(iter: *mut c::btree_iter) -> c::bkey_s_c;
     pub fn bch2_btree_iter_advance(iter: *mut c::btree_iter) -> bool;
-    pub fn bch2_btree_iter_params_valid(btree: c::btree_id, level: c_uint, start: Bpos, end: Bpos,
+    pub fn bch2_btree_iter_params_valid(btree: Btree, level: c_uint, start: Bpos, end: Bpos,
                                         flags: c::btree_iter_update_trigger_flags) -> bool;
     pub fn bch2_btree_iter_rewind(iter: *mut c::btree_iter) -> bool;
     pub fn bch2_trans_iter_exit(iter: *mut c::btree_iter);
     pub fn bch2_trans_iter_init_outlined(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
-                                         btree_id: c::btree_id, pos: Bpos,
+                                         btree_id: Btree, pos: Bpos,
                                          flags: c::btree_iter_update_trigger_flags, ip: c_ulong);
     pub fn bch2_trans_copy_iter(dst: *mut c::btree_iter, src: *mut c::btree_iter);
     pub fn __bch2_trans_node_iter_init(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
-                                       btree_id: c::btree_id, pos: Bpos, locks_want: c_uint,
+                                       btree_id: Btree, pos: Bpos, locks_want: c_uint,
                                        depth: c_uint, flags: c::btree_iter_update_trigger_flags);
     pub fn bch2_trans_begin(trans: *mut c::btree_trans) -> u32;
     pub fn __bch2_trans_get(c: *mut c::bch_fs, fn_idx: c_uint) -> *mut c::btree_trans;
@@ -239,7 +239,7 @@ impl<'f> BtreeTrans<'f> {
     /// in an attempt to begin again.
     pub fn delete_range(
         &self,
-        btree: c::btree_id,
+        btree: Btree,
         start: Bpos,
         end:   Bpos,
         flags: UpdateTriggerFlags,
@@ -346,7 +346,7 @@ impl<'f> BtreeTrans<'f> {
     /// That a path of this transaction has @pos in @btree locked - as one an
     /// update went through stays, after its commit, until the transaction's
     /// unlocked. A panic if not, with debug_check_iterators on.
-    pub fn assert_pos_locked(&self, btree: c::btree_id, pos: Bpos) {
+    pub fn assert_pos_locked(&self, btree: Btree, pos: Bpos) {
         if cfg!(CONFIG_BCACHEFS_DEBUG) && crate::debug::params::debug_check_iterators() {
             unsafe { c::__bch2_assert_pos_locked(self.raw(), btree, pos) }
         }
@@ -641,8 +641,8 @@ impl BtreeNodeRef {
         BkeySC::from(self.key()).arm::<BtreePtrs>().expect("a btree node's key, its pointer")
     }
 
-    pub(crate) fn btree_id(&self) -> c::btree_id {
-        c::btree_id(unsafe { self.raw.as_ref().c.btree_id }.into())
+    pub(crate) fn btree_id(&self) -> Btree {
+        Btree(unsafe { self.raw.as_ref().c.btree_id }.into())
     }
 
     /// The node's identity, for telling whether it's the same node as
@@ -1230,7 +1230,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     /// The value of the @K at @pos in @btree, zero padded:
     /// ENOENT_bkey_type_mismatch if it isn't one.
-    pub fn bkey_get_val<K: BkeyWhole>(&self, btree: c::btree_id, pos: Bpos, flags: BtreeIterFlags)
+    pub fn bkey_get_val<K: BkeyWhole>(&self, btree: Btree, pos: Bpos, flags: BtreeIterFlags)
         -> Result<K, BchError>
     {
         let mut iter = BtreeIter::new(self, btree, pos, flags);
@@ -1239,7 +1239,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     /// bkey_get_val(), the whole key.
-    pub fn bkey_get_key<K: BkeyWhole>(&self, btree: c::btree_id, pos: Bpos, flags: BtreeIterFlags)
+    pub fn bkey_get_key<K: BkeyWhole>(&self, btree: Btree, pos: Bpos, flags: BtreeIterFlags)
         -> Result<BkeyI<K>, BchError>
     {
         let mut iter = BtreeIter::new(self, btree, pos, flags);
@@ -1254,7 +1254,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// both in one enum.
     pub fn bkey_get_mut<K: BkeyWhole>(
         &self,
-        btree:      c::btree_id,
+        btree:      Btree,
         pos:        Bpos,
         iter_flags: BtreeIterFlags,
         flags:      UpdateTriggerFlags,
@@ -1359,7 +1359,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// A key moved from @old_pos to @new_pos, in the same snapshot: in every
     /// descendant snapshot where it was overwritten at @old_pos, whiteout
     /// @new_pos too, so it stays hidden there.
-    pub fn insert_snapshot_whiteouts(&self, btree: c::btree_id, old_pos: Bpos, new_pos: Bpos)
+    pub fn insert_snapshot_whiteouts(&self, btree: Btree, old_pos: Bpos, new_pos: Bpos)
         -> Result<(), BchError>
     {
         assert_eq!(old_pos.snapshot, new_pos.snapshot);
@@ -1385,7 +1385,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     /// @btree is a bitset btree.
-    pub fn bit_mod(&self, btree: c::btree_id, pos: Bpos, set: bool) -> Result<(), BchError> {
+    pub fn bit_mod(&self, btree: Btree, pos: Bpos, set: bool) -> Result<(), BchError> {
         let ret = unsafe { c::bch2_btree_bit_mod(self.raw(), btree, pos, set) };
         self.result(ret)
     }
@@ -1395,7 +1395,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn bkey_get_empty_slot(
         &self,
         iter:  &mut BtreeIter<'a>,
-        btree: c::btree_id,
+        btree: Btree,
         start: Bpos,
         end:   Bpos,
     ) -> Result<(), BchError> {
@@ -1404,7 +1404,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     /// bit_mod(), through the write buffer.
-    pub fn bit_mod_buffered(&self, btree: c::btree_id, pos: Bpos, set: bool) -> Result<(), BchError> {
+    pub fn bit_mod_buffered(&self, btree: Btree, pos: Bpos, set: bool) -> Result<(), BchError> {
         let ret = unsafe { c::bch2_btree_bit_mod_buffered(self.raw(), btree, pos, set) };
         self.result(ret)
     }
@@ -1418,7 +1418,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// @key, for write buffered @btree, through the write buffer: as
     /// bch2_trans_update_buffered(). Copied - into the transaction's journal
     /// entries, or before journal replay's done, an update of its own.
-    pub fn update_buffered<V: ?Sized>(&self, btree: c::btree_id, key: &TransBkey<'_, 't, V>)
+    pub fn update_buffered<V: ?Sized>(&self, btree: Btree, key: &TransBkey<'_, 't, V>)
         -> Result<(), BchError>
     {
         // SAFETY: a key, which is only read
@@ -1445,7 +1445,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let ret = unsafe {
             c::bch2_btree_insert_trans(
                 self.raw(),
-                c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
+                Btree::from_raw(btree.into()).expect("invalid btree id"),
                 key.as_ptr(),
                 c::btree_iter_update_trigger_flags::from_bits_retain(iter_flags.bits() | flags.bits()),
             )
@@ -1462,7 +1462,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let ret = unsafe {
             c::bch2_btree_insert_nonextent(
                 self.raw(),
-                c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
+                Btree::from_raw(btree.into()).expect("invalid btree id"),
                 key.as_ptr(),
                 key.k().u64s as u32,
                 c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
@@ -1488,7 +1488,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     /// The pointer to the node at @level of @btree, at @key's position, made
     /// @key, committed: bch2_btree_node_update_key_at_pos().
-    pub fn btree_node_update_key_at_pos<V: ?Sized>(&self, btree: c::btree_id, level: u32,
+    pub fn btree_node_update_key_at_pos<V: ?Sized>(&self, btree: Btree, level: u32,
                                                    key: TransBkey<'_, 't, V>) -> Result<(), BchError> {
         // SAFETY: our transaction, @key in memory its attempt may edit
         self.result(unsafe { c::bch2_btree_node_update_key_at_pos(self.raw(), btree, level, key.as_ptr()) })
@@ -1518,7 +1518,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// The pointer at @level of @btree, at @pos, edited by @f - handed a copy
     /// of the pointer the node below has, with room for any - and committed:
     /// the node's key updated in place, as btree_node_update_key_at_pos().
-    pub fn btree_node_edit_key(&self, btree: c::btree_id, level: u32, pos: Bpos,
+    pub fn btree_node_edit_key(&self, btree: Btree, level: u32, pos: Bpos,
                                f: impl FnOnce(&mut TransBkey<'a, 't>) -> Result<(), BchError>)
         -> Result<(), BchError>
     {
@@ -1533,7 +1533,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// The pointer at @level of @btree, at @key's position, made @key and
     /// committed, its triggers not run - btree_node_update_key_at_pos(), for
     /// a repair or an injection that does the accounting itself, or none.
-    pub fn btree_node_update_key_at_pos_raw<V: ?Sized>(&self, btree: c::btree_id, level: u32,
+    pub fn btree_node_update_key_at_pos_raw<V: ?Sized>(&self, btree: Btree, level: u32,
                                                        key: TransBkey<'_, 't, V>) -> Result<(), BchError> {
         let mut node_iter = BtreeNodeIter::new(self, btree, key.k().p, 0, level - 1, BtreeIterFlags::INTENT);
         let b = node_iter.peek_ref()?.expect("the node a btree node pointer points to");
@@ -1560,7 +1560,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// bch2_btree_node_rewrite_pos().
     pub fn btree_node_rewrite_pos(
         &self,
-        btree:       c::btree_id,
+        btree:       Btree,
         level:       u32,
         pos:         Bpos,
         target:      u32,
@@ -1576,7 +1576,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// One replica of the node @k points to, on @dev, read and checked - the
     /// node rewritten if it's bad. Async: the read is only submitted.
     /// bch2_btree_node_scrub().
-    pub fn btree_node_scrub(&self, btree: c::btree_id, level: u32, k: BkeySC<'_>, dev: u32)
+    pub fn btree_node_scrub(&self, btree: Btree, level: u32, k: BkeySC<'_>, dev: u32)
         -> Result<(), BchError>
     {
         // SAFETY: our transaction; @k, which C copies
@@ -1592,7 +1592,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let ret = unsafe {
             c::bch2_btree_delete(
                 self.raw(),
-                c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
+                Btree::from_raw(btree.into()).expect("invalid btree id"),
                 pos,
                 c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
             )
@@ -2212,7 +2212,7 @@ impl<'t> BtreeIter<'t> {
     /// The key pointing to @btree's root - none unless the root's just below
     /// @level - with this iterator initialized at it, and given back shared
     /// with the key: bch2_btree_iter_peek_root(), for BtreeLevels.
-    fn peek_root<'i>(&'i mut self, t: &TransAttempt<'_, 't>, btree: c::btree_id, level: u32)
+    fn peek_root<'i>(&'i mut self, t: &TransAttempt<'_, 't>, btree: Btree, level: u32)
         -> Result<Option<(&'i BtreeIter<'t>, BkeySC<'i>)>, BchError>
     {
         // SAFETY: the key, in the iterator's path, for as long as it's borrowed
@@ -2322,7 +2322,7 @@ impl<'t> BtreeIter<'t> {
             c::bch2_trans_iter_init_outlined(
                 trans.trans_raw(),
                 iter.as_mut_ptr().cast(),
-                c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
+                Btree::from_raw(btree.into()).expect("invalid btree id"),
                 pos,
                 c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
                 0
@@ -2345,7 +2345,7 @@ impl<'t> BtreeIter<'t> {
             c::__bch2_trans_node_iter_init(
                 trans.trans_raw(),
                 iter.as_mut_ptr().cast(),
-                c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
+                Btree::from_raw(btree.into()).expect("invalid btree id"),
                 pos,
                 0,
                 level,
@@ -2914,7 +2914,7 @@ impl<'t> BtreeNodeIter<'t> {
             c::__bch2_trans_node_iter_init(
                 trans.trans_raw(),
                 iter.as_mut_ptr().cast(),
-                c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
+                Btree::from_raw(btree.into()).expect("invalid btree id"),
                 pos,
                 locks_want,
                 depth,
@@ -3004,7 +3004,7 @@ impl<'t> BtreeNodeIter<'t> {
 /// keys. The root's is taken whatever @start and @end. Level 0 is the
 /// leaves', with no root key.
 pub struct BtreeLevels {
-    pub btree:  c::btree_id,
+    pub btree:  Btree,
     pub levels: core::ops::Range<u32>,
     pub start:  Bpos,
     pub end:    Bpos,

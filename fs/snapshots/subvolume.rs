@@ -43,7 +43,7 @@ use crate::{bch_err, bch_err_msg, bkey_fsck_err_on, fs_inconsistent, fsck_err,
             fsck_err_on, fsck_err_report, prt};
 use core::mem::offset_of;
 use cstruct_macros::c_export;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /// Whether subvolume key @k is long enough to have @field.
 macro_rules! has_field {
@@ -75,7 +75,7 @@ pub fn get_key(
 ) -> Result<BkeyI<c::Subvolume>, BchError> {
     let fs = t.fs();
 
-    let mut ret = t.bkey_get_key::<c::Subvolume>(c::btree_id::subvolumes, pos(0, subvol as u64),
+    let mut ret = t.bkey_get_key::<c::Subvolume>(Btree::subvolumes, pos(0, subvol as u64),
                                                    BtreeIterFlags::CACHED);
     if matches!(&ret, Ok(k) if k.v.state_decoded() == Some(c::bch_subvolume_state::SUBVOLUME_STATE_deleted)) {
         ret = Err(fs.err(bch_errcode::BCH_ERR_ENOENT_subvolume_deleted));
@@ -110,7 +110,7 @@ pub fn bch2_subvolume_get(
 /// Unlike get(), finds a tombstone's snapshot.
 pub(crate) fn __get_snapshot(t: &TransAttempt<'_, '_>, subvol: u32, warn: bool) -> Result<u32, BchError> {
     let fs = t.fs();
-    let mut iter = BtreeIter::new(t, c::btree_id::subvolumes, pos(0, subvol as u64),
+    let mut iter = BtreeIter::new(t, Btree::subvolumes, pos(0, subvol as u64),
                                   BtreeIterFlags::CACHED);
     match iter.peek_slot_typed::<c::Subvolume>(t) {
         Ok(k) => Ok(k.v().snapshot()),
@@ -174,7 +174,7 @@ pub fn bch2_subvol_is_ro(c: &Opaque<c::bch_fs>, subvol: u32) -> core::ffi::c_int
 
 /// ENOTEMPTY_subvol_not_empty if @subvol has subvolumes under it.
 pub fn require_no_children(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
-    let mut iter = BtreeIter::new(t, c::btree_id::subvolume_children, pos(subvol as u64, 0),
+    let mut iter = BtreeIter::new(t, Btree::subvolume_children, pos(subvol as u64, 0),
                                   BtreeIterFlags::empty());
     match iter.peek(t)? {
         Some(k) if k.k.p.inode == subvol as u64 =>
@@ -396,12 +396,12 @@ fn children_mod(t: &TransAttempt<'_, '_>, p: Bpos, set: bool) -> Result<(), BchE
     if p == POS_MIN {
         return Ok(());
     }
-    t.bit_mod(c::btree_id::subvolume_children, p, set)
+    t.bit_mod(Btree::subvolume_children, p, set)
 }
 
 fn trigger(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError> {
     if op.flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
-        passes::clear_btree_clean(t.fs(), c::btree_id::subvolumes);
+        passes::clear_btree_clean(t.fs(), Btree::subvolumes);
 
         let old = children_pos(op.old);
         let new = children_pos(BkeySC::from(&op.new));
@@ -475,7 +475,7 @@ fn check_subvol<'a, 't>(
     }
 
     let snapid = s.v().snapshot();
-    let mut snap_iter = BtreeIter::new(t, c::btree_id::snapshots, pos(0, snapid as u64),
+    let mut snap_iter = BtreeIter::new(t, Btree::snapshots, pos(0, snapid as u64),
                                        BtreeIterFlags::INTENT);
     let (snap_iter, sk) = match snap_iter.peek_slot_typed_shared::<c::Snapshot>(t) {
         Ok(r) => r,
@@ -553,7 +553,7 @@ fn check_subvol<'a, 't>(
 
     if s.v().fs_path_parent() != 0 {
         let p = children_pos(s.key());
-        let mut children_iter = BtreeIter::new(t, c::btree_id::subvolume_children, p,
+        let mut children_iter = BtreeIter::new(t, Btree::subvolume_children, p,
                                                BtreeIterFlags::empty());
         let ck = children_iter.peek_slot(t)?.expect("a slot always has a key");
 
@@ -561,7 +561,7 @@ fn check_subvol<'a, 't>(
                         id::subvol_children_not_set,
                         "subvolume not set in subvolume_children btree at {}:{}\n{}",
                         { p.inode }, { p.offset }, s.to_text(fs))? {
-            t.bit_mod(c::btree_id::subvolume_children, p, true)?;
+            t.bit_mod(Btree::subvolume_children, p, true)?;
         }
     }
 
@@ -622,14 +622,14 @@ fn check_subvol<'a, 't>(
 
 fn check_subvols(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::subvolumes, POS_MIN,
+    let mut iter = BtreeIter::new(&trans, Btree::subvolumes, POS_MIN,
                                   BtreeIterFlags::PREFETCH);
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC,
                          |t, iter, k| check_subvol(t, iter, k))?;
 
     // A clean pass lets check_key_has_snapshot trust the in-memory table
     if !fs.flag(c::bch_fs_flags::BCH_FS_error) {
-        passes::set_btree_clean(fs, c::btree_id::subvolumes);
+        passes::set_btree_clean(fs, Btree::subvolumes);
     }
     Ok(())
 }
@@ -641,7 +641,7 @@ fn check_subvol_child(
     iter: &BtreeIter<'_>,
     k:    BkeySC<'_>,
 ) -> Result<(), BchError> {
-    let mut s_iter = BtreeIter::new(t, c::btree_id::subvolumes, pos(0, k.k.p.offset),
+    let mut s_iter = BtreeIter::new(t, Btree::subvolumes, pos(0, k.k.p.offset),
                                     BtreeIterFlags::empty());
     let s = val(s_iter.peek_slot(t)?.expect("a slot always has a key"));
 
@@ -658,7 +658,7 @@ fn check_subvol_child(
 
 fn check_subvol_children(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::subvolume_children, POS_MIN,
+    let mut iter = BtreeIter::new(&trans, Btree::subvolume_children, POS_MIN,
                                   BtreeIterFlags::PREFETCH);
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC,
                          |t, iter, k| check_subvol_child(t, iter, k))
@@ -672,7 +672,7 @@ crate::recovery_pass!(bch2_check_subvol_children => check_subvol_children);
 fn get_mut<'a, 't>(t: &TransAttempt<'a, 't>, subvol: u32)
     -> Result<crate::btree::iter::TransBkey<'a, 't, c::Subvolume>, BchError>
 {
-    let ret = t.bkey_get_mut::<c::Subvolume>(c::btree_id::subvolumes, pos(0, subvol as u64),
+    let ret = t.bkey_get_mut::<c::Subvolume>(Btree::subvolumes, pos(0, subvol as u64),
                                              BtreeIterFlags::CACHED, UpdateTriggerFlags::empty());
     if let Err(e) = &ret {
         if e.matches(c::ENOENT) {
@@ -719,7 +719,7 @@ fn reparent_children(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError
     let s = lockrestart_do(trans, |t| get(t, subvol, true))?;
     let new = s.creation_parent.get();
 
-    let mut iter = BtreeIter::new(trans, c::btree_id::subvolumes, POS_MIN,
+    let mut iter = BtreeIter::new(trans, Btree::subvolumes, POS_MIN,
                                   BtreeIterFlags::PREFETCH);
     iter.for_each_commit(trans, None, CommitFlags::NO_ENOSPC,
                          |t, iter, k| reparent(t, iter, k, subvol, new))
@@ -730,7 +730,7 @@ fn reparent_children(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError
 fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
     let fs = t.fs();
 
-    let mut iter = BtreeIter::new(t, c::btree_id::subvolumes, pos(0, subvol as u64),
+    let mut iter = BtreeIter::new(t, Btree::subvolumes, pos(0, subvol as u64),
                                   BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
     let k = match iter.peek_slot_typed::<c::Subvolume>(t) {
         Err(e) if e.matches(c::ENOENT) => {
@@ -741,7 +741,7 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
     };
     let snapid = k.v().snapshot();
 
-    let mut snapshot_iter = BtreeIter::new(t, c::btree_id::snapshots, pos(0, snapid as u64),
+    let mut snapshot_iter = BtreeIter::new(t, Btree::snapshots, pos(0, snapid as u64),
                                            BtreeIterFlags::empty());
     let sk = snapshot_iter.peek_slot_typed::<c::Snapshot>(t)
         .inspect_err(|e| if e.matches(c::ENOENT) {
@@ -749,7 +749,7 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
         })?;
     let tree = sk.v().tree();
 
-    let mut tree_iter = BtreeIter::new(t, c::btree_id::snapshot_trees, pos(0, tree as u64),
+    let mut tree_iter = BtreeIter::new(t, Btree::snapshot_trees, pos(0, tree as u64),
                                        BtreeIterFlags::empty());
     let (tree_iter, tk) = tree_iter
         .peek_slot_typed_shared::<c::SnapshotTree>(t)
@@ -854,7 +854,7 @@ pub fn create(
     let fs = t.fs();
 
     let mut dst_iter = BtreeIter::uninit();
-    match t.bkey_get_empty_slot(&mut dst_iter, c::btree_id::subvolumes, POS_MIN,
+    match t.bkey_get_empty_slot(&mut dst_iter, Btree::subvolumes, POS_MIN,
                                 pos(0, u32::MAX as u64)) {
         Err(e) if e.matches(bch_errcode::BCH_ERR_ENOSPC_btree_slot) =>
             return fs.throw(bch_errcode::BCH_ERR_ENOSPC_subvolume_create),
@@ -928,11 +928,11 @@ fn initialize(fs: &Fs) -> Result<(), BchError> {
     v.inode    = ((c::BCACHEFS_ROOT_INO as u64)).into();
     v.set_state(c::bch_subvolume_state::SUBVOLUME_STATE_live);
 
-    fs.btree_insert(c::btree_id::snapshot_trees, &mut root_tree, None, CommitFlags::empty(),
+    fs.btree_insert(Btree::snapshot_trees, &mut root_tree, None, CommitFlags::empty(),
                     BtreeIterFlags::empty())?;
-    fs.btree_insert(c::btree_id::snapshots, &mut root_snapshot, None, CommitFlags::empty(),
+    fs.btree_insert(Btree::snapshots, &mut root_snapshot, None, CommitFlags::empty(),
                     BtreeIterFlags::empty())?;
-    fs.btree_insert(c::btree_id::subvolumes, &mut root_volume, None, CommitFlags::empty(),
+    fs.btree_insert(Btree::subvolumes, &mut root_volume, None, CommitFlags::empty(),
                     BtreeIterFlags::empty())
 }
 
@@ -945,7 +945,7 @@ pub fn bch2_initialize_subvolumes(c: &Opaque<c::bch_fs>) -> core::ffi::c_int {
 fn fs_upgrade_for_subvolumes(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| {
-        let mut iter = BtreeIter::new(t, c::btree_id::inodes,
+        let mut iter = BtreeIter::new(t, Btree::inodes,
                                       Bpos { inode: 0, offset: c::BCACHEFS_ROOT_INO as u64,
                                                 snapshot: u32::MAX },
                                       BtreeIterFlags::empty());

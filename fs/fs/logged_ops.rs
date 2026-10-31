@@ -29,6 +29,7 @@ use crate::new_lock;
 use crate::types::{RustOnly, rust_only};
 use crate::util::alloc::KVVec;
 use pin_init::pin_data;
+use crate::format::Btree;
 
 #[pin_data]
 #[repr(C)]
@@ -153,7 +154,7 @@ where
     F: FnMut(&TransAttempt<'_, '_>, BkeySC<'_>) -> Result<(), BchError>,
 {
     let trans = crate::btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::logged_ops, pos(INUM, 0), BtreeIterFlags::PREFETCH);
+    let mut iter = BtreeIter::new(&trans, Btree::logged_ops, pos(INUM, 0), BtreeIterFlags::PREFETCH);
 
     iter.for_each_max(&trans, pos(INUM, u64::MAX), |t, _, k| f(t, k))
 }
@@ -189,7 +190,7 @@ crate::recovery_pass!(bch2_resume_logged_ops => |fs| resume_logged_ops(fs, false
 /// @k needn't outlive the call.
 pub fn start(t: &TransAttempt<'_, '_>, k: &mut BkeyI) -> Result<(), BchError> {
     let mut iter = BtreeIter::uninit();
-    t.bkey_get_empty_slot(&mut iter, c::btree_id::logged_ops, POS_MIN, pos(INUM, u64::MAX))?;
+    t.bkey_get_empty_slot(&mut iter, Btree::logged_ops, POS_MIN, pos(INUM, u64::MAX))?;
 
     k.k.p = iter.pos();
 
@@ -218,7 +219,7 @@ pub fn inject_fail(fs: &Fs, ty: c::bch_bkey_type) -> Result<(), BchError> {
 pub fn update(t: &TransAttempt<'_, '_>, op: &BkeyI) -> Result<(), BchError> {
     inject_fail(t.fs(), op.k.key_type())?;
 
-    t.insert_with(c::btree_id::logged_ops, t.bkey_copy(op)?, BtreeIterFlags::CACHED,
+    t.insert_with(Btree::logged_ops, t.bkey_copy(op)?, BtreeIterFlags::CACHED,
                   UpdateTriggerFlags::empty())
 }
 
@@ -251,7 +252,7 @@ pub fn finish(
     }
 
     commit_do(trans, None, flags.flags(CommitFlags::NO_CHECK_RW | CommitFlags::NO_ENOSPC),
-              |t| t.delete(c::btree_id::logged_ops, k.k.p, UpdateTriggerFlags::empty()))
+              |t| t.delete(Btree::logged_ops, k.k.p, UpdateTriggerFlags::empty()))
     .inspect_err(|e| {
         /*
          * This needs to be a fatal error because we've left an unfinished

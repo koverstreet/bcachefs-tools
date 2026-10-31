@@ -51,6 +51,7 @@ use bitflags::bitflags;
 use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
 use cstruct_macros::c_export;
+use crate::format::Btree;
 
 /// What a key with pointers is copied with room for: as large as one can get,
 /// for the reconcile entry and padding pointers set_needs_reconcile() may add.
@@ -60,7 +61,7 @@ const KEY_ROOM: usize = c::BKEY_EXTENT_U64s_MAX * size_of::<u64>();
 /// node still cached is the only copy, for @cached to save - true; else the
 /// node is lost: the pointer's deletion queued, and the btree flagged as
 /// having lost data, for topology repair to fill the hole.
-fn btree_ptr_unreadable<'a>(t: &TransAttempt<'a, '_>, btree: c::btree_id, level: u32, n: BkeySC<'_>,
+fn btree_ptr_unreadable<'a>(t: &TransAttempt<'a, '_>, btree: Btree, level: u32, n: BkeySC<'_>,
                             cached: impl FnOnce(&mut BtreeIter<'a>, BtreeNodeRef) -> Result<(), BchError>)
     -> Result<bool, BchError>
 {
@@ -92,7 +93,7 @@ fn btree_ptr_unreadable<'a>(t: &TransAttempt<'a, '_>, btree: c::btree_id, level:
 /// the node rewritten from memory if it's cached, or the pointer deleted and
 /// the btree flagged as having lost data; for any other key, an error key of
 /// type @error, the loss counted and recorded against its file.
-pub fn bkey_drop_device_and_update(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32,
+pub fn bkey_drop_device_and_update(t: &TransAttempt<'_, '_>, btree: Btree, level: u32,
                                    k: BkeySC<'_, Ptrs>, dev: u32, error: c::bch_key_type_errors)
     -> Result<(), BchError>
 {
@@ -148,8 +149,8 @@ fn btree_node_bad(fs: &Fs, buf: &[u8], k: BkeySC<'_>) -> bool {
 /// wrong - or for a btree node, not the node @k points to. @other_k, in
 /// @other_btree, is the key with a replica in the same space, for the report.
 /// Unchecksummed data, and a device that can't be read, can't say: false.
-pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: BkeySC<'_, Ptrs>,
-                                    other_btree: c::btree_id, other_k: BkeySC<'_, Ptrs>, dev: u32)
+pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeySC<'_, Ptrs>,
+                                    other_btree: Btree, other_k: BkeySC<'_, Ptrs>, dev: u32)
     -> Result<bool, BchError>
 {
     let fs = t.fs();
@@ -195,7 +196,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: c::btree_id
 
     // only an extent's position names an inum - not a btree node pointer's,
     // in the extents btree or not; elsewhere report without recording
-    let damage_pos = if btree == c::btree_id::BTREE_ID_extents && !is_btree_ptr { k.k.p } else { POS_MIN };
+    let damage_pos = if btree == Btree::BTREE_ID_extents && !is_btree_ptr { k.k.p } else { POS_MIN };
 
     if inode_fsck_err!(t, damage_pos, id::dup_backpointer_to_bad_csum_extent, "{}", msg)? {
         bkey_drop_device_and_update(t, btree, level, k, dev,
@@ -366,7 +367,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
 
 /// @k, a key in @btree with nothing to read, rewritten without its triggers -
 /// no_valid_pointers_fix() - and returned, to check in @k's place.
-fn no_valid_pointers_repair<'a, 't>(t: &TransAttempt<'a, 't>, btree: c::btree_id, k: BkeySC<'_, Ptrs>)
+fn no_valid_pointers_repair<'a, 't>(t: &TransAttempt<'a, 't>, btree: Btree, k: BkeySC<'_, Ptrs>)
     -> Result<TransBkey<'a, 't>, BchError>
 {
     let new = no_valid_pointers_fix(t, btree, t.bkey_reassemble_room(k, KEY_ROOM)?)?;
@@ -382,7 +383,7 @@ fn no_valid_pointers_repair<'a, 't>(t: &TransAttempt<'a, 't>, btree: c::btree_id
 /// pointer that's still good made dirty, or if there's none, @new made an
 /// error key - the loss reported, and recorded against its file. Given back
 /// untyped, as an error key has no pointers.
-fn no_valid_pointers_fix<'a, 't>(t: &TransAttempt<'_, '_>, btree: c::btree_id, mut new: TransBkey<'a, 't, Ptrs>)
+fn no_valid_pointers_fix<'a, 't>(t: &TransAttempt<'_, '_>, btree: Btree, mut new: TransBkey<'a, 't, Ptrs>)
     -> Result<TransBkey<'a, 't>, BchError>
 {
     let fs = t.fs();
@@ -407,7 +408,7 @@ fn no_valid_pointers_fix<'a, 't>(t: &TransAttempt<'_, '_>, btree: c::btree_id, m
     // Inode-scoped when we can attribute it: an extents btree position names
     // an inum, so the error records damage against the file. An indirect
     // extent's doesn't - POS_MIN reports without recording
-    let damage_pos = if btree == c::btree_id::BTREE_ID_extents { new.k().p } else { POS_MIN };
+    let damage_pos = if btree == Btree::BTREE_ID_extents { new.k().p } else { POS_MIN };
 
     if found_good_cached_ptr {
         inode_fsck_err!(t, damage_pos, id::extent_ptrs_all_invalid_but_cached,
@@ -424,7 +425,7 @@ fn no_valid_pointers_fix<'a, 't>(t: &TransAttempt<'_, '_>, btree: c::btree_id, m
     Ok(new)
 }
 
-fn check_fix_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: c::btree_id, level: u32,
+fn check_fix_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, level: u32,
                   k: BkeySC<'_, Ptrs>) -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -444,7 +445,7 @@ fn check_fix_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: c::btre
 /// copy with the fixes they need. A btree node pointer's replacement is an
 /// update of the node's key, then a restart. Its own function, not a rebinding
 /// of @k: BkeySC is invariant in its lifetime, so the repair's and @k's differ.
-fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: c::btree_id, level: u32, k: BkeySC<'_>)
+fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, level: u32, k: BkeySC<'_>)
     -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -539,7 +540,7 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: c::btree_i
 pub fn bch2_check_fix_ptrs<'t>(
     trans: &'t BtreeTrans<'t>,
     iter:  &mut BtreeIter<'t>,
-    btree: c::btree_id,
+    btree: Btree,
     level: c_uint,
     k:     BkeySC<'_>,
 ) -> c_int {

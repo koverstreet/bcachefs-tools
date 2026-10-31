@@ -39,6 +39,7 @@ use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::Printbuf;
 use crate::util::log::LogMsg;
 use crate::{bch_err_fn, bch_err_msg, bch_warn, c_function_name, inode_fsck_err, prt};
+use crate::format::Btree;
 
 /// @k: a dirent, from a dirent lookup.
 fn dirent_points_to_inode(
@@ -108,7 +109,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
     }
 
     let mut subvol_path: KVVec<u32> = KVVec::new();
-    let mut parent_iter = BtreeIter::new(t, c::btree_id::subvolumes, POS_MIN,
+    let mut parent_iter = BtreeIter::new(t, Btree::subvolumes, POS_MIN,
                                          BtreeIterFlags::empty());
 
     let start = c::subvol_inum {
@@ -167,9 +168,9 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
 fn check_subvolume_structure(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     let progress = Progress::recovery(fs, c"bch2_check_subvolume_structure",
-                                      &[c::btree_id::subvolumes], &[]);
+                                      &[Btree::subvolumes], &[]);
 
-    let mut iter = BtreeIter::new(&trans, c::btree_id::subvolumes, POS_MIN,
+    let mut iter = BtreeIter::new(&trans, Btree::subvolumes, POS_MIN,
                                   BtreeIterFlags::PREFETCH);
 
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC,
@@ -186,7 +187,7 @@ fn bi_depth_renumber_one(
     new_depth: u32,
 ) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, snapshot),
+    let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum, snapshot),
                                   BtreeIterFlags::empty());
 
     let Some(k) = iter.peek_slot(t)?.filter(|k| inode::bkey_is_inode(k.k)) else {
@@ -244,13 +245,13 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
     // Not all_snapshots: the parent we want is the one visible in @snapshot,
     // and a filtered iterator looks in the snapshot it was initialized with -
     // set_pos() keeps it.
-    let mut inode_iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, 0, snapshot),
+    let mut inode_iter = BtreeIter::new(t, Btree::inodes, spos(0, 0, snapshot),
                                         BtreeIterFlags::empty());
 
     // After check_dirents, a missing dirent or backpointer is
     // check_unreachable_inodes'
     while inode.bi_subvol == 0 && inode.has_backpointer() {
-        let mut dirent_iter = BtreeIter::new(t, c::btree_id::dirents,
+        let mut dirent_iter = BtreeIter::new(t, Btree::dirents,
                                              spos(inode.bi_dir, inode.bi_dir_offset, snapshot),
                                              BtreeIterFlags::empty());
 
@@ -341,7 +342,7 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
 /// Check for directory loops.
 fn check_directory_structure(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::inodes, SPOS_MAX,
+    let mut iter = BtreeIter::new(&trans, Btree::inodes, SPOS_MAX,
         BtreeIterFlags::INTENT | BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
 
     iter.for_each_reverse_commit(&trans, POS_MIN, None,

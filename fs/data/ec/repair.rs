@@ -40,7 +40,7 @@ use crate::{bch_err, c_function_name, log_msg_ratelimited, prt};
 use core::mem::size_of;
 use core::sync::atomic::Ordering::Relaxed;
 use pin_init::stack_pin_init;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 // ── Recording the extents of blocks lost ──
 
@@ -97,16 +97,16 @@ pub fn record_lost_blocks(trans: &BtreeTrans<'_>, s: BkeySC<'_, c::Stripe<Valida
         let ret = block_for_each_extent(trans, s, block, None, CommitFlags::NO_ENOSPC.into(), |t, bp, ext| {
             // reflink extents name no inode to record against
             let Some((_, k)) = ext else { return Ok(()) };
-            if bp.v().target().btree != c::btree_id::extents {
+            if bp.v().target().btree != Btree::extents {
                 return Ok(());
             }
             if buf.is_some_and(|buf| extent_good_in_buf(fs, k, s, buf, block)) {
                 return Ok(());
             }
             if count {
-                damage::record_data_loss(t, c::btree_id::extents, k.k.p, err)
+                damage::record_data_loss(t, Btree::extents, k.k.p, err)
             } else {
-                damage::record_key(t, c::btree_id::extents, k.k.p, err)
+                damage::record_key(t, Btree::extents, k.k.p, err)
             }
         });
 
@@ -166,8 +166,8 @@ fn drop_block_extent(t: &TransAttempt<'_, '_>, idx: u64, block: u32, bp: BkeySC<
     }
 
     // reflink extents name no inode to record against
-    if !readable_now(fs, n.as_sc()) && bp.v().target().btree == c::btree_id::extents {
-        damage::record_key(t, c::btree_id::extents, k.k.p, c::bch_sb_error_id::BCH_FSCK_ERR_stripe_reconstruct_failed)?;
+    if !readable_now(fs, n.as_sc()) && bp.v().target().btree == Btree::extents {
+        damage::record_key(t, Btree::extents, k.k.p, c::bch_sb_error_id::BCH_FSCK_ERR_stripe_reconstruct_failed)?;
     }
 
     t.update(iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
@@ -351,7 +351,7 @@ fn stripe_repair_narrow(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, 
 /// Stripe @s, again, into @key: our own extent updates change its block
 /// counts.
 fn stripe_repair_reload(t: &TransAttempt<'_, '_>, key: &mut BkeyBuf, s: Bpos) -> Result<(), BchError> {
-    let mut iter = BtreeIter::new(t, c::btree_id::stripes, s, BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(t, Btree::stripes, s, BtreeIterFlags::empty());
     key.reassemble(iter.peek_slot_typed::<c::Stripe>(t)?.untyped());
     Ok(())
 }
@@ -491,7 +491,7 @@ fn stripe_block_at_bp(ca: &c::bch_dev, s: BkeySC<'_, c::Stripe<Validated>>, bp: 
 /// is gone, or rewritten without that block, since @read was read.
 fn repair_bad_block(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, read: BkeySC<'_, c::Stripe<Validated>>,
                     block: usize) -> Result<bool, BchError> {
-    let mut iter = BtreeIter::new(t, c::btree_id::stripes, read.k.p, BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(t, Btree::stripes, read.k.p, BtreeIterFlags::INTENT);
     let Some(k) = iter.peek_slot(t)? else { return Ok(false) };
     let want = &read.v().block_ptrs()[block];
     if !k.arm::<c::Stripe>().is_some_and(|s| s.v().block_ptrs().get(block).is_some_and(|p| ptr_eq(p, want))) {

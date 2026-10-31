@@ -17,7 +17,7 @@ use core::mem::size_of;
 use core::ptr::NonNull;
 use core::slice;
 use cstruct_macros::{c_export, c_enum, c_extern, c_xmacro};
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 c_xmacro! {
     BCH_TRANS_COMMIT_FLAGS(x) {
@@ -56,34 +56,34 @@ c_extern! {
     pub fn bch2_fs_log_msg(c: *mut c::bch_fs, fmt: *const core::ffi::c_char, ...) -> c_int;
     pub fn __bch2_trans_subbuf_alloc(trans: *mut c::btree_trans, buf: *mut c::btree_trans_subbuf, u64s: c_uint,
                                      ip: core::ffi::c_ulong) -> *mut core::ffi::c_void;
-    pub fn rust_bch2_trans_update_buffered(trans: *mut c::btree_trans, btree: c::btree_id, k: *mut c::bkey_i) -> c_int;
+    pub fn rust_bch2_trans_update_buffered(trans: *mut c::btree_trans, btree: Btree, k: *mut c::bkey_i) -> c_int;
     pub fn bch2_trigger_get_mutable_new(trans: *mut c::btree_trans, op: c::btree_trigger_op, needed_u64s: c_uint,
                                         out: *mut c::bkey_s) -> c_int;
     pub fn bch2_btree_delete_at(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
                                 flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_delete(trans: *mut c::btree_trans, btree: c::btree_id, pos: Bpos,
+    pub fn bch2_btree_delete(trans: *mut c::btree_trans, btree: Btree, pos: Bpos,
                              flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_insert_nonextent(trans: *mut c::btree_trans, btree: c::btree_id,
+    pub fn bch2_btree_insert_nonextent(trans: *mut c::btree_trans, btree: Btree,
                                        k: *mut c::bkey_i, k_buf_u64s: c_uint,
                                        flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_insert_trans(trans: *mut c::btree_trans, btree: c::btree_id,
+    pub fn bch2_btree_insert_trans(trans: *mut c::btree_trans, btree: Btree,
                                    k: *mut c::bkey_i,
                                    flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_insert(c: *mut c::bch_fs, id: c::btree_id, k: *mut c::bkey_i,
+    pub fn bch2_btree_insert(c: *mut c::bch_fs, id: Btree, k: *mut c::bkey_i,
                              disk_res: *mut c::disk_reservation,
                              commit_flags: c::bch_trans_commit_flags,
                              iter_flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_delete_range_trans(trans: *mut c::btree_trans, btree: c::btree_id,
+    pub fn bch2_btree_delete_range_trans(trans: *mut c::btree_trans, btree: Btree,
                                          start: Bpos, end: Bpos,
                                          flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_delete_range(c: *mut c::bch_fs, id: c::btree_id, start: Bpos, end: Bpos,
+    pub fn bch2_btree_delete_range(c: *mut c::bch_fs, id: Btree, start: Bpos, end: Bpos,
                                    flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_bit_mod(trans: *mut c::btree_trans, btree: c::btree_id, pos: Bpos,
+    pub fn bch2_btree_bit_mod(trans: *mut c::btree_trans, btree: Btree, pos: Bpos,
                               set: bool) -> c_int;
-    pub fn bch2_btree_bit_mod_buffered(trans: *mut c::btree_trans, btree: c::btree_id, pos: Bpos,
+    pub fn bch2_btree_bit_mod_buffered(trans: *mut c::btree_trans, btree: Btree, pos: Bpos,
                                        set: bool) -> c_int;
     pub fn bch2_btree_bit_mod_iter(trans: *mut c::btree_trans, iter: *mut c::btree_iter, set: bool) -> c_int;
-    pub fn __bch2_insert_snapshot_whiteouts(trans: *mut c::btree_trans, btree: c::btree_id,
+    pub fn __bch2_insert_snapshot_whiteouts(trans: *mut c::btree_trans, btree: Btree,
                                             pos: Bpos, s: *mut c::snapshot_id_list) -> c_int;
     #[must_use]
     pub fn bch2_trans_update_ip(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
@@ -93,7 +93,7 @@ c_extern! {
                                               flags: c::btree_iter_update_trigger_flags,
                                               old: c::bkey_s_c, new: c::bkey_s_c) -> c_int;
     pub fn bch2_bkey_get_empty_slot(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
-                                    btree: c::btree_id, start: Bpos, end: Bpos) -> c_int;
+                                    btree: Btree, start: Bpos, end: Bpos) -> c_int;
     pub fn bch2_trans_commit_hook(trans: *mut c::btree_trans, h: *mut c::btree_trans_commit_hook);
     pub fn __bch2_trans_commit(trans: *mut c::btree_trans, flags: c::bch_trans_commit_flags,
                                lazy: bool) -> c_int;
@@ -105,7 +105,7 @@ c_extern! {
 /// snapshot of an extents btree, once the filesystem has the feature, which
 /// this asks for; a snapshot the table doesn't have is a leaf, as C took it.
 /// Any other deletion's is KEY_TYPE_whiteout.
-pub fn extent_whiteout_type(fs: &Fs, btree: c::btree_id, k: &c::bkey) -> c::bch_bkey_type {
+pub fn extent_whiteout_type(fs: &Fs, btree: Btree, k: &c::bkey) -> c::bch_bkey_type {
     if btree.is_extents_snapshots() &&
        k.is_deleted() &&
        fs.snapshots.is_leaf(k.p.snapshot) != Ok(false) &&
@@ -117,7 +117,7 @@ pub fn extent_whiteout_type(fs: &Fs, btree: c::btree_id, k: &c::bkey) -> c::bch_
 }
 
 #[c_export]
-pub fn bch2_extent_whiteout_type(c: &Opaque<c::bch_fs>, btree: c::btree_id, k: &c::bkey) -> c::bch_bkey_type {
+pub fn bch2_extent_whiteout_type(c: &Opaque<c::bch_fs>, btree: Btree, k: &c::bkey) -> c::bch_bkey_type {
     extent_whiteout_type(Fs::from_c(c), btree, k)
 }
 
@@ -180,7 +180,7 @@ impl TransAttempt<'_, '_> {
 
     /// @k, a key of @btree at @level, into the journal with this
     /// transaction's commit.
-    pub fn log_bkey(&self, btree: c::btree_id, level: u32, k: &BkeyI) -> Result<(), BchError> {
+    pub fn log_bkey(&self, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
         // SAFETY: the whole key, as long as it says
         let bytes = unsafe { slice::from_raw_parts(k.as_ffi().cast::<u8>(), k.k.bytes()) };
         self.journal_entry_add(c::bch_jset_entry_type::BCH_JSET_ENTRY_log_bkey, btree.0 as u8, level as u8, bytes)

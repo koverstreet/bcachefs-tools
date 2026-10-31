@@ -27,6 +27,7 @@ use crate::util::projections::Volatile;
 use crate::util::workqueue::ReffedWork;
 use cstruct_macros::{placed, CStruct, Init, TypeInfo, c_enum};
 use pin_init::pin_data;
+use crate::format::Btree;
 
 c_enum! {
     #[flags]
@@ -456,18 +457,18 @@ fn pass_complete(fs: &Fs, pass: Pass, start_time: i64) {
 
 /// Whether btree @btree has been checked consistent and not changed since: as
 /// bch2_btree_is_clean().
-pub fn btree_is_clean(fs: &Fs, btree: c::btree_id) -> bool {
+pub fn btree_is_clean(fs: &Fs, btree: Btree) -> bool {
     fs.sb.btrees_clean.get() & (1u64 << btree.0) != 0
 }
 
 /// Record btree @btree as checked consistent: as bch2_set_btree_clean().
-pub fn set_btree_clean(fs: &Fs, btree: c::btree_id) {
+pub fn set_btree_clean(fs: &Fs, btree: Btree) {
     set_btree_clean_to(fs, btree, true)
 }
 
 /// Btree @btree is being changed, so no longer known consistent: as
 /// bch2_clear_btree_clean().
-pub fn clear_btree_clean(fs: &Fs, btree: c::btree_id) {
+pub fn clear_btree_clean(fs: &Fs, btree: Btree) {
     set_btree_clean_to(fs, btree, false)
 }
 
@@ -475,7 +476,7 @@ pub fn clear_btree_clean(fs: &Fs, btree: c::btree_id) {
 /// written straight through: the superblock is current without a clean
 /// shutdown. Checked before sb_lock as well as under it, so the common case -
 /// already as wanted - doesn't take it.
-fn set_btree_clean_to(fs: &Fs, btree: c::btree_id, clean: bool) {
+fn set_btree_clean_to(fs: &Fs, btree: Btree, clean: bool) {
     if btree_is_clean(fs, btree) == clean {
         return;
     }

@@ -28,6 +28,7 @@ use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, UnvalidatedEntriesM
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, fsck_err, mustfix_fsck_err_on, prt};
 use crate::sb::io::SbResize;
+use crate::format::Btree;
 
 type Section = c::bch_sb_field_clean;
 
@@ -158,7 +159,7 @@ impl Fs {
             return Ok(false);
         }
 
-        for id in 0..c::btree_id::BTREE_ID_NR.0 {
+        for id in 0..Btree::BTREE_ID_NR.0 {
             let sb = btree_root(clean.entries(), id);
             let journal = btree_root(j.entries(), id);
             if sb.is_none() && journal.is_none() {

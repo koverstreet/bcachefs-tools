@@ -60,12 +60,12 @@ use core::ffi::{c_int, c_uint};
 use core::ops::Range;
 use core::ptr::NonNull;
 use cstruct_macros::c_export;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /// What to move: of @k, in @btree, with @io_opts, the move's options filled
 /// in, and whether to. In the walk's attempt, so it can look things up - an
 /// error, or a restart, is the walk's.
-pub type Pred<'p> = dyn FnMut(&TransAttempt<'_, '_>, c::btree_id, BkeySC<'_>, &c::bch_inode_opts,
+pub type Pred<'p> = dyn FnMut(&TransAttempt<'_, '_>, Btree, BkeySC<'_>, &c::bch_inode_opts,
                               &mut c::data_update_opts) -> Result<bool, BchError> + 'p;
 
 // ── Moving a key ─────────────────────────────────────────────────────────
@@ -243,9 +243,9 @@ impl Mover<'_, '_> {
 impl Moving<'_> {
     /// Start moving what @pred picks of @btree, at @levels, @start to @end -
     /// returning once the moves are issued.
-    pub fn move_data_btree(&self, btree: c::btree_id, levels: Range<u32>, start: Bpos, end: Bpos,
+    pub fn move_data_btree(&self, btree: Btree, levels: Range<u32>, start: Bpos, end: Bpos,
                            name: &str,
-                           mut pred: impl FnMut(&TransAttempt<'_, '_>, c::btree_id, BkeySC<'_>, &c::bch_inode_opts,
+                           mut pred: impl FnMut(&TransAttempt<'_, '_>, Btree, BkeySC<'_>, &c::bch_inode_opts,
                                                 &mut c::data_update_opts) -> Result<bool, BchError>)
         -> Result<(), BchError>
     {
@@ -352,7 +352,7 @@ impl PhysWalker<'_, '_> {
         let Some((iter, k)) = backpointer_get_key(t, BkeySC::from(bp), &mut iter, BtreeIterFlags::empty(),
                                                   self.last_flushed.borrow())? else { return Ok(()) };
 
-        if v.level == 0 && c::btree_id(v.btree_id.into()) == c::btree_id::stripes {
+        if v.level == 0 && Btree(v.btree_id.into()) == Btree::stripes {
             return match self.ca.filter(|_| self.w.verify_stripes && moved) {
                 None => Ok(()),
                 Some(ca) => scrub_stripe_block(moving, t, ca, BkeySC::from(bp), k),
@@ -412,9 +412,9 @@ impl Moving<'_> {
 
         let (bp_btree, bp_dev, ca) = match w.bps {
             // userspace might have supplied @dev
-            BpWalk::Dev(dev) => (c::btree_id::backpointers, dev.into(), fs.dev_get(dev)),
+            BpWalk::Dev(dev) => (Btree::backpointers, dev.into(), fs.dev_get(dev)),
             BpWalk::EcOrphan { idx, block } =>
-                (c::btree_id::stripe_backpointers, BackpointerPos::ec_removed_dev(idx, block), None),
+                (Btree::stripe_backpointers, BackpointerPos::ec_removed_dev(idx, block), None),
         };
 
         let end = ca.as_ref().map_or(w.end, |ca| w.end.min(ca.bucket_to_sector(ca.mi.get().nbuckets)));

@@ -320,7 +320,7 @@ use core::fmt;
 use core::ops::ControlFlow;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cstruct_macros::c_export;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 // ── The table ────────────────────────────────────────────────────────────
 
@@ -829,7 +829,7 @@ const NR_SNAPSHOT_BTREES: usize = crate::BTREE_HAS_SNAPSHOTS_MASK.count_ones() a
 
 #[derive(Clone, Copy)]
 struct BtreeAccounting {
-    btree:     c::btree_id,
+    btree:     Btree,
     keys:      u64,
     key_bytes: u64,
     sectors:   u64,
@@ -1228,7 +1228,7 @@ pub fn bch2_snapshot_key_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: 
 
 fn trigger(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError> {
     if op.flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
-        passes::clear_btree_clean(t.fs(), c::btree_id::snapshots);
+        passes::clear_btree_clean(t.fs(), Btree::snapshots);
     }
     if op.flags.contains(UpdateTriggerFlags::ATOMIC) {
         mark_snapshot(t.fs(), BkeySC::from(&op.new))?;
@@ -1268,7 +1268,7 @@ pub fn bch2_snapshot_tree_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k:
 }
 
 pub fn tree_lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::SnapshotTree, BchError> {
-    t.bkey_get_val::<c::SnapshotTree>(c::btree_id::snapshot_trees, pos(0, id as u64),
+    t.bkey_get_val::<c::SnapshotTree>(Btree::snapshot_trees, pos(0, id as u64),
                                       BtreeIterFlags::empty())
         .map_err(|e| if e.matches(c::ENOENT) {
             t.fs().err(bch_errcode::BCH_ERR_ENOENT_snapshot_tree)
@@ -1282,7 +1282,7 @@ pub fn tree_create<'a, 't>(t: &TransAttempt<'a, 't>)
     -> Result<TransBkey<'a, 't, c::SnapshotTree>, BchError>
 {
     let mut iter = BtreeIter::uninit();
-    match t.bkey_get_empty_slot(&mut iter, c::btree_id::snapshot_trees, POS_MIN,
+    match t.bkey_get_empty_slot(&mut iter, Btree::snapshot_trees, POS_MIN,
                                 pos(0, u32::MAX as u64)) {
         Err(e) if e.matches(bch_errcode::BCH_ERR_ENOSPC_btree_slot) =>
             return t.fs().throw(bch_errcode::BCH_ERR_ENOSPC_snapshot_tree),
@@ -1311,7 +1311,7 @@ fn create_snapids(
     let fs = t.fs();
     let depth = fs.snapshots.depth(parent);
 
-    let mut iter = BtreeIter::new(t, c::btree_id::snapshots, POS_MIN, BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(t, Btree::snapshots, POS_MIN, BtreeIterFlags::INTENT);
     iter.peek(t)?;
 
     for (new_id, &subvol) in new_snapids.iter_mut().zip(subvols) {
@@ -1356,7 +1356,7 @@ fn node_create_children(
     let fs = t.fs();
 
     let mut n_parent: TransBkey<'_, '_, c::Snapshot> =
-        match t.bkey_get_mut(c::btree_id::snapshots, pos(0, parent as u64),
+        match t.bkey_get_mut(Btree::snapshots, pos(0, parent as u64),
                              BtreeIterFlags::empty(), UpdateTriggerFlags::empty()) {
             Err(e) if e.matches(c::ENOENT) => {
                 bch_err!(fs, "snapshot {parent} not found");
@@ -1428,7 +1428,7 @@ pub fn table_rebuild_if_needed(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
 /// variants, so the stale window ends before anything trusts the bitmaps.
 fn table_rebuild(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
-    let mut iter = BtreeIter::new(trans, c::btree_id::snapshots, POS_MAX, BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(trans, Btree::snapshots, POS_MAX, BtreeIterFlags::empty());
     iter.for_each_reverse(trans, POS_MIN, |_, _, k| mark_snapshot(fs, k))?;
 
     fs.snapshots.need_table_rebuild.store(false, Ordering::Relaxed);
@@ -1449,7 +1449,7 @@ fn snapshots_read(fs: &Fs) -> Result<(), BchError> {
     // initialized - so mark in reverse:
     let trans = crate::btree_trans!(fs);
     let mut nr_empty_interior = 0;
-    let mut iter = BtreeIter::new(&trans, c::btree_id::snapshots, POS_MAX, BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(&trans, Btree::snapshots, POS_MAX, BtreeIterFlags::empty());
     iter.for_each_reverse(&trans, POS_MIN, |t, _, k| {
         mark_snapshot(fs, k)?;
         delete::check_snapshot_needs_deletion(t, k, &mut nr_empty_interior);
@@ -1472,13 +1472,13 @@ crate::recovery_pass!(bch2_snapshots_read => snapshots_read);
 
 /// ENOENT if there's none.
 pub fn lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::Snapshot, BchError> {
-    t.bkey_get_val::<c::Snapshot>(c::btree_id::snapshots, pos(0, id as u64),
+    t.bkey_get_val::<c::Snapshot>(Btree::snapshots, pos(0, id as u64),
                                   BtreeIterFlags::empty())
 }
 
 /// ENOENT if there's none.
 pub fn lookup_key(t: &TransAttempt<'_, '_>, id: u32) -> Result<BkeyI<c::Snapshot>, BchError> {
-    t.bkey_get_key::<c::Snapshot>(c::btree_id::snapshots, pos(0, id as u64),
+    t.bkey_get_key::<c::Snapshot>(Btree::snapshots, pos(0, id as u64),
                                   BtreeIterFlags::empty())
 }
 
@@ -1497,7 +1497,7 @@ pub fn check_key_has_snapshot<'a>(
 
 /// The snapshots that have overwritten the key at @pos in @btree: on each
 /// branch, the one closest to @pos.snapshot.
-pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos)
+pub fn overwrites(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos)
     -> Result<KVVec<u32>, BchError>
 {
     let mut ids = KVVec::new();
@@ -1523,7 +1523,7 @@ pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos)
 
 /// Whether a descendant of @pos.snapshot has its own version of the key at
 /// @pos in @btree: overwrote it there.
-pub fn has_overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos)
+pub fn has_overwrites(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos)
     -> Result<bool, BchError>
 {
     // Descendants have lower IDs: none below snapshot 0
@@ -1547,7 +1547,7 @@ pub fn has_overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos)
 #[c_export]
 pub unsafe extern "C" fn __bch2_key_has_snapshot_overwrites<'t>(
     trans: &'t BtreeTrans<'t>,
-    btree: c::btree_id,
+    btree: Btree,
     pos:   Bpos,
 ) -> c_int {
     match has_overwrites(&unsafe { trans.attempt_in_progress() }, btree, pos) {
@@ -1564,7 +1564,7 @@ pub unsafe extern "C" fn __bch2_key_has_snapshot_overwrites<'t>(
 #[c_export]
 pub unsafe extern "C" fn bch2_insert_snapshot_whiteouts<'t>(
     trans:   &'t BtreeTrans<'t>,
-    btree:   c::btree_id,
+    btree:   Btree,
     old_pos: Bpos,
     new_pos: Bpos,
 ) -> c_int {

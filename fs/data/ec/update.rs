@@ -28,7 +28,7 @@ use crate::{bch_err, fs_inconsistent, fsck_err_flags, logged_ops, prt};
 use core::mem::size_of;
 use core::ops::RangeInclusive;
 use cstruct_macros::c_export;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 // ── A stripe block's extents ─────────────────────────────────────────────
 //
@@ -44,16 +44,16 @@ use crate::format::Bpos;
 pub(crate) type Extent<'k, 'a> = Option<(&'k BtreeIter<'a>, BkeySC<'k>)>;
 
 /// Where block @block's backpointers are.
-fn block_bps(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: u32) -> (c::btree_id, RangeInclusive<Bpos>) {
+fn block_bps(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: u32) -> (Btree, RangeInclusive<Bpos>) {
     let ptr = &s.v().block_ptrs()[block as usize];
 
     // C's bch2_dev_bkey_tryget() drops the error of scheduling the repair of
     // a missing device it reports
     match fs.dev_bkey_tryget(s.untyped(), ptr.dev().into()).unwrap_or(None) {
-        Some(ca) => (c::btree_id::backpointers, BackpointerPos::bucket_range(&ca, ca.ptr_bucket_pos(ptr))),
+        Some(ca) => (Btree::backpointers, BackpointerPos::bucket_range(&ca, ca.ptr_bucket_pos(ptr))),
         None => {
             let dev = BackpointerPos::ec_removed_dev(s.k.p.offset, block);
-            (c::btree_id::stripe_backpointers, pos(dev, 0)..=pos(dev, u64::MAX))
+            (Btree::stripe_backpointers, pos(dev, 0)..=pos(dev, u64::MAX))
         }
     }
 }
@@ -78,7 +78,7 @@ where
             let Some(bp) = bp_k.arm::<c::Backpointer>() else { return Ok(()) };
 
             // the stripe's own
-            if bp.v().target().btree == c::btree_id::stripes {
+            if bp.v().target().btree == Btree::stripes {
                 return Ok(());
             }
             // a btree node - not erasure coded, so the caller decides how bad
@@ -319,7 +319,7 @@ pub fn resume_logged_op(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), 
     let (old_idx, new_idx) = (op.v.old_idx.get(), op.v.new_idx.get());
 
     let get = |idx| lockrestart_do(trans, |t| {
-        let mut iter = BtreeIter::new(t, c::btree_id::stripes, pos(0, idx), BtreeIterFlags::CACHED);
+        let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, idx), BtreeIterFlags::CACHED);
         let k = iter.peek_slot(t)?.expect("a slot always has a key");
         Ok(k.arm::<c::Stripe>().is_some().then(|| BkeyBuf::from_key(k)))
     });

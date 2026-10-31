@@ -13,6 +13,7 @@ use crate::btree::iter::{
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
+use crate::format::Btree;
 
 fn fix_reflink_p_key<'t>(
     t:    &TransAttempt<'_, 't>,
@@ -42,7 +43,7 @@ fn fix_reflink_p(fs: &Fs) -> Result<(), BchError> {
     }
 
     let trans = crate::btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::extents, POS_MIN,
+    let mut iter = BtreeIter::new(&trans, Btree::extents, POS_MIN,
         BtreeIterFlags::INTENT | BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
 
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC,

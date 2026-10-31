@@ -14,6 +14,7 @@ use clap::Parser;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::util::read_flag_list;
 use crate::wrappers::journal::JournalReplays;
+use bcachefs_kernel::format::Btree;
 
 // ---- entry classification ----
 
@@ -695,7 +696,7 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
 
     if let Some(ref btree_arg) = cli.btree {
         let (sign, rest) = parse_sign(btree_arg);
-        f.btree_filter = read_flag_list(rest, bcachefs_kernel::names_by_value!(bcachefs_kernel::c::btree_id), "btree id")?;
+        f.btree_filter = read_flag_list(rest, bcachefs_kernel::names_by_value!(Btree), "btree id")?;
         if sign < 0 {
             f.btree_filter = !f.btree_filter;
         }

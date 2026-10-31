@@ -13,6 +13,7 @@ use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
 use core::mem::MaybeUninit;
 use cstruct_macros::c_export;
+use crate::format::Btree;
 
 // ── bkey methods ─────────────────────────────────────────────────────────
 
@@ -63,7 +64,7 @@ pub fn bch2_btree_ptr_v2_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, k: B
 }
 
 #[c_export]
-pub fn bch2_btree_ptr_v2_compat(btree: c::btree_id, version: c_uint, big_endian: c_uint, write: c_int,
+pub fn bch2_btree_ptr_v2_compat(btree: Btree, version: c_uint, big_endian: c_uint, write: c_int,
                                 k: BkeyS<'_>) {
     btree_ptr_v2_compat(btree, c::bcachefs_metadata_version(version), big_endian != 0, write != 0, k);
 }

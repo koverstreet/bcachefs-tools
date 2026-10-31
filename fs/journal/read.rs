@@ -2,6 +2,7 @@
 
 use crate::types::DArray;
 use cstruct_macros::{CStruct, c_extern, c_typedef};
+use crate::format::Btree;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -94,8 +95,8 @@ pub fn entry_type(entry: &Head<c::jset_entry>) -> c::bch_jset_entry_type {
 }
 
 /// Convert entry btree_id byte to the enum, if it's a known btree.
-pub fn entry_btree_id(entry: &Head<c::jset_entry>) -> Option<c::btree_id> {
-    c::btree_id::from_raw(entry.btree_id as u32)
+pub fn entry_btree_id(entry: &Head<c::jset_entry>) -> Option<Btree> {
+    Btree::from_raw(entry.btree_id as u32)
 }
 
 // ---- jset_entry_log helpers ----

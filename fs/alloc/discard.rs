@@ -82,7 +82,7 @@ use crate::{bch_err_fn, bch_err_msg, fsck_err, has_bio, prt};
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
 use pin_init::{pin_data, pin_init, stack_pin_init};
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /// Discards in flight at once on a device.
 const DEV_IN_FLIGHT_MAX: u8 = 4;
@@ -408,7 +408,7 @@ impl<'a> Worker<'a> {
             return self.refused(n, bucket_size);
         }
 
-        let mut iter = BtreeIter::new(t, c::btree_id::alloc, bucket, BtreeIterFlags::CACHED);
+        let mut iter = BtreeIter::new(t, Btree::alloc, bucket, BtreeIterFlags::CACHED);
         let k = iter.peek_slot(t)?.expect("a slot always has a key");
         let a = t.alloc_to_v4_mut(k)?;
         let (seq_empty, data_type) = (a.v().journal_seq_empty, a.v().data_type);
@@ -508,7 +508,7 @@ impl<'a> Worker<'a> {
         for d in done {
             let bucket = u64_to_bucket(d.dev_bucket);
             ret = lockrestart_do(trans, |t| {
-                let mut iter = BtreeIter::new(t, c::btree_id::alloc, bucket,
+                let mut iter = BtreeIter::new(t, Btree::alloc, bucket,
                                               BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
                 let k = iter.peek_slot(t)?.expect("a slot always has a key");
                 let a = t.alloc_to_v4_mut(k)?;
@@ -587,7 +587,7 @@ fn calculate_discard_sectors_to_release(trans: &BtreeTrans<'_>, s: &DiscardState
     }
 
     let mut release = r.release;
-    let mut iter = BtreeIter::new(trans, c::btree_id::need_discard, start, BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(trans, Btree::need_discard, start, BtreeIterFlags::empty());
     let walked = iter.for_each(trans, |_, _, k| {
         let journal_seq = k.k.p.inode;
         let bucket = u64_to_bucket(k.k.p.offset);
@@ -626,7 +626,7 @@ fn do_discards(fs: &Fs) {
 
         // need_discard, by the journal seq each bucket was emptied at, up to
         // what the journal's flushed and can no longer rewind past
-        let mut iter = BtreeIter::new(&trans, c::btree_id::need_discard, POS_MIN, BtreeIterFlags::empty());
+        let mut iter = BtreeIter::new(&trans, Btree::need_discard, POS_MIN, BtreeIterFlags::empty());
         let mut ret = iter.for_each(&trans, |t, _, k| {
             let journal_seq = k.k.p.inode;
             let p = k.k.p;
@@ -852,7 +852,7 @@ fn invalidate_one_bp(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, bp: BkeySC<'_, c
 
     if !n.as_sc().can_read(fs) {
         n.set_error(fs, c::bch_key_type_errors::KEY_TYPE_ERROR_device_removed);
-        damage::record_data_loss(t, c::btree_id(bp.v().btree_id.into()), n.k().p, id::data_lost_device_removed)?;
+        damage::record_data_loss(t, Btree(bp.v().btree_id.into()), n.k().p, id::data_lost_device_removed)?;
     }
     Ok(())
 }
@@ -870,7 +870,7 @@ fn invalidate_one_bucket_by_bps(trans: &BtreeTrans<'_>, ca: &c::bch_dev, bucket:
     let res = DiskReservation::new(trans.fs());
     let bp_range = BackpointerPos::bucket_range(ca, bucket);
 
-    BtreeIter::new(trans, c::btree_id::backpointers, *bp_range.start(), BtreeIterFlags::empty())
+    BtreeIter::new(trans, Btree::backpointers, *bp_range.start(), BtreeIterFlags::empty())
         .for_each_max_commit(trans, *bp_range.end(), BtreeIterFlags::empty(), Some(&res),
                              CommitOpts::new().watermark(Watermark::BTREE_COPYGC).flags(CommitFlags::NO_ENOSPC),
                              |t, _, k| {
@@ -894,7 +894,7 @@ fn invalidate_one_bucket(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, lru_k: BkeyS
     if fs.dev_bucket_tryget_noerror(bucket).is_none() {
         if fsck_err!(t, id::lru_entry_to_invalid_bucket,
                      "lru key points to nonexistent device:bucket {}:{}", { bucket.inode }, { bucket.offset })? {
-            return t.bit_mod_buffered(c::btree_id::lru, lru_pos, false);
+            return t.bit_mod_buffered(Btree::lru, lru_pos, false);
         }
         return Ok(());
     }
@@ -903,7 +903,7 @@ fn invalidate_one_bucket(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, lru_k: BkeyS
         return Ok(());
     }
 
-    let mut alloc_iter = BtreeIter::new(t, c::btree_id::alloc, bucket, BtreeIterFlags::CACHED);
+    let mut alloc_iter = BtreeIter::new(t, Btree::alloc, bucket, BtreeIterFlags::CACHED);
     let alloc_k = alloc_iter.peek_slot(t)?.expect("a slot always has a key");
     let a = alloc_to_v4(alloc_k);
 
@@ -952,7 +952,7 @@ pub(crate) fn do_invalidates_work(ca: &c::bch_dev) {
             if nr == 0 {
                 break;
             }
-            BtreeIter::new(&trans, c::btree_id::lru, LruPos::new(dev, start, 0).to_bpos(), BtreeIterFlags::empty())
+            BtreeIter::new(&trans, Btree::lru, LruPos::new(dev, start, 0).to_bpos(), BtreeIterFlags::empty())
                 .for_each_max(&trans, end, |t, _, k| {
                     invalidate_one_bucket(t, ca, k, &mut last_flushed, &mut nr)?;
                     if nr == 0 {

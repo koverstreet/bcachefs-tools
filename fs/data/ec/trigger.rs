@@ -38,7 +38,7 @@ use arrayvec::ArrayVec;
 use core::ops::ControlFlow;
 use cstruct_macros::{c_export, c_extern};
 use core::ffi::c_int;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 c_extern! {
     pub fn bch2_stripe_tryget_existing(iter: *mut c::btree_iter) -> c_int;
@@ -51,7 +51,7 @@ impl TransAttempt<'_, '_> {
     pub fn bucket_nr_stripes(&self, bucket: Bpos) -> Result<u32, BchError> {
         let b = bucket_to_u64(bucket);
         let mut nr = 0;
-        BtreeIter::new(self, c::btree_id::bucket_to_stripe, pos(b, 0), BtreeIterFlags::empty())
+        BtreeIter::new(self, Btree::bucket_to_stripe, pos(b, 0), BtreeIterFlags::empty())
             .for_each_max_norestart(self, pos(b, u64::MAX), |_, _| {
                 nr += 1;
                 Ok(ControlFlow::<()>::Continue(()))
@@ -238,7 +238,7 @@ fn mark_stripe_bucket_alloc(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, s: Stripe
     }
 
     if flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
-        t.bit_mod(c::btree_id::bucket_to_stripe, pos(bucket_to_u64(bucket), s.k.p.offset), !deleting)?;
+        t.bit_mod(Btree::bucket_to_stripe, pos(bucket_to_u64(bucket), s.k.p.offset), !deleting)?;
     }
 
     if !deleting {
@@ -329,7 +329,7 @@ fn mark_stripe_bp(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, insert: bool
         return Ok(());
     }
 
-    let mut bp = extent_ptr_to_bp(fs, c::btree_id::stripes, 0, s.untyped(), &d);
+    let mut bp = extent_ptr_to_bp(fs, Btree::stripes, 0, s.untyped(), &d);
     bucket_backpointer_mod(t, s.untyped(), &mut bp, insert)
 }
 
@@ -421,13 +421,13 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchEr
         // bypass it, and trip the commit's assert. The btree's delete runs
         // this trigger again, which cleans up after it.
         if unlikely(new_lru == STRIPE_LRU_POS_EMPTY) && !fs.stripe_is_open(idx) {
-            return t.delete(c::btree_id::stripes, op.new.k.p, F::OVERWRITE_TRIGGERED);
+            return t.delete(Btree::stripes, op.new.k.p, F::OVERWRITE_TRIGGERED);
         }
 
         lru_change(t, LruId::Stripes, idx, old_lru, new_lru)?;
 
         if needs_reconcile_delta != 0 {
-            t.bit_mod_buffered(c::btree_id::reconcile_hipri, data_to_rb_work_pos(c::btree_id::stripes, op.new.k.p),
+            t.bit_mod_buffered(Btree::reconcile_hipri, data_to_rb_work_pos(Btree::stripes, op.new.k.p),
                                needs_reconcile_delta > 0)?;
         }
     }

@@ -12,7 +12,7 @@
 
 use cstruct_macros::{c_enum, c_extern};
 use crate::util::Printbuf;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 c_enum! {
     #[closed]
@@ -121,7 +121,7 @@ impl HashTable for Dirents {
     type Key<'k> = OsStr;
     type Val = c::Dirent;
 
-    const BTREE: c::btree_id = c::btree_id::dirents;
+    const BTREE: Btree = Btree::dirents;
 
     fn hash_key(info: &c::bch_hash_info, key: &OsStr) -> u64 {
         hash(info, key)
@@ -497,7 +497,7 @@ pub fn empty_dir_snapshot(
     subvol:   u32,
     snapshot: u32,
 ) -> Result<(), BchError> {
-    let mut iter = BtreeIter::new(t, c::btree_id::dirents, spos(dir, 0, snapshot),
+    let mut iter = BtreeIter::new(t, Btree::dirents, spos(dir, 0, snapshot),
                                   BtreeIterFlags::empty());
     iter.for_each_max_norestart(t, pos(dir, u64::MAX), |_, k| {
         let Some(d) = Dirent::new(k) else { return Ok(()) };
@@ -570,7 +570,7 @@ pub fn readdir(
     ctx.fault_in();
 
     let trans = crate::btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::dirents, pos(dir.inum, ctx.pos()),
+    let mut iter = BtreeIter::new(&trans, Btree::dirents, pos(dir.inum, ctx.pos()),
                                   BtreeIterFlags::empty());
 
     subvolume::for_each_in_subvolume_max_in_trans(&trans, &mut iter, pos(dir.inum, u64::MAX),
@@ -798,7 +798,7 @@ fn lookup_first_inode(t: &TransAttempt<'_, '_>, inum: u64)
     -> Result<c::bch_inode_unpacked, BchError>
 {
     let fs = t.fs();
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, pos(0, inum),
+    let mut iter = BtreeIter::new(t, Btree::inodes, pos(0, inum),
                                   BtreeIterFlags::ALL_SNAPSHOTS);
 
     let ret = iter.for_each_norestart(t, |_, k| Ok(
@@ -819,7 +819,7 @@ pub fn fsck_remove(t: &TransAttempt<'_, '_>, pos: Bpos) -> Result<(), BchError> 
     let dir = lookup_first_inode(t, pos.inode)?;
     let hash_info = str_hash::hash_info_init_unchecked(t.fs(), &dir);
 
-    let mut iter = BtreeIter::new(t, c::btree_id::dirents, pos, BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(t, Btree::dirents, pos, BtreeIterFlags::INTENT);
     iter.traverse(t)?;
     str_hash::delete_at::<Dirents>(t, &hash_info, &mut iter,
                                    UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)

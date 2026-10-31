@@ -63,14 +63,14 @@ use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
 use core::ops::{ControlFlow, RangeInclusive};
 use cstruct_macros::{c_export, CStruct};
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /// A backpointer scan in progress: alloc/backpointers.rs's BpScanIter.
 #[repr(C)]
 #[derive(CStruct)]
 pub struct bp_scan_iter {
     /* BTREE_ID_backpointers, BTREE_ID_stripe_backpointers */
-    pub btree: c::btree_id,
+    pub btree: Btree,
     pub pos: Bpos,
     pub nr_flushes: u64,
     pub progress: *mut c::progress_indicator,
@@ -163,7 +163,7 @@ pub fn bch2_backpointer_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>
         (None, _)              => prt!(out, "pos={}:{} ", { p.inode }, { p.offset }),
     }
 
-    unsafe { c::bch2_btree_id_level_to_text(out.as_raw(), c::btree_id(v.btree_id.into()), v.level.into()) };
+    unsafe { c::bch2_btree_id_level_to_text(out.as_raw(), Btree(v.btree_id.into()), v.level.into()) };
     prt!(out, " data_type=");
     c::bch_data_type(v.data_type.into()).to_text(out);
     match fs {
@@ -201,13 +201,13 @@ pub fn bch2_backpointer_swab(_c: Option<&Fs>, k: BkeyS<'_>) {
 impl c::Backpointer {
     /// The btree it's in - not the one it points into, target()'s: stripe
     /// blocks on removed devices have a btree of their own.
-    pub fn bp_btree(&self) -> c::btree_id {
-        if self.stripe_ptr() { c::btree_id::stripe_backpointers } else { c::btree_id::backpointers }
+    pub fn bp_btree(&self) -> Btree {
+        if self.stripe_ptr() { Btree::stripe_backpointers } else { Btree::backpointers }
     }
 
     /// What it points to.
     pub fn target(&self) -> c::bbpos {
-        c::bbpos { btree: c::btree_id(self.btree_id.into()), pos: self.pos }
+        c::bbpos { btree: Btree(self.btree_id.into()), pos: self.pos }
     }
 
     /// Its reconcile phys bits: its extent's work, for a pointer on a
@@ -255,7 +255,7 @@ fn extent_ptr_to_bp_pos(fs: &Fs, k: BkeySC<'_>, p: &c::extent_ptr_decoded) -> Bp
     ret
 }
 
-pub fn extent_ptr_to_bp(fs: &Fs, btree: c::btree_id, level: u32, k: BkeySC<'_>, d: &DecodedPtr<'_>)
+pub fn extent_ptr_to_bp(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, d: &DecodedPtr<'_>)
     -> BkeyI<c::Backpointer>
 {
     let dev = u32::from(d.p.ptr.dev());
@@ -359,7 +359,7 @@ pub fn bucket_backpointer_mod(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, bp: 
 
 // ── What a backpointer points to ─────────────────────────────────────────
 
-fn extent_matches_bp(fs: &Fs, btree: c::btree_id, level: u32, k: BkeySC<'_>,
+fn extent_matches_bp(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>,
                      bp: BkeySC<'_, c::Backpointer>) -> bool {
     let Some(kp) = k.arm::<Ptrs>() else { return false };
 
@@ -377,7 +377,7 @@ fn hole_at(pos: Bpos) -> BkeyI<c::Deleted> {
 }
 
 /// Commits.
-pub(super) fn backpointer_del(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos) -> Result<(), BchError> {
+pub(super) fn backpointer_del(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos) -> Result<(), BchError> {
     if !debug_params::backpointers_no_use_write_buffer() {
         t.bit_mod_buffered(btree, pos, false)?;
     } else {
@@ -416,7 +416,7 @@ fn backpointer_target_not_found(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Back
 
     if let Some(kp) = target.arm::<Ptrs>() {
         for d in kp.ptrs_decoded(fs).filter(|d| u64::from(d.p.ptr.dev()) == bp.k.p.inode) {
-            let bp2 = extent_ptr_to_bp(fs, c::btree_id(v.btree_id.into()), v.level.into(), target, &d);
+            let bp2 = extent_ptr_to_bp(fs, Btree(v.btree_id.into()), v.level.into(), target, &d);
             prt!(&mut buf, "\nwant:  {}", BkeySC::<c::Backpointer>::from(&bp2).to_text(fs));
         }
     }
@@ -450,7 +450,7 @@ fn get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
 {
     let fs = t.fs();
     let v = *bp.v();
-    let btree = c::btree_id(v.btree_id.into());
+    let btree = Btree(v.btree_id.into());
 
     assert!(v.level != 0, "a btree node's backpointer at level 0");
 
@@ -485,7 +485,7 @@ pub(super) fn get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Bac
 {
     let fs = t.fs();
     let v = *bp.v();
-    let btree = c::btree_id(v.btree_id.into());
+    let btree = Btree(v.btree_id.into());
 
     if unlikely(u32::from(v.btree_id) >= fs.btree_id_nr_alive()) {
         return Ok(None);
@@ -560,7 +560,7 @@ pub unsafe fn bch2_backpointer_get_key<'t>(trans: &'t BtreeTrans<'t>, bp: c::bke
 // ── Backpointers in the order of what they point to ──────────────────────
 
 impl c::bp_scan_iter {
-    fn new(btree: c::btree_id, pos: Bpos, progress: *mut c::progress_indicator) -> Self {
+    fn new(btree: Btree, pos: Bpos, progress: *mut c::progress_indicator) -> Self {
         Self { btree, pos, nr_flushes: 0, progress, batch: KVVec::new() }
     }
 
@@ -656,7 +656,7 @@ pub struct BpScanIter<'p> {
 }
 
 impl<'p> BpScanIter<'p> {
-    pub fn new(btree: c::btree_id, start: Bpos, progress: Option<&'p Progress<'_>>) -> Self {
+    pub fn new(btree: Btree, start: Bpos, progress: Option<&'p Progress<'_>>) -> Self {
         let progress = progress.map_or(core::ptr::null_mut(), Progress::as_raw);
         Self { raw: c::bp_scan_iter::new(btree, start, progress), _progress: PhantomData }
     }

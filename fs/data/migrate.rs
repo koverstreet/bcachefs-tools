@@ -61,6 +61,7 @@ use crate::prt;
 use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
 use cstruct_macros::c_export;
+use crate::format::Btree;
 
 /// A backpointer to a node being replaced: its replacement isn't reachable
 /// yet, and has backpointers of its own for the next scan.
@@ -257,8 +258,8 @@ impl DevDrop<'_> {
         let res = DiskReservation::new(fs);
 
         // FIXME: this does not handle unknown btrees with data pointers
-        for btree in (0..c::btree_id::BTREE_ID_NR.0).map(c::btree_id) {
-            if !btree.has_data_ptrs() || btree == c::btree_id::stripes {
+        for btree in (0..Btree::BTREE_ID_NR.0).map(Btree) {
+            if !btree.has_data_ptrs() || btree == Btree::stripes {
                 continue;
             }
 
@@ -280,7 +281,7 @@ impl DevDrop<'_> {
 
         let trans = crate::btree_trans!(fs);
 
-        for btree in (0..fs.btree_id_nr_alive()).map(c::btree_id) {
+        for btree in (0..fs.btree_id_nr_alive()).map(Btree) {
             BtreeLevels { btree, levels: 1..c::BTREE_MAX_DEPTH + 1, start: POS_MIN, end: SPOS_MAX }
                 .for_each_btree_ptr_commit(&trans, None, CommitFlags::empty(), |t, iter, level, k| {
                     progress.update(t, iter)?;
@@ -327,7 +328,7 @@ impl DevDrop<'_> {
 fn dev_data_drop(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchError> {
     let p = c::progress_indicator::default();
 
-    let user = crate::BTREE_HAS_DATA_PTRS_MASK & !(1 << c::btree_id::stripes.0);
+    let user = crate::BTREE_HAS_DATA_PTRS_MASK & !(1 << Btree::stripes.0);
     d.usrdata(fs, &Progress::new(&p, fs, c"dropping user data", user, 0))?;
     d.metadata(fs, &Progress::new(&p, fs, c"dropping metadata", !0, !0))
 }
@@ -350,7 +351,7 @@ fn dev_data_drop_by_backpointers(fs: &Fs, ca: &c::bch_dev, mut d: DevDrop<'_>) -
     let trans = crate::btree_trans!(fs);
     let mut last_flushed = WbMaybeFlush::new()?;
     let p = c::progress_indicator::default();
-    let progress = Progress::new(&p, fs, c"dropping device data", 1 << c::btree_id::backpointers.0, 0);
+    let progress = Progress::new(&p, fs, c"dropping device data", 1 << Btree::backpointers.0, 0);
 
     let mut min_data_buckets = u64::MAX;
     let mut nr_stalled = 0;
@@ -364,7 +365,7 @@ fn dev_data_drop_by_backpointers(fs: &Fs, ca: &c::bch_dev, mut d: DevDrop<'_>) -
         fs.btree_interior_updates_flush();
         trans.write_buffer_flush_sync()?;
 
-        BpScanIter::new(c::btree_id::backpointers, pos(d.dev.into(), 0), Some(&progress))
+        BpScanIter::new(Btree::backpointers, pos(d.dev.into(), 0), Some(&progress))
             .for_each(&trans, pos(d.dev.into(), u64::MAX), last_flushed.borrow(), |t, bp, mut last_flushed| {
                 // What maybe_flush() rate limits its flushes against
                 last_flushed.inc();
@@ -412,12 +413,12 @@ fn dev_remove_stripes(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchError> {
     for _ in 0..MAX_ITER {
         let mut had_open = false;
 
-        BtreeIter::new(&trans, c::btree_id::bucket_to_stripe, start, BtreeIterFlags::INTENT)
+        BtreeIter::new(&trans, Btree::bucket_to_stripe, start, BtreeIterFlags::INTENT)
             .for_each_max_commit(&trans, end, BtreeIterFlags::empty(), None, CommitFlags::empty(), |t, _, r| {
                 // The stripe may be gone since: the flush lets creates
                 // finish, and a reshape deletes the old one - which no
                 // longer points to the device, success.
-                let mut iter = BtreeIter::new(t, c::btree_id::stripes, pos(0, r.k.p.offset), BtreeIterFlags::INTENT);
+                let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, r.k.p.offset), BtreeIterFlags::INTENT);
                 let (iter, k) = iter.peek_slot_shared(t)?;
                 d.stripe(t, iter, k, &mut had_open, &mut recorded)
             })?;

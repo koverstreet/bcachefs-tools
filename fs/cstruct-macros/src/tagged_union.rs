@@ -6,7 +6,7 @@
 //!       pub struct disk_accounting_pos {
 //!           tag type_: u8 = disk_accounting_type,
 //!           arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: bch_acct_ ## f = nr,
-//!           pad: c::bpos,
+//!           pad: Bpos,
 //!           size: pad,
 //!           packed,
 //!       }

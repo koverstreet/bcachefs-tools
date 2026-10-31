@@ -26,6 +26,7 @@ use crate::init::progress::Progress;
 use crate::snapshots::snapshot;
 use crate::xattr::Xattrs;
 use crate::{fsck_err_on, inode, str_hash};
+use crate::format::Btree;
 
 struct CheckXattrs {
     s:         SnapshotsSeen,
@@ -95,14 +96,14 @@ fn check_xattr<'t>(
 
 fn check_xattrs(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    let progress = Progress::recovery(fs, c"bch2_check_xattrs", &[c::btree_id::xattrs], &[]);
+    let progress = Progress::recovery(fs, c"bch2_check_xattrs", &[Btree::xattrs], &[]);
     let mut st = CheckXattrs {
         s:         SnapshotsSeen::new(),
         inode:     InodeWalker::new(),
         hash_info: Default::default(),
     };
 
-    let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs,
+    let mut iter = BtreeIter::new(&trans, Btree::xattrs,
                                   pos(c::BCACHEFS_ROOT_INO as u64, 0),
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
 

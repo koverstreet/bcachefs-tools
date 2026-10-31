@@ -29,6 +29,7 @@ use crate::util::ffi::{bytes, c_char, opt_bytes, opt_bytes_mut, Opaque};
 use crate::util::os_str::{cstr_name, OsStr, OsStrExt};
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
+use crate::format::Btree;
 
 /// setxattr() flags - <uapi/linux/xattr.h>:
 pub const XATTR_CREATE:  i32 = 0x1;
@@ -44,7 +45,7 @@ impl HashTable for Xattrs {
     type Key<'k> = XattrKey<'k>;
     type Val = c::Xattr;
 
-    const BTREE: c::btree_id = c::btree_id::xattrs;
+    const BTREE: Btree = Btree::xattrs;
 
     fn hash_key(info: &c::bch_hash_info, key: &XattrKey<'_>) -> u64 {
         hash(info, key.ty, key.name.as_bytes())
@@ -518,7 +519,7 @@ mod vfs {
         let mut buf = XattrBuf { buf: buffer, used: 0 };
 
         let trans = crate::btree_trans!(v.fs());
-        let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, pos(inum.inum, 0),
+        let mut iter = BtreeIter::new(&trans, Btree::xattrs, pos(inum.inum, 0),
                                       BtreeIterFlags::empty());
 
         let ret = subvolume::for_each_in_subvolume_max_in_trans(

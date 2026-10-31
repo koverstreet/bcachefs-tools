@@ -35,6 +35,7 @@ use cstruct_macros::vtable;
 use super::dentry::Dentry;
 use super::inode::{InodeInfo, InodeRef};
 use super::super_block::SuperBlock;
+use crate::format::Btree;
 
 /// A name as get_name returns it: at most NAME_MAX bytes, and a NUL.
 pub(crate) type NameBuf = [u8; c::NAME_MAX as usize + 1];
@@ -151,7 +152,7 @@ impl ExportOps for Fs {
             let bi = inode::find_by_inum_trans(t, inum, crate::c_function_name!())?;
 
             if bi.bi_dir == dir_inum.inum {
-                let mut iter = BtreeIter::new(t, c::btree_id::dirents, pos(bi.bi_dir, bi.bi_dir_offset),
+                let mut iter = BtreeIter::new(t, Btree::dirents, pos(bi.bi_dir, bi.bi_dir_offset),
                                               BtreeIterFlags::empty());
                 iter.set_snapshot(snapshot);
 
@@ -163,7 +164,7 @@ impl ExportOps for Fs {
                     return Ok(());
                 }
             } else {
-                let mut iter = BtreeIter::new(t, c::btree_id::dirents, pos(dir_inum.inum, 0),
+                let mut iter = BtreeIter::new(t, Btree::dirents, pos(dir_inum.inum, 0),
                                               BtreeIterFlags::empty());
                 iter.set_snapshot(snapshot);
 

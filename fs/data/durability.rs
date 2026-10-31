@@ -29,6 +29,7 @@ use crate::util::vstructs::Validated;
 use arrayvec::ArrayVec;
 use core::ffi::c_uint;
 use cstruct_macros::c_export;
+use crate::format::Btree;
 
 impl Fs {
     /// What a copy already on @dev is worth: nothing if the device is gone or
@@ -80,7 +81,7 @@ struct StripeDev {
 fn stripe_durability(t: &TransAttempt<'_, '_>, p: &c::extent_ptr_decoded, ret: &mut c::bkey_durability,
                      seen: &mut Seen, desired_total: Option<&mut u32>) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut iter = BtreeIter::new(t, c::btree_id::stripes, pos(0, p.ec.idx()), BtreeIterFlags::CACHED);
+    let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, p.ec.idx()), BtreeIterFlags::CACHED);
     let Some(k) = iter.peek_slot(t)? else { return Ok(()) };
     let Some(s) = k.arm::<c::Stripe>() else { return Ok(()) };
 

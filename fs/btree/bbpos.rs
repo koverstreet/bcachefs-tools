@@ -4,12 +4,12 @@ use crate::c;
 use core::cmp::Ordering;
 use cstruct_macros::{CStruct, Plain, bitfield};
 use nestify::nest;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain)]
 pub struct bbpos {
-    pub btree: c::btree_id,
+    pub btree: Btree,
     pub pos: Bpos,
 }
 
@@ -28,7 +28,7 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u16)]
         pub bits: pub struct blbpos_bits {
-            #[bits(16)] pub btree: c::btree_id,
+            #[bits(16)] pub btree: Btree,
         },
         pub level: u16,
         pub pos: Bpos,
@@ -62,10 +62,10 @@ impl Ord for c::bbpos {
 }
 
 impl c::bbpos {
-    pub const MIN: Self = c::bbpos { btree: c::btree_id(0), pos: crate::btree::bkey::POS_MIN };
+    pub const MIN: Self = c::bbpos { btree: Btree(0), pos: crate::btree::bkey::POS_MIN };
     /// The last of BTREE_ID_NR - 1.
     pub const MAX: Self = c::bbpos {
-        btree: c::btree_id(c::BTREE_ID_NR as u32 - 1),
+        btree: Btree(c::BTREE_ID_NR as u32 - 1),
         pos:   crate::btree::bkey::SPOS_MAX,
     };
 
@@ -76,7 +76,7 @@ impl c::bbpos {
         }
 
         assert!(self.btree.0 != c::BTREE_ID_NR as u32, "no position after the last btree's last");
-        c::bbpos { btree: c::btree_id(self.btree.0 + 1), pos: crate::btree::bkey::POS_MIN }
+        c::bbpos { btree: Btree(self.btree.0 + 1), pos: crate::btree::bkey::POS_MIN }
     }
 }
 
@@ -98,7 +98,7 @@ impl FromStr for c::bbpos {
 
         let (btree_s, pos_s) = s.split_once(':').ok_or_else(err)?;
 
-        let btree: c::btree_id = btree_s.parse().map_err(|_| err())?;
+        let btree: Btree = btree_s.parse().map_err(|_| err())?;
         let pos: Bpos = pos_s.parse().map_err(|_| err())?;
 
         Ok(c::bbpos { btree, pos })

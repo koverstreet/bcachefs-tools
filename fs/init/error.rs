@@ -51,7 +51,7 @@ use crate::locking::Locked;
 use crate::new_lock;
 use crate::types::{RustOnly, rust_only};
 use pin_init::pin_data;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /*
  * A path that fsck damaged or couldn't fully recover, remembered so we can
@@ -928,7 +928,7 @@ fn damaged_path_resolve(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32, path
         r => return r,
     }
 
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, pos(0, inum), BtreeIterFlags::ALL_SNAPSHOTS);
+    let mut iter = BtreeIter::new(t, Btree::inodes, pos(0, inum), BtreeIterFlags::ALL_SNAPSHOTS);
     let mut ret = Ok(());
     while let Some(k) = iter.peek(t)? {
         if k.k.p.offset != inum {

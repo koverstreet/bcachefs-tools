@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::c_uint;
 use cstruct_macros::CStruct;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /*
  * A btree and level's journal keys, from @pos: at index @idx, as of the keys'
@@ -15,7 +15,7 @@ use crate::format::Bpos;
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct journal_iter {
-    pub btree_id: c::btree_id,
+    pub btree_id: Btree,
     pub level: c_uint,
     pub idx: usize,
     pub seq: u64,

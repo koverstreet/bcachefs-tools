@@ -50,6 +50,7 @@ use crate::{fs_inconsistent, fsck_err, fsck_err_on, prt};
 use core::ffi::{c_int, c_uint};
 use core::ops::ControlFlow;
 use cstruct_macros::{c_export, c_const};
+use crate::format::Btree;
 
 // bch2_create_trans()'s flags:
 c_const! { pub const BCH_CREATE_TMPFILE: u32 = 1 << 0; }
@@ -471,7 +472,7 @@ pub fn unlink_trans(
 fn subvol_update_parent(t: &TransAttempt<'_, '_>, subvol: u32, new_parent: u32)
     -> Result<(), BchError>
 {
-    let mut s = t.bkey_get_mut::<c::Subvolume>(c::btree_id::subvolumes, pos(0, subvol as u64),
+    let mut s = t.bkey_get_mut::<c::Subvolume>(Btree::subvolumes, pos(0, subvol as u64),
                                                BtreeIterFlags::CACHED, UpdateTriggerFlags::empty())?;
     s.v_mut().fs_path_parent = new_parent.into();
     Ok(())
@@ -700,7 +701,7 @@ pub fn inode_get_dirent<'i, 'a>(
     // child snapshot we'll be moving to:
     *snapshot = t.fs().snapshots.redundant_interior(*snapshot).unwrap_or(*snapshot);
 
-    *iter = BtreeIter::new(t, c::btree_id::dirents,
+    *iter = BtreeIter::new(t, Btree::dirents,
                            spos(inode.bi_dir, inode.bi_dir_offset, *snapshot),
                            BtreeIterFlags::empty());
     iter.peek_slot_typed::<c::Dirent>(t).map(BkeySC::untyped)
@@ -743,7 +744,7 @@ impl PathUp {
 
 /// The snapshot of the first version of inode @inum.
 fn first_inode_snapshot(t: &TransAttempt<'_, '_>, inum: u64) -> Result<u32, BchError> {
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, pos(0, inum),
+    let mut iter = BtreeIter::new(t, Btree::inodes, pos(0, inum),
                                   BtreeIterFlags::ALL_SNAPSHOTS);
 
     iter.for_each_max_norestart(t, spos(0, inum, u32::MAX), |_, k| Ok(
@@ -1032,7 +1033,7 @@ fn check_dirent_inode_dirent(
         return inode::fsck_write(t, target);
     }
 
-    let mut bp_iter = BtreeIter::new(t, c::btree_id::dirents,
+    let mut bp_iter = BtreeIter::new(t, Btree::dirents,
                                      spos(target.bi_dir, target.bi_dir_offset, target.bi_snapshot),
                                      BtreeIterFlags::empty());
     let bp = bp_iter.peek_slot_typed::<c::Dirent>(t).found()?;

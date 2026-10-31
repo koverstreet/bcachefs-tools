@@ -15,6 +15,7 @@ use crate::util::ffi::Opaque;
 use crate::util::place::Placed;
 use crate::{btree_trans, fs_inconsistent, prt};
 use cstruct_macros::c_export;
+use crate::format::Btree;
 
 // ── Stripe deletion ──────────────────────────────────────────────────────
 //
@@ -27,7 +28,7 @@ use cstruct_macros::c_export;
 /// caller holds it open, so it must exist.
 pub(crate) fn stripe_delete(t: &TransAttempt<'_, '_>, idx: u64, is_open: bool) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut iter = BtreeIter::new(t, c::btree_id::stripes, pos(0, idx), BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, idx), BtreeIterFlags::INTENT);
     let k = iter.peek_slot(t)?.expect("a slot");
 
     // checked with the stripe intent locked: an existing stripe is opened
@@ -65,7 +66,7 @@ pub(crate) fn delete_empty_stripes(ec: &c::bch_fs_ec) {
 
     // as C's: errors - going read-only - end the walk, and are dropped
     let _ = trans.write_buffer_tryflush().and_then(|_| {
-        BtreeIter::new(&trans, c::btree_id::lru, at(0), BtreeIterFlags::empty())
+        BtreeIter::new(&trans, Btree::lru, at(0), BtreeIterFlags::empty())
             .for_each_max_commit(&trans, at(u64::MAX), BtreeIterFlags::empty(), None,
                                  CommitFlags::NO_ENOSPC, |t, _, k| stripe_delete(t, k.k.p.offset, false))
     });

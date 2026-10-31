@@ -233,6 +233,7 @@ pub mod format;
 pub mod opts;
 
 pub use paste::paste;
+use crate::format::Btree;
 
 pub mod c {
     #![allow(clippy::missing_safety_doc)]
@@ -430,7 +431,7 @@ pub type metadata_version = c::bcachefs_metadata_version;
 #[allow(non_camel_case_types)]
 pub type opt_id = c::bch_opt_id;
 #[allow(non_camel_case_types)]
-pub type btree_id = c::btree_id;
+pub type btree_id = Btree;
 
 // The x-macro enums' values by their list names - btree_id::extents for
 // BTREE_ID_extents - and their count: an x-macro list, with [the enum, the
@@ -485,7 +486,7 @@ macro_rules! btree_is_data {
 }
 macro_rules! btree_ids_known {
     ($(($name:tt, $nr:literal, $($flag:tt)|+ $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        pub const BTREE_IDS_KNOWN: &[c::btree_id] = &[$(c::btree_id::[<BTREE_ID_ $name>],)*];
+        pub const BTREE_IDS_KNOWN: &[Btree] = &[$(Btree::[<BTREE_ID_ $name>],)*];
 
         /// Btrees whose keys are snapshotted; mirrors the C btree_has_snapshots_mask.
         pub const BTREE_HAS_SNAPSHOTS_MASK: u64 =
@@ -507,7 +508,7 @@ macro_rules! btree_ids_known {
 }
 c::BCH_BTREE_IDS!(btree_ids_known);
 
-impl c::btree_id {
+impl Btree {
     /// Whether its keys are extents, covering ranges: btree_id_is_extents().
     pub fn is_extents(self) -> bool {
         self.0 < 64 && BTREE_IS_EXTENTS_MASK & (1 << self.0) != 0
@@ -531,7 +532,7 @@ impl c::btree_id {
 }
 
 /// The btrees in @mask, a bit per btree id.
-pub fn btrees_in(mask: u64) -> impl Iterator<Item = c::btree_id> {
+pub fn btrees_in(mask: u64) -> impl Iterator<Item = Btree> {
     BTREE_IDS_KNOWN.iter().copied().filter(move |b| mask & (1u64 << b.0) != 0)
 }
 

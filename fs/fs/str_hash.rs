@@ -27,7 +27,7 @@ use bitflags::bitflags;
 use core::ffi::{c_int, c_void};
 use cstruct_macros::{c_export, CStruct, TypeInfo};
 use crate::types::c_default;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -54,7 +54,7 @@ pub trait HashTable {
     type Val: ?Sized + BkeyFamily<Validated: InFamily<AllTypes> + MutBkey<Mut = TableVal<Self>>>
         + 'static;
 
-    const BTREE: c::btree_id;
+    const BTREE: Btree;
 
     fn hash_key(info: &c::bch_hash_info, key: &Self::Key<'_>) -> u64;
 
@@ -494,7 +494,7 @@ pub fn check_key<T: HashTable>(
     // updating their hash positions, so every dirent looks misplaced and
     // same-length names collide: on such an image the names are meaningless,
     // and nothing is checked or "repaired".
-    if T::BTREE == c::btree_id::dirents && t.fs().dirents_sanitized() {
+    if T::BTREE == Btree::dirents && t.fs().dirents_sanitized() {
         return Ok(());
     }
 
@@ -563,7 +563,7 @@ fn dirent_has_target(t: &TransAttempt<'_, '_>, d: BkeySC<'_>) -> Result<bool, Bc
         DirentTarget::Subvol { child, .. } =>
             Ok(subvolume::get(t, child, false).found()?.is_some()),
         DirentTarget::Inode(inum) => {
-            let mut iter = BtreeIter::new(t, c::btree_id::inodes,
+            let mut iter = BtreeIter::new(t, Btree::inodes,
                                           spos(0, inum, d.k.p.snapshot), BtreeIterFlags::empty());
             Ok(inode::bkey_is_inode(iter.peek_slot(t)?.expect("a slot always has a key").k))
         }
@@ -590,7 +590,7 @@ fn hash_pick_winner<T: HashTable>(t: &TransAttempt<'_, '_>, k: TableKey<'_, T>, 
     } else if k.k.p.snapshot != dup.k.p.snapshot {
         // Delete the older key from the newer snapshot
         if k.k.p.snapshot < dup.k.p.snapshot { DeleteDup } else { DeleteK }
-    } else if T::BTREE != c::btree_id::dirents || !dirent_has_target(t, k.into())? {
+    } else if T::BTREE != Btree::dirents || !dirent_has_target(t, k.into())? {
         DeleteK
     } else if !dirent_has_target(t, dup.into())? {
         DeleteDup
@@ -609,7 +609,7 @@ enum Seen<'r> {
 }
 
 impl Seen<'_> {
-    fn get(&mut self, t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos)
+    fn get(&mut self, t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos)
         -> Result<&mut SnapshotsSeen, BchError>
     {
         match self {
@@ -831,7 +831,7 @@ impl Repair<'_> {
         new.k_mut().p.inode    = k.k.p.inode;
         new.k_mut().p.snapshot = k.k.p.snapshot;
 
-        let mut iter = BtreeIter::new(t, c::btree_id::dirents, k.k.p, BtreeIterFlags::SLOTS);
+        let mut iter = BtreeIter::new(t, Btree::dirents, k.k.p, BtreeIterFlags::SLOTS);
         delete_at::<Dirents>(t, self.hash_info, &mut iter,
                              UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 

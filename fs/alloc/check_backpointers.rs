@@ -55,7 +55,7 @@ use core::ffi::c_int;
 use core::ops::{ControlFlow, RangeInclusive};
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 // ── fsck: check_btree_backpointers ───────────────────────────────────────
 
@@ -76,12 +76,12 @@ fn check_backpointer_has_valid_bucket(t: &TransAttempt<'_, '_>, k: BkeySC<'_>,
 
         if fsck_err!(t, id::backpointer_to_missing_device, "backpointer for missing device:\n{}",
                      k.to_text(fs))? {
-            backpointer_del(t, c::btree_id::backpointers, k.k.p)?;
+            backpointer_del(t, Btree::backpointers, k.k.p)?;
         }
         return Ok(());
     };
 
-    let mut alloc_iter = BtreeIter::new(t, c::btree_id::alloc, bucket, BtreeIterFlags::empty());
+    let mut alloc_iter = BtreeIter::new(t, Btree::alloc, bucket, BtreeIterFlags::empty());
     let alloc_k = alloc_iter.peek_slot(t)?.expect("a slot always has a key");
 
     if alloc_k.k.key_type() != c::bch_bkey_type::KEY_TYPE_alloc_v4 {
@@ -90,18 +90,18 @@ fn check_backpointer_has_valid_bucket(t: &TransAttempt<'_, '_>, k: BkeySC<'_>,
         let p = alloc_iter.pos();
         if fsck_err!(t, id::backpointer_to_missing_alloc, "backpointer for nonexistent alloc key: {}:{}:0\n{}",
                      { p.inode }, { p.offset }, k.to_text(fs))? {
-            backpointer_del(t, c::btree_id::backpointers, k.k.p)?;
+            backpointer_del(t, Btree::backpointers, k.k.p)?;
         }
     }
     Ok(())
 }
 
 fn check_btree_backpointers(fs: &Fs) -> Result<(), BchError> {
-    let progress = Progress::recovery(fs, c"bch2_check_btree_backpointers", &[c::btree_id::backpointers], &[]);
+    let progress = Progress::recovery(fs, c"bch2_check_btree_backpointers", &[Btree::backpointers], &[]);
     let mut last_flushed = WbMaybeFlush::new()?;
 
     let trans = crate::btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::backpointers, POS_MIN, BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(&trans, Btree::backpointers, POS_MIN, BtreeIterFlags::empty());
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, k| {
         progress.update(t, iter)?;
         check_backpointer_has_valid_bucket(t, k, &mut last_flushed)
@@ -137,7 +137,7 @@ fn bkey_dev_ptr_stale(fs: &Fs, k: BkeySC<'_, Ptrs>, dev: u32) -> bool {
     stale
 }
 
-fn drop_double_allocation(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u8, k: BkeySC<'_, Ptrs>,
+fn drop_double_allocation(t: &TransAttempt<'_, '_>, btree: Btree, level: u8, k: BkeySC<'_, Ptrs>,
                           dev: u32)
     -> Result<(), BchError>
 {
@@ -168,7 +168,7 @@ fn double_allocation_dropped(t: &TransAttempt<'_, '_>, winner: BkeySC<'_>,
 
 /// One of two extents sharing physical space, and its logical range in the overlap.
 struct DupExtent<'k> {
-    btree:   c::btree_id,
+    btree:   Btree,
     level:   u8,
     k:       BkeySC<'k>,
     overlap: core::ops::Range<u64>,
@@ -218,9 +218,9 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut Bke
                 other_bp: BkeySC<'_, c::Backpointer>) -> Result<(), BchError> {
     let fs = t.fs();
     let dev = bp.k.p.inode as u32;
-    let btree = c::btree_id(bp.v.btree_id.into());
+    let btree = Btree(bp.v.btree_id.into());
     let ov = *other_bp.v();
-    let other_btree = c::btree_id(ov.btree_id.into());
+    let other_btree = Btree(ov.btree_id.into());
 
     let mut other_extent_iter = BtreeIter::uninit();
     let other_extent = match get_key(t, other_bp, &mut other_extent_iter, BtreeIterFlags::empty(), None, false) {
@@ -423,13 +423,13 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
     let mut nr_deletes = 0u32;
     let mut need_commit = false;
 
-    let mut iter = BtreeIter::new(t, c::btree_id::backpointers, *bp_range.start(), BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(t, Btree::backpointers, *bp_range.start(), BtreeIterFlags::empty());
     iter.for_each_max_norestart(t, *bp_range.end(), |_, bp_k| {
         let Some(bp) = bp_k.arm::<c::Backpointer>() else { return Ok(ControlFlow::Continue(())) };
         let v = *bp.v();
 
         if before_bucket_gen && (v.bucket_gen != a.generation || { v.flags } != 0) {
-            backpointer_del(t, c::btree_id::backpointers, bp_k.k.p)?;
+            backpointer_del(t, Btree::backpointers, bp_k.k.p)?;
             nr_deletes += 1;
 
             if nr_deletes > 256 {
@@ -480,7 +480,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
         }
 
         // as C's: whatever of the bucket it reads
-        let mut iter = BtreeIter::new(t, c::btree_id::backpointers, *bp_range.start(), BtreeIterFlags::empty());
+        let mut iter = BtreeIter::new(t, Btree::backpointers, *bp_range.start(), BtreeIterFlags::empty());
         let _ = iter.for_each_max_norestart(t, *bp_range.end(), |_, bp_k| {
             prt!(&mut msg, "{}\n", bp_k.to_text(fs));
             Ok(ControlFlow::<()>::Continue(()))
@@ -532,7 +532,7 @@ pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: 
         // - alloc is a cached btree, so bch2_btree_iter_flags() gives us
         // BTREE_ITER_with_key_cache, which consults an existing entry without
         // creating one.
-        let mut alloc_iter = BtreeIter::new(t, c::btree_id::alloc, pos(ca.dev_idx.into(), bucket),
+        let mut alloc_iter = BtreeIter::new(t, Btree::alloc, pos(ca.dev_idx.into(), bucket),
                                             BtreeIterFlags::empty());
         let k = alloc_iter.peek_slot(t)?.expect("a slot always has a key");
         check_bucket_backpointer_mismatch(t, k, last_flushed.reborrow(), &mut checked_bad)
@@ -582,7 +582,7 @@ struct ExtentsToBpState {
 }
 
 /// A bucket with no backpointers has them all put back without looking.
-fn check_extent_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToBpState, btree: c::btree_id,
+fn check_extent_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToBpState, btree: Btree,
                                 level: u32, k: BkeySC<'_>) -> Result<(), BchError> {
     let fs = t.fs();
     let Some(kp) = k.arm::<Ptrs>() else { return Ok(()) };
@@ -627,7 +627,7 @@ fn check_extent_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToBpSta
 }
 
 /// The root's key is checked a level above the root. Returns the root's level.
-fn check_btree_root_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToBpState, btree: c::btree_id)
+fn check_btree_root_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToBpState, btree: Btree)
     -> Result<u32, BchError>
 {
     let fs = t.fs();
@@ -652,7 +652,7 @@ fn check_extents_to_backpointers_pass(fs: &Fs, trans: &BtreeTrans<'_>, s: &mut E
     // extents btree updates always require a disk res passed in
     let res = DiskReservation::new(fs);
 
-    for btree in (0..fs.btree_id_nr_alive()).map(c::btree_id) {
+    for btree in (0..fs.btree_id_nr_alive()).map(Btree) {
         let depth = if btree.has_data_ptrs() { 0 } else { 1 };
 
         let mut root_level = 0;
@@ -682,7 +682,7 @@ fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, bucket: u
 
     let fs = t.fs();
     let bucket = pos(ca.dev_idx.into(), bucket);
-    let mut iter = BtreeIter::new(t, c::btree_id::alloc, bucket, BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(t, Btree::alloc, bucket, BtreeIterFlags::empty());
     let a = alloc_to_v4(iter.peek_slot(t)?.expect("a slot always has a key"));
 
     if c::bch_data_type(a.data_type.into()) != dt::BCH_DATA_multiple {
@@ -692,7 +692,7 @@ fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, bucket: u
     let bp_range = BackpointerPos::bucket_range(ca, bucket);
     let mut data_type = None;
     let mut mixed = false;
-    let mut iter = BtreeIter::new(t, c::btree_id::backpointers, *bp_range.start(), BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(t, Btree::backpointers, *bp_range.start(), BtreeIterFlags::empty());
     iter.for_each_max_norestart(t, *bp_range.end(), |_, bp_k| {
         let Some(bp) = bp_k.arm::<c::Backpointer>() else { return Ok(ControlFlow::Continue(())) };
         if bp.v().bucket_gen != a.generation {
@@ -756,7 +756,7 @@ fn backpointer_node_has_missing(fs: &Fs, k: BkeySC<'_>) -> bool {
     }
 }
 
-fn btree_node_get_and_pin(t: &TransAttempt<'_, '_>, pins: &BtreeCachePins<'_>, k: &BkeyI, btree: c::btree_id,
+fn btree_node_get_and_pin(t: &TransAttempt<'_, '_>, pins: &BtreeCachePins<'_>, k: &BkeyI, btree: Btree,
                           level: u32) -> Result<(), BchError> {
     let mut iter = BtreeIter::new_level(t, btree, k.k.p, level, BtreeIterFlags::empty());
     if let Some(b) = iter.peek_node(t)? {
@@ -775,7 +775,7 @@ fn pin_backpointer_nodes_with_missing(fs: &Fs, trans: &BtreeTrans<'_>, pins: &Bt
     pins.unpin();
 
     let mut mem_may_pin = pins.budget() as i64;
-    let mut iter = BtreeIter::new_level(trans, c::btree_id::backpointers, start, 1, BtreeIterFlags::PREFETCH);
+    let mut iter = BtreeIter::new_level(trans, Btree::backpointers, start, 1, BtreeIterFlags::PREFETCH);
     iter.for_each(trans, |t, iter, k| {
         if !backpointer_node_has_missing(fs, k) {
             return Ok(ControlFlow::Continue(()));
@@ -794,7 +794,7 @@ fn pin_backpointer_nodes_with_missing(fs: &Fs, trans: &BtreeTrans<'_>, pins: &Bt
     let mut end = SPOS_MAX;
     let mut pinned = SPOS_MAX;
     let mut mem_may_pin = pins.budget() as i64;
-    let mut iter = BtreeIter::new_level(trans, c::btree_id::backpointers, start, 1, BtreeIterFlags::PREFETCH);
+    let mut iter = BtreeIter::new_level(trans, Btree::backpointers, start, 1, BtreeIterFlags::PREFETCH);
     iter.for_each(trans, |t, _, k| {
         if !backpointer_node_has_missing(fs, k) {
             return Ok(ControlFlow::Continue(()));
@@ -807,7 +807,7 @@ fn pin_backpointer_nodes_with_missing(fs: &Fs, trans: &BtreeTrans<'_>, pins: &Bt
         }
 
         tmp.reassemble(k);
-        btree_node_get_and_pin(t, pins, tmp.as_ref(), c::btree_id::backpointers, 0)?;
+        btree_node_get_and_pin(t, pins, tmp.as_ref(), Btree::backpointers, 0)?;
         pinned = tmp.as_ref().k.p;
         Ok(ControlFlow::Continue(()))
     })?;
@@ -821,7 +821,7 @@ fn check_extents_to_backpointers(fs: &Fs) -> Result<(), BchError> {
     let mut s = ExtentsToBpState { bp_range: POS_MIN..=SPOS_MAX, last_flushed: WbMaybeFlush::new()? };
     let mut checked_bad = POS_MAX;
 
-    let mut iter = BtreeIter::new(&trans, c::btree_id::alloc, POS_MIN, BtreeIterFlags::PREFETCH);
+    let mut iter = BtreeIter::new(&trans, Btree::alloc, POS_MIN, BtreeIterFlags::PREFETCH);
     iter.for_each(&trans, |t, _, k| {
         passes::cancelled(fs)?;
         check_bucket_backpointer_mismatch(t, k, s.last_flushed.borrow(), &mut checked_bad)?;
@@ -908,7 +908,7 @@ fn check_bucket_backpointers_to_extents(trans: &BtreeTrans<'_>, ca: &c::bch_dev,
     let restart_count = trans.restart_count();
     let range = BackpointerPos::bucket_range(ca, bucket);
 
-    BpScanIter::new(c::btree_id::backpointers, *range.start(), None)
+    BpScanIter::new(Btree::backpointers, *range.start(), None)
         .for_each(trans, *range.end(), last_flushed, |t, bp, last_flushed| {
             check_one_backpointer(t, &(c::bbpos::MIN..=c::bbpos::MAX), bp, last_flushed)
         })?;
@@ -925,7 +925,7 @@ fn check_backpointers_to_extents_pass(fs: &Fs, trans: &BtreeTrans<'_>, range: Ra
     -> Result<(), BchError>
 {
     let mut last_flushed = WbMaybeFlush::new()?;
-    let btrees = [c::btree_id::backpointers, c::btree_id::stripe_backpointers];
+    let btrees = [Btree::backpointers, Btree::stripe_backpointers];
     let progress = Progress::recovery(fs, c"backpointers_to_extents", &btrees, &[]);
 
     for btree in btrees {
@@ -940,7 +940,7 @@ fn check_backpointers_to_extents_pass(fs: &Fs, trans: &BtreeTrans<'_>, range: Ra
 fn check_backpointers_to_extents(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     let pins = fs.btree_cache_pins();
-    let leaves = 1 << c::btree_id::extents.0 | 1 << c::btree_id::reflink.0;
+    let leaves = 1 << Btree::extents.0 | 1 << Btree::reflink.0;
     let mut start = c::bbpos::MIN;
 
     loop {

@@ -30,6 +30,7 @@ use core::ffi::CStr;
 use cstruct_macros::{c_export, CStruct};
 use crate::locking::SeqLock;
 use crate::types::rust_only;
+use crate::format::Btree;
 
 /*
  * Lame progress indicators
@@ -149,7 +150,7 @@ fn strip_bch2(msg: &'static CStr) -> &'static CStr {
         .unwrap_or(msg)
 }
 
-fn btree_mask(ids: &[c::btree_id]) -> u64 {
+fn btree_mask(ids: &[Btree]) -> u64 {
     ids.iter().fold(0u64, |m, &id| m | 1 << id.0 as u64)
 }
 
@@ -215,8 +216,8 @@ impl c::progress_indicator {
         &self,
         fs:           &Fs,
         msg:          &'static CStr,
-        leaf_btrees:  &[c::btree_id],
-        inner_btrees: &[c::btree_id],
+        leaf_btrees:  &[Btree],
+        inner_btrees: &[Btree],
     ) {
         self.init_masks(fs, Some(msg), btree_mask(leaf_btrees), btree_mask(inner_btrees))
     }
@@ -330,8 +331,8 @@ impl<'f> Progress<'f> {
     pub fn recovery(
         fs:           &'f Fs,
         msg:          &'static CStr,
-        leaf_btrees:  &[c::btree_id],
-        inner_btrees: &[c::btree_id],
+        leaf_btrees:  &[Btree],
+        inner_btrees: &[Btree],
     ) -> Self {
         let p = &fs.recovery.progress;
 

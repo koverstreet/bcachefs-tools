@@ -20,7 +20,7 @@ use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err, prt};
 use core::ops::ControlFlow;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /// The snapshots of the keys seen so far at one position, while walking a
 /// btree in key order with all snapshots: a key in an ancestor is hidden from
@@ -78,7 +78,7 @@ impl SnapshotsSeen {
 
     /// The snapshots that have overwritten the key at @pos in @btree, as if a walk
     /// had seen them: for a key checked out of walk order.
-    pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos)
+    pub fn overwrites(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos)
         -> Result<Self, BchError>
     {
         Ok(SnapshotsSeen { pos, ids: snapshot::overwrites(t, btree, pos)? })
@@ -255,7 +255,7 @@ impl InodeWalker {
         self.inodes.clear();
 
         let inodes = &mut self.inodes;
-        let mut iter = BtreeIter::new(t, c::btree_id::inodes, pos(0, inum),
+        let mut iter = BtreeIter::new(t, Btree::inodes, pos(0, inum),
                                       BtreeIterFlags::ALL_SNAPSHOTS);
         iter.for_each_max_norestart(t, spos(0, inum, u32::MAX), |_, k| {
             inodes.push(WalkerEntry::new(fs, k), GFP_KERNEL)?;
@@ -303,7 +303,7 @@ impl InodeWalker {
         } else {
             let whiteout = t.bkey_alloc_init::<c::Whiteout>(0,
                                              spos(0, e.inode.bi_inum, snapshot))?;
-            t.insert_with(c::btree_id::inodes, whiteout, BtreeIterFlags::CACHED,
+            t.insert_with(Btree::inodes, whiteout, BtreeIterFlags::CACHED,
                           UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
         }
         t.commit(None, CommitFlags::empty())?;
@@ -371,7 +371,7 @@ impl InodeWalker {
             writeln!(buf, "found {nr_keys} keys for this inode");
         }
 
-        let lost_data = fs.btree_lost_data(c::btree_id::inodes);
+        let lost_data = fs.btree_lost_data(Btree::inodes);
         if lost_data {
             writeln!(buf, "data was lost in inodes btree");
         }
@@ -414,7 +414,7 @@ impl InodeWalker {
                 // its type is right and @k is a stray. If it has none, its
                 // keys say what it is:
                 let mode = self.inodes()[l].inode.bi_mode;
-                let own_btree = [c::btree_id::extents, c::btree_id::dirents]
+                let own_btree = [Btree::extents, Btree::dirents]
                     .into_iter()
                     .find(|&b| btree_matches_i_mode(b, mode));
                 let has_own_keys = match own_btree {
@@ -438,7 +438,7 @@ impl InodeWalker {
 
                 // A file's i_size has to cover its data, or the extents are
                 // past the end and go next: as a directory, it had none
-                let (ty, size) = if btree == c::btree_id::dirents {
+                let (ty, size) = if btree == Btree::dirents {
                     (c::S_IFDIR, 0)
                 } else {
                     (c::S_IFREG, extents_end(t, k.k.p.inode, k.k.p.snapshot)?)
@@ -495,7 +495,7 @@ impl InodeWalker {
         self.deletes.clear();
 
         let (inodes, deletes) = (&mut self.inodes, &mut self.deletes);
-        let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, snapshot),
+        let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum, snapshot),
                                       BtreeIterFlags::ALL_SNAPSHOTS);
         iter.for_each_reverse_norestart(t, pos(0, inum), |_, k| {
             let id = k.k.p.snapshot;
@@ -589,7 +589,7 @@ fn delete_stray_key<'t>(t: &TransAttempt<'_, 't>, iter: &BtreeIter<'t>) -> Resul
 /// Where @inum's last extent, as @snapshot sees it, ends, in bytes: the
 /// i_size its data needs.
 fn extents_end(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<u64, BchError> {
-    let mut iter = BtreeIter::new(t, c::btree_id::extents,
+    let mut iter = BtreeIter::new(t, Btree::extents,
                                   spos(inum, u64::MAX, snapshot), BtreeIterFlags::empty());
     Ok(iter.peek_prev_min(t, pos(inum, 0))?.map_or(0, |k| k.k.p.offset << 9))
 }
@@ -608,7 +608,7 @@ fn d_type_mode(d_type: u8) -> Option<u32> {
 /// names it, does if there is one; a regular file if not.
 pub fn reconstruct_inode(
     t:        &TransAttempt<'_, '_>,
-    btree:    c::btree_id,
+    btree:    Btree,
     snapshot: u32,
     inum:     u64,
     d_type:   Option<u8>,
@@ -617,9 +617,9 @@ pub fn reconstruct_inode(
 
     let (mode, size) = match btree {
         // may race with repair deleting the extents that triggered us
-        c::btree_id::extents => (c::S_IFREG, extents_end(t, inum, snapshot)?),
-        c::btree_id::dirents => (c::S_IFDIR, 0),
-        c::btree_id::xattrs  => (d_type.and_then(d_type_mode).unwrap_or(c::S_IFREG), 0),
+        Btree::extents => (c::S_IFREG, extents_end(t, inum, snapshot)?),
+        Btree::dirents => (c::S_IFDIR, 0),
+        Btree::xattrs  => (d_type.and_then(d_type_mode).unwrap_or(c::S_IFREG), 0),
         _ => unreachable!("reconstruct_inode() for btree {}", { btree.0 }),
     };
 
@@ -671,7 +671,7 @@ pub fn reconstruct_subvol_root(
     // the inode with bi_subvol == @subvol is still there, and a second root would
     // orphan the real contents. Nor can it wait for a later pass: a subvolume key
     // with inode == 0 is rejected (subvol_inode_bad).
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, pos(0, 0),
+    let mut iter = BtreeIter::new(t, Btree::inodes, pos(0, 0),
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
     let root = iter.for_each_norestart(t, |_, k| Ok(
         match inode::bkey_is_inode(k.k).then(|| inode::unpack(fs, k)) {
@@ -704,10 +704,10 @@ pub fn reconstruct_subvol(
     v.snapshot = snapshot.into();
     v.inode    = root.into();
     v.set_state(c::bch_subvolume_state::SUBVOLUME_STATE_live);
-    t.insert(c::btree_id::subvolumes, k, UpdateTriggerFlags::empty())?;
+    t.insert(Btree::subvolumes, k, UpdateTriggerFlags::empty())?;
 
     let mut s = bch_err_msg!(fs,
-        t.bkey_get_mut::<c::Snapshot>(c::btree_id::snapshots, pos(0, snapshot as u64),
+        t.bkey_get_mut::<c::Snapshot>(Btree::snapshots, pos(0, snapshot as u64),
                                        BtreeIterFlags::empty(), UpdateTriggerFlags::empty()),
         "getting snapshot {snapshot}")?;
     let s = s.v_mut();
@@ -716,7 +716,7 @@ pub fn reconstruct_subvol(
     s.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
 
     let mut st = bch_err_msg!(fs,
-        t.bkey_get_mut::<c::SnapshotTree>(c::btree_id::snapshot_trees, pos(0, tree as u64),
+        t.bkey_get_mut::<c::SnapshotTree>(Btree::snapshot_trees, pos(0, tree as u64),
                                            BtreeIterFlags::empty(), UpdateTriggerFlags::empty()),
         "getting snapshot tree {tree}")?;
     let st = st.v_mut();
@@ -728,12 +728,12 @@ pub fn reconstruct_subvol(
 }
 
 /// Whether an inode of mode @mode can own keys in @btree.
-fn btree_matches_i_mode(btree: c::btree_id, mode: c::umode_t) -> bool {
+fn btree_matches_i_mode(btree: Btree, mode: c::umode_t) -> bool {
     let fmt = mode as u32 & c::S_IFMT;
     match btree {
-        c::btree_id::extents => fmt == c::S_IFREG || fmt == c::S_IFLNK,
-        c::btree_id::dirents => fmt == c::S_IFDIR,
-        c::btree_id::xattrs  => true,
+        Btree::extents => fmt == c::S_IFREG || fmt == c::S_IFLNK,
+        Btree::dirents => fmt == c::S_IFDIR,
+        Btree::xattrs  => true,
         _ => unreachable!("check_key_has_inode() on btree {}", { btree.0 }),
     }
 }
@@ -747,7 +747,7 @@ const COUNT_INODE_KEYS_MAX: u32 = 100;
 fn count_inode_keys(
     t:         &TransAttempt<'_, '_>,
     inode_pos: Bpos,
-    btree:     c::btree_id,
+    btree:     Btree,
     mut out:   Option<&mut Printbuf>,
 ) -> Result<u32, BchError> {
     let fs = t.fs();

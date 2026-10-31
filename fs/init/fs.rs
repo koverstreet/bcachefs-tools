@@ -17,7 +17,7 @@ use crate::util::refcount::{Refcount, TryRefcount};
 pub use crate::sb::members::DevRef;
 use core::ffi::c_int;
 use cstruct_macros::c_extern;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 c_extern! {
     pub fn bch2_sbs_filter_dead(sbs: *mut c::bch_sb_handles, opts: *mut c::bch_opts,
@@ -174,7 +174,7 @@ impl Fs {
 
     /// Whether btree @id lost data - topology repair dropped nodes - so
     /// repairs may reconstruct what it's missing: c->sb.btrees_lost_data.
-    pub fn btree_lost_data(&self, id: c::btree_id) -> bool {
+    pub fn btree_lost_data(&self, id: Btree) -> bool {
         self.sb.btrees_lost_data.get() & (1u64 << id.0) != 0
     }
 
@@ -317,7 +317,7 @@ impl Fs {
 
     /// Total number of btree IDs (known + dynamic) on this filesystem.
     pub fn btree_id_nr_alive(&self) -> u32 {
-        u32::from(c::btree_id::nr) + self.btree.cache.roots.roots_nr_extra.get()
+        u32::from(Btree::nr) + self.btree.cache.roots.roots_nr_extra.get()
     }
 
     /// Number of devices in the filesystem superblock.
@@ -434,7 +434,7 @@ impl Fs {
     /// iterator's flags and the deletes' - one set of flags, to C.
     pub fn btree_delete_range(
         &self,
-        btree_id:     c::btree_id,
+        btree_id:     Btree,
         start:        Bpos,
         end:          Bpos,
         iter_flags:   BtreeIterFlags,
@@ -448,7 +448,7 @@ impl Fs {
     /// own.
     pub fn btree_insert<'k>(
         &self,
-        btree_id:     c::btree_id,
+        btree_id:     Btree,
         key:          impl Into<&'k mut BkeyI>,
         disk_res:     Option<&DiskReservation<'_>>,
         commit_flags: impl Into<CommitOpts>,
@@ -460,7 +460,7 @@ impl Fs {
     /// btree_insert(), once: not monomorphized per key type.
     fn btree_insert_k_i(
         &self,
-        btree_id:     c::btree_id,
+        btree_id:     Btree,
         key:          &mut BkeyI,
         disk_res:     Option<&DiskReservation<'_>>,
         commit_flags: CommitOpts,
@@ -796,18 +796,18 @@ pub fn writepoint_ptr(wp: &c::write_point) -> c::write_point_specifier {
 
 pub fn btree_id_is_alloc(id: u32) -> bool {
     matches!(
-        c::btree_id::from_raw(id),
-        Some(c::btree_id::alloc
-            | c::btree_id::backpointers
-            | c::btree_id::stripe_backpointers
-            | c::btree_id::need_discard
-            | c::btree_id::freespace
-            | c::btree_id::bucket_gens
-            | c::btree_id::lru
-            | c::btree_id::accounting
-            | c::btree_id::reconcile_work
-            | c::btree_id::reconcile_hipri
-            | c::btree_id::reconcile_pending
-            | c::btree_id::reconcile_scan)
+        Btree::from_raw(id),
+        Some(Btree::alloc
+            | Btree::backpointers
+            | Btree::stripe_backpointers
+            | Btree::need_discard
+            | Btree::freespace
+            | Btree::bucket_gens
+            | Btree::lru
+            | Btree::accounting
+            | Btree::reconcile_work
+            | Btree::reconcile_hipri
+            | Btree::reconcile_pending
+            | Btree::reconcile_scan)
     )
 }

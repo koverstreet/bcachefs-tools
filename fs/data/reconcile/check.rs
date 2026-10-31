@@ -42,7 +42,7 @@ use crate::{fsck_err, fsck_err_on, prt, SPOS_MAX};
 use core::ffi::c_int;
 use core::mem::size_of;
 use cstruct_macros::c_export;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 const NO_ENOSPC: CommitFlags = CommitFlags::NO_ENOSPC;
 
@@ -55,18 +55,18 @@ fn btrees_set(keys: &[WorkKey<'_, '_>]) -> u64 {
 }
 
 /// What btree @want and set mask @set say, for a mismatch's message.
-fn btrees_to_text(out: &mut Printbuf, want: Option<c::btree_id>, set: u64) {
+fn btrees_to_text(out: &mut Printbuf, want: Option<Btree>, set: u64) {
     match want {
         Some(b) => write!(out, "{b}"),
         None    => write!(out, "(none)"),
     }
     write!(out, "\nbut set in: ");
-    crate::util::names::prt_set::<c::btree_id>(out, set);
+    crate::util::names::prt_set::<Btree>(out, set);
 }
 
 /// The bit at @pos in work btree @iter's made whether it's @want's:
 /// fix_reconcile_work_btree().
-fn fix_work_btree(t: &TransAttempt<'_, '_>, want: Option<c::btree_id>, pos: Bpos,
+fn fix_work_btree(t: &TransAttempt<'_, '_>, want: Option<Btree>, pos: Bpos,
                   (iter, k): WorkKey<'_, '_>) -> Result<(), BchError> {
     let should = Some(iter.btree()) == want;
     let have = k.is_some_and(|k| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_set);
@@ -95,7 +95,7 @@ fn backpointer_set_reconcile_phys(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Ba
     if let Some(btree) = want.phys_btree() {
         t.bit_mod_buffered(btree, bp.k.p, true)?;
     }
-    t.update_buffered(c::btree_id::backpointers, &n)
+    t.update_buffered(Btree::backpointers, &n)
 }
 
 /// @bp's reconcile phys bits, not @want - for @extent, if it's found -
@@ -119,7 +119,7 @@ fn reconcile_phys_wrong(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Backpointer>
 /// only extents with work past pending have phys bits to check - so this
 /// costs a backpointer lookup per pointer, but only on those:
 /// check_extent_reconcile_phys().
-fn check_extent_reconcile_phys(t: &TransAttempt<'_, '_>, btree: c::btree_id, k: BkeySC<'_>,
+fn check_extent_reconcile_phys(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
                                last_flushed: &mut WbMaybeFlush) -> Result<(), BchError> {
     let fs = t.fs();
     let Some(kp) = k.arm::<Ptrs>() else { return Ok(()) };
@@ -218,7 +218,7 @@ fn check_reconcile_work_one<'t>(t: &TransAttempt<'_, 't>, data_iter: &mut BtreeI
 }
 
 /// Data btree @btree against the work btrees: check_reconcile_work_data_btree().
-fn check_reconcile_work_data_btree<'t>(trans: &'t BtreeTrans<'t>, btree: c::btree_id, rb: &mut [BtreeIter<'t>; 3],
+fn check_reconcile_work_data_btree<'t>(trans: &'t BtreeTrans<'t>, btree: Btree, rb: &mut [BtreeIter<'t>; 3],
                                    s: &mut PerSnapshotIoOpts, last_flushed: &mut WbMaybeFlush)
     -> Result<(), BchError>
 {
@@ -250,17 +250,17 @@ fn check_reconcile_work_data_btree<'t>(trans: &'t BtreeTrans<'t>, btree: c::btre
 fn check_reconcile_work_data_btrees(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
     let rb_iter = |btree| BtreeIter::new(trans, btree, POS_MIN, BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
-    let mut rb = [rb_iter(c::btree_id::reconcile_work),
-                  rb_iter(c::btree_id::reconcile_hipri),
-                  rb_iter(c::btree_id::reconcile_pending)];
+    let mut rb = [rb_iter(Btree::reconcile_work),
+                  rb_iter(Btree::reconcile_hipri),
+                  rb_iter(Btree::reconcile_pending)];
 
     let mut s = PerSnapshotIoOpts::new(fs);
     let mut last_flushed = WbMaybeFlush::new()?;
 
     fs.recovery.progress.init(fs, c"check_reconcile_work_data_btrees",
-                              &[c::btree_id::extents, c::btree_id::reflink], &[]);
+                              &[Btree::extents, Btree::reflink], &[]);
 
-    for btree in [c::btree_id::stripes, c::btree_id::reflink, c::btree_id::extents] {
+    for btree in [Btree::stripes, Btree::reflink, Btree::extents] {
         check_reconcile_work_data_btree(trans, btree, &mut rb, &mut s, &mut last_flushed)?;
     }
     Ok(())
@@ -337,12 +337,12 @@ fn check_reconcile_work_phys_one<'t>(t: &TransAttempt<'_, 't>, bp_iter: &mut Btr
 /// The backpointers against the phys btrees: check_reconcile_work_phys().
 fn check_reconcile_work_phys(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
-    fs.recovery.progress.init(fs, c"check_reconcile_work_phys", &[c::btree_id::backpointers], &[]);
+    fs.recovery.progress.init(fs, c"check_reconcile_work_phys", &[Btree::backpointers], &[]);
 
     let mut cur_pos = POS_MIN;
-    let mut bp_iter = BtreeIter::new(trans, c::btree_id::backpointers, POS_MIN, BtreeIterFlags::PREFETCH);
-    let mut phys = [BtreeIter::new(trans, c::btree_id::reconcile_work_phys, POS_MIN, BtreeIterFlags::PREFETCH),
-                    BtreeIter::new(trans, c::btree_id::reconcile_hipri_phys, POS_MIN, BtreeIterFlags::PREFETCH)];
+    let mut bp_iter = BtreeIter::new(trans, Btree::backpointers, POS_MIN, BtreeIterFlags::PREFETCH);
+    let mut phys = [BtreeIter::new(trans, Btree::reconcile_work_phys, POS_MIN, BtreeIterFlags::PREFETCH),
+                    BtreeIter::new(trans, Btree::reconcile_hipri_phys, POS_MIN, BtreeIterFlags::PREFETCH)];
     let mut last_flushed = WbMaybeFlush::new()?;
 
     loop {
@@ -397,7 +397,7 @@ fn check_reconcile_work_btree_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
     }
 
     let want = rb_bp(btree, level, k.into());
-    let mut rb_iter = BtreeIter::new(t, c::btree_id::reconcile_scan, bp_pos, BtreeIterFlags::INTENT);
+    let mut rb_iter = BtreeIter::new(t, Btree::reconcile_scan, bp_pos, BtreeIterFlags::INTENT);
     let bp_k = rb_iter.peek_slot(t)?.expect("a slot");
     let is_bp = bp_k.k.key_type() == c::bch_bkey_type::KEY_TYPE_backpointer;
 
@@ -421,7 +421,7 @@ fn check_reconcile_work_btree_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
 
     // someone else's: ours, in a slot of our work id's
     let mut slot = BtreeIter::uninit();
-    t.bkey_get_empty_slot(&mut slot, c::btree_id::reconcile_scan, pos(bp_pos.inode, 1), pos(bp_pos.inode, u64::MAX))?;
+    t.bkey_get_empty_slot(&mut slot, Btree::reconcile_scan, pos(bp_pos.inode, 1), pos(bp_pos.inode, u64::MAX))?;
     alloc_bp(&slot)?;
     set_bp(slot.pos().offset)
 }
@@ -437,7 +437,7 @@ fn check_reconcile_work_btrees(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
         if fs.btree_id_root(btree).is_none() {
             continue;
         }
-        BtreeLevels { btree: c::btree_id(btree), levels: 1..c::BTREE_MAX_DEPTH, start: POS_MIN, end: SPOS_MAX }
+        BtreeLevels { btree: Btree(btree), levels: 1..c::BTREE_MAX_DEPTH, start: POS_MIN, end: SPOS_MAX }
             .for_each_btree_ptr_commit(trans, Some(&res), NO_ENOSPC, |t, iter, level, k| {
                 res.put();
                 fs.recovery.progress.update(t, iter)?;
@@ -454,9 +454,9 @@ fn check_reconcile_work_btrees(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
 fn check_reconcile_btree_bps(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     use c::reconcile_work_id as w;
     let fs = trans.fs();
-    fs.recovery.progress.init(fs, c"check_reconcile_btree_bps", &[c::btree_id::reconcile_scan], &[]);
+    fs.recovery.progress.init(fs, c"check_reconcile_btree_bps", &[Btree::reconcile_scan], &[]);
 
-    let mut iter = BtreeIter::new(trans, c::btree_id::reconcile_scan, pos(w::RECONCILE_WORK_hipri.0.into(), 0),
+    let mut iter = BtreeIter::new(trans, Btree::reconcile_scan, pos(w::RECONCILE_WORK_hipri.0.into(), 0),
                                   BtreeIterFlags::PREFETCH);
     iter.for_each_max(trans, pos(w::RECONCILE_WORK_pending.0.into(), u64::MAX), |t, iter, k| {
         fs.recovery.progress.update(t, iter)?;
@@ -495,14 +495,14 @@ fn check_stripe_can_widen_one(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k:
 /// Stripes' can_widen: check_stripe_can_widen().
 fn check_stripe_can_widen(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
-    fs.recovery.progress.init(fs, c"check_stripe_can_widen", &[c::btree_id::stripes], &[]);
+    fs.recovery.progress.init(fs, c"check_stripe_can_widen", &[Btree::stripes], &[]);
 
     let mut cache = WidenCache::new();
     let scan_pending = lockrestart_do(trans, |t| {
         t.scan_requested(c::reconcile_scan::from_arm(c::reconcile_scan_stripes {}))
     })?;
 
-    let mut iter = BtreeIter::new(trans, c::btree_id::stripes, POS_MIN, BtreeIterFlags::PREFETCH);
+    let mut iter = BtreeIter::new(trans, Btree::stripes, POS_MIN, BtreeIterFlags::PREFETCH);
     iter.for_each_commit(trans, None, NO_ENOSPC, |t, iter, k| {
         fs.recovery.progress.update(t, iter)?;
         check_stripe_can_widen_one(t, iter, k, &mut cache, scan_pending)

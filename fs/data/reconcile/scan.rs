@@ -39,7 +39,7 @@ use crate::{bch_err, SPOS_MAX};
 use core::ffi::c_int;
 use core::ops::Range;
 use cstruct_macros::c_export;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 impl c::reconcile_scan {
     /// The scan for everything.
@@ -115,7 +115,7 @@ impl TransAttempt<'_, '_> {
     /// Request @scan: its cookie's generation bumped, queued in the attempt.
     pub fn request_scan(&self, scan: c::reconcile_scan) -> Result<(), BchError> {
         let p = scan.cookie_pos();
-        let mut iter = BtreeIter::new(self, c::btree_id::reconcile_scan, p, BtreeIterFlags::INTENT);
+        let mut iter = BtreeIter::new(self, Btree::reconcile_scan, p, BtreeIterFlags::INTENT);
         let k = iter.peek_slot(self)?.expect("a slot");
 
         let mut n = BkeyI::<c::Cookie>::new();
@@ -127,7 +127,7 @@ impl TransAttempt<'_, '_> {
 
     /// Whether @scan is requested: its cookie's there.
     pub fn scan_requested(&self, scan: c::reconcile_scan) -> Result<bool, BchError> {
-        let mut iter = BtreeIter::new(self, c::btree_id::reconcile_scan, scan.cookie_pos(), BtreeIterFlags::empty());
+        let mut iter = BtreeIter::new(self, Btree::reconcile_scan, scan.cookie_pos(), BtreeIterFlags::empty());
         Ok(iter.peek_slot(self)?.expect("a slot").arm::<c::Cookie>().is_some())
     }
 }
@@ -171,7 +171,7 @@ impl ScanCookie {
         let fs = trans.fs();
         let mut now = 0;
         commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| {
-            let mut iter = BtreeIter::new(t, c::btree_id::reconcile_scan, self.pos, BtreeIterFlags::INTENT);
+            let mut iter = BtreeIter::new(t, Btree::reconcile_scan, self.pos, BtreeIterFlags::INTENT);
             now = cookie_generation(iter.peek_slot(t)?.expect("a slot"));
             if now == self.generation {
                 t.delete_at(&iter, UpdateTriggerFlags::empty())?;
@@ -309,7 +309,7 @@ impl ScanCookie {
             Ok(S::metadata(_)) => scan_fs(ctxt, scan, s, true)?,
             Ok(S::device(&d))  => scan_device(ctxt, scan, d, last_flushed)?,
             Ok(S::stripes(_))  => scan_stripes(ctxt)?,
-            Ok(S::inum(&i))    => scan_btree(ctxt, scan, s, c::btree_id::extents, 0..1,
+            Ok(S::inum(&i))    => scan_btree(ctxt, scan, s, Btree::extents, 0..1,
                                              pos(i, 0), pos(i, u64::MAX))?,
             Ok(S::pending(_)) | Err(_) => {}
         }
@@ -333,8 +333,8 @@ fn scan_fs(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, s: &mut PerSnapshotI
         if fs.btree_id_root(btree).is_none() {
             continue;
         }
-        let btree = c::btree_id(btree);
-        let leaves = !metadata && (btree == c::btree_id::extents || btree == c::btree_id::reflink);
+        let btree = Btree(btree);
+        let leaves = !metadata && (btree == Btree::extents || btree == Btree::reflink);
         scan_btree(ctxt, scan, s, btree, u32::from(!leaves)..c::BTREE_MAX_DEPTH, POS_MIN, SPOS_MAX)?;
     }
     Ok(())
@@ -343,7 +343,7 @@ fn scan_fs(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, s: &mut PerSnapshotI
 /// @btree's keys at @levels, from @start to @end. An inode's - a scan of the
 /// extents from a nonzero inode - follows its reflink pointers that may
 /// update options, to the indirect extents they share.
-fn scan_btree(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, s: &mut PerSnapshotIoOpts, btree: c::btree_id,
+fn scan_btree(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, s: &mut PerSnapshotIoOpts, btree: Btree,
               levels: Range<u32>, start: Bpos, end: Bpos) -> Result<(), BchError>
 {
     let trans = ctxt.trans();
@@ -373,7 +373,7 @@ fn scan_btree(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, s: &mut PerSnapsh
 fn scan_indirect(trans: &BtreeTrans<'_>, scan: &c::reconcile_scan, res: &DiskReservation<'_>, refs: Range<u64>,
                  s: &mut PerSnapshotIoOpts, opts: &c::bch_inode_opts) -> Result<(), BchError>
 {
-    let mut iter = BtreeIter::new(trans, c::btree_id::reflink, pos(0, refs.start),
+    let mut iter = BtreeIter::new(trans, Btree::reflink, pos(0, refs.start),
                                   BtreeIterFlags::INTENT | BtreeIterFlags::NOT_EXTENTS);
     iter.for_each_commit(trans, Some(res), NO_ENOSPC, |t, iter, k| {
         if bpos_ge(k.k.start_pos(), pos(0, refs.end)) {
@@ -391,10 +391,10 @@ fn scan_device(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, dev: u32, last_f
 {
     let trans = ctxt.trans();
     let fs = trans.fs();
-    let mut bps = BpScanIter::new(c::btree_id::backpointers, pos(dev.into(), 0), None);
+    let mut bps = BpScanIter::new(Btree::backpointers, pos(dev.into(), 0), None);
 
     bps.for_each(trans, pos(dev.into(), u64::MAX), last_flushed.borrow(), |t, bp, last_flushed| {
-        ctxt.stats().set_pos(c::bbpos { btree: c::btree_id::backpointers, pos: bp.k.p });
+        ctxt.stats().set_pos(c::bbpos { btree: Btree::backpointers, pos: bp.k.p });
         stop(fs)?;
         scan_bp(t, scan, bp, last_flushed)?;
         t.commit(Some(&DiskReservation::new(fs)), NO_ENOSPC)
@@ -428,9 +428,9 @@ fn scan_stripes(ctxt: &MovingCtxt<'_>) -> Result<(), BchError> {
     let trans = ctxt.trans();
     let fs = trans.fs();
     let mut cache = WidenCache::new();
-    fs.reconcile.progress.init_masks(fs, None, 1 << c::btree_id::stripes.0, 0);
+    fs.reconcile.progress.init_masks(fs, None, 1 << Btree::stripes.0, 0);
 
-    let mut iter = BtreeIter::new(trans, c::btree_id::stripes, POS_MIN, BtreeIterFlags::PREFETCH);
+    let mut iter = BtreeIter::new(trans, Btree::stripes, POS_MIN, BtreeIterFlags::PREFETCH);
     iter.for_each_commit(trans, None, NO_ENOSPC, |t, iter, k| {
         ctxt.stats().walked(iter, fs.btree_sectors().into());
         fs.reconcile.progress.update(t, iter)?;

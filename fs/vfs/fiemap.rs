@@ -40,6 +40,7 @@ use crate::snapshots::subvolume;
 use cstruct_macros::c_extern;
 
 use super::inode::InodeInfo;
+use crate::format::Btree;
 
 c_extern! {
     // pagecache.c's, until it's Rust:
@@ -160,7 +161,7 @@ fn next_mapping(t: &TransAttempt<'_, '_>, inode: &InodeInfo, start: u64, end: u6
     let inum = inode.inum();
     let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
 
-    let mut iter = BtreeIter::new(t, c::btree_id::extents, spos(inum.inum, start, snapshot),
+    let mut iter = BtreeIter::new(t, Btree::extents, spos(inum.inum, start, snapshot),
                                   BtreeIterFlags::TRIM);
     let k = iter.peek_max(t, pos(inum.inum, end))?;
 

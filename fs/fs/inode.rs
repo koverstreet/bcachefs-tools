@@ -65,7 +65,7 @@ use cstruct_macros::{c_export, CStruct, c_bitmask, c_typedef, c_verbatim, TypeIn
 use crate::cstructs::c::BCH_INODE_FIELDS_v3;
 use crate::types::{c_default, Le64};
 use crate::util::projections::Volatile;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 c_typedef! {
     pub type u96 = u64;
@@ -566,7 +566,7 @@ fn __peek_snapshot<'a>(
     flags:    BtreeIterFlags,
     warn:     Option<&CStr>,
 ) -> Result<c::bch_inode_unpacked, BchError> {
-    *iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum.inum, snapshot),
+    *iter = BtreeIter::new(t, Btree::inodes, spos(0, inum.inum, snapshot),
                            flags | BtreeIterFlags::CACHED);
     let ret = peek_slot(t, iter);
 
@@ -646,7 +646,7 @@ pub fn find_by_inum_snapshot(
     snapshot: u32,
     flags:    BtreeIterFlags,
 ) -> Result<c::bch_inode_unpacked, BchError> {
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, snapshot), flags);
+    let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum, snapshot), flags);
     peek_slot(t, &mut iter)
 }
 
@@ -744,7 +744,7 @@ pub fn find_oldest_snapshot(
     let fs = t.fs();
     let mut root = None;
 
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, snapshot),
+    let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum, snapshot),
                                   BtreeIterFlags::ALL_SNAPSHOTS);
     iter.for_each_norestart(t, |_, k| Ok(
         if k.k.p.offset != inum {
@@ -775,7 +775,7 @@ pub fn find_any_snapshot(t: &TransAttempt<'_, '_>, inum: u64)
 {
     let fs = t.fs();
 
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, pos(0, inum),
+    let mut iter = BtreeIter::new(t, Btree::inodes, pos(0, inum),
                                   BtreeIterFlags::ALL_SNAPSHOTS);
     iter.for_each_norestart(t, |_, k| Ok(
         if k.k.p.offset != inum {
@@ -842,7 +842,7 @@ pub fn fsck_write(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked)
 {
     let mut k = pack_trans(t, inode)?;
     k.k_mut().p.snapshot = inode.bi_snapshot;
-    t.insert_with(c::btree_id::inodes, k, BtreeIterFlags::CACHED,
+    t.insert_with(Btree::inodes, k, BtreeIterFlags::CACHED,
                   UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
@@ -1167,14 +1167,14 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
 
     let cursor_pos = pos(c::logged_ops_inums::LOGGED_OPS_INUM_inode_cursors.0 as u64, idx);
 
-    let cursor = t.bkey_get_mut::<c::InodeAllocCursor>(c::btree_id::logged_ops, cursor_pos,
+    let cursor = t.bkey_get_mut::<c::InodeAllocCursor>(Btree::logged_ops, cursor_pos,
                                                        BtreeIterFlags::CACHED,
                                                        UpdateTriggerFlags::empty());
     let mut cursor = match cursor.found()? {
         Some(cursor) => cursor,
         None => {
             // No cursor there yet:
-            let mut iter = BtreeIter::new(t, c::btree_id::logged_ops, cursor_pos,
+            let mut iter = BtreeIter::new(t, Btree::logged_ops, cursor_pos,
                                           BtreeIterFlags::INTENT | BtreeIterFlags::CACHED);
             iter.traverse(t)?;
 
@@ -1222,7 +1222,7 @@ pub fn create<'a>(
     let mut start = cursor.idx.get();
     let mut inum = start;
 
-    *iter = BtreeIter::new(t, c::btree_id::inodes, pos(0, inum),
+    *iter = BtreeIter::new(t, Btree::inodes, pos(0, inum),
                            BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::INTENT);
     loop {
         while inum < max {
@@ -1351,7 +1351,7 @@ fn snapshot_parent<'i, 'a>(
     mut p: Bpos,
 ) -> Result<Option<BkeySC<'i>>, BchError> {
     loop {
-        *iter = BtreeIter::new(t, c::btree_id::inodes, p.successor(),
+        *iter = BtreeIter::new(t, Btree::inodes, p.successor(),
                                BtreeIterFlags::ALL_SNAPSHOTS);
 
         let snapshot = p.snapshot;
@@ -1378,7 +1378,7 @@ pub fn has_child_snapshots(t: &TransAttempt<'_, '_>, p: Bpos) -> Result<bool, Bc
         return Ok(false);
     }
 
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, pos(0, p.offset),
+    let mut iter = BtreeIter::new(t, Btree::inodes, pos(0, p.offset),
                                   BtreeIterFlags::ALL_SNAPSHOTS);
     let found = iter.find_max_norestart(t, p.predecessor(), |_, k| {
         Ok(crate::snapshots::snapshot::is_ancestor(t, k.k.p.snapshot, p.snapshot) &&
@@ -1459,7 +1459,7 @@ pub fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), B
         let unlinked_delta = is_unlinked(flags_field_mut(&mut op.new)) as i32 -
                              is_unlinked(flags_field(op.old)) as i32;
         if unlinked_delta != 0 {
-            t.bit_mod_buffered(c::btree_id::deleted_inodes, op.new.k.p, unlinked_delta > 0)?;
+            t.bit_mod_buffered(Btree::deleted_inodes, op.new.k.p, unlinked_delta > 0)?;
         }
 
         // Creating or deleting an inode at this snapshot ID, with maybe an
@@ -1505,9 +1505,9 @@ fn may_delete_deleted_inode(
 ) -> Result<bool, BchError> {
 
     let fs = t.fs();
-    let delete = || t.bit_mod_buffered(c::btree_id::deleted_inodes, p, false).map(|_| false);
+    let delete = || t.bit_mod_buffered(Btree::deleted_inodes, p, false).map(|_| false);
 
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, p, BtreeIterFlags::CACHED);
+    let mut iter = BtreeIter::new(t, Btree::inodes, p, BtreeIterFlags::CACHED);
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
     let k_pos = k.k.p;
 
@@ -1606,7 +1606,7 @@ fn may_delete_deleted_inum(t: &TransAttempt<'_, '_>, inum: c::subvol_inum,
 
 /// Delete inode @inum's keys in @btree, in its own begin and commit loop:
 /// as bch2_inode_delete_keys(). An extent is deleted whole.
-fn delete_keys(trans: &BtreeTrans<'_>, inum: c::subvol_inum, btree: c::btree_id)
+fn delete_keys(trans: &BtreeTrans<'_>, inum: c::subvol_inum, btree: Btree)
     -> Result<(), BchError>
 {
     let fs = trans.fs();
@@ -1656,7 +1656,7 @@ fn rm_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<u32, BchEr
     let fs = t.fs();
     let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
 
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum.inum, snapshot),
+    let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum.inum, snapshot),
                                   BtreeIterFlags::INTENT | BtreeIterFlags::CACHED);
     let is_inode = bkey_is_inode(iter.peek_slot(t)?.expect("a slot always has a key").k);
 
@@ -1703,11 +1703,11 @@ pub fn rm(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
     // XXX: the dirent code ideally would delete whiteouts when they're no
     // longer needed
     delete_keys(&trans, inum, if !inode.is_dir() {
-        c::btree_id::extents
+        Btree::extents
     } else {
-        c::btree_id::dirents
+        Btree::dirents
     })?;
-    delete_keys(&trans, inum, c::btree_id::xattrs)?;
+    delete_keys(&trans, inum, Btree::xattrs)?;
 
     let mut snapshot = 0;
     commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| {
@@ -1734,7 +1734,7 @@ fn __rm_snapshot(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<(),
     let fs = trans.fs();
     let mut ret = Ok(());
 
-    for btree in [c::btree_id::extents, c::btree_id::dirents, c::btree_id::xattrs] {
+    for btree in [Btree::extents, Btree::dirents, Btree::xattrs] {
         let r = match trans.delete_range(btree, spos(inum, 0, snapshot), spos(inum, u64::MAX, snapshot),
                                          UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE) {
             // handled restarts are an FYI - the range was fully deleted:
@@ -1748,7 +1748,7 @@ fn __rm_snapshot(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<(),
 
     if ret.is_ok() {
         return commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| {
-            t.delete(c::btree_id::inodes, spos(0, inum, snapshot),
+            t.delete(Btree::inodes, spos(0, inum, snapshot),
                      UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
             crate::init::damage::delete(t, inum, snapshot)
         });
@@ -1762,7 +1762,7 @@ fn __rm_snapshot(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<(),
     commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| {
         let whiteout = t.bkey_alloc_init::<c::Whiteout>(0,
                                          spos(0, inum, snapshot))?;
-        t.insert(c::btree_id::inodes, whiteout, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+        t.insert(Btree::inodes, whiteout, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
         crate::init::damage::delete(t, inum, snapshot)
     })?;
     ret
@@ -1836,7 +1836,7 @@ fn delete_dead_inodes(fs: &Fs) -> Result<(), BchError> {
     trans.begin_raw();
 
     let flags = BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS;
-    let mut iter = BtreeIter::new(&trans, c::btree_id::deleted_inodes, POS_MIN, flags);
+    let mut iter = BtreeIter::new(&trans, Btree::deleted_inodes, POS_MIN, flags);
 
     enum Next { Committed, Deleted }
 
@@ -1889,10 +1889,10 @@ crate::recovery_pass!(bch2_delete_dead_inodes => delete_dead_inodes);
 /// bch2_kill_i_generation_keys().
 fn kill_i_generation_keys(fs: &Fs) -> Result<(), BchError> {
     let progress = Progress::recovery(fs, c"bch2_kill_i_generation_keys",
-                                      &[c::btree_id::inodes], &[]);
+                                      &[Btree::inodes], &[]);
     let trans = crate::btree_trans!(fs);
 
-    let mut iter = BtreeIter::new(&trans, c::btree_id::inodes, POS_MIN,
+    let mut iter = BtreeIter::new(&trans, Btree::inodes, POS_MIN,
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, k| {
         progress.update(t, iter)?;

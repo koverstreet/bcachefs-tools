@@ -15,7 +15,7 @@ use crate::logging;
 use crate::device_scan::OpenedFs;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
-use bcachefs_kernel::format::Bpos;
+use bcachefs_kernel::format::{Bpos, Btree};
 
 fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = bcachefs_kernel::btree_trans!(fs);
@@ -197,7 +197,7 @@ pub struct Cli {
 
     /// Btree to list from
     #[arg(short, long, default_value_t=btree_id::extents)]
-    btree: c::btree_id,
+    btree: Btree,
 
     /// Bkey type to list
     #[arg(short = 'k', long)]

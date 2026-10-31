@@ -55,6 +55,7 @@ use kernel::sync::aref::{ARef, AlwaysRefCounted};
 use super::vfs_inode::VfsInode;
 
 pub use c::InodeInfo;
+use crate::format::Btree;
 
 c_extern! {
     pub fn bch2_vfs_inode_get_trans(trans: *mut c::btree_trans, inum: c::subvol_inum,
@@ -201,7 +202,7 @@ impl InodeInfo {
     pub fn update_after_write(&self, trans: &BtreeTrans<'_>, bi: &c::bch_inode_unpacked, fields: u32) {
         assert_eq!(bi.bi_inum, self.inum().inum, "updating the VFS inode {} to inode {}",
                    self.inum().inum, bi.bi_inum);
-        trans.assert_pos_locked(c::btree_id::inodes, pos(0, bi.bi_inum));
+        trans.assert_pos_locked(Btree::inodes, pos(0, bi.bi_inum));
 
         let fs = self.fs();
         let v = self.vfs();

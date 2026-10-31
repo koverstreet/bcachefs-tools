@@ -15,7 +15,7 @@ use crate::types::c_default;
 use core::ffi::c_uint;
 use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_same, c_verbatim, c_xmacro};
 use nestify::nest;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /* DOC_LATEX(bkey-structures)
  *
@@ -235,7 +235,7 @@ nest! {
             #[bits(8, from = cs::bch_validate_flags::from_bits_retain)] pub flags: cs::bch_validate_flags,
         },
         pub level: u8,
-        pub btree: cs::btree_id,
+        pub btree: Btree,
         #[c_bitfield]
         #>[bitfield(u8)]
         pub root_bits: pub struct bkey_validate_context_root_bits {

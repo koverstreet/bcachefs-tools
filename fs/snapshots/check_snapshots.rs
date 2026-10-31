@@ -50,7 +50,7 @@ use crate::util::{Join, Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err, prt};
 use core::fmt;
 use cstruct_macros::c_export;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /// Snapshot node @id's key, None if there's none: fsck can't assume a node
 /// exists, and absence as a value can't be returned as an error by mistake.
@@ -63,7 +63,7 @@ fn lookup_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<Option<BkeyI<c::Snap
 fn get_mut_node<'a, 't>(t: &TransAttempt<'a, 't>, id: u32)
     -> Result<TransBkey<'a, 't, c::Snapshot>, BchError>
 {
-    t.bkey_get_mut(c::btree_id::snapshots, pos(0, id as u64), BtreeIterFlags::empty(),
+    t.bkey_get_mut(Btree::snapshots, pos(0, id as u64), BtreeIterFlags::empty(),
                    UpdateTriggerFlags::empty())
 }
 
@@ -71,7 +71,7 @@ fn get_mut_node<'a, 't>(t: &TransAttempt<'a, 't>, id: u32)
 /// btrees keyed by id, subvolumes and snapshot trees.
 fn find_key(
     t:        &TransAttempt<'_, '_>,
-    btree:    c::btree_id,
+    btree:    Btree,
     mut pred: impl FnMut(BkeySC<'_>) -> bool,
 ) -> Result<Option<u32>, BchError> {
     let mut iter = BtreeIter::new(t, btree, POS_MIN, BtreeIterFlags::empty());
@@ -81,7 +81,7 @@ fn find_key(
 
 /// A subvolume claiming snapshot @id - to restore a wiped backref.
 fn subvol_claiming(t: &TransAttempt<'_, '_>, id: u32) -> Result<Option<u32>, BchError> {
-    find_key(t, c::btree_id::subvolumes,
+    find_key(t, Btree::subvolumes,
              |k| subvolume::val(k).is_some_and(|s| s.snapshot() == id))
 }
 
@@ -105,7 +105,7 @@ impl fmt::Display for StateName {
 fn tree_master_subvol(t: &TransAttempt<'_, '_>, root: u32) -> Result<Option<u32>, BchError> {
     let fs = t.fs();
 
-    let found = find_key(t, c::btree_id::subvolumes, |k| {
+    let found = find_key(t, Btree::subvolumes, |k| {
         subvolume::val(k).is_some_and(|s| snapshot::is_ancestor(t, s.snapshot(), root) && !s.snap())
     })?;
     if found.is_some() {
@@ -113,7 +113,7 @@ fn tree_master_subvol(t: &TransAttempt<'_, '_>, root: u32) -> Result<Option<u32>
     }
 
     let Some(oldest) = fs.snapshots.oldest_subvol(root) else { return Ok(None) };
-    let Some(mut u) = t.bkey_get_mut::<c::Subvolume>(c::btree_id::subvolumes, pos(0, oldest as u64),
+    let Some(mut u) = t.bkey_get_mut::<c::Subvolume>(Btree::subvolumes, pos(0, oldest as u64),
                                                      BtreeIterFlags::empty(),
                                                      UpdateTriggerFlags::empty()).found()? else {
         return Ok(None);
@@ -188,7 +188,7 @@ fn check_snapshot_tree<'t>(
 
 fn check_snapshot_trees(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::snapshot_trees, POS_MIN,
+    let mut iter = BtreeIter::new(&trans, Btree::snapshot_trees, POS_MIN,
                                   BtreeIterFlags::PREFETCH);
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC,
                          |t, iter, k| check_snapshot_tree(t, iter, k))
@@ -600,7 +600,7 @@ fn resurrect_child(t: &TransAttempt<'_, '_>, parent_id: u32, id: u32) -> Result<
     v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
 
     fs.snapshots.table_make_room(id)?;
-    t.insert(c::btree_id::snapshots, n, UpdateTriggerFlags::empty())
+    t.insert(Btree::snapshots, n, UpdateTriggerFlags::empty())
 }
 
 /// The nodes an edge repair is between, keys and all: which pointer is wrong
@@ -905,7 +905,7 @@ fn check_skiplists<'a, 't>(
         let mut msg = Printbuf::new();
         prt!(&mut msg, "snapshot with bad skiplist pointer {skip}:\n{}\n", n.to_text(fs));
         if skip != 0 {
-            let mut iter = BtreeIter::new(t, c::btree_id::snapshots, pos(0, skip as u64),
+            let mut iter = BtreeIter::new(t, Btree::snapshots, pos(0, skip as u64),
                                           BtreeIterFlags::empty());
             let skip_k = iter.peek_slot(t)?.expect("a slot always has a key");
             prt!(&mut msg, "points to\n  {}\n", skip_k.to_text(fs));
@@ -941,7 +941,7 @@ fn check_to_subvol<'a, 't>(
 
         // A raw read: subvolume::get() reports deleted subvolumes as ENOENT,
         // and the message should show what's actually there.
-        let mut iter = BtreeIter::new(t, c::btree_id::subvolumes, pos(0, subvol_id as u64),
+        let mut iter = BtreeIter::new(t, Btree::subvolumes, pos(0, subvol_id as u64),
                                       BtreeIterFlags::empty());
         let subvol_k = iter.peek_slot(t)?.expect("a slot always has a key");
         let subvol = subvolume::val(subvol_k);
@@ -1026,7 +1026,7 @@ fn check_to_subvol<'a, 't>(
         prt!(&mut msg, "snapshot node {id} has wrong subvol flag:\n{}", n.to_text(fs));
 
         if v.subvol() != 0 {
-            let mut iter = BtreeIter::new(t, c::btree_id::subvolumes, pos(0, v.subvol() as u64),
+            let mut iter = BtreeIter::new(t, Btree::subvolumes, pos(0, v.subvol() as u64),
                                           BtreeIterFlags::empty());
             let subvol_k = iter.peek_slot(t)?.expect("a slot always has a key");
             prt!(&mut msg, "\n{}", subvol_k.to_text(fs));
@@ -1082,7 +1082,7 @@ fn check_snapshot<'a, 't>(
 /// before deleting interior nodes.
 pub(crate) fn check_snapshots_trans(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     // Backwards: fixing a node's depth needs its parent's to be right already.
-    let mut iter = BtreeIter::new(trans, c::btree_id::snapshots, POS_MAX, BtreeIterFlags::PREFETCH);
+    let mut iter = BtreeIter::new(trans, Btree::snapshots, POS_MAX, BtreeIterFlags::PREFETCH);
     iter.for_each_reverse_commit(trans, POS_MIN, None, CommitFlags::NO_ENOSPC,
                                  |t, iter, k| check_snapshot(t, iter, k))?;
 
@@ -1095,7 +1095,7 @@ fn check_snapshots(fs: &Fs) -> Result<(), BchError> {
 
     // A clean pass lets check_key_has_snapshot trust the in-memory table
     if !fs.flag(c::bch_fs_flags::BCH_FS_error) {
-        passes::set_btree_clean(fs, c::btree_id::snapshots);
+        passes::set_btree_clean(fs, Btree::snapshots);
     }
     Ok(())
 }
@@ -1107,7 +1107,7 @@ crate::recovery_pass!(bch2_check_snapshots => check_snapshots);
 /// Which snapshot ids belong to the same tree, from the keys: every version
 /// of one inode is in one tree.
 struct TreeReconstruct {
-    btree:   c::btree_id,
+    btree:   Btree,
     cur_pos: Bpos,
     /// The current inode's snapshot ids.
     cur_ids: KVVec<u32>,
@@ -1118,7 +1118,7 @@ struct TreeReconstruct {
 impl TreeReconstruct {
     /// Whether @pos is the current inode.
     fn same_inode(&self, pos: Bpos) -> bool {
-        if self.btree == c::btree_id::inodes {
+        if self.btree == Btree::inodes {
             self.cur_pos.offset == pos.offset
         } else {
             self.cur_pos.inode == pos.inode
@@ -1167,7 +1167,7 @@ fn add_nodup(ids: &mut KVVec<u32>, id: u32) -> Result<(), BchError> {
 fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     let fs = t.fs();
 
-    let tree_id = find_key(t, c::btree_id::snapshot_trees, |k| {
+    let tree_id = find_key(t, Btree::snapshot_trees, |k| {
         k.arm::<c::SnapshotTree>().map(|k| k.v()).is_some_and(|st| st.root_snapshot.get() == id)
     })?;
 
@@ -1190,7 +1190,7 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
 
     fs.snapshots.table_make_room(id)?;
-    t.insert(c::btree_id::snapshots, n, UpdateTriggerFlags::empty())
+    t.insert(Btree::snapshots, n, UpdateTriggerFlags::empty())
 }
 
 /// Recreate node @id of @tree if it's missing - only if it's a tree to
@@ -1215,7 +1215,7 @@ fn reconstruct_node(t: &TransAttempt<'_, '_>, id: u32, tree: &[u32]) -> Result<(
 fn reconstruct_snapshots(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
 
-    let mut btrees: KVVec<c::btree_id> = KVVec::new();
+    let mut btrees: KVVec<Btree> = KVVec::new();
     for &btree in crate::BTREE_IDS_KNOWN {
         if crate::BTREE_HAS_SNAPSHOTS_MASK & (1 << btree.0) != 0 {
             btrees.push(btree, GFP_KERNEL)?;
@@ -1224,7 +1224,7 @@ fn reconstruct_snapshots(fs: &Fs) -> Result<(), BchError> {
     let progress = Progress::recovery(fs, c"bch2_reconstruct_snapshots", &btrees, &[]);
 
     let mut r = TreeReconstruct {
-        btree:   c::btree_id::extents,
+        btree:   Btree::extents,
         cur_pos: POS_MIN,
         cur_ids: KVVec::new(),
         trees:   KVVec::new(),
@@ -1261,12 +1261,12 @@ crate::recovery_pass!(bch2_reconstruct_snapshots => reconstruct_snapshots);
 /// it's only inherited. A missing inode is left for full fsck.
 fn key_has_inode_in_snapshot(
     t:        &TransAttempt<'_, '_>,
-    btree:    c::btree_id,
+    btree:    Btree,
     inum:     u64,
     snapshot: u32,
 ) -> Result<(), BchError> {
     match btree {
-        c::btree_id::extents | c::btree_id::dirents | c::btree_id::xattrs => {}
+        Btree::extents | Btree::dirents | Btree::xattrs => {}
         _ => return Ok(()),
     }
 
@@ -1326,8 +1326,8 @@ pub(crate) fn check_key_has_snapshot<'a>(
     // Both repairs act on the in-memory table: trust it only if the snapshots and
     // subvolumes btrees were checked clean and not changed since - not just
     // checked this mount. Otherwise schedule the passes and defer.
-    if !passes::btree_is_clean(fs, c::btree_id::snapshots) ||
-       !passes::btree_is_clean(fs, c::btree_id::subvolumes) {
+    if !passes::btree_is_clean(fs, Btree::snapshots) ||
+       !passes::btree_is_clean(fs, Btree::subvolumes) {
         keep(passes::require(fs, &mut buf, BCH_RECOVERY_PASS_check_snapshots));
         keep(passes::require(fs, &mut buf, BCH_RECOVERY_PASS_check_subvols));
     }

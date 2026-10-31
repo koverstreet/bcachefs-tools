@@ -36,7 +36,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use cstruct_macros::{c_export, c_name, CStruct, bitfield, c_const, c_rcu_array, Fieldwise, TypeInfo, c_enum};
 use core::cell::Cell;
 use nestify::nest;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 c_enum! {
     #[flags]
@@ -534,7 +534,7 @@ fn trigger_pointer_dev_missing(fs: &Fs, k: BkeySC<'_>, dev: u32, insert: bool) -
 /// A pointer's bucket - its sectors and its backpointer - in the alloc key,
 /// and in gc's copy with gc: bch2_trigger_pointer(). Returns the pointer's
 /// sectors on disk, negative going out.
-fn trigger_pointer(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: BkeySC<'_>,
+fn trigger_pointer(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeySC<'_>,
                    d: &DecodedPtr<'_>, flags: UpdateTriggerFlags) -> Result<i64, BchError> {
     let fs = t.fs();
     let p = &d.p;
@@ -551,7 +551,7 @@ fn trigger_pointer(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: 
                 bp.k.type_ = c::bch_bkey_type::KEY_TYPE_deleted.0 as u8;
                 bp.k.set_val_bytes(0);
             }
-            t.update_buffered(c::btree_id::stripe_backpointers, &t.bkey_copy(bp.as_ref())?)?;
+            t.update_buffered(Btree::stripe_backpointers, &t.bkey_copy(bp.as_ref())?)?;
         }
         return Ok(sectors);
     }
@@ -612,7 +612,7 @@ fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &c::extent_ptr
 
     if flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
         // the stripe, queued as its update: bch2_bkey_get_mut_typed()
-        let mut iter = BtreeIter::new(t, c::btree_id::stripes, pos(0, idx),
+        let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, idx),
                                       BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
         let s = match iter.peek_slot(t)?.and_then(|s| s.arm::<c::Stripe>()) {
             Some(s) => Some(t.bkey_make_mut_noupdate(s)?),
@@ -665,7 +665,7 @@ fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &c::extent_ptr
 /// One key's part of the extent trigger, going in or out by @flags: each
 /// pointer's bucket and stripe, then the key's accounting - replicas,
 /// compression, its snapshot's, and its btree's or inode's: __trigger_extent().
-fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: BkeySC<'_, Ptrs>,
+fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeySC<'_, Ptrs>,
                       flags: UpdateTriggerFlags) -> Result<(), BchError> {
     let fs = t.fs();
     let gc = flags.contains(UpdateTriggerFlags::GC);
@@ -858,7 +858,7 @@ crate::key_trigger!(bch2_trigger_snapshot_nr_keys => trigger_snapshot_nr_keys);
 fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, b: u64,
                                   data_type: c::bch_data_type, sectors: u32) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut iter = BtreeIter::new(t, c::btree_id::alloc, pos(ca.dev_idx.into(), b),
+    let mut iter = BtreeIter::new(t, Btree::alloc, pos(ca.dev_idx.into(), b),
                                   BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
     let k = iter.peek_slot(t)?.expect("peek_slot() has a key at every position");
     let mut a = t.alloc_to_v4_mut(k)?;

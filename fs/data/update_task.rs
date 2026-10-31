@@ -54,6 +54,7 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use core::task::{Context, Poll};
 use pin_init::{pin_data, pin_init, pinned_drop};
+use crate::format::Btree;
 
 // SAFETY: its pointers - to the filesystem, its devices, its read - are good
 // on any thread, and an update runs on whichever thread its IO completes on
@@ -131,7 +132,7 @@ impl<'q, B: Future<Output = ()> + Send> Spawned<'q, B> {
     #[allow(clippy::too_many_arguments)]
     pub fn init(mut self, t: &TransAttempt<'_, '_>, iter: Option<&BtreeIter<'_>>, moving: Option<&Moving<'_>>,
                 wp: c::write_point_specifier, io_opts: &c::bch_inode_opts, data_opts: c::data_update_opts,
-                btree: c::btree_id, k: BkeySC<'_>) -> Result<Ready<'q, B>, BchError> {
+                btree: Btree, k: BkeySC<'_>) -> Result<Ready<'q, B>, BchError> {
         let mut up = self.0.get().future().project().update;
         // SAFETY: zeroed, and pinned in the task
         unsafe {

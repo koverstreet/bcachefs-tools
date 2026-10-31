@@ -20,6 +20,7 @@ use crate::types::c_default;
 use crate::util::Printbuf;
 use core::sync::atomic::AtomicI32;
 use pin_init::pin_data;
+use crate::format::Btree;
 
 #[repr(C)]
 #[derive(Default, CStruct)]
@@ -98,7 +99,7 @@ c_extern! {
     pub fn bch2_btree_node_update_key(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
                                       b: *mut c::BtreeNode, new_key: *mut c::bkey_i,
                                       commit_flags: c_uint, skip_triggers: bool) -> c_int;
-    pub fn bch2_btree_node_update_key_at_pos(trans: *mut c::btree_trans, btree: c::btree_id, level: c_uint,
+    pub fn bch2_btree_node_update_key_at_pos(trans: *mut c::btree_trans, btree: Btree, level: c_uint,
                                              new_key: *mut c::bkey_i) -> c_int;
     pub fn bch2_btree_node_rewrite(trans: *mut c::btree_trans, iter: *mut c::btree_iter, b: *mut c::BtreeNode,
                                    target: c_uint, flags: c::bch_trans_commit_flags,

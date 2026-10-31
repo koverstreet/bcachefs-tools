@@ -31,6 +31,7 @@ use crate::{bch_err, btree_trans, fs_inconsistent, inode_opts, logged_ops, prt};
 use arrayvec::ArrayVec;
 use core::ptr::NonNull;
 use pin_init::{init, init_zeroed, stack_pin_init, Init};
+use crate::format::Btree;
 
 // ── Its task ─────────────────────────────────────────────────────────────
 
@@ -168,7 +169,7 @@ fn stripe_key_update(t: &TransAttempt<'_, '_>, k: BkeySC<'_, c::Stripe<Validated
     let opts = inode_opts::get_fs(fs, false);
     new.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_foreground, 0)?;
 
-    let mut iter = BtreeIter::new(t, c::btree_id::stripes, k.k.p, BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(t, Btree::stripes, k.k.p, BtreeIterFlags::INTENT);
     let old = iter.peek_slot(t)?.expect("a slot always has a key");
     if old.k.type_ != 0 {
         fs_inconsistent!(fs, "error creating stripe: got existing key\n{}", old.to_text(fs));

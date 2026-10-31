@@ -26,6 +26,7 @@ use crate::util::ffi::Opaque;
 use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, Validated, ValidatedEntries};
 use crate::util::Printbuf;
 use crate::sb::io::SbResize;
+use crate::format::Btree;
 
 type Section = c::bch_sb_field_downgrade;
 type Entry = c::bch_sb_field_downgrade_entry<Validated>;
@@ -259,7 +260,7 @@ impl Fs {
     /// Whether there's a stripes btree: a root read, not a fake one.
     fn have_stripes(&self) -> bool {
         // None, or the root: a failed read is the root's error, not its node
-        self.btree_id_root(c::btree_id::BTREE_ID_stripes.0).is_some_and(|b| !b.is_fake())
+        self.btree_id_root(Btree::BTREE_ID_stripes.0).is_some_and(|b| !b.is_fake())
     }
 
     /// What an upgrade past bucket_stripe_sectors needs on a filesystem with

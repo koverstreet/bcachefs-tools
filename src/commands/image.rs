@@ -37,6 +37,7 @@ use crate::util::parse_human_size;
 use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;
 use crate::wrappers::sysfs;
 use bcachefs_kernel::sb::io::SbResize;
+use bcachefs_kernel::format::Btree;
 
 const BCH_REPLICAS_MAX: u32 = 4;
 const BTREE_MAX_DEPTH: u32 = 4;
@@ -157,7 +158,7 @@ fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::
             continue;
         }
 
-        let btree_id = c::btree_id::from_raw(btree).expect("invalid btree id");
+        let btree_id = Btree::from_raw(btree).expect("invalid btree id");
 
         ctxt.move_data_btree(btree_id, 1..BTREE_MAX_DEPTH, POS_MIN, SPOS_MAX, "move_btree_pred",
                              |_, btree, k, _, opts| {
@@ -257,7 +258,7 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
                 unsafe {
                     c::bch2_btree_id_to_text(
                         indented.as_raw(),
-                        c::btree_id::from_raw(i).expect("invalid btree id"),
+                        Btree::from_raw(i).expect("invalid btree id"),
                     )
                 };
                 prt_sectors(&mut indented, v[0]);

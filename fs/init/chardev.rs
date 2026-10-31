@@ -66,6 +66,7 @@ use cstruct_macros::{c_export, vtable};
 use kernel::alloc::KVec;
 use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
 use kernel::uaccess::{UserPtr, UserSlice};
+use crate::format::Btree;
 
 /* The dispatch */
 
@@ -427,7 +428,7 @@ fn query_btree_keys(fs: &Fs, arg: &mut c::bch_ioctl_query_btree_keys) -> Result<
     }
 
     // an id past the last is what bch2_btree_iter_params_valid() refuses first
-    let valid = c::btree_id::from_raw(arg.btree).is_some_and(|btree| unsafe {
+    let valid = Btree::from_raw(arg.btree).is_some_and(|btree| unsafe {
         c::bch2_btree_iter_params_valid(btree, arg.level, arg.start, arg.end,
             c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()))
     });

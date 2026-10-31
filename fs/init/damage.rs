@@ -50,7 +50,7 @@ use core::cmp::Ordering;
 use core::ffi::c_int;
 use core::mem::size_of;
 use cstruct_macros::c_export;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 // ── The key ──────────────────────────────────────────────────────────────
 
@@ -106,7 +106,7 @@ pub fn bch2_damage_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC
 /// Whether inode @inum has damage recorded in @snapshot or an ancestor
 /// version - the version @snapshot sees.
 pub fn inode_has_damage(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<bool, BchError> {
-    let mut iter = BtreeIter::new(t, c::btree_id::damage, spos(0, inum, snapshot), BtreeIterFlags::NOPRESERVE);
+    let mut iter = BtreeIter::new(t, Btree::damage, spos(0, inum, snapshot), BtreeIterFlags::NOPRESERVE);
     Ok(iter.peek_slot(t)?.is_some_and(|k| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_damage))
 }
 
@@ -118,7 +118,7 @@ pub fn accumulate(t: &TransAttempt<'_, '_>, inum: u64, mut snapshot: u32)
 {
     let mut out: KVVec<c::bch_sb_error_entry_cpu> = KVVec::new();
     loop {
-        let mut iter = BtreeIter::new(t, c::btree_id::damage, spos(0, inum, snapshot), BtreeIterFlags::NOPRESERVE);
+        let mut iter = BtreeIter::new(t, Btree::damage, spos(0, inum, snapshot), BtreeIterFlags::NOPRESERVE);
         let Some(d) = iter.peek_slot(t)?.and_then(|k| k.arm::<c::Damage>()) else { break };
 
         for e in d.v().entries.iter() {
@@ -151,7 +151,7 @@ pub fn record(t: &TransAttempt<'_, '_>, pos: Bpos, err: c::bch_sb_error_id) -> R
 
     crate::init::error::fsck_damaged(t.fs(), pos, err);
 
-    let mut iter = BtreeIter::new(t, c::btree_id::damage, at,
+    let mut iter = BtreeIter::new(t, Btree::damage, at,
                                   BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::INTENT);
     let cur = iter.peek_slot(t)?.and_then(|k| k.arm::<c::Damage>());
     let old = cur.as_ref().map_or(&[][..], |d| &d.v().entries);
@@ -189,23 +189,23 @@ pub fn record(t: &TransAttempt<'_, '_>, pos: Bpos, err: c::bch_sb_error_id) -> R
 /// record(), for a key at @pos in @btree: damage is keyed by inode, and only
 /// an extents position names one - getting to an indirect extent's inodes
 /// would mean walking reflink pointers backwards.
-pub fn record_key(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos, err: c::bch_sb_error_id)
+pub fn record_key(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos, err: c::bch_sb_error_id)
     -> Result<(), BchError>
 {
-    if btree == c::btree_id::extents { record(t, pos, err) } else { Ok(()) }
+    if btree == Btree::extents { record(t, pos, err) } else { Ok(()) }
 }
 
 fn inode_exists(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<bool, BchError> {
-    let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, snapshot), BtreeIterFlags::ALL_SNAPSHOTS);
+    let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum, snapshot), BtreeIterFlags::ALL_SNAPSHOTS);
     Ok(iter.peek_slot(t)?.is_some_and(|k| bkey_is_inode(k.k)))
 }
 
 /// record_key(), for damage found after the fact, when the file may be gone
 /// too - a journal rewind can take its creation with it: a damage key for an
 /// inode that doesn't exist would only be check_damage's to delete.
-pub fn record_key_if_inode(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos,
+pub fn record_key_if_inode(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos,
                            err: c::bch_sb_error_id) -> Result<(), BchError> {
-    if btree != c::btree_id::extents || !inode_exists(t, pos.inode, pos.snapshot)? {
+    if btree != Btree::extents || !inode_exists(t, pos.inode, pos.snapshot)? {
         return Ok(());
     }
     record(t, pos, err)
@@ -214,7 +214,7 @@ pub fn record_key_if_inode(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bp
 /// Data lost or corrupted outside fsck_err()'s reporting - a device's
 /// removal dropping the last replica, a read error: @err counted in the
 /// superblock, and record_key().
-pub fn record_data_loss(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos,
+pub fn record_data_loss(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos,
                         err: c::bch_sb_error_id) -> Result<(), BchError> {
     t.fs().sb_error_count(err);
     record_key(t, btree, pos, err)
@@ -228,7 +228,7 @@ pub fn record_data_loss(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos,
 pub fn delete(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<(), BchError> {
     use c::bch_bkey_type as T;
 
-    let mut iter = BtreeIter::new(t, c::btree_id::damage, spos(0, inum, snapshot), BtreeIterFlags::ALL_SNAPSHOTS);
+    let mut iter = BtreeIter::new(t, Btree::damage, spos(0, inum, snapshot), BtreeIterFlags::ALL_SNAPSHOTS);
     let ty = iter.peek_slot(t)?.map(|k| k.k.key_type());
     if ty != Some(T::KEY_TYPE_damage) && ty != Some(T::KEY_TYPE_whiteout) {
         return Ok(());
@@ -243,7 +243,7 @@ pub fn delete(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<(), 
 pub fn clear(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<(), BchError> {
     let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
 
-    let mut iter = BtreeIter::new(t, c::btree_id::damage, spos(0, inum.inum, snapshot), BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(t, Btree::damage, spos(0, inum.inum, snapshot), BtreeIterFlags::INTENT);
     if !iter.peek_slot(t)?.is_some_and(|k| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_damage) {
         return Ok(());
     }
@@ -300,13 +300,13 @@ pub extern "C" fn bch2_damage_record(trans: &BtreeTrans<'_>, pos: Bpos, err: c::
 }
 
 #[c_export]
-pub extern "C" fn bch2_damage_record_key(trans: &BtreeTrans<'_>, btree: c::btree_id, pos: Bpos,
+pub extern "C" fn bch2_damage_record_key(trans: &BtreeTrans<'_>, btree: Btree, pos: Bpos,
                                      err: c::bch_sb_error_id) -> c_int {
     ret_to_c(record_key(&unsafe { trans.attempt_in_progress() }, btree, pos, err))
 }
 
 #[c_export]
-pub extern "C" fn bch2_damage_record_key_if_inode(trans: &BtreeTrans<'_>, btree: c::btree_id, pos: Bpos,
+pub extern "C" fn bch2_damage_record_key_if_inode(trans: &BtreeTrans<'_>, btree: Btree, pos: Bpos,
                                               err: c::bch_sb_error_id) -> c_int {
     ret_to_c(record_key_if_inode(&unsafe { trans.attempt_in_progress() }, btree, pos, err))
 }
@@ -326,8 +326,8 @@ pub extern "C" fn bch2_damage_record_key_if_inode(trans: &BtreeTrans<'_>, btree:
 /// data are those pointing into it - backpointers run bucket to extent, not
 /// back, so finding them would be a scan of the extents btree for reflink
 /// pointers in the range: an fsck pass, not something a loss site can do.
-pub fn note_lost_extents(fs: &Fs, btree: c::btree_id, k: BkeySC<'_>) {
-    if btree != c::btree_id::extents {
+pub fn note_lost_extents(fs: &Fs, btree: Btree, k: BkeySC<'_>) {
+    if btree != Btree::extents {
         return;
     }
     let Some(p) = k.arm::<c::BtreePtrV2>() else { return };
@@ -356,7 +356,7 @@ pub fn record_lost_extents(fs: &Fs) {
     let mut failed = 0;
 
     for r in ranges.iter() {
-        let mut iter = BtreeIter::new(&trans, c::btree_id::inodes, spos(0, r.start.inode, 0), flags);
+        let mut iter = BtreeIter::new(&trans, Btree::inodes, spos(0, r.start.inode, 0), flags);
         let ret = iter.for_each_max_commit(&trans, spos(0, r.end.inode, u32::MAX), flags, None,
                                            CommitFlags::NO_ENOSPC, |t, _, k| {
             if !bkey_is_inode(k.k) || inode::unpack(fs, k).bi_sectors == 0 {
@@ -384,7 +384,7 @@ pub fn record_lost_extents(fs: &Fs) {
 }
 
 #[c_export]
-pub fn bch2_damage_note_lost_extents(c: &Opaque<c::bch_fs>, btree: c::btree_id, k: BkeySC<'_>) {
+pub fn bch2_damage_note_lost_extents(c: &Opaque<c::bch_fs>, btree: Btree, k: BkeySC<'_>) {
     note_lost_extents(Fs::from_c(c), btree, k)
 }
 
@@ -394,7 +394,7 @@ pub fn bch2_damage_note_lost_extents(c: &Opaque<c::bch_fs>, btree: c::btree_id, 
 fn check_damage(fs: &Fs) -> Result<(), BchError> {
     let trans = btree_trans!(fs);
     let flags = BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::PREFETCH;
-    let mut iter = BtreeIter::new(&trans, c::btree_id::damage, POS_MIN, flags);
+    let mut iter = BtreeIter::new(&trans, Btree::damage, POS_MIN, flags);
     iter.for_each_max_commit(&trans, SPOS_MAX, flags, None, CommitFlags::NO_ENOSPC, |t, iter, k| {
         if k.k.key_type() == c::bch_bkey_type::KEY_TYPE_damage &&
            fsck_err_on!(t, !inode_exists(t, k.k.p.offset, k.k.p.snapshot)?, id::damage_key_no_inode,

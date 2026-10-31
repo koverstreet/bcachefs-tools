@@ -21,7 +21,7 @@ use bcachefs_kernel::util::vstructs::{assume_validated, plain_bytes, VstructRef}
 
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::grow_on_erange;
-use bcachefs_kernel::format::Bpos;
+use bcachefs_kernel::format::{Bpos, Btree};
 
 /// Iteration flags, mirroring BCH_IOCTL_QUERY_BTREE_KEYS_*:
 #[derive(Clone, Copy, Default)]
@@ -55,7 +55,7 @@ pub struct OnlineBtreeIter<'h> {
 
 impl<'h> OnlineBtreeIter<'h> {
     pub fn new(fs: &'h BcachefsHandle,
-	       btree: c::btree_id,
+	       btree: Btree,
 	       level: u32,
 	       start: Bpos,
 	       end: Bpos,
@@ -68,7 +68,7 @@ impl<'h> OnlineBtreeIter<'h> {
     /// buffer of iteration they'll never consume. Grows automatically if
     /// even one key doesn't fit.
     pub fn with_buf_size(fs: &'h BcachefsHandle,
-			 btree: c::btree_id,
+			 btree: Btree,
 			 level: u32,
 			 start: Bpos,
 			 end: Bpos,

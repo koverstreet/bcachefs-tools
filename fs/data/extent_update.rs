@@ -30,7 +30,7 @@ use crate::sb::counters::events;
 use core::ffi::c_int;
 use core::ops::ControlFlow;
 use cstruct_macros::c_export;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /// The most btree iterators an extent update's transaction may need.
 const EXTENT_ITERS_MAX: u32 = 64;
@@ -87,7 +87,7 @@ impl<'t> TransAttempt<'_, 't> {
             t::KEY_TYPE_reflink_p => {
                 let idx = k.arm::<c::ReflinkP>().expect("a reflink_p").v().idx();
                 let sectors = bpos_min(n.end, k.k.p).offset - k.k.start_offset();
-                let mut iter = BtreeIter::new(self, c::btree_id::BTREE_ID_reflink, pos(0, idx + offset),
+                let mut iter = BtreeIter::new(self, Btree::BTREE_ID_reflink, pos(0, idx + offset),
                                               BtreeIterFlags::SLOTS);
 
                 iter.for_each_norestart(self, |_, r_k| {

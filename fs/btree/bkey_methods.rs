@@ -44,7 +44,7 @@ use core::mem::{size_of, MaybeUninit};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, c_extern};
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /*
  * key_validate: checks validity of @k, returns 0 if good or -EINVAL if bad. If
@@ -63,8 +63,8 @@ pub struct bkey_ops {
     pub key_merge: Option<unsafe extern "C" fn(*mut c::bch_fs, c::bkey_s, c::bkey_s_c) -> bool>,
     pub trigger: Option<unsafe extern "C" fn(*mut c::btree_trans, c::btree_trigger_op) -> c_int>,
     pub check_repair: Option<unsafe extern "C" fn(*mut c::btree_trans, *mut c::btree_iter,
-                                                  c::btree_id, c_uint, c::bkey_s_c) -> c_int>,
-    pub compat: Option<unsafe extern "C" fn(id: c::btree_id, version: c_uint,
+                                                  Btree, c_uint, c::bkey_s_c) -> c_int>,
+    pub compat: Option<unsafe extern "C" fn(id: Btree, version: c_uint,
                                             big_endian: c_uint, write: c_int,
                                             c::bkey_s)>,
 
@@ -279,7 +279,7 @@ impl TransBkey<'_, '_> {
 /// mid-commit, and refuses in the atomic phase. That isn't necessarily safe,
 /// and a trigger shouldn't have to.
 pub struct TriggerOp<'a> {
-    pub btree: c::btree_id,
+    pub btree: Btree,
     pub level: u32,
     pub old:   BkeySC<'a>,
     pub new:   BkeyS<'a>,

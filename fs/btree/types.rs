@@ -18,7 +18,7 @@ use pin_init::pin_data;
 use nestify::nest;
 #[cfg(feature = "std")]
 use std::{ffi::CString, str::FromStr};
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /* Btree nodes: */
 
@@ -274,7 +274,7 @@ impl BtreeRoots {
     /// Btree @id's: a known btree's, or past them, roots_extra's -
     /// bch2_btree_id_root(). None for one past those.
     pub fn get(&self, id: u32) -> Option<&cs::btree_root> {
-        let nr_known = u32::from(cs::btree_id::nr);
+        let nr_known = u32::from(Btree::nr);
         if id < nr_known {
             return Some(&self.roots_known[id as usize]);
         }
@@ -284,7 +284,7 @@ impl BtreeRoots {
     }
 
     pub fn get_mut(&mut self, id: u32) -> Option<&mut cs::btree_root> {
-        let nr_known = u32::from(cs::btree_id::nr);
+        let nr_known = u32::from(Btree::nr);
         if id < nr_known {
             return Some(&mut self.roots_known[id as usize]);
         }
@@ -498,7 +498,7 @@ c_enum! {
 #[repr(C)]
 #[derive(Default, CStruct)]
 pub struct btree_trigger_op {
-    pub btree: cs::btree_id,
+    pub btree: Btree,
     pub level: c_uint,
     pub old: cs::bkey_s_c,
     pub new: cs::bkey_s,
@@ -537,7 +537,7 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u16, ty = u32)]
         pub bits: pub struct btree_path_bits {
-            #[bits(7)] pub btree_id: cs::btree_id,
+            #[bits(7)] pub btree_id: Btree,
             cached:           bool,
             preserve:         bool,
             /*
@@ -583,7 +583,7 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8)]
         pub(in crate::btree) bits: pub struct btree_iter_bits {
-            #[bits(8)] pub(self) btree_id: cs::btree_id,
+            #[bits(8)] pub(self) btree_id: Btree,
         },
         pub(in crate::btree) min_depth: u8,
 
@@ -614,7 +614,7 @@ nest! {
 
 impl BtreeIter<'_> {
     /// Set only by C, when it initializes the iterator.
-    pub fn btree(&self) -> cs::btree_id {
+    pub fn btree(&self) -> Btree {
         self.bits.btree_id()
     }
 }
@@ -671,7 +671,7 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u16, ty = u8)]
         pub bits: pub struct btree_insert_entry_bits {
-            #[bits(8)] pub btree_id: cs::btree_id,
+            #[bits(8)] pub btree_id: Btree,
             level:                     u3,
             cached:                    bool,
             insert_trigger_run:        bool,
@@ -856,7 +856,7 @@ nest! {
         pub last_unlock_ip: c_ulong,
         pub srcu_lock_time: c_ulong,
         pub srcu_idx: c_int,
-        pub locking_root_id: cs::btree_id,
+        pub locking_root_id: Btree,
 
         pub locking_hash_val: u64,
         pub locking: *mut cs::btree_bkey_cached_common,
@@ -1182,7 +1182,7 @@ macro_rules! btree_ids_mask {
     ($(($name:ident, $nr:literal $(, $($rest:tt)*)?)),* $(,)?) => { 0u64 $(| 1 << $nr)* };
 }
 
-impl c::btree_id {
+impl Btree {
     /// Whether it's an extents btree with snapshots:
     /// btree_id_is_extents_snapshots().
     pub const fn is_extents_snapshots(self) -> bool {
@@ -1198,8 +1198,8 @@ impl c::btree_id {
     }
 }
 
-impl From<c::btree_id> for u32 {
-    fn from(id: c::btree_id) -> u32 {
+impl From<Btree> for u32 {
+    fn from(id: Btree) -> u32 {
         id.0
     }
 }
@@ -1207,16 +1207,16 @@ impl From<c::btree_id> for u32 {
 /// Get a btree ID name string.
 #[cfg(feature = "std")]
 pub fn btree_id_str(id: u32) -> String {
-    c::btree_id(id).to_string()
+    Btree(id).to_string()
 }
 
 #[cfg(feature = "std")]
-impl FromStr for c::btree_id {
+impl FromStr for Btree {
     type Err = BchError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        <c::btree_id as crate::util::names::Names>::ENTRIES.iter().find(|&&(n, _)| n == s)
-            .and_then(|&(_, v)| c::btree_id::from_raw(v as u32))
+        <Btree as crate::util::names::Names>::ENTRIES.iter().find(|&&(n, _)| n == s)
+            .and_then(|&(_, v)| Btree::from_raw(v as u32))
             .ok_or(bch_errcode::BCH_ERR_EINVAL_parse_btree_id.into())
     }
 }

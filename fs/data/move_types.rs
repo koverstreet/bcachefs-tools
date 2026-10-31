@@ -9,7 +9,7 @@ use core::ffi::{c_int, c_uint};
 use core::sync::atomic::{AtomicI32, AtomicI64};
 use cstruct_macros::{c_name, CStruct, c_typedef, TypeInfo};
 use nestify::nest;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 nest! {
     /// What moves count into - whoever issues them, and their completions,
@@ -86,7 +86,7 @@ pub struct move_bucket {
 #[derive(CStruct)]
 #[c_typedef]
 pub struct scrub_journal_repair {
-    pub btree_id: c::btree_id,
+    pub btree_id: Btree,
     pub level: c_uint,
     pub bad_devs: c_uint,
     pub read_err: c_int,

@@ -22,6 +22,7 @@ use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;
 use core::ffi::c_uint;
 use core::sync::atomic::Ordering;
+use crate::format::Btree;
 
 // ── A new stripe's buckets ───────────────────────────────────────────────
 //
@@ -403,7 +404,7 @@ pub(crate) fn stripe_idx_alloc(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Re
     let min_pos = pos(0, 1);
     let mut start = bpos_max(min_pos, pos(0, fs.ec.stripe_hint.load(Ordering::Relaxed)));
 
-    let mut iter = BtreeIter::new(t, c::btree_id::stripes, start, BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(t, Btree::stripes, start, BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT);
     iter.for_each_norestart(t, |iter, k| {
         fs.ec.stripe_hint.store(iter.pos().offset, Ordering::Relaxed);
 

@@ -11,6 +11,7 @@ use crate::data::reconcile::trigger::{extent_rebalance_v1_to_text, extent_reconc
 use crate::init::error::{id, BkeyValidate};
 use crate::util::rcu::ReadGuard;
 use crate::util::{Printbuf, ToText};
+use crate::format::Btree;
 
 // ── validate ─────────────────────────────────────────────────────────────
 
@@ -344,7 +345,7 @@ pub fn btree_ptr_v2_to_text(out: &mut Printbuf, fs: &Fs, k: BkeySC<'_>) {
 /// validate: a value too short for min_key is left to it, where C writes past.
 ///
 /// XXX: as ptr_swab() - this should take an Unvalidated key.
-pub fn btree_ptr_v2_compat(btree: c::btree_id, version: c::bcachefs_metadata_version, big_endian: bool,
+pub fn btree_ptr_v2_compat(btree: Btree, version: c::bcachefs_metadata_version, big_endian: bool,
                            write: bool, k: BkeyS<'_>) {
     let Some(mut bp) = k.arm::<c::BtreePtrV2>() else { return };
     let Some(v) = <c::BtreePtrV2 as ArmRef>::arm_mut(bp.val_bytes_mut()) else { return };

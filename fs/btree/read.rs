@@ -16,6 +16,7 @@ use core::mem::offset_of;
 use core::ffi::{c_int, c_uint, c_void};
 use cstruct_macros::{CStruct, bitfield, c_extern, c_typedef};
 use nestify::nest;
+use crate::format::Btree;
 
 nest! {
     #[repr(C)]
@@ -47,7 +48,7 @@ c_typedef! {
 }
 
 c_extern! {
-    pub fn bch2_btree_node_scrub(trans: *mut c::btree_trans, btree: c::btree_id, level: c_uint,
+    pub fn bch2_btree_node_scrub(trans: *mut c::btree_trans, btree: Btree, level: c_uint,
                                  k: c::bkey_s_c, dev: c_uint) -> c_int;
 }
 

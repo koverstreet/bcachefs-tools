@@ -52,10 +52,10 @@ use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter};
 use bcachefs_kernel::util::vstructs::{cast_plain, Head, SelfSized};
 use clap::Parser;
-use bcachefs_kernel::format::Bpos;
+use bcachefs_kernel::format::{Bpos, Btree};
 
 struct KillNode {
-    btree:  c::btree_id,
+    btree:  Btree,
     level:  u32,
     idx:    u64,
 }
@@ -100,7 +100,7 @@ fn parse_kill_node(s: &str) -> Result<KillNode> {
         bail!("invalid node spec: {}", s);
     }
 
-    let btree: c::btree_id = parts[0].parse()
+    let btree: Btree = parts[0].parse()
         .map_err(|_| anyhow!("invalid btree id: {}", parts[0]))?;
 
     let level = if parts.len() > 1 {

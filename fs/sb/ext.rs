@@ -15,12 +15,13 @@ use crate::types::Le64;
 use crate::util::bitmap::LeBitmap;
 use crate::util::vstructs::{Validated, Unvalidated};
 use crate::util::Printbuf;
+use crate::format::Btree;
 
 type Section = c::bch_sb_field_ext<Validated>;
 
 fn prt_btrees(out: &mut Printbuf, what: &str, btrees: Le64) {
     write!(out, "{what}:\t");
-    crate::util::names::prt_set::<c::btree_id>(out, btrees.get());
+    crate::util::names::prt_set::<Btree>(out, btrees.get());
     out.newline();
 }
 

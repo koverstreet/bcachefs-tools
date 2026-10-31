@@ -37,6 +37,7 @@ use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, bch_err_ratelimited, bch_info, fsck_err, fsck_err_on, inode_fsck_err};
 use crate::{inode, namei, str_hash};
 use core::ops::ControlFlow;
+use crate::format::Btree;
 
 struct CheckDirents {
     s:                SnapshotsSeen,
@@ -54,7 +55,7 @@ struct CheckDirents {
 /// key even when the repair is declined (see check_dir_nlink()).
 fn count_subdirs(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<u64, BchError> {
     let mut subdirs = 0;
-    let mut iter = BtreeIter::new(t, c::btree_id::dirents, spos(inum, 0, snapshot),
+    let mut iter = BtreeIter::new(t, Btree::dirents, spos(inum, 0, snapshot),
                                   BtreeIterFlags::empty());
 
     iter.for_each_max_norestart(t, pos(inum, u64::MAX), |_, k| {
@@ -145,7 +146,7 @@ fn check_subdir_dirents_count(t: &TransAttempt<'_, '_>, w: &mut InodeWalker) -> 
 
 /// A subvolume whose snapshot is @snapshot or a descendant of it.
 fn find_snapshot_subvol(t: &TransAttempt<'_, '_>, snapshot: u32) -> Result<Option<u32>, BchError> {
-    let mut iter = BtreeIter::new(t, c::btree_id::subvolumes, POS_MIN, BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(t, Btree::subvolumes, POS_MIN, BtreeIterFlags::empty());
 
     iter.for_each_norestart(t, |_, k| Ok(
         match k.arm::<c::Subvolume>().map(|k| k.v()) {
@@ -181,7 +182,7 @@ fn check_dirent_parent_subvol<'t>(
 
     let new_parent = find_snapshot_subvol(t, d_snapshot)?;
 
-    if new_parent.is_none() && fs.btree_lost_data(c::btree_id::subvolumes) {
+    if new_parent.is_none() && fs.btree_lost_data(Btree::subvolumes) {
         // No subvolume sees the dirent's snapshot - but we lost subvolumes,
         // so reconstruct the one it names:
         let root = check::reconstruct_subvol_root(t, d_snapshot, parent, None)?;
@@ -233,7 +234,7 @@ fn check_dirent_to_subvol<'t>(
     let parent = check_dirent_parent_subvol(t, iter, k, parent)?;
     let fs = t.fs();
 
-    let mut subvol_iter = BtreeIter::new(t, c::btree_id::subvolumes, pos(0, child as u64),
+    let mut subvol_iter = BtreeIter::new(t, Btree::subvolumes, pos(0, child as u64),
                                          BtreeIterFlags::empty());
     let s = subvol_iter.peek_slot_typed::<c::Subvolume>(t).found()?;
 
@@ -302,9 +303,9 @@ fn maybe_reconstruct_inum(
     snapshot: u32,
     d_type:   u8,
 ) -> Result<bool, BchError> {
-    for (btree, type_) in [(c::btree_id::extents, "reg"),
-                           (c::btree_id::dirents, "dir"),
-                           (c::btree_id::xattrs,  "with xattrs")] {
+    for (btree, type_) in [(Btree::extents, "reg"),
+                           (Btree::dirents, "dir"),
+                           (Btree::xattrs,  "with xattrs")] {
         let has_contents = {
             let mut iter = BtreeIter::new(t, btree, spos(inum, 0, snapshot), BtreeIterFlags::TRIM);
             iter.peek_max(t, pos(inum, u64::MAX))?.is_some()
@@ -343,7 +344,7 @@ fn move_dirent_to_inode_snapshots(
         // The state firing this is unchanged by the copies: skip those already
         // committed, or a re-drive after a partial commit makes no progress
         let copied = {
-            let mut probe = BtreeIter::new(t, c::btree_id::dirents,
+            let mut probe = BtreeIter::new(t, Btree::dirents,
                                            spos(k.k.p.inode, k.k.p.offset, snapshot),
                                            BtreeIterFlags::empty());
             let old = probe.peek_slot(t)?.expect("a slot always has a key");
@@ -357,12 +358,12 @@ fn move_dirent_to_inode_snapshots(
 
         let mut n = t.bkey_make_mut_noupdate(k)?;
         n.k_mut().p.snapshot = snapshot;
-        t.insert(c::btree_id::dirents, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+        t.insert(Btree::dirents, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
     }
 
     // Delete with the hash info we already have - dirent::fsck_remove()
     // rederives it from the first inode version it finds:
-    let mut del_iter = BtreeIter::new(t, c::btree_id::dirents, k.k.p, BtreeIterFlags::INTENT);
+    let mut del_iter = BtreeIter::new(t, Btree::dirents, k.k.p, BtreeIterFlags::INTENT);
     t.iter_traverse(&mut del_iter)?;
     str_hash::delete_at::<Dirents>(t, &st.hash_info, &mut del_iter,
                                    UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
@@ -426,7 +427,7 @@ fn check_dirent_to_inode<'t>(
 
         t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
 
-        let mut delete_iter = BtreeIter::new(t, c::btree_id::dirents,
+        let mut delete_iter = BtreeIter::new(t, Btree::dirents,
                                              spos(k.k.p.inode, k.k.p.offset, snapshot),
                                              BtreeIterFlags::INTENT);
 
@@ -532,8 +533,8 @@ fn check_dirents(fs: &Fs) -> Result<(), BchError> {
     let mut did_second_pass = false;
 
     loop {
-        let progress = Progress::recovery(fs, c"bch2_check_dirents", &[c::btree_id::dirents], &[]);
-        let mut iter = BtreeIter::new(&trans, c::btree_id::dirents,
+        let progress = Progress::recovery(fs, c"bch2_check_dirents", &[Btree::dirents], &[]);
+        let mut iter = BtreeIter::new(&trans, Btree::dirents,
                                       pos(c::BCACHEFS_ROOT_INO as u64, 0),
                                       BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
 

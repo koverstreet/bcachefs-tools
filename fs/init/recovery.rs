@@ -18,6 +18,7 @@ use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use core::ffi::c_int;
 use cstruct_macros::c_export;
+use crate::format::Btree;
 
 type Pass = c::bch_recovery_pass;
 
@@ -31,8 +32,8 @@ macro_rules! passes {
 /// one leaves dangling references in the others, which otherwise surface later
 /// as runtime errors - a dirents btree flagged lost in one boot is a dirent to
 /// a missing inode weeks after.
-fn lost_data_passes(btree: c::btree_id) -> &'static [Pass] {
-    use c::btree_id as b;
+fn lost_data_passes(btree: Btree) -> &'static [Pass] {
+    use Btree as b;
 
     match btree {
         b::BTREE_ID_alloc |
@@ -68,7 +69,7 @@ fn lost_data_passes(btree: c::btree_id) -> &'static [Pass] {
 /// explains, silenced. @msg is the report: unsuppressed if any of this was new,
 /// so damage already reported doesn't print on every read of a bad node.
 /// bch2_btree_lost_data().
-pub fn btree_lost_data(fs: &Fs, msg: &mut Printbuf, btree: c::btree_id) -> Result<(), BchError> {
+pub fn btree_lost_data(fs: &Fs, msg: &mut Printbuf, btree: Btree) -> Result<(), BchError> {
     let mut w = fs.sb_write();
 
     w.set_btrees_lost_data_ever(btree);
@@ -103,7 +104,7 @@ pub fn btree_lost_data(fs: &Fs, msg: &mut Printbuf, btree: c::btree_id) -> Resul
               id::reconcile_work_incorrectly_set] {
         w.set_err_silent(e);
     }
-    if btree == c::btree_id::BTREE_ID_alloc {
+    if btree == Btree::BTREE_ID_alloc {
         for e in [id::alloc_key_gen_wrong, id::alloc_key_cached_sectors_wrong, id::alloc_key_stripe_wrong,
                   id::alloc_key_stripe_redundancy_wrong] {
             w.set_err_silent(e);
@@ -121,7 +122,7 @@ pub fn btree_lost_data(fs: &Fs, msg: &mut Printbuf, btree: c::btree_id) -> Resul
 }
 
 #[c_export]
-pub fn bch2_btree_lost_data(c: &Opaque<c::bch_fs>, msg: &mut Printbuf, btree: c::btree_id) -> c_int {
+pub fn bch2_btree_lost_data(c: &Opaque<c::bch_fs>, msg: &mut Printbuf, btree: Btree) -> c_int {
     ret_to_c(btree_lost_data(Fs::from_c(c), msg, btree))
 }
 
@@ -166,7 +167,7 @@ fn reconstruct_alloc(fs: &Fs) {
 
     for btree in (0..fs.btree_id_nr_alive()).filter(|&b| btree_id_is_alloc(b)) {
         fs.btree.cache.roots.lock().get_mut(btree).expect("a btree below btree_id_nr_alive()").alive = 0;
-        shoot_down_journal_keys(fs, c::btree_id(btree), 0, c::BTREE_MAX_DEPTH, POS_MIN, SPOS_MAX);
+        shoot_down_journal_keys(fs, Btree(btree), 0, c::BTREE_MAX_DEPTH, POS_MIN, SPOS_MAX);
     }
 }
 

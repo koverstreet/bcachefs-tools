@@ -54,6 +54,7 @@ use core::mem::{offset_of, size_of};
 use core::ops::Range;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering::Relaxed};
 use cstruct_macros::c_export;
+use crate::format::Btree;
 
 /// A value with a refcount - of a BKEY_TYPE_indirect type, or Indirect,
 /// either of them: where in it the refcount is.
@@ -330,7 +331,7 @@ fn gc_write_reflink_key(
 /// gc's end: the reflink btree's refcounts, checked against its counts.
 fn gc_reflink_done(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::reflink, POS_MIN, BtreeIterFlags::PREFETCH);
+    let mut iter = BtreeIter::new(&trans, Btree::reflink, POS_MIN, BtreeIterFlags::PREFETCH);
     let mut idx = 0;
 
     let ret = iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC,
@@ -545,7 +546,7 @@ fn indirect_extent_not_missing(t: &TransAttempt<'_, '_>, p: BkeySC<'_, c::Reflin
     let mut new = t.bkey_make_mut_noupdate(p)?;
 
     new.v_mut().set_error(false);
-    t.insert(c::btree_id::extents, new, UpdateTriggerFlags::NORUN)?;
+    t.insert(Btree::extents, new, UpdateTriggerFlags::NORUN)?;
 
     if !should_commit {
         return Ok(());
@@ -618,7 +619,7 @@ fn indirect_extent_missing_error(
             new.v_mut().set_error(true);
         }
 
-        t.insert(c::btree_id::extents, new, UpdateTriggerFlags::NORUN)?;
+        t.insert(Btree::extents, new, UpdateTriggerFlags::NORUN)?;
 
         if should_commit {
             t.commit_lazy(None, CommitFlags::NO_ENOSPC)?;
@@ -646,7 +647,7 @@ pub fn lookup_indirect_extent<'a, 'k>(
     assert!(refd.contains(&reflink_offset),
             "offset {} into the reflink_p, outside its references {refd:?}", *offset_into_extent);
 
-    *iter = BtreeIter::new(t, c::btree_id::reflink, pos(0, reflink_offset), iter_flags);
+    *iter = BtreeIter::new(t, Btree::reflink, pos(0, reflink_offset), iter_flags);
     let k = iter.peek_slot(t)?.expect("peek_slot() returns a key");
 
     if unlikely(k.arm::<Indirect>().is_none()) {
@@ -797,7 +798,7 @@ crate::key_trigger!(bch2_trigger_reflink_p => trigger_reflink_p);
 pub fn bch2_reflink_p_check_repair<'t>(
     trans:  &'t BtreeTrans<'t>,
     _iter:  &mut BtreeIter<'t>,
-    _btree: c::btree_id,
+    _btree: Btree,
     _level: c_uint,
     k:      BkeySC<'_>,
 ) -> c_int {
@@ -873,7 +874,7 @@ unsafe fn __make_extent_indirect(
      */
     let opts = crate::inode_opts::get_io_opts(t, None, BkeySC::from(&*orig))?;
 
-    let mut reflink_iter = BtreeIter::new(t, c::btree_id::reflink, POS_MAX, BtreeIterFlags::INTENT);
+    let mut reflink_iter = BtreeIter::new(t, Btree::reflink, POS_MAX, BtreeIterFlags::INTENT);
     reflink_iter.peek_prev(t)?;
 
     /*
@@ -971,8 +972,8 @@ pub fn remap_range(
     fs.check_set_feature(c::bch_sb_feature::BCH_FEATURE_reflink);
 
     let trans = crate::btree_trans!(fs);
-    let mut src_iter = BtreeIter::new(&trans, c::btree_id::extents, src_start, BtreeIterFlags::INTENT);
-    let mut dst_iter = BtreeIter::new(&trans, c::btree_id::extents, dst_start, BtreeIterFlags::INTENT);
+    let mut src_iter = BtreeIter::new(&trans, Btree::extents, src_start, BtreeIterFlags::INTENT);
+    let mut dst_iter = BtreeIter::new(&trans, Btree::extents, dst_start, BtreeIterFlags::INTENT);
     let mut ret = Ok(());
 
     while (ret.is_ok() || ret.as_ref().is_err_and(is_restart)) && bkey_lt(dst_iter.pos(), dst_end) {

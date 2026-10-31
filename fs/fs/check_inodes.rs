@@ -24,7 +24,7 @@ use crate::{bch_err_msg, fsck_err, fsck_err_on, inode_fsck_err};
 use crate::dirent::{self, Dirent};
 use crate::{inode, inode_opts, namei, str_hash};
 use core::fmt;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 struct CheckInodes {
     /// The oldest version the current key sees: every version takes its hash
@@ -85,7 +85,7 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpac
 
 /// Whether the inode at @pos is on the deleted_inodes list.
 fn on_deleted_list(t: &TransAttempt<'_, '_>, pos: Bpos) -> Result<bool, BchError> {
-    let mut iter = BtreeIter::new(t, c::btree_id::deleted_inodes, pos, BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(t, Btree::deleted_inodes, pos, BtreeIterFlags::empty());
     Ok(iter.peek_slot(t)?.is_some_and(|k| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_set))
 }
 
@@ -156,7 +156,7 @@ fn check_inode_subvol(
             s.subvol.get() == u.bi_subvol
     });
 
-    if subvol.is_none() && (fs.btree_lost_data(c::btree_id::subvolumes) || snapshot_agrees) {
+    if subvol.is_none() && (fs.btree_lost_data(Btree::subvolumes) || snapshot_agrees) {
         let root = check::reconstruct_subvol_root(t, pos.snapshot, u.bi_subvol, Some(u.bi_inum))?;
         return Ok(SubvolCheck::Reconstruct(root));
     }
@@ -319,7 +319,7 @@ fn check_inode<'t>(
             if !on_deleted_list(t, pos)? &&
                fsck_err!(t, id::unlinked_inode_not_on_deleted_list,
                          "inode unlinked, but not on deleted list\n{u}")? {
-                t.bit_mod_buffered(c::btree_id::deleted_inodes, pos, true)?;
+                t.bit_mod_buffered(Btree::deleted_inodes, pos, true)?;
             }
         } else if !inode::or_descendents_is_open(t, pos)? &&
                   fsck_err!(t, id::inode_unlinked_and_not_open,
@@ -376,12 +376,12 @@ fn check_inode<'t>(
 
 fn check_inodes(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    let progress = Progress::recovery(fs, c"bch2_check_inodes", &[c::btree_id::inodes], &[]);
+    let progress = Progress::recovery(fs, c"bch2_check_inodes", &[Btree::inodes], &[]);
     let mut st = CheckInodes {
         snapshot_root: Default::default(),
     };
 
-    let mut iter = BtreeIter::new(&trans, c::btree_id::inodes, POS_MIN,
+    let mut iter = BtreeIter::new(&trans, Btree::inodes, POS_MIN,
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
 
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, k| {

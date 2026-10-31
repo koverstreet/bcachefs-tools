@@ -839,11 +839,15 @@ c_xmacro! {
 
 c_enum! {
     #[open]
-    pub enum btree_id: u32 {
+    #[c_name(btree_id)]
+    pub enum Btree: u32 {
         BCH_BTREE_IDS(name, nr, ..) => BTREE_ID_ ## name = nr,
         BTREE_ID_NR,
     }
 }
+
+/// C's name, as bindgen's declarations of C functions spell it.
+pub type btree_id = Btree;
 
 c_verbatim!(r#"
 #include "alloc/replicas_format_gen.h"

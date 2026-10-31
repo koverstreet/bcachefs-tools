@@ -55,7 +55,7 @@ use c::bch_data_update_types as Type;
 use crate::types::c_default;
 use core::sync::atomic::AtomicBool;
 use nestify::nest;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 c_xmacro! {
     BCH_DATA_UPDATE_TYPES(x) {
@@ -118,7 +118,7 @@ c_default!(data_update_opts);
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, CStruct)]
 pub struct data_update_key {
-    pub btree: c::btree_id,
+    pub btree: Btree,
     pub pos: Bpos,
     pub copygc: bool,
 }
@@ -128,7 +128,7 @@ pub struct data_update_key {
 pub struct data_update {
     pub rcu: c::rcu_head,
     /* extent being updated: */
-    pub btree_id: c::btree_id,
+    pub btree_id: Btree,
     pub k: c::bkey_buf,
     pub opts: c::data_update_opts,
 
@@ -342,7 +342,7 @@ pub fn bch2_data_update_inflight_to_text(out: &mut Printbuf, m: &c::data_update)
 // ── init, read_done, exit ────────────────────────────────────────────────
 
 c_extern! {
-    fn bch2_scrub_journal_queue(c: *mut c::bch_fs, btree: c::btree_id, level: c_uint, k: *mut c::bkey_i,
+    fn bch2_scrub_journal_queue(c: *mut c::bch_fs, btree: Btree, level: c_uint, k: *mut c::bkey_i,
                                 ptr_bits: c_uint, err: c_int);
     fn bch2_data_read_sb_err(err: c_int) -> c::bch_sb_error_id;
     fn bch2_write(ws: *mut c::work_struct);
@@ -578,10 +578,10 @@ impl c::data_update {
     #[allow(clippy::too_many_arguments)]
     pub(crate) unsafe fn init(&mut self, t: &TransAttempt<'_, '_>, iter: Option<&BtreeIter<'_>>, moving: Option<&Moving<'_>>,
                    wp: c::write_point_specifier, io_opts: &c::bch_inode_opts, data_opts: c::data_update_opts,
-                   btree_id: c::btree_id, k: BkeySC<'_>) -> Result<Held, BchError> {
+                   btree_id: Btree, k: BkeySC<'_>) -> Result<Held, BchError> {
         let fs = t.fs();
         let pos = c::bbpos {
-            btree: iter.map_or(c::btree_id::extents, |i| i.btree()),
+            btree: iter.map_or(Btree::extents, |i| i.btree()),
             pos:   k.k.p,
         };
 

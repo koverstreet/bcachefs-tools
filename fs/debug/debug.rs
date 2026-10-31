@@ -31,7 +31,7 @@ use crate::util::ffi::Opaque;
 use crate::util::place::Placed;
 use crate::util::{rcu, rhashtable, Printbuf};
 use crate::{btree_trans, prt, SPOS_MAX};
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 fn may_iterate(fs: &Fs) -> bool {
     fs.flag(c::bch_fs_flags::BCH_FS_may_go_rw)
@@ -174,7 +174,7 @@ fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &c::BtreeNode) {
     }
 
     prt!(out, "{:016x} ", core::ptr::from_ref(b) as usize);
-    unsafe { c::bch2_btree_id_level_to_text(out.as_raw(), c::btree_id(b.c.btree_id.into()), b.c.level.into()) };
+    unsafe { c::bch2_btree_id_level_to_text(out.as_raw(), Btree(b.c.btree_id.into()), b.c.level.into()) };
     prt!(out, "\n");
 
     let mut out = out.indent(2);
@@ -508,7 +508,7 @@ pub fn bch2_fs_debug_init(c: &Opaque<c::bch_fs>) {
     let Some(btrees) = btrees else { return };
 
     for bd in fs.btree_debug.iter() {
-        let name = unsafe { CStr::from_ptr(c::bch2_btree_id_str(c::btree_id(bd.id.get())).cast()) };
+        let name = unsafe { CStr::from_ptr(c::bch2_btree_id_str(Btree(bd.id.get())).cast()) };
         let Some(dir) = debugfs::create_dir(name, Some(btrees)) else { continue };
 
         unsafe {

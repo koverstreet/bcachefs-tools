@@ -35,7 +35,7 @@ use crate::{bkey_fsck_err_on, fsck_err};
 use core::ffi::c_int;
 use core::ops::RangeInclusive;
 use cstruct_macros::c_export;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 /// What an lru id says: which lru, and for a per-device one, the device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,11 +138,11 @@ impl LruPos {
     pub fn backing(self) -> c::bbpos {
         match self.lru_id().lru_type() {
             c::bch_lru_type::BCH_LRU_stripes => c::bbpos {
-                btree: c::btree_id::stripes,
+                btree: Btree::stripes,
                 pos:   pos(0, self.target),
             },
             _ => c::bbpos {
-                btree: c::btree_id::alloc,
+                btree: Btree::alloc,
                 pos:   u64_to_bucket(self.target),
             },
         }
@@ -186,7 +186,7 @@ pub(crate) fn lru_mod(t: &TransAttempt<'_, '_>, pos: LruPos, set: bool) -> Resul
     if pos.time == 0 {
         return Ok(());
     }
-    t.bit_mod_buffered(c::btree_id::lru, pos.to_bpos(), set)
+    t.bit_mod_buffered(Btree::lru, pos.to_bpos(), set)
 }
 
 /// Move @target's entry in lru @id from @old_time to @new_time:
@@ -219,11 +219,11 @@ pub unsafe extern "C" fn __bch2_lru_change<'t>(trans: &'t BtreeTrans<'t>, lru_id
 /// fs-wide fragmentation lru's are mixed in with every device's.
 fn dev_remove_lrus_scan(fs: &Fs, dev: u32) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::lru, POS_MIN, BtreeIterFlags::PREFETCH);
+    let mut iter = BtreeIter::new(&trans, Btree::lru, POS_MIN, BtreeIterFlags::PREFETCH);
 
     iter.for_each_commit(&trans, None, CommitFlags::empty(), |t, iter, k| {
         let bp = LruPos::from_bpos(k.k.p).backing();
-        if bp.btree == c::btree_id::alloc && bp.pos.inode == u64::from(dev) {
+        if bp.btree == Btree::alloc && bp.pos.inode == u64::from(dev) {
             t.delete_at(iter, UpdateTriggerFlags::empty())?;
         }
         Ok(())
@@ -236,7 +236,7 @@ fn dev_remove_lru_range(fs: &Fs, id: LruId) -> Result<(), BchError> {
     // In a transaction of its own, not the trans's delete_range(), whose
     // transaction_restart_nested this has no attempt to begin again for. The
     // end is inclusive: lru_end(), not the next lru's start.
-    fs.btree_delete_range(c::btree_id::lru, range.start().to_bpos(), range.end().to_bpos(),
+    fs.btree_delete_range(Btree::lru, range.start().to_bpos(), range.end().to_bpos(),
                           BtreeIterFlags::empty(), UpdateTriggerFlags::empty())
 }
 
@@ -280,7 +280,7 @@ pub(crate) fn lru_check_set(
     mut last_flushed: WbFlush<'_>,
 ) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut iter = BtreeIter::new(t, c::btree_id::lru, pos.to_bpos(), BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(t, Btree::lru, pos.to_bpos(), BtreeIterFlags::empty());
     let lru_k = iter.peek_slot(t)?.expect("a slot always has a key");
 
     if lru_k.k.type_ != c::bch_bkey_type::KEY_TYPE_set.0 as u8 {
@@ -327,7 +327,7 @@ fn check_lru_key(
     // deleted, its entries not checked - check_alloc_to_lru_refs recreates
     // them in the per-device lrus, from the alloc btree
     if lru == LruId::FragmentationOld && !per_dev_fragmentation_lru(fs) {
-        return t.bit_mod_buffered(c::btree_id::lru, lru_iter.pos(), false);
+        return t.bit_mod_buffered(Btree::lru, lru_iter.pos(), false);
     }
 
     let bp = pos.backing();
@@ -355,7 +355,7 @@ fn check_lru_key(
         if fsck_err!(t, id::lru_entry_bad,
                      "incorrect lru entry: lru {}, expected id {} time {}\n{}\nfor {}",
                      lru_type_str(ty), want_id, time, lru_k.to_text(fs), k.to_text(fs))? {
-            return t.bit_mod_buffered(c::btree_id::lru, lru_iter.pos(), false);
+            return t.bit_mod_buffered(Btree::lru, lru_iter.pos(), false);
         }
     }
     Ok(())
@@ -368,9 +368,9 @@ fn check_lru_key(
 fn pin_backing(trans: &BtreeTrans<'_>, pins: &BtreeCachePins<'_>, lru: LruId) -> Result<(), BchError> {
     let (btree, start, end) = match lru {
         LruId::Read { dev } | LruId::Fragmentation { dev } =>
-            (c::btree_id::alloc, pos(dev.into(), 0), spos(dev.into(), u64::MAX, u32::MAX)),
+            (Btree::alloc, pos(dev.into(), 0), spos(dev.into(), u64::MAX, u32::MAX)),
         LruId::Stripes =>
-            (c::btree_id::stripes, POS_MIN, SPOS_MAX),
+            (Btree::stripes, POS_MIN, SPOS_MAX),
         LruId::FragmentationOld | LruId::Unknown(_) => {
             pins.unpin();
             return Ok(());
@@ -397,13 +397,13 @@ fn check_lrus(fs: &Fs) -> Result<(), BchError> {
     let trans = &crate::btree_trans!(fs);
     let pins = fs.btree_cache_pins();
     let mut last_flushed = WbMaybeFlush::new()?;
-    let progress = Progress::recovery(fs, c"bch2_check_lrus", &[c::btree_id::lru], &[]);
+    let progress = Progress::recovery(fs, c"bch2_check_lrus", &[Btree::lru], &[]);
     let mut next = POS_MIN;
 
     loop {
         // The next lru with entries
         let Some(id) = lockrestart_do(trans, |t| {
-            let mut iter = BtreeIter::new(t, c::btree_id::lru, next, BtreeIterFlags::empty());
+            let mut iter = BtreeIter::new(t, Btree::lru, next, BtreeIterFlags::empty());
             Ok(iter.peek(t)?.map(|k| LruPos::from_bpos(k.k.p).id))
         })? else { return Ok(()) };
 
@@ -411,7 +411,7 @@ fn check_lrus(fs: &Fs) -> Result<(), BchError> {
         pin_backing(trans, &pins, lru)?;
 
         let range = LruPos::range(lru);
-        let mut iter = BtreeIter::new(trans, c::btree_id::lru, range.start().to_bpos(),
+        let mut iter = BtreeIter::new(trans, Btree::lru, range.start().to_bpos(),
                                       BtreeIterFlags::PREFETCH);
         iter.for_each_max_commit(trans, range.end().to_bpos(), BtreeIterFlags::PREFETCH, None,
                                  CommitFlags::NO_ENOSPC, |t, iter, k| {

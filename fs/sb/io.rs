@@ -164,6 +164,7 @@ use arrayvec::ArrayVec;
 use core::pin::Pin;
 use pin_init::PinInit;
 use crate::published;
+use crate::format::Btree;
 
 /*
  * bringup: this write is part of bringing the filesystem up - allowed before
@@ -1698,7 +1699,7 @@ impl<'a> SbWrite<'a> {
     /// Btree @btree flagged in an ext section bitmap, recorded: whether it
     /// wasn't already.
     fn set_ext_btree(&mut self, bitmap: impl FnOnce(&mut c::bch_sb_field_ext__whole) -> &mut Le64,
-                     btree: c::btree_id) -> bool {
+                     btree: Btree) -> bool {
         let bitmap = bitmap(self.ext_mut());
         let (v, bit) = (bitmap.get(), 1u64 << btree.0);
         bitmap.set(v | bit);
@@ -1706,12 +1707,12 @@ impl<'a> SbWrite<'a> {
     }
 
     /// sb_set_btrees_lost_data()
-    pub fn set_btrees_lost_data(&mut self, btree: c::btree_id) -> bool {
+    pub fn set_btrees_lost_data(&mut self, btree: Btree) -> bool {
         self.set_ext_btree(|e| &mut e.btrees_lost_data, btree)
     }
 
     /// sb_set_btrees_lost_data_ever()
-    pub fn set_btrees_lost_data_ever(&mut self, btree: c::btree_id) -> bool {
+    pub fn set_btrees_lost_data_ever(&mut self, btree: Btree) -> bool {
         self.set_ext_btree(|e| &mut e.btrees_lost_data_ever, btree)
     }
 

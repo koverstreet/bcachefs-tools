@@ -39,6 +39,7 @@ use core::ffi::c_int;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
+use crate::format::Btree;
 
 /// The in-flight limit, per online CPU.
 const PROMOTES_PER_CPU: u32 = 32;
@@ -160,7 +161,7 @@ fn should_promote(fs: &Fs, k: BkeySC<'_>, opts: &c::bch_inode_opts) -> Result<()
     Ok(())
 }
 
-fn promote_new(t: &TransAttempt<'_, '_>, btree: c::btree_id, k: BkeySC<'_>,
+fn promote_new(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
                orig: &mut c::bch_read_bio, opts: &c::bch_inode_opts,
                       failed: Option<&mut c::bch_io_failures>) -> Result<NonNull<c::bch_read_bio>, BchError> {
     let fs = t.fs();
@@ -252,9 +253,9 @@ pub unsafe fn bch2_promote_alloc(trans: &BtreeTrans<'_>, k: BkeySC<'_>, orig: &m
     let full = self_healing || *read_full || fs.opts().promote_whole_extents.get() != 0;
 
     let btree = if k.k.key_type() == c::bch_bkey_type::KEY_TYPE_reflink_v {
-        c::btree_id::reflink
+        Btree::reflink
     } else {
-        c::btree_id::extents
+        Btree::extents
     };
 
     match promote_new(&t, btree, k, orig, opts, failed) {

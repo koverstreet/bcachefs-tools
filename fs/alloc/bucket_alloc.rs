@@ -50,7 +50,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
 
 use c::alloc_btree_bitmap::{BTREE_BITMAP_ANY, BTREE_BITMAP_NO, BTREE_BITMAP_YES};
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 const BUCKET_MASK: u64 = (1 << FREESPACE_GENBITS_SHIFT) - 1;
 
@@ -209,7 +209,7 @@ impl TransAttempt<'_, '_> {
             return Ok(None);
         }
 
-        let iter = BtreeIter::new(self, c::btree_id::BTREE_ID_freespace, pos(ca.dev_idx.into(), p),
+        let iter = BtreeIter::new(self, Btree::BTREE_ID_freespace, pos(ca.dev_idx.into(), p),
                                   BtreeIterFlags::NOPRESERVE);
         let (generation, journal_seq_empty) = match check_freespace_key(self, &iter, FreespaceCheck::Allocator) {
             Err(e) if e == bch_errcode::BCH_ERR_bucket_not_allocatable.into() => return Ok(None),
@@ -252,7 +252,7 @@ impl TransAttempt<'_, '_> {
     {
         let fs = self.fs();
         let shift = ca.mi.get().btree_bitmap_shift;
-        let mut iter = BtreeIter::new(self, c::btree_id::BTREE_ID_alloc, pos(ca.dev_idx.into(), *alloc_cursor),
+        let mut iter = BtreeIter::new(self, Btree::BTREE_ID_alloc, pos(ca.dev_idx.into(), *alloc_cursor),
                                       BtreeIterFlags::SLOTS | BtreeIterFlags::COMMITTED);
 
         loop {
@@ -278,7 +278,7 @@ impl TransAttempt<'_, '_> {
             }
 
             if free {
-                let mut citer = BtreeIter::new(self, c::btree_id::BTREE_ID_alloc, p,
+                let mut citer = BtreeIter::new(self, Btree::BTREE_ID_alloc, p,
                     BtreeIterFlags::CACHED | BtreeIterFlags::NOPRESERVE | BtreeIterFlags::COMMITTED);
                 let a = alloc_to_v4(citer.peek_slot(self)?.expect("a key or a hole, at a bucket"));
 
@@ -317,7 +317,7 @@ impl TransAttempt<'_, '_> {
         }
 
         let trim = if forwards { BtreeIterFlags::TRIM } else { BtreeIterFlags::empty() };
-        let mut iter = BtreeIter::new(self, c::btree_id::BTREE_ID_freespace, pos(dev, p),
+        let mut iter = BtreeIter::new(self, Btree::BTREE_ID_freespace, pos(dev, p),
                                       BtreeIterFlags::COMMITTED | BtreeIterFlags::NOPRESERVE | trim);
         loop {
             if !forwards && p < min {
