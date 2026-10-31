@@ -11,7 +11,7 @@
 //! properly removed, so all that is left afterwards is a short device count,
 //! which reads as "you are missing a disk".
 //!
-//! bch2_dev_in_fs() (fs/init/dev.c) decides what diverged; this only decides
+//! dev_in_fs() (fs/init/dev.rs) decides what diverged; this only decides
 //! what to say. Only BCH_ERR_device_splitbrain means divergence - the other
 //! returns are different problems, left to the kernel to report. Its own
 //! account reaches stderr first, ending in "Not using <dev>", which describes
@@ -24,7 +24,7 @@ use log::warn;
 
 use crate::prompt::{fs_name, Choice, Prompt, Question, NO_ONE_TO_ASK, PROMPT_TIMEOUT};
 use bcachefs_kernel::c;
-use bcachefs_kernel::errcode::BchError;
+use bcachefs_kernel::init::dev::dev_in_fs;
 use bcachefs_kernel::sb::members;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use c::bch_sb_handle;
@@ -68,7 +68,6 @@ pub fn find(sbs: &[(PathBuf, bch_sb_handle)], opts: &c::bch_opts) -> Vec<Diverge
 
     let best_handle = &sbs[best_idx].1;
     let best_members = members::members_v2(best_handle.sb());
-    let mut opts = *opts;
     let mut out = Vec::new();
 
     for (i, (path, handle)) in sbs.iter().enumerate() {
@@ -76,19 +75,9 @@ pub fn find(sbs: &[(PathBuf, bch_sb_handle)], opts: &c::bch_opts) -> Vec<Diverge
             continue;
         }
 
-        // SAFETY: bch2_dev_in_fs() compares two superblocks and formats a
-        // message; it mutates neither handle. Both outlive the call. The
-        // non-const pointers are the C signature, not a licence.
-        let ret = unsafe {
-            c::bch2_dev_in_fs(
-                best_handle.sb,
-                best_handle.dev.bdev,
-                handle as *const _ as *mut _,
-                &mut opts,
-            )
-        };
+        let ret = dev_in_fs(best_handle.sb(), Some(best_handle.dev.bdev()), handle, opts);
 
-        if BchError::from_raw(-ret).matches(c::bch_errcode::BCH_ERR_device_splitbrain) {
+        if ret.is_err_and(|e| e.matches(c::bch_errcode::BCH_ERR_device_splitbrain)) {
             let sb = handle.sb();
             out.push(Divergent {
                 path: path.clone(),

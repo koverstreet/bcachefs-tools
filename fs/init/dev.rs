@@ -11,15 +11,18 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Fs, StateLockWrite};
 use crate::prt;
+use crate::sb::members::{member_exists, sb_member};
+use crate::util::log::{log_no_fs, LogLevel};
+use crate::util::printbuf::{prt_bdevname, DateTime, Msg};
 use crate::util::rcu::read_lock;
+use crate::util::vstructs::{Head, Validated};
 use crate::util::{Nsecs, Printbuf};
 use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_export, CStruct, bitfield, c_extern, c_typedef, TypeInfo};
-use crate::util::vstructs::Head;
 use crate::types::{DArray, bits_to_longs, c_default};
 use crate::util::bio::{Bio, BioBufPtr};
 use crate::util::bitmap::{AtomicBitArray, BitArray};
@@ -161,8 +164,6 @@ pub struct bch_devs_list {
 }
 
 c_extern! {
-    pub fn bch2_dev_in_fs(fs: *mut Head<c::bch_sb>, fs_bdev: *mut c::block_device,
-                          sb: *mut c::bch_sb_handle, opts: *mut c::bch_opts) -> c_int;
     pub fn bch2_dev_add(c: *mut c::bch_fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
     pub fn bch2_dev_add_initialize(c: *mut c::bch_fs, ca: *mut c::bch_dev) -> c_int;
     pub fn bch2_dev_resize(c: *mut c::bch_fs, ca: *mut c::bch_dev, nbuckets: u64,
@@ -184,6 +185,78 @@ c_extern! {
                                   name: *mut c_char, name_size: usize,
                                   model: *mut c_char, model_size: usize,
                                   serial: *mut c_char, serial_size: usize);
+}
+
+/// Whether @sb can be opened as a member of the filesystem whose superblock is
+/// @fs. A device that diverged from @fs - split brain - is reported.
+pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&c::block_device>, sb: &c::bch_sb_handle,
+                 opts: &c::bch_opts) -> Result<(), BchError> {
+    let dev = sb.io.buf.sb();
+    if core::ptr::eq(fs, dev) {
+        return Ok(());
+    }
+    if fs.uuid.b != dev.uuid.b {
+        return Err(bch_errcode::BCH_ERR_device_not_a_member_of_filesystem.into());
+    }
+    if !member_exists(fs, dev.dev_idx.into()) {
+        return Err(bch_errcode::BCH_ERR_device_has_been_removed.into());
+    }
+    if fs.block_size != dev.block_size {
+        return Err(bch_errcode::BCH_ERR_mismatched_block_size.into());
+    }
+
+    let member_seq = c::bcachefs_metadata_version::member_seq.0;
+    if u32::from(fs.version.get()) < member_seq || u32::from(dev.version.get()) < member_seq ||
+       opts.no_splitbrain_check_or_default() {
+        return Ok(());
+    }
+
+    let dev_bdev = Some(sb.dev.bdev());
+    let seq_from_fs = sb_member(fs, dev.dev_idx.into()).map_or(0, |m| m.seq.get());
+
+    if fs.seq == dev.seq && fs.write_time != dev.write_time {
+        log_no_fs(LogLevel::ERR, &Msg(|out: &mut Printbuf| {
+            prt!(out, "Split brain detected between ");
+            prt_bdevname(out, dev_bdev);
+            prt!(out, " and ");
+            prt_bdevname(out, fs_bdev);
+            prt!(out, ":\nseq={} but write_time different, got\n", dev.seq.get());
+            prt_bdevname(out, fs_bdev);
+            prt!(out, " {}\n", DateTime(fs.write_time.get() as i64));
+            prt_bdevname(out, dev_bdev);
+            prt!(out, " {}\nNot using older sb", DateTime(dev.write_time.get() as i64));
+        }));
+        return Err(bch_errcode::BCH_ERR_device_splitbrain.into());
+    }
+
+    if seq_from_fs != 0 && seq_from_fs < dev.seq.get() {
+        log_no_fs(LogLevel::ERR, &Msg(|out: &mut Printbuf| {
+            prt!(out, "Split brain detected between ");
+            prt_bdevname(out, dev_bdev);
+            prt!(out, " and ");
+            prt_bdevname(out, fs_bdev);
+            prt!(out, ":\n");
+            prt_bdevname(out, fs_bdev);
+            prt!(out, " believes seq of ");
+            prt_bdevname(out, dev_bdev);
+            prt!(out, " to be {seq_from_fs}, but ");
+            prt_bdevname(out, dev_bdev);
+            prt!(out, " has {}\nNot using ", dev.seq.get());
+            prt_bdevname(out, dev_bdev);
+        }));
+        return Err(bch_errcode::BCH_ERR_device_splitbrain.into());
+    }
+    Ok(())
+}
+
+/// # Safety
+/// @fs is a superblock.
+#[c_export]
+pub unsafe fn bch2_dev_in_fs(fs: *mut Head<c::bch_sb>, fs_bdev: Option<&c::block_device>,
+                             sb: &c::bch_sb_handle, opts: &c::bch_opts) -> c_int {
+    // SAFETY: the caller's
+    let fs = unsafe { c::bch_sb::<Validated>::from_ffi(fs) };
+    ret_to_c(dev_in_fs(fs, fs_bdev, sb, opts))
 }
 
 /// The memory of a new bch_dev of @c: bch_dev::init()'s - its Rust-typed
