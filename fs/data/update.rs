@@ -72,7 +72,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum bch_data_update_types: u32 {
-        BCH_DATA_UPDATE_TYPES(n) => BCH_DATA_UPDATE_ ## n,
+        BCH_DATA_UPDATE_TYPES(n) => concat(BCH_DATA_UPDATE_, n),
     }
 }
 

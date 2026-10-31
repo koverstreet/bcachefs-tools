@@ -35,7 +35,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum _: u32 {
-        BCH_ALLOC_FIELDS_V1(name, ..) => BCH_ALLOC_FIELD_V1_ ## name,
+        BCH_ALLOC_FIELDS_V1(name, ..) => concat(BCH_ALLOC_FIELD_V1_, name),
     }
 }
 

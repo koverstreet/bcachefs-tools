@@ -28,7 +28,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum bch_folio_sector_state: u32 {
-        BCH_FOLIO_SECTOR_STATE(n) => SECTOR_ ## n,
+        BCH_FOLIO_SECTOR_STATE(n) => concat(SECTOR_, n),
     }
 }
 

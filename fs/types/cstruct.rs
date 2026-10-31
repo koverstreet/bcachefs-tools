@@ -360,7 +360,7 @@ pub enum CXEntry {
 pub struct CXMap {
     pub name:     String,
     pub params:   Vec<String>,
-    /// The arguments MAP gives x, as C text: params, and ## pastes.
+    /// The arguments MAP gives x: params, and concat(A, b) pastes.
     pub template: String,
 }
 
@@ -457,9 +457,8 @@ impl CEnumKind {
 }
 
 /// Items from an x-macro list: `LIST(params) => template`. Each entry's
-/// arguments are bound to the params - `..` the rest - and `A ## B` in the
-/// template is pasted into one identifier: spaced, as Rust 2021 lexes `a##b`
-/// as a reserved prefix.
+/// arguments are bound to the params - `..` the rest - and `concat(A, b)` in the
+/// template is pasted into one identifier.
 #[derive(Debug, Clone)]
 pub struct CFromList {
     pub list:     String,
@@ -498,7 +497,7 @@ impl CEnumDef {
 /// A c_enum! variant. Its value is Rust source, or none for the one after the
 /// last; the generator replaces them with what they evaluate to. Its label is
 /// what it prints as, `#[label("..")]`: a list's variant's is the argument its
-/// template pastes into the name - `stripe`, of `BCH_WATERMARK_ ## name` - as
+/// template pastes into the name - `stripe`, of `concat(BCH_WATERMARK_, name)` - as
 /// C's string tables have it; none, its name.
 #[derive(Debug)]
 pub struct CEnumVariant {
@@ -670,7 +669,7 @@ pub struct CTaggedArm {
 ///
 /// The storage is what C has: the tag, then a union of the arms, overlaid
 /// with the pad, if any. The arms come from an x-macro list, `arms from
-/// LIST(params) => template`, its entries bound to the params and `##`
+/// LIST(params) => template`, its entries bound to the params and `concat()`
 /// pasting tokens - or are written out, `arm name: Type = value`, which is
 /// the form its record has. The arms' types can be defined in the block too,
 /// `[#[...]] [pub] struct|union NAME { ... }`: they go to nestify::nest!,
@@ -2359,6 +2358,19 @@ fn parse_from_list(item: &[Tok]) -> Result<Option<CFromList>, String> {
     Ok(Some(CFromList { list: list.clone(), params, template }))
 }
 
+/// @template, its concat(A, b, ..)s as @paste spells them - C's A##b, or
+/// paste!'s [<A $b>].
+#[allow(dead_code)]
+pub fn spell_concat(template: &str, paste: impl Fn(&[&str]) -> String) -> Result<String, String> {
+    let mut out = template.to_string();
+    while let Some(i) = out.find("concat(") {
+        let j = i + out[i..].find(')').ok_or_else(|| format!("an unclosed concat( in the template {template}"))?;
+        let pasted = paste(&out[i + "concat(".len()..j].split(',').map(str::trim).collect::<Vec<_>>());
+        out.replace_range(i..=j, &pasted);
+    }
+    Ok(out)
+}
+
 /// What @f's template makes of one entry of its list, @entry its source.
 fn from_list_entry(f: &CFromList, entry: &str) -> Result<Vec<Tok>, String> {
     let list = &f.list;
@@ -2394,13 +2406,24 @@ fn from_list_entry(f: &CFromList, entry: &str) -> Result<Vec<Tok>, String> {
                 continue;
             }
         }
-        if subst[k].is_punct('#') && subst.get(k + 1).is_some_and(|t| t.is_punct('#')) {
-            let (Some(Tok::Ident(a) | Tok::Lit(a)), Some(Tok::Ident(b) | Tok::Lit(b))) =
-                (out.pop(), subst.get(k + 2).cloned()) else {
-                return Err(format!("{list}: ## between non-identifiers in the template"));
-            };
-            out.push(Tok::Ident(a + &b));
-            k += 3;
+        if subst[k].is_ident("concat") && subst.get(k + 1).is_some_and(|t| t.is_punct('(')) {
+            let mut name = String::new();
+            let mut j = k + 2;
+            loop {
+                let (Some(Tok::Ident(a) | Tok::Lit(a)), Some(sep)) = (subst.get(j), subst.get(j + 1)) else {
+                    return Err(format!("{list}: concat() in the template pastes identifiers and literals only"));
+                };
+                name.push_str(a);
+                j += 2;
+                if sep.is_punct(')') {
+                    break;
+                }
+                if !sep.is_punct(',') {
+                    return Err(format!("{list}: concat() in the template pastes identifiers and literals only"));
+                }
+            }
+            out.push(Tok::Ident(name));
+            k = j;
             continue;
         }
         out.push(subst[k].clone());
@@ -2483,9 +2506,7 @@ pub fn enum_text(e: &CEnumDef) -> String {
                         e.name.as_deref().unwrap_or("_"), e.repr);
     let lists = |t: &mut String, i: usize| for (at, f) in &e.from {
         if *at == i {
-            // `##` spaced: Rust 2021 lexes `a##b` as a reserved prefix
-            t.push_str(&format!("{}({}) => {}, ", f.list, f.params.join(", "),
-                                f.template.replace("##", " ## ")));
+            t.push_str(&format!("{}({}) => {}, ", f.list, f.params.join(", "), f.template));
         }
     };
     for (i, v) in e.variants.iter().enumerate() {
@@ -3326,8 +3347,8 @@ pub fn emit_items(items: &[CItem],
                 let mut t = String::new();
                 for e in &x.entries {
                     if let CXEntry::Sub { map: Some(m), .. } = e {
-                        t.push_str(&format!("#define {}({})\t\\\n\t{}({})\n",
-                                            m.name, m.params.join(", "), x.callback, m.template));
+                        t.push_str(&format!("#define {}({})\t\\\n\t{}({})\n", m.name, m.params.join(", "),
+                                            x.callback, spell_concat(&m.template, |p| p.join("##"))?));
                     }
                 }
                 t.push_str(&format!("#define {}()", x.name));

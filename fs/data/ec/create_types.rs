@@ -61,7 +61,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum ec_stripe_new_state: u32 {
-        EC_STRIPE_NEW_STATES(n) => EC_STRIPE_NEW_ ## n,
+        EC_STRIPE_NEW_STATES(n) => concat(EC_STRIPE_NEW_, n),
         EC_STRIPE_NEW_STATE_NR,
     }
 }

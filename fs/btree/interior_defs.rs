@@ -25,7 +25,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum btree_update_mode: u32 {
-        BTREE_UPDATE_MODES(n) => BTREE_UPDATE_ ## n,
+        BTREE_UPDATE_MODES(n) => concat(BTREE_UPDATE_, n),
     }
 }
 

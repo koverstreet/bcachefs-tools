@@ -47,7 +47,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum bch_async_obj_lists: u32 {
-        BCH_ASYNC_OBJ_LISTS(n) => BCH_ASYNC_OBJ_LIST_ ## n,
+        BCH_ASYNC_OBJ_LISTS(n) => concat(BCH_ASYNC_OBJ_LIST_, n),
         BCH_ASYNC_OBJ_NR,
     }
 }

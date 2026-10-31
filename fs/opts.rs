@@ -105,7 +105,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum fsck_err_opts: u32 {
-        BCH_FIX_ERRORS_OPTS(t, ..) => FSCK_FIX_ ## t,
+        BCH_FIX_ERRORS_OPTS(t, ..) => concat(FSCK_FIX_, t),
     }
 }
 

@@ -26,7 +26,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_lru_type: u32 {
-        BCH_LRU_TYPES(n) => BCH_LRU_ ## n,
+        BCH_LRU_TYPES(n) => concat(BCH_LRU_, n),
     }
 }
 

@@ -104,7 +104,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum reconcile_scan_type: u32 {
-        RECONCILE_SCAN_TYPES(t) => RECONCILE_SCAN_ ## t,
+        RECONCILE_SCAN_TYPES(t) => concat(RECONCILE_SCAN_, t),
     }
 }
 
@@ -123,7 +123,7 @@ tagged_union! {
     #[derive(TypeInfo)]
     pub struct reconcile_scan {
         tag type_: enum c::reconcile_scan_type,
-        arms from RECONCILE_SCAN_TYPES(x) => x: reconcile_scan_ ## x = c::reconcile_scan_type::RECONCILE_SCAN_ ## x,
+        arms from RECONCILE_SCAN_TYPES(x) => x: concat(reconcile_scan_, x) = c::reconcile_scan_type::concat(RECONCILE_SCAN_, x),
         pad: [u64; 2],
         size: pad,
         plain,

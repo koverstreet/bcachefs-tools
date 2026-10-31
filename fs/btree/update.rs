@@ -42,14 +42,14 @@ c_enum! {
     pub enum __bch_trans_commit_flags: u32 {
         /* First bits for bch_watermark: */
         __BCH_TRANS_COMMIT_FLAGS_START = c::BCH_WATERMARK_BITS,
-        BCH_TRANS_COMMIT_FLAGS(n, ..) => __BCH_TRANS_COMMIT_ ## n,
+        BCH_TRANS_COMMIT_FLAGS(n, ..) => concat(__BCH_TRANS_COMMIT_, n),
     }
 }
 
 c_enum! {
     #[flags]
     pub enum bch_trans_commit_flags: u32 {
-        BCH_TRANS_COMMIT_FLAGS(n, ..) => BCH_TRANS_COMMIT_ ## n = 1 << (c::__BCH_TRANS_COMMIT_ ## n as u32),
+        BCH_TRANS_COMMIT_FLAGS(n, ..) => concat(BCH_TRANS_COMMIT_, n) = 1 << (c::concat(__BCH_TRANS_COMMIT_, n) as u32),
     }
 }
 

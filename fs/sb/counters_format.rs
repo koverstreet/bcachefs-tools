@@ -168,7 +168,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum bch_persistent_counters: u32 {
-        BCH_PERSISTENT_COUNTERS(t, ..) => BCH_COUNTER_ ## t,
+        BCH_PERSISTENT_COUNTERS(t, ..) => concat(BCH_COUNTER_, t),
         BCH_COUNTER_NR,
     }
 }
@@ -176,7 +176,7 @@ c_enum! {
 c_enum! {
     #[open]
     pub enum bch_persistent_counters_stable: u32 {
-        BCH_PERSISTENT_COUNTERS(t, n, ..) => BCH_COUNTER_STABLE_ ## t = n,
+        BCH_PERSISTENT_COUNTERS(t, n, ..) => concat(BCH_COUNTER_STABLE_, t) = n,
         BCH_COUNTER_STABLE_NR,
     }
 }

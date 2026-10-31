@@ -67,7 +67,7 @@ mod cstruct {
     include!("../../types/cstruct.rs");
 }
 use cstruct::{bitfield_type, enum_text, expand_enum_list, parse_c_export, parse_cstruct, parse_items, rust_ident,
-              CEnumDef, CEnumKind, CEnumVariant, CItem, CXEntry};
+              spell_concat, CEnumDef, CEnumKind, CEnumVariant, CItem, CXEntry};
 
 mod fieldwise;
 mod options;
@@ -984,15 +984,21 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
             None => ("($($e:tt)*)".to_string(), "($($e)*)".to_string()),
             Some(m) => {
                 let pattern = format!("({})", m.params.iter().map(|p| format!("${p}:tt")).collect::<Vec<_>>().join(", "));
-                // The template: params are $p, A##p is pasted.
+                // The template: params are $p, and concat(A, p) is paste!'s
+                // [<A $p>] - the mapping is expanded inside paste!.
+                let template = spell_concat(&m.template, |p| format!("[<{}>]", p.join(" ")))?;
+                let not_word = |c: char| !(c.is_ascii_alphanumeric() || c == '_');
                 let arg = |a: &str| -> String {
-                    let parts: Vec<String> = a.split("##").map(|p| {
-                        let p = p.trim();
-                        if m.params.iter().any(|q| q == p) { format!("${p}") } else { p.to_string() }
-                    }).collect();
-                    if parts.len() == 1 { parts[0].clone() } else { format!("[<{}>]", parts.join(" ")) }
+                    let mut out = String::new();
+                    for piece in a.split_inclusive(not_word) {
+                        if m.params.iter().any(|p| p == piece.trim_end_matches(not_word)) {
+                            out.push('$');
+                        }
+                        out.push_str(piece);
+                    }
+                    out.trim().to_string()
                 };
-                (pattern, format!("({})", m.template.split(',').map(arg).collect::<Vec<_>>().join(", ")))
+                (pattern, format!("({})", template.split(',').map(arg).collect::<Vec<_>>().join(", ")))
             }
         };
         let after = lits(i + 1, subs.get(n + 1).copied().unwrap_or(entries.len()));

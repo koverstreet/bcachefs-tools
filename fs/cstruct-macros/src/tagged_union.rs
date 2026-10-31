@@ -130,7 +130,8 @@
 //! The arms come from an x-macro list: tagged_union! hands the declaration to
 //! it - LIST!(cstruct_macros::__tagged_union [decl]) - and the list calls
 //! back with its entries, each bound to the params, `..` the rest, and
-//! `A ## B` pasting - spaced, as Rust 2021 lexes `a##b` as a reserved prefix -
+//! `concat(A, b)` pasting - not paste!'s `[<A b>]`, which a list wrapping its
+//! callback in paste! would paste before we saw it -
 //! and `camel(a)`, a_b as AB.
 //!
 //! The arms' types can be defined in the block, each next to the others, as

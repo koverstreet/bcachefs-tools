@@ -46,7 +46,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum bch_wb_btree: u32 {
-        BCH_WRITE_BUFFER_BTREES(name) => BCH_WB_BTREE_ ## name,
+        BCH_WRITE_BUFFER_BTREES(name) => concat(BCH_WB_BTREE_, name),
         BCH_WB_BTREE_NR,
     }
 }
@@ -151,7 +151,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum wb_flush_caller: u32 {
-        WB_FLUSH_CALLERS(n) => WB_FLUSH_ ## n,
+        WB_FLUSH_CALLERS(n) => concat(WB_FLUSH_, n),
         WB_FLUSH_NR,
     }
 }

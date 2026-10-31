@@ -220,7 +220,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum bkey_validate_from: u32 {
-        BKEY_VALIDATE_CONTEXTS(n) => BKEY_VALIDATE_ ## n,
+        BKEY_VALIDATE_CONTEXTS(n) => concat(BKEY_VALIDATE_, n),
     }
 }
 

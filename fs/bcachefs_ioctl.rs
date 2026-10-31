@@ -350,7 +350,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_data_ops: u32 {
-        BCH_DATA_OPS(t, n) => BCH_DATA_OP_ ## t = n,
+        BCH_DATA_OPS(t, n) => concat(BCH_DATA_OP_, t) = n,
         BCH_DATA_OP_NR,
     }
 }
@@ -968,7 +968,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_progress_units: u32 {
-        BCH_PROGRESS_UNITS(n, v) => BCH_PROGRESS_UNITS_ ## n = v,
+        BCH_PROGRESS_UNITS(n, v) => concat(BCH_PROGRESS_UNITS_, n) = v,
     }
 }
 

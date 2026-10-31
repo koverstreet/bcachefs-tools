@@ -82,7 +82,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_data_type: u32 {
-        BCH_DATA_TYPES(t, ..) => BCH_DATA_ ## t,
+        BCH_DATA_TYPES(t, ..) => concat(BCH_DATA_, t),
         BCH_DATA_NR,
     }
 }
@@ -113,7 +113,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum disk_accounting_type: u32 {
-        BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => BCH_DISK_ACCOUNTING_ ## f = nr,
+        BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => concat(BCH_DISK_ACCOUNTING_, f) = nr,
         BCH_DISK_ACCOUNTING_TYPE_NR,
     }
 }
@@ -128,7 +128,7 @@ tagged_union! {
     #[derive(TypeInfo)]
     pub struct disk_accounting_pos {
         tag type_: u8 = disk_accounting_type,
-        arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: bch_acct_ ## f = nr,
+        arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: concat(bch_acct_, f) = nr,
         pad: Bpos,
         size: pad,
         packed,

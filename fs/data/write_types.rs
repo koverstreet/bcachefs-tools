@@ -37,14 +37,14 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum __bch_write_flags: u32 {
-        BCH_WRITE_FLAGS(f) => __BCH_WRITE_ ## f,
+        BCH_WRITE_FLAGS(f) => concat(__BCH_WRITE_, f),
     }
 }
 
 c_enum! {
     #[flags]
     pub enum bch_write_flags: u32 {
-        BCH_WRITE_FLAGS(f) => BCH_WRITE_ ## f = 1 << (c::__BCH_WRITE_ ## f as u32),
+        BCH_WRITE_FLAGS(f) => concat(BCH_WRITE_, f) = 1 << (c::concat(__BCH_WRITE_, f) as u32),
     }
 }
 

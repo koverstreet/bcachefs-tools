@@ -152,7 +152,7 @@ c_const! {
 c_enum! {
     #[open]
     pub enum bch_extent_entry_type: u32 {
-        BCH_EXTENT_ENTRY_TYPES(f, n) => BCH_EXTENT_ENTRY_ ## f = n,
+        BCH_EXTENT_ENTRY_TYPES(f, n) => concat(BCH_EXTENT_ENTRY_, f) = n,
     }
 }
 
@@ -267,7 +267,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_extent_flags_e: u32 {
-        BCH_EXTENT_FLAGS(n, v) => BCH_EXTENT_FLAG_ ## n = v,
+        BCH_EXTENT_FLAGS(n, v) => concat(BCH_EXTENT_FLAG_, n) = v,
     }
 }
 

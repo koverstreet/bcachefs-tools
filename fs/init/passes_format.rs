@@ -255,7 +255,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum bch_recovery_pass: u32 {
-        BCH_RECOVERY_PASSES(n, ..) => BCH_RECOVERY_PASS_ ## n,
+        BCH_RECOVERY_PASSES(n, ..) => concat(BCH_RECOVERY_PASS_, n),
         BCH_RECOVERY_PASS_NR,
     }
 }
@@ -264,7 +264,7 @@ c_enum! {
 c_enum! {
     #[open]
     pub enum bch_recovery_pass_stable: u32 {
-        BCH_RECOVERY_PASSES(n, id, ..) => BCH_RECOVERY_PASS_STABLE_ ## n = id,
+        BCH_RECOVERY_PASSES(n, id, ..) => concat(BCH_RECOVERY_PASS_STABLE_, n) = id,
     }
 }
 

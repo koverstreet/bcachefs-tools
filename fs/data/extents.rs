@@ -189,14 +189,14 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum __bch_read_flags: u32 {
-        BCH_READ_FLAGS(n) => __BCH_READ_ ## n,
+        BCH_READ_FLAGS(n) => concat(__BCH_READ_, n),
     }
 }
 
 c_enum! {
     #[flags]
     pub enum bch_read_flags: u32 {
-        BCH_READ_FLAGS(n) => BCH_READ_ ## n = 1 << (c::__BCH_READ_ ## n as u32),
+        BCH_READ_FLAGS(n) => concat(BCH_READ_, n) = 1 << (c::concat(__BCH_READ_, n) as u32),
     }
 }
 

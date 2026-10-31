@@ -191,7 +191,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum bch_time_stats: u32 {
-        BCH_TIME_STATS(name, ..) => BCH_TIME_ ## name,
+        BCH_TIME_STATS(name, ..) => concat(BCH_TIME_, name),
         BCH_TIME_STAT_NR,
     }
 }
@@ -233,7 +233,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum bch_dev_read_ref: u32 {
-        BCH_DEV_READ_REFS(n) => BCH_DEV_READ_REF_ ## n,
+        BCH_DEV_READ_REFS(n) => concat(BCH_DEV_READ_REF_, n),
         BCH_DEV_READ_REF_NR,
     }
 }
@@ -256,7 +256,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum bch_dev_write_ref: u32 {
-        BCH_DEV_WRITE_REFS(n) => BCH_DEV_WRITE_REF_ ## n,
+        BCH_DEV_WRITE_REFS(n) => concat(BCH_DEV_WRITE_REF_, n),
         BCH_DEV_WRITE_REF_NR,
     }
 }
@@ -305,7 +305,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum bch_dev_flags: u32 {
-        BCH_DEV_FLAGS(n) => BCH_DEV_ ## n,
+        BCH_DEV_FLAGS(n) => concat(BCH_DEV_, n),
     }
 }
 
@@ -530,7 +530,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum bch_fs_flags: u32 {
-        BCH_FS_FLAGS(n) => BCH_FS_ ## n,
+        BCH_FS_FLAGS(n) => concat(BCH_FS_, n),
     }
 }
 
@@ -571,7 +571,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum bch_write_ref: u32 {
-        BCH_WRITE_REFS(n) => BCH_WRITE_REF_ ## n,
+        BCH_WRITE_REFS(n) => concat(BCH_WRITE_REF_, n),
         BCH_WRITE_REF_NR,
     }
 }

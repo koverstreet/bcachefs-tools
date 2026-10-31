@@ -162,7 +162,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum inode_opt_id: u32 {
-        BCH_INODE_OPTS(name, ..) => Inode_opt_ ## name,
+        BCH_INODE_OPTS(name, ..) => concat(Inode_opt_, name),
         Inode_opt_nr,
     }
 }
@@ -229,14 +229,14 @@ c_xmacro! {
 c_enum! {
     #[flags]
     pub enum bch_inode_flags: u32 {
-        BCH_INODE_FLAGS(t, n) => BCH_INODE_ ## t = 1 << (n as u32),
+        BCH_INODE_FLAGS(t, n) => concat(BCH_INODE_, t) = 1 << (n as u32),
     }
 }
 
 c_enum! {
     #[open]
     pub enum __bch_inode_flags: u32 {
-        BCH_INODE_FLAGS(t, n) => __BCH_INODE_ ## t = n,
+        BCH_INODE_FLAGS(t, n) => concat(__BCH_INODE_, t) = n,
     }
 }
 

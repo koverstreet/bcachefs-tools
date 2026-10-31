@@ -55,7 +55,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_subvolume_state: u32 {
-        BCH_SUBVOLUME_STATES(n, v) => SUBVOLUME_STATE_ ## n = v,
+        BCH_SUBVOLUME_STATES(n, v) => concat(SUBVOLUME_STATE_, n) = v,
     }
 }
 
@@ -138,7 +138,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_snapshot_state: u32 {
-        BCH_SNAPSHOT_STATES(n, v) => SNAPSHOT_STATE_ ## n = v,
+        BCH_SNAPSHOT_STATES(n, v) => concat(SNAPSHOT_STATE_, n) = v,
     }
 }
 

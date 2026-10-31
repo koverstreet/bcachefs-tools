@@ -87,7 +87,7 @@ c_xmacro! {
 c_xmacro! {
     BCH_ERRCODES(x) {
         (EIO, blockdev_io_error, 0),
-        BLK_ERRS(BLK_STS(n, nr) => (BCH_ERR_blockdev_io_error, BLK_STS_ ## n, nr)),
+        BLK_ERRS(BLK_STS(n, nr) => (BCH_ERR_blockdev_io_error, concat(BLK_STS_, n), nr)),
         (BCH_ERR_blockdev_io_error, BLK_STS_UNKNOWN, 20),
         (ERANGE, ERANGE_option_too_small, 21),
         (ERANGE, ERANGE_option_too_big, 22),
@@ -574,7 +574,7 @@ c_xmacro! {
         (BCH_ERR_decompress, decompress_zstd_src_len_bad, 505),
         (BCH_ERR_decompress, decompress_zstd_size_mismatch, 506),
         (BCH_ERR_decompress, zstd_error, 507),
-        ZSTD_ERRS(ZSTD_error(n, nr) => (BCH_ERR_zstd_error, ZSTD_error_ ## n, nr)),
+        ZSTD_ERRS(ZSTD_error(n, nr) => (BCH_ERR_zstd_error, concat(ZSTD_error_, n), nr)),
         (BCH_ERR_zstd_error, ZSTD_error_unknown, 534),
         (EIO, data_write, 535),
         (BCH_ERR_data_write, data_write_io, 536),
@@ -693,7 +693,7 @@ c_enum! {
     #[open]
     pub enum bch_errcode: u32 {
         BCH_ERR_START = 2048,
-        BCH_ERRCODES(class, err, nr) => BCH_ERR_ ## err = (c::BCH_ERR_START as u32) + (nr as u32),
+        BCH_ERRCODES(class, err, nr) => concat(BCH_ERR_, err) = (c::BCH_ERR_START as u32) + (nr as u32),
         BCH_ERR_MAX = (c::BCH_ERR_START as u32)
         + (core::mem::size_of::<c::bch_errcode_max>() as u32),
     }

@@ -232,7 +232,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum bch_btree_cache_not_freed_reasons: u32 {
-        BCH_BTREE_CACHE_NOT_FREED_REASONS(n) => BCH_BTREE_CACHE_NOT_FREED_ ## n,
+        BCH_BTREE_CACHE_NOT_FREED_REASONS(n) => concat(BCH_BTREE_CACHE_NOT_FREED_, n),
         BCH_BTREE_CACHE_NOT_FREED_REASONS_NR,
     }
 }
@@ -480,18 +480,18 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum _: u32 {
-        BTREE_ITER_FLAGS(n) => BTREE_ITER_FLAG_BIT_ ## n,
-        BTREE_UPDATE_FLAGS(n) => BTREE_ITER_FLAG_BIT_ ## n,
-        BTREE_TRIGGER_FLAGS(n) => BTREE_ITER_FLAG_BIT_ ## n,
+        BTREE_ITER_FLAGS(n) => concat(BTREE_ITER_FLAG_BIT_, n),
+        BTREE_UPDATE_FLAGS(n) => concat(BTREE_ITER_FLAG_BIT_, n),
+        BTREE_TRIGGER_FLAGS(n) => concat(BTREE_ITER_FLAG_BIT_, n),
     }
 }
 
 c_enum! {
     #[flags]
     pub enum btree_iter_update_trigger_flags: u32 {
-        BTREE_ITER_FLAGS(n) => BTREE_ITER_ ## n = 1 << (cs::BTREE_ITER_FLAG_BIT_ ## n as u32),
-        BTREE_UPDATE_FLAGS(n) => BTREE_UPDATE_ ## n = 1 << (cs::BTREE_ITER_FLAG_BIT_ ## n as u32),
-        BTREE_TRIGGER_FLAGS(n) => BTREE_TRIGGER_ ## n = 1 << (cs::BTREE_ITER_FLAG_BIT_ ## n as u32),
+        BTREE_ITER_FLAGS(n) => concat(BTREE_ITER_, n) = 1 << (cs::concat(BTREE_ITER_FLAG_BIT_, n) as u32),
+        BTREE_UPDATE_FLAGS(n) => concat(BTREE_UPDATE_, n) = 1 << (cs::concat(BTREE_ITER_FLAG_BIT_, n) as u32),
+        BTREE_TRIGGER_FLAGS(n) => concat(BTREE_TRIGGER_, n) = 1 << (cs::concat(BTREE_ITER_FLAG_BIT_, n) as u32),
     }
 }
 
@@ -1003,7 +1003,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum btree_write_type: u32 {
-        BCH_BTREE_WRITE_TYPES(t, ..) => BTREE_WRITE_ ## t,
+        BCH_BTREE_WRITE_TYPES(t, ..) => concat(BTREE_WRITE_, t),
         BTREE_WRITE_TYPE_NR,
     }
 }
@@ -1045,7 +1045,7 @@ c_enum! {
     pub enum btree_flags: u32 {
         /* First bits for btree node write type */
         BTREE_NODE_FLAGS_START = cs::BTREE_WRITE_TYPE_BITS - 1,
-        BTREE_FLAGS(flag) => BTREE_NODE_ ## flag,
+        BTREE_FLAGS(flag) => concat(BTREE_NODE_, flag),
     }
 }
 
@@ -1061,7 +1061,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum btree_node_rewrite_reason: u32 {
-        BTREE_NODE_REWRITE_REASON(n) => BTREE_NODE_REWRITE_ ## n,
+        BTREE_NODE_REWRITE_REASON(n) => concat(BTREE_NODE_REWRITE_, n),
     }
 }
 
@@ -1172,7 +1172,7 @@ c_enum! {
     #[closed]
     pub enum btree_node_type: u32 {
         BKEY_TYPE_btree,
-        BCH_BTREE_IDS(kwd, val, ..) => BKEY_TYPE_ ## kwd = (val as u32) + 1,
+        BCH_BTREE_IDS(kwd, val, ..) => concat(BKEY_TYPE_, kwd) = (val as u32) + 1,
         BKEY_TYPE_NR,
     }
 }

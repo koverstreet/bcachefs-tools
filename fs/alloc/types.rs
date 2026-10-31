@@ -35,7 +35,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum bch_watermark: u32 {
-        BCH_WATERMARKS(name) => BCH_WATERMARK_ ## name,
+        BCH_WATERMARKS(name) => concat(BCH_WATERMARK_, name),
         BCH_WATERMARK_NR,
     }
 }
@@ -293,7 +293,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum write_point_state: u32 {
-        WRITE_POINT_STATES(n) => WRITE_POINT_ ## n,
+        WRITE_POINT_STATES(n) => concat(WRITE_POINT_, n),
         WRITE_POINT_STATE_NR,
     }
 }

@@ -23,7 +23,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum gc_phase: u32 {
-        GC_PHASES(n) => GC_PHASE_ ## n,
+        GC_PHASES(n) => concat(GC_PHASE_, n),
     }
 }
 

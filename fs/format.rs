@@ -464,7 +464,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_bkey_type: u32 {
-        BCH_BKEY_TYPES(name, nr, ..) => KEY_TYPE_ ## name = nr,
+        BCH_BKEY_TYPES(name, nr, ..) => concat(KEY_TYPE_, name) = nr,
         KEY_TYPE_MAX,
     }
 }
@@ -539,7 +539,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_key_type_errors: u32 {
-        KEY_TYPE_ERRORS(n, t) => KEY_TYPE_ERROR_ ## n = t,
+        KEY_TYPE_ERRORS(n, t) => concat(KEY_TYPE_ERROR_, n) = t,
     }
 }
 
@@ -844,7 +844,7 @@ c_enum! {
     #[open]
     #[c_name(btree_id)]
     pub enum Btree: u32 {
-        BCH_BTREE_IDS(name, nr, ..) => BTREE_ID_ ## name = nr,
+        BCH_BTREE_IDS(name, nr, ..) => concat(BTREE_ID_, name) = nr,
         BTREE_ID_NR,
     }
 }
@@ -886,7 +886,7 @@ c_verbatim!(r#"
 c_enum! {
     #[open]
     pub enum bch_sb_field_type: u32 {
-        BCH_SB_FIELDS(f, nr, ..) => BCH_SB_FIELD_ ## f = nr,
+        BCH_SB_FIELDS(f, nr, ..) => concat(BCH_SB_FIELD_, f) = nr,
         BCH_SB_FIELD_NR,
     }
 }
@@ -895,7 +895,7 @@ c_enum! {
 tagged_union! {
     pub union bch_sb_field in c::bch_sb_field {
         tag type_: u32 = c::bch_sb_field_type,
-        arms from BCH_SB_FIELDS(f, nr, ..) => f: c::bch_sb_field_ ## f = nr,
+        arms from BCH_SB_FIELDS(f, nr, ..) => f: c::concat(bch_sb_field_, f) = nr,
         size: header,
     }
 }
@@ -1257,7 +1257,7 @@ c_enum! {
     #[own_to_text]
     pub enum bcachefs_metadata_version: u32 {
         bcachefs_metadata_version_min = 9,
-        BCH_METADATA_VERSIONS(t, n, ..) => bcachefs_metadata_version_ ## t = n,
+        BCH_METADATA_VERSIONS(t, n, ..) => concat(bcachefs_metadata_version_, t) = n,
         bcachefs_metadata_version_max,
     }
 }
@@ -1580,7 +1580,7 @@ c_const! {
 c_enum! {
     #[open]
     pub enum bch_sb_feature: u32 {
-        BCH_SB_FEATURES(f, ..) => BCH_FEATURE_ ## f,
+        BCH_SB_FEATURES(f, ..) => concat(BCH_FEATURE_, f),
         BCH_FEATURE_NR,
     }
 }
@@ -1600,7 +1600,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_sb_compat: u32 {
-        BCH_SB_COMPAT(f, ..) => BCH_COMPAT_ ## f,
+        BCH_SB_COMPAT(f, ..) => concat(BCH_COMPAT_, f),
         BCH_COMPAT_NR,
     }
 }
@@ -1618,7 +1618,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_version_upgrade_opts: u32 {
-        BCH_VERSION_UPGRADE_OPTS(t, n) => BCH_VERSION_UPGRADE_ ## t = n,
+        BCH_VERSION_UPGRADE_OPTS(t, n) => concat(BCH_VERSION_UPGRADE_, t) = n,
     }
 }
 
@@ -1649,7 +1649,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_error_actions: u32 {
-        BCH_ERROR_ACTIONS(t, n, ..) => BCH_ON_ERROR_ ## t = n,
+        BCH_ERROR_ACTIONS(t, n, ..) => concat(BCH_ON_ERROR_, t) = n,
         BCH_ON_ERROR_NR,
     }
 }
@@ -1666,7 +1666,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_degraded_actions: u32 {
-        BCH_DEGRADED_ACTIONS(t, n) => BCH_DEGRADED_ ## t = n,
+        BCH_DEGRADED_ACTIONS(t, n) => concat(BCH_DEGRADED_, t) = n,
         BCH_DEGRADED_ACTIONS_NR,
     }
 }
@@ -1693,7 +1693,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_write_degraded_actions: u32 {
-        BCH_WRITE_DEGRADED_ACTIONS(t, n) => BCH_WRITE_DEGRADED_ ## t = n,
+        BCH_WRITE_DEGRADED_ACTIONS(t, n) => concat(BCH_WRITE_DEGRADED_, t) = n,
         BCH_WRITE_DEGRADED_ACTIONS_NR,
     }
 }
@@ -1710,7 +1710,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_str_hash_type: u32 {
-        BCH_STR_HASH_TYPES(t, n) => BCH_STR_HASH_ ## t = n,
+        BCH_STR_HASH_TYPES(t, n) => concat(BCH_STR_HASH_, t) = n,
         BCH_STR_HASH_NR,
     }
 }
@@ -1726,7 +1726,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_str_hash_opts: u32 {
-        BCH_STR_HASH_OPTS(t, n) => BCH_STR_HASH_OPT_ ## t = n,
+        BCH_STR_HASH_OPTS(t, n) => concat(BCH_STR_HASH_OPT_, t) = n,
         BCH_STR_HASH_OPT_NR,
     }
 }
@@ -1747,7 +1747,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_csum_type: u32 {
-        BCH_CSUM_TYPES(t, n) => BCH_CSUM_ ## t = n,
+        BCH_CSUM_TYPES(t, n) => concat(BCH_CSUM_, t) = n,
         BCH_CSUM_NR,
     }
 }
@@ -1764,7 +1764,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_csum_opt: u32 {
-        BCH_CSUM_OPTS(t, n) => BCH_CSUM_OPT_ ## t = n,
+        BCH_CSUM_OPTS(t, n) => concat(BCH_CSUM_OPT_, t) = n,
         BCH_CSUM_OPT_NR,
     }
 }
@@ -1783,7 +1783,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_compression_type: u32 {
-        BCH_COMPRESSION_TYPES(t, n) => BCH_COMPRESSION_TYPE_ ## t = n,
+        BCH_COMPRESSION_TYPES(t, n) => concat(BCH_COMPRESSION_TYPE_, t) = n,
         BCH_COMPRESSION_TYPE_NR,
     }
 }
@@ -1800,7 +1800,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_compression_opts: u32 {
-        BCH_COMPRESSION_OPTS(t, n) => BCH_COMPRESSION_OPT_ ## t = n,
+        BCH_COMPRESSION_OPTS(t, n) => concat(BCH_COMPRESSION_OPT_, t) = n,
         BCH_COMPRESSION_OPT_NR,
     }
 }
@@ -1816,7 +1816,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_scrub_journal_opts: u32 {
-        BCH_SCRUB_JOURNAL_OPTS(t, n) => BCH_SCRUB_JOURNAL_ ## t = n,
+        BCH_SCRUB_JOURNAL_OPTS(t, n) => concat(BCH_SCRUB_JOURNAL_, t) = n,
         BCH_SCRUB_JOURNAL_OPT_NR,
     }
 }
@@ -1877,7 +1877,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_jset_entry_type: u32 {
-        BCH_JSET_ENTRY_TYPES(f, nr, ..) => BCH_JSET_ENTRY_ ## f = nr,
+        BCH_JSET_ENTRY_TYPES(f, nr, ..) => concat(BCH_JSET_ENTRY_, f) = nr,
         BCH_JSET_ENTRY_NR,
     }
 }
@@ -1950,7 +1950,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_fs_usage_type: u32 {
-        BCH_FS_USAGE_TYPES(f, nr) => BCH_FS_USAGE_ ## f = nr,
+        BCH_FS_USAGE_TYPES(f, nr) => concat(BCH_FS_USAGE_, f) = nr,
         BCH_FS_USAGE_NR,
     }
 }

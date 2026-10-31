@@ -123,7 +123,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_reconcile_opts: u32 {
-        BCH_RECONCILE_OPTS(n) => BCH_RECONCILE_ ## n,
+        BCH_RECONCILE_OPTS(n) => concat(BCH_RECONCILE_, n),
     }
 }
 
@@ -182,7 +182,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum bch_reconcile_accounting_type: u32 {
-        BCH_RECONCILE_ACCOUNTING(t, n) => BCH_RECONCILE_ACCOUNTING_ ## t = n,
+        BCH_RECONCILE_ACCOUNTING(t, n) => concat(BCH_RECONCILE_ACCOUNTING_, t) = n,
         BCH_RECONCILE_ACCOUNTING_NR,
     }
 }
@@ -199,7 +199,7 @@ c_xmacro! {
 c_enum! {
     #[open]
     pub enum reconcile_work_id: u32 {
-        RECONCILE_WORK_IDS(t) => RECONCILE_WORK_ ## t,
+        RECONCILE_WORK_IDS(t) => concat(RECONCILE_WORK_, t),
     }
 }
 

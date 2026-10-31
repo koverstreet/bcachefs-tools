@@ -268,7 +268,7 @@ c_xmacro! {
 c_enum! {
     #[closed]
     pub enum journal_flags: u32 {
-        JOURNAL_FLAGS(n) => JOURNAL_ ## n,
+        JOURNAL_FLAGS(n) => concat(JOURNAL_, n),
     }
 }
 
