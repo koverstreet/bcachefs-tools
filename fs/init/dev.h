@@ -36,6 +36,4 @@ int __bch2_dev_resize_alloc(struct bch_dev *, u64, u64);
 
 struct bch_dev *bch2_dev_lookup(struct bch_fs *, const char *);
 
-extern const struct blk_holder_ops bch2_sb_handle_bdev_ops;
-
 #endif /* _BCACHEFS_INIT_DEV_H */

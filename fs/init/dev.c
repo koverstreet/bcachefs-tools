@@ -1343,7 +1343,7 @@ int bch2_dev_online(struct bch_fs *c, const char *path, struct printbuf *err)
 	return 0;
 }
 
-static int bch2_dev_may_offline(struct bch_fs *c, struct bch_dev *ca, int flags, struct printbuf *err)
+int bch2_dev_may_offline(struct bch_fs *c, struct bch_dev *ca, int flags, struct printbuf *err)
 {
 	struct bch_devs_mask new_devs = c->devs_online;
 	__clear_bit(ca->dev_idx, new_devs.d);
@@ -1495,109 +1495,3 @@ struct bch_dev *bch2_dev_lookup(struct bch_fs *c, const char *name)
 		}
 	return ERR_PTR(-BCH_ERR_ENOENT_dev_not_found);
 }
-
-/* blk_holder_ops: */
-
-static struct bch_fs *bdev_get_fs(struct block_device *bdev)
-	__releases(&bdev->bd_holder_lock)
-{
-	struct bch_sb_handle_holder *holder = bdev->bd_holder;
-	struct bch_fs *c = holder->c;
-
-	if (c && !bch2_ro_ref_tryget(c))
-		c = NULL;
-
-	mutex_unlock(&bdev->bd_holder_lock);
-
-	if (c)
-		wait_event(c->ro_ref_wait, test_bit(BCH_FS_started, &c->flags));
-	return c;
-}
-
-DEFINE_CLASS(bdev_get_fs, struct bch_fs *,
-	     bch2_ro_ref_put(_T), bdev_get_fs(bdev),
-	     struct block_device *bdev);
-
-/* returns with ref on ca->ref */
-static struct bch_dev *bdev_to_bch_dev(struct bch_fs *c, struct block_device *bdev)
-{
-	for_each_member_device(c, ca)
-		if (ca->disk_sb.bdev == bdev) {
-			bch2_dev_get(ca);
-			return ca;
-		}
-	return NULL;
-}
-
-static void bch2_fs_bdev_mark_dead(struct block_device *bdev, bool surprise)
-{
-	CLASS(bdev_get_fs, c)(bdev);
-	if (!c)
-		return;
-
-	struct super_block *sb = c->vfs_sb;
-	if (sb) {
-		/*
-		 * Not necessary, c->ro_ref guards against the filesystem being
-		 * unmounted - we only take this to avoid a warning in
-		 * sync_filesystem:
-		 */
-		down_read(&sb->s_umount);
-	}
-
-	guard(rwsem_write)(&c->state_lock);
-
-	struct bch_dev *ca = bdev_to_bch_dev(c, bdev);
-	if (ca) {
-		bool print = true;
-		CLASS(printbuf, buf)();
-		__bch2_log_msg_start(ca->name, &buf);
-		prt_printf(&buf, "offline from block layer\n");
-
-		bool dev = !bch2_dev_may_offline(c, ca, BCH_FORCE_IF_DEGRADED, &buf);
-		if (!dev && sb) {
-			if (!surprise)
-				sync_filesystem(sb);
-			shrink_dcache_sb(sb);
-			evict_inodes(sb);
-		}
-
-		if (!dev) {
-			bch2_journal_flush(&c->journal);
-			print = bch2_fs_emergency_read_only(c, &buf);
-		}
-
-		__bch2_dev_offline(c, ca);
-
-		if (print)
-			bch2_print_str(c, KERN_ERR, buf.buf);
-
-		bch2_dev_put(ca);
-	}
-
-	if (sb)
-		up_read(&sb->s_umount);
-}
-
-static void bch2_fs_bdev_sync(struct block_device *bdev)
-{
-	CLASS(bdev_get_fs, c)(bdev);
-	if (!c)
-		return;
-
-	struct super_block *sb = c->vfs_sb;
-	if (sb) {
-		/*
-		 * Not necessary, c->ro_ref guards against the filesystem being
-		 * unmounted - we only take this to avoid a warning in
-		 * sync_filesystem:
-		 */
-		guard(rwsem_read)(&sb->s_umount);
-		sync_filesystem(sb);
-	}
-}
-
-const struct blk_holder_ops bch2_sb_handle_bdev_ops = {
-	.mark_dead		= bch2_fs_bdev_mark_dead,
-	.sync			= bch2_fs_bdev_sync,
-};

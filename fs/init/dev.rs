@@ -3,10 +3,10 @@
 //! Devices: dev.c's, as it converts.
 //!
 //! So far devs_list_to_text(), its congestion, its state set through C's
-//! dev_set_state(), and a bch_dev's memory: Rust allocates it, as bch_fs's,
-//! so its Rust-typed fields have initializers - the bucket bitmaps' Locks -
-//! and it's dropped whole when it's freed: after C's teardown, which leaves
-//! what it freed nulled for those fields' Drops to find.
+//! dev_set_state(), the block layer's holder ops, and a bch_dev's memory: Rust
+//! allocates it, as bch_fs's, so its Rust-typed fields have initializers - the
+//! bucket bitmaps' Locks - and it's dropped whole when it's freed: after C's
+//! teardown, which leaves what it freed nulled for those fields' Drops to find.
 
 #![allow(non_camel_case_types)]
 
@@ -23,6 +23,8 @@ use crate::util::{Nsecs, Printbuf};
 use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_export, CStruct, bitfield, c_extern, c_typedef, TypeInfo};
+#[cfg(kernel)]
+use {crate::fs::RoRef, crate::util::log::{log_msg_start, print_str}, crate::util::sleep::Sleep};
 use crate::types::{DArray, bits_to_longs, c_default};
 use crate::util::bio::{Bio, BioBufPtr};
 use crate::util::bitmap::{AtomicBitArray, BitArray};
@@ -180,7 +182,9 @@ c_extern! {
                                 new_state: c::bch_member_state, flags: c_int,
                                 err: *mut c::printbuf) -> c_int;
     pub fn bch2_dev_lookup(c: *mut c::bch_fs, name: *const c_char) -> *mut c::bch_dev;
-    pub static bch2_sb_handle_bdev_ops: c::blk_holder_ops;
+    pub fn bch2_dev_may_offline(c: *mut c::bch_fs, ca: *mut c::bch_dev, flags: c_int,
+                                err: *mut c::printbuf) -> c_int;
+    pub fn __bch2_dev_offline(c: *mut c::bch_fs, ca: *mut c::bch_dev);
     pub fn bch2_dev_read_identity(bdev: *mut c::block_device,
                                   name: *mut c_char, name_size: usize,
                                   model: *mut c_char, model_size: usize,
@@ -288,6 +292,20 @@ impl StateLockWrite<'_> {
             c::__bch2_dev_set_state(self.fs().as_ptr(), ca, state, flags as c_int, err.as_raw())
         })
     }
+
+    /// Whether the filesystem can do without @ca; why not, in @err.
+    pub fn dev_may_offline(&self, ca: &c::bch_dev, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
+        let ca = core::ptr::from_ref(ca).cast_mut();
+        ret_to_result_void(unsafe {
+            c::bch2_dev_may_offline(self.fs().as_ptr(), ca, flags as c_int, err.as_raw())
+        })
+    }
+
+    /// @ca's block device closed: __bch2_dev_offline().
+    pub fn dev_offline(&self, ca: &c::bch_dev) {
+        let ca = core::ptr::from_ref(ca).cast_mut();
+        unsafe { c::__bch2_dev_offline(self.fs().as_ptr(), ca) }
+    }
 }
 
 impl Fs {
@@ -370,4 +388,77 @@ impl c::bch_dev {
 #[c_export]
 pub fn bch2_dev_congested_read(ca: &c::bch_dev, now: u64) -> u32 {
     ca.congested_read(now)
+}
+
+// ── blk_holder_ops ────────────────────────────────────────────────────────
+
+#[cfg(kernel)]
+pub(crate) static HOLDER_OPS: c::blk_holder_ops = c::blk_holder_ops {
+    mark_dead: Some(bdev_mark_dead),
+    sync: Some(bdev_sync),
+    ..unsafe { core::mem::zeroed() }
+};
+
+/// # Safety
+/// bd_holder_lock is held; this drops it
+#[cfg(kernel)]
+unsafe fn bdev_get_fs(bdev: *mut c::block_device) -> Option<RoRef> {
+    let fs = unsafe {
+        let holder = (*bdev).bd_holder.cast::<c::bch_sb_handle_holder>();
+        (*holder).c.as_ref().and_then(RoRef::tryget)
+    };
+    unsafe { c::mutex_unlock((&raw mut (*bdev).bd_holder_lock).cast()) };
+
+    if let Some(fs) = &fs {
+        let Ok(()) = fs.ro_ref_events.wait_until(Sleep::UNINTERRUPTIBLE,
+                                                 || fs.flag(c::bch_fs_flags::BCH_FS_started).then_some(()));
+    }
+    fs
+}
+
+#[cfg(kernel)]
+unsafe extern "C" fn bdev_mark_dead(bdev: *mut c::block_device, surprise: bool) {
+    let Some(fs) = (unsafe { bdev_get_fs(bdev) }) else { return };
+
+    // Not necessary, c->ro_ref guards against the filesystem being unmounted -
+    // we only take this to avoid a warning in sync_filesystem
+    let sb = fs.vfs_super();
+    let _umount = sb.map(|sb| sb.umount().read());
+    let state = fs.state_lock_write();
+    let Some(ca) = fs.members().find(|ca| ca.disk_sb.bdev == bdev) else { return };
+
+    let mut msg = Printbuf::new();
+    log_msg_start(&mut msg, ca.name());
+    prt!(&mut msg, "offline from block layer\n");
+
+    let dev = state.dev_may_offline(&ca, c::BCH_FORCE_IF_DEGRADED, &mut msg).is_ok();
+    if !dev {
+        if let Some(sb) = sb {
+            unsafe {
+                if !surprise {
+                    c::sync_filesystem(sb.as_ptr());
+                }
+                c::shrink_dcache_sb(sb.as_ptr());
+                c::evict_inodes(sb.as_ptr());
+            }
+        }
+        let _ = fs.journal_flush();
+    }
+    let print = dev || fs.emergency_read_only(&mut msg);
+
+    state.dev_offline(&ca);
+
+    if print {
+        print_str(&fs, LogLevel::ERR, &mut msg);
+    }
+}
+
+#[cfg(kernel)]
+unsafe extern "C" fn bdev_sync(bdev: *mut c::block_device) {
+    let Some(fs) = (unsafe { bdev_get_fs(bdev) }) else { return };
+
+    if let Some(sb) = fs.vfs_super() {
+        let _umount = sb.umount().read();
+        unsafe { c::sync_filesystem(sb.as_ptr()) };
+    }
 }

@@ -54,6 +54,10 @@ impl SuperBlock {
     pub fn fs(&self) -> &Fs {
         self.data()
     }
+
+    pub fn umount(&self) -> &Locked<c::rw_semaphore> {
+        Locked::from_c(unsafe { &*(&raw const (*self.as_ptr()).s_umount).cast() })
+    }
 }
 
 // ── The operations ───────────────────────────────────────────────────────

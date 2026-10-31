@@ -716,6 +716,7 @@ impl Fs {
 
         self.set_flag(Flag::BCH_FS_started);
         wake_up(&self.ro_ref_wait);
+        self.ro_ref_events.wake();
 
         let _state = self.state_lock_write();
         if self.opts().read_only.get() != 0 {

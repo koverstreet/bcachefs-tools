@@ -642,6 +642,10 @@ pub struct Fs {
      */
     pub ro_ref: c::refcount_t,
     pub ro_ref_wait: c::wait_queue_head_t,
+    /// Woken with ro_ref_wait at start, for Rust's waiters on BCH_FS_started
+    #[pin]
+    #[init(RustOnly::new(crate::util::futex::EventCount::new()))]
+    pub(crate) ro_ref_events: rust_only!(crate::util::futex::EventCount),
     pub read_only_work: c::work_struct,
 
     #[c("struct bch_dev __rcu *devs[BCH_SB_MEMBERS_MAX]")]
