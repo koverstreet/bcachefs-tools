@@ -475,13 +475,20 @@ macro_rules! bch_log_ratelimited {
 
 /// A LogMsg at err, suppressed while this call site is ratelimited: C's
 /// CLASS(bch_log_msg_ratelimited).
+///
+/// `log_msg_ratelimited!(fs, i, N)` gives the call site N ratelimit states and
+/// uses the i'th: an IO error path's recovered errors and its failures each
+/// get their own, so a stream of one can't ratelimit away the other.
 #[macro_export]
 macro_rules! log_msg_ratelimited {
-    ($fs:expr) => {{
-        static RATELIMIT: $crate::util::log::Ratelimit = $crate::util::log::Ratelimit::new();
+    ($fs:expr) => {
+        $crate::log_msg_ratelimited!($fs, 0, 1)
+    };
+    ($fs:expr, $idx:expr, $n:expr) => {{
+        static RATELIMIT: [$crate::util::log::Ratelimit; $n] = [const { $crate::util::log::Ratelimit::new() }; $n];
         let fs: &$crate::fs::Fs = $fs;
         let mut msg = $crate::util::log::LogMsg::new(fs);
-        msg.set_suppressed(RATELIMIT.suppress(fs, $crate::c_function_name!()));
+        msg.set_suppressed(RATELIMIT[$idx].suppress(fs, $crate::c_function_name!()));
         msg
     }};
 }
