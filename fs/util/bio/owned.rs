@@ -46,12 +46,19 @@ unsafe impl HasBio for Bio {
     const BIO_OFFSET: usize = 0;
 }
 
-/// HasBio for $t, by its Bio field $f: checked to be a Bio, and last - not
-/// that it's #[pin], which HasBio asks of a struct with #[pin_data].
+/// A struct's bio field: a Bio, or a C-shared struct's c::bio - the same
+/// memory, Bio being transparent.
+pub trait BioField {}
+impl BioField for Bio {}
+impl BioField for c::bio {}
+
+/// HasBio for $t, by its bio field $f: checked to be a Bio or a c::bio, and
+/// last - not that it's #[pin], which HasBio asks of a struct with
+/// #[pin_data].
 #[macro_export]
 macro_rules! has_bio {
     ($t:ty, $f:ident) => {
-        // SAFETY: a Bio field, below, that ends the struct
+        // SAFETY: a bio field, below, that ends the struct
         unsafe impl $crate::util::bio::HasBio for $t {
             const BIO_OFFSET: usize = {
                 let off = ::core::mem::offset_of!($t, $f);
@@ -60,7 +67,10 @@ macro_rules! has_bio {
                 off
             };
         }
-        const _: fn(&$t) -> &$crate::util::bio::Bio = |t| &t.$f;
+        const _: fn(&$t) = |t| {
+            fn bio_field<B: $crate::util::bio::BioField>(_: &B) {}
+            bio_field(&t.$f)
+        };
     };
 }
 
