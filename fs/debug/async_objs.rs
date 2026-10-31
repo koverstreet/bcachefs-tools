@@ -19,9 +19,48 @@
 //! XXX), with an unsafe "freed after a grace period" assertion, as
 //! RcuPtr::assign().
 
+#![allow(non_camel_case_types)]
+
 use crate::c;
 use crate::fs::Fs;
 use crate::util::Printbuf;
+use cstruct_macros::{c_enum, c_xmacro};
+
+// The lists, where Fs has them: only with the lists configured
+#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+use {
+    core::ffi::c_uint,
+    cstruct_macros::{placed, CStruct, Init},
+    pin_init::pin_data,
+};
+
+c_xmacro! {
+    BCH_ASYNC_OBJ_LISTS(x) {
+        (data_update),
+        (rbio),
+        (write_op),
+        (btree_read_bio),
+        (btree_write_bio),
+    }
+}
+
+c_enum! {
+    #[closed]
+    pub enum bch_async_obj_lists: u32 {
+        BCH_ASYNC_OBJ_LISTS(n) => BCH_ASYNC_OBJ_LIST_ ## n,
+        BCH_ASYNC_OBJ_NR,
+    }
+}
+
+#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+#[placed(Fs.async_objs[], index = idx: c_uint)]
+#[pin_data]
+#[repr(C)]
+#[derive(CStruct, Init)]
+pub struct async_obj_list {
+    pub list: c::fast_list,
+}
+
 #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
 use core::ptr::NonNull;
 

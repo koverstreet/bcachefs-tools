@@ -27,6 +27,8 @@
 //! A value is an integer (decimal, 0x hex, or negative), or for an
 //! enum-coded field the codeword's name.
 
+#![allow(non_camel_case_types)]
+
 use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{NoRoom, TransAttempt, TransBkey, UpdateTriggerFlags};
@@ -39,6 +41,41 @@ use crate::snapshot_states::{SNAPSHOT_STATE_VALUES, SUBVOLUME_STATE_VALUES};
 use crate::typeinfo::{self, AccessError, FieldTarget, ResolveError, TypeInfo};
 use core::fmt;
 use core::mem::{size_of, MaybeUninit};
+use crate::util::ffi::c_char;
+use core::ffi::{c_int, c_uint};
+use cstruct_macros::{CStruct, c_extern};
+
+/*
+ * key_validate: checks validity of @k, returns 0 if good or -EINVAL if bad. If
+ * invalid, entire key will be deleted.
+ *
+ * When invalid, error string is returned via @err. @rw indicates whether key is
+ * being read or written; more aggressive checks can be enabled when rw == WRITE.
+ */
+#[repr(C)]
+#[derive(Clone, Copy, Default, CStruct)]
+pub struct bkey_ops {
+    pub key_validate: Option<unsafe extern "C" fn(c: *mut c::bch_fs, k: c::bkey_s_c,
+                                                  from: *const c::bkey_validate_context) -> c_int>,
+    pub val_to_text: Option<unsafe extern "C" fn(*mut c::printbuf, *mut c::bch_fs, c::bkey_s_c)>,
+    pub swab: Option<unsafe extern "C" fn(*const c::bch_fs, c::bkey_s)>,
+    pub key_merge: Option<unsafe extern "C" fn(*mut c::bch_fs, c::bkey_s, c::bkey_s_c) -> bool>,
+    pub trigger: Option<unsafe extern "C" fn(*mut c::btree_trans, c::btree_trigger_op) -> c_int>,
+    pub check_repair: Option<unsafe extern "C" fn(*mut c::btree_trans, *mut c::btree_iter,
+                                                  c::btree_id, c_uint, c::bkey_s_c) -> c_int>,
+    pub compat: Option<unsafe extern "C" fn(id: c::btree_id, version: c_uint,
+                                            big_endian: c_uint, write: c_int,
+                                            c::bkey_s)>,
+
+}
+
+c_extern! {
+    pub static bch2_bkey_types: [*const c_char; 0];
+    pub fn bch2_bpos_to_text(out: *mut c::printbuf, pos: c::bpos);
+    pub fn bch2_bkey_to_text(out: *mut c::printbuf, k: *const c::bkey);
+    pub fn bch2_bkey_val_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, k: c::bkey_s_c);
+    pub fn bch2_set_bkey_error(c: *mut c::bch_fs, k: *mut c::bkey_i, err: c::bch_key_type_errors);
+}
 
 type EnumValues = &'static [(&'static str, u64)];
 

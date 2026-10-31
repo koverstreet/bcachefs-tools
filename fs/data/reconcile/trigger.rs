@@ -5,6 +5,8 @@
 //! btree node pointer's reconcile_bp entry, its backpointer's position in the
 //! reconcile_scan btree.
 
+#![allow(non_camel_case_types)]
+
 use crate::{accounting, bkey_fsck_err_on, fsck_err};
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{bpos_max, bpos_min, pos, BkeySC, BkeyV, BkeyVal};
@@ -21,7 +23,39 @@ use crate::prt;
 use crate::util::printbuf::Msg;
 use crate::util::{Printbuf, ToText};
 use core::mem::size_of;
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, c_enum, CStruct};
+use crate::types::DArray;
+
+c_enum! {
+    #[closed]
+    pub enum set_needs_reconcile_ctx: u32 {
+        SET_NEEDS_RECONCILE_opt_change,
+        SET_NEEDS_RECONCILE_opt_change_indirect,
+        SET_NEEDS_RECONCILE_foreground,
+        SET_NEEDS_RECONCILE_other,
+    }
+}
+
+/* Inodes in different snapshots may have different IO options: */
+#[repr(C)]
+#[derive(Clone, Copy, Default, CStruct)]
+pub struct snapshot_io_opts_entry {
+    pub snapshot: u32,
+    pub io_opts: c::bch_inode_opts,
+}
+
+#[repr(C)]
+#[derive(Default, CStruct)]
+pub struct per_snapshot_io_opts {
+    pub cur_inum: u64,
+    pub metadata: bool,
+    pub fs_scan_cookie: bool,
+    pub inum_scan_cookie: bool,
+    pub dev_cookie: c::bch_devs_mask,
+
+    pub fs_io_opts: c::bch_inode_opts,
+    pub d: DArray<c::snapshot_io_opts_entry>,
+}
 
 /// The work btree a key with @r is tracked in: rb_work_id().
 pub fn rb_work_id(r: Option<&c::bch_extent_reconcile>) -> c::reconcile_work_id {

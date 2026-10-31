@@ -25,6 +25,19 @@
 //! per field - it's SipHash proper, whatever the writes: a key whose fields
 //! lost bytes to the above would hash alike under every key.
 
+#![allow(non_camel_case_types)]
+
+use crate::types::Le64;
+use cstruct_macros::{CStruct, Plain};
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, CStruct, Plain)]
+#[c_typedef]
+pub struct SIPHASH_KEY {
+    pub k0: Le64,
+    pub k1: Le64,
+}
+
 /// SipHash with @C compression and @D finalization rounds, as it runs.
 #[derive(Clone)]
 pub struct SipHasher<const C: usize, const D: usize> {

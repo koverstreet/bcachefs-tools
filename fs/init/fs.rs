@@ -1,3 +1,5 @@
+#![allow(non_camel_case_types)]
+
 use crate::c;
 use crate::btree::bkey::BkeyI;
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
@@ -12,8 +14,26 @@ use crate::util::workqueue::Queue;
 use core::future::Future;
 #[cfg(kernel)]
 use crate::util::refcount::{Refcount, TryRefcount};
-
 pub use crate::sb::members::DevRef;
+use core::ffi::c_int;
+use cstruct_macros::c_extern;
+
+c_extern! {
+    pub fn bch2_sbs_filter_dead(sbs: *mut c::bch_sb_handles, opts: *mut c::bch_opts,
+                                out: *mut c::printbuf) -> c_int;
+    pub fn bch2_fs_emergency_read_only(c: *mut c::bch_fs, out: *mut c::printbuf) -> bool;
+    pub fn bch2_fs_read_only(c: *mut c::bch_fs);
+    pub fn bch2_fs_read_write(c: *mut c::bch_fs) -> c_int;
+    pub fn bch2_fs_stop(c: *mut c::bch_fs) -> c_int;
+    pub fn bch2_fs_start(c: *mut c::bch_fs) -> c_int;
+    pub fn bch2_fs_exit(c: *mut c::bch_fs) -> c_int;
+    pub fn bch2_fs_open(devices: *mut c::darray_const_str, opts: *mut c::bch_opts,
+                        user_key: *const c::bch_key) -> *mut c::bch_fs;
+    pub static bch2_fs_flag_strs: [*const crate::util::ffi::c_char; 0];
+    pub static bch2_write_refs: [*const crate::util::ffi::c_char; 0];
+    pub static bch2_dev_read_refs: [*const crate::util::ffi::c_char; 0];
+    pub static bch2_dev_write_refs: [*const crate::util::ffi::c_char; 0];
+}
 
 /// sb_lock held: the superblock, through it - and c->sb, through its
 /// published().

@@ -17,6 +17,101 @@
 //! come from where they are - over what only the runner reads, publishing
 //! what others read unlocked, a word at a time.
 
+#![allow(non_camel_case_types)]
+
+use crate::locking::Locked;
+use crate::new_lock;
+use crate::published;
+use crate::types::c_default;
+use crate::util::projections::Volatile;
+use crate::util::workqueue::ReffedWork;
+use cstruct_macros::{placed, CStruct, Init, TypeInfo};
+use pin_init::pin_data;
+
+/// What the runner keeps under its lock - taken with interrupts off, as
+/// scheduling can come from where they are. Nothing else reads it.
+#[repr(C)]
+#[derive(Clone, Copy, CStruct, TypeInfo)]
+pub struct bch_recovery_runner {
+    /*
+     * When current_pass started, monotonic, for recovery_status to print
+     * how long it's been going. A poller can time passes by watching
+     * current_pass change; whoever cats the sysfs file once can't.
+     */
+    pub pass_start_time: u64,
+    pub rewound_from: c::bch_recovery_pass,
+    pub rewound_to: c::bch_recovery_pass,
+    /*
+     * Every pass this run dispatched, successful or not - the rewind
+     * gate: we never rewind to (or re-queue behind us) a pass that
+     * already ran this run. Gating on passes_complete alone looped: a
+     * pass that runs and fails never completes, so under
+     * errors=continue a later pass re-requesting it rewound forever
+     * (delete_dead_snapshots <-> check_subvols on an unrepairable
+     * snapshot/subvol edge).
+     */
+    pub passes_attempted: u64,
+    pub passes_failing: u64,
+    pub passes_ratelimiting: u64,
+    /*
+     * Cost-model retry ratelimit for the passes in passes_failing, kept in
+     * memory only: a failing pass must not write the sb recovery_pass_entry,
+     * but we still want the same last_run/last_runtime throttle so automatic
+     * recovery doesn't hammer a pass that keeps failing.
+     */
+    pub passes_failing_ratelimit: [c::recovery_pass_entry; c::BCH_RECOVERY_PASS_NR as usize],
+    /* Consecutive failures, for exponential backoff; zeroed on success */
+    pub passes_failing_nr: [u8; c::BCH_RECOVERY_PASS_NR as usize],
+}
+// rewound_from and rewound_to zeroed are pass 0, recovery_pass_empty: none
+c_default!(bch_recovery_runner);
+
+published! {
+    /// What the runner publishes: read without its lock - by C, by the
+    /// allocator, a word at a time - and written by the runner under it.
+    #[derive(CStruct)]
+    pub struct RecoveryWords {
+        /* counterpart to c->sb.recovery_passes_required */
+        pub scheduled_passes_ephemeral: Volatile<u64>,
+        pub current_passes: Volatile<u64>,
+        pub current_pass: Volatile<c::bch_recovery_pass>,
+        /* never rewinds version of curr_pass */
+        pub pass_done: Volatile<c::bch_recovery_pass>,
+        /* bitmask of recovery passes that we actually ran */
+        pub passes_complete: Volatile<u64>,
+    }
+}
+
+#[placed(Fs.recovery)]
+#[pin_data]
+#[repr(C)]
+#[derive(CStruct, TypeInfo, Init)]
+pub struct bch_fs_recovery {
+    /*
+     * The running pass's progress, for recovery_status to read. One
+     * indicator rather than a stack because no pass has two live at once -
+     * which is what check_reconcile_work_data_btrees() exists to keep true.
+     */
+    pub progress: c::progress_indicator,
+
+    /* the runner's state, under its lock, and what it publishes */
+    #[pin]
+    #[init(new_lock!(Default::default(), ::pin_init::zeroed(), "&c->recovery.lock"))]
+    #[c_lock("spinlock_t lock")]
+    pub runner: Locked<c::spinlock_t, bch_recovery_runner, RecoveryWords>,
+
+    /* passes run under it - and what runs as a pass, it serializes */
+    #[pin]
+    #[init(new_lock!((), "&c->recovery.run_lock"))]
+    #[c("struct mutex run_lock")]
+    pub run_lock: Locked<c::mutex>,
+
+    /* the async runner: run_async() */
+    #[pin]
+    #[c("struct work_struct work")]
+    pub(crate) work: ReffedWork<async_runner, crate::field!(super.writes)>,
+}
+
 /// Export @pass, a function or closure of `&Fs` returning `Result<(), E>`
 /// with E converting to BchError, as the recovery pass the pass table calls
 /// @name - its prototype C's from the header of the file this is in, as
@@ -40,7 +135,7 @@ macro_rules! recovery_pass {
 
 use crate::btree::iter::lockrestart_do;
 use crate::c;
-use crate::c::{bch_recovery_runner as Runner, RecoveryWords};
+use self::bch_recovery_runner as Runner;
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::locking::Guard;

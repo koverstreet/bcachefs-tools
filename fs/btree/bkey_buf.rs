@@ -11,11 +11,23 @@
 //! __GFP_NOFAIL, through rust_kzalloc_nofail() - the kernel's Rust allocator
 //! API doesn't offer it. Zeroed, so the whole buffer is initialized memory.
 
+#![allow(non_camel_case_types)]
+
 use crate::btree::bkey::{BkeyI, BkeySC, BKEY_U64S};
 use crate::c;
 use core::mem::size_of;
 use core::ptr::NonNull;
 use core::slice;
+use crate::types::c_default;
+use cstruct_macros::CStruct;
+
+#[repr(C)]
+#[derive(Clone, Copy, CStruct)]
+pub struct bkey_buf {
+    pub k: *mut c::bkey_i,
+    pub onstack: [u64; 12],
+}
+c_default!(bkey_buf);
 
 const ONSTACK_U64S: usize = 12;
 

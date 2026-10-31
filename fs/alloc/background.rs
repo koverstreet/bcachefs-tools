@@ -470,6 +470,8 @@
 //! background.h's alloc_freespace_genbits(), which FreespacePos must agree
 //! with exactly - to the C integer types, wrapping and all.
 
+#![allow(non_camel_case_types)]
+
 use crate::accounting::{bucket_data_type, data_type, data_type_from_u8, data_type_is_empty, data_type_movable};
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::accounting;
@@ -498,7 +500,13 @@ use crate::{bkey_fsck_err_on, btree_trans, prt};
 use core::ffi::{c_int, c_uint};
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::Ordering;
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, c_const};
+
+c_const! {
+    /// How far a bucket's generation may get past its oldest pointer's before
+    /// it has to be gc'd: the gen is a u8, compared wrapping.
+    pub const BUCKET_GC_GEN_MAX: u32 = 96;
+}
 
 // ── Alloc keys before v4 ─────────────────────────────────────────────────
 

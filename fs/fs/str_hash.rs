@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#![allow(non_camel_case_types)]
+
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, AllTypes, BkeyFamily, BkeyI, BkeySC, InFamily, MutBkey, SPOS_MAX};
 use crate::btree::iter::{
@@ -23,7 +25,23 @@ use crate::util::log::LogMsg;
 use crate::{fsck_err, fsck_err_on, inode_fsck_err, prt};
 use bitflags::bitflags;
 use core::ffi::{c_int, c_void};
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, CStruct, TypeInfo};
+use crate::types::c_default;
+
+#[repr(C)]
+#[derive(Clone, Copy, CStruct, TypeInfo)]
+pub struct bch_hash_info {
+    pub inum_snapshot: u32,
+    pub type_: u8,
+    pub is_31bit: bool,
+    pub cf_encoding: *mut c::unicode_map,
+    /*
+     * For crc32 or crc64 string hashes the first key value of
+     * the siphash_key (k0) is used as the key.
+     */
+    pub siphash_key: c::SIPHASH_KEY,
+}
+c_default!(bch_hash_info);
 
 /// A btree that's a hash table keyed by name: dirents, xattrs. The keys passed
 /// to these are valid - from the btree, or built to be inserted.

@@ -20,6 +20,8 @@
 //! C holds them by bucket - an in-place write till each bio's endio, a data
 //! update from init to exit - through the c_exports below.
 
+#![allow(non_camel_case_types)]
+
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::BtreeTrans;
 use crate::c;
@@ -42,8 +44,17 @@ use crate::warn_on_once;
 use arrayvec::ArrayVec;
 use core::ffi::c_int;
 use core::sync::atomic::{AtomicI32, AtomicU64, Ordering::{AcqRel, Relaxed}};
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, c_const};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
+
+c_const! {
+    #[c_int]
+    pub const BUCKET_NOCOW_LOCKS_BITS: u32 = 10;
+    pub const BUCKET_NOCOW_LOCKS: u32 = 1 << c::BUCKET_NOCOW_LOCKS_BITS;
+
+    #[c_int]
+    pub const NOCOW_LOCK_BUCKET_SIZE: u32 = 6;
+}
 
 const NR_SLOTS: usize = c::NOCOW_LOCK_BUCKET_SIZE as usize;
 const NR_BUCKETS: usize = c::BUCKET_NOCOW_LOCKS as usize;

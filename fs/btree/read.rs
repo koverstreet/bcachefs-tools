@@ -4,13 +4,52 @@
 //! checksum and encryption - its nonce, and a node's and a node entry's
 //! checksum() and encrypt().
 
+#![allow(non_camel_case_types)]
+
 use crate::c;
 use crate::data::checksum::{csum_vstruct, BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::types::Le32;
+use crate::types::{Le32, c_default};
 use crate::util::vstructs::{Head, Unvalidated};
 use core::mem::offset_of;
+use core::ffi::{c_int, c_uint, c_void};
+use cstruct_macros::{CStruct, bitfield, c_extern, c_typedef};
+use nestify::nest;
+
+nest! {
+    #[repr(C)]
+    #[derive(CStruct)]
+    pub struct btree_read_bio {
+        pub c: *mut c::bch_fs,
+        pub ca: *mut c::bch_dev, /* stashed at submit; see bch_write_bio */
+        pub b: *mut c::btree,
+        pub start_time: u64,
+        #[c_bitfield]
+        #>[bitfield(u8, ty = u32)]
+        pub bits: pub struct btree_read_bio_bits {
+            idx:   u7,
+            __pad: u1,
+        },
+        /* its slot on its async object list */
+        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+        pub list_idx: c_uint,
+        pub pick: c::extent_ptr_decoded,
+        pub work: c::work_struct,
+        pub bio: c::bio,
+    }
+}
+c_default!(btree_read_bio);
+
+c_typedef! {
+    pub type btree_node_scrub_report_fn = Option<unsafe extern "C" fn(priv_: *mut c_void,
+                                                                     dev: c_uint, good: bool)>;
+}
+
+c_extern! {
+    pub fn bch2_btree_node_scrub(trans: *mut c::btree_trans, btree: c::btree_id, level: c_uint,
+                                 k: c::bkey_s_c, dev: c_uint) -> c_int;
+}
 
 impl c::bset__head {
     /// The nonce of this bset, at byte @offset of its btree node: the offset,

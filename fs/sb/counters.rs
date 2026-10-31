@@ -24,22 +24,39 @@
 //! XXX: a tracepoint fired only from Rust gets no __tracepoint_check entry, as
 //! C's use sites leave, so a WARN_ON_UNUSED_TRACEPOINTS build calls it unused.
 
+#![allow(non_camel_case_types)]
+
 use core::ffi::c_int;
-
-use cstruct_macros::c_export;
-
+use cstruct_macros::{c_export, CStruct, c_const, TypeInfo};
 use crate::c;
 use crate::errcode::BchError;
 use crate::util::vstructs::Unvalidated;
 use crate::fs::{Fs, SbLockGuard};
 use crate::prt;
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
-use crate::types::Le64;
+use crate::types::{Le64, c_default};
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{nsecs_to_jiffies, NSEC_PER_SEC};
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::sb::io::SbResize;
+use crate::util::percpu::PerCpu;
+
+c_const! {
+    #[c_int]
+    pub const NR_RECENT_COUNTERS: u32 = 20;
+}
+
+#[repr(C)]
+#[derive(CStruct, TypeInfo)]
+pub struct bch_fs_counters {
+    pub mount: [u64; c::BCH_COUNTER_NR as usize],
+    #[c("u64 __percpu *now")]
+    pub now: PerCpu<[u64; c::BCH_COUNTER_NR as usize]>,
+
+    pub recent: [[u64; c::BCH_COUNTER_NR as usize]; c::NR_RECENT_COUNTERS as usize],
+}
+c_default!(bch_fs_counters);
 
 /// What an event's counter counts.
 pub trait Kind {}

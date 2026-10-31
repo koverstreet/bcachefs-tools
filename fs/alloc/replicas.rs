@@ -14,6 +14,8 @@
 //! for a key's worth of devices, BCH_BKEY_PTRS_MAX: C's bch_replicas_padded,
 //! or a disk_accounting_pos, whose replicas entry is that size exactly.
 
+#![allow(non_camel_case_types)]
+
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
@@ -34,8 +36,19 @@ use core::ffi::{c_int, c_uint};
 use core::fmt;
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicI32, Ordering};
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, CStruct, TypeInfo};
 use crate::sb::io::SbResize;
+use crate::types::c_default;
+
+#[repr(C)]
+#[derive(Clone, Copy, CStruct, TypeInfo)]
+pub union bch_replicas_padded {
+    #[c("u8 bytes[struct_size_t(struct bch_replicas_entry_v1, devs, BCH_BKEY_PTRS_MAX)]")]
+    pub bytes: [u8; core::mem::size_of::<Head<c::bch_replicas_entry_v1>>()
+                    + c::BCH_BKEY_PTRS_MAX as usize * core::mem::size_of::<u8>()],
+    pub e: Head<c::bch_replicas_entry_v1>,
+}
+c_default!(bch_replicas_padded);
 
 type Entry = c::bch_replicas_entry_v1<Validated>;
 

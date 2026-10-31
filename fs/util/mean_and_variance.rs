@@ -9,8 +9,50 @@
 //! div64_u64() did - a negative sum isn't a negative mean; time_stats', the
 //! one user, sums durations.
 
+#![allow(non_camel_case_types)]
+
 use crate::c;
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, CStruct};
+
+/*
+ * Streaming median + MAD (median absolute deviation), via a
+ * stochastic-gradient estimator on the L1 losses:
+ *
+ *	median minimizes E[|X − m|]	→ ∇ = −sign(X − m)
+ *	MAD	minimizes E[||X − m| − d|]	→ ∇ = −sign(|X − m| − d)
+ *
+ * Two update modes share the same struct and the same step kernel:
+ *
+ *  - All-time:  mean_and_variance_update(s, x)
+ *	 step ≈ mad / n (Robbins-Monro 1/n schedule via ilog2(n) shift).
+ *	 Σα diverges, Σα² converges → the estimator is *consistent*,
+ *	 converging to the true (lifetime) median and MAD as n → ∞.
+ *	 Additionally maintains exact sum and count, so the true mean
+ *	 is available via mean_and_variance_get_mean().
+ *
+ *  - Exponentially-weighted: mean_and_variance_update_weighted(s, x, w)
+ *	 step = mad >> w (fixed weight). Asymptotic half-life is 2^w
+ *	 samples; steady-state wobble is ~mad/2^w. Tracks the median of
+ *	 the EW-weighted stream — sum and count fields are ignored.
+ *
+ * Per-sample work is shifts, adds, and sign bits: no multiplication,
+ * no division, no sqrt, no u128. MAD is robust to outliers — a single
+ * 100ms hiccup in a µs stream doesn't blow up the dispersion estimate.
+ * The mad-scaled step makes both modes scale-invariant: same convergence
+ * shape for ns- or s-magnitude inputs, no per-call-site tuning.
+ *
+ * For Gaussian inputs, σ ≈ 1.4826·MAD; the get_stddev helper returns
+ * that scaled value so existing "stddev" readout labels keep meaning
+ * roughly "spread around typical."
+ */
+#[repr(C)]
+#[derive(Clone, Copy, Default, CStruct)]
+pub struct mean_and_variance {
+    pub n: i64,
+    pub sum: i64,
+    pub median: i64,
+    pub mad: u64,
+}
 
 /// One stochastic-gradient step of @median and @mad toward @x: by the MAD
 /// shifted down @weight, at least 1. The MAD bottoms out at 1, never 0, so

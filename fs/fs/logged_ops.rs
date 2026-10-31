@@ -6,6 +6,8 @@
 //! can resume it. The ops are in io_misc.rs, ec/create.c and inode_opts.rs;
 //! this is starting and finishing one, and recovery resuming what's left.
 
+#![allow(non_camel_case_types)]
+
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey_buf::BkeyBuf;
@@ -20,8 +22,34 @@ use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use crate::{fs_fatal_error, fsck_err_on};
 use core::ffi::c_int;
-use core::sync::atomic::Ordering;
-use cstruct_macros::c_export;
+use core::sync::atomic::{Ordering, AtomicU32};
+use cstruct_macros::{c_export, CStruct, Init, TypeInfo};
+use crate::locking::Locked;
+use crate::new_lock;
+use crate::types::{RustOnly, rust_only};
+use crate::util::alloc::KVVec;
+use pin_init::pin_data;
+
+#[pin_data]
+#[repr(C)]
+#[derive(CStruct, TypeInfo, Init)]
+pub struct bch_fs_logged_ops {
+    /*
+     * Test knob: KEY_TYPE_logged_op_* whose next cursor update should fail,
+     * or 0. Armed via sysfs, one shot, disarms itself as it fires.
+     */
+    #[c("unsigned fail_next")]
+    #[init(AtomicU32::new(0))]
+    pub fail_next: AtomicU32,
+    /*
+     * Logged ops in the btree when we went rw - the ones from before this
+     * mount, which recovery resumes. Positions in BTREE_ID_logged_ops,
+     * ascending: see bch2_logged_ops_note_unfinished().
+     */
+    #[pin]
+    #[init(RustOnly::new(new_lock!(KVVec::new())))]
+    pub(crate) unfinished: rust_only!(Locked<c::mutex, KVVec<u64>>),
+}
 
 /// Where the ops are, in BTREE_ID_logged_ops: at offsets of this inode.
 const INUM: u64 = c::logged_ops_inums::LOGGED_OPS_INUM_logged_ops.0 as u64;

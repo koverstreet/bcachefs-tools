@@ -11,6 +11,8 @@
 //! side, trigger_stripe_ptr() in alloc/buckets.rs - which updates the stripe
 //! key, running this.
 
+#![allow(non_camel_case_types)]
+
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
 use crate::alloc::buckets::bucket_to_u64;
 use crate::alloc::lru::{lru_change, LruId};
@@ -34,7 +36,12 @@ use crate::util::vstructs::plain_bytes;
 use crate::{accounting, bch_err, fs_inconsistent, fsck_err_on, prt};
 use arrayvec::ArrayVec;
 use core::ops::ControlFlow;
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, c_extern};
+use core::ffi::c_int;
+
+c_extern! {
+    pub fn bch2_stripe_tryget_existing(iter: *mut c::btree_iter) -> c_int;
+}
 
 // ── A bucket's stripes ───────────────────────────────────────────────────
 

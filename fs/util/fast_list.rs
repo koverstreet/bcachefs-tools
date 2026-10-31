@@ -23,6 +23,8 @@
 //!
 //! C's users are the VFS inode list (vfs/fs.c) and async_objs.h's macros.
 
+#![allow(non_camel_case_types)]
+
 use crate::c;
 use crate::util::alloc::AllocError;
 use crate::util::percpu::{IrqGuard, PerCpu, PerCpuRef};
@@ -33,7 +35,31 @@ use core::iter;
 use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, CStruct};
+use crate::types::{c_default, c_opaque};
+use crate::util::ffi::Opaque;
+use crate::util::genradix::SharedGenRadix;
+
+// A CPU's cache of free slots: fast_list.rs's Cache - C only holds the pointer
+c_opaque!(fast_list_pcpu);
+
+#[repr(C)]
+#[derive(CStruct)]
+pub struct fast_list {
+    /* the items, by slot: allocated by any CPU at once */
+    #[c("GENRADIX(void *) items")]
+    pub items: SharedGenRadix<*mut c_void>,
+    #[c("struct ida slots_allocated")]
+    pub slots_allocated: Opaque<c::ida>,
+    /* set by init() and exit(), which take the list shared, as C's pointer is */
+    #[c("struct fast_list_pcpu __percpu *buffer")]
+    pub buffer: AtomicPtr<c::fast_list_pcpu>,
+}
+c_default!(fast_list);
+
+// SAFETY: zeroed is a valid uninitialized ida, as in C's kzalloc()'d struct;
+// fast_list_init() initializes it
+unsafe impl ::pin_init::Zeroable for Opaque<c::ida> {}
 
 /// What a refill gets, and a full cache spills: half of it.
 const BATCH: usize = 16;

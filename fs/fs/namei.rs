@@ -49,7 +49,13 @@ use crate::util::log::LogMsg;
 use crate::{fs_inconsistent, fsck_err, fsck_err_on, prt};
 use core::ffi::{c_int, c_uint};
 use core::ops::ControlFlow;
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, c_const};
+
+// bch2_create_trans()'s flags:
+c_const! { pub const BCH_CREATE_TMPFILE: u32 = 1 << 0; }
+c_const! { pub const BCH_CREATE_SUBVOL: u32 = 1 << 1; }
+c_const! { pub const BCH_CREATE_SNAPSHOT: u32 = 1 << 2; }
+c_const! { pub const BCH_CREATE_SNAPSHOT_RO: u32 = 1 << 3; }
 
 const ROOT_SUBVOL_INUM: c::subvol_inum = c::subvol_inum {
     subvol: c::BCACHEFS_ROOT_SUBVOL as u64,

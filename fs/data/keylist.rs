@@ -27,6 +27,8 @@
 //!   buffer an allocation that records its capacity - popping shrinks u64s,
 //!   not the buffer, so today nothing knows its size.
 
+#![allow(non_camel_case_types)]
+
 use crate::btree::bkey::{BkeyI, BkeyV};
 use crate::c;
 use crate::locking::MemallocFlags;
@@ -34,7 +36,20 @@ use crate::util::alloc::krealloc;
 use crate::util::vstructs::{assume_validated, plain_bytes, VstructRefEntries};
 use core::ffi::c_int;
 use core::mem::size_of;
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, CStruct};
+use crate::types::c_default;
+
+/// keys..top, whole keys back to back: C reads each pointer as a bkey_i * or
+/// a u64 *, Rust as the u64 *.
+#[derive(CStruct)]
+#[repr(C)]
+pub struct keylist {
+    #[c_anon("union { struct bkey_i *keys; u64 *keys_p; }")]
+    pub(crate) keys_p: *mut u64,
+    #[c_anon("union { struct bkey_i *top; u64 *top_p; }")]
+    pub(crate) top_p: *mut u64,
+}
+c_default!(keylist);
 
 impl c::keylist {
     /// # Safety

@@ -16,6 +16,8 @@
 //! A zeroed indicator is a valid one, never initialized - as bch_fs embeds
 //! them, allocated zeroed; a C local is `= {}`.
 
+#![allow(non_camel_case_types)]
+
 use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt};
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
@@ -25,7 +27,29 @@ use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::local_clock;
 use crate::util::{Printbuf, ToText};
 use core::ffi::CStr;
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, CStruct};
+use crate::locking::SeqLock;
+use crate::types::rust_only;
+
+/*
+ * Lame progress indicators
+ *
+ * We don't like to use these because they print to the dmesg console, which is
+ * spammy - we much prefer to be wired up to a userspace programm (e.g. via
+ * thread_with_file) and have it print the progress indicator.
+ *
+ * But some code is old and doesn't support that, or runs in a context where
+ * that's not yet practical (mount).
+ *
+ * The state is Rust's, under a seqlock: readers - sysfs, the recovery status
+ * ioctl - copy it out whole while the work updates it. C embeds one, zeroed,
+ * and goes through init/progress.rs's functions.
+ */
+#[repr(C)]
+#[derive(CStruct)]
+pub struct progress_indicator {
+    pub(crate) state: rust_only!(SeqLock<crate::init::progress::ProgressState>),
+}
 
 crate::module_param! {
     /// For testing the mount-time status display: a filesystem that

@@ -13,6 +13,8 @@
 //! propagated from a parent. Nothing outside this file should touch
 //! bi_<option> directly.
 
+#![allow(non_camel_case_types)]
+
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{spos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
 use crate::btree::iter::{commit_do, is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
@@ -33,7 +35,19 @@ use crate::{fsck_err_flags, inode, logged_ops, opts};
 use core::ffi::{c_int, CStr};
 use core::mem::MaybeUninit;
 use core::ops::ControlFlow;
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, CStruct};
+
+/*
+ * What changing an inode's options leaves for after the commit: an inode
+ * option change has to reach existing data (a reconcile scan) and older
+ * snapshots of the inode (the propagate logged op, finished after commit).
+ */
+#[repr(C)]
+#[derive(Default, CStruct)]
+pub struct inode_opt_change {
+    pub reconcile_changed: bool,
+    pub propagate: c::bkey_i_logged_op_inode_opt_propagate,
+}
 
 const NR: usize = c::inode_opt_id::Inode_opt_nr.0 as usize;
 

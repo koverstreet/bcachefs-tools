@@ -67,6 +67,8 @@
  * what a future rewrite pass would need to move.
  */
 
+#![allow(non_camel_case_types)]
+
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
@@ -79,8 +81,26 @@ use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::{Head, Unvalidated, Validated};
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint, CStr};
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, CStruct, c_rcu_array, TypeInfo};
 use crate::sb::io::SbResize;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+pub struct bch_disk_group_cpu {
+    pub deleted: bool,
+    pub parent: u16,
+    pub label: [u8; c::BCH_SB_LABEL_SIZE as usize],
+    pub devs: c::bch_devs_mask,
+}
+
+// SAFETY: plain data, a bitmap of devices among it; all zeroes is a group
+unsafe impl crate::util::rcu::RcuElement for bch_disk_group_cpu {}
+
+c_rcu_array! {
+    /// c->disk_groups, published under RCU.
+    pub type DiskGroups = crate::util::rcu::RcuArray<c::bch_disk_group_cpu>
+        as struct bch_disk_groups_cpu { nr, entries };
+}
 
 // ── Targets ──────────────────────────────────────────────────────────────
 

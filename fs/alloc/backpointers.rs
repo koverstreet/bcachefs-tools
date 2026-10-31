@@ -34,6 +34,8 @@
 //! None for it - as looping on a restart wouldn't see the deletion without
 //! another flush: the caller moves on to the next backpointer.
 
+#![allow(non_camel_case_types)]
+
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyVal};
 use crate::btree::iter::{is_restart, polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans,
@@ -60,7 +62,19 @@ use crate::{bkey_fsck_err_on, fsck_err, prt};
 use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
 use core::ops::{ControlFlow, RangeInclusive};
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, CStruct};
+
+/// A backpointer scan in progress: alloc/backpointers.rs's BpScanIter.
+#[repr(C)]
+#[derive(CStruct)]
+pub struct bp_scan_iter {
+    /* BTREE_ID_backpointers, BTREE_ID_stripe_backpointers */
+    pub btree: c::btree_id,
+    pub pos: c::bpos,
+    pub nr_flushes: u64,
+    pub progress: *mut c::progress_indicator,
+    pub batch: KVVec<BkeyI<c::Backpointer>>,
+}
 
 /// A backpointer btree position, ordered as the bpos it's encoded in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

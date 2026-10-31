@@ -52,6 +52,8 @@
 //! condition with it, and C calls in. The wake's release orders the fields
 //! for a waiter, whose snapshot acquires.
 
+#![allow(non_camel_case_types)]
+
 use crate::accounting;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::buckets::u64_to_bucket;
@@ -64,7 +66,7 @@ use crate::data::moving::{MoveStats, MovingCtxt};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{writepoint_ptr, Fs};
 use crate::sb::counters::events;
-use crate::types::Fifo;
+use crate::types::{Fifo, RustOnly, rust_only};
 use crate::prt;
 use crate::util::alloc::{flags::GFP_KERNEL, kbox_pin_init, KBox, KVVec};
 use crate::util::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
@@ -82,8 +84,54 @@ use core::hash::{Hash, Hasher};
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering::{Acquire, Relaxed}};
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, CStruct, Init, TypeInfo};
 use pin_init::{pin_data, pin_init, PinInit};
+use crate::locking::Locked;
+use crate::new_lock;
+use crate::util::futex::EventCount;
+use crate::util::projections::Volatile;
+
+#[pin_data]
+#[repr(C)]
+#[derive(CStruct, TypeInfo, Init)]
+pub struct bch_fs_copygc {
+    /* The thread, from start to stop: data/copygc.rs */
+    #[pin]
+    #[init(RustOnly::new(new_lock!(None)))]
+    pub(crate) thread: rust_only!(Locked<c::spinlock_t, Option<Kthread>>),
+    #[pin]
+    #[init(c::write_point::init(c::bch_data_type::BCH_DATA_user))]
+    pub write_point: c::write_point,
+    /* The thread's, read unlocked - foreground.c's to_text, move.c: */
+    pub wait_at: Volatile<i64>,
+    pub wait: Volatile<i64>,
+    pub running: Volatile<bool>,
+    pub run_count: Volatile<u32>,
+    /// Woken as a run ends: data/copygc.rs
+    pub run_done: EventCount,
+
+    /*
+     * Devices over their fragmentation allowance, i.e. that copygc is trying
+     * to free space on. Set by copygc_dev_list() each pass, read unlocked by
+     * allocators that only need it to be roughly right.
+     *
+     * Not cleared when copygc is disabled: the devices are still full.
+     */
+    #[c("struct bch_devs_mask wants_space")]
+    pub wants_space: c::AtomicDevsMask,
+
+    /*
+     * Devices getting full, on a looser threshold than wants_space above -
+     * a superset of it, same lifetime and locking. Read by EC stripe reuse;
+     * see EC_REUSE_FREE_THRESHOLD_PCT.
+     */
+    #[c("struct bch_devs_mask low_on_space")]
+    pub low_on_space: c::AtomicDevsMask,
+
+    /* Dedicated workqueue for btree updates: */
+    #[c("struct workqueue_struct *wq")]
+    pub wq: Workqueue,
+}
 
 // ── Buckets in flight ────────────────────────────────────────────────────
 

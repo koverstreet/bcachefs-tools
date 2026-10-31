@@ -134,21 +134,23 @@
  * superblock-recorded state matches the actual on-disk data.
  */
 
+#![allow(non_camel_case_types)]
+
 use crate::c;
 use crate::c::{bch_sb, bch_sb_buf, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::members;
 use crate::util::bitmap::LeBitmap;
-use crate::util::projections::{AtomicWord, Volatile, VolatileWriter};
+use crate::util::projections::{AtomicWord, Volatile, VolatileWriter, PublishedOnce};
 use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
-use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64};
+use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64, rust_only};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
-use core::ffi::{c_int, c_uint, CStr};
+use core::ffi::{c_int, c_uint, CStr, c_ulong};
 use crate::util::alloc::KVVec;
 use crate::util::bio::{Bio, BioBuf, BioBufPtr, BioOwner};
 use crate::util::gather::Gather;
@@ -156,11 +158,63 @@ use crate::util::task::waiter;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::NSEC_PER_SEC;
 use crate::util::time_stats::TimeStats;
-use cstruct_macros::{c_const, c_export};
+use cstruct_macros::{c_const, c_export, CStruct, TypeInfo};
 use core::mem::{size_of, size_of_val};
 use arrayvec::ArrayVec;
 use core::pin::Pin;
 use pin_init::PinInit;
+use crate::published;
+
+/*
+ * Updated by sb_update(): what's read of the superblock without sb_lock,
+ * a field at a time - written only under it. sb_lock publishes it.
+ */
+published! {
+#[derive(CStruct, TypeInfo)]
+pub struct bch_sb_cpu {
+    #[c("__uuid_t uuid")]
+    pub uuid: [Volatile<u8>; 16],
+    #[c("__uuid_t user_uuid")]
+    pub user_uuid: [Volatile<u8>; 16],
+
+    pub version: Volatile<u16>,
+    pub version_incompat: Volatile<u16>,
+    pub version_incompat_allowed: Volatile<u16>,
+    pub version_min: Volatile<u16>,
+    pub version_upgrade_complete: Volatile<u16>,
+
+    pub nr_devices: Volatile<u8>,
+    pub clean: Volatile<u8>,
+    /* true if we've ever had more than one device */
+    pub multi_device: Volatile<bool>,
+    pub dirents_sanitized: Volatile<bool>,
+
+    pub encryption_type: Volatile<u8>,
+
+    pub extent_type_u64s: [Volatile<u8>; 31],
+    pub extent_types_known: Volatile<u8>,
+    pub extent_bp_shift: Volatile<u8>,
+
+    pub time_base_lo: Volatile<u64>,
+    pub time_base_hi: Volatile<u32>,
+    pub time_units_per_sec: Volatile<c_uint>,
+    pub nsec_per_time_unit: Volatile<c_uint>,
+    pub features: Volatile<u64>,
+    pub compat: Volatile<u64>,
+    pub recovery_passes_required: Volatile<u64>,
+    #[c("unsigned long errors_silent[BITS_TO_LONGS(BCH_FSCK_ERR_MAX)]")]
+    pub errors_silent: [Volatile<c_ulong>; bits_to_longs(c::BCH_FSCK_ERR_MAX as usize)],
+    pub btrees_lost_data: Volatile<u64>,
+    pub btrees_clean: Volatile<u64>,
+
+    /*
+     * The filesystem's key: the superblock's, decrypted at mount - or made
+     * when encryption is turned on, running. Set once, under sb_lock; read
+     * by every encrypted IO, without it.
+     */
+    pub encryption_key: rust_only!(PublishedOnce<c::bch_key>),
+}
+}
 
 /// A superblock section's type: an arm of tagged_union! bch_sb_field, which
 /// gives its field type - handed out as its ArmRef says, a short one, written
