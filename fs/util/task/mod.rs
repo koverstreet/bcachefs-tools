@@ -28,6 +28,8 @@
 //!   C's continue_at(cl, fn, NULL), and as unchecked.
 //! - Spawned, the default: where the task was spawned.
 //! The target is recorded in the header (@target) while the await is pending.
+//! requeue(q) moves a running task to q, an await of nothing: out of an
+//! endio's context, say, before it allocates. On q already, it runs on.
 //!
 //! # Running and waiting
 //!
@@ -194,6 +196,29 @@ impl<A> PinnedDrop for Resumed<'_, A> {
                 target.set(recorded.prev);
             }
         }
+    }
+}
+
+pub fn requeue(q: &Queue) -> Resumed<'_, Requeue> {
+    Requeue { done: Done::completed(), parked: false }.resume_on(Resume::Queue(q))
+}
+
+/// Pending once, on a Done that's done: run() moves the task to its target.
+pub struct Requeue {
+    done:   Done,
+    parked: bool,
+}
+
+impl Resumable for Requeue {
+    type Output = ();
+
+    fn poll_resume(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if self.parked {
+            return Poll::Ready(());
+        }
+        self.parked = true;
+        park_on(cx, &self.done);
+        Poll::Pending
     }
 }
 

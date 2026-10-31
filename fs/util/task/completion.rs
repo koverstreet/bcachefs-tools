@@ -141,6 +141,10 @@ impl<W: Waiter> Done<W> {
         Done { word: AtomicPtr::new(waiter.as_ptr().as_ptr()), _w: PhantomData }
     }
 
+    pub(super) fn completed() -> Self {
+        Done { word: AtomicPtr::new(null_mut()), _w: PhantomData }
+    }
+
     /// # Safety
     /// As from_ptr()'s.
     unsafe fn init_at<'a>(p: *mut *mut c_void, waiter: W) -> &'a Self {
