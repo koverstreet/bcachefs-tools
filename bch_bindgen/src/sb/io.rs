@@ -7,7 +7,7 @@ pub fn read_super_opts(
     path: &std::path::Path,
     mut opts: c::bch_opts,
 ) -> anyhow::Result<c::bch_sb_handle> {
-    bcachefs_kernel::sb::io::read_super(&path_to_cstr(path), &mut opts).map_err(|e| anyhow!(e))
+    bcachefs_kernel::sb::io::read_super(&path_to_cstr(path), &mut opts, None).map_err(|e| anyhow!(e))
 }
 
 pub fn read_super(path: &std::path::Path) -> anyhow::Result<c::bch_sb_handle> {

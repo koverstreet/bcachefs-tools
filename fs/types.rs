@@ -600,6 +600,10 @@ pub struct Fs {
     pub minor: c_int,
     pub chardev: *mut c::device,
     pub vfs_sb: *mut c::super_block,
+    /// What its devices are claimed for: the open's, from bch2_fs_alloc()
+    #[pin]
+    #[init(RustOnly::new(None))]
+    pub(crate) holder: rust_only!(Option<crate::util::alloc::Arc<crate::sb::io::Holder>>),
     pub dev: c::dev_t,
     pub name: [c_char; 40],
 

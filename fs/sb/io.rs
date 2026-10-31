@@ -151,7 +151,8 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past,
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_int, c_uint, CStr, c_ulong};
-use crate::util::alloc::KVVec;
+use crate::util::alloc::{Arc, KVVec};
+use core::sync::atomic::AtomicPtr;
 use crate::util::bio::{Bio, BioBuf, BioBufPtr, BioOwner};
 use crate::util::gather::Gather;
 use crate::util::task::waiter;
@@ -1144,10 +1145,10 @@ impl c::bch_sb_bdev {
             // SAFETY: the file the device was opened with
             unsafe { c::bdev_fput(self.s_bdev_file) };
         }
-        // SAFETY: read_super_and_backups()'s kzalloc()s, or null
+        // SAFETY: read_super_and_backups()'s kzalloc() and Arc ref, or null
         unsafe {
-            if let Some(p) = NonNull::new(self.holder) {
-                kfree(p.cast(), Layout::new::<c::bch_sb_handle_holder>());
+            if !self.holder.is_null() {
+                drop(Arc::from_raw(self.holder));
             }
             if let Some(p) = NonNull::new(self.sb_name) {
                 let len = CStr::from_ptr(p.as_ptr().cast()).to_bytes_with_nul().len();
@@ -1447,8 +1448,8 @@ fn header(sb: &mut bch_sb_handle) -> &Head<bch_sb> {
     cast_plain(sb.io.buf.buffer_mut()).expect("a superblock buffer, holding a header")
 }
 
-fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, err: &mut Printbuf)
-    -> Result<bch_sb_handle, BchError>
+fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&Arc<Holder>>,
+                          err: &mut Printbuf) -> Result<bch_sb_handle, BchError>
 {
     use crate::util::alloc::kzalloc;
     use core::alloc::Layout;
@@ -1458,7 +1459,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, err: &mut Printbu
     sb.io.bits.set_have_bio(1);
 
     let enomem = |_| BchError::from(c::ENOMEM);
-    sb.dev.holder = kzalloc(Layout::new::<c::bch_sb_handle_holder>()).map_err(enomem)?.as_ptr().cast();
+    sb.dev.holder = holder.map_or(core::ptr::null(), |h| Arc::into_raw(h.clone()));
     let name = path.to_bytes_with_nul();
     let p = kzalloc(Layout::array::<u8>(name.len()).map_err(|_| BchError::from(c::ENOMEM))?).map_err(enomem)?;
     // SAFETY: name.len() bytes, just allocated
@@ -1473,15 +1474,15 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, err: &mut Printbu
         sb.dev.mode |= c::BLK_OPEN_WRITE;
     }
 
-    let open = |mode: c::blk_mode_t, holder: *mut c::bch_sb_handle_holder| {
+    let open = |mode: c::blk_mode_t, holder: *const Holder| {
         // the block layer takes any holder as an exclusive claim
-        let holder = if mode & c::BLK_OPEN_EXCL != 0 { holder } else { core::ptr::null_mut() };
+        let holder = if mode & c::BLK_OPEN_EXCL != 0 { holder } else { core::ptr::null() };
         // SAFETY: a C string, and our holder or none; the ops are static
         #[cfg(kernel)]
         let ops = &raw const crate::init::dev::HOLDER_OPS;
         #[cfg(not(kernel))]
         let ops = core::ptr::null();
-        let f = unsafe { c::bdev_file_open_by_path(path.as_ptr().cast(), mode, holder.cast(), ops) };
+        let f = unsafe { c::bdev_file_open_by_path(path.as_ptr().cast(), mode, holder.cast_mut().cast(), ops) };
         crate::errcode::errptr_to_result(core::ptr::NonNull::new(f).expect("bdev_file_open_by_path(): an ERR_PTR, not NULL"))
     };
 
@@ -1569,9 +1570,10 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, err: &mut Printbu
 }
 
 /// read_super_and_backups(), again with buffered IO if direct IO can't.
-fn read_super_err(path: &CStr, opts: &mut c::bch_opts, err: &mut Printbuf) -> Result<bch_sb_handle, BchError> {
+fn read_super_err(path: &CStr, opts: &mut c::bch_opts, holder: Option<&Arc<Holder>>,
+                  err: &mut Printbuf) -> Result<bch_sb_handle, BchError> {
     loop {
-        match read_super_and_backups(path, opts, err) {
+        match read_super_and_backups(path, opts, holder, err) {
             Err(e) if e.raw() == c::EINTR as i32 => err.reset(),
             r => return r,
         }
@@ -1579,13 +1581,16 @@ fn read_super_err(path: &CStr, opts: &mut c::bch_opts, err: &mut Printbuf) -> Re
 }
 
 /// The superblock of the device at @path, opened as @opts says - why not
-/// printed, and what reading a backup instead took: bch2_read_super().
-pub fn read_super(path: &CStr, opts: &mut c::bch_opts) -> Result<bch_sb_handle, BchError> {
+/// printed, and what reading a backup instead took: bch2_read_super(). An
+/// exclusive open claims the device for @holder.
+pub fn read_super(path: &CStr, opts: &mut c::bch_opts, holder: Option<&Arc<Holder>>)
+    -> Result<bch_sb_handle, BchError>
+{
     use crate::util::log::{log_opts, LogLevel};
     use crate::util::printbuf::Msg;
 
     let mut err = Printbuf::new();
-    let ret = read_super_err(path, opts, &mut err);
+    let ret = read_super_err(path, opts, holder, &mut err);
 
     // @err goes mid-message: a reason that came back unterminated would run
     // into whatever's printed next
@@ -1613,15 +1618,32 @@ pub fn read_super(path: &CStr, opts: &mut c::bch_opts) -> Result<bch_sb_handle, 
 
 /// read_super(), printing nothing: for mount.bcachefs.
 pub fn read_super_silent(path: &CStr, opts: &mut c::bch_opts) -> Result<bch_sb_handle, BchError> {
-    read_super_err(path, opts, &mut Printbuf::new())
+    read_super_err(path, opts, None, &mut Printbuf::new())
 }
 
+/// read_super() for a device of @c's: device add and online.
+///
 /// # Safety
 /// @path is a C string; @sb holds nothing, and is written over.
 #[c_export]
-pub unsafe fn bch2_read_super(path: *const c_char, opts: &mut c::bch_opts, sb: *mut c::bch_sb_handle) -> c_int {
+pub unsafe fn bch2_read_super(c: &Opaque<c::bch_fs>, path: *const c_char, opts: &mut c::bch_opts,
+                              sb: *mut c::bch_sb_handle) -> c_int {
+    let holder = Fs::from_c(c).holder();
     // SAFETY: the caller's
-    ret_to_c(read_super(unsafe { CStr::from_ptr(path.cast()) }, opts).map(|h| unsafe { sb.write(h) }))
+    ret_to_c(read_super(unsafe { CStr::from_ptr(path.cast()) }, opts, Some(holder)).map(|h| unsafe { sb.write(h) }))
+}
+
+/// What the block layer is told claims a device: one per open, a ref held by
+/// each of its devices' handles and by the filesystem
+#[repr(C)]
+pub struct Holder {
+    pub(crate) fs: AtomicPtr<Fs>,
+}
+
+impl Holder {
+    pub fn new() -> Result<Arc<Holder>, BchError> {
+        Ok(crate::util::alloc::arc_new(Holder { fs: AtomicPtr::new(core::ptr::null_mut()) })?)
+    }
 }
 
 // ── Writing it back ──────────────────────────────────────────────────────

@@ -1287,10 +1287,11 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 
 struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 			     bch_sb_handles *sbs,
+			     const void *holder,
 			     const struct bch_key *user_key,
 			     struct printbuf *out)
 {
-	struct bch_fs *c = bch2_fs_alloc_mem();
+	struct bch_fs *c = bch2_fs_alloc_mem(holder);
 	if (!c)
 		return ERR_PTR(-BCH_ERR_ENOMEM_fs_alloc);
 

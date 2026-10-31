@@ -14,10 +14,10 @@ use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
 use crate::init::dev::dev_in_fs;
 use crate::locking::{Guard, MutexNoio, Noio, PercpuRwsemNoio};
 use crate::prt;
-use crate::sb::io::read_super;
+use crate::sb::io::{read_super, Holder};
 use crate::sb::members::dev_to_text_short;
 use crate::util::Printbuf;
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::{flags::GFP_KERNEL, Arc, KVVec};
 use crate::util::backref::BackRef;
 use crate::util::enumerated_ref::EnumeratedRef;
 use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
@@ -38,7 +38,8 @@ use crate::format::{Bpos, Btree};
 
 c_extern! {
     pub fn bch2_fs_alloc(sb: *mut crate::util::vstructs::Head<c::bch_sb>, opts: *mut c::bch_opts,
-                         sbs: *mut c::bch_sb_handles, user_key: *const c::bch_key,
+                         sbs: *mut c::bch_sb_handles, holder: *const core::ffi::c_void,
+                         user_key: *const c::bch_key,
                          out: *mut c::printbuf) -> *mut c::bch_fs;
     pub fn bch2_fs_init_rw(c: *mut c::bch_fs) -> c_int;
     pub fn bch2_fs_emergency_read_only(c: *mut c::bch_fs, out: *mut c::printbuf) -> bool;
@@ -212,6 +213,10 @@ impl Fs {
 
     pub fn sb_lock(&self) -> SbLockGuard<'_> {
         self.sb.lock()
+    }
+
+    pub fn holder(&self) -> &Arc<Holder> {
+        self.holder.as_ref().expect("a filesystem's holder, from bch2_fs_alloc()")
     }
 
     /// # Safety
@@ -484,11 +489,17 @@ impl Fs {
     }
 }
 
-/// Rust fields initialized, the rest zeroed, for bch2_fs_init(). NULL if out
-/// of memory.
+/// Rust fields initialized, the rest zeroed, for bch2_fs_init(), taking the
+/// ref on @holder. NULL if out of memory.
+///
+/// # Safety
+/// @holder is a ref on its devices' Holder, from Arc::into_raw()
 #[cstruct_macros::c_export]
-pub fn bch2_fs_alloc_mem() -> *mut c::bch_fs {
-    crate::util::alloc::alloc_pinned(Fs::init()).unwrap_or(core::ptr::null_mut())
+pub unsafe fn bch2_fs_alloc_mem(holder: *const core::ffi::c_void) -> *mut c::bch_fs {
+    let holder = unsafe { Arc::from_raw(holder.cast::<Holder>()) };
+    let Ok(c) = crate::util::alloc::alloc_pinned(Fs::init()) else { return core::ptr::null_mut() };
+    unsafe { *(*c).holder = Some(holder) };
+    c
 }
 
 /// The end of teardown: C's has emptied the C fields, so their Drop finds
@@ -540,9 +551,10 @@ impl OpenFs {
             return Err(c::EINVAL.into());
         }
 
+        let holder = Holder::new()?;
         let mut sbs = KVVec::with_capacity(devs.len(), GFP_KERNEL)?;
         for path in devs {
-            sbs.push(read_super(path, opts)?, GFP_KERNEL)?;
+            sbs.push(read_super(path, opts, Some(&holder))?, GFP_KERNEL)?;
         }
         filter_dead(&mut sbs, opts, Some(out))?;
 
@@ -551,11 +563,15 @@ impl OpenFs {
         let mut lent = c::bch_sb_handles { nr: sbs.len(), size: sbs.capacity(), data: sbs.as_mut_ptr(),
                                            preallocated: [] };
         let key = key.map_or(core::ptr::null(), |k| k);
-        // SAFETY: the handles stay sbs', which frees them
-        let fs = unsafe { c::bch2_fs_alloc(best, opts, &mut lent, key, out.as_raw()) };
+        // SAFETY: the handles stay sbs', which frees them; the holder ref is
+        // the filesystem's
+        let fs = unsafe {
+            c::bch2_fs_alloc(best, opts, &mut lent, Arc::into_raw(holder).cast(), key, out.as_raw())
+        };
         let fs = errptr_to_result(NonNull::new(fs).expect("bch2_fs_alloc(): a filesystem or an error"))?;
         // SAFETY: bch2_fs_alloc()'s, ours to exit
         let fs = unsafe { OpenFs::from_raw(fs.cast()) };
+        fs.holder().fs.store(fs.as_ptr(), core::sync::atomic::Ordering::Release);
 
         // opt_version_init()'s messages, before startup's
         if !out.as_bytes().is_empty() {

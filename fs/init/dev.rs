@@ -24,19 +24,13 @@ use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_export, CStruct, bitfield, c_extern, c_typedef, TypeInfo};
 #[cfg(kernel)]
-use {crate::fs::RoRef, crate::util::log::{log_msg_start, print_str}, crate::util::sleep::Sleep};
+use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
+     crate::util::sleep::Sleep, core::sync::atomic::Ordering::Acquire};
 use crate::types::{DArray, bits_to_longs, c_default};
 use crate::util::bio::{Bio, BioBufPtr};
 use crate::util::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::c_char;
 use nestify::nest;
-
-#[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
-pub struct bch_sb_handle_holder {
-    pub c: *mut c::bch_fs,
-}
-c_default!(bch_sb_handle_holder);
 
 /// A superblock in memory, in a buffer that grows: kvmalloc()'d, a power of
 /// two, zeroes past the superblock. Each of a device's superblock, the
@@ -114,7 +108,9 @@ pub struct bch_sb_bdev {
     pub s_bdev_file: *mut c::file,
     pub bdev: *mut c::block_device,
     pub sb_name: *mut c_char,
-    pub holder: *mut c::bch_sb_handle_holder,
+    /// A ref, the handle's
+    #[c("void *holder")]
+    pub holder: *const crate::sb::io::Holder,
     pub mode: c::blk_mode_t,
 }
 c_default!(bch_sb_bdev);
@@ -404,8 +400,8 @@ pub(crate) static HOLDER_OPS: c::blk_holder_ops = c::blk_holder_ops {
 #[cfg(kernel)]
 unsafe fn bdev_get_fs(bdev: *mut c::block_device) -> Option<RoRef> {
     let fs = unsafe {
-        let holder = (*bdev).bd_holder.cast::<c::bch_sb_handle_holder>();
-        (*holder).c.as_ref().and_then(RoRef::tryget)
+        let holder = (*bdev).bd_holder.cast::<Holder>();
+        (*holder).fs.load(Acquire).as_ref().and_then(RoRef::tryget)
     };
     unsafe { c::mutex_unlock((&raw mut (*bdev).bd_holder_lock).cast()) };
 

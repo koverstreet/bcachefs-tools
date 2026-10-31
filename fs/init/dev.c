@@ -679,13 +679,6 @@ static int __bch2_dev_attach_bdev(struct bch_fs *c, struct bch_dev *ca,
 	ca->sb_layout = sb->sb->layout;
 	memset(sb, 0, sizeof(*sb));
 
-	/*
-	 * Stash pointer to the filesystem for blk_holder_ops - note that once
-	 * attached to a filesystem, we will always close the block device
-	 * before tearing down the filesystem object.
-	 */
-	ca->disk_sb.holder->c = ca->fs;
-
 	ca->dev = ca->disk_sb.bdev->bd_dev;
 
 	enumerated_ref_start(&ca->io_ref[READ]);
@@ -1071,7 +1064,7 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 
 	struct bch_opts opts = bch2_opts_empty();
 	struct bch_sb_handle sb __cleanup(bch2_free_super) = {};
-	ret = bch2_read_super(path, &opts, &sb);
+	ret = bch2_read_super(c, path, &opts, &sb);
 	if (ret) {
 		prt_printf(err, "error reading superblock: %s\n", bch2_err_str(ret));
 		return ret;
@@ -1245,7 +1238,7 @@ int bch2_dev_online(struct bch_fs *c, const char *path, struct printbuf *err)
 
 	guard(rwsem_write)(&c->state_lock);
 
-	ret = bch2_read_super(path, &opts, &sb);
+	ret = bch2_read_super(c, path, &opts, &sb);
 	if (ret) {
 		prt_printf(err, "error reading superblock: %s\n", bch2_err_str(ret));
 		return ret;

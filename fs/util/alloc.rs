@@ -13,6 +13,18 @@ pub use bcachefs_shim::alloc::{flags, AllocError, Flags, KVVec};
 #[cfg(not(kernel))]
 pub type KBox<T> = std::boxed::Box<T>;
 
+#[cfg(kernel)]
+pub use kernel::sync::Arc;
+#[cfg(not(kernel))]
+pub use std::sync::Arc;
+
+pub fn arc_new<T: Send + Sync>(v: T) -> Result<Arc<T>, AllocError> {
+    #[cfg(kernel)]
+    { Arc::new(v, flags::GFP_KERNEL) }
+    #[cfg(not(kernel))]
+    { Ok(Arc::new(v)) }
+}
+
 /// A @T for C to hold, built in place by @init in memory that starts zeroed -
 /// padding too, as kvzalloc()'s did - and pinned there: a KVBox in-kernel,
 /// given up to a raw pointer. free_pinned() takes it back. Fails with @init's
