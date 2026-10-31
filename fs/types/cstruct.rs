@@ -2181,13 +2181,15 @@ fn push_item(items: &mut Vec<CItem>, mut item: CItem) {
 }
 
 /// #[c_export]'s text, as its macro records it - checked that C can have
-/// the prototype.
+/// the prototype. The macro doesn't see the struct map: a Rust-named type
+/// (CamelCase) is taken as a struct here, and rust_types_gen, which has the
+/// map, renders it or fails.
 #[allow(dead_code)]
 pub fn parse_c_export(text: &str) -> Result<CExport, String> {
     let toks = tokenize(text)?;
     let (a, j) = item_attrs(&toks, 0)?;
     let (e, _) = parse_export(&toks, j, a)?;
-    emit_extern(&e.ex, &|_| None)?;
+    emit_extern(&e.ex, &|n| n.starts_with(char::is_uppercase).then(|| format!("struct {n}")))?;
     Ok(e)
 }
 
@@ -2601,6 +2603,10 @@ fn proto_toks(toks: &[Tok], decl: String, konst: bool, last: bool,
             let base = kind(name).unwrap_or_else(|| canon_base(toks).unwrap());
             Some(base_decl(q, &base, &decl))
         }
+        // a type of ours by its Rust name, by any path: C's, from the struct map
+        [.., Tok::Ident(name)] if toks.iter().all(|t| matches!(t, Tok::Ident(_) | Tok::Punct(':'))) &&
+                                 kind(name).is_some() =>
+            kind(name).map(|b| base_decl(q, &b, &decl)),
         _ => canon_base(toks).map(|b| base_decl(q, &b, &decl)),
     }
 }

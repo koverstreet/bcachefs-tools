@@ -162,9 +162,11 @@ fn darray_typedefs(c: &str) -> Vec<String> {
     out
 }
 
-/// The type a record defines, and the types it holds by value - the ones C
-/// must see defined first. A pointer needs only a declaration.
-fn defines_and_holds(r: &Record) -> (Option<String>, Vec<String>) {
+/// The type a record defines - by its C name, and its Rust one where that
+/// differs (#[c_name]), as a field may name it either way - and the types it
+/// holds by value: the ones C must see defined first. A pointer needs only a
+/// declaration.
+fn defines_and_holds(r: &Record) -> (Vec<String>, Vec<String>) {
     // `c::foo`, `[foo; N]` -> foo; a pointer or reference -> nothing
     fn held(ty: &str) -> Option<String> {
         let mut t = ty.trim();
@@ -179,12 +181,13 @@ fn defines_and_holds(r: &Record) -> (Option<String>, Vec<String>) {
     }
     match parse_items(&r.text).ok().and_then(|mut items| items.pop()) {
         Some(CItem::Struct(def)) =>
-            (Some(def.name.clone()), def.fields.iter().filter_map(|f| held(&f.ty)).collect()),
-        Some(CItem::Typedef(t)) => (Some(t.name.clone()), held(&t.ty).into_iter().collect()),
-        Some(CItem::Bitfield(b)) => (Some(b.name.clone()), Vec::new()),
-        Some(CItem::TaggedUnion(tu)) => (Some(tu.name.clone()),
+            ([Some(def.name.clone()), def.rust_name.clone()].into_iter().flatten().collect(),
+             def.fields.iter().filter_map(|f| held(&f.ty)).collect()),
+        Some(CItem::Typedef(t)) => (vec![t.name.clone()], held(&t.ty).into_iter().collect()),
+        Some(CItem::Bitfield(b)) => (vec![b.name.clone()], Vec::new()),
+        Some(CItem::TaggedUnion(tu)) => (vec![tu.name.clone()],
             tu.arms.iter().map(|a| a.ty.as_str()).chain(tu.pad.as_deref()).filter_map(held).collect()),
-        _ => (None, Vec::new()),
+        _ => (Vec::new(), Vec::new()),
     }
 }
 
@@ -201,9 +204,9 @@ fn defines_and_holds(r: &Record) -> (Option<String>, Vec<String>) {
 fn in_dependency_order(rs: Vec<&Record>) -> Vec<&Record> {
     let info: Vec<_> = rs.iter().map(|r| defines_and_holds(r)).collect();
     let by_name: BTreeMap<&str, usize> = info.iter().enumerate()
-        .filter_map(|(i, (d, _))| d.as_deref().map(|d| (d, i)))
+        .flat_map(|(i, (d, _))| d.iter().map(move |d| (d.as_str(), i)))
         .collect();
-    let held_on_its_line = |i: usize| info[i].0.as_deref().is_some_and(|d| {
+    let held_on_its_line = |i: usize| info[i].0.iter().any(|d| {
         info.iter().enumerate().any(|(j, (_, holds))| j != i && rs[j].line == rs[i].line &&
                                                       holds.iter().any(|h| h == d))
     });
@@ -211,7 +214,7 @@ fn in_dependency_order(rs: Vec<&Record>) -> Vec<&Record> {
     order.sort_by(|&i, &j| (rs[i].line, held_on_its_line(i), &rs[i].text)
                             .cmp(&(rs[j].line, held_on_its_line(j), &rs[j].text)));
 
-    fn visit(i: usize, info: &[(Option<String>, Vec<String>)], by_name: &BTreeMap<&str, usize>,
+    fn visit(i: usize, info: &[(Vec<String>, Vec<String>)], by_name: &BTreeMap<&str, usize>,
              visited: &mut [bool], out: &mut Vec<usize>) {
         if std::mem::replace(&mut visited[i], true) {
             return;
