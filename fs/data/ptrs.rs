@@ -1017,6 +1017,12 @@ fn ptr_data_start(p: &c::extent_ptr_decoded, start: u64) -> u64 {
     p.ptr.offset().wrapping_add(p.crc.offset.into()).wrapping_sub(start)
 }
 
+/// The same pointer, as bch2_extent_ptr_eq(): all of it but its entry type.
+pub fn ptr_eq(a: &c::bch_extent_ptr, b: &c::bch_extent_ptr) -> bool {
+    a.cached() == b.cached() && a.unwritten() == b.unwritten() && a.offset() == b.offset() &&
+        a.dev() == b.dev() && a.generation() == b.generation()
+}
+
 /// Whether @p1 of @k1 and @p2 of @k2 point to the same data: the same
 /// device - or the same block of the same stripe - and gen, the same place
 /// given where each extent starts (one may have been trimmed), and
