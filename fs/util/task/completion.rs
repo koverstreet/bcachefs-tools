@@ -10,14 +10,18 @@
 //! The two are made as a pair, so an owed Done always has its waiter waiting
 //! on it - the Completion's drop waits, too:
 //!
-//!     let c = Completion::new(&mut slot, waiter::Async::current().await);
-//!     c.complete();               // its end, once - by the IO's completer
-//!     c.resume_on(at).await;      // a thread: waiter::Sync::current(), c.wait(how)
+//! ```ignore
+//! let c = Completion::new(&mut slot, waiter::Async::current().await);
+//! c.complete();               // its end, once - by the IO's completer
+//! c.resume_on(at).await;      // a thread: waiter::Sync::current(), c.wait(how)
+//! ```
 //!
 //! The word:
 //!
-//!     waiter    owed, the waiter waits
-//!     null      done
+//! ```text
+//! waiter    owed, the waiter waits
+//! null      done
+//! ```
 //!
 //! A task's wake (TaskRef::wake(), task/mod.rs) writes to the task only if
 //! it's parked on this Done.
