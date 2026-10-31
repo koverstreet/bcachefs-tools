@@ -23,7 +23,7 @@ pub const MAX_IO_SIZE: usize = 1 << 20;
 const PAGE_SIZE: usize = 4096;
 const MAX_BVECS: usize = MAX_IO_SIZE / PAGE_SIZE;
 
-extern "C" {
+unsafe extern "C" {
     fn rust_write_submit(
         c: *mut c::bch_fs,
         op: *mut c::bch_write_op,
@@ -77,8 +77,8 @@ unsafe extern "C" fn write_endio(op: *mut c::bch_write_op) {
     // WriteState has op at offset 0
     let state = op as *mut WriteState;
 
-    let waker = (*(*state).waker.get()).take();
-    (*state).completed.store(true, Ordering::Release);
+    let waker = unsafe { (*(*state).waker.get()).take() };
+    unsafe { (*state).completed.store(true, Ordering::Release) };
     if let Some(w) = waker {
         w.wake();
     }
@@ -196,16 +196,15 @@ unsafe impl Sync for ReadState {}
 /// completion and wakes the Rust future.
 unsafe extern "C" fn read_endio(bio: *mut c::bio) {
     // container_of(bio, bch_read_bio, bio) — bio is the last field
-    let rbio = (bio as *mut u8)
-        .sub(std::mem::offset_of!(c::bch_read_bio, bio))
+    let rbio = unsafe { (bio as *mut u8).sub(std::mem::offset_of!(c::bch_read_bio, bio)) }
         as *mut c::bch_read_bio;
     // ReadState has rbio at offset 0
     let state = rbio as *mut ReadState;
 
     // Take and wake before setting completed, so the waker is consumed
     // before any future poll sees completed=true.
-    let waker = (*(*state).waker.get()).take();
-    (*state).completed.store(true, Ordering::Release);
+    let waker = unsafe { (*(*state).waker.get()).take() };
+    unsafe { (*state).completed.store(true, Ordering::Release) };
     if let Some(w) = waker {
         w.wake();
     }

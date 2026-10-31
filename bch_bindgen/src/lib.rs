@@ -22,6 +22,7 @@ pub mod c {
 		dead_code,
 		unknown_lints,	// unnecessary_transmutes is rustc 1.88's
 		unnecessary_transmutes,
+		unsafe_op_in_unsafe_fn,	// bindgen's array and union field helpers, at 0.72
 		clippy::all	// bindgen's output
 	)]
 	#[deny(improper_ctypes)]
@@ -42,7 +43,7 @@ pub mod c {
 	// origin filter - bcachefs-shim can't emit it (no printbuf), the fs/ and
 	// tools crates blocklist include/ - so bind it by hand here. Ideally its C
 	// declaration moves to c_src/.
-	extern "C" {
+	unsafe extern "C" {
 		pub fn sysfs_read_or_html_dirlist(
 			path: *const ::core::ffi::c_char,
 			out: *mut printbuf,

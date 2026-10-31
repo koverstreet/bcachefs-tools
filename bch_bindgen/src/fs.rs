@@ -19,7 +19,7 @@ use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::data::io::{ReadOp, WriteOp};
 use bcachefs_kernel::format::Bpos;
 
-extern "C" {
+unsafe extern "C" {
     fn rust_accounting_mem_read(c: *mut c::bch_fs, p: Bpos, v: *mut u64, nr: u32);
 }
 

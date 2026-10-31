@@ -6,7 +6,7 @@
 name = "bch_bindgen"
 version = "0.1.0"
 authors = [ "Kayla Firestack <dev@kaylafire.me>", "Yuxuan Shui <yshuiv7@gmail.com>", "Kent Overstreet <kent.overstreet@linux.dev>" ]
-edition = "2021"
+edition = "2024"
 rust-version = "1.85.0"
 
 [lib]

@@ -241,6 +241,7 @@ fn main() {
         // NAME__extern: ours by a name of their own, so a binary linking both
         // has one of each
         .wrap_static_fns_suffix("__bch_bindgen_extern")
+        .rust_edition(bindgen::RustEdition::Edition2024)
         .generate()
         .expect("BindGen Generation Failiure: [libbcachefs_wrapper]");
 
@@ -299,6 +300,7 @@ fn main() {
                 .map(|p| format!("-I{}", p.display())),
         )
         .clang_arg(format!("--target={}", clang_target))
+        .rust_edition(bindgen::RustEdition::Edition2024)
         .generate()
         .expect("BindGen Generation Failiure: [Keyutils]");
     bindings
