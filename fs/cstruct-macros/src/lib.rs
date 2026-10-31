@@ -15,8 +15,6 @@
 //!   c_verbatim!(r#".."#) C carried as is; no Rust side
 //!   c_xmacro! { .. }     an x-macro list: Rust gets NAME!(cb), handing cb!
 //!                        the whole list
-//!   c_xmacro_from_c!(..) a list C still defines, read from its header: the
-//!                        same NAME!(cb), no record (xmacro_from_c.rs)
 //!   xmacro_select!       NAME!(xmacro_select [TOKEN => cb]): cb! handed
 //!                        the rows with TOKEN in them - a flag in a flags
 //!                        column
@@ -80,7 +78,6 @@ mod tagged_union;
 mod to_text;
 mod typeinfo;
 mod vstructs;
-mod xmacro_from_c;
 
 /// A tagged union with a stable representation: see tagged_union.rs.
 #[proc_macro]
@@ -895,21 +892,7 @@ pub fn c_verbatim(input: TokenStream) -> TokenStream {
 /// crate::cstructs::c - NAME is expanded wherever it's used.
 #[proc_macro]
 pub fn c_xmacro(input: TokenStream) -> TokenStream {
-    expand("c_xmacro!", || xmacro(input, true))
-}
-
-/// An x-macro list C defines, for Rust until its header is converted:
-/// c_xmacro_from_c!(NAME, "header") is c_xmacro! of the header's
-/// #define NAME(), unrecorded - see xmacro_from_c.rs.
-#[proc_macro]
-pub fn c_xmacro_from_c(input: TokenStream) -> TokenStream {
-    expand("c_xmacro_from_c!", || {
-        let (list, path) = xmacro_from_c::read(input)?;
-        let list = list.parse::<TokenStream>().map_err(|_| format!("{list}: not Rust tokens"))?;
-        let mut out = tokens(&format!("const _: &[u8] = include_bytes!({path:?});"));
-        out.extend(xmacro(list, false)?);
-        Ok(out)
-    })
+    expand("c_xmacro!", || xmacro(input))
 }
 
 /// An x-macro list's rows, selected: NAME!(xmacro_select [TOKEN => cb])
@@ -955,8 +938,8 @@ pub fn xmacro_select(input: TokenStream) -> TokenStream {
     })
 }
 
-/// c_xmacro!, its record only if @recorded: a list C defines has none.
-fn xmacro(input: TokenStream, recorded: bool) -> Result<TokenStream, String> {
+/// c_xmacro!'s expansion: the list's record, and NAME!(cb).
+fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
     let text = format!("c_xmacro! {{ {input} }}");
     let x = one_item!(&text, XMacro, "NAME(x) { (args), ... }");
     let name = &x.name;
@@ -973,7 +956,7 @@ fn xmacro(input: TokenStream, recorded: bool) -> Result<TokenStream, String> {
         .map(|e| e.into_iter().collect::<TokenStream>().to_string())
         .collect();
 
-    let mut out = if recorded { record(&text, &[]) } else { String::new() };
+    let mut out = record(&text, &[]);
     let subs: Vec<usize> = x.entries.iter().enumerate()
         .filter(|(_, e)| matches!(e, CXEntry::Sub { .. }))
         .map(|(i, _)| i)

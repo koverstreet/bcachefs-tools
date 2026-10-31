@@ -330,8 +330,7 @@ $(addprefix $(obj)/,$(bch-arch-asm-rs)): $(obj)/rust/%.rs: $(src)/util/%.rs.S FO
 targets += $(bch-arch-asm-rs)
 
 # mod.o gets them as externs, and the codegen output via OUT_DIR, as in
-# userspace - and the crate's directory as cargo gives it, CARGO_MANIFEST_DIR,
-# which c_xmacro_from_c! reads C's headers relative to.
+# userspace.
 bch-externs := paste:libpaste.so \
 	cstruct_macros:libcstruct_macros.so bitfield_struct:libbitfield_struct.so \
 	nestify:libnestify.so \
@@ -339,7 +338,6 @@ bch-externs := paste:libpaste.so \
 	num_traits:libnum_traits.rmeta uuid:libuuid.rmeta
 RUSTFLAGS_mod.o += $(foreach e,$(bch-externs),--extern $(subst :,=$(obj)/,$(e)))
 $(obj)/mod.o: export OUT_DIR := $(abspath $(obj)/rust)
-$(obj)/mod.o: export CARGO_MANIFEST_DIR := $(abspath $(src))
 $(obj)/mod.o: $(obj)/rust/bindings.rs $(addprefix $(obj)/,$(bch-arch-asm-rs)) $(obj)/libpaste.so \
 	$(obj)/libcstruct_macros.so $(obj)/libbitfield_struct.so $(obj)/libnestify.so \
 	$(obj)/arrayvec.o $(obj)/bitfield.o $(obj)/bitflags.o $(obj)/num_traits.o $(obj)/uuid.o
