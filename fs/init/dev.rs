@@ -409,11 +409,13 @@ unsafe fn bdev_get_fs(bdev: *mut c::block_device) -> Option<RoRef> {
     };
     unsafe { c::mutex_unlock((&raw mut (*bdev).bd_holder_lock).cast()) };
 
-    if let Some(fs) = &fs {
-        let Ok(()) = fs.ro_ref_events.wait_until(Sleep::UNINTERRUPTIBLE,
-                                                 || fs.flag(c::bch_fs_flags::BCH_FS_started).then_some(()));
-    }
-    fs
+    let fs = fs?;
+    let started = |fs: &Fs| fs.flag(c::bch_fs_flags::BCH_FS_started);
+    let Ok(()) = fs.ro_ref_events.wait_until(Sleep::UNINTERRUPTIBLE, || {
+        (started(&fs) || fs.flag(c::bch_fs_flags::BCH_FS_stopping)).then_some(())
+    });
+    // stopped without starting: our ref is what bch2_fs_stop() waits for
+    started(&fs).then_some(fs)
 }
 
 #[cfg(kernel)]

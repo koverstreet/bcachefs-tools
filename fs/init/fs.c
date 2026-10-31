@@ -673,6 +673,8 @@ static void bch2_fs_release(struct kobject *kobj)
 int bch2_fs_stop(struct bch_fs *c)
 {
 	if (!test_and_set_bit(BCH_FS_stopping, &c->flags)) {
+		bch2_fs_stopping_wake(c);
+
 		if (test_bit(BCH_FS_started, &c->flags))
 			bch_verbose(c, "shutting down");
 

@@ -891,6 +891,12 @@ macro_rules! fs_delayed_work {
     };
 }
 
+/// BCH_FS_stopping set: for ro_ref_events' waiters, as for BCH_FS_started
+#[c_export]
+pub fn bch2_fs_stopping_wake(c: &crate::util::ffi::Opaque<c::bch_fs>) {
+    Fs::from_c(c).ro_ref_events.wake();
+}
+
 /// c->ro_ref: bch2_fs_stop() waits for them, and tryget fails once it's
 /// stopping
 #[cfg(kernel)]
