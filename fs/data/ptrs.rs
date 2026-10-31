@@ -336,6 +336,8 @@ unsafe impl<S: KeyState> InFamily<PtrsTypes> for FamilyVal<BtreePtrsTypes, S> {}
 // SAFETY: as above
 unsafe impl<S: KeyState> InFamily<PtrsMutTypes> for FamilyVal<BtreePtrsTypes, S> {}
 
+pub const EXTENT_POISONED: u64 = 1 << c::bch_extent_flags_e::BCH_EXTENT_FLAG_poisoned.0;
+
 /// The extent entries of a key with pointers, in whichever form it's held:
 /// any BkeyV whose value is a PtrsBkey - armed to Ptrs, or to one of them.
 pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
@@ -442,6 +444,10 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
             Some(ExtentEntry::flags(f)) => f.flags(),
             _ => 0,
         }
+    }
+
+    fn poisoned(&self, fs: &Fs) -> bool {
+        self.extent_flags(fs) & EXTENT_POISONED != 0
     }
 
     /// Its pointer to device @dev, if it has one: bch2_bkey_has_device_c().

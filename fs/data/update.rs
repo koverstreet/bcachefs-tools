@@ -869,9 +869,7 @@ impl c::data_update {
         // A bitrotted extent gets a new checksum so it can be moved; its
         // poison bit keeps reads of it returning errors
         if unlikely(i32::from(self.rbio.ret) == -(bch_errcode::BCH_ERR_data_read_csum_err.0 as i32) &&
-                    self.key().arm::<Ptrs>().is_some_and(|k| {
-                        k.extent_flags(fs) & (1 << c::bch_extent_flags_e::BCH_EXTENT_FLAG_poisoned.0) != 0
-                    })) {
+                    self.key().arm::<Ptrs>().is_some_and(|k| k.poisoned(fs))) {
             let nonce = crate::data::ptrs::extent_nonce(self.rbio.version, &crc);
             // SAFETY: the read's bio, done, its data in
             let bio = unsafe { crate::util::bio::Bio::from_raw(&self.rbio.bio) };

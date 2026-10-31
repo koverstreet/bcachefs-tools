@@ -53,9 +53,7 @@ fn read_error_stats(u: &c::data_update, moving: &Moving<'_>, size: u32) {
     let fs = u.op.fs();
     let k = BkeySC::from(u.k.key());
     let poisoned = u.opts.type_ == c::bch_data_update_types::BCH_DATA_UPDATE_scrub &&
-        k.arm::<Ptrs>().is_some_and(|k| {
-            k.extent_flags(fs) & (1 << c::bch_extent_flags_e::BCH_EXTENT_FLAG_poisoned.0) != 0
-        });
+        k.arm::<Ptrs>().is_some_and(|k| k.poisoned(fs));
 
     // Not rbio.bvec_iter: only set when the read went straight into this rbio
     let ret = crate::errcode::ret_to_result_void(u.rbio.ret.into());

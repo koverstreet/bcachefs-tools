@@ -72,7 +72,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
     let mut r = c::bch_extent_reconcile::from_io_opts(opts);
     let need = |r: &mut c::bch_extent_reconcile, opt| r.update_need_rb(|n| n | rb_bit(opt));
 
-    let poisoned = k.extent_flags(fs) & 1 << c::bch_extent_flags_e::BCH_EXTENT_FLAG_poisoned.0 != 0;
+    let poisoned = k.poisoned(fs);
     let compression_type = c::bch_compression_opt::to_type(r.background_compression(), fs);
     let csum_type = if opts.nocow == 0 { fs.data_checksum_type_rb(&r) } else { c::bch_csum_type::BCH_CSUM_none };
     let stripe = k.k.key_type() == c::bch_bkey_type::KEY_TYPE_stripe;
