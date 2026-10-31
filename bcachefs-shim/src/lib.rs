@@ -20,6 +20,7 @@ pub mod c {
         dead_code,
         unknown_lints, // unnecessary_transmutes is rustc 1.88's
         unnecessary_transmutes,
+        unsafe_op_in_unsafe_fn, // bindgen's array and union field helpers, at 0.72
         clippy::all // bindgen's output
     )]
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));

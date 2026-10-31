@@ -167,6 +167,7 @@ fn main() {
         .generate_inline_functions(true)
         .wrap_static_fns(true)
         .wrap_static_fns_path(out_dir.join("extern.c"))
+        .rust_edition(bindgen::RustEdition::Edition2024)
         .generate()
         .expect("BindGen Generation Failure: [bcachefs-shim]");
 

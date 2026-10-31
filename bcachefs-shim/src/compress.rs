@@ -12,7 +12,7 @@ use core::ffi::{c_char, c_int, c_void};
 mod lib {
     use super::*;
 
-    extern "C" {
+    unsafe extern "C" {
         pub fn LZ4_compress_destSize(src: *const c_char, dst: *mut c_char, src_size: *mut c_int,
                                      dst_capacity: c_int) -> c_int;
         pub fn LZ4_compress_HC(src: *const c_char, dst: *mut c_char, src_size: c_int,

@@ -31,7 +31,7 @@ pub mod flags {
     pub const __GFP_NOWARN: Flags = Flags(2);
 }
 
-extern "C" {
+unsafe extern "C" {
     fn realloc(p: *mut core::ffi::c_void, size: usize) -> *mut core::ffi::c_void;
 }
 
