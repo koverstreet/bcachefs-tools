@@ -361,7 +361,7 @@ build/hostrustc-version: force
 
 build/rust_types_gen: fs/types/main.rs fs/types/cstruct.rs build/hostrustc-version
 	@echo "    [RUSTC]  $@"
-	$(Q)$(HOSTRUSTC) --edition 2021 -O -o $@ $<
+	$(Q)$(HOSTRUSTC) --edition 2024 -O -o $@ $<
 
 # Each record is a section of its own, all of the same name: ld -r makes them
 # one, which objcopy extracts.

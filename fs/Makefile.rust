@@ -127,7 +127,7 @@ bcachefs-codegen-blocklist := \
 # The codegen tool: plain host rustc, linked with $(HOSTCC) as kbuild's host
 # Rust is. codegen_main.rs include!s codegen.rs.
 quiet_cmd_bch_codegen_host = HOSTRUSTC $@
-      cmd_bch_codegen_host = $(HOSTRUSTC) --edition 2021 -O \
+      cmd_bch_codegen_host = $(HOSTRUSTC) --edition 2024 -O \
 	-Clinker-flavor=gcc -Clinker=$(HOSTCC) $< -o $@
 
 $(obj)/codegen: $(src)/codegen_main.rs $(src)/codegen.rs FORCE
