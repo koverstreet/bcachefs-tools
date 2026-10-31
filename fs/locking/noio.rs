@@ -127,6 +127,20 @@ impl<'a, R: RawRwLock<GuardState = ()>, G: Sync, P> ReadGuard<'a, Noio<R>, G, P>
     }
 }
 
+impl<'a, R: RawLock<GuardState = ()>, G, P> Guard<'a, Noio<R>, G, P> {
+    pub fn with_unlocked<T>(&mut self, f: impl FnOnce() -> T) -> T {
+        /*
+         * Raw drop/retake of just the lock: the guard keeps PF_MEMALLOC_NOIO
+         * set the whole time.
+         */
+        let lock = self.lock();
+        unsafe { lock.raw().0.unlock(()) };
+        let ret = f();
+        unsafe { lock.raw().0.lock() };
+        ret
+    }
+}
+
 /// C's struct mutex_noio and percpu_rwsem_noio, declared for C below.
 pub type mutex_noio = Noio<c::mutex>;
 pub type percpu_rwsem_noio = Noio<c::percpu_rw_semaphore>;
