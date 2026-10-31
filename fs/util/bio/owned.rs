@@ -147,6 +147,31 @@ impl<T: HasBio> BioSet<T> {
     {
         // SAFETY: a live bioset
         let bio = unsafe { c::bio_alloc_bioset(bdev, nr_vecs as _, opf as _, c::GFP_KERNEL, self.set.as_ptr()) };
+        Self::init_new(bio, init)
+    }
+
+    /// alloc(), the bio a clone of @src's: its bvecs, shared, and its iter.
+    ///
+    /// # Safety
+    /// @src's bvecs outlive the clone.
+    pub unsafe fn alloc_clone<E, I>(&self, bdev: *mut c::block_device, src: &c::bio,
+                                    init: impl FnOnce(BioInPlace) -> I) -> Result<BioBox<T>, E>
+    where
+        I: PinInit<T, E>,
+        E: From<BchError>,
+    {
+        // SAFETY: a live bioset; @src only read, and the caller's
+        let bio = unsafe {
+            c::bio_alloc_clone(bdev, core::ptr::from_ref(src).cast_mut(), c::GFP_KERNEL, self.set.as_ptr())
+        };
+        Self::init_new(bio, init)
+    }
+
+    fn init_new<E, I>(bio: *mut c::bio, init: impl FnOnce(BioInPlace) -> I) -> Result<BioBox<T>, E>
+    where
+        I: PinInit<T, E>,
+        E: From<BchError>,
+    {
         if bio.is_null() {
             return Err(BchError::from(c::ENOMEM).into());
         }
