@@ -27,7 +27,7 @@ const OPAQUE: &str = "crate::typeinfo::FieldKind::Opaque";
 /// each must have TypeInfo itself. By the name the field's type is written
 /// with: a type renamed to Rust's name (#[c_name]) goes here by that name.
 fn derives_type_info(name: &str) -> bool {
-    name.starts_with("bch_") || matches!(name, "Bpos" | "bkey" | "bversion")
+    name.starts_with("bch_") || matches!(name, "Bpos" | "bkey" | "Bversion")
 }
 
 /// By C's name: a family's C definition, X__head, is struct X to C.

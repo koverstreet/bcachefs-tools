@@ -15,7 +15,7 @@ pub use c::bch_reconcile_accounting_type;
 use crate::types::{DArray, c_default};
 use core::ffi::{c_uint, c_int};
 use cstruct_macros::{CStruct, TypeInfo, c_enum, c_extern};
-use crate::format::Bpos;
+use crate::format::{Bpos, Bversion};
 
 c_enum! {
     #[closed]
@@ -48,7 +48,7 @@ c_extern! {
 #[derive(Clone, Copy, CStruct)]
 pub struct accounting_mem_entry {
     pub pos: Bpos,
-    pub bversion: c::bversion,
+    pub bversion: Bversion,
     pub nr_counters: c_uint,
     #[c("u64 __percpu *v[2]")]
     pub v: [*mut u64; 2],

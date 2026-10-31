@@ -11,7 +11,7 @@ use crate::types::{NeBytes, c_default};
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro, TypeInfo};
 use nestify::nest;
-use crate::format::Bpos;
+use crate::format::{Bpos, Bversion};
 
 c_xmacro! {
     BCH_WRITE_FLAGS(x) {
@@ -171,7 +171,7 @@ nest! {
 
         pub subvol: u32,
         pub pos: Bpos,
-        pub version: c::bversion,
+        pub version: Bversion,
 
         /*
          * For BCH_WRITE_data_encoded: what the data we're holding currently
@@ -274,7 +274,7 @@ impl c::bch_write_op {
         self.opts       = opts;
         self.subvol     = 0;
         self.pos        = crate::POS_MAX;
-        self.version    = c::bversion::default();
+        self.version    = Bversion::default();
         self.write_point = c::write_point_specifier { v: 0 };
         // SAFETY: the caller's - not put, and not dropped
         unsafe { core::ptr::write(&mut self.res, c::DiskReservation::new(fs)) };

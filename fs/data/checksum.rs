@@ -38,6 +38,7 @@ use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint, c_void};
 use cstruct_macros::c_export;
+use crate::format::Bversion;
 
 // ── Nonces ───────────────────────────────────────────────────────────────
 
@@ -472,7 +473,7 @@ pub unsafe fn __bch2_encrypt_bio(c: &Opaque<c::bch_fs>, _type: c_uint, nonce: c:
 /// # Safety
 /// @bio is a bio, not in flight.
 #[c_export]
-pub unsafe fn bch2_rechecksum_bio(c: &Opaque<c::bch_fs>, bio: *mut c::bio, version: c::bversion,
+pub unsafe fn bch2_rechecksum_bio(c: &Opaque<c::bch_fs>, bio: *mut c::bio, version: Bversion,
                                   crc_old: c::bch_extent_crc_unpacked,
                                   crc_a: Option<&mut c::bch_extent_crc_unpacked>,
                                   crc_b: Option<&mut c::bch_extent_crc_unpacked>,
@@ -489,7 +490,7 @@ impl Fs {
     /// they merge, else it checksummed again whole. Can't encrypt or decrypt,
     /// so both types are encryption, or neither.
     #[allow(clippy::too_many_arguments)]
-    pub fn rechecksum_bio(&self, bio: &Bio, version: c::bversion, crc_old: c::bch_extent_crc_unpacked,
+    pub fn rechecksum_bio(&self, bio: &Bio, version: Bversion, crc_old: c::bch_extent_crc_unpacked,
                           crc_a: Option<&mut c::bch_extent_crc_unpacked>,
                           crc_b: Option<&mut c::bch_extent_crc_unpacked>,
                           len_a: u32, len_b: u32, new_csum_type: u32) -> Result<(), BchError> {

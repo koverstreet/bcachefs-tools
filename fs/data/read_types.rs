@@ -7,7 +7,7 @@ use crate::types::c_default;
 use core::ffi::c_uint;
 use cstruct_macros::{bitfield, CStruct, TypeInfo};
 use nestify::nest;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, Bversion};
 
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
@@ -94,7 +94,7 @@ nest! {
          */
         pub data_btree: Btree,
         pub data_pos: Bpos,
-        pub version: c::bversion,
+        pub version: Bversion,
 
         pub opts: c::bch_inode_opts,
 
