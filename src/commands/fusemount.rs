@@ -214,7 +214,7 @@ fn signal_parent_err(fd: OwnedFd, byte: u8, reason: &str) {
 /// Convert a raw C return value (negative bcachefs error code) to a fuser Errno.
 /// Walks the bcachefs error hierarchy to the root standard errno.
 fn err(ret: i32) -> Errno {
-    let e = BchError::from_raw(if ret < 0 { -ret } else { ret });
+    let e = BchError::from_raw(ret);
     Errno::from_i32(e.errno())
 }
 

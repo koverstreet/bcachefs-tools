@@ -103,7 +103,7 @@ impl BcachefsHandle {
         // lowercase-with-dashes, the user's spelling may not be)
         if let Ok(uuid) = parse_uuid(&path_str) {
             return Self::open_by_name(&format_uuid(&uuid), Some(uuid))
-                .map_err(|e| BchError::from_raw(-e.0));
+                .map_err(|e| BchError::from(e.0));
         }
 
         if let Some(handle) = Self::open_if_mounted(path)? {
@@ -137,7 +137,7 @@ impl BcachefsHandle {
             return match Self::open_by_name(&format_uuid(&uuid), Some(uuid)) {
                 Ok(h) => Ok(Some(h)),
                 Err(e) if e.0 == libc::ENOENT => Ok(None),
-                Err(e) => Err(BchError::from_raw(-e.0)),
+                Err(e) => Err(BchError::from(e.0)),
             };
         }
 
@@ -150,7 +150,7 @@ impl BcachefsHandle {
         };
 
         let stat = rustix::fs::fstat(&path_fd)
-            .map_err(|e| BchError::from_raw(-e.raw_os_error()))?;
+            .map_err(|e| BchError::from(e.raw_os_error()))?;
         let file_type = rustix::fs::FileType::from_raw_mode(stat.st_mode);
 
         if file_type == rustix::fs::FileType::RegularFile {
@@ -179,7 +179,7 @@ impl BcachefsHandle {
                 if let Some((uuid_str, dev_idx)) = parse_sysfs_link(&target) {
                     let uuid = parse_uuid(uuid_str).ok();
                     let mut handle = Self::open_by_name(uuid_str, uuid)
-                        .map_err(|e| BchError::from_raw(-e.0))?;
+                        .map_err(|e| BchError::from(e.0))?;
                     handle.dev_idx = dev_idx;
                     return Ok(Some(handle));
                 }
@@ -206,18 +206,18 @@ impl BcachefsHandle {
     /// these are.
     pub(crate) fn member_devices(&self) -> Result<Vec<std::path::PathBuf>, BchError> {
         let sysfs_path = sysfs::sysfs_path_from_fd(self.sysfs_fd())
-            .map_err(|_| BchError::from_raw(-libc::EIO))?;
+            .map_err(|_| BchError::from(libc::EIO))?;
 
         let mut devs = Vec::new();
         for d in sysfs::fs_get_devices(&sysfs_path, sysfs::DeviceNameMode::Raw)
-                .map_err(|_| BchError::from_raw(-libc::EIO))? {
+                .map_err(|_| BchError::from(libc::EIO))? {
             if d.online {
                 devs.push(std::path::PathBuf::from(format!("/dev/{}", d.dev)));
             }
         }
 
         if devs.is_empty() {
-            return Err(BchError::from_raw(-libc::ENOENT));
+            return Err(BchError::from(libc::ENOENT));
         }
         Ok(devs)
     }
@@ -233,13 +233,13 @@ impl BcachefsHandle {
         let sysfs_fd = if ret == 0 {
             let name_len = fs_path.len as usize;
             let name = std::str::from_utf8(&fs_path.name[..name_len])
-                .map_err(|_| BchError::from_raw(-libc::EINVAL))?;
+                .map_err(|_| BchError::from(libc::EINVAL))?;
             let sysfs = format!("/sys/fs/{}", name);
             rustix::fs::open(
                 sysfs.as_str(),
                 rustix::fs::OFlags::RDONLY,
                 rustix::fs::Mode::empty(),
-            ).map_err(|e| BchError::from_raw(-e.raw_os_error()))?
+            ).map_err(|e| BchError::from(e.raw_os_error()))?
         } else {
             // Fallback: use UUID
             let uuid_str = format_uuid(&uuid);
@@ -248,7 +248,7 @@ impl BcachefsHandle {
                 sysfs.as_str(),
                 rustix::fs::OFlags::RDONLY,
                 rustix::fs::Mode::empty(),
-            ).map_err(|e| BchError::from_raw(-e.raw_os_error()))?
+            ).map_err(|e| BchError::from(e.raw_os_error()))?
         };
 
         Ok(BcachefsHandle {
@@ -297,7 +297,7 @@ impl BcachefsHandle {
         let sb = bch_bindgen::sb::io::read_super_opts(path, opts)
             .map_err(|e| match e.downcast::<BchError>() {
                 Ok(bch_err) => bch_err,
-                Err(_) => BchError::from_raw(-libc::EIO),
+                Err(_) => BchError::from(libc::EIO),
             })?;
 
         let dev_idx = sb.sb().dev_idx as i32;
@@ -315,7 +315,7 @@ impl BcachefsHandle {
                         eprintln!("filesystem {} not mounted", uuid_str);
                     }
                 }
-                BchError::from_raw(-e.0)
+                BchError::from(e.0)
             })?;
         handle.dev_idx = dev_idx;
         Ok(handle)
