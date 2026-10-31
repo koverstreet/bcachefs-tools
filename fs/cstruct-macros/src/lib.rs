@@ -149,7 +149,7 @@ fn record(text: &str, nums: &[String]) -> String {
              const NAMES: &[(&str, &str)] = &[{names}];\n\
              const LEN: usize = crate::types::record_len(::core::file!(), TEXT, NUMS.len(), NAMES);\n\
              #[used]\n\
-             #[link_section = \".discard.bch_cstruct\"]\n\
+             #[unsafe(link_section = \".discard.bch_cstruct\")]\n\
              static RECORD: [u8; LEN] =\n\
                  crate::types::record::<LEN>(::core::file!(), ::core::line!(), TEXT, NUMS, NAMES);\n\
          }};\n",
@@ -1457,7 +1457,7 @@ fn c_export_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
 
     // extern "C": the fn is C's symbol itself
     if e.extern_c {
-        let mut out = tokens("#[no_mangle]");
+        let mut out = tokens("#[unsafe(no_mangle)]");
         out.extend(item);
         out.extend(tokens(&record));
         return Ok(out);
@@ -1481,7 +1481,7 @@ fn c_export_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
         "{cfg}const _: () = {{\n\
              #[allow(unused_imports)]\n\
              use crate::c;\n\
-             #[no_mangle]\n\
+             #[unsafe(no_mangle)]\n\
              #[allow(unused_unsafe, clippy::transmute_ptr_to_ref)]\n\
              unsafe extern \"C\" fn {name}({params}){ret} {{\n\
                  unsafe {{ {call} }}\n\
@@ -1533,7 +1533,7 @@ fn c_export_static(item: TokenStream) -> Result<TokenStream, String> {
     // SAFETY, of the CStatic: a static C reads is immutable, and its only
     // parts that aren't Sync are its pointers - to other statics, and fns
     Ok(tokens(&format!(
-        "#[no_mangle]\n\
+        "#[unsafe(no_mangle)]\n\
          #[allow(non_upper_case_globals)]\n\
          {rust_prefix} static {name}: crate::types::CStatic<{ty}> =\n\
              unsafe {{ crate::types::CStatic::new({expr}) }};\n\

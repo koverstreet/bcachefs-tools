@@ -3,7 +3,7 @@
 name = "bcachefs-cstruct-macros"
 version = "0.1.0"
 authors = [ "Kent Overstreet <kent.overstreet@linux.dev>" ]
-edition = "2021"
+edition = "2024"
 rust-version = "1.85.0"
 
 [lib]

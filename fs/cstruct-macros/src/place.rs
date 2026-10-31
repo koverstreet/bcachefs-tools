@@ -265,6 +265,6 @@ pub(crate) fn field_init(name: &str) -> String {
         "{{\n\
              use crate::util::place::{{PickPlaced as _, PickZeroed as _}};\n\
              // SAFETY: run into field {name}, by pin_init!()\n\
-             unsafe {{ (&crate::util::place::Pick::<Self, {{ crate::util::place::name({name:?}) }}>::new()).pick() }}\n\
+             unsafe {{ (&crate::util::place::Pick::<Self, {{ crate::util::place::name({name:?}) }}>::NEW).pick() }}\n\
          }}")
 }

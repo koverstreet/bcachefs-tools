@@ -286,9 +286,10 @@ pub(crate) unsafe trait InitAt<const N: u64>: Field<N> {
 pub(crate) struct Pick<B, const N: u64>(PhantomData<fn() -> B>);
 
 impl<B, const N: u64> Pick<B, N> {
-    pub(crate) fn new() -> Self {
-        Pick(PhantomData)
-    }
+    /// A const, so &NEW is promoted to 'static: what pick() returns borrows
+    /// the Pick, and a temporary one would be dropped at the end of the
+    /// initializer's block, as edition 2024 scopes it.
+    pub(crate) const NEW: Self = Pick(PhantomData);
 }
 
 #[doc(hidden)]

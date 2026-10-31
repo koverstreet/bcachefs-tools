@@ -281,6 +281,7 @@ $(obj)/libpaste.so: $(src)/vendor/paste/src/lib.rs FORCE
 	$(call if_changed_dep,bch_procmacro)
 # cstruct-macros include!s its parser from types/cstruct.rs: the dep-info
 # tracks it.
+$(obj)/libcstruct_macros.so: private rs-edition := 2024
 $(obj)/libcstruct_macros.so: $(src)/cstruct-macros/src/lib.rs FORCE
 	$(call if_changed_dep,bch_procmacro)
 $(obj)/libbitfield_struct.so: $(src)/vendor/bitfield-struct/src/lib.rs $(bch-pmac-deps)
