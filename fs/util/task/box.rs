@@ -52,7 +52,7 @@ impl<F: Future<Output = ()>> TaskBox<'_, F> {
     ///
     /// # Safety
     /// @task is a started TaskBox's, not running.
-    unsafe fn free(task: NonNull<Task<'_, F>>) {
+    unsafe fn free(task: NonNull<Task<'_, F>>, (): ()) {
         drop(unsafe { MaybeRcuAlloc::<Task<'_, F>, Kmalloc>::from_raw(task) })
     }
 }
@@ -150,7 +150,7 @@ impl<'q, H: Send + Sync> BoxWithTask<'q, H> {
         }
     }
 
-    unsafe fn task_done<F: Future<Output = ()> + Send>(task: NonNull<Task<'q, F>>) {
+    unsafe fn task_done<F: Future<Output = ()> + Send>(task: NonNull<Task<'q, F>>, (): ()) {
         let w = unsafe {
             task.as_ptr().byte_sub(core::mem::offset_of!(WithTask<'q, H, F>, task)).cast::<WithTask<'q, H, F>>()
         };

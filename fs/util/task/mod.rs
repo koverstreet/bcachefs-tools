@@ -96,7 +96,7 @@ use core::fmt;
 use core::future::Future;
 use core::cell::Cell;
 use core::marker::{PhantomData, PhantomPinned};
-use core::mem::MaybeUninit;
+use core::mem::ManuallyDrop;
 use core::pin::Pin;
 use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering};
@@ -241,24 +241,31 @@ unsafe impl HasRcuHead for Header {
     const WORK: bool = true;
 }
 
+/// The future, and once it's Ready, what it returned: never both.
+#[repr(C)]
+union Body<F, O> {
+    future: ManuallyDrop<F>,
+    output: ManuallyDrop<O>,
+}
+
 #[repr(C)]
 #[pin_data(PinnedDrop)]
 #[derive(RcuHead)]
-pub struct Task<'q, F: Future<Output = ()>> {
+pub struct Task<'q, F: Future> {
     #[pin]
     #[rcu_head]
     header:     Header,
     #[pin]
-    future:     MaybeUninit<F>,
-    owner_done: unsafe fn(NonNull<Self>),
+    body:       Body<F, F::Output>,
+    owner_done: unsafe fn(NonNull<Self>, F::Output),
     _q:         PhantomData<&'q Queue>,
 }
 
-unsafe impl<F: Future<Output = ()> + Send> Send for Task<'_, F> {}
-unsafe impl<F: Future<Output = ()> + Send> Sync for Task<'_, F> {}
+unsafe impl<F: Future + Send> Send for Task<'_, F> where F::Output: Send {}
+unsafe impl<F: Future + Send> Sync for Task<'_, F> where F::Output: Send {}
 
-impl<'q, F: Future<Output = ()> + Send> Task<'q, F> {
-    pub fn new<'n>(spawn: Spawn<'q, 'n>, future: impl PinInit<F> + 'n, owner_done: unsafe fn(NonNull<Self>))
+impl<'q, F: Future + Send> Task<'q, F> {
+    pub fn new<'n>(spawn: Spawn<'q, 'n>, future: impl PinInit<F> + 'n, owner_done: unsafe fn(NonNull<Self>, F::Output))
         -> impl PinInit<Self, BchError> + 'n
     where
         F: 'n,
@@ -269,9 +276,9 @@ impl<'q, F: Future<Output = ()> + Send> Task<'q, F> {
             Spawn::Run(rq) => (Target::UNUSED, Some(NonNull::from(rq.get_ref()))),
             Spawn::Thread(_) => (Target::UNUSED, None),
         };
-        let future = unsafe {
-            pin_init::pin_init_from_closure(move |slot: *mut MaybeUninit<F>| {
-                crate::util::alloc::init_at(future, slot.cast::<F>())
+        let body = unsafe {
+            pin_init::pin_init_from_closure(move |slot: *mut Body<F, F::Output>| {
+                crate::util::alloc::init_at(future, (&raw mut (*slot).future).cast::<F>())
             })
         };
         pin_init!(Self {
@@ -288,7 +295,7 @@ impl<'q, F: Future<Output = ()> + Send> Task<'q, F> {
                 finish:    Self::finish,
                 _rcu:      RcuMember::default(),
             }),
-            future <- future,
+            body <- body,
             owner_done,
             _q:     PhantomData,
         }? BchError)
@@ -305,7 +312,7 @@ impl<'q, F: Future<Output = ()> + Send> Task<'q, F> {
 
     pub fn future(self: Pin<&mut Self>) -> Pin<&mut F> {
         assert!(!self.header.started.get(), "a task's future, after it's started");
-        unsafe { Pin::new_unchecked(self.get_unchecked_mut().future.assume_init_mut()) }
+        unsafe { Pin::new_unchecked(&mut *self.get_unchecked_mut().body.future) }
     }
 
     pub fn task(&self) -> TaskRef {
@@ -318,28 +325,36 @@ impl<'q, F: Future<Output = ()> + Send> Task<'q, F> {
 
     unsafe fn poll(header: NonNull<Header>, cx: &mut Context<'_>) -> Poll<()> {
         let task = header.cast::<Self>().as_ptr();
-        let future = unsafe { (&raw mut (*task).future).cast::<F>() };
-        let result = unsafe { Pin::new_unchecked(&mut *future) }.poll(cx);
-        if result.is_ready() {
-            unsafe { core::ptr::drop_in_place(future) };
+        let future = unsafe { (&raw mut (*task).body.future).cast::<F>() };
+        match unsafe { Pin::new_unchecked(&mut *future) }.poll(cx) {
+            Poll::Ready(output) => {
+                unsafe {
+                    core::ptr::drop_in_place(future);
+                    (&raw mut (*task).body.output).write(ManuallyDrop::new(output));
+                }
+                Poll::Ready(())
+            }
+            Poll::Pending => Poll::Pending,
         }
-        result
     }
 
     unsafe fn finish(header: NonNull<Header>) {
         let task = header.cast::<Self>();
-        unsafe { ((*task.as_ptr()).owner_done)(task) };
+        unsafe {
+            let output = ManuallyDrop::into_inner((&raw const (*task.as_ptr()).body.output).read());
+            ((*task.as_ptr()).owner_done)(task, output)
+        };
     }
 }
 
 #[pinned_drop]
-impl<F: Future<Output = ()>> PinnedDrop for Task<'_, F> {
+impl<F: Future> PinnedDrop for Task<'_, F> {
     fn drop(self: Pin<&mut Self>) {
         let task = unsafe { self.get_unchecked_mut() };
         let started = task.header.started.get();
         assert!(!started || task.header.finished.get(), "a task freed while it runs");
         if !started {
-            unsafe { core::ptr::drop_in_place(task.future.as_mut_ptr()) };
+            unsafe { ManuallyDrop::drop(&mut task.body.future) };
         }
         if let Some(thread) = task.header.thread.take() {
             if !started {
