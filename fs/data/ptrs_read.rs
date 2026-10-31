@@ -228,7 +228,7 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
                 }
                 let ca = if missing { None } else { fs.dev_rcu(dev, &rcu) };
 
-                if p.ptr.cached() != 0 && ca.is_none_or(|ca| ca.ptr_stale(&p.ptr, &rcu) != Some(0)) {
+                if p.ptr.cached() != 0 && ca.is_none_or(|ca| ca.dev_ptr_stale(&p.ptr, &rcu)) {
                     continue;
                 }
 

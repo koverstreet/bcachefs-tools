@@ -467,7 +467,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
         self.ptrs(fs).any(|p| {
             fs.dev_in_target(p.dev().into(), target, &rcu) &&
                 fs.dev_rcu(p.dev().into(), &rcu)
-                    .is_some_and(|ca| p.cached() == 0 || ca.ptr_stale(p, &rcu) == Some(0))
+                    .is_some_and(|ca| p.cached() == 0 || !ca.dev_ptr_stale(p, &rcu))
         })
     }
 
@@ -729,7 +729,7 @@ fn cached_ptr_drop_reason(fs: &Fs, opts: &c::bch_inode_opts, d: &DecodedPtr<'_>,
 
     let dev = u32::from(ptr.dev());
     let ca = fs.dev_rcu(dev, rcu);
-    if ca.is_some_and(|ca| ca.ptr_stale(ptr, rcu) != Some(0)) {
+    if ca.is_some_and(|ca| ca.dev_ptr_stale(ptr, rcu)) {
         return Some("pointer is stale");
     }
     if ca.is_none_or(|ca| u32::from(ca.mi.get().state) == c::bch_member_state::BCH_MEMBER_STATE_evacuating.0) {

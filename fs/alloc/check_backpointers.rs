@@ -132,7 +132,7 @@ fn bkey_dev_ptr_stale(fs: &Fs, k: BkeySC<'_, Ptrs>, dev: u32) -> bool {
     let rcu = read_lock();
     let Some(ca) = fs.dev_rcu(dev, &rcu) else { return false };
 
-    let stale = k.ptrs(fs).any(|p| u32::from(p.dev()) == dev && ca.ptr_stale(p, &rcu).is_none_or(|s| s != 0));
+    let stale = k.ptrs(fs).any(|p| u32::from(p.dev()) == dev && ca.dev_ptr_stale(p, &rcu));
     stale
 }
 
@@ -601,7 +601,7 @@ fn check_extent_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToBpSta
             let rcu = read_lock();
             let Some(ca) = fs.dev_rcu(dev, &rcu) else { continue };
 
-            if d.p.ptr.cached() != 0 && ca.ptr_stale(&d.p.ptr, &rcu).is_none_or(|s| s != 0) {
+            if d.p.ptr.cached() != 0 && ca.dev_ptr_stale(&d.p.ptr, &rcu) {
                 continue;
             }
 

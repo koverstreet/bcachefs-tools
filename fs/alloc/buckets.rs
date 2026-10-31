@@ -1091,4 +1091,10 @@ impl c::bch_dev {
     pub fn ptr_stale(&self, ptr: &c::bch_extent_ptr, rcu: &ReadGuard) -> Option<u8> {
         Some(gen_after(self.bucket_gen(self.ptr_bucket(ptr), rcu)?, ptr.generation()))
     }
+
+    /// Whether @ptr's bucket has moved on from it, or isn't the device's:
+    /// dev_ptr_stale().
+    pub fn dev_ptr_stale(&self, ptr: &c::bch_extent_ptr, rcu: &ReadGuard) -> bool {
+        self.ptr_stale(ptr, rcu) != Some(0)
+    }
 }

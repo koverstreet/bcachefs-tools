@@ -395,7 +395,7 @@ fn no_valid_pointers_fix<'a, 't>(t: &TransAttempt<'_, '_>, btree: c::btree_id, m
         let mut found = false;
         for ptr in new.ptrs_mut(fs) {
             if ptr.cached() != 0 &&
-               fs.dev_rcu(ptr.dev().into(), &rcu).is_some_and(|ca| ca.ptr_stale(ptr, &rcu) == Some(0)) {
+               fs.dev_rcu(ptr.dev().into(), &rcu).is_some_and(|ca| !ca.dev_ptr_stale(ptr, &rcu)) {
                 ptr.set_cached(0);
                 found = true;
             }
