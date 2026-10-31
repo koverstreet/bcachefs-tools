@@ -179,7 +179,7 @@ pub fn open_device(path: &std::ffi::CStr, mode: u32) -> Result<OwnedFd, i32> {
 
 /// Call the C blkid_check function to probe for existing filesystems.
 pub fn blkid_check(fd: RawFd, path: &std::ffi::CStr, force: bool) {
-    extern "C" {
+    unsafe extern "C" {
         fn blkid_check(fd: libc::c_int, path: *const libc::c_char, force: bool);
     }
     unsafe { blkid_check(fd, path.as_ptr(), force) }

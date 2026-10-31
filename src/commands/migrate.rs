@@ -148,11 +148,12 @@ fn bucket_to_sector(bucket_size: u32, bucket: u64) -> u64 {
 
 /// Mark a range of buckets as nouse.
 unsafe fn mark_nouse_range(ca: *const c::bch_dev, sector_from: u64, sector_to: u64) {
-    let bucket_size = (*ca).mi.get().bucket_size as u32;
+    let ca = unsafe { &*ca };
+    let bucket_size = ca.mi.get().bucket_size as u32;
     // SAFETY: buckets_nouse_alloc()'s: a bit per bucket, in words
-    let nouse = AtomicBitmap::from_words(std::slice::from_raw_parts(
-        (*ca).buckets_nouse.load(std::sync::atomic::Ordering::Acquire).cast::<AtomicUsize>(),
-        ((*ca).mi.get().nbuckets as usize).div_ceil(usize::BITS as usize)));
+    let nouse = AtomicBitmap::from_words(unsafe { std::slice::from_raw_parts(
+        ca.buckets_nouse.load(std::sync::atomic::Ordering::Acquire).cast::<AtomicUsize>(),
+        (ca.mi.get().nbuckets as usize).div_ceil(usize::BITS as usize)) });
     let mut b = sector_to_bucket(bucket_size, sector_from);
     loop {
         nouse.set(b as usize);
@@ -166,9 +167,10 @@ unsafe fn mark_nouse_range(ca: *const c::bch_dev, sector_from: u64, sector_to: u
 /// Mark all space NOT covered by the reserved extents as nouse,
 /// plus the space for the default superblock layout.
 unsafe fn mark_unreserved_space(fs: *mut c::bch_fs, extents: &[CRange]) {
-    let ca = (*fs).devs[0].as_ptr();
-    let bucket_size = (*ca).mi.get().bucket_size as u32;
-    let nbuckets = (*ca).mi.get().nbuckets;
+    let fs = unsafe { &*fs };
+    let ca = fs.devs[0].as_ptr();
+    let mi = unsafe { &*ca }.mi.get();
+    let (bucket_size, nbuckets) = (mi.bucket_size as u32, mi.nbuckets);
 
     // Byte-addressed max for hole iteration
     let max_bytes = bucket_to_sector(bucket_size, nbuckets) << 9;
@@ -177,17 +179,12 @@ unsafe fn mark_unreserved_space(fs: *mut c::bch_fs, extents: &[CRange]) {
         if hole.start == hole.end {
             continue;
         }
-        mark_nouse_range(
-            ca,
-            hole.start >> 9,
-            (hole.end + (1 << 9) - 1) >> 9,
-        );
+        unsafe { mark_nouse_range(ca, hole.start >> 9, (hole.end + (1 << 9) - 1) >> 9) };
     }
 
     // Also mark space for the default sb layout
-    let fs = &*fs;
-    let sb_size = 1u64 << fs.dev_sb(&fs.sb_lock(), &*ca).expect("device 0's superblock").sb().layout.sb_max_size_bits;
-    mark_nouse_range(ca, 0, c::BCH_SB_SECTOR as u64 + sb_size * 2);
+    let sb_size = 1u64 << fs.dev_sb(&fs.sb_lock(), unsafe { &*ca }).expect("device 0's superblock").sb().layout.sb_max_size_bits;
+    unsafe { mark_nouse_range(ca, 0, c::BCH_SB_SECTOR as u64 + sb_size * 2) };
 }
 
 /// Reserve space for bcachefs metadata file, return extents and inode number.

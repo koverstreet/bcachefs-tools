@@ -42,7 +42,7 @@ use bcachefs_kernel::format::Btree;
 const BCH_REPLICAS_MAX: u32 = 4;
 const BTREE_MAX_DEPTH: u32 = 4;
 
-extern "C" {
+unsafe extern "C" {
     fn strip_fs_alloc(c: *mut c::bch_fs);
 }
 

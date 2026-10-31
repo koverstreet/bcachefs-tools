@@ -53,7 +53,7 @@ fn file_type_to_dtype(ft: rustix::fs::FileType) -> u8 {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     fn rust_link_data(
         c: *mut c::bch_fs,
         dst_inum: u64,

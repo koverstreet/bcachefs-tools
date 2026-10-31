@@ -53,7 +53,7 @@ pub fn ioctl_rw<I: Ioctl>(fd: impl AsFd, arg: &mut I::Arg) -> io::Result<i32> {
 /// expects for `I`: at least `I::Arg`, plus whatever trailing entries its
 /// header fields promise.
 pub unsafe fn ioctl_ptr<I: Ioctl>(fd: impl AsFd, arg: *mut I::Arg) -> io::Result<i32> {
-    ret(libc::ioctl(fd.as_fd().as_raw_fd(), I::OPCODE as libc::Ioctl, arg))
+    ret(unsafe { libc::ioctl(fd.as_fd().as_raw_fd(), I::OPCODE as libc::Ioctl, arg) })
 }
 
 /// @call with a reply buffer of @bytes, then twice that, while the kernel

@@ -113,7 +113,7 @@ static INIT_LOCK: Mutex<()> = Mutex::new(());
  * stale file exists rather than overwriting (so we never hijack an
  * in-use path).
  */
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bch2_start_http_lazy() {
     let my_pid = std::process::id();
     if STARTED_FOR_PID.load(Ordering::Acquire) == my_pid {
