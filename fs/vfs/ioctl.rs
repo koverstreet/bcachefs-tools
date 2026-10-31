@@ -435,9 +435,16 @@ fn goingdown(fs: &Fs, user: UserArg<u32>) -> Result<(), BchError> {
     prt!(&mut *msg, "shutdown by ioctl type {flags}");
 
     match flags {
-        // DEFAULT froze s_bdev around the flush: with our holder ops, which
-        // have no .freeze, that only synced its page cache, which we don't use
-        c::FSOP_GOING_FLAGS_DEFAULT | c::FSOP_GOING_FLAGS_LOGFLUSH => {
+        // frozen, everything written is on disk; thawed, it stays read-only:
+        // unfreeze_fs() sees the shutdown
+        c::FSOP_GOING_FLAGS_DEFAULT => {
+            let who = c::freeze_holder_FREEZE_HOLDER_KERNEL;
+            ret_to_result_void(unsafe { c::freeze_super(fs.vfs_sb, who, core::ptr::null()) })?;
+            fs.emergency_read_only(&mut msg);
+            unsafe { c::thaw_super(fs.vfs_sb, who, core::ptr::null()) };
+            Ok(())
+        }
+        c::FSOP_GOING_FLAGS_LOGFLUSH => {
             let _ = fs.journal_flush();
             fs.emergency_read_only(&mut msg);
             Ok(())
