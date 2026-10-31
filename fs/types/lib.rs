@@ -25,24 +25,34 @@
 //!
 //! A record, every number little-endian:
 //!
-//!   magic     "CSR1"
+//!   magic     "CSR2"
 //!   len       u32, the whole record's
 //!   line      u32, the macro's line in its source file
 //!   file      u32 length, then file!() - the macro's source file
 //!   text      u32 length, then the item as source - which cstruct.rs parses
 //!   nums      u32 count, then u64s: for a struct, its size and alignment,
 //!             then each field's offset, size and alignment, in order
+//!   names     u32 count, then pairs of u32 length and string: a type name
+//!             as the text writes it - the item's own, a field's - then
+//!             the type rustc resolved it to, type_name(): two files'
+//!             Btrees are different types, and the text can't say which
 //!
 //! A source file's records, ordered by line, are a header: foo/types.rs
 //! gives foo/types_gen.h, foo/bar_types.rs foo/bar_gen.h - and foo/bar.rs's
 //! #[c_export]s follow bar_types.rs's there. By file, not module, as mod.rs's
 //! #[path]s make the two differ.
 
-pub const RECORD_MAGIC: [u8; 4] = *b"CSR1";
+pub const RECORD_MAGIC: [u8; 4] = *b"CSR2";
 
-/// The length of the record for @file, @text and @nums numbers.
-pub const fn record_len(file: &str, text: &str, nums: usize) -> usize {
-    4 + 4 + 4 + 4 + file.len() + 4 + text.len() + 4 + 8 * nums
+/// The length of the record for @file, @text, @nums numbers and @names.
+pub const fn record_len(file: &str, text: &str, nums: usize, names: &[(&str, &str)]) -> usize {
+    let mut len = 4 + 4 + 4 + 4 + file.len() + 4 + text.len() + 4 + 8 * nums + 4;
+    let mut i = 0;
+    while i < names.len() {
+        len += 4 + names[i].0.len() + 4 + names[i].1.len();
+        i += 1;
+    }
+    len
 }
 
 const fn put<const LEN: usize>(mut out: [u8; LEN], mut at: usize, b: &[u8]) -> ([u8; LEN], usize) {
@@ -56,7 +66,8 @@ const fn put<const LEN: usize>(mut out: [u8; LEN], mut at: usize, b: &[u8]) -> (
 }
 
 /// The record: LEN is record_len() of the same arguments.
-pub const fn record<const LEN: usize>(file: &str, line: u32, text: &str, nums: &[u64]) -> [u8; LEN] {
+pub const fn record<const LEN: usize>(file: &str, line: u32, text: &str, nums: &[u64],
+                                      names: &[(&str, &str)]) -> [u8; LEN] {
     let out = [0u8; LEN];
     let (out, at) = put(out, 0, &RECORD_MAGIC);
     let (out, at) = put(out, at, &(LEN as u32).to_le_bytes());
@@ -69,6 +80,15 @@ pub const fn record<const LEN: usize>(file: &str, line: u32, text: &str, nums: &
     let mut i = 0;
     while i < nums.len() {
         (out, at) = put(out, at, &nums[i].to_le_bytes());
+        i += 1;
+    }
+    (out, at) = put(out, at, &(names.len() as u32).to_le_bytes());
+    let mut i = 0;
+    while i < names.len() {
+        (out, at) = put(out, at, &(names[i].0.len() as u32).to_le_bytes());
+        (out, at) = put(out, at, names[i].0.as_bytes());
+        (out, at) = put(out, at, &(names[i].1.len() as u32).to_le_bytes());
+        (out, at) = put(out, at, names[i].1.as_bytes());
         i += 1;
     }
     assert!(at == LEN, "CStruct record: length isn't record_len()'s");

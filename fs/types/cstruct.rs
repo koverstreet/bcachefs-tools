@@ -511,10 +511,19 @@ pub struct CEnumVariant {
 /// declaration less `typedef` - where the canonical rendering of @ty isn't.
 #[derive(Debug)]
 pub struct CTypedef {
-    pub cfg:    Option<Cfg>,
-    pub name:   String,
-    pub ty:     String,
-    pub c_decl: Option<String>,
+    pub cfg:       Option<Cfg>,
+    /// C's name - its Rust one too, but for #[c_name]: rust_name.
+    pub name:      String,
+    pub rust_name: Option<String>,
+    pub ty:        String,
+    pub c_decl:    Option<String>,
+}
+
+impl CTypedef {
+    #[allow(dead_code)]
+    pub fn rust_ident(&self) -> &str {
+        self.rust_name.as_deref().unwrap_or(&self.name)
+    }
 }
 
 /// c_rcu_array!: an RcuArray<@elem[, @head]> C reads, as `struct @c_name {
@@ -652,7 +661,7 @@ pub struct CTaggedArm {
 ///   tagged_union! {
 ///       pub struct disk_accounting_pos {
 ///           tag type_: u8 = disk_accounting_type,
-///           arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: bch_acct_ ## f = nr,
+///           arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: camel(f) = nr,
 ///           pad: Bpos,
 ///           size: pad,
 ///           packed,
@@ -1789,13 +1798,17 @@ fn parse_enum(body: &[Tok], cfg: Option<Cfg>) -> Result<CEnumDef, String> {
     Ok(CEnumDef { cfg, kind, name, repr, variants, from, own_to_text, c_name })
 }
 
-/// c_typedef!'s body: [#[c("C declarator")]] pub type NAME = TYPE;
+/// c_typedef!'s body: [#[c("C declarator")]] [#[c_name(NAME)]] pub type NAME = TYPE;
 fn parse_typedef(body: &[Tok], cfg: Option<Cfg>) -> Result<CTypedef, String> {
     let mut c_decl = None;
+    let mut c_name = None;
     let mut i = 0;
     while let Some((attr, next)) = attr_at(body, i)? {
         if let Some([Tok::Str(s, _)]) = attr_args(attr, "c") {
             c_decl = Some(s.clone());
+        }
+        if let Some([Tok::Ident(n)]) = attr_args(attr, "c_name") {
+            c_name = Some(n.clone());
         }
         i = next;
     }
@@ -1803,7 +1816,11 @@ fn parse_typedef(body: &[Tok], cfg: Option<Cfg>) -> Result<CTypedef, String> {
     match &body[i..] {
         [Tok::Ident(t), Tok::Ident(name), Tok::Punct('='), ty @ ..] if t == "type" && !ty.is_empty() => {
             let ty = ty.strip_suffix(&[Tok::Punct(';')]).unwrap_or(ty);
-            Ok(CTypedef { cfg, name: name.clone(), ty: tokens_to_rust(ty), c_decl })
+            let (name, rust_name) = match c_name {
+                Some(c) => (c, Some(name.clone())),
+                None    => (name.clone(), None),
+            };
+            Ok(CTypedef { cfg, name, rust_name, ty: tokens_to_rust(ty), c_decl })
         }
         _ => Err("c_typedef!: expected pub type NAME = TYPE;".into()),
     }
@@ -2370,6 +2387,13 @@ fn from_list_entry(f: &CFromList, entry: &str) -> Result<Vec<Tok>, String> {
     let mut out: Vec<Tok> = Vec::new();
     let mut k = 0;
     while k < subst.len() {
+        if let [Tok::Ident(c), Tok::Punct('('), Tok::Ident(n), Tok::Punct(')'), ..] = &subst[k..] {
+            if c == "camel" {
+                out.push(Tok::Ident(n.split('_').map(|w| w[..1].to_uppercase() + &w[1..]).collect()));
+                k += 4;
+                continue;
+            }
+        }
         if subst[k].is_punct('#') && subst.get(k + 1).is_some_and(|t| t.is_punct('#')) {
             let (Some(Tok::Ident(a) | Tok::Lit(a)), Some(Tok::Ident(b) | Tok::Lit(b))) =
                 (out.pop(), subst.get(k + 2).cloned()) else {
@@ -3398,6 +3422,123 @@ pub fn emit_items(items: &[CItem],
 }
 
 // ---- entry points ----------------------------------------------------------
+
+/// The type names @text's item writes - its own, its fields', arms' and
+/// prototypes' - for its record to say which type each is: each that's a
+/// plain path, under a pointer, reference or array, as the generator looks
+/// types up; not the item's generic parameters.
+#[allow(dead_code)]
+pub fn written_types(text: &str) -> Vec<String> {
+    let Ok(items) = parse_items(text) else { return Vec::new() };
+    let Ok(toks) = tokenize(text) else { return Vec::new() };
+    // `struct NAME<...>`: what's in the brackets
+    let mut generics = Vec::new();
+    for (i, w) in toks.windows(3).enumerate() {
+        if let [Tok::Ident(kw), Tok::Ident(_), t] = w {
+            if matches!(kw.as_str(), "struct" | "union" | "enum") && t.is_punct('<') {
+                let mut depth = 0;
+                for t in &toks[i + 2..] {
+                    match t {
+                        Tok::Punct('<') => depth += 1,
+                        Tok::Punct('>') => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        Tok::Ident(n) => generics.push(n.clone()),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    let mut tys = Vec::new();
+    for item in &items {
+        match item {
+            CItem::Struct(d) => {
+                if generics.is_empty() && d.lifetimes.is_empty() {
+                    tys.push(d.rust_ident().to_string());
+                }
+                // a #[c_bitfield]'s type is the bitfield's C, which Rust doesn't name
+                tys.extend(d.fields.iter().filter(|f| !f.bitfield).map(|f| f.ty.clone()));
+            }
+            CItem::Bitfield(b) => tys.extend(b.fields.iter().map(|(_, ty, _)| ty.clone())),
+            CItem::Enum(CEnumDef { name: Some(n), .. }) => tys.push(n.clone()),
+            CItem::Typedef(t) => tys.extend([t.rust_ident().to_string(), t.ty.clone()]),
+            CItem::TaggedUnion(tu) => tys.extend(tu.arms.iter().map(|a| a.ty.clone()).chain(tu.pad.clone())),
+            CItem::Extern(x) => {
+                for f in &x.fns {
+                    tys.extend(f.params.iter().map(|(_, ty)| ty.clone()).chain(f.ret.clone()));
+                }
+                tys.extend(x.statics.iter().map(|s| s.ty.clone()));
+            }
+            _ => {}
+        }
+    }
+
+    // A type as C sees one: under pointers, references, arrays, Option<>,
+    // NonNull<> and function pointers, a plain path
+    fn walk(t: &[Tok], out: &mut Vec<String>) {
+        let mut i = 0;
+        loop {
+            match t.get(i) {
+                Some(Tok::Punct('*' | '&')) | Some(Tok::Str(..)) => i += 1,
+                Some(Tok::Ident(k)) if matches!(k.as_str(), "mut" | "const" | "unsafe" | "extern") => i += 1,
+                Some(Tok::Lit(l)) if l.starts_with('\'') => i += 1,
+                _ => break,
+            }
+        }
+        let t = &t[i..];
+        match t {
+            [Tok::Punct('['), inner @ .., Tok::Punct(']')] => {
+                let end = inner.iter().position(|t| t.is_punct(';')).unwrap_or(inner.len());
+                walk(&inner[..end], out);
+            }
+            [Tok::Ident(o), Tok::Punct('<'), inner @ .., Tok::Punct('>')] if o == "Option" || o == "NonNull" =>
+                walk(inner, out),
+            [Tok::Ident(f), Tok::Punct('('), ..] if f == "fn" => {
+                let Ok(close) = skip_group(t, 1) else { return };
+                for a in split_top(&t[2..close - 1], ',') {
+                    walk(a, out);
+                }
+                if let [Tok::Punct('-'), Tok::Punct('>'), ret @ ..] = &t[close..] {
+                    walk(ret, out);
+                }
+            }
+            _ => {
+                let mut path = String::new();
+                let mut i = 0;
+                while let Some(Tok::Ident(n)) = t.get(i) {
+                    if RUST_KEYWORDS.contains(&n.as_str()) && n != "crate" && n != "super" {
+                        return;
+                    }
+                    path = if path.is_empty() { n.clone() } else { format!("{path}::{n}") };
+                    match (t.get(i + 1), t.get(i + 2)) {
+                        (Some(Tok::Punct(':')), Some(Tok::Punct(':'))) => i += 3,
+                        _ => {
+                            i += 1;
+                            break;
+                        }
+                    }
+                }
+                if i == t.len() && !path.is_empty() && !out.contains(&path) {
+                    out.push(path);
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for ty in &tys {
+        if let Ok(t) = tokenize(ty) {
+            walk(&t, &mut out);
+        }
+    }
+    out.retain(|p| !generics.contains(p));
+    out
+}
 
 /// Parse a derive's input: exactly one struct or union.
 #[allow(dead_code)]

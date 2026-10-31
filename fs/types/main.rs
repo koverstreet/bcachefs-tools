@@ -33,7 +33,7 @@ include!("cstruct.rs");
 
 const HEADER: &str = "/* SPDX-License-Identifier: GPL-2.0 */\n";
 
-const RECORD_MAGIC: &[u8; 4] = b"CSR1";
+const RECORD_MAGIC: &[u8; 4] = b"CSR2";
 
 /// One record: see lib.rs.
 struct Record {
@@ -41,6 +41,8 @@ struct Record {
     line:   u32,
     text:   String,
     nums:   Vec<u64>,
+    /// Each type name the text writes, and the type it is.
+    names:  Vec<(String, String)>,
 }
 
 /// A struct's layout, from its record's numbers.
@@ -91,10 +93,16 @@ fn records(mut b: &[u8]) -> Result<Vec<Record>, String> {
             .map(|i| r.get(at + 8 * i..at + 8 * i + 8).map(|s| u64::from_le_bytes(s.try_into().unwrap())))
             .collect::<Option<Vec<_>>>()
             .ok_or("record truncated")?;
-        if at + 8 * n != len {
+        at += 8 * n;
+        let n = u32_at(r, at)? as usize;
+        at += 4;
+        let names = (0..n)
+            .map(|_| Ok((str_at(r, &mut at)?, str_at(r, &mut at)?)))
+            .collect::<Result<Vec<_>, String>>()?;
+        if at != len {
             return Err(format!("{file}:{line}: record length doesn't match its contents"));
         }
-        out.push(Record { file, line, text, nums });
+        out.push(Record { file, line, text, nums, names });
         b = &b[len..];
     }
 }
@@ -183,7 +191,9 @@ fn defines_and_holds(r: &Record) -> (Vec<String>, Vec<String>) {
         Some(CItem::Struct(def)) =>
             ([Some(def.name.clone()), def.rust_name.clone()].into_iter().flatten().collect(),
              def.fields.iter().filter_map(|f| held(&f.ty)).collect()),
-        Some(CItem::Typedef(t)) => (vec![t.name.clone()], held(&t.ty).into_iter().collect()),
+        Some(CItem::Typedef(t)) =>
+            ([Some(t.name.clone()), t.rust_name.clone()].into_iter().flatten().collect(),
+             held(&t.ty).into_iter().collect()),
         Some(CItem::Bitfield(b)) => (vec![b.name.clone()], Vec::new()),
         Some(CItem::TaggedUnion(tu)) => (vec![tu.name.clone()],
             tu.arms.iter().map(|a| a.ty.as_str()).chain(tu.pad.as_deref()).filter_map(held).collect()),
@@ -354,9 +364,9 @@ fn member_asserts(out: &mut String, ty: &str, name: &str, offset: u64, size: u64
 
 /// The header for one source file's records, in order. @structs: every
 /// struct, union and typedef recorded, any file's - Rust name to C type - for
-/// the fields whose type is one.
+/// the fields whose type is one; @paths, the same by the type's full path.
 fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>,
-          enums: &BTreeMap<String, u64>)
+          paths: &BTreeMap<String, String>, enums: &BTreeMap<String, u64>)
     -> Result<String, String>
 {
     let mut items = Vec::new();
@@ -472,11 +482,19 @@ fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>,
         return Err(misplaced.join("\n"));
     }
 
+    // each name these records write, as the type rustc resolved it to: two
+    // files' Btrees are different types
+    let resolved: BTreeMap<&str, &str> = records.iter()
+        .flat_map(|r| &r.names)
+        .map(|(w, p)| (w.rsplit("::").next().unwrap_or(w), p.as_str()))
+        .collect();
+    let lookup = |name: &str| resolved.get(name).and_then(|p| paths.get(*p)).or_else(|| structs.get(name));
+
     // A field whose type is a recorded struct is that struct; any other
     // without a C rendering is Rust's alone: opaque storage, aligned as Rust
     // aligns it - up to the struct's packing.
     let opaque = |def: &CStructDef, f: &CFieldDef| -> Result<String, String> {
-        if let Some(c_type) = structs.get(f.ty.trim()) {
+        if let Some(c_type) = lookup(f.ty.trim()) {
             return Ok(format!("{c_type}\t{}", f.name));
         }
         let i = def.fields.iter().position(|x| x.name == f.name).unwrap();
@@ -493,7 +511,7 @@ fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>,
     };
     // util/darray.h's own darray_foos are typedefs too (types/lib.rs's
     // darrays has them for Rust)
-    let kind = |name: &str| structs.get(name).cloned()
+    let kind = |name: &str| lookup(name).cloned()
         .or_else(|| name.starts_with("darray_").then(|| name.to_string()));
     let body = emit_items(&items, &opaque, &kind)?;
 
@@ -590,9 +608,16 @@ fn main() {
 
             let mut files: BTreeMap<&str, Vec<&Record>> = BTreeMap::new();
             let mut structs = BTreeMap::new();
+            let mut paths = BTreeMap::new();
             let mut enums = BTreeMap::new();
             for r in &recs {
                 files.entry(&r.file).or_default().push(r);
+                // the type the record defines, by its full path
+                let mut path = |name: &str, c_type: String| {
+                    if let Some((_, p)) = r.names.iter().find(|(w, _)| w == name) {
+                        paths.insert(p.clone(), c_type);
+                    }
+                };
                 match parse_items(&r.text).ok().and_then(|mut items| items.pop()) {
                     // by C's name and Rust's - a family's definition, X__whole
                     // or X__head, by X too, the type code names
@@ -602,13 +627,18 @@ fn main() {
                         for n in [Some(def.name.as_str()), Some(rust), family].into_iter().flatten() {
                             structs.insert(n.to_string(), def.c_type());
                         }
+                        path(rust, def.c_type());
                     }
                     Some(CItem::TaggedUnion(tu)) => {
                         structs.insert(tu.name.clone(), tu.c_type());
                     }
                     // a C typedef: by its own name - u##_bits in an x-macro
-                    // struct body is u96 as well as u64
-                    Some(CItem::Typedef(t)) => { structs.insert(t.name.clone(), t.name.clone()); }
+                    // struct body is u96 as well as u64. Not by path: to rustc
+                    // an alias is the type it names
+                    Some(CItem::Typedef(t)) => {
+                        structs.insert(t.name.clone(), t.name.clone());
+                        structs.insert(t.rust_ident().to_string(), t.name.clone());
+                    }
                     // a field of one is C's pointer to its buffer's struct
                     Some(CItem::RcuArray(a)) => {
                         structs.insert(a.alias.clone(), format!("struct {} __rcu *", a.c_name));
@@ -618,6 +648,7 @@ fn main() {
                     Some(CItem::Enum(e)) if e.name.is_some() => {
                         let n = e.name.clone().unwrap();
                         let c = e.c_ident().unwrap_or(&n).to_string();
+                        path(&n, format!("enum {c}"));
                         for k in [n, c.clone()] {
                             structs.insert(k.clone(), format!("enum {c}"));
                             if let Some(&size) = r.nums.first() {
@@ -656,7 +687,7 @@ fn main() {
                         in_dependency_order(rs)
                     })
                     .collect();
-                let h = match file_h(&header, &rs, &structs, &enums) {
+                let h = match file_h(&header, &rs, &structs, &paths, &enums) {
                     Ok(h) => h,
                     Err(e) => { errors.push(e); continue; }
                 };

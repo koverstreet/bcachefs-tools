@@ -141,16 +141,20 @@ fn cfi_encoding(c_name: &str) -> String {
 /// The record of @text, and @nums: Rust expressions, the numbers that go
 /// with it - see fs/types/lib.rs.
 fn record(text: &str, nums: &[String]) -> String {
+    let names: String = cstruct::written_types(text).iter()
+        .map(|t| format!("({t:?}, ::core::any::type_name::<{t}>()), "))
+        .collect();
     format!(
         "#[cfg(bch_cstruct_records)]\n\
          const _: () = {{\n\
              const TEXT: &str = {text:?};\n\
              const NUMS: &[u64] = &[{}];\n\
-             const LEN: usize = crate::types::record_len(::core::file!(), TEXT, NUMS.len());\n\
+             const NAMES: &[(&str, &str)] = &[{names}];\n\
+             const LEN: usize = crate::types::record_len(::core::file!(), TEXT, NUMS.len(), NAMES);\n\
              #[used]\n\
              #[link_section = \".discard.bch_cstruct\"]\n\
              static RECORD: [u8; LEN] =\n\
-                 crate::types::record::<LEN>(::core::file!(), ::core::line!(), TEXT, NUMS);\n\
+                 crate::types::record::<LEN>(::core::file!(), ::core::line!(), TEXT, NUMS, NAMES);\n\
          }};\n",
         nums.join(", "))
 }
@@ -1267,7 +1271,7 @@ pub fn c_typedef(input: TokenStream) -> TokenStream {
         let text = format!("c_typedef! {{ {input} }}");
         let t = one_item!(&text, Typedef, "pub type NAME = TYPE;");
         Ok(tokens(&format!("#[allow(non_camel_case_types)]\npub type {} = {};\n{}",
-                           t.name, t.ty, record(&text, &[]))))
+                           t.rust_ident(), t.ty, record(&text, &[]))))
     })
 }
 

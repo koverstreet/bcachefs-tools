@@ -5,7 +5,7 @@
 //!       /// ...
 //!       pub struct disk_accounting_pos {
 //!           tag type_: u8 = disk_accounting_type,
-//!           arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: bch_acct_ ## f = nr,
+//!           arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: camel(f) = nr,
 //!           pad: Bpos,
 //!           size: pad,
 //!           packed,
@@ -67,6 +67,8 @@
 //!    storage holds (ArmError); Validated, Err(the tag), and an arm that
 //!    doesn't fit a bug. Shared references only: through a `&mut` to an
 //!    arm, a tag in the arm's own bits could change under whoever holds it.
+//!  - `len()` on a Ref, the bytes its arm takes from `ARMS_AT`, where arms
+//!    start - a tailed arm's, as many as its header says;
 //!  - `new()`, and `from_arm()` by the arm's type, Validated: the payload into
 //!    zeroed storage, then Determinant::set() marks it - stabby's order, so a
 //!    tag that's bits of the payload is the last thing written, not
@@ -128,7 +130,8 @@
 //! The arms come from an x-macro list: tagged_union! hands the declaration to
 //! it - LIST!(cstruct_macros::__tagged_union [decl]) - and the list calls
 //! back with its entries, each bound to the params, `..` the rest, and
-//! `A ## B` pasting - spaced, as Rust 2021 lexes `a##b` as a reserved prefix.
+//! `A ## B` pasting - spaced, as Rust 2021 lexes `a##b` as a reserved prefix -
+//! and `camel(a)`, a_b as AB.
 //!
 //! The arms' types can be defined in the block, each next to the others, as
 //! a Rust enum's variants are - comments and all:
@@ -138,11 +141,12 @@
 //!       #[c_typedef]*
 //!       pub struct disk_accounting_pos {
 //!           tag type_: u8 = disk_accounting_type,
-//!           arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: bch_acct_ ## f = nr,
+//!           arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: camel(f) = nr,
 //!           ...
 //!           /* Metadata accounting per btree id: ... */
 //!           #[repr(C, packed)]
-//!           pub struct bch_acct_btree {
+//!           #[c_name(bch_acct_btree)]
+//!           pub struct Btree {
 //!               pub id: u32,
 //!           },
 //!       }
@@ -422,6 +426,10 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
             format!("    {}(&'a <{} as {vs}::CountedHead>::Of<St>),\n", a.name, a.ty.trim())
         })
         .collect();
+    let lens: String = arms.iter()
+        .map(|a| format!("{en}Ref::{}(a) => ::core::mem::size_of_val(a),\n", a.name))
+        .collect();
+    let (st_impl, st_use) = if stated { (format!(", St: {vs}::State"), ", St") } else { (String::new(), "") };
     // get()'s arms, in state @st: @bad, what an arm whose header says it's
     // longer than the storage holds is
     let gets = |st: &str, bad: &str| -> String {
@@ -813,6 +821,15 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
          #[derive(Clone, Copy)]\n\
          {vis} enum {en}Ref<'a{st_param}> {{\n{by_ref}}}\n\
          \n\
+         impl<'a{st_impl}> {en}Ref<'a{st_use}> {{\n\
+             /// The bytes it takes, from {name}::ARMS_AT - a tailed arm's, as\n\
+             /// many as its header says.\n\
+             #[allow(dead_code)]\n\
+             {vis} fn len(&self) -> usize {{\n\
+                 match *self {{\n{lens}}}\n\
+             }}\n\
+         }}\n\
+         \n\
          impl<S> {name}<S> {{\n\
              /// The tag, whether this version knows it or not.\n\
              #[allow(dead_code)]\n\
@@ -843,6 +860,10 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
          \n\
          {unvalidated_impl}\
          impl {name}<{vs}::Validated> {{\n\
+             /// Where its arms start, in any state: after the tag.\n\
+             #[allow(dead_code)]\n\
+             {vis} const ARMS_AT: usize = {payload_offset};\n\
+             \n\
              /// The arm the tag selects - Err(the tag) if it isn't one of ours.\n\
              /// Validated, every arm fits in the storage.\n\
              #[allow(dead_code)]\n\

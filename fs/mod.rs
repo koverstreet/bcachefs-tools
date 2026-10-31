@@ -44,6 +44,8 @@
 // Unstable, as the kernel's own features are: the kernel build has
 // RUSTC_BOOTSTRAP=1, and so does ours (.cargo/config.toml).
 #![feature(auto_traits, negative_impls, context_ext, local_waker)]
+// A type's record says which type each name it writes is: type_name(), const.
+#![cfg_attr(bch_cstruct_records, feature(const_type_name))]
 // A cfg the build doesn't declare is an error, not a warning: a misspelled
 // CONFIG_ is code silently compiled out. And the kernel version checks,
 // cfg(linux_ge = "X.Y"), are declared only by a kernel build: userspace has
