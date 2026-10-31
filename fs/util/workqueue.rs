@@ -135,6 +135,12 @@ impl Queue {
         unsafe { Self::from_raw(c::system_dfl_wq) }
     }
 
+    /// system_highpri_wq: per-cpu, high priority.
+    pub fn system_highpri() -> &'static Queue {
+        // SAFETY: the system's
+        unsafe { Self::from_raw(c::system_highpri_wq) }
+    }
+
     /// Run @work here: queue_work(). False if it was queued already - then
     /// that run is the one there'll be.
     ///
