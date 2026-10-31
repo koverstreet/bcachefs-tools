@@ -14,10 +14,12 @@ use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::mem::size_of;
+use core::ops::Range;
 use core::ptr::NonNull;
 use core::slice;
 use cstruct_macros::{c_export, c_enum, c_extern, c_xmacro};
 use crate::format::{Bpos, Btree};
+use zerocopy::IntoBytes;
 
 c_xmacro! {
     BCH_TRANS_COMMIT_FLAGS(x) {
@@ -123,6 +125,12 @@ pub fn bch2_extent_whiteout_type(c: &Opaque<c::bch_fs>, btree: Btree, k: &c::bke
 
 // ── A transaction's updates, and log entries with its commit ────────────
 
+#[derive(Clone, Copy)]
+pub enum Subbuf {
+    JournalEntries,
+    Accounting,
+}
+
 impl TransAttempt<'_, '_> {
     /// The updates queued, for an error message.
     #[cold]
@@ -131,15 +139,28 @@ impl TransAttempt<'_, '_> {
         unsafe { c::bch2_trans_updates_to_text(out.as_raw(), self.raw()) }
     }
 
-    /// @u64s of journal entries to go in with this transaction's commit, for
-    /// one to be written into. The entries are a sub-buffer of transaction
-    /// memory, which grows by moving there; this is the attempt's, as the
-    /// rest of its memory is.
-    fn jset_entry_alloc(&self, u64s: usize) -> Result<&mut [u8], BchError> {
+    fn subbuf_raw(&self, which: Subbuf) -> *mut c::btree_trans_subbuf {
         let trans = self.raw();
-        // SAFETY: the transaction's entries, which only its attempt touches
+        unsafe {
+            match which {
+                Subbuf::JournalEntries => &raw mut (*trans).journal_entries,
+                Subbuf::Accounting     => &raw mut (*trans).accounting,
+            }
+        }
+    }
+
+    pub unsafe fn subbuf(&self, which: Subbuf) -> &mut [u64] {
+        let buf = self.subbuf_raw(which);
+        unsafe {
+            let base = (*self.raw()).mem.cast::<u64>().add(usize::from((*buf).base));
+            slice::from_raw_parts_mut(base, usize::from((*buf).u64s))
+        }
+    }
+
+    pub fn subbuf_alloc(&self, which: Subbuf, u64s: usize) -> Result<&mut [u64], BchError> {
+        let trans = self.raw();
+        let buf = self.subbuf_raw(which);
         let p = unsafe {
-            let buf = &raw mut (*trans).journal_entries;
             if usize::from((*buf).u64s) + u64s > usize::from((*buf).size) {
                 c::__bch2_trans_subbuf_alloc(trans, buf, u64s as c_uint, 0)
             } else {
@@ -148,9 +169,14 @@ impl TransAttempt<'_, '_> {
                 p.cast()
             }
         };
-        let p = errptr_to_result(NonNull::new(p).expect("journal entries, or an error"))?;
-        // SAFETY: @u64s of transaction memory, ours
-        Ok(unsafe { slice::from_raw_parts_mut(p.as_ptr().cast::<u8>(), u64s * size_of::<u64>()) })
+        let p = errptr_to_result(NonNull::new(p).expect("a sub-buffer's u64s, or an error"))?;
+        Ok(unsafe { slice::from_raw_parts_mut(p.as_ptr().cast::<u64>(), u64s) })
+    }
+
+    pub fn subbuf_remove(&self, which: Subbuf, range: Range<usize>) {
+        let len = range.len();
+        unsafe { self.subbuf(which) }.copy_within(range.end.., range.start);
+        unsafe { (*self.subbuf_raw(which)).u64s -= len as u16 };
     }
 
     /// An entry of @ty for @btree at @level, holding @data, with this
@@ -159,7 +185,8 @@ impl TransAttempt<'_, '_> {
         -> Result<(), BchError>
     {
         let u64s = c::JSET_KEYS_U64s + data.len().div_ceil(size_of::<u64>());
-        EntryWriter::new(self.jset_entry_alloc(u64s)?).push(ty, btree, level, &[data])
+        EntryWriter::new(self.subbuf_alloc(Subbuf::JournalEntries, u64s)?.as_mut_bytes())
+            .push(ty, btree, level, &[data])
             .expect("an entry the size allocated for it");
         Ok(())
     }
