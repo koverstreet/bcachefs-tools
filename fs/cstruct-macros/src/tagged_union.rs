@@ -69,6 +69,7 @@
 //!    storage holds (ArmError); Validated, Err(the tag), and an arm that
 //!    doesn't fit a bug. Shared references only: through a `&mut` to an
 //!    arm, a tag in the arm's own bits could change under whoever holds it.
+//!  - `validate()`, Unvalidated to Validated, if get() finds its arm fits;
 //!  - `len()` on a Ref, the bytes its arm takes from `ARMS_AT`, where arms
 //!    start - a tailed arm's, as many as its header says;
 //!  - `new()`, and `from_arm()` by the arm's type, Validated: the payload into
@@ -798,6 +799,22 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                      let b = &self.as_bytes()[{payload_offset}..];\n\
                      {gets_unvalidated}\
                      Err({vs}::ArmError::Unknown({t_tag}))\n\
+                 }}\n\
+                 \n\
+                 /// Validated, if its arm fits in the storage: get()'s check, kept. A\n\
+                 /// tag this version doesn't know passes - a Validated get() says so.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn validate(self) -> Result<{name}, {vs}::ArmError<{tag_enum}>> {{\n\
+                     self.validated().copied()\n\
+                 }}\n\
+                 \n\
+                 /// validate(), by reference: the same bytes, Validated.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn validated(&self) -> Result<&{name}, {vs}::ArmError<{tag_enum}>> {{\n\
+                     match self.get() {{\n\
+                         Err(e @ ({vs}::ArmError::Bad {{ .. }} | {vs}::ArmError::Short(_))) => Err(e),\n\
+                         _ => Ok(unsafe {{ &*::core::ptr::from_ref(self).cast::<{name}>() }}),\n\
+                     }}\n\
                  }}\n\
              }}\n\
              \n",
