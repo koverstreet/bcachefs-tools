@@ -115,7 +115,6 @@ static inline unsigned bch2_inode_shard_cpu(struct bch_fs *c)
 	return c->inode_shard_cpu[bch2_inode_shard_idx(c)];
 }
 
-#include "btree/locking_defs_gen.h"
 
 static inline int btree_node_locked_type(struct btree_path *path,
 					 unsigned level)

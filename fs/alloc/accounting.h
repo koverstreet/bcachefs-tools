@@ -6,7 +6,6 @@
 #include "sb/members.h"
 #include "util/eytzinger.h"
 
-#include "alloc/accounting_defs_gen.h"
 
 static inline void bch2_u64s_neg(u64 *v, unsigned nr)
 {

@@ -428,7 +428,6 @@ static inline bool bch2_dev_btree_bitmap_marked_sectors_any(struct bch_dev *ca, 
 	return false;
 }
 
-#include "sb/members_defs_gen.h"
 
 static inline void bch2_prt_member_name(struct printbuf *out, struct bch_fs *c, unsigned idx)
 {

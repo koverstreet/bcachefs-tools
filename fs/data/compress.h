@@ -10,7 +10,6 @@ static const unsigned __bch2_compression_opt_to_type[] = {
 #undef x
 };
 
-#include "data/compress_defs_gen.h"
 
 static inline enum bch_compression_type bch2_compression_opt_to_type(unsigned v)
 {

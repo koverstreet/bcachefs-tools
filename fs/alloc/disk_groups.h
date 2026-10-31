@@ -4,7 +4,6 @@
 
 #include "init/dev_gen.h"
 #include "alloc/disk_groups_gen.h"
-#include "alloc/disk_groups_defs_gen.h"
 
 static inline u16 dev_to_target(unsigned dev)
 {

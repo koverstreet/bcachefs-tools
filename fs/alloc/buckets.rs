@@ -33,9 +33,23 @@ use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, 
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::mem::size_of;
 use core::sync::atomic::{AtomicU8, Ordering};
-use cstruct_macros::{c_export, c_name, CStruct, bitfield, c_const, c_rcu_array, Fieldwise, TypeInfo};
+use cstruct_macros::{c_export, c_name, CStruct, bitfield, c_const, c_rcu_array, Fieldwise, TypeInfo, c_enum};
 use core::cell::Cell;
 use nestify::nest;
+
+c_enum! {
+    #[flags]
+    pub enum bch_reservation_flags: u32 {
+        BCH_DISK_RESERVATION_NOFAIL = 1 << 0,
+        BCH_DISK_RESERVATION_PARTIAL = 1 << 1,
+    }
+}
+
+#[repr(C)]
+#[derive(CStruct)]
+pub struct disk_reservation_destructable {
+    pub r: c::disk_reservation,
+}
 
 c_const! {
     #[c_int]

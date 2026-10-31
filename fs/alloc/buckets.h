@@ -403,7 +403,6 @@ static inline void bch2_disk_reservation_put(struct bch_fs *c,
 	}
 }
 
-#include "alloc/buckets_defs_gen.h"
 
 
 /*

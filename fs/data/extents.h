@@ -9,7 +9,6 @@
 #include "data/extents_gen.h"
 #include "data/ptrs_gen.h"
 
-#include "data/extents_defs_gen.h"
 
 /* extent entries: */
 

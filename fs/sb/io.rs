@@ -146,7 +146,7 @@ use crate::util::projections::{AtomicWord, Volatile, VolatileWriter, PublishedOn
 use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
-use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64, rust_only};
+use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64, rust_only, c_default};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
@@ -158,12 +158,43 @@ use crate::util::task::waiter;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::NSEC_PER_SEC;
 use crate::util::time_stats::TimeStats;
-use cstruct_macros::{c_const, c_export, CStruct, TypeInfo};
+use cstruct_macros::{c_const, c_export, CStruct, TypeInfo, c_enum};
 use core::mem::{size_of, size_of_val};
 use arrayvec::ArrayVec;
 use core::pin::Pin;
 use pin_init::PinInit;
 use crate::published;
+
+/*
+ * bringup: this write is part of bringing the filesystem up - allowed before
+ * a start has begun, see __bch2_write_super()
+ */
+c_enum! {
+    #[flags]
+    pub enum bch_sb_write_flags: u32 {
+        BCH_SB_WRITE_bringup = 1 << 0,
+    }
+}
+
+/*
+ * Permission to modify a superblock field, and the thing that writes it back.
+ * Hold sb_lock - guard(mutex_noio)(&c->sb_lock) - and declare one of these
+ * under it. Declaration order is load-bearing: declared after the lock guard,
+ * this destructs first, so the write happens while sb_lock is still held.
+ *
+ * The setters return whether the fact was NEW, which is the caller's business
+ * (an fsck message unsuppresses on novelty). The write-back accumulates
+ * separately, so forgetting to use that return can't lose a superblock write.
+ */
+#[repr(C)]
+#[derive(Clone, Copy, CStruct)]
+pub struct sb_write {
+    pub c: *mut c::bch_fs,
+    pub dirty: bool,
+    pub replicas: bool,
+    pub flags: c::bch_sb_write_flags,
+}
+c_default!(sb_write);
 
 /*
  * Updated by sb_update(): what's read of the superblock without sb_lock,

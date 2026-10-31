@@ -54,7 +54,6 @@ static inline size_t bch2_sb_field_bytes(struct bch_sb_field *f)
 	       sizeof(_f->entries[0]))					\
 	    : 0)
 
-#include "sb/io_defs_gen.h"
 
 static inline __le64 bch2_sb_magic(struct bch_fs *c)
 {

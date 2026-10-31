@@ -2,7 +2,6 @@
 #define _BCACHEFS_RECOVERY_PASSES_H
 
 #include "init/passes_gen.h"
-#include "init/passes_defs_gen.h"
 
 /*
  * A pass is only ever scheduled because it has work to do, so anything

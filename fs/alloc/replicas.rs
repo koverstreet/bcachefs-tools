@@ -36,9 +36,22 @@ use core::ffi::{c_int, c_uint};
 use core::fmt;
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicI32, Ordering};
-use cstruct_macros::{c_export, CStruct, TypeInfo};
+use cstruct_macros::{c_export, CStruct, TypeInfo, c_enum};
 use crate::sb::io::SbResize;
 use crate::types::c_default;
+
+c_enum! {
+    #[closed]
+    pub enum bch_write_check: u32 {
+        /* Starting: is there anywhere to write each data type at all? */
+        BCH_WRITE_CHECK_start,
+        /*
+         * A device leaving the rw set: also refuse, unless the matching force
+         * flag is set, if that takes a data type below its configured replicas
+         */
+        BCH_WRITE_CHECK_dev_leaving_rw,
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]

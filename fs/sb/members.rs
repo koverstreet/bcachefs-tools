@@ -23,6 +23,20 @@ use core::ffi::{c_int, c_uint, c_ulong, CStr};
 use core::sync::atomic::Ordering;
 use cstruct_macros::{c_export, CStruct, Plain, TypeInfo};
 use super::io::*;
+use crate::types::c_default;
+
+#[repr(C)]
+#[derive(Clone, Copy, CStruct, TypeInfo)]
+pub struct bch_dev_identity {
+    #[c("char name[sizeof(((struct bch_member *) NULL) -> device_name) + 1]")]
+    pub name: [c_char; 16 + 1],
+    #[c("char model[sizeof(((struct bch_member *) NULL) -> device_model) + 1]")]
+    pub model: [c_char; 64 + 1],
+    #[c("char serial[sizeof(((struct bch_member *) NULL) -> device_serial) + 1]")]
+    pub serial: [c_char; 64 + 1],
+    pub rotational: bool,
+}
+c_default!(bch_dev_identity);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]

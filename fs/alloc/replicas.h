@@ -15,7 +15,6 @@ static inline void bch2_replicas_entry_cached(struct bch_replicas_entry_v1 *e,
 	e->devs[0]	= dev;
 }
 
-#include "alloc/replicas_defs_gen.h"
 
 static inline void bch2_replicas_entry_put(struct bch_fs *c, struct bch_replicas_entry_v1 *r)
 {

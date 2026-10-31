@@ -4,14 +4,10 @@
 //! of foo/bar.h's types, whose C is generated from it - see types/lib.rs.
 //! btree/types.rs and fs/dirent_format.rs are modules of their own already.
 
-#[path = "alloc/accounting_defs.rs"] pub mod alloc_accounting_defs;
 #[path = "alloc/accounting_format.rs"] pub mod alloc_accounting_format;
-#[path = "alloc/buckets_defs.rs"] pub mod alloc_buckets_defs;
-#[path = "alloc/disk_groups_defs.rs"] pub mod alloc_disk_groups_defs;
 #[path = "alloc/disk_groups_format.rs"] pub mod alloc_disk_groups_format;
 #[path = "alloc/format.rs"] pub mod alloc_format;
 #[path = "alloc/lru_format.rs"] pub mod alloc_lru_format;
-#[path = "alloc/replicas_defs.rs"] pub mod alloc_replicas_defs;
 #[path = "alloc/replicas_format.rs"] pub mod alloc_replicas_format;
 #[path = "alloc/types.rs"] pub mod alloc_types;
 #[path = "bcachefs_format_types.rs"] pub mod bcachefs_format_types;
@@ -19,21 +15,18 @@
 #[path = "bcachefs_types.rs"] pub mod bcachefs_types;
 #[path = "btree/bkey_defs.rs"] pub mod btree_bkey_defs;
 #[path = "btree/bkey_types.rs"] pub mod btree_bkey_types;
-#[path = "btree/bset_types.rs"] pub mod btree_bset_types;
-#[path = "btree/check_types.rs"] pub mod btree_check_types;
 #[path = "btree/interior_defs.rs"] pub mod btree_interior_defs;
 #[path = "btree/journal_overlay_defs.rs"] pub mod btree_journal_overlay_defs;
+#[path = "btree/write_buffer_defs.rs"] pub mod btree_write_buffer_defs;
+#[path = "btree/bset_types.rs"] pub mod btree_bset_types;
+#[path = "btree/check_types.rs"] pub mod btree_check_types;
 #[path = "btree/key_cache_types.rs"] pub mod btree_key_cache_types;
-#[path = "btree/locking_defs.rs"] pub mod btree_locking_defs;
 #[path = "btree/node_scan_types.rs"] pub mod btree_node_scan_types;
 #[path = "btree/sort_types.rs"] pub mod btree_sort_types;
-#[path = "btree/write_buffer_defs.rs"] pub mod btree_write_buffer_defs;
 #[path = "btree/write_types.rs"] pub mod btree_write_types;
-#[path = "data/compress_defs.rs"] pub mod data_compress_defs;
 #[path = "data/ec/create_types.rs"] pub mod data_ec_create_types;
 #[path = "data/ec/format.rs"] pub mod data_ec_format;
 #[path = "data/ec/types.rs"] pub mod data_ec_types;
-#[path = "data/extents_defs.rs"] pub mod data_extents_defs;
 #[path = "data/extents_format.rs"] pub mod data_extents_format;
 #[path = "data/extents_sb_format.rs"] pub mod data_extents_sb_format;
 #[path = "data/move_defs.rs"] pub mod data_move_defs;
@@ -51,7 +44,6 @@
 #[path = "fs/quota_format.rs"] pub mod fs_quota_format;
 #[path = "fs/xattr_format.rs"] pub mod fs_xattr_format;
 #[path = "init/damage_format.rs"] pub mod init_damage_format;
-#[path = "init/passes_defs.rs"] pub mod init_passes_defs;
 #[path = "init/passes_format.rs"] pub mod init_passes_format;
 #[path = "journal/journal_types.rs"] pub mod journal_journal_types;
 #[path = "journal/reclaim_types.rs"] pub mod journal_reclaim_types;
@@ -60,8 +52,6 @@
 #[path = "sb/counters_format.rs"] pub mod sb_counters_format;
 #[path = "sb/downgrade_format.rs"] pub mod sb_downgrade_format;
 #[path = "sb/errors_format.rs"] pub mod sb_errors_format;
-#[path = "sb/io_defs.rs"] pub mod sb_io_defs;
-#[path = "sb/members_defs.rs"] pub mod sb_members_defs;
 #[path = "sb/members_format.rs"] pub mod sb_members_format;
 #[path = "snapshots/format.rs"] pub mod snapshots_format;
 #[path = "snapshots/types.rs"] pub mod snapshots_types;
@@ -119,19 +109,19 @@ pub mod c {
 
     pub use crate::btree::types::*;
     pub use crate::dirent::format::*;
-    pub use super::alloc_accounting_defs::*;
+    pub use crate::accounting::{BCH_ACCOUNTING_gc, BCH_ACCOUNTING_normal, BCH_ACCOUNTING_read, bch2_accounting_mem_gc, bch2_accounting_mem_has_replicas, bch2_dev_usage_remove, bch2_disk_accounting_mod_gc, bch2_disk_accounting_mod_normal, bch2_fs_accounting_read, bch2_fs_replicas_usage_read, bch2_mod_dev_cached_sectors, bch_accounting_mode, rust_bch2_accounting_mem_read};
     pub use super::alloc_accounting_format::*;
     pub use crate::accounting::{accounting_mem_entry, bch_accounting_mem};
     pub use crate::alloc::backpointers::{bp_scan_iter};
-    pub use super::alloc_buckets_defs::*;
+    pub use crate::alloc::buckets::{BCH_DISK_RESERVATION_NOFAIL, BCH_DISK_RESERVATION_PARTIAL, bch_reservation_flags, disk_reservation_destructable};
     pub use crate::alloc::buckets::{BCH_DEV_POS_FRAC_BITS, BucketData, BucketGensArray, BucketGensHead, DiskReservation, RESERVE_FACTOR, bch_dev_usage, bch_dev_usage_full, bch_dev_usage_type, bch_fs_placeable, bch_fs_usage_base, bch_fs_usage_short, bucket, disk_reservation};
-    pub use super::alloc_disk_groups_defs::*;
+    pub use crate::alloc::disk_groups::{TARGET_DEV, TARGET_DEV_START, TARGET_GROUP, TARGET_GROUP_START, TARGET_NULL, bch_target_type, target, target_id};
     pub use super::alloc_disk_groups_format::*;
     pub use crate::alloc::disk_groups::{DiskGroups, bch_disk_group_cpu};
     pub use crate::alloc::foreground::{alloc_btree_bitmap, alloc_request, alloc_request_bits, alloc_trace_entry, alloc_trace_entry_bits, dev_alloc_list};
     pub use super::alloc_format::*;
     pub use super::alloc_lru_format::*;
-    pub use super::alloc_replicas_defs::*;
+    pub use crate::alloc::replicas::{BCH_WRITE_CHECK_dev_leaving_rw, BCH_WRITE_CHECK_start, bch_write_check};
     pub use super::alloc_replicas_format::*;
     pub use crate::alloc::replicas::{bch_replicas_padded};
     pub use super::alloc_types::*;
@@ -153,7 +143,7 @@ pub mod c {
     pub use crate::btree::journal_overlay::{OverwriteRange, OverwriteRanges, OverwriteRangesLive, OverwriteRangesLiveWriter, journal_key, journal_key_flags, journal_key_id, journal_key_journal_pos, journal_key_src, journal_keys, journal_ptr, journal_replay};
     pub(crate) use crate::btree::journal_overlay::{__journal_key_flags_forward, __journal_key_id_forward};
     pub use super::btree_key_cache_types::*;
-    pub use super::btree_locking_defs::*;
+    pub use crate::btree::locking::{BTREE_NODE_INTENT_LOCKED, BTREE_NODE_READ_LOCKED, BTREE_NODE_UNLOCKED, BTREE_NODE_WRITE_LOCKED, btree_node_locked_type};
     pub use crate::btree::locking::{bch2_check_for_deadlock, lock_graph, rust_bch2_inode_shard_idx, trans_waiting_for_lock, trans_waiting_for_lock_bits};
     pub(crate) use crate::btree::locking::{__trans_waiting_for_lock_bits_forward};
     pub use super::btree_node_scan_types::*;
@@ -166,12 +156,13 @@ pub mod c {
     pub use crate::btree::write_buffer::{BCH_WB_BTREE_NR, BCH_WB_BTREE_accounting, BCH_WB_BTREE_backpointers, BCH_WB_BTREE_deleted_inodes, BCH_WB_BTREE_lru, BCH_WB_BTREE_need_discard, BCH_WB_BTREE_reconcile_hipri, BCH_WB_BTREE_reconcile_hipri_phys, BCH_WB_BTREE_reconcile_pending, BCH_WB_BTREE_reconcile_work, BCH_WB_BTREE_reconcile_work_phys, BCH_WB_BTREE_stripe_backpointers, BTREE_WRITE_BUFERED_VAL_U64s_MAX, WB_FLUSH_NR, WB_FLUSH_journal_pin, WB_FLUSH_maybe, WB_FLUSH_sync, WB_FLUSH_thread, WB_FLUSH_tryflush, bch2_btree_write_buffer_flush_sync, bch2_btree_write_buffer_maybe_flush, bch2_btree_write_buffer_to_text, bch2_btree_write_buffer_tryflush, bch_fs_btree_write_buffer, bch_wb_btree, btree_write_buffer_keys, btree_write_buffered_key, wb_flush_caller, wb_key_ref, wb_key_ref_key, wb_key_ref_pos_idx, wb_key_ref_words};
     pub(crate) use crate::btree::write_buffer::{BCH_WRITE_BUFFER_BTREES, WB_FLUSH_CALLERS};
     pub use super::btree_write_types::*;
-    pub use super::data_compress_defs::*;
+    pub use crate::data::compress::{BB_kmalloc, BB_mempool, BB_none, BB_vmap, bbuf, bbuf_type, bch_compression_opt, bch_compression_opt_bits, bch_compression_opt_fields};
+    pub(crate) use crate::data::compress::{__bch_compression_opt_bits_forward};
     pub use crate::data::copygc::{bch_fs_copygc};
     pub use super::data_ec_create_types::*;
     pub use super::data_ec_format::*;
     pub use super::data_ec_types::*;
-    pub use super::data_extents_defs::*;
+    pub use crate::data::extents::{bch_extent_crc, bkey_durability, bkey_ptrs, bkey_ptrs_c};
     pub use super::data_extents_format::*;
     pub use super::data_extents_sb_format::*;
     pub use crate::data::extents::{BCH_READ_hard_require_read_device, BCH_READ_in_retry, BCH_READ_last_fragment, BCH_READ_may_promote, BCH_READ_must_bounce, BCH_READ_must_clone, BCH_READ_no_poison_check, BCH_READ_retry_if_stale, BCH_READ_soft_require_read_device, BCH_READ_user_mapped, __BCH_READ_hard_require_read_device, __BCH_READ_in_retry, __BCH_READ_last_fragment, __BCH_READ_may_promote, __BCH_READ_must_bounce, __BCH_READ_must_clone, __BCH_READ_no_poison_check, __BCH_READ_retry_if_stale, __BCH_READ_soft_require_read_device, __BCH_READ_user_mapped, __bch_read_flags, bch_dev_io_failures, bch_dev_io_failures_bits, bch_io_failures, bch_extent_crc_unpacked, bch_read_flags, extent_ptr_decoded};
@@ -212,7 +203,7 @@ pub mod c {
     pub(crate) use crate::init::dev::{__bch_sb_handle_bits_forward};
     pub use crate::init::error::{bch_fs_errors, fsck_damaged_path};
     pub(crate) use crate::init::error::{ErrorsLocked, FsckErrState};
-    pub use super::init_passes_defs::*;
+    pub use crate::init::passes::{RUN_RECOVERY_PASS_ephemeral, RUN_RECOVERY_PASS_ratelimit, RUN_RECOVERY_PASS_skip_if_complete, bch_run_recovery_pass_flags};
     pub use super::init_passes_format::*;
     pub use crate::init::passes::{RecoveryWords, RecoveryWordsWriter, bch_fs_recovery, bch_recovery_runner};
     pub use crate::init::progress::{progress_indicator};
@@ -229,9 +220,9 @@ pub mod c {
     pub use super::sb_errors_format::*;
     pub use crate::sb::errors::{bch_sb_error_entry_cpu, bch_sb_error_entry_cpu_bits, bch_sb_errors_cpu};
     pub(crate) use crate::sb::errors::{BCH_BLK_STS_SB_ERRS, BCH_DECOMPRESS_SB_ERRS, __bch_sb_error_entry_cpu_bits_forward};
-    pub use super::sb_io_defs::*;
+    pub use crate::sb::io::{BCH_SB_WRITE_bringup, bch_sb_write_flags, sb_write};
     pub use crate::sb::io::{bch_sb_cpu, bch_sb_cpuWriter};
-    pub use super::sb_members_defs::*;
+    pub use crate::sb::members::{bch_dev_identity};
     pub use super::sb_members_format::*;
     pub use crate::sb::members::{bch_member_cpu};
     pub use super::snapshots_format::*;

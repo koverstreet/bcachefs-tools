@@ -13,8 +13,35 @@ pub use c::bch_data_type;
 pub use c::bch_compression_type;
 pub use c::bch_reconcile_accounting_type;
 use crate::types::{DArray, c_default};
-use core::ffi::c_uint;
-use cstruct_macros::{CStruct, TypeInfo};
+use core::ffi::{c_uint, c_int};
+use cstruct_macros::{CStruct, TypeInfo, c_enum, c_extern};
+
+c_enum! {
+    #[closed]
+    pub enum bch_accounting_mode: u32 {
+        BCH_ACCOUNTING_normal,
+        BCH_ACCOUNTING_gc,
+        BCH_ACCOUNTING_read,
+    }
+}
+
+c_extern! {
+    pub fn bch2_fs_replicas_usage_read(c: *mut c::bch_fs, usage: *mut c::darray_char) -> c_int;
+    pub fn bch2_fs_accounting_read(c: *mut c::bch_fs, out: *mut c::darray_char, types_mask: c_uint) -> c_int;
+    pub fn bch2_disk_accounting_mod_normal(trans: *mut c::btree_trans,
+                                           k: *mut c::disk_accounting_pos, d: *mut i64,
+                                           nr: c_uint) -> c_int;
+    pub fn bch2_disk_accounting_mod_gc(trans: *mut c::btree_trans, k: *mut c::disk_accounting_pos,
+                                       d: *mut i64, nr: c_uint) -> c_int;
+    pub fn rust_bch2_accounting_mem_read(c: *mut c::bch_fs, p: c::bpos, v: *mut u64, nr: c_uint);
+    pub fn bch2_accounting_mem_gc(c: *mut c::bch_fs);
+    pub fn bch2_dev_usage_remove(c: *mut c::bch_fs, ca: *mut c::bch_dev) -> c_int;
+    pub fn bch2_mod_dev_cached_sectors(trans: *mut c::btree_trans, dev: c_uint, sectors: i64,
+                                       gc: bool) -> c_int;
+    pub fn bch2_accounting_mem_has_replicas(c: *mut c::bch_fs,
+                                            r: *const crate::util::vstructs::Head<c::bch_replicas_entry_v1>)
+        -> bool;
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]

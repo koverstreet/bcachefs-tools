@@ -11,8 +11,21 @@ use crate::locking::{Guard, Locked, RawTryLock};
 use crate::c;
 use crate::types::{DArray, c_default};
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{bitfield, c_extern, CStruct};
+use cstruct_macros::{bitfield, c_extern, CStruct, c_enum};
 use nestify::nest;
+
+/* path lock state */
+
+/* matches six lock types */
+c_enum! {
+    #[closed]
+    pub enum btree_node_locked_type: i32 {
+        BTREE_NODE_UNLOCKED = -1,
+        BTREE_NODE_READ_LOCKED = c::SIX_LOCK_read as i32,
+        BTREE_NODE_INTENT_LOCKED = c::SIX_LOCK_intent as i32,
+        BTREE_NODE_WRITE_LOCKED = c::SIX_LOCK_write as i32,
+    }
+}
 
 c_extern! {
     pub fn rust_bch2_inode_shard_idx(c: *mut c::bch_fs) -> u64;
