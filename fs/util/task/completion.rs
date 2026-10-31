@@ -19,8 +19,8 @@
 //!     waiter    owed, the waiter waits
 //!     null      done
 //!
-//! A task's wake is a claim (task/mod.rs): complete() writes to the task only
-//! if it's parked on this Done.
+//! A task's wake (TaskRef::wake(), task/mod.rs) writes to the task only if
+//! it's parked on this Done.
 
 use crate::c;
 use crate::util::rcu;
@@ -119,9 +119,8 @@ impl sealed::Waiter for waiter::Async {
         (self.0).0.cast()
     }
 
-    /// A claim: the task, if it's parked on @done.
     unsafe fn wake(p: NonNull<()>, done: NonNull<()>) {
-        unsafe { super::claim(p.cast(), done.cast()) };
+        unsafe { super::TaskRef(p.cast()).wake(done.cast()) };
     }
 }
 

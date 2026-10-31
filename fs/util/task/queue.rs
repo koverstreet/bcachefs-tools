@@ -6,7 +6,7 @@
 //! queue's EventCount; run() takes the stack whole and runs it oldest first,
 //! in the order the tasks were woken.
 
-use super::{run, Header};
+use super::{Header, TaskRef};
 use crate::util::futex::EventCount;
 use core::marker::PhantomPinned;
 use core::pin::Pin;
@@ -16,7 +16,7 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 /// Pinned: its tasks hold its address. Its owner joins them all before it's
 /// gone.
 pub struct RunQueue {
-    /// Newest first, through rq_next.
+    /// Newest first, through runq_next.
     head:    AtomicPtr<Header>,
     events:  EventCount,
     _pinned: PhantomPinned,
@@ -41,7 +41,7 @@ impl RunQueue {
         let hr = unsafe { h.as_ref() };
         let mut head = self.head.load(Ordering::Relaxed);
         loop {
-            hr.rq_next.store(head, Ordering::Relaxed);
+            hr.runq_next.store(head, Ordering::Relaxed);
             match self.head.compare_exchange_weak(head, h.as_ptr(), Ordering::Release, Ordering::Relaxed) {
                 Ok(_)    => break,
                 Err(cur) => head = cur,
@@ -60,15 +60,15 @@ impl RunQueue {
         while let Some(h) = NonNull::new(next) {
             // SAFETY: dispatched here: ours to run
             let hr = unsafe { h.as_ref() };
-            next = hr.rq_next.load(Ordering::Relaxed);
-            hr.rq_next.store(oldest, Ordering::Relaxed);
+            next = hr.runq_next.load(Ordering::Relaxed);
+            hr.runq_next.store(oldest, Ordering::Relaxed);
             oldest = h.as_ptr();
         }
 
         while let Some(h) = NonNull::new(oldest) {
             // read before it's run, and maybe freed
-            oldest = unsafe { h.as_ref() }.rq_next.load(Ordering::Relaxed);
-            unsafe { run(h) };
+            oldest = unsafe { h.as_ref() }.runq_next.load(Ordering::Relaxed);
+            unsafe { TaskRef(h).run() };
         }
     }
 }
