@@ -103,8 +103,9 @@ pub struct bkey_unpack_field {
 }
 
 #[repr(C)]
+#[c_name(btree)]
 #[derive(CStruct)]
-pub struct btree {
+pub struct BtreeNode {
     pub c: cs::btree_bkey_cached_common,
 
     pub hash: cs::rhash_head,
@@ -200,7 +201,7 @@ pub struct btree {
 
     pub cache_state: cs::btree_node_cache_state,
 }
-c_default!(btree);
+c_default!(BtreeNode);
 
 c_enum! {
     #[closed]
@@ -315,10 +316,10 @@ crate::published! {
 
 impl BtreeRootsLive {
     /// Btree @id's root node: bch2_btree_id_root_b().
-    pub fn node(&self, id: u32) -> Option<&cs::btree> {
+    pub fn node(&self, id: u32) -> Option<&cs::BtreeNode> {
         let b = self.roots_b.get(id as usize)?.get() & !((1 << cs::BTREE_ROOT_LEVEL_BITS) - 1);
         // SAFETY: a root's node, live while it's the root
-        unsafe { (b as *const cs::btree).as_ref() }
+        unsafe { (b as *const cs::BtreeNode).as_ref() }
     }
 }
 
@@ -514,7 +515,7 @@ c_typedef! {
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct btree_path_level {
-    pub b: *mut cs::btree,
+    pub b: *mut cs::BtreeNode,
     pub iter: cs::btree_node_iter,
     pub lock_seq: u32,
     #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
@@ -625,7 +626,7 @@ pub type btree_iter = BtreeIter<'static>;
 #[derive(Clone, Copy, CStruct)]
 pub struct get_locks_fail {
     pub l: c_uint,
-    pub b: *mut cs::btree,
+    pub b: *mut cs::BtreeNode,
 }
 c_default!(get_locks_fail);
 

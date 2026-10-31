@@ -30,7 +30,7 @@ c_default!(journal_iter);
 #[derive(Clone, Copy, CStruct)]
 pub struct btree_and_journal_iter {
     pub trans: *mut c::btree_trans,
-    pub b: *mut c::btree,
+    pub b: *mut c::BtreeNode,
     pub node_iter: c::btree_node_iter,
     pub unpacked: c::bkey,
 

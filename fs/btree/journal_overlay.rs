@@ -872,7 +872,7 @@ impl c::btree_and_journal_iter {
     ///
     /// # Safety
     /// @trans and @b are live, @b locked, for as long as the iterator.
-    unsafe fn new(trans: *mut c::btree_trans, b: *mut c::btree, node_iter: c::btree_node_iter, pos: Bpos)
+    unsafe fn new(trans: *mut c::btree_trans, b: *mut c::BtreeNode, node_iter: c::btree_node_iter, pos: Bpos)
         -> Self
     {
         let mut iter = Self {
@@ -910,7 +910,7 @@ pub fn bch2_btree_and_journal_iter_peek(c: &Opaque<c::bch_fs>, iter: &mut c::btr
 #[c_export]
 pub unsafe fn __bch2_btree_and_journal_iter_init_node_iter(trans: *mut c::btree_trans,
                                                           iter: *mut c::btree_and_journal_iter,
-                                                          b: *mut c::btree, node_iter: c::btree_node_iter,
+                                                          b: *mut c::BtreeNode, node_iter: c::btree_node_iter,
                                                           pos: Bpos) {
     // SAFETY: the caller's
     unsafe { iter.write(c::btree_and_journal_iter::new(trans, b, node_iter, pos)) }
@@ -924,7 +924,7 @@ pub unsafe fn __bch2_btree_and_journal_iter_init_node_iter(trans: *mut c::btree_
 #[c_export]
 pub unsafe fn bch2_btree_and_journal_iter_init_node_iter(trans: *mut c::btree_trans,
                                                         iter: *mut c::btree_and_journal_iter,
-                                                        b: *mut c::btree) {
+                                                        b: *mut c::BtreeNode) {
     let mut node_iter = c::btree_node_iter::default();
     // SAFETY: the caller's
     unsafe {

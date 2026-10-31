@@ -7,5 +7,5 @@ use cstruct_macros::c_extern;
 
 c_extern! {
     pub fn bch2_btree_node_ondisk_to_text(out: *mut c::printbuf, c: *mut c::bch_fs,
-                                          b: *const c::btree);
+                                          b: *const c::BtreeNode);
 }

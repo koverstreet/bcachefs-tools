@@ -23,7 +23,7 @@ nest! {
     pub struct btree_read_bio {
         pub c: *mut c::bch_fs,
         pub ca: *mut c::bch_dev, /* stashed at submit; see bch_write_bio */
-        pub b: *mut c::btree,
+        pub b: *mut c::BtreeNode,
         pub start_time: u64,
         #[c_bitfield]
         #>[bitfield(u8, ty = u32)]

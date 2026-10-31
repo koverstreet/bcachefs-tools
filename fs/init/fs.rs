@@ -311,7 +311,7 @@ impl Fs {
         }
     }
 
-    pub fn btree_id_root(&self, id: u32) -> Option<&c::btree> {
+    pub fn btree_id_root(&self, id: u32) -> Option<&c::BtreeNode> {
         self.btree.cache.roots.node(id)
     }
 

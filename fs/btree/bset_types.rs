@@ -173,10 +173,10 @@ pub struct bset_stats {
 }
 
 c_extern! {
-    pub fn bch2_btree_node_iter_bfloat_to_text(out: *mut c::printbuf, b: *mut c::btree,
+    pub fn bch2_btree_node_iter_bfloat_to_text(out: *mut c::printbuf, b: *mut c::BtreeNode,
                                                iter: *mut c::btree_node_iter);
-    pub fn bch2_btree_node_iter_init_from_start(iter: *mut c::btree_node_iter, b: *mut c::btree);
-    pub fn bch2_btree_node_iter_advance(iter: *mut c::btree_node_iter, b: *mut c::btree);
-    pub fn bch2_btree_node_iter_peek_unpack(iter: *mut c::btree_node_iter, b: *mut c::btree,
+    pub fn bch2_btree_node_iter_init_from_start(iter: *mut c::btree_node_iter, b: *mut c::BtreeNode);
+    pub fn bch2_btree_node_iter_advance(iter: *mut c::btree_node_iter, b: *mut c::BtreeNode);
+    pub fn bch2_btree_node_iter_peek_unpack(iter: *mut c::btree_node_iter, b: *mut c::BtreeNode,
                                             u: *mut c::bkey) -> c::bkey_s_c;
 }

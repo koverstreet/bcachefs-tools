@@ -168,7 +168,7 @@ fn list_empty_careful(head: &c::list_head) -> bool {
     next == head_ptr && next == unsafe { core::ptr::read_volatile(&raw const head.prev) }
 }
 
-fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &c::btree) {
+fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &c::BtreeNode) {
     if out.as_raw().nr_tabstops == 0 {
         out.tabstop_push(36);
     }
@@ -207,7 +207,7 @@ impl DebugFile for CachedBtreeNodes {
             // SAFETY: a struct btree isn't freed while the cache is up, only
             // reused, so a chain reaches btrees - if not the ones it did
             let table = unsafe {
-                rhashtable::read::<c::btree>(&fs.btree.cache.table, offset_of!(c::btree, hash), &rcu)
+                rhashtable::read::<c::BtreeNode>(&fs.btree.cache.table, offset_of!(c::BtreeNode, hash), &rcu)
             };
             if self.bucket >= table.nr_buckets() {
                 return Ok(false);
