@@ -482,6 +482,23 @@ impl<'a> BioRange<'a> {
         done
     }
 
+    /// As much as both have, from @src - another bio's - copied: how much. The
+    /// kernel's old bio_copy_data_iter(), which 7.2 removed.
+    pub fn copy_from_range(&self, src: BioRange<'_>) -> u32 {
+        let mut dst = *self;
+        for chunk in src {
+            if dst.is_empty() {
+                break;
+            }
+            // SAFETY: the chunk's bytes, mapped while they're copied
+            let n = chunk.with_mapped(|p, len| dst.copy_from_volatile(unsafe {
+                VolatileSlice::from_raw(NonNull::new_unchecked(p), len)
+            }));
+            dst.advance(n as u32);
+        }
+        self.len() - dst.len()
+    }
+
     pub fn zero(&self) {
         for chunk in *self {
             chunk.zero();
