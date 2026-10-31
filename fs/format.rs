@@ -682,7 +682,8 @@ c_xmacro! {
 
 c_enum! {
     #[flags]
-    pub enum btree_id_flags: u32 {
+    #[c_name(btree_id_flags)]
+    pub enum BtreeFlags: u32 {
         BTREE_IS_extents = 1 << 0,
         BTREE_IS_snapshots = 1 << 1,
         BTREE_IS_snapshot_field = 1 << 2,
