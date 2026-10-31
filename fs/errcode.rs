@@ -768,6 +768,10 @@ fn errname(err: u32) -> Option<&'static str> {
 /// A bcachefs error code or errno, positive: errnos below BCH_ERR_START (2048),
 /// bcachefs's own above. Unlike bch_errcode, a raw errno never makes an invalid
 /// discriminant.
+///
+/// Positive always: C's -errcode is negative only at the boundary. Taken in,
+/// either sign is the same error, so ==, raw() and ret_to_c() can't see C's
+/// sign - a negative one kept would go back to C as success.
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct BchError(i32);
 
@@ -783,11 +787,12 @@ impl From<u32> for BchError {
 }
 
 impl From<i32> for BchError {
-    fn from(errno: i32) -> Self { Self(errno) }
+    fn from(errno: i32) -> Self { Self::from_raw(errno) }
 }
 
 impl BchError {
-    pub fn from_raw(code: i32) -> Self { Self(code) }
+    /// An error code of either sign: C's -errcode, or an errno.
+    pub fn from_raw(code: i32) -> Self { Self(code.unsigned_abs() as i32) }
 
     pub fn raw(&self) -> i32 { self.0 }
 
