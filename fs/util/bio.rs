@@ -74,6 +74,10 @@ mod compat {
 #[cfg(not(kernel))]
 macro_rules! bi_offset { ($i:expr) => { $i.bi_bvec_done } }
 
+pub fn reset_bvec_offset(iter: &mut c::bvec_iter) {
+    bi_offset!(iter) = 0;
+}
+
 /// How many bvecs mapping @len bytes at @p takes: a page each for vmalloc
 /// memory, one for the direct map.
 pub fn buf_nr_bvecs(p: *const u8, len: usize) -> usize {
