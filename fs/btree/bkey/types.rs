@@ -96,6 +96,14 @@ pub struct BkeyI<V: ?Sized = FamilyVal<AllTypes>> {
 }
 
 impl<'a, V: ?Sized + BkeyVal> BkeySC<'a, V> {
+    /// The same key, header and value: bkey_and_val_eq().
+    pub fn and_val_eq<W: ?Sized + BkeyVal>(&self, r: BkeySC<'_, W>) -> bool {
+        use crate::util::vstructs::plain_bytes;
+        let (a, b) = (self.k, r.k);
+        a.u64s == b.u64s && a.type_ == b.type_ && a.p == b.p && plain_bytes(&a.bversion) == plain_bytes(&b.bversion) &&
+            a.size == b.size && self.val_bytes() == r.val_bytes()
+    }
+
     pub fn val_bytes(&self) -> &'a [u8] {
         // SAFETY: its value follows its header, as long as u64s says, for 'a
         unsafe { core::slice::from_raw_parts(self.v.cast::<u8>(), self.k.val_bytes()) }
