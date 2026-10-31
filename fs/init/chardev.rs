@@ -36,6 +36,7 @@
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, RoRef, WriteRef};
+use crate::locking::Locked;
 use crate::util::ffi::Opaque;
 use crate::types::CStatic;
 use crate::util::file::{File, FileOps, FileVTable, UserBuf};
@@ -804,11 +805,9 @@ struct Minors(KVec<Option<NonNull<Fs>>>);
 // takes it out before it's torn down
 unsafe impl Send for Minors {}
 
-kernel::global_lock! {
-    // SAFETY: init()ed by bch2_chardev_init(), at module init, before any
-    // filesystem
-    unsafe(uninit) static MINORS: Mutex<Minors> = Minors(KVec::new());
-}
+// SAFETY: init_zeroed() by bch2_chardev_init(), at module init, before any
+// filesystem
+static MINORS: Locked<c::mutex, Minors> = unsafe { Locked::uninit(Minors(KVec::new()), ()) };
 
 static MAJOR: AtomicU32 = AtomicU32::new(0);
 
@@ -908,7 +907,7 @@ pub fn bch2_fs_chardev_exit(c: &Opaque<c::bch_fs>) {
 #[c_export]
 pub fn bch2_chardev_init() -> c_int {
     // SAFETY: module init, once
-    unsafe { MINORS.init() };
+    let Ok(()) = unsafe { MINORS.init_zeroed(c"MINORS", crate::new_lock!(@key)) };
 
     let fops = &FileVTable::<Ctl>::OPS;
     let major = unsafe { c::__register_chrdev(0, 0, 256, NAME.as_ptr().cast(), fops) };

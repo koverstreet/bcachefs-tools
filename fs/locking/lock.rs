@@ -138,12 +138,26 @@ impl<R: RawLock, G, P> Locked<R, G, P> {
         }
     }
 
-    /// For a Locked in zeroed memory that new() can't reach - a static: its
-    /// raw lock initialized in place, G and P as zeroed.
+    /// A Locked for a static: @g and @p, the raw lock zeroed - a C lock can't
+    /// be made in a const - until init_zeroed().
     ///
     /// # Safety
-    /// Once, before anything takes it; zeroed is a valid G and P. @key is as
-    /// new()'s.
+    /// init_zeroed() runs before anything takes it.
+    pub const unsafe fn uninit(g: G, p: P) -> Self {
+        Self {
+            raw:       unsafe { core::mem::zeroed() },
+            protected: UnsafeCell::new(g),
+            published: p,
+            _pin:      PhantomData,
+        }
+    }
+
+    /// For a Locked in zeroed memory that new() can't reach - a static, or
+    /// uninit()'s: its raw lock initialized in place.
+    ///
+    /// # Safety
+    /// Once, before anything takes it, its G and P valid - zeroed, or
+    /// uninit()'s. @key is as new()'s.
     pub unsafe fn init_zeroed(&self, name: &'static CStr, key: *mut c_void) -> Result<(), R::InitError> {
         unsafe { R::init(core::ptr::from_ref(&self.raw).cast_mut(), name, key) }
     }
