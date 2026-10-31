@@ -67,7 +67,7 @@ pub(crate) fn info(name: &str, shape: &str, fields: &str) -> String {
 }
 
 /// info(), for Rust type @ty, which C names @name.
-fn info_of(ty: &str, name: &str, shape: &str, fields: &str) -> String {
+pub(crate) fn info_of(ty: &str, name: &str, shape: &str, fields: &str) -> String {
     format!(
         "#[automatically_derived]\n\
          impl crate::typeinfo::TypeInfo for {ty} {{\n\

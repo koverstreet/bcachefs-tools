@@ -405,8 +405,8 @@ fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>,
                         (_, false) => format!("{v}"),
                     });
                 }
-                if let Some(name) = &e.name {
-                    enum_sizes.push((name.clone(), *size, *align));
+                if let Some(name) = e.c_ident() {
+                    enum_sizes.push((name.to_string(), *size, *align));
                 }
             }
             // Each opcode as Rust made it - none in a build that has no
@@ -614,10 +614,15 @@ fn main() {
                         structs.insert(a.alias.clone(), format!("struct {} __rcu *", a.c_name));
                     }
                     // how a prototype names it
-                    Some(CItem::Enum(CEnumDef { name: Some(n), .. })) => {
-                        structs.insert(n.clone(), format!("enum {n}"));
-                        if let Some(&size) = r.nums.first() {
-                            enums.insert(n.clone(), size);
+                    // - by its Rust name and C's, where #[c_name] makes them differ
+                    Some(CItem::Enum(e)) if e.name.is_some() => {
+                        let n = e.name.clone().unwrap();
+                        let c = e.c_ident().unwrap_or(&n).to_string();
+                        for k in [n, c.clone()] {
+                            structs.insert(k.clone(), format!("enum {c}"));
+                            if let Some(&size) = r.nums.first() {
+                                enums.insert(k, size);
+                            }
                         }
                     }
                     // a darray type is C's typedef, which its DEFINE_DARRAY*()

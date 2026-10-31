@@ -484,6 +484,15 @@ pub struct CEnumDef {
     /// #[own_to_text]: it prints as more than its name - an open or flags
     /// enum c_enum! otherwise gives ToText.
     pub own_to_text: bool,
+    /// #[c_name(NAME)]: C's name for it, where Rust's differs.
+    pub c_name:   Option<String>,
+}
+
+impl CEnumDef {
+    /// Its name as C has it: C's, or for #[c_name], that.
+    pub fn c_ident(&self) -> Option<&str> {
+        self.c_name.as_deref().or(self.name.as_deref())
+    }
 }
 
 /// A c_enum! variant. Its value is Rust source, or none for the one after the
@@ -1718,6 +1727,7 @@ fn parse_ioctl(body: &[Tok], cfg: Option<Cfg>) -> Result<CIoctl, String> {
 fn parse_enum(body: &[Tok], cfg: Option<Cfg>) -> Result<CEnumDef, String> {
     let mut kind = None;
     let mut own_to_text = false;
+    let mut c_name = None;
     let mut i = 0;
     while let Some((attr, next)) = attr_at(body, i)? {
         for (n, k) in [("open", CEnumKind::Open), ("closed", CEnumKind::Closed), ("flags", CEnumKind::Flags)] {
@@ -1726,6 +1736,9 @@ fn parse_enum(body: &[Tok], cfg: Option<Cfg>) -> Result<CEnumDef, String> {
             }
         }
         own_to_text |= matches!(attr, [Tok::Ident(a)] if a == "own_to_text");
+        if let Some([Tok::Ident(n)]) = attr_args(attr, "c_name") {
+            c_name = Some(n.clone());
+        }
         i = next;
     }
     i = skip_vis(body, i)?;
@@ -1773,7 +1786,7 @@ fn parse_enum(body: &[Tok], cfg: Option<Cfg>) -> Result<CEnumDef, String> {
         };
         variants.push(CEnumVariant { name: vname.to_string(), value, label });
     }
-    Ok(CEnumDef { cfg, kind, name, repr, variants, from, own_to_text })
+    Ok(CEnumDef { cfg, kind, name, repr, variants, from, own_to_text, c_name })
 }
 
 /// c_typedef!'s body: [#[c("C declarator")]] pub type NAME = TYPE;
@@ -2440,8 +2453,9 @@ pub fn expand_enum_list(e: &mut CEnumDef, entries: &[String]) -> Result<(), Stri
 /// place - with all expanded, the record's form.
 #[allow(dead_code)]
 pub fn enum_text(e: &CEnumDef) -> String {
-    let mut t = format!("#[{}] {}pub enum {}: {} {{ ", e.kind.attr(),
+    let mut t = format!("#[{}] {}{}pub enum {}: {} {{ ", e.kind.attr(),
                         if e.own_to_text { "#[own_to_text] " } else { "" },
+                        e.c_name.as_deref().map(|c| format!("#[c_name({c})] ")).unwrap_or_default(),
                         e.name.as_deref().unwrap_or("_"), e.repr);
     let lists = |t: &mut String, i: usize| for (at, f) in &e.from {
         if *at == i {
@@ -3333,7 +3347,7 @@ pub fn emit_items(items: &[CItem],
             }
             CItem::Enum(e) => {
                 let mut t = format!("enum {}{} {{\n", e.kind.marker(),
-                                    e.name.as_deref().map(|n| format!(" {n}")).unwrap_or_default());
+                                    e.c_ident().map(|n| format!(" {n}")).unwrap_or_default());
                 for v in &e.variants {
                     match &v.value {
                         Some(x) => t.push_str(&format!("\t{} = {x},\n", v.name)),

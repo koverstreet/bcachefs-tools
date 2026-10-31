@@ -1121,7 +1121,7 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
         None => repr.clone(),
     };
     if let Some(name) = &e.name {
-        let cfi = cfi_encoding(name);
+        let cfi = cfi_encoding(e.c_ident().unwrap_or(name));
         match e.kind {
             CEnumKind::Closed => {
                 out.push_str(&format!(
@@ -1182,7 +1182,7 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
 
     if let Some(name) = &e.name {
         out.push_str(&names_gen(e, name));
-        out.push_str(&typeinfo::info(name, "Enum", ""));
+        out.push_str(&typeinfo::info_of(name, e.c_ident().unwrap_or(name), "Enum", ""));
 
         // Zeroed is a value of it - so a struct holding one can be Zeroable:
         // any integer is an open enum's or flags', a closed enum's only if a
