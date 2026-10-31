@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
+
+//! Fs - struct bch_fs - its accessors and locks, and OpenFs, the handle that
+//! exits a filesystem when dropped.
+
 #![allow(non_camel_case_types)]
 
 use crate::c;
@@ -36,25 +41,18 @@ c_extern! {
     pub static bch2_dev_write_refs: [*const crate::util::ffi::c_char; 0];
 }
 
-/// sb_lock held: the superblock, through it - and c->sb, through its
-/// published().
+/// sb_lock, held: the superblock, and c->sb, which it publishes
 pub type SbLockGuard<'a> = Guard<'a, Noio<c::mutex>, c::bch_fs_sb, c::bch_sb_cpu>;
 
 impl SbLockGuard<'_> {
-    /// Member @dev_idx, of an open filesystem's superblock - where every one
-    /// is whole: bch2_sb_members_v2_init() grew them at open.
     pub fn fs_member_mut(&mut self, dev_idx: u32) -> &mut c::bch_member {
         self.member_mut(dev_idx)
             .expect("a member, whole: bch2_sb_members_v2_init() grew them at open")
     }
 }
 
-/// state_lock, held for read; up_read() on drop. What needs it held is a
-/// method here.
 pub struct StateLockRead<'a>(&'a Fs);
 
-/// state_lock, held for write; up_write() on drop: the filesystem's state
-/// changes - read-only, read-write - under it.
 pub struct StateLockWrite<'a>(&'a Fs);
 
 impl Drop for StateLockWrite<'_> {
@@ -70,14 +68,12 @@ impl Drop for StateLockRead<'_> {
 }
 
 impl<'a> StateLockWrite<'a> {
-    /// The filesystem whose state is held.
     pub(crate) fn fs(&self) -> &'a Fs {
         self.0
     }
 }
 
 impl StateLockRead<'_> {
-    /// Recompute the filesystem's capacity from its devices.
     pub fn recalc_capacity(&self) {
         crate::alloc::capacity::recalc_capacity(self.0)
     }
@@ -86,49 +82,40 @@ impl StateLockRead<'_> {
 pub use crate::cstructs::types::Fs;
 
 impl Fs {
-    /// For C that takes the filesystem.
     pub fn as_ptr(&self) -> *mut Fs {
         self as *const Fs as *mut Fs
     }
 }
 
-// SAFETY: the filesystem is every thread's: C shares a bch_fs with all of
-// them, its state behind its own locks, atomics and RCU - so a &Fs goes to
-// any thread too. What Rust reads through it is as synchronized as the C it
-// reads: that's each field's, as in C.
+// SAFETY: as C shares a bch_fs: every field is synchronized by its own lock,
+// atomic or RCU
 unsafe impl Sync for Fs {}
 
 impl Fs {
-    /// The filesystem's name, as its messages give it.
     pub fn name(&self) -> &core::ffi::CStr {
         unsafe { core::ffi::CStr::from_ptr((*self.as_ptr()).name.as_ptr().cast()) }
     }
 
-    /// load() copies them all.
     pub fn opts(&self) -> &c::PublishedOpts {
         &self.opts
     }
 
-    /// The options, to change: sb_lock publishes them.
     pub fn opts_writer<'a>(&'a self, sb: &'a mut SbLockGuard<'_>) -> &'a c::PublishedOptsWriter {
         assert!(core::ptr::eq(sb.lock(), &self.sb), "opts_writer(): another filesystem's sb_lock");
         // SAFETY: @sb holds sb_lock, and is borrowed mutably while this is
         unsafe { self.opts.published_writer() }
     }
 
-    /// log2 of the filesystem block size in 512-byte sectors.
+    /// log2 of the block size, in 512-byte sectors
     pub fn block_bits(&self) -> u32 {
         self.block_bits as u32
     }
 
-    /// The inode number shard the current thread allocates from: as
-    /// bch2_inode_shard_idx().
     pub fn inode_shard_idx(&self) -> u64 {
         unsafe { c::rust_bch2_inode_shard_idx(self.as_ptr()) }
     }
 
-    /// The filesystem's key, once it's encrypted and has one: it's never
-    /// unset after.
+    /// Never unset once set
     pub fn encryption_key(&self) -> Option<&c::bch_key> {
         self.sb.encryption_key.get()
     }
@@ -139,15 +126,10 @@ impl Fs {
         unsafe { &*raw }
     }
 
-    /// For an entry point C calls with its filesystem: safe, as an Opaque is
-    /// always a live one.
     pub fn from_c(c: &crate::util::ffi::Opaque<c::bch_fs>) -> &Fs {
         unsafe { Self::borrow_raw(c.as_ptr()) }
     }
 
-    /// The filesystem whose disk_sb @sb is, C's container_of(), and its
-    /// sb_lock, which C holds: for C passing &c->disk_sb.
-    ///
     /// # Safety
     /// @sb is a live filesystem's disk_sb, and the caller holds its sb_lock
     /// for 'a.
@@ -160,55 +142,45 @@ impl Fs {
         }
     }
 
-    /// The metadata version the filesystem is at: C's c->sb.version, the
-    /// in-memory copy, which is what decides version-gated behaviour.
     pub fn version(&self) -> c::bcachefs_metadata_version {
         c::bcachefs_metadata_version(self.sb.version.get() as u32)
     }
 
-    /// The version the last upgrade completed to: c->sb.version_upgrade_complete.
-    /// Below version() while an upgrade's migrations are still running.
+    /// Below version() while an upgrade's migrations are still running
     pub fn version_upgrade_complete(&self) -> c::bcachefs_metadata_version {
         c::bcachefs_metadata_version(self.sb.version_upgrade_complete.get() as u32)
     }
 
-    /// Whether btree @id lost data - topology repair dropped nodes - so
-    /// repairs may reconstruct what it's missing: c->sb.btrees_lost_data.
+    /// Topology repair dropped nodes from btree @id
     pub fn btree_lost_data(&self, id: Btree) -> bool {
         self.sb.btrees_lost_data.get() & (1u64 << id.0) != 0
     }
 
-    /// Whether this is an image made with `bcachefs dump --sanitize`, which
-    /// scrubs dirent names without rehashing them: c->sb.dirents_sanitized.
+    /// An image from `bcachefs dump --sanitize`, which scrubs dirent names
+    /// without rehashing them
     pub fn dirents_sanitized(&self) -> bool {
         self.sb.dirents_sanitized.get()
     }
 
-    /// Whether filesystem flag @f (BCH_FS_*) is set: C's test_bit() on
-    /// c->flags. Other threads set and clear them, so it's an atomic load.
     pub fn flag(&self, f: c::bch_fs_flags) -> bool {
         self.flags().load(core::sync::atomic::Ordering::Relaxed) & (1usize << f as u32) != 0
     }
 
-    /// Set filesystem flag @f: C's set_bit(), which orders nothing.
     pub fn set_flag(&self, f: c::bch_fs_flags) {
         self.flags().fetch_or(1usize << f as u32, core::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Clear filesystem flag @f: C's clear_bit().
     pub fn clear_flag(&self, f: c::bch_fs_flags) {
         self.flags().fetch_and(!(1usize << f as u32), core::sync::atomic::Ordering::Relaxed);
     }
 
-    /// c->flags, which C changes with set_bit() and the like.
     fn flags(&self) -> &core::sync::atomic::AtomicUsize {
         // SAFETY: an unsigned long, which C's bitops change atomically
         unsafe { &*(core::ptr::addr_of!((*self.as_ptr()).flags) as *const core::sync::atomic::AtomicUsize) }
     }
 
-    /// Whether a mount is drawing recovery progress from
-    /// BCH_IOCTL_RECOVERY_STATUS, so progress indicators needn't print it.
-    /// The ioctl sets it - WRITE_ONCE() - so it's an atomic load.
+    /// A mount is reading recovery progress from BCH_IOCTL_RECOVERY_STATUS,
+    /// so progress indicators needn't print it
     pub fn stdio_progress_reader(&self) -> bool {
         let r = unsafe {
             &*(core::ptr::addr_of!((*self.as_ptr()).stdio_progress_reader)
@@ -217,15 +189,12 @@ impl Fs {
         r.load(core::sync::atomic::Ordering::Relaxed)
     }
 
-    /// The journal sequence number being written: C's journal_cur_seq().
     pub fn journal_cur_seq(&self) -> u64 {
         self.journal.seq.load(core::sync::atomic::Ordering::Relaxed) as u64
     }
 
-    /// Go emergency read-only: the journal halts, so nothing more commits,
-    /// and the rest of going read-only is queued. As
-    /// bch2_fs_emergency_read_only(). Whether this call is what did it - if
-    /// so, @out says so, and is no longer suppressed.
+    /// True if this call is the one that went read-only - then @out is
+    /// printed, not suppressed
     pub fn emergency_read_only(&self, out: &mut Printbuf) -> bool {
         unsafe { c::bch2_fs_emergency_read_only(self.as_ptr(), out.as_raw()) }
     }
@@ -234,8 +203,6 @@ impl Fs {
         self.sb.lock()
     }
 
-    /// sb_lock, as C calling in holds it.
-    ///
     /// # Safety
     /// The caller holds sb_lock, for as long as the guard lives.
     pub unsafe fn sb_lock_held(&self) -> SbLockGuard<'_> {
@@ -250,12 +217,11 @@ impl Fs {
         self.mark_lock().assert_held_any()
     }
 
-    /// The BCH_FS_* flags set.
     pub fn flags_to_text(&self, out: &mut Printbuf) {
         unsafe { out.prt_bitflags(c::bch2_fs_flag_strs.as_ptr(), self.flags().load(core::sync::atomic::Ordering::Relaxed) as u64) }
     }
 
-    /// state_lock for read: devices and capacity don't change under it.
+    /// Devices and capacity don't change under it
     pub fn state_lock_read(&self) -> StateLockRead<'_> {
         unsafe { c::down_read((&raw mut (*self.as_ptr()).state_lock).cast()) };
         StateLockRead(self)
@@ -266,27 +232,19 @@ impl Fs {
         StateLockWrite(self)
     }
 
-    /// It changes the superblock - its seq, its checksum: so nothing in it is
-    /// borrowed across the write.
     #[track_caller]
     pub fn write_super(&self, sb: &mut SbLockGuard<'_>) {
         let _ = self.write_super_ret(sb);
     }
 
-    /// write_super(), for a write whose only reason is a replicas entry coming
-    /// or going: it may leave the slow disks behind - bch2_write_super_replicas().
+    /// For a write only for a replicas entry: it may leave the slow disks behind
     #[track_caller]
     pub fn write_super_replicas(&self, sb: &mut SbLockGuard<'_>) {
         let _ = self.write_super_replicas_ret(sb);
     }
 
-    /// Throw @error, as C's bch_err_throw() does: counted in error_throw and
-    /// traced, so errors started in Rust are as visible as errors started in C.
-    /// Naming an error to compare or parse against isn't throwing it - that's
-    /// BchError::from().
-    ///
-    /// Cold, so every path that throws is a slowpath to the compiler: C says
-    /// that with `unlikely(ret)` at each site, which `?` can't.
+    /// Counted and traced, as bch_err_throw(); BchError::from() names an error
+    /// without throwing it. Cold, as C's unlikely(ret).
     #[cold]
     pub fn err(&self, error: bch_errcode) -> BchError {
         BchError::from_raw(-unsafe { c::__bch2_err_throw(self.as_ptr(), -(error.0 as i32)) })
@@ -315,12 +273,10 @@ impl Fs {
         self.btree.cache.roots.node(id)
     }
 
-    /// Total number of btree IDs (known + dynamic) on this filesystem.
     pub fn btree_id_nr_alive(&self) -> u32 {
         u32::from(Btree::nr) + self.btree.cache.roots.roots_nr_extra.get()
     }
 
-    /// Number of devices in the filesystem superblock.
     pub fn nr_devices(&self) -> u32 {
         self.sb.nr_devices.get() as u32
     }
@@ -329,23 +285,17 @@ impl Fs {
         ret_to_result(unsafe { c::bch2_fs_start(self.as_ptr()) })
     }
 
-    /// Flush the journal: everything committed before the call is on disk when
-    /// it returns.
+    /// Everything committed before the call is on disk when it returns
     pub fn journal_flush(&self) -> Result<(), BchError> {
         ret_to_result(unsafe { c::bch2_journal_flush(&mut (*self.as_ptr()).journal) })
     }
 
-    /// Set @inum's i_size to @new_i_size and drop every extent past it, as a
-    /// logged op, so a crash midway resumes rather than leaving extents past
-    /// EOF. Block granular: zeroing the rest of the block @new_i_size falls
-    /// in is the caller's job, as the VFS does it in the page cache.
+    /// A logged op, resumed after a crash. Block granular: zeroing the rest of
+    /// the last block is the caller's, as the VFS does in the page cache.
     pub fn truncate(&self, inum: c::subvol_inum, new_i_size: u64) -> Result<(), BchError> {
         crate::data::io_misc::truncate(self, inum, new_i_size, &mut 0)
     }
 
-    /// Make the filesystem incompatible with versions before @version, if
-    /// it isn't already - an error if that isn't allowed: as
-    /// bch2_request_incompat_feature().
     pub fn request_incompat_feature(&self, version: c::bcachefs_metadata_version)
         -> Result<(), BchError>
     {
@@ -355,22 +305,16 @@ impl Fs {
         self.set_version_incompat(version)
     }
 
-    /// Whether the filesystem uses @feature: c->sb.features, the in-memory
-    /// copy.
     pub fn feature(&self, feature: c::bch_sb_feature) -> bool {
         self.sb.features.get() & (1u64 << feature.0) != 0
     }
 
-    /// Mark the filesystem as using @feature, writing the superblock if it
-    /// wasn't already: as bch2_check_set_feature().
     pub fn check_set_feature(&self, feature: c::bch_sb_feature) {
         if !self.feature(feature) {
             self.set_feature(feature)
         }
     }
 
-    /// Whether casefolding can be used: an error without CONFIG_UNICODE, or
-    /// with the casefold_disabled option - as bch2_fs_casefold_enabled().
     pub fn casefold_enabled(&self) -> Result<(), BchError> {
         if !cfg!(CONFIG_UNICODE) {
             return self.throw(bch_errcode::BCH_ERR_no_casefolding_without_utf8);
@@ -386,21 +330,16 @@ impl Fs {
         self.write_super_flags(sb, c::bch_sb_write_flags::empty())
     }
 
-    /// A superblock write that's part of bringing the filesystem up, on a
-    /// nostart open that will start it afterwards - allowed before start,
-    /// like recovery's own.
+    /// Allowed before start, for a nostart open that starts later
     #[track_caller]
     pub fn write_super_bringup(&self, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         self.write_super_flags(sb, c::bch_sb_write_flags::BCH_SB_WRITE_bringup)
     }
 
-    /// Apply in-memory superblock edits to the in-memory state derived from
-    /// it (c->sb, member info) without writing - for an open that will start
-    /// and persist them then.
+    /// c->sb and member info updated from the superblock, without writing it
     pub fn sb_update(&self, sb: &mut SbLockGuard<'_>) {
         crate::sb::io::sb_update(self, sb)
     }
-
 
     pub fn read_only(&self) {
         unsafe { c::bch2_fs_read_only(self.as_ptr()) };
@@ -410,8 +349,6 @@ impl Fs {
         ret_to_result(unsafe { c::bch2_fs_read_write(self.as_ptr()) })
     }
 
-    /// Stopped: read-only, its background work stopped, offline - its exit
-    /// is still to come.
     pub fn stop(&self) {
         unsafe { c::bch2_fs_stop(self.as_ptr()) };
     }
@@ -425,13 +362,10 @@ impl Fs {
         }
     }
 
-    /// Flush pins up to the current journal sequence.
     pub fn journal_flush_outstanding_pins(&self) -> bool {
         unsafe { c::bch2_journal_flush_pins(&mut (*self.as_ptr()).journal, self.journal_cur_seq()) }
     }
 
-    /// Delete [@start, @end) in @btree_id, in a transaction of its own: its
-    /// iterator's flags and the deletes' - one set of flags, to C.
     pub fn btree_delete_range(
         &self,
         btree_id:     Btree,
@@ -444,8 +378,6 @@ impl Fs {
         ret_to_result(unsafe { c::bch2_btree_delete_range(self.as_ptr(), btree_id, start, end, flags) })
     }
 
-    /// @key, a validated key of any type, inserted in a transaction of its
-    /// own.
     pub fn btree_insert<'k>(
         &self,
         btree_id:     Btree,
@@ -457,7 +389,7 @@ impl Fs {
         self.btree_insert_k_i(btree_id, key.into(), disk_res, commit_flags.into(), iter_flags)
     }
 
-    /// btree_insert(), once: not monomorphized per key type.
+    /// Not monomorphized per key type
     fn btree_insert_k_i(
         &self,
         btree_id:     Btree,
@@ -492,7 +424,6 @@ impl Fs {
         self.opts().block_size.get() as u64
     }
 
-    /// A btree node's size, in sectors: btree_sectors().
     pub fn btree_sectors(&self) -> u32 {
         self.opts().btree_node_size.get() >> 9
     }
@@ -546,17 +477,15 @@ impl Fs {
     }
 }
 
-/// The memory of a new bch_fs: Fs::init()'s - its Rust-typed fields'
-/// initializers run, everything else zeroed - for bch2_fs_init() to go on
-/// with, as it did from kvzalloc(). NULL if out of memory.
+/// Rust fields initialized, the rest zeroed, for bch2_fs_init(). NULL if out
+/// of memory.
 #[cstruct_macros::c_export]
 pub fn bch2_fs_alloc_mem() -> *mut c::bch_fs {
     crate::util::alloc::alloc_pinned(Fs::init()).unwrap_or(core::ptr::null_mut())
 }
 
-/// Drop @c and free it: the end of its teardown, as kvfree() was. Its
-/// Rust-typed fields are dropped; its C ones C's teardown has done, and their
-/// Drop - a printbuf's - finds them empty.
+/// The end of teardown: C's has emptied the C fields, so their Drop finds
+/// nothing.
 ///
 /// # Safety
 /// @c is from bch2_fs_alloc_mem(), and nothing uses it after.
@@ -565,12 +494,10 @@ pub unsafe fn bch2_fs_free_mem(c: *mut c::bch_fs) {
     unsafe { crate::util::alloc::free_pinned(c) }
 }
 
-/// A filesystem opened from userspace, which the holder closes:
-/// bch2_fs_exit() - stop it, and put the ref - on exit() or drop.
+/// Exits the filesystem when dropped
 pub struct OpenFs(core::ptr::NonNull<Fs>);
 
-// SAFETY: a &Fs is every thread's, and any may close it: offline fsck opens
-// it in the ioctl and closes it in its kthread
+// SAFETY: offline fsck opens it in the ioctl and exits it in its kthread
 unsafe impl Send for OpenFs {}
 
 impl OpenFs {
@@ -580,10 +507,7 @@ impl OpenFs {
         OpenFs(fs)
     }
 
-    /// The filesystem on @devs, opened with @opts - and @key, if its
-    /// superblock's key is to be unwrapped with it, not looked up.
-    /// bch2_fs_open() only reads the list: read_super() keeps a copy of each
-    /// path.
+    /// @key unwraps the superblock's key, instead of the keyring
     pub fn open<'a>(devs: impl ExactSizeIterator<Item = &'a core::ffi::CStr>, opts: &mut c::bch_opts,
                     key: Option<&c::bch_key>) -> Result<OpenFs, BchError> {
         use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
@@ -603,12 +527,11 @@ impl OpenFs {
             .map(|fs| unsafe { OpenFs::from_raw(fs.cast()) })
     }
 
-    /// Its ref, given up: from_raw() takes it back.
     pub fn into_raw(self) -> core::ptr::NonNull<Fs> {
         core::mem::ManuallyDrop::new(self).0
     }
 
-    /// bch2_fs_exit()'s error, which Drop discards.
+    /// Drop discards the error
     pub fn exit(self) -> i32 {
         let ret = unsafe { c::bch2_fs_exit(self.0.as_ptr()) };
         core::mem::forget(self);
@@ -630,29 +553,22 @@ impl Drop for OpenFs {
     }
 }
 
-/// A write ref, on c->writes: while one is held, the filesystem can't finish
-/// going read-only, which stops writes and waits for every ref to be put.
+/// While one is held, the filesystem can't finish going read-only
 pub type WriteRef = RefGuard<EnumeratedRef>;
 
 impl Fs {
-    /// The write refs held, by kind.
     pub fn write_refs_to_text(&self, out: &mut Printbuf) {
         // SAFETY: bch2_write_refs names c->writes' kinds
         unsafe { self.writes.to_text(out, c::bch2_write_refs.as_ptr()) }
     }
-}
 
-impl Fs {
-    /// write_ref_wq: for work queued holding a write ref, which going
-    /// read-only drains.
+    /// For work holding a write ref: going read-only drains it
     pub fn write_ref_wq(&self) -> &crate::util::workqueue::Queue {
         // SAFETY: the filesystem's, for as long as it is
         unsafe { crate::util::workqueue::Queue::from_raw(self.write_ref_wq) }
     }
 
-    /// The future @make makes, spawned on write_ref_wq and detached, holding
-    /// a write ref till it's done: EROFS if there's none to be had, the
-    /// filesystem going read-only.
+    /// Holds a write ref until @make's future is done; EROFS if going read-only
     pub fn spawn_write<M, F>(&self, make: M) -> Result<(), BchError>
     where
         M: FnOnce(BackRef<Fs>) -> F + Send + 'static,
@@ -672,22 +588,16 @@ impl Fs {
     }
 }
 
-/// A delayed work item in bch_fs: one declaration for its function and its
-/// initializer. It holds no write ref: it's stopped with cancel_sync() going
-/// read-only, not drained.
+/// A delayed work item in bch_fs: a unit struct with init(), for the field's
+/// #[init], and run(). It holds no write ref: going read-only cancels it.
 ///
 /// ```text
 /// fs_delayed_work! {
-///     /// What it does
 ///     pub(crate) work BtreeBitmapGcSchedule: field maybe_schedule_btree_bitmap_gc;
 ///
 ///     fn run(fs: &Fs) { ... }
 /// }
 /// ```
-///
-/// is the unit struct BtreeBitmapGcSchedule, with init() - the field's
-/// #[init(BtreeBitmapGcSchedule::init())] - and run(), run from the workqueue.
-/// Queueing and cancelling are the field's, a DelayedWork.
 #[macro_export]
 macro_rules! fs_delayed_work {
     (
@@ -734,13 +644,11 @@ macro_rules! fs_delayed_work {
     };
 }
 
-/// c->ro_ref: while a ref is held, the filesystem can't be stopped -
-/// bch2_fs_stop() waits for every ref to be put before it tears the
-/// filesystem down. Its tryget() fails once it's stopping.
+/// c->ro_ref: bch2_fs_stop() waits for them, and tryget fails once it's
+/// stopping
 #[cfg(kernel)]
 pub enum RoRefs {}
 
-/// A ref keeping a filesystem from being stopped.
 #[cfg(kernel)]
 pub type RoRef = RefGuard<Fs, RoRefs>;
 
@@ -782,14 +690,11 @@ unsafe impl TryRefcount<RoRefs> for Fs {
     }
 }
 
-// Standalone helpers — pure Rust reimplementations of C static inlines.
-
-/// Build a hashed writepoint specifier (sets low bit to mark as hashed).
+/// The low bit marks it hashed
 pub fn writepoint_hashed(v: usize) -> c::write_point_specifier {
     c::write_point_specifier { v: (v | 1) as _ }
 }
 
-/// A specifier for write point @wp itself: writepoint_ptr().
 pub fn writepoint_ptr(wp: &c::write_point) -> c::write_point_specifier {
     c::write_point_specifier { v: core::ptr::from_ref(wp) as _ }
 }
