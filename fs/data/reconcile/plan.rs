@@ -64,7 +64,6 @@ use crate::fs::Fs;
 use crate::{log_msg_ratelimited, warn_on_once};
 use crate::sb::counters::events;
 use crate::util::rcu::read_lock;
-use crate::util::vstructs::plain_bytes;
 use core::mem::size_of;
 
 /// Why a key's parked, for the trace.
@@ -388,6 +387,6 @@ fn node_key_eq(l: BkeySC<'_>, r: BkeySC<'_>) -> bool {
     } else {
         0
     };
-    a.u64s == b.u64s && a.key_type() == b.key_type() && a.p == b.p && plain_bytes(&a.bversion) == plain_bytes(&b.bversion) &&
+    a.u64s == b.u64s && a.key_type() == b.key_type() && a.p == b.p && a.bversion == b.bversion &&
         a.size == b.size && l.val_bytes().get(skip..) == r.val_bytes().get(skip..)
 }

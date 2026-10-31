@@ -137,7 +137,7 @@ pub struct bch_val {
 #[cfg(target_endian = "little")]
 #[repr(C, packed(4))]
 #[c_name(bversion)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, CStruct, Plain, TypeInfo)]
 pub struct Bversion {
     pub lo: u64,
     pub hi: u32,
@@ -146,7 +146,7 @@ pub struct Bversion {
 #[cfg(target_endian = "big")]
 #[repr(C, packed)]
 #[c_name(bversion)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, CStruct, Plain, TypeInfo)]
 pub struct Bversion {
     pub hi: u32,
     pub lo: u64,
