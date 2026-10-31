@@ -118,21 +118,41 @@ debug in the field, so messages should include:
 - Relevant state information
 - What corrective action was taken (if any)
 
-### Documentation
+### Comments
 
-Prefer good naming and structure over inline comments. Short comments
-to break files into sections are fine; long inline explanations usually
-mean the code should be restructured to be self-explanatory.
+You're writing code for the people who will have to work on it next -
+including yourself, months from now, with none of today's context. Write
+code that makes them happy, not code that stresses them out.
 
-Each file should have a notes section at the top describing:
-- What the file is for (purpose and scope)
-- Key architectural decisions and design rationale
-- Important invariants or non-obvious properties
-- Relationships to other subsystems
+Code that merely *looks* thorough is not good code. A doc comment on every
+function restating its name, a SAFETY line paraphrasing the unsafe block
+under it, a file that opens with forty lines of prose before the first line
+of code: that's coding for appearances, and the person who opens the file
+pays for it. They came to read the code, and they have to wade through you
+narrating it back to them. Do that to them and they'll hate you, and they'll
+be right.
 
-This is also the right place for analytical notes — safety properties,
-ownership semantics, invariants, things to revisit later. These notes
-document the *thinking* behind the code, not just what it does.
+When something needs explaining, the problem is usually the code. Fix the
+code: name things for what they are, use types that carry the meaning, shape
+the control flow so it shows what's happening. Restructure until it reads;
+don't narrate it.
+
+What a comment is for is what the code can't tell you: *why*. Why does this
+exist? Why is it done this way and not the obvious way? What breaks if you
+change it? What context is the reader missing? That's what they'll actually
+want to know, and it's usually what's missing.
+
+- A conversion keeps the C's comments and adds none of its own.
+- Inline comments only for traps and contracts the code can't express.
+- No SAFETY comments.
+- No doc comments that restate a name or signature, no "as bch2_foo()"
+  breadcrumbs, no notes on what's still C or what changed - they're stale
+  by the next commit.
+- Before committing, compare the diff's comment lines with its code lines -
+  and in a conversion, with the C's. More than the C had means you explained
+  instead of fixing the code.
+
+Analysis and design notes go in `.claude/`, not in the code.
 
 ### Code style
 
