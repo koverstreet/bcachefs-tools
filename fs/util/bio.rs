@@ -59,7 +59,7 @@ pub use iter::{FolioVec, Folios};
 pub use iter::{Chunk, Chunks, Segment, Segments, Walk};
 #[cfg(kernel)]
 pub(crate) use iter::nth_page;
-pub use owned::{BioBox, BioBuf, BioBufPtr, BioField, BioInPlace, BioSet, Endio, HasBio, RawBio};
+pub use owned::{of_bio, BioBox, BioBuf, BioBufPtr, BioField, BioInPlace, BioSet, Endio, HasBio, RawBio};
 
 // A bvec_iter's offset into its bvec, as a place: bi_offset - bi_bvec_done
 // before 7.3, and in the shim.
@@ -111,7 +111,7 @@ impl Bio {
 
     /// # Safety
     /// As from_raw()'s, and nothing else has it for 'a.
-    unsafe fn from_raw_mut<'a>(ptr: *mut c::bio) -> Pin<&'a mut Self> {
+    pub unsafe fn from_raw_mut<'a>(ptr: *mut c::bio) -> Pin<&'a mut Self> {
         // SAFETY: the caller's; a bio never moves
         unsafe { Pin::new_unchecked(&mut *ptr.cast()) }
     }

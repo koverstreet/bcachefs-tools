@@ -80,7 +80,7 @@ fn bio_of<T: HasBio>(t: *mut T) -> *mut c::bio {
 
 /// # Safety
 /// @bio is a T's.
-unsafe fn of_bio<T: HasBio>(bio: *mut c::bio) -> *mut T {
+pub unsafe fn of_bio<T: HasBio>(bio: *mut c::bio) -> *mut T {
     // SAFETY: the caller's
     unsafe { bio.byte_sub(T::BIO_OFFSET).cast() }
 }
