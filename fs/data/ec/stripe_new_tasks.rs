@@ -32,6 +32,7 @@ use arrayvec::ArrayVec;
 use core::ptr::NonNull;
 use pin_init::{init, init_zeroed, stack_pin_init, Init};
 use crate::format::Btree;
+use cstruct_macros::args_stored_once;
 
 // ── Its task ─────────────────────────────────────────────────────────────
 
@@ -42,6 +43,7 @@ struct OldStripeLost {
     blocks: u32,
 }
 
+#[args_stored_once]
 pub(crate) async fn stripe_task(fs: &Fs, p: BackRef<StripeNew>) {
     let at = Resume::Queue(&fs.ec.stripe_create_wq);
     stack_pin_init!(let w = Working::new());
@@ -98,6 +100,7 @@ pub(crate) fn old_stripe_carry(s: &mut Internal, old: &mut StripeBuf) {
 /// read so it can be reconstructed: then the old stripe's validated,
 /// reconstructing what's bad if it can be, and its blocks carried - or the
 /// ones we wanted that are lost said, for create to record damage against.
+#[args_stored_once]
 async fn old_stripe_fold(fs: &Fs, s: &StripeNew, w: &mut Working, at: Resume<'_>) -> Result<(), OldStripeLost> {
     // The old stripe, its key and buffer, to read with across the awaits;
     // back after
@@ -121,6 +124,7 @@ async fn old_stripe_fold(fs: &Fs, s: &StripeNew, w: &mut Working, at: Resume<'_>
 
 /// The old stripe's @required blocks, into @buf - and the rest if one's bad,
 /// to reconstruct it: whether they're good.
+#[args_stored_once]
 async fn old_stripe_read(fs: &Fs, old: &StripeKey, buf: &mut StripeBuf, required: u32, at: Resume<'_>)
     -> Result<(), OldStripeLost>
 {
@@ -241,6 +245,7 @@ impl Working {
 
 /// Data buckets of the new stripe all written: create the stripe, with write
 /// refs on the devices of the blocks it writes.
+#[args_stored_once]
 async fn create(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Result<(), OldStripeLost>, at: Resume<'_>)
     -> Result<(), BchError>
 {
@@ -275,6 +280,7 @@ async fn create_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Result<(),
     create_with_iorefs(fs, s, w, fold, at).await
 }
 
+#[args_stored_once]
 async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Result<(), OldStripeLost>,
                             at: Resume<'_>) -> Result<(), BchError>
 {

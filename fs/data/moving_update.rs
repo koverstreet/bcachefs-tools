@@ -31,7 +31,7 @@ use crate::util::alloc::gfp_flags;
 use crate::util::task::{Resume, Spawn};
 use core::ffi::{c_int, c_uint};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::c_extern;
+use cstruct_macros::{args_stored_once, c_extern};
 use crate::format::{Bpos, Btree};
 
 c_extern! {
@@ -73,6 +73,7 @@ fn read_error_stats(u: &c::data_update, moving: &Moving<'_>, size: u32) {
 /// it's done. What could fail allocating is done before it's spawned, so a
 /// read that fails to issue - __bch2_read_extent() fails synchronously only
 /// before it touches the rbio - ends the update.
+#[args_stored_once]
 async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_bucket>>) {
     let issued = u.issue_read(|d| {
         let trans = crate::btree_trans!(d.op.fs());

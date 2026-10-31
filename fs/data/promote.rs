@@ -38,7 +38,7 @@ use crate::util::{Printbuf, ToText};
 use core::ffi::c_int;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::c_export;
+use cstruct_macros::{args_stored_once, c_export};
 use crate::format::Btree;
 
 /// The in-flight limit, per online CPU.
@@ -108,6 +108,7 @@ pub(crate) fn promote_to_text(u: &c::data_update, out: &mut Printbuf, fs: &Fs) {
 }
 
 /// The body: the read, then the write. @in_flight is held until after exit().
+#[args_stored_once]
 async fn run(mut u: Body, in_flight: InFlight, start_time: u64) {
     let fs = u.op.fs();
 

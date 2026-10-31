@@ -64,6 +64,7 @@ use core::pin::Pin;
 use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use pin_init::{pin_data, pin_init, PinInit};
+use cstruct_macros::args_stored_once;
 
 /// A Gather's result, and how what its refs put is folded into it:
 /// concurrently, from any context - an endio's - so into atomics.
@@ -389,6 +390,7 @@ impl<T: Fold, W: Width> Gather<T, waiter::Sync, W> {
 
 impl<T: Fold, W: Width> Gather<T, waiter::Async, W> {
     /// Wait for every ref to be put, resumed @at, for the result.
+    #[args_stored_once]
     pub async fn wait(&self, at: Resume<'_>) -> T {
         let _w = self.begin_wait();
         if !self.waited() {

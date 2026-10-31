@@ -55,6 +55,9 @@
 //!   __prt!(..)           message!()'s and prt!()'s format strings, written
 //!                        into a printbuf - a ToText argument to_text()'d
 //!                        into it; nothing C sees (prt.rs)
+//!   #[args_stored_once]  an async fn as fn -> impl Future { async move }, so
+//!                        its by-value arguments are stored once in its
+//!                        future, not twice (args_stored_once.rs)
 //!
 //! Zero dependencies: the kernel build compiles this with a bare rustc.
 
@@ -69,6 +72,7 @@ mod cstruct {
 use cstruct::{bitfield_type, enum_text, expand_enum_list, parse_c_export, parse_cstruct, parse_items, rust_ident,
               spell_concat, CEnumDef, CEnumKind, CEnumVariant, CItem, CXEntry};
 
+mod args_stored_once;
 mod fieldwise;
 mod options;
 mod init;
@@ -455,6 +459,15 @@ pub fn vtable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let head: TokenStream = head.into_iter().collect();
         Ok(tokens(&format!("{head} {{ {body} {has} }}")))
     })
+}
+
+/// `#[args_stored_once]` on an async fn: the same fn, as `fn ->
+/// impl Future { async move { body } }`, so an argument live across an
+/// await is stored once in its future - an async fn stores it twice
+/// (rust-lang/rust#62958). See args_stored_once.rs.
+#[proc_macro_attribute]
+pub fn args_stored_once(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand("#[args_stored_once]", || args_stored_once::args_stored_once(attr, item))
 }
 
 /// `#[placed(Base.field)]`, ahead of `#[pin_data]` and the derives, on a
