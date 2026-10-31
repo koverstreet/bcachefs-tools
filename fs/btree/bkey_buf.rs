@@ -28,6 +28,9 @@ pub struct BkeyBuf {
     heap:    Option<NonNull<u64>>,
 }
 
+// SAFETY: it owns its heap buffer
+unsafe impl Send for BkeyBuf {}
+
 impl BkeyBuf {
     /// Holding a deleted key, as bch2_bkey_buf_init() leaves it.
     pub fn new() -> Self {

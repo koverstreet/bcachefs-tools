@@ -11,6 +11,9 @@ use crate::util::os_str::{OsStr, OsStrExt};
 #[repr(transparent)]
 pub struct Printbuf(c::printbuf);
 
+// SAFETY: a heap buffer and its counts, owned: nothing in it is a thread's
+unsafe impl Send for Printbuf {}
+
 /// Undoes Printbuf::indent() on drop.
 pub struct PrintbufIndent<'a> {
     buf: &'a mut Printbuf,

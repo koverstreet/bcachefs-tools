@@ -62,6 +62,9 @@ pub struct bch_io_failures {
     pub ec_msg: c::printbuf,
 }
 
+// SAFETY: its message owns its buffer
+unsafe impl Send for bch_io_failures {}
+
 c_xmacro! {
     BCH_READ_FLAGS(x) {
         (retry_if_stale),
