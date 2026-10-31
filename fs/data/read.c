@@ -497,8 +497,9 @@ static void bch2_rbio_retry(struct work_struct *work)
 			 * layer: errcode also holds our own verdicts (device
 			 * offline, stale pointer, decompress error), and those
 			 * aren't block statuses to be counted as unknown ones.
-			 * Decompression failures are counted where they happen,
-			 * in bch2_bio_uncompress().
+			 * Decompression failures are counted where the read
+			 * path gets them back from bch2_bio_uncompress(), if
+			 * the checksum was good.
 			 */
 			darray_for_each(failed, f) {
 				if (bch2_err_matches(f->errcode, BCH_ERR_blockdev_io_error))
@@ -684,13 +685,13 @@ static int __bch2_read_endio_work(struct bch_read_bio *rbio)
 			 * On a checksum error we still try to decompress - a
 			 * bitflip often decompresses fine, and we return what
 			 * we have. But the checksum error is the one that
-			 * describes what happened, so don't report a
+			 * describes what happened, so don't report or count a
 			 * decompression failure over it: fall through to the
 			 * !csum_good check below.
 			 */
 			ret = bch2_bio_uncompress(c, src, dst, dst_iter, crc);
 			if (ret && !c->opts.no_data_io && csum_good)
-				return ret;
+				return bch2_decompress_err(c, ret);
 		} else {
 			/* don't need to decrypt the entire bio: */
 			nonce = nonce_add(nonce, crc.offset << 9);
@@ -723,7 +724,7 @@ static int __bch2_read_endio_work(struct bch_read_bio *rbio)
 			 */
 			ret = bch2_bio_uncompress(c, src, dst, (struct bvec_iter) {}, crc);
 			if (ret && !c->opts.no_data_io && csum_good)
-				return ret;
+				return bch2_decompress_err(c, ret);
 
 			/* We decrypted to decompress; re-encrypt: */
 			try(bch2_rbio_decrypt(c, rbio, crc, nonce));
