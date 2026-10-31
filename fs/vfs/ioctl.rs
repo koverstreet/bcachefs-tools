@@ -435,18 +435,9 @@ fn goingdown(fs: &Fs, user: UserArg<u32>) -> Result<(), BchError> {
     prt!(&mut *msg, "shutdown by ioctl type {flags}");
 
     match flags {
-        c::FSOP_GOING_FLAGS_DEFAULT => {
-            // SAFETY: a mounted filesystem's superblock, and its device
-            let bdev = unsafe { (*fs.vfs_sb).s_bdev };
-            ret_to_result_void(unsafe { c::bdev_freeze(bdev) })?;
-
-            let _ = fs.journal_flush();
-            fs.emergency_read_only(&mut msg);
-
-            unsafe { c::bdev_thaw(bdev) };
-            Ok(())
-        }
-        c::FSOP_GOING_FLAGS_LOGFLUSH => {
+        // DEFAULT froze s_bdev around the flush: with our holder ops, which
+        // have no .freeze, that only synced its page cache, which we don't use
+        c::FSOP_GOING_FLAGS_DEFAULT | c::FSOP_GOING_FLAGS_LOGFLUSH => {
             let _ = fs.journal_flush();
             fs.emergency_read_only(&mut msg);
             Ok(())

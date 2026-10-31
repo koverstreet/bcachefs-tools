@@ -169,15 +169,10 @@ impl<T: FsType> FsContext<T> {
         }
     }
 
-    /// A new superblock owning @data, s_bdev @bdev, with an anonymous s_dev.
-    /// On failure, @data is dropped.
-    ///
-    /// # Safety
-    /// @bdev is live while the superblock is: @data's, say, a device it holds
-    /// open until kill_sb drops it.
-    pub unsafe fn create_super(&mut self, data: T::Data, bdev: NonNull<c::block_device>)
-        -> Result<NewSuper<T>>
-    {
+    /// A new superblock owning @data, with an anonymous s_dev and no s_bdev: a
+    /// member's device can leave while it's mounted. On failure, @data is
+    /// dropped.
+    pub fn create_super(&mut self, data: T::Data) -> Result<NewSuper<T>> {
         let key = data.into_raw();
         self.raw_mut().s_fs_info = key.as_ptr().cast();
 
@@ -199,12 +194,8 @@ impl<T: FsType> FsContext<T> {
             }
         };
 
-        // SAFETY: a superblock sget_fc() created, s_fs_info @data: s_bdev is
-        // @bdev, which the caller's keeping live
-        unsafe {
-            (*sb.as_ptr().cast::<c::super_block>()).s_bdev = bdev.as_ptr().cast();
-            Ok(NewSuper::from_raw(sb.cast()))
-        }
+        // SAFETY: a superblock sget_fc() created, s_fs_info @data
+        Ok(unsafe { NewSuper::from_raw(sb.cast()) })
     }
 }
 

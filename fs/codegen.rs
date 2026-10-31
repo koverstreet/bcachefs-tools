@@ -29,7 +29,6 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/hash.h",			// GOLDEN_RATIO_64, util/hash.rs's hash_64()
     "linux/mm.h",			// totalram_pages(), a backpointer scan's batch limit
     "linux/mount.h",			// mnt_want_write_file(), vfs/ioctl.rs's
-    "linux/blkdev.h",			// bdev_freeze(), vfs/ioctl.rs's goingdown
     "linux/statfs.h",			// struct kstatfs, uuid_to_fsid(): vfs/super_block.rs's statfs
     "linux/fileattr.h",			// struct file_kattr, fileattr_fill_xflags(): vfs/attr.rs's
     "linux/compat.h",			// in_compat_syscall(): vfs/dir.rs's 32-bit readdir
@@ -77,7 +76,6 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/mm.h",
     "linux/fs.h",
     "linux/mount.h",
-    "linux/blkdev.h",
     "linux/statfs.h",
     "linux/fileattr.h",
     "linux/compat.h",
@@ -109,7 +107,7 @@ const UNBLOCKLISTED: &[&str] = &[
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
     "crc32c", "crc64_be", "sha256", "anon_inode_getfile",
-    "mnt_want_write_file", "mnt_drop_write_file", "bdev_freeze", "bdev_thaw",
+    "mnt_want_write_file", "mnt_drop_write_file",
     "__genradix_ptr", "__genradix_ptr_alloc", "__genradix_iter_peek", "__genradix_free",
     "closure_get", "closure_get_not_zero", "closure_put", "closure_init_stack", "closure_sync", "closure_call",
     "closure_sync_timeout",

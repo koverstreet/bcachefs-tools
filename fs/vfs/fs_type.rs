@@ -12,8 +12,7 @@
 //! - Otherwise, open and start the filesystem - recovery - while no
 //!   superblock exists, so nothing waits on one while recovery runs (sync()
 //!   waits on every superblock not yet born). Then create its superblock,
-//!   owning it, registered under its first online member's device; then
-//!   fill it.
+//!   owning it, and fill it.
 //!
 //! The superblock owns the filesystem from create_super() on, and kill_sb
 //! exits it. Before that the mount does, as an OpenFs.
@@ -220,16 +219,8 @@ impl Bcachefs {
             fc.set_sb_flags(c::SB_RDONLY as u32);
         }
 
-        let Some(bdev) = fs.online_members().next().and_then(|ca| NonNull::new(ca.disk_sb.bdev)) else {
-            crate::bch_err!(&*fs, "mounting: no online device");
-            return Err(c::ENODEV.into());
-        };
-
         let fs_ptr = fs.as_ptr();
-        // SAFETY: a member's, which the filesystem holds open until kill_sb
-        // exits it - unless that member's removed while it's mounted, which
-        // leaves s_bdev stale, as C's did; s_dev is anonymous, and stays good
-        let mut sb = unsafe { fc.create_super(fs, bdev) }?;
+        let mut sb = fc.create_super(fs)?;
         // SAFETY: the superblock's now, live until kill_sb
         let fs = unsafe { Fs::borrow_raw(fs_ptr) };
 
