@@ -113,6 +113,12 @@ unsafe impl<R: ::pin_init::Zeroable> ::pin_init::Zeroable for Noio<R> {}
 
 impl<'a, R: RawRwLock<GuardState = ()>, G: Sync, P> ReadGuard<'a, Noio<R>, G, P> {
     pub fn with_write<T>(&mut self, f: impl FnOnce(&mut Guard<'_, Noio<R>, G, P>) -> T) -> T {
+        /*
+         * Raw of the inner rwsem: our caller holds the lock read via the noio
+         * guard, so PF_MEMALLOC_NOIO stays set across this temporary upgrade
+         * to write - the raw up/down only move the lock, not the memalloc
+         * scope.
+         */
         let lock = self.lock();
         unsafe { lock.raw().0.unlock_shared(()) };
         let ret = f(&mut lock.write());
