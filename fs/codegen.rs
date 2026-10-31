@@ -173,7 +173,8 @@ const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "
 const BLOCKLIST_TYPE: &[&str] = &["inode", "file", "dir_context", "user_namespace", "kqid",
                                      "fiemap_extent_info", "address_space", "vm_fault",
                                      "vm_operations_struct", "vm_area_struct", "vm_area_desc", "kiocb",
-                                     "super_block", "super_operations", "percpu_ref", "ida"];
+                                     "super_block", "super_operations", "percpu_ref", "ida",
+                                     "blk_holder_ops"];
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
                                  "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*",
                                  "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*",
