@@ -28,8 +28,8 @@ use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
-use bcachefs_kernel::fs::{Fs, OpenFs};
-use bcachefs_kernel::util::darray::DarrayVec;
+use bcachefs_kernel::fs::{filter_dead, Fs, OpenFs};
+use bcachefs_kernel::util::alloc::{flags::GFP_KERNEL, KVVec};
 use c::bch_sb_handle;
 use c::bch_opts;
 use uuid::Uuid;
@@ -236,15 +236,13 @@ pub fn filter_current_sbs(
 	sbs: Vec<(PathBuf, bch_sb_handle)>,
 	opts: &bch_opts,
 ) -> Result<Vec<(PathBuf, bch_sb_handle)>, BchError> {
-	let mut opts = *opts;
-
-	// Ahead of bch2_sbs_filter_dead(), which frees the superblock of every
+	// Ahead of filter_dead(), which frees the superblock of every
 	// device it drops - and drops one that diverged the same way it drops one
 	// that was properly removed, leaving nothing to tell them apart afterwards.
 	// The short device count then reads as "a disk is missing", so mount asks
 	// whether to go degraded, and yes silently picks one of two histories.
 	if !opts.no_splitbrain_check_or_default() {
-		let divergent = crate::splitbrain::find(&sbs, &opts);
+		let divergent = crate::splitbrain::find(&sbs, opts);
 		if !divergent.is_empty() {
 			// One warning, not one per line: the report is a single
 			// account with blank lines in it for readability, and a
@@ -255,21 +253,14 @@ pub fn filter_current_sbs(
 		}
 	}
 
-	let handles = sbs.into_iter()
-		.map(|(_, sb)| sb)
-		.collect::<Vec<_>>();
-	let mut handles = DarrayVec::<c::bch_sb_handles, bch_sb_handle>::from_vec(handles);
-
-	let ret = unsafe {
-		c::bch2_sbs_filter_dead(handles.as_mut(), &mut opts, std::ptr::null_mut())
-	};
-	if ret != 0 {
-		return Err(BchError::from_raw(-ret));
+	let mut handles = KVVec::with_capacity(sbs.len(), GFP_KERNEL)?;
+	for (_, sb) in sbs {
+		handles.push(sb, GFP_KERNEL)?;
 	}
+	filter_dead(&mut handles, opts, None)?;
 
-	let handles = handles.into_vec();
 	let mut filtered = Vec::with_capacity(handles.len());
-	for sb in handles {
+	for sb in handles.drain_all() {
 		let path = sb_handle_path(&sb);
 		let path = preferred_multipath_devnode(&path).unwrap_or(path);
 		filtered.push((path, sb));

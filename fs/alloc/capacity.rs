@@ -219,6 +219,12 @@ pub fn bch2_dev_allocator_remove(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {
     closure_wait_event(&fs.allocator.open_buckets_wait, || !dev_has_open_write_point(fs, ca));
 }
 
+impl crate::fs::StateLockWrite<'_> {
+    pub fn dev_allocator_add(&self, ca: &c::bch_dev) {
+        dev_allocator_set_rw(self.fs(), ca, true);
+    }
+}
+
 /// @ca going read-write: into rw_devs[].
 #[c_export]
 pub fn bch2_dev_allocator_add(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {

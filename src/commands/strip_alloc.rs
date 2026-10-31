@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use bch_bindgen::c;
 use anyhow::bail;
 use clap::Parser;
-use crate::wrappers::bch_err_str;
 
 #[derive(Parser, Debug)]
 #[command(about = "Strip alloc info for read-only use")]
@@ -24,9 +23,8 @@ fn cmd_strip_alloc(cli: Cli) -> anyhow::Result<()> {
 
         if fs.sb.clean.get() == 0 {
             println!("Filesystem not clean, running recovery");
-            let ret = unsafe { c::bch2_fs_start(fs.as_ptr()) };
-            if ret != 0 {
-                bail!("Error starting filesystem: {}", bch_err_str(ret));
+            if let Err(e) = fs.start() {
+                bail!("Error starting filesystem: {}", e.msg());
             }
             drop(fs);
             continue;

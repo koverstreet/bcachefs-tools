@@ -592,7 +592,7 @@ fn is_splitbrain(err: &anyhow::Error) -> bool {
 
 /// Scan for the filesystem's devices, and if its history has forked, ask.
 ///
-/// The check runs deep in the scan - it has to, before bch2_sbs_filter_dead()
+/// The check runs deep in the scan - it has to, before filter_dead()
 /// frees the divergent superblocks - but the *decision* cannot, because the
 /// scan re-runs on every device arrival while waiting for members: a question
 /// there would be asked repeatedly and the answer could not persist. So the

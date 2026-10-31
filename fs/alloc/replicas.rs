@@ -408,7 +408,7 @@ pub unsafe fn bch2_can_read_replicas_with_devs(_c: &Opaque<c::bch_fs>, devs: &c:
 /// user data at all, and leaving rw, no fewer replicas than configured of
 /// each - than there are now, if that's fewer - unless @flags allows going
 /// degraded. If not, why in @err.
-fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::bch_write_check,
+pub(crate) fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::bch_write_check,
                        flags: u32, err: &mut Printbuf) -> bool {
     type D = c::bch_data_type;
 

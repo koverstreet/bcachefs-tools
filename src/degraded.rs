@@ -1,6 +1,6 @@
 //! Answering degraded=ask.
 //!
-//! bch2_fs_may_start() acts on yes and very and refuses everything else, `ask`
+//! may_start() acts on yes and very and refuses everything else, `ask`
 //! included - correct for a kernel, which has no user to ask. So `ask` is ours
 //! to resolve, and since it is the default, a filesystem that loses a member is
 //! refused outright until something here answers.
@@ -10,11 +10,11 @@
 //! whether the data on the missing devices has another copy, which is a reading
 //! of the replicas table against the devices actually here - the kernel's to
 //! make, at the moment it decides. So we attempt the mount and let
-//! bch2_fs_may_start() classify its own refusal, as
+//! may_start() classify its own refusal, as
 //! insufficient_devices_data_intact or insufficient_devices_data_lost.
 //!
-//! Attempting is cheap: bch2_fs_may_start() is the first thing
-//! __bch2_fs_start() does, before recovery reads and sorts the journal, which
+//! Attempting is cheap: may_start() is the first thing
+//! Fs::start() does, before recovery reads and sorts the journal, which
 //! after an unclean shutdown is where the time goes. This would not be worth
 //! doing if it were the other way round.
 //!
@@ -88,7 +88,7 @@ impl Situation {
     }
 
     /// What it costs, and the question that follows from it. Neither says which
-    /// devices: the count is in front of this and bch2_fs_may_start() has
+    /// devices: the count is in front of this and may_start() has
     /// already listed them, with everything it knows about each.
     fn line(self) -> (&'static str, &'static str) {
         match self {
@@ -196,7 +196,7 @@ impl Ask {
 
     /// Put the question, if @err is one we know how to ask about.
     ///
-    /// The devices themselves are not named here: bch2_fs_may_start() already
+    /// The devices themselves are not named here: may_start() already
     /// printed them, along with everything it knows about each, on its way to
     /// throwing @err.
     pub fn put(&self, err: &BchError) -> Result<Outcome> {

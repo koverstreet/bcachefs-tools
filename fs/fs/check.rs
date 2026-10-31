@@ -936,7 +936,7 @@ pub mod ioctl {
         unsafe { (*fs.as_ptr()).recovery_task = c::get_current() };
 
         let mut buf = Printbuf::new();
-        let ret = match crate::errcode::ret_to_result_void(unsafe { c::bch2_fs_start(fs.as_ptr()) }) {
+        let ret = match fs.start() {
             Err(e) => {
                 prt!(&mut buf, "{}: error starting filesystem: {}\n",
                      fs.name().to_str().unwrap_or("?"), e.msg());

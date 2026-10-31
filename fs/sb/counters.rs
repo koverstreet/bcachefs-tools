@@ -385,7 +385,7 @@ crate::fs_delayed_work! {
 }
 
 impl RecentCounters {
-    fn queue(fs: &Fs) {
+    pub(crate) fn queue(fs: &Fs) {
         fs.counters_recent.queue(Queue::system_dfl(), nsecs_to_jiffies(NSEC_PER_SEC / 2));
     }
 }

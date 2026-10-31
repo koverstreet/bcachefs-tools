@@ -12,7 +12,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 
 use crate::c;
-use bcachefs_kernel::errcode::{self, BchError, errptr_to_result};
+use bcachefs_kernel::errcode::{self, BchError};
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::util::printbuf::Printbuf;
 
@@ -45,24 +45,12 @@ impl FsExt for Fs {
     fn open_with_key(devs: &[PathBuf], mut opts: c::bch_opts, user_key: Option<&c::bch_key>)
         -> Result<OpenFs, BchError>
     {
-        let devs_cstrs: Vec<_> = devs
+        let devs: Vec<_> = devs
             .iter()
             .map(|i| CString::new(i.as_os_str().as_bytes()).unwrap())
             .collect();
 
-        let mut devs_array: Vec<_> = devs_cstrs.iter().map(|i| i.as_ptr()).collect();
-
-        let ret = unsafe {
-            let mut devs: c::darray_const_str = std::mem::zeroed();
-            devs.data = devs_array[..].as_mut_ptr();
-            devs.nr = devs_array.len();
-            c::bch2_fs_open(&mut devs, &mut opts,
-                            user_key.map_or(std::ptr::null(), |k| k as *const _))
-        };
-
-        // bch2_fs_open() returns the filesystem or an error, never NULL
-        let ret = core::ptr::NonNull::new(ret).expect("a filesystem, or an error");
-        errptr_to_result(ret).map(|fs| unsafe { OpenFs::from_raw(fs) })
+        OpenFs::open(devs.iter().map(CString::as_c_str), &mut opts, user_key)
     }
 
     fn write(&self, inum: u64, offset: u64, subvol: u32, replicas: u32, data: &[u8], new_i_size: u64) -> WriteOp {

@@ -1457,6 +1457,7 @@ impl Fs {
 
 mod change;
 pub use change::OptChange;
+pub(crate) use change::opts_hooks_pre_set;
 
 #[path = "opts_c_export.rs"]
 pub mod c_export;

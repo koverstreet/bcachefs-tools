@@ -6,7 +6,7 @@
 //! has to choose.
 //!
 //! This runs before [`crate::device_scan::filter_current_sbs`] because
-//! bch2_sbs_filter_dead() drops divergent devices *and frees their
+//! filter_dead() drops divergent devices *and frees their
 //! superblocks* - and drops them the same way it drops devices that were
 //! properly removed, so all that is left afterwards is a short device count,
 //! which reads as "you are missing a disk".
@@ -15,7 +15,7 @@
 //! what to say. Only BCH_ERR_device_splitbrain means divergence - the other
 //! returns are different problems, left to the kernel to report. Its own
 //! account reaches stderr first, ending in "Not using <dev>", which describes
-//! what bch2_sbs_filter_dead() would do rather than what we do.
+//! what filter_dead() would do rather than what we do.
 
 use std::path::{Path, PathBuf};
 
@@ -25,6 +25,7 @@ use log::warn;
 use crate::prompt::{fs_name, Choice, Prompt, Question, NO_ONE_TO_ASK, PROMPT_TIMEOUT};
 use bcachefs_kernel::c;
 use bcachefs_kernel::init::dev::dev_in_fs;
+use bcachefs_kernel::fs::newest;
 use bcachefs_kernel::sb::members;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use c::bch_sb_handle;
@@ -46,17 +47,14 @@ fn write_time(sb: &c::bch_sb) -> u64 {
     sb.write_time.get()
 }
 
-/// Highest seq, then newest write time - sb_cmp() in fs/init/fs.c.
+/// The filesystem's superblock as the kernel picks it: newest().
 ///
 /// Only authoritative in the sense the kernel means it: newest wins, which
 /// across a genuine fork is arbitrary and quite possibly wrong - a stale
 /// rescue image booted later is newer than the filesystem the user wants. Used
 /// to have something to compare against, never to decide anything.
 fn authoritative(sbs: &[(PathBuf, bch_sb_handle)]) -> Option<usize> {
-    sbs.iter()
-        .enumerate()
-        .max_by_key(|(_, (_, sb))| (seq(sb.sb()), write_time(sb.sb())))
-        .map(|(i, _)| i)
+    newest(sbs.iter().map(|(_, h)| h.sb()))
 }
 
 /// Devices that have diverged, or an empty vec. Never errors: anything that is

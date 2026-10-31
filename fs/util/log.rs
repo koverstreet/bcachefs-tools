@@ -73,6 +73,11 @@ impl LogLevel {
     fn num(self) -> u8 {
         self.0 - b'0'
     }
+
+    /// As C's KERN_* strings
+    pub fn prefix(self) -> [u8; 2] {
+        [0x01, self.0]
+    }
 }
 
 /// Print @msg at @level: what the bch_err!() family expands to.

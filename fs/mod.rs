@@ -308,9 +308,6 @@ pub mod c {
     #[cfg(not(linux_ge = "6.17"))]
     pub use self::system_unbound_wq as system_dfl_wq;
 
-
-    crate::impl_darray!(bch_sb_handles, bch_sb_handle);
-
     use bitfield::bitfield;
     bitfield! {
         pub struct bch_scrypt_flags(u64);

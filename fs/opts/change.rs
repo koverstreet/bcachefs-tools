@@ -127,7 +127,7 @@ fn opt_hook_pre_set(fs: &Fs, ca: Option<&c::bch_dev>, inum: u64, id: opt_id, v: 
 }
 
 /// Each option's pre-set hook, for c->opts as they are: at mount.
-pub(super) fn opts_hooks_pre_set(fs: &Fs) -> Result<(), BchError> {
+pub(crate) fn opts_hooks_pre_set(fs: &Fs) -> Result<(), BchError> {
     for opt in &OPTS {
         opt_hook_pre_set(fs, None, 0, opt.id, fs.opts.get(opt.id), false)?;
     }

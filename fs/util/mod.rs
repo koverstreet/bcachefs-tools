@@ -6,7 +6,6 @@ pub mod bitmap;
 pub mod clock;
 pub mod closure;
 pub mod cuckoo;
-pub mod darray;
 #[cfg(CONFIG_DEBUG_FS)]
 pub mod debugfs;
 pub mod demangle;

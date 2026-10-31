@@ -17,8 +17,13 @@ use crate::sb::io::SbWrite;
 use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use core::ffi::c_int;
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, c_extern};
 use crate::format::Btree;
+
+c_extern! {
+    pub fn bch2_fs_recovery(c: *mut c::bch_fs) -> c_int;
+    pub fn bch2_fs_initialize(c: *mut c::bch_fs) -> c_int;
+}
 
 type Pass = c::bch_recovery_pass;
 

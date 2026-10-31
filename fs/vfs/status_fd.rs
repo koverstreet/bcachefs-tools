@@ -29,12 +29,12 @@ use pin_init::{pin_data, pin_init};
 #[pin_data]
 struct StatusFd {
     /// The filesystem coming up on this channel. The mounting thread sets it
-    /// around bch2_fs_start() and clears it after, because that is the only
+    /// around Fs::start() and clears it after, because that is the only
     /// window where we know it's alive - the fd outlives the mount either way.
     ///
     /// A mutex, not a spinlock, because the ioctl hands the filesystem to
     /// bch2_fs_ioctl(), which sleeps: the lock has to be held across that
-    /// call, or the mounting thread could return from bch2_fs_start() and
+    /// call, or the mounting thread could return from Fs::start() and
     /// tear it down underneath it. The only waiter is that thread, once, at
     /// the end of the mount.
     #[pin]

@@ -1128,6 +1128,12 @@ impl c::bch_sb_bdev {
         unsafe { &*self.bdev }
     }
 
+    /// The path it was opened by
+    pub fn name(&self) -> &CStr {
+        // SAFETY: read_super()'s copy of the path, freed with the handle
+        if self.sb_name.is_null() { c"" } else { unsafe { CStr::from_ptr(self.sb_name.cast()) } }
+    }
+
     /// The device closed, and what names it freed.
     fn free(&mut self) {
         use crate::util::alloc::kfree;

@@ -1200,6 +1200,21 @@ pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
     }
 }
 
+/// A scheduled pass has work, and can't ask for writes later - it fails with
+/// erofs_trans_commit. opts.recovery_passes counts because Fs::start()
+/// asks before recovery schedules them.
+#[c_export]
+pub fn go_rw_in_recovery(fs: &Fs) -> bool {
+    fs.flag(c::bch_fs_flags::BCH_FS_may_upgrade_downgrade) &&
+        (!fs.journal_keys.keys().is_empty() ||
+         fs.opts().read_only.get() == 0 ||
+         fs.sb.clean.get() == 0 ||
+         fs.opts().recovery_passes.get() != 0 ||
+         fs.sb.recovery_passes_required.get() != 0 ||
+         fs.recovery.runner.scheduled_passes_ephemeral.get() != 0 ||
+         (fs.opts().fsck.get() != 0 && !fs.feature(c::bch_sb_feature::BCH_FEATURE_no_alloc_info)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
