@@ -2,7 +2,7 @@
 
 use crate::types::DArray;
 use cstruct_macros::{CStruct, c_extern, c_typedef};
-use crate::format::Btree;
+use crate::format::{Btree, Nonce};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -42,9 +42,9 @@ pub type journal_entry_type = c::bch_jset_entry_type;
 
 impl c::jset__head {
     /// The nonce of this journal entry: its seq, in the journal domain.
-    pub fn nonce(&self) -> c::nonce {
+    pub fn nonce(&self) -> Nonce {
         let seq = self.seq.get();
-        c::nonce {
+        Nonce {
             d: [
                 Le32::new(0),
                 Le32::new(seq as u32),

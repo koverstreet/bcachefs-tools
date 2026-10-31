@@ -16,7 +16,7 @@ use core::mem::offset_of;
 use core::ffi::{c_int, c_uint, c_void};
 use cstruct_macros::{CStruct, bitfield, c_extern, c_typedef};
 use nestify::nest;
-use crate::format::Btree;
+use crate::format::{Btree, Nonce};
 
 nest! {
     #[repr(C)]
@@ -56,9 +56,9 @@ impl c::bset__head {
     /// The nonce of this bset, at byte @offset of its btree node: the offset,
     /// the bset's seq, and the low half of its journal seq, in the btree
     /// domain.
-    pub fn nonce(&self, offset: u32) -> c::nonce {
+    pub fn nonce(&self, offset: u32) -> Nonce {
         let seq = self.seq.get();
-        c::nonce {
+        Nonce {
             d: [
                 Le32::new(offset),
                 Le32::new(seq as u32),

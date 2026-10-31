@@ -941,8 +941,9 @@ vstruct!(unsized bch_sb_field_journal_v2, field.u64s, start = 0);
 /* BCH_SB_FIELD_crypt: */
 
 #[repr(C)]
+#[c_name(nonce)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-pub struct nonce {
+pub struct Nonce {
     pub d: [Le32; 4],
 }
 

@@ -36,7 +36,7 @@ use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, Val
 use arrayvec::ArrayVec;
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
-use crate::format::Bversion;
+use crate::format::{Bversion, Nonce};
 
 #[path = "ptrs_edit.rs"]
 mod edit;
@@ -971,11 +971,11 @@ pub fn crc_is_compressed(crc: &c::bch_extent_crc_unpacked) -> bool {
 }
 
 /// The nonce of @crc's data, in an extent of version @version: extent_nonce().
-pub fn extent_nonce(version: Bversion, crc: &c::bch_extent_crc_unpacked) -> c::nonce {
+pub fn extent_nonce(version: Bversion, crc: &c::bch_extent_crc_unpacked) -> Nonce {
     let compression_type = if crc_is_compressed(crc) { u32::from(crc.compression_type) } else { 0 };
     let size = if compression_type != 0 { crc.uncompressed_size } else { 0 };
     let (lo, hi) = (version.lo, version.hi);
-    let nonce = c::nonce {
+    let nonce = Nonce {
         d: [
             Le32::new(size << 22),
             Le32::new(lo as u32),
@@ -1212,7 +1212,7 @@ mod tests {
     #[test]
     fn extent_nonce_as_c_makes_it() {
         let version = Bversion { lo: 0x1122_3344_5566_7788, hi: 0x9a };
-        let words = |n: c::nonce| n.d.map(|w| w.get());
+        let words = |n: Nonce| n.d.map(|w| w.get());
 
         // not compressed: no size or compression type; crc.nonce 3 is three
         // 512 byte sectors, 24 ChaCha20 blocks

@@ -137,7 +137,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
-use crate::c::{bch_sb, bch_sb_buf, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
+use crate::c::{bch_sb, bch_sb_buf, bch_sb_field_crypt, bch_sb_handle, block_device};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::members;
@@ -164,7 +164,7 @@ use arrayvec::ArrayVec;
 use core::pin::Pin;
 use pin_init::PinInit;
 use crate::published;
-use crate::format::Btree;
+use crate::format::{Btree, Nonce};
 
 /*
  * bringup: this write is part of bringing the filesystem up - allowed before
@@ -1053,12 +1053,12 @@ impl c::bch_sb__head {
     }
 
     /// The nonce the superblock is encrypted with.
-    pub fn nonce(&self) -> nonce {
+    pub fn nonce(&self) -> Nonce {
         let [a, b, c, d, e, f, g, h, _rest @ ..] = self.uuid.b;
         // nonce.d is __le32: the raw bytes, as they are.
         use crate::types::Le32;
         let raw = |b| Le32::new(u32::from_le_bytes(b));
-        nonce {
+        Nonce {
             d: [Le32::new(0), Le32::new(0), raw([a, b, c, d]), raw([e, f, g, h])],
         }
     }
@@ -1282,7 +1282,7 @@ impl bch_sb<Unvalidated> {
     pub fn checksum(&self) -> c::bch_csum {
         let ty = c::bch_csum_type(self.csum_type() as u32);
         assert!(!ty.is_encryption(), "a superblock checksum of encryption type {ty}");
-        crate::data::checksum::csum_vstruct(None, ty, nonce::default(), self)
+        crate::data::checksum::csum_vstruct(None, ty, Nonce::default(), self)
     }
 }
 

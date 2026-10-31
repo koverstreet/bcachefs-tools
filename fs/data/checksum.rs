@@ -38,7 +38,7 @@ use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint, c_void};
 use cstruct_macros::c_export;
-use crate::format::Bversion;
+use crate::format::{Bversion, Nonce};
 
 // ── Nonces ───────────────────────────────────────────────────────────────
 
@@ -54,7 +54,7 @@ pub const BCH_NONCE_POLY:	u32 = 1 << 31;
 
 /// The nonce @offset bytes further into its stream - a whole number of
 /// ChaCha20 blocks: C's nonce_add().
-impl core::ops::Add<u32> for c::nonce {
+impl core::ops::Add<u32> for Nonce {
     type Output = Self;
 
     fn add(mut self, offset: u32) -> Self {
@@ -87,7 +87,7 @@ enum Csum {
 
 impl Csum {
     /// An encryption type's is keyed by @fs's key: panics without one.
-    fn new(fs: Option<&Fs>, ty: c::bch_csum_type, mut nonce: c::nonce) -> Self {
+    fn new(fs: Option<&Fs>, ty: c::bch_csum_type, mut nonce: Nonce) -> Self {
         use c::bch_csum_type as t;
         match ty {
             t::BCH_CSUM_crc32c          => Csum::Crc32c { seed: 0, xor: 0 },
@@ -167,13 +167,13 @@ impl Csum {
 
 /// The checksum of vstruct @v whose first field is its checksum: of all of it
 /// after that field - C's csum_vstruct(). @fs for an encryption type's key.
-pub fn csum_vstruct<T: Unsized + ?Sized>(fs: Option<&Fs>, ty: c::bch_csum_type, nonce: c::nonce,
+pub fn csum_vstruct<T: Unsized + ?Sized>(fs: Option<&Fs>, ty: c::bch_csum_type, nonce: Nonce,
                                          v: &T) -> c::bch_csum {
     checksum(fs, ty, nonce, &bytes_of(v)[size_of::<c::bch_csum>()..])
 }
 
 /// @data's checksum: Fs::checksum()'s, and checksum_unkeyed()'s.
-fn checksum(fs: Option<&Fs>, ty: c::bch_csum_type, nonce: c::nonce, data: &[u8]) -> c::bch_csum {
+fn checksum(fs: Option<&Fs>, ty: c::bch_csum_type, nonce: Nonce, data: &[u8]) -> c::bch_csum {
     let mut csum = Csum::new(fs, ty, nonce);
     csum.update(data);
     csum.finish()
@@ -221,7 +221,7 @@ impl c::bch_csum_type {
     /// filesystem. Not an encryption type's.
     pub fn checksum_unkeyed(self, data: &[u8]) -> c::bch_csum {
         assert!(!self.is_encryption(), "an unkeyed checksum, of encryption type {}", self.0);
-        checksum(None, self, c::nonce::default(), data)
+        checksum(None, self, Nonce::default(), data)
     }
 
     /// The checksum of a range whose two halves checksum to @a and @b, @b
@@ -231,7 +231,7 @@ impl c::bch_csum_type {
         assert!(self.mergeable(), "merging checksums of type {self}, which don't merge");
         static ZEROES: [u8; 4096] = [0; 4096];
 
-        let mut csum = Csum::new(None, self, c::nonce::default());
+        let mut csum = Csum::new(None, self, Nonce::default());
         csum.seed(a.lo.get());
         let mut left = b_len;
         while left != 0 {
@@ -316,12 +316,12 @@ impl Fs {
     /// @data's checksum of type @ty, with @nonce - an encryption type's under
     /// the filesystem's key. A type this version doesn't know checksums to
     /// zero.
-    pub fn checksum(&self, ty: c::bch_csum_type, nonce: c::nonce, data: &[u8]) -> c::bch_csum {
+    pub fn checksum(&self, ty: c::bch_csum_type, nonce: Nonce, data: &[u8]) -> c::bch_csum {
         checksum(Some(self), ty, nonce, data)
     }
 
     /// The checksum of @r's data. As checksum().
-    pub fn checksum_range(&self, ty: c::bch_csum_type, nonce: c::nonce, r: BioRange<'_>) -> c::bch_csum {
+    pub fn checksum_range(&self, ty: c::bch_csum_type, nonce: Nonce, r: BioRange<'_>) -> c::bch_csum {
         let mut csum = Csum::new(Some(self), ty, nonce);
         for chunk in r {
             // SAFETY: the chunk's bytes, mapped
@@ -337,7 +337,7 @@ impl Fs {
 struct Chacha(c::chacha_state);
 
 impl Chacha {
-    fn new(key: &c::bch_key, nonce: c::nonce) -> Self {
+    fn new(key: &c::bch_key, nonce: Nonce) -> Self {
         let mut words: [u32; 8] = core::array::from_fn(|i| (key.key[i / 2].get() >> (32 * (i % 2))) as u32);
         let mut s = Chacha(c::chacha_state::default());
         // SAFETY: a state to set up, from 8 words of key and 16 bytes of iv
@@ -364,7 +364,7 @@ impl Drop for Chacha {
 }
 
 /// @data, ChaCha20'd under @key from @nonce: encrypted, or decrypted.
-pub fn chacha20(key: &c::bch_key, nonce: c::nonce, data: &mut [u8]) {
+pub fn chacha20(key: &c::bch_key, nonce: Nonce, data: &mut [u8]) {
     // SAFETY: @data's
     unsafe { Chacha::new(key, nonce).crypt(data.as_mut_ptr(), data.len()) }
 }
@@ -372,7 +372,7 @@ pub fn chacha20(key: &c::bch_key, nonce: c::nonce, data: &mut [u8]) {
 impl c::bch_encrypted_key {
     /// Encrypted under @key, from the superblock's @nonce - or decrypted: the
     /// right key leaves its magic as it should be.
-    pub fn chacha20(&mut self, key: &c::bch_key, nonce: c::nonce) {
+    pub fn chacha20(&mut self, key: &c::bch_key, nonce: Nonce) {
         chacha20(key, nonce, crate::util::vstructs::plain_bytes_mut(self))
     }
 }
@@ -391,7 +391,7 @@ impl Fs {
     /// @data encrypted with @ty under the filesystem's key - or decrypted,
     /// ChaCha20 being its own inverse. Nothing, for a type that isn't
     /// encryption.
-    pub fn encrypt(&self, ty: c::bch_csum_type, nonce: c::nonce, data: &mut [u8]) -> Result<(), BchError> {
+    pub fn encrypt(&self, ty: c::bch_csum_type, nonce: Nonce, data: &mut [u8]) -> Result<(), BchError> {
         if ty.is_encryption() {
             chacha20(self.chacha20_key()?, nonce, data);
         }
@@ -400,7 +400,7 @@ impl Fs {
 
     /// @r's data, encrypted in place: as encrypt(), for an encryption type.
     /// Each chunk but the last must be whole ChaCha20 blocks.
-    pub fn encrypt_range(&self, nonce: c::nonce, r: BioRange<'_>) -> Result<(), BchError> {
+    pub fn encrypt_range(&self, nonce: Nonce, r: BioRange<'_>) -> Result<(), BchError> {
         let mut chacha = Chacha::new(self.chacha20_key()?, nonce);
         for chunk in r {
             if chunk.len() % CHACHA_BLOCK_SIZE != 0 {
@@ -421,7 +421,7 @@ impl Fs {
 /// # Safety
 /// @data is @len bytes.
 #[c_export]
-pub unsafe fn bch2_checksum(c: Option<&Opaque<c::bch_fs>>, type_: c_uint, nonce: c::nonce,
+pub unsafe fn bch2_checksum(c: Option<&Opaque<c::bch_fs>>, type_: c_uint, nonce: Nonce,
                             data: *const c_void, len: usize) -> c::bch_csum {
     let mut csum = Csum::new(c.map(Fs::from_c), c::bch_csum_type(type_), nonce);
     // SAFETY: the caller's
@@ -432,7 +432,7 @@ pub unsafe fn bch2_checksum(c: Option<&Opaque<c::bch_fs>>, type_: c_uint, nonce:
 /// # Safety
 /// @data is @len bytes.
 #[c_export]
-pub unsafe fn bch2_encrypt(c: &Opaque<c::bch_fs>, type_: c_uint, nonce: c::nonce,
+pub unsafe fn bch2_encrypt(c: &Opaque<c::bch_fs>, type_: c_uint, nonce: Nonce,
                            data: *mut c_void, len: usize) -> c_int {
     if !c::bch_csum_type(type_).is_encryption() {
         return 0;
@@ -444,7 +444,7 @@ pub unsafe fn bch2_encrypt(c: &Opaque<c::bch_fs>, type_: c_uint, nonce: c::nonce
 /// # Safety
 /// @data is @len bytes.
 #[c_export]
-pub unsafe fn bch2_chacha20(key: &c::bch_key, nonce: c::nonce, data: *mut c_void, len: usize) {
+pub unsafe fn bch2_chacha20(key: &c::bch_key, nonce: Nonce, data: *mut c_void, len: usize) {
     // SAFETY: the caller's
     unsafe { Chacha::new(key, nonce).crypt(data.cast(), len) }
 }
@@ -452,7 +452,7 @@ pub unsafe fn bch2_chacha20(key: &c::bch_key, nonce: c::nonce, data: *mut c_void
 /// # Safety
 /// @bio is a bio, not in flight.
 #[c_export]
-pub unsafe fn bch2_checksum_bio(c: &Opaque<c::bch_fs>, type_: c_uint, nonce: c::nonce,
+pub unsafe fn bch2_checksum_bio(c: &Opaque<c::bch_fs>, type_: c_uint, nonce: Nonce,
                                 bio: *mut c::bio) -> c::bch_csum {
     // SAFETY: the caller's
     Fs::from_c(c).checksum_range(c::bch_csum_type(type_), nonce, unsafe { Bio::from_raw(bio) }.range())
@@ -463,7 +463,7 @@ pub unsafe fn bch2_checksum_bio(c: &Opaque<c::bch_fs>, type_: c_uint, nonce: c::
 /// # Safety
 /// @bio is a bio, not in flight.
 #[c_export]
-pub unsafe fn __bch2_encrypt_bio(c: &Opaque<c::bch_fs>, _type: c_uint, nonce: c::nonce, bio: *mut c::bio) -> c_int {
+pub unsafe fn __bch2_encrypt_bio(c: &Opaque<c::bch_fs>, _type: c_uint, nonce: Nonce, bio: *mut c::bio) -> c_int {
     // SAFETY: the caller's
     ret_to_c(Fs::from_c(c).encrypt_range(nonce, unsafe { Bio::from_raw(bio) }.range()))
 }
