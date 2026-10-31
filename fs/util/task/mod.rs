@@ -356,9 +356,23 @@ unsafe impl Send for TaskRef {}
 unsafe impl Sync for TaskRef {}
 
 impl TaskRef {
+    /// # Safety
+    /// The task's memory lasts till its done function runs, and what its
+    /// future borrows outlives it.
     pub unsafe fn start(self) {
         assert!(!unsafe { self.0.as_ref() }.started.replace(true), "a task started twice");
         unsafe { self.dispatch() };
+    }
+
+    /// start(), the first poll run here: in the caller's context, as an Inline
+    /// resume is in its completer's, so its first requeue() or Queue resume
+    /// moves it - even to the queue it was spawned on.
+    ///
+    /// # Safety
+    /// As start()'s.
+    pub unsafe fn start_inline(self) {
+        assert!(!unsafe { self.0.as_ref() }.started.replace(true), "a task started twice");
+        unsafe { self.run(Target::Inline) };
     }
 
     unsafe fn dispatch(self) {
@@ -373,7 +387,7 @@ impl TaskRef {
         }
         match header.target.get() {
             Target::Inline => {
-                unsafe { self.run() };
+                unsafe { self.run(Target::Inline) };
             }
             Target::Queue(wq) => {
                 unsafe { wq.as_ref().queue_work(&raw mut (*self.0.as_ptr()).work) };
@@ -381,10 +395,11 @@ impl TaskRef {
         }
     }
 
-    unsafe fn run(self) -> bool {
+    /// Polls the task, running @running_on, till it parks, finishes, or its
+    /// target moves it.
+    unsafe fn run(self, running_on: Target) -> bool {
         let header = unsafe { self.0.as_ref() };
         debug_assert!(header.waiting.load(Ordering::Relaxed).is_null() && !header.finished.get());
-        let running_on = header.target.get();
         let never_moves = header.runq.is_some() || header.thread.is_some();
         let mut polled = Polled { task: self, parks_on: None };
         let mut cx = ContextBuilder::from_waker(Waker::noop()).ext(&mut polled).build();
@@ -438,7 +453,7 @@ impl TaskRef {
             let header = unsafe { self.0.as_ref() };
             let Ok(()) = sleep_until(Sleep::IDLE.freezable(),
                 || header.waiting.load(Ordering::Acquire).is_null().then_some(()));
-            let finished = unsafe { self.run() };
+            let finished = unsafe { self.run(header.target.get()) };
             if finished {
                 return;
             }
@@ -451,7 +466,7 @@ impl RawWork for Header {
 
     #[inline(always)]
     unsafe fn run(header: NonNull<Self>) {
-        unsafe { TaskRef(header).run() };
+        unsafe { TaskRef(header).run(header.as_ref().target.get()) };
     }
 }
 

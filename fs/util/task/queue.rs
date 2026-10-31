@@ -68,7 +68,7 @@ impl RunQueue {
         while let Some(h) = NonNull::new(oldest) {
             // read before it's run, and maybe freed
             oldest = unsafe { h.as_ref() }.runq_next.load(Ordering::Relaxed);
-            unsafe { TaskRef(h).run() };
+            unsafe { TaskRef(h).run(h.as_ref().target.get()) };
         }
     }
 }
