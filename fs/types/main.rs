@@ -195,7 +195,7 @@ fn defines_and_holds(r: &Record) -> (Vec<String>, Vec<String>) {
             ([Some(t.name.clone()), t.rust_name.clone()].into_iter().flatten().collect(),
              held(&t.ty).into_iter().collect()),
         Some(CItem::Bitfield(b)) => (vec![b.name.clone()], Vec::new()),
-        Some(CItem::TaggedUnion(tu)) => (vec![tu.name.clone()],
+        Some(CItem::TaggedUnion(tu)) => ([Some(tu.name.clone()), tu.c_name.clone()].into_iter().flatten().collect(),
             tu.arms.iter().map(|a| a.ty.as_str()).chain(tu.pad.as_deref()).filter_map(held).collect()),
         _ => (Vec::new(), Vec::new()),
     }
@@ -631,6 +631,9 @@ fn main() {
                     }
                     Some(CItem::TaggedUnion(tu)) => {
                         structs.insert(tu.name.clone(), tu.c_type());
+                        if let Some(c) = &tu.c_name {
+                            structs.insert(c.clone(), tu.c_type());
+                        }
                     }
                     // a C typedef: by its own name - u##_bits in an x-macro
                     // struct body is u96 as well as u64. Not by path: to rustc

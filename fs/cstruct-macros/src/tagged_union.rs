@@ -3,7 +3,8 @@
 //!
 //!   tagged_union! {
 //!       /// ...
-//!       pub struct disk_accounting_pos {
+//!       #[c_name(disk_accounting_pos)]
+//!       pub struct DiskAccountingPos {
 //!           tag type_: u8 = disk_accounting_type,
 //!           arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: camel(f) = nr,
 //!           pad: Bpos,
@@ -47,16 +48,17 @@
 //!
 //! Generated, for the first declaration:
 //!
-//!  - `union disk_accounting_pos__ffi`: the storage, what C and disk see -
-//!    C's struct disk_accounting_pos; Plain, its pad being every byte of
-//!    it;
-//!  - `disk_accounting_pos<S>`, the storage in a state, Validated unless
+//!  - `union DiskAccountingPos__ffi`: the storage, what C and disk see -
+//!    C's struct disk_accounting_pos, by its #[c_name]; Plain, its pad being
+//!    every byte of it;
+//!  - `DiskAccountingPos<S>`, the storage in a state, Validated unless
 //!    named, as a family's types are (util/vstructs.rs): Unvalidated, bytes
 //!    from outside - `from_bytes()`; Validated, what validate passed, or
 //!    what's made here from an arm. One generic newtype, not a definition
 //!    per state: the states differ only in what get() does with an arm
 //!    that doesn't fit.
-//!  - `enum DiskAccountingPos`, an arm by value, and `enum
+//!  - `enum DiskAccountingPosArm`, an arm by value - the union's name in
+//!    CamelCase, but that's the storage's here - and `enum
 //!    DiskAccountingPosRef<'_, St>`, an arm by reference: one of the arm
 //!    types the block declares, plain data, a reference to it; another's -
 //!    the replicas entry, a header and the devices it counts - its
@@ -140,7 +142,8 @@
 //!   tagged_union! {
 //!       #[derive(Clone, Copy, CStruct, TypeInfo)]*
 //!       #[c_typedef]*
-//!       pub struct disk_accounting_pos {
+//!       #[c_name(disk_accounting_pos)]
+//!       pub struct DiskAccountingPos {
 //!           tag type_: u8 = disk_accounting_type,
 //!           arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: camel(f) = nr,
 //!           ...
@@ -259,6 +262,10 @@ fn attrs_and_vis(decl: &TokenStream) -> (String, String) {
                 continue;
             }
         }
+        // #[c_name], the C storage's, which is generated with it
+        if matches!(g.stream().into_iter().next(), Some(TokenTree::Ident(i)) if i.to_string() == "c_name") {
+            continue;
+        }
         attrs.push_str(&format!("#{g}\n"));
     }
     let mut vis = String::new();
@@ -306,7 +313,11 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
     }
     let (attrs, vis) = attrs_and_vis(decl);
     let name = &tu.name;
+    let c_name = tu.c_name.as_deref().unwrap_or(name);
     let en = camel(name);
+    // the arms by value: named for the union, but where that's the storage's
+    // own name - DiskAccountingPos, C's disk_accounting_pos - its Arm
+    let ev = if en == *name { format!("{en}Arm") } else { en.clone() };
     let (tag, tag_ty) = (&tu.tag_field, &tu.tag_ty);
     // The tag as handed out: its enum, a newtype over an integer the tag
     // widens to - or with none, the tag as it is
@@ -383,7 +394,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                       {vis} u: {name}__arms,\n\
                   }}\n\
                   \n\
-                  #[::cstruct_macros::c_name({name})]\n{attrs}{storage_attrs}{vis} union {s_ty} {{\n\
+                  #[::cstruct_macros::c_name({c_name})]\n{attrs}{storage_attrs}{vis} union {s_ty} {{\n\
                       {vis} t: {name}__tagged,\n\
                       {pad_field}\
                   }}\n\
@@ -453,7 +464,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
             .collect()
     };
     let news: String = arms.iter()
-        .map(|a| format!("{en}::{}(x) => Self::from_arm(x),\n", a.name))
+        .map(|a| format!("{ev}::{}(x) => Self::from_arm(x),\n", a.name))
         .collect();
     // An arm that's the storage itself - a journal entry of keys - isn't a
     // type of its own to go by
@@ -815,7 +826,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
          \n\
          /// One of {name}'s arms, by value: what {name}::new() takes.\n\
          #[allow(non_camel_case_types, dead_code)]\n\
-         {vis} enum {en} {{\n{by_value}}}\n\
+         {vis} enum {ev} {{\n{by_value}}}\n\
          \n\
          {ref_doc}\
          #[allow(non_camel_case_types, dead_code)]\n\
@@ -912,7 +923,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
              /// From an arm: its payload into zeroed storage, then the determinant marks\n\
              /// it - stabby's order, so a tag that's bits of the payload is written last.\n\
              #[allow(dead_code)]\n\
-             {vis} fn new(v: {en}) -> Self {{\n\
+             {vis} fn new(v: {ev}) -> Self {{\n\
                  match v {{\n{news}}}\n\
              }}\n\
              \n\

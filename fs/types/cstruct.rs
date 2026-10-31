@@ -658,7 +658,8 @@ pub struct CTaggedArm {
 /// tagged_union!: a tagged union with a stable representation.
 ///
 ///   tagged_union! {
-///       pub struct disk_accounting_pos {
+///       #[c_name(disk_accounting_pos)]
+///       pub struct DiskAccountingPos {
 ///           tag type_: u8 = disk_accounting_type,
 ///           arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: camel(f) = nr,
 ///           pad: Bpos,
@@ -693,6 +694,8 @@ pub struct CTaggedArm {
 pub struct CTaggedUnion {
     pub cfg:       Option<Cfg>,
     pub name:      String,
+    /// #[c_name(NAME)]: C's name, where Rust's differs.
+    pub c_name:    Option<String>,
     /// `union NAME in STORAGE`: unsized, over another's storage - see
     /// storage; else `struct NAME`, its own sized storage, which this
     /// defines.
@@ -2231,8 +2234,16 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
     // `#[...]*` are for the arm types defined here - nestify propagates them -
     // not the storage: skipped
     let mut i = 0;
-    while let Some((_, next)) = attr_at(body, i)? {
-        i = if body.get(next).is_some_and(|t| t.is_punct('*')) { next + 1 } else { next };
+    let mut c_name = None;
+    while let Some((attr, next)) = attr_at(body, i)? {
+        if body.get(next).is_some_and(|t| t.is_punct('*')) {
+            i = next + 1;
+            continue;
+        }
+        if let Some([Tok::Ident(n)]) = attr_args(attr, "c_name") {
+            c_name = Some(n.clone());
+        }
+        i = next;
     }
     let i = skip_vis(body, i)?;
     const EXPECTED: &str = "tagged_union!: expected struct|union NAME [in STORAGE] { ... }";
@@ -2252,7 +2263,7 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
         _ => return Err(EXPECTED.into()),
     };
     let mut size = None;
-    let mut tu = CTaggedUnion { cfg, name, union, storage, tag_field: String::new(),
+    let mut tu = CTaggedUnion { cfg, name, c_name, union, storage, tag_field: String::new(),
                                 tag_ty: String::new(), tag_enum: String::new(), tag_is_enum: false,
                                 plain: false, from: None,
                                 arms: Vec::new(), pad: None, packed: false,
@@ -2528,8 +2539,9 @@ pub fn enum_text(e: &CEnumDef) -> String {
 pub fn tagged_union_record_text(tu: &CTaggedUnion, arms: &[CTaggedArm]) -> String {
     let tag_enum = if tu.tag_enum.is_empty() { String::new() } else { format!(" = {}", tu.tag_enum) };
     let enum_kw = if tu.tag_is_enum { "enum " } else { "" };
-    let mut t = format!("tagged_union! {{ {} {{ tag {}: {enum_kw}{}{tag_enum}, ",
-                        tu.c_type(), tu.tag_field, tu.tag_ty);
+    let c_name = tu.c_name.as_ref().map_or(String::new(), |c| format!("#[c_name({c})] "));
+    let mut t = format!("tagged_union! {{ {c_name}{} {} {{ tag {}: {enum_kw}{}{tag_enum}, ",
+                        tu.keyword(), tu.name, tu.tag_field, tu.tag_ty);
     for a in arms {
         t.push_str(&format!("arm {}: {} = {}, ", a.name, a.ty, a.value));
     }
@@ -2547,9 +2559,14 @@ pub fn tagged_union_record_text(tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Strin
 }
 
 impl CTaggedUnion {
+    fn keyword(&self) -> &'static str {
+        if self.union { "union" } else { "struct" }
+    }
+
     /// What C calls it: `struct NAME` or `union NAME`.
+    #[allow(dead_code)]
     pub fn c_type(&self) -> String {
-        format!("{} {}", if self.union { "union" } else { "struct" }, self.name)
+        format!("{} {}", self.keyword(), self.c_name.as_deref().unwrap_or(&self.name))
     }
 }
 
@@ -2580,9 +2597,9 @@ fn emit_tagged_union(tu: &CTaggedUnion, kind: &dyn Fn(&str) -> Option<String>) -
             let indented: String = tagged.lines().map(|l| format!("\t\t{l}\n")).collect();
             let body = format!("\tunion {{\n\t\tstruct {{\n{indented}\t\t}}{packed};\n\t\t{};\n\t}};\n",
                                c(p, "_pad")?);
-            under_cfg(&tu.cfg, format!("struct {} {{\n{body}}};\n", tu.name))
+            under_cfg(&tu.cfg, format!("{} {{\n{body}}};\n", tu.c_type()))
         }
-        None => under_cfg(&tu.cfg, format!("struct {} {{\n{tagged}}}{packed};\n", tu.name)),
+        None => under_cfg(&tu.cfg, format!("{} {{\n{tagged}}}{packed};\n", tu.c_type())),
     }
 }
 
