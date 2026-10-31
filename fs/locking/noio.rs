@@ -23,7 +23,7 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{Locked, RawLock, RawRwLock, RawTryLock};
+use super::{Guard, Locked, RawLock, RawRwLock, RawTryLock, ReadGuard};
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::{c_uint, c_void, CStr};
@@ -110,6 +110,16 @@ unsafe impl<R: RawRwLock> RawRwLock for Noio<R> {
 }
 
 unsafe impl<R: ::pin_init::Zeroable> ::pin_init::Zeroable for Noio<R> {}
+
+impl<'a, R: RawRwLock<GuardState = ()>, G: Sync, P> ReadGuard<'a, Noio<R>, G, P> {
+    pub fn with_write<T>(&mut self, f: impl FnOnce(&mut Guard<'_, Noio<R>, G, P>) -> T) -> T {
+        let lock = self.lock();
+        unsafe { lock.raw().0.unlock_shared(()) };
+        let ret = f(&mut lock.write());
+        unsafe { lock.raw().0.lock_shared() };
+        ret
+    }
+}
 
 /// C's struct mutex_noio and percpu_rwsem_noio, declared for C below.
 pub type mutex_noio = Noio<c::mutex>;

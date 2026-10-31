@@ -315,6 +315,14 @@ pub struct ReadGuard<'a, R: RawRwLock, G = (), P = ()> {
 }
 
 impl<'a, R: RawRwLock, G, P> ReadGuard<'a, R, G, P> {
+    pub(super) unsafe fn from_held(lock: &'a Locked<R, G, P>, state: Option<R::GuardState>) -> Self {
+        ReadGuard { lock, state, _not_send: PhantomData }
+    }
+
+    pub(super) fn lock(&self) -> &'a Locked<R, G, P> {
+        self.lock
+    }
+
     pub fn protected(&self) -> &G {
         self
     }
