@@ -87,6 +87,7 @@
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, MaybeUninit};
+use core::ptr::NonNull;
 use cstruct_macros::c_extern;
 
 use crate::c;
@@ -374,6 +375,19 @@ impl<T: ::pin_init::Zeroable> PerCpu<T> {
             })
         }
     }
+}
+
+pub fn alloc_u64s(nr: usize, gfp: c::gfp_t) -> Result<NonNull<u64>, AllocError> {
+    let size = nr * size_of::<u64>();
+    #[cfg(kernel)]
+    let p = unsafe { c::pcpu_alloc_noprof(size, align_of::<u64>(), false, gfp) };
+    #[cfg(not(kernel))]
+    let p = unsafe { c::__alloc_percpu_gfp(size, align_of::<u64>(), gfp) };
+    NonNull::new(p.cast()).ok_or(AllocError)
+}
+
+pub unsafe fn free_u64s(p: NonNull<u64>) {
+    unsafe { c::free_percpu(p.as_ptr().cast()) }
 }
 
 impl<T> PerCpu<T> {
