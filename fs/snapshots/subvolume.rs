@@ -43,6 +43,7 @@ use crate::{bch_err, bch_err_msg, bkey_fsck_err_on, fs_inconsistent, fsck_err,
             fsck_err_on, fsck_err_report, prt};
 use core::mem::offset_of;
 use cstruct_macros::c_export;
+use crate::format::Bpos;
 
 /// Whether subvolume key @k is long enough to have @field.
 macro_rules! has_field {
@@ -191,7 +192,7 @@ pub fn require_no_children(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), 
 pub fn for_each_in_subvolume_max_in_trans<'t, F, R>(
     trans:  &BtreeTrans<'t>,
     iter:   &mut BtreeIter<'t>,
-    end:    c::bpos,
+    end:    Bpos,
     subvol: u32,
     flags:  BtreeIterFlags,
     mut f:  F,
@@ -384,14 +385,14 @@ pub fn bch2_subvolume_to_text(
 }
 
 /// POS_MIN if it isn't nested.
-fn children_pos(k: BkeySC<'_>) -> c::bpos {
+fn children_pos(k: BkeySC<'_>) -> Bpos {
     match val(k) {
         Some(s) if s.fs_path_parent() != 0 => pos(s.fs_path_parent().get() as u64, k.k.p.offset),
         _                                   => POS_MIN,
     }
 }
 
-fn children_mod(t: &TransAttempt<'_, '_>, p: c::bpos, set: bool) -> Result<(), BchError> {
+fn children_mod(t: &TransAttempt<'_, '_>, p: Bpos, set: bool) -> Result<(), BchError> {
     if p == POS_MIN {
         return Ok(());
     }
@@ -945,7 +946,7 @@ fn fs_upgrade_for_subvolumes(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| {
         let mut iter = BtreeIter::new(t, c::btree_id::inodes,
-                                      c::bpos { inode: 0, offset: c::BCACHEFS_ROOT_INO as u64,
+                                      Bpos { inode: 0, offset: c::BCACHEFS_ROOT_INO as u64,
                                                 snapshot: u32::MAX },
                                       BtreeIterFlags::empty());
         let k = iter.peek_slot(t)?.expect("a slot always has a key");

@@ -63,6 +63,7 @@ use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
 use core::ops::{ControlFlow, RangeInclusive};
 use cstruct_macros::{c_export, CStruct};
+use crate::format::Bpos;
 
 /// A backpointer scan in progress: alloc/backpointers.rs's BpScanIter.
 #[repr(C)]
@@ -70,7 +71,7 @@ use cstruct_macros::{c_export, CStruct};
 pub struct bp_scan_iter {
     /* BTREE_ID_backpointers, BTREE_ID_stripe_backpointers */
     pub btree: c::btree_id,
-    pub pos: c::bpos,
+    pub pos: Bpos,
     pub nr_flushes: u64,
     pub progress: *mut c::progress_indicator,
     pub batch: KVVec<BkeyI<c::Backpointer>>,
@@ -92,7 +93,7 @@ impl BackpointerPos {
         idx << 8 | u64::from(block)
     }
 
-    pub fn from_bpos(fs: &Fs, p: c::bpos) -> Self {
+    pub fn from_bpos(fs: &Fs, p: Bpos) -> Self {
         let shift = fs.sb.extent_bp_shift.get();
         Self {
             dev:       p.inode,
@@ -101,20 +102,20 @@ impl BackpointerPos {
         }
     }
 
-    pub fn to_bpos(self, fs: &Fs) -> c::bpos {
+    pub fn to_bpos(self, fs: &Fs) -> Bpos {
         pos(self.dev, (self.sector << fs.sb.extent_bp_shift.get()) + u64::from(self.suboffset))
     }
 
-    pub fn bucket(self, ca: &c::bch_dev) -> c::bpos {
+    pub fn bucket(self, ca: &c::bch_dev) -> Bpos {
         self.bucket_and_offset(ca).0
     }
 
-    pub fn bucket_and_offset(self, ca: &c::bch_dev) -> (c::bpos, u32) {
+    pub fn bucket_and_offset(self, ca: &c::bch_dev) -> (Bpos, u32) {
         let (bucket, offset) = ca.sector_to_bucket_and_offset(self.sector);
         (pos(self.dev, bucket), offset)
     }
 
-    pub fn bucket_range(ca: &c::bch_dev, bucket: c::bpos) -> RangeInclusive<c::bpos> {
+    pub fn bucket_range(ca: &c::bch_dev, bucket: Bpos) -> RangeInclusive<Bpos> {
         let fs = ca.fs();
         let start = |b: u64| Self { dev: bucket.inode, sector: ca.bucket_to_sector(b), suboffset: 0 }
             .to_bpos(fs);
@@ -239,7 +240,7 @@ pub fn bp_reconcile_phys(fs: &Fs, level: u32, dev: u32, k: BkeySC<'_>) -> c::rec
 }
 
 /// A stripe's is past the end of its blocks, clear of its extents' backpointers.
-fn extent_ptr_to_bp_pos(fs: &Fs, k: BkeySC<'_>, p: &c::extent_ptr_decoded) -> c::bpos {
+fn extent_ptr_to_bp_pos(fs: &Fs, k: BkeySC<'_>, p: &c::extent_ptr_decoded) -> Bpos {
     let shift = fs.sb.extent_bp_shift.get();
     let dev = u64::from(p.ptr.dev());
 
@@ -369,14 +370,14 @@ fn extent_matches_bp(fs: &Fs, btree: c::btree_id, level: u32, k: BkeySC<'_>,
     matches
 }
 
-fn hole_at(pos: c::bpos) -> BkeyI<c::Deleted> {
+fn hole_at(pos: Bpos) -> BkeyI<c::Deleted> {
     let mut k = BkeyI::<c::Deleted>::new();
     k.k.p = pos;
     k
 }
 
 /// Commits.
-pub(super) fn backpointer_del(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos) -> Result<(), BchError> {
+pub(super) fn backpointer_del(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos) -> Result<(), BchError> {
     if !debug_params::backpointers_no_use_write_buffer() {
         t.bit_mod_buffered(btree, pos, false)?;
     } else {
@@ -559,13 +560,13 @@ pub unsafe fn bch2_backpointer_get_key<'t>(trans: &'t BtreeTrans<'t>, bp: c::bke
 // ── Backpointers in the order of what they point to ──────────────────────
 
 impl c::bp_scan_iter {
-    fn new(btree: c::btree_id, pos: c::bpos, progress: *mut c::progress_indicator) -> Self {
+    fn new(btree: c::btree_id, pos: Bpos, progress: *mut c::progress_indicator) -> Self {
         Self { btree, pos, nr_flushes: 0, progress, batch: KVVec::new() }
     }
 
     /// The next backpointer, or None past @end: in the caller's attempt @t,
     /// which a refill ends - see BpScanIter.
-    fn peek(&mut self, t: &TransAttempt<'_, '_>, end: c::bpos, last_flushed: &WbFlush<'_>)
+    fn peek(&mut self, t: &TransAttempt<'_, '_>, end: Bpos, last_flushed: &WbFlush<'_>)
         -> Result<Option<BkeySC<'_, c::Backpointer>>, BchError>
     {
         if self.nr_flushes != last_flushed.nr_flushes() {
@@ -598,7 +599,7 @@ impl c::bp_scan_iter {
     /// worth, grown as it's read with nothing locked: a page's worth, then
     /// doubling. When it can't grow, the batch is what's been read - unless
     /// that's nothing.
-    fn refill(&mut self, trans: &BtreeTrans<'_>, end: c::bpos) -> Result<(), BchError> {
+    fn refill(&mut self, trans: &BtreeTrans<'_>, end: Bpos) -> Result<(), BchError> {
         let bp_size = size_of::<BkeyI<c::Backpointer>>();
         let max = totalram_bytes() / 16 / bp_size;
         // SAFETY: init()'s caller's, which outlives the scan
@@ -655,14 +656,14 @@ pub struct BpScanIter<'p> {
 }
 
 impl<'p> BpScanIter<'p> {
-    pub fn new(btree: c::btree_id, start: c::bpos, progress: Option<&'p Progress<'_>>) -> Self {
+    pub fn new(btree: c::btree_id, start: Bpos, progress: Option<&'p Progress<'_>>) -> Self {
         let progress = progress.map_or(core::ptr::null_mut(), Progress::as_raw);
         Self { raw: c::bp_scan_iter::new(btree, start, progress), _progress: PhantomData }
     }
 
     /// Each backpointer in an attempt of its own, retried on restart; the peek and @f
     /// share @last_flushed.
-    pub fn for_each<F>(&mut self, trans: &BtreeTrans<'_>, end: c::bpos,
+    pub fn for_each<F>(&mut self, trans: &BtreeTrans<'_>, end: Bpos,
                        mut last_flushed: WbFlush<'_>, mut f: F) -> Result<(), BchError>
     where
         F: for<'a> FnMut(&TransAttempt<'a, '_>, BkeySC<'_, c::Backpointer>, WbFlush<'_>)

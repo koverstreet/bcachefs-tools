@@ -60,6 +60,7 @@ use crate::device_scan::OpenedFs;
 use crate::logging;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
+use bcachefs_kernel::format::Bpos;
 
 const BKEY_U64S: usize = size_of::<c::bkey>() / size_of::<u64>();
 
@@ -261,7 +262,7 @@ fn parse_btree(s: &str) -> Result<c::btree_id> {
 /// Position parse honoring the session snapshot context: a pos written
 /// without the :snapshot component picks it up from the context. Explicit
 /// :snapshot and the named positions (POS_MIN etc.) are left alone.
-fn parse_pos_ctx(s: &str, snapshot: Option<u32>) -> Result<c::bpos> {
+fn parse_pos_ctx(s: &str, snapshot: Option<u32>) -> Result<Bpos> {
     let mut pos = parse_pos(s)?;
     if let Some(snap) = snapshot {
         if s.matches(':').count() == 1 {
@@ -279,7 +280,7 @@ fn pos_has_explicit_snapshot(s: &str) -> bool {
     s.matches(':').count() >= 2
 }
 
-fn parse_pos(s: &str) -> Result<c::bpos> {
+fn parse_pos(s: &str) -> Result<Bpos> {
     s.parse()
         .map_err(|_| anyhow!("invalid pos '{s}' (inode:offset[:snapshot], POS_MIN, SPOS_MAX)"))
 }
@@ -482,7 +483,7 @@ enum ReadOp {
     PeekPrev,
 }
 
-fn cmd_read(fs: &Fs, op: ReadOp, btree: c::btree_id, pos: c::bpos, level: u32, filtered: bool,
+fn cmd_read(fs: &Fs, op: ReadOp, btree: c::btree_id, pos: Bpos, level: u32, filtered: bool,
             how: Render<'_>) -> Result<String> {
     let trans = bcachefs_kernel::btree_trans!(fs);
     let mut user_err: Option<anyhow::Error> = None;
@@ -581,7 +582,7 @@ fn take_interrupt() -> bool {
     INTERRUPTED.swap(false, Ordering::Relaxed)
 }
 
-fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos, level: u32,
+fn cmd_list(fs: &Fs, btree: c::btree_id, start: Bpos, end: Bpos, level: u32,
             filtered: bool, key_only: bool) -> Result<String> {
     let trans = bcachefs_kernel::btree_trans!(fs);
     let mut out = String::new();
@@ -609,7 +610,7 @@ fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos, level: u3
 /// One key from a mounted filesystem, or None. get: slot iteration at an
 /// exact pos; peek/peek_prev: first key at/after (at/before) pos.
 fn online_one_key(handle: &BcachefsHandle, fs: &Fs,
-		  btree: c::btree_id, pos: c::bpos, level: u32,
+		  btree: c::btree_id, pos: Bpos, level: u32,
 		  flags: OnlineIterFlags, how: Render<'_>) -> Result<String> {
     // Small buffer: the kernel fills the whole thing per call, and we only
     // want one key (it grows automatically if the key doesn't fit):
@@ -635,7 +636,7 @@ fn online_snapshots_flag(filtered: bool) -> OnlineIterFlags {
 }
 
 fn cmd_read_online(handle: &BcachefsHandle, fs: &Fs, op: ReadOp,
-		   btree: c::btree_id, pos: c::bpos, level: u32, filtered: bool,
+		   btree: c::btree_id, pos: Bpos, level: u32, filtered: bool,
 		   how: Render<'_>) -> Result<String> {
     let flags = online_snapshots_flag(filtered) | match op {
         ReadOp::Get => OnlineIterFlags::SLOTS,
@@ -646,7 +647,7 @@ fn cmd_read_online(handle: &BcachefsHandle, fs: &Fs, op: ReadOp,
 }
 
 fn cmd_list_online(handle: &BcachefsHandle, fs: &Fs,
-		   btree: c::btree_id, start: c::bpos, end: c::bpos, level: u32,
+		   btree: c::btree_id, start: Bpos, end: Bpos, level: u32,
 		   filtered: bool, key_only: bool) -> Result<String> {
     let mut out = String::new();
     let mut iter = OnlineBtreeIter::new(handle, btree, level, start, end,
@@ -673,7 +674,7 @@ fn no_key_err() -> BchError {
 fn cmd_update(
     fs: &Fs,
     btree: c::btree_id,
-    pos: c::bpos,
+    pos: Bpos,
     level: u32,
     assigns: &[(&str, &str)],
     raw: bool,
@@ -738,7 +739,7 @@ fn raw_flags(flags: UpdateTriggerFlags, raw: bool) -> UpdateTriggerFlags {
 /// triggers run, but an extent overwrites nothing, so the copy can overlap
 /// what's there - into a slot that must be empty. For an extent, @new_pos is
 /// the copy's end, its size unchanged. @raw: no triggers - see raw_flags().
-fn cmd_copy(fs: &Fs, btree: c::btree_id, pos: c::bpos, new_pos: c::bpos, raw: bool)
+fn cmd_copy(fs: &Fs, btree: c::btree_id, pos: Bpos, new_pos: Bpos, raw: bool)
     -> Result<String>
 {
     let trans = bcachefs_kernel::btree_trans!(fs);
@@ -782,7 +783,7 @@ fn cmd_copy(fs: &Fs, btree: c::btree_id, pos: c::bpos, new_pos: c::bpos, raw: bo
 fn cmd_set(
     fs: &Fs,
     btree: c::btree_id,
-    pos: c::bpos,
+    pos: Bpos,
     type_name: &str,
     assigns: &[(&str, &str)],
     in_snapshot: bool,
@@ -979,7 +980,7 @@ impl KvdbFs {
         }
     }
 
-    fn read(&self, op: ReadOp, btree: c::btree_id, pos: c::bpos, level: u32, filtered: bool,
+    fn read(&self, op: ReadOp, btree: c::btree_id, pos: Bpos, level: u32, filtered: bool,
             how: Render<'_>) -> Result<String> {
         match self {
             KvdbFs::Offline(fs) => cmd_read(fs, op, btree, pos, level, filtered, how),
@@ -988,7 +989,7 @@ impl KvdbFs {
         }
     }
 
-    fn list(&self, btree: c::btree_id, start: c::bpos, end: c::bpos, level: u32, filtered: bool,
+    fn list(&self, btree: c::btree_id, start: Bpos, end: Bpos, level: u32, filtered: bool,
             key_only: bool) -> Result<String> {
         match self {
             KvdbFs::Offline(fs) => cmd_list(fs, btree, start, end, level, filtered, key_only),

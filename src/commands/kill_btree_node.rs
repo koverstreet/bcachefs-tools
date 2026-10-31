@@ -52,6 +52,7 @@ use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter};
 use bcachefs_kernel::util::vstructs::{cast_plain, Head, SelfSized};
 use clap::Parser;
+use bcachefs_kernel::format::Bpos;
 
 struct KillNode {
     btree:  c::btree_id,
@@ -223,7 +224,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
         let mut iter = BtreeNodeIter::new(
             &trans,
             kill.btree,
-            c::bpos::default(),
+            Bpos::default(),
             0,
             kill.level,
             BtreeIterFlags::empty(),

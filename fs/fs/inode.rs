@@ -65,6 +65,7 @@ use cstruct_macros::{c_export, CStruct, c_bitmask, c_typedef, c_verbatim, TypeIn
 use crate::cstructs::c::BCH_INODE_FIELDS_v3;
 use crate::types::{c_default, Le64};
 use crate::util::projections::Volatile;
+use crate::format::Bpos;
 
 c_typedef! {
     pub type u96 = u64;
@@ -1347,7 +1348,7 @@ fn set_journal_seq(k: &mut BkeyS<'_>, seq: u64) {
 fn snapshot_parent<'i, 'a>(
     t:     &'i TransAttempt<'a, '_>,
     iter:  &'i mut BtreeIter<'a>,
-    mut p: c::bpos,
+    mut p: Bpos,
 ) -> Result<Option<BkeySC<'i>>, BchError> {
     loop {
         *iter = BtreeIter::new(t, c::btree_id::inodes, p.successor(),
@@ -1371,7 +1372,7 @@ fn snapshot_parent<'i, 'a>(
 /// Whether the inode at @pos has versions in descendant snapshots - only
 /// looked for if @pos's snapshot has any: as
 /// bch2_inode_has_child_snapshots(). In the caller's transaction attempt.
-pub fn has_child_snapshots(t: &TransAttempt<'_, '_>, p: c::bpos) -> Result<bool, BchError> {
+pub fn has_child_snapshots(t: &TransAttempt<'_, '_>, p: Bpos) -> Result<bool, BchError> {
     // As C: if leafness can't be told, look.
     if let Ok(true) = t.fs().snapshots.is_leaf(p.snapshot) {
         return Ok(false);
@@ -1407,7 +1408,7 @@ fn update_has_children(t: &TransAttempt<'_, '_>, k: &mut BkeyS<'_>, have_child: 
 /// The inode at @p was made or deleted: the version it inherited, in an
 /// ancestor, has a child snapshot version - or with @have_child false, may
 /// no longer. As update_parent_inode_has_children().
-fn update_parent_has_children(t: &TransAttempt<'_, '_>, p: c::bpos, have_child: bool)
+fn update_parent_has_children(t: &TransAttempt<'_, '_>, p: Bpos, have_child: bool)
     -> Result<(), BchError>
 {
     let mut iter = BtreeIter::uninit();
@@ -1498,7 +1499,7 @@ crate::key_trigger!(bch2_trigger_inode => trigger);
 /// committed, and an error.
 fn may_delete_deleted_inode(
     t:                   &TransAttempt<'_, '_>,
-    p:                   c::bpos,
+    p:                   Bpos,
     inode:               &mut c::bch_inode_unpacked,
     from_deleted_inodes: bool,
 ) -> Result<bool, BchError> {
@@ -1771,19 +1772,19 @@ fn __rm_snapshot(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<(),
 /// is open in the VFS: as bch2_inode_or_descendents_is_open(). Never, in
 /// userspace.
 #[cfg(kernel)]
-pub fn or_descendents_is_open(t: &TransAttempt<'_, '_>, pos: c::bpos) -> Result<bool, BchError> {
+pub fn or_descendents_is_open(t: &TransAttempt<'_, '_>, pos: Bpos) -> Result<bool, BchError> {
     Ok(crate::errcode::ret_to_result(unsafe { c::bch2_inode_or_descendents_is_open(t.raw(), pos) })? != 0)
 }
 
 #[cfg(not(kernel))]
-pub fn or_descendents_is_open(_t: &TransAttempt<'_, '_>, _pos: c::bpos) -> Result<bool, BchError> {
+pub fn or_descendents_is_open(_t: &TransAttempt<'_, '_>, _pos: Bpos) -> Result<bool, BchError> {
     Ok(false)
 }
 
 /// After deleting an inode, there may be versions in older snapshots that
 /// should also be deleted - if they're not referenced by sibling snapshots
 /// and not open in other subvolumes: as delete_ancestor_snapshot_inodes().
-fn delete_ancestor_snapshot_inodes(trans: &BtreeTrans<'_>, mut p: c::bpos) -> Result<(), BchError> {
+fn delete_ancestor_snapshot_inodes(trans: &BtreeTrans<'_>, mut p: Bpos) -> Result<(), BchError> {
     loop {
         let parent = lockrestart_do(trans, |t| {
             let mut iter = BtreeIter::uninit();

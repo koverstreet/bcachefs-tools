@@ -45,6 +45,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
 
 use c::bch_write_flags as w;
+use crate::format::Bpos;
 
 impl c::alloc_request {
     /// The devices it has copies on: its caller's, and the buckets it's got.
@@ -397,7 +398,7 @@ impl LockedWritePoint<'_> {
     ///
     /// # Safety
     /// @k has room for an extent with a pointer per bucket.
-    pub unsafe fn unwritten_extent(mut self, k: *mut c::bkey_i, pos: c::bpos, sectors: u32,
+    pub unsafe fn unwritten_extent(mut self, k: *mut c::bkey_i, pos: Bpos, sectors: u32,
                                    ptrs: &mut c::open_buckets) -> u32 {
         let sectors = sectors.min(self.sectors_free());
         // SAFETY: the caller's

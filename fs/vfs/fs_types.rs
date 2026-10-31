@@ -13,6 +13,8 @@ use core::ffi::{c_int, c_void};
 use cstruct_macros::{c_name, c_enum, CStruct, TypeInfo};
 #[cfg(not(NO_BCACHEFS_FS))]
 use cstruct_macros::{c_extern, c_typedef};
+#[cfg(not(NO_BCACHEFS_FS))]
+use crate::format::Bpos;
 
 /*
  * The VFS's inode, and what we keep beside it. Shared - the kernel and C use it
@@ -150,6 +152,6 @@ c_typedef! {
 
 #[cfg(not(NO_BCACHEFS_FS))]
 c_extern! {
-    pub fn bch2_inode_or_descendents_is_open(trans: *mut c::btree_trans, pos: c::bpos) -> c_int;
+    pub fn bch2_inode_or_descendents_is_open(trans: *mut c::btree_trans, pos: Bpos) -> c_int;
     pub fn bch2_evict_subvolume_inodes(c: *mut c::bch_fs, s: *mut c::snapshot_id_list);
 }

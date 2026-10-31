@@ -15,6 +15,7 @@ pub use c::bch_reconcile_accounting_type;
 use crate::types::{DArray, c_default};
 use core::ffi::{c_uint, c_int};
 use cstruct_macros::{CStruct, TypeInfo, c_enum, c_extern};
+use crate::format::Bpos;
 
 c_enum! {
     #[closed]
@@ -33,7 +34,7 @@ c_extern! {
                                            nr: c_uint) -> c_int;
     pub fn bch2_disk_accounting_mod_gc(trans: *mut c::btree_trans, k: *mut c::disk_accounting_pos,
                                        d: *mut i64, nr: c_uint) -> c_int;
-    pub fn rust_bch2_accounting_mem_read(c: *mut c::bch_fs, p: c::bpos, v: *mut u64, nr: c_uint);
+    pub fn rust_bch2_accounting_mem_read(c: *mut c::bch_fs, p: Bpos, v: *mut u64, nr: c_uint);
     pub fn bch2_accounting_mem_gc(c: *mut c::bch_fs);
     pub fn bch2_dev_usage_remove(c: *mut c::bch_fs, ca: *mut c::bch_dev) -> c_int;
     pub fn bch2_mod_dev_cached_sectors(trans: *mut c::btree_trans, dev: c_uint, sectors: i64,
@@ -46,7 +47,7 @@ c_extern! {
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct accounting_mem_entry {
-    pub pos: c::bpos,
+    pub pos: Bpos,
     pub bversion: c::bversion,
     pub nr_counters: c_uint,
     #[c("u64 __percpu *v[2]")]
@@ -83,14 +84,14 @@ pub fn reconcile_type_from_u8(v: u8) -> bch_reconcile_accounting_type {
 }
 
 /// Size of a bpos in bytes — maximum size of any accounting key payload.
-const BPOS_SIZE: usize = core::mem::size_of::<c::bpos>();
+const BPOS_SIZE: usize = core::mem::size_of::<Bpos>();
 
 /// The disk_accounting_pos an accounting key at @p holds, as bytes: the
 /// position as one big-endian number - inode, offset, snapshot - so the first
 /// byte, the inode's top one, is the accounting type. As
 /// bpos_to_disk_accounting_pos(): memcpy_swab() on little endian, a copy on
 /// big - the same bytes, as a bpos's fields are in the opposite order there.
-fn bpos_to_acc_bytes(p: c::bpos) -> [u8; BPOS_SIZE] {
+fn bpos_to_acc_bytes(p: Bpos) -> [u8; BPOS_SIZE] {
     let mut b = [0u8; BPOS_SIZE];
     b[0..8].copy_from_slice(&p.inode.to_be_bytes());
     b[8..16].copy_from_slice(&p.offset.to_be_bytes());
@@ -100,8 +101,8 @@ fn bpos_to_acc_bytes(p: c::bpos) -> [u8; BPOS_SIZE] {
 
 /// The bpos of the accounting key holding disk_accounting_pos bytes @b:
 /// bpos_to_acc_bytes()'s inverse.
-fn acc_bytes_to_bpos(b: &[u8; BPOS_SIZE]) -> c::bpos {
-    c::bpos {
+fn acc_bytes_to_bpos(b: &[u8; BPOS_SIZE]) -> Bpos {
+    Bpos {
         inode:    u64::from_be_bytes(b[0..8].try_into().unwrap()),
         offset:   u64::from_be_bytes(b[8..16].try_into().unwrap()),
         snapshot: u32::from_be_bytes(b[16..20].try_into().unwrap()),
@@ -113,7 +114,7 @@ fn acc_bytes_to_bpos(b: &[u8; BPOS_SIZE]) -> c::bpos {
 impl c::disk_accounting_pos<Unvalidated> {
     /// The disk_accounting_pos an accounting key at @p holds - one validate
     /// may not have passed: bpos_to_disk_accounting_pos().
-    pub fn from_bpos(p: c::bpos) -> Self {
+    pub fn from_bpos(p: Bpos) -> Self {
         Self::from_bytes(&bpos_to_acc_bytes(p))
     }
 }
@@ -121,7 +122,7 @@ impl c::disk_accounting_pos<Unvalidated> {
 impl<S> c::disk_accounting_pos<S> {
     /// The position of the accounting key holding it:
     /// disk_accounting_pos_to_bpos().
-    pub fn to_bpos(&self) -> c::bpos {
+    pub fn to_bpos(&self) -> Bpos {
         acc_bytes_to_bpos(self.as_bytes())
     }
 }

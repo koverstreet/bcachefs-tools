@@ -38,6 +38,7 @@ use arrayvec::ArrayVec;
 use core::ops::ControlFlow;
 use cstruct_macros::{c_export, c_extern};
 use core::ffi::c_int;
+use crate::format::Bpos;
 
 c_extern! {
     pub fn bch2_stripe_tryget_existing(iter: *mut c::btree_iter) -> c_int;
@@ -47,7 +48,7 @@ c_extern! {
 
 impl TransAttempt<'_, '_> {
     /// How many stripes have a block in @bucket, by bucket_to_stripe.
-    pub fn bucket_nr_stripes(&self, bucket: c::bpos) -> Result<u32, BchError> {
+    pub fn bucket_nr_stripes(&self, bucket: Bpos) -> Result<u32, BchError> {
         let b = bucket_to_u64(bucket);
         let mut nr = 0;
         BtreeIter::new(self, c::btree_id::bucket_to_stripe, pos(b, 0), BtreeIterFlags::empty())
@@ -201,7 +202,7 @@ fn dev_stripe_frag_acct(t: &TransAttempt<'_, '_>, old: Option<StripeK<'_>>, new:
 /// (alloc_key_stripe_refcount_wrong, FSCK_AUTOFIX), so leave the true value
 /// to it rather than guessing here.
 #[cold]
-fn stripe_refcount_saturated(fs: &Fs, bucket: c::bpos, stripe: u64, overflow: bool) {
+fn stripe_refcount_saturated(fs: &Fs, bucket: Bpos, stripe: u64, overflow: bool) {
     let mut msg = LogMsg::new(fs);
     prt!(&mut msg, "stripe_refcount {} at bucket {}:{} {} stripe {stripe}\n",
          if overflow { "overflow" } else { "underflow" }, { bucket.inode }, { bucket.offset },
@@ -217,7 +218,7 @@ fn stripe_refcount_saturated(fs: &Fs, bucket: c::bpos, stripe: u64, overflow: bo
 /// count.
 #[allow(clippy::too_many_arguments)]
 fn mark_stripe_bucket_alloc(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, s: StripeK<'_>, i: u32, deleting: bool,
-                            bucket: c::bpos, a: &mut c::AllocV4, flags: UpdateTriggerFlags) -> Result<(), BchError> {
+                            bucket: Bpos, a: &mut c::AllocV4, flags: UpdateTriggerFlags) -> Result<(), BchError> {
     use c::bch_data_type as D;
     let fs = t.fs();
     let v = s.v();

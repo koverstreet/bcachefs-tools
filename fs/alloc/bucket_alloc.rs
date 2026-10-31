@@ -50,6 +50,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
 
 use c::alloc_btree_bitmap::{BTREE_BITMAP_ANY, BTREE_BITMAP_NO, BTREE_BITMAP_YES};
+use crate::format::Bpos;
 
 const BUCKET_MASK: u64 = (1 << FREESPACE_GENBITS_SHIFT) - 1;
 
@@ -81,7 +82,7 @@ impl Fs {
     }
 
     /// Whether @bucket may be taken: not open, not nocow locked.
-    fn may_alloc_bucket(&self, req: &mut c::alloc_request, bucket: c::bpos) -> bool {
+    fn may_alloc_bucket(&self, req: &mut c::alloc_request, bucket: Bpos) -> bool {
         if self.bucket_is_open(bucket.inode as u32, bucket.offset) {
             req.counters.skipped_open += 1;
             false

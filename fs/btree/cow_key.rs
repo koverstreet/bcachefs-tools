@@ -12,10 +12,10 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, BkeySCToText, MutBkey, BkeyWhole};
 use crate::btree::iter::{BtreeIter, TransAttempt, TransBkey, UpdateTriggerFlags};
-use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use core::marker::PhantomData;
+use crate::format::Bpos;
 
 /// Key @k, of the type whose value is @K, at @iter.
 pub struct CowKey<'i, 'k, 'a, 't, K: BkeyWhole> {
@@ -37,7 +37,7 @@ where
         Some(CowKey { iter, k: k.arm::<K>()?, v, u: None })
     }
 
-    pub fn pos(&self) -> c::bpos {
+    pub fn pos(&self) -> Bpos {
         self.k.k.p
     }
 

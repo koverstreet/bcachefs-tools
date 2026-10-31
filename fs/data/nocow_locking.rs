@@ -46,6 +46,7 @@ use core::ffi::c_int;
 use core::sync::atomic::{AtomicI32, AtomicU64, Ordering::{AcqRel, Relaxed}};
 use cstruct_macros::{c_export, c_const};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
+use crate::format::Bpos;
 
 c_const! {
     #[c_int]
@@ -198,7 +199,7 @@ impl NocowLocks {
         &self.l[hash_64(dev_bucket, c::BUCKET_NOCOW_LOCKS_BITS) as usize & (NR_BUCKETS - 1)]
     }
 
-    pub fn is_locked(&self, bucket: c::bpos) -> bool {
+    pub fn is_locked(&self, bucket: Bpos) -> bool {
         let dev_bucket = bucket_to_u64(bucket);
         let l = self.bucket(dev_bucket);
         l.slot(dev_bucket).is_some_and(|i| l.l[i].load(Relaxed) != 0)
@@ -206,7 +207,7 @@ impl NocowLocks {
 
     /// Releases one of a key's buckets alone, as an in-place write's bio does
     /// when it completes.
-    pub fn unlock_bucket(&self, bucket: c::bpos, kind: NocowKind) {
+    pub fn unlock_bucket(&self, bucket: Bpos, kind: NocowKind) {
         let dev_bucket = bucket_to_u64(bucket);
         self.bucket(dev_bucket).unlock(dev_bucket, kind)
     }
@@ -394,7 +395,7 @@ pub unsafe fn bch2_bkey_nocow_unlock(c: &Fs, k: BkeySC<'_>, cas: *const *mut c::
 }
 
 #[c_export]
-pub fn bch2_bucket_nocow_unlock(c: &Fs, bucket: c::bpos, flags: c_int) {
+pub fn bch2_bucket_nocow_unlock(c: &Fs, bucket: Bpos, flags: c_int) {
     c.nocow_locks.unlock_bucket(bucket, NocowKind::from_flags(flags))
 }
 

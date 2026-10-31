@@ -501,6 +501,7 @@ use core::ffi::{c_int, c_uint};
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::Ordering;
 use cstruct_macros::{c_export, c_const};
+use crate::format::Bpos;
 
 c_const! {
     /// How far a bucket's generation may get past its oldest pointer's before
@@ -697,7 +698,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     /// The alloc key of bucket @pos, queued as its update, to edit - the
     /// update already queued, if there is one: bch2_trans_start_alloc_update().
-    pub fn start_alloc_update(&self, pos: c::bpos, flags: UpdateTriggerFlags)
+    pub fn start_alloc_update(&self, pos: Bpos, flags: UpdateTriggerFlags)
         -> Result<TransBkey<'a, 't, c::AllocV4>, BchError>
     {
         let mut iter = BtreeIter::new(self, c::btree_id::alloc, pos,
@@ -989,20 +990,20 @@ impl c::AllocV4 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NeedDiscardPos {
     pub journal_seq_empty: u64,
-    pub bucket:            c::bpos,
+    pub bucket:            Bpos,
 }
 
 impl NeedDiscardPos {
     /// Where bucket @bucket, alloc key @a, belongs.
-    pub fn new(bucket: c::bpos, a: &c::AllocV4) -> Self {
+    pub fn new(bucket: Bpos, a: &c::AllocV4) -> Self {
         Self { journal_seq_empty: a.journal_seq_empty, bucket }
     }
 
-    pub fn from_bpos(p: c::bpos) -> Self {
+    pub fn from_bpos(p: Bpos) -> Self {
         Self { journal_seq_empty: p.inode, bucket: u64_to_bucket(p.offset) }
     }
 
-    pub fn to_bpos(self) -> c::bpos {
+    pub fn to_bpos(self) -> Bpos {
         pos(self.journal_seq_empty, bucket_to_u64(self.bucket))
     }
 }
@@ -1018,7 +1019,7 @@ pub(crate) const FREESPACE_GENBITS_NR: u64 = (u8::MAX >> 4) as u64 + 1;
 /// bits of its gc gen in the top bits of the offset - alloc_freespace_pos().
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FreespacePos {
-    pub bucket:  c::bpos,
+    pub bucket:  Bpos,
     /// The bucket's gc gen >> 4: alloc_freespace_genbits() >> 56. Read from
     /// the btree, whatever the top 8 bits hold.
     pub genbits: u8,
@@ -1026,18 +1027,18 @@ pub struct FreespacePos {
 
 impl FreespacePos {
     /// Where bucket @bucket, alloc key @a, belongs.
-    pub fn new(bucket: c::bpos, a: &c::AllocV4) -> Self {
+    pub fn new(bucket: Bpos, a: &c::AllocV4) -> Self {
         Self { bucket, genbits: a.gc_gen() >> 4 }
     }
 
-    pub fn from_bpos(p: c::bpos) -> Self {
+    pub fn from_bpos(p: Bpos) -> Self {
         Self {
             bucket:  pos(p.inode, p.offset & ((1 << FREESPACE_GENBITS_SHIFT) - 1)),
             genbits: (p.offset >> FREESPACE_GENBITS_SHIFT) as u8,
         }
     }
 
-    pub fn to_bpos(self) -> c::bpos {
+    pub fn to_bpos(self) -> Bpos {
         pos(self.bucket.inode, self.bucket.offset | u64::from(self.genbits) << FREESPACE_GENBITS_SHIFT)
     }
 }
@@ -1047,13 +1048,13 @@ impl FreespacePos {
 /// alloc_gens_pos().
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BucketGensPos {
-    pub key: c::bpos,
+    pub key: Bpos,
     /// < KEY_TYPE_BUCKET_GENS_NR
     pub idx: usize,
 }
 
 impl BucketGensPos {
-    pub fn new(bucket: c::bpos) -> Self {
+    pub fn new(bucket: Bpos) -> Self {
         Self {
             key: pos(bucket.inode, bucket.offset >> c::KEY_TYPE_BUCKET_GENS_BITS),
             idx: (bucket.offset & u64::from(c::KEY_TYPE_BUCKET_GENS_MASK)) as usize,
@@ -1061,7 +1062,7 @@ impl BucketGensPos {
     }
 
     /// The bucket it's the gen of: bucket_gens_pos_to_alloc().
-    pub fn bucket(self) -> c::bpos {
+    pub fn bucket(self) -> Bpos {
         pos(self.key.inode, self.key.offset << c::KEY_TYPE_BUCKET_GENS_BITS | self.idx as u64)
     }
 
@@ -1097,9 +1098,9 @@ pub fn bch2_bucket_gens_to_text(out: &mut Printbuf, _c: Option<&Opaque<c::bch_fs
 fn bucket_gens_init(fs: &Fs) -> Result<(), BchError> {
     let trans = btree_trans!(fs);
     // the key being filled, and its position
-    let mut g: Option<(c::bpos, c::BucketGens)> = None;
+    let mut g: Option<(Bpos, c::BucketGens)> = None;
 
-    fn insert(t: &TransAttempt<'_, '_>, (p, gens): (c::bpos, c::BucketGens)) -> Result<(), BchError> {
+    fn insert(t: &TransAttempt<'_, '_>, (p, gens): (Bpos, c::BucketGens)) -> Result<(), BchError> {
         let mut k = t.bkey_alloc_typed::<c::BucketGens>()?;
         k.k_mut().p = p;
         *k.v_mut() = gens;
@@ -1337,7 +1338,7 @@ pub(crate) fn bucket_do_freespace_index(t: &TransAttempt<'_, '_>, ca: &c::bch_de
 /// Bucket @bucket's need_discard entry, through the write buffer: from the
 /// atomic phase, as its position - the journal seq the bucket went empty at
 /// - is the commit's.
-fn bucket_do_discard_index(t: &TransAttempt<'_, '_>, bucket: c::bpos, a: &c::AllocV4, set: bool)
+fn bucket_do_discard_index(t: &TransAttempt<'_, '_>, bucket: Bpos, a: &c::AllocV4, set: bool)
     -> Result<(), BchError>
 {
     if a.data_type() != data_type::need_discard {
@@ -1347,7 +1348,7 @@ fn bucket_do_discard_index(t: &TransAttempt<'_, '_>, bucket: c::bpos, a: &c::All
 }
 
 /// Bucket @bucket's generation in the bucket_gens btree, made @gen.
-fn bucket_gen_update(t: &TransAttempt<'_, '_>, bucket: c::bpos, gen: u8) -> Result<(), BchError> {
+fn bucket_gen_update(t: &TransAttempt<'_, '_>, bucket: Bpos, gen: u8) -> Result<(), BchError> {
     let pos = BucketGensPos::new(bucket);
     let mut iter = BtreeIter::new(t, c::btree_id::bucket_gens, pos.key, BtreeIterFlags::INTENT);
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
@@ -1723,7 +1724,7 @@ pub fn bch2_dev_remove_alloc(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) -> c_int {
 
 /// @bucket's io_time for @rw, made now: a read of its cached data, so its
 /// place in the read lru is as recently used.
-fn bucket_io_time_reset(t: &TransAttempt<'_, '_>, bucket: c::bpos, rw: usize) -> Result<(), BchError> {
+fn bucket_io_time_reset(t: &TransAttempt<'_, '_>, bucket: Bpos, rw: usize) -> Result<(), BchError> {
     let mut iter = BtreeIter::new(t, c::btree_id::alloc, bucket, BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
     let mut a = t.alloc_to_v4_mut(k)?;

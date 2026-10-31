@@ -3,7 +3,6 @@
 
 use super::{AllTypes, BkeySC, BkeyVal, FamilyVal};
 use crate::c;
-use crate::c::bpos as Bpos;
 use crate::fs::Fs;
 use crate::util::{Printbuf, ToText};
 use core::fmt;
@@ -13,6 +12,7 @@ use core::str::FromStr;
 use crate::errcode::{bch_errcode, BchError};
 #[cfg(feature = "std")]
 use super::{POS_MAX, POS_MIN, SPOS_MAX};
+use crate::format::Bpos;
 
 /// As Display.
 impl fmt::Debug for Bpos {
@@ -42,7 +42,7 @@ fn parse_bpos_u32(s: &str) -> Result<u32, BchError> {
 }
 
 #[cfg(feature = "std")]
-impl FromStr for c::bpos {
+impl FromStr for Bpos {
     type Err = BchError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -72,7 +72,7 @@ impl FromStr for c::bpos {
             .transpose()?
             .unwrap_or(0);
 
-        Ok(c::bpos {
+        Ok(Bpos {
             inode:    ino,
             offset:   off,
             snapshot: snp,

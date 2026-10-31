@@ -9,6 +9,7 @@ use crate::fs::Fs;
 use core::ffi::c_int;
 use cstruct_macros::{bitfield, c_enum, c_extern, c_xmacro, CStruct, TypeInfo};
 use nestify::nest;
+use crate::format::Bpos;
 
 c_xmacro! {
     GC_PHASES(x) {
@@ -37,7 +38,7 @@ nest! {
             #[bits(8)] pub btree: c::btree_id,
         },
         pub level: u16,
-        pub pos: c::bpos,
+        pub pos: Bpos,
     }
 }
 

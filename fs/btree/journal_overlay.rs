@@ -65,6 +65,7 @@ use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8, AtomicUsize};
 use nestify::nest;
 use pin_init::pin_data;
+use crate::format::Bpos;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -245,13 +246,13 @@ impl Fs {
     }
 
     #[inline]
-    fn journal_key_pos(&self, k: &c::journal_key) -> c::bpos {
+    fn journal_key_pos(&self, k: &c::journal_key) -> Bpos {
         // SAFETY: as journal_key_k()'s
         unsafe { (*self.journal_key_k(k)).k.p }
     }
 
     #[inline]
-    fn journal_key_cmp_pos(&self, btree: c::btree_id, level: u32, pos: c::bpos, r: &c::journal_key) -> Ordering {
+    fn journal_key_cmp_pos(&self, btree: c::btree_id, level: u32, pos: Bpos, r: &c::journal_key) -> Ordering {
         btree_cmp(btree, level, r).then_with(|| pos.cmp(&self.journal_key_pos(r)))
     }
 
@@ -261,7 +262,7 @@ impl Fs {
 
     /// The index of the first key at or after @pos in @btree at @level:
     /// __bch2_journal_key_search().
-    fn journal_key_search(&self, btree: c::btree_id, level: u32, pos: c::bpos) -> usize {
+    fn journal_key_search(&self, btree: c::btree_id, level: u32, pos: Bpos) -> usize {
         let keys = self.journal_keys.keys();
         let (mut l, mut r) = (0, keys.len());
 
@@ -408,7 +409,7 @@ impl c::journal_keys {
 
 /// The first key from @pos to @end, not overwritten: searched for, or from
 /// *@idx if it's close, and *@idx left at it for the next.
-fn peek_max(fs: &Fs, btree: c::btree_id, level: u32, pos: c::bpos, end: c::bpos, idx: &mut usize)
+fn peek_max(fs: &Fs, btree: c::btree_id, level: u32, pos: Bpos, end: Bpos, idx: &mut usize)
     -> *const c::bkey_i
 {
     let jk = &fs.journal_keys;
@@ -460,15 +461,15 @@ fn peek_max(fs: &Fs, btree: c::btree_id, level: u32, pos: c::bpos, end: c::bpos,
 }
 
 #[c_export]
-pub fn bch2_journal_keys_peek_max(c: &Opaque<c::bch_fs>, btree: c::btree_id, level: c_uint, pos: c::bpos,
-                                  end: c::bpos, idx: &mut usize) -> *const c::bkey_i {
+pub fn bch2_journal_keys_peek_max(c: &Opaque<c::bch_fs>, btree: c::btree_id, level: c_uint, pos: Bpos,
+                                  end: Bpos, idx: &mut usize) -> *const c::bkey_i {
     peek_max(Fs::from_c(c), btree, level, pos, end, idx)
 }
 
 /// peek_max(), backwards: the last key from @pos down to @end.
 #[c_export]
-pub fn bch2_journal_keys_peek_prev_min(c: &Opaque<c::bch_fs>, btree: c::btree_id, level: c_uint, pos: c::bpos,
-                                       end: c::bpos, idx: &mut usize) -> *const c::bkey_i {
+pub fn bch2_journal_keys_peek_prev_min(c: &Opaque<c::bch_fs>, btree: c::btree_id, level: c_uint, pos: Bpos,
+                                       end: Bpos, idx: &mut usize) -> *const c::bkey_i {
     let fs = Fs::from_c(c);
     let jk = &fs.journal_keys;
     let keys = jk.keys();
@@ -534,7 +535,7 @@ pub fn bch2_journal_keys_peek_prev_min(c: &Opaque<c::bch_fs>, btree: c::btree_id
 }
 
 #[c_export]
-pub fn bch2_journal_keys_peek_slot(c: &Opaque<c::bch_fs>, btree: c::btree_id, level: c_uint, pos: c::bpos)
+pub fn bch2_journal_keys_peek_slot(c: &Opaque<c::bch_fs>, btree: c::btree_id, level: c_uint, pos: Bpos)
     -> *const c::bkey_i
 {
     peek_max(Fs::from_c(c), btree, level, pos, pos, &mut 0)
@@ -546,7 +547,7 @@ pub fn bch2_journal_keys_peek_slot(c: &Opaque<c::bch_fs>, btree: c::btree_id, le
 /// @trans is live.
 #[c_export]
 pub unsafe fn bch2_key_deleted_in_journal(trans: *mut c::btree_trans, btree: c::btree_id, level: c_uint,
-                                          pos: c::bpos) -> bool {
+                                          pos: Bpos) -> bool {
     // SAFETY: the caller's
     let trans = unsafe { &*trans };
     if !trans.bits.journal_replay_not_finished() {
@@ -569,7 +570,7 @@ pub unsafe fn bch2_key_deleted_in_journal(trans: *mut c::btree_trans, btree: c::
 /// @check. The caller holds overwrite_lock.
 #[c_export]
 pub fn bch2_journal_key_check_or_overwrite(c: &Opaque<c::bch_fs>, btree: c::btree_id, level: c_uint,
-                                           pos: c::bpos, check: bool) -> c_int {
+                                           pos: Bpos, check: bool) -> c_int {
     let fs = Fs::from_c(c);
     let jk = &fs.journal_keys;
     // SAFETY: the caller holds it, through this call
@@ -687,7 +688,7 @@ pub unsafe fn bch2_journal_key_insert(c: &Opaque<c::bch_fs>, btree: c::btree_id,
 }
 
 #[c_export]
-pub fn bch2_journal_key_delete(c: &Opaque<c::bch_fs>, btree: c::btree_id, level: c_uint, pos: c::bpos) -> c_int {
+pub fn bch2_journal_key_delete(c: &Opaque<c::bch_fs>, btree: c::btree_id, level: c_uint, pos: Bpos) -> c_int {
     let mut whiteout = c::bkey_i { k: c::bkey::new(), ..Default::default() };
     whiteout.k.p = pos;
     // SAFETY: a key with no value, all of it there
@@ -697,7 +698,7 @@ pub fn bch2_journal_key_delete(c: &Opaque<c::bch_fs>, btree: c::btree_id, level:
 // ── Iterating: a btree node's keys, with the journal's overlaid ──────────
 
 impl c::journal_iter {
-    fn new(fs: &Fs, btree: c::btree_id, level: u32, pos: c::bpos) -> Self {
+    fn new(fs: &Fs, btree: c::btree_id, level: u32, pos: Bpos) -> Self {
         Self {
             btree_id: btree,
             level,
@@ -724,7 +725,7 @@ impl c::journal_iter {
     /// The next key not overwritten, if it's in the iterator's btree and
     /// level; after an insert, the first from @pos or where the iterator
     /// started, whichever's later.
-    fn peek(&mut self, fs: &Fs, pos: c::bpos) -> *const c::bkey_i {
+    fn peek(&mut self, fs: &Fs, pos: Bpos) -> *const c::bkey_i {
         let jk = &fs.journal_keys;
         let seq = jk.seq();
         if self.seq != seq {
@@ -871,7 +872,7 @@ impl c::btree_and_journal_iter {
     ///
     /// # Safety
     /// @trans and @b are live, @b locked, for as long as the iterator.
-    unsafe fn new(trans: *mut c::btree_trans, b: *mut c::btree, node_iter: c::btree_node_iter, pos: c::bpos)
+    unsafe fn new(trans: *mut c::btree_trans, b: *mut c::btree, node_iter: c::btree_node_iter, pos: Bpos)
         -> Self
     {
         let mut iter = Self {
@@ -910,7 +911,7 @@ pub fn bch2_btree_and_journal_iter_peek(c: &Opaque<c::bch_fs>, iter: &mut c::btr
 pub unsafe fn __bch2_btree_and_journal_iter_init_node_iter(trans: *mut c::btree_trans,
                                                           iter: *mut c::btree_and_journal_iter,
                                                           b: *mut c::btree, node_iter: c::btree_node_iter,
-                                                          pos: c::bpos) {
+                                                          pos: Bpos) {
     // SAFETY: the caller's
     unsafe { iter.write(c::btree_and_journal_iter::new(trans, b, node_iter, pos)) }
 }
@@ -1133,7 +1134,7 @@ pub fn bch2_journal_keys_put(c: &Opaque<c::bch_fs>) {
 /// Btree @btree's keys at levels @level_min to @level_max, from @start to
 /// @end, dropped: by recovery, rebuilding the btree from scratch.
 pub fn shoot_down_journal_keys(fs: &Fs, btree: c::btree_id, level_min: u32, level_max: u32,
-                               start: c::bpos, end: c::bpos) {
+                               start: Bpos, end: Bpos) {
     // SAFETY: recovery's, before anything runs alongside it
     let keys = unsafe { fs.journal_keys.keys_mut() };
     let s = keys.make_contiguous();
@@ -1158,6 +1159,6 @@ pub fn shoot_down_journal_keys(fs: &Fs, btree: c::btree_id, level_min: u32, leve
 
 #[c_export]
 pub fn bch2_shoot_down_journal_keys(c: &Opaque<c::bch_fs>, btree: c::btree_id, level_min: c_uint,
-                                    level_max: c_uint, start: c::bpos, end: c::bpos) {
+                                    level_max: c_uint, start: Bpos, end: Bpos) {
     shoot_down_journal_keys(Fs::from_c(c), btree, level_min, level_max, start, end)
 }

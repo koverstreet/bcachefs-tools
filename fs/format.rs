@@ -106,8 +106,9 @@ pub struct bkey_format {
  */
 #[cfg(target_endian = "little")]
 #[repr(C, packed(4))]
+#[c_name(bpos)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bpos {
+pub struct Bpos {
     pub snapshot: u32,
     pub offset: u64,
     pub inode: u64,
@@ -115,12 +116,16 @@ pub struct bpos {
 
 #[cfg(target_endian = "big")]
 #[repr(C, packed)]
+#[c_name(bpos)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bpos {
+pub struct Bpos {
     pub inode: u64,
     pub offset: u64, /* Points to end of extent - sectors */
     pub snapshot: u32,
 }
+
+/// C's name, as bindgen's declarations of C functions spell it.
+pub type bpos = Bpos;
 
 /* Empty placeholder struct, for container_of() */
 #[repr(C)]
@@ -194,7 +199,7 @@ pub struct bkey {
 
     pub bversion: c::bversion,
     pub size: u32, /* extent size, in sectors */
-    pub p: c::bpos,
+    pub p: Bpos,
 }
 
 #[cfg(target_endian = "big")]
@@ -212,7 +217,7 @@ pub struct bkey {
     /* Type of the value */
     pub type_: u8,
 
-    pub p: c::bpos,
+    pub p: Bpos,
     pub size: u32, /* extent size, in sectors */
     pub bversion: c::bversion,
 
@@ -579,7 +584,7 @@ pub struct Backpointer {
     pub bucket_gen: u8,
     pub flags: u32,
     pub bucket_len: u32,
-    pub pos: c::bpos,
+    pub pos: Bpos,
 }
 
 c_bitmask! {
@@ -2170,8 +2175,8 @@ pub struct btree_node {
     pub flags: Le64,
 
     /* Closed interval: */
-    pub min_key: c::bpos,
-    pub max_key: c::bpos,
+    pub min_key: Bpos,
+    pub max_key: Bpos,
     pub _ptr: c::bch_extent_ptr, /* not used anymore */
     pub format: c::bkey_format,
 

@@ -36,6 +36,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use cstruct_macros::{c_export, c_name, CStruct, bitfield, c_const, c_rcu_array, Fieldwise, TypeInfo, c_enum};
 use core::cell::Cell;
 use nestify::nest;
+use crate::format::Bpos;
 
 c_enum! {
     #[flags]
@@ -271,7 +272,7 @@ impl c::bch_dev {
 
     /// The bucket @ptr points into, as an alloc btree position:
     /// PTR_BUCKET_POS().
-    pub fn ptr_bucket_pos(&self, ptr: &c::bch_extent_ptr) -> c::bpos {
+    pub fn ptr_bucket_pos(&self, ptr: &c::bch_extent_ptr) -> Bpos {
         pos(ptr.dev().into(), self.ptr_bucket(ptr))
     }
 
@@ -1214,12 +1215,12 @@ pub unsafe fn bch2_dev_usage_full_read_fast(ca: &c::bch_dev, usage: *mut c::bch_
 /// The bucket @v encodes - device in the top 16 bits, bucket in the low 48 -
 /// as the lru btree's targets and need_discard's positions do:
 /// u64_to_bucket().
-pub fn u64_to_bucket(v: u64) -> c::bpos {
+pub fn u64_to_bucket(v: u64) -> Bpos {
     pos(v >> 48, v & ((1 << 48) - 1))
 }
 
 /// u64_to_bucket()'s inverse: bucket_to_u64().
-pub fn bucket_to_u64(bucket: c::bpos) -> u64 {
+pub fn bucket_to_u64(bucket: Bpos) -> u64 {
     bucket.inode << 48 | (bucket.offset & ((1 << 48) - 1))
 }
 

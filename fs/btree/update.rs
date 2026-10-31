@@ -17,6 +17,7 @@ use core::mem::size_of;
 use core::ptr::NonNull;
 use core::slice;
 use cstruct_macros::{c_export, c_enum, c_extern, c_xmacro};
+use crate::format::Bpos;
 
 c_xmacro! {
     BCH_TRANS_COMMIT_FLAGS(x) {
@@ -60,7 +61,7 @@ c_extern! {
                                         out: *mut c::bkey_s) -> c_int;
     pub fn bch2_btree_delete_at(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
                                 flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_delete(trans: *mut c::btree_trans, btree: c::btree_id, pos: c::bpos,
+    pub fn bch2_btree_delete(trans: *mut c::btree_trans, btree: c::btree_id, pos: Bpos,
                              flags: c::btree_iter_update_trigger_flags) -> c_int;
     pub fn bch2_btree_insert_nonextent(trans: *mut c::btree_trans, btree: c::btree_id,
                                        k: *mut c::bkey_i, k_buf_u64s: c_uint,
@@ -73,17 +74,17 @@ c_extern! {
                              commit_flags: c::bch_trans_commit_flags,
                              iter_flags: c::btree_iter_update_trigger_flags) -> c_int;
     pub fn bch2_btree_delete_range_trans(trans: *mut c::btree_trans, btree: c::btree_id,
-                                         start: c::bpos, end: c::bpos,
+                                         start: Bpos, end: Bpos,
                                          flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_delete_range(c: *mut c::bch_fs, id: c::btree_id, start: c::bpos, end: c::bpos,
+    pub fn bch2_btree_delete_range(c: *mut c::bch_fs, id: c::btree_id, start: Bpos, end: Bpos,
                                    flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_bit_mod(trans: *mut c::btree_trans, btree: c::btree_id, pos: c::bpos,
+    pub fn bch2_btree_bit_mod(trans: *mut c::btree_trans, btree: c::btree_id, pos: Bpos,
                               set: bool) -> c_int;
-    pub fn bch2_btree_bit_mod_buffered(trans: *mut c::btree_trans, btree: c::btree_id, pos: c::bpos,
+    pub fn bch2_btree_bit_mod_buffered(trans: *mut c::btree_trans, btree: c::btree_id, pos: Bpos,
                                        set: bool) -> c_int;
     pub fn bch2_btree_bit_mod_iter(trans: *mut c::btree_trans, iter: *mut c::btree_iter, set: bool) -> c_int;
     pub fn __bch2_insert_snapshot_whiteouts(trans: *mut c::btree_trans, btree: c::btree_id,
-                                            pos: c::bpos, s: *mut c::snapshot_id_list) -> c_int;
+                                            pos: Bpos, s: *mut c::snapshot_id_list) -> c_int;
     #[must_use]
     pub fn bch2_trans_update_ip(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
                                 k: *mut c::bkey_i, k_buf_u64s: c_uint,
@@ -92,7 +93,7 @@ c_extern! {
                                               flags: c::btree_iter_update_trigger_flags,
                                               old: c::bkey_s_c, new: c::bkey_s_c) -> c_int;
     pub fn bch2_bkey_get_empty_slot(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
-                                    btree: c::btree_id, start: c::bpos, end: c::bpos) -> c_int;
+                                    btree: c::btree_id, start: Bpos, end: Bpos) -> c_int;
     pub fn bch2_trans_commit_hook(trans: *mut c::btree_trans, h: *mut c::btree_trans_commit_hook);
     pub fn __bch2_trans_commit(trans: *mut c::btree_trans, flags: c::bch_trans_commit_flags,
                                lazy: bool) -> c_int;

@@ -30,6 +30,7 @@ use crate::util::Printbuf;
 use crate::util::log::{LogLevel, LogMsg};
 use crate::{bch_err, bch_err_msg, bch_info, bch_verbose};
 use core::ops::ControlFlow;
+use crate::format::Bpos;
 
 const LOSTFOUND: &[u8] = b"lost+found";
 
@@ -284,7 +285,7 @@ pub fn inode_should_reattach(inode: &c::bch_inode_unpacked) -> bool {
 
 /// Hide the dirent at @d_pos from @snapshot, a descendant of its snapshot,
 /// if it's visible there.
-fn maybe_delete_dirent(t: &TransAttempt<'_, '_>, d_pos: c::bpos, snapshot: u32)
+fn maybe_delete_dirent(t: &TransAttempt<'_, '_>, d_pos: Bpos, snapshot: u32)
     -> Result<(), BchError>
 {
     let mut iter = BtreeIter::new(t, c::btree_id::dirents,

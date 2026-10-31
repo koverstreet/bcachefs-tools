@@ -24,6 +24,7 @@ use core::sync::atomic::Ordering;
 use cstruct_macros::{c_export, CStruct, Plain, TypeInfo};
 use super::io::*;
 use crate::types::c_default;
+use crate::format::Bpos;
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -1190,19 +1191,19 @@ impl Fs {
     }
 
     /// Whether @bucket is one of its device's: bch2_dev_bucket_exists().
-    pub fn dev_bucket_exists(&self, bucket: c::bpos) -> bool {
+    pub fn dev_bucket_exists(&self, bucket: Bpos) -> bool {
         self.dev_rcu(bucket.inode as u32, &read_lock()).is_some_and(|ca| ca.bucket_valid(bucket.offset))
     }
 
     /// A ref on @bucket's device, if it's a device with that bucket:
     /// bch2_dev_bucket_tryget_noerror().
-    pub fn dev_bucket_tryget_noerror(&self, bucket: c::bpos) -> Option<DevRef> {
+    pub fn dev_bucket_tryget_noerror(&self, bucket: Bpos) -> Option<DevRef> {
         self.dev_get(bucket.inode as u32).filter(|ca| ca.bucket_valid(bucket.offset))
     }
 
     /// dev_bucket_tryget_noerror(), a missing device or bucket reported:
     /// bch2_dev_bucket_tryget().
-    pub fn dev_bucket_tryget(&self, bucket: c::bpos) -> Result<DevRef, BchError> {
+    pub fn dev_bucket_tryget(&self, bucket: Bpos) -> Result<DevRef, BchError> {
         let ca = self.dev_tryget(bucket.inode as u32)?;
         if !ca.bucket_valid(bucket.offset) {
             ca.bucket_missing(bucket.offset);

@@ -15,6 +15,7 @@ use crate::logging;
 use crate::device_scan::OpenedFs;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
+use bcachefs_kernel::format::Bpos;
 
 fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = bcachefs_kernel::btree_trans!(fs);
@@ -208,11 +209,11 @@ pub struct Cli {
 
     /// Start position to list from
     #[arg(short, long, default_value = "POS_MIN")]
-    start: c::bpos,
+    start: Bpos,
 
     /// End position
     #[arg(short, long, default_value = "SPOS_MAX")]
-    end: c::bpos,
+    end: Bpos,
 
     /// Check (fsck) the filesystem first
     #[arg(short, long)]

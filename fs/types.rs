@@ -17,6 +17,7 @@ use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
 use core::sync::atomic::{AtomicI32, AtomicI64, AtomicU64};
 use cstruct_macros::{c_name, c_const, c_enum, c_rcu_array, c_xmacro, placed, CStruct, Fieldwise, Init, TypeInfo};
 use pin_init::pin_data;
+use crate::format::Bpos;
 
 c_xmacro! {
     /* Parameters that are useful for debugging, but should always be compiled in: */
@@ -806,7 +807,7 @@ pub struct Fs {
     /* Extents btree ranges from lost btree nodes, awaiting attribution: init/damage.rs */
     #[pin]
     #[init(RustOnly::new(crate::new_lock!(crate::util::alloc::KVVec::new())))]
-    pub(crate) lost_extents_ranges: rust_only!(Locked<c::mutex, crate::util::alloc::KVVec<core::ops::Range<c::bpos>>>),
+    pub(crate) lost_extents_ranges: rust_only!(Locked<c::mutex, crate::util::alloc::KVVec<core::ops::Range<Bpos>>>),
 
     #[pin]
     #[init(RustOnly::new(::pin_init::zeroed::<crate::data::compress::Compress>()))]

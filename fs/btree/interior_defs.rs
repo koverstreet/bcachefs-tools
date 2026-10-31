@@ -7,6 +7,7 @@ use crate::types::{DArray, c_default, Le64};
 use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct};
 use nestify::nest;
+use crate::format::Bpos;
 
 c_const! {
     pub const BTREE_UPDATE_NODES_MAX: u32 = (c::BTREE_MAX_DEPTH as u32 - 2) * 2 + c::GC_MERGE_NODES;
@@ -96,8 +97,8 @@ nest! {
         },
 
         pub btree_id: c::btree_id,
-        pub node_start: c::bpos,
-        pub node_end: c::bpos,
+        pub node_start: Bpos,
+        pub node_end: Bpos,
         pub node_needed_rewrite: c::btree_node_rewrite_reason,
         pub node_written: u16,
         pub node_sectors: u16,

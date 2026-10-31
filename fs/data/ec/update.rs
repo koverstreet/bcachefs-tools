@@ -28,6 +28,7 @@ use crate::{bch_err, fs_inconsistent, fsck_err_flags, logged_ops, prt};
 use core::mem::size_of;
 use core::ops::RangeInclusive;
 use cstruct_macros::c_export;
+use crate::format::Bpos;
 
 // ── A stripe block's extents ─────────────────────────────────────────────
 //
@@ -43,7 +44,7 @@ use cstruct_macros::c_export;
 pub(crate) type Extent<'k, 'a> = Option<(&'k BtreeIter<'a>, BkeySC<'k>)>;
 
 /// Where block @block's backpointers are.
-fn block_bps(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: u32) -> (c::btree_id, RangeInclusive<c::bpos>) {
+fn block_bps(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: u32) -> (c::btree_id, RangeInclusive<Bpos>) {
     let ptr = &s.v().block_ptrs()[block as usize];
 
     // C's bch2_dev_bkey_tryget() drops the error of scheduling the repair of

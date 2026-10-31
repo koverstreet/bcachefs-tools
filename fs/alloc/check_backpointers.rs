@@ -55,6 +55,7 @@ use core::ffi::c_int;
 use core::ops::{ControlFlow, RangeInclusive};
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
+use crate::format::Bpos;
 
 // ── fsck: check_btree_backpointers ───────────────────────────────────────
 
@@ -401,7 +402,7 @@ impl BucketSectors {
 /// (@checked_bad), and the attempt restarted; if off, the bucket goes in the
 /// bitmaps. Returns whether it did.
 fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'_>,
-                                     mut last_flushed: WbFlush<'_>, checked_bad: &mut c::bpos)
+                                     mut last_flushed: WbFlush<'_>, checked_bad: &mut Bpos)
     -> Result<bool, BchError>
 {
     use c::bch_data_type as dt;
@@ -576,7 +577,7 @@ pub unsafe fn bch2_check_bucket_backpointer_mismatch<'t>(trans: &'t BtreeTrans<'
 }
 
 struct ExtentsToBpState {
-    bp_range:     RangeInclusive<c::bpos>,
+    bp_range:     RangeInclusive<Bpos>,
     last_flushed: WbMaybeFlush,
 }
 
@@ -767,7 +768,7 @@ fn btree_node_get_and_pin(t: &TransAttempt<'_, '_>, pins: &BtreeCachePins<'_>, k
 /// All prefetched first, so they're read in parallel. Returns where the pinned
 /// range ends.
 fn pin_backpointer_nodes_with_missing(fs: &Fs, trans: &BtreeTrans<'_>, pins: &BtreeCachePins<'_>,
-                                      start: c::bpos) -> Result<c::bpos, BchError> {
+                                      start: Bpos) -> Result<Bpos, BchError> {
     let node_size = i64::from(fs.opts.btree_node_size.get());
     let mut tmp = BkeyBuf::new();
 
@@ -902,7 +903,7 @@ fn check_one_backpointer(t: &TransAttempt<'_, '_>, range: &RangeInclusive<c::bbp
 }
 
 /// Inside the caller's attempt: a restart is the caller's.
-fn check_bucket_backpointers_to_extents(trans: &BtreeTrans<'_>, ca: &c::bch_dev, bucket: c::bpos,
+fn check_bucket_backpointers_to_extents(trans: &BtreeTrans<'_>, ca: &c::bch_dev, bucket: Bpos,
                                         last_flushed: WbFlush<'_>) -> Result<(), BchError> {
     let restart_count = trans.restart_count();
     let range = BackpointerPos::bucket_range(ca, bucket);

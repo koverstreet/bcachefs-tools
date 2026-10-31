@@ -15,6 +15,7 @@ use crate::types::c_default;
 use core::ffi::c_uint;
 use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_same, c_verbatim, c_xmacro};
 use nestify::nest;
+use crate::format::Bpos;
 
 /* DOC_LATEX(bkey-structures)
  *
@@ -247,7 +248,7 @@ nest! {
 }
 
 c_extern! {
-    pub fn bch2_bpos_swab(p: *mut cs::bpos);
+    pub fn bch2_bpos_swab(p: *mut Bpos);
     pub fn __bch2_bkey_unpack_key(format: *const cs::bkey_format, out: *mut cs::bkey,
                                   in_: *const cs::bkey_packed);
 }

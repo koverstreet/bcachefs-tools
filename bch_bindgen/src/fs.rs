@@ -17,9 +17,10 @@ use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::util::printbuf::Printbuf;
 
 use crate::data::io::{ReadOp, WriteOp};
+use bcachefs_kernel::format::Bpos;
 
 extern "C" {
-    fn rust_accounting_mem_read(c: *mut c::bch_fs, p: c::bpos, v: *mut u64, nr: u32);
+    fn rust_accounting_mem_read(c: *mut c::bch_fs, p: Bpos, v: *mut u64, nr: u32);
 }
 
 /// Userspace extension methods on the core [`Fs`].
@@ -29,7 +30,7 @@ pub trait FsExt {
         -> Result<OpenFs, BchError>;
     fn write(&self, inum: u64, offset: u64, subvol: u32, replicas: u32, data: &[u8], new_i_size: u64) -> WriteOp;
     fn read<'a>(&'a self, inum: c::subvol_inum, offset: u64, inode: &c::bch_inode_unpacked, buf: &'a mut [u8]) -> ReadOp;
-    fn accounting_mem_read(&self, pos: c::bpos, nr: u32) -> Vec<u64>;
+    fn accounting_mem_read(&self, pos: Bpos, nr: u32) -> Vec<u64>;
     fn dev_add(&self, path: &str) -> Result<(), BchError>;
 }
 
@@ -78,7 +79,7 @@ impl FsExt for Fs {
         ReadOp::new(self, inum, offset, inode, buf)
     }
 
-    fn accounting_mem_read(&self, pos: c::bpos, nr: u32) -> Vec<u64> {
+    fn accounting_mem_read(&self, pos: Bpos, nr: u32) -> Vec<u64> {
         let mut v = vec![0u64; nr as usize];
         unsafe {
             rust_accounting_mem_read(self.as_ptr(), pos, v.as_mut_ptr(), nr);

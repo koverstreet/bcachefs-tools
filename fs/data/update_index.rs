@@ -51,6 +51,7 @@ use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
 use core::sync::atomic::{fence, Ordering};
 use cstruct_macros::c_export;
+use crate::format::Bpos;
 
 /// Room past a key for set_needs_reconcile(): an entry, and a padding pointer
 /// per replica.
@@ -140,7 +141,7 @@ fn count_key_fail(fs: &Fs, u: &c::data_update, new: BkeySC<'_>, wrote: BkeySC<'_
 /// The update of @k, the slot at @iter, by the front of @u's keylist; where
 /// the walk goes on from.
 fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &BtreeIter<'t>, k: BkeySC<'_>)
-    -> Result<c::bpos, BchError>
+    -> Result<Bpos, BchError>
 {
     let fs = t.fs();
     let old = BkeySC::from(u.k.key());

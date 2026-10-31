@@ -25,13 +25,14 @@ use crate::init::error::id;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;
 use crate::{fsck_err, fsck_err_flags, fsck_err_on};
+use crate::format::Bpos;
 
 const KEY_TYPE_SET: u8 = c::bch_bkey_type::KEY_TYPE_set.0 as u8;
 
 /// Bucket @bucket's reference to stripe @stripe, added or (!@set) dropped:
 /// its bucket_to_stripe entry, and its alloc key's stripe_refcount.
 /// bucket_stripe_ref_mod().
-fn bucket_stripe_ref_mod(t: &TransAttempt<'_, '_>, bucket: c::bpos, stripe: u64, set: bool)
+fn bucket_stripe_ref_mod(t: &TransAttempt<'_, '_>, bucket: Bpos, stripe: u64, set: bool)
     -> Result<(), BchError>
 {
     let mut a = t.start_alloc_update(bucket, UpdateTriggerFlags::empty())?;
@@ -77,14 +78,14 @@ fn check_stripe_refs_one(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, last_flushed: 
 }
 
 /// Whether stripe @s has a block in @bucket. bucket_matches_stripe().
-fn bucket_matches_stripe(fs: &Fs, bucket: c::bpos, s: &c::Stripe<Validated>) -> bool {
+fn bucket_matches_stripe(fs: &Fs, bucket: Bpos, s: &c::Stripe<Validated>) -> bool {
     s.block_ptrs().iter()
         .any(|ptr| fs.dev_get(ptr.dev().into()).is_some_and(|ca| ca.ptr_bucket_pos(ptr) == bucket))
 }
 
 /// The bucket_to_stripe entry at @r: its stripe there, with a block in its
 /// bucket - dropped if not. check_bucket_to_stripe_ref().
-fn check_bucket_to_stripe_ref(t: &TransAttempt<'_, '_>, r: c::bpos) -> Result<(), BchError> {
+fn check_bucket_to_stripe_ref(t: &TransAttempt<'_, '_>, r: Bpos) -> Result<(), BchError> {
     let fs = t.fs();
     let bucket = u64_to_bucket(r.inode);
     let stripe = r.offset;

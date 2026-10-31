@@ -88,6 +88,7 @@ use core::ffi::{c_int, c_uint};
 use core::ops::ControlFlow;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_export, CStruct, TypeInfo, c_enum, c_typedef, c_xmacro, tagged_union};
+use crate::format::Bpos;
 
 c_xmacro! {
     RECONCILE_SCAN_TYPES(x) {
@@ -174,8 +175,8 @@ pub struct Phase {
     kind:     PhaseKind,
     priority: c::reconcile_work_id,
     btree:    c::btree_id,
-    start:    c::bpos,
-    end:      c::bpos,
+    start:    Bpos,
+    end:      Bpos,
 }
 
 impl Phase {
@@ -220,7 +221,7 @@ static PHASES: [Phase; 9] = [
 #[derive(Clone, Copy)]
 pub enum Status {
     /// In a pass: in @phase - None between phases - at @pos.
-    Running { phase: Option<&'static Phase>, pos: c::bpos },
+    Running { phase: Option<&'static Phase>, pos: Bpos },
     /// Waiting for the write io clock to reach @iotime_end, from
     /// @iotime_start - since @since, ktime_get_ns() - or a kick.
     Waiting { iotime_start: u64, iotime_end: u64, since: u64 },
@@ -244,7 +245,7 @@ const WORK_BUF_NR: usize = 1024;
 /// The entries a buffered phase has read ahead and not yet done: positions in
 /// its work btree, in order.
 struct WorkBuf {
-    pos:  KVVec<c::bpos>,
+    pos:  KVVec<Bpos>,
     next: usize,
 }
 
@@ -260,8 +261,8 @@ impl WorkBuf {
 
     /// The next entry, from @work_pos up to @end: a batch read once the last's
     /// done, and @work_pos moved past it - next_reconcile_entry().
-    fn next(&mut self, trans: &BtreeTrans<'_>, work_pos: &mut c::bbpos, end: c::bpos)
-        -> Result<Option<c::bpos>, BchError>
+    fn next(&mut self, trans: &BtreeTrans<'_>, work_pos: &mut c::bbpos, end: Bpos)
+        -> Result<Option<Bpos>, BchError>
     {
         if self.next == self.pos.len() {
             self.clear();
@@ -293,8 +294,8 @@ impl WorkBuf {
 
 /// The first key in @btree from @start to @end that @decode takes - a key at
 /// a time, as what's done to one changes the next - and its position.
-fn next_key<T>(trans: &BtreeTrans<'_>, btree: c::btree_id, start: c::bpos, end: c::bpos,
-               mut decode: impl FnMut(BkeySC<'_>) -> Option<T>) -> Result<Option<(c::bpos, T)>, BchError>
+fn next_key<T>(trans: &BtreeTrans<'_>, btree: c::btree_id, start: Bpos, end: Bpos,
+               mut decode: impl FnMut(BkeySC<'_>) -> Option<T>) -> Result<Option<(Bpos, T)>, BchError>
 {
     let mut iter = BtreeIter::new(trans, btree, start, BtreeIterFlags::PREFETCH);
     iter.for_each_max(trans, end, |_, _, k| Ok(match decode(k) {

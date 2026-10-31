@@ -35,6 +35,7 @@ use crate::{bkey_fsck_err_on, fsck_err};
 use core::ffi::c_int;
 use core::ops::RangeInclusive;
 use cstruct_macros::c_export;
+use crate::format::Bpos;
 
 /// What an lru id says: which lru, and for a per-device one, the device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,7 +113,7 @@ impl LruPos {
 
     /// Any position in the lru btree decodes: an id is all of inode's top
     /// bits.
-    pub fn from_bpos(p: c::bpos) -> Self {
+    pub fn from_bpos(p: Bpos) -> Self {
         Self {
             id:     (p.inode >> c::LRU_TIME_BITS) as u16,
             time:   p.inode & c::LRU_TIME_MAX,
@@ -120,7 +121,7 @@ impl LruPos {
         }
     }
 
-    pub fn to_bpos(self) -> c::bpos {
+    pub fn to_bpos(self) -> Bpos {
         pos(u64::from(self.id) << c::LRU_TIME_BITS | self.time, self.target)
     }
 

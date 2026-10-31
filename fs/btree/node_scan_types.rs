@@ -7,6 +7,7 @@ use crate::types::{DArray, c_default};
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{bitfield, CStruct, c_extern, c_typedef};
 use nestify::nest;
+use crate::format::Bpos;
 
 nest! {
     #[repr(C)]
@@ -26,8 +27,8 @@ nest! {
         pub journal_seq: u64,
         pub cookie: u64,
 
-        pub min_key: c::bpos,
-        pub max_key: c::bpos,
+        pub min_key: Bpos,
+        pub max_key: Bpos,
 
         pub nr_ptrs: c_uint,
         pub ptrs: [c::bch_extent_ptr; c::BCH_REPLICAS_MAX as usize],

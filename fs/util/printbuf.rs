@@ -4,12 +4,12 @@ use core::ffi::{CStr, c_int, c_uint, c_void};
 use core::fmt::{self, Write as _};
 use core::ops::{Deref, DerefMut};
 use crate::c;
-use crate::c::bpos as Bpos;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::types::c_default;
 use crate::util::ffi::c_char;
 use cstruct_macros::{CStruct, bitfield, c_const, c_enum, c_extern};
 use nestify::nest;
+use crate::format::Bpos;
 
 c_enum! {
     #[closed]

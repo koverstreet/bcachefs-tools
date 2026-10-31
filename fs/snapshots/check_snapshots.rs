@@ -50,6 +50,7 @@ use crate::util::{Join, Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err, prt};
 use core::fmt;
 use cstruct_macros::c_export;
+use crate::format::Bpos;
 
 /// Snapshot node @id's key, None if there's none: fsck can't assume a node
 /// exists, and absence as a value can't be returned as an error by mistake.
@@ -1107,7 +1108,7 @@ crate::recovery_pass!(bch2_check_snapshots => check_snapshots);
 /// of one inode is in one tree.
 struct TreeReconstruct {
     btree:   c::btree_id,
-    cur_pos: c::bpos,
+    cur_pos: Bpos,
     /// The current inode's snapshot ids.
     cur_ids: KVVec<u32>,
     /// The trees so far; merged-away ones are left empty.
@@ -1116,7 +1117,7 @@ struct TreeReconstruct {
 
 impl TreeReconstruct {
     /// Whether @pos is the current inode.
-    fn same_inode(&self, pos: c::bpos) -> bool {
+    fn same_inode(&self, pos: Bpos) -> bool {
         if self.btree == c::btree_id::inodes {
             self.cur_pos.offset == pos.offset
         } else {
@@ -1145,7 +1146,7 @@ impl TreeReconstruct {
         Ok(())
     }
 
-    fn add(&mut self, pos: c::bpos) -> Result<(), BchError> {
+    fn add(&mut self, pos: Bpos) -> Result<(), BchError> {
         if !self.same_inode(pos) {
             self.next()?;
         }

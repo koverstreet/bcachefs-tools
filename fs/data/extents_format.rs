@@ -6,6 +6,7 @@ use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
 use cstruct_macros::{c_name, bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, whole, CStruct, Plain, TypeInfo, SizedVal};
 use nestify::nest;
+use crate::format::Bpos;
 
 /* DOC_LATEX(extent-checksums)
  *
@@ -327,7 +328,7 @@ pub struct BtreePtrV2 {
     pub seq: Le64,
     pub sectors_written: Le16,
     pub flags: Le16,
-    pub min_key: c::bpos,
+    pub min_key: Bpos,
     pub _data: [u64; 0],
     pub start: [c::bch_extent_ptr; 0],
 }

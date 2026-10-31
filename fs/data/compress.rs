@@ -57,6 +57,7 @@ use core::ptr::{self, NonNull};
 use cstruct_macros::{c_export, bitfield, c_enum, CStruct, TypeInfo};
 use crate::types::c_default;
 use nestify::nest;
+use crate::format::Bpos;
 
 nest! {
     #[derive(Clone, Copy, CStruct, TypeInfo)]*
@@ -675,7 +676,7 @@ fn attempt_compress(fs: &Fs, ws: &mut [MaybeUninit<u8>], dst: VolatileSlice<'_>,
 /// of each - or none or incompressible. @src a slice: what's compressed is
 /// written out, and has to be what's checksummed.
 fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], src_len: &mut usize,
-            compression_opt: u8, write_pos: c::bpos) -> ty {
+            compression_opt: u8, write_pos: Bpos) -> ty {
     let block = fs.block_bytes() as usize;
 
     // If it's only one block, don't bother trying to compress:
@@ -759,7 +760,7 @@ fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], sr
     compression_type
 }
 
-fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: ty, pos: c::bpos) -> bool {
+fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: ty, pos: Bpos) -> bool {
     let src_len = src.len();
     let crc = c::bch_extent_crc_unpacked {
         compressed_size:   (dst.len() >> 9) as u32,
@@ -790,7 +791,7 @@ fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: ty, pos: c::bpos) -> b
 #[c_export]
 pub unsafe fn bch2_bio_compress(c: &Opaque<c::bch_fs>, dst: *mut c::bio, dst_len: &mut usize,
                                 src: *mut c::bio, src_len: &mut usize, compression_opt: c_uint,
-                                write_pos: c::bpos, bounce_source: bool) -> c_uint {
+                                write_pos: Bpos, bounce_source: bool) -> c_uint {
     let fs = Fs::from_c(c);
 
     // SAFETY: the caller's - their sizes ours to clamp, and put back

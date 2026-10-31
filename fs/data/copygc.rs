@@ -90,6 +90,7 @@ use crate::locking::Locked;
 use crate::new_lock;
 use crate::util::futex::EventCount;
 use crate::util::projections::Volatile;
+use crate::format::Bpos;
 
 #[pin_data]
 #[repr(C)]
@@ -316,7 +317,7 @@ pub(crate) fn can_make_progress(ca: &c::bch_dev) -> bool {
 struct CopygcDev {
     dev:  u32,
     wait: i64,
-    pos:  c::bpos,
+    pos:  Bpos,
     /// Its lru exhausted, or it no longer needs copygc
     done: bool,
 }
@@ -373,7 +374,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
 
                 /* No allocating under rcu - skip if a device raced in: */
                 if v <= 0 && devs.len() < devs.capacity() {
-                    let d = CopygcDev { dev: ca.dev_idx.into(), wait: v, pos: c::bpos::default(), done: false };
+                    let d = CopygcDev { dev: ca.dev_idx.into(), wait: v, pos: Bpos::default(), done: false };
                     devs.push(d, GFP_KERNEL).expect("within capacity");
                 } else if v > 0 {
                     wait = wait.min(v as u64);
@@ -404,7 +405,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
     /// block, any. Why not is counted, each reason an error thrown.
     ///
     /// XXX: we should kill the LRU entry here if the bucket's not valid.
-    fn bucket_is_movable(t: &TransAttempt<'_, '_>, bucket: c::bpos, time: u64)
+    fn bucket_is_movable(t: &TransAttempt<'_, '_>, bucket: Bpos, time: u64)
         -> Result<Option<u32>, BchError>
     {
         let fs = t.fs();
@@ -444,7 +445,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
     /// counted - come after its last btree access, so a restart retrying
     /// the key it was for repeats none of them; and one that retries a
     /// stripe's key finds its earlier blocks in flight.
-    fn try_add(&self, t: &TransAttempt<'_, '_>, batch: &mut Batch<'f>, bucket: c::bpos, time: u64)
+    fn try_add(&self, t: &TransAttempt<'_, '_>, batch: &mut Batch<'f>, bucket: Bpos, time: u64)
         -> Result<bool, BchError>
     {
         let Some(generation) = Self::bucket_is_movable(t, bucket, time)? else { return Ok(false) };
@@ -519,7 +520,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
 
     /// The stripe at @lru_k's lru entry, if it's still there and its entry's
     /// current - the lru is updated through the write buffer.
-    fn lru_stripe<'k, 't>(t: &'k TransAttempt<'_, 't>, iter: &'k mut BtreeIter<'t>, lru_k: c::bpos)
+    fn lru_stripe<'k, 't>(t: &'k TransAttempt<'_, 't>, iter: &'k mut BtreeIter<'t>, lru_k: Bpos)
         -> Result<Option<crate::data::ec::stripe::StripeK<'k>>, BchError>
     {
         let lru = LruPos::from_bpos(lru_k);
@@ -537,7 +538,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let mut iter = BtreeIter::new(trans, c::btree_id::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
 
         iter.for_each_max(trans, lru.end().to_bpos(), |t, _, lru_k| {
-            let mut s_iter = BtreeIter::new(t, c::btree_id::stripes, c::bpos::default(), BtreeIterFlags::empty());
+            let mut s_iter = BtreeIter::new(t, c::btree_id::stripes, Bpos::default(), BtreeIterFlags::empty());
             let Some(s) = Self::lru_stripe(t, &mut s_iter, lru_k.k.p)? else { return Ok(LoopFlow::Continue) };
 
             for b in s.data_blocks().filter(|b| b.sectors() != 0) {
@@ -569,7 +570,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let mut iter = BtreeIter::new(trans, c::btree_id::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
 
         let stripe_frag_ratio = iter.for_each_max(trans, lru.end().to_bpos(), |t, _, lru_k| {
-            let mut s_iter = BtreeIter::new(t, c::btree_id::stripes, c::bpos::default(), BtreeIterFlags::empty());
+            let mut s_iter = BtreeIter::new(t, c::btree_id::stripes, Bpos::default(), BtreeIterFlags::empty());
             let Some(s) = Self::lru_stripe(t, &mut s_iter, lru_k.k.p)? else { return Ok(LoopFlow::Continue) };
 
             let v = s.v();

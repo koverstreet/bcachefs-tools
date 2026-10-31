@@ -24,6 +24,7 @@ use crate::{bch_err_msg, fsck_err, fsck_err_on, inode_fsck_err};
 use crate::dirent::{self, Dirent};
 use crate::{inode, inode_opts, namei, str_hash};
 use core::fmt;
+use crate::format::Bpos;
 
 struct CheckInodes {
     /// The oldest version the current key sees: every version takes its hash
@@ -83,7 +84,7 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpac
 }
 
 /// Whether the inode at @pos is on the deleted_inodes list.
-fn on_deleted_list(t: &TransAttempt<'_, '_>, pos: c::bpos) -> Result<bool, BchError> {
+fn on_deleted_list(t: &TransAttempt<'_, '_>, pos: Bpos) -> Result<bool, BchError> {
     let mut iter = BtreeIter::new(t, c::btree_id::deleted_inodes, pos, BtreeIterFlags::empty());
     Ok(iter.peek_slot(t)?.is_some_and(|k| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_set))
 }
@@ -137,7 +138,7 @@ enum SubvolCheck {
 /// that still names it.
 fn check_inode_subvol(
     t:     &TransAttempt<'_, '_>,
-    pos:   c::bpos,
+    pos:   Bpos,
     u:     &mut c::bch_inode_unpacked,
 ) -> Result<SubvolCheck, BchError> {
     let fs = t.fs();
@@ -202,7 +203,7 @@ fn check_inode_subvol(
 /// @u changed.
 fn check_unlinked_dir(
     t:     &TransAttempt<'_, '_>,
-    pos:   c::bpos,
+    pos:   Bpos,
     u:     &mut c::bch_inode_unpacked,
 ) -> Result<bool, BchError> {
     if u.is_subvolume_root() && subvolume::is_unlinked(t, u.bi_subvol)? {

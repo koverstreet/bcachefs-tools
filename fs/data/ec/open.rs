@@ -21,13 +21,14 @@ use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
 use core::ffi::c_int;
 use cstruct_macros::c_export;
+use crate::format::Bpos;
 
 // ── Open stripes, and the buckets of stripes being made ──────────────────
 
 impl Fs {
     /// Whether a stripe being made has a block in @bucket: for what would
     /// move its data meanwhile - reconcile - to leave it.
-    pub fn bucket_has_new_stripe(&self, bucket: c::bpos) -> bool {
+    pub fn bucket_has_new_stripe(&self, bucket: Bpos) -> bool {
         self.ec.stripes_new_buckets.contains(&bucket_to_u64(bucket))
     }
 

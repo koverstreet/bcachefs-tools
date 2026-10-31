@@ -1,8 +1,7 @@
 //! Positions: bpos constructors, the sentinels, and stepping to the next or
 //! previous position.
 
-use crate::c;
-use crate::c::bpos as Bpos;
+use crate::format::Bpos;
 
 pub const fn spos(inode: u64, offset: u64, snapshot: u32) -> Bpos {
     Bpos {
@@ -20,7 +19,7 @@ pub const POS_MIN: Bpos = spos(0, 0, 0);
 pub const POS_MAX: Bpos = spos(u64::MAX, u64::MAX, 0);
 pub const SPOS_MAX: Bpos = spos(u64::MAX, u64::MAX, u32::MAX);
 
-impl c::bpos {
+impl Bpos {
     /// The next position, snapshot field first. None after SPOS_MAX: panics.
     pub fn successor(self) -> Self {
         let (inode, offset, snapshot) = (self.inode, self.offset, self.snapshot);

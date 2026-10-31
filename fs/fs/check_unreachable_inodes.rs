@@ -26,6 +26,7 @@ use crate::{bch_err, inode_fsck_err};
 use crate::dirent::Dirent;
 use crate::{inode, namei};
 use core::ops::ControlFlow;
+use crate::format::Bpos;
 
 /// Whether this inum is a subvolume root, from the first version seen.
 ///
@@ -171,7 +172,7 @@ enum DstSlot {
 
 fn dst_slot(
     t:     &TransAttempt<'_, '_>,
-    pos:   c::bpos,
+    pos:   Bpos,
     inode: &c::bch_inode_unpacked,
     flags: BtreeIterFlags,
 ) -> Result<DstSlot, BchError> {

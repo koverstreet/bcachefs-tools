@@ -4,12 +4,13 @@ use crate::c;
 use core::cmp::Ordering;
 use cstruct_macros::{CStruct, Plain, bitfield};
 use nestify::nest;
+use crate::format::Bpos;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain)]
 pub struct bbpos {
     pub btree: c::btree_id,
-    pub pos: c::bpos,
+    pub pos: Bpos,
 }
 
 // Torn, a mix of two positions - not necessarily between them: harmless in
@@ -30,7 +31,7 @@ nest! {
             #[bits(16)] pub btree: c::btree_id,
         },
         pub level: u16,
-        pub pos: c::bpos,
+        pub pos: Bpos,
     }
 }
 
@@ -98,7 +99,7 @@ impl FromStr for c::bbpos {
         let (btree_s, pos_s) = s.split_once(':').ok_or_else(err)?;
 
         let btree: c::btree_id = btree_s.parse().map_err(|_| err())?;
-        let pos: c::bpos = pos_s.parse().map_err(|_| err())?;
+        let pos: Bpos = pos_s.parse().map_err(|_| err())?;
 
         Ok(c::bbpos { btree, pos })
     }

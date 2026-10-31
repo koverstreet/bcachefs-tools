@@ -7,6 +7,7 @@ use crate::types::c_default;
 use core::ffi::c_uint;
 use cstruct_macros::{bitfield, CStruct, TypeInfo};
 use nestify::nest;
+use crate::format::Bpos;
 
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
@@ -85,14 +86,14 @@ nest! {
          * pos we read from - different from data_pos for indirect extents:
          */
         pub subvol: u32,
-        pub read_pos: c::bpos,
+        pub read_pos: Bpos,
 
         /*
          * start pos of data we read (may not be pos of data we want) - for
          * promote, narrow extents paths:
          */
         pub data_btree: c::btree_id,
-        pub data_pos: c::bpos,
+        pub data_pos: Bpos,
         pub version: c::bversion,
 
         pub opts: c::bch_inode_opts,

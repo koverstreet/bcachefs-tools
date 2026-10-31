@@ -55,6 +55,7 @@ use c::bch_data_update_types as Type;
 use crate::types::c_default;
 use core::sync::atomic::AtomicBool;
 use nestify::nest;
+use crate::format::Bpos;
 
 c_xmacro! {
     BCH_DATA_UPDATE_TYPES(x) {
@@ -118,7 +119,7 @@ c_default!(data_update_opts);
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, CStruct)]
 pub struct data_update_key {
     pub btree: c::btree_id,
-    pub pos: c::bpos,
+    pub pos: Bpos,
     pub copygc: bool,
 }
 

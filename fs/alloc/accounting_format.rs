@@ -5,6 +5,7 @@
 use crate::cstructs::c;
 use crate::util::vstructs::Head;
 use cstruct_macros::{c_name, c_const, c_enum, c_typedef, c_xmacro, tagged_union, whole, CStruct, Plain, TypeInfo};
+use crate::format::Bpos;
 
 /*
  * Disk accounting - KEY_TYPE_accounting - on disk format:
@@ -128,7 +129,7 @@ tagged_union! {
     pub struct disk_accounting_pos {
         tag type_: u8 = disk_accounting_type,
         arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: bch_acct_ ## f = nr,
-        pad: c::bpos,
+        pad: Bpos,
         size: pad,
         packed,
 

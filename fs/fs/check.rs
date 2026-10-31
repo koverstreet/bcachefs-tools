@@ -20,13 +20,14 @@ use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err, prt};
 use core::ops::ControlFlow;
+use crate::format::Bpos;
 
 /// The snapshots of the keys seen so far at one position, while walking a
 /// btree in key order with all snapshots: a key in an ancestor is hidden from
 /// a descendant that overwrote it. C only passes it through, from check_key()
 /// back to __bch2_str_hash_check_key().
 pub struct SnapshotsSeen {
-    pos: c::bpos,
+    pos: Bpos,
     /// Ascending, as seen in key order, plus any a repair added in order.
     ids: KVVec<u32>,
 }
@@ -37,7 +38,7 @@ impl SnapshotsSeen {
     }
 
     /// Record a key at @pos; a new inode:offset starts the list over.
-    pub fn update(&mut self, pos: c::bpos) -> Result<(), BchError> {
+    pub fn update(&mut self, pos: Bpos) -> Result<(), BchError> {
         if self.pos.inode != pos.inode || self.pos.offset != pos.offset {
             self.ids.clear();
         }
@@ -77,7 +78,7 @@ impl SnapshotsSeen {
 
     /// The snapshots that have overwritten the key at @pos in @btree, as if a walk
     /// had seen them: for a key checked out of walk order.
-    pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
+    pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos)
         -> Result<Self, BchError>
     {
         Ok(SnapshotsSeen { pos, ids: snapshot::overwrites(t, btree, pos)? })
@@ -133,7 +134,7 @@ pub struct InodeWalker {
     first_this_inode: bool,
     have_inodes:      bool,
     recalculate_sums: bool,
-    last_pos:         c::bpos,
+    last_pos:         Bpos,
     /// The versions are valid while the transaction's commit_count is this.
     commit_count:     u32,
     inodes:           KVVec<WalkerEntry>,
@@ -745,7 +746,7 @@ const COUNT_INODE_KEYS_MAX: u32 = 100;
 /// the first ten to @out.
 fn count_inode_keys(
     t:         &TransAttempt<'_, '_>,
-    inode_pos: c::bpos,
+    inode_pos: Bpos,
     btree:     c::btree_id,
     mut out:   Option<&mut Printbuf>,
 ) -> Result<u32, BchError> {

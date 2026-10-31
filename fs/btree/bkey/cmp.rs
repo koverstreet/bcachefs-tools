@@ -2,9 +2,9 @@
 //! bkey_*() - inode and offset, the snapshot field ignored. Its Hash is of
 //! every field too, as its Eq.
 
-use crate::c::bpos as Bpos;
 use core::cmp::Ordering;
 use core::hash::{Hash, Hasher};
+use crate::format::Bpos;
 
 impl Hash for Bpos {
     fn hash<H: Hasher>(&self, h: &mut H) {

@@ -44,6 +44,7 @@ use core::mem::{size_of, MaybeUninit};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, c_extern};
+use crate::format::Bpos;
 
 /*
  * key_validate: checks validity of @k, returns 0 if good or -EINVAL if bad. If
@@ -71,7 +72,7 @@ pub struct bkey_ops {
 
 c_extern! {
     pub static bch2_bkey_types: [*const c_char; 0];
-    pub fn bch2_bpos_to_text(out: *mut c::printbuf, pos: c::bpos);
+    pub fn bch2_bpos_to_text(out: *mut c::printbuf, pos: Bpos);
     pub fn bch2_bkey_to_text(out: *mut c::printbuf, k: *const c::bkey);
     pub fn bch2_bkey_val_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, k: c::bkey_s_c);
     pub fn bch2_set_bkey_error(c: *mut c::bch_fs, k: *mut c::bkey_i, err: c::bch_key_type_errors);

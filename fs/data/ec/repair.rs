@@ -40,6 +40,7 @@ use crate::{bch_err, c_function_name, log_msg_ratelimited, prt};
 use core::mem::size_of;
 use core::sync::atomic::Ordering::Relaxed;
 use pin_init::stack_pin_init;
+use crate::format::Bpos;
 
 // ── Recording the extents of blocks lost ──
 
@@ -349,7 +350,7 @@ fn stripe_repair_narrow(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, 
 
 /// Stripe @s, again, into @key: our own extent updates change its block
 /// counts.
-fn stripe_repair_reload(t: &TransAttempt<'_, '_>, key: &mut BkeyBuf, s: c::bpos) -> Result<(), BchError> {
+fn stripe_repair_reload(t: &TransAttempt<'_, '_>, key: &mut BkeyBuf, s: Bpos) -> Result<(), BchError> {
     let mut iter = BtreeIter::new(t, c::btree_id::stripes, s, BtreeIterFlags::empty());
     key.reassemble(iter.peek_slot_typed::<c::Stripe>(t)?.untyped());
     Ok(())

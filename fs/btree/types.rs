@@ -18,6 +18,7 @@ use pin_init::pin_data;
 use nestify::nest;
 #[cfg(feature = "std")]
 use std::{ffi::CString, str::FromStr};
+use crate::format::Bpos;
 
 /* Btree nodes: */
 
@@ -530,7 +531,7 @@ nest! {
         pub intent_ref: u8,
 
         /* btree_iter_copy starts here: */
-        pub pos: cs::bpos,
+        pub pos: Bpos,
 
         #[c_bitfield]
         #>[bitfield(u16, ty = u32)]
@@ -591,7 +592,7 @@ nest! {
         /* When we're filtering by snapshot, the snapshot ID we're looking for: */
         pub(in crate::btree) snapshot: c_uint,
 
-        pub(in crate::btree) pos: cs::bpos,
+        pub(in crate::btree) pos: Bpos,
         /*
          * Current unpacked key - so that bch2_btree_iter_next()/
          * bch2_btree_iter_next_slot() can correctly advance pos.

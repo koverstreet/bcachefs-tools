@@ -39,6 +39,7 @@ use crate::{bch_err, SPOS_MAX};
 use core::ffi::c_int;
 use core::ops::Range;
 use cstruct_macros::c_export;
+use crate::format::Bpos;
 
 impl c::reconcile_scan {
     /// The scan for everything.
@@ -60,7 +61,7 @@ impl c::reconcile_scan {
     }
 
     /// Where its cookie is, in BTREE_ID_reconcile_scan.
-    pub fn cookie_pos(&self) -> c::bpos {
+    pub fn cookie_pos(&self) -> Bpos {
         pos(0, self.cookie())
     }
 
@@ -153,7 +154,7 @@ fn cookie_generation(k: BkeySC<'_>) -> u64 {
 #[derive(Clone, Copy)]
 pub struct ScanCookie {
     pub scan:   c::reconcile_scan,
-    pos:        c::bpos,
+    pos:        Bpos,
     generation: u64,
 }
 
@@ -343,7 +344,7 @@ fn scan_fs(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, s: &mut PerSnapshotI
 /// extents from a nonzero inode - follows its reflink pointers that may
 /// update options, to the indirect extents they share.
 fn scan_btree(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, s: &mut PerSnapshotIoOpts, btree: c::btree_id,
-              levels: Range<u32>, start: c::bpos, end: c::bpos) -> Result<(), BchError>
+              levels: Range<u32>, start: Bpos, end: Bpos) -> Result<(), BchError>
 {
     let trans = ctxt.trans();
     let fs = trans.fs();

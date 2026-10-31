@@ -37,6 +37,7 @@ use crate::{bch_err_fn, bch_err_ratelimited, inode, logged_ops};
 use core::ffi::c_int;
 use cstruct_macros::c_export;
 use pin_init::stack_pin_init;
+use crate::format::Bpos;
 
 /// MAX_LFS_FILESIZE: as far as the page cache indexes - a 32 bit kernel's
 /// ULONG_MAX pages, else LLONG_MAX.
@@ -153,7 +154,7 @@ pub unsafe fn bch2_extent_fallocate<'t>(trans: &'t BtreeTrans<'t>, inum: c::subv
 /// - an fsck_err()'s log of the repair, which the repair won't re-trigger to
 /// queue again once the extents are gone - and returns
 /// transaction_restart_nested after.
-pub fn fpunch_snapshot(trans: &BtreeTrans<'_>, start: c::bpos, end: c::bpos) -> Result<(), BchError> {
+pub fn fpunch_snapshot(trans: &BtreeTrans<'_>, start: Bpos, end: Bpos) -> Result<(), BchError> {
     let fs = trans.fs();
     let res = DiskReservation::new(fs);
     let mut iter = BtreeIter::new(trans, c::btree_id::extents, start, BtreeIterFlags::TRIM);
@@ -566,7 +567,7 @@ fn __resume_finsert(
                     }
                 }
 
-                let mut delete = t.bkey_alloc_init::<c::Deleted>(0, c::bpos { snapshot, ..copy.k().p })?;
+                let mut delete = t.bkey_alloc_init::<c::Deleted>(0, Bpos { snapshot, ..copy.k().p })?;
                 delete.k_mut().size = copy.k().size;
 
                 let p = &mut copy.k_mut().p;

@@ -320,6 +320,7 @@ use core::fmt;
 use core::ops::ControlFlow;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cstruct_macros::c_export;
+use crate::format::Bpos;
 
 // ── The table ────────────────────────────────────────────────────────────
 
@@ -1496,7 +1497,7 @@ pub fn check_key_has_snapshot<'a>(
 
 /// The snapshots that have overwritten the key at @pos in @btree: on each
 /// branch, the one closest to @pos.snapshot.
-pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
+pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos)
     -> Result<KVVec<u32>, BchError>
 {
     let mut ids = KVVec::new();
@@ -1522,7 +1523,7 @@ pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
 
 /// Whether a descendant of @pos.snapshot has its own version of the key at
 /// @pos in @btree: overwrote it there.
-pub fn has_overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
+pub fn has_overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos)
     -> Result<bool, BchError>
 {
     // Descendants have lower IDs: none below snapshot 0
@@ -1547,7 +1548,7 @@ pub fn has_overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos
 pub unsafe extern "C" fn __bch2_key_has_snapshot_overwrites<'t>(
     trans: &'t BtreeTrans<'t>,
     btree: c::btree_id,
-    pos:   c::bpos,
+    pos:   Bpos,
 ) -> c_int {
     match has_overwrites(&unsafe { trans.attempt_in_progress() }, btree, pos) {
         Ok(has) => has as c_int,
@@ -1564,8 +1565,8 @@ pub unsafe extern "C" fn __bch2_key_has_snapshot_overwrites<'t>(
 pub unsafe extern "C" fn bch2_insert_snapshot_whiteouts<'t>(
     trans:   &'t BtreeTrans<'t>,
     btree:   c::btree_id,
-    old_pos: c::bpos,
-    new_pos: c::bpos,
+    old_pos: Bpos,
+    new_pos: Bpos,
 ) -> c_int {
     ret_to_c(unsafe { trans.attempt_in_progress() }.insert_snapshot_whiteouts(btree, old_pos, new_pos))
 }

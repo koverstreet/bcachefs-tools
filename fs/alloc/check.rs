@@ -46,6 +46,7 @@ use crate::c::bch_errcode;
 use crate::c::bch_fsck_flags as F;
 use core::ffi::c_int;
 use cstruct_macros::c_export;
+use crate::format::Bpos;
 
 const KEY_TYPE_SET: u8 = c::bch_bkey_type::KEY_TYPE_set.0 as u8;
 
@@ -54,14 +55,14 @@ const KEY_TYPE_SET: u8 = c::bch_bkey_type::KEY_TYPE_set.0 as u8;
 /// A key in the alloc btree, or a hole: positions @start to @end with no key.
 enum KeyOrHole<'k> {
     Key(BkeySC<'k>),
-    Hole { start: c::bpos, end: c::bpos },
+    Hole { start: Bpos, end: Bpos },
 }
 
 /// The key at @iter, or the hole there - as far as @end, the end of @iter's
 /// leaf node, and U32_MAX positions on, whichever comes first: as
 /// BTREE_ITER_slots does for an extents btree, on a btree that isn't one.
 /// bch2_get_key_or_hole().
-fn get_key_or_hole<'k, 't>(t: &'k TransAttempt<'_, 't>, iter: &'k mut BtreeIter<'t>, mut end: c::bpos)
+fn get_key_or_hole<'k, 't>(t: &'k TransAttempt<'_, 't>, iter: &'k mut BtreeIter<'t>, mut end: Bpos)
     -> Result<KeyOrHole<'k>, BchError>
 {
     let (iter, k) = iter.peek_slot_shared(t)?;
@@ -94,7 +95,7 @@ fn get_key_or_hole<'k, 't>(t: &'k TransAttempt<'_, 't>, iter: &'k mut BtreeIter<
 /// @bucket, moved up to @ca's first bucket - or, past its last, to the next
 /// device's first, @ca following: false if there's no next device.
 /// next_bucket().
-fn next_bucket(fs: &Fs, ca: &mut Option<DevRef>, bucket: &mut c::bpos) -> bool {
+fn next_bucket(fs: &Fs, ca: &mut Option<DevRef>, bucket: &mut Bpos) -> bool {
     if let Some(dev) = ca.as_ref() {
         bucket.offset = bucket.offset.max(dev.mi.get().first_bucket.into());
         if bucket.offset < dev.mi.get().nbuckets {
@@ -279,8 +280,8 @@ fn check_alloc_key<'t>(
 fn check_alloc_hole_freespace<'t>(
     t:              &TransAttempt<'_, 't>,
     ca:             &c::bch_dev,
-    start:          c::bpos,
-    end:            &mut c::bpos,
+    start:          Bpos,
+    end:            &mut Bpos,
     freespace_iter: &mut BtreeIter<'t>,
 ) -> Result<(), BchError> {
     if ca.mi.get().freespace_initialized == 0 {
@@ -310,8 +311,8 @@ fn check_alloc_hole_freespace<'t>(
 /// bch2_check_alloc_hole_bucket_gens().
 fn check_alloc_hole_bucket_gens<'t>(
     t:                &TransAttempt<'_, 't>,
-    start:            c::bpos,
-    end:              &mut c::bpos,
+    start:            Bpos,
+    end:              &mut Bpos,
     bucket_gens_iter: &mut BtreeIter<'t>,
 ) -> Result<(), BchError> {
     let start_pos = BucketGensPos::new(start);
@@ -747,7 +748,7 @@ crate::recovery_pass!(bch2_check_alloc_to_lru_refs => check_alloc_to_lru_refs);
 /// need_discard and need_gc_gens btrees, committed, and @iter on past it:
 /// dev_freespace_init_iter().
 fn dev_freespace_init_iter<'t>(t: &TransAttempt<'_, 't>, ca: &c::bch_dev, iter: &mut BtreeIter<'t>,
-                               end: c::bpos) -> Result<(), BchError> {
+                               end: Bpos) -> Result<(), BchError> {
     match get_key_or_hole(t, iter, end)? {
         // Live keys, one at a time:
         KeyOrHole::Key(k) => {

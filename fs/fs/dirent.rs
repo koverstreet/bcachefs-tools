@@ -12,6 +12,7 @@
 
 use cstruct_macros::{c_enum, c_extern};
 use crate::util::Printbuf;
+use crate::format::Bpos;
 
 c_enum! {
     #[closed]
@@ -158,7 +159,7 @@ pub fn hash(info: &c::bch_hash_info, name: &OsStr) -> u64 {
 
 /// A dirent key at @pos with room for any name, to be filled in with
 /// copy_target() and init_name().
-pub fn alloc_max<'a, 't>(t: &TransAttempt<'a, 't>, pos: c::bpos)
+pub fn alloc_max<'a, 't>(t: &TransAttempt<'a, 't>, pos: Bpos)
     -> Result<TransBkey<'a, 't, c::Dirent>, BchError>
 {
     t.bkey_alloc_init::<c::Dirent>(u8::MAX as usize - BKEY_U64S, pos)
@@ -718,8 +719,8 @@ pub fn rename(
     };
 
     // Positions as the hash table orders them, by inode and offset:
-    let le = |l: c::bpos, r: c::bpos| (l.inode, l.offset) <= (r.inode, r.offset);
-    let lt = |l: c::bpos, r: c::bpos| (l.inode, l.offset) <  (r.inode, r.offset);
+    let le = |l: Bpos, r: Bpos| (l.inode, l.offset) <= (r.inode, r.offset);
+    let lt = |l: Bpos, r: Bpos| (l.inode, l.offset) <  (r.inode, r.offset);
 
     let mut new_src = if mode == BCH_RENAME_EXCHANGE {
         let mut k = create_key(t, src_hash, src_dir, 0, src_name, cf(src_hash, src_lookup), 0)?;
@@ -814,7 +815,7 @@ fn lookup_first_inode(t: &TransAttempt<'_, '_>, inum: u64)
 }
 
 /// Delete the dirent at @pos, as fsck repair: as bch2_fsck_remove_dirent().
-pub fn fsck_remove(t: &TransAttempt<'_, '_>, pos: c::bpos) -> Result<(), BchError> {
+pub fn fsck_remove(t: &TransAttempt<'_, '_>, pos: Bpos) -> Result<(), BchError> {
     let dir = lookup_first_inode(t, pos.inode)?;
     let hash_info = str_hash::hash_info_init_unchecked(t.fs(), &dir);
 

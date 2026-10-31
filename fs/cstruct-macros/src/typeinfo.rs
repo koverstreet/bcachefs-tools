@@ -24,9 +24,10 @@ use crate::tokens;
 const OPAQUE: &str = "crate::typeinfo::FieldKind::Opaque";
 
 /// The type names a field kind may reference as `<T as TypeInfo>::INFO`:
-/// each must have TypeInfo itself.
+/// each must have TypeInfo itself. By the name the field's type is written
+/// with: a type renamed to Rust's name (#[c_name]) goes here by that name.
 fn derives_type_info(name: &str) -> bool {
-    name.starts_with("bch_") || matches!(name, "bpos" | "bkey" | "bversion")
+    name.starts_with("bch_") || matches!(name, "Bpos" | "bkey" | "bversion")
 }
 
 /// By C's name: a family's C definition, X__head, is struct X to C.

@@ -42,6 +42,7 @@ use crate::{fsck_err, fsck_err_on, prt, SPOS_MAX};
 use core::ffi::c_int;
 use core::mem::size_of;
 use cstruct_macros::c_export;
+use crate::format::Bpos;
 
 const NO_ENOSPC: CommitFlags = CommitFlags::NO_ENOSPC;
 
@@ -65,7 +66,7 @@ fn btrees_to_text(out: &mut Printbuf, want: Option<c::btree_id>, set: u64) {
 
 /// The bit at @pos in work btree @iter's made whether it's @want's:
 /// fix_reconcile_work_btree().
-fn fix_work_btree(t: &TransAttempt<'_, '_>, want: Option<c::btree_id>, pos: c::bpos,
+fn fix_work_btree(t: &TransAttempt<'_, '_>, want: Option<c::btree_id>, pos: Bpos,
                   (iter, k): WorkKey<'_, '_>) -> Result<(), BchError> {
     let should = Some(iter.btree()) == want;
     let have = k.is_some_and(|k| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_set);
@@ -157,7 +158,7 @@ fn check_extent_reconcile_phys(t: &TransAttempt<'_, '_>, btree: c::btree_id, k: 
 /// @rb - work, hipri, pending - from @cur_pos, a work btree position, left
 /// where the step was: check_reconcile_work_one().
 fn check_reconcile_work_one<'t>(t: &TransAttempt<'_, 't>, data_iter: &mut BtreeIter<'t>, rb: &mut [BtreeIter<'t>; 3],
-                            s: &mut PerSnapshotIoOpts, last_flushed: &mut WbMaybeFlush, cur_pos: &mut c::bpos)
+                            s: &mut PerSnapshotIoOpts, last_flushed: &mut WbMaybeFlush, cur_pos: &mut Bpos)
     -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -270,7 +271,7 @@ fn check_reconcile_work_data_btrees(trans: &BtreeTrans<'_>) -> Result<(), BchErr
 /// check_reconcile_work_phys_one().
 fn check_reconcile_work_phys_one<'t>(t: &TransAttempt<'_, 't>, bp_iter: &mut BtreeIter<'t>,
                                  phys: &mut [BtreeIter<'t>; 2], last_flushed: &mut WbMaybeFlush,
-                                 cur_pos: &mut c::bpos) -> Result<(), BchError>
+                                 cur_pos: &mut Bpos) -> Result<(), BchError>
 {
     let fs = t.fs();
 

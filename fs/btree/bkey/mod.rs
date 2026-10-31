@@ -86,6 +86,7 @@ pub use self::text::*;
 pub use self::types::*;
 
 use crate::c;
+use crate::format::Bpos;
 
 pub const BKEY_U64S: usize = core::mem::size_of::<c::bkey>() / core::mem::size_of::<u64>();
 
@@ -134,8 +135,8 @@ impl c::bkey {
         c::bch_bkey_type(self.type_ as u32)
     }
 
-    pub fn start_pos(&self) -> c::bpos {
-        c::bpos { offset: self.start_offset(), ..self.p }
+    pub fn start_pos(&self) -> Bpos {
+        Bpos { offset: self.start_offset(), ..self.p }
     }
 
     pub fn start_offset(&self) -> u64 {

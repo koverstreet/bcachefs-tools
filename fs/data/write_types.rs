@@ -11,6 +11,7 @@ use crate::types::{NeBytes, c_default};
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro, TypeInfo};
 use nestify::nest;
+use crate::format::Bpos;
 
 c_xmacro! {
     BCH_WRITE_FLAGS(x) {
@@ -169,7 +170,7 @@ nest! {
         pub opts: c::bch_inode_opts,
 
         pub subvol: u32,
-        pub pos: c::bpos,
+        pub pos: Bpos,
         pub version: c::bversion,
 
         /*

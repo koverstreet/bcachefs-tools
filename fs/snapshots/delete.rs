@@ -78,6 +78,7 @@ use crate::{bch_err, bch_err_msg, bch_info, bch_notice, fs_inconsistent, fsck_er
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
 use pin_init::{pin_data, pin_init, PinInit};
+use crate::format::Bpos;
 
 crate::module_param! {
     /// Stop the key sweep after the extents/dirents/xattrs/damage pass and
@@ -827,7 +828,7 @@ pub fn delete_dead_key<'a, 't>(
         assert!(fs.snapshots.exists(live_child), "migrating to missing snapshot {live_child}");
 
         let btree = iter.btree();
-        let dst = c::bpos { snapshot: live_child, ..k.k.p };
+        let dst = Bpos { snapshot: live_child, ..k.k.p };
 
         let mut dst_iter = BtreeIter::new(t, btree, dst,
                                           BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::INTENT);
@@ -907,8 +908,8 @@ fn delete_dead_snapshot_keys_range(
     trans: &BtreeTrans<'_>,
     res:   &DiskReservation<'_>,
     btree: c::btree_id,
-    start: c::bpos,
-    end:   c::bpos,
+    start: Bpos,
+    end:   Bpos,
     run:   &Run<'_>,
 ) -> Result<(), BchError> {
     let flags = BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS;

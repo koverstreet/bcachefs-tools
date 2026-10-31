@@ -9,6 +9,7 @@ use crate::btree::bkey::BkeyI;
 use crate::util::vstructs::Head;
 use cstruct_macros::{c_const, c_enum, c_ioctl, c_xmacro, counted, CStruct, Plain, TypeInfo};
 use nestify::nest;
+use crate::format::Bpos;
 
 c_const! {
     /*
@@ -373,8 +374,8 @@ nest! {
         pub end_btree: u8,
         pub flags: u32,
 
-        pub start_pos: c::bpos,
-        pub end_pos: c::bpos,
+        pub start_pos: Bpos,
+        pub end_pos: Bpos,
 
         #[c_anon]
         #>[repr(C)]
@@ -454,7 +455,7 @@ pub struct bch_ioctl_data_progress {
     pub data_type: u8,
     pub btree_id: u8,
     pub pad: [u8; 2],
-    pub pos: c::bpos,
+    pub pos: Bpos,
 
     pub sectors_done: u64,
     pub sectors_total: u64,
@@ -1130,8 +1131,8 @@ pub struct bch_ioctl_query_btree_keys {
     pub level: u32,
     pub flags: u32,
     pub done: u32,
-    pub start: c::bpos,
-    pub end: c::bpos,
+    pub start: Bpos,
+    pub end: Bpos,
     pub buf: u64,
     pub buf_size: u32,
     pub used: u32,

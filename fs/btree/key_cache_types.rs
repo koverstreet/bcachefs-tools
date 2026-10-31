@@ -8,6 +8,7 @@ use crate::util::{Printbuf, ToText};
 use core::ffi::{c_uint, c_ulong};
 use core::sync::atomic::AtomicIsize;
 use cstruct_macros::{CStruct, TypeInfo, c_extern};
+use crate::format::Bpos;
 
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
@@ -40,7 +41,7 @@ c_default!(bch_fs_btree_key_cache);
 #[c_packed]
 pub struct bkey_cached_key {
     pub btree_id: u32,
-    pub pos: c::bpos,
+    pub pos: Bpos,
 }
 
 c_extern! {

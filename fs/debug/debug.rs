@@ -31,6 +31,7 @@ use crate::util::ffi::Opaque;
 use crate::util::place::Placed;
 use crate::util::{rcu, rhashtable, Printbuf};
 use crate::{btree_trans, prt, SPOS_MAX};
+use crate::format::Bpos;
 
 fn may_iterate(fs: &Fs) -> bool {
     fs.flag(c::bch_fs_flags::BCH_FS_may_go_rw)
@@ -47,7 +48,7 @@ impl c::btree_debug {
 
 #[derive(Default)]
 struct Keys {
-    from: c::bpos,
+    from: Bpos,
 }
 
 impl DebugFile for Keys {
@@ -76,7 +77,7 @@ impl DebugFile for Keys {
 #[derive(Default)]
 struct Formats {
     level: u32,
-    from:  c::bpos,
+    from:  Bpos,
 }
 
 impl DebugFile for Formats {
@@ -108,7 +109,7 @@ impl DebugFile for Formats {
             }
 
             self.level += 1;
-            self.from = c::bpos::default();
+            self.from = Bpos::default();
         }
         Ok(())
     }
@@ -118,8 +119,8 @@ impl DebugFile for Formats {
 /// failed - after each node, the first time it's reached.
 #[derive(Default)]
 struct BfloatFailed {
-    from:      c::bpos,
-    prev_node: c::bpos,
+    from:      Bpos,
+    prev_node: Bpos,
 }
 
 impl DebugFile for BfloatFailed {

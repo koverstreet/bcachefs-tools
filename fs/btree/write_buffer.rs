@@ -19,6 +19,7 @@ use crate::types::{DArray, c_default};
 use core::ffi::c_int;
 use cstruct_macros::{CStruct, c_const, c_enum, c_extern, c_xmacro, TypeInfo};
 use nestify::nest;
+use crate::format::Bpos;
 
 c_xmacro! {
     /*
@@ -72,7 +73,7 @@ nest! {
             pub pos_idx: pub struct wb_key_ref_pos_idx {
                 pub idx: u32,
                 #[c("u8 pos[sizeof(struct bpos)]")]
-                pub pos: [u8; size_of::<c::bpos>()],
+                pub pos: [u8; size_of::<Bpos>()],
             },
             #[c_anon]
             #>[repr(C)]
@@ -97,7 +98,7 @@ nest! {
             #>[repr(C, packed)]
             pub pos_idx: pub struct wb_key_ref_pos_idx {
                 #[c("u8 pos[sizeof(struct bpos)]")]
-                pub pos: [u8; size_of::<c::bpos>()],
+                pub pos: [u8; size_of::<Bpos>()],
                 pub idx: u32,
             },
             #[c_anon]

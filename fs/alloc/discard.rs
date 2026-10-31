@@ -82,6 +82,7 @@ use crate::{bch_err_fn, bch_err_msg, fsck_err, has_bio, prt};
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
 use pin_init::{pin_data, pin_init, stack_pin_init};
+use crate::format::Bpos;
 
 /// Discards in flight at once on a device.
 const DEV_IN_FLIGHT_MAX: u8 = 4;
@@ -234,7 +235,7 @@ fn dev_bucket_size(fs: &Fs, dev: u64) -> u64 {
 
 /// Whether @bucket is one the allocator mustn't use - a device that isn't
 /// there, as one.
-fn dev_bucket_nouse(fs: &Fs, bucket: c::bpos) -> bool {
+fn dev_bucket_nouse(fs: &Fs, bucket: Bpos) -> bool {
     let rcu = read_lock();
     fs.dev_rcu(bucket.inode as u32, &rcu).is_none_or(|ca| ca.bucket_nouse(bucket.offset))
 }
@@ -253,7 +254,7 @@ fn discard_opt_enabled(fs: &Fs, ca: &c::bch_dev) -> bool {
 impl c::bch_fs_discards {
     /// Whether a discard of @bucket could be issued, with none in flight for
     /// it and room on its device.
-    fn check(&self, bucket: c::bpos, fastpath: bool) -> Result<(), NotAdded> {
+    fn check(&self, bucket: Bpos, fastpath: bool) -> Result<(), NotAdded> {
         if self.in_flight.lock().contains(&bucket_to_u64(bucket)) {
             return Err(NotAdded::Exists);
         }
@@ -310,7 +311,7 @@ impl c::bch_dev {
 impl Discard {
     /// @bucket claimed for a discard by @ca, and a slot on it - unless one's
     /// in flight for it, or @ca has as many as it may.
-    fn claim(ca: DevIoRef<c::bch_dev_write_ref>, bucket: c::bpos, fastpath: bool) -> Result<Self, NotAdded> {
+    fn claim(ca: DevIoRef<c::bch_dev_write_ref>, bucket: Bpos, fastpath: bool) -> Result<Self, NotAdded> {
         let fs = ca.fs();
         let dev_bucket = bucket_to_u64(bucket);
         let mut claimed = fs.discards.in_flight.lock();
@@ -397,7 +398,7 @@ impl<'a> Worker<'a> {
 
     /// Discard @bucket - or, on a device that doesn't discard, mark it free -
     /// unless something says not yet, which is counted.
-    fn one_bucket(&self, t: &TransAttempt<'_, '_>, bucket: c::bpos, bucket_size: u64) -> Result<(), BchError> {
+    fn one_bucket(&self, t: &TransAttempt<'_, '_>, bucket: Bpos, bucket_size: u64) -> Result<(), BchError> {
         let fs = t.fs();
 
         if unlikely(dev_bucket_nouse(fs, bucket)) {
@@ -543,7 +544,7 @@ impl<'a> Worker<'a> {
 /// each device's own shortfall, so one device's pile-up isn't masked by the
 /// rest's room. And whether to flush the journal, or the write buffer, where
 /// need_discard updates may still be. The figures, and how the walk went.
-fn calculate_discard_sectors_to_release(trans: &BtreeTrans<'_>, s: &DiscardState, start: c::bpos)
+fn calculate_discard_sectors_to_release(trans: &BtreeTrans<'_>, s: &DiscardState, start: Bpos)
     -> (DiscardRelease, Result<(), BchError>)
 {
     let fs = trans.fs();
@@ -863,7 +864,7 @@ fn invalidate_one_bp(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, bp: BkeySC<'_, c
 /// data - it only shrinks keys - so it mustn't wait behind a reserve for a
 /// btree node. It's what copygc's btree node allocations get
 /// (btree_update_set_watermark_hipri()), and no bucket reserve is below it.
-fn invalidate_one_bucket_by_bps(trans: &BtreeTrans<'_>, ca: &c::bch_dev, bucket: c::bpos, gen: u8,
+fn invalidate_one_bucket_by_bps(trans: &BtreeTrans<'_>, ca: &c::bch_dev, bucket: Bpos, gen: u8,
                                 last_flushed: &mut WbMaybeFlush) -> Result<(), BchError>
 {
     let res = DiskReservation::new(trans.fs());

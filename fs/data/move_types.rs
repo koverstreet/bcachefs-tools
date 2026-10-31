@@ -9,6 +9,7 @@ use core::ffi::{c_int, c_uint};
 use core::sync::atomic::{AtomicI32, AtomicI64};
 use cstruct_macros::{c_name, CStruct, c_typedef, TypeInfo};
 use nestify::nest;
+use crate::format::Bpos;
 
 nest! {
     /// What moves count into - whoever issues them, and their completions,
@@ -54,7 +55,7 @@ pub type bch_move_stats = MoveStats;
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, CStruct)]
 pub struct move_bucket_key {
-    pub bucket: c::bpos,
+    pub bucket: Bpos,
     pub generation: c_uint,
 }
 

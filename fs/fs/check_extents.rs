@@ -50,6 +50,7 @@ use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, bch_err_ratelimited, fsck_err_on, inode_fsck_err, prt};
 use crate::namei;
+use crate::format::Bpos;
 
 /// Where the last extent seen in a snapshot ended.
 struct ExtentEnd {
@@ -61,14 +62,14 @@ struct ExtentEnd {
 
 #[derive(Default)]
 struct ExtentEnds {
-    last_pos: c::bpos,
+    last_pos: Bpos,
     /// Sorted by snapshot, one per snapshot.
     e:        KVVec<ExtentEnd>,
 }
 
 impl ExtentEnds {
     /// Record where @k ends.
-    fn at(&mut self, seen: &SnapshotsSeen, k: c::bpos) -> Result<(), BchError> {
+    fn at(&mut self, seen: &SnapshotsSeen, k: Bpos) -> Result<(), BchError> {
         let n = ExtentEnd { snapshot: k.snapshot, offset: k.offset, seen: seen.try_clone()? };
 
         match self.e.iter().position(|i| i.snapshot >= k.snapshot) {

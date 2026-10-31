@@ -6,6 +6,7 @@ use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::c_uint;
 use cstruct_macros::CStruct;
+use crate::format::Bpos;
 
 /*
  * A btree and level's journal keys, from @pos: at index @idx, as of the keys'
@@ -18,7 +19,7 @@ pub struct journal_iter {
     pub level: c_uint,
     pub idx: usize,
     pub seq: u64,
-    pub pos: c::bpos,
+    pub pos: Bpos,
 }
 c_default!(journal_iter);
 
@@ -34,7 +35,7 @@ pub struct btree_and_journal_iter {
     pub unpacked: c::bkey,
 
     pub journal: c::journal_iter,
-    pub pos: c::bpos,
+    pub pos: Bpos,
     pub at_end: bool,
     pub prefetch: bool,
     pub fail_if_too_many_whiteouts: bool,

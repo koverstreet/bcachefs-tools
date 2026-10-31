@@ -51,6 +51,7 @@ use crate::locking::Locked;
 use crate::new_lock;
 use crate::types::{RustOnly, rust_only};
 use pin_init::pin_data;
+use crate::format::Bpos;
 
 /*
  * A path that fsck damaged or couldn't fully recover, remembered so we can
@@ -167,7 +168,7 @@ impl FsckErrCtx for TransAttempt<'_, '_> {
 
 fn __fsck_err(
     ctx:   &impl FsckErrCtx,
-    pos:   c::bpos,
+    pos:   Bpos,
     flags: bch_fsck_flags,
     err:   bch_sb_error_id,
     msg:   &dyn ToText,
@@ -225,7 +226,7 @@ pub fn mustfix_fsck_err_on(
 /// records the damage - which takes a transaction.
 pub fn inode_fsck_err(
     t:   &TransAttempt<'_, '_>,
-    pos: c::bpos,
+    pos: Bpos,
     err: bch_sb_error_id,
     msg: &dyn ToText,
 ) -> Result<bool, BchError> {
@@ -237,7 +238,7 @@ pub fn inode_fsck_err(
 /// for none.
 pub fn fsck_err_flags(
     ctx:   &impl FsckErrCtx,
-    pos:   c::bpos,
+    pos:   Bpos,
     flags: bch_fsck_flags,
     err:   bch_sb_error_id,
     msg:   &dyn ToText,
@@ -540,7 +541,7 @@ fn error_action_name(a: c::bch_error_actions) -> &'static str {
 /// takes @trans; with @trans, a fix is logged in the journal with the repair,
 /// and asking drops its locks.
 #[cold]
-pub fn fsck_err_verdict(fs: &Fs, trans: Option<&BtreeTrans<'_>>, pos: c::bpos, mut flags: bch_fsck_flags,
+pub fn fsck_err_verdict(fs: &Fs, trans: Option<&BtreeTrans<'_>>, pos: Bpos, mut flags: bch_fsck_flags,
                         err: bch_sb_error_id, msg: &dyn ToText) -> BchError {
     use bch_errcode as e;
     use bch_fsck_flags as f;
@@ -817,7 +818,7 @@ pub fn bkey_fsck_err_verdict(fs: &Fs, k: BkeySC<'_>, from: &c::bkey_validate_con
 /// @trans is NULL or in an attempt. For error.c's __bch2_fsck_err(): @c, or
 /// @trans's filesystem.
 #[c_export]
-pub unsafe fn bch2_fsck_err_str(c: Option<&Opaque<c::bch_fs>>, trans: Option<&BtreeTrans<'_>>, pos: c::bpos,
+pub unsafe fn bch2_fsck_err_str(c: Option<&Opaque<c::bch_fs>>, trans: Option<&BtreeTrans<'_>>, pos: Bpos,
                                 flags: c::bch_fsck_flags, err: c::bch_sb_error_id, msg: &Printbuf) -> c_int {
     let fs = c.map_or_else(|| trans.expect("a filesystem or a transaction").fs(), Fs::from_c);
     ret_to_c(Err::<(), _>(fsck_err_verdict(fs, trans, pos, flags, err, msg)))
@@ -897,7 +898,7 @@ impl c::fsck_damaged_path {
 
 /// @err against the path at @pos - an extent's, inum in its inode field, or
 /// an inode key's, at (0, inum, snapshot).
-pub fn fsck_damaged(fs: &Fs, pos: c::bpos, err: bch_sb_error_id) {
+pub fn fsck_damaged(fs: &Fs, pos: Bpos, err: bch_sb_error_id) {
     let inum = if pos.inode != 0 { pos.inode } else { pos.offset };
     let mut st = fs.errors.state.lock();
     let paths = &mut st.damaged_paths;
@@ -1003,7 +1004,7 @@ pub fn bch2_fsck_damaged_paths_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>
 /// "path offset N" for @pos in @subvol - "inum N" for an inode with no
 /// subvolume or snapshot, "inum subvol:N" if there's no path to it - in the
 /// caller's attempt: a restart is the caller's.
-pub fn inum_offset_err_msg(t: &TransAttempt<'_, '_>, out: &mut Printbuf, subvol: u32, pos: c::bpos)
+pub fn inum_offset_err_msg(t: &TransAttempt<'_, '_>, out: &mut Printbuf, subvol: u32, pos: Bpos)
     -> Result<(), BchError>
 {
     let ret = if subvol != 0 {
@@ -1029,7 +1030,7 @@ pub fn inum_offset_err_msg(t: &TransAttempt<'_, '_>, out: &mut Printbuf, subvol:
 /// inum_offset_err_msg(), in transactions of its own - so never from inside
 /// an attempt: that's the attempt's end. For C's callers.
 #[c_export]
-pub fn bch2_inum_offset_err_msg_trans(trans: &BtreeTrans<'_>, out: &mut Printbuf, subvol: u32, pos: c::bpos) {
+pub fn bch2_inum_offset_err_msg_trans(trans: &BtreeTrans<'_>, out: &mut Printbuf, subvol: u32, pos: Bpos) {
     let _ = lockrestart_do(trans, |t| inum_offset_err_msg(t, out, subvol, pos));
 }
 

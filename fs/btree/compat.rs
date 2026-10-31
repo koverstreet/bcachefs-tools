@@ -13,8 +13,9 @@
 //! yet - Rust has no unvalidated keys to give them.
 
 use crate::c;
+use crate::format::Bpos;
 
-impl c::bpos {
+impl Bpos {
     /// Byte-swapped, as written by a machine of the other endianness: every
     /// byte reversed - a bpos's fields are in reverse order on big endian, so
     /// that's each field swapped and the order flipped. bch2_bpos_swab().

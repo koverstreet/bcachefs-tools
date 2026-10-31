@@ -30,6 +30,7 @@ use crate::sb::counters::events;
 use core::ffi::c_int;
 use core::ops::ControlFlow;
 use cstruct_macros::c_export;
+use crate::format::Bpos;
 
 /// The most btree iterators an extent update's transaction may need.
 const EXTENT_ITERS_MAX: u32 = 64;
@@ -56,12 +57,12 @@ fn nr_alloc_ptrs(fs: &Fs, k: BkeySC<'_>) -> u32 {
 /// The update's iterators so far, and where it ends.
 struct Count {
     nr:  u32,
-    end: c::bpos,
+    end: Bpos,
 }
 
 impl Count {
     /// At the limit, the update stops at @at: whether it's there.
-    fn stop_at(&mut self, at: c::bpos) -> bool {
+    fn stop_at(&mut self, at: Bpos) -> bool {
         let full = self.nr >= EXTENT_ITERS_MAX;
         if full {
             self.end = bpos_min(self.end, at);

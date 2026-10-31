@@ -27,6 +27,7 @@ use bitflags::bitflags;
 use core::ffi::{c_int, c_void};
 use cstruct_macros::{c_export, CStruct, TypeInfo};
 use crate::types::c_default;
+use crate::format::Bpos;
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -357,7 +358,7 @@ pub fn delete_at<'t, T: HashTable>(
 
 /// A key deleting @pos: a whiteout, if a later key in its probe sequence needs
 /// one - @whiteout - else a deletion.
-pub fn deletion<'a, 't>(t: &TransAttempt<'a, 't>, pos: c::bpos, whiteout: bool)
+pub fn deletion<'a, 't>(t: &TransAttempt<'a, 't>, pos: Bpos, whiteout: bool)
     -> Result<TransBkey<'a, 't>, BchError>
 {
     Ok(if whiteout {
@@ -608,7 +609,7 @@ enum Seen<'r> {
 }
 
 impl Seen<'_> {
-    fn get(&mut self, t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
+    fn get(&mut self, t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: Bpos)
         -> Result<&mut SnapshotsSeen, BchError>
     {
         match self {
@@ -635,7 +636,7 @@ impl Repair<'_> {
     fn update_backpointers<T: HashTable>(
         &mut self,
         t:   &TransAttempt<'_, '_>,
-        pos: c::bpos,
+        pos: Bpos,
         new: &BkeyI,
     ) -> Result<(), BchError> {
         let s = self.s.get(t, T::BTREE, pos)?;

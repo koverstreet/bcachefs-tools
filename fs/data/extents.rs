@@ -20,6 +20,7 @@ use core::ffi::{c_int, c_uint};
 use cstruct_macros::{c_export, CStruct, bitfield, c_enum, c_xmacro, TypeInfo};
 use nestify::nest;
 use crate::types::c_default;
+use crate::format::Bpos;
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -288,7 +289,7 @@ pub trait BkeyVExtents: BkeyV {
     }
 
     /// Cut to start at @where_: bch2_cut_front_s().
-    fn cut_front(mut self, fs: &Fs, where_: c::bpos) -> Option<Self>
+    fn cut_front(mut self, fs: &Fs, where_: Bpos) -> Option<Self>
     where Self: BkeyVMut<V = Extents>
     {
         self.cut_front_in_place(fs, where_);
@@ -296,7 +297,7 @@ pub trait BkeyVExtents: BkeyV {
     }
 
     /// Cut to end at @where_: bch2_cut_back_s().
-    fn cut_back(mut self, where_: c::bpos) -> Option<Self>
+    fn cut_back(mut self, where_: Bpos) -> Option<Self>
     where Self: BkeyVMut<V = Extents>
     {
         self.cut_back_in_place(where_);
@@ -308,7 +309,7 @@ pub trait BkeyVExtents: BkeyV {
     /// into its data, a reflink_p's idx, inline data dropped - and a cut that
     /// leaves nothing makes it a deletion. The u64s its value gives up are
     /// zeroed. bch2_cut_front_s().
-    fn cut_front_in_place(&mut self, fs: &Fs, where_: c::bpos)
+    fn cut_front_in_place(&mut self, fs: &Fs, where_: Bpos)
     where Self: BkeyVMut<V = Extents>
     {
         use c::bch_bkey_type as t;
@@ -382,7 +383,7 @@ pub trait BkeyVExtents: BkeyV {
     /// Cut to end at @where_, if it ends after it - inline data past it
     /// dropped - and a cut that leaves nothing makes it a deletion. The u64s
     /// its value gives up are zeroed. bch2_cut_back_s().
-    fn cut_back_in_place(&mut self, where_: c::bpos)
+    fn cut_back_in_place(&mut self, where_: Bpos)
     where Self: BkeyVMut<V = Extents>
     {
         use c::bch_bkey_type as t;
@@ -438,7 +439,7 @@ fn shrink_val(mut k: BkeyS<'_>, val_u64s: usize) {
 
 /// The change in @k's u64s, never above 0.
 #[c_export]
-pub fn bch2_cut_front_s(c: &Fs, where_: c::bpos, k: BkeyS<'_>) -> c_int {
+pub fn bch2_cut_front_s(c: &Fs, where_: Bpos, k: BkeyS<'_>) -> c_int {
     let u64s = c_int::from(k.k.u64s);
     let mut k = k.arm::<Extents>().expect("cutting a key an extents btree can't hold");
     k.cut_front_in_place(c, where_);
@@ -447,7 +448,7 @@ pub fn bch2_cut_front_s(c: &Fs, where_: c::bpos, k: BkeyS<'_>) -> c_int {
 
 /// The change in @k's u64s, never above 0.
 #[c_export]
-pub fn bch2_cut_back_s(where_: c::bpos, k: BkeyS<'_>) -> c_int {
+pub fn bch2_cut_back_s(where_: Bpos, k: BkeyS<'_>) -> c_int {
     let u64s = c_int::from(k.k.u64s);
     let mut k = k.arm::<Extents>().expect("cutting a key an extents btree can't hold");
     k.cut_back_in_place(where_);

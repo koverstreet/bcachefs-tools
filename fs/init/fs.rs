@@ -17,6 +17,7 @@ use crate::util::refcount::{Refcount, TryRefcount};
 pub use crate::sb::members::DevRef;
 use core::ffi::c_int;
 use cstruct_macros::c_extern;
+use crate::format::Bpos;
 
 c_extern! {
     pub fn bch2_sbs_filter_dead(sbs: *mut c::bch_sb_handles, opts: *mut c::bch_opts,
@@ -434,8 +435,8 @@ impl Fs {
     pub fn btree_delete_range(
         &self,
         btree_id:     c::btree_id,
-        start:        c::bpos,
-        end:          c::bpos,
+        start:        Bpos,
+        end:          Bpos,
         iter_flags:   BtreeIterFlags,
         update_flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {

@@ -60,6 +60,7 @@ use core::ffi::{c_int, c_uint};
 use core::ops::Range;
 use core::ptr::NonNull;
 use cstruct_macros::c_export;
+use crate::format::Bpos;
 
 /// What to move: of @k, in @btree, with @io_opts, the move's options filled
 /// in, and whether to. In the walk's attempt, so it can look things up - an
@@ -242,7 +243,7 @@ impl Mover<'_, '_> {
 impl Moving<'_> {
     /// Start moving what @pred picks of @btree, at @levels, @start to @end -
     /// returning once the moves are issued.
-    pub fn move_data_btree(&self, btree: c::btree_id, levels: Range<u32>, start: c::bpos, end: c::bpos,
+    pub fn move_data_btree(&self, btree: c::btree_id, levels: Range<u32>, start: Bpos, end: Bpos,
                            name: &str,
                            mut pred: impl FnMut(&TransAttempt<'_, '_>, c::btree_id, BkeySC<'_>, &c::bch_inode_opts,
                                                 &mut c::data_update_opts) -> Result<bool, BchError>)
