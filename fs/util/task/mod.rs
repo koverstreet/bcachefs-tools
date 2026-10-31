@@ -26,12 +26,17 @@
 //!   the next await runs there, and must not sleep or take a lock that isn't
 //!   irqsave - C's continue_at(cl, fn, NULL), unchecked.
 //!
-//! The state word keeps a task from being polled twice at once: a wake may
-//! dispatch it to another target while it's still running. OWNED is a task
-//! someone may run - dispatched, running, or not yet started or done, which
-//! nobody may; a wake of an owned task sets NOTIFIED instead, and the poll
-//! that's to come, or that's running, repolls. COMPLETE is a task that's
-//! returned, for its drop's check.
+//! A task is running or waiting, and @waiting says which: the Done it's
+//! parked on, or null - running, dispatched, or not started or done. It's the
+//! task's lock: whoever takes it from a Done to null owns the task and runs
+//! it, so it's never polled twice at once. An await that's pending names its
+//! Done in the poll's Polled - one at a time - and run() publishes it once the
+//! poll has returned, every frame having stored where it resumes; the
+//! completer, having marked its Done, takes it back if it's still the one
+//! named. Between them it's the wait_event() protocol: each side stores, then
+//! reads the other's store, ordered. A completion of a Done the task isn't
+//! parked on writes nothing to the task: running, it sees the Done when it
+//! next looks.
 //!
 //! A poll finds its task in its Context's ext(), which run() fills in -
 //! current_task(). Nothing wakes through a Waker: what a task awaits holds
@@ -39,9 +44,10 @@
 //! Waker::noop().
 //!
 //! A kthread task's thread is woken when the task's dispatched to it, and
-//! sleeps till it's owned - which, as it runs nowhere else, means dispatched
-//! there. Its done runs there, so the thread's last touch is the task's, and
-//! it exits on its own; the task's drop stops it only if it never started.
+//! sleeps till it's claimed - @waiting null - which, as it runs nowhere else,
+//! means dispatched there. Its done runs there, so the thread's last touch is
+//! the task's, and it exits on its own; the task's drop stops it only if it
+//! never started.
 //!
 //! The rest: completion.rs, an IO's end, that a task awaits or a thread waits
 //! on; queue.rs, the
@@ -59,7 +65,7 @@ pub use r#box::{spawn_detached, BoxWithTask, TaskBox};
 use crate::c;
 use crate::errcode::BchError;
 use crate::util::kthread::{Kthread, KthreadRef};
-use crate::util::rcu::RcuMember;
+use crate::util::rcu::{self, RcuMember};
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::workqueue::{Queue, RawWork};
 use core::fmt;
@@ -68,8 +74,8 @@ use core::cell::Cell;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::MaybeUninit;
 use core::pin::Pin;
-use core::ptr::NonNull;
-use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use core::ptr::{null_mut, NonNull};
+use core::sync::atomic::{AtomicPtr, Ordering};
 use core::task::{Context, ContextBuilder, Poll, Waker};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 
@@ -167,12 +173,6 @@ impl<A> PinnedDrop for Resumed<'_, A> {
     }
 }
 
-/* The state word: */
-const OWNED:    usize = 1 << 0;
-/// Woken while owned.
-const NOTIFIED: usize = 1 << 1;
-const COMPLETE: usize = 1 << 2;
-
 /// Where a task runs: where it was spawned, until an await says otherwise.
 /// Inline is in the waker's context. A Queue an await names is borrowed till
 /// the await's done.
@@ -199,19 +199,24 @@ pub enum Spawn<'q, 'n> {
 #[repr(C)]
 #[pin_data]
 struct Header {
+    /// queue_work()'s. It and the four after it are what a completer's claim
+    /// and dispatch() touch, kept together
     #[pin]
     work:      c::work_struct,
-    state:     AtomicUsize,
-    /// Written only in its polls, read by whoever the state word has given
-    /// the task to - which is what makes the Task Sync
+    /// The Done it's parked on, null running: see the top of the file
+    waiting:   AtomicPtr<Done>,
+    /// Written only in its polls, read by whoever's claimed it - which is what
+    /// makes the Task Sync
     next:      Cell<Target>,
-    /// The owner's, by start()
-    started:   Cell<bool>,
     /// Set, it's where the task runs, and @next is unread. It outlives the
     /// task
     runq:      Option<NonNull<RunQueue>>,
     /// As @runq: its own kthread, woken to run it
     thread:    Option<KthreadRef>,
+    /// The owner's, by start()
+    started:   Cell<bool>,
+    /// Returned, for its drop's check
+    complete:  Cell<bool>,
     /// RunQueue's singly linked list
     rq_next:   AtomicPtr<Header>,
     /// Ready: the future's dropped. Here, not behind another pointer: one load
@@ -239,8 +244,8 @@ pub struct Task<'q, F: Future<Output = ()>> {
     _q:     PhantomData<&'q Queue>,
 }
 
-// SAFETY: the header's atomics, or written by whoever the state word gives the
-// task to - @started by its owner - and the future's Send, polled anywhere
+// SAFETY: the header's atomics, or written by whoever's claimed the task -
+// @started by its owner - and the future's Send, polled anywhere
 unsafe impl<F: Future<Output = ()> + Send> Send for Task<'_, F> {}
 unsafe impl<F: Future<Output = ()> + Send> Sync for Task<'_, F> {}
 
@@ -268,12 +273,13 @@ impl<'q, F: Future<Output = ()> + Send> Task<'q, F> {
         pin_init!(Self {
             header <- pin_init!(Header {
                 work <- crate::new_work!(crate::util::workqueue::run_raw::<Header>, "bcachefs task"),
-                state:     AtomicUsize::new(OWNED),
+                waiting:   AtomicPtr::new(null_mut()),
                 next:      Cell::new(next),
-                started:   Cell::new(false),
                 runq,
                 thread:    None,
-                rq_next:   AtomicPtr::new(core::ptr::null_mut()),
+                started:   Cell::new(false),
+                complete:  Cell::new(false),
+                rq_next:   AtomicPtr::new(null_mut()),
                 poll:      Self::poll,
                 done:      Self::call_done,
                 _rcu:      RcuMember,
@@ -313,7 +319,7 @@ impl<'q, F: Future<Output = ()> + Send> Task<'q, F> {
     }
 
     /// # Safety
-    /// @h is a Task<F>'s, OWNED by us.
+    /// @h is a Task<F>'s, claimed by us.
     unsafe fn poll(h: NonNull<Header>, cx: &mut Context<'_>) -> Poll<()> {
         let task = h.cast::<Self>().as_ptr();
         let future = unsafe { (&raw mut (*task).future).cast::<F>() };
@@ -340,8 +346,7 @@ impl<F: Future<Output = ()>> PinnedDrop for Task<'_, F> {
         // SAFETY: not moved out of
         let this = unsafe { self.get_unchecked_mut() };
         let started = this.header.started.get();
-        assert!(!started || this.header.state.load(Ordering::Acquire) & COMPLETE != 0,
-                "a task freed while it runs");
+        assert!(!started || this.header.complete.get(), "a task freed while it runs");
         if !started {
             // SAFETY: made, never polled
             unsafe { core::ptr::drop_in_place(this.future.as_mut_ptr()) };
@@ -359,7 +364,7 @@ impl<F: Future<Output = ()>> PinnedDrop for Task<'_, F> {
 /* Running a task: */
 
 /// # Safety
-/// @h is a live task's, OWNED by the caller, not running.
+/// @h is a live task's, claimed by the caller, not running.
 unsafe fn dispatch(h: NonNull<Header>) {
     let hr = unsafe { h.as_ref() };
     if let Some(thread) = &hr.thread {
@@ -367,7 +372,7 @@ unsafe fn dispatch(h: NonNull<Header>) {
         return;
     }
     if let Some(rq) = hr.runq {
-        // SAFETY: owned and not running, so not on its list, or queued, already
+        // SAFETY: claimed and not running, so not on its list, or queued, already
         unsafe { rq.as_ref().push(h) };
         return;
     }
@@ -391,7 +396,7 @@ impl RawWork for Header {
     }
 }
 
-/// A task's kthread: runs it each time it's owned - dispatched here, as it
+/// A task's kthread: runs it each time it's claimed - dispatched here, as it
 /// runs nowhere else - until it's done; then exits. It sleeps freezable,
 /// which freezes it only once the task's made it freezable
 /// (Kthread::set_freezable()).
@@ -408,7 +413,7 @@ unsafe fn run_thread(t: TaskRef) {
         // SAFETY: the task outlives us, till its done
         let hr = unsafe { h.as_ref() };
         let Ok(()) = sleep_until(Sleep::IDLE.freezable(),
-            || (hr.state.load(Ordering::Acquire) & OWNED != 0).then_some(()));
+            || hr.waiting.load(Ordering::Acquire).is_null().then_some(()));
         // SAFETY: dispatched here: ours to run. Done, it may be gone
         if unsafe { run(h) } {
             return;
@@ -416,81 +421,77 @@ unsafe fn run_thread(t: TaskRef) {
     }
 }
 
-/// Poll the task, until it's done or idle - or wants to run elsewhere: true
+/// Poll the task, until it's done or parked - or wants to run elsewhere: true
 /// if it's done, when it may be gone.
 ///
 /// # Safety
-/// @h is a live task's, dispatched to us: OWNED, ours.
+/// @h is a live task's, dispatched to us: claimed, ours.
 unsafe fn run(h: NonNull<Header>) -> bool {
     let hr = unsafe { h.as_ref() };
-    debug_assert!(hr.state.load(Ordering::Relaxed) & (OWNED|COMPLETE) == OWNED);
+    debug_assert!(hr.waiting.load(Ordering::Relaxed).is_null() && !hr.complete.get());
     // where we are: its target only changes in a poll, and none's run since
     // it was dispatched here; a RunQueue's or a thread's task runs only there
     let here = hr.next.get();
     let fixed = hr.runq.is_some() || hr.thread.is_some();
-    let mut polled = Polled(TaskRef(h));
+    let mut polled = Polled { task: TaskRef(h), parks_on: None };
     let mut cx = ContextBuilder::from_waker(Waker::noop()).ext(&mut polled).build();
 
     loop {
-        // SAFETY: OWNED, by us
+        // SAFETY: claimed, by us
         if unsafe { (hr.poll)(h, &mut cx) }.is_ready() {
             let done = hr.done;
-            // owned for good: a wake after does nothing
-            hr.state.store(OWNED|COMPLETE, Ordering::Release);
+            hr.complete.set(true);
             // the last act: the owner may free it
             unsafe { done(h) };
             return true;
         }
 
-        // Pending: idle, unless woken meanwhile
-        let mut s = hr.state.load(Ordering::Acquire);
-        let repoll = loop {
-            let (new, repoll) = if s & NOTIFIED != 0 {
-                // repolled here, or run where it's now to resume
-                (s & !NOTIFIED, fixed || hr.next.get() == here)
-            } else {
-                (s & !OWNED, false)
-            };
-            match hr.state.compare_exchange_weak(s, new, Ordering::AcqRel, Ordering::Acquire) {
-                Ok(_) if repoll => break true,
-                Ok(_) => {
-                    if new & OWNED != 0 {
-                        // SAFETY: still ours, handed on
-                        unsafe { dispatch(h) };
-                    }
-                    break false;
-                }
-                Err(cur) => s = cur,
+        let d = polled_of(&mut cx).parks_on.take()
+            .expect("a task pending on nothing: nothing will run it again");
+        // SAFETY: still ours, so its future - the Done in it - is where it was
+        if !unsafe { d.as_ref() }.done() {
+            // the unlock, every frame of the poll having stored where it
+            // resumes: from here a completer may claim it, and run it, and the
+            // task and the Done be gone but for RCU
+            let _rcu = rcu::read_lock();
+            // the store, ordered - an xchg, as smp_store_mb() - then the load:
+            // complete()'s store and claim()'s compare_exchange the other side
+            hr.waiting.store(d.as_ptr(), Ordering::SeqCst);
+            if !unsafe { d.as_ref() }.done_ordered() {
+                return false;
             }
-        };
-        if !repoll {
+            // done meanwhile: ours again, unless its completer has it
+            if hr.waiting.compare_exchange(d.as_ptr(), null_mut(), Ordering::SeqCst, Ordering::Relaxed).is_err() {
+                return false;
+            }
+        }
+
+        // ours: repolled here, or run where it's now to resume
+        if !fixed && hr.next.get() != here {
+            unsafe { dispatch(h) };
             return false;
         }
     }
 }
 
+/// A Done's completer, having marked it done: the task's, if it's parked on
+/// it - and dispatched. If it isn't, nothing's written: it's running, and sees
+/// the Done when it next looks, or it's parked on another.
+///
 /// # Safety
-/// @h is a live task's.
-unsafe fn wake(h: NonNull<Header>) {
+/// @h is a task RCU keeps - the caller's in a read lock - and @d is the Done
+/// just marked.
+unsafe fn claim(h: NonNull<Header>, d: NonNull<Done>) {
     let hr = unsafe { h.as_ref() };
-
-    let mut s = hr.state.load(Ordering::Acquire);
-    loop {
-        if s & NOTIFIED != 0 {
-            return;
-        }
-        let new = s | if s & OWNED != 0 { NOTIFIED } else { OWNED };
-        match hr.state.compare_exchange_weak(s, new, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => {
-                if s & OWNED == 0 {
-                    // SAFETY: owned by us: it can't complete, and be freed,
-                    // till we've dispatched it
-                    unsafe { dispatch(h) };
-                }
-                return;
-            }
-            Err(cur) => s = cur,
-        }
+    // One locked op: the read of @waiting, the claim, and the barrier between
+    // it and the store marking @d done, which run()'s store and load pair
+    // with. That's the kernel memory model's: a value-returning cmpxchg is
+    // fully ordered - lock cmpxchg, casal - so the store can't pass it. (The
+    // Rust model promises less for a Release store before an RMW; there's no
+    // smp_mb__before_atomic() to say it.)
+    if hr.waiting.compare_exchange(d.as_ptr(), null_mut(), Ordering::SeqCst, Ordering::Relaxed).is_ok() {
+        // SAFETY: claimed: ours, and alive till it's run
+        unsafe { dispatch(h) };
     }
 }
 
@@ -499,7 +500,7 @@ unsafe fn wake(h: NonNull<Header>) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct TaskRef(NonNull<Header>);
 
-// SAFETY: a pointer; what's reached through it is the state word's
+// SAFETY: a pointer; what's reached through it is @waiting's, the task's lock
 unsafe impl Send for TaskRef {}
 unsafe impl Sync for TaskRef {}
 
@@ -508,12 +509,28 @@ pub fn current_task() -> impl Future<Output = TaskRef> {
     core::future::poll_fn(|cx| Poll::Ready(task_in(cx).expect("polled outside a task of ours")))
 }
 
-/// What run() lends each poll, in its Context's ext(): the task being polled.
-struct Polled(TaskRef);
+/// What run() lends each poll, in its Context's ext().
+struct Polled {
+    /// The task being polled
+    task:     TaskRef,
+    /// The Done the pending await waits on, for run() to publish
+    parks_on: Option<NonNull<Done>>,
+}
 
 /// The task polling us, if it's one of ours.
 fn task_in(cx: &mut Context<'_>) -> Option<TaskRef> {
-    cx.ext().downcast_mut::<Polled>().map(|p| p.0)
+    cx.ext().downcast_mut::<Polled>().map(|p| p.task)
+}
+
+fn polled_of<'a>(cx: &'a mut Context<'_>) -> &'a mut Polled {
+    cx.ext().downcast_mut::<Polled>().expect("polled outside a task of ours")
+}
+
+/// An await of @d, pending: named, for run() to publish once the poll's
+/// returned. An await waits on one thing at a time.
+fn park_on(cx: &mut Context<'_>, d: &Done) {
+    let prev = polled_of(cx).parks_on.replace(NonNull::from(d));
+    assert!(prev.is_none(), "two awaits pending in one poll: a task waits on one thing at a time");
 }
 
 impl TaskRef {
@@ -522,7 +539,7 @@ impl TaskRef {
     /// # Safety
     /// The task stays where it is, alive, till its done.
     pub unsafe fn start(self) {
-        // made OWNED: ours to dispatch
+        // its owner's till now: ours to dispatch
         assert!(!unsafe { self.0.as_ref() }.started.replace(true), "a task started twice");
         unsafe { dispatch(self.0) };
     }

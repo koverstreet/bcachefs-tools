@@ -18,6 +18,9 @@
 //!
 //!     waiter    owed, the waiter waits
 //!     null      done
+//!
+//! A task's wake is a claim (task/mod.rs): complete() writes to the task only
+//! if it's parked on this Done.
 
 use crate::c;
 use crate::util::rcu;
@@ -86,9 +89,10 @@ mod sealed {
     pub trait Waiter {
         fn as_ptr(self) -> NonNull<()>;
         /// # Safety
-        /// @p is a waiter of this kind, from a Done's word; complete() holds
-        /// the RCU read lock, which keeps it.
-        unsafe fn wake(p: NonNull<()>);
+        /// @p is a waiter of this kind, from @done's word, which complete()
+        /// has just marked done; complete() holds the RCU read lock, which
+        /// keeps it.
+        unsafe fn wake(p: NonNull<()>, done: NonNull<()>);
     }
 }
 
@@ -101,7 +105,7 @@ impl sealed::Waiter for waiter::Sync {
         self.0.cast()
     }
 
-    unsafe fn wake(p: NonNull<()>) {
+    unsafe fn wake(p: NonNull<()>, _done: NonNull<()>) {
         unsafe { c::wake_up_process(p.as_ptr().cast()) };
     }
 }
@@ -115,8 +119,9 @@ impl sealed::Waiter for waiter::Async {
         (self.0).0.cast()
     }
 
-    unsafe fn wake(p: NonNull<()>) {
-        unsafe { super::wake(p.cast()) };
+    /// A claim: the task, if it's parked on @done.
+    unsafe fn wake(p: NonNull<()>, done: NonNull<()>) {
+        unsafe { super::claim(p.cast(), done.cast()) };
     }
 }
 
@@ -154,11 +159,17 @@ impl<W: Waiter> Done<W> {
         let w = NonNull::new(self.word.load(Ordering::Relaxed)).expect("Done completed twice");
         self.word.store(null_mut(), Ordering::Release);
         // seeing null, the waiter may return and be freed: RCU keeps it
-        unsafe { W::wake(w) };
+        unsafe { W::wake(w, NonNull::from(self).cast()) };
     }
 
     pub fn done(&self) -> bool {
         self.word.load(Ordering::Acquire).is_null()
+    }
+
+    /// done(), as the load after run()'s store of the task's @waiting: SeqCst,
+    /// the pair of a Dekker pair - a plain load on x86, ldar on arm64.
+    pub(super) fn done_ordered(&self) -> bool {
+        self.word.load(Ordering::SeqCst).is_null()
     }
 }
 
@@ -207,7 +218,12 @@ impl Completion<'_, waiter::Sync> {
 impl Resumable for Completion<'_, waiter::Async> {
     type Output = ();
 
-    fn poll_resume(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
-        if self.d.done() { Poll::Ready(()) } else { Poll::Pending }
+    fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if self.d.done() {
+            return Poll::Ready(());
+        }
+        // run() parks the task on it, once the poll's returned
+        super::park_on(cx, self.d);
+        Poll::Pending
     }
 }
