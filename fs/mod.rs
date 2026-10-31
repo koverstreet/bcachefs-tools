@@ -39,10 +39,11 @@
 // where that isn't C's - Fs is struct bch_fs - cfi_encoding gives C's, or no
 // call through a pointer typed in C's name matches. Makefile.rust allows it.
 #![cfg_attr(kernel, feature(cfi_encoding))]
-// util/rcu.rs's FreeAnytime, an auto trait. Unstable, as the kernel's own
-// features are: the kernel build has RUSTC_BOOTSTRAP=1, and so does ours
-// (.cargo/config.toml).
-#![feature(auto_traits, negative_impls)]
+// util/rcu.rs's FreeAnytime, an auto trait, and util/task's Context::ext(),
+// how a poll finds its task - its ContextBuilder is local_waker's, too.
+// Unstable, as the kernel's own features are: the kernel build has
+// RUSTC_BOOTSTRAP=1, and so does ours (.cargo/config.toml).
+#![feature(auto_traits, negative_impls, context_ext, local_waker)]
 // A cfg the build doesn't declare is an error, not a warning: a misspelled
 // CONFIG_ is code silently compiled out. And the kernel version checks,
 // cfg(linux_ge = "X.Y"), are declared only by a kernel build: userspace has

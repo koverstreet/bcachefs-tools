@@ -164,12 +164,12 @@ bch-rust-gc-flags := -Zfunction-sections=y
 # crate (userspace has bcachefs-shim), and __KERNEL__, as C does.
 RUSTFLAGS_mod.o += --cfg kernel --cfg __KERNEL__ $(bch-rust-gc-flags)
 
-# mod.rs's cfi_encoding, auto_traits and negative_impls, which kbuild's
-# -Zallow-features doesn't list - and it's after RUSTFLAGS_mod.o, the last one
-# being what rustc takes. So another, its list and ours, after it:
-# rust_common_cmd is expanded when mod.o's recipe runs, by then with kbuild's
-# list. (The vendored path allows any feature.)
-$(obj)/mod.o: private rust_common_cmd += -Zallow-features=$(rust_allowed_features),cfi_encoding,auto_traits,negative_impls
+# mod.rs's cfi_encoding, auto_traits, negative_impls, context_ext and
+# local_waker, which kbuild's -Zallow-features doesn't list - and it's after
+# RUSTFLAGS_mod.o, the last one being what rustc takes. So another, its list
+# and ours, after it: rust_common_cmd is expanded when mod.o's recipe runs, by
+# then with kbuild's list. (The vendored path allows any feature.)
+$(obj)/mod.o: private rust_common_cmd += -Zallow-features=$(rust_allowed_features),cfi_encoding,auto_traits,negative_impls,context_ext,local_waker
 
 # And our CONFIG defines, which the kernel's rustc_cfg doesn't have, not being
 # in its .config: -DCONFIG_FOO=1 is --cfg CONFIG_FOO. The Rust tests them as

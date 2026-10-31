@@ -33,10 +33,10 @@
 //! that's to come, or that's running, repolls. COMPLETE is a task that's
 //! returned, for its drop's check.
 //!
-//! A Waker is only how a poll finds its task - current_task(). Nothing
-//! wakes through one: what a task awaits holds the task, a Done its waiter,
-//! and wakes that. Ours panics if woken, or cloned: so it's only ever
-//! run()'s, for a poll, and names the task being polled.
+//! A poll finds its task in its Context's ext(), which run() fills in -
+//! current_task(). Nothing wakes through a Waker: what a task awaits holds
+//! the task, a Done its waiter, and wakes that. A Context needs one, so it's
+//! Waker::noop().
 //!
 //! A kthread task's thread is woken when the task's dispatched to it, and
 //! sleeps till it's owned - which, as it runs nowhere else, means dispatched
@@ -66,11 +66,11 @@ use core::fmt;
 use core::future::Future;
 use core::cell::Cell;
 use core::marker::{PhantomData, PhantomPinned};
-use core::mem::{ManuallyDrop, MaybeUninit};
+use core::mem::MaybeUninit;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+use core::task::{Context, ContextBuilder, Poll, Waker};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 
 #[derive(Clone, Copy)]
@@ -123,7 +123,7 @@ impl<A: Resumable> Future for Resumed<'_, A> {
         let this = self.project();
 
         // not our executor: nowhere to record it
-        let Some(task) = header_of(cx.waker()).map(TaskRef) else {
+        let Some(task) = task_in(cx) else {
             return this.inner.poll_resume(cx);
         };
 
@@ -428,8 +428,8 @@ unsafe fn run(h: NonNull<Header>) -> bool {
     // it was dispatched here; a RunQueue's or a thread's task runs only there
     let here = hr.next.get();
     let fixed = hr.runq.is_some() || hr.thread.is_some();
-    let waker = ManuallyDrop::new(unsafe { waker_raw(h) });
-    let mut cx = Context::from_waker(&waker);
+    let mut polled = Polled(TaskRef(h));
+    let mut cx = ContextBuilder::from_waker(Waker::noop()).ext(&mut polled).build();
 
     loop {
         // SAFETY: OWNED, by us
@@ -505,11 +505,15 @@ unsafe impl Sync for TaskRef {}
 
 /// The task polling us: Ready at once.
 pub fn current_task() -> impl Future<Output = TaskRef> {
-    core::future::poll_fn(|cx| Poll::Ready(task_of(cx)))
+    core::future::poll_fn(|cx| Poll::Ready(task_in(cx).expect("polled outside a task of ours")))
 }
 
-fn task_of(cx: &Context<'_>) -> TaskRef {
-    TaskRef(header_of(cx.waker()).expect("polled outside a task of ours"))
+/// What run() lends each poll, in its Context's ext(): the task being polled.
+struct Polled(TaskRef);
+
+/// The task polling us, if it's one of ours.
+fn task_in(cx: &mut Context<'_>) -> Option<TaskRef> {
+    cx.ext().downcast_mut::<Polled>().map(|p| p.0)
 }
 
 impl TaskRef {
@@ -523,27 +527,3 @@ impl TaskRef {
         unsafe { dispatch(self.0) };
     }
 }
-
-/* Wakers: a task's header, for current_task(); no ref - see the top. */
-
-static VTABLE: RawWakerVTable = RawWakerVTable::new(waker_clone, waker_wake, waker_wake, waker_drop);
-
-fn header_of(w: &Waker) -> Option<NonNull<Header>> {
-    core::ptr::eq(w.vtable(), &VTABLE).then(|| NonNull::new(w.data().cast_mut().cast()).unwrap())
-}
-
-/// # Safety
-/// @h is a live task's.
-unsafe fn waker_raw(h: NonNull<Header>) -> Waker {
-    unsafe { Waker::from_raw(RawWaker::new(h.as_ptr().cast(), &VTABLE)) }
-}
-
-unsafe fn waker_clone(_p: *const ()) -> RawWaker {
-    panic!("a task's Waker cloned: it's only how a poll finds its task, and nothing keeps one");
-}
-
-unsafe fn waker_wake(_p: *const ()) {
-    panic!("a task woken through its Waker: what it awaits wakes its TaskRef");
-}
-
-unsafe fn waker_drop(_p: *const ()) {}
