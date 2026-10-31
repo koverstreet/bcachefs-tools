@@ -8,7 +8,7 @@ use crate::locking::{ByteLock, Locked};
 use crate::util::percpu::Counters;
 use core::cell::Cell;
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, bitfield, c_const, c_rcu_array, Fieldwise, TypeInfo};
+use cstruct_macros::{c_name, CStruct, bitfield, c_const, c_rcu_array, Fieldwise, TypeInfo};
 use nestify::nest;
 
 c_const! {
@@ -143,8 +143,8 @@ pub struct bch_fs_placeable {
  * that embeds one is Default.
  */
 #[repr(C)]
-#[derive(CStruct)]
 #[c_name(disk_reservation)]
+#[derive(CStruct)]
 pub struct DiskReservation<'f> {
     #[c("struct bch_fs *c")]
     pub c: &'f Fs,

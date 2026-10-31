@@ -36,7 +36,7 @@ use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
 use core::ffi::c_int;
 use core::mem::offset_of;
-use cstruct_macros::{bitfield, c_const, c_export, CStruct, TypeInfo, SizedVal};
+use cstruct_macros::{c_name, bitfield, c_const, c_export, CStruct, TypeInfo, SizedVal};
 use nestify::nest;
 use zerocopy::byteorder::little_endian as le;
 
@@ -53,11 +53,11 @@ use zerocopy::byteorder::little_endian as le;
  * collision:
  */
 nest! {
+    #[c_name(bch_dirent)]
     #[derive(Clone, Copy, CStruct, TypeInfo)]*
     #[derive(SizedVal)]
     #[repr(C, align(8))]
     #[c_packed]
-    #[c_name(bch_dirent)]
     pub struct Dirent {
         pub v: cs::bch_val,
 

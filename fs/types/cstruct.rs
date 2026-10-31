@@ -1233,7 +1233,9 @@ fn item_attrs(toks: &[Tok], mut i: usize) -> Result<(ItemAttrs, usize), String> 
         if let Some([Tok::Ident(t)]) = attr_args(attr, "c_typedef") {
             a.typedef = Some(Some(t.clone()));
         }
-        if let Some([Tok::Ident(n)]) = attr_args(attr, "c_name") {
+        // #[c_name], or what it expands to - a family's macro sees it
+        // unexpanded, the derives expanded
+        if let Some([Tok::Ident(n)]) = attr_args(attr, "c_name").or_else(|| attr_args(attr, "c_name_of")) {
             a.c_name = Some(n.clone());
         }
         if let Some(args) = attr_args(attr, "fieldwise") {

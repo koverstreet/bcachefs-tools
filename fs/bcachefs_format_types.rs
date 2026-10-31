@@ -74,7 +74,7 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, floored_by_self, vstruct, vstruct_container, Head, FlexArray, Unvalidated};
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, grown, tagged_union,
+use cstruct_macros::{c_name, bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, grown, tagged_union,
                      unsized_vstruct, whole, CStruct, Plain, TypeInfo, SizedVal};
 #[cfg(__KERNEL__)]
 use cstruct_macros::c_typedef;
@@ -463,30 +463,30 @@ c_enum! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_name(bch_deleted)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct Deleted {
     pub v: c::bch_val,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_name(bch_whiteout)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct Whiteout {
     pub v: c::bch_val,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_name(bch_extent_whiteout)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct ExtentWhiteout {
     pub v: c::bch_val,
 }
 
 #[grown(from = err, bkey)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_name(bch_error)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct Error {
     pub v: c::bch_val,
     pub err: u8,
@@ -537,23 +537,23 @@ c_enum! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_name(bch_cookie)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct Cookie {
     pub v: c::bch_val,
     pub cookie: Le64,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_name(bch_hash_whiteout)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct HashWhiteout {
     pub v: c::bch_val,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_name(bch_set)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct Set {
     pub v: c::bch_val,
 }
@@ -568,9 +568,9 @@ pub struct bch_csum {
 }
 
 #[repr(C, align(8))]
+#[c_name(bch_backpointer)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_packed]
-#[c_name(bch_backpointer)]
 pub struct Backpointer {
     pub v: c::bch_val,
     pub btree_id: u8,

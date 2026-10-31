@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::util::vstructs::Head;
-use cstruct_macros::{c_const, c_enum, c_typedef, c_xmacro, tagged_union, whole, CStruct, Plain, TypeInfo};
+use cstruct_macros::{c_name, c_const, c_enum, c_typedef, c_xmacro, tagged_union, whole, CStruct, Plain, TypeInfo};
 
 /*
  * Disk accounting - KEY_TYPE_accounting - on disk format:
@@ -49,8 +49,8 @@ use cstruct_macros::{c_const, c_enum, c_typedef, c_xmacro, tagged_union, whole, 
 
 #[whole(tail = d: [u64], bkey)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_name(bch_accounting)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct Accounting {
     pub v: c::bch_val,
     pub d: [u64; 0],

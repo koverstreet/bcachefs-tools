@@ -10,7 +10,7 @@ use crate::vfs::vfs_inode::VfsInode;
 use core::ffi::{c_uint, c_ulong};
 #[cfg(not(NO_BCACHEFS_FS))]
 use core::ffi::{c_int, c_void};
-use cstruct_macros::{c_enum, CStruct, TypeInfo};
+use cstruct_macros::{c_name, c_enum, CStruct, TypeInfo};
 #[cfg(not(NO_BCACHEFS_FS))]
 use cstruct_macros::{c_extern, c_typedef};
 
@@ -22,8 +22,8 @@ use cstruct_macros::{c_extern, c_typedef};
  * ei_quota_lock a Locked over what it protects.
  */
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
 #[c_name(bch_inode_info)]
+#[derive(CStruct, TypeInfo)]
 pub struct InodeInfo {
     #[c("struct inode v")]
     pub v: VfsInode,

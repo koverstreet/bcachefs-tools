@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, whole, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{c_name, c_bitmask, c_const, c_enum, c_xmacro, whole, CStruct, Plain, TypeInfo, SizedVal};
 
 c_const! {
     #[c_int]
@@ -15,9 +15,9 @@ c_const! {
 
 #[whole(tail = fields: [u8], bkey)]
 #[repr(C, align(8))]
+#[c_name(bch_inode)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
-#[c_name(bch_inode)]
 pub struct Inode {
     pub v: c::bch_val,
 
@@ -29,9 +29,9 @@ pub struct Inode {
 
 #[whole(tail = fields: [u8], bkey)]
 #[repr(C, align(8))]
+#[c_name(bch_inode_v2)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
-#[c_name(bch_inode_v2)]
 pub struct InodeV2 {
     pub v: c::bch_val,
 
@@ -44,9 +44,9 @@ pub struct InodeV2 {
 
 #[whole(tail = fields: [u8], bkey)]
 #[repr(C, align(8))]
+#[c_name(bch_inode_v3)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-#[c_name(bch_inode_v3)]
 pub struct InodeV3 {
     pub v: c::bch_val,
 
@@ -65,9 +65,9 @@ c_const! {
 }
 
 #[repr(C, align(8))]
+#[c_name(bch_inode_generation)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_packed]
-#[c_name(bch_inode_generation)]
 pub struct InodeGeneration {
     pub v: c::bch_val,
 
@@ -265,8 +265,8 @@ c_bitmask! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_name(bch_inode_alloc_cursor)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 pub struct InodeAllocCursor {
     pub v: c::bch_val,
     pub bits: u8,

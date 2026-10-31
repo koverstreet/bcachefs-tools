@@ -378,7 +378,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                       {vis} u: {name}__arms,\n\
                   }}\n\
                   \n\
-                  {attrs}#[c_name({name})]\n{storage_attrs}{vis} union {s_ty} {{\n\
+                  #[::cstruct_macros::c_name({name})]\n{attrs}{storage_attrs}{vis} union {s_ty} {{\n\
                       {vis} t: {name}__tagged,\n\
                       {pad_field}\
                   }}\n\

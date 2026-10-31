@@ -214,23 +214,51 @@ macro_rules! one_item {
 /// `[T; 0]`: FIELD is its length - the struct's FlexArray (vstructs.rs).
 /// `#[c_typedef]` on the struct: C has it as a typedef - `typedef struct {
 /// ... } name`, or with `#[c_typedef(NAME)]`, `typedef struct name { ... }
-/// NAME`. `#[c_name(NAME)]` on the struct: C's name for it, where Rust's
-/// differs - a family's C definition (vstructs.rs).
+/// NAME`. `#[c_name_of(NAME)]`: C's name for it, where Rust's differs -
+/// what #[c_name] leaves for the derives.
 /// bch_opts' options, a field each: options.rs.
 #[proc_macro_derive(Options, attributes(opt))]
 pub fn derive_options(input: TokenStream) -> TokenStream {
     expand("#[derive(Options)]", || options::derive(input))
 }
 
-#[proc_macro_derive(CStruct, attributes(c, c_anon, c_bitfield, c_inline, c_lock, c_name, c_packed, c_struct_group,
-                                        c_typedef, counted_by))]
+#[proc_macro_derive(CStruct, attributes(c, c_anon, c_bitfield, c_inline, c_lock, c_name_of, c_packed,
+                                        c_struct_group, c_typedef, counted_by))]
 pub fn derive_cstruct(input: TokenStream) -> TokenStream {
     expand("#[derive(CStruct)]", || cstruct_expand(input))
 }
 
+/// `#[c_name(NAME)]`, before the derives, on a struct or union C shares
+/// whose Rust name isn't C's: NAME is C's. The derives get it as
+/// #[c_name_of(NAME)] - after the item's other attributes, as a derive's
+/// helper comes after the derive - and kCFI its encoding (cfi_encoding()),
+/// so a prototype naming it hashes as C's does. A family's C definition gets
+/// one from vstructs.rs.
+#[proc_macro_attribute]
+pub fn c_name(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand("#[c_name]", || {
+        let name = match attr.into_iter().collect::<Vec<_>>().as_slice() {
+            [TokenTree::Ident(n)] => n.to_string(),
+            _ => return Err("takes C's name for the type".into()),
+        };
+        let tts: Vec<TokenTree> = item.into_iter().collect();
+        let mut attrs_end = 0;
+        while matches!((tts.get(attrs_end), tts.get(attrs_end + 1)),
+                       (Some(TokenTree::Punct(p)), Some(TokenTree::Group(g)))
+                           if p.as_char() == '#' && g.delimiter() == Delimiter::Bracket) {
+            attrs_end += 2;
+        }
+        let mut out = tokens(&cfi_encoding(&name));
+        out.extend(tts[..attrs_end].iter().cloned());
+        out.extend(tokens(&format!("#[c_name_of({name})]")));
+        out.extend(tts[attrs_end..].iter().cloned());
+        Ok(out)
+    })
+}
+
 /// `#[derive(TypeInfo)]`: runtime type information for a struct or union C
 /// shares - see typeinfo.rs.
-#[proc_macro_derive(TypeInfo, attributes(c_name))]
+#[proc_macro_derive(TypeInfo, attributes(c_name_of))]
 pub fn derive_type_info(input: TokenStream) -> TokenStream {
     expand("#[derive(TypeInfo)]", || typeinfo::derive(input))
 }

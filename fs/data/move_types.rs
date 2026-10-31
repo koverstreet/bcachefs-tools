@@ -7,7 +7,7 @@ use crate::types::{DArray, c_default};
 use crate::util::projections::Volatile;
 use core::ffi::{c_int, c_uint};
 use core::sync::atomic::{AtomicI32, AtomicI64};
-use cstruct_macros::{CStruct, c_typedef, TypeInfo};
+use cstruct_macros::{c_name, CStruct, c_typedef, TypeInfo};
 use nestify::nest;
 
 nest! {
@@ -15,9 +15,9 @@ nest! {
     /// on any thread - and what the moving contexts' listing and a data job's
     /// progress read as it goes. Shared throughout, so every field is a
     /// Volatile, written one writer at a time, or an atomic, by many.
+    #[c_name(bch_move_stats)]
     #[derive(CStruct, TypeInfo)]*
     #[repr(C)]*
-    #[c_name(bch_move_stats)]
     pub struct MoveStats {
         #[c("char name[32]")]
         pub name: [Volatile<u8>; 32],

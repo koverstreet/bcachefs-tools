@@ -13,7 +13,7 @@ use crate::util::vstructs::Head;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicIsize};
-use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, TypeInfo};
+use cstruct_macros::{c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, TypeInfo};
 use pin_init::pin_data;
 use nestify::nest;
 #[cfg(feature = "std")]
@@ -569,9 +569,8 @@ nest! {
     /// iterator, k - change only through &mut self, iter.rs's methods; through
     /// &self, only key_cache_path, which an update sets up. Hence its Cell.
     #[repr(C)]
-    #[derive(CStruct)]
     #[c_name(btree_iter)]
-    #[cfg_attr(kernel, cfi_encoding = "10btree_iter")]
+    #[derive(CStruct)]
     pub struct BtreeIter<'t> {
         pub(in crate::btree) trans: *mut cs::btree_trans,
         pub(in crate::btree) path: cs::btree_path_idx_t,

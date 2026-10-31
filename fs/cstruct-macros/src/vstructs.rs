@@ -15,7 +15,7 @@
 use proc_macro::{Delimiter, Ident, TokenStream, TokenTree};
 
 use crate::cstruct::{field_type, parse_cstruct, parse_family_args, CFieldDef, CKind, CStructDef, FieldType};
-use crate::{cfi_encoding, tokens};
+use crate::tokens;
 
 /// #[derive(Plain)], on a struct - not a union, whose bytes past a short
 /// arm's end are no field's. An unsized vstruct's states aren't: they're its
@@ -1226,8 +1226,8 @@ fn generic_type(name: &str, g: &Generic<'_>, doc: &str) -> String {
 }
 
 /// @item, a struct, as @to - with #[c_name], C's name for it: its own, which
-/// it keeps, or added after its other attributes, so the derives among them
-/// see it.
+/// it keeps, or added before its other attributes, so it expands before the
+/// derives among them.
 fn rename_struct(item: TokenStream, def: &CStructDef, to: &str) -> Result<TokenStream, String> {
     let name = def.rust_ident();
     let mut tts: Vec<TokenTree> = item.into_iter().collect();
@@ -1236,19 +1236,11 @@ fn rename_struct(item: TokenStream, def: &CStructDef, to: &str) -> Result<TokenS
                                if s.to_string() == "struct" && n.to_string() == name))
         .ok_or_else(|| format!("{name}: a family is made from a struct"))?;
     tts[at + 1] = TokenTree::Ident(Ident::new(to, tts[at + 1].span()));
-    let mut attrs_end = 0;
-    while matches!((tts.get(attrs_end), tts.get(attrs_end + 1)),
-                   (Some(TokenTree::Punct(p)), Some(TokenTree::Group(g)))
-                       if p.as_char() == '#' && g.delimiter() == Delimiter::Bracket) {
-        attrs_end += 2;
-    }
-    let mut out: TokenStream = tts[..attrs_end].iter().cloned().collect();
-    // C's name: the item's #[c_name], which it keeps, or its own
+    let mut out = TokenStream::new();
     if def.rust_name.is_none() {
-        out.extend(tokens(&format!("#[c_name({})]", def.name)));
+        out.extend(tokens(&format!("#[::cstruct_macros::c_name({})]", def.name)));
     }
-    out.extend(tokens(&cfi_encoding(&def.name)));
-    out.extend(tts[attrs_end..].iter().cloned());
+    out.extend(tts.into_iter());
     Ok(out)
 }
 

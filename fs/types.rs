@@ -15,7 +15,7 @@ use crate::types::{GenRadix, RustOnly, bits_to_longs, rust_only};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
 use core::sync::atomic::{AtomicI32, AtomicI64, AtomicU64};
-use cstruct_macros::{c_const, c_enum, c_rcu_array, c_xmacro, placed, CStruct, Fieldwise, Init, TypeInfo};
+use cstruct_macros::{c_name, c_const, c_enum, c_rcu_array, c_xmacro, placed, CStruct, Fieldwise, Init, TypeInfo};
 use pin_init::pin_data;
 
 c_xmacro! {
@@ -582,9 +582,8 @@ c_enum! {
 /// Borrowed by Rust as &Fs; OpenFs owns one opened from userspace.
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
 #[c_name(bch_fs)]
-#[cfg_attr(kernel, cfi_encoding = "6bch_fs")]
+#[derive(CStruct, TypeInfo, Init)]
 pub struct Fs {
     pub cl: c::closure,
 

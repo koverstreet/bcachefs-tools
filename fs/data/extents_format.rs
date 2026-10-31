@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, whole, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{c_name, bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, whole, CStruct, Plain, TypeInfo, SizedVal};
 use nestify::nest;
 
 /* DOC_LATEX(extent-checksums)
@@ -305,9 +305,9 @@ pub struct bch_extent_entry {
 
 #[whole(tail = _data: [u64], bkey)]
 #[repr(C, align(8))]
+#[c_name(bch_btree_ptr)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-#[c_name(bch_btree_ptr)]
 pub struct BtreePtr {
     pub v: c::bch_val,
 
@@ -317,9 +317,9 @@ pub struct BtreePtr {
 
 #[whole(tail = _data: [u64], bkey)]
 #[repr(C, align(8))]
+#[c_name(bch_btree_ptr_v2)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-#[c_name(bch_btree_ptr_v2)]
 pub struct BtreePtrV2 {
     pub v: c::bch_val,
 
@@ -340,9 +340,9 @@ c_bitmask! {
 
 #[whole(tail = _data: [u64], bkey)]
 #[repr(C, align(8))]
+#[c_name(bch_extent)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-#[c_name(bch_extent)]
 pub struct Extent {
     pub v: c::bch_val,
 
@@ -390,9 +390,9 @@ c_const! {
 }
 
 #[repr(C, align(8))]
+#[c_name(bch_reservation)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_packed]
-#[c_name(bch_reservation)]
 pub struct Reservation {
     pub v: c::bch_val,
 
@@ -403,8 +403,8 @@ pub struct Reservation {
 
 #[whole(tail = data: [u8], bkey)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_name(bch_inline_data)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct InlineData {
     pub v: c::bch_val,
     pub data: [u8; 0],

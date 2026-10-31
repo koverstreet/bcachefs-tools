@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use cstruct_macros::{whole, CStruct, Plain, TypeInfo};
+use cstruct_macros::{c_name, whole, CStruct, Plain, TypeInfo};
 
 /*
  * Damage tracking: one key per damaged inode at (0, inum, snapshot),
@@ -20,8 +20,8 @@ use cstruct_macros::{whole, CStruct, Plain, TypeInfo};
  */
 #[whole(tail = entries: [c::bch_sb_field_error_entry_v2], bkey)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_name(bch_damage)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct Damage {
     pub v: c::bch_val,
     pub entries: [c::bch_sb_field_error_entry_v2; 0],
