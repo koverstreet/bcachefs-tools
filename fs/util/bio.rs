@@ -206,6 +206,12 @@ impl Bio {
         unsafe { c::bio_reset(self.raw_mut(), bdev, opf as _) }
     }
 
+    /// Panics if @range isn't this bio's.
+    pub fn set_range(self: Pin<&mut Self>, range: BioRange<'_>) {
+        assert!(range.is_of(&self), "a bio set to another bio's range");
+        self.raw_mut().bi_iter = range.pos();
+    }
+
     /// Panics past its end.
     pub fn shrink(self: Pin<&mut Self>, bytes: u32) {
         let iter = &mut self.raw_mut().bi_iter;
