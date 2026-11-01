@@ -50,11 +50,11 @@
 
 use core::ops::Deref;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicU32, Ordering::{Acquire, Relaxed, Release}};
 
-use crate::util::futex::EventCount;
-use crate::util::place::Placed;
-use crate::util::sleep::Sleep;
+mod atomic;
+mod placed;
+
+pub use atomic::AtomicRef;
 
 /// # Safety
 /// inc() takes a ref that's held until dec() gives it back - and while one
@@ -205,88 +205,9 @@ impl<T: Refcount + ?Sized> Deref for RefBorrow<'_, T> {
     }
 }
 
-unsafe impl<C: Refcount, A> Refcount for Placed<C, A> {
-    unsafe fn inc(&self) {
-        unsafe { (**self).inc() }
-    }
-
-    unsafe fn dec(&self) {
-        unsafe { (**self).dec() }
-    }
-}
-
-unsafe impl<C: TryRefcount, A> TryRefcount for Placed<C, A> {
-    fn try_inc(&self) -> bool {
-        (**self).try_inc()
-    }
-
-    fn try_inc_live(&self) -> bool {
-        (**self).try_inc_live()
-    }
-}
-
 /// stop() puts the owner's ref, and tryget() fails from then on; wait()
 /// returns once every other ref has been put.
 pub trait WaitableRef: TryRefcount {
     fn stop(&self);
     fn wait(&self);
-}
-
-/// A count and its value, as an Arc's, but not owning its memory: it starts
-/// at one, the owner's ref, and the owner frees it after wait(). For slow
-/// paths: EnumeratedRef is the percpu one.
-#[repr(C)]
-pub struct AtomicRef<T> {
-    count:  AtomicU32,
-    events: EventCount,
-    value:  T,
-}
-
-const STOPPED: u32 = 1 << 31;
-
-impl<T> AtomicRef<T> {
-    pub const fn new(value: T) -> Self {
-        AtomicRef { count: AtomicU32::new(1), events: EventCount::new(), value }
-    }
-}
-
-impl<T> Deref for AtomicRef<T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        &self.value
-    }
-}
-
-unsafe impl<T> Refcount for AtomicRef<T> {
-    unsafe fn inc(&self) {
-        self.count.fetch_add(1, Relaxed);
-    }
-
-    unsafe fn dec(&self) {
-        if self.count.fetch_sub(1, Release) == STOPPED | 1 {
-            self.events.wake();
-        }
-    }
-}
-
-unsafe impl<T> TryRefcount for AtomicRef<T> {
-    fn try_inc(&self) -> bool {
-        self.count.fetch_update(Relaxed, Relaxed, |r| (r & STOPPED == 0).then_some(r + 1)).is_ok()
-    }
-}
-
-impl<T> WaitableRef for AtomicRef<T> {
-    fn stop(&self) {
-        if self.count.fetch_update(Release, Relaxed, |r| (r & STOPPED == 0).then_some((r - 1) | STOPPED))
-               == Ok(1) {
-            self.events.wake();
-        }
-    }
-
-    fn wait(&self) {
-        let Ok(()) = self.events.wait_until(Sleep::UNINTERRUPTIBLE, || {
-            (self.count.load(Acquire) == STOPPED).then_some(())
-        });
-    }
 }
