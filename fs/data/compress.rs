@@ -43,12 +43,12 @@
 #![allow(non_camel_case_types)]
 
 use crate::c::{self, bbuf_type as bb, bch_compression_opts as opts, bch_errcode as e};
-use crate::{bch_err, btree::iter::lockrestart_do, btree_trans, fs::Fs, fsck_err};
+use crate::{bch_err, btree::iter::lockrestart_do, btree_trans, fs::{Fs, SbLockGuard}, fsck_err};
 use crate::errcode::{ret_to_c, BchError};
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
 use crate::util::{alloc::{flags::{GFP_KERNEL, GFP_NOWAIT, __GFP_NOWARN}, kmalloc, KVVec}, bio::{Bio, BioRange},
-                  ffi::Opaque, kernel::{unlikely, READ, WRITE}, log::LogMsg, mempool::Mempool,
+                  ffi::Opaque, kernel::{unlikely, READ, WRITE}, late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
                   volatile::VolatileSlice, Printbuf, ToText};
 use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
@@ -207,9 +207,9 @@ fn extent_max(fs: &Fs) -> usize {
 /// read pay the write side's footprint. lz4 decompresses with no workspace.
 #[derive(::pin_init::Zeroable)]
 pub struct Compress {
-    bounce:     [Mempool; 2],
-    workspace:  [Mempool; OPT_NR],
-    decompress: [Mempool; OPT_NR],
+    bounce:     [Late<Mempool, SbLock>; 2],
+    workspace:  [Late<Mempool, SbLock>; OPT_NR],
+    decompress: [Late<Mempool, SbLock>; OPT_NR],
 }
 
 // ── Bounce buffers ───────────────────────────────────────────────────────
@@ -431,7 +431,7 @@ fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice<'_>, crc: 
      * decompression workspace at all, so its decompress pool is never
      * initialized and can't stand in for the check.
      */
-    if unlikely(!fs.compress.workspace[opt].initialized()) {
+    if unlikely(!fs.compress.workspace[opt].is_made()) {
         if !fsck_err!(fs, id::compression_type_not_marked_in_sb,
                       "compression type {} set but not marked in superblock", t)? {
             return fs.throw(e::BCH_ERR_compression_workspace_not_initialized);
@@ -446,7 +446,7 @@ fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice<'_>, crc: 
     let (src, dst) = (src.as_ptr().cast_const(), dst.as_ptr());
     // none for lz4, and for gzip in userspace, whose workspace is 0 bytes
     let pool = &fs.compress.decompress[opt];
-    let ws = pool.initialized().then(|| pool.alloc());
+    let ws = pool.is_made().then(|| pool.alloc());
     let ws = ws.as_ref().map_or(ptr::null_mut(), |b| b.as_ptr().cast());
 
     // SAFETY: @src and @dst crc's sizes, apart
@@ -690,7 +690,7 @@ fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], sr
         panic!("compressing with opt {compression_opt:#x}");
     };
 
-    if unlikely(!fs.compress.workspace[t].initialized()) {
+    if unlikely(!fs.compress.workspace[t].is_made()) {
         let fix = fsck_err!(fs, id::compression_opt_not_marked_in_sb,
                             "compression opt {} set but not marked in superblock", opts(t as u32));
         // not to fix, fsck_err() failing, or no memory for the pools: don't compress
@@ -847,14 +847,14 @@ pub(crate) fn check_set_has_compressed_data(fs: &Fs, compression_opt: u8) -> Res
         return Ok(());
     }
 
-    init_features(fs, fs.sb.features.get() | f)?;
+    init_features(fs, &sb, fs.sb.features.get() | f)?;
     sb.sb_mut().features[0] |= f;
     fs.write_super(&mut sb);
     Ok(())
 }
 
 /// The pools @features' types need, set up if they aren't.
-fn init_features(fs: &Fs, features: u64) -> Result<(), BchError> {
+fn init_features(fs: &Fs, sb: &SbLockGuard<'_>, features: u64) -> Result<(), BchError> {
     // SAFETY: pure functions
     let (zstd, deflate, inflate, zstd_d) = unsafe {
         let params = c::zstd_get_params(c::zstd_max_clevel(), extent_max(fs) as u64);
@@ -875,7 +875,7 @@ fn init_features(fs: &Fs, features: u64) -> Result<(), BchError> {
         return Ok(());
     }
 
-    let pool = |p: &Mempool, size, err: e| p.init_kvmalloc(1, size).map_err(|_| fs.err(err));
+    let pool = |p: &Late<Mempool, SbLock>, size, err: e| p.init(sb, || Mempool::kvmalloc(1, size)).map_err(|_| fs.err(err));
     let pools = &fs.compress;
     pool(&pools.bounce[READ], extent_max(fs), e::BCH_ERR_ENOMEM_compression_bounce_read_init)?;
     pool(&pools.bounce[WRITE], extent_max(fs), e::BCH_ERR_ENOMEM_compression_bounce_write_init)?;
@@ -894,7 +894,7 @@ pub fn bch2_fs_compress_init(c: &Opaque<c::bch_fs>) -> c_int {
     let fs = Fs::from_c(c);
     let opt = |v: u8| opt_feature(bch_compression_opt::bits(v).type_().into());
     let f = fs.sb.features.get() | opt(fs.opts().compression.get()) | opt(fs.opts().background_compression.get());
-    ret_to_c(init_features(fs, f))
+    ret_to_c(init_features(fs, &fs.sb_lock(), f))
 }
 
 // ── Options ──────────────────────────────────────────────────────────────
