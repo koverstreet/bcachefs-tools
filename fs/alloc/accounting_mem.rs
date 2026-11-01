@@ -26,7 +26,6 @@ use crate::util::vstructs::{bytes_of, plain_bytes, ArmError, Unvalidated, Valida
 use crate::util::Printbuf;
 use crate::{bch_err_fn, btree_trans, fsck_err, fsck_err_on, percpu_field};
 use core::ffi::c_int;
-use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
 use zerocopy::IntoBytes;
 
@@ -452,7 +451,7 @@ fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, i: usize) -> Result<usize, B
         let n = key(j);
         if BkeySC::from(n).arm::<Accounting>().is_some() {
             accounting::accumulate(k, n);
-            keys[j].overwritten.store(1, Relaxed);
+            fs.journal_keys.mark_overwritten(j);
         }
     }
     Ok(end)
@@ -497,7 +496,7 @@ fn read_walk(trans: &BtreeTrans<'_>, entries: &mut KVVec<Entry>) -> Result<(), B
 
         while jk < end && cmp(k.k.p, jk).is_eq() &&
               { fs.journal_key(&keys[jk]).k.bversion } <= { k.k.bversion } {
-            keys[jk].overwritten.store(1, Relaxed);
+            fs.journal_keys.mark_overwritten(jk);
             jk += 1;
         }
 

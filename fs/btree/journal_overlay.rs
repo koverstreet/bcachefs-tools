@@ -26,9 +26,9 @@
 //!    last ref's put. keys_mut() is that contract.
 //!  - Overwriting happens later too, from any thread, under overwrite_lock -
 //!    which journal replay's commits take, in C - while the keys are read
-//!    without it. So a key's overwritten flag and range are atomics, and the
-//!    ranges an RcuArray the lock publishes: a reader loads a key's range
-//!    index, which is stored after the range, then reads the range.
+//!    without it. So a key's overwritten flag and range are words the lock
+//!    publishes, as the ranges are an RcuArray it publishes: a reader loads a
+//!    key's range index, which is stored after the range, then reads the range.
 //!  - An insert bumps seq, and an iterator that finds it changed searches
 //!    again for where it was - from where it started, or the
 //!    btree_and_journal_iter's pos if that's later: what's before either it
@@ -43,6 +43,7 @@ use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{btree_id_is_alloc, Fs};
 use crate::locking::{Guard, Locked};
+use crate::util::projections::VolatilePublish;
 use crate::util::alloc::{darray_exit, flags::GFP_KERNEL, DArrayLoan};
 use crate::util::ffi::Opaque;
 use crate::util::gap_buffer::GapBuffer;
@@ -54,7 +55,7 @@ use core::cmp::Ordering;
 use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
 use core::ptr;
-use core::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
+use core::sync::atomic::Ordering::{AcqRel, Relaxed};
 use cstruct_macros::{c_export, bitfield, CStruct, Init};
 use c::bch_bkey_type as kt;
 use c::bch_errcode as e;
@@ -62,7 +63,7 @@ use c::bch_fs_flags as f;
 use crate::types::{DArray, c_default};
 use crate::util::vstructs::Head;
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8, AtomicUsize};
+use core::sync::atomic::{AtomicI32, AtomicU64, AtomicUsize};
 use nestify::nest;
 use pin_init::pin_data;
 use crate::format::{Bpos, Btree};
@@ -131,8 +132,10 @@ nest! {
          * Set, and overwritten_range, under overwrite_lock, while the keys
          * are read without it: in a byte of their own
          */
-        pub overwritten: AtomicU8,
-        pub overwritten_range: AtomicU32,
+        #[c("u8 overwritten")]
+        pub overwritten: VolatilePublish<u8, OverwriteRanges>,
+        #[c("u32 overwritten_range")]
+        pub overwritten_range: VolatilePublish<u32, OverwriteRanges>,
     }
 }
 c_default!(journal_key);
@@ -202,12 +205,12 @@ type OverwriteGuard<'a> = Guard<'a, c::mutex, c::OverwriteRanges, c::OverwriteRa
 
 impl c::journal_key {
     pub(crate) fn is_overwritten(&self) -> bool {
-        self.overwritten.load(Relaxed) != 0
+        self.overwritten.get() != 0
     }
 
     /// Its overwrite range's index, and the range itself published.
     fn range(&self) -> u32 {
-        self.overwritten_range.load(Acquire)
+        self.overwritten_range.get_acquire()
     }
 
     /// For @k, kmalloc()'d, a key of its own.
@@ -327,7 +330,7 @@ impl c::journal_keys {
     fn overwrite(&self, g: &mut OverwriteGuard<'_>, idx: usize) {
         let keys = self.keys();
         let k = &keys[idx];
-        k.overwritten.store(1, Relaxed);
+        k.overwritten.set(1, g);
 
         let prev = idx.checked_sub(1).and_then(|i| keys.get(i)).filter(|k| k.is_overwritten());
         let next = keys.get(idx + 1).filter(|k| k.is_overwritten());
@@ -352,7 +355,7 @@ impl c::journal_keys {
             range.end.store(idx + 1 + next.is_some() as usize, Relaxed);
 
             for k in [Some(k), prev, next].into_iter().flatten() {
-                k.overwritten_range.store(r as u32, Release);
+                k.overwritten_range.set_release(r as u32, g);
             }
             return;
         }
@@ -371,31 +374,38 @@ impl c::journal_keys {
         match (prev_range, next_range) {
             (Some((pr, p)), Some((nr, n))) => {
                 p.end.store(n.end.load(Relaxed), Relaxed);
-                k.overwritten_range.store(pr, Release);
+                k.overwritten_range.set_release(pr, g);
 
                 for i in n.start.load(Relaxed)..n.end.load(Relaxed) {
                     let ik = &keys[i];
                     assert_eq!(ik.range(), nr, "key {i} in overwrite range {nr}");
-                    ik.overwritten_range.store(pr, Release);
+                    ik.overwritten_range.set_release(pr, g);
                 }
             }
             (Some((pr, p)), None) => {
                 p.end.fetch_add(1, Relaxed);
-                k.overwritten_range.store(pr, Release);
+                k.overwritten_range.set_release(pr, g);
                 if let Some(next) = next {
                     p.end.fetch_add(1, Relaxed);
-                    next.overwritten_range.store(pr, Release);
+                    next.overwritten_range.set_release(pr, g);
                 }
             }
             (None, Some((nr, n))) => {
                 n.start.fetch_sub(1, Relaxed);
-                k.overwritten_range.store(nr, Release);
+                k.overwritten_range.set_release(nr, g);
                 if let Some(prev) = prev {
                     n.start.fetch_sub(1, Relaxed);
-                    prev.overwritten_range.store(nr, Release);
+                    prev.overwritten_range.set_release(nr, g);
                 }
             }
             (None, None) => unreachable!(),
+        }
+    }
+
+    pub(crate) fn mark_overwritten(&self, idx: usize) {
+        let mut g = self.overwrites.lock();
+        if !self.keys()[idx].is_overwritten() {
+            self.overwrite(&mut g, idx);
         }
     }
 
