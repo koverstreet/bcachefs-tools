@@ -361,6 +361,10 @@ pub struct CBitmask {
     /// The type the accessors are on: "foo" - or for `struct Head<foo>`, a
     /// family's C definition, "foo__head".
     pub rust_type:  String,
+    /// C's struct, as Rust names its definition: foo, foo__head, or for
+    /// `struct foo<STATE>`, foo__whole - the name the generator resolves, by
+    /// the record's path to it: another type may be foo too.
+    pub def:        String,
     pub field:      String,
     pub strip:      Option<String>,
     pub entries:    Vec<CBitmaskEntry>,
@@ -1241,15 +1245,15 @@ fn parse_bitmask(m: &syn::Macro) -> Result<CBitmask, String> {
             }),
             _ => return Err(bad()),
         };
-        let (rust_type, c_type) = match (n.as_str(), arg.as_deref()) {
-            (_, None) => (n.clone(), format!("struct {n}")),
+        let (rust_type, c_type, def) = match (n.as_str(), arg.as_deref()) {
+            (_, None) => (n.clone(), format!("struct {n}"), n.clone()),
             // a family's C definition, X__head (util/vstructs.rs): its header's
             // fields, which each state's definition derefs to
-            ("Head", Some(f)) => (format!("{f}__head"), format!("struct {f}")),
+            ("Head", Some(f)) => (format!("{f}__head"), format!("struct {f}"), format!("{f}__head")),
             // a family's type in a state: a #[grown] type's value in place, for
             // its floor's fields - every view of it reaches X<Validated>
             (_, Some(st @ ("Whole" | "Validated" | "Unvalidated"))) =>
-                (format!("{n}<crate::util::vstructs::{st}>"), format!("struct {n}")),
+                (format!("{n}<crate::util::vstructs::{st}>"), format!("struct {n}"), format!("{n}__whole")),
             _ => return Err(bad()),
         };
 
@@ -1275,7 +1279,7 @@ fn parse_bitmask(m: &syn::Macro) -> Result<CBitmask, String> {
             list.parse::<Option<syn::Token![,]>>()?;
         }
 
-        Ok(CBitmask { cfg: None, macro_name: ident(&macro_name), c_type, rust_type, field, strip, entries })
+        Ok(CBitmask { cfg: None, macro_name: ident(&macro_name), c_type, rust_type, def, field, strip, entries })
     }).map_err(syn_err("c_bitmask!"))
 }
 
@@ -3029,8 +3033,8 @@ pub fn emit_items(items: &[CItem],
             CItem::Bitmask(b) => {
                 // the struct as Rust names it - if not as C does, C's, which
                 // @kind has from its record
-                let c_type = match b.c_type.strip_prefix("struct ").and_then(|n| Some((n, kind(n)?))) {
-                    Some((n, c)) if ![format!("struct {n}"), format!("union {n}"), n.to_string()].contains(&c) => c,
+                let c_type = match kind(&b.def) {
+                    Some(c) if ![format!("struct {}", b.def), format!("union {}", b.def), b.def.clone()].contains(&c) => c,
                     _ => b.c_type.clone(),
                 };
                 let mut t = String::new();
@@ -3111,9 +3115,9 @@ pub fn emit_items(items: &[CItem],
 // ---- entry points ----------------------------------------------------------
 
 /// The type names @text's item writes - its own, its fields', arms' and
-/// prototypes' - for its record to say which type each is: each that's a
-/// plain path, under a pointer, reference or array, as the generator looks
-/// types up; not the item's generic parameters.
+/// prototypes', a bitmask's struct's - for its record to say which type
+/// each is: each that's a plain path, under a pointer, reference or array,
+/// as the generator looks types up; not the item's generic parameters.
 #[allow(dead_code)]
 pub fn written_types(text: &str) -> Vec<String> {
     let Ok(items) = parse_items(text) else { return Vec::new() };
@@ -3135,6 +3139,7 @@ pub fn written_types(text: &str) -> Vec<String> {
             }
             CItem::Bitfield(b) => tys.extend(b.fields.iter().map(|(_, ty, _)| ty.clone())),
             CItem::Enum(CEnumDef { name: Some(n), .. }) => tys.push(n.clone()),
+            CItem::Bitmask(b) => tys.push(b.def.clone()),
             CItem::Typedef(t) => tys.extend([t.rust_ident().to_string(), t.ty.clone()]),
             CItem::TaggedUnion(tu) => tys.extend(tu.arms.iter().map(|a| a.ty.clone()).chain(tu.pad.clone())),
             CItem::Extern(x) => {
