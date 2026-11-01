@@ -105,12 +105,28 @@ impl BioInPlace {
 /// Rust's, made by new() and destroyed on drop - in a struct C may share, as
 /// its struct bio_set - or C's, borrowed by from_c().
 #[repr(transparent)]
-pub struct BioSet<T: HasBio> {
+pub struct BioSet<T: FrontPad> {
     set: Opaque<c::bio_set>,
     _t:  PhantomData<fn() -> T>,
 }
 
-impl<T: HasBio> BioSet<T> {
+/// What a bioset puts in front of its bios: a HasBio type's, or the larger of
+/// two, Either - a bioset C allocates either container from.
+pub trait FrontPad {
+    const FRONT_PAD: usize;
+}
+
+impl<T: HasBio> FrontPad for T {
+    const FRONT_PAD: usize = T::BIO_OFFSET;
+}
+
+pub struct Either<A, B>(PhantomData<(A, B)>);
+
+impl<A: HasBio, B: HasBio> FrontPad for Either<A, B> {
+    const FRONT_PAD: usize = if A::BIO_OFFSET > B::BIO_OFFSET { A::BIO_OFFSET } else { B::BIO_OFFSET };
+}
+
+impl<T: FrontPad> BioSet<T> {
     /// @pool_size bios held in reserve, and bvecs with them if @need_bvecs:
     /// for bios allocated with more than fit inline. Nothing to undo if it
     /// fails.
@@ -119,11 +135,13 @@ impl<T: HasBio> BioSet<T> {
         // SAFETY: initialized in place, where it stays - pinned
         unsafe {
             ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                ret_to_result_void(c::bioset_init(slot.cast(), pool_size, T::BIO_OFFSET as u32, flags))
+                ret_to_result_void(c::bioset_init(slot.cast(), pool_size, T::FRONT_PAD as u32, flags))
             })
         }
     }
+}
 
+impl<T: HasBio> BioSet<T> {
     /// Panics if its front_pad isn't a T's.
     pub fn from_c(set: &c::bio_set) -> &Self {
         assert_eq!(set.front_pad as usize, T::BIO_OFFSET, "a bioset of another type's bios");
@@ -190,7 +208,7 @@ impl<T: HasBio> BioSet<T> {
     }
 }
 
-impl<T: HasBio> Drop for BioSet<T> {
+impl<T: FrontPad> Drop for BioSet<T> {
     /// Its bios are all back: its owner's teardown waits for them.
     fn drop(&mut self) {
         // SAFETY: new()'s, never moved: a C bioset is only ever borrowed
