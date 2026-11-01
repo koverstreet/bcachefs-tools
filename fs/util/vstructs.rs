@@ -488,6 +488,7 @@ unsafe impl<'a, T, S: State> Restate for VstructRef<'a, T, S> {
 pub struct VstructRefEntries<'a, E> {
     /// None after an error
     rest:   Option<&'a [u8]>,
+    at:     usize,
     _entry: PhantomData<&'a E>,
 }
 
@@ -495,7 +496,7 @@ impl<'a, E> VstructRefEntries<'a, E> {
     /// The entries in @rest: an unsized container's, from its start[] - or
     /// an ioctl's reply, keys one after another.
     pub fn new(rest: &'a [u8]) -> Self {
-        Self { rest: Some(rest), _entry: PhantomData }
+        Self { rest: Some(rest), at: 0, _entry: PhantomData }
     }
 }
 
@@ -507,6 +508,7 @@ impl<'a, E: Plain + SelfSized + 'a> Iterator for VstructRefEntries<'a, E> {
         match VstructRef::<E>::new(rest) {
             Ok(e) => {
                 self.rest = Some(&rest[e.bytes.len()..]);
+                self.at += e.bytes.len();
                 Some(Ok(e))
             }
             Err(err) => {
@@ -570,13 +572,14 @@ unsafe impl<'a, T, S: State> Restate for VstructMut<'a, T, S> {
 /// VstructRefEntries, mutably: each an VstructMut.
 pub struct VstructRefEntriesMut<'a, E> {
     rest:   Option<&'a mut [u8]>,
+    at:     usize,
     _entry: PhantomData<&'a mut E>,
 }
 
 impl<'a, E> VstructRefEntriesMut<'a, E> {
     /// The entries in @rest: an unsized container's, from its start[].
     pub(crate) fn new(rest: &'a mut [u8]) -> Self {
-        Self { rest: Some(rest), _entry: PhantomData }
+        Self { rest: Some(rest), at: 0, _entry: PhantomData }
     }
 }
 
@@ -589,10 +592,46 @@ impl<'a, E: Plain + SelfSized + 'a> Iterator for VstructRefEntriesMut<'a, E> {
             Ok(len) => {
                 let (e, rest) = rest.split_at_mut(len);
                 self.rest = Some(rest);
+                self.at += len;
                 Some(Ok(VstructMut { bytes: e, _t: PhantomData }))
             }
             Err(err) => Some(Err(err)),
         }
+    }
+}
+
+/// A walk over entries that knows where it is: offset() is where the entry
+/// next() returns starts, in bytes from where the walk did - as an entry's
+/// own length is.
+pub trait EntryWalk: Iterator + Sized {
+    fn offset(&self) -> usize;
+
+    /// Each entry with its offset().
+    fn with_offsets(self) -> WithOffsets<Self> {
+        WithOffsets(self)
+    }
+}
+
+pub struct WithOffsets<I>(I);
+
+impl<I: EntryWalk> Iterator for WithOffsets<I> {
+    type Item = (usize, I::Item);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let at = self.0.offset();
+        self.0.next().map(|e| (at, e))
+    }
+}
+
+impl<'a, E: Plain + SelfSized + 'a> EntryWalk for VstructRefEntries<'a, E> {
+    fn offset(&self) -> usize {
+        self.at
+    }
+}
+
+impl<'a, E: Plain + SelfSized + 'a> EntryWalk for VstructRefEntriesMut<'a, E> {
+    fn offset(&self) -> usize {
+        self.at
     }
 }
 

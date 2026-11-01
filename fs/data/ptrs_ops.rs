@@ -386,7 +386,7 @@ pub fn ptr_swab(fs: &Fs, k: BkeyS<'_>) {
 pub(super) fn entries_swab(sizes: EntrySizes, b: &mut [u8]) {
     b.chunks_exact_mut(8).for_each(<[u8]>::reverse);
 
-    for e in (EntriesMut { sizes, b }).map(|(ty, b, stop)| ExtentEntryMut::new(ty, b, stop)) {
+    for e in EntriesMut::new(sizes, b).map(|(ty, b, stop)| ExtentEntryMut::new(ty, b, stop)) {
         match e {
             ExtentEntryMut::crc32(e) => e.update_csum(|c| c.swap_bytes()),
             ExtentEntryMut::crc64(e) => {

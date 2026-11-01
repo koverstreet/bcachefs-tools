@@ -32,7 +32,7 @@ use crate::sb::counters::events;
 use crate::typeinfo::{AccessError, ResolveError};
 use crate::types::{Le32, Le64};
 use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, Validated};
+use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, EntryWalk, Validated};
 use arrayvec::ArrayVec;
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
@@ -216,6 +216,13 @@ fn entry_len(sizes: &EntrySizes, b: &[u8]) -> Option<(u32, usize, Option<Stop>)>
 struct Entries<'a> {
     sizes: EntrySizes,
     b:     &'a [u8],
+    at:    usize,
+}
+
+impl<'a> Entries<'a> {
+    fn new(sizes: EntrySizes, b: &'a [u8]) -> Self {
+        Self { sizes, b, at: 0 }
+    }
 }
 
 impl<'a> Iterator for Entries<'a> {
@@ -225,13 +232,27 @@ impl<'a> Iterator for Entries<'a> {
         let (ty, len, stop) = entry_len(&self.sizes, self.b)?;
         let (e, rest) = self.b.split_at(len);
         self.b = rest;
+        self.at += len;
         Some((ty, e, stop))
+    }
+}
+
+impl EntryWalk for Entries<'_> {
+    fn offset(&self) -> usize {
+        self.at
     }
 }
 
 struct EntriesMut<'a> {
     sizes: EntrySizes,
     b:     &'a mut [u8],
+    at:    usize,
+}
+
+impl<'a> EntriesMut<'a> {
+    fn new(sizes: EntrySizes, b: &'a mut [u8]) -> Self {
+        Self { sizes, b, at: 0 }
+    }
 }
 
 impl<'a> Iterator for EntriesMut<'a> {
@@ -241,7 +262,14 @@ impl<'a> Iterator for EntriesMut<'a> {
         let (ty, len, stop) = entry_len(&self.sizes, self.b)?;
         let (e, rest) = core::mem::take(&mut self.b).split_at_mut(len);
         self.b = rest;
+        self.at += len;
         Some((ty, e, stop))
+    }
+}
+
+impl EntryWalk for EntriesMut<'_> {
+    fn offset(&self) -> usize {
+        self.at
     }
 }
 
@@ -349,13 +377,14 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     }
 
     fn extent_entries(&self, fs: &Fs) -> impl Iterator<Item = ExtentEntry<'_>> {
-        Entries { sizes: EntrySizes::of(fs), b: self.entry_bytes() }.map(|(ty, b, stop)| ExtentEntry::new(ty, b, stop))
+        Entries::new(EntrySizes::of(fs), self.entry_bytes()).map(|(ty, b, stop)| ExtentEntry::new(ty, b, stop))
     }
 
     /// extent_entries(), each with where it is.
     fn extent_entries_at(&self, fs: &Fs) -> impl Iterator<Item = (EntryPos, ExtentEntry<'_>)> {
-        let val = self.as_sc().val_bytes().as_ptr() as usize;
-        self.extent_entries(fs).map(move |e| (EntryPos((e.bytes().as_ptr() as usize - val) / 8), e))
+        let start = <Self::V as PtrsBkey>::entry_range(self.as_sc()).start;
+        Entries::new(EntrySizes::of(fs), self.entry_bytes()).with_offsets()
+            .map(move |(at, (ty, b, stop))| (EntryPos((start + at) / 8), ExtentEntry::new(ty, b, stop)))
     }
 
     fn ptrs(&self, fs: &Fs) -> impl Iterator<Item = &c::bch_extent_ptr> {
@@ -506,12 +535,11 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     fn extent_entries_mut_at(&mut self, fs: &Fs) -> impl Iterator<Item = (EntryPos, ExtentEntryMut<'_>)>
     where Self: BkeyVMut
     {
-        let val = self.as_sc().val_bytes().as_ptr() as usize;
         let range = <Self::V as PtrsBkey>::entry_range(self.as_sc());
+        let start = range.start;
         let b = self.as_s().into_val_bytes_mut().get_mut(range).unwrap_or_default();
-        EntriesMut { sizes: EntrySizes::of(fs), b }.map(move |(ty, b, stop)| {
-            (EntryPos((b.as_ptr() as usize - val) / 8), ExtentEntryMut::new(ty, b, stop))
-        })
+        EntriesMut::new(EntrySizes::of(fs), b).with_offsets()
+            .map(move |(at, (ty, b, stop))| (EntryPos((start + at) / 8), ExtentEntryMut::new(ty, b, stop)))
     }
 
     fn ptrs_mut(&mut self, fs: &Fs) -> impl Iterator<Item = &mut c::bch_extent_ptr>
@@ -1107,21 +1135,18 @@ mod tests {
     /// The type of each entry in @words, and where it is, in u64s: walked by
     /// @table, as a filesystem's.
     fn walk(table: &[u8], mut words: std::vec::Vec<u64>) -> std::vec::Vec<(u32, usize)> {
-        let start = words.as_ptr() as usize;
-        let at = |p: *const u8| (p as usize - start) / 8;
-        Entries { sizes: sizes(table), b: bytes(&mut words) }
-            .map(|(ty, b, stop)| ExtentEntry::new(ty, b, stop))
-            .map(|e| match e {
-                ExtentEntry::ptr(a)        => (0, at(a as *const _ as _)),
-                ExtentEntry::crc32(a)      => (1, at(a as *const _ as _)),
-                ExtentEntry::crc64(a)      => (2, at(a as *const _ as _)),
-                ExtentEntry::crc128(a)     => (3, at(a as *const _ as _)),
-                ExtentEntry::stripe_ptr(a) => (4, at(a as *const _ as _)),
-                ExtentEntry::Unknown { bytes, .. } => (UNKNOWN, at(bytes.as_ptr())),
-                ExtentEntry::Invalid { bytes, .. } => (INVALID, at(bytes.as_ptr())),
-                ExtentEntry::PastEnd { bytes, .. } => (PAST_END, at(bytes.as_ptr())),
+        Entries::new(sizes(table), bytes(&mut words)).with_offsets()
+            .map(|(at, (ty, b, stop))| (match ExtentEntry::new(ty, b, stop) {
+                ExtentEntry::ptr(_)          => 0,
+                ExtentEntry::crc32(_)        => 1,
+                ExtentEntry::crc64(_)        => 2,
+                ExtentEntry::crc128(_)       => 3,
+                ExtentEntry::stripe_ptr(_)   => 4,
+                ExtentEntry::Unknown { .. }  => UNKNOWN,
+                ExtentEntry::Invalid { .. }  => INVALID,
+                ExtentEntry::PastEnd { .. }  => PAST_END,
                 _ => panic!("an entry type the test doesn't use"),
-            })
+            }, at / 8))
             .collect()
     }
 
