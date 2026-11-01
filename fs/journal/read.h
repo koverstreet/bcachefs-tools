@@ -7,7 +7,6 @@
 #include "util/darray.h"
 
 void bch2_journal_pos_from_member_info_set(struct bch_fs *);
-void bch2_journal_pos_from_member_info_resume(struct bch_fs *);
 
 /* The journal scrub runs after an unclean shutdown, or always if asked to */
 static inline bool bch2_journal_scrub_will_run(struct bch_fs *c)
@@ -71,8 +70,5 @@ static inline struct nonce journal_nonce(const struct jset *jset)
 
 #include "journal/read_gen.h"
 
-void bch2_journal_seq_datetime_to_text(struct printbuf *, struct bch_fs *, u64);
-int bch2_journal_reread_for_rewind(struct bch_fs *);
-int bch2_journal_read(struct bch_fs *, struct journal_start_info *);
 
 #endif /* _BCACHEFS_JOURNAL_READ_H */

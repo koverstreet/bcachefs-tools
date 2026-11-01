@@ -78,9 +78,14 @@ c_extern! {
     pub fn bch2_gc_gens(c: *mut Fs) -> c_int;
     pub fn bch2_gc_gens_async(c: *mut Fs);
     pub fn bch2_fs_btree_gc_init_early(c: *mut Fs);
+    pub fn bch2_presplit_shard_boundaries(c: *mut Fs) -> c_int;
 }
 
 impl Fs {
+    pub fn presplit_shard_boundaries(&self) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { bch2_presplit_shard_boundaries(self.as_ptr()) })
+    }
+
     /// Recalculate each bucket's oldest gen, so gens can wrap.
     pub fn gc_gens(&self) -> Result<(), BchError> {
         ret_to_result_void(unsafe { bch2_gc_gens(self.as_ptr()) })

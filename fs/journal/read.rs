@@ -22,6 +22,10 @@ c_extern! {
                                      j: *mut c::journal_replay);
     pub fn bch2_journal_entry_missing_range(c: *mut Fs, start: u64,
                                             end: u64) -> c::u64_range;
+    pub fn bch2_journal_read(c: *mut Fs, info: *mut c::journal_start_info) -> c_int;
+    pub fn bch2_journal_reread_for_rewind(c: *mut Fs) -> c_int;
+    pub fn bch2_journal_pos_from_member_info_resume(c: *mut Fs);
+    pub fn bch2_journal_seq_datetime_to_text(out: *mut Printbuf, c: *mut Fs, seq: u64);
 }
 
 #[path = "entries.rs"] pub mod entries;
@@ -31,9 +35,10 @@ c_extern! {
 use crate::c;
 use crate::util::Printbuf;
 use crate::data::checksum::{csum_vstruct, BCH_NONCE_JOURNAL};
-use crate::errcode::BchError;
+use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::types::Le32;
+use core::ffi::c_int;
 use crate::util::vstructs::{Head, Unvalidated, Validated};
 
 #[allow(non_camel_case_types)]
@@ -93,6 +98,24 @@ impl c::journal_replay {
 }
 
 impl Fs {
+    pub fn journal_read(&self) -> Result<c::journal_start_info, BchError> {
+        let mut info = c::journal_start_info::default();
+        ret_to_result_void(unsafe { bch2_journal_read(self.as_ptr(), &mut info) })?;
+        Ok(info)
+    }
+
+    pub fn journal_reread_for_rewind(&self) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { bch2_journal_reread_for_rewind(self.as_ptr()) })
+    }
+
+    pub fn journal_pos_from_member_info_resume(&self) {
+        unsafe { bch2_journal_pos_from_member_info_resume(self.as_ptr()) }
+    }
+
+    pub fn journal_seq_datetime_to_text(&self, out: &mut Printbuf, seq: u64) {
+        unsafe { bch2_journal_seq_datetime_to_text(out.as_raw(), self.as_ptr(), seq) }
+    }
+
     /* The journal scrub runs after an unclean shutdown, or always if asked to */
     pub fn journal_scrub_will_run(&self) -> bool {
         let opt = u32::from(self.opts.scrub_recent_journal_entries.get());

@@ -115,6 +115,7 @@ c_extern! {
     pub fn bch2_btree_reserve_cache_to_text(out: *mut Printbuf, c: *mut Fs);
     pub fn bch2_async_btree_op(c: *mut Fs, b: *mut c::BtreeNode, op: c::async_btree_op);
     pub fn bch2_btree_root_alloc_fake(c: *mut Fs, btree: Btree, level: c_uint);
+    pub fn bch2_async_btree_node_rewrites_flush(c: *mut Fs);
 }
 
 impl Fs {
@@ -124,6 +125,10 @@ impl Fs {
 
     pub fn btree_root_alloc_fake(&self, btree: Btree, level: u32) {
         unsafe { bch2_btree_root_alloc_fake(self.as_ptr(), btree, level) }
+    }
+
+    pub fn async_btree_node_rewrites_flush(&self) {
+        unsafe { bch2_async_btree_node_rewrites_flush(self.as_ptr()) }
     }
 
     /// Waits for the interior updates in flight to finish - with no btree

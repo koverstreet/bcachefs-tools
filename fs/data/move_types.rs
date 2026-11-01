@@ -4,6 +4,7 @@
 
 use crate::fs::Fs;
 use crate::cstructs::c;
+use crate::errcode::{ret_to_result_void, BchError};
 use crate::types::{DArray, c_default};
 use crate::util::projections::Volatile;
 use core::ffi::{c_int, c_uint};
@@ -104,4 +105,15 @@ c_extern! {
     pub fn bch2_scrub_journal_do_repairs(c: *mut Fs) -> c_int;
     pub fn bch2_fs_move_exit(c: *mut Fs);
     pub fn bch2_fs_move_init(c: *mut Fs);
+    pub fn bch2_scrub_journal(c: *mut Fs, rewind_seq: *mut u64) -> c_int;
+}
+
+impl Fs {
+    /// The seq to rewind the journal to, if the scrub found the device
+    /// didn't honor flush/FUA: 0 if not.
+    pub fn scrub_journal(&self) -> Result<u64, BchError> {
+        let mut rewind_seq = 0;
+        ret_to_result_void(unsafe { bch2_scrub_journal(self.as_ptr(), &mut rewind_seq) })?;
+        Ok(rewind_seq)
+    }
 }

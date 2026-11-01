@@ -47,6 +47,7 @@ c_extern! {
     pub fn bch2_journal_debug_to_text(out: *mut Printbuf, j: *mut c::journal);
     pub fn bch2_journal_halt(j: *mut c::journal);
     pub fn bch2_journal_halt_locked(j: *mut c::journal);
+    pub fn bch2_journal_add_rewind_range(c: *mut Fs, start: u64, end: u64) -> c_int;
 }
 
 impl c::journal {
@@ -73,6 +74,10 @@ impl ToText for c::journal {
 }
 
 impl Fs {
+    pub fn journal_add_rewind_range(&self, start: u64, end: u64) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { bch2_journal_add_rewind_range(self.as_ptr(), start, end) })
+    }
+
     /// Write a journal entry with nothing in it but metadata, and wait for
     /// it to be flushed.
     pub fn journal_meta(&self) -> Result<(), BchError> {

@@ -9,7 +9,6 @@ int bch2_fs_journal_alloc(struct bch_fs *);
 void bch2_dev_journal_stop(struct journal *, struct bch_dev *);
 
 void bch2_fs_journal_stop(struct journal *);
-int bch2_fs_journal_start(struct journal *, struct journal_start_info);
 
 void bch2_dev_journal_exit(struct bch_dev *);
 void bch2_dev_journal_init_early(struct bch_dev *);

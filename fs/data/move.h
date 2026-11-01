@@ -16,7 +16,6 @@
 
 void bch2_scrub_journal_queue(struct bch_fs *, enum btree_id, unsigned,
 			      struct bkey_i *, unsigned, int);
-int bch2_scrub_journal(struct bch_fs *, u64 *);
 int bch2_scrub_journal_do_repairs(struct bch_fs *);
 
 void bch2_move_stats_init(struct bch_move_stats *, const char *);
