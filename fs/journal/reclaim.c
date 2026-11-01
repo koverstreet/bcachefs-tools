@@ -97,10 +97,13 @@ void bch2_journal_set_watermark(struct journal *j)
 
 	watermark = max(watermark, j->watermark_open_buckets);
 
-	if (track_event_change(&c->times[BCH_TIME_blocked_journal_low_on_space], low_on_space) |
-	    track_event_change(&c->times[BCH_TIME_blocked_journal_low_on_pin], low_on_pin) |
-	    track_event_change(&c->times[BCH_TIME_blocked_journal_low_on_open_buckets], j->watermark_open_buckets > 0) |
-	    track_event_change(&c->times[BCH_TIME_blocked_write_buffer_full], low_on_wb))
+	bool changed = false;
+	changed |= track_event_change(&c->times[BCH_TIME_blocked_journal_low_on_space], low_on_space);
+	changed |= track_event_change(&c->times[BCH_TIME_blocked_journal_low_on_pin], low_on_pin);
+	changed |= track_event_change(&c->times[BCH_TIME_blocked_journal_low_on_open_buckets], j->watermark_open_buckets > 0);
+	changed |= track_event_change(&c->times[BCH_TIME_blocked_write_buffer_full], low_on_wb);
+
+	if (changed)
 		event_inc_trace(c, journal_full, buf, ({
 			guard(printbuf_atomic)(&buf);
 			prt_printf(&buf, "low_on_space %u\n",	low_on_space);
