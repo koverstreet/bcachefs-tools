@@ -377,15 +377,11 @@ bool bch2_bkey_transform(const struct bkey_format *,
 			 const struct bkey_format *,
 			 const struct bkey_packed *);
 
-void __bch2_bkey_unpack_key_b(const struct btree *, struct bkey *,
-			      const struct bkey_packed *);
 void bch2_compute_bkey_unpack_consts(struct btree *);
 
 #ifndef HAVE_BCACHEFS_COMPILED_UNPACK
 struct bpos __bkey_unpack_pos(const struct bkey_format *,
 			      const struct bkey_packed *);
-struct bpos __bkey_unpack_pos_b(const struct btree *,
-				const struct bkey_packed *);
 #endif
 
 bool bch2_bkey_pack_key(struct bkey_packed *, const struct bkey *,

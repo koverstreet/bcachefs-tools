@@ -43,6 +43,7 @@
 //! weakens the state at once. What's per kind is at a value's definition:
 //! #[whole(bkey)], #[grown(.., bkey)], #[derive(SizedVal)].
 
+use super::BkeyP;
 use crate::btree::iter::{BtreeIter, TransBkey};
 use crate::c;
 use crate::util::projections::Floored;
@@ -273,13 +274,13 @@ impl AsMut<BkeyI> for BkeyI {
     }
 }
 
-impl<V: ?Sized + InFamily<AllTypes> + BkeyVal<State: Implies<Validated>>> AsRef<BkeyI> for BkeyI<V> {
+impl<V: ?Sized + InFamily<AllTypes> + ValidatedVal> AsRef<BkeyI> for BkeyI<V> {
     fn as_ref(&self) -> &BkeyI {
         self.into()
     }
 }
 
-impl<V: ?Sized + InFamily<AllTypes> + BkeyVal<State: Implies<Validated>>> AsMut<BkeyI> for BkeyI<V> {
+impl<V: ?Sized + InFamily<AllTypes> + ValidatedVal> AsMut<BkeyI> for BkeyI<V> {
     fn as_mut(&mut self) -> &mut BkeyI {
         self.into()
     }
@@ -477,6 +478,10 @@ impl Implies<Validated> for Validated {}
 impl Implies<Unvalidated> for Validated {}
 impl Implies<Unvalidated> for Unvalidated {}
 
+pub trait ValidatedVal: BkeyVal<State: Implies<Validated>> {}
+
+impl<T: ?Sized + BkeyVal<State: Implies<Validated>>> ValidatedVal for T {}
+
 pub trait BkeyTag {
     const TYPE: c::bch_bkey_type;
 
@@ -498,7 +503,7 @@ pub trait BkeyTyped: BkeyVal {
 /// padding aside, which may hold anything: val_copy_pad() copies the key's
 /// bytes over a zeroed one.
 pub unsafe trait BkeyWhole: Sized + Default + BkeyTag + BkeyFamily<Validated: ArmRef>
-    + InFamily<AllTypes> + BkeyVal<State: Implies<Validated>>
+    + InFamily<AllTypes> + ValidatedVal
 {
     /// @k's value, if it's one, zero padded: it may predate fields Self has,
     /// which a reference would read past its end for.
@@ -542,7 +547,7 @@ pub unsafe trait SizedVal: Sized + 'static {}
 // SAFETY: SizedVal's
 unsafe impl<T> BkeyWhole for T
     where T: SizedVal + Default + BkeyTag + BkeyFamily<Validated: ArmRef> + InFamily<AllTypes>
-           + BkeyVal<State: Implies<Validated>>
+           + ValidatedVal
 {}
 
 // A value is at the u64 after its key's header, so it's aligned.
@@ -829,6 +834,11 @@ macro_rules! bkey_family_conv {
             ['a]      [&'a BkeyI<]               => [&'a BkeyI<]:   |k| &*cast_unsized(k.as_ffi());
             ['a]      [&'a mut BkeyI<]           => [&'a mut BkeyI<]:
                 |k| &mut *cast_unsized_mut(k.as_ffi_mut());
+            ['a]      [&'a BkeyP<]               => [&'a BkeyP<]:   |k| k.cast();
+            ['a]      [&'a mut BkeyP<]           => [&'a mut BkeyP<]: |k| k.cast_mut();
+            ['a]      [&'a BkeyI<]               => [&'a BkeyP<]:   |k| <&BkeyP<V>>::from(k).cast();
+            ['a]      [&'a mut BkeyI<]           => [&'a mut BkeyP<]:
+                |k| <&mut BkeyP<V>>::from(k).cast_mut();
             ['a, 't]  [TransBkey<'a, 't,]        => [TransBkey<'a, 't,]: |k| k.cast();
             ['a]      [&'a BkeyI<]               => [BkeySC<'a,]:   |k| BkeySC::<V>::from(k).cast();
             ['a, 'b]  [&'a BkeyS<'b,]            => [BkeySC<'a,]:   |k| BkeySC::<V>::from(k).cast();

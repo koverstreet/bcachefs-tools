@@ -251,4 +251,7 @@ c_extern! {
     pub fn bch2_bpos_swab(p: *mut Bpos);
     pub fn __bch2_bkey_unpack_key(format: *const cs::bkey_format, out: *mut cs::bkey,
                                   in_: *const cs::bkey_packed);
+    pub fn __bch2_bkey_unpack_key_b(b: *const cs::BtreeNode, out: *mut cs::bkey,
+                                    in_: *const cs::bkey_packed);
+    pub fn __bkey_unpack_pos_b(b: *const cs::BtreeNode, in_: *const cs::bkey_packed) -> cs::Bpos;
 }
