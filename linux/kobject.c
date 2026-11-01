@@ -28,15 +28,19 @@ int kobject_add(struct kobject *kobj, struct kobject *parent,
 	kobj->name = vmprintf(fmt, args);
 	va_end(args);
 
-	if (kobj->ktype->default_groups &&
-	    kobj->ktype->default_groups[0] &&
-	    kobj->ktype->default_groups[0]->attrs) {
-		struct attribute **attr = kobj->ktype->default_groups[0]->attrs;
+	const struct attribute_group **groups = kobj->ktype->default_groups;
+	for (; groups && *groups; groups++) {
+		const struct attribute_group *g = *groups;
 
-		while (*attr) {
-			darray_push(&kobj->files, *attr);
-			attr++;
+		if (g->name) {
+			darray_push(&kobj->groups, g);
+			continue;
 		}
+
+		for (struct attribute **attr = g->attrs; attr && *attr; attr++)
+			darray_push(&kobj->files, *attr);
+		for (const struct bin_attribute *const *attr = g->bin_attrs; attr && *attr; attr++)
+			darray_push(&kobj->bin_files, *attr);
 	}
 
 	scoped_guard(mutex, &kobj_lock) {
@@ -93,6 +97,7 @@ static void kobject_cleanup(struct kobject *kobj)
 
 	darray_exit(&kobj->files);
 	darray_exit(&kobj->bin_files);
+	darray_exit(&kobj->groups);
 	darray_exit(&kobj->subdirs);
 
 	if (t && t->release)
@@ -143,10 +148,17 @@ static bool str_end_eq(const char *s1, const char *s2, const char *s2_end)
 		!memcmp(s1, s2, s2_end - s2);
 }
 
+/*
+ * The file at @path, its directory's kobject in @_dir - and in @_grp, the named
+ * group it's in, a directory of that kobject's; NULL, and the directory, if
+ * @path is one.
+ */
 struct attribute *path_lookup(const char *path, struct kobject **_dir,
-			     const struct bin_attribute **_bin_attr)
+			      const struct attribute_group **_grp,
+			      const struct bin_attribute **_bin_attr)
 {
 	struct kobject *dir = root_kobj;
+	const struct attribute_group *grp = NULL;
 	if (!dir)
 		return ERR_PTR(-ENOENT);
 
@@ -155,6 +167,7 @@ struct attribute *path_lookup(const char *path, struct kobject **_dir,
 
 	while (true) {
 		*_dir = dir;
+		*_grp = grp;
 
 		while (*path == '/')
 			path++;
@@ -163,7 +176,18 @@ struct attribute *path_lookup(const char *path, struct kobject **_dir,
 
 		const char *end = strchrnul(path, '/');
 
-		if (!*end) {
+		if (!*end && grp) {
+			for (struct attribute **attr = grp->attrs; attr && *attr; attr++)
+				if (str_end_eq((*attr)->name, path, end))
+					return *attr;
+
+			for (const struct bin_attribute *const *battr = grp->bin_attrs; battr && *battr; battr++)
+				if (str_end_eq((*battr)->attr.name, path, end)) {
+					if (_bin_attr)
+						*_bin_attr = *battr;
+					return (struct attribute *)&(*battr)->attr;
+				}
+		} else if (!*end) {
 			struct attribute **attr = (struct attribute **)
 				darray_find_p(dir->files, i, str_end_eq((*i)->name, path, end));
 			if (attr)
@@ -176,6 +200,17 @@ struct attribute *path_lookup(const char *path, struct kobject **_dir,
 					*_bin_attr = *battr;
 				return (struct attribute *)&(*battr)->attr;
 			}
+		}
+
+		if (grp)
+			return ERR_PTR(-ENOENT);
+
+		const struct attribute_group **g =
+			darray_find_p(dir->groups, i, str_end_eq((*i)->name, path, end));
+		if (g) {
+			grp = *g;
+			path = end;
+			continue;
 		}
 
 		struct kobject **child =
@@ -202,8 +237,9 @@ int sysfs_read_or_html_dirlist(const char *path, struct printbuf *out)
 		return debugfs_read_or_html_dirlist(path + 5, out);
 
 	struct kobject *dir;
+	const struct attribute_group *grp;
 	const struct bin_attribute *bin_attr;
-	struct attribute *attr = errptr_try(path_lookup(path, &dir, &bin_attr));
+	struct attribute *attr = errptr_try(path_lookup(path, &dir, &grp, &bin_attr));
 	if (bin_attr) {
 		loff_t off = 0;
 		while (true) {
@@ -221,10 +257,29 @@ int sysfs_read_or_html_dirlist(const char *path, struct printbuf *out)
 			printbuf_nul_terminate(out);
 		}
 		return 0;
+	} else if (!attr && grp) {
+		prt_str(out, "<html>\n");
+
+		prt_printf(out, "<p> %s </p>", path);
+
+		size_t nr = 0;
+		for (struct attribute **i = grp->attrs; i && *i; i++, nr++)
+			prt_printf(out, "<p> <a href=%s/%s>%s</a></p>\n", path, (*i)->name, (*i)->name);
+
+		for (const struct bin_attribute *const *i = grp->bin_attrs; i && *i; i++, nr++)
+			prt_printf(out, "<p> <a href=%s/%s>%s</a></p>\n", path, (*i)->attr.name, (*i)->attr.name);
+
+		prt_printf(out, "<p> %zu files </p>\n", nr);
+
+		prt_str(out, "</html>\n");
+		return 0;
 	} else if (!attr) {
 		prt_str(out, "<html>\n");
 
 		prt_printf(out, "<p> %s </p>", path);
+
+		darray_for_each(dir->groups, i)
+			prt_printf(out, "<p> <a href=%s/%s>%s/</a></p>\n", path, (*i)->name, (*i)->name);
 
 		darray_for_each(dir->subdirs, i)
 			prt_printf(out, "<p> <a href=%s/%s>%s/</a></p>\n", path, (*i)->name, (*i)->name);
@@ -232,7 +287,7 @@ int sysfs_read_or_html_dirlist(const char *path, struct printbuf *out)
 		if (dir == root_kobj)
 			prt_printf(out, "<p> <a href=debug>debug/</a></p>\n");
 
-		prt_printf(out, "<p> %zu subdirs </p>\n", dir->subdirs.nr);
+		prt_printf(out, "<p> %zu subdirs </p>\n", dir->groups.nr + dir->subdirs.nr);
 
 		darray_for_each(dir->files, i)
 			prt_printf(out, "<p> <a href=%s/%s>%s</a></p>\n", path, (*i)->name, (*i)->name);
@@ -262,8 +317,9 @@ int sysfs_write(const char *path, const char *buf, size_t len)
 	guard(mutex)(&kobj_lock);
 
 	struct kobject *dir;
+	const struct attribute_group *grp;
 	const struct bin_attribute *bin_attr;
-	struct attribute *attr = errptr_try(path_lookup(path, &dir, &bin_attr));
+	struct attribute *attr = errptr_try(path_lookup(path, &dir, &grp, &bin_attr));
 	if (bin_attr) {
 		if (!bin_attr->write)
 			return -EACCES;

@@ -58,6 +58,8 @@ struct kobject {
 	bool			uevent_suppress:1;
 
 	DARRAY(struct kobject *) subdirs;
+	/* named attribute groups: subdirs without kobjects of their own */
+	DARRAY(const struct attribute_group *) groups;
 	DARRAY(const struct attribute *) files;
 	DARRAY(const struct bin_attribute *) bin_files;
 };

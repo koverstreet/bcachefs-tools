@@ -11,8 +11,9 @@
 //! list entry has a ListAttrs instead, and one whose files are something
 //! else's attributes - options' - overrides Dir::show() and store().
 //!
-//! C has the files as `struct attribute *foo_files[]` (Files) and the ops as
-//! a `struct sysfs_ops` (ops()), for init's kobj_types.
+//! The files are `struct attribute *foo_files[]` to C (Files), in attribute
+//! groups (kobject.rs), and the ops a `struct sysfs_ops` (ops()): a named
+//! group's files are its kobject's, so one Dir is all of them.
 //!
 //! A show writes to a Printbuf, which goes to sysfs's page with a trailing
 //! newline, cut at PAGE_SIZE - 1 - ENOMEM if the printbuf couldn't allocate.
@@ -131,17 +132,38 @@ impl<const N: usize> ListAttrs<N> {
 impl<const N: usize> Files<N> {
     /// A ListAttrs' files - M of them, N = M + 1.
     pub const fn list<const M: usize>(attrs: &'static ListAttrs<M>) -> Self {
-        assert!(M + 1 == N);
+        Self::with_list::<(), M>(&[], attrs, &[true; M])
+    }
 
+    /// @attrs' files, then those of @list's entries that @which says: as many
+    /// as there are, plus one.
+    pub const fn with_list<T, const M: usize>(attrs: &'static [Attr<T>], list: &'static ListAttrs<M>,
+                                              which: &[bool; M]) -> Self {
         let mut files = [core::ptr::null(); N];
+        let mut n = 0;
+        while n < attrs.len() {
+            files[n] = &raw const attrs[n].attr;
+            n += 1;
+        }
         let mut i = 0;
         while i < M {
-            files[i] = &raw const attrs.0[i];
+            if which[i] {
+                files[n] = &raw const list.0[i];
+                n += 1;
+            }
             i += 1;
         }
+        assert!(n + 1 == N);
         Files(files)
     }
+
+    /// As a group has them.
+    pub const fn as_ptr(&'static self) -> *mut *mut c::attribute {
+        self.0.as_ptr().cast_mut().cast()
+    }
 }
+
+unsafe impl<const N: usize> Sync for Files<N> {}
 
 /// A directory: the kobject it is, what it asks of every store, and how its
 /// files read and write - by default, as the Attr<Obj>s they are.

@@ -28,6 +28,7 @@ pub mod inline_vec;
 pub mod ioctl;
 pub mod jump_label;
 pub mod kernel;
+pub mod kobject;
 pub mod kthread;
 pub mod late;
 pub mod list;

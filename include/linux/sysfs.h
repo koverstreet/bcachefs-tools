@@ -12,7 +12,9 @@ struct attribute {
 };
 
 struct attribute_group {
-	struct attribute	**attrs;
+	const char			*name;
+	struct attribute		**attrs;
+	const struct bin_attribute	*const *bin_attrs;
 };
 
 struct bin_attribute {
