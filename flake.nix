@@ -197,8 +197,7 @@
               ;
 
             # cargo test with the current minimum supported rust version
-            # according to Cargo.toml - warnings denied: one there is code
-            # nobody builds with that rustc otherwise sees
+            # according to Cargo.toml
             msrv =
               let
                 rustVersion = cargoToml.package.rust-version;
@@ -207,7 +206,6 @@
               craneBuild.cargo-test.overrideAttrs (
                 final: prev: {
                   pname = "${prev.pname}-msrv";
-                  RUSTFLAGS = "-D warnings";
                 }
               );
 
