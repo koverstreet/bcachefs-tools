@@ -19,4 +19,11 @@ c_extern! {
     pub fn bch2_fs_journal_init_early(j: *mut c::journal);
     pub fn bch2_fs_journal_init(j: *mut c::journal) -> c_int;
     pub fn bch2_fs_journal_init_rw(j: *mut c::journal) -> c_int;
+    pub fn bch2_journal_set_replay_done(j: *mut c::journal);
+}
+
+impl c::journal {
+    pub fn set_replay_done(&self) {
+        unsafe { bch2_journal_set_replay_done(core::ptr::from_ref(self).cast_mut()) }
+    }
 }

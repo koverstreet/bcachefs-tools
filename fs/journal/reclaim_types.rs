@@ -29,12 +29,17 @@ c_extern! {
     pub fn bch2_journal_space_available(j: *mut c::journal);
     pub fn bch2_journal_reclaim_start(j: *mut c::journal) -> c_int;
     pub fn bch2_journal_reclaim_stop(j: *mut c::journal);
+    pub fn bch2_journal_replay_pins_put(j: *mut c::journal, seq: u64);
 }
 
 impl c::journal {
     /// The pins up to @seq flushed: whether any were.
     pub fn flush_pins(&self, seq: u64) -> bool {
         unsafe { bch2_journal_flush_pins(self.as_ptr(), seq) }
+    }
+
+    pub fn replay_pins_put(&self, seq: u64) {
+        unsafe { bch2_journal_replay_pins_put(self.as_ptr(), seq) }
     }
 
     /// The lowest watermark it takes reservations at, read without the
