@@ -155,7 +155,6 @@ static inline int __must_check bch2_trans_update_buffered(struct btree_trans *tr
 }
 
 __printf(2, 3) int bch2_fs_log_msg(struct bch_fs *, const char *, ...);
-__printf(2, 3) int bch2_journal_log_msg(struct bch_fs *, const char *, ...);
 
 #define trans_for_each_update(_trans, _i)				\
 	for (struct btree_insert_entry *_i = (_trans)->updates;		\

@@ -7,11 +7,11 @@
 use crate::btree::bkey::BkeyI;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
-use crate::errcode::{bch_errcode, errptr_to_result, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, errptr_to_result, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::journal::entries::EntryWriter;
 use crate::util::ffi::Opaque;
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::mem::size_of;
 use core::ops::Range;
@@ -56,6 +56,8 @@ c_enum! {
 c_extern! {
     #[c_printf(2, 3)]
     pub fn bch2_fs_log_msg(c: *mut Fs, fmt: *const core::ffi::c_char, ...) -> c_int;
+    #[c_printf(2, 3)]
+    pub fn bch2_journal_log_msg(c: *mut Fs, fmt: *const core::ffi::c_char, ...) -> c_int;
     pub fn __bch2_trans_subbuf_alloc(trans: *mut c::btree_trans, buf: *mut c::btree_trans_subbuf, u64s: c_uint,
                                      ip: core::ffi::c_ulong) -> *mut core::ffi::c_void;
     pub fn rust_bch2_trans_update_buffered(trans: *mut c::btree_trans, btree: Btree, k: *mut c::bkey_i) -> c_int;
@@ -121,6 +123,18 @@ pub fn extent_whiteout_type(fs: &Fs, btree: Btree, k: &c::bkey) -> c::bch_bkey_t
 #[c_export]
 pub fn bch2_extent_whiteout_type(c: &Opaque<Fs>, btree: Btree, k: &c::bkey) -> c::bch_bkey_type {
     extent_whiteout_type(Fs::from_c(c), btree, k)
+}
+
+impl Fs {
+    /*
+     * Use for logging messages during recovery to enable reserved space and avoid
+     * blocking.
+     */
+    pub fn journal_log_msg(&self, msg: &dyn ToText) -> Result<(), BchError> {
+        let mut buf = Printbuf::new();
+        msg.to_text(&mut buf);
+        ret_to_result_void(unsafe { bch2_journal_log_msg(self.as_ptr(), c"%s".as_ptr().cast(), buf.as_c_str().as_ptr()) })
+    }
 }
 
 // ── A transaction's updates, and log entries with its commit ────────────
@@ -210,6 +224,10 @@ impl TransAttempt<'_, '_> {
     pub fn log_bkey(&self, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
         self.journal_entry_add(c::bch_jset_entry_type::BCH_JSET_ENTRY_log_bkey, btree.0 as u8, level as u8,
                                k.as_bytes())
+    }
+
+    pub fn set_journal_seq_to_pin(&self, seq: u64) {
+        unsafe { (*self.raw()).journal_seq_to_pin = seq }
     }
 }
 
