@@ -269,6 +269,12 @@ pub unsafe trait BioOwner {
         }
     }
 
+    // TODO: once submitted, a bio's bi_iter is undefined - the block layer
+    // advances and splits it - till its owner sets it again, and nothing
+    // stops a read of it in between. A position after the IO is one saved
+    // before it, or the owner's whole table; an iter is never walked back.
+    // A typestate parameter on Bio, the owners generic over it, would make
+    // it static - if one comes for something else.
     fn submit_wait(&mut self) -> Result<(), BchError> {
         // SAFETY: the owner's bio, held for the IO
         ret_to_result_void(unsafe { c::submit_bio_wait(self.bio_mut().raw_mut()) })
