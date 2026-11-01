@@ -394,8 +394,7 @@ fn pread_raw(file: &File, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_ra
     if user.write_at(offset_of!(c::bch_ioctl_pread_raw, errors), &report.errors).is_err() {
         ret = Err(c::EFAULT.into());
     }
-    // SAFETY: the report's, ours again
-    let msg = unsafe { Printbuf::borrow_raw(&mut report.msg) };
+    let msg = &mut report.msg;
     // The message's copy fails the call only if the read succeeded but read
     // nothing, as C had it
     if let (Err(e), Ok(0)) = (copy_err_msg(&a.err, msg, ret.map(|_| ())), &ret) {

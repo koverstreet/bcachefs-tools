@@ -164,15 +164,6 @@ impl Printbuf {
         Printbuf { buf, size: size as u32, ..Self::empty() }
     }
 
-    /// A C caller's printbuf, to write to - for a to_text C calls. Borrowed:
-    /// it's the caller's to free.
-    ///
-    /// # Safety
-    /// @raw is a valid printbuf nothing else touches for 'a.
-    pub unsafe fn borrow_raw<'a>(raw: *mut Printbuf) -> &'a mut Printbuf {
-        unsafe { &mut *raw }
-    }
-
     pub fn as_str(&self) -> &str {
         if self.buf.is_null() {
             ""

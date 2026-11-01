@@ -113,13 +113,8 @@ impl c::bch_io_failures {
         if self.ec_msg.pos != 0 {
             write!(out, "ec reconstruct:\n");
             let mut out = out.indent(2);
-            out.write_bytes(self.ec_msg_bytes());
+            out.write_bytes(self.ec_msg.as_bytes());
         }
-    }
-
-    fn ec_msg_bytes(&self) -> &[u8] {
-        // SAFETY: a printbuf's first pos bytes, its own
-        unsafe { core::slice::from_raw_parts(self.ec_msg.buf as *const u8, self.ec_msg.pos as usize) }
     }
 }
 

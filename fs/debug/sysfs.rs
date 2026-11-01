@@ -234,7 +234,7 @@ unsafe extern "C" fn trans_stats_json_read(_file: *mut c::file, kobj: *mut c::ko
 
     let _lock = Locked::from_c(&c.btree.trans.stats_json_lock).lock();
     // SAFETY: the buffer is the lock's
-    let out = unsafe { Printbuf::borrow_raw(&raw mut (*c.as_ptr()).btree.trans.stats_json_buf) };
+    let out = unsafe { &mut (*c.as_ptr()).btree.trans.stats_json_buf };
 
     if off == 0 {
         out.reset();
