@@ -2594,7 +2594,7 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&c::bch_devs_mask>, 
     use crate::util::log::LogMsg;
 
     let mut degraded_flags = c::BCH_FORCE_IF_DEGRADED;
-    if fs.opts().degraded() == c::bch_degraded_actions::BCH_DEGRADED_very {
+    if fs.opts().degraded() == c::DegradedAction::very {
         degraded_flags |= c::BCH_FORCE_IF_LOST;
     }
 

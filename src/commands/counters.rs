@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Context, Result};
 use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
-use bch_bindgen::c::bch_degraded_actions;
+use bch_bindgen::c::DegradedAction;
 use bch_bindgen::c::bch_persistent_counters::BCH_COUNTER_NR;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::sb::counters::COUNTERS;
@@ -44,7 +44,7 @@ fn cmd_reset_counters(cli: Cli) -> Result<()> {
     let mut fs_opts = c::bch_opts::default();
     fs_opts.set_nostart(true);
     fs_opts.set_will_not_start(true);
-    fs_opts.set_degraded(bch_degraded_actions::BCH_DEGRADED_very);
+    fs_opts.set_degraded(DegradedAction::very);
 
     let fs = Fs::open(&devs, fs_opts)
         .context("opening filesystem")?;

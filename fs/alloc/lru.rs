@@ -84,13 +84,13 @@ impl LruId {
 
     /// Its type, an unknown id's being read, as lru_type() has it: its
     /// entries' targets are read as buckets.
-    pub fn lru_type(self) -> c::bch_lru_type {
-        use c::bch_lru_type as T;
+    pub fn lru_type(self) -> c::LruType {
+        use c::LruType as T;
 
         match self {
-            Self::Read { .. } | Self::Unknown(_)           => T::BCH_LRU_read,
-            Self::Fragmentation { .. } | Self::FragmentationOld => T::BCH_LRU_fragmentation,
-            Self::Stripes                                  => T::BCH_LRU_stripes,
+            Self::Read { .. } | Self::Unknown(_)           => T::read,
+            Self::Fragmentation { .. } | Self::FragmentationOld => T::fragmentation,
+            Self::Stripes                                  => T::stripes,
         }
     }
 }
@@ -137,7 +137,7 @@ impl LruPos {
     /// The key the entry is for: lru_pos_to_bp().
     pub fn backing(self) -> c::bbpos {
         match self.lru_id().lru_type() {
-            c::bch_lru_type::BCH_LRU_stripes => c::bbpos {
+            c::LruType::stripes => c::bbpos {
                 btree: Btree::stripes,
                 pos:   pos(0, self.target),
             },
@@ -147,16 +147,6 @@ impl LruPos {
             },
         }
     }
-}
-
-/// The bch_lru_type names, by type: bch2_lru_types[].
-macro_rules! lru_type_strs {
-    ($(($n:ident)),* $(,)?) => { [$(stringify!($n)),*] };
-}
-const LRU_TYPE_STRS: [&str; 3] = c::BCH_LRU_TYPES!(lru_type_strs);
-
-fn lru_type_str(t: c::bch_lru_type) -> &'static str {
-    LRU_TYPE_STRS.get(t.0 as usize).copied().unwrap_or("(unknown)")
 }
 
 // ── The key type ─────────────────────────────────────────────────────────
@@ -287,7 +277,7 @@ pub(crate) fn lru_check_set(
         last_flushed.maybe_flush(t, referring_k)?;
 
         if fsck_err!(t, id::alloc_key_to_missing_lru_entry, "missing {} lru entry at pos {}\n{}",
-                     lru_type_str(pos.lru_id().lru_type()), iter.pos(), referring_k.to_text(fs))? {
+                     pos.lru_id().lru_type(), iter.pos(), referring_k.to_text(fs))? {
             lru_mod(t, pos, true)?;
         }
     }
@@ -296,17 +286,17 @@ pub(crate) fn lru_check_set(
 
 /// The time @k says its entry in an lru of type @ty is at - 0, none:
 /// bkey_lru_type_idx().
-fn expected_time(fs: &Fs, ty: c::bch_lru_type, k: BkeySC<'_>) -> u64 {
-    use c::bch_lru_type as T;
+fn expected_time(fs: &Fs, ty: c::LruType, k: BkeySC<'_>) -> u64 {
+    use c::LruType as T;
 
     match ty {
-        T::BCH_LRU_read => alloc_to_v4(k).lru_idx_read(),
-        T::BCH_LRU_fragmentation => {
+        T::read => alloc_to_v4(k).lru_idx_read(),
+        T::fragmentation => {
             let a = alloc_to_v4(k);
             let rcu = read_lock();
             fs.dev_rcu(k.k.p.inode as u32, &rcu).map_or(0, |ca| a.lru_idx_fragmentation(ca))
         }
-        T::BCH_LRU_stripes => k.arm::<c::Stripe>().map_or(0, |s| s.v().lru_pos()),
+        T::stripes => k.arm::<c::Stripe>().map_or(0, |s| s.v().lru_pos()),
         t => unreachable!("lru type {}", t.0),
     }
 }
@@ -343,10 +333,9 @@ fn check_lru_key(
     // fs-wide fragmentation lru after the upgrade.
     let bucket_dev = u64_to_bucket(pos.target).inode as u16;
     let want_id = match ty {
-        c::bch_lru_type::BCH_LRU_read          => bucket_dev,
-        c::bch_lru_type::BCH_LRU_fragmentation => (c::BCH_LRU_BUCKET_FRAGMENTATION_START as u16)
-                                                    .wrapping_add(bucket_dev),
-        _                                      => pos.id,
+        c::LruType::read          => bucket_dev,
+        c::LruType::fragmentation => (c::BCH_LRU_BUCKET_FRAGMENTATION_START as u16).wrapping_add(bucket_dev),
+        _                         => pos.id,
     };
 
     if pos.id != want_id || pos.time != time {
@@ -354,7 +343,7 @@ fn check_lru_key(
 
         if fsck_err!(t, id::lru_entry_bad,
                      "incorrect lru entry: lru {}, expected id {} time {}\n{}\nfor {}",
-                     lru_type_str(ty), want_id, time, lru_k.to_text(fs), k.to_text(fs))? {
+                     ty, want_id, time, lru_k.to_text(fs), k.to_text(fs))? {
             return t.bit_mod_buffered(Btree::lru, lru_iter.pos(), false);
         }
     }

@@ -365,8 +365,8 @@ fn read_key(fs: &Fs, entries: &mut KVVec<Entry>, k: BkeySC<'_>) -> Result<(), Bc
 
     if let Some(r) = replicas_entry(&pos).filter(|_| d.iter().any(|&v| v != 0)) {
         let flags = match fs.opts().degraded() {
-            c::bch_degraded_actions::BCH_DEGRADED_very => c::BCH_FORCE_IF_DEGRADED | c::BCH_FORCE_IF_LOST,
-            c::bch_degraded_actions::BCH_DEGRADED_yes  => c::BCH_FORCE_IF_DEGRADED,
+            c::DegradedAction::very => c::BCH_FORCE_IF_DEGRADED | c::BCH_FORCE_IF_LOST,
+            c::DegradedAction::yes  => c::BCH_FORCE_IF_DEGRADED,
             _ => 0,
         };
 

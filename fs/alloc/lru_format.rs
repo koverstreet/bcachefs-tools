@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::Le64;
-use cstruct_macros::{c_name, c_const, c_enum, c_xmacro, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{c_name, c_const, open_enum, CStruct, Plain, TypeInfo, SizedVal};
 
 #[repr(C, align(8))]
 #[c_name(bch_lru)]
@@ -15,19 +15,12 @@ pub struct Lru {
     pub idx: Le64,
 }
 
-c_xmacro! {
-    BCH_LRU_TYPES(x) {
-        (read),
-        (fragmentation),
-        (stripes),
-    }
-}
-
-c_enum! {
-    #[open]
-    pub enum bch_lru_type: u32 {
-        BCH_LRU_TYPES(n) => concat(BCH_LRU_, n),
-    }
+#[open_enum]
+#[repr(u32)]
+pub enum LruType {
+    read = 0,
+    fragmentation = 1,
+    stripes = 2,
 }
 
 c_const! {

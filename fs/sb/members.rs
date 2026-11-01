@@ -379,7 +379,7 @@ pub unsafe fn bch2_sb_member_get(sb: *mut Head<c::bch_sb>, i: c_int) -> c::bch_m
 
 /// By value, as a member's arrays of them are.
 const MEMBER_ERROR_NAMES: &[&str] = crate::names_by_value!(c::bch_member_error_type);
-const IOPS_NAMES: &[&str] = crate::names_by_value!(c::bch_iops_measurement);
+const IOPS_NAMES: &[&str] = crate::names_by_value!(c::IopsMeasurement);
 
 /// A __nonstring field: NUL terminated only if shorter than the field.
 fn nonstring(b: &[u8]) -> &[u8] {

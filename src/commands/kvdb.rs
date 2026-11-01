@@ -53,7 +53,7 @@ use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::inode;
 use bcachefs_kernel::typeinfo::{self, FieldTarget, StructInfo, TypeInfo};
 use bcachefs_kernel::util::vstructs::Head;
-use bch_bindgen::c::bch_degraded_actions;
+use bch_bindgen::c::DegradedAction;
 use clap::Parser;
 
 use crate::device_scan::OpenedFs;
@@ -1332,7 +1332,7 @@ fn kvdb(cli: Cli) -> Result<()> {
     logging::setup(cli.verbose, cli.colorize);
 
     let mut fs_opts = c::bch_opts::default();
-    fs_opts.set_degraded(bch_degraded_actions::BCH_DEGRADED_very);
+    fs_opts.set_degraded(DegradedAction::very);
     // An injection tool must not consume its own injections: background
     // workers in *this* fs instance would otherwise act on the state under
     // test the moment we go read-write. Snapshot deletion reaps a snapshot

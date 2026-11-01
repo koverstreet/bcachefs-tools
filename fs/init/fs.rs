@@ -774,7 +774,7 @@ impl Fs {
     }
 
     fn may_start(&self, err: &mut Printbuf) -> Result<(), BchError> {
-        use c::bch_degraded_actions as Degraded;
+        use c::DegradedAction as Degraded;
 
         if self.opts().no_version_check.get() != 0 {
             prt!(err, "Cannot start with opts.no_version_check\n");
@@ -782,9 +782,9 @@ impl Fs {
         }
 
         let degraded = self.opts().degraded();
-        let flags = if degraded == Degraded::BCH_DEGRADED_very {
+        let flags = if degraded == Degraded::very {
             c::BCH_FORCE_IF_DEGRADED | c::BCH_FORCE_IF_LOST
-        } else if degraded == Degraded::BCH_DEGRADED_yes {
+        } else if degraded == Degraded::yes {
             c::BCH_FORCE_IF_DEGRADED
         } else {
             let mut missing = false;

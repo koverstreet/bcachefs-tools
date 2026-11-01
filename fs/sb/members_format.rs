@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
 use crate::util::vstructs::{vstruct, Head};
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, unsized_vstruct, CStruct, Plain, TypeInfo};
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, open_enum, unsized_vstruct, CStruct, Plain, TypeInfo};
 
 c_const! {
     /*
@@ -27,21 +27,13 @@ c_const! {
     pub const BCH_MIN_NR_NBUCKETS: u32 = 1 << 9;
 }
 
-c_xmacro! {
-    BCH_IOPS_MEASUREMENTS(x) {
-        (seqread, 0),
-        (seqwrite, 1),
-        (randread, 2),
-        (randwrite, 3),
-    }
-}
-
-c_enum! {
-    #[open]
-    pub enum bch_iops_measurement: u32 {
-        BCH_IOPS_MEASUREMENTS(t, n) => concat(BCH_IOPS_, t) = n,
-        BCH_IOPS_NR,
-    }
+#[open_enum]
+#[repr(u32)]
+pub enum IopsMeasurement {
+    seqread = 0,
+    seqwrite = 1,
+    randread = 2,
+    randwrite = 3,
 }
 
 c_xmacro! {

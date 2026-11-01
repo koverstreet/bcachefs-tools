@@ -74,8 +74,8 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, floored_by_self, vstruct, vstruct_container, Head, FlexArray, Unvalidated};
-use cstruct_macros::{c_name, bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, grown, tagged_union,
-                     unsized_vstruct, whole, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{c_name, bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, grown, open_enum,
+                     tagged_union, unsized_vstruct, whole, CStruct, Plain, TypeInfo, SizedVal};
 #[cfg(__KERNEL__)]
 use cstruct_macros::c_typedef;
 
@@ -1671,21 +1671,13 @@ c_enum! {
     }
 }
 
-c_xmacro! {
-    BCH_DEGRADED_ACTIONS(x) {
-        (ask, 0),
-        (yes, 1),
-        (very, 2),
-        (no, 3),
-    }
-}
-
-c_enum! {
-    #[open]
-    pub enum bch_degraded_actions: u32 {
-        BCH_DEGRADED_ACTIONS(t, n) => concat(BCH_DEGRADED_, t) = n,
-        BCH_DEGRADED_ACTIONS_NR,
-    }
+#[open_enum]
+#[repr(u32)]
+pub enum DegradedAction {
+    ask = 0,
+    yes = 1,
+    very = 2,
+    no = 3,
 }
 
 c_xmacro! {

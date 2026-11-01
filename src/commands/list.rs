@@ -7,7 +7,7 @@ use bcachefs_kernel::btree::iter::BtreeIter;
 use bcachefs_kernel::btree::iter::BtreeIterFlags;
 use bcachefs_kernel::btree::iter::BtreeNodeIter;
 use bcachefs_kernel::fs::Fs;
-use bch_bindgen::c::bch_degraded_actions;
+use bch_bindgen::c::DegradedAction;
 use clap::Parser;
 use std::io::{stdout, IsTerminal};
 
@@ -239,7 +239,7 @@ fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
     fs_opts.set_nochanges(true);
     fs_opts.set_read_only(true);
     fs_opts.set_norecovery(true);
-    fs_opts.set_degraded(bch_degraded_actions::BCH_DEGRADED_very);
+    fs_opts.set_degraded(DegradedAction::very);
     fs_opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue);
 
     if opt.fsck {

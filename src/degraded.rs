@@ -43,7 +43,7 @@ fn sb_opts(sb: &bch_sb_handle) -> bch_opts {
 
 /// What the filesystem says to do about a missing device, unless the caller
 /// said otherwise on the command line.
-fn degraded_action(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> c::bch_degraded_actions {
+fn degraded_action(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> c::DegradedAction {
     if cli_opts.defined(c::bch_opt_id::Opt_degraded) {
         return cli_opts.degraded();
     }
@@ -51,7 +51,7 @@ fn degraded_action(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> c::
     sbs.first()
         .map(|(_, sb)| sb_opts(sb))
         .map(|o| o.degraded_or_default())
-        .unwrap_or(c::bch_degraded_actions::BCH_DEGRADED_ask)
+        .unwrap_or(c::DegradedAction::ask)
 }
 
 /// Which refusal we are answering, and so what is at stake.
@@ -169,7 +169,7 @@ impl Ask {
         let present  = device_scan::present_devices(sbs).len();
 
         if present >= expected
-            || degraded_action(sbs, cli_opts) != c::bch_degraded_actions::BCH_DEGRADED_ask
+            || degraded_action(sbs, cli_opts) != c::DegradedAction::ask
         {
             return None;
         }

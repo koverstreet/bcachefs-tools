@@ -8,7 +8,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use bch_bindgen::fs::FsExt;
 use bch_bindgen::c::{
     self,
-    bch_degraded_actions,
+    DegradedAction,
     BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_METADATA_LOST,
 };
 use bcachefs_kernel::fs::{Fs, OpenFs};
@@ -357,7 +357,7 @@ fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
     let mut opts: c::bch_opts = Default::default();
     opts.set_nostart(true);
     opts.set_will_not_start(true);
-    opts.set_degraded(bch_degraded_actions::BCH_DEGRADED_very);
+    opts.set_degraded(DegradedAction::very);
 
     // Read superblock to get dev_idx
     let sb_handle = bch_bindgen::sb::io::read_super_opts(Path::new(device), opts)

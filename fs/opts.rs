@@ -44,7 +44,7 @@ use crate::util::{HumanReadable, Printbuf};
 use crate::util::sysfs::{parse_human_u64, parse_int};
 use core::ffi::{CStr, c_ulong};
 use crate::cstructs::c::BCH_INODE_OPTS;
-use crate::c::{bch_member, bch_sb_field_ext, BCH_COMPRESSION_OPT_none, BCH_CSUM_OPT_crc32c, BCH_DATA_btree, BCH_DATA_journal, BCH_DATA_user, BCH_DEGRADED_ask, BCH_MEMBER_STATE_rw, BCH_ON_ERROR_fix_safe, BCH_REPLICAS_MAX, BCH_SB_SECTOR, BCH_STR_HASH_OPT_siphash, BCH_VERSION_UPGRADE_compatible, BCH_WRITE_DEGRADED_degraded};
+use crate::c::{bch_member, bch_sb_field_ext, BCH_COMPRESSION_OPT_none, BCH_CSUM_OPT_crc32c, BCH_DATA_btree, BCH_DATA_journal, BCH_DATA_user, BCH_MEMBER_STATE_rw, BCH_ON_ERROR_fix_safe, BCH_REPLICAS_MAX, BCH_SB_SECTOR, BCH_STR_HASH_OPT_siphash, BCH_VERSION_UPGRADE_compatible, BCH_WRITE_DEGRADED_degraded};
 use crate::format::DataType;
 use crate::types::bits_to_longs;
 use cstruct_macros::{CStruct, c_const, c_enum, c_xmacro, Options, TypeInfo};
@@ -338,10 +338,10 @@ pub struct bch_opts {
     pub prjquota: u8,
 
     /// Allow mounting in degraded mode
-    #[opt(str(bch_degraded_actions),
+    #[opt(str(DegradedAction),
           flags = fs | mount,
           sb = bch_sb::degraded_action,
-          default = BCH_DEGRADED_ask)]
+          default = c::DegradedAction::ask.0)]
     pub degraded: u8,
 
     /// Write fewer copies than asked for rather than returning ENOSPC; the default does so only while a device is missing or not read-write
