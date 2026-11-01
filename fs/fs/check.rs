@@ -945,7 +945,7 @@ pub mod ioctl {
             Err(e) => return -e.raw(),
         };
 
-        unsafe { (*fs.as_ptr()).recovery_task = c::get_current() };
+        fs.recovery_task.store(unsafe { c::get_current() }, core::sync::atomic::Ordering::Relaxed);
 
         let mut buf = Printbuf::new();
         let ret = match fs.start() {

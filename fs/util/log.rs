@@ -219,16 +219,14 @@ pub fn print_bytes(fs: &Fs, level: Option<u8>, s: &[u8]) {
         return;
     }
 
-    // SAFETY: C's, written unlocked as C writes it
-    let prev = unsafe { &raw mut (*fs.as_ptr()).prev_loglevel };
     let level = match level {
         Some(l) => {
-            unsafe { *prev = l.into() };
+            fs.prev_loglevel.store(l.into(), Ordering::Relaxed);
             u32::from(l)
         }
-        None => unsafe { *prev },
+        None => fs.prev_loglevel.load(Ordering::Relaxed),
     };
-    let max = match fs.loglevel {
+    let max = match fs.loglevel.load(Ordering::Relaxed) {
         0 if fs.opts().verbose() => 7,
         0 => 6,
         l => l,

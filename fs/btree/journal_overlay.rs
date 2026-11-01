@@ -656,7 +656,7 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
     assert!(!fs.flags.get(f::BCH_FS_scrub_journal));
     /* userspace's current is C's __thread variable, which Rust can't name */
     #[cfg(kernel)]
-    assert!(fs.recovery_task == unsafe { c::get_current() });
+    assert!(fs.recovery_task.load(Relaxed) == unsafe { c::get_current() });
 
     // SAFETY: from the recovery task, before anything runs alongside it, as
     // the asserts say

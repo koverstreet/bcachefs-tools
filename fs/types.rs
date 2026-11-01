@@ -21,7 +21,7 @@ use crate::util::vstructs::Head;
 use crate::types::{GenRadix, RustOnly, bits_to_longs, rust_only};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
-use core::sync::atomic::{AtomicI32, AtomicI64, AtomicU64};
+use core::sync::atomic::{AtomicI32, AtomicI64, AtomicPtr, AtomicU32, AtomicU64};
 use cstruct_macros::{c_name, c_const, c_enum, c_rcu_array, c_xmacro, placed, CStruct, Fieldwise, Init, Late, TypeInfo};
 use pin_init::pin_data;
 use crate::format::Bpos;
@@ -631,13 +631,18 @@ pub struct Fs {
      * still gets its progress in dmesg.
      */
     pub stdio_progress_reader: bool,
-    pub loglevel: c_uint,
-    pub prev_loglevel: c_uint,
+    /// These two and recovery_task: C's plain fields, atomic here, so Rust
+    /// writes them through a shared Fs.
+    #[c("unsigned loglevel")]
+    pub loglevel: AtomicU32,
+    #[c("unsigned prev_loglevel")]
+    pub prev_loglevel: AtomicU32,
     /*
      * Certain operations are only allowed in single threaded mode, during
      * recovery, and we want to assert that this is the case:
      */
-    pub recovery_task: *mut c::task_struct,
+    #[c("struct task_struct *recovery_task")]
+    pub recovery_task: AtomicPtr<c::task_struct>,
 
     /* ro/rw, add/remove/resize devices: */
     #[pin]

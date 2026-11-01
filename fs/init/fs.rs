@@ -449,7 +449,7 @@ impl Fs {
     }
 
     pub fn set_loglevel(&self, level: u32) {
-        unsafe { (*self.as_ptr()).loglevel = level; }
+        self.loglevel.store(level, Relaxed);
     }
 }
 
@@ -480,7 +480,7 @@ impl Fs {
 
         unsafe {
             (*p).stdio = opts.stdio as usize as *mut c::stdio_redirect;
-            (*p).recovery_task = c::bch2_current();
+            (*p).recovery_task.store(c::bch2_current(), Relaxed);
         }
 
         #[cfg(kernel)]
@@ -1101,7 +1101,7 @@ impl Fs {
 
     fn start_to(&self, err: &mut Printbuf) -> Result<(), BchError> {
         let ret = self.bring_up(err);
-        unsafe { (*self.as_ptr()).recovery_task = core::ptr::null_mut() };
+        self.recovery_task.store(core::ptr::null_mut(), Relaxed);
         ret
     }
 
