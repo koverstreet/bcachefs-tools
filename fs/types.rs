@@ -8,6 +8,7 @@ use crate::new_lock;
 use crate::util::alloc::KVVec;
 use crate::util::bitmap::AtomicBitflags;
 use crate::util::kernel::WRITE;
+use crate::util::bio::BioSet;
 use crate::util::late::Late;
 use crate::util::workqueue::{ReffedWork, Workqueue, WqFlags};
 use crate::locking::{Locked, LockedBy, MutexNoio, PercpuRwsemNoio};
@@ -722,6 +723,7 @@ pub struct Fs {
     #[pin]
     pub async_objs: [c::async_obj_list; c::BCH_ASYNC_OBJ_NR as usize],
 
+    #[late]
     pub journal: c::journal,
     pub journal_replay_seq_start: u64,
     /*
@@ -749,6 +751,7 @@ pub struct Fs {
 
     #[pin]
     #[init(c::bch_fs_btree::init())]
+    #[late]
     pub btree: c::bch_fs_btree,
 
     pub gc: c::bch_fs_gc,
@@ -804,8 +807,12 @@ pub struct Fs {
     pub btree_update_wq: Late<Workqueue>,
     pub bio_read: c::bio_set,
     pub bio_read_split: c::bio_set,
-    pub bio_write: c::bio_set,
-    pub replica_set: c::bio_set,
+    #[late(BioSet::new(1, true), ENOMEM_bio_write_init)]
+    #[c("struct bio_set bio_write")]
+    pub bio_write: Late<BioSet<c::bch_write_bio>>,
+    #[late(BioSet::new(4, false), ENOMEM_bio_write_init)]
+    #[c("struct bio_set replica_set")]
+    pub replica_set: Late<BioSet<c::bch_write_bio>>,
     pub bio_bounce_pages_lock: c::mutex,
     /* allocated from through a shared reference: by C and util/bio/pages.rs */
     #[c("mempool_t bio_bounce_bufs")]
@@ -852,6 +859,7 @@ pub struct Fs {
     pub(crate) reflink_gc: rust_only!(crate::data::reflink::ReflinkGc),
 
     #[cfg(not(NO_BCACHEFS_FS))]
+    #[late]
     pub vfs: c::bch_fs_vfs,
     #[cfg(not(NO_BCACHEFS_FS))]
     pub fdm_table: c::fdm_hash,

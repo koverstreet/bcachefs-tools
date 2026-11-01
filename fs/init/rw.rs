@@ -258,10 +258,7 @@ impl StateLockWrite<'_> {
         fs.init_late(self).map_err(|e| fs.err(e))?;
         unsafe {
             ret_to_result(bch2_fs_btree_init_rw(p))?;
-            ret_to_result(c::bch2_fs_io_write_init(p))?;
             ret_to_result(c::bch2_fs_journal_init_rw(&raw mut (*p).journal))?;
-            #[cfg(not(NO_BCACHEFS_FS))]
-            ret_to_result(c::bch2_fs_vfs_init_rw(p))?;
             ret_to_result(c::bch2_journal_reclaim_start(&raw mut (*p).journal))?;
             ret_to_result(bch2_btree_write_buffer_start(p))?;
         }

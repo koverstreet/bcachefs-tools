@@ -3932,13 +3932,8 @@ void bch2_fs_btree_interior_update_exit(struct bch_fs *c)
 	WARN_ON(!list_empty(&c->btree.node_rewrites.list));
 	WARN_ON(!list_empty(&c->btree.node_rewrites.pending));
 
-	if (c->btree.node_rewrites.worker)
-		destroy_workqueue(c->btree.node_rewrites.worker);
 	if (c->btree.node_rewrites.table_init_done)
 		rhashtable_destroy(&c->btree.node_rewrites.table);
-	if (c->btree.interior_updates.worker)
-		destroy_workqueue(c->btree.interior_updates.worker);
-	mempool_exit(&c->btree.interior_updates.pool);
 }
 
 void bch2_fs_btree_interior_update_init_early(struct bch_fs *c)
@@ -3965,25 +3960,6 @@ int bch2_fs_btree_node_rewrites_init(struct bch_fs *c)
 			    &bch_async_btree_rewrite_params))
 		return bch_err_throw(c, ENOMEM_btree_node_rewrites_table_init);
 	c->btree.node_rewrites.table_init_done = true;
-
-	return 0;
-}
-
-int bch2_fs_btree_interior_update_init(struct bch_fs *c)
-{
-	c->btree.interior_updates.worker =
-		alloc_workqueue("btree_update", WQ_UNBOUND|WQ_MEM_RECLAIM, 8);
-	if (!c->btree.interior_updates.worker)
-		return bch_err_throw(c, ENOMEM_btree_interior_update_worker_init);
-
-	c->btree.node_rewrites.worker =
-		alloc_workqueue("btree_node_rewrite", WQ_PERCPU, 0);
-	if (!c->btree.node_rewrites.worker)
-		return bch_err_throw(c, ENOMEM_btree_interior_update_worker_init);
-
-	if (mempool_init_kmalloc_pool(&c->btree.interior_updates.pool, 1,
-				      sizeof(struct btree_update)))
-		return bch_err_throw(c, ENOMEM_btree_interior_update_pool_init);
 
 	return 0;
 }

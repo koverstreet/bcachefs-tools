@@ -131,7 +131,6 @@ void bch2_free_inode(struct inode *);
 
 void bch2_fs_vfs_exit(struct bch_fs *);
 int bch2_fs_vfs_init(struct bch_fs *);
-int bch2_fs_vfs_init_rw(struct bch_fs *);
 
 void bch2_vfs_exit(void);
 int bch2_vfs_init(void);
@@ -154,7 +153,6 @@ static inline void bch2_evict_subvolume_inodes(struct bch_fs *c,
 
 static inline void bch2_fs_vfs_exit(struct bch_fs *c) {}
 static inline int bch2_fs_vfs_init(struct bch_fs *c) { return 0; }
-static inline int bch2_fs_vfs_init_rw(struct bch_fs *c) { return 0; }
 
 static inline void bch2_vfs_exit(void) {}
 static inline int bch2_vfs_init(void) { return 0; }

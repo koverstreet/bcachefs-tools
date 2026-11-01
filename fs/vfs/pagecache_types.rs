@@ -48,6 +48,14 @@ nest! {
     }
 }
 
+/*
+ * Worst-case bytes for a per-folio bch_folio_sector snapshot: a folio can be up
+ * to MAX_PAGECACHE_ORDER pages, each contributing PAGE_SECTORS sector entries.
+ * Used to size the writepage_buf_pool reserve.
+ */
+pub const BCH_WRITEPAGE_BUF_BYTES: usize =
+    ((crate::util::kernel::PAGE_SIZE >> 9) << crate::c::MAX_PAGECACHE_ORDER) * core::mem::size_of::<c::bch_folio_sector>();
+
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_folio {

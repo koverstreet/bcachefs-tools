@@ -73,7 +73,4 @@ extern const char * const bch2_write_flags[];
 void __bch2_write_op_to_text(struct printbuf *, struct bch_write_op *);
 void bch2_write_op_to_text(struct printbuf *, struct bch_write_op *);
 
-void bch2_fs_io_write_exit(struct bch_fs *);
-int bch2_fs_io_write_init(struct bch_fs *);
-
 #endif /* _BCACHEFS_IO_WRITE_H */

@@ -15,3 +15,5 @@ pub struct bch_writepage_io {
     /* must be last: */
     pub op: c::bch_write_op,
 }
+
+crate::has_bio!(bch_writepage_io, op.wbio.bio);

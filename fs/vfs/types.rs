@@ -4,7 +4,9 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use cstruct_macros::{CStruct, TypeInfo};
+#[cfg(not(NO_BCACHEFS_FS))]
+use crate::util::{bio::BioSet, late::Late, mempool::Mempool, workqueue::{Workqueue, WqFlags}};
+use cstruct_macros::{CStruct, Late, TypeInfo};
 
 /*
  * An inode number that something in memory is holding: membership in
@@ -30,7 +32,7 @@ pub struct bch_inum_hash_entry {
 c_default!(bch_inum_hash_entry);
 
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo, Late)]
 pub struct bch_fs_vfs {
     pub inodes: c::fast_list,
     pub inodes_table: c::rhashtable,
@@ -42,11 +44,28 @@ pub struct bch_fs_vfs {
      */
     pub inodes_by_inum_table: c::rhltable,
 
-    pub writepage_bioset: c::bio_set,
-    pub dio_write_bioset: c::bio_set,
+    #[cfg(not(NO_BCACHEFS_FS))]
+    #[late(BioSet::new(4, true), ENOMEM_writepage_bioset_init)]
+    #[c("struct bio_set writepage_bioset")]
+    pub writepage_bioset: Late<BioSet<c::bch_writepage_io>>,
+    #[cfg(not(NO_BCACHEFS_FS))]
+    #[late(BioSet::new(4, true), ENOMEM_dio_write_bioset_init)]
+    #[c("struct bio_set dio_write_bioset")]
+    pub dio_write_bioset: Late<BioSet<c::dio_write>>,
     pub dio_read_bioset: c::bio_set,
-    pub nocow_flush_bioset: c::bio_set,
-    pub writepage_buf_pool: c::mempool_t,
-    pub writeback_wq: *mut c::workqueue_struct,
+    #[cfg(not(NO_BCACHEFS_FS))]
+    #[late(BioSet::new(1, false), ENOMEM_nocow_flush_bioset_init)]
+    #[c("struct bio_set nocow_flush_bioset")]
+    pub nocow_flush_bioset: Late<BioSet<c::nocow_flush>>,
+    #[cfg(not(NO_BCACHEFS_FS))]
+    #[late(Mempool::kvmalloc(4, c::BCH_WRITEPAGE_BUF_BYTES), ENOMEM_writepage_buf_pool_init)]
+    #[c("mempool_t writepage_buf_pool")]
+    pub writepage_buf_pool: Late<Mempool>,
+    #[cfg(not(NO_BCACHEFS_FS))]
+    #[late(Workqueue::new(c"bcachefs_vfs_writeback",
+                          WqFlags::MEM_RECLAIM | WqFlags::FREEZABLE | WqFlags::UNBOUND, 1),
+           ENOMEM_fs_other_alloc)]
+    #[c("struct workqueue_struct *writeback_wq")]
+    pub writeback_wq: Late<Workqueue>,
 }
 c_default!(bch_fs_vfs);

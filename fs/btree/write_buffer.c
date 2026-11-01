@@ -1553,11 +1553,6 @@ void bch2_fs_btree_write_buffer_exit(struct bch_fs *c)
 		darray_exit(&wb->flushing.keys);
 		darray_exit(&wb->inc.keys);
 	}
-
-	if (c->btree.write_buffer_shard_wq)
-		destroy_workqueue(c->btree.write_buffer_shard_wq);
-	if (c->btree.write_buffer_wq)
-		destroy_workqueue(c->btree.write_buffer_wq);
 }
 
 void bch2_btree_write_buffer_stop(struct bch_fs *c)
@@ -1617,18 +1612,6 @@ int bch2_fs_btree_write_buffer_init(struct bch_fs *c)
 	 * matters — at 1<<16 the baseline was ~27 MB per fs.
 	 */
 	unsigned initial_size = 1 << 10;
-
-	c->btree.write_buffer_wq =
-		alloc_workqueue("bcachefs_wb_flush",
-				WQ_UNBOUND|WQ_MEM_RECLAIM|WQ_FREEZABLE, 0);
-	if (!c->btree.write_buffer_wq)
-		return bch_err_throw(c, ENOMEM_fs_other_alloc);
-
-	c->btree.write_buffer_shard_wq =
-		alloc_workqueue("bcachefs_wb_flush_shard",
-				WQ_UNBOUND|WQ_MEM_RECLAIM, 0);
-	if (!c->btree.write_buffer_shard_wq)
-		return bch_err_throw(c, ENOMEM_fs_other_alloc);
 
 	for (unsigned i = 0; i < BCH_WB_BTREE_NR; i++) {
 		struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[i];

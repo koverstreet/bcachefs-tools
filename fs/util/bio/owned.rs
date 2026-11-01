@@ -57,11 +57,11 @@ impl BioField for c::bio {}
 /// #[pin_data].
 #[macro_export]
 macro_rules! has_bio {
-    ($t:ty, $f:ident) => {
+    ($t:ty, $($f:ident).+) => {
         // SAFETY: a bio field, below, that ends the struct
         unsafe impl $crate::util::bio::HasBio for $t {
             const BIO_OFFSET: usize = {
-                let off = ::core::mem::offset_of!($t, $f);
+                let off = ::core::mem::offset_of!($t, $($f).+);
                 assert!(off + ::core::mem::size_of::<$crate::util::bio::Bio>() == ::core::mem::size_of::<$t>(),
                         concat!(stringify!($t), ": its bio isn't last"));
                 off
@@ -69,7 +69,7 @@ macro_rules! has_bio {
         }
         const _: fn(&$t) = |t| {
             fn bio_field<B: $crate::util::bio::BioField>(_: &B) {}
-            bio_field(&t.$f)
+            bio_field(&t.$($f).+)
         };
     };
 }
@@ -205,6 +205,22 @@ impl<T: HasBio> BioSet<T> {
                 Err(e)
             }
         }
+    }
+}
+
+unsafe impl<T: FrontPad> ::pin_init::Zeroable for BioSet<T> {}
+
+unsafe impl<T: FrontPad> crate::util::late::LateInit for BioSet<T> {
+    /// bioset_initialized()
+    #[cfg(kernel)]
+    fn is_made(&self) -> bool {
+        unsafe { !(*self.set.as_ptr()).bio_slab.is_null() }
+    }
+
+    /// Userspace's has no slab: its bio pool's
+    #[cfg(not(kernel))]
+    fn is_made(&self) -> bool {
+        unsafe { !(*self.set.as_ptr()).bio_pool.elements.is_null() }
     }
 }
 

@@ -57,3 +57,5 @@ nest! {
         pub op: c::bch_write_op,
     }
 }
+
+crate::has_bio!(dio_write, op.wbio.bio);

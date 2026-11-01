@@ -8,7 +8,9 @@ use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI32, AtomicI64};
-use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct};
+use crate::util::late::Late;
+use crate::util::workqueue::{Workqueue, WqFlags};
+use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Late};
 use nestify::nest;
 
 c_const! {
@@ -293,6 +295,7 @@ pub struct journal_rewind_range {
 /* Embedded in struct bch_fs */
 nest! {
     #[derive(CStruct)]*
+    #[derive(Late)]
     #[repr(C)]*
     pub struct journal {
         pub __align: CacheAligned,
@@ -383,8 +386,16 @@ nest! {
         pub reclaim_flush_wait: c::closure_waitlist,
 
         pub write_work: c::delayed_work,
-        pub wq: *mut c::workqueue_struct,
-        pub discard_wq: *mut c::workqueue_struct,
+        #[late(Workqueue::new(c"bcachefs_journal",
+                              WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::PERCPU, 512),
+               ENOMEM_fs_other_alloc)]
+        #[c("struct workqueue_struct *wq")]
+        pub wq: Late<Workqueue>,
+        #[late(Workqueue::new(c"bcachefs_journal_discard",
+                              WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::UNBOUND | WqFlags::MEM_RECLAIM, 512),
+               ENOMEM_fs_other_alloc)]
+        #[c("struct workqueue_struct *discard_wq")]
+        pub discard_wq: Late<Workqueue>,
 
         /* Sequence number of most recent journal entry (last entry in @pin) */
         pub seq: AtomicI64,

@@ -2820,18 +2820,3 @@ __cold void bch2_write_op_to_text(struct printbuf *out, struct bch_write_op *op)
 		prt_newline(out);
 	}
 }
-
-void bch2_fs_io_write_exit(struct bch_fs *c)
-{
-	bioset_exit(&c->replica_set);
-	bioset_exit(&c->bio_write);
-}
-
-int bch2_fs_io_write_init(struct bch_fs *c)
-{
-	if (bioset_init(&c->bio_write,   1, offsetof(struct bch_write_bio, bio), BIOSET_NEED_BVECS) ||
-	    bioset_init(&c->replica_set, 4, offsetof(struct bch_write_bio, bio), 0))
-		return bch_err_throw(c, ENOMEM_bio_write_init);
-
-	return 0;
-}

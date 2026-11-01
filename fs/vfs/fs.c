@@ -910,14 +910,8 @@ void bch2_evict_subvolume_inodes(struct bch_fs *c, snapshot_id_list *s)
 
 void bch2_fs_vfs_exit(struct bch_fs *c)
 {
-	bioset_exit(&c->vfs.dio_write_bioset);
 	bioset_exit(&c->vfs.dio_read_bioset);
-	bioset_exit(&c->vfs.writepage_bioset);
-	bioset_exit(&c->vfs.nocow_flush_bioset);
-	mempool_exit(&c->vfs.writepage_buf_pool);
 
-	if (c->vfs.writeback_wq)
-		destroy_workqueue(c->vfs.writeback_wq);
 	if (c->vfs.inodes_by_inum_table.ht.tbl)
 		rhltable_destroy(&c->vfs.inodes_by_inum_table);
 	if (c->vfs.inodes_table.tbl)
@@ -937,34 +931,6 @@ int bch2_fs_vfs_init(struct bch_fs *c)
 			4, offsetof(struct dio_read, rbio.bio),
 			BIOSET_NEED_BVECS))
 		return bch_err_throw(c, ENOMEM_dio_read_bioset_init);
-
-	return 0;
-}
-
-int bch2_fs_vfs_init_rw(struct bch_fs *c)
-{
-	if (bioset_init(&c->vfs.writepage_bioset,
-			4, offsetof(struct bch_writepage_io, op.wbio.bio),
-			BIOSET_NEED_BVECS))
-		return bch_err_throw(c, ENOMEM_writepage_bioset_init);
-
-	if (mempool_init_kvmalloc_pool(&c->vfs.writepage_buf_pool, 4,
-				       BCH_WRITEPAGE_BUF_BYTES))
-		return bch_err_throw(c, ENOMEM_writepage_buf_pool_init);
-
-	if (bioset_init(&c->vfs.dio_write_bioset,
-			4, offsetof(struct dio_write, op.wbio.bio),
-			BIOSET_NEED_BVECS))
-		return bch_err_throw(c, ENOMEM_dio_write_bioset_init);
-
-	if (bioset_init(&c->vfs.nocow_flush_bioset,
-			1, offsetof(struct nocow_flush, bio), 0))
-		return bch_err_throw(c, ENOMEM_nocow_flush_bioset_init);
-
-	c->vfs.writeback_wq = alloc_workqueue("bcachefs_vfs_writeback",
-					      WQ_MEM_RECLAIM|WQ_FREEZABLE|WQ_UNBOUND, 1);
-	if (!c->vfs.writeback_wq)
-		return bch_err_throw(c, ENOMEM_fs_other_alloc);
 
 	return 0;
 }

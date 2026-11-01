@@ -254,7 +254,6 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_fs_vfs_exit(c);
 	bch2_fs_reconcile_exit(c);
 	bch2_fs_journal_exit(&c->journal);
-	bch2_fs_io_write_exit(c);
 	bch2_fs_io_read_exit(c);
 	bch2_fs_ec_exit(c);
 	bch2_fs_move_exit(c);

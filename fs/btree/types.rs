@@ -7,13 +7,14 @@ use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
 use crate::errcode::{bch_errcode, BchError};
 use crate::locking::Locked;
+use crate::util::{late::Late, workqueue::{Workqueue, WqFlags}};
 use crate::types::{CacheAligned, DArray, NeBytes, bits_to_longs, c_default};
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicIsize};
-use cstruct_macros::{c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, TypeInfo};
+use cstruct_macros::{c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, Late, TypeInfo};
 use pin_init::pin_data;
 use nestify::nest;
 #[cfg(feature = "std")]
@@ -1101,7 +1102,7 @@ c_default!(btree_write_stats);
 
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(CStruct, TypeInfo, Init, Late)]
 pub struct bch_fs_btree {
     pub foreground_merge_threshold: u16,
 
@@ -1115,7 +1116,11 @@ pub struct bch_fs_btree {
     pub read_errors_soft: cs::ratelimit_state,
     pub read_errors_hard: cs::ratelimit_state,
 
-    pub write_complete_wq: *mut cs::workqueue_struct,
+    #[late(Workqueue::new(c"bcachefs_btree_write_complete",
+                          WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::PERCPU, 1),
+           ENOMEM_fs_other_alloc)]
+    #[c("struct workqueue_struct *write_complete_wq")]
+    pub write_complete_wq: Late<Workqueue>,
 
     pub root_journal_res: cs::journal_entry_res,
 
@@ -1147,8 +1152,14 @@ pub struct bch_fs_btree {
      * flush. Shards are only queued by a running flush, so once the outer
      * wq is frozen no new ones appear.
      */
-    pub write_buffer_wq: *mut cs::workqueue_struct,
-    pub write_buffer_shard_wq: *mut cs::workqueue_struct,
+    #[late(Workqueue::new(c"bcachefs_wb_flush",
+                          WqFlags::UNBOUND | WqFlags::MEM_RECLAIM | WqFlags::FREEZABLE, 0),
+           ENOMEM_fs_other_alloc)]
+    #[c("struct workqueue_struct *write_buffer_wq")]
+    pub write_buffer_wq: Late<Workqueue>,
+    #[late(Workqueue::new(c"bcachefs_wb_flush_shard", WqFlags::UNBOUND | WqFlags::MEM_RECLAIM, 0), ENOMEM_fs_other_alloc)]
+    #[c("struct workqueue_struct *write_buffer_shard_wq")]
+    pub write_buffer_shard_wq: Late<Workqueue>,
     /*
      * Sync flushers (btree_write_buffer_flush_seq) wake the per-btree
      * flush_works and then wait here for the worker to drain pins past
@@ -1162,7 +1173,9 @@ pub struct bch_fs_btree {
     #[pin]
     #[init(cs::bch_fs_btree_reserve_cache::init())]
     pub reserve_cache: cs::bch_fs_btree_reserve_cache,
+    #[late]
     pub interior_updates: cs::bch_fs_btree_interior_updates,
+    #[late]
     pub node_rewrites: cs::bch_fs_btree_node_rewrites,
     pub node_scan: cs::find_btree_nodes,
 }

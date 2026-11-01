@@ -38,15 +38,6 @@ static inline u64 folio_end_sector(struct folio *folio)
 	return folio_end_pos(folio) >> 9;
 }
 
-/*
- * Worst-case bytes for a per-folio bch_folio_sector snapshot: a folio can be up
- * to MAX_PAGECACHE_ORDER pages, each contributing PAGE_SECTORS sector entries.
- * Used to size the writepage_buf_pool reserve.
- */
-#define BCH_WRITEPAGE_BUF_BYTES						\
-	((PAGE_SECTORS << MAX_PAGECACHE_ORDER) *			\
-	 sizeof(struct bch_folio_sector))
-
 /* Helper for when we need to add debug instrumentation: */
 static inline void bch2_folio_sector_set(struct folio *folio,
 			     struct bch_folio *s,

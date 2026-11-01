@@ -34,10 +34,22 @@ unsafe impl LateInit for Mempool {
 impl Mempool {
     /// @min_nr elements of @size bytes. Nothing to undo if it fails.
     pub fn kvmalloc(min_nr: usize, size: usize) -> impl PinInit<Self, BchError> {
+        Self::with(min_nr, c::mempool_kvmalloc, c::mempool_kvfree, size)
+    }
+
+    /// As kvmalloc(), the elements kmalloc()'d: mempool_init_kmalloc_pool().
+    pub fn kmalloc(min_nr: usize, size: usize) -> impl PinInit<Self, BchError> {
+        Self::with(min_nr, c::mempool_kmalloc, c::mempool_kfree, size)
+    }
+
+    fn with(min_nr: usize,
+            alloc: unsafe extern "C" fn(c::gfp_t, *mut c_void) -> *mut c_void,
+            free: unsafe extern "C" fn(*mut c_void, *mut c_void),
+            size: usize) -> impl PinInit<Self, BchError> {
         unsafe {
             ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                ret_to_result_void(c::mempool_init_noprof(slot.cast(), min_nr as c_int, Some(c::mempool_kvmalloc),
-                                                          Some(c::mempool_kvfree), size as *mut c_void))
+                ret_to_result_void(c::mempool_init_noprof(slot.cast(), min_nr as c_int, Some(alloc),
+                                                          Some(free), size as *mut c_void))
             })
         }
     }

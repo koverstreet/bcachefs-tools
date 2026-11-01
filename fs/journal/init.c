@@ -755,12 +755,6 @@ int bch2_dev_journal_init(struct bch_dev *ca, struct bch_sb *sb)
 
 void bch2_fs_journal_exit(struct journal *j)
 {
-	if (j->discard_wq)
-		destroy_workqueue(j->discard_wq);
-
-	if (j->wq)
-		destroy_workqueue(j->wq);
-
 	darray_exit(&j->early_journal_entries);
 	darray_exit(&j->rewind_ranges);
 
@@ -837,15 +831,6 @@ int bch2_fs_journal_init_rw(struct journal *j)
 	     buf++)
 		buf->wait.list.first = JOURNAL_BUF_NOT_IN_FLIGHT;
 
-	j->wq = alloc_workqueue("bcachefs_journal",
-				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM|WQ_PERCPU, 512);
-	if (!j->wq)
-		return bch_err_throw(c, ENOMEM_fs_other_alloc);
-
-	j->discard_wq = alloc_workqueue("bcachefs_journal_discard",
-				WQ_HIGHPRI|WQ_FREEZABLE|WQ_UNBOUND|WQ_MEM_RECLAIM, 512);
-	if (!j->discard_wq)
-		return bch_err_throw(c, ENOMEM_fs_other_alloc);
 	return 0;
 }
 

@@ -17,6 +17,8 @@ pub struct nocow_flush {
 }
 c_default!(nocow_flush);
 
+crate::has_bio!(nocow_flush, bio);
+
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct folio_vec {

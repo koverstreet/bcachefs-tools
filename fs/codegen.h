@@ -50,6 +50,13 @@ const unsigned long RUST_CONST_HELPER_SB_NOSEC		= SB_NOSEC;
 const unsigned long RUST_CONST_HELPER_SB_ACTIVE		= SB_ACTIVE;
 const loff_t RUST_CONST_HELPER_MAX_LFS_FILESIZE		= MAX_LFS_FILESIZE;
 
+/*
+ * the largest folio, for vfs's writepage_buf_pool: pagemap.h's
+ * MAX_PAGECACHE_ORDER, whose min() isn't allowed at file scope
+ */
+const unsigned int RUST_CONST_HELPER_MAX_PAGECACHE_ORDER	=
+	MIN(MAX_XAS_ORDER, PREFERRED_MAX_PAGECACHE_ORDER);
+
 /* a notifier's answer, as reconcile's power supply notifier gives it */
 const int RUST_CONST_HELPER_NOTIFY_OK			= NOTIFY_OK;
 

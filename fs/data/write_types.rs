@@ -103,6 +103,8 @@ nest! {
 }
 c_default!(bch_write_bio);
 
+crate::has_bio!(c::bch_write_bio, bio);
+
 nest! {
     #[repr(C)]
     #[derive(CStruct, TypeInfo)]
@@ -215,7 +217,6 @@ nest! {
 }
 
 c_extern! {
-    pub fn bch2_fs_io_write_init(c: *mut c::bch_fs) -> c_int;
     pub fn bch2_write_point_do_index_updates(work: *mut c::work_struct);
     pub fn bch2_sum_sector_overwrites(trans: *mut c::btree_trans, extent_iter: *mut c::btree_iter,
                                       new: *mut c::bkey_i, usage_increasing: *mut bool,

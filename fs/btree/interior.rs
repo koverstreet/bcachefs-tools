@@ -7,7 +7,7 @@
 
 use core::ffi::{c_ulong, c_int, c_uint};
 use core::mem::size_of;
-use cstruct_macros::{c_export, CStruct, Init, c_const, c_extern, TypeInfo};
+use cstruct_macros::{c_export, CStruct, Init, Late, c_const, c_extern, TypeInfo};
 use zerocopy::IntoBytes;
 use crate::c;
 use crate::fs::Fs;
@@ -18,6 +18,7 @@ use crate::util::vstructs::{plain_bytes, Head};
 use crate::new_lock;
 use crate::types::c_default;
 use crate::util::Printbuf;
+use crate::util::{late::Late, mempool::Mempool, workqueue::{Workqueue, WqFlags}};
 use core::sync::atomic::AtomicI32;
 use pin_init::pin_data;
 use crate::format::Btree;
@@ -65,22 +66,26 @@ pub struct bch_fs_btree_reserve_cache {
 }
 
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo, Late)]
 pub struct bch_fs_btree_interior_updates {
-    pub pool: c::mempool_t,
+    #[late(Mempool::kmalloc(1, size_of::<c::btree_update>()), ENOMEM_btree_interior_update_pool_init)]
+    #[c("mempool_t pool")]
+    pub pool: Late<Mempool>,
     pub list: c::list_head,
     pub unwritten: c::list_head,
     pub lock: c::mutex,
     pub commit_lock: c::mutex,
     pub wait: c::closure_waitlist,
 
-    pub worker: *mut c::workqueue_struct,
+    #[late(Workqueue::new(c"btree_update", WqFlags::UNBOUND | WqFlags::MEM_RECLAIM, 8), ENOMEM_btree_interior_update_worker_init)]
+    #[c("struct workqueue_struct *worker")]
+    pub worker: Late<Workqueue>,
     pub work: c::work_struct,
 }
 c_default!(bch_fs_btree_interior_updates);
 
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo, Late)]
 pub struct bch_fs_btree_node_rewrites {
     pub list: c::list_head,
     pub pending: c::list_head,
@@ -89,7 +94,9 @@ pub struct bch_fs_btree_node_rewrites {
     pub nr: AtomicI32,
     pub table: c::rhashtable,
     pub table_init_done: bool,
-    pub worker: *mut c::workqueue_struct,
+    #[late(Workqueue::new(c"btree_node_rewrite", WqFlags::PERCPU, 0), ENOMEM_btree_interior_update_worker_init)]
+    #[c("struct workqueue_struct *worker")]
+    pub worker: Late<Workqueue>,
 }
 c_default!(bch_fs_btree_node_rewrites);
 
@@ -124,7 +131,7 @@ impl Fs {
     /// Run the interior update worker now.
     pub fn btree_interior_updates_kick(&self) {
         let u = &self.btree.interior_updates;
-        unsafe { c::bch2_queue_work(u.worker, (&raw const u.work).cast_mut()) };
+        unsafe { u.worker.queue_work((&raw const u.work).cast_mut()) };
     }
 }
 
