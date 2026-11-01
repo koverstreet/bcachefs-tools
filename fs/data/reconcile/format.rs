@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use cstruct_macros::{bitfield, c_const, c_enum, c_xmacro, CStruct};
+use cstruct_macros::{bitfield, c_const, c_enum, c_xmacro, open_enum, CStruct};
 
 /*
  * rebalance on disk data structures:
@@ -166,30 +166,18 @@ impl bch_extent_reconcile {
     }
 }
 
-c_xmacro! {
-    BCH_RECONCILE_ACCOUNTING(x) {
-        (replicas, 0),
-        (checksum, 1),
-        (erasure_code, 2),
-        (compression, 3),
-        (target, 4),
-        (high_priority, 5),
-        (pending, 6),
-        (stripes, 7),
-    }
+#[open_enum]
+#[repr(u32)]
+pub enum ReconcileType {
+    replicas = 0,
+    checksum = 1,
+    erasure_code = 2,
+    compression = 3,
+    target = 4,
+    high_priority = 5,
+    pending = 6,
+    stripes = 7,
 }
-
-c_enum! {
-    #[open]
-    #[c_name(bch_reconcile_accounting_type)]
-    pub enum ReconcileType: u32 {
-        BCH_RECONCILE_ACCOUNTING(t, n) => concat(BCH_RECONCILE_ACCOUNTING_, t) = n,
-        BCH_RECONCILE_ACCOUNTING_NR,
-    }
-}
-
-/// C's name, as bindgen's declarations of C functions spell it.
-pub type bch_reconcile_accounting_type = ReconcileType;
 
 c_xmacro! {
     RECONCILE_WORK_IDS(x) {

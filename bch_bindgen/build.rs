@@ -204,7 +204,6 @@ fn main() {
         .newtype_enum("bch_bkey_type")
         .newtype_enum("bch_data_type")
         .newtype_enum("bch_compression_type")
-        .newtype_enum("bch_reconcile_accounting_type")
         .newtype_enum("disk_accounting_type")
         .newtype_enum("bch_jset_entry_type")
         .newtype_enum("bch_kdf_types")

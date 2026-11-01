@@ -237,7 +237,6 @@ pub mod format;
 pub mod opts;
 
 pub use paste::paste;
-use crate::accounting::ReconcileType;
 use crate::format::{Btree, CompressionType, DataType};
 
 pub mod c {
@@ -461,7 +460,6 @@ c::BCH_JSET_ENTRY_TYPES!(newtype_enum_aliases [bch_jset_entry_type, BCH_JSET_ENT
 c::BCH_SB_COMPAT!(newtype_enum_aliases [bch_sb_compat, BCH_COMPAT, nr = BCH_COMPAT_NR]);
 c::BCH_SB_FIELDS!(newtype_enum_aliases [bch_sb_field_type, BCH_SB_FIELD, nr = BCH_SB_FIELD_NR]);
 c::BCH_DISK_ACCOUNTING_TYPES!(newtype_enum_aliases [disk_accounting_type, BCH_DISK_ACCOUNTING, nr = BCH_DISK_ACCOUNTING_TYPE_NR]);
-c::BCH_RECONCILE_ACCOUNTING!(newtype_enum_aliases [ReconcileType, BCH_RECONCILE_ACCOUNTING, nr = BCH_RECONCILE_ACCOUNTING_NR]);
 
 // BCH_BTREE_IDS(): every btree id, and those whose keys are snapshotted - as
 // C's btree_has_snapshots_mask.
@@ -640,12 +638,6 @@ impl From<c::bch_bkey_type> for u32 {
 
 impl From<c::disk_accounting_type> for u32 {
     fn from(t: c::disk_accounting_type) -> u32 {
-        t.0
-    }
-}
-
-impl From<ReconcileType> for u32 {
-    fn from(t: ReconcileType) -> u32 {
         t.0
     }
 }

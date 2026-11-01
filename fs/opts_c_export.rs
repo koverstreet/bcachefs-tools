@@ -3,7 +3,6 @@
 //! pointers, C strings, an errcode returned. Deleted with the last C caller.
 
 use super::*;
-use crate::accounting::ReconcileType;
 use crate::errcode::ret_to_c;
 use crate::util::ffi::Opaque;
 use crate::util::vstructs::{Head, Validated};
@@ -55,11 +54,6 @@ pub fn bch2_prt_compression_type(out: &mut Printbuf, t: CompressionType) {
 
 #[c_export]
 pub fn bch2_prt_data_type(out: &mut Printbuf, t: DataType) {
-    t.to_text(out)
-}
-
-#[c_export]
-pub fn bch2_prt_reconcile_accounting_type(out: &mut Printbuf, t: ReconcileType) {
     t.to_text(out)
 }
 

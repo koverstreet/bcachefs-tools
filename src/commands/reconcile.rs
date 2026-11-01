@@ -12,49 +12,29 @@ use crossterm::{
 };
 
 use crate::util::run_tui;
-use crate::wrappers::accounting::{self, disk_accounting_type};
+use crate::wrappers::accounting::{disk_accounting_type, ReconcileType};
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
 use crate::wrappers::handle::BcachefsHandle;
 use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::util::names::{self, Names};
 use bcachefs_kernel::util::{Sectors, ToText};
 use crate::wrappers::sysfs;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-#[clap(rename_all = "snake_case")]
-enum ReconcileType {
-    Replicas,
-    Checksum,
-    ErasureCode,
-    Compression,
-    Target,
-    HighPriority,
-    Pending,
-    Stripes,
+/// The reconcile types by name, as they print - and as --help lists them.
+fn reconcile_type() -> impl clap::builder::TypedValueParser<Value = ReconcileType> {
+    use clap::builder::TypedValueParser as _;
+    clap::builder::PossibleValuesParser::new(NAMES.iter().map(|&(n, _)| n))
+        .map(|n| ReconcileType(names::value_of(NAMES, &n).expect("one of NAMES") as u32))
 }
 
-impl ReconcileType {
-    fn as_c(self) -> accounting::ReconcileType {
-        match self {
-            Self::Replicas     => accounting::ReconcileType::replicas,
-            Self::Checksum     => accounting::ReconcileType::checksum,
-            Self::ErasureCode  => accounting::ReconcileType::erasure_code,
-            Self::Compression  => accounting::ReconcileType::compression,
-            Self::Target       => accounting::ReconcileType::target,
-            Self::HighPriority => accounting::ReconcileType::high_priority,
-            Self::Pending      => accounting::ReconcileType::pending,
-            Self::Stripes      => accounting::ReconcileType::stripes,
-        }
-    }
+const NAMES: &[(&str, u64)] = <ReconcileType as Names>::ENTRIES;
 
-    fn all() -> Vec<Self> {
-        vec![Self::Replicas, Self::Checksum, Self::ErasureCode,
-             Self::Compression, Self::Target, Self::HighPriority,
-             Self::Pending, Self::Stripes]
-    }
+fn all() -> Vec<ReconcileType> {
+    NAMES.iter().map(|&(_, t)| ReconcileType(t as u32)).collect()
+}
 
-    fn all_except_pending() -> Vec<Self> {
-        Self::all().into_iter().filter(|t| *t != Self::Pending).collect()
-    }
+fn all_except_pending() -> Vec<ReconcileType> {
+    all().into_iter().filter(|t| *t != ReconcileType::pending).collect()
 }
 
 /// Show status of background reconciliation
@@ -66,7 +46,7 @@ pub struct StatusCli {
     _help: (),
 
     /// Reconcile types to display (comma-separated)
-    #[arg(short = 't', long = "types", value_delimiter = ',', value_enum)]
+    #[arg(short = 't', long = "types", value_delimiter = ',', value_parser = reconcile_type())]
     types: Vec<ReconcileType>,
 
     /// Filesystem mountpoint
@@ -83,7 +63,7 @@ pub struct WaitCli {
     _help: (),
 
     /// Reconcile types to wait on (comma-separated)
-    #[arg(short = 't', long = "types", value_delimiter = ',', value_enum)]
+    #[arg(short = 't', long = "types", value_delimiter = ',', value_parser = reconcile_type())]
     types: Vec<ReconcileType>,
 
     /// Filesystem mountpoint
@@ -108,7 +88,7 @@ fn reconcile_status_to_text(
         .map_err(|e| anyhow!("query_accounting: {}", e))?;
 
     // Build array of [data_sectors, metadata_sectors] per reconcile type
-    let nr = accounting::ReconcileType::nr.0 as usize;
+    let nr = names::table_len(NAMES);
     let mut v = vec![[0u64; 2]; nr];
 
     for entry in &result.entries {
@@ -127,10 +107,10 @@ fn reconcile_status_to_text(
     let mut have_pending = scan_pending != 0;
 
     for t in display_types {
-        let idx = t.as_c().0 as usize;
+        let idx = t.0 as usize;
         if idx < nr {
             write!(out, "  ");
-            t.as_c().to_text(out);
+            t.to_text(out);
             write!(out, ":\t{}\r{}\r\n", Sectors(v[idx][0]), Sectors(v[idx][1]));
             if wait_types.contains(t) {
                 have_pending |= v[idx][0] != 0 || v[idx][1] != 0;
@@ -145,7 +125,7 @@ fn reconcile_status_to_text(
 fn cmd_reconcile_status(cli: StatusCli) -> Result<()> {
 
     let types = if cli.types.is_empty() {
-        ReconcileType::all()
+        all()
     } else {
         cli.types
     };
@@ -173,7 +153,7 @@ fn cmd_reconcile_status(cli: StatusCli) -> Result<()> {
 fn cmd_reconcile_wait(cli: WaitCli) -> Result<()> {
 
     let (display_types, wait_types) = if cli.types.is_empty() {
-        (ReconcileType::all(), ReconcileType::all_except_pending())
+        (all(), all_except_pending())
     } else {
         (cli.types.clone(), cli.types)
     };

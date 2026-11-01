@@ -478,7 +478,7 @@ c::BCH_SB_FIELDS!(sb_field_ops);
 impl c::bch_sb_field_type {
     /// The type named @name.
     pub fn from_name(name: &str) -> Option<Self> {
-        Self::ENTRIES.iter().find(|&&(n, _)| n == name).map(|&(_, t)| Self(t as u32))
+        crate::util::names::value_of(Self::ENTRIES, name).map(|t| Self(t as u32))
     }
 }
 

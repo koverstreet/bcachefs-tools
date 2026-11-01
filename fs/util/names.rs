@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 //! What an enum built from an x-macro list is named: Names, which c_enum!
-//! implements for each.
+//! implements for each - and #[open_enum] for its own, by its variants'
+//! names.
 //!
 //! A static description, not a visitor: ENTRIES is each variant's name and
 //! value - a flags type's, its bit - and a value with none is "(unknown 7)".
@@ -27,6 +28,11 @@ pub trait Names {
 /// @v's name in @entries.
 pub fn name_of(entries: &[(&'static str, u64)], v: u64) -> Option<&'static str> {
     entries.iter().find(|&&(_, e)| e == v).map(|&(n, _)| n)
+}
+
+/// The value named @name in @entries.
+pub fn value_of(entries: &[(&'static str, u64)], name: &str) -> Option<u64> {
+    entries.iter().find(|&&(n, _)| n == name).map(|&(_, v)| v)
 }
 
 /// @v's name in @entries, or "(unknown @v)".
