@@ -61,7 +61,7 @@ pub use iter::{FolioVec, Folios};
 pub use iter::{Chunk, Chunks, Segment, Segments, Walk};
 #[cfg(kernel)]
 pub(crate) use iter::nth_page;
-pub use owned::{of_bio, BioBox, BioBuf, BioBufPtr, BioField, BioInPlace, BioSet, Either, Endio, FrontPad, HasBio, RawBio, Remaining};
+pub use owned::{of_bio, BioBox, BioBuf, BioBufPtr, BioEnd, BioField, BioInPlace, BioSet, Either, Endio, FrontPad, HasBio, RawBio, Remaining};
 
 // A bvec_iter's offset into its bvec, as a place: bi_offset - bi_bvec_done
 // before 7.3, and in the shim.

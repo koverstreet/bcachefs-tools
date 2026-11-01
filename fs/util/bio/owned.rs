@@ -90,6 +90,12 @@ fn bio_of<T: HasBio>(t: *mut T) -> *mut c::bio {
 #[repr(transparent)]
 pub struct Remaining<T>(T);
 
+/// What a T counted by Remaining does as its last end is put: before the
+/// bio's bi_end_io, after which it may be gone.
+pub trait BioEnd {
+    fn bio_end(&self);
+}
+
 impl<T: HasBio> Remaining<T> {
     fn bio(&self) -> *mut c::bio {
         bio_of(core::ptr::from_ref(&self.0).cast_mut())
@@ -117,19 +123,20 @@ impl<T> Deref for Remaining<T> {
     }
 }
 
-unsafe impl<T: HasBio> Refcount for Remaining<T> {
+unsafe impl<T: HasBio + BioEnd> Refcount for Remaining<T> {
     unsafe fn inc(&self) {
         self.count().fetch_add(1, Relaxed);
     }
 
     unsafe fn dec(&self) {
         if unsafe { self.dec_and_test() } {
+            self.0.bio_end();
             unsafe { c::bio_endio(self.bio()) };
         }
     }
 }
 
-unsafe impl<T: HasBio> TestRefcount for Remaining<T> {
+unsafe impl<T: HasBio + BioEnd> TestRefcount for Remaining<T> {
     /// The only ref can't be inc()ed - that takes one - so it needs no RMW.
     unsafe fn dec_and_test(&self) -> bool {
         let count = self.count();
