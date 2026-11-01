@@ -43,12 +43,12 @@ use core::task::{ready, Context, Poll};
 
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
-use crate::prt;
 use crate::util::task::{waiter, Completion, Done};
 use crate::util::gather::GatherRef;
 use crate::util::task::Resumable;
 use crate::util::{Printbuf, ToText};
 use crate::util::volatile::VolatileSlice;
+use cstruct_macros::c_extern;
 
 mod iter;
 mod owned;
@@ -221,11 +221,14 @@ impl Bio {
     }
 }
 
+c_extern! {
+    fn bch2_bio_to_text(out: *mut c::printbuf, bio: *mut c::bio);
+}
+
 impl ToText for Bio {
+    #[cold]
     fn to_text(&self, out: &mut Printbuf) {
-        let iter = self.bio.bi_iter;
-        prt!(out, "bio {:p}: vcnt {}, idx {}, size {:#x}, offset {:#x}",
-             self, self.bio.bi_vcnt, iter.bi_idx, iter.bi_size, bi_offset!(iter));
+        unsafe { bch2_bio_to_text(out.as_raw(), core::ptr::from_ref(&self.bio).cast_mut()) }
     }
 }
 

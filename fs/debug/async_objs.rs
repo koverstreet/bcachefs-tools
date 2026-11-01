@@ -158,11 +158,12 @@ use crate::data::update::bch2_read_bio_to_text;
 use crate::data::update_task::Update;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
+use crate::util::bio::Bio;
 use crate::util::debugfs::{self, DebugFile, DebugOut};
 use crate::util::ffi::Opaque;
 use crate::util::place::Placed;
 use crate::util::rcu;
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 
 #[c_export]
 pub fn bch2_fs_async_obj_init(c: &Opaque<c::bch_fs>) -> c_int {
@@ -187,7 +188,6 @@ pub fn bch2_fs_async_obj_exit(c: &Opaque<c::bch_fs>) {
 cstruct_macros::c_extern! {
     fn bch2_write_op_to_text(out: *mut c::printbuf, op: *mut c::bch_write_op);
     fn bch2_btree_read_bio_to_text(out: *mut c::printbuf, rbio: *mut c::btree_read_bio);
-    fn bch2_bio_to_text(out: *mut c::printbuf, bio: *mut c::bio);
 }
 
 /// How a list's objects are shown: of the list's kind, read under RCU.
@@ -218,7 +218,7 @@ unsafe fn btree_read_bio_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_
 #[cold]
 unsafe fn btree_write_bio_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
     let wbio = obj.cast::<c::btree_write_bio>().as_ptr();
-    unsafe { bch2_bio_to_text(out.as_raw(), &raw mut (*wbio).wbio.bio) }
+    unsafe { Bio::from_raw(&raw const (*wbio).wbio.bio) }.to_text(out)
 }
 
 macro_rules! list_table {
