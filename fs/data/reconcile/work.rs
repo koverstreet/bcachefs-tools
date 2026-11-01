@@ -50,6 +50,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::accounting::ReconcileType;
 use crate::accounting;
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::backpointers::backpointer_get_key;
@@ -941,7 +942,7 @@ impl<'f> Reconciler<'f, '_> {
 /// doesn't wait.
 fn hipri_work_pending(fs: &Fs) -> bool {
     accounting::read(fs, accounting::ReconcileWork {
-        type_: c::bch_reconcile_accounting_type::BCH_RECONCILE_ACCOUNTING_high_priority.0 as u8,
+        type_: ReconcileType::high_priority.0 as u8,
     }) != Default::default()
 }
 

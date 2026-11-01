@@ -80,9 +80,7 @@ use zerocopy::{FromBytes, IntoBytes};
 
 pub use crate::format::accounting::*;
 pub use crate::format::CompressionType;
-pub use c::bch_reconcile_accounting_type;
-
-pub type reconcile_accounting_type = bch_reconcile_accounting_type;
+pub use c::ReconcileType;
 
 pub fn data_type_from_u8(v: u8) -> DataType {
     DataType(v as u32)
@@ -92,8 +90,8 @@ pub fn compression_type_from_u8(v: u8) -> CompressionType {
     CompressionType(v as u32)
 }
 
-pub fn reconcile_type_from_u8(v: u8) -> bch_reconcile_accounting_type {
-    bch_reconcile_accounting_type(v as u32)
+pub fn reconcile_type_from_u8(v: u8) -> ReconcileType {
+    ReconcileType(v as u32)
 }
 
 /// Size of a bpos in bytes — maximum size of any accounting key payload.

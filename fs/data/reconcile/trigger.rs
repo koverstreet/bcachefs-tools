@@ -7,6 +7,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::accounting::ReconcileType;
 use crate::{accounting, bkey_fsck_err_on, fsck_err};
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{bpos_max, bpos_min, pos, BkeySC, BkeyV, BkeyVal};
@@ -250,14 +251,13 @@ pub(crate) fn add_reconcile_bp(t: &TransAttempt<'_, '_>, btree: Btree, level: u3
 /// bits - their accounting types are BCH_RECONCILE_OPTS()'s order - pending in
 /// place of target and replicas, or high_priority added: rb_accounting_counters().
 fn rb_accounting_counters(r: Option<&c::bch_extent_reconcile>) -> u32 {
-    use c::bch_reconcile_accounting_type as a;
     let Some(r) = r else { return 0 };
     let mut ret = u32::from(r.need_rb());
     if r.pending() != 0 {
-        ret |= 1 << a::BCH_RECONCILE_ACCOUNTING_pending.0;
-        ret &= !(1 << a::BCH_RECONCILE_ACCOUNTING_target.0 | 1 << a::BCH_RECONCILE_ACCOUNTING_replicas.0);
+        ret |= 1 << ReconcileType::pending.0;
+        ret &= !(1 << ReconcileType::target.0 | 1 << ReconcileType::replicas.0);
     } else if r.hipri() != 0 {
-        ret |= 1 << a::BCH_RECONCILE_ACCOUNTING_high_priority.0;
+        ret |= 1 << ReconcileType::high_priority.0;
     }
     ret
 }

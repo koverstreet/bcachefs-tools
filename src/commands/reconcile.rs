@@ -3,7 +3,6 @@ use std::time::Duration;
 use std::thread;
 
 use anyhow::{anyhow, Result};
-use bch_bindgen::c;
 use clap::Parser;
 use crossterm::{
     cursor,
@@ -13,7 +12,7 @@ use crossterm::{
 };
 
 use crate::util::run_tui;
-use crate::wrappers::accounting::{disk_accounting_type, reconcile_accounting_type};
+use crate::wrappers::accounting::{self, disk_accounting_type};
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
 use crate::wrappers::handle::BcachefsHandle;
 use bcachefs_kernel::util::printbuf::Printbuf;
@@ -34,16 +33,16 @@ enum ReconcileType {
 }
 
 impl ReconcileType {
-    fn as_c(self) -> c::bch_reconcile_accounting_type {
+    fn as_c(self) -> accounting::ReconcileType {
         match self {
-            Self::Replicas     => reconcile_accounting_type::replicas,
-            Self::Checksum     => reconcile_accounting_type::checksum,
-            Self::ErasureCode  => reconcile_accounting_type::erasure_code,
-            Self::Compression  => reconcile_accounting_type::compression,
-            Self::Target       => reconcile_accounting_type::target,
-            Self::HighPriority => reconcile_accounting_type::high_priority,
-            Self::Pending      => reconcile_accounting_type::pending,
-            Self::Stripes      => reconcile_accounting_type::stripes,
+            Self::Replicas     => accounting::ReconcileType::replicas,
+            Self::Checksum     => accounting::ReconcileType::checksum,
+            Self::ErasureCode  => accounting::ReconcileType::erasure_code,
+            Self::Compression  => accounting::ReconcileType::compression,
+            Self::Target       => accounting::ReconcileType::target,
+            Self::HighPriority => accounting::ReconcileType::high_priority,
+            Self::Pending      => accounting::ReconcileType::pending,
+            Self::Stripes      => accounting::ReconcileType::stripes,
         }
     }
 
@@ -109,7 +108,7 @@ fn reconcile_status_to_text(
         .map_err(|e| anyhow!("query_accounting: {}", e))?;
 
     // Build array of [data_sectors, metadata_sectors] per reconcile type
-    let nr = reconcile_accounting_type::nr.0 as usize;
+    let nr = accounting::ReconcileType::nr.0 as usize;
     let mut v = vec![[0u64; 2]; nr];
 
     for entry in &result.entries {

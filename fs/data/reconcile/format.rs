@@ -181,11 +181,15 @@ c_xmacro! {
 
 c_enum! {
     #[open]
-    pub enum bch_reconcile_accounting_type: u32 {
+    #[c_name(bch_reconcile_accounting_type)]
+    pub enum ReconcileType: u32 {
         BCH_RECONCILE_ACCOUNTING(t, n) => concat(BCH_RECONCILE_ACCOUNTING_, t) = n,
         BCH_RECONCILE_ACCOUNTING_NR,
     }
 }
+
+/// C's name, as bindgen's declarations of C functions spell it.
+pub type bch_reconcile_accounting_type = ReconcileType;
 
 c_xmacro! {
     RECONCILE_WORK_IDS(x) {

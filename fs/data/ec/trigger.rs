@@ -13,6 +13,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::accounting::ReconcileType;
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
 use crate::alloc::buckets::bucket_to_u64;
 use crate::alloc::lru::{lru_change, LruId};
@@ -437,7 +438,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchEr
     if needs_reconcile_delta != 0 {
         let s = old.map(|s| s.v()).or(new.map(|s| s.v())).expect("a stripe, if needs_reconcile changed");
         let acct = accounting::ReconcileWork {
-            type_: c::bch_reconcile_accounting_type::BCH_RECONCILE_ACCOUNTING_stripes.0 as u8,
+            type_: ReconcileType::stripes.0 as u8,
         };
         let data = i64::from(s.nr_blocks) * i64::from(s.sectors.get()) * needs_reconcile_delta;
         accounting::add(t, acct, accounting::ReconcileWorkCounters { data, metadata: 0 }, gc)?;
