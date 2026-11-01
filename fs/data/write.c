@@ -1624,8 +1624,7 @@ static struct bio *bch2_write_bio_alloc(struct bch_fs *c,
 	unsigned required = min(output_available, c->opts.encoded_extent_max);
 
 	if (unlikely(bio->bi_iter.bi_size < required))
-		__bch2_bio_alloc_pages_pool(c, bio, c->opts.block_size, required,
-					    GFP_NOIO|__GFP_SKIP_ZERO);
+		__bch2_bio_alloc_pages_pool(c, bio, required, GFP_NOIO|__GFP_SKIP_ZERO);
 
 	return bio;
 }

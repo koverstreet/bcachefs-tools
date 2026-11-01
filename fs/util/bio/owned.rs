@@ -27,8 +27,10 @@ use core::sync::atomic::{AtomicI32, Ordering::{AcqRel, Acquire, Relaxed}};
 
 use pin_init::PinInit;
 
-use super::{Bio, BioOwner, BioRange};
+use super::{pages, Bio, BioOwner, BioRange};
 use crate::c;
+use crate::fs::Fs;
+use crate::util::kernel::PAGE_SIZE;
 use crate::util::refcount::{Refcount, TestRefcount};
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::alloc::{init_at, kfree, kzalloc, KBox};
@@ -260,6 +262,21 @@ impl<T: HasBio> BioSet<T> {
         Ok(BioClone { b, _src: PhantomData })
     }
 
+    /// alloc(), with @size bytes of data of its own, @gfp's - what that can't
+    /// have from the page allocator from the bounce pool, so it doesn't fail
+    /// for want of it.
+    pub fn alloc_data<'f, E, I>(&self, fs: &'f Fs, size: usize, gfp: c::gfp_t,
+                                init: impl FnOnce(BioInPlace) -> I) -> Result<BioBoxData<'f, T>, E>
+    where
+        I: PinInit<T, E>,
+        E: From<BchError>,
+    {
+        let nr_vecs = size.div_ceil(PAGE_SIZE).try_into().expect("a bio's data of more than 64k pages");
+        let mut b = self.alloc(core::ptr::null_mut(), nr_vecs, 0, init)?;
+        pages::alloc_pages_pool(fs, b.bio_mut().raw_mut(), size, gfp);
+        Ok(BioBoxData { b, fs })
+    }
+
     fn init_new<E, I>(bio: *mut c::bio, init: impl FnOnce(BioInPlace) -> I) -> Result<BioBox<T>, E>
     where
         I: PinInit<T, E>,
@@ -388,6 +405,39 @@ unsafe impl<T: HasBio> BioOwner for BioClone<'_, T> {
 
     fn bio_mut(&mut self) -> Pin<&mut Bio> {
         self.b.bio_mut()
+    }
+}
+
+/// A BioBox and its data: alloc_data()'s, freed with it.
+pub struct BioBoxData<'f, T: HasBio> {
+    b:  BioBox<T>,
+    fs: &'f Fs,
+}
+
+impl<T: HasBio> Deref for BioBoxData<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.b
+    }
+}
+
+// SAFETY: its box's
+unsafe impl<T: HasBio> BioOwner for BioBoxData<'_, T> {
+    fn bio(&self) -> &Bio {
+        self.b.bio()
+    }
+
+    fn bio_mut(&mut self) -> Pin<&mut Bio> {
+        self.b.bio_mut()
+    }
+}
+
+impl<T: HasBio> Drop for BioBoxData<'_, T> {
+    fn drop(&mut self) {
+        // what's in its bvecs is alloc_data()'s, or more of the same: nothing
+        // safe puts anything else there for longer than a borrow of the box
+        unsafe { pages::free_pages_pool(self.fs, self.b.bio_mut().raw_mut()) }
     }
 }
 
