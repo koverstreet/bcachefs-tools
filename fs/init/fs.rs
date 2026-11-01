@@ -266,6 +266,11 @@ impl Fs {
         self.btree.cache.roots.node(id)
     }
 
+    /// Btree @id's root error, published as the root is.
+    pub fn btree_id_root_set_error(&self, id: u32, err: c_int) {
+        self.btree.cache.roots.lock().published().roots_error[id as usize].set(err as i16);
+    }
+
     pub fn btree_id_nr_alive(&self) -> u32 {
         u32::from(Btree::nr) + self.btree.cache.roots.roots_nr_extra.get()
     }

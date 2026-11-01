@@ -328,6 +328,11 @@ impl BtreeRootsLive {
         // SAFETY: a root's node, live while it's the root
         unsafe { (b as *const cs::BtreeNode).as_ref() }
     }
+
+    /// The error reading btree @id's root left.
+    pub fn error(&self, id: u32) -> c_int {
+        self.roots_error.get(id as usize).map_or(0, |e| e.get().into())
+    }
 }
 
 #[pin_data]
