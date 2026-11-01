@@ -591,8 +591,8 @@ pub unsafe fn bch2_key_deleted_in_journal(trans: *mut c::btree_trans, btree: Btr
     k.k.p == pos && k.k.key_type() == kt::KEY_TYPE_deleted
 }
 
-/// The key at @pos overwritten, if the journal has one that isn't - unless
-/// @check. The caller holds overwrite_lock.
+/// The key at @pos overwritten, if the journal has one that isn't - or with
+/// @check, -1 if it has one that is. The caller holds overwrite_lock.
 #[c_export]
 pub fn bch2_journal_key_check_or_overwrite(c: &Opaque<c::bch_fs>, btree: Btree, level: c_uint,
                                            pos: Bpos, check: bool) -> c_int {
@@ -603,16 +603,17 @@ pub fn bch2_journal_key_check_or_overwrite(c: &Opaque<c::bch_fs>, btree: Btree, 
     let idx = fs.journal_key_search(btree, level, pos);
 
     let Some(k) = jk.keys().get(idx) else { return 0 };
-    if k.btree_id() != btree || u32::from(k.level()) != level || k.is_overwritten() || fs.journal_key_pos(k) != pos {
+    if k.btree_id() != btree || u32::from(k.level()) != level || fs.journal_key_pos(k) != pos {
         return 0;
     }
 
-    /* C's -1 for an overwritten key, which returned above */
-    if check {
-        return 0;
+    if k.is_overwritten() {
+        return if check { -1 } else { 0 };
     }
 
-    jk.overwrite(&mut g, idx);
+    if !check {
+        jk.overwrite(&mut g, idx);
+    }
     0
 }
 
