@@ -234,6 +234,8 @@ pub fn derive_options(input: proc_macro::TokenStream) -> proc_macro::TokenStream
     expand_syn("#[derive(Options)]", || options::derive(syn::parse(input)?))
 }
 
+/// `#[derive(CStruct)]`: a #[repr(C)] struct or union's record, for C's
+/// declaration of it; no Rust side.
 #[proc_macro_derive(CStruct, attributes(c, c_anon, c_bitfield, c_inline, c_lock, c_name_of, c_packed,
                                         c_struct_group, c_typedef, counted_by))]
 pub fn derive_cstruct(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
