@@ -551,8 +551,9 @@ static int __journal_entry_open_one(struct journal *j)
 	 * the atomic reservation-state cmpxchg below so that reservations on
 	 * the new state idx see the ring slot populated.
 	 */
-	j->ring[seq & JOURNAL_STATE_BUF_MASK].buf  = buf;
-	j->ring[seq & JOURNAL_STATE_BUF_MASK].data = buf->data;
+	j->ring_buf[seq & JOURNAL_STATE_BUF_MASK]		= buf;
+	j->ring_data[seq & JOURNAL_STATE_BUF_MASK]		= buf->data;
+	j->ring_has_overwrites[seq & JOURNAL_STATE_BUF_MASK]	= buf->has_overwrites;
 
 	if (j->early_journal_entries.nr) {
 		memcpy(buf->data->_data, j->early_journal_entries.data,

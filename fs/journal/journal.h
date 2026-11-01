@@ -150,8 +150,8 @@ static inline u64 journal_cur_seq(struct journal *j)
  * FIFO mutation), since the FIFO front moves with seq_ondisk and
  * buffers are freed on pop.
  *
- * For the fast path when holding a reservation, use journal_res_buf()
- * instead — the reservation pins its ring slot.
+ * A reservation holder doesn't need its buf: journal_res_data() and
+ * ring_has_overwrites are its ring slot's, pinned by the reservation.
  */
 static inline struct journal_buf *
 journal_seq_to_buf(struct journal *j, u64 seq)
@@ -219,30 +219,19 @@ static inline u64 journal_last_unallocated_seq(struct journal *j)
 
 static inline struct journal_buf *journal_cur_buf(struct journal *j)
 {
-	return j->ring[j->reservations.idx].buf;
+	return j->ring_buf[j->reservations.idx];
 }
 
 /*
- * Fastpath buffer lookup for a held reservation. No lock required: the
- * reservation holds a count on the ring slot's state index, so the slot
- * still points at the buf for res->seq until the reservation is released.
- */
-static inline struct journal_buf *
-journal_res_buf(struct journal *j, struct journal_res *res)
-{
-	return j->ring[res->seq & JOURNAL_STATE_BUF_MASK].buf;
-}
-
-/*
- * Fastpath access to the staging buffer (jset) for a held reservation.
- * Equivalent to journal_res_buf(j, res)->data, but goes through the
- * cached pointer in the ring slot to avoid an extra dereference on the
- * hot reservation-write path.
+ * Fastpath access to the staging buffer (jset) for a held reservation. No
+ * lock required: the reservation holds a count on the ring slot's state
+ * index, so the slot still points at the data for res->seq until the
+ * reservation is released.
  */
 static inline struct jset *
 journal_res_data(struct journal *j, struct journal_res *res)
 {
-	return j->ring[res->seq & JOURNAL_STATE_BUF_MASK].data;
+	return j->ring_data[res->seq & JOURNAL_STATE_BUF_MASK];
 }
 
 static inline int journal_state_count(union journal_res_state s, int idx)
@@ -483,7 +472,7 @@ static inline int journal_res_get_fast(struct journal *j,
 	res->offset	= old.cur_entry_offset;
 	res->seq	= journal_cur_seq(j);
 	res->seq -= (res->seq - old.idx) & JOURNAL_STATE_BUF_MASK;
-	res->has_overwrites = journal_res_buf(j, res)->has_overwrites;
+	res->has_overwrites = j->ring_has_overwrites[res->seq & JOURNAL_STATE_BUF_MASK];
 	return 1;
 }
 

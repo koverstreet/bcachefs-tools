@@ -195,7 +195,7 @@ impl Fs {
     }
 
     pub fn journal_cur_seq(&self) -> u64 {
-        self.journal.seq.load(core::sync::atomic::Ordering::Relaxed) as u64
+        self.journal.fastpath.seq.load(core::sync::atomic::Ordering::Relaxed) as u64
     }
 
     pub fn sb_lock(&self) -> SbLockGuard<'_> {

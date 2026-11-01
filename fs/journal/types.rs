@@ -88,26 +88,6 @@ nest! {
 c_default!(journal_buf);
 
 /*
- * Ring slot for open reservations. Cache of the journal_buf pointer and
- * its data pointer, indexed by seq & JOURNAL_STATE_BUF_MASK. The
- * reservation fastpath reads .data directly to avoid the extra
- * indirection through .buf.
- *
- * A ring slot is overwritten in journal_entry_open() when a new seq is
- * assigned to that state index. Stale entries are never dereferenced
- * because the only readers are reservation holders (trusted: the
- * reservation pins the buf) or journal_res_entry() via those reservations.
- * All non-reservation seq→buf lookups go through j->in_flight.
- */
-#[repr(C)]
-#[derive(Clone, Copy, CStruct)]
-pub struct journal_ringbuf {
-    pub buf: *mut c::journal_buf,
-    pub data: *mut Head<c::jset>,
-}
-c_default!(journal_ringbuf);
-
-/*
  * Something that makes a journal entry dirty - i.e. a btree node that has to be
  * flushed:
  */
@@ -300,13 +280,28 @@ nest! {
     #[repr(C)]*
     pub struct journal {
         pub __align: CacheAligned,
-        /* Fastpath stuff up front: */
+        /*
+         * Fastpath stuff up front, in one cacheline: everything a reservation
+         * reads, beside the counter its cmpxchg takes the line exclusive for.
+         */
         #[c_anon]
-        #>[derive(Clone, Copy)]
         pub fastpath: pub struct journal_fastpath {
             pub __align: CacheAligned,
             pub reservations: c::journal_res_state,
+            /* Sequence number of most recent journal entry (last entry in @pin) */
+            pub seq: AtomicI64,
+            /* Max size of current journal entry */
+            pub cur_entry_u64s: c_uint,
             pub watermark: c::bch_watermark,
+            /*
+             * Each open reservation's ring slot, indexed by seq &
+             * JOURNAL_STATE_BUF_MASK: its journal_buf's data, and whether
+             * the entry has overwrites - copies, so a reservation doesn't
+             * touch the journal_buf. Set with ring_buf, in
+             * journal_entry_open().
+             */
+            pub ring_data: [*mut Head<c::jset>; c::JOURNAL_STATE_BUF_NR as usize],
+            pub ring_has_overwrites: [bool; c::JOURNAL_STATE_BUF_NR as usize],
         },
 
         /*
@@ -322,8 +317,6 @@ nest! {
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         pub stop_thread: *mut c::task_struct,
 
-        /* Max size of current journal entry */
-        pub cur_entry_u64s: c_uint,
         pub cur_entry_sectors: c_uint,
 
         /* Reserved space in journal entry to be used just prior to write */
@@ -350,11 +343,14 @@ nest! {
          */
         pub buf_lock: c::mutex_noio,
         /*
-         * Ring of slots indexed by seq & JOURNAL_STATE_BUF_MASK; only used by
-         * the reservation fastpath. Updated in journal_entry_open() when a new
-         * seq is assigned to the slot's state index.
+         * The journal_buf of each ring slot, indexed by seq &
+         * JOURNAL_STATE_BUF_MASK. Updated in journal_entry_open() when a new
+         * seq is assigned to the slot's state index. Stale slots are never
+         * dereferenced: the readers are reservation holders (the reservation
+         * pins the buf) and the current entry's, under the lock. All
+         * non-reservation seq→buf lookups go through j->in_flight.
          */
-        pub ring: [c::journal_ringbuf; c::JOURNAL_STATE_BUF_NR as usize],
+        pub ring_buf: [*mut c::journal_buf; c::JOURNAL_STATE_BUF_NR as usize],
 
         /*
          * FIFO of in-flight journal bufs, one entry per seq in
@@ -397,9 +393,6 @@ nest! {
                ENOMEM_fs_other_alloc)]
         #[c("struct workqueue_struct *discard_wq")]
         pub discard_wq: Late<Workqueue>,
-
-        /* Sequence number of most recent journal entry (last entry in @pin) */
-        pub seq: AtomicI64,
 
         pub seq_write_started: u64,
         /* seq, last_seq from the most recent journal entry successfully written */
@@ -508,6 +501,9 @@ nest! {
     }
 }
 c_default!(journal);
+
+const _: () = assert!(core::mem::size_of::<journal_fastpath>() == core::mem::align_of::<journal_fastpath>(),
+                      "journal_fastpath is more than a cacheline");
 
 /*
  * Embedded in struct bch_dev. First three fields refer to the array of journal
