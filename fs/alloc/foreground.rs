@@ -68,7 +68,7 @@ use crate::util::hash::{hash_64, Fold};
 use crate::util::inline_vec::InlineVec;
 use crate::util::kernel::{jiffies, time_after, unlikely, HZ};
 use crate::util::log::{print_str, LogLevel};
-use crate::util::place::Placed;
+use crate::util::place::Contained;
 use crate::util::projections::Volatile;
 use crate::util::rcu::read_lock;
 use crate::util::refcount::{RefBorrow, RefGuard, Refcount};

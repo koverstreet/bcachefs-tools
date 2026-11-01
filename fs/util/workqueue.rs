@@ -24,7 +24,7 @@
 use crate::c;
 use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
-use crate::util::place::{OnePath, Path, Place, Placed, Within};
+use crate::util::place::{OnePath, Path, Place, Contained, Within};
 use crate::util::refcount::{RefGuard, TryRefcount};
 use bitflags::bitflags;
 use core::cell::UnsafeCell;
@@ -298,7 +298,7 @@ unsafe impl<F: WorkFunc, R> Sync for ReffedWork<F, R> {}
 
 // SAFETY: its At field, given by the parent's #[derive(Init)], from at(),
 // for the field it names
-unsafe impl<F: WorkFunc, R> Placed for ReffedWork<F, R>
+unsafe impl<F: WorkFunc, R> Contained for ReffedWork<F, R>
 where
     F::At: Place<Type = Self>,
 {

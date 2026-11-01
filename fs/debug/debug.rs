@@ -25,7 +25,7 @@ use crate::fs::Fs;
 use crate::locking::Locked;
 use crate::util::debugfs::{self, DebugFile, DebugOut};
 use crate::util::eytzinger::Eytzinger0;
-use crate::util::place::Placed;
+use crate::util::place::Contained;
 use crate::util::{rcu, rhashtable, Printbuf};
 use crate::{btree_trans, prt, SPOS_MAX};
 use crate::format::{Bpos, Btree};

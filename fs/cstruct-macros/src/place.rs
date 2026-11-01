@@ -11,7 +11,7 @@
 //!   or an element's index, NAME, its AtIndex C's TYPE - for the derives
 //!   after it to see as any other field: `#[derive(Init)]` gives its init()
 //!   the At to put there;
-//! - Placed - its parent, and its At;
+//! - Contained - its parent, and its At;
 //! - InitAt for Base's field - its init(), the At from at(), or for an
 //!   array each element's from at_index() - which Base's `#[derive(Init)]`
 //!   picks for the field: so an At is made only for the field it names, and
@@ -24,7 +24,7 @@
 //!
 //! For an element of a Container, it gives the struct its AtIn field, and
 //! PlacedIn, and Base's InitAt for the field - the Container, by
-//! util/place.rs's container() - but neither Placed nor a container() - an
+//! util/place.rs's container() - but neither Contained nor a container() - an
 //! element's place is for the guarantee it never outlives its Base - nor
 //! any rule on its drop. The At field's attributes, #[placed_at] and #[c],
 //! are #[derive(Init)]'s and #[derive(CStruct)]'s, so it has them only if it
@@ -178,7 +178,7 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
         }
     };
 
-    // A field's or an array element's: Placed, its InitAt, and no drop of
+    // A field's or an array element's: Contained, its InitAt, and no drop of
     // its own. A container's element: PlacedIn, its container's InitAt -
     // and its drop is its own, the container whole while it runs
     let impls = match &kind {
@@ -208,7 +208,7 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
                 #[automatically_derived]
                 // SAFETY: its At field, which its init() takes - given by InitAt's,
                 // from at() or at_index(), for the place the At names
-                unsafe impl crate::util::place::Placed for #name {
+                unsafe impl crate::util::place::Contained for #name {
                     type Parent = #base;
                     type At = #at;
                     unsafe fn placed_at_raw(p: *const Self) -> *const Self::At {

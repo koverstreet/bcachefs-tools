@@ -36,7 +36,7 @@ use crate::inode;
 use crate::snapshots::snapshot;
 use crate::util::alloc::KVVec;
 use crate::util::ffi::Opaque;
-use crate::util::place::Placed;
+use crate::util::place::Contained;
 use crate::util::Printbuf;
 use crate::util::log::{LogLevel, LogMsg};
 use crate::{bch_err, bch_err_msg, bkey_fsck_err_on, fs_inconsistent, fsck_err,

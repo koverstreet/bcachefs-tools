@@ -313,7 +313,7 @@ use crate::util::bitmap::BitArray;
 use crate::util::rcu::RcuArray;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{cold_path, likely, unlikely};
-use crate::util::place::Placed;
+use crate::util::place::Contained;
 use crate::util::{HumanReadable, Printbuf};
 use core::ffi::c_int;
 use core::fmt;

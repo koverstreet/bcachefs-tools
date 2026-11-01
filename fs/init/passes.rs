@@ -173,7 +173,7 @@ use crate::util::kthread::Kthread;
 use crate::util::log::{log_cont, log_start, LogLevel, LogMsg};
 use crate::util::projections::AtomicWord;
 use crate::util::vstructs::{Head, Validated, Unvalidated};
-use crate::util::place::Placed;
+use crate::util::place::Contained;
 use crate::util::workqueue::Queue;
 use crate::util::{DateTime, Nsecs, Printbuf};
 use crate::{bch_err, bch_info, c_function_name, inode, message, prt};

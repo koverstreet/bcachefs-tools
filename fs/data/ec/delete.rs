@@ -12,7 +12,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::sb::counters::events;
 use crate::util::ffi::Opaque;
-use crate::util::place::Placed;
+use crate::util::place::Contained;
 use crate::{btree_trans, fs_inconsistent, prt};
 use cstruct_macros::c_export;
 use crate::format::Btree;

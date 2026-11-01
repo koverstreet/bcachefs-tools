@@ -48,7 +48,7 @@ use crate::util::gather::GatherRef;
 use crate::util::task::Resumable;
 use crate::util::{Printbuf, ToText};
 use crate::util::volatile::VolatileSlice;
-use crate::util::place::Placed;
+use crate::util::place::Contained;
 use cstruct_macros::{c_extern, placed, Init};
 use pin_init::pin_data;
 

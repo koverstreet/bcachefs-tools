@@ -159,7 +159,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::bio::Bio;
 use crate::util::debugfs::{self, DebugFile, DebugOut};
-use crate::util::place::Placed;
+use crate::util::place::Contained;
 use crate::util::rcu;
 use crate::util::{Printbuf, ToText};
 

@@ -466,7 +466,7 @@ pub fn args_stored_once(attr: proc_macro::TokenStream, item: proc_macro::TokenSt
 
 /// `#[placed(Base.field)]`, ahead of `#[pin_data]` and the derives, on a
 /// struct that lives only at Base's field: its At, the field util/place.rs's
-/// Placed is had by, which `#[derive(Init)]` then gives its init() - see
+/// Contained is had by, which `#[derive(Init)]` then gives its init() - see
 /// place.rs.
 #[proc_macro_attribute]
 pub fn placed(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {

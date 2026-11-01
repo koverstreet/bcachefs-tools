@@ -5,7 +5,7 @@
 //!
 //! container_of() needs two things true: the value is a P's field - its
 //! location - and the P is valid while it's used. This is the first: a type
-//! that's Placed is, every value of it, its parent's field N, so its
+//! that's Contained is, every value of it, its parent's field N, so its
 //! container() is a safe call. The parent's validity is the parent's own:
 //! a &child borrowed from it is had only while it is.
 //!
@@ -36,7 +36,7 @@
 //!   it, and at_index() writes for each element as the array's InitAt makes
 //!   them. Its container() is the array's offset, plus that many elements.
 //!
-//! - Placed is the child's side - its Parent, and its At, which ties the two
+//! - Contained is the child's side - its Parent, and its At, which ties the two
 //!   - and container() the field's address back to its parent's.
 //!
 //! What keeps a placed value at its place is that no value of it can be had
@@ -95,7 +95,7 @@
 //! A type lives at one place. One that lives at several, as a kobject or a
 //! work_struct does, is given one by a type parameter: ReffedWork<F, R> is
 //! the work_struct of work function F, whose WorkFunc - from the parent's
-//! #[derive(Init)], for the one field of that type - gives it its At, Placed
+//! #[derive(Init)], for the one field of that type - gives it its At, Contained
 //! as any field's type is (util/workqueue.rs).
 
 use crate::errcode::BchError;
@@ -328,7 +328,7 @@ where
 /// # Safety
 /// Self has a field of type Self::At, so a Self is had only from an
 /// initializer at() was given.
-pub(crate) unsafe trait Placed: Sized {
+pub(crate) unsafe trait Contained: Sized {
     /// What it's the field of.
     type Parent;
     /// Its proof - which ties Parent to where at() made it.
@@ -354,8 +354,8 @@ pub(crate) unsafe trait Placed: Sized {
 ///
 /// # Safety
 /// @p points to a live Self, initialized - had for 'a.
-pub(crate) unsafe fn container_of<'a, T: Placed>(p: *const T) -> &'a T::Parent {
-    // SAFETY: Placed's - p is in a parent, its At's offset() in it, the At
+pub(crate) unsafe fn container_of<'a, T: Contained>(p: *const T) -> &'a T::Parent {
+    // SAFETY: Contained's - p is in a parent, its At's offset() in it, the At
     // fixed once made; had for 'a, so the parent's live for 'a. Its known
     // gap, the parent's discipline: see the file comment
     unsafe {
@@ -462,9 +462,9 @@ impl<T> Path<T> for Here {
 
 impl<T, P: Path<T>> Path<T> for Up<P>
 where
-    P::To: Placed + 'static,
+    P::To: Contained + 'static,
 {
-    type To = <P::To as Placed>::Parent;
+    type To = <P::To as Contained>::Parent;
     fn get(t: &T) -> &Self::To {
         P::get(t).container()
     }
