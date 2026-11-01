@@ -832,7 +832,7 @@ impl Fs {
         }
 
         if !self.copygc.wq.is_some() {
-            let wq = Workqueue::new(format_args!("bcachefs_copygc"),
+            let wq = Workqueue::new(c"bcachefs_copygc",
                                     WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::UNBOUND, 1)
                 .map_err(|_| self.err(bch_errcode::BCH_ERR_ENOMEM_fs_other_alloc))?;
             // SAFETY: none to drop; start and exit are serialized by the

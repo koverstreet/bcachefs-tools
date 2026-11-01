@@ -26,11 +26,9 @@ use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
 use crate::util::place::{OnePath, Path, Place, Placed, Within};
 use crate::util::refcount::{RefGuard, TryRefcount};
-use crate::util::Printbuf;
 use bitflags::bitflags;
 use core::cell::UnsafeCell;
-use core::ffi::{c_int, c_ulong};
-use core::fmt;
+use core::ffi::{c_int, c_ulong, CStr};
 use core::marker::{PhantomData, PhantomPinned};
 use core::ptr::NonNull;
 
@@ -46,8 +44,20 @@ bitflags! {
         const MEM_RECLAIM   = c::BCH_WQ_MEM_RECLAIM;
         const HIGHPRI       = c::BCH_WQ_HIGHPRI;
         const CPU_INTENSIVE = c::BCH_WQ_CPU_INTENSIVE;
+        const PERCPU        = WQ_PERCPU;
     }
 }
+
+// 6.17's flag (128ea9f6ccfb): before it, per-cpu was the default, and
+// bcachefs.h defines it as 0
+#[cfg(kernel)]
+#[cfg(linux_ge = "6.17")]
+const WQ_PERCPU: u32 = c::BCH_WQ_PERCPU;
+#[cfg(kernel)]
+#[cfg(not(linux_ge = "6.17"))]
+const WQ_PERCPU: u32 = 0;
+#[cfg(not(kernel))]
+const WQ_PERCPU: u32 = c::BCH_WQ_PERCPU;
 
 /// A workqueue Rust owns, destroyed on drop - none until it's made, as a
 /// struct's field C sees as its struct workqueue_struct *.
@@ -62,17 +72,19 @@ unsafe impl Sync for Workqueue {}
 // SAFETY: none, a null pointer
 unsafe impl ::pin_init::Zeroable for Workqueue {}
 
+unsafe impl crate::util::late::LateInit for Workqueue {
+    fn is_made(&self) -> bool {
+        self.is_some()
+    }
+}
+
 impl Workqueue {
     /// Workqueue @name, running @max_active of its work at once (0: the
     /// default): alloc_workqueue(). Its failure is the caller's to name, as
     /// C's are.
-    pub fn new(name: fmt::Arguments<'_>, flags: WqFlags, max_active: c_int) -> Result<Self, AllocError> {
-        let mut name_buf = Printbuf::new();
-        write!(name_buf, "{name}");
+    pub fn new(name: &CStr, flags: WqFlags, max_active: c_int) -> Result<Self, AllocError> {
         // SAFETY: plain; the name is copied
-        let wq = unsafe {
-            c::bch2_alloc_workqueue(name_buf.as_c_str().as_ptr().cast(), flags.bits(), max_active)
-        };
+        let wq = unsafe { c::bch2_alloc_workqueue(name.as_ptr().cast(), flags.bits(), max_active) };
         NonNull::new(wq).map(|wq| Workqueue(Some(wq))).ok_or(AllocError)
     }
 

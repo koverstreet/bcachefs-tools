@@ -80,6 +80,7 @@ mod args_stored_once;
 mod fieldwise;
 mod options;
 mod init;
+mod late;
 mod place;
 mod prt;
 mod tagged_union;
@@ -269,6 +270,13 @@ pub fn derive_type_info(input: proc_macro::TokenStream) -> proc_macro::TokenStre
 #[proc_macro_derive(Init, attributes(init, init_args, placed_at))]
 pub fn derive_init(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand_syn("#[derive(Init)]", || init::derive(syn::parse(input)?))
+}
+
+/// `#[derive(Late)]`: `init_late()` and `exit_late()`, for the fields with
+/// `#[late]` - see late.rs.
+#[proc_macro_derive(Late, attributes(late))]
+pub fn derive_late(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[derive(Late)]", || late::derive(syn::parse(input)?))
 }
 
 /// `#[derive(Fieldwise)]`: each method `#[fieldwise(...)]` names, applied to

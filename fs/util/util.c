@@ -1376,6 +1376,7 @@ static_assert(BCH_WQ_FREEZABLE		== WQ_FREEZABLE);
 static_assert(BCH_WQ_MEM_RECLAIM	== WQ_MEM_RECLAIM);
 static_assert(BCH_WQ_HIGHPRI		== WQ_HIGHPRI);
 static_assert(BCH_WQ_CPU_INTENSIVE	== WQ_CPU_INTENSIVE);
+static_assert(BCH_WQ_PERCPU		== WQ_PERCPU || !WQ_PERCPU);
 
 /* For util/kthread.rs: kthread_create() is a macro in the kernel, a function in userspace */
 struct task_struct *bch2_kthread_create(int (*fn)(void *), void *data, const char *name)

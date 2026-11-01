@@ -46,10 +46,11 @@
 //! lockdep class of its own - a static in this generated code, one per
 //! field, as a static in ReffedWork's generic code wouldn't be.
 
-use proc_macro2::{Literal, TokenStream};
-use quote::{quote, ToTokens as _};
+use proc_macro2::{Literal, TokenStream, TokenTree};
+use quote::{format_ident, quote, ToTokens as _};
 use syn::punctuated::Punctuated;
-use syn::{Data, DataStruct, DeriveInput, Error, FnArg, GenericArgument, Ident, PathArguments, Token, Type};
+use syn::{Attribute, Data, DataStruct, DeriveInput, Error, FnArg, GenericArgument, Ident, PathArguments, Token,
+          Type};
 
 use crate::place;
 
@@ -84,10 +85,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         field_impls.push(place::field_impl(&cfg, &impl_g, &inst_ty, where_c, name, ty));
 
         let init = match f.attrs.iter().find(|a| a.path().is_ident("init")) {
-            Some(a) => match a.parse_args::<TokenStream>() {
-                Ok(init) if !init.is_empty() => Some(init),
-                _ => return Err(Error::new_spanned(a, format!("{name}: #[init(EXPR)] takes the field's initializer"))),
-            },
+            Some(a) => Some(initializer(a, name)?),
             None => None,
         };
         inits.push(cfg.clone());
@@ -139,6 +137,33 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         }
         #(#field_impls)*
     })
+}
+
+/// #[ATTR(EXPR)] or #[ATTR(EXPR, ERRCODE)]'s initializer: EXPR, or EXPR
+/// failing with BCH_ERR_ERRCODE - by init_or(). #[late]'s too.
+pub(crate) fn initializer(a: &Attribute, name: &Ident) -> syn::Result<TokenStream> {
+    let toks: Vec<TokenTree> = a.parse_args::<TokenStream>()?.into_iter().collect();
+    // ERRCODE is an ident after the last comma outside brackets - a comma in
+    // EXPR's turbofish is followed by more than that
+    let errcode = match toks.iter().rposition(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
+        Some(i) if i > 0 && i + 2 == toks.len() => match &toks[i + 1] {
+            TokenTree::Ident(err) => Some((i, format_ident!("BCH_ERR_{err}"))),
+            _ => None,
+        },
+        _ => None,
+    };
+    match errcode {
+        Some((i, err)) => {
+            let init: TokenStream = toks[..i].iter().cloned().collect();
+            Ok(quote!(crate::util::alloc::init_or(#init, crate::errcode::bch_errcode::#err)))
+        }
+        None if !toks.is_empty() => Ok(toks.into_iter().collect()),
+        None => {
+            let attr = a.path().to_token_stream();
+            Err(Error::new_spanned(a, format!("{name}: #[{attr}(EXPR)] or #[{attr}(EXPR, ERRCODE)]: the field's \
+                                               initializer, and the bch_errcode its failure is")))
+        }
+    }
 }
 
 // ── ReffedWork fields ───────────────────────────────────────────────────────

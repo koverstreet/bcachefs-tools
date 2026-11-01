@@ -388,6 +388,13 @@ pub unsafe fn init_at<T, E>(init: impl ::pin_init::PinInit<T, E>, slot: *mut T) 
     return unsafe { init.__pinned_init(slot) };
 }
 
+/// @init, failing with @err: an allocation's ENOMEM, as the error that says
+/// which it was
+pub fn init_or<T, E>(init: impl ::pin_init::PinInit<T, E>, err: crate::errcode::bch_errcode)
+    -> impl ::pin_init::PinInit<T, crate::errcode::BchError> {
+    unsafe { ::pin_init::pin_init_from_closure(move |slot| init_at(init, slot).map_err(|_| err.into())) }
+}
+
 fn alloc_in<const KMALLOC: bool, T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>,
                                                           #[allow(unused_variables)] gfp: Flags)
     -> Result<*mut T, E>

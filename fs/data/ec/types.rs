@@ -105,7 +105,7 @@ pub struct bch_fs_ec {
     /// What stripes being made's tasks run on: destroyed with the filesystem,
     /// which drains their last runs - see stripe_new.rs.
     #[c("struct workqueue_struct *stripe_create_wq")]
-    #[init(Workqueue::new(format_args!("bcachefs_ec_create"), WqFlags::UNBOUND, 0))]
+    #[init(Workqueue::new(c"bcachefs_ec_create", WqFlags::UNBOUND, 0))]
     pub stripe_create_wq: Workqueue,
     /// Where stripe_idx_alloc() looks for a free slot first: stripe heads'
     /// allocations race on it, each under its own lock.

@@ -24,6 +24,8 @@ c_const! {
     pub const BCH_WQ_HIGHPRI: u32 = 1 << 4;
     #[c_int]
     pub const BCH_WQ_CPU_INTENSIVE: u32 = 1 << 5;
+    #[c_int]
+    pub const BCH_WQ_PERCPU: u32 = 1 << 8;
 }
 
 #[repr(C)]
