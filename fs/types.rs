@@ -630,7 +630,8 @@ pub struct Fs {
      * channel detaches - a mount that asks for a status fd but never polls
      * still gets its progress in dmesg.
      */
-    pub stdio_progress_reader: bool,
+    #[c("bool stdio_progress_reader")]
+    pub stdio_progress_reader: core::sync::atomic::AtomicBool,
     /// These two and recovery_task: C's plain fields, atomic here, so Rust
     /// writes them through a shared Fs.
     #[c("unsigned loglevel")]

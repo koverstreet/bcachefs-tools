@@ -71,8 +71,7 @@ impl StdioFile for StatusFd {
             }
 
             // Whoever's asking is drawing it: keep it off the console.
-            // SAFETY: a flag C reads as READ_ONCE()
-            unsafe { core::ptr::write_volatile(&raw mut (*fs.as_ptr()).stdio_progress_reader, true) };
+            fs.stdio_progress_reader.store(true, core::sync::atomic::Ordering::Relaxed);
 
             let r = &fs.recovery;
             {
@@ -160,7 +159,7 @@ impl Drop for Attached<'_> {
         unsafe {
             (*fs).stdio = core::ptr::null_mut();
             (*fs).stdio_user_only = false;
-            core::ptr::write_volatile(&raw mut (*fs).stdio_progress_reader, false);
+            (*fs).stdio_progress_reader.store(false, core::sync::atomic::Ordering::Relaxed);
         }
     }
 }

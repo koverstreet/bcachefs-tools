@@ -187,11 +187,7 @@ impl Fs {
     /// A mount is reading recovery progress from BCH_IOCTL_RECOVERY_STATUS,
     /// so progress indicators needn't print it
     pub fn stdio_progress_reader(&self) -> bool {
-        let r = unsafe {
-            &*(core::ptr::addr_of!((*self.as_ptr()).stdio_progress_reader)
-               as *const core::sync::atomic::AtomicBool)
-        };
-        r.load(core::sync::atomic::Ordering::Relaxed)
+        self.stdio_progress_reader.load(Relaxed)
     }
 
     pub fn journal_cur_seq(&self) -> u64 {
