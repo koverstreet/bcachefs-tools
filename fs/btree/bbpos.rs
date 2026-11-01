@@ -83,8 +83,7 @@ impl c::bbpos {
 /// btree:pos, as bch2_bbpos_to_text().
 impl crate::util::ToText for c::bbpos {
     fn to_text(&self, out: &mut crate::util::Printbuf) {
-        unsafe { c::bch2_btree_id_to_text(out.as_raw(), self.btree) };
-        crate::prt!(out, ":{}", self.pos);
+        crate::prt!(out, "{}:{}", self.btree, self.pos);
     }
 }
 crate::display_via_to_text!(c::bbpos);

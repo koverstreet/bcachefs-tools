@@ -799,10 +799,8 @@ pub fn bkey_fsck_err_verdict(fs: &Fs, k: BkeySC<'_>, from: &c::bkey_validate_con
         if from_ty == c::bkey_validate_from::BKEY_VALIDATE_journal {
             write!(out, " journal seq={} offset={}", from.journal_seq, from.journal_offset);
         }
-        write!(out, " btree=");
-        // SAFETY: a printbuf, and a btree id
-        unsafe { c::bch2_btree_id_to_text(out.as_raw(), from.btree) };
-        write!(out, " level={}: ", from.level);
+        let btree = from.btree;
+        write!(out, " btree={btree} level={}: ", from.level);
         // SAFETY: a key of the filesystem
         unsafe { c::bch2_bkey_val_to_text(out.as_raw(), fs.as_ptr(), k.into()) };
         out.newline();

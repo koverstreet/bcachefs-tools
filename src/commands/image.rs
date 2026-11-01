@@ -255,12 +255,7 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
             let v = fs.accounting_mem_read(acc_pos.to_bpos(), 1);
 
             if v[0] != 0 {
-                unsafe {
-                    c::bch2_btree_id_to_text(
-                        indented.as_raw(),
-                        Btree::from_raw(i).expect("invalid btree id"),
-                    )
-                };
+                write!(indented, "{}", Btree::from_raw(i).expect("invalid btree id"));
                 prt_sectors(&mut indented, v[0]);
             }
         }
