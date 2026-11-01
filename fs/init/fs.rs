@@ -1359,3 +1359,18 @@ pub fn btree_id_is_alloc(id: u32) -> bool {
             | Btree::reconcile_scan)
     )
 }
+
+/* We can reconstruct these btrees from information in other btrees */
+pub fn btree_id_can_reconstruct(id: u32) -> bool {
+    btree_id_is_alloc(id) ||
+        matches!(
+            Btree::from_raw(id),
+            Some(Btree::snapshot_trees
+                | Btree::deleted_inodes
+                | Btree::reconcile_work
+                | Btree::reconcile_hipri
+                | Btree::reconcile_pending
+                | Btree::reconcile_scan
+                | Btree::subvolume_children)
+        )
+}
