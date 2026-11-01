@@ -322,8 +322,6 @@ btree_path_idx_t bch2_path_get(struct btree_trans *,
 btree_path_idx_t bch2_path_get_unlocked_mut(struct btree_trans *, enum btree_id,
 					    unsigned, struct bpos, bool);
 
-struct bkey_s_c bch2_btree_path_peek_slot(struct btree_path *, struct bkey *);
-
 /*
  * bch2_btree_path_peek_slot() for a cached iterator might return a key in a
  * different snapshot:

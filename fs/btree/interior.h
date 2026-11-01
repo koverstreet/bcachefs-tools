@@ -59,8 +59,6 @@ static inline int btree_node_shard(struct bch_fs *c, struct btree *b)
 	return (field << 1) >> (64 - c->opts.shard_inode_numbers_bits);
 }
 
-int bch2_btree_increase_depth(struct btree_trans *, btree_path_idx_t, unsigned);
-
 int __bch2_foreground_maybe_merge(struct btree_trans *, btree_path_idx_t,
 				  unsigned, enum bch_trans_commit_flags,
 				  u64 *);

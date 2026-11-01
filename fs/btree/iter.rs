@@ -66,6 +66,8 @@ c_extern! {
     pub fn bch2_trans_kmalloc_trace_to_text(out: *mut Printbuf,
                                             trace: *mut c::darray_trans_kmalloc_trace);
     pub fn bch2_path_put(trans: *mut c::btree_trans, path_idx: c::btree_path_idx_t, intent: bool);
+    pub fn bch2_btree_path_peek_slot(path: *mut c::btree_path, u: *mut c::bkey) -> c::bkey_s_c;
+    pub fn bch2_btree_increase_depth(trans: *mut c::btree_trans, path: c::btree_path_idx_t, flags: c_uint) -> c_int;
     pub fn bch2_btree_iter_peek_root(trans: *mut c::btree_trans, iter: *mut c::btree_iter, btree: Btree,
                                      level: c_uint) -> c::bkey_s_c;
     pub fn __bch2_trans_relock(trans: *mut c::btree_trans, trace: bool) -> c_int;
@@ -1362,6 +1364,11 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.result(ret)
     }
 
+    pub fn btree_increase_depth(&self, iter: &BtreeIter<'a>) -> Result<(), BchError> {
+        let ret = unsafe { bch2_btree_increase_depth(self.raw(), iter.path, 0) };
+        self.result(ret)
+    }
+
     /// A key moved from @old_pos to @new_pos, in the same snapshot: in every
     /// descendant snapshot where it was overwritten at @old_pos, whiteout
     /// @new_pos too, so it stays hidden there.
@@ -1879,6 +1886,7 @@ bitflags! {
 
 bitflags! {
     /// The bits of bch_trans_commit_flags above the watermark.
+    #[derive(Clone, Copy)]
     pub struct CommitFlags: u32 {
         const NO_ENOSPC             = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_enospc.bits();
         const NO_CHECK_RW           = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_check_rw.bits();
@@ -2237,6 +2245,18 @@ impl<'t> BtreeIter<'t> {
             let node = (*path).l[(*path).level() as usize].b;
 
             errptr_or_null(node).ok()?.map(|raw| BtreeNodeRef { raw })
+        }
+    }
+
+    /// The btree's key at the iterator's path's position - not the journal
+    /// keys over it, which a peek sees - unpacked into @u if it's packed.
+    pub(crate) fn path_peek_slot<'k>(&'k self, t: &TransAttempt<'_, 't>, u: &'k mut c::bkey) -> BkeySC<'k> {
+        unsafe {
+            let path = (*t.raw()).paths.add(self.path as usize);
+            bkey_s_c_to_result::<'k>(bch2_btree_path_peek_slot(path, u))
+                .ok()
+                .flatten()
+                .expect("a slot always has a key")
         }
     }
 
