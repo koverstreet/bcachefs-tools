@@ -31,7 +31,6 @@ use crate::data::ec::head::stripe_heads_stop;
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::{Fs, StateLockWrite};
 use crate::init::dev::bch2_dev_io_ref_stop;
-use crate::locking::Locked;
 use crate::sb::members::{BtreeBitmapGcSchedule, SbMembersMut};
 use crate::util::futex::EventCount;
 use crate::util::ffi::Opaque;
@@ -107,7 +106,7 @@ impl Fs {
 
         bch_info!(self, "{}clean shutdown complete, journal seq {}",
                   if self.flags.get(Flag::BCH_FS_clean_shutdown) { "" } else { "un" },
-                  self.journal.seq_ondisk);
+                  self.journal.lock.seq_ondisk.get());
 
         /*
          * After stopping journal:
@@ -229,7 +228,7 @@ impl StateLockWrite<'_> {
            fs.flags.get(Flag::BCH_FS_started) &&
            fs.flags.get(Flag::BCH_FS_clean_shutdown) &&
            fs.recovery.runner.pass_done.get() >= c::bch_recovery_pass::BCH_RECOVERY_PASS_journal_replay {
-            assert_eq!(fs.journal.last_empty_seq, fs.journal_cur_seq());
+            assert_eq!(fs.journal.lock.lock().last_empty_seq, fs.journal_cur_seq());
             assert!(fs.sb.clean.get() != 0);
             assert!(fs.btree.cache.live.iter().all(|l| l.nr_dirty == 0));
             assert_eq!(fs.btree.key_cache.nr_dirty.load(Relaxed), 0);
@@ -330,7 +329,7 @@ impl StateLockWrite<'_> {
          * at least one non-flush write in the journal or recovery will fail:
          */
         {
-            let _j = Locked::from_c(&fs.journal.lock).lock();
+            let _j = fs.journal.lock.lock();
             fs.journal.flags.set(Journal::JOURNAL_need_flush_write, true);
             fs.journal.flags.set(Journal::JOURNAL_running, true);
             #[cfg(CONFIG_BCACHEFS_DEBUG)]

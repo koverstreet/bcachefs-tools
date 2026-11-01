@@ -155,6 +155,26 @@ unsafe impl<T: Publish, const N: usize> Publish for [T; N] {
     type Writer = [T::Writer; N];
 }
 
+// SAFETY: its writes are atomic, so its writer is itself
+unsafe impl Publish for core::sync::atomic::AtomicU64 {
+    type Writer = Self;
+}
+
+// SAFETY: as AtomicU64's
+unsafe impl Publish for core::sync::atomic::AtomicI64 {
+    type Writer = Self;
+}
+
+// SAFETY: as AtomicU64's
+unsafe impl<T> Publish for core::sync::atomic::AtomicPtr<T> {
+    type Writer = Self;
+}
+
+// SAFETY: no bytes
+unsafe impl Publish for crate::types::CacheAligned {
+    type Writer = Self;
+}
+
 /// A struct a Locked publishes, and its writer: the struct as declared,
 /// #[repr(C)], and NameWriter - each field as its writer has it, the Publish
 /// Writer of its type - which the lock's guard hands out. Fields are Publish

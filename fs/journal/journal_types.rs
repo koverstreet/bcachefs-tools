@@ -8,7 +8,7 @@ use crate::fs::Fs;
 use crate::types::c_default;
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_uint};
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::Ordering;
 use cstruct_macros::{CStruct, c_enum, c_extern};
 
 c_enum! {
@@ -51,8 +51,8 @@ c_extern! {
 
 impl c::journal {
     pub fn halted(&self) -> bool {
-        let s = unsafe { &*(&raw const self.fastpath.reservations).cast::<AtomicU64>() };
-        s.load(Ordering::Relaxed) & u64::from(c::JOURNAL_ENTRY_OFFSET_MAX) == u64::from(c::JOURNAL_ENTRY_ERROR_VAL)
+        self.lock.hot.reservations.load(Ordering::Relaxed) & u64::from(c::JOURNAL_ENTRY_OFFSET_MAX) ==
+            u64::from(c::JOURNAL_ENTRY_ERROR_VAL)
     }
 }
 

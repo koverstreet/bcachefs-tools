@@ -788,7 +788,7 @@ pub(crate) fn list_journal_run(
 
     // Main iteration
     let mut seq = 0u64;
-    let last_seq_ondisk = unsafe { (*c_fs).journal.last_seq_ondisk };
+    let last_seq_ondisk = unsafe { &*c_fs }.journal.lock.last_seq_ondisk.get();
 
     for p in replays.iter() {
         if interrupted.is_some_and(|i| i()) {

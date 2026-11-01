@@ -479,7 +479,7 @@ fn get_sb_journal(fs: &Fs, ca: &Dev, entire_journal: bool, d: &mut DumpDev) {
     }
 
     // Journal buckets
-    let last_seq_ondisk = unsafe { (*fs.as_ptr()).journal.last_seq_ondisk };
+    let last_seq_ondisk = fs.journal.lock.last_seq_ondisk.get();
     for i in 0..ca.journal.nr as usize {
         let seq = unsafe { *ca.journal.bucket_seq.add(i) };
         if entire_journal || seq >= last_seq_ondisk {

@@ -262,14 +262,14 @@ pub(crate) fn fs_mark_clean(fs: &Fs, guard: &mut SbLockGuard<'_>) {
     sb.sb_mut().compat[0] |= 1 << c::bch_sb_compat::BCH_COMPAT_alloc_info.0 |
                              1 << c::bch_sb_compat::BCH_COMPAT_alloc_metadata.0;
 
-    let u64s = SECTION_HEAD / size_of::<u64>() + fs.journal.entry_u64s_reserved as usize;
+    let u64s = SECTION_HEAD / size_of::<u64>() + fs.journal.lock.entry_u64s_reserved.get() as usize;
     let Some(f) = sb.field_resize::<Section>(u64s as u32) else {
         bch_err!(fs, "error resizing superblock while setting filesystem clean");
         return;
     };
 
     f.flags = Le32::new(0);
-    f.journal_seq = Le64::new(fs.journal.fastpath.seq.load(Relaxed) as u64);
+    f.journal_seq = Le64::new(fs.journal.lock.hot.seq.load(Relaxed) as u64);
     // Trying to catch outstanding bug:
     assert!(f.journal_seq.get() <= i64::MAX as u64, "journal seq {} past S64_MAX", f.journal_seq.get());
 

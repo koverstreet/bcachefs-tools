@@ -35,9 +35,7 @@ impl c::journal {
     /// The lowest watermark it takes reservations at, read without the
     /// journal's lock, which it's written under.
     pub fn watermark(&self) -> c::bch_watermark {
-        // SAFETY: ours, only ever written with a watermark: read once, as
-        // READ_ONCE()
-        unsafe { core::ptr::read_volatile(&raw const self.fastpath.watermark) }
+        c::bch_watermark::from_bits(self.lock.hot.watermark.get())
     }
 
     /// The open bucket pool can't serve below @watermark - 0 for all of them:
@@ -45,12 +43,12 @@ impl c::journal {
     /// unchanged case a compare, as C's bch2_journal_set_alloc_watermark()
     /// - the allocator's fast paths report on every bucket.
     pub fn set_open_buckets_watermark(&self, watermark: u32) {
-        if u32::from(self.watermark_open_buckets.get()) != watermark {
+        if u32::from(self.lock.watermark_open_buckets.get()) != watermark {
             // SAFETY: ours, and its field - a Volatile<u8>, laid out as a u8 -
             // set under the journal's lock, which C takes
             unsafe {
                 __bch2_journal_set_alloc_watermark(core::ptr::from_ref(self).cast_mut(),
-                    (&raw const self.watermark_open_buckets).cast_mut().cast(), watermark)
+                    (&raw const self.lock.watermark_open_buckets).cast_mut().cast(), watermark)
             }
         }
     }
