@@ -15,6 +15,7 @@
 //!
 //! lru.h's inlines are the same encoding, for C's callers.
 
+use crate::fs::Dev;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::buckets::u64_to_bucket;
 use crate::btree::bkey::prelude::*;
@@ -234,7 +235,7 @@ fn dev_remove_lru_range(fs: &Fs, id: LruId) -> Result<(), BchError> {
 /// has them - a device past the per-device lrus' ids has its entries found
 /// by scanning - and before per_dev_fragmentation_lru, the fs-wide
 /// fragmentation lru's, found by scanning.
-pub(crate) fn dev_remove_lrus(fs: &Fs, ca: &c::bch_dev) -> Result<(), BchError> {
+pub(crate) fn dev_remove_lrus(fs: &Fs, ca: &Dev) -> Result<(), BchError> {
     crate::btree_trans!(fs).write_buffer_flush_sync()?;
 
     let dev = u32::from(ca.dev_idx);

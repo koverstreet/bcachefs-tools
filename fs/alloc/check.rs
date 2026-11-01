@@ -23,6 +23,7 @@
 //! The injection tests for every error here: ktest's alloc-inject.ktest and
 //! lru-inject.ktest.
 
+use crate::fs::Dev;
 use crate::alloc::background::{alloc_to_v4, bucket_do_freespace_index, BucketGensPos, FreespacePos, NeedDiscardPos};
 use crate::alloc::buckets::bucket_to_u64;
 use crate::alloc::lru::{lru_check_set, lru_mod, per_dev_fragmentation_lru, LruId, LruPos};
@@ -279,7 +280,7 @@ fn check_alloc_key<'t>(
 /// btree - @end cut to the freespace key there: bch2_check_alloc_hole_freespace().
 fn check_alloc_hole_freespace<'t>(
     t:              &TransAttempt<'_, 't>,
-    ca:             &c::bch_dev,
+    ca:             &Dev,
     start:          Bpos,
     end:            &mut Bpos,
     freespace_iter: &mut BtreeIter<'t>,
@@ -747,7 +748,7 @@ crate::recovery_pass!(bch2_check_alloc_to_lru_refs => check_alloc_to_lru_refs);
 /// The alloc key or hole at @iter, short of @end, into the freespace,
 /// need_discard and need_gc_gens btrees, committed, and @iter on past it:
 /// dev_freespace_init_iter().
-fn dev_freespace_init_iter<'t>(t: &TransAttempt<'_, 't>, ca: &c::bch_dev, iter: &mut BtreeIter<'t>,
+fn dev_freespace_init_iter<'t>(t: &TransAttempt<'_, 't>, ca: &Dev, iter: &mut BtreeIter<'t>,
                                end: Bpos) -> Result<(), BchError> {
     match get_key_or_hole(t, iter, end)? {
         // Live keys, one at a time:
@@ -774,7 +775,7 @@ fn dev_freespace_init_iter<'t>(t: &TransAttempt<'_, 't>, ca: &c::bch_dev, iter: 
 /// Device @ca's buckets @bucket_start to @bucket_end, from the alloc btree
 /// into the freespace, need_discard and need_gc_gens btrees, and its member
 /// marked freespace_initialized: bch2_dev_freespace_init().
-fn dev_freespace_init(fs: &Fs, ca: &c::bch_dev, bucket_start: u64, bucket_end: u64) -> Result<(), BchError> {
+fn dev_freespace_init(fs: &Fs, ca: &Dev, bucket_start: u64, bucket_end: u64) -> Result<(), BchError> {
     let dev = u32::from(ca.dev_idx);
     let end = pos(dev.into(), bucket_end);
 
@@ -802,7 +803,7 @@ fn dev_freespace_init(fs: &Fs, ca: &c::bch_dev, bucket_start: u64, bucket_end: u
 }
 
 #[c_export]
-pub fn bch2_dev_freespace_init(c: &Opaque<Fs>, ca: &c::bch_dev, bucket_start: u64, bucket_end: u64)
+pub fn bch2_dev_freespace_init(c: &Opaque<Fs>, ca: &Dev, bucket_start: u64, bucket_end: u64)
     -> c_int
 {
     ret_to_c(dev_freespace_init(Fs::from_c(c), ca, bucket_start, bucket_end))

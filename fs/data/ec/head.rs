@@ -12,6 +12,7 @@
 //! that a stripe's can_widen is measured against: so a device going offline
 //! and coming back doesn't have reconcile rewrite every stripe's.
 
+use crate::fs::Dev;
 use crate::alloc::disk_groups::Target;
 use crate::alloc::foreground::OpenBucket;
 use crate::btree::bkey::BkeyV;
@@ -145,7 +146,7 @@ impl Fs {
             0 => None,
             l => self.target_to_mask(disk_label_target(l), &rcu),
         };
-        let in_label = |ca: &&c::bch_dev| label.is_none_or(|t| t.d.test(ca.dev_idx.into()));
+        let in_label = |ca: &&Dev| label.is_none_or(|t| t.d.test(ca.dev_idx.into()));
 
         for ca in self.devs_rcu_in(0..self.nr_devices() as usize, &rcu).filter(in_label) {
             let mi = ca.mi.get();
@@ -298,7 +299,7 @@ pub(crate) fn stripe_head_put(fs: &Fs, mut g: HeadGuard<'_>) {
 /// Whether stopping device @ca - None: the filesystem - cancels @s: one with a
 /// block on it, freshly allocated or carried from a reused stripe.
 /// should_cancel_stripe().
-fn stripe_on_dev(s: &Internal, ca: Option<&c::bch_dev>) -> bool {
+fn stripe_on_dev(s: &Internal, ca: Option<&Dev>) -> bool {
     let Some(ca) = ca else { return true };
     let v = s.new_stripe.stripe().v();
 
@@ -314,7 +315,7 @@ fn stripe_on_dev(s: &Internal, ca: Option<&c::bch_dev>) -> bool {
 /// Cancel the stripes the heads are filling with a block on @ca - every one,
 /// for None: for the filesystem going read-only, which it's already set, so
 /// heads stay empty after.
-pub(crate) fn stripe_heads_stop(fs: &Fs, ca: Option<&c::bch_dev>) {
+pub(crate) fn stripe_heads_stop(fs: &Fs, ca: Option<&Dev>) {
     let heads = fs.ec.stripe_heads.lock();
     for h in heads.iter() {
         let mut g = h.lock.lock();

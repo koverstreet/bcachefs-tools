@@ -36,6 +36,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyVal};
 use crate::btree::iter::{is_restart, polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans,
@@ -106,16 +107,16 @@ impl BackpointerPos {
         pos(self.dev, (self.sector << fs.sb.extent_bp_shift.get()) + u64::from(self.suboffset))
     }
 
-    pub fn bucket(self, ca: &c::bch_dev) -> Bpos {
+    pub fn bucket(self, ca: &Dev) -> Bpos {
         self.bucket_and_offset(ca).0
     }
 
-    pub fn bucket_and_offset(self, ca: &c::bch_dev) -> (Bpos, u32) {
+    pub fn bucket_and_offset(self, ca: &Dev) -> (Bpos, u32) {
         let (bucket, offset) = ca.sector_to_bucket_and_offset(self.sector);
         (pos(self.dev, bucket), offset)
     }
 
-    pub fn bucket_range(ca: &c::bch_dev, bucket: Bpos) -> RangeInclusive<Bpos> {
+    pub fn bucket_range(ca: &Dev, bucket: Bpos) -> RangeInclusive<Bpos> {
         let fs = ca.fs();
         let start = |b: u64| Self { dev: bucket.inode, sector: ca.bucket_to_sector(b), suboffset: 0 }
             .to_bpos(fs);

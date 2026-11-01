@@ -69,6 +69,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::DataType;
@@ -496,7 +497,7 @@ fn dev_label_resolve(sb: &mut (impl SbResize + ?Sized), name: &[u8]) -> Result<u
 /// # Safety
 /// @name is a C string.
 #[c_export]
-pub unsafe fn __bch2_dev_group_set(c: &Opaque<Fs>, ca: &c::bch_dev, name: *const c_char) -> c_int {
+pub unsafe fn __bch2_dev_group_set(c: &Opaque<Fs>, ca: &Dev, name: *const c_char) -> c_int {
     // SAFETY: the caller's
     let name = unsafe { CStr::from_ptr(name.cast()) };
     let fs = Fs::from_c(c);

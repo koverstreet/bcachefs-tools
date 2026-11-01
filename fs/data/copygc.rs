@@ -54,6 +54,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::accounting;
 use crate::alloc::accounting_mem::MarkHeld;
 use crate::alloc::background::alloc_to_v4;
@@ -260,7 +261,7 @@ const _: () = assert!(COPYGC_FREE_THRESHOLD_PCT * 5 == 100);
 /// In C's arithmetic: sector counts are u64s, made s64s where C's are, and
 /// wrapping - a kernel build panics on overflow, and accounting gone wrong
 /// mustn't take the kernel with it.
-pub(crate) fn dev_wait_amount(ca: &c::bch_dev, mark: &impl MarkHeld) -> (i64, bool) {
+pub(crate) fn dev_wait_amount(ca: &Dev, mark: &impl MarkHeld) -> (i64, bool) {
     let fs = ca.fs();
     let usage_full = ca.usage_full_read_fast();
     let mut usage = c::bch_dev_usage::default();
@@ -309,7 +310,7 @@ pub(crate) fn dev_wait_amount(ca: &c::bch_dev, mark: &impl MarkHeld) -> (i64, bo
 /// threshold copygc drives to zero, so on a device it is actively working the
 /// comparison flips constantly and says nothing about whether space is
 /// coming.
-pub(crate) fn can_make_progress(ca: &c::bch_dev, mark: &impl MarkHeld) -> bool {
+pub(crate) fn can_make_progress(ca: &Dev, mark: &impl MarkHeld) -> bool {
     ca.copygc_in_flight.load(Relaxed) != 0 || dev_wait_amount(ca, mark).0 <= 0
 }
 

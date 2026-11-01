@@ -16,6 +16,7 @@
 //! key at the walk's position, where C overwrote its iter->k with a deleted
 //! one.
 
+use crate::fs::Dev;
 use crate::alloc::backpointers::{backpointer_get_key, backpointers_match, bp_reconcile_phys, extent_ptr_to_bp};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::check_backpointers::check_bp_exists;
@@ -528,7 +529,7 @@ pub fn bch2_check_reconcile_work(c: &Opaque<Fs>) -> c_int {
 /// backpointers made under the old setting stale, and deletes after it miss
 /// their phys btree entries - expected, not damage: check_reconcile_work is
 /// scheduled to repair them, quietly.
-pub fn rotational_changed(fs: &Fs, ca: &c::bch_dev) {
+pub fn rotational_changed(fs: &Fs, ca: &Dev) {
     let mut msg = LogMsg::with_level(fs, LogLevel::INFO);
     write!(msg, "{}: rotational changed, repairing backpointer reconcile phys bits\n",
            ca);

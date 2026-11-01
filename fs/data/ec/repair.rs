@@ -4,6 +4,7 @@
 //! rebuilding around what's left of it - and recording, or taking out of
 //! the stripe, the extents of blocks that are lost.
 
+use crate::fs::Dev;
 use crate::alloc::backpointers::BackpointerPos;
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::disk_groups::Target;
@@ -477,7 +478,7 @@ fn ptr_eq(a: &c::bch_extent_ptr, b: &c::bch_extent_ptr) -> bool {
 }
 
 /// The block of @s on @ca, in the bucket backpointer @bp is in.
-fn stripe_block_at_bp(ca: &c::bch_dev, s: BkeySC<'_, c::Stripe<Validated>>, bp: BkeySC<'_, c::Backpointer>)
+fn stripe_block_at_bp(ca: &Dev, s: BkeySC<'_, c::Stripe<Validated>>, bp: BkeySC<'_, c::Backpointer>)
     -> Option<usize>
 {
     let bucket = BackpointerPos::from_bpos(ca.fs(), bp.k.p).bucket(ca).offset;
@@ -518,7 +519,7 @@ fn repair_bad_block(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, read: BkeySC<'_
 /// block: its extents outside the bad granule are intact, and may be needed
 /// if the stripe can't be reconstructed. A restart is the walk's, which
 /// retries the block.
-pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, ca: &c::bch_dev,
+pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, ca: &Dev,
                                  bp: BkeySC<'_, c::Backpointer>, k: BkeySC<'_>) -> Result<(), BchError> {
     let fs = t.fs();
     let Some(s) = k.arm::<c::Stripe>() else { return Ok(()) };

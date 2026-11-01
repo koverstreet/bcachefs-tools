@@ -31,6 +31,7 @@
 //! the per-cpu counters, whose online reservations must all be put by then.
 
 
+use crate::fs::Dev;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
 use crate::c::bch_errcode;
@@ -63,7 +64,7 @@ use pin_init::pinned_drop;
 /// against what that freed - or its share of the copygc reserve, by
 /// capacity, not bucket count, as bucket sizes can differ; whichever is
 /// more, and never more than the device.
-fn dev_reserved_sectors(ca: &c::bch_dev, gc_reserve: u64, capacity: u64) -> u64 {
+fn dev_reserved_sectors(ca: &Dev, gc_reserve: u64, capacity: u64) -> u64 {
     let dev_sectors = ca.capacity_sectors();
 
     let alloc_reserve = (u64::from(ca.nr_btree_reserve) * 2 +
@@ -141,7 +142,7 @@ pub(crate) fn fs_ra_pages(fs: &Fs) -> usize {
     let rcu = read_lock();
     // SAFETY: a pointer, read whole - as C's READ_ONCE(): set and cleared
     // as the device comes and goes
-    let online = |ca: &c::bch_dev| !unsafe { core::ptr::read_volatile(&raw const ca.disk_sb.bdev) }.is_null();
+    let online = |ca: &Dev| !unsafe { core::ptr::read_volatile(&raw const ca.disk_sb.bdev) }.is_null();
     match fs.devs_rcu(&rcu).filter(|ca| online(ca)).count() * per_dev {
         // VM_READAHEAD_PAGES
         0 => (128 << 10) >> kernel::page::PAGE_SHIFT,
@@ -162,7 +163,7 @@ impl Fs {
 /// @ca in or out of rw_devs[]: every rw device takes free; cached, the
 /// user data of a device of durability 0; the rest, what it allows, with
 /// durability.
-fn dev_allocator_set_rw(fs: &Fs, ca: &c::bch_dev, rw: bool) {
+fn dev_allocator_set_rw(fs: &Fs, ca: &Dev, rw: bool) {
     let allowed = |t: DataType| u64::from(ca.mi.get().data_allowed) & (1 << t.0) != 0;
 
     for (i, devs) in fs.allocator.rw_devs.iter().enumerate() {
@@ -190,7 +191,7 @@ impl Fs {
 
 /// Whether an open bucket on @ca is a write point's - not on the partial
 /// list, which doesn't keep writes in flight.
-fn dev_has_open_write_point(fs: &Fs, ca: &c::bch_dev) -> bool {
+fn dev_has_open_write_point(fs: &Fs, ca: &Dev) -> bool {
     fs.allocator.open_buckets.iter().any(|ob| {
         let id = ob.id();
         id.valid() && id.dev() == ca.dev_idx && !ob.flag(c::open_bucket::ON_PARTIAL_LIST)
@@ -200,7 +201,7 @@ fn dev_has_open_write_point(fs: &Fs, ca: &c::bch_dev) -> bool {
 impl Fs {
     /// @ca going read-only: out of rw_devs[], capacity recomputed without it, its
     /// open buckets stopped, and the writes still in flight to it waited for.
-    pub fn dev_allocator_remove(&self, ca: &c::bch_dev) {
+    pub fn dev_allocator_remove(&self, ca: &Dev) {
         self.state_lock.assert_held_any();
 
         dev_allocator_set_rw(self, ca, false);
@@ -220,19 +221,19 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_dev_allocator_remove(c: &Opaque<Fs>, ca: &c::bch_dev) {
+pub fn bch2_dev_allocator_remove(c: &Opaque<Fs>, ca: &Dev) {
     Fs::from_c(c).dev_allocator_remove(ca)
 }
 
 impl crate::fs::StateLockWrite<'_> {
-    pub fn dev_allocator_add(&self, ca: &c::bch_dev) {
+    pub fn dev_allocator_add(&self, ca: &Dev) {
         dev_allocator_set_rw(self.fs(), ca, true);
     }
 }
 
 /// @ca going read-write: into rw_devs[].
 #[c_export]
-pub fn bch2_dev_allocator_add(c: &Opaque<Fs>, ca: &c::bch_dev) {
+pub fn bch2_dev_allocator_add(c: &Opaque<Fs>, ca: &Dev) {
     let fs = Fs::from_c(c);
     fs.state_lock.assert_held_any();
     dev_allocator_set_rw(fs, ca, true);
@@ -351,7 +352,7 @@ struct DevPlaceable {
 }
 
 impl DevPlaceable {
-    fn new(ca: &c::bch_dev) -> Self {
+    fn new(ca: &Dev) -> Self {
         if !ca.has_capacity() {
             return Self::default();
         }

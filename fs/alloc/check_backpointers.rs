@@ -22,6 +22,7 @@
 //! again - see backpointers.rs.
 
 
+use crate::fs::Dev;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_del, backpointers_match, backpointers_maybe_flush,
                                  bucket_backpointer_mod, extent_ptr_to_bp, get_key, BackpointerPos,
@@ -512,7 +513,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
 
 /// Schedules check_extents_to_backpointers - ratelimited from copygc, until 1/128
 /// of the device's buckets are short.
-pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: &c::bch_dev, bucket: u64,
+pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: &Dev, bucket: u64,
                                          copygc: bool, mut last_flushed: WbFlush<'_>)
     -> Result<(), BchError>
 {
@@ -567,7 +568,7 @@ pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: 
 /// # Safety
 /// @trans isn't in an attempt; @last_flushed is the caller's.
 #[c_export]
-pub unsafe fn bch2_check_bucket_backpointer_mismatch<'t>(trans: &'t BtreeTrans<'t>, ca: &c::bch_dev,
+pub unsafe fn bch2_check_bucket_backpointer_mismatch<'t>(trans: &'t BtreeTrans<'t>, ca: &Dev,
                                                          bucket: u64, copygc: bool,
                                                          last_flushed: *mut c::wb_maybe_flush) -> c_int {
     let last_flushed = unsafe { WbFlush::from_raw(last_flushed) }.expect("a wb_maybe_flush");
@@ -675,7 +676,7 @@ fn check_extents_to_backpointers_pass(fs: &Fs, trans: &BtreeTrans<'_>, s: &mut E
 /// this pass to resolve; once it has, the bucket's backpointers agree on a
 /// type, and that is the bucket's again. They're read from the btree: the
 /// caller flushes the write buffer first.
-fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, bucket: u64) -> Result<(), BchError> {
+fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &Dev, bucket: u64) -> Result<(), BchError> {
 
     let fs = t.fs();
     let bucket = pos(ca.dev_idx.into(), bucket);
@@ -900,7 +901,7 @@ fn check_one_backpointer(t: &TransAttempt<'_, '_>, range: &RangeInclusive<c::bbp
 }
 
 /// Inside the caller's attempt: a restart is the caller's.
-fn check_bucket_backpointers_to_extents(trans: &BtreeTrans<'_>, ca: &c::bch_dev, bucket: Bpos,
+fn check_bucket_backpointers_to_extents(trans: &BtreeTrans<'_>, ca: &Dev, bucket: Bpos,
                                         last_flushed: WbFlush<'_>) -> Result<(), BchError> {
     let restart_count = trans.restart_count();
     let range = BackpointerPos::bucket_range(ca, bucket);
@@ -981,7 +982,7 @@ impl c::bucket_bitmap {
     }
 
     /// The first allocates the bitmap.
-    pub fn set(&self, ca: &c::bch_dev, b: u64) -> Result<(), BchError> {
+    pub fn set(&self, ca: &Dev, b: u64) -> Result<(), BchError> {
         let mut l = self.bits.lock();
         let w = l.published();
 
@@ -997,7 +998,7 @@ impl c::bucket_bitmap {
     }
 
     /// Only if it's allocated: a copy, the old words freed after a grace period.
-    pub fn resize(&self, ca: &c::bch_dev, nbuckets: u64) -> Result<(), BchError> {
+    pub fn resize(&self, ca: &Dev, nbuckets: u64) -> Result<(), BchError> {
         let mut l = self.bits.lock();
         let w = l.published();
 

@@ -9,6 +9,7 @@
 //! device failed, or is offline, is read by reconstructing it from its
 //! stripe.
 
+use crate::fs::Dev;
 use super::*;
 use crate::debug::params as debug_params;
 use crate::errcode::bch_errcode;
@@ -126,7 +127,7 @@ impl c::bch_io_failures {
 
 /// What a read from @ca costs: its read latency, or the most for no device -
 /// dev_latency().
-fn dev_latency(ca: Option<&c::bch_dev>) -> u64 {
+fn dev_latency(ca: Option<&Dev>) -> u64 {
     ca.map_or(i64::MAX as u64, |ca| ca.cur_latency(READ) as u64)
 }
 

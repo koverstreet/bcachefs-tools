@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::accounting::{self, mod_dev_cached_sectors};
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
 use crate::alloc::replicas::{bkey_replicas_acct, entry_acct, replicas_acct};
@@ -216,7 +217,7 @@ pub type disk_reservation = DiskReservation<'static>;
 // ── Bucket addressing ────────────────────────────────────────────────────
 
 /// A device's sectors as its buckets: alloc/buckets.h's inlines.
-impl c::bch_dev {
+impl Dev {
     /// sector_to_bucket().
     pub fn sector_to_bucket(&self, s: u64) -> u64 {
         s / u64::from(self.mi.get().bucket_size)
@@ -306,7 +307,7 @@ impl c::bch_dev {
 
 // ── GC buckets ───────────────────────────────────────────────────────────
 
-impl c::bch_dev {
+impl Dev {
     /// Bucket @b's gc state, if it's one of the device's: gc_bucket().
     pub fn gc_bucket(&self, b: u64) -> Option<&c::bucket> {
         self.bucket_valid(b).then(|| self.buckets_gc.get(b as usize)).flatten()
@@ -317,7 +318,7 @@ impl TransAttempt<'_, '_> {
     /// Gc bucket @g's state, as an alloc key, edited by @f under its lock -
     /// left as it was if @f fails - and device @ca's counters moved from the
     /// old to the new after: a trigger's gc side, on a bucket.
-    pub fn gc_bucket_mod(&self, ca: &c::bch_dev, g: &c::bucket, flags: UpdateTriggerFlags,
+    pub fn gc_bucket_mod(&self, ca: &Dev, g: &c::bucket, flags: UpdateTriggerFlags,
                          f: impl FnOnce(&mut c::AllocV4) -> Result<(), BchError>) -> Result<(), BchError> {
         let (old, new) = {
             let mut b = g.lock.lock();
@@ -369,7 +370,7 @@ impl TransAttempt<'_, '_> {
     /// ignored on overwrite, so deletion works; a stale cached pointer is
     /// BCH_ERR_cached_ptr_stale: bch2_bucket_ref_update().
     #[allow(clippy::too_many_arguments)]
-    pub fn bucket_ref_update(&self, ca: &c::bch_dev, k: BkeySC<'_>, ptr: &c::bch_extent_ptr,
+    pub fn bucket_ref_update(&self, ca: &Dev, k: BkeySC<'_>, ptr: &c::bch_extent_ptr,
                              sectors: i64, ptr_data_type: DataType, b_gen: u8,
                              bucket_data_type: &mut u8, bucket_sectors: &mut u32) -> Result<(), BchError> {
         assert!(sectors != 0);
@@ -390,7 +391,7 @@ impl TransAttempt<'_, '_> {
     #[cold]
     #[inline(never)]
     #[allow(clippy::too_many_arguments)]
-    fn bucket_ref_update_slowpath(&self, ca: &c::bch_dev, k: BkeySC<'_>, ptr: &c::bch_extent_ptr,
+    fn bucket_ref_update_slowpath(&self, ca: &Dev, k: BkeySC<'_>, ptr: &c::bch_extent_ptr,
                                   sectors: i64, ptr_data_type: DataType, b_gen: u8,
                                   bucket_data_type: &mut u8, bucket_sectors: &mut u32) -> Result<(), BchError> {
         let fs = self.fs();
@@ -490,7 +491,7 @@ impl TransAttempt<'_, '_> {
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn __bch2_bucket_ref_update<'t>(
     trans:            &'t BtreeTrans<'t>,
-    ca:               &c::bch_dev,
+    ca:               &Dev,
     k:                BkeySC<'_>,
     ptr:              &c::bch_extent_ptr,
     sectors:          i64,
@@ -510,7 +511,7 @@ pub unsafe fn __bch2_bucket_ref_update<'t>(
 /// or cached count, as the pointer is - and on insert, the bucket's data type
 /// set from it: __mark_pointer().
 #[allow(clippy::too_many_arguments)]
-fn mark_pointer(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, k: BkeySC<'_>, p: &c::extent_ptr_decoded,
+fn mark_pointer(t: &TransAttempt<'_, '_>, ca: &Dev, k: BkeySC<'_>, p: &c::extent_ptr_decoded,
                 sectors: i64, ptr_data_type: DataType, a: &mut c::AllocV4, insert: bool)
     -> Result<(), BchError>
 {
@@ -870,7 +871,7 @@ crate::key_trigger!(bch2_trigger_snapshot_nr_keys => trigger_snapshot_nr_keys);
 
 /// Bucket @b of @ca as @sectors of @data_type in its alloc key - set, not
 /// added to, so marking again is a no-op: __bch2_trans_mark_metadata_bucket().
-fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, b: u64,
+fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64,
                                   data_type: DataType, sectors: u32) -> Result<(), BchError> {
     let fs = t.fs();
     let mut iter = BtreeIter::new(t, Btree::alloc, pos(ca.dev_idx.into(), b),
@@ -900,7 +901,7 @@ fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, b: 
 
 /// trans_mark_metadata_bucket_key(), in gc's copy - which adds: gc counts
 /// each bucket's metadata once: bch2_mark_metadata_bucket().
-fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, b: u64, data_type: DataType,
+fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64, data_type: DataType,
                            sectors: u32, flags: UpdateTriggerFlags) -> Result<(), BchError> {
     let fs = t.fs();
     let Some(g) = ca.gc_bucket(b) else {
@@ -934,7 +935,7 @@ fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, b: u64, da
 /// to unmark it: in its alloc key, committed, or in gc's copy:
 /// bch2_trans_mark_metadata_bucket(). The gc side runs in an attempt of its
 /// own; it's only reached on a transaction made for it.
-pub fn trans_mark_metadata_bucket(trans: &BtreeTrans<'_>, ca: &c::bch_dev, b: u64, data_type: DataType,
+pub fn trans_mark_metadata_bucket(trans: &BtreeTrans<'_>, ca: &Dev, b: u64, data_type: DataType,
                                   sectors: u32, flags: UpdateTriggerFlags) -> Result<(), BchError> {
     assert!(matches!(data_type, DataType::free | DataType::sb | DataType::journal),
             "marking {} as metadata", data_type_str(data_type));
@@ -957,7 +958,7 @@ pub fn trans_mark_metadata_bucket(trans: &BtreeTrans<'_>, ca: &c::bch_dev, b: u6
 /// @range's sectors on @ca, metadata of @data_type, into @bucket - a bucket
 /// and its count so far - marking the bucket when the range moves past it:
 /// bch2_trans_mark_metadata_sectors().
-fn trans_mark_metadata_sectors(trans: &BtreeTrans<'_>, ca: &c::bch_dev, range: core::ops::Range<u64>,
+fn trans_mark_metadata_sectors(trans: &BtreeTrans<'_>, ca: &Dev, range: core::ops::Range<u64>,
                                data_type: DataType, bucket: &mut (u64, u32),
                                flags: UpdateTriggerFlags) -> Result<(), BchError> {
     let mut start = range.start;
@@ -981,7 +982,7 @@ fn trans_mark_metadata_sectors(trans: &BtreeTrans<'_>, ca: &c::bch_dev, range: c
 
 /// @ca's superblocks' buckets - the first's, from sector 0 - and its journal
 /// buckets: __bch2_trans_mark_dev_sb().
-fn trans_mark_dev_sb_in(trans: &BtreeTrans<'_>, ca: &c::bch_dev, flags: UpdateTriggerFlags)
+fn trans_mark_dev_sb_in(trans: &BtreeTrans<'_>, ca: &Dev, flags: UpdateTriggerFlags)
     -> Result<(), BchError>
 {
     let fs = trans.fs();
@@ -1012,7 +1013,7 @@ fn trans_mark_dev_sb_in(trans: &BtreeTrans<'_>, ca: &c::bch_dev, flags: UpdateTr
 impl Fs {
     /// Device @ca's superblock and journal buckets marked as theirs, in the
     /// alloc btree - or gc's copy, with gc: bch2_trans_mark_dev_sb().
-    pub fn trans_mark_dev_sb(&self, ca: &c::bch_dev, flags: UpdateTriggerFlags) -> Result<(), BchError> {
+    pub fn trans_mark_dev_sb(&self, ca: &Dev, flags: UpdateTriggerFlags) -> Result<(), BchError> {
         let trans = btree_trans!(self);
         bch_err_fn!(self, trans_mark_dev_sb_in(&trans, ca, flags))
     }
@@ -1023,7 +1024,7 @@ impl Fs {
         for ca in self.online_members() {
             // marked again, even if it was: harmless if not needed, and a
             // superblock or journal bucket allocated twice would be painful
-            let ca_raw = core::ptr::from_ref::<c::bch_dev>(&ca).cast_mut();
+            let ca_raw = core::ptr::from_ref::<Dev>(&ca).cast_mut();
             ret_to_result(unsafe { c::bch2_dev_add_initialize(self.as_ptr(), ca_raw) })?;
             self.trans_mark_dev_sb(&ca, flags)?;
         }
@@ -1032,7 +1033,7 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_trans_mark_metadata_bucket<'t>(trans: &'t BtreeTrans<'t>, ca: &c::bch_dev, b: u64,
+pub fn bch2_trans_mark_metadata_bucket<'t>(trans: &'t BtreeTrans<'t>, ca: &Dev, b: u64,
                                            data_type: DataType, sectors: c_uint,
                                            flags: c::btree_iter_update_trigger_flags) -> c_int {
     ret_to_c(trans_mark_metadata_bucket(trans, ca, b, data_type, sectors,
@@ -1040,7 +1041,7 @@ pub fn bch2_trans_mark_metadata_bucket<'t>(trans: &'t BtreeTrans<'t>, ca: &c::bc
 }
 
 #[c_export]
-pub fn bch2_trans_mark_dev_sb(c: &Opaque<Fs>, ca: &c::bch_dev, flags: c::btree_iter_update_trigger_flags)
+pub fn bch2_trans_mark_dev_sb(c: &Opaque<Fs>, ca: &Dev, flags: c::btree_iter_update_trigger_flags)
     -> c_int
 {
     ret_to_c(Fs::from_c(c).trans_mark_dev_sb(ca, UpdateTriggerFlags::from_bits_retain(flags.bits())))
@@ -1075,7 +1076,7 @@ impl Fs {
     }
 }
 
-impl c::bch_dev {
+impl Dev {
     /// Its buckets' generations at @nbuckets - as many of the old copied as
     /// both have - and its bucket bitmaps with them; nothing changed on
     /// failure. A resize is under state_lock: bch2_dev_buckets_resize().
@@ -1129,25 +1130,25 @@ impl c::bch_dev {
 }
 
 #[c_export]
-pub fn bch2_dev_buckets_resize(_c: &Opaque<Fs>, ca: &c::bch_dev, nbuckets: u64) -> c_int {
+pub fn bch2_dev_buckets_resize(_c: &Opaque<Fs>, ca: &Dev, nbuckets: u64) -> c_int {
     ret_to_c(ca.buckets_resize(nbuckets))
 }
 
 /// @ca is being set up: nothing else has it yet.
 #[c_export]
-pub fn bch2_dev_buckets_alloc(_c: &Opaque<Fs>, ca: &mut c::bch_dev) -> c_int {
+pub fn bch2_dev_buckets_alloc(_c: &Opaque<Fs>, ca: &mut Dev) -> c_int {
     ret_to_c(ca.buckets_alloc())
 }
 
 /// @ca is being freed: nothing else has it any more.
 #[c_export]
-pub fn bch2_dev_buckets_free(ca: &mut c::bch_dev) {
+pub fn bch2_dev_buckets_free(ca: &mut Dev) {
     ca.buckets_free()
 }
 
 // ── Usage ────────────────────────────────────────────────────────────────
 
-impl c::bch_dev {
+impl Dev {
     /// The buckets held back from allocations at @watermark - for those at the
     /// watermarks under it: bch2_dev_buckets_reserved().
     pub fn buckets_reserved(&self, watermark: c::bch_watermark) -> u64 {
@@ -1216,14 +1217,14 @@ impl c::bch_dev {
 /// # Safety
 /// @usage is writable.
 #[c_export]
-pub unsafe fn bch2_dev_usage_read_fast(ca: &c::bch_dev, usage: *mut c::bch_dev_usage) {
+pub unsafe fn bch2_dev_usage_read_fast(ca: &Dev, usage: *mut c::bch_dev_usage) {
     unsafe { usage.write(ca.usage_read_fast()) }
 }
 
 /// # Safety
 /// @usage is writable.
 #[c_export]
-pub unsafe fn bch2_dev_usage_full_read_fast(ca: &c::bch_dev, usage: *mut c::bch_dev_usage_full) {
+pub unsafe fn bch2_dev_usage_full_read_fast(ca: &Dev, usage: *mut c::bch_dev_usage_full) {
     unsafe { usage.write(ca.usage_full_read_fast()) }
 }
 
@@ -1253,7 +1254,7 @@ pub fn gen_after(a: u8, b: u8) -> u8 {
 }
 
 /// A device's bucket generations, under RCU: alloc/buckets.h's.
-impl c::bch_dev {
+impl Dev {
     /// Where bucket @b's generation is, for as long as @rcu's section - None
     /// if it isn't one of the device's: bucket_gen().
     pub fn bucket_gen_ref<'a>(&'a self, b: u64, rcu: &'a ReadGuard) -> Option<&'a AtomicU8> {

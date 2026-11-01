@@ -4,6 +4,7 @@
 //! bucket per entry, and journal_v2, which replaced it, a run of contiguous
 //! buckets per entry. Both are validated as runs - v1's of one bucket.
 
+use crate::fs::Dev;
 use core::ffi::{c_int, c_uint};
 use core::ops::Range;
 
@@ -118,7 +119,7 @@ impl c::journal_device {
 /// v2, if it was added after v1 - so v2 can't be written through a pointer
 /// from before (C did: its entries landed v1's size past v2). And on failure,
 /// the superblock is as it was.
-fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &c::bch_dev, buckets: &[u64])
+fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev, buckets: &[u64])
     -> Result<(), BchError>
 {
     let mut dev_sb = fs.dev_sb_mut(sb, ca).expect("journal buckets: a device with no superblock");
@@ -147,7 +148,7 @@ fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &c::bch_dev, buckets: &[
 /// # Safety
 /// @buckets is @nr u64s; sb_lock is held.
 #[c_export]
-pub unsafe fn bch2_journal_buckets_to_sb(c: &Opaque<Fs>, ca: &c::bch_dev,
+pub unsafe fn bch2_journal_buckets_to_sb(c: &Opaque<Fs>, ca: &Dev,
                                          buckets: *const u64, nr: c_uint) -> c_int {
     let fs = Fs::from_c(c);
     let buckets = match nr {

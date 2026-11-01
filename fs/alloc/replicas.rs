@@ -16,6 +16,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::accounting::DiskAccountingPos;
 use crate::alloc::accounting_mem::{self, MarkWrite};
 use crate::btree::bkey::{BkeySC, BkeyV};
@@ -358,7 +359,7 @@ impl<S: SbState> c::bch_sb<S> {
 }
 
 #[c_export]
-pub fn bch2_dev_has_data(_c: &Opaque<Fs>, ca: &c::bch_dev) -> c_uint {
+pub fn bch2_dev_has_data(_c: &Opaque<Fs>, ca: &Dev) -> c_uint {
     ca.has_data()
 }
 

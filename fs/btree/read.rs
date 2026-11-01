@@ -6,6 +6,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::c;
 use crate::data::checksum::{csum_vstruct, BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
 use crate::errcode::BchError;
@@ -23,7 +24,7 @@ nest! {
     #[derive(CStruct)]
     pub struct btree_read_bio {
         pub c: *mut Fs,
-        pub ca: *mut c::bch_dev, /* stashed at submit; see bch_write_bio */
+        pub ca: *mut Dev, /* stashed at submit; see bch_write_bio */
         pub b: *mut c::BtreeNode,
         pub start_time: u64,
         #[c_bitfield]

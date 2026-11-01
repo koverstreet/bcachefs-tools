@@ -473,6 +473,7 @@
 #![allow(non_camel_case_types)]
 
 
+use crate::fs::Dev;
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::accounting;
 use crate::alloc::check::need_discard_or_freespace_err;
@@ -896,7 +897,7 @@ impl c::AllocV4 {
     /// The sectors of @ca's bucket that aren't in use, a full bucket of them if
     /// it's empty but not free: bch2_bucket_sectors_fragmented(), which takes
     /// the sectors as an int.
-    fn sectors_fragmented(&self, ca: &c::bch_dev) -> i64 {
+    fn sectors_fragmented(&self, ca: &Dev) -> i64 {
         let d = self.sectors() as i32;
         let bucket_size = i32::from(ca.mi.get().bucket_size);
 
@@ -922,7 +923,7 @@ impl c::AllocV4 {
     /// Its time in @ca's fragmentation lru, 0 for none - how full it is, as a
     /// fraction of 1 << 31, for movable data with room it isn't using:
     /// alloc_lru_idx_fragmentation().
-    pub fn lru_idx_fragmentation(&self, ca: &c::bch_dev) -> u64 {
+    pub fn lru_idx_fragmentation(&self, ca: &Dev) -> u64 {
         if self.data_type >= c::BCH_DATA_NR as u8 ||
            !self.data_type().is_movable() ||
            self.sectors_fragmented(ca) == 0 {
@@ -1317,7 +1318,7 @@ fn transition_text(fs: &Fs, what: core::fmt::Arguments<'_>, old: BkeySC<'_>, new
 /// A free bucket's entry in the freespace btree, for alloc key @alloc_k - @a,
 /// as a v4 - set, or cleared: reported, and left, if it's already as @set
 /// says. Not free, it has none.
-pub(crate) fn bucket_do_freespace_index(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, alloc_k: BkeySC<'_>,
+pub(crate) fn bucket_do_freespace_index(t: &TransAttempt<'_, '_>, ca: &Dev, alloc_k: BkeySC<'_>,
                                         a: &c::AllocV4, set: bool) -> Result<(), BchError> {
     if a.data_type() != DataType::free {
         return Ok(());
@@ -1364,7 +1365,7 @@ fn bucket_gen_update(t: &TransAttempt<'_, '_>, bucket: Bpos, generation: u8) -> 
     t.update(&iter, &g, UpdateTriggerFlags::empty())
 }
 
-fn dev_data_type_accounting_mod(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, data_type: DataType,
+fn dev_data_type_accounting_mod(t: &TransAttempt<'_, '_>, ca: &Dev, data_type: DataType,
                                 d: accounting::DevDataTypeCounters<i64>, gc: bool) -> Result<(), BchError> {
     accounting::add(t, accounting::DevDataType { dev: ca.dev_idx, data_type: data_type.0 as u8 }, d, gc)
 }
@@ -1372,7 +1373,7 @@ fn dev_data_type_accounting_mod(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, data_
 impl TransAttempt<'_, '_> {
     /// Device @ca's bucket counts and sectors, for a bucket going from @old
     /// to @new: bch2_alloc_key_to_dev_counters().
-    pub fn alloc_key_to_dev_counters(&self, ca: &c::bch_dev, old: &c::AllocV4, new: &c::AllocV4,
+    pub fn alloc_key_to_dev_counters(&self, ca: &Dev, old: &c::AllocV4, new: &c::AllocV4,
                                      flags: UpdateTriggerFlags) -> Result<(), BchError> {
         let gc = flags.contains(UpdateTriggerFlags::GC);
         let (old_sectors, new_sectors) = (old.sectors(), new.sectors());
@@ -1406,7 +1407,7 @@ impl TransAttempt<'_, '_> {
 /// # Safety
 /// @trans is in an attempt.
 #[c_export]
-pub unsafe fn bch2_alloc_key_to_dev_counters(trans: &BtreeTrans<'_>, ca: &c::bch_dev, old: &c::AllocV4,
+pub unsafe fn bch2_alloc_key_to_dev_counters(trans: &BtreeTrans<'_>, ca: &Dev, old: &c::AllocV4,
                                              new: &c::AllocV4, flags: c_uint) -> c_int {
     let t = unsafe { trans.attempt_in_progress() };
     ret_to_c(t.alloc_key_to_dev_counters(ca, old, new, UpdateTriggerFlags::from_bits_retain(flags)))
@@ -1705,7 +1706,7 @@ fn dev_remove_need_discard(fs: &Fs, dev: u64) -> Result<(), BchError> {
 /// Everything the alloc btrees have of device @ca, and its usage accounting,
 /// as it's removed - the lrus and need_discard first, so the invalidate and
 /// discard workers find nothing of it to race with.
-fn dev_remove_alloc(fs: &Fs, ca: &c::bch_dev) -> Result<(), BchError> {
+fn dev_remove_alloc(fs: &Fs, ca: &Dev) -> Result<(), BchError> {
     let dev = u64::from(ca.dev_idx);
 
     dev_remove_lrus(fs, ca)?;
@@ -1718,7 +1719,7 @@ fn dev_remove_alloc(fs: &Fs, ca: &c::bch_dev) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_dev_remove_alloc(c: &Opaque<Fs>, ca: &c::bch_dev) -> c_int {
+pub fn bch2_dev_remove_alloc(c: &Opaque<Fs>, ca: &Dev) -> c_int {
     ret_to_c(crate::bch_err_msg_dev!(ca, dev_remove_alloc(Fs::from_c(c), ca), "removing dev alloc info"))
 }
 

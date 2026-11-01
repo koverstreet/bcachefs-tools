@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::cstructs::c;
 use crate::types::{CacheAligned, DArray, Fifo, c_default};
 use crate::util::projections::Volatile;
@@ -51,7 +52,7 @@ nest! {
          * re-derive ca via c->devs[idx], which dev_remove may have cleared
          * while our io_ref still pins the dev object.
          */
-        pub cas: [*mut c::bch_dev; c::BCH_REPLICAS_MAX as usize],
+        pub cas: [*mut Dev; c::BCH_REPLICAS_MAX as usize],
         pub devs_written: c::bch_devs_list,
         pub failed: c::bch_io_failures,
 
@@ -277,7 +278,7 @@ c_enum! {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct journal_bio {
-    pub ca: *mut c::bch_dev,
+    pub ca: *mut Dev,
     pub buf: *mut c::journal_buf,
     pub submit_time: u64,
 

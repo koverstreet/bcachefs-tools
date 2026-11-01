@@ -23,6 +23,7 @@
 //! wakeups, cache shrinks, the logged-op knob, work that takes its own ref -
 //! need none.
 
+use crate::fs::Dev;
 use core::ffi::CStr;
 use core::mem::offset_of;
 use core::sync::atomic::{AtomicPtr, Ordering};
@@ -365,7 +366,7 @@ fn opt_from_attr(attr: &c::attribute) -> Option<c::bch_opt_id> {
     OPT_FILES.index(attr).map(|i| c::bch_opt_id(i as u32))
 }
 
-fn opt_show(c: &Fs, ca: Option<&c::bch_dev>, id: c::bch_opt_id, out: &mut Printbuf)
+fn opt_show(c: &Fs, ca: Option<&Dev>, id: c::bch_opt_id, out: &mut Printbuf)
     -> Result<(), BchError>
 {
     let opt = id.opt();
@@ -401,7 +402,7 @@ fn opt_show(c: &Fs, ca: Option<&c::bch_dev>, id: c::bch_opt_id, out: &mut Printb
     Ok(())
 }
 
-fn opt_store(c: &Fs, ca: Option<&c::bch_dev>, id: c::bch_opt_id, s: &str) -> Result<(), BchError> {
+fn opt_store(c: &Fs, ca: Option<&Dev>, id: c::bch_opt_id, s: &str) -> Result<(), BchError> {
     let opt = id.opt();
     // strim()
     let val = s.trim_matches(|ch| matches!(ch, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r')).as_bytes();
@@ -497,7 +498,7 @@ pub(crate) static FS_GROUPS: Groups<{ FS_GROUPS_NR + 1 }> = Groups::new([
 //
 // Its own files, and the device options' - added at runtime, as options/'s.
 
-const DEV: &[Attr<c::bch_dev>] = &[
+const DEV: &[Attr<Dev>] = &[
     Attr::ro(c"uuid",                   |ca, out| prt!(out, "{}\n", ca.uuid)),
     Attr::ro(c"first_bucket",           |ca, out| writeln!(out, "{}", ca.mi.get().first_bucket)),
     Attr::ro(c"nbuckets",               |ca, out| writeln!(out, "{}", ca.mi.get().nbuckets)),
@@ -530,7 +531,7 @@ const DEV: &[Attr<c::bch_dev>] = &[
 
 /// Sectors read and written, by data type, as JSON.
 #[cold]
-fn io_done_to_text(ca: &c::bch_dev, out: &mut Printbuf) {
+fn io_done_to_text(ca: &Dev, out: &mut Printbuf) {
     let done = ca.io_done.sum();
     let nr = c::BCH_DATA_NR as usize;
 
@@ -550,10 +551,10 @@ fn io_done_to_text(ca: &c::bch_dev, out: &mut Printbuf) {
 struct DevDir;
 
 unsafe impl Dir for DevDir {
-    type Obj = c::bch_dev;
-    const KOBJ: usize = offset_of!(c::bch_dev, kobj);
+    type Obj = Dev;
+    const KOBJ: usize = offset_of!(Dev, kobj);
 
-    fn show(ca: &c::bch_dev, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
+    fn show(ca: &Dev, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
         match opt_from_attr(attr) {
             Some(id) => opt_show(ca.fs(), Some(ca), id, out),
             // SAFETY: a device's files that aren't options' are DEV's
@@ -561,7 +562,7 @@ unsafe impl Dir for DevDir {
         }
     }
 
-    fn store(ca: &c::bch_dev, attr: &c::attribute, s: &str) -> Result<(), BchError> {
+    fn store(ca: &Dev, attr: &c::attribute, s: &str) -> Result<(), BchError> {
         match opt_from_attr(attr) {
             Some(id) => opt_store(ca.fs(), Some(ca), id, s),
             // SAFETY: as show()'s

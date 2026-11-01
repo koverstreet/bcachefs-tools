@@ -44,6 +44,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::alloc::discard::fast_discard_bucket_add;
 use crate::alloc::disk_groups::Target;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
@@ -181,7 +182,7 @@ nest! {
         pub usage: c::bch_dev_usage,
 
         /* bch2_bucket_alloc_trans(): */
-        pub ca: *mut c::bch_dev,
+        pub ca: *mut Dev,
 
         /*
          * Allocate the free bucket nearest this device position (a 32.32
@@ -248,7 +249,7 @@ impl OpenBucketRef {
 
     /// Its device, which it keeps: device removal stops its open buckets
     /// before the device goes.
-    pub fn ca(&self) -> &c::bch_dev {
+    pub fn ca(&self) -> &Dev {
         let p = self.fs().devs[usize::from(self.id().dev())].as_ptr();
         // SAFETY: an open bucket's device outlives it, as above
         unsafe { p.as_ref() }.expect("an open bucket's device")
@@ -567,7 +568,7 @@ impl Fs {
     /// Bucket @bucket of @ca, of generation @generation, opened: None if it's
     /// open already. Err with the pool down to @req's watermark's reserve -
     /// blocked, with @req's closure on open_buckets_wait.
-    pub(crate) fn try_alloc_bucket_locked(&self, ca: &c::bch_dev, req: &mut c::alloc_request, bucket: u64,
+    pub(crate) fn try_alloc_bucket_locked(&self, ca: &Dev, req: &mut c::alloc_request, bucket: u64,
                                           generation: u8) -> Result<Option<OpenBucket>, BchError>
     {
         let a = &self.allocator;
@@ -702,7 +703,7 @@ impl Fs {
 
     /// Whether @ob goes, stopping @ca - or with @ec, erasure coding - or the
     /// whole filesystem, with neither.
-    pub(crate) fn open_bucket_should_drop(&self, ob: &OpenBucketRef, ca: Option<&c::bch_dev>, ec: bool) -> bool {
+    pub(crate) fn open_bucket_should_drop(&self, ob: &OpenBucketRef, ca: Option<&Dev>, ec: bool) -> bool {
         match ca {
             _ if ec  => ob.stripe().is_some(),
             Some(ca) => ob.id().dev() == ca.dev_idx ||
@@ -713,7 +714,7 @@ impl Fs {
 
     /// The partial list's buckets that go - see open_bucket_should_drop() -
     /// taken off it and put.
-    pub(crate) fn open_buckets_partial_stop(&self, ca: Option<&c::bch_dev>, ec: bool) {
+    pub(crate) fn open_buckets_partial_stop(&self, ca: Option<&Dev>, ec: bool) {
         let a = &self.allocator;
         let mut i = 0;
         loop {
@@ -735,7 +736,7 @@ impl Fs {
 
 // ── Waking allocations ───────────────────────────────────────────────────
 
-impl c::bch_dev {
+impl Dev {
     /// Wake what's waiting on the allocator for a bucket on it: its counter
     /// bumped tells a waiter that tried it the wake is for it.
     pub fn alloc_wake(&self) {
@@ -958,7 +959,7 @@ impl Fs {
 
     /// Whether @req could allocate from @ca: a device in its target, if it may
     /// only use those, read-write, online, and taking its data type.
-    fn dev_may_alloc(&self, ca: &c::bch_dev, req: &c::alloc_request) -> bool {
+    fn dev_may_alloc(&self, ca: &Dev, req: &c::alloc_request) -> bool {
         if req.flags.contains(c::bch_write_flags::BCH_WRITE_only_specified_devs) && req.target != 0 &&
            !self.dev_in_target(ca.dev_idx.into(), Target::decode(req.target), &read_lock()) {
             return false;
@@ -1007,7 +1008,7 @@ impl Fs {
         req.trace_to_text(out);
     }
 
-    fn dev_alloc_debug_header(out: &mut Printbuf, ca: &c::bch_dev) {
+    fn dev_alloc_debug_header(out: &mut Printbuf, ca: &Dev) {
         write!(out, "Dev {} ({}): {}", ca, ca.dev_idx, member_state_str(ca.mi.get().state));
         if !ca.is_online() {
             write!(out, " (offline)");
@@ -1227,7 +1228,7 @@ impl Fs {
     }
 }
 
-impl c::bch_dev {
+impl Dev {
     /// Its usage, its reserve at each watermark, and its open buckets and
     /// buckets to invalidate.
     #[cold]
@@ -1249,7 +1250,7 @@ impl c::bch_dev {
 
 impl Fs {
     /// The open buckets - on @ca, or all of them.
-    pub fn open_buckets_to_text(&self, out: &mut Printbuf, ca: Option<&c::bch_dev>) {
+    pub fn open_buckets_to_text(&self, out: &mut Printbuf, ca: Option<&Dev>) {
         let mut out = out.atomic();
         for ob in &self.allocator.open_buckets {
             let l = ob.lock.lock();

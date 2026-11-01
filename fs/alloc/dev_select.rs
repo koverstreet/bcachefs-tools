@@ -17,6 +17,7 @@
 //! lopsided enough that a device only fills if every write puts a copy on
 //! it), then the clock hands.
 
+use crate::fs::Dev;
 use crate::c;
 use crate::fs::Fs;
 use crate::sb::counters::events;
@@ -68,7 +69,7 @@ impl c::dev_stripe_state {
 
     /// An allocation from @ca, its usage @usage: its hand advanced by the
     /// inverse of its free space.
-    pub fn increment(&mut self, ca: &c::bch_dev, usage: &c::bch_dev_usage) {
+    pub fn increment(&mut self, ca: &Dev, usage: &c::bch_dev_usage) {
         let free = ca.free_buckets_at(usage, c::bch_watermark::BCH_WATERMARK_normal);
         let v = &mut self.next_alloc[usize::from(ca.dev_idx)];
 
@@ -211,6 +212,6 @@ pub unsafe fn bch2_dev_alloc_list_devs(c: &Opaque<Fs>, stripe: &mut c::dev_strip
 }
 
 #[c_export]
-pub fn bch2_dev_stripe_increment(ca: &c::bch_dev, stripe: &mut c::dev_stripe_state) {
+pub fn bch2_dev_stripe_increment(ca: &Dev, stripe: &mut c::dev_stripe_state) {
     stripe.increment(ca, &ca.usage_read_fast())
 }

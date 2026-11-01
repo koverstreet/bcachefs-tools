@@ -32,6 +32,7 @@
 //! A stripe isn't moved: the phys walk of a scrub checks its blocks against
 //! their checksums instead (ec/repair.rs's scrub_stripe_block()).
 
+use crate::fs::Dev;
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::check_backpointers::check_one_bucket_backpointer_mismatch;
@@ -319,7 +320,7 @@ struct PhysWalker<'a, 'p> {
     mover:        Mover<'a, 'p>,
     w:            &'a PhysWalk,
     /// The device, for a walk of a device's backpointers: it's audited
-    ca:           Option<&'a c::bch_dev>,
+    ca:           Option<&'a Dev>,
     last_flushed: WbMaybeFlush,
     /// Buckets below it audited
     audited:      u64,

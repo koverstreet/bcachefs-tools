@@ -14,6 +14,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -165,7 +166,7 @@ fn print(fs: &Fs, level: u8, prefix: bool, msg: &dyn ToText, newline: bool) {
 
 /// @msg at @level after device @ca's name, as C's bch_dev_log() - in
 /// userspace too, unlike the filesystem's.
-pub fn log_dev(ca: &c::bch_dev, level: LogLevel, msg: &dyn ToText) {
+pub fn log_dev(ca: &Dev, level: LogLevel, msg: &dyn ToText) {
     let msg = crate::util::printbuf::Msg(|out: &mut Printbuf| {
         #[cfg(kernel)]
         write!(out, "bcachefs ({ca}): ");

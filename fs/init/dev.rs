@@ -10,6 +10,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Fs, StateLockWrite};
@@ -163,32 +164,32 @@ pub struct bch_devs_list {
 }
 
 c_extern! {
-    pub fn bch2_dev_io_ref_stop(ca: *mut c::bch_dev, rw: c_int);
-    pub fn bch2_dev_unlink(ca: *mut c::bch_dev);
-    pub fn bch2_dev_free(ca: *mut c::bch_dev);
-    pub fn bch2_dev_sysfs_online(c: *mut Fs, ca: *mut c::bch_dev) -> c_int;
+    pub fn bch2_dev_io_ref_stop(ca: *mut Dev, rw: c_int);
+    pub fn bch2_dev_unlink(ca: *mut Dev);
+    pub fn bch2_dev_free(ca: *mut Dev);
+    pub fn bch2_dev_sysfs_online(c: *mut Fs, ca: *mut Dev) -> c_int;
     pub fn bch2_dev_alloc(c: *mut Fs, dev_idx: c_uint) -> c_int;
     pub fn bch2_dev_attach_bdev(c: *mut Fs, sb: *mut c::bch_sb_handle, err: *mut c::printbuf) -> c_int;
-    pub fn __bch2_dev_resize_alloc(ca: *mut c::bch_dev, old_nbuckets: u64, new_nbuckets: u64) -> c_int;
+    pub fn __bch2_dev_resize_alloc(ca: *mut Dev, old_nbuckets: u64, new_nbuckets: u64) -> c_int;
     pub fn bch2_dev_add(c: *mut Fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
-    pub fn bch2_dev_add_initialize(c: *mut Fs, ca: *mut c::bch_dev) -> c_int;
-    pub fn bch2_dev_resize(c: *mut Fs, ca: *mut c::bch_dev, nbuckets: u64,
+    pub fn bch2_dev_add_initialize(c: *mut Fs, ca: *mut Dev) -> c_int;
+    pub fn bch2_dev_resize(c: *mut Fs, ca: *mut Dev, nbuckets: u64,
                            err: *mut c::printbuf) -> c_int;
-    pub fn bch2_dev_remove(c: *mut Fs, ca: *mut c::bch_dev, flags: c_int,
+    pub fn bch2_dev_remove(c: *mut Fs, ca: *mut Dev, flags: c_int,
                            err: *mut c::printbuf) -> c_int;
     pub fn bch2_dev_online(c: *mut Fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
-    pub fn bch2_dev_offline(c: *mut Fs, ca: *mut c::bch_dev, flags: c_int,
+    pub fn bch2_dev_offline(c: *mut Fs, ca: *mut Dev, flags: c_int,
                             err: *mut c::printbuf) -> c_int;
-    pub fn bch2_dev_set_state(c: *mut Fs, ca: *mut c::bch_dev,
+    pub fn bch2_dev_set_state(c: *mut Fs, ca: *mut Dev,
                               new_state: c::bch_member_state, flags: c_int,
                               err: *mut c::printbuf) -> c_int;
-    pub fn __bch2_dev_set_state(c: *mut Fs, ca: *mut c::bch_dev,
+    pub fn __bch2_dev_set_state(c: *mut Fs, ca: *mut Dev,
                                 new_state: c::bch_member_state, flags: c_int,
                                 err: *mut c::printbuf) -> c_int;
-    pub fn bch2_dev_lookup(c: *mut Fs, name: *const c_char) -> *mut c::bch_dev;
-    pub fn bch2_dev_may_offline(c: *mut Fs, ca: *mut c::bch_dev, flags: c_int,
+    pub fn bch2_dev_lookup(c: *mut Fs, name: *const c_char) -> *mut Dev;
+    pub fn bch2_dev_may_offline(c: *mut Fs, ca: *mut Dev, flags: c_int,
                                 err: *mut c::printbuf) -> c_int;
-    pub fn __bch2_dev_offline(c: *mut Fs, ca: *mut c::bch_dev);
+    pub fn __bch2_dev_offline(c: *mut Fs, ca: *mut Dev);
     pub fn bch2_dev_read_identity(bdev: *mut c::block_device,
                                   name: *mut c_char, name_size: usize,
                                   model: *mut c_char, model_size: usize,
@@ -271,8 +272,8 @@ pub unsafe fn bch2_dev_in_fs(fs: *mut Head<c::bch_sb>, fs_bdev: Option<&c::block
 /// fields' initializers run, everything else zeroed - for __bch2_dev_alloc()
 /// to go on with. NULL if out of memory.
 #[c_export]
-pub fn bch2_dev_alloc_mem(c: &crate::util::ffi::Opaque<Fs>) -> *mut c::bch_dev {
-    crate::util::alloc::alloc_pinned(c::bch_dev::init(crate::fs::Fs::from_c(c)))
+pub fn bch2_dev_alloc_mem(c: &crate::util::ffi::Opaque<Fs>) -> *mut Dev {
+    crate::util::alloc::alloc_pinned(Dev::init(crate::fs::Fs::from_c(c)))
         .unwrap_or(core::ptr::null_mut())
 }
 
@@ -281,13 +282,13 @@ pub fn bch2_dev_alloc_mem(c: &crate::util::ffi::Opaque<Fs>) -> *mut c::bch_dev {
 /// # Safety
 /// @ca is from bch2_dev_alloc_mem(), and nothing uses it after.
 #[c_export]
-pub unsafe fn bch2_dev_free_mem(ca: *mut c::bch_dev) {
+pub unsafe fn bch2_dev_free_mem(ca: *mut Dev) {
     unsafe { crate::util::alloc::free_pinned(ca) }
 }
 
 impl StateLockWrite<'_> {
     /// @ca set to @state, the state lock held; why not, if it can't be, in @err.
-    pub fn dev_set_state(&self, ca: &c::bch_dev, state: c::bch_member_state, flags: u32, err: &mut Printbuf)
+    pub fn dev_set_state(&self, ca: &Dev, state: c::bch_member_state, flags: u32, err: &mut Printbuf)
         -> Result<(), BchError>
     {
         let ca = core::ptr::from_ref(ca).cast_mut();
@@ -298,7 +299,7 @@ impl StateLockWrite<'_> {
     }
 
     /// Whether the filesystem can do without @ca; why not, in @err.
-    pub fn dev_may_offline(&self, ca: &c::bch_dev, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
+    pub fn dev_may_offline(&self, ca: &Dev, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
         let ca = core::ptr::from_ref(ca).cast_mut();
         ret_to_result_void(unsafe {
             c::bch2_dev_may_offline(self.fs().as_ptr(), ca, flags as c_int, err.as_raw())
@@ -306,7 +307,7 @@ impl StateLockWrite<'_> {
     }
 
     /// @ca's block device closed: __bch2_dev_offline().
-    pub fn dev_offline(&self, ca: &c::bch_dev) {
+    pub fn dev_offline(&self, ca: &Dev) {
         let ca = core::ptr::from_ref(ca).cast_mut();
         unsafe { c::__bch2_dev_offline(self.fs().as_ptr(), ca) }
     }
@@ -315,7 +316,7 @@ impl StateLockWrite<'_> {
 impl Fs {
     /// @ca set to @state - dirty pagecache written back first if it's leaving
     /// the allocator, then under the state lock; why not, if it can't be, in @err.
-    pub fn dev_set_state(&self, ca: &c::bch_dev, state: c::bch_member_state, flags: u32,
+    pub fn dev_set_state(&self, ca: &Dev, state: c::bch_member_state, flags: u32,
                          err: Option<&mut Printbuf>) -> Result<(), BchError>
     {
         let ca = core::ptr::from_ref(ca).cast_mut();
@@ -353,7 +354,7 @@ pub fn bch2_devs_list_to_text(out: &mut Printbuf, c: &Fs, d: &c::bch_devs_list) 
 // ── Congestion ───────────────────────────────────────────────────────────
 
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-impl c::bch_dev {
+impl Dev {
     /// The device's congestion at @now (local_clock()), out of CONGESTED_MAX:
     /// what bch2_latency_acct() added for IO over the latency threshold,
     /// decayed by the time since.
@@ -368,7 +369,7 @@ impl c::bch_dev {
 }
 
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-impl c::bch_dev {
+impl Dev {
     /// How congested its IO is - its latency, against what's expected.
     #[cold]
     pub fn congested_to_text(&self, out: &mut Printbuf) {
@@ -390,7 +391,7 @@ impl c::bch_dev {
 
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
 #[c_export]
-pub fn bch2_dev_congested_read(ca: &c::bch_dev, now: u64) -> u32 {
+pub fn bch2_dev_congested_read(ca: &Dev, now: u64) -> u32 {
     ca.congested_read(now)
 }
 
@@ -474,7 +475,7 @@ unsafe extern "C" fn bdev_sync(bdev: *mut c::block_device) {
 
 // ── Resizing on mount ────────────────────────────────────────────────────
 
-impl c::bch_dev {
+impl Dev {
     /// The disk it's on, in sectors: get_capacity()
     fn disk_sectors(&self) -> u64 {
         unsafe {
@@ -523,7 +524,7 @@ impl Fs {
             }
 
             if ca.mi.get().freespace_initialized != 0 {
-                let ca = core::ptr::from_ref::<c::bch_dev>(&ca).cast_mut();
+                let ca = core::ptr::from_ref::<Dev>(&ca).cast_mut();
                 ret_to_result_void(unsafe { __bch2_dev_resize_alloc(ca, old_nbuckets, new_nbuckets) })?;
             }
         }

@@ -1,3 +1,4 @@
+use bcachefs_kernel::fs::Dev;
 use bcachefs_kernel::btree::bkey::prelude::*;
 use std::os::fd::{AsFd, BorrowedFd};
 use std::path::Path;
@@ -457,7 +458,7 @@ fn dump_node(fs: &Fs, devs: &mut [DumpDev], k: btree::BkeySC<'_>, btree_node_siz
     }
 }
 
-fn get_sb_journal(fs: &Fs, ca: &c::bch_dev, entire_journal: bool, d: &mut DumpDev) {
+fn get_sb_journal(fs: &Fs, ca: &Dev, entire_journal: bool, d: &mut DumpDev) {
     let bucket_bytes = (ca.mi.get().bucket_size as u64) << 9;
 
     {
@@ -519,7 +520,7 @@ fn write_sanitized_ranges(
 #[allow(clippy::too_many_arguments)]
 fn write_dev_image(
     fs: &Fs,
-    ca: &c::bch_dev,
+    ca: &Dev,
     path: &str,
     force: bool,
     sanitize: bool,

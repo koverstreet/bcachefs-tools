@@ -42,6 +42,7 @@
 //! fast discard and invalidate works the device's write io ref and a write
 //! ref - so going read-only, and a device going offline, wait for them.
 
+use crate::fs::Dev;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
@@ -219,7 +220,7 @@ impl Fs {
     }
 }
 
-impl c::bch_dev {
+impl Dev {
     pub fn fast_discards_to_text(&self, out: &mut Printbuf) {
         prt!(out, "{}\n", self.discard_fast.lock().len());
     }
@@ -241,7 +242,7 @@ fn dev_bucket_nouse(fs: &Fs, bucket: Bpos) -> bool {
 
 /// Discards on, for @ca: the mount option, if it was given, or the device's
 /// own.
-fn discard_opt_enabled(fs: &Fs, ca: &c::bch_dev) -> bool {
+fn discard_opt_enabled(fs: &Fs, ca: &Dev) -> bool {
     let on = if fs.flags.get(c::bch_fs_flags::BCH_FS_discard_mount_opt_set) {
         fs.opts.discard.get()
     } else {
@@ -273,7 +274,7 @@ fn dev_in_flight_max(fastpath: bool) -> u8 {
     DEV_IN_FLIGHT_MAX + u8::from(fastpath)
 }
 
-impl c::bch_dev {
+impl Dev {
     fn discard_slot_free(&self, fastpath: bool) -> bool {
         self.discards_in_flight.load(Ordering::Relaxed) < dev_in_flight_max(fastpath)
     }
@@ -757,7 +758,7 @@ pub fn bch2_do_discards_async(c: &Opaque<Fs>) {
 
 /// A device's fast discard work: its queued buckets, each discarded and
 /// marked free once its discard completes.
-pub(crate) fn do_discards_fast(ca: &c::bch_dev) {
+pub(crate) fn do_discards_fast(ca: &Dev) {
     let fs = ca.fs();
     let s = SeqLock::new(DiscardState::default());
     let trans = crate::btree_trans!(fs);
@@ -794,7 +795,7 @@ pub(crate) fn do_discards_fast(ca: &c::bch_dev) {
 /// Queue @bucket of @ca for fast discard, and kick its work: the alloc
 /// trigger's, for a bucket emptied by a transaction that needed no flush -
 /// or the open bucket's close, if it was emptied while open.
-pub(crate) fn fast_discard_bucket_add(ca: &c::bch_dev, bucket: u64) {
+pub(crate) fn fast_discard_bucket_add(ca: &Dev, bucket: u64) {
     if ca.discard_fast.lock().push(bucket, GFP_KERNEL).is_err() {
         return;
     }
@@ -805,7 +806,7 @@ pub(crate) fn fast_discard_bucket_add(ca: &c::bch_dev, bucket: u64) {
 
 /// As bch2_dev_get_ioref() has it for a write ref: work queued holding one is
 /// for a device that's rw.
-fn dev_is_rw(ca: &c::bch_dev) -> bool {
+fn dev_is_rw(ca: &Dev) -> bool {
     ca.mi.get().state as u32 == c::bch_member_state::BCH_MEMBER_STATE_rw.0
 }
 
@@ -820,7 +821,7 @@ fn dev_is_rw(ca: &c::bch_dev) -> bool {
 /// where that's more. Invalidating is the cheapest way to free space, nothing
 /// moved: stopping short of reserved_sectors leaves no space writable now,
 /// with cached buckets sitting unreclaimed.
-impl c::bch_dev {
+impl Dev {
     pub fn should_invalidate_buckets(&self, u: &c::bch_dev_usage) -> u64 {
         let reserved = self.reserved_sectors.get().div_ceil(self.mi.get().bucket_size.into())
             .max(self.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe));
@@ -833,7 +834,7 @@ impl c::bch_dev {
 
 /// Drop @ca's pointers from what backpointer @bp points to - its data's lost,
 /// recorded, if that leaves it unreadable.
-fn invalidate_one_bp(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, bp: BkeySC<'_, c::Backpointer>,
+fn invalidate_one_bp(t: &TransAttempt<'_, '_>, ca: &Dev, bp: BkeySC<'_, c::Backpointer>,
                      last_flushed: WbFlush<'_>) -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -861,7 +862,7 @@ fn invalidate_one_bp(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, bp: BkeySC<'_, c
 /// data - it only shrinks keys - so it mustn't wait behind a reserve for a
 /// btree node. It's what copygc's btree node allocations get
 /// (btree_update_set_watermark_hipri()), and no bucket reserve is below it.
-fn invalidate_one_bucket_by_bps(trans: &BtreeTrans<'_>, ca: &c::bch_dev, bucket: Bpos, generation: u8,
+fn invalidate_one_bucket_by_bps(trans: &BtreeTrans<'_>, ca: &Dev, bucket: Bpos, generation: u8,
                                 last_flushed: &mut WbMaybeFlush) -> Result<(), BchError>
 {
     let res = DiskReservation::new(trans.fs());
@@ -881,7 +882,7 @@ fn invalidate_one_bucket_by_bps(trans: &BtreeTrans<'_>, ca: &c::bch_dev, bucket:
 
 /// Invalidate the bucket lru entry @lru_k is for, if it's still cached and
 /// still due - and count it off @nr.
-fn invalidate_one_bucket(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, lru_k: BkeySC<'_>,
+fn invalidate_one_bucket(t: &TransAttempt<'_, '_>, ca: &Dev, lru_k: BkeySC<'_>,
                          last_flushed: &mut WbMaybeFlush, nr: &mut i64) -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -932,7 +933,7 @@ fn invalidate_one_bucket(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, lru_k: BkeyS
 
 /// A device's invalidate work: its read lru from the current time, wrapping
 /// round once, its cached buckets invalidated until it isn't short.
-pub(crate) fn do_invalidates_work(ca: &c::bch_dev) {
+pub(crate) fn do_invalidates_work(ca: &Dev) {
     let fs = ca.fs();
     let trans = crate::btree_trans!(fs);
     let ret = (|| -> Result<(), BchError> {
@@ -967,7 +968,7 @@ pub(crate) fn do_invalidates_work(ca: &c::bch_dev) {
     let _ = bch_err_msg!(fs, ret, "invalidating buckets on {}", ca);
 }
 
-impl c::bch_dev {
+impl Dev {
     /// Kick its invalidate work - unless it isn't rw, or the filesystem is
     /// going read-only.
     pub fn do_invalidates(&self) {

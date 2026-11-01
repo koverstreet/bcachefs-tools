@@ -48,6 +48,7 @@
  * bch2_accounting_mem_mod() tells it to.
  */
 
+use crate::fs::Dev;
 use crate::alloc::accounting_mem::{self, mem_read, mem_read_locked, usage_of, Delta, MarkHeld};
 use crate::alloc::buckets::bch_fs_usage_base;
 use crate::alloc::replicas::{replicas_acct, SbEntry};
@@ -472,7 +473,7 @@ pub fn accumulate(dst: &mut BkeyI, src: &BkeyI) {
 
 impl Fs {
     /// Device @ca's usage accounting, deleted: as it's removed.
-    pub fn dev_usage_remove(&self, ca: &c::bch_dev) -> Result<(), BchError> {
+    pub fn dev_usage_remove(&self, ca: &Dev) -> Result<(), BchError> {
         let trans = btree_trans!(self);
         let at = |data_type| DiskAccountingPos::from_arm(DevDataType { dev: ca.dev_idx, data_type }).to_bpos();
         let (start, end) = (at(0), at(u8::MAX));
@@ -494,7 +495,7 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_dev_usage_init(ca: &c::bch_dev, gc: bool) -> c_int {
+pub fn bch2_dev_usage_init(ca: &Dev, gc: bool) -> c_int {
     let fs = ca.fs();
     let trans = btree_trans!(fs);
     ret_to_c(bch_err_fn!(fs, lockrestart_do(&trans, |t| {

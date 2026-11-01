@@ -29,6 +29,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::btree::bkey::{pos, BkeySC, POS_MIN};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
 use crate::c;
@@ -1152,7 +1153,7 @@ pub unsafe fn bch2_fatal_error_str(c: &Opaque<Fs>, func: *const c_char, msg: &Pr
 // device's memory only - and rechecks under the lock that it's not being
 // removed, nor the filesystem stopping.
 
-impl c::bch_dev {
+impl Dev {
     /// An IO error of type @ty: counted, and a write's starting the write
     /// error clock, which io_error_work() reads.
     pub fn io_error(&self, ty: c::bch_member_error_type) {
@@ -1178,7 +1179,7 @@ impl c::bch_dev {
 pub unsafe extern "C" fn bch2_io_error_work(work: *mut c::work_struct) {
     // SAFETY: the caller's - and the ref, ours to put
     let ca = unsafe {
-        DevOuterRef::from_raw(work.byte_sub(core::mem::offset_of!(c::bch_dev, io_error_work)).cast())
+        DevOuterRef::from_raw(work.byte_sub(core::mem::offset_of!(Dev, io_error_work)).cast())
     };
     let fs = ca.fs();
 
@@ -1209,7 +1210,7 @@ pub unsafe extern "C" fn bch2_io_error_work(work: *mut c::work_struct) {
 }
 
 #[c_export]
-pub fn bch2_io_error(ca: &c::bch_dev, ty: c::bch_member_error_type) {
+pub fn bch2_io_error(ca: &Dev, ty: c::bch_member_error_type) {
     ca.io_error(ty)
 }
 

@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::btree::bkey::BkeyI;
 use crate::btree::iter::{BtreeIter, TransAttempt, TransBkey};
 use crate::cstructs::c;
@@ -74,7 +75,7 @@ nest! {
              * lookup table before draining refs).  Non-NULL iff we hold an io_ref;
              * doubles as the "we hold the ref" indicator.
              */
-            pub ca: *mut c::bch_dev,
+            pub ca: *mut Dev,
 
             pub submit_time: u64,
             pub inode_offset: u64,
@@ -228,7 +229,7 @@ c_extern! {
                           i_sectors_delta_total: *mut i64, check_enospc: bool,
                           change_cookie: u32, flush: *mut c::closure) -> c_int;
     #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-    pub fn bch2_latency_acct(ca: *mut c::bch_dev, submit_time: u64, rw: c_int);
+    pub fn bch2_latency_acct(ca: *mut Dev, submit_time: u64, rw: c_int);
 }
 
 /// What writing @new over what it overwrites does to the inode and the disk:

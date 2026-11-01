@@ -28,6 +28,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::c;
 use crate::opt_id;
 use crate::errcode::{bch_errcode, BchError};
@@ -1462,7 +1463,7 @@ impl Fs {
     /// Set @opt in the superblock - in device @ca's member for a device
     /// option - @val its string for a member string option, and write it if
     /// that changed it: whether it did.
-    pub fn opt_set_sb(&self, ca: Option<&c::bch_dev>, opt: &Opt, v: u64, val: Option<&[u8]>) -> bool {
+    pub fn opt_set_sb(&self, ca: Option<&Dev>, opt: &Opt, v: u64, val: Option<&[u8]>) -> bool {
         let mut sb = self.sb_lock();
         let changed = opt_set_sb(&mut sb, ca.map(|ca| ca.dev_idx.into()), opt, v, val);
         if changed {

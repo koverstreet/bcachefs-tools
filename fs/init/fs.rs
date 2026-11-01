@@ -101,6 +101,7 @@ impl StateLockRead<'_> {
 }
 
 pub use crate::cstructs::types::Fs;
+pub use crate::cstructs::types::Dev;
 
 impl Fs {
     pub fn as_ptr(&self) -> *mut Fs {
@@ -391,7 +392,7 @@ impl Fs {
 
     /// # Safety
     /// The device exists.
-    pub unsafe fn dev_raw(&self, dev: u32) -> *mut c::bch_dev {
+    pub unsafe fn dev_raw(&self, dev: u32) -> *mut Dev {
         self.devs[dev as usize].as_ptr()
     }
 

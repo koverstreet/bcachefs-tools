@@ -33,6 +33,7 @@
 //! repaired is rewritten without the device, so the scan goes again until
 //! it's met none.
 
+use crate::fs::Dev;
 use crate::accounting;
 use crate::alloc::backpointers::{backpointer_get_key, backpointer_get_node, BpScanIter};
 use crate::alloc::buckets::bucket_to_u64;
@@ -335,7 +336,7 @@ fn dev_data_drop(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchError> {
 
 /// Not its journal's or superblock's: removal deals with the journal after,
 /// and the superblock goes with the device.
-fn dev_data_buckets(ca: &c::bch_dev) -> u64 {
+fn dev_data_buckets(ca: &Dev) -> u64 {
     ca.usage_read_fast().buckets.iter().enumerate()
         .filter(|&(i, _)| {
             let t = DataType(i as u32);
@@ -345,7 +346,7 @@ fn dev_data_buckets(ca: &c::bch_dev) -> u64 {
         .sum()
 }
 
-fn dev_data_drop_by_backpointers(fs: &Fs, ca: &c::bch_dev, mut d: DevDrop<'_>) -> Result<(), BchError> {
+fn dev_data_drop_by_backpointers(fs: &Fs, ca: &Dev, mut d: DevDrop<'_>) -> Result<(), BchError> {
     const MAX_STALLED: u32 = 10;
 
     let trans = crate::btree_trans!(fs);
@@ -451,7 +452,7 @@ pub extern "C" fn bch2_dev_data_drop(c: &Opaque<Fs>, dev_idx: c_uint, flags: c_u
 }
 
 #[c_export]
-pub extern "C" fn bch2_dev_data_drop_by_backpointers(c: &Opaque<Fs>, ca: &c::bch_dev, flags: c_uint,
+pub extern "C" fn bch2_dev_data_drop_by_backpointers(c: &Opaque<Fs>, ca: &Dev, flags: c_uint,
                                                      err: &mut Printbuf) -> c_int {
     let d = DevDrop { dev: ca.dev_idx.into(), flags, err };
     ret_to_c(dev_data_drop_by_backpointers(Fs::from_c(c), ca, d))

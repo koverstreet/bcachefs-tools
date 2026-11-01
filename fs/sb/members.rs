@@ -1,5 +1,6 @@
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::btree::bkey::{BkeySC, BkeyV, POS_MIN};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
@@ -247,7 +248,7 @@ impl<'a> MembersV1<'a> {
 }
 
 /// @ca as C takes a device that may be none: NULL.
-pub fn dev_ptr(ca: Option<&c::bch_dev>) -> *mut c::bch_dev {
+pub fn dev_ptr(ca: Option<&Dev>) -> *mut Dev {
     ca.map_or(core::ptr::null_mut(), |ca| core::ptr::from_ref(ca).cast_mut())
 }
 
@@ -626,7 +627,7 @@ pub(crate) fn dev_to_text_short(out: &mut Printbuf, sb: &c::bch_sb, dev: u32) {
 }
 
 #[c_export]
-pub fn bch2_member_to_text_short(out: &mut Printbuf, c: &Opaque<Fs>, ca: &c::bch_dev) {
+pub fn bch2_member_to_text_short(out: &mut Printbuf, c: &Opaque<Fs>, ca: &Dev) {
     let fs = Fs::from_c(c);
     dev_to_text_short(out, fs.sb_lock().sb(), ca.dev_idx.into());
 }
@@ -754,7 +755,7 @@ fn mi_field_upgrades(sb: &mut SbLockGuard<'_>, dev: u32, id: &c::bch_dev_identit
 
 /// @w, the caller's superblock write, is dirtied if anything changed.
 #[c_export]
-pub fn bch2_dev_mi_field_upgrades_locked(c: &Opaque<Fs>, ca: &c::bch_dev,
+pub fn bch2_dev_mi_field_upgrades_locked(c: &Opaque<Fs>, ca: &Dev,
                                          id: &c::bch_dev_identity, w: &mut c::sb_write) {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock, with its CLASS(sb_write)
@@ -765,12 +766,12 @@ pub fn bch2_dev_mi_field_upgrades_locked(c: &Opaque<Fs>, ca: &c::bch_dev,
 }
 
 #[c_export]
-pub fn bch2_dev_mi_field_read(ca: &c::bch_dev, id: &mut c::bch_dev_identity) {
+pub fn bch2_dev_mi_field_read(ca: &Dev, id: &mut c::bch_dev_identity) {
     *id = ca.identity();
 }
 
 #[c_export]
-pub fn bch2_dev_mi_field_upgrades(ca: &c::bch_dev) {
+pub fn bch2_dev_mi_field_upgrades(ca: &Dev) {
     ca.mi_field_upgrades();
 }
 
@@ -804,7 +805,7 @@ fn bitmap_coarsen(bitmap: u64, by: u32) -> u64 {
     (0..64).filter(|i| bitmap & 1 << i != 0).fold(0, |new, i| new | 1 << (i >> by))
 }
 
-impl c::bch_dev {
+impl Dev {
     /// Whether all of [@start, @start + @sectors) is marked in its member's
     /// bitmap - and, @with_gc, in the one gc is rebuilding. members.h has
     /// C's, an inline the allocator calls.
@@ -1074,7 +1075,7 @@ impl c::bch_devs_list {
 impl Fs {
     /// c->devs[@dev], for as long as @rcu's section: bch2_dev_rcu_noerror().
     /// None past the superblock's devices, or for a slot with no device.
-    pub fn dev_rcu<'g>(&'g self, dev: u32, rcu: &'g ReadGuard) -> Option<&'g c::bch_dev> {
+    pub fn dev_rcu<'g>(&'g self, dev: u32, rcu: &'g ReadGuard) -> Option<&'g Dev> {
         self.devs.get(..self.nr_devices() as usize)?.get(dev as usize)?.read(rcu)
     }
 
@@ -1095,7 +1096,7 @@ impl Fs {
 
     /// The filesystem's devices, for as long as @rcu's section:
     /// for_each_member_device_rcu().
-    pub fn devs_rcu<'g>(&'g self, rcu: &'g ReadGuard) -> impl Iterator<Item = &'g c::bch_dev> {
+    pub fn devs_rcu<'g>(&'g self, rcu: &'g ReadGuard) -> impl Iterator<Item = &'g Dev> {
         // nr_devices read each step, as C's: a device added meanwhile is seen
         (0..).take_while(move |&dev| dev < self.nr_devices())
             .filter_map(move |dev| self.dev_rcu(dev, rcu))
@@ -1104,23 +1105,23 @@ impl Fs {
     /// Those of @devs - a mask's iter() - that there are:
     /// for_each_member_device_rcu() with a mask.
     pub fn devs_rcu_in<'g>(&'g self, devs: impl Iterator<Item = usize> + 'g, rcu: &'g ReadGuard)
-        -> impl Iterator<Item = &'g c::bch_dev>
+        -> impl Iterator<Item = &'g Dev>
     {
         devs.filter_map(move |dev| self.dev_rcu(dev as u32, rcu))
     }
 
     /// The online devices: for_each_online_member_rcu().
-    pub fn online_devs_rcu<'g>(&'g self, rcu: &'g ReadGuard) -> impl Iterator<Item = &'g c::bch_dev> {
+    pub fn online_devs_rcu<'g>(&'g self, rcu: &'g ReadGuard) -> impl Iterator<Item = &'g Dev> {
         self.devs_rcu_in(self.devs_online.iter(), rcu)
     }
 
     /// The devices the allocator writes to: for_each_rw_member_rcu().
-    pub fn rw_devs_rcu<'g>(&'g self, rcu: &'g ReadGuard) -> impl Iterator<Item = &'g c::bch_dev> {
+    pub fn rw_devs_rcu<'g>(&'g self, rcu: &'g ReadGuard) -> impl Iterator<Item = &'g Dev> {
         self.devs_rcu_in(self.allocator.rw_devs[DataType::free.0 as usize].iter(), rcu)
     }
 
     /// dev_rcu(), a missing device reported: bch2_dev_rcu().
-    pub fn dev_rcu_or_err<'g>(&'g self, dev: u32, rcu: &'g ReadGuard) -> Result<&'g c::bch_dev, BchError> {
+    pub fn dev_rcu_or_err<'g>(&'g self, dev: u32, rcu: &'g ReadGuard) -> Result<&'g Dev, BchError> {
         self.dev_rcu(dev, rcu).ok_or_else(|| self.dev_missing(dev))
     }
 
@@ -1137,7 +1138,7 @@ impl Fs {
 
     /// A ref on device @dev, if there is one: bch2_dev_tryget_noerror().
     pub fn dev_get(&self, dev: u32) -> Option<DevRef> {
-        self.dev_rcu(dev, &read_lock()).map(c::bch_dev::get_ref)
+        self.dev_rcu(dev, &read_lock()).map(Dev::get_ref)
     }
 
     /// @ca made the ref on device @dev, for a walk by device - kept if it's
@@ -1204,7 +1205,7 @@ impl Fs {
 
     /// An io ref on @ca, one of ours found under RCU: the ref keeps the device
     /// past the section, and the guard hands it out only while it's held.
-    fn io_ref_tryget<R: IoRefIdx>(&self, ca: &c::bch_dev) -> Option<DevIoRef<R>> {
+    fn io_ref_tryget<R: IoRefIdx>(&self, ca: &Dev) -> Option<DevIoRef<R>> {
         // SAFETY: as above
         DevIoRef::tryget_live(unsafe { &*core::ptr::from_ref(ca).cast::<DevIo<R>>() })
     }
@@ -1212,7 +1213,7 @@ impl Fs {
     /// What @f makes of each device it doesn't skip: each step its own RCU
     /// section, resuming after the device the last one stopped at, as
     /// __bch2_next_dev().
-    fn walk<'f, T>(&'f self, mut f: impl FnMut(&c::bch_dev) -> Option<T> + 'f) -> impl Iterator<Item = T> + 'f {
+    fn walk<'f, T>(&'f self, mut f: impl FnMut(&Dev) -> Option<T> + 'f) -> impl Iterator<Item = T> + 'f {
         let mut next = 0;
         core::iter::from_fn(move || {
             let rcu = read_lock();
@@ -1309,7 +1310,7 @@ pub fn bch2_dev_missing_atomic(c: &Opaque<Fs>, dev: c_uint) {
     Fs::from_c(c).dev_missing_atomic(dev)
 }
 
-impl c::bch_dev {
+impl Dev {
     /// A pointer to bucket @bucket, which this device hasn't: an
     /// inconsistency.
     pub fn bucket_missing(&self, bucket: u64) {
@@ -1319,7 +1320,7 @@ impl c::bch_dev {
 }
 
 #[c_export]
-pub fn bch2_dev_bucket_missing(ca: &c::bch_dev, bucket: u64) {
+pub fn bch2_dev_bucket_missing(ca: &Dev, bucket: u64) {
     ca.bucket_missing(bucket)
 }
 
@@ -1328,7 +1329,7 @@ pub fn bch2_dev_bucket_missing(ca: &c::bch_dev, bucket: u64) {
 /// A ref on a device - ca->ref: it stays a member while this is held. Put
 /// on drop; cloned with bch2_dev_get().
 /// A NonNull, so Option<DevRef> has C's layout: a nullable bch_dev *.
-pub struct DevRef(core::ptr::NonNull<c::bch_dev>);
+pub struct DevRef(core::ptr::NonNull<Dev>);
 
 // SAFETY: a ref on a Sync device, which C takes and puts from any thread
 unsafe impl Send for DevRef {}
@@ -1336,20 +1337,20 @@ unsafe impl Send for DevRef {}
 impl DevRef {
     /// # Safety
     /// @ca holds a ref that's this one's now: bch2_dev_lookup()'s.
-    pub unsafe fn from_raw(ca: *mut c::bch_dev) -> Self {
+    pub unsafe fn from_raw(ca: *mut Dev) -> Self {
         DevRef(core::ptr::NonNull::new(ca).expect("a device ref on no device"))
     }
 
     /// For C functions taking *mut bch_dev.
-    pub fn as_mut_ptr(&self) -> *mut c::bch_dev {
+    pub fn as_mut_ptr(&self) -> *mut Dev {
         self.0.as_ptr()
     }
 }
 
 impl core::ops::Deref for DevRef {
-    type Target = c::bch_dev;
+    type Target = Dev;
 
-    fn deref(&self) -> &c::bch_dev {
+    fn deref(&self) -> &Dev {
         // SAFETY: the ref keeps it
         unsafe { self.0.as_ref() }
     }
@@ -1369,7 +1370,7 @@ impl Drop for DevRef {
 }
 
 /// bch2_dev_get(), as members.h's inline - which C still calls - is.
-fn dev_get(ca: &c::bch_dev) {
+fn dev_get(ca: &Dev) {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     assert!(ca.ref_.fetch_add(1, Ordering::SeqCst) >= 1, "bch_dev->ref get with no ref held");
 
@@ -1383,7 +1384,7 @@ fn dev_get(ca: &c::bch_dev) {
 ///
 /// # Safety
 /// @ca holds a ref, which this puts.
-unsafe fn dev_put(ca: *mut c::bch_dev) {
+unsafe fn dev_put(ca: *mut Dev) {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     unsafe {
         let r = (*ca).ref_.fetch_sub(1, Ordering::SeqCst) - 1;
@@ -1408,16 +1409,16 @@ unsafe fn dev_put(ca: *mut c::bch_dev) {
 /// removal can complete while this is held. For contexts that block on
 /// state_lock, where a DevRef mustn't be held: recheck ca.removing under the
 /// lock before touching member state.
-pub struct DevOuterRef(*mut c::bch_dev);
+pub struct DevOuterRef(*mut Dev);
 
 impl DevOuterRef {
     /// For C functions taking *mut bch_dev.
-    pub fn as_mut_ptr(&self) -> *mut c::bch_dev {
+    pub fn as_mut_ptr(&self) -> *mut Dev {
         self.0
     }
 
     /// The ref, for a C function that puts it: bch2_dev_remove().
-    pub fn into_raw(self) -> *mut c::bch_dev {
+    pub fn into_raw(self) -> *mut Dev {
         core::mem::ManuallyDrop::new(self).0
     }
 
@@ -1425,15 +1426,15 @@ impl DevOuterRef {
     ///
     /// # Safety
     /// @ca holds an outer ref no one else will put.
-    pub unsafe fn from_raw(ca: *mut c::bch_dev) -> Self {
+    pub unsafe fn from_raw(ca: *mut Dev) -> Self {
         DevOuterRef(ca)
     }
 }
 
 impl core::ops::Deref for DevOuterRef {
-    type Target = c::bch_dev;
+    type Target = Dev;
 
-    fn deref(&self) -> &c::bch_dev {
+    fn deref(&self) -> &Dev {
         // SAFETY: the ref keeps the memory
         unsafe { &*self.0 }
     }
@@ -1467,12 +1468,12 @@ impl IoRefIdx for c::bch_dev_write_ref {
 
 /// A device, counted by its io refs for R: io_ref[R::RW].
 #[repr(transparent)]
-pub struct DevIo<R>(c::bch_dev, PhantomData<R>);
+pub struct DevIo<R>(Dev, PhantomData<R>);
 
 impl<R> Deref for DevIo<R> {
-    type Target = c::bch_dev;
+    type Target = Dev;
 
-    fn deref(&self) -> &c::bch_dev {
+    fn deref(&self) -> &Dev {
         &self.0
     }
 }
@@ -1507,7 +1508,7 @@ pub type DevIoRef<R> = RefGuard<DevIo<R>>;
 // is: its state behind its own locks, atomics and RCU - so a &bch_dev goes to
 // any thread too, and an io ref, a percpu ref, is put from anywhere. What
 // Rust reads through it is as synchronized as the C it reads.
-unsafe impl Sync for c::bch_dev {}
+unsafe impl Sync for Dev {}
 
 /// The last device looked up, its ref kept while lookups keep hitting it:
 /// bch2_dev_iterate(), for walks whose keys mostly stay on one device.
@@ -1548,7 +1549,7 @@ impl Fs {
     }
 }
 
-impl c::bch_dev {
+impl Dev {
     /// Its filesystem.
     pub fn fs(&self) -> &Fs {
         &self.fs
@@ -1704,7 +1705,7 @@ impl c::bch_dev {
 
     /// An outer ref on it - bch2_dev_get_outer().
     pub fn outer_ref(&self) -> DevOuterRef {
-        let ca = (self as *const c::bch_dev).cast_mut();
+        let ca = (self as *const Dev).cast_mut();
         // SAFETY: the device is in hand, so live; C's to change
         unsafe { c::refcount_inc(core::ptr::addr_of_mut!((*ca).ref_outer)) };
         DevOuterRef(ca)
@@ -1741,12 +1742,12 @@ impl c::bch_dev {
 }
 
 /// A device prints as its name, as C's messages name it.
-impl ToText for c::bch_dev {
+impl ToText for Dev {
     fn to_text(&self, out: &mut Printbuf) {
         out.write_bytes(self.name().to_bytes())
     }
 }
-crate::display_via_to_text!(c::bch_dev);
+crate::display_via_to_text!(Dev);
 
 #[cfg(test)]
 mod tests {

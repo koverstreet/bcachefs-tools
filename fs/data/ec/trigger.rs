@@ -13,6 +13,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::accounting::ReconcileType;
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
 use crate::alloc::buckets::bucket_to_u64;
@@ -217,7 +218,7 @@ fn stripe_refcount_saturated(fs: &Fs, bucket: Bpos, stripe: u64, overflow: bool)
 /// are the stripe's; a data block's are its extents', which their triggers
 /// count.
 #[allow(clippy::too_many_arguments)]
-fn mark_stripe_bucket_alloc(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, s: StripeK<'_>, i: u32, deleting: bool,
+fn mark_stripe_bucket_alloc(t: &TransAttempt<'_, '_>, ca: &Dev, s: StripeK<'_>, i: u32, deleting: bool,
                             bucket: Bpos, a: &mut c::AllocV4, flags: UpdateTriggerFlags) -> Result<(), BchError> {
     let fs = t.fs();
     let v = s.v();

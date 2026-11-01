@@ -22,6 +22,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::BtreeTrans;
 use crate::c;
@@ -321,7 +322,7 @@ impl ToText for NocowLocks {
 
 /// The buckets of @k's pointers that @dev gives a device for, by pointer
 /// index; a pointer without one isn't locked.
-fn buckets<'a>(fs: &Fs, k: BkeySC<'_>, dev: impl Fn(usize) -> Option<&'a c::bch_dev>) -> Buckets {
+fn buckets<'a>(fs: &Fs, k: BkeySC<'_>, dev: impl Fn(usize) -> Option<&'a Dev>) -> Buckets {
     let Some(k) = k.arm::<Ptrs>() else { return Buckets::new() };
     k.ptrs(fs).enumerate()
         .filter_map(|(i, ptr)| dev(i).map(|ca| bucket_to_u64(ca.ptr_bucket_pos(ptr))))
@@ -334,7 +335,7 @@ fn buckets<'a>(fs: &Fs, k: BkeySC<'_>, dev: impl Fn(usize) -> Option<&'a c::bch_
 /// # Safety
 /// @cas has an entry per pointer of @k, each NULL or a device the caller
 /// holds a ref on.
-unsafe fn cas_buckets(fs: &Fs, k: BkeySC<'_>, cas: *const *mut c::bch_dev) -> Buckets {
+unsafe fn cas_buckets(fs: &Fs, k: BkeySC<'_>, cas: *const *mut Dev) -> Buckets {
     // SAFETY: the caller's
     buckets(fs, k, |i| unsafe { (*cas.add(i)).as_ref() })
 }
@@ -379,7 +380,7 @@ pub(crate) fn bkey_lock(fs: &'static Fs, trans: Option<&BtreeTrans<'_>>, k: Bkey
 /// btree locks.
 #[c_export]
 pub unsafe fn bch2_bkey_nocow_lock(c: &Fs, trans: Option<&BtreeTrans<'_>>, k: BkeySC<'_>,
-                                   cas: *const *mut c::bch_dev, flags: c_int) {
+                                   cas: *const *mut Dev, flags: c_int) {
     // SAFETY: the caller's
     let buckets = unsafe { cas_buckets(c, k, cas) };
     c.nocow_locks.lock(c, trans, &buckets, NocowKind::from_flags(flags))
@@ -388,7 +389,7 @@ pub unsafe fn bch2_bkey_nocow_lock(c: &Fs, trans: Option<&BtreeTrans<'_>>, k: Bk
 /// # Safety
 /// As cas_buckets(), with @cas as it was when they were locked.
 #[c_export]
-pub unsafe fn bch2_bkey_nocow_unlock(c: &Fs, k: BkeySC<'_>, cas: *const *mut c::bch_dev, flags: c_int) {
+pub unsafe fn bch2_bkey_nocow_unlock(c: &Fs, k: BkeySC<'_>, cas: *const *mut Dev, flags: c_int) {
     // SAFETY: the caller's
     let buckets = unsafe { cas_buckets(c, k, cas) };
     c.nocow_locks.unlock(&buckets, NocowKind::from_flags(flags))

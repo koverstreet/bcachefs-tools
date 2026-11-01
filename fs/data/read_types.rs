@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::fs::Fs;
 use crate::cstructs::c;
 use crate::types::c_default;
@@ -24,7 +25,7 @@ nest! {
     #[repr(C)]*
     pub struct bch_read_bio {
         pub c: *mut Fs,
-        pub ca: *mut c::bch_dev, /* stashed at submit; see bch_write_bio */
+        pub ca: *mut Dev, /* stashed at submit; see bch_write_bio */
         pub start_time: u64,
         pub submit_time: u64,
 

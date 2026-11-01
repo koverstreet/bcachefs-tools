@@ -6,6 +6,7 @@
 //! starts. The pre-set hooks run at mount too, for every option, with no
 //! change to register: opts_hooks_pre_set().
 
+use crate::fs::Dev;
 use super::{opt_id, opt_to_text, Opt, OPTS};
 use crate::c;
 use crate::data::compress;
@@ -18,14 +19,14 @@ use crate::util::printbuf::Printbuf;
 impl Fs {
     /// Before setting option @id to @v, for device @ca or the filesystem,
     /// without an OptChange - offline: as OptChange::pre_set().
-    pub fn opt_hook_pre_set(&self, ca: Option<&c::bch_dev>, id: opt_id, v: u64) -> Result<(), BchError> {
+    pub fn opt_hook_pre_set(&self, ca: Option<&Dev>, id: opt_id, v: u64) -> Result<(), BchError> {
         opt_hook_pre_set(self, ca, 0, id, v, true)
     }
 }
 
 /// The reconcile scans an option change needs, registered before it and
 /// done after: those of what it changes the io options of.
-fn opt_hook_io(fs: &Fs, ca: Option<&c::bch_dev>, inum: u64, id: opt_id, v: u64, post: bool)
+fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64, post: bool)
     -> Result<(), BchError>
 {
     use c::reconcile_scan as scan;
@@ -86,7 +87,7 @@ fn opt_hook_io(fs: &Fs, ca: Option<&c::bch_dev>, inum: u64, id: opt_id, v: u64, 
 /// Before setting option @id to @v - for device @ca, or inode @inum, or with
 /// neither (0) the filesystem: what it needs, and whether it may be; with
 /// @change, the scans it needs registered.
-fn opt_hook_pre_set(fs: &Fs, ca: Option<&c::bch_dev>, inum: u64, id: opt_id, v: u64, change: bool)
+fn opt_hook_pre_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64, change: bool)
     -> Result<(), BchError>
 {
     match id {
@@ -136,7 +137,7 @@ pub(crate) fn opts_hooks_pre_set(fs: &Fs) -> Result<(), BchError> {
 
 /// After setting option @id to @v, as opt_hook_pre_set(): logged, and what
 /// the change starts.
-fn opt_hook_post_set(fs: &Fs, ca: Option<&c::bch_dev>, inum: u64, id: opt_id, v: u64) {
+fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) {
     if fs.flags.get(c::bch_fs_flags::BCH_FS_started) {
         let mut buf = Printbuf::new();
         write!(buf, "opt change: {}=", id.opt().name);
@@ -229,18 +230,18 @@ impl<'f> OptChange<'f> {
     /// Before setting option @id to @v - for device @ca, or inode @inum, or
     /// with neither (0) the filesystem: records what the change needs, and
     /// fails if it may not.
-    pub fn pre_set(&mut self, ca: Option<&c::bch_dev>, inum: u64, id: opt_id, v: u64) -> Result<(), BchError> {
+    pub fn pre_set(&mut self, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) -> Result<(), BchError> {
         opt_hook_pre_set(self.fs, ca, inum, id, v, true)
     }
 
-    pub fn post_set(&self, ca: Option<&c::bch_dev>, inum: u64, id: opt_id, v: u64) {
+    pub fn post_set(&self, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) {
         opt_hook_post_set(self.fs, ca, inum, id, v)
     }
 
     /// Set @opt to @v - in the superblock if it's a field of it, @ca's member
     /// for a device option - and for a filesystem option in c->opts, no longer
     /// as mount set it; both under one sb_lock. Whether it changed.
-    pub fn set(&self, ca: Option<&c::bch_dev>, opt: &Opt, v: u64, val: &[u8]) -> bool {
+    pub fn set(&self, ca: Option<&Dev>, opt: &Opt, v: u64, val: &[u8]) -> bool {
         let fs = self.fs;
         let mut sb = fs.sb_lock();
 

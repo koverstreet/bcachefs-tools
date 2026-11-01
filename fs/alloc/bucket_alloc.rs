@@ -30,6 +30,7 @@
 //! counter snapshot saying whether a wake was for it - or bails, committing
 //! the copies it has, when waiting won't help: alloc_should_bail().
 
+use crate::fs::Dev;
 use crate::alloc::background::{FREESPACE_GENBITS_NR, FREESPACE_GENBITS_SHIFT, alloc_to_v4};
 use crate::alloc::check::{check_freespace_key, FreespaceCheck};
 use crate::alloc::foreground::OpenBucket;
@@ -57,7 +58,7 @@ const BUCKET_MASK: u64 = (1 << FREESPACE_GENBITS_SHIFT) - 1;
 impl c::alloc_request {
     /// Whether bucket @b of @ca is in the wrong place for it: a btree node's
     /// outside the device's btree bitmap, or other data's inside it.
-    fn btree_bitmap_mismatch(&self, ca: &c::bch_dev, b: u64) -> bool {
+    fn btree_bitmap_mismatch(&self, ca: &Dev, b: u64) -> bool {
         self.btree_bitmap != BTREE_BITMAP_ANY &&
             (self.btree_bitmap == BTREE_BITMAP_YES) !=
             ca.btree_bitmap_marked_sectors(ca.bucket_to_sector(b), ca.mi.get().bucket_size.into(), false)
@@ -75,7 +76,7 @@ impl Fs {
     /// free hole, not marked yet: before the trans_mark_dev_sbs pass, and on
     /// a device without freespace initialized - which a resize has while it
     /// marks those the new range brings in.
-    fn superblock_bucket_unmarked(&self, ca: &c::bch_dev, b: u64) -> bool {
+    fn superblock_bucket_unmarked(&self, ca: &Dev, b: u64) -> bool {
         let marked = self.recovery.runner.passes_complete.get() &
             1 << c::bch_recovery_pass::BCH_RECOVERY_PASS_trans_mark_dev_sbs as u32 != 0;
         !(marked && ca.mi.get().freespace_initialized != 0) && ca.is_superblock_bucket(b)
@@ -108,7 +109,7 @@ impl Fs {
     }
 
     /// Bucket @b of @ca, at gen @generation, opened - None if it's not to be.
-    fn try_alloc_bucket(&self, ca: &c::bch_dev, req: &mut c::alloc_request, b: u64, generation: u8)
+    fn try_alloc_bucket(&self, ca: &Dev, req: &mut c::alloc_request, b: u64, generation: u8)
         -> Result<Option<OpenBucket>, BchError>
     {
         if unlikely(self.superblock_bucket_unmarked(ca, b)) {
@@ -149,7 +150,7 @@ impl Fs {
     /// itself (not btree nodes, which mustn't commit degraded: a node on a
     /// failing device would take the filesystem read-only) - or the devices
     /// can't hold its copies at all.
-    fn alloc_should_bail(&self, ca: &c::bch_dev, req: &c::alloc_request) -> bool {
+    fn alloc_should_bail(&self, ca: &Dev, req: &c::alloc_request) -> bool {
         let have_replicas = req.nr_effective != 0 || req.devs_have().is_some_and(|d| d.nr != 0);
 
         have_replicas &&
@@ -161,7 +162,7 @@ impl Fs {
 
     #[cold]
     #[inline(never)]
-    fn bucket_alloc_to_text(&self, out: &mut Printbuf, ca: &c::bch_dev, req: &c::alloc_request,
+    fn bucket_alloc_to_text(&self, out: &mut Printbuf, ca: &Dev, req: &c::alloc_request,
                             ret: Result<&OpenBucket, BchError>) {
         out.tabstop_push(32);
 
@@ -198,7 +199,7 @@ impl Fs {
 impl TransAttempt<'_, '_> {
     /// Freespace btree offset @p of @ca - genbits | bucket - checked against
     /// the bucket's alloc key, and opened.
-    fn try_alloc_bucket_pos(&self, ca: &c::bch_dev, req: &mut c::alloc_request, p: u64)
+    fn try_alloc_bucket_pos(&self, ca: &Dev, req: &mut c::alloc_request, p: u64)
         -> Result<Option<OpenBucket>, BchError>
     {
         let fs = self.fs();
@@ -226,7 +227,7 @@ impl TransAttempt<'_, '_> {
     /// cache - but the cached key is what serializes allocating a bucket, so
     /// a candidate's is looked up before it's taken.
     #[inline(never)]
-    fn bucket_alloc_early(&self, ca: &c::bch_dev, req: &mut c::alloc_request)
+    fn bucket_alloc_early(&self, ca: &Dev, req: &mut c::alloc_request)
         -> Result<Option<OpenBucket>, BchError>
     {
         let first_bucket = u64::from(ca.mi.get().first_bucket);
@@ -246,7 +247,7 @@ impl TransAttempt<'_, '_> {
 
     /// bucket_alloc_early() from @alloc_cursor, to the end of the device; the
     /// last bucket it looked at left in @alloc_cursor.
-    fn bucket_alloc_early_from(&self, ca: &c::bch_dev, req: &mut c::alloc_request, alloc_cursor: &mut u64)
+    fn bucket_alloc_early_from(&self, ca: &Dev, req: &mut c::alloc_request, alloc_cursor: &mut u64)
         -> Result<Option<OpenBucket>, BchError>
     {
         let fs = self.fs();
@@ -299,7 +300,7 @@ impl TransAttempt<'_, '_> {
     /// @ca's freespace btree forwards or backwards from @start - which
     /// belongs to the forwards scan. Candidates that can't be taken - open,
     /// in the wrong btree bitmap region - move the scan on.
-    fn bucket_alloc_scan(&self, ca: &c::bch_dev, req: &mut c::alloc_request, genbits: u64, start: u64,
+    fn bucket_alloc_scan(&self, ca: &Dev, req: &mut c::alloc_request, genbits: u64, start: u64,
                          forwards: bool) -> Result<Option<OpenBucket>, BchError>
     {
         let dev = u64::from(ca.dev_idx);
@@ -372,7 +373,7 @@ impl TransAttempt<'_, '_> {
 
     /// From @ca's cursor: forwards through the genbits classes from there,
     /// then from the start of the device.
-    fn bucket_alloc_freelist(&self, ca: &c::bch_dev, req: &mut c::alloc_request)
+    fn bucket_alloc_freelist(&self, ca: &Dev, req: &mut c::alloc_request)
         -> Result<Option<OpenBucket>, BchError>
     {
         let first_bucket = u64::from(ca.mi.get().first_bucket);
@@ -401,7 +402,7 @@ impl TransAttempt<'_, '_> {
     /// nearest of them kept - nearness over the cursor path's order of
     /// classes, and buckets opened only to be put are cheap. The cursor's
     /// left alone: stripes being made don't drag it about, or each other.
-    fn bucket_alloc_target(&self, ca: &c::bch_dev, req: &mut c::alloc_request)
+    fn bucket_alloc_target(&self, ca: &Dev, req: &mut c::alloc_request)
         -> Result<Option<OpenBucket>, BchError>
     {
         let target = ca.sector_to_bucket(ca.frac_to_offset(req.target_frac))
@@ -432,7 +433,7 @@ impl TransAttempt<'_, '_> {
     /// From the freespace btree - by @req.target_frac if it has one - or the
     /// alloc btree before freespace is initialized; then with the btree
     /// bitmap ignored, and before check_alloc_info, from the alloc btree.
-    fn bucket_alloc_from(&self, ca: &c::bch_dev, req: &mut c::alloc_request, mut freespace: bool)
+    fn bucket_alloc_from(&self, ca: &Dev, req: &mut c::alloc_request, mut freespace: bool)
         -> Result<Option<OpenBucket>, BchError>
     {
         loop {
@@ -460,7 +461,7 @@ impl TransAttempt<'_, '_> {
     /// @req may not block, bucket_alloc_no_progress if it should bail -
     /// otherwise its closure waits on freelist_wait, and it looks once more:
     /// bucket_alloc_blocked if there's still none.
-    pub fn bucket_alloc(&self, req: &mut c::alloc_request, ca: &c::bch_dev) -> Result<OpenBucket, BchError> {
+    pub fn bucket_alloc(&self, req: &mut c::alloc_request, ca: &Dev) -> Result<OpenBucket, BchError> {
         let fs = self.fs();
         let freespace = ca.mi.get().freespace_initialized != 0;
         let mut waiting = false;

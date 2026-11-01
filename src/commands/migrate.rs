@@ -11,6 +11,7 @@
 // the file is what keeps the old filesystem's allocator away from blocks
 // bcachefs is using, and removing it would corrupt both filesystems.
 
+use bcachefs_kernel::fs::Dev;
 use std::ffi::{CString, c_char};
 use std::sync::atomic::AtomicUsize;
 use std::fs;
@@ -147,7 +148,7 @@ fn bucket_to_sector(bucket_size: u32, bucket: u64) -> u64 {
 }
 
 /// Mark a range of buckets as nouse.
-unsafe fn mark_nouse_range(ca: *const c::bch_dev, sector_from: u64, sector_to: u64) {
+unsafe fn mark_nouse_range(ca: *const Dev, sector_from: u64, sector_to: u64) {
     let ca = unsafe { &*ca };
     let bucket_size = ca.mi.get().bucket_size as u32;
     // SAFETY: buckets_nouse_alloc()'s: a bit per bucket, in words

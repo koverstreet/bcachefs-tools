@@ -136,6 +136,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Dev;
 use crate::c;
 use crate::c::{bch_sb, bch_sb_buf, bch_sb_field_crypt, bch_sb_handle, block_device};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
@@ -2132,18 +2133,18 @@ impl SbResize for FsSbResize<'_> {
 pub struct DevSbMut<'a> {
     fs_sb: &'a bch_sb,
     io:    &'a mut c::bch_sb_io,
-    ca:    &'a c::bch_dev,
+    ca:    &'a Dev,
 }
 
 impl Fs {
     /// That @ca's superblock is the one @sb locks: sb_lock is ours, @ca ours.
-    fn dev_sb_check(&self, sb: &SbLockGuard<'_>, ca: &c::bch_dev) {
+    fn dev_sb_check(&self, sb: &SbLockGuard<'_>, ca: &Dev) {
         assert!(core::ptr::eq(sb.lock(), &self.sb), "dev_sb(): another filesystem's sb_lock");
         assert!(core::ptr::eq(ca.fs(), self), "dev_sb(): another filesystem's device {}", ca.dev_idx);
     }
 
     /// @ca's superblock, under sb_lock: None if it has none, not attached.
-    pub fn dev_sb<'a>(&self, sb: &'a SbLockGuard<'_>, ca: &'a c::bch_dev) -> Option<&'a bch_sb_buf> {
+    pub fn dev_sb<'a>(&self, sb: &'a SbLockGuard<'_>, ca: &'a Dev) -> Option<&'a bch_sb_buf> {
         self.dev_sb_check(sb, ca);
         // SAFETY: @sb holds sb_lock, which protects it - and every &mut of
         // it is had through a guard borrowed mutably
@@ -2152,7 +2153,7 @@ impl Fs {
     }
 
     /// @ca's superblock, to edit: None if it has none, not attached.
-    pub fn dev_sb_mut<'a>(&self, sb: &'a mut SbLockGuard<'_>, ca: &'a c::bch_dev) -> Option<DevSbMut<'a>> {
+    pub fn dev_sb_mut<'a>(&self, sb: &'a mut SbLockGuard<'_>, ca: &'a Dev) -> Option<DevSbMut<'a>> {
         let sb: &'a SbLockGuard<'_> = sb;
         self.dev_sb_check(sb, ca);
         // SAFETY: @sb holds sb_lock, which protects it - mutably borrowed, so
@@ -2379,7 +2380,7 @@ impl<'a> DevSbMut<'a> {
 
 /// A device's result in a superblock write: its IO accounted, and what went
 /// wrong thrown - as the IO's endio did, in C.
-fn sb_io_result(fs: &Fs, ca: &c::bch_dev, rw: c::bch_member_error_type, ret: Result<(), BchError>)
+fn sb_io_result(fs: &Fs, ca: &Dev, rw: c::bch_member_error_type, ret: Result<(), BchError>)
     -> Result<(), BchError>
 {
     match ret {
@@ -3083,7 +3084,7 @@ pub fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &bch_sb) -> Result<(), B
 
 /// @ca's superblock from the filesystem's: bch2_sb_from_fs().
 #[c_export]
-pub fn bch2_sb_from_fs(c: &Opaque<Fs>, ca: &c::bch_dev) -> c_int {
+pub fn bch2_sb_from_fs(c: &Opaque<Fs>, ca: &Dev) -> c_int {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
     let mut sb = unsafe { fs.sb_lock_held() };

@@ -3,6 +3,7 @@
 // Uses a temporary second device for metadata, writes data sequentially to the
 // primary device, then migrates metadata to the primary and drops the temp device.
 
+use bcachefs_kernel::fs::Dev;
 use std::ffi::{CString, c_char};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
@@ -215,7 +216,7 @@ fn prt_sectors(out: &mut Printbuf, v: u64) {
 /// Print usage for a specific data type on a device.
 fn print_data_type_usage(
     out: &mut Printbuf,
-    ca: &c::bch_dev,
+    ca: &Dev,
     usage: &c::bch_dev_usage_full,
     data_type: DataType,
 ) {

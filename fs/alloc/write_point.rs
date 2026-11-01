@@ -24,6 +24,7 @@
 //! they strand - a bucket each - and shrink when an allocation finds it
 //! isn't: too_many_writepoints().
 
+use crate::fs::Dev;
 use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::data::ec::head::stripe_heads_stop;
@@ -225,7 +226,7 @@ impl Fs {
 
 impl Fs {
     /// @wp's buckets that go - see open_bucket_should_drop() - put.
-    fn writepoint_stop(&self, wp: &c::write_point, ca: Option<&c::bch_dev>, ec: bool) {
+    fn writepoint_stop(&self, wp: &c::write_point, ca: Option<&Dev>, ec: bool) {
         let mut g = wp.alloc.lock.lock();
         let mut keep = c::open_buckets::default();
         for ob in g.ptrs.drain(self) {
@@ -240,7 +241,7 @@ impl Fs {
     /// stripes being made - or with neither, any: closed, the write points'
     /// and the partial list's, and the btree's reserve cache emptied; the
     /// stripes being made on @ca stopped.
-    pub fn open_buckets_stop(&self, ca: Option<&c::bch_dev>, ec: bool) {
+    pub fn open_buckets_stop(&self, ca: Option<&Dev>, ec: bool) {
         let a = &self.allocator;
         for wp in a.write_points.iter().chain([&self.copygc.write_point, &a.reconcile_write_point,
                                                &a.btree_write_point]) {

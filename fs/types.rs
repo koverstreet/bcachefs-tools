@@ -323,9 +323,10 @@ c_const! {
 
 #[pin_data]
 #[repr(C)]
+#[c_name(bch_dev)]
 #[derive(CStruct, TypeInfo, Init)]
 #[init_args(fs: &crate::fs::Fs)]
-pub struct bch_dev {
+pub struct Dev {
     pub kobj: c::kobject,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     pub ref_: core::sync::atomic::AtomicIsize,
@@ -664,7 +665,7 @@ pub struct Fs {
     pub read_only_work: c::work_struct,
 
     #[c("struct bch_dev __rcu *devs[BCH_SB_MEMBERS_MAX]")]
-    pub devs: [crate::util::rcu::RcuPtr<c::bch_dev>; c::BCH_SB_MEMBERS_MAX as usize],
+    pub devs: [crate::util::rcu::RcuPtr<Dev>; c::BCH_SB_MEMBERS_MAX as usize],
     #[c("struct bch_devs_mask devs_online")]
     pub devs_online: c::AtomicDevsMask,
     #[c("struct bch_devs_mask devs_removed")]
