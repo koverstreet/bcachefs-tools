@@ -1584,7 +1584,7 @@ fn may_delete_deleted_inode(
     }
 
     if from_deleted_inodes {
-        if fs.flag(c::bch_fs_flags::BCH_FS_clean_recovery) &&
+        if fs.flags.get(c::bch_fs_flags::BCH_FS_clean_recovery) &&
            !fsck_err!(t, id::deleted_inode_but_clean,
                       "filesystem marked as clean but have deleted inode {}:{}",
                       { p.offset }, { p.snapshot })? {

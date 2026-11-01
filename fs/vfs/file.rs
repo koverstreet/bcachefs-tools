@@ -126,7 +126,7 @@ impl FileData for InodeFile {
     unsafe fn release(file: *mut c::file) {
         // SAFETY: as ops_of()'s
         let inode = unsafe { Self::ops_of(file) };
-        if inode.take_flag(c::bch_inode_info_flags::EI_INODE_FLUSH_ON_CLOSE) {
+        if inode.ei_flags.swap(c::bch_inode_info_flags::EI_INODE_FLUSH_ON_CLOSE, false) {
             unsafe { c::rust_filemap_flush((*inode.vfs().as_ptr()).i_mapping) };
         }
     }
@@ -136,7 +136,7 @@ impl FileData for InodeFile {
 /// read-only: @flags the mapping's VM_*.
 fn mmap_check(fs: &Fs, flags: c_ulong) -> Result<(), BchError> {
     let shared_writable = c::VM_SHARED | c::VM_WRITE;
-    if flags & shared_writable == shared_writable && fs.flag(c::bch_fs_flags::BCH_FS_emergency_ro) {
+    if flags & shared_writable == shared_writable && fs.flags.get(c::bch_fs_flags::BCH_FS_emergency_ro) {
         return fs.throw(bch_errcode::BCH_ERR_mmap_emergency_ro);
     }
     Ok(())

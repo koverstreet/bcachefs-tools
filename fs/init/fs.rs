@@ -47,7 +47,6 @@ c_extern! {
     pub fn bch2_fs_read_write(c: *mut c::bch_fs) -> c_int;
     pub fn bch2_fs_stop(c: *mut c::bch_fs) -> c_int;
     pub fn bch2_fs_exit(c: *mut c::bch_fs) -> c_int;
-    pub static bch2_fs_flag_strs: [*const crate::util::ffi::c_char; 0];
     pub static bch2_write_refs: [*const crate::util::ffi::c_char; 0];
     pub static bch2_dev_read_refs: [*const crate::util::ffi::c_char; 0];
     pub static bch2_dev_write_refs: [*const crate::util::ffi::c_char; 0];
@@ -168,23 +167,6 @@ impl Fs {
         self.sb.dirents_sanitized.get()
     }
 
-    pub fn flag(&self, f: c::bch_fs_flags) -> bool {
-        self.flags().load(core::sync::atomic::Ordering::Relaxed) & (1usize << f as u32) != 0
-    }
-
-    pub fn set_flag(&self, f: c::bch_fs_flags) {
-        self.flags().fetch_or(1usize << f as u32, core::sync::atomic::Ordering::Relaxed);
-    }
-
-    pub fn clear_flag(&self, f: c::bch_fs_flags) {
-        self.flags().fetch_and(!(1usize << f as u32), core::sync::atomic::Ordering::Relaxed);
-    }
-
-    fn flags(&self) -> &core::sync::atomic::AtomicUsize {
-        // SAFETY: an unsigned long, which C's bitops change atomically
-        unsafe { &*(core::ptr::addr_of!((*self.as_ptr()).flags) as *const core::sync::atomic::AtomicUsize) }
-    }
-
     /// A mount is reading recovery progress from BCH_IOCTL_RECOVERY_STATUS,
     /// so progress indicators needn't print it
     pub fn stdio_progress_reader(&self) -> bool {
@@ -225,10 +207,6 @@ impl Fs {
 
     pub fn mark_lock_assert_held(&self) {
         self.mark_lock().assert_held_any()
-    }
-
-    pub fn flags_to_text(&self, out: &mut Printbuf) {
-        unsafe { out.prt_bitflags(c::bch2_fs_flag_strs.as_ptr(), self.flags().load(core::sync::atomic::Ordering::Relaxed) as u64) }
     }
 
     /// Devices and capacity don't change under it
@@ -713,14 +691,14 @@ impl Fs {
 
     fn bring_up(&self, err: &mut Printbuf) -> Result<(), BchError> {
         use c::bch_fs_flags as Flag;
-        assert!(!self.flag(Flag::BCH_FS_started));
+        assert!(!self.flags.get(Flag::BCH_FS_started));
 
         // the open skipped what a start needs: opt_version_init()
         if self.opts().will_not_start.get() != 0 {
             return self.throw(bch_errcode::BCH_ERR_EINVAL_will_not_start);
         }
         // superblock writes from here on are part of bringing it up
-        self.set_flag(Flag::BCH_FS_start_begun);
+        self.flags.set(Flag::BCH_FS_start_begun, true);
 
         {
             let state = self.state_lock_write();
@@ -760,14 +738,14 @@ impl Fs {
 
         crate::opts::opts_hooks_pre_set(self)?;
 
-        self.set_flag(Flag::BCH_FS_started);
+        self.flags.set(Flag::BCH_FS_started, true);
         wake_up(&self.ro_ref_wait);
         self.ro_ref_events.wake();
 
         let _state = self.state_lock_write();
         if self.opts().read_only.get() != 0 {
             self.read_only();
-        } else if !self.flag(Flag::BCH_FS_rw) {
+        } else if !self.flags.get(Flag::BCH_FS_rw) {
             self.read_write()?;
         }
         Ok(())
@@ -984,7 +962,7 @@ unsafe impl Refcount<RoRefs> for Fs {
 unsafe impl TryRefcount<RoRefs> for Fs {
     fn try_inc(&self) -> bool {
         // SAFETY: c->ro_ref
-        !self.flag(c::bch_fs_flags::BCH_FS_stopping) &&
+        !self.flags.get(c::bch_fs_flags::BCH_FS_stopping) &&
             unsafe { c::rust_refcount_inc_not_zero(self.ro_ref_raw()) }
     }
 }

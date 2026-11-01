@@ -313,6 +313,57 @@ impl<const W: usize> Deref for AtomicBitArray<W> {
     }
 }
 
+// ── Flags ────────────────────────────────────────────────────────────────
+
+/// A #[closed] enum as bit numbers - set_bit()'s, as BCH_FS_FLAGS are - and
+/// the words a set of it takes: c_enum!'s, from the enum's values.
+pub trait BitEnum: Copy {
+    type Words: Deref<Target = AtomicBitmap> + ::pin_init::Zeroable;
+
+    fn bit(self) -> usize;
+    /// None for a bit that's no variant's
+    fn from_bit(bit: usize) -> Option<Self>;
+}
+
+/// C's flags word - `unsigned long flags`, set_bit() on by an enum's numbers -
+/// as many words as T needs.
+#[repr(transparent)]
+pub struct AtomicBitflags<T: BitEnum>(T::Words, core::marker::PhantomData<T>);
+
+unsafe impl<T: BitEnum> ::pin_init::Zeroable for AtomicBitflags<T> {}
+
+impl<T: BitEnum> AtomicBitflags<T> {
+    /// test_bit()
+    pub fn get(&self, f: T) -> bool {
+        self.0.test(f.bit())
+    }
+
+    /// set_bit(), clear_bit()
+    pub fn set(&self, f: T, v: bool) {
+        self.0.assign(f.bit(), v)
+    }
+
+    /// Set to @v, and what it was: test_and_set_bit(), test_and_clear_bit().
+    pub fn swap(&self, f: T, v: bool) -> bool {
+        if v { self.0.test_and_set(f.bit()) } else { self.0.test_and_clear(f.bit()) }
+    }
+}
+
+impl<T: BitEnum + crate::util::ToText> crate::util::ToText for AtomicBitflags<T> {
+    /// The flags set, by name - by number, a bit the enum has no name for.
+    fn to_text(&self, out: &mut crate::util::Printbuf) {
+        for (i, bit) in self.0.iter().enumerate() {
+            if i > 0 {
+                crate::prt!(out, ",");
+            }
+            match T::from_bit(bit) {
+                Some(f) => f.to_text(out),
+                None    => crate::prt!(out, "{bit}"),
+            }
+        }
+    }
+}
+
 // ── On disk ──────────────────────────────────────────────────────────────
 
 /// A bitmap on disk - a superblock section's: little-endian u64 words, so

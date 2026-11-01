@@ -1148,6 +1148,13 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
                 // what it prints as: its list's name for it, as C's string table has it
                 let labels = e.variants.iter().map(|v| v.label.as_ref().map(|l| quote!(#[label(#l)])));
                 let msg = format!("{name}::from_bits(): not a {name}");
+                // as bit numbers: a set of them takes a bit past the largest -
+                // a negative value, unlocked's -1, isn't one
+                let nr = quote! {{
+                    let mut nr = 0;
+                    #(if #name::#names as i64 >= nr { nr = #name::#names as i64 + 1; })*
+                    nr as usize
+                }};
                 quote! {
                     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, crate::util::ToText)]
                     #[repr(#repr)]
@@ -1161,6 +1168,16 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
                             }
                         }
                         pub const fn into_bits(self) -> #repr { self as #repr }
+                    }
+                    impl crate::util::bitmap::BitEnum for #name {
+                        type Words = crate::util::bitmap::AtomicBitArray<{ crate::types::bits_to_longs(#nr) }>;
+                        fn bit(self) -> usize { self as usize }
+                        fn from_bit(bit: usize) -> Option<Self> {
+                            match bit {
+                                #(x if x == Self::#names as usize => Some(Self::#names),)*
+                                _ => None,
+                            }
+                        }
                     }
                 }
             }

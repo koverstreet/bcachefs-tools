@@ -99,7 +99,7 @@ unsafe impl Dir for InternalDir {
 }
 
 const INTERNAL: &[Attr<Fs>] = &[
-    Attr::ro(c"flags",                  |c, out| c.flags_to_text(out)),
+    Attr::ro(c"flags",                  |c, out| c.flags.to_text(out)),
     Attr::ro(c"journal_debug",          |c, out| c.journal.to_text(out)),
     Attr::ro(c"journal_reclaim",        |c, out| c.journal_reclaim_to_text(out)),
     Attr::ro(c"btree_cache",            |c, out| c.btree.cache.to_text(out)),
@@ -636,7 +636,7 @@ pub static bch2_dev_sysfs_ops: c::sysfs_ops = sysfs::ops::<DevDir>();
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 fn started(c: &Fs) -> Result<(), BchError> {
-    if c.flag(c::bch_fs_flags::BCH_FS_started) {
+    if c.flags.get(c::bch_fs_flags::BCH_FS_started) {
         Ok(())
     } else {
         Err(c::EPERM.into())

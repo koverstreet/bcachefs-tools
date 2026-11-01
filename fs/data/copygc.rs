@@ -747,7 +747,7 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
      * start (bch2_logged_ops_note_unfinished()).
      */
     let _ = sleep_until(Sleep::INTERRUPTIBLE.freezable(),
-        || (fs.flag(c::bch_fs_flags::BCH_FS_rw) || Kthread::should_stop()).then_some(()));
+        || (fs.flags.get(c::bch_fs_flags::BCH_FS_rw) || Kthread::should_stop()).then_some(()));
     if Kthread::should_stop() {
         return Ok(());
     }

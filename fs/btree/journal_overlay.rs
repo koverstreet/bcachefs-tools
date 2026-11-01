@@ -629,7 +629,7 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
     let jk = &fs.journal_keys;
     let n = c::journal_key::new_allocated(btree, level, k);
 
-    if !fs.flag(f::BCH_FS_btree_running) {
+    if !fs.flags.get(f::BCH_FS_btree_running) {
         // SAFETY: before the btree runs, the keys are recovery's alone
         return unsafe { jk.pre_sort() }.push(n, GFP_KERNEL)
             .map_err(|_| fs.err(e::BCH_ERR_ENOMEM_journal_key_insert));
@@ -639,10 +639,10 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
     let k = unsafe { &mut *BkeyI::from_raw_mut(k) };
     let idx = fs.journal_key_search(btree, level, k.k.p);
 
-    assert!(!fs.flag(f::BCH_FS_may_go_rw));
-    assert!(!fs.flag(f::BCH_FS_rw));
+    assert!(!fs.flags.get(f::BCH_FS_may_go_rw));
+    assert!(!fs.flags.get(f::BCH_FS_rw));
     /* keys are frozen for the scrub, whose reads run on workqueues */
-    assert!(!fs.flag(f::BCH_FS_scrub_journal));
+    assert!(!fs.flags.get(f::BCH_FS_scrub_journal));
     /* userspace's current is C's __thread variable, which Rust can't name */
     #[cfg(kernel)]
     assert!(fs.recovery_task == unsafe { c::get_current() });
@@ -798,7 +798,7 @@ impl c::btree_and_journal_iter {
     fn prefetch(&self, fs: &Fs) {
         let mut iter = *self;
         let level = iter.journal.level;
-        let nr = if fs.flag(f::BCH_FS_started) { if level > 1 { 0 } else { 2 } } else if level > 1 { 1 } else { 16 };
+        let nr = if fs.flags.get(f::BCH_FS_started) { if level > 1 { 0 } else { 2 } } else if level > 1 { 1 } else { 16 };
 
         iter.prefetch = false;
         iter.fail_if_too_many_whiteouts = true;

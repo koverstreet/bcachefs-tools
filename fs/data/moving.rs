@@ -434,7 +434,7 @@ impl<'a> Moving<'a> {
         if Kthread::should_stop() {
             return fs.throw(bch_errcode::BCH_ERR_kthread_cancelled);
         }
-        if fs.flag(c::bch_fs_flags::BCH_FS_going_ro) {
+        if fs.flags.get(c::bch_fs_flags::BCH_FS_going_ro) {
             return fs.throw(bch_errcode::BCH_ERR_erofs_no_writes);
         }
         if Kthread::freezing() {

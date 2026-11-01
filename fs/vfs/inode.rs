@@ -37,7 +37,6 @@ use arrayvec::ArrayVec;
 use core::ffi::{c_int, c_uint, c_void, CStr};
 use core::mem::offset_of;
 use core::ptr::NonNull;
-use core::sync::atomic::Ordering::{Relaxed, SeqCst};
 
 use crate::btree::bkey::pos;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt};
@@ -185,17 +184,6 @@ impl InodeInfo {
         self.ei_inode.get()
     }
 
-    pub fn flag(&self, f: c::bch_inode_info_flags) -> bool {
-        self.ei_flags.load(Relaxed) & (1 << f as u32) != 0
-    }
-
-    /// Clear flag @f, and whether it was set: C's test_and_clear_bit(),
-    /// fully ordered.
-    pub fn take_flag(&self, f: c::bch_inode_info_flags) -> bool {
-        let bit = 1 << f as u32;
-        self.ei_flags.fetch_and(!bit, SeqCst) & bit != 0
-    }
-
     /// Update the VFS inode to @bi, just committed in @trans - which still
     /// holds the inode's btree position locked. @fields: the ATTR_* that
     /// changed.
@@ -326,7 +314,7 @@ impl<'i> UpdateLock<'i> {
         }
 
         // Quotas don't count snapshot inodes: only the qid changes.
-        if !inode.flag(c::bch_inode_info_flags::EI_INODE_SNAPSHOT) {
+        if !inode.ei_flags.get(c::bch_inode_info_flags::EI_INODE_SNAPSHOT) {
             // blocks(): stable, under ei_quota_lock
             quota::transfer(fs, qtypes, qid, q.ei_qid, inode.vfs().blocks() + q.ei_quota_reserved, mode)?;
         }

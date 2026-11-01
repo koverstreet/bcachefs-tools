@@ -108,9 +108,9 @@ pub(crate) fn recalc_capacity(fs: &Fs) {
     // Cached: every reservation that comes up short asks, and only this
     // changes it
     if all_devs_rw {
-        fs.set_flag(c::bch_fs_flags::BCH_FS_all_devs_rw);
+        fs.flags.set(c::bch_fs_flags::BCH_FS_all_devs_rw, true);
     } else {
-        fs.clear_flag(c::bch_fs_flags::BCH_FS_all_devs_rw);
+        fs.flags.set(c::bch_fs_flags::BCH_FS_all_devs_rw, false);
     }
 
     #[cfg(kernel)]
@@ -618,7 +618,7 @@ impl Fs {
         match self.opts.write_degraded() {
             c::bch_write_degraded_actions::BCH_WRITE_DEGRADED_yes => true,
             c::bch_write_degraded_actions::BCH_WRITE_DEGRADED_no  => false,
-            _ => !self.flag(c::bch_fs_flags::BCH_FS_all_devs_rw),
+            _ => !self.flags.get(c::bch_fs_flags::BCH_FS_all_devs_rw),
         }
     }
 
@@ -761,7 +761,7 @@ impl Fs {
 
         if !ok {
             // after a shutdown nothing is writable: that's not out of space
-            return Err(self.err(match self.flag(c::bch_fs_flags::BCH_FS_emergency_ro) {
+            return Err(self.err(match self.flags.get(c::bch_fs_flags::BCH_FS_emergency_ro) {
                 true  => bch_errcode::BCH_ERR_emergency_ro,
                 false => bch_errcode::BCH_ERR_ENOSPC_disk_reservation,
             }));

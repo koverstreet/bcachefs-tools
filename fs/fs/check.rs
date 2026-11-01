@@ -854,7 +854,7 @@ impl Fs {
             (BCH_FS_error,        4, "still has errors"),
             (BCH_FS_emergency_ro, 8, "fatal error (went emergency read-only)"),
         ] {
-            if self.flag(flag) {
+            if self.flags.get(flag) {
                 out.write_bytes(self.name().to_bytes());
                 prt!(out, ": {what}\n");
                 ret |= bit;
@@ -1023,12 +1023,12 @@ pub mod ioctl {
                 });
                 w.fsck.set(1);
             }
-            fs.set_flag(c::bch_fs_flags::BCH_FS_in_fsck);
+            fs.flags.set(c::bch_fs_flags::BCH_FS_in_fsck, true);
 
             ret = run_passes(&fs, passes, true)
                 .map(|()| fs.fsck_errcode(&mut buf));
 
-            fs.clear_flag(c::bch_fs_flags::BCH_FS_in_fsck);
+            fs.flags.set(c::bch_fs_flags::BCH_FS_in_fsck, false);
 
             unsafe {
                 (*c).stdio = core::ptr::null_mut();

@@ -6,6 +6,7 @@ use crate::alloc::discard::{do_discards_fast, do_invalidates_work};
 use crate::cstructs::c;
 use crate::new_lock;
 use crate::util::alloc::KVVec;
+use crate::util::bitmap::AtomicBitflags;
 use crate::util::kernel::WRITE;
 use crate::util::workqueue::ReffedWork;
 use crate::locking::{Locked, LockedBy, MutexNoio, PercpuRwsemNoio};
@@ -376,8 +377,8 @@ pub struct bch_dev {
     /// so Rust's are through a shared bch_dev.
     #[c("unsigned long write_errors_start")]
     pub write_errors_start: crate::util::bitmap::AtomicULong,
-    /// BCH_DEV_FLAGS, by bit: C's set_bit() and test_bit()'s, so atomic
-    pub flags: crate::util::bitmap::AtomicULong,
+    #[c("unsigned long flags")]
+    pub flags: AtomicBitflags<c::bch_dev_flags>,
 
     pub uuid: c::__uuid_t,
     pub name: [c_char; c::BDEVNAME_SIZE as usize],
@@ -594,7 +595,8 @@ pub struct Fs {
     pub opts_dir: c::kobject,
     pub time_stats: c::kobject,
     pub time_stats_json: c::kobject,
-    pub flags: c_ulong,
+    #[c("unsigned long flags")]
+    pub flags: AtomicBitflags<c::bch_fs_flags>,
 
     pub minor: c_int,
     pub chardev: *mut c::device,

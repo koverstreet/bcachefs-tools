@@ -310,7 +310,7 @@ impl InodeOps for DirOps {
                                         Some(src_dentry.name()), uid, gid,
                                         (c::S_IFCHR | c::WHITEOUT_MODE) as c::umode_t, 0,
                                         None, None, c::subvol_inum::default(), 0)?;
-                    if !src_dir.flag(c::bch_inode_info_flags::EI_INODE_SNAPSHOT) {
+                    if !src_dir.ei_flags.get(c::bch_inode_info_flags::EI_INODE_SNAPSHOT) {
                         quota::acct(fs, quota::qid(w), c::quota_counters::Q_INO.0 as usize, 1,
                                     c::quota_acct_mode::KEY_TYPE_QUOTA_PREALLOC)?;
                     }

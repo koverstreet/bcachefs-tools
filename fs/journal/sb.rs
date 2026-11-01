@@ -166,7 +166,7 @@ pub unsafe fn bch2_journal_buckets_to_sb(c: &Opaque<c::bch_fs>, ca: &c::bch_dev,
 pub fn bch2_sb_journal_sort(c: &Opaque<c::bch_fs>) -> c_int {
     let fs = Fs::from_c(c);
     assert!(fs.sb.clean.get() != 0);
-    assert!(!fs.flag(c::bch_fs_flags::BCH_FS_rw));
+    assert!(!fs.flags.get(c::bch_fs_flags::BCH_FS_rw));
 
     let mut sb = fs.sb_lock();
     let mut dirty = false;

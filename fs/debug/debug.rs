@@ -34,7 +34,7 @@ use crate::{btree_trans, prt, SPOS_MAX};
 use crate::format::{Bpos, Btree};
 
 fn may_iterate(fs: &Fs) -> bool {
-    fs.flag(c::bch_fs_flags::BCH_FS_may_go_rw)
+    fs.flags.get(c::bch_fs_flags::BCH_FS_may_go_rw)
 }
 
 /* btrees/<btree>/ */

@@ -2374,7 +2374,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
     use c::bch_fs_flags as f;
     use crate::util::alloc::flags::GFP_KERNEL;
 
-    if !fs.flag(f::BCH_FS_may_upgrade_downgrade) {
+    if !fs.flags.get(f::BCH_FS_may_upgrade_downgrade) {
         return Ok(());
     }
 
@@ -2384,7 +2384,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
     // start is either part of bringing the filesystem up (as recovery's own
     // are), or from an open that said it will never start, which skips
     // those decisions:
-    if !fs.flag(f::BCH_FS_start_begun) &&
+    if !fs.flags.get(f::BCH_FS_start_begun) &&
        fs.opts().will_not_start.get() == 0 &&
        !flags.contains(c::bch_sb_write_flags::BCH_SB_WRITE_bringup) {
         return fs.throw(bch_errcode::BCH_ERR_erofs_sb_write_before_start);
@@ -2472,10 +2472,10 @@ fn write_prepare(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(
 
     let s = sb.sb_mut();
     s.write_time = Le64::new(crate::util::kernel::ktime_get_real_seconds() as u64);
-    if fs.flag(f::BCH_FS_error) {
+    if fs.flags.get(f::BCH_FS_error) {
         s.set_has_errors(true);
     }
-    if fs.flag(f::BCH_FS_topology_error) {
+    if fs.flags.get(f::BCH_FS_topology_error) {
         s.set_has_topology_errors(true);
     }
     s.set_big_endian(cfg!(target_endian = "big"));

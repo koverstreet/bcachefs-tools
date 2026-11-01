@@ -11,7 +11,7 @@
 // the file is what keeps the old filesystem's allocator away from blocks
 // bcachefs is using, and removing it would corrupt both filesystems.
 
-use std::ffi::{CString, c_char, c_ulong};
+use std::ffi::{CString, c_char};
 use std::sync::atomic::AtomicUsize;
 use std::fs;
 use std::io;
@@ -571,8 +571,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
     unsafe { mark_nouse_range(ca, 0, c::BCH_SB_SECTOR as u64 + sb_size as u64 * 2) };
 
     // Clear no_default_sb feature so recovery doesn't force ro
-    unsafe {
-        let fs_raw = fs.as_ptr();
+    {
         let mut sb = fs.sb_lock();
         let f = &mut sb.sb_mut().features[0];
         f.set(f.get() & !(1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64));
@@ -583,7 +582,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
 
         // This is normall set in fs_init if BCH_FEATURE_no_default_sb is
         // cleared - but fs_init already happened:
-        (*fs_raw).flags |= (1 as c_ulong) << c::bch_fs_flags::BCH_FS_may_upgrade_downgrade as u32;
+        fs.flags.set(c::bch_fs_flags::BCH_FS_may_upgrade_downgrade, true);
     }
 
     fs.start()

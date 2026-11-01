@@ -1651,9 +1651,9 @@ impl c::bch_dev {
     /// A write completed that the device may still have in its volatile
     /// cache, for the journal's next preflush.
     pub fn write_unflushed(&self) {
-        let bit = 1 << c::bch_dev_flags::BCH_DEV_unflushed_writes as u32;
-        if self.flags.load(Ordering::Relaxed) & bit == 0 {
-            self.flags.fetch_or(bit, Ordering::Relaxed);
+        let f = c::bch_dev_flags::BCH_DEV_unflushed_writes;
+        if !self.flags.get(f) {
+            self.flags.set(f, true);
         }
     }
 

@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::locking::Locked;
 use crate::types::c_default;
-use crate::util::bitmap::AtomicULong;
+use crate::util::bitmap::AtomicBitflags;
 use crate::vfs::vfs_inode::VfsInode;
 use core::ffi::{c_uint, c_ulong};
 #[cfg(not(NO_BCACHEFS_FS))]
@@ -58,8 +58,8 @@ pub struct InodeInfo {
     pub ei_reserved_lock: c::spinlock_t,
 
     pub ei_inodes_idx: c_uint,
-    /// bch_inode_info_flags, by bit: C's set_bit() and test_bit()'s, so atomic
-    pub ei_flags: AtomicULong,
+    #[c("unsigned long ei_flags")]
+    pub ei_flags: AtomicBitflags<c::bch_inode_info_flags>,
 
     pub ei_update_lock: c::mutex,
     pub ei_last_dirtied: c_ulong,

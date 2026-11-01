@@ -313,7 +313,8 @@ nest! {
         /* written under the journal's lock, read without it */
         pub watermark_open_buckets: crate::util::projections::Volatile<u8>,
 
-        pub flags: c_ulong,
+        #[c("unsigned long flags")]
+        pub flags: crate::util::bitmap::AtomicBitflags<c::journal_flags>,
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         pub stop_thread: *mut c::task_struct,
 

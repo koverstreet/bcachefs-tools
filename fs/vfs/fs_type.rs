@@ -173,7 +173,7 @@ impl Bcachefs {
         let fs = claimed.open(opts, p.user_key.as_ref().map(|k| &k.0))?;
 
         if opts.defined(opt_id::Opt_discard) {
-            fs.set_flag(c::bch_fs_flags::BCH_FS_discard_mount_opt_set);
+            fs.flags.set(c::bch_fs_flags::BCH_FS_discard_mount_opt_set, true);
         }
         set_mount_opts(&fs, opts);
 
@@ -449,7 +449,7 @@ impl FsType for Bcachefs {
         // fc->sb_flags, not c->opts.read_only: emergency ro stops the
         // filesystem without rewriting the option, so that would find nothing
         // to do and report success, read-only.
-        if !rdonly && fs.flag(c::bch_fs_flags::BCH_FS_emergency_ro) {
+        if !rdonly && fs.flags.get(c::bch_fs_flags::BCH_FS_emergency_ro) {
             fc.errorfc(format_args!("cannot go read-write: filesystem is in emergency read-only"));
             return fs.throw(bch_errcode::BCH_ERR_emergency_ro);
         }

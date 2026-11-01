@@ -521,13 +521,13 @@ unsafe impl AtomicWord for Pass {
 /// Whether recovery has @pass still to run, or running: as
 /// recovery_pass_will_run(). Never true outside recovery.
 pub fn will_run(fs: &Fs, pass: Pass) -> bool {
-    fs.flag(c::bch_fs_flags::BCH_FS_in_recovery) && fs.recovery.runner.current_passes.get() & bit(pass) != 0
+    fs.flags.get(c::bch_fs_flags::BCH_FS_in_recovery) && fs.recovery.runner.current_passes.get() & bit(pass) != 0
 }
 
 /// Whether recovery work should stop - the filesystem going read-only, or
 /// the kthread running it told to.
 pub fn cancelled(fs: &Fs) -> Result<(), BchError> {
-    if fs.flag(c::bch_fs_flags::BCH_FS_going_ro) {
+    if fs.flags.get(c::bch_fs_flags::BCH_FS_going_ro) {
         return fs.throw(bch_errcode::BCH_ERR_erofs_recovery_cancelled);
     }
     if Kthread::should_stop() {
@@ -585,13 +585,13 @@ fn should_defer(pass: usize, passes: u64) -> bool {
 /// into current_passes - which is how an offline pass reaches a live
 /// filesystem.
 fn may_run_now(fs: &Fs, pass: Pass) -> bool {
-    !fs.flag(c::bch_fs_flags::BCH_FS_started) || pass.when() & c::PASS_ONLINE != 0
+    !fs.flags.get(c::bch_fs_flags::BCH_FS_started) || pass.when() & c::PASS_ONLINE != 0
 }
 
 /// Whether running @pass means going back for it: the pass loop is running,
 /// is past it, and hasn't run it this run.
 fn needs_rewind(fs: &Fs, r: &Recovery<'_>, pass: Pass) -> bool {
-    fs.flag(c::bch_fs_flags::BCH_FS_running_recovery_passes) &&
+    fs.flags.get(c::bch_fs_flags::BCH_FS_running_recovery_passes) &&
         fs.recovery.runner.current_pass.get() > pass &&
         r.passes_attempted & bit(pass) == 0
 }
@@ -632,7 +632,7 @@ fn needs_set(fs: &Fs, r: &Recovery<'_>, pass: Pass, flags: &mut Flags, sb: Optio
      * scan_for_btree_nodes can never reach the superblock set - so this arm
      * always says "not already requested".
      */
-    let in_recovery = fs.flag(c::bch_fs_flags::BCH_FS_in_recovery);
+    let in_recovery = fs.flags.get(c::bch_fs_flags::BCH_FS_in_recovery);
     let already_running = if !in_recovery || is_persistent(pass) {
         fs.sb.recovery_passes_required.get()
     } else {
@@ -676,7 +676,7 @@ pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags
 
     out.set_suppressed(false);
 
-    let running = fs.flag(c::bch_fs_flags::BCH_FS_running_recovery_passes);
+    let running = fs.flags.get(c::bch_fs_flags::BCH_FS_running_recovery_passes);
     let ratelimit = flags.contains(Flags::RUN_RECOVERY_PASS_ratelimit);
 
     if flags.contains(Flags::RUN_RECOVERY_PASS_ephemeral) || !is_persistent(pass) {
@@ -701,7 +701,7 @@ pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags
     }
 
     if pass < Pass::BCH_RECOVERY_PASS_set_may_go_rw &&
-       fs.flag(c::bch_fs_flags::BCH_FS_may_go_rw) {
+       fs.flags.get(c::bch_fs_flags::BCH_FS_may_go_rw) {
         write!(out, "need recovery pass {} ({}), but already rw\n", pass.name(), pass as u32);
         return fs.throw(bch_errcode::BCH_ERR_cannot_rewind_recovery);
     }
@@ -807,7 +807,7 @@ pub fn run_explicit(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags) -
 /// if it has; restart_recovery if it's in recovery's past, which rewinds to
 /// it; else recovery_pass_will_run - it's scheduled, and runs later.
 pub fn require(fs: &Fs, out: &mut Printbuf, pass: Pass) -> Result<(), BchError> {
-    if fs.flag(c::bch_fs_flags::BCH_FS_running_recovery_passes) &&
+    if fs.flags.get(c::bch_fs_flags::BCH_FS_running_recovery_passes) &&
        fs.recovery.runner.passes_complete.get() & bit(pass) != 0 {
         return Ok(());
     }
@@ -911,7 +911,7 @@ fn run_pass(fs: &Fs, pass: Pass) -> Result<(), BchError> {
     r.passes_failing_nr[pass as usize] = 0;
     drop(r);
 
-    if !fs.flag(c::bch_fs_flags::BCH_FS_error) {
+    if !fs.flags.get(c::bch_fs_flags::BCH_FS_error) {
         pass_complete(fs, pass, start_time);
     }
     Ok(())
@@ -928,7 +928,7 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
      * loop is running, which includes the async runner - not only during
      * mount. BCH_FS_in_recovery is cleared before the async runner starts.
      */
-    fs.set_flag(c::bch_fs_flags::BCH_FS_running_recovery_passes);
+    fs.flags.set(c::bch_fs_flags::BCH_FS_running_recovery_passes, true);
 
     let rec = &fs.recovery.runner;
     let mut r = lock(fs);
@@ -949,7 +949,7 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
      * run them even if they failed before, and let them fail loudly again
      * rather than silently returning success having done nothing.
      */
-    if !fs.flag(c::bch_fs_flags::BCH_FS_in_fsck) {
+    if !fs.flags.get(c::bch_fs_flags::BCH_FS_in_fsck) {
         for p in (0..NR).filter(|&p| r.passes_failing & 1 << p != 0) {
             if entry_ratelimited(&r.passes_failing_ratelimit[p], failing_pass_backoff(&r, p)) {
                 passes &= !(1 << p);
@@ -1022,7 +1022,7 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
     r.published().current_pass.set(NONE);
     drop(r);
 
-    fs.clear_flag(c::bch_fs_flags::BCH_FS_running_recovery_passes);
+    fs.flags.set(c::bch_fs_flags::BCH_FS_running_recovery_passes, false);
     ret
 }
 
@@ -1124,7 +1124,7 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
         run_passes(fs, passes, true)?;
     }
 
-    fs.clear_flag(c::bch_fs_flags::BCH_FS_in_recovery);
+    fs.flags.set(c::bch_fs_flags::BCH_FS_in_recovery, false);
 
     if defer != 0 {
         let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
@@ -1194,7 +1194,7 @@ pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
 
         line(out, "Next", r.runner.current_passes.get());
 
-        if fs.flag(c::bch_fs_flags::BCH_FS_in_recovery) && rewound_from != NONE {
+        if fs.flags.get(c::bch_fs_flags::BCH_FS_in_recovery) && rewound_from != NONE {
             write!(out, "Rewound from:\t{} ({})\n", rewound_from.name(), rewound_from as u32);
         }
     }
@@ -1205,7 +1205,7 @@ pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
 /// asks before recovery schedules them.
 #[c_export]
 pub fn go_rw_in_recovery(fs: &Fs) -> bool {
-    fs.flag(c::bch_fs_flags::BCH_FS_may_upgrade_downgrade) &&
+    fs.flags.get(c::bch_fs_flags::BCH_FS_may_upgrade_downgrade) &&
         (!fs.journal_keys.keys().is_empty() ||
          fs.opts().read_only.get() == 0 ||
          fs.sb.clean.get() == 0 ||

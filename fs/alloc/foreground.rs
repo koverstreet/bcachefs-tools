@@ -789,7 +789,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             self.trans().sleep_on_allocator(req, err, cl.as_opaque());
         }
         let fs = self.fs();
-        if fs.flag(c::bch_fs_flags::BCH_FS_emergency_ro) {
+        if fs.flags.get(c::bch_fs_flags::BCH_FS_emergency_ro) {
             return fs.throw(crate::c::bch_errcode::BCH_ERR_emergency_ro);
         }
         Ok(())
@@ -1130,7 +1130,7 @@ impl BtreeTrans<'_> {
 
             // going emergency read-only, a draining device may never have
             // buckets free: waiting again could block read_only_work forever
-            if fs.flag(c::bch_fs_flags::BCH_FS_emergency_ro) || !blocked || fs.alloc_wait_advanced(req) {
+            if fs.flags.get(c::bch_fs_flags::BCH_FS_emergency_ro) || !blocked || fs.alloc_wait_advanced(req) {
                 return;
             }
 

@@ -96,7 +96,7 @@ pub fn fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError>
         <c::BCH_IOCTL_DISK_GET_IDX as Ioctl>::OPCODE =>
             input::<c::BCH_IOCTL_DISK_GET_IDX, _>(user, |a| disk_get_idx(fs, a)),
 
-        _ if !fs.flag(c::bch_fs_flags::BCH_FS_started) =>
+        _ if !fs.flags.get(c::bch_fs_flags::BCH_FS_started) =>
             fs.throw(E::BCH_ERR_EINVAL_ioctl_not_started),
 
         <c::BCH_IOCTL_DATA as Ioctl>::OPCODE =>
@@ -176,7 +176,7 @@ pub fn bch2_global_ioctl(cmd: c_uint, arg: *mut c_void) -> c_long {
 /* The queries */
 
 fn accounting_read_done(fs: &Fs) -> bool {
-    fs.flag(c::bch_fs_flags::BCH_FS_new_fs) ||
+    fs.flags.get(c::bch_fs_flags::BCH_FS_new_fs) ||
         fs.recovery.runner.passes_complete.get() &
             (1 << c::bch_recovery_pass::BCH_RECOVERY_PASS_accounting_read as u32) != 0
 }

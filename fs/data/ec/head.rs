@@ -229,7 +229,7 @@ pub(crate) fn stripe_head_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32, alg
     let fs_lifetime = |h: &c::ec_stripe_head| -> &'f c::ec_stripe_head { unsafe { &*core::ptr::from_ref(h) } };
 
     let mut heads = fs.ec.stripe_heads.lock_trans(t)?;
-    if fs.flag(c::bch_fs_flags::BCH_FS_going_ro) {
+    if fs.flags.get(c::bch_fs_flags::BCH_FS_going_ro) {
         return fs.throw(bch_errcode::BCH_ERR_erofs_no_writes);
     }
 
@@ -247,7 +247,7 @@ pub(crate) fn stripe_head_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32, alg
             // bch2_fs_ec_stop() may have been through this head while we
             // waited: it sets going_ro before it starts, so anything we
             // started now would be missed
-            if fs.flag(c::bch_fs_flags::BCH_FS_going_ro) {
+            if fs.flags.get(c::bch_fs_flags::BCH_FS_going_ro) {
                 return fs.throw(bch_errcode::BCH_ERR_erofs_no_writes);
             }
             (h, g)
