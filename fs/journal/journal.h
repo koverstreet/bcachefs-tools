@@ -470,7 +470,7 @@ static inline int journal_res_get_fast(struct journal *j,
 
 	res->ref	= true;
 	res->offset	= old.cur_entry_offset;
-	res->seq	= journal_cur_seq(j);
+	res->seq	= atomic64_read(&j->res_seq);
 	res->seq -= (res->seq - old.idx) & JOURNAL_STATE_BUF_MASK;
 	res->has_overwrites = j->ring_has_overwrites[res->seq & JOURNAL_STATE_BUF_MASK];
 	return 1;

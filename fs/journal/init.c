@@ -594,6 +594,7 @@ int bch2_fs_journal_start(struct journal *j, struct journal_start_info info)
 	}
 	j->pin.back		= cur_seq;
 	atomic64_set(&j->seq, cur_seq - 1);
+	atomic64_set(&j->res_seq, cur_seq - 1);
 
 	/*
 	 * Align the in_flight FIFO with seq numbering: front == seq_ondisk + 1

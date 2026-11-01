@@ -493,6 +493,7 @@ static int __journal_entry_open_one(struct journal *j)
 	 * incremented for j->last_seq to be calculated correctly
 	 */
 	u64 seq = atomic64_inc_return(&j->seq);
+	atomic64_set(&j->res_seq, seq);
 	journal_pin_list_init(fifo_push_ref(&j->pin), 1);
 
 	BUG_ON(j->pin.back - 1 != seq);

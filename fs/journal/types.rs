@@ -322,8 +322,11 @@ published! {
         pub __align: CacheAligned,
         #[c("union journal_res_state reservations")]
         pub reservations: AtomicU64,
-        /* Sequence number of most recent journal entry (last entry in @pin) */
-        pub seq: AtomicI64,
+        /*
+         * seq, as reservations read it: a copy, set with it, so seq's own
+         * readers don't share this line with every reservation's cmpxchg
+         */
+        pub res_seq: AtomicI64,
         /* Max size of current journal entry */
         pub cur_entry_u64s: Volatile<c_uint>,
         #[c("enum bch_watermark watermark")]
@@ -346,6 +349,9 @@ published! {
     pub struct JournalPublished {
         #[c_anon]
         pub hot: JournalHot,
+
+        /* Sequence number of most recent journal entry (last entry in @pin) */
+        pub seq: AtomicI64,
 
         /*
          * We have to ratelimit at the journal for the allocator because the

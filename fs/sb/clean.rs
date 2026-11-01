@@ -269,7 +269,7 @@ pub(crate) fn fs_mark_clean(fs: &Fs, guard: &mut SbLockGuard<'_>) {
     };
 
     f.flags = Le32::new(0);
-    f.journal_seq = Le64::new(fs.journal.lock.hot.seq.load(Relaxed) as u64);
+    f.journal_seq = Le64::new(fs.journal.lock.seq.load(Relaxed) as u64);
     // Trying to catch outstanding bug:
     assert!(f.journal_seq.get() <= i64::MAX as u64, "journal seq {} past S64_MAX", f.journal_seq.get());
 
