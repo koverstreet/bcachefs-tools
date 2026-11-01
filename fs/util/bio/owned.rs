@@ -45,6 +45,14 @@ pub unsafe trait HasBio: Sized {
     fn remaining(&self) -> &Remaining<Self> {
         unsafe { &*core::ptr::from_ref(self).cast::<Remaining<Self>>() }
     }
+
+    fn bio(&self) -> &Bio {
+        unsafe { Bio::from_raw(bio_of(core::ptr::from_ref(self).cast_mut())) }
+    }
+
+    fn bio_mut(self: Pin<&mut Self>) -> Pin<&mut Bio> {
+        unsafe { Bio::from_raw_mut(bio_of(self.get_unchecked_mut())) }
+    }
 }
 
 // SAFETY: a bio, at its own start
@@ -338,13 +346,11 @@ impl<T: HasBio> BioBox<T> {
 // SAFETY: the box's bio, its only ref
 unsafe impl<T: HasBio> BioOwner for BioBox<T> {
     fn bio(&self) -> &Bio {
-        // SAFETY: the T's bio
-        unsafe { Bio::from_raw(bio_of(self.0.as_ptr())) }
+        HasBio::bio(&**self)
     }
 
     fn bio_mut(&mut self) -> Pin<&mut Bio> {
-        // SAFETY: as bio()'s, and the box's alone, as in as_mut()
-        unsafe { Bio::from_raw_mut(bio_of(self.0.as_ptr())) }
+        HasBio::bio_mut(self.as_mut())
     }
 }
 
@@ -447,13 +453,11 @@ impl<T: HasBio> Deref for BioBuf<T> {
 // SAFETY: the buffer's bio, its own
 unsafe impl<T: HasBio> BioOwner for BioBuf<T> {
     fn bio(&self) -> &Bio {
-        // SAFETY: the T's bio
-        unsafe { Bio::from_raw(bio_of(core::ptr::from_ref(&self.0.t).cast_mut())) }
+        HasBio::bio(&self.0.t)
     }
 
     fn bio_mut(&mut self) -> Pin<&mut Bio> {
-        // SAFETY: the T's bio, had by &mut
-        unsafe { Bio::from_raw_mut(bio_of(&raw mut self.0.t)) }
+        HasBio::bio_mut(unsafe { Pin::new_unchecked(&mut self.0.t) })
     }
 }
 
@@ -517,13 +521,11 @@ impl<T: HasBio> Deref for BioBufPtr<T> {
 // SAFETY: the buffer's bio, its own
 unsafe impl<T: HasBio> BioOwner for BioBufPtr<T> {
     fn bio(&self) -> &Bio {
-        // SAFETY: the T's bio
-        unsafe { Bio::from_raw(bio_of(self.0.as_ptr())) }
+        HasBio::bio(&**self)
     }
 
     fn bio_mut(&mut self) -> Pin<&mut Bio> {
-        // SAFETY: the T's bio, had by &mut
-        unsafe { Bio::from_raw_mut(bio_of(self.0.as_ptr())) }
+        HasBio::bio_mut(unsafe { Pin::new_unchecked(self.0.as_mut()) })
     }
 }
 
