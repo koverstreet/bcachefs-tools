@@ -1217,11 +1217,6 @@ pub fn bch2_reconcile_wakeup(c: &Fs) {
 }
 
 #[c_export]
-pub fn bch2_reconcile_start(c: &Fs) -> c_int {
-    ret_to_c(c.reconcile_start())
-}
-
-#[c_export]
 pub fn bch2_reconcile_stop(c: &Fs) {
     c.reconcile_stop()
 }

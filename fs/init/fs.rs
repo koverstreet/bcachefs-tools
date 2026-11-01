@@ -24,7 +24,6 @@ use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
 use crate::util::rcu::read_lock;
 use crate::util::refcount::RefGuard;
 use crate::util::sleep::wake_up;
-use crate::util::workqueue::Queue;
 use core::ffi::CStr;
 use core::future::Future;
 use core::ptr::NonNull;
@@ -41,10 +40,6 @@ c_extern! {
                          sbs: *mut c::bch_sb_handles, holder: *const core::ffi::c_void,
                          user_key: *const c::bch_key,
                          out: *mut c::printbuf) -> *mut c::bch_fs;
-    pub fn bch2_fs_init_rw(c: *mut c::bch_fs) -> c_int;
-    pub fn bch2_fs_emergency_read_only(c: *mut c::bch_fs, out: *mut c::printbuf) -> bool;
-    pub fn bch2_fs_read_only(c: *mut c::bch_fs);
-    pub fn bch2_fs_read_write(c: *mut c::bch_fs) -> c_int;
     pub fn bch2_fs_stop(c: *mut c::bch_fs) -> c_int;
     pub fn bch2_fs_exit(c: *mut c::bch_fs) -> c_int;
     pub static bch2_write_refs: [*const crate::util::ffi::c_char; 0];
@@ -179,12 +174,6 @@ impl Fs {
 
     pub fn journal_cur_seq(&self) -> u64 {
         self.journal.seq.load(core::sync::atomic::Ordering::Relaxed) as u64
-    }
-
-    /// True if this call is the one that went read-only - then @out is
-    /// printed, not suppressed
-    pub fn emergency_read_only(&self, out: &mut Printbuf) -> bool {
-        unsafe { c::bch2_fs_emergency_read_only(self.as_ptr(), out.as_raw()) }
     }
 
     pub fn sb_lock(&self) -> SbLockGuard<'_> {
@@ -323,25 +312,12 @@ impl Fs {
         crate::sb::io::sb_update(self, sb)
     }
 
-    pub fn read_only(&self) {
-        unsafe { c::bch2_fs_read_only(self.as_ptr()) };
-    }
-
-    pub fn read_write(&self) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_fs_read_write(self.as_ptr()) })
-    }
-
     pub fn stop(&self) {
         unsafe { c::bch2_fs_stop(self.as_ptr()) };
     }
 
-    pub fn journal_flush_all_pins(&self) {
-        unsafe {
-            c::bch2_journal_flush_pins(
-                &mut (*self.as_ptr()).journal,
-                u64::MAX,
-            );
-        }
+    pub fn journal_flush_all_pins(&self) -> bool {
+        unsafe { c::bch2_journal_flush_pins(&mut (*self.as_ptr()).journal, u64::MAX) }
     }
 
     pub fn journal_flush_outstanding_pins(&self) -> bool {
@@ -725,7 +701,7 @@ impl Fs {
         // allocated now if it may be needed: a mount failing on
         // kthread_create() is very annoying
         if crate::init::passes::go_rw_in_recovery(self) {
-            ret_to_result(unsafe { c::bch2_fs_init_rw(self.as_ptr()) })?;
+            self.state_lock_write().init_rw()?;
         }
 
         // some options can only be checked once started
@@ -742,11 +718,11 @@ impl Fs {
         wake_up(&self.ro_ref_wait);
         self.ro_ref_events.wake();
 
-        let _state = self.state_lock_write();
+        let state = self.state_lock_write();
         if self.opts().read_only.get() != 0 {
-            self.read_only();
+            state.read_only();
         } else if !self.flags.get(Flag::BCH_FS_rw) {
-            self.read_write()?;
+            state.read_write()?;
         }
         Ok(())
     }
@@ -835,8 +811,7 @@ impl Fs {
 
     /// For work holding a write ref: going read-only drains it
     pub fn write_ref_wq(&self) -> &crate::util::workqueue::Queue {
-        // SAFETY: the filesystem's, for as long as it is
-        unsafe { crate::util::workqueue::Queue::from_raw(self.write_ref_wq) }
+        &self.write_ref_wq
     }
 
     /// Holds a write ref until @make's future is done; EROFS if going read-only
@@ -848,7 +823,7 @@ impl Fs {
         let w: WriteRef = RefGuard::tryget_live(&self.writes).ok_or(BchError::from(c::EROFS))?;
         // SAFETY: going read-only waits for the task's write ref: the
         // filesystem and its write_ref_wq outlive it
-        let (fs, wq) = unsafe { (BackRef::new(self), Queue::from_raw(self.write_ref_wq)) };
+        let (fs, wq) = unsafe { (BackRef::new(self), self.write_ref_wq()) };
         // SAFETY: what the future has is 'static, or the BackRef above's
         unsafe {
             crate::util::task::spawn_detached(crate::util::task::Spawn::Queue(wq), async move {
@@ -899,7 +874,7 @@ macro_rules! fs_delayed_work {
                 $crate::util::workqueue::DelayedWork::new(Self::work_fn)
             }
 
-            fn run($fs: &$crate::fs::Fs) $body
+            $vis fn run($fs: &$crate::fs::Fs) $body
 
             /// # Safety
             /// @work is the field's.

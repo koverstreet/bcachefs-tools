@@ -456,20 +456,20 @@ impl FsType for Bcachefs {
 
         let want_ro = fc.ctx().opts.read_only;
         if want_ro != fs.opts().read_only.get() {
-            let _lock = fs.state_lock_write();
+            let state = fs.state_lock_write();
             // Stored as C did, not set as an option; sb_lock for the store
             // alone - going read-write writes the superblock
             let set_ro = |v: u8| fs.opts_writer(&mut fs.sb_lock()).read_only.set(v);
 
             if want_ro != 0 {
                 sb.sync()?;
-                fs.read_only();
+                state.read_only();
                 sb.set_rdonly(true);
             } else {
                 // __bch2_fs_read_write() gates reconcile on this:
                 set_ro(0);
 
-                if let Err(e) = fs.read_write() {
+                if let Err(e) = state.read_write() {
                     set_ro(1);
                     // bch_err() says which filesystem, errorfc() reaches the
                     // caller; the throw discards the errcode

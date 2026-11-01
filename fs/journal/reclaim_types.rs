@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::DArray;
-use core::ffi::c_uint;
+use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, c_extern, c_typedef};
 
 #[repr(C)]
@@ -25,6 +25,9 @@ c_extern! {
     pub fn bch2_journal_seq_pins_to_text(out: *mut c::printbuf, j: *mut c::journal, seq: *mut u64,
                                          pin_type: *mut c_uint) -> bool;
     pub fn __bch2_journal_set_alloc_watermark(j: *mut c::journal, p: *mut u8, watermark: c_uint);
+    pub fn bch2_journal_space_available(j: *mut c::journal);
+    pub fn bch2_journal_reclaim_start(j: *mut c::journal) -> c_int;
+    pub fn bch2_journal_reclaim_stop(j: *mut c::journal);
 }
 
 impl c::journal {

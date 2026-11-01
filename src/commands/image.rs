@@ -340,7 +340,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     move_btree(fs, keep_alloc, 0)
         .map_err(|e| anyhow!("migrating btree from temporary device: {}", e))?;
 
-    fs.read_only();
+    fs.state_lock_write().read_only();
 
     let nbuckets = get_nbuckets_used(fs)?;
 

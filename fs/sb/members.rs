@@ -1031,17 +1031,6 @@ crate::fs_delayed_work! {
     }
 }
 
-/// Going rw: the check now, and daily after.
-#[c_export]
-pub fn bch2_maybe_schedule_btree_bitmap_gc(c: &Opaque<c::bch_fs>) {
-    BtreeBitmapGcSchedule::run(Fs::from_c(c));
-}
-
-#[c_export]
-pub fn bch2_maybe_schedule_btree_bitmap_gc_stop(c: &Opaque<c::bch_fs>) {
-    Fs::from_c(c).maybe_schedule_btree_bitmap_gc.cancel_sync();
-}
-
 // ---------------------------------------------------------------------------
 // Devices - c->devs[], the filesystem's bch_devs, and what's known of each:
 // members.h's in-memory side.

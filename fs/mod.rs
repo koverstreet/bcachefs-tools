@@ -122,6 +122,7 @@ pub mod init {
     #[path = "progress.rs"] pub mod progress;
     #[path = "recovery.rs"] pub mod recovery;
     #[path = "registry.rs"] pub mod registry;
+    #[path = "rw.rs"] pub mod rw;
 }
 #[path = "fs/inode.rs"]        pub mod inode;
 #[path = "fs/inode_opts.rs"]   pub mod inode_opts;

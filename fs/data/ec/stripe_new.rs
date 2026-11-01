@@ -764,11 +764,6 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_fs_ec_flush(c: &Opaque<c::bch_fs>) {
-    Fs::from_c(c).ec_flush()
-}
-
-#[c_export]
 pub fn bch2_fs_ec_flush_outstanding(c: &Opaque<c::bch_fs>) {
     Fs::from_c(c).ec_flush_outstanding()
 }

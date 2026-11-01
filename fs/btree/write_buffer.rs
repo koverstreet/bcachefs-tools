@@ -193,6 +193,9 @@ c_extern! {
     pub fn bch2_btree_write_buffer_maybe_flush(trans: *mut c::btree_trans, referring_k: c::bkey_s_c,
                                                f: *mut c::wb_maybe_flush) -> c_int;
     pub fn bch2_btree_write_buffer_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
+    pub fn bch2_btree_write_buffer_flush_going_ro(c: *mut c::bch_fs) -> bool;
+    pub fn bch2_btree_write_buffer_start(c: *mut c::bch_fs) -> c_int;
+    pub fn bch2_btree_write_buffer_stop(c: *mut c::bch_fs);
 }
 
 impl Fs {

@@ -154,4 +154,5 @@ c_typedef! {
 c_extern! {
     pub fn bch2_inode_or_descendents_is_open(trans: *mut c::btree_trans, pos: Bpos) -> c_int;
     pub fn bch2_evict_subvolume_inodes(c: *mut c::bch_fs, s: *mut c::snapshot_id_list);
+    pub fn bch2_fs_vfs_init_rw(c: *mut c::bch_fs) -> c_int;
 }

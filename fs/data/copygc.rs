@@ -64,7 +64,7 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, 
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::moving::{MoveStats, MovingCtxt};
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::{writepoint_ptr, Fs};
 use crate::sb::counters::events;
 use crate::types::{Fifo, RustOnly, rust_only};
@@ -73,6 +73,7 @@ use crate::util::alloc::{flags::GFP_KERNEL, kbox_pin_init, KBox, KVVec};
 use crate::util::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
 use crate::util::kernel::{cond_resched, WRITE};
 use crate::util::kthread::{Kthread, KthreadSelf};
+use crate::util::late::Late;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::sort::heapsort_by;
@@ -80,12 +81,11 @@ use crate::util::workqueue::{Workqueue, WqFlags};
 use crate::util::{HumanReadable, Printbuf};
 use crate::{bch_err_msg, fs_fatal_error};
 use core::borrow::Borrow;
-use core::ffi::c_int;
 use core::hash::{Hash, Hasher};
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering::{Acquire, Relaxed}};
-use cstruct_macros::{c_export, CStruct, Init, TypeInfo};
+use cstruct_macros::{c_export, CStruct, Init, Late, TypeInfo};
 use pin_init::{pin_data, pin_init, PinInit};
 use crate::locking::Locked;
 use crate::new_lock;
@@ -95,7 +95,7 @@ use crate::format::{Bpos, Btree, DataType};
 
 #[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(CStruct, TypeInfo, Init, Late)]
 pub struct bch_fs_copygc {
     /* The thread, from start to stop: data/copygc.rs */
     #[pin]
@@ -131,8 +131,11 @@ pub struct bch_fs_copygc {
     pub low_on_space: c::AtomicDevsMask,
 
     /* Dedicated workqueue for btree updates: */
+    #[late(Workqueue::new(c"bcachefs_copygc",
+                          WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::UNBOUND, 1),
+           ENOMEM_fs_other_alloc)]
     #[c("struct workqueue_struct *wq")]
-    pub wq: Workqueue,
+    pub wq: Late<Workqueue>,
 }
 
 // ── Buckets in flight ────────────────────────────────────────────────────
@@ -831,15 +834,6 @@ impl Fs {
             return Ok(());
         }
 
-        if !self.copygc.wq.is_some() {
-            let wq = Workqueue::new(c"bcachefs_copygc",
-                                    WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::UNBOUND, 1)
-                .map_err(|_| self.err(bch_errcode::BCH_ERR_ENOMEM_fs_other_alloc))?;
-            // SAFETY: none to drop; start and exit are serialized by the
-            // caller, and nothing queues on it until it's made
-            unsafe { core::ptr::write(&raw mut (*self.as_ptr()).copygc.wq, wq) };
-        }
-
         let cg = &self.copygc;
         if cg.thread.lock().is_some() {
             return Ok(());
@@ -924,20 +918,8 @@ pub fn bch2_copygc_wakeup(c: &Fs) {
 }
 
 #[c_export]
-pub fn bch2_copygc_start(c: &Fs) -> c_int {
-    ret_to_c(c.copygc_start())
-}
-
-#[c_export]
 pub fn bch2_copygc_stop(c: &Fs) {
     c.copygc_stop()
-}
-
-#[c_export]
-pub fn bch2_fs_copygc_exit(c: &Fs) {
-    // SAFETY: the thread's stopped, and what queued on it with it: the
-    // filesystem's going
-    drop(unsafe { core::ptr::replace(&raw mut (*c.as_ptr()).copygc.wq, Workqueue::default()) });
 }
 
 /// Until copygc isn't running, or this kthread's told to stop: for a moving

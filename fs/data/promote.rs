@@ -60,8 +60,7 @@ impl Fs {
     }
 
     fn promote_wq(&self) -> &Queue {
-        // SAFETY: the filesystem's, for as long as it is
-        unsafe { Queue::from_raw(self.promote_wq) }
+        &self.promote_wq
     }
 }
 

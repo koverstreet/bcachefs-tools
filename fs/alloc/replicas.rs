@@ -1011,12 +1011,12 @@ pub fn bch2_can_read_fs_with_devs(c: &Opaque<c::bch_fs>, devs: &c::bch_devs_mask
     Fs::from_c(c).can_read_fs_with_devs(devs, flags, err)
 }
 
-/// A warning for any ref left: at shutdown, the journal done with them all.
-#[c_export]
-pub fn bch2_verify_replicas_refs_clean(c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
-    for (e, r) in fs.replicas.read().with_refs().filter(|(_, r)| r.load(Ordering::Relaxed) != 0) {
-        warn(fs, format_args!("replicas entry ref leaked:\nref={} {e}", r.load(Ordering::Relaxed) as u32));
+impl Fs {
+    /// A warning for any ref left: at shutdown, the journal done with them all.
+    pub fn verify_replicas_refs_clean(&self) {
+        for (e, r) in self.replicas.read().with_refs().filter(|(_, r)| r.load(Ordering::Relaxed) != 0) {
+            warn(self, format_args!("replicas entry ref leaked:\nref={} {e}", r.load(Ordering::Relaxed) as u32));
+        }
     }
 }
 

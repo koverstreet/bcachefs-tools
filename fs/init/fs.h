@@ -10,6 +10,7 @@
 
 #include <linux/math64.h>
 #include "init/fs_gen.h"
+#include "init/rw_gen.h"
 
 #define KTYPE(type)							\
 static const struct attribute_group type ## _group = {			\
@@ -31,11 +32,6 @@ extern const char * const bch2_fs_flag_strs[];
 extern const char * const bch2_write_refs[];
 extern const char * const bch2_dev_read_refs[];
 extern const char * const bch2_dev_write_refs[];
-
-bool bch2_fs_emergency_read_only_locked(struct bch_fs *, struct printbuf *out);
-
-int bch2_fs_read_write(struct bch_fs *);
-int bch2_fs_read_write_early(struct bch_fs *);
 
 int bch2_fs_resize_on_mount(struct bch_fs *);
 

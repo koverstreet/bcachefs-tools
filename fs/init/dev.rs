@@ -162,6 +162,7 @@ pub struct bch_devs_list {
 }
 
 c_extern! {
+    pub fn bch2_dev_io_ref_stop(ca: *mut c::bch_dev, rw: c_int);
     pub fn bch2_dev_add(c: *mut c::bch_fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
     pub fn bch2_dev_add_initialize(c: *mut c::bch_fs, ca: *mut c::bch_dev) -> c_int;
     pub fn bch2_dev_resize(c: *mut c::bch_fs, ca: *mut c::bch_dev, nbuckets: u64,

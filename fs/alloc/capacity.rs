@@ -197,26 +197,31 @@ fn dev_has_open_write_point(fs: &Fs, ca: &c::bch_dev) -> bool {
     })
 }
 
-/// @ca going read-only: out of rw_devs[], capacity recomputed without it, its
-/// open buckets stopped, and the writes still in flight to it waited for.
+impl Fs {
+    /// @ca going read-only: out of rw_devs[], capacity recomputed without it, its
+    /// open buckets stopped, and the writes still in flight to it waited for.
+    pub fn dev_allocator_remove(&self, ca: &c::bch_dev) {
+        self.state_lock.assert_held_any();
+
+        dev_allocator_set_rw(self, ca, false);
+        recalc_capacity(self);
+
+        self.open_buckets_stop(Some(ca), false);
+
+        // allocations blocked: the device can no longer be allocated from, and
+        // capacity has changed
+        self.alloc_wake_all();
+        // a journal reservation waiting on space: there may be no devices left
+        // to allocate from
+        closure_wake_up(&self.journal.async_wait);
+
+        closure_wait_event(&self.allocator.open_buckets_wait, || !dev_has_open_write_point(self, ca));
+    }
+}
+
 #[c_export]
 pub fn bch2_dev_allocator_remove(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {
-    let fs = Fs::from_c(c);
-    fs.state_lock.assert_held_any();
-
-    dev_allocator_set_rw(fs, ca, false);
-    recalc_capacity(fs);
-
-    fs.open_buckets_stop(Some(ca), false);
-
-    // allocations blocked: the device can no longer be allocated from, and
-    // capacity has changed
-    fs.alloc_wake_all();
-    // a journal reservation waiting on space: there may be no devices left
-    // to allocate from
-    closure_wake_up(&fs.journal.async_wait);
-
-    closure_wait_event(&fs.allocator.open_buckets_wait, || !dev_has_open_write_point(fs, ca));
+    Fs::from_c(c).dev_allocator_remove(ca)
 }
 
 impl crate::fs::StateLockWrite<'_> {

@@ -8,6 +8,7 @@ use crate::fs::Fs;
 use crate::types::c_default;
 use crate::util::{Printbuf, ToText};
 use core::ffi::c_int;
+use core::sync::atomic::{AtomicU64, Ordering};
 use cstruct_macros::{CStruct, c_enum, c_extern};
 
 c_enum! {
@@ -43,6 +44,15 @@ c_extern! {
     pub fn bch2_journal_meta(j: *mut c::journal) -> c_int;
     pub fn bch2_journal_do_writes(j: *mut c::journal);
     pub fn bch2_journal_debug_to_text(out: *mut c::printbuf, j: *mut c::journal);
+    pub fn bch2_journal_halt(j: *mut c::journal);
+    pub fn bch2_journal_halt_locked(j: *mut c::journal);
+}
+
+impl c::journal {
+    pub fn halted(&self) -> bool {
+        let s = unsafe { &*(&raw const self.fastpath.reservations).cast::<AtomicU64>() };
+        s.load(Ordering::Relaxed) & u64::from(c::JOURNAL_ENTRY_OFFSET_MAX) == u64::from(c::JOURNAL_ENTRY_ERROR_VAL)
+    }
 }
 
 impl ToText for c::journal {

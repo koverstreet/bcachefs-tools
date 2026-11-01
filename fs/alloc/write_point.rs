@@ -323,11 +323,6 @@ impl Fs {
 // ── For C ────────────────────────────────────────────────────────────────
 
 #[c_export]
-pub fn bch2_open_buckets_stop(c: &Opaque<c::bch_fs>, ca: Option<&c::bch_dev>, ec: bool) {
-    Fs::from_c(c).open_buckets_stop(ca, ec)
-}
-
-#[c_export]
 pub fn bch2_reset_alloc_cursors(c: &Opaque<c::bch_fs>) {
     let fs = Fs::from_c(c);
     let rcu = crate::util::rcu::read_lock();

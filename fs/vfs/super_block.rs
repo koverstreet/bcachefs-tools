@@ -18,7 +18,7 @@ use core::ptr::NonNull;
 use crate::accounting;
 use crate::alloc::capacity::avail_factor;
 use crate::c;
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::inode_opts;
 use crate::locking::Locked;
@@ -195,8 +195,7 @@ impl SuperOps for Fs {
     /// for now; blocking support, or sb_start_intwrite() and friends, would
     /// close it.
     fn freeze_fs(&self, _sb: &SuperBlock) -> Result<(), BchError> {
-        let _state = self.state_lock_write();
-        self.read_only();
+        self.state_lock_write().read_only();
         Ok(())
     }
 
@@ -204,8 +203,7 @@ impl SuperOps for Fs {
         if self.flags.get(c::bch_fs_flags::BCH_FS_emergency_ro) {
             return Ok(());
         }
-        let _state = self.state_lock_write();
-        ret_to_result_void(unsafe { c::bch2_fs_read_write(self.as_ptr()) })
+        self.state_lock_write().read_write()
     }
 }
 

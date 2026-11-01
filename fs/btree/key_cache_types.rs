@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::{Printbuf, ToText};
-use core::ffi::{c_uint, c_ulong};
+use core::ffi::{c_int, c_uint, c_ulong};
 use core::sync::atomic::AtomicIsize;
 use cstruct_macros::{CStruct, TypeInfo, c_extern};
 use crate::format::Bpos;
@@ -46,6 +46,7 @@ pub struct bkey_cached_key {
 
 c_extern! {
     pub fn bch2_btree_key_cache_to_text(out: *mut c::printbuf, bc: *mut c::bch_fs_btree_key_cache);
+    pub fn bch2_btree_key_cache_flush_going_ro(c: *mut c::bch_fs) -> c_int;
 }
 
 impl ToText for c::bch_fs_btree_key_cache {

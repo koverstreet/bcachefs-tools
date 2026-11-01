@@ -232,363 +232,7 @@ KTYPE(bch2_fs_time_stats_json);
 
 static struct kobject bcachefs_kobj;
 
-static DECLARE_WAIT_QUEUE_HEAD(bch2_read_only_wait);
-
 static bool bch2_fs_will_resize_on_mount(struct bch_fs *);
-
-/* Filesystem RO/RW: */
-
-/*
- * For startup/shutdown of RW stuff, the dependencies are:
- *
- * - foreground writes depend on copygc and rebalance (to free up space)
- *
- * - copygc and rebalance depend on mark and sweep gc (they actually probably
- *   don't because they either reserve ahead of time or don't block if
- *   allocations fail, but allocations can require mark and sweep gc to run
- *   because of generation number wraparound)
- *
- * - all of the above depends on the allocator threads
- *
- * - allocator depends on the journal (when it rewrites prios and gens)
- */
-
-static void __bch2_fs_read_only(struct bch_fs *c)
-{
-	unsigned clean_passes = 0;
-	u64 seq = 0;
-
-	bch2_maybe_schedule_btree_bitmap_gc_stop(c);
-	bch2_fs_ec_stop(c);
-	bch2_open_buckets_stop(c, NULL, true);
-	bch2_copygc_stop(c);
-	bch2_btree_write_buffer_stop(c);
-	bch2_fs_ec_flush(c);
-
-	bch_verbose(c, "flushing journal and stopping allocators, journal seq %llu",
-		    journal_cur_seq(&c->journal));
-
-	do {
-		clean_passes++;
-
-		bch2_do_discards_going_ro(c);
-
-		if (bch2_btree_write_buffer_flush_going_ro(c) ||
-		    bch2_btree_key_cache_flush_going_ro(c) ||
-		    bch2_btree_interior_updates_flush(c) ||
-		    bch2_journal_flush_all_pins(&c->journal) ||
-		    bch2_btree_flush_all_writes(c) ||
-		    seq != atomic64_read(&c->journal.seq)) {
-			seq = atomic64_read(&c->journal.seq);
-			clean_passes = 0;
-		}
-	} while (clean_passes < 2);
-
-	/*
-	 * On a dead journal the clean-shutdown loop above can't make dirty
-	 * btree nodes clean: journal_flush_all_pins doesn't push them out,
-	 * and __bch2_btree_node_write skips submission for journal_error, so
-	 * BTREE_NODE_dirty stays set on every node that hadn't been written
-	 * yet. The loop terminates (everything no-ops) but live[].dirty is
-	 * still populated. Force-cancel: drop dirty bits + transition DIRTY →
-	 * CLEAN, then drain any interior updates btree_node_write_update_key
-	 * may have kicked off before the journal died.
-	 */
-	if (bch2_journal_error(&c->journal)) {
-		bch2_btree_cancel_all_writes(c);
-		bch2_btree_interior_updates_flush(c);
-	}
-
-	bch_verbose(c, "flushing journal and stopping allocators complete, journal seq %llu",
-		    journal_cur_seq(&c->journal));
-
-	if (test_bit(JOURNAL_replay_done, &c->journal.flags) &&
-	    !test_bit(BCH_FS_emergency_ro, &c->flags))
-		set_bit(BCH_FS_clean_shutdown, &c->flags);
-
-	bch2_fs_journal_stop(&c->journal);
-
-	bch_info(c, "%sclean shutdown complete, journal seq %llu",
-		 test_bit(BCH_FS_clean_shutdown, &c->flags) ? "" : "un",
-		 c->journal.seq_ondisk);
-
-	/*
-	 * After stopping journal:
-	 */
-	for_each_member_device(c, ca) {
-		bch2_dev_io_ref_stop(ca, WRITE);
-		bch2_dev_allocator_remove(c, ca);
-
-		/*
-		 * Queued from bch2_journal_space_available(); not cancelled
-		 * anywhere else on the going-RO path, so cancel it here, after
-		 * the journal is stopped, or it can run against a freed device.
-		 */
-		cancel_work_sync(&ca->journal.discard);
-	}
-}
-
-static void bch2_writes_disabled(struct enumerated_ref *writes)
-{
-	struct bch_fs *c = container_of(writes, struct bch_fs, writes);
-
-	set_bit(BCH_FS_write_disable_complete, &c->flags);
-	wake_up(&bch2_read_only_wait);
-}
-
-void bch2_fs_read_only(struct bch_fs *c)
-{
-	if (!test_bit(BCH_FS_rw, &c->flags)) {
-		bch2_journal_reclaim_stop(&c->journal);
-		return;
-	}
-
-	BUG_ON(test_bit(BCH_FS_write_disable_complete, &c->flags));
-
-	bch_verbose(c, "going read-only");
-
-	/*
-	 * Block new foreground-end write operations from starting - any new
-	 * writes will return -EROFS. Set before stopping reconcile so the
-	 * reconcile kthread's child workers (which check this flag to break
-	 * out) see it while bch2_reconcile_stop() is blocked waiting on them.
-	 */
-	set_bit(BCH_FS_going_ro, &c->flags);
-
-	/*
-	 * Stop background kthreads that issue writes (reconcile, etc.)
-	 * before disabling c->writes; otherwise they can dispatch
-	 * data_update operations that fail with erofs_no_writes once
-	 * c->writes is stopped, and the failure-rate threshold trips.
-	 */
-	bch2_reconcile_stop(c);
-
-	enumerated_ref_stop_async(&c->writes);
-
-	/*
-	 * If we're not doing an emergency shutdown, we want to wait on
-	 * outstanding writes to complete so they don't see spurious errors due
-	 * to shutting down the allocator:
-	 *
-	 * If we are doing an emergency shutdown outstanding writes may
-	 * hang until we shutdown the allocator so we don't want to wait
-	 * on outstanding writes before shutting everything down - but
-	 * we do need to wait on them before returning and signalling
-	 * that going RO is complete:
-	 */
-	wait_event(bch2_read_only_wait,
-		   test_bit(BCH_FS_write_disable_complete, &c->flags) ||
-		   test_bit(BCH_FS_emergency_ro, &c->flags));
-
-	bool writes_disabled = test_bit(BCH_FS_write_disable_complete, &c->flags);
-	if (writes_disabled)
-		bch_verbose(c, "finished waiting for writes to stop");
-
-	__bch2_fs_read_only(c);
-
-	wait_event(bch2_read_only_wait,
-		   test_bit(BCH_FS_write_disable_complete, &c->flags));
-
-	if (!writes_disabled)
-		bch_verbose(c, "finished waiting for writes to stop");
-
-	clear_bit(BCH_FS_write_disable_complete, &c->flags);
-	clear_bit(BCH_FS_going_ro, &c->flags);
-	clear_bit(BCH_FS_rw, &c->flags);
-
-	if (!bch2_journal_error(&c->journal) &&
-	    !test_bit(BCH_FS_error, &c->flags) &&
-	    !test_bit(BCH_FS_emergency_ro, &c->flags) &&
-	    test_bit(BCH_FS_started, &c->flags) &&
-	    test_bit(BCH_FS_clean_shutdown, &c->flags) &&
-	    c->recovery.pass_done >= BCH_RECOVERY_PASS_journal_replay) {
-		BUG_ON(c->journal.last_empty_seq != journal_cur_seq(&c->journal));
-		BUG_ON(!c->sb.clean);
-		BUG_ON(c->btree.cache.live[0].nr_dirty || c->btree.cache.live[1].nr_dirty);
-		BUG_ON(atomic_long_read(&c->btree.key_cache.nr_dirty));
-		for (unsigned i = 0; i < BCH_WB_BTREE_NR; i++) {
-			BUG_ON(c->btree.write_buffer[i].inc.keys.nr);
-			BUG_ON(c->btree.write_buffer[i].flushing.keys.nr);
-		}
-		bch2_verify_replicas_refs_clean(c);
-		bch2_verify_accounting_clean(c);
-	} else {
-		/* Make sure error counts/counters are persisted */
-		guard(mutex_noio)(&c->sb_lock);
-		bch2_write_super(c);
-
-		bch_verbose(c, "done going read-only, filesystem not clean");
-	}
-}
-
-static void bch2_fs_read_only_work(struct work_struct *work)
-{
-	struct bch_fs *c =
-		container_of(work, struct bch_fs, read_only_work);
-
-	guard(rwsem_write)(&c->state_lock);
-	bch2_fs_read_only(c);
-}
-
-static void bch2_fs_read_only_async(struct bch_fs *c)
-{
-	queue_work(system_long_wq, &c->read_only_work);
-}
-
-static bool __bch2_fs_emergency_read_only(struct bch_fs *c, struct printbuf *out, bool locked)
-{
-	bool ret = !test_and_set_bit(BCH_FS_emergency_ro, &c->flags);
-
-	if (!locked)
-		bch2_journal_halt(&c->journal);
-	else
-		bch2_journal_halt_locked(&c->journal);
-	bch2_fs_read_only_async(c);
-	wake_up(&bch2_read_only_wait);
-
-	/*
-	 * Wake threads parked in __bch2_wait_on_allocator: going-RO won't
-	 * complete while they hold open closures on freelist_wait, and they
-	 * won't otherwise notice the fs is shutting down.
-	 */
-	bch2_alloc_wake_all(c);
-
-	if (ret) {
-		prt_printf(out, "emergency read only at seq %llu\n",
-			   journal_cur_seq(&c->journal));
-		out->suppress = false;
-	}
-
-	return ret;
-}
-
-/* Returns true if going ERO, false if we already are */
-bool bch2_fs_emergency_read_only(struct bch_fs *c, struct printbuf *out)
-{
-	return __bch2_fs_emergency_read_only(c, out, false);
-}
-
-bool bch2_fs_emergency_read_only_locked(struct bch_fs *c, struct printbuf *out)
-{
-	return __bch2_fs_emergency_read_only(c, out, true);
-}
-
-static int __bch2_fs_read_write(struct bch_fs *c, bool early)
-{
-	BUG_ON(!test_bit(BCH_FS_may_go_rw, &c->flags));
-
-	if (WARN_ON(c->sb.features & BIT_ULL(BCH_FEATURE_no_alloc_info)))
-		return bch_err_throw(c, erofs_no_alloc_info);
-
-	BUG_ON(!test_bit(BCH_FS_may_upgrade_downgrade, &c->flags));
-
-	if (test_bit(BCH_FS_initial_gc_unfixed, &c->flags)) {
-		bch_err(c, "cannot go rw, unfixed btree errors");
-		return bch_err_throw(c, erofs_unfixed_errors);
-	}
-
-	if (c->sb.features & BIT_ULL(BCH_FEATURE_small_image)) {
-		bch_err(c, "cannot go rw, filesystem is an unresized image file");
-		return bch_err_throw(c, erofs_filesystem_full);
-	}
-
-	if (c->sb.features & BIT_ULL(BCH_FEATURE_no_default_sb)) {
-		bch_err(c, "cannot go rw, run bcachefs migrate-superblock first");
-		return bch_err_throw(c, erofs_sb_not_migrated);
-	}
-
-	if (test_bit(BCH_FS_rw, &c->flags))
-		return 0;
-
-	bch_info(c, "going read-write");
-
-	try(bch2_fs_init_rw(c));
-	scoped_guard(mutex_noio, &c->sb_lock)
-		try(bch2_sb_members_v2_init(c));
-
-	clear_bit(BCH_FS_clean_shutdown, &c->flags);
-
-	scoped_guard(rcu)
-		for_each_online_member_rcu(c, ca)
-			if (ca->mi.state == BCH_MEMBER_STATE_rw) {
-				bch2_dev_allocator_add(c, ca);
-				enumerated_ref_start(&ca->io_ref[WRITE]);
-			}
-
-	bch2_recalc_capacity(c);
-
-	/*
-	 * First journal write must be a flush write: after a clean shutdown we
-	 * don't read the journal, so the first journal write may end up
-	 * overwriting whatever was there previously, and there must always be
-	 * at least one non-flush write in the journal or recovery will fail:
-	 */
-	scoped_guard(spinlock, &c->journal.lock) {
-		set_bit(JOURNAL_need_flush_write, &c->journal.flags);
-		set_bit(JOURNAL_running, &c->journal.flags);
-#ifdef CONFIG_BCACHEFS_DEBUG
-		c->journal.stop_thread = NULL;
-#endif
-		bch2_journal_space_available(&c->journal);
-	}
-
-	/*
-	 * Don't jump to our error path, and call bch2_fs_read_only(), unless we
-	 * successfully marked the filesystem dirty
-	 */
-
-	set_bit(BCH_FS_rw, &c->flags);
-	set_bit(BCH_FS_was_rw, &c->flags);
-
-	if (test_and_clear_bit(BCH_FS_sb_dirty, &c->flags)) {
-		guard(mutex_noio)(&c->sb_lock);
-		bch2_write_super(c);
-	}
-
-	enumerated_ref_start(&c->writes);
-
-	int ret = bch2_journal_reclaim_start(&c->journal) ?:
-		  bch2_btree_write_buffer_start(c) ?:
-		  bch2_copygc_start(c) ?:
-		  (!c->opts.read_only
-		   ? bch2_reconcile_start(c)
-		   : 0);
-	if (ret) {
-		bch2_fs_read_only(c);
-		return ret;
-	}
-
-	/* copygc was started before recovery, and waits for BCH_FS_rw: */
-	bch2_copygc_wakeup(c);
-	bch2_do_discards_async(c);
-	bch2_do_invalidates(c);
-	bch2_do_stripe_deletes(c);
-	bch2_do_pending_node_rewrites(c);
-	bch2_scrub_journal_do_repairs(c);
-	bch2_maybe_schedule_btree_bitmap_gc(c);
-	return 0;
-}
-
-int bch2_fs_read_write(struct bch_fs *c)
-{
-	if (c->opts.recovery_pass_last &&
-	    c->opts.recovery_pass_last < BCH_RECOVERY_PASS_journal_replay)
-		return bch_err_throw(c, erofs_norecovery);
-
-	if (c->opts.nochanges)
-		return bch_err_throw(c, erofs_nochanges);
-
-	if (c->sb.features & BIT_ULL(BCH_FEATURE_no_alloc_info))
-		return bch_err_throw(c, erofs_no_alloc_info);
-
-	return __bch2_fs_read_write(c, false);
-}
-
-int bch2_fs_read_write_early(struct bch_fs *c)
-{
-	guard(rwsem_write)(&c->state_lock);
-	return __bch2_fs_read_write(c, true);
-}
 
 /* Filesystem startup/shutdown: */
 
@@ -606,6 +250,7 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_btree_write_buffer_stop(c);
 	bch2_free_pending_node_rewrites(c);
 	bch2_free_fsck_errs(c);
+	bch2_fs_exit_late(c);
 	bch2_fs_vfs_exit(c);
 	bch2_fs_reconcile_exit(c);
 	bch2_fs_journal_exit(&c->journal);
@@ -615,7 +260,6 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_fs_move_exit(c);
 	bch2_fs_counters_exit(c);
 	free_percpu(c->counters.now);
-	bch2_fs_copygc_exit(c);
 	bch2_fs_btree_exit(c);
 	bch2_fs_accounting_exit(c);
 
@@ -625,13 +269,6 @@ static void __bch2_fs_free(struct bch_fs *c)
 
 	enumerated_ref_exit(&c->writes);
 	bch2_fs_disk_groups_exit(c);
-
-	if (c->promote_wq)
-		destroy_workqueue(c->promote_wq);
-	if (c->write_ref_wq)
-		destroy_workqueue(c->write_ref_wq);
-	if (c->btree_update_wq)
-		destroy_workqueue(c->btree_update_wq);
 
 	bch2_free_fs_sb(&c->disk_sb);
 	bch2_fs_free_mem(c);
@@ -653,8 +290,7 @@ int bch2_fs_stop(struct bch_fs *c)
 		if (test_bit(BCH_FS_started, &c->flags))
 			bch_verbose(c, "shutting down");
 
-		scoped_guard(rwsem_write, &c->state_lock)
-			bch2_fs_read_only(c);
+		bch2_fs_read_only(c);
 
 		for (unsigned i = 0; i < c->sb.nr_devices; i++) {
 			struct bch_dev *ca = rcu_dereference_protected(c->devs[i], true);
@@ -756,32 +392,6 @@ static int bch2_fs_online(struct bch_fs *c)
 		if (bch2_dev_sysfs_online(c, ca))
 			return bch_err_throw(c, sysfs_init_error);
 
-	return 0;
-}
-
-int bch2_fs_init_rw(struct bch_fs *c)
-{
-	if (test_bit(BCH_FS_rw_init_done, &c->flags))
-		return 0;
-
-	if (!(c->btree_update_wq = alloc_workqueue("bcachefs",
-				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM|WQ_UNBOUND, 512)) ||
-	    !(c->write_ref_wq = alloc_workqueue("bcachefs_write_ref",
-				WQ_FREEZABLE|WQ_PERCPU, 0)) ||
-	    !(c->promote_wq = alloc_workqueue("bcachefs_promotes",
-				WQ_FREEZABLE|WQ_PERCPU, 2)))
-		return bch_err_throw(c, ENOMEM_fs_other_alloc);
-
-	try(bch2_fs_btree_init_rw(c));
-	try(bch2_fs_io_write_init(c));
-	try(bch2_fs_journal_init_rw(&c->journal));
-	try(bch2_fs_vfs_init_rw(c));
-	try(bch2_journal_reclaim_start(&c->journal));
-	try(bch2_btree_write_buffer_start(c));
-	try(bch2_copygc_start(c));
-	try(bch2_reconcile_start(c));
-
-	set_bit(BCH_FS_rw_init_done, &c->flags);
 	return 0;
 }
 

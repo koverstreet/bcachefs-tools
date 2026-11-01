@@ -8,7 +8,8 @@ use crate::new_lock;
 use crate::util::alloc::KVVec;
 use crate::util::bitmap::AtomicBitflags;
 use crate::util::kernel::WRITE;
-use crate::util::workqueue::ReffedWork;
+use crate::util::late::Late;
+use crate::util::workqueue::{ReffedWork, Workqueue, WqFlags};
 use crate::locking::{Locked, LockedBy, MutexNoio, PercpuRwsemNoio};
 use crate::util::percpu::{Counters, PerCpu};
 use crate::util::vstructs::Head;
@@ -16,7 +17,7 @@ use crate::types::{GenRadix, RustOnly, bits_to_longs, rust_only};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
 use core::sync::atomic::{AtomicI32, AtomicI64, AtomicU64};
-use cstruct_macros::{c_name, c_const, c_enum, c_rcu_array, c_xmacro, placed, CStruct, Fieldwise, Init, TypeInfo};
+use cstruct_macros::{c_name, c_const, c_enum, c_rcu_array, c_xmacro, placed, CStruct, Fieldwise, Init, Late, TypeInfo};
 use pin_init::pin_data;
 use crate::format::Bpos;
 
@@ -585,7 +586,7 @@ c_enum! {
 #[pin_data]
 #[repr(C)]
 #[c_name(bch_fs)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(CStruct, TypeInfo, Init, Late)]
 pub struct Fs {
     pub cl: c::closure,
 
@@ -779,9 +780,13 @@ pub struct Fs {
      * dependency problems with other wq tasks that can block on ref
      * draining, such as read-only transition.
      */
-    pub write_ref_wq: *mut c::workqueue_struct,
+    #[late(Workqueue::new(c"bcachefs_write_ref", WqFlags::FREEZABLE | WqFlags::PERCPU, 0), ENOMEM_fs_other_alloc)]
+    #[c("struct workqueue_struct *write_ref_wq")]
+    pub write_ref_wq: Late<Workqueue>,
 
-    pub promote_wq: *mut c::workqueue_struct,
+    #[late(Workqueue::new(c"bcachefs_promotes", WqFlags::FREEZABLE | WqFlags::PERCPU, 2), ENOMEM_fs_other_alloc)]
+    #[c("struct workqueue_struct *promote_wq")]
+    pub promote_wq: Late<Workqueue>,
     /* Promotes in flight, against their limit: data/promote.rs */
     pub promotes_in_flight: core::sync::atomic::AtomicU32,
 
@@ -792,7 +797,11 @@ pub struct Fs {
     pub rewind_limit_res: c::journal_entry_res,
 
     /* IO PATH */
-    pub btree_update_wq: *mut c::workqueue_struct,
+    #[late(Workqueue::new(c"bcachefs",
+                          WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::UNBOUND, 512),
+           ENOMEM_fs_other_alloc)]
+    #[c("struct workqueue_struct *btree_update_wq")]
+    pub btree_update_wq: Late<Workqueue>,
     pub bio_read: c::bio_set,
     pub bio_read_split: c::bio_set,
     pub bio_write: c::bio_set,
@@ -832,6 +841,7 @@ pub struct Fs {
     pub reconcile: c::bch_fs_reconcile,
     #[pin]
     #[init(c::bch_fs_copygc::init())]
+    #[late]
     pub copygc: c::bch_fs_copygc,
     #[pin]
     pub ec: c::bch_fs_ec,

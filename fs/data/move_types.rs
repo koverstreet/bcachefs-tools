@@ -7,7 +7,7 @@ use crate::types::{DArray, c_default};
 use crate::util::projections::Volatile;
 use core::ffi::{c_int, c_uint};
 use core::sync::atomic::{AtomicI32, AtomicI64};
-use cstruct_macros::{c_name, CStruct, c_typedef, TypeInfo};
+use cstruct_macros::{c_extern, c_name, CStruct, c_typedef, TypeInfo};
 use nestify::nest;
 use crate::format::{Bpos, Btree, DataType};
 
@@ -97,4 +97,8 @@ c_default!(scrub_journal_repair);
 
 c_typedef! {
     pub type darray_scrub_journal_repair = DArray<c::scrub_journal_repair>;
+}
+
+c_extern! {
+    pub fn bch2_scrub_journal_do_repairs(c: *mut c::bch_fs) -> c_int;
 }

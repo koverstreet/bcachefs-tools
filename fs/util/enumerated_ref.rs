@@ -39,6 +39,8 @@ c_extern! {
     pub fn rust_enumerated_ref_tryget(r: *mut c::enumerated_ref) -> bool;
     pub fn rust_enumerated_ref_put(r: *mut c::enumerated_ref);
     pub fn rust_enumerated_ref_is_zero(r: *mut c::enumerated_ref) -> bool;
+    pub fn enumerated_ref_start(r: *mut c::enumerated_ref);
+    pub fn enumerated_ref_stop_async(r: *mut c::enumerated_ref);
     pub fn enumerated_ref_to_text(out: *mut c::printbuf, r: *mut c::enumerated_ref,
                                   names: *const *const crate::util::ffi::c_char);
 }
@@ -75,6 +77,16 @@ impl EnumeratedRef {
     /// No refs held: stopped, or never started.
     pub fn is_zero(&self) -> bool {
         unsafe { c::rust_enumerated_ref_is_zero(self.r.get()) }
+    }
+
+    pub fn start(&self) {
+        unsafe { enumerated_ref_start(self.r.get()) }
+    }
+
+    /// Trygets fail from now; the stop function's called when the last ref's
+    /// put.
+    pub fn stop_async(&self) {
+        unsafe { enumerated_ref_stop_async(self.r.get()) }
     }
 
     /// The refs held, by kind - @names the kinds', NULL terminated.

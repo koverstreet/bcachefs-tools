@@ -732,27 +732,25 @@ impl Fs {
     pub fn do_discards_async(&self) {
         self.discards.work.queue(self.write_ref_wq());
     }
+
+    /// Going read-only, with free space short on a device with buckets waiting
+    /// for discard: discard them now, before the allocator stops.
+    pub fn do_discards_going_ro(&self) {
+        let must = self.rw_devs_rcu(&read_lock()).any(|ca| {
+            let u = ca.usage_read_fast();
+            u.buckets[DataType::free.0 as usize] <
+                ca.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe) * 4 &&
+            u.buckets[DataType::need_discard.0 as usize] != 0
+        });
+        if must {
+            do_discards(self);
+        }
+    }
 }
 
 #[c_export]
 pub fn bch2_do_discards_async(c: &Opaque<c::bch_fs>) {
     Fs::from_c(c).do_discards_async()
-}
-
-/// Going read-only, with free space short on a device with buckets waiting
-/// for discard: discard them now, before the allocator stops.
-#[c_export]
-pub fn bch2_do_discards_going_ro(c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
-    let must = fs.rw_devs_rcu(&read_lock()).any(|ca| {
-        let u = ca.usage_read_fast();
-        u.buckets[DataType::free.0 as usize] <
-            ca.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe) * 4 &&
-        u.buckets[DataType::need_discard.0 as usize] != 0
-    });
-    if must {
-        do_discards(fs);
-    }
 }
 
 // ── Fast discards ────────────────────────────────────────────────────────
@@ -985,9 +983,4 @@ impl Fs {
             ca.do_invalidates();
         }
     }
-}
-
-#[c_export]
-pub fn bch2_do_invalidates(c: &Opaque<c::bch_fs>) {
-    Fs::from_c(c).do_invalidates()
 }
