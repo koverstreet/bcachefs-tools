@@ -377,17 +377,44 @@ impl<T: ::pin_init::Zeroable> PerCpu<T> {
     }
 }
 
-pub fn alloc_u64s(nr: usize, gfp: c::gfp_t) -> Result<NonNull<u64>, AllocError> {
-    let size = nr * size_of::<u64>();
-    #[cfg(kernel)]
-    let p = unsafe { c::pcpu_alloc_noprof(size, align_of::<u64>(), false, gfp) };
-    #[cfg(not(kernel))]
-    let p = unsafe { c::__alloc_percpu_gfp(size, align_of::<u64>(), gfp) };
-    NonNull::new(p.cast()).ok_or(AllocError)
+/// @n u64 counters, percpu, of a length known only when they're allocated:
+/// freed when dropped.
+pub struct PerCpuU64s {
+    p: NonNull<u64>,
+    n: usize,
 }
 
-pub unsafe fn free_u64s(p: NonNull<u64>) {
-    unsafe { c::free_percpu(p.as_ptr().cast()) }
+impl PerCpuU64s {
+    pub fn new(n: usize, gfp: c::gfp_t) -> Result<Self, AllocError> {
+        let size = n * size_of::<u64>();
+        #[cfg(kernel)]
+        let p = unsafe { c::pcpu_alloc_noprof(size, align_of::<u64>(), false, gfp) };
+        #[cfg(not(kernel))]
+        let p = unsafe { c::__alloc_percpu_gfp(size, align_of::<u64>(), gfp) };
+        Ok(Self { p: NonNull::new(p.cast()).ok_or(AllocError)?, n })
+    }
+
+    pub fn len(&self) -> usize {
+        self.n
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = PerCpuRef<'_, u64>> + '_ {
+        (0..self.n).map(move |i| unsafe { PerCpuRef::from_raw(self.p.as_ptr().add(i)) })
+    }
+
+    /// Each counter set to @v's, zero past its end: through &mut, so no add
+    /// races it.
+    pub fn set(&mut self, v: &[u64]) {
+        for (i, c) in self.iter().enumerate() {
+            unsafe { c.set(v.get(i).copied().unwrap_or(0)) };
+        }
+    }
+}
+
+impl Drop for PerCpuU64s {
+    fn drop(&mut self) {
+        unsafe { c::free_percpu(self.p.as_ptr().cast()) }
+    }
 }
 
 impl<T> PerCpu<T> {
@@ -467,6 +494,13 @@ impl<'a, T> PerCpuRef<'a, T> {
         where 'a: 'g
     {
         ThisCpu(unsafe { this_cpu_ptr(self.0, g) }, PhantomData)
+    }
+
+    /// Nothing else may reach it meanwhile, on any CPU.
+    pub unsafe fn zero(self) where T: Default {
+        for cpu in self.cpus() {
+            unsafe { cpu.0.cast_mut().write(T::default()) };
+        }
     }
 }
 
