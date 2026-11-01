@@ -99,6 +99,19 @@ impl Fs {
         opt != 0 &&
             (self.sb.clean.get() == 0 || opt == c::bch_scrub_journal_opts::BCH_SCRUB_JOURNAL_always.0)
     }
+
+    /// The entries the journal read kept, and their jsets, but those replay
+    /// ignores.
+    ///
+    /// # Safety
+    /// The journal keys' initial ref is held - recovery's, whose put may free
+    /// the entries - for as long as the references live.
+    pub unsafe fn journal_replays(&self) -> impl Iterator<Item = (&c::journal_replay, &c::jset)> + '_ {
+        self.journal_entries.iter_from(0)
+            .filter_map(|(_, &i)| unsafe { i.as_ref() })
+            .filter(|i| !i.ignored())
+            .map(|i| (i, unsafe { c::journal_replay::jset(i) }))
+    }
 }
 
 // ---- entry type conversion ----

@@ -1031,17 +1031,9 @@ fn keys_sort(fs: &Fs) -> Result<(), BchError> {
 
     jk.reset(keys);
 
-    for (_, &i) in fs.journal_entries.iter_from(0) {
-        // SAFETY: an entry the journal read, valid until the last put
-        let Some(i) = (unsafe { i.as_ref() }) else { continue };
-        if i.ignored() {
-            continue;
-        }
-
+    for (i, j) in unsafe { fs.journal_replays() } {
         cond_resched();
 
-        // SAFETY: as i's
-        let j = unsafe { c::journal_replay::jset(i) };
         let seq = j.seq.get();
         let seq_rewound = journal_seq_is_rewound(fs, seq);
 
