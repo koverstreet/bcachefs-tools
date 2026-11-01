@@ -267,7 +267,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                             std::os::unix::fs::FileExt::write_all_at(&*file, &zeroes, offset)?,
                         ErrorType::Csum | ErrorType::Keys => {
                             /* the whole written extent, so we can walk its bsets */
-                            let written = b.written as usize;
+                            let written = b.written.get() as usize;
                             let mut buf = crate::util::AlignedBuf::new((written * 512).max(block_size));
 
                             std::os::unix::fs::FileExt::read_exact_at(&*file, &mut buf, offset)?;

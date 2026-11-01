@@ -121,7 +121,14 @@ pub struct BtreeNode {
     pub hash_val: u64,
 
     pub flags: c_ulong,
-    pub written: u16,
+    /*
+     * XXX: written and whiteout_u64s are the node writer's: the thread that
+     * cleared BTREE_NODE_dirty, which may hold only a read lock. They want a
+     * Volatile variant whose Writer has a private constructor - clearing the
+     * dirty bit - and borrows the guard on c.lock. With btree/write.c's
+     * conversion.
+     */
+    pub written: Volatile<u16>,
     pub nsets: u8,
     pub nr_key_bits: u8,
     pub version_ondisk: u16,
@@ -167,7 +174,7 @@ pub struct BtreeNode {
 
     pub nr: cs::btree_nr_keys,
     pub sib_u64s: [u16; 2],
-    pub whiteout_u64s: u16,
+    pub whiteout_u64s: Volatile<u16>,
     pub byte_order: u8,
     pub unpack_fn_len: u8,
 
