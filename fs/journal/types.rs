@@ -478,7 +478,7 @@ nest! {
         /* Flushes under-replicated pins when a device comes back: */
         pub flush_degraded_work: c::work_struct,
 
-        pub replay_journal_seq: u64,
+        pub replay_journal_seq: Volatile<u64>,
 
         /*
          * The round robin over devices journal writes take - protected by

@@ -422,7 +422,7 @@ pub struct bch_fs_btree_cache {
      * sorted-order fastpath, which holds every journal pin until replay
      * finishes - pins must be released for reclaim to clean btree nodes.
      */
-    pub nr_self_reclaim: c_ulong,
+    pub nr_self_reclaim: AtomicIsize,
 
     /*
      * If we need to allocate memory for a new btree node and that

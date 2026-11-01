@@ -1104,7 +1104,7 @@ struct btree *bch2_btree_node_mem_alloc(struct btree_trans *trans, bool pcpu_rea
 	 * OOM under heavy load (TiCPU report).
 	 */
 	if (unlikely(system_memory_usage_high(c))) {
-		bc->nr_self_reclaim++;
+		atomic_long_inc(&bc->nr_self_reclaim);
 		b = bch2_btree_node_grab(c, &bc->live[pcpu_read_locks].clean, pcpu_read_locks, 0);
 		if (b)
 			goto got_mem;
@@ -2075,7 +2075,7 @@ __cold void bch2_btree_cache_to_text(struct printbuf *out, const struct bch_fs_b
 	prt_printf(out, "counters since mount:\n");
 	prt_printf(out, "requested:\t%zu\n",	bc->nr_requested);
 	prt_printf(out, "freed:\t%zu\n",	bc->nr_freed);
-	prt_printf(out, "self reclaim:\t%lu\n",	bc->nr_self_reclaim);
+	prt_printf(out, "self reclaim:\t%li\n",	atomic_long_read(&bc->nr_self_reclaim));
 	prt_printf(out, "not freed:\n");
 
 	for (unsigned i = 0; i < ARRAY_SIZE(bc->not_freed); i++)
