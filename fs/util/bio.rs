@@ -147,8 +147,7 @@ impl Bio {
 
     /// For its own methods, and C's: never moved out of.
     fn raw_mut(self: Pin<&mut Self>) -> &mut c::bio {
-        // SAFETY: not moved, as above
-        unsafe { &mut self.get_unchecked_mut().bio }
+        self.project().bio
     }
 
     pub fn range(&self) -> BioRange<'_> {
