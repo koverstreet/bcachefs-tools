@@ -1143,7 +1143,7 @@ fn unit_bits(ty: &str) -> Option<u32> {
 }
 
 /// The width of integer type @ty, in bits.
-fn int_bits(ty: &str) -> Option<u32> {
+pub fn int_bits(ty: &str) -> Option<u32> {
     Some(match ty.trim() {
         "u8" | "i8" => 8,
         "u16" | "i16" => 16,

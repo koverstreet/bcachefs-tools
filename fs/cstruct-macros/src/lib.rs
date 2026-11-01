@@ -24,6 +24,8 @@
 //!                        marker type for each, its opcode and argument type
 //!   c_enum! { .. }       an enum, #[open], #[closed] or #[flags]: Rust gets
 //!                        the type that is, and its values as constants
+//!   #[open_enum]         an open enum Rust alone has: c_enum!'s #[open],
+//!                        without the C
 //!   c_const! { .. }      integer constants: C gets a #define each
 //!   c_typedef! { .. }    a type alias: C gets a typedef
 //!   c_rcu_array! { .. }  an RcuArray C reads: C gets the struct of its
@@ -1015,12 +1017,59 @@ pub fn c_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         let e = one_item!(&text, Enum, C_ENUM_SYNTAX);
         Ok(match e.from.first() {
             Some((_, f)) => through_list(&f.list, "cstruct_macros::__c_enum", input.into()),
-            None => c_enum_gen(&e, &text),
+            None => c_enum_gen(&e, EnumOf::C(&text)),
         })
     })
 }
 
 const C_ENUM_SYNTAX: &str = "#[open|closed|flags] pub enum NAME: REPR { ... }";
+
+/// `#[open_enum]` on `#[repr(uN)] pub enum NAME { a = 0, b, ... }`: an enum
+/// Rust alone has, whose values can be anything - read off disk, written by
+/// another version: c_enum!'s #[open], without the C - no constants of the
+/// module, no record. Each variant is named, as Names has it and it prints,
+/// by its own name, or its `#[label("..")]`; #[own_to_text] as c_enum!'s.
+#[proc_macro_attribute]
+pub fn open_enum(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[open_enum]", || {
+        use syn::ext::IdentExt as _;
+        if !attr.is_empty() {
+            return Err(syn::Error::new_spanned(TokenStream::from(attr), "takes no arguments"));
+        }
+        let item: syn::ItemEnum = syn::parse(item)?;
+        let what = |s: &str| format!("{}: {s}", item.ident);
+        let mut repr = None;
+        let mut own_to_text = false;
+        let mut attrs = Vec::new();
+        for a in &item.attrs {
+            if a.path().is_ident("repr") {
+                repr = Some(a.parse_args::<Ident>()?);
+            } else if a.path().is_ident("own_to_text") {
+                own_to_text = true;
+            } else {
+                attrs.push(a.clone());
+            }
+        }
+        let repr = repr.filter(|r| cstruct::int_bits(&r.to_string()).is_some())
+            .ok_or_else(|| syn::Error::new_spanned(&item.ident, what("#[repr(uN)]: its integer type")))?;
+        let mut variants = Vec::new();
+        for v in &item.variants {
+            if !matches!(v.fields, syn::Fields::Unit) {
+                return Err(syn::Error::new_spanned(v, what("its variants are values, without fields")));
+            }
+            let name = v.ident.unraw().to_string();
+            let label = match v.attrs.iter().find(|a| a.path().is_ident("label")) {
+                Some(a) => a.parse_args::<syn::LitStr>()?.value(),
+                None => name.clone(),
+            };
+            let value = v.discriminant.as_ref().map(|(_, x)| x.to_token_stream().to_string());
+            variants.push(CEnumVariant { name, value, label: Some(label) });
+        }
+        let e = CEnumDef { cfg: None, kind: CEnumKind::Open, name: Some(item.ident.to_string()), repr: repr.to_string(),
+                           variants, from: Vec::new(), own_to_text, c_name: None };
+        Ok(c_enum_gen(&e, EnumOf::Rust(&item.vis, &attrs)))
+    })
+}
 
 /// c_enum!'s list's callback: { [decl] (entry), (entry), ... } - the enum
 /// with its first list's variants in their place: through the next list, if
@@ -1036,13 +1085,22 @@ pub fn __c_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         let decl = enum_text(&e);
         Ok(match e.from.first() {
             Some((_, f)) => through_list(&f.list, "cstruct_macros::__c_enum", tokens(&decl)),
-            None => c_enum_gen(&e, &format!("c_enum! {{ {decl} }}")),
+            None => c_enum_gen(&e, EnumOf::C(&format!("c_enum! {{ {decl} }}"))),
         })
     })
 }
 
-/// c_enum! @e's Rust, and its record, of @text.
-fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
+/// Whose an enum is: C's, a c_enum!'s - its constants the module's, as C's
+/// are, and its record, of the text - or Rust's alone, an #[open_enum]'s,
+/// with the visibility and attributes it was written with.
+#[derive(Clone, Copy)]
+enum EnumOf<'a> {
+    C(&'a str),
+    Rust(&'a syn::Visibility, &'a [syn::Attribute]),
+}
+
+/// Enum @e's Rust - and if it's C's, its record.
+fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
     let repr = format_ident!("{}", e.repr);
     let names: Vec<Ident> = e.variants.iter().map(|v| format_ident!("{}", v.name)).collect();
 
@@ -1050,6 +1108,7 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
     // the one before it, which would make a const chain as long as the enum:
     // too deep for rustc, at bch_persistent_counters' hundreds.
     let mut out = TokenStream::new();
+    let mut values = Vec::new();
     let mut base = None;
     let mut n = 0;
     for (v, CEnumVariant { value, .. }) in names.iter().zip(&e.variants) {
@@ -1060,10 +1119,17 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
                 n = 0;
                 tokens(x)
             }
-            (None, Some(b)) => quote!(#b + #k),
+            (None, Some(b)) if matches!(of, EnumOf::C(_)) => quote!(#b + #k),
+            (None, Some(b)) => quote!(Self::#b.0 + #k),
             (None, None) => quote!(#k),
         };
-        out.extend(quote!(#[allow(non_upper_case_globals, dead_code)] pub const #v: #repr = #value;));
+        match of {
+            EnumOf::C(_) => {
+                out.extend(quote!(#[allow(non_upper_case_globals, dead_code)] pub const #v: #repr = #value;));
+                values.push(quote!(#v));
+            }
+            EnumOf::Rust(..) => values.push(value),
+        }
         n += 1;
     }
 
@@ -1072,7 +1138,10 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
         None => repr.clone(),
     };
     if let Some(name) = &e.name {
-        let cfi = cfi_encoding(e.c_ident().unwrap_or(name));
+        let (vis, attrs) = match of {
+            EnumOf::C(_) => (quote!(pub), cfi_encoding(e.c_ident().unwrap_or(name))),
+            EnumOf::Rust(vis, attrs) => (quote!(#vis), quote!(#(#attrs)*)),
+        };
         let name = format_ident!("{name}");
         out.extend(match e.kind {
             CEnumKind::Closed => {
@@ -1082,8 +1151,8 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
                 quote! {
                     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, crate::util::ToText)]
                     #[repr(#repr)]
-                    #cfi
-                    pub enum #name { #(#labels #names = #names,)* }
+                    #attrs
+                    #vis enum #name { #(#labels #names = #values,)* }
                     impl #name {
                         pub const fn from_bits(v: #repr) -> Self {
                             match v {
@@ -1098,11 +1167,11 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
             CEnumKind::Open => quote! {
                 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
                 #[repr(transparent)]
-                #cfi
-                pub struct #name(pub #repr);
+                #attrs
+                #vis struct #name(pub #repr);
                 #[allow(non_upper_case_globals)]
                 impl #name {
-                    #(pub const #names: Self = Self(#names);)*
+                    #(pub const #names: Self = Self(#values);)*
                     pub const fn from_bits(v: #repr) -> Self { Self(v) }
                     pub const fn into_bits(self) -> #repr { self.0 }
                 }
@@ -1123,9 +1192,9 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
                 ::bitflags::bitflags! {
                     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
                     #[repr(transparent)]
-                    #cfi
-                    pub struct #name: #repr {
-                        #(#[allow(non_upper_case_globals)] const #names = #names;)*
+                    #attrs
+                    #vis struct #name: #repr {
+                        #(#[allow(non_upper_case_globals)] const #names = #values;)*
                     }
                 }
                 impl #name {
@@ -1155,9 +1224,11 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
         }
     }
 
-    let mut nums = size_align(&ty);
-    nums.extend(names.iter().map(|v| quote!(#v as u64)));
-    out.extend(record(text, &nums));
+    if let EnumOf::C(text) = of {
+        let mut nums = size_align(&ty);
+        nums.extend(names.iter().map(|v| quote!(#v as u64)));
+        out.extend(record(text, &nums));
+    }
     out
 }
 
@@ -1176,8 +1247,9 @@ fn names_gen(e: &CEnumDef, name: &str) -> TokenStream {
 
     let (name, n) = (format_ident!("{name}"), quote!(crate::util::names));
     let entries = labelled.iter().map(|(l, v)| match e.kind {
-        CEnumKind::Flags => quote!((#l, #n::bit(#v as u64))),
-        _                => quote!((#l, #v as u64)),
+        CEnumKind::Closed => quote!((#l, Self::#v as u64)),
+        CEnumKind::Open   => quote!((#l, Self::#v.0 as u64)),
+        CEnumKind::Flags  => quote!((#l, #n::bit(Self::#v.bits() as u64))),
     });
     let mut out = quote! {
         impl #n::Names for #name {
