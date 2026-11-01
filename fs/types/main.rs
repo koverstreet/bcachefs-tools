@@ -274,9 +274,10 @@ fn layout(def: &CStructDef, nums: &[u64]) -> Result<Layout, String> {
 /// a new unit of a bitfield member's type rather than let it straddle one.
 /// Little-endian bitfields only: big-endian C declares the members reversed,
 /// to put each at the same bits of the same word. An enum member's unit is
-/// the enum's size, from @enums - the C enum's too, which the headers assert.
+/// the enum's size, from @enum_size - the C enum's too, which the headers
+/// assert.
 fn check_bitfield(bf: &CBitfieldDef, offset: u64, prev_end: u64, packed: bool,
-                  enums: &BTreeMap<String, u64>) -> Result<(), String> {
+                  enum_size: &dyn Fn(&str) -> Option<u64>) -> Result<(), String> {
     let storage = int_bits(&bf.storage)
         .ok_or_else(|| format!("{}: storage {} isn't an integer", bf.name, bf.storage))? as u64;
     let align_up = |pos: u64, unit: u64| pos.div_ceil(unit) * unit;
@@ -293,7 +294,7 @@ fn check_bitfield(bf: &CBitfieldDef, offset: u64, prev_end: u64, packed: bool,
         }
         let ty = bf.c_type(ty);
         let unit = unit_bits(ty).map(u64::from)
-            .or_else(|| ty.trim().rsplit("::").next().and_then(|e| enums.get(e)).map(|size| size * 8))
+            .or_else(|| ty.trim().rsplit("::").next().and_then(enum_size).map(|size| size * 8))
             .ok_or_else(|| format!("{}.{name}: {ty} isn't an integer, bool or enum", bf.name))?;
         if !packed && (width == unit || c / unit != (c + width - 1) / unit) {
             c = align_up(c, unit);
@@ -362,13 +363,26 @@ fn member_asserts(out: &mut String, ty: &str, name: &str, offset: u64, size: u64
     }
 }
 
-/// The header for one source file's records, in order. @structs: every
-/// struct, union and typedef recorded, any file's - Rust name to C type - for
-/// the fields whose type is one; @paths, the same by the type's full path.
-fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>,
-          paths: &BTreeMap<String, String>, enums: &BTreeMap<String, u64>)
+/// The header for one source file's records, in order. @paths: C's type for
+/// every Rust type recorded, any file's, by the type's full path - for the
+/// fields and parameters whose type is one; @enums, an enum's size, the same
+/// way; @c_names, C's own names - typedefs, and what verbatim C defines.
+fn file_h(header: &str, records: &[&Record], paths: &BTreeMap<String, String>,
+          enums: &BTreeMap<String, u64>, c_names: &BTreeMap<String, String>)
     -> Result<String, String>
 {
+    // each name these records write, as the type rustc resolved it to: two
+    // files' Btrees are different types - and in one header, one is
+    let mut resolved: BTreeMap<&str, &str> = BTreeMap::new();
+    for (w, p) in records.iter().flat_map(|r| &r.names).filter(|(w, _)| !w.contains('<')) {
+        let n = w.rsplit("::").next().unwrap_or(w);
+        if let Some(old) = resolved.insert(n, p) && old != p {
+            return Err(format!("{header}: {n} is written for two types, {old} and {p}"));
+        }
+    }
+    let lookup = |name: &str| resolved.get(name).and_then(|p| paths.get(*p)).or_else(|| c_names.get(name));
+    let enum_size = |name: &str| resolved.get(name).and_then(|p| enums.get(*p)).copied();
+
     let mut items = Vec::new();
     let mut layouts = BTreeMap::new();
     let mut enum_sizes = Vec::new();
@@ -473,7 +487,7 @@ fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>,
                 _ => None,
             }).ok_or_else(|| format!("{}.{}: #[c_bitfield], but {} isn't a #[bitfield] type in {header}",
                                      def.name, f.name, f.ty))?;
-            if let Err(e) = check_bitfield(bf, *offset, prev_end, def.repr.packed.is_some(), enums) {
+            if let Err(e) = check_bitfield(bf, *offset, prev_end, def.repr.packed.is_some(), &enum_size) {
                 misplaced.push(format!("{}.{}: {e}", def.name, f.name));
             }
         }
@@ -481,14 +495,6 @@ fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>,
     if !misplaced.is_empty() {
         return Err(misplaced.join("\n"));
     }
-
-    // each name these records write, as the type rustc resolved it to: two
-    // files' Btrees are different types
-    let resolved: BTreeMap<&str, &str> = records.iter()
-        .flat_map(|r| &r.names)
-        .map(|(w, p)| (w.rsplit("::").next().unwrap_or(w), p.as_str()))
-        .collect();
-    let lookup = |name: &str| resolved.get(name).and_then(|p| paths.get(*p)).or_else(|| structs.get(name));
 
     // A field whose type is a recorded struct is that struct; any other
     // without a C rendering is Rust's alone: opaque storage, aligned as Rust
@@ -607,71 +613,68 @@ fn main() {
             let src = std::fs::canonicalize(src).unwrap_or_else(|e| die(format!("{src}: {e}")));
 
             let mut files: BTreeMap<&str, Vec<&Record>> = BTreeMap::new();
-            let mut structs = BTreeMap::new();
+            // C's type for each Rust type a record defines, by the type's
+            // full path - and an enum's size - and C's own names, a typedef's
+            // and what verbatim C defines, which C has one namespace for
             let mut paths = BTreeMap::new();
             let mut enums = BTreeMap::new();
+            let mut c_names: BTreeMap<String, String> = BTreeMap::new();
+            let mut conflicts = Vec::new();
             for r in &recs {
                 files.entry(&r.file).or_default().push(r);
-                // the type the record defines, by its full path
+                let path_of = |name: &str| r.names.iter().find(|(w, _)| w == name).map(|(_, p)| p.clone());
                 let mut path = |name: &str, c_type: String| {
-                    if let Some((_, p)) = r.names.iter().find(|(w, _)| w == name) {
-                        paths.insert(p.clone(), c_type);
+                    if let Some(p) = path_of(name) {
+                        paths.insert(p, c_type);
                     }
                 };
+                let mut c_name = |name: &str, c_type: String| match c_names.insert(name.to_string(), c_type.clone()) {
+                    Some(old) if old != c_type =>
+                        conflicts.push(format!("{}:{}: C's {name} is {c_type}, and elsewhere {old}", r.file, r.line)),
+                    _ => {}
+                };
                 match parse_items(&r.text).ok().and_then(|mut items| items.pop()) {
-                    // by C's name and Rust's - a family's definition, X__whole
-                    // or X__head, by X too, the type code names
+                    // a family's definition, X__whole or X__head, as X too,
+                    // the type code names
                     Some(CItem::Struct(def)) => {
-                        let rust = def.rust_ident();
-                        let family = rust.strip_suffix("__whole").or_else(|| rust.strip_suffix("__head"));
-                        for n in [Some(def.name.as_str()), Some(rust), family].into_iter().flatten() {
-                            structs.insert(n.to_string(), def.c_type());
+                        for n in [Some(def.rust_ident()), def.family()].into_iter().flatten() {
+                            path(n, def.c_type());
                         }
-                        path(rust, def.c_type());
                     }
-                    Some(CItem::TaggedUnion(tu)) => {
-                        structs.insert(tu.name.clone(), tu.c_type());
-                        if let Some(c) = &tu.c_name {
-                            structs.insert(c.clone(), tu.c_type());
+                    Some(CItem::TaggedUnion(tu)) => path(&tu.name, tu.c_type()),
+                    Some(CItem::Same(s)) => path(&s.rust_ty, s.c_type.clone()),
+                    // how a prototype names it
+                    Some(CItem::Enum(ref e)) if let Some(n) = &e.name => {
+                        let c = e.c_ident().unwrap_or(n);
+                        path(n, format!("enum {c}"));
+                        if let (Some(p), Some(&size)) = (path_of(n), r.nums.first()) {
+                            enums.insert(p, size);
                         }
                     }
                     // a C typedef: by its own name - u##_bits in an x-macro
                     // struct body is u96 as well as u64. Not by path: to rustc
                     // an alias is the type it names
                     Some(CItem::Typedef(t)) => {
-                        structs.insert(t.name.clone(), t.name.clone());
-                        structs.insert(t.rust_ident().to_string(), t.name.clone());
+                        c_name(&t.name, t.name.clone());
+                        c_name(t.rust_ident(), t.name.clone());
                     }
                     // a field of one is C's pointer to its buffer's struct
-                    Some(CItem::RcuArray(a)) => {
-                        structs.insert(a.alias.clone(), format!("struct {} __rcu *", a.c_name));
-                    }
-                    // how a prototype names it
-                    // - by its Rust name and C's, where #[c_name] makes them differ
-                    Some(CItem::Enum(e)) if e.name.is_some() => {
-                        let n = e.name.clone().unwrap();
-                        let c = e.c_ident().unwrap_or(&n).to_string();
-                        path(&n, format!("enum {c}"));
-                        for k in [n, c.clone()] {
-                            structs.insert(k.clone(), format!("enum {c}"));
-                            if let Some(&size) = r.nums.first() {
-                                enums.insert(k, size);
-                            }
-                        }
-                    }
+                    Some(CItem::RcuArray(a)) => c_name(&a.alias, format!("struct {} __rcu *", a.c_name)),
                     // a darray type is C's typedef, which its DEFINE_DARRAY*()
                     // makes: Rust's is a DArray alias, with no record
                     Some(CItem::Verbatim(v)) => {
                         for n in darray_typedefs(&v.text) {
-                            structs.insert(n.clone(), n);
+                            c_name(&n, n.clone());
                         }
-                        // a Rust type's own definition wins
                         for (n, ty) in verbatim_types(&v.text) {
-                            structs.entry(n).or_insert(ty);
+                            c_name(&n, ty);
                         }
                     }
                     _ => {}
                 }
+            }
+            if !conflicts.is_empty() {
+                die(conflicts.join("\n"));
             }
             // foo_types.rs's records, then foo.rs's
             let mut headers: BTreeMap<String, Vec<(&str, Vec<&Record>)>> = BTreeMap::new();
@@ -690,7 +693,7 @@ fn main() {
                         in_dependency_order(rs)
                     })
                     .collect();
-                let h = match file_h(&header, &rs, &structs, &paths, &enums) {
+                let h = match file_h(&header, &rs, &paths, &enums, &c_names) {
                     Ok(h) => h,
                     Err(e) => { errors.push(e); continue; }
                 };

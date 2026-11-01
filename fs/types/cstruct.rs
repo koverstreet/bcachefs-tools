@@ -192,6 +192,13 @@ impl CStructDef {
         self.rust_name.as_deref().unwrap_or(&self.name)
     }
 
+    /// X, if it's a family's definition, X__whole or X__head
+    /// (util/vstructs.rs): the type code names.
+    pub fn family(&self) -> Option<&str> {
+        let rust = self.rust_ident();
+        rust.strip_suffix("__whole").or_else(|| rust.strip_suffix("__head"))
+    }
+
     /// Its Rust type, its lifetimes elided - X<'_> - as an expression, or an
     /// impl that doesn't name them, has it.
     #[allow(dead_code)]
@@ -3114,10 +3121,12 @@ pub fn emit_items(items: &[CItem],
 
 // ---- entry points ----------------------------------------------------------
 
-/// The type names @text's item writes - its own, its fields', arms' and
-/// prototypes', a bitmask's struct's - for its record to say which type
-/// each is: each that's a plain path, under a pointer, reference or array,
-/// as the generator looks types up; not the item's generic parameters.
+/// The type names @text's item writes - its own, and a family definition's
+/// family, its fields', arms' and prototypes', a bitmask's struct's,
+/// c_same!'s Rust type - for its record to say which type each is: each
+/// that's a plain path, under a pointer, reference, array or generic
+/// argument, as the generator looks types up; not the item's generic
+/// parameters. The generator looks a Rust type up by nothing else.
 #[allow(dead_code)]
 pub fn written_types(text: &str) -> Vec<String> {
     let Ok(items) = parse_items(text) else { return Vec::new() };
@@ -3127,6 +3136,8 @@ pub fn written_types(text: &str) -> Vec<String> {
         Err(_) => Vec::new(),
     };
 
+    // c_same!'s Rust type, written whole: it's the type the record is of
+    let mut out = Vec::new();
     let mut tys = Vec::new();
     for item in &items {
         match item {
@@ -3134,6 +3145,7 @@ pub fn written_types(text: &str) -> Vec<String> {
                 if generics.is_empty() && d.lifetimes.is_empty() {
                     tys.push(d.rust_ident().to_string());
                 }
+                tys.extend(d.family().map(str::to_string));
                 // a #[c_bitfield]'s type is the bitfield's C, which Rust doesn't name
                 tys.extend(d.fields.iter().filter(|f| !f.bitfield).map(|f| f.ty.clone()));
             }
@@ -3141,19 +3153,22 @@ pub fn written_types(text: &str) -> Vec<String> {
             CItem::Enum(CEnumDef { name: Some(n), .. }) => tys.push(n.clone()),
             CItem::Bitmask(b) => tys.push(b.def.clone()),
             CItem::Typedef(t) => tys.extend([t.rust_ident().to_string(), t.ty.clone()]),
-            CItem::TaggedUnion(tu) => tys.extend(tu.arms.iter().map(|a| a.ty.clone()).chain(tu.pad.clone())),
+            // a struct's own name: a union over another's storage is generic
+            CItem::TaggedUnion(tu) => tys.extend(tu.arms.iter().map(|a| a.ty.clone()).chain(tu.pad.clone())
+                .chain((!tu.union).then(|| tu.name.clone()))),
             CItem::Extern(x) => {
                 for f in &x.fns {
                     tys.extend(f.params.iter().map(|(_, ty)| ty.clone()).chain(f.ret.clone()));
                 }
                 tys.extend(x.statics.iter().map(|s| s.ty.clone()));
             }
+            CItem::Same(s) => out.push(s.rust_ty.clone()),
             _ => {}
         }
     }
 
-    // A type as C sees one: under pointers, references, arrays, Option<>,
-    // NonNull<> and function pointers, a plain path
+    // A type as C sees one: under pointers, references, arrays, generic
+    // arguments and function pointers, a plain path
     fn walk(t: &syn::Type, out: &mut Vec<String>) {
         use syn::Type::*;
         match t {
@@ -3166,10 +3181,16 @@ pub fn written_types(text: &str) -> Vec<String> {
                     walk(r, out);
                 }
             }
-            Path(p) if p.path.leading_colon.is_none() => {
-                if let Some(a) = arg_of(t, "Option").or_else(|| arg_of(t, "NonNull"))
-                    .filter(|_| p.path.segments.len() == 1) {
-                    return walk(a, out);
+            Path(p) if p.qself.is_none() && p.path.leading_colon.is_none() => {
+                for a in p.path.segments.iter().filter_map(|s| match &s.arguments {
+                    syn::PathArguments::AngleBracketed(a) => Some(a),
+                    _ => None,
+                }) {
+                    for g in &a.args {
+                        if let syn::GenericArgument::Type(t) = g {
+                            walk(t, out);
+                        }
+                    }
                 }
                 let Some(names) = path_names(t) else { return };
                 if names.iter().any(|n| RUST_KEYWORDS.contains(&n.as_str()) && n != "crate" && n != "super") {
@@ -3184,7 +3205,6 @@ pub fn written_types(text: &str) -> Vec<String> {
         }
     }
 
-    let mut out = Vec::new();
     for t in tys.iter().filter_map(|t| type_of(t)) {
         walk(&t, &mut out);
     }
