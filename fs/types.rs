@@ -336,7 +336,11 @@ pub struct Dev {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     pub last_put: crate::util::projections::Volatile<core::ffi::c_ulong>,
     #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
-    pub ref_: c::percpu_ref,
+    #[pin]
+    #[init(crate::util::refcount::PercpuRef::new())]
+    #[c_anon("struct { struct percpu_ref ref; u32 ref_released; }")]
+    pub ref_: crate::util::refcount::PercpuRef,
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
     pub ref_completion: c::completion,
     /*
      * ref_outer keeps the bch_dev allocation alive - nothing more.

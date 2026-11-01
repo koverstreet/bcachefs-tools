@@ -1374,9 +1374,9 @@ fn dev_get(ca: &Dev) {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     assert!(ca.ref_.fetch_add(1, Ordering::SeqCst) >= 1, "bch_dev->ref get with no ref held");
 
-    // SAFETY: a ref held, so it's live; C's to change
+    // SAFETY: a ref held, so it's live
     #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
-    unsafe { c::percpu_ref_get(core::ptr::addr_of!(ca.ref_).cast_mut()) };
+    unsafe { ca.ref_.inc() };
 }
 
 /// bch2_dev_put(), as members.h's inline is. A raw pointer, not a reference:
@@ -1402,7 +1402,7 @@ pub(crate) unsafe fn dev_put(ca: *mut Dev) {
     }
 
     #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
-    unsafe { c::percpu_ref_put(core::ptr::addr_of_mut!((*ca).ref_)) };
+    unsafe { (*ca).ref_.dec() };
 }
 
 /// ca->ref_outer: keeps the bch_dev's memory alive and nothing else - its

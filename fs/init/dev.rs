@@ -256,6 +256,8 @@ use crate::types::{DArray, bits_to_longs, c_default};
 use crate::util::bio::{Bio, BioBufPtr};
 use crate::util::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::c_char;
+#[cfg(not(CONFIG_BCACHEFS_DEBUG))]
+use crate::util::refcount::WaitableRef;
 use nestify::nest;
 
 /// A superblock in memory, in a buffer that grows: kvmalloc()'d, a power of
@@ -537,8 +539,6 @@ pub(crate) unsafe fn dev_free(ca: *mut Dev) {
     unsafe {
         ca.io_ref[WRITE].exit();
         ca.io_ref[READ].exit();
-        #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
-        c::percpu_ref_exit(&mut ca.ref_);
         Kobject::put((&raw const ca.kobj).cast());
     }
 }
@@ -562,19 +562,13 @@ impl StateLockWrite<'_> {
     }
 }
 
-#[cfg(not(CONFIG_BCACHEFS_DEBUG))]
-unsafe extern "C" fn dev_ref_complete(r: *mut c::percpu_ref) {
-    let ca = unsafe { r.byte_sub(core::mem::offset_of!(Dev, ref_)).cast::<Dev>() };
-
-    unsafe { c::complete(&raw mut (*ca).ref_completion) };
-}
-
 fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<*mut Dev> {
     let p = alloc_pinned(Dev::init(fs)).ok()?;
     let ca = unsafe { &mut *p };
 
     let io_error_work = crate::new_work!(bch2_io_error_work, "bch_dev.io_error_work");
     unsafe {
+        #[cfg(CONFIG_BCACHEFS_DEBUG)]
         c::init_completion(&mut ca.ref_completion);
         c::refcount_set(&mut ca.ref_outer, 1);
         c::init_completion(&mut ca.ref_outer_completion);
@@ -593,11 +587,6 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<*mut Dev> {
 
     ca.nr_btree_reserve = c::BTREE_NODE_RESERVE.div_ceil(u32::from(ca.mi.get().bucket_size) / fs.btree_sectors());
 
-    #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
-    if unsafe { c::percpu_ref_init(&mut ca.ref_, Some(dev_ref_complete), 0, c::GFP_KERNEL) } != 0 {
-        unsafe { dev_free(p) };
-        return None;
-    }
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     ca.ref_.store(1, Relaxed);
 
@@ -1204,15 +1193,18 @@ impl StateLockWrite<'_> {
                 self.devs()[ca.dev_idx as usize].take();
             }
 
-            let ca_p = ca.as_ptr();
             #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
-            unsafe { c::percpu_ref_kill(&raw mut (*ca_p).ref_) };
+            {
+                ca.ref_.stop();
+                ca.ref_.wait();
+            }
             #[cfg(CONFIG_BCACHEFS_DEBUG)]
             unsafe {
+                let ca_p = ca.as_ptr();
                 ca.dying.set(true);
                 crate::sb::members::dev_put(ca_p);
+                c::wait_for_completion(&raw mut (*ca_p).ref_completion);
             }
-            unsafe { c::wait_for_completion(&raw mut (*ca_p).ref_completion) };
             Ok(())
         })();
 
