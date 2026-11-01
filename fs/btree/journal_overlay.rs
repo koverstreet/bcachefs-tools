@@ -258,6 +258,12 @@ impl Fs {
         unsafe { &*BkeyI::from_raw(self.journal_key_k(k)) }
     }
 
+    /// The seq of the journal entry @k was read from: None for a key inserted
+    /// since.
+    pub(crate) fn journal_key_seq(&self, k: &c::journal_key) -> Option<u64> {
+        k.journal_pos().map(|pos| self.journal_entries_base_seq + u64::from(pos.journal_seq_offset))
+    }
+
     #[inline]
     pub(crate) fn journal_key_pos(&self, k: &c::journal_key) -> Bpos {
         self.journal_key(k).k.p
@@ -1154,6 +1160,13 @@ pub fn bch2_journal_keys_put(fs: &Fs) {
         }
         entries.free();
     }
+}
+
+pub fn journal_keys_put_initial(fs: &Fs) {
+    if fs.journal_keys.initial_ref_held {
+        bch2_journal_keys_put(fs);
+    }
+    unsafe { (*fs.as_ptr()).journal_keys.initial_ref_held = false };
 }
 
 /// Btree @btree's keys at levels @level_min to @level_max, from @start to
