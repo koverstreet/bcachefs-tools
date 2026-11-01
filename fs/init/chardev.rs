@@ -35,7 +35,7 @@
 
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
-use crate::fs::{Fs, RoRef, WriteRef};
+use crate::fs::{Fs, WriteRef};
 use crate::locking::Locked;
 use crate::util::ffi::Opaque;
 use crate::types::CStatic;
@@ -43,6 +43,7 @@ use crate::util::file::{File, FileOps, FileVTable, UserBuf};
 use crate::util::ioctl::{arg, inout, input, output, vstruct, Ioctl, UserArg, UserStr, UserVstruct};
 use crate::util::alloc::{flags::GFP_KERNEL, KBox, KVVec};
 use crate::util::rcu::read_lock;
+use crate::util::place::Contained;
 use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::plain_bytes;
 use crate::accounting;
@@ -829,11 +830,11 @@ impl FileOps for Ctl {
         let fs = MINORS.lock().0.get(minor as usize).copied().flatten().map(|fs| {
             // SAFETY: live while it's in MINORS
             let fs = unsafe { fs.as_ref() };
-            RoRef::tryget(fs).ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ioctl_fs_stopping))
+            fs.ro_ref.tryget().ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ioctl_fs_stopping))
         });
 
         ioctl_ret(match fs {
-            Some(fs) => fs.and_then(|fs| fs_ioctl(&fs, cmd, user)),
+            Some(fs) => fs.and_then(|r| fs_ioctl(r.container(), cmd, user)),
             None     => global_ioctl(cmd, user),
         })
     }

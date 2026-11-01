@@ -25,7 +25,8 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_export, CStruct, bitfield, c_extern, c_typedef, TypeInfo};
 #[cfg(kernel)]
 use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
-     crate::util::sleep::Sleep, core::sync::atomic::Ordering::Acquire};
+     crate::util::place::Contained, crate::util::refcount::TryRefcount, crate::util::sleep::Sleep,
+     core::sync::atomic::Ordering::Acquire};
 use crate::types::{DArray, bits_to_longs, c_default};
 use crate::util::bio::{Bio, BioBufPtr};
 use crate::util::bitmap::{AtomicBitArray, BitArray};
@@ -406,24 +407,26 @@ pub(crate) static HOLDER_OPS: c::blk_holder_ops = c::blk_holder_ops {
 /// bd_holder_lock is held; this drops it
 #[cfg(kernel)]
 unsafe fn bdev_get_fs(bdev: *mut c::block_device) -> Option<RoRef> {
-    let fs = unsafe {
+    let r = unsafe {
         let holder = (*bdev).bd_holder.cast::<Holder>();
-        (*holder).fs.load(Acquire).as_ref().and_then(RoRef::tryget)
+        (*holder).fs.load(Acquire).as_ref().and_then(|fs: &Fs| fs.ro_ref.tryget())
     };
     unsafe { c::mutex_unlock((&raw mut (*bdev).bd_holder_lock).cast()) };
 
-    let fs = fs?;
+    let r = r?;
+    let fs = r.container();
     let started = |fs: &Fs| fs.flags.get(c::bch_fs_flags::BCH_FS_started);
     let Ok(()) = fs.ro_ref_events.wait_until(Sleep::UNINTERRUPTIBLE, || {
-        (started(&fs) || fs.flags.get(c::bch_fs_flags::BCH_FS_stopping)).then_some(())
+        (started(fs) || fs.flags.get(c::bch_fs_flags::BCH_FS_stopping)).then_some(())
     });
     // stopped without starting: our ref is what bch2_fs_stop() waits for
-    started(&fs).then_some(fs)
+    started(fs).then_some(r)
 }
 
 #[cfg(kernel)]
 unsafe extern "C" fn bdev_mark_dead(bdev: *mut c::block_device, surprise: bool) {
-    let Some(fs) = (unsafe { bdev_get_fs(bdev) }) else { return };
+    let Some(r) = (unsafe { bdev_get_fs(bdev) }) else { return };
+    let fs = r.container();
 
     // Not necessary, c->ro_ref guards against the filesystem being unmounted -
     // we only take this to avoid a warning in sync_filesystem
@@ -460,7 +463,8 @@ unsafe extern "C" fn bdev_mark_dead(bdev: *mut c::block_device, surprise: bool) 
 
 #[cfg(kernel)]
 unsafe extern "C" fn bdev_sync(bdev: *mut c::block_device) {
-    let Some(fs) = (unsafe { bdev_get_fs(bdev) }) else { return };
+    let Some(r) = (unsafe { bdev_get_fs(bdev) }) else { return };
+    let fs = r.container();
 
     if let Some(sb) = fs.vfs_super() {
         let _umount = sb.umount().read();

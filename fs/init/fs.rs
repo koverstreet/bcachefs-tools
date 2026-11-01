@@ -48,13 +48,14 @@ use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
 use crate::util::percpu::PerCpu;
 use crate::util::printbuf::prt_bdevname;
 use crate::util::rcu::read_lock;
-use crate::util::refcount::{RefGuard, Refcount, TryRefcount};
-use crate::util::sleep::Sleep;
+use crate::util::refcount::{RefGuard, WaitableRef};
+#[cfg(kernel)]
+use crate::util::{place::Placed, refcount::AtomicRef};
 use core::ffi::CStr;
 use core::future::Future;
 use core::mem::size_of;
 use core::ptr::NonNull;
-use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
 pub use crate::sb::members::DevRef;
 use core::ffi::{c_int, c_uint};
@@ -894,6 +895,7 @@ impl Fs {
         let p = self.as_ptr();
 
         if !self.flags.swap(Flag::BCH_FS_stopping, true) {
+            self.ro_ref.stop();
             self.ro_ref_events.wake();
 
             if self.flags.get(Flag::BCH_FS_started) {
@@ -920,10 +922,7 @@ impl Fs {
             #[cfg(kernel)]
             self.chardev_exit();
 
-            unsafe { <Fs as Refcount>::dec(self) };
-            let Ok(()) = self.ro_ref_events.wait_until(Sleep::UNINTERRUPTIBLE, || {
-                (self.ro_ref.load(Acquire) == 0).then_some(())
-            });
+            self.ro_ref.wait();
 
             unsafe {
                 /* btree prefetch might have kicked off reads in the background: */
@@ -1330,27 +1329,8 @@ macro_rules! fs_delayed_work {
     };
 }
 
-/// c->ro_ref: Fs::stop() waits for them, and tryget fails once it's stopping
-pub type RoRef = RefGuard<Fs>;
-
-unsafe impl Refcount for Fs {
-    unsafe fn inc(&self) {
-        self.ro_ref.fetch_add(1, Relaxed);
-    }
-
-    unsafe fn dec(&self) {
-        if self.ro_ref.fetch_sub(1, Release) == 1 {
-            self.ro_ref_events.wake();
-        }
-    }
-}
-
-unsafe impl TryRefcount for Fs {
-    fn try_inc(&self) -> bool {
-        !self.flags.get(c::bch_fs_flags::BCH_FS_stopping) &&
-            self.ro_ref.fetch_update(Relaxed, Relaxed, |r| (r != 0).then_some(r + 1)).is_ok()
-    }
-}
+#[cfg(kernel)]
+pub(crate) type RoRef = RefGuard<Placed<AtomicRef<()>, crate::at!(Fs.ro_ref)>>;
 
 /// The low bit marks it hashed
 pub fn writepoint_hashed(v: usize) -> c::write_point_specifier {

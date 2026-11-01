@@ -877,6 +877,8 @@ pub mod ioctl {
     use crate::init::passes::{bch2_recovery_passes, passes_match, run_passes};
     use crate::opts::parse_mount_opts_cstr;
     use crate::util::kernel::{capable, Capability};
+    use crate::util::place::Contained;
+    use crate::util::refcount::TryRefcount;
     use crate::util::thread_with_file::{StdioRedirect, ThreadWithFile};
     use crate::util::ioctl::{UserStr, UserVstruct};
     use kernel::ffi::c_int;
@@ -977,13 +979,14 @@ pub mod ioctl {
 
         let opts = user_opts(arg.opts)?;
 
-        let fs_ref = RoRef::tryget(fs).ok_or(BchError::from(c::EROFS))?;
+        let fs_ref = fs.ro_ref.tryget().ok_or(BchError::from(c::EROFS))?;
 
         let thr = ThreadWithFile::new_stdio(Ok(()))?;
         crate::bch_err_fn!(fs, thr.run_stdio(move |(), stdio| fsck_online_thread(fs_ref, opts, stdio)))
     }
 
-    fn fsck_online_thread(fs: RoRef, opts: c::bch_opts, stdio: &StdioRedirect) -> c_int {
+    fn fsck_online_thread(fs_ref: RoRef, opts: c::bch_opts, stdio: &StdioRedirect) -> c_int {
+        let fs = fs_ref.container();
         let mut buf = Printbuf::new();
 
         let online = passes_match(c::PASS_ONLINE);

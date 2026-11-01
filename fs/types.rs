@@ -12,6 +12,8 @@ use crate::util::kobject::Kobject;
 use crate::util::bio::BioSet;
 use crate::util::late::Late;
 use crate::util::mempool::Mempool;
+use crate::util::place::Placed;
+use crate::util::refcount::AtomicRef;
 use crate::util::workqueue::{ReffedWork, Workqueue, WqFlags};
 use crate::locking::{Locked, LockedBy, MutexNoio, PercpuRwsemNoio};
 use crate::util::percpu::{Counters, PerCpu};
@@ -651,9 +653,11 @@ pub struct Fs {
      * Analagous to c->writes, for asynchronous ops that don't necessarily
      * need fs to be read-write
      */
-    #[init(AtomicI32::new(1))]
-    pub ro_ref: AtomicI32,
-    /// Woken as it starts and as it stops, and as the last ro_ref is put
+    #[c("u32 ro_ref[2]")]
+    #[pin]
+    #[init(AtomicRef::new(()))]
+    pub(crate) ro_ref: Placed<AtomicRef<()>, crate::at!(Fs.ro_ref)>,
+    /// Woken as it starts and as it stops
     #[pin]
     #[init(RustOnly::new(crate::util::futex::EventCount::new()))]
     pub(crate) ro_ref_events: rust_only!(crate::util::futex::EventCount),
