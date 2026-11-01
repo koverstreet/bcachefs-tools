@@ -36,7 +36,8 @@
 //!
 //! And each field is a Field<N>, one without #[init] is zeroed only if no
 //! placed type lives there, and a placed struct's init() takes its At: a
-//! value's place - place.rs.
+//! value's place - place.rs. A Placed<C, A> field is made with at(), around
+//! its #[init]: the A it names must be its own place, or it won't compile.
 //!
 //! A field `w: ReffedWork<f, R>` - a work item, running fn f, holding a ref
 //! on R's count - is made here too, with all it needs, as the field is the
@@ -92,6 +93,15 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         if has("placed_at") {
             at = Some(ty);
             inits.push(quote!(#name: at,));
+            continue;
+        }
+        if is_placed(ty) {
+            let value = init.unwrap_or_else(|| quote!(::pin_init::zeroed()));
+            let n = name.to_string();
+            inits.push(quote!(#name <- unsafe {
+                crate::util::place::at::<Self, { crate::util::place::name(#n) }, _, crate::errcode::BchError>(
+                    |at| crate::util::place::Placed::new(at, #value))
+            },));
             continue;
         }
         if let (None, Some(func)) = (&init, reffed_work_fn(&parent, name, ty)?) {
@@ -164,6 +174,11 @@ pub(crate) fn initializer(a: &Attribute, name: &Ident) -> syn::Result<TokenStrea
                                                initializer, and the bch_errcode its failure is")))
         }
     }
+}
+
+/// Whether field type @ty is a Placed<C, A>.
+fn is_placed(ty: &Type) -> bool {
+    matches!(ty, Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "Placed"))
 }
 
 // ── ReffedWork fields ───────────────────────────────────────────────────────
