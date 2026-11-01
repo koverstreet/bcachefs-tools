@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::bkey::BkeyI;
 use crate::fs::Fs;
 use crate::c;
 use crate::cstructs::c as cs;
@@ -266,6 +267,19 @@ pub struct btree_root {
     pub alive: u8,
 }
 c_default!(btree_root);
+
+impl btree_root {
+    /// Its value runs on past key, into key_pad.
+    pub fn key(&self) -> &BkeyI {
+        unsafe { &*BkeyI::from_raw(core::ptr::from_ref(self).cast()) }
+    }
+
+    pub fn set_key(&mut self, k: &BkeyI) {
+        let bytes = k.as_bytes();
+        assert!(bytes.len() <= core::mem::offset_of!(btree_root, level), "a btree root's key: {} bytes", bytes.len());
+        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), core::ptr::from_mut(self).cast::<u8>(), bytes.len()) }
+    }
+}
 
 /// root_lock's: each btree's root as the journal and the clean section
 /// record it - key, level, alive. The known btrees', and the rest's, which

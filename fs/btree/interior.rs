@@ -8,13 +8,12 @@
 use core::ffi::{c_ulong, c_int, c_uint};
 use core::mem::size_of;
 use cstruct_macros::{c_export, CStruct, Init, Late, c_const, c_extern, TypeInfo};
-use zerocopy::IntoBytes;
 use crate::c;
 use crate::fs::Fs;
 use crate::journal::entries::{EntryWriter, NoRoom};
 use crate::locking::{Guard, Locked};
 use crate::util::ffi::Opaque;
-use crate::util::vstructs::{plain_bytes, Head};
+use crate::util::vstructs::Head;
 use crate::new_lock;
 use crate::types::c_default;
 use crate::util::Printbuf;
@@ -149,13 +148,6 @@ fn roots<'a>(fs: &'a Fs, root_lock: &'a RootsGuard<'_>, skip: u64)
         .filter_map(move |id| root_lock.get(id).filter(|r| r.alive != 0).map(|r| (id, r)))
 }
 
-/// @r's key: its bkey_i, and its value on into key_pad, as long as it says.
-fn key_parts(r: &c::btree_root) -> [&[u8]; 2] {
-    let bytes = usize::from(r.key.k.u64s) * size_of::<u64>();
-    let head = plain_bytes(&r.key);
-    [head, &r.key_pad.as_bytes()[..bytes - head.len()]]
-}
-
 /// An entry's bytes, for @r's key.
 fn entry_bytes(r: &c::btree_root) -> usize {
     size_of::<Head<c::jset_entry>>() + usize::from(r.key.k.u64s) * size_of::<u64>()
@@ -165,7 +157,7 @@ fn push_roots(fs: &Fs, root_lock: &RootsGuard<'_>, skip: u64, w: &mut EntryWrite
     -> Result<(), NoRoom>
 {
     for (id, r) in roots(fs, root_lock, skip) {
-        w.push(c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_root, id as u8, r.level, &key_parts(r))?;
+        w.push(c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_root, id as u8, r.level, &[r.key().as_bytes()])?;
     }
     Ok(())
 }
