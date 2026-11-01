@@ -200,6 +200,11 @@ pub fn acct(_fs: &Fs, _qid: c::bch_qid, _counter: usize, _v: i64, _mode: c::quot
 }
 
 #[cfg(not(CONFIG_BCACHEFS_QUOTA))]
+pub fn fs_quota_read(_fs: &Fs) -> Result<(), BchError> {
+    Ok(())
+}
+
+#[cfg(not(CONFIG_BCACHEFS_QUOTA))]
 pub fn transfer(_fs: &Fs, _qtypes: u32, _dst: c::bch_qid, _src: c::bch_qid, _space: u64,
                 _mode: c::quota_acct_mode) -> Result<(), BchError> {
     Ok(())

@@ -268,7 +268,7 @@ impl StateLockWrite<'_> {
         Ok(())
     }
 
-    fn start_rw(&self) -> Result<(), BchError> {
+    pub(crate) fn start_rw(&self) -> Result<(), BchError> {
         let fs = self.fs();
         let p = fs.as_ptr();
 

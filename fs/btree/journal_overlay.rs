@@ -309,7 +309,7 @@ impl c::journal_keys {
     /// Nothing else reads or writes the keys, or pre_sort, while it's held:
     /// sorting, before the btree runs; the recovery task, before anything runs
     /// alongside it; the last ref.
-    unsafe fn keys_mut(&self) -> &mut GapBuffer<c::journal_key> {
+    pub(crate) unsafe fn keys_mut(&self) -> &mut GapBuffer<c::journal_key> {
         unsafe { &mut *self.keys.get() }
     }
 
@@ -1028,7 +1028,7 @@ fn journal_seq_is_rewound(fs: &Fs, seq: u64) -> bool {
 
 /// The keys, from the journal entries read - again, if they were already,
 /// as for a rewind recovery decides on after a scrub of the recent entries.
-fn keys_sort(fs: &Fs) -> Result<(), BchError> {
+pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
     let jk = &fs.journal_keys;
     // SAFETY: before the btree runs, the keys are recovery's alone
     let keys = unsafe { jk.keys_mut() };

@@ -904,7 +904,7 @@ pub fn create(
 // ── A new filesystem, an upgrade ─────────────────────────────────────────
 
 /// The root snapshot tree, snapshot and subvolume of a new filesystem.
-fn initialize(fs: &Fs) -> Result<(), BchError> {
+pub(crate) fn initialize(fs: &Fs) -> Result<(), BchError> {
     let mut root_tree = BkeyI::<c::SnapshotTree>::new();
     root_tree.k.p.offset = 1;
     let v = &mut root_tree.v;

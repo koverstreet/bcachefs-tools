@@ -165,7 +165,10 @@ pub unsafe fn bch2_journal_buckets_to_sb(c: &Opaque<Fs>, ca: &Dev,
 /// for devices where it isn't or a v1 field is left.
 #[c_export]
 pub fn bch2_sb_journal_sort(c: &Opaque<Fs>) -> c_int {
-    let fs = Fs::from_c(c);
+    ret_to_c(sb_journal_sort(Fs::from_c(c)))
+}
+
+pub(crate) fn sb_journal_sort(fs: &Fs) -> Result<(), BchError> {
     assert!(fs.sb.clean.get() != 0);
     assert!(!fs.flags.get(c::bch_fs_flags::BCH_FS_rw));
 
@@ -192,5 +195,5 @@ pub fn bch2_sb_journal_sort(c: &Opaque<Fs>) -> c_int {
         }
     }
 
-    ret_to_c(if dirty { fs.write_super_ret(&mut sb) } else { Ok(()) })
+    if dirty { fs.write_super_ret(&mut sb) } else { Ok(()) }
 }

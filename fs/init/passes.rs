@@ -543,10 +543,13 @@ pub fn run_lock(fs: &Fs) -> Guard<'_, c::mutex> {
 
 /// Recovery done through @pass, without the runner: a new filesystem's,
 /// which has nothing to recover.
+pub(crate) fn set_pass_done(fs: &Fs, pass: Pass) {
+    lock(fs).published().pass_done.set(pass);
+}
+
 #[c_export]
 pub fn bch2_recovery_set_pass_done(c: &Opaque<Fs>, pass: c::bch_recovery_pass) {
-    let fs = Fs::from_c(c);
-    lock(fs).published().pass_done.set(pass);
+    set_pass_done(Fs::from_c(c), pass)
 }
 
 // ── Scheduling ───────────────────────────────────────────────────────────────

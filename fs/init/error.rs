@@ -838,15 +838,23 @@ pub fn __bch2_count_fsck_err(c: &Opaque<Fs>, id: c::bch_sb_error_id, msg: &mut P
     count_fsck_err(Fs::from_c(c), id, msg)
 }
 
+pub(crate) fn fsck_errs_seen(fs: &Fs) -> bool {
+    !fs.errors.state.lock().msgs.is_empty()
+}
+
 #[c_export]
 pub fn bch2_fsck_errs_seen(c: &Opaque<Fs>) -> bool {
-    !Fs::from_c(c).errors.state.lock().msgs.is_empty()
+    fsck_errs_seen(Fs::from_c(c))
+}
+
+#[c_export]
+pub fn bch2_fsck_err_counts_to_text(out: &mut Printbuf, c: &Opaque<Fs>) {
+    fsck_err_counts_to_text(out, Fs::from_c(c))
 }
 
 /// Each kind of error seen, and how often: most often first.
-#[c_export]
-pub fn bch2_fsck_err_counts_to_text(out: &mut Printbuf, c: &Opaque<Fs>) {
-    let mut st = Fs::from_c(c).errors.state.lock();
+pub(crate) fn fsck_err_counts_to_text(out: &mut Printbuf, fs: &Fs) {
+    let mut st = fs.errors.state.lock();
     st.msgs.sort_unstable_by(|l, r| r.nr.cmp(&l.nr));
     for s in st.msgs.iter() {
         s.id.to_text(out);
@@ -856,7 +864,7 @@ pub fn bch2_fsck_err_counts_to_text(out: &mut Printbuf, c: &Opaque<Fs>) {
 
 /// The errors' states freed - the ratelimited ones' counts printed if
 /// @print: at the end of fsck, or with nothing printed, at teardown.
-fn flush_fsck_errs(fs: &Fs, print: bool) {
+pub(crate) fn flush_fsck_errs(fs: &Fs, print: bool) {
     let msgs = core::mem::take(&mut fs.errors.state.lock().msgs);
     for s in msgs.iter() {
         if let (true, true, Some(m)) = (print, s.ratelimited, &s.last_msg) {
@@ -963,10 +971,13 @@ pub fn damaged_path_to_text(out: &mut Printbuf, trans: &BtreeTrans<'_>, p: &c::f
     out.newline();
 }
 
-/// The paths fsck damaged: the first DAMAGED_PATHS_PRINT, then how many more.
 #[c_export]
 pub fn bch2_fsck_damaged_paths_to_text(out: &mut Printbuf, c: &Opaque<Fs>) {
-    let fs = Fs::from_c(c);
+    fsck_damaged_paths_to_text(out, Fs::from_c(c))
+}
+
+/// The paths fsck damaged: the first DAMAGED_PATHS_PRINT, then how many more.
+pub(crate) fn fsck_damaged_paths_to_text(out: &mut Printbuf, fs: &Fs) {
     let (nr, alloc_err) = {
         let st = fs.errors.state.lock();
         (st.damaged_paths.len(), st.damaged_paths_alloc_err)

@@ -173,13 +173,15 @@ fn resume_logged_ops(fs: &Fs, early: bool) -> Result<(), BchError> {
  * An op keeps its slot until it's finished, and only recovery finishes these,
  * so a slot noted here still holds the same op when its resume pass comes.
  */
+pub(crate) fn note_unfinished(fs: &Fs) -> Result<(), BchError> {
+    for_each_logged_op(fs, |_, k| {
+        Ok(fs.logged_ops.unfinished.lock().push(k.k.p.offset, GFP_KERNEL)?)
+    })
+}
+
 #[c_export]
 pub fn bch2_logged_ops_note_unfinished(c: &Opaque<Fs>) -> c_int {
-    let fs = Fs::from_c(c);
-
-    ret_to_c(for_each_logged_op(fs, |_, k| {
-        Ok(fs.logged_ops.unfinished.lock().push(k.k.p.offset, GFP_KERNEL)?)
-    }))
+    ret_to_c(note_unfinished(Fs::from_c(c)))
 }
 
 crate::recovery_pass!(bch2_resume_logged_ops_early => |fs| resume_logged_ops(fs, true));

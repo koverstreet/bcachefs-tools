@@ -1435,7 +1435,7 @@ fn table_rebuild(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
 
 /// The table, from the btree - and the deletions it finds to schedule: the
 /// snapshots_read recovery pass.
-fn snapshots_read(fs: &Fs) -> Result<(), BchError> {
+pub(crate) fn snapshots_read(fs: &Fs) -> Result<(), BchError> {
     // It's important that we check if we need to reconstruct snapshots before
     // going RW, so we mark that pass as required in the superblock -
     // otherwise, we could end up deleting keys with missing snapshot nodes

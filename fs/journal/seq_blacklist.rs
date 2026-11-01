@@ -250,8 +250,11 @@ pub fn blacklist_table_initialize(fs: &Fs) -> Result<(), BchError> {
 pub fn bch2_blacklist_entries_gc(c: &Opaque<Fs>) -> bool {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock, with recovery's last superblock update
-    let mut guard = unsafe { fs.sb_lock_held() };
-    let mut sb = fs.sb_resize(&mut guard);
+    blacklist_entries_gc(fs, &mut unsafe { fs.sb_lock_held() })
+}
+
+pub(crate) fn blacklist_entries_gc(fs: &Fs, guard: &mut SbLockGuard<'_>) -> bool {
+    let mut sb = fs.sb_resize(guard);
     let Some(f) = sb.field_mut::<Section>() else { return false };
     let bl = &mut f.start;
     let nr = bl.len();
