@@ -269,15 +269,13 @@ impl Fs {
     /// for it.
     pub(crate) fn write_points_init(&self) {
         let a = &self.allocator;
-        let mut hg = a.write_points_hash_lock.lock();
-        hg.published().write_points_nr.set(a.write_points.len() as c_uint);
+        a.write_points_hash_lock.lock().published().write_points_nr.set(a.write_points.len() as c_uint);
 
         for (i, wp) in a.write_points.iter().enumerate() {
-            {
-                let mut g = wp.alloc.lock.lock();
-                g.published().last_used.set(local_clock());
-                g.published().write_point.set(core::ptr::from_ref(wp) as c_ulong);
-            }
+            let mut g = wp.alloc.lock.lock();
+            let mut hg = a.write_points_hash_lock.lock();
+            g.published().last_used.set(local_clock());
+            g.published().write_point.set(core::ptr::from_ref(wp) as c_ulong);
             a.wp_hash_add(&mut hg, c::WritePointIdx::new(i));
         }
     }
