@@ -30,9 +30,10 @@
 //!
 //! - Volatile words: Volatile, a word read by anyone and written one writer
 //!   at a time - not an atomic, whose writers race each other - and
-//!   VolatileWriter, it as its writer has it. A value of more words is one
-//!   only if it's TearSafe: a reader may see it torn, and its type says
-//!   that's fine. They stay; their places go.
+//!   VolatileWriter, it as its writer has it; VolatilePublish, one set only
+//!   by showing the guard of the lock that publishes it. A value of more
+//!   words is one only if it's TearSafe: a reader may see it torn, and its
+//!   type says that's fine. They stay; their places go.
 //!
 //! - Published once: PublishedOnce, a value set once by its lock's holder
 //!   and read by anyone from then on - a key a running filesystem gains,
@@ -61,6 +62,7 @@ use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
                          AtomicU64, AtomicU8, AtomicUsize, Ordering};
 
+use crate::locking::{Guard, RawLock};
 use crate::util::vstructs::{Native, Plain};
 
 // ── Places ───────────────────────────────────────────────────────────────
@@ -426,6 +428,36 @@ impl<T: AtomicWord> FakePlaceRead for VolatileWriter<T> {
 impl<T: AtomicWord> FakePlaceWrite for VolatileWriter<T> {
     fn set(&self, v: T) {
         VolatileWriter::set(self, v)
+    }
+}
+
+/// A Volatile word published by the lock that protects a @G: read by anyone,
+/// set by whoever shows its guard.
+#[repr(transparent)]
+#[derive(::pin_init::Zeroable)]
+pub struct VolatilePublish<T: AtomicWord, G>(Volatile<T>, PhantomData<fn() -> G>);
+
+impl<T: AtomicWord, G> VolatilePublish<T, G> {
+    pub fn get(&self) -> T {
+        self.0.get()
+    }
+
+    /// get(), and what the set_release() that stored it was ordered after.
+    pub fn get_acquire(&self) -> T {
+        let v = self.0.get();
+        core::sync::atomic::fence(Ordering::Acquire);
+        v
+    }
+
+    pub fn set<R: RawLock, P>(&self, v: T, _: &Guard<'_, R, G, P>) {
+        self.0.set(v)
+    }
+
+    /// set(), ordered after the stores before it: for what get_acquire()'s
+    /// reader goes on to read.
+    pub fn set_release<R: RawLock, P>(&self, v: T, _: &Guard<'_, R, G, P>) {
+        core::sync::atomic::fence(Ordering::Release);
+        self.0.set(v)
     }
 }
 
