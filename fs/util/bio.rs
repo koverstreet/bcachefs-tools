@@ -35,21 +35,25 @@
 //! it's over c::bio here, in both builds - the shim's bio_vec laid out as the
 //! kernel's.
 
+use core::ffi::c_ulong;
 use core::future::Future;
 use core::marker::{PhantomData, PhantomPinned};
 use core::pin::Pin;
 use core::ptr::NonNull;
+use core::sync::atomic::Ordering::Relaxed;
 use core::task::{ready, Context, Poll};
 
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
+use crate::util::backtrace::prt_symbol;
+use crate::util::printbuf::prt_bdevname;
 use crate::util::task::{waiter, Completion, Done};
 use crate::util::gather::GatherRef;
 use crate::util::task::Resumable;
 use crate::util::{Printbuf, ToText};
 use crate::util::volatile::VolatileSlice;
 use crate::util::place::Contained;
-use cstruct_macros::{c_extern, Init};
+use cstruct_macros::{c_export, Init};
 use pin_init::pin_data;
 
 mod iter;
@@ -69,12 +73,12 @@ pub use owned::{of_bio, BioBox, BioBuf, BioBufPtr, BioClone, BioEnd, BioField, B
 #[macro_use]
 mod compat {
     #[cfg(linux_ge = "7.3")]
-    macro_rules! bi_offset { ($i:expr) => { $i.bi_offset } }
+    macro_rules! bi_offset { (@name) => { "bi_offset" }; ($i:expr) => { $i.bi_offset } }
     #[cfg(not(linux_ge = "7.3"))]
-    macro_rules! bi_offset { ($i:expr) => { $i.bi_bvec_done } }
+    macro_rules! bi_offset { (@name) => { "bi_bvec_done" }; ($i:expr) => { $i.bi_bvec_done } }
 }
 #[cfg(not(kernel))]
-macro_rules! bi_offset { ($i:expr) => { $i.bi_bvec_done } }
+macro_rules! bi_offset { (@name) => { "bi_bvec_done" }; ($i:expr) => { $i.bi_bvec_done } }
 
 pub fn reset_bvec_offset(iter: &mut c::bvec_iter) {
     bi_offset!(iter) = 0;
@@ -227,6 +231,19 @@ impl Bio {
         iter.bi_size = bytes;
     }
 
+    /// A random u64 of its data overwritten: the debug corrupt ratios'.
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    pub fn corrupt(self: Pin<&mut Self>) {
+        use crate::util::kernel::{random_u64, random_u64_below};
+        let u64s = self.bio.bi_iter.bi_size / 8;
+        if u64s == 0 {
+            return;
+        }
+        let mut r = self.range();
+        r.advance(random_u64_below(u64s.into()) as u32 * 8);
+        r.take(8).copy_from(&random_u64().to_ne_bytes());
+    }
+
     pub fn set_sector(self: Pin<&mut Self>, sector: u64) {
         self.raw_mut().bi_iter.bi_sector = sector;
     }
@@ -258,15 +275,83 @@ impl Bio {
     }
 }
 
-c_extern! {
-    fn bch2_bio_to_text(out: *mut Printbuf, bio: *mut c::bio);
+/// # Safety
+/// @bio is a bio, not in flight, nothing else has it.
+#[cfg(CONFIG_BCACHEFS_DEBUG)]
+#[c_export]
+pub unsafe fn bch2_corrupt_bio(bio: *mut c::bio) {
+    unsafe { Bio::from_raw_mut(bio) }.corrupt()
 }
+
+fn request_op_str(op: u32) -> &'static str {
+    macro_rules! ops {
+        ($($op:ident),*) => { ::paste::paste! {
+            match op {
+                $(c::[<req_op_ $op>] => stringify!($op),)*
+                _ => "(null)",
+            }
+        } };
+    }
+    ops!(REQ_OP_READ, REQ_OP_WRITE, REQ_OP_FLUSH, REQ_OP_DISCARD, REQ_OP_SECURE_ERASE, REQ_OP_ZONE_APPEND,
+         REQ_OP_WRITE_ZEROES, REQ_OP_ZONE_OPEN, REQ_OP_ZONE_CLOSE, REQ_OP_ZONE_FINISH, REQ_OP_ZONE_RESET,
+         REQ_OP_ZONE_RESET_ALL, REQ_OP_DRV_IN, REQ_OP_DRV_OUT)
+}
+
+const REQUEST_FLAG_STRS: &[&str] = &[
+    "REQ_FAILFAST_DEV", "REQ_FAILFAST_TRANSPORT", "REQ_FAILFAST_DRIVER", "REQ_SYNC", "REQ_META", "REQ_PRIO",
+    "REQ_NOMERGE", "REQ_IDLE", "REQ_INTEGRITY", "REQ_FUA", "REQ_PREFLUSH", "REQ_RAHEAD", "REQ_BACKGROUND",
+    "REQ_NOWAIT", "REQ_POLLED", "REQ_ALLOC_CACHE", "REQ_SWAP", "REQ_DRV", "REQ_FS_PRIVATE", "REQ_ATOMIC",
+    "REQ_P2PDMA", "REQ_NOUNMAP",
+];
+
+const BIO_FLAG_STRS: &[&str] = &[
+    "BIO_PAGE_PINNED", "BIO_CLONED", "BIO_QUIET", "BIO_CHAIN", "BIO_REFFED", "BIO_BPS_THROTTLED",
+    "BIO_TRACE_COMPLETION", "BIO_CGROUP_ACCT", "BIO_QOS_THROTTLED", "BIO_QOS_MERGED", "BIO_REMAPPED",
+    "BIO_ZONE_WRITE_PLUGGING", "BIO_EMULATES_ZONE_APPEND",
+];
 
 impl ToText for Bio {
     #[cold]
     fn to_text(&self, out: &mut Printbuf) {
-        unsafe { bch2_bio_to_text(out.as_raw(), core::ptr::from_ref(&self.bio).cast_mut()) }
+        let b = &self.bio;
+        if out.nr_tabstops() == 0 {
+            out.tabstop_push(24);
+        }
+
+        write!(out, "bi_bdev:\t");
+        prt_bdevname(out, unsafe { b.bi_bdev.as_ref() });
+        out.newline();
+
+        write!(out, "bi_opf:\t{} ", request_op_str(self.op()));
+        out.bitflags(REQUEST_FLAG_STRS, (b.bi_opf >> c::REQ_OP_BITS).into());
+        out.newline();
+
+        write!(out, "bi_flags:\t");
+        out.bitflags(BIO_FLAG_STRS, b.bi_flags.into());
+        out.newline();
+
+        write!(out, "bi_status:\t{}\n", b.bi_status);
+
+        write!(out, "bi_iter.bi_sector\t{}\n", { b.bi_iter.bi_sector });
+        write!(out, "bi_iter.bi_size\t{}\n", b.bi_iter.bi_size);
+        write!(out, "bi_iter.bi_idx\t{}\n", b.bi_iter.bi_idx);
+        write!(out, concat!("bi_iter.", bi_offset!(@name), "\t{}\n"), bi_offset!(b.bi_iter));
+
+        write!(out, "bi_remaining:\t{}\n", HasBio::remaining(self).count().load(Relaxed) as u32);
+        write!(out, "bi_end_io:\t");
+        prt_symbol(out, b.bi_end_io.map_or(0, |f| f as usize as c_ulong));
+        out.newline();
+
+        write!(out, "bi_vcnt\t{}\n", b.bi_vcnt);
+        write!(out, "bi_max_vecs\t{}\n", b.bi_max_vecs);
     }
+}
+
+/// # Safety
+/// @bio is a bio, not in flight.
+#[c_export]
+pub unsafe fn bch2_bio_to_text(out: &mut Printbuf, bio: *mut c::bio) {
+    unsafe { Bio::from_raw(bio) }.to_text(out)
 }
 
 /// # Safety

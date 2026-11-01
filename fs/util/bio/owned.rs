@@ -109,7 +109,7 @@ impl<T: HasBio> Remaining<T> {
         bio_of(core::ptr::from_ref(&self.0).cast_mut())
     }
 
-    fn count(&self) -> &AtomicI32 {
+    pub(super) fn count(&self) -> &AtomicI32 {
         unsafe { AtomicI32::from_ptr(&raw mut (*self.bio()).__bi_remaining.counter) }
     }
 
