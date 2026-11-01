@@ -811,15 +811,13 @@ impl c::bch_fs_snapshots {
         SnapshotAccounting(core::array::from_fn(|_| {
             let btree = btrees.next().expect("NR_SNAPSHOT_BTREES is the mask's popcount");
 
-            let mut v = [0u64; 3];
-            crate::accounting::mem_read(fs, &c::disk_accounting_pos::from_arm(
-                    c::bch_acct_snapshot { id, btree: btree.0 }), &mut v);
+            let v = crate::accounting::read(fs, crate::accounting::Snapshot { id, btree: btree.0 });
 
             BtreeAccounting {
                 btree,
-                keys:      if trust_keys { v[0] } else { 0 },
-                key_bytes: if trust_keys { v[1] } else { 0 },
-                sectors:   v[2],
+                keys:      if trust_keys { v.keys } else { 0 },
+                key_bytes: if trust_keys { v.key_bytes } else { 0 },
+                sectors:   v.sectors,
             }
         }))
     }
@@ -1600,13 +1598,10 @@ fn node_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, id: u32) -> Result
             }
             out.tab();
 
-            // external_sectors is counter 2, and only the extents btree
-            // (btree 0, the default here) carries it - so this one read is
-            // the snapshot's total on-disk usage.
-            let mut v = [0u64; 3];
-            crate::accounting::mem_read(t.fs(), &c::disk_accounting_pos::from_arm(
-                    c::bch_acct_snapshot { id, btree: 0 }), &mut v);
-            prt!(out, "{}\r", HumanReadable(v[2] << 9));
+            // only the extents btree (btree 0, the default here) carries
+            // sectors - so this one read is the snapshot's total on-disk usage.
+            let v = crate::accounting::read(t.fs(), crate::accounting::Snapshot { id, btree: 0 });
+            prt!(out, "{}\r", HumanReadable(v.sectors << 9));
         }
     }
     out.newline();

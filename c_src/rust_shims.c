@@ -265,11 +265,3 @@ int rust_link_data(struct bch_fs *c,
 
 	return 0;
 }
-
-/* Accounting read shim */
-
-void rust_accounting_mem_read(struct bch_fs *c, struct bpos p,
-			      u64 *v, unsigned nr)
-{
-	bch2_accounting_mem_read(c, p, v, nr);
-}

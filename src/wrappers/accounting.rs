@@ -110,7 +110,7 @@ fn parse_accounting_entries(data: &[u8]) -> anyhow::Result<Vec<AccountingEntry>>
             if need_swab {
                 unsafe { c::bch2_bpos_swab(&mut p) };
             }
-            Ok(AccountingEntry { pos: c::disk_accounting_pos::from_bpos(p), counters: a.v().d.to_vec() })
+            Ok(AccountingEntry { pos: DiskAccountingPos::from_bpos(p), counters: a.v().d.to_vec() })
         })
         .collect()
 }

@@ -504,7 +504,7 @@ fn ptr_available(t: &TransAttempt<'_, '_>, n: &c::Snapshot, n_id: u32, role: Rol
 /// btree. Keys as well as sectors: a snapshot of only dirents or xattrs has no
 /// sectors.
 fn has_accounting(fs: &Fs, id: u32) -> bool {
-    accounting::snapshot_btrees(fs, id).any(|v| v.iter().any(|&x| x != 0))
+    accounting::snapshot_btrees(fs, id).any(|v| v != Default::default())
 }
 
 /// Commit an edge repair, have the table rebuilt, and restart: decisions

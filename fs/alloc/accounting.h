@@ -6,6 +6,7 @@
 #include "sb/members.h"
 #include "util/eytzinger.h"
 
+#include "alloc/accounting_mem_gen.h"
 
 static inline void bch2_u64s_neg(u64 *v, unsigned nr)
 {
@@ -44,8 +45,6 @@ static inline void bch2_accounting_accumulate(struct bkey_i_accounting *dst,
 		dst->k.bversion = src.k->bversion;
 }
 
-void __bch2_accounting_maybe_kill(struct bch_fs *, struct bpos pos);
-
 static inline void bch2_accounting_accumulate_maybe_kill(struct bch_fs *c,
 							 struct bkey_i_accounting *dst,
 							 struct bkey_s_c_accounting src)
@@ -54,26 +53,6 @@ static inline void bch2_accounting_accumulate_maybe_kill(struct bch_fs *c,
 
 	if (bch2_accounting_key_is_zero(accounting_i_to_s_c(dst)))
 		__bch2_accounting_maybe_kill(c, dst->k.p);
-}
-
-static inline void fs_usage_data_type_to_base(struct bch_fs_usage_base *fs_usage,
-					      enum bch_data_type data_type,
-					      s64 sectors)
-{
-	switch (data_type) {
-	case BCH_DATA_btree:
-		fs_usage->btree		+= sectors;
-		break;
-	case BCH_DATA_user:
-	case BCH_DATA_parity:
-		fs_usage->data		+= sectors;
-		break;
-	case BCH_DATA_cached:
-		fs_usage->cached	+= sectors;
-		break;
-	default:
-		break;
-	}
 }
 
 static inline void bpos_to_disk_accounting_pos(struct disk_accounting_pos *acc, struct bpos p)
@@ -85,26 +64,6 @@ static inline void bpos_to_disk_accounting_pos(struct disk_accounting_pos *acc, 
 #else
 	memcpy_swab(acc, &p, sizeof(p));
 #endif
-}
-
-static inline struct bpos disk_accounting_pos_to_bpos(struct disk_accounting_pos *acc)
-{
-	struct bpos p;
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-	p = acc->_pad;
-#else
-	memcpy_swab(&p, acc, sizeof(p));
-#endif
-	return p;
-}
-
-static inline int bch2_disk_accounting_mod(struct btree_trans *trans,
-			     struct disk_accounting_pos *k,
-			     s64 *d, unsigned nr, bool gc)
-{
-	return likely(!gc)
-		? bch2_disk_accounting_mod_normal(trans, k, d, nr)
-		: bch2_disk_accounting_mod_gc(trans, k, d, nr);
 }
 
 #define disk_accounting_key_init(_k, _type, ...)			\
@@ -121,32 +80,11 @@ do {									\
 	bch2_disk_accounting_mod(trans, &pos, _v, ARRAY_SIZE(_v), _gc);	\
 })
 
-int bch2_mod_dev_cached_sectors(struct btree_trans *, unsigned, s64, bool);
-
-int bch2_accounting_validate(struct bch_fs *, struct bkey_s_c,
-			     const struct bkey_validate_context *);
-void bch2_accounting_key_to_text(struct printbuf *, struct bch_fs *, struct disk_accounting_pos *);
-void bch2_accounting_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
-void bch2_accounting_swab(const struct bch_fs *, struct bkey_s);
-
 #define bch2_bkey_ops_accounting ((struct bkey_ops) {	\
 	.key_validate	= bch2_accounting_validate,	\
 	.val_to_text	= bch2_accounting_to_text,	\
 	.swab		= bch2_accounting_swab,		\
 })
-
-int bch2_accounting_update_sb(struct btree_trans *);
-
-static inline int accounting_pos_cmp(const void *_l, const void *_r)
-{
-	const struct bpos *l = _l, *r = _r;
-
-	return bpos_cmp(*l, *r);
-}
-
-int bch2_accounting_mem_insert(struct bch_fs *, struct bkey_s_c_accounting, enum bch_accounting_mode);
-int bch2_accounting_mem_insert_locked(struct bch_fs *, struct bkey_s_c_accounting, enum bch_accounting_mode);
-void bch2_accounting_mem_gc(struct bch_fs *);
 
 static inline bool bch2_accounting_is_mem(struct disk_accounting_pos *acc)
 {
@@ -162,123 +100,6 @@ static inline bool bch2_bkey_is_accounting_mem(struct bkey *k)
 	struct disk_accounting_pos acc_k;
 	bpos_to_disk_accounting_pos(&acc_k, k->p);
 	return bch2_accounting_is_mem(&acc_k);
-}
-
-/*
- * Update in memory counters so they match the btree update we're doing; called
- * from transaction commit path
- */
-static __always_inline
-int bch2_accounting_mem_add_inlined(struct btree_trans *trans,
-				   struct bkey_s_c_accounting a,
-				   enum bch_accounting_mode mode,
-				   bool write_locked)
-{
-	struct bch_fs *c = trans->c;
-	struct bch_accounting_mem *acc = &c->accounting;
-	struct disk_accounting_pos acc_k;
-	bpos_to_disk_accounting_pos(&acc_k, a.k->p);
-	bool gc = mode == BCH_ACCOUNTING_gc;
-
-	if (gc && !acc->gc_running)
-		return 0;
-
-	if (!bch2_accounting_is_mem(&acc_k))
-		return 0;
-
-	if (mode == BCH_ACCOUNTING_normal) {
-		switch (acc_k.type) {
-		case BCH_DISK_ACCOUNTING_persistent_reserved:
-			trans->fs_usage_delta.reserved += acc_k.persistent_reserved.nr_replicas * a.v->d[0];
-			break;
-		case BCH_DISK_ACCOUNTING_replicas:
-			fs_usage_data_type_to_base(&trans->fs_usage_delta, acc_k.replicas.data_type, a.v->d[0]);
-			break;
-		case BCH_DISK_ACCOUNTING_dev_data_type: {
-			guard(rcu)();
-			const enum bch_data_type data_type = acc_k.dev_data_type.data_type;
-			struct bch_dev *ca = bch2_dev_rcu_noerror(c, acc_k.dev_data_type.dev);
-			if (ca) {
-				this_cpu_add(ca->usage->d[data_type].buckets, a.v->d[0]);
-				this_cpu_add(ca->usage->d[data_type].sectors, a.v->d[1]);
-				this_cpu_add(ca->usage->d[data_type].fragmented, a.v->d[2]);
-
-				if (data_type == BCH_DATA_sb || data_type == BCH_DATA_journal)
-					trans->fs_usage_delta.hidden += a.v->d[0] * ca->mi.bucket_size;
-			}
-			break;
-		}
-		}
-	}
-
-	unsigned idx;
-
-	while ((idx = eytzinger0_find(acc->k.data, acc->k.nr, sizeof(acc->k.data[0]),
-				      accounting_pos_cmp, &a.k->p)) >= acc->k.nr) {
-		if (unlikely(write_locked))
-			try(bch2_accounting_mem_insert_locked(c, a, mode));
-		else
-			try(bch2_accounting_mem_insert(c, a, mode));
-	}
-
-	struct accounting_mem_entry *e = &acc->k.data[idx];
-
-	const unsigned nr = min_t(unsigned, bch2_accounting_counters(a.k), e->nr_counters);
-
-	for (unsigned i = 0; i < nr; i++)
-		this_cpu_add(e->v[gc][i], a.v->d[i]);
-	return 0;
-}
-
-int bch2_accounting_mem_add(struct btree_trans *, struct bkey_s_c_accounting,
-			    enum bch_accounting_mode, bool);
-
-static inline void bch2_accounting_mem_read_counters(struct bch_accounting_mem *acc,
-						     unsigned idx, u64 *v, unsigned nr, bool gc)
-{
-	memset(v, 0, sizeof(*v) * nr);
-
-	if (unlikely(idx >= acc->k.nr))
-		return;
-
-	struct accounting_mem_entry *e = &acc->k.data[idx];
-
-	nr = min_t(unsigned, nr, e->nr_counters);
-
-	for (unsigned i = 0; i < nr; i++)
-		v[i] = percpu_u64_get(e->v[gc] + i);
-}
-
-static inline void bch2_accounting_mem_read_locked(struct bch_fs *c, struct bpos p,
-						   u64 *v, unsigned nr)
-{
-	percpu_rwsem_assert_held(&c->capacity.mark_lock.lock);
-
-	/*
-	 * Types not in the mem table read back as zeros - not an error, a
-	 * silently wrong answer: bch2_snapshot_node_check_no_data()'s empty
-	 * check read zeros from the day it was added, licensing no_keys
-	 * transitions that stranded live keys. Non-mem types must be read
-	 * from the accounting btree.
-	 */
-	EBUG_ON(({
-		struct disk_accounting_pos acc_k;
-		bpos_to_disk_accounting_pos(&acc_k, p);
-		!bch2_accounting_is_mem(&acc_k);
-	}));
-
-	struct bch_accounting_mem *acc = &c->accounting;
-	unsigned idx = eytzinger0_find(acc->k.data, acc->k.nr, sizeof(acc->k.data[0]),
-				       accounting_pos_cmp, &p);
-
-	bch2_accounting_mem_read_counters(acc, idx, v, nr, false);
-}
-
-static inline void bch2_accounting_mem_read(struct bch_fs *c, struct bpos p,
-					    u64 *v, unsigned nr)
-{
-	guard(percpu_read_noio)(&c->capacity.mark_lock);
-	bch2_accounting_mem_read_locked(c, p, v, nr);
 }
 
 static inline struct bversion journal_pos_to_bversion(struct journal_res *res, unsigned offset)
@@ -301,7 +122,7 @@ static inline int bch2_accounting_trans_commit_hook(struct btree_trans *trans,
 	EBUG_ON(bversion_zero(a->k.bversion));
 
 	return likely(!(commit_flags & BCH_TRANS_COMMIT_skip_accounting_apply))
-		? bch2_accounting_mem_add_inlined(trans, accounting_i_to_s_c(a), BCH_ACCOUNTING_normal, false)
+		? bch2_accounting_mem_add(trans, bkey_i_to_s_c(&a->k_i))
 		: 0;
 }
 
@@ -313,33 +134,9 @@ static inline void bch2_accounting_trans_commit_revert(struct btree_trans *trans
 		struct bkey_s_accounting a = accounting_i_to_s(a_i);
 
 		bch2_accounting_neg(a);
-		bch2_accounting_mem_add(trans, a.c, BCH_ACCOUNTING_normal, false);
+		bch2_accounting_mem_add(trans, bkey_i_to_s_c(&a_i->k_i));
 		bch2_accounting_neg(a);
 	}
 }
-
-int bch2_fs_replicas_usage_read(struct bch_fs *, darray_char *);
-int bch2_fs_accounting_read(struct bch_fs *, darray_char *, unsigned);
-int bch2_fs_accounting_read_key(struct btree_trans *, struct disk_accounting_pos *, u64 *, unsigned);
-
-#define bch2_fs_accounting_read_key2(_trans, _v, ...)			\
-({									\
-	struct disk_accounting_pos pos;					\
-	disk_accounting_key_init(pos, __VA_ARGS__);			\
-	bch2_fs_accounting_read_key(trans, &pos, _v, ARRAY_SIZE(_v));	\
-})
-
-int bch2_gc_accounting_start(struct bch_fs *);
-int bch2_gc_accounting_done(struct bch_fs *);
-
-int bch2_accounting_read(struct bch_fs *);
-
-int bch2_dev_usage_remove(struct bch_fs *, struct bch_dev *);
-int bch2_dev_usage_init(struct bch_dev *, bool);
-
-void bch2_verify_accounting_clean(struct bch_fs *c);
-
-void bch2_accounting_gc_free(struct bch_fs *);
-void bch2_fs_accounting_exit(struct bch_fs *);
 
 #endif /* _BCACHEFS_DISK_ACCOUNTING_H */

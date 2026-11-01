@@ -751,7 +751,10 @@ pub struct Fs {
     pub gc: c::bch_fs_gc,
     pub gc_gens: c::bch_fs_gc_gens,
 
-    pub accounting: c::bch_accounting_mem,
+    /// The in-memory accounting table, under mark_lock.
+    #[pin]
+    #[init(RustOnly::new(LockedBy::new(crate::alloc::accounting_mem::Table::default(), ())))]
+    pub(crate) accounting: rust_only!(LockedBy<crate::alloc::accounting_mem::Table>),
     /// The replicas table, behind its own lock: alloc/replicas.rs's alone.
     #[pin]
     #[init(RustOnly::new(crate::new_lock!(crate::alloc::replicas::ReplicasCpu::new(), "&c->replicas")))]

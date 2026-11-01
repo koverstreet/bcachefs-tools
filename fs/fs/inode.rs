@@ -1451,8 +1451,8 @@ pub fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), B
 
     let nr = bkey_is_inode(op.new.k) as i64 - bkey_is_inode(op.old.k) as i64;
     if op.flags.intersects(UpdateTriggerFlags::TRANSACTIONAL | UpdateTriggerFlags::GC) && nr != 0 {
-        crate::accounting::add(t, &c::disk_accounting_pos::from_arm(c::bch_acct_nr_inodes {}),
-                               &[nr], op.flags.contains(UpdateTriggerFlags::GC))?;
+        crate::accounting::add(t, crate::accounting::NrInodes {}, crate::accounting::NrInodesCounters { nr },
+                               op.flags.contains(UpdateTriggerFlags::GC))?;
     }
 
     if op.flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {

@@ -212,9 +212,9 @@ fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, s: 
 /// Whether copygc will run on any of @devs - would free buckets there:
 /// copygc_can_run_on_devs().
 fn copygc_can_run_on_devs(fs: &Fs, devs: &c::bch_devs_mask) -> bool {
-    let _mark = fs.mark_lock().read();
+    let mark = fs.mark_lock().read();
     let rcu = read_lock();
-    let any = fs.devs_rcu_in(devs.d.iter(), &rcu).any(|ca| copygc::dev_wait_amount(ca).0 <= 0);
+    let any = fs.devs_rcu_in(devs.d.iter(), &rcu).any(|ca| copygc::dev_wait_amount(ca, &mark).0 <= 0);
     any
 }
 

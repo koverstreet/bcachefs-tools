@@ -241,7 +241,7 @@ impl DevDrop<'_> {
                               c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
 
         let user = c::bch_data_type::BCH_DATA_user;
-        accounting::add(t, &bkey_replicas_acct(fs, s.as_sc().untyped(), user), &[-sectors], false)?;
+        accounting::add_at(t, &bkey_replicas_acct(fs, s.as_sc().untyped(), user), &[-sectors], false)?;
 
         for p in s.v_mut().block_ptrs_mut().iter_mut().filter(|p| u32::from(p.dev()) == self.dev) {
             p.set_dev(c::BCH_SB_MEMBER_INVALID as u8);
@@ -250,7 +250,7 @@ impl DevDrop<'_> {
         // made of the device
         s.v_mut().bits.set_needs_reconcile(1u8.into());
 
-        accounting::add(t, &bkey_replicas_acct(fs, s.as_sc().untyped(), user), &[sectors], false)
+        accounting::add_at(t, &bkey_replicas_acct(fs, s.as_sc().untyped(), user), &[sectors], false)
     }
 
     fn usrdata(&mut self, fs: &Fs, progress: &Progress<'_>) -> Result<(), BchError> {

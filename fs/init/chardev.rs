@@ -41,11 +41,12 @@ use crate::util::ffi::Opaque;
 use crate::types::CStatic;
 use crate::util::file::{File, FileOps, FileVTable, UserBuf};
 use crate::util::ioctl::{arg, inout, input, output, vstruct, Ioctl, UserArg, UserStr, UserVstruct};
-use crate::util::alloc::{darray_take, flags::GFP_KERNEL, KBox, KVVec};
+use crate::util::alloc::{flags::GFP_KERNEL, KBox, KVVec};
 use crate::util::rcu::read_lock;
 use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::plain_bytes;
 use crate::accounting;
+use crate::alloc::accounting_mem;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags};
 use crate::btree_trans;
 use core::mem::offset_of;
@@ -190,11 +191,7 @@ fn fs_usage(fs: &Fs, user: UserArg<c::bch_ioctl_fs_usage>) -> Result<(), BchErro
     }
     let entries_bytes = user.read()?.replica_entries_bytes;
 
-    let mut d = c::darray_char::default();
-    let ret = ret_to_result_void(unsafe { c::bch2_fs_replicas_usage_read(fs.as_ptr().cast(), &mut d) });
-    // SAFETY: C's darray, filled
-    let replicas = unsafe { darray_take(&mut d) };
-    ret?;
+    let replicas = accounting_mem::replicas_usage_read(fs)?;
     if (entries_bytes as usize) < replicas.len() {
         return Err(c::ERANGE.into());
     }
@@ -209,8 +206,7 @@ fn fs_usage(fs: &Fs, user: UserArg<c::bch_ioctl_fs_usage>) -> Result<(), BchErro
         ..Default::default()
     };
     for (i, r) in arg.persistent_reserved.iter_mut().enumerate() {
-        let pos = c::disk_accounting_pos::from_arm(c::bch_acct_persistent_reserved { nr_replicas: i as u8 });
-        accounting::mem_read(fs, &pos, core::slice::from_mut(r));
+        *r = accounting::read(fs, accounting::PersistentReserved { nr_replicas: i as u8 }).sectors;
     }
     user.write(&arg)
 }
@@ -252,13 +248,7 @@ fn query_accounting(fs: &Fs, arg: &mut c::bch_ioctl_query_accounting_v2,
                                        1 << T::BCH_DISK_ACCOUNTING_dev_stripe_frag.0);
     }
 
-    let mut d = c::darray_char::default();
-    let ret = ret_to_result_void(unsafe {
-        c::bch2_fs_accounting_read(fs.as_ptr().cast(), &mut d, arg.accounting_types_mask)
-    });
-    // SAFETY: C's darray, filled
-    let keys = unsafe { darray_take(&mut d) };
-    ret?;
+    let keys = accounting_mem::to_keys(fs, arg.accounting_types_mask)?;
     if (arg.accounting_u64s as usize) * size_of::<u64>() < keys.len() {
         return Err(c::ERANGE.into());
     }

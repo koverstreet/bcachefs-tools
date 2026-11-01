@@ -79,6 +79,8 @@ use cstruct_macros::{c_name, bitfield, c_bitmask, c_const, c_enum, c_verbatim, c
 #[cfg(__KERNEL__)]
 use cstruct_macros::c_typedef;
 
+#[path = "alloc/accounting_format.rs"] pub mod accounting;
+
 #[cfg(__KERNEL__)]
 c_typedef! {
     pub type __uuid_t = c::uuid_t;

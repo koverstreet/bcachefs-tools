@@ -10,8 +10,9 @@ use std::process;
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::fs::FsExt;
-use bcachefs_kernel::accounting::{compression_type, data_type};
+use bcachefs_kernel::accounting::{self, compression_type, data_type};
 use bcachefs_kernel::btree::bkey::bkey_type;
+use bcachefs_kernel::alloc::{accounting_mem, replicas::replicas_acct};
 use bcachefs_kernel::btree_id;
 use bcachefs_kernel::util::{HumanReadable, ToText};
 use bcachefs_kernel::btree::iter::{BtreeIter, lockrestart_do};
@@ -251,29 +252,17 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
                 continue;
             }
 
-            let acc_pos = c::disk_accounting_pos::from_arm(c::bch_acct_btree { id: i });
-            let v = fs.accounting_mem_read(acc_pos.to_bpos(), 1);
+            let v = accounting::read(fs, accounting::Btree { id: i });
 
-            if v[0] != 0 {
+            if v.sectors != 0 {
                 write!(indented, "{}", Btree::from_raw(i).expect("invalid btree id"));
-                prt_sectors(&mut indented, v[0]);
+                prt_sectors(&mut indented, v.sectors);
             }
         }
     }
 
     // User data via replicas accounting
-    let acc_pos = c::disk_accounting_pos::from_arm_tailed(
-        c::bch_acct_replicas {
-            data_type: data_type::user.0 as u8,
-            nr_devs: 1,
-            nr_required: 1,
-            devs: Default::default(),
-        },
-        &[0], // dev 0
-    )
-    .expect("one device fits in an accounting position");
-
-    let v = fs.accounting_mem_read(acc_pos.to_bpos(), 1);
+    let v = accounting_mem::mem_read(fs, &replicas_acct(data_type::user, 1, &[0]));
     write!(&mut buf, "user");
     prt_sectors(&mut buf, v[0]);
 
@@ -289,10 +278,9 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
     let mut compression_header = false;
     let comp_nr = u32::from(compression_type::nr);
     for i in 1..comp_nr {
-        let acc_pos = c::disk_accounting_pos::from_arm(c::bch_acct_compression { type_: i as u8 });
-        let v = fs.accounting_mem_read(acc_pos.to_bpos(), 3);
+        let v = accounting::read(fs, accounting::Compression { type_: i as u8 });
 
-        if v[0] == 0 {
+        if v.nr_extents == 0 {
             continue;
         }
 
@@ -302,18 +290,15 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
         }
         compression_header = true;
 
-        let sectors_uncompressed = v[1];
-        let sectors_compressed = v[2];
-
-        write!(&mut buf, "{}\t{}\r", c::bch_compression_type(i), HumanReadable(sectors_compressed << 9));
+        write!(&mut buf, "{}\t{}\r", c::bch_compression_type(i), HumanReadable(v.compressed << 9));
 
         if i == u32::from(compression_type::incompressible) {
             buf.newline();
             continue;
         }
 
-        write!(&mut buf, "{}", HumanReadable(sectors_uncompressed << 9));
-        if let Some(pct) = (sectors_compressed * 100).checked_div(sectors_uncompressed) {
+        write!(&mut buf, "{}", HumanReadable(v.uncompressed << 9));
+        if let Some(pct) = (v.compressed * 100).checked_div(v.uncompressed) {
             write!(&mut buf, "\r{pct}%\r\n");
         } else {
             write!(&mut buf, "\r\n");

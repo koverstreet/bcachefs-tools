@@ -201,7 +201,7 @@ pub struct journal_keys {
 type OverwriteGuard<'a> = Guard<'a, c::mutex, c::OverwriteRanges, c::OverwriteRangesLive>;
 
 impl c::journal_key {
-    fn is_overwritten(&self) -> bool {
+    pub(crate) fn is_overwritten(&self) -> bool {
         self.overwritten.load(Relaxed) != 0
     }
 
@@ -218,6 +218,11 @@ impl c::journal_key {
         n.src.allocated_k = k;
         n
     }
+
+    /// Where in the journal it was read from: None for a key inserted since.
+    pub(crate) fn journal_pos(&self) -> Option<c::journal_key_journal_pos> {
+        (!self.allocated()).then(|| unsafe { self.src.journal })
+    }
 }
 
 /// Of a key at @level in @btree and key @r: which btree and level sorts
@@ -231,7 +236,7 @@ impl Fs {
     /// Key @k: its own, or in the journal entry it was read from -
     /// journal_key_k().
     #[inline]
-    fn journal_key_k(&self, k: &c::journal_key) -> *mut c::bkey_i {
+    pub(crate) fn journal_key_k(&self, k: &c::journal_key) -> *mut c::bkey_i {
         // SAFETY: a key read from the journal is in an entry that lives as
         // long as the keys, at its offset
         unsafe {
@@ -251,22 +256,22 @@ impl Fs {
     }
 
     #[inline]
-    fn journal_key_pos(&self, k: &c::journal_key) -> Bpos {
+    pub(crate) fn journal_key_pos(&self, k: &c::journal_key) -> Bpos {
         self.journal_key(k).k.p
     }
 
     #[inline]
-    fn journal_key_cmp_pos(&self, btree: Btree, level: u32, pos: Bpos, r: &c::journal_key) -> Ordering {
+    pub(crate) fn journal_key_cmp_pos(&self, btree: Btree, level: u32, pos: Bpos, r: &c::journal_key) -> Ordering {
         btree_cmp(btree, level, r).then_with(|| pos.cmp(&self.journal_key_pos(r)))
     }
 
-    fn journal_key_cmp(&self, l: &c::journal_key, r: &c::journal_key) -> Ordering {
+    pub(crate) fn journal_key_cmp(&self, l: &c::journal_key, r: &c::journal_key) -> Ordering {
         self.journal_key_cmp_pos(l.btree_id(), l.level().into(), self.journal_key_pos(l), r)
     }
 
     /// The index of the first key at or after @pos in @btree at @level:
     /// __bch2_journal_key_search().
-    fn journal_key_search(&self, btree: Btree, level: u32, pos: Bpos) -> usize {
+    pub(crate) fn journal_key_search(&self, btree: Btree, level: u32, pos: Bpos) -> usize {
         let keys = self.journal_keys.keys();
         let (mut l, mut r) = (0, keys.len());
 
@@ -406,6 +411,23 @@ impl c::journal_keys {
         let mut g = self.overwrites.lock();
         g.overwrites_nr = 0;
         g.published().ranges.clear();
+    }
+
+    /// The keys marked overwritten dropped - an allocated one's key freed -
+    /// the rest kept in order.
+    pub(crate) unsafe fn drop_overwritten(&self) {
+        let keys = unsafe { self.keys_mut() };
+        let s = keys.make_contiguous();
+        let mut nr = 0;
+        for i in 0..s.len() {
+            if !s[i].is_overwritten() {
+                s.swap(nr, i);
+                nr += 1;
+            } else if s[i].allocated() {
+                unsafe { c::rust_kfree(s[i].src.allocated_k.cast()) };
+            }
+        }
+        keys.truncate(nr);
     }
 }
 

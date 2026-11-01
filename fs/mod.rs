@@ -70,6 +70,7 @@ macro_rules! concat_literals {
 
 #[path = "alloc/accounting.rs"] pub mod accounting;
 pub mod alloc {
+    pub mod accounting_mem;
     pub mod background;
     pub mod backpointers;
     pub mod bucket_alloc;

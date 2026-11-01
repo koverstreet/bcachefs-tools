@@ -922,8 +922,7 @@ retry:
 	     accounting != btree_trans_subbuf_top(trans, &trans->accounting);
 	     accounting = bkey_next(accounting)) {
 		ret = likely(!(flags & BCH_TRANS_COMMIT_skip_accounting_apply))
-			? bch2_accounting_mem_add(trans, bkey_i_to_s_c_accounting(accounting),
-						  BCH_ACCOUNTING_normal, false)
+			? bch2_accounting_mem_add(trans, bkey_i_to_s_c(accounting))
 			: 0;
 		if (ret)
 			goto revert_fs_usage;

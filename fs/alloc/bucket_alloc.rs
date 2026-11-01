@@ -166,8 +166,7 @@ impl Fs {
         out.tabstop_push(32);
 
         let copygc_dev_wait = {
-            let _mark = self.mark_lock().read();
-            dev_wait_amount(ca).0
+            dev_wait_amount(ca, &self.mark_lock().read()).0
         };
         write!(out, "dev\t{} ({})\n", ca, ca.dev_idx);
         write!(out, "avail\t{}\n", ca.free_buckets_at(&req.usage, req.watermark));
@@ -493,10 +492,7 @@ impl TransAttempt<'_, '_> {
             if avail == 0 && !(req.watermark as u32 > c::bch_watermark::BCH_WATERMARK_normal as u32 &&
                                fs.recovery.runner.pass_done.get() <
                                c::bch_recovery_pass::BCH_RECOVERY_PASS_check_allocations) {
-                copygc_can_make_progress = {
-                    let _mark = fs.mark_lock().read();
-                    can_make_progress(ca)
-                };
+                copygc_can_make_progress = can_make_progress(ca, &fs.mark_lock().read());
                 if copygc_can_make_progress {
                     req.bits.set_copygc_can_make_progress(true);
                     fs.copygc_wakeup();

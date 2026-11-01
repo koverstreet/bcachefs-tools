@@ -530,9 +530,9 @@ fn snapshot_tree(fs: &Fs, subvol: u32, tree_id: u32, size: u32, node_size: usize
             };
             // summed as C did, wrapping: a corrupt counter is a wrong answer, not a panic
             for v in accounting::snapshot_btrees(fs, id) {
-                node.nr_keys   = node.nr_keys.wrapping_add(v[0]);
-                node.key_bytes = node.key_bytes.wrapping_add(v[1]);
-                node.sectors   = node.sectors.wrapping_add(v[2]);
+                node.nr_keys   = node.nr_keys.wrapping_add(v.keys);
+                node.key_bytes = node.key_bytes.wrapping_add(v.key_bytes);
+                node.sectors   = node.sectors.wrapping_add(v.sectors);
             }
 
             r.total += 1;

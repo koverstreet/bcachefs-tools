@@ -16,6 +16,8 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::accounting::DiskAccountingPos;
+use crate::alloc::accounting_mem::{self, MarkWrite};
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
@@ -112,7 +114,7 @@ impl<'a> From<&'a c::bch_replicas_entry_v0<Unvalidated>> for SbEntry<'a> {
 }
 
 impl SbEntry<'_> {
-    fn to_text(&self, out: &mut Printbuf) {
+    pub(crate) fn to_text(&self, out: &mut Printbuf) {
         c::bch_data_type(self.data_type.into()).to_text(out);
         match self.nr_required {
             Some(r) => write!(out, ": {r}/{} [", self.devs.len()),
@@ -133,7 +135,7 @@ crate::display_via_to_text!(Entry);
 impl Entry {
     /// Devices, nr_required fewer than them - or 1, a single device's - and
     /// none that @dev_ok says isn't one.
-    fn validate(&self, dev_ok: impl Fn(u8) -> bool, err: &mut Printbuf) -> Result<(), BchError> {
+    pub(crate) fn validate(&self, dev_ok: impl Fn(u8) -> bool, err: &mut Printbuf) -> Result<(), BchError> {
         let invalid = |err: &mut Printbuf, msg: fmt::Arguments<'_>| {
             write!(err, "{msg} in entry ");
             self.to_text(err);
@@ -255,17 +257,24 @@ fn bkey_to_replicas(fs: &Fs, e: &mut EntryBuf<'_>, k: BkeySC<'_>) {
 
 /// The replicas accounting position for @data_type data on @devs, of which
 /// @nr_required are needed to read it.
-pub(crate) fn replicas_acct(data_type: c::bch_data_type, nr_required: u8, devs: &[u8]) -> c::disk_accounting_pos {
+pub fn replicas_acct(data_type: c::bch_data_type, nr_required: u8, devs: &[u8]) -> DiskAccountingPos {
+    try_replicas_acct(data_type, nr_required, devs).expect("a key's devices fit an accounting position")
+}
+
+/// replicas_acct(), or None if @devs don't fit in an accounting position.
+pub(crate) fn try_replicas_acct(data_type: c::bch_data_type, nr_required: u8, devs: &[u8])
+    -> Option<DiskAccountingPos>
+{
     let mut e = Head::<c::bch_replicas_entry_v1>::default();
     e.data_type   = data_type.0 as u8;
     e.nr_devs     = devs.len() as u8;
     e.nr_required = nr_required;
-    c::disk_accounting_pos::from_arm_tailed(e, devs).expect("a key's devices fit an accounting position")
+    DiskAccountingPos::from_arm_tailed(e, devs).ok()
 }
 
 /// replicas_acct() of the entry in @b - an EntryBuf's bytes, or a
 /// bch_replicas_padded's - for @data_type data, whatever type it says.
-pub(crate) fn entry_acct(b: &[u8; ENTRY_BYTES], data_type: c::bch_data_type) -> c::disk_accounting_pos {
+pub(crate) fn entry_acct(b: &[u8; ENTRY_BYTES], data_type: c::bch_data_type) -> DiskAccountingPos {
     let nr = usize::from(b[1]);
     replicas_acct(data_type, b[2], &b[DEVS..DEVS + nr])
 }
@@ -280,7 +289,7 @@ pub(crate) fn bkey_replicas_padded(fs: &Fs, k: BkeySC<'_>) -> c::bch_replicas_pa
 
 /// replicas_acct() of @k's entry, as bkey_to_replicas() makes it, for
 /// @data_type data.
-pub(crate) fn bkey_replicas_acct(fs: &Fs, k: BkeySC<'_>, data_type: c::bch_data_type) -> c::disk_accounting_pos {
+pub(crate) fn bkey_replicas_acct(fs: &Fs, k: BkeySC<'_>, data_type: c::bch_data_type) -> DiskAccountingPos {
     let mut b = [0; ENTRY_BYTES];
     bkey_to_replicas(fs, &mut EntryBuf(&mut b), k);
     entry_acct(&b, data_type)
@@ -357,7 +366,9 @@ pub fn bch2_dev_has_data(_c: &Opaque<c::bch_fs>, ca: &c::bch_dev) -> c_uint {
 /// Whether data that @e lists can be read with @devs: none of its devices
 /// missing past what @flags, BCH_FORCE_IF_*, allows - degraded, or lost. If
 /// not, why in @err.
-fn can_read_with_devs(e: &Entry, devs: &c::bch_devs_mask, flags: u32, err: Option<&mut Printbuf>) -> bool {
+pub(crate) fn can_read_with_devs(e: &Entry, devs: &c::bch_devs_mask, flags: u32, err: Option<&mut Printbuf>)
+    -> bool
+{
     type D = c::bch_data_type;
 
     if u32::from(e.data_type) == D::BCH_DATA_cached.0 {
@@ -910,16 +921,15 @@ impl Fs {
     /// Entries that no accounting is kept for dropped - journal entries
     /// aside, which have none.
     pub fn replicas_gc_accounted(&self) -> Result<(), BchError> {
-        unsafe { c::bch2_accounting_mem_gc(self.as_ptr()) };
+        accounting_mem::mem_gc(self);
 
         let mut sb = self.sb_lock();
         {
-            let _mark = self.mark_lock().write();
+            let mark = self.mark_lock().write();
             let mut r = self.replicas.write();
 
             let new = r.filtered(|e| u32::from(e.data_type) == c::bch_data_type::BCH_DATA_journal.0 ||
-                    // SAFETY: an entry; under mark_lock
-                    unsafe { c::bch2_accounting_mem_has_replicas(self.as_ptr(), core::ptr::from_ref(e).cast()) })
+                    accounting_mem::has_replicas(self, &mark, e))
                 .map_err(|_| {
                     crate::bch_err!(self, "error allocating c->replicas_gc");
                     self.err(bch_errcode::BCH_ERR_ENOMEM_replicas_gc)
@@ -973,25 +983,14 @@ pub unsafe fn bch2_replicas_entry_put_many(c: &Opaque<c::bch_fs>, e: *const Head
     Fs::from_c(c).replicas_entry_put_many(unsafe { from_ffi(e) }, nr)
 }
 
-/// @e dropped - the accounting's last for it gone: under sb_lock and
-/// mark_lock, for write, which the caller holds, writing the superblock after
-/// it drops mark_lock.
-///
-/// # Safety
-/// @e is an entry, as long as its nr_devs says.
-#[c_export]
-pub unsafe fn bch2_replicas_entry_kill(c: &Opaque<c::bch_fs>, e: *const Head<c::bch_replicas_entry_v1>) {
-    let fs = Fs::from_c(c);
-    // SAFETY: the caller's
-    let e = unsafe { from_ffi::<Entry>(e) };
-    fs.mark_lock_assert_held();
-    // SAFETY: C calls it under sb_lock
-    let mut sb = unsafe { fs.sb_lock_held() };
-
-    let mut r = fs.replicas.write();
-    match r.find(e) {
-        Some(i) => fs.replicas_kill(&mut r, &mut sb, i),
-        None => warn(fs, format_args!("replicas entry not found in sb: {e}")),
+impl Fs {
+    /// The caller writes the superblock, after dropping mark_lock.
+    pub(crate) fn replicas_entry_kill(&self, sb: &mut SbLockGuard<'_>, _mark: &MarkWrite<'_>, e: &Entry) {
+        let mut r = self.replicas.write();
+        match r.find(e) {
+            Some(i) => self.replicas_kill(&mut r, sb, i),
+            None => warn(self, format_args!("replicas entry not found in sb: {e}")),
+        }
     }
 }
 

@@ -274,8 +274,9 @@ fn trigger_dev_counters(t: &TransAttempt<'_, '_>, sectors: Option<u32>, k: BkeyS
         if u32::from(r.ptrs_moving()) >> i & 1 != 0 {
             let v = i64::from(sectors.unwrap_or(d.p.crc.compressed_size));
             let v = if flags.contains(UpdateTriggerFlags::OVERWRITE) { -v } else { v };
-            let acct = c::disk_accounting_pos::from_arm(c::bch_acct_dev_leaving { dev: d.ptr.dev().into() });
-            accounting::add(t, &acct, &[v], flags.contains(UpdateTriggerFlags::GC))?;
+            accounting::add(t, accounting::DevLeaving { dev: d.ptr.dev().into() },
+                            accounting::DevLeavingCounters { sectors: v },
+                            flags.contains(UpdateTriggerFlags::GC))?;
         }
     }
     Ok(())
@@ -352,17 +353,16 @@ pub(crate) fn trigger_extent_reconcile(t: &TransAttempt<'_, '_>, op: &mut Trigge
             let ty = delta.trailing_zeros();
             delta &= delta - 1;
 
-            // [data, metadata] sectors
-            let mut v = [0i64; 2];
-            let i = usize::from(sectors.is_some());
+            let mut v = accounting::ReconcileWorkCounters::<i64>::default();
+            let s = if sectors.is_some() { &mut v.metadata } else { &mut v.data };
             if old_a >> ty & 1 != 0 {
-                v[i] -= old_size;
+                *s -= old_size;
             }
             if new_a >> ty & 1 != 0 {
-                v[i] += new_size;
+                *s += new_size;
             }
-            let acct = c::disk_accounting_pos::from_arm(c::bch_acct_reconcile_work { type_: ty as u8 });
-            accounting::add(t, &acct, &v, flags.contains(UpdateTriggerFlags::GC))?;
+            accounting::add(t, accounting::ReconcileWork { type_: ty as u8 }, v,
+                            flags.contains(UpdateTriggerFlags::GC))?;
         }
 
         trigger_dev_counters(t, sectors, op.old, old_r, flags - UpdateTriggerFlags::INSERT)?;

@@ -4,7 +4,8 @@
 
 use crate::cstructs::c;
 use crate::util::vstructs::Head;
-use cstruct_macros::{c_name, c_const, c_enum, c_typedef, c_xmacro, tagged_union, whole, CStruct, Plain, TypeInfo};
+use cstruct_macros::{c_name, c_const, c_enum, c_typedef, c_xmacro, counters, tagged_union, whole, CStruct, Plain,
+                     TypeInfo};
 use crate::format::Bpos;
 
 /*
@@ -91,22 +92,21 @@ c_xmacro! {
     /*
      * field 1: name
      * field 2: id
-     * field 3: number of counters (max 3)
      */
     BCH_DISK_ACCOUNTING_TYPES(x) {
-        (nr_inodes, 0, 1),
-        (persistent_reserved, 1, 1),
-        (replicas, 2, 1),
-        (dev_data_type, 3, 3),
-        (compression, 4, 3),
-        (snapshot, 5, 3),
-        (btree, 6, 3),
-        (rebalance_work, 7, 1),
-        (inum, 8, 3),
-        (reconcile_work, 9, 2),
-        (dev_leaving, 10, 1),
-        (stripe_frag, 11, 2),
-        (dev_stripe_frag, 12, 2),
+        (nr_inodes, 0),
+        (persistent_reserved, 1),
+        (replicas, 2),
+        (dev_data_type, 3),
+        (compression, 4),
+        (snapshot, 5),
+        (btree, 6),
+        (rebalance_work, 7),
+        (inum, 8),
+        (reconcile_work, 9),
+        (dev_leaving, 10),
+        (stripe_frag, 11),
+        (dev_stripe_frag, 12),
     }
 }
 
@@ -119,16 +119,19 @@ c_enum! {
 }
 
 c_typedef! {
-    pub type bch_acct_replicas = Head<c::bch_replicas_entry_v1>;
+    #[c_name(bch_acct_replicas)]
+    pub type Replicas = Head<c::bch_replicas_entry_v1>;
 }
+crate::accounting::acct_counters!(ReplicasCounters { sectors });
 
 tagged_union! {
     #[derive(Clone, Copy, CStruct, TypeInfo)]*
     #[c_typedef]*
+    #[c_name(disk_accounting_pos)]
     #[derive(TypeInfo)]
-    pub struct disk_accounting_pos {
+    pub struct DiskAccountingPos {
         tag type_: u8 = disk_accounting_type,
-        arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: concat(bch_acct_, f) = nr,
+        arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: camel(f) = nr,
         pad: Bpos,
         size: pad,
         packed,
@@ -139,14 +142,18 @@ tagged_union! {
          * XXX: perhaps we could add a per-subvolume counter?
          */
         #[repr(C)]
-        pub struct bch_acct_nr_inodes {},
+        #[c_name(bch_acct_nr_inodes)]
+        #[counters(nr)]
+        pub struct NrInodes {},
 
         /*
          * Tracks KEY_TYPE_reservation sectors, broken out by number of replicas for the
          * reservation:
          */
         #[repr(C)]
-        pub struct bch_acct_persistent_reserved {
+        #[c_name(bch_acct_persistent_reserved)]
+        #[counters(sectors)]
+        pub struct PersistentReserved {
             pub nr_replicas: u8,
         },
 
@@ -170,7 +177,9 @@ tagged_union! {
          * to the bucket size.
          */
         #[repr(C)]
-        pub struct bch_acct_dev_data_type {
+        #[c_name(bch_acct_dev_data_type)]
+        #[counters(buckets, sectors, fragmented)]
+        pub struct DevDataType {
             pub dev: u8,
             pub data_type: u8,
         },
@@ -186,7 +195,9 @@ tagged_union! {
          * Compression ratio, average extent size (fragmentation).
          */
         #[repr(C)]
-        pub struct bch_acct_compression {
+        #[c_name(bch_acct_compression)]
+        #[counters(nr_extents, uncompressed, compressed)]
+        pub struct Compression {
             pub type_: u8,
         },
 
@@ -204,7 +215,9 @@ tagged_union! {
          * ]
          */
         #[repr(C, packed)]
-        pub struct bch_acct_snapshot {
+        #[c_name(bch_acct_snapshot)]
+        #[counters(keys, key_bytes, sectors)]
+        pub struct Snapshot {
             pub id: u32,
             pub btree: u32,
         },
@@ -218,7 +231,9 @@ tagged_union! {
          * ]
          */
         #[repr(C, packed)]
-        pub struct bch_acct_btree {
+        #[c_name(bch_acct_btree)]
+        #[counters(sectors, nodes, interior)]
+        pub struct Btree {
             pub id: u32,
         },
 
@@ -227,7 +242,9 @@ tagged_union! {
          * move, extents counted here are also in the rebalance_work btree.
          */
         #[repr(C)]
-        pub struct bch_acct_rebalance_work {},
+        #[c_name(bch_acct_rebalance_work)]
+        #[counters(sectors)]
+        pub struct RebalanceWork {},
 
         /*
          * inum counter fields:
@@ -243,17 +260,23 @@ tagged_union! {
          * This tracks on disk fragmentation.
          */
         #[repr(C, packed)]
-        pub struct bch_acct_inum {
+        #[c_name(bch_acct_inum)]
+        #[counters(nr_extents, sectors, disk_sectors)]
+        pub struct Inum {
             pub inum: u64,
         },
 
         #[repr(C)]
-        pub struct bch_acct_reconcile_work {
+        #[c_name(bch_acct_reconcile_work)]
+        #[counters(data, metadata)]
+        pub struct ReconcileWork {
             pub type_: u8,
         },
 
         #[repr(C, packed)]
-        pub struct bch_acct_dev_leaving {
+        #[c_name(bch_acct_dev_leaving)]
+        #[counters(sectors)]
+        pub struct DevLeaving {
             pub dev: u32,
         },
 
@@ -275,7 +298,9 @@ tagged_union! {
          * check_allocations recomputes it.
          */
         #[repr(C)]
-        pub struct bch_acct_stripe_frag {
+        #[c_name(bch_acct_stripe_frag)]
+        #[counters(data, empty)]
+        pub struct StripeFrag {
             pub nr_empty: u8,
         },
 
@@ -291,7 +316,9 @@ tagged_union! {
          * hence two keys, not one.
          */
         #[repr(C)]
-        pub struct bch_acct_dev_stripe_frag {
+        #[c_name(bch_acct_dev_stripe_frag)]
+        #[counters(data, empty)]
+        pub struct DevStripeFrag {
             pub dev: u8,
         },
     }

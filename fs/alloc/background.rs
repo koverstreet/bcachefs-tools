@@ -1365,12 +1365,9 @@ fn bucket_gen_update(t: &TransAttempt<'_, '_>, bucket: Bpos, generation: u8) -> 
     t.update(&iter, &g, UpdateTriggerFlags::empty())
 }
 
-/// @ca's counters for its buckets of @data_type - gc's, with @gc: @d their
-/// number, sectors and fragmented sectors.
-fn dev_data_type_accounting_mod(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, data_type: data_type, d: [i64; 3],
-                                gc: bool) -> Result<(), BchError> {
-    let pos = c::disk_accounting_pos::from_arm(c::bch_acct_dev_data_type { dev: ca.dev_idx, data_type: data_type.0 as u8 });
-    accounting::add(t, &pos, &d, gc)
+fn dev_data_type_accounting_mod(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, data_type: data_type,
+                                d: accounting::DevDataTypeCounters<i64>, gc: bool) -> Result<(), BchError> {
+    accounting::add(t, accounting::DevDataType { dev: ca.dev_idx, data_type: data_type.0 as u8 }, d, gc)
 }
 
 impl TransAttempt<'_, '_> {
@@ -1381,21 +1378,27 @@ impl TransAttempt<'_, '_> {
         let gc = flags.contains(UpdateTriggerFlags::GC);
         let (old_sectors, new_sectors) = (old.sectors(), new.sectors());
         if old.data_type != new.data_type {
-            dev_data_type_accounting_mod(self, ca, new.data_type(),
-                                         [1, new_sectors, new.sectors_fragmented(ca)], gc)?;
-            dev_data_type_accounting_mod(self, ca, old.data_type(),
-                                         [-1, -old_sectors, -old.sectors_fragmented(ca)], gc)?;
+            dev_data_type_accounting_mod(self, ca, new.data_type(), accounting::DevDataTypeCounters {
+                buckets: 1, sectors: new_sectors, fragmented: new.sectors_fragmented(ca),
+            }, gc)?;
+            dev_data_type_accounting_mod(self, ca, old.data_type(), accounting::DevDataTypeCounters {
+                buckets: -1, sectors: -old_sectors, fragmented: -old.sectors_fragmented(ca),
+            }, gc)?;
         } else if old_sectors != new_sectors {
-            dev_data_type_accounting_mod(self, ca, new.data_type(),
-                                         [0, new_sectors - old_sectors,
-                                          new.sectors_fragmented(ca) - old.sectors_fragmented(ca)], gc)?;
+            dev_data_type_accounting_mod(self, ca, new.data_type(), accounting::DevDataTypeCounters {
+                buckets: 0,
+                sectors: new_sectors - old_sectors,
+                fragmented: new.sectors_fragmented(ca) - old.sectors_fragmented(ca),
+            }, gc)?;
         }
 
         let (old_unstriped, new_unstriped) = (old.sectors_unstriped(), new.sectors_unstriped());
         if old_unstriped != new_unstriped {
-            dev_data_type_accounting_mod(self, ca, data_type::unstriped,
-                                         [i64::from(new_unstriped != 0) - i64::from(old_unstriped != 0),
-                                          new_unstriped - old_unstriped, 0], gc)?;
+            dev_data_type_accounting_mod(self, ca, data_type::unstriped, accounting::DevDataTypeCounters {
+                buckets: i64::from(new_unstriped != 0) - i64::from(old_unstriped != 0),
+                sectors: new_unstriped - old_unstriped,
+                fragmented: 0,
+            }, gc)?;
         }
         Ok(())
     }

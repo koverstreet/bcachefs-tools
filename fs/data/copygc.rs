@@ -55,6 +55,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::accounting;
+use crate::alloc::accounting_mem::MarkHeld;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::buckets::u64_to_bucket;
 use crate::alloc::lru::{LruId, LruPos};
@@ -241,8 +242,8 @@ const _: () = assert!(COPYGC_FREE_THRESHOLD_PCT * 5 == 100);
 /// reuse threshold - reported from here because a positive wait could be
 /// either of the two paths below, and doesn't say which.
 ///
-/// mark_lock held (read), for the dev_leaving accounting read - taken
-/// outside any rcu read section, as mark_lock can block.
+/// With @mark held, for the dev_leaving accounting read - taken outside any
+/// rcu read section, as mark_lock can block.
 ///
 /// The allowance at the limit - when the device is full - is the space we
 /// reserved in bch2_recalc_capacity; we can't have more than that amount of
@@ -256,7 +257,7 @@ const _: () = assert!(COPYGC_FREE_THRESHOLD_PCT * 5 == 100);
 /// In C's arithmetic: sector counts are u64s, made s64s where C's are, and
 /// wrapping - a kernel build panics on overflow, and accounting gone wrong
 /// mustn't take the kernel with it.
-pub(crate) fn dev_wait_amount(ca: &c::bch_dev) -> (i64, bool) {
+pub(crate) fn dev_wait_amount(ca: &c::bch_dev, mark: &impl MarkHeld) -> (i64, bool) {
     let fs = ca.fs();
     let usage_full = ca.usage_full_read_fast();
     let mut usage = c::bch_dev_usage::default();
@@ -269,11 +270,8 @@ pub(crate) fn dev_wait_amount(ca: &c::bch_dev) -> (i64, bool) {
      * free-to-be: a full device whose data is mostly leaving doesn't need
      * copygc, it needs reconcile to run.
      */
-    let mut leaving = [0];
-    accounting::mem_read_locked(fs, &c::disk_accounting_pos::from_arm(c::bch_acct_dev_leaving {
-        dev: ca.dev_idx.into(),
-    }), &mut leaving);
-    let leaving = (leaving[0] as i64).max(0);
+    let leaving = accounting::read_locked(fs, mark, accounting::DevLeaving { dev: ca.dev_idx.into() }).sectors;
+    let leaving = (leaving as i64).max(0);
 
     let bucket_size = u64::from(ca.mi.get().bucket_size);
     let free = usage.buckets[c::bch_data_type::BCH_DATA_free.0 as usize]
@@ -307,9 +305,9 @@ pub(crate) fn dev_wait_amount(ca: &c::bch_dev) -> (i64, bool) {
 /// Plus buckets copygc already has queued here: the wait amount is a
 /// threshold copygc drives to zero, so on a device it is actively working the
 /// comparison flips constantly and says nothing about whether space is
-/// coming. mark_lock held, as dev_wait_amount().
-pub(crate) fn can_make_progress(ca: &c::bch_dev) -> bool {
-    ca.copygc_in_flight.load(Relaxed) != 0 || dev_wait_amount(ca).0 <= 0
+/// coming.
+pub(crate) fn can_make_progress(ca: &c::bch_dev, mark: &impl MarkHeld) -> bool {
+    ca.copygc_in_flight.load(Relaxed) != 0 || dev_wait_amount(ca, mark).0 <= 0
 }
 
 // ── Picking buckets ──────────────────────────────────────────────────────
@@ -358,10 +356,10 @@ impl<'f, 'w> Copygc<'f, 'w> {
         devs.reserve(fs.nr_devices() as usize, GFP_KERNEL)?;
 
         {
-            let _mark = fs.mark_lock().read();
+            let mark = fs.mark_lock().read();
             let rcu = read_lock();
             for ca in fs.rw_devs_rcu(&rcu) {
-                let (v, dev_low_on_space) = dev_wait_amount(ca);
+                let (v, dev_low_on_space) = dev_wait_amount(ca, &mark);
                 let dev = usize::from(ca.dev_idx);
 
                 /* Over allowance, whether or not we have room to queue it: */
@@ -394,9 +392,9 @@ impl<'f, 'w> Copygc<'f, 'w> {
     /// bring a device back under its allowance mid batch - pop it off the
     /// list when it no longer needs copygc.
     fn dev_still_needed(&self, dev: u32) -> bool {
-        let _mark = self.fs.mark_lock().read();
+        let mark = self.fs.mark_lock().read();
         let rcu = read_lock();
-        self.fs.dev_rcu(dev, &rcu).is_some_and(can_make_progress)
+        self.fs.dev_rcu(dev, &rcu).is_some_and(|ca| can_make_progress(ca, &mark))
     }
 
     /// The bucket's generation, if it can be evacuated: on a device we can
@@ -893,12 +891,12 @@ impl Fs {
         out.make_room_gfp(4096, c::GFP_KERNEL);
 
         {
-            let _mark = self.mark_lock().read();
+            let mark = self.mark_lock().read();
             let rcu = read_lock();
             let mut out = out.atomic();
             write!(out, "Currently calculated wait:\n");
             for ca in self.rw_devs_rcu(&rcu) {
-                prt!(out, "  {}:\t{}\n", ca, HumanReadable(dev_wait_amount(ca).0));
+                prt!(out, "  {}:\t{}\n", ca, HumanReadable(dev_wait_amount(ca, &mark).0));
             }
         }
 

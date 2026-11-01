@@ -2,9 +2,9 @@
 
 //! The data types C shares, one module per header: foo/bar.rs is the source
 //! of foo/bar.h's types, whose C is generated from it - see types/lib.rs.
-//! btree/types.rs and fs/dirent_format.rs are modules of their own already.
+//! btree/types.rs, fs/dirent_format.rs and format.rs's are modules of their
+//! own already.
 
-#[path = "alloc/accounting_format.rs"] pub mod alloc_accounting_format;
 #[path = "alloc/disk_groups_format.rs"] pub mod alloc_disk_groups_format;
 #[path = "alloc/format.rs"] pub mod alloc_format;
 #[path = "alloc/lru_format.rs"] pub mod alloc_lru_format;
@@ -108,9 +108,7 @@ pub mod c {
 
     pub use crate::btree::types::*;
     pub use crate::dirent::format::*;
-    pub use crate::accounting::{BCH_ACCOUNTING_gc, BCH_ACCOUNTING_normal, BCH_ACCOUNTING_read, bch2_accounting_mem_gc, bch2_accounting_mem_has_replicas, bch2_dev_usage_remove, bch2_disk_accounting_mod_gc, bch2_disk_accounting_mod_normal, bch2_fs_accounting_read, bch2_fs_replicas_usage_read, bch2_mod_dev_cached_sectors, bch_accounting_mode, rust_bch2_accounting_mem_read};
-    pub use super::alloc_accounting_format::*;
-    pub use crate::accounting::{accounting_mem_entry, bch_accounting_mem};
+    pub use crate::format::accounting::*;
     pub use crate::alloc::backpointers::{bp_scan_iter};
     pub use crate::alloc::buckets::{BCH_DISK_RESERVATION_NOFAIL, BCH_DISK_RESERVATION_PARTIAL, bch_reservation_flags, disk_reservation_destructable};
     pub use crate::alloc::buckets::{BCH_DEV_POS_FRAC_BITS, BucketData, BucketGensArray, BucketGensHead, DiskReservation, RESERVE_FACTOR, bch_dev_usage, bch_dev_usage_full, bch_dev_usage_type, bch_fs_placeable, bch_fs_usage_base, bch_fs_usage_short, bucket, disk_reservation};
@@ -225,6 +223,7 @@ pub mod c {
     pub use super::sb_members_format::*;
     pub use crate::sb::members::{bch_member_cpu};
     pub use super::snapshots_format::*;
+    pub use super::snapshots_format::Snapshot;
     pub use super::snapshots_types::*;
     pub use super::types::*;
     pub use crate::util::clock::{io_clock, IO_CLOCK_PCPU_SECTORS};

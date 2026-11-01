@@ -130,27 +130,27 @@ fn refresh_can_widen(fs: &Fs, new: &mut BkeyS<'_>) {
     }
 }
 
-/// stripe_frag accounting - [data sectors, empty sectors], by how many of
-/// its data blocks are empty - for @s, added (@sign 1) or taken away (-1):
-/// two mods rather than one delta, as the position changes when the number
-/// of empty blocks does.
+/// stripe_frag accounting, by how many of its data blocks are empty, for
+/// @s - added (@sign 1) or taken away (-1): two mods rather than one delta,
+/// as the position changes when the number of empty blocks does.
 fn stripe_frag_acct(t: &TransAttempt<'_, '_>, s: Option<StripeK<'_>>, gc: bool, sign: i64) -> Result<(), BchError> {
     let Some(s) = s else { return Ok(()) };
     let sectors = i64::from(s.v().sectors.get());
     let nr_data = s.data_blocks().count() as i64;
     let nr_empty = s.data_blocks().filter(|b| b.sectors() == 0).count();
 
-    let acct = c::disk_accounting_pos::from_arm(c::bch_acct_stripe_frag { nr_empty: nr_empty as u8 });
-    accounting::add(t, &acct, &[sign * nr_data * sectors, sign * nr_empty as i64 * sectors], gc)
+    accounting::add(t, accounting::StripeFrag { nr_empty: nr_empty as u8 }, accounting::StripeFragCounters {
+        data: sign * nr_data * sectors, empty: sign * nr_empty as i64 * sectors,
+    }, gc)
 }
 
-/// dev_stripe_frag accounting - each device's [data sectors, empty sectors]
-/// - from @old to @new: summed by device first, so an unchanged block nets to
-/// zero, and the common case is one mod, not one per block.
+/// dev_stripe_frag accounting, each device's, from @old to @new: summed by
+/// device first, so an unchanged block nets to zero, and the common case is
+/// one mod, not one per block.
 fn dev_stripe_frag_acct(t: &TransAttempt<'_, '_>, old: Option<StripeK<'_>>, new: Option<StripeK<'_>>, gc: bool)
     -> Result<(), BchError>
 {
-    type Deltas = ArrayVec<(u8, i64, i64), { 2 * c::BCH_BKEY_PTRS_MAX as usize }>;
+    type Deltas = ArrayVec<(u8, accounting::DevStripeFragCounters<i64>), { 2 * c::BCH_BKEY_PTRS_MAX as usize }>;
 
     fn add(d: &mut Deltas, s: Option<StripeK<'_>>, sign: i64) {
         let Some(s) = s else { return };
@@ -160,10 +160,10 @@ fn dev_stripe_frag_acct(t: &TransAttempt<'_, '_>, old: Option<StripeK<'_>>, new:
             let dev = b.ptr().dev();
             let i = match d.iter().position(|e| e.0 == dev) {
                 Some(i) => i,
-                None    => { d.push((dev, 0, 0)); d.len() - 1 }
+                None    => { d.push((dev, Default::default())); d.len() - 1 }
             };
-            d[i].1 += sign * sectors;
-            d[i].2 += if b.sectors() == 0 { sign * sectors } else { 0 };
+            d[i].1.data += sign * sectors;
+            d[i].1.empty += if b.sectors() == 0 { sign * sectors } else { 0 };
         }
     }
 
@@ -171,10 +171,9 @@ fn dev_stripe_frag_acct(t: &TransAttempt<'_, '_>, old: Option<StripeK<'_>>, new:
     add(&mut d, old, -1);
     add(&mut d, new, 1);
 
-    for (dev, data, empty) in d {
-        if data != 0 || empty != 0 {
-            let acct = c::disk_accounting_pos::from_arm(c::bch_acct_dev_stripe_frag { dev });
-            accounting::add(t, &acct, &[data, empty], gc)?;
+    for (dev, v) in d {
+        if v != Default::default() {
+            accounting::add(t, accounting::DevStripeFrag { dev }, v, gc)?;
         }
     }
     Ok(())
@@ -438,11 +437,11 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchEr
 
     if needs_reconcile_delta != 0 {
         let s = old.map(|s| s.v()).or(new.map(|s| s.v())).expect("a stripe, if needs_reconcile changed");
-        let acct = c::disk_accounting_pos::from_arm(c::bch_acct_reconcile_work {
+        let acct = accounting::ReconcileWork {
             type_: c::bch_reconcile_accounting_type::BCH_RECONCILE_ACCOUNTING_stripes.0 as u8,
-        });
-        let sectors = i64::from(s.nr_blocks) * i64::from(s.sectors.get()) * needs_reconcile_delta;
-        accounting::add(t, &acct, &[sectors, 0], gc)?;
+        };
+        let data = i64::from(s.nr_blocks) * i64::from(s.sectors.get()) * needs_reconcile_delta;
+        accounting::add(t, acct, accounting::ReconcileWorkCounters { data, metadata: 0 }, gc)?;
     }
 
     // above the unchanged return: block counts change without the pointers
@@ -485,14 +484,14 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchEr
         let r = bkey_replicas_padded(fs, n.untyped());
         let sectors = i64::from(n.v().sectors.get()) * i64::from(n.v().nr_redundant);
         // SAFETY: any bytes are an entry's
-        accounting::add(t, &entry_acct(unsafe { &r.bytes }, parity), &[sectors], gc)?;
+        accounting::add_at(t, &entry_acct(unsafe { &r.bytes }, parity), &[sectors], gc)?;
         if let Some(m) = m {
             m.lock.lock().r = r;
         }
     }
     if let Some(o) = old {
         let sectors = -(i64::from(o.v().sectors.get()) * i64::from(o.v().nr_redundant));
-        accounting::add(t, &bkey_replicas_acct(fs, o.untyped(), parity), &[sectors], gc)?;
+        accounting::add_at(t, &bkey_replicas_acct(fs, o.untyped(), parity), &[sectors], gc)?;
     }
 
     mark_stripe_buckets(t, old, new, flags)

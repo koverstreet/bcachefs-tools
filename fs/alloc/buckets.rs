@@ -152,6 +152,20 @@ pub struct bch_fs_usage_base {
     pub reserved: u64,
 }
 
+impl bch_fs_usage_base {
+    pub fn add_data_type(&mut self, data_type: c::bch_data_type, sectors: u64) {
+        use c::bch_data_type as dt;
+
+        let to = match data_type {
+            dt::BCH_DATA_btree => &mut self.btree,
+            dt::BCH_DATA_user | dt::BCH_DATA_parity => &mut self.data,
+            dt::BCH_DATA_cached => &mut self.cached,
+            _ => return,
+        };
+        *to = to.wrapping_add(sectors);
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_fs_usage_short {
@@ -633,7 +647,7 @@ fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &c::extent_ptr
         n.set((i64::from(n.get()) + sectors) as u16);
 
         let acct = bkey_replicas_acct(fs, s.as_sc().untyped(), data_type);
-        return accounting::add(t, &acct, &[sectors], false);
+        return accounting::add_at(t, &acct, &[sectors], false);
     }
 
     if flags.contains(UpdateTriggerFlags::GC) {
@@ -656,7 +670,7 @@ fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &c::extent_ptr
             // SAFETY: the stripe's entry, as its trigger copied it in
             entry_acct(unsafe { &m.r.bytes }, data_type)
         };
-        accounting::add(t, &acct, &[sectors], true)?;
+        accounting::add_at(t, &acct, &[sectors], true)?;
     }
 
     Ok(())
@@ -678,16 +692,16 @@ fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: Bke
     let mut nr_devs = 0;
     let mut nr_required = 1;
 
-    // [extents, uncompressed sectors, compressed sectors], for each run of
-    // pointers of one compression type
-    let compression_add = |ty: u8, mut v: [i64; 3]| {
+    // for each run of pointers of one compression type
+    let compression_add = |type_: u8, mut v: accounting::CompressionCounters<i64>| {
         if !insert {
             v = v.map(i64::wrapping_neg);
         }
-        accounting::add(t, &c::disk_accounting_pos::from_arm(c::bch_acct_compression { type_: ty }), &v, gc)
+        accounting::add(t, accounting::Compression { type_ }, v, gc)
     };
+    let one_extent = accounting::CompressionCounters { nr_extents: 1, ..Default::default() };
     let mut compression_type = 0;
-    let mut compression = [1, 0, 0];
+    let mut compression = one_extent;
 
     for d in k.ptrs_decoded(fs) {
         let p = &d.p;
@@ -713,24 +727,25 @@ fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: Bke
 
         if compression_type != 0 && compression_type != p.crc.compression_type {
             compression_add(compression_type, compression)?;
-            compression = [1, 0, 0];
+            compression = one_extent;
         }
         compression_type = p.crc.compression_type;
         if compression_type != 0 {
-            compression[1] += i64::from(p.crc.uncompressed_size);
-            compression[2] += i64::from(p.crc.compressed_size);
+            compression.uncompressed += i64::from(p.crc.uncompressed_size);
+            compression.compressed += i64::from(p.crc.compressed_size);
         }
     }
 
     if nr_devs != 0 {
-        accounting::add(t, &replicas_acct(data_type, nr_required, &devs[..nr_devs]), &[replicas_sectors], gc)?;
+        accounting::add_at(t, &replicas_acct(data_type, nr_required, &devs[..nr_devs]), &[replicas_sectors], gc)?;
     }
 
-    // [keys, key bytes, sectors]: an extent counts its own key here, not by
-    // trigger_snapshot_nr_keys(), as part of the sectors it adds anyway
+    // an extent counts its own key here, not by trigger_snapshot_nr_keys(),
+    // as part of the sectors it adds anyway
     if level == 0 && k.k.p.snapshot != 0 {
-        let acct = c::disk_accounting_pos::from_arm(c::bch_acct_snapshot { id: k.k.p.snapshot, btree: btree.0 });
-        accounting::add(t, &acct, &[nr, nr * k.k.bytes() as i64, replicas_sectors], gc)?;
+        accounting::add(t, accounting::Snapshot { id: k.k.p.snapshot, btree: btree.0 }, accounting::SnapshotCounters {
+            keys: nr, key_bytes: nr * k.k.bytes() as i64, sectors: replicas_sectors,
+        }, gc)?;
     }
 
     if compression_type != 0 {
@@ -738,14 +753,13 @@ fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: Bke
     }
 
     if level != 0 {
-        // [sectors, nodes, interior nodes]
-        let interior = if level > 1 { nr } else { 0 };
-        let acct = c::disk_accounting_pos::from_arm(c::bch_acct_btree { id: btree.0 });
-        accounting::add(t, &acct, &[replicas_sectors, nr, interior], gc)
+        accounting::add(t, accounting::Btree { id: btree.0 }, accounting::BtreeCounters {
+            sectors: replicas_sectors, nodes: nr, interior: if level > 1 { nr } else { 0 },
+        }, gc)
     } else {
-        // [extents, sectors, sectors on disk]
-        let acct = c::disk_accounting_pos::from_arm(c::bch_acct_inum { inum: k.k.p.inode });
-        accounting::add(t, &acct, &[nr, nr * i64::from(k.k.size), replicas_sectors], gc)
+        accounting::add(t, accounting::Inum { inum: k.k.p.inode }, accounting::InumCounters {
+            nr_extents: nr, sectors: nr * i64::from(k.k.size), disk_sectors: replicas_sectors,
+        }, gc)
     }
 }
 
@@ -801,12 +815,13 @@ fn trigger_reservation(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(
         let nr: i64 = if flags.contains(UpdateTriggerFlags::OVERWRITE) { -1 } else { 1 };
         let sectors = nr * i64::from(k.k.size);
 
-        accounting::add(t, &c::disk_accounting_pos::from_arm(c::bch_acct_persistent_reserved { nr_replicas }),
-                        &[sectors], gc)?;
+        accounting::add(t, accounting::PersistentReserved { nr_replicas },
+                        accounting::PersistentReservedCounters { sectors }, gc)?;
 
         if op.level == 0 && k.k.p.snapshot != 0 {
-            let acct = c::disk_accounting_pos::from_arm(c::bch_acct_snapshot { id: k.k.p.snapshot, btree: op.btree.0 });
-            accounting::add(t, &acct, &[nr, nr * k.k.bytes() as i64, sectors * i64::from(nr_replicas)], gc)?;
+            accounting::add(t, accounting::Snapshot { id: k.k.p.snapshot, btree: op.btree.0 }, accounting::SnapshotCounters {
+                keys: nr, key_bytes: nr * k.k.bytes() as i64, sectors: sectors * i64::from(nr_replicas),
+            }, gc)?;
         }
         Ok(())
     })
@@ -844,9 +859,10 @@ fn trigger_snapshot_nr_keys(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Res
         return Ok(());
     }
 
-    // [nr_keys, key_bytes, external_sectors]: extents and reservations count sectors
-    let acct = c::disk_accounting_pos::from_arm(c::bch_acct_snapshot { id: op.new.k.p.snapshot, btree: op.btree.0 });
-    accounting::add(t, &acct, &[nr, bytes, 0], op.flags.contains(UpdateTriggerFlags::GC))
+    // extents and reservations count sectors
+    accounting::add(t, accounting::Snapshot { id: op.new.k.p.snapshot, btree: op.btree.0 },
+                    accounting::SnapshotCounters { keys: nr, key_bytes: bytes, sectors: 0 },
+                    op.flags.contains(UpdateTriggerFlags::GC))
 }
 
 crate::key_trigger!(bch2_trigger_snapshot_nr_keys => trigger_snapshot_nr_keys);

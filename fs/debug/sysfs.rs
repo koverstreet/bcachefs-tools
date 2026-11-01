@@ -663,15 +663,12 @@ fn compression_stats_to_text(c: &Fs, out: &mut Printbuf) {
     write!(out, "type\tcompressed\runcompressed\raverage extent size\r\n");
 
     for i in 1..c::BCH_COMPRESSION_TYPE_NR {
-        let pos = c::disk_accounting_pos::from_arm(c::bch_acct_compression { type_: i as u8 });
-        let mut v = [0u64; 3];
-        accounting::mem_read(c, &pos, &mut v);
-        let [nr_extents, sectors_uncompressed, sectors_compressed] = v;
+        let v = accounting::read(c, accounting::Compression { type_: i as u8 });
 
         prt!(out, "{}\t{}\r{}\r{}\r\n", c::bch_compression_type(i),
-             HumanReadable(sectors_compressed << 9),
-             HumanReadable(sectors_uncompressed << 9),
-             HumanReadable((sectors_uncompressed << 9).checked_div(nr_extents).unwrap_or(0)));
+             HumanReadable(v.compressed << 9),
+             HumanReadable(v.uncompressed << 9),
+             HumanReadable((v.uncompressed << 9).checked_div(v.nr_extents).unwrap_or(0)));
     }
 }
 

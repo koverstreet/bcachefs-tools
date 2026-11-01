@@ -466,6 +466,29 @@ pub fn placed(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand("#[placed]", || place::placed(attr, item))
 }
 
+/// `#[counters(a, b, ..)]` on an accounting key type X: its counters, struct
+/// XCounters - accounting.rs's acct_counters! - and its KeyType impl.
+#[proc_macro_attribute]
+pub fn counters(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand("#[counters]", || {
+        let trees: Vec<TokenTree> = item.clone().into_iter().collect();
+        let name = trees.windows(2)
+            .find_map(|w| match w {
+                [TokenTree::Ident(kw), TokenTree::Ident(n)] if kw.to_string() == "struct" => Some(n.to_string()),
+                _ => None,
+            })
+            .ok_or("expected a struct")?;
+        let mut out = item;
+        out.extend(tokens(&format!(
+            "crate::accounting::acct_counters!({name}Counters {{ {attr} }});\n\
+             impl crate::accounting::KeyType for {name} {{\n\
+                 type Delta = {name}Counters<i64>;\n\
+                 type Read  = {name}Counters<u64>;\n\
+             }}\n")));
+        Ok(out)
+    })
+}
+
 /// `#[unsized_vstruct]`, on C's definition of a struct ending in a flexible
 /// array - or `#[unsized_vstruct(tail = [E])]`, `tail = NAME: [E]`, saying
 /// what follows its header: the family of its definitions, one per state -

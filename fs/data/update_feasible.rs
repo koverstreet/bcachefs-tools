@@ -70,7 +70,7 @@ impl Fs {
         let cached = data_opts.write_flags.contains(w::BCH_WRITE_cached);
 
         // copygc::can_make_progress() reads accounting for dev_leaving
-        let _mark = self.mark_lock().read();
+        let mark = self.mark_lock().read();
         let rcu = read_lock();
         let devs = self.target_rw_devs(data_type, Target::decode(target));
         let mut ret = Available::default();
@@ -84,7 +84,7 @@ impl Fs {
             let free = ca.free_buckets_at(&ca.usage_read_fast(), watermark);
             if free != 0 {
                 ret.durability += if cached { 1 } else { ca.rw_durability() };
-            } else if copygc::can_make_progress(ca) {
+            } else if copygc::can_make_progress(ca, &mark) {
                 ret.need_copygc = true;
                 self.copygc_wakeup();
             }

@@ -940,12 +940,9 @@ impl<'f> Reconciler<'f, '_> {
 /// Whether there's high priority work - evacuating, rereplicating - which
 /// doesn't wait.
 fn hipri_work_pending(fs: &Fs) -> bool {
-    let pos = c::disk_accounting_pos::from_arm(c::bch_acct_reconcile_work {
+    accounting::read(fs, accounting::ReconcileWork {
         type_: c::bch_reconcile_accounting_type::BCH_RECONCILE_ACCOUNTING_high_priority.0 as u8,
-    });
-    let mut v = [0; 2];
-    accounting::mem_read(fs, &pos, &mut v);
-    v != [0, 0]
+    }) != Default::default()
 }
 
 /// Wait, after a pass with nothing to do: for the write io clock to reach a

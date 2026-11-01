@@ -935,7 +935,7 @@ impl Fs {
             return true;
         }
 
-        let _mark = self.mark_lock().read();
+        let mark = self.mark_lock().read();
         let rcu = read_lock();
         let mut found = false;
 
@@ -945,7 +945,7 @@ impl Fs {
             let Some(ca) = self.dev_rcu(e.dev.into(), &rcu) else { return true };
             if ca.alloc_wake_counter.load(Relaxed) as u32 != e.wake_counter_snapshot {
                 req.usage = ca.usage_read_fast();
-                if ca.free_buckets_at(&req.usage, req.watermark) > 1 || !can_make_progress(ca) {
+                if ca.free_buckets_at(&req.usage, req.watermark) > 1 || !can_make_progress(ca, &mark) {
                     return true;
                 }
                 self.copygc_wakeup();

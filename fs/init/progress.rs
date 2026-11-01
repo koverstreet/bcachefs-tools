@@ -169,15 +169,11 @@ fn total_nodes(fs: &Fs, leaf_mask: u64, inner_mask: u64) -> u64 {
             continue;
         }
 
-        // disk_sectors, total_nodes, inner_nodes
-        let mut v = [0u64; 3];
-        crate::accounting::mem_read(fs, &c::disk_accounting_pos::from_arm(c::bch_acct_btree { id: i }),
-                                    &mut v);
-        let [disk_sectors, total_nodes, inner_nodes] = v;
+        let v = crate::accounting::read(fs, crate::accounting::Btree { id: i });
 
         // Better to estimate as 0 than the total node count
         if inner_mask & bit != 0 {
-            total += inner_nodes;
+            total += v.interior;
         }
 
         if leaf_mask & bit == 0 {
@@ -186,10 +182,10 @@ fn total_nodes(fs: &Fs, leaf_mask: u64, inner_mask: u64) -> u64 {
 
         // We check for zeros to degrade gracefully when run with
         // un-upgraded accounting info (missing some counters).
-        total += if total_nodes != 0 {
-            total_nodes.wrapping_sub(inner_nodes)
+        total += if v.nodes != 0 {
+            v.nodes.wrapping_sub(v.interior)
         } else {
-            disk_sectors / expected_node_disk_sectors
+            v.sectors / expected_node_disk_sectors
         };
     }
     total

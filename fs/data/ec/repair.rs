@@ -270,14 +270,14 @@ fn stripe_repair_usable_devs(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, b: St
         carried.d.set(s.v().block_ptrs()[i].dev().into());
     }
 
-    let _mark = fs.mark_lock().read();
+    let mark = fs.mark_lock().read();
     let rcu = read_lock();
 
     let all = *devs;
     for i in all.d.iter().filter(|&i| !carried.d.test(i)) {
         let usable = fs.dev_rcu(i as u32, &rcu).is_some_and(|ca| {
             ca.free_buckets_at(&ca.usage_read_fast(), c::bch_watermark::BCH_WATERMARK_normal) != 0 ||
-                copygc::can_make_progress(ca)
+                copygc::can_make_progress(ca, &mark)
         });
         if !usable {
             devs.d.clear(i);
