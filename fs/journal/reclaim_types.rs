@@ -32,6 +32,11 @@ c_extern! {
 }
 
 impl c::journal {
+    /// The pins up to @seq flushed: whether any were.
+    pub fn flush_pins(&self, seq: u64) -> bool {
+        unsafe { bch2_journal_flush_pins(self.as_ptr(), seq) }
+    }
+
     /// The lowest watermark it takes reservations at, read without the
     /// journal's lock, which it's written under.
     pub fn watermark(&self) -> c::bch_watermark {
@@ -47,7 +52,7 @@ impl c::journal {
             // SAFETY: ours, and its field - a Volatile<u8>, laid out as a u8 -
             // set under the journal's lock, which C takes
             unsafe {
-                __bch2_journal_set_alloc_watermark(core::ptr::from_ref(self).cast_mut(),
+                __bch2_journal_set_alloc_watermark(self.as_ptr(),
                     (&raw const self.lock.watermark_open_buckets).cast_mut().cast(), watermark)
             }
         }

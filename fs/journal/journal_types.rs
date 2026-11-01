@@ -50,15 +50,25 @@ c_extern! {
 }
 
 impl c::journal {
+    /// For C, which writes what it changes through it as its locks allow.
+    pub fn as_ptr(&self) -> *mut c::journal {
+        core::ptr::from_ref(self).cast_mut()
+    }
+
     pub fn halted(&self) -> bool {
         self.lock.hot.reservations.load(Ordering::Relaxed) & u64::from(c::JOURNAL_ENTRY_OFFSET_MAX) ==
             u64::from(c::JOURNAL_ENTRY_ERROR_VAL)
+    }
+
+    /// Everything committed before the call is on disk when it returns
+    pub fn flush(&self) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { bch2_journal_flush(self.as_ptr()) })
     }
 }
 
 impl ToText for c::journal {
     fn to_text(&self, out: &mut Printbuf) {
-        unsafe { bch2_journal_debug_to_text(out.as_raw(), core::ptr::from_ref(self).cast_mut()) }
+        unsafe { bch2_journal_debug_to_text(out.as_raw(), self.as_ptr()) }
     }
 }
 
@@ -66,27 +76,27 @@ impl Fs {
     /// Write a journal entry with nothing in it but metadata, and wait for
     /// it to be flushed.
     pub fn journal_meta(&self) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { bch2_journal_meta(&raw mut (*self.as_ptr()).journal) })
+        ret_to_result_void(unsafe { bch2_journal_meta(self.journal.as_ptr()) })
     }
 
     /// Ask the journal not to flush seqs [@start, @end), whose entries hold
     /// nothing that needs it - false if it can't: one's been flushed.
     pub fn journal_noflush_seq(&self, start: u64, end: u64) -> bool {
-        unsafe { bch2_journal_noflush_seq(&raw mut (*self.as_ptr()).journal, start, end) }
+        unsafe { bch2_journal_noflush_seq(self.journal.as_ptr(), start, end) }
     }
 
     /// Advance the rewind limit to @seq: buckets emptied before it may be
     /// discarded, once a journal flush has the limit on disk.
     pub fn journal_advance_rewind_seq(&self, seq: u64) {
-        unsafe { bch2_journal_advance_rewind_seq(&raw mut (*self.as_ptr()).journal, seq) }
+        unsafe { bch2_journal_advance_rewind_seq(self.journal.as_ptr(), seq) }
     }
 
     /// Start writes of whatever's ready to be written.
     pub fn journal_do_writes(&self) {
-        unsafe { bch2_journal_do_writes(&raw mut (*self.as_ptr()).journal) }
+        unsafe { bch2_journal_do_writes(self.journal.as_ptr()) }
     }
 
     pub fn journal_reclaim_to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_journal_reclaim_to_text(out.as_raw(), &raw mut (*self.as_ptr()).journal) }
+        unsafe { c::bch2_journal_reclaim_to_text(out.as_raw(), self.journal.as_ptr()) }
     }
 }

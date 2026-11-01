@@ -276,7 +276,7 @@ impl Fs {
 
     /// Everything committed before the call is on disk when it returns
     pub fn journal_flush(&self) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_journal_flush(&mut (*self.as_ptr()).journal) })
+        self.journal.flush()
     }
 
     /// A logged op, resumed after a crash. Block granular: zeroing the rest of
@@ -331,11 +331,11 @@ impl Fs {
     }
 
     pub fn journal_flush_all_pins(&self) -> bool {
-        unsafe { c::bch2_journal_flush_pins(&mut (*self.as_ptr()).journal, u64::MAX) }
+        self.journal.flush_pins(u64::MAX)
     }
 
     pub fn journal_flush_outstanding_pins(&self) -> bool {
-        unsafe { c::bch2_journal_flush_pins(&mut (*self.as_ptr()).journal, self.journal_cur_seq()) }
+        self.journal.flush_pins(self.journal_cur_seq())
     }
 
     pub fn btree_delete_range(
