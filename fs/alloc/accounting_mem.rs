@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::accounting::{self, accounting_bkey, data_type_from_u8, is_mem, key_to_text,
+use crate::accounting::{self, accounting_bkey, is_mem, key_to_text,
                         replicas_entry, Accounting, CounterSet, Counters, DiskAccountingPos, MAX_COUNTERS};
 use crate::alloc::buckets::bch_fs_usage_base;
 use crate::alloc::replicas::{can_read_with_devs, try_replicas_acct};
@@ -755,7 +755,7 @@ crate::recovery_pass!(bch2_accounting_read => read);
 /// Whether accounting is kept for @e - or it's an entry no accounting
 /// position here holds, a newer version's, and not ours to drop.
 pub(crate) fn has_replicas(fs: &Fs, mark: &impl MarkHeld, e: &c::bch_replicas_entry_v1) -> bool {
-    let Some(pos) = try_replicas_acct(data_type_from_u8(e.data_type), e.nr_required, &e.devs) else { return true };
+    let Some(pos) = try_replicas_acct(DataType(e.data_type.into()), e.nr_required, &e.devs) else { return true };
     fs.accounting_mem(mark).find(pos.to_bpos()).is_some()
 }
 
@@ -772,7 +772,7 @@ pub(crate) fn usage_of<R>(fs: &Fs, pos: &DiskAccountingPos<Unvalidated>, d: &[u6
         Ok(A::persistent_reserved(r)) => usage.reserved =
             u64::from(r.nr_replicas).wrapping_mul(accounting::PersistentReservedCounters::from_slice(d).sectors),
         Ok(A::replicas(r)) =>
-            usage.add_data_type(data_type_from_u8(r.data_type), accounting::ReplicasCounters::from_slice(d).sectors),
+            usage.add_data_type(DataType(r.data_type.into()), accounting::ReplicasCounters::from_slice(d).sectors),
         Ok(A::dev_data_type(r)) => {
             let rcu = rcu::read_lock();
             if let (Some(ca), Some(t)) = (fs.dev_rcu(r.dev.into(), &rcu), r.known_data_type()) {

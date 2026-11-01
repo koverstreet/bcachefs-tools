@@ -472,7 +472,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::accounting::data_type_from_u8;
+
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::accounting;
 use crate::alloc::check::need_discard_or_freespace_err;
@@ -876,7 +876,7 @@ pub fn bch2_alloc_v4_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>>, 
 
 impl c::AllocV4 {
     fn data_type(&self) -> DataType {
-        data_type_from_u8(self.data_type)
+        DataType(self.data_type.into())
     }
 
     /// bch2_bucket_sectors_dirty(): u32s added as C's, wrapping.

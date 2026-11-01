@@ -82,18 +82,6 @@ pub use crate::format::accounting::*;
 pub use crate::format::CompressionType;
 pub use c::ReconcileType;
 
-pub fn data_type_from_u8(v: u8) -> DataType {
-    DataType(v as u32)
-}
-
-pub fn compression_type_from_u8(v: u8) -> CompressionType {
-    CompressionType(v as u32)
-}
-
-pub fn reconcile_type_from_u8(v: u8) -> ReconcileType {
-    ReconcileType(v as u32)
-}
-
 /// Size of a bpos in bytes — maximum size of any accounting key payload.
 const BPOS_SIZE: usize = core::mem::size_of::<Bpos>();
 
@@ -137,7 +125,7 @@ impl DevDataType {
     /// Its data type, if this version knows it: a newer version's are kept
     /// in the table, but not in a device's usage, which has no slot for them.
     pub fn known_data_type(&self) -> Option<DataType> {
-        let t = data_type_from_u8(self.data_type);
+        let t = DataType(self.data_type.into());
         (t.0 < DataType::nr.0).then_some(t)
     }
 }
@@ -302,8 +290,8 @@ pub fn key_to_text(out: &mut Printbuf, fs: Option<&Fs>, pos: &DiskAccountingPos<
         Err(_) => {}
         Ok(A::persistent_reserved(a)) => write!(out, "replicas={}", a.nr_replicas),
         Ok(A::replicas(r)) => SbEntry::from(r).to_text(out),
-        Ok(A::dev_data_type(a)) => write!(out, "dev={} data_type={}", a.dev, data_type_from_u8(a.data_type)),
-        Ok(A::compression(a)) => write!(out, "{}", compression_type_from_u8(a.type_)),
+        Ok(A::dev_data_type(a)) => write!(out, "dev={} data_type={}", a.dev, DataType(a.data_type.into())),
+        Ok(A::compression(a)) => write!(out, "{}", CompressionType(a.type_.into())),
         Ok(A::snapshot(a)) => {
             let (id, btree) = (a.id, format::Btree(a.btree));
             write!(out, "id={id} btree={btree}");
@@ -312,7 +300,7 @@ pub fn key_to_text(out: &mut Printbuf, fs: Option<&Fs>, pos: &DiskAccountingPos<
             let btree = format::Btree(a.id);
             write!(out, "btree={btree}");
         }
-        Ok(A::reconcile_work(a)) => write!(out, "{}", reconcile_type_from_u8(a.type_)),
+        Ok(A::reconcile_work(a)) => write!(out, "{}", ReconcileType(a.type_.into())),
         Ok(A::stripe_frag(a)) => write!(out, "nr_empty={}", a.nr_empty),
         Ok(A::dev_stripe_frag(a)) => write!(out, "dev={}", a.dev),
         Ok(A::dev_leaving(a)) => {
@@ -349,7 +337,7 @@ fn normalized_bpos(pos: &DiskAccountingPos) -> Bpos {
             let devs = &mut devs[..r.devs.len()];
             devs.copy_from_slice(&r.devs);
             devs.sort_unstable();
-            replicas_acct(data_type_from_u8(r.data_type), r.nr_required, devs).to_bpos()
+            replicas_acct(DataType(r.data_type.into()), r.nr_required, devs).to_bpos()
         }
         _ => pos.to_bpos(),
     }

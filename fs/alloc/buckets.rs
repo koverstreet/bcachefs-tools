@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::accounting::{self, data_type_from_u8, mod_dev_cached_sectors};
+use crate::accounting::{self, mod_dev_cached_sectors};
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
 use crate::alloc::replicas::{bkey_replicas_acct, entry_acct, replicas_acct};
 use crate::btree::bkey::prelude::*;
@@ -377,7 +377,7 @@ impl TransAttempt<'_, '_> {
         // as C's: a negative @sectors past the count wraps, and is past U32_MAX
         let new = u64::from(*bucket_sectors).wrapping_add(sectors as u64);
         if b_gen != ptr.generation() ||
-           data_type_from_u8(*bucket_data_type).mismatches(ptr_data_type) ||
+           DataType(u32::from(*bucket_data_type)).mismatches(ptr_data_type) ||
            new > u64::from(u32::MAX) {
             return self.bucket_ref_update_slowpath(ca, k, ptr, sectors, ptr_data_type, b_gen,
                                                    bucket_data_type, bucket_sectors);
@@ -397,7 +397,7 @@ impl TransAttempt<'_, '_> {
         let (dev, b, ptr_gen) = (ptr.dev(), ca.ptr_bucket(ptr), ptr.generation());
         let inserting = sectors > 0;
         // the bucket's type, or the pointer's if it hasn't one
-        let type_str = |t: u8| data_type_str(if t != 0 { data_type_from_u8(t) } else { ptr_data_type });
+        let type_str = |t: u8| data_type_str(if t != 0 { DataType(t.into()) } else { ptr_data_type });
 
         assert!(sectors != 0);
 
@@ -433,10 +433,10 @@ impl TransAttempt<'_, '_> {
                 type_str(*bucket_data_type)));
         }
 
-        if data_type_from_u8(*bucket_data_type).mismatches(ptr_data_type) {
+        if DataType(u32::from(*bucket_data_type)).mismatches(ptr_data_type) {
             self.bucket_ref_update_err(k, false, id::ptr_bucket_data_type_mismatch, message!(
                 "bucket {dev}:{b} gen {b_gen} different types of data in same bucket: {}, {}",
-                data_type_str(data_type_from_u8(*bucket_data_type)), data_type_str(ptr_data_type)))?;
+                data_type_str(DataType(u32::from(*bucket_data_type))), data_type_str(ptr_data_type)))?;
             *bucket_data_type = DataType::multiple.0 as u8;
         }
 
@@ -554,7 +554,7 @@ fn trigger_pointer(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeySC
     let insert = !flags.contains(UpdateTriggerFlags::OVERWRITE);
 
     let mut bp = extent_ptr_to_bp(fs, btree, level, k, d);
-    let bp_data_type = data_type_from_u8(bp.v.data_type);
+    let bp_data_type = DataType(bp.v.data_type.into());
     let sectors = if insert { i64::from(bp.v.bucket_len) } else { -i64::from(bp.v.bucket_len) };
 
     let dev = u32::from(p.ptr.dev());
@@ -882,7 +882,7 @@ fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, b: 
     if cur != 0 && data_type.0 != 0 && u32::from(cur) != data_type.0 {
         let mut msg = LogMsg::new(fs);
         prt!(&mut msg, "bucket {}:{b} gen {} different types of data in same bucket: {}, {}\nwhile marking {}\n",
-             ca.dev_idx, a.v().generation, data_type_str(data_type_from_u8(cur)),
+             ca.dev_idx, a.v().generation, data_type_str(DataType(cur.into())),
              data_type_str(data_type), data_type_str(data_type));
         count_fsck_err(fs, id::bucket_metadata_type_mismatch, &mut msg);
         passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_allocations,
@@ -910,7 +910,7 @@ fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, b: u64, da
     };
 
     t.gc_bucket_mod(ca, g, flags, |a| {
-        let cur = data_type_from_u8(a.data_type);
+        let cur = DataType(a.data_type.into());
         if a.data_type != 0 && cur != data_type {
             fs_inconsistent(fs, message!("different types of data in same bucket: {}, {}",
                                          data_type_str(cur), data_type_str(data_type)));
@@ -1206,7 +1206,7 @@ impl c::bch_dev {
 
         write!(out, "\tbuckets\rsectors\rfragmented\r\n");
         for (i, u) in usage.d.iter().enumerate() {
-            data_type_from_u8(i as u8).to_text(out);
+            DataType(u32::from(i as u8)).to_text(out);
             write!(out, "\t{}\r{}\r{}\r\n", u.buckets, u.sectors, u.fragmented);
         }
         write!(out, "capacity\t{}\r\n", self.mi.get().nbuckets);

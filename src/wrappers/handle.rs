@@ -556,11 +556,11 @@ impl DevUsage {
     /// Iterate data types with their typed enum key.
     /// Caps at BCH_DATA_NR to avoid UB if the kernel returns more types than we know.
     pub fn iter_typed(&self) -> impl Iterator<Item = (DataType, &DevUsageType)> {
-        use super::accounting::data_type_from_u8;
+
         let max = DataType::nr.0 as usize;
         self.data_types.iter().enumerate()
             .take(max)
-            .map(|(i, dt)| (data_type_from_u8(i as u8), dt))
+            .map(|(i, dt)| (DataType(u32::from(i as u8)), dt))
     }
 
     /// Total capacity in sectors.

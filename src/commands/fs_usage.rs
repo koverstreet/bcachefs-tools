@@ -4,9 +4,7 @@ use bch_bindgen::c;
 use clap::Parser;
 
 use crate::commands::DeviceNameArgs;
-use crate::wrappers::accounting::{
-    AccountingEntry, compression_type_from_u8, data_type_from_u8, disk_accounting_type, reconcile_type_from_u8,
-};
+use crate::wrappers::accounting::{AccountingEntry, CompressionType, disk_accounting_type, ReconcileType};
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
 use bcachefs_kernel::format::DataType;
 use bcachefs_kernel::util::vstructs::ArmError;
@@ -200,7 +198,7 @@ fn fs_usage_v1_to_text(
                         let dev_list = &r.devs;
                         let dur = replicas_durability(r.nr_devs, r.nr_required, dev_list, devs);
 
-                        data_type_from_u8(r.data_type).to_text(sub);
+                        DataType(r.data_type.into()).to_text(sub);
                         write!(sub, ":\t{}/{}\t{}\t[", r.nr_required, r.nr_devs, dur.durability);
 
                         prt_dev_list(sub, dev_list, devs);
@@ -225,7 +223,7 @@ fn fs_usage_v1_to_text(
 
                 for entry in &compr {
                     if let Ok(Acct::compression(r)) = entry.pos.get() {
-                        compression_type_from_u8(r.type_).to_text(sub);
+                        CompressionType(r.type_.into()).to_text(sub);
                         write!(sub, "\t");
 
                         let nr_extents = entry.counter(0);
@@ -278,7 +276,7 @@ fn fs_usage_v1_to_text(
                 write!(sub, "\nPending reconcile:\tdata\rmetadata\r\n");
                 for entry in &reconcile {
                     if let Ok(Acct::reconcile_work(r)) = entry.pos.get() {
-                        reconcile_type_from_u8(r.type_).to_text(sub);
+                        ReconcileType(r.type_.into()).to_text(sub);
                         write!(sub, ":\t{}\r{}\r\n", Sectors(entry.counter(0)), Sectors(entry.counter(1)));
                     }
                 }
@@ -458,7 +456,7 @@ fn replicas_summary_to_text(
                 reserved += entry.counter(0);
             }
             Ok(Acct::replicas(r)) => {
-                if data_type_from_u8(r.data_type) == DataType::cached {
+                if DataType(r.data_type.into()) == DataType::cached {
                     cached += entry.counter(0);
                     continue;
                 }
