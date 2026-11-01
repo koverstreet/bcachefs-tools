@@ -843,7 +843,7 @@ pub fn delete_dead_key<'a, 't>(
                 let new = damage::keys_merge(t, dst, dst_k, k)?;
                 t.update(&dst_iter, &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
             }
-            Some(dst_k) if !dst_k.k.is_deleted() => {}
+            Some(dst_k) if !dst_k.k.key_type().is_deleted() => {}
             _ => {
                 let mut new = t.bkey_make_mut_noupdate(k)?;
                 new.k_mut().p = dst;

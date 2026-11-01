@@ -112,12 +112,6 @@ impl c::bkey {
         (self.u64s as usize).saturating_sub(BKEY_U64S) * size_of::<u64>()
     }
 
-    /// Whether it's @K's type: the tag. Not whether its value is long enough
-    /// - that's validate's, as in C.
-    pub fn is<K: BkeyTag + ?Sized>(&self) -> bool {
-        self.type_ as u32 == K::TYPE.0
-    }
-
     pub fn set_val_bytes(&mut self, bytes: usize) {
         let u64s = BKEY_U64S + bytes.div_ceil(size_of::<u64>());
         self.u64s = u8::try_from(u64s)
@@ -143,19 +137,28 @@ impl c::bkey {
         self.p.offset.wrapping_sub(self.size as u64)
     }
 
-    pub fn is_deleted(&self) -> bool {
-        self.key_type() == c::bch_bkey_type::KEY_TYPE_deleted
+    pub fn is_btree_ptr(&self) -> bool {
+        <crate::data::ptrs::BtreePtrs as BkeyFamily>::contains(self)
+    }
+}
+
+impl c::bch_bkey_type {
+    /// Whether it's @K's type: the tag. Not whether its value is long enough
+    /// - that's validate's, as in C.
+    pub fn is<K: BkeyTag + ?Sized>(self) -> bool {
+        self == K::TYPE
+    }
+
+    pub fn is_deleted(self) -> bool {
+        self == Self::KEY_TYPE_deleted
+    }
+
+    pub fn is_whiteout(self) -> bool {
+        matches!(self, Self::KEY_TYPE_deleted | Self::KEY_TYPE_whiteout)
     }
 
     /// A tombstone in an extents btree.
-    pub fn is_extent_whiteout(&self) -> bool {
-        matches!(self.key_type(),
-                 c::bch_bkey_type::KEY_TYPE_deleted |
-                 c::bch_bkey_type::KEY_TYPE_whiteout |
-                 c::bch_bkey_type::KEY_TYPE_extent_whiteout)
-    }
-
-    pub fn is_btree_ptr(&self) -> bool {
-        <crate::data::ptrs::BtreePtrs as BkeyFamily>::contains(self)
+    pub fn is_extent_whiteout(self) -> bool {
+        matches!(self, Self::KEY_TYPE_deleted | Self::KEY_TYPE_whiteout | Self::KEY_TYPE_extent_whiteout)
     }
 }

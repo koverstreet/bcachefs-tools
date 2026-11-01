@@ -119,7 +119,7 @@ fn bp_missing(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::Ba
     let mut buf = Printbuf::new();
     prt!(&mut buf, "missing backpointer\nfor:  {}", extent.to_text(fs));
     prt!(&mut buf, "\nwant: {}", BkeySC::<c::Backpointer>::from(&*bp).to_text(fs));
-    if !bp_found.k.is_deleted() {
+    if !bp_found.k.key_type().is_deleted() {
         prt!(&mut buf, "\ngot:  {}", bp_found.to_text(fs));
     }
 

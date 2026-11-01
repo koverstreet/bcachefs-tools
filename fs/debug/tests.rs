@@ -241,7 +241,7 @@ fn test_iterate_extents_trim(fs: &Fs, nr: u64) -> TestRet {
     let slots_end = keys_end + 12;
     iter_at(min, BtreeIterFlags::SLOTS).for_each_max(&trans, pos(0, slots_end), |_, _, k| {
         assert_eq!(k.k.start_offset(), i, "{} isn't the slot starting at {i}", k.k);
-        assert_eq!(k.k.is_deleted(), i >= keys_end, "{} at {i}", k.k);
+        assert_eq!(k.k.key_type().is_deleted(), i >= keys_end, "{} at {i}", k.k);
         i = k.k.p.offset;
         Ok(())
     })?;
@@ -251,7 +251,7 @@ fn test_iterate_extents_trim(fs: &Fs, nr: u64) -> TestRet {
     // to its end; backwards, an extent straddling both ends of [2, 6), and an
     // empty window - each with where the iterator's left
     fn extent(k: Option<BkeySC<'_>>) -> Option<(bool, u64, u64)> {
-        k.map(|k| (k.k.is_deleted(), k.k.start_offset(), k.k.p.offset))
+        k.map(|k| (k.k.key_type().is_deleted(), k.k.start_offset(), k.k.p.offset))
     }
     let (hole, hole_end) = (keys_end + 2, keys_end + 6);
     let mut iter = iter_at(0, BtreeIterFlags::empty());
@@ -345,7 +345,7 @@ fn test_iterate_slots(fs: &Fs, nr: u64) -> TestRet {
             return Ok(ControlFlow::Break(()));
         }
         assert!(k.k.p.offset == i);
-        assert_eq!(k.k.is_deleted(), (i & 1) != 0);
+        assert_eq!(k.k.key_type().is_deleted(), (i & 1) != 0);
         i += 1;
         Ok(ControlFlow::Continue(()))
     })?;
@@ -380,7 +380,7 @@ fn test_iterate_slots_extents(fs: &Fs, nr: u64) -> TestRet {
         if i == nr {
             return Ok(ControlFlow::Break(()));
         }
-        assert_eq!(k.k.is_deleted(), i % 16 == 0);
+        assert_eq!(k.k.key_type().is_deleted(), i % 16 == 0);
         assert_eq!(k.k.start_offset(), i);
         assert_eq!({ k.k.size }, 8);
         i = k.k.p.offset;
@@ -771,7 +771,7 @@ fn test_bkey_buf(_fs: &Fs, _nr: u64) -> TestRet {
     let mut big = [0u64; 64];
 
     let mut b = BkeyBuf::new();
-    assert!(b.as_ref().k.is_deleted());
+    assert!(b.as_ref().k.key_type().is_deleted());
 
     let k = bkey_buf_test_key(&mut small, 100);
     b.reassemble(k);

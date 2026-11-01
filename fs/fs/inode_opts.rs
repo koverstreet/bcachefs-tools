@@ -764,7 +764,7 @@ impl c::inode_opt_change {
     /// After the transaction has committed: finish the propagate, if one was
     /// started, and wake reconcile, if there's a scan for it.
     pub fn finish(&mut self, trans: &BtreeTrans<'_>) -> Result<(), BchError> {
-        let ret = if self.propagate.k.is::<c::LoggedOpInodeOptPropagate>() {
+        let ret = if self.propagate.k.key_type().is::<c::LoggedOpInodeOptPropagate>() {
             propagate_finish(trans, &mut self.propagate)
         } else {
             Ok(())

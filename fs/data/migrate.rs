@@ -134,7 +134,7 @@ impl DevDrop<'_> {
 
         // Not through an extent iterator - an all_snapshots one isn't - so a
         // deletion is a plain key's, not an extent overwrite's
-        if n.k().is_deleted() {
+        if n.k().key_type().is_deleted() {
             n.k_mut().size = 0;
         }
         t.update(iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)

@@ -857,11 +857,11 @@ impl Repair<'_> {
         let found = iter.find_max_norestart(t, SPOS_MAX, |_, k| Ok(
             k.k.p == hash_k.k.p ||
             k.arm::<T::Val>().is_some_and(|k| T::same_name(k, hash_k)) ||
-            k.k.is_deleted()))?;
+            k.k.key_type().is_deleted()))?;
 
         match found {
             Some(k) if k.k.p == hash_k.k.p => {}
-            Some(hole) if hole.k.is_deleted() => return self.bad_hash::<T>(t, hash_k, hash),
+            Some(hole) if hole.k.key_type().is_deleted() => return self.bad_hash::<T>(t, hash_k, hash),
             Some(dup) => {
                 let dup = dup.arm::<T::Val>().expect("a key of the same name");
                 // A repair of the hash info commits, and restarts: past this,

@@ -503,7 +503,7 @@ pub unsafe trait BkeyWhole: Sized + Default + BkeyTag + BkeyFamily<Validated: Ar
     /// @k's value, if it's one, zero padded: it may predate fields Self has,
     /// which a reference would read past its end for.
     fn val_copy_pad(k: BkeySC<'_>) -> Option<Self> {
-        if !k.k.is::<Self>() {
+        if !k.k.key_type().is::<Self>() {
             return None;
         }
         let mut v = core::mem::MaybeUninit::<Self>::zeroed();
@@ -596,7 +596,7 @@ impl<T: BkeyTag + InState> BkeyFamily for T
     type Unvalidated = T::In<Unvalidated>;
 
     fn contains(k: &c::bkey) -> bool {
-        k.is::<T>()
+        k.key_type().is::<T>()
     }
 }
 

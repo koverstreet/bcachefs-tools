@@ -1755,7 +1755,7 @@ impl<'a, 't> TransBkey<'a, 't> {
     /// # Safety
     /// It's of @V's type, and the buffer holds a whole BkeyI<@V>.
     pub(crate) unsafe fn whole_unchecked<V: BkeyWhole>(self) -> TransBkey<'a, 't, V> {
-        debug_assert!(self.k().is::<V>());
+        debug_assert!(self.k().key_type().is::<V>());
         debug_assert!(self.buf_u64s as usize * size_of::<u64>() >= size_of::<BkeyI<V>>());
         // SAFETY: the caller's
         unsafe { self.cast() }

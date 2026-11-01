@@ -131,7 +131,7 @@ impl<'t> TransAttempt<'_, 't> {
         // the iterator's peek flags - its slots, say - as C's walk is
         let end = pos(ins.p.inode, u64::MAX);
         while let Some(k) = copy.peek_max(self, end)? {
-            if k.k.is_extent_whiteout() {
+            if k.k.key_type().is_extent_whiteout() {
                 let whiteout_type = *whiteout_type.get_or_insert_with(||
                     extent_whiteout_type(fs, iter.btree(), &ins));
 

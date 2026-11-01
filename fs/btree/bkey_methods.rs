@@ -347,10 +347,10 @@ impl<'a> TriggerOp<'a> {
     where
         F: FnMut(BkeySC<'_>, UpdateTriggerFlags) -> Result<(), BchError>,
     {
-        if !self.old.k.is_deleted() {
+        if !self.old.k.key_type().is_deleted() {
             f(self.old, self.flags - UpdateTriggerFlags::INSERT)?;
         }
-        if !self.new.k.is_deleted() {
+        if !self.new.k.key_type().is_deleted() {
             f(BkeySC::from(&self.new).untyped(), self.flags - UpdateTriggerFlags::OVERWRITE)?;
         }
         Ok(())

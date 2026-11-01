@@ -111,7 +111,7 @@ c_extern! {
 /// Any other deletion's is KEY_TYPE_whiteout.
 pub fn extent_whiteout_type(fs: &Fs, btree: Btree, k: &c::bkey) -> c::bch_bkey_type {
     if btree.is_extents_snapshots() &&
-       k.is_deleted() &&
+       k.key_type().is_deleted() &&
        fs.snapshots.is_leaf(k.p.snapshot) != Ok(false) &&
        fs.request_incompat_feature(c::bcachefs_metadata_version::extent_snapshot_whiteouts).is_ok() {
         c::bch_bkey_type::KEY_TYPE_extent_whiteout

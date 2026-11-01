@@ -185,7 +185,7 @@ fn dst_slot(
 
     let mut dst_iter = BtreeIter::new(t, Btree::dirents, pos,
                                       flags | BtreeIterFlags::ALL_SNAPSHOTS);
-    Ok(if dst_iter.peek_slot(t)?.expect("a slot always has a key").k.is_deleted() {
+    Ok(if dst_iter.peek_slot(t)?.expect("a slot always has a key").k.key_type().is_deleted() {
         DstSlot::Empty
     } else {
         DstSlot::Taken

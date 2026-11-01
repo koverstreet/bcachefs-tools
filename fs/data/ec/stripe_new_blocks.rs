@@ -416,7 +416,7 @@ pub(crate) fn stripe_idx_alloc(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Re
             return Ok(LoopFlow::ContinueFrom(min_pos));
         }
 
-        if k.k.is_deleted() {
+        if k.k.key_type().is_deleted() {
             if let Some(h) = OpenStripe::tryget(fs, k.k.p.offset)? {
                 ec_stripe_mem_alloc(t, iter)?;
                 assert!(s.slot_claim.is_none(), "a stripe being made with two slots");

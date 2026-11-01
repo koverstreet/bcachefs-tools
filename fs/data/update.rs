@@ -423,7 +423,7 @@ fn extent_drop_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_
     // We're not inserting through an extent iterator - an all_snapshots
     // iterator isn't one - so a deletion takes the plain key deletion path,
     // not the extent overwrite path
-    if n.k().is_deleted() && !iter.iter_flags().contains(BtreeIterFlags::IS_EXTENTS) {
+    if n.k().key_type().is_deleted() && !iter.iter_flags().contains(BtreeIterFlags::IS_EXTENTS) {
         n.k_mut().size = 0;
     }
 

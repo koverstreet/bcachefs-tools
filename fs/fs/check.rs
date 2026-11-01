@@ -329,7 +329,7 @@ impl InodeWalker {
         let btree = iter.btree();
 
         // whiteouts and hash whiteouts are tombstones - they need no inode:
-        if k.k.is_extent_whiteout() || k.k.key_type() == c::bch_bkey_type::KEY_TYPE_hash_whiteout {
+        if k.k.key_type().is_extent_whiteout() || k.k.key_type() == c::bch_bkey_type::KEY_TYPE_hash_whiteout {
             return Ok(());
         }
 

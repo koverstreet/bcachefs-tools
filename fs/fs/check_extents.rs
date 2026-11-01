@@ -390,7 +390,7 @@ fn check_extent<'t>(
         st.w.set_recalculate_sums();
     }
 
-    if !k.k.is_extent_whiteout() {
+    if !k.k.key_type().is_extent_whiteout() {
         check_extent_past_end(t, st, k)?;
     }
 

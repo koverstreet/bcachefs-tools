@@ -782,7 +782,7 @@ pub(crate) fn trigger_extent(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -
 
     if op.flags.contains(UpdateTriggerFlags::TRANSACTIONAL | UpdateTriggerFlags::INSERT) &&
        !op.flags.contains(UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE) &&
-       op.level == 0 && !op.new.k.is_deleted() {
+       op.level == 0 && !op.new.k.key_type().is_deleted() {
         extent_trigger_set_needs_reconcile(t, op)?;
     }
 
@@ -834,9 +834,9 @@ crate::key_trigger!(bch2_trigger_reservation => trigger_reservation);
 /// reservation, which count themselves.
 fn snapshot_key_counted(k: &c::bkey) -> bool {
     k.p.snapshot != 0 &&
-        !k.is_extent_whiteout() &&
-        !k.is::<c::Extent>() &&
-        !k.is::<c::Reservation>()
+        !k.key_type().is_extent_whiteout() &&
+        !k.key_type().is::<c::Extent>() &&
+        !k.key_type().is::<c::Reservation>()
 }
 
 /// Each (snapshot, btree)'s leaf keys and their bytes, so snapshot deletion

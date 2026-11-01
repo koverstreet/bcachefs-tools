@@ -1287,7 +1287,7 @@ fn is(t: DataType) -> impl Fn(&c::AllocV4) -> bool {
 /// @k's value, all of today's alloc_v4, to edit - None if it's another
 /// type, or a v4 shorter than today's.
 fn alloc_v4_whole_mut<'k>(k: &'k mut BkeyS<'_>) -> Option<&'k mut c::AllocV4> {
-    if !k.k.is::<c::AllocV4>() {
+    if !k.k.key_type().is::<c::AllocV4>() {
         return None;
     }
     <c::AllocV4 as ArmRef>::arm_mut(k.as_s().into_val_bytes_mut())
@@ -1453,7 +1453,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
     // An alloc key for a bucket that doesn't exist is check_alloc_info's to
     // delete (alloc_key_to_missing_dev_bucket): gc has nothing to account for
     // it, and deleting it nothing to undo. Inserting one is the inconsistency
-    if !fs.dev_bucket_exists(p) && (flags.contains(F::GC) || hdr.is_deleted()) {
+    if !fs.dev_bucket_exists(p) && (flags.contains(F::GC) || hdr.key_type().is_deleted()) {
         return Ok(());
     }
 
@@ -1463,7 +1463,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
     // A copy, for gc, which only reads it - its keys are the btree's, of any
     // version - and for a deletion. Otherwise it's edited in place
     let mut copy;
-    let new_a: &mut c::AllocV4 = if hdr.is_deleted() || !flags.intersects(F::TRANSACTIONAL | F::ATOMIC) {
+    let new_a: &mut c::AllocV4 = if hdr.key_type().is_deleted() || !flags.intersects(F::TRANSACTIONAL | F::ATOMIC) {
         copy = alloc_to_v4(BkeySC::from(&op.new));
         &mut copy
     } else {
