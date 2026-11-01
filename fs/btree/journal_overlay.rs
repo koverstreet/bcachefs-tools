@@ -246,9 +246,13 @@ impl Fs {
     }
 
     #[inline]
+    pub(crate) fn journal_key<'a>(&'a self, k: &'a c::journal_key) -> &'a BkeyI {
+        unsafe { &*BkeyI::from_raw(self.journal_key_k(k)) }
+    }
+
+    #[inline]
     fn journal_key_pos(&self, k: &c::journal_key) -> Bpos {
-        // SAFETY: as journal_key_k()'s
-        unsafe { (*self.journal_key_k(k)).k.p }
+        self.journal_key(k).k.p
     }
 
     #[inline]
@@ -561,8 +565,7 @@ pub unsafe fn bch2_key_deleted_in_journal(trans: *mut c::btree_trans, btree: Btr
         return false;
     }
 
-    // SAFETY: as journal_key_k()'s
-    let k = unsafe { &*fs.journal_key_k(k) };
+    let k = fs.journal_key(k);
     k.k.p == pos && k.k.key_type() == kt::KEY_TYPE_deleted
 }
 
@@ -627,8 +630,7 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
     let keys = unsafe { jk.keys_mut() };
 
     if let Some(o) = keys.get_mut(idx).filter(|o| fs.journal_key_cmp(&n, o).is_eq()) {
-        // SAFETY: as journal_key_k()'s
-        let ok = unsafe { &*BkeyI::from_raw(fs.journal_key_k(o)) };
+        let ok = fs.journal_key(o);
         let accounting = k.k.key_type() == kt::KEY_TYPE_accounting && ok.k.key_type() == kt::KEY_TYPE_accounting;
 
         if !(accounting && !o.allocated()) {
@@ -968,8 +970,7 @@ fn sort_dedup(fs: &Fs, keys: &mut GapBuffer<c::journal_key>) {
 
     let mut dst = 0;
     for src in 0..s.len() {
-        // SAFETY: as journal_key_k()'s
-        let accounting = unsafe { (*fs.journal_key_k(&s[src])).k.key_type() } == kt::KEY_TYPE_accounting;
+        let accounting = fs.journal_key(&s[src]).k.key_type() == kt::KEY_TYPE_accounting;
         if !accounting && src + 1 < s.len() && fs.journal_key_cmp(&s[src], &s[src + 1]).is_eq() {
             continue;
         }
