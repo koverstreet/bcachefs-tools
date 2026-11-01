@@ -173,7 +173,7 @@ macro_rules! module_param {
         $(#[$attr:meta])*
         $vis:vis static $name:ident: $t:ty = $default:expr;
         $(#[$reg:meta])*
-        perm = $perm:expr, desc = $desc:literal $(;)?
+        perm = $perm:expr $(, desc = $desc:literal)? $(;)?
     ) => {
         $(#[$attr])*
         #[allow(non_upper_case_globals)]
@@ -182,9 +182,25 @@ macro_rules! module_param {
 
         #[cfg(kernel)]
         $(#[$reg])*
+        $crate::module_param_cb!($name, $name.as_arg(),
+                                 <$t as $crate::util::module_param::ParamType>::OPS,
+                                 <$t as $crate::util::module_param::ParamType>::C_NAME,
+                                 $perm $(, $desc)?);
+    };
+}
+
+/// A module parameter's registration, as C's module_param_cb(),
+/// __MODULE_PARM_TYPE() and MODULE_PARM_DESC(): @name, its value at @arg, read
+/// and written by @ops, shown in modinfo as of type @c_type.
+#[cfg(kernel)]
+#[macro_export]
+macro_rules! module_param_cb {
+    ($name:ident, $arg:expr, $ops:expr, $c_type:expr, $perm:expr $(, $desc:expr)?) => {
+        $crate::module_info!("parmtype" = ::core::stringify!($name), ":", $c_type);
+        $($crate::module_info!("parm" = ::core::stringify!($name), ":", $desc);)?
+
         const _: () = {
-            use $crate::util::module_param::{modinfo, modinfo_len, verify_perm, KernelParam,
-                                             ParamType, MODINFO_PREFIX};
+            use $crate::util::module_param::{verify_perm, KernelParam};
 
             #[unsafe(link_section = "__param")]
             #[used(compiler)]
@@ -197,26 +213,30 @@ macro_rules! module_param {
                 mod_:  &raw mut ::kernel::bindings::__this_module,
                 #[cfg(not(MODULE))]
                 mod_:  ::core::ptr::null_mut(),
-                ops:   <$t as ParamType>::OPS,
+                ops:   $ops,
                 perm:  verify_perm($perm),
                 level: -1,
                 flags: 0,
                 __bindgen_anon_1: ::kernel::bindings::kernel_param__bindgen_ty_1 {
-                    arg: $name.as_arg(),
+                    arg: $arg,
                 },
             });
+        };
+    };
+}
 
-            const PARMTYPE: &[&str] =
-                &[MODINFO_PREFIX, "parmtype=", ::core::stringify!($name), ":", <$t as ParamType>::C_NAME];
+/// A .modinfo string, as C's MODULE_INFO(): @tag=, then @parts.
+#[cfg(kernel)]
+#[macro_export]
+macro_rules! module_info {
+    ($tag:literal = $($part:expr),+) => {
+        const _: () = {
+            use $crate::util::module_param::{modinfo, modinfo_len, MODINFO_PREFIX};
+
+            const INFO: &[&str] = &[MODINFO_PREFIX, $tag, "=", $($part),+];
             #[unsafe(link_section = ".modinfo")]
             #[used(compiler)]
-            static PARMTYPE_INFO: [u8; modinfo_len(PARMTYPE)] = modinfo(PARMTYPE);
-
-            const PARM: &[&str] =
-                &[MODINFO_PREFIX, "parm=", ::core::stringify!($name), ":", $desc];
-            #[unsafe(link_section = ".modinfo")]
-            #[used(compiler)]
-            static PARM_INFO: [u8; modinfo_len(PARM)] = modinfo(PARM);
+            static INFO_STR: [u8; modinfo_len(INFO)] = modinfo(INFO);
         };
     };
 }
