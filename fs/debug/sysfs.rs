@@ -32,7 +32,7 @@ use cstruct_macros::c_export;
 use crate::accounting;
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
-use crate::format::DataType;
+use crate::format::{CompressionType, DataType};
 use crate::fs::{Fs, WriteRef};
 use crate::init::passes;
 use crate::locking::{Locked, MemallocFlags};
@@ -666,7 +666,7 @@ fn compression_stats_to_text(c: &Fs, out: &mut Printbuf) {
     for i in 1..c::BCH_COMPRESSION_TYPE_NR {
         let v = accounting::read(c, accounting::Compression { type_: i as u8 });
 
-        prt!(out, "{}\t{}\r{}\r{}\r\n", c::bch_compression_type(i),
+        prt!(out, "{}\t{}\r{}\r{}\r\n", CompressionType(i),
              HumanReadable(v.compressed << 9),
              HumanReadable(v.uncompressed << 9),
              HumanReadable((v.uncompressed << 9).checked_div(v.nr_extents).unwrap_or(0)));

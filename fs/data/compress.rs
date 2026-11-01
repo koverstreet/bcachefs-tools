@@ -42,7 +42,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::c::{self, bbuf_type as bb, bch_compression_opts as opts, bch_compression_type as ty, bch_errcode as e};
+use crate::c::{self, bbuf_type as bb, bch_compression_opts as opts, bch_errcode as e};
 use crate::{bch_err, btree::iter::lockrestart_do, btree_trans, fs::Fs, fsck_err};
 use crate::errcode::{ret_to_c, BchError};
 use crate::init::error::{count_fsck_err, id};
@@ -57,7 +57,7 @@ use core::ptr::{self, NonNull};
 use cstruct_macros::{c_export, bitfield, c_enum, CStruct, TypeInfo};
 use crate::types::c_default;
 use nestify::nest;
-use crate::format::Bpos;
+use crate::format::{Bpos, CompressionType};
 
 nest! {
     #[derive(Clone, Copy, CStruct, TypeInfo)]*
@@ -95,11 +95,11 @@ impl bch_compression_opt {
 
     /// The compression type opt type @t writes, if it's one: C's
     /// __bch2_compression_opt_to_type[].
-    pub fn type_of(t: u8) -> Option<c::bch_compression_type> {
+    pub fn type_of(t: u8) -> Option<CompressionType> {
         macro_rules! map {
             ($(($t:ident, $n:literal)),* $(,)?) => { ::paste::paste! {
                 match t {
-                    $($n => Some(c::bch_compression_type::[<BCH_COMPRESSION_TYPE_ $t>]),)*
+                    $($n => Some(CompressionType::[<BCH_COMPRESSION_TYPE_ $t>]),)*
                     _ => None,
                 }
             } };
@@ -115,10 +115,10 @@ impl bch_compression_opt {
 
     /// The compression type @v writes: bch2_compression_opt_to_type(). An
     /// unknown type is none - options are validated, so that's warned about.
-    pub fn to_type(v: u8, fs: &Fs) -> c::bch_compression_type {
+    pub fn to_type(v: u8, fs: &Fs) -> CompressionType {
         Self::type_of(Self::bits(v).type_()).unwrap_or_else(|| {
             crate::warn_once!(true, fs, "unknown compression opt {v}");
-            c::bch_compression_type::BCH_COMPRESSION_TYPE_none
+            CompressionType::none
         })
     }
 }
@@ -158,12 +158,12 @@ const OPT_NR: usize = opts::BCH_COMPRESSION_OPT_NR.0 as usize;
 
 
 /// The opt whose pools decompress type @t.
-fn type_to_opt(t: ty) -> usize {
+fn type_to_opt(t: CompressionType) -> usize {
     match t {
-        ty::BCH_COMPRESSION_TYPE_none | ty::BCH_COMPRESSION_TYPE_incompressible => opts::BCH_COMPRESSION_OPT_none,
-        ty::BCH_COMPRESSION_TYPE_lz4_old | ty::BCH_COMPRESSION_TYPE_lz4 => opts::BCH_COMPRESSION_OPT_lz4,
-        ty::BCH_COMPRESSION_TYPE_gzip => opts::BCH_COMPRESSION_OPT_gzip,
-        ty::BCH_COMPRESSION_TYPE_zstd => opts::BCH_COMPRESSION_OPT_zstd,
+        CompressionType::none | CompressionType::incompressible => opts::BCH_COMPRESSION_OPT_none,
+        CompressionType::lz4_old | CompressionType::lz4 => opts::BCH_COMPRESSION_OPT_lz4,
+        CompressionType::gzip => opts::BCH_COMPRESSION_OPT_gzip,
+        CompressionType::zstd => opts::BCH_COMPRESSION_OPT_zstd,
         _ => panic!("compression type {}", t.0),
     }.0 as usize
 }
@@ -422,7 +422,7 @@ fn z_stream(src: *const u8, src_len: usize, dst: *mut u8, dst_len: usize,
 fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice<'_>, crc: &c::bch_extent_crc_unpacked)
     -> Result<(), BchError>
 {
-    let t = ty(crc.compression_type.into());
+    let t = CompressionType(crc.compression_type.into());
     let opt = type_to_opt(t);
 
     /*
@@ -452,14 +452,14 @@ fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice<'_>, crc: 
     // SAFETY: @src and @dst crc's sizes, apart
     unsafe {
         match t {
-            ty::BCH_COMPRESSION_TYPE_lz4_old | ty::BCH_COMPRESSION_TYPE_lz4 => {
+            CompressionType::lz4_old | CompressionType::lz4 => {
                 let (s, d) = (src_len as c_int, dst_len as c_int);
                 if c::LZ4_decompress_safe_partial(src.cast(), dst.cast(), s, d, d) != d {
-                    return fs.throw(if t == ty::BCH_COMPRESSION_TYPE_lz4 { e::BCH_ERR_decompress_lz4 }
+                    return fs.throw(if t == CompressionType::lz4 { e::BCH_ERR_decompress_lz4 }
                                     else { e::BCH_ERR_decompress_lz4_old });
                 }
             }
-            ty::BCH_COMPRESSION_TYPE_gzip => {
+            CompressionType::gzip => {
                 let mut strm = z_stream(src, src_len, dst, dst_len, ws);
                 c::zlib_inflateInit2(&mut strm, -(c::MAX_WBITS as c_int));
                 let ret = c::zlib_inflate(&mut strm, c::Z_FINISH as c_int);
@@ -472,7 +472,7 @@ fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice<'_>, crc: 
                     return fs.throw(e::BCH_ERR_decompress_gzip_size_mismatch);
                 }
             }
-            ty::BCH_COMPRESSION_TYPE_zstd => {
+            CompressionType::zstd => {
                 let real_src_len = match src_len {
                     4.. => u32::from_le_bytes(src.cast::<[u8; 4]>().read_unaligned()) as usize,
                     _ => usize::MAX,
@@ -676,12 +676,12 @@ fn attempt_compress(fs: &Fs, ws: &mut [MaybeUninit<u8>], dst: VolatileSlice<'_>,
 /// of each - or none or incompressible. @src a slice: what's compressed is
 /// written out, and has to be what's checksummed.
 fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], src_len: &mut usize,
-            compression_opt: u8, write_pos: Bpos) -> ty {
+            compression_opt: u8, write_pos: Bpos) -> CompressionType {
     let block = fs.block_bytes() as usize;
 
     // If it's only one block, don't bother trying to compress:
     if *src_len <= block {
-        return ty::BCH_COMPRESSION_TYPE_incompressible;
+        return CompressionType::incompressible;
     }
 
     let bits = bch_compression_opt::bits(compression_opt);
@@ -695,7 +695,7 @@ fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], sr
                             "compression opt {} set but not marked in superblock", opts(t as u32));
         // not to fix, fsck_err() failing, or no memory for the pools: don't compress
         if !matches!(fix, Ok(true)) || check_set_has_compressed_data(fs, t as u8).is_err() {
-            return ty::BCH_COMPRESSION_TYPE_none;
+            return CompressionType::none;
         }
     }
 
@@ -746,21 +746,21 @@ fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], sr
     // Didn't fit, or didn't get smaller:
     let padded = dst_len.next_multiple_of(block);
     if !fit || padded >= *src_len {
-        return ty::BCH_COMPRESSION_TYPE_incompressible;
+        return CompressionType::incompressible;
     }
 
     dst.sub(*dst_len..padded).fill(0);
     *dst_len = padded;
 
     if unlikely(verify_compress.get()) && !verify(fs, dst.sub(0..*dst_len), &src[..*src_len], compression_type, write_pos) {
-        return ty::BCH_COMPRESSION_TYPE_incompressible;
+        return CompressionType::incompressible;
     }
     assert!(*dst_len % block == 0 && *src_len % block == 0,
             "compressed {src_len} bytes to {dst_len}, not whole {block} byte blocks");
     compression_type
 }
 
-fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: ty, pos: Bpos) -> bool {
+fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: Bpos) -> bool {
     let src_len = src.len();
     let crc = c::bch_extent_crc_unpacked {
         compressed_size:   (dst.len() >> 9) as u32,
@@ -813,7 +813,7 @@ pub unsafe fn bch2_bio_compress(c: &Opaque<c::bch_fs>, dst: *mut c::bio, dst_len
         // a copy, says are stable: BCH_WRITE_pages_stable
         let src_slice = unsafe { src_data.data().assume_stable() };
         let t = compress(fs, dst_data.data(), dst_len, src_slice, src_len, compression_opt as u8, write_pos);
-        if t != ty::BCH_COMPRESSION_TYPE_none && t != ty::BCH_COMPRESSION_TYPE_incompressible {
+        if t != CompressionType::none && t != CompressionType::incompressible {
             if !dst_data.mapped() {
                 // past what's compressed, uninitialized and never submitted
                 dst.copy_from_volatile(dst_data.data());

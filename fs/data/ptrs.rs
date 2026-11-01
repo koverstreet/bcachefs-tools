@@ -36,7 +36,7 @@ use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, Ent
 use arrayvec::ArrayVec;
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
-use crate::format::{Bversion, DataType, Nonce};
+use crate::format::{Bversion, CompressionType, DataType, Nonce};
 
 #[path = "ptrs_edit.rs"]
 mod edit;
@@ -435,7 +435,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     /// Whether it has data that didn't compress - a crc of compression type
     /// incompressible: bch2_bkey_is_incompressible().
     fn is_incompressible(&self, fs: &Fs) -> bool {
-        let incompressible = c::bch_compression_type::BCH_COMPRESSION_TYPE_incompressible.0 as u8;
+        let incompressible = CompressionType::incompressible.0 as u8;
         self.crcs(fs).any(|crc| crc.compression_type == incompressible)
     }
 
@@ -453,9 +453,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
             return;
         }
 
-        use c::bch_compression_type as t;
-        let (none, incompressible) = (t::BCH_COMPRESSION_TYPE_none.0 as u8,
-                                      t::BCH_COMPRESSION_TYPE_incompressible.0 as u8);
+        let (none, incompressible) = (CompressionType::none.0 as u8, CompressionType::incompressible.0 as u8);
         for e in self.extent_entries_mut(fs) {
             match e {
                 ExtentEntryMut::crc32(e) if e.compression_type() == none => e.set_compression_type(incompressible),
@@ -999,8 +997,8 @@ impl ExtentEntryMut<'_> {
 
 /// Whether @crc's data is compressed - incompressible isn't: crc_is_compressed().
 pub fn crc_is_compressed(crc: &c::bch_extent_crc_unpacked) -> bool {
-    crc.compression_type as u32 != c::bch_compression_type::BCH_COMPRESSION_TYPE_none.0 &&
-        crc.compression_type as u32 != c::bch_compression_type::BCH_COMPRESSION_TYPE_incompressible.0
+    crc.compression_type as u32 != CompressionType::none.0 &&
+        crc.compression_type as u32 != CompressionType::incompressible.0
 }
 
 /// The nonce of @crc's data, in an extent of version @version: extent_nonce().

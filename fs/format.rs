@@ -1799,11 +1799,15 @@ c_xmacro! {
 
 c_enum! {
     #[open]
-    pub enum bch_compression_type: u32 {
+    #[c_name(bch_compression_type)]
+    pub enum CompressionType: u32 {
         BCH_COMPRESSION_TYPES(t, n) => concat(BCH_COMPRESSION_TYPE_, t) = n,
         BCH_COMPRESSION_TYPE_NR,
     }
 }
+
+/// C's name, as bindgen's declarations of C functions spell it.
+pub type bch_compression_type = CompressionType;
 
 c_xmacro! {
     BCH_COMPRESSION_OPTS(x) {

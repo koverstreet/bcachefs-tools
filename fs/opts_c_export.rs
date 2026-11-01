@@ -9,7 +9,7 @@ use crate::util::vstructs::{Head, Validated};
 use core::ffi::{c_int, c_uint};
 use crate::util::ToText;
 use cstruct_macros::c_export;
-use crate::format::{Btree, DataType};
+use crate::format::{Btree, CompressionType, DataType};
 
 #[c_export]
 pub static bch2_opts_default: c::bch_opts = DEFAULTS;
@@ -48,7 +48,7 @@ pub fn bch2_prt_csum_type(out: &mut Printbuf, t: c::bch_csum_type) {
 }
 
 #[c_export]
-pub fn bch2_prt_compression_type(out: &mut Printbuf, t: c::bch_compression_type) {
+pub fn bch2_prt_compression_type(out: &mut Printbuf, t: CompressionType) {
     t.to_text(out)
 }
 

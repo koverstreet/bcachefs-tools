@@ -237,7 +237,7 @@ pub mod format;
 pub mod opts;
 
 pub use paste::paste;
-use crate::format::{Btree, DataType};
+use crate::format::{Btree, CompressionType, DataType};
 
 pub mod c {
     #![allow(clippy::missing_safety_doc)]
@@ -455,7 +455,7 @@ c::BCH_METADATA_VERSIONS!(newtype_enum_aliases [bcachefs_metadata_version, bcach
 c::BCH_BTREE_IDS!(newtype_enum_aliases [btree_id, BTREE_ID, nr = BTREE_ID_NR]);
 c::BCH_BKEY_TYPES!(newtype_enum_aliases [bch_bkey_type, KEY_TYPE, nr = KEY_TYPE_MAX]);
 c::BCH_DATA_TYPES!(newtype_enum_aliases [DataType, BCH_DATA, nr = BCH_DATA_NR]);
-c::BCH_COMPRESSION_TYPES!(newtype_enum_aliases [bch_compression_type, BCH_COMPRESSION_TYPE, nr = BCH_COMPRESSION_TYPE_NR]);
+c::BCH_COMPRESSION_TYPES!(newtype_enum_aliases [CompressionType, BCH_COMPRESSION_TYPE, nr = BCH_COMPRESSION_TYPE_NR]);
 c::BCH_JSET_ENTRY_TYPES!(newtype_enum_aliases [bch_jset_entry_type, BCH_JSET_ENTRY, nr = BCH_JSET_ENTRY_NR]);
 c::BCH_SB_COMPAT!(newtype_enum_aliases [bch_sb_compat, BCH_COMPAT, nr = BCH_COMPAT_NR]);
 c::BCH_SB_FIELDS!(newtype_enum_aliases [bch_sb_field_type, BCH_SB_FIELD, nr = BCH_SB_FIELD_NR]);
@@ -613,8 +613,8 @@ impl From<DataType> for u32 {
     }
 }
 
-impl From<c::bch_compression_type> for u32 {
-    fn from(t: c::bch_compression_type) -> u32 {
+impl From<CompressionType> for u32 {
+    fn from(t: CompressionType) -> u32 {
         t.0
     }
 }

@@ -11,7 +11,7 @@ use crate::data::reconcile::trigger::{extent_rebalance_v1_to_text, extent_reconc
 use crate::init::error::{id, BkeyValidate};
 use crate::util::rcu::ReadGuard;
 use crate::util::{Printbuf, ToText};
-use crate::format::Btree;
+use crate::format::{Btree, CompressionType};
 
 // ── validate ─────────────────────────────────────────────────────────────
 
@@ -126,7 +126,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                 bkey_fsck_err_on!(v, !csum_type.valid(fs), id::ptr_crc_csum_type_unknown,
                                   "invalid checksum type")?;
                 bkey_fsck_err_on!(v, u32::from(crc.compression_type) >=
-                                     c::bch_compression_type::BCH_COMPRESSION_TYPE_NR.0,
+                                     CompressionType::nr.0,
                                   id::ptr_crc_compression_type_unknown, "invalid compression type")?;
 
                 bkey_fsck_err_on!(v, u32::from(crc.offset).wrapping_add(crc.live_size) > crc.uncompressed_size,
@@ -236,7 +236,7 @@ fn crc_unpacked_to_text(out: &mut Printbuf, crc: &c::bch_extent_crc_unpacked) {
            crc.compressed_size, crc.uncompressed_size, crc.offset, crc.nonce,
            c::bch_csum_type(crc.csum_type.into()),
            csum_word_raw(crc.csum.hi), csum_word_raw(crc.csum.lo));
-    c::bch_compression_type(crc.compression_type.into()).to_text(out);
+    CompressionType(crc.compression_type.into()).to_text(out);
 }
 
 /// A key with pointers' entries, a line each: bch2_bkey_ptrs_to_text(). It

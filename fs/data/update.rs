@@ -55,7 +55,7 @@ use c::bch_data_update_types as Type;
 use crate::types::c_default;
 use core::sync::atomic::AtomicBool;
 use nestify::nest;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, CompressionType};
 
 c_xmacro! {
     BCH_DATA_UPDATE_TYPES(x) {
@@ -686,7 +686,7 @@ impl c::data_update {
                     }
                 }
 
-                if u32::from(p.crc.compression_type) == c::bch_compression_type::BCH_COMPRESSION_TYPE_incompressible.0 {
+                if u32::from(p.crc.compression_type) == CompressionType::incompressible.0 {
                     self.op.bits.set_incompressible(1);
                 }
 

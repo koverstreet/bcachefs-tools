@@ -15,6 +15,7 @@ use crate::data::durability::BkeyVDurability;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
 use crate::data::reconcile::trigger::{extent_reconcile_to_text, BkeyVReconcile};
 use crate::errcode::{ret_to_c, BchError};
+use crate::format::CompressionType;
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
 use crate::util::kernel::unlikely;
@@ -85,7 +86,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
             let p = &d.p;
             let dev = u32::from(p.ptr.dev());
 
-            incompressible |= p.crc.compression_type == c::bch_compression_type::BCH_COMPRESSION_TYPE_incompressible.0 as u8;
+            incompressible |= p.crc.compression_type == CompressionType::incompressible.0 as u8;
             unwritten      |= p.ptr.unwritten() != 0;
 
             // A stripe block counts for nothing on a device of durability 0 -
