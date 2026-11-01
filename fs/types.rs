@@ -9,6 +9,7 @@ use crate::util::alloc::KVVec;
 use crate::util::bitmap::AtomicBitflags;
 use crate::util::kernel::WRITE;
 use crate::util::kobject::Kobject;
+use crate::util::projections::Volatile;
 use crate::util::bio::BioSet;
 use crate::util::late::Late;
 use crate::util::mempool::Mempool;
@@ -747,13 +748,13 @@ pub struct Fs {
     #[init(c::journal::init())]
     #[late]
     pub journal: c::journal,
-    pub journal_replay_seq_start: u64,
+    pub journal_replay_seq_start: Volatile<u64>,
     /*
      * Journal scrub: where its first flush range starts - the newest flush
      * before journal_replay_seq_start - while it runs; 0 otherwise.
      */
-    pub journal_scrub_seq: u64,
-    pub journal_replay_seq_end: u64,
+    pub journal_scrub_seq: Volatile<u64>,
+    pub journal_replay_seq_end: Volatile<u64>,
     pub journal_entries: GenRadix<*mut c::journal_replay>,
     pub journal_entries_base_seq: u64,
     #[pin]

@@ -1033,7 +1033,7 @@ fn keys_sort(fs: &Fs) -> Result<(), BchError> {
     // SAFETY: before the btree runs, the keys are recovery's alone
     let keys = unsafe { jk.keys_mut() };
     let (mut nr_read, mut nr_extra_sorts) = (0usize, 0usize);
-    let start_seq = if fs.journal_scrub_seq != 0 { fs.journal_scrub_seq } else { fs.journal_replay_seq_start };
+    let start_seq = match fs.journal_scrub_seq.get() { 0 => fs.journal_replay_seq_start.get(), s => s };
 
     jk.reset(keys);
 
