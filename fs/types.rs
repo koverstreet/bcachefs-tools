@@ -614,15 +614,21 @@ pub struct Fs {
     pub dev: c::dev_t,
     pub name: [c_char; 40],
 
-    pub stdio: *mut c::stdio_redirect,
-    pub stdio_filter: *mut c::task_struct,
+    /// This, stdio_filter and stdio_user_only: set as a redirect attaches and
+    /// detaches - the status fd's, online fsck's - and read by every print,
+    /// on any thread. stdio published last, Release, and read Acquire.
+    #[c("struct stdio_redirect *stdio")]
+    pub stdio: AtomicPtr<c::stdio_redirect>,
+    #[c("struct task_struct *stdio_filter")]
+    pub stdio_filter: AtomicPtr<c::task_struct>,
     /*
      * Online fsck redirects everything it prints; mounting doesn't - a boot
      * splash wants the questions and the hard errors, not a running
      * commentary of IO errors. Set this and the redirect carries only what
      * bch2_print_str_user() sends.
      */
-    pub stdio_user_only: bool,
+    #[c("bool stdio_user_only")]
+    pub stdio_user_only: core::sync::atomic::AtomicBool,
     /*
      * Someone is polling BCH_IOCTL_RECOVERY_STATUS on that redirect, so
      * they're drawing progress themselves and progress indicators keep off

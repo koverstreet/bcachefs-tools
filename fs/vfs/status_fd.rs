@@ -22,6 +22,7 @@ use crate::util::thread_with_file::{Stdio, StdioFile, ThreadWithFile};
 use core::ffi::c_void;
 use core::mem::size_of;
 use core::ptr::NonNull;
+use core::sync::atomic::Ordering::{Relaxed, Release};
 use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
 use kernel::uaccess::UserPtr;
 use pin_init::{pin_data, pin_init};
@@ -71,7 +72,7 @@ impl StdioFile for StatusFd {
             }
 
             // Whoever's asking is drawing it: keep it off the console.
-            fs.stdio_progress_reader.store(true, core::sync::atomic::Ordering::Relaxed);
+            fs.stdio_progress_reader.store(true, Relaxed);
 
             let r = &fs.recovery;
             {
@@ -124,12 +125,8 @@ impl StatusFile {
     /// questions, go to it, and its ioctl answers for @fs - until the guard
     /// returned drops: recovery's over, however it went.
     pub(crate) fn attach<'a>(&'a self, fs: &'a Fs) -> Attached<'a> {
-        // SAFETY: as C's: set while the mount's in recovery, which is the
-        // mounting thread
-        unsafe {
-            (*fs.as_ptr()).stdio = self.status().redirect.as_c();
-            (*fs.as_ptr()).stdio_user_only = true;
-        }
+        fs.stdio_user_only.store(true, Relaxed);
+        fs.stdio.store(self.status().redirect.as_c(), Release);
         *self.status().data.fs.lock() = Some(NonNull::from(fs));
         Attached { file: self, fs }
     }
@@ -155,11 +152,8 @@ impl Drop for Attached<'_> {
         // filesystem under this lock, so no further ioctl can set it.
         *self.file.status().data.fs.lock() = None;
 
-        let fs = self.fs.as_ptr();
-        unsafe {
-            (*fs).stdio = core::ptr::null_mut();
-            (*fs).stdio_user_only = false;
-            (*fs).stdio_progress_reader.store(false, core::sync::atomic::Ordering::Relaxed);
-        }
+        self.fs.stdio.store(core::ptr::null_mut(), Release);
+        self.fs.stdio_user_only.store(false, Relaxed);
+        self.fs.stdio_progress_reader.store(false, Relaxed);
     }
 }

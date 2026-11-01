@@ -200,13 +200,15 @@ const PRINTK_LIMIT: usize = 1024;
 /// and if this is the task it's for.
 #[cfg(kernel)]
 pub(crate) fn stdio_redirect(fs: &Fs, user: bool) -> Option<&crate::util::thread_with_file::StdioRedirect> {
-    if fs.stdio.is_null() ||
-       (!user && fs.stdio_user_only) ||
-       (!fs.stdio_filter.is_null() && fs.stdio_filter != unsafe { c::get_current() }) {
+    let stdio = fs.stdio.load(Ordering::Acquire);
+    let filter = fs.stdio_filter.load(Ordering::Relaxed);
+    if stdio.is_null() ||
+       (!user && fs.stdio_user_only.load(Ordering::Relaxed)) ||
+       (!filter.is_null() && filter != unsafe { c::get_current() }) {
         return None;
     }
     // SAFETY: the filesystem's redirect, set while it's attached
-    Some(unsafe { crate::util::thread_with_file::StdioRedirect::from_c(fs.stdio) })
+    Some(unsafe { crate::util::thread_with_file::StdioRedirect::from_c(stdio) })
 }
 
 /// @s at printk level @level - None, the previous message's - if the

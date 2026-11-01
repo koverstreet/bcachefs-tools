@@ -872,6 +872,7 @@ impl Fs {
 #[cfg(kernel)]
 pub mod ioctl {
     use super::*;
+    use core::sync::atomic::Ordering::{Relaxed, Release};
     use crate::fs::{OpenFs, RoRef};
     use crate::init::registry::{self, Claim, FsHandle, Opener};
     use crate::init::passes::{bch2_recovery_passes, passes_match, run_passes};
@@ -1007,12 +1008,8 @@ pub mod ioctl {
 
         let mut ret = Err(BchError::from(c::EAGAIN));
         if let Some(_run) = fs.recovery.run_lock.try_lock() {
-            let c = fs.as_ptr();
-            // SAFETY: as C's, under run_lock: online fsck's, while it runs
-            unsafe {
-                (*c).stdio_filter = c::get_current();
-                (*c).stdio = stdio.as_c();
-            }
+            fs.stdio_filter.store(unsafe { c::get_current() }, Relaxed);
+            fs.stdio.store(stdio.as_c(), Release);
 
             // XXX: can we figure out a way to do this without mucking with c->opts?
             let old_fix_errors = fs.opts.fix_errors.get();
@@ -1033,10 +1030,8 @@ pub mod ioctl {
 
             fs.flags.set(c::bch_fs_flags::BCH_FS_in_fsck, false);
 
-            unsafe {
-                (*c).stdio = core::ptr::null_mut();
-                (*c).stdio_filter = core::ptr::null_mut();
-            }
+            fs.stdio.store(core::ptr::null_mut(), Release);
+            fs.stdio_filter.store(core::ptr::null_mut(), Relaxed);
             fs.opts_writer(&mut fs.sb_lock()).fix_errors.set(old_fix_errors);
         }
 

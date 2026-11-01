@@ -475,7 +475,7 @@ impl Fs {
         let p = self.as_ptr();
 
         unsafe {
-            (*p).stdio = opts.stdio as usize as *mut c::stdio_redirect;
+            (*p).stdio.store(opts.stdio as usize as *mut c::stdio_redirect, Relaxed);
             (*p).recovery_task.store(c::bch2_current(), Relaxed);
         }
 
