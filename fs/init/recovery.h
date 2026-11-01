@@ -3,7 +3,4 @@
 #define _BCACHEFS_RECOVERY_H
 #include "init/recovery_gen.h"
 
-int bch2_set_may_go_rw(struct bch_fs *);
-int bch2_journal_replay(struct bch_fs *);
-
 #endif /* _BCACHEFS_RECOVERY_H */

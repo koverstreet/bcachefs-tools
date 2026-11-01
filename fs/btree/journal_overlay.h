@@ -47,11 +47,4 @@ static inline int journal_key_cmp(struct bch_fs *c,
 				 journal_key_k(c, l)->k.p, r);
 }
 
-static inline void bch2_journal_keys_put_initial(struct bch_fs *c)
-{
-	if (c->journal_keys.initial_ref_held)
-		bch2_journal_keys_put(c);
-	c->journal_keys.initial_ref_held = false;
-}
-
 #endif /* _BCACHEFS_BTREE_JOURNAL_ITER_H */

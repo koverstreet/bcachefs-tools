@@ -1,29 +1,49 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Recovery - init/recovery.c's, as it converts. So far what it records in
-//! the superblock: a btree that lost data and the repairs that takes, alloc
-//! info dropped to be reconstructed, and the errors a journal rewind leaves
-//! expected. Each is idempotent, so what it dirties is exactly what's new.
+//! Recovery - a filesystem brought up from its superblock and journal, or a
+//! new one initialized - and what it records in the superblock: a btree that
+//! lost data and the repairs that takes, alloc info dropped to be
+//! reconstructed, and the errors a journal rewind leaves expected. Each of
+//! those is idempotent, so what it dirties is exactly what's new.
 
-use crate::btree::bkey::{POS_MIN, SPOS_MAX};
-use crate::btree::journal_overlay::shoot_down_journal_keys;
+use crate::accounting;
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
+use crate::btree::bkey_buf::BkeyBuf;
+use crate::btree::iter::{commit_do, trans_commit_do, BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts,
+                         TransAttempt, UpdateTriggerFlags, Watermark};
+use crate::btree::journal_overlay::{journal_keys_put_initial, keys_sort, shoot_down_journal_keys};
+use crate::btree::update::Subbuf;
 use crate::c;
-use crate::errcode::{ret_to_c, BchError};
-use crate::fs::{btree_id_is_alloc, Fs};
-use crate::init::error::id;
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::fs::{btree_id_can_reconstruct, btree_id_is_alloc, Fs};
+use crate::init::error::{self, id};
 use crate::init::passes::{self, run_explicit_sb};
-use crate::prt;
-use crate::sb::io::SbWrite;
+use crate::journal::sb as journal_sb;
+use crate::journal::seq_blacklist::blacklist_entries_gc;
+use crate::opts::opts_hooks_pre_set;
+use crate::sb::io::{check_version_downgrade, sb_upgrade, SbWrite};
+use crate::snapshots::snapshot::snapshots_read;
+use crate::snapshots::subvolume;
+use crate::types::Le64;
+use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::ffi::Opaque;
+use crate::util::kernel::{cond_resched, sort_nonatomic, unlikely};
+use crate::util::log::LogMsg;
+use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
+use crate::{inode, logged_ops, namei, quota};
+use crate::{bch_err, bch_err_msg, bch_info, bch_notice, bch_verbose, btree_trans, fs_fatal_error, fsck_err_on,
+            message, mustfix_fsck_err, mustfix_fsck_err_on, prt};
+use c::bch_bkey_type as kt;
+use c::bch_fs_flags as Flag;
+use c::bch_progress_units as Units;
+use core::cmp::Ordering;
 use core::ffi::c_int;
-use cstruct_macros::{c_export, c_extern};
+use core::sync::atomic::Ordering::Relaxed;
+use cstruct_macros::c_export;
 use crate::format::Btree;
-
-c_extern! {
-    pub fn bch2_fs_recovery(c: *mut Fs) -> c_int;
-    pub fn bch2_fs_initialize(c: *mut Fs) -> c_int;
-}
+use zerocopy::IntoBytes;
 
 type Pass = c::bch_recovery_pass;
 
@@ -73,7 +93,6 @@ fn lost_data_passes(btree: Btree) -> &'static [Pass] {
 /// with its repairs scheduled and the errors they'll find, which the loss
 /// explains, silenced. @msg is the report: unsuppressed if any of this was new,
 /// so damage already reported doesn't print on every read of a bad node.
-/// bch2_btree_lost_data().
 pub fn btree_lost_data(fs: &Fs, msg: &mut Printbuf, btree: Btree) -> Result<(), BchError> {
     let mut w = fs.sb_write();
 
@@ -198,4 +217,918 @@ fn ignore_journal_rewind_errors(fs: &Fs) {
 #[c_export]
 pub fn bch2_ignore_journal_rewind_errors(c: &Opaque<Fs>) {
     ignore_journal_rewind_errors(Fs::from_c(c))
+}
+
+/* journal replay: */
+
+fn journal_replay_accounting_key(t: &TransAttempt<'_, '_>, k: &c::journal_key) -> Result<(), BchError> {
+    let fs = t.fs();
+    let bk = fs.journal_key(k);
+
+    let mut iter = BtreeNodeIter::new(t, k.btree_id(), bk.k.p, c::BTREE_MAX_DEPTH, k.level().into(),
+                                      BtreeIterFlags::INTENT);
+    iter.iter().traverse(t)?;
+
+    let mut u = c::bkey::default();
+    let old = iter.iter().path_peek_slot(t, &mut u);
+
+    /* Has this delta already been applied to the btree? */
+    if old.k.bversion >= bk.k.bversion {
+        return Ok(());
+    }
+
+    let mut new = t.bkey_make_mut_noupdate(BkeySC::from(bk))?;
+    if old.k.key_type() == kt::KEY_TYPE_accounting {
+        accounting::accumulate(new.as_mut(), old);
+    }
+
+    if let Some(seq) = fs.journal_key_seq(k) {
+        t.set_journal_seq_to_pin(seq);
+    }
+
+    t.update(iter.iter(), &new, UpdateTriggerFlags::NORUN)
+}
+
+fn journal_replay_key(t: &TransAttempt<'_, '_>, idx: usize) -> Result<(), BchError> {
+    let fs = t.fs();
+    let k = &fs.journal_keys.keys()[idx];
+    let mut iter_flags = BtreeIterFlags::INTENT | BtreeIterFlags::NOT_EXTENTS;
+    let mut update_flags = UpdateTriggerFlags::NORUN;
+
+    if k.is_overwritten() {
+        return Ok(());
+    }
+
+    if let Some(seq) = fs.journal_key_seq(k) {
+        t.set_journal_seq_to_pin(seq);
+    }
+
+    /*
+     * BTREE_UPDATE_key_cache_reclaim disables key cache lookup/update to
+     * keep the key cache coherent with the underlying btree. Nothing
+     * besides the allocator is doing updates yet so we don't need key cache
+     * coherency for non-alloc btrees, and key cache fills for snapshots
+     * btrees use BTREE_ITER_filter_snapshots, which isn't available until
+     * the snapshots recovery pass runs.
+     */
+    if k.level() == 0 && k.btree_id() == Btree::BTREE_ID_alloc {
+        iter_flags |= BtreeIterFlags::CACHED;
+    } else {
+        update_flags |= UpdateTriggerFlags::KEY_CACHE_RECLAIM;
+    }
+
+    let bk = fs.journal_key(k);
+    let mut iter = BtreeNodeIter::new(t, k.btree_id(), bk.k.p, c::BTREE_MAX_DEPTH, k.level().into(), iter_flags);
+    iter.iter().traverse(t)?;
+
+    if unlikely(iter.iter().node_at_iter_level(t).is_none()) {
+        drop(iter);
+        return journal_replay_key_no_node(t, idx, iter_flags);
+    }
+
+    /* Must be checked with btree locked: */
+    if k.is_overwritten() {
+        return Ok(());
+    }
+
+    if bk.k.key_type() == kt::KEY_TYPE_accounting {
+        t.subbuf_alloc(Subbuf::Accounting, bk.k.u64s.into())?.as_mut_bytes().copy_from_slice(bk.as_bytes());
+        return Ok(());
+    }
+
+    let new = t.bkey_make_mut_noupdate(BkeySC::from(bk))?;
+    t.update(iter.iter(), &new, update_flags)
+}
+
+#[cold]
+#[inline(never)]
+fn journal_replay_key_no_node(t: &TransAttempt<'_, '_>, idx: usize, iter_flags: BtreeIterFlags)
+    -> Result<(), BchError>
+{
+    let fs = t.fs();
+    let k = &fs.journal_keys.keys()[idx];
+    let bk = fs.journal_key(k);
+
+    let mut buf = Printbuf::new();
+    prt!(&mut buf, "btree={} level={} {}", k.btree_id(), k.level(), BkeySC::from(bk).to_text(fs));
+
+    let scanned = passes::bit(Pass::BCH_RECOVERY_PASS_scan_for_btree_nodes) |
+                  passes::bit(Pass::BCH_RECOVERY_PASS_check_topology);
+    if fs.recovery.runner.passes_complete.get() & scanned == 0 {
+        bch_err!(fs, "have key in journal replay for btree depth that does not exist, confused\n{}", buf);
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_journal_replay_key_bad_btree_depth);
+    }
+
+    if !k.allocated() {
+        bch_notice!(fs, "dropping key in journal replay for depth that does not exist because we're recovering from scan\n{}",
+                    buf);
+        fs.journal_keys.mark_overwritten(idx);
+        return Ok(());
+    }
+
+    let mut iter = BtreeNodeIter::new(t, k.btree_id(), bk.k.p, c::BTREE_MAX_DEPTH, 0, iter_flags);
+    iter.iter().traverse(t)?;
+    t.btree_increase_depth(iter.iter())?;
+    Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))
+}
+
+fn journal_sort_seq_cmp(l: &c::journal_key, r: &c::journal_key) -> Ordering {
+    match (l.journal_pos(), r.journal_pos()) {
+        (Some(l), Some(r)) => l.journal_seq_offset.cmp(&r.journal_seq_offset),
+        _                  => l.allocated().cmp(&r.allocated()),
+    }
+}
+
+fn journal_replay(fs: &Fs) -> Result<(), BchError> {
+    let jk = &fs.journal_keys;
+    let keys = jk.keys();
+    let start_seq = fs.journal_replay_seq_start.get();
+    let end_seq = fs.journal_replay_seq_start.get();
+    let mut immediate_flush = false;
+
+    let replay_flags = CommitFlags::JOURNAL_REPLAY | CommitFlags::NO_ENOSPC | CommitFlags::NO_SKIP_NOOPS |
+                       CommitFlags::SKIP_ACCOUNTING_APPLY;
+
+    assert!(jk.ref_.load(Relaxed) != 0);
+    assert_eq!(keys.gap, keys.len());
+
+    if !keys.is_empty() {
+        fs.journal_log_msg(message!("Starting journal replay ({} keys in entries {}-{})",
+                                    keys.len(), start_seq, end_seq))?;
+    }
+
+    let trans = btree_trans!(fs);
+
+    let replays_accounting = |k: &c::journal_key| {
+        fs.journal_key(k).k.key_type() == kt::KEY_TYPE_accounting && !k.allocated()
+    };
+    let accounting_total = keys.iter().filter(|k| replays_accounting(k)).count();
+
+    /*
+     * Replay accounting keys first: we can't allow the write buffer to
+     * flush accounting keys until we're done
+     */
+    fs.recovery.progress.init_count(Some(c"journal replay: accounting"), Units::BCH_PROGRESS_UNITS_keys,
+                                    accounting_total as u64);
+
+    for (idx, k) in keys.iter().enumerate() {
+        if !replays_accounting(k) {
+            continue;
+        }
+
+        cond_resched();
+
+        let flags = CommitOpts::new()
+            .flags(replay_flags | CommitFlags::JOURNAL_RECLAIM | CommitFlags::NO_JOURNAL_RES)
+            .watermark(Watermark::RECLAIM);
+        if let Err(e) = commit_do(&trans, None, flags, |t| journal_replay_accounting_key(t, k)) {
+            fs_fatal_error!(fs, "error replaying accounting; {}", e.msg());
+            return Err(e);
+        }
+
+        jk.mark_overwritten(idx);
+        fs.recovery.progress.update_count(fs);
+    }
+
+    fs.flags.set(Flag::BCH_FS_accounting_replay_done, true);
+
+    /*
+     * First, attempt to replay keys in sorted order. This is more
+     * efficient - better locality of btree access -  but some might fail if
+     * that would cause a journal deadlock.
+     */
+    fs.recovery.progress.init_count(Some(c"journal replay: sorted pass"), Units::BCH_PROGRESS_UNITS_keys,
+                                    keys.len() as u64);
+
+    let mut keys_sorted = KVVec::new();
+    for (idx, k) in keys.iter().enumerate() {
+        cond_resched();
+        fs.recovery.progress.update_count(fs);
+
+        /*
+         * k->allocated means the key wasn't read in from the journal,
+         * rather it was from early repair code
+         */
+        if k.allocated() {
+            immediate_flush = true;
+        }
+
+        /*
+         * Skip the fastpath if we're low on space in the journal, or
+         * if btree node allocation has hit the memory-pressure self
+         * reclaim path: the fastpath holds every journal pin until
+         * replay finishes, but self reclaim needs pins to be released
+         * so that journal reclaim can write back and free btree nodes
+         * - with enough devices the journal can be bigger than RAM,
+         * and the btree node cache will eat all of memory before the
+         * journal-space watermark ever trips.
+         */
+        let self_reclaim = fs.btree.cache.nr_self_reclaim.load(Relaxed);
+        let replayed = fs.journal.watermark() == c::bch_watermark::BCH_WATERMARK_stripe &&
+            self_reclaim == 0 &&
+            commit_do(&trans, None,
+                      replay_flags | CommitFlags::JOURNAL_RECLAIM |
+                      if !k.allocated() { CommitFlags::NO_JOURNAL_RES } else { CommitFlags::empty() },
+                      |t| journal_replay_key(t, idx)).is_ok();
+        if !replayed {
+            keys_sorted.push(idx, GFP_KERNEL)?;
+        }
+    }
+
+    trans.unlock_long();
+    /*
+     * Now, replay any remaining keys in the order in which they appear in
+     * the journal, unpinning those journal entries as we go:
+     */
+    sort_nonatomic(&mut keys_sorted, |&l, &r| journal_sort_seq_cmp(&keys[l], &keys[r]));
+
+    fs.recovery.progress.init_count(Some(c"journal replay: journal-order pass"), Units::BCH_PROGRESS_UNITS_keys,
+                                    keys_sorted.len() as u64);
+
+    for &idx in keys_sorted.iter() {
+        cond_resched();
+        fs.recovery.progress.update_count(fs);
+
+        let k = &keys[idx];
+
+        fs.journal.replay_pins_put(fs.journal_key_seq(k).unwrap_or(fs.journal.lock.replay_journal_seq_end.get()));
+
+        let mut flags = CommitOpts::new().flags(replay_flags);
+        if !k.allocated() {
+            flags = flags.flags(CommitFlags::NO_JOURNAL_RES).watermark(Watermark::RECLAIM);
+        }
+        if let Err(e) = commit_do(&trans, None, flags, |t| journal_replay_key(t, idx)) {
+            return bch_err_msg!(fs, Err(e), "while replaying key at btree={} level={}:", k.btree_id(), k.level());
+        }
+
+        assert!(k.btree_id() == Btree::BTREE_ID_accounting || k.is_overwritten(),
+                "journal key {idx} replayed, but not overwritten");
+    }
+
+    trans.unlock_long();
+
+    if fs.opts.retain_recovery_info.get() == 0 &&
+       fs.recovery.runner.pass_done.get() >= Pass::BCH_RECOVERY_PASS_journal_replay {
+        journal_keys_put_initial(fs);
+    }
+
+    fs.journal.replay_pins_put(fs.journal.lock.replay_journal_seq_end.get());
+    fs.journal.replay_journal_seq.set(0);
+
+    fs.journal.set_replay_done();
+
+    /* if we did any repair, flush it immediately */
+    if immediate_flush {
+        fs.journal_flush_outstanding_pins();
+        let _ = fs.journal_meta();
+    }
+
+    if !jk.keys().is_empty() {
+        let _ = fs.journal_log_msg(message!("journal replay finished"));
+    }
+    Ok(())
+}
+
+crate::recovery_pass!(bch2_journal_replay => journal_replay);
+
+/* journal replay early: */
+
+fn journal_replay_entry_early(fs: &Fs, entry: &c::jset_entry) -> Result<(), BchError> {
+    match entry.typed() {
+        Ok(c::JsetEntryRef::btree_root(e)) => {
+            let Some(k) = e.entries().next() else { return Ok(()) };
+            let id = u32::from(e.btree_id);
+
+            if fsck_err_on!(fs, id >= c::BTREE_ID_NR_MAX, id::invalid_btree_id,
+                            "invalid btree id {} (max {})", id, c::BTREE_ID_NR_MAX)? {
+                return Ok(());
+            }
+
+            let mut roots = fs.btree.cache.roots.lock();
+
+            roots.grow_to(id)?;
+
+            let r = roots.get_mut(id).expect("grown to it");
+            r.level = e.level;
+            r.set_key(k.key());
+            r.alive = 1;
+            roots.published().roots_error[id as usize].set(0);
+        }
+        Ok(c::JsetEntryRef::usage(u)) => {
+            if u.entry.btree_id == c::bch_fs_usage_type::BCH_FS_USAGE_key_version.0 as u8 {
+                fs.key_version.store(u.v.get() as i64, Relaxed);
+            }
+        }
+        Ok(c::JsetEntryRef::blacklist(bl)) => {
+            fs.journal_seq_blacklist_add(bl.seq.get(), bl.seq.get().wrapping_add(1))?;
+        }
+        Ok(c::JsetEntryRef::blacklist_v2(bl)) => {
+            fs.journal_seq_blacklist_add(bl.start.get(), bl.end.get().wrapping_add(1))?;
+        }
+        Ok(c::JsetEntryRef::clock(clock)) => {
+            fs.io_clock[usize::from(clock.rw)].now.store(clock.time.get() as i64, Relaxed);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn journal_replay_early(fs: &Fs, clean: Option<&c::bch_sb_field_clean>) -> Result<(), BchError> {
+    if let Some(clean) = clean {
+        for entry in clean.entries() {
+            journal_replay_entry_early(fs, entry)?;
+        }
+    } else {
+        for (_, j) in unsafe { fs.journal_replays() } {
+            for entry in j.entries() {
+                journal_replay_entry_early(fs, entry)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/* sb clean section: */
+
+fn read_btree_roots(fs: &Fs) -> Result<(), BchError> {
+    let mut buf = Printbuf::new();
+
+    for i in 0..fs.btree_id_nr_alive() {
+        let Some((key, level)) = fs.btree.cache.roots.lock().get(i)
+            .filter(|r| r.alive != 0)
+            .map(|r| (BkeyBuf::from_key(r.key().into()), r.level))
+        else {
+            continue;
+        };
+
+        buf.reset();
+        prt!(&mut buf, "btree={} level={}", Btree(i), level);
+
+        let fixed = if fs.btree.cache.roots.error(i) != 0 {
+            mustfix_fsck_err!(fs, id::btree_root_bkey_invalid, "invalid btree root {}", buf)?
+        } else {
+            let read = fs.btree_root_read(Btree(i), key.as_ref(), level.into());
+            fs.btree_id_root_set_error(i, ret_to_c(read));
+            mustfix_fsck_err_on!(fs, read.is_err(), id::btree_root_read_error,
+                                 "error reading btree root {}: {}", buf, read.err().map_or("", |e| e.msg()))?
+        };
+        if fixed && btree_id_can_reconstruct(i) {
+            fs.btree_id_root_set_error(i, 0);
+        }
+    }
+
+    for i in 0..u32::from(Btree::nr) {
+        if fs.btree_id_root(i).is_none() && fs.btree.cache.roots.error(i) == 0 {
+            {
+                let mut roots = fs.btree.cache.roots.lock();
+                let r = roots.get_mut(i).expect("a known btree's root");
+                r.alive = 0;
+                r.level = 0;
+            }
+            fs.btree_root_alloc_fake(Btree(i), 0);
+        }
+    }
+    Ok(())
+}
+
+fn set_may_go_rw(fs: &Fs) -> Result<(), BchError> {
+    /*
+     * After we go RW, the journal keys buffer can't be modified (except for
+     * setting journal_key->overwritten: it will be accessed by multiple
+     * threads
+     */
+    unsafe { fs.journal_keys.keys_mut() }.make_contiguous();
+
+    fs.flags.set(Flag::BCH_FS_may_go_rw, true);
+
+    /* Before going rw, and anything that could start a logged op: */
+    logged_ops::note_unfinished(fs)?;
+
+    if passes::go_rw_in_recovery(fs) {
+        if fs.feature(c::bch_sb_feature::BCH_FEATURE_no_alloc_info) {
+            bch_info!(fs, "mounting a filesystem with no alloc info read-write; will recreate");
+            reconstruct_alloc(fs);
+        }
+
+        return fs.state_lock_write().start_rw();
+    }
+    Ok(())
+}
+
+crate::recovery_pass!(bch2_set_may_go_rw => set_may_go_rw);
+
+fn recovery(fs: &Fs) -> Result<(), BchError> {
+    let mut journal_start = c::journal_start_info::default();
+
+    let mut clean = if fs.sb.clean.get() != 0 {
+        let c = fs.read_superblock_clean()?;
+
+        bch_info!(fs, "recovering from clean shutdown, journal seq {}", c.journal_seq.get());
+
+        journal_sb::sb_journal_sort(fs)?;
+        Some(c)
+    } else {
+        bch_info!(fs, "recovering from unclean shutdown");
+        None
+    };
+
+    fs.journal_pos_from_member_info_resume();
+
+    let read_journal = fs.sb.clean.get() == 0 ||
+        fs.opts.retain_recovery_info.get() != 0 ||
+        fs.opts.journal_rewind.get() != 0 ||
+        u32::from(fs.opts.scrub_recent_journal_entries.get()) == c::bch_scrub_journal_opts::BCH_SCRUB_JOURNAL_always.0;
+    let mut use_clean = !read_journal;
+
+    if read_journal {
+        bch_verbose!(fs, "starting journal read");
+        journal_start = fs.journal_read()?;
+
+        /*
+         * If we found persisted rewind ranges from a previous
+         * crashed rewind, re-read any journal entries that were
+         * dropped because they were older than last_seq:
+         */
+        fs.journal_reread_for_rewind()?;
+
+        /*
+         * note: cmd_list_journal needs the blacklist table fully up to date so
+         * it can asterisk ignored journal entries:
+         */
+        if fs.opts.read_journal_only.get() != 0 {
+            return Ok(());
+        }
+
+        /*
+         * bch2_journal_read() leaves clean false if it found no flush
+         * entry at all - an empty journal, not a dirty one:
+         */
+        if mustfix_fsck_err_on!(fs, fs.sb.clean.get() != 0 &&
+                                    journal_start.replay_end != 0 &&
+                                    !journal_start.clean,
+                                id::clean_but_journal_not_empty,
+                                "filesystem marked clean but journal not empty")? {
+            let mut sb = fs.sb_lock();
+            let compat = fs.sb.compat.get() & !(1 << c::bch_sb_compat::BCH_COMPAT_alloc_info.0);
+            sb.published().compat.set(compat);
+            sb.sb_mut().set_clean(false);
+            sb.published().clean.set(0);
+        }
+
+        let mut last_journal_entry = fs.journal_entries.iter_rev()
+            .map(|(_, &i)| i)
+            .find(|&i| unsafe { i.as_ref() }.is_some_and(|i| !i.ignored()));
+
+        if last_journal_entry.is_none() {
+            fsck_err_on!(fs, fs.sb.clean.get() == 0, id::dirty_but_no_journal_entries,
+                         "no journal entries found")?;
+            if clean.is_some() {
+                use_clean = true;
+            } else {
+                last_journal_entry = fs.journal_entries.iter_rev().map(|(_, &i)| i).find(|i| !i.is_null());
+                if let Some(i) = last_journal_entry {
+                    let i = unsafe { &mut *i };
+                    i.ignore_blacklisted = false;
+                    i.ignore_not_dirty = false;
+                    /*
+                     * This was probably a NO_FLUSH entry,
+                     * so last_seq was garbage - but we know
+                     * we're only using a single journal
+                     * entry, set it here:
+                     */
+                    i.j.last_seq = i.j.seq;
+                }
+            }
+        }
+
+        if !use_clean && fs.sb.clean.get() != 0 {
+            if let (Some(c), Some(i)) = (clean.as_deref(), last_journal_entry) {
+                if !fs.verify_superblock_clean(c, unsafe { c::journal_replay::jset(i) })? {
+                    clean = None;
+                }
+            }
+        }
+    }
+
+    if use_clean {
+        let Some(c) = clean.as_deref() else {
+            bch_err!(fs, "no superblock clean section found");
+            return fs.throw(bch_errcode::BCH_ERR_fsck_repair_impossible);
+        };
+
+        journal_start.cur_seq = c.journal_seq.get().wrapping_add(1);
+    }
+
+    fs.journal_replay_seq_start.set(journal_start.last_seq);
+    fs.journal_replay_seq_end.set(journal_start.replay_end);
+
+    journal_replay_early(fs, clean.as_deref())?;
+
+    {
+        let _state = fs.state_lock_write();
+        fs.resize_on_mount()?;
+    }
+
+    if fs.feature(c::bch_sb_feature::BCH_FEATURE_small_image) {
+        bch_info!(fs, "filesystem is an unresized image file, mounting ro");
+        fs.opts_writer(&mut fs.sb_lock()).read_only.set(1);
+    }
+
+    if fs.feature(c::bch_sb_feature::BCH_FEATURE_no_default_sb) {
+        bch_info!(fs, "filesystem does not have default superblock layout, mounting ro");
+        fs.opts_writer(&mut fs.sb_lock()).read_only.set(1);
+    }
+
+    if fs.opts.read_only.get() == 0 && fs.feature(c::bch_sb_feature::BCH_FEATURE_no_alloc_info) {
+        bch_info!(fs, "mounting a filesystem with no alloc info read-write; will recreate");
+
+        reconstruct_alloc(fs);
+    } else if fs.opts.dangerously_reconstruct_alloc.get() != 0 {
+        let _ = fs.journal_log_msg(message!("dropping alloc info"));
+        bch_info!(fs, "dropping and reconstructing all alloc info");
+
+        reconstruct_alloc(fs);
+    }
+
+    if fs.opts.journal_rewind.get() != 0 {
+        fs.journal_add_rewind_range(journal_start.replay_end, fs.opts.journal_rewind.get())?;
+        ignore_journal_rewind_errors(fs);
+        fs.journal_reread_for_rewind()?;
+    }
+
+    if fs.feature(c::bch_sb_feature::BCH_FEATURE_no_alloc_info) {
+        /* We can't go RW to fix errors without alloc info */
+        let mut sb = fs.sb_lock();
+        let w = fs.opts_writer(&mut sb);
+        let fix = w.fix_errors.get();
+        if fix == c::fsck_err_opts::FSCK_FIX_yes as u8 || fix == c::fsck_err_opts::FSCK_FIX_ask as u8 {
+            w.fix_errors.set(c::fsck_err_opts::FSCK_FIX_no as u8);
+        }
+        if u32::from(w.errors.get()) == c::bch_error_actions::BCH_ON_ERROR_fix_safe.0 {
+            w.errors.set(c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8);
+        }
+    }
+
+    /*
+     * After an unclean shutdown, skip the next several journal sequence
+     * numbers: btree nodes may have been written referencing journal
+     * sequences whose journal writes never became durable (btree writes
+     * lead the journal). Those sequences are blacklisted below, so btree
+     * writes referencing them are ignored on replay.
+     *
+     * The skip must exceed how far a btree write can lead the durable
+     * journal, which is bounded by the journal pipeline depth
+     * (j->in_flight.size, currently 256). Use a large margin so this
+     * can't silently break if pipelining is increased.
+     */
+    if fs.sb.clean.get() == 0 {
+        journal_start.cur_seq = journal_start.cur_seq.wrapping_add(4096);
+    }
+
+    let blacklist_seq = journal_start.replay_end.wrapping_add(1);
+    if journal_start.replay_end != 0 && blacklist_seq != journal_start.cur_seq {
+        fs.journal_log_msg(message!("blacklisting entries {}-{}", blacklist_seq, journal_start.cur_seq))?;
+        fs.journal_seq_blacklist_add(blacklist_seq, journal_start.cur_seq)?;
+    }
+
+    /*
+     * Skip past versions that might have possibly been used (as nonces),
+     * but hadn't had their pointers written:
+     */
+    if fs.sb.encryption_type.get() != 0 && fs.sb.clean.get() == 0 {
+        fs.key_version.fetch_add(1 << 16, Relaxed);
+    }
+
+    keys_sort(fs)?;
+
+    read_btree_roots(fs)?;
+
+    fs.flags.set(Flag::BCH_FS_btree_running, true);
+
+    /* some mount options can only be checked after the btree is running */
+    opts_hooks_pre_set(fs)?;
+
+    fs.sb_set_upgrade_extra();
+
+    if fs.journal_scrub_will_run() {
+        fs.flags.set(Flag::BCH_FS_scrub_journal, true);
+        let rewind_seq = fs.scrub_journal()?;
+        fs.flags.set(Flag::BCH_FS_scrub_journal, false);
+
+        /*
+         * Done with the keys from before the replay start: re-sort
+         * without them, before accounting read and replay - the
+         * rewind below re-sorts anyway.
+         */
+        let resort = fs.journal_scrub_seq.get() != 0;
+        fs.journal_scrub_seq.set(0);
+        if resort && rewind_seq == 0 {
+            keys_sort(fs)?;
+        }
+        if rewind_seq != 0 {
+            let mut msg = LogMsg::new(fs);
+            prt!(&mut msg, "journal scrub: device not honoring flush/FUA, rewinding from seq {} (",
+                 journal_start.replay_end);
+            fs.journal_seq_datetime_to_text(&mut msg, journal_start.replay_end);
+            prt!(&mut msg, ") back to seq {} (", rewind_seq);
+            fs.journal_seq_datetime_to_text(&mut msg, rewind_seq);
+            prt!(&mut msg, ")");
+
+            let _ = fs.journal_log_msg(&*msg);
+            {
+                let mut sb = fs.sb_lock();
+                let w = fs.opts_writer(&mut sb);
+                w.journal_rewind.set(rewind_seq);
+                w.fsck.set(1);
+            }
+
+            fs.journal_add_rewind_range(journal_start.replay_end, rewind_seq)?;
+            ignore_journal_rewind_errors(fs);
+
+            /*
+             * Re-read journal buckets to pick up entries that
+             * were dropped during the first read because they
+             * were older than last_seq:
+             */
+            fs.journal_reread_for_rewind()?;
+            keys_sort(fs)?;
+        }
+    }
+
+    /*
+     * Not until the journal scrub has decided whether to rewind: a rewind
+     * re-reads entries from before last_seq (back to the rewind target's
+     * last_seq) and replays them, so the pin fifo has to start there -
+     * journal_replay_seq_start, which only a re-read lowers. Nothing above
+     * needs the journal started; the blacklist, which btree node reads do
+     * need, is set up before the roots are read.
+     */
+    journal_start.last_seq = fs.journal_replay_seq_start.get();
+
+    fs.journal_log_msg(message!("starting journal at entry {}, replaying {}-{}",
+                                journal_start.cur_seq, journal_start.last_seq, journal_start.replay_end))?;
+    fs.journal.start(journal_start)?;
+
+    passes::run_passes_startup(fs, Pass::from_bits(0))?;
+
+    /*
+     * Normally set by the appropriate recovery pass: when cleared, this
+     * indicates we're in early recovery and btree updates should be done by
+     * being applied to the journal replay keys. _Must_ be cleared before
+     * multithreaded use:
+     */
+    fs.flags.set(Flag::BCH_FS_may_go_rw, true);
+    fs.flags.set(Flag::BCH_FS_in_fsck, false);
+
+    /* in case we don't run journal replay, i.e. norecovery mode */
+    fs.flags.set(Flag::BCH_FS_accounting_replay_done, true);
+
+    fs.async_btree_node_rewrites_flush();
+
+    /* fsync if we fixed errors */
+    let errors_fixed = fs.flags.get(Flag::BCH_FS_errors_fixed) ||
+        fs.flags.get(Flag::BCH_FS_errors_fixed_silent);
+
+    if errors_fixed {
+        fs.journal_flush_outstanding_pins();
+        let _ = fs.journal_meta();
+    }
+
+    if error::fsck_errs_seen(fs) {
+        let mut msg = LogMsg::new(fs);
+        prt!(&mut msg, "errors this recovery:\n");
+        error::fsck_err_counts_to_text(&mut msg, fs);
+        error::fsck_damaged_paths_to_text(&mut msg, fs);
+    }
+
+    /* If we fixed errors, verify that fs is actually clean now: */
+    if cfg!(CONFIG_BCACHEFS_DEBUG) &&
+       errors_fixed &&
+       !fs.flags.get(Flag::BCH_FS_errors_not_fixed) &&
+       !fs.flags.get(Flag::BCH_FS_error) {
+        error::flush_fsck_errs(fs, true);
+
+        bch_info!(fs, "Fixed errors, running fsck a second time to verify fs is clean");
+
+        let saved_fixed        = fs.flags.swap(Flag::BCH_FS_errors_fixed, false);
+        let saved_fixed_silent = fs.flags.swap(Flag::BCH_FS_errors_fixed_silent, false);
+
+        passes::run_passes_startup(fs, Pass::BCH_RECOVERY_PASS_check_alloc_info)?;
+
+        if fs.flags.get(Flag::BCH_FS_errors_fixed) ||
+           fs.flags.get(Flag::BCH_FS_errors_fixed_silent) ||
+           fs.flags.get(Flag::BCH_FS_errors_not_fixed) {
+            bch_err!(fs, "Second fsck run was not clean");
+            fs.flags.set(Flag::BCH_FS_errors_not_fixed, true);
+        }
+
+        fs.flags.set(Flag::BCH_FS_errors_fixed, saved_fixed);
+        fs.flags.set(Flag::BCH_FS_errors_fixed_silent, saved_fixed_silent);
+    }
+
+    if quota::enabled_qtypes(fs) != 0 {
+        bch_verbose!(fs, "reading quotas");
+        quota::fs_quota_read(fs)?;
+        bch_verbose!(fs, "quotas done");
+    }
+
+    {
+        let mut w = fs.sb_write();
+        let error = fs.flags.get(Flag::BCH_FS_error);
+        let passes_complete = fs.recovery.runner.passes_complete.get();
+        let complete = |p: Pass| passes_complete & passes::bit(p) != 0;
+
+        let version = w.sb().version.get();
+        if w.sb().version_upgrade_complete() != version.into() {
+            w.sb_mut().set_version_upgrade_complete(version.into());
+            w.dirty();
+        }
+
+        if !error {
+            w.set_compat(c::bch_sb_compat::BCH_COMPAT_alloc_info);
+        }
+
+        if fs.opts.fsck.get() != 0 &&
+           !error &&
+           fs.recovery.runner.pass_done.get() == passes::LAST &&
+           w.ext_mut().btrees_lost_data.get() != 0 {
+            w.ext_mut().btrees_lost_data.set(0);
+            w.dirty();
+        }
+
+        if fs.opts.fsck.get() != 0 &&
+           !error &&
+           !fs.flags.get(Flag::BCH_FS_errors_not_fixed) {
+            w.sb_mut().set_has_errors(false);
+            w.dirty();
+        }
+
+        /*
+         * BCH_SB_HAS_TOPOLOGY_ERRORS forces check_topology on every mount,
+         * not just fsck mounts (see the "superblock requires" path in
+         * bch2_fs_recovery() startup) - so clear it whenever that pass has
+         * run clean, not only under fsck. Otherwise a plain mount re-runs
+         * the full (potentially very slow) pass every time and never clears
+         * the flag.
+         */
+        if complete(Pass::BCH_RECOVERY_PASS_check_topology) &&
+           !error &&
+           !fs.flags.get(Flag::BCH_FS_errors_not_fixed) {
+            w.sb_mut().set_has_topology_errors(false);
+            w.dirty();
+        }
+
+        if blacklist_entries_gc(fs, &mut w) {
+            w.dirty();
+        }
+
+        if complete(Pass::BCH_RECOVERY_PASS_check_extents) &&
+           complete(Pass::BCH_RECOVERY_PASS_check_indirect_extents) {
+            w.set_compat(c::bch_sb_compat::BCH_COMPAT_no_stale_ptrs);
+        }
+
+        /*
+         * check_allocations recomputes accounting, so it is what makes
+         * the stripe fragmentation counters true.
+         */
+        if complete(Pass::BCH_RECOVERY_PASS_check_allocations) {
+            w.set_compat(c::bch_sb_compat::BCH_COMPAT_stripe_frag_accounting);
+        }
+
+        /*
+         * check_inodes runs inode_opts::check_propagated(), so
+         * after it every inode's options have reached its ancestor
+         * snapshots - and a later violation is a bug, not legacy state.
+         */
+        if complete(Pass::BCH_RECOVERY_PASS_check_inodes) {
+            w.set_compat(c::bch_sb_compat::BCH_COMPAT_inode_opts_propagated);
+        }
+    }
+
+    /*
+     * (Hopefully unnecessary) cleanup, once per mount - we should be
+     * killing replicas entries when accounting entries go to 0, but - old
+     * filesystems, etc.:
+     */
+    let _ = fs.replicas_gc_accounted();
+    Ok(())
+}
+
+pub fn fs_recovery(fs: &Fs) -> Result<(), BchError> {
+    let ret = recovery(fs);
+
+    error::flush_fsck_errs(fs, true);
+
+    if let Err(e) = ret {
+        let mut msg = LogMsg::new(fs);
+        prt!(&mut msg, "unexpected error in bch2_fs_recovery(): {}\n", e.msg());
+        fs.emergency_read_only(&mut msg);
+    }
+    ret
+}
+
+pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
+    bch_notice!(fs, "initializing new filesystem");
+    fs.flags.set(Flag::BCH_FS_new_fs, true);
+
+    {
+        let mut sb = fs.sb_lock();
+        sb.sb_mut().compat[0] |= 1 << c::bch_sb_compat::BCH_COMPAT_extents_above_btree_updates_done.0 |
+                                 1 << c::bch_sb_compat::BCH_COMPAT_bformat_overflow_done.0 |
+                                 1 << c::bch_sb_compat::BCH_COMPAT_no_stale_ptrs.0 |
+                                 1 << c::bch_sb_compat::BCH_COMPAT_stripe_frag_accounting.0 |
+                                 1 << c::bch_sb_compat::BCH_COMPAT_inode_opts_propagated.0;
+
+        check_version_downgrade(fs, &mut sb);
+
+        if u32::from(fs.opts.version_upgrade.get()) != c::bch_version_upgrade_opts::BCH_VERSION_UPGRADE_none.0 {
+            let current = c::bcachefs_metadata_version_current;
+            sb_upgrade(fs, &mut sb, current, false);
+            sb.sb_mut().set_version_upgrade_complete(current.into());
+            fs.write_super(&mut sb);
+        }
+
+        for ca in fs.members() {
+            let m = sb.fs_member_mut(ca.dev_idx.into());
+            m.set_freespace_initialized(false);
+            m.set_initialized(c::bch_member_initialized::BCH_MEMBER_INITIALIZED_pre_dev_usage.0.into());
+        }
+
+        fs.write_super(&mut sb);
+    }
+
+    for i in 0..u32::from(Btree::nr) {
+        fs.btree_root_alloc_fake(Btree(i), 0);
+    }
+
+    fs.flags.set(Flag::BCH_FS_btree_running, true);
+
+    /*
+     * Write out the superblock and journal buckets, now that we can do
+     * btree updates
+     */
+    bch_verbose!(fs, "marking superblocks");
+    bch_err_msg!(fs, fs.trans_mark_dev_sbs(UpdateTriggerFlags::TRANSACTIONAL), "marking superblocks")?;
+
+    /*
+     * journal_res_get() will crash if called before this has
+     * set up the journal.pin FIFO and journal.cur pointer:
+     */
+    fs.journal.start(c::journal_start_info { cur_seq: 1, ..Default::default() })?;
+
+    set_may_go_rw(fs)?;
+    journal_replay(fs)?;
+    subvolume::initialize(fs)?;
+    snapshots_read(fs)?;
+    fs.presplit_shard_boundaries()?;
+
+    let mut root_inode = inode::init(fs, 0, 0, (c::S_IFDIR | 0o755) as c::umode_t, 0, None);
+    root_inode.bi_inum = c::BCACHEFS_ROOT_INO.into();
+    root_inode.bi_subvol = c::BCACHEFS_ROOT_SUBVOL;
+    let mut packed_inode = inode::pack(&root_inode);
+    packed_inode.inode.k.p.snapshot = u32::MAX;
+
+    bch_err_msg!(fs, fs.btree_insert(Btree::BTREE_ID_inodes, packed_inode.as_mut(), None,
+                                     CommitFlags::empty(), BtreeIterFlags::empty()),
+                 "creating root directory")?;
+
+    let mut lostfound_inode = c::bch_inode_unpacked::default();
+    inode::init_early(fs, &mut lostfound_inode);
+
+    let mut new_subvol = c::Subvolume::default();
+    bch_err_msg!(fs, trans_commit_do(fs, None, CommitFlags::empty(), |t| {
+        namei::create_trans(t, c::subvol_inum::ROOT, &mut root_inode, &mut lostfound_inode, &mut new_subvol,
+                            Some(OsStr::from_bytes(b"lost+found")), 0, 0, (c::S_IFDIR | 0o700) as c::umode_t, 0,
+                            None, None, c::subvol_inum::default(), 0)
+    }), "creating lost+found")?;
+
+    passes::set_pass_done(fs, passes::LAST);
+
+    fs.copygc_wakeup();
+    fs.reconcile_wakeup();
+
+    if quota::enabled_qtypes(fs) != 0 {
+        quota::fs_quota_read(fs)?;
+    }
+
+    bch_err_msg!(fs, fs.journal_flush(), "writing first journal entry")?;
+
+    /* Don't allow rewind into initialization entries */
+    let init_seq = fs.journal_cur_seq() + 1;
+    fs.journal_advance_rewind_seq(init_seq);
+    bch_info!(fs, "fs initialized, journal seq {} rewind_seq {}", init_seq - 1, init_seq);
+
+    {
+        let mut w = fs.sb_write();
+        w.sb_mut().set_initialized(true);
+        w.sb_mut().set_clean(false);
+
+        let ext = w.ext_mut();
+        ext.errors_silent.fill(Le64::new(0));
+        ext.recovery_passes_required.fill(Le64::new(0));
+        w.dirty();
+    }
+
+    Ok(())
 }

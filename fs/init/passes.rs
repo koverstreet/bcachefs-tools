@@ -237,7 +237,7 @@ const _: () = assert!(NR <= 64);
 /// rewound_from hold for none.
 const NONE: Pass = Pass::BCH_RECOVERY_PASS_recovery_pass_empty;
 
-fn bit(pass: Pass) -> u64 {
+pub(crate) fn bit(pass: Pass) -> u64 {
     1 << pass as u32
 }
 

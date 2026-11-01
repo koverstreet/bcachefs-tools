@@ -135,9 +135,6 @@ static inline unsigned bch2_inode_nlink_get(struct bch_inode_unpacked *bi)
 
 #include "data/reconcile/trigger.h"
 
-#define BCACHEFS_ROOT_SUBVOL_INUM					\
-	((subvol_inum) { BCACHEFS_ROOT_SUBVOL,	BCACHEFS_ROOT_INO })
-
 static inline bool subvol_inum_eq(subvol_inum a, subvol_inum b)
 {
 	return a.subvol == b.subvol && a.inum == b.inum;

@@ -257,7 +257,6 @@ pub mod c {
     pub use crate::data::ec::trigger::{bch2_stripe_tryget_existing};
     pub use crate::namei::{BCH_CREATE_SNAPSHOT, BCH_CREATE_SNAPSHOT_RO, BCH_CREATE_SUBVOL, BCH_CREATE_TMPFILE};
     pub use crate::fs::{bch2_dev_read_refs, bch2_dev_write_refs, bch2_write_refs};
-    pub use crate::init::recovery::{bch2_fs_initialize, bch2_fs_recovery};
     pub use super::journal_init_types::*;
     pub use super::journal_validate_types::*;
 }

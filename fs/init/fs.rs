@@ -1149,9 +1149,7 @@ impl Fs {
         crate::opts::opts_hooks_pre_set(self)?;
 
         let initialized = self.sb_lock().sb().initialized();
-        ret_to_result(unsafe {
-            if initialized { c::bch2_fs_recovery(self.as_ptr()) } else { c::bch2_fs_initialize(self.as_ptr()) }
-        })?;
+        if initialized { crate::init::recovery::fs_recovery(self) } else { crate::init::recovery::fs_initialize(self) }?;
 
         crate::opts::opts_hooks_pre_set(self)?;
 
