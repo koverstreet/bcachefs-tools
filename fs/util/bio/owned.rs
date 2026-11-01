@@ -23,11 +23,13 @@ use core::marker::PhantomData;
 use core::ops::Deref;
 use core::pin::Pin;
 use core::ptr::NonNull;
+use core::sync::atomic::{AtomicI32, Ordering::{AcqRel, Acquire, Relaxed}};
 
 use pin_init::PinInit;
 
 use super::{Bio, BioOwner};
 use crate::c;
+use crate::util::refcount::{Refcount, TestRefcount};
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::alloc::{init_at, kfree, kzalloc, KBox};
 use crate::util::ffi::Opaque;
@@ -39,6 +41,10 @@ use crate::util::ffi::Opaque;
 /// moved off its bvecs.
 pub unsafe trait HasBio: Sized {
     const BIO_OFFSET: usize;
+
+    fn remaining(&self) -> &Remaining<Self> {
+        unsafe { &*core::ptr::from_ref(self).cast::<Remaining<Self>>() }
+    }
 }
 
 // SAFETY: a bio, at its own start
@@ -76,6 +82,59 @@ macro_rules! has_bio {
 
 fn bio_of<T: HasBio>(t: *mut T) -> *mut c::bio {
     t.cast::<u8>().wrapping_add(T::BIO_OFFSET).cast()
+}
+
+/// Not bi_cnt, which keeps the bio's memory: the ends owed before the bio
+/// ends. The last dec() ends it, so BIO_CHAIN mustn't be set, or bio_endio()
+/// would count too.
+#[repr(transparent)]
+pub struct Remaining<T>(T);
+
+impl<T: HasBio> Remaining<T> {
+    fn bio(&self) -> *mut c::bio {
+        bio_of(core::ptr::from_ref(&self.0).cast_mut())
+    }
+
+    fn count(&self) -> &AtomicI32 {
+        unsafe { AtomicI32::from_ptr(&raw mut (*self.bio()).__bi_remaining.counter) }
+    }
+
+    /// For a bio back from the block layer: one it split is chained, and left
+    /// at zero.
+    ///
+    /// # Safety
+    /// No ref but the caller's is held, and the bio isn't in flight.
+    pub unsafe fn reset(&self) {
+        self.count().store(1, Relaxed);
+    }
+}
+
+impl<T> Deref for Remaining<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+unsafe impl<T: HasBio> Refcount for Remaining<T> {
+    unsafe fn inc(&self) {
+        self.count().fetch_add(1, Relaxed);
+    }
+
+    unsafe fn dec(&self) {
+        if unsafe { self.dec_and_test() } {
+            unsafe { c::bio_endio(self.bio()) };
+        }
+    }
+}
+
+unsafe impl<T: HasBio> TestRefcount for Remaining<T> {
+    /// The only ref can't be inc()ed - that takes one - so it needs no RMW.
+    unsafe fn dec_and_test(&self) -> bool {
+        let count = self.count();
+        count.load(Acquire) == 1 || count.fetch_sub(1, AcqRel) == 1
+    }
 }
 
 /// # Safety
