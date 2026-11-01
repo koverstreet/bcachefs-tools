@@ -168,4 +168,8 @@ impl c::bch_bkey_type {
     pub fn is_extent_whiteout(self) -> bool {
         matches!(self, Self::KEY_TYPE_deleted | Self::KEY_TYPE_whiteout | Self::KEY_TYPE_extent_whiteout)
     }
+
+    pub fn is_hash_whiteout(self) -> bool {
+        self == Self::KEY_TYPE_hash_whiteout
+    }
 }

@@ -151,10 +151,6 @@ fn visible_key<T: HashTable>(inum: c::subvol_inum, k: BkeySC<'_>) -> Option<Tabl
     k.arm::<T::Val>().filter(|&k| inum.inum == 0 || T::is_visible(inum, k))
 }
 
-fn is_whiteout(k: BkeySC<'_>) -> bool {
-    k.k.type_ == c::bch_bkey_type::KEY_TYPE_hash_whiteout.0 as u8
-}
-
 /// In inode @inum as seen in @snapshot: the key found, through @iter, or
 /// ENOENT_str_hash_lookup.
 pub fn lookup_in_snapshot<'i, 'a, T: HashTable>(
@@ -174,7 +170,7 @@ pub fn lookup_in_snapshot<'i, 'a, T: HashTable>(
     let found = iter.find_max_norestart(t, pos(inum.inum, u64::MAX), |_, k| Ok(
         match visible_key::<T>(inum, k) {
             Some(k) => T::matches(k, key),
-            None    => !is_whiteout(k),
+            None    => !k.k.key_type().is_hash_whiteout(),
         }))?;
 
     found.and_then(|k| visible_key::<T>(inum, k))
@@ -232,7 +228,7 @@ pub fn needs_whiteout<'t, T: HashTable>(
     let found = iter.find_max_norestart(t, SPOS_MAX, |_, k| Ok(
         match k.arm::<T::Val>() {
             Some(k) => T::hash_bkey(hash_info, k) <= start.pos().offset,
-            None    => !is_whiteout(k),
+            None    => !k.k.key_type().is_hash_whiteout(),
         }))?;
 
     Ok(found.is_some_and(|k| k.arm::<T::Val>().is_some()))
@@ -287,7 +283,7 @@ pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
                 if slot.is_none() && !must_replace {
                     slot = Some(iter.copy());
                 }
-                !is_whiteout(k)
+                !k.k.key_type().is_hash_whiteout()
             }
         }))?;
 

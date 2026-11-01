@@ -329,7 +329,7 @@ impl InodeWalker {
         let btree = iter.btree();
 
         // whiteouts and hash whiteouts are tombstones - they need no inode:
-        if k.k.key_type().is_extent_whiteout() || k.k.key_type() == c::bch_bkey_type::KEY_TYPE_hash_whiteout {
+        if k.k.key_type().is_extent_whiteout() || k.k.key_type().is_hash_whiteout() {
             return Ok(());
         }
 
@@ -758,7 +758,7 @@ fn count_inode_keys(
         // Error keys count: they're placeholders for unreadable data,
         // evidence the inode had contents. Hash whiteouts are just
         // tombstones:
-        if k.k.key_type() == c::bch_bkey_type::KEY_TYPE_hash_whiteout {
+        if k.k.key_type().is_hash_whiteout() {
             return Ok(ControlFlow::Continue(()));
         }
 
