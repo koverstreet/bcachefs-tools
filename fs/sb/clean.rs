@@ -85,11 +85,20 @@ fn validate_late(fs: &Fs, version: u16, big_endian: bool, f: &mut Section, write
     Ok(())
 }
 
+/// A copy of the clean section, validated: recovery's, which uses it after
+/// sb_lock is dropped and the superblock may have changed.
+pub(crate) struct CleanSection(KVVec<u64>);
+
+impl core::ops::Deref for CleanSection {
+    type Target = Section;
+
+    fn deref(&self) -> &Section {
+        unsafe { Section::from_ffi(self.0.as_ptr().cast()) }
+    }
+}
+
 impl Fs {
-    /// A copy of the clean section, validated - for recovery, which uses it
-    /// after sb_lock is dropped and the superblock may have changed, and
-    /// frees it with kvfree().
-    fn read_superblock_clean(&self) -> Result<*mut Head<c::bch_sb_field_clean>, BchError> {
+    pub(crate) fn read_superblock_clean(&self) -> Result<CleanSection, BchError> {
         let mut sb = self.sb_lock();
         let (version, big_endian) = (sb.sb().version.get(), sb.sb().big_endian());
 
@@ -111,14 +120,16 @@ impl Fs {
         let clean = unsafe { Section::from_ffi_mut(copy.as_mut_ptr().cast()) };
         validate_late(self, version, big_endian, clean, false)?;
 
-        let (p, _, _) = copy.into_raw_parts();
-        Ok(p.cast())
+        Ok(CleanSection(copy))
     }
 }
 
 #[c_export]
 pub fn bch2_read_superblock_clean(c: &Opaque<Fs>) -> *mut Head<c::bch_sb_field_clean> {
-    Fs::from_c(c).read_superblock_clean().unwrap_or_else(err_ptr)
+    match Fs::from_c(c).read_superblock_clean() {
+        Ok(clean) => clean.0.into_raw_parts().0.cast(),
+        Err(e)    => err_ptr(e),
+    }
 }
 
 type Key<'a> = VstructRef<'a, c::bkey_i, Validated>;
@@ -151,7 +162,7 @@ impl Fs {
     /// entry, after a clean shutdown: its seq, and every btree root. False if
     /// its seq doesn't - it's of no use then - and an error if a root doesn't
     /// and that can't be fixed.
-    fn verify_superblock_clean(&self, clean: &Section, j: &c::jset) -> Result<bool, BchError> {
+    pub(crate) fn verify_superblock_clean(&self, clean: &Section, j: &c::jset) -> Result<bool, BchError> {
         if mustfix_fsck_err_on!(self, j.seq != clean.journal_seq,
                 c::bch_sb_error_id::BCH_FSCK_ERR_sb_clean_journal_seq_mismatch,
                 "superblock journal seq ({}) doesn't match journal ({}) after clean shutdown",
