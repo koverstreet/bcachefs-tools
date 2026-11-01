@@ -343,7 +343,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
     let jk = &fs.journal_keys;
     let keys = jk.keys();
     let start_seq = fs.journal_replay_seq_start.get();
-    let end_seq = fs.journal_replay_seq_start.get();
+    let end_seq = fs.journal_replay_seq_end.get();
     let mut immediate_flush = false;
 
     let replay_flags = CommitFlags::JOURNAL_REPLAY | CommitFlags::NO_ENOSPC | CommitFlags::NO_SKIP_NOOPS |
