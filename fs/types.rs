@@ -654,7 +654,7 @@ pub struct Fs {
      * Analagous to c->writes, for asynchronous ops that don't necessarily
      * need fs to be read-write
      */
-    #[c("u32 ro_ref[2]")]
+    #[c("u32 ro_ref")]
     #[pin]
     #[init(AtomicRef::new(()))]
     pub(crate) ro_ref: Placed<AtomicRef<()>, crate::at!(Fs.ro_ref)>,
