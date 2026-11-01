@@ -859,12 +859,32 @@ c_xmacro! {
 
 c_enum! {
     #[open]
+    #[own_to_text]
     #[c_name(btree_id)]
     pub enum Btree: u32 {
         BCH_BTREE_IDS(name, nr, ..) => concat(BTREE_ID_, name) = nr,
         BTREE_ID_NR,
     }
 }
+
+impl Btree {
+    /// Its name: None for a btree this version doesn't know.
+    pub fn name(self) -> Option<&'static str> {
+        crate::util::names::name_of(<Self as crate::util::names::Names>::ENTRIES, self.0.into())
+    }
+}
+
+/// A btree this version doesn't know is still said to be one, as C's
+/// bch2_btree_id_to_text() has it: recovery meets them.
+impl crate::util::ToText for Btree {
+    fn to_text(&self, out: &mut crate::util::Printbuf) {
+        match self.name() {
+            Some(name) => crate::prt!(out, "{name}"),
+            None       => crate::prt!(out, "(unknown btree {})", self.0),
+        }
+    }
+}
+crate::display_via_to_text!(Btree);
 
 /// C's name, as bindgen's declarations of C functions spell it.
 pub type btree_id = Btree;

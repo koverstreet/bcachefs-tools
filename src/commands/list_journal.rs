@@ -323,9 +323,7 @@ fn journal_entry_keys_noval_to_text(out: &mut Printbuf, entry: &c::jset_entry) {
         t.to_text(out);
         write!(out, ": ");
         if let Some(btree) = entry_btree_id(entry) {
-            unsafe {
-                c::bch2_btree_id_level_to_text(out.as_raw(), btree, entry.level as u32);
-            }
+            write!(out, "btree={btree} level={}", entry.level);
         } else {
             write!(out, "(unknown btree {})", entry.btree_id);
         }

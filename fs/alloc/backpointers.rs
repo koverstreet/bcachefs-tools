@@ -164,7 +164,7 @@ pub fn bch2_backpointer_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: B
         (None, _)              => prt!(out, "pos={}:{} ", { p.inode }, { p.offset }),
     }
 
-    unsafe { c::bch2_btree_id_level_to_text(out.as_raw(), Btree(v.btree_id.into()), v.level.into()) };
+    prt!(out, "btree={} level={}", Btree(v.btree_id.into()), v.level);
     prt!(out, " data_type=");
     DataType(v.data_type.into()).to_text(out);
     match fs {
