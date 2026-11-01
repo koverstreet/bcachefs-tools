@@ -240,7 +240,7 @@ $(VRD)/helpers.o: $(VENDOR)/helpers/helpers.c $(wildcard $(VENDOR)/helpers/*.c) 
 # that rule does; mod.rs mustn't (a no_std attribute there is a duplicate on
 # the kbuild path: unused_attributes, fatal under CONFIG_WERROR).
 quiet_cmd_bch_vr_mod = RUSTC M  $@
-      cmd_bch_vr_mod = OUT_DIR=$(abspath $(obj)/rust) OBJTREE=$(VRD_ABS) \
+      cmd_bch_vr_mod = OUT_DIR=$(abspath $(obj)/rust) OBJTREE=$(VRD_ABS) RUST_MODFILE=$(modfile) \
 	$(RUSTC) $(filter-out --edition=%,$(_rust_flags)) $(modkern_rustflags) $(bch-rust-gc-flags) @$(bch-rustc-cfg) \
 	--edition=2024 -Awarnings -Zunstable-options --sysroot=/dev/null \
 	-L$(VRD) -Zcrate-attr=no_std -Zcrate-attr='feature($(rust_allowed_features))' \

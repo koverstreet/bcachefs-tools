@@ -75,8 +75,6 @@
 #include "vfs/direct.h"
 
 #include "util/enumerated_ref.h"
-#include "init/registry_gen.h"
-#include "util/futex_gen.h"
 #ifdef __KERNEL__
 #include "util/thread_with_file_gen.h"
 #endif
@@ -90,10 +88,6 @@
 #include <linux/percpu.h>
 #include <linux/random.h>
 #include <linux/sysfs.h>
-
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Kent Overstreet <kent.overstreet@gmail.com>");
-MODULE_DESCRIPTION("bcachefs filesystem");
 
 #define x(n)		#n,
 const char * const bch2_fs_flag_strs[] = {
@@ -190,60 +184,3 @@ void bch2_rust_warn(const char *file, unsigned line)
 {
 	WARN(1, "WARNING at %s:%u\n", file, line);
 }
-
-static struct attribute *bcachefs_files[] = {
-	NULL
-};
-
-static void bcachefs_release(struct kobject *k)
-{
-}
-
-static const struct sysfs_ops bcachefs_sysfs_ops = {};
-
-KTYPE(bcachefs);
-
-struct kobject bcachefs_kobj;
-
-/* Global interfaces/init */
-
-static void bcachefs_exit(void)
-{
-	bch2_debug_exit();
-	bch2_vfs_exit();
-	bch2_chardev_exit();
-	bch2_btree_key_cache_exit();
-	bch2_lock_graph_exit();
-	kobject_put(&bcachefs_kobj);
-}
-
-static int __init bcachefs_init(void)
-{
-	bch2_bkey_pack_test();
-
-	bch2_futex_init();
-	bch2_dirent_init();
-	bch2_fs_registry_init();
-
-	kobject_init(&bcachefs_kobj, &bcachefs_ktype);
-
-	if (kobject_add(&bcachefs_kobj, fs_kobj, "bcachefs") ||
-	    bch2_lock_graph_init() ||
-	    bch2_btree_key_cache_init() ||
-	    bch2_chardev_init() ||
-	    bch2_vfs_init() ||
-	    bch2_debug_init())
-		goto err;
-
-	return 0;
-err:
-	bcachefs_exit();
-	return -ENOMEM;
-}
-
-__maybe_unused
-static unsigned bch2_metadata_version = bcachefs_metadata_version_current;
-module_param_named(version, bch2_metadata_version, uint, 0444);
-
-module_exit(bcachefs_exit);
-module_init(bcachefs_init);

@@ -885,7 +885,6 @@ impl Fs {
     }
 }
 
-#[c_export]
 pub fn bch2_chardev_init() -> c_int {
     // SAFETY: module init, once
     let Ok(()) = unsafe { MINORS.init_zeroed(c"MINORS", crate::new_lock!(@key)) };
@@ -917,7 +916,6 @@ pub fn bch2_chardev_init() -> c_int {
     0
 }
 
-#[c_export]
 pub fn bch2_chardev_exit() {
     let major = MAJOR.load(Relaxed);
     unsafe {

@@ -118,6 +118,7 @@ pub mod init {
     #[path = "damage.rs"] pub mod damage;
     #[path = "dev.rs"] pub mod dev;
     #[path = "error.rs"] pub mod error;
+    #[path = "module.rs"] pub mod module;
     #[path = "passes.rs"] pub mod passes;
     #[path = "progress.rs"] pub mod progress;
     #[path = "recovery.rs"] pub mod recovery;

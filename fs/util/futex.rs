@@ -40,7 +40,6 @@ use core::sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Or
 use crate::util::list::ListLinks;
 use crate::util::sleep::{sleep_until, Sleep, SleepEnd};
 use core::ptr;
-use cstruct_macros::c_export;
 
 /// A word futex_wait() can wait on.
 pub trait FutexWord {
@@ -82,7 +81,6 @@ fn bucket(addr: usize) -> &'static Bucket {
 }
 
 /// Before anything can wait: at module init, in both builds.
-#[c_export]
 pub fn bch2_futex_init() {
     #[cfg(kernel)]
     let key = ::kernel::static_lock_class!().as_ptr().cast();

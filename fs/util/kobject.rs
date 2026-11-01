@@ -182,10 +182,18 @@ impl Kobject {
         unsafe {
             ::pin_init::pin_init_from_closure(|slot: *mut Self| {
                 slot.write_bytes(0, 1);
-                c::kobject_init(UnsafeCell::raw_get(slot.cast()), &Ktype::<T>::KTYPE);
+                (*slot).init::<T>();
                 Ok(())
             })
         }
+    }
+
+    /// new(), for one already in place, zeroed: a static's.
+    ///
+    /// # Safety
+    /// As new()'s.
+    pub unsafe fn init<T: KobjOwner>(&self) {
+        unsafe { c::kobject_init(self.as_ptr(), &Ktype::<T>::KTYPE) }
     }
 
     pub fn as_ptr(&self) -> *mut c::kobject {
@@ -206,10 +214,12 @@ impl Kobject {
         u32::from(unsafe { (*self.as_ptr()).state_in_sysfs() }) != 0
     }
 
-    /// Into sysfs as @name, in @parent's directory: its groups' files with it.
-    pub fn add(&self, parent: &Kobject, name: &CStr) -> Result<(), BchError> {
+    /// Into sysfs as @name, in @parent's directory - or at the top, without
+    /// one: its groups' files with it.
+    pub fn add(&self, parent: Option<&Kobject>, name: &CStr) -> Result<(), BchError> {
+        let parent = parent.map_or(core::ptr::null_mut(), Kobject::as_ptr);
         ret_to_result_void(unsafe {
-            c::kobject_add(self.as_ptr(), parent.as_ptr(), c"%s".as_ptr().cast(), name.as_ptr())
+            c::kobject_add(self.as_ptr(), parent, c"%s".as_ptr().cast(), name.as_ptr())
         })
     }
 

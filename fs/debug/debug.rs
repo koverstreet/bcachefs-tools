@@ -16,8 +16,6 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use core::marker::PhantomData;
 
-use cstruct_macros::c_export;
-
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter};
 use crate::btree::BtreeIter;
@@ -515,14 +513,12 @@ pub fn debug_init(fs: &Fs) {
     }
 }
 
-#[c_export]
 pub fn bch2_debug_exit() {
     if let Some(root) = NonNull::new(BCH_DEBUG.load(Ordering::Acquire)) {
         debugfs::remove_recursive(root);
     }
 }
 
-#[c_export]
 pub fn bch2_debug_init() -> c_int {
     BCH_DEBUG.store(dentry_ptr(debugfs::create_dir(c"bcachefs", None)), Ordering::Release);
     0

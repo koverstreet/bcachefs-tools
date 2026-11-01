@@ -14,10 +14,6 @@ static inline long bch2_fs_ioctl(struct bch_fs *c,
 	return -ENOTTY;
 }
 
-
-static inline void bch2_chardev_exit(void) {}
-static inline int __init bch2_chardev_init(void) { return 0; }
-
 #endif /* NO_BCACHEFS_FS */
 
 #endif /* _BCACHEFS_CHARDEV_H */

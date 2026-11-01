@@ -30,7 +30,6 @@ use crate::util::printbuf::{Printbuf, ToText};
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
 use crate::prt;
-use cstruct_macros::c_export;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Opener {
@@ -253,7 +252,6 @@ pub fn find(key: Key<'_>) -> Option<NonNull<Fs>> {
     REGISTRY.lock().find(key)
 }
 
-#[c_export]
 pub fn bch2_fs_registry_init() {
     // SAFETY: module init, once
     let Ok(()) = unsafe { REGISTRY.init_zeroed(c"REGISTRY", crate::new_lock!(@key)) };

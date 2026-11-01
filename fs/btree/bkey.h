@@ -564,8 +564,6 @@ static inline unsigned high_word_offset(const struct bkey_format *f)
 
 #ifdef CONFIG_BCACHEFS_DEBUG
 void bch2_bkey_pack_test(void);
-#else
-static inline void bch2_bkey_pack_test(void) {}
 #endif
 
 void bch2_bkey_format_init(struct bkey_format_state *);

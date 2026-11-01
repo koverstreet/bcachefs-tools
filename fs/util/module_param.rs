@@ -4,11 +4,12 @@
 //! module_param_named() and MODULE_PARM_DESC() together.
 //!
 //! Not the kernel crate's (kernel::module_param): that's for its module!()
-//! macro - our module's init is C - and only for parameters set at load, a
-//! SetOnce with perm 0, so nothing in sysfs. Ours are C's: the kernel_param in
-//! __param points at C's own param_ops_bool/uint/int, which parse, print and
-//! store the value, at load and, as perm allows, through
-//! /sys/module/bcachefs/parameters/ while the module is loaded.
+//! macro - our module's init is our own, init/module.rs - and only for
+//! parameters set at load, a SetOnce with perm 0, so nothing in sysfs. Ours
+//! are C's: the kernel_param in __param points at C's own
+//! param_ops_bool/uint/int, which parse, print and store the value, at load
+//! and, as perm allows, through /sys/module/bcachefs/parameters/ while the
+//! module is loaded.
 //!
 //! The value is an atomic with the C type's layout - AtomicBool is bool's,
 //! AtomicU32 unsigned int's. param_ops_* store to it through kernel_param.arg

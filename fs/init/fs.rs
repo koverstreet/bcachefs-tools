@@ -62,7 +62,6 @@ use cstruct_macros::c_extern;
 use crate::format::{Bpos, Btree};
 
 c_extern! {
-    static mut bcachefs_kobj: c::kobject;
     pub static bch2_write_refs: [*const crate::util::ffi::c_char; 0];
     pub static bch2_dev_read_refs: [*const crate::util::ffi::c_char; 0];
     pub static bch2_dev_write_refs: [*const crate::util::ffi::c_char; 0];
@@ -749,9 +748,8 @@ impl Fs {
         } else {
             name.write_bytes(self.name().to_bytes());
         }
-        // SAFETY: module init made it, module exit puts it
-        let parent = unsafe { Kobject::from_raw(&raw mut bcachefs_kobj) };
-        if name.allocation_failure() || self.kobj.add(parent, name.as_c_str()).is_err() {
+        let parent = &crate::init::module::BCACHEFS_KOBJ.0;
+        if name.allocation_failure() || self.kobj.add(Some(parent), name.as_c_str()).is_err() {
             return self.throw(bch_errcode::BCH_ERR_sysfs_init_error);
         }
 
