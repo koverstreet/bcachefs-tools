@@ -22,6 +22,7 @@ use crate::data::ec::stripe_new::{self, Internal, IoRef, Slot, StripeBlock, Stri
 use crate::data::ec::stripe_new_reuse::OldRead;
 use crate::data::ec::stripe_new_blocks::stripe_alloc_or_reuse;
 use crate::errcode::{bch_errcode, BchError};
+use crate::format::DataType;
 use crate::fs::Fs;
 use crate::locking::Guard;
 use crate::sb::counters::events;
@@ -61,7 +62,7 @@ impl Fs {
     /// data, durable, with buckets of @blocksize - or if that's 0, of the
     /// most common size among them - and the blocksize.
     pub fn disk_label_ec_devs(&self, disk_label: u32, blocksize: u32) -> (c::bch_devs_mask, u32) {
-        let mut devs = self.target_rw_devs(c::bch_data_type::BCH_DATA_user, disk_label_target(disk_label));
+        let mut devs = self.target_rw_devs(DataType::user, disk_label_target(disk_label));
         let rcu = read_lock();
 
         let all = devs;
@@ -152,7 +153,7 @@ impl Fs {
             // rw set, which a device leaves going offline
             if mi.state as u32 == c::bch_member_state::BCH_MEMBER_STATE_rw.0 &&
                mi.durability != 0 &&
-               mi.data_allowed & (1 << c::bch_data_type::BCH_DATA_user.0) != 0 &&
+               mi.data_allowed & (1 << DataType::user.0) != 0 &&
                u32::from(mi.bucket_size) == blocksize
             {
                 devs.d.set(ca.dev_idx.into());

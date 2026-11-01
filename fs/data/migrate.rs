@@ -61,7 +61,7 @@ use crate::prt;
 use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
 use cstruct_macros::c_export;
-use crate::format::Btree;
+use crate::format::{Btree, DataType};
 
 /// A backpointer to a node being replaced: its replacement isn't reachable
 /// yet, and has backpointers of its own for the next scan.
@@ -240,7 +240,7 @@ impl DevDrop<'_> {
         s.set_needs_reconcile(t, None, &inode_opts::get_fs(fs, false),
                               c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
 
-        let user = c::bch_data_type::BCH_DATA_user;
+        let user = DataType::user;
         accounting::add_at(t, &bkey_replicas_acct(fs, s.as_sc().untyped(), user), &[-sectors], false)?;
 
         for p in s.v_mut().block_ptrs_mut().iter_mut().filter(|p| u32::from(p.dev()) == self.dev) {
@@ -338,7 +338,7 @@ fn dev_data_drop(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchError> {
 fn dev_data_buckets(ca: &c::bch_dev) -> u64 {
     ca.usage_read_fast().buckets.iter().enumerate()
         .filter(|&(i, _)| {
-            let t = c::bch_data_type(i as u32);
+            let t = DataType(i as u32);
             !data_type_is_empty(t) && !data_type_is_hidden(t)
         })
         .map(|(_, &nr)| nr)

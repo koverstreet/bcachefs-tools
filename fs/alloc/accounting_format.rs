@@ -82,11 +82,15 @@ c_xmacro! {
 
 c_enum! {
     #[open]
-    pub enum bch_data_type: u32 {
+    #[c_name(bch_data_type)]
+    pub enum DataType: u32 {
         BCH_DATA_TYPES(t, ..) => concat(BCH_DATA_, t),
         BCH_DATA_NR,
     }
 }
+
+/// C's name, as bindgen's declarations of C functions spell it.
+pub type bch_data_type = DataType;
 
 c_xmacro! {
     /*

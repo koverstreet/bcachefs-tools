@@ -25,6 +25,7 @@ use crate::data::durability::{extent_ptr_durability, BkeyVDurability};
 use crate::data::ec::head::{head_get, stripe_head_put};
 use crate::data::ptrs::{BkeyVPtrs, BtreePtrs, Ptrs};
 use crate::errcode::{ret_to_c, BchError};
+use crate::format::DataType;
 use crate::fs::Fs;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
@@ -55,7 +56,7 @@ fn watermark(data_opts: &c::data_update_opts) -> c::bch_watermark {
 impl Fs {
     /// Durability available to a write to @target, 0 meaning every device. A
     /// cached write counts 1 per device.
-    fn durability_available(&self, data_opts: &c::data_update_opts, data_type: c::bch_data_type,
+    fn durability_available(&self, data_opts: &c::data_update_opts, data_type: DataType,
                             target: u32, devs_have: &c::bch_devs_list,
                             mut trace: Option<&mut Printbuf>) -> Available {
         if let Some(out) = trace.as_deref_mut() {
@@ -99,7 +100,7 @@ impl Fs {
 
     /// Ignores stripe pointers: btree pointers have none.
     fn btree_ptr_durability_on_target(&self, k: BkeySC<'_, BtreePtrs>, target: u32) -> u32 {
-        let devs = self.target_rw_devs(c::bch_data_type::BCH_DATA_btree, Target::decode(target));
+        let devs = self.target_rw_devs(DataType::btree, Target::decode(target));
         let rcu = read_lock();
 
         k.ptrs(self)
@@ -136,7 +137,7 @@ impl Fs {
         }
 
         let none = c::bch_devs_list::default();
-        let btree = c::bch_data_type::BCH_DATA_btree;
+        let btree = DataType::btree;
         let target = data_opts.target.into();
 
         let durability        = u32::from(k.btree_ptr_durability(self).total);
@@ -169,7 +170,7 @@ impl Fs {
             return self.write_btree_feasible(opts, data_opts, b, trace);
         }
 
-        let data_type = if btree.is_some() { c::bch_data_type::BCH_DATA_btree } else { c::bch_data_type::BCH_DATA_user };
+        let data_type = if btree.is_some() { DataType::btree } else { DataType::user };
         let target = if data_opts.write_flags.contains(w::BCH_WRITE_only_specified_devs) {
             data_opts.target.into()
         } else {

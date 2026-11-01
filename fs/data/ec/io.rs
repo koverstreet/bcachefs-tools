@@ -29,7 +29,7 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicI32, Ordering};
 use cstruct_macros::c_export;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
-use crate::format::Btree;
+use crate::format::{Btree, DataType};
 
 // ── Block IO ─────────────────────────────────────────────────────────────
 //
@@ -247,8 +247,8 @@ where
                 "IO to {sector_offset}+{sectors} of a stripe buffer of {}+{}", this.buf.offset, this.buf.size);
 
         let ptr = s.v().block_ptrs()[idx];
-        let data_type = if (idx as u32) < sh.nr_data { c::bch_data_type::BCH_DATA_user }
-                        else { c::bch_data_type::BCH_DATA_parity };
+        let data_type = if (idx as u32) < sh.nr_data { DataType::user }
+                        else { DataType::parity };
 
         let Some(ca) = fs.dev_get_ioref::<R>(ptr.dev().into()) else {
             this.buf.err[PRE][idx] = Some(fs.err(bch_errcode::BCH_ERR_stripe_read_device_offline));

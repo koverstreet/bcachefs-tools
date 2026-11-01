@@ -50,7 +50,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
 
 use c::alloc_btree_bitmap::{BTREE_BITMAP_ANY, BTREE_BITMAP_NO, BTREE_BITMAP_YES};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, DataType};
 
 const BUCKET_MASK: u64 = (1 << FREESPACE_GENBITS_SHIFT) - 1;
 
@@ -155,7 +155,7 @@ impl Fs {
         have_replicas &&
             (!self.allocator.rw_devs[req.data_type.0 as usize].test(ca.dev_idx.into()) ||
              !req.bits.copygc_can_make_progress() ||
-             (req.watermark == c::bch_watermark::BCH_WATERMARK_copygc && req.data_type != c::bch_data_type::BCH_DATA_btree) ||
+             (req.watermark == c::bch_watermark::BCH_WATERMARK_copygc && req.data_type != DataType::btree) ||
              self.dev_sizes_mismatched(req))
     }
 
@@ -177,8 +177,8 @@ impl Fs {
         write!(out, "will_retry_all_devices\t{}\n", u8::from(req.bits.will_retry_all_devices()));
         write!(out, "will_retry_set_devices\t{}\n", u8::from(req.bits.will_retry_set_devices()));
         write!(out, "blocking\t{}\n", u8::from(!req.flags.contains(c::bch_write_flags::BCH_WRITE_alloc_nowait)));
-        write!(out, "free\t{}\n", req.usage.buckets[c::bch_data_type::BCH_DATA_free.0 as usize]);
-        write!(out, "need_discard\t{}\n", req.usage.buckets[c::bch_data_type::BCH_DATA_need_discard.0 as usize]);
+        write!(out, "free\t{}\n", req.usage.buckets[DataType::free.0 as usize]);
+        write!(out, "need_discard\t{}\n", req.usage.buckets[DataType::need_discard.0 as usize]);
         write!(out, "copygc_wait\t{}\n",
                self.copygc.wait.get().wrapping_sub(self.io_clock[WRITE].now.load(Relaxed)));
         write!(out, "seen\t{}\n", req.counters.buckets_seen);
@@ -256,7 +256,7 @@ impl TransAttempt<'_, '_> {
 
         loop {
             let Some(k) = iter.peek_slot(self)? else { return Ok(None) };
-            let (p, free) = (k.k.p, alloc_to_v4(k).data_type == c::bch_data_type::BCH_DATA_free.0 as u8);
+            let (p, free) = (k.k.p, alloc_to_v4(k).data_type == DataType::free.0 as u8);
             let b = p.offset;
             *alloc_cursor = b;
 
@@ -281,7 +281,7 @@ impl TransAttempt<'_, '_> {
                     BtreeIterFlags::CACHED | BtreeIterFlags::NOPRESERVE | BtreeIterFlags::COMMITTED);
                 let a = alloc_to_v4(citer.peek_slot(self)?.expect("a key or a hole, at a bucket"));
 
-                if a.data_type == c::bch_data_type::BCH_DATA_free.0 as u8 {
+                if a.data_type == DataType::free.0 as u8 {
                     req.counters.buckets_seen += 1;
 
                     if fs.may_alloc_bucket(req, p) && fs.may_alloc_bucket_journal_seq(req, a.journal_seq_empty) {
@@ -466,7 +466,7 @@ impl TransAttempt<'_, '_> {
         let mut waiting = false;
         let mut copygc_can_make_progress = false;
 
-        req.btree_bitmap = match req.data_type == c::bch_data_type::BCH_DATA_btree {
+        req.btree_bitmap = match req.data_type == DataType::btree {
             true  => BTREE_BITMAP_YES,
             false => BTREE_BITMAP_NO,
         };
@@ -477,10 +477,10 @@ impl TransAttempt<'_, '_> {
             req.usage = ca.usage_read_fast();
             let avail = ca.free_buckets_at(&req.usage, req.watermark);
 
-            if req.usage.buckets[c::bch_data_type::BCH_DATA_need_discard.0 as usize] > avail.min(ca.mi.get().nbuckets >> 7) {
+            if req.usage.buckets[DataType::need_discard.0 as usize] > avail.min(ca.mi.get().nbuckets >> 7) {
                 fs.do_discards_async();
             }
-            if req.usage.buckets[c::bch_data_type::BCH_DATA_need_gc_gens.0 as usize] > avail {
+            if req.usage.buckets[DataType::need_gc_gens.0 as usize] > avail {
                 fs.gc_gens_async();
             }
             if ca.should_invalidate_buckets(&req.usage) != 0 {

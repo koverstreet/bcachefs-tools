@@ -24,12 +24,12 @@ use anyhow::Context;
 use rustix::fs::{flock, FlockOperation};
 
 use bch_bindgen::c;
+use bcachefs_kernel::format::DataType;
 use bcachefs_kernel::init::passes;
 use bcachefs_kernel::util::vstructs::{Unvalidated, UnvalidatedEntries};
 
 use crate::commands::fs_usage::replicas_spare_redundancy;
 use crate::thread_with_file::StatusDisplay;
-use crate::wrappers::accounting::data_type;
 use crate::wrappers::ioctl::{
     grow_on_erange, ioctl_ptr, ioctl_rw, IoctlBuf, BCH_IOCTL_FS_USAGE, BCH_IOCTL_RECOVERY_STATUS,
 };
@@ -152,7 +152,7 @@ impl<'a> RecoveryDisplay<'a> {
             .context("BCH_IOCTL_FS_USAGE reply")?;
 
         Ok(replicas.iter()
-            .filter(|u| u.r.data_type as u32 != u32::from(data_type::cached))
+            .filter(|u| u.r.data_type as u32 != u32::from(DataType::cached))
             .map(|u| replicas_spare_redundancy(u.r.nr_devs, u.r.nr_required, &u.devs, &self.devs))
             .min())
     }

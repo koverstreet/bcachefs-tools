@@ -1,4 +1,5 @@
 use std::io::{self, IsTerminal, Read, Write};
+use bcachefs_kernel::format::DataType;
 use std::os::unix::io::FromRawFd;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,7 +11,6 @@ use bch_bindgen::c::{
     bch_ioctl_data, bch_ioctl_data_args, bch_ioctl_data_event_ret, bch_ioctl_data_progress,
     bch_ioctl_data_scrub,
 };
-use bch_bindgen::accounting::data_type;
 use clap::Parser;
 
 use crate::commands::DeviceNameArgs;
@@ -113,7 +113,7 @@ fn scrub(cli: Cli) -> Result<()> {
     }
 
     let data_types: u32 = if cli.metadata {
-        1 << u32::from(data_type::btree)
+        1 << u32::from(DataType::btree)
     } else {
         !0u32
     };

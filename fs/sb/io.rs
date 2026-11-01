@@ -165,7 +165,7 @@ use arrayvec::ArrayVec;
 use core::pin::Pin;
 use pin_init::PinInit;
 use crate::published;
-use crate::format::{Btree, Nonce};
+use crate::format::{Btree, DataType, Nonce};
 
 /*
  * bringup: this write is part of bringing the filesystem up - allowed before
@@ -2507,7 +2507,7 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
         // SAFETY: once, until its read's waited on
         let scratch = unsafe { dev_sb.scratch() };
         scratch.fill(0);
-        dev_sb.ca.io_done_add(crate::util::kernel::READ, c::bch_data_type::BCH_DATA_sb, (scratch.len() >> 9) as u64);
+        dev_sb.ca.io_done_add(crate::util::kernel::READ, DataType::sb, (scratch.len() >> 9) as u64);
         ios.as_mut().read(dev_sb, sector, scratch)?;
     }
 
@@ -2557,7 +2557,7 @@ fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Co
                 continue;
             }
             let (sector, bytes) = dev_sb.copy_for(fs, idx);
-            dev_sb.ca.io_done_add(crate::util::kernel::WRITE, c::bch_data_type::BCH_DATA_sb, (bytes >> 9) as u64);
+            dev_sb.ca.io_done_add(crate::util::kernel::WRITE, DataType::sb, (bytes >> 9) as u64);
             ios.as_mut().write(dev_sb, sector, bytes)?;
             wrote = true;
         }
@@ -2774,7 +2774,7 @@ impl Fs {
         let mut total = 0u64;
 
         for ca in self.online_members() {
-            let sectors = ca.usage_full_read_fast().d[c::bch_data_type::BCH_DATA_btree.0 as usize].sectors;
+            let sectors = ca.usage_full_read_fast().d[DataType::btree.0 as usize].sectors;
             if m.push((ca.dev_idx, sectors), crate::util::alloc::flags::GFP_KERNEL).is_err() {
                 return self.write_super_flags(sb, c::bch_sb_write_flags::empty());
             }

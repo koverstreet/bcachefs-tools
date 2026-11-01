@@ -13,12 +13,12 @@ use bch_bindgen::c::{
     bch_ioctl_query_btree_keys, bch_ioctl_query_uuid, bch_ioctl_read_super,
     BCH_BY_INDEX, BCH_SUBVOL_SNAPSHOT_CREATE,
 };
-use bch_bindgen::accounting::data_type;
 use crate::wrappers::ioctl::*;
 use crate::wrappers::sysfs;
 use bch_bindgen::c::bch_sb;
 use bcachefs_kernel::util::vstructs::{read_past, Head};
 use bcachefs_kernel::errcode::BchError;
+use bcachefs_kernel::format::DataType;
 use bcachefs_kernel::path_to_cstr;
 use errno::Errno;
 
@@ -492,7 +492,7 @@ impl BcachefsHandle {
 
     /// Query device usage (v2 with flex array, v1 fallback).
     pub(crate) fn dev_usage(&self, dev_idx: u32) -> Result<DevUsage, Errno> {
-        let nr_data_types = data_type::nr.0 as usize;
+        let nr_data_types = DataType::nr.0 as usize;
 
         let mut buf = IoctlBuf::<Head<bch_ioctl_dev_usage_v2>>::new(nr_data_types);
         let hdr = buf.hdr_mut();
@@ -555,9 +555,9 @@ pub(crate) struct DevUsage {
 impl DevUsage {
     /// Iterate data types with their typed enum key.
     /// Caps at BCH_DATA_NR to avoid UB if the kernel returns more types than we know.
-    pub fn iter_typed(&self) -> impl Iterator<Item = (data_type, &DevUsageType)> {
+    pub fn iter_typed(&self) -> impl Iterator<Item = (DataType, &DevUsageType)> {
         use super::accounting::data_type_from_u8;
-        let max = data_type::nr.0 as usize;
+        let max = DataType::nr.0 as usize;
         self.data_types.iter().enumerate()
             .take(max)
             .map(|(i, dt)| (data_type_from_u8(i as u8), dt))
@@ -580,7 +580,7 @@ impl DevUsage {
     /// Used sectors (all data types except unstriped).
     pub fn used_sectors(&self) -> u64 {
         self.iter_typed()
-            .filter(|(t, _)| *t != data_type::unstriped)
+            .filter(|(t, _)| *t != DataType::unstriped)
             .map(|(_, dt)| dt.sectors)
             .sum()
     }
@@ -592,7 +592,7 @@ impl DevUsage {
         use super::accounting::{data_type_is_empty, data_type_is_hidden};
         self.iter_typed()
             .filter(|(t, _)| !data_type_is_empty(*t) && !data_type_is_hidden(*t) &&
-                             *t != data_type::unstriped)
+                             *t != DataType::unstriped)
             .map(|(_, dt)| dt.buckets)
             .sum()
     }

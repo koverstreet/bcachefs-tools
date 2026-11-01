@@ -22,6 +22,7 @@ use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::format::DataType;
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{entries_as_read, entries_end, SbField, SbFieldOps, SbState};
 use crate::sb::members::member_exists;
@@ -115,7 +116,7 @@ impl<'a> From<&'a c::bch_replicas_entry_v0<Unvalidated>> for SbEntry<'a> {
 
 impl SbEntry<'_> {
     pub(crate) fn to_text(&self, out: &mut Printbuf) {
-        c::bch_data_type(self.data_type.into()).to_text(out);
+        DataType(self.data_type.into()).to_text(out);
         match self.nr_required {
             Some(r) => write!(out, ": {r}/{} [", self.devs.len()),
             None    => write!(out, ": {} [", self.devs.len()),
@@ -203,7 +204,7 @@ impl EntryBuf<'_> {
         EntryBuf(unsafe { &mut *e.cast() })
     }
 
-    fn start(&mut self, data_type: c::bch_data_type, nr_required: u8) {
+    fn start(&mut self, data_type: DataType, nr_required: u8) {
         self.0[..DEVS].copy_from_slice(&[data_type.0 as u8, 0, nr_required]);
     }
 
@@ -230,7 +231,7 @@ impl EntryBuf<'_> {
 /// stripe's blocks'. A key with no data leaves the data type as it was, and
 /// no devices.
 fn bkey_to_replicas(fs: &Fs, e: &mut EntryBuf<'_>, k: BkeySC<'_>) {
-    type D = c::bch_data_type;
+    type D = DataType;
 
     e.0[1] = 0;
 
@@ -257,12 +258,12 @@ fn bkey_to_replicas(fs: &Fs, e: &mut EntryBuf<'_>, k: BkeySC<'_>) {
 
 /// The replicas accounting position for @data_type data on @devs, of which
 /// @nr_required are needed to read it.
-pub fn replicas_acct(data_type: c::bch_data_type, nr_required: u8, devs: &[u8]) -> DiskAccountingPos {
+pub fn replicas_acct(data_type: DataType, nr_required: u8, devs: &[u8]) -> DiskAccountingPos {
     try_replicas_acct(data_type, nr_required, devs).expect("a key's devices fit an accounting position")
 }
 
 /// replicas_acct(), or None if @devs don't fit in an accounting position.
-pub(crate) fn try_replicas_acct(data_type: c::bch_data_type, nr_required: u8, devs: &[u8])
+pub(crate) fn try_replicas_acct(data_type: DataType, nr_required: u8, devs: &[u8])
     -> Option<DiskAccountingPos>
 {
     let mut e = Head::<c::bch_replicas_entry_v1>::default();
@@ -274,7 +275,7 @@ pub(crate) fn try_replicas_acct(data_type: c::bch_data_type, nr_required: u8, de
 
 /// replicas_acct() of the entry in @b - an EntryBuf's bytes, or a
 /// bch_replicas_padded's - for @data_type data, whatever type it says.
-pub(crate) fn entry_acct(b: &[u8; ENTRY_BYTES], data_type: c::bch_data_type) -> DiskAccountingPos {
+pub(crate) fn entry_acct(b: &[u8; ENTRY_BYTES], data_type: DataType) -> DiskAccountingPos {
     let nr = usize::from(b[1]);
     replicas_acct(data_type, b[2], &b[DEVS..DEVS + nr])
 }
@@ -289,7 +290,7 @@ pub(crate) fn bkey_replicas_padded(fs: &Fs, k: BkeySC<'_>) -> c::bch_replicas_pa
 
 /// replicas_acct() of @k's entry, as bkey_to_replicas() makes it, for
 /// @data_type data.
-pub(crate) fn bkey_replicas_acct(fs: &Fs, k: BkeySC<'_>, data_type: c::bch_data_type) -> DiskAccountingPos {
+pub(crate) fn bkey_replicas_acct(fs: &Fs, k: BkeySC<'_>, data_type: DataType) -> DiskAccountingPos {
     let mut b = [0; ENTRY_BYTES];
     bkey_to_replicas(fs, &mut EntryBuf(&mut b), k);
     entry_acct(&b, data_type)
@@ -300,10 +301,10 @@ pub(crate) fn bkey_replicas_acct(fs: &Fs, k: BkeySC<'_>, data_type: c::bch_data_
 /// # Safety
 /// @e has room for BCH_BKEY_PTRS_MAX devices.
 #[c_export]
-pub unsafe fn bch2_devlist_to_replicas(e: *mut Head<c::bch_replicas_entry_v1>, data_type: c::bch_data_type,
+pub unsafe fn bch2_devlist_to_replicas(e: *mut Head<c::bch_replicas_entry_v1>, data_type: DataType,
                                        devs: c::bch_devs_list) {
     assert!(data_type.0 != 0 &&
-            data_type != c::bch_data_type::BCH_DATA_sb &&
+            data_type != DataType::sb &&
             data_type.0 < c::BCH_DATA_NR,
             "replicas entry of data type {}", data_type.0);
 
@@ -345,7 +346,7 @@ pub fn sb_entries<S: SbState>(sb: &c::bch_sb<S>) -> impl Iterator<Item = SbEntry
 impl<S: SbState> c::bch_sb<S> {
     /// Whether it lists journal replicas.
     pub fn has_journal(&self) -> bool {
-        sb_entries(self).any(|e| u32::from(e.data_type) == c::bch_data_type::BCH_DATA_journal.0)
+        sb_entries(self).any(|e| u32::from(e.data_type) == DataType::journal.0)
     }
 
     /// The data types with data on @dev: a mask, by bch_data_type.
@@ -369,7 +370,7 @@ pub fn bch2_dev_has_data(_c: &Opaque<c::bch_fs>, ca: &c::bch_dev) -> c_uint {
 pub(crate) fn can_read_with_devs(e: &Entry, devs: &c::bch_devs_mask, flags: u32, err: Option<&mut Printbuf>)
     -> bool
 {
-    type D = c::bch_data_type;
+    type D = DataType;
 
     if u32::from(e.data_type) == D::BCH_DATA_cached.0 {
         return true;
@@ -421,7 +422,7 @@ pub unsafe fn bch2_can_read_replicas_with_devs(_c: &Opaque<c::bch_fs>, devs: &c:
 /// degraded. If not, why in @err.
 pub(crate) fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::bch_write_check,
                        flags: u32, err: &mut Printbuf) -> bool {
-    type D = c::bch_data_type;
+    type D = DataType;
 
     // have: what the rw set has now; online: what @devs would have
     let mut have = [0u32; c::BCH_DATA_NR as usize];
@@ -793,7 +794,7 @@ impl Fs {
     /// Whether entries of @data_type have no place in the superblock: user
     /// data's don't, past no_sb_user_data_replicas.
     fn replicas_obsolete(&self, data_type: u8) -> bool {
-        u32::from(data_type) > c::bch_data_type::BCH_DATA_btree.0 &&
+        u32::from(data_type) > DataType::btree.0 &&
             u32::from(self.sb.version_incompat.get()) >= c::bcachefs_metadata_version::no_sb_user_data_replicas.0
     }
 
@@ -841,7 +842,7 @@ impl Fs {
         if e.devs.is_empty() {
             return false;
         }
-        assert_eq!(u32::from(e.data_type), c::bch_data_type::BCH_DATA_journal.0,
+        assert_eq!(u32::from(e.data_type), DataType::journal.0,
                    "a ref on replicas entry of data type {}", e.data_type);
         verify_entry(e);
         true
@@ -905,7 +906,7 @@ impl Fs {
         let mut sb = self.sb_lock();
         let dirty = {
             let mut r = self.replicas.write();
-            let changed = r.retain(|e, refs| u32::from(e.data_type) != c::bch_data_type::BCH_DATA_journal.0 ||
+            let changed = r.retain(|e, refs| u32::from(e.data_type) != DataType::journal.0 ||
                                              refs.load(Ordering::Relaxed) != 0);
             if changed {
                 r.write_sb(self, &mut sb)?;
@@ -928,7 +929,7 @@ impl Fs {
             let mark = self.mark_lock().write();
             let mut r = self.replicas.write();
 
-            let new = r.filtered(|e| u32::from(e.data_type) == c::bch_data_type::BCH_DATA_journal.0 ||
+            let new = r.filtered(|e| u32::from(e.data_type) == DataType::journal.0 ||
                     accounting_mem::has_replicas(self, &mark, e))
                 .map_err(|_| {
                     crate::bch_err!(self, "error allocating c->replicas_gc");
@@ -1029,9 +1030,9 @@ pub fn bch2_replicas_clear(c: &Opaque<c::bch_fs>) {
 mod tests {
     use super::*;
 
-    const JOURNAL: u8 = c::bch_data_type::BCH_DATA_journal.0 as u8;
-    const BTREE: u8 = c::bch_data_type::BCH_DATA_btree.0 as u8;
-    const USER: u8 = c::bch_data_type::BCH_DATA_user.0 as u8;
+    const JOURNAL: u8 = DataType::journal.0 as u8;
+    const BTREE: u8 = DataType::btree.0 as u8;
+    const USER: u8 = DataType::user.0 as u8;
 
     fn bytes(data_type: u8, nr_required: u8, devs: &[u8]) -> Vec<u8> {
         [&[data_type, devs.len() as u8, nr_required][..], devs].concat()

@@ -10,7 +10,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, B
                          TransAttempt};
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
-use crate::format::{self, bcachefs_metadata_version, Bpos};
+use crate::format::{self, bcachefs_metadata_version, Bpos, DataType};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id, FsckErrCtx};
 use crate::init::passes;
@@ -239,7 +239,7 @@ pub fn maybe_kill(fs: &Fs, p: Bpos) {
     let pos = DiskAccountingPos::from_bpos(p);
     let Some(e) = replicas_entry(&pos) else { return };
 
-    if u32::from(e.data_type) > accounting::bch_data_type::BCH_DATA_btree.0 &&
+    if u32::from(e.data_type) > DataType::btree.0 &&
        fs.request_incompat_feature(bcachefs_metadata_version::no_sb_user_data_replicas).is_ok() {
         return;
     }

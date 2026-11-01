@@ -472,7 +472,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::accounting::{bucket_data_type, data_type, data_type_from_u8, data_type_is_empty, data_type_movable};
+use crate::accounting::{bucket_data_type, data_type_from_u8, data_type_is_empty, data_type_movable};
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::accounting;
 use crate::alloc::check::need_discard_or_freespace_err;
@@ -501,7 +501,7 @@ use core::ffi::{c_int, c_uint};
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::Ordering;
 use cstruct_macros::{c_export, c_const};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, DataType};
 
 c_const! {
     /// How far a bucket's generation may get past its oldest pointer's before
@@ -746,7 +746,6 @@ fn alloc_v1_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 fn alloc_v4_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    use c::bch_data_type as dt;
 
     let a = c::AllocV4::val_copy_pad(v.k).expect("an alloc_v4");
     let (want, have) = (a.u64s_noerror(), v.k.k.val_bytes() / size_of::<u64>());
@@ -773,14 +772,14 @@ fn alloc_v4_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
     let (stripe, dirty, cached, refcount) = (a.stripe_sectors, a.dirty_sectors, a.cached_sectors, a.stripe_refcount);
     match a.data_type() {
-        dt::BCH_DATA_free | dt::BCH_DATA_need_gc_gens | dt::BCH_DATA_need_discard =>
+        DataType::free | DataType::need_gc_gens | DataType::need_discard =>
             bkey_fsck_err_on!(v, stripe != 0 || dirty != 0 || cached != 0 || refcount != 0,
                               id::alloc_key_empty_but_have_data,
                               "empty data type free but have data {stripe}.{dirty}.{cached} {refcount}"),
-        dt::BCH_DATA_sb | dt::BCH_DATA_journal | dt::BCH_DATA_btree | dt::BCH_DATA_user | dt::BCH_DATA_parity =>
+        DataType::sb | DataType::journal | DataType::btree | DataType::user | DataType::parity =>
             bkey_fsck_err_on!(v, dirty == 0 && stripe == 0 && refcount == 0, id::alloc_key_dirty_sectors_0,
                               "data_type {} but dirty_sectors==0", data_type_str(a.data_type())),
-        dt::BCH_DATA_cached =>
+        DataType::cached =>
             bkey_fsck_err_on!(v, cached == 0 || dirty != 0 || stripe != 0 || refcount != 0,
                               id::alloc_key_cached_inconsistency, "data type inconsistency"),
         _ => Ok(()),
@@ -876,7 +875,7 @@ pub fn bch2_alloc_v4_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>>, 
 }
 
 impl c::AllocV4 {
-    fn data_type(&self) -> data_type {
+    fn data_type(&self) -> DataType {
         data_type_from_u8(self.data_type)
     }
 
@@ -887,7 +886,7 @@ impl c::AllocV4 {
 
     /// bch2_bucket_sectors().
     fn sectors(&self) -> i64 {
-        if self.data_type() == data_type::cached {
+        if self.data_type() == DataType::cached {
             i64::from(self.cached_sectors)
         } else {
             self.sectors_dirty()
@@ -913,7 +912,7 @@ impl c::AllocV4 {
     /// Its time in its device's read lru, 0 for none - only cached data is
     /// in it: alloc_lru_idx_read().
     pub fn lru_idx_read(&self) -> u64 {
-        if self.data_type() == data_type::cached {
+        if self.data_type() == DataType::cached {
             self.io_time[READ] & c::LRU_TIME_MAX
         } else {
             0
@@ -955,25 +954,25 @@ impl c::AllocV4 {
 
     /// Its type, from what it holds: @t is what's being added to it, or
     /// need_discard for one just emptied.
-    pub fn alloc_data_type(&self, t: data_type) -> data_type {
-        if self.data_type() == data_type::multiple {
-            data_type::multiple
+    pub fn alloc_data_type(&self, t: DataType) -> DataType {
+        if self.data_type() == DataType::multiple {
+            DataType::multiple
         } else if self.stripe_refcount != 0 {
-            if t == data_type::parity { t } else { data_type::stripe }
+            if t == DataType::parity { t } else { DataType::stripe }
         } else if self.sectors_dirty() != 0 {
             bucket_data_type(t)
         } else if self.cached_sectors != 0 {
-            data_type::cached
-        } else if t == data_type::need_discard {
-            data_type::need_discard
+            DataType::cached
+        } else if t == DataType::need_discard {
+            DataType::need_discard
         } else if u32::from(self.gc_gen()) >= c::BUCKET_GC_GEN_MAX {
-            data_type::need_gc_gens
+            DataType::need_gc_gens
         } else {
-            data_type::free
+            DataType::free
         }
     }
 
-    pub fn set_data_type(&mut self, t: data_type) {
+    pub fn set_data_type(&mut self, t: DataType) {
         self.data_type = self.alloc_data_type(t).0 as u8;
     }
 }
@@ -1258,7 +1257,7 @@ impl c::AllocV4 {
 
     /// A stripe bucket's dirty sectors: bch2_bucket_sectors_unstriped().
     fn sectors_unstriped(&self) -> i64 {
-        if self.data_type() == data_type::stripe { i64::from(self.dirty_sectors) } else { 0 }
+        if self.data_type() == DataType::stripe { i64::from(self.dirty_sectors) } else { 0 }
     }
 }
 
@@ -1280,7 +1279,7 @@ fn nonempty(a: &c::AllocV4) -> bool {
     !data_type_is_empty(a.data_type())
 }
 
-fn is(t: data_type) -> impl Fn(&c::AllocV4) -> bool {
+fn is(t: DataType) -> impl Fn(&c::AllocV4) -> bool {
     move |a| a.data_type() == t
 }
 
@@ -1320,7 +1319,7 @@ fn transition_text(fs: &Fs, what: core::fmt::Arguments<'_>, old: BkeySC<'_>, new
 /// says. Not free, it has none.
 pub(crate) fn bucket_do_freespace_index(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, alloc_k: BkeySC<'_>,
                                         a: &c::AllocV4, set: bool) -> Result<(), BchError> {
-    if a.data_type() != data_type::free {
+    if a.data_type() != DataType::free {
         return Ok(());
     }
 
@@ -1341,7 +1340,7 @@ pub(crate) fn bucket_do_freespace_index(t: &TransAttempt<'_, '_>, ca: &c::bch_de
 fn bucket_do_discard_index(t: &TransAttempt<'_, '_>, bucket: Bpos, a: &c::AllocV4, set: bool)
     -> Result<(), BchError>
 {
-    if a.data_type() != data_type::need_discard {
+    if a.data_type() != DataType::need_discard {
         return Ok(());
     }
     t.bit_mod_buffered(Btree::need_discard, NeedDiscardPos::new(bucket, a).to_bpos(), set)
@@ -1365,7 +1364,7 @@ fn bucket_gen_update(t: &TransAttempt<'_, '_>, bucket: Bpos, generation: u8) -> 
     t.update(&iter, &g, UpdateTriggerFlags::empty())
 }
 
-fn dev_data_type_accounting_mod(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, data_type: data_type,
+fn dev_data_type_accounting_mod(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, data_type: DataType,
                                 d: accounting::DevDataTypeCounters<i64>, gc: bool) -> Result<(), BchError> {
     accounting::add(t, accounting::DevDataType { dev: ca.dev_idx, data_type: data_type.0 as u8 }, d, gc)
 }
@@ -1394,7 +1393,7 @@ impl TransAttempt<'_, '_> {
 
         let (old_unstriped, new_unstriped) = (old.sectors_unstriped(), new.sectors_unstriped());
         if old_unstriped != new_unstriped {
-            dev_data_type_accounting_mod(self, ca, data_type::unstriped, accounting::DevDataTypeCounters {
+            dev_data_type_accounting_mod(self, ca, DataType::unstriped, accounting::DevDataTypeCounters {
                 buckets: i64::from(new_unstriped != 0) - i64::from(old_unstriped != 0),
                 sectors: new_unstriped - old_unstriped,
                 fragmented: 0,
@@ -1487,12 +1486,12 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
         // before it's reused. Not sb or journal, which don't go empty this
         // way - the WARN below catches one that does
         if ceased(nonempty, &old_a, new_a) &&
-           old_a.data_type() != data_type::sb && old_a.data_type() != data_type::journal {
-            new_a.data_type = data_type::need_discard.0 as u8;
+           old_a.data_type() != DataType::sb && old_a.data_type() != DataType::journal {
+            new_a.data_type = DataType::need_discard.0 as u8;
         }
 
         if became(nonempty, &old_a, new_a) {
-            if new_a.data_type() != data_type::sb && new_a.data_type() != data_type::journal &&
+            if new_a.data_type() != DataType::sb && new_a.data_type() != DataType::journal &&
                !fs.bucket_is_open_safe(dev, b) && !ca.bucket_nouse(b) {
                 let new = new_key(new_a);
                 let buf = transition_text(fs, format_args!("bucket going nonempty but not open in {}",
@@ -1522,12 +1521,12 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
 
         // To free legitimately: from need_discard, by the discard path; from
         // need_gc_gens, by gc_gens bumping oldest_gen - empty all along
-        if became(is(data_type::free), &old_a, new_a) {
-            crate::warn_on!(!in_fsck && old_a.data_type() != data_type::need_discard &&
-                            old_a.data_type() != data_type::need_gc_gens);
+        if became(is(DataType::free), &old_a, new_a) {
+            crate::warn_on!(!in_fsck && old_a.data_type() != DataType::need_discard &&
+                            old_a.data_type() != DataType::need_gc_gens);
         }
 
-        if ceased(is(data_type::need_discard), &old_a, new_a) {
+        if ceased(is(DataType::need_discard), &old_a, new_a) {
             if data_type_is_empty(new_a.data_type()) {
                 crate::warn_on!(!in_fsck && !flags.contains(F::IS_DISCARD));
             } else {
@@ -1541,7 +1540,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
         // data types, which set_data_type() above made free. With NEED_DISCARD
         // it may yet need discarding: back to need_discard, for the discard
         // worker. Otherwise the journal seqs are residue
-        if new_a.data_type() == data_type::free &&
+        if new_a.data_type() == DataType::free &&
            (new_a.need_discard() || new_a.journal_seq_nonempty != 0 || new_a.journal_seq_empty != 0) {
             crate::log_fsck_err!(t, id::alloc_key_data_type_free_dirty_bookkeeping,
                 "bucket marked free still has discard/journal bookkeeping\n\
@@ -1549,7 +1548,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
                 u8::from(new_a.need_discard()), new_a.journal_seq_nonempty, new_a.journal_seq_empty,
                 as_sc(&new_key(new_a)).to_text(fs))?;
             if new_a.need_discard() {
-                new_a.data_type = data_type::need_discard.0 as u8;
+                new_a.data_type = DataType::need_discard.0 as u8;
             } else {
                 new_a.journal_seq_nonempty = 0;
                 new_a.journal_seq_empty = 0;
@@ -1565,8 +1564,8 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
             new_a.set_data_type(new_a.data_type());
         }
 
-        if changed(is(data_type::free), &old_a, new_a) ||
-           (new_a.data_type() == data_type::free &&
+        if changed(is(DataType::free), &old_a, new_a) ||
+           (new_a.data_type() == DataType::free &&
             FreespacePos::new(p, &old_a).genbits != FreespacePos::new(p, new_a).genbits) {
             bucket_do_freespace_index(t, &ca, op.old, &old_a, false)?;
             let new = new_key(new_a);
@@ -1575,12 +1574,12 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
 
         // Journal space for the need_discard update the atomic phase makes,
         // through the write buffer: a key's jset_u64s(), twice
-        if changed(is(data_type::need_discard), &old_a, new_a) ||
-           (old_a.data_type() == data_type::need_discard && old_a.journal_seq_empty != new_a.journal_seq_empty) {
+        if changed(is(DataType::need_discard), &old_a, new_a) ||
+           (old_a.data_type() == DataType::need_discard && old_a.journal_seq_empty != new_a.journal_seq_empty) {
             t.trans().reserve_extra_journal_u64s(2 * (c::BKEY_U64s + c::JSET_KEYS_U64s) as u32);
         }
 
-        if new_a.data_type() == data_type::cached && new_a.io_time[READ] == 0 {
+        if new_a.data_type() == DataType::cached && new_a.io_time[READ] == 0 {
             new_a.io_time[READ] = fs.current_io_time(READ);
         }
 
@@ -1617,17 +1616,17 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
             generation.store(new_a.generation, Ordering::Relaxed);
         }
 
-        if became(is(data_type::free), &old_a, new_a) {
+        if became(is(DataType::free), &old_a, new_a) {
             ca.alloc_wake();
         }
 
-        if changed(is(data_type::free), &old_a, new_a) {
+        if changed(is(DataType::free), &old_a, new_a) {
             // nr_open_buckets counts open buckets that are still free: a
             // written one is gone from buckets[free] already, and
             // free_buckets_at() would take it off twice
             let _freelist = fs.allocator.freelist_lock.lock();
             if let Some(ob) = fs.open_bucket(dev, b) {
-                let uncount = ceased(is(data_type::free), &old_a, new_a);
+                let uncount = ceased(is(DataType::free), &old_a, new_a);
                 if ob.free_uncounted.get() != uncount {
                     let n = ca.nr_open_buckets.get();
                     ca.nr_open_buckets.set(if uncount { n.wrapping_sub(1) } else { n.wrapping_add(1) });
@@ -1642,7 +1641,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
             new_a.journal_seq_nonempty = seq;
         }
 
-        if became(is(data_type::need_discard), &old_a, new_a) {
+        if became(is(DataType::need_discard), &old_a, new_a) {
             // Emptied: waiting for a journal flush - unless nothing since it
             // went nonempty was flushed, and the journal can be asked not to
             // flush the seqs in between
@@ -1659,17 +1658,17 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
             }
         }
 
-        if changed(is(data_type::need_discard), &old_a, new_a) {
+        if changed(is(DataType::need_discard), &old_a, new_a) {
             bucket_do_discard_index(t, p, &old_a, false)?;
             bucket_do_discard_index(t, p, new_a, true)?;
         }
 
-        if became(is(data_type::cached), &old_a, new_a) && !fs.bucket_is_open(dev, b) &&
+        if became(is(DataType::cached), &old_a, new_a) && !fs.bucket_is_open(dev, b) &&
            ca.should_invalidate_buckets(&ca.usage_read_fast()) != 0 {
             ca.do_invalidates();
         }
 
-        if became(is(data_type::need_gc_gens), &old_a, new_a) {
+        if became(is(DataType::need_gc_gens), &old_a, new_a) {
             fs.gc_gens_async();
         }
     }

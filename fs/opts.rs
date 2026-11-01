@@ -45,6 +45,7 @@ use crate::util::sysfs::{parse_human_u64, parse_int};
 use core::ffi::{CStr, c_ulong};
 use crate::cstructs::c::BCH_INODE_OPTS;
 use crate::c::{bch_member, bch_sb_field_ext, BCH_COMPRESSION_OPT_none, BCH_CSUM_OPT_crc32c, BCH_DATA_btree, BCH_DATA_journal, BCH_DATA_user, BCH_DEGRADED_ask, BCH_MEMBER_STATE_rw, BCH_ON_ERROR_fix_safe, BCH_REPLICAS_MAX, BCH_SB_SECTOR, BCH_STR_HASH_OPT_siphash, BCH_VERSION_UPGRADE_compatible, BCH_WRITE_DEGRADED_degraded};
+use crate::format::DataType;
 use crate::types::bits_to_longs;
 use cstruct_macros::{CStruct, c_const, c_enum, c_xmacro, Options, TypeInfo};
 
@@ -715,7 +716,7 @@ pub const DEFAULTS: c::bch_opts = c::bch_opts::DEFAULTS;
 // ── Names ────────────────────────────────────────────────────────────────
 
 /// @t's name - "(invalid data type)" if it isn't one: bch2_data_type_str().
-pub fn data_type_str(t: c::bch_data_type) -> &'static str {
+pub fn data_type_str(t: DataType) -> &'static str {
     t.name().unwrap_or("(invalid data type)")
 }
 

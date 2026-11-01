@@ -32,6 +32,7 @@ use cstruct_macros::c_export;
 use crate::accounting;
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
+use crate::format::DataType;
 use crate::fs::{Fs, WriteRef};
 use crate::init::passes;
 use crate::locking::{Locked, MemallocFlags};
@@ -558,7 +559,7 @@ const DEV: &[Attr<c::bch_dev>] = &[
     Attr::ro(c"nbuckets",               |ca, out| writeln!(out, "{}", ca.mi.get().nbuckets)),
 
     Attr::ro(c"has_data",               |ca, out| {
-        crate::util::names::prt_set::<c::bch_data_type>(out, ca.has_data() as u64);
+        crate::util::names::prt_set::<DataType>(out, ca.has_data() as u64);
         out.newline();
     }),
     Attr::ro(c"io_done",                io_done_to_text),
@@ -594,7 +595,7 @@ fn io_done_to_text(ca: &c::bch_dev, out: &mut Printbuf) {
         writeln!(out, "  \"{name}\": {{");
         for i in 1..nr {
             write!(out, "    \"");
-            c::bch_data_type(i as u32).to_text(out);
+            DataType(i as u32).to_text(out);
             writeln!(out, "\": {}{}", done.sectors[rw][i] << 9, if i < nr - 1 { "," } else { "" });
         }
         writeln!(out, "  }}{}", if rw == READ { "," } else { "" });

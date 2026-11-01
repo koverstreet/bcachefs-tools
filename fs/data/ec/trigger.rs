@@ -38,7 +38,7 @@ use arrayvec::ArrayVec;
 use core::ops::ControlFlow;
 use cstruct_macros::{c_export, c_extern};
 use core::ffi::c_int;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, DataType};
 
 c_extern! {
     pub fn bch2_stripe_tryget_existing(iter: *mut c::btree_iter) -> c_int;
@@ -218,12 +218,11 @@ fn stripe_refcount_saturated(fs: &Fs, bucket: Bpos, stripe: u64, overflow: bool)
 #[allow(clippy::too_many_arguments)]
 fn mark_stripe_bucket_alloc(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, s: StripeK<'_>, i: u32, deleting: bool,
                             bucket: Bpos, a: &mut c::AllocV4, flags: UpdateTriggerFlags) -> Result<(), BchError> {
-    use c::bch_data_type as D;
     let fs = t.fs();
     let v = s.v();
     let ptr = &s.v().block_ptrs()[i as usize];
     let parity = i >= v.nr_data();
-    let data_type = if parity { D::BCH_DATA_parity } else { D::BCH_DATA_stripe };
+    let data_type = if parity { DataType::parity } else { DataType::stripe };
 
     let sectors = if parity { i64::from(v.sectors.get()) } else { 0 };
     if sectors != 0 {
@@ -280,7 +279,7 @@ fn mark_stripe_bucket_alloc(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, s: Stripe
         }
     }
 
-    a.set_data_type(if a.stripe_refcount != 0 { data_type } else { D::BCH_DATA_user });
+    a.set_data_type(if a.stripe_refcount != 0 { data_type } else { DataType::user });
     Ok(())
 }
 
@@ -479,7 +478,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchEr
         None
     };
 
-    let parity = c::bch_data_type::BCH_DATA_parity;
+    let parity = DataType::parity;
     if let Some(n) = new {
         let r = bkey_replicas_padded(fs, n.untyped());
         let sectors = i64::from(n.v().sectors.get()) * i64::from(n.v().nr_redundant);

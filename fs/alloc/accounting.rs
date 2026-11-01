@@ -82,12 +82,11 @@ pub use crate::format::accounting::*;
 pub use crate::format::bch_compression_type;
 pub use c::bch_reconcile_accounting_type;
 
-pub type data_type = bch_data_type;
 pub type compression_type = bch_compression_type;
 pub type reconcile_accounting_type = bch_reconcile_accounting_type;
 
-pub fn data_type_from_u8(v: u8) -> bch_data_type {
-    bch_data_type(v as u32)
+pub fn data_type_from_u8(v: u8) -> DataType {
+    DataType(v as u32)
 }
 
 pub fn compression_type_from_u8(v: u8) -> bch_compression_type {
@@ -140,9 +139,9 @@ impl<S> DiskAccountingPos<S> {
 impl DevDataType {
     /// Its data type, if this version knows it: a newer version's are kept
     /// in the table, but not in a device's usage, which has no slot for them.
-    pub fn known_data_type(&self) -> Option<bch_data_type> {
+    pub fn known_data_type(&self) -> Option<DataType> {
         let t = data_type_from_u8(self.data_type);
-        (t.0 < data_type::nr.0).then_some(t)
+        (t.0 < DataType::nr.0).then_some(t)
     }
 }
 
@@ -461,7 +460,7 @@ pub unsafe fn bch2_accounting_update_sb<'t>(trans: &'t BtreeTrans<'t>) -> c_int 
 pub fn mod_dev_cached_sectors(t: &TransAttempt<'_, '_>, dev: u32, sectors: i64, gc: bool)
     -> Result<(), BchError>
 {
-    add_at(t, &replicas_acct(data_type::cached, 1, &[dev as u8]), &[sectors], gc)
+    add_at(t, &replicas_acct(DataType::cached, 1, &[dev as u8]), &[sectors], gc)
 }
 
 /// Snapshot @id's counters - keys, key bytes, sectors - in each snapshotted
@@ -503,31 +502,31 @@ pub fn accumulate(dst: &mut BkeyI, src: &BkeyI) {
 }
 
 /// Free/empty data types — not counted as "used" space.
-pub fn data_type_is_empty(t: bch_data_type) -> bool {
-    t == data_type::free
-        || t == data_type::need_gc_gens
-        || t == data_type::need_discard
+pub fn data_type_is_empty(t: DataType) -> bool {
+    t == DataType::free
+        || t == DataType::need_gc_gens
+        || t == DataType::need_discard
 }
 
 /// Internal/hidden data types — not user-visible (superblock, journal).
-pub fn data_type_is_hidden(t: bch_data_type) -> bool {
-    t == data_type::sb || t == data_type::journal
+pub fn data_type_is_hidden(t: DataType) -> bool {
+    t == DataType::sb || t == DataType::journal
 }
 
 /// What a bucket holding @t is: cached and stripe data are in user buckets.
-pub fn bucket_data_type(t: bch_data_type) -> bch_data_type {
-    if t == data_type::cached || t == data_type::stripe { data_type::user } else { t }
+pub fn bucket_data_type(t: DataType) -> DataType {
+    if t == DataType::cached || t == DataType::stripe { DataType::user } else { t }
 }
 
 /// Whether a bucket of type @bucket can't hold a pointer of type @ptr.
-pub fn bucket_data_type_mismatch(bucket: bch_data_type, ptr: bch_data_type) -> bool {
+pub fn bucket_data_type_mismatch(bucket: DataType, ptr: DataType) -> bool {
     !data_type_is_empty(bucket) &&
-        bucket != data_type::multiple &&
+        bucket != DataType::multiple &&
         bucket_data_type(bucket) != bucket_data_type(ptr)
 }
 
 /// Whether copygc moves data of type @t.
-pub fn data_type_movable(t: bch_data_type) -> bool {
+pub fn data_type_movable(t: DataType) -> bool {
     c::DATA_TYPES_MOVABLE & (1 << t.0) != 0
 }
 
@@ -569,7 +568,7 @@ pub fn bch2_dev_usage_init(ca: &c::bch_dev, gc: bool) -> c_int {
          * sees the non-gc counters, so the gc path keeps the plain
          * delta-add (cur stays zero).
          */
-        let arm = DevDataType { dev: ca.dev_idx, data_type: data_type::free.0 as u8 };
+        let arm = DevDataType { dev: ca.dev_idx, data_type: DataType::free.0 as u8 };
         let cur = if gc { DevDataTypeCounters::default() } else { read(fs, arm) };
         let mi = ca.mi.get();
         let nbuckets = mi.nbuckets.wrapping_sub(mi.first_bucket.into());

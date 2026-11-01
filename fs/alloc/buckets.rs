@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::accounting::{self, bucket_data_type_mismatch, data_type, data_type_from_u8, mod_dev_cached_sectors};
+use crate::accounting::{self, bucket_data_type_mismatch, data_type_from_u8, mod_dev_cached_sectors};
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
 use crate::alloc::replicas::{bkey_replicas_acct, entry_acct, replicas_acct};
 use crate::btree::bkey::prelude::*;
@@ -36,7 +36,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use cstruct_macros::{c_export, c_name, CStruct, bitfield, c_const, c_rcu_array, Fieldwise, TypeInfo, c_enum};
 use core::cell::Cell;
 use nestify::nest;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, DataType};
 
 c_enum! {
     #[flags]
@@ -153,13 +153,12 @@ pub struct bch_fs_usage_base {
 }
 
 impl bch_fs_usage_base {
-    pub fn add_data_type(&mut self, data_type: c::bch_data_type, sectors: u64) {
-        use c::bch_data_type as dt;
+    pub fn add_data_type(&mut self, data_type: DataType, sectors: u64) {
 
         let to = match data_type {
-            dt::BCH_DATA_btree => &mut self.btree,
-            dt::BCH_DATA_user | dt::BCH_DATA_parity => &mut self.data,
-            dt::BCH_DATA_cached => &mut self.cached,
+            DataType::btree => &mut self.btree,
+            DataType::user | DataType::parity => &mut self.data,
+            DataType::cached => &mut self.cached,
             _ => return,
         };
         *to = to.wrapping_add(sectors);
@@ -371,7 +370,7 @@ impl TransAttempt<'_, '_> {
     /// BCH_ERR_cached_ptr_stale: bch2_bucket_ref_update().
     #[allow(clippy::too_many_arguments)]
     pub fn bucket_ref_update(&self, ca: &c::bch_dev, k: BkeySC<'_>, ptr: &c::bch_extent_ptr,
-                             sectors: i64, ptr_data_type: c::bch_data_type, b_gen: u8,
+                             sectors: i64, ptr_data_type: DataType, b_gen: u8,
                              bucket_data_type: &mut u8, bucket_sectors: &mut u32) -> Result<(), BchError> {
         assert!(sectors != 0);
 
@@ -392,7 +391,7 @@ impl TransAttempt<'_, '_> {
     #[inline(never)]
     #[allow(clippy::too_many_arguments)]
     fn bucket_ref_update_slowpath(&self, ca: &c::bch_dev, k: BkeySC<'_>, ptr: &c::bch_extent_ptr,
-                                  sectors: i64, ptr_data_type: c::bch_data_type, b_gen: u8,
+                                  sectors: i64, ptr_data_type: DataType, b_gen: u8,
                                   bucket_data_type: &mut u8, bucket_sectors: &mut u32) -> Result<(), BchError> {
         let fs = self.fs();
         let (dev, b, ptr_gen) = (ptr.dev(), ca.ptr_bucket(ptr), ptr.generation());
@@ -438,7 +437,7 @@ impl TransAttempt<'_, '_> {
             self.bucket_ref_update_err(k, false, id::ptr_bucket_data_type_mismatch, message!(
                 "bucket {dev}:{b} gen {b_gen} different types of data in same bucket: {}, {}",
                 data_type_str(data_type_from_u8(*bucket_data_type)), data_type_str(ptr_data_type)))?;
-            *bucket_data_type = data_type::multiple.0 as u8;
+            *bucket_data_type = DataType::multiple.0 as u8;
         }
 
         let new = u64::from(*bucket_sectors).wrapping_add(sectors as u64);
@@ -495,7 +494,7 @@ pub unsafe fn __bch2_bucket_ref_update<'t>(
     k:                BkeySC<'_>,
     ptr:              &c::bch_extent_ptr,
     sectors:          i64,
-    ptr_data_type:    c::bch_data_type,
+    ptr_data_type:    DataType,
     b_gen:            u8,
     bucket_data_type: &mut u8,
     bucket_sectors:   &mut u32,
@@ -512,7 +511,7 @@ pub unsafe fn __bch2_bucket_ref_update<'t>(
 /// set from it: __mark_pointer().
 #[allow(clippy::too_many_arguments)]
 fn mark_pointer(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, k: BkeySC<'_>, p: &c::extent_ptr_decoded,
-                sectors: i64, ptr_data_type: c::bch_data_type, a: &mut c::AllocV4, insert: bool)
+                sectors: i64, ptr_data_type: DataType, a: &mut c::AllocV4, insert: bool)
     -> Result<(), BchError>
 {
     let (generation, mut bucket_data_type) = (a.generation, a.data_type);
@@ -618,7 +617,7 @@ fn mark_stripe_ptr_no_match(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, idx: u64) -
 /// in the stripes btree, and gc's copy with gc - and in the stripe's
 /// replicas accounting: bch2_trigger_stripe_ptr().
 fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &c::extent_ptr_decoded,
-                      data_type: c::bch_data_type, sectors: i64, flags: UpdateTriggerFlags)
+                      data_type: DataType, sectors: i64, flags: UpdateTriggerFlags)
     -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -685,7 +684,7 @@ fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: Bke
     let gc = flags.contains(UpdateTriggerFlags::GC);
     let insert = !flags.contains(UpdateTriggerFlags::OVERWRITE);
     let nr: i64 = if insert { 1 } else { -1 };
-    let data_type = if k.k.is_btree_ptr() { data_type::btree } else { data_type::user };
+    let data_type = if k.k.is_btree_ptr() { DataType::btree } else { DataType::user };
 
     let mut replicas_sectors = 0i64;
     let mut devs = [0u8; c::BCH_BKEY_PTRS_MAX as usize];
@@ -872,7 +871,7 @@ crate::key_trigger!(bch2_trigger_snapshot_nr_keys => trigger_snapshot_nr_keys);
 /// Bucket @b of @ca as @sectors of @data_type in its alloc key - set, not
 /// added to, so marking again is a no-op: __bch2_trans_mark_metadata_bucket().
 fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, b: u64,
-                                  data_type: c::bch_data_type, sectors: u32) -> Result<(), BchError> {
+                                  data_type: DataType, sectors: u32) -> Result<(), BchError> {
     let fs = t.fs();
     let mut iter = BtreeIter::new(t, Btree::alloc, pos(ca.dev_idx.into(), b),
                                   BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
@@ -901,7 +900,7 @@ fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, b: 
 
 /// trans_mark_metadata_bucket_key(), in gc's copy - which adds: gc counts
 /// each bucket's metadata once: bch2_mark_metadata_bucket().
-fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, b: u64, data_type: c::bch_data_type,
+fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, b: u64, data_type: DataType,
                            sectors: u32, flags: UpdateTriggerFlags) -> Result<(), BchError> {
     let fs = t.fs();
     let Some(g) = ca.gc_bucket(b) else {
@@ -935,9 +934,9 @@ fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, b: u64, da
 /// to unmark it: in its alloc key, committed, or in gc's copy:
 /// bch2_trans_mark_metadata_bucket(). The gc side runs in an attempt of its
 /// own; it's only reached on a transaction made for it.
-pub fn trans_mark_metadata_bucket(trans: &BtreeTrans<'_>, ca: &c::bch_dev, b: u64, data_type: c::bch_data_type,
+pub fn trans_mark_metadata_bucket(trans: &BtreeTrans<'_>, ca: &c::bch_dev, b: u64, data_type: DataType,
                                   sectors: u32, flags: UpdateTriggerFlags) -> Result<(), BchError> {
-    assert!(matches!(data_type, data_type::free | data_type::sb | data_type::journal),
+    assert!(matches!(data_type, DataType::free | DataType::sb | DataType::journal),
             "marking {} as metadata", data_type_str(data_type));
 
     // a backup superblock can be past the end of the usable space
@@ -959,7 +958,7 @@ pub fn trans_mark_metadata_bucket(trans: &BtreeTrans<'_>, ca: &c::bch_dev, b: u6
 /// and its count so far - marking the bucket when the range moves past it:
 /// bch2_trans_mark_metadata_sectors().
 fn trans_mark_metadata_sectors(trans: &BtreeTrans<'_>, ca: &c::bch_dev, range: core::ops::Range<u64>,
-                               data_type: c::bch_data_type, bucket: &mut (u64, u32),
+                               data_type: DataType, bucket: &mut (u64, u32),
                                flags: UpdateTriggerFlags) -> Result<(), BchError> {
     let mut start = range.start;
     loop {
@@ -996,16 +995,16 @@ fn trans_mark_dev_sb_in(trans: &BtreeTrans<'_>, ca: &c::bch_dev, flags: UpdateTr
 
     for offset in layout.sb_offset[..usize::from(layout.nr_superblocks)].iter().map(|o| o.get()) {
         if offset == sb_sector {
-            trans_mark_metadata_sectors(trans, ca, 0..sb_sector, data_type::sb, &mut bucket, flags)?;
+            trans_mark_metadata_sectors(trans, ca, 0..sb_sector, DataType::sb, &mut bucket, flags)?;
         }
-        trans_mark_metadata_sectors(trans, ca, offset..offset + sb_sectors, data_type::sb, &mut bucket, flags)?;
+        trans_mark_metadata_sectors(trans, ca, offset..offset + sb_sectors, DataType::sb, &mut bucket, flags)?;
     }
     if bucket.1 != 0 {
-        trans_mark_metadata_bucket(trans, ca, bucket.0, data_type::sb, bucket.1, flags)?;
+        trans_mark_metadata_bucket(trans, ca, bucket.0, DataType::sb, bucket.1, flags)?;
     }
 
     for &b in ca.journal.buckets() {
-        trans_mark_metadata_bucket(trans, ca, b, data_type::journal, ca.mi.get().bucket_size.into(), flags)?;
+        trans_mark_metadata_bucket(trans, ca, b, DataType::journal, ca.mi.get().bucket_size.into(), flags)?;
     }
     Ok(())
 }
@@ -1034,7 +1033,7 @@ impl Fs {
 
 #[c_export]
 pub fn bch2_trans_mark_metadata_bucket<'t>(trans: &'t BtreeTrans<'t>, ca: &c::bch_dev, b: u64,
-                                           data_type: c::bch_data_type, sectors: c_uint,
+                                           data_type: DataType, sectors: c_uint,
                                            flags: c::btree_iter_update_trigger_flags) -> c_int {
     ret_to_c(trans_mark_metadata_bucket(trans, ca, b, data_type, sectors,
                                         UpdateTriggerFlags::from_bits_retain(flags.bits())))
@@ -1172,7 +1171,7 @@ impl c::bch_dev {
     /// allocator's, read unlocked, as C does.
     pub fn free_buckets_at(&self, usage: &c::bch_dev_usage, watermark: c::bch_watermark) -> u64 {
         let open = self.nr_open_buckets.get();
-        let free = usage.buckets[c::bch_data_type::BCH_DATA_free.0 as usize];
+        let free = usage.buckets[DataType::free.0 as usize];
         // as C's: u64s, then max_t(s64, 0, ..)
         (free.wrapping_sub(open.into()).wrapping_sub(self.buckets_reserved(watermark)) as i64).max(0) as u64
     }

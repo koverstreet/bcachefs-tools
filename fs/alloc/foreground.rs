@@ -51,6 +51,7 @@ use crate::c;
 use crate::c::bch_errcode;
 use crate::data::copygc::can_make_progress;
 use crate::errcode::{err_ptr, ret_to_c, ret_to_result_void, BchError};
+use crate::format::DataType;
 use crate::fs::Fs;
 use crate::locking::Guard;
 use crate::opts::data_type_str;
@@ -155,7 +156,7 @@ nest! {
         },
         pub watermark: c::bch_watermark,
         pub flags: c::bch_write_flags,
-        pub data_type: c::bch_data_type,
+        pub data_type: DataType,
         pub devs_have: *mut c::bch_devs_list,
         pub wp: *mut c::write_point,
 
@@ -1058,8 +1059,8 @@ impl Fs {
                 for ca in self.devs_rcu(&rcu) {
                     let u = ca.usage_read_fast();
                     let sectors = u64::from(ca.mi.get().bucket_size);
-                    need_discard += sectors * u.buckets[c::bch_data_type::BCH_DATA_need_discard.0 as usize];
-                    free         += sectors * u.buckets[c::bch_data_type::BCH_DATA_free.0 as usize];
+                    need_discard += sectors * u.buckets[DataType::need_discard.0 as usize];
+                    free         += sectors * u.buckets[DataType::free.0 as usize];
                     reserve      += sectors * ca.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe);
                 }
             }
@@ -1181,7 +1182,7 @@ impl Fs {
                c::OPEN_BUCKETS_COUNT - u32::from(a.freelist_lock.open_buckets_nr_free.get()));
         write!(out, "open buckets total\t{}\n", c::OPEN_BUCKETS_COUNT);
         for (i, n) in nr.into_iter().enumerate().filter(|&(_, n)| n != 0) {
-            write!(out, "open_buckets {}:\t{n}\n", data_type_str(c::bch_data_type(i as u32)));
+            write!(out, "open_buckets {}:\t{n}\n", data_type_str(DataType(i as u32)));
         }
         write!(out, "open_buckets_wait\t{}\n", waiting_to_text(&a.open_buckets_wait));
     }
@@ -1269,7 +1270,7 @@ impl ToText for OpenBucketRef {
     fn to_text(&self, out: &mut Printbuf) {
         let bucket_size = u32::from(self.ca().mi.get().bucket_size);
         write!(out, "{} ref {} ", self.idx().get(), self.pin.load(Relaxed));
-        c::bch_data_type(self.data_type.get().into()).to_text(out);
+        DataType(self.data_type.get().into()).to_text(out);
         let id = self.id();
         write!(out, " {}:{} gen {} allocated {}/{}", id.dev(), id.bucket(), id.generation(),
                bucket_size.wrapping_sub(self.sectors_free.get()), bucket_size);

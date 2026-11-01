@@ -63,7 +63,7 @@ use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
 use core::ops::{ControlFlow, RangeInclusive};
 use cstruct_macros::{c_export, CStruct};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, DataType};
 
 /// A backpointer scan in progress: alloc/backpointers.rs's BpScanIter.
 #[repr(C)]
@@ -165,7 +165,7 @@ pub fn bch2_backpointer_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>
 
     unsafe { c::bch2_btree_id_level_to_text(out.as_raw(), Btree(v.btree_id.into()), v.level.into()) };
     prt!(out, " data_type=");
-    c::bch_data_type(v.data_type.into()).to_text(out);
+    DataType(v.data_type.into()).to_text(out);
     match fs {
         Some(fs) => prt!(out, " suboffset={} len={} gen={} pos=",
                          BackpointerPos::from_bpos(fs, p).suboffset, { v.bucket_len }, v.bucket_gen),

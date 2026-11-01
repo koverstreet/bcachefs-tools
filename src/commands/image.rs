@@ -10,7 +10,7 @@ use std::process;
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::fs::FsExt;
-use bcachefs_kernel::accounting::{self, compression_type, data_type};
+use bcachefs_kernel::accounting::{self, compression_type};
 use bcachefs_kernel::btree::bkey::bkey_type;
 use bcachefs_kernel::alloc::{accounting_mem, replicas::replicas_acct};
 use bcachefs_kernel::btree_id;
@@ -38,7 +38,7 @@ use crate::util::parse_human_size;
 use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;
 use crate::wrappers::sysfs;
 use bcachefs_kernel::sb::io::SbResize;
-use bcachefs_kernel::format::Btree;
+use bcachefs_kernel::format::{Btree, DataType};
 
 const BCH_REPLICAS_MAX: u32 = 4;
 const BTREE_MAX_DEPTH: u32 = 4;
@@ -129,11 +129,11 @@ fn count_input_size(dir: &std::fs::File) -> u64 {
 fn set_data_allowed_for_image_update(fs: &Fs) {
     let mut sb = fs.sb_lock();
 
-    sb.fs_member_mut(0).set_data_allowed(data_type::user.bit());
+    sb.fs_member_mut(0).set_data_allowed(DataType::user.bit());
 
     sb.fs_member_mut(1).set_data_allowed(
-        data_type::journal.bit()
-            | data_type::btree.bit(),
+        DataType::journal.bit()
+            | DataType::btree.bit(),
     );
 
     // Not started yet: the start persists this. It needs the in-memory
@@ -217,7 +217,7 @@ fn print_data_type_usage(
     out: &mut Printbuf,
     ca: &c::bch_dev,
     usage: &c::bch_dev_usage_full,
-    data_type: c::bch_data_type,
+    data_type: DataType,
 ) {
     let d = &usage.d[data_type.0 as usize];
     if d.buckets != 0 {
@@ -239,9 +239,9 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
     let ca = unsafe { &*fs.dev_raw(0) };
     let usage = ca.usage_full_read_fast();
 
-    print_data_type_usage(&mut buf, ca, &usage, data_type::sb);
-    print_data_type_usage(&mut buf, ca, &usage, data_type::journal);
-    print_data_type_usage(&mut buf, ca, &usage, data_type::btree);
+    print_data_type_usage(&mut buf, ca, &usage, DataType::sb);
+    print_data_type_usage(&mut buf, ca, &usage, DataType::journal);
+    print_data_type_usage(&mut buf, ca, &usage, DataType::btree);
 
     {
         let mut indented = buf.indent(2);
@@ -262,11 +262,11 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
     }
 
     // User data via replicas accounting
-    let v = accounting_mem::mem_read(fs, &replicas_acct(data_type::user, 1, &[0]));
+    let v = accounting_mem::mem_read(fs, &replicas_acct(DataType::user, 1, &[0]));
     write!(&mut buf, "user");
     prt_sectors(&mut buf, v[0]);
 
-    let user_idx = data_type::user.0 as usize;
+    let user_idx = DataType::user.0 as usize;
     if usage.d[user_idx].fragmented != 0 {
         write!(&mut buf, "user fragmented");
         prt_sectors(&mut buf, usage.d[user_idx].fragmented);
@@ -330,7 +330,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     {
         let mut sb = fs.sb_lock();
         let m = sb.fs_member_mut(0);
-        let allowed = m.data_allowed() | data_type::btree.bit();
+        let allowed = m.data_allowed() | DataType::btree.bit();
         m.set_data_allowed(allowed);
         fs.write_super(&mut sb);
     }
@@ -371,7 +371,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
 
     // Allow journal on primary device
     let m = sb.fs_member_mut(0);
-    let allowed = m.data_allowed() | data_type::journal.bit();
+    let allowed = m.data_allowed() | DataType::journal.bit();
     m.set_data_allowed(allowed);
 
     // Set nbuckets
@@ -433,11 +433,11 @@ fn image_create_inner(
 
     {
         let dev0_opts = &mut devs[0].opts;
-        dev0_opts.set_data_allowed(data_type::user.bit() as u8);
+        dev0_opts.set_data_allowed(DataType::user.bit() as u8);
     }
     {
         let meta_opts = &mut meta_dev.opts;
-        meta_opts.set_data_allowed((data_type::journal.bit() | data_type::btree.bit()) as u8);
+        meta_opts.set_data_allowed((DataType::journal.bit() | DataType::btree.bit()) as u8);
     }
     devs.push(meta_dev);
 

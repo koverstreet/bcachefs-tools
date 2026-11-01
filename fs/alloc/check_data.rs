@@ -29,7 +29,6 @@ use crate::btree::bkey::{BkeySC, POS_MIN};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, BtreeTrans, CommitOpts,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
-use crate::c::bch_data_type as dt;
 use crate::c::bch_errcode;
 use crate::data::ec::stripe::ptr_matches_stripe_m;
 use crate::data::ptrs::{brand, extent_nonce, ptr_data_type, BkeyVPtrs, BkeyVPtrsMut, DecodedPtr, Ptrs, PtrsMut};
@@ -51,7 +50,7 @@ use bitflags::bitflags;
 use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
 use cstruct_macros::c_export;
-use crate::format::Btree;
+use crate::format::{Btree, DataType};
 
 /// What a key with pointers is copied with room for: as large as one can get,
 /// for the reconcile entry and padding pointers set_needs_reconcile() may add.
@@ -253,11 +252,11 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
     let data_type = ptr_data_type(fs, k, d);
     // what the messages name it, as C's ptr_data_type(): a stripe's are user data
     let ptr_type = data_type_str(if k.k.is_btree_ptr() {
-        dt::BCH_DATA_btree
+        DataType::btree
     } else if cached {
-        dt::BCH_DATA_cached
+        DataType::cached
     } else {
-        dt::BCH_DATA_user
+        DataType::user
     });
     let mut fix = PtrFix::empty();
 
@@ -301,7 +300,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
         return Ok(PtrFix::DROP);
     }
 
-    if data_type != dt::BCH_DATA_btree && ptr_gen != generation {
+    if data_type != DataType::btree && ptr_gen != generation {
         return Ok(fix);
     }
 
@@ -309,7 +308,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
     if fsck_err_on!(t, bucket_data_type_mismatch(bucket_type, data_type), id::ptr_bucket_data_type_mismatch,
                     "bucket {dev}:{b} gen {generation} different types of data in same bucket: {}, {}\n\
                      while marking {marking}", data_type_str(bucket_type), data_type_str(data_type))? {
-        if bucket_type == dt::BCH_DATA_journal {
+        if bucket_type == DataType::journal {
             // SAFETY: a device we have a ref on
             ret_to_result_void(unsafe { c::bch2_dev_journal_bucket_delete(ca.as_mut_ptr(), b) })?;
 
@@ -325,7 +324,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
             return Ok(fix);
         }
 
-        if !cached && data_type == dt::BCH_DATA_btree && bucket_type == dt::BCH_DATA_sb {
+        if !cached && data_type == DataType::btree && bucket_type == DataType::sb {
             bch_err!(fs, "btree and superblock in the same bucket - cannot repair");
             return fs.throw(bch_errcode::BCH_ERR_fsck_repair_unimplemented);
         }
@@ -334,14 +333,14 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
         // it has been or will be overwritten - drop the pointer. If it was the
         // last readable one, repair_ptrs() records the loss. Seen after a
         // resize freed the bucket holding a backup superblock (#785).
-        if bucket_type == dt::BCH_DATA_sb {
+        if bucket_type == DataType::sb {
             return Ok(fix | PtrFix::DROP);
         }
 
         // Left to check_extents_to_backpointers() to resolve; counted as
         // `multiple` meanwhile, as the alloc key gc writes will say
         t.gc_bucket_mod(&ca, g, UpdateTriggerFlags::GC, |a| {
-            a.data_type = dt::BCH_DATA_multiple.0 as u8;
+            a.data_type = DataType::multiple.0 as u8;
             Ok(())
         })?;
     }

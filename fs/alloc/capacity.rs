@@ -30,11 +30,12 @@
 //! bch_fs_capacity is made by its Init and freed by its drop: its locks, and
 //! the per-cpu counters, whose online reservations must all be put by then.
 
-use crate::accounting::{data_type, data_type_movable};
+use crate::accounting::data_type_movable;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::errcode::{ret_to_c, BchError};
+use crate::format::DataType;
 use crate::fs::Fs;
 use crate::init::error::trans_inconsistent;
 use crate::percpu_field;
@@ -162,13 +163,13 @@ impl Fs {
 /// user data of a device of durability 0; the rest, what it allows, with
 /// durability.
 fn dev_allocator_set_rw(fs: &Fs, ca: &c::bch_dev, rw: bool) {
-    let allowed = |t: c::bch_data_type| u64::from(ca.mi.get().data_allowed) & (1 << t.0) != 0;
+    let allowed = |t: DataType| u64::from(ca.mi.get().data_allowed) & (1 << t.0) != 0;
 
     for (i, devs) in fs.allocator.rw_devs.iter().enumerate() {
-        let t = c::bch_data_type(i as u32);
+        let t = DataType(i as u32);
         let data_type_rw = rw && match t {
-            c::bch_data_type::BCH_DATA_free   => true,
-            c::bch_data_type::BCH_DATA_cached => allowed(c::bch_data_type::BCH_DATA_user) && ca.mi.get().durability == 0,
+            DataType::free   => true,
+            DataType::cached => allowed(DataType::user) && ca.mi.get().durability == 0,
             _                                 => allowed(t) && ca.mi.get().durability != 0,
         };
         devs.assign(ca.dev_idx.into(), data_type_rw);
@@ -351,7 +352,7 @@ impl DevPlaceable {
         }
 
         let f = ca.usage_full_read_fast();
-        let buckets = |t: c::bch_data_type| f.d[t.0 as usize].buckets;
+        let buckets = |t: DataType| f.d[t.0 as usize].buckets;
         let bucket_size = u64::from(ca.mi.get().bucket_size);
 
         // Not the allocator's free or available buckets: those take out open
@@ -359,11 +360,11 @@ impl DevPlaceable {
         // nothing's been written to it, as fragmented if something has - so
         // taking it out again undercounts, until unmount gives it back.
         // reserved_sectors is our reserve.
-        let now = buckets(data_type::free) * bucket_size;
-        let reclaimable = buckets(data_type::free) + buckets(data_type::cached) +
-            buckets(data_type::need_gc_gens) + buckets(data_type::need_discard);
+        let now = buckets(DataType::free) * bucket_size;
+        let reclaimable = buckets(DataType::free) + buckets(DataType::cached) +
+            buckets(DataType::need_gc_gens) + buckets(DataType::need_discard);
         let fragmented: u64 = f.d.iter().enumerate()
-            .filter(|&(t, _)| data_type_movable(c::bch_data_type(t as u32)))
+            .filter(|&(t, _)| data_type_movable(DataType(t as u32)))
             .map(|(_, u)| u.fragmented)
             .sum();
 

@@ -71,6 +71,7 @@
 
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::format::DataType;
 use crate::fs::{Fs, SbLockGuard};
 use crate::opts::OptFn;
 use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState};
@@ -309,7 +310,7 @@ impl Fs {
 
     /// The devices that take @data_type writes now, in @target - all of them
     /// if @target names no devices.
-    pub fn target_rw_devs(&self, data_type: c::bch_data_type, target: Target) -> c::bch_devs_mask {
+    pub fn target_rw_devs(&self, data_type: DataType, target: Target) -> c::bch_devs_mask {
         let mut devs = c::bch_devs_mask { d: self.allocator.rw_devs[data_type.0 as usize].load() };
         let rcu = read_lock();
         if let Some(t) = self.target_to_mask(target, &rcu) {
@@ -343,7 +344,7 @@ impl Fs {
         {
             let now = crate::util::kernel::local_clock();
             let rcu = read_lock();
-            let rw = c::bch_devs_mask { d: self.allocator.rw_devs[c::bch_data_type::BCH_DATA_user.0 as usize].load() };
+            let rw = c::bch_devs_mask { d: self.allocator.rw_devs[DataType::user.0 as usize].load() };
             let devs = self.target_to_mask(Target::decode(target.into()), &rcu).unwrap_or(&rw);
 
             let (mut nr, mut total) = (0u64, 0u64);

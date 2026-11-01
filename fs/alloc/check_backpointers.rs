@@ -55,7 +55,7 @@ use core::ffi::c_int;
 use core::ops::{ControlFlow, RangeInclusive};
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, DataType};
 
 // ── fsck: check_btree_backpointers ───────────────────────────────────────
 
@@ -378,11 +378,10 @@ impl BucketSectors {
     }
 
     fn add(&mut self, bp: &c::Backpointer) {
-        use c::bch_data_type as dt;
-        let counter = match c::bch_data_type(bp.data_type.into()) {
-            dt::BCH_DATA_btree | dt::BCH_DATA_user    => &mut self.dirty,
-            dt::BCH_DATA_cached                       => &mut self.cached,
-            dt::BCH_DATA_stripe | dt::BCH_DATA_parity => &mut self.stripe,
+        let counter = match DataType(bp.data_type.into()) {
+            DataType::btree | DataType::user    => &mut self.dirty,
+            DataType::cached                       => &mut self.cached,
+            DataType::stripe | DataType::parity => &mut self.stripe,
             _ => return,
         };
         // as C's: u32s
@@ -405,12 +404,11 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
                                      mut last_flushed: WbFlush<'_>, checked_bad: &mut Bpos)
     -> Result<bool, BchError>
 {
-    use c::bch_data_type as dt;
 
     let fs = t.fs();
     let a = alloc_to_v4(alloc_k);
 
-    if matches!(c::bch_data_type(a.data_type.into()), dt::BCH_DATA_sb | dt::BCH_DATA_journal | dt::BCH_DATA_parity) {
+    if matches!(DataType(a.data_type.into()), DataType::sb | DataType::journal | DataType::parity) {
         return Ok(false);
     }
 
@@ -467,7 +465,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
         let mut msg = LogMsg::new(fs);
         prt!(&mut msg, "backpointer sectors > bucket sectors, but found no bad backpointers\n\
                         bucket {}:{} data type ", { p.inode }, { p.offset });
-        c::bch_data_type(a.data_type.into()).to_text(&mut msg);
+        DataType(a.data_type.into()).to_text(&mut msg);
         prt!(&mut msg, ", counters\n");
         if sectors.dirty > have.dirty {
             prt!(&mut msg, "dirty: {} > {}\n", sectors.dirty, have.dirty);
@@ -498,7 +496,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
     // Pre upgrade, we expect all the buckets to be wrong, a write buffer
     // flush is pointless:
     if !before_bucket_gen {
-        if c::bch_data_type(a.data_type.into()) == dt::BCH_DATA_btree {
+        if DataType(a.data_type.into()) == DataType::btree {
             t.trans().unlock_long();
             fs.btree_interior_updates_flush();
         }
@@ -678,14 +676,13 @@ fn check_extents_to_backpointers_pass(fs: &Fs, trans: &BtreeTrans<'_>, s: &mut E
 /// type, and that is the bucket's again. They're read from the btree: the
 /// caller flushes the write buffer first.
 fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, bucket: u64) -> Result<(), BchError> {
-    use c::bch_data_type as dt;
 
     let fs = t.fs();
     let bucket = pos(ca.dev_idx.into(), bucket);
     let mut iter = BtreeIter::new(t, Btree::alloc, bucket, BtreeIterFlags::empty());
     let a = alloc_to_v4(iter.peek_slot(t)?.expect("a slot always has a key"));
 
-    if c::bch_data_type(a.data_type.into()) != dt::BCH_DATA_multiple {
+    if DataType(a.data_type.into()) != DataType::multiple {
         return Ok(());
     }
 
@@ -699,7 +696,7 @@ fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, bucket: u
             return Ok(ControlFlow::Continue(()));
         }
 
-        let bp_type = c::bch_data_type(bp.v().data_type.into());
+        let bp_type = DataType(bp.v().data_type.into());
         mixed = data_type.is_some_and(|d| bucket_data_type(d) != bucket_data_type(bp_type));
         data_type.get_or_insert(bp_type);
         Ok(if mixed { ControlFlow::Break(()) } else { ControlFlow::Continue(()) })
@@ -709,13 +706,13 @@ fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, bucket: u
 
     let mut new = t.start_alloc_update(bucket, UpdateTriggerFlags::empty())?;
     let a = new.v_mut();
-    a.data_type = dt::BCH_DATA_free.0 as u8;
+    a.data_type = DataType::free.0 as u8;
     a.set_data_type(data_type);
 
     let mut msg = LogMsg::new(fs);
     prt!(&mut msg, "bucket {}:{}: double allocation resolved, data type multiple -> ",
          { bucket.inode }, { bucket.offset });
-    c::bch_data_type(a.data_type.into()).to_text(&mut msg);
+    DataType(a.data_type.into()).to_text(&mut msg);
     Ok(())
 }
 

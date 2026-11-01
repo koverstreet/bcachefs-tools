@@ -45,7 +45,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
 
 use c::bch_write_flags as w;
-use crate::format::Bpos;
+use crate::format::{Bpos, DataType};
 
 impl c::alloc_request {
     /// The devices it has copies on: its caller's, and the buckets it's got.
@@ -104,7 +104,7 @@ impl<'f> TransAttempt<'_, 'f> {
             // writes of cached data put their one copy on cache devices and
             // durable ones alike
             if req.flags.contains(w::BCH_WRITE_cached) {
-                let cached = fs.target_rw_devs(c::bch_data_type::BCH_DATA_cached, Target::decode(req.target));
+                let cached = fs.target_rw_devs(DataType::cached, Target::decode(req.target));
                 req.devs_may_alloc.d.or(&cached.d);
             }
 
@@ -202,10 +202,10 @@ impl<'f> TransAttempt<'_, 'f> {
         // for moves, which move only the data there is, nor for writes of
         // cached data, which are on the cache devices already
         if !req.flags.intersects(w::BCH_WRITE_move | w::BCH_WRITE_cached) &&
-           req.data_type == c::bch_data_type::BCH_DATA_user {
+           req.data_type == DataType::user {
             // from the target asked for: devs_may_alloc's been narrowed by
             // each copy, and may have been widened
-            req.devs_may_alloc = fs.target_rw_devs(c::bch_data_type::BCH_DATA_cached, Target::decode(orig_target));
+            req.devs_may_alloc = fs.target_rw_devs(DataType::cached, Target::decode(orig_target));
             let used = req.devs_used(fs);
             req.devs_may_alloc.d.andnot(&used);
 
@@ -375,7 +375,7 @@ impl LockedWritePoint<'_> {
     /// @k is a key with pointers - btree_ptr, btree_ptr_v2, extent - with
     /// room after its value for one per bucket, on none of their devices.
     pub unsafe fn append_ptrs(&mut self, k: *mut c::bkey_i, sectors: u32) {
-        let (fs, user) = (self.fs, self.wp.alloc.data_type == c::bch_data_type::BCH_DATA_user);
+        let (fs, user) = (self.fs, self.wp.alloc.data_type == DataType::user);
         let g = self.g.as_mut().expect("locked till it's dropped");
         assert!(sectors <= g.sectors_free, "{sectors} sectors from a write point with {} free", g.sectors_free);
         g.sectors_free -= sectors;

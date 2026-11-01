@@ -25,8 +25,9 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 
 use crate::commands::DeviceNameArgs;
-use crate::wrappers::accounting::{AccountingEntry, data_type, data_type_from_u8, disk_accounting_type};
+use crate::wrappers::accounting::{AccountingEntry, data_type_from_u8, disk_accounting_type};
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
+use bcachefs_kernel::format::DataType;
 use bcachefs_kernel::util::vstructs::ArmError;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs::{self, DeviceNameMode, DevInfo};
@@ -100,7 +101,7 @@ fn accounting_replicas_entries(acct: &[&AccountingEntry]) -> Result<Vec<Entry>> 
 
         // Cached data has no durability to lose; nr_required == 0 extents
         // are backed by stripes, accounted via the stripe entries:
-        if sectors == 0 || data_type_from_u8(r.data_type) == data_type::cached || nr_required == 0 {
+        if sectors == 0 || data_type_from_u8(r.data_type) == DataType::cached || nr_required == 0 {
             continue;
         }
 

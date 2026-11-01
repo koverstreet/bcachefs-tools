@@ -24,7 +24,7 @@ use core::sync::atomic::Ordering;
 use cstruct_macros::{c_export, CStruct, Plain, TypeInfo};
 use super::io::*;
 use crate::types::c_default;
-use crate::format::Bpos;
+use crate::format::{Bpos, DataType};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -513,7 +513,7 @@ impl SbFieldOps for c::bch_sb_field_members_v2 {
 
 pub(crate) fn data_types_to_text(out: &mut Printbuf, types: u64) {
     match types {
-        t if t != 0 => crate::util::names::prt_set::<c::bch_data_type>(out, t),
+        t if t != 0 => crate::util::names::prt_set::<DataType>(out, t),
         _           => write!(out, "(none)"),
     }
 }
@@ -1011,7 +1011,7 @@ crate::fs_delayed_work! {
         let mut want_schedule = false;
         for ca in fs.members() {
             let u = ca.usage_read_fast();
-            let btree_sectors = ca.bucket_to_sector(u.buckets[c::bch_data_type::BCH_DATA_btree.0 as usize]);
+            let btree_sectors = ca.bucket_to_sector(u.buckets[DataType::btree.0 as usize]);
             let bitmap_sectors = u64::from(ca.mi.get().btree_allocated_bitmap.count_ones()) << ca.mi.get().btree_bitmap_shift;
 
             if btree_sectors * 4 < bitmap_sectors {
@@ -1135,7 +1135,7 @@ impl Fs {
 
     /// The devices the allocator writes to: for_each_rw_member_rcu().
     pub fn rw_devs_rcu<'g>(&'g self, rcu: &'g ReadGuard) -> impl Iterator<Item = &'g c::bch_dev> {
-        self.devs_rcu_in(self.allocator.rw_devs[c::bch_data_type::BCH_DATA_free.0 as usize].iter(), rcu)
+        self.devs_rcu_in(self.allocator.rw_devs[DataType::free.0 as usize].iter(), rcu)
     }
 
     /// dev_rcu(), a missing device reported: bch2_dev_rcu().
@@ -1613,7 +1613,7 @@ impl c::bch_dev {
 
     /// @sectors of IO of @data_type, reading or writing as @rw, counted in
     /// io_done: this_cpu_add(ca->io_done->sectors[rw][data_type], sectors).
-    pub fn io_done_add(&self, rw: usize, data_type: c::bch_data_type, sectors: u64) {
+    pub fn io_done_add(&self, rw: usize, data_type: DataType, sectors: u64) {
         crate::percpu_field!(self.io_done.get(), sectors[rw][data_type.0 as usize]).add(sectors);
     }
 
@@ -1738,7 +1738,7 @@ impl c::bch_dev {
 
     /// Whether the allocator writes to it: bch2_dev_is_rw().
     pub fn is_rw(&self) -> bool {
-        self.fs.allocator.rw_devs[c::bch_data_type::BCH_DATA_free.0 as usize].test(self.dev_idx.into())
+        self.fs.allocator.rw_devs[DataType::free.0 as usize].test(self.dev_idx.into())
     }
 
     /// What a new copy written to it would be worth - nothing unless it's rw:

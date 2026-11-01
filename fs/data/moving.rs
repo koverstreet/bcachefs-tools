@@ -28,6 +28,7 @@ use crate::c;
 use crate::c::bch_errcode;
 use crate::data::copygc::bch2_copygc_wait_not_running;
 use crate::errcode::BchError;
+use crate::format::DataType;
 use crate::fs::Fs;
 use crate::function_name;
 use crate::locking::Locked;
@@ -61,7 +62,7 @@ impl MoveStats {
             b.set(if i < len { name[i] } else { 0 });
         }
         self.ret.set(c::bch_ioctl_data_event_ret(0));
-        self.at.data_type.set(c::bch_data_type::BCH_DATA_user);
+        self.at.data_type.set(DataType::user);
         self.at.pos.set(c::bbpos::default());
         self.at.dev.set(0);
         self.at.offset.set(0);

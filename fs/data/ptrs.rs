@@ -36,7 +36,7 @@ use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, Ent
 use arrayvec::ArrayVec;
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
-use crate::format::{Bversion, Nonce};
+use crate::format::{Bversion, DataType, Nonce};
 
 #[path = "ptrs_edit.rs"]
 mod edit;
@@ -790,22 +790,21 @@ pub struct DecodedPtr<'a> {
 
 /// What @d, a pointer of @k, points to - a stripe's parity blocks are parity,
 /// its others user data.
-pub fn ptr_data_type(fs: &Fs, k: BkeySC<'_>, d: &DecodedPtr<'_>) -> c::bch_data_type {
+pub fn ptr_data_type(fs: &Fs, k: BkeySC<'_>, d: &DecodedPtr<'_>) -> DataType {
     use c::bch_bkey_type as t;
-    use c::bch_data_type as dt;
     match k.k.key_type() {
-        t::KEY_TYPE_btree_ptr | t::KEY_TYPE_btree_ptr_v2 => dt::BCH_DATA_btree,
+        t::KEY_TYPE_btree_ptr | t::KEY_TYPE_btree_ptr_v2 => DataType::btree,
         t::KEY_TYPE_extent | t::KEY_TYPE_reflink_v =>
-            if d.p.has_ec { dt::BCH_DATA_stripe }
-            else if d.p.ptr.cached() != 0 { dt::BCH_DATA_cached }
-            else { dt::BCH_DATA_user },
+            if d.p.has_ec { DataType::stripe }
+            else if d.p.ptr.cached() != 0 { DataType::cached }
+            else { DataType::user },
         t::KEY_TYPE_stripe => {
             let s = k.arm::<c::Stripe>().expect("a stripe");
             let block = s.ptrs(fs).position(|p| core::ptr::eq(p, d.ptr))
                 .expect("a pointer of the stripe's");
             let s = s.v();
             assert!(block < s.nr_blocks.into(), "stripe pointer past its blocks");
-            if block + usize::from(s.nr_redundant) >= s.nr_blocks.into() { dt::BCH_DATA_parity } else { dt::BCH_DATA_user }
+            if block + usize::from(s.nr_redundant) >= s.nr_blocks.into() { DataType::parity } else { DataType::user }
         }
         _ => panic!("the data type of a pointer in a key without pointers"),
     }

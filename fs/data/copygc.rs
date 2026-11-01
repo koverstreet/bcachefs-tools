@@ -91,7 +91,7 @@ use crate::locking::Locked;
 use crate::new_lock;
 use crate::util::futex::EventCount;
 use crate::util::projections::Volatile;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, DataType};
 
 #[pin_data]
 #[repr(C)]
@@ -102,7 +102,7 @@ pub struct bch_fs_copygc {
     #[init(RustOnly::new(new_lock!(None)))]
     pub(crate) thread: rust_only!(Locked<c::spinlock_t, Option<Kthread>>),
     #[pin]
-    #[init(c::write_point::init(c::bch_data_type::BCH_DATA_user))]
+    #[init(c::write_point::init(DataType::user))]
     pub write_point: c::write_point,
     /* The thread's, read unlocked - foreground.c's to_text, move.c: */
     pub wait_at: Volatile<i64>,
@@ -274,7 +274,7 @@ pub(crate) fn dev_wait_amount(ca: &c::bch_dev, mark: &impl MarkHeld) -> (i64, bo
     let leaving = (leaving as i64).max(0);
 
     let bucket_size = u64::from(ca.mi.get().bucket_size);
-    let free = usage.buckets[c::bch_data_type::BCH_DATA_free.0 as usize]
+    let free = usage.buckets[DataType::free.0 as usize]
         .wrapping_mul(bucket_size).wrapping_add(leaving as u64) as i64;
     let capacity = ca.mi.get().nbuckets.wrapping_mul(bucket_size) as i64;
 
@@ -290,7 +290,7 @@ pub(crate) fn dev_wait_amount(ca: &c::bch_dev, mark: &impl MarkHeld) -> (i64, bo
     let fragmented_allowed = (ca.free_buckets_at(&usage, watermark).wrapping_add(ca.buckets_reserved(watermark))
         .wrapping_mul(bucket_size).wrapping_add(leaving as u64) >> 1) as i64;
     let fragmented = usage_full.d.iter().enumerate()
-        .filter(|&(i, _)| accounting::data_type_movable(c::bch_data_type(i as u32)))
+        .filter(|&(i, _)| accounting::data_type_movable(DataType(i as u32)))
         .fold(0u64, |f, (_, d)| f.wrapping_add(d.fragmented)) as i64;
 
     (fragmented_allowed.wrapping_sub(fragmented), low_on_space)

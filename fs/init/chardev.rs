@@ -67,7 +67,7 @@ use cstruct_macros::{c_export, vtable};
 use kernel::alloc::KVec;
 use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
 use kernel::uaccess::{UserPtr, UserSlice};
-use crate::format::Btree;
+use crate::format::{Btree, DataType};
 
 /* The dispatch */
 
@@ -710,7 +710,7 @@ fn data_job(job: &DataJob, _write_ref: WriteRef) {
         stats.ret.set(c::bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_device_offline);
     } else {
         stats.ret.set(c::bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_done);
-        stats.at.data_type.set(c::bch_data_type(c::DATA_PROGRESS_DATA_TYPE_done));
+        stats.at.data_type.set(DataType(c::DATA_PROGRESS_DATA_TYPE_done));
     }
 }
 

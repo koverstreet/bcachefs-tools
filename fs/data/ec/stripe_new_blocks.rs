@@ -22,7 +22,7 @@ use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;
 use core::ffi::c_uint;
 use core::sync::atomic::Ordering;
-use crate::format::Btree;
+use crate::format::{Btree, DataType};
 
 // ── A new stripe's buckets ───────────────────────────────────────────────
 //
@@ -51,7 +51,7 @@ fn blocks_centroid(fs: &Fs, v: &c::Stripe<Validated>, blocks: &[Slot]) -> u64 {
 #[allow(clippy::too_many_arguments)]
 fn alloc_blocks(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripe: &mut c::dev_stripe_state,
                 v: &mut c::Stripe<Validated>, blocks: &mut [Slot], block_devs: &BlockDevsWriter,
-                data_type: c::bch_data_type, slots: core::ops::Range<usize>, have: &mut usize)
+                data_type: DataType, slots: core::ops::Range<usize>, have: &mut usize)
     -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -97,7 +97,7 @@ fn alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripes: 
     // wrongly exclude their devices' domains
     req.devs_chosen = c::bch_devs_mask::default();
     // as the sector allocator, which we bypass, would
-    req.devs_may_alloc.d.and(&fs.allocator.rw_devs[c::bch_data_type::BCH_DATA_user.0 as usize].load());
+    req.devs_may_alloc.d.and(&fs.allocator.rw_devs[DataType::user.0 as usize].load());
 
     let (mut have_data, mut have_parity) = (0, 0);
     for i in (0..nr_blocks).filter(|&i| s.blocks[i].gotten()) {
@@ -115,9 +115,9 @@ fn alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripes: 
             "new stripe with {have_data}/{nr_data} data blocks and {have_parity}/{nr_parity} parity");
 
     let blocks = &mut s.blocks;
-    alloc_blocks(t, req, &mut stripes.parity_stripe, v, blocks, block_devs, c::bch_data_type::BCH_DATA_parity,
+    alloc_blocks(t, req, &mut stripes.parity_stripe, v, blocks, block_devs, DataType::parity,
                  nr_data..nr_blocks, &mut have_parity)?;
-    alloc_blocks(t, req, &mut stripes.block_stripe, v, blocks, block_devs, c::bch_data_type::BCH_DATA_user,
+    alloc_blocks(t, req, &mut stripes.block_stripe, v, blocks, block_devs, DataType::user,
                  0..nr_data, &mut have_data)
 }
 
@@ -336,7 +336,7 @@ pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::al
 #[derive(::pin_init::Zeroable)]
 struct ReqSaved {
     flags:          c::bch_write_flags,
-    data_type:      c::bch_data_type,
+    data_type:      DataType,
     ptrs:           c::open_buckets,
     nr_replicas:    u8,
     nr_effective:   c_uint,

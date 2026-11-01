@@ -5,6 +5,7 @@
 use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::alloc::discard::{do_discards_work, DiscardBio, DiscardState};
+use crate::format::DataType;
 use crate::util::alloc::KVVec;
 use crate::locking::{Locked, SeqLock};
 use crate::{new_lock, new_work};
@@ -326,14 +327,14 @@ published! {
 #[pin_data]
 #[repr(C)]
 #[derive(CStruct, Init)]
-#[init_args(data_type: c::bch_data_type)]
+#[init_args(data_type: DataType)]
 pub struct write_point_alloc {
     pub __align: CacheAligned,
     /* the next in its hash chain: write_points_hash_lock's */
     #[c("u8 hash_next")]
     pub hash_next: Volatile<Option<WritePointIdx>>,
     #[init(data_type)]
-    pub data_type: c::bch_data_type,
+    pub data_type: DataType,
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&wp->lock"))]
     #[c_lock("struct mutex lock")]
@@ -343,7 +344,7 @@ pub struct write_point_alloc {
 #[pin_data]
 #[repr(C)]
 #[derive(CStruct, Init)]
-#[init_args(data_type: c::bch_data_type)]
+#[init_args(data_type: DataType)]
 pub struct write_point {
     #[c_anon]
     #[pin]
@@ -518,7 +519,7 @@ pub struct bch_fs_allocator {
     pub open_buckets_hash: [Volatile<Option<OpenBucketIdx>>; c::OPEN_BUCKETS_COUNT as usize],
 
     #[pin]
-    #[init(::pin_init::pin_init_array_from_fn(|_| c::write_point::init(c::bch_data_type::BCH_DATA_user)))]
+    #[init(::pin_init::pin_init_array_from_fn(|_| c::write_point::init(DataType::user)))]
     pub write_points: [c::write_point; c::WRITE_POINT_MAX as usize],
     /* the write point hash's writers, and write_points_nr's */
     #[pin]
@@ -527,10 +528,10 @@ pub struct bch_fs_allocator {
     pub write_points_hash_lock: Locked<c::mutex, (), WritePointsHash>,
 
     #[pin]
-    #[init(c::write_point::init(c::bch_data_type::BCH_DATA_btree))]
+    #[init(c::write_point::init(DataType::btree))]
     pub btree_write_point: c::write_point,
     #[pin]
-    #[init(c::write_point::init(c::bch_data_type::BCH_DATA_user))]
+    #[init(c::write_point::init(DataType::user))]
     pub reconcile_write_point: c::write_point,
 }
 

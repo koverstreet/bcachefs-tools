@@ -42,7 +42,6 @@
 //! fast discard and invalidate works the device's write io ref and a write
 //! ref - so going read-only, and a device going offline, wait for them.
 
-use crate::accounting::data_type;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
@@ -82,7 +81,7 @@ use crate::{bch_err_fn, bch_err_msg, fsck_err, has_bio, prt};
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
 use pin_init::{pin_data, pin_init, stack_pin_init};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, DataType};
 
 /// Discards in flight at once on a device.
 const DEV_IN_FLIGHT_MAX: u8 = 4;
@@ -423,7 +422,7 @@ impl<'a> Worker<'a> {
             Some(|s| &mut s.need_journal_commit)
         } else if seq_empty >= rewind_ondisk {
             Some(|s| &mut s.need_rewind_advance)
-        } else if data_type != c::bch_data_type::BCH_DATA_need_discard.0 as u8 {
+        } else if data_type != DataType::need_discard.0 as u8 {
             // an expected race: the write buffer
             Some(|s| &mut s.bad_data_type)
         } else if fs.bucket_is_open_safe(bucket.inode as u32, bucket.offset) {
@@ -470,7 +469,7 @@ impl<'a> Worker<'a> {
     {
         let fs = t.fs();
 
-        if a.v().data_type != c::bch_data_type::BCH_DATA_need_discard.0 as u8 {
+        if a.v().data_type != DataType::need_discard.0 as u8 {
             let mut msg = LogMsg::new(fs);
             prt!(msg, "Discarded bucket that is no longer BCH_DATA_need_discard!\n{}", a.as_sc().to_text(fs));
             fs.emergency_read_only(&mut msg);
@@ -484,7 +483,7 @@ impl<'a> Worker<'a> {
         v.set_need_discard(false);
         v.journal_seq_nonempty = 0;
         v.journal_seq_empty = 0;
-        v.set_data_type(data_type::free);
+        v.set_data_type(DataType::free);
 
         t.update(iter, &a, UpdateTriggerFlags::IS_DISCARD)?;
         t.commit(None, CommitOpts::new().watermark(Watermark::RECLAIM)
@@ -555,10 +554,10 @@ fn calculate_discard_sectors_to_release(trans: &BtreeTrans<'_>, s: &DiscardState
         for ca in fs.rw_devs_rcu(&rcu) {
             let u = ca.usage_read_fast();
             let sectors = u64::from(ca.mi.get().bucket_size);
-            let buckets = |t: c::bch_data_type| u.buckets[t.0 as usize];
+            let buckets = |t: DataType| u.buckets[t.0 as usize];
 
-            let pending  = sectors * buckets(c::bch_data_type::BCH_DATA_need_discard);
-            let free     = sectors * buckets(c::bch_data_type::BCH_DATA_free);
+            let pending  = sectors * buckets(DataType::need_discard);
+            let free     = sectors * buckets(DataType::free);
             let reserve  = sectors * ca.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe);
             let capacity = sectors * ca.mi.get().nbuckets;
             let buffer   = capacity * u64::from(fs.opts.journal_rewind_discard_buffer_percent.get()) / 100;
@@ -747,9 +746,9 @@ pub fn bch2_do_discards_going_ro(c: &Opaque<c::bch_fs>) {
     let fs = Fs::from_c(c);
     let must = fs.rw_devs_rcu(&read_lock()).any(|ca| {
         let u = ca.usage_read_fast();
-        u.buckets[c::bch_data_type::BCH_DATA_free.0 as usize] <
+        u.buckets[DataType::free.0 as usize] <
             ca.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe) * 4 &&
-        u.buckets[c::bch_data_type::BCH_DATA_need_discard.0 as usize] != 0
+        u.buckets[DataType::need_discard.0 as usize] != 0
     });
     if must {
         do_discards(fs);
@@ -828,8 +827,8 @@ impl c::bch_dev {
         let reserved = self.reserved_sectors.get().div_ceil(self.mi.get().bucket_size.into())
             .max(self.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe));
         let want_free = reserved + (self.mi.get().nbuckets >> 5);
-        let free = u.buckets[c::bch_data_type::BCH_DATA_free.0 as usize];
-        let cached = u.buckets[c::bch_data_type::BCH_DATA_cached.0 as usize] as i64;
+        let free = u.buckets[DataType::free.0 as usize];
+        let cached = u.buckets[DataType::cached.0 as usize] as i64;
         (want_free as i64 - free as i64).clamp(0, cached) as u64
     }
 }
@@ -914,7 +913,7 @@ fn invalidate_one_bucket(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, lru_k: BkeyS
 
     // lru_idx_read() is nonzero only for a cached bucket, and lru_validate()
     // refuses an entry at time 0
-    assert_eq!(a.data_type, c::bch_data_type::BCH_DATA_cached.0 as u8, "a read lru entry for a bucket not cached");
+    assert_eq!(a.data_type, DataType::cached.0 as u8, "a read lru entry for a bucket not cached");
     assert_eq!({ a.dirty_sectors }, 0, "a read lru entry for a bucket with dirty data");
 
     if a.cached_sectors == 0 {

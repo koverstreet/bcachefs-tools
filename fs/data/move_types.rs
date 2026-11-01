@@ -9,7 +9,7 @@ use core::ffi::{c_int, c_uint};
 use core::sync::atomic::{AtomicI32, AtomicI64};
 use cstruct_macros::{c_name, CStruct, c_typedef, TypeInfo};
 use nestify::nest;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, DataType};
 
 nest! {
     /// What moves count into - whoever issues them, and their completions,
@@ -29,7 +29,7 @@ nest! {
         #[c_anon]
         pub at: pub struct bch_move_stats_at {
             #[c("enum bch_data_type data_type")]
-            pub data_type: Volatile<c::bch_data_type>,
+            pub data_type: Volatile<DataType>,
             #[c("struct bbpos pos")]
             pub pos: Volatile<c::bbpos>,
             pub dev: Volatile<c_uint>,

@@ -60,7 +60,7 @@ use core::ffi::{c_int, c_uint};
 use core::ops::Range;
 use core::ptr::NonNull;
 use cstruct_macros::c_export;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, DataType};
 
 /// What to move: of @k, in @btree, with @io_opts, the move's options filled
 /// in, and whether to. In the walk's attempt, so it can look things up - an
@@ -255,7 +255,7 @@ impl Moving<'_> {
         let mut mover = Mover { moving: self, bucket: None, name, pred: &mut pred };
 
         if let Some(stats) = self.stats_opt() {
-            stats.at.data_type.set(c::bch_data_type::BCH_DATA_user);
+            stats.at.data_type.set(DataType::user);
             stats.set_pos(c::bbpos { btree, pos: start });
         }
 
@@ -543,7 +543,7 @@ impl Moving<'_> {
 fn scrub(fs: &Fs, stats: &MoveStats, arg: c::bch_ioctl_data_scrub) -> Result<(), BchError> {
     let ctxt = MovingCtxt::new(fs, stats, writepoint_hashed(current_id()), false)
         .map_err(|_| BchError::from(c::ENOMEM))?;
-    stats.at.data_type.set(c::bch_data_type(c::DATA_PROGRESS_DATA_TYPE_phys));
+    stats.at.data_type.set(DataType(c::DATA_PROGRESS_DATA_TYPE_phys));
 
     let _ = ctxt.trans().write_buffer_flush_sync();
 

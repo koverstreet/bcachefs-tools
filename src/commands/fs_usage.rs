@@ -5,10 +5,11 @@ use clap::Parser;
 
 use crate::commands::DeviceNameArgs;
 use crate::wrappers::accounting::{
-    AccountingEntry, compression_type_from_u8, data_type, data_type_from_u8, data_type_is_empty,
+    AccountingEntry, compression_type_from_u8, data_type_from_u8, data_type_is_empty,
     disk_accounting_type, reconcile_type_from_u8,
 };
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
+use bcachefs_kernel::format::DataType;
 use bcachefs_kernel::util::vstructs::ArmError;
 use crate::wrappers::handle::{BcachefsHandle, DevUsage};
 use bcachefs_kernel::{btree, metadata_version};
@@ -458,7 +459,7 @@ fn replicas_summary_to_text(
                 reserved += entry.counter(0);
             }
             Ok(Acct::replicas(r)) => {
-                if data_type_from_u8(r.data_type) == data_type::cached {
+                if data_type_from_u8(r.data_type) == DataType::cached {
                     cached += entry.counter(0);
                     continue;
                 }
@@ -656,7 +657,7 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
 
                 if let Some(empty) = d.stripe_empty {
                     write!(sub, "\r");
-                    if dt_type == data_type::stripe {
+                    if dt_type == DataType::stripe {
                         write!(sub, "{}", Sectors(empty));
                     }
                 }
