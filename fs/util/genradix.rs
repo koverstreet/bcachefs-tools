@@ -101,6 +101,12 @@ impl<T: Zeroable> GenRadix<T> {
         RawIter::new(self.tree(), idx)
     }
 
+    /// iter_from(0)'s entries, last first: as genradix_for_each_reverse().
+    #[inline]
+    pub fn iter_rev(&self) -> RevIter<'_, T> {
+        RevIter(RawRevIter::new(self.tree()))
+    }
+
     /// Free every node: as genradix_free(). Empty after, as a new one is.
     pub fn free(&mut self) {
         unsafe { c::__genradix_free(&mut self.tree) }
@@ -233,6 +239,65 @@ impl<T: Zeroable> Iterator for RawIter<'_, T> {
                 self.iter.offset = usize::MAX;
                 self.iter.pos    = usize::MAX;
             }
+        }
+
+        Some(item)
+    }
+}
+
+/// GenRadix::iter_rev()'s walk.
+pub struct RawRevIter<'a, T> {
+    tree: *mut c::__genradix,
+    iter: c::genradix_iter,
+    _t:   PhantomData<&'a T>,
+}
+
+impl<T: Zeroable> RawRevIter<'_, T> {
+    #[inline]
+    fn new(tree: *mut c::__genradix) -> Self {
+        // genradix_last_pos(): the last index an offset can hold
+        let pos = usize::MAX / NODE_SIZE * (NODE_SIZE / size_of::<T>()) - 1;
+        let offset = GenRadix::<T>::offset(pos).expect("the last position's offset fits");
+        RawRevIter { tree, iter: c::genradix_iter { offset, pos }, _t: PhantomData }
+    }
+}
+
+pub struct RevIter<'a, T>(RawRevIter<'a, T>);
+
+impl<'a, T: Zeroable> Iterator for RevIter<'a, T> {
+    type Item = (usize, &'a T);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        // SAFETY: as GenRadix::get()'s
+        self.0.next().map(|(pos, p)| (pos, unsafe { p.as_ref() }))
+    }
+}
+
+impl<T: Zeroable> Iterator for RawRevIter<'_, T> {
+    type Item = (usize, NonNull<T>);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let size = size_of::<T>();
+
+        // genradix_iter_peek_prev(): which skips unallocated nodes, moving the
+        // iterator to the last entry of the previous allocated one
+        let p = unsafe {
+            c::__genradix_iter_peek_prev(&mut self.iter, self.tree, NODE_SIZE / size, size + NODE_SIZE % size)
+        };
+        let item = (self.iter.pos, NonNull::new(p.cast::<T>())?);
+
+        // genradix_iter_rewind(): back over a node's unused tail, to the
+        // previous node's last whole entry
+        if self.iter.offset == 0 || self.iter.offset == usize::MAX {
+            self.iter.offset = usize::MAX;
+        } else {
+            if self.iter.offset & (NODE_SIZE - 1) == 0 {
+                self.iter.offset -= NODE_SIZE % size;
+            }
+            self.iter.offset -= size;
+            self.iter.pos -= 1;
         }
 
         Some(item)
