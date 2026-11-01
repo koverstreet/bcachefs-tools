@@ -148,7 +148,7 @@ macro_rules! recovery_pass {
         /// # Safety
         /// @c is a live filesystem: the pass table's caller.
         #[::cstruct_macros::c_export]
-        pub unsafe extern "C" fn $name(c: *mut $crate::c::bch_fs) -> core::ffi::c_int {
+        pub unsafe extern "C" fn $name(c: *mut $crate::fs::Fs) -> core::ffi::c_int {
             let fs = unsafe { $crate::fs::Fs::borrow_raw(c) };
 
             $crate::errcode::ret_to_c(($pass)(fs))
@@ -195,11 +195,11 @@ mod pass_fns {
     macro_rules! pass_fns {
         ($(($name:ident, $($rest:tt)*)),* $(,)?) => { ::paste::paste! {
             unsafe extern "C" {
-                $(pub(super) fn [<bch2_ $name>](c: *mut crate::c::bch_fs) -> core::ffi::c_int;)*
+                $(pub(super) fn [<bch2_ $name>](c: *mut crate::fs::Fs) -> core::ffi::c_int;)*
             }
 
             /// By pass.
-            pub(super) const RUN: [unsafe extern "C" fn(*mut crate::c::bch_fs) -> core::ffi::c_int; super::NR] =
+            pub(super) const RUN: [unsafe extern "C" fn(*mut crate::fs::Fs) -> core::ffi::c_int; super::NR] =
                 [$([<bch2_ $name>]),*];
         } };
     }
@@ -541,7 +541,7 @@ pub fn run_lock(fs: &Fs) -> Guard<'_, c::mutex> {
 /// Recovery done through @pass, without the runner: a new filesystem's,
 /// which has nothing to recover.
 #[c_export]
-pub fn bch2_recovery_set_pass_done(c: &Opaque<c::bch_fs>, pass: c::bch_recovery_pass) {
+pub fn bch2_recovery_set_pass_done(c: &Opaque<Fs>, pass: c::bch_recovery_pass) {
     let fs = Fs::from_c(c);
     lock(fs).published().pass_done.set(pass);
 }
@@ -817,7 +817,7 @@ pub fn require(fs: &Fs, out: &mut Printbuf, pass: Pass) -> Result<(), BchError> 
 }
 
 #[c_export]
-pub fn __bch2_run_explicit_recovery_pass(c: &Opaque<c::bch_fs>, out: &mut Printbuf, pass: c::bch_recovery_pass,
+pub fn __bch2_run_explicit_recovery_pass(c: &Opaque<Fs>, out: &mut Printbuf, pass: c::bch_recovery_pass,
                                          flags: c::bch_run_recovery_pass_flags,
                                          w: Option<&mut c::sb_write>) -> c_int {
     let fs = Fs::from_c(c);
@@ -827,7 +827,7 @@ pub fn __bch2_run_explicit_recovery_pass(c: &Opaque<c::bch_fs>, out: &mut Printb
 }
 
 #[c_export]
-pub fn bch2_run_explicit_recovery_pass(c: &Opaque<c::bch_fs>, out: &mut Printbuf, pass: c::bch_recovery_pass,
+pub fn bch2_run_explicit_recovery_pass(c: &Opaque<Fs>, out: &mut Printbuf, pass: c::bch_recovery_pass,
                                        flags: c::bch_run_recovery_pass_flags) -> c_int {
     ret_to_c(run_explicit(Fs::from_c(c), out, pass, flags))
 }
@@ -1140,7 +1140,7 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_run_recovery_passes_startup(c: &Opaque<c::bch_fs>, from: c::bch_recovery_pass) -> c_int {
+pub fn bch2_run_recovery_passes_startup(c: &Opaque<Fs>, from: c::bch_recovery_pass) -> c_int {
     ret_to_c(run_passes_startup(Fs::from_c(c), from))
 }
 

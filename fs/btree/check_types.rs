@@ -75,9 +75,9 @@ pub struct bch_fs_gc_gens {
 c_default!(bch_fs_gc_gens);
 
 c_extern! {
-    pub fn bch2_gc_gens(c: *mut c::bch_fs) -> c_int;
-    pub fn bch2_gc_gens_async(c: *mut c::bch_fs);
-    pub fn bch2_fs_btree_gc_init_early(c: *mut c::bch_fs);
+    pub fn bch2_gc_gens(c: *mut Fs) -> c_int;
+    pub fn bch2_gc_gens_async(c: *mut Fs);
+    pub fn bch2_fs_btree_gc_init_early(c: *mut Fs);
 }
 
 impl Fs {

@@ -143,11 +143,11 @@ impl Fs {
 
     /// # Safety
     /// @raw points to a live bch_fs, that outlives 'a.
-    pub unsafe fn borrow_raw<'a>(raw: *mut c::bch_fs) -> &'a Fs {
+    pub unsafe fn borrow_raw<'a>(raw: *mut Fs) -> &'a Fs {
         unsafe { &*raw }
     }
 
-    pub fn from_c(c: &crate::util::ffi::Opaque<c::bch_fs>) -> &Fs {
+    pub fn from_c(c: &crate::util::ffi::Opaque<Fs>) -> &Fs {
         unsafe { Self::borrow_raw(c.as_ptr()) }
     }
 
@@ -1320,8 +1320,8 @@ macro_rules! fs_delayed_work {
             unsafe extern "C" fn work_fn(work: *mut $crate::c::work_struct) {
                 let c = unsafe {
                     work.byte_sub(::core::mem::offset_of!($crate::c::delayed_work, work))
-                        .byte_sub(::core::mem::offset_of!($crate::c::bch_fs, $($field).+))
-                        .cast::<$crate::c::bch_fs>()
+                        .byte_sub(::core::mem::offset_of!($crate::fs::Fs, $($field).+))
+                        .cast::<$crate::fs::Fs>()
                 };
                 Self::run(unsafe { $crate::fs::Fs::borrow_raw(c) })
             }

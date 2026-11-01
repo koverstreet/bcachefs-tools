@@ -401,12 +401,12 @@ pub fn drop_extra_ec_durability<'id, K: BkeyVMut<V = PtrsMut>>(t: &TransAttempt<
 // ── C's ──────────────────────────────────────────────────────────────────
 
 #[c_export]
-pub fn bch2_dev_durability(c: &Opaque<c::bch_fs>, dev: c_uint) -> c_uint {
+pub fn bch2_dev_durability(c: &Opaque<Fs>, dev: c_uint) -> c_uint {
     Fs::from_c(c).dev_durability(dev, &read_lock())
 }
 
 #[c_export]
-pub fn bch2_btree_ptr_durability(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) -> c::bkey_durability {
+pub fn bch2_btree_ptr_durability(c: &Opaque<Fs>, k: BkeySC<'_>) -> c::bkey_durability {
     k.arm::<BtreePtrs>().expect("a btree node pointer").btree_ptr_durability(Fs::from_c(c))
 }
 

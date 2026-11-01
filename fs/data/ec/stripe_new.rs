@@ -710,7 +710,7 @@ impl StripeNew {
 /// # Safety
 /// @wp is a write point, locked.
 #[c_export]
-pub unsafe fn bch2_writepoint_ec_buf(c: &Opaque<c::bch_fs>, wp: &c::write_point) -> *mut c_void {
+pub unsafe fn bch2_writepoint_ec_buf(c: &Opaque<Fs>, wp: &c::write_point) -> *mut c_void {
     let fs = Fs::from_c(c);
     // SAFETY: the caller's
     let wp = unsafe { wp.alloc.lock.held() };
@@ -765,7 +765,7 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_fs_ec_flush_outstanding(c: &Opaque<c::bch_fs>) {
+pub fn bch2_fs_ec_flush_outstanding(c: &Opaque<Fs>) {
     Fs::from_c(c).ec_flush_outstanding()
 }
 

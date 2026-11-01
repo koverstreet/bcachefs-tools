@@ -25,7 +25,7 @@ const MAX_BVECS: usize = MAX_IO_SIZE / PAGE_SIZE;
 
 unsafe extern "C" {
     fn rust_write_submit(
-        c: *mut c::bch_fs,
+        c: *mut Fs,
         op: *mut c::bch_write_op,
         bvecs: *mut c::bio_vec,
         nr_bvecs: u32,
@@ -40,7 +40,7 @@ unsafe extern "C" {
     ) -> i32;
 
     fn rust_read_submit(
-        c: *mut c::bch_fs,
+        c: *mut Fs,
         rbio: *mut c::bch_read_bio,
         bvecs: *mut c::bio_vec,
         nr_bvecs: u32,

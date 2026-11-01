@@ -166,29 +166,29 @@ c_extern! {
     pub fn bch2_dev_io_ref_stop(ca: *mut c::bch_dev, rw: c_int);
     pub fn bch2_dev_unlink(ca: *mut c::bch_dev);
     pub fn bch2_dev_free(ca: *mut c::bch_dev);
-    pub fn bch2_dev_sysfs_online(c: *mut c::bch_fs, ca: *mut c::bch_dev) -> c_int;
-    pub fn bch2_dev_alloc(c: *mut c::bch_fs, dev_idx: c_uint) -> c_int;
-    pub fn bch2_dev_attach_bdev(c: *mut c::bch_fs, sb: *mut c::bch_sb_handle, err: *mut c::printbuf) -> c_int;
+    pub fn bch2_dev_sysfs_online(c: *mut Fs, ca: *mut c::bch_dev) -> c_int;
+    pub fn bch2_dev_alloc(c: *mut Fs, dev_idx: c_uint) -> c_int;
+    pub fn bch2_dev_attach_bdev(c: *mut Fs, sb: *mut c::bch_sb_handle, err: *mut c::printbuf) -> c_int;
     pub fn __bch2_dev_resize_alloc(ca: *mut c::bch_dev, old_nbuckets: u64, new_nbuckets: u64) -> c_int;
-    pub fn bch2_dev_add(c: *mut c::bch_fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
-    pub fn bch2_dev_add_initialize(c: *mut c::bch_fs, ca: *mut c::bch_dev) -> c_int;
-    pub fn bch2_dev_resize(c: *mut c::bch_fs, ca: *mut c::bch_dev, nbuckets: u64,
+    pub fn bch2_dev_add(c: *mut Fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
+    pub fn bch2_dev_add_initialize(c: *mut Fs, ca: *mut c::bch_dev) -> c_int;
+    pub fn bch2_dev_resize(c: *mut Fs, ca: *mut c::bch_dev, nbuckets: u64,
                            err: *mut c::printbuf) -> c_int;
-    pub fn bch2_dev_remove(c: *mut c::bch_fs, ca: *mut c::bch_dev, flags: c_int,
+    pub fn bch2_dev_remove(c: *mut Fs, ca: *mut c::bch_dev, flags: c_int,
                            err: *mut c::printbuf) -> c_int;
-    pub fn bch2_dev_online(c: *mut c::bch_fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
-    pub fn bch2_dev_offline(c: *mut c::bch_fs, ca: *mut c::bch_dev, flags: c_int,
+    pub fn bch2_dev_online(c: *mut Fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
+    pub fn bch2_dev_offline(c: *mut Fs, ca: *mut c::bch_dev, flags: c_int,
                             err: *mut c::printbuf) -> c_int;
-    pub fn bch2_dev_set_state(c: *mut c::bch_fs, ca: *mut c::bch_dev,
+    pub fn bch2_dev_set_state(c: *mut Fs, ca: *mut c::bch_dev,
                               new_state: c::bch_member_state, flags: c_int,
                               err: *mut c::printbuf) -> c_int;
-    pub fn __bch2_dev_set_state(c: *mut c::bch_fs, ca: *mut c::bch_dev,
+    pub fn __bch2_dev_set_state(c: *mut Fs, ca: *mut c::bch_dev,
                                 new_state: c::bch_member_state, flags: c_int,
                                 err: *mut c::printbuf) -> c_int;
-    pub fn bch2_dev_lookup(c: *mut c::bch_fs, name: *const c_char) -> *mut c::bch_dev;
-    pub fn bch2_dev_may_offline(c: *mut c::bch_fs, ca: *mut c::bch_dev, flags: c_int,
+    pub fn bch2_dev_lookup(c: *mut Fs, name: *const c_char) -> *mut c::bch_dev;
+    pub fn bch2_dev_may_offline(c: *mut Fs, ca: *mut c::bch_dev, flags: c_int,
                                 err: *mut c::printbuf) -> c_int;
-    pub fn __bch2_dev_offline(c: *mut c::bch_fs, ca: *mut c::bch_dev);
+    pub fn __bch2_dev_offline(c: *mut Fs, ca: *mut c::bch_dev);
     pub fn bch2_dev_read_identity(bdev: *mut c::block_device,
                                   name: *mut c_char, name_size: usize,
                                   model: *mut c_char, model_size: usize,
@@ -271,7 +271,7 @@ pub unsafe fn bch2_dev_in_fs(fs: *mut Head<c::bch_sb>, fs_bdev: Option<&c::block
 /// fields' initializers run, everything else zeroed - for __bch2_dev_alloc()
 /// to go on with. NULL if out of memory.
 #[c_export]
-pub fn bch2_dev_alloc_mem(c: &crate::util::ffi::Opaque<c::bch_fs>) -> *mut c::bch_dev {
+pub fn bch2_dev_alloc_mem(c: &crate::util::ffi::Opaque<Fs>) -> *mut c::bch_dev {
     crate::util::alloc::alloc_pinned(c::bch_dev::init(crate::fs::Fs::from_c(c)))
         .unwrap_or(core::ptr::null_mut())
 }

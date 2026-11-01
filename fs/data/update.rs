@@ -160,7 +160,7 @@ c::BCH_DATA_UPDATE_TYPES!(type_names);
 
 c_extern! {
     fn __bch2_write_op_to_text(out: *mut c::printbuf, op: *mut c::bch_write_op);
-    pub fn bch2_read_bio_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, rbio: *mut c::bch_read_bio);
+    pub fn bch2_read_bio_to_text(out: *mut c::printbuf, c: *mut Fs, rbio: *mut c::bch_read_bio);
 }
 
 /// The read failed only because the extent changed under it - the key was
@@ -290,7 +290,7 @@ impl Fs {
 
 #[cold]
 #[c_export]
-pub fn bch2_data_update_opts_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, io_opts: &c::bch_inode_opts,
+pub fn bch2_data_update_opts_to_text(out: &mut Printbuf, c: &Opaque<Fs>, io_opts: &c::bch_inode_opts,
                                      data_opts: &c::data_update_opts) {
     Fs::from_c(c).data_update_opts_to_text(out, io_opts, data_opts)
 }
@@ -342,7 +342,7 @@ pub fn bch2_data_update_inflight_to_text(out: &mut Printbuf, m: &c::data_update)
 // ── init, read_done, exit ────────────────────────────────────────────────
 
 c_extern! {
-    fn bch2_scrub_journal_queue(c: *mut c::bch_fs, btree: Btree, level: c_uint, k: *mut c::bkey_i,
+    fn bch2_scrub_journal_queue(c: *mut Fs, btree: Btree, level: c_uint, k: *mut c::bkey_i,
                                 ptr_bits: c_uint, err: c_int);
     fn bch2_data_read_sb_err(err: c_int) -> c::bch_sb_error_id;
     fn bch2_write(ws: *mut c::work_struct);

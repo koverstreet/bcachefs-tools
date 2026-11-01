@@ -412,16 +412,16 @@ pub(crate) unsafe extern "C" fn writes_disabled(writes: *mut c::enumerated_ref) 
 }
 
 #[c_export]
-pub fn bch2_fs_emergency_read_only(c: &Opaque<c::bch_fs>, out: &mut Printbuf) -> bool {
+pub fn bch2_fs_emergency_read_only(c: &Opaque<Fs>, out: &mut Printbuf) -> bool {
     Fs::from_c(c).emergency_read_only_to(out, false)
 }
 
 #[c_export]
-pub fn bch2_fs_emergency_read_only_locked(c: &Opaque<c::bch_fs>, out: &mut Printbuf) -> bool {
+pub fn bch2_fs_emergency_read_only_locked(c: &Opaque<Fs>, out: &mut Printbuf) -> bool {
     Fs::from_c(c).emergency_read_only_to(out, true)
 }
 
 #[c_export]
-pub fn bch2_fs_read_write_early(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_fs_read_write_early(c: &Opaque<Fs>) -> c_int {
     ret_to_c(Fs::from_c(c).state_lock_write().start_rw())
 }

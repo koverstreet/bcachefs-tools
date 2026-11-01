@@ -816,7 +816,7 @@ pub fn bkey_fsck_err_verdict(fs: &Fs, k: BkeySC<'_>, from: &c::bkey_validate_con
 /// @trans is NULL or in an attempt. For error.c's __bch2_fsck_err(): @c, or
 /// @trans's filesystem.
 #[c_export]
-pub unsafe fn bch2_fsck_err_str(c: Option<&Opaque<c::bch_fs>>, trans: Option<&BtreeTrans<'_>>, pos: Bpos,
+pub unsafe fn bch2_fsck_err_str(c: Option<&Opaque<Fs>>, trans: Option<&BtreeTrans<'_>>, pos: Bpos,
                                 flags: c::bch_fsck_flags, err: c::bch_sb_error_id, msg: &Printbuf) -> c_int {
     let fs = c.map_or_else(|| trans.expect("a filesystem or a transaction").fs(), Fs::from_c);
     ret_to_c(Err::<(), _>(fsck_err_verdict(fs, trans, pos, flags, err, msg)))
@@ -825,7 +825,7 @@ pub unsafe fn bch2_fsck_err_str(c: Option<&Opaque<c::bch_fs>>, trans: Option<&Bt
 /// # Safety
 /// @k a key, @from its context. For error.c's __bch2_bkey_fsck_err().
 #[c_export]
-pub unsafe fn bch2_bkey_fsck_err_str(c: &Opaque<c::bch_fs>, k: c::bkey_s_c, from: &c::bkey_validate_context,
+pub unsafe fn bch2_bkey_fsck_err_str(c: &Opaque<Fs>, k: c::bkey_s_c, from: &c::bkey_validate_context,
                                      err: c::bch_sb_error_id, msg: &Printbuf) -> c_int {
     // SAFETY: the caller's
     let k = unsafe { BkeySC::from_c(&k) };
@@ -833,18 +833,18 @@ pub unsafe fn bch2_bkey_fsck_err_str(c: &Opaque<c::bch_fs>, k: c::bkey_s_c, from
 }
 
 #[c_export]
-pub fn __bch2_count_fsck_err(c: &Opaque<c::bch_fs>, id: c::bch_sb_error_id, msg: &mut Printbuf) -> bool {
+pub fn __bch2_count_fsck_err(c: &Opaque<Fs>, id: c::bch_sb_error_id, msg: &mut Printbuf) -> bool {
     count_fsck_err(Fs::from_c(c), id, msg)
 }
 
 #[c_export]
-pub fn bch2_fsck_errs_seen(c: &Opaque<c::bch_fs>) -> bool {
+pub fn bch2_fsck_errs_seen(c: &Opaque<Fs>) -> bool {
     !Fs::from_c(c).errors.state.lock().msgs.is_empty()
 }
 
 /// Each kind of error seen, and how often: most often first.
 #[c_export]
-pub fn bch2_fsck_err_counts_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>) {
+pub fn bch2_fsck_err_counts_to_text(out: &mut Printbuf, c: &Opaque<Fs>) {
     let mut st = Fs::from_c(c).errors.state.lock();
     st.msgs.sort_unstable_by(|l, r| r.nr.cmp(&l.nr));
     for s in st.msgs.iter() {
@@ -865,7 +865,7 @@ fn flush_fsck_errs(fs: &Fs, print: bool) {
 }
 
 #[c_export]
-pub fn bch2_flush_fsck_errs(c: &Opaque<c::bch_fs>) {
+pub fn bch2_flush_fsck_errs(c: &Opaque<Fs>) {
     flush_fsck_errs(Fs::from_c(c), true)
 }
 
@@ -964,7 +964,7 @@ pub fn damaged_path_to_text(out: &mut Printbuf, trans: &BtreeTrans<'_>, p: &c::f
 
 /// The paths fsck damaged: the first DAMAGED_PATHS_PRINT, then how many more.
 #[c_export]
-pub fn bch2_fsck_damaged_paths_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>) {
+pub fn bch2_fsck_damaged_paths_to_text(out: &mut Printbuf, c: &Opaque<Fs>) {
     let fs = Fs::from_c(c);
     let (nr, alloc_err) = {
         let st = fs.errors.state.lock();
@@ -1106,7 +1106,7 @@ fn fs_trans_inconsistent(fs: &Fs, t: Option<&TransAttempt<'_, '_>>, msg: &dyn To
 
 /// An inconsistency, with nothing to say about it.
 #[c_export]
-pub fn bch2_inconsistent_error(c: &Opaque<c::bch_fs>) -> bool {
+pub fn bch2_inconsistent_error(c: &Opaque<Fs>) -> bool {
     let fs = Fs::from_c(c);
     let mut buf = Printbuf::new();
     let mut out = buf.atomic();
@@ -1123,7 +1123,7 @@ pub fn bch2_inconsistent_error(c: &Opaque<c::bch_fs>) -> bool {
 /// @trans is NULL, or in an attempt. For error.c's
 /// bch2_fs_inconsistent() and bch2_trans_inconsistent().
 #[c_export]
-pub unsafe fn bch2_fs_trans_inconsistent_str(c: &Opaque<c::bch_fs>, trans: Option<&BtreeTrans<'_>>,
+pub unsafe fn bch2_fs_trans_inconsistent_str(c: &Opaque<Fs>, trans: Option<&BtreeTrans<'_>>,
                                              msg: &Printbuf) -> bool {
     // SAFETY: the caller's
     let t = trans.map(|t| unsafe { t.attempt_in_progress() });
@@ -1131,14 +1131,14 @@ pub unsafe fn bch2_fs_trans_inconsistent_str(c: &Opaque<c::bch_fs>, trans: Optio
 }
 
 #[c_export]
-pub fn __bch2_topology_error(c: &Opaque<c::bch_fs>, out: &mut Printbuf) -> c_int {
+pub fn __bch2_topology_error(c: &Opaque<Fs>, out: &mut Printbuf) -> c_int {
     ret_to_c(Err::<(), _>(Fs::from_c(c).topology_error(out)))
 }
 
 /// # Safety
 /// @func is a string. For error.c's bch2_fatal_error().
 #[c_export]
-pub unsafe fn bch2_fatal_error_str(c: &Opaque<c::bch_fs>, func: *const c_char, msg: &Printbuf) {
+pub unsafe fn bch2_fatal_error_str(c: &Opaque<Fs>, func: *const c_char, msg: &Printbuf) {
     // SAFETY: the caller's
     fs_fatal_error(Fs::from_c(c), unsafe { CStr::from_ptr(func.cast()) }, msg)
 }

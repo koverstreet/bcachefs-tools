@@ -264,7 +264,7 @@ fn accounting_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_accounting_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
+pub fn bch2_accounting_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
     ret_to_c(accounting_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
@@ -318,7 +318,7 @@ pub fn key_to_text(out: &mut Printbuf, fs: Option<&Fs>, pos: &DiskAccountingPos<
 
 #[cold]
 #[c_export]
-pub fn bch2_accounting_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>>, k: BkeySC<'_>) {
+pub fn bch2_accounting_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
     key_to_text(out, c.map(Fs::from_c), &DiskAccountingPos::from_bpos(k.k.p));
     write!(out, " {}", Join(" ", k.arm::<Accounting>().expect("an accounting key").v().d.iter().map(|&d| d as i64)));
 }

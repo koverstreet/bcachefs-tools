@@ -276,7 +276,7 @@ fn star_start_of_lines(s: &str) -> String {
 
 fn journal_entry_header_to_text(
     out: &mut Printbuf,
-    c_fs: *mut c::bch_fs,
+    c_fs: *mut Fs,
     p: &c::journal_replay,
     blacklisted: bool,
 ) {
@@ -339,7 +339,7 @@ fn journal_entry_keys_noval_to_text(out: &mut Printbuf, entry: &c::jset_entry) {
 
 fn print_one_entry(
     out: &mut Printbuf,
-    c_fs: *mut c::bch_fs,
+    c_fs: *mut Fs,
     f: &JournalFilter,
     p: &c::journal_replay,
     entry: &c::jset_entry,
@@ -384,7 +384,7 @@ fn print_one_entry(
     }
 }
 
-fn journal_replay_print(c_fs: *mut c::bch_fs, f: &JournalFilter, p: &c::journal_replay,
+fn journal_replay_print(c_fs: *mut Fs, f: &JournalFilter, p: &c::journal_replay,
                         j: &c::jset) {
     let mut buf = Printbuf::new();
     let seq = p.j.seq.get();

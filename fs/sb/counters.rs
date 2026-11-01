@@ -166,13 +166,14 @@ c::BCH_PERSISTENT_COUNTERS!(counter_events);
 #[cfg(all(kernel, CONFIG_TRACEPOINTS))]
 mod tracepoints {
     use crate::c;
+    use crate::fs::Fs;
 
     macro_rules! tracepoint_externs {
         ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
             unsafe extern "C" {
                 $(
                     pub(super) static [<__tracepoint_ $name>]: c::tracepoint;
-                    pub(super) fn [<rust_do_trace_ $name>](c: *mut c::bch_fs, str: *const ::core::ffi::c_char);
+                    pub(super) fn [<rust_do_trace_ $name>](c: *mut Fs, str: *const ::core::ffi::c_char);
                 )*
             }
         } };
@@ -405,7 +406,7 @@ pub fn counters_init(fs: &Fs) {
 }
 
 #[c_export]
-pub fn bch2_fs_counters_init_late(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_fs_counters_init_late(c: &Opaque<Fs>) -> c_int {
     RecentCounters::queue(Fs::from_c(c));
     0
 }

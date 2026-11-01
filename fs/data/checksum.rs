@@ -421,7 +421,7 @@ impl Fs {
 /// # Safety
 /// @data is @len bytes.
 #[c_export]
-pub unsafe fn bch2_checksum(c: Option<&Opaque<c::bch_fs>>, type_: c_uint, nonce: Nonce,
+pub unsafe fn bch2_checksum(c: Option<&Opaque<Fs>>, type_: c_uint, nonce: Nonce,
                             data: *const c_void, len: usize) -> c::bch_csum {
     let mut csum = Csum::new(c.map(Fs::from_c), c::bch_csum_type(type_), nonce);
     // SAFETY: the caller's
@@ -432,7 +432,7 @@ pub unsafe fn bch2_checksum(c: Option<&Opaque<c::bch_fs>>, type_: c_uint, nonce:
 /// # Safety
 /// @data is @len bytes.
 #[c_export]
-pub unsafe fn bch2_encrypt(c: &Opaque<c::bch_fs>, type_: c_uint, nonce: Nonce,
+pub unsafe fn bch2_encrypt(c: &Opaque<Fs>, type_: c_uint, nonce: Nonce,
                            data: *mut c_void, len: usize) -> c_int {
     if !c::bch_csum_type(type_).is_encryption() {
         return 0;
@@ -452,7 +452,7 @@ pub unsafe fn bch2_chacha20(key: &c::bch_key, nonce: Nonce, data: *mut c_void, l
 /// # Safety
 /// @bio is a bio, not in flight.
 #[c_export]
-pub unsafe fn bch2_checksum_bio(c: &Opaque<c::bch_fs>, type_: c_uint, nonce: Nonce,
+pub unsafe fn bch2_checksum_bio(c: &Opaque<Fs>, type_: c_uint, nonce: Nonce,
                                 bio: *mut c::bio) -> c::bch_csum {
     // SAFETY: the caller's
     Fs::from_c(c).checksum_range(c::bch_csum_type(type_), nonce, unsafe { Bio::from_raw(bio) }.range())
@@ -463,7 +463,7 @@ pub unsafe fn bch2_checksum_bio(c: &Opaque<c::bch_fs>, type_: c_uint, nonce: Non
 /// # Safety
 /// @bio is a bio, not in flight.
 #[c_export]
-pub unsafe fn __bch2_encrypt_bio(c: &Opaque<c::bch_fs>, _type: c_uint, nonce: Nonce, bio: *mut c::bio) -> c_int {
+pub unsafe fn __bch2_encrypt_bio(c: &Opaque<Fs>, _type: c_uint, nonce: Nonce, bio: *mut c::bio) -> c_int {
     // SAFETY: the caller's
     ret_to_c(Fs::from_c(c).encrypt_range(nonce, unsafe { Bio::from_raw(bio) }.range()))
 }
@@ -473,7 +473,7 @@ pub unsafe fn __bch2_encrypt_bio(c: &Opaque<c::bch_fs>, _type: c_uint, nonce: No
 /// # Safety
 /// @bio is a bio, not in flight.
 #[c_export]
-pub unsafe fn bch2_rechecksum_bio(c: &Opaque<c::bch_fs>, bio: *mut c::bio, version: Bversion,
+pub unsafe fn bch2_rechecksum_bio(c: &Opaque<Fs>, bio: *mut c::bio, version: Bversion,
                                   crc_old: c::bch_extent_crc_unpacked,
                                   crc_a: Option<&mut c::bch_extent_crc_unpacked>,
                                   crc_b: Option<&mut c::bch_extent_crc_unpacked>,
@@ -730,7 +730,7 @@ pub fn encryption_init(fs: &Fs, user_key: Option<&c::bch_key>) -> Result<(), Bch
 
 /// Whether @c has its key - an encryption type is no use without it.
 #[c_export]
-pub fn bch2_fs_has_encryption_key(c: &Opaque<c::bch_fs>) -> bool {
+pub fn bch2_fs_has_encryption_key(c: &Opaque<Fs>) -> bool {
     Fs::from_c(c).encryption_key().is_some()
 }
 

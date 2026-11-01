@@ -158,13 +158,13 @@ fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_quota_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
+pub fn bch2_quota_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
     ret_to_c(validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
 #[cold]
 #[c_export]
-pub fn bch2_quota_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_quota_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
     let q = c::Quota::val_copy_pad(k).expect("a quota");
 
     for (c, counter) in q.c.iter().zip(COUNTERS) {
@@ -504,7 +504,7 @@ mod vfs {
 
     #[c_export]
     pub fn bch2_quota_acct(
-        c:       &Opaque<c::bch_fs>,
+        c:       &Opaque<Fs>,
         qid:     c::bch_qid,
         counter: c::quota_counters,
         v:       i64,
@@ -558,7 +558,7 @@ mod vfs {
 
     #[c_export]
     pub fn bch2_quota_transfer(
-        c:      &Opaque<c::bch_fs>,
+        c:      &Opaque<Fs>,
         qtypes: c_uint,
         dst:    c::bch_qid,
         src:    c::bch_qid,
@@ -719,7 +719,7 @@ mod vfs {
     }
 
     #[c_export]
-    pub fn bch2_fs_quota_read(c: &Opaque<c::bch_fs>) -> c_int {
+    pub fn bch2_fs_quota_read(c: &Opaque<Fs>) -> c_int {
         ret_to_c(fs_quota_read(Fs::from_c(c)))
     }
 

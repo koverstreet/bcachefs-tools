@@ -117,7 +117,7 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_read_superblock_clean(c: &Opaque<c::bch_fs>) -> *mut Head<c::bch_sb_field_clean> {
+pub fn bch2_read_superblock_clean(c: &Opaque<Fs>) -> *mut Head<c::bch_sb_field_clean> {
     Fs::from_c(c).read_superblock_clean().unwrap_or_else(err_ptr)
 }
 
@@ -183,7 +183,7 @@ impl Fs {
 /// *@cleanp is from bch2_read_superblock_clean(), and @j the last journal
 /// entry, validated.
 #[c_export]
-pub unsafe fn bch2_verify_superblock_clean(c: &Opaque<c::bch_fs>, cleanp: *mut *mut Head<c::bch_sb_field_clean>,
+pub unsafe fn bch2_verify_superblock_clean(c: &Opaque<Fs>, cleanp: *mut *mut Head<c::bch_sb_field_clean>,
                                            j: *mut Head<c::jset>) -> c_int {
     // SAFETY: the caller's
     let (clean, j) = unsafe { (Section::from_ffi(*cleanp), c::jset::<Validated>::from_ffi(j)) };
@@ -231,7 +231,7 @@ fn super_entries_add_common(fs: &Fs, w: &mut EntryWriter<'_>) -> Result<(), NoRo
 /// # Safety
 /// There's room for them at *@end.
 #[c_export]
-pub unsafe fn bch2_journal_super_entries_add_common(c: &Opaque<c::bch_fs>, end: *mut *mut Head<c::jset_entry>,
+pub unsafe fn bch2_journal_super_entries_add_common(c: &Opaque<Fs>, end: *mut *mut Head<c::jset_entry>,
                                                     _seq: u64) {
     // SAFETY: the caller's - room for these
     let buf = unsafe { core::slice::from_raw_parts_mut((*end).cast(), COMMON_BYTES) };

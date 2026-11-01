@@ -82,7 +82,7 @@ fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_damage_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
+pub fn bch2_damage_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
     -> core::ffi::c_int
 {
     ret_to_c(validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
@@ -90,7 +90,7 @@ pub fn bch2_damage_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey
 
 #[cold]
 #[c_export]
-pub fn bch2_damage_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_damage_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
     for (i, e) in k.arm::<c::Damage>().expect("a damage key").v().entries.iter().enumerate() {
         if i != 0 {
             out.newline();
@@ -384,7 +384,7 @@ pub fn record_lost_extents(fs: &Fs) {
 }
 
 #[c_export]
-pub fn bch2_damage_note_lost_extents(c: &Opaque<c::bch_fs>, btree: Btree, k: BkeySC<'_>) {
+pub fn bch2_damage_note_lost_extents(c: &Opaque<Fs>, btree: Btree, k: BkeySC<'_>) {
     note_lost_extents(Fs::from_c(c), btree, k)
 }
 

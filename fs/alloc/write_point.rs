@@ -321,7 +321,7 @@ impl Fs {
 // ── For C ────────────────────────────────────────────────────────────────
 
 #[c_export]
-pub fn bch2_reset_alloc_cursors(c: &Opaque<c::bch_fs>) {
+pub fn bch2_reset_alloc_cursors(c: &Opaque<Fs>) {
     let fs = Fs::from_c(c);
     let rcu = crate::util::rcu::read_lock();
     for ca in fs.devs_rcu(&rcu) {

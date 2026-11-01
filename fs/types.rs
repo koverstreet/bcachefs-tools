@@ -897,6 +897,3 @@ pub struct Fs {
     #[pin]
     pub btree_debug: [c::btree_debug; c::BTREE_ID_NR as usize],
 }
-
-/// C's name, as FFI declarations spell it: *mut c::bch_fs.
-pub type bch_fs = Fs;

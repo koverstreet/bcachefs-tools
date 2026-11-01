@@ -6,15 +6,16 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Fs;
 use crate::cstructs::c;
 use crate::util::vstructs::Head;
 use cstruct_macros::c_extern;
 
 c_extern! {
-    pub fn bch2_journal_entry_validate(c: *mut c::bch_fs, jset: *mut Head<c::jset>,
+    pub fn bch2_journal_entry_validate(c: *mut Fs, jset: *mut Head<c::jset>,
                                        entry: *mut Head<c::jset_entry>, version: core::ffi::c_uint,
                                        big_endian: core::ffi::c_int,
                                        from: c::bkey_validate_context) -> core::ffi::c_int;
-    pub fn bch2_journal_entry_to_text(out: *mut c::printbuf, c: *mut c::bch_fs,
+    pub fn bch2_journal_entry_to_text(out: *mut c::printbuf, c: *mut Fs,
                                       entry: *mut Head<c::jset_entry>);
 }

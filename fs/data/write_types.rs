@@ -66,7 +66,7 @@ nest! {
     pub struct bch_write_bio {
         #[c_struct_group]
         pub wbio: pub struct bch_write_bio_wbio {
-            pub c: *mut c::bch_fs,
+            pub c: *mut Fs,
             pub parent: *mut c::bch_write_bio,
             /*
              * Stashed at submit so endio doesn't have to re-derive the dev pointer

@@ -147,7 +147,7 @@ fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &c::bch_dev, buckets: &[
 /// # Safety
 /// @buckets is @nr u64s; sb_lock is held.
 #[c_export]
-pub unsafe fn bch2_journal_buckets_to_sb(c: &Opaque<c::bch_fs>, ca: &c::bch_dev,
+pub unsafe fn bch2_journal_buckets_to_sb(c: &Opaque<Fs>, ca: &c::bch_dev,
                                          buckets: *const u64, nr: c_uint) -> c_int {
     let fs = Fs::from_c(c);
     let buckets = match nr {
@@ -163,7 +163,7 @@ pub unsafe fn bch2_journal_buckets_to_sb(c: &Opaque<c::bch_fs>, ca: &c::bch_dev,
 /// At a clean mount, before the journal starts: rewrite journal_v2 sorted,
 /// for devices where it isn't or a v1 field is left.
 #[c_export]
-pub fn bch2_sb_journal_sort(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_sb_journal_sort(c: &Opaque<Fs>) -> c_int {
     let fs = Fs::from_c(c);
     assert!(fs.sb.clean.get() != 0);
     assert!(!fs.flags.get(c::bch_fs_flags::BCH_FS_rw));

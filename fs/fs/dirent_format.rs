@@ -303,7 +303,7 @@ pub fn d_type_str(d_type: u8) -> &'static str {
 #[c_export]
 pub fn bch2_dirent_to_text(
     out: &mut Printbuf,
-    _c:  &Opaque<c::bch_fs>,
+    _c:  &Opaque<Fs>,
     k:   BkeySC<'_>,
 ) {
     to_text(out, k)
@@ -367,7 +367,7 @@ pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<super::Dirent<'k>, BchEr
 /// For C's bkey_ops: bch2_dirent_validate().
 #[c_export]
 pub fn bch2_dirent_validate(
-    c:    &Opaque<c::bch_fs>,
+    c:    &Opaque<Fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
 ) -> c_int {

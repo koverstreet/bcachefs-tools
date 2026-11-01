@@ -436,7 +436,7 @@ fn dev_remove_stripes(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub extern "C" fn bch2_dev_remove_stripes(c: &Opaque<c::bch_fs>, dev_idx: c_uint, flags: c_uint, err: &mut Printbuf)
+pub extern "C" fn bch2_dev_remove_stripes(c: &Opaque<Fs>, dev_idx: c_uint, flags: c_uint, err: &mut Printbuf)
     -> c_int
 {
     let fs = Fs::from_c(c);
@@ -444,14 +444,14 @@ pub extern "C" fn bch2_dev_remove_stripes(c: &Opaque<c::bch_fs>, dev_idx: c_uint
 }
 
 #[c_export]
-pub extern "C" fn bch2_dev_data_drop(c: &Opaque<c::bch_fs>, dev_idx: c_uint, flags: c_uint, err: &mut Printbuf)
+pub extern "C" fn bch2_dev_data_drop(c: &Opaque<Fs>, dev_idx: c_uint, flags: c_uint, err: &mut Printbuf)
     -> c_int
 {
     ret_to_c(dev_data_drop(Fs::from_c(c), DevDrop { dev: dev_idx, flags, err }))
 }
 
 #[c_export]
-pub extern "C" fn bch2_dev_data_drop_by_backpointers(c: &Opaque<c::bch_fs>, ca: &c::bch_dev, flags: c_uint,
+pub extern "C" fn bch2_dev_data_drop_by_backpointers(c: &Opaque<Fs>, ca: &c::bch_dev, flags: c_uint,
                                                      err: &mut Printbuf) -> c_int {
     let d = DevDrop { dev: ca.dev_idx.into(), flags, err };
     ret_to_c(dev_data_drop_by_backpointers(Fs::from_c(c), ca, d))

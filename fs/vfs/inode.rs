@@ -59,10 +59,10 @@ use crate::format::Btree;
 c_extern! {
     pub fn bch2_vfs_inode_get_trans(trans: *mut c::btree_trans, inum: c::subvol_inum,
                                     func: *const crate::util::ffi::c_char) -> *mut c::bch_inode_info;
-    fn bch2_vfs_inode_get(c: *mut c::bch_fs, inum: c::subvol_inum,
+    fn bch2_vfs_inode_get(c: *mut Fs, inum: c::subvol_inum,
                           warn: *const crate::util::ffi::c_char) -> *mut c::inode;
     // fs.c's inode cache, for lookup:
-    fn bch2_inode_hash_find(c: *mut c::bch_fs, trans: *mut c::btree_trans,
+    fn bch2_inode_hash_find(c: *mut Fs, trans: *mut c::btree_trans,
                             inum: c::subvol_inum) -> *mut c::bch_inode_info;
     fn bch2_inode_hash_init_insert(trans: *mut c::btree_trans, inum: c::subvol_inum,
                                    bi: *mut c::bch_inode_unpacked,
@@ -402,7 +402,7 @@ impl<'i> UpdateLock<'i> {
 /// its error, or 0 to write the inode, or positive for nothing to write.
 #[must_use]
 #[c_export]
-pub fn bch2_write_inode(_c: &Opaque<c::bch_fs>, inode: &c::bch_inode_info, set: c::inode_set_fn,
+pub fn bch2_write_inode(_c: &Opaque<Fs>, inode: &c::bch_inode_info, set: c::inode_set_fn,
                         p: *mut c_void, fields: c_uint) -> c_int {
     // SAFETY: every C caller holds @inode's ei_update_lock
     let l = unsafe { UpdateLock::held(inode) };

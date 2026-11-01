@@ -195,7 +195,7 @@ impl Fs {
 /// # Safety
 /// @domain_keys is BCH_SB_MEMBERS_MAX u64s.
 #[c_export]
-pub unsafe fn bch2_dev_alloc_list_devs(c: &Opaque<c::bch_fs>, stripe: &mut c::dev_stripe_state,
+pub unsafe fn bch2_dev_alloc_list_devs(c: &Opaque<Fs>, stripe: &mut c::dev_stripe_state,
                                        devs: &c::bch_devs_mask, devs_chosen: &c::bch_devs_mask,
                                        domain_keys: *mut u64, ret: &mut c::dev_alloc_list) {
     let fs = Fs::from_c(c);

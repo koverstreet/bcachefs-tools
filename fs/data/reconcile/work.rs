@@ -1172,7 +1172,7 @@ mod power {
                                   _data: *mut core::ffi::c_void) -> c_int {
         // SAFETY: our notifier block, in its filesystem
         let fs = unsafe {
-            Fs::borrow_raw(nb.byte_sub(core::mem::offset_of!(c::bch_fs, reconcile.power_notifier)).cast())
+            Fs::borrow_raw(nb.byte_sub(core::mem::offset_of!(Fs, reconcile.power_notifier)).cast())
         };
         fs.reconcile.on_battery.store(on_battery(), Relaxed);
         fs.reconcile_wakeup();

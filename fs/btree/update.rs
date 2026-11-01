@@ -55,7 +55,7 @@ c_enum! {
 
 c_extern! {
     #[c_printf(2, 3)]
-    pub fn bch2_fs_log_msg(c: *mut c::bch_fs, fmt: *const core::ffi::c_char, ...) -> c_int;
+    pub fn bch2_fs_log_msg(c: *mut Fs, fmt: *const core::ffi::c_char, ...) -> c_int;
     pub fn __bch2_trans_subbuf_alloc(trans: *mut c::btree_trans, buf: *mut c::btree_trans_subbuf, u64s: c_uint,
                                      ip: core::ffi::c_ulong) -> *mut core::ffi::c_void;
     pub fn rust_bch2_trans_update_buffered(trans: *mut c::btree_trans, btree: Btree, k: *mut c::bkey_i) -> c_int;
@@ -71,14 +71,14 @@ c_extern! {
     pub fn bch2_btree_insert_trans(trans: *mut c::btree_trans, btree: Btree,
                                    k: *mut c::bkey_i,
                                    flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_insert(c: *mut c::bch_fs, id: Btree, k: *mut c::bkey_i,
+    pub fn bch2_btree_insert(c: *mut Fs, id: Btree, k: *mut c::bkey_i,
                              disk_res: *mut c::disk_reservation,
                              commit_flags: c::bch_trans_commit_flags,
                              iter_flags: c::btree_iter_update_trigger_flags) -> c_int;
     pub fn bch2_btree_delete_range_trans(trans: *mut c::btree_trans, btree: Btree,
                                          start: Bpos, end: Bpos,
                                          flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_delete_range(c: *mut c::bch_fs, id: Btree, start: Bpos, end: Bpos,
+    pub fn bch2_btree_delete_range(c: *mut Fs, id: Btree, start: Bpos, end: Bpos,
                                    flags: c::btree_iter_update_trigger_flags) -> c_int;
     pub fn bch2_btree_bit_mod(trans: *mut c::btree_trans, btree: Btree, pos: Bpos,
                               set: bool) -> c_int;
@@ -119,7 +119,7 @@ pub fn extent_whiteout_type(fs: &Fs, btree: Btree, k: &c::bkey) -> c::bch_bkey_t
 }
 
 #[c_export]
-pub fn bch2_extent_whiteout_type(c: &Opaque<c::bch_fs>, btree: Btree, k: &c::bkey) -> c::bch_bkey_type {
+pub fn bch2_extent_whiteout_type(c: &Opaque<Fs>, btree: Btree, k: &c::bkey) -> c::bch_bkey_type {
     extent_whiteout_type(Fs::from_c(c), btree, k)
 }
 

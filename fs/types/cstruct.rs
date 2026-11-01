@@ -1664,11 +1664,8 @@ fn parse_extern(m: &syn::Macro) -> Result<CExtern, String> {
 
 /// Rust's types for C's that a #[c_export] fn may take, as unqualified() has
 /// them, and C's, as c_extern! does: #[repr(transparent)], or c_same! - one
-/// layout either way. References are c_export_type()'s. Fs is struct bch_fs
-/// itself, defined in Rust: &Fs is the const struct bch_fs * C passes, where
-/// &Opaque<bch_fs> is the non-const one.
+/// layout either way. References are c_export_type()'s.
 const C_EXPORT_TYPES: &[(&str, &str)] = &[
-    ("Fs",             "c::bch_fs"),
     ("Printbuf",       "c::printbuf"),
     ("BkeySC<'_>",     "c::bkey_s_c"),
     ("BkeyS<'_>",      "c::bkey_s"),
@@ -1680,8 +1677,8 @@ const C_EXPORT_TYPES: &[(&str, &str)] = &[
 /// reference: their pointer isn't const, as an Opaque's isn't.
 const C_EXPORT_OPAQUE: &[&str] = &["BtreeTrans<'_>"];
 
-/// @ty with each path's qualifiers dropped: `&crate::util::ffi::Opaque<c::bch_fs>`
-/// is `&Opaque<bch_fs>`.
+/// @ty with each path's qualifiers dropped: `&crate::util::ffi::Opaque<crate::fs::Fs>`
+/// is `&Opaque<Fs>`.
 fn unqualified(ty: &syn::Type) -> String {
     struct Last;
     impl syn::visit_mut::VisitMut for Last {

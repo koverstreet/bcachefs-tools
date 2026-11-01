@@ -214,27 +214,27 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_journal_seq_is_blacklisted(c: &Opaque<c::bch_fs>, seq: u64, dirty: bool) -> bool {
+pub fn bch2_journal_seq_is_blacklisted(c: &Opaque<Fs>, seq: u64, dirty: bool) -> bool {
     Fs::from_c(c).journal_seq_is_blacklisted(seq, dirty)
 }
 
 #[c_export]
-pub fn bch2_journal_seq_next_blacklisted(c: &Opaque<c::bch_fs>, seq: u64) -> u64 {
+pub fn bch2_journal_seq_next_blacklisted(c: &Opaque<Fs>, seq: u64) -> u64 {
     Fs::from_c(c).journal_seq_blacklist.next_blacklisted(seq)
 }
 
 #[c_export]
-pub fn bch2_journal_seq_next_nonblacklisted(c: &Opaque<c::bch_fs>, seq: u64) -> u64 {
+pub fn bch2_journal_seq_next_nonblacklisted(c: &Opaque<Fs>, seq: u64) -> u64 {
     Fs::from_c(c).journal_seq_blacklist.next_nonblacklisted(seq)
 }
 
 #[c_export]
-pub fn bch2_journal_last_blacklisted_seq(c: &Opaque<c::bch_fs>) -> u64 {
+pub fn bch2_journal_last_blacklisted_seq(c: &Opaque<Fs>) -> u64 {
     Fs::from_c(c).journal_seq_blacklist.last_blacklisted()
 }
 
 #[c_export]
-pub fn bch2_journal_seq_blacklist_add(c: &Opaque<c::bch_fs>, start: u64, end: u64) -> c_int {
+pub fn bch2_journal_seq_blacklist_add(c: &Opaque<Fs>, start: u64, end: u64) -> c_int {
     ret_to_c(Fs::from_c(c).journal_seq_blacklist_add(start, end))
 }
 
@@ -247,7 +247,7 @@ pub fn blacklist_table_initialize(fs: &Fs) -> Result<(), BchError> {
 /// older than the journal on disk. Whether the section changed. The table
 /// isn't rebuilt: it keeps them, harmlessly, until the next mount.
 #[c_export]
-pub fn bch2_blacklist_entries_gc(c: &Opaque<c::bch_fs>) -> bool {
+pub fn bch2_blacklist_entries_gc(c: &Opaque<Fs>) -> bool {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock, with recovery's last superblock update
     let mut guard = unsafe { fs.sb_lock_held() };

@@ -496,7 +496,7 @@ fn dev_label_resolve(sb: &mut (impl SbResize + ?Sized), name: &[u8]) -> Result<u
 /// # Safety
 /// @name is a C string.
 #[c_export]
-pub unsafe fn __bch2_dev_group_set(c: &Opaque<c::bch_fs>, ca: &c::bch_dev, name: *const c_char) -> c_int {
+pub unsafe fn __bch2_dev_group_set(c: &Opaque<Fs>, ca: &c::bch_dev, name: *const c_char) -> c_int {
     // SAFETY: the caller's
     let name = unsafe { CStr::from_ptr(name.cast()) };
     let fs = Fs::from_c(c);
@@ -552,13 +552,13 @@ impl Fs {
 // borrow - what's returned is good for the caller's read side section.
 
 #[c_export]
-pub fn bch2_target_to_mask(c: &Opaque<c::bch_fs>, target: c_uint) -> *const c::bch_devs_mask {
+pub fn bch2_target_to_mask(c: &Opaque<Fs>, target: c_uint) -> *const c::bch_devs_mask {
     let rcu = read_lock();
     Fs::from_c(c).target_to_mask(Target::decode(target), &rcu).map_or(core::ptr::null(), |m| m)
 }
 
 #[c_export]
-pub fn bch2_dev_in_target_rcu(c: &Opaque<c::bch_fs>, dev: c_uint, target: c_uint) -> bool {
+pub fn bch2_dev_in_target_rcu(c: &Opaque<Fs>, dev: c_uint, target: c_uint) -> bool {
     Fs::from_c(c).dev_in_target(dev, Target::decode(target), &read_lock())
 }
 

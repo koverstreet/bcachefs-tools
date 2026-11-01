@@ -5,6 +5,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Fs;
 use crate::btree::iter::TransAttempt;
 use crate::errcode::BchError;
 use crate::locking::{Guard, Locked, RawTryLock};
@@ -28,7 +29,7 @@ c_enum! {
 }
 
 c_extern! {
-    pub fn rust_bch2_inode_shard_idx(c: *mut c::bch_fs) -> u64;
+    pub fn rust_bch2_inode_shard_idx(c: *mut Fs) -> u64;
     pub fn bch2_check_for_deadlock(trans: *mut c::btree_trans, cycle: *mut c::printbuf) -> c_int;
 }
 

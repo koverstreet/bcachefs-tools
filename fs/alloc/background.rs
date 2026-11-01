@@ -787,26 +787,26 @@ fn alloc_v4_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_alloc_v1_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
+pub fn bch2_alloc_v1_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
     ret_to_c(alloc_v1_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
 #[c_export]
-pub fn bch2_alloc_v2_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
+pub fn bch2_alloc_v2_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
     let v = BkeyValidate { fs: Fs::from_c(c), k, from };
     let a = k.arm::<c::AllocV2>().expect("an alloc_v2");
     ret_to_c(bkey_fsck_err_on!(&v, AllocUnpacked::v2(a).is_none(), id::alloc_v2_unpack_error, "unpack error"))
 }
 
 #[c_export]
-pub fn bch2_alloc_v3_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
+pub fn bch2_alloc_v3_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
     let v = BkeyValidate { fs: Fs::from_c(c), k, from };
     let a = k.arm::<c::AllocV3>().expect("an alloc_v3");
     ret_to_c(bkey_fsck_err_on!(&v, AllocUnpacked::v3(a).is_none(), id::alloc_v3_unpack_error, "unpack error"))
 }
 
 #[c_export]
-pub fn bch2_alloc_v4_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
+pub fn bch2_alloc_v4_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
     ret_to_c(alloc_v4_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
@@ -863,13 +863,13 @@ fn alloc_v4_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>, a: &c::A
 
 #[cold]
 #[c_export]
-pub fn bch2_alloc_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>>, k: BkeySC<'_>) {
+pub fn bch2_alloc_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
     alloc_v4_to_text(out, c.map(Fs::from_c), k, &alloc_to_v4(k));
 }
 
 #[cold]
 #[c_export]
-pub fn bch2_alloc_v4_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>>, k: BkeySC<'_>) {
+pub fn bch2_alloc_v4_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
     let a = c::AllocV4::val_copy_pad(k).expect("an alloc_v4");
     alloc_v4_to_text(out, c.map(Fs::from_c), k, &a);
 }
@@ -1080,13 +1080,13 @@ fn bucket_gens_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_bucket_gens_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
+pub fn bch2_bucket_gens_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
     ret_to_c(bucket_gens_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
 #[cold]
 #[c_export]
-pub fn bch2_bucket_gens_to_text(out: &mut Printbuf, _c: Option<&Opaque<c::bch_fs>>, k: BkeySC<'_>) {
+pub fn bch2_bucket_gens_to_text(out: &mut Printbuf, _c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
     if let Some(g) = k.arm::<c::BucketGens>() {
         prt!(out, "{}", Join(" ", g.v().gens.iter()));
     }
@@ -1718,7 +1718,7 @@ fn dev_remove_alloc(fs: &Fs, ca: &c::bch_dev) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_dev_remove_alloc(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) -> c_int {
+pub fn bch2_dev_remove_alloc(c: &Opaque<Fs>, ca: &c::bch_dev) -> c_int {
     ret_to_c(crate::bch_err_msg_dev!(ca, dev_remove_alloc(Fs::from_c(c), ca), "removing dev alloc info"))
 }
 

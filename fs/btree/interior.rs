@@ -101,10 +101,10 @@ pub struct bch_fs_btree_node_rewrites {
 c_default!(bch_fs_btree_node_rewrites);
 
 c_extern! {
-    pub fn bch2_btree_interior_updates_flush(c: *mut c::bch_fs) -> bool;
-    pub fn bch2_do_pending_node_rewrites(c: *mut c::bch_fs);
-    pub fn bch2_free_pending_node_rewrites(c: *mut c::bch_fs);
-    pub fn bch2_btree_updates_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
+    pub fn bch2_btree_interior_updates_flush(c: *mut Fs) -> bool;
+    pub fn bch2_do_pending_node_rewrites(c: *mut Fs);
+    pub fn bch2_free_pending_node_rewrites(c: *mut Fs);
+    pub fn bch2_btree_updates_to_text(out: *mut c::printbuf, c: *mut Fs);
     pub fn bch2_btree_node_update_key(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
                                       b: *mut c::BtreeNode, new_key: *mut c::bkey_i,
                                       commit_flags: c_uint, skip_triggers: bool) -> c_int;
@@ -113,8 +113,8 @@ c_extern! {
     pub fn bch2_btree_node_rewrite(trans: *mut c::btree_trans, iter: *mut c::btree_iter, b: *mut c::BtreeNode,
                                    target: c_uint, flags: c::bch_trans_commit_flags,
                                    write_flags: c::bch_write_flags) -> c_int;
-    pub fn bch2_btree_reserve_cache_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
-    pub fn bch2_async_btree_op(c: *mut c::bch_fs, b: *mut c::BtreeNode, op: c::async_btree_op);
+    pub fn bch2_btree_reserve_cache_to_text(out: *mut c::printbuf, c: *mut Fs);
+    pub fn bch2_async_btree_op(c: *mut Fs, b: *mut c::BtreeNode, op: c::async_btree_op);
 }
 
 impl Fs {
@@ -181,7 +181,7 @@ pub fn btree_roots_to_journal_entries(fs: &Fs, w: &mut EntryWriter<'_>, skip: u6
 /// # Safety
 /// There's room at @end for an entry for every live root.
 #[c_export]
-pub unsafe fn bch2_btree_roots_to_journal_entries(c: &Opaque<c::bch_fs>, end: *mut Head<c::jset_entry>,
+pub unsafe fn bch2_btree_roots_to_journal_entries(c: &Opaque<Fs>, end: *mut Head<c::jset_entry>,
                                                   skip: c_ulong) -> *mut Head<c::jset_entry> {
     let fs = Fs::from_c(c);
     let root_lock = fs.btree.cache.roots.lock();

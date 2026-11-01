@@ -1304,7 +1304,7 @@ pub fn allocator_foreground_init(fs: &Fs) {
 }
 
 #[c_export]
-pub fn bch2_alloc_wake_all(c: &Opaque<c::bch_fs>) {
+pub fn bch2_alloc_wake_all(c: &Opaque<Fs>) {
     Fs::from_c(c).alloc_wake_all()
 }
 
@@ -1313,7 +1313,7 @@ pub fn bch2_alloc_wake_all(c: &Opaque<c::bch_fs>) {
 /// # Safety
 /// @ob's last pin was put by the caller.
 #[c_export]
-pub unsafe fn __bch2_open_bucket_put(c: &Opaque<c::bch_fs>, ob: &c::open_bucket) {
+pub unsafe fn __bch2_open_bucket_put(c: &Opaque<Fs>, ob: &c::open_bucket) {
     // SAFETY: open until it's closed, which this does
     Fs::from_c(c).open_bucket_close(unsafe { OpenBucketRef::from_c(ob) })
 }
@@ -1321,7 +1321,7 @@ pub unsafe fn __bch2_open_bucket_put(c: &Opaque<c::bch_fs>, ob: &c::open_bucket)
 /// The stripes the buckets of @obs on @dev are blocks of, cancelled with
 /// @err: the writes to @dev failed.
 #[c_export]
-pub fn bch2_open_bucket_write_error(c: &Opaque<c::bch_fs>, obs: &c::open_buckets, dev: c_uint, err: c_int) {
+pub fn bch2_open_bucket_write_error(c: &Opaque<Fs>, obs: &c::open_buckets, dev: c_uint, err: c_int) {
     let Err(err) = ret_to_result_void(err) else { panic!("a write error without an error") };
     obs.iter(Fs::from_c(c)).filter(|ob| u32::from(ob.id().dev()) == dev).filter_map(|ob| ob.into_ref().stripe()).for_each(|s| s.err.set(err));
 }
@@ -1329,7 +1329,7 @@ pub fn bch2_open_bucket_write_error(c: &Opaque<c::bch_fs>, obs: &c::open_buckets
 /// # Safety
 /// @ob is open, and held open for the call.
 #[c_export]
-pub unsafe fn bch2_open_bucket_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, ob: &c::open_bucket) {
+pub unsafe fn bch2_open_bucket_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, ob: &c::open_bucket) {
     // SAFETY: the caller's
     unsafe { OpenBucketRef::from_c(ob) }.to_text(out)
 }

@@ -78,7 +78,7 @@ impl c::bch_fs_ec {
 }
 
 #[c_export]
-pub fn bch2_gc_stripe_get(c: &Opaque<c::bch_fs>, idx: u64) -> *mut c::gc_stripe {
+pub fn bch2_gc_stripe_get(c: &Opaque<Fs>, idx: u64) -> *mut c::gc_stripe {
     Fs::from_c(c).ec.gc_stripe(idx).map_or(core::ptr::null_mut(), |m| core::ptr::from_ref(m).cast_mut())
 }
 
@@ -87,7 +87,7 @@ pub fn bch2_gc_stripe_get(c: &Opaque<c::bch_fs>, idx: u64) -> *mut c::gc_stripe 
 /// commit's gc trigger that saw it running - as reflink's gc table isn't:
 /// see ReflinkGc.
 #[c_export]
-pub unsafe fn bch2_gc_stripes_free(c: &Opaque<c::bch_fs>) {
+pub unsafe fn bch2_gc_stripes_free(c: &Opaque<Fs>) {
     unsafe { Fs::from_c(c).ec.gc_stripes.free() }
 }
 

@@ -21,8 +21,8 @@ use cstruct_macros::{c_export, c_extern};
 use crate::format::Btree;
 
 c_extern! {
-    pub fn bch2_fs_recovery(c: *mut c::bch_fs) -> c_int;
-    pub fn bch2_fs_initialize(c: *mut c::bch_fs) -> c_int;
+    pub fn bch2_fs_recovery(c: *mut Fs) -> c_int;
+    pub fn bch2_fs_initialize(c: *mut Fs) -> c_int;
 }
 
 type Pass = c::bch_recovery_pass;
@@ -127,7 +127,7 @@ pub fn btree_lost_data(fs: &Fs, msg: &mut Printbuf, btree: Btree) -> Result<(), 
 }
 
 #[c_export]
-pub fn bch2_btree_lost_data(c: &Opaque<c::bch_fs>, msg: &mut Printbuf, btree: Btree) -> c_int {
+pub fn bch2_btree_lost_data(c: &Opaque<Fs>, msg: &mut Printbuf, btree: Btree) -> c_int {
     ret_to_c(btree_lost_data(Fs::from_c(c), msg, btree))
 }
 
@@ -177,7 +177,7 @@ fn reconstruct_alloc(fs: &Fs) {
 }
 
 #[c_export]
-pub fn bch2_reconstruct_alloc(c: &Opaque<c::bch_fs>) {
+pub fn bch2_reconstruct_alloc(c: &Opaque<Fs>) {
     reconstruct_alloc(Fs::from_c(c))
 }
 
@@ -197,6 +197,6 @@ fn ignore_journal_rewind_errors(fs: &Fs) {
 }
 
 #[c_export]
-pub fn bch2_ignore_journal_rewind_errors(c: &Opaque<c::bch_fs>) {
+pub fn bch2_ignore_journal_rewind_errors(c: &Opaque<Fs>) {
     ignore_journal_rewind_errors(Fs::from_c(c))
 }

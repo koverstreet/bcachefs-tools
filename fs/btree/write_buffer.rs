@@ -160,7 +160,7 @@ c_enum! {
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_btree_write_buffer {
     /* Back-refs set at init so the flush thread can find c and its idx. */
-    pub c: *mut c::bch_fs,
+    pub c: *mut Fs,
     pub idx: c::bch_wb_btree,
 
     pub sorted: DArray<c::wb_key_ref>,
@@ -192,10 +192,10 @@ c_extern! {
     pub fn bch2_btree_write_buffer_tryflush(trans: *mut c::btree_trans) -> c_int;
     pub fn bch2_btree_write_buffer_maybe_flush(trans: *mut c::btree_trans, referring_k: c::bkey_s_c,
                                                f: *mut c::wb_maybe_flush) -> c_int;
-    pub fn bch2_btree_write_buffer_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
-    pub fn bch2_btree_write_buffer_flush_going_ro(c: *mut c::bch_fs) -> bool;
-    pub fn bch2_btree_write_buffer_start(c: *mut c::bch_fs) -> c_int;
-    pub fn bch2_btree_write_buffer_stop(c: *mut c::bch_fs);
+    pub fn bch2_btree_write_buffer_to_text(out: *mut c::printbuf, c: *mut Fs);
+    pub fn bch2_btree_write_buffer_flush_going_ro(c: *mut Fs) -> bool;
+    pub fn bch2_btree_write_buffer_start(c: *mut Fs) -> c_int;
+    pub fn bch2_btree_write_buffer_stop(c: *mut Fs);
 }
 
 impl Fs {

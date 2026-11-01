@@ -137,7 +137,7 @@ fn backpointer_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_backpointer_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
+pub fn bch2_backpointer_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
     -> c_int
 {
     ret_to_c(backpointer_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
@@ -145,7 +145,7 @@ pub fn bch2_backpointer_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c:
 
 #[cold]
 #[c_export]
-pub fn bch2_backpointer_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>>, k: BkeySC<'_>) {
+pub fn bch2_backpointer_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
     let fs = c.map(Fs::from_c);
     let bp = k.arm::<c::Backpointer>().expect("a backpointer");
     let p = bp.k.p;

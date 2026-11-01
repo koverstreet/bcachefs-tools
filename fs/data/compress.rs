@@ -142,7 +142,7 @@ c_enum! {
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct bbuf {
-    pub c: *mut c::bch_fs,
+    pub c: *mut Fs,
     pub b: *mut c_void,
     pub type_: c::bbuf_type,
     pub rw: c_int,
@@ -385,14 +385,14 @@ fn map_or_bounce<'a>(fs: &'a Fs, r: BioRange<'a>, rw: usize) -> Bbuf<'a> {
 }
 
 #[c_export]
-pub fn bch2_bounce_alloc(c: &Opaque<c::bch_fs>, size: c_uint, rw: c_int) -> c::bbuf {
+pub fn bch2_bounce_alloc(c: &Opaque<Fs>, size: c_uint, rw: c_int) -> c::bbuf {
     bounce_alloc(Fs::from_c(c), size as usize, rw as usize).into_c()
 }
 
 /// # Safety
 /// @start is a position of @bio.
 #[c_export]
-pub unsafe fn bch2_bio_bounce(c: &Opaque<c::bch_fs>, bio: *mut c::bio, start: c::bvec_iter, rw: c_int) -> c::bbuf {
+pub unsafe fn bch2_bio_bounce(c: &Opaque<Fs>, bio: *mut c::bio, start: c::bvec_iter, rw: c_int) -> c::bbuf {
     // SAFETY: the caller's
     bio_bounce(Fs::from_c(c), unsafe { Bio::from_raw(bio).range_at(start) }, rw as usize).into_c()
 }
@@ -400,7 +400,7 @@ pub unsafe fn bch2_bio_bounce(c: &Opaque<c::bch_fs>, bio: *mut c::bio, start: c:
 /// # Safety
 /// @bio is a bio.
 #[c_export]
-pub unsafe fn bch2_bio_map_or_bounce(c: &Opaque<c::bch_fs>, bio: *mut c::bio, rw: c_int) -> c::bbuf {
+pub unsafe fn bch2_bio_map_or_bounce(c: &Opaque<Fs>, bio: *mut c::bio, rw: c_int) -> c::bbuf {
     // SAFETY: the caller's
     map_or_bounce(Fs::from_c(c), unsafe { Bio::from_raw(bio).range() }, rw as usize).into_c()
 }
@@ -500,7 +500,7 @@ fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice<'_>, crc: 
 /// # Safety
 /// @dst and @src are @crc's uncompressed and compressed sizes.
 #[c_export]
-pub unsafe fn bch2_buf_uncompress(c: &Opaque<c::bch_fs>, dst: *mut c_void, src: *mut c_void,
+pub unsafe fn bch2_buf_uncompress(c: &Opaque<Fs>, dst: *mut c_void, src: *mut c_void,
                                   crc: c::bch_extent_crc_unpacked) -> c_int {
     let buf = |p: *mut c_void, sectors: u32| {
         // SAFETY: the caller's
@@ -530,7 +530,7 @@ fn decompress_err(fs: &Fs, ret: Result<(), BchError>) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_decompress_err(c: &Opaque<c::bch_fs>, ret: c_int) -> c_int {
+pub fn bch2_decompress_err(c: &Opaque<Fs>, ret: c_int) -> c_int {
     let ret = if ret != 0 { Err(BchError::from_raw(-ret)) } else { Ok(()) };
     ret_to_c(decompress_err(Fs::from_c(c), ret))
 }
@@ -538,7 +538,7 @@ pub fn bch2_decompress_err(c: &Opaque<c::bch_fs>, ret: c_int) -> c_int {
 /// # Safety
 /// @src and @dst are bios, @dst_iter a position of @dst.
 #[c_export]
-pub unsafe fn bch2_bio_uncompress(c: &Opaque<c::bch_fs>, src: *mut c::bio, dst: *mut c::bio,
+pub unsafe fn bch2_bio_uncompress(c: &Opaque<Fs>, src: *mut c::bio, dst: *mut c::bio,
                                   dst_iter: c::bvec_iter, crc: c::bch_extent_crc_unpacked) -> c_int {
     let fs = Fs::from_c(c);
     // SAFETY: the caller's
@@ -789,7 +789,7 @@ fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: 
 /// # Safety
 /// @dst and @src are bios, ours.
 #[c_export]
-pub unsafe fn bch2_bio_compress(c: &Opaque<c::bch_fs>, dst: *mut c::bio, dst_len: &mut usize,
+pub unsafe fn bch2_bio_compress(c: &Opaque<Fs>, dst: *mut c::bio, dst_len: &mut usize,
                                 src: *mut c::bio, src_len: &mut usize, compression_opt: c_uint,
                                 write_pos: Bpos, bounce_source: bool) -> c_uint {
     let fs = Fs::from_c(c);

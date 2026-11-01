@@ -749,7 +749,7 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_do_discards_async(c: &Opaque<c::bch_fs>) {
+pub fn bch2_do_discards_async(c: &Opaque<Fs>) {
     Fs::from_c(c).do_discards_async()
 }
 

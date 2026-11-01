@@ -278,7 +278,7 @@ fn stripe_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_stripe_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
+pub fn bch2_stripe_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
     -> c_int
 {
     ret_to_c(stripe_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
@@ -289,7 +289,7 @@ pub fn bch2_stripe_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey
 /// validate rejected.
 #[cold]
 #[c_export]
-pub fn bch2_stripe_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_stripe_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
     let fs = Fs::from_c(c);
     // the header's there - bch2_val_to_text() checks min_val_size, all of it,
     // before calling this - but not what's after it

@@ -1211,7 +1211,7 @@ fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
 #[c_export]
 pub fn bch2_snapshot_validate(
-    c:    &Opaque<c::bch_fs>,
+    c:    &Opaque<Fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
 ) -> c_int {
@@ -1220,7 +1220,7 @@ pub fn bch2_snapshot_validate(
 
 #[cold]
 #[c_export]
-pub fn bch2_snapshot_key_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_snapshot_key_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
     write!(out, "{}", val(k).expect("a snapshot"));
 }
 
@@ -1251,7 +1251,7 @@ fn tree_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
 #[c_export]
 pub fn bch2_snapshot_tree_validate(
-    c:    &Opaque<c::bch_fs>,
+    c:    &Opaque<Fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
 ) -> c_int {
@@ -1260,7 +1260,7 @@ pub fn bch2_snapshot_tree_validate(
 
 #[cold]
 #[c_export]
-pub fn bch2_snapshot_tree_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_snapshot_tree_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
     let t = c::SnapshotTree::val_copy_pad(k).expect("a snapshot_tree");
     write!(out, "subvol {} root snapshot {}", t.master_subvol.get(), t.root_snapshot.get());
 }

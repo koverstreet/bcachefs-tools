@@ -168,7 +168,7 @@ pub fn is_ro(fs: &Fs, subvol: u32) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_subvol_is_ro(c: &Opaque<c::bch_fs>, subvol: u32) -> core::ffi::c_int {
+pub fn bch2_subvol_is_ro(c: &Opaque<Fs>, subvol: u32) -> core::ffi::c_int {
     ret_to_c(is_ro(Fs::from_c(c), subvol))
 }
 
@@ -338,7 +338,7 @@ fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
 #[c_export]
 pub fn bch2_subvolume_validate(
-    c:    &Opaque<c::bch_fs>,
+    c:    &Opaque<Fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
 ) -> core::ffi::c_int {
@@ -349,7 +349,7 @@ pub fn bch2_subvolume_validate(
 #[c_export]
 pub fn bch2_subvolume_to_text(
     out: &mut Printbuf,
-    _c:  &Opaque<c::bch_fs>,
+    _c:  &Opaque<Fs>,
     k:   BkeySC<'_>,
 ) {
     let s = val(k).expect("a subvolume");
@@ -937,7 +937,7 @@ fn initialize(fs: &Fs) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_initialize_subvolumes(c: &Opaque<c::bch_fs>) -> core::ffi::c_int {
+pub fn bch2_initialize_subvolumes(c: &Opaque<Fs>) -> core::ffi::c_int {
     ret_to_c(initialize(Fs::from_c(c)))
 }
 

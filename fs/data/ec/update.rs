@@ -353,7 +353,7 @@ pub fn resume_logged_op(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), 
 
 #[cold]
 #[c_export]
-pub fn bch2_logged_op_stripe_update_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_logged_op_stripe_update_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
     let k = k.arm::<c::LoggedOpStripeUpdate>().expect("a stripe update op");
     let op = k.v();
 

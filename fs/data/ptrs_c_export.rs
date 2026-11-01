@@ -3,6 +3,7 @@
 //! isn't, keys untyped, a key without pointers answered as an empty list of
 //! them.
 
+use crate::fs::Fs;
 use super::*;
 use super::ops::{btree_ptr_validate, btree_ptr_v2_validate};
 use crate::btree::iter::{BtreeTrans, TransBkey};
@@ -18,7 +19,7 @@ use crate::format::Btree;
 // ── bkey methods ─────────────────────────────────────────────────────────
 
 #[c_export]
-pub fn bch2_bkey_ptrs_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
+pub fn bch2_bkey_ptrs_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
     -> c_int
 {
     ret_to_c(bkey_ptrs_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
@@ -27,18 +28,18 @@ pub fn bch2_bkey_ptrs_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::b
 /// For C, which may or may not be in a read-side section: this takes its own.
 #[cold]
 #[c_export]
-pub fn bch2_extent_ptr_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>>, ptr: &c::bch_extent_ptr) {
+pub fn bch2_extent_ptr_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, ptr: &c::bch_extent_ptr) {
     extent_ptr_to_text(out, c.map(Fs::from_c), ptr, &read_lock());
 }
 
 #[cold]
 #[c_export]
-pub fn bch2_bkey_ptrs_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>>, k: BkeySC<'_>) {
+pub fn bch2_bkey_ptrs_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
     bkey_ptrs_to_text(out, c.map(Fs::from_c), k);
 }
 
 #[c_export]
-pub fn bch2_btree_ptr_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
+pub fn bch2_btree_ptr_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
     -> c_int
 {
     ret_to_c(btree_ptr_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
@@ -46,12 +47,12 @@ pub fn bch2_btree_ptr_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::b
 
 #[cold]
 #[c_export]
-pub fn bch2_btree_ptr_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_btree_ptr_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
     bkey_ptrs_to_text(out, Some(Fs::from_c(c)), k);
 }
 
 #[c_export]
-pub fn bch2_btree_ptr_v2_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
+pub fn bch2_btree_ptr_v2_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
     -> c_int
 {
     ret_to_c(btree_ptr_v2_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
@@ -59,7 +60,7 @@ pub fn bch2_btree_ptr_v2_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c
 
 #[cold]
 #[c_export]
-pub fn bch2_btree_ptr_v2_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_btree_ptr_v2_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
     btree_ptr_v2_to_text(out, Fs::from_c(c), k);
 }
 
@@ -85,22 +86,22 @@ pub fn bch2_bkey_has_device_c(c: &Fs, k: BkeySC<'_>, dev: c_uint) -> *const c::b
 }
 
 #[c_export]
-pub fn bch2_bkey_devs_rw(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) -> bool {
+pub fn bch2_bkey_devs_rw(c: &Opaque<Fs>, k: BkeySC<'_>) -> bool {
     k.arm::<Ptrs>().is_none_or(|k| k.devs_rw(Fs::from_c(c)))
 }
 
 #[c_export]
-pub fn bch2_bkey_has_target(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, target: c_uint) -> bool {
+pub fn bch2_bkey_has_target(c: &Opaque<Fs>, k: BkeySC<'_>, target: c_uint) -> bool {
     k.arm::<Ptrs>().is_some_and(|k| k.has_target(Fs::from_c(c), Target::decode(target)))
 }
 
 #[c_export]
-pub fn bch2_bkey_in_target(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, target: c_uint) -> bool {
+pub fn bch2_bkey_in_target(c: &Opaque<Fs>, k: BkeySC<'_>, target: c_uint) -> bool {
     k.arm::<Ptrs>().is_none_or(|k| k.in_target(Fs::from_c(c), Target::decode(target)))
 }
 
 #[c_export]
-pub fn bch2_bkey_matches_ptr(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, m: c::bch_extent_ptr, offset: u64) -> bool {
+pub fn bch2_bkey_matches_ptr(c: &Opaque<Fs>, k: BkeySC<'_>, m: c::bch_extent_ptr, offset: u64) -> bool {
     k.arm::<Ptrs>().is_some_and(|k| k.matches_ptr(Fs::from_c(c), &m, offset))
 }
 
@@ -113,7 +114,7 @@ pub fn bch2_extents_match(c: &Fs, k1: BkeySC<'_>, k2: BkeySC<'_>) -> bool {
 
 #[cold]
 #[c_export]
-pub fn bch2_io_failures_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, failed: &c::bch_io_failures) {
+pub fn bch2_io_failures_to_text(out: &mut Printbuf, c: &Opaque<Fs>, failed: &c::bch_io_failures) {
     failed.to_text(out, Fs::from_c(c));
 }
 
@@ -142,7 +143,7 @@ pub fn bch2_mark_io_failure(failed: &mut c::bch_io_failures, p: &c::extent_ptr_d
 /// 1 and @pick written, 0 for nothing to read, or an error. @failed may be
 /// NULL, and @pick is written, not read.
 #[c_export]
-pub fn bch2_bkey_pick_read_device(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, failed: Option<&c::bch_io_failures>,
+pub fn bch2_bkey_pick_read_device(c: &Opaque<Fs>, k: BkeySC<'_>, failed: Option<&c::bch_io_failures>,
                                   pick: &mut MaybeUninit<c::extent_ptr_decoded>, preferred_dev: c_uint,
                                   flags: c_uint) -> c_int {
     match k.pick_read_device(Fs::from_c(c), failed, preferred_dev, c::bch_read_flags::from_bits_retain(flags)) {

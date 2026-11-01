@@ -302,7 +302,7 @@ pub fn get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_opts {
 
 #[c_export]
 pub fn bch2_inode_opts_get_inode(
-    c:     &Opaque<c::bch_fs>,
+    c:     &Opaque<Fs>,
     inode: &c::bch_inode_unpacked,
     ret:   &mut c::bch_inode_opts,
 ) {
@@ -646,7 +646,7 @@ fn propagate_one(
 
 #[cold]
 #[c_export]
-pub fn bch2_logged_op_inode_opt_propagate_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_logged_op_inode_opt_propagate_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
     let op = c::LoggedOpInodeOptPropagate::val_copy_pad(k).expect("an inode_opt_propagate op");
 
     write!(out, "inum={} origin={} cursor={}",

@@ -1040,19 +1040,19 @@ pub fn bch2_trans_mark_metadata_bucket<'t>(trans: &'t BtreeTrans<'t>, ca: &c::bc
 }
 
 #[c_export]
-pub fn bch2_trans_mark_dev_sb(c: &Opaque<c::bch_fs>, ca: &c::bch_dev, flags: c::btree_iter_update_trigger_flags)
+pub fn bch2_trans_mark_dev_sb(c: &Opaque<Fs>, ca: &c::bch_dev, flags: c::btree_iter_update_trigger_flags)
     -> c_int
 {
     ret_to_c(Fs::from_c(c).trans_mark_dev_sb(ca, UpdateTriggerFlags::from_bits_retain(flags.bits())))
 }
 
 #[c_export]
-pub fn bch2_trans_mark_dev_sbs_flags(c: &Opaque<c::bch_fs>, flags: c::btree_iter_update_trigger_flags) -> c_int {
+pub fn bch2_trans_mark_dev_sbs_flags(c: &Opaque<Fs>, flags: c::btree_iter_update_trigger_flags) -> c_int {
     ret_to_c(Fs::from_c(c).trans_mark_dev_sbs(UpdateTriggerFlags::from_bits_retain(flags.bits())))
 }
 
 #[c_export]
-pub fn bch2_trans_mark_dev_sbs(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_trans_mark_dev_sbs(c: &Opaque<Fs>) -> c_int {
     ret_to_c(Fs::from_c(c).trans_mark_dev_sbs(UpdateTriggerFlags::TRANSACTIONAL))
 }
 
@@ -1129,13 +1129,13 @@ impl c::bch_dev {
 }
 
 #[c_export]
-pub fn bch2_dev_buckets_resize(_c: &Opaque<c::bch_fs>, ca: &c::bch_dev, nbuckets: u64) -> c_int {
+pub fn bch2_dev_buckets_resize(_c: &Opaque<Fs>, ca: &c::bch_dev, nbuckets: u64) -> c_int {
     ret_to_c(ca.buckets_resize(nbuckets))
 }
 
 /// @ca is being set up: nothing else has it yet.
 #[c_export]
-pub fn bch2_dev_buckets_alloc(_c: &Opaque<c::bch_fs>, ca: &mut c::bch_dev) -> c_int {
+pub fn bch2_dev_buckets_alloc(_c: &Opaque<Fs>, ca: &mut c::bch_dev) -> c_int {
     ret_to_c(ca.buckets_alloc())
 }
 

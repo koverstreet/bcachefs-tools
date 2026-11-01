@@ -2,6 +2,7 @@
 //! name, and each a C name over a Rust function, with C's types - superblock
 //! pointers, C strings, an errcode returned. Deleted with the last C caller.
 
+use crate::fs::Fs;
 use super::*;
 use crate::errcode::ret_to_c;
 use crate::util::ffi::Opaque;
@@ -93,7 +94,7 @@ pub unsafe fn bch2_opts_validate_sb(sb: *mut Head<c::bch_sb>, out: &mut Printbuf
 /// @sb, if not NULL, is a validated superblock.
 #[cold]
 #[c_export]
-pub unsafe fn bch2_opts_to_text(out: &mut Printbuf, opts: c::bch_opts, c: Option<&Opaque<c::bch_fs>>,
+pub unsafe fn bch2_opts_to_text(out: &mut Printbuf, opts: c::bch_opts, c: Option<&Opaque<Fs>>,
                                 sb: *mut Head<c::bch_sb>,
                                 mask: Option<&c::bch_opts_mask>,
                                 show_mask: c_uint, hide_mask: c_uint, flags: c_uint) {
@@ -112,7 +113,7 @@ pub fn bch2_opts_hooks_pre_set(c: &Fs) -> c_int {
 /// # Safety
 /// @name is a C string; @val one, or NULL.
 #[c_export]
-pub unsafe fn bch2_parse_one_mount_opt(c: Option<&Opaque<c::bch_fs>>, opts: Option<&mut c::bch_opts>,
+pub unsafe fn bch2_parse_one_mount_opt(c: Option<&Opaque<Fs>>, opts: Option<&mut c::bch_opts>,
                                        parse_later: Option<&mut Printbuf>, name: *const c_char,
                                        val: *const c_char, err: &mut Printbuf) -> c_int {
     // SAFETY: the caller's
@@ -124,7 +125,7 @@ pub unsafe fn bch2_parse_one_mount_opt(c: Option<&Opaque<c::bch_fs>>, opts: Opti
 /// # Safety
 /// @options is a C string, or NULL.
 #[c_export]
-pub unsafe fn bch2_parse_mount_opts(c: Option<&Opaque<c::bch_fs>>, opts: &mut c::bch_opts,
+pub unsafe fn bch2_parse_mount_opts(c: Option<&Opaque<Fs>>, opts: &mut c::bch_opts,
                                     parse_later: Option<&mut Printbuf>, options: *const c_char,
                                     ignore_unknown: bool) -> c_int {
     if options.is_null() {

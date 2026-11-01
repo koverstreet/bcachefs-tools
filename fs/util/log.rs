@@ -29,7 +29,7 @@ use cstruct_macros::{CStruct, c_enum, c_export, c_extern, TypeInfo};
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_log_msg {
-    pub c: *mut c::bch_fs,
+    pub c: *mut Fs,
     pub loglevel: u8,
     pub m: c::printbuf,
 }
@@ -51,9 +51,9 @@ c_enum! {
 
 c_extern! {
     #[c_printf(2, 3)]
-    pub fn __bch2_print(c: *mut c::bch_fs, fmt: *const c_char, ...);
+    pub fn __bch2_print(c: *mut Fs, fmt: *const c_char, ...);
     pub fn bch2_ratelimit_state_init(rs: *mut c::ratelimit_state);
-    pub fn bch2_ratelimit_suppress(c: *mut c::bch_fs, rs: *mut c::ratelimit_state,
+    pub fn bch2_ratelimit_suppress(c: *mut Fs, rs: *mut c::ratelimit_state,
                                    func: *const c_char) -> bool;
     pub fn bch2_rust_warn(file: *const c_char, line: c_uint);
 }
@@ -326,7 +326,7 @@ fn prefix_level(prefix: &[u8]) -> Option<u8> {
 /// # Safety
 /// @str is NULL or a string.
 #[c_export]
-pub unsafe fn bch2_print_str_loglevel(c: &Opaque<c::bch_fs>, loglevel: c_int, str: *const c_char) {
+pub unsafe fn bch2_print_str_loglevel(c: &Opaque<Fs>, loglevel: c_int, str: *const c_char) {
     if let Some(s) = unsafe { c_bytes(str) } {
         print_bytes(Fs::from_c(c), u8::try_from(loglevel).ok(), s)
     }
@@ -335,7 +335,7 @@ pub unsafe fn bch2_print_str_loglevel(c: &Opaque<c::bch_fs>, loglevel: c_int, st
 /// # Safety
 /// @prefix a string; @str NULL or one.
 #[c_export]
-pub unsafe fn bch2_print_str(c: &Opaque<c::bch_fs>, prefix: *const c_char, str: *const c_char) {
+pub unsafe fn bch2_print_str(c: &Opaque<Fs>, prefix: *const c_char, str: *const c_char) {
     if let Some(s) = unsafe { c_bytes(str) } {
         let level = prefix_level(unsafe { c_bytes(prefix) }.unwrap_or_default());
         print_bytes(Fs::from_c(c), level, s)

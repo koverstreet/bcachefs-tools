@@ -166,7 +166,7 @@ unsafe fn mark_nouse_range(ca: *const c::bch_dev, sector_from: u64, sector_to: u
 
 /// Mark all space NOT covered by the reserved extents as nouse,
 /// plus the space for the default superblock layout.
-unsafe fn mark_unreserved_space(fs: *mut c::bch_fs, extents: &[CRange]) {
+unsafe fn mark_unreserved_space(fs: *mut Fs, extents: &[CRange]) {
     let fs = unsafe { &*fs };
     let ca = fs.devs[0].as_ptr();
     let mi = unsafe { &*ca }.mi.get();

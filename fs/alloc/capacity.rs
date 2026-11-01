@@ -130,7 +130,7 @@ pub(crate) fn recalc_capacity(fs: &Fs) {
 }
 
 #[c_export]
-pub fn bch2_recalc_capacity(c: &Opaque<c::bch_fs>) {
+pub fn bch2_recalc_capacity(c: &Opaque<Fs>) {
     recalc_capacity(Fs::from_c(c))
 }
 
@@ -220,7 +220,7 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_dev_allocator_remove(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {
+pub fn bch2_dev_allocator_remove(c: &Opaque<Fs>, ca: &c::bch_dev) {
     Fs::from_c(c).dev_allocator_remove(ca)
 }
 
@@ -232,7 +232,7 @@ impl crate::fs::StateLockWrite<'_> {
 
 /// @ca going read-write: into rw_devs[].
 #[c_export]
-pub fn bch2_dev_allocator_add(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {
+pub fn bch2_dev_allocator_add(c: &Opaque<Fs>, ca: &c::bch_dev) {
     let fs = Fs::from_c(c);
     fs.state_lock.assert_held_any();
     dev_allocator_set_rw(fs, ca, true);
@@ -780,7 +780,7 @@ impl Fs {
 
 /// buckets.h's fastpath's, when this CPU's cache is short.
 #[c_export]
-pub fn bch2_disk_reservation_add_slowpath(c: &Opaque<c::bch_fs>, res: &c::disk_reservation, sectors: u64,
+pub fn bch2_disk_reservation_add_slowpath(c: &Opaque<Fs>, res: &c::disk_reservation, sectors: u64,
                                           flags: c::bch_reservation_flags) -> c_int {
     ret_to_c(Fs::from_c(c).disk_reservation_add_slowpath(res, sectors, flags))
 }
@@ -788,7 +788,7 @@ pub fn bch2_disk_reservation_add_slowpath(c: &Opaque<c::bch_fs>, res: &c::disk_r
 /// buckets.h's bch2_disk_reservation_add()'s, at fewer replicas than asked:
 /// @ip is where.
 #[c_export]
-pub fn bch2_disk_reservation_degraded(c: &Opaque<c::bch_fs>, wanted: c_uint, got: c_uint, sectors: u64, ip: c_ulong) {
+pub fn bch2_disk_reservation_degraded(c: &Opaque<Fs>, wanted: c_uint, got: c_uint, sectors: u64, ip: c_ulong) {
     Fs::from_c(c).disk_reservation_degraded(wanted, got, sectors, |out| prt_symbol(out, ip));
 }
 

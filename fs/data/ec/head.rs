@@ -327,7 +327,7 @@ pub(crate) fn stripe_heads_stop(fs: &Fs, ca: Option<&c::bch_dev>) {
 /// The recovery pass that read the stripes into memory: there's nothing to
 /// read now, but passes keep their numbers.
 #[c_export]
-pub fn bch2_stripes_read(_c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_stripes_read(_c: &Opaque<Fs>) -> c_int {
     0
 }
 

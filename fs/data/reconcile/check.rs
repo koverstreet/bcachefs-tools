@@ -520,7 +520,7 @@ fn check_reconcile_work(fs: &Fs) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_check_reconcile_work(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_check_reconcile_work(c: &Opaque<Fs>) -> c_int {
     ret_to_c(check_reconcile_work(Fs::from_c(c)))
 }
 

@@ -165,7 +165,7 @@ pub fn ioctl_ret(ret: Result<c_long, BchError>) -> c_long {
 }
 
 #[c_export]
-pub fn bch2_fs_ioctl(c: &Opaque<c::bch_fs>, cmd: c_uint, arg: *mut c_void) -> c_long {
+pub fn bch2_fs_ioctl(c: &Opaque<Fs>, cmd: c_uint, arg: *mut c_void) -> c_long {
     ioctl_ret(fs_ioctl(Fs::from_c(c), cmd, UserPtr::from_ptr(arg)))
 }
 

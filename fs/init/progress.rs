@@ -368,7 +368,7 @@ unsafe fn c_msg(msg: *const c_char) -> Option<&'static CStr> {
 pub unsafe extern "C" fn bch2_progress_init(
     s:     &c::progress_indicator,
     msg:   *const c_char,
-    c:     &Opaque<c::bch_fs>,
+    c:     &Opaque<Fs>,
     leaf_btree_id_mask:  u64,
     inner_btree_id_mask: u64,
 ) {
@@ -403,6 +403,6 @@ pub fn bch2_progress_update_iter<'t>(
 
 /// bch2_progress_update_count().
 #[c_export]
-pub fn bch2_progress_update_count(c: &Opaque<c::bch_fs>, s: &c::progress_indicator) {
+pub fn bch2_progress_update_count(c: &Opaque<Fs>, s: &c::progress_indicator) {
     s.update_count(Fs::from_c(c))
 }

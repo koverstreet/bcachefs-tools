@@ -602,7 +602,7 @@ pub fn readdir(
 /// @ctx the VFS's (or FUSE's), its actor valid for the call.
 #[c_export]
 pub unsafe extern "C" fn bch2_readdir(
-    c:         &Opaque<c::bch_fs>,
+    c:         &Opaque<Fs>,
     dir:       c::subvol_inum,
     hash_info: &mut c::bch_hash_info,
     ctx:       *mut c::dir_context,

@@ -802,7 +802,7 @@ fn dev_freespace_init(fs: &Fs, ca: &c::bch_dev, bucket_start: u64, bucket_end: u
 }
 
 #[c_export]
-pub fn bch2_dev_freespace_init(c: &Opaque<c::bch_fs>, ca: &c::bch_dev, bucket_start: u64, bucket_end: u64)
+pub fn bch2_dev_freespace_init(c: &Opaque<Fs>, ca: &c::bch_dev, bucket_start: u64, bucket_end: u64)
     -> c_int
 {
     ret_to_c(dev_freespace_init(Fs::from_c(c), ca, bucket_start, bucket_end))
@@ -837,6 +837,6 @@ fn fs_freespace_init(fs: &Fs) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_fs_freespace_init(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_fs_freespace_init(c: &Opaque<Fs>) -> c_int {
     ret_to_c(fs_freespace_init(Fs::from_c(c)))
 }

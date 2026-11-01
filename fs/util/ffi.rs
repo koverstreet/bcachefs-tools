@@ -10,7 +10,7 @@
 use core::cell::UnsafeCell;
 use core::marker::PhantomPinned;
 
-/// A C object as an entry point's argument: `&Opaque<c::bch_fs>` where C
+/// A C object as an entry point's argument: `&Opaque<Fs>` where C
 /// passes a `struct bch_fs *`. Same ABI; transparent. A transaction is
 /// BtreeTrans, itself over one.
 ///

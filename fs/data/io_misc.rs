@@ -256,7 +256,7 @@ pub fn fpunch(fs: &Fs, inum: c::subvol_inum, start: u64, end: u64, i_sectors_del
 /// @i_sectors_delta is valid for the call.
 #[c_export]
 pub unsafe extern "C" fn bch2_fpunch(
-    c:               &Opaque<c::bch_fs>,
+    c:               &Opaque<Fs>,
     inum:            c::subvol_inum,
     start:           u64,
     end:             u64,
@@ -269,7 +269,7 @@ pub unsafe extern "C" fn bch2_fpunch(
 
 #[cold]
 #[c_export]
-pub fn bch2_logged_op_truncate_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_logged_op_truncate_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
     let op = c::LoggedOpTruncate::val_copy_pad(k).expect("a truncate op");
 
     write!(out, "subvol={}", op.subvol.get());
@@ -350,7 +350,7 @@ pub fn truncate(fs: &Fs, inum: c::subvol_inum, new_i_size: u64, i_sectors_delta:
 /// @i_sectors_delta is valid for the call.
 #[c_export]
 pub unsafe extern "C" fn bch2_truncate(
-    c:               &Opaque<c::bch_fs>,
+    c:               &Opaque<Fs>,
     inum:            c::subvol_inum,
     new_i_size:      u64,
     i_sectors_delta: *mut u64,
@@ -362,7 +362,7 @@ pub unsafe extern "C" fn bch2_truncate(
 
 #[cold]
 #[c_export]
-pub fn bch2_logged_op_finsert_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_logged_op_finsert_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
     let op = c::LoggedOpFinsert::val_copy_pad(k).expect("a finsert op");
 
     write!(out, "subvol={}", op.subvol.get());
@@ -647,7 +647,7 @@ pub fn fcollapse_finsert(
 /// @i_sectors_delta is valid for the call.
 #[c_export]
 pub unsafe extern "C" fn bch2_fcollapse_finsert(
-    c:               &Opaque<c::bch_fs>,
+    c:               &Opaque<Fs>,
     inum:            c::subvol_inum,
     offset:          u64,
     len:             u64,

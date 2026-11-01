@@ -22,7 +22,7 @@ nest! {
     #[repr(C)]
     #[derive(CStruct)]
     pub struct btree_read_bio {
-        pub c: *mut c::bch_fs,
+        pub c: *mut Fs,
         pub ca: *mut c::bch_dev, /* stashed at submit; see bch_write_bio */
         pub b: *mut c::BtreeNode,
         pub start_time: u64,
@@ -51,7 +51,7 @@ c_typedef! {
 c_extern! {
     pub fn bch2_btree_node_scrub(trans: *mut c::btree_trans, btree: Btree, level: c_uint,
                                  k: c::bkey_s_c, dev: c_uint) -> c_int;
-    pub fn bch2_btree_flush_all_reads(c: *mut c::bch_fs) -> bool;
+    pub fn bch2_btree_flush_all_reads(c: *mut Fs) -> bool;
 }
 
 impl c::bset__head {

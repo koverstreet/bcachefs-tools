@@ -32,6 +32,7 @@ pub mod c {
 		// C's: the unsized vstructs bindgen's fns name, as C's structs,
 		// Head<T>: an item beats the glob
 		type bch_sb = bcachefs_kernel::util::vstructs::Head<bcachefs_kernel::c::bch_sb>;
+		type bch_fs = bcachefs_kernel::fs::Fs;
 
 		include!(concat!(env!("OUT_DIR"), "/non_fs.rs"));
 	}

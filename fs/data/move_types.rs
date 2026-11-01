@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Fs;
 use crate::cstructs::c;
 use crate::types::{DArray, c_default};
 use crate::util::projections::Volatile;
@@ -100,7 +101,7 @@ c_typedef! {
 }
 
 c_extern! {
-    pub fn bch2_scrub_journal_do_repairs(c: *mut c::bch_fs) -> c_int;
-    pub fn bch2_fs_move_exit(c: *mut c::bch_fs);
-    pub fn bch2_fs_move_init(c: *mut c::bch_fs);
+    pub fn bch2_scrub_journal_do_repairs(c: *mut Fs) -> c_int;
+    pub fn bch2_fs_move_exit(c: *mut Fs);
+    pub fn bch2_fs_move_init(c: *mut Fs);
 }

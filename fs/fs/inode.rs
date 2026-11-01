@@ -382,7 +382,7 @@ pub fn unpack(fs: &Fs, k: BkeySC<'_>) -> c::bch_inode_unpacked {
 /// For C: bch2_inode_unpack().
 #[c_export]
 pub extern "C" fn bch2_inode_unpack(
-    c:        &Opaque<c::bch_fs>,
+    c:        &Opaque<Fs>,
     k:        BkeySC<'_>,
     unpacked: &mut MaybeUninit<c::bch_inode_unpacked>,
 ) {
@@ -496,7 +496,7 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
 /// For C: bch2_inode_pack().
 #[c_export]
 pub extern "C" fn bch2_inode_pack(
-    _c:     &Opaque<c::bch_fs>,
+    _c:     &Opaque<Fs>,
     packed: &mut MaybeUninit<c::bkey_inode_buf>,
     inode:  &c::bch_inode_unpacked,
 ) {
@@ -722,7 +722,7 @@ pub fn find_by_inum(fs: &Fs, inum: c::subvol_inum) -> Result<c::bch_inode_unpack
 /// For C's VFS and FUSE: bch2_inode_find_by_inum().
 #[c_export]
 pub extern "C" fn bch2_inode_find_by_inum(
-    c:     &Opaque<c::bch_fs>,
+    c:     &Opaque<Fs>,
     inum:  c::subvol_inum,
     inode: &mut MaybeUninit<c::bch_inode_unpacked>,
 ) -> core::ffi::c_int {
@@ -916,7 +916,7 @@ fn validate_str_hash(v: &BkeyValidate<'_, '_>, str_hash: u64) -> Result<(), BchE
 
 /// A validate export, for an inode version's @validate.
 fn validate_c(
-    c:        &Opaque<c::bch_fs>,
+    c:        &Opaque<Fs>,
     k:        BkeySC<'_>,
     from:     &c::bkey_validate_context,
     validate: fn(&BkeyValidate<'_, '_>) -> Result<(), BchError>,
@@ -927,7 +927,7 @@ fn validate_c(
 /// For C's bkey_ops: bch2_inode_validate().
 #[c_export]
 pub fn bch2_inode_validate(
-    c:    &Opaque<c::bch_fs>,
+    c:    &Opaque<Fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
 ) -> core::ffi::c_int {
@@ -940,7 +940,7 @@ pub fn bch2_inode_validate(
 /// For C's bkey_ops: bch2_inode_v2_validate().
 #[c_export]
 pub fn bch2_inode_v2_validate(
-    c:    &Opaque<c::bch_fs>,
+    c:    &Opaque<Fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
 ) -> core::ffi::c_int {
@@ -954,7 +954,7 @@ pub fn bch2_inode_v2_validate(
 /// fixed ones, within the value.
 #[c_export]
 pub fn bch2_inode_v3_validate(
-    c:    &Opaque<c::bch_fs>,
+    c:    &Opaque<Fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
 ) -> core::ffi::c_int {
@@ -975,7 +975,7 @@ pub fn bch2_inode_v3_validate(
 /// For C's bkey_ops: bch2_inode_generation_validate().
 #[c_export]
 pub fn bch2_inode_generation_validate(
-    c:    &Opaque<c::bch_fs>,
+    c:    &Opaque<Fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
 ) -> core::ffi::c_int {
@@ -1058,7 +1058,7 @@ pub extern "C" fn bch2_inode_unpacked_to_text(out: &mut Printbuf, inode: &c::bch
 #[c_export]
 pub fn bch2_inode_to_text(
     out: &mut Printbuf,
-    c:   &Opaque<c::bch_fs>,
+    c:   &Opaque<Fs>,
     k:   BkeySC<'_>,
 ) {
     let inode = unpack(Fs::from_c(c), k);
@@ -1070,7 +1070,7 @@ pub fn bch2_inode_to_text(
 #[c_export]
 pub fn bch2_inode_generation_to_text(
     out: &mut Printbuf,
-    _c:  &Opaque<c::bch_fs>,
+    _c:  &Opaque<Fs>,
     k:   BkeySC<'_>,
 ) {
     let generation = (k.arm::<c::InodeGeneration>().expect("an inode_generation").v().bi_generation).get();
@@ -1259,7 +1259,7 @@ fn alloc_cursor_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 /// For C's bkey_ops: bch2_inode_alloc_cursor_validate().
 #[c_export]
 pub fn bch2_inode_alloc_cursor_validate(
-    c:    &Opaque<c::bch_fs>,
+    c:    &Opaque<Fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
 ) -> core::ffi::c_int {
@@ -1272,7 +1272,7 @@ pub fn bch2_inode_alloc_cursor_validate(
 #[c_export]
 pub fn bch2_inode_alloc_cursor_to_text(
     out: &mut Printbuf,
-    c:   &Opaque<c::bch_fs>,
+    c:   &Opaque<Fs>,
     k:   BkeySC<'_>,
 ) {
     let fs = Fs::from_c(c);
@@ -1711,7 +1711,7 @@ pub fn rm(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
 
 /// For C's VFS: bch2_inode_rm().
 #[c_export]
-pub extern "C" fn bch2_inode_rm(c: &Opaque<c::bch_fs>, inum: c::subvol_inum) -> core::ffi::c_int {
+pub extern "C" fn bch2_inode_rm(c: &Opaque<Fs>, inum: c::subvol_inum) -> core::ffi::c_int {
     ret_to_c(rm(Fs::from_c(c), inum))
 }
 
@@ -1913,7 +1913,7 @@ pub fn init_early(fs: &Fs, inode: &mut c::bch_inode_unpacked) {
 /// For C's VFS, subvolume creation and recovery: bch2_inode_init_early().
 #[c_export]
 pub extern "C" fn bch2_inode_init_early(
-    c:     &Opaque<c::bch_fs>,
+    c:     &Opaque<Fs>,
     inode: &mut MaybeUninit<c::bch_inode_unpacked>,
 ) {
     init_early(Fs::from_c(c), inode.write(Default::default()))
@@ -1988,7 +1988,7 @@ pub fn init(
 /// For C's recovery: bch2_inode_init(). @parent may be NULL.
 #[c_export]
 pub extern "C" fn bch2_inode_init(
-    c:      &Opaque<c::bch_fs>,
+    c:      &Opaque<Fs>,
     inode:  &mut MaybeUninit<c::bch_inode_unpacked>,
     uid:    c::uid_t,
     gid:    c::gid_t,

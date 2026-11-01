@@ -191,7 +191,7 @@ impl io_clock {
 }
 
 #[c_export]
-pub fn bch2_increment_clock(c: &Opaque<c::bch_fs>, sectors: u64, rw: c_int) {
+pub fn bch2_increment_clock(c: &Opaque<Fs>, sectors: u64, rw: c_int) {
     Fs::from_c(c).io_clock[rw as usize].increment(sectors)
 }
 

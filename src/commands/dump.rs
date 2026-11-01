@@ -228,7 +228,7 @@ fn sanitize_val(fs: &Fs, mut k: BkeyS, opts: SanitizeOpts) -> bool {
 
 /// Sanitize a journal buffer in-place: walk jset entries, handle encryption,
 /// zero inline data, optionally scramble filenames, clear checksums.
-fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
+fn sanitize_journal(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
     let fs = unsafe { Fs::borrow_raw(fs_raw) };
     let jset_magic = fs.sb_lock().sb().jset_magic();
     let block_bits = fs.block_bits();
@@ -283,7 +283,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
 
 /// Sanitize a btree node buffer in-place: walk bset entries, handle
 /// encryption, zero inline data, optionally scramble filenames.
-fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
+fn sanitize_btree(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
     let fs = unsafe { Fs::borrow_raw(fs_raw) };
     let bset_magic = fs.sb_lock().sb().bset_magic();
     let block_bits = fs.block_bits();
@@ -490,11 +490,11 @@ fn get_sb_journal(fs: &Fs, ca: &c::bch_dev, entire_journal: bool, d: &mut DumpDe
 
 fn write_sanitized_ranges(
     img: &mut Qcow2Image<'_>,
-    fs_raw: *mut c::bch_fs,
+    fs_raw: *mut Fs,
     ranges: &mut Ranges,
     bucket_bytes: u64,
     opts: SanitizeOpts,
-    sanitize_fn: fn(*mut c::bch_fs, &mut [u8], SanitizeOpts) -> Result<()>,
+    sanitize_fn: fn(*mut Fs, &mut [u8], SanitizeOpts) -> Result<()>,
 ) -> Result<()> {
     ranges_sort(ranges);
     let mut words = vec![0u64; bucket_bytes as usize / 8];

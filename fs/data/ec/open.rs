@@ -48,7 +48,7 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_stripe_is_open(c: &Opaque<c::bch_fs>, idx: u64) -> bool {
+pub fn bch2_stripe_is_open(c: &Opaque<Fs>, idx: u64) -> bool {
     Fs::from_c(c).stripe_is_open(idx)
 }
 
@@ -56,7 +56,7 @@ pub fn bch2_stripe_is_open(c: &Opaque<c::bch_fs>, idx: u64) -> bool {
 /// locks: open stripe @idx - 1, or 0 if it's open already - for the
 /// OpenStripe::tryget_existing() that called it to hold.
 #[c_export]
-pub fn bch2_stripe_tryget(c: &Opaque<c::bch_fs>, idx: u64) -> c_int {
+pub fn bch2_stripe_tryget(c: &Opaque<Fs>, idx: u64) -> c_int {
     match Fs::from_c(c).stripe_open(idx) {
         Ok(opened) => opened.into(),
         Err(e) => ret_to_c(Err(e)),

@@ -1458,17 +1458,17 @@ fn thin_pointers(name: &str, cfg: &Option<cstruct::Cfg>, params: &[(String, Stri
 /// A Rust fn C calls:
 ///
 ///   #[c_export]
-///   pub fn bch2_xattr_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>,
+///   pub fn bch2_xattr_validate(c: &Opaque<Fs>, k: BkeySC<'_>,
 ///                              from: &c::bkey_validate_context) -> c_int { .. }
 ///
 /// C gets the prototype, as c_extern!'s, from the fn's signature - in
 /// foo/bar_gen.h, for a fn in foo/bar.rs - each Rust type as C's
-/// (cstruct.rs, c_export_type()): &Opaque<bch_fs> is struct bch_fs *,
+/// (cstruct.rs, c_export_type()): &Opaque<Fs> is struct bch_fs *,
 /// BkeySC struct bkey_s_c. An extern "C" fn is the symbol C calls, made
 /// #[no_mangle]. Any other is called through a definition with exactly C's
 /// signature, made here, which transmutes what isn't C's type: kCFI checks
 /// every call through a pointer against a hash of the callee's type, and a fn
-/// in Rust's types (&Opaque<bch_fs>, BkeySC) never hashes as C's prototype
+/// in Rust's types (&Opaque<Fs>, BkeySC) never hashes as C's prototype
 /// does.
 ///
 /// And a static C reads - an ops table:

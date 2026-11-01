@@ -159,13 +159,13 @@ fn lru_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_lru_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
+pub fn bch2_lru_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
     ret_to_c(lru_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
 #[cold]
 #[c_export]
-pub fn bch2_lru_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_lru_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
     write!(out, "idx {}", k.arm::<c::Lru>().expect("an lru key").v().idx.get());
 }
 

@@ -44,7 +44,7 @@ const BCH_REPLICAS_MAX: u32 = 4;
 const BTREE_MAX_DEPTH: u32 = 4;
 
 unsafe extern "C" {
-    fn strip_fs_alloc(c: *mut c::bch_fs);
+    fn strip_fs_alloc(c: *mut Fs);
 }
 
 // --- Core logic, converted from C ---

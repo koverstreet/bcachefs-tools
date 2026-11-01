@@ -470,7 +470,7 @@ pub fn hash_info_init(
 
 /// hash_info_init(), for C: @ret is set only on success.
 #[c_export]
-pub fn bch2_hash_info_init(c: &Opaque<c::bch_fs>, bi: &c::bch_inode_unpacked,
+pub fn bch2_hash_info_init(c: &Opaque<Fs>, bi: &c::bch_inode_unpacked,
                            ret: &mut c::bch_hash_info) -> c_int {
     ret_to_c(hash_info_init(Fs::from_c(c), bi).map(|info| *ret = info))
 }

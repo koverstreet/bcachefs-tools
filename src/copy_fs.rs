@@ -55,7 +55,7 @@ fn file_type_to_dtype(ft: rustix::fs::FileType) -> u8 {
 
 unsafe extern "C" {
     fn rust_link_data(
-        c: *mut c::bch_fs,
+        c: *mut Fs,
         dst_inum: u64,
         sectors_delta: *mut i64,
         logical: u64,

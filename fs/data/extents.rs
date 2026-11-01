@@ -640,7 +640,7 @@ pub fn extent_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
 }
 
 #[c_export]
-pub fn bch2_extent_merge(c: &Opaque<c::bch_fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
+pub fn bch2_extent_merge(c: &Opaque<Fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
     extent_merge(Fs::from_c(c), l, r)
 }
 
@@ -655,7 +655,7 @@ fn reservation_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_reservation_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
+pub fn bch2_reservation_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
     -> c_int
 {
     ret_to_c(reservation_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
@@ -663,7 +663,7 @@ pub fn bch2_reservation_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c:
 
 #[cold]
 #[c_export]
-pub fn bch2_reservation_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_reservation_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
     let r = k.arm::<c::Reservation>().expect("a reservation").v();
 
     write!(out, "generation {} replicas {}", r.generation.get(), r.nr_replicas);
@@ -671,7 +671,7 @@ pub fn bch2_reservation_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: B
 
 /// Adjacent reservations of the same generation and replicas are one.
 #[c_export]
-pub fn bch2_reservation_merge(_c: &Opaque<c::bch_fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
+pub fn bch2_reservation_merge(_c: &Opaque<Fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
     let lv = l.as_sc().arm::<c::Reservation>().expect("a reservation").v();
     let rv = r.arm::<c::Reservation>().expect("a reservation").v();
 

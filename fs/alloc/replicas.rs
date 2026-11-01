@@ -171,7 +171,7 @@ pub unsafe fn bch2_replicas_entry_to_text(out: &mut Printbuf, e: *const Head<c::
 /// # Safety
 /// @e is an entry, as long as its nr_devs says.
 #[c_export]
-pub unsafe fn bch2_replicas_entry_validate(e: *const Head<c::bch_replicas_entry_v1>, c: &Opaque<c::bch_fs>,
+pub unsafe fn bch2_replicas_entry_validate(e: *const Head<c::bch_replicas_entry_v1>, c: &Opaque<Fs>,
                                            err: &mut Printbuf) -> c_int {
     let fs = Fs::from_c(c);
     // SAFETY: the caller's
@@ -358,7 +358,7 @@ impl<S: SbState> c::bch_sb<S> {
 }
 
 #[c_export]
-pub fn bch2_dev_has_data(_c: &Opaque<c::bch_fs>, ca: &c::bch_dev) -> c_uint {
+pub fn bch2_dev_has_data(_c: &Opaque<Fs>, ca: &c::bch_dev) -> c_uint {
     ca.has_data()
 }
 
@@ -408,7 +408,7 @@ pub(crate) fn can_read_with_devs(e: &Entry, devs: &c::bch_devs_mask, flags: u32,
 /// # Safety
 /// @e is an entry, as long as its nr_devs says.
 #[c_export]
-pub unsafe fn bch2_can_read_replicas_with_devs(_c: &Opaque<c::bch_fs>, devs: &c::bch_devs_mask,
+pub unsafe fn bch2_can_read_replicas_with_devs(_c: &Opaque<Fs>, devs: &c::bch_devs_mask,
                                                e: *const Head<c::bch_replicas_entry_v1>, flags: c_uint,
                                                err: Option<&mut Printbuf>) -> bool {
     // SAFETY: the caller's
@@ -477,7 +477,7 @@ pub(crate) fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::bc
 }
 
 #[c_export]
-pub fn bch2_can_write_fs_with_devs(c: &Opaque<c::bch_fs>, devs: c::bch_devs_mask, check: c::bch_write_check,
+pub fn bch2_can_write_fs_with_devs(c: &Opaque<Fs>, devs: c::bch_devs_mask, check: c::bch_write_check,
                                    flags: c_uint, err: &mut Printbuf) -> bool {
     can_write_with_devs(Fs::from_c(c), &devs, check, flags, err)
 }
@@ -954,7 +954,7 @@ impl Fs {
 /// # Safety
 /// @e is an entry, as long as its nr_devs says.
 #[c_export]
-pub unsafe fn bch2_replicas_marked(c: &Opaque<c::bch_fs>, e: *const Head<c::bch_replicas_entry_v1>) -> bool {
+pub unsafe fn bch2_replicas_marked(c: &Opaque<Fs>, e: *const Head<c::bch_replicas_entry_v1>) -> bool {
     // SAFETY: the caller's
     Fs::from_c(c).replicas_marked(unsafe { from_ffi(e) })
 }
@@ -962,7 +962,7 @@ pub unsafe fn bch2_replicas_marked(c: &Opaque<c::bch_fs>, e: *const Head<c::bch_
 /// # Safety
 /// @e is an entry, as long as its nr_devs says.
 #[c_export]
-pub unsafe fn bch2_mark_replicas(c: &Opaque<c::bch_fs>, e: *const Head<c::bch_replicas_entry_v1>) -> c_int {
+pub unsafe fn bch2_mark_replicas(c: &Opaque<Fs>, e: *const Head<c::bch_replicas_entry_v1>) -> c_int {
     // SAFETY: the caller's
     ret_to_c(Fs::from_c(c).mark_replicas(unsafe { from_ffi(e) }))
 }
@@ -970,7 +970,7 @@ pub unsafe fn bch2_mark_replicas(c: &Opaque<c::bch_fs>, e: *const Head<c::bch_re
 /// # Safety
 /// @e is an entry, as long as its nr_devs says.
 #[c_export]
-pub unsafe fn bch2_replicas_entry_get(c: &Opaque<c::bch_fs>, e: *const Head<c::bch_replicas_entry_v1>) -> c_int {
+pub unsafe fn bch2_replicas_entry_get(c: &Opaque<Fs>, e: *const Head<c::bch_replicas_entry_v1>) -> c_int {
     // SAFETY: the caller's
     ret_to_c(Fs::from_c(c).replicas_entry_get(unsafe { from_ffi(e) }))
 }
@@ -978,7 +978,7 @@ pub unsafe fn bch2_replicas_entry_get(c: &Opaque<c::bch_fs>, e: *const Head<c::b
 /// # Safety
 /// @e is an entry, as long as its nr_devs says.
 #[c_export]
-pub unsafe fn bch2_replicas_entry_put_many(c: &Opaque<c::bch_fs>, e: *const Head<c::bch_replicas_entry_v1>,
+pub unsafe fn bch2_replicas_entry_put_many(c: &Opaque<Fs>, e: *const Head<c::bch_replicas_entry_v1>,
                                            nr: c_uint) {
     // SAFETY: the caller's
     Fs::from_c(c).replicas_entry_put_many(unsafe { from_ffi(e) }, nr)
@@ -996,17 +996,17 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_replicas_gc_reffed(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_replicas_gc_reffed(c: &Opaque<Fs>) -> c_int {
     ret_to_c(Fs::from_c(c).replicas_gc_reffed())
 }
 
 #[c_export]
-pub fn bch2_replicas_gc_accounted(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_replicas_gc_accounted(c: &Opaque<Fs>) -> c_int {
     ret_to_c(Fs::from_c(c).replicas_gc_accounted())
 }
 
 #[c_export]
-pub fn bch2_can_read_fs_with_devs(c: &Opaque<c::bch_fs>, devs: &c::bch_devs_mask, flags: c_uint,
+pub fn bch2_can_read_fs_with_devs(c: &Opaque<Fs>, devs: &c::bch_devs_mask, flags: c_uint,
                                   err: Option<&mut Printbuf>) -> bool {
     Fs::from_c(c).can_read_fs_with_devs(devs, flags, err)
 }
@@ -1022,7 +1022,7 @@ impl Fs {
 
 /// The table emptied: for an image stripped of its replicas sections.
 #[c_export]
-pub fn bch2_replicas_clear(c: &Opaque<c::bch_fs>) {
+pub fn bch2_replicas_clear(c: &Opaque<Fs>) {
     *Fs::from_c(c).replicas.write() = ReplicasCpu::new();
 }
 

@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Fs;
 use crate::cstructs::c;
 use crate::types::{DArray, c_default, Le64};
 use core::ffi::{c_uint, c_ulong};
@@ -79,7 +80,7 @@ nest! {
     #[derive(CStruct)]
     pub struct btree_update {
         pub cl: c::closure,
-        pub c: *mut c::bch_fs,
+        pub c: *mut Fs,
         pub start_time: u64,
         pub ip_started: c_ulong,
 

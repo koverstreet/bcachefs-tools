@@ -67,7 +67,7 @@ pub fn alloc_pages(bio: &mut c::bio, bs: u32, size: usize, gfp: c::gfp_t) -> Res
 /// fails. It hands out whole elements, so the bio's size is trimmed to @size
 /// after.
 #[c_export]
-pub fn __bch2_bio_alloc_pages_pool(c: &Opaque<c::bch_fs>, bio: &mut c::bio, _bs: c_uint, size: usize, gfp: c::gfp_t) {
+pub fn __bch2_bio_alloc_pages_pool(c: &Opaque<Fs>, bio: &mut c::bio, _bs: c_uint, size: usize, gfp: c::gfp_t) {
     let fs = Fs::from_c(c);
     let _lock = Locked::from_c(&fs.bio_bounce_pages_lock).lock();
 
@@ -82,7 +82,7 @@ pub fn __bch2_bio_alloc_pages_pool(c: &Opaque<c::bch_fs>, bio: &mut c::bio, _bs:
 /// Allocates @size bytes into @bio with alloc_pages(), and the rest from the
 /// bounce pool. The bio must have the bvecs for them.
 #[c_export]
-pub fn bch2_bio_alloc_pages_pool(c: &Opaque<c::bch_fs>, bio: &mut c::bio, bs: c_uint, size: usize, gfp: c::gfp_t) {
+pub fn bch2_bio_alloc_pages_pool(c: &Opaque<Fs>, bio: &mut c::bio, bs: c_uint, size: usize, gfp: c::gfp_t) {
     // short is fine: the pool has the rest
     let _ = alloc_pages(bio, Fs::from_c(c).opts().block_size.get().into(), size, gfp);
     if (bio.bi_iter.bi_size as usize) < size {
@@ -122,7 +122,7 @@ pub fn bch2_bio_alloc_pages(bio: &mut c::bio, bs: c_uint, size: usize, gfp: c::g
 /// # Safety
 /// free_pages_pool()'s.
 #[c_export]
-pub unsafe fn bch2_bio_free_pages_pool(c: &Opaque<c::bch_fs>, bio: &mut c::bio) {
+pub unsafe fn bch2_bio_free_pages_pool(c: &Opaque<Fs>, bio: &mut c::bio) {
     // SAFETY: the caller's
     unsafe { free_pages_pool(Fs::from_c(c), bio) }
 }

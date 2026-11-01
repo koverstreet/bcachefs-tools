@@ -463,12 +463,12 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_sb_error_count(c: &Opaque<c::bch_fs>, err: c::bch_sb_error_id) {
+pub fn bch2_sb_error_count(c: &Opaque<Fs>, err: c::bch_sb_error_id) {
     Fs::from_c(c).sb_error_count(err)
 }
 
 #[c_export]
-pub fn bch2_sb_errors_to_cpu(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_sb_errors_to_cpu(c: &Opaque<Fs>) -> c_int {
     let fs = Fs::from_c(c);
     ret_to_c(c::bch_sb_field_errors_v2::to_cpu(fs, &mut fs.sb_lock()))
 }

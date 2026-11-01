@@ -288,7 +288,7 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_sb_set_upgrade_extra(c: &Opaque<c::bch_fs>) {
+pub fn bch2_sb_set_upgrade_extra(c: &Opaque<Fs>) {
     Fs::from_c(c).sb_set_upgrade_extra()
 }
 

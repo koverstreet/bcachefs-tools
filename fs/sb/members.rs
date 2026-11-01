@@ -162,7 +162,7 @@ fn sb_member_alloc(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<u32, BchError> {
 
 /// The new member's index, or an error.
 #[c_export]
-pub fn bch2_sb_member_alloc(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_sb_member_alloc(c: &Opaque<Fs>) -> c_int {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
     match sb_member_alloc(fs, &mut unsafe { fs.sb_lock_held() }) {
@@ -173,7 +173,7 @@ pub fn bch2_sb_member_alloc(c: &Opaque<c::bch_fs>) -> c_int {
 
 /// Deleted members' slots made free: fsck's, once nothing points to them.
 #[c_export]
-pub fn bch2_sb_members_clean_deleted(c: &Opaque<c::bch_fs>) {
+pub fn bch2_sb_members_clean_deleted(c: &Opaque<Fs>) {
     let fs = Fs::from_c(c);
     let mut sb = fs.sb_lock();
     let mut dirty = false;
@@ -626,7 +626,7 @@ pub(crate) fn dev_to_text_short(out: &mut Printbuf, sb: &c::bch_sb, dev: u32) {
 }
 
 #[c_export]
-pub fn bch2_member_to_text_short(out: &mut Printbuf, c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {
+pub fn bch2_member_to_text_short(out: &mut Printbuf, c: &Opaque<Fs>, ca: &c::bch_dev) {
     let fs = Fs::from_c(c);
     dev_to_text_short(out, fs.sb_lock().sb(), ca.dev_idx.into());
 }
@@ -694,7 +694,7 @@ fn failure_domain_id(sb: &c::bch_sb, dev: u32, m: &c::bch_member) -> u16 {
 }
 
 #[c_export]
-pub fn bch2_sb_members_to_cpu(c: &Opaque<c::bch_fs>) {
+pub fn bch2_sb_members_to_cpu(c: &Opaque<Fs>) {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
     let _ = c::bch_sb_field_members_v2::to_cpu(fs, &mut unsafe { fs.sb_lock_held() });
@@ -704,7 +704,7 @@ pub fn bch2_sb_members_to_cpu(c: &Opaque<c::bch_fs>) {
 /// to scale timeouts and "held too long" warnings so slow storage doesn't
 /// trip them.
 #[c_export]
-pub fn bch2_dev_latency_max(c: &Opaque<c::bch_fs>, devs: &c::bch_devs_mask, rw: c_int) -> c_ulong {
+pub fn bch2_dev_latency_max(c: &Opaque<Fs>, devs: &c::bch_devs_mask, rw: c_int) -> c_ulong {
     let fs = Fs::from_c(c);
     let rcu = read_lock();
     let ns = fs.devs_rcu_in(devs.d.iter(), &rcu)
@@ -754,7 +754,7 @@ fn mi_field_upgrades(sb: &mut SbLockGuard<'_>, dev: u32, id: &c::bch_dev_identit
 
 /// @w, the caller's superblock write, is dirtied if anything changed.
 #[c_export]
-pub fn bch2_dev_mi_field_upgrades_locked(c: &Opaque<c::bch_fs>, ca: &c::bch_dev,
+pub fn bch2_dev_mi_field_upgrades_locked(c: &Opaque<Fs>, ca: &c::bch_dev,
                                          id: &c::bch_dev_identity, w: &mut c::sb_write) {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock, with its CLASS(sb_write)
@@ -957,18 +957,18 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_dev_btree_bitmap_marked(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) -> bool {
+pub fn bch2_dev_btree_bitmap_marked(c: &Opaque<Fs>, k: BkeySC<'_>) -> bool {
     Fs::from_c(c).btree_bitmap_marked(k, true)
 }
 
 #[c_export]
-pub fn bch2_dev_btree_bitmap_marked_nogc(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) -> bool {
+pub fn bch2_dev_btree_bitmap_marked_nogc(c: &Opaque<Fs>, k: BkeySC<'_>) -> bool {
     Fs::from_c(c).btree_bitmap_marked(k, false)
 }
 
 /// @w, the caller's superblock write, is dirtied if a member changed.
 #[c_export]
-pub fn bch2_dev_btree_bitmap_mark_locked(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, w: &mut c::sb_write) {
+pub fn bch2_dev_btree_bitmap_mark_locked(c: &Opaque<Fs>, k: BkeySC<'_>, w: &mut c::sb_write) {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock, with its CLASS(sb_write)
     let mut w = unsafe { SbWrite::from_c(fs, w) };
@@ -978,12 +978,12 @@ pub fn bch2_dev_btree_bitmap_mark_locked(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, w
 }
 
 #[c_export]
-pub fn bch2_dev_btree_bitmap_mark(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_dev_btree_bitmap_mark(c: &Opaque<Fs>, k: BkeySC<'_>) {
     Fs::from_c(c).btree_bitmap_mark(k)
 }
 
 #[c_export]
-pub fn bch2_btree_bitmap_gc(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_btree_bitmap_gc(c: &Opaque<Fs>) -> c_int {
     ret_to_c(Fs::from_c(c).btree_bitmap_gc())
 }
 
@@ -1300,12 +1300,12 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_dev_missing_bkey(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, dev: c_uint) -> c_int {
+pub fn bch2_dev_missing_bkey(c: &Opaque<Fs>, k: BkeySC<'_>, dev: c_uint) -> c_int {
     ret_to_c(Fs::from_c(c).dev_missing_bkey(k, dev))
 }
 
 #[c_export]
-pub fn bch2_dev_missing_atomic(c: &Opaque<c::bch_fs>, dev: c_uint) {
+pub fn bch2_dev_missing_atomic(c: &Opaque<Fs>, dev: c_uint) {
     Fs::from_c(c).dev_missing_atomic(dev)
 }
 

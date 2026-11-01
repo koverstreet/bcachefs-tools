@@ -174,7 +174,7 @@ fn resume_logged_ops(fs: &Fs, early: bool) -> Result<(), BchError> {
  * so a slot noted here still holds the same op when its resume pass comes.
  */
 #[c_export]
-pub fn bch2_logged_ops_note_unfinished(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_logged_ops_note_unfinished(c: &Opaque<Fs>) -> c_int {
     let fs = Fs::from_c(c);
 
     ret_to_c(for_each_logged_op(fs, |_, k| {

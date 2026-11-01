@@ -341,13 +341,13 @@ fn gc_reflink_done(fs: &Fs) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_gc_reflink_done(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_gc_reflink_done(c: &Opaque<Fs>) -> c_int {
     ret_to_c(gc_reflink_done(Fs::from_c(c)))
 }
 
 /// gc's start: the table empty, for gc_reflink_add() to fill.
 #[c_export]
-pub fn bch2_gc_reflink_start(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_gc_reflink_start(c: &Opaque<Fs>) -> c_int {
     Fs::from_c(c).reflink_gc.nr.store(0, Relaxed);
     0
 }
@@ -385,7 +385,7 @@ fn gc_reflink_add(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_gc_reflink_add(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) -> c_int {
+pub fn bch2_gc_reflink_add(c: &Opaque<Fs>, k: BkeySC<'_>) -> c_int {
     let fs = Fs::from_c(c);
     ret_to_c(bch_err_fn!(fs, gc_reflink_add(fs, k)))
 }
@@ -396,7 +396,7 @@ pub fn bch2_gc_reflink_add(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) -> c_int {
 /// gc.pos is back to not_running, and nothing is still counting into the
 /// table - which isn't guaranteed: see ReflinkGc.
 #[c_export]
-pub unsafe fn bch2_gc_reflink_free(c: &Opaque<c::bch_fs>) {
+pub unsafe fn bch2_gc_reflink_free(c: &Opaque<Fs>) {
     let gc = &Fs::from_c(c).reflink_gc;
 
     // SAFETY: the caller's
@@ -427,7 +427,7 @@ fn reflink_p_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_reflink_p_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
+pub fn bch2_reflink_p_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
     -> c_int
 {
     ret_to_c(reflink_p_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
@@ -435,7 +435,7 @@ pub fn bch2_reflink_p_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::b
 
 #[cold]
 #[c_export]
-pub fn bch2_reflink_p_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_reflink_p_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
     let p = k.arm::<c::ReflinkP>().expect("a reflink_p").v();
 
     write!(out, "idx {} front_pad {} back_pad {}", p.idx(), p.front_pad.get(), p.back_pad.get());
@@ -451,7 +451,7 @@ pub fn bch2_reflink_p_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: Bke
 
 #[allow(unreachable_code, unused_variables, unused_mut)]
 #[c_export]
-pub fn bch2_reflink_p_merge(_c: &Opaque<c::bch_fs>, mut l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
+pub fn bch2_reflink_p_merge(_c: &Opaque<Fs>, mut l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
     /*
      * Disabled for now, the triggers code needs to be reworked for merging
      * of reflink pointers to work:
@@ -491,7 +491,7 @@ fn reflink_v_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 #[c_export]
-pub fn bch2_reflink_v_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
+pub fn bch2_reflink_v_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
     -> c_int
 {
     ret_to_c(reflink_v_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
@@ -499,7 +499,7 @@ pub fn bch2_reflink_v_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::b
 
 #[cold]
 #[c_export]
-pub fn bch2_reflink_v_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_reflink_v_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
     write!(out, "refcount: {} ", k.arm::<c::ReflinkV>().expect("a reflink_v").refcount().get());
 
     crate::data::ptrs::bkey_ptrs_to_text(out, Some(Fs::from_c(c)), k);
@@ -510,7 +510,7 @@ pub fn bch2_reflink_v_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, k: Bkey
  */
 #[cfg(any())]
 #[c_export]
-pub fn bch2_reflink_v_merge(c: &Opaque<c::bch_fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
+pub fn bch2_reflink_v_merge(c: &Opaque<Fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
     l.as_sc().arm::<c::ReflinkV>().expect("a reflink_v").refcount() ==
         r.arm::<c::ReflinkV>().expect("a reflink_v").refcount() &&
         crate::data::extents::extent_merge(Fs::from_c(c), l, r)
@@ -519,14 +519,14 @@ pub fn bch2_reflink_v_merge(c: &Opaque<c::bch_fs>, l: BkeyS<'_>, r: BkeySC<'_>) 
 // ── indirect inline data ─────────────────────────────────────────────────
 
 #[c_export]
-pub fn bch2_indirect_inline_data_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>,
+pub fn bch2_indirect_inline_data_validate(c: &Opaque<Fs>, k: BkeySC<'_>,
                                           from: &c::bkey_validate_context) -> c_int {
     ret_to_c(indirect_pos_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
 #[cold]
 #[c_export]
-pub fn bch2_indirect_inline_data_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+pub fn bch2_indirect_inline_data_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
     let data = &k.val_bytes()[size_of::<c::IndirectInlineData>()..];
 
     write!(out, "refcount {} datalen {}: ", k.arm::<c::IndirectInlineData>().expect("indirect inline data").refcount().get(), data.len());
@@ -1075,7 +1075,7 @@ pub fn remap_range(
 #[c_export]
 #[allow(clippy::too_many_arguments)]
 pub fn bch2_remap_range(
-    c:                           &Opaque<c::bch_fs>,
+    c:                           &Opaque<Fs>,
     dst_inum:                    c::subvol_inum,
     dst_offset:                  u64,
     src_inum:                    c::subvol_inum,

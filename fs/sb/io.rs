@@ -191,7 +191,7 @@ c_enum! {
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct sb_write {
-    pub c: *mut c::bch_fs,
+    pub c: *mut Fs,
     pub dirty: bool,
     pub replicas: bool,
     pub flags: c::bch_sb_write_flags,
@@ -834,12 +834,12 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_set_version_incompat(c: &Opaque<c::bch_fs>, version: c::bcachefs_metadata_version) -> c_int {
+pub fn bch2_set_version_incompat(c: &Opaque<Fs>, version: c::bcachefs_metadata_version) -> c_int {
     ret_to_c(Fs::from_c(c).set_version_incompat(version))
 }
 
 #[c_export]
-pub fn __bch2_check_set_feature(c: &Opaque<c::bch_fs>, feat: c_uint) {
+pub fn __bch2_check_set_feature(c: &Opaque<Fs>, feat: c_uint) {
     Fs::from_c(c).set_feature(c::bch_sb_feature(feat))
 }
 
@@ -872,7 +872,7 @@ pub(crate) fn check_version_downgrade(fs: &Fs, sb: &mut SbLockGuard<'_>) -> bool
 }
 
 #[c_export]
-pub fn bch2_check_version_downgrade(c: &Opaque<c::bch_fs>) -> bool {
+pub fn bch2_check_version_downgrade(c: &Opaque<Fs>) -> bool {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
     check_version_downgrade(fs, &mut unsafe { fs.sb_lock_held() })
@@ -898,7 +898,7 @@ pub(crate) fn sb_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, new: u32, incompat: 
 }
 
 #[c_export]
-pub fn bch2_sb_upgrade(c: &Opaque<c::bch_fs>, new_version: c_uint, incompat: bool) {
+pub fn bch2_sb_upgrade(c: &Opaque<Fs>, new_version: c_uint, incompat: bool) {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
     sb_upgrade(fs, &mut unsafe { fs.sb_lock_held() }, new_version, incompat)
@@ -1670,7 +1670,7 @@ pub fn read_super_silent(path: &CStr, opts: &mut c::bch_opts) -> Result<bch_sb_h
 /// # Safety
 /// @path is a C string; @sb holds nothing, and is written over.
 #[c_export]
-pub unsafe fn bch2_read_super(c: &Opaque<c::bch_fs>, path: *const c_char, opts: &mut c::bch_opts,
+pub unsafe fn bch2_read_super(c: &Opaque<Fs>, path: *const c_char, opts: &mut c::bch_opts,
                               sb: *mut c::bch_sb_handle) -> c_int {
     let holder = Fs::from_c(c).holder();
     // SAFETY: the caller's
@@ -2861,21 +2861,21 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_write_super(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_write_super(c: &Opaque<Fs>) -> c_int {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
     ret_to_c(fs.write_super_flags(&mut unsafe { fs.sb_lock_held() }, c::bch_sb_write_flags::empty()))
 }
 
 #[c_export]
-pub fn bch2_write_super_flags(c: &Opaque<c::bch_fs>, flags: c::bch_sb_write_flags) -> c_int {
+pub fn bch2_write_super_flags(c: &Opaque<Fs>, flags: c::bch_sb_write_flags) -> c_int {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
     ret_to_c(fs.write_super_flags(&mut unsafe { fs.sb_lock_held() }, flags))
 }
 
 #[c_export]
-pub fn bch2_write_super_replicas(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_write_super_replicas(c: &Opaque<Fs>) -> c_int {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
     ret_to_c(fs.write_super_replicas_ret(&mut unsafe { fs.sb_lock_held() }))
@@ -3083,7 +3083,7 @@ pub fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &bch_sb) -> Result<(), B
 
 /// @ca's superblock from the filesystem's: bch2_sb_from_fs().
 #[c_export]
-pub fn bch2_sb_from_fs(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) -> c_int {
+pub fn bch2_sb_from_fs(c: &Opaque<Fs>, ca: &c::bch_dev) -> c_int {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
     let mut sb = unsafe { fs.sb_lock_held() };

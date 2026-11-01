@@ -56,11 +56,11 @@ use crate::format::{Bpos, Btree};
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct bkey_ops {
-    pub key_validate: Option<unsafe extern "C" fn(c: *mut c::bch_fs, k: c::bkey_s_c,
+    pub key_validate: Option<unsafe extern "C" fn(c: *mut Fs, k: c::bkey_s_c,
                                                   from: *const c::bkey_validate_context) -> c_int>,
-    pub val_to_text: Option<unsafe extern "C" fn(*mut c::printbuf, *mut c::bch_fs, c::bkey_s_c)>,
-    pub swab: Option<unsafe extern "C" fn(*const c::bch_fs, c::bkey_s)>,
-    pub key_merge: Option<unsafe extern "C" fn(*mut c::bch_fs, c::bkey_s, c::bkey_s_c) -> bool>,
+    pub val_to_text: Option<unsafe extern "C" fn(*mut c::printbuf, *mut Fs, c::bkey_s_c)>,
+    pub swab: Option<unsafe extern "C" fn(*const Fs, c::bkey_s)>,
+    pub key_merge: Option<unsafe extern "C" fn(*mut Fs, c::bkey_s, c::bkey_s_c) -> bool>,
     pub trigger: Option<unsafe extern "C" fn(*mut c::btree_trans, c::btree_trigger_op) -> c_int>,
     pub check_repair: Option<unsafe extern "C" fn(*mut c::btree_trans, *mut c::btree_iter,
                                                   Btree, c_uint, c::bkey_s_c) -> c_int>,
@@ -74,8 +74,8 @@ c_extern! {
     pub static bch2_bkey_types: [*const c_char; 0];
     pub fn bch2_bpos_to_text(out: *mut c::printbuf, pos: Bpos);
     pub fn bch2_bkey_to_text(out: *mut c::printbuf, k: *const c::bkey);
-    pub fn bch2_bkey_val_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, k: c::bkey_s_c);
-    pub fn bch2_set_bkey_error(c: *mut c::bch_fs, k: *mut c::bkey_i, err: c::bch_key_type_errors);
+    pub fn bch2_bkey_val_to_text(out: *mut c::printbuf, c: *mut Fs, k: c::bkey_s_c);
+    pub fn bch2_set_bkey_error(c: *mut Fs, k: *mut c::bkey_i, err: c::bch_key_type_errors);
 }
 
 type EnumValues = &'static [(&'static str, u64)];

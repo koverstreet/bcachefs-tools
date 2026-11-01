@@ -198,7 +198,7 @@ pub fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 /// For C's bkey_ops: bch2_xattr_validate().
 #[c_export]
 pub fn bch2_xattr_validate(
-    c:    &Opaque<c::bch_fs>,
+    c:    &Opaque<Fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
 ) -> c_int {
@@ -245,7 +245,7 @@ pub fn to_text(out: &mut Printbuf, k: BkeySC<'_>) {
 #[c_export]
 pub fn bch2_xattr_to_text(
     out: &mut Printbuf,
-    _c:  &Opaque<c::bch_fs>,
+    _c:  &Opaque<Fs>,
     k:   BkeySC<'_>,
 ) {
     to_text(out, k)

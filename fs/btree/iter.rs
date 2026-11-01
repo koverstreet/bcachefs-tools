@@ -99,9 +99,9 @@ c_extern! {
                                        btree_id: Btree, pos: Bpos, locks_want: c_uint,
                                        depth: c_uint, flags: c::btree_iter_update_trigger_flags);
     pub fn bch2_trans_begin(trans: *mut c::btree_trans) -> u32;
-    pub fn __bch2_trans_get(c: *mut c::bch_fs, fn_idx: c_uint) -> *mut c::btree_trans;
+    pub fn __bch2_trans_get(c: *mut Fs, fn_idx: c_uint) -> *mut c::btree_trans;
     pub fn bch2_trans_put(trans: *mut c::btree_trans);
-    pub fn bch2_current_has_btree_trans(c: *mut c::bch_fs) -> bool;
+    pub fn bch2_current_has_btree_trans(c: *mut Fs) -> bool;
     pub static mut bch2_btree_transaction_fns: [*const c_char; c::BCH_TRANSACTIONS_NR as usize];
     pub fn bch2_trans_get_fn_idx(fn_: *const c_char) -> c_uint;
 }

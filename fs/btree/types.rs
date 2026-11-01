@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::fs::Fs;
 use crate::c;
 use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
@@ -782,7 +783,7 @@ nest! {
     #[repr(C)]
     #[derive(CStruct)]
     pub struct btree_trans {
-        pub c: *mut cs::bch_fs,
+        pub c: *mut Fs,
 
         pub paths_allocated: *mut c_ulong,
         pub paths: *mut cs::btree_path,
