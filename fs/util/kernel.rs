@@ -110,6 +110,19 @@ pub fn cond_resched() {
     unsafe { c::bch2_cond_resched() }
 }
 
+/// For a slice big enough that sorting it would hog the CPU: it yields from
+/// the comparisons, the one call of ours the sort makes.
+pub fn sort_nonatomic<T>(v: &mut [T], mut cmp: impl FnMut(&T, &T) -> core::cmp::Ordering) {
+    let mut n = 0u32;
+    v.sort_unstable_by(|a, b| {
+        n = n.wrapping_add(1);
+        if n % 4096 == 0 {
+            cond_resched();
+        }
+        cmp(a, b)
+    })
+}
+
 pub fn msleep(ms: u32) {
     unsafe { c::bch2_msleep(ms) }
 }
