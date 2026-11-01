@@ -28,6 +28,7 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::inode;
 use crate::namei::subvol_inum_eq;
+use crate::types::CStatic;
 use crate::snapshots::subvolume;
 use crate::util::os_str::OsStrExt;
 use cstruct_macros::vtable;
@@ -233,4 +234,5 @@ impl ExportOps for Fs {
     }
 }
 
-pub(crate) static EXPORT_OPS: c::export_operations = ExportVTable::<Fs>::OPS;
+// CONFIG_EXPORTFS_BLOCK_OPS's block_ops pointer makes export_operations !Sync
+pub(crate) static EXPORT_OPS: CStatic<c::export_operations> = unsafe { CStatic::new(ExportVTable::<Fs>::OPS) };
