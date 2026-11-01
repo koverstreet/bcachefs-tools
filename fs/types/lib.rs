@@ -126,12 +126,7 @@ macro_rules! le_int {
         // SAFETY: the integer, and zero is one
         unsafe impl ::pin_init::Zeroable for $name {}
 
-        // SAFETY: the integer's atomic, which zeroes are a value of
-        unsafe impl crate::util::projections::AtomicWord for $name {
-            type Atomic = <$t as crate::util::projections::AtomicWord>::Atomic;
-            fn load(a: &Self::Atomic) -> Self { Self(<$t as crate::util::projections::AtomicWord>::load(a)) }
-            fn store(a: &Self::Atomic, v: Self) { <$t as crate::util::projections::AtomicWord>::store(a, v.0) }
-        }
+        crate::one_word!($name);
 
         impl crate::util::vstructs::Native for $name {
             type Native = $t;

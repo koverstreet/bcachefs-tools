@@ -75,7 +75,7 @@ unsafe impl pin_init::ZeroableOption for OpenBucketIdx {}
 
 // SAFETY: a u16, any of which is an Option of one - 0 None
 unsafe impl crate::util::vstructs::Plain for Option<OpenBucketIdx> {}
-crate::tear_safe!(Option<OpenBucketIdx>);
+crate::one_word!(Option<OpenBucketIdx>);
 
 impl OpenBucketIdx {
     /// Slot @idx's index - None for 0, the sentinel's.
@@ -106,7 +106,7 @@ unsafe impl pin_init::ZeroableOption for WritePointIdx {}
 
 // SAFETY: a u8, any of which is an Option of one - 0 None
 unsafe impl crate::util::vstructs::Plain for Option<WritePointIdx> {}
-crate::tear_safe!(Option<WritePointIdx>);
+crate::one_word!(Option<WritePointIdx>);
 
 impl WritePointIdx {
     pub fn new(idx: usize) -> Self {

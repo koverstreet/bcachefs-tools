@@ -67,7 +67,7 @@ pub struct bch_member_cpu {
 }
 
 // ca->mi: read by anyone, a field at a time - a copy half made is one
-crate::tear_safe!(bch_member_cpu);
+unsafe impl crate::util::projections::TearSafe for bch_member_cpu {}
 
 // ---------------------------------------------------------------------------
 // Members — bounds-checked readers for bch_sb_field_members_v2 and v1

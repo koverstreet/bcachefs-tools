@@ -196,7 +196,7 @@ macro_rules! published {
 // ── Volatile words ───────────────────────────────────────────────────────
 
 /// A value with an atomic of its own size: what a Volatile is stored as - or,
-/// for a TearSafe value of more than a word, Torn.
+/// for a TearSafe value, Torn.
 ///
 /// # Safety
 /// Atomic is laid out as Self is, and all zeroes is a Self: a Volatile in
@@ -228,15 +228,16 @@ atomic_word!(bool => AtomicBool, u8 => AtomicU8, u16 => AtomicU16, u32 => Atomic
              usize => AtomicUsize, i8 => AtomicI8, i16 => AtomicI16, i32 => AtomicI32, i64 => AtomicI64,
              isize => AtomicIsize);
 
-/// A value of more than a word whose readers are fine with seeing it torn -
-/// each word as some write left it, not all from the same one: a position
-/// read for progress, say. That a torn one is a valid value is Plain's -
-/// memory safety; that it's an acceptable one is the type's to say, and
-/// can't be wrong in a way that's unsafe. tear_safe!() says it, and makes
-/// the type an AtomicWord whose storage is Torn, so a Volatile of it is read
-/// and written a word at a time. A one-word value can't tear: it's an
-/// AtomicWord of its own.
-pub trait TearSafe: Plain + Copy {}
+/// A value whose readers are fine with seeing it torn - each word as some
+/// write left it, not all from the same one: a position read for progress,
+/// say. That a torn one is a valid value is Plain's; that it's an acceptable
+/// one is the type's to say. An AtomicWord whose storage is Torn, so a
+/// Volatile of it is read and written a word at a time. One word at its
+/// alignment can't tear: one_word!() says so, checked.
+///
+/// # Safety
+/// A torn value is one its readers can take.
+pub unsafe trait TearSafe: Plain + Copy {}
 
 /// A TearSafe value as a Volatile holds it: loaded and stored a word at a
 /// time - of its alignment, up to a u64 - by relaxed atomics.
@@ -290,11 +291,13 @@ unsafe fn store_words<W: Word>(src: *const W, dst: *mut W, n: usize) {
     }
 }
 
-impl<T: TearSafe> Torn<T> {
+impl<T> Torn<T> {
     /// A word: T's alignment, up to a u64's - which a T is a whole number of.
     const WORD: usize = if align_of::<T>() < size_of::<u64>() { align_of::<T>() } else { size_of::<u64>() };
-    const WORDS: usize = size_of::<T>() / Self::WORD;
+    pub const WORDS: usize = size_of::<T>() / Self::WORD;
+}
 
+impl<T: TearSafe> Torn<T> {
     pub fn load(&self) -> T {
         let mut v = MaybeUninit::<T>::uninit();
         let (src, dst) = (self.0.get(), v.as_mut_ptr());
@@ -325,24 +328,28 @@ impl<T: TearSafe> Torn<T> {
     }
 }
 
-/// @T is TearSafe, and a Volatile of it is loaded and stored a word at a time.
+// SAFETY: Torn is laid out as @T is, and @T is Plain: zeroes are one
+unsafe impl<T: TearSafe> AtomicWord for T {
+    type Atomic = Torn<T>;
+
+    fn load(a: &Torn<T>) -> T {
+        a.load()
+    }
+
+    fn store(a: &Torn<T>, v: T) {
+        a.store(v)
+    }
+}
+
+/// @T, Plain and one word at its alignment, is TearSafe: a Volatile of it is
+/// loaded and stored whole.
 #[macro_export]
-macro_rules! tear_safe {
+macro_rules! one_word {
     ($($t:ty),* $(,)?) => { $(
-        impl $crate::util::projections::TearSafe for $t {}
-
-        // SAFETY: Torn is laid out as @T is, and @T is Plain: zeroes are one
-        unsafe impl $crate::util::projections::AtomicWord for $t {
-            type Atomic = $crate::util::projections::Torn<$t>;
-
-            fn load(a: &Self::Atomic) -> $t {
-                a.load()
-            }
-
-            fn store(a: &Self::Atomic, v: $t) {
-                a.store(v)
-            }
-        }
+        const _: () = assert!($crate::util::projections::Torn::<$t>::WORDS == 1,
+                              ::core::concat!(::core::stringify!($t),
+                                              ": more than a word at its alignment - unsafe impl TearSafe"));
+        unsafe impl $crate::util::projections::TearSafe for $t {}
     )* };
 }
 
