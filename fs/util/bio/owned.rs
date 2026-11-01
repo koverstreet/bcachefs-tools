@@ -27,7 +27,7 @@ use core::sync::atomic::{AtomicI32, Ordering::{AcqRel, Acquire, Relaxed}};
 
 use pin_init::PinInit;
 
-use super::{Bio, BioOwner};
+use super::{Bio, BioOwner, BioRange};
 use crate::c;
 use crate::util::refcount::{Refcount, TestRefcount};
 use crate::errcode::{ret_to_result_void, BchError};
@@ -234,21 +234,22 @@ impl<T: HasBio> BioSet<T> {
         Self::init_new(bio, init)
     }
 
-    /// alloc(), the bio a clone of @src's: its bvecs, shared, and its iter.
-    ///
-    /// # Safety
-    /// @src's bvecs outlive the clone.
-    pub unsafe fn alloc_clone<E, I>(&self, bdev: *mut c::block_device, src: &c::bio,
-                                    init: impl FnOnce(BioInPlace) -> I) -> Result<BioBox<T>, E>
+    /// alloc(), the bio a clone of @src's bio, at @src: its bvecs shared, so it
+    /// borrows them as @src does.
+    pub fn alloc_clone<'a, E, I>(&self, bdev: *mut c::block_device, src: BioRange<'a>,
+                                 init: impl FnOnce(BioInPlace) -> I) -> Result<BioClone<'a, T>, E>
     where
         I: PinInit<T, E>,
         E: From<BchError>,
     {
-        // SAFETY: a live bioset; @src only read, and the caller's
+        // SAFETY: a live bioset; @src's bio only read
         let bio = unsafe {
-            c::bio_alloc_clone(bdev, core::ptr::from_ref(src).cast_mut(), c::GFP_KERNEL, self.set.as_ptr())
+            c::bio_alloc_clone(bdev, core::ptr::from_ref(src.bio().raw()).cast_mut(), c::GFP_KERNEL,
+                               self.set.as_ptr())
         };
-        Self::init_new(bio, init)
+        let mut b = Self::init_new(bio, init)?;
+        b.bio_mut().raw_mut().bi_iter = src.pos();
+        Ok(BioClone { b, _src: PhantomData })
     }
 
     fn init_new<E, I>(bio: *mut c::bio, init: impl FnOnce(BioInPlace) -> I) -> Result<BioBox<T>, E>
@@ -355,6 +356,32 @@ impl<T: HasBio> Drop for BioBox<T> {
             core::ptr::drop_in_place(self.0.as_ptr());
             c::bio_put(bio_of(self.0.as_ptr()));
         }
+    }
+}
+
+/// A BioBox of a clone: alloc_clone()'s, borrowing the bio it shares the
+/// bvecs of.
+pub struct BioClone<'a, T: HasBio> {
+    b:    BioBox<T>,
+    _src: PhantomData<BioRange<'a>>,
+}
+
+impl<T: HasBio> Deref for BioClone<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.b
+    }
+}
+
+// SAFETY: its box's
+unsafe impl<T: HasBio> BioOwner for BioClone<'_, T> {
+    fn bio(&self) -> &Bio {
+        self.b.bio()
+    }
+
+    fn bio_mut(&mut self) -> Pin<&mut Bio> {
+        self.b.bio_mut()
     }
 }
 
