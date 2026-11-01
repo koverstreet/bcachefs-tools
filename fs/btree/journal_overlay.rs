@@ -1034,7 +1034,7 @@ fn keys_sort(fs: &Fs) -> Result<(), BchError> {
     for (_, &i) in fs.journal_entries.iter_from(0) {
         // SAFETY: an entry the journal read, valid until the last put
         let Some(i) = (unsafe { i.as_ref() }) else { continue };
-        if i.ignore_blacklisted || i.ignore_not_dirty {
+        if i.ignored() {
             continue;
         }
 

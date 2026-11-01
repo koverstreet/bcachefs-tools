@@ -86,6 +86,19 @@ impl c::journal_replay {
         // SAFETY: the caller's
         unsafe { c::jset::<Validated>::from_ffi(&raw const (*p).j) }
     }
+
+    pub fn ignored(&self) -> bool {
+        self.ignore_blacklisted || self.ignore_not_dirty
+    }
+}
+
+impl Fs {
+    /* The journal scrub runs after an unclean shutdown, or always if asked to */
+    pub fn journal_scrub_will_run(&self) -> bool {
+        let opt = u32::from(self.opts.scrub_recent_journal_entries.get());
+        opt != 0 &&
+            (self.sb.clean.get() == 0 || opt == c::bch_scrub_journal_opts::BCH_SCRUB_JOURNAL_always.0)
+    }
 }
 
 // ---- entry type conversion ----
