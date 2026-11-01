@@ -748,7 +748,7 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
      * journal replay: replay can need buckets that only we can free. Moves
      * don't need check_snapshots (bch2_snapshot_is_ancestor() walks parent
      * pointers until it's run), and recovery won't resume stripe updates we
-     * start (bch2_logged_ops_note_unfinished()).
+     * start (logged_ops::note_unfinished()).
      */
     let _ = sleep_until(Sleep::INTERRUPTIBLE.freezable(),
         || (fs.flags.get(c::bch_fs_flags::BCH_FS_rw) || Kthread::should_stop()).then_some(()));
@@ -912,11 +912,6 @@ impl Fs {
 }
 
 // ── For C ────────────────────────────────────────────────────────────────
-
-#[c_export]
-pub fn bch2_copygc_wakeup(c: &Fs) {
-    c.copygc_wakeup()
-}
 
 /// Until copygc isn't running, or this kthread's told to stop: for a moving
 /// context that waits on copygc, Moving::ratelimit()'s. Freezable - copygc

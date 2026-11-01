@@ -412,9 +412,9 @@ impl AsMut<BkeyI> for c::bkey_inode_buf {
     }
 }
 
-/// @inode packed, as an inode_v3 key at snapshot 0 - the caller's to set: as
-/// bch2_inode_pack(). The key ends at the last nonzero field, and
-/// has_inode_opts is recomputed - pack is what maintains it.
+/// @inode packed, as an inode_v3 key at snapshot 0 - the caller's to set.
+/// The key ends at the last nonzero field, and has_inode_opts is recomputed -
+/// pack is what maintains it.
 pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
 
     let mut out = c::bkey_inode_buf::default();
@@ -491,16 +491,6 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
     }
 
     out
-}
-
-/// For C: bch2_inode_pack().
-#[c_export]
-pub extern "C" fn bch2_inode_pack(
-    _c:     &Opaque<Fs>,
-    packed: &mut MaybeUninit<c::bkey_inode_buf>,
-    inode:  &c::bch_inode_unpacked,
-) {
-    packed.write(pack(inode));
 }
 
 // ── Reading keys, without unpacking ──────────────────────────────────────
@@ -789,7 +779,7 @@ pub fn find_any_snapshot(t: &TransAttempt<'_, '_>, inum: u64)
 }
 
 /// @inode packed, in transaction memory - at no snapshot, which is for the
-/// caller to set: as bch2_inode_pack().
+/// caller to set: as pack().
 fn pack_trans<'a, 't>(t: &TransAttempt<'a, 't>, inode: &c::bch_inode_unpacked)
     -> Result<TransBkey<'a, 't>, BchError>
 {
@@ -1969,8 +1959,7 @@ pub fn init_late(
     }
 }
 
-/// A new inode, made now: init_early(), then init_late() - as
-/// bch2_inode_init().
+/// A new inode, made now: init_early(), then init_late().
 pub fn init(
     fs:     &Fs,
     uid:    c::uid_t,
@@ -1983,20 +1972,6 @@ pub fn init(
     init_early(fs, &mut inode);
     init_late(fs, &mut inode, fs.current_time(), uid, gid, mode, rdev, parent);
     inode
-}
-
-/// For C's recovery: bch2_inode_init(). @parent may be NULL.
-#[c_export]
-pub extern "C" fn bch2_inode_init(
-    c:      &Opaque<Fs>,
-    inode:  &mut MaybeUninit<c::bch_inode_unpacked>,
-    uid:    c::uid_t,
-    gid:    c::gid_t,
-    mode:   c::umode_t,
-    rdev:   c::dev_t,
-    parent: Option<&c::bch_inode_unpacked>,
-) {
-    inode.write(init(Fs::from_c(c), uid, gid, mode, rdev, parent));
 }
 
 // ── Options and casefolding ──────────────────────────────────────────────

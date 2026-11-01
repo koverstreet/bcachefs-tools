@@ -103,11 +103,6 @@ pub unsafe fn bch2_opts_to_text(out: &mut Printbuf, opts: c::bch_opts, c: Option
     opts_to_text(out, &opts, c.map(Fs::from_c), sb, mask, show_mask, hide_mask, flags)
 }
 
-#[c_export]
-pub fn bch2_opts_hooks_pre_set(c: &Fs) -> c_int {
-    ret_to_c(change::opts_hooks_pre_set(c))
-}
-
 /// One mount option, for the VFS's parse_param(): as parse_one_mount_opt().
 ///
 /// # Safety

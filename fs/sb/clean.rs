@@ -7,7 +7,6 @@
 //! The section is a list of journal entries, stored exactly as they would be
 //! in the journal, after a header saying which journal seq they're as of.
 
-use core::ffi::c_int;
 use core::mem::size_of;
 use core::sync::atomic::Ordering::Relaxed;
 
@@ -17,7 +16,7 @@ use zerocopy::IntoBytes;
 use crate::btree::bkey::BkeySCToText;
 use crate::btree::interior::btree_roots_to_journal_entries;
 use crate::c;
-use crate::errcode::{bch_errcode, err_ptr, ret_to_c, ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::journal::entries::{EntryWriter, NoRoom};
 use crate::sb::io::{entries_end, SbFieldOps};
@@ -124,14 +123,6 @@ impl Fs {
     }
 }
 
-#[c_export]
-pub fn bch2_read_superblock_clean(c: &Opaque<Fs>) -> *mut Head<c::bch_sb_field_clean> {
-    match Fs::from_c(c).read_superblock_clean() {
-        Ok(clean) => clean.0.into_raw_parts().0.cast(),
-        Err(e)    => err_ptr(e),
-    }
-}
-
 type Key<'a> = VstructRef<'a, c::bkey_i, Validated>;
 
 /// A btree root's entry in @entries, if there is one: its level, and its key
@@ -187,28 +178,6 @@ impl Fs {
                  journal: {}\n", RootText(self, &sb), RootText(self, &journal))?;
         }
         Ok(true)
-    }
-}
-
-/// # Safety
-/// *@cleanp is from bch2_read_superblock_clean(), and @j the last journal
-/// entry, validated.
-#[c_export]
-pub unsafe fn bch2_verify_superblock_clean(c: &Opaque<Fs>, cleanp: *mut *mut Head<c::bch_sb_field_clean>,
-                                           j: *mut Head<c::jset>) -> c_int {
-    // SAFETY: the caller's
-    let (clean, j) = unsafe { (Section::from_ffi(*cleanp), c::jset::<Validated>::from_ffi(j)) };
-    match Fs::from_c(c).verify_superblock_clean(clean, j) {
-        Ok(true) => 0,
-        Ok(false) => {
-            // SAFETY: a KVVec's buffer, which nothing uses after
-            unsafe {
-                c::rust_kvfree((*cleanp).cast());
-                *cleanp = core::ptr::null_mut();
-            }
-            0
-        }
-        Err(e) => ret_to_c(Err::<(), _>(e)),
     }
 }
 

@@ -28,7 +28,7 @@ use crate::c;
 use crate::c::bch_fs_flags as Flag;
 use crate::c::journal_flags as Journal;
 use crate::data::ec::head::stripe_heads_stop;
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::{Fs, StateLockWrite};
 use crate::init::dev::bch2_dev_io_ref_stop;
 use crate::sb::members::{BtreeBitmapGcSchedule, SbMembersMut};
@@ -418,9 +418,4 @@ pub fn bch2_fs_emergency_read_only(c: &Opaque<Fs>, out: &mut Printbuf) -> bool {
 #[c_export]
 pub fn bch2_fs_emergency_read_only_locked(c: &Opaque<Fs>, out: &mut Printbuf) -> bool {
     Fs::from_c(c).emergency_read_only_to(out, true)
-}
-
-#[c_export]
-pub fn bch2_fs_read_write_early(c: &Opaque<Fs>) -> c_int {
-    ret_to_c(Fs::from_c(c).state_lock_write().start_rw())
 }

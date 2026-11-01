@@ -936,10 +936,7 @@ pub(crate) fn initialize(fs: &Fs) -> Result<(), BchError> {
                     BtreeIterFlags::empty())
 }
 
-#[c_export]
-pub fn bch2_initialize_subvolumes(c: &Opaque<Fs>) -> core::ffi::c_int {
-    ret_to_c(initialize(Fs::from_c(c)))
-}
+crate::recovery_pass!(bch2_initialize_subvolumes => initialize);
 
 /// Set bi_subvol on the root inode, upgrading to subvolumes.
 fn fs_upgrade_for_subvolumes(fs: &Fs) -> Result<(), BchError> {

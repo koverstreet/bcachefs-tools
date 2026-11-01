@@ -31,7 +31,6 @@
 //! The blacklist is BCH_SB_FIELD_journal_seq_blacklist: ranges [start, end),
 //! sorted and not overlapping.
 
-use core::ffi::c_int;
 use core::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 use cstruct_macros::c_export;
@@ -40,7 +39,7 @@ use crate::sb_err_on;
 use crate::bch_verbose;
 use crate::c;
 use crate::util::vstructs::Unvalidated;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::types::Le64;
@@ -233,11 +232,6 @@ pub fn bch2_journal_last_blacklisted_seq(c: &Opaque<Fs>) -> u64 {
     Fs::from_c(c).journal_seq_blacklist.last_blacklisted()
 }
 
-#[c_export]
-pub fn bch2_journal_seq_blacklist_add(c: &Opaque<Fs>, start: u64, end: u64) -> c_int {
-    ret_to_c(Fs::from_c(c).journal_seq_blacklist_add(start, end))
-}
-
 /// At mount.
 pub fn blacklist_table_initialize(fs: &Fs) -> Result<(), BchError> {
     Section::to_cpu(fs, &mut fs.sb_lock())
@@ -246,13 +240,6 @@ pub fn blacklist_table_initialize(fs: &Fs) -> Result<(), BchError> {
 /// At the end of recovery: drop the ranges nothing was found in that are
 /// older than the journal on disk. Whether the section changed. The table
 /// isn't rebuilt: it keeps them, harmlessly, until the next mount.
-#[c_export]
-pub fn bch2_blacklist_entries_gc(c: &Opaque<Fs>) -> bool {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock, with recovery's last superblock update
-    blacklist_entries_gc(fs, &mut unsafe { fs.sb_lock_held() })
-}
-
 pub(crate) fn blacklist_entries_gc(fs: &Fs, guard: &mut SbLockGuard<'_>) -> bool {
     let mut sb = fs.sb_resize(guard);
     let Some(f) = sb.field_mut::<Section>() else { return false };

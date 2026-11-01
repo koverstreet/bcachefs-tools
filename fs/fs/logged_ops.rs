@@ -14,16 +14,14 @@ use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags};
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::util::alloc::flags::GFP_KERNEL;
-use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use crate::{fs_fatal_error, fsck_err_on};
-use core::ffi::c_int;
 use core::sync::atomic::{Ordering, AtomicU32};
-use cstruct_macros::{c_export, CStruct, Init, TypeInfo};
+use cstruct_macros::{CStruct, Init, TypeInfo};
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::types::{RustOnly, rust_only};
@@ -45,7 +43,7 @@ pub struct bch_fs_logged_ops {
     /*
      * Logged ops in the btree when we went rw - the ones from before this
      * mount, which recovery resumes. Positions in BTREE_ID_logged_ops,
-     * ascending: see bch2_logged_ops_note_unfinished().
+     * ascending: see note_unfinished().
      */
     #[pin]
     #[init(RustOnly::new(new_lock!(KVVec::new())))]
@@ -63,7 +61,7 @@ struct LoggedOp {
     /// start these, so they're resumed by resume_logged_ops_early. The rest
     /// are only started from userspace, and are resumed after fsck has
     /// repaired what they walk. Either pass resumes only the ops from before
-    /// this mount: see bch2_logged_ops_note_unfinished().
+    /// this mount: see note_unfinished().
     early:  bool,
     resume: fn(&BtreeTrans<'_>, &mut BkeyI) -> Result<(), BchError>,
 }
@@ -113,7 +111,7 @@ impl Fs {
 fn resume_logged_op(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, early: bool) -> Result<(), BchError> {
     let fs = t.fs();
 
-    /* Started this mount, and live: see bch2_logged_ops_note_unfinished() */
+    /* Started this mount, and live: see note_unfinished() */
     let offset = k.k.p.offset;
     if !fs.logged_ops.unfinished.lock().contains(&offset) {
         return Ok(());
@@ -177,11 +175,6 @@ pub(crate) fn note_unfinished(fs: &Fs) -> Result<(), BchError> {
     for_each_logged_op(fs, |_, k| {
         Ok(fs.logged_ops.unfinished.lock().push(k.k.p.offset, GFP_KERNEL)?)
     })
-}
-
-#[c_export]
-pub fn bch2_logged_ops_note_unfinished(c: &Opaque<Fs>) -> c_int {
-    ret_to_c(note_unfinished(Fs::from_c(c)))
 }
 
 crate::recovery_pass!(bch2_resume_logged_ops_early => |fs| resume_logged_ops(fs, true));

@@ -10,7 +10,6 @@
 use core::ffi::c_ulong;
 use core::mem::size_of;
 
-use cstruct_macros::c_export;
 
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
@@ -22,7 +21,6 @@ use crate::sb::io::{entries_as_read, entries_end, SbFieldOps};
 use crate::types::Le64;
 use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
 use crate::util::bitmap::LeBitmap;
-use crate::util::ffi::Opaque;
 use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, Validated, ValidatedEntries};
 use crate::util::Printbuf;
 use crate::sb::io::SbResize;
@@ -285,11 +283,6 @@ impl Fs {
         silent.set(c::bch_sb_error_id::BCH_FSCK_ERR_alloc_key_stripe_sectors_wrong.0 as usize);
         self.write_super(&mut sb);
     }
-}
-
-#[c_export]
-pub fn bch2_sb_set_upgrade_extra(c: &Opaque<Fs>) {
-    Fs::from_c(c).sb_set_upgrade_extra()
 }
 
 /// Downgrading from minor version @old_minor to @new_minor: what the section

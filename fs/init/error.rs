@@ -842,16 +842,6 @@ pub(crate) fn fsck_errs_seen(fs: &Fs) -> bool {
     !fs.errors.state.lock().msgs.is_empty()
 }
 
-#[c_export]
-pub fn bch2_fsck_errs_seen(c: &Opaque<Fs>) -> bool {
-    fsck_errs_seen(Fs::from_c(c))
-}
-
-#[c_export]
-pub fn bch2_fsck_err_counts_to_text(out: &mut Printbuf, c: &Opaque<Fs>) {
-    fsck_err_counts_to_text(out, Fs::from_c(c))
-}
-
 /// Each kind of error seen, and how often: most often first.
 pub(crate) fn fsck_err_counts_to_text(out: &mut Printbuf, fs: &Fs) {
     let mut st = fs.errors.state.lock();
@@ -871,11 +861,6 @@ pub(crate) fn flush_fsck_errs(fs: &Fs, print: bool) {
             crate::bch_err!(fs, "Saw {} errors like:\n  {}", s.nr, core::str::from_utf8(m).unwrap_or("?"));
         }
     }
-}
-
-#[c_export]
-pub fn bch2_flush_fsck_errs(c: &Opaque<Fs>) {
-    flush_fsck_errs(Fs::from_c(c), true)
 }
 
 pub fn free_fsck_errs(fs: &Fs) {
@@ -969,11 +954,6 @@ pub fn damaged_path_to_text(out: &mut Printbuf, trans: &BtreeTrans<'_>, p: &c::f
         bch_sb_error_id(e.into()).to_text(out);
     }
     out.newline();
-}
-
-#[c_export]
-pub fn bch2_fsck_damaged_paths_to_text(out: &mut Printbuf, c: &Opaque<Fs>) {
-    fsck_damaged_paths_to_text(out, Fs::from_c(c))
 }
 
 /// The paths fsck damaged: the first DAMAGED_PATHS_PRINT, then how many more.

@@ -190,7 +190,7 @@ c_xmacro! {
      * BCH_INODE_has_inode_opts is set iff some field in BCH_INODE_OPTS() is
      * nonzero on this inode (per-inode option overrides exist). Lets the
      * extent-update path skip the inode unpack and use fs defaults when the
-     * bit is clear. Maintained by bch2_inode_pack(): recomputed from the
+     * bit is clear. Maintained by inode::pack(): recomputed from the
      * BCH_INODE_OPTS fields every pack.
      *
      * BCH_INODE_has_access_acl / has_default_acl are set iff a POSIX ACL

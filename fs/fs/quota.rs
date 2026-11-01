@@ -693,7 +693,7 @@ mod vfs {
     }
 
     /// Read the quotas in: the limits, from the superblock and the quotas
-    /// btree; the usage, counted from the inodes. As bch2_fs_quota_read().
+    /// btree; the usage, counted from the inodes.
     pub fn fs_quota_read(fs: &Fs) -> Result<(), BchError> {
         {
             let mut sb = fs.sb_lock();
@@ -721,11 +721,6 @@ mod vfs {
             read_inode(t, k)?;
             Ok(LoopFlow::ContinueFrom(k.k.p.nosnap_successor()))
         })
-    }
-
-    #[c_export]
-    pub fn bch2_fs_quota_read(c: &Opaque<Fs>) -> c_int {
-        ret_to_c(fs_quota_read(Fs::from_c(c)))
     }
 
     // ── quotactl ────────────────────────────────────────────────────────

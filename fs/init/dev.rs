@@ -531,8 +531,3 @@ impl Fs {
         Ok(())
     }
 }
-
-#[c_export]
-pub fn bch2_fs_resize_on_mount(c: &Fs) -> c_int {
-    ret_to_c(c.resize_on_mount())
-}

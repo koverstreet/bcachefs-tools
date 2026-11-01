@@ -846,7 +846,7 @@ pub fn __bch2_check_set_feature(c: &Opaque<Fs>, feat: c_uint) {
 
 /// A superblock newer than this version brought down to it - what it's at
 /// and what it allows - and the compat bits this version doesn't know
-/// cleared: whether it was newer. bch2_check_version_downgrade().
+/// cleared: whether it was newer.
 ///
 /// The superblock only: c->sb keeps the version it's coming from, which
 /// sb_set_downgrade() wants next, until the write's sb_update() brings
@@ -872,17 +872,10 @@ pub(crate) fn check_version_downgrade(fs: &Fs, sb: &mut SbLockGuard<'_>) -> bool
     current < fs.sb.version.get().into()
 }
 
-#[c_export]
-pub fn bch2_check_version_downgrade(c: &Opaque<Fs>) -> bool {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    check_version_downgrade(fs, &mut unsafe { fs.sb_lock_held() })
-}
-
 /// The superblock at @new, and allowing incompatible features up to it if
 /// @incompat; a new major empties the downgrade section, which is for
 /// downgrades within one - empties, not deletes: a write calls the from_cpu()
-/// of each section there is. bch2_sb_upgrade().
+/// of each section there is.
 pub(crate) fn sb_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, new: u32, incompat: bool) {
     if c::BCH_VERSION_MAJOR(new.into()) > c::BCH_VERSION_MAJOR(sb.sb().version.get().into()) {
         let empty = <c::bch_sb_field_downgrade as ArmRef>::MIN_LEN.div_ceil(size_of::<u64>());
@@ -896,13 +889,6 @@ pub(crate) fn sb_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, new: u32, incompat: 
         let max = s.version_incompat_allowed().max(new.into());
         s.set_version_incompat_allowed(max);
     }
-}
-
-#[c_export]
-pub fn bch2_sb_upgrade(c: &Opaque<Fs>, new_version: c_uint, incompat: bool) {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    sb_upgrade(fs, &mut unsafe { fs.sb_lock_held() }, new_version, incompat)
 }
 
 // ── Printing ─────────────────────────────────────────────────────────────

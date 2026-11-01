@@ -43,8 +43,6 @@ static inline int bch2_quota_transfer(struct bch_fs *c, unsigned qtypes,
 	return 0;
 }
 
-static inline int bch2_fs_quota_read(struct bch_fs *c) { return 0; }
-
 #endif
 
 #endif /* _BCACHEFS_QUOTA_H */

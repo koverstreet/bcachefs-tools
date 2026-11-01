@@ -1052,10 +1052,7 @@ pub fn bch2_trans_mark_dev_sbs_flags(c: &Opaque<Fs>, flags: c::btree_iter_update
     ret_to_c(Fs::from_c(c).trans_mark_dev_sbs(UpdateTriggerFlags::from_bits_retain(flags.bits())))
 }
 
-#[c_export]
-pub fn bch2_trans_mark_dev_sbs(c: &Opaque<Fs>) -> c_int {
-    ret_to_c(Fs::from_c(c).trans_mark_dev_sbs(UpdateTriggerFlags::TRANSACTIONAL))
-}
+crate::recovery_pass!(bch2_trans_mark_dev_sbs => |fs: &Fs| fs.trans_mark_dev_sbs(UpdateTriggerFlags::TRANSACTIONAL));
 
 // ── Startup and shutdown ─────────────────────────────────────────────────
 

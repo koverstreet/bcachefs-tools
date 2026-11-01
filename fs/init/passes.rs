@@ -547,11 +547,6 @@ pub(crate) fn set_pass_done(fs: &Fs, pass: Pass) {
     lock(fs).published().pass_done.set(pass);
 }
 
-#[c_export]
-pub fn bch2_recovery_set_pass_done(c: &Opaque<Fs>, pass: c::bch_recovery_pass) {
-    set_pass_done(Fs::from_c(c), pass)
-}
-
 // ── Scheduling ───────────────────────────────────────────────────────────────
 
 /// Every pass that depends on @pass, transitively, and @pass.
@@ -1143,11 +1138,6 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
     }
 
     Ok(())
-}
-
-#[c_export]
-pub fn bch2_run_recovery_passes_startup(c: &Opaque<Fs>, from: c::bch_recovery_pass) -> c_int {
-    ret_to_c(run_passes_startup(Fs::from_c(c), from))
 }
 
 // ── Status ───────────────────────────────────────────────────────────────────

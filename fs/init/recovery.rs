@@ -152,8 +152,7 @@ pub fn bch2_btree_lost_data(c: &Opaque<Fs>, msg: &mut Printbuf, btree: Btree) ->
 
 /// The alloc info dropped, to be rebuilt: the passes that rebuild it required,
 /// the errors they'll find silenced, and the alloc btrees killed. For
-/// -o reconstruct_alloc, or a filesystem with no alloc info going read-write:
-/// bch2_reconstruct_alloc().
+/// -o reconstruct_alloc, or a filesystem with no alloc info going read-write.
 fn reconstruct_alloc(fs: &Fs) {
     {
         let mut w = fs.sb_write();
@@ -194,14 +193,9 @@ fn reconstruct_alloc(fs: &Fs) {
     }
 }
 
-#[c_export]
-pub fn bch2_reconstruct_alloc(c: &Opaque<Fs>) {
-    reconstruct_alloc(Fs::from_c(c))
-}
-
 /// After a journal rewind, the alloc info is stale for buckets whose state
 /// changed between the rewind point and the original journal head: what
-/// check_alloc_info finds of that, silenced. bch2_ignore_journal_rewind_errors().
+/// check_alloc_info finds of that, silenced.
 fn ignore_journal_rewind_errors(fs: &Fs) {
     let mut w = fs.sb_write();
     for e in [id::alloc_key_data_type_wrong, id::alloc_key_gen_wrong, id::alloc_key_dirty_sectors_wrong,
@@ -212,11 +206,6 @@ fn ignore_journal_rewind_errors(fs: &Fs) {
         w.set_err_silent(e);
     }
     w.dirty();
-}
-
-#[c_export]
-pub fn bch2_ignore_journal_rewind_errors(c: &Opaque<Fs>) {
-    ignore_journal_rewind_errors(Fs::from_c(c))
 }
 
 /* journal replay: */

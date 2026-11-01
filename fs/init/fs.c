@@ -61,7 +61,6 @@
 
 #include "sb/clean.h"
 #include "sb/counters.h"
-#include "sb/downgrade.h"
 #include "sb/errors.h"
 #include "sb/io.h"
 #include "sb/members.h"
