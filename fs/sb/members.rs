@@ -1719,9 +1719,7 @@ impl Dev {
     /// The block device's name - sdX and the like: up to its NUL, within the
     /// buffer, or empty if it has none.
     pub fn name(&self) -> &CStr {
-        // SAFETY: a c_char is a byte: the buffer's bytes
-        let bytes = unsafe { core::slice::from_raw_parts(self.name.as_ptr().cast::<u8>(), self.name.len()) };
-        CStr::from_bytes_until_nul(bytes).unwrap_or(c"")
+        crate::util::ffi::cstr_in(&self.name)
     }
 
     /// Whether its block device is open for IO: bch2_dev_is_online().

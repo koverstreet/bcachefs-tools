@@ -99,6 +99,12 @@ pub const fn c_str(s: &'static str) -> &'static core::ffi::CStr {
     }
 }
 
+/// The string in C char array @buf: up to its NUL, or empty if it has none.
+pub fn cstr_in(buf: &[c_char]) -> &core::ffi::CStr {
+    let bytes = unsafe { core::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len()) };
+    core::ffi::CStr::from_bytes_until_nul(bytes).unwrap_or(c"")
+}
+
 /// @f, given @s as a C string - a copy, NUL terminated, and as C would see
 /// it: up to a NUL in @s, if there's one.
 pub fn with_cstr<R>(s: &str, f: impl FnOnce(&core::ffi::CStr) -> R)

@@ -115,7 +115,7 @@ unsafe impl Sync for Fs {}
 
 impl Fs {
     pub fn name(&self) -> &core::ffi::CStr {
-        unsafe { core::ffi::CStr::from_ptr((*self.as_ptr()).name.as_ptr().cast()) }
+        crate::util::ffi::cstr_in(&self.name)
     }
 
     pub fn opts(&self) -> &c::PublishedOpts {
