@@ -26,9 +26,13 @@ crate::module_param! {
 // ── io failures ──────────────────────────────────────────────────────────
 
 impl c::bch_io_failures {
+    pub fn devs(&self) -> &[c::bch_dev_io_failures] {
+        &self.data[..self.nr.into()]
+    }
+
     /// @dev's record, if it has one: bch2_dev_io_failures().
     pub fn dev(&self, dev: u32) -> Option<&c::bch_dev_io_failures> {
-        self.data[..self.nr.into()].iter().find(|f| u32::from(f.dev) == dev)
+        self.devs().iter().find(|f| u32::from(f.dev) == dev)
     }
 
     /// @dev's record, a new one if it has none: bch2_dev_io_failures_mut().
@@ -70,7 +74,7 @@ impl c::bch_io_failures {
     /// once, when it was: bch2_io_failures_all_dev_removed(). Only for an
     /// operation that succeeded; a record with no error at all isn't one.
     pub fn all_dev_removed(&self) -> bool {
-        self.data[..self.nr.into()].iter().all(|f| {
+        self.devs().iter().all(|f| {
             f.bits.csum_nr() == 0 && f.ec_errcode == 0 &&
                 BchError::from_raw(-i32::from(f.errcode)).matches(bch_errcode::BCH_ERR_BLK_STS_REMOVED)
         })
@@ -82,7 +86,7 @@ impl c::bch_io_failures {
         {
             let mut out = out.indent(2);
 
-            for f in &self.data[..self.nr.into()] {
+            for f in self.devs() {
                 out.make_room_gfp(1024, c::GFP_KERNEL);
                 {
                     let mut out = out.atomic();
