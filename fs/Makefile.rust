@@ -264,9 +264,10 @@ $(bch-host)/libsyn.rmeta: private rs-flags := $(foreach f,clone-impls derive ext
 $(bch-host)/libsyn.rmeta: $(bch-host-src)/syn/lib.rs $(bch-host)/libquote.rmeta FORCE
 	$(call if_changed_dep,bch_host)
 
-# The proc-macros on them:
-bch-pmac := --cap-lints=allow -L$(bch-host) --extern proc_macro2=$(bch-host)/libproc_macro2.rlib \
+# The proc-macros on them, and rust_types_gen:
+bch-pmac-externs := -L$(bch-host) --extern proc_macro2=$(bch-host)/libproc_macro2.rlib \
 	--extern quote=$(bch-host)/libquote.rlib --extern syn=$(bch-host)/libsyn.rlib
+bch-pmac := --cap-lints=allow $(bch-pmac-externs)
 bch-pmac-deps := $(bch-host)/libsyn.rmeta FORCE
 
 # Vendored crates get --cap-lints=allow: the kernel's lints are about how our
@@ -282,7 +283,8 @@ $(obj)/libpaste.so: $(src)/vendor/paste/src/lib.rs FORCE
 # cstruct-macros include!s its parser from types/cstruct.rs: the dep-info
 # tracks it.
 $(obj)/libcstruct_macros.so: private rs-edition := 2024
-$(obj)/libcstruct_macros.so: $(src)/cstruct-macros/src/lib.rs FORCE
+$(obj)/libcstruct_macros.so: private rs-flags := $(bch-pmac-externs)
+$(obj)/libcstruct_macros.so: $(src)/cstruct-macros/src/lib.rs $(bch-pmac-deps)
 	$(call if_changed_dep,bch_procmacro)
 $(obj)/libbitfield_struct.so: $(src)/vendor/bitfield-struct/src/lib.rs $(bch-pmac-deps)
 	$(call if_changed_dep,bch_procmacro)
@@ -434,8 +436,16 @@ targets += $(bch-rust-gc-in)
 # one, which objcopy extracts. A record's source path is relative to where
 # rustc ran - or, since 7.0's --remap-path-prefix=$(srcroot)/=, to srcroot:
 # not where this runs in an in-tree O= build, so rust_types_gen is given it.
-$(obj)/rust_types_gen: $(src)/types/main.rs $(src)/types/cstruct.rs FORCE
-	$(call if_changed,bch_codegen_host)
+#
+# Built with $(RUSTC), not $(HOSTRUSTC), as it links the host rlibs of syn,
+# which $(RUSTC) built for the proc-macros: an rlib links only into its own
+# compiler's crates.
+quiet_cmd_bch_types_gen = RUSTC H  $@
+      cmd_bch_types_gen = $(RUSTC) --edition 2024 -O $(bch-pmac-externs) \
+	-Clinker-flavor=gcc -Clinker=$(HOSTCC) $< -o $@
+
+$(obj)/rust_types_gen: $(src)/types/main.rs $(src)/types/cstruct.rs $(bch-pmac-deps)
+	$(call if_changed,bch_types_gen)
 
 quiet_cmd_bch_cstruct_gen = GEN     $(obj)/rust/*_gen.h
       cmd_bch_cstruct_gen = $(LD) -r -o $(obj)/rust/cstruct.o $< && \

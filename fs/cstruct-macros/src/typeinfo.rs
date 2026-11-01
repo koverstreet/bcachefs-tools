@@ -16,7 +16,7 @@
 //! reference to that type's own INFO, so that type must have TypeInfo too, or
 //! the `<T as TypeInfo>` bound fails to resolve (a loud, actionable error).
 
-use proc_macro::TokenStream;
+use proc_macro2::TokenStream;
 
 use crate::cstruct::{field_type, parse_cstruct, CKind, FieldType};
 use crate::tokens;

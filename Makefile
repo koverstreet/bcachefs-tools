@@ -351,17 +351,37 @@ build/cstruct/fs.o: force
 		--target-dir build/gen-headers -p bcachefs-kernel --lib -- \
 		--cfg bch_cstruct_records --emit=obj=$(abspath $@)
 
-# rust_types_gen runs on the build host: no dependencies, plain rustc. Rebuilt
-# when the host rustc changes, as cargo would - a ktest VM builds in this tree
-# too, and its binary doesn't run on the host, nor the host's in the VM.
+# rust_types_gen runs on the build host: plain rustc, on the vendored syn -
+# the kernel build's, built here too, as it does. Rebuilt when the host rustc
+# changes, as cargo would - a ktest VM builds in this tree too, and its binary
+# doesn't run on the host, nor the host's in the VM.
 build/hostrustc-version: force
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(HOSTRUSTC) -vV > $@.new
 	$(Q)cmp -s $@.new $@ || mv $@.new $@
 
-build/rust_types_gen: fs/types/main.rs fs/types/cstruct.rs build/hostrustc-version
+HOST_SYN_SRC := fs/vendor/kernel-rust
+HOST_SYN := build/rust-host
+HOST_SYN_EXTERNS := -L$(HOST_SYN) --extern proc_macro2=$(HOST_SYN)/libproc_macro2.rlib \
+	--extern quote=$(HOST_SYN)/libquote.rlib --extern syn=$(HOST_SYN)/libsyn.rlib
+
+$(HOST_SYN)/libproc_macro2.rlib: $(HOST_SYN_SRC)/proc-macro2/lib.rs build/hostrustc-version
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(HOSTRUSTC) --edition 2021 --cap-lints=allow --crate-type rlib --crate-name proc_macro2 \
+		--cfg 'feature="proc-macro"' --cfg wrap_proc_macro -O -o $@ $<
+$(HOST_SYN)/libquote.rlib: $(HOST_SYN_SRC)/quote/lib.rs $(HOST_SYN)/libproc_macro2.rlib
+	$(Q)$(HOSTRUSTC) --edition 2018 --cap-lints=allow --crate-type rlib --crate-name quote \
+		--cfg 'feature="proc-macro"' -L$(HOST_SYN) \
+		--extern proc_macro2=$(HOST_SYN)/libproc_macro2.rlib -O -o $@ $<
+$(HOST_SYN)/libsyn.rlib: $(HOST_SYN_SRC)/syn/lib.rs $(HOST_SYN)/libquote.rlib
+	$(Q)$(HOSTRUSTC) --edition 2021 --cap-lints=allow --crate-type rlib --crate-name syn \
+		$(foreach f,clone-impls derive extra-traits full parsing printing proc-macro visit visit-mut,--cfg 'feature="$(f)"') \
+		-L$(HOST_SYN) --extern proc_macro2=$(HOST_SYN)/libproc_macro2.rlib \
+		--extern quote=$(HOST_SYN)/libquote.rlib -O -o $@ $<
+
+build/rust_types_gen: fs/types/main.rs fs/types/cstruct.rs build/hostrustc-version $(HOST_SYN)/libsyn.rlib
 	@echo "    [RUSTC]  $@"
-	$(Q)$(HOSTRUSTC) --edition 2024 -O -o $@ $<
+	$(Q)$(HOSTRUSTC) --edition 2024 -O $(HOST_SYN_EXTERNS) -o $@ $<
 
 # Each record is a section of its own, all of the same name: ld -r makes them
 # one, which objcopy extracts.

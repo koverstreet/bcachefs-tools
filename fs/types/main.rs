@@ -22,8 +22,8 @@
 //! The records are from the target build, with its configuration: the C is
 //! that configuration's, #[cfg] already resolved.
 //!
-//! A host program of its own, with no dependencies: built and run before the
-//! C, on any build host.
+//! A host program of its own, on the vendored syn alone: built and run before
+//! the C, on any build host.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

@@ -164,7 +164,7 @@
 //! declaration reaches the list as tokens, so an error in a definition is
 //! reported where it's written.
 
-use proc_macro::{Delimiter, Group, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
 
 use crate::cstruct::{parse_items, tagged_union_arms, tagged_union_record_text, CItem, CTaggedArm,
                      CTaggedSize, CTaggedUnion};
@@ -522,7 +522,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
             format!("::core::mem::align_of::<{s_ty}>() as u64"),
             format!("{payload_offset} as u64"),
         ];
-        record(&tagged_union_record_text(tu, arms), &nums)
+        record(&tagged_union_record_text(tu, arms), &nums.map(|n| tokens(&n))).to_string()
     } else {
         String::new()
     };

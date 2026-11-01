@@ -22,7 +22,10 @@
 //! in its expansion, where the caller's locals aren't - so an inline {x}'s
 //! ident takes the format string's span, as format_args!()'s does.
 
-use proc_macro::{Delimiter, Group, Ident, Literal, Spacing, TokenStream, TokenTree};
+use proc_macro2::{Ident, Literal, Span, TokenStream, TokenTree};
+use quote::{format_ident, quote, ToTokens as _};
+use syn::parse::{Parse, ParseStream};
+use syn::{Error, Expr, LitStr, Token};
 
 /// What a placeholder names: a positional argument - {} numbered in order, as
 /// format_args!() numbers them - or a name, a named argument's or the
@@ -124,192 +127,120 @@ fn split_fmt(src: &str) -> Result<(String, String, Vec<Piece>), String> {
     Ok((open, close, pieces))
 }
 
-/// @ts split at its top level commas - a turbofish's included, whose angle
-/// brackets aren't a group. A trailing comma makes no empty last piece.
-fn split_commas(ts: TokenStream) -> Vec<Vec<TokenTree>> {
-    let mut out = vec![Vec::new()];
-    let mut angle = 0usize;
-    let mut prev_colons = false;
+/// __prt!'s input: CRATE, OUT, "fmt", then the arguments - positional, then
+/// `name = expr`.
+pub(crate) struct PrtInput {
+    krate: TokenTree,
+    out:   Expr,
+    fmt:   LitStr,
+    args:  Vec<(Option<Ident>, Expr)>,
+}
 
-    for tt in ts {
-        let colons = matches!(&tt, TokenTree::Punct(p) if p.as_char() == ':');
-        match &tt {
-            TokenTree::Punct(p) if p.as_char() == ',' && angle == 0 => {
-                out.push(Vec::new());
-                prev_colons = false;
-                continue;
-            }
-            TokenTree::Punct(p) if p.as_char() == '<' && (prev_colons || angle > 0) => angle += 1,
-            TokenTree::Punct(p) if p.as_char() == '>' && angle > 0 => angle -= 1,
-            _ => {}
+impl Parse for PrtInput {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let krate = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let out = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let fmt = input.parse().map_err(|e| Error::new(e.span(), "the format string must be a string literal"))?;
+        let mut args = Vec::new();
+        while input.parse::<Option<Token![,]>>()?.is_some() && !input.is_empty() {
+            let name = match input.peek(syn::Ident) && input.peek2(Token![=]) && !input.peek2(Token![==]) {
+                true => {
+                    let name = input.parse()?;
+                    input.parse::<Token![=]>()?;
+                    Some(name)
+                }
+                false => None,
+            };
+            args.push((name, input.parse()?));
         }
-        prev_colons = colons;
-        out.last_mut().unwrap().push(tt);
-    }
-    if out.last().is_some_and(|l| l.is_empty()) {
-        out.pop();
-    }
-    out
-}
-
-/// A macro_rules fragment ($x:literal, $x:expr) comes as a group of its own,
-/// with no delimiters: what's in it.
-fn unwrap_none(tt: &TokenTree) -> Option<TokenTree> {
-    match tt {
-        TokenTree::Group(g) if g.delimiter() == Delimiter::None => {
-            let mut inner = g.stream().into_iter();
-            match (inner.next(), inner.next()) {
-                (Some(t), None) => unwrap_none(&t).or(Some(t)),
-                _ => None,
-            }
+        if !input.is_empty() {
+            return Err(input.error("expected `,` between the arguments"));
         }
-        _ => None,
+        Ok(PrtInput { krate, out, fmt, args })
     }
 }
 
-fn code(s: &str) -> TokenStream {
-    s.parse().unwrap()
+/// A string literal of @src, quotes included, at @span.
+fn lit_at(src: &str, span: Span) -> syn::Result<Literal> {
+    let mut lit: Literal = src.parse().map_err(|_| Error::new(span, format!("bad format piece {src}")))?;
+    lit.set_span(span);
+    Ok(lit)
 }
 
-fn paren(ts: TokenStream) -> TokenTree {
-    TokenTree::Group(Group::new(Delimiter::Parenthesis, ts))
-}
-
-/// ::core::write!(__bch_out, @lit, @arg);
-fn write_call(lit: Literal, arg: Option<TokenStream>) -> TokenStream {
-    let mut args = code("__bch_out,");
-    args.extend([TokenTree::Literal(lit)]);
-    if let Some(arg) = arg {
-        args.extend(code(","));
-        args.extend(arg);
-    }
-    let mut ts = code("::core::write!");
-    ts.extend([paren(args)]);
-    ts.extend(code(";"));
-    ts
-}
-
-pub(crate) fn prt(input: TokenStream) -> Result<TokenStream, String> {
-    let mut parts = split_commas(input).into_iter();
-    let krate: TokenStream = parts.next().ok_or("no crate")?.into_iter().collect();
-    let out: TokenStream = parts.next().ok_or("no printbuf")?.into_iter().collect();
-
-    let fmt_part = parts.next().ok_or("no format string")?;
-    let fmt_tt = match fmt_part.as_slice() {
-        [tt] => unwrap_none(tt).unwrap_or_else(|| tt.clone()),
-        _    => return Err("the format string must be a string literal".into()),
-    };
-    let TokenTree::Literal(fmt_lit) = &fmt_tt else {
-        return Err("the format string must be a string literal".into());
-    };
-    let fmt_span = fmt_lit.span();
-    let (open, close, pieces) = split_fmt(&fmt_lit.to_string())?;
+pub(crate) fn prt(PrtInput { krate, out, fmt, args }: PrtInput) -> syn::Result<TokenStream> {
+    let fmt_span = fmt.span();
+    let (open, close, pieces) = split_fmt(&fmt.token().to_string()).map_err(|e| Error::new(fmt_span, e))?;
 
     // The arguments, positional then named - bound as __bch_argN, N their
     // place here - and whether each is used
-    let mut args: Vec<(Option<String>, TokenStream)> = Vec::new();
-    for a in parts {
-        match a.as_slice() {
-            [TokenTree::Ident(name), TokenTree::Punct(eq), rest @ ..]
-                if eq.as_char() == '=' && eq.spacing() == Spacing::Alone && !rest.is_empty() =>
-                args.push((Some(name.to_string()), rest.iter().cloned().collect())),
-            _ => args.push((None, a.into_iter().collect())),
-        }
-    }
     let nr_positional = args.iter().take_while(|(name, _)| name.is_none()).count();
     let mut used = vec![false; args.len()];
+    let binding = |i: usize| format_ident!("__bch_arg{i}");
 
-    let path = |rest: &str| -> TokenStream {
-        let mut ts = krate.clone();
-        ts.extend(code(rest));
-        ts
-    };
-
-    let mut body = TokenStream::new();
-
-    // let __bch_out: &mut CRATE::util::Printbuf = &mut *(OUT);
-    body.extend(code("let __bch_out: &mut"));
-    body.extend(path("::util::Printbuf"));
-    body.extend(code("= &mut *"));
-    body.extend([paren(out)]);
-    body.extend(code(";"));
-
-    body.extend(code("#[allow(unused_imports)] use"));
-    body.extend(path("::util::printbuf::prt_arg::{ViaText as _, ViaDisplay as _};"));
-
+    let mut body = Vec::new();
     for p in pieces {
         match p {
             Piece::Lit(s) => {
-                let mut lit: Literal = format!("{open}{s}{close}").parse().unwrap();
-                lit.set_span(fmt_span);
-                body.extend(write_call(lit, None));
+                let lit = lit_at(&format!("{open}{s}{close}"), fmt_span)?;
+                body.push(quote!(::core::write!(__bch_out, #lit);));
             }
             Piece::Arg { arg, spec } => {
                 // the argument, as a reference: an argument's binding, or an
                 // inline capture - the caller's name, at the caller's span
-                let mut bound = |i: usize| {
-                    used[i] = true;
-                    code(&format!("__bch_arg{i}"))
-                };
-                let arg_ts = match arg {
-                    ArgRef::Index(i) if i < nr_positional => bound(i),
-                    ArgRef::Index(i) => return Err(format!("format string refers to argument {i}, \
-                                                            but there are {nr_positional}")),
-                    ArgRef::Name(n) => match args.iter().position(|(name, _)| name.as_ref() == Some(&n)) {
-                        Some(i) => bound(i),
+                let arg = match arg {
+                    ArgRef::Index(i) if i < nr_positional => {
+                        used[i] = true;
+                        binding(i).into_token_stream()
+                    }
+                    ArgRef::Index(i) => return Err(Error::new(fmt_span,
+                        format!("format string refers to argument {i}, but there are {nr_positional}"))),
+                    ArgRef::Name(n) => match args.iter().position(|(name, _)| name.as_ref().is_some_and(|m| *m == n)) {
+                        Some(i) => {
+                            used[i] = true;
+                            binding(i).into_token_stream()
+                        }
                         None => {
-                            let mut ts = code("&");
-                            ts.extend([TokenTree::Ident(Ident::new(&n, fmt_span))]);
-                            ts
+                            let n = Ident::new(&n, fmt_span);
+                            quote!(&#n)
                         }
                     },
                 };
 
-                if spec.is_empty() {
-                    // (&CRATE::util::printbuf::prt_arg::Arg(ARG)).prt(__bch_out);
-                    let mut call = code("&");
-                    call.extend(path("::util::printbuf::prt_arg::Arg"));
-                    call.extend([paren(arg_ts)]);
-                    body.extend([paren(call)]);
-                    body.extend(code(".prt(__bch_out);"));
-                } else {
-                    let mut lit: Literal = format!("\"{{:{spec}}}\"").parse()
-                        .map_err(|_| format!("bad format spec `{spec}`"))?;
-                    lit.set_span(fmt_span);
-                    body.extend(write_call(lit, Some(arg_ts)));
-                }
+                body.push(match spec.is_empty() {
+                    true => quote!((&#krate::util::printbuf::prt_arg::Arg(#arg)).prt(__bch_out);),
+                    false => {
+                        let lit = lit_at(&format!("\"{{:{spec}}}\""), fmt_span)?;
+                        quote!(::core::write!(__bch_out, #lit, #arg);)
+                    }
+                });
             }
         }
     }
 
     if let Some(i) = used.iter().position(|u| !u) {
-        return Err(match &args[i].0 {
-            Some(name) => format!("named argument `{name}` is never used"),
-            None       => format!("argument {i} is never used"),
+        return Err(match &args[i] {
+            (Some(name), _) => Error::new_spanned(name, format!("named argument `{name}` is never used")),
+            (None, a)       => Error::new_spanned(a, format!("argument {i} is never used")),
         });
     }
 
     // Each argument evaluated once, as format_args!() does it: borrowed in a
     // match's scrutinee, so the temporaries in it - k.to_text(fs)'s key - live
     // until the writes are done.
-    //   match (&(A0), &(A1), ..) { (__bch_arg0, __bch_arg1, ..) => { body } }
-    let mut scrutinee = TokenStream::new();
-    let mut pattern = TokenStream::new();
-    for (i, (_, a)) in args.into_iter().enumerate() {
-        scrutinee.extend(code("&"));
-        scrutinee.extend([paren(a)]);
-        scrutinee.extend(code(","));
-        pattern.extend(code(&format!("__bch_arg{i},")));
-    }
-
-    let mut ts = code("match");
-    ts.extend([paren(scrutinee)]);
-    let mut arm = TokenStream::new();
-    arm.extend([paren(pattern)]);
-    arm.extend(code("=>"));
-    arm.extend([TokenTree::Group(Group::new(Delimiter::Brace, body))]);
-    ts.extend([TokenTree::Group(Group::new(Delimiter::Brace, arm))]);
-    Ok(ts)
+    let exprs = args.iter().map(|(_, a)| a);
+    let bindings = (0..args.len()).map(binding);
+    Ok(quote! {
+        match (#(&(#exprs),)*) {
+            (#(#bindings,)*) => {
+                let __bch_out: &mut #krate::util::Printbuf = &mut *(#out);
+                #[allow(unused_imports)]
+                use #krate::util::printbuf::prt_arg::{ViaText as _, ViaDisplay as _};
+                #(#body)*
+            }
+        }
+    })
 }
 
 #[cfg(test)]

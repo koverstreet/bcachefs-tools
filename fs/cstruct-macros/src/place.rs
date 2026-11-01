@@ -35,153 +35,148 @@
 //! placed at it - and initializes one without #[init] with field_init(): its
 //! InitAt, if a placed type lives there, else zeroed.
 
-use proc_macro::{Delimiter, Group, TokenStream, TokenTree};
+use proc_macro2::TokenStream;
+use quote::{format_ident, quote, ToTokens as _};
+use syn::parse::{Parse, ParseStream, Parser as _};
+use syn::punctuated::Punctuated;
+use syn::{bracketed, token, Error, Field, Fields, Ident, ItemStruct, LitStr, Path, Token, Type};
 
 use crate::cstruct::CFieldDef;
-use crate::tokens;
 
 /// Where #[placed] says a type lives: at Base.field; as an element of the
 /// array there, holding its index as @0, of integer type @1; or as an
 /// element of the Container there.
 enum Kind {
     Field,
-    Array(String, String),
+    Array(Ident, Type),
     Container,
 }
 
-struct PlaceAttr {
-    base:  String,
-    field: String,
+pub(crate) struct PlaceAttr {
+    base:  Path,
+    field: Ident,
     kind:  Kind,
 }
 
-fn parse_attr(attr: TokenStream) -> Result<PlaceAttr, String> {
-    let usage = "takes Base.field; Base.field[], index = NAME: TYPE, for an element of the array there, its index \
-                 the field NAME of integer TYPE; or Base.field[..], for an element of the Container there";
-    let attr: String = attr.to_string().chars().filter(|c| !c.is_whitespace()).collect();
-    let (path, index) = match attr.split_once(',') {
-        Some((path, rest)) => {
-            let (name, ty) = rest.strip_prefix("index=").and_then(|r| r.split_once(':'))
-                .ok_or_else(|| format!("{usage} - not {attr:?}"))?;
-            (path, Some((name.to_string(), ty.to_string())))
+const USAGE: &str = "takes Base.field; Base.field[], index = NAME: TYPE, for an element of the array there, its \
+                     index the field NAME of integer TYPE; or Base.field[..], for an element of the Container there";
+
+impl Parse for PlaceAttr {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let usage = |e: Error| Error::new(e.span(), format!("{USAGE} - {e}"));
+        let base = Path::parse_mod_style(input).map_err(usage)?;
+        input.parse::<Token![.]>().map_err(usage)?;
+        let field: Ident = input.parse().map_err(usage)?;
+        // Some(container): [..] or []
+        let elem = match input.peek(token::Bracket) {
+            true => {
+                let inner;
+                bracketed!(inner in input);
+                let container = !inner.is_empty();
+                if container {
+                    inner.parse::<Token![..]>().map_err(usage)?;
+                }
+                Some(container)
+            }
+            false => None,
+        };
+        let index = match input.parse::<Option<Token![,]>>()? {
+            Some(_) => {
+                let kw: Ident = input.parse().map_err(usage)?;
+                if kw != "index" {
+                    return Err(usage(Error::new_spanned(kw, "expected index")));
+                }
+                input.parse::<Token![=]>().map_err(usage)?;
+                let name: Ident = input.parse().map_err(usage)?;
+                input.parse::<Token![:]>().map_err(usage)?;
+                Some((name, input.parse::<Type>().map_err(usage)?))
+            }
+            None => None,
+        };
+        if !input.is_empty() {
+            return Err(usage(input.error("unexpected tokens")));
         }
-        None => (attr.as_str(), None),
-    };
-    let (path, kind) = if let Some(p) = path.strip_suffix("[..]") {
-        (p, Kind::Container)
-    } else if let Some(p) = path.strip_suffix("[]") {
-        let (name, ty) = index.clone()
-            .ok_or_else(|| format!("{usage}: an array's element names its index - not {attr:?}"))?;
-        (p, Kind::Array(name, ty))
-    } else {
-        (path, Kind::Field)
-    };
-    if index.is_some() && !matches!(kind, Kind::Array(..)) {
-        return Err(format!("{usage}: only an array's element has an index - not {attr:?}"));
+        let kind = match (elem, index) {
+            (None, None) => Kind::Field,
+            (Some(true), None) => Kind::Container,
+            (Some(false), Some((name, ty))) => Kind::Array(name, ty),
+            (Some(false), None) => return Err(Error::new(field.span(),
+                format!("{USAGE}: an array's element names its index"))),
+            (_, Some((name, _))) => return Err(Error::new(name.span(),
+                format!("{USAGE}: only an array's element has an index"))),
+        };
+        Ok(PlaceAttr { base, field, kind })
     }
-    let (base, field) = path.rsplit_once('.')
-        .filter(|(b, f)| !b.is_empty() && !f.is_empty() && f.chars().all(|c| c == '_' || c.is_ascii_alphanumeric()))
-        .ok_or_else(|| format!("{usage} - not {attr:?}"))?;
-    Ok(PlaceAttr { base: base.into(), field: field.into(), kind })
 }
 
 /// `#[placed(...)]`: the struct, its At field added, and its impls.
-pub(crate) fn placed(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
-    let PlaceAttr { base, field, kind } = parse_attr(attr)?;
+pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemStruct) -> syn::Result<TokenStream> {
+    let name = item.ident.clone();
 
-    let mut trees: Vec<TokenTree> = item.into_iter().collect();
-
-    // Its outer attributes - #[pin_data], its derives, its #[cfg]s - then the
-    // struct keyword and its name
+    // Its outer attributes: #[pin_data], its derives, its #[cfg]s
     let mut pin_data: Option<bool> = None;  // whether PinnedDrop
     let mut cstruct = false;                // whether C has it
     let mut init = false;                   // whether #[derive(Init)]'s
-    let mut cfgs = String::new();           // for its impls too
-    let mut i = 0;
-    while let (Some(TokenTree::Punct(p)), Some(TokenTree::Group(g))) = (trees.get(i), trees.get(i + 1)) {
-        if p.as_char() != '#' || g.delimiter() != Delimiter::Bracket {
-            break;
+    let mut cfgs = Vec::new();              // for its impls too
+    for a in &item.attrs {
+        let path = a.path();
+        if path.segments.last().is_some_and(|s| s.ident == "pin_data") {
+            pin_data = Some(a.meta.to_token_stream().to_string().contains("PinnedDrop"));
+        } else if path.is_ident("derive") {
+            let derives = a.parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)?;
+            let has = |d: &str| derives.iter().any(|p| p.segments.last().is_some_and(|s| s.ident == d));
+            cstruct |= has("CStruct");
+            init |= has("Init");
+        } else if path.is_ident("cfg") {
+            cfgs.push(a.clone());
         }
-        let a: String = g.stream().to_string().chars().filter(|c| !c.is_whitespace()).collect();
-        let path = a.split('(').next().unwrap_or_default();
-        if path == "pin_data" || path.ends_with("::pin_data") {
-            pin_data = Some(a.contains("PinnedDrop"));
-        }
-        if path == "derive" {
-            cstruct |= a.contains("CStruct");
-            init |= a.contains("Init");
-        }
-        if path == "cfg" {
-            cfgs.push_str(&format!("#[{}]\n", g.stream()));
-        }
-        i += 2;
     }
-    let kw = trees[i..].iter()
-        .position(|t| matches!(t, TokenTree::Ident(id) if id.to_string() == "struct"))
-        .map(|k| k + i)
-        .ok_or("is for a struct with named fields")?;
-    let name = match trees.get(kw + 1) {
-        Some(TokenTree::Ident(id)) => id.to_string(),
-        _ => return Err("is for a struct with named fields".into()),
-    };
-    if matches!(trees.get(kw + 2), Some(TokenTree::Punct(p)) if p.as_char() == '<') {
-        return Err(format!("{name}: a placed type has no generics"));
+    if !item.generics.params.is_empty() {
+        return Err(Error::new_spanned(&item.generics, format!("{name}: a placed type has no generics")));
     }
 
     // Its At, and the field it's in: an element's index, as C names it, or
     // a field of no bytes
-    let n = format!("{{ crate::util::place::name({field:?}) }}");
-    let (at, at_field, at_decl) = match &kind {
-        Kind::Field => (
-            format!("crate::util::place::At<{base}, {n}>"),
-            AT_FIELD.to_string(),
-            format!("char {AT_FIELD}[0]"),
-        ),
+    let field_name = LitStr::new(&field.to_string(), field.span());
+    let n = quote!({ crate::util::place::name(#field_name) });
+    let empty_at = || (format_ident!("{AT_FIELD}"), format!("char {AT_FIELD}[0]"));
+    let (at, (at_field, at_decl)) = match &kind {
+        Kind::Field => (quote!(crate::util::place::At<#base, #n>), empty_at()),
         Kind::Array(idx, ty) => {
-            let c_ty = match crate::cstruct::field_type(ty)? {
-                crate::cstruct::FieldType::Named { c: Some(c), .. } => c,
-                _ => return Err(format!("{name}: its index, {idx}: {ty}, isn't an integer C has")),
+            let c_ty = match crate::cstruct::field_type(&ty.to_token_stream().to_string()) {
+                Ok(crate::cstruct::FieldType::Named { c: Some(c), .. }) => c,
+                _ => return Err(Error::new_spanned(ty,
+                    format!("{name}: its index, {idx}: {}, isn't an integer C has", ty.to_token_stream()))),
             };
-            (format!("crate::util::place::AtIndex<{base}, {n}, {ty}>"), idx.clone(), format!("{c_ty} {idx}"))
+            (quote!(crate::util::place::AtIndex<#base, #n, #ty>), (idx.clone(), format!("{c_ty} {idx}")))
         }
-        Kind::Container => (
-            format!("crate::util::place::AtIn<{name}>"),
-            AT_FIELD.to_string(),
-            format!("char {AT_FIELD}[0]"),
-        ),
+        Kind::Container => (quote!(crate::util::place::AtIn<#name>), empty_at()),
     };
 
-    // The At field, last
-    let body = match trees.last() {
-        Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => g.stream(),
-        _ => return Err(format!("{name}: is for a struct with named fields")),
+    // The At field, last. #[derive(Init)]'s init() takes the At, and C has a
+    // declaration of it - if they're there: the attributes are theirs
+    let Fields::Named(fields) = &mut item.fields else {
+        return Err(Error::new_spanned(&item, format!("{name}: is for a struct with named fields")));
     };
-    let sep = match body.clone().into_iter().last() {
-        None => "",
-        Some(TokenTree::Punct(p)) if p.as_char() == ',' => "",
-        _ => ",",
-    };
-    // #[derive(Init)]'s init() takes the At, and C has a declaration of it -
-    // if they're there: the attributes are theirs
-    let init_attr = if init { "#[placed_at]" } else { "" };
-    let c_attr = if cstruct { format!("#[c(\"{at_decl}\")]") } else { String::new() };
-    let body = tokens(&format!("{body}{sep} {init_attr} {c_attr} pub(crate) {at_field}: {at},"));
-    *trees.last_mut().unwrap() = TokenTree::Group(Group::new(Delimiter::Brace, body));
-    let item: TokenStream = trees.into_iter().collect();
+    let init_attr = init.then(|| quote!(#[placed_at]));
+    let c_attr = cstruct.then(|| quote!(#[c(#at_decl)]));
+    fields.named.push(Field::parse_named.parse2(quote!(#init_attr #c_attr pub(crate) #at_field: #at))?);
 
-    let init_at = |init: &str| format!(
-        "{cfgs}#[automatically_derived]\n\
-         // SAFETY: init() is Base's for {field}, which {base}'s #[derive(Init)]\n\
-         // runs it into, the field it's for\n\
-         unsafe impl crate::util::place::InitAt<{n}> for {base} {{\n\
-             unsafe fn init() -> impl ::pin_init::PinInit<\n\
-                 <Self as crate::util::place::Field<{n}>>::Type,\n\
-                 crate::errcode::BchError>\n\
-             {{\n\
-                 // SAFETY: the caller's\n\
-                 unsafe {{ {init} }}\n\
-             }}\n\
-         }}\n");
+    let init_at = |init: TokenStream| quote! {
+        #(#cfgs)*
+        #[automatically_derived]
+        // SAFETY: init() is Base's for the field, which Base's #[derive(Init)]
+        // runs it into, the field it's for
+        unsafe impl crate::util::place::InitAt<#n> for #base {
+            unsafe fn init() -> impl ::pin_init::PinInit<
+                <Self as crate::util::place::Field<#n>>::Type,
+                crate::errcode::BchError>
+            {
+                // SAFETY: the caller's
+                unsafe { #init }
+            }
+        }
+    };
 
     // A field's or an array element's: Placed, its InitAt, and no drop of
     // its own. A container's element: PlacedIn, its container's InitAt -
@@ -189,56 +184,61 @@ pub(crate) fn placed(attr: TokenStream, item: TokenStream) -> Result<TokenStream
     let impls = match &kind {
         Kind::Field | Kind::Array(..) => {
             if pin_data == Some(true) {
-                return Err(format!("{name}: a placed type has no drop of its own - its container() would see a \
-                                    parent partly dropped - so not #[pin_data(PinnedDrop)]"));
+                return Err(Error::new_spanned(&name, format!(
+                    "{name}: a placed type has no drop of its own - its container() would see a parent partly \
+                     dropped - so not #[pin_data(PinnedDrop)]")));
             }
             let init = match &kind {
-                Kind::Field => format!("crate::util::place::at({name}::init)"),
-                _ => format!("::pin_init::pin_init_array_from_fn(|i| unsafe {{ \
-                              crate::util::place::at_index(i, {name}::init) }})"),
+                Kind::Field => quote!(crate::util::place::at(#name::init)),
+                _ => quote!(::pin_init::pin_init_array_from_fn(|i| unsafe {
+                    crate::util::place::at_index(i, #name::init) })),
             };
             // #[pin_data]'s own check refuses a Drop; without it, this is the
             // one a Drop of its own would conflict with
-            let no_drop = match pin_data {
-                Some(_) => String::new(),
-                None => format!("{cfgs}#[automatically_derived]\n\
-                                 impl Drop for {name} {{\n\
-                                     fn drop(&mut self) {{}}\n\
-                                 }}\n"),
-            };
-            format!(
-                "{cfgs}#[automatically_derived]\n\
-                 // SAFETY: its At field, which its init() takes - given by InitAt's,\n\
-                 // from at() or at_index(), for the place the At names\n\
-                 unsafe impl crate::util::place::Placed for {name} {{\n\
-                     type Parent = {base};\n\
-                     type At = {at};\n\
-                     unsafe fn placed_at_raw(p: *const Self) -> *const Self::At {{\n\
-                         // SAFETY: the caller's\n\
-                         unsafe {{ &raw const (*p).{at_field} }}\n\
-                     }}\n\
-                 }}\n\
-                 {}{no_drop}", init_at(&init))
+            let no_drop = pin_data.is_none().then(|| quote! {
+                #(#cfgs)*
+                #[automatically_derived]
+                impl Drop for #name {
+                    fn drop(&mut self) {}
+                }
+            });
+            let init_at = init_at(init);
+            quote! {
+                #(#cfgs)*
+                #[automatically_derived]
+                // SAFETY: its At field, which its init() takes - given by InitAt's,
+                // from at() or at_index(), for the place the At names
+                unsafe impl crate::util::place::Placed for #name {
+                    type Parent = #base;
+                    type At = #at;
+                    unsafe fn placed_at_raw(p: *const Self) -> *const Self::At {
+                        // SAFETY: the caller's
+                        unsafe { &raw const (*p).#at_field }
+                    }
+                }
+                #init_at
+                #no_drop
+            }
         }
-        Kind::Container => format!(
-            "{cfgs}#[automatically_derived]\n\
-             // SAFETY: its AtIn field, which only its container's insert() makes\n\
-             unsafe impl crate::util::place::PlacedIn for {name} {{\n\
-                 type Base = {base};\n\
-             }}\n\
-             {}", init_at(&format!("crate::util::place::container::<Self, {n}, {name}, _>()"))),
+        Kind::Container => {
+            let init_at = init_at(quote!(crate::util::place::container::<Self, #n, #name, _>()));
+            quote! {
+                #(#cfgs)*
+                #[automatically_derived]
+                // SAFETY: its AtIn field, which only its container's insert() makes
+                unsafe impl crate::util::place::PlacedIn for #name {
+                    type Base = #base;
+                }
+                #init_at
+            }
+        }
     };
 
-    Ok(tokens(&format!("{item}\n{impls}")))
+    Ok(quote!(#item #impls))
 }
 
 /// The At field #[placed] adds, where there's no index for it to be.
 const AT_FIELD: &str = "_placed_at";
-
-/// Whether @f is a place's At: the field #[placed] added.
-pub(crate) fn is_at_field(f: &CFieldDef) -> bool {
-    f.placed_at
-}
 
 /// Whether @f is an At of no bytes - not an element's index - which
 /// TypeInfo doesn't describe.
@@ -246,25 +246,31 @@ pub(crate) fn is_empty_at_field(f: &CFieldDef) -> bool {
     f.placed_at && f.name == AT_FIELD
 }
 
-/// Field<N> for field @name, of type @ty, of @inst_ty - @impl_lts its
-/// lifetimes, @cfg the field's #[cfg].
-pub(crate) fn field_impl(cfg: &str, impl_lts: &str, inst_ty: &str, name: &str, ty: &str) -> String {
-    format!(
-        "{cfg}#[automatically_derived]\n\
-         // SAFETY: its field {name}, by offset_of!()\n\
-         unsafe impl{impl_lts} crate::util::place::Field<{{ crate::util::place::name({name:?}) }}> for {inst_ty} {{\n\
-             type Type = {ty};\n\
-             const OFFSET: usize = ::core::mem::offset_of!({inst_ty}, {name});\n\
-         }}\n")
+/// Field<N> for field @name, of type @ty, of @inst_ty - @impl_g and @where_c
+/// its generics, @cfg the field's #[cfg].
+pub(crate) fn field_impl(cfg: &TokenStream, impl_g: &impl quote::ToTokens, inst_ty: &TokenStream,
+                         where_c: Option<&syn::WhereClause>, name: &Ident, ty: &Type) -> TokenStream {
+    let n = name.to_string();
+    quote! {
+        #cfg
+        #[automatically_derived]
+        // SAFETY: its field, by offset_of!()
+        unsafe impl #impl_g crate::util::place::Field<{ crate::util::place::name(#n) }> for #inst_ty #where_c {
+            type Type = #ty;
+            const OFFSET: usize = ::core::mem::offset_of!(#inst_ty, #name);
+        }
+    }
 }
 
 /// The initializer for field @name, without #[init]: InitAt's, if a placed
 /// type lives there, else zeroed - util/place.rs's Pick.
-pub(crate) fn field_init(name: &str) -> String {
-    format!(
-        "{{\n\
-             use crate::util::place::{{PickPlaced as _, PickZeroed as _}};\n\
-             // SAFETY: run into field {name}, by pin_init!()\n\
-             unsafe {{ (&crate::util::place::Pick::<Self, {{ crate::util::place::name({name:?}) }}>::NEW).pick() }}\n\
-         }}")
+pub(crate) fn field_init(name: &Ident) -> TokenStream {
+    let n = name.to_string();
+    quote! {
+        {
+            use crate::util::place::{PickPlaced as _, PickZeroed as _};
+            // SAFETY: run into the field, by pin_init!()
+            unsafe { (&crate::util::place::Pick::<Self, { crate::util::place::name(#n) }>::NEW).pick() }
+        }
+    }
 }

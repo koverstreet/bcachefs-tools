@@ -10,7 +10,10 @@ rust-version = "1.85.0"
 name = "cstruct_macros"
 proc-macro = true
 
-# Deliberately zero dependencies (no syn/quote): the kernel/DKMS build compiles
-# this with a plain `rustc --crate-type proc-macro src/lib.rs`. Its parser is
-# fs/types/cstruct.rs, include!d.
+# The kernel/DKMS build compiles this with a plain rustc, against the vendored
+# syn, quote and proc-macro2 (vendor/kernel-rust) - which rust_types_gen,
+# include!ing the same parser (fs/types/cstruct.rs), is built on too.
 [dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits", "visit", "visit-mut"] }

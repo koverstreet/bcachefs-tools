@@ -46,147 +46,155 @@
 //! lockdep class of its own - a static in this generated code, one per
 //! field, as a static in ReffedWork's generic code wouldn't be.
 
-use proc_macro::{TokenStream, TokenTree};
+use proc_macro2::{Literal, TokenStream};
+use quote::{quote, ToTokens as _};
+use syn::punctuated::Punctuated;
+use syn::{Data, DataStruct, DeriveInput, Error, FnArg, GenericArgument, Ident, PathArguments, Token, Type};
 
-use crate::cstruct::{parse_cstruct, CKind};
 use crate::place;
-use crate::tokens;
 
-pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
-    let args = init_args(&input);
-    let def = parse_cstruct(&input.to_string())?;
-    if def.kind != CKind::Struct {
-        return Err(format!("{}: #[derive(Init)] is for a struct", def.name));
-    }
-    let inst = def.rust_ident();
-    let (impl_lts, inst_ty) = if def.lifetimes.is_empty() {
-        (String::new(), inst.to_string())
-    } else {
-        let l = def.lifetimes.join(", ");
-        (format!("<{l}>"), format!("{inst}<{l}>"))
+pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
+    let args = match input.attrs.iter().find(|a| a.path().is_ident("init_args")) {
+        Some(a) => Some(a.parse_args_with(Punctuated::<FnArg, Token![,]>::parse_terminated)?),
+        None => None,
     };
+    // the name C has it by, as the lockdep classes are named
+    let parent = match input.attrs.iter().find(|a| a.path().is_ident("c_name_of")) {
+        Some(a) => a.parse_args::<Ident>()?.to_string(),
+        None => input.ident.to_string(),
+    };
+    let Data::Struct(DataStruct { fields, .. }) = &input.data else {
+        return Err(Error::new_spanned(&input, format!("{parent}: #[derive(Init)] is for a struct")));
+    };
+    let inst = &input.ident;
+    let (impl_g, ty_g, where_c) = input.generics.split_for_impl();
+    let inst_ty = quote!(#inst #ty_g);
+    let has_lifetimes = input.generics.lifetimes().next().is_some();
 
-    let mut fields = String::new();
-    let mut field_impls = String::new();
-    let mut at: Option<&str> = None;
-    for f in &def.fields {
-        let cfg = f.cfg.as_ref().map(|c| format!("#[cfg({})] ", c.to_rust())).unwrap_or_default();
-        let name = f.rust_name();
-        fields.push_str(&cfg);
-        field_impls.push_str(&place::field_impl(&cfg, &impl_lts, &inst_ty, &name, &f.ty));
+    let mut inits = Vec::new();
+    let mut field_impls = Vec::new();
+    let mut at: Option<&Type> = None;
+    for f in fields {
+        let Some(name) = &f.ident else {
+            return Err(Error::new_spanned(f, format!("{parent}: #[derive(Init)] is for named fields")));
+        };
+        let (ty, has) = (&f.ty, |n: &str| f.attrs.iter().any(|a| a.path().is_ident(n)));
+        let cfg: Vec<_> = f.attrs.iter().filter(|a| a.path().is_ident("cfg")).collect();
+        let cfg = quote!(#(#cfg)*);
+        field_impls.push(place::field_impl(&cfg, &impl_g, &inst_ty, where_c, name, ty));
 
-        if place::is_at_field(f) {
-            at = Some(&f.ty);
-            fields.push_str(&format!("{name}: at,\n"));
+        let init = match f.attrs.iter().find(|a| a.path().is_ident("init")) {
+            Some(a) => match a.parse_args::<TokenStream>() {
+                Ok(init) if !init.is_empty() => Some(init),
+                _ => return Err(Error::new_spanned(a, format!("{name}: #[init(EXPR)] takes the field's initializer"))),
+            },
+            None => None,
+        };
+        inits.push(cfg.clone());
+        if has("placed_at") {
+            at = Some(ty);
+            inits.push(quote!(#name: at,));
             continue;
         }
-        if let (None, Some(func)) = (&f.init, reffed_work_fn(&def.name, &name, &f.ty)?) {
-            if !def.lifetimes.is_empty() {
-                return Err(format!("{}.{name}: a ReffedWork's parent has no lifetimes", def.name));
+        if let (None, Some(func)) = (&init, reffed_work_fn(&parent, name, ty)?) {
+            if has_lifetimes {
+                return Err(Error::new_spanned(name, format!("{parent}.{name}: a ReffedWork's parent has no lifetimes")));
             }
-            field_impls.push_str(&work_func(&cfg, &inst_ty, &name, &func));
-            fields.push_str(&format!("{name} <- {},\n", work_init(&def.name, &name)));
+            field_impls.push(work_func(&cfg, &inst_ty, name, func));
+            let w = work_init(&parent, name)?;
+            inits.push(quote!(#name <- #w,));
             continue;
         }
-        match f.init.as_deref() {
-            Some(init) => fields.push_str(&format!("{name} <- {init},\n")),
+        inits.push(match init {
+            Some(init) => quote!(#name <- #init,),
             // SAFETY: core's atomics are their integers, and zero is one -
             // Zeroable, but for the impl the orphan rule doesn't allow us
-            None if crate::is_core_atomic(&f.ty) =>
-                fields.push_str(&format!("{name}: unsafe {{ ::core::mem::zeroed() }},\n")),
-            None => fields.push_str(&format!("{name} <- {},\n", place::field_init(&name))),
-        }
+            None if crate::is_core_atomic(&ty.to_token_stream().to_string()) =>
+                quote!(#name: unsafe { ::core::mem::zeroed() },),
+            None => {
+                let init = place::field_init(name);
+                quote!(#name <- #init,)
+            }
+        });
     }
 
     // An At is crate-private, as place.rs is - so is an init() taking one
     let (vis, at_param) = match at {
-        Some(ty) => ("pub(crate)", Some(format!("at: {ty}"))),
-        None => ("pub", None),
+        Some(ty) => (quote!(pub(crate)), Some(quote!(at: #ty))),
+        None => (quote!(pub), None),
     };
-    let params: Vec<String> = at_param.into_iter().chain(args.clone()).collect();
-    let borrows = if args.as_deref().is_some_and(|a| a.contains('&')) { " + '_" } else { "" };
+    let args = args.iter().flatten();
+    let borrows = args.clone().any(|a| a.to_token_stream().to_string().contains('&')).then(|| quote!(+ '_));
+    let params = at_param.into_iter().chain(args.map(|a| a.to_token_stream()));
 
-    Ok(tokens(&format!(
-        "#[automatically_derived]\n\
-         impl {inst} {{\n\
-             /// Zeroed, but for its #[init] fields: see #[derive(Init)].\n\
-             {vis} fn init({params}) -> impl ::pin_init::PinInit<Self, crate::errcode::BchError>{borrows} {{\n\
-                 ::pin_init::pin_init!({inst} {{\n{fields}}}? crate::errcode::BchError)\n\
-             }}\n\
-         }}\n\
-         {field_impls}", params = params.join(", "))))
-}
-
-/// #[init_args(PARAMS)] on the struct, if it has it: PARAMS.
-fn init_args(input: &TokenStream) -> Option<String> {
-    let mut toks = input.clone().into_iter();
-    while let Some(t) = toks.next() {
-        match t {
-            TokenTree::Punct(p) if p.as_char() == '#' => {
-                let Some(TokenTree::Group(attr)) = toks.next() else { continue };
-                let mut a = attr.stream().into_iter();
-                if let (Some(TokenTree::Ident(name)), Some(TokenTree::Group(params))) = (a.next(), a.next()) {
-                    if name.to_string() == "init_args" {
-                        return Some(params.stream().to_string());
-                    }
-                }
+    Ok(quote! {
+        #[automatically_derived]
+        impl #impl_g #inst_ty #where_c {
+            /// Zeroed, but for its #[init] fields: see #[derive(Init)].
+            #vis fn init(#(#params),*) -> impl ::pin_init::PinInit<Self, crate::errcode::BchError> #borrows {
+                ::pin_init::pin_init!(#inst {
+                    #(#inits)*
+                }? crate::errcode::BchError)
             }
-            // the struct's own attributes are all before it
-            TokenTree::Ident(i) if i.to_string() == "struct" => break,
-            _ => {}
         }
-    }
-    None
+        #(#field_impls)*
+    })
 }
 
 // ── ReffedWork fields ───────────────────────────────────────────────────────
 
 /// f, if field type @ty is a ReffedWork<f, R>: f a bare name, the fn in
 /// scope here that it runs - its type is made here, beside it.
-fn reffed_work_fn(parent: &str, name: &str, ty: &str) -> Result<Option<String>, String> {
-    let ty: String = ty.chars().filter(|c| !c.is_whitespace()).collect();
-    let Some((path, args)) = ty.split_once('<') else { return Ok(None) };
-    if path.rsplit("::").next() != Some("ReffedWork") {
-        return Ok(None);
+fn reffed_work_fn<'a>(parent: &str, name: &Ident, ty: &'a Type) -> syn::Result<Option<&'a Ident>> {
+    let Type::Path(p) = ty else { return Ok(None) };
+    let Some(last) = p.path.segments.last().filter(|s| s.ident == "ReffedWork") else { return Ok(None) };
+    let PathArguments::AngleBracketed(args) = &last.arguments else { return Ok(None) };
+    match args.args.first() {
+        Some(GenericArgument::Type(Type::Path(f))) if f.qself.is_none() && f.path.get_ident().is_some() =>
+            Ok(f.path.get_ident()),
+        f => Err(Error::new_spanned(f, format!("{parent}.{name}: a ReffedWork's function is named bare, as the \
+                                                fn in scope here - its type is made beside it: `use` it"))),
     }
-    let f = args.split(',').next().unwrap_or_default();
-    if f.is_empty() || !f.chars().all(|c| c == '_' || c.is_ascii_alphanumeric()) {
-        return Err(format!("{parent}.{name}: a ReffedWork's function is named bare, as the fn in scope \
-                            here - its type is made beside it - not {f:?}: `use` it"));
-    }
-    Ok(Some(f.to_string()))
 }
 
 /// Field @name's work function f, as a type: f's struct, and its WorkFunc -
 /// the field's At, and the call.
-fn work_func(cfg: &str, inst_ty: &str, name: &str, f: &str) -> String {
-    format!(
-        "{cfg}#[doc(hidden)]\n\
-         #[allow(non_camel_case_types)]\n\
-         pub(crate) struct {f} {{}}\n\
-         {cfg}#[automatically_derived]\n\
-         // SAFETY: field {name}'s - the one of type ReffedWork<{f}, _>, its\n\
-         // initializer init()'s, below\n\
-         unsafe impl crate::util::workqueue::WorkFunc for {f} {{\n\
-             type At = crate::util::place::At<{inst_ty}, {{ crate::util::place::name({name:?}) }}>;\n\
-             fn run(p: &{inst_ty}) {{\n\
-                 {f}(p)\n\
-             }}\n\
-         }}\n")
+fn work_func(cfg: &TokenStream, inst_ty: &TokenStream, name: &Ident, f: &Ident) -> TokenStream {
+    let n = name.to_string();
+    quote! {
+        #cfg
+        #[doc(hidden)]
+        #[allow(non_camel_case_types)]
+        pub(crate) struct #f {}
+        #cfg
+        #[automatically_derived]
+        // SAFETY: the field's - the one of type ReffedWork<f, _>, its
+        // initializer init()'s, below
+        unsafe impl crate::util::workqueue::WorkFunc for #f {
+            type At = crate::util::place::At<#inst_ty, { crate::util::place::name(#n) }>;
+            fn run(p: &#inst_ty) {
+                #f(p)
+            }
+        }
+    }
 }
 
 /// Field @name's initializer, of @parent: the work, given its At, its
 /// lockdep class named for the field.
-fn work_init(parent: &str, name: &str) -> String {
-    format!(
-        "{{\n\
-             #[cfg(kernel)]\n\
-             let w = |at| crate::util::workqueue::ReffedWork::new(at, c\"{parent}.{name}\",\n\
-                                                                  ::kernel::static_lock_class!());\n\
-             #[cfg(not(kernel))]\n\
-             let w = |at| crate::util::workqueue::ReffedWork::new(at);\n\
-             // SAFETY: run into field {name}, by pin_init!()\n\
-             unsafe {{ crate::util::place::at::<Self, {{ crate::util::place::name({name:?}) }}, _, \
-                                                crate::errcode::BchError>(w) }}\n\
-         }}")
+fn work_init(parent: &str, name: &Ident) -> syn::Result<TokenStream> {
+    let n = name.to_string();
+    let class: Literal = format!("c\"{parent}.{name}\"").parse()
+        .map_err(|_| Error::new_spanned(name, format!("{parent}.{name}: no C string of the name")))?;
+    Ok(quote! {
+        {
+            #[cfg(kernel)]
+            let w = |at| crate::util::workqueue::ReffedWork::new(at, #class, ::kernel::static_lock_class!());
+            #[cfg(not(kernel))]
+            let w = |at| crate::util::workqueue::ReffedWork::new(at);
+            // SAFETY: run into the field, by pin_init!()
+            unsafe {
+                crate::util::place::at::<Self, { crate::util::place::name(#n) }, _, crate::errcode::BchError>(w)
+            }
+        }
+    })
 }

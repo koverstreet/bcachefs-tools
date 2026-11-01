@@ -59,9 +59,11 @@
 //!                        its by-value arguments are stored once in its
 //!                        future, not twice (args_stored_once.rs)
 //!
-//! Zero dependencies: the kernel build compiles this with a bare rustc.
+//! On syn and quote - vendor/kernel-rust's: the kernel build compiles this
+//! with a bare rustc.
 
-use proc_macro::{Delimiter, Group, Punct, Spacing, Span, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, Ident, Literal, Spacing, Span, TokenStream, TokenTree};
+use quote::{format_ident, quote, ToTokens};
 
 // A proc-macro crate may export only its macros: the parser's pub items go in
 // a private module - pub for rust_types_gen, which include!s it too.
@@ -85,33 +87,38 @@ mod vstructs;
 
 /// A tagged union with a stable representation: see tagged_union.rs.
 #[proc_macro]
-pub fn tagged_union(input: TokenStream) -> TokenStream {
-    expand("tagged_union!", || tagged_union::tagged_union(input))
+pub fn tagged_union(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("tagged_union!", || tagged_union::tagged_union(input.into()))
 }
 
 /// tagged_union!'s callback from its list, with the list's entries.
 #[doc(hidden)]
 #[proc_macro]
-pub fn __tagged_union(input: TokenStream) -> TokenStream {
-    expand("tagged_union!", || tagged_union::from_list(input))
+pub fn __tagged_union(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("tagged_union!", || tagged_union::from_list(input.into()))
 }
 
 /// message!()'s format string written into a printbuf, ToText arguments
 /// to_text()'d into it: see prt.rs.
 #[doc(hidden)]
 #[proc_macro]
-pub fn __prt(input: TokenStream) -> TokenStream {
-    expand("message!", || prt::prt(input))
+pub fn __prt(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("message!", || prt::prt(syn::parse(input)?))
 }
 
 fn compile_error(msg: &str) -> TokenStream {
-    format!("::core::compile_error!({msg:?});").parse().unwrap()
+    quote!(::core::compile_error!(#msg);)
 }
 
 /// A macro's expansion, @f, or its error as compile_error!, @what naming the
-/// macro: every macro here is expand("name!", || ..).
-fn expand(what: &str, f: impl FnOnce() -> Result<TokenStream, String>) -> TokenStream {
-    f().unwrap_or_else(|e| compile_error(&format!("{what}: {e}")))
+/// macro: every macro here is expand("name!", || ..), or expand_syn().
+fn expand(what: &str, f: impl FnOnce() -> Result<TokenStream, String>) -> proc_macro::TokenStream {
+    f().unwrap_or_else(|e| compile_error(&format!("{what}: {e}"))).into()
+}
+
+/// expand() of a macro on syn: its error at the tokens it's about.
+fn expand_syn(what: &str, f: impl FnOnce() -> syn::Result<TokenStream>) -> proc_macro::TokenStream {
+    f().unwrap_or_else(|e| syn::Error::new(e.span(), format!("{what}: {e}")).into_compile_error()).into()
 }
 
 /// Rust code a macro made, as tokens: it always parses, or the macro has a bug.
@@ -121,55 +128,52 @@ fn tokens(code: &str) -> TokenStream {
 
 /// A record's first numbers, as every type's has them: @ty's size and
 /// alignment.
-fn size_align(ty: &str) -> Vec<String> {
-    vec![format!("::core::mem::size_of::<{ty}>() as u64"),
-         format!("::core::mem::align_of::<{ty}>() as u64")]
+fn size_align(ty: &impl ToTokens) -> Vec<TokenStream> {
+    vec![quote!(::core::mem::size_of::<#ty>() as u64), quote!(::core::mem::align_of::<#ty>() as u64)]
 }
 
 /// The #[cfg(..)] on an item, if it has one.
-fn cfg_attr(cfg: &Option<cstruct::Cfg>) -> String {
-    cfg.as_ref().map(|c| format!("#[cfg({})] ", c.to_rust())).unwrap_or_default()
+fn cfg_attr(cfg: &Option<cstruct::Cfg>) -> TokenStream {
+    cfg.as_ref().map(|c| tokens(&c.to_rust())).map(|c| quote!(#[cfg(#c)])).unwrap_or_default()
 }
 
 /// For a type C knows as @c_name: kCFI hashes an extern "C" fn's repr(C)
 /// struct by its Rust name, and an enum or a transparent newtype as its
 /// integer - neither what C's prototype says. In the kernel only, where the
 /// feature's allowed (mod.rs).
-fn cfi_encoding(c_name: &str) -> String {
-    format!("#[cfg_attr(kernel, cfi_encoding = \"{}{c_name}\")]\n", c_name.len())
+fn cfi_encoding(c_name: &str) -> TokenStream {
+    let enc = format!("{}{c_name}", c_name.len());
+    quote!(#[cfg_attr(kernel, cfi_encoding = #enc)])
 }
 
 /// The record of @text, and @nums: Rust expressions, the numbers that go
 /// with it - see fs/types/lib.rs.
-fn record(text: &str, nums: &[String]) -> String {
-    let names: String = cstruct::written_types(text).iter()
-        .map(|t| format!("({t:?}, ::core::any::type_name::<{t}>()), "))
-        .collect();
-    format!(
-        "#[cfg(bch_cstruct_records)]\n\
-         const _: () = {{\n\
-             const TEXT: &str = {text:?};\n\
-             const NUMS: &[u64] = &[{}];\n\
-             const NAMES: &[(&str, &str)] = &[{names}];\n\
-             const LEN: usize = crate::types::record_len(::core::file!(), TEXT, NUMS.len(), NAMES);\n\
-             #[used]\n\
-             #[unsafe(link_section = \".discard.bch_cstruct\")]\n\
-             static RECORD: [u8; LEN] =\n\
-                 crate::types::record::<LEN>(::core::file!(), ::core::line!(), TEXT, NUMS, NAMES);\n\
-         }};\n",
-        nums.join(", "))
+fn record(text: &str, nums: &[TokenStream]) -> TokenStream {
+    let names = cstruct::written_types(text).into_iter().map(|t| {
+        let ty = tokens(&t);
+        quote!((#t, ::core::any::type_name::<#ty>()))
+    });
+    quote! {
+        #[cfg(bch_cstruct_records)]
+        const _: () = {
+            const TEXT: &str = #text;
+            const NUMS: &[u64] = &[#(#nums),*];
+            const NAMES: &[(&str, &str)] = &[#(#names),*];
+            const LEN: usize = crate::types::record_len(::core::file!(), TEXT, NUMS.len(), NAMES);
+            #[used]
+            #[unsafe(link_section = ".discard.bch_cstruct")]
+            static RECORD: [u8; LEN] =
+                crate::types::record::<LEN>(::core::file!(), ::core::line!(), TEXT, NUMS, NAMES);
+        };
+    }
 }
 
 /// @decl through @list - LIST!(@callback [decl]) - which calls @callback back
 /// with its entries: { [decl] (entry), (entry), ... }. The declaration goes as
 /// tokens, not text, so what's defined in it keeps its spans.
 fn through_list(list: &str, callback: &str, decl: TokenStream) -> TokenStream {
-    let mut cb = tokens(callback);
-    cb.extend([TokenTree::Group(Group::new(Delimiter::Bracket, decl))]);
-    let mut out = tokens(&format!("crate::cstructs::c::{list}!"));
-    out.extend([TokenTree::Group(Group::new(Delimiter::Parenthesis, cb)),
-                TokenTree::Punct(Punct::new(';', Spacing::Alone))]);
-    out
+    let (list, cb) = (format_ident!("{list}"), tokens(callback));
+    quote!(crate::cstructs::c::#list!(#cb [#decl]);)
 }
 
 /// What a list hands through_list()'s callback - { [decl] (entry), (entry),
@@ -223,14 +227,14 @@ macro_rules! one_item {
 /// what #[c_name] leaves for the derives.
 /// bch_opts' options, a field each: options.rs.
 #[proc_macro_derive(Options, attributes(opt))]
-pub fn derive_options(input: TokenStream) -> TokenStream {
-    expand("#[derive(Options)]", || options::derive(input))
+pub fn derive_options(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[derive(Options)]", || options::derive(syn::parse(input)?))
 }
 
 #[proc_macro_derive(CStruct, attributes(c, c_anon, c_bitfield, c_inline, c_lock, c_name_of, c_packed,
                                         c_struct_group, c_typedef, counted_by))]
-pub fn derive_cstruct(input: TokenStream) -> TokenStream {
-    expand("#[derive(CStruct)]", || cstruct_expand(input))
+pub fn derive_cstruct(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[derive(CStruct)]", || cstruct_expand(input.into()))
 }
 
 /// `#[c_name(NAME)]`, before the derives, on a struct or union C shares
@@ -240,75 +244,65 @@ pub fn derive_cstruct(input: TokenStream) -> TokenStream {
 /// so a prototype naming it hashes as C's does. A family's C definition gets
 /// one from vstructs.rs.
 #[proc_macro_attribute]
-pub fn c_name(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand("#[c_name]", || {
-        let name = match attr.into_iter().collect::<Vec<_>>().as_slice() {
-            [TokenTree::Ident(n)] => n.to_string(),
-            _ => return Err("takes C's name for the type".into()),
-        };
-        let tts: Vec<TokenTree> = item.into_iter().collect();
-        let mut attrs_end = 0;
-        while matches!((tts.get(attrs_end), tts.get(attrs_end + 1)),
-                       (Some(TokenTree::Punct(p)), Some(TokenTree::Group(g)))
-                           if p.as_char() == '#' && g.delimiter() == Delimiter::Bracket) {
-            attrs_end += 2;
-        }
-        let mut out = tokens(&cfi_encoding(&name));
-        out.extend(tts[..attrs_end].iter().cloned());
-        out.extend(tokens(&format!("#[c_name_of({name})]")));
-        out.extend(tts[attrs_end..].iter().cloned());
-        Ok(out)
+pub fn c_name(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[c_name]", || {
+        let name: syn::Ident = syn::parse(attr)
+            .map_err(|e| syn::Error::new(e.span(), "takes C's name for the type"))?;
+        let mut item: syn::DeriveInput = syn::parse(item)?;
+        item.attrs.push(syn::parse_quote!(#[c_name_of(#name)]));
+        let cfi = cfi_encoding(&name.to_string());
+        Ok(quote!(#cfi #item))
     })
 }
 
 /// `#[derive(TypeInfo)]`: runtime type information for a struct or union C
 /// shares - see typeinfo.rs.
 #[proc_macro_derive(TypeInfo, attributes(c_name_of))]
-pub fn derive_type_info(input: TokenStream) -> TokenStream {
-    expand("#[derive(TypeInfo)]", || typeinfo::derive(input))
+pub fn derive_type_info(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[derive(TypeInfo)]", || typeinfo::derive(input.into()))
 }
 
 /// `#[derive(Init)]`: `T::init()`, an initializer that zeroes every field but
 /// those with `#[init(EXPR)]` - see init.rs.
 #[proc_macro_derive(Init, attributes(init, init_args, placed_at))]
-pub fn derive_init(input: TokenStream) -> TokenStream {
-    expand("#[derive(Init)]", || init::derive(input))
+pub fn derive_init(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[derive(Init)]", || init::derive(syn::parse(input)?))
 }
 
 /// `#[derive(Fieldwise)]`: each method `#[fieldwise(...)]` names, applied to
 /// every field - see fieldwise.rs.
 #[proc_macro_derive(Fieldwise, attributes(fieldwise))]
-pub fn derive_fieldwise(input: TokenStream) -> TokenStream {
-    expand("#[derive(Fieldwise)]", || fieldwise::derive(input))
+pub fn derive_fieldwise(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[derive(Fieldwise)]", || fieldwise::derive(syn::parse(input)?))
 }
 
 /// `#[derive(ToText)]`: a fieldless enum printed as its variant's name, or
 /// its `#[label("..")]` - see to_text.rs.
 #[proc_macro_derive(ToText, attributes(label))]
-pub fn derive_to_text(input: TokenStream) -> TokenStream {
-    expand("#[derive(ToText)]", || to_text::derive(input))
+pub fn derive_to_text(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[derive(ToText)]", || to_text::derive(syn::parse(input)?))
 }
 
 /// `#[derive(Plain)]`: util/vstructs.rs's Plain, checked at compile time -
 /// see vstructs.rs.
 #[proc_macro_derive(Plain)]
-pub fn derive_plain(input: TokenStream) -> TokenStream {
-    expand("#[derive(Plain)]", || vstructs::derive_plain(input))
+pub fn derive_plain(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[derive(Plain)]", || vstructs::derive_plain(input.into()))
 }
 
 /// `#[derive(SizedVal)]`: a key value that's itself in place, any bytes of it
 /// a valid one - btree/bkey/types.rs's SizedVal, what a sized key type's
 /// value is.
 #[proc_macro_derive(SizedVal)]
-pub fn derive_sized_val(input: TokenStream) -> TokenStream {
-    expand("#[derive(SizedVal)]", || vstructs::derive_sized_val(input))
+pub fn derive_sized_val(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[derive(SizedVal)]", || vstructs::derive_sized_val(input.into()))
 }
 
 /// `#[derive(View)]`: a projection for each field, on util/vstructs.rs's
 /// View and ViewMut of the type - see vstructs.rs.
 #[proc_macro_derive(View)]
-pub fn derive_view(input: TokenStream) -> TokenStream {
-    expand("#[derive(View)]", || vstructs::derive_view(input))
+pub fn derive_view(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[derive(View)]", || vstructs::derive_view(input.into()))
 }
 
 fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
@@ -319,42 +313,43 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
     }
 
     let name = def.rust_ident();
-    let inst = def.rust_type();
-    let inst = inst.as_str();
+    let inst = tokens(&def.rust_type());
     // A #[c_bitfield] field's members, on the struct: its type's forwarders
     // (#[bitfield]), by the type's own path. Not a Volatile one's: that's a
     // word, read and written whole.
-    let mut forward = String::new();
+    let mut forward = TokenStream::new();
     for f in def.fields.iter().filter(|f| f.bitfield && bitfield_type(&f.ty) == f.ty.trim()) {
         let ty = f.ty.trim();
         let (path, ty) = ty.rsplit_once("::").map_or(("", ty), |(p, t)| (p, t));
         let path = if path.is_empty() { String::new() } else { format!("{path}::") };
-        forward.push_str(&format!("{path}__{ty}_forward!({inst}, {});\n", f.rust_name()));
+        let (fwd, field) = (tokens(&format!("{path}__{ty}_forward")), tokens(&f.rust_name()));
+        forward.extend(quote!(#fwd!(#inst, #field);));
     }
-    let mut nums = size_align(inst);
+    let mut nums = size_align(&inst);
     for f in &def.fields {
-        let field = f.rust_name();
-        let proj = format!("|p: *const {inst}| unsafe {{ ::core::ptr::addr_of!((*p).{field}) }}");
-        nums.push(format!("::core::mem::offset_of!({inst}, {field}) as u64"));
-        nums.push(format!("crate::types::field_size({proj})"));
-        nums.push(format!("crate::types::field_align({proj})"));
+        let field = tokens(&f.rust_name());
+        let proj = quote!(|p: *const #inst| unsafe { ::core::ptr::addr_of!((*p).#field) });
+        nums.push(quote!(::core::mem::offset_of!(#inst, #field) as u64));
+        nums.push(quote!(crate::types::field_size(#proj)));
+        nums.push(quote!(crate::types::field_align(#proj)));
     }
     // a #[c_lock] field's, after every field's: the lock's size, and where
     // in the Locked what it protects and what it publishes are
     for f in def.fields.iter().filter(|f| f.lock.is_some()) {
         let [r, ..] = cstruct::lock_args(&f.ty)?.expect("checked when parsed");
-        nums.push(format!("::core::mem::size_of::<{r}>() as u64"));
-        nums.push(format!("<{}>::PROTECTED_OFFSET as u64", f.ty));
-        nums.push(format!("<{}>::PUBLISHED_OFFSET as u64", f.ty));
+        let (r, ty) = (tokens(&r), tokens(&f.ty));
+        nums.push(quote!(::core::mem::size_of::<#r>() as u64));
+        nums.push(quote!(<#ty>::PROTECTED_OFFSET as u64));
+        nums.push(quote!(<#ty>::PUBLISHED_OFFSET as u64));
     }
     // a pointer field C reads is a thin one: as c_extern!'s parameters
-    let thin: String = def.fields.iter()
+    let thin: TokenStream = def.fields.iter()
         .map(|f| thin_pointers(name, &f.cfg, &[(f.rust_name(), static_lifetimes(&f.ty, &def.lifetimes))], None))
         .collect();
-    let flex = vstructs::flex_array(&def)?;
+    let flex = tokens(&vstructs::flex_array(&def)?);
     let zeroable = maybe_zeroable(&def);
-    Ok(tokens(&format!("{forward}{flex}{zeroable}const _: () = {{\n{thin}}};\n{}",
-                       record(&text, &nums))))
+    let record = record(&text, &nums);
+    Ok(quote!(#forward #flex #zeroable const _: () = { #thin }; #record))
 }
 
 /// Zeroable when every field is - as bindgen's C structs are, deriving
@@ -364,16 +359,20 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
 /// #[derive(Init)] can't zero it. core's atomics are, as their integers are,
 /// though pin_init has no impl for them, and the orphan rule allows none
 /// here: their fields aren't bounds.
-fn maybe_zeroable(def: &cstruct::CStructDef) -> String {
-    let bounds: Vec<String> = def.fields.iter()
+fn maybe_zeroable(def: &cstruct::CStructDef) -> TokenStream {
+    let bounds: Vec<TokenStream> = def.fields.iter()
         .filter(|f| !is_core_atomic(&f.ty))
-        .map(|f| format!("{}: for<'__dummy> ::pin_init::Zeroable", f.ty))
+        .map(|f| tokens(&f.ty))
+        .map(|ty| quote!(#ty: for<'__dummy> ::pin_init::Zeroable))
         .collect();
-    let whr = if bounds.is_empty() { String::new() } else { format!("where {}", bounds.join(",\n")) };
+    let whr = (!bounds.is_empty()).then(|| quote!(where #(#bounds),*));
     let (generics, ty) = def.impl_generics();
-    format!("// SAFETY: every field is Zeroable, and padding may be zero\n\
-             #[automatically_derived]\n\
-             unsafe impl{generics} ::pin_init::Zeroable for {ty} {whr} {{}}\n")
+    let (generics, ty) = (tokens(&generics), tokens(&ty));
+    quote! {
+        // SAFETY: every field is Zeroable, and padding may be zero
+        #[automatically_derived]
+        unsafe impl #generics ::pin_init::Zeroable for #ty #whr {}
+    }
 }
 
 /// One of core::sync::atomic's integer, bool or pointer atomics, by any path
@@ -414,8 +413,8 @@ pub(crate) fn is_core_atomic(ty: &str) -> bool {
 /// bitfield needs said on i386 (Align8U64). It's recorded as the struct and
 /// #[c_bitfield] member the generator knows - as `NAME { bits: NAME_bits }`.
 #[proc_macro_attribute]
-pub fn bitfield(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand("#[bitfield]", || bitfield_expand(attr, item))
+pub fn bitfield(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[bitfield]", || bitfield_expand(attr.into(), item.into()))
 }
 
 /// `#[vtable]`, on an impl of a trait whose methods are optional - one with
@@ -425,39 +424,24 @@ pub fn bitfield(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// implemented. The kernel crate's #[vtable] does this too, but from 7.3 its
 /// impls name crate::LocalModule, which only a module!() crate has.
 #[proc_macro_attribute]
-pub fn vtable(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand("#[vtable]", || {
+pub fn vtable(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[vtable]", || {
         if !attr.is_empty() {
-            return Err("takes no arguments".into());
+            return Err(syn::Error::new_spanned(proc_macro2::TokenStream::from(attr), "takes no arguments"));
         }
-        let mut head: Vec<TokenTree> = item.into_iter().collect();
-        let body = match head.pop() {
-            Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => g.stream(),
-            _ => return Err("on an impl".into()),
-        };
-
-        // The body's own fns and consts - not those inside a method's body,
-        // which is a group of its own
-        let items: Vec<TokenTree> = body.clone().into_iter().collect();
-        let mut fns = Vec::new();
-        let mut consts = Vec::new();
-        for w in items.windows(2) {
-            if let (TokenTree::Ident(kw), TokenTree::Ident(name)) = (&w[0], &w[1]) {
-                match kw.to_string().as_str() {
-                    "fn"    => fns.push(name.to_string()),
-                    "const" => consts.push(name.to_string()),
-                    _       => {}
-                }
-            }
+        let mut imp: syn::ItemImpl = syn::parse(item)?;
+        let consts: Vec<String> = imp.items.iter().filter_map(|i| match i {
+            syn::ImplItem::Const(c) => Some(c.ident.to_string()),
+            _ => None,
+        }).collect();
+        let has: Vec<syn::Ident> = imp.items.iter().filter_map(|i| match i {
+            syn::ImplItem::Fn(f) => Some(quote::format_ident!("HAS_{}", f.sig.ident.to_string().to_uppercase())),
+            _ => None,
+        }).filter(|c| !consts.contains(&c.to_string())).collect();
+        for c in has {
+            imp.items.push(syn::parse_quote!(const #c: bool = true;));
         }
-
-        let has: String = fns.iter()
-            .map(|f| format!("HAS_{}", f.to_uppercase()))
-            .filter(|c| !consts.contains(c))
-            .map(|c| format!("const {c}: bool = true;\n"))
-            .collect();
-        let head: TokenStream = head.into_iter().collect();
-        Ok(tokens(&format!("{head} {{ {body} {has} }}")))
+        Ok(quote::quote!(#imp))
     })
 }
 
@@ -466,8 +450,8 @@ pub fn vtable(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// await is stored once in its future - an async fn stores it twice
 /// (rust-lang/rust#62958). See args_stored_once.rs.
 #[proc_macro_attribute]
-pub fn args_stored_once(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand("#[args_stored_once]", || args_stored_once::args_stored_once(attr, item))
+pub fn args_stored_once(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[args_stored_once]", || args_stored_once::args_stored_once(attr.into(), syn::parse(item)?))
 }
 
 /// `#[placed(Base.field)]`, ahead of `#[pin_data]` and the derives, on a
@@ -475,30 +459,26 @@ pub fn args_stored_once(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Placed is had by, which `#[derive(Init)]` then gives its init() - see
 /// place.rs.
 #[proc_macro_attribute]
-pub fn placed(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand("#[placed]", || place::placed(attr, item))
+pub fn placed(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[placed]", || place::placed(syn::parse(attr)?, syn::parse(item)?))
 }
 
 /// `#[counters(a, b, ..)]` on an accounting key type X: its counters, struct
 /// XCounters - accounting.rs's acct_counters! - and its KeyType impl.
 #[proc_macro_attribute]
-pub fn counters(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand("#[counters]", || {
-        let trees: Vec<TokenTree> = item.clone().into_iter().collect();
-        let name = trees.windows(2)
-            .find_map(|w| match w {
-                [TokenTree::Ident(kw), TokenTree::Ident(n)] if kw.to_string() == "struct" => Some(n.to_string()),
-                _ => None,
-            })
-            .ok_or("expected a struct")?;
-        let mut out = item;
-        out.extend(tokens(&format!(
-            "crate::accounting::acct_counters!({name}Counters {{ {attr} }});\n\
-             impl crate::accounting::KeyType for {name} {{\n\
-                 type Delta = {name}Counters<i64>;\n\
-                 type Read  = {name}Counters<u64>;\n\
-             }}\n")));
-        Ok(out)
+pub fn counters(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[counters]", || {
+        let s: syn::ItemStruct = syn::parse(item)?;
+        let (name, attr) = (&s.ident, proc_macro2::TokenStream::from(attr));
+        let counters = quote::format_ident!("{name}Counters");
+        Ok(quote::quote! {
+            #s
+            crate::accounting::acct_counters!(#counters { #attr });
+            impl crate::accounting::KeyType for #name {
+                type Delta = #counters<i64>;
+                type Read  = #counters<u64>;
+            }
+        })
     })
 }
 
@@ -508,8 +488,8 @@ pub fn counters(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// C's, renamed X__head, and each state's, a DST of the header and its tail -
 /// and X<S>, a generic struct over the one for S. See vstructs.rs.
 #[proc_macro_attribute]
-pub fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand("#[unsized_vstruct]", || vstructs::unsized_vstruct(attr, item))
+pub fn unsized_vstruct(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[unsized_vstruct]", || vstructs::unsized_vstruct(attr.into(), item.into()))
 }
 
 /// `#[grown(from = FIELD)]`, on the definition of a type that grew between
@@ -517,8 +497,8 @@ pub fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// generic struct - X<Whole>, X, the whole struct; X<Validated>, the floor
 /// and the bytes there are, at the value's length. See vstructs.rs.
 #[proc_macro_attribute]
-pub fn grown(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand("#[grown]", || vstructs::grown(attr, item))
+pub fn grown(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[grown]", || vstructs::grown(attr.into(), item.into()))
 }
 
 /// `#[counted]`, `#[counted(PATH)]`, `#[counted(PATH, tail = [E])]` or
@@ -526,16 +506,16 @@ pub fn grown(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// in elements: its family, the count private in each state's definition -
 /// see vstructs.rs.
 #[proc_macro_attribute]
-pub fn counted(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand("#[counted]", || vstructs::counted(attr, item))
+pub fn counted(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[counted]", || vstructs::counted(attr.into(), item.into()))
 }
 
 /// `#[whole]`, on C's definition of a type every valid value of which has
 /// all of it - a superblock section or journal entry of fixed fields: its
 /// family, every state all of it, at the value's length - see vstructs.rs.
 #[proc_macro_attribute]
-pub fn whole(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand("#[whole]", || vstructs::whole(attr, item))
+pub fn whole(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[whole]", || vstructs::whole(attr.into(), item.into()))
 }
 
 fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
@@ -553,29 +533,31 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
         None     => args.storage.clone(),
     };
     let text = if s.c_struct {
-        format!("#[bitfield({rec_args})] pub struct {name}_bits {}", s.body)
+        format!("#[bitfield({rec_args})] pub struct {name}_bits {}", s.body())
     } else {
-        format!("#[bitfield({rec_args})] pub struct {name} {}", s.body)
+        format!("#[bitfield({rec_args})] pub struct {name} {}", s.body())
     };
     let bf = one_item!(&text, Bitfield, "a bitfield struct");
     let mut out = record(&text, &[]);
+    let ident = format_ident!("{name}");
+    // Each member, not padding: its name, setter and updater, type, and
+    // visibility
+    let members: Vec<_> = bf.fields.iter().map(|(m, ty, _)| (rust_ident(m), ty)).filter(|(m, _)| !m.starts_with('_'))
+        .map(|(m, ty)| {
+            let vis = s.vis.iter().find(|(n, _)| *n == m).map_or("pub", |(_, v)| v.as_str());
+            (format_ident!("{m}"), format_ident!("set_{m}"), format_ident!("update_{m}"), tokens(ty), tokens(vis))
+        })
+        .collect();
 
     // update_x(f): set_x(f(x())), each member's, as visible as its setter -
     // bitfield_struct's, which has the getter and setter but not this.
     // XXX Deprecated when real field projections arrive: x op= v through a
     // projected place instead.
-    let mut update = String::new();
-    for (m, ty, _) in &bf.fields {
-        let m = rust_ident(m);
-        if m.starts_with('_') {
-            continue;
-        }
-        let vis = s.vis.iter().find(|(n, _)| *n == m).map_or("pub", |(_, v)| v.as_str());
-        update.push_str(&format!(
-            "#[allow(dead_code)]\n\
-             {vis} fn update_{m}(&mut self, f: impl FnOnce({ty}) -> {ty}) {{ self.set_{m}(f(self.{m}())) }}\n"));
-    }
-    out.push_str(&format!("impl {name} {{\n{update}}}\n"));
+    let update = members.iter().map(|(m, set, update, ty, vis)| quote! {
+        #[allow(dead_code)]
+        #vis fn #update(&mut self, f: impl FnOnce(#ty) -> #ty) { self.#set(f(self.#m())) }
+    });
+    out.extend(quote!(impl #ident { #(#update)* }));
 
     if s.c_struct {
         let repr = if args.align8 { "#[repr(C, align(8))]" } else { "#[repr(C)]" };
@@ -584,57 +566,56 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
                             pub struct {name} {{ #[c_bitfield] pub bits: {name}_bits, }}");
         one_item!(&text, Struct, "a struct");
         // the member's: the whole struct
-        let mut nums = size_align(name);
-        nums.insert(2, "0".into());
-        nums.extend(size_align(name));
-        out.push_str(&record(&text, &nums));
+        let mut nums = size_align(&ident);
+        nums.insert(2, quote!(0));
+        nums.extend(size_align(&ident));
+        out.extend(record(&text, &nums));
     } else {
-        // A member of a C struct: its getters and setters for that struct
-        let mut fns = String::new();
-        for (m, ty, _) in &bf.fields {
-            let m = rust_ident(m);
-            let vis = s.vis.iter().find(|(n, _)| *n == m).map_or("pub", |(_, v)| v.as_str());
-            // pub(self): its module's, which has the bitfield itself
-            if !m.starts_with('_') && vis.replace(' ', "") != "pub(self)" {
-                fns.push_str(&format!(
-                    "{vis} fn {m}(&self) -> {ty} {{ let b = self.$field; b.{m}() }}\n\
-                     {vis} fn set_{m}(&mut self, v: {ty}) {{ let mut b = self.$field; b.set_{m}(v); self.$field = b; }}\n\
-                     {vis} fn update_{m}(&mut self, f: impl FnOnce({ty}) -> {ty}) {{\n\
-                         let mut b = self.$field; b.set_{m}(f(b.{m}())); self.$field = b;\n\
-                     }}\n"));
-            }
-        }
-        out.push_str(&format!(
-            "#[allow(unused_macros)]\n\
-             macro_rules! __{name}_forward {{ ($s:ty, $field:ident) => {{ impl $s {{\n{fns}}} }} }}\n\
-             #[allow(unused_imports)]\npub(crate) use __{name}_forward;\n"));
+        // A member of a C struct: its getters and setters for that struct -
+        // not pub(self)'s: its module's, which has the bitfield itself
+        let fns = members.iter().filter(|(.., vis)| vis.to_string().replace(' ', "") != "pub(self)")
+            .map(|(m, set, update, ty, vis)| quote! {
+                #vis fn #m(&self) -> #ty { let b = self.$field; b.#m() }
+                #vis fn #set(&mut self, v: #ty) { let mut b = self.$field; b.#set(v); self.$field = b; }
+                #vis fn #update(&mut self, f: impl FnOnce(#ty) -> #ty) {
+                    let mut b = self.$field; b.#set(f(b.#m())); self.$field = b;
+                }
+            });
+        let fwd = format_ident!("__{name}_forward");
+        out.extend(quote! {
+            #[allow(unused_macros)]
+            macro_rules! #fwd { ($s:ty, $field:ident) => { impl $s { #(#fns)* } } }
+            #[allow(unused_imports)]
+            pub(crate) use #fwd;
+        });
     }
 
-    let mut bs_args = vec![args.storage.clone()];
-    bs_args.extend(args.rest.iter().map(|a| a.iter().cloned().collect::<TokenStream>().to_string()));
-    if args.align8 {
-        bs_args.extend(["repr = crate::types::Align8U64", "from = crate::types::Align8U64::from_u64",
-                        "into = crate::types::Align8U64::to_u64"].map(String::from));
-    }
+    let (storage, rest) = (format_ident!("{}", args.storage), &args.rest);
+    let align8 = args.align8.then(|| quote! {
+        , repr = crate::types::Align8U64, from = crate::types::Align8U64::from_u64,
+        into = crate::types::Align8U64::to_u64
+    });
     // What it holds - its repr, else the storage integer - and nothing else:
     // so it's Plain
     let held = if args.align8 {
         "crate::types::Align8U64".to_string()
     } else {
-        args.rest.iter()
+        rest.iter()
             .find_map(|a| key_value(a).filter(|(k, _)| k == "repr").map(|(_, v)| v))
             .unwrap_or_else(|| args.storage.clone())
     };
+    let item = &s.item;
+    let (info, plain) = (tokens(&typeinfo::info(name, "Struct", "")), tokens(&vstructs::plain(name, &[&held])));
     // The struct as tokens, not text: an error in a member points at it
-    let mut out = tokens(&out);
-    out.extend(tokens(&format!("#[::bitfield_struct::bitfield({})]", bs_args.join(", "))));
-    out.extend(s.item.clone());
-    out.extend(tokens(&typeinfo::info(name, "Struct", "")));
-    out.extend(tokens(&vstructs::plain(name, &[&held])));
-    out.extend(tokens(&format!(
-        "// SAFETY: Plain - its integer, any bytes of which are one\n\
-         unsafe impl ::pin_init::Zeroable for {name} {{}}\n")));
-    Ok(out)
+    Ok(quote! {
+        #out
+        #[::bitfield_struct::bitfield(#storage #(, #rest)* #align8)]
+        #item
+        #info
+        #plain
+        // SAFETY: Plain - its integer, any bytes of which are one
+        unsafe impl ::pin_init::Zeroable for #ident {}
+    })
 }
 
 /// @ts's top-level comma separated items - commas in a type's <..> aren't -
@@ -664,15 +645,6 @@ fn comma_list(ts: TokenStream) -> Vec<Vec<TokenTree>> {
     items
 }
 
-/// `KEY = VALUE`: KEY, and VALUE as text.
-fn key_value(toks: &[TokenTree]) -> Option<(String, String)> {
-    match toks {
-        [TokenTree::Ident(k), TokenTree::Punct(eq), v @ ..] if eq.as_char() == '=' && !v.is_empty() =>
-            Some((k.to_string(), v.iter().cloned().collect::<TokenStream>().to_string())),
-        _ => None,
-    }
-}
-
 /// @span's location, as the macro's: an error points there, while what's
 /// generated from it - bitfield-struct's with_type__checked() of a member
 /// type_ - isn't linted as written code.
@@ -698,16 +670,25 @@ fn respan(ts: TokenStream, span: Span) -> TokenStream {
 struct BitfieldArgs {
     storage: String,
     /// The rest of bitfield-struct's
-    rest:    Vec<Vec<TokenTree>>,
+    rest:    Vec<TokenStream>,
     /// `ty = T`: C's declared type of the integer members
     ty:      Option<String>,
     /// `align = 8`: C's __aligned(8), on a u64 bitfield that's a C struct
     align8:  bool,
 }
 
+/// `KEY = VALUE`: KEY, and VALUE as text.
+fn key_value(toks: &TokenStream) -> Option<(String, String)> {
+    match &toks.clone().into_iter().collect::<Vec<_>>()[..] {
+        [TokenTree::Ident(k), TokenTree::Punct(eq), v @ ..] if eq.as_char() == '=' && !v.is_empty() =>
+            Some((k.to_string(), v.iter().cloned().collect::<TokenStream>().to_string())),
+        _ => None,
+    }
+}
+
 fn bitfield_args(attr: TokenStream) -> Result<BitfieldArgs, String> {
-    let mut rest = comma_list(attr);
-    let storage = match rest.first().map(Vec::as_slice) {
+    let mut rest: Vec<TokenStream> = comma_list(attr).into_iter().map(|a| a.into_iter().collect()).collect();
+    let storage = match rest.first().map(|a| a.clone().into_iter().collect::<Vec<_>>()).as_deref() {
         Some([TokenTree::Ident(s)]) => s.to_string(),
         _ => return Err("expected the storage type first: #[bitfield(uN, ..)]".into()),
     };
@@ -733,9 +714,7 @@ fn bitfield_args(attr: TokenStream) -> Result<BitfieldArgs, String> {
 struct BitfieldStruct {
     name:     String,
     /// The struct, for bitfield-struct: its members canonical
-    item:     TokenStream,
-    /// Its body, those members - for the record
-    body:     TokenStream,
+    item:     syn::ItemStruct,
     /// #[derive(CStruct)]: the bitfield is C's struct, not a member of one
     c_struct: bool,
     /// #[c_packed]: C's is __packed
@@ -744,154 +723,87 @@ struct BitfieldStruct {
     vis:      Vec<(String, String)>,
 }
 
-fn bitfield_struct(item: TokenStream) -> Result<BitfieldStruct, String> {
-    let mut s = BitfieldStruct { name: String::new(), item: TokenStream::new(),
-                                 body: TokenStream::new(), c_struct: false, packed: false,
-                                 vis: Vec::new() };
-    let mut toks = item.into_iter().peekable();
-    while let Some(t) = toks.next() {
-        match t {
-            TokenTree::Punct(p) if p.as_char() == '#' => {
-                let Some(TokenTree::Group(attr)) = toks.next() else {
-                    return Err("expected an attribute after #".into());
-                };
-                if let Some(attr) = attr_less_ours(attr, &mut s) {
-                    s.item.extend([TokenTree::Punct(p), attr.into()]);
-                }
-            }
-            TokenTree::Ident(i) if i.to_string() == "struct" => {
-                if let Some(TokenTree::Ident(n)) = toks.peek() {
-                    s.name = n.to_string();
-                }
-                s.item.extend([TokenTree::Ident(i)]);
-            }
-            TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => {
-                let (members, vis) = bitfield_members(g.stream())?;
-                s.vis = vis;
-                let mut body = Group::new(Delimiter::Brace, members);
-                body.set_span(g.span());
-                s.body.extend([TokenTree::Group(body.clone())]);
-                s.item.extend([TokenTree::Group(body)]);
-            }
-            t => s.item.extend([t]),
-        }
+impl BitfieldStruct {
+    /// Its body, those members - for the record
+    fn body(&self) -> TokenStream {
+        self.item.fields.to_token_stream()
     }
-    if s.name.is_empty() {
-        return Err("expected a struct".into());
-    }
-    if s.packed && !s.c_struct {
-        return Err(format!("{}: #[c_packed] is a C struct's - #[derive(CStruct)]", s.name));
-    }
-    Ok(s)
 }
 
-/// @attr, one #[..]'s brackets, less what's ours - see BitfieldStruct - or
-/// None if nothing's left.
-fn attr_less_ours(attr: Group, s: &mut BitfieldStruct) -> Option<Group> {
-    let inner: Vec<TokenTree> = attr.stream().into_iter().collect();
-    match inner.as_slice() {
-        [TokenTree::Ident(a)] if a.to_string() == "c_packed" => {
-            s.packed = true;
-            None
-        }
-        [TokenTree::Ident(a), TokenTree::Group(list)] if a.to_string() == "derive" => {
-            let kept: Vec<Vec<TokenTree>> = comma_list(list.stream()).into_iter()
-                .filter(|path| match path.last().map(|t| t.to_string()).as_deref() {
-                    Some("CStruct") => { s.c_struct = true; false }
+fn bitfield_struct(item: TokenStream) -> Result<BitfieldStruct, String> {
+    let mut item: syn::ItemStruct = syn::parse2(item).map_err(|e| format!("expected a struct - {e}"))?;
+    let name = item.ident.to_string();
+    let (mut c_struct, mut packed) = (false, false);
+    let mut attrs = Vec::new();
+    for a in std::mem::take(&mut item.attrs) {
+        if matches!(&a.meta, syn::Meta::Path(p) if p.is_ident("c_packed")) {
+            packed = true;
+        } else if a.path().is_ident("derive") {
+            let derives = a.parse_args_with(syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated)
+                .map_err(|e| format!("{name}: {e}"))?;
+            let kept: Vec<_> = derives.into_iter()
+                .filter(|p| match p.segments.last().map(|s| s.ident.to_string()).as_deref() {
+                    Some("CStruct") => { c_struct = true; false }
                     Some("TypeInfo") => false,
                     _ => true,
                 })
                 .collect();
-            if kept.is_empty() {
-                return None;
+            if !kept.is_empty() {
+                let derive = respan(quote!(derive(#(#kept),*)), a.path().segments[0].ident.span());
+                attrs.push(syn::parse_quote!(#[#derive]));
             }
-            let list = kept.into_iter().map(|p| p.into_iter().collect::<TokenStream>().to_string())
-                .collect::<Vec<_>>().join(", ");
-            Some(Group::new(Delimiter::Bracket, respan(tokens(&format!("derive({list})")), a.span())))
+        } else {
+            attrs.push(a);
         }
-        _ => Some(attr),
     }
-}
-
-/// A bitfield struct's members, as bitfield-struct has them - see bitfield() -
-/// and each one's name and visibility, for its forwarders.
-fn bitfield_members(body: TokenStream) -> Result<(TokenStream, Vec<(String, String)>), String> {
-    let mut out = TokenStream::new();
+    item.attrs = attrs;
+    if packed && !c_struct {
+        return Err(format!("{name}: #[c_packed] is a C struct's - #[derive(CStruct)]"));
+    }
+    let syn::Fields::Named(members) = &mut item.fields else {
+        return Err(format!("{name}: expected members, `name: type`"));
+    };
     let mut vis = Vec::new();
-    for m in comma_list(body) {
-        let (member, name, v) = bitfield_member(&m)?;
-        out.extend(member);
-        out.extend([TokenTree::Punct(Punct::new(',', Spacing::Alone))]);
-        vis.push((name, v));
+    for m in members.named.iter_mut() {
+        bitfield_member(m)?;
+        vis.push((m.ident.as_ref().unwrap().to_string(), m.vis.to_token_stream().to_string()));
     }
-    Ok((out, vis))
+    Ok(BitfieldStruct { name, item, c_struct, packed, vis })
 }
 
 /// One member: `name: uN` and `name: bool` with their #[bits(N)] and Rust
 /// type, at the span of the type they replace, so an error points there - a
 /// #[bits(..)] of bitfield-struct's options only, default = .., gets the width
 /// put first; one with #[bits(N, ..)] as written. Its visibility as written,
-/// pub if none. With its name and that visibility.
-fn bitfield_member(m: &[TokenTree]) -> Result<(TokenStream, String, String), String> {
-    let mut attrs = 0;
-    // #[bits(..)]: where it is, and its arguments
-    let mut bits: Option<(usize, TokenStream)> = None;
-    while let [TokenTree::Punct(p), TokenTree::Group(g), ..] = &m[attrs..] {
-        if p.as_char() != '#' || g.delimiter() != Delimiter::Bracket {
-            break;
-        }
-        if let [TokenTree::Ident(a), TokenTree::Group(args)] = &g.stream().into_iter().collect::<Vec<_>>()[..] {
-            if a.to_string() == "bits" {
-                bits = Some((attrs, args.stream()));
-            }
-        }
-        attrs += 2;
-    }
-    let mut rest = &m[attrs..];
-    if matches!(rest.first(), Some(TokenTree::Ident(v)) if v.to_string() == "pub") {
-        rest = &rest[1..];
-        if matches!(rest.first(), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis) {
-            rest = &rest[1..];
-        }
-    }
-    let vis: TokenStream = m[attrs..m.len() - rest.len()].iter().cloned().collect();
-    let [TokenTree::Ident(name), TokenTree::Punct(colon), ty @ ..] = rest else {
-        return Err(format!("expected a member, `name: type`: `{}`", m.iter().cloned().collect::<TokenStream>()));
-    };
-    if colon.as_char() != ':' || ty.is_empty() {
-        return Err(format!("{name}: expected `name: type`"));
-    }
-
-    let width_given = bits.as_ref()
-        .is_some_and(|(_, args)| matches!(args.clone().into_iter().next(), Some(TokenTree::Literal(_))));
-    let mut out = TokenStream::new();
-    let ty: TokenStream = if width_given {
-        out.extend(m[..attrs].iter().cloned());
-        ty.iter().cloned().collect()
-    } else {
-        let [TokenTree::Ident(t)] = ty else {
-            return Err(format!("{name}: a member without #[bits(N)] is uN or bool"));
-        };
+/// pub if none.
+fn bitfield_member(m: &mut syn::Field) -> Result<(), String> {
+    use syn::parse::Parser as _;
+    let name = m.ident.clone().expect("a named member");
+    let bits = m.attrs.iter().position(|a| a.path().is_ident("bits"));
+    let width_given = bits.is_some_and(|i| matches!(&m.attrs[i].meta, syn::Meta::List(l)
+        if matches!(l.tokens.clone().into_iter().next(), Some(TokenTree::Literal(_)))));
+    if !width_given {
+        let t = match &m.ty {
+            syn::Type::Path(p) if p.qself.is_none() => p.path.get_ident().cloned(),
+            _ => None,
+        }.ok_or_else(|| format!("{name}: a member without #[bits(N)] is uN or bool"))?;
         let (width, rust_ty) = bilge_width(&t.to_string())
             .ok_or_else(|| format!("{name}: {t}: a member without #[bits(N)] is uN or bool"))?;
         // the other attributes, then #[bits(N)] with its options
-        for (i, a) in m[..attrs].chunks(2).enumerate() {
-            if bits.as_ref().is_none_or(|(at, _)| *at != i * 2) {
-                out.extend(a.iter().cloned());
-            }
-        }
-        let opts = bits.map(|(_, args)| format!(", {args}")).unwrap_or_default();
-        out.extend(respan(tokens(&format!("#[bits({width}{opts})]")), t.span()));
-        respan(tokens(&rust_ty), t.span())
-    };
-    let vis = if vis.is_empty() { respan(tokens("pub"), name.span()) } else { vis };
-    let vis_text = vis.to_string();
-    out.extend(vis);
-    let mut name = name.clone();
-    name.set_span(at(name.span()));
-    out.extend([TokenTree::Ident(name.clone()), TokenTree::Punct(colon.clone())]);
-    out.extend(ty);
-    Ok((out, name.to_string(), vis_text))
+        let opts = bits.map(|i| m.attrs.remove(i)).and_then(|a| match a.meta {
+            syn::Meta::List(l) => Some(l.tokens),
+            _ => None,
+        }).map(|o| quote!(, #o));
+        let width = Literal::u32_unsuffixed(width);
+        m.attrs.extend(syn::Attribute::parse_outer.parse2(respan(quote!(#[bits(#width #opts)]), t.span()))
+            .expect("an attribute"));
+        m.ty = syn::parse2(respan(tokens(&rust_ty), t.span())).expect("a type");
+    }
+    if matches!(m.vis, syn::Visibility::Inherited) {
+        m.vis = syn::parse2(respan(quote!(pub), name.span())).expect("a visibility");
+    }
+    m.ident.as_mut().unwrap().set_span(at(name.span()));
+    Ok(())
 }
 
 /// A bilge member type's width and the Rust type it's read as: bool, and uN
@@ -907,11 +819,11 @@ fn bilge_width(t: &str) -> Option<(u32, String)> {
 
 /// C carried as is: c_verbatim!(r#"..."#).
 #[proc_macro]
-pub fn c_verbatim(input: TokenStream) -> TokenStream {
+pub fn c_verbatim(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("c_verbatim!", || {
         let text = format!("c_verbatim!({input})");
         one_item!(&text, Verbatim, "one string");
-        Ok(tokens(&record(&text, &[])))
+        Ok(record(&text, &[]))
     })
 }
 
@@ -927,8 +839,8 @@ pub fn c_verbatim(input: TokenStream) -> TokenStream {
 /// and calls the next; the last calls cb!. They're named by path, through
 /// crate::cstructs::c - NAME is expanded wherever it's used.
 #[proc_macro]
-pub fn c_xmacro(input: TokenStream) -> TokenStream {
-    expand("c_xmacro!", || xmacro(input))
+pub fn c_xmacro(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("c_xmacro!", || xmacro(input.into()))
 }
 
 /// An x-macro list's rows, selected: NAME!(xmacro_select [TOKEN => cb])
@@ -939,9 +851,9 @@ pub fn c_xmacro(input: TokenStream) -> TokenStream {
 /// muncher instead nests an expansion per token, which runs into the
 /// recursion limit as lists grow.
 #[proc_macro]
-pub fn xmacro_select(input: TokenStream) -> TokenStream {
+pub fn xmacro_select(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("xmacro_select!", || {
-        let mut input = input.into_iter();
+        let mut input = TokenStream::from(input).into_iter();
         let Some(TokenTree::Group(pre)) = input.next().filter(|t| matches!(t,
             TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket)) else {
             return Err("expected [TOKEN => cb] before the list".into());
@@ -953,8 +865,8 @@ pub fn xmacro_select(input: TokenStream) -> TokenStream {
             _ => return Err("expected [TOKEN => cb] before the list".into()),
         };
         let (cb, args) = match cb {
-            [cb @ .., TokenTree::Group(g)] if g.delimiter() == Delimiter::Brace => (cb, g.stream().to_string()),
-            cb => (cb, String::new()),
+            [cb @ .., TokenTree::Group(g)] if g.delimiter() == Delimiter::Brace => (cb, g.stream()),
+            cb => (cb, TokenStream::new()),
         };
         let cb = cb.iter().cloned().collect::<TokenStream>();
 
@@ -963,14 +875,14 @@ pub fn xmacro_select(input: TokenStream) -> TokenStream {
             match t {
                 TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis => {
                     if g.stream().into_iter().any(|t| matches!(&t, TokenTree::Ident(i) if i.to_string() == token)) {
-                        rows.push(g.to_string());
+                        rows.push(g);
                     }
                 }
                 TokenTree::Punct(p) if p.as_char() == ',' => {}
                 t => return Err(format!("expected a list of (args) rows, found {t}")),
             }
         }
-        Ok(tokens(&format!("{cb}! {{ {args} {} }}", rows.join(", "))))
+        Ok(quote!(#cb! { #args #(#rows),* }))
     })
 }
 
@@ -978,9 +890,8 @@ pub fn xmacro_select(input: TokenStream) -> TokenStream {
 fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
     let text = format!("c_xmacro! {{ {input} }}");
     let x = one_item!(&text, XMacro, "NAME(x) { (args), ... }");
-    let name = &x.name;
-    // The list: the brace group after NAME(x), past any attributes - its
-    // entries, as text.
+    let name = format_ident!("{}", x.name);
+    // The list: the brace group after NAME(x), past any attributes
     let list = input.into_iter()
         .filter_map(|t| match t {
             TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => Some(g.stream()),
@@ -988,9 +899,7 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
         })
         .last()
         .expect("parse_items found the list");
-    let entries: Vec<String> = comma_list(list).into_iter()
-        .map(|e| e.into_iter().collect::<TokenStream>().to_string())
-        .collect();
+    let entries: Vec<TokenStream> = comma_list(list).into_iter().map(|e| e.into_iter().collect()).collect();
 
     let mut out = record(&text, &[]);
     let subs: Vec<usize> = x.entries.iter().enumerate()
@@ -999,27 +908,31 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
         .collect();
 
     if subs.is_empty() {
-        let list = entries.join(", ");
-        out.push_str(&format!(
-            "#[allow(unused_macros)]\n\
-             macro_rules! {name} {{ ($($cb:ident)::+ $([$($pre:tt)*])?) => {{ $($cb)::+! {{ $([$($pre)*])? {list} }} }} }}\n\
-             #[allow(unused_imports)]\npub(crate) use {name};\n"));
-        return Ok(tokens(&out));
+        out.extend(quote! {
+            #[allow(unused_macros)]
+            macro_rules! #name { ($($cb:ident)::+ $([$($pre:tt)*])?) => { $($cb)::+! { $([$($pre)*])? #(#entries),* } } }
+            #[allow(unused_imports)]
+            pub(crate) use #name;
+        });
+        return Ok(out);
     }
 
     // The plain entries before the first list spliced in, between each and
     // the next, and after the last.
-    let lits = |from: usize, to: usize| -> String {
-        entries[from..to].iter().map(|e| format!("{e}, ")).collect()
+    let lits = |from: usize, to: usize| {
+        let e = &entries[from..to];
+        quote!(#(#e,)*)
     };
-    let path = "crate::cstructs::c";
-    let carry = "($($cb)::+) ($($pre)?)";
+    let path = quote!(crate::cstructs::c);
+    let carry = quote!(($($cb)::+) ($($pre)?));
+    let step = |n: usize| format_ident!("__{}_{n}", x.name);
     for (n, &i) in subs.iter().enumerate() {
         let CXEntry::Sub { map, .. } = &x.entries[i] else { unreachable!() };
         let (pattern, mapped) = match map {
-            None => ("($($e:tt)*)".to_string(), "($($e)*)".to_string()),
+            None => (quote!(($($e:tt)*)), quote!(($($e)*))),
             Some(m) => {
-                let pattern = format!("({})", m.params.iter().map(|p| format!("${p}:tt")).collect::<Vec<_>>().join(", "));
+                let params = m.params.iter().map(|p| format_ident!("{p}"));
+                let pattern = quote!((#($#params:tt),*));
                 // The template: params are $p, and concat(A, p) is paste!'s
                 // [<A $p>] - the mapping is expanded inside paste!.
                 let template = spell_concat(&m.template, |p| format!("[<{}>]", p.join(" ")))?;
@@ -1034,34 +947,42 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
                     }
                     out.trim().to_string()
                 };
-                (pattern, format!("({})", template.split(',').map(arg).collect::<Vec<_>>().join(", ")))
+                (pattern, tokens(&format!("({})", template.split(',').map(arg).collect::<Vec<_>>().join(", "))))
             }
         };
         let after = lits(i + 1, subs.get(n + 1).copied().unwrap_or(entries.len()));
-        let acc = format!("$($acc)* $({mapped},)* {after}");
+        let acc = quote!($($acc)* $(#mapped,)* #after);
         let next = match subs.get(n + 1) {
             Some(&j) => {
                 let CXEntry::Sub { list: next_list, .. } = &x.entries[j] else { unreachable!() };
-                format!("{path}::{next_list}!({path}::__{name}_{} [{carry} {acc}]);", n + 1)
+                let (next_list, next_step) = (format_ident!("{next_list}"), step(n + 1));
+                quote!(#path::#next_list!(#path::#next_step [#carry #acc]);)
             }
-            None => format!("$($cb)::+! {{ $($pre)? {acc} }}"),
+            None => quote!($($cb)::+! { $($pre)? #acc }),
         };
-        out.push_str(&format!(
-            "#[allow(unused_macros)]\n\
-             macro_rules! __{name}_{n} {{\n\
-                 ([($($cb:ident)::+) ($($pre:tt)?) $($acc:tt)*] $({pattern}),* $(,)?) => {{ ::paste::paste! {{ {next} }} }};\n\
-             }}\n\
-             #[allow(unused_imports)]\npub(crate) use __{name}_{n};\n"));
+        let this = step(n);
+        out.extend(quote! {
+            #[allow(unused_macros)]
+            macro_rules! #this {
+                ([($($cb:ident)::+) ($($pre:tt)?) $($acc:tt)*] $(#pattern),* $(,)?) => { ::paste::paste! { #next } };
+            }
+            #[allow(unused_imports)]
+            pub(crate) use #this;
+        });
     }
     // The callback's [pre] bracketed, as the plain list's: an optional single
     // tt after a path callback is ambiguous with its `::`.
     let CXEntry::Sub { list: first, .. } = &x.entries[subs[0]] else { unreachable!() };
-    out.push_str(&format!(
-        "#[allow(unused_macros)]\n\
-         macro_rules! {name} {{ ($($cb:ident)::+ $([$($pre:tt)*])?) => {{ {path}::{first}!({path}::__{name}_0 [($($cb)::+) ($([$($pre)*])?) {}]); }} }}\n\
-         #[allow(unused_imports)]\npub(crate) use {name};\n",
-        lits(0, subs[0])));
-    Ok(tokens(&out))
+    let (first, step0, lits0) = (format_ident!("{first}"), step(0), lits(0, subs[0]));
+    out.extend(quote! {
+        #[allow(unused_macros)]
+        macro_rules! #name {
+            ($($cb:ident)::+ $([$($pre:tt)*])?) => { #path::#first!(#path::#step0 [($($cb)::+) ($([$($pre)*])?) #lits0]); }
+        }
+        #[allow(unused_imports)]
+        pub(crate) use #name;
+    });
+    Ok(out)
 }
 
 /// An enum, and what its values can be (fs/enum_kind.h):
@@ -1088,12 +1009,12 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
 /// `_` for the name: an anonymous enum, the constants alone. A variant with
 /// no value is the one before it plus one, as in C.
 #[proc_macro]
-pub fn c_enum(input: TokenStream) -> TokenStream {
+pub fn c_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("c_enum!", || {
         let text = format!("c_enum! {{ {input} }}");
         let e = one_item!(&text, Enum, C_ENUM_SYNTAX);
         Ok(match e.from.first() {
-            Some((_, f)) => through_list(&f.list, "cstruct_macros::__c_enum", input),
+            Some((_, f)) => through_list(&f.list, "cstruct_macros::__c_enum", input.into()),
             None => c_enum_gen(&e, &text),
         })
     })
@@ -1106,9 +1027,9 @@ const C_ENUM_SYNTAX: &str = "#[open|closed|flags] pub enum NAME: REPR { ... }";
 /// it has another, or recorded so.
 #[doc(hidden)]
 #[proc_macro]
-pub fn __c_enum(input: TokenStream) -> TokenStream {
+pub fn __c_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("c_enum!", || {
-        let (decl, entries) = list_callback(input)?;
+        let (decl, entries) = list_callback(input.into())?;
         let mut e = one_item!(&format!("c_enum! {{ {decl} }}"), Enum, C_ENUM_SYNTAX);
         expand_enum_list(&mut e, &entries)
             .map_err(|err| format!("{}: {err}", e.name.as_deref().unwrap_or("_")))?;
@@ -1122,96 +1043,101 @@ pub fn __c_enum(input: TokenStream) -> TokenStream {
 
 /// c_enum! @e's Rust, and its record, of @text.
 fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
-    let repr = &e.repr;
+    let repr = format_ident!("{}", e.repr);
+    let names: Vec<Ident> = e.variants.iter().map(|v| format_ident!("{}", v.name)).collect();
 
     // A variant with no value counts from the last that has one - not from
     // the one before it, which would make a const chain as long as the enum:
     // too deep for rustc, at bch_persistent_counters' hundreds.
-    let mut out = String::new();
-    let mut base: Option<&str> = None;
+    let mut out = TokenStream::new();
+    let mut base = None;
     let mut n = 0;
-    for CEnumVariant { name: v, value, .. } in &e.variants {
+    for (v, CEnumVariant { value, .. }) in names.iter().zip(&e.variants) {
+        let k = Literal::usize_unsuffixed(n);
         let value = match (value, base) {
             (Some(x), _) => {
                 base = Some(v);
                 n = 0;
-                x.clone()
+                tokens(x)
             }
-            (None, Some(b)) => format!("{b} + {n}"),
-            (None, None) => format!("{n}"),
+            (None, Some(b)) => quote!(#b + #k),
+            (None, None) => quote!(#k),
         };
-        out.push_str(&format!("#[allow(non_upper_case_globals, dead_code)]\npub const {v}: {repr} = {value};\n"));
+        out.extend(quote!(#[allow(non_upper_case_globals, dead_code)] pub const #v: #repr = #value;));
         n += 1;
     }
 
-    let names: Vec<&str> = e.variants.iter().map(|v| v.name.as_str()).collect();
     let ty = match &e.name {
-        Some(n) => n.clone(),
+        Some(n) => format_ident!("{n}"),
         None => repr.clone(),
     };
     if let Some(name) = &e.name {
         let cfi = cfi_encoding(e.c_ident().unwrap_or(name));
-        match e.kind {
+        let name = format_ident!("{name}");
+        out.extend(match e.kind {
             CEnumKind::Closed => {
-                out.push_str(&format!(
-                    "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, crate::util::ToText)]\n\
-                     #[repr({repr})]\n{cfi}pub enum {name} {{\n"));
-                for v in &e.variants {
-                    // what it prints as: its list's name for it, as C's string table has it
-                    if let Some(l) = &v.label {
-                        out.push_str(&format!("    #[label({l:?})]\n"));
+                // what it prints as: its list's name for it, as C's string table has it
+                let labels = e.variants.iter().map(|v| v.label.as_ref().map(|l| quote!(#[label(#l)])));
+                let msg = format!("{name}::from_bits(): not a {name}");
+                quote! {
+                    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, crate::util::ToText)]
+                    #[repr(#repr)]
+                    #cfi
+                    pub enum #name { #(#labels #names = #names,)* }
+                    impl #name {
+                        pub const fn from_bits(v: #repr) -> Self {
+                            match v {
+                                #(x if x == Self::#names as #repr => Self::#names,)*
+                                _ => panic!(#msg),
+                            }
+                        }
+                        pub const fn into_bits(self) -> #repr { self as #repr }
                     }
-                    out.push_str(&format!("    {0} = {0},\n", v.name));
                 }
-                out.push_str(&format!("}}\nimpl {name} {{\n    pub const fn from_bits(v: {repr}) -> Self {{\n        match v {{\n"));
-                for v in &names {
-                    out.push_str(&format!("            x if x == Self::{v} as {repr} => Self::{v},\n"));
-                }
-                out.push_str(&format!(
-                    "            _ => panic!(\"{name}::from_bits(): not a {name}\"),\n        }}\n    }}\n\
-                     pub const fn into_bits(self) -> {repr} {{ self as {repr} }}\n}}\n"));
             }
-            CEnumKind::Open => {
-                out.push_str(&format!(
-                    "#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]\n\
-                     #[repr(transparent)]\n{cfi}pub struct {name}(pub {repr});\n\
-                     #[allow(non_upper_case_globals)]\nimpl {name} {{\n"));
-                for v in &names {
-                    out.push_str(&format!("    pub const {v}: Self = Self({v});\n"));
+            CEnumKind::Open => quote! {
+                #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+                #[repr(transparent)]
+                #cfi
+                pub struct #name(pub #repr);
+                #[allow(non_upper_case_globals)]
+                impl #name {
+                    #(pub const #names: Self = Self(#names);)*
+                    pub const fn from_bits(v: #repr) -> Self { Self(v) }
+                    pub const fn into_bits(self) -> #repr { self.0 }
                 }
-                out.push_str(&format!("    pub const fn from_bits(v: {repr}) -> Self {{ Self(v) }}\n"));
-                out.push_str(&format!("    pub const fn into_bits(self) -> {repr} {{ self.0 }}\n}}\n"));
-                out.push_str(&format!("// SAFETY: its integer, every value of which is one\n\
-                                       unsafe impl crate::util::vstructs::Plain for {name} {{}}\n\
-                                       // SAFETY: its integer's atomic, which zeroes are a value of\n\
-                                       unsafe impl crate::util::projections::AtomicWord for {name} {{\n\
-                                       \x20   type Atomic = <{repr} as crate::util::projections::AtomicWord>::Atomic;\n\
-                                       \x20   fn load(a: &Self::Atomic) -> Self {{\n\
-                                       \x20       Self(<{repr} as crate::util::projections::AtomicWord>::load(a))\n\
-                                       \x20   }}\n\
-                                       \x20   fn store(a: &Self::Atomic, v: Self) {{\n\
-                                       \x20       <{repr} as crate::util::projections::AtomicWord>::store(a, v.0)\n\
-                                       \x20   }}\n\
-                                       }}\n"));
-            }
-            CEnumKind::Flags => {
-                out.push_str(&format!(
-                    "::bitflags::bitflags! {{\n\
-                     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]\n\
-                     #[repr(transparent)]\n{cfi}pub struct {name}: {repr} {{\n"));
-                for v in &names {
-                    out.push_str(&format!("    #[allow(non_upper_case_globals)]\n    const {v} = {v};\n"));
+                // SAFETY: its integer, every value of which is one
+                unsafe impl crate::util::vstructs::Plain for #name {}
+                // SAFETY: its integer's atomic, which zeroes are a value of
+                unsafe impl crate::util::projections::AtomicWord for #name {
+                    type Atomic = <#repr as crate::util::projections::AtomicWord>::Atomic;
+                    fn load(a: &Self::Atomic) -> Self {
+                        Self(<#repr as crate::util::projections::AtomicWord>::load(a))
+                    }
+                    fn store(a: &Self::Atomic, v: Self) {
+                        <#repr as crate::util::projections::AtomicWord>::store(a, v.0)
+                    }
                 }
-                out.push_str(&format!(
-                    "}}\n}}\n\
-                     impl {name} {{\n    pub const fn into_bits(self) -> {repr} {{ self.bits() }}\n}}\n"));
-            }
-        }
+            },
+            CEnumKind::Flags => quote! {
+                ::bitflags::bitflags! {
+                    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+                    #[repr(transparent)]
+                    #cfi
+                    pub struct #name: #repr {
+                        #(#[allow(non_upper_case_globals)] const #names = #names;)*
+                    }
+                }
+                impl #name {
+                    pub const fn into_bits(self) -> #repr { self.bits() }
+                }
+            },
+        });
     }
 
     if let Some(name) = &e.name {
-        out.push_str(&names_gen(e, name));
-        out.push_str(&typeinfo::info_of(name, e.c_ident().unwrap_or(name), "Enum", ""));
+        out.extend(names_gen(e, name));
+        out.extend(tokens(&typeinfo::info_of(name, e.c_ident().unwrap_or(name), "Enum", "")));
 
         // Zeroed is a value of it - so a struct holding one can be Zeroable:
         // any integer is an open enum's or flags', a closed enum's only if a
@@ -1222,16 +1148,17 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
                 Some(x) => x.trim() == "0",
             });
         if has_zero {
-            out.push_str(&format!(
-                "// SAFETY: zero is a {name}\n\
-                 unsafe impl ::pin_init::Zeroable for {name} {{}}\n"));
+            out.extend(quote! {
+                // SAFETY: zero is a value of it
+                unsafe impl ::pin_init::Zeroable for #ty {}
+            });
         }
     }
 
     let mut nums = size_align(&ty);
-    nums.extend(names.iter().map(|v| format!("{v} as u64")));
-    out.push_str(&record(text, &nums));
-    tokens(&out)
+    nums.extend(names.iter().map(|v| quote!(#v as u64)));
+    out.extend(record(text, &nums));
+    out
 }
 
 /// An enum from an x-macro list - with labelled variants - is named by the
@@ -1239,51 +1166,49 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
 /// flags type's bits. An open or flags one prints through it - ToText, and
 /// Display through that - unless it's #[own_to_text]; a closed one derives
 /// ToText.
-fn names_gen(e: &CEnumDef, name: &str) -> String {
-    let labelled: Vec<(&str, &str)> = e.variants.iter()
-        .filter_map(|v| v.label.as_deref().map(|l| (l, v.name.as_str())))
+fn names_gen(e: &CEnumDef, name: &str) -> TokenStream {
+    let labelled: Vec<(&str, Ident)> = e.variants.iter()
+        .filter_map(|v| v.label.as_deref().map(|l| (l, format_ident!("{}", v.name))))
         .collect();
     if labelled.is_empty() {
-        return String::new();
+        return TokenStream::new();
     }
 
-    let n = "crate::util::names";
-    let index = |v: &str| match e.kind {
-        CEnumKind::Flags => format!("{n}::bit({v} as u64)"),
-        _                => format!("{v} as u64"),
+    let (name, n) = (format_ident!("{name}"), quote!(crate::util::names));
+    let entries = labelled.iter().map(|(l, v)| match e.kind {
+        CEnumKind::Flags => quote!((#l, #n::bit(#v as u64))),
+        _                => quote!((#l, #v as u64)),
+    });
+    let mut out = quote! {
+        impl #n::Names for #name {
+            const ENTRIES: &'static [(&'static str, u64)] = &[#(#entries),*];
+        }
     };
-    let entries: Vec<String> = labelled.iter().map(|(l, v)| format!("({l:?}, {})", index(v))).collect();
-
-    let mut out = format!(
-        "impl {n}::Names for {name} {{\n\
-         \x20   const ENTRIES: &'static [(&'static str, u64)] = &[{}];\n\
-         }}\n",
-        entries.join(", "));
 
     let to_text = match e.kind {
         _ if e.own_to_text => None,
         CEnumKind::Closed  => None,
-        CEnumKind::Open    => Some(format!(
-            "{n}::prt_name(out, <Self as {n}::Names>::ENTRIES, self.0 as u64)")),
-        CEnumKind::Flags   => Some(format!(
-            "{n}::prt_flags(out, <Self as {n}::Names>::ENTRIES, self.bits() as u64)")),
+        CEnumKind::Open    => Some(quote!(#n::prt_name(out, <Self as #n::Names>::ENTRIES, self.0 as u64))),
+        CEnumKind::Flags   => Some(quote!(#n::prt_flags(out, <Self as #n::Names>::ENTRIES, self.bits() as u64))),
     };
     // A closed enum's derive gives it name(); an open one's is here
     if e.kind == CEnumKind::Open && !e.own_to_text {
-        out.push_str(&format!(
-            "impl {name} {{\n\
-             \x20   /// Its name: None for a value this version has none for.\n\
-             \x20   #[inline]\n\
-             \x20   pub fn name(self) -> Option<&'static str> {{ {n}::name_of(<Self as {n}::Names>::ENTRIES, self.0 as u64) }}\n\
-             }}\n"));
+        out.extend(quote! {
+            impl #name {
+                /// Its name: None for a value this version has none for.
+                #[inline]
+                pub fn name(self) -> Option<&'static str> { #n::name_of(<Self as #n::Names>::ENTRIES, self.0 as u64) }
+            }
+        });
     }
     if let Some(body) = to_text {
-        out.push_str(&format!(
-            "impl crate::util::ToText for {name} {{\n\
-             \x20   #[inline]\n\
-             \x20   fn to_text(&self, out: &mut crate::util::Printbuf) {{ {body} }}\n\
-             }}\n\
-             crate::display_via_to_text!({name});\n"));
+        out.extend(quote! {
+            impl crate::util::ToText for #name {
+                #[inline]
+                fn to_text(&self, out: &mut crate::util::Printbuf) { #body }
+            }
+            crate::display_via_to_text!(#name);
+        });
     }
     out
 }
@@ -1291,12 +1216,12 @@ fn names_gen(e: &CEnumDef, name: &str) -> String {
 /// A type alias - C's typedef: c_typedef! { pub type NAME = TYPE; }, with
 /// #[c("...")] for the C declarator where TYPE's canonical rendering isn't it.
 #[proc_macro]
-pub fn c_typedef(input: TokenStream) -> TokenStream {
+pub fn c_typedef(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("c_typedef!", || {
         let text = format!("c_typedef! {{ {input} }}");
         let t = one_item!(&text, Typedef, "pub type NAME = TYPE;");
-        Ok(tokens(&format!("#[allow(non_camel_case_types)]\npub type {} = {};\n{}",
-                           t.rust_ident(), t.ty, record(&text, &[]))))
+        let (name, ty, record) = (format_ident!("{}", t.rust_ident()), tokens(&t.ty), record(&text, &[]));
+        Ok(quote!(#[allow(non_camel_case_types)] pub type #name = #ty; #record))
     })
 }
 
@@ -1310,15 +1235,16 @@ pub fn c_typedef(input: TokenStream) -> TokenStream {
 /// #[repr(C)] struct of the same file - checked against RcuArray's layout. A
 /// field of the alias's type is, to C, `struct NAME __rcu *`.
 #[proc_macro]
-pub fn c_rcu_array(input: TokenStream) -> TokenStream {
+pub fn c_rcu_array(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("c_rcu_array!", || {
         let text = format!("c_rcu_array! {{ {input} }}");
         let a = one_item!(&text, RcuArray, "pub type ALIAS = RcuArray<T[, H]> as struct NAME { NR, ELEMS };");
-        let nums: Vec<String> = ["NR", "HEAD", "TAIL"].iter()
-            .map(|n| format!("<{}>::{n} as u64", a.ty))
+        let (alias, ty) = (format_ident!("{}", a.alias), tokens(&a.ty));
+        let nums: Vec<_> = ["NR", "HEAD", "TAIL"].iter().map(|n| format_ident!("{n}"))
+            .map(|n| quote!(<#ty>::#n as u64))
             .collect();
-        Ok(tokens(&format!("#[allow(non_camel_case_types)]\npub type {} = {};\n{}",
-                           a.alias, a.ty, record(&text, &nums))))
+        let record = record(&text, &nums);
+        Ok(quote!(#[allow(non_camel_case_types)] pub type #alias = #ty; #record))
     })
 }
 
@@ -1330,14 +1256,14 @@ pub fn c_rcu_array(input: TokenStream) -> TokenStream {
 /// and alignment, and the listed fields its offsets - so Rust can pass one
 /// where C has the other.
 #[proc_macro]
-pub fn c_same(input: TokenStream) -> TokenStream {
+pub fn c_same(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("c_same!", || {
         let text = format!("c_same! {{ {input} }}");
         let s = one_item!(&text, Same, "struct NAME == TYPE { fields }");
-        let ty = &s.rust_ty;
-        let mut nums = size_align(ty);
-        nums.extend(s.fields.iter().map(|f| format!("::core::mem::offset_of!({ty}, {f}) as u64")));
-        Ok(tokens(&record(&text, &nums)))
+        let ty = tokens(&s.rust_ty);
+        let mut nums = size_align(&ty);
+        nums.extend(s.fields.iter().map(|f| format_ident!("{f}")).map(|f| quote!(::core::mem::offset_of!(#ty, #f) as u64)));
+        Ok(record(&text, &nums))
     })
 }
 
@@ -1353,34 +1279,44 @@ pub fn c_same(input: TokenStream) -> TokenStream {
 /// const, and [T; 0] its unsized array: `extern const struct bkey_ops
 /// bch2_bkey_ops[];`.
 #[proc_macro]
-pub fn c_extern(input: TokenStream) -> TokenStream {
+pub fn c_extern(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("c_extern!", || {
         let text = format!("c_extern! {{ {input} }}");
         let ex = one_item!(&text, Extern, "fns and statics");
 
-        let mut decls = String::new();
-        let mut asserts = String::new();
+        let mut decls = TokenStream::new();
+        let mut asserts = TokenStream::new();
         for f in &ex.fns {
-            let mut params: Vec<String> = f.params.iter().map(|(n, ty)| format!("{n}: {ty}")).collect();
+            let mut params = params(&f.params);
             if f.variadic {
-                params.push("...".into());
+                params.push(quote!(...));
             }
-            let ret = f.ret.as_ref().map(|r| format!(" -> {r}")).unwrap_or_default();
-            let must_use = if f.must_use { "#[must_use] " } else { "" };
-            let cold = if f.cold { "#[cold] " } else { "" };
-            decls.push_str(&format!("{}{must_use}{cold}pub fn {}({}){ret};\n", cfg_attr(&f.cfg), f.name,
-                                    params.join(", ")));
-            asserts.push_str(&thin_pointers(&f.name, &f.cfg, &f.params, f.ret.as_deref()));
+            let (cfg, name, ret) = (cfg_attr(&f.cfg), tokens(&f.name), ret(&f.ret));
+            let must_use = f.must_use.then(|| quote!(#[must_use]));
+            let cold = f.cold.then(|| quote!(#[cold]));
+            decls.extend(quote!(#cfg #must_use #cold pub fn #name(#(#params),*) #ret;));
+            asserts.extend(thin_pointers(&f.name, &f.cfg, &f.params, f.ret.as_deref()));
         }
         for s in &ex.statics {
-            let m = if s.mutable { "mut " } else { "" };
-            decls.push_str(&format!("{}pub static {m}{}: {};\n", cfg_attr(&s.cfg), s.name, s.ty));
+            let (cfg, name, ty) = (cfg_attr(&s.cfg), tokens(&s.name), tokens(&s.ty));
+            let m = s.mutable.then(|| quote!(mut));
+            decls.extend(quote!(#cfg pub static #m #name: #ty;));
         }
-        let cfg = cfg_attr(&ex.cfg);
-        Ok(tokens(&format!("{cfg}unsafe extern \"C\" {{\n{decls}}}\n\
-                            {cfg}const _: () = {{\n{asserts}}};\n\
-                            {}", record(&text, &[]))))
+        let (cfg, record) = (cfg_attr(&ex.cfg), record(&text, &[]));
+        Ok(quote! {
+            #cfg unsafe extern "C" { #decls }
+            #cfg const _: () = { #asserts };
+            #record
+        })
     })
+}
+
+fn params(params: &[(String, String)]) -> Vec<TokenStream> {
+    params.iter().map(|(n, ty)| (tokens(n), tokens(ty))).map(|(n, ty)| quote!(#n: #ty)).collect()
+}
+
+fn ret(ret: &Option<String>) -> Option<TokenStream> {
+    ret.as_deref().map(tokens).map(|r| quote!(-> #r))
 }
 
 /// @ty, a field's type, with @lifetimes - its struct's - 'static: for a check
@@ -1405,16 +1341,18 @@ fn static_lifetimes(ty: &str, lifetimes: &[String]) -> String {
 /// whose metadata C has nowhere for. improper_ctypes can't say so: rustc
 /// doesn't report it in what a proc macro generates. A pointer to an unsized
 /// vstruct is to its header, Head<T>, which is C's struct.
-fn thin_pointers(name: &str, cfg: &Option<cstruct::Cfg>, params: &[(String, String)], ret: Option<&str>) -> String {
+fn thin_pointers(name: &str, cfg: &Option<cstruct::Cfg>, params: &[(String, String)], ret: Option<&str>) -> TokenStream {
+    let cfg = cfg_attr(cfg);
     params.iter()
         .map(|(n, ty)| (n.as_str(), ty.as_str()))
         .chain(ret.map(|r| ("its return", r)))
         .filter(|(_, ty)| ty.trim_start().starts_with(['*', '&']))
-        .map(|(n, ty)| format!(
-            "{}assert!(::core::mem::size_of::<{ty}>() == ::core::mem::size_of::<*const u8>(),\n\
-                     \"{name}: {n}'s {ty} is a fat pointer, which C has no place for - \
-                      a pointer to an unsized vstruct T is to Head<T>\");\n",
-            cfg_attr(cfg)))
+        .map(|(n, ty)| {
+            let msg = format!("{name}: {n}'s {ty} is a fat pointer, which C has no place for - \
+                               a pointer to an unsized vstruct T is to Head<T>");
+            let ty = tokens(ty);
+            quote!(#cfg assert!(::core::mem::size_of::<#ty>() == ::core::mem::size_of::<*const u8>(), #msg);)
+        })
         .collect()
 }
 
@@ -1445,135 +1383,117 @@ fn thin_pointers(name: &str, cfg: &Option<cstruct::Cfg>, params: &[(String, Stri
 /// #[c("...")] after #[c_export] is the declaration, where the Rust type
 /// doesn't say it - or C's isn't const, as attribute_group's attrs aren't.
 #[proc_macro_attribute]
-pub fn c_export(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand("#[c_export]", || c_export_expand(attr, item))
+pub fn c_export(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[c_export]", || c_export_expand(attr.into(), item.into()))
 }
 
-/// @toks without their #[@name(..)] attributes.
-fn without_attr(toks: &[TokenTree], name: &str) -> TokenStream {
-    let is_attr = |t: &TokenTree| matches!(t, TokenTree::Group(g)
-        if g.delimiter() == Delimiter::Bracket &&
-           matches!(g.stream().into_iter().next(), Some(TokenTree::Ident(i)) if i.to_string() == name));
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < toks.len() {
-        if matches!(&toks[i], TokenTree::Punct(p) if p.as_char() == '#') && toks.get(i + 1).is_some_and(is_attr) {
-            i += 2;
-        } else {
-            out.push(toks[i].clone());
-            i += 1;
-        }
-    }
-    out.into_iter().collect()
+/// @attrs without their #[@name(..)]s.
+fn without_attr<'a>(attrs: &'a [syn::Attribute], name: &str) -> impl Iterator<Item = &'a syn::Attribute> {
+    attrs.iter().filter(move |a| !a.path().is_ident(name))
 }
 
 fn c_export_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     if !attr.is_empty() {
         return Err("takes no arguments".into());
     }
-    if item.clone().into_iter().any(|t| matches!(&t, TokenTree::Ident(i) if i.to_string() == "static")) {
-        return c_export_static(item);
+    match syn::parse2(item).map_err(|e| format!("on a fn or a static - {e}"))? {
+        syn::Item::Fn(f) => c_export_fn(f),
+        syn::Item::Static(s) => c_export_static(s),
+        _ => Err("on a fn or a static".into()),
     }
-    // What the record has: the signature, the body dropped - and $crate,
-    // from a macro_rules!, as the crate this is.
-    let mut sig: Vec<TokenTree> = item.clone().into_iter().collect();
-    if !matches!(sig.pop(), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace) {
-        return Err("on a fn".into());
-    }
-    let text = |sig: TokenStream| format!("#[c_export] {sig} {{}}").replace("$crate", "crate");
+}
 
-    let e = parse_c_export(&text(sig.iter().cloned().collect()))?;
+/// The record's text of a #[c_export] item, @item: $crate, from a
+/// macro_rules!, as the crate this is.
+fn c_export_text(item: TokenStream) -> String {
+    format!("#[c_export] {item}").replace("$crate", "crate")
+}
+
+fn c_export_fn(item: syn::ItemFn) -> Result<TokenStream, String> {
+    // What the record has: the signature, the body dropped
+    let (vis, sig) = (&item.vis, &item.sig);
+    let text = |attrs: Vec<&syn::Attribute>| c_export_text(quote!(#(#attrs)* #vis #sig {}));
+    let e = parse_c_export(&text(item.attrs.iter().collect()))?;
     let f = &e.ex.fns[0];
     let cfg = cfg_attr(&f.cfg);
     // The record is under the fn's #[cfg], so it exists only where that holds,
     // and its text has none - which C would get as an #if: before rustc 1.89,
     // an attribute macro is passed the #[cfg] in front of it, already true,
     // and in C #[cfg(kernel)] is defined(kernel) - never.
-    let record = format!("{cfg}{}", record(&text(without_attr(&sig, "cfg")), &[]));
+    let record = record(&text(without_attr(&item.attrs, "cfg").collect()), &[]);
+    let record = quote!(#cfg #record);
 
     // extern "C": the fn is C's symbol itself
     if e.extern_c {
-        let mut out = tokens("#[unsafe(no_mangle)]");
-        out.extend(item);
-        out.extend(tokens(&record));
-        return Ok(out);
+        return Ok(quote!(#[unsafe(no_mangle)] #item #record));
     }
 
-    let params: Vec<String> = f.params.iter().map(|(n, ty)| format!("{n}: {ty}")).collect();
-    let args: Vec<String> = f.params.iter().zip(&e.params)
-        .map(|((n, c), r)| match r {
-            Some(r) => format!("::core::mem::transmute::<{c}, {r}>({n})"),
-            None    => n.clone(),
-        })
-        .collect();
-    let call = format!("self::{}({})", f.name, args.join(", "));
-    let (ret, call) = match (&f.ret, &e.ret) {
-        (Some(c), Some(r)) => (format!(" -> {c}"), format!("::core::mem::transmute::<{r}, {c}>({call})")),
-        (Some(c), None)    => (format!(" -> {c}"), call),
-        (None, _)          => (String::new(), call),
+    let (name, params) = (tokens(&f.name), params(&f.params));
+    let args = f.params.iter().zip(&e.params).map(|((n, c), r)| {
+        let n = tokens(n);
+        match r {
+            Some(r) => {
+                let (c, r) = (tokens(c), tokens(r));
+                quote!(::core::mem::transmute::<#c, #r>(#n))
+            }
+            None => n,
+        }
+    });
+    let call = quote!(self::#name(#(#args),*));
+    let call = match (&f.ret, &e.ret) {
+        (Some(c), Some(r)) => {
+            let (c, r) = (tokens(c), tokens(r));
+            quote!(::core::mem::transmute::<#r, #c>(#call))
+        }
+        _ => call,
     };
+    let ret = ret(&f.ret);
     let thin = thin_pointers(&f.name, &None, &f.params, f.ret.as_deref());
-    let def = format!(
-        "{cfg}const _: () = {{\n\
-             #[allow(unused_imports)]\n\
-             use crate::c;\n\
-             #[unsafe(no_mangle)]\n\
-             #[allow(unused_unsafe, clippy::transmute_ptr_to_ref)]\n\
-             unsafe extern \"C\" fn {name}({params}){ret} {{\n\
-                 unsafe {{ {call} }}\n\
-             }}\n\
-             const _: () = {{\n{thin}}};\n\
-         }};\n\
-         {record}",
-        name = f.name, params = params.join(", "));
-
-    let mut out = item;
-    out.extend(tokens(&def));
-    Ok(out)
+    Ok(quote! {
+        #item
+        #cfg const _: () = {
+            #[allow(unused_imports)]
+            use crate::c;
+            #[unsafe(no_mangle)]
+            #[allow(unused_unsafe, clippy::transmute_ptr_to_ref)]
+            unsafe extern "C" fn #name(#(#params),*) #ret {
+                unsafe { #call }
+            }
+            const _: () = { #thin };
+        };
+        #record
+    })
 }
 
 /// A #[c_export] static: the symbol C reads - #[no_mangle], in a CStatic,
 /// Sync for the pointers C's structs hold - and C's extern declaration of it,
 /// as a c_extern! static's: `extern const struct foo NAME;`.
-fn c_export_static(item: TokenStream) -> Result<TokenStream, String> {
-    let toks: Vec<TokenTree> = item.into_iter().collect();
-    let text_of = |t: &[TokenTree]| t.iter().cloned().collect::<TokenStream>().to_string();
-    let is_punct = |t: &TokenTree, c: char| matches!(t, TokenTree::Punct(p) if p.as_char() == c);
-
-    let s = toks.iter().position(|t| matches!(t, TokenTree::Ident(i) if i.to_string() == "static"))
-        .ok_or("on a fn or a static")?;
-    let (name, colon) = match &toks[s + 1..] {
-        [TokenTree::Ident(n), c, ..] if is_punct(c, ':') && n.to_string() != "mut" => (n.to_string(), s + 2),
-        _ => return Err("expected static NAME: TYPE = EXPR; - not mut".into()),
-    };
-    let eq = (colon + 1..toks.len()).find(|&i| is_punct(&toks[i], '='))
-        .ok_or("a static needs a value")?;
-    if !toks.last().is_some_and(|t| is_punct(t, ';')) {
-        return Err("expected static NAME: TYPE = EXPR;".into());
+fn c_export_static(s: syn::ItemStatic) -> Result<TokenStream, String> {
+    if !matches!(s.mutability, syn::StaticMutability::None) {
+        return Err("expected static NAME: TYPE = EXPR; - not mut".into());
     }
-
-    let ty = text_of(&toks[colon + 1..eq]);
-    let expr = text_of(&toks[eq + 1..toks.len() - 1]);
-
-    let text = |prefix: TokenStream|
-        format!("#[c_export] {prefix} static {name}: {ty};").replace("$crate", "crate");
-    let e = cstruct::parse_c_export(&text(toks[..s].iter().cloned().collect()))?;
+    let syn::ItemStatic { attrs, vis, ident: name, ty, expr, .. } = &s;
+    let text = |attrs: Vec<&syn::Attribute>| c_export_text(quote!(#(#attrs)* #vis static #name: #ty;));
+    let e = cstruct::parse_c_export(&text(attrs.iter().collect()))?;
     // As a fn's record: under the static's #[cfg], not with it
-    let record = format!("{}{}", cfg_attr(&e.ex.statics[0].cfg),
-                         record(&text(without_attr(&toks[..s], "cfg")), &[]));
+    let cfg = cfg_attr(&e.ex.statics[0].cfg);
+    let record = record(&text(without_attr(attrs, "cfg").collect()), &[]);
 
     // #[c("...")], C's declaration where the Rust type doesn't say it, is the
     // record's alone
-    let rust_prefix = without_attr(&toks[..s], "c");
+    let attrs = without_attr(attrs, "c");
 
     // SAFETY, of the CStatic: a static C reads is immutable, and its only
     // parts that aren't Sync are its pointers - to other statics, and fns
-    Ok(tokens(&format!(
-        "#[unsafe(no_mangle)]\n\
-         #[allow(non_upper_case_globals)]\n\
-         {rust_prefix} static {name}: crate::types::CStatic<{ty}> =\n\
-             unsafe {{ crate::types::CStatic::new({expr}) }};\n\
-         {record}")))
+    Ok(quote! {
+        #[unsafe(no_mangle)]
+        #[allow(non_upper_case_globals)]
+        #(#attrs)* #vis static #name: crate::types::CStatic<#ty> = {
+            let v = #expr;
+            unsafe { crate::types::CStatic::new(v) }
+        };
+        #cfg #record
+    })
 }
 
 /// Integer constants - C's #defines: c_const! { pub const NAME: u32 = EXPR; ... }
@@ -1581,7 +1501,7 @@ fn c_export_static(item: TokenStream) -> Result<TokenStream, String> {
 /// a constant C had as a plain number and Rust wants unsigned. The record is
 /// the block's, with each constant's value, in order.
 #[proc_macro]
-pub fn c_const(input: TokenStream) -> TokenStream {
+pub fn c_const(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("c_const!", || {
         let text = format!("c_const! {{ {input} }}");
         let consts: Vec<_> = parse_items(&text)?.into_iter()
@@ -1589,14 +1509,15 @@ pub fn c_const(input: TokenStream) -> TokenStream {
             .collect::<Option<_>>()
             .filter(|c: &Vec<_>| !c.is_empty())
             .ok_or("expected pub const NAME: TYPE = EXPR;")?;
-        let mut out = String::new();
+        let mut out = TokenStream::new();
         let mut nums = Vec::new();
         for c in &consts {
-            out.push_str(&format!("#[allow(non_upper_case_globals, dead_code)]\npub const {}: {} = {};\n",
-                                  c.name, c.ty, c.value));
-            nums.push(format!("{} as u64", c.name));
+            let (name, ty, value) = (tokens(&c.name), tokens(&c.ty), tokens(&c.value));
+            out.extend(quote!(#[allow(non_upper_case_globals, dead_code)] pub const #name: #ty = #value;));
+            nums.push(quote!(#name as u64));
         }
-        Ok(tokens(&format!("{out}{}", record(&text, &nums))))
+        out.extend(record(&text, &nums));
+        Ok(out)
     })
 }
 
@@ -1613,32 +1534,34 @@ pub fn c_const(input: TokenStream) -> TokenStream {
 /// target's own constants, and the argument type. The record carries the
 /// opcodes, and the generated header asserts C's are the same.
 #[proc_macro]
-pub fn c_ioctl(input: TokenStream) -> TokenStream {
+pub fn c_ioctl(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("c_ioctl!", || {
         let text = format!("c_ioctl! {{ {input} }}");
         let io = one_item!(&text, Ioctl, "NAME = _IOW(type, nr, ARG), ...");
 
-        let mut out = String::new();
+        let mut out = TokenStream::new();
         let mut opcodes = Vec::new();
         for e in &io.entries {
-            let (name, dir, ty, nr) = (&e.name, &e.dir, &e.ty, &e.nr);
-            let (arg, opcode) = match &e.arg {
-                Some(a) => (a.as_str(), format!("crate::util::ioctl::{dir}::<{a}>({ty}, {nr})")),
-                None => ("()", format!("crate::util::ioctl::_IO({ty}, {nr})")),
+            let (name, dir, ty, nr) = (format_ident!("{}", e.name), format_ident!("{}", e.dir), tokens(&e.ty), tokens(&e.nr));
+            let (arg, opcode) = match e.arg.as_deref().map(tokens) {
+                Some(a) => (a.clone(), quote!(crate::util::ioctl::#dir::<#a>(#ty, #nr))),
+                None => (quote!(()), quote!(crate::util::ioctl::_IO(#ty, #nr))),
             };
             // _IOWR -> dir::WR, _IO -> dir::IO
-            let dir_ty = dir.strip_prefix("_IO").filter(|d| !d.is_empty()).unwrap_or("IO");
-            out.push_str(&format!(
-                "#[allow(non_camel_case_types)]\n\
-                 pub struct {name};\n\
-                 impl crate::util::ioctl::Ioctl for {name} {{\n\
-                     const OPCODE: u32 = {opcode};\n\
-                     type Arg = {arg};\n\
-                     type Dir = crate::util::ioctl::dir::{dir_ty};\n\
-                 }}\n"));
-            opcodes.push(format!("<{name} as crate::util::ioctl::Ioctl>::OPCODE as u64"));
+            let dir_ty = format_ident!("{}", e.dir.strip_prefix("_IO").filter(|d| !d.is_empty()).unwrap_or("IO"));
+            out.extend(quote! {
+                #[allow(non_camel_case_types)]
+                pub struct #name;
+                impl crate::util::ioctl::Ioctl for #name {
+                    const OPCODE: u32 = #opcode;
+                    type Arg = #arg;
+                    type Dir = crate::util::ioctl::dir::#dir_ty;
+                }
+            });
+            opcodes.push(quote!(<#name as crate::util::ioctl::Ioctl>::OPCODE as u64));
         }
-        Ok(tokens(&format!("{out}{}", record(&text, &opcodes))))
+        out.extend(record(&text, &opcodes));
+        Ok(out)
     })
 }
 
@@ -1647,8 +1570,8 @@ pub fn c_ioctl(input: TokenStream) -> TokenStream {
 /// set_name() for each - NAME without PREFIX_, lowercased - as C's NAME() and
 /// SET_NAME(): the bits [start, end) of field, as a u64.
 #[proc_macro]
-pub fn c_bitmask(input: TokenStream) -> TokenStream {
-    expand("c_bitmask!", || bitmask_expand(input))
+pub fn c_bitmask(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("c_bitmask!", || bitmask_expand(input.into()))
 }
 
 fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
@@ -1658,10 +1581,11 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
     // An LE*_BITMASK field is a little-endian integer - Le32, Le64 - read and
     // written with get() and set(); a BITMASK one, native.
     let field = &b.field;
+    let f = tokens(field);
     let (get, set) = if b.macro_name == "BITMASK" {
-        (format!("self.{field} as u64"), format!("self.{field} = new as _"))
+        (quote!(self.#f as u64), quote!(self.#f = new as _))
     } else {
-        (format!("u64::from(self.{field}.get())"), format!("self.{field}.set(new as _)"))
+        (quote!(u64::from(self.#f.get())), quote!(self.#f.set(new as _)))
     };
 
     // The runtime table of them (typeinfo.rs's BitmaskField): this struct
@@ -1672,15 +1596,15 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
                         field.replace(|c: char| !c.is_alphanumeric(), "_").trim_end_matches('_'));
     // Each entry's struct as typeinfo names it, C's name: its TypeInfo's - a
     // family's type in a state has it as X<Whole>
-    let info_ty = match b.rust_type.split_once('<') {
+    let info_ty = tokens(&match b.rust_type.split_once('<') {
         Some((x, _)) => format!("{x}<crate::util::vstructs::Whole>"),
         None         => b.rust_type.clone(),
-    };
-    let struct_name = format!("<{info_ty} as crate::typeinfo::TypeInfo>::INFO.name");
-    let mut table_entries = String::new();
+    });
+    let struct_name = quote!(<#info_ty as crate::typeinfo::TypeInfo>::INFO.name);
+    let mut table_entries = Vec::new();
 
-    let mut methods = String::new();
-    let mut setters = String::new();
+    let mut methods = TokenStream::new();
+    let mut setters = TokenStream::new();
     for e in &b.entries {
         let m = b.method(&e.name);
         // set_128_bit_macs: the setter's set_ makes it a name already
@@ -1688,52 +1612,61 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
             Some(s) if s.starts_with(|c: char| c.is_ascii_digit()) => s,
             _ => m.as_str(),
         };
-        let (start, end) = (&e.start, &e.end);
-        table_entries.push_str(&format!(
-            "crate::typeinfo::BitmaskField {{ struct_name: {struct_name}, field: {field:?}, name: {set_m:?}, \
-             lo: ({start}) as u8, hi: ({end}) as u8 }},\n"));
+        let (start, end) = (tokens(&e.start), tokens(&e.end));
+        table_entries.push(quote! {
+            crate::typeinfo::BitmaskField { struct_name: #struct_name, field: #field, name: #set_m,
+                                            lo: (#start) as u8, hi: (#end) as u8 }
+        });
         // C's LE*_BITMASK() defines NAME_MAX: the largest value it holds
-        methods.push_str(&format!(
-            "#[allow(dead_code)]\n\
-             pub const {}_MAX: u64 = u64::MAX >> (64 - (({end}) - ({start})));\n",
-            m.to_uppercase()));
+        let (max, get_m) = (format_ident!("{}_MAX", m.to_uppercase()), format_ident!("{m}"));
+        let (set_fn, update_fn) = (format_ident!("set_{set_m}"), format_ident!("update_{set_m}"));
         // One bit is a flag: bool, as the accessors on bindgen's structs had it.
-        let one_bit = matches!((start.parse::<u32>(), end.parse::<u32>()), (Ok(s), Ok(e)) if e == s + 1);
-        let (ty, from, to) = if one_bit { ("bool", " != 0", " as u64") } else { ("u64", "", "") };
-        methods.push_str(&format!(
-            "#[allow(dead_code)]\n\
-             pub fn {m}(&self) -> {ty} {{\n\
-                 (({get} >> ({start})) & (u64::MAX >> (64 - (({end}) - ({start}))))){from}\n\
-             }}\n"));
+        let one_bit = matches!((e.start.parse::<u32>(), e.end.parse::<u32>()), (Ok(s), Ok(e)) if e == s + 1);
+        let (ty, from, to) = match one_bit {
+            true => (quote!(bool), quote!(!= 0), quote!(as u64)),
+            false => (quote!(u64), quote!(), quote!()),
+        };
+        methods.extend(quote! {
+            #[allow(dead_code)]
+            pub const #max: u64 = u64::MAX >> (64 - ((#end) - (#start)));
+            #[allow(dead_code)]
+            pub fn #get_m(&self) -> #ty {
+                ((#get >> (#start)) & (u64::MAX >> (64 - ((#end) - (#start))))) #from
+            }
+        });
         // update_x(f): set_x(f(x())). XXX Deprecated when real field
         // projections arrive: x op= v through a projected place instead.
-        setters.push_str(&format!(
-            "#[allow(dead_code)]\n\
-             pub fn set_{set_m}(&mut self, v: {ty}) {{\n\
-                 let mask = (u64::MAX >> (64 - (({end}) - ({start})))) << ({start});\n\
-                 let new = ({get} & !mask) | (((v{to}) << ({start})) & mask);\n\
-                 {set};\n\
-             }}\n\
-             #[allow(dead_code)]\n\
-             pub fn update_{set_m}(&mut self, f: impl FnOnce({ty}) -> {ty}) {{\n\
-                 self.set_{set_m}(f(self.{m}()))\n\
-             }}\n"));
+        setters.extend(quote! {
+            #[allow(dead_code)]
+            pub fn #set_fn(&mut self, v: #ty) {
+                let mask = (u64::MAX >> (64 - ((#end) - (#start)))) << (#start);
+                let new = (#get & !mask) | (((v #to) << (#start)) & mask);
+                #set;
+            }
+            #[allow(dead_code)]
+            pub fn #update_fn(&mut self, f: impl FnOnce(#ty) -> #ty) {
+                self.#set_fn(f(self.#get_m()))
+            }
+        });
     }
 
     // A family's C struct, X__head: its state definitions, which have C's
     // fields inline and no DerefMut to it, get the setters too - the getters
     // they reach through their Deref
-    let state_setters = match b.rust_type.strip_suffix("__head") {
-        Some(family) => format!("__{family}__state_impls! {{\n{setters}}}\n"),
-        None => String::new(),
-    };
+    let state_setters = b.rust_type.strip_suffix("__head").map(|family| {
+        let state_impls = format_ident!("__{family}__state_impls");
+        quote!(#state_impls! { #setters })
+    });
 
-    Ok(tokens(&format!(
-        "{}impl {} {{\n{methods}{setters}}}\n\
-         {state_setters}\
-         #[allow(non_upper_case_globals)]\n\
-         pub const {table}: &[crate::typeinfo::BitmaskField] = &[\n{table_entries}];\n\
-         const _: () = assert!(crate::typeinfo::bitmasks_listed({table:?}),\n\
-                               \"{table}: not in typeinfo.rs's BITMASKS - add it\");\n",
-        record(&text, &[]), b.rust_type)))
+    let (rust_type, table_id) = (tokens(&b.rust_type), format_ident!("{table}"));
+    let msg = format!("{table}: not in typeinfo.rs's BITMASKS - add it");
+    let record = record(&text, &[]);
+    Ok(quote! {
+        #record
+        impl #rust_type { #methods #setters }
+        #state_setters
+        #[allow(non_upper_case_globals)]
+        pub const #table_id: &[crate::typeinfo::BitmaskField] = &[#(#table_entries),*];
+        const _: () = assert!(crate::typeinfo::bitmasks_listed(#table), #msg);
+    })
 }

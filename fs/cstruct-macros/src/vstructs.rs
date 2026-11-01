@@ -12,7 +12,7 @@
 //! sizes add up to the type's, so there's no padding - zerocopy's FromBytes,
 //! for the types we define.
 
-use proc_macro::{Delimiter, Ident, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Ident, TokenStream, TokenTree};
 
 use crate::cstruct::{field_type, parse_cstruct, parse_family_args, CFieldDef, CKind, CStructDef, FieldType};
 use crate::tokens;

@@ -16,86 +16,115 @@
 //! element; a field of another such struct gets the method it was given - so
 //! the methods take and return by value, the struct Copy, as integers' own are.
 
-use proc_macro::TokenStream;
+use proc_macro2::TokenStream;
+use quote::{format_ident, quote};
+use syn::parse::{Parse, ParseStream};
+use syn::punctuated::Punctuated;
+use syn::{parenthesized, token, Data, DataStruct, DeriveInput, Error, Ident, Token, Type};
 
-use crate::cstruct::{parse_cstruct, CKind};
-use crate::tokens;
+/// A method #[derive(Fieldwise)] lifts: unary, or binary with a parameter of
+/// this name - #[fieldwise(method)] or #[fieldwise(method(rhs))] - and an
+/// inherent one, or Trait::method, of that trait's impl.
+struct Method {
+    tr:     Option<Ident>,
+    method: Ident,
+    rhs:    Option<Ident>,
+}
 
-pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
-    let def = parse_cstruct(&input.to_string())?;
-    if def.kind != CKind::Struct {
-        return Err(format!("{}: #[derive(Fieldwise)] is for a struct", def.name));
+impl Parse for Method {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let first: Ident = input.parse()?;
+        let (tr, method) = match input.parse::<Option<Token![::]>>()? {
+            Some(_) => (Some(first), input.parse()?),
+            None => (None, first),
+        };
+        let rhs = match input.peek(token::Paren) {
+            true => {
+                let inner;
+                parenthesized!(inner in input);
+                Some(inner.parse()?)
+            }
+            false => None,
+        };
+        Ok(Method { tr, method, rhs })
     }
-    if def.fieldwise.is_empty() {
-        return Err(format!("{}: #[fieldwise(...)] names no methods", def.name));
+}
+
+pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
+    let name = &input.ident;
+    let Data::Struct(DataStruct { fields, .. }) = &input.data else {
+        return Err(Error::new_spanned(&input, format!("{name}: #[derive(Fieldwise)] is for a struct")));
+    };
+    let mut methods = Vec::new();
+    for a in input.attrs.iter().filter(|a| a.path().is_ident("fieldwise")) {
+        methods.extend(a.parse_args_with(Punctuated::<Method, Token![,]>::parse_terminated)?);
+    }
+    if methods.is_empty() {
+        return Err(Error::new_spanned(name, format!("{name}: #[fieldwise(...)] names no methods")));
     }
 
     // Inherent methods under None, a trait's under its name: one impl each.
-    let mut impls: Vec<(Option<&str>, String)> = Vec::new();
-    for m in &def.fieldwise {
-        let mut fields = String::new();
-        for f in &def.fields {
-            if f.bitfield {
-                return Err(format!("{}.{}: #[derive(Fieldwise)] can't see into a bitfield",
-                                   def.name, f.name));
+    let mut impls: Vec<(Option<&Ident>, Vec<TokenStream>)> = Vec::new();
+    for m in &methods {
+        let mut inits = Vec::new();
+        for f in fields {
+            let Some(field) = &f.ident else {
+                return Err(Error::new_spanned(f, format!("{name}: #[derive(Fieldwise)] is for named fields")));
+            };
+            if f.attrs.iter().any(|a| a.path().is_ident("c_bitfield")) {
+                return Err(Error::new_spanned(field,
+                    format!("{name}.{field}: #[derive(Fieldwise)] can't see into a bitfield")));
             }
-            if let Some(cfg) = &f.cfg {
-                fields.push_str(&format!("#[cfg({})] ", cfg.to_rust()));
-            }
-            let name = f.rust_name();
-            let rhs = m.rhs.as_ref().map(|r| format!("{r}.{name}"));
-            fields.push_str(&format!("{name}: {},\n",
-                                     apply(&m.method, &f.ty, &format!("self.{name}"), rhs.as_deref(), 0)?));
+            let cfg = f.attrs.iter().filter(|a| a.path().is_ident("cfg"));
+            let rhs = m.rhs.as_ref().map(|r| quote!(#r.#field));
+            let e = apply(&m.method, &f.ty, quote!(self.#field), rhs, 0);
+            inits.push(quote!(#(#cfg)* #field: #e,));
         }
 
         let params = match &m.rhs {
-            Some(r) => format!("self, {r}: Self"),
-            None    => "self".to_string(),
+            Some(r) => quote!(self, #r: Self),
+            None    => quote!(self),
         };
-        let vis = if m.tr.is_none() { "pub " } else { "" };
-        let method = format!("#[inline]\n{vis}fn {}({params}) -> Self {{\nSelf {{\n{fields}}}\n}}\n",
-                             m.method);
+        let vis = m.tr.is_none().then(|| quote!(pub));
+        let method = &m.method;
+        let method = quote! {
+            #[inline]
+            #vis fn #method(#params) -> Self {
+                Self {
+                    #(#inits)*
+                }
+            }
+        };
 
-        let tr = m.tr.as_deref();
-        match impls.iter_mut().find(|(t, _)| *t == tr) {
-            Some((_, body)) => body.push_str(&method),
-            None            => impls.push((tr, method)),
+        match impls.iter_mut().find(|(t, _)| *t == m.tr.as_ref()) {
+            Some((_, body)) => body.push(method),
+            None            => impls.push((m.tr.as_ref(), vec![method])),
         }
     }
 
-    let ty = def.rust_type();
-    Ok(tokens(&impls.iter().map(|(tr, body)| match tr {
-        Some(tr) => format!("#[automatically_derived]\nimpl {tr} for {ty} {{\n{body}}}\n"),
-        None     => format!("#[automatically_derived]\nimpl {ty} {{\n{body}}}\n"),
-    }).collect::<String>()))
+    // its lifetimes elided, as an impl that doesn't name them has it
+    let lts: Vec<_> = input.generics.lifetimes().map(|_| quote!('_)).collect();
+    let ty = match lts.is_empty() {
+        true => quote!(#name),
+        false => quote!(#name<#(#lts),*>),
+    };
+    Ok(impls.iter().map(|(tr, body)| match tr {
+        Some(tr) => quote!(#[automatically_derived] impl #tr for #ty { #(#body)* }),
+        None     => quote!(#[automatically_derived] impl #ty { #(#body)* }),
+    }).collect())
 }
 
 /// @method on @val, of type @ty - with @rhs, for a binary one - an array's
 /// elements each, at @depth arrays in.
-fn apply(method: &str, ty: &str, val: &str, rhs: Option<&str>, depth: usize) -> Result<String, String> {
-    if let Some(elem) = array_elem(ty) {
-        let i = format!("__i{depth}");
-        let rhs = rhs.map(|r| format!("{r}[{i}]"));
-        let e = apply(method, elem, &format!("{val}[{i}]"), rhs.as_deref(), depth + 1)?;
-        return Ok(format!("::core::array::from_fn(|{i}| {e})"));
+fn apply(method: &Ident, ty: &Type, val: TokenStream, rhs: Option<TokenStream>, depth: usize) -> TokenStream {
+    if let Type::Array(a) = ty {
+        let i = format_ident!("__i{depth}");
+        let rhs = rhs.map(|r| quote!(#r[#i]));
+        let e = apply(method, &a.elem, quote!(#val[#i]), rhs, depth + 1);
+        return quote!(::core::array::from_fn(|#i| #e));
     }
-    Ok(match rhs {
-        Some(r) => format!("{val}.{method}({r})"),
-        None    => format!("{val}.{method}()"),
-    })
-}
-
-/// The element type of an array type, `[T; N]`.
-fn array_elem(ty: &str) -> Option<&str> {
-    let inner = ty.trim().strip_prefix('[')?.strip_suffix(']')?;
-    let mut depth = 0i32;
-    for (i, c) in inner.char_indices() {
-        match c {
-            '[' | '(' | '<' => depth += 1,
-            ']' | ')' | '>' => depth -= 1,
-            ';' if depth == 0 => return Some(inner[..i].trim()),
-            _ => {}
-        }
+    match rhs {
+        Some(r) => quote!(#val.#method(#r)),
+        None    => quote!(#val.#method()),
     }
-    None
 }
