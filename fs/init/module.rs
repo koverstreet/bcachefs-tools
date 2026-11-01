@@ -12,7 +12,7 @@
 
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
-use crate::util::kobject::{GroupList, Groups, KobjOwner, Kobject};
+use crate::util::kobject::{GroupList, Groups, KobjOwner, KobjPlace, Kobject};
 use crate::util::sysfs::Dir;
 use core::ffi::c_int;
 use core::ptr::NonNull;
@@ -53,6 +53,7 @@ crate::module_param! {
 }
 
 /// /sys/fs/bcachefs.
+#[repr(transparent)]
 pub(crate) struct Root(pub(crate) Kobject);
 
 pub(crate) static BCACHEFS_KOBJ: Root = Root(unsafe { core::mem::zeroed() });
@@ -61,11 +62,18 @@ static NO_GROUPS: Groups<1> = Groups::new([]);
 
 unsafe impl Dir for Root {
     type Obj = Root;
-    const KOBJ: usize = 0;
+    type Kobj = Root;
+}
+
+unsafe impl KobjPlace for Root {
+    type Owner = Root;
+
+    unsafe fn owner(kobj: *mut c::kobject) -> *mut Root {
+        kobj.cast()
+    }
 }
 
 unsafe impl KobjOwner for Root {
-    const KOBJ: usize = 0;
     const GROUPS: GroupList = NO_GROUPS.list();
     type Dir = Root;
 

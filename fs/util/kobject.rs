@@ -17,6 +17,7 @@ use core::ptr::NonNull;
 
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
+use crate::util::place::{container_of_raw, Place, Placed};
 use crate::util::sysfs::{self, Dir, Files};
 
 /// A sysfs file read and written in pages at an offset: a bin_attribute,
@@ -128,13 +129,32 @@ impl<const N: usize> Groups<N> {
 #[derive(Clone, Copy)]
 pub struct GroupList(*const *const c::attribute_group);
 
+/// Where a kobject is, as a type: what it's the kobject of.
+///
+/// # Safety
+/// owner() of a kobject at this place is the Owner it's in.
+pub(crate) unsafe trait KobjPlace {
+    type Owner;
+
+    /// # Safety
+    /// @kobj is at this place.
+    unsafe fn owner(kobj: *mut c::kobject) -> *mut Self::Owner;
+}
+
+unsafe impl<A: Place<Type = Self>> KobjPlace for Placed<Kobject, A> {
+    type Owner = A::Base;
+
+    unsafe fn owner(kobj: *mut c::kobject) -> *mut A::Base {
+        unsafe { container_of_raw(kobj.cast::<Self>()) }
+    }
+}
+
 /// What a kobject is the kobject of: its kobj_type's.
 ///
 /// # Safety
-/// KOBJ is the offset in Self of a Kobject made with Kobject::new::<Self>();
-/// Dir's Obj is Self, at the same offset; release() frees what it's given.
-pub unsafe trait KobjOwner: Sized + 'static {
-    const KOBJ: usize;
+/// Its Dir's kobject was made with Kobject::new::<Self>(); release() frees
+/// what it's given.
+pub(crate) unsafe trait KobjOwner: Sized + 'static {
     const GROUPS: GroupList;
     type Dir: Dir<Obj = Self>;
 
@@ -159,7 +179,7 @@ impl<T: KobjOwner> Ktype<T> {
     };
 
     unsafe extern "C" fn release(kobj: *mut c::kobject) {
-        unsafe { T::release(NonNull::new_unchecked(kobj.byte_sub(T::KOBJ).cast())) }
+        unsafe { T::release(NonNull::new_unchecked(<T::Dir as Dir>::Kobj::owner(kobj))) }
     }
 }
 
@@ -177,8 +197,8 @@ impl Kobject {
     /// put() drops.
     ///
     /// # Safety
-    /// For T's field at T::KOBJ.
-    pub unsafe fn new<T: KobjOwner>() -> impl ::pin_init::PinInit<Self> {
+    /// For T's kobject, its Dir's Kobj.
+    pub(crate) unsafe fn new<T: KobjOwner>() -> impl ::pin_init::PinInit<Self> {
         unsafe {
             ::pin_init::pin_init_from_closure(|slot: *mut Self| {
                 slot.write_bytes(0, 1);
@@ -192,7 +212,7 @@ impl Kobject {
     ///
     /// # Safety
     /// As new()'s.
-    pub unsafe fn init<T: KobjOwner>(&self) {
+    pub(crate) unsafe fn init<T: KobjOwner>(&self) {
         unsafe { c::kobject_init(self.as_ptr(), &Ktype::<T>::KTYPE) }
     }
 

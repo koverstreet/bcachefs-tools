@@ -598,9 +598,9 @@ pub struct Fs {
     pub cl: c::closure,
 
     #[pin]
-    #[init(unsafe { Kobject::new::<Fs>() })]
+    #[init(Kobject::new::<Fs>())]
     #[c("struct kobject kobj")]
-    pub kobj: Kobject,
+    pub(crate) kobj: Placed<Kobject, crate::at!(Fs.kobj)>,
     #[c("unsigned long flags")]
     pub flags: AtomicBitflags<c::bch_fs_flags>,
 

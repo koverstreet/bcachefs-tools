@@ -46,7 +46,8 @@ use crate::util::kernel::{READ, WRITE};
 use crate::util::log::LogMsg;
 use crate::util::time_stats::TimeStats;
 use crate::util::refcount::TryRefcount;
-use crate::util::kobject::{BinFile, BinFiles, Group, Groups};
+use crate::util::kobject::{BinFile, BinFiles, Group, Groups, KobjPlace, Kobject};
+use crate::util::place::Placed;
 use crate::util::sysfs::{self, parse_human_u64, parse_int, Attr, Dir, Files, ListAttrs};
 use crate::util::{HumanReadable, Printbuf, ToText};
 
@@ -56,7 +57,7 @@ pub struct FsDir;
 
 unsafe impl Dir for FsDir {
     type Obj = Fs;
-    const KOBJ: usize = offset_of!(Fs, kobj);
+    type Kobj = Placed<Kobject, crate::at!(Fs.kobj)>;
 
     fn show(c: &Fs, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
         if let Some(i) = TIME_STATS.index(attr) {
@@ -550,9 +551,20 @@ fn io_done_to_text(ca: &Dev, out: &mut Printbuf) {
 
 struct DevDir;
 
+/// A device's kobject, C's.
+struct DevKobj;
+
+unsafe impl KobjPlace for DevKobj {
+    type Owner = Dev;
+
+    unsafe fn owner(kobj: *mut c::kobject) -> *mut Dev {
+        unsafe { kobj.byte_sub(offset_of!(Dev, kobj)).cast() }
+    }
+}
+
 unsafe impl Dir for DevDir {
     type Obj = Dev;
-    const KOBJ: usize = offset_of!(Dev, kobj);
+    type Kobj = DevKobj;
 
     fn show(ca: &Dev, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
         match opt_from_attr(attr) {

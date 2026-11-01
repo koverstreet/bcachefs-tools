@@ -976,12 +976,11 @@ unsafe fn exit(p: NonNull<Fs>) -> Result<(), BchError> {
 
     bch_verbose!(fs, "shutdown complete");
 
-    unsafe { Kobject::put(&raw const (*p.as_ptr()).kobj) };
+    unsafe { Kobject::put((&raw const (*p.as_ptr()).kobj).cast()) };
     ret
 }
 
 unsafe impl KobjOwner for Fs {
-    const KOBJ: usize = core::mem::offset_of!(Fs, kobj);
     const GROUPS: GroupList = FS_GROUPS.list();
     type Dir = FsDir;
 

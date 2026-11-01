@@ -7,7 +7,7 @@
 //! attribute sysfs sees (name, mode) with its show and store beside it, the
 //! kernel's kobj_attribute pattern - so the directory's sysfs_ops get from
 //! the attribute sysfs hands them to its handlers by container_of(), and from
-//! the kobject to T by the kobject's offset in T. A directory of one file per
+//! the kobject to T by the kobject's place in T. A directory of one file per
 //! list entry has a ListAttrs instead, and one whose files are something
 //! else's attributes - options' - overrides Dir::show() and store().
 //!
@@ -28,6 +28,7 @@ use core::ffi::CStr;
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::ffi::{c_char, with_cstr};
+use crate::util::kobject::KobjPlace;
 use crate::util::Printbuf;
 
 pub type Show<T>  = fn(&T, &mut Printbuf);
@@ -164,13 +165,12 @@ unsafe impl<const N: usize> Sync for Files<N> {}
 /// files read and write - by default, as the Attr<Obj>s they are.
 ///
 /// # Safety
-/// ops::<Self>() is only ever the sysfs_ops of the kobject KOBJ bytes into an
-/// Obj; and its files are Attr<Obj>s, unless show and store are overridden.
-pub unsafe trait Dir: 'static {
+/// ops::<Self>() is only ever the sysfs_ops of an Obj's kobject; and its files
+/// are Attr<Obj>s, unless show and store are overridden.
+pub(crate) unsafe trait Dir: 'static {
     type Obj: 'static;
-
-    /// The directory's kobject's offset in Obj.
-    const KOBJ: usize;
+    /// The directory's kobject: where in Obj it is.
+    type Kobj: KobjPlace<Owner = Self::Obj>;
 
     /// Before any store: may refuse it.
     fn may_store(_obj: &Self::Obj) -> Result<(), BchError> {
@@ -214,7 +214,7 @@ pub unsafe fn attr_store<T: 'static>(obj: &T, attr: &c::attribute, s: &str) -> R
 }
 
 /// A Dir's sysfs_ops.
-pub const fn ops<D: Dir>() -> c::sysfs_ops {
+pub(crate) const fn ops<D: Dir>() -> c::sysfs_ops {
     c::sysfs_ops {
         show:  Some(show::<D>),
         store: Some(store::<D>),
@@ -225,8 +225,8 @@ pub const fn ops<D: Dir>() -> c::sysfs_ops {
 ///
 /// # Safety
 /// @kobj is D's kobject, in a live D::Obj.
-pub unsafe fn obj_of<'a, D: Dir>(kobj: *mut c::kobject) -> &'a D::Obj {
-    unsafe { &*kobj.byte_sub(D::KOBJ).cast::<D::Obj>() }
+pub(crate) unsafe fn obj_of<'a, D: Dir>(kobj: *mut c::kobject) -> &'a D::Obj {
+    unsafe { &*D::Kobj::owner(kobj) }
 }
 
 unsafe extern "C" fn show<D: Dir>(kobj: *mut c::kobject, attr: *mut c::attribute,

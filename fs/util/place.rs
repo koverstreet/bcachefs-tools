@@ -355,13 +355,19 @@ pub(crate) unsafe trait Contained: Sized {
 /// # Safety
 /// @p points to a live Self, initialized - had for 'a.
 pub(crate) unsafe fn container_of<'a, T: Contained>(p: *const T) -> &'a T::Parent {
+    // SAFETY: had for 'a, so the parent's live for 'a. Its known gap, the
+    // parent's discipline: see the file comment
+    unsafe { &*container_of_raw(p.cast_mut()) }
+}
+
+/// container_of(), as the pointer it was given: for what frees the parent.
+///
+/// # Safety
+/// @p points to a live Self, initialized.
+pub(crate) unsafe fn container_of_raw<T: Contained>(p: *mut T) -> *mut T::Parent {
     // SAFETY: Contained's - p is in a parent, its At's offset() in it, the At
-    // fixed once made; had for 'a, so the parent's live for 'a. Its known
-    // gap, the parent's discipline: see the file comment
-    unsafe {
-        let at = &*T::placed_at_raw(p);
-        &*p.byte_sub(at.offset()).cast::<T::Parent>()
-    }
+    // fixed once made
+    unsafe { p.byte_sub((*T::placed_at_raw(p)).offset()).cast() }
 }
 
 /// C, at the field A names - at!(Fs.ro_ref) - so container() is the struct
