@@ -668,7 +668,7 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
 
         if !(accounting && !o.allocated()) {
             if accounting {
-                accounting::accumulate(k, ok);
+                accounting::accumulate(k, BkeySC::from(ok));
             }
             if o.allocated() {
                 // SAFETY: the replaced key's own

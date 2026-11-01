@@ -459,7 +459,7 @@ pub fn nr_inodes(fs: &Fs) -> u64 {
     read(fs, NrInodes {}).nr
 }
 
-pub fn accumulate(dst: &mut BkeyI, src: &BkeyI) {
+pub fn accumulate(dst: &mut BkeyI, src: BkeySC<'_>) {
     let s = &src.arm::<Accounting>().expect("an accounting key").v().d;
     for (d, s) in dst.arm::<Accounting>().expect("an accounting key").v_mut().d.iter_mut().zip(s) {
         *d = d.wrapping_add(*s);

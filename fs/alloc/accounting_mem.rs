@@ -450,7 +450,7 @@ fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, i: usize) -> Result<usize, B
     for j in i + 1..end {
         let n = key(j);
         if BkeySC::from(n).arm::<Accounting>().is_some() {
-            accounting::accumulate(k, n);
+            accounting::accumulate(k, BkeySC::from(n));
             fs.journal_keys.mark_overwritten(j);
         }
     }
