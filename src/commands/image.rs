@@ -603,7 +603,7 @@ fn image_update_inner(
             bcachefs_kernel::errcode::BchError::from_raw(ret).msg());
     }
 
-    fs.dev_add(&metadata_path)
+    FsExt::dev_add(&*fs, &metadata_path)
         .map_err(|e| anyhow!("error adding metadata device: {}", e))?;
 
     set_data_allowed_for_image_update(&fs);

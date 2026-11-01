@@ -12,7 +12,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 
 use crate::c;
-use bcachefs_kernel::errcode::{self, BchError};
+use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::util::printbuf::Printbuf;
 
@@ -65,13 +65,13 @@ impl FsExt for Fs {
     fn dev_add(&self, path: &str) -> Result<(), BchError> {
         let path_cstr = CString::new(path).unwrap();
         let mut err = Printbuf::new();
-        let ret = unsafe { c::bch2_dev_add(self.as_ptr(), path_cstr.as_ptr(), err.as_raw()) };
-        if ret != 0 {
+        let ret = Fs::dev_add(self, &path_cstr, &mut err);
+        if ret.is_err() {
             match err.as_str().trim_end() {
                 ""  => eprintln!("error adding device {path}"),
                 msg => eprintln!("error adding device {path}: {msg}"),
             }
         }
-        errcode::ret_to_result(ret).map(|_| ())
+        ret
     }
 }

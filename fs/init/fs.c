@@ -39,7 +39,6 @@
 #include "debug/async_objs.h"
 #endif
 #include "debug/debug.h"
-#include "debug/sysfs.h"
 
 #include "fs/check.h"
 #include "fs/dirent.h"
@@ -48,7 +47,6 @@
 
 #include "init/chardev.h"
 #include "init/damage.h"
-#include "init/dev.h"
 #include "init/error.h"
 #include "init/recovery.h"
 #include "init/passes.h"

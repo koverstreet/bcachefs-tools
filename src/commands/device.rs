@@ -105,7 +105,7 @@ fn cmd_device_add_offline(
     device_add_format(dev_path, force, matches,
         block_size, btree_node_size)?;
 
-    fs.dev_add(dev_path)
+    FsExt::dev_add(&*fs, dev_path)
         .map_err(|e| anyhow!("adding device '{}': {}", dev_path, e))?;
     crate::commands::format_util::trigger_udev_for_paths(&[dev_path]);
 
@@ -459,11 +459,8 @@ fn resize_offline(device: &str, size_sectors: u64) -> Result<()> {
     println!("resizing to {} buckets", nbuckets);
 
     let mut err = Printbuf::new();
-    let ret = unsafe {
-        c::bch2_dev_resize(fs.as_ptr(), ca.as_mut_ptr(), nbuckets, err.as_raw())
-    };
-    if ret != 0 {
-        bail!("resize error: {}\n{}", crate::wrappers::bch_err_str(ret), err);
+    if let Err(e) = fs.dev_resize(&ca, nbuckets, &mut err) {
+        bail!("resize error: {}\n{}", e.msg(), err);
     }
     Ok(())
 }

@@ -73,10 +73,10 @@ fn unless_overwritten<T>(r: Result<Option<T>, BchError>) -> Result<Option<T>, Bc
     }
 }
 
-struct DevDrop<'e> {
-    dev:   u32,
-    flags: u32,
-    err:   &'e mut Printbuf,
+pub(crate) struct DevDrop<'e> {
+    pub(crate) dev:   u32,
+    pub(crate) flags: u32,
+    pub(crate) err:   &'e mut Printbuf,
 }
 
 impl DevDrop<'_> {
@@ -326,7 +326,7 @@ impl DevDrop<'_> {
     }
 }
 
-fn dev_data_drop(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchError> {
+pub(crate) fn dev_data_drop(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchError> {
     let p = c::progress_indicator::default();
 
     let user = crate::BTREE_HAS_DATA_PTRS_MASK & !(1 << Btree::stripes.0);
@@ -346,7 +346,7 @@ fn dev_data_buckets(ca: &Dev) -> u64 {
         .sum()
 }
 
-fn dev_data_drop_by_backpointers(fs: &Fs, ca: &Dev, mut d: DevDrop<'_>) -> Result<(), BchError> {
+pub(crate) fn dev_data_drop_by_backpointers(fs: &Fs, ca: &Dev, mut d: DevDrop<'_>) -> Result<(), BchError> {
     const MAX_STALLED: u32 = 10;
 
     let trans = crate::btree_trans!(fs);
@@ -403,7 +403,7 @@ fn dev_data_drop_by_backpointers(fs: &Fs, ca: &Dev, mut d: DevDrop<'_>) -> Resul
 /// entries: DevDrop::stripe() - bch2_dev_remove_stripes(). Open stripes are
 /// skipped, so after a scan that met one, in-flight creates are flushed and
 /// it goes again: ten times, then remove_stripes_did_not_terminate.
-fn dev_remove_stripes(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchError> {
+pub(crate) fn dev_remove_stripes(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchError> {
     const MAX_ITER: u32 = 10;
 
     let trans = crate::btree_trans!(fs);

@@ -1715,6 +1715,10 @@ impl<'a> SbWrite<'a> {
         self.state().dirty = true;
     }
 
+    pub fn bringup(&mut self) {
+        self.state().flags |= c::bch_sb_write_flags::BCH_SB_WRITE_bringup;
+    }
+
     /// @was_new from a test-and-set: the superblock changed if it was, and
     /// whether it was - a different question from whether to write - is
     /// returned.

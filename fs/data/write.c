@@ -732,7 +732,6 @@
 
 #include "fs/inode.h"
 
-#include "init/dev.h"
 #include "init/error.h"
 #include "init/fs.h"
 

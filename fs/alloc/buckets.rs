@@ -17,7 +17,7 @@ use crate::data::ec::stripe::{ptr_matches_stripe, ptr_matches_stripe_m};
 use crate::data::ptrs::{BkeyVPtrs, DecodedPtr, Ptrs};
 use crate::data::reconcile::needs_reconcile::extent_trigger_set_needs_reconcile;
 use crate::data::reconcile::trigger::trigger_extent_reconcile;
-use crate::errcode::{ret_to_c, ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, fs_inconsistent, id};
 use crate::init::passes;
@@ -1017,8 +1017,7 @@ impl Fs {
         for ca in self.online_members() {
             // marked again, even if it was: harmless if not needed, and a
             // superblock or journal bucket allocated twice would be painful
-            let ca_raw = core::ptr::from_ref::<Dev>(&ca).cast_mut();
-            ret_to_result(unsafe { c::bch2_dev_add_initialize(self.as_ptr(), ca_raw) })?;
+            self.dev_add_initialize(&ca)?;
             self.trans_mark_dev_sb(&ca, flags)?;
         }
         Ok(())

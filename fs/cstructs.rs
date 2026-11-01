@@ -189,7 +189,7 @@ pub mod c {
     pub use crate::str_hash::{bch_hash_info};
     pub use super::fs_xattr_format::*;
     pub use super::init_damage_format::*;
-    pub use crate::init::dev::{AtomicDevsMask, DevsMask, __bch2_dev_offline, __bch2_dev_set_state, bch2_dev_add, bch2_dev_add_initialize, bch2_dev_in_fs, bch2_dev_lookup, bch2_dev_may_offline, bch2_dev_offline, bch2_dev_online, bch2_dev_read_identity, bch2_dev_remove, bch2_dev_resize, bch2_dev_set_state, bch_devs_list, bch_devs_mask, bch_fs_sb, bch_sb_bdev, bch_sb_buf, bch_sb_handle, bch_sb_handle_bits, bch_sb_handles, bch_sb_io};
+    pub use crate::init::dev::{AtomicDevsMask, DevsMask, bch2_dev_in_fs, bch_devs_list, bch_devs_mask, bch_fs_sb, bch_sb_bdev, bch_sb_buf, bch_sb_handle, bch_sb_handle_bits, bch_sb_handles, bch_sb_io};
     pub(crate) use crate::init::dev::{__bch_sb_handle_bits_forward};
     pub use crate::init::error::{bch_fs_errors, fsck_damaged_path};
     pub(crate) use crate::init::error::{ErrorsLocked, FsckErrState};
@@ -252,6 +252,6 @@ pub mod c {
     pub use crate::btree::cache::{bch2_btree_cache_pin, bch2_btree_cache_pin_budget, bch2_btree_cache_to_text, bch2_btree_cache_unpin, bch2_btree_id_level_to_text, bch2_btree_id_str, bch2_btree_node_flags, bch2_btree_node_prefetch, bch2_btree_node_to_text, bch2_node_pin};
     pub use crate::data::ec::trigger::{bch2_stripe_tryget_existing};
     pub use crate::namei::{BCH_CREATE_SNAPSHOT, BCH_CREATE_SNAPSHOT_RO, BCH_CREATE_SUBVOL, BCH_CREATE_TMPFILE};
-    pub use crate::fs::{bch2_dev_read_refs, bch2_dev_write_refs, bch2_write_refs};
+    pub use crate::fs::bch2_write_refs;
     pub use super::journal_init_types::*;
 }

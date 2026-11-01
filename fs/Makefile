@@ -91,7 +91,6 @@ bcachefs-y		:=			\
 	debug/trace.o				\
 	errcode.o				\
 	fs/dirent.o				\
-	init/dev.o				\
 	init/error.o				\
 	init/fs.o				\
 	journal/init.o				\

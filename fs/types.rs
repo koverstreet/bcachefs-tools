@@ -328,7 +328,6 @@ c_const! {
 #[derive(CStruct, TypeInfo, Init)]
 #[init_args(fs: &crate::fs::Fs)]
 pub struct Dev {
-    pub kobj: c::kobject,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     pub ref_: core::sync::atomic::AtomicIsize,
     /* debug builds' ref checks, from any thread: members.h's and DevRef's */
@@ -372,7 +371,7 @@ pub struct Dev {
      * stripe pointers; set by bch2_dev_remove() before the data drop,
      * cleared if removal fails.
      */
-    pub removing: bool,
+    pub removing: crate::util::projections::Volatile<bool>,
     /*
      * Cached version of this device's member info from superblock
      * Committed by bch2_write_super() -> bch_fs_mi_update(): written under
@@ -390,6 +389,10 @@ pub struct Dev {
 
     pub uuid: c::__uuid_t,
     pub name: [c_char; c::BDEVNAME_SIZE as usize],
+    #[pin]
+    #[init(Kobject::new::<Dev>())]
+    #[c("struct kobject kobj")]
+    pub(crate) kobj: Placed<Kobject, crate::at!(Dev.kobj)>,
 
     /// Its superblock, sb_lock's - through Fs::dev_sb() - and the block
     /// device it's on, fixed while it's attached.

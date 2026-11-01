@@ -14,7 +14,6 @@
 #include "debug/async_objs.h"
 #include "debug/debug.h"
 
-#include "init/dev.h"
 #include "init/error.h"
 #include "init/fs.h"
 

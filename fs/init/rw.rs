@@ -15,7 +15,6 @@
 //!
 //! - allocator depends on the journal (when it rewrites prios and gens)
 
-use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
 
 use crate::accounting::bch2_verify_accounting_clean;
@@ -30,7 +29,6 @@ use crate::c::journal_flags as Journal;
 use crate::data::ec::head::stripe_heads_stop;
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::{Fs, StateLockWrite};
-use crate::init::dev::bch2_dev_io_ref_stop;
 use crate::sb::members::{BtreeBitmapGcSchedule, SbMembersMut};
 use crate::util::futex::EventCount;
 use crate::util::ffi::Opaque;
@@ -112,7 +110,7 @@ impl Fs {
          * After stopping journal:
          */
         for ca in self.members() {
-            unsafe { bch2_dev_io_ref_stop(ca.as_mut_ptr(), WRITE as c_int) };
+            ca.io_ref_stop(WRITE);
             self.dev_allocator_remove(&ca);
 
             /*

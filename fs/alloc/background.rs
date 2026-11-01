@@ -1706,7 +1706,7 @@ fn dev_remove_need_discard(fs: &Fs, dev: u64) -> Result<(), BchError> {
 /// Everything the alloc btrees have of device @ca, and its usage accounting,
 /// as it's removed - the lrus and need_discard first, so the invalidate and
 /// discard workers find nothing of it to race with.
-fn dev_remove_alloc(fs: &Fs, ca: &Dev) -> Result<(), BchError> {
+pub(crate) fn dev_remove_alloc(fs: &Fs, ca: &Dev) -> Result<(), BchError> {
     let dev = u64::from(ca.dev_idx);
 
     dev_remove_lrus(fs, ca)?;

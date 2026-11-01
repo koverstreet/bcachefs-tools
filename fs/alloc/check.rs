@@ -775,7 +775,7 @@ fn dev_freespace_init_iter<'t>(t: &TransAttempt<'_, 't>, ca: &Dev, iter: &mut Bt
 /// Device @ca's buckets @bucket_start to @bucket_end, from the alloc btree
 /// into the freespace, need_discard and need_gc_gens btrees, and its member
 /// marked freespace_initialized: bch2_dev_freespace_init().
-fn dev_freespace_init(fs: &Fs, ca: &Dev, bucket_start: u64, bucket_end: u64) -> Result<(), BchError> {
+pub(crate) fn dev_freespace_init(fs: &Fs, ca: &Dev, bucket_start: u64, bucket_end: u64) -> Result<(), BchError> {
     let dev = u32::from(ca.dev_idx);
     let end = pos(dev.into(), bucket_end);
 
@@ -811,7 +811,7 @@ pub fn bch2_dev_freespace_init(c: &Opaque<Fs>, ca: &Dev, bucket_start: u64, buck
 
 /// Every device whose freespace isn't initialized - checked on every mount,
 /// for a crash in the middle of adding a device: bch2_fs_freespace_init().
-fn fs_freespace_init(fs: &Fs) -> Result<(), BchError> {
+pub(crate) fn fs_freespace_init(fs: &Fs) -> Result<(), BchError> {
     if fs.sb.features.get() & (1 << c::bch_sb_feature::BCH_FEATURE_small_image.0) != 0 {
         return Ok(());
     }

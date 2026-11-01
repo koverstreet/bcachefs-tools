@@ -19,7 +19,6 @@
 #include "fs/xattr.h"
 
 #include "init/chardev.h"
-#include "init/dev.h"
 #include "init/fs.h"
 #include "init/passes.h"
 

@@ -541,10 +541,7 @@ fn dev_lookup(fs: &Fs, dev: u64, flags: u32) -> Result<DevRef, BchError> {
         fs.dev_get(dev as u32).ok_or(BchError::from(c::EINVAL))
     } else {
         let path = UserStr::read(dev, c::PATH_MAX as usize)?;
-        let ca = unsafe { c::bch2_dev_lookup(fs.as_ptr().cast(), path.as_cstr().as_ptr().cast()) };
-        let ca = errptr_to_result(NonNull::new(ca).expect("a device, or an error"))?;
-        // SAFETY: bch2_dev_lookup()'s ref
-        Ok(unsafe { DevRef::from_raw(ca.as_ptr()) })
+        fs.dev_lookup(path.as_cstr())
     }
 }
 
@@ -564,9 +561,7 @@ fn disk_add(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: bch_errcode) 
     let path = UserStr::read(a.dev, c::PATH_MAX as usize)?;
 
     let mut err = Printbuf::new();
-    let ret = ret_to_result_void(unsafe {
-        c::bch2_dev_add(fs.as_ptr().cast(), path.as_cstr().as_ptr().cast(), err.as_raw())
-    });
+    let ret = fs.dev_add(path.as_cstr(), &mut err);
     msg.report(&mut err, ret, |ret, err| bch_err_msg!(fs, ret, "{}", err))
 }
 
@@ -578,10 +573,7 @@ fn disk_remove(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: bch_errcod
     let ca = dev_lookup_outer(fs, a.dev, a.flags)?;
 
     let mut err = Printbuf::new();
-    // It takes our ref_outer: nothing of ca after
-    let ret = ret_to_result_void(unsafe {
-        c::bch2_dev_remove(fs.as_ptr().cast(), ca.into_raw(), a.flags as c_int, err.as_raw())
-    });
+    let ret = fs.dev_remove(ca, a.flags, &mut err);
     msg.report(&mut err, ret, |ret, err| {
         if ret.is_err() {
             bch_err!(fs, "{}", err);
@@ -598,9 +590,7 @@ fn disk_online(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: bch_errcod
     let path = UserStr::read(a.dev, c::PATH_MAX as usize)?;
 
     let mut err = Printbuf::new();
-    let ret = ret_to_result_void(unsafe {
-        c::bch2_dev_online(fs.as_ptr().cast(), path.as_cstr().as_ptr().cast(), err.as_raw())
-    });
+    let ret = fs.dev_bring_online(path.as_cstr(), &mut err);
     msg.report(&mut err, ret, |ret, err| {
         if ret.is_err() {
             bch_err!(fs, "{}", err);
@@ -617,9 +607,7 @@ fn disk_offline(fs: &Fs, a: c::bch_ioctl_disk, msg: ErrMsg, bad_flags: bch_errco
     let ca = dev_lookup_outer(fs, a.dev, a.flags)?;
 
     let mut err = Printbuf::new();
-    let ret = ret_to_result_void(unsafe {
-        c::bch2_dev_offline(fs.as_ptr().cast(), ca.as_mut_ptr(), a.flags as c_int, err.as_raw())
-    });
+    let ret = fs.dev_offline(&ca, a.flags, &mut err);
     msg.report(&mut err, ret, |ret, err| {
         if ret.is_err() {
             bch_err_dev!(&ca, "{}", err);
@@ -653,9 +641,7 @@ fn disk_resize(fs: &Fs, a: c::bch_ioctl_disk_resize, msg: ErrMsg, bad_flags: bch
     let ca = dev_lookup_outer(fs, a.dev, a.flags)?;
 
     let mut err = Printbuf::new();
-    let ret = ret_to_result_void(unsafe {
-        c::bch2_dev_resize(fs.as_ptr().cast(), ca.as_mut_ptr(), a.nbuckets, err.as_raw())
-    });
+    let ret = fs.dev_resize(&ca, a.nbuckets, &mut err);
     msg.report(&mut err, ret, |ret, err| {
         if ret.is_err() {
             bch_err_dev!(&ca, "{}", err);

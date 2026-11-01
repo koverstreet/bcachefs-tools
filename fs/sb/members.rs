@@ -87,7 +87,7 @@ const MEMBERS_V2_HEAD: usize = size_of::<Head<c::bch_sb_field_members_v2>>();
 const MEMBERS_V1_HEAD: usize = size_of::<Head<c::bch_sb_field_members_v1>>();
 
 /// bcachefs_format.h's BCH_SB_MEMBER_DELETED_UUID.
-const MEMBER_DELETED_UUID: [u8; 16] = [
+pub(crate) const MEMBER_DELETED_UUID: [u8; 16] = [
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef,
 ];
@@ -148,7 +148,7 @@ fn sb_member_find_slot(fs: &Fs, sb: &c::bch_sb) -> Result<u32, BchError> {
 
 /// A member slot for a new device, members_v2 and nr_devices grown to hold
 /// it.
-fn sb_member_alloc(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<u32, BchError> {
+pub(crate) fn sb_member_alloc(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<u32, BchError> {
     let dev = sb_member_find_slot(fs, sb.sb())?;
     let nr = (dev + 1).max(fs.nr_devices());
 
@@ -737,7 +737,7 @@ fn mi_update_str(dst: &mut [u8], src: &[c_char]) -> bool {
 
 /// Member @dev's name, model and serial made @id's, and its rotational
 /// flag if it's never been set. Whether anything changed.
-fn mi_field_upgrades(sb: &mut SbLockGuard<'_>, dev: u32, id: &c::bch_dev_identity) -> bool {
+pub(crate) fn mi_field_upgrades(sb: &mut SbLockGuard<'_>, dev: u32, id: &c::bch_dev_identity) -> bool {
     let m = sb.fs_member_mut(dev);
     let mut dirty = false;
 
@@ -1384,7 +1384,7 @@ fn dev_get(ca: &Dev) {
 ///
 /// # Safety
 /// @ca holds a ref, which this puts.
-unsafe fn dev_put(ca: *mut Dev) {
+pub(crate) unsafe fn dev_put(ca: *mut Dev) {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     unsafe {
         let r = (*ca).ref_.fetch_sub(1, Ordering::SeqCst) - 1;
@@ -1637,8 +1637,7 @@ impl Dev {
     /// Whether it's being removed - set by bch2_dev_remove() before the data
     /// drop, cleared if the removal fails: read once, as C's READ_ONCE().
     pub fn removing(&self) -> bool {
-        // SAFETY: read once, volatile
-        unsafe { core::ptr::read_volatile(&self.removing) }
+        self.removing.get()
     }
 
     /// A write completed that the device may still have in its volatile
@@ -1651,16 +1650,11 @@ impl Dev {
     }
 
     /// Its block device's name, model and serial, and whether it's rotational.
-    fn identity(&self) -> c::bch_dev_identity {
+    pub(crate) fn identity(&self) -> c::bch_dev_identity {
         let mut id = c::bch_dev_identity::default();
         let bdev = self.disk_sb.bdev;
-        unsafe {
-            c::bch2_dev_read_identity(bdev,
-                                      id.name.as_mut_ptr(), id.name.len(),
-                                      id.model.as_mut_ptr(), id.model.len(),
-                                      id.serial.as_mut_ptr(), id.serial.len());
-            id.rotational = c::bch2_bdev_rot(bdev);
-        }
+        crate::init::dev::read_identity(unsafe { &*bdev }, &mut id.name, &mut id.model, &mut id.serial);
+        id.rotational = unsafe { c::bch2_bdev_rot(bdev) };
         id
     }
 
@@ -1682,12 +1676,8 @@ impl Dev {
 
     /// The IO refs held, by kind - for reads (READ) or writes (WRITE).
     pub fn io_refs_to_text(&self, out: &mut Printbuf, rw: usize) {
-        let names = match rw {
-            READ => unsafe { c::bch2_dev_read_refs.as_ptr() },
-            _    => unsafe { c::bch2_dev_write_refs.as_ptr() },
-        };
         // SAFETY: the names of io_ref[rw]'s kinds
-        unsafe { self.io_ref[rw].to_text(out, names) }
+        unsafe { self.io_ref[rw].to_text(out, crate::init::dev::io_ref_names(rw)) }
     }
 
     /// The data types with data on it, by the superblock's replicas: a mask

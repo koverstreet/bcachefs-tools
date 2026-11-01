@@ -43,6 +43,7 @@ c_extern! {
     pub fn rust_enumerated_ref_is_zero(r: *mut c::enumerated_ref) -> bool;
     pub fn enumerated_ref_start(r: *mut c::enumerated_ref);
     pub fn enumerated_ref_stop_async(r: *mut c::enumerated_ref);
+    pub fn enumerated_ref_stop(r: *mut c::enumerated_ref, names: *const *const crate::util::ffi::c_char);
     pub fn enumerated_ref_exit(r: *mut c::enumerated_ref);
     pub fn enumerated_ref_init(r: *mut c::enumerated_ref, nr: c_uint,
                                stop_fn: Option<unsafe extern "C" fn(*mut c::enumerated_ref)>) -> c_int;
@@ -94,14 +95,20 @@ impl EnumeratedRef {
         unsafe { enumerated_ref_stop_async(self.r.get()) }
     }
 
+    /// # Safety
+    /// @names is the count's kinds' names, NULL terminated.
+    pub unsafe fn stop(&self, names: *const *const crate::util::ffi::c_char) {
+        unsafe { enumerated_ref_stop(self.r.get(), names) }
+    }
+
     /// @nr kinds of ref, @stop_fn called when the last is put after stopping.
     ///
     /// # Safety
     /// Once, before anything takes a ref.
-    pub unsafe fn init(&self, nr: u32, stop_fn: unsafe extern "C" fn(*mut c::enumerated_ref))
+    pub unsafe fn init(&self, nr: u32, stop_fn: Option<unsafe extern "C" fn(*mut c::enumerated_ref)>)
         -> Result<(), BchError>
     {
-        ret_to_result_void(unsafe { enumerated_ref_init(self.r.get(), nr, Some(stop_fn)) })
+        ret_to_result_void(unsafe { enumerated_ref_init(self.r.get(), nr, stop_fn) })
     }
 
     /// # Safety

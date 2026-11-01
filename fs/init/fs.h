@@ -30,7 +30,5 @@ static const struct kobj_type type ## _ktype = {			\
 
 extern const char * const bch2_fs_flag_strs[];
 extern const char * const bch2_write_refs[];
-extern const char * const bch2_dev_read_refs[];
-extern const char * const bch2_dev_write_refs[];
 
 #endif /* _BCACHEFS_SUPER_H */

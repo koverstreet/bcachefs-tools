@@ -24,8 +24,7 @@ use crate::data::compress::compress_init;
 use crate::data::ec::head::ec_exit;
 use crate::data::reconcile::work::reconcile_exit;
 use crate::debug::sysfs::{FsDir, FS_GROUPS};
-use crate::init::dev::{bch2_dev_alloc, bch2_dev_attach_bdev, bch2_dev_free, bch2_dev_io_ref_stop,
-                       bch2_dev_sysfs_online, bch2_dev_unlink, dev_in_fs};
+use crate::init::dev::{dev_free, dev_in_fs};
 use crate::init::error::free_fsck_errs;
 use crate::init::registry::register;
 use crate::init::rw::{read_only_work, writes_disabled};
@@ -65,8 +64,6 @@ use crate::format::{Bpos, Btree};
 
 c_extern! {
     pub static bch2_write_refs: [*const crate::util::ffi::c_char; 0];
-    pub static bch2_dev_read_refs: [*const crate::util::ffi::c_char; 0];
-    pub static bch2_dev_write_refs: [*const crate::util::ffi::c_char; 0];
 }
 
 /// sb_lock, held: the superblock, and c->sb, which it publishes
@@ -554,7 +551,7 @@ impl Fs {
         }
         dst[len] = 0;
 
-        if unsafe { self.writes.init(c::bch_write_ref::BCH_WRITE_REF_NR as u32, writes_disabled) }.is_err() {
+        if unsafe { self.writes.init(c::bch_write_ref::BCH_WRITE_REF_NR as u32, Some(writes_disabled)) }.is_err() {
             return self.throw(bch_errcode::BCH_ERR_ENOMEM_fs_other_alloc);
         }
 
@@ -594,7 +591,7 @@ impl Fs {
             if !member_exists(self.sb_lock().sb(), i) {
                 continue;
             }
-            ret_to_result(unsafe { bch2_dev_alloc(p, i) })?;
+            self.dev_alloc(i)?;
         }
 
         unsafe {
@@ -608,9 +605,9 @@ impl Fs {
         }
 
         {
-            let _state = self.state_lock_write();
+            let state = self.state_lock_write();
             for sb in sbs.iter_mut() {
-                ret_to_result(unsafe { bch2_dev_attach_bdev(p, sb, out.as_raw()) })?;
+                state.dev_attach_bdev(sb, out)?;
             }
         }
 
@@ -765,7 +762,7 @@ impl Fs {
 
         let _state = self.state_lock_write();
         for ca in self.members() {
-            if unsafe { bch2_dev_sysfs_online(self.as_ptr(), ca.as_mut_ptr()) } != 0 {
+            if ca.sysfs_online().is_err() {
                 return self.throw(bch_errcode::BCH_ERR_sysfs_init_error);
             }
         }
@@ -914,14 +911,13 @@ impl Fs {
             self.state_lock_write().read_only();
 
             for dev in &self.devs[..self.nr_devices() as usize] {
-                let ca = dev.as_ptr();
-                if !ca.is_null() {
-                    unsafe { bch2_dev_io_ref_stop(ca, READ as c_int) };
+                if let Some(ca) = unsafe { dev.as_ptr().as_ref() } {
+                    ca.io_ref_stop(READ);
                 }
             }
 
             for ca in self.members() {
-                unsafe { bch2_dev_unlink(ca.as_mut_ptr()) };
+                ca.unlink();
             }
 
             self.kobj.del();
@@ -975,9 +971,9 @@ unsafe fn exit(p: NonNull<Fs>) -> Result<(), BchError> {
             unsafe {
                 #[cfg(CONFIG_BCACHEFS_DEBUG)]
                 assert_eq!((*ca).ref_.load(Relaxed), 1);
-                bch2_dev_io_ref_stop(ca, READ as c_int);
+                (*ca).io_ref_stop(READ);
                 bch2_free_super(&mut *(&raw mut (*ca).disk_sb).cast());
-                bch2_dev_free(ca);
+                dev_free(ca);
             }
         }
     }

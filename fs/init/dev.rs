@@ -1,27 +1,251 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Devices: dev.c's, as it converts.
-//!
-//! So far devs_list_to_text(), its congestion, its state set through C's
-//! dev_set_state(), the block layer's holder ops, and a bch_dev's memory: Rust
-//! allocates it, as bch_fs's, so its Rust-typed fields have initializers - the
-//! bucket bitmaps' Locks - and it's dropped whole when it's freed: after C's
-//! teardown, which leaves what it freed nulled for those fields' Drops to find.
+/* DOC_LATEX(device-management)
+ * bcachefs is a multi-device filesystem: a single filesystem can span any number
+ * of block devices, each contributing storage capacity and IO bandwidth. Devices
+ * need not be the same size or have the same performance characteristics---the
+ * \hyperref[sec:write-points]{allocator} stripes across all available devices,
+ * biasing toward devices with more free space so that all devices fill at the
+ * same rate, and the read path
+ * tracks per-device IO latency to direct reads to the fastest available replica.
+ *
+ * Devices can be added and removed at any time without unmounting.
+ *
+ * \subsubsection{Per-device metadata}
+ *
+ * Each device has a \texttt{bch\_member} entry in the
+ * \hyperref[sec:superblock]{superblock} containing:
+ *
+ * \begin{itemize}
+ * \item \textbf{Identity}: per-device UUID, device name, model string
+ * \item \textbf{Geometry}: bucket count, bucket size, first usable bucket
+ * \item \textbf{State}: rw, ro, evacuating, or spare (see below)
+ * \item \textbf{Configuration}: durability, data-type restrictions
+ *   (\texttt{data\_allowed}), discard (TRIM) support, rotational hint
+ * \item \textbf{Diagnostics}: cumulative error counters (read, write,
+ *   checksum), performance measurements (sequential and random IO rates),
+ *   last mount timestamp
+ * \end{itemize}
+ *
+ * \subsubsection{Device states}
+ *
+ * Each device has a persistent state stored in the superblock:
+ *
+ * \begin{description}
+ * \item[\texttt{rw}] Read-write: fully operational, participates in allocation
+ * \item[\texttt{ro}] Read-only: can be read from but receives no new writes
+ * \item[\texttt{evacuating}] Being emptied of data prior to removal
+ * \item[\texttt{spare}] Reserved, not currently participating in IO
+ * \end{description}
+ *
+ * Device state is changed with \texttt{bcachefs device set-state}. Transitions
+ * that would reduce write redundancy below the configured replication level
+ * require the \texttt{-{}-force} flag.
+ *
+ * Separately from the persistent state, a device can be \emph{online} (kernel
+ * has the device open) or \emph{offline} (device is listed in the superblock but
+ * not currently accessible).
+ *
+ * \subsubsection{Durability}
+ *
+ * The \texttt{durability} setting controls how many replicas a copy on a given
+ * device counts for. The default is 1. Setting \texttt{durability=2} on a
+ * hardware RAID device tells bcachefs that data on that device already has
+ * internal redundancy---it counts as two replicas, so the filesystem does not
+ * need to keep an additional copy elsewhere. Setting \texttt{durability=0} means
+ * copies on the device do not count toward replication requirements at all---the
+ * device can only be used as a cache.
+ *
+ * \subsubsection{Caching}
+ *
+ * When an extent has multiple copies on different devices, some of those copies
+ * may be marked as \emph{cached}. Cached copies are evicted in LRU order by the
+ * allocator when the device needs space. Caching behavior is controlled through
+ * the target options:
+ *
+ * \begin{description}
+ * \item[Writeback caching] Set \texttt{foreground\_target} and
+ *   \texttt{promote\_target} to the cache device, and
+ *   \texttt{background\_target} to the backing device. Writes land on the fast
+ *   device first and migrate to the backing device in the background.
+ * \item[Writearound caching] Set \texttt{foreground\_target} to the backing
+ *   device and \texttt{promote\_target} to the cache device. Writes go directly
+ *   to the backing device; frequently-read data is promoted to the cache.
+ * \end{description}
+ *
+ * The \texttt{durability=0} setting is essential for cache devices: it ensures
+ * bcachefs does not count cached copies toward the replica count, so losing the
+ * cache device never causes data loss.
+ *
+ * \subsubsection{Adding and removing devices}
+ *
+ * \begin{description}
+ * \item[\texttt{bcachefs device add}] Adds a new device to a mounted
+ *   filesystem. The device is formatted with bcachefs metadata and integrated
+ *   immediately---new allocations can land on it right away. A label can be
+ *   assigned at add time with \texttt{-l}. Other per-device options
+ *   (\texttt{-{}-discard}, \texttt{-{}-durability}) can be set at add time.
+ *
+ *   The new device must have a block size and bucket size compatible with the
+ *   existing filesystem. After the device is added, its UUID is published via
+ *   uevent so that \texttt{/dev/disk/by-uuid} symlinks are updated, and the
+ *   reconcile subsystem is notified to scan for any work on the new device.
+ *
+ * \item[\texttt{bcachefs device evacuate}] Migrates all data off a device,
+ *   displaying progress as sectors are moved. Uses the reconcile subsystem
+ *   internally; the device's state transitions to evacuating during the process.
+ *   Requires metadata version $\geq$ \texttt{reconcile} (1.33).
+ * \item[\texttt{bcachefs device remove}] Removes a fully evacuated device from
+ *   the filesystem and erases its metadata. Force flags allow removal even if
+ *   some data (\texttt{-f}) or metadata (\texttt{-F}) would be lost.
+ *
+ *   Two removal code paths exist: the legacy path walks the btree to find and
+ *   relocate all references to the device, while the \texttt{fast\_device\_removal}
+ *   path (default on newer metadata versions) uses
+ *   \hyperref[sec:backpointers]{backpointers} to efficiently locate all data
+ *   on the device without a full btree scan.
+ *
+ * \item[\texttt{bcachefs device online/offline}] Bring a device back online or
+ *   take it offline without removing it. Offline devices retain their superblock
+ *   membership and can be brought back later. Bringing a device online includes
+ *   a splitbrain check against the running filesystem's sequence numbers;
+ *   onlining also triggers a reconcile scan to detect any data that may need
+ *   re-replication.
+ *
+ *   Offlining a device requires that the remaining online devices can still
+ *   satisfy both read and write requirements---the kernel checks that at least
+ *   one device can serve reads and at least one can accept writes for every
+ *   replica group. If offlining would leave the filesystem unable to operate,
+ *   the request is rejected unless forced.
+ * \end{description}
+ *
+ * The typical device removal workflow: \texttt{bcachefs device evacuate /dev/sda}
+ * (wait for completion, watching progress), then \texttt{bcachefs device remove
+ * /dev/sda}.
+ *
+ * \subsubsection{Block layer hot-remove}
+ *
+ * When the block layer reports a device as dead (e.g., a USB drive is
+ * unplugged, or a disk is removed from a hot-swap bay), bcachefs receives
+ * a notification and attempts a graceful response. If the device can be
+ * offlined without leaving the filesystem unable to operate, it is taken
+ * offline automatically. Otherwise, the filesystem transitions to
+ * emergency read-only mode to prevent data corruption from writes that
+ * can no longer reach all required replicas.
+ *
+ * \subsubsection{Data-type restrictions}
+ *
+ * The \texttt{data\_allowed} member field restricts which data types a device
+ * can hold: journal, btree, or user data. This allows dedicating fast devices to
+ * metadata while slower devices hold only user data, or restricting a device to
+ * journal-only for write-ahead log isolation. Restrictions are set at format
+ * time or via \texttt{set-fs-option} and are enforced by the
+ * \hyperref[sec:write-points]{allocator}.
+ *
+ * \subsubsection{Degraded mode}
+ *
+ * When a device is unavailable (failed, offline, or physically disconnected),
+ * the filesystem can continue operating in degraded mode if sufficient
+ * redundancy remains. The number of tolerable failures per replica group is
+ * \texttt{nr\_devs - nr\_required}: with 3-way replication, one device can fail
+ * without data loss.
+ *
+ * The \texttt{degraded} mount option controls behavior when devices are missing:
+ *
+ * \begin{description}
+ * \item[\texttt{degraded=true}] Allow mounting with missing devices (read-only
+ *   access to degraded data)
+ * \item[\texttt{degraded=run}] Allow mounting and normal operation with missing
+ *   devices
+ * \item[\texttt{degraded=very}] Allow mounting even if writes cannot maintain
+ *   the requested replica count (\textbf{dangerous}---creates splitbrain risk)
+ * \end{description}
+ *
+ * While degraded, the filesystem has reduced safety margin---further device loss
+ * may cause data unavailability. The reconcile subsystem will automatically
+ * repair degraded data by re-replicating to available devices.
+ *
+ * \subsubsection{Resize}
+ *
+ * \texttt{bcachefs device resize} grows a device to use additional space
+ * (shrinking is not yet supported). If no size is specified, the device grows to
+ * fill its underlying block device. Resize works online---no unmount required.
+ * The new size is subject to a maximum bucket count
+ * (\texttt{BCH\_MEMBER\_NBUCKETS\_MAX}); resize will fail if the requested size
+ * would exceed this limit. After resize, the reconcile subsystem is notified to
+ * account for the newly available space.
+ *
+ * \texttt{bcachefs device resize-journal} adjusts the per-device journal size
+ * independently of the data area.
+ *
+ * \subsubsection{Device failure and error tracking}
+ *
+ * Each device tracks cumulative error counters (read, write, checksum) in the
+ * superblock members section. These counters persist across mounts and help
+ * identify failing hardware before catastrophic failure. The
+ * \texttt{write\_error\_timeout} option (default 30 seconds) controls how long
+ * sustained write errors must persist before the device is automatically set to
+ * read-only.
+ *
+ * When a device is set to read-only due to errors, reads can still be served
+ * from it. If reads also fail, the device should be taken offline entirely to
+ * prevent \hyperref[sec:journal]{journal} stalls---the journal cannot reclaim
+ * space if it cannot read back btree nodes from a failed device.
+ *
+ * \subsubsection{Consistency and self-healing}
+ *
+ * Device membership is tracked in the superblock and cross-validated against
+ * on-disk data during recovery. The allocator checks freespace and alloc btrees
+ * against each other before using a bucket. Backpointer walks verify that all
+ * data on a device is accounted for. If a device is removed or fails, the
+ * reconcile subsystem detects under-replicated data and re-replicates it to
+ * remaining devices automatically.
+ */
+
+//! A bch_dev is allocated as bch_fs is, so its Rust-typed fields have
+//! initializers - the bucket bitmaps' Locks - and it's dropped whole when its
+//! kobject's last ref is put: after dev_free()'s teardown, which leaves what it
+//! freed nulled for those fields' Drops to find.
 
 #![allow(non_camel_case_types)]
 
 use crate::fs::Dev;
 use crate::c;
+use crate::accounting::{self, bch2_dev_usage_init};
+use crate::btree::iter::{trans_commit_do, CommitFlags};
+use crate::sb::io::SbFieldOps;
+use crate::alloc::capacity::recalc_capacity;
+use crate::alloc::check::{dev_freespace_init, fs_freespace_init};
+use crate::alloc::background::dev_remove_alloc;
+use crate::alloc::disk_groups::{dev_group_set, disk_path_to_text_sb};
+use crate::alloc::replicas::can_write_with_devs;
+use crate::btree::iter::UpdateTriggerFlags;
+use crate::data::migrate::{dev_data_drop, dev_data_drop_by_backpointers, dev_remove_stripes, DevDrop};
+use crate::debug::sysfs::{DevDir, DEV_GROUPS};
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Fs, StateLockWrite};
-use crate::prt;
-use crate::sb::members::{member_exists, sb_member};
-use crate::util::log::{log_no_fs, LogLevel};
+use crate::init::error::bch2_io_error_work;
+use crate::format::DataType;
+use crate::locking::MemallocFlags;
+use crate::opts::c_export::__bch2_data_types;
+use crate::sb::io::{read_super, BCH_SB_READ_SCRATCH_BUF_SIZE};
+use crate::sb::members::{bch2_mi_to_cpu, member_exists, member_state_str, mi_field_upgrades, sb_member,
+                         sb_member_alloc, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
+use crate::types::CStatic;
+use crate::util::alloc::{alloc_pinned, flags::GFP_KERNEL, free_pinned, init_at, kmalloc, KVVec};
+use crate::util::file::read_file;
+use crate::util::kernel::{ktime_get_real_seconds, READ, WRITE};
+use crate::util::kobject::{GroupList, KobjOwner, Kobject};
+use crate::util::log::{log_dev, log_no_fs, LogLevel};
+use crate::util::names;
+use crate::util::percpu::PerCpu;
 use crate::util::printbuf::{prt_bdevname, DateTime, Msg};
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::{Head, Validated};
 use crate::util::{Nsecs, Printbuf};
-use core::ffi::{c_int, c_uint};
+use crate::{bch_err_fn, prt};
+use core::ffi::{c_int, c_uint, CStr};
+use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_export, CStruct, bitfield, c_extern, c_typedef, TypeInfo};
 #[cfg(kernel)]
@@ -164,36 +388,394 @@ pub struct bch_devs_list {
 }
 
 c_extern! {
-    pub fn bch2_dev_io_ref_stop(ca: *mut Dev, rw: c_int);
-    pub fn bch2_dev_unlink(ca: *mut Dev);
-    pub fn bch2_dev_free(ca: *mut Dev);
-    pub fn bch2_dev_sysfs_online(c: *mut Fs, ca: *mut Dev) -> c_int;
-    pub fn bch2_dev_alloc(c: *mut Fs, dev_idx: c_uint) -> c_int;
-    pub fn bch2_dev_attach_bdev(c: *mut Fs, sb: *mut c::bch_sb_handle, err: *mut Printbuf) -> c_int;
-    pub fn __bch2_dev_resize_alloc(ca: *mut Dev, old_nbuckets: u64, new_nbuckets: u64) -> c_int;
-    pub fn bch2_dev_add(c: *mut Fs, path: *const c_char, err: *mut Printbuf) -> c_int;
-    pub fn bch2_dev_add_initialize(c: *mut Fs, ca: *mut Dev) -> c_int;
-    pub fn bch2_dev_resize(c: *mut Fs, ca: *mut Dev, nbuckets: u64,
-                           err: *mut Printbuf) -> c_int;
-    pub fn bch2_dev_remove(c: *mut Fs, ca: *mut Dev, flags: c_int,
-                           err: *mut Printbuf) -> c_int;
-    pub fn bch2_dev_online(c: *mut Fs, path: *const c_char, err: *mut Printbuf) -> c_int;
-    pub fn bch2_dev_offline(c: *mut Fs, ca: *mut Dev, flags: c_int,
-                            err: *mut Printbuf) -> c_int;
-    pub fn bch2_dev_set_state(c: *mut Fs, ca: *mut Dev,
-                              new_state: c::bch_member_state, flags: c_int,
-                              err: *mut Printbuf) -> c_int;
-    pub fn __bch2_dev_set_state(c: *mut Fs, ca: *mut Dev,
-                                new_state: c::bch_member_state, flags: c_int,
-                                err: *mut Printbuf) -> c_int;
-    pub fn bch2_dev_lookup(c: *mut Fs, name: *const c_char) -> *mut Dev;
-    pub fn bch2_dev_may_offline(c: *mut Fs, ca: *mut Dev, flags: c_int,
-                                err: *mut Printbuf) -> c_int;
-    pub fn __bch2_dev_offline(c: *mut Fs, ca: *mut Dev);
-    pub fn bch2_dev_read_identity(bdev: *mut c::block_device,
-                                  name: *mut c_char, name_size: usize,
-                                  model: *mut c_char, model_size: usize,
-                                  serial: *mut c_char, serial_size: usize);
+    pub fn bch2_dev_journal_init_early(ca: *mut Dev);
+    pub fn bch2_dev_journal_init(ca: *mut Dev, sb: *mut Head<c::bch_sb>) -> c_int;
+    pub fn bch2_dev_journal_exit(ca: *mut Dev);
+    pub fn bch2_dev_journal_stop(j: *mut c::journal, ca: *mut Dev);
+    pub fn bch2_dev_journal_alloc(ca: *mut Dev, new_fs: bool) -> c_int;
+    pub fn bch2_journal_flush_dev_ro(j: *mut c::journal, dev_idx: c_uint);
+    pub fn bch2_journal_flush_device_pins(j: *mut c::journal, dev_idx: c_int) -> c_int;
+}
+
+static DEV_READ_REF_NAMES: CStatic<[*const c_char; names::c_table_len::<c::bch_dev_read_ref>()]> =
+    unsafe { CStatic::new(crate::c_names_table!(c::bch_dev_read_ref)) };
+
+static DEV_WRITE_REF_NAMES: CStatic<[*const c_char; names::c_table_len::<c::bch_dev_write_ref>()]> =
+    unsafe { CStatic::new(crate::c_names_table!(c::bch_dev_write_ref)) };
+
+pub(crate) fn io_ref_names(rw: usize) -> *const *const c_char {
+    if rw == READ { DEV_READ_REF_NAMES.as_ptr() } else { DEV_WRITE_REF_NAMES.as_ptr() }
+}
+
+fn may_add(fs: &Fs, sb: &c::bch_sb) -> Result<(), BchError> {
+    let m = sb_member(sb, sb.dev_idx.into()).unwrap_or_default();
+
+    if u64::from(sb.block_size.get()) != fs.block_bytes() >> 9 {
+        return fs.throw(bch_errcode::BCH_ERR_mismatched_block_size);
+    }
+
+    if u64::from(m.bucket_size()) < fs.sb_lock().sb().btree_node_size() {
+        return fs.throw(bch_errcode::BCH_ERR_bucket_size_too_small);
+    }
+
+    Ok(())
+}
+
+/* Device startup/shutdown: */
+
+impl Dev {
+    pub fn io_ref_stop(&self, rw: usize) {
+        if rw == READ {
+            self.fs().devs_online.clear(self.dev_idx.into());
+        }
+
+        if !self.io_ref[rw].is_zero() {
+            unsafe { self.io_ref[rw].stop(io_ref_names(rw)) };
+        }
+    }
+
+    pub fn unlink(&self) {
+        /*
+         * This is racy w.r.t. the underlying block device being hot-removed,
+         * which removes it from sysfs.
+         *
+         * It'd be lovely if we had a way to handle this race, but the sysfs
+         * code doesn't appear to provide a good method and block/holder.c is
+         * susceptible as well:
+         */
+        #[cfg(kernel)]
+        {
+            if self.kobj.in_sysfs() && !self.disk_sb.bdev.is_null() {
+                let b = self.disk_sb.kobj();
+                if b.in_sysfs() {
+                    b.unlink(c"bcachefs");
+                    self.kobj.unlink(c"block");
+                }
+            }
+        }
+    }
+
+    pub fn sysfs_online(&self) -> Result<(), BchError> {
+        let fs = self.fs();
+        if !fs.kobj.in_sysfs() {
+            return Ok(());
+        }
+
+        if !self.kobj.in_sysfs() {
+            let mut name = Printbuf::new();
+            prt!(&mut name, "dev-{}", self.dev_idx);
+            if name.allocation_failure() {
+                return Err(c::ENOMEM.into());
+            }
+            self.kobj.add(Some(&fs.kobj), name.as_c_str())?;
+        }
+
+        #[cfg(kernel)]
+        {
+            if !self.disk_sb.bdev.is_null() {
+                let block = self.disk_sb.kobj();
+
+                block.link(&self.kobj, c"bcachefs")?;
+                self.kobj.link(block, c"block")?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+unsafe impl KobjOwner for Dev {
+    const GROUPS: GroupList = DEV_GROUPS.list();
+    type Dir = DevDir;
+
+    unsafe fn release(this: NonNull<Dev>) {
+        unsafe { free_pinned(this.as_ptr()) }
+    }
+}
+
+pub(crate) unsafe fn dev_free(ca: *mut Dev) {
+    {
+        let ca = unsafe { &*ca };
+
+        /*
+         * ref_outer holders (io_error_work, ioctl lookups) may block on
+         * state_lock before noticing the device is going away - so we must
+         * not drain them while holding it:
+         */
+
+        /*
+         * io_error_work is never cancelled - it owns a ref_outer per queued
+         * instance, so this drain waits for it to run and put:
+         */
+        drop(unsafe { DevOuterRef::from_raw(ca.as_ptr()) });
+    }
+    unsafe { c::wait_for_completion(&raw mut (*ca).ref_outer_completion) };
+
+    let ca = unsafe { &mut *ca };
+
+    crate::warn_on!(!ca.io_ref[WRITE].is_zero());
+    crate::warn_on!(!ca.io_ref[READ].is_zero());
+
+    ca.unlink();
+
+    if ca.kobj.in_sysfs() {
+        ca.kobj.del();
+    }
+
+    ca.bucket_backpointer_mismatch.free();
+    ca.bucket_backpointer_empty.free();
+
+    unsafe {
+        (*(&raw mut ca.disk_sb).cast::<c::bch_sb_handle>()).free();
+        bch2_dev_journal_exit(ca);
+    }
+
+    ca.io_done.free();
+    ca.buckets_free();
+    unsafe { c::rust_kfree(ca.sb_read_scratch.cast()) };
+
+    unsafe {
+        ca.io_ref[WRITE].exit();
+        ca.io_ref[READ].exit();
+        #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
+        c::percpu_ref_exit(&mut ca.ref_);
+        Kobject::put((&raw const ca.kobj).cast());
+    }
+}
+
+impl StateLockWrite<'_> {
+    pub fn dev_offline(&self, ca: &Dev) {
+        if ca.io_ref[READ].is_zero() {
+            return;
+        }
+
+        self.dev_read_only(ca);
+
+        ca.io_ref_stop(READ);
+
+        ca.unlink();
+
+        unsafe {
+            (*(&raw const ca.disk_sb).cast::<c::bch_sb_handle>().cast_mut()).free();
+            bch2_dev_journal_exit(ca.as_ptr());
+        }
+    }
+}
+
+#[cfg(not(CONFIG_BCACHEFS_DEBUG))]
+unsafe extern "C" fn dev_ref_complete(r: *mut c::percpu_ref) {
+    let ca = unsafe { r.byte_sub(core::mem::offset_of!(Dev, ref_)).cast::<Dev>() };
+
+    unsafe { c::complete(&raw mut (*ca).ref_completion) };
+}
+
+fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<*mut Dev> {
+    let p = alloc_pinned(Dev::init(fs)).ok()?;
+    let ca = unsafe { &mut *p };
+
+    let io_error_work = crate::new_work!(bch2_io_error_work, "bch_dev.io_error_work");
+    unsafe {
+        c::init_completion(&mut ca.ref_completion);
+        c::refcount_set(&mut ca.ref_outer, 1);
+        c::init_completion(&mut ca.ref_outer_completion);
+
+        let _ = init_at(io_error_work, &raw mut ca.io_error_work);
+    }
+
+    ca.mi.set(bch2_mi_to_cpu(member));
+    ca.btree_allocated_bitmap_gc = member.btree_allocated_bitmap.get();
+
+    for (e, m) in ca.errors.iter().zip(member.errors.iter()) {
+        e.store(m.get() as i64, Relaxed);
+    }
+
+    ca.uuid = member.uuid;
+
+    ca.nr_btree_reserve = c::BTREE_NODE_RESERVE.div_ceil(u32::from(ca.mi.get().bucket_size) / fs.btree_sectors());
+
+    #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
+    if unsafe { c::percpu_ref_init(&mut ca.ref_, Some(dev_ref_complete), 0, c::GFP_KERNEL) } != 0 {
+        unsafe { dev_free(p) };
+        return None;
+    }
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    ca.ref_.store(1, Relaxed);
+
+    unsafe { bch2_dev_journal_init_early(ca) };
+
+    let ok = unsafe { ca.io_ref[READ].init(c::bch_dev_read_ref::BCH_DEV_READ_REF_NR as u32, None) }.is_ok() &&
+        unsafe { ca.io_ref[WRITE].init(c::bch_dev_write_ref::BCH_DEV_WRITE_REF_NR as u32, None) }.is_ok() && {
+            ca.sb_read_scratch = kmalloc(BCH_SB_READ_SCRATCH_BUF_SIZE as usize, GFP_KERNEL)
+                .map_or(core::ptr::null_mut(), |p| p.as_ptr().cast());
+            !ca.sb_read_scratch.is_null()
+        } &&
+        ca.buckets_alloc().is_ok() &&
+        PerCpu::alloc().map(|io_done| ca.io_done = io_done).is_ok();
+    if !ok {
+        unsafe { dev_free(p) };
+        return None;
+    }
+
+    Some(p)
+}
+
+fn dev_attach(state: &StateLockWrite<'_>, p: *mut Dev, dev_idx: u32) {
+    {
+        let ca = unsafe { &mut *p };
+
+        ca.dev_idx = dev_idx as u8;
+        ca.self_mask.d.set(dev_idx as usize);
+
+        if ca.name[0] == 0 {
+            let mut name = Printbuf::new();
+            prt!(&mut name, "dev-{dev_idx}");
+            strscpy(&mut ca.name, name.as_bytes());
+        }
+    }
+
+    // freed after ca->ref's kill and drain, a grace period on - XXX: not in
+    // debug builds, where ca->ref is an atomic
+    unsafe { state.devs()[dev_idx as usize].publish(NonNull::new_unchecked(p)) };
+
+    let ca = unsafe { &*p };
+    if ca.sysfs_online().is_err() {
+        log_no_fs(LogLevel::WARN, &Msg(|out: &mut Printbuf| prt!(out, "error creating sysfs objects")));
+    }
+}
+
+impl Fs {
+    pub fn dev_alloc(&self, dev_idx: u32) -> Result<(), BchError> {
+        let member = sb_member(self.sb_lock().sb(), dev_idx).unwrap_or_default();
+
+        let ca = dev_alloc(self, &member).ok_or_else(|| self.err(bch_errcode::BCH_ERR_ENOMEM_dev_alloc))?;
+
+        dev_attach(&self.state_lock_write(), ca, dev_idx);
+        Ok(())
+    }
+}
+
+struct SbHandleGuard(c::bch_sb_handle);
+
+impl core::ops::Deref for SbHandleGuard {
+    type Target = c::bch_sb_handle;
+
+    fn deref(&self) -> &c::bch_sb_handle {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for SbHandleGuard {
+    fn deref_mut(&mut self) -> &mut c::bch_sb_handle {
+        &mut self.0
+    }
+}
+
+impl Drop for SbHandleGuard {
+    fn drop(&mut self) {
+        self.0.free();
+    }
+}
+
+fn strscpy(dst: &mut [c_char], src: &[u8]) {
+    let Some(max) = dst.len().checked_sub(1) else { return };
+    let src = &src[..src.iter().position(|&b| b == 0).unwrap_or(src.len())];
+    let n = src.len().min(max);
+
+    for (d, &s) in dst.iter_mut().zip(&src[..n]) {
+        *d = s as c_char;
+    }
+    dst[n] = 0;
+}
+
+fn read_file_str(path: &CStr, buf: &mut [u8]) -> Result<usize, BchError> {
+    /*
+     * TODO: unify this with read_file_str() in bcachefs-tools tools-util.c
+     *
+     * Unfortunately, we don't have openat() in kernel
+     */
+    let mut nr = read_file(path, buf)?;
+
+    if nr > 0 && buf[nr - 1] != 0 {
+        /* null terminate */
+        if nr >= buf.len() {
+            nr = buf.len() - 1;
+        }
+        buf[nr] = 0;
+    }
+    Ok(nr)
+}
+
+/*
+ * Read a sysfs device file (e.g. "device/model", "device/serial") into @ret,
+ * resolving partitions to their parent disk.
+ *
+ * device/model and device/serial live under the whole disk, not its partitions.
+ * Look the device up by dev_t under /sys/dev/block/<maj>:<min>/ (present for
+ * both disks and partitions); a partition has no device/ link of its own, so
+ * fall back to the parent disk via "..". Mirrors fd_to_dev_model() in the
+ * userspace tools (src/wrappers/bdev.rs).
+ */
+fn read_dev_sysfs_file(dev: c::dev_t, file: &str, ret: &mut [u8]) -> usize {
+    let (major, minor) = (dev >> c::MINORBITS, dev & ((1 << c::MINORBITS) - 1));
+
+    for parent in ["", "../"] {
+        let mut path = Printbuf::new();
+        prt!(&mut path, "/sys/dev/block/{major}:{minor}/{parent}{file}");
+
+        let mut nr = read_file_str(path.as_c_str(), ret).unwrap_or(0);
+
+        if nr != 0 && ret[nr - 1] == b'\n' {
+            nr -= 1;
+            ret[nr] = 0;
+        }
+
+        if nr != 0 {
+            return nr;
+        }
+    }
+    0
+}
+
+fn read_dev_sysfs_attr(dev: c::dev_t, attr: &str, ret: &mut [u8]) -> usize {
+    let mut file = Printbuf::new();
+    prt!(&mut file, "device/{attr}");
+    read_dev_sysfs_file(dev, file.as_str(), ret)
+}
+
+pub fn read_identity(bdev: &c::block_device, name: &mut [c_char], model: &mut [c_char], serial: &mut [c_char]) {
+    let mut bdevname = Printbuf::new();
+    prt_bdevname(&mut bdevname, Some(bdev));
+
+    strscpy(name, bdevname.as_bytes());
+    if let Some(m) = model.first_mut() {
+        *m = 0;
+    }
+    if let Some(s) = serial.first_mut() {
+        *s = 0;
+    }
+
+    if !model.is_empty() {
+        let mut sysfs_model = KVVec::from_elem(0u8, model.len(), GFP_KERNEL);
+        if let Ok(buf) = sysfs_model.as_deref_mut() {
+            let mut nr = read_dev_sysfs_attr(bdev.bd_dev, "model", buf);
+            if nr == 0 {
+                nr = read_dev_sysfs_file(bdev.bd_dev, "loop/backing_file", buf);
+            }
+            if nr != 0 {
+                strscpy(model, &buf[..nr]);
+            }
+        }
+    }
+
+    if !serial.is_empty() {
+        let mut sysfs_serial = KVVec::from_elem(0u8, serial.len(), GFP_KERNEL);
+        if let Ok(buf) = sysfs_serial.as_deref_mut() {
+            let nr = read_dev_sysfs_attr(bdev.bd_dev, "serial", buf);
+            if nr != 0 {
+                strscpy(serial, &buf[..nr]);
+            }
+        }
+    }
 }
 
 /// Whether @sb can be opened as a member of the filesystem whose superblock is
@@ -268,61 +850,841 @@ pub unsafe fn bch2_dev_in_fs(fs: *mut Head<c::bch_sb>, fs_bdev: Option<&c::block
     ret_to_c(dev_in_fs(fs, fs_bdev, sb, opts))
 }
 
-/// The memory of a new bch_dev of @c: bch_dev::init()'s - its Rust-typed
-/// fields' initializers run, everything else zeroed - for __bch2_dev_alloc()
-/// to go on with. NULL if out of memory.
-#[c_export]
-pub fn bch2_dev_alloc_mem(c: &crate::util::ffi::Opaque<Fs>) -> *mut Dev {
-    crate::util::alloc::alloc_pinned(Dev::init(crate::fs::Fs::from_c(c)))
-        .unwrap_or(core::ptr::null_mut())
-}
+fn attach_bdev(ca: &Dev, sb: &mut c::bch_sb_handle, err: &mut Printbuf) -> Result<(), BchError> {
+    let fs = ca.fs();
+    let mi = ca.mi.get();
 
-/// Drop @ca and free it, from its kobject's release.
-///
-/// # Safety
-/// @ca is from bch2_dev_alloc_mem(), and nothing uses it after.
-#[c_export]
-pub unsafe fn bch2_dev_free_mem(ca: *mut Dev) {
-    unsafe { crate::util::alloc::free_pinned(ca) }
+    if ca.is_online() {
+        prt!(err, "Cannot attach {}: already have device {} online in slot {}\n",
+             sb.dev.name().to_str().unwrap_or("?"), ca, sb.sb().dev_idx);
+        return fs.throw(bch_errcode::BCH_ERR_device_already_online);
+    }
+
+    let capacity = sb.dev.capacity();
+    if capacity < u64::from(mi.bucket_size) * mi.nbuckets {
+        prt!(err, "Cannot online {}: device too small (capacity {} filesystem size {} nbuckets {})\n",
+             sb.dev.name().to_str().unwrap_or("?"), capacity, u64::from(mi.bucket_size) * mi.nbuckets, mi.nbuckets);
+        return fs.throw(bch_errcode::BCH_ERR_device_size_too_small);
+    }
+
+    assert!(ca.io_ref[READ].is_zero(), "attaching device {ca} with read refs");
+    assert!(ca.io_ref[WRITE].is_zero(), "attaching device {ca} with write refs");
+
+    let ca_p = ca.as_ptr();
+    ret_to_result_void(unsafe { bch2_dev_journal_init(ca_p, sb.io.buf.sb) })?;
+
+    let mut name = Printbuf::new();
+    prt_bdevname(&mut name, Some(sb.dev.bdev()));
+
+    /* Commit: */
+    unsafe {
+        strscpy(&mut (*ca_p).name, name.as_bytes());
+
+        let layout = sb.sb().layout;
+        *(&raw mut (*ca_p).disk_sb).cast::<c::bch_sb_handle>() = core::mem::take(sb);
+        (*ca_p).sb_layout.set(layout);
+
+        (*ca_p).dev = (*ca.disk_sb.bdev).bd_dev;
+    }
+
+    ca.io_ref[READ].start();
+
+    Ok(())
 }
 
 impl StateLockWrite<'_> {
-    /// @ca set to @state, the state lock held; why not, if it can't be, in @err.
-    pub fn dev_set_state(&self, ca: &Dev, state: c::bch_member_state, flags: u32, err: &mut Printbuf)
+    pub fn dev_attach_bdev(&self, sb: &mut c::bch_sb_handle, err: &mut Printbuf) -> Result<(), BchError> {
+        let fs = self.fs();
+
+        {
+            let fs_sb = fs.sb_lock();
+            let fs_seq = fs_sb.sb().seq.get();
+            if sb.sb().seq.get() > fs_seq {
+                /*
+                 * rewind, we'll lose some updates but it's not safe to call
+                 * bch2_sb_to_fs() after fs is started
+                 */
+                sb.sb_mut().seq.set(fs_seq);
+            }
+        }
+
+        let dev_idx = u32::from(sb.sb().dev_idx);
+        let ca = unsafe { fs.devs[dev_idx as usize].as_ptr().as_ref() }.expect("attaching a device that's not a member");
+
+        attach_bdev(ca, sb, err)?;
+
+        fs.devs_online.set(ca.dev_idx.into());
+
+        let _ = ca.sysfs_online();
+
+        fs.reconcile_wakeup();
+        Ok(())
+    }
+
+    fn dev_read_only(&self, ca: &Dev) {
+        let fs = self.fs();
+
+        /*
+         * Push journal reclaim so the remaining devices have free journal space
+         * before we drop ca from the journal write set below. Otherwise, if ca
+         * held the journal's only free space, dropping it strands the journal in
+         * journal_full (see bch2_journal_flush_dev_ro()). Must come before
+         * bch2_dev_allocator_remove(), which pulls ca from rw_devs[journal].
+         */
+        unsafe { bch2_journal_flush_dev_ro(fs.journal.as_ptr(), ca.dev_idx.into()) };
+
+        /*
+         * The allocator thread itself allocates btree nodes, so stop it first:
+         */
+        fs.dev_allocator_remove(ca);
+        recalc_capacity(fs);
+
+        /*
+         * bch2_dev_allocator_remove() above blocks until every open_bucket on
+         * this device has been released. Submitting write bios and taking
+         * write io_refs both happen while we hold open_bucket refs, so that
+         * drain also waits for any in-flight submits to complete. Only then
+         * is it safe to stop write io_refs: stopping them sooner would cause
+         * bch2_dev_get_ioref() to fail at submit time for in-flight writes,
+         * surfacing as -EIO to userspace even though the underlying block
+         * device is still healthy (we're going read-only, not removing).
+         */
+        ca.io_ref_stop(WRITE);
+
+        unsafe { bch2_dev_journal_stop(fs.journal.as_ptr(), ca.as_ptr()) };
+        fs.do_discards_async();
+
+        /*
+         * may_reuse_stripe() / init_new_stripe_from_old() check
+         * bch2_dev_bad_or_evacuating at stripe allocation time, but state can
+         * flip to non-rw between that check and the stripe commit. Stripes
+         * still on a stripe head were cancelled by stripe_heads_stop() via
+         * bch2_dev_allocator_remove() above; stripes that had moved to
+         * stripe_new_list (commit in progress) may still commit with a ptr
+         * to ca. Wait for them to finish so the subsequent data-drop pass
+         * sees their backpointers.
+         */
+        fs.ec_flush_outstanding();
+    }
+
+    fn dev_read_write(&self, ca: &Dev) {
+        let fs = self.fs();
+
+        assert_eq!(c::bch_member_state(ca.mi.get().state.into()), c::bch_member_state::BCH_MEMBER_STATE_rw,
+                   "device {ca} going read-write, not rw");
+
+        self.dev_allocator_add(ca);
+        recalc_capacity(fs);
+
+        if ca.io_ref[WRITE].is_zero() {
+            ca.io_ref[WRITE].start();
+        }
+
+        fs.do_discards_async();
+    }
+
+    /*
+     * Note: this function is also used by the error paths - when a particular
+     * device sees an error, we call it to determine whether we can just set the
+     * device RO, or - if this function returns false - we'll set the whole
+     * filesystem RO:
+     *
+     * XXX: maybe we should be more explicit about whether we're changing state
+     * because we got an error or what have you?
+     */
+    pub fn dev_state_allowed(&self, ca: &Dev, new_state: c::bch_member_state, flags: u32,
+                             err: &mut Printbuf) -> bool {
+        let fs = self.fs();
+        let rw = c::bch_member_state::BCH_MEMBER_STATE_rw;
+
+        if c::bch_member_state(ca.mi.get().state.into()) == rw && new_state != rw {
+            let mut new_rw_devs = c::bch_devs_mask { d: fs.allocator.rw_devs[0].load() };
+            new_rw_devs.d.clear(ca.dev_idx.into());
+
+            return can_write_with_devs(fs, &new_rw_devs, c::bch_write_check::BCH_WRITE_CHECK_dev_leaving_rw,
+                                       flags, err);
+        }
+
+        true
+    }
+
+    pub fn dev_set_state(&self, ca: &Dev, new_state: c::bch_member_state, flags: u32, err: &mut Printbuf)
         -> Result<(), BchError>
     {
-        let ca = core::ptr::from_ref(ca).cast_mut();
-        // SAFETY: a device of the filesystem, its state lock held
-        ret_to_result_void(unsafe {
-            c::__bch2_dev_set_state(self.fs().as_ptr(), ca, state, flags as c_int, err.as_raw())
-        })
+        use c::bch_member_state as S;
+        let fs = self.fs();
+        let state = S(ca.mi.get().state.into());
+
+        let was_rw = state == S::BCH_MEMBER_STATE_rw;
+        let do_reconcile_scan = new_state == S::BCH_MEMBER_STATE_rw || new_state == S::BCH_MEMBER_STATE_evacuating;
+
+        let s = if new_state == S::BCH_MEMBER_STATE_rw {
+            c::reconcile_scan::from_arm(c::reconcile_scan_pending {})
+        } else {
+            c::reconcile_scan::from_arm(c_uint::from(ca.dev_idx))
+        };
+
+        /* empty stripes hold their buckets until deleted: */
+        if new_state == S::BCH_MEMBER_STATE_evacuating {
+            fs.do_stripe_deletes();
+        }
+
+        if state == new_state {
+            if new_state == S::BCH_MEMBER_STATE_evacuating {
+                return fs.request_scan(s, true);
+            }
+            return Ok(());
+        }
+
+        if !self.dev_state_allowed(ca, new_state, flags, err) {
+            return fs.throw(bch_errcode::BCH_ERR_device_state_not_allowed);
+        }
+
+        if new_state != S::BCH_MEMBER_STATE_rw {
+            self.dev_read_only(ca);
+        }
+
+        log_dev(ca, LogLevel::NOTICE, &Msg(|out: &mut Printbuf| prt!(out, "{}", member_state_str(new_state.0 as u8))));
+
+        if do_reconcile_scan {
+            fs.request_scan(s, false)?;
+        }
+
+        {
+            let mut sb = fs.sb_lock();
+            sb.fs_member_mut(ca.dev_idx.into()).set_state(new_state.0.into());
+            fs.write_super(&mut sb);
+        }
+
+        if new_state == S::BCH_MEMBER_STATE_rw && ca.is_online() {
+            self.dev_read_write(ca);
+        }
+
+        /*
+         * Any RW transition (in or out) changes the EC widening target (RW
+         * members) for this disk_label; queue a stripes scan so can_widen is
+         * refreshed. Must come after the SB write above so the scan, which
+         * reads ca->mi.state, sees the new state.
+         *
+         * Going-RW grows the target so newly-widenable stripes can be picked
+         * up; going-from-RW shrinks it, and while get_old_stripe demotes
+         * lazily on the reuse path, fsck and the canonical can_widen value
+         * still need the scan to converge.
+         */
+        if new_state == S::BCH_MEMBER_STATE_rw || was_rw {
+            fs.request_scan(c::reconcile_scan::from_arm(c::reconcile_scan_stripes {}), false)?;
+        }
+
+        if do_reconcile_scan {
+            fs.request_scan(s, true)?;
+        }
+
+        Ok(())
     }
 
-    /// Whether the filesystem can do without @ca; why not, in @err.
     pub fn dev_may_offline(&self, ca: &Dev, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
-        let ca = core::ptr::from_ref(ca).cast_mut();
-        ret_to_result_void(unsafe {
-            c::bch2_dev_may_offline(self.fs().as_ptr(), ca, flags as c_int, err.as_raw())
-        })
+        let fs = self.fs();
+
+        let mut new_devs = c::bch_devs_mask { d: fs.devs_online.load() };
+        new_devs.d.clear(ca.dev_idx.into());
+
+        let mut new_rw_devs = c::bch_devs_mask { d: fs.allocator.rw_devs[0].load() };
+        new_rw_devs.d.clear(ca.dev_idx.into());
+
+        if !fs.can_read_fs_with_devs(&new_devs, flags, Some(err)) ||
+           (fs.opts().read_only.get() == 0 &&
+            !can_write_with_devs(fs, &new_rw_devs, c::bch_write_check::BCH_WRITE_CHECK_dev_leaving_rw,
+                                 flags, err)) {
+            prt!(err, "Cannot offline required disk\n");
+            return fs.throw(bch_errcode::BCH_ERR_device_state_not_allowed);
+        }
+
+        Ok(())
     }
 
-    /// @ca's block device closed: __bch2_dev_offline().
-    pub fn dev_offline(&self, ca: &Dev) {
-        let ca = core::ptr::from_ref(ca).cast_mut();
-        unsafe { c::__bch2_dev_offline(self.fs().as_ptr(), ca) }
+    fn dev_remove_locked(&self, ca: &Dev, fast_device_removal: bool, flags: u32,
+                         err: &mut Printbuf) -> Result<(), BchError> {
+        let fs = self.fs();
+
+        let r = (|| {
+            /*
+             * Fence stripe creates before we start deleting this device's alloc
+             * info and stripe pointers: a stripe create that reused an existing
+             * stripe holds pre-invalidation copies of its pointers, and may not
+             * commit (or seal, if still accumulating writes) until after our data
+             * drop walks have passed it by:
+             */
+            ca.removing.set(true);
+
+            self.dev_set_state(ca, c::bch_member_state::BCH_MEMBER_STATE_evacuating, flags, err)?;
+
+            /*
+             * __bch2_dev_read_only() flushes outstanding stripe creates, but only
+             * runs if the device wasn't already evacuating: flush explicitly so
+             * creates that passed the ->removing check before we set it complete
+             * before the data drop, which needs to see their backpointers:
+             */
+            fs.ec_flush_outstanding();
+
+            let dev = ca.dev_idx.into();
+            if fast_device_removal {
+                dev_data_drop_by_backpointers(fs, ca, DevDrop { dev, flags, err: &mut *err })?;
+            } else {
+                dev_data_drop(fs, DevDrop { dev, flags, err: &mut *err })?;
+                crate::bch_err_fn!(fs, dev_remove_stripes(fs, DevDrop { dev, flags, err: &mut *err }))?;
+            }
+
+            unsafe { c::bch2_btree_interior_updates_flush(fs.as_ptr()) };
+
+            /* Check if device still has data before blowing away alloc info */
+            let usage = ca.usage_read_fast();
+            let mut ret = Ok(());
+            for i in 0..c::BCH_DATA_NR {
+                let t = DataType(i);
+                if !t.is_empty() && !t.is_hidden() && usage.buckets[i as usize] != 0 {
+                    if ret.is_ok() {
+                        prt!(err, "Remove failed: still has data\n");
+                        ret = Err(BchError::from(c::EBUSY));
+                    }
+                    prt!(err, "  {}: {} buckets\n", t, usage.buckets[i as usize]);
+                }
+            }
+            ret?;
+
+            /*
+             * Flush journal pins that reference the device being removed, and any
+             * outstanding pins (data_drop's btree updates), before tearing down
+             * the device. __bch2_dev_offline below kills ca's io_ref and frees
+             * ca->journal.buckets - any journal write that still needs ca in its
+             * replicas set will see EROFS.
+             */
+            fs.journal_flush_outstanding_pins();
+
+            let j = fs.journal.as_ptr();
+            ret_to_result_void(unsafe { bch2_journal_flush_device_pins(j, ca.dev_idx.into()) })
+                .inspect_err(|e| prt!(err, "bch2_journal_flush_device_pins() error: {}\n", e.msg()))?;
+
+            fs.journal_flush()
+                .inspect_err(|e| prt!(err, "bch2_journal_flush() error: {}\n", e.msg()))?;
+
+            /*
+             * Disallow reads before we remove alloc info, otherwise we'll get
+             * spurious stale pointer errors:
+             */
+            self.dev_offline(ca);
+
+            crate::bch_err_msg_dev!(ca, dev_remove_alloc(fs, ca), "removing dev alloc info")
+                .inspect_err(|e| prt!(err, "bch2_dev_remove_alloc() error: {}\n", e.msg()))?;
+
+            /*
+             * dev_remove_alloc issued btree deletes that need to be durable before
+             * we drop the sb member entry:
+             */
+            fs.journal_flush()
+                .inspect_err(|e| prt!(err, "bch2_journal_flush() error: {}\n", e.msg()))?;
+
+            fs.replicas_gc_accounted()
+                .inspect_err(|e| prt!(err, "bch2_replicas_gc2() error: {}\n", e.msg()))?;
+            /*
+             * flushing the journal should be sufficient, but it's the write buffer
+             * flush that kills superblock replicas entries after they've gone to 0
+             * so bch2_dev_has_data() returns the correct value:
+             */
+
+            let data = ca.has_data();
+            if data != 0 {
+                prt!(err, "Remove failed, still has data (");
+                unsafe { err.prt_bitflags(__bch2_data_types.as_ptr(), data.into()) };
+                prt!(err, ")\n");
+                return Err(BchError::from(c::EBUSY));
+            }
+
+            {
+                let _sb = fs.sb_lock();
+                self.devs()[ca.dev_idx as usize].take();
+            }
+
+            let ca_p = ca.as_ptr();
+            #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
+            unsafe { c::percpu_ref_kill(&raw mut (*ca_p).ref_) };
+            #[cfg(CONFIG_BCACHEFS_DEBUG)]
+            unsafe {
+                ca.dying.set(true);
+                crate::sb::members::dev_put(ca_p);
+            }
+            unsafe { c::wait_for_completion(&raw mut (*ca_p).ref_completion) };
+            Ok(())
+        })();
+
+        if r.is_err() {
+            /* The device is staying; allow new references to it again: */
+            ca.removing.set(false);
+
+            if fs.flags.get(c::bch_fs_flags::BCH_FS_rw) &&
+               c::bch_member_state(ca.mi.get().state.into()) == c::bch_member_state::BCH_MEMBER_STATE_rw &&
+               !ca.io_ref[READ].is_zero() {
+                self.dev_read_write(ca);
+            }
+        }
+        r
     }
 }
 
 impl Fs {
-    /// @ca set to @state - dirty pagecache written back first if it's leaving
-    /// the allocator, then under the state lock; why not, if it can't be, in @err.
-    pub fn dev_set_state(&self, ca: &Dev, state: c::bch_member_state, flags: u32,
+    pub fn dev_set_state(&self, ca: &Dev, new_state: c::bch_member_state, flags: u32,
                          err: Option<&mut Printbuf>) -> Result<(), BchError>
     {
-        let ca = core::ptr::from_ref(ca).cast_mut();
-        let err = err.map_or(core::ptr::null_mut(), |e| e.as_raw());
-        // SAFETY: a device of the filesystem
-        ret_to_result_void(unsafe { c::bch2_dev_set_state(self.as_ptr(), ca, state, flags as c_int, err) })
+        let mut no_err = Printbuf::new();
+        let err = err.unwrap_or(&mut no_err);
+
+        /*
+         * Taking a device out of the allocator shrinks capacity under the
+         * reservations dirty pagecache already holds, and the allocator
+         * waits for space that isn't coming back: write it out first, while
+         * the space is still there.
+         *
+         * Before state_lock, which writeback may need; trylock because
+         * umount holds s_umount while it waits for sysfs writers - us, from
+         * the state option - to drain.
+         */
+        #[cfg(kernel)]
+        if let Some(sb) = self.vfs_super() &&
+           let rw = c::bch_member_state::BCH_MEMBER_STATE_rw &&
+           c::bch_member_state(ca.mi.get().state.into()) == rw && new_state != rw {
+            sb.try_sync();
+        }
+
+        let state = self.state_lock_write();
+
+        if ca.removing() {
+            return self.throw(bch_errcode::BCH_ERR_device_has_been_removed);
+        }
+
+        state.dev_set_state(ca, new_state, flags, err)
+    }
+
+    /* Device add/removal: */
+
+    pub fn dev_remove(&self, ca: DevOuterRef, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
+        let ca_p = ca.as_mut_ptr();
+        let dev_idx = ca.dev_idx;
+        let fast_device_removal = self.sb.compat.get() & (1 << c::bch_sb_compat::BCH_COMPAT_no_stale_ptrs.0) != 0 &&
+            self.request_incompat_feature(c::bcachefs_metadata_version::fast_device_removal).is_ok();
+
+        {
+            let state = self.state_lock_write();
+
+            /*
+             * We consume the caller's ref_outer, regardless of whether we succeed
+             * or fail - the lookup no longer takes a ca->ref, which we'd deadlock
+             * against draining below, and holding ref_outer across bch2_dev_free()
+             * would deadlock against the ref_outer drain:
+             */
+            drop(ca);
+
+            state.dev_remove_locked(unsafe { &*ca_p }, fast_device_removal, flags, err)?;
+        }
+
+        /*
+         * The device is now unreachable - not in c->devs, ca->ref drained,
+         * ca->removing set. Drain ref_outer holders and free outside
+         * state_lock: they may be blocked on it (io_error_work), and will
+         * bail via ca->removing once they acquire it.
+         */
+        unsafe { dev_free(ca_p) };
+
+        /*
+         * Free this device's slot in the bch_member array - all pointers to
+         * this device must be gone:
+         */
+        let mut sb = self.sb_lock();
+        let m = sb.fs_member_mut(dev_idx.into());
+
+        if fast_device_removal {
+            m.uuid = c::__uuid_t { b: MEMBER_DELETED_UUID };
+        } else {
+            m.uuid = c::__uuid_t { b: [0; 16] };
+        }
+
+        self.write_super(&mut sb);
+        Ok(())
+    }
+
+    fn dev_set_initialized(&self, ca: &Dev, state: c::bch_member_initialized) -> Result<(), BchError> {
+        let mut sb = self.sb_lock();
+        sb.fs_member_mut(ca.dev_idx.into()).set_initialized(state.0.into());
+        self.write_super_flags(&mut sb, c::bch_sb_write_flags::empty())
+    }
+
+    pub fn dev_add_initialize(&self, ca: &Dev) -> Result<(), BchError> {
+        use c::bch_member_initialized as I;
+        let mut state = I(ca.mi.get().initialized.into());
+
+        if state == I::BCH_MEMBER_INITIALIZED_pre_dev_usage {
+            ret_to_result_void(bch2_dev_usage_init(ca, false))?;
+            self.dev_set_initialized(ca, I::BCH_MEMBER_INITIALIZED_pre_mark_sb)?;
+            state = I::BCH_MEMBER_INITIALIZED_pre_mark_sb;
+        }
+        if state == I::BCH_MEMBER_INITIALIZED_pre_mark_sb {
+            self.trans_mark_dev_sb(ca, UpdateTriggerFlags::TRANSACTIONAL)?;
+            self.dev_set_initialized(ca, I::BCH_MEMBER_INITIALIZED_pre_freespace_init)?;
+            state = I::BCH_MEMBER_INITIALIZED_pre_freespace_init;
+        }
+        if state == I::BCH_MEMBER_INITIALIZED_pre_freespace_init {
+            fs_freespace_init(self)?;
+            self.dev_set_initialized(ca, I::BCH_MEMBER_INITIALIZED_pre_journal_alloc)?;
+            state = I::BCH_MEMBER_INITIALIZED_pre_journal_alloc;
+        }
+        if state == I::BCH_MEMBER_INITIALIZED_pre_journal_alloc {
+            ret_to_result_void(unsafe { bch2_dev_journal_alloc(ca.as_ptr(), false) })?;
+            self.dev_set_initialized(ca, I::BCH_MEMBER_INITIALIZED_initialized)?;
+        }
+
+        Ok(())
+    }
+
+    /* Add new device to running filesystem: */
+    pub fn dev_add(&self, path: &CStr, err: &mut Printbuf) -> Result<(), BchError> {
+        let mut opts = c::bch_opts::default();
+        let mut sb = SbHandleGuard(read_super(path, &mut opts, Some(self.holder()))
+            .inspect_err(|e| prt!(err, "error reading superblock: {}\n", e.msg()))?);
+
+        let mut dev_mi = sb_member(sb.sb(), sb.sb().dev_idx.into()).unwrap_or_default();
+
+        let mut label = Printbuf::new();
+        if dev_mi.group() != 0 {
+            disk_path_to_text_sb(&mut label, sb.sb(), dev_mi.group() as u32 - 1);
+            if label.allocation_failure() {
+                return Err(c::ENOMEM.into());
+            }
+        }
+
+        may_add(self, sb.sb())?;
+
+        let Some(ca) = dev_alloc(self, &dev_mi) else { return Err(c::ENOMEM.into()) };
+
+        let ret: Result<(), (BchError, bool)> = 'out: {
+            if let Err(e) = attach_bdev(unsafe { &*ca }, &mut sb, err) {
+                break 'out Err((e, true));
+            }
+
+            let identity = unsafe { &*ca }.identity();
+
+            let s = c::reconcile_scan::from_arm(c::reconcile_scan_pending {});
+            if self.flags.get(c::bch_fs_flags::BCH_FS_started) {
+                /*
+                 * Technically incorrect, but 'bcachefs image update' is the
+                 * only thing that adds a device to a not-started filesystem:
+                 */
+                if let Err(e) = self.request_scan(s, false) {
+                    break 'out Err((e, true));
+                }
+            }
+
+            {
+                let state = self.state_lock_write();
+                {
+                    let _noio = MemallocFlags::noio();
+                    let mut w = self.sb_write();
+                    w.sb_mut().set_multi_device(true);
+
+                    if let Err(e) = self.dev_sb_mut(&mut w, unsafe { &*ca })
+                        .expect("a device just attached has its superblock")
+                        .sync() {
+                        prt!(err, "error setting up new superblock: {}\n", e.msg());
+                        break 'out Err((e, true));
+                    }
+
+                    let dev_idx = match sb_member_alloc(self, &mut w) {
+                        Ok(dev_idx) => dev_idx,
+                        Err(e) => {
+                            prt!(err, "error allocating superblock member slot: {}\n", e.msg());
+                            break 'out Err((e, true));
+                        }
+                    };
+
+                    /* success: */
+
+                    dev_mi.last_mount = (ktime_get_real_seconds() as u64).into();
+                    dev_mi.set_initialized(c::bch_member_initialized::BCH_MEMBER_INITIALIZED_pre_dev_usage.0.into());
+
+                    *w.fs_member_mut(dev_idx) = dev_mi;
+
+                    unsafe {
+                        (*(&raw mut (*ca).disk_sb).cast::<c::bch_sb_handle>()).io.buf.sb_mut().dev_idx = dev_idx as u8;
+                    }
+                    dev_attach(&state, ca, dev_idx);
+                    let ca = unsafe { &*ca };
+
+                    self.devs_online.set(ca.dev_idx.into());
+
+                    if dev_mi.group() != 0 &&
+                       let Err(e) = dev_group_set(self, &mut w, ca.dev_idx.into(), label.as_bytes()) {
+                        prt!(err, "error creating new label: {}\n", e.msg());
+                        break 'out Err((e, false));
+                    }
+
+                    /*
+                     * The failure domain string carried over with the
+                     * member copy above; re-intern so the new device gets
+                     * its failure_domain id.
+                     */
+                    let _ = c::bch_sb_field_members_v2::to_cpu(self, &mut w);
+
+                    if mi_field_upgrades(&mut w, ca.dev_idx.into(), &identity) {
+                        w.dirty();
+                    }
+
+                    /*
+                     * We don't call bch2_sb_update() until after the
+                     * superblock write finishes - but without sync
+                     * c->sb.nr_devices, write_super won't write to the new
+                     * device:
+                     */
+                    self.sb.nr_devices.set(w.sb().nr_devices);
+
+                    /* We just added a device: the write isn't optional, and
+                     * we need its error. On a filesystem not yet started
+                     * (bcachefs device add, offline) it's part of bringing
+                     * it up. */
+                    w.bringup();
+                    w.dirty();
+                    if let Err(e) = w.flush() {
+                        break 'out Err((e, false));
+                    }
+                }
+
+                let ca = unsafe { &*ca };
+
+                if self.flags.get(c::bch_fs_flags::BCH_FS_started) {
+                    if let Err(e) = self.dev_add_initialize(ca) {
+                        prt!(err, "error marking new superblock: {}\n", e.msg());
+                        break 'out Err((e, false));
+                    }
+
+                    if c::bch_member_state(ca.mi.get().state.into()) == c::bch_member_state::BCH_MEMBER_STATE_rw {
+                        state.dev_read_write(ca);
+                    }
+                }
+
+                /*
+                 * We just changed the superblock UUID, invalidate cache and send a
+                 * uevent to update /dev/disk/by-uuid
+                 */
+                #[cfg(kernel)]
+                {
+                    let bdev = ca.disk_sb.bdev;
+                    unsafe { c::invalidate_bdev(bdev) };
+
+                    let mut uuid_str = Printbuf::new();
+                    prt!(&mut uuid_str, "UUID={}", uuid::Uuid::from_bytes(self.sb.uuid.each_ref().map(|b| b.get())));
+
+                    let _ = ca.disk_sb.kobj().uevent_change(&[c"CHANGE=uuid", uuid_str.as_c_str()]);
+                }
+            }
+
+            if self.flags.get(c::bch_fs_flags::BCH_FS_started) {
+                self.request_scan(s, true)?;
+            }
+            Ok(())
+        };
+
+        bch_err_fn!(self, ret.map_err(|(e, free_ca)| {
+            if free_ca {
+                unsafe { dev_free(ca) };
+            }
+            e
+        }))
+    }
+
+    /* Hot add existing device to running filesystem: */
+    pub fn dev_bring_online(&self, path: &CStr, err: &mut Printbuf) -> Result<(), BchError> {
+        let mut opts = c::bch_opts::default();
+
+        let state = self.state_lock_write();
+
+        let mut sb = SbHandleGuard(read_super(path, &mut opts, Some(self.holder()))
+            .inspect_err(|e| prt!(err, "error reading superblock: {}\n", e.msg()))?);
+
+        let dev_idx = u32::from(sb.sb().dev_idx);
+
+        dev_in_fs(self.sb_lock().sb(), None, &sb, &self.opts().load())
+            .inspect_err(|e| prt!(err, "device not a member of fs: {}\n", e.msg()))?;
+
+        state.dev_attach_bdev(&mut sb, err)?;
+
+        let ca = unsafe { self.devs[dev_idx as usize].as_ptr().as_ref() }.expect("a device just attached");
+
+        ca.mi_field_upgrades();
+
+        /*
+         * A member can arrive here with its add never finished: the filesystem
+         * was initialized or the device added while it was absent, so nothing
+         * ever ran bch2_dev_usage_init() for it and its usage counters are
+         * zero rather than nbuckets. Resume from wherever it stopped.
+         *
+         * This has to come before marking the superblock. Marking subtracts the
+         * sb buckets from the device's free count, so against a zeroed count it
+         * wraps: free becomes -4, the allocator sorts on it, and a device
+         * advertising 2^64 free buckets wins every allocation and then blocks
+         * in bucket_alloc_blocked forever - taking the journal with it.
+         */
+        self.dev_add_initialize(ca)
+            .inspect_err(|e| prt!(err, "bch2_dev_add_initialize() error: {}\n", e.msg()))?;
+
+        /*
+         * Then reconcile: we didn't know where this device's superblocks were
+         * until we saw it, so make the allocations match what the sb says.
+         * Idempotent - __bch2_trans_mark_metadata_bucket() assigns rather than
+         * accumulates - so this is a no-op when the resume above just did it.
+         */
+        self.trans_mark_dev_sb(ca, UpdateTriggerFlags::TRANSACTIONAL)
+            .inspect_err(|e| prt!(err, "bch2_trans_mark_dev_sb() error: {}\n", e.msg()))?;
+
+        let mi = ca.mi.get();
+
+        if c::bch_member_state(mi.state.into()) == c::bch_member_state::BCH_MEMBER_STATE_rw {
+            state.dev_read_write(ca);
+
+            /*
+             * Re-replicate journal written while this device was gone.
+             * After __bch2_dev_read_write(), or the journal write the flush
+             * ends with is degraded too; queued because the flush is
+             * unbounded and we hold state_lock.
+             */
+            unsafe { self.journal.wq.queue_work((&raw const self.journal.flush_degraded_work).cast_mut()) };
+        }
+
+        if mi.freespace_initialized == 0 {
+            dev_freespace_init(self, ca, 0, mi.nbuckets)
+                .inspect_err(|e| prt!(err, "bch2_dev_freespace_init() error: {}\n", e.msg()))?;
+        }
+
+        if ca.journal.nr == 0 {
+            ret_to_result_void(unsafe { bch2_dev_journal_alloc(ca.as_ptr(), false) })
+                .inspect_err(|e| prt!(err, "bch2_dev_journal_alloc() error: {}\n", e.msg()))?;
+        }
+
+        {
+            let mut sb = self.sb_lock();
+            sb.fs_member_mut(ca.dev_idx.into()).last_mount = (ktime_get_real_seconds() as u64).into();
+            self.write_super(&mut sb);
+        }
+
+        /*
+         * We might have been unable to write because this device was offline:
+         *
+         * We'd like to limit reconcile pending scans, having them happen
+         * because a device is going offline and coming back sucks - but to do
+         * that right we need to at least note somewhere /which/ targets have
+         * extents on the pending list:
+         */
+        self.request_scan(c::reconcile_scan::from_arm(c::reconcile_scan_pending {}), true)
+    }
+
+    pub fn dev_offline(&self, ca: &Dev, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
+        let state = self.state_lock_write();
+
+        if ca.removing() {
+            return self.throw(bch_errcode::BCH_ERR_device_has_been_removed);
+        }
+
+        if !ca.is_online() {
+            prt!(err, "Already offline\n");
+            return Ok(());
+        }
+
+        state.dev_may_offline(ca, flags, err)?;
+
+        state.dev_offline(ca);
+        Ok(())
+    }
+
+    pub fn dev_resize(&self, ca: &Dev, nbuckets: u64, err: &mut Printbuf) -> Result<(), BchError> {
+        let _state = self.state_lock_write();
+
+        if ca.removing() {
+            return self.throw(bch_errcode::BCH_ERR_device_has_been_removed);
+        }
+
+        let old_nbuckets = ca.mi.get().nbuckets;
+
+        if nbuckets < old_nbuckets {
+            prt!(err, "Cannot shrink yet\n");
+            return self.throw(bch_errcode::BCH_ERR_EINVAL_dev_resize_shrink);
+        }
+
+        let wakeup_reconcile_pending = nbuckets > old_nbuckets;
+        let s = c::reconcile_scan::from_arm(c::reconcile_scan_pending {});
+        if wakeup_reconcile_pending {
+            self.request_scan(s, false)?;
+        }
+
+        if nbuckets > u64::from(c::BCH_MEMBER_NBUCKETS_MAX) {
+            prt!(err, "New device size too big ({} greater than max {})\n", nbuckets, c::BCH_MEMBER_NBUCKETS_MAX);
+            return self.throw(bch_errcode::BCH_ERR_device_size_too_big);
+        }
+
+        let bucket_size = u64::from(ca.mi.get().bucket_size);
+        if ca.is_online() {
+            let capacity = ca.disk_sb.capacity();
+            if capacity < bucket_size * nbuckets {
+                prt!(err, "New size {} larger than device size {}\n", bucket_size * nbuckets, capacity);
+                return self.throw(bch_errcode::BCH_ERR_device_size_too_small);
+            }
+        }
+
+        ca.buckets_resize(nbuckets)
+            .inspect_err(|e| prt!(err, "bch2_dev_buckets_resize() error: {}\n", e.msg()))?;
+
+        /*
+         * The new range comes into the alloc btree as holes - free buckets - and
+         * may hold a backup superblock that was past the old end. It has to be
+         * marked before the range goes into freespace, and marking needs
+         * nbuckets to cover it (the alloc trigger refuses buckets past the end).
+         * So mark with freespace not initialized, as device add does: the alloc
+         * trigger doesn't expect the new range in freespace yet, and the
+         * allocator steers clear of superblock buckets (is_superblock_bucket()).
+         * bch2_dev_freespace_init() sets it again; after a crash, mount
+         * initializes freespace for the whole device.
+         */
+        let freespace_initialized = ca.mi.get().freespace_initialized != 0;
+
+        {
+            let mut sb = self.sb_lock();
+            let m = sb.fs_member_mut(ca.dev_idx.into());
+            m.nbuckets = nbuckets.into();
+            m.set_freespace_initialized(false);
+
+            self.write_super(&mut sb);
+        }
+
+        self.trans_mark_dev_sb(ca, UpdateTriggerFlags::TRANSACTIONAL)
+            .inspect_err(|e| prt!(err, "bch2_trans_mark_dev_sb() error: {}\n", e.msg()))?;
+
+        if freespace_initialized {
+            ca.resize_alloc(old_nbuckets, nbuckets)
+                .inspect_err(|e| prt!(err, "__bch2_dev_resize_alloc() error: {}\n", e.msg()))?;
+
+            self.write_super(&mut self.sb_lock());
+        }
+
+        recalc_capacity(self);
+
+        if wakeup_reconcile_pending {
+            self.request_scan(s, true)?;
+        }
+        Ok(())
+    }
+
+    /* return with ref on ca->ref: */
+    pub fn dev_lookup(&self, name: &CStr) -> Result<DevRef, BchError> {
+        let name = name.to_bytes();
+        let name = name.strip_prefix(b"/dev/").unwrap_or(name);
+
+        self.members()
+            .find(|ca| ca.name().to_bytes() == name)
+            .ok_or(bch_errcode::BCH_ERR_ENOENT_dev_not_found.into())
     }
 
     /// @devs by name, space separated; one there isn't, by its number.
@@ -349,6 +1711,22 @@ impl Fs {
 #[c_export]
 pub fn bch2_devs_list_to_text(out: &mut Printbuf, c: &Fs, d: &c::bch_devs_list) {
     c.devs_list_to_text(out, d)
+}
+
+/* Resize on mount */
+
+impl Dev {
+    pub fn resize_alloc(&self, old_nbuckets: u64, new_nbuckets: u64) -> Result<(), BchError> {
+        let fs = self.fs();
+
+        trans_commit_do(fs, None, CommitFlags::empty(), |t| {
+            accounting::add(t, accounting::DevDataType { dev: self.dev_idx, data_type: DataType::free.0 as u8 },
+                            accounting::DevDataTypeCounters {
+                                buckets: new_nbuckets.wrapping_sub(old_nbuckets) as i64, sectors: 0, fragmented: 0,
+                            }, false)
+        })?;
+        dev_freespace_init(fs, self, old_nbuckets, new_nbuckets)
+    }
 }
 
 // ── Congestion ───────────────────────────────────────────────────────────
@@ -478,14 +1856,7 @@ unsafe extern "C" fn bdev_sync(bdev: *mut c::block_device) {
 impl Dev {
     /// The disk it's on, in sectors: get_capacity()
     fn disk_sectors(&self) -> u64 {
-        unsafe {
-            let disk = (*self.disk_sb.bdev).bd_disk;
-            #[cfg(kernel)]
-            let sectors = (*(*disk).part0).bd_nr_sectors;
-            #[cfg(not(kernel))]
-            let sectors = c::get_capacity(disk);
-            sectors as u64
-        }
+        self.disk_sb.capacity()
     }
 
     fn will_resize_on_mount(&self) -> bool {
@@ -524,8 +1895,7 @@ impl Fs {
             }
 
             if ca.mi.get().freespace_initialized != 0 {
-                let ca = core::ptr::from_ref::<Dev>(&ca).cast_mut();
-                ret_to_result_void(unsafe { __bch2_dev_resize_alloc(ca, old_nbuckets, new_nbuckets) })?;
+                ca.resize_alloc(old_nbuckets, new_nbuckets)?;
             }
         }
         Ok(())

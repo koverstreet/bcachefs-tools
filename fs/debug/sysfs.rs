@@ -5,7 +5,7 @@
 //! The filesystem's directory is its kobject's, FsDir; its subdirectories are
 //! named attribute groups of it (util/kobject.rs), so FsDir reads and writes
 //! their files too, each told by the table its attribute is in. A device's
-//! dir is DevDir, its kobject's - dev.c's KTYPE(). Files are one of:
+//! dir is DevDir, its kobject's. Files are one of:
 //! - a table of Attrs - name, mode, what reading and writing do: the fs dir,
 //!   internal/, a device's own files;
 //! - a ListAttrs, a file per entry of an x-macro list: time_stats/,
@@ -25,10 +25,8 @@
 
 use crate::fs::Dev;
 use core::ffi::CStr;
-use core::mem::offset_of;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
-use cstruct_macros::c_export;
 
 use crate::accounting;
 use crate::c;
@@ -46,7 +44,7 @@ use crate::util::kernel::{READ, WRITE};
 use crate::util::log::LogMsg;
 use crate::util::time_stats::TimeStats;
 use crate::util::refcount::TryRefcount;
-use crate::util::kobject::{BinFile, BinFiles, Group, Groups, KobjPlace, Kobject};
+use crate::util::kobject::{BinFile, BinFiles, Group, Groups, Kobject};
 use crate::util::place::Placed;
 use crate::util::sysfs::{self, parse_human_u64, parse_int, Attr, Dir, Files, ListAttrs};
 use crate::util::{HumanReadable, Printbuf, ToText};
@@ -549,22 +547,11 @@ fn io_done_to_text(ca: &Dev, out: &mut Printbuf) {
     writeln!(out, "}}");
 }
 
-struct DevDir;
-
-/// A device's kobject, C's.
-struct DevKobj;
-
-unsafe impl KobjPlace for DevKobj {
-    type Owner = Dev;
-
-    unsafe fn owner(kobj: *mut c::kobject) -> *mut Dev {
-        unsafe { kobj.byte_sub(offset_of!(Dev, kobj)).cast() }
-    }
-}
+pub struct DevDir;
 
 unsafe impl Dir for DevDir {
     type Obj = Dev;
-    type Kobj = DevKobj;
+    type Kobj = Placed<Kobject, crate::at!(Dev.kobj)>;
 
     fn show(ca: &Dev, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
         match opt_from_attr(attr) {
@@ -583,12 +570,11 @@ unsafe impl Dir for DevDir {
     }
 }
 
-#[c_export]
-#[c("struct attribute *bch2_dev_files[]")]
-pub static bch2_dev_files: Files<{ DEV.len() + nr_true(&DEV_OPTS) + 1 }> = Files::with_list(DEV, &OPT_FILES, &DEV_OPTS);
+static DEV_FILES: Files<{ DEV.len() + nr_true(&DEV_OPTS) + 1 }> = Files::with_list(DEV, &OPT_FILES, &DEV_OPTS);
 
-#[c_export]
-pub static bch2_dev_sysfs_ops: c::sysfs_ops = sysfs::ops::<DevDir>();
+static DEV_GROUP: Group = Group::new(None, &DEV_FILES);
+
+pub(crate) static DEV_GROUPS: Groups<2> = Groups::new([&DEV_GROUP]);
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
