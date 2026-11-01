@@ -254,8 +254,8 @@ impl Fs {
     /// Counted and traced, as bch_err_throw(); BchError::from() names an error
     /// without throwing it. Cold, as C's unlikely(ret).
     #[cold]
-    pub fn err(&self, error: bch_errcode) -> BchError {
-        BchError::from_raw(-unsafe { c::__bch2_err_throw(self.as_ptr(), -(error.0 as i32)) })
+    pub fn err(&self, error: impl Into<BchError>) -> BchError {
+        BchError::from_raw(-unsafe { c::__bch2_err_throw(self.as_ptr(), -error.into().raw()) })
     }
 
     pub fn throw<T>(&self, error: bch_errcode) -> Result<T, BchError> {
