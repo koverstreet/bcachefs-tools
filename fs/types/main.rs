@@ -376,7 +376,7 @@ fn file_h(header: &str, records: &[&Record], paths: &BTreeMap<String, String>,
     let mut resolved: BTreeMap<&str, &str> = BTreeMap::new();
     for (w, p) in records.iter().flat_map(|r| &r.names).filter(|(w, _)| !w.contains('<')) {
         let n = w.rsplit("::").next().unwrap_or(w);
-        if let Some(old) = resolved.insert(n, p) && old != p {
+        if let Some(old) = resolved.insert(n, p).filter(|&old| old != p) {
             return Err(format!("{header}: {n} is written for two types, {old} and {p}"));
         }
     }
@@ -644,7 +644,7 @@ fn main() {
                     Some(CItem::TaggedUnion(tu)) => path(&tu.name, tu.c_type()),
                     Some(CItem::Same(s)) => path(&s.rust_ty, s.c_type.clone()),
                     // how a prototype names it
-                    Some(CItem::Enum(ref e)) if let Some(n) = &e.name => {
+                    Some(CItem::Enum(ref e @ CEnumDef { name: Some(ref n), .. })) => {
                         let c = e.c_ident().unwrap_or(n);
                         path(n, format!("enum {c}"));
                         if let (Some(p), Some(&size)) = (path_of(n), r.nums.first()) {

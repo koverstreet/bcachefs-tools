@@ -26,11 +26,11 @@ pub(crate) fn args_stored_once(attr: TokenStream, mut f: ItemFn) -> syn::Result<
         return Err(Error::new_spanned(&f.sig, "expected an async fn"));
     }
     for p in &f.sig.inputs {
-        if let FnArg::Typed(t) = p
-            && !matches!(&*t.pat, Pat::Ident(i) if i.by_ref.is_none() && i.subpat.is_none())
-        {
-            return Err(Error::new_spanned(&t.pat,
-                "a pattern or `_` parameter: the lowering's move is how those bind and drop - name it"));
+        match p {
+            FnArg::Typed(t) if !matches!(&*t.pat, Pat::Ident(i) if i.by_ref.is_none() && i.subpat.is_none()) =>
+                return Err(Error::new_spanned(&t.pat,
+                    "a pattern or `_` parameter: the lowering's move is how those bind and drop - name it")),
+            _ => {}
         }
     }
 

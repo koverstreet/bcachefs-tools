@@ -1563,10 +1563,12 @@ fn item_attrs_of(attrs: &[syn::Attribute]) -> Result<ItemAttrs, String> {
             // cfg_attr(PRED, repr(...)): a repr for one configuration.
             let args = l.parse_args_with(syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated)
                 .map_err(|e| format!("cfg_attr: {e}"))?;
-            if let [pred, syn::Meta::List(r)] = args.iter().collect::<Vec<_>>().as_slice() && r.path.is_ident("repr") {
-                let mut repr = CRepr::default();
-                repr_of(r, &mut repr)?;
-                a.cfg_reprs.push((cfg_of(pred)?, repr));
+            if let [pred, syn::Meta::List(r)] = args.iter().collect::<Vec<_>>().as_slice() {
+                if r.path.is_ident("repr") {
+                    let mut repr = CRepr::default();
+                    repr_of(r, &mut repr)?;
+                    a.cfg_reprs.push((cfg_of(pred)?, repr));
+                }
             }
         }
         if let (true, Some(l)) = (is("bitfield"), list) {
@@ -1586,15 +1588,15 @@ fn item_attrs_of(attrs: &[syn::Attribute]) -> Result<ItemAttrs, String> {
         if let (true, Some(l)) = (is("c_printf"), list) {
             a.c_printf = Some(c_text(&l.tokens));
         }
-        if is("c") && let Ok(s) = attr.parse_args::<syn::LitStr>() {
+        if let (true, Ok(s)) = (is("c"), attr.parse_args::<syn::LitStr>()) {
             a.c_decl = Some(s.value());
         }
-        if is("c_typedef") && let Ok(t) = attr.parse_args::<syn::Ident>() {
+        if let (true, Ok(t)) = (is("c_typedef"), attr.parse_args::<syn::Ident>()) {
             a.typedef = Some(Some(ident(&t)));
         }
         // #[c_name], or what it expands to - a family's macro sees it
         // unexpanded, the derives expanded
-        if (is("c_name") || is("c_name_of")) && let Ok(n) = attr.parse_args::<syn::Ident>() {
+        if let (true, Ok(n)) = (is("c_name") || is("c_name_of"), attr.parse_args::<syn::Ident>()) {
             a.c_name = Some(ident(&n));
         }
     }
@@ -1876,9 +1878,12 @@ fn parse_tagged_union(m: &syn::Macro) -> Result<CTaggedUnion, String> {
     // not the storage: skipped
     let mut c_name = None;
     let i = skip_attrs_vis(&body, &mut |g, star| {
-        if !star && let Ok(syn::Meta::List(l)) = syn::parse2::<syn::Meta>(g.stream())
-            && l.path.is_ident("c_name") && let Ok(n) = syn::parse2::<syn::Ident>(l.tokens.clone()) {
-            c_name = Some(ident(&n));
+        match syn::parse2::<syn::Meta>(g.stream()) {
+            Ok(syn::Meta::List(l)) if !star && l.path.is_ident("c_name") =>
+                if let Ok(n) = syn::parse2::<syn::Ident>(l.tokens) {
+                    c_name = Some(ident(&n));
+                },
+            _ => {}
         }
     });
     const EXPECTED: &str = "tagged_union!: expected struct|union NAME [in STORAGE] { ... }";
@@ -1904,10 +1909,13 @@ fn parse_tagged_union(m: &syn::Macro) -> Result<CTaggedUnion, String> {
         let eq = item.iter().rposition(|t| is_punct(Some(t), '='));
         // an arm type defined here: [#[..]] [pub] struct|union NAME { .. }
         let j = skip_attrs_vis(&item, &mut |_, _| {});
-        if (is_ident(item.get(j), "struct") || is_ident(item.get(j), "union")) &&
-           is_group(item.get(j + 2), Delimiter::Brace) && let Some(TokenTree::Ident(n)) = item.get(j + 1) {
-            tu.defs.push(CTaggedDef { name: ident(n) });
-            continue;
+        match item.get(j..j + 3) {
+            Some([TokenTree::Ident(kw), TokenTree::Ident(n), TokenTree::Group(g)])
+                if (kw == "struct" || kw == "union") && g.delimiter() == Delimiter::Brace => {
+                tu.defs.push(CTaggedDef { name: ident(n) });
+                continue;
+            }
+            _ => {}
         }
         let colon = |t: &TokenTree| is_punct(Some(t), ':');
         match item.as_slice() {
@@ -3244,16 +3252,17 @@ pub fn parse_items(src: &str) -> Result<Vec<CItem>, String> {
             _ => {}
         }
     }
-    if let Ok(item) = syn::parse_str::<syn::Item>(src) && is_export(&item) && let Some(e) = export_of(&item) {
+    if let Some(e) = syn::parse_str::<syn::Item>(src).ok().filter(is_export).as_ref().and_then(export_of) {
         return Ok(vec![CItem::Extern(e?.ex)]);
     }
 
     // else a struct or a union: a #[bitfield]'s, or a CStruct
     let d = syn::parse_str::<syn::DeriveInput>(src).map_err(|e| format!("{src}: {e}"))?;
     let a = item_attrs_of(&d.attrs)?;
-    if let Some(storage) = a.bitfield.clone() &&
-       let Some(def) = parse_bitfield(&d, a.cfg.clone(), storage, a.bitfield_ty.clone())? {
-        return Ok(vec![CItem::Bitfield(def)]);
+    if let Some(storage) = a.bitfield.clone() {
+        if let Some(def) = parse_bitfield(&d, a.cfg.clone(), storage, a.bitfield_ty.clone())? {
+            return Ok(vec![CItem::Bitfield(def)]);
+        }
     }
     Ok(match a.derives {
         true => parse_struct(&d, a)?.map(CItem::Struct).into_iter().collect(),
