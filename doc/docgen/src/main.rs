@@ -18,11 +18,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
-// X-macro parsing (adapted from fs/bch_bindgen/build.rs)
+// X-macro parsing: a C #define, or a c_xmacro! block in the Rust source
 // ---------------------------------------------------------------------------
 
-fn parse_xmacro(source: &str, macro_name: &str) -> Vec<Vec<String>> {
-    let define_prefix = format!("#define {}", macro_name);
+/// The entries of x-macro @macro_name, if @source #defines it (adapted from
+/// fs/bch_bindgen/build.rs).
+fn parse_xmacro(source: &str, macro_name: &str) -> Option<Vec<Vec<String>>> {
+    let define_prefix = format!("#define {}(", macro_name);
+    if !source.contains(&define_prefix) {
+        return None;
+    }
     let mut in_macro = false;
     let mut macro_text = String::new();
 
@@ -81,7 +86,74 @@ fn parse_xmacro(source: &str, macro_name: &str) -> Vec<Vec<String>> {
             break;
         }
     }
-    entries
+    Some(entries)
+}
+
+/// The entries of x-macro @macro_name, as written in its c_xmacro! block:
+/// `NAME(x) { (args), (args), ... }`. Each entry's text is what its x(...)
+/// holds in the generated C, comments dropped and whitespace outside strings
+/// collapsed - so a doc string split across lines reads `"a " "b"` as there.
+fn parse_c_xmacro(source: &str, macro_name: &str) -> Option<Vec<Vec<String>>> {
+    let start = source.find(&format!("{macro_name}(x) {{"))?;
+    let body = &source[start..];
+    let body = &body[body.find('{')? + 1..];
+
+    let mut entries = Vec::new();
+    let mut entry = String::new();
+    let mut depth = 0;
+    let mut chars = body.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '/' if chars.peek() == Some(&'/') => {
+                while chars.next().is_some_and(|c| c != '\n') {}
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut prev = ' ';
+                while let Some(c) = chars.next() {
+                    if prev == '*' && c == '/' {
+                        break;
+                    }
+                    prev = c;
+                }
+            }
+            '"' => {
+                entry.push(ch);
+                while let Some(c) = chars.next() {
+                    entry.push(c);
+                    match c {
+                        '\\' => entry.extend(chars.next()),
+                        '"' => break,
+                        _ => {}
+                    }
+                }
+            }
+            '(' => {
+                if depth > 0 {
+                    entry.push(ch);
+                }
+                depth += 1;
+            }
+            ')' => {
+                depth -= 1;
+                if depth > 0 {
+                    entry.push(ch);
+                } else {
+                    entries.push(split_xmacro_args(entry.trim()));
+                    entry.clear();
+                }
+            }
+            '}' if depth == 0 => return Some(entries),
+            c if c.is_whitespace() => {
+                if depth > 0 && !entry.ends_with(' ') {
+                    entry.push(' ');
+                }
+            }
+            c if depth > 0 => entry.push(c),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Split comma-separated arguments, respecting nested parens and C strings.
@@ -538,7 +610,6 @@ fn markup_to_latex(content: &str) -> String {
 
 struct EnumList {
     key: &'static str,
-    header: &'static str,
     macro_name: &'static str,
     default: Option<&'static str>,
     /// Which x-macro argument index contains the doc string (None = no descriptions)
@@ -556,7 +627,6 @@ struct EnumList {
 const ENUM_LISTS: &[EnumList] = &[
     EnumList {
         key: "error-actions",
-        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_ERROR_ACTIONS",
         default: Some("fix_safe"),
         doc_field: Some(2),
@@ -567,7 +637,6 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "csum-opts",
-        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_CSUM_OPTS",
         default: Some("crc32c"),
         doc_field: None,
@@ -578,7 +647,6 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "compression-opts",
-        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_COMPRESSION_OPTS",
         default: Some("none"),
         doc_field: None,
@@ -589,7 +657,6 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "str-hash-opts",
-        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_STR_HASH_OPTS",
         default: Some("siphash"),
         doc_field: None,
@@ -600,7 +667,6 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "btree-ids",
-        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_BTREE_IDS",
         default: None,
         doc_field: Some(4),
@@ -611,7 +677,6 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "time-stats",
-        header: "fs/types.h",
         macro_name: "BCH_TIME_STATS",
         default: None,
         doc_field: Some(1),
@@ -622,7 +687,6 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "sb-fields",
-        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_SB_FIELDS",
         default: None,
         doc_field: Some(2),
@@ -633,7 +697,6 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "jset-entry-types",
-        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_JSET_ENTRY_TYPES",
         default: None,
         doc_field: Some(2),
@@ -644,7 +707,6 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "counters",
-        header: "fs/sb/counters_format.h",
         macro_name: "BCH_PERSISTENT_COUNTERS",
         default: None,
         doc_field: Some(3),
@@ -655,7 +717,6 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "bkey-types",
-        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_BKEY_TYPES",
         default: None,
         doc_field: Some(3),
@@ -666,7 +727,6 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "metadata-versions",
-        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_METADATA_VERSIONS",
         default: None,
         doc_field: Some(2),
@@ -677,7 +737,6 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "recovery-passes",
-        header: "fs/init/passes_format.h",
         macro_name: "BCH_RECOVERY_PASSES",
         default: None,
         doc_field: Some(4),
@@ -874,11 +933,27 @@ fn main() {
     }
 
     // --- Simple enum lists ---
+    // From each x-macro wherever in fs/ it lives - a C #define or a Rust
+    // c_xmacro! block - found by name, so a list moving between files, or
+    // from C to Rust, doesn't break the docs.
+    let mut sources = Vec::new();
+    walk_c_files(&root.join("fs"), &mut |path| {
+        if let Ok(source) = fs::read_to_string(path) {
+            let rust = path.extension().is_some_and(|e| e == "rs");
+            sources.push((rust, source));
+        }
+    });
     for el in ENUM_LISTS {
-        let source = fs::read_to_string(root.join(el.header)).unwrap();
-        let entries = parse_xmacro(&source, el.macro_name);
+        let found = sources.iter().find_map(|(rust, s)| {
+            if *rust { parse_c_xmacro(s, el.macro_name) } else { parse_xmacro(s, el.macro_name) }
+        });
+        let Some(entries) = found else {
+            eprintln!("error: no x-macro {} in fs/ - neither a #define nor a c_xmacro!", el.macro_name);
+            errors += 1;
+            continue;
+        };
         if entries.is_empty() {
-            eprintln!("warning: {} in {} produced no entries", el.macro_name, el.header);
+            eprintln!("warning: {} produced no entries", el.macro_name);
             continue;
         }
         let latex = generate_enum_list(el, &entries);
