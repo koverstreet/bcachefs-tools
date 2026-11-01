@@ -14,6 +14,7 @@ use crate::errcode::{
 use crate::fs::Fs;
 use crate::locking::Locked;
 use crate::util::closure::ClosureRef;
+use crate::util::percpu::Counters;
 use crate::util::futex::EventCount;
 use crate::util::kernel::{jiffies, nsecs_to_jiffies, NSEC_PER_SEC};
 use crate::util::sleep::Sleep;
@@ -328,6 +329,11 @@ impl<'f> BtreeTrans<'f> {
 
     pub fn raw(&self) -> *mut c::btree_trans {
         self.inner.as_ptr()
+    }
+
+    pub fn fs_usage_delta_add(&self, d: c::bch_fs_usage_base) {
+        let usage = unsafe { &mut (*self.raw()).fs_usage_delta };
+        *usage = usage.wrapping_add(d);
     }
 
     pub(crate) fn fs(&self) -> &'f Fs {
