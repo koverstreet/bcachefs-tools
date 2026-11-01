@@ -4,51 +4,6 @@
 
 #include "btree/bkey.h"
 
-#ifdef CONFIG_X86_64
-static inline int __bkey_cmp_bits(const u64 *l, const u64 *r,
-				  unsigned nr_key_bits)
-{
-	long d0, d1, d2, d3;
-	int cmp;
-
-	/* we shouldn't need asm for this, but gcc is being retarded: */
-
-	asm(".intel_syntax noprefix;"
-	    "xor eax, eax;"
-	    "xor edx, edx;"
-	    "1:;"
-	    "mov r8, [rdi];"
-	    "mov r9, [rsi];"
-	    "sub ecx, 64;"
-	    "jl 2f;"
-
-	    "cmp r8, r9;"
-	    "jnz 3f;"
-
-	    "lea rdi, [rdi - 8];"
-	    "lea rsi, [rsi - 8];"
-	    "jmp 1b;"
-
-	    "2:;"
-	    "not ecx;"
-	    "shr r8, 1;"
-	    "shr r9, 1;"
-	    "shr r8, cl;"
-	    "shr r9, cl;"
-	    "cmp r8, r9;"
-
-	    "3:\n"
-	    "seta al;"
-	    "setb dl;"
-	    "sub eax, edx;"
-	    ".att_syntax prefix;"
-	    : "=&D" (d0), "=&S" (d1), "=&d" (d2), "=&c" (d3), "=&a" (cmp)
-	    : "0" (l), "1" (r), "3" (nr_key_bits)
-	    : "r8", "r9", "cc", "memory");
-
-	return cmp;
-}
-#else
 static inline int __bkey_cmp_bits(const u64 *l, const u64 *r,
 				  unsigned nr_key_bits)
 {
@@ -83,7 +38,6 @@ static inline int __bkey_cmp_bits(const u64 *l, const u64 *r,
 
 	return cmp_int(l_v, r_v);
 }
-#endif
 
 static inline __pure __flatten
 int __bch2_bkey_cmp_packed_format_checked_inlined(const struct bkey_packed *l,
