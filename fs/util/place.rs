@@ -104,7 +104,7 @@ use core::cell::UnsafeCell;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::size_of;
 use core::pin::Pin;
-use pin_init::{Init, PinInit, Zeroable};
+use pin_init::{pin_data, pin_init, Init, PinInit, Zeroable};
 
 /// A field's name, as Field<N>'s N: its FNV-1a hash.
 pub const fn name(s: &str) -> u64 {
@@ -362,6 +362,50 @@ pub(crate) unsafe fn container_of<'a, T: Contained>(p: *const T) -> &'a T::Paren
         let at = &*T::placed_at_raw(p);
         &*p.byte_sub(at.offset()).cast::<T::Parent>()
     }
+}
+
+/// C, at the field A names - at!(Fs.ro_ref) - so container() is the struct
+/// it's in. What C is, it is as itself: a ref on a Placed AtomicRef is a ref
+/// on its container. The parent's #[derive(Init)] makes a field of this type
+/// with at(), around the field's #[init]: so A is the place it's at.
+#[pin_data]
+#[repr(C)]
+pub struct Placed<C, A> {
+    #[pin]
+    value:      C,
+    _placed_at: A,
+}
+
+unsafe impl<C, A: Place<Type = Self>> Contained for Placed<C, A> {
+    type Parent = A::Base;
+    type At = A;
+
+    unsafe fn placed_at_raw(p: *const Self) -> *const A {
+        p.wrapping_byte_add(core::mem::offset_of!(Self, _placed_at)).cast()
+    }
+}
+
+impl<C, A> Placed<C, A> {
+    #[doc(hidden)]
+    pub fn new<E: From<F>, F>(at: A, value: impl PinInit<C, F>) -> impl PinInit<Self, E> {
+        pin_init!(Self { value <- value, _placed_at: at }? E)
+    }
+}
+
+impl<C, A> core::ops::Deref for Placed<C, A> {
+    type Target = C;
+
+    fn deref(&self) -> &C {
+        &self.value
+    }
+}
+
+/// The At of field @f of @B, as a type: at!(Fs.ro_ref), for a Placed.
+#[macro_export]
+macro_rules! at {
+    ($b:ident . $f:ident) => {
+        $crate::util::place::At<$b, { $crate::util::place::name(::core::stringify!($f)) }>
+    };
 }
 
 // ── Paths ────────────────────────────────────────────────────────────────

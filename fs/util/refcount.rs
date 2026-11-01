@@ -53,6 +53,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU32, Ordering::{Acquire, Relaxed, Release}};
 
 use crate::util::futex::EventCount;
+use crate::util::place::Placed;
 use crate::util::sleep::Sleep;
 
 /// # Safety
@@ -201,6 +202,26 @@ impl<T: Refcount + ?Sized> Deref for RefBorrow<'_, T> {
 
     fn deref(&self) -> &T {
         self.t
+    }
+}
+
+unsafe impl<C: Refcount, A> Refcount for Placed<C, A> {
+    unsafe fn inc(&self) {
+        unsafe { (**self).inc() }
+    }
+
+    unsafe fn dec(&self) {
+        unsafe { (**self).dec() }
+    }
+}
+
+unsafe impl<C: TryRefcount, A> TryRefcount for Placed<C, A> {
+    fn try_inc(&self) -> bool {
+        (**self).try_inc()
+    }
+
+    fn try_inc_live(&self) -> bool {
+        (**self).try_inc_live()
     }
 }
 
