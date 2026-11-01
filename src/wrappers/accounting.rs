@@ -2,7 +2,7 @@ use bcachefs_kernel::btree::bkey::prelude::*;
 use anyhow::anyhow;
 use bch_bindgen::c;
 use bcachefs_kernel::metadata_version;
-use bcachefs_kernel::util::vstructs::VstructRefEntries;
+use bcachefs_kernel::util::vstructs::{Unvalidated, VstructRefEntries};
 
 use super::handle::BcachefsHandle;
 use super::ioctl::{grow_on_erange, ioctl_ptr, IoctlBuf, BCH_IOCTL_QUERY_ACCOUNTING, BCH_IOCTL_QUERY_ACCOUNTING_v2};
@@ -28,6 +28,19 @@ pub struct AccountingResult {
     /// backlog, not space we don't have.
     pub free_now: Vec<u64>,
     pub entries: Vec<AccountingEntry>,
+}
+
+/// A single accounting entry, from the query_accounting ioctl - from the
+/// kernel, so its position is Unvalidated.
+pub struct AccountingEntry {
+    pub pos: DiskAccountingPos<Unvalidated>,
+    pub counters: Vec<u64>,
+}
+
+impl AccountingEntry {
+    pub fn counter(&self, i: usize) -> u64 {
+        self.counters.get(i).copied().unwrap_or(0)
+    }
 }
 
 impl BcachefsHandle {

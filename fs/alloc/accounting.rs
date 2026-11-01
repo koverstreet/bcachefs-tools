@@ -473,22 +473,6 @@ pub fn nr_inodes(fs: &Fs) -> u64 {
     read(fs, NrInodes {}).nr
 }
 
-/// A single accounting entry, from the query_accounting ioctl - from the
-/// kernel, so its position is Unvalidated. Tools-only — holds its counters
-/// in a heap Vec.
-#[cfg(feature = "std")]
-pub struct AccountingEntry {
-    pub pos: DiskAccountingPos<Unvalidated>,
-    pub counters: Vec<u64>,
-}
-
-#[cfg(feature = "std")]
-impl AccountingEntry {
-    pub fn counter(&self, i: usize) -> u64 {
-        self.counters.get(i).copied().unwrap_or(0)
-    }
-}
-
 pub fn accumulate(dst: &mut BkeyI, src: &BkeyI) {
     let s = &src.arm::<Accounting>().expect("an accounting key").v().d;
     for (d, s) in dst.arm::<Accounting>().expect("an accounting key").v_mut().d.iter_mut().zip(s) {
