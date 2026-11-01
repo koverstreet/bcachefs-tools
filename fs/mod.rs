@@ -570,6 +570,35 @@ impl DataType {
     pub fn bit(self) -> u64 {
         1u64 << self.0
     }
+
+    /// Free/empty data types — not counted as "used" space.
+    pub fn is_empty(self) -> bool {
+        self == DataType::free
+            || self == DataType::need_gc_gens
+            || self == DataType::need_discard
+    }
+
+    /// Internal/hidden data types — not user-visible (superblock, journal).
+    pub fn is_hidden(self) -> bool {
+        self == DataType::sb || self == DataType::journal
+    }
+
+    /// What a bucket holding it is: cached and stripe data are in user buckets.
+    pub fn bucket_type(self) -> DataType {
+        if self == DataType::cached || self == DataType::stripe { DataType::user } else { self }
+    }
+
+    /// Whether a bucket of this type can't hold a pointer of type @ptr.
+    pub fn mismatches(self, ptr: DataType) -> bool {
+        !self.is_empty() &&
+            self != DataType::multiple &&
+            self.bucket_type() != ptr.bucket_type()
+    }
+
+    /// Whether copygc moves data of this type.
+    pub fn is_movable(self) -> bool {
+        c::DATA_TYPES_MOVABLE & (1 << self.0) != 0
+    }
 }
 
 impl c::disk_accounting_type {

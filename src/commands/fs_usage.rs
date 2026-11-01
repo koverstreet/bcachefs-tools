@@ -5,8 +5,7 @@ use clap::Parser;
 
 use crate::commands::DeviceNameArgs;
 use crate::wrappers::accounting::{
-    AccountingEntry, compression_type_from_u8, data_type_from_u8, data_type_is_empty,
-    disk_accounting_type, reconcile_type_from_u8,
+    AccountingEntry, compression_type_from_u8, data_type_from_u8, disk_accounting_type, reconcile_type_from_u8,
 };
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
 use bcachefs_kernel::format::DataType;
@@ -644,7 +643,7 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
                 dt_type.to_text(sub);
                 write!(sub, ":\t");
 
-                let sectors = if data_type_is_empty(dt_type) {
+                let sectors = if dt_type.is_empty() {
                     dt.buckets * u.bucket_size as u64
                 } else {
                     dt.sectors

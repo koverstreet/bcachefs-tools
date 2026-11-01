@@ -21,7 +21,7 @@
 //! Before calling a key missing, a pass flushes the write buffer and looks
 //! again - see backpointers.rs.
 
-use crate::accounting::bucket_data_type;
+
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_del, backpointers_match, backpointers_maybe_flush,
                                  bucket_backpointer_mod, extent_ptr_to_bp, get_key, BackpointerPos,
@@ -687,7 +687,7 @@ fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, bucket: u
     }
 
     let bp_range = BackpointerPos::bucket_range(ca, bucket);
-    let mut data_type = None;
+    let mut data_type: Option<DataType> = None;
     let mut mixed = false;
     let mut iter = BtreeIter::new(t, Btree::backpointers, *bp_range.start(), BtreeIterFlags::empty());
     iter.for_each_max_norestart(t, *bp_range.end(), |_, bp_k| {
@@ -697,7 +697,7 @@ fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, bucket: u
         }
 
         let bp_type = DataType(bp.v().data_type.into());
-        mixed = data_type.is_some_and(|d| bucket_data_type(d) != bucket_data_type(bp_type));
+        mixed = data_type.is_some_and(|d| d.bucket_type() != bp_type.bucket_type());
         data_type.get_or_insert(bp_type);
         Ok(if mixed { ControlFlow::Break(()) } else { ControlFlow::Continue(()) })
     })?;

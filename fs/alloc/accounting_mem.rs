@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::accounting::{self, accounting_bkey, data_type_from_u8, data_type_is_hidden, is_mem, key_to_text,
+use crate::accounting::{self, accounting_bkey, data_type_from_u8, is_mem, key_to_text,
                         replicas_entry, Accounting, CounterSet, Counters, DiskAccountingPos, MAX_COUNTERS};
 use crate::alloc::buckets::bch_fs_usage_base;
 use crate::alloc::replicas::{can_read_with_devs, try_replicas_acct};
@@ -776,7 +776,7 @@ pub(crate) fn usage_of<R>(fs: &Fs, pos: &DiskAccountingPos<Unvalidated>, d: &[u6
         Ok(A::dev_data_type(r)) => {
             let rcu = rcu::read_lock();
             if let (Some(ca), Some(t)) = (fs.dev_rcu(r.dev.into(), &rcu), r.known_data_type()) {
-                if data_type_is_hidden(t) {
+                if t.is_hidden() {
                     let buckets = accounting::DevDataTypeCounters::from_slice(d).buckets;
                     usage.hidden = buckets.wrapping_mul(ca.mi.get().bucket_size.into());
                 }

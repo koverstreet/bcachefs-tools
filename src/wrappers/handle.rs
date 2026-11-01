@@ -570,9 +570,8 @@ impl DevUsage {
 
     /// Hidden sectors (superblock + journal) — subtracted from capacity for percentage display.
     pub fn hidden_sectors(&self) -> u64 {
-        use super::accounting::data_type_is_hidden;
         self.iter_typed()
-            .filter(|(t, _)| data_type_is_hidden(*t))
+            .filter(|(t, _)| t.is_hidden())
             .map(|(_, dt)| dt.sectors)
             .sum()
     }
@@ -589,9 +588,8 @@ impl DevUsage {
     /// Not unstriped either: those are stripe buckets that also hold data
     /// outside the stripe, counted again - they're already in stripe's.
     pub fn used_buckets(&self) -> u64 {
-        use super::accounting::{data_type_is_empty, data_type_is_hidden};
         self.iter_typed()
-            .filter(|(t, _)| !data_type_is_empty(*t) && !data_type_is_hidden(*t) &&
+            .filter(|(t, _)| !t.is_empty() && !t.is_hidden() &&
                              *t != DataType::unstriped)
             .map(|(_, dt)| dt.buckets)
             .sum()

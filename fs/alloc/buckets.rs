@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::accounting::{self, bucket_data_type_mismatch, data_type_from_u8, mod_dev_cached_sectors};
+use crate::accounting::{self, data_type_from_u8, mod_dev_cached_sectors};
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
 use crate::alloc::replicas::{bkey_replicas_acct, entry_acct, replicas_acct};
 use crate::btree::bkey::prelude::*;
@@ -377,7 +377,7 @@ impl TransAttempt<'_, '_> {
         // as C's: a negative @sectors past the count wraps, and is past U32_MAX
         let new = u64::from(*bucket_sectors).wrapping_add(sectors as u64);
         if b_gen != ptr.generation() ||
-           bucket_data_type_mismatch(data_type_from_u8(*bucket_data_type), ptr_data_type) ||
+           data_type_from_u8(*bucket_data_type).mismatches(ptr_data_type) ||
            new > u64::from(u32::MAX) {
             return self.bucket_ref_update_slowpath(ca, k, ptr, sectors, ptr_data_type, b_gen,
                                                    bucket_data_type, bucket_sectors);
@@ -433,7 +433,7 @@ impl TransAttempt<'_, '_> {
                 type_str(*bucket_data_type)));
         }
 
-        if bucket_data_type_mismatch(data_type_from_u8(*bucket_data_type), ptr_data_type) {
+        if data_type_from_u8(*bucket_data_type).mismatches(ptr_data_type) {
             self.bucket_ref_update_err(k, false, id::ptr_bucket_data_type_mismatch, message!(
                 "bucket {dev}:{b} gen {b_gen} different types of data in same bucket: {}, {}",
                 data_type_str(data_type_from_u8(*bucket_data_type)), data_type_str(ptr_data_type)))?;

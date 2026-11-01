@@ -22,7 +22,7 @@
 //! the write it decides on there's the fsck question, so the two are atomic
 //! only because gc's walk is single threaded today.
 
-use crate::accounting::{bucket_data_type_mismatch, data_type_from_u8};
+use crate::accounting::data_type_from_u8;
 use crate::alloc::buckets::gen_cmp;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN};
@@ -305,7 +305,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
     }
 
     let bucket_type = data_type_from_u8(g.lock.lock().data_type());
-    if fsck_err_on!(t, bucket_data_type_mismatch(bucket_type, data_type), id::ptr_bucket_data_type_mismatch,
+    if fsck_err_on!(t, bucket_type.mismatches(data_type), id::ptr_bucket_data_type_mismatch,
                     "bucket {dev}:{b} gen {generation} different types of data in same bucket: {}, {}\n\
                      while marking {marking}", data_type_str(bucket_type), data_type_str(data_type))? {
         if bucket_type == DataType::journal {

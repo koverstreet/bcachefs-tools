@@ -20,7 +20,7 @@ use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_ma
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::device_scan::OpenedFs;
 use crate::util::{fmt_bytes_human, fmt_duration_human, fmt_sectors_human, parse_human_size};
-use crate::wrappers::accounting::{data_type_is_empty, data_type_is_hidden};
+
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs::{self, bcachefs_kernel_version};
 
@@ -590,7 +590,7 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
             .context("querying device usage")?;
 
         let data_sectors: u64 = usage.iter_typed()
-            .filter(|(t, _)| !data_type_is_empty(*t) && !data_type_is_hidden(*t))
+            .filter(|(t, _)| !t.is_empty() && !t.is_hidden())
             .map(|(_, dt)| dt.sectors)
             .sum();
 

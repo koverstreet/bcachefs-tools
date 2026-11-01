@@ -30,7 +30,7 @@
 //! bch_fs_capacity is made by its Init and freed by its drop: its locks, and
 //! the per-cpu counters, whose online reservations must all be put by then.
 
-use crate::accounting::data_type_movable;
+
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
 use crate::c::bch_errcode;
@@ -364,7 +364,7 @@ impl DevPlaceable {
         let reclaimable = buckets(DataType::free) + buckets(DataType::cached) +
             buckets(DataType::need_gc_gens) + buckets(DataType::need_discard);
         let fragmented: u64 = f.d.iter().enumerate()
-            .filter(|&(t, _)| data_type_movable(DataType(t as u32)))
+            .filter(|&(t, _)| DataType(t as u32).is_movable())
             .map(|(_, u)| u.fragmented)
             .sum();
 

@@ -33,7 +33,7 @@
 //! repaired is rewritten without the device, so the scan goes again until
 //! it's met none.
 
-use crate::accounting::{self, data_type_is_empty, data_type_is_hidden};
+use crate::accounting;
 use crate::alloc::backpointers::{backpointer_get_key, backpointer_get_node, BpScanIter};
 use crate::alloc::buckets::bucket_to_u64;
 use crate::alloc::capacity::DiskReservation;
@@ -339,7 +339,7 @@ fn dev_data_buckets(ca: &c::bch_dev) -> u64 {
     ca.usage_read_fast().buckets.iter().enumerate()
         .filter(|&(i, _)| {
             let t = DataType(i as u32);
-            !data_type_is_empty(t) && !data_type_is_hidden(t)
+            !t.is_empty() && !t.is_hidden()
         })
         .map(|(_, &nr)| nr)
         .sum()

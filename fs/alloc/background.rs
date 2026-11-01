@@ -472,7 +472,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::accounting::{bucket_data_type, data_type_from_u8, data_type_is_empty, data_type_movable};
+use crate::accounting::data_type_from_u8;
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::accounting;
 use crate::alloc::check::need_discard_or_freespace_err;
@@ -902,7 +902,7 @@ impl c::AllocV4 {
 
         i64::from(if d != 0 {
             (bucket_size - d).max(0)
-        } else if !data_type_is_empty(self.data_type()) {
+        } else if !self.data_type().is_empty() {
             bucket_size
         } else {
             0
@@ -924,7 +924,7 @@ impl c::AllocV4 {
     /// alloc_lru_idx_fragmentation().
     pub fn lru_idx_fragmentation(&self, ca: &c::bch_dev) -> u64 {
         if self.data_type >= c::BCH_DATA_NR as u8 ||
-           !data_type_movable(self.data_type()) ||
+           !self.data_type().is_movable() ||
            self.sectors_fragmented(ca) == 0 {
             return 0;
         }
@@ -960,7 +960,7 @@ impl c::AllocV4 {
         } else if self.stripe_refcount != 0 {
             if t == DataType::parity { t } else { DataType::stripe }
         } else if self.sectors_dirty() != 0 {
-            bucket_data_type(t)
+            t.bucket_type()
         } else if self.cached_sectors != 0 {
             DataType::cached
         } else if t == DataType::need_discard {
@@ -1276,7 +1276,7 @@ fn changed(f: impl Fn(&c::AllocV4) -> bool, old: &c::AllocV4, new: &c::AllocV4) 
 }
 
 fn nonempty(a: &c::AllocV4) -> bool {
-    !data_type_is_empty(a.data_type())
+    !a.data_type().is_empty()
 }
 
 fn is(t: DataType) -> impl Fn(&c::AllocV4) -> bool {
@@ -1527,7 +1527,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
         }
 
         if ceased(is(DataType::need_discard), &old_a, new_a) {
-            if data_type_is_empty(new_a.data_type()) {
+            if new_a.data_type().is_empty() {
                 crate::warn_on!(!in_fsck && !flags.contains(F::IS_DISCARD));
             } else {
                 crate::warn_on!(!in_fsck && !fs.bucket_is_open_safe(dev, b));
@@ -1555,7 +1555,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
             }
         }
 
-        if data_type_is_empty(new_a.data_type()) && new_a.need_inc_gen() && !fs.bucket_is_open_safe(dev, b) {
+        if new_a.data_type().is_empty() && new_a.need_inc_gen() && !fs.bucket_is_open_safe(dev, b) {
             if new_a.oldest_gen == new_a.generation && new_a.sectors_total() == 0 {
                 new_a.oldest_gen = new_a.oldest_gen.wrapping_add(1);
             }

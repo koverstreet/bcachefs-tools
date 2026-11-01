@@ -290,7 +290,7 @@ pub(crate) fn dev_wait_amount(ca: &c::bch_dev, mark: &impl MarkHeld) -> (i64, bo
     let fragmented_allowed = (ca.free_buckets_at(&usage, watermark).wrapping_add(ca.buckets_reserved(watermark))
         .wrapping_mul(bucket_size).wrapping_add(leaving as u64) >> 1) as i64;
     let fragmented = usage_full.d.iter().enumerate()
-        .filter(|&(i, _)| accounting::data_type_movable(DataType(i as u32)))
+        .filter(|&(i, _)| DataType(i as u32).is_movable())
         .fold(0u64, |f, (_, d)| f.wrapping_add(d.fragmented)) as i64;
 
     (fragmented_allowed.wrapping_sub(fragmented), low_on_space)

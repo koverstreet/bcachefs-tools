@@ -501,35 +501,6 @@ pub fn accumulate(dst: &mut BkeyI, src: &BkeyI) {
     }
 }
 
-/// Free/empty data types — not counted as "used" space.
-pub fn data_type_is_empty(t: DataType) -> bool {
-    t == DataType::free
-        || t == DataType::need_gc_gens
-        || t == DataType::need_discard
-}
-
-/// Internal/hidden data types — not user-visible (superblock, journal).
-pub fn data_type_is_hidden(t: DataType) -> bool {
-    t == DataType::sb || t == DataType::journal
-}
-
-/// What a bucket holding @t is: cached and stripe data are in user buckets.
-pub fn bucket_data_type(t: DataType) -> DataType {
-    if t == DataType::cached || t == DataType::stripe { DataType::user } else { t }
-}
-
-/// Whether a bucket of type @bucket can't hold a pointer of type @ptr.
-pub fn bucket_data_type_mismatch(bucket: DataType, ptr: DataType) -> bool {
-    !data_type_is_empty(bucket) &&
-        bucket != DataType::multiple &&
-        bucket_data_type(bucket) != bucket_data_type(ptr)
-}
-
-/// Whether copygc moves data of type @t.
-pub fn data_type_movable(t: DataType) -> bool {
-    c::DATA_TYPES_MOVABLE & (1 << t.0) != 0
-}
-
 impl Fs {
     /// Device @ca's usage accounting, deleted: as it's removed.
     pub fn dev_usage_remove(&self, ca: &c::bch_dev) -> Result<(), BchError> {
