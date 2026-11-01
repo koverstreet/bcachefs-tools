@@ -480,7 +480,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
     /* if we did any repair, flush it immediately */
     if immediate_flush {
         fs.journal_flush_outstanding_pins();
-        let _ = fs.journal_meta();
+        fs.journal_meta()?;
     }
 
     if !jk.keys().is_empty() {
