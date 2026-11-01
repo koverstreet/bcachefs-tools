@@ -9,7 +9,7 @@ use crate::util::sleep::Sleep;
 
 /// A count and its value, as an Arc's, but not owning its memory: it starts
 /// at one, the owner's ref, and the owner frees it after wait(). For slow
-/// paths: EnumeratedRef is the percpu one.
+/// paths: PercpuRef and EnumeratedRef are percpu.
 ///
 /// wait() sleeps on the count itself: the write that drops it to STOPPED is
 /// the last a put makes, and the wake after it only hashes the address - so

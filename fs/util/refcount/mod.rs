@@ -52,9 +52,11 @@ use core::ops::Deref;
 use core::ptr::NonNull;
 
 mod atomic;
+mod percpu;
 mod placed;
 
 pub use atomic::AtomicRef;
+pub use percpu::PercpuRef;
 
 /// # Safety
 /// inc() takes a ref that's held until dec() gives it back - and while one
