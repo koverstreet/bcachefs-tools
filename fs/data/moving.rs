@@ -170,7 +170,7 @@ unsafe impl Send for MovingIo {}
 // SAFETY: evacuate_bucket()'s callers keep a bucket in flight until its count
 // is back to zero - copygc's InFlight, until done()
 unsafe impl Refcount for c::move_bucket {
-    fn inc(&self) {
+    unsafe fn inc(&self) {
         self.count.fetch_add(1, Relaxed);
     }
 
@@ -323,7 +323,7 @@ impl<'a> Moving<'a> {
         let (s, ios) = io_counts(self.io(), write);
         s.fetch_add(sectors as i32, Relaxed);
         ios.fetch_add(1, Relaxed);
-        MovingIo { ctxt: NonNull::from(&self.0), write, sectors, _cl: self.0.cl.get() }
+        MovingIo { ctxt: NonNull::from(&self.0), write, sectors, _cl: unsafe { ClosureRef::get(&self.0.cl) } }
     }
 
     pub fn trans(&self) -> &BtreeTrans<'a> {

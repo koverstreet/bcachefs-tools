@@ -26,7 +26,7 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::update::{read_err_benign, IOPRIO_IDLE};
 use crate::errcode::BchError;
 use crate::data::update_task::{Body, Update, UpdateTask};
-use crate::util::refcount::{RefGuard, Refcount};
+use crate::util::refcount::RefGuard;
 use crate::util::alloc::gfp_flags;
 use crate::util::task::{Resume, Spawn};
 use core::ffi::{c_int, c_uint};
@@ -160,7 +160,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
 
     let size = BkeySC::from(u.k.key()).k.size;
     let read_io = moving.io_start(false, size);
-    let bucket = bucket_in_flight.map(Refcount::get);
+    let bucket = bucket_in_flight.map(|b| unsafe { RefGuard::get(b) });
 
     u.start(|b| run(b, read_io, bucket));
 

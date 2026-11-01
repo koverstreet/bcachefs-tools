@@ -71,7 +71,7 @@ use crate::util::log::{print_str, LogLevel};
 use crate::util::place::Placed;
 use crate::util::projections::Volatile;
 use crate::util::rcu::read_lock;
-use crate::util::refcount::{RefGuard, Refcount};
+use crate::util::refcount::{RefBorrow, RefGuard, Refcount};
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::convert::Infallible;
@@ -282,7 +282,7 @@ unsafe impl Sync for OpenBucketRef {}
 // SAFETY: an OpenBucketRef is had only while it's held open - by a pin, or
 // its ->ec - so inc() is from a pin that's held; the last put closes it
 unsafe impl Refcount for OpenBucketRef {
-    fn inc(&self) {
+    unsafe fn inc(&self) {
         self.pin.fetch_add(1, Relaxed);
     }
 
@@ -356,10 +356,10 @@ impl Drop for EcOpenBucket {
 
 impl c::open_buckets {
     /// Its buckets, borrowed: the list's pins keep them open while it is.
-    pub fn iter<'a>(&'a self, fs: &'a Fs) -> impl Iterator<Item = &'a OpenBucketRef> + 'a {
+    pub fn iter<'a>(&'a self, fs: &'a Fs) -> impl Iterator<Item = RefBorrow<'a, OpenBucketRef>> + 'a {
         self.v[..usize::from(self.nr)].iter().map(move |&i| {
             // SAFETY: the list's pin, held while the list's borrowed
-            unsafe { OpenBucketRef::from_idx(fs, i.expect("a bucket of the list")) }
+            unsafe { RefBorrow::new(OpenBucketRef::from_idx(fs, i.expect("a bucket of the list"))) }
         })
     }
 
@@ -1323,7 +1323,7 @@ pub unsafe fn __bch2_open_bucket_put(c: &Opaque<c::bch_fs>, ob: &c::open_bucket)
 #[c_export]
 pub fn bch2_open_bucket_write_error(c: &Opaque<c::bch_fs>, obs: &c::open_buckets, dev: c_uint, err: c_int) {
     let Err(err) = ret_to_result_void(err) else { panic!("a write error without an error") };
-    obs.iter(Fs::from_c(c)).filter(|ob| u32::from(ob.id().dev()) == dev).filter_map(|ob| ob.stripe()).for_each(|s| s.err.set(err));
+    obs.iter(Fs::from_c(c)).filter(|ob| u32::from(ob.id().dev()) == dev).filter_map(|ob| ob.into_ref().stripe()).for_each(|s| s.err.set(err));
 }
 
 /// # Safety

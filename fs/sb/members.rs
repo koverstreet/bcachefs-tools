@@ -20,6 +20,8 @@ use crate::util::ffi::{c_char, Opaque};
 use crate::util::strided::{Strided, StridedMut};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, plain_bytes, Head, Unsized, Unvalidated, Validated};
 use core::ffi::{c_int, c_uint, c_ulong, CStr};
+use core::marker::PhantomData;
+use core::ops::Deref;
 use core::sync::atomic::Ordering;
 use cstruct_macros::{c_export, CStruct, Plain, TypeInfo};
 use super::io::*;
@@ -1206,7 +1208,7 @@ impl Fs {
     /// past the section, and the guard hands it out only while it's held.
     fn io_ref_tryget<R: IoRefIdx>(&self, ca: &c::bch_dev) -> Option<DevIoRef<R>> {
         // SAFETY: as above
-        DevIoRef::tryget_live(unsafe { &*core::ptr::from_ref(ca) })
+        DevIoRef::tryget_live(unsafe { &*core::ptr::from_ref(ca).cast::<DevIo<R>>() })
     }
 
     /// What @f makes of each device it doesn't skip: each step its own RCU
@@ -1452,8 +1454,7 @@ impl Drop for DevOuterRef {
 }
 
 /// Which of a device's io refs: bch_dev_read_ref for io_ref[READ],
-/// bch_dev_write_ref for io_ref[WRITE] - the kind enum names the count, as
-/// its Refcount's K.
+/// bch_dev_write_ref for io_ref[WRITE].
 pub trait IoRefIdx: 'static {
     const RW: usize;
 }
@@ -1466,10 +1467,22 @@ impl IoRefIdx for c::bch_dev_write_ref {
     const RW: usize = WRITE;
 }
 
+/// A device, counted by its io refs for R: io_ref[R::RW].
+#[repr(transparent)]
+pub struct DevIo<R>(c::bch_dev, PhantomData<R>);
+
+impl<R> Deref for DevIo<R> {
+    type Target = c::bch_dev;
+
+    fn deref(&self) -> &c::bch_dev {
+        &self.0
+    }
+}
+
 // SAFETY: io_ref[R::RW]'s
-unsafe impl<R: IoRefIdx> Refcount<R> for c::bch_dev {
-    fn inc(&self) {
-        self.io_ref[R::RW].inc()
+unsafe impl<R: IoRefIdx> Refcount for DevIo<R> {
+    unsafe fn inc(&self) {
+        unsafe { self.io_ref[R::RW].inc() }
     }
 
     unsafe fn dec(&self) {
@@ -1478,7 +1491,7 @@ unsafe impl<R: IoRefIdx> Refcount<R> for c::bch_dev {
 }
 
 // SAFETY: io_ref[R::RW]'s
-unsafe impl<R: IoRefIdx> TryRefcount<R> for c::bch_dev {
+unsafe impl<R: IoRefIdx> TryRefcount for DevIo<R> {
     fn try_inc(&self) -> bool {
         self.io_ref[R::RW].try_inc()
     }
@@ -1490,7 +1503,7 @@ unsafe impl<R: IoRefIdx> TryRefcount<R> for c::bch_dev {
 
 /// An io ref on a device - for reading or writing, as R is: its block
 /// device is open while it's held.
-pub type DevIoRef<R> = RefGuard<c::bch_dev, R>;
+pub type DevIoRef<R> = RefGuard<DevIo<R>>;
 
 // SAFETY: a device is every thread's that does IO to it, as its filesystem
 // is: its state behind its own locks, atomics and RCU - so a &bch_dev goes to

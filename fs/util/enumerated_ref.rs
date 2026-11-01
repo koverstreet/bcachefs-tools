@@ -125,7 +125,7 @@ impl EnumeratedRef {
 // every ref: the filesystem going read-only for c->writes, a device going
 // offline for its io refs - bch2_dev_free() warns if one's still held
 unsafe impl Refcount for EnumeratedRef {
-    fn inc(&self) {
+    unsafe fn inc(&self) {
         unsafe { c::rust_enumerated_ref_get(self.r.get()) }
     }
 

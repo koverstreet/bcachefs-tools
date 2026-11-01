@@ -24,7 +24,7 @@ use crate::sb::members::DevIoRef;
 use crate::util::alloc::KBox;
 use crate::util::backref::BackRef;
 use crate::util::rcu::read_lock;
-use crate::util::refcount::Refcount;
+use crate::util::refcount::RefGuard;
 use crate::util::task::{waiter, Resume};
 use crate::util::vstructs::Validated;
 use crate::{bch_err, btree_trans, fs_inconsistent, inode_opts, logged_ops, prt};
@@ -61,7 +61,7 @@ pub(crate) async fn stripe_task(fs: &Fs, p: BackRef<StripeNew>) {
     // they're stopped too - bch2_open_buckets_stop(), in
     // __bch2_fs_read_only(), puts the last buckets of full stripes after
     // c->writes is drained.
-    let _w = fs.writes.get();
+    let _w = unsafe { RefGuard::get(&fs.writes) };
 
     let ret = create(fs, s, w, fold, at).await;
     create_done(fs, s, ret);

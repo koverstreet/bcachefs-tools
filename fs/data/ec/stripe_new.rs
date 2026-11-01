@@ -444,7 +444,7 @@ impl StripeNew {
             new_stripe_key(fs, &mut s.new_stripe, algorithm as u8, nr_data as u8, nr_parity as u8,
                            blocksize as u16, disk_label as u8);
             s.task = Some(b.task());
-            s.maker = Some(IoRef::get(&b));
+            s.maker = Some(unsafe { IoRef::get(&b) });
         }
 
         b.in_flight_ref.set(b.in_flight.get());
@@ -502,17 +502,14 @@ impl StripeNew {
     }
 }
 
-/// A stripe being made's io refs: see the file comment.
-pub(crate) enum IoRefs {}
-
 /// An io ref on a stripe being made.
-pub(crate) type IoRef = RefGuard<StripeNew, IoRefs>;
+pub(crate) type IoRef = RefGuard<StripeNew>;
 
 // SAFETY: @io_refs counts them. The last dec() puts the io refs' ref on
 // @in_flight, the last touch: the task may free the stripe after it - while
 // dec()'s &self is still on the stack, as Gather::put()'s is.
-unsafe impl Refcount<IoRefs> for StripeNew {
-    fn inc(&self) {
+unsafe impl Refcount for StripeNew {
+    unsafe fn inc(&self) {
         self.io_refs.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -559,6 +556,10 @@ impl Internal {
 
     pub(crate) fn nr_data(&self) -> u32 {
         self.new_stripe.stripe().v().nr_data()
+    }
+
+    pub(crate) fn io_ref(&self) -> IoRef {
+        self.maker.as_ref().expect("an open stripe has its maker's io ref").borrow().get()
     }
 
     /// Its blocks that have one: a bucket, or the old stripe's in place.
@@ -714,7 +715,7 @@ pub unsafe fn bch2_writepoint_ec_buf(c: &Opaque<c::bch_fs>, wp: &c::write_point)
     // SAFETY: the caller's
     let wp = unsafe { wp.alloc.lock.held() };
     // the write point's pins, which its lock keeps
-    let Some((ob, s)) = wp.ptrs.iter(fs).find_map(|ob| Some((ob, ob.stripe()?))) else {
+    let Some((ob, s)) = wp.ptrs.iter(fs).find_map(|ob| Some((ob, ob.into_ref().stripe()?))) else {
         return core::ptr::null_mut()
     };
 

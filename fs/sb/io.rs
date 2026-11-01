@@ -2240,7 +2240,7 @@ impl SbResize for DevSbResize<'_> {
 impl Fs {
     /// @devs' superblocks, to edit together - as dev_sb_mut() gives each, and
     /// None for one with none, not attached. Panics if one's twice in @devs.
-    pub fn dev_sbs_mut<'a, D: core::ops::Deref<Target = c::bch_dev>>(&self, sb: &'a mut SbLockGuard<'_>, devs: &'a [D])
+    pub fn dev_sbs_mut<'a, R: members::IoRefIdx>(&self, sb: &'a mut SbLockGuard<'_>, devs: &'a [members::DevIoRef<R>])
         -> impl Iterator<Item = Option<DevSbMut<'a>>>
     {
         let sb: &'a SbLockGuard<'_> = sb;

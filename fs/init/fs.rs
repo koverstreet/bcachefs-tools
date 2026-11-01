@@ -806,7 +806,7 @@ impl Fs {
             #[cfg(kernel)]
             self.chardev_exit();
 
-            unsafe { <Fs as Refcount<RoRefs>>::dec(self) };
+            unsafe { <Fs as Refcount>::dec(self) };
             let Ok(()) = self.ro_ref_events.wait_until(Sleep::UNINTERRUPTIBLE, || {
                 (self.ro_ref.load(Acquire) == 0).then_some(())
             });
@@ -1217,12 +1217,10 @@ macro_rules! fs_delayed_work {
 }
 
 /// c->ro_ref: Fs::stop() waits for them, and tryget fails once it's stopping
-pub enum RoRefs {}
+pub type RoRef = RefGuard<Fs>;
 
-pub type RoRef = RefGuard<Fs, RoRefs>;
-
-unsafe impl Refcount<RoRefs> for Fs {
-    fn inc(&self) {
+unsafe impl Refcount for Fs {
+    unsafe fn inc(&self) {
         self.ro_ref.fetch_add(1, Relaxed);
     }
 
@@ -1233,7 +1231,7 @@ unsafe impl Refcount<RoRefs> for Fs {
     }
 }
 
-unsafe impl TryRefcount<RoRefs> for Fs {
+unsafe impl TryRefcount for Fs {
     fn try_inc(&self) -> bool {
         !self.flags.get(c::bch_fs_flags::BCH_FS_stopping) &&
             self.ro_ref.fetch_update(Relaxed, Relaxed, |r| (r != 0).then_some(r + 1)).is_ok()

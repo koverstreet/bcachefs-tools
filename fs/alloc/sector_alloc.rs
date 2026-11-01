@@ -26,7 +26,6 @@
 //! and use foreground.h's own append_ptrs and done, until they convert.
 
 use crate::alloc::disk_groups::Target;
-use crate::alloc::foreground::OpenBucket;
 use crate::alloc::write_point::{WritePointGuard, WritePointSpec};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeyI, BkeyS};
@@ -363,7 +362,7 @@ impl LockedWritePoint<'_> {
     pub fn open_buckets_get(&self, ptrs: &mut c::open_buckets) {
         for ob in self.guard().ptrs.iter(self.fs) {
             ob.data_type.set(self.wp.alloc.data_type.0 as u8);
-            ptrs.push(OpenBucket::get(ob));
+            ptrs.push(ob.get());
         }
     }
 
