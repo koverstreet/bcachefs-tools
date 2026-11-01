@@ -10,6 +10,7 @@ use crate::cstructs::c as cs;
 use crate::errcode::bch_errcode;
 use crate::errcode::BchError;
 use crate::locking::Locked;
+use crate::util::alloc::{flags::GFP_KERNEL, DArrayLoan};
 use crate::util::bio::{BioSet, Either};
 use crate::util::late::Late;
 use crate::util::Printbuf;
@@ -312,6 +313,16 @@ impl BtreeRoots {
         let idx = (id - nr_known) as usize;
         // SAFETY: as get()'s
         (idx < self.roots_extra.nr).then(|| unsafe { &mut *self.roots_extra.data.add(idx) })
+    }
+
+    /// Slots up to btree @id's, empty: for a btree past the known ones that
+    /// the journal has a root for.
+    pub fn grow_to(&mut self, id: u32) -> Result<(), BchError> {
+        let mut extra = unsafe { DArrayLoan::new(&mut self.roots_extra) };
+        while id >= extra.len() as u32 + u32::from(Btree::nr) {
+            extra.push(cs::btree_root::default(), GFP_KERNEL)?;
+        }
+        Ok(())
     }
 }
 
