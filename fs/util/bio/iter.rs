@@ -85,7 +85,7 @@ unsafe fn chunk_at(page: NonNull<c::page>, offset: u32, len: u32) -> (At, u32) {
 
 impl BioRange<'_> {
     fn walkable(&self) -> bool {
-        !self.is_empty() && !self.bio.no_advance_iter()
+        !self.is_empty() && !self.bio().no_advance_iter()
     }
 
     /// Where it starts - the page, and where in it - and how much of that

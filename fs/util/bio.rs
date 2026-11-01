@@ -48,7 +48,9 @@ use crate::util::gather::GatherRef;
 use crate::util::task::Resumable;
 use crate::util::{Printbuf, ToText};
 use crate::util::volatile::VolatileSlice;
-use cstruct_macros::c_extern;
+use crate::util::place::Placed;
+use cstruct_macros::{c_extern, placed, Init};
+use pin_init::pin_data;
 
 mod iter;
 mod owned;
@@ -91,15 +93,29 @@ pub fn buf_nr_bvecs(p: *const u8, len: usize) -> usize {
     1
 }
 
-#[repr(transparent)]
+#[pin_data]
+#[repr(C)]
+#[derive(Init)]
 pub struct Bio {
     bio:  c::bio,
-    _pin: PhantomPinned,
+    #[pin]
+    data: BioData,
+    #[pin]
+    _pin: PhantomData<PhantomPinned>,
 }
 
 // SAFETY: a bio is no thread's - submitted on one, completed on another. Not
 // Sync: two holders of a &Bio could write its data at once.
 unsafe impl Send for Bio {}
+
+/// Sync, as Bio isn't, for a BioRange to go to another thread: what a range
+/// reads of its bio, the op and the bvecs, doesn't change while they're
+/// mapped.
+#[placed(Bio.data)]
+#[pin_data]
+#[repr(C)]
+#[derive(Init)]
+pub struct BioData {}
 
 impl Bio {
     /// # Safety
@@ -127,7 +143,7 @@ impl Bio {
     }
 
     pub fn range(&self) -> BioRange<'_> {
-        BioRange { bio: self, iter: self.bio.bi_iter }
+        BioRange { data: &self.data, iter: self.bio.bi_iter }
     }
 
     /// Its data from @pos: a position saved from it, its bi_iter before the IO
@@ -140,7 +156,7 @@ impl Bio {
     // lifetime tying them together may make this safe, once bcachefs walks its
     // bios this way throughout.
     pub unsafe fn range_at(&self, pos: c::bvec_iter) -> BioRange<'_> {
-        BioRange { bio: self, iter: pos }
+        BioRange { data: &self.data, iter: pos }
     }
 
     /// It, then the bios chained after it by bi_next.
@@ -248,7 +264,7 @@ pub unsafe trait BioOwner {
         let size = (0..u32::from(bio.bio.bi_vcnt)).map(|i| unsafe { bio.bvec(i) }.bv_len).sum();
         // INVARIANT: from its first bvec, all of them
         BioRange {
-            bio,
+            data: &bio.data,
             iter: c::bvec_iter { bi_size: size, ..Default::default() },
         }
     }
@@ -377,13 +393,17 @@ impl<O: BioOwner, B> Drop for Mapped<'_, O, B> {
 /// after it.
 #[derive(Clone, Copy)]
 pub struct BioRange<'a> {
-    bio:  &'a Bio,
+    data: &'a BioData,
     iter: c::bvec_iter,
 }
 
 impl<'a> BioRange<'a> {
-    pub fn bio(&self) -> &'a Bio {
-        self.bio
+    fn bio(&self) -> &Bio {
+        self.data.container()
+    }
+
+    pub fn is_of(&self, bio: &Bio) -> bool {
+        core::ptr::eq(self.bio(), bio)
     }
 
     pub fn len(&self) -> u32 {
@@ -402,7 +422,7 @@ impl<'a> BioRange<'a> {
     /// Panics past its end.
     pub fn advance(&mut self, mut bytes: u32) {
         assert!(bytes <= self.len(), "advancing a bio range of {} bytes by {bytes}", self.len());
-        if self.bio.no_advance_iter() {
+        if self.bio().no_advance_iter() {
             self.iter.bi_sector += u64::from(bytes >> 9);
             self.iter.bi_size -= bytes;
             return;
@@ -514,7 +534,7 @@ impl<'a> BioRange<'a> {
     fn bvec(&self) -> c::bio_vec {
         debug_assert!(!self.is_empty());
         // SAFETY: the invariant - not empty, so its start is in a bvec
-        unsafe { self.bio.bvec(self.iter.bi_idx) }
+        unsafe { self.bio().bvec(self.iter.bi_idx) }
     }
 
     /// mp_bvec_iter_offset(): past the bvec's first page, if it spans pages
