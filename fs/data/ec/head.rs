@@ -333,9 +333,7 @@ pub fn bch2_stripes_read(_c: &Opaque<c::bch_fs>) -> c_int {
 
 /// At shutdown, free the heads: no stripe's blocks are still allocated - and
 /// with them, the last stripes being made.
-#[c_export]
-pub fn bch2_fs_ec_exit(c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
+pub fn ec_exit(fs: &Fs) {
     let heads = core::mem::take(&mut *fs.ec.stripe_heads.lock());
 
     for h in heads {

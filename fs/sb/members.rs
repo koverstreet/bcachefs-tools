@@ -343,14 +343,6 @@ pub trait SbMembersMut: SbResize {
 
 impl<T: SbResize + ?Sized> SbMembersMut for T {}
 
-#[c_export]
-pub fn bch2_sb_members_v2_init(c: &Opaque<c::bch_fs>) -> c_int {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    let mut sb = unsafe { fs.sb_lock_held() };
-    ret_to_c(fs.sb_resize(&mut sb).members_v2_init().ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ENOSPC_sb_members_v2)))
-}
-
 /// Member @i of members_v2, whole - as every one is, on an open filesystem.
 ///
 /// # Safety

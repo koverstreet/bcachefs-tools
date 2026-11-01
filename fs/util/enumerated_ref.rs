@@ -10,7 +10,9 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
+use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::refcount::{Refcount, TryRefcount};
+use core::ffi::{c_int, c_uint};
 use crate::util::Printbuf;
 use crate::types::c_default;
 use cstruct_macros::{c_extern, CStruct};
@@ -41,6 +43,9 @@ c_extern! {
     pub fn rust_enumerated_ref_is_zero(r: *mut c::enumerated_ref) -> bool;
     pub fn enumerated_ref_start(r: *mut c::enumerated_ref);
     pub fn enumerated_ref_stop_async(r: *mut c::enumerated_ref);
+    pub fn enumerated_ref_exit(r: *mut c::enumerated_ref);
+    pub fn enumerated_ref_init(r: *mut c::enumerated_ref, nr: c_uint,
+                               stop_fn: Option<unsafe extern "C" fn(*mut c::enumerated_ref)>) -> c_int;
     pub fn enumerated_ref_to_text(out: *mut c::printbuf, r: *mut c::enumerated_ref,
                                   names: *const *const crate::util::ffi::c_char);
 }
@@ -87,6 +92,22 @@ impl EnumeratedRef {
     /// put.
     pub fn stop_async(&self) {
         unsafe { enumerated_ref_stop_async(self.r.get()) }
+    }
+
+    /// @nr kinds of ref, @stop_fn called when the last is put after stopping.
+    ///
+    /// # Safety
+    /// Once, before anything takes a ref.
+    pub unsafe fn init(&self, nr: u32, stop_fn: unsafe extern "C" fn(*mut c::enumerated_ref))
+        -> Result<(), BchError>
+    {
+        ret_to_result_void(unsafe { enumerated_ref_init(self.r.get(), nr, Some(stop_fn)) })
+    }
+
+    /// # Safety
+    /// Nothing uses it after.
+    pub unsafe fn exit(&self) {
+        unsafe { enumerated_ref_exit(self.r.get()) }
     }
 
     /// The refs held, by kind - @names the kinds', NULL terminated.

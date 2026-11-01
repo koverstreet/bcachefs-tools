@@ -20,7 +20,7 @@ use crate::util::printbuf::{prt_bdevname, DateTime, Msg};
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::{Head, Validated};
 use crate::util::{Nsecs, Printbuf};
-use core::ffi::c_int;
+use core::ffi::{c_int, c_uint};
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_export, CStruct, bitfield, c_extern, c_typedef, TypeInfo};
 #[cfg(kernel)]
@@ -163,6 +163,11 @@ pub struct bch_devs_list {
 
 c_extern! {
     pub fn bch2_dev_io_ref_stop(ca: *mut c::bch_dev, rw: c_int);
+    pub fn bch2_dev_unlink(ca: *mut c::bch_dev);
+    pub fn bch2_dev_free(ca: *mut c::bch_dev);
+    pub fn bch2_dev_sysfs_online(c: *mut c::bch_fs, ca: *mut c::bch_dev) -> c_int;
+    pub fn bch2_dev_alloc(c: *mut c::bch_fs, dev_idx: c_uint) -> c_int;
+    pub fn bch2_dev_attach_bdev(c: *mut c::bch_fs, sb: *mut c::bch_sb_handle, err: *mut c::printbuf) -> c_int;
     pub fn bch2_dev_add(c: *mut c::bch_fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
     pub fn bch2_dev_add_initialize(c: *mut c::bch_fs, ca: *mut c::bch_dev) -> c_int;
     pub fn bch2_dev_resize(c: *mut c::bch_fs, ca: *mut c::bch_dev, nbuckets: u64,

@@ -25,6 +25,7 @@ pub struct btree_write_bio {
     pub wbio: c::bch_write_bio,
 }
 c_default!(btree_write_bio);
+crate::has_bio!(btree_write_bio, wbio.bio);
 
 c_enum! {
     #[closed]

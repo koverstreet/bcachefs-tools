@@ -19,6 +19,9 @@ use crate::format::Btree;
 
 c_extern! {
     pub fn bch2_fs_btree_init_rw(c: *mut c::bch_fs) -> c_int;
+    pub fn bch2_fs_btree_exit(c: *mut c::bch_fs);
+    pub fn bch2_fs_btree_init_early(c: *mut c::bch_fs);
+    pub fn bch2_fs_btree_init(c: *mut c::bch_fs) -> c_int;
     pub fn bch2_btree_id_str(btree: Btree) -> *const c_char;
     pub fn bch2_btree_id_to_text(out: *mut c::printbuf, btree: Btree);
     pub fn bch2_btree_id_level_to_text(out: *mut c::printbuf, btree: Btree, level: c_uint);

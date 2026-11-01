@@ -910,8 +910,6 @@ void bch2_evict_subvolume_inodes(struct bch_fs *c, snapshot_id_list *s)
 
 void bch2_fs_vfs_exit(struct bch_fs *c)
 {
-	bioset_exit(&c->vfs.dio_read_bioset);
-
 	if (c->vfs.inodes_by_inum_table.ht.tbl)
 		rhltable_destroy(&c->vfs.inodes_by_inum_table);
 	if (c->vfs.inodes_table.tbl)
@@ -926,11 +924,6 @@ int bch2_fs_vfs_init(struct bch_fs *c)
 
 	try(rhashtable_init(&c->vfs.inodes_table, &bch2_vfs_inodes_params));
 	try(rhltable_init(&c->vfs.inodes_by_inum_table, &bch2_vfs_inodes_by_inum_params));
-
-	if (bioset_init(&c->vfs.dio_read_bioset,
-			4, offsetof(struct dio_read, rbio.bio),
-			BIOSET_NEED_BVECS))
-		return bch_err_throw(c, ENOMEM_dio_read_bioset_init);
 
 	return 0;
 }

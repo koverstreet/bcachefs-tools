@@ -107,6 +107,7 @@ nest! {
     }
 }
 c_default!(bch_read_bio);
+crate::has_bio!(bch_read_bio, bio);
 
 impl c::bch_read_bio {
     pub fn bits(&self) -> c::bch_read_bio_bits {

@@ -11,25 +11,38 @@
 //! them apart by size: a bvec of exactly the element size goes back to the
 //! pool.
 
-use core::ffi::{c_int, c_uint};
+use core::ffi::{c_int, c_uint, c_void};
 use core::ptr::NonNull;
 
 use crate::c;
 use crate::fs::Fs;
 use crate::locking::Locked;
+use crate::errcode::BchError;
 use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::PAGE_SIZE;
+use crate::util::mempool::Mempool;
+use pin_init::PinInit;
 use cstruct_macros::c_export;
 
 use super::iter::page_address;
 
-/// The bounce pool's element size: read.h's BIO_BOUNCE_BUF_POOL_LEN.
+/// The bounce pool's element size
 const POOL_LEN: usize = PAGE_SIZE << c::PAGE_ALLOC_COSTLY_ORDER;
 
-// SAFETY: a zeroed mempool is a valid uninitialized one, as in C's
-// kvzalloc()'d bch_fs; bch2_fs_init() initializes it
-unsafe impl ::pin_init::Zeroable for Opaque<c::mempool_t> {}
+/// The bounce pool: enough elements for the largest btree node or extent.
+pub(crate) fn bounce_pool(opts: &c::bch_opts) -> impl PinInit<Mempool, BchError> {
+    let max = opts.btree_node_size.max(opts.encoded_extent_max);
+    Mempool::with(max as usize / POOL_LEN, bounce_alloc, bounce_free, POOL_LEN)
+}
+
+unsafe extern "C" fn bounce_alloc(gfp: c::gfp_t, _: *mut c_void) -> *mut c_void {
+    unsafe { c::rust_bio_pages_alloc(POOL_LEN, gfp) }
+}
+
+unsafe extern "C" fn bounce_free(p: *mut c_void, _: *mut c_void) {
+    unsafe { c::rust_bio_pages_free(p, POOL_LEN) }
+}
 
 /// Allocates pages into @bio up to @size bytes, each allocation a multiple of
 /// @bs. On AllocError, what was allocated stays on the bio. The bio must have
@@ -59,12 +72,9 @@ pub fn __bch2_bio_alloc_pages_pool(c: &Opaque<c::bch_fs>, bio: &mut c::bio, _bs:
     let _lock = Locked::from_c(&fs.bio_bounce_pages_lock).lock();
 
     while (bio.bi_iter.bi_size as usize) < size {
-        // SAFETY: the filesystem's pool; an element is POOL_LEN bytes, the
-        // bio's now
-        unsafe {
-            let p = c::mempool_alloc_noprof(fs.bio_bounce_bufs.as_ptr(), gfp);
-            c::bio_add_virt_nofail(bio, p, POOL_LEN as u32);
-        }
+        let p = fs.bio_bounce_bufs.alloc_raw(gfp);
+        // SAFETY: an element is POOL_LEN bytes, the bio's now
+        unsafe { c::bio_add_virt_nofail(bio, p.as_ptr().cast(), POOL_LEN as u32) };
     }
     bio.bi_iter.bi_size = bio.bi_iter.bi_size.min(size as u32);
 }
@@ -91,12 +101,11 @@ pub unsafe fn free_pages_pool(fs: &Fs, bio: &mut c::bio) {
         let bv = unsafe { *bio.bi_io_vec.add(i) };
         // SAFETY: the caller's: an allocation of bv_len, at its page's address
         unsafe {
-            let p = page_address(NonNull::new(bv.bv_page).expect("a bvec's page"))
-                .add(bv.bv_offset as usize).as_ptr().cast();
+            let p = page_address(NonNull::new(bv.bv_page).expect("a bvec's page")).add(bv.bv_offset as usize);
             if bv.bv_len as usize == POOL_LEN {
-                c::mempool_free(p, fs.bio_bounce_bufs.as_ptr());
+                fs.bio_bounce_bufs.free_raw(p);
             } else {
-                c::rust_bio_pages_free(p, bv.bv_len as usize);
+                c::rust_bio_pages_free(p.as_ptr().cast(), bv.bv_len as usize);
             }
         }
     }

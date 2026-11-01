@@ -41,6 +41,7 @@ nest! {
     }
 }
 c_default!(btree_read_bio);
+crate::has_bio!(btree_read_bio, bio);
 
 c_typedef! {
     pub type btree_node_scrub_report_fn = Option<unsafe extern "C" fn(priv_: *mut c_void,
@@ -50,6 +51,7 @@ c_typedef! {
 c_extern! {
     pub fn bch2_btree_node_scrub(trans: *mut c::btree_trans, btree: Btree, level: c_uint,
                                  k: c::bkey_s_c, dev: c_uint) -> c_int;
+    pub fn bch2_btree_flush_all_reads(c: *mut c::bch_fs) -> bool;
 }
 
 impl c::bset__head {

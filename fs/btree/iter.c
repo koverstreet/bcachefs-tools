@@ -4524,8 +4524,6 @@ void bch2_fs_btree_iter_exit(struct bch_fs *c)
 	}
 	/* Drain pending trans_rcu_free callbacks before the pool is gone. */
 	rcu_barrier();
-	mempool_exit(&c->btree.trans.malloc_pool);
-	mempool_exit(&c->btree.trans.pool);
 }
 
 void bch2_fs_btree_iter_init_early(struct bch_fs *c)
@@ -4550,8 +4548,6 @@ int bch2_fs_btree_iter_init(struct bch_fs *c)
 	if (!c->btree.trans.bufs)
 		return -ENOMEM;
 
-	try(mempool_init_kmalloc_pool(&c->btree.trans.pool, 1, sizeof(struct btree_trans)));
-	try(mempool_init_kmalloc_pool(&c->btree.trans.malloc_pool, 1, BTREE_TRANS_MEM_MAX));
 	try(init_srcu_struct(&c->btree.trans.barrier));
 
 	/*

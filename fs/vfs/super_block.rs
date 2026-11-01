@@ -185,7 +185,7 @@ impl SuperOps for Fs {
     }
 
     fn put_super(&self, _sb: &SuperBlock) {
-        unsafe { c::bch2_fs_stop(self.as_ptr()) };
+        let _ = self.stop();
     }
 
     /// bcachefs doesn't integrate intwrite freeze protection, but the

@@ -27,7 +27,6 @@ use crate::fs::Fs;
 use crate::locking::Locked;
 use crate::util::debugfs::{self, DebugFile, DebugOut};
 use crate::util::eytzinger::Eytzinger0;
-use crate::util::ffi::Opaque;
 use crate::util::place::Placed;
 use crate::util::{rcu, rhashtable, Printbuf};
 use crate::{btree_trans, prt, SPOS_MAX};
@@ -457,19 +456,16 @@ fn dentry_ptr(d: Option<NonNull<c::dentry>>) -> *mut c::dentry {
     d.map_or(core::ptr::null_mut(), NonNull::as_ptr)
 }
 
-#[c_export]
-pub fn bch2_fs_debug_exit(c: &Opaque<c::bch_fs>) {
-    if let Some(dir) = NonNull::new(Fs::from_c(c).fs_debug_dir) {
+pub fn debug_exit(fs: &Fs) {
+    if let Some(dir) = NonNull::new(fs.fs_debug_dir) {
         debugfs::remove_recursive(dir);
     }
 }
 
 /// bcachefs/<fs>/: named by the external UUID if the filesystem has ever had
 /// more than one device, by its one device otherwise.
-#[c_export]
-pub fn bch2_fs_debug_init(c: &Opaque<c::bch_fs>) {
+pub fn debug_init(fs: &Fs) {
     let Some(root) = NonNull::new(BCH_DEBUG.load(Ordering::Acquire)) else { return };
-    let fs = Fs::from_c(c);
 
     let mut name = Printbuf::new();
     if fs.sb.multi_device.get() {
@@ -483,7 +479,7 @@ pub fn bch2_fs_debug_init(c: &Opaque<c::bch_fs>) {
 
     let dir = debugfs::create_dir(name.as_c_str(), Some(root));
     // SAFETY: filesystem init, before anything reads it
-    unsafe { (*c.as_ptr()).fs_debug_dir = dentry_ptr(dir) };
+    unsafe { (*fs.as_ptr()).fs_debug_dir = dentry_ptr(dir) };
     let Some(dir) = dir else { return };
 
     // SAFETY, for each file: the filesystem outlives them - bch2_fs_debug_exit()
@@ -501,10 +497,10 @@ pub fn bch2_fs_debug_init(c: &Opaque<c::bch_fs>) {
     }
 
     #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
-    crate::debug::async_objs::debugfs_init(c, dir);
+    crate::debug::async_objs::debugfs_init(fs, dir);
 
     let btrees = debugfs::create_dir(c"btrees", Some(dir));
-    unsafe { (*c.as_ptr()).btree_debug_dir = dentry_ptr(btrees) };
+    unsafe { (*fs.as_ptr()).btree_debug_dir = dentry_ptr(btrees) };
     let Some(btrees) = btrees else { return };
 
     for bd in fs.btree_debug.iter() {

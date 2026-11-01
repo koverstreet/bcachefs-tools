@@ -352,8 +352,9 @@ pub unsafe fn bch2_accounting_gc_free(fs: &Fs) {
     acc.gc_running = false;
 }
 
-#[c_export]
-pub unsafe fn bch2_fs_accounting_exit(fs: &Fs) {
+/// # Safety
+/// Nothing uses the accounting any more.
+pub unsafe fn accounting_exit(fs: &Fs) {
     let acc = unsafe { fs.accounting.protected_mut() };
     acc.entries = KVVec::new();
 }

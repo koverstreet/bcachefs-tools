@@ -27,6 +27,7 @@ pub struct dio_read {
     pub rbio: c::bch_read_bio,
 }
 c_default!(dio_read);
+crate::has_bio!(dio_read, rbio.bio);
 
 nest! {
     #[repr(C)]

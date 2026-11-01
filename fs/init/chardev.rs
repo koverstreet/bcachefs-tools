@@ -52,7 +52,7 @@ use crate::btree_trans;
 use core::mem::offset_of;
 use core::ops::ControlFlow;
 use crate::util::Printbuf;
-use crate::errcode::{errptr_to_result, ret_to_c, ret_to_result_void};
+use crate::errcode::{errptr_to_result, ret_to_result_void};
 use crate::sb::members::{DevOuterRef, DevRef};
 use crate::{bch_err, bch_err_dev, bch_err_msg, bch_err_msg_dev, prt};
 use crate::util::kernel::{capable, Capability};
@@ -840,7 +840,7 @@ impl FileOps for Ctl {
 }
 
 impl Fs {
-    fn chardev_init(&self) -> Result<(), BchError> {
+    pub(crate) fn chardev_init(&self) -> Result<(), BchError> {
         let minor = {
             let mut minors = MINORS.lock();
             let fs = Some(NonNull::from(self));
@@ -867,7 +867,7 @@ impl Fs {
         }
     }
 
-    fn chardev_exit(&self) {
+    pub(crate) fn chardev_exit(&self) {
         // SAFETY: ours, as chardev_init() set them, or as allocation left them
         let (dev, minor) = unsafe { ((*self.as_ptr()).chardev, (*self.as_ptr()).minor) };
         if !dev.is_null() {
@@ -883,16 +883,6 @@ impl Fs {
             }
         }
     }
-}
-
-#[c_export]
-pub fn bch2_fs_chardev_init(c: &Opaque<c::bch_fs>) -> c_int {
-    ret_to_c(Fs::from_c(c).chardev_init())
-}
-
-#[c_export]
-pub fn bch2_fs_chardev_exit(c: &Opaque<c::bch_fs>) {
-    Fs::from_c(c).chardev_exit()
 }
 
 #[c_export]

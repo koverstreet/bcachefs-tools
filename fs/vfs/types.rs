@@ -6,7 +6,8 @@ use crate::cstructs::c;
 use crate::types::c_default;
 #[cfg(not(NO_BCACHEFS_FS))]
 use crate::util::{bio::BioSet, late::Late, mempool::Mempool, workqueue::{Workqueue, WqFlags}};
-use cstruct_macros::{CStruct, Late, TypeInfo};
+use cstruct_macros::{CStruct, Init, Late, TypeInfo};
+use pin_init::pin_data;
 
 /*
  * An inode number that something in memory is holding: membership in
@@ -31,8 +32,9 @@ pub struct bch_inum_hash_entry {
 }
 c_default!(bch_inum_hash_entry);
 
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo, Late)]
+#[derive(CStruct, TypeInfo, Init, Late)]
 pub struct bch_fs_vfs {
     pub inodes: c::fast_list,
     pub inodes_table: c::rhashtable,
@@ -52,7 +54,11 @@ pub struct bch_fs_vfs {
     #[late(BioSet::new(4, true), ENOMEM_dio_write_bioset_init)]
     #[c("struct bio_set dio_write_bioset")]
     pub dio_write_bioset: Late<BioSet<c::dio_write>>,
-    pub dio_read_bioset: c::bio_set,
+    #[cfg(not(NO_BCACHEFS_FS))]
+    #[pin]
+    #[init(BioSet::new(4, true), ENOMEM_dio_read_bioset_init)]
+    #[c("struct bio_set dio_read_bioset")]
+    pub dio_read_bioset: BioSet<c::dio_read>,
     #[cfg(not(NO_BCACHEFS_FS))]
     #[late(BioSet::new(1, false), ENOMEM_nocow_flush_bioset_init)]
     #[c("struct bio_set nocow_flush_bioset")]

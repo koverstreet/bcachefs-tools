@@ -1400,6 +1400,22 @@ pub fn opts_validate_sb(sb: &c::bch_sb<Unvalidated>, out: &mut Printbuf) -> Resu
     Ok(())
 }
 
+/// A filesystem's options: @sb's, valid, and the mount's @opts over them
+pub fn fs_opts(sb: &c::bch_sb<Unvalidated>, opts: &c::bch_opts, out: &mut Printbuf) -> Result<c::bch_opts, BchError> {
+    opts_validate_sb(sb, out)?;
+
+    let mut fs_opts = DEFAULTS;
+    opts_from_sb(&mut fs_opts, sb);
+    fs_opts.apply(opts);
+
+    #[cfg(all(kernel, not(CONFIG_TRANSPARENT_HUGEPAGE)))]
+    if fs_opts.block_size as usize > crate::util::kernel::PAGE_SIZE {
+        prt!(out, "cannot mount bs > ps filesystem without CONFIG_TRANSPARENT_HUGEPAGE\n");
+        return Err(bch_errcode::BCH_ERR_EINVAL_block_size_needs_thp.into());
+    }
+    Ok(fs_opts)
+}
+
 /// Set @opt in @sb, to @v - for a device option in member @dev's - @val its
 /// string for a member string option: whether it changed.
 pub fn opt_set_sb(sb: &mut c::bch_sb_buf, dev: Option<u32>, opt: &Opt, v: u64, val: Option<&[u8]>) -> bool {

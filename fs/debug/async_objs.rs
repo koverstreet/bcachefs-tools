@@ -148,38 +148,33 @@ pub(crate) use lists::debugfs_init;
 
 #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
 pub mod lists {
-use core::ffi::{c_int, c_void, CStr};
+use core::ffi::{c_void, CStr};
 use core::ptr::NonNull;
-use cstruct_macros::c_export;
 
 use super::AsyncObj;
 use crate::c;
 use crate::data::update::bch2_read_bio_to_text;
 use crate::data::update_task::Update;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::bio::Bio;
 use crate::util::debugfs::{self, DebugFile, DebugOut};
-use crate::util::ffi::Opaque;
 use crate::util::place::Placed;
 use crate::util::rcu;
 use crate::util::{Printbuf, ToText};
 
-#[c_export]
-pub fn bch2_fs_async_obj_init(c: &Opaque<c::bch_fs>) -> c_int {
-    let fs = Fs::from_c(c);
+pub fn async_obj_init(fs: &Fs) -> Result<(), BchError> {
     for l in &fs.async_objs {
         // SAFETY: filesystem init, before anything is listed
         if unsafe { l.list.init() }.is_err() {
-            return ret_to_c(Err(fs.err(c::bch_errcode::BCH_ERR_ENOMEM_async_obj_init)));
+            return fs.throw(c::bch_errcode::BCH_ERR_ENOMEM_async_obj_init);
         }
     }
-    0
+    Ok(())
 }
 
-#[c_export]
-pub fn bch2_fs_async_obj_exit(c: &Opaque<c::bch_fs>) {
-    for l in &Fs::from_c(c).async_objs {
+pub fn async_obj_exit(fs: &Fs) {
+    for l in &fs.async_objs {
         // SAFETY: filesystem teardown, everything done with
         unsafe { l.list.exit() };
     }
@@ -274,14 +269,13 @@ impl DebugFile for AsyncObjList {
     }
 }
 
-/// bch2_fs_debug_init()'s, in its directory @parent.
-pub(crate) fn debugfs_init(c: &Opaque<c::bch_fs>, parent: NonNull<c::dentry>) {
+/// debug_init()'s, in its directory @parent.
+pub(crate) fn debugfs_init(fs: &Fs, parent: NonNull<c::dentry>) {
     let dir = debugfs::create_dir(c"async_objs", Some(parent));
     // SAFETY: filesystem init, before anything reads it
-    unsafe { (*c.as_ptr()).async_obj_dir = dir.map_or(core::ptr::null_mut(), NonNull::as_ptr) };
+    unsafe { (*fs.as_ptr()).async_obj_dir = dir.map_or(core::ptr::null_mut(), NonNull::as_ptr) };
 
     let Some(dir) = dir else { return };
-    let fs = Fs::from_c(c);
     for (list, (name, _)) in fs.async_objs.iter().zip(LISTS) {
         // SAFETY: bch2_fs_debug_exit() removes them first
         unsafe { debugfs::create_file::<AsyncObjList>(name, dir, list) };

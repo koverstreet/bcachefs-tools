@@ -479,14 +479,6 @@ fn groups_to_cpu(dst: &mut [c::bch_disk_group_cpu], src: &[c::bch_disk_group], s
     }
 }
 
-/// # Safety
-/// No readers or writers are left.
-#[c_export]
-pub unsafe fn bch2_fs_disk_groups_exit(c: &Opaque<c::bch_fs>) {
-    // SAFETY: the caller's
-    unsafe { Fs::from_c(c).disk_groups.free() }
-}
-
 fn dev_group_set(fs: &Fs, sb: &mut SbLockGuard<'_>, dev: u32, name: &[u8]) -> Result<(), BchError> {
     let v = dev_label_resolve(&mut fs.sb_resize(sb), name)?;
     sb.fs_member_mut(dev).set_group(v.into());

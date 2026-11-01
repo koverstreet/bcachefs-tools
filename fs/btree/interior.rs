@@ -103,6 +103,7 @@ c_default!(bch_fs_btree_node_rewrites);
 c_extern! {
     pub fn bch2_btree_interior_updates_flush(c: *mut c::bch_fs) -> bool;
     pub fn bch2_do_pending_node_rewrites(c: *mut c::bch_fs);
+    pub fn bch2_free_pending_node_rewrites(c: *mut c::bch_fs);
     pub fn bch2_btree_updates_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
     pub fn bch2_btree_node_update_key(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
                                       b: *mut c::BtreeNode, new_key: *mut c::bkey_i,

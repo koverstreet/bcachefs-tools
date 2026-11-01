@@ -305,22 +305,6 @@ static inline int bch2_kthread_cancelled(struct bch_fs *c)
 	return 0;
 }
 
-/* Read-only refs: */
-
-static inline bool bch2_ro_ref_tryget(struct bch_fs *c)
-{
-	if (test_bit(BCH_FS_stopping, &c->flags))
-		return false;
-
-	return refcount_inc_not_zero(&c->ro_ref);
-}
-
-static inline void bch2_ro_ref_put(struct bch_fs *c)
-{
-	if (c && refcount_dec_and_test(&c->ro_ref))
-		wake_up(&c->ro_ref_wait);
-}
-
 /* Unit conversions: */
 
 static inline unsigned bucket_bytes(const struct bch_dev *ca)

@@ -1128,8 +1128,7 @@ pub fn bch2_journal_keys_sort(c: &Opaque<c::bch_fs>) -> c_int {
 /// A ref on the keys dropped: the last frees them, and the journal entries
 /// they're read from.
 #[c_export]
-pub fn bch2_journal_keys_put(c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
+pub fn bch2_journal_keys_put(fs: &Fs) {
     let jk = &fs.journal_keys;
 
     assert!(jk.ref_.load(Relaxed) > 0, "journal keys put without a ref");

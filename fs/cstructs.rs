@@ -259,7 +259,7 @@ pub mod c {
     pub use crate::btree::cache::{bch2_btree_cache_pin, bch2_btree_cache_pin_budget, bch2_btree_cache_to_text, bch2_btree_cache_unpin, bch2_btree_id_level_to_text, bch2_btree_id_str, bch2_btree_node_flags, bch2_btree_node_prefetch, bch2_btree_node_to_text, bch2_node_pin};
     pub use crate::data::ec::trigger::{bch2_stripe_tryget_existing};
     pub use crate::namei::{BCH_CREATE_SNAPSHOT, BCH_CREATE_SNAPSHOT_RO, BCH_CREATE_SUBVOL, BCH_CREATE_TMPFILE};
-    pub use crate::fs::{bch2_dev_read_refs, bch2_dev_write_refs, bch2_fs_alloc, bch2_fs_exit, bch2_fs_stop, bch2_write_refs};
+    pub use crate::fs::{bch2_dev_read_refs, bch2_dev_write_refs, bch2_write_refs};
     pub use crate::init::recovery::{bch2_fs_initialize, bch2_fs_recovery};
     pub use super::journal_init_types::*;
     pub use super::journal_validate_types::*;

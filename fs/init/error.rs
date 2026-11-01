@@ -869,9 +869,8 @@ pub fn bch2_flush_fsck_errs(c: &Opaque<c::bch_fs>) {
     flush_fsck_errs(Fs::from_c(c), true)
 }
 
-#[c_export]
-pub fn bch2_free_fsck_errs(c: &Opaque<c::bch_fs>) {
-    flush_fsck_errs(Fs::from_c(c), false)
+pub fn free_fsck_errs(fs: &Fs) {
+    flush_fsck_errs(fs, false)
 }
 
 // ── Damaged paths ────────────────────────────────────────────────────────

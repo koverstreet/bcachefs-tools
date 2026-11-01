@@ -1289,9 +1289,7 @@ impl ToText for OpenBucketRef {
 /// What's built once the allocator is in place, before anything allocates:
 /// the open buckets' freelist - every one but slot 0, the sentinel, never
 /// handed out - and the write points' hash.
-#[c_export]
-pub fn bch2_fs_allocator_foreground_init(c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
+pub fn allocator_foreground_init(fs: &Fs) {
     let a = &fs.allocator;
     {
         let mut g = a.freelist_lock.lock();

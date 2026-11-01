@@ -5,9 +5,13 @@
 use crate::c;
 use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::bch_errcode;
+use crate::errcode::BchError;
 use crate::locking::Locked;
-use crate::util::{late::Late, workqueue::{Workqueue, WqFlags}};
+use crate::util::bio::{BioSet, Either};
+use crate::util::late::Late;
+use crate::util::mempool::Mempool;
+use crate::util::workqueue::{Workqueue, WqFlags};
 use crate::types::{CacheAligned, DArray, NeBytes, bits_to_longs, c_default};
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
@@ -15,7 +19,7 @@ use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicIsize};
 use cstruct_macros::{c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, Late, TypeInfo};
-use pin_init::pin_data;
+use pin_init::{pin_data, PinInit};
 use nestify::nest;
 #[cfg(feature = "std")]
 use std::{ffi::CString, str::FromStr};
@@ -972,8 +976,14 @@ c_const! {
 pub struct bch_fs_btree_trans {
     pub lock: cs::seqmutex,
     pub list: cs::list_head,
-    pub pool: cs::mempool_t,
-    pub malloc_pool: cs::mempool_t,
+    #[pin]
+    #[init(Mempool::kmalloc(1, core::mem::size_of::<c::btree_trans>()))]
+    #[c("mempool_t pool")]
+    pub pool: Mempool,
+    #[pin]
+    #[init(Mempool::kmalloc(1, c::BTREE_TRANS_MEM_MAX as usize))]
+    #[c("mempool_t malloc_pool")]
+    pub malloc_pool: Mempool,
     #[c("struct btree_trans_buf __percpu *bufs")]
     pub bufs: *mut cs::btree_trans_buf,
 
@@ -1103,16 +1113,31 @@ c_default!(btree_write_stats);
 #[pin_data]
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init, Late)]
+#[init_args(opts: &c::bch_opts)]
 pub struct bch_fs_btree {
     pub foreground_merge_threshold: u16,
 
-    pub bounce_pool: cs::mempool_t,
+    #[pin]
+    #[init(Mempool::kvmalloc(1, opts.btree_node_size as usize), ENOMEM_fs_other_alloc)]
+    #[c("mempool_t bounce_pool")]
+    pub bounce_pool: Mempool,
 
     pub write_stats: [cs::btree_write_stats; cs::BTREE_WRITE_TYPE_NR as usize],
 
-    pub bio: cs::bio_set,
-    pub fill_iter: cs::mempool_t,
-    pub read_complete_wq: *mut cs::workqueue_struct,
+    #[pin]
+    #[init(BioSet::new(1, true), ENOMEM_fs_other_alloc)]
+    #[c("struct bio_set bio")]
+    pub bio: BioSet<Either<cs::btree_read_bio, cs::btree_write_bio>>,
+    #[pin]
+    #[init(fill_iter_pool(opts), ENOMEM_fs_other_alloc)]
+    #[c("mempool_t fill_iter")]
+    pub fill_iter: Mempool,
+    #[pin]
+    #[init(Workqueue::new(c"bcachefs_btree_read_complete",
+                          WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::PERCPU, 512),
+           ENOMEM_fs_other_alloc)]
+    #[c("struct workqueue_struct *read_complete_wq")]
+    pub read_complete_wq: Workqueue,
     pub read_errors_soft: cs::ratelimit_state,
     pub read_errors_hard: cs::ratelimit_state,
 
@@ -1178,6 +1203,11 @@ pub struct bch_fs_btree {
     #[late]
     pub node_rewrites: cs::bch_fs_btree_node_rewrites,
     pub node_scan: cs::find_btree_nodes,
+}
+
+fn fill_iter_pool(opts: &c::bch_opts) -> impl PinInit<Mempool, BchError> {
+    let btree_blocks = (opts.btree_node_size as usize >> 9) >> (opts.block_size as usize >> 9).ilog2();
+    Mempool::kmalloc(1, size_of::<c::sort_iter>() + (btree_blocks + 1) * 2 * size_of::<c::sort_iter_set>())
 }
 
 /* Btree ID properties: */

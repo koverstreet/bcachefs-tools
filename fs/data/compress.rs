@@ -298,7 +298,7 @@ fn bounce_alloc(fs: &Fs, size: usize, rw: usize) -> Bbuf<'_> {
      */
     match kmalloc(size, GFP_KERNEL | __GFP_NOWARN) {
         Ok(p) => Bbuf::new(fs, p, bb::BB_kmalloc, rw, size),
-        Err(_) => Bbuf::new(fs, fs.compress.bounce[rw].alloc_raw(), bb::BB_mempool, rw, size),
+        Err(_) => Bbuf::new(fs, fs.compress.bounce[rw].alloc_raw(c::GFP_KERNEL), bb::BB_mempool, rw, size),
     }
 }
 
@@ -889,12 +889,10 @@ fn init_features(fs: &Fs, sb: &SbLockGuard<'_>, features: u64) -> Result<(), Bch
     Ok(())
 }
 
-#[c_export]
-pub fn bch2_fs_compress_init(c: &Opaque<c::bch_fs>) -> c_int {
-    let fs = Fs::from_c(c);
+pub fn compress_init(fs: &Fs) -> Result<(), BchError> {
     let opt = |v: u8| opt_feature(bch_compression_opt::bits(v).type_().into());
     let f = fs.sb.features.get() | opt(fs.opts().compression.get()) | opt(fs.opts().background_compression.get());
-    ret_to_c(init_features(fs, &fs.sb_lock(), f))
+    init_features(fs, &fs.sb_lock(), f)
 }
 
 // ── Options ──────────────────────────────────────────────────────────────

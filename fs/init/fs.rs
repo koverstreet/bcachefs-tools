@@ -7,41 +7,68 @@
 
 use crate::c;
 use crate::btree::bkey::BkeyI;
-use crate::errcode::{bch_errcode, errptr_to_result, ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void as ret_to_result, BchError};
+use crate::alloc::accounting_mem::accounting_exit;
 use crate::alloc::capacity::DiskReservation;
+use crate::alloc::foreground::allocator_foreground_init;
 use crate::alloc::replicas::can_write_with_devs;
+use crate::btree::cache::{bch2_fs_btree_exit, bch2_fs_btree_init, bch2_fs_btree_init_early};
+use crate::btree::interior::bch2_free_pending_node_rewrites;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
-use crate::init::dev::dev_in_fs;
-use crate::locking::{Guard, MutexNoio, Noio, PercpuRwsemNoio, ReadGuard};
-use crate::prt;
-use crate::sb::io::{read_super, Holder};
-use crate::sb::members::dev_to_text_short;
+use crate::btree::journal_overlay::bch2_journal_keys_put;
+use crate::btree::read::bch2_btree_flush_all_reads;
+use crate::btree::write_buffer::bch2_btree_write_buffer_stop;
+use crate::data::checksum::encryption_init;
+use crate::data::compress::compress_init;
+use crate::data::ec::head::ec_exit;
+use crate::data::reconcile::work::reconcile_exit;
+use crate::debug::sysfs::{bch2_opts_create_sysfs_files, bin_attr_btree_trans_stats_json};
+use crate::init::dev::{bch2_dev_alloc, bch2_dev_attach_bdev, bch2_dev_free, bch2_dev_io_ref_stop,
+                       bch2_dev_sysfs_online, bch2_dev_unlink, dev_in_fs};
+use crate::init::error::free_fsck_errs;
+use crate::init::registry::register;
+use crate::init::rw::{read_only_work, writes_disabled};
+use crate::inode::shard_cpu_init;
+use crate::journal::seq_blacklist::blacklist_table_initialize;
+use crate::locking::{Guard, MutexNoio, Noio, PercpuRwsemNoio, RawLock, ReadGuard};
+use crate::{bch_verbose, new_lock, prt};
+use crate::sb::counters::counters_init;
+use crate::sb::io::{bch2_free_super, read_super, sb_to_fs, Holder};
+use crate::sb::members::{dev_to_text_short, member_exists, SbMembersMut};
 use crate::util::Printbuf;
-use crate::util::alloc::{flags::GFP_KERNEL, Arc, KVVec};
+use crate::util::alloc::{flags::GFP_KERNEL, init_at, Arc, KVVec};
 use crate::util::backref::BackRef;
 use crate::util::enumerated_ref::EnumeratedRef;
+use crate::util::ffi::c_char;
+use crate::util::kernel::READ;
 use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
+use crate::util::percpu::PerCpu;
+use crate::util::printbuf::prt_bdevname;
 use crate::util::rcu::read_lock;
-use crate::util::refcount::RefGuard;
-use crate::util::sleep::wake_up;
+use crate::util::refcount::{RefGuard, Refcount, TryRefcount};
+use crate::util::sleep::Sleep;
 use core::ffi::CStr;
 use core::future::Future;
+use core::mem::size_of;
 use core::ptr::NonNull;
+use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use cstruct_macros::c_export;
-#[cfg(kernel)]
-use crate::util::refcount::{Refcount, TryRefcount};
 pub use crate::sb::members::DevRef;
-use core::ffi::c_int;
+use core::ffi::{c_int, c_uint};
 use cstruct_macros::c_extern;
 use crate::format::{Bpos, Btree};
 
 c_extern! {
-    pub fn bch2_fs_alloc(sb: *mut crate::util::vstructs::Head<c::bch_sb>, opts: *mut c::bch_opts,
-                         sbs: *mut c::bch_sb_handles, holder: *const core::ffi::c_void,
-                         user_key: *const c::bch_key,
-                         out: *mut c::printbuf) -> *mut c::bch_fs;
-    pub fn bch2_fs_stop(c: *mut c::bch_fs) -> c_int;
-    pub fn bch2_fs_exit(c: *mut c::bch_fs) -> c_int;
+    fn bch2_fs_opt_version_init(c: *mut c::bch_fs, out: *mut c::printbuf) -> c_int;
+    fn sysfs_create_bin_file(kobj: *mut c::kobject, attr: *const c::bin_attribute) -> c_int;
+    fn sysfs_remove_bin_file(kobj: *mut c::kobject, attr: *const c::bin_attribute);
+    static mut bcachefs_kobj: c::kobject;
+    static bch2_fs_ktype: c::kobj_type;
+    static bch2_fs_counters_ktype: c::kobj_type;
+    static bch2_fs_internal_ktype: c::kobj_type;
+    static bch2_fs_opts_dir_ktype: c::kobj_type;
+    static bch2_fs_time_stats_ktype: c::kobj_type;
+    static bch2_fs_time_stats_json_ktype: c::kobj_type;
     pub static bch2_write_refs: [*const crate::util::ffi::c_char; 0];
     pub static bch2_dev_read_refs: [*const crate::util::ffi::c_char; 0];
     pub static bch2_dev_write_refs: [*const crate::util::ffi::c_char; 0];
@@ -181,7 +208,7 @@ impl Fs {
     }
 
     pub fn holder(&self) -> &Arc<Holder> {
-        self.holder.as_ref().expect("a filesystem's holder, from bch2_fs_alloc()")
+        self.holder.as_ref().expect("a filesystem's holder, from alloc()")
     }
 
     /// # Safety
@@ -312,10 +339,6 @@ impl Fs {
         crate::sb::io::sb_update(self, sb)
     }
 
-    pub fn stop(&self) {
-        unsafe { c::bch2_fs_stop(self.as_ptr()) };
-    }
-
     pub fn journal_flush_all_pins(&self) -> bool {
         unsafe { c::bch2_journal_flush_pins(&mut (*self.as_ptr()).journal, u64::MAX) }
     }
@@ -435,27 +458,223 @@ impl Fs {
     }
 }
 
-/// Rust fields initialized, the rest zeroed, for bch2_fs_init(), taking the
-/// ref on @holder. NULL if out of memory.
-///
-/// # Safety
-/// @holder is a ref on its devices' Holder, from Arc::into_raw()
-#[cstruct_macros::c_export]
-pub unsafe fn bch2_fs_alloc_mem(holder: *const core::ffi::c_void) -> *mut c::bch_fs {
-    let holder = unsafe { Arc::from_raw(holder.cast::<Holder>()) };
-    let Ok(c) = crate::util::alloc::alloc_pinned(Fs::init()) else { return core::ptr::null_mut() };
-    unsafe { *(*c).holder = Some(holder) };
-    c
+/// The filesystem @sbs are the devices of, with options @opts: Fs::init()'s
+/// fields, the rest from init_from(). It takes the devices it attaches,
+/// leaving their handles zeroed; on failure, it's exited.
+fn alloc(sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts, holder: Arc<Holder>,
+         user_key: Option<&c::bch_key>, out: &mut Printbuf) -> Result<OpenFs, BchError> {
+    let c = crate::util::alloc::alloc_pinned_or(Fs::init(opts), bch_errcode::BCH_ERR_ENOMEM_fs_alloc)?;
+    let fs = unsafe {
+        *(*c).holder = Some(holder);
+        OpenFs::from_raw(NonNull::new_unchecked(c))
+    };
+    fs.init_from(sbs, opts, user_key, out)?;
+    Ok(fs)
 }
 
-/// The end of teardown: C's has emptied the C fields, so their Drop finds
-/// nothing.
-///
-/// # Safety
-/// @c is from bch2_fs_alloc_mem(), and nothing uses it after.
-#[cstruct_macros::c_export]
-pub unsafe fn bch2_fs_free_mem(c: *mut c::bch_fs) {
-    unsafe { crate::util::alloc::free_pinned(c) }
+/// UNICODE_AGE(12, 1, 0)
+#[cfg(CONFIG_UNICODE)]
+const BCH_FS_DEFAULT_UTF8_ENCODING: c_uint = (12 << 16) | (1 << 8);
+
+impl Fs {
+    fn init_from(&self, sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts, user_key: Option<&c::bch_key>,
+                 out: &mut Printbuf) -> Result<(), BchError> {
+        use c::bch_time_stats as Time;
+        let p = self.as_ptr();
+
+        unsafe {
+            (*p).stdio = opts.stdio as usize as *mut c::stdio_redirect;
+            (*p).recovery_task = c::bch2_current();
+        }
+
+        #[cfg(kernel)]
+        unsafe { c::__module_get(&raw mut kernel::bindings::__this_module) };
+
+        let work = crate::new_work!(read_only_work, "read_only_work");
+        unsafe {
+            c::closure_init(&raw mut (*p).cl, core::ptr::null_mut());
+
+            c::kobject_init(&raw mut (*p).kobj, &raw const bch2_fs_ktype);
+            c::kobject_init(&raw mut (*p).internal, &raw const bch2_fs_internal_ktype);
+            c::kobject_init(&raw mut (*p).opts_dir, &raw const bch2_fs_opts_dir_ktype);
+            c::kobject_init(&raw mut (*p).time_stats, &raw const bch2_fs_time_stats_ktype);
+            c::kobject_init(&raw mut (*p).time_stats_json, &raw const bch2_fs_time_stats_json_ktype);
+            c::kobject_init(&raw mut (*p).counters_kobj, &raw const bch2_fs_counters_ktype);
+
+            (*p).minor = -1;
+
+            let Ok(()) = init_at(work, &raw mut (*p).read_only_work);
+
+            let Ok(()) = c::mutex::init(&raw mut (*p).opt_change_lock, c"&c->opt_change_lock", new_lock!(@key));
+        }
+
+        allocator_foreground_init(self);
+        unsafe {
+            c::bch2_fs_btree_gc_init_early(p);
+            bch2_fs_btree_init_early(p);
+            c::bch2_fs_journal_init_early(&raw mut (*p).journal);
+            c::bch2_fs_move_init(p);
+
+            let Ok(()) = c::mutex::init(&raw mut (*p).bio_bounce_pages_lock, c"&c->bio_bounce_pages_lock",
+                                        new_lock!(@key));
+
+            let Ok(()) = c::spinlock_t::init(&raw mut (*p).write_error_lock, c"&c->write_error_lock",
+                                             new_lock!(@key));
+
+            let times = &raw mut (*p).times;
+            (*p).journal.flush_write_time = &raw mut (*times)[Time::BCH_TIME_journal_flush_write as usize];
+            (*p).journal.noflush_write_time = &raw mut (*times)[Time::BCH_TIME_journal_noflush_write as usize];
+            (*p).journal.flush_seq_time = &raw mut (*times)[Time::BCH_TIME_journal_flush_seq as usize];
+        }
+
+        /* must be initialized before we throw any errors */
+        let now = PerCpu::alloc().map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_fs_counters_init))?;
+        unsafe { (*p).counters.now = now };
+
+        {
+            let mut sb = self.sb_lock();
+            sb_to_fs(self, &mut sb, sbs[0].io.buf.sb())?;
+            self.sb_resize(&mut sb).members_v2_init()
+                .ok_or_else(|| self.err(bch_errcode::BCH_ERR_ENOSPC_sb_members_v2))?;
+        }
+
+        shard_cpu_init(self);
+
+        let mut name = Printbuf::new();
+        if self.sb.multi_device.get() {
+            prt!(&mut name, "{}", self.sb.user_uuid());
+        } else {
+            prt_bdevname(&mut name, Some(sbs[0].dev.bdev()));
+        }
+        if name.allocation_failure() {
+            return Err(bch_errcode::BCH_ERR_ENOMEM_fs_name_alloc.into());
+        }
+        // strscpy()
+        let dst = unsafe { &mut (*p).name };
+        let len = name.as_bytes().len().min(dst.len() - 1);
+        for (d, &s) in dst.iter_mut().zip(&name.as_bytes()[..len]) {
+            *d = s as c_char;
+        }
+        dst[len] = 0;
+
+        if unsafe { self.writes.init(c::bch_write_ref::BCH_WRITE_REF_NR as u32, writes_disabled) }.is_err() {
+            return self.throw(bch_errcode::BCH_ERR_ENOMEM_fs_other_alloc);
+        }
+
+        blacklist_table_initialize(self)?;
+        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+        crate::debug::async_objs::lists::async_obj_init(self)?;
+        ret_to_result(unsafe { bch2_fs_btree_init(p) })?;
+        compress_init(self)?;
+        counters_init(self);
+        encryption_init(self, user_key)?;
+        ret_to_result(unsafe { c::bch2_fs_journal_init(&raw mut (*p).journal) })?;
+        #[cfg(not(NO_BCACHEFS_FS))]
+        ret_to_result(unsafe { c::bch2_fs_vfs_init(p) })?;
+
+        #[cfg(CONFIG_UNICODE)]
+        if self.casefold_enabled().is_ok() {
+            /* Default encoding until we can potentially have more as an option. */
+            let enc = unsafe { c::utf8_load(BCH_FS_DEFAULT_UTF8_ENCODING) };
+            match NonNull::new(enc).map(crate::errcode::errptr_to_result) {
+                Some(Ok(enc)) => unsafe { (*p).cf_encoding = enc.as_ptr() },
+                _ => {
+                    prt!(out, "Cannot load UTF-8 encoding for filesystem. Version: {}.{}.{}\n",
+                         BCH_FS_DEFAULT_UTF8_ENCODING >> 16,
+                         (BCH_FS_DEFAULT_UTF8_ENCODING >> 8) & 0xff,
+                         BCH_FS_DEFAULT_UTF8_ENCODING & 0xff);
+                    return self.throw(bch_errcode::BCH_ERR_EINVAL_utf8_load_failed);
+                }
+            }
+        }
+        #[cfg(not(CONFIG_UNICODE))]
+        if self.feature(c::bch_sb_feature::BCH_FEATURE_casefolding) {
+            prt!(out, "Cannot mount a filesystem with casefolding on a kernel without CONFIG_UNICODE\n");
+            return self.throw(bch_errcode::BCH_ERR_EINVAL_casefolding_no_unicode);
+        }
+
+        for i in 0..self.nr_devices() {
+            if !member_exists(self.sb_lock().sb(), i) {
+                continue;
+            }
+            ret_to_result(unsafe { bch2_dev_alloc(p, i) })?;
+        }
+
+        unsafe {
+            let j = &raw mut (*p).journal;
+            c::bch2_journal_entry_res_resize(j, &raw mut (*p).btree.root_journal_res,
+                (c::BTREE_ID_NR as usize * (c::JSET_KEYS_U64s + c::BKEY_BTREE_PTR_U64s_MAX)) as c_uint);
+            c::bch2_journal_entry_res_resize(j, &raw mut (*p).clock_journal_res,
+                (size_of::<c::jset_entry_clock>() / size_of::<u64>() * 2) as c_uint);
+            c::bch2_journal_entry_res_resize(j, &raw mut (*p).rewind_limit_res,
+                (size_of::<c::jset_entry_rewind_limit>() / size_of::<u64>()) as c_uint);
+        }
+
+        {
+            let _state = self.state_lock_write();
+            for sb in sbs.iter_mut() {
+                ret_to_result(unsafe { bch2_dev_attach_bdev(p, sb, out.as_raw()) })?;
+            }
+        }
+
+        if self.opts().no_version_check.get() == 0 {
+            /*
+             * Do this early, so that we never expose a filesystem object that
+             * hasn't been version downgraded
+             */
+            ret_to_result(unsafe { bch2_fs_opt_version_init(p, out.as_raw()) })?;
+        }
+
+        if cfg!(CONFIG_BCACHEFS_DEBUG) {
+            prt!(out, "*** DEBUG BUILD ***\n");
+        }
+
+        /* first: a UUID already open fails as that, not as a sysfs name taken */
+        register(self)?;
+        self.online()
+    }
+
+    fn online(&self) -> Result<(), BchError> {
+        #[cfg(kernel)]
+        self.chardev_init()?;
+
+        #[cfg(CONFIG_DEBUG_FS)]
+        crate::debug::debug::debug_init(self);
+
+        let p = self.as_ptr();
+        let uuid = self.sb.user_uuid();
+        let add = |kobj: *mut c::kobject, parent: *mut c::kobject, name: &CStr| unsafe {
+            c::kobject_add(kobj, parent, name.as_ptr().cast()) == 0
+        };
+        let added = unsafe {
+            (if self.sb.multi_device.get() {
+                c::kobject_add(&raw mut (*p).kobj, &raw mut bcachefs_kobj, c"%pU".as_ptr().cast(),
+                               uuid.b.as_ptr()) == 0
+            } else {
+                c::kobject_add(&raw mut (*p).kobj, &raw mut bcachefs_kobj, c"%s".as_ptr().cast(),
+                               (*p).name.as_ptr()) == 0
+            }) &&
+            add(&raw mut (*p).internal, &raw mut (*p).kobj, c"internal") &&
+            add(&raw mut (*p).opts_dir, &raw mut (*p).kobj, c"options") &&
+            (cfg!(CONFIG_BCACHEFS_NO_LATENCY_ACCT) ||
+             (add(&raw mut (*p).time_stats, &raw mut (*p).kobj, c"time_stats") &&
+              add(&raw mut (*p).time_stats_json, &raw mut (*p).kobj, c"time_stats_json"))) &&
+            add(&raw mut (*p).counters_kobj, &raw mut (*p).kobj, c"counters") &&
+            bch2_opts_create_sysfs_files(&raw mut (*p).opts_dir, c::OPT_FS as c_uint) == 0 &&
+            sysfs_create_bin_file(&raw mut (*p).internal, &*bin_attr_btree_trans_stats_json) == 0
+        };
+        if !added {
+            return self.throw(bch_errcode::BCH_ERR_sysfs_init_error);
+        }
+
+        let _state = self.state_lock_write();
+        for ca in self.members() {
+            if unsafe { bch2_dev_sysfs_online(p, ca.as_mut_ptr()) } != 0 {
+                return self.throw(bch_errcode::BCH_ERR_sysfs_init_error);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Exits the filesystem when dropped
@@ -509,9 +728,7 @@ impl OpenFs {
 
     /// Drop discards the error
     pub fn exit(self) -> i32 {
-        let ret = unsafe { c::bch2_fs_exit(self.0.as_ptr()) };
-        core::mem::forget(self);
-        ret
+        ret_to_c(unsafe { exit(self.into_raw()) })
     }
 }
 
@@ -552,20 +769,10 @@ impl Claimed {
         let out = &mut self.out;
         let sbs = &mut self.sbs;
 
-        // bch2_fs_alloc() takes the handles it attaches, leaving them zeroed
-        let best = sbs[0].io.buf.sb;
-        let mut lent = c::bch_sb_handles { nr: sbs.len(), size: sbs.capacity(), data: sbs.as_mut_ptr(),
-                                           preallocated: [] };
-        let key = key.map_or(core::ptr::null(), |k| k);
-        // SAFETY: the handles stay sbs', which frees them; the holder ref is
-        // the filesystem's
-        let fs = unsafe {
-            c::bch2_fs_alloc(best, opts, &mut lent, Arc::into_raw(self.holder.clone()).cast(), key,
-                             out.as_raw())
-        };
-        let fs = errptr_to_result(NonNull::new(fs).expect("bch2_fs_alloc(): a filesystem or an error"))?;
-        // SAFETY: bch2_fs_alloc()'s, ours to exit
-        let fs = unsafe { OpenFs::from_raw(fs.cast()) };
+        sbs[0].set_compat_defaults()?;
+        let fs_opts = crate::opts::fs_opts(sbs[0].sb().as_unvalidated(), opts, out)?;
+
+        let fs = alloc(sbs, &fs_opts, self.holder.clone(), key, out)?;
         self.holder.fs.store(fs.as_ptr(), core::sync::atomic::Ordering::Release);
 
         // opt_version_init()'s messages, before startup's
@@ -591,8 +798,164 @@ impl core::ops::Deref for OpenFs {
 
 impl Drop for OpenFs {
     fn drop(&mut self) {
-        unsafe { c::bch2_fs_exit(self.0.as_ptr()); }
+        let _ = unsafe { exit(self.0) };
     }
+}
+
+impl Fs {
+    pub fn stop(&self) -> Result<(), BchError> {
+        use c::bch_fs_flags as Flag;
+        let p = self.as_ptr();
+
+        if !self.flags.swap(Flag::BCH_FS_stopping, true) {
+            self.ro_ref_events.wake();
+
+            if self.flags.get(Flag::BCH_FS_started) {
+                bch_verbose!(self, "shutting down");
+            }
+
+            self.state_lock_write().read_only();
+
+            for dev in &self.devs[..self.nr_devices() as usize] {
+                let ca = dev.as_ptr();
+                if !ca.is_null() {
+                    unsafe { bch2_dev_io_ref_stop(ca, READ as c_int) };
+                }
+            }
+
+            for ca in self.members() {
+                unsafe { bch2_dev_unlink(ca.as_mut_ptr()) };
+            }
+
+            if in_sysfs(&self.kobj) {
+                unsafe { c::kobject_del(&raw mut (*p).kobj) };
+            }
+
+            #[cfg(CONFIG_DEBUG_FS)]
+            crate::debug::debug::debug_exit(self);
+            #[cfg(kernel)]
+            self.chardev_exit();
+
+            unsafe { <Fs as Refcount<RoRefs>>::dec(self) };
+            let Ok(()) = self.ro_ref_events.wait_until(Sleep::UNINTERRUPTIBLE, || {
+                (self.ro_ref.load(Acquire) == 0).then_some(())
+            });
+
+            unsafe {
+                c::kobject_put(&raw mut (*p).counters_kobj);
+                c::kobject_put(&raw mut (*p).time_stats_json);
+                c::kobject_put(&raw mut (*p).time_stats);
+                c::kobject_put(&raw mut (*p).opts_dir);
+                if in_sysfs(&self.internal) {
+                    sysfs_remove_bin_file(&raw mut (*p).internal, &*bin_attr_btree_trans_stats_json);
+                }
+                c::kobject_put(&raw mut (*p).internal);
+
+                /* btree prefetch might have kicked off reads in the background: */
+                bch2_btree_flush_all_reads(p);
+
+                c::cancel_work_sync(&raw mut (*p).read_only_work);
+
+                c::flush_work(&raw mut (*p).btree.interior_updates.work);
+            }
+        }
+
+        if self.flags.get(Flag::BCH_FS_emergency_ro) {
+            return self.throw(bch_errcode::BCH_ERR_shutdown_with_emergency_ro);
+        }
+        if self.flags.get(Flag::BCH_FS_error) {
+            return self.throw(bch_errcode::BCH_ERR_shutdown_with_errors_unfixed);
+        }
+        if self.flags.get(Flag::BCH_FS_errors_fixed) {
+            return self.throw(bch_errcode::BCH_ERR_shutdown_with_errors_fixed);
+        }
+        Ok(())
+    }
+}
+
+// a bool in userspace's kobject, an unsigned bitfield in the kernel's
+fn in_sysfs(kobj: &c::kobject) -> bool {
+    u32::from(kobj.state_in_sysfs()) != 0
+}
+
+/// Stopped, its devices freed, and its kobject's last ref put: its release
+/// frees it.
+///
+/// # Safety
+/// @p is the caller's to exit: nothing uses it after.
+unsafe fn exit(p: NonNull<Fs>) -> Result<(), BchError> {
+    let fs = unsafe { p.as_ref() };
+    let ret = fs.stop();
+
+    crate::init::registry::deregister(fs);
+
+    unsafe { c::closure_sync(&raw mut (*p.as_ptr()).cl) };
+
+    for dev in &fs.devs[..fs.nr_devices() as usize] {
+        let ca = dev.as_ptr();
+        if !ca.is_null() {
+            unsafe {
+                #[cfg(CONFIG_BCACHEFS_DEBUG)]
+                assert_eq!((*ca).ref_.load(Relaxed), 1);
+                bch2_dev_io_ref_stop(ca, READ as c_int);
+                bch2_free_super(&mut *(&raw mut (*ca).disk_sb).cast());
+                bch2_dev_free(ca);
+            }
+        }
+    }
+
+    bch_verbose!(fs, "shutdown complete");
+
+    unsafe { c::kobject_put(&raw mut (*p.as_ptr()).kobj) };
+    ret
+}
+
+/// # Safety
+/// @kobj is c->kobj, its last ref put.
+#[c_export]
+pub unsafe fn bch2_fs_release(kobj: *mut c::kobject) {
+    let p = unsafe { kobj.byte_sub(core::mem::offset_of!(Fs, kobj)).cast::<Fs>() };
+    let fs = unsafe { &*p };
+
+    if fs.journal_keys.initial_ref_held {
+        bch2_journal_keys_put(fs);
+    }
+    assert_eq!(fs.journal_keys.ref_.load(Relaxed), 0);
+
+    #[cfg(CONFIG_UNICODE)]
+    unsafe { c::utf8_unload(fs.cf_encoding) };
+
+    fs.reconcile_stop();
+    fs.copygc_stop();
+    unsafe {
+        bch2_btree_write_buffer_stop(p);
+        bch2_free_pending_node_rewrites(p);
+    }
+    free_fsck_errs(fs);
+    // each workqueue's destroy is its flush: before the exits free what their
+    // work uses
+    unsafe { fs.exit_late() };
+    #[cfg(not(NO_BCACHEFS_FS))]
+    unsafe { c::bch2_fs_vfs_exit(p) };
+    reconcile_exit(fs);
+    unsafe { c::bch2_fs_journal_exit(&raw mut (*p).journal) };
+    ec_exit(fs);
+    unsafe { c::bch2_fs_move_exit(p) };
+    fs.counters_recent.cancel_sync();
+    unsafe {
+        (*p).counters.now.free();
+        bch2_fs_btree_exit(p);
+        accounting_exit(fs);
+    }
+    #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+    crate::debug::async_objs::lists::async_obj_exit(fs);
+    unsafe {
+        fs.writes.exit();
+        fs.disk_groups.free();
+        crate::util::alloc::free_pinned(p);
+    }
+    #[cfg(kernel)]
+    unsafe { c::module_put(&raw mut kernel::bindings::__this_module) };
 }
 
 /// Which is the filesystem's superblock: the newest - highest seq, then write
@@ -715,7 +1078,6 @@ impl Fs {
         crate::opts::opts_hooks_pre_set(self)?;
 
         self.flags.set(Flag::BCH_FS_started, true);
-        wake_up(&self.ro_ref_wait);
         self.ro_ref_events.wake();
 
         let state = self.state_lock_write();
@@ -890,55 +1252,27 @@ macro_rules! fs_delayed_work {
     };
 }
 
-/// BCH_FS_stopping set: for ro_ref_events' waiters, as for BCH_FS_started
-#[c_export]
-pub fn bch2_fs_stopping_wake(c: &crate::util::ffi::Opaque<c::bch_fs>) {
-    Fs::from_c(c).ro_ref_events.wake();
-}
-
-/// c->ro_ref: bch2_fs_stop() waits for them, and tryget fails once it's
-/// stopping
-#[cfg(kernel)]
+/// c->ro_ref: Fs::stop() waits for them, and tryget fails once it's stopping
 pub enum RoRefs {}
 
-#[cfg(kernel)]
 pub type RoRef = RefGuard<Fs, RoRefs>;
 
-#[cfg(kernel)]
-impl Fs {
-    fn ro_ref_raw(&self) -> *mut c::refcount_t {
-        // SAFETY: the filesystem's, for as long as it is
-        unsafe { &raw mut (*self.as_ptr()).ro_ref }
-    }
-}
-
-// SAFETY: a refcount_t, which the filesystem outlives
-#[cfg(kernel)]
 unsafe impl Refcount<RoRefs> for Fs {
     fn inc(&self) {
-        // SAFETY: c->ro_ref
-        unsafe { c::refcount_inc(self.ro_ref_raw()) }
+        self.ro_ref.fetch_add(1, Relaxed);
     }
 
     unsafe fn dec(&self) {
-        // SAFETY: c->ro_ref, the caller's ref; the waitqueue's live while
-        // there's a ref to wait for
-        unsafe {
-            if c::refcount_dec_and_test(self.ro_ref_raw()) {
-                c::__wake_up(&raw mut (*self.as_ptr()).ro_ref_wait, kernel::task::TASK_NORMAL, 1,
-                             core::ptr::null_mut());
-            }
+        if self.ro_ref.fetch_sub(1, Release) == 1 {
+            self.ro_ref_events.wake();
         }
     }
 }
 
-// SAFETY: refcount_inc_not_zero() takes a ref when it succeeds
-#[cfg(kernel)]
 unsafe impl TryRefcount<RoRefs> for Fs {
     fn try_inc(&self) -> bool {
-        // SAFETY: c->ro_ref
         !self.flags.get(c::bch_fs_flags::BCH_FS_stopping) &&
-            unsafe { c::rust_refcount_inc_not_zero(self.ro_ref_raw()) }
+            self.ro_ref.fetch_update(Relaxed, Relaxed, |r| (r != 0).then_some(r + 1)).is_ok()
     }
 }
 

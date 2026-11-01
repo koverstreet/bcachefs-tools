@@ -392,9 +392,7 @@ impl RecentCounters {
 
 /// The superblock's counters into memory, as both the counts now and at
 /// mount. A counter the superblock has no slot for starts at 0.
-#[c_export]
-pub fn bch2_fs_counters_init(c: &Opaque<c::bch_fs>) -> c_int {
-    let fs = Fs::from_c(c);
+pub fn counters_init(fs: &Fs) {
     let mut sb = fs.sb_lock();
     let _ = c::bch_sb_field_counters::to_cpu(fs, &mut sb);
 
@@ -404,19 +402,12 @@ pub fn bch2_fs_counters_init(c: &Opaque<c::bch_fs>) -> c_int {
         // SAFETY: filesystem init, before anything reads them
         unsafe { (*ctrs).mount[i] = d.get(ctr.stable_id as usize).map_or(0, |v| v.get()) };
     }
-    0
 }
 
 #[c_export]
 pub fn bch2_fs_counters_init_late(c: &Opaque<c::bch_fs>) -> c_int {
     RecentCounters::queue(Fs::from_c(c));
     0
-}
-
-/// Before counters.now is freed.
-#[c_export]
-pub fn bch2_fs_counters_exit(c: &Opaque<c::bch_fs>) {
-    Fs::from_c(c).counters_recent.cancel_sync();
 }
 
 // ── BCH_IOCTL_QUERY_COUNTERS ─────────────────────────────────────────────────

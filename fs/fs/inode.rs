@@ -1114,15 +1114,6 @@ pub fn shard_cpu_init(fs: &Fs) {
     let _ = fs;
 }
 
-/// For C's filesystem startup: bch2_fs_inode_shard_cpu_init().
-///
-/// # Safety
-/// @c is a filesystem being started, nothing else using it.
-#[c_export]
-pub unsafe extern "C" fn bch2_fs_inode_shard_cpu_init(c: &Opaque<c::bch_fs>) {
-    shard_cpu_init(Fs::from_c(c))
-}
-
 /// The default for shard_inode_numbers_bits, when it isn't set.
 ///
 /// Scales with @nr_cpus - doubled, for oversubscribed threads - capped so the

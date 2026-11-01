@@ -719,19 +719,13 @@ fn decrypt_sb_key(fs: &Fs, sb: &c::bch_sb, crypt: &c::bch_sb_field_crypt, user_k
 
 /// The filesystem's key set, if it's encrypted: at mount, @user_key the key
 /// whoever opened it was handed - its owner's still, to wipe.
-#[c_export]
-pub fn bch2_fs_encryption_init(c: &Opaque<c::bch_fs>, user_key: Option<&c::bch_key>) -> c_int {
-    let fs = Fs::from_c(c);
+pub fn encryption_init(fs: &Fs, user_key: Option<&c::bch_key>) -> Result<(), BchError> {
     let mut sb = fs.sb_lock();
-    let Some(crypt) = sb.field::<c::bch_sb_field_crypt>() else { return 0 };
+    let Some(crypt) = sb.field::<c::bch_sb_field_crypt>() else { return Ok(()) };
 
-    match decrypt_sb_key(fs, sb.sb(), crypt, user_key) {
-        Ok(key) => {
-            assert!(sb.published().encryption_key.set(key), "the filesystem's key set before mount");
-            0
-        }
-        Err(e) => ret_to_c(Err(e)),
-    }
+    let key = decrypt_sb_key(fs, sb.sb(), crypt, user_key)?;
+    assert!(sb.published().encryption_key.set(key), "the filesystem's key set before mount");
+    Ok(())
 }
 
 /// Whether @c has its key - an encryption type is no use without it.

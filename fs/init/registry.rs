@@ -14,17 +14,16 @@
 //! A mount that finds another mount's Opening waits for it to end, then gets
 //! the filesystem it opened; any other conflict is EBUSY.
 
-use core::ffi::{c_int, CStr};
+use core::ffi::CStr;
 use core::ptr::NonNull;
 
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
 use crate::fs::{Claimed, Fs, OpenFs};
 use crate::locking::Locked;
 use crate::sb::io::Holder;
 use crate::util::alloc::{flags::GFP_KERNEL, Arc, KVVec};
 use crate::util::backref::BackRef;
-use crate::util::ffi::Opaque;
 use crate::util::futex::EventCount;
 use crate::util::log::{log_no_fs, LogLevel};
 use crate::util::printbuf::{Printbuf, ToText};
@@ -260,20 +259,16 @@ pub fn bch2_fs_registry_init() {
     let Ok(()) = unsafe { REGISTRY.init_zeroed(c"REGISTRY", crate::new_lock!(@key)) };
 }
 
-#[c_export]
-pub fn bch2_fs_register(c: &Opaque<c::bch_fs>) -> c_int {
-    let fs = Fs::from_c(c);
+pub fn register(fs: &Fs) -> Result<(), BchError> {
     let mut registry = REGISTRY.lock();
 
     if fs.sb.multi_device.get() && registry.open.iter().any(|f| fs_uuid(f) == fs_uuid(fs)) {
-        return ret_to_c(Err(fs.err(bch_errcode::BCH_ERR_filesystem_uuid_already_open)));
+        return fs.throw(bch_errcode::BCH_ERR_filesystem_uuid_already_open);
     }
-    // SAFETY: bch2_fs_free() deregisters it before freeing it
-    ret_to_c(registry.open.push(unsafe { BackRef::new(fs) }, GFP_KERNEL))
+    // SAFETY: exit() deregisters it before freeing it
+    Ok(registry.open.push(unsafe { BackRef::new(fs) }, GFP_KERNEL)?)
 }
 
-#[c_export]
-pub fn bch2_fs_deregister(c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
+pub fn deregister(fs: &Fs) {
     REGISTRY.lock().open.retain(|f| !core::ptr::eq(&**f, fs));
 }

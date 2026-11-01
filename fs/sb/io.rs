@@ -1219,6 +1219,55 @@ impl bch_sb_handle {
         self.io.realloc(&self.dev, u64s)
     }
 
+    /// The defaults an older version left unset, filled in
+    pub fn set_compat_defaults(&mut self) -> Result<(), BchError> {
+        use c::bcachefs_metadata_version as V;
+
+        let s = self.sb_mut();
+        let version = u32::from(s.version.get());
+
+        /* Compat: */
+        if s.journal_flush_delay() == 0 {
+            s.set_journal_flush_delay(1000);
+        }
+        if s.journal_reclaim_delay() == 0 {
+            s.set_journal_reclaim_delay(1000);
+        }
+        if s.version_upgrade_complete() == 0 {
+            s.set_version_upgrade_complete(version.into());
+        }
+        if version <= V::bcachefs_metadata_version_disk_accounting_v2.0 && s.allocator_stuck_timeout() == 0 {
+            s.set_allocator_stuck_timeout(30);
+        }
+        if version <= V::bcachefs_metadata_version_disk_accounting_v2.0 {
+            s.set_promote_whole_extents(true);
+        }
+        if s.write_error_timeout() == 0 {
+            s.set_write_error_timeout(30);
+        }
+        if version <= V::bcachefs_metadata_version_extent_flags.0 && s.csum_err_retry_nr() == 0 {
+            s.set_csum_err_retry_nr(3);
+        }
+
+        /* Ensure sb_field_ext exists at current size before reading opts, so
+         * ext opts see a fully-sized field: */
+        let ext = self.field_get_minsize::<c::bch_sb_field_ext>((size_of::<c::bch_sb_field_ext>() / size_of::<u64>()) as u32)
+            .ok_or(BchError::from(bch_errcode::BCH_ERR_ENOSPC_sb))?;
+        if ext.dev_readahead() == 0 {
+            ext.set_dev_readahead((2 << 20) >> 9);
+        }
+        if ext.ec_stripe_buf_limit() == 0 {
+            ext.set_ec_stripe_buf_limit(5);
+        }
+        if ext.btree_cache_shrinker_seeks() == 0 {
+            ext.set_btree_cache_shrinker_seeks(4);
+        }
+        if version <= V::bcachefs_metadata_version_erasure_coding.0 && ext.discard_buffer() == 0 {
+            ext.set_discard_buffer(4);
+        }
+        Ok(())
+    }
+
     /// What it holds released, and it zeroed: bch2_free_super().
     pub fn free(&mut self) {
         self.io.free();
@@ -1956,6 +2005,12 @@ impl bch_sb_buf {
     fn field_ptr(&mut self, off: Option<usize>) -> *mut Head<c::bch_sb_field> {
         // SAFETY: a section of the handle's superblock
         off.map_or(core::ptr::null_mut(), |off| unsafe { field_at(self.sb, off) })
+    }
+}
+
+impl Drop for c::bch_fs_sb {
+    fn drop(&mut self) {
+        self.free();
     }
 }
 
@@ -2860,12 +2915,6 @@ pub unsafe fn bch2_sb_field_get_minsize_id(sb: *mut c::bch_fs_sb, ty: c::bch_sb_
     sb.field_ptr(off)
 }
 
-/// The filesystem's superblock's buffer freed: bch2_free_super(), for it.
-#[c_export]
-pub fn bch2_free_fs_sb(sb: &mut c::bch_fs_sb) {
-    sb.free();
-}
-
 /// The u64s section @F is with @nr of its tail's entries: for
 /// field_resize() and field_get_minsize().
 pub fn sb_field_u64s<F: SbField + Unsized + ?Sized>(nr: usize) -> u32 {
@@ -3006,7 +3055,7 @@ fn copy_super<T: SbResize + ?Sized>(dst: &mut T, src: &bch_sb) -> Result<(), Bch
 
 /// The filesystem's superblock from @src, and what it derives from it:
 /// bch2_sb_to_fs().
-fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &bch_sb) -> Result<(), BchError> {
+pub fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &bch_sb) -> Result<(), BchError> {
     let mut disk_sb = fs.sb_resize(sb);
     disk_sb.sb_realloc(0)?;
     copy_super(&mut disk_sb, src)?;
@@ -3035,15 +3084,6 @@ fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &bch_sb) -> Result<(), BchEr
     c::bch_sb_field_extent_type_u64s::to_cpu(fs, sb)?;
     sb_update(fs, sb);
     Ok(())
-}
-
-/// # Safety
-/// @src is a validated superblock, not the filesystem's.
-#[c_export]
-pub unsafe fn bch2_sb_to_fs(c: &Opaque<c::bch_fs>, src: *mut Head<c::bch_sb>) -> c_int {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock; @src is the caller's
-    ret_to_c(sb_to_fs(fs, &mut unsafe { fs.sb_lock_held() }, unsafe { bch_sb::<Validated>::from_ffi(src) }))
 }
 
 /// @ca's superblock from the filesystem's: bch2_sb_from_fs().

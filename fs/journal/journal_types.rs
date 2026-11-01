@@ -7,7 +7,7 @@ use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::types::c_default;
 use crate::util::{Printbuf, ToText};
-use core::ffi::c_int;
+use core::ffi::{c_int, c_uint};
 use core::sync::atomic::{AtomicU64, Ordering};
 use cstruct_macros::{CStruct, c_enum, c_extern};
 
@@ -38,6 +38,7 @@ c_default!(journal_block);
 
 c_extern! {
     pub fn bch2_journal_flush(j: *mut c::journal) -> c_int;
+    pub fn bch2_journal_entry_res_resize(j: *mut c::journal, res: *mut c::journal_entry_res, new_u64s: c_uint);
     pub fn bch2_journal_flush_async(j: *mut c::journal, parent: *mut c::closure);
     pub fn bch2_journal_advance_rewind_seq(j: *mut c::journal, seq: u64);
     pub fn bch2_journal_noflush_seq(j: *mut c::journal, start: u64, end: u64) -> bool;

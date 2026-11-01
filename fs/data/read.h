@@ -7,8 +7,6 @@
 #include "data/extents_gen.h"
 #include "data/reflink.h"
 
-#define BIO_BOUNCE_BUF_POOL_LEN	(PAGE_SIZE << PAGE_ALLOC_COSTLY_ORDER)
-
 #define BCH_READ_ERR_checksum		(1U << 0)
 #define BCH_READ_ERR_io			(1U << 1)
 #define BCH_READ_ERR_decompression	(1U << 2)
@@ -110,8 +108,5 @@ static inline struct bch_read_bio *rbio_init(struct bio *bio,
 }
 
 void bch2_read_bio_to_text(struct printbuf *, struct bch_fs *, struct bch_read_bio *);
-
-void bch2_fs_io_read_exit(struct bch_fs *);
-int bch2_fs_io_read_init(struct bch_fs *);
 
 #endif /* _BCACHEFS_IO_READ_H */

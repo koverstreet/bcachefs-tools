@@ -122,12 +122,6 @@ static inline unsigned long rust_folio_page_idx(struct folio *folio, struct page
 }
 
 /* a static inline */
-static inline bool rust_refcount_inc_not_zero(refcount_t *r)
-{
-	return refcount_inc_not_zero(r);
-}
-
-/* a static inline */
 static inline void rust_poll_wait(struct file *file, wait_queue_head_t *q, poll_table *pt)
 {
 	poll_wait(file, q, pt);

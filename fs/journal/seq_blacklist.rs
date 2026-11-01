@@ -239,10 +239,8 @@ pub fn bch2_journal_seq_blacklist_add(c: &Opaque<c::bch_fs>, start: u64, end: u6
 }
 
 /// At mount.
-#[c_export]
-pub fn bch2_blacklist_table_initialize(c: &Opaque<c::bch_fs>) -> c_int {
-    let fs = Fs::from_c(c);
-    ret_to_c(Section::to_cpu(fs, &mut fs.sb_lock()))
+pub fn blacklist_table_initialize(fs: &Fs) -> Result<(), BchError> {
+    Section::to_cpu(fs, &mut fs.sb_lock())
 }
 
 /// At the end of recovery: drop the ranges nothing was found in that are

@@ -917,11 +917,6 @@ pub fn bch2_copygc_wakeup(c: &Fs) {
     c.copygc_wakeup()
 }
 
-#[c_export]
-pub fn bch2_copygc_stop(c: &Fs) {
-    c.copygc_stop()
-}
-
 /// Until copygc isn't running, or this kthread's told to stop: for a moving
 /// context that waits on copygc, Moving::ratelimit()'s. Freezable - copygc
 /// freezes in place, mid run - and interruptible, as wait_event_freezable().

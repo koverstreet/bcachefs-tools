@@ -263,7 +263,7 @@ impl Bcachefs {
         })();
 
         if let Err(e) = filled {
-            fs.stop();
+            let _ = fs.stop();
             return Err(e);
         }
 

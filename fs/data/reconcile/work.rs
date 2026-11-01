@@ -1209,21 +1209,15 @@ mod power {
     pub(super) fn unregister(_: &Fs) {}
 }
 
+pub fn reconcile_exit(fs: &Fs) {
+    power::unregister(fs)
+}
+
 // ── C's ──────────────────────────────────────────────────────────────────
 
 #[c_export]
 pub fn bch2_reconcile_wakeup(c: &Fs) {
     c.reconcile_wakeup()
-}
-
-#[c_export]
-pub fn bch2_reconcile_stop(c: &Fs) {
-    c.reconcile_stop()
-}
-
-#[c_export]
-pub fn bch2_fs_reconcile_exit(c: &Fs) {
-    power::unregister(c)
 }
 
 #[c_export]

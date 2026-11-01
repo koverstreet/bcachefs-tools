@@ -33,6 +33,27 @@ pub fn alloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>
     alloc_in::<false, T, E>(init, flags::GFP_KERNEL)
 }
 
+/// alloc_pinned(), the allocation failing with @err - @init with its own.
+pub fn alloc_pinned_or<T>(init: impl ::pin_init::PinInit<T, crate::errcode::BchError>, err: crate::errcode::bch_errcode)
+    -> Result<*mut T, crate::errcode::BchError>
+{
+    enum Failed {
+        Alloc,
+        Init(crate::errcode::BchError),
+    }
+    impl From<AllocError> for Failed {
+        fn from(_: AllocError) -> Self {
+            Failed::Alloc
+        }
+    }
+
+    let init = unsafe { ::pin_init::pin_init_from_closure(move |slot| init_at(init, slot).map_err(Failed::Init)) };
+    alloc_pinned(init).map_err(|e| match e {
+        Failed::Alloc   => err.into(),
+        Failed::Init(e) => e,
+    })
+}
+
 /// Drop and free @p.
 ///
 /// # Safety

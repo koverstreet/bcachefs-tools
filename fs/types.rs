@@ -10,6 +10,7 @@ use crate::util::bitmap::AtomicBitflags;
 use crate::util::kernel::WRITE;
 use crate::util::bio::BioSet;
 use crate::util::late::Late;
+use crate::util::mempool::Mempool;
 use crate::util::workqueue::{ReffedWork, Workqueue, WqFlags};
 use crate::locking::{Locked, LockedBy, MutexNoio, PercpuRwsemNoio};
 use crate::util::percpu::{Counters, PerCpu};
@@ -580,14 +581,15 @@ c_enum! {
 }
 
 /// The filesystem: struct bch_fs, to C. Rust allocates it and frees it -
-/// bch2_fs_alloc_mem(), bch2_fs_free_mem() - so its Rust-typed fields get
-/// their initializers, from Fs::init(), and their Drop; C's bch2_fs_init()
-/// and teardown do the rest, as they did with kvzalloc() and kvfree().
+/// alloc(), bch2_fs_release() - so its Rust-typed fields get their
+/// initializers, from Fs::init(), and their Drop; init_from() and the
+/// subsystems' inits and exits do the rest.
 /// Borrowed by Rust as &Fs; OpenFs owns one opened from userspace.
 #[pin_data]
 #[repr(C)]
 #[c_name(bch_fs)]
 #[derive(CStruct, TypeInfo, Init, Late)]
+#[init_args(options: &c::bch_opts)]
 pub struct Fs {
     pub cl: c::closure,
 
@@ -603,7 +605,7 @@ pub struct Fs {
     pub minor: c_int,
     pub chardev: *mut c::device,
     pub vfs_sb: *mut c::super_block,
-    /// What its devices are claimed for: the open's, from bch2_fs_alloc()
+    /// What its devices are claimed for: the open's, from alloc()
     #[pin]
     #[init(RustOnly::new(None))]
     pub(crate) holder: rust_only!(Option<crate::util::alloc::Arc<crate::sb::io::Holder>>),
@@ -650,9 +652,9 @@ pub struct Fs {
      * Analagous to c->writes, for asynchronous ops that don't necessarily
      * need fs to be read-write
      */
-    pub ro_ref: c::refcount_t,
-    pub ro_ref_wait: c::wait_queue_head_t,
-    /// Woken with ro_ref_wait at start, for Rust's waiters on BCH_FS_started
+    #[init(AtomicI32::new(1))]
+    pub ro_ref: AtomicI32,
+    /// Woken as it starts and as it stops, and as the last ro_ref is put
     #[pin]
     #[init(RustOnly::new(crate::util::futex::EventCount::new()))]
     pub(crate) ro_ref_events: rust_only!(crate::util::futex::EventCount),
@@ -669,6 +671,7 @@ pub struct Fs {
 
     /// The options: read by anyone, an option at a time - written under
     /// sb_lock, which publishes them - Fs::opts_writer().
+    #[init(LockedBy::new((), (*options).into()))]
     #[c("struct bch_opts opts")]
     pub opts: LockedBy<(), c::PublishedOpts>,
     pub opt_change_lock: c::mutex,
@@ -692,6 +695,7 @@ pub struct Fs {
         bits_to_longs(c::BCH_VERSION_MINOR(c::bcachefs_metadata_version_current as u64) as usize) }>,
     pub cf_encoding: *mut c::unicode_map,
 
+    #[init((options.block_size >> 9).ilog2() as c_ushort)]
     pub block_bits: c_ushort, /* ilog2(block_size) */
 
     /*
@@ -750,7 +754,7 @@ pub struct Fs {
     pub logged_ops: c::bch_fs_logged_ops,
 
     #[pin]
-    #[init(c::bch_fs_btree::init())]
+    #[init(c::bch_fs_btree::init(options))]
     #[late]
     pub btree: c::bch_fs_btree,
 
@@ -805,8 +809,14 @@ pub struct Fs {
            ENOMEM_fs_other_alloc)]
     #[c("struct workqueue_struct *btree_update_wq")]
     pub btree_update_wq: Late<Workqueue>,
-    pub bio_read: c::bio_set,
-    pub bio_read_split: c::bio_set,
+    #[pin]
+    #[init(BioSet::new(1, true), ENOMEM_bio_read_init)]
+    #[c("struct bio_set bio_read")]
+    pub bio_read: BioSet<c::bch_read_bio>,
+    #[pin]
+    #[init(BioSet::new(1, true), ENOMEM_bio_read_split_init)]
+    #[c("struct bio_set bio_read_split")]
+    pub bio_read_split: BioSet<c::bch_read_bio>,
     #[late(BioSet::new(1, true), ENOMEM_bio_write_init)]
     #[c("struct bio_set bio_write")]
     pub bio_write: Late<BioSet<c::bch_write_bio>>,
@@ -814,9 +824,10 @@ pub struct Fs {
     #[c("struct bio_set replica_set")]
     pub replica_set: Late<BioSet<c::bch_write_bio>>,
     pub bio_bounce_pages_lock: c::mutex,
-    /* allocated from through a shared reference: by C and util/bio/pages.rs */
+    #[pin]
+    #[init(crate::util::bio::pages::bounce_pool(options), ENOMEM_bio_bounce_pages_init)]
     #[c("mempool_t bio_bounce_bufs")]
-    pub bio_bounce_bufs: crate::util::ffi::Opaque<c::mempool_t>,
+    pub bio_bounce_bufs: Mempool,
     #[pin]
     #[init(RustOnly::new(crate::data::nocow_locking::NocowLocks::new()))]
     pub(crate) nocow_locks: rust_only!(crate::data::nocow_locking::NocowLocks),
@@ -859,6 +870,8 @@ pub struct Fs {
     pub(crate) reflink_gc: rust_only!(crate::data::reflink::ReflinkGc),
 
     #[cfg(not(NO_BCACHEFS_FS))]
+    #[pin]
+    #[init(c::bch_fs_vfs::init())]
     #[late]
     pub vfs: c::bch_fs_vfs,
     #[cfg(not(NO_BCACHEFS_FS))]

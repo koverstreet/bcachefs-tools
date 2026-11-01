@@ -439,6 +439,12 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             assert!(core::mem::align_of::<#name>() == core::mem::align_of::<PublishedOpts>());
         };
 
+        impl From<#name> for PublishedOpts {
+            fn from(o: #name) -> Self {
+                unsafe { core::mem::transmute(o) }
+            }
+        }
+
         impl PublishedOpts {
             /// A copy: each option as it was when it was read, not all as of one
             /// moment.

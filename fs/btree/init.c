@@ -292,11 +292,7 @@ void bch2_fs_btree_exit(struct bch_fs *c)
 	bch2_fs_btree_cache_exit(c);
 
 	if (c->btree.read_complete_wq)
-		destroy_workqueue(c->btree.read_complete_wq);
-
-	mempool_exit(&c->btree.bounce_pool);
-	bioset_exit(&c->btree.bio);
-	mempool_exit(&c->btree.fill_iter);
+		drain_workqueue(c->btree.read_complete_wq);
 }
 
 void bch2_fs_btree_init_early(struct bch_fs *c)
@@ -311,21 +307,6 @@ void bch2_fs_btree_init_early(struct bch_fs *c)
 int bch2_fs_btree_init(struct bch_fs *c)
 {
 	c->btree.foreground_merge_threshold = BTREE_FOREGROUND_MERGE_THRESHOLD(c);
-
-	unsigned iter_size = sizeof(struct sort_iter) +
-		(btree_blocks(c) + 1) * 2 *
-		sizeof(struct sort_iter_set);
-
-	if (!(c->btree.read_complete_wq = alloc_workqueue("bcachefs_btree_read_complete",
-				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM|WQ_PERCPU, 512)) ||
-	    mempool_init_kmalloc_pool(&c->btree.fill_iter, 1, iter_size) ||
-	    bioset_init(&c->btree.bio, 1,
-			max(offsetof(struct btree_read_bio, bio),
-			    offsetof(struct btree_write_bio, wbio.bio)),
-			BIOSET_NEED_BVECS) ||
-	    mempool_init_kvmalloc_pool(&c->btree.bounce_pool, 1,
-				       c->opts.btree_node_size))
-		return bch_err_throw(c, ENOMEM_fs_other_alloc);
 
 	try(bch2_fs_btree_cache_init(c));
 	try(bch2_fs_btree_iter_init(c));

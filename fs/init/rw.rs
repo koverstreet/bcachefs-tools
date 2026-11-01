@@ -400,19 +400,12 @@ impl StateLockWrite<'_> {
     }
 }
 
-#[c_export]
-pub fn bch2_fs_read_only(c: &Opaque<c::bch_fs>) {
-    Fs::from_c(c).state_lock_write().read_only()
-}
-
-#[c_export]
-pub unsafe fn bch2_fs_read_only_work(work: *mut c::work_struct) {
+pub(crate) unsafe extern "C" fn read_only_work(work: *mut c::work_struct) {
     let fs = unsafe { &*work.byte_sub(core::mem::offset_of!(Fs, read_only_work)).cast::<Fs>() };
     fs.state_lock_write().read_only();
 }
 
-#[c_export]
-pub unsafe fn bch2_writes_disabled(writes: *mut c::enumerated_ref) {
+pub(crate) unsafe extern "C" fn writes_disabled(writes: *mut c::enumerated_ref) {
     let fs = unsafe { &*writes.byte_sub(core::mem::offset_of!(Fs, writes)).cast::<Fs>() };
     fs.flags.set(Flag::BCH_FS_write_disable_complete, true);
     READ_ONLY_EVENTS.wake();
@@ -431,14 +424,4 @@ pub fn bch2_fs_emergency_read_only_locked(c: &Opaque<c::bch_fs>, out: &mut Print
 #[c_export]
 pub fn bch2_fs_read_write_early(c: &Opaque<c::bch_fs>) -> c_int {
     ret_to_c(Fs::from_c(c).state_lock_write().start_rw())
-}
-
-/// What init_rw() made, gone - each workqueue's destroy its flush - before
-/// the subsystems' exits free what their work uses.
-///
-/// # Safety
-/// From teardown: nothing uses them any more.
-#[c_export]
-pub unsafe fn bch2_fs_exit_late(c: &Opaque<c::bch_fs>) {
-    unsafe { Fs::from_c(c).exit_late() }
 }
