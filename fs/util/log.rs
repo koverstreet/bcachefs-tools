@@ -735,6 +735,28 @@ macro_rules! bch_err_dev {
     };
 }
 
+#[macro_export]
+macro_rules! bch_info_dev {
+    ($ca:expr, $($arg:tt)*) => {
+        $crate::util::log::log_dev($ca, $crate::util::log::LogLevel::INFO, $crate::message!($($arg)*))
+    };
+}
+
+/// As C's bch_err_fn_dev(): bch_err_fn!(), after the device's name.
+#[macro_export]
+macro_rules! bch_err_fn_dev {
+    ($ca:expr, $result:expr) => {{
+        let result = $result;
+        if let Err(e) = &result {
+            let e: $crate::errcode::BchError = (*e).into();
+            if $crate::util::log::should_print_err(&e) {
+                $crate::bch_err_dev!($ca, "{}(): error {}", $crate::function_name!(), e.msg());
+            }
+        }
+        result
+    }};
+}
+
 /// As C's bch_err_msg_dev(): bch_err_msg!(), after the device's name.
 #[macro_export]
 macro_rules! bch_err_msg_dev {

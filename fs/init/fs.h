@@ -33,6 +33,4 @@ extern const char * const bch2_write_refs[];
 extern const char * const bch2_dev_read_refs[];
 extern const char * const bch2_dev_write_refs[];
 
-int bch2_fs_resize_on_mount(struct bch_fs *);
-
 #endif /* _BCACHEFS_SUPER_H */

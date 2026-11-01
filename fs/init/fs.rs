@@ -62,7 +62,6 @@ use cstruct_macros::c_extern;
 use crate::format::{Bpos, Btree};
 
 c_extern! {
-    fn bch2_fs_will_resize_on_mount(c: *mut c::bch_fs) -> bool;
     static mut bcachefs_kobj: c::kobject;
     pub static bch2_write_refs: [*const crate::util::ffi::c_char; 0];
     pub static bch2_dev_read_refs: [*const crate::util::ffi::c_char; 0];
@@ -657,7 +656,7 @@ impl Fs {
         }
 
         if !(self.feature(Feature::BCH_FEATURE_small_image) || self.feature(Feature::BCH_FEATURE_no_default_sb)) ||
-           unsafe { bch2_fs_will_resize_on_mount(self.as_ptr()) } {
+           self.will_resize_on_mount() {
             self.flags.set(Flag::BCH_FS_may_upgrade_downgrade, true);
         }
 

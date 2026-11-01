@@ -205,63 +205,6 @@ KTYPE(bcachefs);
 
 struct kobject bcachefs_kobj;
 
-/* Filesystem startup: */
-
-static bool bch2_dev_will_resize_on_mount(struct bch_dev *ca)
-{
-	return ca->mi.resize_on_mount &&
-		ca->mi.nbuckets < div64_u64(get_capacity(ca->disk_sb.bdev->bd_disk),
-					    ca->mi.bucket_size);
-}
-
-bool bch2_fs_will_resize_on_mount(struct bch_fs *c)
-{
-	bool ret = false;
-	for_each_online_member(c, ca, BCH_DEV_READ_REF_fs_resize_on_mount)
-		ret |= bch2_dev_will_resize_on_mount(ca);
-	return ret;
-}
-
-int bch2_fs_resize_on_mount(struct bch_fs *c)
-{
-	for_each_online_member(c, ca, BCH_DEV_READ_REF_fs_resize_on_mount) {
-		if (bch2_dev_will_resize_on_mount(ca)) {
-			u64 old_nbuckets = ca->mi.nbuckets;
-			u64 new_nbuckets = div64_u64(get_capacity(ca->disk_sb.bdev->bd_disk),
-						     ca->mi.bucket_size);
-
-			bch_info_dev(ca, "resizing to size %llu", new_nbuckets * ca->mi.bucket_size);
-			int ret = bch2_dev_buckets_resize(c, ca, new_nbuckets);
-			bch_err_fn_dev(ca, ret);
-			if (ret) {
-				enumerated_ref_put(&ca->io_ref[READ],
-						   BCH_DEV_READ_REF_fs_resize_on_mount);
-				return ret;
-			}
-
-			scoped_guard(mutex_noio, &c->sb_lock) {
-				struct bch_member *m =
-					bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
-				m->nbuckets = cpu_to_le64(new_nbuckets);
-				SET_BCH_MEMBER_RESIZE_ON_MOUNT(m, false);
-
-				c->disk_sb.sb->features[0] &= ~cpu_to_le64(BIT_ULL(BCH_FEATURE_small_image));
-				bch2_write_super(c);
-			}
-
-			if (ca->mi.freespace_initialized) {
-				ret = __bch2_dev_resize_alloc(ca, old_nbuckets, new_nbuckets);
-				if (ret) {
-					enumerated_ref_put(&ca->io_ref[READ],
-							BCH_DEV_READ_REF_fs_resize_on_mount);
-					return ret;
-				}
-			}
-		}
-	}
-	return 0;
-}
-
 /* Global interfaces/init */
 
 static void bcachefs_exit(void)

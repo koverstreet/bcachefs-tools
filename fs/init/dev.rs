@@ -168,6 +168,7 @@ c_extern! {
     pub fn bch2_dev_sysfs_online(c: *mut c::bch_fs, ca: *mut c::bch_dev) -> c_int;
     pub fn bch2_dev_alloc(c: *mut c::bch_fs, dev_idx: c_uint) -> c_int;
     pub fn bch2_dev_attach_bdev(c: *mut c::bch_fs, sb: *mut c::bch_sb_handle, err: *mut c::printbuf) -> c_int;
+    pub fn __bch2_dev_resize_alloc(ca: *mut c::bch_dev, old_nbuckets: u64, new_nbuckets: u64) -> c_int;
     pub fn bch2_dev_add(c: *mut c::bch_fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
     pub fn bch2_dev_add_initialize(c: *mut c::bch_fs, ca: *mut c::bch_dev) -> c_int;
     pub fn bch2_dev_resize(c: *mut c::bch_fs, ca: *mut c::bch_dev, nbuckets: u64,
@@ -465,4 +466,68 @@ unsafe extern "C" fn bdev_sync(bdev: *mut c::block_device) {
         let _umount = sb.umount().read();
         unsafe { c::sync_filesystem(sb.as_ptr()) };
     }
+}
+
+// ── Resizing on mount ────────────────────────────────────────────────────
+
+impl c::bch_dev {
+    /// The disk it's on, in sectors: get_capacity()
+    fn disk_sectors(&self) -> u64 {
+        unsafe {
+            let disk = (*self.disk_sb.bdev).bd_disk;
+            #[cfg(kernel)]
+            let sectors = (*(*disk).part0).bd_nr_sectors;
+            #[cfg(not(kernel))]
+            let sectors = c::get_capacity(disk);
+            sectors as u64
+        }
+    }
+
+    fn will_resize_on_mount(&self) -> bool {
+        let mi = self.mi.get();
+        mi.resize_on_mount != 0 && mi.nbuckets < self.disk_sectors() / u64::from(mi.bucket_size)
+    }
+}
+
+impl Fs {
+    pub(crate) fn will_resize_on_mount(&self) -> bool {
+        self.online_members().any(|ca| ca.will_resize_on_mount())
+    }
+
+    pub fn resize_on_mount(&self) -> Result<(), BchError> {
+        for ca in self.online_members() {
+            if !ca.will_resize_on_mount() {
+                continue;
+            }
+
+            let mi = ca.mi.get();
+            let old_nbuckets = mi.nbuckets;
+            let new_nbuckets = ca.disk_sectors() / u64::from(mi.bucket_size);
+
+            crate::bch_info_dev!(&ca, "resizing to size {}", new_nbuckets * u64::from(mi.bucket_size));
+            crate::bch_err_fn_dev!(&ca, ca.buckets_resize(new_nbuckets))?;
+
+            {
+                let mut sb = self.sb_lock();
+                let m = sb.fs_member_mut(ca.dev_idx.into());
+                m.nbuckets = new_nbuckets.into();
+                m.set_resize_on_mount(false);
+
+                let s = sb.sb_mut();
+                s.features[0] = (s.features[0].get() & !(1 << c::bch_sb_feature::BCH_FEATURE_small_image.0)).into();
+                self.write_super(&mut sb);
+            }
+
+            if ca.mi.get().freespace_initialized != 0 {
+                let ca = core::ptr::from_ref::<c::bch_dev>(&ca).cast_mut();
+                ret_to_result_void(unsafe { __bch2_dev_resize_alloc(ca, old_nbuckets, new_nbuckets) })?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[c_export]
+pub fn bch2_fs_resize_on_mount(c: &Fs) -> c_int {
+    ret_to_c(c.resize_on_mount())
 }
