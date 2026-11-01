@@ -191,26 +191,6 @@ void bch2_rust_warn(const char *file, unsigned line)
 	WARN(1, "WARNING at %s:%u\n", file, line);
 }
 
-static void bch2_fs_counters_release(struct kobject *k)
-{
-}
-
-static void bch2_fs_internal_release(struct kobject *k)
-{
-}
-
-static void bch2_fs_opts_dir_release(struct kobject *k)
-{
-}
-
-static void bch2_fs_time_stats_release(struct kobject *k)
-{
-}
-
-static void bch2_fs_time_stats_json_release(struct kobject *k)
-{
-}
-
 static struct attribute *bcachefs_files[] = {
 	NULL
 };
@@ -222,12 +202,6 @@ static void bcachefs_release(struct kobject *k)
 static const struct sysfs_ops bcachefs_sysfs_ops = {};
 
 KTYPE(bcachefs);
-KTYPE(bch2_fs);
-KTYPE(bch2_fs_counters);
-KTYPE(bch2_fs_internal);
-KTYPE(bch2_fs_opts_dir);
-KTYPE(bch2_fs_time_stats);
-KTYPE(bch2_fs_time_stats_json);
 
 struct kobject bcachefs_kobj;
 

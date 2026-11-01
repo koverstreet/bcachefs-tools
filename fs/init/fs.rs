@@ -22,7 +22,7 @@ use crate::data::checksum::encryption_init;
 use crate::data::compress::compress_init;
 use crate::data::ec::head::ec_exit;
 use crate::data::reconcile::work::reconcile_exit;
-use crate::debug::sysfs::{bch2_opts_create_sysfs_files, bin_attr_btree_trans_stats_json};
+use crate::debug::sysfs::{FsDir, FS_GROUPS};
 use crate::init::dev::{bch2_dev_alloc, bch2_dev_attach_bdev, bch2_dev_free, bch2_dev_io_ref_stop,
                        bch2_dev_sysfs_online, bch2_dev_unlink, dev_in_fs};
 use crate::init::error::free_fsck_errs;
@@ -41,6 +41,7 @@ use crate::util::backref::BackRef;
 use crate::util::enumerated_ref::EnumeratedRef;
 use crate::util::ffi::c_char;
 use crate::util::kernel::READ;
+use crate::util::kobject::{GroupList, KobjOwner, Kobject};
 use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
 use crate::util::percpu::PerCpu;
 use crate::util::printbuf::prt_bdevname;
@@ -60,15 +61,7 @@ use crate::format::{Bpos, Btree};
 
 c_extern! {
     fn bch2_fs_opt_version_init(c: *mut c::bch_fs, out: *mut c::printbuf) -> c_int;
-    fn sysfs_create_bin_file(kobj: *mut c::kobject, attr: *const c::bin_attribute) -> c_int;
-    fn sysfs_remove_bin_file(kobj: *mut c::kobject, attr: *const c::bin_attribute);
     static mut bcachefs_kobj: c::kobject;
-    static bch2_fs_ktype: c::kobj_type;
-    static bch2_fs_counters_ktype: c::kobj_type;
-    static bch2_fs_internal_ktype: c::kobj_type;
-    static bch2_fs_opts_dir_ktype: c::kobj_type;
-    static bch2_fs_time_stats_ktype: c::kobj_type;
-    static bch2_fs_time_stats_json_ktype: c::kobj_type;
     pub static bch2_write_refs: [*const crate::util::ffi::c_char; 0];
     pub static bch2_dev_read_refs: [*const crate::util::ffi::c_char; 0];
     pub static bch2_dev_write_refs: [*const crate::util::ffi::c_char; 0];
@@ -494,13 +487,6 @@ impl Fs {
         unsafe {
             c::closure_init(&raw mut (*p).cl, core::ptr::null_mut());
 
-            c::kobject_init(&raw mut (*p).kobj, &raw const bch2_fs_ktype);
-            c::kobject_init(&raw mut (*p).internal, &raw const bch2_fs_internal_ktype);
-            c::kobject_init(&raw mut (*p).opts_dir, &raw const bch2_fs_opts_dir_ktype);
-            c::kobject_init(&raw mut (*p).time_stats, &raw const bch2_fs_time_stats_ktype);
-            c::kobject_init(&raw mut (*p).time_stats_json, &raw const bch2_fs_time_stats_json_ktype);
-            c::kobject_init(&raw mut (*p).counters_kobj, &raw const bch2_fs_counters_ktype);
-
             (*p).minor = -1;
 
             let Ok(()) = init_at(work, &raw mut (*p).read_only_work);
@@ -641,35 +627,21 @@ impl Fs {
         #[cfg(CONFIG_DEBUG_FS)]
         crate::debug::debug::debug_init(self);
 
-        let p = self.as_ptr();
-        let uuid = self.sb.user_uuid();
-        let add = |kobj: *mut c::kobject, parent: *mut c::kobject, name: &CStr| unsafe {
-            c::kobject_add(kobj, parent, name.as_ptr().cast()) == 0
-        };
-        let added = unsafe {
-            (if self.sb.multi_device.get() {
-                c::kobject_add(&raw mut (*p).kobj, &raw mut bcachefs_kobj, c"%pU".as_ptr().cast(),
-                               uuid.b.as_ptr()) == 0
-            } else {
-                c::kobject_add(&raw mut (*p).kobj, &raw mut bcachefs_kobj, c"%s".as_ptr().cast(),
-                               (*p).name.as_ptr()) == 0
-            }) &&
-            add(&raw mut (*p).internal, &raw mut (*p).kobj, c"internal") &&
-            add(&raw mut (*p).opts_dir, &raw mut (*p).kobj, c"options") &&
-            (cfg!(CONFIG_BCACHEFS_NO_LATENCY_ACCT) ||
-             (add(&raw mut (*p).time_stats, &raw mut (*p).kobj, c"time_stats") &&
-              add(&raw mut (*p).time_stats_json, &raw mut (*p).kobj, c"time_stats_json"))) &&
-            add(&raw mut (*p).counters_kobj, &raw mut (*p).kobj, c"counters") &&
-            bch2_opts_create_sysfs_files(&raw mut (*p).opts_dir, c::OPT_FS as c_uint) == 0 &&
-            sysfs_create_bin_file(&raw mut (*p).internal, &*bin_attr_btree_trans_stats_json) == 0
-        };
-        if !added {
+        let mut name = Printbuf::new();
+        if self.sb.multi_device.get() {
+            prt!(&mut name, "{}", self.sb.user_uuid());
+        } else {
+            name.write_bytes(self.name().to_bytes());
+        }
+        // SAFETY: module init made it, module exit puts it
+        let parent = unsafe { Kobject::from_raw(&raw mut bcachefs_kobj) };
+        if name.allocation_failure() || self.kobj.add(parent, name.as_c_str()).is_err() {
             return self.throw(bch_errcode::BCH_ERR_sysfs_init_error);
         }
 
         let _state = self.state_lock_write();
         for ca in self.members() {
-            if unsafe { bch2_dev_sysfs_online(p, ca.as_mut_ptr()) } != 0 {
+            if unsafe { bch2_dev_sysfs_online(self.as_ptr(), ca.as_mut_ptr()) } != 0 {
                 return self.throw(bch_errcode::BCH_ERR_sysfs_init_error);
             }
         }
@@ -827,9 +799,7 @@ impl Fs {
                 unsafe { bch2_dev_unlink(ca.as_mut_ptr()) };
             }
 
-            if in_sysfs(&self.kobj) {
-                unsafe { c::kobject_del(&raw mut (*p).kobj) };
-            }
+            self.kobj.del();
 
             #[cfg(CONFIG_DEBUG_FS)]
             crate::debug::debug::debug_exit(self);
@@ -842,15 +812,6 @@ impl Fs {
             });
 
             unsafe {
-                c::kobject_put(&raw mut (*p).counters_kobj);
-                c::kobject_put(&raw mut (*p).time_stats_json);
-                c::kobject_put(&raw mut (*p).time_stats);
-                c::kobject_put(&raw mut (*p).opts_dir);
-                if in_sysfs(&self.internal) {
-                    sysfs_remove_bin_file(&raw mut (*p).internal, &*bin_attr_btree_trans_stats_json);
-                }
-                c::kobject_put(&raw mut (*p).internal);
-
                 /* btree prefetch might have kicked off reads in the background: */
                 bch2_btree_flush_all_reads(p);
 
@@ -871,11 +832,6 @@ impl Fs {
         }
         Ok(())
     }
-}
-
-// a bool in userspace's kobject, an unsigned bitfield in the kernel's
-fn in_sysfs(kobj: &c::kobject) -> bool {
-    u32::from(kobj.state_in_sysfs()) != 0
 }
 
 /// Stopped, its devices freed, and its kobject's last ref put: its release
@@ -906,15 +862,23 @@ unsafe fn exit(p: NonNull<Fs>) -> Result<(), BchError> {
 
     bch_verbose!(fs, "shutdown complete");
 
-    unsafe { c::kobject_put(&raw mut (*p.as_ptr()).kobj) };
+    unsafe { Kobject::put(&raw const (*p.as_ptr()).kobj) };
     ret
 }
 
+unsafe impl KobjOwner for Fs {
+    const KOBJ: usize = core::mem::offset_of!(Fs, kobj);
+    const GROUPS: GroupList = FS_GROUPS.list();
+    type Dir = FsDir;
+
+    unsafe fn release(this: NonNull<Fs>) {
+        unsafe { release(this.as_ptr()) }
+    }
+}
+
 /// # Safety
-/// @kobj is c->kobj, its last ref put.
-#[c_export]
-pub unsafe fn bch2_fs_release(kobj: *mut c::kobject) {
-    let p = unsafe { kobj.byte_sub(core::mem::offset_of!(Fs, kobj)).cast::<Fs>() };
+/// @p's kobject's last ref is put.
+unsafe fn release(p: *mut Fs) {
     let fs = unsafe { &*p };
 
     if fs.journal_keys.initial_ref_held {

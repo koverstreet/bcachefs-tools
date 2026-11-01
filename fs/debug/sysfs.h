@@ -4,7 +4,7 @@
 
 #include <linux/sysfs.h>
 
-/* debug/sysfs.rs: each directory's files and sysfs_ops, for init's KTYPE()s */
+/* debug/sysfs.rs: a device's files and sysfs_ops, for dev.c's KTYPE() */
 #include "debug/sysfs_gen.h"
 
 #endif  /* _BCACHEFS_SYSFS_H_ */

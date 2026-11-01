@@ -2,17 +2,17 @@
 
 //! /sys/fs/bcachefs/<uuid>/: the filesystem's sysfs files.
 //!
-//! Each directory is a Dir (util/sysfs.rs), exported to C as the foo_files[]
-//! and foo_sysfs_ops that init's KTYPE()s name - the kobjects and their
-//! lifetimes are init's. Its files are one of:
+//! The filesystem's directory is its kobject's, FsDir; its subdirectories are
+//! named attribute groups of it (util/kobject.rs), so FsDir reads and writes
+//! their files too, each told by the table its attribute is in. A device's
+//! dir is DevDir, its kobject's - dev.c's KTYPE(). Files are one of:
 //! - a table of Attrs - name, mode, what reading and writing do: the fs dir,
 //!   internal/, a device's own files;
 //! - a ListAttrs, a file per entry of an x-macro list: time_stats/,
 //!   time_stats_json/, counters/;
-//! - the options' own attributes, added at runtime by
-//!   bch2_opts_create_sysfs_files(): options/, and a device's options in its
-//!   dir. opts.c is still C: opt_show() and opt_store() are over opts.rs's
-//!   wrappers.
+//! - the options' own attributes, those of the options that apply: options/,
+//!   and a device's options in its dir. opts.c is still C: opt_show() and
+//!   opt_store() are over opts.rs's wrappers.
 //!
 //! internal/btree_trans_stats_json is a bin_attribute, apart from the rest.
 //!
@@ -23,7 +23,7 @@
 //! wakeups, cache shrinks, the logged-op knob, work that takes its own ref -
 //! need none.
 
-use core::ffi::{c_int, c_uint, CStr};
+use core::ffi::CStr;
 use core::mem::offset_of;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
@@ -45,19 +45,45 @@ use crate::util::kernel::{READ, WRITE};
 use crate::util::log::LogMsg;
 use crate::util::time_stats::TimeStats;
 use crate::util::refcount::TryRefcount;
+use crate::util::kobject::{BinFile, BinFiles, Group, Groups};
 use crate::util::sysfs::{self, parse_human_u64, parse_int, Attr, Dir, Files, ListAttrs};
 use crate::util::{HumanReadable, Printbuf, ToText};
 
 // ── the fs dir ──────────────────────────────────────────────────────────────
 
-struct FsDir;
+pub struct FsDir;
 
 unsafe impl Dir for FsDir {
     type Obj = Fs;
     const KOBJ: usize = offset_of!(Fs, kobj);
 
-    fn may_store(c: &Fs) -> Result<(), BchError> {
-        started(c)
+    fn show(c: &Fs, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
+        if let Some(i) = TIME_STATS.index(attr) {
+            c.times[i].to_text(out);
+        } else if let Some(i) = TIME_STATS_JSON.index(attr) {
+            c.times[i].json_to_text(out);
+        } else if let Some(i) = COUNTER_FILES.index(attr) {
+            counter_to_text(c, i, out);
+        } else if let Some(id) = opt_from_attr(attr) {
+            return opt_show(c, None, id, out);
+        } else {
+            return unsafe { sysfs::attr_show(c, attr, out) };
+        }
+        Ok(())
+    }
+
+    fn store(c: &Fs, attr: &c::attribute, s: &str) -> Result<(), BchError> {
+        if let Some(i) = TIME_STATS.index(attr).or_else(|| TIME_STATS_JSON.index(attr)) {
+            c.times[i].reset();
+        } else if let Some(i) = COUNTER_FILES.index(attr) {
+            c.counter_reset(i);
+        } else if let Some(id) = opt_from_attr(attr) {
+            return opt_store(c, None, id, s);
+        } else {
+            started(c)?;
+            return unsafe { sysfs::attr_store(c, attr, s) };
+        }
+        Ok(())
     }
 }
 
@@ -78,25 +104,7 @@ const FS: &[Attr<Fs>] = &[
     Attr::wo(c"perf_test",              perf_test),
 ];
 
-#[c_export]
-#[c("struct attribute *bch2_fs_files[]")]
-pub static bch2_fs_files: Files<{ FS.len() + 1 }> = Files::new(FS);
-
-#[c_export]
-pub static bch2_fs_sysfs_ops: c::sysfs_ops = sysfs::ops::<FsDir>();
-
 // ── internal/ ───────────────────────────────────────────────────────────────
-
-struct InternalDir;
-
-unsafe impl Dir for InternalDir {
-    type Obj = Fs;
-    const KOBJ: usize = offset_of!(Fs, internal);
-
-    fn may_store(c: &Fs) -> Result<(), BchError> {
-        started(c)
-    }
-}
 
 const INTERNAL: &[Attr<Fs>] = &[
     Attr::ro(c"flags",                  |c, out| c.flags.to_text(out)),
@@ -168,13 +176,6 @@ const INTERNAL: &[Attr<Fs>] = &[
     Attr::ro(c"filldir64_specialization", |_, out| c::filldir64_specialization_to_text(out)),
 ];
 
-#[c_export]
-#[c("struct attribute *bch2_fs_internal_files[]")]
-pub static bch2_fs_internal_files: Files<{ INTERNAL.len() + 1 }> = Files::new(INTERNAL);
-
-#[c_export]
-pub static bch2_fs_internal_sysfs_ops: c::sysfs_ops = sysfs::ops::<InternalDir>();
-
 // internal/btree_trans_stats_json, a bin_attribute: kernfs reads one a page a
 // call, so the JSON is made only at offset 0 - kept in
 // c->btree.trans.stats_json_buf - and the pages read are of one whole.
@@ -226,8 +227,8 @@ fn trans_stats_json(c: &Fs, out: &mut Printbuf) {
 unsafe extern "C" fn trans_stats_json_read(_file: *mut c::file, kobj: *mut c::kobject,
                                            _attr: *const c::bin_attribute, buf: *mut c_char,
                                            off: c::loff_t, count: usize) -> isize {
-    // SAFETY: internal/'s kobject, which has this file
-    let c = unsafe { sysfs::obj_of::<InternalDir>(kobj) };
+    // SAFETY: the filesystem's kobject, which has this file
+    let c = unsafe { sysfs::obj_of::<FsDir>(kobj) };
 
     let _lock = Locked::from_c(&c.btree.trans.stats_json_lock).lock();
     // SAFETY: the buffer is the lock's
@@ -255,8 +256,8 @@ unsafe extern "C" fn trans_stats_json_read(_file: *mut c::file, kobj: *mut c::ko
 unsafe extern "C" fn trans_stats_json_write(_file: *mut c::file, kobj: *mut c::kobject,
                                             _attr: *const c::bin_attribute, _buf: *mut c_char,
                                             _off: c::loff_t, count: usize) -> isize {
-    // SAFETY: internal/'s kobject, which has this file
-    let c = unsafe { sysfs::obj_of::<InternalDir>(kobj) };
+    // SAFETY: the filesystem's kobject, which has this file
+    let c = unsafe { sysfs::obj_of::<FsDir>(kobj) };
 
     for (_, s) in trans_stats(c) {
         let _lock = Locked::from_c(&s.lock).lock();
@@ -276,8 +277,7 @@ unsafe extern "C" fn trans_stats_json_write(_file: *mut c::file, kobj: *mut c::k
     count as isize
 }
 
-#[c_export]
-pub static bin_attr_btree_trans_stats_json: c::bin_attribute = {
+static TRANS_STATS_JSON: BinFile = BinFile({
     // SAFETY: the rest of a bin_attribute is NULL or zero
     let mut a: c::bin_attribute = unsafe { core::mem::zeroed() };
     a.attr.name = c"btree_trans_stats_json".as_ptr().cast();
@@ -285,7 +285,7 @@ pub static bin_attr_btree_trans_stats_json: c::bin_attribute = {
     a.read = Some(trans_stats_json_read);
     a.write = Some(trans_stats_json_write);
     a
-};
+});
 
 // ── time_stats/, time_stats_json/ ───────────────────────────────────────────
 //
@@ -309,50 +309,10 @@ macro_rules! time_stat_names {
 }
 c::BCH_TIME_STATS!(time_stat_names);
 
+// Each its own table: a group's files are its kobject's, so which directory
+// a file's in is which table its attribute is from
 static TIME_STATS: ListAttrs<{ c::BCH_TIME_STAT_NR as usize }> = ListAttrs::new(&TIME_STAT_NAMES, 0o644);
-
-fn time_stat<'a>(c: &'a Fs, attr: &c::attribute) -> Result<&'a c::bch2_time_stats, BchError> {
-    TIME_STATS.index(attr)
-        .map(|i| &c.times[i])
-        .ok_or(c::EINVAL.into())
-}
-
-/// time_stats/, or as JSON time_stats_json/.
-struct TimeStatsDir<const JSON: bool>;
-
-unsafe impl<const JSON: bool> Dir for TimeStatsDir<JSON> {
-    type Obj = Fs;
-    const KOBJ: usize = if JSON { offset_of!(Fs, time_stats_json) } else { offset_of!(Fs, time_stats) };
-
-    fn show(c: &Fs, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
-        let s = time_stat(c, attr)?;
-        if JSON {
-            s.json_to_text(out)
-        } else {
-            s.to_text(out)
-        }
-        Ok(())
-    }
-
-    fn store(c: &Fs, attr: &c::attribute, _: &str) -> Result<(), BchError> {
-        time_stat(c, attr)?.reset();
-        Ok(())
-    }
-}
-
-#[c_export]
-#[c("struct attribute *bch2_fs_time_stats_files[]")]
-pub static bch2_fs_time_stats_files: Files<{ c::BCH_TIME_STAT_NR as usize + 1 }> = Files::list(&TIME_STATS);
-
-#[c_export]
-pub static bch2_fs_time_stats_sysfs_ops: c::sysfs_ops = sysfs::ops::<TimeStatsDir<false>>();
-
-#[c_export]
-#[c("struct attribute *bch2_fs_time_stats_json_files[]")]
-pub static bch2_fs_time_stats_json_files: Files<{ c::BCH_TIME_STAT_NR as usize + 1 }> = Files::list(&TIME_STATS);
-
-#[c_export]
-pub static bch2_fs_time_stats_json_sysfs_ops: c::sysfs_ops = sysfs::ops::<TimeStatsDir<true>>();
+static TIME_STATS_JSON: ListAttrs<{ c::BCH_TIME_STAT_NR as usize }> = ListAttrs::new(&TIME_STAT_NAMES, 0o644);
 
 // ── counters/ ───────────────────────────────────────────────────────────────
 //
@@ -368,49 +328,23 @@ c::BCH_PERSISTENT_COUNTERS!(counter_names);
 
 static COUNTER_FILES: ListAttrs<{ c::BCH_COUNTER_NR as usize }> = ListAttrs::new(&COUNTER_NAMES, 0o644);
 
-fn counter_idx(attr: &c::attribute) -> Result<usize, BchError> {
-    COUNTER_FILES.index(attr).ok_or(c::EINVAL.into())
-}
+fn counter_to_text(c: &Fs, i: usize, out: &mut Printbuf) {
+    let count = c.counter_read(i);
+    let since_mount = count.wrapping_sub(c.counters.mount[i]);
 
-struct CountersDir;
-
-unsafe impl Dir for CountersDir {
-    type Obj = Fs;
-    const KOBJ: usize = offset_of!(Fs, counters_kobj);
-
-    fn show(c: &Fs, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
-        let i = counter_idx(attr)?;
-        let count = c.counter_read(i);
-        let since_mount = count.wrapping_sub(c.counters.mount[i]);
-
-        out.tabstop_push(32);
-        if COUNTERS[i].is_sectors {
-            prt!(out, "since mount:\t{}\nsince filesystem creation:\t{}\n",
-                 HumanReadable(since_mount << 9), HumanReadable(count << 9));
-        } else {
-            prt!(out, "since mount:\t{since_mount}\nsince filesystem creation:\t{count}\n");
-        }
-        Ok(())
-    }
-
-    fn store(c: &Fs, attr: &c::attribute, _: &str) -> Result<(), BchError> {
-        c.counter_reset(counter_idx(attr)?);
-        Ok(())
+    out.tabstop_push(32);
+    if COUNTERS[i].is_sectors {
+        prt!(out, "since mount:\t{}\nsince filesystem creation:\t{}\n",
+             HumanReadable(since_mount << 9), HumanReadable(count << 9));
+    } else {
+        prt!(out, "since mount:\t{since_mount}\nsince filesystem creation:\t{count}\n");
     }
 }
-
-#[c_export]
-#[c("struct attribute *bch2_fs_counters_files[]")]
-pub static bch2_fs_counters_files: Files<{ c::BCH_COUNTER_NR as usize + 1 }> = Files::list(&COUNTER_FILES);
-
-#[c_export]
-pub static bch2_fs_counters_sysfs_ops: c::sysfs_ops = sysfs::ops::<CountersDir>();
 
 // ── options/ ────────────────────────────────────────────────────────────────
 //
-// An option's file is its attribute in OPT_FILES, added at runtime -
-// bch2_opts_create_sysfs_files() - to options/ for the filesystem options,
-// and to a device's dir for the device options, among its own files.
+// An option's file is its attribute in OPT_FILES: options/ has the filesystem
+// options', and a device's dir the device options', among its own files.
 
 /// Each option's file, by bch_opt_id - which option a file is, from where
 /// its attribute is: writable if it may be set at runtime.
@@ -487,48 +421,15 @@ fn opt_store(c: &Fs, ca: Option<&c::bch_dev>, id: c::bch_opt_id, s: &str) -> Res
     Ok(())
 }
 
-/// The option @attr is the file of: only options' files are added where
-/// this is asked.
-fn attr_opt(attr: &c::attribute) -> Result<c::bch_opt_id, BchError> {
-    opt_from_attr(attr).ok_or(c::EINVAL.into())
-}
-
-struct OptsDir;
-
-unsafe impl Dir for OptsDir {
-    type Obj = Fs;
-    const KOBJ: usize = offset_of!(Fs, opts_dir);
-
-    fn show(c: &Fs, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
-        opt_show(c, None, attr_opt(attr)?, out)
-    }
-
-    fn store(c: &Fs, attr: &c::attribute, s: &str) -> Result<(), BchError> {
-        opt_store(c, None, attr_opt(attr)?, s)
-    }
-}
-
-#[c_export]
-#[c("struct attribute *bch2_fs_opts_dir_files[]")]
-pub static bch2_fs_opts_dir_files: Files<1> = Files::new::<Fs>(&[]);
-
-#[c_export]
-pub static bch2_fs_opts_dir_sysfs_ops: c::sysfs_ops = sysfs::ops::<OptsDir>();
-
-/// Add a file for each option of @ty - OPT_FS, OPT_DEVICE - to @kobj: the
-/// filesystem's options/, or a device's dir.
-///
-/// # Safety
-/// @kobj is a live, added kobject, whose sysfs_ops handle options' files.
-#[c_export]
-pub unsafe extern "C" fn bch2_opts_create_sysfs_files(kobj: *mut c::kobject, ty: c_uint) -> c_int {
-    let fs_opts = ty == c::opt_flags::OPT_FS.bits();
-
-    for opt in &opts::OPTS {
-        if opt.has(c::opt_flags::OPT_HIDDEN) || opt.flags.bits() & ty == 0 {
-            continue;
-        }
-
+/// Which options have a file: those of the filesystem's, @fs, or a device's
+/// - but none that's hidden.
+const fn opts_with_files(fs: bool) -> [bool; opts::NR] {
+    let (hidden, fs_opt, dev_opt) =
+        (c::opt_flags::OPT_HIDDEN.bits(), c::opt_flags::OPT_FS.bits(), c::opt_flags::OPT_DEVICE.bits());
+    let mut which = [false; opts::NR];
+    let mut i = 0;
+    while i < opts::NR {
+        let flags = c::bch_opts::TABLE[i].flags.bits();
         /*
          * For options that are both OPT_FS and OPT_DEVICE (currently only
          * @discard), expose only the per-device sysfs entry: the FS-level
@@ -537,17 +438,60 @@ pub unsafe extern "C" fn bch2_opts_create_sysfs_files(kobj: *mut c::kobject, ty:
          * no-ops and reads can't disambiguate which scope is being shown.
          * Mount-time @-o discard= remains the only fs-scope handle.
          */
-        if fs_opts && opt.has(c::opt_flags::OPT_DEVICE) {
-            continue;
-        }
-
-        // SAFETY: the caller's; an option's attribute is static
-        if let Err(e) = unsafe { sysfs::create_file(kobj, OPT_FILES.get(opt.id.0 as usize)) } {
-            return -e.raw();
-        }
+        which[i] = flags & hidden == 0 &&
+            if fs { flags & fs_opt != 0 && flags & dev_opt == 0 } else { flags & dev_opt != 0 };
+        i += 1;
     }
-    0
+    which
 }
+
+const fn nr_true<const N: usize>(which: &[bool; N]) -> usize {
+    let mut nr = 0;
+    let mut i = 0;
+    while i < N {
+        nr += which[i] as usize;
+        i += 1;
+    }
+    nr
+}
+
+const FS_OPTS: [bool; opts::NR] = opts_with_files(true);
+const DEV_OPTS: [bool; opts::NR] = opts_with_files(false);
+
+// ── the fs dir's groups ─────────────────────────────────────────────────────
+
+static FS_FILES: Files<{ FS.len() + 1 }> = Files::new(FS);
+static INTERNAL_FILES: Files<{ INTERNAL.len() + 1 }> = Files::new(INTERNAL);
+static INTERNAL_BIN_FILES: BinFiles<2> = BinFiles::new([&TRANS_STATS_JSON]);
+static OPTS_FILES: Files<{ nr_true(&FS_OPTS) + 1 }> = Files::with_list::<Fs, { opts::NR }>(&[], &OPT_FILES, &FS_OPTS);
+#[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+static TIME_STATS_FILES: Files<{ c::BCH_TIME_STAT_NR as usize + 1 }> = Files::list(&TIME_STATS);
+#[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+static TIME_STATS_JSON_FILES: Files<{ c::BCH_TIME_STAT_NR as usize + 1 }> = Files::list(&TIME_STATS_JSON);
+static COUNTERS_FILES: Files<{ c::BCH_COUNTER_NR as usize + 1 }> = Files::list(&COUNTER_FILES);
+
+static FS_GROUP: Group = Group::new(None, &FS_FILES);
+static INTERNAL_GROUP: Group = Group::with_bin(Some(c"internal"), &INTERNAL_FILES, &INTERNAL_BIN_FILES);
+static OPTS_GROUP: Group = Group::new(Some(c"options"), &OPTS_FILES);
+#[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+static TIME_STATS_GROUP: Group = Group::new(Some(c"time_stats"), &TIME_STATS_FILES);
+#[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+static TIME_STATS_JSON_GROUP: Group = Group::new(Some(c"time_stats_json"), &TIME_STATS_JSON_FILES);
+static COUNTERS_GROUP: Group = Group::new(Some(c"counters"), &COUNTERS_FILES);
+
+const FS_GROUPS_NR: usize = if cfg!(CONFIG_BCACHEFS_NO_LATENCY_ACCT) { 4 } else { 6 };
+
+/// The filesystem's kobject's groups: its files, and its subdirectories
+pub(crate) static FS_GROUPS: Groups<{ FS_GROUPS_NR + 1 }> = Groups::new([
+    &FS_GROUP,
+    &INTERNAL_GROUP,
+    &OPTS_GROUP,
+    #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+    &TIME_STATS_GROUP,
+    #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+    &TIME_STATS_JSON_GROUP,
+    &COUNTERS_GROUP,
+]);
 
 // ── a device's dir: /sys/fs/bcachefs/<uuid>/dev-N/ ───────────────────────────
 //
@@ -628,7 +572,7 @@ unsafe impl Dir for DevDir {
 
 #[c_export]
 #[c("struct attribute *bch2_dev_files[]")]
-pub static bch2_dev_files: Files<{ DEV.len() + 1 }> = Files::new(DEV);
+pub static bch2_dev_files: Files<{ DEV.len() + nr_true(&DEV_OPTS) + 1 }> = Files::with_list(DEV, &OPT_FILES, &DEV_OPTS);
 
 #[c_export]
 pub static bch2_dev_sysfs_ops: c::sysfs_ops = sysfs::ops::<DevDir>();

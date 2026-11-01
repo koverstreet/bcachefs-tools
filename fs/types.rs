@@ -8,6 +8,7 @@ use crate::new_lock;
 use crate::util::alloc::KVVec;
 use crate::util::bitmap::AtomicBitflags;
 use crate::util::kernel::WRITE;
+use crate::util::kobject::Kobject;
 use crate::util::bio::BioSet;
 use crate::util::late::Late;
 use crate::util::mempool::Mempool;
@@ -581,7 +582,7 @@ c_enum! {
 }
 
 /// The filesystem: struct bch_fs, to C. Rust allocates it and frees it -
-/// alloc(), bch2_fs_release() - so its Rust-typed fields get their
+/// alloc(), its kobject's release - so its Rust-typed fields get their
 /// initializers, from Fs::init(), and their Drop; init_from() and the
 /// subsystems' inits and exits do the rest.
 /// Borrowed by Rust as &Fs; OpenFs owns one opened from userspace.
@@ -593,12 +594,10 @@ c_enum! {
 pub struct Fs {
     pub cl: c::closure,
 
-    pub kobj: c::kobject,
-    pub counters_kobj: c::kobject,
-    pub internal: c::kobject,
-    pub opts_dir: c::kobject,
-    pub time_stats: c::kobject,
-    pub time_stats_json: c::kobject,
+    #[pin]
+    #[init(unsafe { Kobject::new::<Fs>() })]
+    #[c("struct kobject kobj")]
+    pub kobj: Kobject,
     #[c("unsigned long flags")]
     pub flags: AtomicBitflags<c::bch_fs_flags>,
 

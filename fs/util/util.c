@@ -1436,11 +1436,6 @@ bool bch2_capable(int cap)
 	return capable(cap);
 }
 
-int bch2_sysfs_create_file(struct kobject *kobj, const struct attribute *attr)
-{
-	return sysfs_create_file(kobj, attr);
-}
-
 /* For util/rhashtable.rs, to which struct bucket_table is opaque */
 const struct bucket_table *bch2_rht_table(const struct rhashtable *ht)
 {

@@ -430,10 +430,8 @@ int bch2_dev_sysfs_online(struct bch_fs *c, struct bch_dev *ca)
 	if (!c->kobj.state_in_sysfs)
 		return 0;
 
-	if (!ca->kobj.state_in_sysfs) {
+	if (!ca->kobj.state_in_sysfs)
 		try(kobject_add(&ca->kobj, &c->kobj, "dev-%u", ca->dev_idx));
-		try(bch2_opts_create_sysfs_files(&ca->kobj, OPT_DEVICE));
-	}
 
 	if (ca->disk_sb.bdev) {
 		struct kobject *block = bdev_kobj(ca->disk_sb.bdev);

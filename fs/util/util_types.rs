@@ -123,7 +123,6 @@ c_extern! {
     pub fn bch2_init_work(work: *mut c::work_struct, func: Option<unsafe extern "C" fn(*mut c::work_struct)>);
     pub fn bch2_set_worker_desc(desc: *const c_char);
     pub fn bch2_capable(cap: c_int) -> bool;
-    pub fn bch2_sysfs_create_file(kobj: *mut c::kobject, attr: *const c::attribute) -> c_int;
     #[cfg(__KERNEL__)]
     pub fn bch2_cpumask_local_spread(i: c_uint) -> c_uint;
     #[cfg(__KERNEL__)]

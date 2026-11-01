@@ -22,7 +22,7 @@ static const struct attribute_group *type ## _groups[] = {		\
 	NULL								\
 };									\
 									\
-const struct kobj_type type ## _ktype = {				\
+static const struct kobj_type type ## _ktype = {			\
 	.release	= type ## _release,				\
 	.sysfs_ops	= &type ## _sysfs_ops,				\
 	.default_groups = type ## _groups				\

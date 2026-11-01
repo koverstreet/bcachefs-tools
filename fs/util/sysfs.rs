@@ -116,11 +116,6 @@ impl<const N: usize> ListAttrs<N> {
         ListAttrs(attrs)
     }
 
-    /// Entry @i's attribute.
-    pub fn get(&'static self, i: usize) -> &'static c::attribute {
-        &self.0[i]
-    }
-
     /// The entry @attr is the file of, if it's one of these.
     pub fn index(&self, attr: &c::attribute) -> Option<usize> {
         let i = (core::ptr::from_ref(attr) as usize)
@@ -296,15 +291,6 @@ pub fn parse_human_u64(s: &str) -> Result<u64, BchError> {
     let mut v = 0;
     with_cstr(s, |s| ret_to_result_void(unsafe { c::bch2_strtoull_h(s.as_ptr().cast(), &mut v) }))??;
     Ok(v)
-}
-
-/// Add @attr's file to @kobj - one made at runtime, not in its kobj_type's
-/// groups: sysfs_create_file().
-///
-/// # Safety
-/// @kobj is live and added, and its sysfs_ops handle @attr.
-pub unsafe fn create_file(kobj: *mut c::kobject, attr: &'static c::attribute) -> Result<(), BchError> {
-    ret_to_result_void(unsafe { c::bch2_sysfs_create_file(kobj, attr) })
 }
 
 /// What a store writes as a number: kstrto*(), base 10 - one trailing newline
