@@ -52,10 +52,12 @@ fn main() {
     rerun_if_userspace_config_changed(&root);
     println!("cargo:rerun-if-changed={}", include_dir.display());
 
-    // What src/compress.rs calls: linked after this crate, as a link
-    // --as-needed only keeps a library that's needed by what comes before it
+    // What src/compress.rs and the crypto wrappers call: linked after this
+    // crate, as a link --as-needed only keeps a library that's needed by what
+    // comes before it
     println!("cargo:rustc-link-lib=z");
     println!("cargo:rustc-link-lib=lz4");
+    println!("cargo:rustc-link-lib=sodium");
 
     let urcu = pkg_config::probe_library("liburcu").expect("Failed to find urcu lib");
     let target = std::env::var("TARGET").unwrap();
