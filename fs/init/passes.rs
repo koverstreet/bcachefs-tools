@@ -336,16 +336,6 @@ pub fn passes_from_stable(v: u64) -> u64 {
     map_bits(v, &FROM_STABLE)
 }
 
-#[c_export]
-pub fn bch2_recovery_passes_to_stable(v: u64) -> u64 {
-    passes_to_stable(v)
-}
-
-#[c_export]
-pub fn bch2_recovery_passes_from_stable(v: u64) -> u64 {
-    passes_from_stable(v)
-}
-
 /// The recovery passes in @stable - bits of their stable index, as the
 /// superblock stores them - by name.
 pub fn prt_stable(out: &mut Printbuf, stable: u64) {

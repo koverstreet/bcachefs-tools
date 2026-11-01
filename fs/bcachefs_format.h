@@ -127,9 +127,6 @@ static inline void SET_##name(type *k, __u64 v)				\
 #define BCH_VERSION_MINOR(_v)		((__u16) ((_v) & ~(~0U << 10)))
 #define BCH_VERSION(_major, _minor)	(((_major) << 10)|(_minor) << 0)
 
-static const __maybe_unused
-unsigned bcachefs_metadata_required_upgrade_below = bcachefs_metadata_version_btree_node_accounting;
-
 static const __maybe_unused unsigned bch_crc_bytes[] = {
 	[BCH_CSUM_none]				= 0,
 	[BCH_CSUM_crc32c_nonzero]		= 4,

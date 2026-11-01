@@ -33,8 +33,10 @@ use crate::journal::seq_blacklist::blacklist_table_initialize;
 use crate::locking::{Guard, MutexNoio, Noio, PercpuRwsemNoio, RawLock, ReadGuard};
 use crate::{bch_verbose, new_lock, prt};
 use crate::sb::counters::counters_init;
-use crate::sb::io::{bch2_free_super, read_super, sb_to_fs, Holder};
-use crate::sb::members::{dev_to_text_short, member_exists, SbMembersMut};
+use crate::sb::io::{bch2_free_super, read_super, sb_to_fs, version, Holder};
+use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists, SbMembersMut};
+use crate::sb::version::prep_for_start;
+use crate::util::names;
 use crate::util::Printbuf;
 use crate::util::alloc::{flags::GFP_KERNEL, init_at, Arc, KVVec};
 use crate::util::backref::BackRef;
@@ -60,7 +62,7 @@ use cstruct_macros::c_extern;
 use crate::format::{Bpos, Btree};
 
 c_extern! {
-    fn bch2_fs_opt_version_init(c: *mut c::bch_fs, out: *mut c::printbuf) -> c_int;
+    fn bch2_fs_will_resize_on_mount(c: *mut c::bch_fs) -> bool;
     static mut bcachefs_kobj: c::kobject;
     pub static bch2_write_refs: [*const crate::util::ffi::c_char; 0];
     pub static bch2_dev_read_refs: [*const crate::util::ffi::c_char; 0];
@@ -465,7 +467,8 @@ fn alloc(sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts, holder: Arc<Hold
     Ok(fs)
 }
 
-/// UNICODE_AGE(12, 1, 0)
+/// The default encoding, utf8 12.1.0: UNICODE_AGE()'s major, minor and rev
+/// bytes
 #[cfg(CONFIG_UNICODE)]
 const BCH_FS_DEFAULT_UTF8_ENCODING: c_uint = (12 << 16) | (1 << 8);
 
@@ -608,7 +611,7 @@ impl Fs {
              * Do this early, so that we never expose a filesystem object that
              * hasn't been version downgraded
              */
-            ret_to_result(unsafe { bch2_fs_opt_version_init(p, out.as_raw()) })?;
+            self.opt_version_init(out)?;
         }
 
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
@@ -618,6 +621,120 @@ impl Fs {
         /* first: a UUID already open fails as that, not as a sysfs name taken */
         register(self)?;
         self.online()
+    }
+
+    #[inline(never)]
+    fn opt_version_init(&self, out: &mut Printbuf) -> Result<(), BchError> {
+        use c::bch_fs_flags as Flag;
+        use c::bch_sb_feature as Feature;
+        use c::bcachefs_metadata_version as Version;
+        let opts = self.opts();
+
+        {
+            let mut sb = self.sb_lock();
+            let w = self.opts_writer(&mut sb);
+
+            if opts.norecovery.get() != 0 {
+                let snapshots_read = c::bch_recovery_pass::BCH_RECOVERY_PASS_snapshots_read as _;
+                w.recovery_pass_last.set(match opts.recovery_pass_last.get() {
+                    0    => snapshots_read,
+                    last => last.min(snapshots_read),
+                });
+                w.nochanges.set(1);
+            }
+
+            if opts.nochanges.get() != 0 {
+                w.read_only.set(1);
+            }
+
+            if opts.will_not_start.get() != 0 {
+                w.nostart.set(1);
+            }
+
+            if opts.journal_rewind.get() != 0 {
+                w.fsck.set(1);
+            }
+        }
+
+        if !(self.feature(Feature::BCH_FEATURE_small_image) || self.feature(Feature::BCH_FEATURE_no_default_sb)) ||
+           unsafe { bch2_fs_will_resize_on_mount(self.as_ptr()) } {
+            self.flags.set(Flag::BCH_FS_may_upgrade_downgrade, true);
+        }
+
+        prt!(out, "starting version {}\n", version(self.sb.version.get()));
+
+        let mut mount_opts = Printbuf::new();
+        crate::opts::opts_to_text(&mut mount_opts, &opts.load(), Some(self), Some(self.sb_lock().sb().as_unvalidated()),
+                                  None, c::opt_flags::OPT_MOUNT.bits(), 0, c::OPT_SHOW_MOUNT_STYLE);
+        if !mount_opts.as_bytes().is_empty() {
+            prt!(out, "with options: ");
+            out.write_bytes(mount_opts.as_bytes());
+            out.newline();
+        }
+
+        if self.sb.version_incompat_allowed.get() != self.sb.version.get() {
+            prt!(out, "allowing incompatible features up to {}\n", version(self.sb.version_incompat_allowed.get()));
+        }
+
+        if opts.verbose.get() != 0 {
+            prt!(out, "features: {}\n", names::set::<Feature>(self.sb.features.get()));
+        }
+
+        if self.sb.multi_device.get() {
+            prt!(out, "with devices: ");
+            for (i, ca) in self.online_members().enumerate() {
+                if i > 0 {
+                    out.write_bytes(b",");
+                }
+                out.write_bytes(ca.name().to_bytes());
+            }
+            out.newline();
+        }
+
+        /* cf_encoding log message should be here, but it breaks xfstests - sigh */
+
+        if opts.journal_rewind.get() != 0 {
+            prt!(out, "rewinding journal, fsck required\n");
+        }
+
+        if opts.will_not_start.get() == 0 {
+            prep_for_start(self, out);
+        }
+
+        if self.sb.clean.get() != 0 {
+            self.flags.set(Flag::BCH_FS_clean_recovery, true);
+        }
+        if opts.fsck.get() != 0 {
+            self.flags.set(Flag::BCH_FS_in_fsck, true);
+        }
+        self.flags.set(Flag::BCH_FS_in_recovery, true);
+
+        /* this really should be part of our one multi line mount message, but -
+         * xfstests... */
+        #[cfg(CONFIG_UNICODE)]
+        if !self.cf_encoding.is_null() {
+            crate::bch_info!(self, "Using encoding defined by superblock: utf8-{}.{}.{}",
+                      BCH_FS_DEFAULT_UTF8_ENCODING >> 16,
+                      (BCH_FS_DEFAULT_UTF8_ENCODING >> 8) & 0xff,
+                      BCH_FS_DEFAULT_UTF8_ENCODING & 0xff);
+        }
+
+        if self.sb_lock().sb().initialized() {
+            if !self.feature(Feature::BCH_FEATURE_new_extent_overwrite) {
+                prt!(out, "feature new_extent_overwrite not set, filesystem no longer supported\n");
+                return self.throw(bch_errcode::BCH_ERR_EINVAL_missing_new_extent_overwrite);
+            }
+
+            if u32::from(self.sb.version_min.get()) < Version::bcachefs_metadata_version_btree_ptr_sectors_written.0 {
+                prt!(out, "version_min < version_btree_ptr_sectors_written\n");
+                prt!(out, "filesystem needs upgrade from older version; run fsck from older bcachefs-tools to fix\n");
+                return self.throw(bch_errcode::BCH_ERR_EINVAL_version_min_too_old);
+            }
+        }
+
+        fs_mi_field_upgrades(self);
+
+        Ok(())
     }
 
     fn online(&self) -> Result<(), BchError> {

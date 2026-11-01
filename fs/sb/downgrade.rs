@@ -4,10 +4,10 @@
 //! past, the recovery passes to run and the errors to fix silently.
 //!
 //! It's written by the version that knows what downgrading from it costs, for
-//! an older one to read - bch2_sb_set_downgrade(), when an older version
+//! an older one to read - sb_set_downgrade(), when an older version
 //! mounts a newer filesystem.
 
-use core::ffi::{c_uint, c_ulong};
+use core::ffi::c_ulong;
 use core::mem::size_of;
 
 use cstruct_macros::c_export;
@@ -227,7 +227,7 @@ const DOWNGRADE: &[UpDown] = table! {
 // ── Applying them ────────────────────────────────────────────────────────────
 
 /// Every superblock has one from mount on.
-fn ext(sb: &mut c::bch_sb_buf) -> &mut c::bch_sb_field_ext<Validated> {
+pub(crate) fn ext(sb: &mut c::bch_sb_buf) -> &mut c::bch_sb_field_ext<Validated> {
     sb.field_mut().expect("an ext section")
 }
 
@@ -245,10 +245,9 @@ fn set_upgrade(sb: &mut c::bch_sb_buf, table: &[UpDown], old: u32, new: u32) {
     }
 }
 
-#[c_export]
-pub fn bch2_sb_set_upgrade(c: &Opaque<c::bch_fs>, old: c_uint, new: c_uint) {
-    // SAFETY: C calls it under sb_lock
-    set_upgrade(&mut *unsafe { Fs::from_c(c).sb_lock_held() }, UPGRADE, old, new)
+/// set_upgrade(), by the table for upgrades.
+pub(crate) fn sb_set_upgrade(sb: &mut c::bch_sb_buf, old: u32, new: u32) {
+    set_upgrade(sb, UPGRADE, old, new)
 }
 
 /// set_upgrade(), by the table for allowing incompatible features.
@@ -296,11 +295,7 @@ pub fn bch2_sb_set_upgrade_extra(c: &Opaque<c::bch_fs>) {
 /// Downgrading from minor version @old_minor to @new_minor: what the section
 /// says each minor version past @new_minor, up to @old_minor, needs - into
 /// the ext section, and errors_silent in memory, which recovery reads.
-#[c_export]
-pub fn bch2_sb_set_downgrade(c: &Opaque<c::bch_fs>, new_minor: c_uint, old_minor: c_uint) {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    let mut sb = unsafe { fs.sb_lock_held() };
+pub(crate) fn sb_set_downgrade(sb: &mut SbLockGuard<'_>, new_minor: u32, old_minor: u32) {
     let (handle, cpu) = sb.parts();
     let Some(d) = handle.field::<Section>() else { return };
 
@@ -325,7 +320,7 @@ pub fn bch2_sb_set_downgrade(c: &Opaque<c::bch_fs>, new_minor: c_uint, old_minor
         }
     }
 
-    let ext = ext(&mut sb);
+    let ext = ext(sb);
     for (w, p) in ext.recovery_passes_required.iter_mut().zip(passes) {
         *w |= p;
     }

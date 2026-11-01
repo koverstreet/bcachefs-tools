@@ -775,9 +775,7 @@ pub fn bch2_dev_mi_field_upgrades(ca: &c::bch_dev) {
 }
 
 /// Every online device's identity, recorded.
-#[c_export]
-pub fn bch2_fs_mi_field_upgrades(c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
+pub fn fs_mi_field_upgrades(fs: &Fs) {
     for ca in fs.online_members() {
         /*
          * Reads sysfs, so it can't happen under sb_lock - which is why this

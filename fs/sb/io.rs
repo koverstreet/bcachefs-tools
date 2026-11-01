@@ -562,7 +562,7 @@ fn version_compatible(version: u16) -> bool {
         u32::from(version) >= c::bcachefs_metadata_version_min as u32
 }
 
-fn version(v: impl Into<u32>) -> c::bcachefs_metadata_version {
+pub(crate) fn version(v: impl Into<u32>) -> c::bcachefs_metadata_version {
     c::bcachefs_metadata_version(v.into())
 }
 
@@ -762,11 +762,6 @@ pub fn bch2_version_to_text(out: &mut Printbuf, v: c::bcachefs_metadata_version)
     v.to_text(out)
 }
 
-#[c_export]
-pub fn bch2_latest_compatible_version(v: c::bcachefs_metadata_version) -> c::bcachefs_metadata_version {
-    v.latest_compatible()
-}
-
 impl Fs {
     /// Whether features of @version may be used, without asking:
     /// bch2_incompat_feature_allowed().
@@ -853,9 +848,9 @@ pub fn __bch2_check_set_feature(c: &Opaque<c::bch_fs>, feat: c_uint) {
 /// cleared: whether it was newer. bch2_check_version_downgrade().
 ///
 /// The superblock only: c->sb keeps the version it's coming from, which
-/// bch2_sb_set_downgrade() wants next, until the write's sb_update() brings
+/// sb_set_downgrade() wants next, until the write's sb_update() brings
 /// it up to date.
-fn check_version_downgrade(fs: &Fs, sb: &mut SbLockGuard<'_>) -> bool {
+pub(crate) fn check_version_downgrade(fs: &Fs, sb: &mut SbLockGuard<'_>) -> bool {
     let current = c::bcachefs_metadata_version_current;
     let s = sb.sb_mut();
 
@@ -887,7 +882,7 @@ pub fn bch2_check_version_downgrade(c: &Opaque<c::bch_fs>) -> bool {
 /// @incompat; a new major empties the downgrade section, which is for
 /// downgrades within one - empties, not deletes: a write calls the from_cpu()
 /// of each section there is. bch2_sb_upgrade().
-fn sb_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, new: u32, incompat: bool) {
+pub(crate) fn sb_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, new: u32, incompat: bool) {
     if c::BCH_VERSION_MAJOR(new.into()) > c::BCH_VERSION_MAJOR(sb.sb().version.get().into()) {
         let empty = <c::bch_sb_field_downgrade as ArmRef>::MIN_LEN.div_ceil(size_of::<u64>());
         fs.sb_resize(sb).field_resize::<c::bch_sb_field_downgrade>(empty as u32);
