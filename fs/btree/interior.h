@@ -101,7 +101,6 @@ int bch2_btree_node_rewrite_key(struct btree_trans *,
 void bch2_btree_set_root_for_read(struct bch_fs *, struct btree *);
 
 int bch2_btree_root_alloc_fake_trans(struct btree_trans *, enum btree_id, unsigned);
-void bch2_btree_root_alloc_fake(struct bch_fs *, enum btree_id, unsigned);
 
 static inline unsigned btree_update_reserve_required(struct bch_fs *c,
 						     struct btree *b)

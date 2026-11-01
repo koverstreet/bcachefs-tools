@@ -7,9 +7,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::fs::Dev;
+use crate::btree::bkey::BkeyI;
 use crate::c;
 use crate::data::checksum::{csum_vstruct, BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
-use crate::errcode::BchError;
+use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::types::{Le32, c_default};
 use crate::util::vstructs::{Head, Unvalidated};
@@ -53,6 +54,13 @@ c_extern! {
     pub fn bch2_btree_node_scrub(trans: *mut c::btree_trans, btree: Btree, level: c_uint,
                                  k: c::bkey_s_c, dev: c_uint) -> c_int;
     pub fn bch2_btree_flush_all_reads(c: *mut Fs) -> bool;
+    pub fn bch2_btree_root_read(c: *mut Fs, btree: Btree, k: *const c::bkey_i, level: c_uint) -> c_int;
+}
+
+impl Fs {
+    pub fn btree_root_read(&self, btree: Btree, k: &BkeyI, level: u32) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { bch2_btree_root_read(self.as_ptr(), btree, k.as_ffi(), level) })
+    }
 }
 
 impl c::bset__head {

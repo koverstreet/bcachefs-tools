@@ -92,8 +92,6 @@ int bch2_btree_node_read_done(struct bch_fs *, struct bch_dev *,
 			      struct bch_io_failures *,
 			      struct printbuf *);
 void bch2_btree_node_read(struct btree_trans *, struct btree *, bool);
-int bch2_btree_root_read(struct bch_fs *, enum btree_id,
-			 const struct bkey_i *, unsigned);
 
 void bch2_btree_read_bio_to_text(struct printbuf *, struct btree_read_bio *);
 

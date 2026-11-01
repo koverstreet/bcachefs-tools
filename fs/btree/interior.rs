@@ -114,11 +114,16 @@ c_extern! {
                                    write_flags: c::bch_write_flags) -> c_int;
     pub fn bch2_btree_reserve_cache_to_text(out: *mut Printbuf, c: *mut Fs);
     pub fn bch2_async_btree_op(c: *mut Fs, b: *mut c::BtreeNode, op: c::async_btree_op);
+    pub fn bch2_btree_root_alloc_fake(c: *mut Fs, btree: Btree, level: c_uint);
 }
 
 impl Fs {
     pub fn btree_reserve_cache_to_text(&self, out: &mut Printbuf) {
         unsafe { bch2_btree_reserve_cache_to_text(out.as_raw(), self.as_ptr()) }
+    }
+
+    pub fn btree_root_alloc_fake(&self, btree: Btree, level: u32) {
+        unsafe { bch2_btree_root_alloc_fake(self.as_ptr(), btree, level) }
     }
 
     /// Waits for the interior updates in flight to finish - with no btree
