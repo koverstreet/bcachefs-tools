@@ -147,12 +147,6 @@
 
 #define BCH_DEBUG_PARAMS_ALL() BCH_DEBUG_PARAMS_ALWAYS() BCH_DEBUG_PARAMS_DEBUG()
 
-#ifdef CONFIG_BCACHEFS_DEBUG
-#define BCH_DEBUG_PARAMS() BCH_DEBUG_PARAMS_ALL()
-#else
-#define BCH_DEBUG_PARAMS() BCH_DEBUG_PARAMS_ALWAYS()
-#endif
-
 #define BCH_DEBUG_PARAM(name, description) extern struct static_key_false bch2_##name;
 BCH_DEBUG_PARAMS_ALL()
 #undef BCH_DEBUG_PARAM

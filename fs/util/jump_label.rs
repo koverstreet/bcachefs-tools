@@ -28,14 +28,14 @@ include!(concat!(env!("OUT_DIR"), "/jump_label_asm.rs"));
 #[cfg(all(kernel, CONFIG_JUMP_LABEL, any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub(crate) use static_branch_asm;
 
-/// Whether the static key at field @field of @key, a static of type @keytyp
-/// that C defines, is enabled - unlikely, so the branch costs a NOP while it
-/// isn't: static_branch_unlikely(). As the kernel crate's macro takes it: a
-/// symbol, as the asm's __jump_table entry has to name one.
+/// Whether the static key at field @field of @key, a static of type @keytyp, is
+/// enabled - unlikely, so the branch costs a NOP while it isn't:
+/// static_branch_unlikely(). As the kernel crate's macro takes it: a symbol, as
+/// the asm's __jump_table entry has to name one.
 ///
 /// # Safety
-/// @key is a static C defines, its @field a struct static_key_false that only C
-/// writes.
+/// @key is a static, its @field a struct static_key_false - in an UnsafeCell, if
+/// Rust defines it - that only the static key API writes.
 #[macro_export]
 macro_rules! static_branch_unlikely {
     ($key:path, $keytyp:ty, $field:ident) => {{
@@ -66,7 +66,7 @@ macro_rules! static_branch_unlikely {
 
         #[cfg(not(all(kernel, CONFIG_JUMP_LABEL, any(target_arch = "x86_64", target_arch = "aarch64"))))]
         let enabled = $crate::util::jump_label::bch2_static_branch_unlikely(
-            ::core::ptr::addr_of!($key.$field).cast_mut());
+            ::core::ptr::addr_of!($key.$field).cast_mut().cast());
 
         enabled
     }};
