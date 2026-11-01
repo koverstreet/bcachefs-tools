@@ -152,6 +152,20 @@ pub struct Bversion {
     pub lo: u64,
 }
 
+/// hi, then lo: not derived, as little endian lays lo out first.
+impl Ord for Bversion {
+    fn cmp(&self, r: &Self) -> core::cmp::Ordering {
+        let (l, r) = (*self, *r);
+        (l.hi, l.lo).cmp(&(r.hi, r.lo))
+    }
+}
+
+impl PartialOrd for Bversion {
+    fn partial_cmp(&self, r: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(r))
+    }
+}
+
 #[bitfield(u8)]
 pub struct bkey_format_bits {
     format:         u7,
