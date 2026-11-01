@@ -1070,7 +1070,7 @@ impl c::bch_dev {
         let old = unsafe { self.bucket_gens.get_head_locked() }.map(|(_, gens)| gens);
 
         if old.is_some() {
-            Locked::from_c(&fs.state_lock).assert_held_any();
+            fs.state_lock.assert_held_any();
             if !self.buckets_nouse.load(Ordering::Relaxed).is_null() {
                 return fs.throw(bch_errcode::BCH_ERR_no_resize_with_buckets_nouse);
             }

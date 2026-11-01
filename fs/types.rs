@@ -632,7 +632,10 @@ pub struct Fs {
     pub recovery_task: *mut c::task_struct,
 
     /* ro/rw, add/remove/resize devices: */
-    pub state_lock: c::rw_semaphore,
+    #[pin]
+    #[init(new_lock!((), "&c->state_lock"))]
+    #[c("struct rw_semaphore state_lock")]
+    pub state_lock: Locked<c::rw_semaphore>,
 
     /* Counts outstanding writes, for clean transition to read-only */
     #[c("struct enumerated_ref writes")]

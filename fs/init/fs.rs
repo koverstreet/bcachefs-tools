@@ -12,7 +12,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::alloc::replicas::can_write_with_devs;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
 use crate::init::dev::dev_in_fs;
-use crate::locking::{Guard, MutexNoio, Noio, PercpuRwsemNoio};
+use crate::locking::{Guard, MutexNoio, Noio, PercpuRwsemNoio, ReadGuard};
 use crate::prt;
 use crate::sb::io::{read_super, Holder};
 use crate::sb::members::dev_to_text_short;
@@ -63,31 +63,25 @@ impl SbLockGuard<'_> {
     }
 }
 
-pub struct StateLockRead<'a>(&'a Fs);
-
-pub struct StateLockWrite<'a>(&'a Fs);
-
-impl Drop for StateLockWrite<'_> {
-    fn drop(&mut self) {
-        unsafe { c::up_write((&raw mut (*self.0.as_ptr()).state_lock).cast()) };
-    }
+pub struct StateLockRead<'a> {
+    fs:     &'a Fs,
+    _guard: ReadGuard<'a, c::rw_semaphore>,
 }
 
-impl Drop for StateLockRead<'_> {
-    fn drop(&mut self) {
-        unsafe { c::up_read((&raw mut (*self.0.as_ptr()).state_lock).cast()) };
-    }
+pub struct StateLockWrite<'a> {
+    fs:     &'a Fs,
+    _guard: Guard<'a, c::rw_semaphore>,
 }
 
 impl<'a> StateLockWrite<'a> {
     pub(crate) fn fs(&self) -> &'a Fs {
-        self.0
+        self.fs
     }
 }
 
 impl StateLockRead<'_> {
     pub fn recalc_capacity(&self) {
-        crate::alloc::capacity::recalc_capacity(self.0)
+        crate::alloc::capacity::recalc_capacity(self.fs)
     }
 }
 
@@ -239,13 +233,11 @@ impl Fs {
 
     /// Devices and capacity don't change under it
     pub fn state_lock_read(&self) -> StateLockRead<'_> {
-        unsafe { c::down_read((&raw mut (*self.as_ptr()).state_lock).cast()) };
-        StateLockRead(self)
+        StateLockRead { fs: self, _guard: self.state_lock.read() }
     }
 
     pub fn state_lock_write(&self) -> StateLockWrite<'_> {
-        unsafe { c::down_write((&raw mut (*self.as_ptr()).state_lock).cast()) };
-        StateLockWrite(self)
+        StateLockWrite { fs: self, _guard: self.state_lock.write() }
     }
 
     #[track_caller]
