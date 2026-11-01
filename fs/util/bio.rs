@@ -206,6 +206,13 @@ impl Bio {
         unsafe { c::bio_reset(self.raw_mut(), bdev, opf as _) }
     }
 
+    /// Panics past its end.
+    pub fn shrink(self: Pin<&mut Self>, bytes: u32) {
+        let iter = &mut self.raw_mut().bi_iter;
+        assert!(bytes <= iter.bi_size, "shrinking a bio of {} bytes to {bytes}", iter.bi_size);
+        iter.bi_size = bytes;
+    }
+
     pub fn set_sector(self: Pin<&mut Self>, sector: u64) {
         self.raw_mut().bi_iter.bi_sector = sector;
     }
