@@ -238,7 +238,7 @@ impl Bio {
 }
 
 c_extern! {
-    fn bch2_bio_to_text(out: *mut c::printbuf, bio: *mut c::bio);
+    fn bch2_bio_to_text(out: *mut Printbuf, bio: *mut c::bio);
 }
 
 impl ToText for Bio {

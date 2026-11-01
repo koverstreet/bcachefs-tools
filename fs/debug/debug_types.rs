@@ -4,9 +4,10 @@
 
 use crate::fs::Fs;
 use crate::cstructs::c;
+use crate::util::Printbuf;
 use cstruct_macros::c_extern;
 
 c_extern! {
-    pub fn bch2_btree_node_ondisk_to_text(out: *mut c::printbuf, c: *mut Fs,
+    pub fn bch2_btree_node_ondisk_to_text(out: *mut Printbuf, c: *mut Fs,
                                           b: *const c::BtreeNode);
 }

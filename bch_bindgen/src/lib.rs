@@ -32,6 +32,7 @@ pub mod c {
 		// C's: the unsized vstructs bindgen's fns name, as C's structs,
 		// Head<T>: an item beats the glob
 		type bch_sb = bcachefs_kernel::util::vstructs::Head<bcachefs_kernel::c::bch_sb>;
+		type printbuf = bcachefs_kernel::util::printbuf::Printbuf;
 		type bch_fs = bcachefs_kernel::fs::Fs;
 
 		include!(concat!(env!("OUT_DIR"), "/non_fs.rs"));
@@ -47,7 +48,7 @@ pub mod c {
 	unsafe extern "C" {
 		pub fn sysfs_read_or_html_dirlist(
 			path: *const ::core::ffi::c_char,
-			out: *mut printbuf,
+			out: *mut bcachefs_kernel::util::printbuf::Printbuf,
 		) -> ::core::ffi::c_int;
 	}
 }

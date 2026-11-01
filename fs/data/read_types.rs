@@ -6,6 +6,7 @@ use crate::fs::Dev;
 use crate::fs::Fs;
 use crate::cstructs::c;
 use crate::types::c_default;
+use crate::util::Printbuf;
 use core::ffi::c_uint;
 use cstruct_macros::{bitfield, CStruct, TypeInfo};
 use nestify::nest;
@@ -16,7 +17,7 @@ use crate::format::{Bpos, Btree, Bversion};
 pub struct bch_read_err_report {
     pub lock: c::mutex,
     pub errors: u32,
-    pub msg: c::printbuf,
+    pub msg: Printbuf,
 }
 c_default!(bch_read_err_report);
 

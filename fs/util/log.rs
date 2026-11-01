@@ -32,7 +32,7 @@ use cstruct_macros::{CStruct, c_enum, c_export, c_extern, TypeInfo};
 pub struct bch_log_msg {
     pub c: *mut Fs,
     pub loglevel: u8,
-    pub m: c::printbuf,
+    pub m: Printbuf,
 }
 c_default!(bch_log_msg);
 
@@ -160,7 +160,7 @@ fn print(fs: &Fs, level: u8, prefix: bool, msg: &dyn ToText, newline: bool) {
     // KERN_SOH, level, then the message as data: a '%' in it is text.
     let fmt = [0x01, level, b'%', b's', 0];
     unsafe {
-        __bch2_print(fs.as_ptr(), fmt.as_ptr() as *const c_char, buf.as_raw().buf);
+        __bch2_print(fs.as_ptr(), fmt.as_ptr() as *const c_char, buf.buf);
     }
 }
 

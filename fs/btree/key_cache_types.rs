@@ -46,7 +46,7 @@ pub struct bkey_cached_key {
 }
 
 c_extern! {
-    pub fn bch2_btree_key_cache_to_text(out: *mut c::printbuf, bc: *mut c::bch_fs_btree_key_cache);
+    pub fn bch2_btree_key_cache_to_text(out: *mut Printbuf, bc: *mut c::bch_fs_btree_key_cache);
     pub fn bch2_btree_key_cache_flush_going_ro(c: *mut Fs) -> c_int;
 }
 

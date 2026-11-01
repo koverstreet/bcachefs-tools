@@ -385,7 +385,7 @@ fn pread_raw(file: &File, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_ra
     // The reads' completions add to it, under its lock: initialized where it
     // stays, for the call
     let mut report = c::bch_read_err_report::default();
-    report.msg = c::printbuf::new();
+    report.msg = Printbuf::new();
     unsafe { <c::mutex as RawLock>::init(&raw mut report.lock, c"bch_read_err_report", crate::new_lock!(@key)) };
 
     let ret = unsafe { bch2_direct_IO_read(kiocb.as_mut_ptr(), iter.as_mut_ptr(), flags, &mut report) };

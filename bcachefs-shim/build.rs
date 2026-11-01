@@ -152,6 +152,7 @@ fn main() {
         // userspace helpers that take it (they reference the blocklisted type
         // and belong to bch_bindgen anyway).
         .blocklist_function("prt_.*")
+        .blocklist_type("printbuf")
         .blocklist_function("sysfs_.*")
         // Empty opaque structs — only ever used behind pointers. As zero-field
         // structs they make every extern fn that transitively embeds one (via

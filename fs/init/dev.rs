@@ -169,26 +169,26 @@ c_extern! {
     pub fn bch2_dev_free(ca: *mut Dev);
     pub fn bch2_dev_sysfs_online(c: *mut Fs, ca: *mut Dev) -> c_int;
     pub fn bch2_dev_alloc(c: *mut Fs, dev_idx: c_uint) -> c_int;
-    pub fn bch2_dev_attach_bdev(c: *mut Fs, sb: *mut c::bch_sb_handle, err: *mut c::printbuf) -> c_int;
+    pub fn bch2_dev_attach_bdev(c: *mut Fs, sb: *mut c::bch_sb_handle, err: *mut Printbuf) -> c_int;
     pub fn __bch2_dev_resize_alloc(ca: *mut Dev, old_nbuckets: u64, new_nbuckets: u64) -> c_int;
-    pub fn bch2_dev_add(c: *mut Fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
+    pub fn bch2_dev_add(c: *mut Fs, path: *const c_char, err: *mut Printbuf) -> c_int;
     pub fn bch2_dev_add_initialize(c: *mut Fs, ca: *mut Dev) -> c_int;
     pub fn bch2_dev_resize(c: *mut Fs, ca: *mut Dev, nbuckets: u64,
-                           err: *mut c::printbuf) -> c_int;
+                           err: *mut Printbuf) -> c_int;
     pub fn bch2_dev_remove(c: *mut Fs, ca: *mut Dev, flags: c_int,
-                           err: *mut c::printbuf) -> c_int;
-    pub fn bch2_dev_online(c: *mut Fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
+                           err: *mut Printbuf) -> c_int;
+    pub fn bch2_dev_online(c: *mut Fs, path: *const c_char, err: *mut Printbuf) -> c_int;
     pub fn bch2_dev_offline(c: *mut Fs, ca: *mut Dev, flags: c_int,
-                            err: *mut c::printbuf) -> c_int;
+                            err: *mut Printbuf) -> c_int;
     pub fn bch2_dev_set_state(c: *mut Fs, ca: *mut Dev,
                               new_state: c::bch_member_state, flags: c_int,
-                              err: *mut c::printbuf) -> c_int;
+                              err: *mut Printbuf) -> c_int;
     pub fn __bch2_dev_set_state(c: *mut Fs, ca: *mut Dev,
                                 new_state: c::bch_member_state, flags: c_int,
-                                err: *mut c::printbuf) -> c_int;
+                                err: *mut Printbuf) -> c_int;
     pub fn bch2_dev_lookup(c: *mut Fs, name: *const c_char) -> *mut Dev;
     pub fn bch2_dev_may_offline(c: *mut Fs, ca: *mut Dev, flags: c_int,
-                                err: *mut c::printbuf) -> c_int;
+                                err: *mut Printbuf) -> c_int;
     pub fn __bch2_dev_offline(c: *mut Fs, ca: *mut Dev);
     pub fn bch2_dev_read_identity(bdev: *mut c::block_device,
                                   name: *mut c_char, name_size: usize,

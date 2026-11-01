@@ -27,7 +27,7 @@ c_extern! {
     pub fn bch2_readdir_fault_in(ctx: *mut c::dir_context);
     pub fn bch2_dir_emit(trans: *mut c::btree_trans, ctx: *mut c::dir_context,
                          d: c::bkey_s_c_dirent, target: c::subvol_inum) -> c_int;
-    pub fn bch2_filldir64_specialization_to_text(out: *mut c::printbuf);
+    pub fn bch2_filldir64_specialization_to_text(out: *mut Printbuf);
 }
 
 /// Whether readdir's specialized filldir64 is in use, and why not.

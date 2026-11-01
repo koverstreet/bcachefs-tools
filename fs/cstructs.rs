@@ -91,10 +91,6 @@ pub mod c {
 
     pub use crate::types::darrays::*;
 
-    // Ours, where the kernel's has one of the same name: the shim's
-    // printbuf is its own.
-    pub use crate::util::printbuf::printbuf;
-
     // C's locks, as the structs C shares hold them: written through shared
     // references - locking/raw.rs.
     pub use crate::locking::{mutex, percpu_rw_semaphore, rw_semaphore, spinlock_t};

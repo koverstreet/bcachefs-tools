@@ -46,7 +46,7 @@ c_extern! {
     pub fn enumerated_ref_exit(r: *mut c::enumerated_ref);
     pub fn enumerated_ref_init(r: *mut c::enumerated_ref, nr: c_uint,
                                stop_fn: Option<unsafe extern "C" fn(*mut c::enumerated_ref)>) -> c_int;
-    pub fn enumerated_ref_to_text(out: *mut c::printbuf, r: *mut c::enumerated_ref,
+    pub fn enumerated_ref_to_text(out: *mut Printbuf, r: *mut c::enumerated_ref,
                                   names: *const *const crate::util::ffi::c_char);
 }
 

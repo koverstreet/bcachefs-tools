@@ -165,7 +165,7 @@ pub struct bch_io_failures {
     #[c("struct bch_dev_io_failures data[BCH_REPLICAS_MAX + 1]")]
     pub data: [c::bch_dev_io_failures; c::BCH_REPLICAS_MAX as usize + 1],
 
-    pub ec_msg: c::printbuf,
+    pub ec_msg: Printbuf,
 }
 
 // SAFETY: its message owns its buffer

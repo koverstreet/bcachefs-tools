@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::util::Printbuf;
 use cstruct_macros::{CStruct, c_const, c_enum, c_extern};
 
 /*
@@ -173,7 +174,7 @@ pub struct bset_stats {
 }
 
 c_extern! {
-    pub fn bch2_btree_node_iter_bfloat_to_text(out: *mut c::printbuf, b: *mut c::BtreeNode,
+    pub fn bch2_btree_node_iter_bfloat_to_text(out: *mut Printbuf, b: *mut c::BtreeNode,
                                                iter: *mut c::btree_node_iter);
     pub fn bch2_btree_node_iter_init_from_start(iter: *mut c::btree_node_iter, b: *mut c::BtreeNode);
     pub fn bch2_btree_node_iter_advance(iter: *mut c::btree_node_iter, b: *mut c::BtreeNode);

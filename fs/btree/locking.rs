@@ -10,6 +10,7 @@ use crate::btree::iter::TransAttempt;
 use crate::errcode::BchError;
 use crate::locking::{Guard, Locked, RawTryLock};
 use crate::c;
+use crate::util::Printbuf;
 use crate::types::{DArray, c_default};
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{bitfield, c_extern, CStruct, c_enum};
@@ -30,7 +31,7 @@ c_enum! {
 
 c_extern! {
     pub fn rust_bch2_inode_shard_idx(c: *mut Fs) -> u64;
-    pub fn bch2_check_for_deadlock(trans: *mut c::btree_trans, cycle: *mut c::printbuf) -> c_int;
+    pub fn bch2_check_for_deadlock(trans: *mut c::btree_trans, cycle: *mut Printbuf) -> c_int;
 }
 
 /* State used for the cycle detector */

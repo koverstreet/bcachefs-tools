@@ -159,8 +159,8 @@ macro_rules! type_names {
 c::BCH_DATA_UPDATE_TYPES!(type_names);
 
 c_extern! {
-    fn __bch2_write_op_to_text(out: *mut c::printbuf, op: *mut c::bch_write_op);
-    pub fn bch2_read_bio_to_text(out: *mut c::printbuf, c: *mut Fs, rbio: *mut c::bch_read_bio);
+    fn __bch2_write_op_to_text(out: *mut Printbuf, op: *mut c::bch_write_op);
+    pub fn bch2_read_bio_to_text(out: *mut Printbuf, c: *mut Fs, rbio: *mut c::bch_read_bio);
 }
 
 /// The read failed only because the extent changed under it - the key was

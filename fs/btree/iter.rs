@@ -60,10 +60,10 @@ pub struct trans_may_drop_updates {
 c_default!(trans_may_drop_updates);
 
 c_extern! {
-    pub fn bch2_btree_trans_to_text(out: *mut c::printbuf, trans: *mut c::btree_trans);
-    pub fn bch2_trans_updates_to_text(out: *mut c::printbuf, trans: *mut c::btree_trans);
+    pub fn bch2_btree_trans_to_text(out: *mut Printbuf, trans: *mut c::btree_trans);
+    pub fn bch2_trans_updates_to_text(out: *mut Printbuf, trans: *mut c::btree_trans);
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-    pub fn bch2_trans_kmalloc_trace_to_text(out: *mut c::printbuf,
+    pub fn bch2_trans_kmalloc_trace_to_text(out: *mut Printbuf,
                                             trace: *mut c::darray_trans_kmalloc_trace);
     pub fn bch2_path_put(trans: *mut c::btree_trans, path_idx: c::btree_path_idx_t, intent: bool);
     pub fn bch2_btree_iter_peek_root(trans: *mut c::btree_trans, iter: *mut c::btree_iter, btree: Btree,

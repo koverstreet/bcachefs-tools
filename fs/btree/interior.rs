@@ -104,7 +104,7 @@ c_extern! {
     pub fn bch2_btree_interior_updates_flush(c: *mut Fs) -> bool;
     pub fn bch2_do_pending_node_rewrites(c: *mut Fs);
     pub fn bch2_free_pending_node_rewrites(c: *mut Fs);
-    pub fn bch2_btree_updates_to_text(out: *mut c::printbuf, c: *mut Fs);
+    pub fn bch2_btree_updates_to_text(out: *mut Printbuf, c: *mut Fs);
     pub fn bch2_btree_node_update_key(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
                                       b: *mut c::BtreeNode, new_key: *mut c::bkey_i,
                                       commit_flags: c_uint, skip_triggers: bool) -> c_int;
@@ -113,7 +113,7 @@ c_extern! {
     pub fn bch2_btree_node_rewrite(trans: *mut c::btree_trans, iter: *mut c::btree_iter, b: *mut c::BtreeNode,
                                    target: c_uint, flags: c::bch_trans_commit_flags,
                                    write_flags: c::bch_write_flags) -> c_int;
-    pub fn bch2_btree_reserve_cache_to_text(out: *mut c::printbuf, c: *mut Fs);
+    pub fn bch2_btree_reserve_cache_to_text(out: *mut Printbuf, c: *mut Fs);
     pub fn bch2_async_btree_op(c: *mut Fs, b: *mut c::BtreeNode, op: c::async_btree_op);
 }
 

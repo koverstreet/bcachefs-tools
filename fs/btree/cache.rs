@@ -23,10 +23,10 @@ c_extern! {
     pub fn bch2_fs_btree_init_early(c: *mut Fs);
     pub fn bch2_fs_btree_init(c: *mut Fs) -> c_int;
     pub fn bch2_btree_id_str(btree: Btree) -> *const c_char;
-    pub fn bch2_btree_id_to_text(out: *mut c::printbuf, btree: Btree);
-    pub fn bch2_btree_id_level_to_text(out: *mut c::printbuf, btree: Btree, level: c_uint);
-    pub fn bch2_btree_node_to_text(out: *mut c::printbuf, c: *mut Fs, b: *const c::BtreeNode);
-    pub fn bch2_btree_cache_to_text(out: *mut c::printbuf, bc: *const c::bch_fs_btree_cache);
+    pub fn bch2_btree_id_to_text(out: *mut Printbuf, btree: Btree);
+    pub fn bch2_btree_id_level_to_text(out: *mut Printbuf, btree: Btree, level: c_uint);
+    pub fn bch2_btree_node_to_text(out: *mut Printbuf, c: *mut Fs, b: *const c::BtreeNode);
+    pub fn bch2_btree_cache_to_text(out: *mut Printbuf, bc: *const c::bch_fs_btree_cache);
     pub fn bch2_btree_cache_pin_budget(c: *mut Fs) -> u64;
     pub fn bch2_node_pin(c: *mut Fs, b: *mut c::BtreeNode);
     pub fn bch2_btree_node_prefetch(trans: *mut c::btree_trans, path: *mut c::btree_path,

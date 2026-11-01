@@ -630,7 +630,7 @@ mod vfs {
         let mut out = Printbuf::new();
         opts::opt_to_text(&mut out, Some(fs), None, opt, inode_opts.get(id), 0);
 
-        if out.as_raw().allocation_failure() {
+        if out.allocation_failure() {
             return Err(BchError::from(c::ENOMEM));
         }
 

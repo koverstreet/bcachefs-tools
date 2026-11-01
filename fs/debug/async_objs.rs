@@ -181,8 +181,8 @@ pub fn async_obj_exit(fs: &Fs) {
 }
 
 cstruct_macros::c_extern! {
-    fn bch2_write_op_to_text(out: *mut c::printbuf, op: *mut c::bch_write_op);
-    fn bch2_btree_read_bio_to_text(out: *mut c::printbuf, rbio: *mut c::btree_read_bio);
+    fn bch2_write_op_to_text(out: *mut Printbuf, op: *mut c::bch_write_op);
+    fn bch2_btree_read_bio_to_text(out: *mut Printbuf, rbio: *mut c::btree_read_bio);
 }
 
 /// How a list's objects are shown: of the list's kind, read under RCU.

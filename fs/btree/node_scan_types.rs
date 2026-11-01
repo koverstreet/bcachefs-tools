@@ -4,6 +4,7 @@
 
 use crate::fs::Fs;
 use crate::cstructs::c;
+use crate::util::Printbuf;
 use crate::types::{DArray, c_default};
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{bitfield, CStruct, c_extern, c_typedef};
@@ -50,6 +51,6 @@ pub struct find_btree_nodes {
 c_default!(find_btree_nodes);
 
 c_extern! {
-    pub fn bch2_found_btree_node_to_text(out: *mut c::printbuf, c: *mut Fs,
+    pub fn bch2_found_btree_node_to_text(out: *mut Printbuf, c: *mut Fs,
                                          n: *const c::found_btree_node);
 }

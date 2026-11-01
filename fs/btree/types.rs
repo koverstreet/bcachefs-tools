@@ -11,6 +11,7 @@ use crate::errcode::BchError;
 use crate::locking::Locked;
 use crate::util::bio::{BioSet, Either};
 use crate::util::late::Late;
+use crate::util::Printbuf;
 use crate::util::mempool::Mempool;
 use crate::util::workqueue::{Workqueue, WqFlags};
 use crate::types::{CacheAligned, DArray, NeBytes, bits_to_longs, c_default};
@@ -996,7 +997,7 @@ pub struct bch_fs_btree_trans {
     pub stats: [cs::btree_transaction_stats; cs::BCH_TRANSACTIONS_NR as usize],
 
     pub stats_json_lock: cs::mutex,
-    pub stats_json_buf: cs::printbuf,
+    pub stats_json_buf: Printbuf,
 }
 c_default!(bch_fs_btree_trans);
 

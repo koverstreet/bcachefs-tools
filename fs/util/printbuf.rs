@@ -5,9 +5,8 @@ use core::fmt::{self, Write as _};
 use core::ops::{Deref, DerefMut};
 use crate::c;
 use crate::util::os_str::{OsStr, OsStrExt};
-use crate::types::c_default;
 use crate::util::ffi::c_char;
-use cstruct_macros::{CStruct, bitfield, c_const, c_enum, c_extern};
+use cstruct_macros::{CStruct, bitfield, c_const, c_enum, c_extern, c_name};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -25,9 +24,12 @@ c_const! {
 }
 
 nest! {
+    /// fmt::Write goes through bch2_prt_bytes_indented(): `\t`, `\r` and `\n`
+    /// are tabstops and indent.
+    #[c_name(printbuf)]
     #[repr(C)]
     #[derive(CStruct)]
-    pub struct printbuf {
+    pub struct Printbuf {
         pub buf: *mut c_char,
         pub size: c_uint,
         pub pos: c_uint,
@@ -41,7 +43,7 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8)]
         pub bits: pub struct printbuf_bits {
-            allocation_failure:     bool,
+            pub allocation_failure: bool,
             heap_allocated:         bool,
             overflow:               bool,
             /* Ratelimited or already printed */
@@ -49,7 +51,7 @@ nest! {
             #[bits(1)] pub si_units: c::printbuf_si,
             human_readable_units:   bool,
             has_indent_or_tabstops: bool,
-            may_vmalloc:            bool,
+            pub may_vmalloc:        bool,
         },
         pub nr_tabstops: u8,
 
@@ -61,7 +63,6 @@ nest! {
         pub _tabstops: [u8; c::PRINTBUF_INLINE_TABSTOPS as usize],
     }
 }
-c_default!(printbuf);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -74,30 +75,25 @@ pub struct printbuf_restore {
 }
 
 c_extern! {
-    pub fn bch2_printbuf_exit(buf: *mut c::printbuf);
-    pub fn bch2_printbuf_make_room_gfp(buf: *mut c::printbuf, extra: c_uint, gfp: c::gfp_t) -> c_int;
-    pub fn bch2_printbuf_tabstops_reset(buf: *mut c::printbuf);
-    pub fn bch2_printbuf_tabstop_push(buf: *mut c::printbuf, spaces: c_uint) -> c_int;
-    pub fn bch2_printbuf_indent_add(buf: *mut c::printbuf, spaces: c_uint);
-    pub fn bch2_printbuf_indent_sub(buf: *mut c::printbuf, spaces: c_uint);
-    pub fn bch2_printbuf_indent_add_nextline(buf: *mut c::printbuf, spaces: c_uint);
-    pub fn bch2_prt_newline(buf: *mut c::printbuf);
-    pub fn bch2_prt_tab(out: *mut c::printbuf);
-    pub fn bch2_prt_tab_rjust(buf: *mut c::printbuf);
-    pub fn bch2_printbuf_tabstop_align(buf: *mut c::printbuf);
-    pub fn bch2_prt_bytes_indented(out: *mut c::printbuf, str: *const c_char, count: c_uint);
-    pub fn bch2_prt_human_readable_u64(out: *mut c::printbuf, v: u64);
-    pub fn bch2_prt_units_u64(out: *mut c::printbuf, v: u64);
-    pub fn bch2_prt_bitflags(out: *mut c::printbuf, list: *const *const c_char, flags: u64);
-    pub fn rust_prt_bytes(out: *mut c::printbuf, b: *const c_void, n: c_uint);
+    pub fn bch2_printbuf_exit(buf: *mut Printbuf);
+    pub fn bch2_printbuf_make_room_gfp(buf: *mut Printbuf, extra: c_uint, gfp: c::gfp_t) -> c_int;
+    pub fn bch2_printbuf_tabstops_reset(buf: *mut Printbuf);
+    pub fn bch2_printbuf_tabstop_push(buf: *mut Printbuf, spaces: c_uint) -> c_int;
+    pub fn bch2_printbuf_indent_add(buf: *mut Printbuf, spaces: c_uint);
+    pub fn bch2_printbuf_indent_sub(buf: *mut Printbuf, spaces: c_uint);
+    pub fn bch2_printbuf_indent_add_nextline(buf: *mut Printbuf, spaces: c_uint);
+    pub fn bch2_prt_newline(buf: *mut Printbuf);
+    pub fn bch2_prt_tab(out: *mut Printbuf);
+    pub fn bch2_prt_tab_rjust(buf: *mut Printbuf);
+    pub fn bch2_printbuf_tabstop_align(buf: *mut Printbuf);
+    pub fn bch2_prt_bytes_indented(out: *mut Printbuf, str: *const c_char, count: c_uint);
+    pub fn bch2_prt_human_readable_u64(out: *mut Printbuf, v: u64);
+    pub fn bch2_prt_units_u64(out: *mut Printbuf, v: u64);
+    pub fn bch2_prt_bitflags(out: *mut Printbuf, list: *const *const c_char, flags: u64);
+    pub fn rust_prt_bytes(out: *mut Printbuf, b: *const c_void, n: c_uint);
     #[c_printf(2, 3)]
-    pub fn bch2_prt_printf(out: *mut c::printbuf, fmt: *const c_char, ...);
+    pub fn bch2_prt_printf(out: *mut Printbuf, fmt: *const c_char, ...);
 }
-
-/// fmt::Write goes through bch2_prt_bytes_indented(): `\t`, `\r` and `\n` are
-/// tabstops and indent.
-#[repr(transparent)]
-pub struct Printbuf(c::printbuf);
 
 // SAFETY: a heap buffer and its counts, owned: nothing in it is a thread's
 unsafe impl Send for Printbuf {}
@@ -130,7 +126,7 @@ pub struct PrintbufAtomic<'a> {
 
 impl Drop for PrintbufAtomic<'_> {
     fn drop(&mut self) {
-        self.buf.0.atomic -= 1;
+        self.buf.atomic -= 1;
     }
 }
 
@@ -144,8 +140,18 @@ impl DerefMut for PrintbufAtomic<'_> {
 }
 
 impl Printbuf {
+    const fn empty() -> Self {
+        Printbuf {
+            buf: core::ptr::null_mut(), size: 0, pos: 0, last_newline: 0, last_field: 0, indent: 0, atomic: 0,
+            bits: printbuf_bits::new(), nr_tabstops: 0, cur_tabstop: 0,
+            _tabstops: [0; c::PRINTBUF_INLINE_TABSTOPS as usize],
+        }
+    }
+
     pub fn new() -> Self {
-        Printbuf(c::printbuf::new())
+        let mut buf = Self::empty();
+        buf.set_heap_allocated(true);
+        buf
     }
 
     /// A printbuf over @size bytes at @buf that it doesn't own: it never
@@ -155,10 +161,7 @@ impl Printbuf {
     /// # Safety
     /// @buf is @size writable bytes, for as long as this lives.
     pub unsafe fn new_extern(buf: *mut crate::util::ffi::c_char, size: usize) -> Self {
-        let mut p = c::printbuf::default();
-        p.buf  = buf;
-        p.size = size as u32;
-        Printbuf(p)
+        Printbuf { buf, size: size as u32, ..Self::empty() }
     }
 
     /// A C caller's printbuf, to write to - for a to_text C calls. Borrowed:
@@ -166,15 +169,15 @@ impl Printbuf {
     ///
     /// # Safety
     /// @raw is a valid printbuf nothing else touches for 'a.
-    pub unsafe fn borrow_raw<'a>(raw: *mut c::printbuf) -> &'a mut Printbuf {
-        unsafe { &mut *(raw as *mut Printbuf) }
+    pub unsafe fn borrow_raw<'a>(raw: *mut Printbuf) -> &'a mut Printbuf {
+        unsafe { &mut *raw }
     }
 
     pub fn as_str(&self) -> &str {
-        if self.0.buf.is_null() {
+        if self.buf.is_null() {
             ""
         } else {
-            unsafe { CStr::from_ptr(self.0.buf.cast()) }
+            unsafe { CStr::from_ptr(self.buf.cast()) }
                 .to_str()
                 .unwrap_or("")
         }
@@ -182,30 +185,30 @@ impl Printbuf {
 
     /// What's been written, as a C string: to hand to C.
     pub fn as_c_str(&self) -> &CStr {
-        if self.0.buf.is_null() {
+        if self.buf.is_null() {
             c""
         } else {
             // SAFETY: a printbuf's buffer is NUL-terminated
-            unsafe { CStr::from_ptr(self.0.buf.cast()) }
+            unsafe { CStr::from_ptr(self.buf.cast()) }
         }
     }
 
     /// What's written, cut back to @len bytes - C's out->pos = len.
     pub fn truncate(&mut self, len: usize) {
-        if len < self.0.pos as usize {
-            self.0.pos = len as core::ffi::c_uint;
+        if len < self.pos as usize {
+            self.pos = len as core::ffi::c_uint;
             // SAFETY: inside what's written, which the buffer holds
-            unsafe { *self.0.buf.add(len) = 0 };
+            unsafe { *self.buf.add(len) = 0 };
         }
     }
 
     /// What's been written, as bytes - which needn't be UTF-8, after
     /// write_bytes().
     pub fn as_bytes(&self) -> &[u8] {
-        if self.0.buf.is_null() {
+        if self.buf.is_null() {
             &[]
         } else {
-            unsafe { core::slice::from_raw_parts(self.0.buf as *const u8, self.0.pos as usize) }
+            unsafe { core::slice::from_raw_parts(self.buf as *const u8, self.pos as usize) }
         }
     }
 
@@ -216,11 +219,11 @@ impl Printbuf {
 
     /// Add a tabstop at `spaces` columns from the previous tabstop.
     pub fn tabstop_push(&mut self, spaces: u32) {
-        unsafe { c::bch2_printbuf_tabstop_push(&mut self.0, spaces) };
+        unsafe { c::bch2_printbuf_tabstop_push(self, spaces) };
     }
 
     pub fn tabstops_reset(&mut self) {
-        unsafe { c::bch2_printbuf_tabstops_reset(&mut self.0) };
+        unsafe { c::bch2_printbuf_tabstops_reset(self) };
     }
 
     pub fn tabstops(&mut self, widths: &[u32]) {
@@ -231,11 +234,11 @@ impl Printbuf {
     }
 
     pub fn indent_add(&mut self, spaces: u32) {
-        unsafe { c::bch2_printbuf_indent_add(&mut self.0, spaces) };
+        unsafe { c::bch2_printbuf_indent_add(self, spaces) };
     }
 
     pub fn indent_sub(&mut self, spaces: u32) {
-        unsafe { c::bch2_printbuf_indent_sub(&mut self.0, spaces) };
+        unsafe { c::bch2_printbuf_indent_sub(self, spaces) };
     }
 
     /// Indented until the guard drops.
@@ -246,31 +249,31 @@ impl Printbuf {
 
     /// The lines after this one - not this one - indented by @spaces more.
     pub fn indent_add_nextline(&mut self, spaces: u32) {
-        unsafe { c::bch2_printbuf_indent_add_nextline(&mut self.0, spaces) };
+        unsafe { c::bch2_printbuf_indent_add_nextline(self, spaces) };
     }
 
     /// Allocating as from atomic context - under RCU, a spinlock - until the
     /// guard drops: guard(printbuf_atomic).
     pub fn atomic(&mut self) -> PrintbufAtomic<'_> {
-        self.0.atomic += 1;
+        self.atomic += 1;
         PrintbufAtomic { buf: self }
     }
 
     /// `\t` in a format string.
     pub fn tab(&mut self) {
-        unsafe { c::bch2_prt_tab(&mut self.0) };
+        unsafe { c::bch2_prt_tab(self) };
     }
 
     /// `\r` in a format string: right-justify the text since the last tabstop.
     pub fn tab_rjust(&mut self) {
-        unsafe { c::bch2_prt_tab_rjust(&mut self.0) };
+        unsafe { c::bch2_prt_tab_rjust(self) };
     }
 
     /// Post-process the buffer, aligning columns separated by raw `\t`
     /// (left-aligned) and `\r` (right-aligned) characters. Call after
     /// writing a section of tabular data without preset tabstops.
     pub fn tabstop_align(&mut self) {
-        unsafe { c::bch2_printbuf_tabstop_align(&mut self.0) };
+        unsafe { c::bch2_printbuf_tabstop_align(self) };
     }
 
     /// Tabular data written by @f, aligned by tabstop_align().
@@ -286,64 +289,64 @@ impl Printbuf {
     /// printbuf_state_save().
     pub fn state_save(&self) -> c::printbuf_restore {
         c::printbuf_restore {
-            pos:          self.0.pos,
-            last_newline: self.0.last_newline,
-            last_field:   self.0.last_field,
-            indent:       self.0.indent,
-            cur_tabstop:  self.0.cur_tabstop,
+            pos:          self.pos,
+            last_newline: self.last_newline,
+            last_field:   self.last_field,
+            indent:       self.indent,
+            cur_tabstop:  self.cur_tabstop,
         }
     }
 
     /// Undo what's been written since @s: printbuf_state_restore().
     pub fn state_restore(&mut self, s: c::printbuf_restore) {
-        self.0.pos          = s.pos;
-        self.0.last_newline = s.last_newline;
-        self.0.last_field   = s.last_field;
-        self.0.indent       = s.indent;
-        self.0.cur_tabstop  = s.cur_tabstop;
+        self.pos          = s.pos;
+        self.last_newline = s.last_newline;
+        self.last_field   = s.last_field;
+        self.indent       = s.indent;
+        self.cur_tabstop  = s.cur_tabstop;
     }
 
     pub fn nr_tabstops(&self) -> u32 {
-        self.0.nr_tabstops.into()
+        self.nr_tabstops.into()
     }
 
     pub fn indent_level(&self) -> u32 {
-        self.0.indent
+        self.indent
     }
 
     /// Room for @extra more bytes, allocated with @gfp: false if it
     /// couldn't. bch2_printbuf_make_room_gfp().
     pub fn make_room_gfp(&mut self, extra: u32, gfp: c::gfp_t) -> bool {
-        unsafe { c::bch2_printbuf_make_room_gfp(&mut self.0, extra, gfp) == 0 }
+        unsafe { c::bch2_printbuf_make_room_gfp(self, extra, gfp) == 0 }
     }
 
     /// `\n` in a format string.
     pub fn newline(&mut self) {
-        unsafe { c::bch2_prt_newline(&mut self.0) };
+        unsafe { c::bch2_prt_newline(self) };
     }
 
     pub fn is_human_readable(&self) -> bool {
-        self.0.human_readable_units()
+        self.human_readable_units()
     }
 
     pub fn set_human_readable(&mut self, v: bool) {
-        self.0.set_human_readable_units(v);
+        self.set_human_readable_units(v);
     }
 
     /// Whether this message is not to be printed: C's printbuf.suppress, for
     /// a message that's printed only if what it reports turns out to need
     /// it - scheduling a recovery pass, for one, clears it.
     pub fn is_suppressed(&self) -> bool {
-        self.0.suppress()
+        self.suppress()
     }
 
     pub fn set_suppressed(&mut self, v: bool) {
-        self.0.set_suppress(v);
+        self.set_suppress(v);
     }
 
     /// Empty, to write again - its buffer kept: printbuf_reset().
     pub fn reset(&mut self) {
-        let b = &mut self.0;
+        let b = self;
         b.pos = 0;
         b.set_allocation_failure(false);
         b.last_newline = 0;
@@ -357,15 +360,6 @@ impl Printbuf {
         }
     }
 
-    /// Whether an allocation failed, and what's written is cut short.
-    pub fn allocation_failure(&self) -> bool {
-        self.0.allocation_failure()
-    }
-
-    pub fn set_may_vmalloc(&mut self, v: bool) {
-        self.0.set_may_vmalloc(v);
-    }
-
     /// Drop the first @n bytes written, moving the rest - and the positions in
     /// it - to the front.
     pub fn drop_front(&mut self, n: usize) {
@@ -375,7 +369,7 @@ impl Printbuf {
             return;
         }
 
-        let b = &mut self.0;
+        let b = self;
         // SAFETY: n <= pos < size: the bytes written and their NUL, in the buffer
         unsafe { core::ptr::copy(b.buf.add(n), b.buf, pos - n + 1) };
 
@@ -402,7 +396,7 @@ impl Printbuf {
     /// # Safety
     /// `list` must be a valid null-terminated array of C string pointers.
     pub unsafe fn prt_bitflags(&mut self, list: *const *const crate::util::ffi::c_char, flags: u64) {
-        c::bch2_prt_bitflags(&mut self.0, list, flags);
+        c::bch2_prt_bitflags(self, list, flags);
     }
 
     /// The names of the bits set in @flags, comma separated: prt_bitflags(),
@@ -418,8 +412,8 @@ impl Printbuf {
     }
 
     /// For the C prt_*() functions.
-    pub fn as_raw(&mut self) -> &mut c::printbuf {
-        &mut self.0
+    pub fn as_raw(&mut self) -> *mut Printbuf {
+        self
     }
 
     /// Shadows fmt::Write's - an inherent method wins - so write!() has no
@@ -433,7 +427,7 @@ impl Printbuf {
     /// newlines and tabs aren't indent or tabstops: as prt_bytes().
     pub fn write_bytes(&mut self, bytes: &[u8]) {
         unsafe {
-            c::rust_prt_bytes(&mut self.0, bytes.as_ptr() as *const core::ffi::c_void,
+            c::rust_prt_bytes(self, bytes.as_ptr() as *const core::ffi::c_void,
                               bytes.len() as core::ffi::c_uint);
         }
     }
@@ -442,7 +436,7 @@ impl Printbuf {
     /// prt_bytes_indented(), what write!() goes through.
     pub fn write_bytes_indented(&mut self, bytes: &[u8]) {
         // SAFETY: the bytes, by their length
-        unsafe { c::bch2_prt_bytes_indented(&mut self.0, bytes.as_ptr().cast(), bytes.len() as core::ffi::c_uint) }
+        unsafe { c::bch2_prt_bytes_indented(self, bytes.as_ptr().cast(), bytes.len() as core::ffi::c_uint) }
     }
 }
 
@@ -468,8 +462,8 @@ pub fn prt_bdevname(out: &mut Printbuf, bdev: Option<&c::block_device>) {
 
 impl fmt::Write for Printbuf {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        if self.0.atomic & Printbuf::FMT_JOB != 0 {
-            self.0.atomic &= !Printbuf::FMT_JOB;
+        if self.atomic & Printbuf::FMT_JOB != 0 {
+            self.atomic &= !Printbuf::FMT_JOB;
             // SAFETY: after Probe::Job, pass_through()'s empty str: its
             // address is that of a job on pass_through()'s stack, exposed
             let job = unsafe {
@@ -482,7 +476,7 @@ impl fmt::Write for Printbuf {
         match Probe::of(s) {
             Some(Probe::IsPrintbuf) => return Err(fmt::Error),
             Some(Probe::Job) => {
-                self.0.atomic |= Printbuf::FMT_JOB;
+                self.atomic |= Printbuf::FMT_JOB;
                 return Ok(());
             }
             None => {}
@@ -503,16 +497,7 @@ impl fmt::Display for Printbuf {
     }
 }
 
-impl c::printbuf {
-    pub fn new() -> c::printbuf {
-        let mut buf: c::printbuf = Default::default();
-
-        buf.set_heap_allocated(true);
-        buf
-    }
-}
-
-impl Drop for c::printbuf {
+impl Drop for Printbuf {
     fn drop(&mut self) {
         unsafe { c::bch2_printbuf_exit(self) }
     }
@@ -560,7 +545,7 @@ pub struct Nsecs(pub u64);
 
 impl ToText for Bytes {
     fn to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_prt_units_u64(&mut out.0, self.0) };
+        unsafe { c::bch2_prt_units_u64(out, self.0) };
     }
 }
 
@@ -572,7 +557,7 @@ impl ToText for Sectors {
 
 impl ToText for HumanReadable<u64> {
     fn to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_prt_human_readable_u64(&mut out.0, self.0) };
+        unsafe { c::bch2_prt_human_readable_u64(out, self.0) };
     }
 }
 
@@ -587,7 +572,7 @@ impl ToText for HumanReadable<i64> {
 
 impl ToText for DateTime {
     fn to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_prt_datetime(&mut out.0, self.0) };
+        unsafe { c::bch2_prt_datetime(out, self.0) };
     }
 }
 

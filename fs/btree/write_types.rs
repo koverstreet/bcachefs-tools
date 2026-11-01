@@ -36,7 +36,7 @@ c_enum! {
 }
 
 c_extern! {
-    pub fn bch2_btree_write_stats_to_text(out: *mut c::printbuf, c: *mut Fs);
+    pub fn bch2_btree_write_stats_to_text(out: *mut Printbuf, c: *mut Fs);
     pub fn bch2_btree_flush_all_writes(c: *mut Fs) -> bool;
     pub fn bch2_btree_cancel_all_writes(c: *mut Fs);
 }

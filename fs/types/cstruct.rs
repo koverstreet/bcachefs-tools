@@ -1666,7 +1666,6 @@ fn parse_extern(m: &syn::Macro) -> Result<CExtern, String> {
 /// them, and C's, as c_extern! does: #[repr(transparent)], or c_same! - one
 /// layout either way. References are c_export_type()'s.
 const C_EXPORT_TYPES: &[(&str, &str)] = &[
-    ("Printbuf",       "c::printbuf"),
     ("BkeySC<'_>",     "c::bkey_s_c"),
     ("BkeyS<'_>",      "c::bkey_s"),
     ("BtreeTrans<'_>", "c::btree_trans"),

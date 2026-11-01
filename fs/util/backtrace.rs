@@ -29,7 +29,7 @@ use cstruct_macros::{c_export, c_extern};
 // knows it - linux/stacktrace.c, the userspace shim's %pB.
 c_extern! {
     #[cfg(not(kernel))]
-    pub fn bch2_prt_symbol(out: *mut c::printbuf, addr: c_ulong);
+    pub fn bch2_prt_symbol(out: *mut Printbuf, addr: c_ulong);
 }
 
 /// @sym, a symbol "name..." as the symbolizer printed it, to @out: the name

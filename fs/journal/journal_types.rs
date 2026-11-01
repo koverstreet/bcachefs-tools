@@ -44,7 +44,7 @@ c_extern! {
     pub fn bch2_journal_noflush_seq(j: *mut c::journal, start: u64, end: u64) -> bool;
     pub fn bch2_journal_meta(j: *mut c::journal) -> c_int;
     pub fn bch2_journal_do_writes(j: *mut c::journal);
-    pub fn bch2_journal_debug_to_text(out: *mut c::printbuf, j: *mut c::journal);
+    pub fn bch2_journal_debug_to_text(out: *mut Printbuf, j: *mut c::journal);
     pub fn bch2_journal_halt(j: *mut c::journal);
     pub fn bch2_journal_halt_locked(j: *mut c::journal);
 }

@@ -166,7 +166,7 @@ fn list_empty_careful(head: &c::list_head) -> bool {
 }
 
 fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &c::BtreeNode) {
-    if out.as_raw().nr_tabstops == 0 {
+    if out.nr_tabstops == 0 {
         out.tabstop_push(36);
     }
 

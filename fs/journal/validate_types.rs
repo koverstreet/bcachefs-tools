@@ -8,6 +8,7 @@
 
 use crate::fs::Fs;
 use crate::cstructs::c;
+use crate::util::Printbuf;
 use crate::util::vstructs::Head;
 use cstruct_macros::c_extern;
 
@@ -16,6 +17,6 @@ c_extern! {
                                        entry: *mut Head<c::jset_entry>, version: core::ffi::c_uint,
                                        big_endian: core::ffi::c_int,
                                        from: c::bkey_validate_context) -> core::ffi::c_int;
-    pub fn bch2_journal_entry_to_text(out: *mut c::printbuf, c: *mut Fs,
+    pub fn bch2_journal_entry_to_text(out: *mut Printbuf, c: *mut Fs,
                                       entry: *mut Head<c::jset_entry>);
 }
