@@ -208,9 +208,8 @@ impl TransAttempt<'_, '_> {
     /// @k, a key of @btree at @level, into the journal with this
     /// transaction's commit.
     pub fn log_bkey(&self, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
-        // SAFETY: the whole key, as long as it says
-        let bytes = unsafe { slice::from_raw_parts(k.as_ffi().cast::<u8>(), k.k.bytes()) };
-        self.journal_entry_add(c::bch_jset_entry_type::BCH_JSET_ENTRY_log_bkey, btree.0 as u8, level as u8, bytes)
+        self.journal_entry_add(c::bch_jset_entry_type::BCH_JSET_ENTRY_log_bkey, btree.0 as u8, level as u8,
+                               k.as_bytes())
     }
 }
 

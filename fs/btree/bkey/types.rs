@@ -197,6 +197,11 @@ impl<V: ?Sized> BkeyI<V> {
         (self as *const Self).cast()
     }
 
+    /// All of it, as its u64s say: header and value.
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.as_ffi().cast::<u8>(), self.k.bytes()) }
+    }
+
     pub fn as_ffi_mut(&mut self) -> *mut c::bkey_i {
         (self as *mut Self).cast()
     }
