@@ -49,7 +49,7 @@ use crate::util::task::Resumable;
 use crate::util::{Printbuf, ToText};
 use crate::util::volatile::VolatileSlice;
 use crate::util::place::Contained;
-use cstruct_macros::{c_extern, placed, Init};
+use cstruct_macros::{c_extern, Init};
 use pin_init::pin_data;
 
 mod iter;
@@ -108,14 +108,23 @@ pub struct Bio {
 // Sync: two holders of a &Bio could write its data at once.
 unsafe impl Send for Bio {}
 
-/// Sync, as Bio isn't, for a BioRange to go to another thread: what a range
-/// reads of its bio, the op and the bvecs, doesn't change while they're
-/// mapped.
-#[placed(Bio.data)]
-#[pin_data]
-#[repr(C)]
-#[derive(Init)]
-pub struct BioData {}
+// Unnameable outside the bio code: crate-visible for the place machinery's
+// Field, in a module nothing else can reach
+mod data {
+    use super::Bio;
+    use cstruct_macros::{placed, Init};
+    use pin_init::pin_data;
+
+    /// Sync, as Bio isn't, for a BioRange to go to another thread: what a range
+    /// reads of its bio, the op and the bvecs, doesn't change while they're
+    /// mapped.
+    #[placed(Bio.data)]
+    #[pin_data]
+    #[repr(C)]
+    #[derive(Init)]
+    pub(crate) struct BioData {}
+}
+use data::BioData;
 
 impl Bio {
     /// # Safety
