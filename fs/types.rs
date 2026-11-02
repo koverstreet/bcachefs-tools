@@ -18,7 +18,6 @@ use crate::util::refcount::AtomicRef;
 use crate::util::workqueue::{ReffedWork, Workqueue, WqFlags};
 use crate::locking::{Locked, LockedBy, MutexNoio, PercpuRwsemNoio};
 use crate::util::percpu::{Counters, PerCpu};
-use crate::util::vstructs::Head;
 use crate::types::{GenRadix, RustOnly, bits_to_longs, rust_only};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ushort};
@@ -408,7 +407,9 @@ pub struct Dev {
     /// of superblock buckets. Copied as it's attached, and as it's edited -
     /// DevSbMut::edit_layout(), under sb_lock.
     pub sb_layout: crate::util::projections::Volatile<c::bch_sb_layout>,
-    pub sb_read_scratch: *mut Head<c::bch_sb>,
+    #[pin]
+    #[init(RustOnly::new(None))]
+    pub(crate) sb_read_scratch: rust_only!(Option<crate::util::alloc::KBox<crate::sb::io::SbReadScratch>>),
     pub dev: c::dev_t,
 
     pub self_mask: c::bch_devs_mask,

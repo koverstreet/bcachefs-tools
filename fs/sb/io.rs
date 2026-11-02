@@ -2317,6 +2317,22 @@ c_const! {
     pub const BCH_SB_READ_SCRATCH_BUF_SIZE: u32 = 4096;
 }
 
+/// ca->sb_read_scratch: read into by the write's own bio, so aligned as
+/// kmalloc() aligns its size - what O_DIRECT, in userspace, needs.
+#[repr(C, align(4096))]
+pub struct SbReadScratch {
+    buf: core::cell::UnsafeCell<[u8; BCH_SB_READ_SCRATCH_BUF_SIZE as usize]>,
+}
+
+unsafe impl ::pin_init::Zeroable for SbReadScratch {}
+
+impl SbReadScratch {
+    /// Zeroed in place: 4096 bytes aren't built on the stack.
+    pub fn new() -> impl ::pin_init::Init<Self, crate::util::alloc::AllocError> {
+        ::pin_init::init!(Self { ..Zeroable::init_zeroed() }? crate::util::alloc::AllocError)
+    }
+}
+
 impl DevSbMut<'_> {
     /// Valid to be written, as validate() checks one about to be.
     fn validate_write(&mut self, err: &mut Printbuf) -> Result<(), BchError> {
@@ -2349,12 +2365,11 @@ impl<'a> DevSbMut<'a> {
     /// # Safety
     /// Not had twice at once.
     unsafe fn scratch(&self) -> &'a mut [u8] {
-        // SAFETY: the device's, BCH_SB_READ_SCRATCH_BUF_SIZE bytes, kmalloc()'d
-        // at its alloc - used only by a superblock write, under the sb_lock
-        // we hold; once at a time, the caller's
-        unsafe {
-            core::slice::from_raw_parts_mut(self.ca.sb_read_scratch.cast::<u8>(), BCH_SB_READ_SCRATCH_BUF_SIZE as usize)
-        }
+        let ca: &'a Dev = self.ca;
+        let s = ca.sb_read_scratch.as_ref().expect("a device's sb_read_scratch, from its alloc");
+        // SAFETY: used only by a superblock write, under the sb_lock we hold;
+        // once at a time, the caller's
+        unsafe { &mut *s.buf.get() }
     }
 }
 

@@ -228,11 +228,11 @@ use crate::init::error::bch2_io_error_work;
 use crate::format::DataType;
 use crate::locking::MemallocFlags;
 use crate::opts::c_export::__bch2_data_types;
-use crate::sb::io::{bch2_free_super, read_super, BCH_SB_READ_SCRATCH_BUF_SIZE};
+use crate::sb::io::{bch2_free_super, read_super, SbReadScratch};
 use crate::sb::members::{bch2_mi_to_cpu, member_exists, member_state_str, mi_field_upgrades, sb_member,
                          sb_member_alloc, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
 use crate::types::CStatic;
-use crate::util::alloc::{alloc_pinned, flags::GFP_KERNEL, free_pinned, init_at, kmalloc, KVVec};
+use crate::util::alloc::{alloc_pinned, flags::GFP_KERNEL, free_pinned, init_at, kbox_pin_init, KVVec};
 use crate::util::file::read_file;
 use crate::util::kernel::{ktime_get_real_seconds, READ, WRITE};
 use crate::util::kobject::{GroupList, KobjOwner, Kobject};
@@ -511,7 +511,6 @@ impl PinnedDrop for Dev {
 
         ca.io_done.free();
         ca.buckets_free();
-        unsafe { c::rust_kfree(ca.sb_read_scratch.cast()) };
 
         unsafe {
             ca.io_ref[WRITE].exit();
@@ -631,11 +630,9 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<ARef<Dev>> {
     unsafe { bch2_dev_journal_init_early(ca) };
 
     let ok = unsafe { ca.io_ref[READ].init(c::bch_dev_read_ref::BCH_DEV_READ_REF_NR as u32, None) }.is_ok() &&
-        unsafe { ca.io_ref[WRITE].init(c::bch_dev_write_ref::BCH_DEV_WRITE_REF_NR as u32, None) }.is_ok() && {
-            ca.sb_read_scratch = kmalloc(BCH_SB_READ_SCRATCH_BUF_SIZE as usize, GFP_KERNEL)
-                .map_or(core::ptr::null_mut(), |p| p.as_ptr().cast());
-            !ca.sb_read_scratch.is_null()
-        } &&
+        unsafe { ca.io_ref[WRITE].init(c::bch_dev_write_ref::BCH_DEV_WRITE_REF_NR as u32, None) }.is_ok() &&
+        kbox_pin_init(SbReadScratch::new())
+            .map(|s| *ca.sb_read_scratch = Some(Pin::into_inner(s))).is_ok() &&
         ca.buckets_alloc().is_ok() &&
         PerCpu::alloc().map(|io_done| ca.io_done = io_done).is_ok();
 
