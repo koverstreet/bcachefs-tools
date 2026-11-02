@@ -9,7 +9,7 @@ use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
 use crate::errcode::bch_errcode;
 use crate::errcode::BchError;
-use crate::locking::Locked;
+use crate::locking::{Guard, Locked};
 use crate::util::alloc::{flags::GFP_KERNEL, DArrayLoan};
 use crate::util::bio::{BioSet, Either};
 use crate::util::late::Late;
@@ -314,14 +314,23 @@ impl BtreeRoots {
         // SAFETY: as get()'s
         (idx < self.roots_extra.nr).then(|| unsafe { &mut *self.roots_extra.data.add(idx) })
     }
+}
 
-    /// Slots up to btree @id's, empty: for a btree past the known ones that
-    /// the journal has a root for.
+/// root_lock, held: the roots, and what it publishes of them.
+pub type BtreeRootsGuard<'a> = Guard<'a, cs::mutex, BtreeRoots, BtreeRootsLive>;
+
+impl BtreeRootsGuard<'_> {
+    /// Slots up to btree @id's, empty, and how many there are published: for
+    /// a btree past the known ones that the journal has a root for.
     pub fn grow_to(&mut self, id: u32) -> Result<(), BchError> {
-        let mut extra = unsafe { DArrayLoan::new(&mut self.roots_extra) };
-        while id >= extra.len() as u32 + u32::from(Btree::nr) {
-            extra.push(cs::btree_root::default(), GFP_KERNEL)?;
+        {
+            let mut extra = unsafe { DArrayLoan::new(&mut self.roots_extra) };
+            while id >= extra.len() as u32 + u32::from(Btree::nr) {
+                extra.push(cs::btree_root::default(), GFP_KERNEL)?;
+            }
         }
+        let nr = self.roots_extra.nr as u32;
+        self.published().roots_nr_extra.set(nr);
         Ok(())
     }
 }
