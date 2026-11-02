@@ -133,6 +133,17 @@ pub fn cond_resched() {
     unsafe { c::bch2_cond_resched() }
 }
 
+/// Userspace has no vmalloc: its is_vmalloc_addr() is a macro, 0.
+pub fn is_vmalloc_addr<T>(p: *const T) -> bool {
+    #[cfg(kernel)]
+    return unsafe { c::is_vmalloc_addr(p.cast()) };
+    #[cfg(not(kernel))]
+    {
+        let _ = p;
+        false
+    }
+}
+
 /// For a slice big enough that sorting it would hog the CPU: it yields from
 /// the comparisons, the one call of ours the sort makes.
 pub fn sort_nonatomic<T>(v: &mut [T], mut cmp: impl FnMut(&T, &T) -> core::cmp::Ordering) {

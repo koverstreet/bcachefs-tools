@@ -13,9 +13,10 @@ use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use core::ops::RangeInclusive;
 use crate::util::ffi::c_char;
+use crate::util::kernel::is_vmalloc_addr;
 use crate::util::{Printbuf, ToText};
-use core::ffi::{c_int, c_uint};
-use cstruct_macros::c_extern;
+use core::ffi::{c_int, c_uint, c_void};
+use cstruct_macros::{c_export, c_extern};
 use crate::format::Btree;
 
 c_extern! {
@@ -63,6 +64,17 @@ impl Fs {
     pub fn btree_cache_size(&self) -> u64 {
         let bc = &self.btree.cache;
         ((bc.live[0].nr() + bc.live[1].nr()) * self.opts.btree_node_size.get() as usize) as u64
+    }
+}
+
+/// A node's buffer swapped, @old for @new: the cache counts the vmalloc'd.
+#[c_export]
+pub fn btree_node_buf_swap_account(fs: &Fs, old: *const c_void, new: *const c_void) {
+    let delta = is_vmalloc_addr(new) as isize - is_vmalloc_addr(old) as isize;
+
+    if delta != 0 {
+        let mut lists = fs.btree.cache.lock.lock();
+        lists.nr_vmalloc = lists.nr_vmalloc.wrapping_add_signed(delta);
     }
 }
 

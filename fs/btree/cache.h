@@ -310,18 +310,6 @@ static inline bool btree_node_is_root(struct bch_fs *c, struct btree *b)
 	return b == root;
 }
 
-static inline void btree_node_buf_swap_account(struct bch_fs *c, void *old, void *new)
-{
-	int vmalloc_delta =
-		(int) is_vmalloc_addr(new) -
-		(int) is_vmalloc_addr(old);
-
-	if (vmalloc_delta) {
-		guard(mutex_noio)(&c->btree.cache.lock);
-		c->btree.cache.nr_vmalloc += vmalloc_delta;
-	}
-}
-
 void __bch2_btree_pos_to_text(struct printbuf *, struct bch_fs *,
 			      enum btree_id, unsigned, struct bkey_s_c);
 void bch2_btree_pos_to_text(struct printbuf *, struct bch_fs *, const struct btree *);

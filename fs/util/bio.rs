@@ -87,13 +87,10 @@ pub fn reset_bvec_offset(iter: &mut c::bvec_iter) {
 /// How many bvecs mapping @len bytes at @p takes: a page each for vmalloc
 /// memory, one for the direct map.
 pub fn buf_nr_bvecs(p: *const u8, len: usize) -> usize {
-    use crate::util::kernel::PAGE_SIZE;
-    // SAFETY: an address, only compared
-    #[cfg(kernel)]
-    if unsafe { c::is_vmalloc_addr(p.cast()) } {
+    use crate::util::kernel::{is_vmalloc_addr, PAGE_SIZE};
+    if is_vmalloc_addr(p) {
         return (len + (p as usize & (PAGE_SIZE - 1))).div_ceil(PAGE_SIZE);
     }
-    let _ = (p, len, PAGE_SIZE);
     1
 }
 
