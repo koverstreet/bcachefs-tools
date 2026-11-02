@@ -77,6 +77,7 @@ use cstruct::{bitfield_type, enum_text, expand_enum_list, parse_c_export, parse_
               spell_concat, CEnumDef, CEnumKind, CEnumVariant, CItem, CXEntry};
 
 mod args_stored_once;
+mod detach;
 mod fieldwise;
 mod options;
 mod init;
@@ -282,6 +283,12 @@ pub fn derive_init(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 #[proc_macro_derive(Late, attributes(late))]
 pub fn derive_late(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand_syn("#[derive(Late)]", || late::derive(syn::parse(input)?))
+}
+
+/// `#[derive(Detach)]`: util/rcu.rs's Detach, of every field - see detach.rs.
+#[proc_macro_derive(Detach)]
+pub fn derive_detach(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[derive(Detach)]", || detach::derive(syn::parse(input)?))
 }
 
 /// `#[derive(Fieldwise)]`: each method `#[fieldwise(...)]` names, applied to

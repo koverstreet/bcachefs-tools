@@ -42,6 +42,7 @@ use cstruct_macros::c_extern;
 use crate::c;
 use crate::util::alloc::AllocError;
 use crate::util::projections::Publish;
+use crate::util::refcount::{ARef, AlwaysRefCounted};
 
 #[cfg(not(kernel))]
 unsafe extern "C" {
@@ -97,6 +98,50 @@ pub unsafe auto trait FreeAnytime {}
 pub struct RcuMember;
 
 impl !FreeAnytime for RcuMember {}
+
+/// # Safety
+/// As FreeAnytime's: no impl may depend on a lifetime.
+#[rustc_specialization_trait]
+pub unsafe auto trait NothingToDetach {}
+
+pub struct DetachMember;
+
+impl !NothingToDetach for DetachMember {}
+
+unsafe impl<T: ?Sized> NothingToDetach for &T {}
+unsafe impl<T: ?Sized> NothingToDetach for &mut T {}
+unsafe impl<T: ?Sized> NothingToDetach for *const T {}
+unsafe impl<T: ?Sized> NothingToDetach for *mut T {}
+unsafe impl<T: ?Sized> NothingToDetach for NonNull<T> {}
+#[cfg(kernel)]
+unsafe impl<T: ?Sized + NothingToDetach, A: kernel::alloc::Allocator> NothingToDetach for kernel::alloc::Box<T, A> {}
+#[cfg(kernel)]
+unsafe impl<T: NothingToDetach, A: kernel::alloc::Allocator> NothingToDetach for kernel::alloc::kvec::Vec<T, A> {}
+unsafe impl<T: AlwaysRefCounted> NothingToDetach for ARef<T> {}
+
+pub trait Detach {
+    fn detach(&self);
+}
+
+pub use cstruct_macros::Detach;
+
+impl<T> Detach for T {
+    default fn detach(&self) {
+        let () = NoDetach::<T>::ERR;
+    }
+}
+
+// default, so a derive on what turns out to have nothing to detach is
+// another no-op, not a conflict
+impl<T: NothingToDetach> Detach for T {
+    default fn detach(&self) {}
+}
+
+struct NoDetach<T>(PhantomData<T>);
+
+impl<T> NoDetach<T> {
+    const ERR: () = panic!("has something to detach before it's freed - a DetachMember - and no Detach impl");
+}
 
 c_extern! {
     pub fn rust_srcu_read_lock(ssp: *mut c::srcu_struct) -> c_int;
