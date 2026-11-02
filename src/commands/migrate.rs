@@ -13,7 +13,6 @@
 
 use bcachefs_kernel::fs::Dev;
 use std::ffi::{CString, c_char};
-use std::sync::atomic::AtomicUsize;
 use std::fs;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
@@ -151,18 +150,17 @@ fn bucket_to_sector(bucket_size: u32, bucket: u64) -> u64 {
 unsafe fn mark_nouse_range(ca: *const Dev, sector_from: u64, sector_to: u64) {
     let ca = unsafe { &*ca };
     let bucket_size = ca.mi.get().bucket_size as u32;
-    // SAFETY: buckets_nouse_alloc()'s: a bit per bucket, in words
-    let nouse = AtomicBitmap::from_words(unsafe { std::slice::from_raw_parts(
-        ca.buckets_nouse.load(std::sync::atomic::Ordering::Acquire).cast::<AtomicUsize>(),
-        (ca.mi.get().nbuckets as usize).div_ceil(usize::BITS as usize)) });
-    let mut b = sector_to_bucket(bucket_size, sector_from);
-    loop {
-        nouse.set(b as usize);
-        b += 1;
-        if bucket_to_sector(bucket_size, b) >= sector_to {
-            break;
+    ca.buckets_nouse.with(|w| {
+        let nouse = AtomicBitmap::from_words(w);
+        let mut b = sector_to_bucket(bucket_size, sector_from);
+        loop {
+            nouse.set(b as usize);
+            b += 1;
+            if bucket_to_sector(bucket_size, b) >= sector_to {
+                break;
+            }
         }
-    }
+    })
 }
 
 /// Mark all space NOT covered by the reserved extents as nouse,

@@ -29,10 +29,10 @@ use crate::util::kernel::unlikely;
 use crate::util::log::LogMsg;
 use crate::util::percpu::{Counters, PerCpu};
 use crate::util::rcu::{read_lock, ReadGuard};
+use crate::util::bitmap::AtomicBitmap;
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
-use core::ffi::{c_int, c_uint, c_ulong};
-use core::mem::size_of;
+use core::ffi::{c_int, c_uint};
 use core::sync::atomic::{AtomicU8, Ordering};
 use cstruct_macros::{c_export, c_name, CStruct, bitfield, c_const, c_rcu_array, Fieldwise, TypeInfo, c_enum};
 use core::cell::Cell;
@@ -243,14 +243,7 @@ impl Dev {
     /// Whether the allocator mustn't use bucket @b - migrate marks the space
     /// it can't: bch2_bucket_nouse().
     pub fn bucket_nouse(&self, b: u64) -> bool {
-        let p = self.buckets_nouse.load(Ordering::Acquire);
-        !p.is_null() && {
-            let bits = c_ulong::BITS as u64;
-            // SAFETY: its bitmap, a bit per bucket, freed with the device; its
-            // words set atomically, as test_bit() reads them
-            let w = unsafe { &*p.add((b / bits) as usize).cast::<core::sync::atomic::AtomicUsize>() };
-            w.load(Ordering::Relaxed) & 1 << (b % bits) != 0
-        }
+        self.buckets_nouse.with(|w| AtomicBitmap::from_words(w).test(b as usize))
     }
 
     /// Whether bucket @b holds a superblock - bucket 0 does, from sector 0 to
@@ -1060,14 +1053,15 @@ impl Fs {
     /// Every device's buckets_nouse, a zeroed bit per bucket: for migrate, to
     /// mark the space it can't use. bch2_buckets_nouse_alloc().
     pub fn buckets_nouse_alloc(&self) -> Result<(), BchError> {
+        let _state = self.state_lock_write();
         for ca in self.members() {
-            assert!(ca.buckets_nouse.load(Ordering::Relaxed).is_null(), "buckets_nouse allocated twice");
-
-            let p = unsafe { c::rust_kvzalloc(bits_to_longs(ca.mi.get().nbuckets as usize) * size_of::<c_ulong>()) };
-            if p.is_null() {
-                return self.throw(bch_errcode::BCH_ERR_ENOMEM_buckets_nouse);
+            // SAFETY: state_lock is its writers' lock, as a resize's
+            unsafe {
+                assert!(ca.buckets_nouse.get_locked().is_empty(), "buckets_nouse allocated twice");
+                if ca.buckets_nouse.rebuild(bits_to_longs(ca.mi.get().nbuckets as usize), |_| ()).is_err() {
+                    return self.throw(bch_errcode::BCH_ERR_ENOMEM_buckets_nouse);
+                }
             }
-            ca.buckets_nouse.store(p.cast(), Ordering::Release);
         }
         Ok(())
     }
@@ -1084,7 +1078,7 @@ impl Dev {
 
         if old.is_some() {
             fs.state_lock.assert_held_any();
-            if !self.buckets_nouse.load(Ordering::Relaxed).is_null() {
+            if self.buckets_nouse.with(|w| !w.is_empty()) {
                 return fs.throw(bch_errcode::BCH_ERR_no_resize_with_buckets_nouse);
             }
         }
@@ -1119,7 +1113,7 @@ impl Dev {
     /// freed: bch2_dev_buckets_free().
     pub fn buckets_free(&mut self) {
         unsafe {
-            c::rust_kvfree(self.buckets_nouse.swap(core::ptr::null_mut(), Ordering::Relaxed).cast());
+            self.buckets_nouse.free();
             self.bucket_gens.free();
         }
         self.usage.free();

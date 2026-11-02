@@ -537,9 +537,4 @@ static inline u64 avail_factor(u64 r)
 	return div_u64(r << RESERVE_FACTOR, (1 << RESERVE_FACTOR) + 1);
 }
 
-static inline bool bch2_bucket_nouse(struct bch_dev *ca, u64 bucket)
-{
-	return unlikely(ca->buckets_nouse && test_bit(bucket, ca->buckets_nouse));
-}
-
 #endif /* _BUCKETS_H */

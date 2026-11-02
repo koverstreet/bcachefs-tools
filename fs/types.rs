@@ -21,7 +21,7 @@ use crate::util::percpu::{Counters, PerCpu};
 use crate::util::vstructs::Head;
 use crate::types::{GenRadix, RustOnly, bits_to_longs, rust_only};
 use crate::util::ffi::c_char;
-use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
+use core::ffi::{c_int, c_uint, c_ushort};
 use core::sync::atomic::{AtomicI32, AtomicI64, AtomicPtr, AtomicU32, AtomicU64};
 use cstruct_macros::{c_name, c_const, c_enum, c_rcu_array, c_xmacro, placed, CStruct, Fieldwise, Init, Late, TypeInfo};
 use pin_init::pin_data;
@@ -335,7 +335,7 @@ pub struct Dev {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     pub dying: crate::util::projections::Volatile<bool>,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub last_put: crate::util::projections::Volatile<c_ulong>,
+    pub last_put: crate::util::projections::Volatile<core::ffi::c_ulong>,
     #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
     pub ref_: c::percpu_ref,
     pub ref_completion: c::completion,
@@ -413,9 +413,8 @@ pub struct Dev {
     pub buckets_gc: GenRadix<c::bucket>,
     pub bucket_gens: c::BucketGensArray,
     pub oldest_gen: *mut u8,
-    /* allocated once, by migrate, and read without a lock: atomic, C's plain */
-    #[c("unsigned long *buckets_nouse")]
-    pub buckets_nouse: core::sync::atomic::AtomicPtr<c_ulong>,
+    /* allocated once, by migrate, and read without a lock */
+    pub buckets_nouse: c::BucketBitmapWords,
 
     #[pin]
     #[init(c::bucket_bitmap::init())]
