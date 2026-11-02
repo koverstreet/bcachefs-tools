@@ -258,7 +258,7 @@ impl Bio {
         match self.bio.bi_status {
             0  => Ok(()),
             // SAFETY: a status
-            st => Err(unsafe { c::blk_status_to_bch_err(st) }.into()),
+            st => Err(crate::errcode::blk_status_to_bch_err(st).into()),
         }
     }
 

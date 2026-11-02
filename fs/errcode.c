@@ -102,20 +102,6 @@ const char *bch2_blk_status_to_str(blk_status_t status)
 	}
 }
 
-enum bch_errcode blk_status_to_bch_err(blk_status_t err)
-{
-	if (!err)
-		return 0;
-
-	switch (err) {
-#undef BLK_STS
-#define BLK_STS(n, nr) case BLK_STS_##n:	return BCH_ERR_BLK_STS_##n;
-		BLK_ERRS()
-#undef BLK_STS
-		default:		return BCH_ERR_BLK_STS_UNKNOWN;
-	}
-}
-
 int __bch2_err_throw(struct bch_fs *c, int err)
 {
 	BUG_ON(err >= 0);

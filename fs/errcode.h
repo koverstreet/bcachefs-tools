@@ -2,9 +2,6 @@
 #ifndef _BCACHEFS_ERRCODE_H
 #define _BCACHEFS_ERRCODE_H
 
-/* we're getting away from reusing bi_status, this should go away */
-#define BLK_STS_REMOVED		((__force blk_status_t)128)
-
 #include "enum_kind.h"
 #include "errcode_gen.h"
 
@@ -31,7 +28,6 @@ static inline s64 bch2_err_class(s64 err)
 
 #include <linux/blk_types.h>
 const char *bch2_blk_status_to_str(blk_status_t);
-enum bch_errcode blk_status_to_bch_err(blk_status_t);
 
 #include <linux/zstd_errors.h>
 

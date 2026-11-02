@@ -27,7 +27,7 @@ use core::iter;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering};
 use crate::types::c_default;
-use cstruct_macros::{CStruct, c_enum, c_extern, c_xmacro, TypeInfo};
+use cstruct_macros::{CStruct, c_enum, c_export, c_extern, c_xmacro, TypeInfo};
 
 c_xmacro! {
     BLK_ERRS(BLK_STS) {
@@ -701,8 +701,31 @@ c_enum! {
 
 c_extern! {
     pub fn __bch2_err_class(bch_err: c_int) -> c_int;
-    // blk_status_t: a u8, which errcode_gen.h can name before blk_types.h has
-    pub fn blk_status_to_bch_err(err: u8) -> c::bch_errcode;
+}
+
+// The status's, beside the errcode of the same name
+pub mod status {
+    use cstruct_macros::c_const;
+
+    c_const! {
+        /* we're getting away from reusing bi_status, this should go away */
+        pub const BLK_STS_REMOVED: u8 = 128;
+    }
+}
+
+// blk_status_t: a u8, which errcode_gen.h can name before blk_types.h has
+#[c_export]
+pub fn blk_status_to_bch_err(err: u8) -> c::bch_errcode {
+    macro_rules! statuses {
+        ($(($n:ident, $nr:tt)),* $(,)?) => { ::paste::paste! {
+            match err {
+                0 => bch_errcode(0),
+                $(c::[<BLK_STS_ $n>] => bch_errcode::[<BCH_ERR_BLK_STS_ $n>],)*
+                _ => bch_errcode::BCH_ERR_BLK_STS_UNKNOWN,
+            }
+        } };
+    }
+    c::BLK_ERRS!(statuses)
 }
 
 // Each errcode by its BCH_ERRCODES() name: transaction_restart for
