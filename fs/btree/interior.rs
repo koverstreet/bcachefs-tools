@@ -8,6 +8,7 @@
 use core::ffi::{c_ulong, c_int, c_uint};
 use core::mem::size_of;
 use cstruct_macros::{c_export, CStruct, Init, Late, c_const, c_extern, TypeInfo};
+use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::fs::Fs;
 use crate::journal::entries::{EntryWriter, NoRoom};
@@ -105,15 +106,15 @@ c_extern! {
     pub fn bch2_free_pending_node_rewrites(c: *mut Fs);
     pub fn bch2_btree_updates_to_text(out: *mut Printbuf, c: *mut Fs);
     pub fn bch2_btree_node_update_key(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
-                                      b: *mut c::BtreeNode, new_key: *mut c::bkey_i,
+                                      b: *mut BtreeNode, new_key: *mut c::bkey_i,
                                       commit_flags: c_uint, skip_triggers: bool) -> c_int;
     pub fn bch2_btree_node_update_key_at_pos(trans: *mut c::btree_trans, btree: Btree, level: c_uint,
                                              new_key: *mut c::bkey_i) -> c_int;
-    pub fn bch2_btree_node_rewrite(trans: *mut c::btree_trans, iter: *mut c::btree_iter, b: *mut c::BtreeNode,
+    pub fn bch2_btree_node_rewrite(trans: *mut c::btree_trans, iter: *mut c::btree_iter, b: *mut BtreeNode,
                                    target: c_uint, flags: c::bch_trans_commit_flags,
                                    write_flags: c::bch_write_flags) -> c_int;
     pub fn bch2_btree_reserve_cache_to_text(out: *mut Printbuf, c: *mut Fs);
-    pub fn bch2_async_btree_op(c: *mut Fs, b: *mut c::BtreeNode, op: c::async_btree_op);
+    pub fn bch2_async_btree_op(c: *mut Fs, b: *mut BtreeNode, op: c::async_btree_op);
     pub fn bch2_btree_root_alloc_fake(c: *mut Fs, btree: Btree, level: c_uint);
     pub fn bch2_async_btree_node_rewrites_flush(c: *mut Fs);
 }

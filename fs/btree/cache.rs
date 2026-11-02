@@ -7,6 +7,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::iter::BtreeTrans;
+use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
@@ -25,10 +26,10 @@ c_extern! {
     pub fn bch2_btree_id_str(btree: Btree) -> *const c_char;
     pub fn bch2_btree_id_to_text(out: *mut Printbuf, btree: Btree);
     pub fn bch2_btree_id_level_to_text(out: *mut Printbuf, btree: Btree, level: c_uint);
-    pub fn bch2_btree_node_to_text(out: *mut Printbuf, c: *mut Fs, b: *const c::BtreeNode);
+    pub fn bch2_btree_node_to_text(out: *mut Printbuf, c: *mut Fs, b: *const BtreeNode);
     pub fn bch2_btree_cache_to_text(out: *mut Printbuf, bc: *const c::bch_fs_btree_cache);
     pub fn bch2_btree_cache_pin_budget(c: *mut Fs) -> u64;
-    pub fn bch2_node_pin(c: *mut Fs, b: *mut c::BtreeNode);
+    pub fn bch2_node_pin(c: *mut Fs, b: *mut BtreeNode);
     pub fn bch2_btree_node_prefetch(trans: *mut c::btree_trans, path: *mut c::btree_path,
                                     k: *const c::bkey_i, btree: Btree, level: c_uint) -> c_int;
     pub fn bch2_btree_cache_unpin(c: *mut Fs);
@@ -96,7 +97,7 @@ impl BtreeCachePins<'_> {
     }
 
     /// Outside any window.
-    pub fn node(&self, b: &c::BtreeNode) {
+    pub fn node(&self, b: &BtreeNode) {
         unsafe { c::bch2_node_pin(self.0.as_ptr(), core::ptr::from_ref(b).cast_mut()) }
     }
 

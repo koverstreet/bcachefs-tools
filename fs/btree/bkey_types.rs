@@ -9,6 +9,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC};
+use crate::btree::node::BtreeNode;
 use crate::cstructs::c as cs;
 use crate::cstructs::c::BCH_BKEY_TYPES;
 use crate::types::c_default;
@@ -251,7 +252,7 @@ c_extern! {
     pub fn bch2_bpos_swab(p: *mut Bpos);
     pub fn __bch2_bkey_unpack_key(format: *const cs::bkey_format, out: *mut cs::bkey,
                                   in_: *const cs::bkey_packed);
-    pub fn __bch2_bkey_unpack_key_b(b: *const cs::BtreeNode, out: *mut cs::bkey,
+    pub fn __bch2_bkey_unpack_key_b(b: *const BtreeNode, out: *mut cs::bkey,
                                     in_: *const cs::bkey_packed);
-    pub fn __bkey_unpack_pos_b(b: *const cs::BtreeNode, in_: *const cs::bkey_packed) -> cs::Bpos;
+    pub fn __bkey_unpack_pos_b(b: *const BtreeNode, in_: *const cs::bkey_packed) -> cs::Bpos;
 }

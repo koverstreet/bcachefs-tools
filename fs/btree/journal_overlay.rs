@@ -39,6 +39,7 @@
 use crate::accounting;
 use crate::btree::bkey::{BkeyI, BkeySC, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
+use crate::btree::node::{bset, iter::KeyIter, BtreeNode};
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{btree_id_is_alloc, Fs};
@@ -904,12 +905,12 @@ impl c::btree_and_journal_iter {
 
             let btree_k = loop {
                 // SAFETY: the node's iterator, of node b
-                let k = unsafe { c::bch2_btree_node_iter_peek_unpack(&mut self.node_iter, self.b, &mut self.unpacked) };
+                let k = unsafe { bset::bch2_btree_node_iter_peek_unpack(&mut self.node_iter, self.b, &mut self.unpacked) };
                 // SAFETY: a key of the node's
                 if k.k.is_null() || unsafe { (*k.k).p } >= self.pos {
                     break k;
                 }
-                unsafe { c::bch2_btree_node_iter_advance(&mut self.node_iter, self.b) };
+                unsafe { bset::bch2_btree_node_iter_advance(&mut self.node_iter, self.b) };
             };
 
             let mut journal_k = ptr::null();
@@ -959,7 +960,7 @@ impl c::btree_and_journal_iter {
     ///
     /// # Safety
     /// @trans and @b are live, @b locked, for as long as the iterator.
-    unsafe fn new(trans: *mut c::btree_trans, b: *mut c::BtreeNode, node_iter: c::btree_node_iter, pos: Bpos)
+    unsafe fn new(trans: *mut c::btree_trans, b: *mut BtreeNode, node_iter: KeyIter, pos: Bpos)
         -> Self
     {
         let mut iter = Self {
@@ -998,7 +999,7 @@ pub fn bch2_btree_and_journal_iter_peek(c: &Opaque<Fs>, iter: &mut c::btree_and_
 #[c_export]
 pub unsafe fn __bch2_btree_and_journal_iter_init_node_iter(trans: *mut c::btree_trans,
                                                           iter: *mut c::btree_and_journal_iter,
-                                                          b: *mut c::BtreeNode, node_iter: c::btree_node_iter,
+                                                          b: *mut BtreeNode, node_iter: KeyIter,
                                                           pos: Bpos) {
     // SAFETY: the caller's
     unsafe { iter.write(c::btree_and_journal_iter::new(trans, b, node_iter, pos)) }
@@ -1012,11 +1013,11 @@ pub unsafe fn __bch2_btree_and_journal_iter_init_node_iter(trans: *mut c::btree_
 #[c_export]
 pub unsafe fn bch2_btree_and_journal_iter_init_node_iter(trans: *mut c::btree_trans,
                                                         iter: *mut c::btree_and_journal_iter,
-                                                        b: *mut c::BtreeNode) {
-    let mut node_iter = c::btree_node_iter::default();
+                                                        b: *mut BtreeNode) {
+    let mut node_iter = KeyIter::default();
     // SAFETY: the caller's
     unsafe {
-        c::bch2_btree_node_iter_init_from_start(&mut node_iter, b);
+        bset::bch2_btree_node_iter_init_from_start(&mut node_iter, b);
         iter.write(c::btree_and_journal_iter::new(trans, b, node_iter, (*(*b).data).min_key));
     }
 }

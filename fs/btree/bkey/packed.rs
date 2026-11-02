@@ -6,6 +6,7 @@ use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 
 use super::{AllTypes, BkeyI, BkeyS, BkeySC, FamilyVal, ValidatedVal, BKEY_U64S};
+use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::format::Bpos;
 use crate::util::kernel::likely;
@@ -154,7 +155,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
         unsafe { &*self.as_ffi().cast::<c::bkey>() }
     }
 
-    fn unpack_format_checked(&self, b: &c::BtreeNode) -> c::bkey {
+    fn unpack_format_checked(&self, b: &BtreeNode) -> c::bkey {
         let mut out = MaybeUninit::<c::bkey>::uninit();
         let out = unsafe {
             c::__bch2_bkey_unpack_key_b(b, out.as_mut_ptr(), self.as_ffi());
@@ -169,7 +170,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
 
     #[cold]
     #[inline(never)]
-    fn unpack_verify(&self, b: &c::BtreeNode, out: &c::bkey) {
+    fn unpack_verify(&self, b: &BtreeNode, out: &c::bkey) {
         let mut check = MaybeUninit::<c::bkey>::uninit();
         let check = unsafe {
             c::__bch2_bkey_unpack_key(&b.format, check.as_mut_ptr(), self.as_ffi());
@@ -180,7 +181,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
     }
 
     /// Just the key, not the value.
-    pub fn unpack(&self, b: &c::BtreeNode) -> c::bkey {
+    pub fn unpack(&self, b: &BtreeNode) -> c::bkey {
         if likely(self.is_packed()) {
             self.unpack_format_checked(b)
         } else {
@@ -188,7 +189,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
         }
     }
 
-    pub fn unpack_pos(&self, b: &c::BtreeNode) -> Bpos {
+    pub fn unpack_pos(&self, b: &BtreeNode) -> Bpos {
         if likely(self.is_packed()) {
             unsafe { c::__bkey_unpack_pos_b(b, self.as_ffi()) }
         } else {
@@ -197,7 +198,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
     }
 
     /// The key unpacked into @u, the value where it is.
-    pub fn disassemble<'a>(&'a self, b: &c::BtreeNode, u: &'a mut c::bkey) -> BkeySC<'a, V> {
+    pub fn disassemble<'a>(&'a self, b: &BtreeNode, u: &'a mut c::bkey) -> BkeySC<'a, V> {
         *u = self.unpack(b);
         BkeySC {
             k:    u,
@@ -207,7 +208,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
         }
     }
 
-    pub fn disassemble_mut<'a>(&'a mut self, b: &c::BtreeNode, u: &'a mut c::bkey) -> BkeyS<'a, V> {
+    pub fn disassemble_mut<'a>(&'a mut self, b: &BtreeNode, u: &'a mut c::bkey) -> BkeyS<'a, V> {
         *u = self.unpack(b);
         BkeyS {
             k:   u,
@@ -217,7 +218,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
     }
 }
 
-impl c::BtreeNode {
+impl BtreeNode {
     pub fn cmp_packed(&self,
                       l: &BkeyP<impl ?Sized + ValidatedVal>,
                       r: &BkeyP<impl ?Sized + ValidatedVal>) -> Ordering {

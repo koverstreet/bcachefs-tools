@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::node::BtreeNode;
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::c_uint;
@@ -18,7 +19,7 @@ c_default!(sort_iter_set);
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct sort_iter {
-    pub b: *mut c::BtreeNode,
+    pub b: *mut BtreeNode,
     pub used: c_uint,
     pub size: c_uint,
 

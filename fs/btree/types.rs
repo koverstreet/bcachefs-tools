@@ -4,6 +4,7 @@
 
 use crate::btree::bkey::BkeyI;
 use crate::fs::Fs;
+use crate::btree::node::{iter::KeyIter, BtreeNode};
 use crate::c;
 use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
@@ -208,10 +209,10 @@ crate::published! {
 
 impl BtreeRootsLive {
     /// Btree @id's root node: bch2_btree_id_root_b().
-    pub fn node(&self, id: u32) -> Option<&cs::BtreeNode> {
+    pub fn node(&self, id: u32) -> Option<&BtreeNode> {
         let b = self.roots_b.get(id as usize)?.get() & !((1 << cs::BTREE_ROOT_LEVEL_BITS) - 1);
         // SAFETY: a root's node, live while it's the root
-        unsafe { (b as *const cs::BtreeNode).as_ref() }
+        unsafe { (b as *const BtreeNode).as_ref() }
     }
 
     /// The error reading btree @id's root left.
@@ -399,8 +400,8 @@ c_typedef! {
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct btree_path_level {
-    pub b: *mut cs::BtreeNode,
-    pub iter: cs::btree_node_iter,
+    pub b: *mut BtreeNode,
+    pub iter: KeyIter,
     pub lock_seq: u32,
     #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
     pub lock_taken_time: u64,
@@ -510,7 +511,7 @@ pub type btree_iter = BtreeIter<'static>;
 #[derive(Clone, Copy, CStruct)]
 pub struct get_locks_fail {
     pub l: c_uint,
-    pub b: *mut cs::BtreeNode,
+    pub b: *mut BtreeNode,
 }
 c_default!(get_locks_fail);
 

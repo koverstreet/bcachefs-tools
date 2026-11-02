@@ -3,6 +3,7 @@
 use super::bkey::*;
 pub use super::types::BtreeIter;
 use crate::alloc::capacity::DiskReservation;
+use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::errcode::{
     BchError,
@@ -81,7 +82,7 @@ c_extern! {
     pub fn bch2_trans_restart_ip(trans: *mut c::btree_trans, err: c_int, ip: c_ulong) -> c_int;
     #[must_use]
     pub fn bch2_btree_iter_traverse(iter: *mut c::btree_iter) -> c_int;
-    pub fn bch2_btree_iter_peek_node(iter: *mut c::btree_iter) -> *mut c::BtreeNode;
+    pub fn bch2_btree_iter_peek_node(iter: *mut c::btree_iter) -> *mut BtreeNode;
     pub fn bch2_btree_iter_peek_max(iter: *mut c::btree_iter, end: *const Bpos) -> c::bkey_s_c;
     pub fn bch2_btree_iter_peek_prev_min(iter: *mut c::btree_iter, end: Bpos) -> c::bkey_s_c;
     pub fn bch2_btree_iter_peek_slot(iter: *mut c::btree_iter) -> c::bkey_s_c;
@@ -632,7 +633,7 @@ impl fmt::Display for NoRoom {
 }
 
 pub(crate) struct BtreeNodeRef {
-    raw: NonNull<c::BtreeNode>,
+    raw: NonNull<BtreeNode>,
 }
 
 impl BtreeNodeRef {
@@ -659,15 +660,15 @@ impl BtreeNodeRef {
         self.raw.as_ptr() as usize
     }
 
-    pub(crate) fn as_ptr(&self) -> *mut c::BtreeNode {
+    pub(crate) fn as_ptr(&self) -> *mut BtreeNode {
         self.raw.as_ptr()
     }
 }
 
 /// A node an iterator returned - backpointer_get_node()'s, say: held by that
 /// iterator's path, as peek_ref()'s is.
-impl From<&c::BtreeNode> for BtreeNodeRef {
-    fn from(b: &c::BtreeNode) -> Self {
+impl From<&BtreeNode> for BtreeNodeRef {
+    fn from(b: &BtreeNode) -> Self {
         Self { raw: NonNull::from(b) }
     }
 }
@@ -2410,7 +2411,7 @@ impl<'t> BtreeIter<'t> {
 
     /// At the iterator's level - new_level()'s; None if the btree isn't that deep.
     pub fn peek_node<'k>(&'k mut self, _t: &'k TransAttempt<'_, 't>)
-        -> Result<Option<&'k c::BtreeNode>, BchError>
+        -> Result<Option<&'k BtreeNode>, BchError>
     {
         // SAFETY: the node is locked by the iterator's path, while self is
         // borrowed, within the attempt
@@ -2951,7 +2952,7 @@ impl<'t> BtreeNodeIter<'t> {
         }
     }
 
-    pub fn peek(&mut self) -> Result<Option<&c::BtreeNode>, BchError> {
+    pub fn peek(&mut self) -> Result<Option<&BtreeNode>, BchError> {
         unsafe {
             let b = c::bch2_btree_iter_peek_node(self.raw.raw_mut());
             // NULL past the last
@@ -2983,7 +2984,7 @@ impl<'t> BtreeNodeIter<'t> {
     /// restart retries the node.
     pub fn for_each<F, R>(&mut self, trans: &BtreeTrans<'_>, mut f: F) -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&'a c::BtreeNode) -> Result<R, BchError>,
+        F: for<'a> FnMut(&'a BtreeNode) -> Result<R, BchError>,
         R: LoopControl,
     {
         let raw = self.raw.raw_mut();
@@ -3117,7 +3118,7 @@ pub struct PathLeaf<'a> {
 }
 
 impl<'a> PathLeaf<'a> {
-    pub fn node(&self) -> &'a c::BtreeNode {
+    pub fn node(&self) -> &'a BtreeNode {
         unsafe { &*(*self.l).b }
     }
 
@@ -3126,7 +3127,7 @@ impl<'a> PathLeaf<'a> {
     /// keys.
     pub fn bfloat_to_text(&self, out: &mut Printbuf) {
         unsafe {
-            c::bch2_btree_node_iter_bfloat_to_text(out.as_raw(), (*self.l).b, &raw mut (*self.l).iter)
+            crate::btree::node::bset::bch2_btree_node_iter_bfloat_to_text(out.as_raw(), (*self.l).b, &raw mut (*self.l).iter)
         }
     }
 }

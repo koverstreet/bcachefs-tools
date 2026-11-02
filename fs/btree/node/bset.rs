@@ -2,9 +2,11 @@
 
 #![allow(non_camel_case_types)]
 
+use super::iter::KeyIter;
+use super::BtreeNode;
 use crate::cstructs::c;
 use crate::util::Printbuf;
-use cstruct_macros::{CStruct, c_const, c_enum, c_extern};
+use cstruct_macros::{c_name, CStruct, c_const, c_enum, c_extern};
 
 /*
  * BKEYS:
@@ -146,8 +148,9 @@ c_const! {
 }
 
 #[repr(C)]
+#[c_name(bset_tree)]
 #[derive(Clone, Copy, Default, CStruct)]
-pub struct bset_tree {
+pub struct BsetTree {
     /*
      * We construct a binary tree in an array as if the array
      * started at 1, so that things line up on the same cachelines
@@ -168,7 +171,8 @@ pub struct bset_tree {
 
 c_enum! {
     #[closed]
-    pub enum bset_aux_tree_type: u32 {
+    #[c_name(bset_aux_tree_type)]
+    pub enum AuxTreeType: u32 {
         BSET_NO_AUX_TREE,
         BSET_RO_AUX_TREE,
         BSET_RW_AUX_TREE,
@@ -182,27 +186,29 @@ c_const! {
 
 /* bset_stats.sets[]: the counts for one bset tree type */
 #[repr(C)]
+#[c_name(bset_stats_set)]
 #[derive(Clone, Copy, Default, CStruct)]
-pub struct bset_stats_set {
+pub struct BsetStatsSet {
     pub nr: usize,
     pub bytes: usize,
 }
 
 #[repr(C)]
+#[c_name(bset_stats)]
 #[derive(Clone, Copy, Default, CStruct)]
-pub struct bset_stats {
+pub struct BsetStats {
     #[c_inline]
-    pub sets: [bset_stats_set; c::BSET_TREE_NR_TYPES as usize],
+    pub sets: [BsetStatsSet; c::BSET_TREE_NR_TYPES as usize],
 
     pub floats: usize,
     pub failed: usize,
 }
 
 c_extern! {
-    pub fn bch2_btree_node_iter_bfloat_to_text(out: *mut Printbuf, b: *mut c::BtreeNode,
-                                               iter: *mut c::btree_node_iter);
-    pub fn bch2_btree_node_iter_init_from_start(iter: *mut c::btree_node_iter, b: *mut c::BtreeNode);
-    pub fn bch2_btree_node_iter_advance(iter: *mut c::btree_node_iter, b: *mut c::BtreeNode);
-    pub fn bch2_btree_node_iter_peek_unpack(iter: *mut c::btree_node_iter, b: *mut c::BtreeNode,
+    pub fn bch2_btree_node_iter_bfloat_to_text(out: *mut Printbuf, b: *mut BtreeNode,
+                                               iter: *mut KeyIter);
+    pub fn bch2_btree_node_iter_init_from_start(iter: *mut KeyIter, b: *mut BtreeNode);
+    pub fn bch2_btree_node_iter_advance(iter: *mut KeyIter, b: *mut BtreeNode);
+    pub fn bch2_btree_node_iter_peek_unpack(iter: *mut KeyIter, b: *mut BtreeNode,
                                             u: *mut c::bkey) -> c::bkey_s_c;
 }

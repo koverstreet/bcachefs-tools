@@ -8,6 +8,7 @@
 
 use crate::fs::Dev;
 use crate::btree::bkey::BkeyI;
+use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::data::checksum::{csum_vstruct, BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
 use crate::errcode::{ret_to_result_void, BchError};
@@ -26,7 +27,7 @@ nest! {
     pub struct btree_read_bio {
         pub c: *mut Fs,
         pub ca: *mut Dev, /* stashed at submit; see bch_write_bio */
-        pub b: *mut c::BtreeNode,
+        pub b: *mut BtreeNode,
         pub start_time: u64,
         #[c_bitfield]
         #>[bitfield(u8, ty = u32)]

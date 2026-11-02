@@ -5,6 +5,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::btree::bkey::BkeyI;
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void as ret_to_result, BchError};
@@ -262,7 +263,7 @@ impl Fs {
         }
     }
 
-    pub fn btree_id_root(&self, id: u32) -> Option<&c::BtreeNode> {
+    pub fn btree_id_root(&self, id: u32) -> Option<&BtreeNode> {
         self.btree.cache.roots.node(id)
     }
 

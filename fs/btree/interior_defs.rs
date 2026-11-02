@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::fs::Fs;
+use crate::btree::node::BtreeNode;
 use crate::cstructs::c;
 use crate::types::{DArray, c_default, Le64};
 use core::ffi::{c_uint, c_ulong};
@@ -33,7 +34,7 @@ c_enum! {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct btree_update_node {
-    pub b: *mut c::BtreeNode,
+    pub b: *mut BtreeNode,
     pub level: c_uint,
     pub root: bool,
     pub update_node_key: bool,
@@ -51,7 +52,7 @@ c_typedef! {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct prealloc_nodes {
-    pub b: [*mut c::BtreeNode; c::BTREE_UPDATE_NODES_MAX as usize],
+    pub b: [*mut BtreeNode; c::BTREE_UPDATE_NODES_MAX as usize],
     pub nr: c_uint,
     pub consumed: c_uint,
 }
@@ -124,7 +125,7 @@ nest! {
          * from writing by putting this btree_interior update on the
          * @b->write_blocked list with @write_blocked_list:
          */
-        pub b: *mut c::BtreeNode,
+        pub b: *mut BtreeNode,
         pub write_blocked_list: c::list_head,
 
         /*

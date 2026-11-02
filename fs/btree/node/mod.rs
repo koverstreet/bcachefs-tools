@@ -18,13 +18,16 @@ use core::ffi::c_void;
 use core::marker::PhantomData;
 use core::ops::ControlFlow;
 use core::sync::atomic::AtomicUsize;
+use bset::BsetTree;
+use iter::KeyIter;
 use cstruct_macros::{c_name, CStruct};
 
 /* Btree nodes: */
 
 #[repr(C)]
+#[c_name(btree_nr_keys)]
 #[derive(Clone, Copy, Default, CStruct)]
-pub struct btree_nr_keys {
+pub struct BtreeNrKeys {
     /*
      * Amount of live metadata (i.e. size of node after a compaction) in
      * units of u64s
@@ -38,8 +41,9 @@ pub struct btree_nr_keys {
 }
 
 #[repr(C)]
+#[c_name(bkey_unpack_field)]
 #[derive(Clone, Copy, Default, CStruct)]
-pub struct bkey_unpack_field {
+pub struct BkeyUnpackField {
     pub byte_offset: i8,
     pub shift_right: u8, /* 64 - bits, or 64 if field has no bits in packed */
 }
@@ -92,7 +96,7 @@ pub struct BtreeNode {
      * the slow path via byte_aligned_fields = false.
      */
     pub byte_aligned_fields: bool,
-    pub unpack: [cs::bkey_unpack_field; cs::BKEY_NR_FIELDS as usize],
+    pub unpack: [BkeyUnpackField; cs::BKEY_NR_FIELDS as usize],
 
     pub data: *mut Head<cs::btree_node>,
     pub aux_data: *mut c_void,
@@ -104,9 +108,9 @@ pub struct BtreeNode {
      * to the memory we have allocated for this btree node. Additionally,
      * set[0]->data points to the entire btree node as it exists on disk.
      */
-    pub set: [cs::bset_tree; cs::MAX_BSETS as usize],
+    pub set: [BsetTree; cs::MAX_BSETS as usize],
 
-    pub nr: cs::btree_nr_keys,
+    pub nr: BtreeNrKeys,
     pub sib_u64s: [u16; 2],
     pub whiteout_u64s: Volatile<u16>,
     pub byte_order: u8,
@@ -154,7 +158,7 @@ pub struct BtreeNode {
 }
 c_default!(BtreeNode);
 
-impl<'b, 'f> c::BtreeNode {
+impl<'b, 'f> BtreeNode {
     pub fn to_text(&'b self, fs: &'f Fs) -> BtreeNodeToText<'b, 'f> {
         BtreeNodeToText { b: self, fs }
     }
@@ -164,7 +168,7 @@ impl<'b, 'f> c::BtreeNode {
     }
 }
 
-impl c::BtreeNode {
+impl BtreeNode {
     /// The node's key, all of it - its value runs past bkey_i, into key_pad.
     pub fn key_i(&self) -> &BkeyI {
         // SAFETY: the node's key, from a pointer to all of the node
@@ -185,15 +189,15 @@ impl c::BtreeNode {
     where
         F: for<'a> FnMut(BkeySC<'a>) -> ControlFlow<()>,
     {
-        let b = self as *const _ as *mut c::BtreeNode;
-        let mut node_iter = c::btree_node_iter::default();
+        let b = self as *const _ as *mut BtreeNode;
+        let mut node_iter = KeyIter::default();
         let mut unpacked: c::bkey = pin_init::Zeroable::zeroed();
 
-        unsafe { c::bch2_btree_node_iter_init_from_start(&mut node_iter, b) };
+        unsafe { bset::bch2_btree_node_iter_init_from_start(&mut node_iter, b) };
 
         loop {
             let k = unsafe {
-                c::bch2_btree_node_iter_peek_unpack(&mut node_iter, b, &mut unpacked)
+                bset::bch2_btree_node_iter_peek_unpack(&mut node_iter, b, &mut unpacked)
             };
             if k.k.is_null() {
                 return ControlFlow::Continue(());
@@ -206,14 +210,14 @@ impl c::BtreeNode {
             }).is_break() {
                 return ControlFlow::Break(());
             }
-            unsafe { c::bch2_btree_node_iter_advance(&mut node_iter, b) };
+            unsafe { bset::bch2_btree_node_iter_advance(&mut node_iter, b) };
         }
     }
 }
 
 
 pub struct BtreeNodeToText<'b, 'f> {
-    b:  &'b c::BtreeNode,
+    b:  &'b BtreeNode,
     fs: &'f Fs,
 }
 
@@ -225,7 +229,7 @@ impl ToText for BtreeNodeToText<'_, '_> {
 crate::display_via_to_text!(BtreeNodeToText<'_, '_>);
 
 pub struct BtreeNodeOndiskToText<'b, 'f> {
-    b:  &'b c::BtreeNode,
+    b:  &'b BtreeNode,
     fs: &'f Fs,
 }
 

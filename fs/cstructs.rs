@@ -125,9 +125,7 @@ pub mod c {
     pub use super::btree_bkey_defs::*;
     pub use crate::btree::bkey_methods::{bch2_bkey_to_text, bch2_bkey_types, bch2_bkey_val_to_text, bch2_bpos_to_text, bch2_set_bkey_error, bkey_ops};
     pub use super::btree_bkey_types::*;
-    pub use crate::btree::node::{BtreeNode, bkey_unpack_field, btree_nr_keys};
-    pub use crate::btree::node::bset::*;
-    pub use crate::btree::node::iter::*;
+    pub use crate::btree::node::bset::{BSET_TREE_NR_TYPES, MAX_BSETS};
     pub use super::btree_check_types::*;
     pub use super::btree_interior_defs::*;
     pub use crate::btree::interior::{BTREE_NODE_RESERVE, BTREE_RESERVE_MAX, BtreeReserveCache, bch2_async_btree_op, bch2_btree_interior_updates_flush, bch2_btree_node_rewrite, bch2_btree_node_update_key, bch2_btree_node_update_key_at_pos, bch2_btree_reserve_cache_to_text, bch2_btree_updates_to_text, bch_fs_btree_interior_updates, bch_fs_btree_node_rewrites, bch_fs_btree_reserve_cache, btree_alloc};

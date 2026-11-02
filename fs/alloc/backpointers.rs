@@ -42,6 +42,7 @@ use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyVal};
 use crate::btree::iter::{is_restart, polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbFlush;
+use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::data::ptrs::{ptr_data_type, ptr_disk_sectors, DecodedPtr, Ptrs};
 use crate::data::reconcile::trigger::BkeyVReconcile;
@@ -447,7 +448,7 @@ fn backpointer_target_not_found(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Back
 /// None if it isn't there, which is reported.
 fn get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
                     iter: &'i mut BtreeIter<'t>, last_flushed: Option<WbFlush<'_>>, commit: bool)
-    -> Result<Option<&'i c::BtreeNode>, BchError>
+    -> Result<Option<&'i BtreeNode>, BchError>
 {
     let fs = t.fs();
     let v = *bp.v();
@@ -531,7 +532,7 @@ pub fn backpointer_get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c
 
 pub fn backpointer_get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
                                     iter: &'i mut BtreeIter<'t>, last_flushed: WbFlush<'_>)
-    -> Result<Option<&'i c::BtreeNode>, BchError>
+    -> Result<Option<&'i BtreeNode>, BchError>
 {
     get_node(t, bp, iter, Some(last_flushed), true)
 }
