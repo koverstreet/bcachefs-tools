@@ -237,10 +237,10 @@ impl Fs {
     }
 }
 
-/// What an update holds from init() to exit(), released in this order as
-/// it's dropped: its in-flight entry, its nocow locks, a ref on each pointer's
-/// device - what the nocow locks were worked out from, not c->devs[], which a
-/// device removal may clear while the ref pins the device.
+/// What an update holds from init() to exit(), released as it's dropped, in
+/// no order that matters: its in-flight entry, its nocow locks, a ref on each
+/// pointer's device - what the nocow locks were worked out from, not
+/// c->devs[], which a device removal may clear while the ref pins the device.
 pub(crate) struct Held {
     in_flight: Option<InFlightReg>,
     nocow:     Option<nocow_locking::Locked>,
