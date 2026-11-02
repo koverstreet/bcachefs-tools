@@ -450,8 +450,6 @@ do_write:
 
 	BUG_ON(!b->written && i->u64s != b->data->keys.u64s);
 
-	bch2_set_bset_needs_whiteout(i, false);
-
 	/* do we have data to write? */
 	if (b->written && !i->u64s)
 		goto nowrite;

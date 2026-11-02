@@ -944,8 +944,6 @@ int bch2_btree_node_read_done(struct bch_fs *c, struct bch_dev *ca,
 
 	bch2_bset_build_aux_tree(b, b->set, false);
 
-	bch2_set_bset_needs_whiteout(btree_bset_first(b), true);
-
 	btree_node_reset_sib_u64s(b);
 
 	if (updated_range)

@@ -210,14 +210,19 @@ impl MergeCmp for CmpPackedInlined {
 /// The sorted keys fit their room: a sort only drops keys, and the room is as
 /// big as its input.
 #[inline(always)]
-fn copy_key(dst: &mut [u64], out: usize, k: &BkeyP) -> usize {
+fn copy_key(dst: &mut [u64], out: usize, k: &BkeyP, f: impl FnOnce(&mut [u64])) -> usize {
     let src = k.as_slice();
 
     invariant!(out <= dst.len(), src.len() <= dst.len() - out);
     let dst = &mut dst[out..][..src.len()];
 
     unsafe { copy_u64s_small(dst.as_mut_ptr(), src.as_ptr(), src.len()) };
+    f(dst);
     out + src.len()
+}
+
+fn set_needs_whiteout(k: &mut [u64], v: bool) {
+    BkeyP::from_slice_mut(k).expect("a key just copied").set_needs_whiteout(v)
 }
 
 fn move_down(buf: &mut [u64], from: usize, len: usize, to: usize) {
@@ -228,7 +233,8 @@ fn move_down(buf: &mut [u64], from: usize, len: usize, to: usize) {
     unsafe { copy_u64s_small(p.add(to), p.add(from), len) };
 }
 
-fn key_sort_fix_overlapping(keys: &Keys<'_>, runs: &mut [SortIterSet], dst: &mut [u64]) -> (usize, BtreeNrKeys) {
+fn key_sort_fix_overlapping(keys: &Keys<'_>, runs: &mut [SortIterSet], dst: &mut [u64],
+                            mut f: impl FnMut(&mut [u64])) -> (usize, BtreeNrKeys) {
     let mut nr = BtreeNrKeys::default();
     let mut out = 0;
     let mut iter = Merge::<KeySortFixOverlappingCmp>::new(keys, runs);
@@ -237,7 +243,7 @@ fn key_sort_fix_overlapping(keys: &Keys<'_>, runs: &mut [SortIterSet], dst: &mut
         let k = iter.key_at(at);
 
         if !k.key_type().is_deleted() && !iter.should_drop_next_key() {
-            out = copy_key(dst, out, k);
+            out = copy_key(dst, out, k, &mut f);
             nr.account_key_add(0, k);
         }
 
@@ -263,7 +269,7 @@ fn sort_repack(dst: &mut KeysMut<'_>, src: &Keys<'_>, src_iter: &mut KeyIter,
         }
 
         if !transform {
-            copy_key(dst.buf, out, k);
+            copy_key(dst.buf, out, k, |_| {});
         } else {
             let room = &mut dst.buf[out..];
             assert!(room.len() >= BKEY_U64S + k.val_u64s(in_f),
@@ -296,7 +302,8 @@ fn sort_repack(dst: &mut KeysMut<'_>, src: &Keys<'_>, src_iter: &mut KeyIter,
  * dropped if overwritten by real keys:
  */
 fn sort_keys_keep_unwritten_whiteouts(keys: &Keys<'_>, unwritten_whiteouts: usize,
-                                      runs: &mut [SortIterSet], dst: &mut [u64]) -> usize {
+                                      runs: &mut [SortIterSet], dst: &mut [u64],
+                                      mut f: impl FnMut(&mut [u64])) -> usize {
     let mut iter = Merge::<KeepUnwrittenWhiteoutsCmp>::new(keys, runs);
     let mut out = 0;
 
@@ -311,7 +318,7 @@ fn sort_keys_keep_unwritten_whiteouts(keys: &Keys<'_>, unwritten_whiteouts: usiz
             continue;
         }
 
-        out = copy_key(dst, out, k);
+        out = copy_key(dst, out, k, &mut f);
     }
     out
 }
@@ -329,7 +336,7 @@ fn sort_keys(keys: &Keys<'_>, runs: &mut [SortIterSet], dst: &mut [u64]) -> usiz
         let k = iter.key_at(at);
 
         if !k.key_type().is_deleted() {
-            out = copy_key(dst, out, k);
+            out = copy_key(dst, out, k, |_| {});
         }
     }
     out
@@ -436,7 +443,7 @@ fn sort_whiteouts(fs: &Fs, b: &mut BtreeNode) {
         let mut out = 0;
         for i in ptrs..u64s {
             let at = new[i] as usize;
-            out = copy_key(new, out, key_at(keys.buf, at));
+            out = copy_key(new, out, key_at(keys.buf, at), |_| {});
         }
     }
 
@@ -725,18 +732,22 @@ pub unsafe fn sort_iter_add(iter: *mut SortIter, k: *const c::bkey_packed, end: 
     }
 }
 
+/// Sets each key's needs_whiteout: they're all on disk.
+///
 /// # Safety
 /// @iter's runs are of its node's bsets, and @dst has room for their keys.
 #[c_export]
 pub unsafe fn bch2_key_sort_fix_overlapping(_fs: &Fs, dst: *mut Head<c::bset>, iter: *mut SortIter) -> BtreeNrKeys {
     let (b, runs) = unsafe { sort_iter(iter) };
     let room = unsafe { core::slice::from_raw_parts_mut((&raw mut (*dst)._data).cast(), runs_u64s(runs)) };
-    let (u64s, nr) = key_sort_fix_overlapping(&b.keys(), runs, room);
+    let (u64s, nr) = key_sort_fix_overlapping(&b.keys(), runs, room, |k| set_needs_whiteout(k, true));
 
     unsafe { (*dst).set_u64s(u64s) };
     nr
 }
 
+/// Clears each key's needs_whiteout: it isn't written.
+///
 /// # Safety
 /// @iter's runs are of its node, and @dst has room for their keys.
 #[c_export]
@@ -746,7 +757,8 @@ pub unsafe fn bch2_sort_keys_keep_unwritten_whiteouts(dst: *mut c::bkey_packed, 
     let keys = b.keys();
     let unwritten_whiteouts = keys.buf.len() - b.whiteout_u64s.get() as usize;
 
-    sort_keys_keep_unwritten_whiteouts(&keys, unwritten_whiteouts, runs, room) as c_uint
+    sort_keys_keep_unwritten_whiteouts(&keys, unwritten_whiteouts, runs, room,
+                                       |k| set_needs_whiteout(k, false)) as c_uint
 }
 
 /// # Safety
