@@ -2,8 +2,8 @@
 
 //! The data types C shares, one module per header: foo/bar.rs is the source
 //! of foo/bar.h's types, whose C is generated from it - see types/lib.rs.
-//! btree/types.rs, fs/dirent_format.rs and format.rs's are modules of their
-//! own already.
+//! btree/types.rs, btree/node/, fs/dirent_format.rs and format.rs's are
+//! modules of their own already.
 
 #[path = "alloc/disk_groups_format.rs"] pub mod alloc_disk_groups_format;
 #[path = "alloc/format.rs"] pub mod alloc_format;
@@ -17,7 +17,6 @@
 #[path = "btree/interior_defs.rs"] pub mod btree_interior_defs;
 #[path = "btree/journal_overlay_defs.rs"] pub mod btree_journal_overlay_defs;
 #[path = "btree/write_buffer_defs.rs"] pub mod btree_write_buffer_defs;
-#[path = "btree/bset_types.rs"] pub mod btree_bset_types;
 #[path = "btree/check_types.rs"] pub mod btree_check_types;
 #[path = "btree/key_cache_types.rs"] pub mod btree_key_cache_types;
 #[path = "btree/node_scan_types.rs"] pub mod btree_node_scan_types;
@@ -126,7 +125,9 @@ pub mod c {
     pub use super::btree_bkey_defs::*;
     pub use crate::btree::bkey_methods::{bch2_bkey_to_text, bch2_bkey_types, bch2_bkey_val_to_text, bch2_bpos_to_text, bch2_set_bkey_error, bkey_ops};
     pub use super::btree_bkey_types::*;
-    pub use super::btree_bset_types::*;
+    pub use crate::btree::node::{BtreeNode, bkey_unpack_field, btree_nr_keys};
+    pub use crate::btree::node::bset::*;
+    pub use crate::btree::node::iter::*;
     pub use super::btree_check_types::*;
     pub use super::btree_interior_defs::*;
     pub use crate::btree::interior::{BTREE_NODE_RESERVE, BTREE_RESERVE_MAX, BtreeReserveCache, bch2_async_btree_op, bch2_btree_interior_updates_flush, bch2_btree_node_rewrite, bch2_btree_node_update_key, bch2_btree_node_update_key_at_pos, bch2_btree_reserve_cache_to_text, bch2_btree_updates_to_text, bch_fs_btree_interior_updates, bch_fs_btree_node_rewrites, bch_fs_btree_reserve_cache, btree_alloc};

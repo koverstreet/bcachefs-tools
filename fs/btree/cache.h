@@ -3,7 +3,10 @@
 #define _BCACHEFS_BTREE_CACHE_H
 
 #include "bcachefs.h"
+#include "btree/node/bset_gen.h"
+#include "btree/node/iter_gen.h"
 #include "btree/types_gen.h"
+#include "btree/node_gen.h"
 #include "btree/bkey_methods.h"
 #include "btree/cache_gen.h"
 

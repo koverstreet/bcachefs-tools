@@ -107,7 +107,10 @@
 #include "data/extents_gen.h"
 #include "journal/types_gen.h"
 #include "btree/write_buffer_gen.h"
+#include "btree/node/bset_gen.h"
+#include "btree/node/iter_gen.h"
 #include "btree/types_gen.h"
+#include "btree/node_gen.h"
 #include "btree/types_inline.h"
 
 #include "data/compress_gen.h"

@@ -16,7 +16,10 @@
 #include <trace/events/lock.h>
 
 #include "six.h"
+#include "btree/node/bset_gen.h"
+#include "btree/node/iter_gen.h"
 #include "btree/types_gen.h"
+#include "btree/node_gen.h"
 
 #define six_acquire(l, t, r, ip)	lock_acquire(l, 0, t, r, 1, NULL, ip)
 #define six_release(l, ip)		lock_release(l, ip)

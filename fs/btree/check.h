@@ -4,7 +4,10 @@
 
 #include "btree/bkey.h"
 #include "btree/check_gen.h"
+#include "btree/node/bset_gen.h"
+#include "btree/node/iter_gen.h"
 #include "btree/types_gen.h"
+#include "btree/node_gen.h"
 
 int bch2_check_topology(struct bch_fs *);
 int bch2_check_allocations(struct bch_fs *);

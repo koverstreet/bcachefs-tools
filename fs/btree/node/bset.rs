@@ -141,6 +141,31 @@ use cstruct_macros::{CStruct, c_const, c_enum, c_extern};
  * first key in that range of bytes again.
  */
 
+c_const! {
+    pub const MAX_BSETS: u32 = 3;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, CStruct)]
+pub struct bset_tree {
+    /*
+     * We construct a binary tree in an array as if the array
+     * started at 1, so that things line up on the same cachelines
+     * better: see comments in bset.c at cacheline_to_bkey() for
+     * details
+     */
+
+    /* size of the binary tree and prev array */
+    pub size: u16,
+
+    /* function of size - precalculated for to_inorder() */
+    pub extra: u16,
+
+    pub data_offset: u16,
+    pub aux_data_offset: u16,
+    pub end_offset: u16,
+}
+
 c_enum! {
     #[closed]
     pub enum bset_aux_tree_type: u32 {

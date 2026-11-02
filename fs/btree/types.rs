@@ -18,11 +18,9 @@ use crate::util::mempool::Mempool;
 use crate::util::workqueue::{Workqueue, WqFlags};
 use crate::types::{CacheAligned, DArray, NeBytes, bits_to_longs, c_default};
 use crate::util::projections::Volatile;
-use crate::util::vstructs::Head;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
-use core::sync::atomic::{AtomicI64, AtomicIsize, AtomicUsize};
-use crate::util::bitmap::AtomicBitflags;
+use core::sync::atomic::{AtomicI64, AtomicIsize};
 use cstruct_macros::{c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, Late, TypeInfo};
 use pin_init::{pin_data, PinInit};
 use nestify::nest;
@@ -31,46 +29,6 @@ use std::{ffi::CString, str::FromStr};
 use crate::format::{Bpos, Btree};
 
 /* Btree nodes: */
-
-c_const! {
-    pub const MAX_BSETS: u32 = 3;
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct btree_nr_keys {
-    /*
-     * Amount of live metadata (i.e. size of node after a compaction) in
-     * units of u64s
-     */
-    pub live_u64s: u16,
-    pub bset_u64s: [u16; cs::MAX_BSETS as usize],
-
-    /* live keys only: */
-    pub packed_keys: u16,
-    pub unpacked_keys: u16,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct bset_tree {
-    /*
-     * We construct a binary tree in an array as if the array
-     * started at 1, so that things line up on the same cachelines
-     * better: see comments in bset.c at cacheline_to_bkey() for
-     * details
-     */
-
-    /* size of the binary tree and prev array */
-    pub size: u16,
-
-    /* function of size - precalculated for to_inorder() */
-    pub extra: u16,
-
-    pub data_offset: u16,
-    pub aux_data_offset: u16,
-    pub end_offset: u16,
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -104,123 +62,6 @@ c_enum! {
         BTREE_NODE_CACHE_DIRTY,         /* on bc->live[pinned].dirty; hashed; has data */
     }
 }
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct bkey_unpack_field {
-    pub byte_offset: i8,
-    pub shift_right: u8, /* 64 - bits, or 64 if field has no bits in packed */
-}
-
-#[repr(C)]
-#[c_name(btree)]
-#[derive(CStruct)]
-pub struct BtreeNode {
-    pub c: cs::btree_bkey_cached_common,
-
-    pub hash: cs::rhash_head,
-    pub hash_val: u64,
-
-    #[c("unsigned long flags")]
-    pub flags: AtomicBitflags<cs::btree_flags>,
-    /*
-     * XXX: written and whiteout_u64s are the node writer's: the thread that
-     * cleared BTREE_NODE_dirty, which may hold only a read lock. They want a
-     * Volatile variant whose Writer has a private constructor - clearing the
-     * dirty bit - and borrows the guard on c.lock. With btree/write.c's
-     * conversion.
-     */
-    pub written: Volatile<u16>,
-    pub nsets: u8,
-    pub nr_key_bits: u8,
-    pub version_ondisk: u16,
-
-    pub format: cs::bkey_format,
-
-    /*
-     * Per-field unpack constants, derived from @format at node init.
-     * Extract each field with:
-     *
-     *   field = (load_8_unaligned(bytes + byte_offset) >> (64 - bits))
-     *           + field_offset
-     *
-     * Load position chosen so the field ends at the top of the loaded
-     * value (load_offset + 8 == byte after field's MSB byte); junk from
-     * earlier-in-memory fields lands in the low bits and shifts off.
-     *
-     * byte_offset is signed: for a field near the start of @in, the
-     * load can need to start before @in. The byte(s) before @in are
-     * always valid memory in the callers we care about (bset payload
-     * after the bset header, or other bkeys in the same bset).
-     *
-     * Only handles formats where every field's MSB sits at a byte
-     * boundary (field_msb_bit % 8 == 7). bch2_bkey_format_done()
-     * rounds fields up to byte width when there are spare bits, so
-     * this is the common case. Formats too tight to byte-align take
-     * the slow path via byte_aligned_fields = false.
-     */
-    pub byte_aligned_fields: bool,
-    pub unpack: [cs::bkey_unpack_field; cs::BKEY_NR_FIELDS as usize],
-
-    pub data: *mut Head<cs::btree_node>,
-    pub aux_data: *mut c_void,
-
-    /*
-     * Sets of sorted keys - the real btree node - plus a binary search tree
-     *
-     * set[0] is special; set[0]->tree, set[0]->prev and set[0]->data point
-     * to the memory we have allocated for this btree node. Additionally,
-     * set[0]->data points to the entire btree node as it exists on disk.
-     */
-    pub set: [cs::bset_tree; cs::MAX_BSETS as usize],
-
-    pub nr: cs::btree_nr_keys,
-    pub sib_u64s: [u16; 2],
-    pub whiteout_u64s: Volatile<u16>,
-    pub byte_order: u8,
-    pub unpack_fn_len: u8,
-
-    pub writes: [cs::btree_write; 2],
-
-    /* Key/pointer for this btree node */
-    pub key: cs::bkey_i,
-    pub key_pad: [u64; cs::BKEY_BTREE_PTR_VAL_U64s_MAX],
-
-    /*
-     * XXX: add a delete sequence number, so when bch2_btree_node_relock()
-     * fails because the lock sequence number has changed - i.e. the
-     * contents were modified - we can still relock the node if it's still
-     * the one we want, without redoing the traversal
-     */
-
-    /*
-     * For asynchronous splits/interior node updates:
-     * When we do a split, we allocate new child nodes and update the parent
-     * node to point to them: we update the parent in memory immediately,
-     * but then we must wait until the children have been written out before
-     * the update to the parent can be written - this is a list of the
-     * btree_updates that are blocking this node from being
-     * written:
-     */
-    pub write_blocked: cs::list_head,
-
-    /*
-     * Also for asynchronous splits/interior node updates:
-     * If a btree node isn't reachable yet, we don't want to kick off
-     * another write - because that write also won't yet be reachable and
-     * marking it as completed before it's reachable would be incorrect:
-     */
-    #[c("unsigned long will_make_reachable")]
-    pub will_make_reachable: AtomicUsize,
-
-    pub ob: cs::open_buckets,
-
-    /* lru list */
-    pub list: cs::list_head,
-
-    pub cache_state: cs::btree_node_cache_state,
-}
-c_default!(BtreeNode);
 
 c_enum! {
     #[closed]
@@ -450,19 +291,6 @@ pub struct bch_fs_btree_cache {
 }
 
 /* Iterator, update, and trigger flags: */
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct btree_node_iter_set {
-    pub k: u16,
-    pub end: u16,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct btree_node_iter {
-    pub data: [cs::btree_node_iter_set; cs::MAX_BSETS as usize],
-}
 
 c_xmacro! {
     BTREE_ITER_FLAGS(x) {

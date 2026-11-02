@@ -4,7 +4,10 @@
 
 #include "btree/bset.h"
 #include "btree/cache.h"
+#include "btree/node/bset_gen.h"
+#include "btree/node/iter_gen.h"
 #include "btree/types_gen.h"
+#include "btree/node_gen.h"
 
 #include "closure.h"
 #include "sb/counters.h"

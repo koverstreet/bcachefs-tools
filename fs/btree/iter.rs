@@ -3111,63 +3111,6 @@ impl BtreeLevels {
     }
 }
 
-impl<'b, 'f> c::BtreeNode {
-    pub fn to_text(&'b self, fs: &'f Fs) -> BtreeNodeToText<'b, 'f> {
-        BtreeNodeToText { b: self, fs }
-    }
-
-    pub fn ondisk_to_text(&'b self, fs: &'f Fs) -> BtreeNodeOndiskToText<'b, 'f> {
-        BtreeNodeOndiskToText { b: self, fs }
-    }
-}
-
-impl c::BtreeNode {
-    /// The node's key, all of it - its value runs past bkey_i, into key_pad.
-    pub fn key_i(&self) -> &BkeyI {
-        // SAFETY: the node's key, from a pointer to all of the node
-        unsafe { &*BkeyI::from_raw(&raw const self.key) }
-    }
-
-    pub fn is_fake(&self) -> bool {
-        self.flags.get(c::btree_flags::BTREE_NODE_fake)
-    }
-
-    /// Not yet reachable: an interior update in flight will make it so.
-    pub fn will_make_reachable(&self) -> bool {
-        self.flags.get(c::btree_flags::BTREE_NODE_will_make_reachable)
-    }
-
-    /// The node's keys, unpacked, in order.
-    pub fn for_each_key<F>(&self, mut f: F) -> ControlFlow<()>
-    where
-        F: for<'a> FnMut(BkeySC<'a>) -> ControlFlow<()>,
-    {
-        let b = self as *const _ as *mut c::BtreeNode;
-        let mut node_iter = c::btree_node_iter::default();
-        let mut unpacked: c::bkey = pin_init::Zeroable::zeroed();
-
-        unsafe { c::bch2_btree_node_iter_init_from_start(&mut node_iter, b) };
-
-        loop {
-            let k = unsafe {
-                c::bch2_btree_node_iter_peek_unpack(&mut node_iter, b, &mut unpacked)
-            };
-            if k.k.is_null() {
-                return ControlFlow::Continue(());
-            }
-            if f(BkeySC {
-                k:    unsafe { &*k.k },
-                v:    k.v,
-                iter: PhantomData,
-                val:  PhantomData,
-            }).is_break() {
-                return ControlFlow::Break(());
-            }
-            unsafe { c::bch2_btree_node_iter_advance(&mut node_iter, b) };
-        }
-    }
-}
-
 pub struct PathLeaf<'a> {
     l:      *mut c::btree_path_level,
     _trans: PhantomData<&'a ()>,
@@ -3187,30 +3130,6 @@ impl<'a> PathLeaf<'a> {
         }
     }
 }
-
-pub struct BtreeNodeToText<'b, 'f> {
-    b:  &'b c::BtreeNode,
-    fs: &'f Fs,
-}
-
-impl ToText for BtreeNodeToText<'_, '_> {
-    fn to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_btree_node_to_text(out.as_raw(), self.fs.as_ptr(), self.b) }
-    }
-}
-crate::display_via_to_text!(BtreeNodeToText<'_, '_>);
-
-pub struct BtreeNodeOndiskToText<'b, 'f> {
-    b:  &'b c::BtreeNode,
-    fs: &'f Fs,
-}
-
-impl ToText for BtreeNodeOndiskToText<'_, '_> {
-    fn to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_btree_node_ondisk_to_text(out.as_raw(), self.fs.as_ptr(), self.b) }
-    }
-}
-crate::display_via_to_text!(BtreeNodeOndiskToText<'_, '_>);
 
 // ── The filesystem's transactions: c->btree.trans.list ──────────────────────
 
