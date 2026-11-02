@@ -107,6 +107,16 @@ impl<T: Zeroable> GenRadix<T> {
         RevIter(RawRevIter::new(self.tree()))
     }
 
+    #[inline]
+    pub fn iter_mut_from(&mut self, idx: usize) -> impl Iterator<Item = (usize, &mut T)> + '_ {
+        RawIter::<T>::new(self.tree(), idx).map(|(pos, mut p)| (pos, unsafe { p.as_mut() }))
+    }
+
+    #[inline]
+    pub fn iter_rev_mut(&mut self) -> impl Iterator<Item = (usize, &mut T)> + '_ {
+        RawRevIter::<T>::new(self.tree()).map(|(pos, mut p)| (pos, unsafe { p.as_mut() }))
+    }
+
     /// Free every node: as genradix_free(). Empty after, as a new one is.
     pub fn free(&mut self) {
         unsafe { c::__genradix_free(&mut self.tree) }

@@ -232,6 +232,12 @@ impl<T> Default for DArray<T> {
     }
 }
 
+impl<T, const N: usize> DArray<T, N> {
+    pub fn as_slice(&self) -> &[T] {
+        if self.nr == 0 { &[] } else { unsafe { core::slice::from_raw_parts(self.data, self.nr) } }
+    }
+}
+
 // ---- Rust's own, in C's structs ---------------------------------------------
 
 /// A field of a struct C shares that's Rust's alone - a Locked<c::mutex,
@@ -426,6 +432,8 @@ pub struct GenRadix<T> {
 
 // SAFETY: zeroed is empty - genradix_init() is a memset
 unsafe impl<T> ::pin_init::Zeroable for GenRadix<T> {}
+
+unsafe impl<T: Send> Send for GenRadix<T> {}
 
 // Opaque to TypeInfo, as bindgen's were: size only.
 macro_rules! typeinfo_opaque {
