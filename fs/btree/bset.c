@@ -887,9 +887,9 @@ static noinline void __build_rw_aux_tree(struct btree *b, struct bset_tree *t)
 
 static noinline void __build_ro_aux_tree(struct btree *b, struct bset_tree *t)
 {
-	struct bkey_packed *k = btree_bkey_first(b, t);
+	struct bkey_packed *k;
 	struct bkey_i_padded min_key, max_key;
-	unsigned cacheline = 1;
+	unsigned cacheline;
 
 	t->size = min(bkey_to_cacheline(b, t, btree_bkey_last(b, t)),
 		      bset_ro_tree_capacity(b, t));
@@ -903,6 +903,9 @@ retry:
 	t->extra = eytzinger1_extra(t->size - 1);
 
 	/* First we figure out where the first key in each cacheline is */
+	k = btree_bkey_first(b, t);
+	cacheline = 1;
+
 	eytzinger1_for_each(j, t->size - 1) {
 		while (bkey_to_cacheline(b, t, k) < cacheline)
 			k = bkey_p_next(k);
