@@ -150,6 +150,18 @@ c_typedef! {
                                                         -> c_int>;
 }
 
+/// ei_pagecache_lock's states: adding to the page cache, or blocking adds.
+pub enum PagecacheAdd {}
+pub enum PagecacheBlock {}
+
+impl c::TwoState for PagecacheAdd {
+    const S: bool = false;
+}
+
+impl c::TwoState for PagecacheBlock {
+    const S: bool = true;
+}
+
 #[cfg(not(NO_BCACHEFS_FS))]
 c_extern! {
     pub fn bch2_inode_or_descendents_is_open(trans: *mut c::btree_trans, pos: Bpos) -> c_int;

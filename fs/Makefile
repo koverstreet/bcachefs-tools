@@ -101,7 +101,6 @@ bcachefs-y		:=			\
 	util/eytzinger.o			\
 	util/printbuf.o				\
 	util/rcu.o				\
-	util/two_state_shared_lock.o		\
 	util/util.o				\
 	vendor/bio_iov_iter.o			\
 	vendor/closure.o			\
