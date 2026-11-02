@@ -189,6 +189,9 @@ type Flags = c::bch_run_recovery_pass_flags;
 
 const NR: usize = Pass::BCH_RECOVERY_PASS_NR as usize;
 
+/// The last pass: once it's done, they all are.
+pub const LAST: Pass = Pass::from_bits(NR as u32 - 1);
+
 /// Each pass's function: C's, or Rust's under its C name. A module of their
 /// own, as this one defines two of them.
 mod pass_fns {
