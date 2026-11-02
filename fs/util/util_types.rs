@@ -80,6 +80,8 @@ c_extern! {
     pub fn bch2_prt_u64_base2_nbits(out: *mut Printbuf, v: u64, nr_bits: c_uint);
     pub fn bch2_prt_task_backtrace(out: *mut Printbuf, task: *mut c::task_struct, skipnr: c_uint,
                                    gfp: c::gfp_t) -> c_int;
+    pub fn bch2_save_backtrace(stack: *mut c::bch_stacktrace, task: *mut c::task_struct, skipnr: c_uint,
+                               gfp: c::gfp_t) -> c_int;
     pub fn bch2_rht_table(ht: *const c::rhashtable) -> *const c::bucket_table;
     pub fn bch2_rht_nr_buckets(tbl: *const c::bucket_table) -> c_uint;
     pub fn bch2_rht_bucket(tbl: *const c::bucket_table, hash: c_uint) -> *mut *mut c_void;

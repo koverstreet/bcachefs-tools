@@ -133,26 +133,6 @@
 #include "enum_kind.h"
 #include "locking/six_gen.h"
 
-/*
- * Wait list entry: cached {waiter pointer, start_time + lock_want} pair.
- * Keeping start_time and lock_want in the slot lets the wakeup scan filter
- * and pick the oldest matching waiter without dereffing each six_lock_waiter
- * — only the chosen one is touched via @w.
- *
- * Low SIX_LOCK_WANT_BITS bits of @start_time hold lock_want; the remaining
- * high bits hold trans_start_time shifted up. Time comparisons among waiters
- * of the same lock_want are unaffected — the low bits are equal — so callers
- * can compare @start_time directly without masking.
- */
-#define SIX_LOCK_WANT_BITS	2
-#define SIX_LOCK_WANT_MASK	((1U << SIX_LOCK_WANT_BITS) - 1)
-
-void six_lock_exit(struct six_lock *lock);
-
-void __six_lock_init(struct six_lock *lock, const char *name,
-		     struct lock_class_key *key, enum six_lock_init_flags flags,
-		     gfp_t gfp);
-
 /**
  * six_lock_init - initialize a six lock
  * @lock:	lock to initialize
@@ -181,8 +161,6 @@ static inline u32 six_lock_seq(const struct six_lock *lock)
 	return lock->seq;
 }
 
-bool six_trylock_ip(struct six_lock *lock, enum six_lock_type type, unsigned long ip);
-
 /**
  * six_trylock_type - attempt to take a six lock without blocking
  * @lock:	lock to take
@@ -194,24 +172,6 @@ static inline bool six_trylock_type(struct six_lock *lock, enum six_lock_type ty
 {
 	return six_trylock_ip(lock, type, _THIS_IP_);
 }
-
-int six_lock_ip_waiter(struct six_lock *lock, enum six_lock_type type,
-		       struct six_lock_waiter *wait,
-		       six_lock_should_sleep_fn should_sleep_fn,
-		       unsigned long ip);
-
-/*
- * As six_lock_ip_waiter(), but skip the initial trylock and go straight
- * to the waitlist slowpath. Use this when the caller has already done a
- * trylock and observed contention (e.g. btree_node_lock dispatching
- * to btree_node_lock_nopath after its own fast-path trylock failed) —
- * avoids burning a second locked CAS on a lock state we already know
- * is contended.
- */
-int six_lock_contended(struct six_lock *lock, enum six_lock_type type,
-				 struct six_lock_waiter *wait,
-				 six_lock_should_sleep_fn should_sleep_fn,
-				 unsigned long ip);
 
 /**
  * six_lock_waiter - take a lock, with full waitlist interface
@@ -274,9 +234,6 @@ static inline int six_lock_type(struct six_lock *lock, enum six_lock_type type,
 }
 #endif
 
-bool six_relock_ip(struct six_lock *lock, enum six_lock_type type,
-		   unsigned seq, unsigned long ip);
-
 /**
  * six_relock_type - attempt to re-take a lock that was held previously
  * @lock:	lock to take
@@ -291,8 +248,6 @@ static inline bool six_relock_type(struct six_lock *lock, enum six_lock_type typ
 {
 	return six_relock_ip(lock, type, seq, _THIS_IP_);
 }
-
-void six_unlock_ip(struct six_lock *lock, enum six_lock_type type, unsigned long ip);
 
 /**
  * six_unlock_type - drop a six lock
@@ -381,16 +336,9 @@ __SIX_UNLOCK(intent)
 __SIX_UNLOCK(write)
 #undef __SIX_LOCK
 
-void six_lock_downgrade(struct six_lock *);
-bool six_lock_tryupgrade(struct six_lock *);
-bool six_trylock_convert(struct six_lock *, enum six_lock_type,
-			 enum six_lock_type);
-
-void six_lock_increment(struct six_lock *, enum six_lock_type);
-
-void six_lock_wakeup_all(struct six_lock *);
-
-struct six_lock_count six_lock_counts(struct six_lock *);
-void six_lock_readers_add(struct six_lock *, int);
+static inline void six_lock_increment(struct six_lock *lock, enum six_lock_type type)
+{
+	six_lock_increment_ip(lock, type, _THIS_IP_);
+}
 
 #endif /* _LINUX_SIX_H */
