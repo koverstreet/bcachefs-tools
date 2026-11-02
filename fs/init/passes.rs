@@ -1192,7 +1192,7 @@ pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
 #[c_export]
 pub fn go_rw_in_recovery(fs: &Fs) -> bool {
     fs.flags.get(c::bch_fs_flags::BCH_FS_may_upgrade_downgrade) &&
-        (!fs.journal_keys.keys().is_empty() ||
+        (fs.journal_keys_get().is_some_and(|jk| !jk.value().keys().is_empty()) ||
          fs.opts().read_only.get() == 0 ||
          fs.sb.clean.get() == 0 ||
          fs.opts().recovery_passes.get() != 0 ||

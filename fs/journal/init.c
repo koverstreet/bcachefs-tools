@@ -609,7 +609,7 @@ int bch2_fs_journal_start(struct journal *j, struct journal_start_info info)
 		p->unreplayed = true;
 	}
 
-	genradix_for_each(&c->journal_keys.entries, iter, _i) {
+	genradix_for_each(&c->journal_keys.v.entries, iter, _i) {
 		i = *_i;
 
 		if (journal_replay_ignore(i))

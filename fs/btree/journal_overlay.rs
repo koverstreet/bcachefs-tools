@@ -49,13 +49,16 @@ use crate::util::ffi::Opaque;
 use crate::util::gap_buffer::GapBuffer;
 use crate::util::kernel::cond_resched;
 use crate::util::log::{LogLevel, LogMsg};
+use crate::util::place::Placed;
 use crate::util::rcu::{self, ReadGuard, RcuArray, RcuElement};
+use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
 use crate::{bch_err, prt, new_lock, published};
 use core::cmp::Ordering;
 use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
+use core::pin::Pin;
 use core::ptr;
-use core::sync::atomic::Ordering::{AcqRel, Relaxed};
+use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_export, bitfield, CStruct, Init};
 use c::bch_bkey_type as kt;
 use c::bch_errcode as e;
@@ -63,9 +66,9 @@ use c::bch_fs_flags as f;
 use crate::types::{DArray, GenRadix, c_default};
 use crate::util::vstructs::Head;
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicI32, AtomicU64, AtomicUsize};
+use core::sync::atomic::{AtomicU64, AtomicUsize};
 use nestify::nest;
-use pin_init::pin_data;
+use pin_init::{pin_data, pinned_drop};
 use crate::format::{Bpos, Btree};
 
 #[repr(C)]
@@ -169,7 +172,10 @@ published! {
     }
 }
 
-#[pin_data]
+/// The value of the filesystem's AtomicRef, Fs.journal_keys: recovery's ref
+/// is its owner's, stopped once replay's done with the keys, and the last
+/// put drops them.
+#[pin_data(PinnedDrop)]
 #[repr(C)]
 #[derive(CStruct, Init)]
 pub struct journal_keys {
@@ -179,10 +185,6 @@ pub struct journal_keys {
      */
     #[c_anon("size_t nr; size_t size; struct journal_key *data; struct journal_key preallocated[0]; size_t gap")]
     pub keys: UnsafeCell<GapBuffer<c::journal_key>>,
-    #[init(AtomicI32::new(1))]
-    pub ref_: AtomicI32,
-    #[init(true)]
-    pub initial_ref_held: bool,
     /* Bumped by each insert: an iterator that saw another searches again */
     pub seq: AtomicU64,
 
@@ -205,6 +207,24 @@ pub struct journal_keys {
 }
 
 type OverwriteGuard<'a> = Guard<'a, c::mutex, c::OverwriteRanges, c::OverwriteRangesLive>;
+
+pub(crate) type JournalKeysRef = RefGuard<Placed<AtomicRef<c::journal_keys>, crate::at!(Fs.journal_keys)>>;
+
+impl Fs {
+    /// A ref on the journal keys: None once recovery's done with them.
+    pub(crate) fn journal_keys_get(&self) -> Option<JournalKeysRef> {
+        self.journal_keys.tryget()
+    }
+
+    /// The journal keys, for a C transaction's ref: its
+    /// journal_replay_not_finished.
+    ///
+    /// # Safety
+    /// A ref is held for 'a.
+    unsafe fn journal_keys_held(&self) -> &c::journal_keys {
+        unsafe { self.journal_keys.value_held() }
+    }
+}
 
 impl c::journal_key {
     pub(crate) fn is_overwritten(&self) -> bool {
@@ -239,10 +259,18 @@ fn btree_cmp(btree: Btree, level: u32, r: &c::journal_key) -> Ordering {
 }
 
 impl Fs {
+    /// The seq of the journal entry @k was read from: None for a key inserted
+    /// since.
+    pub(crate) fn journal_key_seq(&self, k: &c::journal_key) -> Option<u64> {
+        k.journal_pos().map(|pos| self.journal_entries_base_seq + u64::from(pos.journal_seq_offset))
+    }
+}
+
+impl c::journal_keys {
     /// Key @k: its own, or in the journal entry it was read from -
     /// journal_key_k().
     #[inline]
-    pub(crate) fn journal_key_k(&self, k: &c::journal_key) -> *mut c::bkey_i {
+    pub(crate) fn key_k(&self, k: &c::journal_key) -> *mut c::bkey_i {
         // SAFETY: a key read from the journal is in an entry that lives as
         // long as the keys, at its offset
         unsafe {
@@ -250,59 +278,67 @@ impl Fs {
                 return k.src.allocated_k;
             }
             let pos = k.src.journal;
-            let i = *self.journal_keys.entries.get(pos.journal_seq_offset as usize)
+            let i = *self.entries.get(pos.journal_seq_offset as usize)
                 .expect("a journal key's entry");
             (&raw mut (*i).j._data).cast::<u64>().add(pos.journal_offset as usize).cast()
         }
     }
 
     #[inline]
-    pub(crate) fn journal_key<'a>(&'a self, k: &'a c::journal_key) -> &'a BkeyI {
-        unsafe { &*BkeyI::from_raw(self.journal_key_k(k)) }
-    }
-
-    /// The seq of the journal entry @k was read from: None for a key inserted
-    /// since.
-    pub(crate) fn journal_key_seq(&self, k: &c::journal_key) -> Option<u64> {
-        k.journal_pos().map(|pos| self.journal_entries_base_seq + u64::from(pos.journal_seq_offset))
+    pub(crate) fn key<'a>(&'a self, k: &'a c::journal_key) -> &'a BkeyI {
+        unsafe { &*BkeyI::from_raw(self.key_k(k)) }
     }
 
     #[inline]
-    pub(crate) fn journal_key_pos(&self, k: &c::journal_key) -> Bpos {
-        self.journal_key(k).k.p
+    pub(crate) fn key_pos(&self, k: &c::journal_key) -> Bpos {
+        self.key(k).k.p
     }
 
     #[inline]
-    pub(crate) fn journal_key_cmp_pos(&self, btree: Btree, level: u32, pos: Bpos, r: &c::journal_key) -> Ordering {
-        btree_cmp(btree, level, r).then_with(|| pos.cmp(&self.journal_key_pos(r)))
+    pub(crate) fn key_cmp_pos(&self, btree: Btree, level: u32, pos: Bpos, r: &c::journal_key) -> Ordering {
+        btree_cmp(btree, level, r).then_with(|| pos.cmp(&self.key_pos(r)))
     }
 
-    pub(crate) fn journal_key_cmp(&self, l: &c::journal_key, r: &c::journal_key) -> Ordering {
-        self.journal_key_cmp_pos(l.btree_id(), l.level().into(), self.journal_key_pos(l), r)
+    pub(crate) fn key_cmp(&self, l: &c::journal_key, r: &c::journal_key) -> Ordering {
+        self.key_cmp_pos(l.btree_id(), l.level().into(), self.key_pos(l), r)
     }
 
     /// The index of the first key at or after @pos in @btree at @level:
     /// __bch2_journal_key_search().
-    pub(crate) fn journal_key_search(&self, btree: Btree, level: u32, pos: Bpos) -> usize {
-        let keys = self.journal_keys.keys();
+    pub(crate) fn search(&self, btree: Btree, level: u32, pos: Bpos) -> usize {
+        let keys = self.keys();
         let (mut l, mut r) = (0, keys.len());
 
         while l < r {
             let m = l + (r - l) / 2;
-            if self.journal_key_cmp_pos(btree, level, pos, &keys[m]).is_gt() {
+            if self.key_cmp_pos(btree, level, pos, &keys[m]).is_gt() {
                 l = m + 1;
             } else {
                 r = m;
             }
         }
 
-        assert!(l == keys.len() || self.journal_key_cmp_pos(btree, level, pos, &keys[l]).is_le());
-        assert!(l == 0 || self.journal_key_cmp_pos(btree, level, pos, &keys[l - 1]).is_gt());
+        assert!(l == keys.len() || self.key_cmp_pos(btree, level, pos, &keys[l]).is_le());
+        assert!(l == 0 || self.key_cmp_pos(btree, level, pos, &keys[l - 1]).is_gt());
         l
     }
-}
 
-impl c::journal_keys {
+    /// The entries the journal read kept, and their jsets, but those replay
+    /// ignores.
+    pub fn replays(&self) -> impl Iterator<Item = (&c::journal_replay, &c::jset)> {
+        self.entries.iter_from(0)
+            .filter_map(|(_, &i)| unsafe { i.as_ref() })
+            .filter(|i| !i.ignored())
+            .map(|i| (i, unsafe { c::journal_replay::jset(i) }))
+    }
+
+    /// Every entry the journal read kept, and its jset: newest first.
+    pub fn replays_rev(&self) -> impl Iterator<Item = (&c::journal_replay, &c::jset)> {
+        self.entries.iter_rev()
+            .filter_map(|(_, &i)| unsafe { i.as_ref() })
+            .map(|i| (i, unsafe { c::journal_replay::jset(i) }))
+    }
+
     pub fn keys(&self) -> &GapBuffer<c::journal_key> {
         // SAFETY: written only through keys_mut(), with nothing reading
         unsafe { &*self.keys.get() }
@@ -454,20 +490,19 @@ impl c::journal_keys {
 
 /// The first key from @pos to @end, not overwritten: searched for, or from
 /// *@idx if it's close, and *@idx left at it for the next.
-fn peek_max(fs: &Fs, btree: Btree, level: u32, pos: Bpos, end: Bpos, idx: &mut usize)
+fn peek_max(jk: &c::journal_keys, btree: Btree, level: u32, pos: Bpos, end: Bpos, idx: &mut usize)
     -> *const c::bkey_i
 {
-    let jk = &fs.journal_keys;
     let keys = jk.keys();
     let mut iters = 0;
 
     assert!(*idx <= keys.len(), "journal key {} of {}", *idx, keys.len());
     'search: loop {
         if *idx == 0 {
-            *idx = fs.journal_key_search(btree, level, pos);
+            *idx = jk.search(btree, level, pos);
         }
 
-        while *idx > 0 && fs.journal_key_cmp_pos(btree, level, end, &keys[*idx - 1]).is_le() {
+        while *idx > 0 && jk.key_cmp_pos(btree, level, end, &keys[*idx - 1]).is_le() {
             *idx -= 1;
             iters += 1;
             if iters == 10 {
@@ -478,7 +513,7 @@ fn peek_max(fs: &Fs, btree: Btree, level: u32, pos: Bpos, end: Bpos, idx: &mut u
 
         let rcu = rcu::read_lock();
         while let Some(k) = keys.get(*idx) {
-            if fs.journal_key_cmp_pos(btree, level, end, k).is_lt() {
+            if jk.key_cmp_pos(btree, level, end, k).is_lt() {
                 break;
             }
 
@@ -490,8 +525,8 @@ fn peek_max(fs: &Fs, btree: Btree, level: u32, pos: Bpos, end: Bpos, idx: &mut u
                 continue;
             }
 
-            if fs.journal_key_cmp_pos(btree, level, pos, k).is_le() {
-                return fs.journal_key_k(k);
+            if jk.key_cmp_pos(btree, level, pos, k).is_le() {
+                return jk.key_k(k);
             }
 
             *idx += 1;
@@ -505,18 +540,23 @@ fn peek_max(fs: &Fs, btree: Btree, level: u32, pos: Bpos, end: Bpos, idx: &mut u
     }
 }
 
+/// # Safety
+/// The caller's transaction holds a ref on the journal keys:
+/// journal_replay_not_finished.
 #[c_export]
-pub fn bch2_journal_keys_peek_max(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos,
-                                  end: Bpos, idx: &mut usize) -> *const c::bkey_i {
-    peek_max(Fs::from_c(c), btree, level, pos, end, idx)
+pub unsafe fn bch2_journal_keys_peek_max(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos,
+                                         end: Bpos, idx: &mut usize) -> *const c::bkey_i {
+    peek_max(unsafe { Fs::from_c(c).journal_keys_held() }, btree, level, pos, end, idx)
 }
 
 /// peek_max(), backwards: the last key from @pos down to @end.
+///
+/// # Safety
+/// As bch2_journal_keys_peek_max()'s.
 #[c_export]
-pub fn bch2_journal_keys_peek_prev_min(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos,
-                                       end: Bpos, idx: &mut usize) -> *const c::bkey_i {
-    let fs = Fs::from_c(c);
-    let jk = &fs.journal_keys;
+pub unsafe fn bch2_journal_keys_peek_prev_min(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos,
+                                              end: Bpos, idx: &mut usize) -> *const c::bkey_i {
+    let jk = unsafe { Fs::from_c(c).journal_keys_held() };
     let keys = jk.keys();
     let mut iters = 0;
 
@@ -526,10 +566,10 @@ pub fn bch2_journal_keys_peek_prev_min(c: &Opaque<Fs>, btree: Btree, level: c_ui
     }
     'search: loop {
         if *idx == 0 {
-            *idx = fs.journal_key_search(btree, level, pos);
+            *idx = jk.search(btree, level, pos);
         }
 
-        while *idx < keys.len() && fs.journal_key_cmp_pos(btree, level, end, &keys[*idx]).is_ge() {
+        while *idx < keys.len() && jk.key_cmp_pos(btree, level, end, &keys[*idx]).is_ge() {
             *idx += 1;
             iters += 1;
             if iters == 10 {
@@ -545,7 +585,7 @@ pub fn bch2_journal_keys_peek_prev_min(c: &Opaque<Fs>, btree: Btree, level: c_ui
         let rcu = rcu::read_lock();
         loop {
             let k = &keys[*idx];
-            if fs.journal_key_cmp_pos(btree, level, end, k).is_gt() {
+            if jk.key_cmp_pos(btree, level, end, k).is_gt() {
                 break;
             }
 
@@ -561,8 +601,8 @@ pub fn bch2_journal_keys_peek_prev_min(c: &Opaque<Fs>, btree: Btree, level: c_ui
                 continue;
             }
 
-            if fs.journal_key_cmp_pos(btree, level, pos, k).is_ge() {
-                return fs.journal_key_k(k);
+            if jk.key_cmp_pos(btree, level, pos, k).is_ge() {
+                return jk.key_k(k);
             }
 
             if *idx == 0 {
@@ -579,11 +619,13 @@ pub fn bch2_journal_keys_peek_prev_min(c: &Opaque<Fs>, btree: Btree, level: c_ui
     }
 }
 
+/// # Safety
+/// As bch2_journal_keys_peek_max()'s.
 #[c_export]
-pub fn bch2_journal_keys_peek_slot(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos)
+pub unsafe fn bch2_journal_keys_peek_slot(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos)
     -> *const c::bkey_i
 {
-    peek_max(Fs::from_c(c), btree, level, pos, pos, &mut 0)
+    peek_max(unsafe { Fs::from_c(c).journal_keys_held() }, btree, level, pos, pos, &mut 0)
 }
 
 /// Whether the journal deletes @pos, before replay's done.
@@ -600,29 +642,31 @@ pub unsafe fn bch2_key_deleted_in_journal(trans: *mut c::btree_trans, btree: Btr
     }
 
     // SAFETY: trans->c outlives it
-    let fs = unsafe { Fs::borrow_raw(trans.c) };
-    let Some(k) = fs.journal_keys.keys().get(fs.journal_key_search(btree, level, pos)) else { return false };
+    let jk = unsafe { Fs::borrow_raw(trans.c).journal_keys_held() };
+    let Some(k) = jk.keys().get(jk.search(btree, level, pos)) else { return false };
     if k.btree_id() != btree || u32::from(k.level()) != level {
         return false;
     }
 
-    let k = fs.journal_key(k);
+    let k = jk.key(k);
     k.k.p == pos && k.k.key_type() == kt::KEY_TYPE_deleted
 }
 
 /// The key at @pos overwritten, if the journal has one that isn't - or with
 /// @check, -1 if it has one that is. The caller holds overwrite_lock.
+///
+/// # Safety
+/// As bch2_journal_keys_peek_max()'s.
 #[c_export]
-pub fn bch2_journal_key_check_or_overwrite(c: &Opaque<Fs>, btree: Btree, level: c_uint,
-                                           pos: Bpos, check: bool) -> c_int {
-    let fs = Fs::from_c(c);
-    let jk = &fs.journal_keys;
+pub unsafe fn bch2_journal_key_check_or_overwrite(c: &Opaque<Fs>, btree: Btree, level: c_uint,
+                                                  pos: Bpos, check: bool) -> c_int {
+    let jk = unsafe { Fs::from_c(c).journal_keys_held() };
     // SAFETY: the caller holds it, through this call
     let mut g = unsafe { jk.overwrites.held() };
-    let idx = fs.journal_key_search(btree, level, pos);
+    let idx = jk.search(btree, level, pos);
 
     let Some(k) = jk.keys().get(idx) else { return 0 };
-    if k.btree_id() != btree || u32::from(k.level()) != level || fs.journal_key_pos(k) != pos {
+    if k.btree_id() != btree || u32::from(k.level()) != level || jk.key_pos(k) != pos {
         return 0;
     }
 
@@ -646,7 +690,8 @@ pub fn bch2_journal_key_check_or_overwrite(c: &Opaque<Fs>, btree: Btree, level: 
 /// # Safety
 /// @k is a key, kmalloc()'d, the caller's; still the caller's on error.
 unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> Result<(), BchError> {
-    let jk = &fs.journal_keys;
+    let jk = fs.journal_keys_get().expect("journal keys inserted after recovery was done with them");
+    let jk = jk.value();
     let n = c::journal_key::new_allocated(btree, level, k);
 
     if !fs.flags.get(f::BCH_FS_btree_running) {
@@ -657,7 +702,7 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
 
     // SAFETY: the caller's
     let k = unsafe { &mut *BkeyI::from_raw_mut(k) };
-    let idx = fs.journal_key_search(btree, level, k.k.p);
+    let idx = jk.search(btree, level, k.k.p);
 
     assert!(!fs.flags.get(f::BCH_FS_may_go_rw));
     assert!(!fs.flags.get(f::BCH_FS_rw));
@@ -671,8 +716,8 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
     // the asserts say
     let keys = unsafe { jk.keys_mut() };
 
-    if let Some(o) = keys.get_mut(idx).filter(|o| fs.journal_key_cmp(&n, o).is_eq()) {
-        let ok = fs.journal_key(o);
+    if let Some(o) = keys.get_mut(idx).filter(|o| jk.key_cmp(&n, o).is_eq()) {
+        let ok = jk.key(o);
         let accounting = k.k.key_type() == kt::KEY_TYPE_accounting && ok.k.key_type() == kt::KEY_TYPE_accounting;
 
         if !(accounting && !o.allocated()) {
@@ -742,26 +787,26 @@ pub fn bch2_journal_key_delete(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos:
 // ── Iterating: a btree node's keys, with the journal's overlaid ──────────
 
 impl c::journal_iter {
-    fn new(fs: &Fs, btree: Btree, level: u32, pos: Bpos) -> Self {
+    fn new(jk: &c::journal_keys, btree: Btree, level: u32, pos: Bpos) -> Self {
         Self {
             btree_id: btree,
             level,
-            idx: fs.journal_key_search(btree, level, pos),
-            seq: fs.journal_keys.seq(),
+            idx: jk.search(btree, level, pos),
+            seq: jk.seq(),
             pos,
         }
     }
 
-    fn verify(&self, fs: &Fs) {
+    fn verify(&self, jk: &c::journal_keys) {
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
-            if let Some(k) = fs.journal_keys.keys().get(self.idx) {
+            if let Some(k) = jk.keys().get(self.idx) {
                 assert!(btree_cmp(self.btree_id, self.level, k).is_le(), "journal iter before its btree");
             }
         }
     }
 
-    fn advance(&mut self, fs: &Fs) {
-        if self.idx < fs.journal_keys.keys().len() {
+    fn advance(&mut self, jk: &c::journal_keys) {
+        if self.idx < jk.keys().len() {
             self.idx += 1;
         }
     }
@@ -769,14 +814,13 @@ impl c::journal_iter {
     /// The next key not overwritten, if it's in the iterator's btree and
     /// level; after an insert, the first from @pos or where the iterator
     /// started, whichever's later.
-    fn peek(&mut self, fs: &Fs, pos: Bpos) -> *const c::bkey_i {
-        let jk = &fs.journal_keys;
+    fn peek(&mut self, jk: &c::journal_keys, pos: Bpos) -> *const c::bkey_i {
         let seq = jk.seq();
         if self.seq != seq {
-            self.idx = fs.journal_key_search(self.btree_id, self.level, pos.max(self.pos));
+            self.idx = jk.search(self.btree_id, self.level, pos.max(self.pos));
             self.seq = seq;
         }
-        self.verify(fs);
+        self.verify(jk);
 
         let keys = jk.keys();
         let rcu = rcu::read_lock();
@@ -788,7 +832,7 @@ impl c::journal_iter {
             }
 
             if !k.is_overwritten() {
-                return fs.journal_key_k(k);
+                return jk.key_k(k);
             }
 
             self.idx = match k.range() {
@@ -872,13 +916,14 @@ impl c::btree_and_journal_iter {
 
             let mut journal_k = ptr::null();
             if self.replay_not_finished() {
+                let jk = unsafe { fs.journal_keys_held() };
                 journal_k = loop {
-                    let k = self.journal.peek(fs, self.pos);
+                    let k = self.journal.peek(jk, self.pos);
                     // SAFETY: a journal key
                     if k.is_null() || unsafe { (*k).k.p } >= self.pos {
                         break k;
                     }
-                    self.journal.advance(fs);
+                    self.journal.advance(jk);
                 };
             }
 
@@ -931,7 +976,8 @@ impl c::btree_and_journal_iter {
         if iter.replay_not_finished() {
             // SAFETY: the caller's
             let (fs, btree, level) = unsafe { (Fs::borrow_raw((*trans).c), (*b).c.btree_id, (*b).c.level) };
-            iter.journal = c::journal_iter::new(fs, Btree(btree.into()), level.into(), pos);
+            iter.journal = c::journal_iter::new(unsafe { fs.journal_keys_held() }, Btree(btree.into()),
+                                                level.into(), pos);
         }
         iter
     }
@@ -982,8 +1028,8 @@ pub unsafe fn bch2_btree_and_journal_iter_init_node_iter(trans: *mut c::btree_tr
 /// Journal keys @l and @r in sort order: of equal keys, the oldest first - of
 /// two a rewind undoes, the newest - and what was read before what was
 /// inserted.
-fn sort_cmp(fs: &Fs, l: &c::journal_key, r: &c::journal_key) -> Ordering {
-    fs.journal_key_cmp(l, r).then_with(|| {
+fn sort_cmp(jk: &c::journal_keys, l: &c::journal_key, r: &c::journal_key) -> Ordering {
+    jk.key_cmp(l, r).then_with(|| {
         if l.allocated() || r.allocated() {
             return l.allocated().cmp(&r.allocated());
         }
@@ -997,7 +1043,7 @@ fn sort_cmp(fs: &Fs, l: &c::journal_key, r: &c::journal_key) -> Ordering {
 
 /// The keys sorted, and of equal keys the newest kept - but accounting keys,
 /// which replay compares each against the btree's version.
-fn sort_dedup(fs: &Fs, keys: &mut GapBuffer<c::journal_key>) {
+fn sort_dedup(jk: &c::journal_keys, keys: &mut GapBuffer<c::journal_key>) {
     let s = keys.make_contiguous();
     let mut cmps = 0u32;
     s.sort_unstable_by(|l, r| {
@@ -1005,15 +1051,15 @@ fn sort_dedup(fs: &Fs, keys: &mut GapBuffer<c::journal_key>) {
         if cmps % 1024 == 0 {
             cond_resched();
         }
-        sort_cmp(fs, l, r)
+        sort_cmp(jk, l, r)
     });
 
     cond_resched();
 
     let mut dst = 0;
     for src in 0..s.len() {
-        let accounting = fs.journal_key(&s[src]).k.key_type() == kt::KEY_TYPE_accounting;
-        if !accounting && src + 1 < s.len() && fs.journal_key_cmp(&s[src], &s[src + 1]).is_eq() {
+        let accounting = jk.key(&s[src]).k.key_type() == kt::KEY_TYPE_accounting;
+        if !accounting && src + 1 < s.len() && jk.key_cmp(&s[src], &s[src + 1]).is_eq() {
             continue;
         }
         s.swap(dst, src);
@@ -1032,7 +1078,8 @@ fn journal_seq_is_rewound(fs: &Fs, seq: u64) -> bool {
 /// The keys, from the journal entries read - again, if they were already,
 /// as for a rewind recovery decides on after a scrub of the recent entries.
 pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
-    let jk = &fs.journal_keys;
+    let jk = fs.journal_keys_get().expect("journal keys sorted after recovery was done with them");
+    let jk = jk.value();
     // SAFETY: before the btree runs, the keys are recovery's alone
     let keys = unsafe { jk.keys_mut() };
     let (mut nr_read, mut nr_extra_sorts) = (0usize, 0usize);
@@ -1040,7 +1087,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
 
     jk.reset(keys);
 
-    for (i, j) in unsafe { fs.journal_replays() } {
+    for (i, j) in jk.replays() {
         cond_resched();
 
         let seq = j.seq.get();
@@ -1084,7 +1131,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
                 };
 
                 if keys.reserve().is_err() {
-                    sort_dedup(fs, keys);
+                    sort_dedup(jk, keys);
                     nr_extra_sorts += 1;
 
                     if keys.len() * 8 > keys.size * 7 {
@@ -1111,10 +1158,10 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
     }
     drop(pre_sort);
 
-    sort_dedup(fs, keys);
+    sort_dedup(jk, keys);
 
     for i in keys.iter() {
-        let k = fs.journal_key_k(i);
+        let k = jk.key_k(i);
         // SAFETY: a key of the entries, which are recovery's
         unsafe {
             if (*k).k.key_type() == kt::KEY_TYPE_btree_ptr_v2 {
@@ -1137,47 +1184,55 @@ pub fn bch2_journal_keys_sort(c: &Opaque<Fs>) -> c_int {
     ret_to_c(keys_sort(Fs::from_c(c)))
 }
 
-/// A ref on the keys dropped: the last frees them, and the journal entries
-/// they're read from.
-#[c_export]
-pub fn bch2_journal_keys_put(fs: &Fs) {
-    let jk = &fs.journal_keys;
+/// The last ref's put: the keys freed, and the journal entries they're read
+/// from.
+#[pinned_drop]
+impl PinnedDrop for c::journal_keys {
+    fn drop(self: Pin<&mut Self>) {
+        // SAFETY: the last ref's
+        unsafe {
+            self.reset(self.keys_mut());
 
-    assert!(jk.ref_.load(Relaxed) > 0, "journal keys put without a ref");
-    if jk.ref_.fetch_sub(1, AcqRel) != 1 {
-        return;
-    }
+            for k in self.pre_sort().iter() {
+                c::rust_kfree(k.src.allocated_k.cast());
+            }
+            darray_exit(&mut *self.pre_sort.get());
 
-    // SAFETY: the last ref's
-    unsafe {
-        jk.reset(jk.keys_mut());
-
-        for k in jk.pre_sort().iter() {
-            c::rust_kfree(k.src.allocated_k.cast());
+            for (_, &i) in self.entries.iter_from(0) {
+                c::rust_kvfree(i.cast());
+            }
         }
-        darray_exit(&mut *jk.pre_sort.get());
-
-        let entries = &mut (*fs.as_ptr()).journal_keys.entries;
-        for (_, &i) in entries.iter_from(0) {
-            c::rust_kvfree(i.cast());
-        }
-        entries.free();
+        self.project().entries.free();
     }
 }
 
+/// A ref for a C transaction, held until bch2_journal_keys_put(): false once
+/// recovery's done with the keys.
+#[c_export]
+pub fn bch2_journal_keys_tryget(c: &Opaque<Fs>) -> bool {
+    Fs::from_c(c).journal_keys_get().map(RefGuard::leak).is_some()
+}
+
+/// # Safety
+/// The caller holds a ref, from bch2_journal_keys_tryget().
+#[c_export]
+pub unsafe fn bch2_journal_keys_put(c: &Opaque<Fs>) {
+    drop(unsafe { RefGuard::adopt(&Fs::from_c(c).journal_keys) })
+}
+
+/// Recovery done with the keys: its ref put, and no more to be had.
 pub fn journal_keys_put_initial(fs: &Fs) {
-    if fs.journal_keys.initial_ref_held {
-        bch2_journal_keys_put(fs);
-    }
-    unsafe { (*fs.as_ptr()).journal_keys.initial_ref_held = false };
+    fs.journal_keys.stop()
 }
 
 /// Btree @btree's keys at levels @level_min to @level_max, from @start to
 /// @end, dropped: by recovery, rebuilding the btree from scratch.
 pub fn shoot_down_journal_keys(fs: &Fs, btree: Btree, level_min: u32, level_max: u32,
                                start: Bpos, end: Bpos) {
+    let Some(jk) = fs.journal_keys_get() else { return };
+    let jk = jk.value();
     // SAFETY: recovery's, before anything runs alongside it
-    let keys = unsafe { fs.journal_keys.keys_mut() };
+    let keys = unsafe { jk.keys_mut() };
     let s = keys.make_contiguous();
     let mut dst = 0;
 
@@ -1185,7 +1240,7 @@ pub fn shoot_down_journal_keys(fs: &Fs, btree: Btree, level_min: u32, level_max:
         let i = &s[src];
         if i.btree_id() == btree &&
            (level_min..=level_max).contains(&u32::from(i.level())) &&
-           (start..=end).contains(&fs.journal_key_pos(i)) {
+           (start..=end).contains(&jk.key_pos(i)) {
             if i.allocated() {
                 // SAFETY: its own, dropped with it
                 unsafe { c::rust_kfree(i.src.allocated_k.cast()) };

@@ -82,10 +82,10 @@ struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c)
 	size_t count = 0;
 
 	/* the last journal_keys put frees the entries: hold one while they're out */
-	if (!atomic_inc_not_zero(&c->journal_keys.ref))
+	if (!bch2_journal_keys_tryget(c))
 		return ret;
 
-	genradix_for_each(&c->journal_keys.entries, iter, _p)
+	genradix_for_each(&c->journal_keys.v.entries, iter, _p)
 		if (*_p)
 			count++;
 
@@ -98,7 +98,7 @@ struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c)
 	if (!ret.entries)
 		die("malloc");
 
-	genradix_for_each(&c->journal_keys.entries, iter, _p)
+	genradix_for_each(&c->journal_keys.v.entries, iter, _p)
 		if (*_p)
 			ret.entries[ret.nr++] = *_p;
 

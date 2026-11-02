@@ -206,9 +206,11 @@ fn ignore_journal_rewind_errors(fs: &Fs) {
 
 /* journal replay: */
 
-fn journal_replay_accounting_key(t: &TransAttempt<'_, '_>, k: &c::journal_key) -> Result<(), BchError> {
+fn journal_replay_accounting_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, k: &c::journal_key)
+    -> Result<(), BchError>
+{
     let fs = t.fs();
-    let bk = fs.journal_key(k);
+    let bk = jk.key(k);
 
     let mut iter = BtreeNodeIter::new(t, k.btree_id(), bk.k.p, c::BTREE_MAX_DEPTH, k.level().into(),
                                       BtreeIterFlags::INTENT);
@@ -234,9 +236,9 @@ fn journal_replay_accounting_key(t: &TransAttempt<'_, '_>, k: &c::journal_key) -
     t.update(iter.iter(), &new, UpdateTriggerFlags::NORUN)
 }
 
-fn journal_replay_key(t: &TransAttempt<'_, '_>, idx: usize) -> Result<(), BchError> {
+fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, idx: usize) -> Result<(), BchError> {
     let fs = t.fs();
-    let k = &fs.journal_keys.keys()[idx];
+    let k = &jk.keys()[idx];
     let mut iter_flags = BtreeIterFlags::INTENT | BtreeIterFlags::NOT_EXTENTS;
     let mut update_flags = UpdateTriggerFlags::NORUN;
 
@@ -262,13 +264,13 @@ fn journal_replay_key(t: &TransAttempt<'_, '_>, idx: usize) -> Result<(), BchErr
         update_flags |= UpdateTriggerFlags::KEY_CACHE_RECLAIM;
     }
 
-    let bk = fs.journal_key(k);
+    let bk = jk.key(k);
     let mut iter = BtreeNodeIter::new(t, k.btree_id(), bk.k.p, c::BTREE_MAX_DEPTH, k.level().into(), iter_flags);
     iter.iter().traverse(t)?;
 
     if unlikely(iter.iter().node_at_iter_level(t).is_none()) {
         drop(iter);
-        return journal_replay_key_no_node(t, idx, iter_flags);
+        return journal_replay_key_no_node(t, jk, idx, iter_flags);
     }
 
     /* Must be checked with btree locked: */
@@ -287,12 +289,12 @@ fn journal_replay_key(t: &TransAttempt<'_, '_>, idx: usize) -> Result<(), BchErr
 
 #[cold]
 #[inline(never)]
-fn journal_replay_key_no_node(t: &TransAttempt<'_, '_>, idx: usize, iter_flags: BtreeIterFlags)
-    -> Result<(), BchError>
+fn journal_replay_key_no_node(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, idx: usize,
+                              iter_flags: BtreeIterFlags) -> Result<(), BchError>
 {
     let fs = t.fs();
-    let k = &fs.journal_keys.keys()[idx];
-    let bk = fs.journal_key(k);
+    let k = &jk.keys()[idx];
+    let bk = jk.key(k);
 
     let mut buf = Printbuf::new();
     prt!(&mut buf, "btree={} level={} {}", k.btree_id(), k.level(), BkeySC::from(bk).to_text(fs));
@@ -307,7 +309,7 @@ fn journal_replay_key_no_node(t: &TransAttempt<'_, '_>, idx: usize, iter_flags: 
     if !k.allocated() {
         bch_notice!(fs, "dropping key in journal replay for depth that does not exist because we're recovering from scan\n{}",
                     buf);
-        fs.journal_keys.mark_overwritten(idx);
+        jk.mark_overwritten(idx);
         return Ok(());
     }
 
@@ -325,7 +327,8 @@ fn journal_sort_seq_cmp(l: &c::journal_key, r: &c::journal_key) -> Ordering {
 }
 
 fn journal_replay(fs: &Fs) -> Result<(), BchError> {
-    let jk = &fs.journal_keys;
+    let jk = fs.journal_keys_get().expect("journal replay after recovery was done with the journal keys");
+    let jk = jk.value();
     let keys = jk.keys();
     let start_seq = fs.journal_replay_seq_start.get();
     let end_seq = fs.journal_replay_seq_end.get();
@@ -334,7 +337,6 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
     let replay_flags = CommitFlags::JOURNAL_REPLAY | CommitFlags::NO_ENOSPC | CommitFlags::NO_SKIP_NOOPS |
                        CommitFlags::SKIP_ACCOUNTING_APPLY;
 
-    assert!(jk.ref_.load(Relaxed) != 0);
     assert_eq!(keys.gap, keys.len());
 
     if !keys.is_empty() {
@@ -345,7 +347,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
     let trans = btree_trans!(fs);
 
     let replays_accounting = |k: &c::journal_key| {
-        fs.journal_key(k).k.key_type() == kt::KEY_TYPE_accounting && !k.allocated()
+        jk.key(k).k.key_type() == kt::KEY_TYPE_accounting && !k.allocated()
     };
     let accounting_total = keys.iter().filter(|k| replays_accounting(k)).count();
 
@@ -366,7 +368,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
         let flags = CommitOpts::new()
             .flags(replay_flags | CommitFlags::JOURNAL_RECLAIM | CommitFlags::NO_JOURNAL_RES)
             .watermark(Watermark::RECLAIM);
-        if let Err(e) = commit_do(&trans, None, flags, |t| journal_replay_accounting_key(t, k)) {
+        if let Err(e) = commit_do(&trans, None, flags, |t| journal_replay_accounting_key(t, jk, k)) {
             fs_fatal_error!(fs, "error replaying accounting; {}", e.msg());
             return Err(e);
         }
@@ -414,7 +416,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
             commit_do(&trans, None,
                       replay_flags | CommitFlags::JOURNAL_RECLAIM |
                       if !k.allocated() { CommitFlags::NO_JOURNAL_RES } else { CommitFlags::empty() },
-                      |t| journal_replay_key(t, idx)).is_ok();
+                      |t| journal_replay_key(t, jk, idx)).is_ok();
         if !replayed {
             keys_sorted.push(idx, GFP_KERNEL)?;
         }
@@ -442,7 +444,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
         if !k.allocated() {
             flags = flags.flags(CommitFlags::NO_JOURNAL_RES).watermark(Watermark::RECLAIM);
         }
-        if let Err(e) = commit_do(&trans, None, flags, |t| journal_replay_key(t, idx)) {
+        if let Err(e) = commit_do(&trans, None, flags, |t| journal_replay_key(t, jk, idx)) {
             return bch_err_msg!(fs, Err(e), "while replaying key at btree={} level={}:", k.btree_id(), k.level());
         }
 
@@ -468,7 +470,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
         fs.journal_meta()?;
     }
 
-    if !jk.keys().is_empty() {
+    if !keys.is_empty() {
         let _ = fs.journal_log_msg(message!("journal replay finished"));
     }
     Ok(())
@@ -524,7 +526,8 @@ fn journal_replay_early(fs: &Fs, clean: Option<&c::bch_sb_field_clean>) -> Resul
             journal_replay_entry_early(fs, entry)?;
         }
     } else {
-        for (_, j) in unsafe { fs.journal_replays() } {
+        let jk = fs.journal_keys_get().expect("early replay after recovery was done with the journal keys");
+        for (_, j) in jk.value().replays() {
             for entry in j.entries() {
                 journal_replay_entry_early(fs, entry)?;
             }
@@ -583,7 +586,9 @@ fn set_may_go_rw(fs: &Fs) -> Result<(), BchError> {
      * setting journal_key->overwritten: it will be accessed by multiple
      * threads
      */
-    unsafe { fs.journal_keys.keys_mut() }.make_contiguous();
+    if let Some(jk) = fs.journal_keys_get() {
+        unsafe { jk.value().keys_mut() }.make_contiguous();
+    }
 
     fs.flags.set(Flag::BCH_FS_may_go_rw, true);
 
@@ -661,35 +666,33 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
             sb.published().clean.set(0);
         }
 
-        let mut last_journal_entry = fs.journal_keys.entries.iter_rev()
-            .map(|(_, &i)| i)
-            .find(|&i| unsafe { i.as_ref() }.is_some_and(|i| !i.ignored()));
+        let jk = fs.journal_keys_get().expect("recovery after it was done with the journal keys");
+        let jk = jk.value();
+        let mut last_journal_entry = jk.replays_rev().find(|(i, _)| !i.ignored()).map(|(_, j)| j);
 
         if last_journal_entry.is_none() {
             fsck_err_on!(fs, fs.sb.clean.get() == 0, id::dirty_but_no_journal_entries,
                          "no journal entries found")?;
             if clean.is_some() {
                 use_clean = true;
-            } else {
-                last_journal_entry = fs.journal_keys.entries.iter_rev().map(|(_, &i)| i).find(|i| !i.is_null());
-                if let Some(i) = last_journal_entry {
-                    let i = unsafe { &mut *i };
-                    i.ignore_blacklisted = false;
-                    i.ignore_not_dirty = false;
-                    /*
-                     * This was probably a NO_FLUSH entry,
-                     * so last_seq was garbage - but we know
-                     * we're only using a single journal
-                     * entry, set it here:
-                     */
-                    i.j.last_seq = i.j.seq;
-                }
+            } else if let Some((_, &i)) = jk.entries.iter_rev().find(|(_, i)| !i.is_null()) {
+                let i = unsafe { &mut *i };
+                i.ignore_blacklisted = false;
+                i.ignore_not_dirty = false;
+                /*
+                 * This was probably a NO_FLUSH entry,
+                 * so last_seq was garbage - but we know
+                 * we're only using a single journal
+                 * entry, set it here:
+                 */
+                i.j.last_seq = i.j.seq;
+                last_journal_entry = jk.replays_rev().next().map(|(_, j)| j);
             }
         }
 
         if !use_clean && fs.sb.clean.get() != 0 {
-            if let (Some(c), Some(i)) = (clean.as_deref(), last_journal_entry) {
-                if !fs.verify_superblock_clean(c, unsafe { c::journal_replay::jset(i) })? {
+            if let (Some(c), Some(j)) = (clean.as_deref(), last_journal_entry) {
+                if !fs.verify_superblock_clean(c, j)? {
                     clean = None;
                 }
             }

@@ -207,14 +207,14 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 	 * ascending seq order, so take two passes rather than reversing.
 	 */
 	u64 newest_time = 0;
-	genradix_for_each(&c->journal_keys.entries, radix_iter, _i) {
+	genradix_for_each(&c->journal_keys.v.entries, radix_iter, _i) {
 		struct journal_replay *i = *_i;
 
 		if (!journal_replay_ignore(i) && !JSET_NO_FLUSH(&i->j))
 			newest_time = max(newest_time, (u64) jset_datetime(&i->j));
 	}
 
-	genradix_for_each(&c->journal_keys.entries, radix_iter, _i) {
+	genradix_for_each(&c->journal_keys.v.entries, radix_iter, _i) {
 		struct journal_replay *i = *_i;
 
 		if (journal_replay_ignore(i) || JSET_NO_FLUSH(&i->j))
@@ -252,7 +252,7 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 	bch2_moving_ctxt_init(&ctxt, c, &stats, (struct write_point_specifier) {}, false);
 
 	struct btree_trans *trans = ctxt.trans;
-	struct journal_keys *keys = &c->journal_keys;
+	struct journal_keys *keys = &c->journal_keys.v;
 
 	/*
 	 * Scrub one flush range at a time, newest first. Within each range,

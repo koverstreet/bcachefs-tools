@@ -15,7 +15,7 @@ use crate::alloc::replicas::can_write_with_devs;
 use crate::btree::cache::{bch2_fs_btree_exit, bch2_fs_btree_init, bch2_fs_btree_init_early};
 use crate::btree::interior::bch2_free_pending_node_rewrites;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
-use crate::btree::journal_overlay::bch2_journal_keys_put;
+use crate::btree::journal_overlay::journal_keys_put_initial;
 use crate::btree::read::bch2_btree_flush_all_reads;
 use crate::btree::write_buffer::bch2_btree_write_buffer_stop;
 use crate::data::checksum::encryption_init;
@@ -995,10 +995,7 @@ unsafe impl KobjOwner for Fs {
 unsafe fn release(p: *mut Fs) {
     let fs = unsafe { &*p };
 
-    if fs.journal_keys.initial_ref_held {
-        bch2_journal_keys_put(fs);
-    }
-    assert_eq!(fs.journal_keys.ref_.load(Relaxed), 0);
+    journal_keys_put_initial(fs);
 
     #[cfg(CONFIG_UNICODE)]
     unsafe { c::utf8_unload(fs.cf_encoding) };

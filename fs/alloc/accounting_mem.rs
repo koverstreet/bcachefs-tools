@@ -408,10 +408,10 @@ fn read_key(fs: &Fs, entries: &mut KVVec<Entry>, k: BkeySC<'_>) -> Result<(), Bc
 
 /// Journal key @i's newer deltas, the keys after it at its position, added
 /// into it and marked overwritten: the index past them.
-fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, i: usize) -> Result<usize, BchError> {
-    let keys = fs.journal_keys.keys();
-    let key = |j: usize| fs.journal_key(&keys[j]);
-    let same_pos = |j: usize| j < keys.len() && fs.journal_key_cmp(&keys[i], &keys[j]).is_eq();
+fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, jk: &c::journal_keys, i: usize) -> Result<usize, BchError> {
+    let keys = jk.keys();
+    let key = |j: usize| jk.key(&keys[j]);
+    let same_pos = |j: usize| j < keys.len() && jk.key_cmp(&keys[i], &keys[j]).is_eq();
 
     /* Not a key to add deltas into: the accounting keys after it are a run of their own */
     if BkeySC::from(key(i)).arm::<Accounting>().is_none() {
@@ -446,33 +446,35 @@ fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, i: usize) -> Result<usize, B
         end += 1;
     }
 
-    let k = unsafe { &mut *BkeyI::from_raw_mut(fs.journal_key_k(&keys[i])) };
+    let k = unsafe { &mut *BkeyI::from_raw_mut(jk.key_k(&keys[i])) };
     for j in i + 1..end {
         let n = key(j);
         if BkeySC::from(n).arm::<Accounting>().is_some() {
             accounting::accumulate(k, BkeySC::from(n));
-            fs.journal_keys.mark_overwritten(j);
+            jk.mark_overwritten(j);
         }
     }
     Ok(end)
 }
 
-fn accumulate_and_read(ctx: &impl FsckErrCtx, fs: &Fs, entries: &mut KVVec<Entry>, i: usize)
-    -> Result<usize, BchError>
+fn accumulate_and_read(ctx: &impl FsckErrCtx, fs: &Fs, journal_keys: &c::journal_keys,
+                       entries: &mut KVVec<Entry>, i: usize) -> Result<usize, BchError>
 {
-    let next = accumulate_newer(ctx, fs, i)?;
-    read_key(fs, entries, fs.journal_key(&fs.journal_keys.keys()[i]).into())?;
+    let next = accumulate_newer(ctx, fs, journal_keys, i)?;
+    read_key(fs, entries, journal_keys.key(&journal_keys.keys()[i]).into())?;
     Ok(next)
 }
 
-fn read_walk(trans: &BtreeTrans<'_>, entries: &mut KVVec<Entry>) -> Result<(), BchError> {
+fn read_walk(trans: &BtreeTrans<'_>, journal_keys: &c::journal_keys, entries: &mut KVVec<Entry>)
+    -> Result<(), BchError>
+{
     let fs = trans.fs();
-    let keys = fs.journal_keys.keys();
-    let cmp = |p: Bpos, j: usize| fs.journal_key_cmp_pos(format::Btree::accounting, 0, p, &keys[j]);
+    let keys = journal_keys.keys();
+    let cmp = |p: Bpos, j: usize| journal_keys.key_cmp_pos(format::Btree::accounting, 0, p, &keys[j]);
 
     /* Find the range of accounting keys from the journal: */
-    let mut jk = fs.journal_key_search(format::Btree::accounting, 0, POS_MIN);
-    let end = fs.journal_key_search(format::Btree::accounting, 0, SPOS_MAX);
+    let mut jk = journal_keys.search(format::Btree::accounting, 0, POS_MIN);
+    let end = journal_keys.search(format::Btree::accounting, 0, SPOS_MAX);
 
     /*
      * Iterate over btree and journal accounting simultaneously:
@@ -491,17 +493,17 @@ fn read_walk(trans: &BtreeTrans<'_>, entries: &mut KVVec<Entry>) -> Result<(), B
         }
 
         while jk < end && cmp(k.k.p, jk).is_gt() {
-            jk = accumulate_and_read(t, fs, entries, jk)?;
+            jk = accumulate_and_read(t, fs, journal_keys, entries, jk)?;
         }
 
         while jk < end && cmp(k.k.p, jk).is_eq() &&
-              { fs.journal_key(&keys[jk]).k.bversion } <= { k.k.bversion } {
-            fs.journal_keys.mark_overwritten(jk);
+              { journal_keys.key(&keys[jk]).k.bversion } <= { k.k.bversion } {
+            journal_keys.mark_overwritten(jk);
             jk += 1;
         }
 
         if jk < end && cmp(k.k.p, jk).is_eq() {
-            jk = accumulate_and_read(t, fs, entries, jk)?;
+            jk = accumulate_and_read(t, fs, journal_keys, entries, jk)?;
         }
 
         let acc_k = DiskAccountingPos::from_bpos(k.k.p);
@@ -511,7 +513,7 @@ fn read_walk(trans: &BtreeTrans<'_>, entries: &mut KVVec<Entry>) -> Result<(), B
 
         if !is_mem(&acc_k) {
             let next = acc_k.next_type_start();
-            let next = if jk < end { next.min(fs.journal_key_pos(&keys[jk])) } else { next };
+            let next = if jk < end { next.min(journal_keys.key_pos(&keys[jk])) } else { next };
             return Ok(LoopFlow::ContinueFrom(next));
         }
 
@@ -521,7 +523,7 @@ fn read_walk(trans: &BtreeTrans<'_>, entries: &mut KVVec<Entry>) -> Result<(), B
 
     lockrestart_do(trans, |t| {
         while jk < end {
-            jk = accumulate_and_read(t, fs, entries, jk)?;
+            jk = accumulate_and_read(t, fs, journal_keys, entries, jk)?;
         }
         Ok(())
     })
@@ -713,8 +715,10 @@ fn read(fs: &Fs) -> Result<(), BchError> {
     let usage = percpu_field!(fs.capacity.pcpu.get(), counters.usage);
     unsafe { usage.zero() };
 
+    let journal_keys = fs.journal_keys_get().expect("accounting read after recovery was done with the journal keys");
+    let journal_keys = journal_keys.value();
     let mut entries = KVVec::new();
-    let walked = read_walk(&trans, &mut entries);
+    let walked = read_walk(&trans, journal_keys, &mut entries);
 
     /*
      * Entries were inserted unsorted during the btree/journal walk above.
@@ -727,7 +731,7 @@ fn read(fs: &Fs) -> Result<(), BchError> {
     walked?;
 
     trans.unlock();
-    unsafe { fs.journal_keys.drop_overwritten() };
+    unsafe { journal_keys.drop_overwritten() };
 
     /* Assert no duplicates - the btree/journal walk must produce unique keys */
     {

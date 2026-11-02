@@ -1706,8 +1706,8 @@ static void bch2_insert_fixup_btree_ptr(struct btree_update *as,
 	BUG_ON(insert->k.type == KEY_TYPE_btree_ptr_v2 &&
 	       !btree_ptr_sectors_written(bkey_i_to_s_c(insert)));
 
-	if (unlikely(!test_bit(JOURNAL_replay_done, &c->journal.flags))) {
-		guard(mutex)(&c->journal_keys.overwrite_lock);
+	if (unlikely(trans->journal_replay_not_finished)) {
+		guard(mutex)(&c->journal_keys.v.overwrite_lock);
 		bch2_journal_key_check_or_overwrite(c, b->c.btree_id, b->c.level,
 						    insert->k.p, false);
 	}

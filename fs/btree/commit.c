@@ -766,11 +766,11 @@ static int bch2_check_drop_overwrites_from_journal(struct btree_trans *trans, bo
 noinline __cold
 static int trans_commit_to_journal_replay_pre(struct btree_trans *trans, enum bch_trans_commit_flags flags)
 {
-	mutex_lock(&trans->c->journal_keys.overwrite_lock);
+	mutex_lock(&trans->c->journal_keys.v.overwrite_lock);
 
 	if ((flags & BCH_TRANS_COMMIT_journal_replay) &&
 	    bch2_check_drop_overwrites_from_journal(trans, true)) {
-		mutex_unlock(&trans->c->journal_keys.overwrite_lock);
+		mutex_unlock(&trans->c->journal_keys.v.overwrite_lock);
 		bch2_trans_unlock_updates_write(trans);
 		return btree_trans_restart(trans, BCH_ERR_transaction_restart_journal_overwrites_changed);
 	}
@@ -783,7 +783,7 @@ static void trans_commit_to_journal_replay_post(struct btree_trans *trans, int r
 {
 	if (!ret)
 		bch2_check_drop_overwrites_from_journal(trans, false);
-	mutex_unlock(&trans->c->journal_keys.overwrite_lock);
+	mutex_unlock(&trans->c->journal_keys.v.overwrite_lock);
 }
 
 static int journal_reclaim_wait_done(struct bch_fs *c)
