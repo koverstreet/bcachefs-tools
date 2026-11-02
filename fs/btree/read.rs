@@ -27,7 +27,7 @@ use crate::types::{Le32, c_default};
 use crate::util::bio::{buf_nr_bvecs, Bio, BioBuf, BioOwner};
 use crate::util::refcount::TryRefcount;
 use crate::util::backref::BackRef;
-use crate::util::task::{Resumable, Resume, Spawn, TaskBox};
+use crate::util::task::{spawn_static, Resumable, Resume, Spawn};
 use crate::util::vstructs::{cast_plain, Head, SelfSized, Unvalidated};
 use crate::util::Printbuf;
 use crate::util::sleep::Sleep;
@@ -301,8 +301,7 @@ pub fn btree_node_scrub(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, dev: u
     let Some(r) = ReplicaRead::new(fs, k, dev)? else { return Ok(()) };
     let key = BtreeKeyBuf::new(btree, level, k);
 
-    TaskBox::new(Spawn::Queue(&fs.btree.read_complete_wq), rewrite_if_bad(write, fs_ref, key, r))
-        .map(TaskBox::start)
+    spawn_static(Spawn::Queue(&fs.btree.read_complete_wq), rewrite_if_bad(write, fs_ref, key, r))
 }
 
 async fn rewrite_if_bad(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, mut r: ReplicaRead<'static>) {

@@ -177,13 +177,13 @@ RUSTFLAGS_REMOVE_mod.o += --edition=2021
 RUSTFLAGS_mod.o += --edition=2024
 
 # mod.rs's cfi_encoding, auto_traits, negative_impls, min_specialization,
-# rustc_attrs, context_ext, local_waker, const_type_name and core_intrinsics
-# (for bch_return_address), which kbuild's
+# rustc_attrs, context_ext, local_waker, async_fn_traits, unboxed_closures,
+# const_type_name and core_intrinsics (for bch_return_address), which kbuild's
 # -Zallow-features doesn't list - and it's after RUSTFLAGS_mod.o, the last one
 # being what rustc takes. So another, its list and ours, after it:
 # rust_common_cmd is expanded when mod.o's recipe runs, by then with kbuild's
 # list. (The vendored path allows any feature.)
-$(obj)/mod.o: private rust_common_cmd += -Zallow-features=$(rust_allowed_features),cfi_encoding,auto_traits,negative_impls,min_specialization,rustc_attrs,context_ext,local_waker,const_type_name,core_intrinsics
+$(obj)/mod.o: private rust_common_cmd += -Zallow-features=$(rust_allowed_features),cfi_encoding,auto_traits,negative_impls,min_specialization,rustc_attrs,context_ext,local_waker,async_fn_traits,unboxed_closures,const_type_name,core_intrinsics
 
 # And our CONFIG defines, which the kernel's rustc_cfg doesn't have, not being
 # in its .config: -DCONFIG_FOO=1 is --cfg CONFIG_FOO. The Rust tests them as

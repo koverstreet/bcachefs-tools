@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A mover's data update: an UpdateTask (update_task.rs) on the moving
+//! A mover's data update: a data update's task (update_task.rs) on the moving
 //! context's run queue. The run queue runs only in the mover's waits, so
 //! updates run on the mover's thread between its own steps: a mover can't
 //! issue faster than it completes, and its work stays out of everyone else's
@@ -26,7 +26,7 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::scrub_journal::BadRef;
 use crate::data::update::{read_err_benign, IOPRIO_IDLE};
 use crate::errcode::BchError;
-use crate::data::update_task::{Body, Update, UpdateTask};
+use crate::data::update_task::{self, Body, Update};
 use crate::util::refcount::RefGuard;
 use crate::util::task::{Resume, Spawn};
 use core::ffi::{c_int, c_uint};
@@ -145,7 +145,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
 
     // SAFETY: flush_all() waits for every task before the context goes
     let task = unsafe {
-        UpdateTask::spawn(t, Spawn::Run(moving.runq()), bch_errcode::BCH_ERR_ENOMEM_move_extent)
+        update_task::spawn(t, Spawn::Run(moving.runq()), bch_errcode::BCH_ERR_ENOMEM_move_extent)
     }?;
     // On error init() has cleaned up, and the task is dropped unstarted
     let mut u = match task.init(t, Some(iter), Some(moving), moving.write_point(), io_opts, *data_opts, btree, k) {
@@ -162,7 +162,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
     let read_io = moving.io_start(false, size);
     let bucket = bucket_in_flight.map(|b| unsafe { RefGuard::get(b) });
 
-    u.start(|b| run(b, read_io, bucket));
+    u.start(|b| async move |_: &Update| run(b, read_io, bucket).await);
 
     moving.stats().keys_moved.fetch_add(1, Relaxed);
     moving.stats().sectors_moved.fetch_add(size.into(), Relaxed);

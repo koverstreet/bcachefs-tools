@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A data update run as an async task. UpdateTask is the task's future: the
-//! update, an Update, and the body - the async fn that runs it, a mover's
-//! (moving_update.rs) or a promote's (promote.rs).
+//! A data update run as an async task: the update, an Update, is the home of
+//! its task's box (util/task's TaskBox), and the body - the async fn that
+//! runs it, a mover's (moving_update.rs) or a promote's (promote.rs) - its
+//! future.
 //!
-//! The update is pinned in the task. C holds pointers into it - the read path
+//! The update is pinned in the box. C holds pointers into it - the read path
 //! into rbio, the write path into op - and the endios get from those to its
 //! Dones by container_of.
 //!
 //! Each step of its life has a type:
-//! - spawn() makes the task, with the update zeroed: Spawned.
+//! - spawn() makes the box, with the update zeroed and no task yet: Spawned.
 //! - init() sets the update up in the spawner's transaction: Ready - or, on
-//!   error, the task's dropped unstarted. The spawner start()s the task with
-//!   its body. A mover's body issues the read itself, Body::issue_read(); a
-//!   promote's waits on the one C issues once the promote's made, its Done
-//!   made first, by start_read().
+//!   error, the box is dropped. The spawner start()s it with its body, made
+//!   then, as what it's given only exists then. A mover's body issues the
+//!   read itself, Body::issue_read(); a promote's waits on the one C issues
+//!   once the promote's made, its Done made first, by start_read(), for the
+//!   task to be.
 //! - The body holds the update as a Body.
 //!
 //! Body derefs to the data_update, and Ready to its Body. While an IO is in flight C writes
@@ -43,22 +45,25 @@ use crate::fs::Fs;
 use crate::util::task::{Completion, Done};
 use crate::util::gather::Gather;
 use crate::util::task::{waiter, Resumable, Resume, Spawn};
-use crate::util::task::TaskBox;
+use crate::util::task::TaskSlot;
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
 use core::ffi::c_int;
-use core::future::Future;
 use core::mem::MaybeUninit;
-use core::ops::{Deref, DerefMut};
+use core::ops::{AsyncFnOnce, Deref, DerefMut};
 use core::pin::Pin;
 use core::ptr::NonNull;
-use core::task::{Context, Poll};
 use pin_init::{pin_data, pin_init, pinned_drop};
 use crate::format::Btree;
 
 // SAFETY: its pointers - to the filesystem, its devices, its read - are good
 // on any thread, and an update runs on whichever thread its IO completes on
 unsafe impl Send for c::data_update {}
+
+// SAFETY: shared as its box's home - its task's, its endios', the async object
+// list's walk - each by its own protocol: the Dones and Gather atomic, the
+// data_update C's or the Body's in turn
+unsafe impl Sync for Update {}
 
 #[pin_data(PinnedDrop)]
 pub struct Update {
@@ -77,109 +82,100 @@ pub struct Update {
     u:         UnsafeCell<MaybeUninit<c::data_update>>,
 }
 
-#[pin_data]
-pub struct UpdateTask<B> {
-    /// Declared first so it's dropped first: it points into @update
-    #[pin]
-    body:   Option<B>,
-    #[pin]
-    update: Update,
+/// Makes the update's box, its task to run on @at, with the update zeroed. Out
+/// of memory is reported as @enomem.
+///
+/// # Safety
+/// @at, and what the body borrows, outlive the task.
+pub unsafe fn spawn<'q, M>(t: &TransAttempt<'_, '_>, at: Spawn<'q, 'static>, enomem: c::bch_errcode)
+    -> Result<Spawned<'q, M>, BchError>
+where
+    M: for<'h> AsyncFnOnce<(&'h Update,), Output = ()>,
+    for<'h> <M as AsyncFnOnce<(&'h Update,)>>::CallOnceFuture: Send,
+{
+    let fs = t.fs();
+    t.allocate_dropping_locks(|| {
+        let init = pin_init!(Update {
+            read:      None,
+            write:     None,
+            turn <- Gather::new(),
+            found:     None,
+            listed:    AsyncObjSlot::none(),
+            held:      None,
+            u:         UnsafeCell::new(MaybeUninit::zeroed()),
+        });
+        TaskSlot::alloc(init)
+    })
+    .map(|slot| Spawned { slot, at })
+    .map_err(|e| if e.matches(c::ENOMEM) { fs.err(enomem) } else { e })
 }
 
-impl<B: Future<Output = ()> + Send> UpdateTask<B> {
-    /// Makes the task, to run on @at, with the update zeroed. Out of memory is
-    /// reported as @enomem.
-    ///
-    /// # Safety
-    /// @at, and what the body borrows, outlive the task.
-    pub unsafe fn spawn<'q>(t: &TransAttempt<'_, '_>, at: Spawn<'q, '_>, enomem: c::bch_errcode)
-        -> Result<Spawned<'q, B>, BchError>
-    {
-        let fs = t.fs();
-        t.allocate_dropping_locks(|| {
-            let init = pin_init!(Self {
-                body: None,
-                update <- pin_init!(Update {
-                    read:      None,
-                    write:     None,
-                    turn <- Gather::new(),
-                    found:     None,
-                    listed:    AsyncObjSlot::none(),
-                    held:      None,
-                    u:         UnsafeCell::new(MaybeUninit::zeroed()),
-                }),
-            });
-            TaskBox::new(at, init)
-        })
-        .map(Spawned)
-        .map_err(|e| if e.matches(c::ENOMEM) { fs.err(enomem) } else { e })
-    }
-}
-
-impl<B: Future<Output = ()>> Future for UpdateTask<B> {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        self.project().body.as_pin_mut().expect("a data update's task started without its body").poll(cx)
-    }
-}
-
-/// A task whose update is still zeroed: a TaskBox, so freed a grace period
+/// An update still zeroed, in a box with no task yet: freed a grace period
 /// after it's done - the async object list's walk may still be reading it.
-pub struct Spawned<'q, B: Future<Output = ()>>(TaskBox<'q, UpdateTask<B>>);
+pub struct Spawned<'q, M> {
+    slot: TaskSlot<'q, Update, M>,
+    at:   Spawn<'q, 'static>,
+}
 
-impl<'q, B: Future<Output = ()> + Send> Spawned<'q, B> {
+impl<'q, M> Spawned<'q, M>
+where
+    M: for<'h> AsyncFnOnce<(&'h Update,), Output = ()>,
+    for<'h> <M as AsyncFnOnce<(&'h Update,)>>::CallOnceFuture: Send,
+{
     /// Sets the update up with data_update::init() and readies it for its
-    /// read: sets op.end_io, and lists it. On error the task is dropped
-    /// unstarted.
+    /// read: sets op.end_io, and lists it. On error the box is dropped.
     #[allow(clippy::too_many_arguments)]
     pub fn init(mut self, t: &TransAttempt<'_, '_>, iter: Option<&BtreeIter<'_>>, moving: Option<&Moving<'_>>,
                 wp: c::write_point_specifier, io_opts: &c::bch_inode_opts, data_opts: c::data_update_opts,
-                btree: Btree, k: BkeySC<'_>) -> Result<Ready<'q, B>, BchError> {
-        let mut up = self.0.get().future().project().update;
-        // SAFETY: zeroed, and pinned in the task
+                btree: Btree, k: BkeySC<'_>) -> Result<Ready<'q, M>, BchError> {
+        let mut up = self.slot.home();
+        // SAFETY: zeroed, and pinned in the box
         unsafe {
             let u = &mut *up.u.get().cast::<c::data_update>();
             let held = u.init(t, iter, moving, wp, io_opts, data_opts, btree, k)?;
             u.op.end_io = Some(write_done);
             *up.as_mut().project().held = Some(held);
         }
-        // SAFETY: a field of the pinned task
-        let slot = unsafe { AsyncObjSlot::new(t.fs(), &*up) };
-        *up.as_mut().project().listed = slot;
+        // SAFETY: the box's home, pinned
+        let listed = unsafe { AsyncObjSlot::new(t.fs(), &*up) };
+        *up.as_mut().project().listed = listed;
 
         let body = Body { up: NonNull::from(up.as_ref().get_ref()), read: None };
-        Ok(Ready { task: self.0, body })
+        Ok(Ready { slot: self.slot, at: self.at, body })
     }
 }
 
-/// An update that's set up, in a task not started yet: the spawner start()s
+/// An update that's set up, its box's task not made yet: the spawner start()s
 /// it.
-pub struct Ready<'q, B: Future<Output = ()>> {
-    task: TaskBox<'q, UpdateTask<B>>,
+pub struct Ready<'q, M> {
+    slot: TaskSlot<'q, Update, M>,
+    at:   Spawn<'q, 'static>,
     body: Body,
 }
 
-impl<B: Future<Output = ()> + Send> Ready<'_, B> {
+impl<'q, M> Ready<'q, M>
+where
+    M: for<'h> AsyncFnOnce<(&'h Update,), Output = ()> + 'q,
+    for<'h> <M as AsyncFnOnce<(&'h Update,)>>::CallOnceFuture: Send,
+{
     /// Right before the read's issued.
     pub fn start_read(&mut self) {
-        let task = self.task.get();
-        // SAFETY: the Body, in the task, awaits it or drops it; the update's,
-        // not yet reached by its IO
-        let (slot, waiter) = unsafe { (&mut (*self.body.up.as_ptr()).read, waiter::Async::of(&task)) };
+        // SAFETY: the Body, in the task to be, awaits it or drops it; the
+        // update's, not yet reached by its IO
+        let (slot, waiter) = unsafe { (&mut (*self.body.up.as_ptr()).read, waiter::Async::of_ref(self.slot.task())) };
         self.body.read = Some(Completion::new(slot, waiter));
     }
 
-    /// Starts the task, @body running the update.
-    pub fn start(self, body: impl FnOnce(Body) -> B) {
-        let Ready { mut task, body: b } = self;
-        task.get().future().project().body.set(Some(body(b)));
+    /// Starts the task, its future made by @body from the update's Body.
+    pub fn start(self, body: impl FnOnce(Body) -> M) {
+        let Ready { slot, at, body: b } = self;
+        let task = slot.init(at, body(b), None).expect("a queue's or run queue's task: nothing in it fails");
         // SAFETY: spawn()'s: its queue, and what the body borrows, outlive it
         unsafe { task.start_unchecked() };
     }
 }
 
-impl<B: Future<Output = ()>> Deref for Ready<'_, B> {
+impl<M> Deref for Ready<'_, M> {
     type Target = Body;
 
     fn deref(&self) -> &Body {
@@ -187,7 +183,7 @@ impl<B: Future<Output = ()>> Deref for Ready<'_, B> {
     }
 }
 
-impl<B: Future<Output = ()>> DerefMut for Ready<'_, B> {
+impl<M> DerefMut for Ready<'_, M> {
     fn deref_mut(&mut self) -> &mut Body {
         &mut self.body
     }

@@ -27,7 +27,7 @@
 //! A job can't borrow its caller's transaction - BtreeTrans isn't Sync - so
 //! each gets its own, as C's workers do.
 //!
-//! A job is a task (util::task) in a BoxWithTask, on its own kthread or the
+//! A job is a task (util::task) in a TaskBox, on its own kthread or the
 //! workqueue, whose future runs the job's closure and keeps what it returned
 //! in the box. Started, it holds a ref on the scope's join, a Gather, which
 //! its done puts - its last touch - and the scope frees it after the join.
@@ -40,7 +40,7 @@ use crate::errcode::BchError;
 use crate::util::alloc::KVVec;
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::kthread::Kthread;
-use crate::util::task::{waiter, BoxWithTask, Spawn};
+use crate::util::task::{waiter, Spawn, TaskBox, TaskSlot};
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
 use core::cell::{RefCell, UnsafeCell};
@@ -71,7 +71,7 @@ struct JobHome {
 unsafe impl Send for JobHome {}
 unsafe impl Sync for JobHome {}
 
-type Job<'env> = BoxWithTask<'env, JobHome>;
+type Job<'env> = TaskBox<'env, JobHome>;
 
 /// # Safety
 /// @home is a started job's: its last touch.
@@ -162,19 +162,18 @@ impl<'scope, 'env> Scope<'scope, 'env> {
             Backend::Workqueue(wq) => (Spawn::Queue(wq), Some(worker_desc(name)), false),
         };
         let home = init!(JobHome { ret: UnsafeCell::new(None), join: UnsafeCell::new(None) }? BchError);
+        let job = TaskSlot::alloc(home)?.init(at, async move |home: &JobHome| {
+            if freezable {
+                Kthread::set_freezable();
+            }
+            if let Some(desc) = desc {
+                unsafe { c::bch2_set_worker_desc(desc.as_ptr().cast()) };
+            }
+            unsafe { *home.ret.get() = Some(f()) };
+        }, Some(job_done))?;
         // SAFETY: what @f borrows outlives 'scope, and run_scope() joins or
-        // drops every job before 'scope ends; the queue is 'env's
-        let job = unsafe {
-            BoxWithTask::new(at, home, move |home: &JobHome| async move {
-                if freezable {
-                    Kthread::set_freezable();
-                }
-                if let Some(desc) = desc {
-                    c::bch2_set_worker_desc(desc.as_ptr().cast());
-                }
-                *home.ret.get() = Some(f());
-            }, job_done)
-        }?;
+        // drops every job before 'scope ends
+        let job = unsafe { core::mem::transmute::<TaskBox<'scope, JobHome>, Job<'env>>(job) };
         // not pushed, it's dropped: discarded
         self.jobs.borrow_mut().push(job)?;
         Ok(())

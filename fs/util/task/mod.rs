@@ -77,9 +77,9 @@
 //! only if the task never started.
 //!
 //! Also here: completion.rs, the Done and Completion an IO's end is waited on
-//! through; queue.rs, the RunQueue; box.rs, a task in a box of its own
-//! (TaskBox) or sharing one with what it's the task of (BoxWithTask);
-//! in_place.rs, a task in a field of what it's the task of (InPlace).
+//! through; queue.rs, the RunQueue; box.rs, a task in a box with what it's
+//! the task of (TaskBox); in_place.rs, a task in a field of what it's the
+//! task of (InPlace).
 
 mod r#box;
 pub mod completion;
@@ -89,7 +89,7 @@ mod queue;
 pub use completion::{waiter, Completion, Done, Waiter};
 pub use in_place::{InPlace, TaskEnd};
 pub use queue::RunQueue;
-pub use r#box::{spawn_detached, BoxWithTask, TaskBox};
+pub use r#box::{spawn_detached, spawn_static, TaskBox, TaskSlot};
 
 use crate::c;
 use crate::errcode::BchError;
@@ -338,17 +338,8 @@ impl<'q, F: Future + Send> Task<'q, F> {
         })
     }
 
-    pub fn future(self: Pin<&mut Self>) -> Pin<&mut F> {
-        assert!(!self.header.started.get(), "a task's future, after it's started");
-        unsafe { Pin::new_unchecked(&mut *self.get_unchecked_mut().body.future) }
-    }
-
     pub fn task(&self) -> TaskRef {
         TaskRef(NonNull::from(&self.header))
-    }
-
-    pub fn start(self: Pin<&Self>) {
-        unsafe { self.task().start() };
     }
 
     unsafe fn poll(header: NonNull<Header>, cx: &mut Context<'_>) -> Poll<()> {

@@ -6,7 +6,7 @@
 //! Promotes are opportunistic, so they're skipped when they can't be done
 //! cheaply: when the target is congested, or too many are in flight.
 //!
-//! A promote is an UpdateTask (update_task.rs) on promote_wq.
+//! A promote is a data update's task (update_task.rs) on promote_wq.
 //! bch2_promote_alloc(), called partway through a read, decides whether to
 //! promote, and if so makes the update and returns its read bio: a bounce
 //! split of the read, for the read path to read into. The read path signals
@@ -23,7 +23,7 @@ use crate::c::bch_errcode;
 use crate::data::extents::BkeyVExtents;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::update::bch2_read_bio_to_text;
-use crate::data::update_task::{Body, Update, UpdateTask};
+use crate::data::update_task::{self, Body, Update};
 use crate::errcode::{err_ptr, BchError};
 use crate::fs::{writepoint_hashed, Fs, WriteRef};
 use crate::prt;
@@ -205,7 +205,7 @@ fn promote_new(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
     // SAFETY: the task borrows nothing, and promote_wq is drained before the
     // filesystem is freed
     let task = unsafe {
-        UpdateTask::spawn(t, Spawn::Queue(fs.promote_wq()), bch_errcode::BCH_ERR_nopromote_enomem)
+        update_task::spawn(t, Spawn::Queue(fs.promote_wq()), bch_errcode::BCH_ERR_nopromote_enomem)
     }?;
     // On error - such as nocow_lock_blocked, ENOSPC_disk_reservation - the
     // task goes unstarted
@@ -218,7 +218,7 @@ fn promote_new(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
     // C issues the read into it next
     u.start_read();
     let rbio = NonNull::from(&mut u.rbio);
-    u.start(move |b| run(b, in_flight, start_time));
+    u.start(move |b| async move |_: &Update| run(b, in_flight, start_time).await);
     Ok(rbio)
 }
 

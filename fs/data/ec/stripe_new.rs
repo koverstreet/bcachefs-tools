@@ -82,7 +82,7 @@
 //! when its task next runs. It then puts the one ref on @in_flight, the
 //! Gather its task waits on.
 //!
-//! Its task, one: made with it, in its box (a BoxWithTask), unstarted, so
+//! Its task, one: made with it, in its box (a TaskBox), unstarted, so
 //! starting it can't fail - and started when it's staged, or when it's
 //! handed on before. It folds the old stripe's carried blocks in, if it's
 //! reading one; waits to be in flight; creates the stripe; and tears it down:
@@ -155,7 +155,7 @@ use crate::util::gather::{Gather, GatherRefSlot};
 use crate::util::refcount::{RefGuard, Refcount};
 use crate::util::kernel::local_clock;
 use crate::util::sleep::Sleep;
-use crate::util::task::{waiter, BoxWithTask, Spawn, TaskRef};
+use crate::util::task::{waiter, Spawn, TaskBox, TaskRef, TaskSlot};
 use crate::util::workqueue::Queue;
 use crate::util::projections::Volatile;
 use crate::util::{HumanReadable, Nsecs, Printbuf};
@@ -345,7 +345,7 @@ pub(crate) struct Internal {
 /// done takes it out of new_stripes and drops it.
 /// 'static: its queue, stripe_create_wq, is the filesystem's, which holds the
 /// box, and destroying it drains the task - see the file comment.
-pub(crate) type StripeNewBox = BoxWithTask<'static, StripeNew>;
+pub(crate) type StripeNewBox = TaskBox<'static, StripeNew>;
 
 /// The stripes being made that their heads and repairs have handed on: in
 /// bch_fs_ec.new_stripes, each until its task is done with it. A stripe is
@@ -429,15 +429,11 @@ impl StripeNew {
             internal    <- new_lock!(<- Internal::new(devs, watermark), ::pin_init::zeroed(), "stripe_new.internal"),
         }? BchError);
 
-        // SAFETY: what the task borrows outlives it - see the file comment;
-        // stripe_create_wq too, destroyed as the filesystem's freed, which
-        // drains the task's done - and the stripe, which it's in, outlives
-        // its future. Its state's interior: it's shared from here
-        let b = unsafe {
-            let wq = Queue::from_raw(fs.ec.stripe_create_wq.as_ptr());
-            BoxWithTask::new(Spawn::Queue(wq), init,
-                             |s| stripe_task(fs, BackRef::new(s)), stripe_done)
-        }?;
+        // SAFETY: stripe_create_wq is destroyed as the filesystem's freed,
+        // which drains the task's done
+        let wq = unsafe { Queue::from_raw(fs.ec.stripe_create_wq.as_ptr()) };
+        let b = TaskSlot::alloc(init)?
+            .init(Spawn::Queue(wq), async |s: &StripeNew| stripe_task(s.fs_ref(), s).await, Some(stripe_done))?;
         {
             let mut s = b.lock();
             new_stripe_key(fs, &mut s.new_stripe, algorithm as u8, nr_data as u8, nr_parity as u8,

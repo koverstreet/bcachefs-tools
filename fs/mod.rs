@@ -42,9 +42,12 @@
 // util/rcu.rs's FreeAnytime, an auto trait, which its frees specialize on
 // (rustc_attrs is #[rustc_specialization_trait]), and util/task's
 // Context::ext(), how a poll finds its task - its ContextBuilder is
-// local_waker's, too. Unstable, as the kernel's own features are: the kernel
-// build has RUSTC_BOOTSTRAP=1, and so does ours (.cargo/config.toml).
-#![feature(auto_traits, negative_impls, min_specialization, rustc_attrs, context_ext, local_waker)]
+// local_waker's, too. And util/task's TaskBox names the future an async
+// closure makes from its home (async_fn_traits, in the trait's
+// unboxed_closures form). Unstable, as the kernel's own features are: the
+// kernel build has RUSTC_BOOTSTRAP=1, and so does ours (.cargo/config.toml).
+#![feature(auto_traits, negative_impls, min_specialization, rustc_attrs, context_ext, local_waker, async_fn_traits,
+           unboxed_closures)]
 #![allow(internal_features)]
 // A type's record says which type each name it writes is: type_name(), const.
 #![cfg_attr(bch_cstruct_records, feature(const_type_name))]

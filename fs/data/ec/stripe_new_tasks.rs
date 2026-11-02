@@ -22,7 +22,6 @@ use crate::fs::Fs;
 use crate::sb::counters::events;
 use crate::sb::members::DevIoRef;
 use crate::util::alloc::KBox;
-use crate::util::backref::BackRef;
 use crate::util::rcu::read_lock;
 use crate::util::refcount::RefGuard;
 use crate::util::task::{waiter, Resume};
@@ -44,12 +43,10 @@ struct OldStripeLost {
 }
 
 #[args_stored_once]
-pub(crate) async fn stripe_task(fs: &Fs, p: BackRef<StripeNew>) {
+pub(crate) async fn stripe_task(fs: &Fs, s: &StripeNew) {
     let at = Resume::Queue(&fs.ec.stripe_create_wq);
     stack_pin_init!(let w = Working::new());
     let w = w.get_mut();
-
-    let s: &StripeNew = &p;
 
     // set before its start, by its head or repair
     let to_read = s.lock().reuse.as_ref().is_some_and(|r| r.read == OldRead::ToRead);
@@ -66,7 +63,7 @@ pub(crate) async fn stripe_task(fs: &Fs, p: BackRef<StripeNew>) {
     let ret = create(fs, s, w, fold, at).await;
     create_done(fs, s, ret);
     // SAFETY: in flight
-    unsafe { teardown(p) };
+    unsafe { teardown(s) };
 }
 
 /// Only the blocks we carry forward have to be good - everything else in the
@@ -437,15 +434,13 @@ fn create_done(fs: &Fs, s: &StripeNew, ret: Result<(), BchError>) {
 }
 
 /// What it holds given back - its writers done: the blocks they claimed
-/// closed, the rest put; a repair's writes done with it. @p is the task's,
-/// given up: what borrowed the stripe from it can't be used after. Out of
-/// new_stripes it goes in the task's done.
+/// closed, the rest put; a repair's writes done with it. Out of new_stripes
+/// it goes in the task's done.
 ///
 /// # Safety
 /// It's in flight: every writer's io ref put, so nothing else has it.
-unsafe fn teardown(p: BackRef<StripeNew>) {
-    p.release();
-    drop(p);
+unsafe fn teardown(s: &StripeNew) {
+    s.release();
 }
 
 /// The task's done: the stripe out of new_stripes and freed, its task with

@@ -43,7 +43,6 @@ use core::task::{Context, Poll};
 /// awaiting it - got the same way, a task's awaited.
 pub mod waiter {
     use super::{c, current_task, NonNull, TaskRef};
-    use core::future::Future;
 
     /// A thread, by its task_struct, with no ref.
     #[derive(Clone, Copy)]
@@ -67,13 +66,14 @@ pub mod waiter {
         }
 
         /// @task, for its owner, making the Done of an IO it submits before
-        /// the task runs.
+        /// the task runs: a TaskSlot's, for the task to be.
         ///
         /// # Safety
         /// @task waits on the Done, or drops its Completion: waited on
-        /// elsewhere, the IO would still wake @task, which may be gone.
-        pub unsafe fn of<F: Future<Output = ()> + Send>(task: &super::super::Task<'_, F>) -> Self {
-            Async(task.task())
+        /// elsewhere, the IO would still wake @task, which may be gone. And
+        /// the task's made before the Done's completed.
+        pub unsafe fn of_ref(task: TaskRef) -> Self {
+            Async(task)
         }
     }
 }

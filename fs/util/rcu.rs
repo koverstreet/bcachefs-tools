@@ -353,6 +353,11 @@ unsafe impl<T: HasRcuHead> HasRcuHead for core::mem::ManuallyDrop<T> {
     const HEAD: usize = T::HEAD;
     const WORK: bool = T::WORK;
 }
+// made or not, its T's head is memory nothing but the free uses
+unsafe impl<T: HasRcuHead> HasRcuHead for core::mem::MaybeUninit<T> {
+    const HEAD: usize = T::HEAD;
+    const WORK: bool = T::WORK;
+}
 
 pub use cstruct_macros::RcuHead;
 

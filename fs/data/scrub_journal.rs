@@ -28,7 +28,7 @@ use crate::util::log::LogMsg;
 use crate::locking::Locked;
 use crate::util::gather::{Fold, Gather, GatherRef};
 use crate::util::backref::BackRef;
-use crate::util::task::{waiter, Spawn, TaskBox};
+use crate::util::task::{spawn_static, waiter, Spawn};
 use crate::{bch_err, bch_err_ratelimited, bch_info, new_lock, prt};
 use core::ffi::c_int;
 use cstruct_macros::c_extern;
@@ -198,9 +198,8 @@ fn scrub_node(fs: &Fs, found: &Gather<Bad, waiter::Sync>, btree: Btree, level: u
 
     if !reads.is_empty() {
         let (key, found) = (BtreeKeyBuf::new(btree, level, k), found.get());
-        let task = TaskBox::new(Spawn::Queue(&fs.btree.read_complete_wq),
-                                async move { found.put(node_verdict(fs_ref, key, reads).await) });
-        ret = ret.and(task.map(TaskBox::start));
+        ret = ret.and(spawn_static(Spawn::Queue(&fs.btree.read_complete_wq),
+                                   async move { found.put(node_verdict(fs_ref, key, reads).await) }));
     }
     ret
 }
