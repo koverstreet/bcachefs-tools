@@ -113,7 +113,10 @@
 //! a grown type's at the arm's length, its later fields zero past the end.
 //! arm::<A>() is typed() for one arm, if the tag is A's - A in the storage's
 //! state, X<Unvalidated> for an Unvalidated one - and arm_mut::<A>() the
-//! same, to edit.
+//! same, to edit. And for what's done to whichever arm it is - an ops trait's
+//! methods - NAME_match!(r, a => ..) on what typed() gave, and
+//! NAME_by_tag!(tag, A => .., _ => ..) by the tag alone: `a: A`, or A, names
+//! the arm's type, A<S> in state S.
 //!
 //! Or, `union NAME in HEAD { .., size: arm }`, each value is as long as the
 //! arm its tag selects - an ACL's entries: no count to step by, so a tag this
@@ -745,8 +748,42 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                      \n")
             })
             .collect();
+        // The arms' types as paths from anywhere in the crate: the macros
+        // below expand at their callers
+        let arm_path = |ty: &str| match ty.trim().strip_prefix("c::") {
+            Some(rest) => format!("crate::c::{rest}"),
+            None => ty.trim().to_string(),
+        };
+        let match_arms: String = arms.iter()
+            .map(|a| format!("crate::c::{en}Ref::{}($a) => {{ $(type $A<S> = {}<S>;)? $body }}\n",
+                             a.name, arm_path(&a.ty)))
+            .collect();
+        let tag_arms: String = arms.iter()
+            .map(|a| format!("if t == ({}) as {tag_ty} {{ type $A<S> = {}<S>; $body }} else ",
+                             a.value, arm_path(&a.ty)))
+            .collect();
+        let dispatch = format!(
+            "#[allow(unused_macros)]\n\
+             macro_rules! {name}_match {{\n\
+                 ($r:expr, $a:ident $(: $A:ident)? => $body:expr) => {{\n\
+                     match $r {{\n{match_arms}}}\n\
+                 }};\n\
+             }}\n\
+             #[allow(unused_imports)]\n\
+             pub(crate) use {name}_match;\n\
+             \n\
+             #[allow(unused_macros)]\n\
+             macro_rules! {name}_by_tag {{\n\
+                 ($t:expr, $A:ident => $body:expr, _ => $other:expr) => {{{{\n\
+                     let t: {tag_ty} = $t;\n\
+                     {tag_arms}{{ $other }}\n\
+                 }}}};\n\
+             }}\n\
+             #[allow(unused_imports)]\n\
+             pub(crate) use {name}_by_tag;\n");
         return with_defs(defs, name, &format!(
             "{storage}\
+             {dispatch}\
              /// One of {name}'s arms, with the bytes its header says are its - as\n\
              /// many as there are, for one written before its type grew: what\n\
              /// {name}'s typed() gives.\n\

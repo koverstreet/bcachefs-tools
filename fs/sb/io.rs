@@ -261,8 +261,9 @@ pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef {
 
 impl<F: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef + ?Sized> SbField for F {}
 
-/// How a section type is validated and printed - by the sections! table, as
-/// its type says. Both get the section as read, Unvalidated, from a superblock
+/// How a section type is validated and printed: implemented on its family in
+/// Validated, X<Validated> - an arm in every family, which the dispatch by
+/// its tag names. Both get the section as read, Unvalidated, from a superblock
 /// that's Unvalidated too: validating is what finds out whether it's valid,
 /// and a printer prints one that isn't - the error saying it isn't does. One
 /// too short to be read as its type fails validation before validate() is
@@ -373,7 +374,8 @@ fn validate_at(sb: &mut bch_sb<Unvalidated>, off: usize, flags: c::bch_validate_
     -> Result<(), BchError>
 {
     let ty = field_head(sb, off).type_.get();
-    let Some(&min_len) = SECTION_MIN_LEN.get(ty as usize) else { return Ok(()) };
+    let Some(min_len) = c::bch_sb_field_by_tag!(ty, A => Some(<A<Validated> as ArmRef>::MIN_LEN), _ => None)
+        else { return Ok(()) };
 
     let invalid = || Err(bch_errcode::BCH_ERR_invalid_sb_field_size.into());
     let too_short = |err: &mut Printbuf, len| {
@@ -406,75 +408,32 @@ fn validate_at(sb: &mut bch_sb<Unvalidated>, off: usize, flags: c::bch_validate_
 const FIELD_NR: usize = c::bch_sb_field_type::BCH_SB_FIELD_NR.0 as usize;
 const _: () = assert!(FIELD_NR <= 64, "bch_sb_buf.dirty: a bit per section type");
 
-/// A section's to_cpu() or from_cpu(), as the union hands it out.
-pub type SbSyncFn = fn(&Fs, &mut SbLockGuard<'_>) -> Result<(), BchError>;
+impl c::bch_sb_field<Unvalidated> {
+    /// Where its whole entries end, as its type says: None if it's too short
+    /// to be one, or of a type this version doesn't know. By the tag, not
+    /// typed() - it's what finds a partial entry, which typed() can't read the
+    /// arm past.
+    fn entries_end(&self) -> Option<usize> {
+        c::bch_sb_field_by_tag!(self.type_.get(), A => <A<Validated> as SbFieldOps>::entries_end(self.as_bytes()),
+                                _ => None)
+    }
 
-/// The type a section's SbFieldOps are of: its arm - ext's, a grown type's
-/// family, not its C struct.
-macro_rules! section_ops {
-    (ext)          => { c::bch_sb_field_ext<Validated> };
-    ($name:ident)  => { ::paste::paste! { c::[<bch_sb_field_ $name>] } };
-}
+    /// Its type's validate(): None if it can't be read as one.
+    fn validate(&self, sb: &bch_sb<Unvalidated>, flags: c::bch_validate_flags, err: &mut Printbuf)
+        -> Option<Result<(), BchError>>
+    {
+        let r = self.typed().ok()?;
+        Some(c::bch_sb_field_match!(r, f: A => <A<Validated> as SbFieldOps>::validate(sb, f, flags, err)))
+    }
 
-/// The section union's ops: each arm's SbFieldOps, by its tag - typed().
-macro_rules! sb_field_ops {
-    ($(($name:ident, $nr:literal, $($desc:literal)*)),* $(,)?) => { ::paste::paste! {
-        /// Each type's shortest: what a section is too short to be read as
-        /// one under, to say so.
-        const SECTION_MIN_LEN: [usize; FIELD_NR] = [$(<section_ops!($name) as ArmRef>::MIN_LEN),*];
-
-        /// Each type's entries_end(): by the tag, not typed() - it's what
-        /// finds a partial entry, which typed() can't read the arm past.
-        const SECTION_ENTRIES_END: [fn(&[u8]) -> Option<usize>; FIELD_NR] =
-            [$(<section_ops!($name) as SbFieldOps>::entries_end),*];
-
-        impl c::bch_sb_field<Unvalidated> {
-            /// Where its whole entries end, as its type says: None if it's
-            /// too short to be one, or of a type this version doesn't know.
-            fn entries_end(&self) -> Option<usize> {
-                SECTION_ENTRIES_END.get(self.type_.get() as usize)?(self.as_bytes())
-            }
-
-            /// Its type's validate(): None if it can't be read as one.
-            fn validate(&self, sb: &bch_sb<Unvalidated>, flags: c::bch_validate_flags, err: &mut Printbuf)
-                -> Option<Result<(), BchError>>
-            {
-                match self.typed() {
-                    $(Ok(c::BchSbFieldRef::$name(f)) =>
-                        Some(<section_ops!($name) as SbFieldOps>::validate(sb, f, flags, err)),)*
-                    Err(_) => None,
-                }
-            }
-
-            /// Its type's to_text(): nothing, if it's too short to be one, or
-            /// of a type this version doesn't know.
-            fn to_text(&self, out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>) {
-                match self.typed() {
-                    $(Ok(c::BchSbFieldRef::$name(f)) =>
-                        <section_ops!($name) as SbFieldOps>::to_text(out, fs, sb, f),)*
-                    Err(_) => {}
-                }
-            }
+    /// Its type's to_text(): nothing, if it's too short to be one, or of a
+    /// type this version doesn't know.
+    fn to_text(&self, out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>) {
+        if let Ok(r) = self.typed() {
+            c::bch_sb_field_match!(r, f: A => <A<Validated> as SbFieldOps>::to_text(out, fs, sb, f))
         }
-
-        impl c::bch_sb_field<Validated> {
-            /// Its type's to_cpu(): None for a type this version doesn't know.
-            fn to_cpu_fn(&self) -> Option<SbSyncFn> {
-                match self.typed().ok()? {
-                    $(c::BchSbFieldRef::$name(_) => Some(<section_ops!($name) as SbFieldOps>::to_cpu),)*
-                }
-            }
-
-            /// Its type's from_cpu(): None for a type this version doesn't know.
-            fn from_cpu_fn(&self) -> Option<SbSyncFn> {
-                match self.typed().ok()? {
-                    $(c::BchSbFieldRef::$name(_) => Some(<section_ops!($name) as SbFieldOps>::from_cpu),)*
-                }
-            }
-        }
-    } };
+    }
 }
-c::BCH_SB_FIELDS!(sb_field_ops);
 
 impl c::bch_sb_field_type {
     /// The type named @name.
@@ -2540,8 +2499,8 @@ fn write_prepare(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(
     s.set_big_endian(cfg!(target_endian = "big"));
 
     // each section's from_cpu() - sb_to_fs() made those that make their own
-    for from_cpu in section_fns(sb.sb(), |_| true, c::bch_sb_field::from_cpu_fn) {
-        from_cpu(fs, sb)?;
+    for t in section_types(sb.sb(), |_| true) {
+        c::bch_sb_field_by_tag!(t, A => <A<Validated> as SbFieldOps>::from_cpu(fs, sb), _ => Ok(()))?;
     }
     // members_v2's, mirrored - as C, failing doesn't stop the write
     let _ = fs.sb_resize(sb).members_cpy_v2_v1();
@@ -2767,17 +2726,19 @@ fn write_super_devs(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_devs
 /// to_cpu() for each section the superblock has that @dirty names, by bit:
 /// each, whichever fails. XXX: not one deleted since the last write.
 fn sections_to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>, dirty: u64) -> Result<(), BchError> {
-    let fns = section_fns(sb.sb(), |f| dirty & 1u64.checked_shl(f.type_.get()).unwrap_or(0) != 0,
-                          c::bch_sb_field::to_cpu_fn);
-    fns.into_iter().fold(Ok(()), |ret, f| ret.and(f(fs, sb)))
+    let types = section_types(sb.sb(), |f| dirty & 1u64.checked_shl(f.type_.get()).unwrap_or(0) != 0);
+    types.into_iter().fold(Ok(()), |ret, t| {
+        ret.and(c::bch_sb_field_by_tag!(t, A => <A<Validated> as SbFieldOps>::to_cpu(fs, sb), _ => Ok(())))
+    })
 }
 
-/// Of each section @sb has that @keep passes, its @f - collected, for the
-/// walk borrows the superblock, and what it collects is called with it.
-fn section_fns(sb: &bch_sb, keep: impl Fn(&c::bch_sb_field) -> bool,
-               f: impl Fn(&c::bch_sb_field) -> Option<SbSyncFn>) -> ArrayVec<SbSyncFn, FIELD_NR> {
+/// The types this version knows of the sections @sb has that @keep passes -
+/// collected, for the walk borrows the superblock, and each type's ops are
+/// called with it.
+fn section_types(sb: &bch_sb, keep: impl Fn(&c::bch_sb_field) -> bool) -> ArrayVec<u32, FIELD_NR> {
     // validated: one of each type at most
-    sb.entries().filter(|s| keep(s)).filter_map(f).take(FIELD_NR).collect()
+    sb.entries().filter(|s| keep(s)).map(|s| s.type_.get()).filter(|&t| (t as usize) < FIELD_NR)
+        .take(FIELD_NR).collect()
 }
 
 /// How much of the filesystem's metadata we're willing to leave on devices a

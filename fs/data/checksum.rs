@@ -28,7 +28,7 @@
 
 use crate::sb_err_on;
 use crate::c;
-use crate::util::vstructs::{bytes_of, Unsized, Unvalidated};
+use crate::util::vstructs::{bytes_of, Unsized, Unvalidated, Validated};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::sb::io::{SbFieldOps, SbResize};
@@ -563,7 +563,7 @@ impl Fs {
 
 /// A section shorter than the struct is refused before validate(), as too
 /// short to be one.
-impl SbFieldOps for c::bch_sb_field_crypt {
+impl SbFieldOps for c::bch_sb_field_crypt<Validated> {
     fn validate(_sb: &c::bch_sb<Unvalidated>, crypt: &c::bch_sb_field_crypt<Unvalidated>,
                 _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
         let kdf = crypt.bch_crypt_kdf_type();
