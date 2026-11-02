@@ -78,6 +78,32 @@ void rust_spin_lock_assert_held(spinlock_t *lock)
 	lockdep_assert_held(lock);
 }
 
+/* raw.rs: raw_spinlock_t */
+
+void rust_raw_spin_lock_init(raw_spinlock_t *lock, const char *name, void *key)
+{
+#if defined(__KERNEL__) && defined(CONFIG_DEBUG_SPINLOCK)
+	__raw_spin_lock_init(lock, name, key, LD_WAIT_SPIN);
+#else
+	raw_spin_lock_init(lock);
+#endif
+}
+
+void rust_raw_spin_lock(raw_spinlock_t *lock)
+{
+	raw_spin_lock(lock);
+}
+
+void rust_raw_spin_unlock(raw_spinlock_t *lock)
+{
+	raw_spin_unlock(lock);
+}
+
+void rust_raw_spin_lock_assert_held(raw_spinlock_t *lock)
+{
+	lockdep_assert_held(lock);
+}
+
 /*
  * percpu.rs: local_lock_t - one cpu's copy initialized, and this cpu's taken
  * irqsave, by its percpu pointer, as the util.c percpu helpers take theirs

@@ -40,7 +40,7 @@ pub mod seqmutex;
 
 pub use crate::new_lock;
 pub use bytelock::ByteLock;
-pub use raw::{mutex, percpu_rw_semaphore, rw_semaphore, spinlock_t};
+pub use raw::{mutex, percpu_rw_semaphore, raw_spinlock_t, rw_semaphore, spinlock_t};
 // for util/percpu.rs's LocalLockGuard and IrqGuard
 pub(crate) use raw::{rust_local_irq_restore, rust_local_irq_save, rust_local_lock_init, rust_local_lock_irqsave,
                      rust_local_unlock_irqrestore};

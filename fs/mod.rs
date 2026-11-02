@@ -281,7 +281,7 @@ pub mod c {
     // ours; and C's locks, as the structs C shares hold them; and
     // mempool_kvmalloc() and _kvfree(), the kernel's too before 6.19.
     pub use crate::cstructs::c::*;
-    pub use crate::cstructs::c::{mutex, percpu_rw_semaphore, rw_semaphore, spinlock_t};
+    pub use crate::cstructs::c::{mutex, percpu_rw_semaphore, raw_spinlock_t, rw_semaphore, spinlock_t};
     pub use crate::cstructs::c::{mempool_kvfree, mempool_kvmalloc};
 
     // Userspace #defines timespec64 → timespec (include/linux/time64.h), so

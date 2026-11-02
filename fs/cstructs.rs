@@ -89,7 +89,7 @@ pub mod c {
 
     // C's locks, as the structs C shares hold them: written through shared
     // references - locking/raw.rs.
-    pub use crate::locking::{mutex, percpu_rw_semaphore, rw_semaphore, spinlock_t};
+    pub use crate::locking::{mutex, percpu_rw_semaphore, raw_spinlock_t, rw_semaphore, spinlock_t};
 
     // C's limits, which the constants use.
     pub const U8_MAX:  u8  = u8::MAX;

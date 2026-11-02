@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! C's locks, as RawLocks: struct mutex, spinlock_t (taken irqsave),
-//! rw_semaphore and percpu_rw_semaphore - in both builds, the shim's
-//! pthread-backed ones in userspace.
+//! raw_spinlock_t, rw_semaphore and percpu_rw_semaphore - in both builds, the
+//! shim's pthread-backed ones in userspace.
 //!
 //! Each is C's struct in an Opaque - an UnsafeCell, so it's written through
 //! a shared reference: by whoever takes it, Rust or C. c::mutex and the rest
@@ -35,9 +35,15 @@ pub type spinlock_t = Opaque<b::spinlock_t>;
 pub type rw_semaphore = Opaque<b::rw_semaphore>;
 pub type percpu_rw_semaphore = Opaque<b::percpu_rw_semaphore>;
 
+/// A struct, where the others are Opaques: the userspace shim's spinlock_t is
+/// a typedef of raw_spinlock_t, so an Opaque of one is the other's type.
+#[repr(transparent)]
+pub struct raw_spinlock_t(Opaque<b::raw_spinlock_t>);
+
 // Zeroed as the structs holding them start; a lock only once their init runs
 unsafe impl ::pin_init::Zeroable for mutex {}
 unsafe impl ::pin_init::Zeroable for spinlock_t {}
+unsafe impl ::pin_init::Zeroable for raw_spinlock_t {}
 unsafe impl ::pin_init::Zeroable for rw_semaphore {}
 unsafe impl ::pin_init::Zeroable for percpu_rw_semaphore {}
 
@@ -49,6 +55,11 @@ c_extern! {
     pub fn rust_spin_lock_irqsave(lock: *mut c::spinlock_t) -> c_ulong;
     pub fn rust_spin_unlock_irqrestore(lock: *mut c::spinlock_t, flags: c_ulong);
     pub fn rust_spin_lock_assert_held(lock: *mut c::spinlock_t);
+
+    pub fn rust_raw_spin_lock_init(lock: *mut c::raw_spinlock_t, name: *const c_char, key: *mut c_void);
+    pub fn rust_raw_spin_lock(lock: *mut c::raw_spinlock_t);
+    pub fn rust_raw_spin_unlock(lock: *mut c::raw_spinlock_t);
+    pub fn rust_raw_spin_lock_assert_held(lock: *mut c::raw_spinlock_t);
 
     pub fn rust_local_lock_init(lock: *mut c::local_lock_t);
     pub fn rust_local_lock_irqsave(lock: *mut c::local_lock_t) -> c_ulong;
@@ -139,6 +150,32 @@ unsafe impl RawLock for c::spinlock_t {
 
     unsafe fn assert_held(&self) {
         unsafe { rust_spin_lock_assert_held(self.as_ptr().cast()) }
+    }
+}
+
+// ── raw_spinlock_t ───────────────────────────────────────────────────────
+
+// Taken with interrupts as they are, for what no interrupt takes - a lock's
+// wait list. A spinning lock on PREEMPT_RT too, where spinlock_t sleeps.
+unsafe impl RawLock for c::raw_spinlock_t {
+    type GuardState = ();
+    type InitError = Infallible;
+
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
+        unsafe { rust_raw_spin_lock_init(l, name.as_ptr().cast(), key) };
+        Ok(())
+    }
+
+    unsafe fn lock(&self) {
+        unsafe { rust_raw_spin_lock(self.0.as_ptr().cast()) }
+    }
+
+    unsafe fn unlock(&self, _: ()) {
+        unsafe { rust_raw_spin_unlock(self.0.as_ptr().cast()) }
+    }
+
+    unsafe fn assert_held(&self) {
+        unsafe { rust_raw_spin_lock_assert_held(self.0.as_ptr().cast()) }
     }
 }
 
