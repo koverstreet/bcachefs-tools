@@ -24,7 +24,7 @@ use crate::data::compress::compress_init;
 use crate::data::ec::head::ec_exit;
 use crate::data::reconcile::work::reconcile_exit;
 use crate::debug::sysfs::{FsDir, FS_GROUPS};
-use crate::init::dev::{dev_free, dev_in_fs};
+use crate::init::dev::{dev_exit, dev_in_fs};
 use crate::init::error::free_fsck_errs;
 use crate::init::registry::register;
 use crate::init::rw::{read_only_work, writes_disabled};
@@ -33,7 +33,7 @@ use crate::journal::seq_blacklist::blacklist_table_initialize;
 use crate::locking::{Guard, MutexNoio, Noio, PercpuRwsemNoio, RawLock, ReadGuard};
 use crate::{bch_verbose, new_lock, prt};
 use crate::sb::counters::counters_init;
-use crate::sb::io::{bch2_free_super, read_super, sb_to_fs, version, Holder};
+use crate::sb::io::{read_super, sb_to_fs, version, Holder};
 use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists, SbMembersMut};
 use crate::sb::version::prep_for_start;
 use crate::util::names;
@@ -92,7 +92,7 @@ impl<'a> StateLockWrite<'a> {
     }
 
     /// c->devs[], as their writer has them.
-    pub fn devs(&self) -> &[RcuPtrWriter<NonNull<Dev>>; c::BCH_SB_MEMBERS_MAX as usize] {
+    pub(crate) fn devs(&self) -> &[RcuPtrWriter<NonNull<Dev>>; c::BCH_SB_MEMBERS_MAX as usize] {
         // state_lock is held, for as long as we are
         unsafe { self.fs.devs.published_writer() }
     }
@@ -971,11 +971,7 @@ unsafe fn exit(p: NonNull<Fs>) -> Result<(), BchError> {
         let p = fs.state_lock_write().devs()[i].take();
         // stopped: no readers
         if let Some(ca) = p.map(|p| unsafe { ARef::from_raw(p) }) {
-            #[cfg(CONFIG_BCACHEFS_DEBUG)]
-            assert_eq!(ca.ref_.load(Relaxed), 1);
-            ca.io_ref_stop(READ);
-            unsafe { bch2_free_super(&mut *(&raw mut (*ca.as_ptr()).disk_sb).cast()) };
-            dev_free(ca);
+            dev_exit(ca);
         }
     }
 

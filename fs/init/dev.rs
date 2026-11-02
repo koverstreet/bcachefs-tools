@@ -228,7 +228,7 @@ use crate::init::error::bch2_io_error_work;
 use crate::format::DataType;
 use crate::locking::MemallocFlags;
 use crate::opts::c_export::__bch2_data_types;
-use crate::sb::io::{read_super, BCH_SB_READ_SCRATCH_BUF_SIZE};
+use crate::sb::io::{bch2_free_super, read_super, BCH_SB_READ_SCRATCH_BUF_SIZE};
 use crate::sb::members::{bch2_mi_to_cpu, member_exists, member_state_str, mi_field_upgrades, sb_member,
                          sb_member_alloc, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
 use crate::types::CStatic;
@@ -547,6 +547,32 @@ pub(crate) fn dev_free(ca: ARef<Dev>) {
 
     if ca.kobj.in_sysfs() {
         ca.kobj.del();
+    }
+}
+
+/// An attached device freed: its reads stopped, its superblock closed.
+pub(crate) fn dev_exit(ca: ARef<Dev>) {
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    assert_eq!(ca.ref_.load(Relaxed), 1);
+    ca.io_ref_stop(READ);
+    unsafe { bch2_free_super(&mut *(&raw mut (*ca.as_ptr()).disk_sb).cast()) };
+    dev_free(ca);
+}
+
+impl Fs {
+    /// Device @dev_idx gone from the filesystem in memory, not from its
+    /// superblock - that's the caller's: out of c->devs[], so nothing touches
+    /// it again, and freed once readers are done with it. For image's
+    /// temporary metadata device, which the image is written without.
+    pub fn dev_detach(&self, dev_idx: u32) {
+        let ca = {
+            let state = self.state_lock_write();
+            let _sb = self.sb_lock();
+            let p = state.devs()[dev_idx as usize].take().expect("detaching a device that's not in c->devs[]");
+            unsafe { ARef::from_raw(p) }
+        };
+        crate::util::rcu::synchronize();
+        dev_exit(ca);
     }
 }
 

@@ -356,8 +356,10 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     rustix::fs::ftruncate(fd, image_size)
         .map_err(|e| anyhow!("truncate error: {}", e))?;
 
+    // Drop temp device: the superblock written below is the image's alone
+    fs.dev_detach(1);
+
     // Lock sb and finalize
-    let state = fs.state_lock_write();
     let mut sb = fs.sb_lock();
 
     if !keep_alloc {
@@ -366,9 +368,6 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
         }
         unsafe { strip_fs_alloc(fs.as_ptr()) };
     }
-
-    // Drop temp device - out of c->devs[], not freed
-    state.devs()[1].take();
 
     // Allow journal on primary device
     let m = sb.fs_member_mut(0);
