@@ -16,8 +16,7 @@
 //!   tagged_union! {
 //!       pub union jset_entry in c::jset_entry {
 //!           tag type_: u8 = c::bch_jset_entry_type,
-//!           arm btree_keys: c::jset_entry = ..,
-//!           ...
+//!           arms from BCH_JSET_ENTRY_TYPES(f, nr, ..) => f: c::concat(jset_entry_, f) = nr,
 //!           size: header,
 //!       }
 //!   }
@@ -111,11 +110,10 @@
 //! family (util/vstructs.rs), so an Unvalidated storage's arms are
 //! Unvalidated. An arm may be shorter than its type - written by an older
 //! version, before the type grew - so it's what its definition's ArmRef says:
-//! a grown type's at the arm's length, its later fields zero
-//! past the end. An arm that's the storage itself - a journal entry of keys -
-//! is the storage, in its state. arm::<A>() is typed() for one arm, if the
-//! tag is A's - A in the storage's state, X<Unvalidated> for an Unvalidated
-//! one - and arm_mut::<A>() the same, to edit.
+//! a grown type's at the arm's length, its later fields zero past the end.
+//! arm::<A>() is typed() for one arm, if the tag is A's - A in the storage's
+//! state, X<Unvalidated> for an Unvalidated one - and arm_mut::<A>() the
+//! same, to edit.
 //!
 //! Or, `union NAME in HEAD { .., size: arm }`, each value is as long as the
 //! arm its tag selects - an ACL's entries: no count to step by, so a tag this
@@ -467,8 +465,8 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
     let news: String = arms.iter()
         .map(|a| format!("{ev}::{}(x) => Self::from_arm(x),\n", a.name))
         .collect();
-    // An arm that's the storage itself - a journal entry of keys - isn't a
-    // type of its own to go by
+    // An arm that's the storage itself - an ACL's short entry - isn't a type
+    // of its own to go by
     let arms_of: String = arms.iter()
         .filter(|a| a.ty.trim() != s_ty.trim())
         .map(|a| format!("impl {arm_of}<{s_ty}> for {} {{\n\
@@ -664,20 +662,14 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
         // count says - each reference to one has them: typed() and arm(), on
         // each state's definition of the storage. An arm there may be an
         // older, shorter version of its type: as its ArmRef has it, over the
-        // storage's bytes. Or the storage itself - a journal entry of keys -
-        // in its state.
+        // storage's bytes.
         //
         // Every arm has a family - #[unsized_vstruct], #[grown], #[whole] -
         // so each is named in the storage's state: a member of an Unvalidated
         // one is Unvalidated, all the way down.
         let vs = "crate::util::vstructs";
-        let own = |a: &CTaggedArm| a.ty.trim() == s_ty.trim();
         let by_ref: String = arms.iter()
-            .map(|a| if own(a) {
-                format!("    {}(&'a {s_ty}<St>),\n", a.name)
-            } else {
-                format!("    {}(&'a {}<St>),\n", a.name, a.ty.trim())
-            })
+            .map(|a| format!("    {}(&'a {}<St>),\n", a.name, a.ty.trim()))
             .collect();
         // ArmOf by state - the storage's, X<St>, for the arm's definition in
         // that state, which the arm's X<St> has it by: an arm of an
@@ -685,7 +677,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
         let arms_of_by_state: String = states.iter()
             .flat_map(|(st, _)| {
                 let (lower, s_ty) = (st.to_lowercase(), &s_ty);
-                arms.iter().filter(|a| !own(a)).map(move |a| format!(
+                arms.iter().map(move |a| format!(
                     "impl {arm_of}<{s_ty}<{vs}::{st}>> for {}__{lower} {{\n\
                          type Tag = {tag_ty};\n\
                          const TAG: {tag_ty} = ({}) as {tag_ty};\n\
@@ -702,13 +694,9 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                                           return {};\n\
                                       }}\n",
                                      a.value,
-                                     if own(a) {
-                                         format!("Ok({en}Ref::{}(self))", a.name)
-                                     } else {
-                                         format!("<{}<{vs}::{st}> as {vs}::ArmRef>::arm_ref(self.as_bytes())\n\
-                                                      .map({en}Ref::{}).ok_or({t_tag})",
-                                                 a.ty.trim(), a.name)
-                                     }))
+                                     format!("<{}<{vs}::{st}> as {vs}::ArmRef>::arm_ref(self.as_bytes())\n\
+                                                  .map({en}Ref::{}).ok_or({t_tag})",
+                                             a.ty.trim(), a.name)))
                     .collect();
                 let ref_args = format!("<'_, {vs}::{st}>");
                 format!(

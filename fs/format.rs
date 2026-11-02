@@ -1915,33 +1915,42 @@ c_enum! {
     }
 }
 
-/*
- * A journal entry is the type its type says. Six have no struct of their own:
- * keys, or a legacy prio_ptrs, in the entry itself - so the arms are written
- * out, not from BCH_JSET_ENTRY_TYPES, which would name one for each.
- */
+/* A journal entry is the type its type says: */
 tagged_union! {
     pub union jset_entry in c::jset_entry {
         tag type_: u8 = c::bch_jset_entry_type,
-        arm btree_keys:        c::jset_entry              = c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_keys.0,
-        arm btree_root:        c::jset_entry              = c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_root.0,
-        arm prio_ptrs:         c::jset_entry              = c::bch_jset_entry_type::BCH_JSET_ENTRY_prio_ptrs.0,
-        arm blacklist:         c::jset_entry_blacklist    = c::bch_jset_entry_type::BCH_JSET_ENTRY_blacklist.0,
-        arm blacklist_v2:      c::jset_entry_blacklist_v2 = c::bch_jset_entry_type::BCH_JSET_ENTRY_blacklist_v2.0,
-        arm usage:             c::jset_entry_usage        = c::bch_jset_entry_type::BCH_JSET_ENTRY_usage.0,
-        arm data_usage:        c::jset_entry_data_usage   = c::bch_jset_entry_type::BCH_JSET_ENTRY_data_usage.0,
-        arm clock:             c::jset_entry_clock        = c::bch_jset_entry_type::BCH_JSET_ENTRY_clock.0,
-        arm dev_usage:         c::jset_entry_dev_usage    = c::bch_jset_entry_type::BCH_JSET_ENTRY_dev_usage.0,
-        arm log:               c::jset_entry_log          = c::bch_jset_entry_type::BCH_JSET_ENTRY_log.0,
-        arm overwrite:         c::jset_entry              = c::bch_jset_entry_type::BCH_JSET_ENTRY_overwrite.0,
-        arm write_buffer_keys: c::jset_entry              = c::bch_jset_entry_type::BCH_JSET_ENTRY_write_buffer_keys.0,
-        arm datetime:          c::jset_entry_datetime     = c::bch_jset_entry_type::BCH_JSET_ENTRY_datetime.0,
-        arm log_bkey:          c::jset_entry              = c::bch_jset_entry_type::BCH_JSET_ENTRY_log_bkey.0,
-        arm rewind_limit:      c::jset_entry_rewind_limit = c::bch_jset_entry_type::BCH_JSET_ENTRY_rewind_limit.0,
-        arm rewind:            c::jset_entry_rewind       = c::bch_jset_entry_type::BCH_JSET_ENTRY_rewind.0,
+        arms from BCH_JSET_ENTRY_TYPES(f, nr, ..) => f: c::concat(jset_entry_, f) = nr,
         size: header,
     }
 }
+
+/* The entries whose payload is keys: */
+macro_rules! jset_entry_keys {
+    ($($name:ident),*) => { $(
+        #[unsized_vstruct]
+        #[repr(C)]
+        #[derive(Default, CStruct, Plain, TypeInfo)]
+        pub struct $name {
+            pub entry: Head<c::jset_entry>,
+            pub start: [c::bkey_i; 0],
+            pub _data: [u64; 0],
+        }
+        vstruct!(unsized $name, entry.u64s);
+        vstruct_container!($name, thin c::bkey_i);
+    )* };
+}
+jset_entry_keys!(jset_entry_btree_keys, jset_entry_btree_root, jset_entry_overwrite,
+                 jset_entry_write_buffer_keys, jset_entry_log_bkey);
+
+/* Legacy, no longer written: */
+#[unsized_vstruct]
+#[repr(C)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
+pub struct jset_entry_prio_ptrs {
+    pub entry: Head<c::jset_entry>,
+    pub _data: [u64; 0],
+}
+vstruct!(unsized jset_entry_prio_ptrs, entry.u64s);
 
 /*
  * Journal sequence numbers can be blacklisted: bsets record the max sequence
