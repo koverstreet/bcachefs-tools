@@ -245,7 +245,9 @@ use crate::util::vstructs::{Head, Validated};
 use crate::util::{Nsecs, Printbuf};
 use crate::{bch_err_fn, prt};
 use core::ffi::{c_int, c_uint, CStr};
+use core::pin::Pin;
 use core::ptr::NonNull;
+use pin_init::pinned_drop;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_export, CStruct, bitfield, c_extern, c_typedef, TypeInfo};
 #[cfg(kernel)]
@@ -490,7 +492,14 @@ unsafe impl KobjOwner for Dev {
     type Dir = DevDir;
 
     unsafe fn release(this: NonNull<Dev>) {
-        let ca = unsafe { &mut *this.as_ptr() };
+        unsafe { free_pinned(this.as_ptr()) }
+    }
+}
+
+#[pinned_drop]
+impl PinnedDrop for Dev {
+    fn drop(self: Pin<&mut Self>) {
+        let ca = unsafe { self.get_unchecked_mut() };
 
         ca.bucket_backpointer_mismatch.free();
         ca.bucket_backpointer_empty.free();
@@ -507,7 +516,6 @@ unsafe impl KobjOwner for Dev {
         unsafe {
             ca.io_ref[WRITE].exit();
             ca.io_ref[READ].exit();
-            free_pinned(this.as_ptr());
         }
     }
 }
@@ -568,8 +576,7 @@ impl Fs {
         let ca = {
             let state = self.state_lock_write();
             let _sb = self.sb_lock();
-            let p = state.devs()[dev_idx as usize].take().expect("detaching a device that's not in c->devs[]");
-            unsafe { ARef::from_raw(p) }
+            state.devs()[dev_idx as usize].take().expect("detaching a device that's not in c->devs[]")
         };
         crate::util::rcu::synchronize();
         dev_exit(ca);
@@ -656,9 +663,7 @@ fn dev_attach(state: &StateLockWrite<'_>, ca: &ARef<Dev>, dev_idx: u32) {
         }
     }
 
-    // the slot's ref, put after ca->ref's kill and drain, a grace period on -
-    // XXX: not in debug builds, where ca->ref is an atomic
-    unsafe { state.devs()[dev_idx as usize].publish(ARef::into_raw(ca.clone())) };
+    state.devs()[dev_idx as usize].publish(ca.clone());
 
     if ca.sysfs_online().is_err() {
         log_no_fs(LogLevel::WARN, &Msg(|out: &mut Printbuf| prt!(out, "error creating sysfs objects")));
@@ -931,7 +936,8 @@ impl StateLockWrite<'_> {
         }
 
         let dev_idx = u32::from(sb.sb().dev_idx);
-        let ca = unsafe { fs.devs[dev_idx as usize].as_ptr().as_ref() }.expect("attaching a device that's not a member");
+        let ca = self.devs()[dev_idx as usize].get().expect("attaching a device that's not a member");
+        let ca: &Dev = &ca;
 
         attach_bdev(ca, sb, err)?;
 
@@ -1223,8 +1229,7 @@ impl StateLockWrite<'_> {
 
             let slot = {
                 let _sb = fs.sb_lock();
-                let p = self.devs()[ca.dev_idx as usize].take().expect("removing a device that's in c->devs[]");
-                unsafe { ARef::from_raw(p) }
+                self.devs()[ca.dev_idx as usize].take().expect("removing a device that's in c->devs[]")
             };
 
             #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
@@ -1539,7 +1544,8 @@ impl Fs {
 
         state.dev_attach_bdev(&mut sb, err)?;
 
-        let ca = unsafe { self.devs[dev_idx as usize].as_ptr().as_ref() }.expect("a device just attached");
+        let ca = state.devs()[dev_idx as usize].get().expect("a device just attached");
+        let ca: &Dev = &ca;
 
         ca.mi_field_upgrades();
 

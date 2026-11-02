@@ -322,7 +322,7 @@ c_const! {
     pub const CONGESTED_MAX: u32 = 1024;
 }
 
-#[pin_data]
+#[pin_data(PinnedDrop)]
 #[repr(C)]
 #[c_name(bch_dev)]
 #[derive(CStruct, TypeInfo, Init)]
@@ -480,6 +480,10 @@ pub struct Dev {
     #[pin]
     #[init(RustOnly::new(core::sync::atomic::AtomicU8::new(0)))]
     pub(crate) discards_in_flight: rust_only!(core::sync::atomic::AtomicU8),
+    /// c->devs[]'s RCU readers may still have it.
+    #[pin]
+    #[init(RustOnly::new(crate::util::rcu::RcuMember))]
+    pub(crate) _rcu: rust_only!(crate::util::rcu::RcuMember),
 
     pub rebalance_work: AtomicI64,
 
@@ -686,7 +690,7 @@ pub struct Fs {
 
     /// Written under state_lock: StateLockWrite::devs().
     #[c("struct bch_dev __rcu *devs[BCH_SB_MEMBERS_MAX]")]
-    pub devs: LockedBy<(), [crate::util::rcu::RcuPtr<core::ptr::NonNull<Dev>>; c::BCH_SB_MEMBERS_MAX as usize]>,
+    pub devs: LockedBy<(), [crate::util::rcu::RcuPtr<crate::util::refcount::ARef<Dev>>; c::BCH_SB_MEMBERS_MAX as usize]>,
     #[c("struct bch_devs_mask devs_online")]
     pub devs_online: c::AtomicDevsMask,
     #[c("struct bch_devs_mask devs_removed")]

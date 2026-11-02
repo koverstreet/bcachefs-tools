@@ -92,7 +92,7 @@ impl<'a> StateLockWrite<'a> {
     }
 
     /// c->devs[], as their writer has them.
-    pub(crate) fn devs(&self) -> &[RcuPtrWriter<NonNull<Dev>>; c::BCH_SB_MEMBERS_MAX as usize] {
+    pub(crate) fn devs(&self) -> &[RcuPtrWriter<ARef<Dev>>; c::BCH_SB_MEMBERS_MAX as usize] {
         // state_lock is held, for as long as we are
         unsafe { self.fs.devs.published_writer() }
     }
@@ -910,8 +910,9 @@ impl Fs {
 
             self.state_lock_write().read_only();
 
-            for dev in &self.devs[..self.nr_devices() as usize] {
-                if let Some(ca) = unsafe { dev.as_ptr().as_ref() } {
+            for i in 0..self.nr_devices() as usize {
+                let ca = self.state_lock_write().devs()[i].get();
+                if let Some(ca) = ca {
                     ca.io_ref_stop(READ);
                 }
             }
@@ -968,12 +969,14 @@ unsafe fn exit(p: NonNull<Fs>) -> Result<(), BchError> {
     for i in 0..fs.nr_devices() as usize {
         // freed outside state_lock: dev_free() drains ref_outer, whose holders
         // may be waiting on it
-        let p = fs.state_lock_write().devs()[i].take();
+        let ca = fs.state_lock_write().devs()[i].take();
         // stopped: no readers
-        if let Some(ca) = p.map(|p| unsafe { ARef::from_raw(p) }) {
+        if let Some(ca) = ca {
             dev_exit(ca);
         }
     }
+    // their drops are a grace period on, and need what the filesystem frees
+    crate::util::rcu::barrier();
 
     bch_verbose!(fs, "shutdown complete");
 
