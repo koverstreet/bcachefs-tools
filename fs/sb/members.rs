@@ -1442,13 +1442,29 @@ impl core::ops::Deref for DevOuterRef {
 
 impl Drop for DevOuterRef {
     fn drop(&mut self) {
-        // SAFETY: our ref, put once; a raw pointer, as dev_put()'s is - the
-        // last one's waiter may free the device
-        unsafe {
-            if c::refcount_dec_and_test(core::ptr::addr_of_mut!((*self.0).ref_outer)) {
-                c::complete(core::ptr::addr_of_mut!((*self.0).ref_outer_completion));
-            }
-        }
+        // SAFETY: our ref, put once
+        unsafe { (*self.0).ref_outer.dec() }
+    }
+}
+
+/// bch2_dev_get_outer(), for C: an outer ref, as Dev::outer_ref().
+///
+/// # Safety
+/// @ca is live - a ref held on it, or in hand under RCU.
+#[c_export]
+pub unsafe fn bch2_dev_get_outer(ca: *mut Dev) {
+    unsafe { (*ca).ref_outer.inc() }
+}
+
+/// bch2_dev_put_outer(), for C: an outer ref put, as DevOuterRef's drop - of
+/// nothing, for NULL or an error pointer.
+///
+/// # Safety
+/// @ca holds an outer ref, which this puts.
+#[c_export]
+pub unsafe fn bch2_dev_put_outer(ca: *mut Dev) {
+    if !ca.is_null() && ca.addr() < (-4095isize) as usize {
+        unsafe { (*ca).ref_outer.dec() }
     }
 }
 
@@ -1695,10 +1711,9 @@ impl Dev {
 
     /// An outer ref on it - bch2_dev_get_outer().
     pub fn outer_ref(&self) -> DevOuterRef {
-        let ca = (self as *const Dev).cast_mut();
-        // SAFETY: the device is in hand, so live; C's to change
-        unsafe { c::refcount_inc(core::ptr::addr_of_mut!((*ca).ref_outer)) };
-        DevOuterRef(ca)
+        // SAFETY: the device is in hand, so live
+        unsafe { self.ref_outer.inc() };
+        DevOuterRef(self.as_ptr())
     }
 
     /// Whether @b is one of its buckets: bucket_valid().

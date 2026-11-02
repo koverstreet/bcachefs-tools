@@ -353,8 +353,9 @@ pub struct Dev {
      * items, ioctl lookups) hold ref_outer instead, and recheck
      * ca->removing under the lock before touching member state.
      */
-    pub ref_outer: c::refcount_t,
-    pub ref_outer_completion: c::completion,
+    #[init(AtomicRef::new(()))]
+    #[c("u32 ref_outer")]
+    pub ref_outer: AtomicRef<()>,
     #[c("struct enumerated_ref io_ref[2]")]
     pub io_ref: [crate::util::enumerated_ref::EnumeratedRef; 2],
 

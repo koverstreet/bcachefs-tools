@@ -256,7 +256,6 @@ use crate::types::{DArray, bits_to_longs, c_default};
 use crate::util::bio::{Bio, BioBufPtr};
 use crate::util::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::c_char;
-#[cfg(not(CONFIG_BCACHEFS_DEBUG))]
 use crate::util::refcount::WaitableRef;
 use nestify::nest;
 
@@ -509,9 +508,9 @@ pub(crate) unsafe fn dev_free(ca: *mut Dev) {
          * io_error_work is never cancelled - it owns a ref_outer per queued
          * instance, so this drain waits for it to run and put:
          */
-        drop(unsafe { DevOuterRef::from_raw(ca.as_ptr()) });
+        ca.ref_outer.stop();
+        ca.ref_outer.wait();
     }
-    unsafe { c::wait_for_completion(&raw mut (*ca).ref_outer_completion) };
 
     let ca = unsafe { &mut *ca };
 
@@ -570,8 +569,6 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<*mut Dev> {
     unsafe {
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         c::init_completion(&mut ca.ref_completion);
-        c::refcount_set(&mut ca.ref_outer, 1);
-        c::init_completion(&mut ca.ref_outer_completion);
 
         let _ = init_at(io_error_work, &raw mut ca.io_error_work);
     }
