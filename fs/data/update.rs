@@ -844,7 +844,10 @@ impl c::data_update {
                     self.key().arm::<Ptrs>().is_some_and(|k| k.poisoned(fs))) {
             if let Some(crc) = &mut crc {
                 let nonce = crate::data::ptrs::extent_nonce(self.key().k.bversion, crc);
-                crc.csum = fs.checksum_range(c::bch_csum_type(crc.csum_type.into()), nonce, self.rbio.bio().range());
+                // what was read is at the buffer's start, whatever the bio's
+                // iter was left at
+                let data = self.rbio.bio().range().take(crc.compressed_size << 9);
+                crc.csum = fs.checksum_range(c::bch_csum_type(crc.csum_type.into()), nonce, data);
                 ret = Ok(());
             }
         }
