@@ -31,6 +31,7 @@ c_extern! {
 #[path = "entries.rs"] pub mod entries;
 #[path = "sb.rs"] pub mod sb;
 #[path = "seq_blacklist.rs"] pub mod seq_blacklist;
+#[path = "validate.rs"] pub mod validate;
 
 use crate::c;
 use crate::util::Printbuf;

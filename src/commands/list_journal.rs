@@ -6,6 +6,7 @@ use bcachefs_kernel::journal::{
     entry_type, entry_btree_id, entry_log_str_eq,
     journal_entry_type,
 };
+use bcachefs_kernel::journal::validate::journal_entry_to_text;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::util::ToText;
 use bcachefs_kernel::util::vstructs::SelfSized;
@@ -369,9 +370,7 @@ fn print_one_entry(
     if !f.bkey_val && entry_is_print_key(entry) {
         journal_entry_keys_noval_to_text(&mut ind, entry);
     } else {
-        unsafe {
-            c::bch2_journal_entry_to_text(ind.as_raw(), c_fs, entry.as_ffi() as *mut _);
-        }
+        journal_entry_to_text(&mut ind, Some(unsafe { Fs::borrow_raw(c_fs) }), entry.as_unvalidated());
         ind.newline();
     }
 
@@ -400,11 +399,7 @@ fn journal_replay_print(c_fs: *mut Fs, f: &JournalFilter, p: &c::journal_replay,
 
         for entry in j.entries() {
             if entry_type(entry) == journal_entry_type::datetime {
-                unsafe {
-                    c::bch2_journal_entry_to_text(
-                        buf.as_raw(), c_fs, entry.as_ffi() as *mut _,
-                    );
-                }
+                journal_entry_to_text(&mut buf, Some(unsafe { Fs::borrow_raw(c_fs) }), entry.as_unvalidated());
                 break;
             }
         }

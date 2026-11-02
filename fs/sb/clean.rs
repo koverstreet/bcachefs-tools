@@ -16,9 +16,10 @@ use zerocopy::IntoBytes;
 use crate::btree::bkey::BkeySCToText;
 use crate::btree::interior::btree_roots_to_journal_entries;
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::journal::entries::{EntryWriter, NoRoom};
+use crate::journal::validate::{journal_entry_to_text, journal_entry_validate};
 use crate::sb::io::{entries_end, SbFieldOps};
 use crate::types::{Le32, Le64};
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
@@ -42,13 +43,11 @@ impl SbFieldOps for Section {
         write!(out, "flags:          {:x}\n", f.flags.get());
         write!(out, "journal_seq:    {}\n", f.journal_seq.get());
 
-        let fs = fs.map_or(core::ptr::null_mut(), Fs::as_ptr);
         for e in f.entries().map_while(Result::ok) {
             if e.type_ == c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_keys.0 as u8 && e.u64s() == 0 {
                 continue;
             }
-            // SAFETY: a whole entry; C takes NULL for no filesystem
-            unsafe { c::bch2_journal_entry_to_text(out.as_raw(), fs, e.as_ffi().cast_mut()) };
+            journal_entry_to_text(out, fs, e);
             out.newline();
         }
     }
@@ -75,11 +74,7 @@ fn validate_late(fs: &Fs, version: u16, big_endian: bool, f: &mut Section, write
         // whole: sb_field_validate() has repaired or refused a section with
         // one overrunning its end
         let e = e.map_err(|_| BchError::from(bch_errcode::BCH_ERR_invalid_sb_clean))?;
-        // SAFETY: a whole entry, ours to change
-        ret_to_result(unsafe {
-            c::bch2_journal_entry_validate(fs.as_ptr(), core::ptr::null_mut(), e.as_ffi_mut(),
-                                           version.into(), big_endian.into(), from)
-        })?;
+        journal_entry_validate(fs, bytes_of_mut(e), version.into(), big_endian, from)?;
     }
     Ok(())
 }

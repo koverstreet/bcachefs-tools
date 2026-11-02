@@ -99,7 +99,6 @@ bcachefs-y		:=			\
 	journal/journal.o			\
 	journal/read.o				\
 	journal/reclaim.o			\
-	journal/validate.o			\
 	journal/write.o				\
 	locking/locking.o			\
 	util/darray.o				\

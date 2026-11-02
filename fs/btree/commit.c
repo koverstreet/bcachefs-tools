@@ -1261,7 +1261,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 	for (struct jset_entry *i = btree_trans_journal_entries_start(trans);
 	     i != btree_trans_journal_entries_top(trans);
 	     i = vstruct_next(i)) {
-		ret = bch2_journal_entry_validate(c, NULL, i,
+		ret = bch2_journal_entry_validate(c, i,
 						  bcachefs_metadata_version_current,
 						  CPU_BIG_ENDIAN, validate_context);
 		if (unlikely(ret))
