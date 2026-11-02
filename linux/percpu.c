@@ -465,6 +465,11 @@ void free_percpu(void *p)
 	size_t size  = size_at_grain[grain] * (size_t)BCH_PERCPU_GRAIN;
 	size_at_grain[grain] = 0;
 
+	/* Its init is its own: run on threads after, it writes freed memory */
+	darray_for_each_reverse(dynamic_inits, di)
+		if (di->pcv == p)
+			darray_remove_item(&dynamic_inits, di);
+
 	if (darray_push(&free_runs, ((struct bch_percpu_free_run){off, size}))) {
 		/* OOM appending to free list: leak the slot rather than crash.
 		 * This shouldn't happen in practice — free_runs is bounded by
