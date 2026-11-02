@@ -1718,7 +1718,6 @@ out:
 
 void bch2_fs_btree_cache_init_early(struct bch_fs_btree_cache *bc)
 {
-	mutex_noio_init(&bc->lock);
 	for (unsigned i = 0; i < ARRAY_SIZE(bc->live); i++) {
 		bc->live[i].idx = i;
 		INIT_LIST_HEAD(&bc->live[i].clean);

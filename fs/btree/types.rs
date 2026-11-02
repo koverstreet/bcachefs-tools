@@ -221,6 +221,20 @@ impl BtreeRootsLive {
     }
 }
 
+/// bc->lock's: the freeable and freed lists, and the counts.
+#[repr(C)]
+#[derive(CStruct)]
+pub struct BtreeCacheLists {
+    pub freeable: cs::list_head,
+    pub freed_pcpu: cs::list_head,
+    pub freed_nonpcpu: cs::list_head,
+
+    pub nr_vmalloc: usize,
+    pub nr_freeable: usize,
+    pub nr_reserve: usize,
+    pub nr_by_btree: [usize; cs::BTREE_ID_NR as usize],
+}
+
 #[pin_data]
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init)]
@@ -245,16 +259,11 @@ pub struct bch_fs_btree_cache {
      * common to delete and allocate btree nodes in quick succession. It
      * should never grow past ~2-3 nodes in practice.
      */
-    pub lock: cs::mutex_noio,
-    pub freeable: cs::list_head,
-    pub freed_pcpu: cs::list_head,
-    pub freed_nonpcpu: cs::list_head,
+    #[pin]
+    #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), (), "&bc->lock"))]
+    #[c_lock("struct mutex_noio lock")]
+    pub lock: Locked<cs::mutex_noio, BtreeCacheLists>,
     pub live: [cs::btree_cache_list; 2],
-
-    pub nr_vmalloc: usize,
-    pub nr_freeable: usize,
-    pub nr_reserve: usize,
-    pub nr_by_btree: [usize; cs::BTREE_ID_NR as usize],
 
     /* Number of nodes with BTREE_NODE_write_in_flight set. */
     pub nr_in_flight: AtomicIsize,
