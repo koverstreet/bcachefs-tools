@@ -18,6 +18,8 @@ pub use kernel::sync::Arc;
 #[cfg(not(kernel))]
 pub use std::sync::Arc;
 
+use crate::util::rcu::FreeAnytime;
+
 pub fn arc_new<T: Send + Sync>(v: T) -> Result<Arc<T>, AllocError> {
     #[cfg(kernel)]
     { Arc::new(v, flags::GFP_KERNEL) }
@@ -100,7 +102,9 @@ pub fn kbox_into_inner<T>(b: KBox<T>) -> T {
     { *b }
 }
 
-pub fn kbox_pin_init<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>)
+/// A KBox frees when it drops, without waiting out RCU readers: what they may
+/// reach, which isn't FreeAnytime, can't be in one.
+pub fn kbox_pin_init<T: FreeAnytime, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>)
     -> Result<core::pin::Pin<KBox<T>>, E>
 {
     // SAFETY: kalloc_pinned()'s is a KBox's allocation, pinned

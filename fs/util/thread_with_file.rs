@@ -55,6 +55,7 @@ use crate::new_lock;
 use crate::types::Fifo;
 use crate::util::alloc::{flags, kbox_pin_init, KBox, KVVec};
 use crate::util::ffi::c_char;
+use crate::util::rcu::{FreeAnytime, NothingToDetach};
 use crate::util::file::{file_data, File, FileData, FileOps, NewFile, PollQueue, PollTable, UserBuf};
 use crate::util::futex::EventCount;
 use crate::util::kernel::current_comm;
@@ -71,7 +72,7 @@ use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 
 /* ThreadWithFile */
 
-pub trait ThreadFile: FileOps {
+pub trait ThreadFile: FileOps + FreeAnytime {
     /// At close, before the thread's stopped: wake it from whatever it's
     /// blocked on that only the file would end.
     fn closing(&self) {}
@@ -113,7 +114,7 @@ impl<T: ThreadFile> ThreadWithFile<T> {
     }
 
     /// The kthread's named for the caller.
-    pub fn run(mut self, f: impl FnOnce(&T) + Send + 'static) -> Result<c_int, BchError> {
+    pub fn run(mut self, f: impl FnOnce(&T) + Send + FreeAnytime + NothingToDetach + 'static) -> Result<c_int, BchError> {
         // SAFETY: the thread runs only while the file lives - release()
         // stops it before the data's dropped - or not at all: if there's no
         // file, it's stopped unrun, as the data is dropped
@@ -398,7 +399,7 @@ impl StdioRedirect {
 
 /* Stdio: a ThreadWithFile on a StdioRedirect */
 
-pub trait StdioFile: Send + Sync + 'static {
+pub trait StdioFile: Send + Sync + FreeAnytime + 'static {
     fn ioctl(&self, _cmd: c_uint, _arg: c_ulong) -> c_long {
         -(c::ENOTTY as c_long)
     }
@@ -457,7 +458,7 @@ impl<T: StdioFile> ThreadWithFile<Stdio<T>> {
         &self.data().redirect
     }
 
-    pub fn run_stdio(self, f: impl FnOnce(&T, &StdioRedirect) -> c_int + Send + 'static)
+    pub fn run_stdio(self, f: impl FnOnce(&T, &StdioRedirect) -> c_int + Send + FreeAnytime + NothingToDetach + 'static)
         -> Result<c_int, BchError>
     {
         self.run(move |s: &Stdio<T>| {

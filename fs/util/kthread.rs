@@ -29,6 +29,7 @@
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
 use crate::util::alloc::{kbox_pin_init, AllocError, KBox};
+use crate::util::rcu::{FreeAnytime, NothingToDetach};
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
 use core::ffi::{c_int, c_void};
@@ -139,13 +140,13 @@ pub struct Kthread {
     /// Dropped after the stop, and never moved out of: the thread holds a
     /// reference into it. Not a Pin<KBox>: the kernel's Box coerces to the
     /// dyn, but not in a Pin - it has no PinCoerceUnsized
-    thread: KBox<Thread<dyn Send>>,
+    thread: KBox<Thread<dyn Send + FreeAnytime + NothingToDetach>>,
 }
 
 impl Kthread {
     /// Thread @name, to run @f once woken - created stopped, as
     /// kthread_create().
-    pub fn create<F: FnOnce(&KthreadSelf<'_>) + Send + 'static>(name: fmt::Arguments<'_>, f: F)
+    pub fn create<F: FnOnce(&KthreadSelf<'_>) + Send + FreeAnytime + NothingToDetach + 'static>(name: fmt::Arguments<'_>, f: F)
         -> Result<Self, BchError>
     {
         let thread = kbox_pin_init::<_, AllocError>(Ok(Thread {

@@ -99,6 +99,18 @@ pub struct RcuMember;
 
 impl !FreeAnytime for RcuMember {}
 
+unsafe impl<T: ?Sized> FreeAnytime for &T {}
+unsafe impl<T: ?Sized> FreeAnytime for &mut T {}
+unsafe impl<T: ?Sized> FreeAnytime for *const T {}
+unsafe impl<T: ?Sized> FreeAnytime for *mut T {}
+unsafe impl<T: ?Sized> FreeAnytime for NonNull<T> {}
+#[cfg(kernel)]
+unsafe impl<T: ?Sized + FreeAnytime, A: kernel::alloc::Allocator> FreeAnytime for kernel::alloc::Box<T, A> {}
+#[cfg(kernel)]
+unsafe impl<T: FreeAnytime, A: kernel::alloc::Allocator> FreeAnytime for kernel::alloc::kvec::Vec<T, A> {}
+// its last put frees T as T says
+unsafe impl<T: AlwaysRefCounted> FreeAnytime for ARef<T> {}
+
 /// # Safety
 /// As FreeAnytime's: no impl may depend on a lifetime.
 #[rustc_specialization_trait]

@@ -17,6 +17,7 @@ use crate::locking::Locked;
 use crate::new_lock;
 use crate::util::alloc::{kbox_pin_init, KBox};
 use crate::util::ffi::Opaque;
+use crate::util::rcu::FreeAnytime;
 use crate::util::file::{File, FileOps, FileVTable, UserBuf};
 use crate::util::Printbuf;
 use core::ffi::CStr;
@@ -27,7 +28,7 @@ use cstruct_macros::vtable;
 use pin_init::{pin_data, pin_init};
 
 /// A debugfs file - the type is the file's cursor, Default at open.
-pub trait DebugFile: Default + Unpin + 'static {
+pub trait DebugFile: Default + Unpin + FreeAnytime + 'static {
     /// What the file is of: what create_file() was given.
     type Obj;
 

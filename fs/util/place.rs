@@ -100,6 +100,7 @@
 
 use crate::errcode::BchError;
 use crate::util::alloc::{flags::GFP_KERNEL, kbox_pin_init, AllocError, KBox, KVVec};
+use crate::util::rcu::FreeAnytime;
 use core::cell::UnsafeCell;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::size_of;
@@ -596,7 +597,7 @@ pub(crate) unsafe trait Holds<T>: Sized {
 
 // SAFETY: each element in a pinned box of its own, made there; room for
 // its box is made first, so an element made is an element held
-unsafe impl<T> Holds<T> for KVVec<Pin<KBox<T>>> {
+unsafe impl<T: FreeAnytime> Holds<T> for KVVec<Pin<KBox<T>>> {
     fn empty() -> Self {
         KVVec::new()
     }
