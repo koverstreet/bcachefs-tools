@@ -625,16 +625,15 @@ int bch2_fs_journal_start(struct journal *j, struct journal_start_info info)
 			j->last_empty_seq = le64_to_cpu(i->j.seq);
 
 		if (!info.clean) {
+			struct bch_devs_list seq_devs = bch2_journal_replay_devs(i);
+
 			p = &fifo_entry(&j->pin, seq);
 			p->devs.nr = 0;
 
-			darray_for_each(i->ptrs, ptr)
-				p->devs.data[p->devs.nr++] = ptr->dev;
+			for (unsigned d = 0; d < seq_devs.nr; d++)
+				p->devs.data[p->devs.nr++] = seq_devs.data[d];
 
 			CLASS(printbuf, buf)();
-			struct bch_devs_list seq_devs = {};
-			darray_for_each(i->ptrs, ptr)
-				bch2_dev_list_add_dev(&seq_devs, ptr->dev);
 			union bch_replicas_padded r;
 			bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, seq_devs);
 			bch2_replicas_entry_to_text(&buf, &r.e);

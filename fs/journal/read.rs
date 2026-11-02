@@ -1,7 +1,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::types::DArray;
-use cstruct_macros::{CStruct, c_extern, c_typedef};
+use cstruct_macros::{CStruct, c_export, c_extern, c_typedef};
 use crate::format::{Btree, Nonce};
 
 #[repr(C)]
@@ -96,6 +96,21 @@ impl c::journal_replay {
     pub fn ignored(&self) -> bool {
         self.ignore_blacklisted || self.ignore_not_dirty
     }
+
+    /// Where its jset was read from: each copy.
+    pub fn ptrs(&self) -> &[c::journal_ptr] {
+        self.ptrs.as_slice()
+    }
+}
+
+/// The devices replay @i's copies are on, each once.
+#[c_export]
+pub fn bch2_journal_replay_devs(i: &c::journal_replay) -> c::bch_devs_list {
+    let mut devs = c::bch_devs_list::default();
+    for p in i.ptrs() {
+        devs.add(p.dev);
+    }
+    devs
 }
 
 impl Fs {
