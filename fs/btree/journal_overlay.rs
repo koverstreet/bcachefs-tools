@@ -939,7 +939,7 @@ impl c::btree_and_journal_iter {
             };
 
             // SAFETY: the node, and its data, while the iterator's on it
-            if !ret.k.is_null() && !self.b.is_null() && unsafe { (*ret.k).p > (*(*self.b).data).max_key } {
+            if !ret.k.is_null() && unsafe { (*ret.k).p > (*(*self.b).data).max_key } {
                 ret = null;
             }
 
