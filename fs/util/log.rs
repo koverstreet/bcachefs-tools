@@ -507,6 +507,17 @@ macro_rules! bch_err_ratelimited {
 }
 
 #[macro_export]
+macro_rules! bch_err_dev_ratelimited {
+    ($ca:expr, $($arg:tt)*) => {{
+        static RATELIMIT: $crate::util::log::Ratelimit = $crate::util::log::Ratelimit::new();
+        let ca: &$crate::fs::Dev = $ca;
+        if !RATELIMIT.suppress(ca.fs(), $crate::c_function_name!()) {
+            $crate::util::log::log_dev(ca, $crate::util::log::LogLevel::ERR, $crate::message!($($arg)*));
+        }
+    }};
+}
+
+#[macro_export]
 macro_rules! bch_warn_ratelimited {
     ($fs:expr, $($arg:tt)*) => {
         $crate::bch_log_ratelimited!($fs, $crate::util::log::LogLevel::WARN, $($arg)*)
