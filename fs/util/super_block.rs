@@ -61,6 +61,21 @@ impl<T> SuperBlock<T> {
     pub fn rdonly(&self) -> bool {
         self.flags() & c::SB_RDONLY as c_ulong != 0
     }
+
+    /// sync_filesystem(), if s_umount can be had for reading without waiting:
+    /// whether it was.
+    #[cfg(kernel)]
+    pub fn try_sync(&self) -> bool {
+        let s_umount = unsafe { &raw mut (*self.as_ptr()).s_umount };
+        if unsafe { c::down_read_trylock(s_umount) } == 0 {
+            return false;
+        }
+        unsafe {
+            c::sync_filesystem(self.as_ptr());
+            c::up_read(s_umount);
+        }
+        true
+    }
 }
 
 /// A superblock from sget with s_umount held for writing, its reference: the
