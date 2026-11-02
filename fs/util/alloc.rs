@@ -24,7 +24,9 @@ pub use std::sync::Arc;
 use crate::util::maybe_rcu_alloc::{KVmalloc, Kmalloc, MaybeRcuAlloc};
 use crate::util::rcu::FreeAnytime;
 
-pub fn arc_new<T: Send + Sync>(v: T) -> Result<Arc<T>, AllocError> {
+/// The last ref's put frees it at once: what RCU readers may reach, which
+/// isn't FreeAnytime, can't be in one.
+pub fn arc_new<T: Send + Sync + FreeAnytime>(v: T) -> Result<Arc<T>, AllocError> {
     #[cfg(kernel)]
     { Arc::new(v, flags::GFP_KERNEL) }
     #[cfg(not(kernel))]
