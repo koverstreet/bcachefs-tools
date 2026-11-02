@@ -21,7 +21,8 @@ use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
-use core::sync::atomic::{AtomicI64, AtomicIsize};
+use core::sync::atomic::{AtomicI64, AtomicIsize, AtomicUsize};
+use crate::util::bitmap::AtomicBitflags;
 use cstruct_macros::{c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, Late, TypeInfo};
 use pin_init::{pin_data, PinInit};
 use nestify::nest;
@@ -120,7 +121,8 @@ pub struct BtreeNode {
     pub hash: cs::rhash_head,
     pub hash_val: u64,
 
-    pub flags: c_ulong,
+    #[c("unsigned long flags")]
+    pub flags: AtomicBitflags<cs::btree_flags>,
     /*
      * XXX: written and whiteout_u64s are the node writer's: the thread that
      * cleared BTREE_NODE_dirty, which may hold only a read lock. They want a
@@ -208,7 +210,8 @@ pub struct BtreeNode {
      * another write - because that write also won't yet be reachable and
      * marking it as completed before it's reachable would be incorrect:
      */
-    pub will_make_reachable: c_ulong,
+    #[c("unsigned long will_make_reachable")]
+    pub will_make_reachable: AtomicUsize,
 
     pub ob: cs::open_buckets,
 

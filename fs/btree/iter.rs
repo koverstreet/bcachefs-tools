@@ -3129,12 +3129,12 @@ impl c::BtreeNode {
     }
 
     pub fn is_fake(&self) -> bool {
-        (self.flags >> c::btree_flags::BTREE_NODE_fake as u64) & 1 != 0
+        self.flags.get(c::btree_flags::BTREE_NODE_fake)
     }
 
     /// Not yet reachable: an interior update in flight will make it so.
     pub fn will_make_reachable(&self) -> bool {
-        (self.flags >> c::btree_flags::BTREE_NODE_will_make_reachable as u64) & 1 != 0
+        self.flags.get(c::btree_flags::BTREE_NODE_will_make_reachable)
     }
 
     /// The node's keys, unpacked, in order.
