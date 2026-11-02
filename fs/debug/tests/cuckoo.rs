@@ -53,7 +53,7 @@ use crate::locking::Locked;
 use crate::new_lock;
 use crate::prt;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
-use crate::util::cuckoo::{Cuckoo, CuckooItem, Entry, Faults};
+use crate::util::cuckoo::{Cuckoo, CuckooItem, Entry, Faults, Registration};
 use crate::util::hash::GoldenRatio;
 use crate::util::siphash::SipHash13Key;
 use core::hash::BuildHasher;
@@ -223,7 +223,21 @@ fn model<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(name: &st
     Ok(())
 }
 
+/// A dropped Registration's entry is out of its table - which nothing else
+/// would show, but every later register() of its key failing.
+fn registration() -> TestRet {
+    let t = Cuckoo::<Entry<u64>>::default();
+    let e = 7u64;
+    // SAFETY: @e outlives its registration, and the table is read only here
+    let r = unsafe { Registration::register(&t, e, NonNull::from(&e)) };
+    assert!(r.is_ok() && t.contains(&e), "registration: not in the table");
+    drop(r);
+    assert!(!t.contains(&e), "registration: dropped, and still in the table");
+    Ok(())
+}
+
 pub(super) fn test_cuckoo(_fs: &Fs, _nr: u64) -> TestRet {
+    registration()?;
     model::<u64, SipHash13Key, 2>("set, siphash, 2-way")?;
     model::<u64, SipHash13Key, 3>("set, siphash, 3-way")?;
     model::<u64, GoldenRatio, 2>("set, golden, 2-way")?;
