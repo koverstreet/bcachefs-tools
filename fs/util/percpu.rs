@@ -377,6 +377,38 @@ impl<T: ::pin_init::Zeroable> PerCpu<T> {
     }
 }
 
+#[cfg(not(kernel))]
+unsafe extern "C" {
+    fn __bch2_alloc_percpu_init(pcv: *mut c_void, init: InitCopy<c_void, c_void>, ctx: *mut c_void);
+}
+
+/// alloc_init()'s initializer, of @copy from zeroes, for CPU @cpu.
+pub type InitCopy<T, C> = unsafe extern "C" fn(copy: *mut T, ctx: *mut C, cpu: c_uint);
+
+impl<T> PerCpu<T> {
+    /// Every possible CPU's copy, initialized by @init: bch2_alloc_percpu_init().
+    /// In userspace a CPU is a thread's slot, and a thread that starts later
+    /// is a CPU coming online - @init runs on its copy then, until the PerCpu
+    /// is freed.
+    ///
+    /// # Safety
+    /// @init only initializes the copy it's given, from zeroes; @ctx lives
+    /// until the PerCpu is freed.
+    pub unsafe fn alloc_init<C>(init: InitCopy<T, C>, ctx: *mut C) -> Result<Self, AllocError> {
+        let p = PerCpu::<MaybeUninit<T>>::alloc()?.into_raw().cast::<T>();
+        #[cfg(kernel)]
+        for cpu in possible_cpus() {
+            unsafe { init(bch2_per_cpu_ptr(p.cast(), cpu).cast(), ctx, cpu) };
+        }
+        #[cfg(not(kernel))]
+        unsafe {
+            __bch2_alloc_percpu_init(p.cast(), core::mem::transmute::<InitCopy<T, C>, InitCopy<c_void, c_void>>(init),
+                                     ctx.cast())
+        };
+        Ok(PerCpu(p))
+    }
+}
+
 /// @n u64 counters, percpu, of a length known only when they're allocated:
 /// freed when dropped.
 pub struct PerCpuU64s {
