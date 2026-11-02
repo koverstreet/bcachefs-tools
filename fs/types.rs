@@ -754,7 +754,7 @@ pub struct Fs {
      */
     pub journal_scrub_seq: Volatile<u64>,
     pub journal_replay_seq_end: Volatile<u64>,
-    pub journal_entries_base_seq: u64,
+    pub journal_entries_base_seq: Volatile<u64>,
     #[c("struct { u32 ref; struct journal_keys v; } journal_keys")]
     #[pin]
     #[init(AtomicRef::pin_init(c::journal_keys::init()))]

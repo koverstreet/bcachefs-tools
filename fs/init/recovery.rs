@@ -16,6 +16,7 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{btree_id_can_reconstruct, btree_id_is_alloc, Fs};
 use crate::init::error::{self, id};
 use crate::init::passes::{self, run_explicit_sb};
+use crate::journal::{journal_pos_from_member_info_resume, journal_read, journal_reread_for_rewind};
 use crate::journal::sb as journal_sb;
 use crate::journal::seq_blacklist::blacklist_entries_gc;
 use crate::opts::opts_hooks_pre_set;
@@ -647,7 +648,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
         None
     };
 
-    fs.journal_pos_from_member_info_resume();
+    journal_pos_from_member_info_resume(fs);
 
     let read_journal = fs.sb.clean.get() == 0 ||
         fs.opts.retain_recovery_info.get() != 0 ||
@@ -657,14 +658,14 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
 
     if read_journal {
         bch_verbose!(fs, "starting journal read");
-        journal_start = fs.journal_read()?;
+        journal_start = journal_read(fs)?;
 
         /*
          * If we found persisted rewind ranges from a previous
          * crashed rewind, re-read any journal entries that were
          * dropped because they were older than last_seq:
          */
-        fs.journal_reread_for_rewind()?;
+        journal_reread_for_rewind(fs)?;
 
         /*
          * note: cmd_list_journal needs the blacklist table fully up to date so
@@ -699,8 +700,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
                          "no journal entries found")?;
             if clean.is_some() {
                 use_clean = true;
-            } else if let Some((_, &i)) = jk.entries().iter_rev().find(|(_, i)| !i.is_null()) {
-                let i = unsafe { &mut *i };
+            } else if let Some(i) = unsafe { fs.not_rw().journal_entries() }.slots_rev_mut().find_map(Option::as_mut) {
                 i.ignore_blacklisted = false;
                 i.ignore_not_dirty = false;
                 /*
@@ -766,7 +766,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     if fs.opts.journal_rewind.get() != 0 {
         fs.journal_add_rewind_range(journal_start.replay_end, fs.opts.journal_rewind.get())?;
         ignore_journal_rewind_errors(fs);
-        fs.journal_reread_for_rewind()?;
+        journal_reread_for_rewind(fs)?;
     }
 
     if fs.feature(c::bch_sb_feature::BCH_FEATURE_no_alloc_info) {
@@ -863,7 +863,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
              * were dropped during the first read because they
              * were older than last_seq:
              */
-            fs.journal_reread_for_rewind()?;
+            journal_reread_for_rewind(fs)?;
             keys_sort(fs)?;
         }
     }

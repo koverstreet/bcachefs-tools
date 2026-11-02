@@ -46,7 +46,7 @@ use crate::fs::{btree_id_is_alloc, Fs};
 use crate::init::recovery::NotRw;
 use crate::locking::{Guard, Locked};
 use crate::util::projections::VolatilePublish;
-use crate::util::alloc::{darray_exit, flags::GFP_KERNEL, DArrayLoan};
+use crate::util::alloc::{darray_exit, flags::GFP_KERNEL, DArrayLoan, KVVec};
 use crate::util::ffi::Opaque;
 use crate::util::gap_buffer::GapBuffer;
 use crate::util::kernel::cond_resched;
@@ -65,7 +65,8 @@ use cstruct_macros::{c_export, bitfield, CStruct, Init};
 use c::bch_bkey_type as kt;
 use c::bch_errcode as e;
 use c::bch_fs_flags as f;
-use crate::types::{DArray, GenRadix, c_default};
+use crate::journal::JournalEntries;
+use crate::types::{DArray, c_default, rust_only};
 use crate::util::vstructs::Head;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, AtomicUsize};
@@ -91,7 +92,7 @@ pub struct journal_ptr {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct journal_replay {
-    pub ptrs: DArray<c::journal_ptr, 8>,
+    pub ptrs: rust_only!(KVVec<c::journal_ptr>),
 
     pub csum_good: bool,
     pub ignore_blacklisted: bool,
@@ -99,7 +100,6 @@ pub struct journal_replay {
     /* must be last: */
     pub j: Head<c::jset>,
 }
-c_default!(journal_replay);
 
 nest! {
     #[derive(CStruct)]*
@@ -204,7 +204,7 @@ pub struct journal_keys {
      * keys'. Written only before the filesystem can go rw: NotRw.
      */
     #[c_anon("GENRADIX(struct journal_replay *) entries")]
-    entries: UnsafeCell<GenRadix<*mut c::journal_replay>>,
+    entries: UnsafeCell<JournalEntries>,
 
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&keys->overwrite_lock"))]
@@ -237,7 +237,7 @@ impl<'a> NotRw<'a> {
     ///
     /// # Safety
     /// No other reference to them lives meanwhile.
-    pub(crate) unsafe fn journal_entries(&self) -> &'a mut GenRadix<*mut c::journal_replay> {
+    pub(crate) unsafe fn journal_entries(&self) -> &'a mut JournalEntries {
         unsafe { &mut *self.fs.journal_keys_held().entries.get() }
     }
 }
@@ -287,7 +287,7 @@ impl Fs {
     /// The seq of the journal entry @k was read from: None for a key inserted
     /// since.
     pub(crate) fn journal_key_seq(&self, k: &c::journal_key) -> Option<u64> {
-        k.journal_pos().map(|pos| self.journal_entries_base_seq + u64::from(pos.journal_seq_offset))
+        k.journal_pos().map(|pos| self.journal_entries_base_seq.get() + u64::from(pos.journal_seq_offset))
     }
 }
 
@@ -303,9 +303,8 @@ impl c::journal_keys {
                 return k.src.allocated_k;
             }
             let pos = k.src.journal;
-            let i = *self.entries().get(pos.journal_seq_offset as usize)
-                .expect("a journal key's entry");
-            (&raw mut (*i).j._data).cast::<u64>().add(pos.journal_offset as usize).cast()
+            let i = self.entries().at_offset(pos.journal_seq_offset).expect("a journal key's entry");
+            (&raw const (**i).j._data).cast::<u64>().add(pos.journal_offset as usize).cast_mut().cast()
         }
     }
 
@@ -356,17 +355,15 @@ impl c::journal_keys {
 
     /// Every entry the journal read kept, and its jset, ignored or not.
     pub fn all_replays(&self) -> impl Iterator<Item = (&c::journal_replay, &c::jset)> {
-        self.entries().iter_from(0)
-            .filter_map(|(_, &i)| unsafe { i.as_ref().map(|i| (i, c::journal_replay::jset(i))) })
+        self.entries().iter().map(|i| (&**i, i.jset()))
     }
 
     /// all_replays(), newest first.
     pub fn all_replays_rev(&self) -> impl Iterator<Item = (&c::journal_replay, &c::jset)> {
-        self.entries().iter_rev()
-            .filter_map(|(_, &i)| unsafe { i.as_ref().map(|i| (i, c::journal_replay::jset(i))) })
+        self.entries().iter_rev().map(|i| (&**i, i.jset()))
     }
 
-    pub fn entries(&self) -> &GenRadix<*mut c::journal_replay> {
+    pub fn entries(&self) -> &JournalEntries {
         unsafe { &*self.entries.get() }
     }
 
@@ -1079,10 +1076,7 @@ fn sort_dedup(jk: &c::journal_keys, keys: &mut GapBuffer<c::journal_key>) {
 }
 
 fn journal_seq_is_rewound(fs: &Fs, seq: u64) -> bool {
-    let ranges = &fs.journal.rewind_ranges;
-    // SAFETY: a darray: nr ranges at data
-    let ranges = if ranges.nr == 0 { &[][..] } else { unsafe { core::slice::from_raw_parts(ranges.data, ranges.nr) } };
-    ranges.iter().any(|r| seq > r.to && seq <= r.from)
+    fs.journal.rewind_ranges.as_slice().iter().any(|r| seq > r.to && seq <= r.from)
 }
 
 /// The keys, from the journal entries read - again, if they were already,
@@ -1135,7 +1129,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
                     .with_level(entry.level);
                 n.flags = c::journal_key_flags::new().with_rewind(rewind);
                 n.src.journal = c::journal_key_journal_pos {
-                    journal_seq_offset: (seq - fs.journal_entries_base_seq) as u32,
+                    journal_seq_offset: (seq - fs.journal_entries_base_seq.get()) as u32,
                     journal_offset: ((k.as_bytes().as_ptr() as usize - (&raw const i.j._data) as usize)
                                      / size_of::<u64>()) as u32,
                 };
@@ -1203,12 +1197,7 @@ impl PinnedDrop for c::journal_keys {
         unsafe {
             self.reset(self.keys_mut());
             darray_exit(&mut *self.pre_sort.get());
-
-            for (_, &i) in self.entries().iter_from(0) {
-                c::rust_kvfree(i.cast());
-            }
         }
-        self.project().entries.get_mut().free();
     }
 }
 

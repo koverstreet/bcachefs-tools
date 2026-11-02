@@ -265,6 +265,5 @@ pub(crate) fn fs_mark_clean(fs: &Fs, guard: &mut SbLockGuard<'_>) {
     }
     sb.sb_mut().set_clean(true);
 
-    // SAFETY: under sb_lock, which it needs
-    unsafe { c::bch2_journal_pos_from_member_info_set(fs.as_ptr()) };
+    crate::journal::journal_pos_from_member_info_set(fs, guard);
 }

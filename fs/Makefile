@@ -96,7 +96,6 @@ bcachefs-y		:=			\
 	init/fs.o				\
 	journal/init.o				\
 	journal/journal.o			\
-	journal/read.o				\
 	journal/reclaim.o			\
 	journal/write.o				\
 	locking/locking.o			\

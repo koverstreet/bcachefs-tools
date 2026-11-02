@@ -4,7 +4,7 @@ use bch_bindgen::c;
 use bcachefs_kernel::{BbposRange, bbpos_range_parse};
 use bcachefs_kernel::journal::{
     entry_type, entry_btree_id, entry_log_str_eq,
-    journal_entry_type,
+    journal_entry_missing_range, journal_entry_type, journal_ptrs_to_text,
 };
 use bcachefs_kernel::journal::validate::journal_entry_to_text;
 use bcachefs_kernel::fs::Fs;
@@ -299,9 +299,7 @@ fn journal_entry_header_to_text(
         if p.j.no_flush() { 0 } else { 1 },
     );
 
-    unsafe {
-        c::bch2_journal_ptrs_to_text(out.as_raw(), c_fs, p as *const _ as *mut _);
-    }
+    journal_ptrs_to_text(out, unsafe { Fs::borrow_raw(c_fs) }, p);
     out.newline();
 }
 
@@ -756,13 +754,7 @@ pub(crate) fn list_journal_run(
                 seq = p_seq;
             }
 
-            loop {
-                let missing = unsafe {
-                    c::bch2_journal_entry_missing_range(c_fs, seq, p_seq)
-                };
-                if missing.start == 0 {
-                    break;
-                }
+            while let Some(missing) = journal_entry_missing_range(unsafe { Fs::borrow_raw(c_fs) }, seq, p_seq) {
                 seq = missing.end;
                 min_seq_to_print = missing.end;
             }
@@ -808,13 +800,7 @@ pub(crate) fn list_journal_run(
         }
 
         // Print missing ranges
-        loop {
-            let missing = unsafe {
-                c::bch2_journal_entry_missing_range(c_fs, seq, p_seq)
-            };
-            if missing.start == 0 {
-                break;
-            }
+        while let Some(missing) = journal_entry_missing_range(unsafe { Fs::borrow_raw(c_fs) }, seq, p_seq) {
             if f.print_missing {
                 println!(
                     "missing {} entries at {}-{}{}",

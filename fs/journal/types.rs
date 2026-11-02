@@ -440,7 +440,7 @@ nest! {
 
         pub flushed_seq_ondisk: Volatile<u64>,
         pub flushing_seq: AtomicI64,
-        pub oldest_seq_found_ondisk: u64,
+        pub oldest_seq_found_ondisk: Volatile<u64>,
 
         /* Oldest journal seq that is safe to rewind to — discards of buckets
          * freed at >= this seq have not yet been issued */
@@ -564,11 +564,11 @@ pub struct journal_device {
     pub discard_lock: c::mutex,
     pub discard: c::work_struct,
 
-    /* for bch_journal_read_device */
-    pub read: c::closure,
     pub highest_seq_found: u64,
 }
 c_default!(journal_device);
+
+unsafe impl Send for journal_device {}
 
 /*
  * journal_entry_res - reserve space in every journal entry:

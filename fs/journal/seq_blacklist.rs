@@ -250,7 +250,7 @@ pub(crate) fn blacklist_entries_gc(fs: &Fs, guard: &mut SbLockGuard<'_>) -> bool
     let t = unsafe { fs.journal_seq_blacklist.get_locked() };
     assert_eq!(t.len(), nr, "blacklist table out of sync with the superblock");
 
-    let oldest = fs.journal.oldest_seq_found_ondisk;
+    let oldest = fs.journal.oldest_seq_found_ondisk.get();
     let mut new_nr = 0;
     // in order, the section's order
     for (src, i) in Eytzinger0::of(t).iter().enumerate() {

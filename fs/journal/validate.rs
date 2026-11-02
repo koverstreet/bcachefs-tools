@@ -623,14 +623,24 @@ pub(crate) fn jset_validate(fs: &Fs, ca: Option<&Dev>, j: &mut [u8], sector: u64
                           name, sector, seq, h.csum_type());
 
     /* last_seq is ignored when JSET_NO_FLUSH is true */
-    if journal_entry_err_on!(ctx, !h.no_flush() && h.last_seq.get() > seq, jset_last_seq_newer_than_seq,
-                             "invalid journal entry: last_seq > seq ({} > {})", h.last_seq.get(), seq) {
-        jset_head_mut(j).last_seq = crate::types::Le64::new(seq);
+    if !h.no_flush() && jset_last_seq_check(fs, jset_head_mut(j), flags)? {
         return Ok(Jset::Bad);
     }
 
     jset_validate_entries(fs, j, flags)?;
     Ok(Jset::Ok)
+}
+
+pub(crate) fn jset_last_seq_check(fs: &Fs, h: &mut Head<c::jset>, flags: Flags) -> Result<bool, BchError> {
+    let ctx = Ctx::jset(fs, h, flags);
+    let seq = h.seq.get();
+
+    if journal_entry_err_on!(ctx, h.last_seq.get() > seq, jset_last_seq_newer_than_seq,
+                             "invalid journal entry: last_seq > seq ({} > {})", h.last_seq.get(), seq) {
+        h.last_seq = crate::types::Le64::new(seq);
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 /// Jset @h's header, as read from a bucket with @bucket_sectors_left: cut to
@@ -663,23 +673,6 @@ pub(crate) fn jset_validate_early(fs: &Fs, ca: Option<&Dev>, h: &mut Head<c::jse
         h.set_val_u64s(h.u64s() - (bytes - max) / 8);
     }
     Ok(Jset::Ok)
-}
-
-/// # Safety
-/// @jset and @entry are NULL, or headers; @entry, if both aren't, @jset's.
-#[c_export]
-pub unsafe fn bch2_journal_entry_err_msg(out: &mut Printbuf, version: u32, jset: *mut Head<c::jset>,
-                                         entry: *mut Head<c::jset_entry>) {
-    let pos = unsafe { jset.as_ref() }.map(|j| JsetPos { seq: j.seq.get(), u64s: j.u64s() as u32 });
-    let entry = unsafe { entry.as_ref() }.map(|e| {
-        let offset = if jset.is_null() {
-            0
-        } else {
-            (e as *const _ as usize - (jset as usize + JSET_HEAD)) / 8
-        };
-        EntryPos { type_: e.type_, offset }
-    });
-    err_msg(out, version, pos, entry)
 }
 
 /// # Safety
