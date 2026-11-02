@@ -1767,6 +1767,13 @@ impl<'a> SbWrite<'a> {
         self.record(v & bit == 0)
     }
 
+    /// Compat feature @compat set, recorded: whether it wasn't already.
+    pub fn set_compat(&mut self, compat: c::bch_sb_compat) -> bool {
+        let (v, bit) = (self.sb().compat[0].get(), 1u64 << compat.0);
+        self.sb_mut().compat[0] |= bit;
+        self.record(v & bit == 0)
+    }
+
     /// The ext section, all of it: mount grows it to its full size, so a
     /// mounted filesystem's has every field.
     pub fn ext_mut(&mut self) -> &mut c::bch_sb_field_ext__whole {
