@@ -94,7 +94,7 @@ use crate::types::CacheAligned;
 use crate::util::alloc::AllocError;
 use crate::util::backref::BackRef;
 use crate::util::kernel::random_u64;
-use crate::util::rcu::{read_lock, RcuArray, RcuElement, ReadGuard};
+use crate::util::rcu::{read_lock, Detach, DetachMember, RcuArray, RcuElement, ReadGuard};
 use crate::util::siphash::SipHash13Key;
 
 /// The longest chain of moves an insert follows before it rehashes.
@@ -677,12 +677,16 @@ impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> Cuckoo<I, S
 /// its key itself is registered by register(), and this held beside it.
 ///
 /// The table is a BackRef: it outlives its entries.
+///
+/// Taking the entry out is its Detach: what the entry's in is freed with it
+/// detached first - and readers of a table that's shared, a grace period on.
 pub struct Registration<K, E, S = SipHash13Key, const W: usize = 2>
 where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
 {
-    table: BackRef<Cuckoo<Entry<E>, S, W>>,
-    entry: NonNull<E>,
-    key:   K,
+    table:   BackRef<Cuckoo<Entry<E>, S, W>>,
+    entry:   NonNull<E>,
+    key:     K,
+    _detach: DetachMember,
 }
 
 // SAFETY: shared or sent, it gives out only the key, and its drop takes the
@@ -718,15 +722,15 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
     /// # Safety
     /// Entry::new()'s, but for the key, which is this one's; @table outlives
     /// this; and @e is the entry this is a field of, being pin-initialized -
-    /// pin-init's &this - with this its first field, so dropped first, and
-    /// initialized last.
+    /// pin-init's &this - with this initialized last, and detached before
+    /// the rest of @e is dropped: @e's Detach, which its drop runs first.
     pub unsafe fn new<'w>(table: &'w Cuckoo<Entry<E>, S, W>, key: K, e: NonNull<E>)
         -> impl ::pin_init::PinInit<Self, RegisterError> + use<'w, K, E, S, W>
     {
         let init = move |slot: *mut Self| {
             // SAFETY: @slot is ours to write, pin-init's; @table outlives
             // this, the caller's
-            unsafe { slot.write(Self { table: BackRef::new(table), entry: e, key }) };
+            unsafe { slot.write(Self { table: BackRef::new(table), entry: e, key, _detach: DetachMember }) };
             // SAFETY: the caller's
             let err = match table.insert_new(unsafe { Entry::new(e) }) {
                 Ok(Ok(())) => return Ok(()),
@@ -754,7 +758,7 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
         // SAFETY: the caller's
         match table.insert_new(unsafe { Entry::new(e) }) {
             // SAFETY: the caller's
-            Ok(Ok(())) => Ok(Self { table: unsafe { BackRef::new(table) }, entry: e, key }),
+            Ok(Ok(())) => Ok(Self { table: unsafe { BackRef::new(table) }, entry: e, key, _detach: DetachMember }),
             Ok(Err(_)) => Err(RegisterError::Exists),
             Err(_)     => Err(RegisterError::Alloc),
         }
@@ -765,12 +769,12 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
     }
 }
 
-impl<K, E, S, const W: usize> Drop for Registration<K, E, S, W>
+impl<K, E, S, const W: usize> Detach for Registration<K, E, S, W>
 where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
 {
     /// Out, if the slot is still this entry's: an insert() of its key may
-    /// have put another in its place.
-    fn drop(&mut self) {
+    /// have put another in its place - or the entry's out already.
+    fn detach(&self) {
         let table = &*self.table;
         let g = table.lock.lock();
         let Some(s) = table.locked(&g).and_then(|t| t.find_locked(&self.key)) else { return };
@@ -778,6 +782,15 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
             s.clear();
             table.nr.fetch_sub(1, Relaxed);
         }
+    }
+}
+
+impl<K, E, S, const W: usize> Drop for Registration<K, E, S, W>
+where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
+{
+    fn drop(&mut self) {
+        // not self.detach(): that's &mut Self's, which has nothing to detach
+        <Self as Detach>::detach(self)
     }
 }
 

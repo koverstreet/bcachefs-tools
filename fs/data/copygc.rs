@@ -75,7 +75,7 @@ use crate::util::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
 use crate::util::kernel::{cond_resched, WRITE};
 use crate::util::kthread::{Kthread, KthreadSelf};
 use crate::util::late::Late;
-use crate::util::rcu::read_lock;
+use crate::util::rcu::{read_lock, Detach};
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::sort::heapsort_by;
 use crate::util::workqueue::{Workqueue, WqFlags};
@@ -87,7 +87,7 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering::{Acquire, Relaxed}};
 use cstruct_macros::{c_export, CStruct, Init, Late, TypeInfo};
-use pin_init::{pin_data, pin_init, PinInit};
+use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::util::futex::EventCount;
@@ -169,14 +169,22 @@ impl Drop for DevInFlight<'_> {
     }
 }
 
-#[pin_data]
+#[pin_data(PinnedDrop)]
+#[derive(Detach)]
 struct InFlight<'f> {
-    /// First, so it's out of the set before the rest goes
     #[pin]
     reg:  Registration<c::move_bucket_key, InFlight<'f>>,
     _dev: DevInFlight<'f>,
     /// What the moves count on
     b:    c::move_bucket,
+}
+
+/// Out of the set before the rest goes
+#[pinned_drop]
+impl PinnedDrop for InFlight<'_> {
+    fn drop(self: Pin<&mut Self>) {
+        <Self as Detach>::detach(&self)
+    }
 }
 
 type InFlightSet<'f> = Cuckoo<Entry<InFlight<'f>>>;
@@ -190,8 +198,8 @@ impl<'f> InFlight<'f> {
             b:    c::move_bucket { count: AtomicI32::new(0) },
             // SAFETY: the set's the thread's: only it reads the set, so
             // Entry::new()'s grace period is none, and it drops every
-            // InFlight before the set goes. This is the first field,
-            // initialized last, so the rest's there when it's hashed.
+            // InFlight before the set goes. Initialized last, so the rest's
+            // there when it's hashed.
             reg <- unsafe { Registration::new(set, key, this) },
         }? RegisterError)
     }
