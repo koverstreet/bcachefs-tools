@@ -79,6 +79,8 @@ unsafe extern "C" {
     fn urcu_memb_synchronize_rcu();
     fn urcu_memb_call_rcu(rcu: *mut c::rcu_head, func: unsafe extern "C" fn(*mut c::rcu_head));
     fn urcu_memb_barrier();
+    fn urcu_memb_start_poll_synchronize_rcu() -> c::urcu_gp_poll_state;
+    fn urcu_memb_poll_state_synchronize_rcu(state: c::urcu_gp_poll_state) -> bool;
 }
 
 // ── Reading ──────────────────────────────────────────────────────────────
@@ -137,6 +139,109 @@ pub fn synchronize() {
     unsafe { kernel::bindings::synchronize_rcu() };
     #[cfg(not(kernel))]
     unsafe { urcu_memb_synchronize_rcu() };
+}
+
+// ── Grace periods, polled ────────────────────────────────────────────────
+
+/// A grace period, as the poll API's cookie names one.
+#[derive(Clone, Copy, Default)]
+pub struct GpCookie(#[cfg(kernel)] usize, #[cfg(not(kernel))] c::urcu_gp_poll_state);
+
+impl PartialEq for GpCookie {
+    fn eq(&self, o: &Self) -> bool {
+        #[cfg(kernel)]
+        return self.0 == o.0;
+        #[cfg(not(kernel))]
+        return self.0.grace_period_id == o.0.grace_period_id;
+    }
+}
+
+/// Which RCU: the kernel's, or an SRCU domain's - C's srcu_struct pointer,
+/// null for RCU. In userspace, SRCU is RCU.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct Flavor(*mut c::srcu_struct);
+
+// an srcu_struct is any thread's to wait on and queue on
+unsafe impl Send for Flavor {}
+unsafe impl Sync for Flavor {}
+
+impl Flavor {
+    pub const RCU: Flavor = Flavor(core::ptr::null_mut());
+
+    /// # Safety
+    /// @srcu outlives everything waited for or queued on it through this.
+    pub unsafe fn srcu(srcu: *mut c::srcu_struct) -> Flavor {
+        Flavor(srcu)
+    }
+
+    pub fn as_ptr(self) -> *mut c::srcu_struct {
+        self.0
+    }
+
+    #[cfg(kernel)]
+    fn ssp(self) -> Option<*mut kernel::bindings::srcu_struct> {
+        (!self.0.is_null()).then(|| self.0.cast())
+    }
+
+    /// The grace period a reader now would have to be past, without starting
+    /// one: get_state_synchronize_rcu().
+    pub fn get_state(self) -> GpCookie {
+        #[cfg(kernel)]
+        return GpCookie(match self.ssp() {
+            Some(ssp) => unsafe { kernel::bindings::get_state_synchronize_srcu(ssp) },
+            None      => unsafe { kernel::bindings::get_state_synchronize_rcu() },
+        });
+        #[cfg(not(kernel))]
+        return GpCookie(unsafe { urcu_memb_start_poll_synchronize_rcu() });
+    }
+
+    /// get_state(), and that grace period started: start_poll_synchronize_rcu().
+    pub fn start_poll(self) -> GpCookie {
+        #[cfg(kernel)]
+        return GpCookie(match self.ssp() {
+            Some(ssp) => unsafe { kernel::bindings::start_poll_synchronize_srcu(ssp) },
+            None      => unsafe { kernel::bindings::start_poll_synchronize_rcu() },
+        });
+        #[cfg(not(kernel))]
+        return GpCookie(unsafe { urcu_memb_start_poll_synchronize_rcu() });
+    }
+
+    /// Whether @c's grace period is over: poll_state_synchronize_rcu().
+    pub fn poll(self, c: GpCookie) -> bool {
+        #[cfg(kernel)]
+        return match self.ssp() {
+            Some(ssp) => unsafe { kernel::bindings::poll_state_synchronize_srcu(ssp, c.0) },
+            None      => unsafe { kernel::bindings::poll_state_synchronize_rcu(c.0) },
+        };
+        #[cfg(not(kernel))]
+        return unsafe { urcu_memb_poll_state_synchronize_rcu(c.0) };
+    }
+
+    /// Every callback queued with call() run: rcu_barrier().
+    pub fn barrier(self) {
+        #[cfg(kernel)]
+        match self.ssp() {
+            Some(ssp) => unsafe { kernel::bindings::srcu_barrier(ssp) },
+            None      => unsafe { kernel::bindings::rcu_barrier() },
+        }
+        #[cfg(not(kernel))]
+        unsafe { urcu_memb_barrier() };
+    }
+
+    /// @func(@head) a grace period on: call_rcu().
+    ///
+    /// # Safety
+    /// @head isn't queued already, and lives until @func runs.
+    pub unsafe fn call(self, head: *mut c::rcu_head, func: unsafe extern "C" fn(*mut c::rcu_head)) {
+        #[cfg(kernel)]
+        match self.ssp() {
+            Some(ssp) => unsafe { kernel::bindings::call_srcu(ssp, head, Some(func)) },
+            None      => unsafe { call_rcu(head, func) },
+        }
+        #[cfg(not(kernel))]
+        unsafe { call_rcu(head, func) };
+    }
 }
 
 // ── Freeing ──────────────────────────────────────────────────────────────
