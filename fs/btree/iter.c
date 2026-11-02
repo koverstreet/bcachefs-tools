@@ -2459,6 +2459,15 @@ static const struct bkey_i *bch2_btree_journal_peek(struct btree_trans *trans,
 						    struct bpos search_pos,
 						    struct bpos end_pos)
 {
+	/*
+	 * BTREE_ITER_with_journal is the iterator's from its init; trans_begin()
+	 * puts the transaction's ref on the journal keys once replay is done,
+	 * and can't clear the flag on iterators it can't see - so the
+	 * transaction's ref, not the iterator's flag, says the keys are there:
+	 */
+	if (!trans->journal_replay_not_finished)
+		return NULL;
+
 	struct btree_path *path = btree_iter_path(trans, iter);
 
 	return bch2_journal_keys_peek_max(trans->c, iter->btree_id,
@@ -2504,6 +2513,9 @@ static const struct bkey_i *bch2_btree_journal_peek_prev(struct btree_trans *tra
 							 struct bpos search_key,
 							 struct bpos end_pos)
 {
+	if (!trans->journal_replay_not_finished)
+		return NULL;
+
 	struct btree_path *path = btree_iter_path(trans, iter);
 
 	return bch2_journal_keys_peek_prev_min(trans->c, iter->btree_id,
