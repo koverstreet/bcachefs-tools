@@ -23,6 +23,13 @@ impl core::ops::BitOr for Flags {
     }
 }
 
+impl Flags {
+    /// As C's gfp_t: what krealloc()'s shrinkers are run as.
+    pub fn gfp(self) -> crate::c::gfp_t {
+        if self.0 & flags::GFP_NOWAIT.0 != 0 { crate::c::GFP_NOWAIT } else { crate::c::GFP_KERNEL }
+    }
+}
+
 pub mod flags {
     use super::Flags;
 
@@ -34,16 +41,26 @@ pub mod flags {
 
 unsafe extern "C" {
     fn realloc(p: *mut core::ffi::c_void, size: usize) -> *mut core::ffi::c_void;
+    fn run_shrinkers(gfp_mask: crate::c::gfp_t, allocation_failed: bool);
 }
 
-/// krealloc(), as the shim's slab.h has it: realloc(), its memory what C's
-/// kfree() - free() - takes back. Null if it can't.
+/// krealloc(), as the shim's slab.h has it: tried ten times, the shrinkers run
+/// between - if @gfp lets them - its memory what C's kfree() - free() - takes
+/// back. Null if it can't.
 ///
 /// # Safety
 /// @p is null, or malloc()'s and not used after unless this fails.
-pub unsafe fn krealloc(p: *mut u8, size: usize) -> *mut u8 {
-    // SAFETY: the caller's
-    unsafe { realloc(p.cast(), size).cast() }
+pub unsafe fn krealloc(p: *mut u8, size: usize, gfp: crate::c::gfp_t) -> *mut u8 {
+    for _ in 0..10 {
+        // not 0: realloc() would free @p
+        let new = unsafe { realloc(p.cast(), size.max(1)) };
+        if !new.is_null() {
+            return new.cast();
+        }
+
+        unsafe { run_shrinkers(gfp, true) };
+    }
+    core::ptr::null_mut()
 }
 
 /// What push_within_capacity() gives back: there was no room for it.

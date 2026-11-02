@@ -197,7 +197,7 @@ pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<core::ptr::NonNull<u8>,
     }
     // SAFETY: the caller's
     #[cfg(not(kernel))]
-    core::ptr::NonNull::new(unsafe { bcachefs_shim::alloc::krealloc(p, new) }).ok_or(AllocError)
+    core::ptr::NonNull::new(unsafe { bcachefs_shim::alloc::krealloc(p, new, crate::c::GFP_KERNEL) }).ok_or(AllocError)
 }
 
 /// @size bytes kmalloc()'d, uninitialized, as @gfp says: for a buffer of no
@@ -213,8 +213,7 @@ pub fn kmalloc(size: usize, gfp: Flags) -> Result<core::ptr::NonNull<u8>, AllocE
     // SAFETY: a new allocation
     #[cfg(not(kernel))]
     {
-        let _ = gfp;
-        core::ptr::NonNull::new(unsafe { bcachefs_shim::alloc::krealloc(core::ptr::null_mut(), size) })
+        core::ptr::NonNull::new(unsafe { bcachefs_shim::alloc::krealloc(core::ptr::null_mut(), size, gfp.gfp()) })
             .ok_or(AllocError)
     }
 }
