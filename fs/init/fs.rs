@@ -48,7 +48,7 @@ use crate::util::kobject::{GroupList, KobjOwner, Kobject};
 use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
 use crate::util::percpu::PerCpu;
 use crate::util::printbuf::prt_bdevname;
-use crate::util::rcu::read_lock;
+use crate::util::rcu::{read_lock, RcuPtrWriter};
 use crate::util::refcount::{RefGuard, WaitableRef};
 #[cfg(kernel)]
 use crate::util::{place::Placed, refcount::AtomicRef};
@@ -92,6 +92,12 @@ pub struct StateLockWrite<'a> {
 impl<'a> StateLockWrite<'a> {
     pub(crate) fn fs(&self) -> &'a Fs {
         self.fs
+    }
+
+    /// c->devs[], as their writer has them.
+    pub fn devs(&self) -> &[RcuPtrWriter<NonNull<Dev>>; c::BCH_SB_MEMBERS_MAX as usize] {
+        // state_lock is held, for as long as we are
+        unsafe { self.fs.devs.published_writer() }
     }
 }
 

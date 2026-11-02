@@ -165,6 +165,9 @@ impl<T> NoDetach<T> {
 }
 
 pub(crate) trait RcuFreeing: Sized {
+    /// A build error for a T that's FreeAnytime.
+    fn assert_rcu_freed();
+
     fn alloc_pinned<E: From<AllocError>>(init: impl PinInit<Self, E>) -> Result<*mut Self, E>;
 
     /// # Safety
@@ -173,6 +176,8 @@ pub(crate) trait RcuFreeing: Sized {
 }
 
 impl<T> RcuFreeing for T {
+    default fn assert_rcu_freed() {}
+
     default fn alloc_pinned<E: From<AllocError>>(init: impl PinInit<T, E>) -> Result<*mut T, E> {
         let p = alloc_in::<false, RcuFreed<T>, E>(RcuFreed::init(init), GFP_KERNEL)?;
         Ok(unsafe { &raw mut (*p).value })
@@ -185,6 +190,10 @@ impl<T> RcuFreeing for T {
 }
 
 impl<T: FreeAnytime> RcuFreeing for T {
+    fn assert_rcu_freed() {
+        let () = NotRcuFreed::<T>::ERR;
+    }
+
     fn alloc_pinned<E: From<AllocError>>(init: impl PinInit<T, E>) -> Result<*mut T, E> {
         alloc_in::<false, T, E>(init, GFP_KERNEL)
     }
@@ -193,6 +202,12 @@ impl<T: FreeAnytime> RcuFreeing for T {
         <T as Detach>::detach(unsafe { &*p });
         unsafe { free_pinned_now(p) }
     }
+}
+
+struct NotRcuFreed<T>(PhantomData<T>);
+
+impl<T> NotRcuFreed<T> {
+    const ERR: () = panic!("what RCU readers reach must be freed a grace period on: it needs an RcuMember");
 }
 
 #[repr(C)]
@@ -315,36 +330,133 @@ impl Drop for SrcuReadGuard<'_> {
 
 // ── RcuPtr ───────────────────────────────────────────────────────────────
 
-/// C's `T __rcu *` to an object C owns - a bch_dev in c->devs[] - laid out as
-/// C's pointer: C publishes it with rcu_assign_pointer(), and frees what it
-/// replaces only after a grace period.
+/// # Safety
+/// into_raw() gives itself up as a pointer to the target, which from_raw()
+/// takes back.
+pub unsafe trait RcuPointer: Sized {
+    type Target;
+
+    fn into_raw(self) -> NonNull<Self::Target>;
+
+    /// # Safety
+    /// @p is into_raw()'s, and taken back once.
+    unsafe fn from_raw(p: NonNull<Self::Target>) -> Self;
+}
+
+/// # Safety
+/// The target lives as long as Self does, and is freed only as its type
+/// frees it: a grace period on, if it isn't FreeAnytime.
+pub unsafe trait RcuOwner: RcuPointer {}
+
+unsafe impl<T> RcuPointer for NonNull<T> {
+    type Target = T;
+
+    fn into_raw(self) -> NonNull<T> {
+        self
+    }
+
+    unsafe fn from_raw(p: NonNull<T>) -> Self {
+        p
+    }
+}
+
+unsafe impl<T: AlwaysRefCounted> RcuPointer for ARef<T> {
+    type Target = T;
+
+    fn into_raw(self) -> NonNull<T> {
+        ARef::into_raw(self)
+    }
+
+    unsafe fn from_raw(p: NonNull<T>) -> Self {
+        unsafe { ARef::from_raw(p) }
+    }
+}
+
+unsafe impl<T: AlwaysRefCounted> RcuOwner for ARef<T> {}
+
 #[repr(transparent)]
-pub struct RcuPtr<T>(AtomicPtr<T>);
+pub struct RcuPtr<P: RcuPointer> {
+    p:  AtomicPtr<P::Target>,
+    _p: PhantomData<P>,
+}
 
-// SAFETY: zeroed is NULL, nothing published
-unsafe impl<T> ::pin_init::Zeroable for RcuPtr<T> {}
+unsafe impl<P: RcuPointer> ::pin_init::Zeroable for RcuPtr<P> {}
 
-impl<T> RcuPtr<T> {
-    /// rcu_dereference(): what's published, for as long as @_g's section.
-    pub fn read<'a>(&'a self, _g: &'a ReadGuard) -> Option<&'a T> {
-        // SAFETY: what's published is a valid T, freed only after a grace
-        // period - past @_g's section
-        unsafe { self.0.load(Ordering::Acquire).as_ref() }
+impl<P: RcuPointer> RcuPtr<P> {
+    pub fn read<'a>(&'a self, _g: &'a ReadGuard) -> Option<&'a P::Target> {
+        unsafe { self.p.load(Ordering::Acquire).as_ref() }
     }
 
-    /// The pointer as it is, for C that takes it: rcu_dereference_protected()'s
-    /// - its holder's lock, or a ref, keeps it alive, not this.
-    pub fn as_ptr(&self) -> *mut T {
-        self.0.load(Ordering::Relaxed)
+    /// For C: its holder's lock, or a ref, keeps what it points to alive -
+    /// not this.
+    pub fn as_ptr(&self) -> *mut P::Target {
+        self.p.load(Ordering::Relaxed)
     }
 
-    /// rcu_assign_pointer() @p.
+    fn swap(&self, new: Option<P>) -> Option<P> {
+        let new = new.map_or(core::ptr::null_mut(), |p| P::into_raw(p).as_ptr());
+        NonNull::new(self.p.swap(new, Ordering::Release)).map(|old| unsafe { P::from_raw(old) })
+    }
+
+    fn fill(&self, p: P) {
+        let old = self.swap(Some(p));
+        assert!(old.is_none(), "publishing into a slot already holding one");
+    }
+}
+
+impl<P: RcuPointer> Drop for RcuPtr<P> {
+    fn drop(&mut self) {
+        drop(self.swap(None));
+    }
+}
+
+unsafe impl<P: RcuPointer> Publish for RcuPtr<P> {
+    type Writer = RcuPtrWriter<P>;
+}
+
+#[repr(transparent)]
+pub struct RcuPtrWriter<P: RcuPointer>(RcuPtr<P>);
+
+impl<P: RcuPointer> core::ops::Deref for RcuPtrWriter<P> {
+    type Target = RcuPtr<P>;
+
+    fn deref(&self) -> &RcuPtr<P> {
+        &self.0
+    }
+}
+
+impl<P: RcuOwner> RcuPtrWriter<P> {
+    /// Into an empty slot.
+    pub fn publish(&self, p: P) {
+        <P::Target as RcuFreeing>::assert_rcu_freed();
+        self.0.fill(p);
+    }
+}
+
+impl<T> RcuPtrWriter<NonNull<T>> {
+    /// Into an empty slot.
     ///
     /// # Safety
-    /// The caller is the writer - holds the writers' lock - and what it
-    /// replaces is freed only after a grace period.
-    pub unsafe fn assign(&self, p: *mut T) {
-        self.0.store(p, Ordering::Release)
+    /// @p stays valid until a grace period after it's taken out.
+    pub unsafe fn publish(&self, p: NonNull<T>) {
+        self.0.fill(p);
+    }
+}
+
+impl<P: RcuPointer> RcuPtrWriter<P> {
+    pub fn take(&self) -> Option<P> {
+        self.0.swap(None)
+    }
+
+    /// An owner of its own, not a borrow - which a take() by its own writer
+    /// would outlive.
+    pub fn get(&self) -> Option<P>
+    where
+        P: Clone,
+    {
+        // no writer but us, to take it while we clone it
+        let p = core::mem::ManuallyDrop::new(unsafe { P::from_raw(NonNull::new(self.0.as_ptr())?) });
+        Some((*p).clone())
     }
 }
 

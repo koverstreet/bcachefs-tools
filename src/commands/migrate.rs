@@ -466,7 +466,7 @@ fn migrate_fs(
 
     // Calculate reserve_start: round up (superblock_size * 2 + BCH_SB_SECTOR) sectors
     // to bucket boundary (in bytes)
-    let bucket_bytes = unsafe { (*(*fs.as_ptr()).devs[0].as_ptr()).mi.get().bucket_size as u64 } << 9;
+    let bucket_bytes = unsafe { (*fs.devs[0].as_ptr()).mi.get().bucket_size as u64 } << 9;
     let reserve_start = (((superblock_size as u64 * 2 + c::BCH_SB_SECTOR as u64) << 9)
         .div_ceil(bucket_bytes)) * bucket_bytes;
 
@@ -566,7 +566,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
         .map_err(|e| anyhow!("Error allocating buckets_nouse: {}", e))?;
 
     // Mark the new sb bucket range as nouse
-    let ca = unsafe { (*fs.as_ptr()).devs[0].as_ptr() };
+    let ca = fs.devs[0].as_ptr();
     unsafe { mark_nouse_range(ca, 0, c::BCH_SB_SECTOR as u64 + sb_size as u64 * 2) };
 
     // Clear no_default_sb feature so recovery doesn't force ro

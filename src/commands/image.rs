@@ -357,6 +357,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
         .map_err(|e| anyhow!("truncate error: {}", e))?;
 
     // Lock sb and finalize
+    let state = fs.state_lock_write();
     let mut sb = fs.sb_lock();
 
     if !keep_alloc {
@@ -366,9 +367,8 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
         unsafe { strip_fs_alloc(fs.as_ptr()) };
     }
 
-    // Drop temp device
-    // SAFETY: offline, so ours alone - and the device isn't freed
-    unsafe { fs.devs[1].assign(std::ptr::null_mut()) };
+    // Drop temp device - out of c->devs[], not freed
+    state.devs()[1].take();
 
     // Allow journal on primary device
     let m = sb.fs_member_mut(0);

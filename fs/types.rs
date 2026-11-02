@@ -676,8 +676,9 @@ pub struct Fs {
     pub(crate) ro_ref_events: rust_only!(crate::util::futex::EventCount),
     pub read_only_work: c::work_struct,
 
+    /// Written under state_lock: StateLockWrite::devs().
     #[c("struct bch_dev __rcu *devs[BCH_SB_MEMBERS_MAX]")]
-    pub devs: [crate::util::rcu::RcuPtr<Dev>; c::BCH_SB_MEMBERS_MAX as usize],
+    pub devs: LockedBy<(), [crate::util::rcu::RcuPtr<core::ptr::NonNull<Dev>>; c::BCH_SB_MEMBERS_MAX as usize]>,
     #[c("struct bch_devs_mask devs_online")]
     pub devs_online: c::AtomicDevsMask,
     #[c("struct bch_devs_mask devs_removed")]

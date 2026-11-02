@@ -17,7 +17,7 @@
 //! at completion - bio_put(), end_io() - with no grace period. Each list's
 //! objects RCU-freed is a series of its own; then fast_list can be typed (its
 //! XXX), with an unsafe "freed after a grace period" assertion, as
-//! RcuPtr::assign().
+//! publishing a NonNull into an RcuPtr.
 
 #![allow(non_camel_case_types)]
 
