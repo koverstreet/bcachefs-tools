@@ -668,7 +668,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
 
         let jk = fs.journal_keys_get().expect("recovery after it was done with the journal keys");
         let jk = jk.value();
-        let mut last_journal_entry = jk.replays_rev().find(|(i, _)| !i.ignored()).map(|(_, j)| j);
+        let mut last_journal_entry = jk.all_replays_rev().find(|(i, _)| !i.ignored()).map(|(_, j)| j);
 
         if last_journal_entry.is_none() {
             fsck_err_on!(fs, fs.sb.clean.get() == 0, id::dirty_but_no_journal_entries,
@@ -686,7 +686,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
                  * entry, set it here:
                  */
                 i.j.last_seq = i.j.seq;
-                last_journal_entry = jk.replays_rev().next().map(|(_, j)| j);
+                last_journal_entry = jk.all_replays_rev().next().map(|(_, j)| j);
             }
         }
 

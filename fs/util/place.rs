@@ -134,7 +134,7 @@ pub(crate) unsafe trait Field<const N: u64> {
 /// is, for the C structs that hold one. The UnsafeCell, of no bytes, is so
 /// container() widens to a usable &P - see the file comment.
 #[repr(C)]
-pub(crate) struct At<B, const N: u64> {
+pub struct At<B, const N: u64> {
     _c:   UnsafeCell<[u8; 0]>,
     _b:   PhantomData<fn() -> B>,
     /// !Unpin - a PhantomData of it, which improper_ctypes skips, as it

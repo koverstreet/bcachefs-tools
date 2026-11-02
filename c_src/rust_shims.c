@@ -74,47 +74,6 @@ void rust_strip_alloc_do(struct bch_fs *c)
 	bch2_write_super(c);
 }
 
-struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c)
-{
-	struct rust_journal_entries ret = { NULL, 0 };
-	struct genradix_iter iter;
-	struct journal_replay **_p;
-	size_t count = 0;
-
-	/* the last journal_keys put frees the entries: hold one while they're out */
-	if (!bch2_journal_keys_tryget(c))
-		return ret;
-
-	genradix_for_each(&c->journal_keys.v.entries, iter, _p)
-		if (*_p)
-			count++;
-
-	if (!count) {
-		bch2_journal_keys_put(c);
-		return ret;
-	}
-
-	ret.entries = malloc(count * sizeof(*ret.entries));
-	if (!ret.entries)
-		die("malloc");
-
-	genradix_for_each(&c->journal_keys.v.entries, iter, _p)
-		if (*_p)
-			ret.entries[ret.nr++] = *_p;
-
-	return ret;
-}
-
-void rust_journal_entries_put(struct bch_fs *c, struct rust_journal_entries *e)
-{
-	if (e->entries) {
-		free(e->entries);
-		e->entries = NULL;
-		e->nr = 0;
-		bch2_journal_keys_put(c);
-	}
-}
-
 
 /*
  * Data IO shims — bridge Rust async IO to kernel closure-based completion.

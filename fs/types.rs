@@ -759,7 +759,7 @@ pub struct Fs {
     #[c("struct { u32 ref; struct journal_keys v; } journal_keys")]
     #[pin]
     #[init(AtomicRef::pin_init(c::journal_keys::init()))]
-    pub(crate) journal_keys: Placed<AtomicRef<c::journal_keys>, crate::at!(Fs.journal_keys)>,
+    pub journal_keys: Placed<AtomicRef<c::journal_keys>, crate::at!(Fs.journal_keys)>,
     /// The blacklist, in memory: journal/seq_blacklist.rs's alone.
     #[pin]
     #[init(RustOnly::new(::pin_init::zeroed::<crate::journal::seq_blacklist::JournalSeqBlacklist>()))]

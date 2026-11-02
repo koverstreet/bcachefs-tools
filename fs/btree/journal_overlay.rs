@@ -208,11 +208,11 @@ pub struct journal_keys {
 
 type OverwriteGuard<'a> = Guard<'a, c::mutex, c::OverwriteRanges, c::OverwriteRangesLive>;
 
-pub(crate) type JournalKeysRef = RefGuard<Placed<AtomicRef<c::journal_keys>, crate::at!(Fs.journal_keys)>>;
+pub type JournalKeysRef = RefGuard<Placed<AtomicRef<c::journal_keys>, crate::at!(Fs.journal_keys)>>;
 
 impl Fs {
     /// A ref on the journal keys: None once recovery's done with them.
-    pub(crate) fn journal_keys_get(&self) -> Option<JournalKeysRef> {
+    pub fn journal_keys_get(&self) -> Option<JournalKeysRef> {
         self.journal_keys.tryget()
     }
 
@@ -332,8 +332,15 @@ impl c::journal_keys {
             .map(|i| (i, unsafe { c::journal_replay::jset(i) }))
     }
 
-    /// Every entry the journal read kept, and its jset: newest first.
-    pub fn replays_rev(&self) -> impl Iterator<Item = (&c::journal_replay, &c::jset)> {
+    /// Every entry the journal read kept, and its jset, ignored or not.
+    pub fn all_replays(&self) -> impl Iterator<Item = (&c::journal_replay, &c::jset)> {
+        self.entries.iter_from(0)
+            .filter_map(|(_, &i)| unsafe { i.as_ref() })
+            .map(|i| (i, unsafe { c::journal_replay::jset(i) }))
+    }
+
+    /// all_replays(), newest first.
+    pub fn all_replays_rev(&self) -> impl Iterator<Item = (&c::journal_replay, &c::jset)> {
         self.entries.iter_rev()
             .filter_map(|(_, &i)| unsafe { i.as_ref() })
             .map(|i| (i, unsafe { c::journal_replay::jset(i) }))
