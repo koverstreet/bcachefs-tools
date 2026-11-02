@@ -15,7 +15,7 @@ impl Hash for Bpos {
 
 impl PartialEq for Bpos {
     fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
+        (self.inode, self.offset, self.snapshot) == (other.inode, other.offset, other.snapshot)
     }
 }
 
@@ -29,17 +29,8 @@ impl PartialOrd for Bpos {
 
 impl Ord for Bpos {
     fn cmp(&self, other: &Self) -> Ordering {
-        let l_inode = self.inode;
-        let r_inode = other.inode;
-        let l_offset = self.offset;
-        let r_offset = other.offset;
-        let l_snapshot = self.snapshot;
-        let r_snapshot = other.snapshot;
-
-        l_inode
-            .cmp(&r_inode)
-            .then(l_offset.cmp(&r_offset))
-            .then(l_snapshot.cmp(&r_snapshot))
+        /* not Ordering::then(): that compares every field, and < can't skip it */
+        (self.inode, self.offset, self.snapshot).cmp(&(other.inode, other.offset, other.snapshot))
     }
 }
 
