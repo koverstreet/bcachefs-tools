@@ -251,6 +251,15 @@ impl c::journal_key {
     }
 }
 
+impl Drop for c::journal_key {
+    fn drop(&mut self) {
+        if self.allocated() {
+            // SAFETY: new_allocated()'s, kmalloc()'d: its own
+            unsafe { c::rust_kfree(self.src.allocated_k.cast()) };
+        }
+    }
+}
+
 /// Of a key at @level in @btree and key @r: which btree and level sorts
 /// first.
 #[inline]
@@ -459,19 +468,14 @@ impl c::journal_keys {
     /// The keys freed, what they own and the buffer, and the overwrite
     /// ranges: bch2_journal_keys_reset().
     fn reset(&self, keys: &mut GapBuffer<c::journal_key>) {
-        for k in keys.iter().filter(|k| k.allocated()) {
-            // SAFETY: an allocated key's own, freed with it
-            unsafe { c::rust_kfree(k.src.allocated_k.cast()) };
-        }
-        keys.free_storage();
+        keys.clear();
 
         let mut g = self.overwrites.lock();
         g.overwrites_nr = 0;
         g.published().ranges.clear();
     }
 
-    /// The keys marked overwritten dropped - an allocated one's key freed -
-    /// the rest kept in order.
+    /// The keys marked overwritten dropped, the rest kept in order.
     pub(crate) unsafe fn drop_overwritten(&self) {
         let keys = unsafe { self.keys_mut() };
         let s = keys.make_contiguous();
@@ -480,8 +484,6 @@ impl c::journal_keys {
             if !s[i].is_overwritten() {
                 s.swap(nr, i);
                 nr += 1;
-            } else if s[i].allocated() {
-                unsafe { c::rust_kfree(s[i].src.allocated_k.cast()) };
             }
         }
         keys.truncate(nr);
@@ -686,11 +688,11 @@ pub unsafe fn bch2_journal_key_check_or_overwrite(c: &Opaque<Fs>, btree: Btree, 
 
 /// @k inserted, as @btree and @level's key, replacing an equal key - adding
 /// to it, for accounting - or before it. Taking @k, whose kfree() is the
-/// keys' from here on. Before the btree runs, into pre_sort, which sorting
-/// merges in.
+/// keys' from here on - on error too. Before the btree runs, into pre_sort,
+/// which sorting merges in.
 ///
 /// # Safety
-/// @k is a key, kmalloc()'d, the caller's; still the caller's on error.
+/// @k is a key, kmalloc()'d, the caller's to give.
 unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> Result<(), BchError> {
     let jk = fs.journal_keys_get().expect("journal keys inserted after recovery was done with them");
     let jk = jk.value();
@@ -726,10 +728,6 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
             if accounting {
                 accounting::accumulate(k, BkeySC::from(ok));
             }
-            if o.allocated() {
-                // SAFETY: the replaced key's own
-                unsafe { c::rust_kfree(o.src.allocated_k.cast()) };
-            }
             *o = n;
             return Ok(());
         }
@@ -749,12 +747,10 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
 fn insert(fs: &Fs, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
     let bytes = k.k.bytes();
     let n = crate::util::alloc::kmalloc(bytes, GFP_KERNEL).map_err(|_| fs.err(e::BCH_ERR_ENOMEM_journal_key_insert))?;
-    // SAFETY: @bytes of key, into as many of ours; then ours to hand over, or
-    // free if it isn't taken
+    // SAFETY: @bytes of key, into as many of ours; then ours to hand over
     unsafe {
         ptr::copy_nonoverlapping(k.as_ffi().cast::<u8>(), n.as_ptr(), bytes);
         insert_take(fs, btree, level, n.as_ptr().cast())
-            .inspect_err(|_| c::rust_kfree(n.as_ptr().cast()))
     }
 }
 
@@ -1194,10 +1190,6 @@ impl PinnedDrop for c::journal_keys {
         // SAFETY: the last ref's
         unsafe {
             self.reset(self.keys_mut());
-
-            for k in self.pre_sort().iter() {
-                c::rust_kfree(k.src.allocated_k.cast());
-            }
             darray_exit(&mut *self.pre_sort.get());
 
             for (_, &i) in self.entries.iter_from(0) {
@@ -1240,14 +1232,9 @@ pub fn shoot_down_journal_keys(fs: &Fs, btree: Btree, level_min: u32, level_max:
 
     for src in 0..s.len() {
         let i = &s[src];
-        if i.btree_id() == btree &&
-           (level_min..=level_max).contains(&u32::from(i.level())) &&
-           (start..=end).contains(&jk.key_pos(i)) {
-            if i.allocated() {
-                // SAFETY: its own, dropped with it
-                unsafe { c::rust_kfree(i.src.allocated_k.cast()) };
-            }
-        } else {
+        if !(i.btree_id() == btree &&
+             (level_min..=level_max).contains(&u32::from(i.level())) &&
+             (start..=end).contains(&jk.key_pos(i))) {
             s.swap(dst, src);
             dst += 1;
         }

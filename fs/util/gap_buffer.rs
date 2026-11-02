@@ -7,11 +7,11 @@
 //! it, a darray's nr, size and data, then gap, while C reads those.
 //!
 //! An element's index is its place in the sequence, 0..len(); where it's
-//! stored is the index, or past the gap the index plus the gap's size. Like a
-//! DArray it doesn't drop its elements, which are their owner's; the storage
-//! is a KVVec's, kvmalloc()'d, as C's is, and freed as one. Growing is
-//! reserve()'s, apart from insert(), so an element that owns something is
-//! never handed over to an allocation that fails.
+//! stored is the index, or past the gap the index plus the gap's size. It
+//! owns its elements, dropping them as they're truncated off, cleared or it's
+//! dropped; the storage is a KVVec's, kvmalloc()'d, as C's is, and freed as
+//! one. Growing is reserve()'s, apart from insert(), so an element that owns
+//! something is never handed over to an allocation that fails.
 
 use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
 use core::ops::Index;
@@ -82,12 +82,17 @@ impl<T> GapBuffer<T> {
         unsafe { core::slice::from_raw_parts_mut(self.data, self.nr) }
     }
 
-    /// The first @len kept, the rest forgotten - their owner's, as
-    /// make_contiguous() left them.
+    /// The first @len kept, the rest dropped, as make_contiguous() left them.
     pub fn truncate(&mut self, len: usize) {
+        if len >= self.nr {
+            return;
+        }
         self.move_gap(self.nr);
-        self.nr = self.nr.min(len);
-        self.gap = self.nr;
+        // SAFETY: the gap at the end, the elements are the first nr; past
+        // @len, ours to drop, and not counted after
+        unsafe { ptr::drop_in_place(ptr::slice_from_raw_parts_mut(self.data.add(len), self.nr - len)) };
+        self.nr = len;
+        self.gap = len;
     }
 
     /// Room for one more: if it's full, grown to twice the size, the gap at
@@ -134,11 +139,18 @@ impl<T> GapBuffer<T> {
         (!data.is_null()).then(|| unsafe { KVVec::from_raw_parts(data, 0, self.size) })
     }
 
-    /// The storage freed - not its elements: kvfree() of C's data.
-    pub fn free_storage(&mut self) {
-        // SAFETY: the elements are their owner's, not dropped here
+    /// The elements dropped and the storage freed: empty, as zeroed.
+    pub fn clear(&mut self) {
+        self.truncate(0);
+        // SAFETY: no elements left
         drop(unsafe { self.take_storage() });
-        (self.nr, self.size, self.gap) = (0, 0, 0);
+        (self.size, self.gap) = (0, 0);
+    }
+}
+
+impl<T> Drop for GapBuffer<T> {
+    fn drop(&mut self) {
+        self.clear()
     }
 }
 
@@ -176,6 +188,5 @@ mod tests {
         assert_eq!(b.make_contiguous(), &want[..]);
         b.truncate(10);
         assert_eq!(b.make_contiguous(), &want[..10]);
-        b.free_storage();
     }
 }

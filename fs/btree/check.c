@@ -136,10 +136,8 @@ static int set_node_min(struct bch_fs *c, struct btree *b, struct bpos new_min)
 	SET_BTREE_PTR_RANGE_UPDATED(&new->v, true);
 
 	ret = bch2_journal_key_insert_take(c, b->c.btree_id, b->c.level + 1, &new->k_i);
-	if (ret) {
-		kfree(new);
+	if (ret)
 		return ret;
-	}
 
 	bch2_btree_node_drop_keys_outside_node(b);
 	bkey_copy(&b->key, &new->k_i);
@@ -173,10 +171,8 @@ static int set_node_max(struct btree_trans *trans, struct btree *b, struct bpos 
 	SET_BTREE_PTR_RANGE_UPDATED(&new->v, true);
 
 	int ret = bch2_journal_key_insert_take(c, b->c.btree_id, b->c.level + 1, &new->k_i);
-	if (ret) {
-		kfree(new);
+	if (ret)
 		return ret;
-	}
 
 	bch2_btree_node_drop_keys_outside_node(b);
 
