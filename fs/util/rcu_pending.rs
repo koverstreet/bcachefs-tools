@@ -3,8 +3,7 @@
 //! Objects waiting out an RCU or SRCU grace period, then processed - per CPU,
 //! batched by the grace period they wait for - and taken back before then if
 //! wanted. What processing is, and what's queued, is the Mode: a process
-//! callback - C's, or CALL_RCU's, each rcu_head's own func - or kvfree_rcu()
-//! of a KVBox.
+//! callback - C's, or CALL_RCU's, each rcu_head's own func - or kvfree_rcu().
 
 #![allow(non_camel_case_types)]
 
@@ -22,7 +21,7 @@ use crate::types::GenRadix;
 use crate::util::alloc::{flags, init_at, kbox_zeroed_nofail, AllocError, KBox, KVBox, KVVec};
 use crate::util::ffi::Opaque;
 use crate::util::genradix::NewNode;
-use crate::util::maybe_rcu_alloc::{alloc_at, Kmalloc};
+use crate::util::maybe_rcu_alloc::{alloc_at, KVmalloc, Kmalloc, Retired};
 use crate::util::percpu::{CpuShared, PerCpu, PerCpuRef};
 use crate::util::rcu::{Flavor, GpCookie};
 use crate::util::workqueue::{flush_work, Queue};
@@ -60,7 +59,9 @@ pub unsafe trait Mode: Sized {
     /// @p is into_raw()'s, taken back once.
     unsafe fn from_raw(p: Raw) -> Self::Item;
 
-    fn process(&self, _pending: &RcuPending<Self>, item: Self::Item) {
+    /// # Safety
+    /// @item's grace period is over.
+    unsafe fn process(&self, _pending: &RcuPending<Self>, item: Self::Item) {
         drop(item)
     }
 }
@@ -98,7 +99,7 @@ unsafe impl Mode for CProcess {
         CHead(p.cast())
     }
 
-    fn process(&self, pending: &RcuPending<Self>, item: CHead) {
+    unsafe fn process(&self, pending: &RcuPending<Self>, item: CHead) {
         unsafe { (self.0)(ptr::from_ref(pending).cast_mut().cast(), item.as_ptr()) }
     }
 }
@@ -112,27 +113,23 @@ pub const CALL_RCU: CProcess = {
     CProcess(call)
 };
 
-/// A type with an rcu_head in it, for kvfree_rcu() of a KVBox of one.
-///
-/// # Safety
-/// RCU_HEAD is the offset of a c::rcu_head in Self, which nothing else uses.
-pub unsafe trait HasRcuHead {
-    const RCU_HEAD: usize;
-}
-
-/// kvfree_rcu(), batched: a KVBox dropped a grace period after it's queued.
+/// kvfree_rcu(), batched: a MaybeRcuAlloc's memory, its T dropped when it was
+/// retired, freed a grace period after it's queued.
 pub struct KvFree<T>(PhantomData<fn(T)>);
 
-unsafe impl<T: HasRcuHead + Send> Mode for KvFree<T> {
-    type Item = KVBox<T>;
+unsafe impl<T> Mode for KvFree<T> {
+    type Item = Retired<T, KVmalloc>;
 
-    fn into_raw(item: KVBox<T>) -> Raw {
-        let p = NonNull::new(KVBox::into_raw(item)).expect("a box's pointer");
-        unsafe { p.byte_add(T::RCU_HEAD).cast() }
+    fn into_raw(item: Retired<T, KVmalloc>) -> Raw {
+        item.into_head().cast()
     }
 
-    unsafe fn from_raw(p: Raw) -> KVBox<T> {
-        unsafe { KVBox::from_raw(p.byte_sub(T::RCU_HEAD).as_ptr().cast()) }
+    unsafe fn from_raw(p: Raw) -> Retired<T, KVmalloc> {
+        unsafe { Retired::from_head(p.cast()) }
+    }
+
+    unsafe fn process(&self, _pending: &RcuPending<Self>, item: Retired<T, KVmalloc>) {
+        unsafe { item.free() }
     }
 }
 
@@ -461,7 +458,7 @@ impl<M: Mode> RcuPending<M> {
     }
 
     fn process_raw(&self, raw: Raw) {
-        self.process.process(self, unsafe { M::from_raw(raw) })
+        unsafe { self.process.process(self, M::from_raw(raw)) }
     }
 
     /// A list entry's item: the head itself, or what a spare head holds.
