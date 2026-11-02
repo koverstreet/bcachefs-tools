@@ -20,7 +20,8 @@ use core::marker::PhantomData;
 use core::ptr::NonNull;
 
 use crate::c;
-use crate::util::alloc::{kalloc_pinned, AllocError, KBox};
+use crate::util::alloc::{flags::GFP_KERNEL, AllocError};
+use crate::util::maybe_rcu_alloc::{Kmalloc, MaybeRcuAlloc};
 use kernel::error::to_result;
 use pin_init::Init;
 
@@ -141,11 +142,11 @@ fn ret_val<T: FsType>(r: Result<c_int, T::Error>) -> c_int {
 unsafe extern "C" fn init_fs_context<T: FsType>(fc: *mut kernel::bindings::fs_context) -> c_int {
     let fc = fc.cast::<c::fs_context>();
     ret::<T>((|| {
-        let ctx = kalloc_pinned(T::new_context())?;
+        let ctx = MaybeRcuAlloc::<T::Context, Kmalloc>::new(T::new_context(), GFP_KERNEL)?.into_raw();
 
         // SAFETY: a context being set up, ours
         unsafe {
-            (*fc).fs_private = ctx.cast();
+            (*fc).fs_private = ctx.as_ptr().cast();
             (*fc).ops = &Ops::<T>::CONTEXT;
         }
         Ok(())
@@ -153,11 +154,8 @@ unsafe extern "C" fn init_fs_context<T: FsType>(fc: *mut kernel::bindings::fs_co
 }
 
 unsafe extern "C" fn free<T: FsType>(fc: *mut c::fs_context) {
-    // SAFETY: init_fs_context()'s - kalloc_pinned()'s is a KBox's - or NULL
-    // if it failed
-    let ctx = unsafe { (*fc).fs_private.cast::<T::Context>() };
-    if !ctx.is_null() {
-        drop(unsafe { KBox::from_raw(ctx) });
+    if let Some(ctx) = NonNull::new(unsafe { (*fc).fs_private.cast::<T::Context>() }) {
+        drop(unsafe { MaybeRcuAlloc::<T::Context, Kmalloc>::from_raw(ctx) });
     }
 }
 

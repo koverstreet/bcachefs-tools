@@ -21,7 +21,7 @@ pub use kernel::sync::Arc;
 #[cfg(not(kernel))]
 pub use std::sync::Arc;
 
-use crate::util::maybe_rcu_alloc::{KVmalloc, MaybeRcuAlloc};
+use crate::util::maybe_rcu_alloc::{KVmalloc, Kmalloc, MaybeRcuAlloc};
 use crate::util::rcu::FreeAnytime;
 
 pub fn arc_new<T: Send + Sync>(v: T) -> Result<Arc<T>, AllocError> {
@@ -66,13 +66,6 @@ pub unsafe fn free_pinned<T>(p: *mut T) {
     drop(unsafe { MaybeRcuAlloc::<T, KVmalloc>::from_raw(core::ptr::NonNull::new_unchecked(p)) })
 }
 
-/// alloc_pinned(), kmalloc()'d - a KBox in-kernel - for what's freed from
-/// any context: kfree() is safe anywhere, and kvfree() isn't - vfree() may
-/// sleep, outside interrupt context.
-pub fn kalloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>) -> Result<*mut T, E> {
-    alloc_in::<true, T, E>(init, flags::GFP_KERNEL)
-}
-
 /// The allocator's Flags for @gfp, which is GFP_NOWAIT or GFP_KERNEL - the
 /// two allocate_dropping_locks() tries.
 pub fn gfp_flags(gfp: crate::c::gfp_t) -> Flags {
@@ -82,14 +75,6 @@ pub fn gfp_flags(gfp: crate::c::gfp_t) -> Flags {
         assert!(gfp == crate::c::GFP_KERNEL, "gfp_flags() of a mask that's neither GFP_NOWAIT nor GFP_KERNEL");
         flags::GFP_KERNEL
     }
-}
-
-/// kalloc_pinned(), allocating as @gfp says - GFP_NOWAIT, say, with btree
-/// locks held. Userspace ignores it.
-pub fn kalloc_pinned_gfp<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>, gfp: Flags)
-    -> Result<*mut T, E>
-{
-    alloc_in::<true, T, E>(init, gfp)
 }
 
 /// @b's value, out of its box: *b, for a std Box - which the kernel's isn't,
@@ -135,8 +120,8 @@ pub fn kbox_zeroed_nofail<T: ::pin_init::Zeroable + FreeAnytime>() -> KBox<T> {
 pub fn kbox_pin_init<T: FreeAnytime, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>)
     -> Result<core::pin::Pin<KBox<T>>, E>
 {
-    // SAFETY: kalloc_pinned()'s is a KBox's allocation, pinned
-    Ok(unsafe { core::pin::Pin::new_unchecked(KBox::from_raw(kalloc_pinned(init)?)) })
+    let p = crate::util::maybe_rcu_alloc::alloc_at::<T, Kmalloc, E>(init, flags::GFP_KERNEL)?;
+    Ok(unsafe { core::pin::Pin::new_unchecked(KBox::from_raw(p.as_ptr())) })
 }
 
 /// @layout's worth of memory, zeroed, as a KBox allocates: for a KBox of an
@@ -445,47 +430,6 @@ pub unsafe fn init_at<T, E>(init: impl ::pin_init::PinInit<T, E>, slot: *mut T) 
 pub fn init_or<T, E>(init: impl ::pin_init::PinInit<T, E>, err: crate::errcode::bch_errcode)
     -> impl ::pin_init::PinInit<T, crate::errcode::BchError> {
     unsafe { ::pin_init::pin_init_from_closure(move |slot| init_at(init, slot).map_err(|_| err.into())) }
-}
-
-pub(crate) fn alloc_in<const KMALLOC: bool, T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>,
-                                                          #[allow(unused_variables)] gfp: Flags)
-    -> Result<*mut T, E>
-{
-    #[cfg(kernel)]
-    {
-        use core::pin::Pin;
-        use kernel::alloc::{flags::__GFP_ZERO, KBox, KVBox};
-        use kernel::init::InPlaceInit;
-
-        let gfp = gfp | __GFP_ZERO;
-        // SAFETY: pinned still: given up to its holder, which frees it
-        Ok(unsafe {
-            if KMALLOC {
-                KBox::into_raw(Pin::into_inner_unchecked(KBox::try_pin_init(init, gfp)?))
-            } else {
-                KVBox::into_raw(Pin::into_inner_unchecked(KVBox::try_pin_init(init, gfp)?))
-            }
-        })
-    }
-    #[cfg(not(kernel))]
-    {
-        let layout = std::alloc::Layout::new::<T>();
-        // SAFETY: not zero sized - what C holds a pointer to has bytes
-        let p = unsafe { std::alloc::alloc_zeroed(layout) }.cast::<T>();
-        if p.is_null() {
-            return Err(AllocError.into());
-        }
-        // SAFETY: valid for writes, and it won't move: it's C's from here
-        match unsafe { init_at(init, p) } {
-            Ok(()) => Ok(p),
-            Err(e) => {
-                // SAFETY: alloc_zeroed()'s, with this layout; a failed init
-                // has dropped what it made
-                unsafe { std::alloc::dealloc(p.cast(), layout) };
-                Err(e)
-            }
-        }
-    }
 }
 
 /// A darray C owns, lent to Rust as a KVVec while this lives; given back -

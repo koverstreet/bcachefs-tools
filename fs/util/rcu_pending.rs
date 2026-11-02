@@ -19,9 +19,10 @@ use crate::c;
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::types::GenRadix;
-use crate::util::alloc::{flags, init_at, kalloc_pinned_gfp, kbox_zeroed_nofail, AllocError, KBox, KVBox, KVVec};
+use crate::util::alloc::{flags, init_at, kbox_zeroed_nofail, AllocError, KBox, KVBox, KVVec};
 use crate::util::ffi::Opaque;
 use crate::util::genradix::NewNode;
+use crate::util::maybe_rcu_alloc::{alloc_at, Kmalloc};
 use crate::util::percpu::{CpuShared, PerCpu, PerCpuRef};
 use crate::util::rcu::{Flavor, GpCookie};
 use crate::util::workqueue::{flush_work, Queue};
@@ -168,8 +169,8 @@ impl SpareHead {
                 Ok::<(), AllocError>(())
             })
         };
-        let p = kalloc_pinned_gfp(init, flags::__GFP_NOWARN).ok()?;
-        Some(unsafe { KBox::from_raw(p) })
+        let p = alloc_at::<SpareHead, Kmalloc, AllocError>(init, flags::__GFP_NOWARN).ok()?;
+        Some(unsafe { KBox::from_raw(p.as_ptr()) })
     }
 }
 
