@@ -10,14 +10,14 @@
 //! the file's path under SRC, the crate's source root: foo/types.rs gives
 //! foo/types_gen.h, foo/bar_types.rs foo/bar_gen.h - and foo/bar.rs's, what
 //! C calls of the Rust that is bar.c (#[c_export]), follow bar_types.rs's in
-//! foo/bar_gen.h. Run from where rustc ran: a record's file is file!(),
-//! which is relative to that - or, if rustc remapped source paths
-//! (--remap-path-prefix, as kernels since 7.0 build with), relative to ROOT,
-//! the kernel's srcroot. A Rust-only field is opaque storage of its
-//! size and alignment; after the definitions come _Static_asserts of the
-//! Rust layout, so a C declaration that doesn't match its Rust type fails
-//! the C build, naming the field - and of the ioctl numbers, which C and
-//! Rust each compute.
+//! foo/bar_gen.h, as foo/bar/mod.rs's do. Run from where rustc ran: a
+//! record's file is file!(), which is relative to that - or, if rustc
+//! remapped source paths (--remap-path-prefix, as kernels since 7.0 build
+//! with), relative to ROOT, the kernel's srcroot. A Rust-only field is opaque
+//! storage of its size and alignment; after the definitions come
+//! _Static_asserts of the Rust layout, so a C declaration that doesn't match
+//! its Rust type fails the C build, naming the field - and of the ioctl
+//! numbers, which C and Rust each compute.
 //!
 //! The records are from the target build, with its configuration: the C is
 //! that configuration's, #[cfg] already resolved.
@@ -109,8 +109,8 @@ fn records(mut b: &[u8]) -> Result<Vec<Record>, String> {
 
 /// The header for source file @file, under @src: foo/bar_types.rs - foo/bar.h's
 /// types and what Rust calls of it - is foo/bar_gen.h, and foo/bar.rs - what
-/// C calls of Rust - too, as is foo/bar_c_export.rs, bar.rs's wrappers for C;
-/// foo/types.rs is foo/types_gen.h.
+/// C calls of Rust - too, as is foo/bar_c_export.rs, bar.rs's wrappers for C,
+/// and foo/bar/mod.rs; foo/types.rs is foo/types_gen.h.
 ///
 /// @file is where rustc ran from - or, relative, under @root, if there's one:
 /// what rustc remapped the source paths to be relative to.
@@ -128,6 +128,7 @@ fn gen_header(src: &std::path::Path, root: Option<&std::path::Path>, file: &str)
     let stem = rel.trim_end_matches(".rs");
     let stem = stem.strip_suffix("_types")
         .or_else(|| stem.strip_suffix("_c_export"))
+        .or_else(|| stem.strip_suffix("/mod"))
         .unwrap_or(stem);
     Ok(stem.to_string() + "_gen.h")
 }
