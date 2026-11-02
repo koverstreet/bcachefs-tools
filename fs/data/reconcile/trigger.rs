@@ -10,7 +10,7 @@
 use crate::accounting::ReconcileType;
 use crate::{accounting, bkey_fsck_err_on, fsck_err};
 use crate::alloc::disk_groups::Target;
-use crate::btree::bkey::{bpos_max, bpos_min, pos, BkeySC, BkeyV, BkeyVal};
+use crate::btree::bkey::{pos, BkeySC, BkeyV, BkeyVal};
 use crate::btree::bkey_methods::TriggerOp;
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, NoRoom, TransAttempt, TransBkey, UpdateTriggerFlags};
@@ -107,10 +107,10 @@ impl c::reconcile_work_id {
 pub fn data_to_rb_work_pos(btree: Btree, mut p: Bpos) -> Bpos {
     use Btree as b;
     if btree == b::reflink || btree == b::stripes {
-        p = bpos_min(p, pos(0, u64::MAX));
+        p = p.min(pos(0, u64::MAX));
     }
     if btree == b::extents {
-        p = bpos_max(p, pos(c::BCACHEFS_ROOT_INO as u64, 0));
+        p = p.max(pos(c::BCACHEFS_ROOT_INO as u64, 0));
     }
     if btree == b::reflink {
         p.inode += 1;

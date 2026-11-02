@@ -2188,9 +2188,9 @@ pub fn peek_parallel<'k, 't, const N: usize>(
     let iters = iters.map(|iter| -> &'k BtreeIter<'t> { iter });
 
     let pos: [Bpos; N] = core::array::from_fn(|i| to_walk(i, iters[i]));
-    let at = pos.iter().copied().reduce(bpos_min).expect("an iterator to walk");
+    let at = pos.iter().copied().min().expect("an iterator to walk");
 
-    Ok((at, core::array::from_fn(|i| (iters[i], if bpos_lt(at, pos[i]) { None } else { keys[i] }))))
+    Ok((at, core::array::from_fn(|i| (iters[i], if at < pos[i] { None } else { keys[i] }))))
 }
 
 /// A key C returned - a peek, a lookup - or its error.

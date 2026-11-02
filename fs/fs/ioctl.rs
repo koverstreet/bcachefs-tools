@@ -628,7 +628,7 @@ fn propagate_to_reflink_v(fs: &Fs, trans: &BtreeTrans<'_>, opts: &c::bch_inode_o
     let mut iter = BtreeIter::new(trans, Btree::reflink, bkey::pos(0, range.start), flags);
     iter.for_each_max_commit(trans, bkey::SPOS_MAX, flags, Some(&res), CommitFlags::NO_ENOSPC, |t, iter, k| {
         res.put();
-        if bkey::bpos_ge(k.k.start_pos(), bkey::pos(0, range.end)) {
+        if k.k.start_pos() >= bkey::pos(0, range.end) {
             return Err(bch_errcode::BCH_ERR_fc_break.into());
         }
         update_reconcile_opts(t, None, opts, iter, 0, k,
@@ -712,7 +712,7 @@ fn unpoison_reflink(t: &TransAttempt<'_, '_>, p: BkeySC<'_, c::ReflinkP>) -> Res
     let live = p.live();
     let mut iter = BtreeIter::new(t, Btree::reflink, bkey::pos(0, live.start), BtreeIterFlags::INTENT);
     iter.for_each_norestart(t, |iter, k| {
-        if bkey::bpos_ge(k.k.start_pos(), bkey::pos(0, live.end)) {
+        if k.k.start_pos() >= bkey::pos(0, live.end) {
             return Ok(ControlFlow::Break(()));
         }
         unpoison_extent(t, iter, k)?;

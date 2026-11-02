@@ -19,7 +19,7 @@
 use crate::alloc::backpointers::{backpointer_get_key, BpScanIter};
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{bpos_ge, pos, BkeyI, BkeySC, POS_MIN};
+use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeLevels, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
@@ -376,7 +376,7 @@ fn scan_indirect(trans: &BtreeTrans<'_>, scan: &c::reconcile_scan, res: &DiskRes
     let mut iter = BtreeIter::new(trans, Btree::reflink, pos(0, refs.start),
                                   BtreeIterFlags::INTENT | BtreeIterFlags::NOT_EXTENTS);
     iter.for_each_commit(trans, Some(res), NO_ENOSPC, |t, iter, k| {
-        if bpos_ge(k.k.start_pos(), pos(0, refs.end)) {
+        if k.k.start_pos() >= pos(0, refs.end) {
             return Err(c::bch_errcode::BCH_ERR_fc_break.into());
         }
         res.put();

@@ -1,4 +1,4 @@
-//! Comparing positions: Bpos's Ord, and C's bpos_*() - every field - and
+//! Comparing positions: Bpos's Ord - every field, C's bpos_*() - and
 //! bkey_*() - inode and offset, the snapshot field ignored. Its Hash is of
 //! every field too, as its Eq.
 
@@ -32,61 +32,6 @@ impl Ord for Bpos {
         /* not Ordering::then(): that compares every field, and < can't skip it */
         (self.inode, self.offset, self.snapshot).cmp(&(other.inode, other.offset, other.snapshot))
     }
-}
-
-#[inline(always)]
-pub fn bpos_lt(l: Bpos, r: Bpos) -> bool {
-    if l.inode != r.inode {
-        l.inode < r.inode
-    } else if l.offset != r.offset {
-        l.offset < r.offset
-    } else {
-        l.snapshot < r.snapshot
-    }
-}
-
-#[inline(always)]
-pub fn bpos_le(l: Bpos, r: Bpos) -> bool {
-    if l.inode != r.inode {
-        l.inode < r.inode
-    } else if l.offset != r.offset {
-        l.offset < r.offset
-    } else {
-        l.snapshot <= r.snapshot
-    }
-}
-
-#[inline(always)]
-pub fn bpos_gt(l: Bpos, r: Bpos) -> bool {
-    bpos_lt(r, l)
-}
-
-#[inline(always)]
-pub fn bpos_ge(l: Bpos, r: Bpos) -> bool {
-    bpos_le(r, l)
-}
-
-#[inline(always)]
-pub fn bpos_cmp(l: Bpos, r: Bpos) -> i32 {
-    if l.inode != r.inode {
-        if l.inode < r.inode { -1 } else { 1 }
-    } else if l.offset != r.offset {
-        if l.offset < r.offset { -1 } else { 1 }
-    } else if l.snapshot != r.snapshot {
-        if l.snapshot < r.snapshot { -1 } else { 1 }
-    } else {
-        0
-    }
-}
-
-#[inline]
-pub fn bpos_min(l: Bpos, r: Bpos) -> Bpos {
-    if bpos_lt(l, r) { l } else { r }
-}
-
-#[inline]
-pub fn bpos_max(l: Bpos, r: Bpos) -> Bpos {
-    if bpos_gt(l, r) { l } else { r }
 }
 
 #[inline(always)]

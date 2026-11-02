@@ -19,7 +19,7 @@
 //! borrowed, as a BkeySC.
 
 use crate::bkey_fsck_err_on;
-use crate::btree::bkey::{bkey_eq, bpos_gt, pos, BkeyI, BkeySC, BkeyV, POS_MIN};
+use crate::btree::bkey::{bkey_eq, pos, BkeyI, BkeySC, BkeyV, POS_MIN};
 use crate::c;
 use crate::data::ptrs::{bkey_ptrs_validate, extent_ptr_to_text};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
@@ -265,7 +265,7 @@ fn stripe_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     bkey_fsck_err_on!(v, s.csum_granularity_bits >= 31, id::stripe_csum_granularity_bad,
                       "invalid csum granularity ({} >= 31)", s.csum_granularity_bits)?;
 
-    bkey_fsck_err_on!(v, bkey_eq(v.k.k.p, POS_MIN) || bpos_gt(v.k.k.p, pos(0, u32::MAX.into())),
+    bkey_fsck_err_on!(v, bkey_eq(v.k.k.p, POS_MIN) || v.k.k.p > pos(0, u32::MAX.into()),
                       id::stripe_pos_bad, "stripe at bad pos")?;
 
     let val_u64s = v.k.val_bytes().len() / 8;

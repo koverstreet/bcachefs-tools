@@ -4,7 +4,7 @@
 //! and moved from an old stripe it reuses (stripe_new_reuse.rs) - and its
 //! slot.
 
-use crate::btree::bkey::{bkey_gt, bpos_max, pos};
+use crate::btree::bkey::{bkey_gt, pos};
 use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, LoopFlow, TransAttempt};
 use crate::c;
 use crate::data::copygc;
@@ -402,7 +402,7 @@ pub(crate) fn new_stripe_key(fs: &Fs, key: &mut StripeKey, algorithm: u8, nr_dat
 pub(crate) fn stripe_idx_alloc(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Result<(), BchError> {
     let fs = t.fs();
     let min_pos = pos(0, 1);
-    let mut start = bpos_max(min_pos, pos(0, fs.ec.stripe_hint.load(Ordering::Relaxed)));
+    let mut start = min_pos.max(pos(0, fs.ec.stripe_hint.load(Ordering::Relaxed)));
 
     let mut iter = BtreeIter::new(t, Btree::stripes, start, BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT);
     iter.for_each_norestart(t, |iter, k| {

@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::{bkey_fsck_err, bkey_fsck_err_on};
-use crate::btree::bkey::{bkey_eq, bpos_ge, POS_MIN};
+use crate::btree::bkey::{bkey_eq, POS_MIN};
 use crate::data::durability::BkeyVDurability;
 use crate::data::reconcile::trigger::{extent_rebalance_v1_to_text, extent_reconcile_to_text,
                                       extent_reconcile_validate};
@@ -315,7 +315,7 @@ pub(super) fn btree_ptr_v2_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchE
     bkey_fsck_err_on!(v, val_u64s > c::BKEY_BTREE_PTR_VAL_U64s_MAX, id::btree_ptr_v2_val_too_big,
                       "value too big ({} > {})", val_u64s, c::BKEY_BTREE_PTR_VAL_U64s_MAX)?;
 
-    bkey_fsck_err_on!(v, bpos_ge(bp.v().min_key, bp.k.p), id::btree_ptr_v2_min_key_bad,
+    bkey_fsck_err_on!(v, bp.v().min_key >= bp.k.p, id::btree_ptr_v2_min_key_bad,
                       "min_key > key")?;
 
     if v.from.flags().contains(c::bch_validate_flags::BCH_VALIDATE_write) &&

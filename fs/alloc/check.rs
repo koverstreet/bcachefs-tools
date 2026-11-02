@@ -29,7 +29,7 @@ use crate::alloc::buckets::bucket_to_u64;
 use crate::alloc::lru::{lru_check_set, lru_mod, per_dev_fragmentation_lru, LruId, LruPos};
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{bkey_eq, bkey_lt, bkey_min, bpos_lt, pos, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{bkey_eq, bkey_lt, bkey_min, pos, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{is_restart, lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbMaybeFlush;
@@ -146,7 +146,7 @@ fn get_key_or_real_bucket_hole<'k, 't>(
             let next_dev = next_bucket(fs, ca, &mut next);
 
             if let Some(k) = iter.peek(t)? {
-                if !next_dev || bpos_lt(k.k.p, next) {
+                if !next_dev || k.k.p < next {
                     // XXX polonius: returned here, @iter used below
                     let k = unsafe { polonius_key(k) };
                     return Ok(Some((&*iter, KeyOrHole::Key(k))));

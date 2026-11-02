@@ -20,7 +20,7 @@ use crate::fs::Dev;
 use crate::alloc::backpointers::{backpointer_get_key, backpointers_match, bp_reconcile_phys, extent_ptr_to_bp};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::check_backpointers::check_bp_exists;
-use crate::btree::bkey::{bpos_ge, pos, BkeyI, BkeySC, BkeyV, BkeyVMut, POS_MIN};
+use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyV, BkeyVMut, POS_MIN};
 use crate::btree::iter::{commit_do, lockrestart_do, peek_parallel, BtreeIter, BtreeIterFlags, BtreeLevels,
                          BtreeTrans, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbMaybeFlush;
@@ -187,7 +187,7 @@ fn check_reconcile_work_one<'t>(t: &TransAttempt<'_, 't>, data_iter: &mut BtreeI
     })?;
 
     *cur_pos = pos;
-    if bpos_ge(pos, data_to_rb_work_pos(btree, SPOS_MAX)) {
+    if pos >= data_to_rb_work_pos(btree, SPOS_MAX) {
         return Ok(());
     }
 
@@ -237,7 +237,7 @@ fn check_reconcile_work_data_btree<'t>(trans: &'t BtreeTrans<'t>, btree: Btree, 
             fs.recovery.progress.update(t, &data_iter)?;
             check_reconcile_work_one(t, &mut data_iter, rb, s, last_flushed, &mut cur_pos)
         })?;
-        if bpos_ge(cur_pos, end) {
+        if cur_pos >= end {
             return Ok(());
         }
 

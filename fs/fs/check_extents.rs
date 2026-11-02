@@ -31,7 +31,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
-use crate::btree::bkey::{bpos_gt, pos, spos, BkeySC, POS_MIN};
+use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
     is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
     TransBkey, UpdateTriggerFlags,
@@ -199,7 +199,7 @@ fn overlapping_extents_found(
     let pos1 = spos(inum, e1.offset, e1.snapshot);
     let end = pos(inum, u64::MAX);
 
-    assert!(bpos_gt(pos1, pos2.start_pos()));
+    assert!(pos1 > pos2.start_pos());
 
     let mut iter1 = BtreeIter::new(t, Btree::extents, pos1,
                                    BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::NOT_EXTENTS);

@@ -163,12 +163,10 @@ pub fn bch2_keylist_pop_front(l: &mut c::keylist) {
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 #[c_export]
 pub fn bch2_verify_keylist_sorted(l: &c::keylist) {
-    use crate::btree::bkey::bpos_ge;
-
     let mut keys = l.iter().peekable();
     while let Some(k) = keys.next() {
         if let Some(next) = keys.peek() {
-            assert!(!bpos_ge(k.k().p, next.k().p), "keylist out of order: {} before {}", k.k(), next.k());
+            assert!(k.k().p < next.k().p, "keylist out of order: {} before {}", k.k(), next.k());
         }
     }
 }

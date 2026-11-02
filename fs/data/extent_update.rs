@@ -17,7 +17,7 @@
 //! update's end ends the walk: key start positions, extent_whiteouts included,
 //! only go up (btree/update.rs's extent_whiteout_type()).
 
-use crate::btree::bkey::{bkey_ge, bkey_gt, bpos_ge, bpos_gt, bpos_min, pos, BkeySC, BkeyV, BkeyVMut};
+use crate::btree::bkey::{bkey_ge, bkey_gt, pos, BkeySC, BkeyV, BkeyVMut};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey};
 use crate::btree::update::extent_whiteout_type;
 use crate::c;
@@ -65,7 +65,7 @@ impl Count {
     fn stop_at(&mut self, at: Bpos) -> bool {
         let full = self.nr >= EXTENT_ITERS_MAX;
         if full {
-            self.end = bpos_min(self.end, at);
+            self.end = self.end.min(at);
         }
         full
     }
@@ -86,7 +86,7 @@ impl<'t> TransAttempt<'_, 't> {
             }
             t::KEY_TYPE_reflink_p => {
                 let idx = k.arm::<c::ReflinkP>().expect("a reflink_p").v().idx();
-                let sectors = bpos_min(n.end, k.k.p).offset - k.k.start_offset();
+                let sectors = n.end.min(k.k.p).offset - k.k.start_offset();
                 let mut iter = BtreeIter::new(self, Btree::BTREE_ID_reflink, pos(0, idx + offset),
                                               BtreeIterFlags::SLOTS);
 
@@ -135,7 +135,7 @@ impl<'t> TransAttempt<'_, 't> {
                 let whiteout_type = *whiteout_type.get_or_insert_with(||
                     extent_whiteout_type(fs, iter.btree(), &ins));
 
-                if bpos_gt(k.k.p, ins.p) {
+                if k.k.p > ins.p {
                     if k.k.key_type() == c::bch_bkey_type::KEY_TYPE_extent_whiteout {
                         break;
                     }
@@ -146,7 +146,7 @@ impl<'t> TransAttempt<'_, 't> {
                     }
                 }
             } else {
-                if bpos_ge(k.k.start_pos(), n.end) {
+                if k.k.start_pos() >= n.end {
                     break;
                 }
                 let offset = if bkey_gt(iter.pos(), k.k.start_pos()) {
@@ -165,7 +165,7 @@ impl<'t> TransAttempt<'_, 't> {
             }
         }
 
-        if bpos_gt(ins.p, n.end) {
+        if ins.p > n.end {
             fs.event_trace(events::extent_trim_atomic, |out| {
                 prt!(out, "{}\n{}", n.end, insert.as_sc().to_text(fs));
             });
