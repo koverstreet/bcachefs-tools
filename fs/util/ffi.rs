@@ -105,6 +105,23 @@ pub fn cstr_in(buf: &[c_char]) -> &core::ffi::CStr {
     core::ffi::CStr::from_bytes_until_nul(bytes).unwrap_or(c"")
 }
 
+/// C char array @buf, as the bytes it holds: to read into.
+pub fn bytes_in(buf: &mut [c_char]) -> &mut [u8] {
+    unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<u8>(), buf.len()) }
+}
+
+/// @s, up to a NUL in it, into C char array @buf - truncated to leave room
+/// for its NUL - as strscpy().
+pub fn strscpy(buf: &mut [c_char], s: &[u8]) {
+    let buf = bytes_in(buf);
+    let Some(max) = buf.len().checked_sub(1) else { return };
+    let s = &s[..s.iter().position(|&b| b == 0).unwrap_or(s.len())];
+    let n = s.len().min(max);
+
+    buf[..n].copy_from_slice(&s[..n]);
+    buf[n] = 0;
+}
+
 /// @f, given @s as a C string - a copy, NUL terminated, and as C would see
 /// it: up to a NUL in @s, if there's one.
 pub fn with_cstr<R>(s: &str, f: impl FnOnce(&core::ffi::CStr) -> R)

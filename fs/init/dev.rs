@@ -232,7 +232,7 @@ use crate::sb::io::{read_super, SbReadScratch};
 use crate::sb::members::{bch2_mi_to_cpu, member_exists, member_state_str, mi_field_upgrades, sb_member,
                          sb_member_alloc, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
 use crate::types::CStatic;
-use crate::util::alloc::{alloc_pinned, flags::GFP_KERNEL, free_pinned, init_at, kbox_pin_init, KVVec};
+use crate::util::alloc::{alloc_pinned, free_pinned, init_at, kbox_pin_init};
 use crate::util::file::read_file;
 use crate::util::kernel::{ktime_get_real_seconds, READ, WRITE};
 use crate::util::kobject::{GroupList, KobjOwner, Kobject};
@@ -257,7 +257,7 @@ use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, 
 use crate::types::{DArray, bits_to_longs, c_default};
 use crate::util::bio::{Bio, BioBufPtr};
 use crate::util::bitmap::{AtomicBitArray, BitArray};
-use crate::util::ffi::c_char;
+use crate::util::ffi::{bytes_in, c_char, strscpy};
 use crate::util::refcount::{ARef, AlwaysRefCounted, WaitableRef};
 use nestify::nest;
 
@@ -708,35 +708,6 @@ impl Fs {
     }
 }
 
-fn strscpy(dst: &mut [c_char], src: &[u8]) {
-    let Some(max) = dst.len().checked_sub(1) else { return };
-    let src = &src[..src.iter().position(|&b| b == 0).unwrap_or(src.len())];
-    let n = src.len().min(max);
-
-    for (d, &s) in dst.iter_mut().zip(&src[..n]) {
-        *d = s as c_char;
-    }
-    dst[n] = 0;
-}
-
-fn read_file_str(path: &CStr, buf: &mut [u8]) -> Result<usize, BchError> {
-    /*
-     * TODO: unify this with read_file_str() in bcachefs-tools tools-util.c
-     *
-     * Unfortunately, we don't have openat() in kernel
-     */
-    let mut nr = read_file(path, buf)?;
-
-    if nr > 0 && buf[nr - 1] != 0 {
-        /* null terminate */
-        if nr >= buf.len() {
-            nr = buf.len() - 1;
-        }
-        buf[nr] = 0;
-    }
-    Ok(nr)
-}
-
 /*
  * Read a sysfs device file (e.g. "device/model", "device/serial") into @ret,
  * resolving partitions to their parent disk.
@@ -747,67 +718,35 @@ fn read_file_str(path: &CStr, buf: &mut [u8]) -> Result<usize, BchError> {
  * fall back to the parent disk via "..". Mirrors fd_to_dev_model() in the
  * userspace tools (src/wrappers/bdev.rs).
  */
-fn read_dev_sysfs_file(dev: c::dev_t, file: &str, ret: &mut [u8]) -> usize {
+fn read_dev_sysfs_file(dev: c::dev_t, file: &str, ret: &mut [c_char]) -> bool {
     let (major, minor) = (dev >> c::MINORBITS, dev & ((1 << c::MINORBITS) - 1));
+    let ret = bytes_in(ret);
 
     for parent in ["", "../"] {
         let mut path = Printbuf::new();
         prt!(&mut path, "/sys/dev/block/{major}:{minor}/{parent}{file}");
 
-        let mut nr = read_file_str(path.as_c_str(), ret).unwrap_or(0);
-
-        if nr != 0 && ret[nr - 1] == b'\n' {
-            nr -= 1;
-            ret[nr] = 0;
-        }
+        /* null terminate */
+        let nr = read_file(path.as_c_str(), ret).unwrap_or(0).min(ret.len() - 1);
+        let nr = ret[..nr].strip_suffix(b"\n").map_or(nr, <[u8]>::len);
+        ret[nr] = 0;
 
         if nr != 0 {
-            return nr;
+            return true;
         }
     }
-    0
+    false
 }
 
-fn read_dev_sysfs_attr(dev: c::dev_t, attr: &str, ret: &mut [u8]) -> usize {
-    let mut file = Printbuf::new();
-    prt!(&mut file, "device/{attr}");
-    read_dev_sysfs_file(dev, file.as_str(), ret)
-}
-
-pub fn read_identity(bdev: &c::block_device, name: &mut [c_char], model: &mut [c_char], serial: &mut [c_char]) {
+pub fn read_identity(bdev: &c::block_device, id: &mut c::bch_dev_identity) {
     let mut bdevname = Printbuf::new();
     prt_bdevname(&mut bdevname, Some(bdev));
+    strscpy(&mut id.name, bdevname.as_bytes());
 
-    strscpy(name, bdevname.as_bytes());
-    if let Some(m) = model.first_mut() {
-        *m = 0;
+    if !read_dev_sysfs_file(bdev.bd_dev, "device/model", &mut id.model) {
+        read_dev_sysfs_file(bdev.bd_dev, "loop/backing_file", &mut id.model);
     }
-    if let Some(s) = serial.first_mut() {
-        *s = 0;
-    }
-
-    if !model.is_empty() {
-        let mut sysfs_model = KVVec::from_elem(0u8, model.len(), GFP_KERNEL);
-        if let Ok(buf) = sysfs_model.as_deref_mut() {
-            let mut nr = read_dev_sysfs_attr(bdev.bd_dev, "model", buf);
-            if nr == 0 {
-                nr = read_dev_sysfs_file(bdev.bd_dev, "loop/backing_file", buf);
-            }
-            if nr != 0 {
-                strscpy(model, &buf[..nr]);
-            }
-        }
-    }
-
-    if !serial.is_empty() {
-        let mut sysfs_serial = KVVec::from_elem(0u8, serial.len(), GFP_KERNEL);
-        if let Ok(buf) = sysfs_serial.as_deref_mut() {
-            let nr = read_dev_sysfs_attr(bdev.bd_dev, "serial", buf);
-            if nr != 0 {
-                strscpy(serial, &buf[..nr]);
-            }
-        }
-    }
+    read_dev_sysfs_file(bdev.bd_dev, "device/serial", &mut id.serial);
 }
 
 /// Whether @sb can be opened as a member of the filesystem whose superblock is
