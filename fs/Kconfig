@@ -65,16 +65,6 @@ config BCACHEFS_NO_LATENCY_ACCT
 	help
 	This disables device latency tracking and time stats, only for performance testing
 
-config BCACHEFS_SIX_OPTIMISTIC_SPIN
-	bool "Optimistic spinning for six locks"
-	depends on BCACHEFS_FS
-	depends on SMP
-	default y
-	help
-	Instead of immediately sleeping when attempting to take a six lock that
-	is held by another thread, spin for a short while, as long as the
-	thread owning the lock is running.
-
 config BCACHEFS_PATH_TRACEPOINTS
 	bool "Extra btree_path tracepoints"
 	depends on BCACHEFS_FS && TRACING

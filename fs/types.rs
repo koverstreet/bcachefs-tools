@@ -53,6 +53,9 @@ c_xmacro! {
          "Verify btree accounting for keys within a node"),
         (debug_check_bkey_unpack,
          "Enables extra verification for bkey unpack"),
+        (six_optimistic_spin_disabled,
+         "Disables optimistic spinning on six locks: a waiter "
+         "spinning while the lock's owner is running"),
     }
 }
 

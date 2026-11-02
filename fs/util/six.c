@@ -507,7 +507,7 @@ bool six_relock_ip(struct six_lock *lock, enum six_lock_type type,
 }
 EXPORT_SYMBOL_GPL(six_relock_ip);
 
-#ifdef CONFIG_BCACHEFS_SIX_OPTIMISTIC_SPIN
+#ifdef CONFIG_SMP
 
 static inline bool six_owner_running(struct six_lock *lock)
 {
@@ -528,7 +528,8 @@ static inline bool six_optimistic_spin(struct six_lock *lock,
 	unsigned loop = 0;
 	u64 end_time;
 
-	if (type == SIX_LOCK_write)
+	if (type == SIX_LOCK_write ||
+	    static_branch_unlikely(&bch2_six_optimistic_spin_disabled))
 		return false;
 
 	scoped_guard(rcu) {
@@ -573,7 +574,7 @@ static inline bool six_optimistic_spin(struct six_lock *lock,
 	return false;
 }
 
-#else /* CONFIG_LOCK_SPIN_ON_OWNER */
+#else /* CONFIG_SMP */
 
 static inline bool six_optimistic_spin(struct six_lock *lock,
 				       struct six_lock_waiter *wait,
