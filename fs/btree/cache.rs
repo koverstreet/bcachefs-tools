@@ -71,11 +71,8 @@ impl<'f> Bounce<'f> {
                 self.bytes, b.buf_bytes());
 
         let old = core::mem::replace(&mut b.data, self.p.as_ptr().cast());
+        btree_node_buf_swap_account(self.fs, old.cast(), b.data.cast());
         self.p = NonNull::new(old.cast()).expect("a node's buffer");
-    }
-
-    pub fn as_ptr(&self) -> *const c_void {
-        self.p.as_ptr().cast()
     }
 }
 

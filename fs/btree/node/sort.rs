@@ -5,13 +5,13 @@ use super::iter::KeyIter;
 use super::keys::{key_at, keys_in, Keys, KeysMut};
 use super::{BtreeNode, BtreeNrKeys};
 use crate::btree::bkey::{BkeyP, BKEY_U64S};
-use crate::btree::cache::{btree_node_buf_swap_account, Bounce};
+use crate::btree::cache::Bounce;
 use crate::c;
 use crate::fs::Fs;
 use crate::types::{c_default, Le64};
 use crate::util::kernel::{copy_u64s_small, local_clock, mem_alloc_profiling_enabled};
 use crate::util::time_stats::TimeStats;
-use crate::util::vstructs::{cast_plain_mut, plain_bytes, plain_bytes_mut, Head};
+use crate::util::vstructs::{plain_bytes, Head};
 use core::cmp::Ordering;
 use core::marker::PhantomData;
 use core::ffi::c_uint;
@@ -61,7 +61,6 @@ c_enum! {
 
 const SECTOR_U64S: usize = 512 / size_of::<u64>();
 const NODE_U64S: usize = size_of::<Head<c::btree_node>>() / size_of::<u64>();
-const NODE_KEYS: usize = offset_of!(Head<c::btree_node>, keys) / size_of::<u64>();
 const ENTRY_U64S: usize = size_of::<Head<c::btree_node_entry>>() / size_of::<u64>();
 const ENTRY_KEYS: usize = offset_of!(Head<c::btree_node_entry>, keys) / size_of::<u64>();
 
@@ -161,10 +160,6 @@ impl<'a, C: MergeCmp> Merge<'a, C> {
             _ => false,
         }
     }
-}
-
-fn cmp_packed(keys: &Keys<'_>, l: usize, r: usize) -> Ordering {
-    keys.node().cmp_packed(key_at(keys.buf, l), key_at(keys.buf, r))
 }
 
 /*
@@ -348,7 +343,7 @@ fn verify_no_dups(b: &BtreeNode, buf: &[u64], start: usize, end: usize) {
 }
 
 fn sort_bkey_ptrs(keys: &Keys<'_>, ptrs: &mut [u64]) {
-    let cmp = |l: u64, r: u64| cmp_packed(keys, l as usize, r as usize);
+    let cmp = |l: u64, r: u64| keys.node().cmp_packed(key_at(keys.buf, l as usize), key_at(keys.buf, r as usize));
     let (mut n, mut a) = (ptrs.len(), ptrs.len() / 2);
 
     if a == 0 {
@@ -564,6 +559,7 @@ fn btree_node_sort(fs: &Fs, b: &mut BtreeNode, start_idx: usize, end_idx: usize)
         .map(|t| keys.bset(t).journal_seq.get())
         .max().unwrap_or(0);
     let start_offset = keys.sets[start_idx].data_offset;
+    let first = keys.sets[start_idx].first_offset() as usize;
     b.keys_mut().bset_head_mut(start_offset).journal_seq = Le64::new(seq);
 
     if sorting_entire_node &&
@@ -574,45 +570,26 @@ fn btree_node_sort(fs: &Fs, b: &mut BtreeNode, start_idx: usize, end_idx: usize)
          * memcpy()
          */
         out.u64s()[..NODE_U64S].copy_from_slice(&b.keys().buf[..NODE_U64S]);
-        out_header(&mut out).keys.set_u64s(u64s);
         out.swap(b);
-        b.keys_mut().set_bset(0, NODE_KEYS as u16);
-
-        btree_node_buf_swap_account(fs, out.as_ptr(), b.data.cast());
     } else {
-        let mut keys = b.keys_mut();
-        let first = keys.sets[start_idx].first_offset() as usize;
-
-        keys.bset_head_mut(start_offset).set_u64s(u64s);
-        keys.buf[first..first + u64s].copy_from_slice(&out.u64s()[NODE_U64S..NODE_U64S + u64s]);
+        b.keys_mut().buf[first..][..u64s].copy_from_slice(&out.u64s()[NODE_U64S..][..u64s]);
     }
 
-    for i in start_idx + 1..end_idx {
-        b.nr.bset_u64s[start_idx] += b.nr.bset_u64s[i];
-    }
-
+    let nsets = b.nsets as usize;
+    b.nr.bset_u64s[start_idx] += b.nr.bset_u64s[start_idx + 1..end_idx].iter().sum::<u16>();
+    b.nr.bset_u64s.copy_within(end_idx..nsets, start_idx + 1);
+    b.set.copy_within(end_idx..nsets, start_idx + 1);
     b.nsets -= shift as u8;
-
-    for i in start_idx + 1..b.nsets as usize {
-        b.nr.bset_u64s[i] = b.nr.bset_u64s[i + shift];
-        b.set[i]          = b.set[i + shift];
-    }
-
-    for i in b.nsets as usize..MAX_BSETS as usize {
-        b.nr.bset_u64s[i] = 0;
-    }
+    b.nr.bset_u64s[b.nsets as usize..].fill(0);
 
     let mut keys = b.keys_mut();
+    keys.bset_head_mut(start_offset).set_u64s(u64s);
     keys.set_bset_end(start_idx);
     keys.sets.set_no_aux_tree(start_idx);
 
     drop(out);
 
     keys.verify_btree_nr_keys();
-}
-
-fn out_header<'a>(out: &'a mut Bounce<'_>) -> &'a mut Head<c::btree_node> {
-    cast_plain_mut(plain_bytes_mut(&mut out.u64s()[..NODE_U64S])).expect("a btree node's header")
 }
 
 fn btree_sort_into(fs: &Fs, dst: &mut BtreeNode, src: &BtreeNode) {
