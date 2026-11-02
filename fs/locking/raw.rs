@@ -22,7 +22,7 @@ use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::ffi::{c_char, Opaque};
 use core::convert::Infallible;
-use core::ffi::{c_int, c_ulong, c_void, CStr};
+use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
 use cstruct_macros::c_extern;
 
 #[cfg(kernel)]
@@ -60,6 +60,24 @@ c_extern! {
     pub fn rust_raw_spin_lock(lock: *mut c::raw_spinlock_t);
     pub fn rust_raw_spin_unlock(lock: *mut c::raw_spinlock_t);
     pub fn rust_raw_spin_lock_assert_held(lock: *mut c::raw_spinlock_t);
+
+    // lockdep, and the contention tracepoints, for a lock whose state is ours
+    // - six - so no C lock tells them: as C's lock_acquire() and the rest. A
+    // @map is a struct lockdep_map, which userspace hasn't
+    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+    pub fn rust_lockdep_init_map(map: *mut c_void, name: *const c_char, key: *mut c_void);
+    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+    pub fn rust_lock_acquire(map: *mut c_void, trylock: c_int, read: c_int, ip: c_ulong);
+    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+    pub fn rust_lock_release(map: *mut c_void, ip: c_ulong);
+    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+    pub fn rust_lock_contended(map: *mut c_void, ip: c_ulong);
+    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+    pub fn rust_lock_acquired(map: *mut c_void, ip: c_ulong);
+    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+    pub fn rust_debug_check_no_locks_freed(p: *const c_void, len: c_ulong);
+    pub fn rust_trace_contention_begin(lock: *const c_void, flags: c_uint);
+    pub fn rust_trace_contention_end(lock: *const c_void, ret: c_int);
 
     pub fn rust_local_lock_init(lock: *mut c::local_lock_t);
     pub fn rust_local_lock_irqsave(lock: *mut c::local_lock_t) -> c_ulong;

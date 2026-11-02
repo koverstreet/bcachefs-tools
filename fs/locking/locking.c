@@ -17,6 +17,8 @@
 #include "bcachefs.h"
 #include "locking/locking.h"
 
+#include <trace/events/lock.h>
+
 /* noio.rs: the NOIO scope */
 
 unsigned int rust_memalloc_noio_save(void)
@@ -102,6 +104,50 @@ void rust_raw_spin_unlock(raw_spinlock_t *lock)
 void rust_raw_spin_lock_assert_held(raw_spinlock_t *lock)
 {
 	lockdep_assert_held(lock);
+}
+
+/* raw.rs: lockdep and the contention tracepoints, for a lock whose state is ours */
+
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+void rust_lockdep_init_map(void *map, const char *name, void *key)
+{
+	lockdep_init_map(map, name, key, 0);
+}
+
+void rust_lock_acquire(void *map, int trylock, int read, unsigned long ip)
+{
+	lock_acquire(map, 0, trylock, read, 1, NULL, ip);
+}
+
+void rust_lock_release(void *map, unsigned long ip)
+{
+	lock_release(map, ip);
+}
+
+void rust_lock_contended(void *map, unsigned long ip)
+{
+	lock_contended(map, ip);
+}
+
+void rust_lock_acquired(void *map, unsigned long ip)
+{
+	lock_acquired(map, ip);
+}
+
+void rust_debug_check_no_locks_freed(const void *p, unsigned long len)
+{
+	debug_check_no_locks_freed(p, len);
+}
+#endif
+
+void rust_trace_contention_begin(const void *lock, unsigned int flags)
+{
+	trace_contention_begin((void *) lock, flags);
+}
+
+void rust_trace_contention_end(const void *lock, int ret)
+{
+	trace_contention_end((void *) lock, ret);
 }
 
 /*
