@@ -243,6 +243,33 @@ impl Kobject {
         })
     }
 
+    /// A link in its directory, @name, to @target's: sysfs_create_link().
+    #[cfg(kernel)]
+    pub fn link(&self, target: &Kobject, name: &CStr) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::sysfs_create_link(self.as_ptr(), target.as_ptr(), name.as_ptr().cast()) })
+    }
+
+    /// link()'s @name, removed.
+    #[cfg(kernel)]
+    pub fn unlink(&self, name: &CStr) {
+        unsafe { c::sysfs_remove_link(self.as_ptr(), name.as_ptr().cast()) }
+    }
+
+    /// A KOBJ_CHANGE uevent, @env its VAR=value strings.
+    #[cfg(kernel)]
+    pub fn uevent_change(&self, env: &[&CStr]) -> Result<(), BchError> {
+        use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+
+        let mut envp = KVVec::with_capacity(env.len() + 1, GFP_KERNEL)?;
+        for e in env {
+            envp.push(e.as_ptr().cast_mut(), GFP_KERNEL)?;
+        }
+        envp.push(core::ptr::null_mut(), GFP_KERNEL)?;
+        ret_to_result_void(unsafe {
+            c::kobject_uevent_env(self.as_ptr(), c::kobject_action_KOBJ_CHANGE, envp.as_mut_ptr().cast())
+        })
+    }
+
     /// Out of sysfs, if it's there.
     pub fn del(&self) {
         if self.in_sysfs() {
@@ -250,10 +277,16 @@ impl Kobject {
         }
     }
 
-    /// new()'s ref put: the last, and the owner's released - freed.
+    /// A ref, for put() to give back.
+    pub fn get(&self) {
+        unsafe { c::kobject_get(self.as_ptr()) };
+    }
+
+    /// A ref given back: the last releases the owner - frees it.
     ///
     /// # Safety
-    /// Nothing uses the owner after, nor holds a ref.
+    /// The caller holds the ref; if it's the last, nothing uses the owner
+    /// after.
     pub unsafe fn put(this: *const Kobject) {
         unsafe { c::kobject_put(UnsafeCell::raw_get(this.cast())) }
     }

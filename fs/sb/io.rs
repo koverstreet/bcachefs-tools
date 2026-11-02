@@ -1111,6 +1111,21 @@ impl c::bch_sb_bdev {
         unsafe { &*self.bdev }
     }
 
+    /// The device's size, in 512 byte sectors: get_capacity() of its disk.
+    pub fn capacity(&self) -> u64 {
+        // an open block device has a disk, and its disk a part0 - itself
+        #[cfg(kernel)]
+        return unsafe { (*(*self.bdev().bd_disk).part0).bd_nr_sectors as u64 };
+        #[cfg(not(kernel))]
+        return unsafe { c::get_capacity(self.bdev().bd_disk) as u64 };
+    }
+
+    /// The device's sysfs directory's kobject.
+    #[cfg(kernel)]
+    pub fn kobj(&self) -> &crate::util::kobject::Kobject {
+        unsafe { crate::util::kobject::Kobject::from_raw((&raw const self.bdev().bd_device.kobj).cast_mut()) }
+    }
+
     /// The path it was opened by
     pub fn name(&self) -> &CStr {
         // SAFETY: read_super()'s copy of the path, freed with the handle
