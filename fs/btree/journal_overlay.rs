@@ -326,24 +326,19 @@ impl c::journal_keys {
     /// The entries the journal read kept, and their jsets, but those replay
     /// ignores.
     pub fn replays(&self) -> impl Iterator<Item = (&c::journal_replay, &c::jset)> {
-        self.entries.iter_from(0)
-            .filter_map(|(_, &i)| unsafe { i.as_ref() })
-            .filter(|i| !i.ignored())
-            .map(|i| (i, unsafe { c::journal_replay::jset(i) }))
+        self.all_replays().filter(|(i, _)| !i.ignored())
     }
 
     /// Every entry the journal read kept, and its jset, ignored or not.
     pub fn all_replays(&self) -> impl Iterator<Item = (&c::journal_replay, &c::jset)> {
         self.entries.iter_from(0)
-            .filter_map(|(_, &i)| unsafe { i.as_ref() })
-            .map(|i| (i, unsafe { c::journal_replay::jset(i) }))
+            .filter_map(|(_, &i)| unsafe { i.as_ref().map(|i| (i, c::journal_replay::jset(i))) })
     }
 
     /// all_replays(), newest first.
     pub fn all_replays_rev(&self) -> impl Iterator<Item = (&c::journal_replay, &c::jset)> {
         self.entries.iter_rev()
-            .filter_map(|(_, &i)| unsafe { i.as_ref() })
-            .map(|i| (i, unsafe { c::journal_replay::jset(i) }))
+            .filter_map(|(_, &i)| unsafe { i.as_ref().map(|i| (i, c::journal_replay::jset(i))) })
     }
 
     pub fn keys(&self) -> &GapBuffer<c::journal_key> {
