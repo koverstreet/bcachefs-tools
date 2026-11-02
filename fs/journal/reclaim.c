@@ -1421,6 +1421,11 @@ __cold bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *
 	guard(percpu_read)(&j->pin_resize_lock);
 	struct journal_entry_pin_list *pin_list = &fifo_entry(&j->pin, *seq);
 	guard(spinlock)(&pin_list->lock);
+
+	/* nothing holds it - only reclaim hasn't got to it yet */
+	if (!atomic_read(&pin_list->count))
+		return false;
+
 	guard(printbuf_atomic)(out);
 
 	prt_printf(out, "%llu: count %u", *seq, atomic_read(&pin_list->count));
@@ -1517,7 +1522,7 @@ __cold void bch2_journal_reclaim_to_text(struct printbuf *out, struct journal *j
 
 	prt_newline(out);
 	prt_printf(out, "Oldest journal pins:\n");
-	bch2_journal_pins_to_text(out, j, 8);
+	bch2_journal_pins_to_text(out, j, 2);
 
 	struct task_struct *t = READ_ONCE(j->reclaim_thread);
 	if (t)

@@ -1573,7 +1573,7 @@ __cold void bch2_journal_debug_to_text(struct printbuf *out, struct journal *j)
 		__bch2_journal_debug_to_text(out, j);
 
 	prt_printf(out, "Oldest journal pins:\n");
-	bch2_journal_pins_to_text(out, j, 8);
+	bch2_journal_pins_to_text(out, j, 2);
 
 	if (test_bit(JOURNAL_low_on_wb, &j->flags)) {
 		struct bch_fs *c = container_of(j, struct bch_fs, journal);
