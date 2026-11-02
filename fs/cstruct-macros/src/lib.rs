@@ -156,13 +156,16 @@ fn record(text: &str, nums: &[TokenStream]) -> TokenStream {
         let ty = tokens(&t);
         quote!((#t, ::core::any::type_name::<#ty>()))
     });
+    // the count as a literal, not NUMS.len(): RECORD's type mustn't need the
+    // numbers - a field's layout - or a field of an opaque type is a cycle
+    let n = nums.len();
     quote! {
         #[cfg(bch_cstruct_records)]
         const _: () = {
             const TEXT: &str = #text;
-            const NUMS: &[u64] = &[#(#nums),*];
+            const NUMS: &[u64; #n] = &[#(#nums),*];
             const NAMES: &[(&str, &str)] = &[#(#names),*];
-            const LEN: usize = crate::types::record_len(::core::file!(), TEXT, NUMS.len(), NAMES);
+            const LEN: usize = crate::types::record_len(::core::file!(), TEXT, #n, NAMES);
             #[used]
             #[unsafe(link_section = ".discard.bch_cstruct")]
             static RECORD: [u8; LEN] =
