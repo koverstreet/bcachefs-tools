@@ -34,20 +34,27 @@
 
 use core::ffi::c_int;
 use core::marker::PhantomData;
-use core::mem::{align_of, size_of};
+use core::mem::{align_of, offset_of, size_of};
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering::{self, Acquire, Relaxed, Release}};
 use cstruct_macros::c_extern;
+use pin_init::{pin_init_from_closure, PinInit};
 
 use crate::c;
-use crate::util::alloc::AllocError;
+use crate::util::alloc::{alloc_in, flags::GFP_KERNEL, free_pinned_now, init_at, AllocError};
+use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::projections::Publish;
 use crate::util::refcount::{ARef, AlwaysRefCounted};
+use crate::util::sleep::Sleep;
+use crate::util::workqueue::{Queue, Workqueue, WqFlags};
 
 #[cfg(not(kernel))]
 unsafe extern "C" {
     fn urcu_memb_read_lock();
     fn urcu_memb_read_unlock();
+    fn urcu_memb_synchronize_rcu();
+    fn urcu_memb_call_rcu(rcu: *mut c::rcu_head, func: unsafe extern "C" fn(*mut c::rcu_head));
+    fn urcu_memb_barrier();
 }
 
 /// An RCU read-side critical section, open until dropped. Not Send: it's
@@ -91,7 +98,9 @@ impl Drop for ReadGuard {
 /// See the top of the file.
 ///
 /// # Safety
-/// An impl says that what an RCU reader may hold isn't freed with Self.
+/// An impl says that what an RCU reader may hold isn't freed with Self. No
+/// impl may depend on a lifetime: RcuFreeing specializes on it.
+#[rustc_specialization_trait]
 pub unsafe auto trait FreeAnytime {}
 
 /// A member that makes what it's in need freeing a grace period on.
@@ -153,6 +162,131 @@ struct NoDetach<T>(PhantomData<T>);
 
 impl<T> NoDetach<T> {
     const ERR: () = panic!("has something to detach before it's freed - a DetachMember - and no Detach impl");
+}
+
+pub(crate) trait RcuFreeing: Sized {
+    fn alloc_pinned<E: From<AllocError>>(init: impl PinInit<Self, E>) -> Result<*mut Self, E>;
+
+    /// # Safety
+    /// @p is from alloc_pinned(), and nothing but RCU readers uses it after.
+    unsafe fn free_pinned(p: *mut Self);
+}
+
+impl<T> RcuFreeing for T {
+    default fn alloc_pinned<E: From<AllocError>>(init: impl PinInit<T, E>) -> Result<*mut T, E> {
+        let p = alloc_in::<false, RcuFreed<T>, E>(RcuFreed::init(init), GFP_KERNEL)?;
+        Ok(unsafe { &raw mut (*p).value })
+    }
+
+    default unsafe fn free_pinned(p: *mut T) {
+        <T as Detach>::detach(unsafe { &*p });
+        unsafe { RcuFreed::free(p) }
+    }
+}
+
+impl<T: FreeAnytime> RcuFreeing for T {
+    fn alloc_pinned<E: From<AllocError>>(init: impl PinInit<T, E>) -> Result<*mut T, E> {
+        alloc_in::<false, T, E>(init, GFP_KERNEL)
+    }
+
+    unsafe fn free_pinned(p: *mut T) {
+        <T as Detach>::detach(unsafe { &*p });
+        unsafe { free_pinned_now(p) }
+    }
+}
+
+#[repr(C)]
+pub(crate) struct RcuFreed<T> {
+    rcu:   c::rcu_head,
+    work:  c::work_struct,
+    value: T,
+}
+
+/// RcuFreeds whose drop is still to come - the word their last write goes
+/// to, so barrier() waits on it.
+static PENDING: AtomicU32 = AtomicU32::new(0);
+
+/// From module init to exit.
+static FREE_WQ: AtomicPtr<c::workqueue_struct> = AtomicPtr::new(core::ptr::null_mut());
+
+pub fn free_init() -> Result<(), AllocError> {
+    let wq = Workqueue::new(c"bcachefs_rcu_free", WqFlags::UNBOUND, 0)?;
+    FREE_WQ.store(core::mem::ManuallyDrop::new(wq).as_ptr(), Release);
+    Ok(())
+}
+
+/// After barrier(), so nothing's on it.
+pub fn free_exit() {
+    let wq = FREE_WQ.swap(core::ptr::null_mut(), Acquire);
+    if !wq.is_null() {
+        unsafe { c::destroy_workqueue(wq) };
+    }
+}
+
+impl<T> RcuFreed<T> {
+    fn init<E>(value: impl PinInit<T, E>) -> impl PinInit<Self, E> {
+        let work = crate::new_work!(Self::work_fn, "rcu_freed");
+        unsafe {
+            pin_init_from_closure(move |slot: *mut Self| {
+                (&raw mut (*slot).rcu).write(core::mem::zeroed());
+                let Ok(()) = init_at(work, &raw mut (*slot).work);
+                init_at(value, &raw mut (*slot).value)
+            })
+        }
+    }
+
+    /// # Safety
+    /// @p is an RcuFreed's value, and nothing but RCU readers uses it after.
+    unsafe fn free(p: *mut T) {
+        let this = unsafe { p.byte_sub(offset_of!(Self, value)).cast::<Self>() };
+        PENDING.fetch_add(1, Relaxed);
+        unsafe { call_rcu(&raw mut (*this).rcu, Self::rcu_fn) };
+    }
+
+    unsafe extern "C" fn rcu_fn(rcu: *mut c::rcu_head) {
+        let this = unsafe { rcu.byte_sub(offset_of!(Self, rcu)).cast::<Self>() };
+        let wq = FREE_WQ.load(Acquire);
+        assert!(!wq.is_null(), "an RcuFreed freed outside module init and exit");
+        unsafe { Queue::from_raw(wq).queue_work(&raw mut (*this).work) };
+    }
+
+    unsafe extern "C" fn work_fn(work: *mut c::work_struct) {
+        let this = unsafe { work.byte_sub(offset_of!(Self, work)).cast::<Self>() };
+        unsafe { free_pinned_now(this) };
+
+        if PENDING.fetch_sub(1, Release) == 1 {
+            futex_wake(core::ptr::from_ref(&PENDING).cast(), usize::MAX);
+        }
+    }
+}
+
+unsafe fn call_rcu(rcu: *mut c::rcu_head, func: unsafe extern "C" fn(*mut c::rcu_head)) {
+    #[cfg(kernel)]
+    unsafe { kernel::bindings::call_rcu(rcu, Some(func)) };
+    #[cfg(not(kernel))]
+    unsafe { urcu_memb_call_rcu(rcu, func) };
+}
+
+pub fn barrier() {
+    #[cfg(kernel)]
+    unsafe { kernel::bindings::rcu_barrier() };
+    #[cfg(not(kernel))]
+    unsafe { urcu_memb_barrier() };
+
+    loop {
+        let n = PENDING.load(Acquire);
+        if n == 0 {
+            return;
+        }
+        let Ok(()) = futex_wait(&PENDING, n, Sleep::UNINTERRUPTIBLE);
+    }
+}
+
+pub fn synchronize() {
+    #[cfg(kernel)]
+    unsafe { kernel::bindings::synchronize_rcu() };
+    #[cfg(not(kernel))]
+    unsafe { urcu_memb_synchronize_rcu() };
 }
 
 c_extern! {

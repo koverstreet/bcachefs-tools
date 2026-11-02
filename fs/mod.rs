@@ -39,11 +39,11 @@
 // where that isn't C's - Fs is struct bch_fs - cfi_encoding gives C's, or no
 // call through a pointer typed in C's name matches. Makefile.rust allows it.
 #![cfg_attr(kernel, feature(cfi_encoding))]
-// util/rcu.rs's FreeAnytime and NothingToDetach, auto traits, which Detach
-// specializes on (rustc_attrs is #[rustc_specialization_trait]), and
-// util/task's Context::ext(), how a poll finds its task - its ContextBuilder
-// is local_waker's, too. Unstable, as the kernel's own features are: the
-// kernel build has RUSTC_BOOTSTRAP=1, and so does ours (.cargo/config.toml).
+// util/rcu.rs's FreeAnytime, an auto trait, which its frees specialize on
+// (rustc_attrs is #[rustc_specialization_trait]), and util/task's
+// Context::ext(), how a poll finds its task - its ContextBuilder is
+// local_waker's, too. Unstable, as the kernel's own features are: the kernel
+// build has RUSTC_BOOTSTRAP=1, and so does ours (.cargo/config.toml).
 #![feature(auto_traits, negative_impls, min_specialization, rustc_attrs, context_ext, local_waker)]
 #![allow(internal_features)]
 // A type's record says which type each name it writes is: type_name(), const.
