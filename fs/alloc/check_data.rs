@@ -38,7 +38,8 @@ use crate::init::damage;
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
 use crate::opts::data_type_str;
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::{AVec, ConstAlign};
+use crate::util::kernel::PAGE_SIZE;
 use crate::util::bio::{buf_nr_bvecs, Bio, BioBuf, BioOwner};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
@@ -170,7 +171,12 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
     } else {
         (p.crc.compressed_size as usize) << 9
     };
-    let mut buf = KVVec::from_elem(0u8, bytes, GFP_KERNEL).map_err(|_| BchError::from(c::ENOMEM))?;
+    /* page aligned: userspace reads into it O_DIRECT */
+    let mut buf = AVec::<u8, ConstAlign<PAGE_SIZE>>::new(PAGE_SIZE);
+    buf.try_reserve_exact(bytes).map_err(|_| BchError::from(c::ENOMEM))?;
+    unsafe { buf.set_len(bytes) };
+    let mut buf = buf.into_boxed_slice();
+    buf.fill(0);
 
     let nr_vecs = buf_nr_bvecs(buf.as_ptr(), bytes).try_into().expect("bvecs for a btree node or an extent");
     let mut bio = BioBuf::<Bio>::new::<BchError, _>(ca.disk_sb.bdev, nr_vecs, c::req_op_REQ_OP_READ as u32,
