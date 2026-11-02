@@ -10,7 +10,7 @@ use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::format::Bpos;
 use crate::util::kernel::likely;
-use crate::util::vstructs::{plain_bytes, Unsized};
+use crate::util::vstructs::{cast_plain_slice, plain_bytes, Unsized, Unvalidated};
 
 /// V, as a BkeyI's, is the key's type and state - only a marker: where the
 /// value starts is the node's format's.
@@ -37,6 +37,27 @@ impl BkeyP {
     pub unsafe fn from_raw_mut(p: *mut c::bkey_packed) -> *mut Self {
         unsafe { core::ptr::slice_from_raw_parts_mut(p.cast::<u64>(), (*p).u64s as usize) as *mut Self }
     }
+
+    /// The key @s starts with, if all of it is in @s.
+    pub fn from_slice(s: &[u64]) -> Option<&BkeyP<FamilyVal<AllTypes, Unvalidated>>> {
+        let u64s = s.first()?.to_ne_bytes()[0] as usize;
+        if u64s == 0 || u64s > s.len() {
+            return None;
+        }
+        let s = &s[..u64s];
+        Some(unsafe { &*(s as *const [u64] as *const BkeyP<FamilyVal<AllTypes, Unvalidated>>) })
+    }
+
+    /// A key in a bkey_packed of its own, as one packed onto the stack.
+    pub fn from_packed(k: &c::bkey_packed) -> Option<&BkeyP<FamilyVal<AllTypes, Unvalidated>>> {
+        Self::from_slice(cast_plain_slice(plain_bytes(k)).expect("a bkey_packed is whole u64s"))
+    }
+
+    pub fn from_slice_mut(s: &mut [u64]) -> Option<&mut BkeyP<FamilyVal<AllTypes, Unvalidated>>> {
+        let u64s = s.first()?.to_ne_bytes()[0] as usize;
+        let s = s.get_mut(..u64s).filter(|s| !s.is_empty())?;
+        Some(unsafe { &mut *(s as *mut [u64] as *mut BkeyP<FamilyVal<AllTypes, Unvalidated>>) })
+    }
 }
 
 impl<V: ?Sized> BkeyP<V> {
@@ -48,11 +69,15 @@ impl<V: ?Sized> BkeyP<V> {
         (self as *mut Self).cast()
     }
 
-    pub(super) fn cast<W: ?Sized>(&self) -> &BkeyP<W> {
+    pub fn as_slice(&self) -> &[u64] {
+        &self.data
+    }
+
+    pub(crate) fn cast<W: ?Sized>(&self) -> &BkeyP<W> {
         unsafe { &*(self as *const Self as *const BkeyP<W>) }
     }
 
-    pub(super) fn cast_mut<W: ?Sized>(&mut self) -> &mut BkeyP<W> {
+    pub(crate) fn cast_mut<W: ?Sized>(&mut self) -> &mut BkeyP<W> {
         unsafe { &mut *(self as *mut Self as *mut BkeyP<W>) }
     }
 
@@ -190,6 +215,12 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
     }
 
     pub fn unpack_pos(&self, b: &BtreeNode) -> Bpos {
+        unsafe { self.unpack_pos_raw(b) }
+    }
+
+    /// @b is read only for its format, its unpack constants and its key bits,
+    /// so the rest of it may be borrowed mutably.
+    pub(crate) unsafe fn unpack_pos_raw(&self, b: *const BtreeNode) -> Bpos {
         if likely(self.is_packed()) {
             unsafe { c::__bkey_unpack_pos_b(b, self.as_ffi()) }
         } else {

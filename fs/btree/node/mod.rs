@@ -2,8 +2,18 @@
 
 #![allow(non_camel_case_types)]
 
+/// EBUG_ON(), as an assertion: checked in CONFIG_BCACHEFS_DEBUG builds.
+macro_rules! ebug_assert {
+    ($($arg:tt)*) => {
+        if cfg!(CONFIG_BCACHEFS_DEBUG) {
+            assert!($($arg)*);
+        }
+    };
+}
+
 pub mod bset;
 pub mod iter;
+pub mod keys;
 
 use crate::btree::bkey::{BkeyI, BkeyP, BkeySC};
 use crate::c;
