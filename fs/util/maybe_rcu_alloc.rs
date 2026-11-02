@@ -20,16 +20,10 @@ use pin_init::{pin_init_from_closure, PinInit};
 use crate::c;
 use crate::util::alloc::{init_at, AllocError, Flags};
 use crate::util::futex::{futex_wait, futex_wake};
-use crate::util::rcu::{Detach, DropAnytime, DropAtomic, FreeAnytime, HasRcuHead, HeadKind, NothingToDetach, RcuHead,
-                       RcuWorkHead};
+use crate::util::rcu::{Detach, DropAnytime, DropAtomic, Flavor, FreeAnytime, HasRcuHead, HeadKind, NothingToDetach,
+                       RcuHead, RcuWorkHead};
 use crate::util::sleep::Sleep;
 use crate::util::workqueue::{Queue, Workqueue, WqFlags};
-
-#[cfg(not(kernel))]
-unsafe extern "C" {
-    fn urcu_memb_call_rcu(rcu: *mut c::rcu_head, func: unsafe extern "C" fn(*mut c::rcu_head));
-    fn urcu_memb_barrier();
-}
 
 /// # Safety
 /// alloc() gives @layout's bytes, zeroed and aligned to it; free() and,
@@ -254,7 +248,7 @@ impl<T> RcuFreeing for T {
     default unsafe fn free<A: Alloc>(p: NonNull<T>) {
         <T as Detach>::detach(unsafe { p.as_ref() });
         PENDING.fetch_add(1, Relaxed);
-        unsafe { call_rcu(<T as RcuHeadAt<RcuWorkHead>>::head(p).cast(), queue_fn::<T, A>) };
+        unsafe { Flavor::RCU.call(<T as RcuHeadAt<RcuWorkHead>>::head(p).cast(), queue_fn::<T, A>) };
     }
 }
 
@@ -267,7 +261,7 @@ impl<T: DropAtomic> RcuFreeing for T {
 
     default unsafe fn free<A: Alloc>(p: NonNull<T>) {
         <T as Detach>::detach(unsafe { p.as_ref() });
-        unsafe { call_rcu(<T as RcuHeadAt<RcuHead>>::head(p).cast(), drop_free_fn::<T, A>) };
+        unsafe { Flavor::RCU.call(<T as RcuHeadAt<RcuHead>>::head(p).cast(), drop_free_fn::<T, A>) };
     }
 }
 
@@ -287,7 +281,7 @@ impl<T: DropAtomic + DropAnytime> RcuFreeing for T {
             #[cfg(kernel)]
             <T as RcuHeadAt<RcuHead>>::kvfree_rcu_mem(p);
             #[cfg(not(kernel))]
-            call_rcu(<T as RcuHeadAt<RcuHead>>::head(p).cast(), free_fn::<T, A>);
+            Flavor::RCU.call(<T as RcuHeadAt<RcuHead>>::head(p).cast(), free_fn::<T, A>);
         }
     }
 }
@@ -370,19 +364,9 @@ unsafe extern "C" fn work_fn<T, A: Alloc>(work: *mut c::work_struct) {
     }
 }
 
-unsafe fn call_rcu(rcu: *mut c::rcu_head, func: unsafe extern "C" fn(*mut c::rcu_head)) {
-    #[cfg(kernel)]
-    unsafe { kernel::bindings::call_rcu(rcu, Some(func)) };
-    #[cfg(not(kernel))]
-    unsafe { urcu_memb_call_rcu(rcu, func) };
-}
-
 /// Before what pending frees' drops need goes, and at module exit.
 pub fn barrier() {
-    #[cfg(kernel)]
-    unsafe { kernel::bindings::rcu_barrier() };
-    #[cfg(not(kernel))]
-    unsafe { urcu_memb_barrier() };
+    Flavor::RCU.barrier();
 
     loop {
         let n = PENDING.load(Acquire);
