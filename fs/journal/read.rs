@@ -1406,8 +1406,9 @@ fn validate_kept(fs: &Fs, not_rw: &NotRw<'_>, entries: &mut JournalEntries, drop
         let ca = fs.dev_get(p.dev.into());
         match validate::jset_validate(fs, ca.as_deref(), i.jset_bytes_mut(), p.sector, Flags::empty())? {
             Jset::Ok => {}
-            /* C's positive return, which its caller takes as success */
-            Jset::None | Jset::Bad => return Ok(()),
+            /* its last_seq was past its seq, and repaired: its entries still need validating */
+            Jset::Bad => validate::jset_validate_entries(fs, i.jset_bytes_mut(), Flags::empty())?,
+            Jset::None => unreachable!("a kept entry's magic was checked when it was read"),
         }
 
         /*

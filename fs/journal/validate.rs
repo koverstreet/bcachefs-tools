@@ -560,7 +560,7 @@ fn jset_head_mut(j: &mut [u8]) -> &mut Head<c::jset> {
     cast_plain_mut(j).expect("a jset's header")
 }
 
-fn jset_validate_entries(fs: &Fs, j: &mut [u8], flags: Flags) -> Result<(), BchError> {
+pub(crate) fn jset_validate_entries(fs: &Fs, j: &mut [u8], flags: Flags) -> Result<(), BchError> {
     let mut ctx = Ctx::jset(fs, jset_head(j), flags);
     let u64s = jset_head(j).u64s();
     let data = &mut j[JSET_HEAD..JSET_HEAD + u64s * 8];
