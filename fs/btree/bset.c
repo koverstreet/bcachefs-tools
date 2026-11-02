@@ -423,13 +423,13 @@ static void __bch2_verify_insert_pos(struct btree *b, struct bkey_packed *where,
 
 		prt_str(&buf, "insert > next:\n");
 
-		prt_str(&buf, "prev    key ");
-		struct bkey k1 = bkey_unpack_key(b, prev);
+		prt_str(&buf, "insert  key ");
+		struct bkey k1 = bkey_unpack_key(b, insert);
 		bch2_bkey_to_text(&buf, &k1);
 		prt_newline(&buf);
 
-		prt_str(&buf, "insert  key ");
-		struct bkey k2 = bkey_unpack_key(b, insert);
+		prt_str(&buf, "next    key ");
+		struct bkey k2 = bkey_unpack_key(b, next);
 		bch2_bkey_to_text(&buf, &k2);
 		prt_newline(&buf);
 
