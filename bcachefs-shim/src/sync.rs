@@ -6,6 +6,10 @@ use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicU32, Ordering::{Acquire, Relaxed, Release}};
 
+/// The kernel's own: the vendored source, as it is
+#[path = "../../fs/vendor/kernel-rust/kernel/sync/aref.rs"]
+pub mod aref;
+
 /// kernel::sync::SetOnce: populated at most once, then read by anyone.
 ///
 /// # Invariants

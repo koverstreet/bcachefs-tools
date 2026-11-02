@@ -58,6 +58,11 @@ mod placed;
 pub use atomic::AtomicRef;
 pub use percpu::PercpuRef;
 
+#[cfg(kernel)]
+pub use kernel::sync::aref::{ARef, AlwaysRefCounted};
+#[cfg(not(kernel))]
+pub use bcachefs_shim::sync::aref::{ARef, AlwaysRefCounted};
+
 /// # Safety
 /// inc() takes a ref that's held until dec() gives it back - and while one
 /// is, the T isn't freed, nor what it's in.

@@ -7,6 +7,8 @@ rust-version = "1.85.0"
 
 [lib]
 crate-type = ["lib"]
+# sync::aref's examples are the kernel's, written against kernel::
+doctest = false
 
 [dependencies]
 pin-init = { path = "pin-init" }
