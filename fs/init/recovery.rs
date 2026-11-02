@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Recovery - a filesystem brought up from its superblock and journal, or a
-//! new one initialized - and what it records in the superblock: a btree that
-//! lost data and the repairs that takes, alloc info dropped to be
-//! reconstructed, and the errors a journal rewind leaves expected. Each of
-//! those is idempotent, so what it dirties is exactly what's new.
+//! Recovery: a filesystem brought up from its superblock and journal, or a
+//! new one initialized.
 
 use crate::accounting;
 use crate::btree::bkey::prelude::*;
@@ -205,7 +202,6 @@ fn ignore_journal_rewind_errors(fs: &Fs) {
               id::lru_entry_bad, id::accounting_mismatch, id::backpointer_to_missing_ptr] {
         w.set_err_silent(e);
     }
-    w.dirty();
 }
 
 /* journal replay: */
