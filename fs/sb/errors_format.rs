@@ -463,7 +463,8 @@ c_xmacro! {
         (extent_ptrs_entry_past_end, 437, 0),
         (accounting_key_replicas_past_end, 438, FSCK_AUTOFIX),
         (alloc_v4_inline_backpointers, 439, FSCK_AUTOFIX),
-        (MAX, 440, 0),
+        (journal_entry_datetime_bad_size, 440, 0),
+        (MAX, 441, 0),
     }
 }
 

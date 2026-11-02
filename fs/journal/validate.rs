@@ -504,7 +504,7 @@ impl EntryOps for c::jset_entry_log<Unvalidated> {
 }
 
 impl EntryOps for c::jset_entry_datetime<Unvalidated> {
-    const SIZE: Size = Size::AtLeast(id::journal_entry_dev_usage_bad_size);
+    const SIZE: Size = Size::AtLeast(id::journal_entry_datetime_bad_size);
 
     fn to_text(&self, out: &mut Printbuf, _fs: Option<&Fs>) {
         unsafe { c::bch2_prt_datetime(out.as_raw(), self.seconds.get() as c::time64_t) };
