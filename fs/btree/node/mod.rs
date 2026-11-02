@@ -20,6 +20,7 @@ pub mod aux_tree;
 pub mod bset;
 pub mod iter;
 pub mod keys;
+pub mod sort;
 
 use crate::btree::bkey::{BkeyI, BkeyP, BkeySC};
 use crate::c;
