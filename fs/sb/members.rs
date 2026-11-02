@@ -1722,6 +1722,11 @@ impl Dev {
         crate::util::ffi::cstr_in(&self.name)
     }
 
+    /// For C functions taking *mut bch_dev.
+    pub fn as_ptr(&self) -> *mut Dev {
+        core::ptr::from_ref(self).cast_mut()
+    }
+
     /// Whether its block device is open for IO: bch2_dev_is_online().
     pub fn is_online(&self) -> bool {
         !self.io_ref[READ].is_zero()
