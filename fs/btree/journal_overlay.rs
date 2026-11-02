@@ -60,7 +60,7 @@ use cstruct_macros::{c_export, bitfield, CStruct, Init};
 use c::bch_bkey_type as kt;
 use c::bch_errcode as e;
 use c::bch_fs_flags as f;
-use crate::types::{DArray, c_default};
+use crate::types::{DArray, GenRadix, c_default};
 use crate::util::vstructs::Head;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicI32, AtomicU64, AtomicUsize};
@@ -195,6 +195,9 @@ pub struct journal_keys {
     #[c_anon("DARRAY(struct journal_key) pre_sort")]
     pub pre_sort: UnsafeCell<DArray<c::journal_key>>,
 
+    /* What the journal read kept, by seq from journal_entries_base_seq: the keys' */
+    pub entries: GenRadix<*mut c::journal_replay>,
+
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&keys->overwrite_lock"))]
     #[c_lock("struct mutex overwrite_lock")]
@@ -247,7 +250,7 @@ impl Fs {
                 return k.src.allocated_k;
             }
             let pos = k.src.journal;
-            let i = *self.journal_entries.get(pos.journal_seq_offset as usize)
+            let i = *self.journal_keys.entries.get(pos.journal_seq_offset as usize)
                 .expect("a journal key's entry");
             (&raw mut (*i).j._data).cast::<u64>().add(pos.journal_offset as usize).cast()
         }
@@ -1154,7 +1157,7 @@ pub fn bch2_journal_keys_put(fs: &Fs) {
         }
         darray_exit(&mut *jk.pre_sort.get());
 
-        let entries = &mut (*fs.as_ptr()).journal_entries;
+        let entries = &mut (*fs.as_ptr()).journal_keys.entries;
         for (_, &i) in entries.iter_from(0) {
             c::rust_kvfree(i.cast());
         }

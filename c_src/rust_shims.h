@@ -87,7 +87,7 @@ void strip_fs_alloc(struct bch_fs *c);
 void rust_strip_alloc_do(struct bch_fs *c);
 
 /*
- * Collect all non-NULL journal_replay entries from c->journal_entries
+ * Collect all non-NULL journal_replay entries from c->journal_keys.entries
  * (genradix) into a flat array, pinned by a journal_keys ref - whose last
  * put frees them - until rust_journal_entries_put(). Empty, holding no ref,
  * if they're gone already.

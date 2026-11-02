@@ -75,7 +75,7 @@ static __cold void bch2_journal_datetime_to_text(struct printbuf *out, struct js
 
 __cold void bch2_journal_seq_datetime_to_text(struct printbuf *out, struct bch_fs *c, u64 seq)
 {
-	struct journal_replay **p = genradix_ptr(&c->journal_entries,
+	struct journal_replay **p = genradix_ptr(&c->journal_keys.entries,
 						 journal_entry_radix_idx(c, seq));
 	if (p && *p)
 		bch2_journal_datetime_to_text(out, &(*p)->j);
@@ -105,7 +105,7 @@ static void __journal_replay_free(struct bch_fs *c,
 				  struct journal_replay *i)
 {
 	struct journal_replay **p =
-		genradix_ptr(&c->journal_entries,
+		genradix_ptr(&c->journal_keys.entries,
 			     journal_entry_radix_idx(c, le64_to_cpu(i->j.seq)));
 
 	BUG_ON(*p != i);
@@ -183,7 +183,7 @@ static void journal_list_scrub_seq_update(struct bch_fs *c, struct journal_list 
 	/* scrub_seq may be 0, below the base: not a valid index */
 	u64 from = max(jlist->scrub_seq, c->journal_entries_base_seq);
 
-	genradix_for_each_from(&c->journal_entries, iter, _i,
+	genradix_for_each_from(&c->journal_keys.entries, iter, _i,
 			       journal_entry_radix_idx(c, from)) {
 		struct journal_replay *i = *_i;
 
@@ -255,7 +255,7 @@ static int journal_entry_add(struct bch_fs *c, struct bch_dev *ca,
 
 	/* Drop entries we don't need anymore */
 	if (journal_list_keep_from(jlist) > keep_from && !c->opts.read_entire_journal) {
-		genradix_for_each_from(&c->journal_entries, iter, _i,
+		genradix_for_each_from(&c->journal_keys.entries, iter, _i,
 				       journal_entry_radix_idx(c,
 					max(keep_from, c->journal_entries_base_seq))) {
 			i = *_i;
@@ -274,7 +274,7 @@ static int journal_entry_add(struct bch_fs *c, struct bch_dev *ca,
 
 	size_t bytes = vstruct_bytes(j);
 
-	_i = genradix_ptr_alloc(&c->journal_entries, journal_entry_radix_idx(c, seq), GFP_KERNEL);
+	_i = genradix_ptr_alloc(&c->journal_keys.entries, journal_entry_radix_idx(c, seq), GFP_KERNEL);
 	if (!_i)
 		return bch_err_throw(c, ENOMEM_journal_entry_add);
 
@@ -974,7 +974,7 @@ struct u64_range bch2_journal_entry_missing_range(struct bch_fs *c, u64 start, u
 
 /*
  * Returns true if any seq in [start_seq, end_seq] is missing from
- * c->journal_entries (excluding blacklisted ranges). Used to decide whether
+ * c->journal_keys.entries (excluding blacklisted ranges). Used to decide whether
  * to fall back to a full per-device journal read after the bsearch fast
  * path; the bsearch on any single device may legitimately have gaps on
  * multi-device + replication setups, but the union across devices must
@@ -987,7 +987,7 @@ static bool journal_has_any_missing(struct bch_fs *c, u64 start_seq, u64 end_seq
 	u64 seq = start_seq;
 
 	/* From start_seq: entries before it are only kept for the journal scrub */
-	genradix_for_each_from(&c->journal_entries, radix_iter, _i,
+	genradix_for_each_from(&c->journal_keys.entries, radix_iter, _i,
 			journal_entry_radix_idx(c, max(start_seq, c->journal_entries_base_seq))) {
 		i = *_i;
 		if (journal_replay_ignore(i))
@@ -1060,7 +1060,7 @@ static int bch2_journal_check_for_missing(struct bch_fs *c, u64 start_seq, u64 e
 	u64 seq = start_seq;
 
 	/* From start_seq: entries before it are only kept for the journal scrub */
-	genradix_for_each_from(&c->journal_entries, radix_iter, _i,
+	genradix_for_each_from(&c->journal_keys.entries, radix_iter, _i,
 			journal_entry_radix_idx(c, max(start_seq, c->journal_entries_base_seq))) {
 		i = *_i;
 
@@ -1113,7 +1113,7 @@ int bch2_journal_reread_for_rewind(struct bch_fs *c)
 
 	darray_for_each(c->journal.rewind_ranges, range) {
 		struct journal_replay **p =
-			genradix_ptr(&c->journal_entries,
+			genradix_ptr(&c->journal_keys.entries,
 				     journal_entry_radix_idx(c, range->to));
 		if (!p || !*p) {
 			bch_err(c, "journal rewind: flush entry at seq %llu not found",
@@ -1183,7 +1183,7 @@ int bch2_journal_reread_for_rewind(struct bch_fs *c)
 	 */
 	struct genradix_iter radix_iter;
 	struct journal_replay **_i;
-	genradix_for_each(&c->journal_entries, radix_iter, _i) {
+	genradix_for_each(&c->journal_keys.entries, radix_iter, _i) {
 		struct journal_replay *i = *_i;
 		if (i && le64_to_cpu(i->j.seq) >= need_from)
 			i->ignore_not_dirty = false;
@@ -1248,7 +1248,7 @@ int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 	 * Everything between replay_end+1 and cur_seq-1 (noflush entries and
 	 * torn flush writes) will be blacklisted by the caller.
 	 */
-	genradix_for_each_reverse(&c->journal_entries, radix_iter, _i) {
+	genradix_for_each_reverse(&c->journal_keys.entries, radix_iter, _i) {
 		i = *_i;
 
 		if (journal_replay_ignore(i))
@@ -1340,7 +1340,7 @@ int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 
 	u64 keep_from = c->journal_scrub_seq ?: drop_before;
 
-	genradix_for_each(&c->journal_entries, radix_iter, _i) {
+	genradix_for_each(&c->journal_keys.entries, radix_iter, _i) {
 		i = *_i;
 
 		if (journal_replay_ignore(i))
@@ -1365,7 +1365,7 @@ int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 	 * have gaps in any single device's bucket_seq (multi-device with
 	 * replication: seqs that went to other devices), so the only valid
 	 * place to verify completeness is here, against the union of all
-	 * devices' entries in c->journal_entries. If anything's missing,
+	 * devices' entries in c->journal_keys.entries. If anything's missing,
 	 * fall back to a full per-device read before erroring.
 	 */
 	if (bsearch_used &&
@@ -1376,7 +1376,7 @@ int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 
 	try(bch2_journal_check_for_missing(c, drop_before, info->replay_end));
 
-	genradix_for_each(&c->journal_entries, radix_iter, _i) {
+	genradix_for_each(&c->journal_keys.entries, radix_iter, _i) {
 		union bch_replicas_padded replicas = {
 			.e.data_type = BCH_DATA_journal,
 			.e.nr_devs = 0,

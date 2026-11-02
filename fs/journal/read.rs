@@ -130,7 +130,7 @@ impl Fs {
     /// The journal keys' initial ref is held - recovery's, whose put may free
     /// the entries - for as long as the references live.
     pub unsafe fn journal_replays(&self) -> impl Iterator<Item = (&c::journal_replay, &c::jset)> + '_ {
-        self.journal_entries.iter_from(0)
+        self.journal_keys.entries.iter_from(0)
             .filter_map(|(_, &i)| unsafe { i.as_ref() })
             .filter(|i| !i.ignored())
             .map(|i| (i, unsafe { c::journal_replay::jset(i) }))

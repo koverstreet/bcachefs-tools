@@ -755,7 +755,6 @@ pub struct Fs {
      */
     pub journal_scrub_seq: Volatile<u64>,
     pub journal_replay_seq_end: Volatile<u64>,
-    pub journal_entries: GenRadix<*mut c::journal_replay>,
     pub journal_entries_base_seq: u64,
     #[pin]
     #[init(c::journal_keys::init())]

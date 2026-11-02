@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The journal replays the journal read keeps - c->journal_entries - for the
+//! The journal replays the journal read keeps - c->journal_keys.entries - for the
 //! commands that print them: list_journal, journal_rewind_info, kvdb's
 //! list_journal.
 //!

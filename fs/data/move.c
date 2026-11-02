@@ -207,14 +207,14 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 	 * ascending seq order, so take two passes rather than reversing.
 	 */
 	u64 newest_time = 0;
-	genradix_for_each(&c->journal_entries, radix_iter, _i) {
+	genradix_for_each(&c->journal_keys.entries, radix_iter, _i) {
 		struct journal_replay *i = *_i;
 
 		if (!journal_replay_ignore(i) && !JSET_NO_FLUSH(&i->j))
 			newest_time = max(newest_time, (u64) jset_datetime(&i->j));
 	}
 
-	genradix_for_each(&c->journal_entries, radix_iter, _i) {
+	genradix_for_each(&c->journal_keys.entries, radix_iter, _i) {
 		struct journal_replay *i = *_i;
 
 		if (journal_replay_ignore(i) || JSET_NO_FLUSH(&i->j))

@@ -661,7 +661,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
             sb.published().clean.set(0);
         }
 
-        let mut last_journal_entry = fs.journal_entries.iter_rev()
+        let mut last_journal_entry = fs.journal_keys.entries.iter_rev()
             .map(|(_, &i)| i)
             .find(|&i| unsafe { i.as_ref() }.is_some_and(|i| !i.ignored()));
 
@@ -671,7 +671,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
             if clean.is_some() {
                 use_clean = true;
             } else {
-                last_journal_entry = fs.journal_entries.iter_rev().map(|(_, &i)| i).find(|i| !i.is_null());
+                last_journal_entry = fs.journal_keys.entries.iter_rev().map(|(_, &i)| i).find(|i| !i.is_null());
                 if let Some(i) = last_journal_entry {
                     let i = unsafe { &mut *i };
                     i.ignore_blacklisted = false;
