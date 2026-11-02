@@ -288,14 +288,11 @@ impl WbFlush<'_> {
 }
 
 impl Drop for WbMaybeFlush {
-    /// wb_maybe_flush_exit(): a key grown past its own storage is on the heap.
+    /// wb_maybe_flush_exit()
     fn drop(&mut self) {
         // SAFETY: ours, from alloc_pinned(), and nothing uses it after
         unsafe {
-            let buf = &raw mut (*self.0.as_ptr()).last_flushed;
-            if (*buf).k.cast() != (&raw mut (*buf).onstack).cast::<u64>() {
-                c::rust_kfree((*buf).k.cast());
-            }
+            self.0.as_mut().last_flushed.exit();
             free_pinned(self.0.as_ptr());
         }
     }
