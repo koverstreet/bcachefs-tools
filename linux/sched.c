@@ -29,6 +29,14 @@ void __put_task_struct(struct task_struct *t)
 /* returns true if process was woken up, false if it was already running */
 int wake_up_process(struct task_struct *p)
 {
+	/*
+	 * A full barrier before the task state, as try_to_wake_up(): else on
+	 * arm64 the waker's condition store can land after TASK_RUNNING, and
+	 * the task overwrites that with its sleep state and reads the
+	 * condition stale - a lost wakeup (six's lock handoff hung on it).
+	 */
+	smp_mb();
+
 	int ret = p->state != TASK_RUNNING;
 
 	p->state = TASK_RUNNING;
