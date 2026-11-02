@@ -133,6 +133,33 @@ pub fn cond_resched() {
     unsafe { c::bch2_cond_resched() }
 }
 
+/// Forward, so @dst may be below an overlapping @src. Raw pointers: through
+/// slices, LLVM makes the loop a memcpy() call again.
+///
+/// # Safety
+/// @src and @dst are valid for @n u64s; if they overlap, @dst is at or below
+/// @src.
+#[inline(always)]
+pub unsafe fn copy_u64s_small(dst: *mut u64, src: *const u64, n: usize) {
+    let mut i = 0;
+
+    while i + 2 <= n {
+        unsafe {
+            let (a, b) = (src.add(i).read(), src.add(i + 1).read());
+            dst.add(i).write(a);
+            dst.add(i + 1).write(b);
+        }
+        i += 2;
+    }
+    if i < n {
+        unsafe { dst.add(i).write(src.add(i).read()) }
+    }
+}
+
+pub fn mem_alloc_profiling_enabled() -> bool {
+    unsafe { c::rust_mem_alloc_profiling_enabled() }
+}
+
 /// Userspace has no vmalloc: its is_vmalloc_addr() is a macro, 0.
 pub fn is_vmalloc_addr<T>(p: *const T) -> bool {
     #[cfg(kernel)]

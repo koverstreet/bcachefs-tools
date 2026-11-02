@@ -98,6 +98,7 @@ c_extern! {
     pub fn rust_bio_pages_alloc(size: usize, gfp: c::gfp_t) -> *mut c_void;
     pub fn rust_bio_pages_free(p: *mut c_void, size: usize);
     pub fn rust_kfree_rcu_mightsleep(p: *mut c_void);
+    pub fn rust_mem_alloc_profiling_enabled() -> bool;
     pub fn bch2_local_clock() -> u64;
     pub fn bch2_cond_resched();
     pub fn bch2_msleep(ms: c_uint);

@@ -369,22 +369,12 @@ static inline void set_bkeyp_val_u64s(const struct bkey_format *format,
 #define bkeyp_val(_format, _k)						\
 	 ((struct bch_val *) ((u64 *) (_k)->_data + bkeyp_key_u64s(_format, _k)))
 
-extern const struct bkey_format bch2_bkey_format_current;
-
-bool bch2_bkey_transform(const struct bkey_format *,
-			 struct bkey_packed *,
-			 const struct bkey_format *,
-			 const struct bkey_packed *);
-
 void bch2_compute_bkey_unpack_consts(struct btree *);
 
 #ifndef HAVE_BCACHEFS_COMPILED_UNPACK
 struct bpos __bkey_unpack_pos(const struct bkey_format *,
 			      const struct bkey_packed *);
 #endif
-
-void bch2_bkey_unpack(const struct btree *, struct bkey_i *,
-		 const struct bkey_packed *);
 
 static inline void
 __bkey_unpack_key_format_checked(const struct btree *b,

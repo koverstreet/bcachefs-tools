@@ -335,6 +335,7 @@ impl KeyIter {
         None
     }
 
+    #[inline]
     pub fn next_all(&mut self, keys: &Keys<'_>) -> Option<u16> {
         let ret = self.peek_all();
 

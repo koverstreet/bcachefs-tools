@@ -12,6 +12,7 @@ use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use core::ops::RangeInclusive;
+use core::ptr::NonNull;
 use crate::util::ffi::c_char;
 use crate::util::kernel::is_vmalloc_addr;
 use crate::util::{Printbuf, ToText};
@@ -38,6 +39,50 @@ c_extern! {
                                 start: c::bbpos, end: c::bbpos, pinned_end: *mut c::bbpos)
                                 -> core::ffi::c_int;
     pub static bch2_btree_node_flags: [*const c_char; 0];
+    pub fn bch2_btree_bounce_alloc_noprof(c: *mut Fs, size: usize, used_mempool: *mut bool) -> *mut c_void;
+    pub fn bch2_btree_bounce_free(c: *mut Fs, size: usize, used_mempool: bool, p: *mut c_void);
+}
+
+/// Up to a node's size, to sort a node's keys into: kvmalloc()'d, or the
+/// bounce pool's, so it never fails. Freed when dropped - whichever buffer it
+/// holds then: swap() trades it for a node's, which it's allocated as.
+pub struct Bounce<'f> {
+    fs:      &'f Fs,
+    p:       NonNull<u64>,
+    bytes:   usize,
+    mempool: bool,
+}
+
+impl<'f> Bounce<'f> {
+    pub fn new(fs: &'f Fs, bytes: usize) -> Self {
+        let mut mempool = false;
+        let p = unsafe { bch2_btree_bounce_alloc_noprof(fs.as_ptr(), bytes, &mut mempool) };
+
+        Self { fs, p: NonNull::new(p.cast()).expect("the bounce pool waits for an element"), bytes, mempool }
+    }
+
+    pub fn u64s(&mut self) -> &mut [u64] {
+        unsafe { core::slice::from_raw_parts_mut(self.p.as_ptr(), self.bytes / size_of::<u64>()) }
+    }
+
+    /// The node's buffer this, and this the node's old one.
+    pub fn swap(&mut self, b: &mut BtreeNode) {
+        assert!(self.bytes == b.buf_bytes(), "swapping a {} byte bounce for a {} byte node buffer",
+                self.bytes, b.buf_bytes());
+
+        let old = core::mem::replace(&mut b.data, self.p.as_ptr().cast());
+        self.p = NonNull::new(old.cast()).expect("a node's buffer");
+    }
+
+    pub fn as_ptr(&self) -> *const c_void {
+        self.p.as_ptr().cast()
+    }
+}
+
+impl Drop for Bounce<'_> {
+    fn drop(&mut self) {
+        unsafe { bch2_btree_bounce_free(self.fs.as_ptr(), self.bytes, self.mempool, self.p.as_ptr().cast()) }
+    }
 }
 
 impl ToText for c::bch_fs_btree_cache {

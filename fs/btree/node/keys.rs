@@ -90,15 +90,14 @@ impl BtreeNode {
 
 #[cold]
 #[inline(never)]
-fn no_key_at(offset: u16, len: usize) -> ! {
+fn no_key_at(offset: usize, len: usize) -> ! {
     panic!("no key at offset {offset} of a {len} u64 node")
 }
 
-/// The u64s of the key at @offset in @buf, as node read validates them: not
+/// The u64s of the key at @at in @buf, as node read validates them: not
 /// zero, and all of the key in the buffer.
 #[inline(always)]
-fn key_u64s_at(buf: &[u64], offset: u16) -> usize {
-    let at = offset as usize;
+fn key_u64s_at(buf: &[u64], at: usize) -> usize {
     invariant!(at < buf.len());
 
     let u64s = buf[at].to_ne_bytes()[0] as usize;
@@ -106,15 +105,16 @@ fn key_u64s_at(buf: &[u64], offset: u16) -> usize {
     u64s
 }
 
-/// The key at @offset in @buf: a node's keys are validated.
+/// The key at @offset in @buf: a node's keys are validated. A usize for the
+/// unwritten whiteouts, which run to the buffer's end.
 #[inline(always)]
-pub(super) fn key_at(buf: &[u64], offset: u16) -> &BkeyP {
-    let at = offset as usize;
-    let u64s = key_u64s_at(buf, offset);
+pub(super) fn key_at(buf: &[u64], offset: impl Into<usize>) -> &BkeyP {
+    let at = offset.into();
+    let u64s = key_u64s_at(buf, at);
 
-    match BkeyP::from_slice(&buf[at..at + u64s]) {
+    match BkeyP::from_slice(&buf[at..][..u64s]) {
         Some(k) => k.cast(),
-        None    => no_key_at(offset, buf.len()),
+        None    => no_key_at(at, buf.len()),
     }
 }
 
@@ -122,9 +122,9 @@ pub(super) fn key_at(buf: &[u64], offset: u16) -> &BkeyP {
 /// read validates.
 #[inline(always)]
 pub(super) fn bkey_p_next(buf: &[u64], k: u16) -> u16 {
-    let next = k as usize + key_u64s_at(buf, k);
+    let next = k as usize + key_u64s_at(buf, k.into());
     invariant!(next <= u16::MAX as usize);
-    u16::try_from(next).unwrap_or_else(|_| no_key_at(k, buf.len()))
+    u16::try_from(next).unwrap_or_else(|_| no_key_at(k.into(), buf.len()))
 }
 
 /// Set @t's keys in @buf, in order, with their offsets.
@@ -210,11 +210,11 @@ impl KeysMut<'_> {
 
     pub fn key_at_mut(&mut self, offset: u16) -> &mut BkeyP {
         let (at, len) = (offset as usize, self.buf.len());
-        let u64s = key_u64s_at(self.buf, offset);
+        let u64s = key_u64s_at(self.buf, offset.into());
 
-        match BkeyP::from_slice_mut(&mut self.buf[at..at + u64s]) {
+        match BkeyP::from_slice_mut(&mut self.buf[at..][..u64s]) {
             Some(k) => k.cast_mut(),
-            None    => no_key_at(offset, len),
+            None    => no_key_at(offset.into(), len),
         }
     }
 

@@ -1156,6 +1156,12 @@ void rust_kfree_rcu_mightsleep(void *p)
 	kfree_rcu_mightsleep(p);
 }
 
+/* For util/kernel.rs: a static key */
+bool rust_mem_alloc_profiling_enabled(void)
+{
+	return mem_alloc_profiling_enabled();
+}
+
 /*
  * For Rust, what it can't call itself: static inlines and macros, and in
  * places which of the two differs between the kernel and userspace.

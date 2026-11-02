@@ -262,4 +262,8 @@ c_extern! {
                               format: *const cs::bkey_format) -> bool;
     pub fn bch2_bkey_pack_pos_lossy(out: *mut cs::bkey_packed, in_: *const Bpos,
                                     b: *const BtreeNode) -> cs::bkey_pack_pos_ret;
+    pub fn bch2_bkey_transform(out_f: *const cs::bkey_format, out: *mut cs::bkey_packed,
+                               in_f: *const cs::bkey_format, in_: *const cs::bkey_packed) -> bool;
+    pub fn bch2_bkey_unpack(b: *const BtreeNode, dst: *mut cs::bkey_i, src: *const cs::bkey_packed);
+    pub static bch2_bkey_format_current: cs::bkey_format;
 }

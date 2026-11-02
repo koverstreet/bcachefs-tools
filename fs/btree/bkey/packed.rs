@@ -117,6 +117,10 @@ impl<V: ?Sized> BkeyP<V> {
         self.header_mut().format_bits.set_needs_whiteout(v as u8);
     }
 
+    pub fn set_format(&mut self, format: u8) {
+        self.header_mut().format_bits.set_format(format);
+    }
+
     pub fn key_type(&self) -> c::bch_bkey_type {
         c::bch_bkey_type(self.header().type_ as u32)
     }
@@ -253,6 +257,14 @@ impl BtreeNode {
     pub fn cmp_packed(&self,
                       l: &BkeyP<impl ?Sized + ValidatedVal>,
                       r: &BkeyP<impl ?Sized + ValidatedVal>) -> Ordering {
+        self.cmp_packed_inlined(l, r)
+    }
+
+    /// For the sorts' merge loops.
+    #[inline(always)]
+    pub fn cmp_packed_inlined(&self,
+                              l: &BkeyP<impl ?Sized + ValidatedVal>,
+                              r: &BkeyP<impl ?Sized + ValidatedVal>) -> Ordering {
         if likely(l.is_packed() && r.is_packed()) {
             self.cmp_packed_format_checked(l, r)
         } else {
@@ -269,6 +281,7 @@ impl BtreeNode {
     }
 
     /// Both keys packed.
+    #[inline(always)]
     pub fn cmp_packed_format_checked(&self,
                                      l: &BkeyP<impl ?Sized + ValidatedVal>,
                                      r: &BkeyP<impl ?Sized + ValidatedVal>) -> Ordering {
@@ -346,6 +359,7 @@ impl c::bkey_format {
 /// on big endian.
 pub const HIGH_BIT_OFFSET: u32 = if cfg!(target_endian = "little") { 0 } else { c::KEY_PACKED_BITS_START };
 
+#[inline(always)]
 unsafe fn cmp_bits(mut l: *const u64, mut r: *const u64, mut nr_key_bits: u32) -> Ordering {
     let next_word = |p: *const u64| {
         if cfg!(target_endian = "little") { p.wrapping_sub(1) } else { p.wrapping_add(1) }
