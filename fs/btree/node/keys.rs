@@ -127,18 +127,44 @@ pub(super) fn bkey_p_next(buf: &[u64], k: u16) -> u16 {
     u16::try_from(next).unwrap_or_else(|_| no_key_at(k.into(), buf.len()))
 }
 
-/// Set @t's keys in @buf, in order, with their offsets.
-pub(super) fn set_keys<'a>(buf: &'a [u64], t: &BsetTree) -> impl Iterator<Item = (u16, &'a BkeyP)> + use<'a> {
-    let (mut k, end) = (t.first_offset(), t.end_offset);
+/// The keys in @buf from @k to @end, in order, with their offsets.
+#[inline(always)]
+pub(super) fn keys_in(buf: &[u64], mut k: usize, end: usize) -> impl Iterator<Item = (usize, &BkeyP)> {
     core::iter::from_fn(move || {
         if k == end {
             return None;
         }
-        let at = k;
-        k = bkey_p_next(buf, k);
+        let (at, key) = (k, key_at(buf, k));
+        k += key.u64s();
         invariant!(k <= end);
-        Some((at, key_at(buf, at)))
+        Some((at, key))
     })
+}
+
+/// keys_in(), mutably.
+fn keys_in_mut(buf: &mut [u64], mut k: usize, end: usize) -> impl Iterator<Item = &mut BkeyP> {
+    let mut rest = &mut buf[k..end];
+    core::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
+        let (at, u64s) = (k, key_u64s_at(rest, 0));
+        let (key, tail) = core::mem::take(&mut rest).split_at_mut(u64s);
+        rest = tail;
+        k += u64s;
+        Some(BkeyP::from_slice_mut(key).unwrap_or_else(|| no_key_at(at, end)).cast_mut())
+    })
+}
+
+/// keys_in(), between a node's offsets.
+#[inline(always)]
+pub(super) fn keys_between(buf: &[u64], k: u16, end: u16) -> impl Iterator<Item = (u16, &BkeyP)> {
+    keys_in(buf, k.into(), end.into()).map(|(at, k)| (at as u16, k))
+}
+
+/// Set @t's keys in @buf, in order, with their offsets.
+pub(super) fn set_keys<'a>(buf: &'a [u64], t: &BsetTree) -> impl Iterator<Item = (u16, &'a BkeyP)> + use<'a> {
+    keys_between(buf, t.first_offset(), t.end_offset)
 }
 
 impl<'a> Keys<'a> {
@@ -180,6 +206,11 @@ impl<'a> Keys<'a> {
         self.buf.as_ptr().wrapping_add(offset as usize).cast_mut().cast()
     }
 
+    #[inline(always)]
+    pub fn keys_between(&self, k: u16, end: u16) -> impl Iterator<Item = (u16, &'a BkeyP)> + use<'a> {
+        keys_between(self.buf, k, end)
+    }
+
     /// Set @t's keys, in order, with their offsets.
     pub fn set_keys(&self, t: &BsetTree) -> impl Iterator<Item = (u16, &'a BkeyP)> + use<'a> {
         set_keys(self.buf, t)
@@ -206,6 +237,19 @@ impl<'a> Keys<'a> {
 impl KeysMut<'_> {
     pub fn as_keys(&self) -> Keys<'_> {
         Keys { node: self.node, sets: &self.sets, buf: self.buf, aux: self.aux, unpack_fn_len: self.unpack_fn_len }
+    }
+
+    /// Every set's keys, set by set, mutably: the sets are in buffer order.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut BkeyP> {
+        let (mut rest, mut base) = (&mut *self.buf, 0);
+
+        self.sets.iter().flat_map(move |t| {
+            let (first, end) = (t.first_offset() as usize, t.end_offset as usize);
+            let (set, tail) = core::mem::take(&mut rest)[first - base..].split_at_mut(end - first);
+
+            (rest, base) = (tail, end);
+            keys_in_mut(set, 0, set.len())
+        })
     }
 
     pub fn key_at_mut(&mut self, offset: u16) -> &mut BkeyP {

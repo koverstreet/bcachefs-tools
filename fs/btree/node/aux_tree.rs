@@ -3,7 +3,7 @@
 /* Auxiliary search trees */
 
 use super::bset::{AuxTreeType, BsetTree, BSET_CACHELINE, BSET_NO_AUX_TREE_VAL, BSET_RW_AUX_TREE_VAL};
-use super::keys::{bkey_p_next, key_at, set_keys, Keys, KeysMut};
+use super::keys::{bkey_p_next, key_at, keys_between, set_keys, Keys, KeysMut};
 use super::{check_lookups, BtreeNode};
 use crate::btree::bkey::{BkeyP, HIGH_BIT_OFFSET};
 use crate::c;
@@ -172,8 +172,7 @@ impl<'a> Keys<'a> {
     }
 
     fn __bset_verify_rw_aux_tree(&self, t: &BsetTree) {
-        let mut k = t.first_offset();
-        let mut j = 0;
+        let k = t.first_offset();
 
         assert!(!t.has_ro_aux_tree(), "rw aux tree check of a set with a ro aux tree");
 
@@ -182,22 +181,17 @@ impl<'a> Keys<'a> {
         assert!(!rw.is_empty(), "rw aux tree of no entries");
         assert!(rw[0].offset == k, "rw aux tree's first entry at {}, its set's first key at {k}", rw[0].offset);
 
-        loop {
-            j += 1;
-            if j == rw.len() {
-                break;
-            }
+        let mut keys = self.set_keys(t);
 
+        for j in 1..rw.len() {
             assert!(rw[j].offset > rw[j - 1].offset,
                     "rw aux tree entry {j} at {}, not past entry {} at {}", rw[j].offset, j - 1, rw[j - 1].offset);
 
-            while rw[j].offset != k {
-                k = self.bkey_p_next(k);
-                assert!(k < t.end_offset, "rw aux tree entry {j} at {}, not at a key of its set", rw[j].offset);
-            }
+            let (k, key) = keys.find(|&(k, _)| k == rw[j].offset)
+                .unwrap_or_else(|| panic!("rw aux tree entry {j} at {}, not at a key of its set", rw[j].offset));
 
-            assert!(rw[j].k == self.unpack_pos(self.key_at(k)),
-                    "rw aux tree entry {j} at {}: {}, its key at {}", k, rw[j].k, self.unpack_pos(self.key_at(k)));
+            assert!(rw[j].k == self.unpack_pos(key),
+                    "rw aux tree entry {j} at {}: {}, its key at {}", k, rw[j].k, self.unpack_pos(key));
         }
     }
 
@@ -532,20 +526,13 @@ impl KeysMut<'_> {
 
         if size < rw.len() &&
            (end - start) as usize * size_of::<u64>() > L1_CACHE_BYTES {
-            let mut k = start;
+            let k = keys_between(self.buf, start, end).skip(1)
+                .find(|&(k, _)| (k - start) as usize * size_of::<u64>() >= L1_CACHE_BYTES);
 
-            loop {
-                k = bkey_p_next(self.buf, k);
-                if k == end {
-                    break;
-                }
-
-                if (k - start) as usize * size_of::<u64>() >= L1_CACHE_BYTES {
-                    rw.copy_within(idx..size, idx + 1);
-                    t.size += 1;
-                    rw[idx] = rw_aux_tree_entry(self.node, self.buf, t, k);
-                    break;
-                }
+            if let Some((k, _)) = k {
+                rw.copy_within(idx..size, idx + 1);
+                t.size += 1;
+                rw[idx] = rw_aux_tree_entry(self.node, self.buf, t, k);
             }
         }
     }

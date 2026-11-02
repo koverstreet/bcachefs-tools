@@ -288,14 +288,7 @@ impl Keys<'_> {
     pub fn bset_to_text(&self, out: &mut Printbuf, fs: Option<&Fs>, set: usize) {
         let b = self.node();
         let t = &self.sets[set];
-        let i = self.bset(t);
-
-        if i.u64s() == 0 {
-            return;
-        }
-
-        let start = t.first_offset();
-        let last = start + i.u64s() as u16;
+        let (start, last) = (t.first_offset(), t.end_offset);
         let mut k = start;
 
         while k < last {
@@ -403,7 +396,7 @@ impl Keys<'_> {
             let ty = t.aux_tree_type() as usize;
 
             stats.sets[ty].nr += 1;
-            stats.sets[ty].bytes += self.bset(t).u64s() * size_of::<u64>();
+            stats.sets[ty].bytes += t.u64s() * size_of::<u64>();
 
             if let AuxTree::Ro(ro) = self.aux_tree(t) {
                 stats.floats += t.size as usize - 1;
@@ -505,27 +498,17 @@ impl Keys<'_> {
         while ret.is_none() {
             let Some(p) = self.__bkey_prev(t, k) else { break };
 
-            let mut i = p;
-            while i != k {
-                let key = self.key_at(i);
-                if key.key_type().0 >= min_key_type {
-                    ret = Some(i);
-                }
-                i += key.u64s() as u16;
-            }
-
+            ret = self.keys_between(p, k).filter(|(_, key)| key.key_type().0 >= min_key_type)
+                .last().map(|(i, _)| i);
             k = p;
         }
 
         if check_lookups() {
             assert!(ret.is_none_or(|r| r < orig_k), "prev of key at {orig_k} at {ret:?}");
 
-            let mut i = ret.map_or(t.first_offset(), |r| r + self.key_at(r).u64s() as u16);
-            while i != orig_k {
-                let key = self.key_at(i);
+            for (i, key) in self.keys_between(ret.map_or(t.first_offset(), |r| self.bkey_p_next(r)), orig_k) {
                 assert!(key.key_type().0 < min_key_type,
                         "key at {i} of type {} skipped, before key at {orig_k}", key.key_type().0);
-                i += key.u64s() as u16;
             }
         }
 
@@ -607,10 +590,10 @@ impl KeysMut<'_> {
         if src_u64s != clobber_u64s {
             let t = self.sets[set];
 
-            ebug_assert!(self.as_keys().bset(&t).u64s() as isize >= clobber as isize - u64s as isize);
+            ebug_assert!(t.u64s() as isize >= clobber as isize - u64s as isize);
 
             self.buf.copy_within(w + clobber..t.end_offset as usize, w + u64s);
-            let bset_u64s = self.as_keys().bset(&t).u64s() + u64s - clobber;
+            let bset_u64s = t.u64s() + u64s - clobber;
             self.bset_head_mut(t.data_offset).set_u64s(bset_u64s);
             self.set_bset_end(set);
         }
@@ -636,10 +619,10 @@ impl KeysMut<'_> {
 
         self.as_keys().bset_verify_rw_aux_tree(&t);
 
-        ebug_assert!(self.as_keys().bset(&t).u64s() >= clobber);
+        ebug_assert!(t.u64s() >= clobber);
 
         self.buf.copy_within(w + clobber..t.end_offset as usize, w);
-        let bset_u64s = self.as_keys().bset(&t).u64s() - clobber;
+        let bset_u64s = t.u64s() - clobber;
         self.bset_head_mut(t.data_offset).set_u64s(bset_u64s);
         self.set_bset_end(set);
 
@@ -720,23 +703,16 @@ impl Keys<'_> {
                                           packed_search: Option<&BkeyP>,
                                           lossy_packed_search: &BkeyP, mut m: u16) -> u16 {
         let b = self.node();
+        let end = t.end_offset;
 
-        while m != t.end_offset {
-            let k = self.key_at(m);
-            if !b.bkey_iter_cmp_p_or_unp(k, Some(lossy_packed_search), search).is_lt() {
-                break;
-            }
-            m = self.bkey_p_next(m);
-        }
+        m = self.keys_between(m, end)
+            .find(|(_, k)| !b.bkey_iter_cmp_p_or_unp(k, Some(lossy_packed_search), search).is_lt())
+            .map_or(end, |(at, _)| at);
 
         if packed_search.is_none() {
-            while m != t.end_offset {
-                let k = self.key_at(m);
-                if !b.bkey_iter_pos_cmp(k, search).is_lt() {
-                    break;
-                }
-                m = self.bkey_p_next(m);
-            }
+            m = self.keys_between(m, end)
+                .find(|(_, k)| !b.bkey_iter_pos_cmp(k, search).is_lt())
+                .map_or(end, |(at, _)| at);
         }
 
         if check_lookups() {

@@ -2,7 +2,7 @@
 
 use super::bset::{BsetTree, MAX_BSETS};
 use super::iter::KeyIter;
-use super::keys::{key_at, Keys, KeysMut};
+use super::keys::{key_at, keys_in, Keys, KeysMut};
 use super::{BtreeNode, BtreeNrKeys};
 use crate::btree::bkey::{BkeyP, BKEY_U64S};
 use crate::btree::cache::{btree_node_buf_swap_account, Bounce};
@@ -11,10 +11,10 @@ use crate::fs::Fs;
 use crate::types::{c_default, Le64};
 use crate::util::kernel::{copy_u64s_small, local_clock, mem_alloc_profiling_enabled};
 use crate::util::time_stats::TimeStats;
-use crate::util::vstructs::{cast_plain_mut, from_ffi_mut, plain_bytes, plain_bytes_mut, Head};
+use crate::util::vstructs::{cast_plain_mut, plain_bytes, plain_bytes_mut, Head};
 use core::cmp::Ordering;
 use core::marker::PhantomData;
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use core::mem::offset_of;
 use cstruct_macros::{c_enum, c_export, c_name, CStruct};
 
@@ -64,12 +64,6 @@ const NODE_U64S: usize = size_of::<Head<c::btree_node>>() / size_of::<u64>();
 const NODE_KEYS: usize = offset_of!(Head<c::btree_node>, keys) / size_of::<u64>();
 const ENTRY_U64S: usize = size_of::<Head<c::btree_node_entry>>() / size_of::<u64>();
 const ENTRY_KEYS: usize = offset_of!(Head<c::btree_node_entry>, keys) / size_of::<u64>();
-
-#[cold]
-#[inline(never)]
-fn no_key_at(at: usize, len: usize) -> ! {
-    panic!("no key at offset {at} of a {len} u64 buffer")
-}
 
 fn bset_written(b: &BtreeNode, t: &BsetTree) -> bool {
     (t.data_offset as usize) < b.written.get() as usize * SECTOR_U64S
@@ -343,21 +337,14 @@ fn sort_keys(keys: &Keys<'_>, runs: &mut [SortIterSet], dst: &mut [u64]) -> usiz
 }
 
 fn verify_no_dups(b: &BtreeNode, buf: &[u64], start: usize, end: usize) {
-    if !cfg!(CONFIG_BCACHEFS_DEBUG) || start == end {
+    if !cfg!(CONFIG_BCACHEFS_DEBUG) {
         return;
     }
 
-    let mut p = start;
-    let mut k = p + key_at(buf, p).u64s();
-
-    while k != end {
-        let l = key_at(buf, p).unpack(b);
-        let r = key_at(buf, k).unpack(b);
-
+    keys_in(buf, start, end).map(|(_, k)| k.unpack(b)).reduce(|l, r| {
         assert!(l.p < r.start_pos(), "unwritten whiteouts out of order, or overlapping: {l}, then {r}");
-        p = k;
-        k += key_at(buf, k).u64s();
-    }
+        r
+    });
 }
 
 fn sort_bkey_ptrs(keys: &Keys<'_>, ptrs: &mut [u64]) {
@@ -430,12 +417,10 @@ fn sort_whiteouts(fs: &Fs, b: &mut BtreeNode) {
          */
         let new = &mut buf[1..];
         let mut ptrs = u64s;
-        let mut k = start;
 
-        while k != keys.buf.len() {
+        for (k, _) in keys_in(keys.buf, start, keys.buf.len()) {
             ptrs -= 1;
             new[ptrs] = k as u64;
-            k += key_at(keys.buf, k).u64s();
         }
 
         sort_bkey_ptrs(&keys, &mut new[ptrs..]);
@@ -495,7 +480,7 @@ fn drop_whiteouts(b: &mut BtreeNode, mode: CompactMode) -> bool {
 
         if !compact {
             if src != dst {
-                let u64s = keys.as_keys().bset(&t).u64s();
+                let u64s = t.u64s();
                 keys.buf.copy_within(src..src + ENTRY_U64S + u64s, dst);
                 keys.set_bset(set, (dst + ENTRY_KEYS) as u16);
             }
@@ -551,7 +536,7 @@ fn btree_node_sort(fs: &Fs, b: &mut BtreeNode, start_idx: usize, end_idx: usize)
 
     let keys = b.keys();
     for t in &keys.sets[start_idx..end_idx] {
-        u64s += keys.bset(t).u64s();
+        u64s += t.u64s();
         if t.first_offset() != t.end_offset {
             runs[used] = SortIterSet { k: t.first_offset().into(), end: t.end_offset.into() };
             used += 1;
@@ -761,19 +746,9 @@ pub unsafe fn bch2_sort_keys_keep_unwritten_whiteouts(dst: *mut c::bkey_packed, 
                                        |k| set_needs_whiteout(k, false)) as c_uint
 }
 
-/// # Safety
-/// @i is a bset, all of its keys there.
 #[c_export]
-pub unsafe fn bch2_set_bset_needs_whiteout(i: *mut Head<c::bset>, v: c_int) {
-    let i = unsafe { from_ffi_mut::<c::bset>(i) };
-    let len = i._data.len();
-    let mut k = 0;
-
-    while k != len {
-        let key = BkeyP::from_slice_mut(&mut i._data[k..]).unwrap_or_else(|| no_key_at(k, len));
-        key.set_needs_whiteout(v != 0);
-        k += key.u64s();
-    }
+pub fn bch2_btree_node_set_needs_whiteout(b: &mut BtreeNode) {
+    b.keys_mut().iter_mut().for_each(|k| k.set_needs_whiteout(true));
 }
 
 #[c_export]
