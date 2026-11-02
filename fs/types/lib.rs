@@ -599,6 +599,9 @@ pub struct CacheAligned([u8; 0]);
 // SAFETY: no bytes
 unsafe impl ::pin_init::Zeroable for CacheAligned {}
 
+pub const SMP_CACHE_BYTES: usize = align_of::<CacheAligned>();
+pub const L1_CACHE_BYTES: usize = SMP_CACHE_BYTES;
+
 /// Default for a type C shares: all zeroes, C's `= {}` - as bindgen's was. For
 /// types whose every field is C's, to which all zeroes is a valid value - an
 /// unsized vstruct's C definition too, by name: c_default!(T__head).

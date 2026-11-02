@@ -54,10 +54,6 @@ static inline void bkey_val_copy(struct bkey_i *dst, const struct bkey_i *src)
 extern struct static_key_false bch2_debug_check_bkey_unpack;
 
 __pure
-unsigned bch2_bkey_greatest_differing_bit(const struct btree *,
-					  const struct bkey_packed *,
-					  const struct bkey_packed *);
-__pure
 unsigned bch2_bkey_ffs(const struct btree *, const struct bkey_packed *);
 
 __pure
@@ -386,14 +382,6 @@ void bch2_compute_bkey_unpack_consts(struct btree *);
 struct bpos __bkey_unpack_pos(const struct bkey_format *,
 			      const struct bkey_packed *);
 #endif
-
-bool bch2_bkey_pack_key(struct bkey_packed *, const struct bkey *,
-		   const struct bkey_format *);
-
-enum bkey_pack_pos_ret bch2_bkey_pack_pos_lossy(struct bkey_packed *, const struct bpos *,
-					   const struct btree *);
-
-bool bch2_bkey_pack_pos(struct bkey_packed *, struct bpos, const struct btree *);
 
 void bch2_bkey_unpack(const struct btree *, struct bkey_i *,
 		 const struct bkey_packed *);

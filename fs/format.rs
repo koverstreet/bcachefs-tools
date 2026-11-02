@@ -2201,6 +2201,13 @@ pub struct bset {
 }
 vstruct!(unsized bset, u64s);
 
+impl bset__head {
+    /// By what holds it, which has room for its keys.
+    pub fn set_u64s(&mut self, u64s: usize) {
+        self.u64s.set(u64s as u16);
+    }
+}
+
 c_bitmask! {
     LE32_BITMASK(struct Head<bset>, flags), strip BSET_ {
         BSET_CSUM_TYPE(0, 4),

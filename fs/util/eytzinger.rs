@@ -61,8 +61,19 @@ macro_rules! eytzinger_impl {
                 Self { size, extra }
             }
 
+            /// A tree of @size nodes, with the extra new() computed for it,
+            /// stored.
+            pub const fn with_extra(size: $t, extra: $t) -> Self {
+                debug_assert!(extra == Self::new(size).extra);
+                Self { size, extra }
+            }
+
             pub const fn size(&self) -> $t {
                 self.size
+            }
+
+            pub const fn extra(&self) -> $t {
+                self.extra
             }
 
             /// Node @i's left (@dir 0) or right (@dir 1) child.
@@ -105,6 +116,7 @@ macro_rules! eytzinger_impl {
             }
 
             /// The node before @i in order; 0 before the first.
+            #[inline]
             pub fn prev(&self, mut i: $t) -> $t {
                 debug_assert!(i != 0 && i <= self.size);
 
@@ -121,6 +133,7 @@ macro_rules! eytzinger_impl {
             }
 
             /// Node @i's inorder (sorted) position, 1-based.
+            #[inline]
             pub fn to_inorder(&self, mut i: $t) -> $t {
                 debug_assert!(i != 0 && i <= self.size);
 
@@ -141,6 +154,7 @@ macro_rules! eytzinger_impl {
             }
 
             /// The node at inorder position @i, 1-based.
+            #[inline]
             pub fn from_inorder(&self, mut i: $t) -> $t {
                 debug_assert!(i != 0 && i <= self.size);
 

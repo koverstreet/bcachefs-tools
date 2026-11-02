@@ -255,4 +255,11 @@ c_extern! {
     pub fn __bch2_bkey_unpack_key_b(b: *const BtreeNode, out: *mut cs::bkey,
                                     in_: *const cs::bkey_packed);
     pub fn __bkey_unpack_pos_b(b: *const BtreeNode, in_: *const cs::bkey_packed) -> cs::Bpos;
+    pub fn bch2_bkey_greatest_differing_bit(b: *const BtreeNode, l: *const cs::bkey_packed,
+                                            r: *const cs::bkey_packed) -> c_uint;
+    pub fn bch2_bkey_pack_pos(out: *mut cs::bkey_packed, in_: Bpos, b: *const BtreeNode) -> bool;
+    pub fn bch2_bkey_pack_key(out: *mut cs::bkey_packed, in_: *const cs::bkey,
+                              format: *const cs::bkey_format) -> bool;
+    pub fn bch2_bkey_pack_pos_lossy(out: *mut cs::bkey_packed, in_: *const Bpos,
+                                    b: *const BtreeNode) -> cs::bkey_pack_pos_ret;
 }

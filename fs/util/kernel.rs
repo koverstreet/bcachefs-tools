@@ -39,6 +39,29 @@ pub fn likely(b: bool) -> bool {
 #[inline(never)]
 pub fn cold_path() {}
 
+/// C's prefetch(): a hint, which can't fault, whatever @p is. As each side's C
+/// does it: the kernel's x86-64 prefetch() is prefetchnta, the shim's
+/// __builtin_prefetch() prefetcht0; elsewhere, only arm64's is kept. asm!,
+/// not _mm_prefetch(): that's an SSE target_feature fn, which the kernel's
+/// soft-float target can't inline - it'd be a call.
+#[inline(always)]
+pub fn prefetch<T>(p: *const T) {
+    #[cfg(all(target_arch = "x86_64", kernel))]
+    unsafe {
+        core::arch::asm!("prefetchnta [{}]", in(reg) p, options(nostack, readonly, preserves_flags))
+    }
+    #[cfg(all(target_arch = "x86_64", not(kernel)))]
+    unsafe {
+        core::arch::asm!("prefetcht0 [{}]", in(reg) p, options(nostack, readonly, preserves_flags))
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("prfm pldl1keep, [{}]", in(reg) p, options(nostack, readonly, preserves_flags))
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let _ = p;
+}
+
 /// Ask @shrink to free @nr objects, as memory pressure would: its
 /// scan_objects(), GFP_KERNEL.
 ///

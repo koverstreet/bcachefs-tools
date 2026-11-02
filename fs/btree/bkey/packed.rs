@@ -310,9 +310,11 @@ impl c::bkey_format {
     }
 }
 
-unsafe fn cmp_bits(mut l: *const u64, mut r: *const u64, mut nr_key_bits: u32) -> Ordering {
-    const HIGH_BIT_OFFSET: u32 = if cfg!(target_endian = "little") { 0 } else { c::KEY_PACKED_BITS_START };
+/// Where a packed key's position bits start in its high word: past the header,
+/// on big endian.
+pub const HIGH_BIT_OFFSET: u32 = if cfg!(target_endian = "little") { 0 } else { c::KEY_PACKED_BITS_START };
 
+unsafe fn cmp_bits(mut l: *const u64, mut r: *const u64, mut nr_key_bits: u32) -> Ordering {
     let next_word = |p: *const u64| {
         if cfg!(target_endian = "little") { p.wrapping_sub(1) } else { p.wrapping_add(1) }
     };
