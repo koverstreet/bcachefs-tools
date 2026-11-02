@@ -8,6 +8,7 @@
 use crate::errcode::BchError;
 use crate::util::alloc::Flags;
 use crate::util::maybe_rcu_alloc::{Kmalloc, MaybeRcuAlloc};
+use crate::util::rcu::RcuHead;
 use crate::util::workqueue::Queue;
 use super::{Spawn, Task, TaskRef};
 use core::future::Future;
@@ -69,12 +70,15 @@ pub unsafe fn spawn_detached<F: Future<Output = ()> + Send>(at: Spawn<'_, '_>, f
 
 // ── A task in its home ───────────────────────────────────────────────────
 
-/// One allocation, the future borrowing @home.
+/// One allocation, the future borrowing @home. The task's head is the free's,
+/// so the task goes first: tiny RCU's kvfree_rcu() wants it in the first page.
 #[repr(C)]
+#[derive(RcuHead)]
 struct WithTask<'q, H, F: Future<Output = ()>> {
+    #[rcu_head]
+    task: ManuallyDrop<Task<'q, F>>,
     home: ManuallyDrop<H>,
     done: unsafe fn(NonNull<H>),
-    task: ManuallyDrop<Task<'q, F>>,
 }
 
 impl<H, F: Future<Output = ()>> Drop for WithTask<'_, H, F> {

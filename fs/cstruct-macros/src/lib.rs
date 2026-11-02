@@ -78,6 +78,7 @@ use cstruct::{bitfield_type, enum_text, expand_enum_list, parse_c_export, parse_
 
 mod args_stored_once;
 mod detach;
+mod rcu_head;
 mod fieldwise;
 mod options;
 mod init;
@@ -289,6 +290,13 @@ pub fn derive_late(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 #[proc_macro_derive(Detach)]
 pub fn derive_detach(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand_syn("#[derive(Detach)]", || detach::derive(syn::parse(input)?))
+}
+
+/// `#[derive(RcuHead)]`: util/rcu.rs's HasRcuHead, at the field marked
+/// #[rcu_head] - see rcu_head.rs.
+#[proc_macro_derive(RcuHead, attributes(rcu_head))]
+pub fn derive_rcu_head(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[derive(RcuHead)]", || rcu_head::derive(syn::parse(input)?))
 }
 
 /// `#[derive(Fieldwise)]`: each method `#[fieldwise(...)]` names, applied to

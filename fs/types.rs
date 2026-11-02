@@ -19,6 +19,7 @@ use crate::util::workqueue::{ReffedWork, Workqueue, WqFlags};
 use crate::locking::{Locked, LockedBy, MutexNoio, PercpuRwsemNoio};
 use crate::util::percpu::{Counters, PerCpu};
 use crate::types::{GenRadix, RustOnly, bits_to_longs, rust_only};
+use crate::util::rcu::RcuHead;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ushort};
 use core::sync::atomic::{AtomicI32, AtomicI64, AtomicPtr, AtomicU32, AtomicU64};
@@ -327,7 +328,7 @@ c_const! {
 #[pin_data(PinnedDrop)]
 #[repr(C)]
 #[c_name(bch_dev)]
-#[derive(CStruct, TypeInfo, Init)]
+#[derive(CStruct, TypeInfo, Init, RcuHead)]
 #[init_args(fs: &crate::fs::Fs)]
 pub struct Dev {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -487,8 +488,9 @@ pub struct Dev {
     /// c->devs[]'s RCU readers may still have it, and take its io refs, which
     /// its drop exits: dropped a grace period on, in process context.
     #[pin]
-    #[init(RustOnly::new(crate::util::rcu::RcuDropWorkMember))]
-    pub(crate) _rcu: rust_only!(crate::util::rcu::RcuDropWorkMember),
+    #[rcu_head]
+    #[init(RustOnly::new(crate::util::rcu::RcuDropWorkMember::default()))]
+    pub(crate) _rcu: rust_only!(crate::util::rcu::RcuDropWorkMember<crate::util::rcu::RcuWorkHead>),
 
     pub rebalance_work: AtomicI64,
 

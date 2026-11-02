@@ -248,36 +248,40 @@ pub unsafe auto trait DropAnytime {}
 pub unsafe auto trait DropAtomic {}
 
 /// What it's in is freed a grace period on: dropped at once, its memory once
-/// RCU readers are done with it - they reach nothing its drop frees.
+/// RCU readers are done with it - they reach nothing its drop frees. @H is
+/// RcuHead for what the free may use, rather than a header of its own.
+#[repr(transparent)]
 #[derive(Default)]
-pub struct RcuMember;
+pub struct RcuMember<H = ()>(H);
 
-impl !FreeAnytime for RcuMember {}
+impl<H> !FreeAnytime for RcuMember<H> {}
 
 /// What it's in is dropped and freed a grace period on, in the RCU callback:
-/// its readers reach what its drop frees.
-pub struct RcuDropMember(());
+/// its readers reach what its drop frees. @H as RcuMember's.
+#[repr(transparent)]
+pub struct RcuDropMember<H = ()>(H);
 
-impl !FreeAnytime for RcuDropMember {}
-impl !DropAnytime for RcuDropMember {}
+impl<H> !FreeAnytime for RcuDropMember<H> {}
+impl<H> !DropAnytime for RcuDropMember<H> {}
 
-impl RcuDropMember {
+impl<H: Default> RcuDropMember<H> {
     /// # Safety
     /// What it's in drops without sleeping: in softirq context, an RCU
     /// callback's.
-    pub const unsafe fn new() -> Self {
-        Self(())
+    pub unsafe fn new() -> Self {
+        Self(H::default())
     }
 }
 
 /// As RcuDropMember, for a drop that needs process context: it runs on the
 /// free queue.
+#[repr(transparent)]
 #[derive(Default)]
-pub struct RcuDropWorkMember;
+pub struct RcuDropWorkMember<H = ()>(H);
 
-impl !FreeAnytime for RcuDropWorkMember {}
-impl !DropAnytime for RcuDropWorkMember {}
-impl !DropAtomic for RcuDropWorkMember {}
+impl<H> !FreeAnytime for RcuDropWorkMember<H> {}
+impl<H> !DropAnytime for RcuDropWorkMember<H> {}
+impl<H> !DropAtomic for RcuDropWorkMember<H> {}
 
 #[repr(transparent)]
 pub struct RcuHead(c::rcu_head);
@@ -289,11 +293,17 @@ pub union RcuWorkHead {
     work: core::mem::ManuallyDrop<c::work_struct>,
 }
 
-pub(crate) trait HeadKind {}
+pub(crate) trait HeadKind {
+    const WORK: bool;
+}
 
-impl HeadKind for RcuHead {}
+impl HeadKind for RcuHead {
+    const WORK: bool = false;
+}
 
-impl HeadKind for RcuWorkHead {}
+impl HeadKind for RcuWorkHead {
+    const WORK: bool = true;
+}
 
 macro_rules! heads {
     ($($h:ident),*) => {$(
@@ -311,6 +321,36 @@ macro_rules! heads {
 }
 
 heads!(RcuHead, RcuWorkHead);
+
+/// A type's own head: #[derive(RcuHead)]'s, at the field marked #[rcu_head].
+///
+/// # Safety
+/// HEAD is the offset in Self of an RcuHead - an RcuWorkHead, if WORK -
+/// nothing but its free uses.
+#[rustc_specialization_trait]
+pub unsafe trait HasRcuHead {
+    const HEAD: usize;
+    const WORK: bool;
+}
+
+unsafe impl HasRcuHead for RcuMember<RcuHead> {
+    const HEAD: usize = 0;
+    const WORK: bool = false;
+}
+unsafe impl HasRcuHead for RcuDropMember<RcuHead> {
+    const HEAD: usize = 0;
+    const WORK: bool = false;
+}
+unsafe impl HasRcuHead for RcuDropWorkMember<RcuWorkHead> {
+    const HEAD: usize = 0;
+    const WORK: bool = true;
+}
+unsafe impl<T: HasRcuHead> HasRcuHead for core::mem::ManuallyDrop<T> {
+    const HEAD: usize = T::HEAD;
+    const WORK: bool = T::WORK;
+}
+
+pub use cstruct_macros::RcuHead;
 
 /// What holds without owning, or owns as its T says: borrows and pointers,
 /// which free nothing; the kernel's Box and Vec, as their T would; an ARef,

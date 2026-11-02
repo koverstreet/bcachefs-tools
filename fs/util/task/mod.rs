@@ -89,7 +89,7 @@ pub use r#box::{spawn_detached, BoxWithTask, TaskBox};
 use crate::c;
 use crate::errcode::BchError;
 use crate::util::kthread::{Kthread, KthreadRef};
-use crate::util::rcu::{self, RcuMember};
+use crate::util::rcu::{self, HasRcuHead, RcuHead, RcuMember, RcuWorkHead};
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::workqueue::{Queue, RawWork};
 use core::fmt;
@@ -230,10 +230,23 @@ struct Header {
     _rcu:      RcuMember,
 }
 
+// The free's head is @work, dead once the task has finished: only dispatch()
+// queues it. What's still reached locklessly after - a late completer's
+// compare-exchange of @waiting, which then fails - must stay outside the head.
+unsafe impl HasRcuHead for Header {
+    const HEAD: usize = {
+        assert!(size_of::<RcuWorkHead>() <= size_of::<c::work_struct>());
+        core::mem::offset_of!(Header, work)
+    };
+    const WORK: bool = true;
+}
+
 #[repr(C)]
 #[pin_data(PinnedDrop)]
+#[derive(RcuHead)]
 pub struct Task<'q, F: Future<Output = ()>> {
     #[pin]
+    #[rcu_head]
     header:     Header,
     #[pin]
     future:     MaybeUninit<F>,
@@ -273,7 +286,7 @@ impl<'q, F: Future<Output = ()> + Send> Task<'q, F> {
                 runq_next: AtomicPtr::new(null_mut()),
                 poll:      Self::poll,
                 finish:    Self::finish,
-                _rcu:      RcuMember,
+                _rcu:      RcuMember::default(),
             }),
             future <- future,
             owner_done,

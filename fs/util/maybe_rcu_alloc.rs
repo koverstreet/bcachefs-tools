@@ -20,7 +20,8 @@ use pin_init::{pin_init_from_closure, PinInit};
 use crate::c;
 use crate::util::alloc::{init_at, AllocError, Flags};
 use crate::util::futex::{futex_wait, futex_wake};
-use crate::util::rcu::{Detach, DropAnytime, DropAtomic, FreeAnytime, HeadKind, NothingToDetach, RcuHead, RcuWorkHead};
+use crate::util::rcu::{Detach, DropAnytime, DropAtomic, FreeAnytime, HasRcuHead, HeadKind, NothingToDetach, RcuHead,
+                       RcuWorkHead};
 use crate::util::sleep::Sleep;
 use crate::util::workqueue::{Queue, Workqueue, WqFlags};
 
@@ -140,7 +141,7 @@ impl<T, A: Alloc> Drop for MaybeRcuAlloc<T, A> {
 
 // ── Freeing ──────────────────────────────────────────────────────────────
 
-/// The head a free uses: a Headed<T, H>'s, before T, which is then the
+/// The head a free uses: T's own, or a Headed<T, H>'s, which is then the
 /// allocation.
 trait RcuHeadAt<H: HeadKind>: Sized {
     fn alloc<A: Alloc, E: From<AllocError>>(init: impl PinInit<Self, E>, gfp: Flags) -> Result<NonNull<Self>, E>;
@@ -175,30 +176,56 @@ struct Headed<T, H> {
 }
 
 impl<T, H: HeadKind> RcuHeadAt<H> for T {
-    fn alloc<A: Alloc, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E> {
+    default fn alloc<A: Alloc, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E> {
         let init = unsafe { pin_init_from_closure(move |slot: *mut Headed<T, H>| init_at(init, &raw mut (*slot).value)) };
         let p = alloc_at::<Headed<T, H>, A, E>(init, gfp)?;
         Ok(unsafe { NonNull::new_unchecked(&raw mut (*p.as_ptr()).value) })
     }
 
-    unsafe fn head(p: NonNull<T>) -> *mut H {
+    default unsafe fn head(p: NonNull<T>) -> *mut H {
         unsafe { p.as_ptr().byte_sub(offset_of!(Headed<T, H>, value)).cast() }
     }
 
-    unsafe fn of_head(h: *mut H) -> NonNull<T> {
+    default unsafe fn of_head(h: *mut H) -> NonNull<T> {
         unsafe { NonNull::new_unchecked(h.byte_add(offset_of!(Headed<T, H>, value)).cast()) }
     }
 
-    unsafe fn free_mem<A: Alloc>(p: NonNull<T>) {
+    default unsafe fn free_mem<A: Alloc>(p: NonNull<T>) {
         unsafe { A::free(NonNull::new_unchecked(<T as RcuHeadAt<H>>::head(p).cast()), Layout::new::<Headed<T, H>>()) }
     }
 
     #[cfg(kernel)]
-    unsafe fn kvfree_rcu_mem(p: NonNull<T>) {
+    default unsafe fn kvfree_rcu_mem(p: NonNull<T>) {
         unsafe {
             let h = <T as RcuHeadAt<H>>::head(p);
             c::rust_kvfree_rcu(h.cast(), h.cast());
         }
+    }
+}
+
+impl<T: HasRcuHead, H: HeadKind> RcuHeadAt<H> for T {
+    fn alloc<A: Alloc, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E> {
+        const { assert!(!H::WORK || T::WORK, "an RcuDropWorkMember's head is an RcuWorkHead, with room for the work") };
+        alloc_at::<T, A, E>(init, gfp)
+    }
+
+    unsafe fn head(p: NonNull<T>) -> *mut H {
+        unsafe { p.as_ptr().byte_add(T::HEAD).cast() }
+    }
+
+    unsafe fn of_head(h: *mut H) -> NonNull<T> {
+        unsafe { NonNull::new_unchecked(h.byte_sub(T::HEAD).cast()) }
+    }
+
+    unsafe fn free_mem<A: Alloc>(p: NonNull<T>) {
+        unsafe { A::free(p.cast(), Layout::new::<T>()) }
+    }
+
+    #[cfg(kernel)]
+    unsafe fn kvfree_rcu_mem(p: NonNull<T>) {
+        // tiny RCU passes the head's offset as its callback
+        const { assert!(T::HEAD < 4096, "kvfree_rcu() of a head more than a page into its object") };
+        unsafe { c::rust_kvfree_rcu(p.as_ptr().cast(), <T as RcuHeadAt<H>>::head(p).cast()) }
     }
 }
 

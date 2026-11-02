@@ -274,6 +274,13 @@ unsafe impl<T: Send, const U64S: usize, const ALIGN: usize> Send for RustOnly<T,
 unsafe impl<T: Sync, const U64S: usize, const ALIGN: usize> Sync for RustOnly<T, U64S, ALIGN>
     where Align<ALIGN>: AlignMarker {}
 
+unsafe impl<T: crate::util::rcu::HasRcuHead, const U64S: usize, const ALIGN: usize> crate::util::rcu::HasRcuHead
+    for RustOnly<T, U64S, ALIGN> where Align<ALIGN>: AlignMarker
+{
+    const HEAD: usize = T::HEAD;
+    const WORK: bool = T::WORK;
+}
+
 // SAFETY: zeroed storage is a zeroed @T - which, @T being Zeroable, is a @T,
 // as new() would have made one. A @T with invariants zeroes can't satisfy -
 // a lock - isn't Zeroable, so neither is its RustOnly.
