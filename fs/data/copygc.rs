@@ -71,7 +71,8 @@ use crate::sb::counters::events;
 use crate::types::{Fifo, RustOnly, rust_only};
 use crate::prt;
 use crate::util::alloc::{flags::GFP_KERNEL, kbox_pin_init, KBox, KVVec};
-use crate::util::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
+use crate::util::cuckoo::{Cuckoo, Entry, Private, RegisterError, Registration};
+use crate::util::siphash::SipHash13Key;
 use crate::util::kernel::{cond_resched, WRITE};
 use crate::util::kthread::{Kthread, KthreadSelf};
 use crate::util::late::Late;
@@ -173,7 +174,7 @@ impl Drop for DevInFlight<'_> {
 #[derive(Detach)]
 struct InFlight<'f> {
     #[pin]
-    reg:  Registration<c::move_bucket_key, InFlight<'f>>,
+    reg:  Registration<c::move_bucket_key, InFlight<'f>, SipHash13Key, 2, Private>,
     _dev: DevInFlight<'f>,
     /// What the moves count on
     b:    c::move_bucket,
@@ -187,7 +188,8 @@ impl PinnedDrop for InFlight<'_> {
     }
 }
 
-type InFlightSet<'f> = Cuckoo<Entry<InFlight<'f>>>;
+/// The thread's alone: its InFlights go at once
+type InFlightSet<'f> = Cuckoo<Entry<InFlight<'f>>, SipHash13Key, 2, Private>;
 
 impl<'f> InFlight<'f> {
     fn new<'w>(fs: &'f Fs, set: &'w InFlightSet<'f>, key: c::move_bucket_key)

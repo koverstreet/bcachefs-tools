@@ -34,9 +34,9 @@ use core::ptr::NonNull;
 
 /// A pointer, to C: repr(transparent), for a field C reads as T *.
 #[repr(transparent)]
-pub struct BackRef<T: ?Sized + Sync>(NonNull<T>);
+pub struct BackRef<T: ?Sized>(NonNull<T>);
 
-impl<T: ?Sized + Sync> BackRef<T> {
+impl<T: ?Sized> BackRef<T> {
     /// # Safety
     /// @t outlives this BackRef, and what's handed a reference from it - its
     /// owner drains what holds one, and what that holds, before it goes - and
@@ -56,7 +56,7 @@ impl<T: ?Sized + Sync> BackRef<T> {
     }
 }
 
-impl<T: ?Sized + Sync> Deref for BackRef<T> {
+impl<T: ?Sized> Deref for BackRef<T> {
     type Target = T;
 
     fn deref(&self) -> &T {

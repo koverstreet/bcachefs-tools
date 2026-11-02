@@ -147,6 +147,7 @@ pub fn synchronize() {
 #[rustc_specialization_trait]
 pub unsafe auto trait FreeAnytime {}
 
+#[derive(Default)]
 pub struct RcuMember;
 
 impl !FreeAnytime for RcuMember {}
