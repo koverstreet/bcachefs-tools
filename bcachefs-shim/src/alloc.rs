@@ -28,6 +28,7 @@ pub mod flags {
 
     pub const GFP_KERNEL: Flags = Flags(0);
     pub const GFP_NOWAIT: Flags = Flags(1);
+    pub const GFP_ATOMIC: Flags = Flags(1);
     pub const __GFP_NOWARN: Flags = Flags(2);
 }
 

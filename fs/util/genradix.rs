@@ -88,6 +88,19 @@ impl<T: Zeroable> GenRadix<T> {
         NonNull::new(p.cast::<T>()).map(|mut p| unsafe { p.as_mut() }).ok_or(AllocError)
     }
 
+    /// get_or_alloc(), with @node for it to use, if it has one - taken if it
+    /// does: as genradix_ptr_alloc_preallocated(), for a caller that
+    /// allocates as it needs to outside a lock, and retries under it.
+    #[inline]
+    pub fn get_or_alloc_preallocated(&mut self, idx: usize, node: &mut NewNode, gfp: c::gfp_t)
+        -> Result<&mut T, AllocError>
+    {
+        let offset = Self::offset(idx).ok_or(AllocError)?;
+        let p = unsafe { c::__genradix_ptr_alloc(&mut self.tree, offset, &mut node.0, gfp) };
+        // SAFETY: as get_mut()'s
+        NonNull::new(p.cast::<T>()).map(|mut p| unsafe { p.as_mut() }).ok_or(AllocError)
+    }
+
     /// The entries from @idx on, with their indices - every entry of each
     /// allocated node, written or not: as genradix_for_each_from().
     #[inline]
@@ -120,6 +133,41 @@ impl<T: Zeroable> GenRadix<T> {
     /// Free every node: as genradix_free(). Empty after, as a new one is.
     pub fn free(&mut self) {
         unsafe { c::__genradix_free(&mut self.tree) }
+    }
+}
+
+/// A node for get_or_alloc_preallocated(), allocated ahead of it - zeroed,
+/// as genradix_alloc_node() - and freed if it's never taken.
+pub struct NewNode(*mut c::genradix_node);
+
+impl NewNode {
+    /// Nodes are their size's alignment: the tree finds an entry's node by
+    /// its address.
+    const LAYOUT: core::alloc::Layout = match core::alloc::Layout::from_size_align(NODE_SIZE, NODE_SIZE) {
+        Ok(l)  => l,
+        Err(_) => panic!("a genradix node's layout"),
+    };
+
+    pub const fn none() -> Self {
+        NewNode(core::ptr::null_mut())
+    }
+
+    /// GFP_KERNEL - and with @nofail, __GFP_NOFAIL.
+    pub fn alloc(&mut self, nofail: bool) -> Result<(), AllocError> {
+        *self = NewNode(if nofail {
+            unsafe { c::rust_kzalloc_nofail(NODE_SIZE) }.cast()
+        } else {
+            crate::util::alloc::kzalloc(Self::LAYOUT)?.as_ptr().cast()
+        });
+        Ok(())
+    }
+}
+
+impl Drop for NewNode {
+    fn drop(&mut self) {
+        if let Some(p) = NonNull::new(self.0) {
+            unsafe { crate::util::alloc::kfree(p.cast(), Self::LAYOUT) }
+        }
     }
 }
 

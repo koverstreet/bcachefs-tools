@@ -5,13 +5,16 @@
 //! An allocation failure is an AllocError to handle, never an abort.
 
 #[cfg(kernel)]
-pub use kernel::alloc::{flags, AllocError, Flags, KBox, KVVec};
+pub use kernel::alloc::{flags, AllocError, Flags, KBox, KVBox, KVVec};
 
 #[cfg(not(kernel))]
 pub use bcachefs_shim::alloc::{flags, AllocError, Flags, KVVec};
 /// In userspace, a Box is a KBox.
 #[cfg(not(kernel))]
 pub type KBox<T> = std::boxed::Box<T>;
+/// And a KVBox.
+#[cfg(not(kernel))]
+pub type KVBox<T> = std::boxed::Box<T>;
 
 #[cfg(kernel)]
 pub use kernel::sync::Arc;
