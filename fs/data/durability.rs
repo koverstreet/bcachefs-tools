@@ -29,14 +29,14 @@ use crate::util::vstructs::Validated;
 use arrayvec::ArrayVec;
 use core::ffi::c_uint;
 use cstruct_macros::c_export;
-use crate::format::Btree;
+use crate::format::{Btree, MemberState};
 
 impl Fs {
     /// What a copy already on @dev is worth: nothing if the device is gone or
     /// being evacuated. bch2_dev_durability().
     pub fn dev_durability(&self, dev: u32, rcu: &ReadGuard) -> u32 {
         self.dev_rcu(dev, rcu)
-            .filter(|ca| u32::from(ca.mi.get().state) != c::bch_member_state::BCH_MEMBER_STATE_evacuating.0)
+            .filter(|ca| ca.mi.get().state != MemberState::evacuating)
             .map_or(0, |ca| ca.mi.get().durability.into())
     }
 

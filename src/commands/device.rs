@@ -286,12 +286,12 @@ enum MemberState {
 }
 
 impl MemberState {
-    fn as_u32(self) -> u32 {
+    fn state(self) -> c::MemberState {
         match self {
-            MemberState::Rw         => c::bch_member_state::BCH_MEMBER_STATE_rw.0,
-            MemberState::Ro         => c::bch_member_state::BCH_MEMBER_STATE_ro.0,
-            MemberState::Evacuating => c::bch_member_state::BCH_MEMBER_STATE_evacuating.0,
-            MemberState::Spare      => c::bch_member_state::BCH_MEMBER_STATE_spare.0,
+            MemberState::Rw         => c::MemberState::rw,
+            MemberState::Ro         => c::MemberState::ro,
+            MemberState::Evacuating => c::MemberState::evacuating,
+            MemberState::Spare      => c::MemberState::spare,
         }
     }
 }
@@ -331,7 +331,7 @@ pub struct SetStateCli {
 
 fn cmd_device_set_state(cli: SetStateCli) -> Result<()> {
 
-    let new_state = cli.new_state.as_u32();
+    let new_state = cli.new_state.state();
 
     if cli.offline {
         if cli.device.parse::<u32>().is_ok() {
@@ -352,7 +352,7 @@ fn cmd_device_set_state(cli: SetStateCli) -> Result<()> {
         .context("setting device state")
 }
 
-fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
+fn set_state_offline(device: &str, new_state: c::MemberState) -> Result<()> {
 
     let mut opts: c::bch_opts = Default::default();
     opts.set_nostart(true);
@@ -371,7 +371,7 @@ fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
 
     {
         let mut sb = fs.sb_lock();
-        sb.fs_member_mut(dev_idx).set_state(new_state as u64);
+        sb.fs_member_mut(dev_idx).set_state(new_state.0.into());
         fs.write_super_ret(&mut sb)
             .map_err(|e| anyhow!("error writing superblock: {}", e))?;
     }
@@ -552,14 +552,14 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
     let usage = handle.dev_usage(dev_idx)
         .context("querying device usage")?;
 
-    if usage.state == c::bch_member_state::BCH_MEMBER_STATE_rw.0 as u8 {
+    if c::MemberState(usage.state) == c::MemberState::rw {
         println!("Setting {} readonly", cli.device);
-        handle.disk_set_state(dev_idx, c::bch_member_state::BCH_MEMBER_STATE_ro.0, BCH_FORCE_IF_DEGRADED)
+        handle.disk_set_state(dev_idx, c::MemberState::ro, BCH_FORCE_IF_DEGRADED)
             .context("setting device readonly")?;
     }
 
     println!("Setting {} evacuating", cli.device);
-    handle.disk_set_state(dev_idx, c::bch_member_state::BCH_MEMBER_STATE_evacuating.0, BCH_FORCE_IF_DEGRADED)
+    handle.disk_set_state(dev_idx, c::MemberState::evacuating, BCH_FORCE_IF_DEGRADED)
         .context("setting device evacuating")?;
 
     // Trigger reconcile wakeup so it starts processing the evacuation

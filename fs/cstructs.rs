@@ -49,7 +49,6 @@
 #[path = "sb/counters_format.rs"] pub mod sb_counters_format;
 #[path = "sb/downgrade_format.rs"] pub mod sb_downgrade_format;
 #[path = "sb/errors_format.rs"] pub mod sb_errors_format;
-#[path = "sb/members_format.rs"] pub mod sb_members_format;
 #[path = "snapshots/format.rs"] pub mod snapshots_format;
 #[path = "snapshots/types.rs"] pub mod snapshots_types;
 #[path = "types.rs"] pub mod types;
@@ -213,7 +212,7 @@ pub mod c {
     pub use crate::sb::io::{BCH_SB_WRITE_bringup, bch_sb_write_flags, sb_write};
     pub use crate::sb::io::{bch_sb_cpu, bch_sb_cpuWriter};
     pub use crate::sb::members::{bch_dev_identity};
-    pub use super::sb_members_format::*;
+    pub use crate::format::members::*;
     pub use crate::sb::members::{bch_member_cpu};
     pub use super::snapshots_format::*;
     pub use super::snapshots_format::Snapshot;

@@ -36,7 +36,7 @@ use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, Ent
 use arrayvec::ArrayVec;
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
-use crate::format::{Bversion, CompressionType, DataType, Nonce};
+use crate::format::{Bversion, CompressionType, DataType, MemberState, Nonce};
 
 #[path = "ptrs_edit.rs"]
 mod edit;
@@ -765,7 +765,7 @@ fn cached_ptr_drop_reason(fs: &Fs, opts: &c::bch_inode_opts, d: &DecodedPtr<'_>,
     if ca.is_some_and(|ca| ca.dev_ptr_stale(ptr, rcu)) {
         return Some("pointer is stale");
     }
-    if ca.is_none_or(|ca| u32::from(ca.mi.get().state) == c::bch_member_state::BCH_MEMBER_STATE_evacuating.0) {
+    if ca.is_none_or(|ca| ca.mi.get().state == MemberState::evacuating) {
         return Some("device bad or evacuating");
     }
 

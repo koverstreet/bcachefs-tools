@@ -68,7 +68,7 @@ use cstruct_macros::{c_export, vtable};
 use kernel::alloc::KVec;
 use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
 use kernel::uaccess::{UserPtr, UserSlice};
-use crate::format::{Btree, DataType};
+use crate::format::{Btree, DataType, MemberState};
 
 /* The dispatch */
 
@@ -302,7 +302,7 @@ fn dev_usage(fs: &Fs, arg: &mut c::bch_ioctl_dev_usage) -> Result<(), BchError> 
     let ca = dev_lookup(fs, arg.dev, arg.flags)?;
     let src = ca.usage_full_read_fast();
 
-    arg.state       = ca.mi.get().state;
+    arg.state       = ca.mi.get().state.0;
     arg.bucket_size = ca.mi.get().bucket_size.into();
     arg.nr_buckets  = ca.mi.get().nbuckets - u64::from(ca.mi.get().first_bucket);
     for (d, s) in arg.d.iter_mut().zip(&src.d) {
@@ -324,7 +324,7 @@ fn dev_usage_v2(fs: &Fs, user: UserVstruct<c::bch_ioctl_dev_usage_v2>) -> Result
     let ca = dev_lookup(fs, arg.dev, arg.flags)?;
     let src = ca.usage_full_read_fast();
 
-    arg.state         = ca.mi.get().state;
+    arg.state         = ca.mi.get().state.0;
     arg.bucket_size   = ca.mi.get().bucket_size.into();
     arg.nr_data_types = arg.nr_data_types.min(c::BCH_DATA_NR as u8);
     arg.nr_buckets    = ca.mi.get().nbuckets - u64::from(ca.mi.get().first_bucket);
@@ -620,14 +620,14 @@ fn disk_set_state(fs: &Fs, a: c::bch_ioctl_disk_set_state, msg: ErrMsg, bad_args
     -> Result<(), BchError>
 {
     admin(fs)?;
-    if a.flags & !FORCE_FLAGS != 0 || a.pad != [0; 3] ||
-       u32::from(a.new_state) >= c::BCH_MEMBER_STATE_NR {
+    let new_state = MemberState(a.new_state);
+    if a.flags & !FORCE_FLAGS != 0 || a.pad != [0; 3] || new_state >= MemberState::nr {
         return fs.throw(bad_args);
     }
     let ca = dev_lookup_outer(fs, a.dev, a.flags)?;
 
     let mut err = Printbuf::new();
-    let ret = fs.dev_set_state(&ca, c::bch_member_state(a.new_state.into()), a.flags, Some(&mut err));
+    let ret = fs.dev_set_state(&ca, new_state, a.flags, Some(&mut err));
     msg.report(&mut err, ret, |ret, _| bch_err_msg_dev!(&ca, ret, "setting device state"))
 }
 

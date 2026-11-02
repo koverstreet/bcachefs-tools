@@ -23,7 +23,7 @@ use crate::data::ec::stripe_new::{self, Internal, Slot, StripeBlock, StripeNew, 
 use crate::data::ec::stripe_new_reuse::OldRead;
 use crate::data::ec::stripe_new_blocks::stripe_alloc_or_reuse;
 use crate::errcode::{bch_errcode, BchError};
-use crate::format::DataType;
+use crate::format::{DataType, MemberState};
 use crate::fs::Fs;
 use crate::locking::Guard;
 use crate::sb::counters::events;
@@ -152,7 +152,7 @@ impl Fs {
             let mi = ca.mi.get();
             // its member state, not rw_durability(): that's the allocator's
             // rw set, which a device leaves going offline
-            if mi.state as u32 == c::bch_member_state::BCH_MEMBER_STATE_rw.0 &&
+            if mi.state == MemberState::rw &&
                mi.durability != 0 &&
                mi.data_allowed & (1 << DataType::user.0) != 0 &&
                u32::from(mi.bucket_size) == blocksize

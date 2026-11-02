@@ -82,7 +82,7 @@ use crate::{bch_err_fn, bch_err_msg, fsck_err, has_bio, prt};
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
 use pin_init::{pin_data, pin_init, stack_pin_init};
-use crate::format::{Bpos, Btree, DataType};
+use crate::format::{Bpos, Btree, DataType, MemberState};
 
 /// Discards in flight at once on a device.
 const DEV_IN_FLIGHT_MAX: u8 = 4;
@@ -807,7 +807,7 @@ pub(crate) fn fast_discard_bucket_add(ca: &Dev, bucket: u64) {
 /// As bch2_dev_get_ioref() has it for a write ref: work queued holding one is
 /// for a device that's rw.
 fn dev_is_rw(ca: &Dev) -> bool {
-    ca.mi.get().state as u32 == c::bch_member_state::BCH_MEMBER_STATE_rw.0
+    ca.mi.get().state == MemberState::rw
 }
 
 // ── Invalidates ──────────────────────────────────────────────────────────

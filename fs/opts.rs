@@ -573,7 +573,7 @@ pub struct bch_opts {
     pub no_data_io: u8,
 
     /// Device state
-    #[opt(str(bch_member_state),
+    #[opt(str(MemberState),
           flags = device | runtime,
           sb = bch_member::state,
           default = BCH_MEMBER_STATE_rw)]

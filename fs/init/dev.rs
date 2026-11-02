@@ -225,7 +225,7 @@ use crate::debug::sysfs::{DevDir, DEV_GROUPS};
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Fs, StateLockWrite};
 use crate::init::error::bch2_io_error_work;
-use crate::format::DataType;
+use crate::format::{DataType, MemberState};
 use crate::locking::MemallocFlags;
 use crate::opts::c_export::__bch2_data_types;
 use crate::sb::io::{read_super, SbReadScratch};
@@ -1002,7 +1002,7 @@ impl StateLockWrite<'_> {
     fn dev_read_write(&self, ca: &Dev) {
         let fs = self.fs();
 
-        assert_eq!(c::bch_member_state(ca.mi.get().state.into()), c::bch_member_state::BCH_MEMBER_STATE_rw,
+        assert_eq!(ca.mi.get().state, MemberState::rw,
                    "device {ca} going read-write, not rw");
 
         self.dev_allocator_add(ca);
@@ -1024,12 +1024,12 @@ impl StateLockWrite<'_> {
      * XXX: maybe we should be more explicit about whether we're changing state
      * because we got an error or what have you?
      */
-    pub fn dev_state_allowed(&self, ca: &Dev, new_state: c::bch_member_state, flags: u32,
+    pub fn dev_state_allowed(&self, ca: &Dev, new_state: MemberState, flags: u32,
                              err: &mut Printbuf) -> bool {
         let fs = self.fs();
-        let rw = c::bch_member_state::BCH_MEMBER_STATE_rw;
+        let rw = MemberState::rw;
 
-        if c::bch_member_state(ca.mi.get().state.into()) == rw && new_state != rw {
+        if ca.mi.get().state == rw && new_state != rw {
             let mut new_rw_devs = c::bch_devs_mask { d: fs.allocator.rw_devs[0].load() };
             new_rw_devs.d.clear(ca.dev_idx.into());
 
@@ -1040,29 +1040,28 @@ impl StateLockWrite<'_> {
         true
     }
 
-    pub fn dev_set_state(&self, ca: &Dev, new_state: c::bch_member_state, flags: u32, err: &mut Printbuf)
+    pub fn dev_set_state(&self, ca: &Dev, new_state: MemberState, flags: u32, err: &mut Printbuf)
         -> Result<(), BchError>
     {
-        use c::bch_member_state as S;
         let fs = self.fs();
-        let state = S(ca.mi.get().state.into());
+        let state = ca.mi.get().state;
 
-        let was_rw = state == S::BCH_MEMBER_STATE_rw;
-        let do_reconcile_scan = new_state == S::BCH_MEMBER_STATE_rw || new_state == S::BCH_MEMBER_STATE_evacuating;
+        let was_rw = state == MemberState::rw;
+        let do_reconcile_scan = new_state == MemberState::rw || new_state == MemberState::evacuating;
 
-        let s = if new_state == S::BCH_MEMBER_STATE_rw {
+        let s = if new_state == MemberState::rw {
             c::reconcile_scan::from_arm(c::reconcile_scan_pending {})
         } else {
             c::reconcile_scan::from_arm(c_uint::from(ca.dev_idx))
         };
 
         /* empty stripes hold their buckets until deleted: */
-        if new_state == S::BCH_MEMBER_STATE_evacuating {
+        if new_state == MemberState::evacuating {
             fs.do_stripe_deletes();
         }
 
         if state == new_state {
-            if new_state == S::BCH_MEMBER_STATE_evacuating {
+            if new_state == MemberState::evacuating {
                 return fs.request_scan(s, true);
             }
             return Ok(());
@@ -1072,11 +1071,11 @@ impl StateLockWrite<'_> {
             return fs.throw(bch_errcode::BCH_ERR_device_state_not_allowed);
         }
 
-        if new_state != S::BCH_MEMBER_STATE_rw {
+        if new_state != MemberState::rw {
             self.dev_read_only(ca);
         }
 
-        log_dev(ca, LogLevel::NOTICE, &Msg(|out: &mut Printbuf| prt!(out, "{}", member_state_str(new_state.0 as u8))));
+        log_dev(ca, LogLevel::NOTICE, &Msg(|out: &mut Printbuf| prt!(out, "{}", member_state_str(new_state.0))));
 
         if do_reconcile_scan {
             fs.request_scan(s, false)?;
@@ -1088,7 +1087,7 @@ impl StateLockWrite<'_> {
             fs.write_super(&mut sb);
         }
 
-        if new_state == S::BCH_MEMBER_STATE_rw && ca.is_online() {
+        if new_state == MemberState::rw && ca.is_online() {
             self.dev_read_write(ca);
         }
 
@@ -1103,7 +1102,7 @@ impl StateLockWrite<'_> {
          * lazily on the reuse path, fsck and the canonical can_widen value
          * still need the scan to converge.
          */
-        if new_state == S::BCH_MEMBER_STATE_rw || was_rw {
+        if new_state == MemberState::rw || was_rw {
             fs.request_scan(c::reconcile_scan::from_arm(c::reconcile_scan_stripes {}), false)?;
         }
 
@@ -1148,7 +1147,7 @@ impl StateLockWrite<'_> {
              */
             ca.removing.set(true);
 
-            self.dev_set_state(ca, c::bch_member_state::BCH_MEMBER_STATE_evacuating, flags, err)?;
+            self.dev_set_state(ca, MemberState::evacuating, flags, err)?;
 
             /*
              * __bch2_dev_read_only() flushes outstanding stripe creates, but only
@@ -1256,7 +1255,7 @@ impl StateLockWrite<'_> {
             ca.removing.set(false);
 
             if fs.flags.get(c::bch_fs_flags::BCH_FS_rw) &&
-               c::bch_member_state(ca.mi.get().state.into()) == c::bch_member_state::BCH_MEMBER_STATE_rw &&
+               ca.mi.get().state == MemberState::rw &&
                !ca.io_ref[READ].is_zero() {
                 self.dev_read_write(ca);
             }
@@ -1266,7 +1265,7 @@ impl StateLockWrite<'_> {
 }
 
 impl Fs {
-    pub fn dev_set_state(&self, ca: &Dev, new_state: c::bch_member_state, flags: u32,
+    pub fn dev_set_state(&self, ca: &Dev, new_state: MemberState, flags: u32,
                          err: Option<&mut Printbuf>) -> Result<(), BchError>
     {
         let mut no_err = Printbuf::new();
@@ -1283,10 +1282,10 @@ impl Fs {
          * the state option - to drain.
          */
         #[cfg(kernel)]
-        if let Some(sb) = self.vfs_super() &&
-           let rw = c::bch_member_state::BCH_MEMBER_STATE_rw &&
-           c::bch_member_state(ca.mi.get().state.into()) == rw && new_state != rw {
-            sb.try_sync();
+        if ca.mi.get().state == MemberState::rw && new_state != MemberState::rw {
+            if let Some(sb) = self.vfs_super() {
+                sb.try_sync();
+            }
         }
 
         let state = self.state_lock_write();
@@ -1477,7 +1476,7 @@ impl Fs {
                 self.dev_add_initialize(&ca)
                     .inspect_err(|e| prt!(err, "error marking new superblock: {}\n", e.msg()))?;
 
-                if c::bch_member_state(ca.mi.get().state.into()) == c::bch_member_state::BCH_MEMBER_STATE_rw {
+                if ca.mi.get().state == MemberState::rw {
                     state.dev_read_write(&ca);
                 }
             }
@@ -1551,7 +1550,7 @@ impl Fs {
 
         let mi = ca.mi.get();
 
-        if c::bch_member_state(mi.state.into()) == c::bch_member_state::BCH_MEMBER_STATE_rw {
+        if mi.state == MemberState::rw {
             state.dev_read_write(ca);
 
             /*

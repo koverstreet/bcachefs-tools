@@ -52,7 +52,7 @@ use crate::locking::Locked;
 use crate::new_lock;
 use crate::types::{RustOnly, rust_only};
 use pin_init::pin_data;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, MemberState};
 
 /*
  * A path that fsck damaged or couldn't fully recover, remembered so we can
@@ -1184,7 +1184,7 @@ pub unsafe extern "C" fn bch2_io_error_work(work: *mut c::work_struct) {
     let state = fs.state_lock_write();
     if ca.removing() ||
        fs.flags.get(c::bch_fs_flags::BCH_FS_stopping) ||
-       ca.mi.get().state >= c::BCH_MEMBER_STATE_ro as u8 {
+       ca.mi.get().state >= MemberState::ro {
         return;
     }
 
@@ -1192,7 +1192,7 @@ pub unsafe extern "C" fn bch2_io_error_work(work: *mut c::work_struct) {
     log_msg_start(&mut buf, ca.name());
     write!(buf, "writes erroring for {timeout} seconds\n");
 
-    let dev = state.dev_set_state(&ca, c::bch_member_state::BCH_MEMBER_STATE_ro,
+    let dev = state.dev_set_state(&ca, MemberState::ro,
                                   c::BCH_FORCE_IF_DEGRADED, &mut buf).is_ok();
     write!(buf, "setting {} ro", if dev { "device" } else { "filesystem" });
     if dev || fs.emergency_read_only(&mut buf) {

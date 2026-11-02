@@ -81,6 +81,8 @@ use cstruct_macros::c_typedef;
 
 #[path = "alloc/accounting_format.rs"] pub mod accounting;
 pub use accounting::DataType;
+#[path = "sb/members_format.rs"] pub mod members;
+pub use members::MemberState;
 
 #[cfg(__KERNEL__)]
 c_typedef! {

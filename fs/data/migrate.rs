@@ -62,7 +62,7 @@ use crate::prt;
 use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
 use cstruct_macros::c_export;
-use crate::format::{Btree, DataType};
+use crate::format::{Btree, DataType, MemberState};
 
 /// A backpointer to a node being replaced: its replacement isn't reachable
 /// yet, and has backpointers of its own for the next scan.
@@ -181,7 +181,7 @@ impl DevDrop<'_> {
                 }
                 let ca = fs.dev_rcu(dev, &rcu);
                 nr_good += u32::from(ca.is_some_and(|ca| {
-                    u32::from(ca.mi.get().state) != c::bch_member_state::BCH_MEMBER_STATE_evacuating.0
+                    ca.mi.get().state != MemberState::evacuating
                 }));
                 if ca.is_none() {
                     lost |= 1 << i;

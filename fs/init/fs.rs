@@ -60,7 +60,7 @@ use cstruct_macros::c_export;
 pub use crate::sb::members::DevRef;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::c_extern;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, MemberState};
 
 c_extern! {
     pub static bch2_write_refs: [*const crate::util::ffi::c_char; 0];
@@ -1121,7 +1121,7 @@ impl Fs {
             let state = self.state_lock_write();
             let rcu = read_lock();
             for ca in self.online_devs_rcu(&rcu) {
-                if u32::from(ca.mi.get().state) == c::bch_member_state::BCH_MEMBER_STATE_rw.0 {
+                if ca.mi.get().state == MemberState::rw {
                     state.dev_allocator_add(ca);
                 }
             }
@@ -1182,7 +1182,7 @@ impl Fs {
             let mut missing = false;
             for ca in self.members() {
                 if !ca.is_online() &&
-                   (u32::from(ca.mi.get().state) != c::bch_member_state::BCH_MEMBER_STATE_evacuating.0 ||
+                   (ca.mi.get().state != MemberState::evacuating ||
                     ca.has_data() != 0) {
                     prt!(err, "Cannot mount without device {}\n", ca.dev_idx);
                     err.indent_add(2);

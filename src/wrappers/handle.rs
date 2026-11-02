@@ -11,7 +11,7 @@ use bch_bindgen::c::{
     bch_ioctl_disk_resize_journal, bch_ioctl_disk_resize_journal_v2,
     bch_ioctl_subvolume, bch_ioctl_subvolume_v2,
     bch_ioctl_query_btree_keys, bch_ioctl_query_uuid, bch_ioctl_read_super,
-    BCH_BY_INDEX, BCH_SUBVOL_SNAPSHOT_CREATE,
+    BCH_BY_INDEX, BCH_SUBVOL_SNAPSHOT_CREATE, MemberState,
 };
 use crate::wrappers::ioctl::*;
 use crate::wrappers::sysfs;
@@ -430,11 +430,11 @@ impl BcachefsHandle {
     }
 
     /// Change device state (rw, ro, evacuating, spare).
-    pub(crate) fn disk_set_state(&self, dev_idx: u32, new_state: u32, flags: u32) -> Result<(), Errno> {
+    pub(crate) fn disk_set_state(&self, dev_idx: u32, new_state: MemberState, flags: u32) -> Result<(), Errno> {
         v2_v1_ioctl!(
             self.ioctl_fd(), BCH_IOCTL_DISK_SET_STATE_v2, BCH_IOCTL_DISK_SET_STATE,
-            bch_ioctl_disk_set_state_v2 { flags: flags | BCH_BY_INDEX, new_state: new_state as u8, dev: dev_idx as u64, ..Default::default() },
-            bch_ioctl_disk_set_state    { flags: flags | BCH_BY_INDEX, new_state: new_state as u8, dev: dev_idx as u64, ..Default::default() }
+            bch_ioctl_disk_set_state_v2 { flags: flags | BCH_BY_INDEX, new_state: new_state.0, dev: dev_idx as u64, ..Default::default() },
+            bch_ioctl_disk_set_state    { flags: flags | BCH_BY_INDEX, new_state: new_state.0, dev: dev_idx as u64, ..Default::default() }
         )
     }
 

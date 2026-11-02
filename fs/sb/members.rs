@@ -27,7 +27,7 @@ use core::sync::atomic::Ordering;
 use cstruct_macros::{c_export, CStruct, Plain, TypeInfo};
 use super::io::*;
 use crate::types::c_default;
-use crate::format::{Bpos, DataType};
+use crate::format::{Bpos, DataType, MemberState};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -51,7 +51,7 @@ pub struct bch_member_cpu {
     pub bucket_size: u16, /* sectors */
     pub group: u16,
     pub failure_domain: u16,
-    pub state: u8,
+    pub state: MemberState,
     pub discard: u8,
     pub data_allowed: u8,
     pub durability: u8,
@@ -79,7 +79,7 @@ unsafe impl crate::util::projections::TearSafe for bch_member_cpu {}
 // ---------------------------------------------------------------------------
 
 pub fn member_state_str(state: u8) -> &'static str {
-    c::bch_member_state(state.into()).name().unwrap_or("unknown")
+    MemberState(state).name().unwrap_or("unknown")
 }
 
 const BCH_MEMBER_V1_BYTES: usize = c::BCH_MEMBER_V1_BYTES as usize;
@@ -661,7 +661,7 @@ impl c::bch_member {
             bucket_size:            self.bucket_size.get(),
             group:                  self.group() as u16,
             failure_domain:         0,
-            state:                  self.state() as u8,
+            state:                  MemberState(self.state() as u8),
             discard:                self.discard() as u8,
             data_allowed:           self.data_allowed() as u8,
             // one-biased on disk: 0 is the default, 1
@@ -1200,7 +1200,7 @@ impl Fs {
         let rcu = read_lock();
         let ca = self.io_ref_tryget(self.dev_rcu(dev, &rcu)?)?;
         // then_some(), eager: a write ref on a device that isn't rw is put
-        (R::RW == READ || ca.mi.get().state as u32 == c::bch_member_state::BCH_MEMBER_STATE_rw.0).then_some(ca)
+        (R::RW == READ || ca.mi.get().state == MemberState::rw).then_some(ca)
     }
 
     /// An io ref on @ca, one of ours found under RCU: the ref keeps the device
@@ -1233,7 +1233,7 @@ impl Fs {
     /// each, put when it's dropped: __for_each_online_member().
     pub fn io_members<R: IoRefIdx>(&self, states: u32) -> impl Iterator<Item = DevIoRef<R>> + '_ {
         self.walk(move |ca| {
-            (states & 1 << ca.mi.get().state != 0).then(|| self.io_ref_tryget(ca)).flatten()
+            (states & 1 << ca.mi.get().state.0 != 0).then(|| self.io_ref_tryget(ca)).flatten()
         })
     }
 
@@ -1244,13 +1244,13 @@ impl Fs {
 
     /// The rw devices, an io ref for writing on each: for_each_rw_member().
     pub fn rw_members(&self) -> impl Iterator<Item = DevIoRef<c::bch_dev_write_ref>> + '_ {
-        self.io_members(1 << c::bch_member_state::BCH_MEMBER_STATE_rw.0)
+        self.io_members(1 << MemberState::rw.0)
     }
 
     /// The rw and ro devices, an io ref for reading on each: for_each_readable_member().
     pub fn readable_members(&self) -> impl Iterator<Item = DevIoRef<c::bch_dev_read_ref>> + '_ {
-        self.io_members(1 << c::bch_member_state::BCH_MEMBER_STATE_rw.0 |
-                        1 << c::bch_member_state::BCH_MEMBER_STATE_ro.0)
+        self.io_members(1 << MemberState::rw.0 |
+                        1 << MemberState::ro.0)
     }
 }
 
@@ -1560,7 +1560,7 @@ impl Fs {
     /// Whether @dev is missing, or being evacuated: bch2_dev_bad_or_evacuating_rcu().
     pub fn dev_bad_or_evacuating(&self, dev: u32, rcu: &ReadGuard) -> bool {
         self.dev_rcu(dev, rcu).is_none_or(|ca| {
-            ca.mi.get().state as u32 == c::bch_member_state::BCH_MEMBER_STATE_evacuating.0
+            ca.mi.get().state == MemberState::evacuating
         })
     }
 }

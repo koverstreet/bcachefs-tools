@@ -6,6 +6,7 @@
 //! starts. The pre-set hooks run at mount too, for every option, with no
 //! change to register: opts_hooks_pre_set().
 
+use crate::format::MemberState;
 use crate::fs::Dev;
 use super::{opt_id, opt_to_text, Opt, OPTS};
 use crate::c;
@@ -93,7 +94,7 @@ fn opt_hook_pre_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64, ch
     match id {
         opt_id::Opt_state => {
             if let Some(ca) = ca {
-                return fs.dev_set_state(ca, c::bch_member_state(v as u32), c::BCH_FORCE_IF_DEGRADED, None);
+                return fs.dev_set_state(ca, MemberState(v as u8), c::BCH_FORCE_IF_DEGRADED, None);
             }
         }
         opt_id::Opt_compression | opt_id::Opt_background_compression => {
@@ -172,7 +173,7 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) {
             let state = fs.state_lock_read();
             if let Some(ca) = ca {
                 if fs.flags.get(c::bch_fs_flags::BCH_FS_rw) && ca.is_online() &&
-                   ca.mi.get().state == c::BCH_MEMBER_STATE_rw as u8 {
+                   ca.mi.get().state == MemberState::rw {
                     fs.dev_allocator_set_rw(ca.dev_idx.into(), true);
                     state.recalc_capacity();
                 }

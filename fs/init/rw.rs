@@ -17,6 +17,7 @@
 
 use core::sync::atomic::Ordering::Relaxed;
 
+use crate::format::MemberState;
 use crate::accounting::bch2_verify_accounting_clean;
 use crate::alloc::capacity::recalc_capacity;
 use crate::btree::cache::bch2_fs_btree_init_rw;
@@ -311,7 +312,7 @@ impl StateLockWrite<'_> {
         {
             let rcu = read_lock();
             for ca in fs.online_devs_rcu(&rcu) {
-                if u32::from(ca.mi.get().state) == c::bch_member_state::BCH_MEMBER_STATE_rw.0 {
+                if ca.mi.get().state == MemberState::rw {
                     self.dev_allocator_add(ca);
                     ca.io_ref[WRITE].start();
                 }

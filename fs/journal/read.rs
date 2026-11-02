@@ -1,7 +1,7 @@
 #![allow(non_camel_case_types)]
 
 use cstruct_macros::c_export;
-use crate::format::{Btree, Nonce};
+use crate::format::{Btree, MemberState, Nonce};
 
 #[path = "entries.rs"] pub mod entries;
 #[path = "sb.rs"] pub mod sb;
@@ -1035,9 +1035,9 @@ fn journal_devs(fs: &Fs, want: impl Fn(&Dev) -> bool, degraded: bool)
             continue;
         }
 
-        let state = u32::from(ca.mi.get().state);
-        let ioref = (state == c::bch_member_state::BCH_MEMBER_STATE_rw.0 ||
-                     state == c::bch_member_state::BCH_MEMBER_STATE_ro.0)
+        let state = ca.mi.get().state;
+        let ioref = (state == MemberState::rw ||
+                     state == MemberState::ro)
             .then(|| fs.dev_get_ioref::<c::bch_dev_read_ref>(ca.dev_idx.into()))
             .flatten();
         match ioref {

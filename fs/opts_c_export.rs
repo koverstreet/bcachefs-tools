@@ -10,7 +10,7 @@ use crate::util::vstructs::{Head, Validated};
 use core::ffi::{c_int, c_uint};
 use crate::util::ToText;
 use cstruct_macros::c_export;
-use crate::format::{Btree, CompressionType, DataType};
+use crate::format::{Btree, CompressionType, DataType, MemberState};
 
 #[c_export]
 pub static bch2_opts_default: c::bch_opts = DEFAULTS;
@@ -30,7 +30,7 @@ c_names! {
     "const char * const __bch2_btree_ids[]"    __bch2_btree_ids: Btree;
     "const char * const __bch2_csum_types[]"   __bch2_csum_types: c::bch_csum_type;
     "const char * const __bch2_data_types[]"   __bch2_data_types: DataType;
-    "const char * const bch2_member_states[]"  bch2_member_states: c::bch_member_state;
+    "const char * const bch2_member_states[]"  bch2_member_states: MemberState;
 }
 
 #[c_export]
