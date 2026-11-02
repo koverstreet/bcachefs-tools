@@ -3080,7 +3080,10 @@ pub fn emit_items(items: &[CItem],
                         None => t.push_str(&format!("\t{},\n", v.name)),
                     }
                 }
-                under_cfg(&e.cfg, t + "};\n")?
+                // a byte wide, where a field holds it: GCC's packed enum is
+                // the smallest type its values fit
+                let end = if matches!(e.repr.as_str(), "u8" | "i8") { "} __packed;\n" } else { "};\n" };
+                under_cfg(&e.cfg, t + end)?
             }
             CItem::Const(c) => under_cfg(&c.cfg, format!("#define {}\t{}\n", c.name, c.c_value()?))?,
             CItem::Typedef(t) => match (&t.c_decl, darray_args(&t.ty)?) {
