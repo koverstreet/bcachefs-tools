@@ -122,6 +122,14 @@ c_extern! {
     pub fn bch2_set_current_state(state: c_uint);
     pub fn bch2_set_current_state_running();
     pub fn bch2_signal_pending_state(state: c_uint) -> bool;
+    #[cfg(CONFIG_SMP)]
+    pub fn bch2_need_resched() -> bool;
+    #[cfg(CONFIG_SMP)]
+    pub fn bch2_owner_on_cpu(owner: *mut c::task_struct) -> bool;
+    #[cfg(CONFIG_SMP)]
+    pub fn bch2_rt_or_dl_task_current() -> bool;
+    #[cfg(CONFIG_SMP)]
+    pub fn bch2_sched_clock() -> u64;
     pub fn bch2_init_work(work: *mut c::work_struct, func: Option<unsafe extern "C" fn(*mut c::work_struct)>);
     pub fn bch2_set_worker_desc(desc: *const c_char);
     pub fn bch2_capable(cap: c_int) -> bool;
