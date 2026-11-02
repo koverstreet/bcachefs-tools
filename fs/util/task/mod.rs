@@ -86,10 +86,10 @@ pub mod completion;
 mod in_place;
 mod queue;
 
-pub use completion::{waiter, Completion, Done, Waiter};
+pub use completion::{waiter, Completion, CompletionReturn, Done, DoneWith, Return, Waiter};
 pub use in_place::{InPlace, TaskEnd};
 pub use queue::RunQueue;
-pub use r#box::{spawn_detached, spawn_static, TaskBox, TaskSlot};
+pub use r#box::{spawn_detached, spawn_static, Join, TaskBox, TaskSlot};
 
 use crate::c;
 use crate::errcode::BchError;

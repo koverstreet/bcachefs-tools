@@ -30,6 +30,7 @@ use crate::c;
 use crate::util::rcu;
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::task::{current_task, Resumable, TaskRef};
+use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::marker::PhantomData;
 use core::pin::Pin;
@@ -232,5 +233,79 @@ impl Resumable for Completion<'_, waiter::Async> {
         // run() parks the task on it, once the poll's returned
         super::park_on(cx, self.d);
         Poll::Pending
+    }
+}
+
+/* A Done that carries its completer's value */
+
+/// A Done, and what its completer leaves for its waiter: one IO's, or a
+/// task's, end with its result.
+pub struct DoneWith<T, W: Waiter = waiter::Async> {
+    done:  Done<W>,
+    value: UnsafeCell<Option<T>>,
+}
+
+unsafe impl<T: Send, W: Waiter> Sync for DoneWith<T, W> {}
+
+/// A Completion that returns what its completer left: None if it was dropped
+/// without leaving anything.
+#[must_use = "a Completion is waited on, or its drop waits for it"]
+pub struct CompletionReturn<'a, T, W: Waiter = waiter::Async> {
+    c: Completion<'a, W>,
+    d: &'a DoneWith<T, W>,
+}
+
+/// The completer's side of a CompletionReturn: complete() leaves its value
+/// and completes the Done, once - dropped, it completes it with none.
+pub struct Return<T, W: Waiter = waiter::Async>(NonNull<DoneWith<T, W>>);
+
+unsafe impl<T: Send, W: Waiter> Send for Return<T, W> {}
+
+impl<'a, T, W: Waiter> CompletionReturn<'a, T, W> {
+    /// A DoneWith in @slot, born with @waiter: the wait on it, and its
+    /// completer. The completer holds no borrow: the wait's drop waits for it.
+    pub fn new(slot: &'a mut Option<DoneWith<T, W>>, waiter: W) -> (Self, Return<T, W>) {
+        let d = slot.insert(DoneWith { done: Done::new(waiter), value: UnsafeCell::new(None) });
+        let ret = Return(NonNull::from(&*d));
+        (CompletionReturn { c: Completion { d: &d.done, _w: PhantomData }, d }, ret)
+    }
+
+    fn take(&self) -> Option<T> {
+        unsafe { (*self.d.value.get()).take() }
+    }
+}
+
+impl<T> CompletionReturn<'_, T, waiter::Sync> {
+    pub fn wait(self, how: Sleep) -> Option<T> {
+        let Ok(()) = sleep_until(how, || self.d.done.done().then_some(()));
+        self.take()
+    }
+}
+
+impl<T> Resumable for CompletionReturn<'_, T, waiter::Async> {
+    type Output = Option<T>;
+
+    fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.c).poll_resume(cx) {
+            Poll::Ready(()) => Poll::Ready(this.take()),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<T, W: Waiter> Return<T, W> {
+    pub fn complete(self, v: T) {
+        let d = core::mem::ManuallyDrop::new(self).0;
+        unsafe {
+            *(*d.as_ptr()).value.get() = Some(v);
+            (*d.as_ptr()).done.complete();
+        }
+    }
+}
+
+impl<T, W: Waiter> Drop for Return<T, W> {
+    fn drop(&mut self) {
+        unsafe { (*self.0.as_ptr()).done.complete() };
     }
 }

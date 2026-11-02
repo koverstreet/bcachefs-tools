@@ -10,14 +10,15 @@
 //! home, but only for as long as the closure's call, which no lifetime it can
 //! name outlives - so it can't keep the borrow past the task. A box with no
 //! done of its owner's frees itself when its task is done; spawn_detached()
-//! is one started at once.
+//! is one started at once. A Join is a task its spawner awaits, for what it
+//! returns, through a CompletionReturn.
 
 use crate::errcode::BchError;
 use crate::util::alloc::Kmalloc;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::rcu::RcuHead;
 use crate::util::workqueue::Queue;
-use super::{Spawn, Task, TaskRef};
+use super::{waiter, CompletionReturn, DoneWith, Spawn, Task, TaskRef};
 use core::future::Future;
 use core::marker::PhantomData;
 use core::mem::{ManuallyDrop, MaybeUninit};
@@ -230,4 +231,34 @@ pub fn spawn_static<F: Future<Output = ()> + Send + 'static>(at: Spawn<'static, 
     -> Result<(), BchError>
 {
     unsafe { spawn_detached(at, future) }
+}
+
+/// A task its spawner awaits, for what it returns: its CompletionReturn's
+/// DoneWith, in the spawner's frame. The task completes it as its last act,
+/// touching the spawner no more. spawn() is a plain call, so the task's
+/// future goes straight into its box - a spawner that's a future holds the
+/// Join and the CompletionReturn, not the task's state. The box is had before
+/// the Done's armed, so failing to allocate it leaves nothing to wait on.
+pub struct Join<T>(Option<DoneWith<T>>);
+
+impl<T: Send> Join<T> {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Join(None)
+    }
+
+    /// @future run as a task on @q, for @waiter to wait on - the
+    /// CompletionReturn, which outlives nothing @future borrows.
+    pub fn spawn<'a, F>(&'a mut self, q: &Queue, future: F, waiter: waiter::Async)
+        -> Result<CompletionReturn<'a, T>, BchError>
+    where
+        F: Future<Output = T> + Send + 'a,
+    {
+        let slot = TaskSlot::alloc(())?;
+        let (wait, ret) = CompletionReturn::new(&mut self.0, waiter);
+        let task = slot.init(Spawn::Queue(q), async move |_: &()| ret.complete(future.await), None)
+            .expect("a queue's task: nothing in it fails");
+        unsafe { task.start_unchecked() };
+        Ok(wait)
+    }
 }
