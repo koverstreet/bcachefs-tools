@@ -400,6 +400,11 @@ __cold void bch2_val_to_text(struct printbuf *out, struct bch_fs *c,
 __cold void bch2_bkey_val_to_text(struct printbuf *out, struct bch_fs *c,
 			   struct bkey_s_c k)
 {
+	if (k.k->u64s < BKEY_U64s) {
+		prt_printf(out, "(invalid, u64s %u < %zu)", k.k->u64s, BKEY_U64s);
+		return;
+	}
+
 	bch2_bkey_to_text(out, k.k);
 
 	if (bkey_val_bytes(k.k)) {
@@ -474,6 +479,10 @@ void __bch2_bkey_compat(const struct bch_fs *c,
 	struct bkey uk;
 	unsigned nr_compat = 5;
 	int i;
+
+	/* on read, before it's validated: too short to be a key isn't one */
+	if (!bkeyp_u64s_valid(f, k))
+		return;
 
 	/*
 	 * Do these operations in reverse order in the write path:
