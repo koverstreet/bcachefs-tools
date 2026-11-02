@@ -5,7 +5,9 @@
 use super::iter::KeyIter;
 use super::BtreeNode;
 use crate::cstructs::c;
+use crate::util::vstructs::Head;
 use crate::util::Printbuf;
+use core::mem::offset_of;
 use cstruct_macros::{c_name, CStruct, c_const, c_enum, c_extern};
 
 /*
@@ -167,6 +169,63 @@ pub struct BsetTree {
     pub data_offset: u16,
     pub aux_data_offset: u16,
     pub end_offset: u16,
+}
+
+c_const! {
+    pub const BSET_NO_AUX_TREE_VAL: u16 = u16::MAX;
+    pub const BSET_RW_AUX_TREE_VAL: u16 = u16::MAX - 1;
+}
+
+/*
+ * BSET_CACHELINE was originally intended to match the hardware cacheline size -
+ * it used to be 64, but I realized the lookup code would touch slightly less
+ * memory if it was 128.
+ *
+ * It definites the number of bytes (in struct bset) per struct bkey_float in
+ * the auxiliar search tree - when we're done searching the bset_float tree we
+ * have this many bytes left that we do a linear search over.
+ *
+ * Since (after level 5) every level of the bset_tree is on a new cacheline,
+ * we're touching one fewer cacheline in the bset tree in exchange for one more
+ * cacheline in the linear search - but the linear search might stop before it
+ * gets to the second cacheline.
+ */
+c_const! {
+    #[c_int]
+    pub const BSET_CACHELINE: usize = 256;
+}
+
+impl BsetTree {
+    pub fn aux_tree_type(&self) -> AuxTreeType {
+        let ty = match self.extra {
+            BSET_NO_AUX_TREE_VAL => AuxTreeType::BSET_NO_AUX_TREE,
+            BSET_RW_AUX_TREE_VAL => AuxTreeType::BSET_RW_AUX_TREE,
+            _                    => AuxTreeType::BSET_RO_AUX_TREE,
+        };
+        if cfg!(CONFIG_BCACHEFS_DEBUG) {
+            assert!((self.size == 0) == (ty == AuxTreeType::BSET_NO_AUX_TREE),
+                    "bset tree of size {} with aux tree {ty:?}", self.size);
+        }
+        ty
+    }
+
+    pub fn has_ro_aux_tree(&self) -> bool {
+        self.aux_tree_type() == AuxTreeType::BSET_RO_AUX_TREE
+    }
+
+    pub fn has_rw_aux_tree(&self) -> bool {
+        self.aux_tree_type() == AuxTreeType::BSET_RW_AUX_TREE
+    }
+
+    /// Its first key's offset in the node.
+    pub fn first_offset(&self) -> u16 {
+        self.data_offset + (offset_of!(Head<c::bset>, _data) / size_of::<u64>()) as u16
+    }
+
+    /// Its keys' u64s.
+    pub fn u64s(&self) -> usize {
+        (self.end_offset - self.first_offset()) as usize
+    }
 }
 
 c_enum! {

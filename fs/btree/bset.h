@@ -15,10 +15,6 @@
 #include "util/util.h" /* for time_stats */
 #include "util/vstructs.h"
 
-
-#define BSET_NO_AUX_TREE_VAL	(U16_MAX)
-#define BSET_RW_AUX_TREE_VAL	(U16_MAX - 1)
-
 static inline enum bset_aux_tree_type bset_aux_tree_type(const struct bset_tree *t)
 {
 	switch (t->extra) {
@@ -33,23 +29,6 @@ static inline enum bset_aux_tree_type bset_aux_tree_type(const struct bset_tree 
 		return BSET_RO_AUX_TREE;
 	}
 }
-
-/*
- * BSET_CACHELINE was originally intended to match the hardware cacheline size -
- * it used to be 64, but I realized the lookup code would touch slightly less
- * memory if it was 128.
- *
- * It definites the number of bytes (in struct bset) per struct bkey_float in
- * the auxiliar search tree - when we're done searching the bset_float tree we
- * have this many bytes left that we do a linear search over.
- *
- * Since (after level 5) every level of the bset_tree is on a new cacheline,
- * we're touching one fewer cacheline in the bset tree in exchange for one more
- * cacheline in the linear search - but the linear search might stop before it
- * gets to the second cacheline.
- */
-
-#define BSET_CACHELINE		256
 
 static inline size_t __btree_keys_cachelines(unsigned byte_order)
 {

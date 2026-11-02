@@ -5,7 +5,7 @@
 pub mod bset;
 pub mod iter;
 
-use crate::btree::bkey::{BkeyI, BkeySC};
+use crate::btree::bkey::{BkeyI, BkeyP, BkeySC};
 use crate::c;
 use crate::cstructs::c as cs;
 use crate::fs::Fs;
@@ -18,7 +18,7 @@ use core::ffi::c_void;
 use core::marker::PhantomData;
 use core::ops::ControlFlow;
 use core::sync::atomic::AtomicUsize;
-use bset::BsetTree;
+use bset::{BsetTree, BSET_CACHELINE};
 use iter::KeyIter;
 use cstruct_macros::{c_name, CStruct};
 
@@ -38,6 +38,28 @@ pub struct BtreeNrKeys {
     /* live keys only: */
     pub packed_keys: u16,
     pub unpacked_keys: u16,
+}
+
+impl BtreeNrKeys {
+    fn account_key(&mut self, set: usize, k: &BkeyP, sign: i16) {
+        let u64s = k.u64s() as i16 * sign;
+
+        self.live_u64s = self.live_u64s.wrapping_add_signed(u64s);
+        self.bset_u64s[set] = self.bset_u64s[set].wrapping_add_signed(u64s);
+        if k.is_packed() {
+            self.packed_keys = self.packed_keys.wrapping_add_signed(sign);
+        } else {
+            self.unpacked_keys = self.unpacked_keys.wrapping_add_signed(sign);
+        }
+    }
+
+    pub fn account_key_add(&mut self, set: usize, k: &BkeyP) {
+        self.account_key(set, k, 1)
+    }
+
+    pub fn account_key_drop(&mut self, set: usize, k: &BkeyP) {
+        self.account_key(set, k, -1)
+    }
 }
 
 #[repr(C)]
@@ -215,6 +237,31 @@ impl BtreeNode {
     }
 }
 
+impl BtreeNode {
+    pub fn sets(&self) -> &[BsetTree] {
+        &self.set[..self.nsets as usize]
+    }
+
+    pub fn last_set(&self) -> &BsetTree {
+        self.sets().last().expect("a btree node with no bsets")
+    }
+
+    pub fn buf_bytes(&self) -> usize {
+        1 << self.byte_order
+    }
+
+    pub fn keys_cachelines(&self) -> usize {
+        self.buf_bytes() / BSET_CACHELINE
+    }
+
+    pub fn aux_data_bytes(&self) -> usize {
+        self.keys_cachelines() * size_of::<u64>()
+    }
+
+    pub fn aux_data_u64s(&self) -> usize {
+        self.aux_data_bytes() / size_of::<u64>()
+    }
+}
 
 pub struct BtreeNodeToText<'b, 'f> {
     b:  &'b BtreeNode,
