@@ -46,6 +46,7 @@ pub mod printbuf;
 pub mod projections;
 pub mod raid;
 pub mod rcu;
+pub mod rcu_pending;
 pub mod refcount;
 pub mod rhashtable;
 #[cfg(kernel)]

@@ -102,7 +102,6 @@ bcachefs-y		:=			\
 	util/eytzinger.o			\
 	util/printbuf.o				\
 	util/rcu.o				\
-	util/rcu_pending.o			\
 	util/six.o				\
 	util/two_state_shared_lock.o		\
 	util/util.o				\

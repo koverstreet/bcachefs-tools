@@ -10,6 +10,12 @@ c_typedef! {
     pub type rcu_pending_process_fn = Option<unsafe extern "C" fn(*mut c::rcu_pending, *mut c::rcu_head)>;
 }
 
+c_typedef! {
+    /// rcu_pending_dequeue_where()'s predicate: true if it's claimed @rcu's
+    /// object. Called with the CPU's lock held; mustn't sleep.
+    pub type rcu_pending_claim_fn = Option<unsafe extern "C" fn(*mut c::rcu_head) -> bool>;
+}
+
 c_opaque!(rcu_pending_pcpu);
 
 #[repr(C)]
