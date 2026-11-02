@@ -256,7 +256,7 @@ use crate::types::{DArray, bits_to_longs, c_default};
 use crate::util::bio::{Bio, BioBufPtr};
 use crate::util::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::c_char;
-use crate::util::refcount::WaitableRef;
+use crate::util::refcount::{ARef, AlwaysRefCounted, WaitableRef};
 use nestify::nest;
 
 /// A superblock in memory, in a buffer that grows: kvmalloc()'d, a power of
@@ -490,55 +490,63 @@ unsafe impl KobjOwner for Dev {
     type Dir = DevDir;
 
     unsafe fn release(this: NonNull<Dev>) {
-        unsafe { free_pinned(this.as_ptr()) }
+        let ca = unsafe { &mut *this.as_ptr() };
+
+        ca.bucket_backpointer_mismatch.free();
+        ca.bucket_backpointer_empty.free();
+
+        unsafe {
+            (*(&raw mut ca.disk_sb).cast::<c::bch_sb_handle>()).free();
+            bch2_dev_journal_exit(ca);
+        }
+
+        ca.io_done.free();
+        ca.buckets_free();
+        unsafe { c::rust_kfree(ca.sb_read_scratch.cast()) };
+
+        unsafe {
+            ca.io_ref[WRITE].exit();
+            ca.io_ref[READ].exit();
+            free_pinned(this.as_ptr());
+        }
     }
 }
 
-pub(crate) unsafe fn dev_free(ca: *mut Dev) {
-    {
-        let ca = unsafe { &*ca };
-
-        /*
-         * ref_outer holders (io_error_work, ioctl lookups) may block on
-         * state_lock before noticing the device is going away - so we must
-         * not drain them while holding it:
-         */
-
-        /*
-         * io_error_work is never cancelled - it owns a ref_outer per queued
-         * instance, so this drain waits for it to run and put:
-         */
-        ca.ref_outer.stop();
-        ca.ref_outer.wait();
+unsafe impl AlwaysRefCounted for Dev {
+    fn inc_ref(&self) {
+        self.kobj.get()
     }
 
-    let ca = unsafe { &mut *ca };
+    unsafe fn dec_ref(obj: NonNull<Self>) {
+        unsafe { Kobject::put((&raw const (*obj.as_ptr()).kobj).cast()) }
+    }
+}
+
+/// @ca, out of c->devs[] and past readers: its sysfs gone, and freed with its
+/// last ref.
+pub(crate) fn dev_free(ca: ARef<Dev>) {
+    /*
+     * ref_outer holders (io_error_work, ioctl lookups) may block on
+     * state_lock before noticing the device is going away - so we must
+     * not drain them while holding it:
+     */
+
+    /*
+     * io_error_work is never cancelled - it owns a ref_outer per queued
+     * instance, so this drain waits for it to run and put:
+     */
+    ca.ref_outer.stop();
+    ca.ref_outer.wait();
 
     crate::warn_on!(!ca.io_ref[WRITE].is_zero());
     crate::warn_on!(!ca.io_ref[READ].is_zero());
 
+    // not in release(): kobject_put() has taken the kobject out of sysfs by
+    // then, and the links in it can't be removed
     ca.unlink();
 
     if ca.kobj.in_sysfs() {
         ca.kobj.del();
-    }
-
-    ca.bucket_backpointer_mismatch.free();
-    ca.bucket_backpointer_empty.free();
-
-    unsafe {
-        (*(&raw mut ca.disk_sb).cast::<c::bch_sb_handle>()).free();
-        bch2_dev_journal_exit(ca);
-    }
-
-    ca.io_done.free();
-    ca.buckets_free();
-    unsafe { c::rust_kfree(ca.sb_read_scratch.cast()) };
-
-    unsafe {
-        ca.io_ref[WRITE].exit();
-        ca.io_ref[READ].exit();
-        Kobject::put((&raw const ca.kobj).cast());
     }
 }
 
@@ -561,7 +569,7 @@ impl StateLockWrite<'_> {
     }
 }
 
-fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<*mut Dev> {
+fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<ARef<Dev>> {
     let p = alloc_pinned(Dev::init(fs)).ok()?;
     let ca = unsafe { &mut *p };
 
@@ -597,17 +605,20 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<*mut Dev> {
         } &&
         ca.buckets_alloc().is_ok() &&
         PerCpu::alloc().map(|io_done| ca.io_done = io_done).is_ok();
+
+    // Kobject::new()'s ref
+    let ca = unsafe { ARef::from_raw(NonNull::new_unchecked(p)) };
     if !ok {
-        unsafe { dev_free(p) };
+        dev_free(ca);
         return None;
     }
 
-    Some(p)
+    Some(ca)
 }
 
-fn dev_attach(state: &StateLockWrite<'_>, p: *mut Dev, dev_idx: u32) {
+fn dev_attach(state: &StateLockWrite<'_>, ca: &ARef<Dev>, dev_idx: u32) {
     {
-        let ca = unsafe { &mut *p };
+        let ca = unsafe { &mut *ca.as_ptr() };
 
         ca.dev_idx = dev_idx as u8;
         ca.self_mask.d.set(dev_idx as usize);
@@ -619,11 +630,10 @@ fn dev_attach(state: &StateLockWrite<'_>, p: *mut Dev, dev_idx: u32) {
         }
     }
 
-    // freed after ca->ref's kill and drain, a grace period on - XXX: not in
-    // debug builds, where ca->ref is an atomic
-    unsafe { state.devs()[dev_idx as usize].publish(NonNull::new_unchecked(p)) };
+    // the slot's ref, put after ca->ref's kill and drain, a grace period on -
+    // XXX: not in debug builds, where ca->ref is an atomic
+    unsafe { state.devs()[dev_idx as usize].publish(ARef::into_raw(ca.clone())) };
 
-    let ca = unsafe { &*p };
     if ca.sysfs_online().is_err() {
         log_no_fs(LogLevel::WARN, &Msg(|out: &mut Printbuf| prt!(out, "error creating sysfs objects")));
     }
@@ -635,7 +645,7 @@ impl Fs {
 
         let ca = dev_alloc(self, &member).ok_or_else(|| self.err(bch_errcode::BCH_ERR_ENOMEM_dev_alloc))?;
 
-        dev_attach(&self.state_lock_write(), ca, dev_idx);
+        dev_attach(&self.state_lock_write(), &ca, dev_idx);
         Ok(())
     }
 }
@@ -1089,7 +1099,7 @@ impl StateLockWrite<'_> {
     }
 
     fn dev_remove_locked(&self, ca: &Dev, fast_device_removal: bool, flags: u32,
-                         err: &mut Printbuf) -> Result<(), BchError> {
+                         err: &mut Printbuf) -> Result<ARef<Dev>, BchError> {
         let fs = self.fs();
 
         let r = (|| {
@@ -1185,10 +1195,11 @@ impl StateLockWrite<'_> {
                 return Err(BchError::from(c::EBUSY));
             }
 
-            {
+            let slot = {
                 let _sb = fs.sb_lock();
-                self.devs()[ca.dev_idx as usize].take();
-            }
+                let p = self.devs()[ca.dev_idx as usize].take().expect("removing a device that's in c->devs[]");
+                unsafe { ARef::from_raw(p) }
+            };
 
             #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
             {
@@ -1202,7 +1213,7 @@ impl StateLockWrite<'_> {
                 crate::sb::members::dev_put(ca_p);
                 c::wait_for_completion(&raw mut (*ca_p).ref_completion);
             }
-            Ok(())
+            Ok(slot)
         })();
 
         if r.is_err() {
@@ -1260,7 +1271,7 @@ impl Fs {
         let fast_device_removal = self.sb.compat.get() & (1 << c::bch_sb_compat::BCH_COMPAT_no_stale_ptrs.0) != 0 &&
             self.request_incompat_feature(c::bcachefs_metadata_version::fast_device_removal).is_ok();
 
-        {
+        let slot = {
             let state = self.state_lock_write();
 
             /*
@@ -1271,8 +1282,8 @@ impl Fs {
              */
             drop(ca);
 
-            state.dev_remove_locked(unsafe { &*ca_p }, fast_device_removal, flags, err)?;
-        }
+            state.dev_remove_locked(unsafe { &*ca_p }, fast_device_removal, flags, err)?
+        };
 
         /*
          * The device is now unreachable - not in c->devs, ca->ref drained,
@@ -1280,7 +1291,7 @@ impl Fs {
          * state_lock: they may be blocked on it (io_error_work), and will
          * bail via ca->removing once they acquire it.
          */
-        unsafe { dev_free(ca_p) };
+        dev_free(slot);
 
         /*
          * Free this device's slot in the bch_member array - all pointers to
@@ -1353,11 +1364,11 @@ impl Fs {
         let Some(ca) = dev_alloc(self, &dev_mi) else { return Err(c::ENOMEM.into()) };
 
         let ret: Result<(), (BchError, bool)> = 'out: {
-            if let Err(e) = attach_bdev(unsafe { &*ca }, &mut sb, err) {
+            if let Err(e) = attach_bdev(&ca, &mut sb, err) {
                 break 'out Err((e, true));
             }
 
-            let identity = unsafe { &*ca }.identity();
+            let identity = ca.identity();
 
             let s = c::reconcile_scan::from_arm(c::reconcile_scan_pending {});
             if self.flags.get(c::bch_fs_flags::BCH_FS_started) {
@@ -1377,7 +1388,7 @@ impl Fs {
                     let mut w = self.sb_write();
                     w.sb_mut().set_multi_device(true);
 
-                    if let Err(e) = self.dev_sb_mut(&mut w, unsafe { &*ca })
+                    if let Err(e) = self.dev_sb_mut(&mut w, &ca)
                         .expect("a device just attached has its superblock")
                         .sync() {
                         prt!(err, "error setting up new superblock: {}\n", e.msg());
@@ -1400,10 +1411,10 @@ impl Fs {
                     *w.fs_member_mut(dev_idx) = dev_mi;
 
                     unsafe {
-                        (*(&raw mut (*ca).disk_sb).cast::<c::bch_sb_handle>()).io.buf.sb_mut().dev_idx = dev_idx as u8;
+                        (*(&raw mut (*ca.as_ptr()).disk_sb).cast::<c::bch_sb_handle>()).io.buf.sb_mut().dev_idx = dev_idx as u8;
                     }
-                    dev_attach(&state, ca, dev_idx);
-                    let ca = unsafe { &*ca };
+                    dev_attach(&state, &ca, dev_idx);
+                    let ca: &Dev = &ca;
 
                     self.devs_online.set(ca.dev_idx.into());
 
@@ -1443,7 +1454,7 @@ impl Fs {
                     }
                 }
 
-                let ca = unsafe { &*ca };
+                let ca: &Dev = &ca;
 
                 if self.flags.get(c::bch_fs_flags::BCH_FS_started) {
                     if let Err(e) = self.dev_add_initialize(ca) {
@@ -1480,7 +1491,7 @@ impl Fs {
 
         bch_err_fn!(self, ret.map_err(|(e, free_ca)| {
             if free_ca {
-                unsafe { dev_free(ca) };
+                dev_free(ca);
             }
             e
         }))

@@ -48,7 +48,7 @@ use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
 use crate::util::percpu::PerCpu;
 use crate::util::printbuf::prt_bdevname;
 use crate::util::rcu::{read_lock, RcuPtrWriter};
-use crate::util::refcount::{RefGuard, WaitableRef};
+use crate::util::refcount::{ARef, RefGuard, WaitableRef};
 #[cfg(kernel)]
 use crate::util::{place::Placed, refcount::AtomicRef};
 use core::ffi::CStr;
@@ -965,16 +965,17 @@ unsafe fn exit(p: NonNull<Fs>) -> Result<(), BchError> {
 
     unsafe { c::closure_sync(&raw mut (*p.as_ptr()).cl) };
 
-    for dev in &fs.devs[..fs.nr_devices() as usize] {
-        let ca = dev.as_ptr();
-        if !ca.is_null() {
-            unsafe {
-                #[cfg(CONFIG_BCACHEFS_DEBUG)]
-                assert_eq!((*ca).ref_.load(Relaxed), 1);
-                (*ca).io_ref_stop(READ);
-                bch2_free_super(&mut *(&raw mut (*ca).disk_sb).cast());
-                dev_free(ca);
-            }
+    for i in 0..fs.nr_devices() as usize {
+        // freed outside state_lock: dev_free() drains ref_outer, whose holders
+        // may be waiting on it
+        let p = fs.state_lock_write().devs()[i].take();
+        // stopped: no readers
+        if let Some(ca) = p.map(|p| unsafe { ARef::from_raw(p) }) {
+            #[cfg(CONFIG_BCACHEFS_DEBUG)]
+            assert_eq!(ca.ref_.load(Relaxed), 1);
+            ca.io_ref_stop(READ);
+            unsafe { bch2_free_super(&mut *(&raw mut (*ca.as_ptr()).disk_sb).cast()) };
+            dev_free(ca);
         }
     }
 
