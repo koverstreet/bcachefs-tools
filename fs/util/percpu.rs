@@ -68,16 +68,21 @@
 //! patches at boot - arm64's tpidr_el1 or tpidr_el2, its LL/SC or LSE - is
 //! that kernel's, never a copy falling behind it.
 //!
-//! - x86_64: one %gs-relative instruction - mov, add, cmpxchg, and xchg as
-//!   C's cmpxchg loop - none LOCKed.
+//! A PerCpuWord - u32 or u64 - has three: read, add, cmpxchg. xchg is a
+//! cmpxchg loop over them, as x86's C is.
+//!
+//! - x86_64: one %gs-relative instruction - mov, add, cmpxchg - none LOCKed.
 //! - arm64: this CPU's offset from tpidr, then a load, the kernel's add,
-//!   LSE's ldadd or LL/SC, or util/atomic.rs's swp or cas for xchg and
-//!   cmpxchg. The add leaves preemption on, where C's disables it: a task
-//!   moved between reading the offset and adding adds, atomically, to the
-//!   CPU it left - right for a counter, which is only ever summed. The load
-//!   likewise reads the CPU it left. xchg and cmpxchg disable it, as C's do.
+//!   LSE's ldadd or LL/SC, or util/atomic.rs's cas for cmpxchg. The add
+//!   leaves preemption on, where C's disables it: a task moved between
+//!   reading the offset and adding adds, atomically, to the CPU it left -
+//!   right for a counter, which is only ever summed. The load likewise reads
+//!   the CPU it left. cmpxchg disables it, as C's does.
 //! - Elsewhere, and in userspace - whose per-CPU areas are per thread, found
 //!   through a C thread-local - C's, out of line.
+//!
+//! Each arch's are written once, for every width: the asm takes the
+//! operand's register modifier, which sizes the instruction.
 //!
 //! C's everywhere, out of line: per_cpu_ptr() and the possible CPUs, for the
 //! sums; preempt_disable() and _enable(), for CpuGuard; this_cpu_ptr() but on
@@ -98,8 +103,9 @@ use crate::util::ffi::Opaque;
 use crate::util::projections::{AtomicWord, FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};
 
 c_extern! {
+    pub fn bch2_this_cpu_add_u32(pcp: *mut u32, val: u32);
     pub fn bch2_this_cpu_add_u64(pcp: *mut u64, val: u64);
-    pub fn bch2_this_cpu_xchg_u64(pcp: *mut u64, val: u64) -> u64;
+    pub fn bch2_this_cpu_cmpxchg_u32(pcp: *mut u32, old: u32, new: u32) -> u32;
     pub fn bch2_this_cpu_cmpxchg_u64(pcp: *mut u64, old: u64, new: u64) -> u64;
     pub fn bch2_this_cpu_ptr(pcp: *mut c_void) -> *mut c_void;
     pub fn bch2_per_cpu_ptr(pcp: *mut c_void, cpu: c_uint) -> *mut c_void;
@@ -109,64 +115,71 @@ c_extern! {
 }
 
 // ── The operations, an arch's own ────────────────────────────────────────
-//
-// Safety, for each: @pcp is a per-CPU u64 - a T, for this_cpu_ptr() -
-// allocated for every possible CPU and live.
+
+/// A word per-CPU data is operated on in: u32 or u64. Its operations are
+/// this CPU's copy's, each one instruction where the arch has one; xchg is
+/// a cmpxchg loop over them, as C's is.
+///
+/// # Safety
+/// Each is C's this_cpu_*() of a Self: for a @pcp to a per-CPU Self,
+/// allocated for every possible CPU and live.
+pub unsafe trait PerCpuWord: Copy + Eq {
+    unsafe fn this_cpu_read(pcp: *mut Self) -> Self;
+    unsafe fn this_cpu_add(pcp: *mut Self, val: Self);
+    unsafe fn this_cpu_cmpxchg(pcp: *mut Self, old: Self, new: Self) -> Self;
+}
 
 #[cfg(all(kernel, target_arch = "x86_64"))]
 mod arch {
-    use super::{bch2_this_cpu_ptr, Pinned};
+    use super::{bch2_this_cpu_ptr, PerCpuWord, Pinned};
 
     include!(concat!(env!("OUT_DIR"), "/percpu_asm.rs"));
 
-    #[inline(always)]
-    pub(super) unsafe fn this_cpu_read(pcp: *mut u64) -> u64 {
-        let val: u64;
-        unsafe {
-            core::arch::asm!(this_cpu_read_asm!(), ptr = in(reg) pcp, val = out(reg) val,
-                             options(att_syntax, nostack, readonly, preserves_flags));
-        }
-        val
-    }
+    macro_rules! per_cpu_word {
+        ($($t:ty, $w:literal);*) => { $(
+            unsafe impl PerCpuWord for $t {
+                #[inline(always)]
+                unsafe fn this_cpu_read(pcp: *mut $t) -> $t {
+                    let val: $t;
+                    unsafe {
+                        core::arch::asm!(this_cpu_read_asm!($w), ptr = in(reg) pcp, val = out(reg) val,
+                                         options(att_syntax, nostack, readonly, preserves_flags));
+                    }
+                    val
+                }
 
-    #[inline(always)]
-    pub(super) unsafe fn this_cpu_add(pcp: *mut u64, val: u64) {
-        unsafe {
-            core::arch::asm!(this_cpu_add_asm!(), ptr = in(reg) pcp, val = in(reg) val,
-                             options(att_syntax, nostack));
-        }
+                #[inline(always)]
+                unsafe fn this_cpu_add(pcp: *mut $t, val: $t) {
+                    unsafe {
+                        core::arch::asm!(this_cpu_add_asm!($w), ptr = in(reg) pcp, val = in(reg) val,
+                                         options(att_syntax, nostack));
+                    }
+                }
+
+                #[inline(always)]
+                unsafe fn this_cpu_cmpxchg(pcp: *mut $t, old: $t, new: $t) -> $t {
+                    let prev: $t;
+                    unsafe {
+                        core::arch::asm!(this_cpu_cmpxchg_asm!($w), ptr = in(reg) pcp, new = in(reg) new,
+                                         inout("rax") old => prev, options(att_syntax, nostack));
+                    }
+                    prev
+                }
+            }
+        )* };
     }
+    per_cpu_word!(u32, ":e"; u64, "");
 
     #[inline(always)]
     pub(super) unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &impl Pinned) -> *mut T {
         unsafe { bch2_this_cpu_ptr(pcp.cast()).cast() }
     }
-
-    #[inline(always)]
-    pub(super) unsafe fn this_cpu_xchg(pcp: *mut u64, val: u64) -> u64 {
-        let old: u64;
-        unsafe {
-            core::arch::asm!(this_cpu_xchg_asm!(), ptr = in(reg) pcp, new = in(reg) val,
-                             out("rax") old, options(att_syntax, nostack));
-        }
-        old
-    }
-
-    #[inline(always)]
-    pub(super) unsafe fn this_cpu_cmpxchg(pcp: *mut u64, old: u64, new: u64) -> u64 {
-        let prev: u64;
-        unsafe {
-            core::arch::asm!(this_cpu_cmpxchg_asm!(), ptr = in(reg) pcp, new = in(reg) new,
-                             inout("rax") old => prev, options(att_syntax, nostack));
-        }
-        prev
-    }
 }
 
 #[cfg(all(kernel, target_arch = "aarch64"))]
 mod arch {
-    use super::{CpuGuard, Pinned};
-    use core::sync::atomic::{AtomicU64, Ordering};
+    use super::{CpuGuard, PerCpuWord, Pinned};
+    use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
     include!(concat!(env!("OUT_DIR"), "/percpu_asm.rs"));
 
@@ -182,67 +195,72 @@ mod arch {
         pcp.wrapping_byte_add(off)
     }
 
-    #[inline(always)]
-    pub(super) unsafe fn this_cpu_read(pcp: *mut u64) -> u64 {
-        unsafe { AtomicU64::from_ptr(my_cpu(pcp)) }.load(Ordering::Relaxed)
-    }
+    macro_rules! per_cpu_word {
+        ($($t:ty, $a:ty, $w:literal);*) => { $(
+            unsafe impl PerCpuWord for $t {
+                #[inline(always)]
+                unsafe fn this_cpu_read(pcp: *mut $t) -> $t {
+                    unsafe { <$a>::from_ptr(my_cpu(pcp)) }.load(Ordering::Relaxed)
+                }
 
-    #[inline(always)]
-    pub(super) unsafe fn this_cpu_add(pcp: *mut u64, val: u64) {
-        unsafe {
-            core::arch::asm!(this_cpu_add_asm!(), ptr = in(reg) my_cpu(pcp), val = in(reg) val,
-                             tmp = out(reg) _, retry = out(reg) _, options(nostack));
-        }
+                #[inline(always)]
+                unsafe fn this_cpu_add(pcp: *mut $t, val: $t) {
+                    unsafe {
+                        core::arch::asm!(this_cpu_add_asm!($w), ptr = in(reg) my_cpu(pcp), val = in(reg) val,
+                                         tmp = out(reg) _, retry = out(reg) _, options(nostack));
+                    }
+                }
+
+                #[inline(always)]
+                unsafe fn this_cpu_cmpxchg(pcp: *mut $t, old: $t, new: $t) -> $t {
+                    let g = CpuGuard::new();
+                    match unsafe { <$a>::from_ptr(this_cpu_ptr(pcp, &g)) }
+                        .compare_exchange(old, new, Ordering::Relaxed, Ordering::Relaxed) {
+                        Ok(v) | Err(v) => v,
+                    }
+                }
+            }
+        )* };
     }
+    per_cpu_word!(u32, AtomicU32, ":w"; u64, AtomicU64, "");
 
     #[inline(always)]
     pub(super) unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &impl Pinned) -> *mut T {
         my_cpu(pcp)
     }
-
-    #[inline(always)]
-    pub(super) unsafe fn this_cpu_xchg(pcp: *mut u64, val: u64) -> u64 {
-        let g = CpuGuard::new();
-        unsafe { AtomicU64::from_ptr(this_cpu_ptr(pcp, &g)) }.swap(val, Ordering::Relaxed)
-    }
-
-    #[inline(always)]
-    pub(super) unsafe fn this_cpu_cmpxchg(pcp: *mut u64, old: u64, new: u64) -> u64 {
-        let g = CpuGuard::new();
-        match unsafe { AtomicU64::from_ptr(this_cpu_ptr(pcp, &g)) }
-            .compare_exchange(old, new, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(v) | Err(v) => v,
-        }
-    }
 }
 
 #[cfg(not(all(kernel, any(target_arch = "x86_64", target_arch = "aarch64"))))]
 mod arch {
-    use super::{bch2_this_cpu_add_u64, bch2_this_cpu_cmpxchg_u64, bch2_this_cpu_ptr,
-                bch2_this_cpu_xchg_u64, Pinned};
+    use super::{bch2_this_cpu_add_u32, bch2_this_cpu_add_u64, bch2_this_cpu_cmpxchg_u32,
+                bch2_this_cpu_cmpxchg_u64, bch2_this_cpu_ptr, PerCpuWord, Pinned};
 
-    pub(super) unsafe fn this_cpu_read(pcp: *mut u64) -> u64 {
-        unsafe { core::ptr::read_volatile(bch2_this_cpu_ptr(pcp.cast()).cast::<u64>()) }
-    }
+    macro_rules! per_cpu_word {
+        ($($t:ty, $add:ident, $cmpxchg:ident);*) => { $(
+            unsafe impl PerCpuWord for $t {
+                unsafe fn this_cpu_read(pcp: *mut $t) -> $t {
+                    unsafe { core::ptr::read_volatile(bch2_this_cpu_ptr(pcp.cast()).cast::<$t>()) }
+                }
 
-    pub(super) unsafe fn this_cpu_add(pcp: *mut u64, val: u64) {
-        unsafe { bch2_this_cpu_add_u64(pcp, val) }
+                unsafe fn this_cpu_add(pcp: *mut $t, val: $t) {
+                    unsafe { $add(pcp, val) }
+                }
+
+                unsafe fn this_cpu_cmpxchg(pcp: *mut $t, old: $t, new: $t) -> $t {
+                    unsafe { $cmpxchg(pcp, old, new) }
+                }
+            }
+        )* };
     }
+    per_cpu_word!(u32, bch2_this_cpu_add_u32, bch2_this_cpu_cmpxchg_u32;
+                  u64, bch2_this_cpu_add_u64, bch2_this_cpu_cmpxchg_u64);
 
     pub(super) unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &impl Pinned) -> *mut T {
         unsafe { bch2_this_cpu_ptr(pcp.cast()).cast() }
     }
-
-    pub(super) unsafe fn this_cpu_xchg(pcp: *mut u64, val: u64) -> u64 {
-        unsafe { bch2_this_cpu_xchg_u64(pcp, val) }
-    }
-
-    pub(super) unsafe fn this_cpu_cmpxchg(pcp: *mut u64, old: u64, new: u64) -> u64 {
-        unsafe { bch2_this_cpu_cmpxchg_u64(pcp, old, new) }
-    }
 }
 
-use arch::{this_cpu_add, this_cpu_cmpxchg, this_cpu_ptr, this_cpu_read, this_cpu_xchg};
+use arch::this_cpu_ptr;
 
 /// The task held to this CPU while it lives: for this CPU's copy, which
 /// is the copy of whatever CPU the task is on.
@@ -594,17 +612,18 @@ impl<T: Counters> PerCpuRef<'_, T> {
     }
 }
 
-impl PerCpuRef<'_, u64> {
+impl<T: PerCpuWord + From<u8>> PerCpuRef<'_, T> {
     /// This CPU's, or the one the task was just on: for a cmpxchg() to start
     /// from, which fails unless it's this CPU's value now.
     #[inline(always)]
-    pub fn read(&self) -> u64 {
-        unsafe { this_cpu_read(self.0) }
+    pub fn read(&self) -> T {
+        unsafe { T::this_cpu_read(self.0) }
     }
 
+    /// A subtraction is the add of its wrapping_neg().
     #[inline(always)]
-    pub fn add(&self, v: u64) {
-        unsafe { this_cpu_add(self.0, v) }
+    pub fn add(&self, v: T) {
+        unsafe { T::this_cpu_add(self.0, v) }
     }
 
     /// This CPU's to @v, every other's to 0.
@@ -612,23 +631,29 @@ impl PerCpuRef<'_, u64> {
     /// # Safety
     /// An add racing it may or may not count. Whether that's sound is up to
     /// what the variable is for - or there are no adders yet.
-    pub unsafe fn set(&self, v: u64) {
+    pub unsafe fn set(&self, v: T) {
         for cpu in possible_cpus() {
             // SAFETY: a live CPU's copy; another CPU's, written as read
-            unsafe { core::ptr::write_volatile(bch2_per_cpu_ptr(self.0.cast(), cpu).cast::<u64>(), 0) };
+            unsafe { core::ptr::write_volatile(bch2_per_cpu_ptr(self.0.cast(), cpu).cast::<T>(), T::from(0)) };
         }
         self.xchg(v);
     }
 
     #[inline(always)]
-    pub fn xchg(&self, v: u64) -> u64 {
-        unsafe { this_cpu_xchg(self.0, v) }
+    pub fn xchg(&self, v: T) -> T {
+        let mut old = self.read();
+        loop {
+            match self.cmpxchg(old, v) {
+                Ok(old) => return old,
+                Err(cur) => old = cur,
+            }
+        }
     }
 
     /// Err(what it was), if it wasn't @old.
     #[inline(always)]
-    pub fn cmpxchg(&self, old: u64, new: u64) -> Result<u64, u64> {
-        match unsafe { this_cpu_cmpxchg(self.0, old, new) } {
+    pub fn cmpxchg(&self, old: T, new: T) -> Result<T, T> {
+        match unsafe { T::this_cpu_cmpxchg(self.0, old, new) } {
             v if v == old => Ok(v),
             v             => Err(v),
         }
@@ -815,17 +840,22 @@ pub trait Counters: Copy {
     fn clamp_nonnegative(self) -> Self;
 }
 
-impl Counters for u64 {
-    #[inline]
-    fn wrapping_add(self, rhs: u64) -> u64 {
-        u64::wrapping_add(self, rhs)
-    }
+macro_rules! counters {
+    ($($t:ty, $signed:ty);*) => { $(
+        impl Counters for $t {
+            #[inline]
+            fn wrapping_add(self, rhs: $t) -> $t {
+                <$t>::wrapping_add(self, rhs)
+            }
 
-    #[inline]
-    fn clamp_nonnegative(self) -> u64 {
-        (self as i64).max(0) as u64
-    }
+            #[inline]
+            fn clamp_nonnegative(self) -> $t {
+                (self as $signed).max(0) as $t
+            }
+        }
+    )* };
 }
+counters!(u32, i32; u64, i64);
 
 impl<T: Counters, const N: usize> Counters for [T; N] {
     #[inline]

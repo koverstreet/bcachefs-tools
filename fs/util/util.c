@@ -974,14 +974,24 @@ u64 *bch2_acc_percpu_u64s(u64 __percpu *p, unsigned nr)
 }
 
 /*
- * this_cpu_add(), for Rust where it has no asm of its own (util/percpu.rs).
- * @pcp is a u64 __percpu *: the prototype Rust generates can't say so, and
- * on x86 __percpu can be an address space of its own.
+ * this_cpu_add() and _cmpxchg(), for Rust where it has no asm of its own
+ * (util/percpu.rs). @pcp is a _t __percpu *: the prototype Rust generates
+ * can't say so, and on x86 __percpu can be an address space of its own.
  */
-void bch2_this_cpu_add_u64(u64 *pcp, u64 val)
-{
-	this_cpu_add(*(u64 __percpu *) (unsigned long) pcp, val);
+#define BCH2_THIS_CPU_OPS(_t)							\
+void bch2_this_cpu_add_##_t(_t *pcp, _t val)					\
+{										\
+	this_cpu_add(*(_t __percpu *) (unsigned long) pcp, val);		\
+}										\
+										\
+_t bch2_this_cpu_cmpxchg_##_t(_t *pcp, _t old, _t new)				\
+{										\
+	return this_cpu_cmpxchg(*(_t __percpu *) (unsigned long) pcp, old, new);\
 }
+
+BCH2_THIS_CPU_OPS(u32)
+BCH2_THIS_CPU_OPS(u64)
+#undef BCH2_THIS_CPU_OPS
 
 /*
  * static_branch_unlikely(), for Rust where it has no asm of its own
@@ -1010,20 +1020,10 @@ int bch2_cpu_possible_next(int cpu)
 #endif
 }
 
-/* ...this CPU's: its copy, xchg and cmpxchg, and preemption */
+/* ...this CPU's: its copy, and preemption */
 void *bch2_this_cpu_ptr(void *pcp)
 {
 	return this_cpu_ptr((void __percpu *) (unsigned long) pcp);
-}
-
-u64 bch2_this_cpu_xchg_u64(u64 *pcp, u64 val)
-{
-	return this_cpu_xchg(*(u64 __percpu *) (unsigned long) pcp, val);
-}
-
-u64 bch2_this_cpu_cmpxchg_u64(u64 *pcp, u64 old, u64 new)
-{
-	return this_cpu_cmpxchg(*(u64 __percpu *) (unsigned long) pcp, old, new);
 }
 
 void bch2_preempt_disable(void)
