@@ -70,6 +70,15 @@ macro_rules! concat_literals {
     ($($s:literal)*) => { ::core::concat!($($s),*) };
 }
 
+/// EBUG_ON(), as an assertion: checked in CONFIG_BCACHEFS_DEBUG builds.
+macro_rules! ebug_assert {
+    ($($arg:tt)*) => {
+        if cfg!(CONFIG_BCACHEFS_DEBUG) {
+            assert!($($arg)*);
+        }
+    };
+}
+
 #[path = "alloc/accounting.rs"] pub mod accounting;
 pub mod alloc {
     pub mod accounting_mem;

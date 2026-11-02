@@ -2,15 +2,6 @@
 
 #![allow(non_camel_case_types)]
 
-/// EBUG_ON(), as an assertion: checked in CONFIG_BCACHEFS_DEBUG builds.
-macro_rules! ebug_assert {
-    ($($arg:tt)*) => {
-        if cfg!(CONFIG_BCACHEFS_DEBUG) {
-            assert!($($arg)*);
-        }
-    };
-}
-
 /// The checks behind bch2_debug_check_bset_lookups, in debug builds.
 fn check_lookups() -> bool {
     cfg!(CONFIG_BCACHEFS_DEBUG) && crate::debug::params::debug_check_bset_lookups()
