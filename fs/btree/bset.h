@@ -116,16 +116,6 @@ static inline struct bset *bset_next_set(struct btree *b,
 	return ((void *) i) + round_up(vstruct_bytes(i), block_bytes);
 }
 
-void bch2_btree_keys_init(struct btree *);
-
-void bch2_bset_init_first(struct btree *, struct bset *);
-void bch2_bset_init_next(struct btree *, struct btree_node_entry *);
-void bch2_bset_build_aux_tree(struct btree *, struct bset_tree *, bool);
-
-void bch2_bset_insert(struct btree *, struct bkey_packed *, struct bkey_i *,
-		      unsigned);
-void bch2_bset_delete(struct btree *, struct bkey_packed *, unsigned);
-
 /* Bkey utility code */
 
 static inline struct bset_tree *
@@ -142,11 +132,6 @@ bch2_bkey_to_bset_inlined(struct btree *b, struct bkey_packed *k)
 	BUG();
 }
 
-struct bset_tree *bch2_bkey_to_bset(struct btree *, struct bkey_packed *);
-
-struct bkey_packed *bch2_bkey_prev_filter(struct btree *, struct bset_tree *,
-					  struct bkey_packed *, unsigned);
-
 static inline struct bkey_packed *
 bch2_bkey_prev_all(struct btree *b, struct bset_tree *t, struct bkey_packed *k)
 {
@@ -160,19 +145,6 @@ bch2_bkey_prev(struct btree *b, struct bset_tree *t, struct bkey_packed *k)
 }
 
 /* Btree key iteration */
-
-void bch2_btree_node_iter_push(struct btree_node_iter *, struct btree *,
-			      const struct bkey_packed *,
-			      const struct bkey_packed *);
-void bch2_btree_node_iter_init(struct bch_fs *, struct btree *,
-			       struct btree_node_iter *, struct bpos *);
-struct bkey_packed *bch2_btree_node_iter_bset_pos(struct btree_node_iter *,
-						 struct btree *,
-						 struct bset_tree *);
-
-void bch2_btree_node_iter_sort(struct btree_node_iter *, struct btree *);
-void bch2_btree_node_iter_set_drop(struct btree_node_iter *,
-				   struct btree_node_iter_set *);
 
 #define btree_node_iter_for_each(_iter, _set)				\
 	for (struct btree_node_iter_set *_set = (_iter)->data;		\
@@ -271,11 +243,6 @@ bch2_btree_node_iter_next_all(struct btree_node_iter *iter, struct btree *b)
 	return ret;
 }
 
-struct bkey_packed *bch2_btree_node_iter_prev_all(struct btree_node_iter *,
-						  struct btree *);
-struct bkey_packed *bch2_btree_node_iter_prev(struct btree_node_iter *,
-					      struct btree *);
-
 #define for_each_btree_node_key(b, k, iter)				\
 	for (bch2_btree_node_iter_init_from_start((iter), (b));		\
 	     (k = bch2_btree_node_iter_peek((iter), (b)));		\
@@ -287,8 +254,6 @@ struct bkey_packed *bch2_btree_node_iter_prev(struct btree_node_iter *,
 	     bch2_btree_node_iter_advance(iter, b))
 
 /* Accounting: */
-
-struct btree_nr_keys bch2_btree_node_count_keys(struct btree *);
 
 static inline void btree_keys_account_key(struct btree_nr_keys *n,
 					  unsigned bset,
@@ -326,21 +291,7 @@ static inline void btree_keys_account_val_delta(struct btree *b,
 	btree_keys_account_key(&(_b)->nr,			\
 		bch2_bkey_to_bset(_b, _k) - (_b)->set, _k, -1)
 
-void bch2_btree_keys_stats(const struct btree *, struct bset_stats *);
-void bch2_bfloat_to_text(struct printbuf *, struct btree *,
-			 struct bkey_packed *);
-
 /* Debug stuff */
-
-void bch2_btree_node_keys_to_text(struct printbuf *, struct bch_fs *, struct btree *);
-
-void bch2_bset_to_text(struct printbuf *,
-		       struct bch_fs *, struct btree *,
-		       struct bset *, unsigned);
-void bch2_dump_btree_node_iter(struct btree *, struct btree_node_iter *);
-
-void __bch2_verify_btree_nr_keys(struct btree *);
-void __bch2_btree_node_iter_verify(struct btree_node_iter *, struct btree *);
 
 /*
  * Always runs the cheap structural checks in debug builds; the expensive ones

@@ -94,31 +94,50 @@ fn no_key_at(offset: u16, len: usize) -> ! {
     panic!("no key at offset {offset} of a {len} u64 node")
 }
 
+/// The u64s of the key at @offset in @buf, as node read validates them: not
+/// zero, and all of the key in the buffer.
+#[inline(always)]
+fn key_u64s_at(buf: &[u64], offset: u16) -> usize {
+    let at = offset as usize;
+    invariant!(at < buf.len());
+
+    let u64s = buf[at].to_ne_bytes()[0] as usize;
+    invariant!(u64s != 0, u64s <= buf.len() - at);
+    u64s
+}
+
 /// The key at @offset in @buf: a node's keys are validated.
-#[inline]
+#[inline(always)]
 pub(super) fn key_at(buf: &[u64], offset: u16) -> &BkeyP {
-    match buf.get(offset as usize..).and_then(BkeyP::from_slice) {
+    let at = offset as usize;
+    let u64s = key_u64s_at(buf, offset);
+
+    match BkeyP::from_slice(&buf[at..at + u64s]) {
         Some(k) => k.cast(),
         None    => no_key_at(offset, buf.len()),
     }
 }
 
-/// The key after the one at @k in @buf.
-#[inline]
+/// The key after the one at @k in @buf: its end is an offset, a u16, as node
+/// read validates.
+#[inline(always)]
 pub(super) fn bkey_p_next(buf: &[u64], k: u16) -> u16 {
-    k + key_at(buf, k).u64s() as u16
+    let next = k as usize + key_u64s_at(buf, k);
+    invariant!(next <= u16::MAX as usize);
+    u16::try_from(next).unwrap_or_else(|_| no_key_at(k, buf.len()))
 }
 
 /// Set @t's keys in @buf, in order, with their offsets.
 pub(super) fn set_keys<'a>(buf: &'a [u64], t: &BsetTree) -> impl Iterator<Item = (u16, &'a BkeyP)> + use<'a> {
-    let (mut offset, end) = (t.first_offset(), t.end_offset);
-    let mut rest = &buf[offset as usize..end as usize];
+    let (mut k, end) = (t.first_offset(), t.end_offset);
     core::iter::from_fn(move || {
-        let k: &'a BkeyP = BkeyP::from_slice(rest)?.cast();
-        let at = offset;
-        rest = &rest[k.u64s()..];
-        offset += k.u64s() as u16;
-        Some((at, k))
+        if k == end {
+            return None;
+        }
+        let at = k;
+        k = bkey_p_next(buf, k);
+        invariant!(k <= end);
+        Some((at, key_at(buf, at)))
     })
 }
 
@@ -129,10 +148,12 @@ impl<'a> Keys<'a> {
         unsafe { &*self.node }
     }
 
+    #[inline(always)]
     pub fn key_at(&self, offset: u16) -> &'a BkeyP {
         key_at(self.buf, offset)
     }
 
+    #[inline(always)]
     pub fn bkey_p_next(&self, k: u16) -> u16 {
         bkey_p_next(self.buf, k)
     }
@@ -188,8 +209,10 @@ impl KeysMut<'_> {
     }
 
     pub fn key_at_mut(&mut self, offset: u16) -> &mut BkeyP {
-        let len = self.buf.len();
-        match BkeyP::from_slice_mut(&mut self.buf[offset as usize..]) {
+        let (at, len) = (offset as usize, self.buf.len());
+        let u64s = key_u64s_at(self.buf, offset);
+
+        match BkeyP::from_slice_mut(&mut self.buf[at..at + u64s]) {
             Some(k) => k.cast_mut(),
             None    => no_key_at(offset, len),
         }
@@ -209,7 +232,10 @@ impl KeysMut<'_> {
     pub fn set_bset_end(&mut self, set: usize) {
         let t = &self.sets[set];
         let end = t.first_offset() as usize + self.as_keys().bset(t).u64s();
-        self.sets[set].end_offset = end as u16;
+
+        invariant!(end <= u16::MAX as usize);
+        self.sets[set].end_offset = u16::try_from(end)
+            .unwrap_or_else(|_| crate::btree::invariant_failed("a bset past the last offset"));
     }
 }
 
@@ -245,6 +271,7 @@ impl Deref for Sets<'_> {
     type Target = [BsetTree];
 
     fn deref(&self) -> &[BsetTree] {
+        invariant!(*self.nr as usize <= self.set.len());
         &self.set[..*self.nr as usize]
     }
 }

@@ -68,7 +68,6 @@ bcachefs-y		:=			\
 	alloc/foreground.o			\
 	btree/bkey.o				\
 	btree/bkey_methods.o			\
-	btree/bset.o				\
 	btree/cache.o				\
 	btree/check.o				\
 	btree/commit.o				\

@@ -39,7 +39,7 @@
 use crate::accounting;
 use crate::btree::bkey::{BkeyI, BkeySC, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::node::{bset, iter::KeyIter, BtreeNode};
+use crate::btree::node::{iter::KeyIter, BtreeNode};
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{btree_id_is_alloc, Fs};
@@ -905,12 +905,13 @@ impl c::btree_and_journal_iter {
 
             let btree_k = loop {
                 // SAFETY: the node's iterator, of node b
-                let k = unsafe { bset::bch2_btree_node_iter_peek_unpack(&mut self.node_iter, self.b, &mut self.unpacked) };
+                let keys = unsafe { (*self.b).keys() };
+                let k = self.node_iter.peek_unpack(&keys, &mut self.unpacked).map_or(null, Into::into);
                 // SAFETY: a key of the node's
                 if k.k.is_null() || unsafe { (*k.k).p } >= self.pos {
                     break k;
                 }
-                unsafe { bset::bch2_btree_node_iter_advance(&mut self.node_iter, self.b) };
+                self.node_iter.advance(&keys);
             };
 
             let mut journal_k = ptr::null();
@@ -1017,7 +1018,7 @@ pub unsafe fn bch2_btree_and_journal_iter_init_node_iter(trans: *mut c::btree_tr
     let mut node_iter = KeyIter::default();
     // SAFETY: the caller's
     unsafe {
-        bset::bch2_btree_node_iter_init_from_start(&mut node_iter, b);
+        node_iter.init_from_start(&(*b).keys());
         iter.write(c::btree_and_journal_iter::new(trans, b, node_iter, (*(*b).data).min_key));
     }
 }

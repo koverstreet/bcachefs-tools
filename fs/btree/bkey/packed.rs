@@ -278,6 +278,7 @@ impl BtreeNode {
             assert!(l.is_packed() && r.is_packed());
             assert!(self.nr_key_bits as u32 == f.key_bits());
         }
+        invariant!(f.key_u64s != 0);
 
         let ret = unsafe { cmp_bits(l.high_word(f), r.high_word(f), self.nr_key_bits as u32) };
 

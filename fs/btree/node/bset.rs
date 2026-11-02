@@ -2,13 +2,26 @@
 
 #![allow(non_camel_case_types)]
 
-use super::iter::KeyIter;
-use super::BtreeNode;
+use super::aux_tree::{bset_search_tree, bset_search_write_set, rw_aux_tree_bsearch, AuxTree, BFLOAT_FAILED};
+use super::keys::{key_at, Keys, KeysMut};
+use super::{check_lookups, BtreeNode, BtreeNrKeys};
+use crate::btree::bkey::{BkeyI, BkeyP, BkeyV, BKEY_U64S};
 use crate::cstructs::c;
-use crate::util::vstructs::Head;
+use crate::debug::params::debug_check_btree_accounting;
+use crate::format::Bpos;
+use crate::fs::Fs;
+use crate::prt;
+use crate::types::Le64;
+use crate::util::kernel::{likely, random_u64};
+use crate::util::log::{log_no_fs, print_lines, LogLevel};
+use crate::util::printbuf::Msg;
+use crate::util::vstructs::{cast_plain_mut, cast_plain_slice, plain_bytes, plain_bytes_mut, Head};
 use crate::util::Printbuf;
+use core::cmp::Ordering;
+use core::fmt;
+use core::ffi::c_uint;
 use core::mem::offset_of;
-use cstruct_macros::{c_name, CStruct, c_const, c_enum, c_extern};
+use cstruct_macros::{c_name, CStruct, c_const, c_enum, c_export};
 
 /*
  * BKEYS:
@@ -156,7 +169,7 @@ pub struct BsetTree {
     /*
      * We construct a binary tree in an array as if the array
      * started at 1, so that things line up on the same cachelines
-     * better: see comments in bset.c at cacheline_to_bkey() for
+     * better: see comments in aux_tree.rs at cacheline_to_bkey() for
      * details
      */
 
@@ -219,7 +232,10 @@ impl BsetTree {
 
     /// Its first key's offset in the node.
     pub fn first_offset(&self) -> u16 {
-        self.data_offset + (offset_of!(Head<c::bset>, _data) / size_of::<u64>()) as u16
+        let first = self.data_offset as usize + offset_of!(Head<c::bset>, _data) / size_of::<u64>();
+
+        invariant!(first <= u16::MAX as usize);
+        u16::try_from(first).unwrap_or_else(|_| crate::btree::invariant_failed("a bset past the last offset"))
     }
 
     /// Its keys' u64s.
@@ -263,11 +279,550 @@ pub struct BsetStats {
     pub failed: usize,
 }
 
-c_extern! {
-    pub fn bch2_btree_node_iter_bfloat_to_text(out: *mut Printbuf, b: *mut BtreeNode,
-                                               iter: *mut KeyIter);
-    pub fn bch2_btree_node_iter_init_from_start(iter: *mut KeyIter, b: *mut BtreeNode);
-    pub fn bch2_btree_node_iter_advance(iter: *mut KeyIter, b: *mut BtreeNode);
-    pub fn bch2_btree_node_iter_peek_unpack(iter: *mut KeyIter, b: *mut BtreeNode,
-                                            u: *mut c::bkey) -> c::bkey_s_c;
+fn pr_err(args: fmt::Arguments<'_>) {
+    log_no_fs(LogLevel::ERR, &Msg(|out: &mut Printbuf| { let _ = out.write_fmt(args); }));
+}
+
+impl Keys<'_> {
+    #[cold]
+    pub fn bset_to_text(&self, out: &mut Printbuf, fs: Option<&Fs>, set: usize) {
+        let b = self.node();
+        let t = &self.sets[set];
+        let i = self.bset(t);
+
+        if i.u64s() == 0 {
+            return;
+        }
+
+        let start = t.first_offset();
+        let last = start + i.u64s() as u16;
+        let mut k = start;
+
+        while k < last {
+            if self.buf[k as usize].to_ne_bytes()[0] == 0 {
+                pr_err(format_args!("block {set} key {:5} - u64s 0? aieee!", k - start));
+                break;
+            }
+
+            let _k = self.key_at(k);
+            let n = k + _k.u64s() as u16;
+            let mut uk = c::bkey::new();
+            let sc = _k.disassemble(b, &mut uk);
+
+            prt!(out, "block {set} key {:5}: ", k - start);
+            match fs {
+                Some(fs) => prt!(out, "{}", sc.to_text(fs)),
+                None     => prt!(out, "{}", sc.k),
+            }
+            prt!(out, "\n");
+
+            if n != last {
+                let nu = self.key_at(n).unpack(b);
+
+                if nu.p < sc.k.p {
+                    pr_err(format_args!("Key skipped backwards"));
+                } else if !sc.k.key_type().is_deleted() && nu.p == sc.k.p {
+                    pr_err(format_args!("Duplicate keys"));
+                }
+            }
+            k = n;
+        }
+    }
+
+    #[cold]
+    pub fn btree_node_bsets_to_text(&self, out: &mut Printbuf, fs: Option<&Fs>) {
+        for set in 0..self.sets.len() {
+            self.bset_to_text(out, fs, set);
+        }
+    }
+
+    pub fn btree_node_count_keys(&self) -> BtreeNrKeys {
+        let mut nr = BtreeNrKeys::default();
+
+        for (set, t) in self.sets.iter().enumerate() {
+            for (_, k) in self.set_keys(t) {
+                if !k.key_type().is_deleted() {
+                    nr.account_key_add(set, k);
+                }
+            }
+        }
+        nr
+    }
+
+    fn __verify_btree_nr_keys(&self, nr: &BtreeNrKeys) {
+        let counted = self.btree_node_count_keys();
+
+        assert!(counted == *nr, "btree node's key counts {nr:?}, its keys' {counted:?}");
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn insert_pos_bad(&self, msg: &str, l_name: &str, l: &BkeyP, r_name: &str, r: &BkeyP) -> ! {
+        let b = self.node();
+        let mut buf = Printbuf::new();
+
+        self.btree_node_bsets_to_text(&mut buf, None);
+        prt!(&mut buf, "{msg}:\n");
+        prt!(&mut buf, "{l_name} key {}\n", l.unpack(b));
+        prt!(&mut buf, "{r_name} key {}\n", r.unpack(b));
+
+        print_lines(&LogLevel::ERR.prefix(), buf.as_bytes());
+        panic!("__verify_insert_pos");
+    }
+
+    fn __verify_insert_pos(&self, where_: u16, insert: &BkeyP, clobber_u64s: u16) {
+        let b = self.node();
+        let t = &self.sets[self.bkey_to_bset(where_)];
+        let next = where_ + clobber_u64s;
+
+        if let Some(prev) = self.bkey_prev_all(t, where_) {
+            let prev = self.key_at(prev);
+            if b.bkey_iter_cmp(prev, insert).is_gt() {
+                self.insert_pos_bad("prev > insert", "prev   ", prev, "insert ", insert);
+            }
+        }
+
+        if next != t.end_offset {
+            let next = self.key_at(next);
+            if b.bkey_iter_cmp(insert, next).is_gt() {
+                self.insert_pos_bad("insert > next", "insert ", insert, "next   ", next);
+            }
+        }
+    }
+
+    fn verify_insert_pos(&self, where_: u16, insert: &BkeyP, clobber_u64s: u16) {
+        if check_lookups() {
+            self.__verify_insert_pos(where_, insert, clobber_u64s);
+        }
+    }
+}
+
+impl Keys<'_> {
+    pub fn btree_keys_stats(&self, stats: &mut BsetStats) {
+        for t in self.sets {
+            let ty = t.aux_tree_type() as usize;
+
+            stats.sets[ty].nr += 1;
+            stats.sets[ty].bytes += self.bset(t).u64s() * size_of::<u64>();
+
+            if let AuxTree::Ro(ro) = self.aux_tree(t) {
+                stats.floats += t.size as usize - 1;
+
+                for j in 1..t.size as usize {
+                    stats.failed += (ro.f[j].exponent == BFLOAT_FAILED) as usize;
+                }
+            }
+        }
+    }
+}
+
+impl BtreeNode {
+    pub fn __verify_btree_nr_keys(&self) {
+        self.keys().__verify_btree_nr_keys(&self.nr);
+    }
+
+    #[cold]
+    pub fn bfloat_to_text(&self, out: &mut Printbuf, k: u16) {
+        let keys = self.keys();
+        let t = &keys.sets[keys.bkey_to_bset(k)];
+
+        let AuxTree::Ro(ro) = keys.aux_tree(t) else { return };
+
+        let inorder = t.bkey_to_cacheline(k);
+        if inorder == 0 || inorder >= t.size as usize {
+            return;
+        }
+
+        let j = ro.eytz.from_inorder(inorder);
+        if k != ro.tree_to_bkey(t, j) {
+            return;
+        }
+
+        if ro.f[j].exponent == BFLOAT_FAILED {
+            let uk = keys.key_at(k).unpack(self);
+            prt!(out, "    failed unpacked at depth {}\n\t", j.ilog2());
+            prt!(out, "{}\n", uk.p);
+        }
+    }
+}
+
+/* Bkey utility code */
+
+impl Keys<'_> {
+    pub fn bkey_to_bset(&self, k: u16) -> usize {
+        for (i, t) in self.sets.iter().enumerate() {
+            if k <= t.end_offset {
+                ebug_assert!(k >= t.first_offset());
+                return i;
+            }
+        }
+
+        panic!("key at {k}, past the end of the node's last set");
+    }
+
+    /*
+     * find _some_ key in the same bset as @k that precedes @k - not necessarily the
+     * immediate predecessor:
+     */
+    fn __bkey_prev(&self, t: &BsetTree, k: u16) -> Option<u16> {
+        ebug_assert!(k >= t.first_offset() && k <= t.end_offset);
+
+        if k == t.first_offset() {
+            return None;
+        }
+
+        Some(match self.aux_tree(t) {
+            AuxTree::None => t.first_offset(),
+            AuxTree::Ro(ro) => {
+                let mut j = (t.size as usize - 1).min(t.bkey_to_cacheline(k));
+
+                loop {
+                    let p = if j != 0 {
+                        let n = ro.eytz.from_inorder(j);
+                        j -= 1;
+                        ro.tree_to_bkey(t, n)
+                    } else {
+                        t.first_offset()
+                    };
+
+                    if p < k {
+                        break p;
+                    }
+                }
+            }
+            AuxTree::Rw(rw) => {
+                let j = rw_aux_tree_bsearch(t, rw, k);
+
+                if j != 0 { rw[j - 1].offset } else { t.first_offset() }
+            }
+        })
+    }
+
+    pub fn bkey_prev_filter(&self, t: &BsetTree, orig_k: u16, min_key_type: u32) -> Option<u16> {
+        let mut k = orig_k;
+        let mut ret = None;
+
+        while ret.is_none() {
+            let Some(p) = self.__bkey_prev(t, k) else { break };
+
+            let mut i = p;
+            while i != k {
+                let key = self.key_at(i);
+                if key.key_type().0 >= min_key_type {
+                    ret = Some(i);
+                }
+                i += key.u64s() as u16;
+            }
+
+            k = p;
+        }
+
+        if check_lookups() {
+            assert!(ret.is_none_or(|r| r < orig_k), "prev of key at {orig_k} at {ret:?}");
+
+            let mut i = ret.map_or(t.first_offset(), |r| r + self.key_at(r).u64s() as u16);
+            while i != orig_k {
+                let key = self.key_at(i);
+                assert!(key.key_type().0 < min_key_type,
+                        "key at {i} of type {} skipped, before key at {orig_k}", key.key_type().0);
+                i += key.u64s() as u16;
+            }
+        }
+
+        ret
+    }
+
+    pub fn bkey_prev_all(&self, t: &BsetTree, k: u16) -> Option<u16> {
+        self.bkey_prev_filter(t, k, 0)
+    }
+
+    pub fn bkey_prev(&self, t: &BsetTree, k: u16) -> Option<u16> {
+        self.bkey_prev_filter(t, k, 1)
+    }
+}
+
+/* Insert */
+
+impl KeysMut<'_> {
+    pub fn btree_keys_init(&mut self) {
+        self.sets.clear();
+        *self.nr = BtreeNrKeys::default();
+    }
+
+    fn bset_head_mut(&mut self, offset: u16) -> &mut Head<c::bset> {
+        let len = self.buf.len();
+        cast_plain_mut(plain_bytes_mut(&mut self.buf[offset as usize..]))
+            .unwrap_or_else(|| panic!("no room for a bset at offset {offset} of a {len} u64 node"))
+    }
+
+    /// The bset at @offset, with its first set's seq, as a new set.
+    fn bset_init(&mut self, offset: u16, seq: Le64) {
+        let i = self.bset_head_mut(offset);
+
+        plain_bytes_mut(i).fill(0);
+        i.seq = seq;
+        i.set_big_endian(cfg!(target_endian = "big") as _);
+
+        let set = self.sets.push();
+        self.set_bset(set, offset);
+    }
+
+    pub fn bset_init_first(&mut self, offset: u16) {
+        assert!(self.sets.is_empty(), "first bset of a node with {} already", self.sets.len());
+
+        self.bset_init(offset, Le64::new(random_u64()));
+    }
+
+    /// @bne the offset of a btree_node_entry, its bset after its csum.
+    pub fn bset_init_next(&mut self, bne: u16) {
+        let last_end = self.sets.last().expect("a btree node with no bsets").end_offset;
+
+        assert!((bne as usize) < self.buf.len(), "btree node entry at {bne}, past a {} u64 node", self.buf.len());
+        assert!(bne >= last_end, "btree node entry at {bne}, before the last bset's end at {last_end}");
+        assert!(self.sets.len() < MAX_BSETS as usize, "a btree node's {} bsets, full", self.sets.len());
+
+        let seq = self.as_keys().bset(&self.sets[0]).seq;
+        let keys = offset_of!(Head<c::btree_node_entry>, keys) / size_of::<u64>();
+        self.bset_init(bne + keys as u16, seq);
+    }
+
+    pub fn bset_insert(&mut self, where_: u16, insert: &BkeyI, clobber_u64s: u16) {
+        let f = self.format;
+        let set = self.sets.len() - 1;
+        let insert_p: &BkeyP = insert.into();
+        let mut packed = c::bkey_packed::default();
+
+        self.as_keys().bset_verify_rw_aux_tree(&self.sets[set]);
+        self.as_keys().verify_insert_pos(where_, insert_p, clobber_u64s);
+
+        let (src_u64s, src_key): (u16, &[u64]) = if unsafe { c::bch2_bkey_pack_key(&mut packed, &insert.k, f) } {
+            let key: &[u64] = cast_plain_slice(plain_bytes(&packed)).expect("a bkey_packed is whole u64s");
+            (packed.u64s as u16, &key[..f.key_u64s as usize])
+        } else {
+            (insert.k.u64s as u16, &insert_p.as_slice()[..BKEY_U64S])
+        };
+
+        let (w, clobber, u64s) = (where_ as usize, clobber_u64s as usize, src_u64s as usize);
+
+        if src_u64s != clobber_u64s {
+            let t = self.sets[set];
+
+            ebug_assert!(self.as_keys().bset(&t).u64s() as isize >= clobber as isize - u64s as isize);
+
+            self.buf.copy_within(w + clobber..t.end_offset as usize, w + u64s);
+            let bset_u64s = self.as_keys().bset(&t).u64s() + u64s - clobber;
+            self.bset_head_mut(t.data_offset).set_u64s(bset_u64s);
+            self.set_bset_end(set);
+        }
+
+        self.buf[w..w + src_key.len()].copy_from_slice(src_key);
+        self.buf[w + src_key.len()..w + u64s].copy_from_slice(insert_p.val(f));
+
+        if !insert.k.key_type().is_deleted() {
+            self.nr.account_key_add(set, key_at(self.buf, where_));
+        }
+
+        if src_u64s != clobber_u64s {
+            self.bset_fix_lookup_table(set, where_, clobber_u64s, src_u64s);
+        }
+
+        self.verify_btree_nr_keys();
+    }
+
+    pub fn bset_delete(&mut self, where_: u16, clobber_u64s: u16) {
+        let set = self.sets.len() - 1;
+        let t = self.sets[set];
+        let (w, clobber) = (where_ as usize, clobber_u64s as usize);
+
+        self.as_keys().bset_verify_rw_aux_tree(&t);
+
+        ebug_assert!(self.as_keys().bset(&t).u64s() >= clobber);
+
+        self.buf.copy_within(w + clobber..t.end_offset as usize, w);
+        let bset_u64s = self.as_keys().bset(&t).u64s() - clobber;
+        self.bset_head_mut(t.data_offset).set_u64s(bset_u64s);
+        self.set_bset_end(set);
+
+        self.bset_fix_lookup_table(set, where_, clobber_u64s, 0);
+    }
+
+    fn verify_btree_nr_keys(&self) {
+        if cfg!(CONFIG_BCACHEFS_DEBUG) && debug_check_btree_accounting() {
+            self.as_keys().__verify_btree_nr_keys(self.nr);
+        }
+    }
+}
+
+/* Lookup */
+
+impl BtreeNode {
+    /* packed or unpacked */
+    #[inline]
+    pub(super) fn cmp_p_or_unp(&self, l: &BkeyP, r_packed: Option<&BkeyP>, r: &Bpos) -> Ordering {
+        ebug_assert!(r_packed.is_none_or(|r| r.is_packed()));
+
+        match r_packed {
+            Some(r_packed) if likely(l.is_packed()) => self.cmp_packed_format_checked(l, r_packed),
+            _ => self.cmp_left_packed(l, r),
+        }
+    }
+
+    fn bkey_iter_cmp_p_or_unp(&self, l: &BkeyP, r_packed: Option<&BkeyP>, r: &Bpos) -> Ordering {
+        self.cmp_p_or_unp(l, r_packed, r)
+            .then_with(|| if l.key_type().is_deleted() { Ordering::Less } else { Ordering::Equal })
+    }
+
+    /*
+     * When keys compare equal, deleted keys compare first:
+     *
+     * XXX: only need to compare pointers for keys that are both within a
+     * btree_node_iterator - we need to break ties for prev() to work correctly
+     */
+    pub(super) fn bkey_iter_cmp(&self, l: &BkeyP, r: &BkeyP) -> Ordering {
+        self.cmp_packed(l, r)
+            .then_with(|| r.key_type().is_deleted().cmp(&l.key_type().is_deleted()))
+            .then_with(|| l.as_ffi().cmp(&r.as_ffi()))
+    }
+
+    /* These assume r (the search key) is not a deleted key: */
+    pub(super) fn bkey_iter_pos_cmp(&self, l: &BkeyP, r: &Bpos) -> Ordering {
+        self.cmp_left_packed(l, r)
+            .then_with(|| if l.key_type().is_deleted() { Ordering::Less } else { Ordering::Equal })
+    }
+}
+
+impl Keys<'_> {
+    pub(super) fn __bset_search(&self, t: &BsetTree, search: &Bpos,
+                                     lossy_packed_search: &c::bkey_packed) -> u16 {
+        /*
+         * First, we search for a cacheline, then lastly we do a linear search
+         * within that cacheline.
+         *
+         * To search for the cacheline, there's three different possibilities:
+         *  * The set is too small to have a search tree, so we just do a linear
+         *    search over the whole set.
+         *  * The set is the one we're currently inserting into; keeping a full
+         *    auxiliary search tree up to date would be too expensive, so we
+         *    use a much simpler lookup table to do a binary search -
+         *    bset_search_write_set().
+         *  * Or we use the auxiliary search tree we constructed earlier -
+         *    bset_search_tree()
+         */
+
+        match self.aux_tree(t) {
+            AuxTree::None   => t.first_offset(),
+            AuxTree::Rw(rw) => bset_search_write_set(rw, search),
+            AuxTree::Ro(ro) => bset_search_tree(self, t, ro, search, lossy_packed_search),
+        }
+    }
+
+    pub(super) fn bset_search_linear(&self, t: &BsetTree, search: &Bpos,
+                                          packed_search: Option<&BkeyP>,
+                                          lossy_packed_search: &BkeyP, mut m: u16) -> u16 {
+        let b = self.node();
+
+        while m != t.end_offset {
+            let k = self.key_at(m);
+            if !b.bkey_iter_cmp_p_or_unp(k, Some(lossy_packed_search), search).is_lt() {
+                break;
+            }
+            m = self.bkey_p_next(m);
+        }
+
+        if packed_search.is_none() {
+            while m != t.end_offset {
+                let k = self.key_at(m);
+                if !b.bkey_iter_pos_cmp(k, search).is_lt() {
+                    break;
+                }
+                m = self.bkey_p_next(m);
+            }
+        }
+
+        if check_lookups() {
+            if let Some(prev) = self.bkey_prev_all(t, m) {
+                assert!(b.bkey_iter_cmp_p_or_unp(self.key_at(prev), packed_search, search).is_lt(),
+                        "bset search for {search}: key at {prev}, before the result at {m}, isn't before it");
+            }
+        }
+
+        m
+    }
+}
+
+/* For C: pointers into the node in, offsets inside */
+
+#[c_export]
+pub fn bch2_btree_keys_init(b: &mut BtreeNode) {
+    b.keys_mut().btree_keys_init();
+}
+
+#[c_export]
+pub fn bch2_bset_init_first(b: &mut BtreeNode, i: *mut Head<c::bset>) {
+    let mut keys = b.keys_mut();
+    let offset = keys.as_keys().offset_of(i);
+    keys.bset_init_first(offset);
+}
+
+#[c_export]
+pub fn bch2_bset_init_next(b: &mut BtreeNode, bne: *mut Head<c::btree_node_entry>) {
+    let mut keys = b.keys_mut();
+    let offset = keys.as_keys().offset_of(bne);
+    keys.bset_init_next(offset);
+}
+
+#[c_export]
+pub fn bch2_bset_build_aux_tree(b: &mut BtreeNode, t: *mut BsetTree, writeable: bool) {
+    let set = b.set_index(t);
+    b.keys_mut().bset_build_aux_tree(set, writeable);
+}
+
+/// # Safety
+/// @insert a whole key.
+#[c_export]
+pub unsafe fn bch2_bset_insert(b: &mut BtreeNode, where_: *mut c::bkey_packed, insert: *mut c::bkey_i,
+                               clobber_u64s: c_uint) {
+    // SAFETY: the caller's
+    let insert = unsafe { &*BkeyI::from_raw(insert) };
+    let mut keys = b.keys_mut();
+    let w = keys.as_keys().offset_of(where_);
+    keys.bset_insert(w, insert, clobber_u64s as u16);
+}
+
+#[c_export]
+pub fn bch2_bset_delete(b: &mut BtreeNode, where_: *mut c::bkey_packed, clobber_u64s: c_uint) {
+    let mut keys = b.keys_mut();
+    let w = keys.as_keys().offset_of(where_);
+    keys.bset_delete(w, clobber_u64s as u16);
+}
+
+#[c_export]
+pub fn bch2_bkey_to_bset(b: &BtreeNode, k: *mut c::bkey_packed) -> *mut BsetTree {
+    let keys = b.keys();
+    let set = keys.bkey_to_bset(keys.offset_of(k));
+    (&raw const b.set[set]).cast_mut()
+}
+
+#[c_export]
+pub fn bch2_bkey_prev_filter(b: &BtreeNode, t: *mut BsetTree, k: *mut c::bkey_packed,
+                             min_key_type: c_uint) -> *mut c::bkey_packed {
+    let keys = b.keys();
+    let t = &b.set[b.set_index(t)];
+    keys.bkey_prev_filter(t, keys.offset_of(k), min_key_type)
+        .map_or(core::ptr::null_mut(), |p| keys.ptr_at(p))
+}
+
+#[c_export]
+pub fn bch2_btree_node_count_keys(b: &BtreeNode) -> BtreeNrKeys {
+    b.keys().btree_node_count_keys()
+}
+
+#[c_export]
+pub fn __bch2_verify_btree_nr_keys(b: &BtreeNode) {
+    b.__verify_btree_nr_keys();
+}
+
+#[c_export]
+pub fn bch2_btree_keys_stats(b: &BtreeNode, stats: &mut BsetStats) {
+    b.keys().btree_keys_stats(stats);
 }

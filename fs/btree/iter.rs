@@ -3123,12 +3123,10 @@ impl<'a> PathLeaf<'a> {
     }
 
     /// Where the bset search tree failed at the path's key, if it did:
-    /// bch2_bfloat_to_text(). Peeks the node iterator, moving it past deleted
+    /// the node's bfloat_to_text(). Peeks the node iterator, moving it past deleted
     /// keys.
     pub fn bfloat_to_text(&self, out: &mut Printbuf) {
-        unsafe {
-            crate::btree::node::bset::bch2_btree_node_iter_bfloat_to_text(out.as_raw(), (*self.l).b, &raw mut (*self.l).iter)
-        }
+        unsafe { (*(*self.l).b).btree_node_iter_bfloat_to_text(out, &mut (*self.l).iter) }
     }
 }
 

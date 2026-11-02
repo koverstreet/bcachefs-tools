@@ -11,6 +11,12 @@ macro_rules! ebug_assert {
     };
 }
 
+/// The checks behind bch2_debug_check_bset_lookups, in debug builds.
+fn check_lookups() -> bool {
+    cfg!(CONFIG_BCACHEFS_DEBUG) && crate::debug::params::debug_check_bset_lookups()
+}
+
+pub mod aux_tree;
 pub mod bset;
 pub mod iter;
 pub mod keys;
@@ -25,7 +31,6 @@ use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use crate::util::{Printbuf, ToText};
 use core::ffi::c_void;
-use core::marker::PhantomData;
 use core::ops::ControlFlow;
 use core::sync::atomic::AtomicUsize;
 use bset::{BsetTree, BSET_CACHELINE};
@@ -36,7 +41,7 @@ use cstruct_macros::{c_name, CStruct};
 
 #[repr(C)]
 #[c_name(btree_nr_keys)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, CStruct)]
 pub struct BtreeNrKeys {
     /*
      * Amount of live metadata (i.e. size of node after a compaction) in
@@ -221,35 +226,33 @@ impl BtreeNode {
     where
         F: for<'a> FnMut(BkeySC<'a>) -> ControlFlow<()>,
     {
-        let b = self as *const _ as *mut BtreeNode;
+        let keys = self.keys();
         let mut node_iter = KeyIter::default();
-        let mut unpacked: c::bkey = pin_init::Zeroable::zeroed();
+        let mut unpacked = c::bkey::new();
 
-        unsafe { bset::bch2_btree_node_iter_init_from_start(&mut node_iter, b) };
+        node_iter.init_from_start(&keys);
 
-        loop {
-            let k = unsafe {
-                bset::bch2_btree_node_iter_peek_unpack(&mut node_iter, b, &mut unpacked)
-            };
-            if k.k.is_null() {
-                return ControlFlow::Continue(());
-            }
-            if f(BkeySC {
-                k:    unsafe { &*k.k },
-                v:    k.v,
-                iter: PhantomData,
-                val:  PhantomData,
-            }).is_break() {
-                return ControlFlow::Break(());
-            }
-            unsafe { bset::bch2_btree_node_iter_advance(&mut node_iter, b) };
+        while let Some(k) = node_iter.peek_unpack(&keys, &mut unpacked) {
+            f(k)?;
+            node_iter.advance(&keys);
         }
+        ControlFlow::Continue(())
     }
 }
 
 impl BtreeNode {
     pub fn sets(&self) -> &[BsetTree] {
+        invariant!(self.nsets as usize <= self.set.len());
         &self.set[..self.nsets as usize]
+    }
+
+    /// Of a pointer C has into set[].
+    pub fn set_index(&self, t: *const BsetTree) -> usize {
+        let i = (t as usize).wrapping_sub(self.set.as_ptr() as usize) / size_of::<BsetTree>();
+
+        ebug_assert!(i < self.set.len() && core::ptr::eq(&self.set[i], t),
+                     "{t:p}, not a set of the node at {:p}", self);
+        i
     }
 
     pub fn last_set(&self) -> &BsetTree {
@@ -257,6 +260,7 @@ impl BtreeNode {
     }
 
     pub fn buf_bytes(&self) -> usize {
+        invariant!((self.byte_order as u32) < usize::BITS);
         1 << self.byte_order
     }
 
