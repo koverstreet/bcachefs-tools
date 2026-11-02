@@ -70,43 +70,8 @@
 #include "enum_kind.h"
 #include "util/printbuf_gen.h"
 
-static inline struct printbuf_restore printbuf_state_save(struct printbuf *buf)
-{
-	return (struct printbuf_restore) {
-		.pos		= buf->pos,
-		.last_newline	= buf->last_newline,
-		.last_field	= buf->last_field,
-		.indent		= buf->indent,
-		.cur_tabstop	= buf->cur_tabstop
-	};
-}
-
-static inline void printbuf_state_restore(struct printbuf *buf,
-					  struct printbuf_restore s)
-{
-	buf->pos		= s.pos;
-	buf->last_newline	= s.last_newline;
-	buf->last_field		= s.last_field;
-	buf->indent		= s.indent;
-	buf->cur_tabstop	= s.cur_tabstop;
-}
-
-int bch2_printbuf_make_room_gfp(struct printbuf *, unsigned, gfp_t);
-int bch2_printbuf_make_room(struct printbuf *, unsigned);
 __printf(2, 3) void bch2_prt_printf(struct printbuf *out, const char *fmt, ...);
 __printf(2, 0) void bch2_prt_vprintf(struct printbuf *out, const char *fmt, va_list);
-const char *bch2_printbuf_str(const struct printbuf *);
-
-void bch2_printbuf_tabstop_pop(struct printbuf *);
-
-void bch2_printbuf_ensure_trailing_newline(struct printbuf *);
-void bch2_printbuf_strip_trailing_newline(struct printbuf *);
-
-void bch2_prt_human_readable_s64(struct printbuf *, s64);
-void bch2_prt_units_s64(struct printbuf *, s64);
-void bch2_prt_string_option(struct printbuf *, const char * const[], size_t);
-void bch2_prt_bitflags_vector(struct printbuf *, const char * const[],
-			      unsigned long *, unsigned);
 
 /* Initializer for a heap allocated printbuf: */
 #define PRINTBUF ((struct printbuf) { .heap_allocated = true })
@@ -127,89 +92,22 @@ DEFINE_CLASS(printbuf, struct printbuf,
 	     bch2_printbuf_exit(&_T), bch2_printbuf_init(), void)
 
 /*
- * Returns size remaining of output buffer:
- */
-static inline unsigned printbuf_remaining_size(struct printbuf *out)
-{
-	if (WARN_ON(out->size && out->pos >= out->size))
-		out->pos = out->size - 1;
-	return out->size - out->pos;
-}
-
-/*
  * Returns number of characters we can print to the output buffer - i.e.
  * excluding the terminating nul:
  */
 static inline unsigned printbuf_remaining(struct printbuf *out)
 {
-	return out->size ? printbuf_remaining_size(out) - 1 : 0;
-}
-
-static inline unsigned printbuf_written(struct printbuf *out)
-{
-	return out->size ? min(out->pos, out->size - 1) : 0;
-}
-
-static inline void printbuf_nul_terminate_reserved(struct printbuf *out)
-{
-	if (WARN_ON(out->size && out->pos >= out->size))
-		out->pos = out->size - 1;
-	if (out->size)
-		out->buf[out->pos] = 0;
+	return bch2_printbuf_remaining(out);
 }
 
 static inline void printbuf_nul_terminate(struct printbuf *out)
 {
-	bch2_printbuf_make_room(out, 1);
-	printbuf_nul_terminate_reserved(out);
-}
-
-/* Doesn't call bch2_printbuf_make_room(), doesn't nul terminate: */
-static inline void __prt_char_reserved(struct printbuf *out, char c)
-{
-	if (printbuf_remaining(out))
-		out->buf[out->pos++] = c;
-}
-
-/* Doesn't nul terminate: */
-static inline void __prt_char(struct printbuf *out, char c)
-{
-	bch2_printbuf_make_room(out, 1);
-	__prt_char_reserved(out, c);
+	bch2_printbuf_nul_terminate(out);
 }
 
 static inline void prt_char(struct printbuf *out, char c)
 {
-	bch2_printbuf_make_room(out, 2);
-	__prt_char_reserved(out, c);
-	printbuf_nul_terminate_reserved(out);
-}
-
-static inline void __prt_chars_reserved(struct printbuf *out, char c, unsigned n)
-{
-	unsigned can_print = min(n, printbuf_remaining(out));
-
-	for (unsigned i = 0; i < can_print; i++)
-		out->buf[out->pos++] = c;
-}
-
-static inline void prt_chars(struct printbuf *out, char c, unsigned n)
-{
-	bch2_printbuf_make_room(out, n);
-	__prt_chars_reserved(out, c, n);
-	printbuf_nul_terminate_reserved(out);
-}
-
-static inline void prt_bytes(struct printbuf *out, const void *b, unsigned n)
-{
-	bch2_printbuf_make_room(out, n);
-
-	unsigned can_print = min(n, printbuf_remaining(out));
-
-	for (unsigned i = 0; i < can_print; i++)
-		out->buf[out->pos++] = ((char *) b)[i];
-
-	printbuf_nul_terminate(out);
+	bch2_prt_chars(out, c, 1);
 }
 
 static inline void prt_str(struct printbuf *out, const char *str)
@@ -217,44 +115,14 @@ static inline void prt_str(struct printbuf *out, const char *str)
 	bch2_prt_bytes_indented(out, str, strlen(str));
 }
 
-static inline void prt_hex_byte(struct printbuf *out, u8 byte)
-{
-	bch2_printbuf_make_room(out, 3);
-	__prt_char_reserved(out, hex_asc_hi(byte));
-	__prt_char_reserved(out, hex_asc_lo(byte));
-	printbuf_nul_terminate_reserved(out);
-}
-
-static inline void prt_hex_byte_upper(struct printbuf *out, u8 byte)
-{
-	bch2_printbuf_make_room(out, 3);
-	__prt_char_reserved(out, hex_asc_upper_hi(byte));
-	__prt_char_reserved(out, hex_asc_upper_lo(byte));
-	printbuf_nul_terminate_reserved(out);
-}
-
-/*
- * Contiguous hex dump, same output as printk's %*phN - which the userspace
- * build can't use: libc vsnprintf prints kernel %p extensions as raw
- * pointers.
- */
 static inline void prt_hex_bytes(struct printbuf *out, const void *b, unsigned n)
 {
-	for (unsigned i = 0; i < n; i++)
-		prt_hex_byte(out, ((const u8 *) b)[i]);
+	bch2_prt_hex_bytes(out, b, n);
 }
 
-static inline void printbuf_reset_keep_tabstops(struct printbuf *buf)
+static inline void prt_hex_byte(struct printbuf *out, u8 byte)
 {
-	buf->pos		= 0;
-	buf->allocation_failure	= 0;
-	buf->last_newline	= 0;
-	buf->last_field		= 0;
-	buf->indent		= 0;
-	buf->cur_tabstop	= 0;
-
-	if (buf->size)
-		printbuf_nul_terminate_reserved(buf);
+	bch2_prt_hex_bytes(out, &byte, 1);
 }
 
 /**
@@ -262,8 +130,7 @@ static inline void printbuf_reset_keep_tabstops(struct printbuf *buf)
  */
 static inline void printbuf_reset(struct printbuf *buf)
 {
-	printbuf_reset_keep_tabstops(buf);
-	buf->nr_tabstops	= 0;
+	bch2_printbuf_reset(buf);
 }
 
 /**

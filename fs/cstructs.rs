@@ -222,7 +222,7 @@ pub mod c {
     pub use crate::util::fast_list::{fast_list, fast_list_pcpu};
     pub use crate::locking::{mutex_noio, percpu_rwsem_noio};
     pub use crate::util::mean_and_variance::{mean_and_variance};
-    pub use crate::util::printbuf::{PRINTBUF_INLINE_TABSTOPS, PRINTBUF_UNITS_10, PRINTBUF_UNITS_2, bch2_printbuf_exit, bch2_printbuf_indent_add, bch2_printbuf_indent_add_nextline, bch2_printbuf_indent_sub, bch2_printbuf_make_room_gfp, bch2_printbuf_tabstop_align, bch2_printbuf_tabstop_push, bch2_printbuf_tabstops_reset, bch2_prt_bitflags, bch2_prt_bytes_indented, bch2_prt_human_readable_u64, bch2_prt_newline, bch2_prt_printf, bch2_prt_tab, bch2_prt_tab_rjust, bch2_prt_units_u64, printbuf_bits, printbuf_restore, printbuf_si, rust_prt_bytes};
+    pub use crate::util::printbuf::{PRINTBUF_INLINE_TABSTOPS, PRINTBUF_UNITS_10, PRINTBUF_UNITS_2, bch2_prt_printf, printbuf_bits, printbuf_restore, printbuf_si};
     pub(crate) use crate::util::printbuf::{__printbuf_bits_forward};
     pub use super::util_rcu_pending_types::*;
     pub use crate::locking::seqmutex::seqmutex;
