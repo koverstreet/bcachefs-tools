@@ -97,7 +97,7 @@
 #include "btree/bbpos_types_inline.h"
 #include "btree/check_gen.h"
 #include "btree/journal_overlay_gen.h"
-#include "util/six.h"
+#include "locking/six.h"
 #include "btree/bkey_gen.h"
 #include "btree/bkey_types_inline.h"
 #include "btree/interior_gen.h"

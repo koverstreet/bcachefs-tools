@@ -13,7 +13,7 @@
 #include "data/keylist.h"
 #include "data/move_gen.h"
 
-#include "util/six.h"
+#include "locking/six.h"
 
 #include <linux/blktrace_api.h>
 

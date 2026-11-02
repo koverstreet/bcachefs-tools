@@ -37,6 +37,7 @@ mod noio;
 mod raw;
 mod seqlock;
 pub mod seqmutex;
+pub mod six;
 
 pub use crate::new_lock;
 pub use bytelock::ByteLock;

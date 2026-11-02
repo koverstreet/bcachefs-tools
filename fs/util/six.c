@@ -15,7 +15,7 @@
 
 #include <trace/events/lock.h>
 
-#include "six.h"
+#include "locking/six.h"
 #include "btree/node/bset_gen.h"
 #include "btree/node/iter_gen.h"
 #include "btree/types_gen.h"
