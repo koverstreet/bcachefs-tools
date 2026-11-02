@@ -312,13 +312,14 @@ static int six_lock_wait_fifo_realloc(struct six_lock *lock,
 	}
 
 	unsigned old_size = old_wf->size;
-	if (old_size >= (1 << 15))
-		return -ENOMEM;
 
 	raw_spin_unlock(&lock->wait_lock);
 
-	if (new_wf)
-		kfree(new_wf);
+	kfree(new_wf);
+	*_new_wf = NULL;
+
+	if (old_size >= (1 << 15))
+		return -ENOMEM;
 
 	unsigned new_size = old_size * 2;
 	new_wf = kzalloc(struct_size(new_wf, data, new_size), GFP_KERNEL);
