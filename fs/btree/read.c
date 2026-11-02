@@ -798,6 +798,20 @@ int bch2_btree_node_read_done(struct bch_fs *c, struct bch_dev *ca,
 			}
 		}
 
+		/*
+		 * The bset code addresses keys by u16 offsets from b->data, and a
+		 * 512k node's end is one past the last: no bset may end there
+		 */
+		if (btree_err_on(vstruct_end(i) == (u64 *) b->data + U16_MAX + 1,
+				 FSCK_CAN_FIX,
+				 c, ca, b, i, NULL,
+				 bset_past_end_of_btree_node,
+				 "bset ends at the end of the btree node, u64 %u: past the last u16 offset",
+				 U16_MAX + 1)) {
+			i->u64s = 0;
+			btree_node_read_keys_lost(c, ca, failed);
+		}
+
 		b->version_ondisk = min(b->version_ondisk,
 					le16_to_cpu(i->version));
 
