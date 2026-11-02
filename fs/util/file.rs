@@ -31,7 +31,7 @@ use crate::errcode::BchError;
 use crate::util::alloc::KBox;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::ops::{from_raw, SelfOf};
-use core::ffi::c_int;
+use core::ffi::{c_int, CStr};
 use core::pin::Pin;
 
 #[cfg(kernel)]
@@ -89,6 +89,27 @@ impl File {
     #[cfg(kernel)]
     pub fn nonblock(&self) -> bool {
         self.flags() & c::O_NONBLOCK != 0
+    }
+}
+
+/// One read, from the start of the file at @path: enough for a sysfs
+/// attribute, which hands over its value in one go.
+pub fn read_file(path: &CStr, buf: &mut [u8]) -> Result<usize, BchError> {
+    #[cfg(kernel)]
+    unsafe {
+        let file = c::filp_open(path.as_ptr().cast(), c::O_RDONLY as c_int, 0);
+        let file = errptr_to_result(NonNull::new(file).expect("a file, or an error"))?.as_ptr();
+
+        let mut pos = 0;
+        let r = c::kernel_read(file, buf.as_mut_ptr().cast(), buf.len(), &mut pos);
+        c::fput(file);
+        if r < 0 { Err(BchError::from_raw(r as c_int)) } else { Ok(r as usize) }
+    }
+    #[cfg(not(kernel))]
+    {
+        use std::{io::Read, os::unix::ffi::OsStrExt};
+        let path = std::path::Path::new(std::ffi::OsStr::from_bytes(path.to_bytes()));
+        Ok(std::fs::File::open(path)?.read(buf)?)
     }
 }
 
