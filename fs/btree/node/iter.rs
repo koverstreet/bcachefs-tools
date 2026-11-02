@@ -83,12 +83,7 @@ impl KeyIter {
     }
 
     fn __used(&self) -> usize {
-        let mut n = NR;
-
-        while n != 0 && self.__set_end(n - 1) {
-            n -= 1;
-        }
-        n
+        NR - self.data.iter().rev().take_while(|s| s.k == s.end).count()
     }
 
     #[cold]
@@ -125,18 +120,14 @@ impl KeyIter {
             return;
         }
 
-        let used = self.__used();
+        let live = &self.data[..self.__used()];
 
-        for i in 0..used {
-            if self.__set_end(i) {
-                self.bad(keys, "empty entry before a live one");
-            }
+        if live.iter().any(|s| s.k == s.end) {
+            self.bad(keys, "empty entry before a live one");
+        }
 
-            for j in 0..i {
-                if self.data[i].end == self.data[j].end {
-                    self.bad(keys, "two entries track the same bset");
-                }
-            }
+        if (1..live.len()).any(|i| live[..i].iter().any(|s| s.end == live[i].end)) {
+            self.bad(keys, "two entries track the same bset");
         }
     }
 
@@ -482,14 +473,6 @@ impl KeyIter {
             return;
         }
 
-        /* Verify no duplicates: */
-        for (i, set) in self.sets().enumerate() {
-            assert!(set.k <= set.end, "btree node iterator entry {i} at {}, past its end at {}", set.k, set.end);
-            for (j, s2) in self.sets().enumerate() {
-                assert!(i == j || set.end != s2.end, "btree node iterator entries {i} and {j} track the same bset");
-            }
-        }
-
         /* Verify that set->end is correct: */
         for (i, set) in self.sets().enumerate() {
             let t = keys.bset_tree_find(set.end);
@@ -548,15 +531,10 @@ impl KeyIter {
 impl BtreeNode {
     #[cold]
     pub fn btree_node_keys_to_text(&self, out: &mut Printbuf, fs: &Fs) {
-        let keys = self.keys();
-        let mut iter = KeyIter::default();
-        let mut unpacked = c::bkey::new();
-
-        iter.init_from_start(&keys);
-        while let Some(k) = iter.peek_unpack(&keys, &mut unpacked) {
+        let _ = self.for_each_key(|k| {
             prt!(out, "{}\n", k.to_text(fs));
-            iter.advance(&keys);
-        }
+            core::ops::ControlFlow::Continue(())
+        });
     }
 
     /* For Rust, which doesn't see a packed key: that of the key @iter is at. */

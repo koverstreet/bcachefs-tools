@@ -400,10 +400,7 @@ impl Keys<'_> {
 
             if let AuxTree::Ro(ro) = self.aux_tree(t) {
                 stats.floats += t.size as usize - 1;
-
-                for j in 1..t.size as usize {
-                    stats.failed += (ro.f[j].exponent == BFLOAT_FAILED) as usize;
-                }
+                stats.failed += ro.f[1..t.size as usize].iter().filter(|f| f.exponent == BFLOAT_FAILED).count();
             }
         }
     }
@@ -443,14 +440,11 @@ impl BtreeNode {
 
 impl Keys<'_> {
     pub fn bkey_to_bset(&self, k: u16) -> usize {
-        for (i, t) in self.sets.iter().enumerate() {
-            if k <= t.end_offset {
-                ebug_assert!(k >= t.first_offset());
-                return i;
-            }
-        }
+        let i = self.sets.iter().position(|t| k <= t.end_offset)
+            .unwrap_or_else(|| panic!("key at {k}, past the end of the node's last set"));
 
-        panic!("key at {k}, past the end of the node's last set");
+        ebug_assert!(k >= self.sets[i].first_offset());
+        i
     }
 
     /*
