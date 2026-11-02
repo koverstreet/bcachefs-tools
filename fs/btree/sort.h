@@ -40,11 +40,6 @@ bch2_sort_repack(struct bset *, struct btree *,
 unsigned bch2_sort_keys_keep_unwritten_whiteouts(struct bkey_packed *, struct sort_iter *);
 unsigned bch2_sort_keys(struct bkey_packed *, struct sort_iter *);
 
-void bch2_btree_bounce_free(struct bch_fs *, size_t, bool, void *);
-void *bch2_btree_bounce_alloc_noprof(struct bch_fs *, size_t, bool *);
-#define bch2_btree_bounce_alloc(...)						\
-	alloc_hooks(bch2_btree_bounce_alloc_noprof(__VA_ARGS__))
-
 void bch2_set_bset_needs_whiteout(struct bset *, int);
 void bch2_sort_whiteouts(struct bch_fs *, struct btree *);
 bool bch2_drop_whiteouts(struct btree *, enum compact_mode mode);

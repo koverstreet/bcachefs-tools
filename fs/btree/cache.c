@@ -266,6 +266,40 @@ static int __btree_node_data_alloc(struct bch_fs *c, struct btree_node_bufs *b,
 	return 0;
 }
 
+void bch2_btree_bounce_free(struct bch_fs *c, size_t size, bool used_mempool, void *p)
+{
+	if (used_mempool)
+		mempool_free(p, &c->btree.bounce_pool);
+	else
+		kvfree(p);
+}
+
+void *bch2_btree_bounce_alloc_noprof(struct bch_fs *c, size_t size, bool *used_mempool)
+{
+	BUG_ON(size > c->opts.btree_node_size);
+
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
+
+	*used_mempool = false;
+#if defined(__KERNEL__) && LINUX_VERSION_CODE < KERNEL_VERSION(6,18,0)
+	/*
+	 * kvmalloc_node_align() is 6.18+; we only need align == 1 here, and
+	 * with GFP_NOWAIT the vmalloc fallback doesn't happen either way -
+	 * failure falls through to the mempool below.
+	 */
+	void *p = kvmalloc_noprof(size, GFP_NOWAIT|__GFP_ACCOUNT|__GFP_RECLAIMABLE);
+#else
+	void *p = kvmalloc_node_align_noprof(size, 1,
+					     GFP_NOWAIT|__GFP_ACCOUNT|__GFP_RECLAIMABLE,
+					     NUMA_NO_NODE);
+#endif
+	if (!p) {
+		*used_mempool = true;
+		p = mempool_alloc_noprof(&c->btree.bounce_pool, GFP_NOIO|__GFP_ACCOUNT|__GFP_RECLAIMABLE);
+	}
+	return p;
+}
+
 static struct btree *__btree_node_mem_alloc(struct bch_fs *c, bool pcpu_read_locks, gfp_t gfp)
 {
 	struct btree *b = kzalloc(sizeof(struct btree), gfp);
