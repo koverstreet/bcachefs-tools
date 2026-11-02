@@ -141,6 +141,12 @@ impl Queue {
         unsafe { Self::from_raw(c::system_long_wq) }
     }
 
+    /// system_wq: per-cpu, what schedule_work_on() queues on.
+    pub fn system() -> &'static Queue {
+        // SAFETY: the system's
+        unsafe { Self::from_raw(c::system_wq) }
+    }
+
     /// system_dfl_wq: the default, unbound.
     pub fn system_dfl() -> &'static Queue {
         // SAFETY: the system's
@@ -162,6 +168,32 @@ impl Queue {
         // SAFETY: the caller's
         unsafe { c::bch2_queue_work(self.as_ptr(), work) }
     }
+
+    /// queue_work(), to run on @cpu: queue_work_on(). Userspace has no CPU
+    /// to choose.
+    ///
+    /// # Safety
+    /// As queue_work()'s.
+    pub unsafe fn queue_work_on(&self, cpu: u32, work: *mut c::work_struct) -> bool {
+        #[cfg(kernel)]
+        return unsafe { kernel::bindings::queue_work_on(cpu as core::ffi::c_int, self.as_ptr().cast(), work.cast()) };
+        #[cfg(not(kernel))]
+        {
+            let _ = cpu;
+            unsafe { self.queue_work(work) }
+        }
+    }
+}
+
+/// Wait for @work's last queueing to have run: flush_work().
+///
+/// # Safety
+/// @work is initialized.
+pub unsafe fn flush_work(work: *mut c::work_struct) {
+    #[cfg(kernel)]
+    unsafe { kernel::bindings::flush_work(work.cast()) };
+    #[cfg(not(kernel))]
+    unsafe { c::flush_work(work) };
 }
 
 pub type WorkFn = unsafe extern "C" fn(*mut c::work_struct);
