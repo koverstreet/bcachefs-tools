@@ -2663,7 +2663,7 @@ pub fn in_place_def<'a>(f: &CFieldDef, items: &'a [CItem]) -> Option<&'a CStruct
         return None;
     }
     items.iter().find_map(|i| match i {
-        CItem::Struct(d) if d.name == elem.trim() => Some(d),
+        CItem::Struct(d) if d.rust_ident() == elem.trim() => Some(d),
         _ => None,
     })
 }
