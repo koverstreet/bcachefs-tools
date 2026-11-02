@@ -516,7 +516,7 @@ fn validate_layout(layout: &c::bch_sb_layout, out: &mut Printbuf) -> Result<(), 
 
 /// Whether this version reads @version: its major, and no older than the
 /// oldest it knows - bch2_version_compatible().
-fn version_compatible(version: u16) -> bool {
+pub(crate) fn version_compatible(version: u16) -> bool {
     let current = c::bcachefs_metadata_version_current as u64;
     c::BCH_VERSION_MAJOR(version.into()) <= c::BCH_VERSION_MAJOR(current) &&
         u32::from(version) >= c::bcachefs_metadata_version_min as u32
@@ -1007,10 +1007,19 @@ impl c::bch_sb__head {
 }
 
 impl Fs {
-    /// The magic this filesystem's btree nodes carry, from c->sb's uuid:
-    /// bset_magic().
+    /// The first 8 bytes of c->sb's uuid, which each of its magics is made from.
+    fn sb_magic(&self) -> u64 {
+        u64::from_le_bytes(core::array::from_fn(|i| self.sb.uuid[i].get()))
+    }
+
+    /// The magic this filesystem's btree nodes carry.
     pub fn bset_magic(&self) -> u64 {
-        u64::from_le_bytes(core::array::from_fn(|i| self.sb.uuid[i].get())) ^ BSET_MAGIC
+        self.sb_magic() ^ BSET_MAGIC
+    }
+
+    /// The magic this filesystem's jsets carry.
+    pub fn jset_magic(&self) -> u64 {
+        self.sb_magic() ^ JSET_MAGIC
     }
 }
 

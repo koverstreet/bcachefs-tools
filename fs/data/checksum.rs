@@ -734,6 +734,12 @@ pub fn bch2_fs_has_encryption_key(c: &Opaque<Fs>) -> bool {
     Fs::from_c(c).encryption_key().is_some()
 }
 
+/// Whether checksum type @t is one this version has, and one @fs can use.
+pub(crate) fn checksum_type_valid(fs: &Fs, t: u64) -> bool {
+    t < c::bch_csum_type::BCH_CSUM_NR.0.into() &&
+        !(c::bch_csum_type(t as u32).is_encryption() && fs.encryption_key().is_none())
+}
+
 // ── Turning encryption on and off ────────────────────────────────────────
 //
 // Nothing calls these yet - C had them under #if 0, and neither had been

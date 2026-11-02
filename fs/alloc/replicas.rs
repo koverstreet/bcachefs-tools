@@ -125,16 +125,7 @@ impl SbEntry<'_> {
         prt_spaced(out, self.devs, |out, d| write!(out, "{d}"));
         write!(out, "]");
     }
-}
 
-impl ToText for Entry {
-    fn to_text(&self, out: &mut Printbuf) {
-        SbEntry::from(self).to_text(out)
-    }
-}
-crate::display_via_to_text!(Entry);
-
-impl Entry {
     /// Devices, nr_required fewer than them - or 1, a single device's - and
     /// none that @dev_ok says isn't one.
     pub(crate) fn validate(&self, dev_ok: impl Fn(u8) -> bool, err: &mut Printbuf) -> Result<(), BchError> {
@@ -147,15 +138,28 @@ impl Entry {
         if self.devs.is_empty() {
             return invalid(err, format_args!("no devices"));
         }
-        if self.nr_required > 1 && usize::from(self.nr_required) >= self.devs.len() {
+        if self.nr_required.is_some_and(|r| r > 1 && usize::from(r) >= self.devs.len()) {
             return invalid(err, format_args!("bad nr_required"));
         }
-        for &d in &self.devs {
+        for &d in self.devs {
             if u32::from(d) != c::BCH_SB_MEMBER_INVALID && !dev_ok(d) {
                 return invalid(err, format_args!("invalid device {d}"));
             }
         }
         Ok(())
+    }
+}
+
+impl ToText for Entry {
+    fn to_text(&self, out: &mut Printbuf) {
+        SbEntry::from(self).to_text(out)
+    }
+}
+crate::display_via_to_text!(Entry);
+
+impl Entry {
+    pub(crate) fn validate(&self, dev_ok: impl Fn(u8) -> bool, err: &mut Printbuf) -> Result<(), BchError> {
+        SbEntry::from(self).validate(dev_ok, err)
     }
 }
 

@@ -76,6 +76,9 @@ c_extern! {
     pub fn bch2_bpos_to_text(out: *mut Printbuf, pos: Bpos);
     pub fn bch2_bkey_to_text(out: *mut Printbuf, k: *const c::bkey);
     pub fn bch2_bkey_val_to_text(out: *mut Printbuf, c: *mut Fs, k: c::bkey_s_c);
+    pub fn bch2_bkey_validate(c: *mut Fs, k: c::bkey_s_c, from: *const c::bkey_validate_context) -> c_int;
+    pub fn __bch2_bkey_compat(c: *const Fs, level: c_uint, btree: Btree, version: c_uint, big_endian: c_uint,
+                              write: c_int, f: *mut c::bkey_format, k: *mut c::bkey_packed);
     pub fn bch2_set_bkey_error(c: *mut Fs, k: *mut c::bkey_i, err: c::bch_key_type_errors);
 }
 
