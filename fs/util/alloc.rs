@@ -112,6 +112,35 @@ pub fn kbox_into_inner<T>(b: KBox<T>) -> T {
     { *b }
 }
 
+/// A zeroed KBox that can't fail to allocate: __GFP_NOFAIL, which the
+/// kernel's Rust allocator API doesn't offer - so kzalloc()'d through C,
+/// kmalloc()'s memory, what a KBox frees. Userspace's allocator aborts rather
+/// than fail.
+pub fn kbox_zeroed_nofail<T: ::pin_init::Zeroable + FreeAnytime>() -> KBox<T> {
+    // kmalloc()'s alignment, at least
+    const { assert!(size_of::<T>() != 0 && align_of::<T>() <= 8) };
+
+    #[cfg(kernel)]
+    {
+        // SAFETY: a size; zeroed is a valid T
+        let p = unsafe { crate::c::rust_kzalloc_nofail(size_of::<T>()) }.cast::<T>();
+        assert!(!p.is_null(), "__GFP_NOFAIL allocation returned NULL");
+        // SAFETY: kmalloc()'d, a T's size and alignment
+        unsafe { KBox::from_raw(p) }
+    }
+    #[cfg(not(kernel))]
+    {
+        let layout = core::alloc::Layout::new::<T>();
+        // SAFETY: not zero sized
+        let p = unsafe { std::alloc::alloc_zeroed(layout) }.cast::<T>();
+        if p.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+        // SAFETY: the global allocator's, of a T's layout; zeroed is a valid T
+        unsafe { KBox::from_raw(p) }
+    }
+}
+
 /// A KBox frees when it drops, without waiting out RCU readers: what they may
 /// reach, which isn't FreeAnytime, can't be in one.
 pub fn kbox_pin_init<T: FreeAnytime, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>)

@@ -8,17 +8,17 @@
 //! use is decided on each access, and a BkeyBuf moves like any other value.
 //!
 //! As in C, copying a key in can't fail: the heap buffer is allocated
-//! __GFP_NOFAIL, through rust_kzalloc_nofail() - the kernel's Rust allocator
-//! API doesn't offer it. Zeroed, so the whole buffer is initialized memory.
+//! __GFP_NOFAIL - kbox_zeroed_nofail(), and C's bkey_buf's by
+//! rust_kzalloc_nofail(), which C's kfree() takes back. Zeroed, so the whole
+//! buffer is initialized memory.
 
 #![allow(non_camel_case_types)]
 
 use crate::btree::bkey::{BkeyI, BkeySC, BKEY_U64S};
 use crate::c;
 use core::mem::size_of;
-use core::ptr::NonNull;
-use core::slice;
 use crate::types::c_default;
+use crate::util::alloc::{kbox_zeroed_nofail, KBox};
 use cstruct_macros::CStruct;
 
 #[repr(C)]
@@ -37,11 +37,8 @@ const HEAP_U64S: usize = 256;
 
 pub struct BkeyBuf {
     onstack: [u64; ONSTACK_U64S],
-    heap:    Option<NonNull<u64>>,
+    heap:    Option<KBox<[u64; HEAP_U64S]>>,
 }
-
-// SAFETY: it owns its heap buffer
-unsafe impl Send for BkeyBuf {}
 
 impl BkeyBuf {
     /// Holding a deleted key, as bch2_bkey_buf_init() leaves it.
@@ -52,15 +49,15 @@ impl BkeyBuf {
     }
 
     fn buf(&self) -> &[u64] {
-        match self.heap {
-            Some(p) => unsafe { slice::from_raw_parts(p.as_ptr(), HEAP_U64S) },
+        match &self.heap {
+            Some(h) => &h[..],
             None    => &self.onstack,
         }
     }
 
     fn buf_mut(&mut self) -> &mut [u64] {
-        match self.heap {
-            Some(p) => unsafe { slice::from_raw_parts_mut(p.as_ptr(), HEAP_U64S) },
+        match &mut self.heap {
+            Some(h) => &mut h[..],
             None    => &mut self.onstack,
         }
     }
@@ -72,11 +69,9 @@ impl BkeyBuf {
             return;
         }
 
-        let p = unsafe { c::rust_kzalloc_nofail(HEAP_U64S * size_of::<u64>()) } as *mut u64;
-        let p = NonNull::new(p).expect("__GFP_NOFAIL allocation returned NULL");
-
-        unsafe { core::ptr::copy_nonoverlapping(self.onstack.as_ptr(), p.as_ptr(), ONSTACK_U64S) };
-        self.heap = Some(p);
+        let mut h = kbox_zeroed_nofail::<[u64; HEAP_U64S]>();
+        h[..ONSTACK_U64S].copy_from_slice(&self.onstack);
+        self.heap = Some(h);
     }
 
     /// A copy of @k.
@@ -190,13 +185,5 @@ impl c::bkey_buf {
 impl Default for BkeyBuf {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Drop for BkeyBuf {
-    fn drop(&mut self) {
-        if let Some(p) = self.heap {
-            unsafe { c::rust_kfree(p.as_ptr() as *const core::ffi::c_void) };
-        }
     }
 }
