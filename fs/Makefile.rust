@@ -164,6 +164,12 @@ bch-rust-gc-flags := -Zfunction-sections=y
 # crate (userspace has bcachefs-shim), and __KERNEL__, as C does.
 RUSTFLAGS_mod.o += --cfg kernel --cfg __KERNEL__ $(bch-rust-gc-flags)
 
+# memcpy() as an inline rep movsb: the kernel's is one, behind a call and a
+# return thunk.
+ifdef CONFIG_X86_64
+RUSTFLAGS_mod.o += -Ctarget-feature=+fsrm -Cllvm-args=-x86-use-fsrm-for-memcpy
+endif
+
 # Our crate is edition 2024; kbuild's flags have the kernel's, 2021, and rustc
 # takes one --edition.
 RUSTFLAGS_REMOVE_mod.o += --edition=2021
