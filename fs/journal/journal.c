@@ -970,15 +970,19 @@ int bch2_journal_res_get_slowpath(struct journal *j, struct journal_res *res,
 		   total_wait))
 		return ret;
 
-	CLASS(printbuf, buf)();
-	prt_printf(&buf, bch2_fmt(c, "Journal stuck? Waited for %lis, err %s"),
-		   total_wait / HZ, bch2_err_str(ret));
-	bch2_journal_debug_to_text(&buf, j);
-	bch2_print_str(c, KERN_ERR, buf.buf);
+	/* every waiter times out together: one report per time we're stuck */
+	if (!test_and_set_bit(JOURNAL_stuck_reported, &j->flags)) {
+		CLASS(printbuf, buf)();
+		prt_printf(&buf, bch2_fmt(c, "Journal stuck? Waited for %lis, err %s"),
+			   total_wait / HZ, bch2_err_str(ret));
+		bch2_journal_debug_to_text(&buf, j);
+		bch2_print_str(c, KERN_ERR, buf.buf);
+	}
 
 	trans_wait_event(trans, &j->async_wait,
 		   !bch2_err_matches(ret = __journal_res_get(j, res, flags), BCH_ERR_operation_blocked) ||
 		   (flags & JOURNAL_RES_GET_NONBLOCK));
+	clear_bit(JOURNAL_stuck_reported, &j->flags);
 	return ret;
 }
 

@@ -248,6 +248,7 @@ c_xmacro! {
         (low_on_space),
         (low_on_pin),
         (low_on_wb),
+        (stuck_reported),
     }
 }
 
