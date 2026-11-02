@@ -228,7 +228,7 @@ use crate::init::error::bch2_io_error_work;
 use crate::format::DataType;
 use crate::locking::MemallocFlags;
 use crate::opts::c_export::__bch2_data_types;
-use crate::sb::io::{bch2_free_super, read_super, SbReadScratch};
+use crate::sb::io::{read_super, SbReadScratch};
 use crate::sb::members::{bch2_mi_to_cpu, member_exists, member_state_str, mi_field_upgrades, sb_member,
                          sb_member_alloc, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
 use crate::types::CStatic;
@@ -427,6 +427,16 @@ fn may_add(fs: &Fs, sb: &c::bch_sb) -> Result<(), BchError> {
 /* Device startup/shutdown: */
 
 impl Dev {
+    /// disk_sb whole, as C's struct bch_sb_handle: to attach a superblock, or
+    /// close it.
+    ///
+    /// # Safety
+    /// Nothing else refers to it: state_lock is held for write, and the IO
+    /// refs are stopped.
+    unsafe fn sb_handle(&self) -> &mut c::bch_sb_handle {
+        unsafe { &mut *(&raw const self.disk_sb).cast::<c::bch_sb_handle>().cast_mut() }
+    }
+
     pub fn io_ref_stop(&self, rw: usize) {
         if rw == READ {
             self.fs().devs_online.clear(self.dev_idx.into());
@@ -505,7 +515,7 @@ impl PinnedDrop for Dev {
         ca.bucket_backpointer_empty.free();
 
         unsafe {
-            (*(&raw mut ca.disk_sb).cast::<c::bch_sb_handle>()).free();
+            ca.sb_handle().free();
             bch2_dev_journal_exit(ca);
         }
 
@@ -562,7 +572,7 @@ pub(crate) fn dev_exit(ca: ARef<Dev>) {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     assert_eq!(ca.ref_.load(Relaxed), 1);
     ca.io_ref_stop(READ);
-    unsafe { bch2_free_super(&mut *(&raw mut (*ca.as_ptr()).disk_sb).cast()) };
+    unsafe { ca.sb_handle().free() };
     dev_free(ca);
 }
 
@@ -595,13 +605,33 @@ impl StateLockWrite<'_> {
         ca.unlink();
 
         unsafe {
-            (*(&raw const ca.disk_sb).cast::<c::bch_sb_handle>().cast_mut()).free();
+            ca.sb_handle().free();
             bch2_dev_journal_exit(ca.as_ptr());
         }
     }
 }
 
-fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<ARef<Dev>> {
+/// A device not yet in c->devs[]: freed if it's dropped, until attach()
+/// publishes it.
+struct NewDev(Option<ARef<Dev>>);
+
+impl core::ops::Deref for NewDev {
+    type Target = Dev;
+
+    fn deref(&self) -> &Dev {
+        self.0.as_deref().expect("a NewDev not yet attached")
+    }
+}
+
+impl Drop for NewDev {
+    fn drop(&mut self) {
+        if let Some(ca) = self.0.take() {
+            dev_free(ca);
+        }
+    }
+}
+
+fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<NewDev> {
     let p = alloc_pinned(Dev::init(fs)).ok()?;
     let ca = unsafe { &mut *p };
 
@@ -637,33 +667,33 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<ARef<Dev>> {
         PerCpu::alloc().map(|io_done| ca.io_done = io_done).is_ok();
 
     // Kobject::new()'s ref
-    let ca = unsafe { ARef::from_raw(NonNull::new_unchecked(p)) };
-    if !ok {
-        dev_free(ca);
-        return None;
-    }
-
-    Some(ca)
+    let ca = NewDev(Some(unsafe { ARef::from_raw(NonNull::new_unchecked(p)) }));
+    ok.then_some(ca)
 }
 
-fn dev_attach(state: &StateLockWrite<'_>, ca: &ARef<Dev>, dev_idx: u32) {
-    {
-        let ca = unsafe { &mut *ca.as_ptr() };
+impl NewDev {
+    /// Into c->devs[@dev_idx], which owns it from here.
+    fn attach(mut self, state: &StateLockWrite<'_>, dev_idx: u32) -> ARef<Dev> {
+        let ca = self.0.take().expect("a NewDev attached twice");
+        {
+            let ca = unsafe { &mut *ca.as_ptr() };
 
-        ca.dev_idx = dev_idx as u8;
-        ca.self_mask.d.set(dev_idx as usize);
+            ca.dev_idx = dev_idx as u8;
+            ca.self_mask.d.set(dev_idx as usize);
 
-        if ca.name[0] == 0 {
-            let mut name = Printbuf::new();
-            prt!(&mut name, "dev-{dev_idx}");
-            strscpy(&mut ca.name, name.as_bytes());
+            if ca.name[0] == 0 {
+                let mut name = Printbuf::new();
+                prt!(&mut name, "dev-{dev_idx}");
+                strscpy(&mut ca.name, name.as_bytes());
+            }
         }
-    }
 
-    state.devs()[dev_idx as usize].publish(ca.clone());
+        state.devs()[dev_idx as usize].publish(ca.clone());
 
-    if ca.sysfs_online().is_err() {
-        log_no_fs(LogLevel::WARN, &Msg(|out: &mut Printbuf| prt!(out, "error creating sysfs objects")));
+        if ca.sysfs_online().is_err() {
+            log_no_fs(LogLevel::WARN, &Msg(|out: &mut Printbuf| prt!(out, "error creating sysfs objects")));
+        }
+        ca
     }
 }
 
@@ -673,30 +703,8 @@ impl Fs {
 
         let ca = dev_alloc(self, &member).ok_or_else(|| self.err(bch_errcode::BCH_ERR_ENOMEM_dev_alloc))?;
 
-        dev_attach(&self.state_lock_write(), &ca, dev_idx);
+        ca.attach(&self.state_lock_write(), dev_idx);
         Ok(())
-    }
-}
-
-struct SbHandleGuard(c::bch_sb_handle);
-
-impl core::ops::Deref for SbHandleGuard {
-    type Target = c::bch_sb_handle;
-
-    fn deref(&self) -> &c::bch_sb_handle {
-        &self.0
-    }
-}
-
-impl core::ops::DerefMut for SbHandleGuard {
-    fn deref_mut(&mut self) -> &mut c::bch_sb_handle {
-        &mut self.0
-    }
-}
-
-impl Drop for SbHandleGuard {
-    fn drop(&mut self) {
-        self.0.free();
     }
 }
 
@@ -904,9 +912,8 @@ fn attach_bdev(ca: &Dev, sb: &mut c::bch_sb_handle, err: &mut Printbuf) -> Resul
     unsafe {
         strscpy(&mut (*ca_p).name, name.as_bytes());
 
-        let layout = sb.sb().layout;
-        *(&raw mut (*ca_p).disk_sb).cast::<c::bch_sb_handle>() = core::mem::take(sb);
-        (*ca_p).sb_layout.set(layout);
+        ca.sb_layout.set(sb.sb().layout);
+        *ca.sb_handle() = core::mem::take(sb);
 
         (*ca_p).dev = (*ca.disk_sb.bdev).bd_dev;
     }
@@ -1374,8 +1381,8 @@ impl Fs {
     /* Add new device to running filesystem: */
     pub fn dev_add(&self, path: &CStr, err: &mut Printbuf) -> Result<(), BchError> {
         let mut opts = c::bch_opts::default();
-        let mut sb = SbHandleGuard(read_super(path, &mut opts, Some(self.holder()))
-            .inspect_err(|e| prt!(err, "error reading superblock: {}\n", e.msg()))?);
+        let mut sb = read_super(path, &mut opts, Some(self.holder()))
+            .inspect_err(|e| prt!(err, "error reading superblock: {}\n", e.msg()))?;
 
         let mut dev_mi = sb_member(sb.sb(), sb.sb().dev_idx.into()).unwrap_or_default();
 
@@ -1389,140 +1396,112 @@ impl Fs {
 
         may_add(self, sb.sb())?;
 
-        let Some(ca) = dev_alloc(self, &dev_mi) else { return Err(c::ENOMEM.into()) };
+        let ca = dev_alloc(self, &dev_mi).ok_or(BchError::from(c::ENOMEM))?;
+        let started = self.flags.get(c::bch_fs_flags::BCH_FS_started);
+        let s = c::reconcile_scan::from_arm(c::reconcile_scan_pending {});
 
-        let ret: Result<(), (BchError, bool)> = 'out: {
-            if let Err(e) = attach_bdev(&ca, &mut sb, err) {
-                break 'out Err((e, true));
-            }
+        bch_err_fn!(self, (|| -> Result<(), BchError> {
+            attach_bdev(&ca, &mut sb, err)?;
 
             let identity = ca.identity();
 
-            let s = c::reconcile_scan::from_arm(c::reconcile_scan_pending {});
-            if self.flags.get(c::bch_fs_flags::BCH_FS_started) {
+            if started {
                 /*
                  * Technically incorrect, but 'bcachefs image update' is the
                  * only thing that adds a device to a not-started filesystem:
                  */
-                if let Err(e) = self.request_scan(s, false) {
-                    break 'out Err((e, true));
-                }
+                self.request_scan(s, false)?;
             }
 
-            {
-                let state = self.state_lock_write();
-                {
-                    let _noio = MemallocFlags::noio();
-                    let mut w = self.sb_write();
-                    w.sb_mut().set_multi_device(true);
+            let state = self.state_lock_write();
+            let ca = {
+                let _noio = MemallocFlags::noio();
+                let mut w = self.sb_write();
+                w.sb_mut().set_multi_device(true);
 
-                    if let Err(e) = self.dev_sb_mut(&mut w, &ca)
-                        .expect("a device just attached has its superblock")
-                        .sync() {
-                        prt!(err, "error setting up new superblock: {}\n", e.msg());
-                        break 'out Err((e, true));
-                    }
+                self.dev_sb_mut(&mut w, &ca)
+                    .expect("a device just attached has its superblock")
+                    .sync()
+                    .inspect_err(|e| prt!(err, "error setting up new superblock: {}\n", e.msg()))?;
 
-                    let dev_idx = match sb_member_alloc(self, &mut w) {
-                        Ok(dev_idx) => dev_idx,
-                        Err(e) => {
-                            prt!(err, "error allocating superblock member slot: {}\n", e.msg());
-                            break 'out Err((e, true));
-                        }
-                    };
+                let dev_idx = sb_member_alloc(self, &mut w)
+                    .inspect_err(|e| prt!(err, "error allocating superblock member slot: {}\n", e.msg()))?;
 
-                    /* success: */
+                /* success: */
 
-                    dev_mi.last_mount = (ktime_get_real_seconds() as u64).into();
-                    dev_mi.set_initialized(c::bch_member_initialized::BCH_MEMBER_INITIALIZED_pre_dev_usage.0.into());
+                dev_mi.last_mount = (ktime_get_real_seconds() as u64).into();
+                dev_mi.set_initialized(c::bch_member_initialized::BCH_MEMBER_INITIALIZED_pre_dev_usage.0.into());
 
-                    *w.fs_member_mut(dev_idx) = dev_mi;
+                *w.fs_member_mut(dev_idx) = dev_mi;
 
-                    unsafe {
-                        (*(&raw mut (*ca.as_ptr()).disk_sb).cast::<c::bch_sb_handle>()).io.buf.sb_mut().dev_idx = dev_idx as u8;
-                    }
-                    dev_attach(&state, &ca, dev_idx);
-                    let ca: &Dev = &ca;
+                unsafe { ca.sb_handle() }.sb_mut().dev_idx = dev_idx as u8;
+                let ca = ca.attach(&state, dev_idx);
 
-                    self.devs_online.set(ca.dev_idx.into());
+                self.devs_online.set(dev_idx as usize);
 
-                    if dev_mi.group() != 0 &&
-                       let Err(e) = dev_group_set(self, &mut w, ca.dev_idx.into(), label.as_bytes()) {
-                        prt!(err, "error creating new label: {}\n", e.msg());
-                        break 'out Err((e, false));
-                    }
-
-                    /*
-                     * The failure domain string carried over with the
-                     * member copy above; re-intern so the new device gets
-                     * its failure_domain id.
-                     */
-                    let _ = c::bch_sb_field_members_v2::to_cpu(self, &mut w);
-
-                    if mi_field_upgrades(&mut w, ca.dev_idx.into(), &identity) {
-                        w.dirty();
-                    }
-
-                    /*
-                     * We don't call bch2_sb_update() until after the
-                     * superblock write finishes - but without sync
-                     * c->sb.nr_devices, write_super won't write to the new
-                     * device:
-                     */
-                    self.sb.nr_devices.set(w.sb().nr_devices);
-
-                    /* We just added a device: the write isn't optional, and
-                     * we need its error. On a filesystem not yet started
-                     * (bcachefs device add, offline) it's part of bringing
-                     * it up. */
-                    w.bringup();
-                    w.dirty();
-                    if let Err(e) = w.flush() {
-                        break 'out Err((e, false));
-                    }
-                }
-
-                let ca: &Dev = &ca;
-
-                if self.flags.get(c::bch_fs_flags::BCH_FS_started) {
-                    if let Err(e) = self.dev_add_initialize(ca) {
-                        prt!(err, "error marking new superblock: {}\n", e.msg());
-                        break 'out Err((e, false));
-                    }
-
-                    if c::bch_member_state(ca.mi.get().state.into()) == c::bch_member_state::BCH_MEMBER_STATE_rw {
-                        state.dev_read_write(ca);
-                    }
+                if dev_mi.group() != 0 {
+                    dev_group_set(self, &mut w, dev_idx, label.as_bytes())
+                        .inspect_err(|e| prt!(err, "error creating new label: {}\n", e.msg()))?;
                 }
 
                 /*
-                 * We just changed the superblock UUID, invalidate cache and send a
-                 * uevent to update /dev/disk/by-uuid
+                 * The failure domain string carried over with the
+                 * member copy above; re-intern so the new device gets
+                 * its failure_domain id.
                  */
-                #[cfg(kernel)]
-                {
-                    let bdev = ca.disk_sb.bdev;
-                    unsafe { c::invalidate_bdev(bdev) };
+                let _ = c::bch_sb_field_members_v2::to_cpu(self, &mut w);
 
-                    let mut uuid_str = Printbuf::new();
-                    prt!(&mut uuid_str, "UUID={}", uuid::Uuid::from_bytes(self.sb.uuid.each_ref().map(|b| b.get())));
+                if mi_field_upgrades(&mut w, dev_idx, &identity) {
+                    w.dirty();
+                }
 
-                    let _ = ca.disk_sb.kobj().uevent_change(&[c"CHANGE=uuid", uuid_str.as_c_str()]);
+                /*
+                 * We don't call bch2_sb_update() until after the
+                 * superblock write finishes - but without sync
+                 * c->sb.nr_devices, write_super won't write to the new
+                 * device:
+                 */
+                self.sb.nr_devices.set(w.sb().nr_devices);
+
+                /* We just added a device: the write isn't optional, and
+                 * we need its error. On a filesystem not yet started
+                 * (bcachefs device add, offline) it's part of bringing
+                 * it up. */
+                w.bringup();
+                w.dirty();
+                w.flush()?;
+                ca
+            };
+
+            if started {
+                self.dev_add_initialize(&ca)
+                    .inspect_err(|e| prt!(err, "error marking new superblock: {}\n", e.msg()))?;
+
+                if c::bch_member_state(ca.mi.get().state.into()) == c::bch_member_state::BCH_MEMBER_STATE_rw {
+                    state.dev_read_write(&ca);
                 }
             }
 
-            if self.flags.get(c::bch_fs_flags::BCH_FS_started) {
-                self.request_scan(s, true)?;
+            /*
+             * We just changed the superblock UUID, invalidate cache and send a
+             * uevent to update /dev/disk/by-uuid
+             */
+            #[cfg(kernel)]
+            {
+                unsafe { c::invalidate_bdev(ca.disk_sb.bdev) };
+
+                let mut uuid_str = Printbuf::new();
+                prt!(&mut uuid_str, "UUID={}", uuid::Uuid::from_bytes(self.sb.uuid.each_ref().map(|b| b.get())));
+
+                let _ = ca.disk_sb.kobj().uevent_change(&[c"CHANGE=uuid", uuid_str.as_c_str()]);
             }
             Ok(())
-        };
+        })())?;
 
-        bch_err_fn!(self, ret.map_err(|(e, free_ca)| {
-            if free_ca {
-                dev_free(ca);
-            }
-            e
-        }))
+        if started {
+            self.request_scan(s, true)?;
+        }
+        Ok(())
     }
 
     /* Hot add existing device to running filesystem: */
@@ -1531,8 +1510,8 @@ impl Fs {
 
         let state = self.state_lock_write();
 
-        let mut sb = SbHandleGuard(read_super(path, &mut opts, Some(self.holder()))
-            .inspect_err(|e| prt!(err, "error reading superblock: {}\n", e.msg()))?);
+        let mut sb = read_super(path, &mut opts, Some(self.holder()))
+            .inspect_err(|e| prt!(err, "error reading superblock: {}\n", e.msg()))?;
 
         let dev_idx = u32::from(sb.sb().dev_idx);
 
