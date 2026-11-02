@@ -27,6 +27,8 @@ pub mod hash;
 pub mod heap;
 pub mod inline_vec;
 pub mod ioctl;
+#[cfg(kernel)]
+pub mod iov_iter;
 pub mod jump_label;
 pub mod kernel;
 pub mod kobject;

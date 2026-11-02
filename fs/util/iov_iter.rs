@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: GPL-2.0
+
+//! The VFS's iov_iter: a read's or a write's buffer, walked as it's used.
+
+use crate::c;
+use core::ops::{Deref, DerefMut};
+
+/// An iov_iter, borrowed from the VFS for a call.
+pub struct IovIter<'a>(&'a mut c::iov_iter);
+
+impl<'a> IovIter<'a> {
+    /// # Safety
+    /// @i is valid, and used by nothing else, for 'a: the VFS's, for the call
+    /// it's passed to.
+    pub unsafe fn from_raw(i: *mut c::iov_iter) -> Self {
+        Self(unsafe { &mut *i })
+    }
+
+    pub fn as_ptr(&mut self) -> *mut c::iov_iter {
+        self.0
+    }
+
+    /// iov_iter_count()
+    pub fn count(&self) -> usize {
+        unsafe { self.0.__bindgen_anon_1.__bindgen_anon_1.as_ref().count }
+    }
+
+    fn set_count(&mut self, count: usize) {
+        unsafe { self.0.__bindgen_anon_1.__bindgen_anon_1.as_mut().count = count }
+    }
+
+    /// bio_iov_vecs_to_alloc(): the bvecs a bio of its next pages wants, up to
+    /// BIO_MAX_VECS.
+    pub fn bio_vecs(&mut self) -> u16 {
+        unsafe { c::bio_iov_vecs_to_alloc(self.0, c::BIO_MAX_VECS as core::ffi::c_int) as u16 }
+    }
+
+    /// user_backed_iter(): its pages are the user's.
+    pub fn user_backed(&self) -> bool {
+        let ty = self.0.iter_type;
+        ty == c::iter_type_ITER_UBUF as u8 || ty == c::iter_type_ITER_IOVEC as u8
+    }
+
+    /// Its last @n bytes held back till the guard's dropped: iov_iter_truncate(),
+    /// then iov_iter_reexpand() by what was taken.
+    pub fn hold_back(&mut self, n: usize) -> HeldBack<'_, 'a> {
+        let count = self.count();
+        assert!(n <= count, "holding back {n} bytes of an iov_iter of {count}");
+        self.set_count(count - n);
+        HeldBack { iter: self, n }
+    }
+}
+
+pub struct HeldBack<'b, 'a> {
+    iter: &'b mut IovIter<'a>,
+    n:    usize,
+}
+
+impl<'a> Deref for HeldBack<'_, 'a> {
+    type Target = IovIter<'a>;
+
+    fn deref(&self) -> &IovIter<'a> {
+        self.iter
+    }
+}
+
+impl<'a> DerefMut for HeldBack<'_, 'a> {
+    fn deref_mut(&mut self) -> &mut IovIter<'a> {
+        self.iter
+    }
+}
+
+impl Drop for HeldBack<'_, '_> {
+    fn drop(&mut self) {
+        let count = self.iter.count();
+        self.iter.set_count(count + self.n);
+    }
+}
