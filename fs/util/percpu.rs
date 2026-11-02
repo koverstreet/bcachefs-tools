@@ -522,6 +522,11 @@ impl<'a, T> PerCpuRef<'a, T> {
         possible_cpus().map(move |cpu| CpuCopy(unsafe { bch2_per_cpu_ptr(self.0.cast(), cpu) }.cast(), PhantomData))
     }
 
+    /// cpus(), with each copy's CPU.
+    pub fn cpus_numbered(self) -> impl Iterator<Item = (c_uint, CpuCopy<'a, T>)> {
+        possible_cpus().map(move |cpu| (cpu, CpuCopy(unsafe { bch2_per_cpu_ptr(self.0.cast(), cpu) }.cast(), PhantomData)))
+    }
+
     pub fn this_cpu<'g>(self, g: &'g impl Pinned) -> ThisCpu<'g, T>
         where 'a: 'g
     {
@@ -651,6 +656,14 @@ impl<'a, T: CpuShared> PerCpuRef<'a, T> {
         // reference races nothing
         possible_cpus().map(move |cpu| unsafe { &*bch2_per_cpu_ptr(self.0.cast(), cpu).cast::<T>() })
     }
+
+    /// This CPU's copy - or by the time it's used, the one this was on:
+    /// raw_cpu_ptr(), for a copy any CPU may use.
+    pub fn raw_this_cpu(self) -> &'a T {
+        let g = CpuGuard::new();
+        // SAFETY: as each_cpu()'s, of the CPU @g pinned us to
+        unsafe { &*this_cpu_ptr(self.0, &g) }
+    }
 }
 
 impl<'a> PerCpuRef<'a, Volatile<u64>> {
@@ -680,6 +693,12 @@ impl<'a, T> CpuCopy<'a, T> {
     #[inline]
     pub unsafe fn field<U>(self, f: impl FnOnce(*const T) -> *const U) -> CpuCopy<'a, U> {
         CpuCopy(self.0.wrapping_byte_add(field_offset(f)).cast(), PhantomData)
+    }
+
+    /// Its CPU's copy, as a pointer: for its owner to initialize, or tear
+    /// down.
+    pub fn as_ptr(self) -> *const T {
+        self.0
     }
 
     /// Its CPU's copy, by reference: for its owner while no CPU uses it - its
