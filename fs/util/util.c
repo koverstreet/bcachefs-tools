@@ -1126,13 +1126,18 @@ void rust_kvfree(void *p)
 	kvfree(p);
 }
 
-struct rust_rcu_head_first {
-	struct rcu_head		rcu;
-};
-
-void rust_kvfree_rcu(void *p)
+/*
+ * kvfree_rcu(p, field), for a head the macro can't name: anywhere in @p. As a
+ * void *, as the macro casts it: newer kernels take a struct kvfree_rcu_head,
+ * no bigger than an rcu_head.
+ */
+void rust_kvfree_rcu(void *p, struct rcu_head *head)
 {
-	kvfree_rcu((struct rust_rcu_head_first *) p, rcu);
+#ifdef __KERNEL__
+	kvfree_call_rcu((void *) head, p);
+#else
+	kvfree_rcu(p, head);
+#endif
 }
 
 /* For util/bio/pages.rs: __get_free_pages() is a macro */

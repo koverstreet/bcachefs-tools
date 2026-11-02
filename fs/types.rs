@@ -484,10 +484,11 @@ pub struct Dev {
     #[pin]
     #[init(RustOnly::new(core::sync::atomic::AtomicU8::new(0)))]
     pub(crate) discards_in_flight: rust_only!(core::sync::atomic::AtomicU8),
-    /// c->devs[]'s RCU readers may still have it.
+    /// c->devs[]'s RCU readers may still have it, and take its io refs, which
+    /// its drop exits: dropped a grace period on, in process context.
     #[pin]
-    #[init(RustOnly::new(crate::util::rcu::RcuMember))]
-    pub(crate) _rcu: rust_only!(crate::util::rcu::RcuMember),
+    #[init(RustOnly::new(crate::util::rcu::RcuDropWorkMember))]
+    pub(crate) _rcu: rust_only!(crate::util::rcu::RcuDropWorkMember),
 
     pub rebalance_work: AtomicI64,
 

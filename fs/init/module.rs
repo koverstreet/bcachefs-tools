@@ -95,8 +95,8 @@ fn bcachefs_exit() {
         Kobject::put(&BCACHEFS_KOBJ.0);
     }
     // what's freed a grace period on runs our code
-    crate::util::rcu::barrier();
-    crate::util::rcu::free_exit();
+    crate::util::maybe_rcu_alloc::barrier();
+    crate::util::maybe_rcu_alloc::free_exit();
 }
 
 #[cfg_attr(kernel, unsafe(link_section = ".init.text"))]
@@ -124,7 +124,7 @@ fn init_interfaces() -> Result<(), BchError> {
     #[cfg(not(kernel))]
     let parent = None;
 
-    crate::util::rcu::free_init()?;
+    crate::util::maybe_rcu_alloc::free_init()?;
     BCACHEFS_KOBJ.0.add(parent, c"bcachefs")?;
     ret_to_result_void(unsafe { bch2_lock_graph_init() })?;
     ret_to_result_void(unsafe { bch2_btree_key_cache_init() })?;

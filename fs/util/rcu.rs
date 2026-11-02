@@ -13,27 +13,10 @@
 //! # Freeing
 //!
 //! What a reader may still have is freed only a grace period after it's out
-//! of their reach - and before that, taken out of their reach. Two auto
-//! traits say which types need which, so that nothing has to say it by hand:
-//!
-//! - FreeAnytime: a type is, unless it has an RcuMember - a member, or
-//!   anything it owns has one. Borrows and pointers free nothing, so don't
-//!   count; an owner through a pointer says it owns - std's with a
-//!   PhantomData<T>, the kernel's Box and Vec with an impl here.
-//! - NothingToDetach: likewise, unless it has a DetachMember - something
-//!   readers find it by that has to be taken out of their way first, a
-//!   Registration's entry in a cuckoo table. Its Detach::detach() does that;
-//!   #[derive(Detach)] detaches every field.
-//!
-//! alloc_pinned() and free_pinned() (util/alloc.rs) decide by them, through
-//! RcuFreeing's specialization. free_pinned() detaches - a build error, for
-//! something with a DetachMember and no Detach - then frees at once what's
-//! FreeAnytime, and what isn't a grace period on: allocated as an RcuFreed,
-//! behind a header C doesn't see, it's call_rcu()'d, and the callback queues
-//! its drop and free on the free queue, as a drop may sleep. barrier() waits
-//! for all of those begun - before what their drops need goes, and at module
-//! exit, before their code does. A free that can't wait - a KBox's, from
-//! kbox_pin_init() - requires FreeAnytime.
+//! of their reach. Its members say how - RcuMember, RcuDropMember,
+//! RcuDropWorkMember - and auto traits carry that to what owns them; a
+//! MaybeRcuAlloc (util/maybe_rcu_alloc.rs) frees by them. What's dropped after
+//! the grace period is detached first, out of readers' way: Detach.
 //!
 //! synchronize() is synchronize_rcu(), for what has to wait out readers
 //! before it goes on.
@@ -45,11 +28,12 @@
 //! publishes it - a Locked's or LockedBy's published writer (Publish).
 //!
 //! - RcuPtr<P> publishes a P, an RcuPointer, and owns what P owns. An
-//!   RcuOwner - ARef - owns its target, which mustn't be FreeAnytime, a build
-//!   error if it is, so what's taken out may be dropped at once. A NonNull
-//!   owns nothing, and publishing one is unsafe: a promise that it stays
-//!   valid until a grace period after it's taken out. Its writer, an
-//!   RcuPtrWriter, publishes, takes and get()s.
+//!   RcuOwner - ARef - owns its target, which readers read whole: so it must
+//!   be dropped a grace period on - an RcuDropMember's or an
+//!   RcuDropWorkMember's, a build error if not - and what's taken out may be
+//!   dropped at once. A NonNull owns nothing, and publishing one is unsafe: a
+//!   promise that it stays valid until a grace period after it's taken out.
+//!   Its writer, an RcuPtrWriter, publishes, takes and get()s.
 //! - RcuBuf<T> is a buffer its writer replaces whole, kvfree_rcu()ing the
 //!   old; RcuArray<T, H> is one of C's `{ rcu_head; nr; H; T s[] }`, read as
 //!   a &[T] and grown by copy and replace - its elements RcuElements, plain
@@ -58,19 +42,16 @@
 
 use core::ffi::c_int;
 use core::marker::PhantomData;
-use core::mem::{align_of, offset_of, size_of};
+use core::mem::{align_of, size_of};
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering::{self, Acquire, Relaxed, Release}};
+use core::sync::atomic::{AtomicPtr, Ordering};
 use cstruct_macros::c_extern;
-use pin_init::{pin_init_from_closure, PinInit};
 
 use crate::c;
-use crate::util::alloc::{alloc_in, flags::GFP_KERNEL, free_pinned_now, init_at, AllocError};
-use crate::util::futex::{futex_wait, futex_wake};
+use crate::util::alloc::AllocError;
+use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::projections::Publish;
 use crate::util::refcount::{ARef, AlwaysRefCounted};
-use crate::util::sleep::Sleep;
-use crate::util::workqueue::{Queue, Workqueue, WqFlags};
 
 #[cfg(not(kernel))]
 unsafe extern "C" {
@@ -237,10 +218,10 @@ impl Flavor {
         #[cfg(kernel)]
         match self.ssp() {
             Some(ssp) => unsafe { kernel::bindings::call_srcu(ssp, head, Some(func)) },
-            None      => unsafe { call_rcu(head, func) },
+            None      => unsafe { kernel::bindings::call_rcu(head, Some(func)) },
         }
         #[cfg(not(kernel))]
-        unsafe { call_rcu(head, func) };
+        unsafe { urcu_memb_call_rcu(head, func) };
     }
 }
 
@@ -252,22 +233,102 @@ impl Flavor {
 #[rustc_specialization_trait]
 pub unsafe auto trait FreeAnytime {}
 
+/// # Safety
+/// As FreeAnytime's: an impl says that nothing an RCU reader may hold is
+/// dropped with Self - its memory may still have to wait for them.
+#[rustc_specialization_trait]
+pub unsafe auto trait DropAnytime {}
+
+/// What hasn't an RcuDropWorkMember: what's dropped after a grace period, by
+/// an RcuDropMember's promise, drops without sleeping - in an RCU callback.
+///
+/// # Safety
+/// As FreeAnytime's.
+#[rustc_specialization_trait]
+pub unsafe auto trait DropAtomic {}
+
+/// What it's in is freed a grace period on: dropped at once, its memory once
+/// RCU readers are done with it - they reach nothing its drop frees.
 #[derive(Default)]
 pub struct RcuMember;
 
 impl !FreeAnytime for RcuMember {}
 
-unsafe impl<T: ?Sized> FreeAnytime for &T {}
-unsafe impl<T: ?Sized> FreeAnytime for &mut T {}
-unsafe impl<T: ?Sized> FreeAnytime for *const T {}
-unsafe impl<T: ?Sized> FreeAnytime for *mut T {}
-unsafe impl<T: ?Sized> FreeAnytime for NonNull<T> {}
-#[cfg(kernel)]
-unsafe impl<T: ?Sized + FreeAnytime, A: kernel::alloc::Allocator> FreeAnytime for kernel::alloc::Box<T, A> {}
-#[cfg(kernel)]
-unsafe impl<T: FreeAnytime, A: kernel::alloc::Allocator> FreeAnytime for kernel::alloc::kvec::Vec<T, A> {}
-// its last put frees T as T says
-unsafe impl<T: AlwaysRefCounted> FreeAnytime for ARef<T> {}
+/// What it's in is dropped and freed a grace period on, in the RCU callback:
+/// its readers reach what its drop frees.
+pub struct RcuDropMember(());
+
+impl !FreeAnytime for RcuDropMember {}
+impl !DropAnytime for RcuDropMember {}
+
+impl RcuDropMember {
+    /// # Safety
+    /// What it's in drops without sleeping: in softirq context, an RCU
+    /// callback's.
+    pub const unsafe fn new() -> Self {
+        Self(())
+    }
+}
+
+/// As RcuDropMember, for a drop that needs process context: it runs on the
+/// free queue.
+#[derive(Default)]
+pub struct RcuDropWorkMember;
+
+impl !FreeAnytime for RcuDropWorkMember {}
+impl !DropAnytime for RcuDropWorkMember {}
+impl !DropAtomic for RcuDropWorkMember {}
+
+#[repr(transparent)]
+pub struct RcuHead(c::rcu_head);
+
+/// The rcu_head, then the work queued in its place.
+#[repr(C)]
+pub union RcuWorkHead {
+    rcu:  core::mem::ManuallyDrop<c::rcu_head>,
+    work: core::mem::ManuallyDrop<c::work_struct>,
+}
+
+pub(crate) trait HeadKind {}
+
+impl HeadKind for RcuHead {}
+
+impl HeadKind for RcuWorkHead {}
+
+macro_rules! heads {
+    ($($h:ident),*) => {$(
+        unsafe impl Send for $h {}
+        unsafe impl Sync for $h {}
+
+        impl Default for $h {
+            fn default() -> Self {
+                unsafe { core::mem::zeroed() }
+            }
+        }
+
+        unsafe impl ::pin_init::Zeroable for $h {}
+    )*};
+}
+
+heads!(RcuHead, RcuWorkHead);
+
+/// What holds without owning, or owns as its T says: borrows and pointers,
+/// which free nothing; the kernel's Box and Vec, as their T would; an ARef,
+/// whose last put frees T as T says.
+macro_rules! held_pointers {
+    ($($trait:ident),*) => {$(
+        unsafe impl<T: ?Sized> $trait for &T {}
+        unsafe impl<T: ?Sized> $trait for &mut T {}
+        unsafe impl<T: ?Sized> $trait for *const T {}
+        unsafe impl<T: ?Sized> $trait for *mut T {}
+        unsafe impl<T: ?Sized> $trait for NonNull<T> {}
+        #[cfg(kernel)]
+        unsafe impl<T: ?Sized + $trait, A: kernel::alloc::Allocator> $trait for kernel::alloc::Box<T, A> {}
+        #[cfg(kernel)]
+        unsafe impl<T: $trait, A: kernel::alloc::Allocator> $trait for kernel::alloc::kvec::Vec<T, A> {}
+        unsafe impl<T: AlwaysRefCounted> $trait for ARef<T> {}
+    )*};
+}
 
 /// # Safety
 /// As FreeAnytime's: no impl may depend on a lifetime.
@@ -278,16 +339,7 @@ pub struct DetachMember;
 
 impl !NothingToDetach for DetachMember {}
 
-unsafe impl<T: ?Sized> NothingToDetach for &T {}
-unsafe impl<T: ?Sized> NothingToDetach for &mut T {}
-unsafe impl<T: ?Sized> NothingToDetach for *const T {}
-unsafe impl<T: ?Sized> NothingToDetach for *mut T {}
-unsafe impl<T: ?Sized> NothingToDetach for NonNull<T> {}
-#[cfg(kernel)]
-unsafe impl<T: ?Sized + NothingToDetach, A: kernel::alloc::Allocator> NothingToDetach for kernel::alloc::Box<T, A> {}
-#[cfg(kernel)]
-unsafe impl<T: NothingToDetach, A: kernel::alloc::Allocator> NothingToDetach for kernel::alloc::kvec::Vec<T, A> {}
-unsafe impl<T: AlwaysRefCounted> NothingToDetach for ARef<T> {}
+held_pointers!(FreeAnytime, DropAnytime, DropAtomic, NothingToDetach);
 
 pub trait Detach {
     fn detach(&self);
@@ -313,139 +365,6 @@ impl<T> NoDetach<T> {
     const ERR: () = panic!("has something to detach before it's freed - a DetachMember - and no Detach impl");
 }
 
-pub(crate) trait RcuFreeing: Sized {
-    /// A build error for a T that's FreeAnytime.
-    fn assert_rcu_freed();
-
-    fn alloc_pinned<E: From<AllocError>>(init: impl PinInit<Self, E>) -> Result<*mut Self, E>;
-
-    /// # Safety
-    /// @p is from alloc_pinned(), and nothing but RCU readers uses it after.
-    unsafe fn free_pinned(p: *mut Self);
-}
-
-impl<T> RcuFreeing for T {
-    default fn assert_rcu_freed() {}
-
-    default fn alloc_pinned<E: From<AllocError>>(init: impl PinInit<T, E>) -> Result<*mut T, E> {
-        let p = alloc_in::<false, RcuFreed<T>, E>(RcuFreed::init(init), GFP_KERNEL)?;
-        Ok(unsafe { &raw mut (*p).value })
-    }
-
-    default unsafe fn free_pinned(p: *mut T) {
-        <T as Detach>::detach(unsafe { &*p });
-        unsafe { RcuFreed::free(p) }
-    }
-}
-
-impl<T: FreeAnytime> RcuFreeing for T {
-    fn assert_rcu_freed() {
-        let () = NotRcuFreed::<T>::ERR;
-    }
-
-    fn alloc_pinned<E: From<AllocError>>(init: impl PinInit<T, E>) -> Result<*mut T, E> {
-        alloc_in::<false, T, E>(init, GFP_KERNEL)
-    }
-
-    unsafe fn free_pinned(p: *mut T) {
-        <T as Detach>::detach(unsafe { &*p });
-        unsafe { free_pinned_now(p) }
-    }
-}
-
-struct NotRcuFreed<T>(PhantomData<T>);
-
-impl<T> NotRcuFreed<T> {
-    const ERR: () = panic!("what RCU readers reach must be freed a grace period on: it needs an RcuMember");
-}
-
-#[repr(C)]
-pub(crate) struct RcuFreed<T> {
-    rcu:   c::rcu_head,
-    work:  c::work_struct,
-    value: T,
-}
-
-/// RcuFreeds whose drop is still to come - the word their last write goes
-/// to, so barrier() waits on it.
-static PENDING: AtomicU32 = AtomicU32::new(0);
-
-/// From module init to exit.
-static FREE_WQ: AtomicPtr<c::workqueue_struct> = AtomicPtr::new(core::ptr::null_mut());
-
-pub fn free_init() -> Result<(), AllocError> {
-    let wq = Workqueue::new(c"bcachefs_rcu_free", WqFlags::UNBOUND, 0)?;
-    FREE_WQ.store(core::mem::ManuallyDrop::new(wq).as_ptr(), Release);
-    Ok(())
-}
-
-/// After barrier(), so nothing's on it.
-pub fn free_exit() {
-    let wq = FREE_WQ.swap(core::ptr::null_mut(), Acquire);
-    if !wq.is_null() {
-        unsafe { c::destroy_workqueue(wq) };
-    }
-}
-
-impl<T> RcuFreed<T> {
-    fn init<E>(value: impl PinInit<T, E>) -> impl PinInit<Self, E> {
-        let work = crate::new_work!(Self::work_fn, "rcu_freed");
-        unsafe {
-            pin_init_from_closure(move |slot: *mut Self| {
-                (&raw mut (*slot).rcu).write(core::mem::zeroed());
-                let Ok(()) = init_at(work, &raw mut (*slot).work);
-                init_at(value, &raw mut (*slot).value)
-            })
-        }
-    }
-
-    /// # Safety
-    /// @p is an RcuFreed's value, and nothing but RCU readers uses it after.
-    unsafe fn free(p: *mut T) {
-        let this = unsafe { p.byte_sub(offset_of!(Self, value)).cast::<Self>() };
-        PENDING.fetch_add(1, Relaxed);
-        unsafe { call_rcu(&raw mut (*this).rcu, Self::rcu_fn) };
-    }
-
-    unsafe extern "C" fn rcu_fn(rcu: *mut c::rcu_head) {
-        let this = unsafe { rcu.byte_sub(offset_of!(Self, rcu)).cast::<Self>() };
-        let wq = FREE_WQ.load(Acquire);
-        assert!(!wq.is_null(), "an RcuFreed freed outside module init and exit");
-        unsafe { Queue::from_raw(wq).queue_work(&raw mut (*this).work) };
-    }
-
-    unsafe extern "C" fn work_fn(work: *mut c::work_struct) {
-        let this = unsafe { work.byte_sub(offset_of!(Self, work)).cast::<Self>() };
-        unsafe { free_pinned_now(this) };
-
-        if PENDING.fetch_sub(1, Release) == 1 {
-            futex_wake(core::ptr::from_ref(&PENDING).cast(), usize::MAX);
-        }
-    }
-}
-
-unsafe fn call_rcu(rcu: *mut c::rcu_head, func: unsafe extern "C" fn(*mut c::rcu_head)) {
-    #[cfg(kernel)]
-    unsafe { kernel::bindings::call_rcu(rcu, Some(func)) };
-    #[cfg(not(kernel))]
-    unsafe { urcu_memb_call_rcu(rcu, func) };
-}
-
-pub fn barrier() {
-    #[cfg(kernel)]
-    unsafe { kernel::bindings::rcu_barrier() };
-    #[cfg(not(kernel))]
-    unsafe { urcu_memb_barrier() };
-
-    loop {
-        let n = PENDING.load(Acquire);
-        if n == 0 {
-            return;
-        }
-        let Ok(()) = futex_wait(&PENDING, n, Sleep::UNINTERRUPTIBLE);
-    }
-}
-
 // ── RcuPtr ───────────────────────────────────────────────────────────────
 
 /// # Safety
@@ -462,8 +381,8 @@ pub unsafe trait RcuPointer: Sized {
 }
 
 /// # Safety
-/// The target lives as long as Self does, and is freed only as its type
-/// frees it: a grace period on, if it isn't FreeAnytime.
+/// The target lives as long as Self does, and is dropped and freed only as
+/// its type says: a grace period on, if its members say so.
 pub unsafe trait RcuOwner: RcuPointer {}
 
 unsafe impl<T> RcuPointer for NonNull<T> {
@@ -587,7 +506,7 @@ impl<P: RcuPointer> RcuPtrWriter<P> {
 /// only by readers under the RCU read lock - none of them reading its first
 /// bytes.
 pub unsafe fn kvfree_rcu<T>(p: *mut T) {
-    unsafe { c::rust_kvfree_rcu(p.cast()) };
+    unsafe { c::rust_kvfree_rcu(p.cast(), p.cast()) };
 }
 
 /// A buffer starting with an rcu_head, which a thin pointer - C's - reaches

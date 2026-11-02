@@ -33,6 +33,7 @@ pub mod kthread;
 pub mod late;
 pub mod list;
 pub mod log;
+pub mod maybe_rcu_alloc;
 pub mod mean_and_variance;
 pub mod mempool;
 pub mod module_param;

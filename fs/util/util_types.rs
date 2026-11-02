@@ -94,7 +94,7 @@ c_extern! {
     pub fn rust_kfree(p: *const c_void);
     pub fn rust_kvzalloc(size: usize) -> *mut c_void;
     pub fn rust_kvfree(p: *mut c_void);
-    pub fn rust_kvfree_rcu(p: *mut c_void);
+    pub fn rust_kvfree_rcu(p: *mut c_void, head: *mut c::rcu_head);
     pub fn mempool_kvmalloc(gfp_mask: c::gfp_t, pool_data: *mut c_void) -> *mut c_void;
     pub fn mempool_kvfree(element: *mut c_void, pool_data: *mut c_void);
     pub fn rust_bio_pages_alloc(size: usize, gfp: c::gfp_t) -> *mut c_void;

@@ -424,6 +424,8 @@ pub trait Mode {
     type Member: Default;
     /// What the table does: whether it's Sync
     type Marker;
+    /// Read by other threads, under RCU
+    const SHARED: bool;
 }
 
 pub struct Shared;
@@ -432,11 +434,13 @@ pub struct Private;
 impl Mode for Shared {
     type Member = RcuMember;
     type Marker = ();
+    const SHARED: bool = true;
 }
 
 impl Mode for Private {
     type Member = ();
     type Marker = core::cell::Cell<()>;
+    const SHARED: bool = false;
 }
 
 /// See the top of the file: of @I - u64s, or Entry<E> - hashed by @S, in @W
@@ -745,6 +749,11 @@ impl From<AllocError> for RegisterError {
 impl<K, E, S, const W: usize, M: Mode> Registration<K, E, S, W, M>
 where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
 {
+    /// A Shared table's readers may hold an &E past its drop: only its memory
+    /// waits for them.
+    const NOTHING_TO_DROP: () = assert!(!M::SHARED || !core::mem::needs_drop::<E>(),
+        "a Shared cuckoo table's entries are read after they're dropped: E must have nothing to drop");
+
     /// Registers @e in @table under @key until this is dropped. It's made in
     /// place as a field of @e, so the insert hashes @e through it. Fails,
     /// leaving the table unchanged, if @key is in it already or it can't grow.
@@ -757,6 +766,7 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
     pub unsafe fn new<'w>(table: &'w Cuckoo<Entry<E>, S, W, M>, key: K, e: NonNull<E>)
         -> impl ::pin_init::PinInit<Self, RegisterError> + use<'w, K, E, S, W, M>
     {
+        let () = Self::NOTHING_TO_DROP;
         let init = move |slot: *mut Self| {
             // SAFETY: @slot is ours to write, pin-init's; @table outlives
             // this, the caller's
@@ -785,6 +795,7 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
     /// Entry::new()'s, for @e, whose key is @key while it's in; and @table
     /// outlives this.
     pub unsafe fn register(table: &Cuckoo<Entry<E>, S, W, M>, key: K, e: NonNull<E>) -> Result<Self, RegisterError> {
+        let () = Self::NOTHING_TO_DROP;
         // SAFETY: the caller's
         match table.insert_new(unsafe { Entry::new(e) }) {
             // SAFETY: the caller's

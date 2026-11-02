@@ -976,7 +976,7 @@ unsafe fn exit(p: NonNull<Fs>) -> Result<(), BchError> {
         }
     }
     // their drops are a grace period on, and need what the filesystem frees
-    crate::util::rcu::barrier();
+    crate::util::maybe_rcu_alloc::barrier();
 
     bch_verbose!(fs, "shutdown complete");
 

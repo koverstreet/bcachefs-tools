@@ -21,6 +21,7 @@ pub use kernel::sync::Arc;
 #[cfg(not(kernel))]
 pub use std::sync::Arc;
 
+use crate::util::maybe_rcu_alloc::{KVmalloc, MaybeRcuAlloc};
 use crate::util::rcu::FreeAnytime;
 
 pub fn arc_new<T: Send + Sync>(v: T) -> Result<Arc<T>, AllocError> {
@@ -30,13 +31,10 @@ pub fn arc_new<T: Send + Sync>(v: T) -> Result<Arc<T>, AllocError> {
     { Ok(Arc::new(v)) }
 }
 
-/// A @T for C to hold, built in place by @init in memory that starts zeroed -
-/// padding too, as kvzalloc()'s did - and pinned there: a KVBox in-kernel,
-/// given up to a raw pointer, and behind an RcuFreed's header if it isn't
-/// FreeAnytime - not then the allocation's start, so only free_pinned() takes
-/// it back, never C's kvfree(). Fails with @init's error, or the allocation's.
+/// A @T for C to hold: a MaybeRcuAlloc's, kvmalloc()'d, given up to a raw
+/// pointer, which free_pinned() takes back.
 pub fn alloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>) -> Result<*mut T, E> {
-    <T as crate::util::rcu::RcuFreeing>::alloc_pinned(init)
+    MaybeRcuAlloc::<T, KVmalloc>::new(init, flags::GFP_KERNEL).map(|b| b.into_raw().as_ptr())
 }
 
 /// alloc_pinned(), the allocation failing with @err - @init with its own.
@@ -60,24 +58,12 @@ pub fn alloc_pinned_or<T>(init: impl ::pin_init::PinInit<T, crate::errcode::BchE
     })
 }
 
-/// Drop and free @p - if RCU readers may reach it, once they're done with it:
-/// util/rcu.rs's FreeAnytime.
+/// Drop and free @p, as its MaybeRcuAlloc's drop does.
 ///
 /// # Safety
 /// @p is from alloc_pinned(), and nothing but RCU readers uses it after.
 pub unsafe fn free_pinned<T>(p: *mut T) {
-    unsafe { <T as crate::util::rcu::RcuFreeing>::free_pinned(p) }
-}
-
-/// free_pinned(), now: RcuFreeing's, which knows when.
-///
-/// # Safety
-/// free_pinned()'s, and no RCU reader can still reach @p.
-pub(crate) unsafe fn free_pinned_now<T>(p: *mut T) {
-    #[cfg(kernel)]
-    drop(unsafe { kernel::alloc::KVBox::from_raw(p) });
-    #[cfg(not(kernel))]
-    drop(unsafe { std::boxed::Box::from_raw(p) });
+    drop(unsafe { MaybeRcuAlloc::<T, KVmalloc>::from_raw(core::ptr::NonNull::new_unchecked(p)) })
 }
 
 /// alloc_pinned(), kmalloc()'d - a KBox in-kernel - for what's freed from
