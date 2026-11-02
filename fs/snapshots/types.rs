@@ -138,3 +138,8 @@ pub struct subvol_inum {
     pub subvol: u64,
     pub inum: u64,
 }
+
+impl subvol_inum {
+    /// The root directory, in the root subvolume.
+    pub const ROOT: Self = Self { subvol: c::BCACHEFS_ROOT_SUBVOL as u64, inum: c::BCACHEFS_ROOT_INO as u64 };
+}

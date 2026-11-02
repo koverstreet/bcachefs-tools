@@ -58,11 +58,6 @@ c_const! { pub const BCH_CREATE_SUBVOL: u32 = 1 << 1; }
 c_const! { pub const BCH_CREATE_SNAPSHOT: u32 = 1 << 2; }
 c_const! { pub const BCH_CREATE_SNAPSHOT_RO: u32 = 1 << 3; }
 
-const ROOT_SUBVOL_INUM: c::subvol_inum = c::subvol_inum {
-    subvol: c::BCACHEFS_ROOT_SUBVOL as u64,
-    inum:   c::BCACHEFS_ROOT_INO as u64,
-};
-
 pub(crate) fn subvol_inum_eq(l: c::subvol_inum, r: c::subvol_inum) -> bool {
     l.subvol == r.subvol && l.inum == r.inum
 }
@@ -1199,7 +1194,7 @@ fn propagate_has_case_insensitive(t: &TransAttempt<'_, '_>, mut inum: c::subvol_
         inode.set_flag(c::bch_inode_flags::BCH_INODE_has_case_insensitive, true);
         inode::write(t, &mut iter, &mut inode)?;
 
-        if subvol_inum_eq(inum, ROOT_SUBVOL_INUM) {
+        if subvol_inum_eq(inum, c::subvol_inum::ROOT) {
             break;
         }
 

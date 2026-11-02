@@ -119,11 +119,6 @@ fn set_mount_opts(fs: &Fs, opts: &c::bch_opts) {
     }
 }
 
-const ROOT_SUBVOL_INUM: c::subvol_inum = c::subvol_inum {
-    subvol: c::BCACHEFS_ROOT_SUBVOL as u64,
-    inum:   c::BCACHEFS_ROOT_INO as u64,
-};
-
 impl Bcachefs {
     /// Mount @fs, already open, through its superblock; None if @fs has gone
     /// away and @key should be looked up again.
@@ -255,7 +250,7 @@ impl Bcachefs {
                 unsafe { sb.set_encoding(fs.cf_encoding) };
             }
 
-            let root = InodeInfo::get_warn(fs, ROOT_SUBVOL_INUM, c"bch2_fs_get_tree")
+            let root = InodeInfo::get_warn(fs, c::subvol_inum::ROOT, c"bch2_fs_get_tree")
                 .inspect_err(|e| crate::bch_err!(fs, "mounting: error getting root inode: {}", e.msg()))?;
 
             Ok(sb.fill(ARef::<VfsInode>::from(root.vfs()))
