@@ -44,6 +44,30 @@ use zerocopy::IntoBytes;
 
 type Pass = c::bch_recovery_pass;
 
+/// The filesystem before it can go rw: the recovery task alone runs, so what
+/// this hands out is had exclusively. Not Send: the recovery task's.
+pub struct NotRw<'a> {
+    pub(crate) fs: &'a Fs,
+    _task:         core::marker::PhantomData<*mut ()>,
+}
+
+impl Fs {
+    /// # Safety
+    /// No other NotRw lives meanwhile. The asserts are that nothing else runs:
+    /// called before the filesystem can go rw, on the recovery task.
+    pub(crate) unsafe fn not_rw(&self) -> NotRw<'_> {
+        assert!(!self.flags.get(Flag::BCH_FS_may_go_rw));
+        assert!(!self.flags.get(Flag::BCH_FS_rw));
+        /* the journal keys are frozen for the scrub, whose reads run on workqueues */
+        assert!(!self.flags.get(Flag::BCH_FS_scrub_journal));
+        /* userspace's current is C's __thread variable, which Rust can't name */
+        #[cfg(kernel)]
+        assert!(self.recovery_task.load(Relaxed) == unsafe { c::get_current() });
+
+        NotRw { fs: self, _task: core::marker::PhantomData }
+    }
+}
+
 macro_rules! passes {
     ($($p:ident),* $(,)?) => { ::paste::paste! { &[$(Pass::[<BCH_RECOVERY_PASS_ $p>]),*] } };
 }
@@ -675,7 +699,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
                          "no journal entries found")?;
             if clean.is_some() {
                 use_clean = true;
-            } else if let Some((_, &i)) = jk.entries.iter_rev().find(|(_, i)| !i.is_null()) {
+            } else if let Some((_, &i)) = jk.entries().iter_rev().find(|(_, i)| !i.is_null()) {
                 let i = unsafe { &mut *i };
                 i.ignore_blacklisted = false;
                 i.ignore_not_dirty = false;

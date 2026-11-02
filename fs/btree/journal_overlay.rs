@@ -43,6 +43,7 @@ use crate::btree::node::{iter::KeyIter, BtreeNode};
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{btree_id_is_alloc, Fs};
+use crate::init::recovery::NotRw;
 use crate::locking::{Guard, Locked};
 use crate::util::projections::VolatilePublish;
 use crate::util::alloc::{darray_exit, flags::GFP_KERNEL, DArrayLoan};
@@ -198,8 +199,12 @@ pub struct journal_keys {
     #[c_anon("DARRAY(struct journal_key) pre_sort")]
     pub pre_sort: UnsafeCell<DArray<c::journal_key>>,
 
-    /* What the journal read kept, by seq from journal_entries_base_seq: the keys' */
-    pub entries: GenRadix<*mut c::journal_replay>,
+    /*
+     * What the journal read kept, by seq from journal_entries_base_seq: the
+     * keys'. Written only before the filesystem can go rw: NotRw.
+     */
+    #[c_anon("GENRADIX(struct journal_replay *) entries")]
+    entries: UnsafeCell<GenRadix<*mut c::journal_replay>>,
 
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&keys->overwrite_lock"))]
@@ -224,6 +229,16 @@ impl Fs {
     /// A ref is held for 'a.
     unsafe fn journal_keys_held(&self) -> &c::journal_keys {
         unsafe { self.journal_keys.value_held() }
+    }
+}
+
+impl<'a> NotRw<'a> {
+    /// The journal entries, recovery's to write: recovery's ref holds them.
+    ///
+    /// # Safety
+    /// No other reference to them lives meanwhile.
+    pub(crate) unsafe fn journal_entries(&self) -> &'a mut GenRadix<*mut c::journal_replay> {
+        unsafe { &mut *self.fs.journal_keys_held().entries.get() }
     }
 }
 
@@ -288,7 +303,7 @@ impl c::journal_keys {
                 return k.src.allocated_k;
             }
             let pos = k.src.journal;
-            let i = *self.entries.get(pos.journal_seq_offset as usize)
+            let i = *self.entries().get(pos.journal_seq_offset as usize)
                 .expect("a journal key's entry");
             (&raw mut (*i).j._data).cast::<u64>().add(pos.journal_offset as usize).cast()
         }
@@ -341,14 +356,18 @@ impl c::journal_keys {
 
     /// Every entry the journal read kept, and its jset, ignored or not.
     pub fn all_replays(&self) -> impl Iterator<Item = (&c::journal_replay, &c::jset)> {
-        self.entries.iter_from(0)
+        self.entries().iter_from(0)
             .filter_map(|(_, &i)| unsafe { i.as_ref().map(|i| (i, c::journal_replay::jset(i))) })
     }
 
     /// all_replays(), newest first.
     pub fn all_replays_rev(&self) -> impl Iterator<Item = (&c::journal_replay, &c::jset)> {
-        self.entries.iter_rev()
+        self.entries().iter_rev()
             .filter_map(|(_, &i)| unsafe { i.as_ref().map(|i| (i, c::journal_replay::jset(i))) })
+    }
+
+    pub fn entries(&self) -> &GenRadix<*mut c::journal_replay> {
+        unsafe { &*self.entries.get() }
     }
 
     pub fn keys(&self) -> &GapBuffer<c::journal_key> {
@@ -709,16 +728,7 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
     let k = unsafe { &mut *BkeyI::from_raw_mut(k) };
     let idx = jk.search(btree, level, k.k.p);
 
-    assert!(!fs.flags.get(f::BCH_FS_may_go_rw));
-    assert!(!fs.flags.get(f::BCH_FS_rw));
-    /* keys are frozen for the scrub, whose reads run on workqueues */
-    assert!(!fs.flags.get(f::BCH_FS_scrub_journal));
-    /* userspace's current is C's __thread variable, which Rust can't name */
-    #[cfg(kernel)]
-    assert!(fs.recovery_task.load(Relaxed) == unsafe { c::get_current() });
-
-    // SAFETY: from the recovery task, before anything runs alongside it, as
-    // the asserts say
+    let _not_rw = unsafe { fs.not_rw() };
     let keys = unsafe { jk.keys_mut() };
 
     if let Some(o) = keys.get_mut(idx).filter(|o| jk.key_cmp(&n, o).is_eq()) {
@@ -1194,11 +1204,11 @@ impl PinnedDrop for c::journal_keys {
             self.reset(self.keys_mut());
             darray_exit(&mut *self.pre_sort.get());
 
-            for (_, &i) in self.entries.iter_from(0) {
+            for (_, &i) in self.entries().iter_from(0) {
                 c::rust_kvfree(i.cast());
             }
         }
-        self.project().entries.free();
+        self.project().entries.get_mut().free();
     }
 }
 
