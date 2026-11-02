@@ -165,8 +165,7 @@ fn reconstruct_alloc(fs: &Fs) {
         let opts = fs.opts_writer(&mut w);
         opts.recovery_passes.set(opts.recovery_passes.get() | passes::passes_from_stable(v));
 
-        let features = &mut w.sb_mut().features[0];
-        features.set(features.get() & !(1 << c::bch_sb_feature::BCH_FEATURE_no_alloc_info.0));
+        w.sb_mut().features[0] &= !(1 << c::bch_sb_feature::BCH_FEATURE_no_alloc_info.0);
         w.dirty();
     }
 

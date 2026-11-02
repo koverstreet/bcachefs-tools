@@ -149,6 +149,11 @@ macro_rules! le_int {
             fn bitor_assign(&mut self, v: $t) { self.0 |= v.to_le() }
         }
 
+        /// Bits cleared: as is AND.
+        impl core::ops::BitAndAssign<$t> for $name {
+            fn bitand_assign(&mut self, v: $t) { self.0 &= v.to_le() }
+        }
+
         impl From<$name> for $t {
             fn from(v: $name) -> Self { v.get() }
         }
