@@ -90,6 +90,26 @@ impl File {
     pub fn nonblock(&self) -> bool {
         self.flags() & c::O_NONBLOCK != 0
     }
+
+    /// Whether it has pages in the page cache.
+    #[cfg(kernel)]
+    pub fn has_pagecache(&self) -> bool {
+        unsafe { (*(*self.as_ptr()).f_mapping).nrpages != 0 }
+    }
+
+    /// Its page cache's dirty pages from @start to @end, inclusive, written and
+    /// waited on: filemap_write_and_wait_range().
+    #[cfg(kernel)]
+    pub fn write_and_wait_range(&self, start: i64, end: i64) -> Result<(), BchError> {
+        let ret = unsafe { c::rust_filemap_write_and_wait_range((*self.as_ptr()).f_mapping, start, end) };
+        crate::errcode::ret_to_result_void(ret)
+    }
+
+    /// file_accessed(): its atime touched.
+    #[cfg(kernel)]
+    pub fn accessed(&self) {
+        unsafe { c::file_accessed(self.as_ptr()) }
+    }
 }
 
 /// One read, from the start of the file at @path: enough for a sysfs

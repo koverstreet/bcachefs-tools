@@ -186,6 +186,7 @@ pub mod vfs {
     #[cfg(kernel)] pub mod iattr;
     #[cfg(kernel)] pub mod idmap;
     #[cfg(kernel)] pub mod inode;
+    #[cfg(kernel)] pub mod kiocb;
     #[cfg(kernel)] pub mod inode_ops;
     #[cfg(kernel)] pub mod mount;
     #[cfg(kernel)] pub mod namei;
