@@ -359,6 +359,7 @@ pub struct BioBox<T: HasBio>(NonNull<T>);
 
 // SAFETY: a T, as a Box's: what has the box has the T
 unsafe impl<T: HasBio + Send> Send for BioBox<T> {}
+unsafe impl<T: HasBio + Sync> Sync for BioBox<T> {}
 
 // SAFETY: the T's bio, and back - container_of()
 unsafe impl<T: HasBio> RawBio for BioBox<T> {
@@ -384,6 +385,11 @@ impl<T: HasBio> Deref for BioBox<T> {
 }
 
 impl<T: HasBio> BioBox<T> {
+    /// The T, for an owner that keeps the box and reaches it by pointer.
+    pub fn as_ptr(&self) -> *mut T {
+        self.0.as_ptr()
+    }
+
     pub fn as_mut(&mut self) -> Pin<&mut T> {
         // SAFETY: the T, live while it's had, and the box's alone - a bio in
         // flight has given up its box; never moved from where its set made it
