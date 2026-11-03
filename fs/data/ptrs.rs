@@ -1108,8 +1108,7 @@ mod tests {
     }
 
     fn bytes(words: &mut [u64]) -> &mut [u8] {
-        // SAFETY: u64s are plain data
-        unsafe { core::slice::from_raw_parts_mut(words.as_mut_ptr().cast(), words.len() * 8) }
+        crate::util::vstructs::plain_bytes_mut(words)
     }
 
     /// Our sizes, as a filesystem's table has them for the types we know.
@@ -1197,9 +1196,7 @@ mod tests {
 
     /// @v's words, as this machine has them.
     fn words_of<T: crate::util::vstructs::Plain>(v: &T) -> std::vec::Vec<u64> {
-        // SAFETY: Plain, and a whole number of u64s
-        let b = unsafe { core::slice::from_raw_parts((v as *const T).cast::<u8>(), size_of::<T>()) };
-        b.chunks_exact(8).map(|w| u64::from_ne_bytes(w.try_into().unwrap())).collect()
+        plain_bytes(v).chunks_exact(8).map(|w| u64::from_ne_bytes(w.try_into().unwrap())).collect()
     }
 
     #[test]

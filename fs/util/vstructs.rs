@@ -1257,8 +1257,7 @@ mod tests {
     }
 
     fn bytes(buf: &[u64]) -> &[u8] {
-        // SAFETY: u64s, which any bytes are
-        unsafe { core::slice::from_raw_parts(buf.as_ptr().cast(), buf.len() * 8) }
+        plain_bytes(buf)
     }
 
     fn entry(u64s: usize) -> Head<c::jset_entry> {
@@ -1544,8 +1543,7 @@ mod unsized_tests {
     }
 
     fn bytes(buf: &[u64]) -> &[u8] {
-        // SAFETY: u64s, which any bytes are
-        unsafe { core::slice::from_raw_parts(buf.as_ptr().cast(), buf.len() * 8) }
+        plain_bytes(buf)
     }
 
     /// A reference has the value's length - every byte of it, none past -

@@ -20,11 +20,7 @@ impl Bpos {
     /// byte reversed - a bpos's fields are in reverse order on big endian, so
     /// that's each field swapped and the order flipped. bch2_bpos_swab().
     pub fn swab(&mut self) {
-        // SAFETY: a bpos is Plain - every byte part of a field, any bytes a bpos
-        let bytes = unsafe {
-            core::slice::from_raw_parts_mut((self as *mut Self).cast::<u8>(), size_of::<Self>())
-        };
-        bytes.reverse();
+        crate::util::vstructs::plain_bytes_mut(self).reverse();
     }
 
     /// A position, in @btree, as @version on a machine @big_endian or not

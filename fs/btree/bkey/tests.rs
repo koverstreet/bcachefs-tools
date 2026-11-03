@@ -53,8 +53,7 @@ fn bkey_typed_short_values() {
 #[test]
 fn bkey_unfloored() {
     let b = [0u64; 3];
-    // SAFETY: b's bytes, aligned for any value
-    let b = unsafe { core::slice::from_raw_parts(b.as_ptr().cast::<u8>(), size_of_val(&b)) };
+    let b = crate::util::vstructs::plain_bytes(&b);
     use crate::util::vstructs::Validated;
     assert!(<c::Snapshot<Validated> as ArmRef>::arm_ref(&b[..16]).is_none());
     assert!(<c::Snapshot<Validated> as ArmRef>::arm_ref(&b[..24]).is_some());

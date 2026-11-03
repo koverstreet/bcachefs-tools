@@ -3315,8 +3315,7 @@ mod tests {
         let Ok(c::BchSbFieldRef::clean(clean)) = f.typed() else { panic!("a clean section") };
         assert_eq!(clean.entries().count(), 1);
 
-        // SAFETY: u64s, which any bytes are
-        let b = unsafe { core::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len() * 8) };
+        let b = crate::util::vstructs::plain_bytes(&buf[..]);
         let f = c::bch_sb_field::<Unvalidated>::from_bytes(b).unwrap();
         let Ok(c::BchSbFieldRef::clean(clean)) = f.typed() else { panic!("a clean section") };
         let es: Vec<_> = clean.entries().collect();
