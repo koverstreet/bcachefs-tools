@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, rust_only, RustOnly};
-use pin_init::PinInit;
+use crate::util::alloc::init_at;
 use crate::util::futex::EventCount;
 use crate::util::sleep::Sleep;
 use cstruct_macros::{c_export, CStruct};
@@ -96,7 +96,7 @@ impl<S: TwoState> Drop for TwoStateGuard<'_, S> {
 pub unsafe fn two_state_lock_init(lock: *mut c::two_state_lock_t) {
     unsafe {
         (&raw mut (*lock).v).write(AtomicIsize::new(0));
-        let Ok(()) = RustOnly::new(EventCount::new()).__pinned_init(&raw mut (*lock).wait);
+        let Ok(()) = init_at(RustOnly::new(EventCount::new()), &raw mut (*lock).wait);
     }
 }
 
