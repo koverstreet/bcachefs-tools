@@ -13,7 +13,7 @@ use crate::errcode::{
     ret_to_result_void as ret_to_result,
 };
 use crate::fs::Fs;
-use crate::locking::Locked;
+use crate::locking::{Guard, Locked, RawTimedLock};
 use crate::util::closure::ClosureRef;
 use crate::util::percpu::Counters;
 use crate::util::futex::EventCount;
@@ -417,6 +417,17 @@ impl<'f> BtreeTrans<'f> {
             remaining -= jiffies().wrapping_sub(start) as c_long;
         }
         false
+    }
+
+    /// @l locked, waited for under SRCU as wait_until() waits. The caller
+    /// must have dropped its btree locks.
+    pub fn lock_timed<'l, R: RawTimedLock, G, P>(&self, l: &'l Locked<R, G, P>) -> Guard<'l, R, G, P> {
+        loop {
+            match self.srcu_wait_budget() {
+                Some(left) => if let Some(g) = l.try_lock_timeout(left) { return g },
+                None       => return l.lock(),
+            }
+        }
     }
 
     pub fn commit(

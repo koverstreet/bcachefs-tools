@@ -8,7 +8,7 @@
 use crate::fs::Fs;
 use crate::btree::iter::TransAttempt;
 use crate::errcode::BchError;
-use crate::locking::{Guard, Locked, RawTryLock};
+use crate::locking::{Guard, Locked, RawTimedLock};
 use crate::c;
 use crate::util::Printbuf;
 use crate::types::{DArray, c_default};
@@ -74,14 +74,15 @@ pub struct lock_graph {
     pub printed_chain: bool,
 }
 
-impl<R: RawTryLock, G, P> Locked<R, G, P> {
+impl<R: RawTimedLock, G, P> Locked<R, G, P> {
     /// lock(), in attempt @t: if it isn't free, the btree locks are dropped
-    /// to wait for it - bch2_trans_mutex_lock(). An error is drop_locks_do()'s
-    /// relock, the lock not held: a restart.
+    /// to wait for it - bch2_trans_mutex_lock() - and past a short wait, the
+    /// SRCU lock: lock_timed(). An error is drop_locks_do()'s relock, the
+    /// lock not held: a restart.
     pub fn lock_trans(&self, t: &TransAttempt<'_, '_>) -> Result<Guard<'_, R, G, P>, BchError> {
         match self.try_lock() {
             Some(g) => Ok(g),
-            None    => t.drop_locks_do(|| Ok(self.lock())),
+            None    => t.drop_locks_do(|| Ok(t.trans().lock_timed(self))),
         }
     }
 
@@ -91,7 +92,7 @@ impl<R: RawTryLock, G, P> Locked<R, G, P> {
     pub fn lock_trans_norelock(&self, t: &TransAttempt<'_, '_>) -> Guard<'_, R, G, P> {
         self.try_lock().unwrap_or_else(|| {
             t.unlock();
-            self.lock()
+            t.trans().lock_timed(self)
         })
     }
 }
