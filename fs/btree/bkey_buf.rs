@@ -16,6 +16,7 @@
 
 use crate::btree::bkey::{BkeyI, BkeySC, BKEY_U64S};
 use crate::c;
+use crate::format::Btree;
 use core::mem::size_of;
 use crate::types::c_default;
 use crate::util::alloc::{kbox_zeroed_nofail, KBox};
@@ -185,5 +186,23 @@ impl c::bkey_buf {
 impl Default for BkeyBuf {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// An owned copy of a key, and where it lives: its btree, and its level - 0
+/// for a leaf's key, a node pointer's the level above its node's.
+pub struct BtreeKeyBuf {
+    pub btree: Btree,
+    pub level: u32,
+    pub k:     BkeyBuf,
+}
+
+impl BtreeKeyBuf {
+    pub fn new(btree: Btree, level: u32, k: BkeySC<'_>) -> Self {
+        BtreeKeyBuf { btree, level, k: BkeyBuf::from_key(k) }
+    }
+
+    pub fn key(&self) -> BkeySC<'_> {
+        (&self.k).into()
     }
 }
