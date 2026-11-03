@@ -505,6 +505,13 @@ impl<O: BioOwner, B> Mapped<'_, O, B> {
         self.owner.submit_wait()
     }
 
+    pub fn submit(&mut self) -> impl Future<Output = Submitted<'_>> + Send
+    where
+        O: Send,
+    {
+        self.owner.submit()
+    }
+
     /// Submitted, @r put when it completes. The mapping stays until the bio's
     /// next reset().
     ///
