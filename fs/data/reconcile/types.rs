@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::fs::Fs;
 use crate::data::reconcile::scan::OptChangeScans;
 use crate::data::reconcile::work::Status;
 use crate::locking::{Locked, SeqLock};
@@ -11,9 +12,10 @@ use crate::data::reconcile::work::StripesPending;
 use crate::types::{RustOnly, rust_only};
 use crate::util::kthread::Kthread;
 use core::sync::atomic::{AtomicBool, AtomicI32};
-use cstruct_macros::{CStruct, Init, TypeInfo};
+use cstruct_macros::{placed, CStruct, Init, TypeInfo};
 use pin_init::pin_data;
 
+#[placed(Fs.reconcile)]
 #[pin_data]
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init)]
@@ -62,6 +64,19 @@ pub struct bch_fs_reconcile {
     #[pin]
     #[init(RustOnly::new(AtomicBool::new(false)))]
     pub(crate) on_battery: rust_only!(AtomicBool),
+    /// Registered with the power supply class, which links it into its chain.
     #[cfg(CONFIG_POWER_SUPPLY)]
-    pub power_notifier: c::notifier_block,
+    #[c("struct notifier_block power_notifier")]
+    #[pin]
+    #[init(::pin_init::init_zeroed())]
+    pub(crate) power_notifier:
+        crate::util::place::Placed<crate::util::ffi::Opaque<c::notifier_block>,
+                                   crate::at!(bch_fs_reconcile.power_notifier)>,
 }
+
+/// power_notifier's type, for its callback to cast to.
+#[cfg(CONFIG_POWER_SUPPLY)]
+pub(crate) type PowerNotifier = <crate::at!(bch_fs_reconcile.power_notifier) as crate::util::place::Place>::Type;
+
+#[cfg(CONFIG_POWER_SUPPLY)]
+unsafe impl ::pin_init::Zeroable for crate::util::ffi::Opaque<c::notifier_block> {}

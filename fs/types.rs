@@ -896,7 +896,6 @@ pub struct Fs {
     #[init(RustOnly::new(::pin_init::zeroed::<crate::data::compress::Compress>()))]
     pub(crate) compress: rust_only!(crate::data::compress::Compress),
     #[pin]
-    #[init(c::bch_fs_reconcile::init())]
     pub reconcile: c::bch_fs_reconcile,
     #[pin]
     #[init(c::bch_fs_copygc::init())]

@@ -1161,6 +1161,7 @@ impl Fs {
 #[cfg(CONFIG_POWER_SUPPLY)]
 mod power {
     use super::*;
+    use crate::util::place::{container_of, Contained};
 
     fn on_battery() -> bool {
         // SAFETY: plain
@@ -1170,17 +1171,14 @@ mod power {
     /// The power supply changed: bch2_reconcile_power_notifier().
     unsafe extern "C" fn notifier(nb: *mut c::notifier_block, _event: kernel::ffi::c_ulong,
                                   _data: *mut core::ffi::c_void) -> c_int {
-        // SAFETY: our notifier block, in its filesystem
-        let fs = unsafe {
-            Fs::borrow_raw(nb.byte_sub(core::mem::offset_of!(Fs, reconcile.power_notifier)).cast())
-        };
-        fs.reconcile.on_battery.store(on_battery(), Relaxed);
-        fs.reconcile_wakeup();
+        let r = unsafe { container_of(nb.cast::<c::PowerNotifier>()) };
+        r.on_battery.store(on_battery(), Relaxed);
+        r.container().reconcile_wakeup();
         c::NOTIFY_OK
     }
 
     pub(super) fn register(fs: &Fs) -> Result<(), BchError> {
-        let nb = core::ptr::from_ref(&fs.reconcile.power_notifier).cast_mut();
+        let nb = fs.reconcile.power_notifier.as_ptr();
         // SAFETY: ours, unregistered by unregister(); set up before it's
         // registered
         unsafe {
@@ -1193,7 +1191,7 @@ mod power {
 
     pub(super) fn unregister(fs: &Fs) {
         // SAFETY: ours, registered by register()
-        unsafe { c::power_supply_unreg_notifier(core::ptr::from_ref(&fs.reconcile.power_notifier).cast_mut()) };
+        unsafe { c::power_supply_unreg_notifier(fs.reconcile.power_notifier.as_ptr()) };
     }
 }
 
