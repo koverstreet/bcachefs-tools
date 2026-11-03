@@ -54,6 +54,7 @@ c_extern! {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
 pub struct Folio(NonNull<c::folio>);
 
 impl Folio {
@@ -69,6 +70,10 @@ impl Folio {
 
     pub fn size(self) -> usize {
         unsafe { c::rust_folio_size(self.as_ptr()) }
+    }
+
+    pub fn nr_sectors(self) -> usize {
+        self.size() >> 9
     }
 
     pub fn nr_pages(self) -> usize {
@@ -99,6 +104,24 @@ impl Folio {
         unsafe { c::folio_test_dirty(self.as_ptr()) }
     }
 
+    pub fn writeback(self) -> bool {
+        unsafe { c::folio_test_writeback(self.as_ptr()) }
+    }
+
+    pub fn locked(self) -> bool {
+        unsafe { c::folio_test_locked(self.as_ptr()) }
+    }
+
+    /// Its mapping, unless it's been truncated out of it.
+    pub fn mapping(self) -> Option<Mapping> {
+        NonNull::new(unsafe { c::rust_folio_mapping(self.as_ptr()) }).map(Mapping)
+    }
+
+    /// Waited for, if its data is being written and mustn't change meanwhile:
+    /// folio_wait_stable().
+    pub fn wait_stable(self) {
+        unsafe { c::folio_wait_stable(self.as_ptr()) }
+    }
 
     pub fn mark_uptodate(self) {
         unsafe { c::folio_mark_uptodate(self.as_ptr()) }
@@ -167,7 +190,7 @@ impl Folio {
     /// Its bcachefs state, locked, if it has any.
     pub fn lock_state_if_any(&self) -> Option<FolioStateGuard<'_>> {
         let s = unsafe { self.bch()?.as_ref() };
-        Some(FolioStateGuard { guard: s.state.lock(), sectors: self.size() >> 9 })
+        Some(FolioStateGuard { guard: s.state.lock(), sectors: self.nr_sectors() })
     }
 
     /// Its bcachefs state brought up to date with the btree: bch2_folio_set().
@@ -249,6 +272,14 @@ impl FolioRef<'_> {
         FolioRef(Folio(NonNull::new(folio).expect("a folio")), PhantomData)
     }
 
+    pub fn pos(&self) -> u64 {
+        self.0.pos()
+    }
+
+    pub fn size(&self) -> usize {
+        self.0.size()
+    }
+
     pub fn lock(&self) -> FolioGuard<'_> {
         unsafe { c::folio_lock(self.0.as_ptr()) };
         FolioGuard(self.0, PhantomData)
@@ -261,6 +292,13 @@ impl FolioRef<'_> {
 
 /// A FolioRef's folio, locked: unlocked when dropped.
 pub struct FolioGuard<'a>(Folio, PhantomData<&'a ()>);
+
+impl FolioGuard<'_> {
+    /// Left locked, for whoever we return it to: a fault's VM_FAULT_LOCKED.
+    pub fn keep_locked(self) -> Folio {
+        core::mem::ManuallyDrop::new(self).0
+    }
+}
 
 impl Deref for FolioGuard<'_> {
     type Target = Folio;
@@ -295,7 +333,8 @@ impl Drop for LockedFolio {
     }
 }
 
-#[derive(Clone, Copy)]
+/// Ordered by address: lock order, for two of them.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Mapping(NonNull<c::address_space>);
 
 impl Mapping {
@@ -387,7 +426,14 @@ impl Mapping {
 
     /// The folio at @index, made if there's none.
     pub fn lock_folio_create(self, index: u64, gfp: c::gfp_t) -> Result<LockedFolio, BchError> {
-        let folio = unsafe { c::rust_filemap_lock_folio_create(self.as_ptr(), index as _, gfp) };
+        self.get_folio(index, c::FGP_LOCK | c::FGP_CREAT, gfp)
+    }
+
+    /// The folio at @index, as __filemap_get_folio() finds it with @fgp -
+    /// which has FGP_LOCK.
+    pub fn get_folio(self, index: u64, fgp: c::fgf_t, gfp: c::gfp_t) -> Result<LockedFolio, BchError> {
+        debug_assert!(fgp & c::FGP_LOCK != 0);
+        let folio = unsafe { c::__filemap_get_folio(self.as_ptr(), index as _, fgp, gfp) };
         errptr_to_result(NonNull::new(folio).expect("a folio, or an error")).map(|f| LockedFolio(Folio(f)))
     }
 

@@ -128,7 +128,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "folio_get", "folio_put", "folio_detach_private", "folio_test_uptodate", "folio_test_dirty",
     "folio_mark_uptodate", "folio_end_read", "filemap_add_folio", "readahead_gfp_mask",
     "mapping_min_folio_order", "mapping_max_folio_order", "__readahead_folio", "xa_load", "xa_is_value",
-    "bio_add_folio_nofail", "folio_unlock", "filemap_lock_folio", "rust_filemap_lock_folio_create",
+    "bio_add_folio_nofail", "folio_unlock", "filemap_lock_folio",
     "rust_folio_zero_segment", "rust_folio_mkclean", "rust_filemap_dirty_folio",
     "folio_lock", "folio_trylock", "filemap_get_folios",
     "folio_batch_init", "folio_batch_count", "folio_batch_release",

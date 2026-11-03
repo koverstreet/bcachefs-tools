@@ -221,16 +221,6 @@ static inline struct folio *rust_filemap_alloc_folio(gfp_t gfp, unsigned int ord
 #endif
 }
 
-/*
- * A folio looked up locked, made if there's none: __filemap_get_folio() is a
- * static inline in newer kernels, and FGP_* are __force casts
- */
-static inline struct folio *rust_filemap_lock_folio_create(struct address_space *mapping,
-							   pgoff_t index, gfp_t gfp)
-{
-	return __filemap_get_folio(mapping, index, FGP_LOCK|FGP_CREAT, gfp);
-}
-
 /* in a union in struct folio, which bindgen names by number */
 static inline struct address_space *rust_folio_mapping(struct folio *folio)
 {
