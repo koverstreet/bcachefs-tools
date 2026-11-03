@@ -10,7 +10,10 @@
 //! under the state's lock, lock_state_if_any()'s.
 //!
 //! A LockedFolio is one looked up locked and with a ref, both its own: a
-//! Folio until it's dropped, which unlocks and puts it.
+//! Folio until it's dropped, which unlocks and puts it. A FolioRef is one
+//! not locked, kept by a ref someone else has - a walk's batch, walk_folios()'s,
+//! or a fault's page - for its holder to lock: a FolioGuard, a Folio until
+//! it's dropped.
 //!
 //! A Mapping is an inode's page cache: where a read finds and adds folios. A
 //! Readahead is the VFS's readahead_control: the locked folios it asks a read
@@ -21,9 +24,10 @@ use crate::c;
 use crate::errcode::{errptr_to_result, loff_to_result, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::locking::Guard;
-use crate::util::kernel::loff;
+use crate::util::kernel::{cond_resched, loff};
 use core::ffi::{c_int, c_uint};
-use core::ops::{Deref, DerefMut};
+use core::marker::PhantomData;
+use core::ops::{ControlFlow, Deref, DerefMut};
 use core::ptr::NonNull;
 use cstruct_macros::c_extern;
 
@@ -94,6 +98,7 @@ impl Folio {
     pub fn dirty(self) -> bool {
         unsafe { c::folio_test_dirty(self.as_ptr()) }
     }
+
 
     pub fn mark_uptodate(self) {
         unsafe { c::folio_mark_uptodate(self.as_ptr()) }
@@ -207,6 +212,70 @@ impl FolioStateGuard<'_> {
     }
 }
 
+/// A walk's batch of folios, a ref on each: filemap_get_folios()'s, put when
+/// it's released or dropped.
+struct FolioBatch(c::folio_batch);
+
+impl FolioBatch {
+    fn new() -> Self {
+        let mut b = FolioBatch(unsafe { core::mem::zeroed() });
+        unsafe { c::folio_batch_init(&mut b.0) };
+        b
+    }
+
+    fn folios(&self) -> &[*mut c::folio] {
+        let nr = unsafe { c::folio_batch_count((&raw const self.0).cast_mut()) } as usize;
+        &self.0.folios[..nr]
+    }
+
+    fn release(&mut self) {
+        unsafe { c::folio_batch_release(&mut self.0) }
+    }
+}
+
+impl Drop for FolioBatch {
+    fn drop(&mut self) {
+        self.release()
+    }
+}
+
+/// A folio not locked, kept by a ref someone else has for 'r.
+pub struct FolioRef<'r>(Folio, PhantomData<&'r ()>);
+
+impl FolioRef<'_> {
+    /// # Safety
+    /// @folio is kept, by a ref of the caller's or its caller's, for 'r.
+    pub unsafe fn from_raw(folio: *mut c::folio) -> Self {
+        FolioRef(Folio(NonNull::new(folio).expect("a folio")), PhantomData)
+    }
+
+    pub fn lock(&self) -> FolioGuard<'_> {
+        unsafe { c::folio_lock(self.0.as_ptr()) };
+        FolioGuard(self.0, PhantomData)
+    }
+
+    pub fn try_lock(&self) -> Option<FolioGuard<'_>> {
+        unsafe { c::folio_trylock(self.0.as_ptr()) }.then(|| FolioGuard(self.0, PhantomData))
+    }
+}
+
+/// A FolioRef's folio, locked: unlocked when dropped.
+pub struct FolioGuard<'a>(Folio, PhantomData<&'a ()>);
+
+impl Deref for FolioGuard<'_> {
+    type Target = Folio;
+
+    fn deref(&self) -> &Folio {
+        &self.0
+    }
+}
+
+impl Drop for FolioGuard<'_> {
+    fn drop(&mut self) {
+        unsafe { c::folio_unlock(self.0.as_ptr()) }
+    }
+}
+
 pub struct LockedFolio(Folio);
 
 impl Deref for LockedFolio {
@@ -270,6 +339,37 @@ impl Mapping {
         loff_to_result(unsafe {
             bch2_seek_pagecache_hole((*self.as_ptr()).host, loff(start), loff(end), min_replicas, nonblock)
         })
+    }
+
+    /// Its folios from index @start to @end, inclusive, to @f in order until
+    /// it breaks or errors: unlocked, for @f to lock or try to. A batch at a
+    /// time, as filemap_get_folios() finds them, with a cond_resched() between.
+    pub fn walk_folios<T, E>(self, start: u64, end: u64,
+                             mut f: impl FnMut(FolioRef<'_>) -> Result<ControlFlow<T>, E>)
+        -> Result<Option<T>, E>
+    {
+        let mut index = start as _;
+        let mut batch = FolioBatch::new();
+        while unsafe { c::filemap_get_folios(self.as_ptr(), &mut index, end as _, &mut batch.0) } != 0 {
+            for &folio in batch.folios() {
+                let folio = unsafe { FolioRef::from_raw(folio) };
+                if let ControlFlow::Break(v) = f(folio)? {
+                    return Ok(Some(v));
+                }
+            }
+            batch.release();
+            cond_resched();
+        }
+        Ok(None)
+    }
+
+    /// walk_folios(), for a walk that visits every folio: that can't fail,
+    /// and doesn't stop early.
+    pub fn for_each_folio(self, start: u64, end: u64, mut f: impl FnMut(FolioRef<'_>)) {
+        let Ok(_) = self.walk_folios(start, end, |folio| {
+            f(folio);
+            Ok::<_, core::convert::Infallible>(ControlFlow::<()>::Continue(()))
+        });
     }
 
     /// Its pages from @start to @end, inclusive, written and dropped:

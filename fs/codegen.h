@@ -21,6 +21,12 @@
 #include <linux/mm.h>
 #include <linux/notifier.h>
 #include <linux/pagemap.h>
+/* struct folio_batch: pagevec.h's, before 7.1 */
+#if __has_include(<linux/folio_batch.h>)
+#include <linux/folio_batch.h>
+#else
+#include <linux/pagevec.h>
+#endif
 #include <linux/poll.h>
 #include <linux/rmap.h>
 #include <linux/version.h>

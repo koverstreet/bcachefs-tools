@@ -108,6 +108,8 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/console.h",
     "linux/bio.h",
     "linux/pagemap.h",
+    "linux/pagevec.h",			// struct folio_batch, before 7.1
+    "linux/folio_batch.h",
     "linux/page-flags.h",
     "linux/xarray.h",
 ];
@@ -127,6 +129,8 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "mapping_min_folio_order", "mapping_max_folio_order", "__readahead_folio", "xa_load", "xa_is_value",
     "bio_add_folio_nofail", "folio_unlock", "filemap_lock_folio", "rust_filemap_lock_folio_create",
     "rust_folio_zero_segment", "rust_folio_mkclean", "rust_filemap_dirty_folio",
+    "folio_lock", "folio_trylock", "filemap_get_folios",
+    "folio_batch_init", "folio_batch_count", "folio_batch_release",
     "rust_page_highmem", "rust_page_address", "rust_is_sync",
     "rust_poll_wait", "rust_fault_in_writeable",
     "rust_fault_in_readable", "rust_filemap_write_and_wait_range", "rust_filemap_flush",
@@ -179,7 +183,7 @@ const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "
                                   "xxh64_state", "chacha_state", "poly1305_desc_ctx",
                                   // the kernel crate's fs_context and fs_parameter are opaque
                                   "fs_context", "fs_parameter", "fs_context_operations",
-                                  "readahead_control"];
+                                  "readahead_control", "folio_batch"];
 /// Structs in an unblocklisted header - defined there, or only declared, as
 /// uidgid.h declares user_namespace - that kernel::bindings binds: a second
 /// copy would be a different type - and bindgen, stopped at one, doesn't
