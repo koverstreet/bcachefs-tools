@@ -617,6 +617,16 @@ impl Fs {
         percpu_field!(self.capacity.pcpu.get(), counters.online_reserved).at(disk_res_slot(nr_replicas))
     }
 
+    /// @sectors reserved at @from replicas, counted at @to now: the sub and
+    /// the add with preemption off between them.
+    pub(crate) fn reserved_move_slot(&self, sectors: u64, from: u32, to: u32) {
+        if sectors != 0 && disk_res_slot(from) != disk_res_slot(to) {
+            let _cpu = CpuGuard::new();
+            self.online_reserved_at(from).add(sectors.wrapping_neg());
+            self.online_reserved_at(to).add(sectors);
+        }
+    }
+
     /// May we write fewer copies than were asked for, rather than returning
     /// ENOSPC? See enum bch_write_degraded_actions for why the default is
     /// what it is.
@@ -798,26 +808,28 @@ impl<'f> DiskReservation<'f> {
         DiskReservation { c: fs, sectors: Cell::new(0), generation: Cell::new(0), nr_replicas: Cell::new(0) }
     }
 
-    /// To count @nr_replicas: what it holds moves slot with it, the sub and
-    /// the add with preemption off between them.
-    fn move_slot(&self, nr_replicas: u32) {
-        let (old, sectors) = (self.nr_replicas.get(), self.sectors.get());
-
-        if sectors != 0 && disk_res_slot(old) != disk_res_slot(nr_replicas) {
-            let _cpu = CpuGuard::new();
-            self.c.online_reserved_at(old).add(sectors.wrapping_neg());
-            self.c.online_reserved_at(nr_replicas).add(sectors);
-        }
+    /// To count @nr_replicas: what it holds moves slot with it.
+    pub(crate) fn move_slot(&self, nr_replicas: u32) {
+        self.c.reserved_move_slot(self.sectors.get(), self.nr_replicas.get(), nr_replicas);
         self.nr_replicas.set(nr_replicas);
     }
 
     /// Charging only ever raises the count: erring high reserves more than we
     /// need, erring low reserves space we can't place. Only write_degraded
     /// lowers it.
-    fn set_nr_replicas(&self, nr_replicas: u32) {
+    pub(crate) fn set_nr_replicas(&self, nr_replicas: u32) {
         if nr_replicas > self.nr_replicas.get() {
             self.move_slot(nr_replicas);
         }
+    }
+
+    /// @other's sectors, ours now. A reservation lives in one slot: whichever
+    /// count is lower is raised first.
+    #[cfg(kernel)]
+    pub(crate) fn merge(&self, other: DiskReservation<'_>) {
+        other.set_nr_replicas(self.nr_replicas.get());
+        self.set_nr_replicas(other.nr_replicas.get());
+        self.sectors.set(self.sectors.get() + other.sectors.replace(0));
     }
 
     /// Reserve @sectors of data at @nr_replicas copies, on top of what it
