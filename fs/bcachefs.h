@@ -119,7 +119,6 @@
 #include "data/keylist_gen.h"
 #include "data/nocow_locking_gen.h"
 #include "bcachefs_ioctl.h"
-#include "data/move_defs_gen.h"
 #include "data/move_gen.h"
 #include "init/progress.h"
 #include "data/reconcile/types_gen.h"

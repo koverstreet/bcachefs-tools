@@ -40,9 +40,9 @@ use crate::util::gather::{Gather, GatherRef};
 use core::cell::{Cell, UnsafeCell};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicI32, AtomicPtr};
+use core::sync::atomic::AtomicI32;
 use core::sync::atomic::Ordering::Relaxed;
-use pin_init::pin_init;
+use pin_init::{pin_data, pin_init};
 
 pub use c::MoveStats;
 
@@ -107,14 +107,69 @@ pub struct InFlightUpdate {
     done:    bool,
 }
 
+/*
+ * Tracks in-flight data movement IO for ratelimiting.
+ *
+ * Four atomic counters track sectors and IOs in flight:
+ *  - read_sectors/read_ios: extent read submit -> its task taking the
+ *    completed read
+ *  - write_sectors/write_ios: then -> write completion
+ *
+ * Moving::ratelimit() blocks the caller until all counters are below
+ * c->opts.move_bytes_in_flight / move_ios_in_flight.
+ *
+ * Moves (Moving::move_extent()) and stripe repairs (ec/repair.rs)
+ * both account through these counters.
+ *
+ * Lifetime: every in-flight IO holds a ref on in_flight.
+ * Moving::flush_all() waits for the counters to drain, and MovingCtxt's
+ * drop asserts they have, then waits in_flight's refs out.
+ */
+#[pin_data]
+pub struct MovingContext {
+    trans:          *mut c::btree_trans,
+    stats:          Cell<NonNull<MoveStats>>,
+    wp:             c::write_point_specifier,
+    wait_on_copygc: bool,
+
+    /* A ref each for what's in flight - MovingIo's - which drop waits out */
+    #[pin]
+    in_flight:      Gather<(), waiter::Sync>,
+
+    io:             IoCounts,
+
+    /*
+     * Its updates' tasks, run in its waits - data/moving_update.rs - whose
+     * EventCount every completion wakes: Moving::wake()
+     */
+    #[pin]
+    runq:           RunQueue,
+    /*
+     * Its data updates in flight, in the order they were issued, by seq - an
+     * update's index in it - and the first whose write hasn't started. The
+     * mover's thread's alone.
+     */
+    updates:        UnsafeCell<Fifo<InFlightUpdate, u64>>,
+    write_next:     Cell<u64>,
+}
+
+/* In flight: what ratelimit() throttles on, and flush_all() waits out */
+#[derive(Default)]
+pub struct IoCounts {
+    pub read_sectors:  AtomicI32,
+    pub write_sectors: AtomicI32,
+    pub read_ios:      AtomicI32,
+    pub write_ios:     AtomicI32,
+}
+
 /// Freed - once what's in flight is done - when it's dropped.
 pub struct MovingCtxt<'a> {
-    ctxt: NonNull<c::moving_context>,
+    ctxt: NonNull<MovingContext>,
     life: PhantomData<(&'a Fs, &'a MoveStats)>,
 }
 
 #[repr(transparent)]
-pub struct Moving<'a>(c::moving_context, PhantomData<(&'a Fs, &'a MoveStats)>);
+pub struct Moving<'a>(MovingContext, PhantomData<(&'a Fs, &'a MoveStats)>);
 
 /// A read or a write in flight: counted in the context's read or write
 /// counts, which ratelimit() throttles on and flush_all() waits out, with a
@@ -123,7 +178,7 @@ pub struct Moving<'a>(c::moving_context, PhantomData<(&'a Fs, &'a MoveStats)>);
 /// puts the ref.
 #[must_use = "the IO is done as soon as it's dropped"]
 pub struct MovingIo {
-    ctxt:    NonNull<c::moving_context>,
+    ctxt:    NonNull<MovingContext>,
     write:   bool,
     sectors: u32,
     /// Dropped last: once it's put, the context may be gone
@@ -146,7 +201,7 @@ unsafe impl Refcount for c::move_bucket {
     }
 }
 
-fn io_counts(io: &c::moving_io_counts, write: bool) -> (&AtomicI32, &AtomicI32) {
+fn io_counts(io: &IoCounts, write: bool) -> (&AtomicI32, &AtomicI32) {
     if write { (&io.write_sectors, &io.write_ios) } else { (&io.read_sectors, &io.read_ios) }
 }
 
@@ -168,9 +223,9 @@ impl<'a> MovingCtxt<'a> {
         -> Result<MovingCtxt<'a>, BchError>
     {
         static FN: TransFnName = TransFnName::new();
-        let init = pin_init!(c::moving_context {
+        let init = pin_init!(MovingContext {
             trans:          unsafe { c::__bch2_trans_get(fs.as_ptr(), FN.idx(function_name!())) },
-            stats:          AtomicPtr::new(core::ptr::from_ref(stats).cast_mut()),
+            stats:          Cell::new(NonNull::from(stats)),
             wp,
             wait_on_copygc,
             in_flight <- Gather::new(),
@@ -197,13 +252,13 @@ impl<'a> Moving<'a> {
     /// # Safety
     /// @ctxt is initialized, and outlives the borrow, and its filesystem and
     /// stats live for 'a.
-    pub unsafe fn from_raw<'r>(ctxt: *mut c::moving_context) -> &'r Self {
+    pub unsafe fn from_raw<'r>(ctxt: *mut MovingContext) -> &'r Self {
         // SAFETY: the caller's; repr(transparent) over it
         unsafe { &*ctxt.cast() }
     }
 
     /// For a data update's pointer back to the context it's in flight in.
-    pub(crate) fn raw(&self) -> *mut c::moving_context {
+    pub(crate) fn raw(&self) -> *mut MovingContext {
         core::ptr::from_ref(&self.0).cast_mut()
     }
 
@@ -223,20 +278,15 @@ impl<'a> Moving<'a> {
 
     /// Count moves from here on into @stats.
     pub fn set_stats(&self, stats: &'a MoveStats) {
-        self.0.stats.store(core::ptr::from_ref(stats).cast_mut(), Relaxed)
+        self.0.stats.set(NonNull::from(stats))
     }
 
-    pub fn stats(&self) -> &MoveStats {
-        self.stats_opt().expect("a Rust moving context has stats")
+    pub fn stats(&self) -> &'a MoveStats {
+        // SAFETY: set from a &'a MoveStats
+        unsafe { self.0.stats.get().as_ref() }
     }
 
-    /// A context C made may have no stats.
-    pub(crate) fn stats_opt(&self) -> Option<&MoveStats> {
-        // SAFETY: null, or set from a &'a MoveStats
-        unsafe { self.0.stats.load(Relaxed).as_ref() }
-    }
-
-    pub(crate) fn io(&self) -> &c::moving_io_counts {
+    pub(crate) fn io(&self) -> &IoCounts {
         &self.0.io
     }
 

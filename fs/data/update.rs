@@ -36,7 +36,6 @@ use crate::data::ptrs::{brand, BkeyVPtrs, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::util::bio::pages;
-use crate::util::backref::BackRef;
 use crate::util::closure::StackClosure;
 use crate::sb::members::DevRef;
 use crate::util::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
@@ -141,10 +140,8 @@ pub struct data_update {
 
     /* associated with @ctxt: its index in the context's updates */
     pub io_seq: u64,
-    pub ctxt: *mut c::moving_context,
-    /* the mover's, if it keeps any - which outlive its updates */
-    #[c("struct bch_move_stats *stats")]
-    pub stats: Option<crate::util::backref::BackRef<c::MoveStats>>,
+    #[c("struct moving_context *ctxt")]
+    pub ctxt: *mut crate::data::moving::MovingContext,
 
     pub rbio: c::bch_read_bio,
     pub op: c::bch_write_op,
@@ -591,9 +588,6 @@ impl c::data_update {
         self.btree_id = btree_id;
         self.opts = data_opts;
         self.ctxt = moving.map_or(core::ptr::null_mut(), Moving::raw);
-        // SAFETY: a context's exit waits for what's in flight in it, and its
-        // stats outlive it
-        self.stats = moving.and_then(Moving::stats_opt).map(|s| unsafe { BackRef::new(s) });
 
         // SAFETY: an update is done before the filesystem goes
         unsafe { self.op.init(fs, *io_opts) };

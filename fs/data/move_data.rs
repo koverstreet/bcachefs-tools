@@ -234,10 +234,8 @@ impl Moving<'_> {
         let mut s = PerSnapshotIoOpts::new(fs);
         let mut mover = Mover { moving: self, bucket: None, name, pred: &mut pred };
 
-        if let Some(stats) = self.stats_opt() {
-            stats.at.data_type.set(DataType::user);
-            stats.set_pos(c::bbpos { btree, pos: start });
-        }
+        self.stats().at.data_type.set(DataType::user);
+        self.stats().set_pos(c::bbpos { btree, pos: start });
 
         BtreeLevels { btree, levels, start, end }.for_each(trans, |t, iter, level, k| {
             let sectors = key_sectors(fs, k);
@@ -252,9 +250,7 @@ impl Moving<'_> {
                     warn_once!(!e.matches(c::EAGAIN), fs, "unhandled error from move_extent: {e}");
                 }
             }
-            if let Some(stats) = self.stats_opt() {
-                stats.walked(iter, sectors);
-            }
+            self.stats().walked(iter, sectors);
             // between keys: it unlocks, and @k is done with
             self.ratelimit()
         })
@@ -324,9 +320,7 @@ impl PhysWalker<'_, '_> {
         let v = &bp.v;
         let moved = self.w.data_types & (1 << v.data_type) != 0;
 
-        if let Some(stats) = moving.stats_opt() {
-            stats.at.offset.set(bp.k.p.offset >> fs.sb.extent_bp_shift.get());
-        }
+        moving.stats().at.offset.set(bp.k.p.offset >> fs.sb.extent_bp_shift.get());
 
         let mut iter = BtreeIter::uninit();
         let Some((iter, k)) = backpointer_get_key(t, BkeySC::from(bp), &mut iter, BtreeIterFlags::empty(),
@@ -349,9 +343,7 @@ impl PhysWalker<'_, '_> {
         if matches!(&ret, Err(e) if is_restart(e)) {
             return ret;
         }
-        if let Some(stats) = moving.stats_opt() {
-            stats.walked(iter, bucket_len.into());
-        }
+        moving.stats().walked(iter, bucket_len.into());
         match ret {
             Ok(()) => Ok(()),
             // failure for this key: go on

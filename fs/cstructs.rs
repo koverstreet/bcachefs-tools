@@ -25,7 +25,6 @@
 #[path = "data/ec/types.rs"] pub mod data_ec_types;
 #[path = "data/extents_format.rs"] pub mod data_extents_format;
 #[path = "data/extents_sb_format.rs"] pub mod data_extents_sb_format;
-#[path = "data/move_defs.rs"] pub mod data_move_defs;
 #[path = "data/move_types.rs"] pub mod data_move_types;
 #[path = "data/read_types.rs"] pub mod data_read_types;
 #[path = "data/reconcile/format.rs"] pub mod data_reconcile_format;
@@ -153,7 +152,6 @@ pub mod c {
     pub use crate::data::extents::{BCH_READ_hard_require_read_device, BCH_READ_in_retry, BCH_READ_last_fragment, BCH_READ_may_promote, BCH_READ_must_bounce, BCH_READ_must_clone, BCH_READ_no_poison_check, BCH_READ_retry_if_stale, BCH_READ_soft_require_read_device, BCH_READ_user_mapped, __BCH_READ_hard_require_read_device, __BCH_READ_in_retry, __BCH_READ_last_fragment, __BCH_READ_may_promote, __BCH_READ_must_bounce, __BCH_READ_must_clone, __BCH_READ_no_poison_check, __BCH_READ_retry_if_stale, __BCH_READ_soft_require_read_device, __BCH_READ_user_mapped, __bch_read_flags, bch_dev_io_failures, bch_dev_io_failures_bits, bch_io_failures, bch_extent_crc_unpacked, bch_read_flags, extent_ptr_decoded};
     pub(crate) use crate::data::extents::{BCH_READ_FLAGS, __bch_dev_io_failures_bits_forward};
     pub use crate::data::keylist::{keylist};
-    pub use super::data_move_defs::*;
     pub use super::data_move_types::*;
     pub use super::data_read_types::*;
     pub use crate::data::nocow_locking::{BUCKET_NOCOW_LOCKS, BUCKET_NOCOW_LOCKS_BITS, NOCOW_LOCK_BUCKET_SIZE};

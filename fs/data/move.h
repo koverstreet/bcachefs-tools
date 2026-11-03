@@ -10,6 +10,4 @@
 #include "data/move_gen.h"
 #include "data/moving_update_gen.h"
 
-#include "data/move_defs_gen.h"
-
 #endif /* _BCACHEFS_MOVE_H */

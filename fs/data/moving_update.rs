@@ -50,7 +50,7 @@ fn moving_size(u: &c::data_update) -> (&Moving<'_>, u32) {
 /// the bad data a new checksum. Not for the journal scrub, where uncorrected
 /// means a rewind, which can't bring it back.
 fn read_error_stats(u: &c::data_update, moving: &Moving<'_>, size: u32) {
-    let Some(stats) = moving.stats_opt() else { return };
+    let stats = moving.stats();
     let fs = u.op.fs();
     let k = BkeySC::from(u.k.key());
     let poisoned = u.opts.type_ == c::bch_data_update_types::BCH_DATA_UPDATE_scrub &&
@@ -165,9 +165,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
 
     u.start(|b| run(b, read_io, bucket));
 
-    if let Some(stats) = moving.stats_opt() {
-        stats.keys_moved.fetch_add(1, Relaxed);
-        stats.sectors_moved.fetch_add(size.into(), Relaxed);
-    }
+    moving.stats().keys_moved.fetch_add(1, Relaxed);
+    moving.stats().sectors_moved.fetch_add(size.into(), Relaxed);
     Ok(())
 }

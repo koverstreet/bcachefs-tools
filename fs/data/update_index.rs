@@ -127,7 +127,7 @@ fn key_to_text(out: &mut Printbuf, fs: &Fs, u: &c::data_update, new: BkeySC<'_>,
 #[cold]
 #[inline(never)]
 fn count_key_fail(fs: &Fs, u: &c::data_update, new: BkeySC<'_>, wrote: BkeySC<'_>, insert: BkeySC<'_>, msg: &str) {
-    if let Some(stats) = &u.stats {
+    if let Some(stats) = u.moving().map(|m| m.stats()) {
         stats.keys_raced.fetch_add(1, Ordering::Relaxed);
         stats.sectors_raced.fetch_add(insert.k.size.into(), Ordering::Relaxed);
     }

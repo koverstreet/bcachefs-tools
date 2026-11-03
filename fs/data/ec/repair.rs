@@ -547,10 +547,9 @@ pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, ca
         r => r.map(|_| ()),
     };
 
-    if let Some(stats) = ctxt.stats_opt() {
-        let n = if ret.is_ok() { &stats.sectors_error_corrected } else { &stats.sectors_error_uncorrected };
-        n.fetch_add(r.bad_sectors as i64, Relaxed);
-    }
+    let stats = ctxt.stats();
+    let n = if ret.is_ok() { &stats.sectors_error_corrected } else { &stats.sectors_error_uncorrected };
+    n.fetch_add(r.bad_sectors as i64, Relaxed);
 
     let ty = c::bch_csum_type(s.v().csum_type.into());
     let mut msg = log_msg_ratelimited!(fs);
