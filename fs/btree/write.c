@@ -99,12 +99,12 @@ static int btree_node_write_update_key(struct btree_trans *trans,
 		bkey_i_to_btree_ptr_v2(&wbio->key)->v.sectors_written;
 
 	bch2_bkey_drop_ptrs_noerror(bkey_i_to_s(n), p, entry,
-		bch2_io_failures_has_dev(&wbio->wbio.failed, p.ptr.dev));
+		bch2_io_failures_has_dev(&wbio->failed, p.ptr.dev));
 
 	if (!bch2_bkey_durability_safe(c, bkey_i_to_s_c(n)).nr_ptrs)
 		return bch_err_throw(c, btree_node_write_all_failed);
 
-	if (!bch2_io_failures_empty(&wbio->wbio.failed)) {
+	if (!bch2_io_failures_empty(&wbio->failed)) {
 		struct bch_inode_opts opts;
 		try(bch2_bkey_get_io_opts(trans, NULL, bkey_i_to_s_c(n), &opts));
 		try(bch2_bkey_set_needs_reconcile(trans, NULL, &opts, bkey_i_to_s(n),
@@ -117,7 +117,7 @@ static int btree_node_write_update_key(struct btree_trans *trans,
 					  BCH_TRANS_COMMIT_journal_reclaim|
 					  BCH_TRANS_COMMIT_no_enospc|
 					  BCH_TRANS_COMMIT_no_check_rw,
-					  bch2_io_failures_empty(&wbio->wbio.failed));
+					  bch2_io_failures_empty(&wbio->failed));
 }
 
 static void btree_node_write_work(struct work_struct *work)
@@ -140,13 +140,13 @@ static void btree_node_write_work(struct work_struct *work)
 	 * BTREE_NODE_write_in_flight clears and flushers/cancellers drain.
 	 */
 	if (!bch2_journal_error(&c->journal) &&
-	    (!wbio->wbio.first_btree_write || !bch2_io_failures_empty(&wbio->wbio.failed))) {
+	    (!wbio->wbio.first_btree_write || !bch2_io_failures_empty(&wbio->failed))) {
 		int ret = lockrestart_do(trans, btree_node_write_update_key(trans, wbio, b));
 		if (ret)
 			set_btree_node_noevict(b);
 
 		if ((ret && !bch2_err_matches(ret, EROFS)) ||
-		    !bch2_io_failures_empty(&wbio->wbio.failed)) {
+		    !bch2_io_failures_empty(&wbio->failed)) {
 			CLASS(bch_log_msg, msg)(c);
 
 			/*
@@ -157,7 +157,7 @@ static void btree_node_write_work(struct work_struct *work)
 			 * budget - the noise must not crowd out a real error
 			 * arriving in the same window.
 			 */
-			if (!ret && bch2_io_failures_all_dev_removed(&wbio->wbio.failed)) {
+			if (!ret && bch2_io_failures_all_dev_removed(&wbio->failed)) {
 				msg.m.suppress = true;
 			} else {
 				/* Separate ratelimit_states for hard and soft errors */
@@ -170,7 +170,7 @@ static void btree_node_write_work(struct work_struct *work)
 			bch2_btree_pos_to_text(&msg.m, c, b);
 			prt_newline(&msg.m);
 
-			bch2_io_failures_to_text(&msg.m, c, &wbio->wbio.failed);
+			bch2_io_failures_to_text(&msg.m, c, &wbio->failed);
 
 			if (!ret) {
 				prt_printf(&msg.m, "wrote degraded to ");
@@ -216,7 +216,7 @@ static void btree_node_write_endio(struct bio *bio)
 
 	if (unlikely(bio->bi_status)) {
 		guard(spinlock_irqsave)(&c->write_error_lock);
-		bch2_io_failures_set_errcode(&orig->failed, wbio->dev,
+		bch2_io_failures_set_errcode(&wb->failed, wbio->dev,
 			__bch2_err_throw(c, -blk_status_to_bch_err(bio->bi_status)));
 	}
 
@@ -547,6 +547,7 @@ do_write:
 	wbio->data_bytes		= bytes;
 	wbio->sector_offset		= b->written;
 	wbio->start_time		= start_time;
+	wbio->failed			= bch2_io_failures_init();
 	wbio->wbio.c			= c;
 	wbio->wbio.used_mempool		= used_mempool;
 	wbio->wbio.first_btree_write	= !b->written;

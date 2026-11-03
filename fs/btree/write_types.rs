@@ -21,6 +21,7 @@ pub struct btree_write_bio {
     pub start_time: u64,
     /* its slot on its async object list */
     pub list_idx: c_uint,
+    pub failed: c::bch_io_failures,
     pub wbio: c::bch_write_bio,
 }
 c_default!(btree_write_bio);

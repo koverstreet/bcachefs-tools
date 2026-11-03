@@ -1282,7 +1282,7 @@ static noinline int bch2_write_drop_io_error_ptrs(struct bch_write_op *op)
 
 		if (bkey_extent_is_direct_data(&src->k)) {
 			bch2_bkey_drop_ptrs_noerror(bkey_i_to_s(src), p, entry,
-				bch2_io_failures_has_dev(&op->wbio.failed, p.ptr.dev));
+				bch2_io_failures_has_dev(&op->failed, p.ptr.dev));
 
 			if (!bch2_bkey_durability_safe(c, bkey_i_to_s_c(src)).nr_ptrs)
 				return bch_err_throw(c, data_write_io);
@@ -1327,7 +1327,7 @@ static void __bch2_write_index(struct bch_write_op *op)
 		 * which spends this call site's burst budget - the noise must
 		 * not crowd out a real error arriving in the same window.
 		 */
-		if (!ret && bch2_io_failures_all_dev_removed(&op->wbio.failed)) {
+		if (!ret && bch2_io_failures_all_dev_removed(&op->failed)) {
 			msg.m.suppress = true;
 		} else {
 			/* Separate ratelimit_states for hard and soft errors */
@@ -1338,7 +1338,7 @@ static void __bch2_write_index(struct bch_write_op *op)
 
 		struct bkey_i *k = bch2_keylist_front(&op->insert_keys);
 		bch2_log_write_error_start(&msg.m, false, op, bkey_start_offset(&k->k));
-		bch2_io_failures_to_text(&msg.m, c, &op->wbio.failed);
+		bch2_io_failures_to_text(&msg.m, c, &op->failed);
 
 		if (!ret) {
 			prt_printf(&msg.m, "wrote degraded to ");
@@ -1377,7 +1377,7 @@ static void __bch2_write_index(struct bch_write_op *op)
 	}
 out:
 	/* If some a bucket wasn't written, we can't erasure code it: */
-	bch2_open_buckets_write_errors(c, &op->open_buckets, &op->wbio.failed);
+	bch2_open_buckets_write_errors(c, &op->open_buckets, &op->failed);
 
 	bch2_open_buckets_put(c, &op->open_buckets);
 	return;
@@ -1501,7 +1501,7 @@ static void bch2_write_endio(struct bio *bio)
 
 	if (unlikely(bio->bi_status)) {
 		guard(spinlock_irqsave)(&c->write_error_lock);
-		bch2_io_failures_set_errcode(&op->wbio.failed, wbio->dev,
+		bch2_io_failures_set_errcode(&op->failed, wbio->dev,
 			__bch2_err_throw(c, -blk_status_to_bch_err(bio->bi_status)));
 		op->io_error = true;
 	}
@@ -2478,7 +2478,7 @@ static void __bch2_write(struct bch_write_op *op)
 	    bch2_nocow_write(op))
 		return;
 again:
-	bch2_io_failures_reset_devs(&op->wbio.failed);
+	bch2_io_failures_reset_devs(&op->failed);
 
 	do {
 		struct bkey_i *key_to_write;
@@ -2519,7 +2519,7 @@ again:
 			    wait_on_allocator_sync) {
 				ret2 = bch2_wait_on_allocator(trans, req, ret2, &op->cl);
 				__bch2_write_index(op);
-				bch2_io_failures_reset_devs(&op->wbio.failed);
+				bch2_io_failures_reset_devs(&op->failed);
 				ret2 = ret2 ?: btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
 			}
 			ret2;
@@ -2622,7 +2622,7 @@ static void bch2_write_data_inline(struct bch_write_op *op, unsigned data_len)
 	unsigned sectors;
 	int ret;
 
-	bch2_io_failures_reset_devs(&op->wbio.failed);
+	bch2_io_failures_reset_devs(&op->failed);
 
 	op->flags |= BCH_WRITE_wrote_data_inline;
 	op->flags |= BCH_WRITE_submitted;

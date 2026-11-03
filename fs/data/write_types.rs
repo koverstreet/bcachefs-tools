@@ -81,7 +81,6 @@ nest! {
             pub inode_offset: u64,
             pub nocow_bucket: u64,
 
-            pub failed: c::bch_io_failures,
             pub dev: u8,
 
             #[c_bitfield]
@@ -211,6 +210,9 @@ nest! {
          */
         pub devs_need_flush: *mut c::bch_devs_mask,
 
+        /* what failed writing this round's buckets: */
+        pub failed: c::bch_io_failures,
+
         /* Must be last: */
         pub wbio: c::bch_write_bio,
     }
@@ -283,6 +285,7 @@ impl c::bch_write_op {
         self.new_i_size = u64::MAX;
         self.i_sectors_delta = 0;
         self.devs_need_flush = core::ptr::null_mut();
+        unsafe { core::ptr::write(&mut self.failed, Default::default()) };
     }
 }
 
