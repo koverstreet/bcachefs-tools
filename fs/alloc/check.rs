@@ -213,7 +213,7 @@ fn check_alloc_key<'t>(
     }
     let Some(ca) = ca else { return Ok(()) };
 
-    if ca.mi.get().freespace_initialized == 0 {
+    if !ca.mi.get().freespace_initialized {
         return Ok(());
     }
 
@@ -285,7 +285,7 @@ fn check_alloc_hole_freespace<'t>(
     end:            &mut Bpos,
     freespace_iter: &mut BtreeIter<'t>,
 ) -> Result<(), BchError> {
-    if ca.mi.get().freespace_initialized == 0 {
+    if !ca.mi.get().freespace_initialized {
         return Ok(());
     }
 
@@ -818,7 +818,7 @@ pub(crate) fn fs_freespace_init(fs: &Fs) -> Result<(), BchError> {
 
     let mut doing_init = false;
     for ca in fs.members() {
-        if ca.mi.get().freespace_initialized != 0 {
+        if ca.mi.get().freespace_initialized {
             continue;
         }
 

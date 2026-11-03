@@ -1328,7 +1328,7 @@ pub(crate) fn bucket_do_freespace_index(t: &TransAttempt<'_, '_>, ca: &Dev, allo
     let mut iter = BtreeIter::new(t, Btree::freespace, pos, BtreeIterFlags::INTENT | BtreeIterFlags::TRIM);
     let old = iter.peek_slot(t)?.expect("a slot always has a key");
 
-    if ca.mi.get().freespace_initialized != 0 && (old.k.type_ == 0) != set &&
+    if ca.mi.get().freespace_initialized && (old.k.type_ == 0) != set &&
        !need_discard_or_freespace_err(t, alloc_k, set, false, false)? {
         return Ok(());
     }

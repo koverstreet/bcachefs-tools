@@ -79,7 +79,7 @@ impl Fs {
     fn superblock_bucket_unmarked(&self, ca: &Dev, b: u64) -> bool {
         let marked = self.recovery.runner.passes_complete.get() &
             1 << c::bch_recovery_pass::BCH_RECOVERY_PASS_trans_mark_dev_sbs as u32 != 0;
-        !(marked && ca.mi.get().freespace_initialized != 0) && ca.is_superblock_bucket(b)
+        !(marked && ca.mi.get().freespace_initialized) && ca.is_superblock_bucket(b)
     }
 
     /// Whether @bucket may be taken: not open, not nocow locked.
@@ -463,7 +463,7 @@ impl TransAttempt<'_, '_> {
     /// bucket_alloc_blocked if there's still none.
     pub fn bucket_alloc(&self, req: &mut c::alloc_request, ca: &Dev) -> Result<OpenBucket, BchError> {
         let fs = self.fs();
-        let freespace = ca.mi.get().freespace_initialized != 0;
+        let freespace = ca.mi.get().freespace_initialized;
         let mut waiting = false;
         let mut copygc_can_make_progress = false;
 

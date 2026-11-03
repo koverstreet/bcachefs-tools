@@ -1501,7 +1501,7 @@ impl Fs {
             unsafe { self.journal.wq.queue_work((&raw const self.journal.flush_degraded_work).cast_mut()) };
         }
 
-        if mi.freespace_initialized == 0 {
+        if !mi.freespace_initialized {
             dev_freespace_init(self, ca, 0, mi.nbuckets)
                 .inspect_err(|e| prt!(err, "bch2_dev_freespace_init() error: {}\n", e.msg()))?;
         }
@@ -1594,7 +1594,7 @@ impl Fs {
          * bch2_dev_freespace_init() sets it again; after a crash, mount
          * initializes freespace for the whole device.
          */
-        let freespace_initialized = ca.mi.get().freespace_initialized != 0;
+        let freespace_initialized = ca.mi.get().freespace_initialized;
 
         {
             let mut sb = self.sb_lock();
@@ -1807,7 +1807,7 @@ impl Dev {
 
     fn will_resize_on_mount(&self) -> bool {
         let mi = self.mi.get();
-        mi.resize_on_mount != 0 && mi.nbuckets < self.disk_sectors() / u64::from(mi.bucket_size)
+        mi.resize_on_mount && mi.nbuckets < self.disk_sectors() / u64::from(mi.bucket_size)
     }
 }
 
@@ -1840,7 +1840,7 @@ impl Fs {
                 self.write_super(&mut sb);
             }
 
-            if ca.mi.get().freespace_initialized != 0 {
+            if ca.mi.get().freespace_initialized {
                 ca.resize_alloc(old_nbuckets, new_nbuckets)?;
             }
         }

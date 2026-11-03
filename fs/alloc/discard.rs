@@ -243,12 +243,11 @@ fn dev_bucket_nouse(fs: &Fs, bucket: Bpos) -> bool {
 /// Discards on, for @ca: the mount option, if it was given, or the device's
 /// own.
 fn discard_opt_enabled(fs: &Fs, ca: &Dev) -> bool {
-    let on = if fs.flags.get(c::bch_fs_flags::BCH_FS_discard_mount_opt_set) {
-        fs.opts.discard.get()
+    if fs.flags.get(c::bch_fs_flags::BCH_FS_discard_mount_opt_set) {
+        fs.opts.discard.get() != 0
     } else {
         ca.mi.get().discard
-    };
-    on != 0
+    }
 }
 
 impl c::bch_fs_discards {

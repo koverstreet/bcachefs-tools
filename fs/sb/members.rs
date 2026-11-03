@@ -24,7 +24,7 @@ use core::ffi::{c_int, c_uint, c_ulong, CStr};
 use core::marker::PhantomData;
 use core::ops::Deref;
 use core::sync::atomic::Ordering;
-use cstruct_macros::{c_export, CStruct, Plain, TypeInfo};
+use cstruct_macros::{c_export, CStruct, TypeInfo};
 use super::io::*;
 use crate::types::c_default;
 use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState};
@@ -43,7 +43,7 @@ pub struct bch_dev_identity {
 c_default!(bch_dev_identity);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_member_cpu {
     pub nbuckets: u64, /* device size */
     pub nbuckets_minus_first: u64,
@@ -53,12 +53,12 @@ pub struct bch_member_cpu {
     #[c("u16 data_allowed")]
     pub data_allowed: DataTypes,
     pub state: MemberState,
-    pub discard: u8,
+    pub discard: bool,
     pub durability: u8,
-    pub freespace_initialized: u8,
+    pub freespace_initialized: bool,
     pub initialized: MemberInitialized,
-    pub resize_on_mount: u8,
-    pub rotational: u8,
+    pub resize_on_mount: bool,
+    pub rotational: bool,
     pub btree_bitmap_shift: u8,
     pub btree_allocated_bitmap: u64,
 }
@@ -479,7 +479,7 @@ impl SbFieldOps for c::bch_sb_field_members_v2 {
             mi.failure_domain = failure_domain_id(sb.sb(), dev, &m);
 
             ca.set_mi(sb, mi);
-            fs.devs_rotational.assign(dev as usize, mi.rotational != 0);
+            fs.devs_rotational.assign(dev as usize, mi.rotational);
         }
 
         if let Some(mi2) = members_v2(sb.sb()) {
@@ -658,14 +658,14 @@ impl c::bch_member {
             bucket_size:            self.bucket_size.get(),
             failure_domain:         0,
             state:                  MemberState(self.state() as u8),
-            discard:                self.discard() as u8,
+            discard:                self.discard(),
             data_allowed:           DataTypes::from_bits_retain(self.data_allowed() as u16),
             // one-biased on disk: 0 is the default, 1
             durability:             self.durability().checked_sub(1).unwrap_or(1) as u8,
-            freespace_initialized:  self.freespace_initialized() as u8,
+            freespace_initialized:  self.freespace_initialized(),
             initialized:            MemberInitialized(self.initialized() as u8),
-            resize_on_mount:        self.resize_on_mount() as u8,
-            rotational:             self.rotational() as u8,
+            resize_on_mount:        self.resize_on_mount(),
+            rotational:             self.rotational(),
             btree_bitmap_shift:     self.btree_bitmap_shift,
             btree_allocated_bitmap: self.btree_allocated_bitmap.get(),
         }
