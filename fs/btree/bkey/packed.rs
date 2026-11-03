@@ -23,10 +23,20 @@ pub struct BkeyP<V: ?Sized = FamilyVal<AllTypes>> {
 /// bkey_packed's first three bytes: bkey_packed itself is padded to a bkey's
 /// size, so a reference to one reaches past a short key.
 #[repr(C)]
-struct Header {
-    u64s:        u8,
-    format_bits: c::bkey_format_bits,
-    type_:       u8,
+pub(super) struct Header {
+    pub(super) u64s:        u8,
+    pub(super) format_bits: c::bkey_format_bits,
+    pub(super) type_:       u8,
+}
+
+impl Header {
+    pub(super) fn of(w: &u64) -> &Self {
+        unsafe { &*(w as *const u64).cast() }
+    }
+
+    pub(super) fn of_mut(w: &mut u64) -> &mut Self {
+        unsafe { &mut *(w as *mut u64).cast() }
+    }
 }
 
 impl BkeyP {
@@ -234,10 +244,16 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
 
     /// The key unpacked into @u, the value where it is.
     pub fn disassemble<'a>(&'a self, b: &BtreeNode, u: &'a mut c::bkey) -> BkeySC<'a, V> {
-        *u = self.unpack(b);
+        self.disassembled(&b.format, self.unpack(b), u)
+    }
+
+    /// disassemble(), of the key unpacked already: @k.
+    pub(crate) fn disassembled<'a>(&'a self, f: &c::bkey_format, k: c::bkey,
+                                   u: &'a mut c::bkey) -> BkeySC<'a, V> {
+        *u = k;
         BkeySC {
             k:    u,
-            v:    self.val(&b.format).as_ptr().cast(),
+            v:    self.val(f).as_ptr().cast(),
             iter: PhantomData,
             val:  PhantomData,
         }

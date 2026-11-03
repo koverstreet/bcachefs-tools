@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use cstruct_macros::{c_enum, c_typedef, c_xmacro, CStruct};
+use cstruct_macros::{c_enum, c_typedef, c_xmacro, CStruct, Plain};
 
 c_enum! {
     #[closed]
@@ -28,7 +28,7 @@ c_enum! {
  * padding.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, CStruct, Plain)]
 pub struct bkey_packed_padded {
     pub _pad: [u8; 8],
     pub k: c::bkey_packed,
