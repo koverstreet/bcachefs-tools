@@ -174,7 +174,7 @@ fn promote_new(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
     let mut update_opts = c::data_update_opts { write_flags: w::BCH_WRITE_alloc_nowait, ..Default::default() };
 
     match failed.as_deref() {
-        Some(f) if f.nr != 0 => {
+        Some(f) if !f.is_empty() => {
             update_opts.type_ = c::bch_data_update_types::BCH_DATA_UPDATE_self_heal;
             update_opts.target = opts.background_target;
 
@@ -241,7 +241,7 @@ pub unsafe fn bch2_promote_alloc(trans: &BtreeTrans<'_>, k: BkeySC<'_>, orig: &m
     let self_healing = failed.is_some();
 
     // the retry path, before anything is known to need repair: no promote
-    if failed.as_deref().is_some_and(|f| f.nr == 0) {
+    if failed.as_deref().is_some_and(|f| f.is_empty()) {
         return core::ptr::null_mut();
     }
 

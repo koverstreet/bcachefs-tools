@@ -149,8 +149,8 @@ pub mod c {
     pub use crate::data::extents::{bch_extent_crc, bkey_durability, bkey_ptrs, bkey_ptrs_c};
     pub use super::data_extents_format::*;
     pub use super::data_extents_sb_format::*;
-    pub use crate::data::extents::{BCH_READ_hard_require_read_device, BCH_READ_in_retry, BCH_READ_last_fragment, BCH_READ_may_promote, BCH_READ_must_bounce, BCH_READ_must_clone, BCH_READ_no_poison_check, BCH_READ_retry_if_stale, BCH_READ_soft_require_read_device, BCH_READ_user_mapped, __BCH_READ_hard_require_read_device, __BCH_READ_in_retry, __BCH_READ_last_fragment, __BCH_READ_may_promote, __BCH_READ_must_bounce, __BCH_READ_must_clone, __BCH_READ_no_poison_check, __BCH_READ_retry_if_stale, __BCH_READ_soft_require_read_device, __BCH_READ_user_mapped, __bch_read_flags, bch_dev_io_failures, bch_dev_io_failures_bits, bch_io_failures, bch_extent_crc_unpacked, bch_read_flags, extent_ptr_decoded};
-    pub(crate) use crate::data::extents::{BCH_READ_FLAGS, __bch_dev_io_failures_bits_forward};
+    pub use crate::data::extents::{BCH_READ_hard_require_read_device, BCH_READ_in_retry, BCH_READ_last_fragment, BCH_READ_may_promote, BCH_READ_must_bounce, BCH_READ_must_clone, BCH_READ_no_poison_check, BCH_READ_retry_if_stale, BCH_READ_soft_require_read_device, BCH_READ_user_mapped, __BCH_READ_hard_require_read_device, __BCH_READ_in_retry, __BCH_READ_last_fragment, __BCH_READ_may_promote, __BCH_READ_must_bounce, __BCH_READ_must_clone, __BCH_READ_no_poison_check, __BCH_READ_retry_if_stale, __BCH_READ_soft_require_read_device, __BCH_READ_user_mapped, __bch_read_flags, bch_io_failures, bch_extent_crc_unpacked, bch_read_flags, extent_ptr_decoded};
+    pub(crate) use crate::data::extents::BCH_READ_FLAGS;
     pub use crate::data::keylist::{keylist};
     pub use super::data_move_types::*;
     pub use super::data_read_types::*;

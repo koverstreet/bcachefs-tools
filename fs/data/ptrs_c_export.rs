@@ -156,7 +156,7 @@ pub fn bch2_io_failures_dev_errcode(failed: &c::bch_io_failures, dev: c_uint) ->
 
 #[c_export]
 pub fn bch2_io_failures_set_errcode(failed: &mut c::bch_io_failures, dev: c_uint, err: c_int) {
-    failed.dev_mut(dev).errcode = err as i16;
+    failed.set_errcode(dev, err);
 }
 
 /// The erasure coded reconstruct's message, for the read path to write.

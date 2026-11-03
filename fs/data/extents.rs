@@ -8,7 +8,7 @@ use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{bkey_family, bkey_ge, bkey_gt, bkey_le, bkey_lt, BkeyFamily, BkeyS, BkeySC, BkeyV, BkeyVal,
                          BkeyVMut};
 use crate::c;
-use crate::data::ptrs::{crc_is_compressed, crc_unpack, BkeyVPtrs, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
+use crate::data::ptrs::{crc_is_compressed, crc_unpack, BkeyVPtrs, ExtentEntry, ExtentEntryMut, IoFailures, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
@@ -17,8 +17,7 @@ use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{c_export, CStruct, bitfield, c_enum, c_xmacro, TypeInfo};
-use nestify::nest;
+use cstruct_macros::{c_export, CStruct, c_enum, c_xmacro, TypeInfo};
 use crate::types::c_default;
 use crate::format::Bpos;
 
@@ -141,35 +140,13 @@ pub struct extent_ptr_decoded {
     pub ec: c::bch_extent_stripe_ptr,
 }
 
-nest! {
-    #[repr(C)]
-    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-    pub struct bch_dev_io_failures {
-        #[c_anon("")] pub __bitfield_align: [u32; 0],
-        pub dev: u8,
-        #[c_bitfield]
-        #>[bitfield(u8, ty = u32)]
-        pub bits: pub struct bch_dev_io_failures_bits {
-            csum_nr: u7,
-            __pad:   u1,
-        },
-        pub ec_errcode: i16,
-        pub errcode: i16,
-    }
-}
-
+/// What failed reading or writing a key's pointers, for C: its size, not its
+/// layout - C asks it what it holds.
 #[repr(C)]
 #[derive(Default, CStruct, TypeInfo)]
 pub struct bch_io_failures {
-    pub nr: u8,
-    #[c("struct bch_dev_io_failures data[BCH_REPLICAS_MAX + 1]")]
-    pub data: [c::bch_dev_io_failures; c::BCH_REPLICAS_MAX as usize + 1],
-
-    pub ec_msg: Printbuf,
+    pub(crate) failures: IoFailures<{ c::BCH_BKEY_PTRS_MAX as usize }>,
 }
-
-// SAFETY: its message owns its buffer
-unsafe impl Send for bch_io_failures {}
 
 c_xmacro! {
     BCH_READ_FLAGS(x) {

@@ -51,7 +51,7 @@ mod mask;
 
 pub use edit::BkeyVPtrsMut;
 pub use mask::{brand, Branded, PtrMask};
-pub use read::BkeyVRead;
+pub use read::{BkeyVRead, DevIoFailures, IoFailures};
 pub use ops::{bkey_ptrs_to_text, bkey_ptrs_validate, btree_ptr_v2_compat, btree_ptr_v2_to_text, ptr_swab};
 pub(crate) use ops::extent_ptr_to_text;
 

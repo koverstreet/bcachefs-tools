@@ -16,6 +16,9 @@ use crate::errcode::bch_errcode;
 use crate::util::Printbuf;
 use crate::sb::errors::bch2_blk_sts_sb_err;
 use crate::util::kernel::{cold_path, unlikely, READ};
+use crate::data_structures::array_vec::ArrayVec;
+use core::ffi::c_int;
+use core::ops::{Deref, DerefMut};
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 crate::module_param! {
@@ -26,37 +29,77 @@ crate::module_param! {
 
 // ── io failures ──────────────────────────────────────────────────────────
 
-impl c::bch_io_failures {
-    pub fn devs(&self) -> &[c::bch_dev_io_failures] {
-        &self.data[..self.nr.into()]
+/// What failed on one device: an io error, a reconstruct's, and how many
+/// checksum errors.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct DevIoFailures {
+    pub dev: u8,
+    pub csum_nr: u8,
+    pub ec_errcode: i16,
+    pub errcode: i16,
+}
+
+/// What failed, a device at a time, with room for @N devices - and an erasure
+/// coded reconstruct's message. All zeroes is empty.
+#[repr(C)]
+#[derive(Default)]
+pub struct IoFailures<const N: usize> {
+    devs: ArrayVec<DevIoFailures, N>,
+    pub ec_msg: Printbuf,
+}
+
+// SAFETY: its message owns its buffer
+unsafe impl<const N: usize> Send for IoFailures<N> {}
+
+impl Deref for c::bch_io_failures {
+    type Target = IoFailures<{ c::BCH_BKEY_PTRS_MAX as usize }>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.failures
+    }
+}
+
+impl DerefMut for c::bch_io_failures {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.failures
+    }
+}
+
+impl<const N: usize> IoFailures<N> {
+    pub fn devs(&self) -> &[DevIoFailures] {
+        &self.devs
     }
 
     pub fn is_empty(&self) -> bool {
-        self.nr == 0
+        self.devs.is_empty()
     }
 
     /// Forget every device's failures - not the reconstruct's message.
     pub fn reset_devs(&mut self) {
-        self.nr = 0;
+        self.devs.clear();
     }
 
-    /// @dev's record, if it has one.
-    pub fn dev(&self, dev: u32) -> Option<&c::bch_dev_io_failures> {
-        self.devs().iter().find(|f| u32::from(f.dev) == dev)
+    pub fn dev(&self, dev: u32) -> Option<&DevIoFailures> {
+        self.devs.iter().find(|f| u32::from(f.dev) == dev)
     }
 
     /// @dev's record, a new one if it has none.
-    /// Panics if there's no room for one - one per replica, and one more.
-    pub fn dev_mut(&mut self, dev: u32) -> &mut c::bch_dev_io_failures {
-        let nr = usize::from(self.nr);
-        if let Some(i) = self.data[..nr].iter().position(|f| u32::from(f.dev) == dev) {
-            return &mut self.data[i];
+    /// Panics if there's no room for one: @N is the most devices its user can
+    /// have failures on.
+    pub fn dev_mut(&mut self, dev: u32) -> &mut DevIoFailures {
+        if let Some(i) = self.devs.iter().position(|f| u32::from(f.dev) == dev) {
+            return &mut self.devs[i];
         }
 
-        assert!(nr < self.data.len(), "io failures of {} devices, recording dev {dev}", nr + 1);
-        self.nr += 1;
-        self.data[nr] = c::bch_dev_io_failures { dev: dev as u8, ..Default::default() };
-        &mut self.data[nr]
+        if self.devs.try_push(DevIoFailures { dev: dev as u8, ..Default::default() }).is_err() {
+            panic!("io failures of more than {N} devices, recording dev {dev}");
+        }
+        self.devs.last_mut().expect("just pushed")
+    }
+
+    pub fn set_errcode(&mut self, dev: u32, err: c_int) {
+        self.dev_mut(dev).errcode = err as i16;
     }
 
     /// Record @err, reading @p: a failed reconstruct, a checksum error - those
@@ -73,8 +116,7 @@ impl c::bch_io_failures {
         if p.do_ec_reconstruct {
             f.ec_errcode = code;
         } else if err.raw() == bch_errcode::BCH_ERR_data_read_retry_csum_err.0 as i32 {
-            // its 7 bits, wrapping as C's bitfield does
-            f.bits.update_csum_nr(|n| n.wrapping_add(1) & 0x7f);
+            f.csum_nr = f.csum_nr.saturating_add(1);
         } else {
             f.errcode = code;
         }
@@ -84,7 +126,7 @@ impl c::bch_io_failures {
     pub fn err_mask(&self) -> u32 {
         let mut errors = 0;
         for f in self.devs() {
-            if f.bits.csum_nr() != 0 {
+            if f.csum_nr != 0 {
                 errors |= c::BCH_READ_ERR_checksum;
             }
             if f.ec_errcode != 0 {
@@ -119,7 +161,7 @@ impl c::bch_io_failures {
     /// operation that succeeded; a record with no error at all isn't one.
     pub fn all_dev_removed(&self) -> bool {
         self.devs().iter().all(|f| {
-            f.bits.csum_nr() == 0 && f.ec_errcode == 0 &&
+            f.csum_nr == 0 && f.ec_errcode == 0 &&
                 BchError::from_raw(-i32::from(f.errcode)).matches(bch_errcode::BCH_ERR_BLK_STS_REMOVED)
         })
     }
@@ -142,11 +184,11 @@ impl c::bch_io_failures {
                 }
 
                 let err_str = |code: i16| BchError::from_raw(-i32::from(code)).msg();
-                if f.bits.csum_nr() == 0 && f.ec_errcode == 0 && f.errcode == 0 {
+                if f.csum_nr == 0 && f.ec_errcode == 0 && f.errcode == 0 {
                     write!(out, " no error - confused");
                 }
-                if f.bits.csum_nr() != 0 {
-                    write!(out, " checksum ({})", f.bits.csum_nr());
+                if f.csum_nr != 0 {
+                    write!(out, " checksum ({})", f.csum_nr);
                 }
                 if f.errcode != 0 {
                     write!(out, " io: {}", err_str(f.errcode));
@@ -278,7 +320,7 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
 
                 if let Some(f) = failed.and_then(|f| f.dev(dev)) {
                     cold_path();
-                    let csum_nr = f.bits.csum_nr();
+                    let csum_nr = f.csum_nr;
                     p.crc_retry_nr = csum_nr;
                     p.has_ec &= f.ec_errcode == 0;
 
