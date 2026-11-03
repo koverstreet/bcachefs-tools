@@ -291,7 +291,7 @@ mod abox {
     use core::alloc::Layout;
     use core::marker::PhantomData;
     use core::ptr::NonNull;
-    use kernel::alloc::{allocator::KVmalloc, flags::GFP_KERNEL, Allocator, NumaNode};
+    use kernel::alloc::{allocator::KVmalloc, flags::GFP_KERNEL, Allocator, Flags, NumaNode};
 
     /// An alignment, as aligned-vec's: here only the compile-time one.
     pub trait Alignment {
@@ -333,6 +333,12 @@ mod abox {
 
         /// Room for exactly @additional more.
         pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), AllocError> {
+            self.try_reserve_exact_gfp(additional, GFP_KERNEL)
+        }
+
+        /// try_reserve_exact(), as @gfp allows - allocate_dropping_locks()'s
+        /// GFP_NOWAIT try: not the crate's.
+        pub fn try_reserve_exact_gfp(&mut self, additional: usize, gfp: Flags) -> Result<(), AllocError> {
             if additional <= self.cap - self.len {
                 return Ok(());
             }
@@ -340,7 +346,7 @@ mod abox {
             let old = (self.cap != 0).then_some(self.p.cast());
             // SAFETY: @old is KVmalloc's, of its layout, or none
             let p = unsafe {
-                KVmalloc::realloc(old, layout::<T, A>(cap)?, layout::<T, A>(self.cap)?, GFP_KERNEL, NumaNode::NO_NODE)
+                KVmalloc::realloc(old, layout::<T, A>(cap)?, layout::<T, A>(self.cap)?, gfp, NumaNode::NO_NODE)
             }?;
             self.p = p.cast();
             self.cap = cap;
