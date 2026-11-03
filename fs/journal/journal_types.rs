@@ -38,6 +38,7 @@ c_default!(journal_block);
 
 c_extern! {
     pub fn bch2_journal_flush(j: *mut c::journal) -> c_int;
+    pub fn bch2_journal_flush_seq(j: *mut c::journal, seq: u64, task_state: c_uint) -> c_int;
     pub fn bch2_journal_entry_res_resize(j: *mut c::journal, res: *mut c::journal_entry_res, new_u64s: c_uint);
     pub fn bch2_journal_flush_async(j: *mut c::journal, parent: *mut c::closure);
     pub fn bch2_journal_advance_rewind_seq(j: *mut c::journal, seq: u64);
@@ -61,9 +62,22 @@ impl c::journal {
             u64::from(c::JOURNAL_ENTRY_ERROR_VAL)
     }
 
+    /// journal_shutdown if it's halted: bch2_journal_error().
+    pub fn error(&self) -> Result<(), BchError> {
+        if self.halted() {
+            Err(crate::errcode::bch_errcode::BCH_ERR_journal_shutdown.into())
+        } else {
+            Ok(())
+        }
+    }
+
     /// Everything committed before the call is on disk when it returns
     pub fn flush(&self) -> Result<(), BchError> {
         ret_to_result_void(unsafe { bch2_journal_flush(self.as_ptr()) })
+    }
+
+    pub fn flush_seq(&self, seq: u64, task_state: c_uint) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { bch2_journal_flush_seq(self.as_ptr(), seq, task_state) })
     }
 }
 
