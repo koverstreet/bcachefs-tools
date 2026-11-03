@@ -8,29 +8,16 @@
 
 use core::cmp::Ordering;
 
+use super::heap::sift_down;
+
 /// @v sorted by @cmp, as sort_unstable_by().
 pub fn heapsort_by<T>(v: &mut [T], mut cmp: impl FnMut(&T, &T) -> Ordering) {
-    let mut sift_down = |v: &mut [T], mut node: usize| loop {
-        let mut child = 2 * node + 1;
-        if child >= v.len() {
-            break;
-        }
-        if child + 1 < v.len() && cmp(&v[child], &v[child + 1]) == Ordering::Less {
-            child += 1;
-        }
-        if cmp(&v[node], &v[child]) != Ordering::Less {
-            break;
-        }
-        v.swap(node, child);
-        node = child;
-    };
-
     for i in (0..v.len() / 2).rev() {
-        sift_down(v, i);
+        sift_down(v, i, &mut cmp);
     }
     for end in (1..v.len()).rev() {
         v.swap(0, end);
-        sift_down(&mut v[..end], 0);
+        sift_down(&mut v[..end], 0, &mut cmp);
     }
 }
 

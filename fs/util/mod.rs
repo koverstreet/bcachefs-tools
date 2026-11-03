@@ -24,6 +24,7 @@ pub mod gap_buffer;
 pub mod gather;
 pub mod genradix;
 pub mod hash;
+pub mod heap;
 pub mod inline_vec;
 pub mod ioctl;
 pub mod jump_label;
