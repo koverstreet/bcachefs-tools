@@ -19,6 +19,7 @@ use super::inode::InodeInfo;
 use crate::c;
 use crate::errcode::{errptr_to_result, loff_to_result, ret_to_result_void, BchError};
 use crate::fs::Fs;
+use crate::locking::Locked;
 use crate::util::kernel::loff;
 use core::ffi::{c_int, c_uint};
 use core::ops::Deref;
@@ -157,11 +158,13 @@ impl Folio {
         unsafe { (*self.bch().expect("a folio's bch_folio").as_ptr()).partially_uptodate = sectors }
     }
 
-    /// @f on its bcachefs state's sectors, one a sector of the folio; the
-    /// folio lock makes them the caller's. Panics if it has no bcachefs
+    /// @f on its bcachefs state's sectors, one a sector of the folio, under
+    /// the state's lock: the folio lock isn't enough, as writeback completion
+    /// writes them with the folio unlocked. Panics if it has no bcachefs
     /// state.
     pub fn with_bch_sectors<R>(self, f: impl FnOnce(&mut [c::bch_folio_sector]) -> R) -> R {
         let s = self.bch().expect("a folio's bch_folio").as_ptr();
+        let _lock = Locked::from_c(unsafe { &(*s).lock }).lock();
         f(unsafe { core::slice::from_raw_parts_mut((&raw mut (*s).s).cast(), self.size() >> 9) })
     }
 
