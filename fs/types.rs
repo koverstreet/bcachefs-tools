@@ -4,6 +4,7 @@
 
 use crate::alloc::discard::{do_discards_fast, do_invalidates_work};
 use crate::init::error::io_error_work;
+use crate::init::rw::read_only_work;
 use crate::cstructs::c;
 use crate::new_lock;
 use crate::util::alloc::KVVec;
@@ -696,7 +697,9 @@ pub struct Fs {
     #[pin]
     #[init(RustOnly::new(crate::util::futex::EventCount::new()))]
     pub(crate) ro_ref_events: rust_only!(crate::util::futex::EventCount),
-    pub read_only_work: c::work_struct,
+    #[c("struct work_struct read_only_work")]
+    #[pin]
+    pub(crate) read_only_work: ReffedWork<read_only_work, crate::field!(ro_ref)>,
 
     /// Written under state_lock: StateLockWrite::devs().
     #[c("struct bch_dev __rcu *devs[BCH_SB_MEMBERS_MAX]")]

@@ -132,7 +132,7 @@ impl Fs {
         } else {
             unsafe { c::bch2_journal_halt(j) };
         }
-        unsafe { Queue::system_long().queue_work((&raw const self.read_only_work).cast_mut()) };
+        self.read_only_work.queue(Queue::system_long());
         READ_ONLY_EVENTS.wake();
 
         /*
@@ -396,8 +396,7 @@ impl StateLockWrite<'_> {
     }
 }
 
-pub(crate) unsafe extern "C" fn read_only_work(work: *mut c::work_struct) {
-    let fs = unsafe { &*work.byte_sub(core::mem::offset_of!(Fs, read_only_work)).cast::<Fs>() };
+pub(crate) fn read_only_work(fs: &Fs) {
     fs.state_lock_write().read_only();
 }
 

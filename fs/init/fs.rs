@@ -27,7 +27,7 @@ use crate::debug::sysfs::{FsDir, FS_GROUPS};
 use crate::init::dev::{dev_exit, dev_in_fs};
 use crate::init::error::free_fsck_errs;
 use crate::init::registry::register;
-use crate::init::rw::{read_only_work, writes_disabled};
+use crate::init::rw::writes_disabled;
 use crate::inode::shard_cpu_init;
 use crate::journal::seq_blacklist::blacklist_table_initialize;
 use crate::locking::{Guard, MutexNoio, Noio, PercpuRwsemNoio, RawLock, ReadGuard};
@@ -38,7 +38,7 @@ use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists,
 use crate::sb::version::prep_for_start;
 use crate::util::names;
 use crate::util::Printbuf;
-use crate::util::alloc::{flags::GFP_KERNEL, init_at, Arc, KVVec};
+use crate::util::alloc::{flags::GFP_KERNEL, Arc, KVVec};
 use crate::util::backref::BackRef;
 use crate::util::enumerated_ref::EnumeratedRef;
 use crate::util::ffi::c_char;
@@ -489,13 +489,10 @@ impl Fs {
         #[cfg(kernel)]
         unsafe { c::__module_get(&raw mut kernel::bindings::__this_module) };
 
-        let work = crate::new_work!(read_only_work, "read_only_work");
         unsafe {
             c::closure_init(&raw mut (*p).cl, core::ptr::null_mut());
 
             (*p).minor = -1;
-
-            let Ok(()) = init_at(work, &raw mut (*p).read_only_work);
 
             let Ok(()) = c::mutex::init(&raw mut (*p).opt_change_lock, c"&c->opt_change_lock", new_lock!(@key));
         }
@@ -929,8 +926,6 @@ impl Fs {
             unsafe {
                 /* btree prefetch might have kicked off reads in the background: */
                 bch2_btree_flush_all_reads(p);
-
-                c::cancel_work_sync(&raw mut (*p).read_only_work);
 
                 c::flush_work(&raw mut (*p).btree.interior_updates.work);
             }
