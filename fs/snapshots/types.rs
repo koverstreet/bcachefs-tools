@@ -9,7 +9,7 @@ use crate::new_lock;
 use crate::snapshots::subvolume::delete_unlinked;
 use crate::types::{DArray, RustOnly, bits_to_longs, rust_only};
 use crate::util::alloc::KVVec;
-use crate::util::bitmap::AtomicBitArray;
+use crate::data_structures::bitmap::AtomicBitArray;
 use crate::util::workqueue::ReffedWork;
 use core::sync::atomic::{AtomicBool, AtomicU32};
 use cstruct_macros::{c_const, c_enum, c_rcu_array, placed, CStruct, c_typedef, Init, TypeInfo};

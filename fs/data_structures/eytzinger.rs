@@ -2,7 +2,7 @@
 
 //! Eytzinger layout: a complete binary tree in an array, root first, then
 //! each level in turn - node i's children at 2i and 2i + 1. The C
-//! (util/eytzinger.[ch]) stays until its C users are gone.
+//! (data_structures/eytzinger.[ch]) stays until its C users are gone.
 //!
 //! In place of binary search over a sorted array: binary search is a worst
 //! case for branch prediction and prefetching, while here a node's children

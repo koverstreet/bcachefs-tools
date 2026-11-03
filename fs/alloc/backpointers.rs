@@ -57,7 +57,7 @@ use crate::util::ffi::Opaque;
 use crate::util::kernel::{totalram_bytes, unlikely, PAGE_SIZE};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
-use crate::util::sort::heapsort_by;
+use crate::data_structures::sort::heapsort_by;
 use crate::util::vstructs::plain_bytes;
 use crate::util::{Printbuf, ToText};
 use crate::{bkey_fsck_err_on, fsck_err, prt};

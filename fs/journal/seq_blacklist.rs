@@ -43,7 +43,7 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::types::Le64;
-use crate::util::eytzinger::Eytzinger0;
+use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::ffi::Opaque;
 use crate::util::rcu::{RcuArray, RcuElement};
 use crate::util::Printbuf;

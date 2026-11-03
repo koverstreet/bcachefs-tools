@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::data::ec::stripe_new::StripeNewBox;
 use crate::locking::{ByteLock, Locked, Lockdep};
 use crate::types::{bits_to_longs, c_opaque};
-use crate::util::bitmap::BitArray;
+use crate::data_structures::bitmap::BitArray;
 use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::{c_enum, c_xmacro, CStruct};
 use pin_init::pin_data;

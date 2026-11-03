@@ -74,7 +74,7 @@ use crate::sb::counters::events;
 use crate::prt;
 use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::alloc::KVVec;
-use crate::util::cuckoo::Cuckoo;
+use crate::data_structures::cuckoo::Cuckoo;
 use crate::util::kernel::{cond_resched, ktime_get_ns, WRITE};
 use crate::util::kthread::{Kthread, KthreadSelf};
 use crate::util::par::{self, Backend};

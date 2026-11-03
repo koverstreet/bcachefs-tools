@@ -256,7 +256,7 @@ use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, 
      core::sync::atomic::Ordering::Acquire};
 use crate::types::{DArray, bits_to_longs, c_default};
 use crate::util::bio::{Bio, BioBufPtr};
-use crate::util::bitmap::{AtomicBitArray, BitArray};
+use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::{bytes_in, c_char, strscpy};
 use crate::util::refcount::{ARef, AlwaysRefCounted, WaitableRef};
 use nestify::nest;

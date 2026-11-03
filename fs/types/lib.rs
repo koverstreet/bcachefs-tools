@@ -188,7 +188,7 @@ le_int!(Le16: u16, Le32: u32, Le64: u64);
 // holds them, so they're opaque - darray's layout is C's, not Vec's. A field
 // of one is declared in C with its macro - the generator's container_c().
 
-/// DARRAY(T) - DARRAY_PREALLOCATED(T, N) - util/darray.h. Not Clone or
+/// DARRAY(T) - DARRAY_PREALLOCATED(T, N) - data_structures/darray.h. Not Clone or
 /// Copy: it owns its allocation, and a copy would be a second owner.
 #[repr(C)]
 pub struct DArray<T, const N: usize = 0> {
@@ -408,7 +408,7 @@ impl<T> core::ops::Deref for CStatic<T> {
     }
 }
 
-/// util/darray.h's DEFINE_DARRAY()s: C's typedefs are its own, these the
+/// data_structures/darray.h's DEFINE_DARRAY()s: C's typedefs are its own, these the
 /// same types for Rust.
 #[allow(non_camel_case_types)]
 pub mod darrays {
@@ -457,12 +457,12 @@ macro_rules! typeinfo_opaque {
 }
 typeinfo_opaque!(DArray<T, N>, T, const N: usize);
 typeinfo_opaque!(GenRadix<T>, T);
-typeinfo_opaque!(Fifo<T, I>, T, I: crate::util::fifo::FifoIdx);
+typeinfo_opaque!(Fifo<T, I>, T, I: crate::data_structures::fifo::FifoIdx);
 
-/// FIFO(T), FIFO_U16_IDX(T)... - util/fifo.h: __FIFO(T, I). Its methods are
-/// util/fifo.rs's.
+/// FIFO(T), FIFO_U16_IDX(T)... - data_structures/fifo.h: __FIFO(T, I). Its methods are
+/// data_structures/fifo.rs's.
 #[repr(C)]
-pub struct Fifo<T, I: crate::util::fifo::FifoIdx = usize> {
+pub struct Fifo<T, I: crate::data_structures::fifo::FifoIdx = usize> {
     pub front: I,
     pub back:  I,
     pub size:  I,
@@ -471,7 +471,7 @@ pub struct Fifo<T, I: crate::util::fifo::FifoIdx = usize> {
 }
 
 // SAFETY: zeroed is empty, nothing allocated - as before init_fifo()
-unsafe impl<T, I: crate::util::fifo::FifoIdx + ::pin_init::Zeroable> ::pin_init::Zeroable for Fifo<T, I> {}
+unsafe impl<T, I: crate::data_structures::fifo::FifoIdx + ::pin_init::Zeroable> ::pin_init::Zeroable for Fifo<T, I> {}
 
 /// XXX migration only: rip this out once the types are Rust's alone. It's
 /// here so the converted types keep the C layout exactly, where a run of C

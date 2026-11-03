@@ -127,7 +127,7 @@
 #include <linux/sched.h>
 #include <linux/types.h>
 
-#include "util/fifo.h"
+#include "data_structures/fifo.h"
 #include "util/util.h"
 
 #include "enum_kind.h"

@@ -12,7 +12,7 @@
 // 4. Search correctness (eytzinger0_find_le)
 //
 // The proofs mirror the C implementation in:
-//   fs/bcachefs/util/eytzinger.h
+//   fs/bcachefs/data_structures/eytzinger.h
 //
 // Run: ~/verus-bin/verus-x86-linux/verus verus-proofs/eytzinger_verify.rs
 

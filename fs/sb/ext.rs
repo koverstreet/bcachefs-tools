@@ -12,7 +12,7 @@ use crate::init::passes;
 use crate::sb::errors::prt_error_ids;
 use crate::sb::io::SbFieldOps;
 use crate::types::Le64;
-use crate::util::bitmap::LeBitmap;
+use crate::data_structures::bitmap::LeBitmap;
 use crate::util::vstructs::{Validated, Unvalidated};
 use crate::util::Printbuf;
 use crate::format::Btree;

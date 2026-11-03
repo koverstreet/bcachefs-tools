@@ -28,7 +28,7 @@ use core::ffi::c_int;
 use cstruct_macros::{c_export, c_enum, CStruct, TypeInfo};
 use crate::locking::Locked;
 use crate::new_lock;
-use crate::util::genradix::SharedGenRadix;
+use crate::data_structures::genradix::SharedGenRadix;
 use core::sync::atomic::AtomicU32;
 use pin_init::{pin_data, pin_init, PinInit};
 #[cfg(CONFIG_BCACHEFS_QUOTA)]

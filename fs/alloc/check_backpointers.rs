@@ -47,7 +47,7 @@ use crate::init::error::id;
 use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::types::bits_to_longs;
-use crate::util::bitmap::{AtomicBitmap, AtomicULong};
+use crate::data_structures::bitmap::{AtomicBitmap, AtomicULong};
 use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg, Ratelimit};
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::{Printbuf, ToText};

@@ -5,7 +5,7 @@
 //! short-input PRF"): c compression rounds per 8 byte block, d finalization
 //! rounds, a 128 bit key and a 64 bit result. The round counts are the type's:
 //! str_hash's SipHash24, the full strength, and SipHash13 - hsiphash()'s
-//! rounds on 64-bit - for hash tables, util/cuckoo.rs's.
+//! rounds on 64-bit - for hash tables, data_structures/cuckoo.rs's.
 //!
 //! Translated from util/siphash.c, OpenBSD's siphash.c 1.3, which it replaces -
 //! and like it, not quite SipHash when one input comes in several updates. An

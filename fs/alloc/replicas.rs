@@ -31,8 +31,8 @@ use crate::util::ffi::Opaque;
 use crate::util::kernel::{cold_path, likely};
 use crate::util::rcu::read_lock;
 use crate::util::alloc::{flags, AllocError, KVVec};
-use crate::util::eytzinger::Eytzinger0;
-use crate::util::strided::StridedBuf;
+use crate::data_structures::eytzinger::Eytzinger0;
+use crate::data_structures::strided::StridedBuf;
 use crate::util::vstructs::{bytes_of, bytes_of_mut, from_ffi, from_ffi_mut, Head, Unsized, Unvalidated,
                             Validated};
 use crate::util::{Printbuf, ToText};

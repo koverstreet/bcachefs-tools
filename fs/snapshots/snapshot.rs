@@ -309,7 +309,7 @@ use crate::init::passes;
 use crate::snapshots::{check_snapshots, delete, subvolume};
 use crate::util::log::{LogLevel, LogMsg};
 use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
-use crate::util::bitmap::BitArray;
+use crate::data_structures::bitmap::BitArray;
 use crate::util::rcu::RcuArray;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{cold_path, likely, unlikely};

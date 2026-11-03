@@ -165,7 +165,7 @@ use crate::locking::Guard;
 use crate::sb::io::{SbFieldOps, SbWrite};
 use crate::snapshots::subvolume;
 use crate::types::{Le32, Le64};
-use crate::util::bitmap::LeBitmap;
+use crate::data_structures::bitmap::LeBitmap;
 use crate::util::names;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::{ktime_get_ns, ktime_get_real_seconds, NSEC_PER_SEC};

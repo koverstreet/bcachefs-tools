@@ -142,7 +142,7 @@ use crate::c::{bch_sb, bch_sb_buf, bch_sb_field_crypt, bch_sb_handle, block_devi
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::members;
-use crate::util::bitmap::LeBitmap;
+use crate::data_structures::bitmap::LeBitmap;
 use crate::util::projections::{AtomicWord, Volatile, VolatileWriter, PublishedOnce};
 use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};

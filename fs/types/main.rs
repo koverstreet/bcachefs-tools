@@ -149,7 +149,7 @@ fn verbatim_types(c: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The typedefs @c's DEFINE_DARRAY*()s make - util/darray.h:
+/// The typedefs @c's DEFINE_DARRAY*()s make - data_structures/darray.h:
 /// DEFINE_DARRAY(foo) and the like are darray_foo, DEFINE_DARRAY_NAMED(name,
 /// ...) name.
 fn darray_typedefs(c: &str) -> Vec<String> {
@@ -516,7 +516,7 @@ fn file_h(header: &str, records: &[&Record], paths: &BTreeMap<String, String>,
             format!("unsigned char\t{}[{size}]", f.name)
         })
     };
-    // util/darray.h's own darray_foos are typedefs too (types/lib.rs's
+    // data_structures/darray.h's own darray_foos are typedefs too (types/lib.rs's
     // darrays has them for Rust)
     let kind = |name: &str| lookup(name).cloned()
         .or_else(|| name.starts_with("darray_").then(|| name.to_string()));

@@ -5,7 +5,7 @@
 //! So an index names its entry for as long as it's in the fifo, whatever's
 //! pushed and popped around it - the journal's are its sequence numbers.
 //!
-//! The struct is util/fifo.h's, Fifo<T, I> in types/lib.rs: C's macros and
+//! The struct is data_structures/fifo.h's, Fifo<T, I> in types/lib.rs: C's macros and
 //! these methods work on the same one, until the journal's C is gone and
 //! fifo.h with it. size is C's limit on how many entries it holds; here it's
 //! always the whole buffer, mask + 1 - as C's journal fifos have it too - and

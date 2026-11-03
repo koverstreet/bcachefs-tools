@@ -38,7 +38,7 @@ use crate::fs::Fs;
 use crate::util::bio::pages;
 use crate::util::closure::StackClosure;
 use crate::sb::members::DevRef;
-use crate::util::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
+use crate::data_structures::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
 use crate::util::ffi::{c_str, Opaque};
 use crate::util::kernel::unlikely;
 use crate::util::rcu::read_lock;

@@ -30,8 +30,8 @@
 
 #include "libbcachefs.h"
 
-#include "fs/util/darray.h"
-#include "fs/util/eytzinger.h"
+#include "fs/data_structures/darray.h"
+#include "fs/data_structures/eytzinger.h"
 
 #include "rust_shims.h"
 

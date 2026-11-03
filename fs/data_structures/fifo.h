@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_FIFO_H
 #define _BCACHEFS_FIFO_H
 
-#include "util.h"
+#include "util/util.h"
 
 #define __FIFO(type, index_type)					\
 struct {								\

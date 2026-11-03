@@ -5,7 +5,7 @@
 #include "data/extents.h"
 #include "init/dev_gen.h"
 #include "sb/members.h"
-#include "util/eytzinger.h"
+#include "data_structures/eytzinger.h"
 
 #include <asm/byteorder.h>
 

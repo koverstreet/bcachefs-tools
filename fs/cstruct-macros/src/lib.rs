@@ -406,7 +406,7 @@ fn maybe_zeroable(def: &cstruct::CStructDef) -> TokenStream {
 }
 
 /// One of core::sync::atomic's integer, bool or pointer atomics, by any path
-/// - or an array of one - or util/bitmap.rs's AtomicULong, AtomicUsize as C's
+/// - or an array of one - or data_structures/bitmap.rs's AtomicULong, AtomicUsize as C's
 /// unsigned long.
 pub(crate) fn is_core_atomic(ty: &str) -> bool {
     let ty = ty.trim();
@@ -1197,8 +1197,8 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
                         }
                         pub const fn into_bits(self) -> #repr { self as #repr }
                     }
-                    impl crate::util::bitmap::BitEnum for #name {
-                        type Words = crate::util::bitmap::AtomicBitArray<{ crate::types::bits_to_longs(#nr) }>;
+                    impl crate::data_structures::bitmap::BitEnum for #name {
+                        type Words = crate::data_structures::bitmap::AtomicBitArray<{ crate::types::bits_to_longs(#nr) }>;
                         fn bit(self) -> usize { self as usize }
                         fn from_bit(bit: usize) -> Option<Self> {
                             match bit {

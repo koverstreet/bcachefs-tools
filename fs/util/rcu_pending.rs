@@ -20,7 +20,7 @@ use crate::new_lock;
 use crate::types::GenRadix;
 use crate::util::alloc::{flags, init_at, kbox_zeroed_nofail, AllocError, KBox, KVBox, KVVec};
 use crate::util::ffi::Opaque;
-use crate::util::genradix::NewNode;
+use crate::data_structures::genradix::NewNode;
 use crate::util::maybe_rcu_alloc::{alloc_at, KVmalloc, Kmalloc, Retired};
 use crate::util::percpu::{CpuShared, PerCpu, PerCpuRef};
 use crate::util::rcu::{Flavor, GpCookie};

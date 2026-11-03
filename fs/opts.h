@@ -9,7 +9,7 @@
 #include <linux/string.h>
 #include <linux/sysfs.h>
 #include "bcachefs_format.h"
-#include "util/darray.h"
+#include "data_structures/darray.h"
 
 #include "opts_gen.h"
 

@@ -82,6 +82,8 @@ bcachefs-y		:=			\
 	data/extents.o				\
 	data/read.o				\
 	data/write.o				\
+	data_structures/darray.o		\
+	data_structures/eytzinger.o		\
 	debug/debug.o				\
 	debug/trace.o				\
 	errcode.o				\
@@ -93,9 +95,7 @@ bcachefs-y		:=			\
 	journal/reclaim.o			\
 	journal/write.o				\
 	locking/locking.o			\
-	util/darray.o				\
 	util/enumerated_ref.o			\
-	util/eytzinger.o			\
 	util/printbuf.o				\
 	util/rcu.o				\
 	util/util.o				\

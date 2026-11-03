@@ -29,7 +29,7 @@ use crate::util::kernel::unlikely;
 use crate::util::log::LogMsg;
 use crate::util::percpu::{Counters, PerCpu};
 use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::bitmap::AtomicBitmap;
+use crate::data_structures::bitmap::AtomicBitmap;
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
 use core::ffi::{c_int, c_uint};

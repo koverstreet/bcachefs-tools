@@ -25,7 +25,7 @@
 #include <linux/types.h>
 #include <linux/workqueue.h>
 
-#include "util/darray.h"
+#include "data_structures/darray.h"
 
 struct kobj_type {
 	void (*release)(struct kobject *kobj);

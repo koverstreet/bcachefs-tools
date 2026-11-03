@@ -66,7 +66,7 @@ use crate::util::closure::{closure_has_waiters, closure_wait, closure_wake_up, S
 use crate::util::time_stats::TimeStats;
 use crate::util::ffi::Opaque;
 use crate::util::hash::{hash_64, Fold};
-use crate::util::inline_vec::InlineVec;
+use crate::data_structures::inline_vec::InlineVec;
 use crate::util::kernel::{jiffies, time_after, unlikely, HZ};
 use crate::util::log::{print_str, LogLevel};
 use crate::util::place::Contained;

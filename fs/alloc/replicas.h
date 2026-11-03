@@ -4,7 +4,7 @@
 
 #include "btree/bkey.h"
 #include "alloc/replicas_gen.h"
-#include "util/eytzinger.h"
+#include "data_structures/eytzinger.h"
 
 static inline void bch2_replicas_entry_cached(struct bch_replicas_entry_v1 *e,
 					      unsigned dev)

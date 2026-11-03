@@ -4,7 +4,7 @@
 
 #include "data/checksum.h"
 
-#include "util/darray.h"
+#include "data_structures/darray.h"
 
 static inline bool journal_replay_ignore(struct journal_replay *i)
 {

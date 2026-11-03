@@ -4,7 +4,7 @@
 
 #include "data/extents.h"
 #include "init/dev_gen.h"
-#include "util/darray.h"
+#include "data_structures/darray.h"
 
 #include "bcachefs_ioctl.h"
 

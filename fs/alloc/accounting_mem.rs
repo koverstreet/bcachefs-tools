@@ -17,7 +17,7 @@ use crate::init::passes;
 use crate::locking::{percpu_rwsem_noio, Guard, ReadGuard};
 use crate::sb::counters::events;
 use crate::util::alloc::{flags, AllocError, KVVec};
-use crate::util::eytzinger::Eytzinger0;
+use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::util::percpu::{Counters as _, CpuGuard, PerCpuRef, PerCpuU64s};
 use crate::util::printbuf::{Join, Msg};

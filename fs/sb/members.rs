@@ -18,7 +18,7 @@ use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::refcount::{RefGuard, Refcount, TryRefcount};
 use crate::alloc::disk_groups;
 use crate::util::ffi::{c_char, Opaque};
-use crate::util::strided::{Strided, StridedMut};
+use crate::data_structures::strided::{Strided, StridedMut};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, plain_bytes, Head, Unsized, Unvalidated, Validated};
 use core::ffi::{c_int, c_uint, c_ulong, CStr};
 use core::marker::PhantomData;

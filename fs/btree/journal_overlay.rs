@@ -10,7 +10,7 @@
 //!    level - descending - and position. Equal keys sort oldest first, and
 //!    sorting keeps only the newest, but for accounting keys, whose updates
 //!    are deltas, each compared against the btree's version in replay.
-//!  - The keys are a GapBuffer (util/gap_buffer.rs): recovery's inserts come
+//!  - The keys are a GapBuffer (data_structures/gap_buffer.rs): recovery's inserts come
 //!    in order, so each moves little.
 //!  - A key is overwritten when replay, or a btree update before replay is
 //!    done, has made it obsolete: readers skip it. A run of overwritten keys
@@ -48,7 +48,7 @@ use crate::locking::{Guard, Locked};
 use crate::util::projections::VolatilePublish;
 use crate::util::alloc::{darray_exit, flags::GFP_KERNEL, DArrayLoan, KVVec};
 use crate::util::ffi::Opaque;
-use crate::util::gap_buffer::GapBuffer;
+use crate::data_structures::gap_buffer::GapBuffer;
 use crate::util::kernel::cond_resched;
 use crate::util::log::{LogLevel, LogMsg};
 use crate::util::place::Placed;
@@ -182,7 +182,7 @@ published! {
 #[derive(CStruct, Init)]
 pub struct journal_keys {
     /*
-     * The keys, a gap buffer: util/gap_buffer.rs, whose fields C reads as
+     * The keys, a gap buffer: data_structures/gap_buffer.rs, whose fields C reads as
      * its own. Written only where nothing else reads them: keys_mut()
      */
     #[c_anon("size_t nr; size_t size; struct journal_key *data; struct journal_key preallocated[0]; size_t gap")]

@@ -2,30 +2,21 @@ pub mod alloc;
 pub mod backref;
 pub mod backtrace;
 pub mod bio;
-pub mod bitmap;
 pub mod clock;
 pub mod closure;
-pub mod cuckoo;
 #[cfg(CONFIG_DEBUG_FS)]
 pub mod debugfs;
 pub mod demangle;
 pub mod enumerated_ref;
-pub mod eytzinger;
-pub mod fast_list;
 pub mod ffi;
-pub mod fifo;
 pub mod file;
 #[cfg(kernel)]
 pub mod fs_context;
 #[cfg(kernel)]
 pub mod fs_type;
 pub mod futex;
-pub mod gap_buffer;
 pub mod gather;
-pub mod genradix;
 pub mod hash;
-pub mod heap;
-pub mod inline_vec;
 pub mod ioctl;
 #[cfg(kernel)]
 pub mod iov_iter;
@@ -34,7 +25,6 @@ pub mod kernel;
 pub mod kobject;
 pub mod kthread;
 pub mod late;
-pub mod list;
 pub mod log;
 pub mod maybe_rcu_alloc;
 pub mod mean_and_variance;
@@ -52,13 +42,10 @@ pub mod raid;
 pub mod rcu;
 pub mod rcu_pending;
 pub mod refcount;
-pub mod rhashtable;
 #[cfg(kernel)]
 pub mod seq_file;
 pub mod siphash;
 pub mod sleep;
-pub mod sort;
-pub mod strided;
 #[cfg(kernel)]
 pub mod super_block;
 pub mod sysfs;

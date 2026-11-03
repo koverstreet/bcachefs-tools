@@ -4,7 +4,7 @@
 
 #include "btree/update.h"
 #include "sb/members.h"
-#include "util/eytzinger.h"
+#include "data_structures/eytzinger.h"
 
 #include "alloc/accounting_mem_gen.h"
 

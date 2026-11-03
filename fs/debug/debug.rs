@@ -25,9 +25,9 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::locking::Locked;
 use crate::util::debugfs::{self, DebugFile, DebugOut};
-use crate::util::eytzinger::Eytzinger0;
+use crate::data_structures::{eytzinger::Eytzinger0, rhashtable};
 use crate::util::place::Contained;
-use crate::util::{rcu, rhashtable, Printbuf};
+use crate::util::{rcu, Printbuf};
 use crate::{btree_trans, prt, SPOS_MAX};
 use crate::format::{Bpos, Btree};
 

@@ -215,7 +215,7 @@ pub mod c {
     pub use super::types::*;
     pub use crate::util::clock::{io_clock, IO_CLOCK_PCPU_SECTORS};
     pub use crate::util::enumerated_ref::{enumerated_ref, enumerated_ref_to_text, rust___enumerated_ref_tryget, rust_enumerated_ref_get, rust_enumerated_ref_is_zero, rust_enumerated_ref_put, rust_enumerated_ref_tryget};
-    pub use crate::util::fast_list::{fast_list, fast_list_pcpu};
+    pub use crate::data_structures::fast_list::{fast_list, fast_list_pcpu};
     pub use crate::locking::{mutex_noio, percpu_rwsem_noio};
     pub use crate::util::mean_and_variance::{mean_and_variance};
     pub use crate::util::printbuf::{PRINTBUF_INLINE_TABSTOPS, PRINTBUF_UNITS_10, PRINTBUF_UNITS_2, bch2_prt_printf, printbuf_bits, printbuf_restore, printbuf_si};

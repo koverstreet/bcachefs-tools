@@ -31,7 +31,7 @@
 #include <linux/static_key.h>
 #include <linux/version.h>
 
-#include "eytzinger.h"
+#include "data_structures/eytzinger.h"
 #include "mean_and_variance.h"
 #include "util.h"
 #include "util/jump_label_gen.h"
@@ -1337,7 +1337,7 @@ bool bch2_capable(int cap)
 	return capable(cap);
 }
 
-/* For util/rhashtable.rs, to which struct bucket_table is opaque */
+/* For data_structures/rhashtable.rs, to which struct bucket_table is opaque */
 const struct bucket_table *bch2_rht_table(const struct rhashtable *ht)
 {
 	/* lockdep_rht_mutex_is_held() only reads it, but isn't const */

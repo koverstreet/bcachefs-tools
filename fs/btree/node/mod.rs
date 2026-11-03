@@ -18,7 +18,7 @@ use crate::c;
 use crate::cstructs::c as cs;
 use crate::fs::Fs;
 use crate::types::c_default;
-use crate::util::bitmap::AtomicBitflags;
+use crate::data_structures::bitmap::AtomicBitflags;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use crate::util::{Printbuf, ToText};

@@ -3088,7 +3088,7 @@ pub fn emit_items(items: &[CItem],
             }
             CItem::Const(c) => under_cfg(&c.cfg, format!("#define {}\t{}\n", c.name, c.c_value()?))?,
             CItem::Typedef(t) => match (&t.c_decl, darray_args(&t.ty)?) {
-                // util/darray.h's: the typedef and its cleanup class
+                // data_structures/darray.h's: the typedef and its cleanup class
                 (None, Some((elem, nr))) => {
                     let elem = canon_c(&elem, "", false, kind)
                         .ok_or_else(|| format!("typedef {}: {elem} has no C rendering", t.name))?;

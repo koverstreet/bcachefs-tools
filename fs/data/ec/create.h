@@ -3,7 +3,7 @@
 #define _BCACHEFS_DATA_EC_CREATE_H
 
 #include "io.h"
-#include "util/darray.h"
+#include "data_structures/darray.h"
 
 #include "data/ec/delete_gen.h"
 #include "data/ec/head_gen.h"

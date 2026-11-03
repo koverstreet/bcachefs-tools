@@ -17,7 +17,7 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::types::Align8U64;
 use crate::util::backref::BackRef;
-use crate::util::bitmap::Bitmap;
+use crate::data_structures::bitmap::Bitmap;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;
 use core::ffi::c_uint;

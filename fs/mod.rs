@@ -169,6 +169,7 @@ pub mod snapshot_states {
 /// The records types defined in Rust that C shares are written from.
 #[path = "types/lib.rs"]       pub mod types;
 pub mod cstructs;
+pub mod data_structures;
 pub mod locking;
 pub mod typeinfo;
 pub mod util;

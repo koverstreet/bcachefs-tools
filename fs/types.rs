@@ -6,7 +6,7 @@ use crate::alloc::discard::{do_discards_fast, do_invalidates_work};
 use crate::cstructs::c;
 use crate::new_lock;
 use crate::util::alloc::KVVec;
-use crate::util::bitmap::AtomicBitflags;
+use crate::data_structures::bitmap::AtomicBitflags;
 use crate::util::kernel::WRITE;
 use crate::util::kobject::Kobject;
 use crate::util::projections::Volatile;
@@ -274,7 +274,7 @@ c_enum! {
 
 c_rcu_array! {
     /// A bucket_bitmap's words: replaced by a copy when the device grows.
-    pub type BucketBitmapWords = crate::util::rcu::RcuArray<crate::util::bitmap::AtomicULong>
+    pub type BucketBitmapWords = crate::util::rcu::RcuArray<crate::data_structures::bitmap::AtomicULong>
         as struct bucket_bitmap_words { nr, d };
 }
 
@@ -391,7 +391,7 @@ pub struct Dev {
     /// Written racing C's plain reads and stores, as C's are: atomic here,
     /// so Rust's are through a shared bch_dev.
     #[c("unsigned long write_errors_start")]
-    pub write_errors_start: crate::util::bitmap::AtomicULong,
+    pub write_errors_start: crate::data_structures::bitmap::AtomicULong,
     #[c("unsigned long flags")]
     pub flags: AtomicBitflags<c::bch_dev_flags>,
 
@@ -727,7 +727,7 @@ pub struct Fs {
     #[c_anon("struct mutex_noio sb_lock; struct bch_fs_sb disk_sb; struct bch_sb_cpu sb")]
     pub sb: MutexNoio<c::bch_fs_sb, c::bch_sb_cpu>,
     #[c("unsigned long incompat_versions_requested[BITS_TO_LONGS(BCH_VERSION_MINOR(bcachefs_metadata_version_current))]")]
-    pub incompat_versions_requested: crate::util::bitmap::AtomicBitArray<{
+    pub incompat_versions_requested: crate::data_structures::bitmap::AtomicBitArray<{
         bits_to_longs(c::BCH_VERSION_MINOR(c::bcachefs_metadata_version_current as u64) as usize) }>,
     pub cf_encoding: *mut c::unicode_map,
 

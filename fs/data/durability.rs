@@ -23,7 +23,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::ffi::Opaque;
-use crate::util::inline_vec::InlineVec;
+use crate::data_structures::inline_vec::InlineVec;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::Validated;
 use arrayvec::ArrayVec;

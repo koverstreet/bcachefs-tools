@@ -38,7 +38,7 @@ use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use cstruct_macros::{c_export, CStruct};
 use crate::types::{c_default, c_opaque};
 use crate::util::ffi::Opaque;
-use crate::util::genradix::SharedGenRadix;
+use crate::data_structures::genradix::SharedGenRadix;
 
 // A CPU's cache of free slots: fast_list.rs's Cache - C only holds the pointer
 c_opaque!(fast_list_pcpu);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! util/cuckoo.rs's tests, run by perf_test - so built only with
+//! data_structures/cuckoo.rs's tests, run by perf_test - so built only with
 //! CONFIG_BCACHEFS_TESTS. A lookup that misses is silent: these check every
 //! lookup against what it should find. Each runs on sets and on maps of
 //! entries (TestItem), by SipHash and by golden ratio, in two ways and three.
@@ -53,7 +53,7 @@ use crate::locking::Locked;
 use crate::new_lock;
 use crate::prt;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
-use crate::util::cuckoo::{Cuckoo, CuckooItem, Entry, Faults, Registration};
+use crate::data_structures::cuckoo::{Cuckoo, CuckooItem, Entry, Faults, Registration};
 use crate::util::hash::GoldenRatio;
 use crate::util::siphash::SipHash13Key;
 use core::hash::BuildHasher;

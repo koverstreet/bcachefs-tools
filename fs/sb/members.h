@@ -5,7 +5,7 @@
 #include "btree/bkey_gen.h"
 #include "sb/members_gen.h"
 #include "util/enumerated_ref.h"
-#include "util/darray.h"
+#include "data_structures/darray.h"
 
 /* Superblock member access: */
 

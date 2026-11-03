@@ -250,7 +250,7 @@ static SPLINES: &[&[&str]] = &[
     // The last line is ours and it is true: our answer was not a better
     // binary search, it was to permute the array so the accesses land where
     // the cache wants them. Anyone who follows it arrives at
-    // fs/util/eytzinger.h and learns that Eytzinger was a 16th century
+    // fs/data_structures/eytzinger.h and learns that Eytzinger was a 16th century
     // genealogist laying out pedigrees, which is the delight.
     &["Binary searching the bset",
       "Published 1946. Correct for all n: 1962",

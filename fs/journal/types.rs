@@ -388,7 +388,7 @@ nest! {
         pub lock: Locked<c::spinlock_t, JournalLocked, JournalPublished>,
 
         #[c("unsigned long flags")]
-        pub flags: crate::util::bitmap::AtomicBitflags<c::journal_flags>,
+        pub flags: crate::data_structures::bitmap::AtomicBitflags<c::journal_flags>,
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         pub stop_thread: *mut c::task_struct,
 

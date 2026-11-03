@@ -169,7 +169,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "logfc", "super_set_uuid", "super_set_sysfs_name_uuid",
     // static inlines: util/refcount/percpu.rs's PercpuRef
     "percpu_ref_get", "percpu_ref_put", "percpu_ref_tryget", "percpu_ref_tryget_live", "percpu_ref_kill",
-    // util/fast_list.rs: static inlines; the rest of the ida the kernel crate binds
+    // data_structures/fast_list.rs: static inlines; the rest of the ida the kernel crate binds
     "ida_init", "ida_find_first",
     // util/log.rs: a long message printk()ed in pieces, the console held across them
     "console_trylock", "console_unlock",

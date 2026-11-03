@@ -70,7 +70,7 @@ use crate::new_lock;
 use crate::snapshots::check_snapshots;
 use crate::snapshots::snapshot;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
-use crate::util::eytzinger::Eytzinger1;
+use crate::data_structures::eytzinger::Eytzinger1;
 use crate::util::log::{self, LogLevel, LogMsg};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_notice, bch_verbose, fs_inconsistent, fsck_err, prt,

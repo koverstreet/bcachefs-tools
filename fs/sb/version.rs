@@ -15,7 +15,7 @@ use crate::prt;
 use crate::sb::downgrade::{ext, sb_set_downgrade, sb_set_upgrade};
 use crate::sb::io::{check_version_downgrade, sb_upgrade, version};
 use crate::types::Le64;
-use crate::util::bitmap::LeBitmap;
+use crate::data_structures::bitmap::LeBitmap;
 use crate::util::kernel::ktime_get_real_seconds;
 use crate::util::names;
 use crate::util::rcu::read_lock;

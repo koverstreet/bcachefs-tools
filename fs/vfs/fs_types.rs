@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::locking::Locked;
 use crate::types::c_default;
-use crate::util::bitmap::AtomicBitflags;
+use crate::data_structures::bitmap::AtomicBitflags;
 use crate::vfs::vfs_inode::VfsInode;
 use core::ffi::{c_uint, c_ulong};
 #[cfg(not(NO_BCACHEFS_FS))]

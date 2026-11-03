@@ -26,7 +26,7 @@
 #include "closure.h"
 #include "mean_and_variance.h"
 
-#include "darray.h"
+#include "data_structures/darray.h"
 #include "time_stats.h"
 
 #include "printbuf.h"

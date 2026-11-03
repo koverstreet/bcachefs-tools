@@ -21,7 +21,7 @@ use anyhow::{anyhow, bail, Result};
 use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::util::bitmap::AtomicBitmap;
+use bcachefs_kernel::data_structures::bitmap::AtomicBitmap;
 use bcachefs_kernel::util::vstructs::Head;
 use clap::Parser;
 

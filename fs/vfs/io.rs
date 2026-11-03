@@ -22,7 +22,7 @@ use crate::sb::counters::events;
 use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume;
 use crate::util::bio::{Bio, BioBox, Endio, RawBio};
-use crate::util::bitmap::AtomicBitmap;
+use crate::data_structures::bitmap::AtomicBitmap;
 use crate::util::file::File;
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::kernel::{current_id, ktime_get_coarse_real_ts64, ktime_get_ns, PAGE_SIZE};

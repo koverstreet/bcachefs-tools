@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_SUBVOLUME_H
 #define _BCACHEFS_SUBVOLUME_H
 
-#include "util/darray.h"
+#include "data_structures/darray.h"
 #include "snapshots/types_gen.h"
 #include "snapshots/subvolume_gen.h"
 
