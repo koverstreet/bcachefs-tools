@@ -1,5 +1,3 @@
-export BCACHEFS_DKMS=1
-
 # Pick up build options written by `make install_dkms` (e.g.
 # BCACHEFS_DEBUG, BCACHEFS_TESTS), and hand them to the recursive kbuild
 # so fs/Makefile's matching ifdefs fire. Missing file is fine.

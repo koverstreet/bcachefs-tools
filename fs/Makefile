@@ -1,9 +1,9 @@
 # bcachefs's kbuild Makefile. Built in-tree (scripts/install-to-kernel.sh),
 # configured by the kernel's .config like any filesystem; or as an external
-# module by DKMS (dkms/Makefile sets BCACHEFS_DKMS), where no .config has our
-# options and we set them here.
+# module (M=, as DKMS builds it), where no .config has our options and we set
+# them here.
 
-ifdef BCACHEFS_DKMS
+ifdef KBUILD_EXTMOD
 CONFIG_BCACHEFS_FS := m
 
 # If the build farm has a signed bcachefs.ko for this kernel and version,
@@ -108,7 +108,7 @@ bcachefs-y		:=			\
 	vfs/direct.o				\
 	vfs/pagecache.o
 
-ifdef BCACHEFS_DKMS
+ifdef KBUILD_EXTMOD
 ifneq ($(wildcard $(src)/module-version.c),)
 	bcachefs-y += module-version.o
 else

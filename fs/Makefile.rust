@@ -22,7 +22,7 @@ ifndef CONFIG_RUST
 bcachefs-kernel-rust-why := kernel $(KERNELVERSION) was built without CONFIG_RUST
 else ifeq ($(BCACHEFS_RUST_VENDOR),1)
 bcachefs-kernel-rust-why := vendored Rust forced with BCACHEFS_RUST_VENDOR=1
-else ifdef BCACHEFS_DKMS
+else ifdef KBUILD_EXTMOD
 bcachefs-kernel-rust-why := $(filter-out y,$(call bch-rust-available,kernel))
 # --target: on x86 a generated scripts/target.json, which headers may lack.
 bcachefs-kernel-rust-target := $(patsubst --target=%,%,$(filter --target=%.json,$(KBUILD_RUSTFLAGS)))

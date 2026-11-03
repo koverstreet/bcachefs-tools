@@ -8,9 +8,9 @@
 # the kernel's fs/Kconfig and fs/Makefile.
 #
 # The copied fs/Makefile builds correctly in-tree as-is: its DKMS / out-of-tree
-# machinery is all guarded by `ifdef BCACHEFS_DKMS`, which an in-tree build never
-# sets, so CONFIG_BCACHEFS_FS comes from the kernel's own .config like any other
-# filesystem. The userspace-tools scaffolding that also lives under fs/ (Rust
+# machinery is all guarded by `ifdef KBUILD_EXTMOD`, which kbuild sets only for
+# M= builds, so CONFIG_BCACHEFS_FS comes from the kernel's own .config like any
+# other filesystem. The userspace-tools scaffolding that also lives under fs/ (Rust
 # codegen, vendored crates) is inert to kbuild — it only builds what's in the
 # bcachefs-y object list.
 #
