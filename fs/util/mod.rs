@@ -54,6 +54,8 @@ pub mod time_stats;
 #[cfg(kernel)]
 pub mod thread_with_file;
 pub mod varint;
+#[cfg(kernel)]
+pub mod vm;
 pub mod volatile;
 pub mod vstructs;
 pub mod workqueue;
