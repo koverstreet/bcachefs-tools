@@ -32,6 +32,35 @@ c_enum! {
     }
 }
 
+impl bch_folio_sector_state {
+    pub fn dirty(self) -> Self {
+        use bch_folio_sector_state::*;
+        match self {
+            SECTOR_unallocated => SECTOR_dirty,
+            SECTOR_reserved    => SECTOR_dirty_reserved,
+            s                  => s,
+        }
+    }
+
+    pub fn undirty(self) -> Self {
+        use bch_folio_sector_state::*;
+        match self {
+            SECTOR_dirty          => SECTOR_unallocated,
+            SECTOR_dirty_reserved => SECTOR_reserved,
+            s                     => s,
+        }
+    }
+
+    pub fn reserve(self) -> Self {
+        use bch_folio_sector_state::*;
+        match self {
+            SECTOR_unallocated => SECTOR_reserved,
+            SECTOR_dirty       => SECTOR_dirty_reserved,
+            s                  => s,
+        }
+    }
+}
+
 nest! {
     #[repr(C)]
     #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
