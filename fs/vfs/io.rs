@@ -23,7 +23,6 @@ use crate::sb::counters::events;
 use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume;
 use crate::util::bio::{Bio, BioBox, Endio, RawBio};
-use crate::data_structures::bitmap::AtomicBitmap;
 use crate::util::file::File;
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::kernel::{current_id, ktime_get_coarse_real_ts64, ktime_get_ns, PAGE_BYTES, PAGE_SECTORS, PAGE_SECTORS_SHIFT};
@@ -74,10 +73,7 @@ impl InodeInfo {
          * either way.
          */
         let mut devs = c::bch_devs_mask::default();
-        let need_flush = &self.ei_devs_need_flush.d;
-        AtomicBitmap::from_words(unsafe {
-            core::slice::from_raw_parts(core::ptr::from_ref(need_flush).cast(), need_flush.words().len())
-        }).take(&mut devs.d);
+        self.ei_devs_need_flush.take(&mut devs.d);
 
         stack_pin_init!(let g = Gather::<(), waiter::Sync>::new());
         for dev in devs.d.iter() {

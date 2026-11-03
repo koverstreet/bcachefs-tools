@@ -69,7 +69,8 @@ pub struct InodeInfo {
      * incremented when we isusue a cache flush, and track here the sequence
      * number that needs flushing.
      */
-    pub ei_devs_need_flush: c::bch_devs_mask,
+    #[c("struct bch_devs_mask ei_devs_need_flush")]
+    pub ei_devs_need_flush: c::AtomicDevsMask,
 
     /*
      * copy of inode in btree: written after a commit, the inode's btree
