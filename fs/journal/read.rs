@@ -152,6 +152,11 @@ impl Replay {
         c::jset::<Unvalidated>::from_bytes(self.jset_bytes()).expect("a replay holds its jset")
     }
 
+    /// Its jset's datetime entry's, in seconds: 0 if it has none.
+    pub fn datetime(&self) -> u64 {
+        self.jset_unvalidated().datetime()
+    }
+
     fn jset_bytes(&self) -> &[u8] {
         let bytes = self.j.bytes();
         unsafe { core::slice::from_raw_parts((&raw const (*self.0.as_ptr()).j).cast(), bytes) }
