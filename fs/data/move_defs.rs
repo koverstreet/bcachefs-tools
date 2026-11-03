@@ -34,11 +34,7 @@ use cstruct_macros::CStruct;
 #[derive(CStruct)]
 pub struct moving_context {
     pub trans: *mut c::btree_trans,
-    /* on c->moving_context_list, which other contexts' adds and dels write */
-    #[c("struct list_head list")]
-    pub list: Opaque<c::list_head>,
 
-    /* set racily, read by the listing */
     #[c("struct bch_move_stats *stats")]
     pub stats: AtomicPtr<c::bch_move_stats>,
     pub wp: c::write_point_specifier,

@@ -876,10 +876,6 @@ pub struct Fs {
 
     pub key_version: AtomicI64,
 
-    /* MOVE.C */
-    pub moving_context_list: c::list_head,
-    pub moving_context_lock: c::mutex,
-
     /* Journal scrub: extents needing repair after recovery */
     #[pin]
     #[init(RustOnly::new(crate::new_lock!(crate::util::alloc::KVVec::new())))]

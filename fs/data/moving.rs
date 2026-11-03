@@ -15,10 +15,9 @@
 //! IoMark is: an update's seq, done once everything issued before it is. The
 //! mover's thread's alone, issuing and finishing, so not locked.
 //!
-//! The context is pinned - it's on c->moving_context_list, its closure waited
-//! on in place - and owns its transaction, trans(), which ratelimit(),
-//! flush_all() and move_extent() unlock: keys borrowed from it are stale
-//! after, as after any unlock. MovingCtxt owns one; moving through it is
+//! The context is pinned - its closure waited on in place - and owns its
+//! transaction, trans(), which ratelimit(), flush_all() and move_extent()
+//! unlock: keys borrowed from it are stale after, as after any unlock. MovingCtxt owns one; moving through it is
 //! Moving's, a borrow - of a MovingCtxt, or of a context C hands Rust. IO that
 //! outlives the borrow, counted in the context, is a MovingIo.
 
@@ -31,13 +30,9 @@ use crate::errcode::BchError;
 use crate::format::DataType;
 use crate::fs::Fs;
 use crate::function_name;
-use crate::locking::{Locked, RawLock};
-use crate::prt;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError, Flags};
-use crate::util::list::List;
 use crate::util::closure::ClosureRef;
 use crate::util::ffi::Opaque;
-use crate::util::{HumanReadable, Printbuf, ToText};
 use crate::util::refcount::Refcount;
 use crate::util::kthread::Kthread;
 use crate::util::task::{waiter, RunQueue};
@@ -53,8 +48,8 @@ use cstruct_macros::c_export;
 pub use c::MoveStats;
 
 impl MoveStats {
-    /// Zeroed, and named @name for the moving contexts' listing - field by
-    /// field, as it may be read meanwhile.
+    /// Zeroed, and named @name - field by field, as a data job's progress may
+    /// be read meanwhile.
     pub fn reset(&self, name: &str) {
         let name = name.as_bytes();
         let len = name.len().min(self.name.len() - 1);
@@ -85,7 +80,7 @@ impl MoveStats {
         self.sectors_moved.load(Relaxed) as u64
     }
 
-    /// Where whoever's moving through it is, for the listing.
+    /// Where whoever's moving through it is, for a data job's progress.
     pub fn set_pos(&self, pos: c::bbpos) {
         self.at.pos.set(pos);
     }
@@ -94,27 +89,6 @@ impl MoveStats {
     pub fn walked(&self, iter: &BtreeIter<'_>, sectors: u64) {
         self.set_pos(c::bbpos { btree: iter.btree(), pos: iter.pos() });
         self.add_sectors_seen(sectors);
-    }
-
-    /// For the moving contexts' listing.
-    #[cold]
-    pub fn to_text(&self, out: &mut Printbuf) {
-        let mut name = [0u8; 32];
-        for (b, n) in name.iter_mut().zip(&self.name) {
-            *b = n.get();
-        }
-        let len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
-        write!(out, "{}: data type==", core::str::from_utf8(&name[..len]).unwrap_or("(invalid name)"));
-        self.at.data_type.get().to_text(out);
-        write!(out, " pos={}\n", self.at.pos.get());
-
-        let mut out = out.indent(2);
-        write!(out, "keys moved:\t{}\n", self.keys_moved.load(Relaxed));
-        write!(out, "keys raced:\t{}\n", self.keys_raced.load(Relaxed));
-        let sectors = [("seen", &self.sectors_seen), ("moved", &self.sectors_moved), ("raced", &self.sectors_raced)];
-        for (what, n) in sectors {
-            prt!(out, "bytes {what}:\t{}\n", HumanReadable((n.load(Relaxed) as u64) << 9));
-        }
     }
 }
 
@@ -211,32 +185,6 @@ impl<'a> MovingCtxt<'a> {
     }
 }
 
-/// c->moving_context_list, for the listing: every context, from init to exit.
-type ContextList = List<c::moving_context, { core::mem::offset_of!(c::moving_context, list) }>;
-
-/// The moving contexts' list and its lock, as the filesystem is made.
-///
-/// # Safety
-/// @p is the filesystem being made: nothing else sees it yet.
-pub(crate) unsafe fn contexts_init(p: *mut Fs) {
-    unsafe {
-        ContextList::from_c(&raw mut (*p).moving_context_list).init();
-        let Ok(()) = c::mutex::init(&raw mut (*p).moving_context_lock, c"&c->moving_context_lock",
-                                    crate::new_lock!(@key));
-    }
-}
-
-impl Fs {
-    /// The moving contexts, @f's alone - under moving_context_lock - while it
-    /// runs.
-    fn moving_contexts<R>(&self, f: impl FnOnce(&mut ContextList) -> R) -> R {
-        let _lock = Locked::from_c(&self.moving_context_lock).lock();
-        // SAFETY: the list, locked, and no other borrow of it in Rust: they're
-        // all here, and @f can't reenter, as the lock isn't
-        f(unsafe { ContextList::from_c((&raw const self.moving_context_list).cast_mut()) })
-    }
-}
-
 /// A moving context at @ctxt: its moves counted into @stats, written to @wp,
 /// and with @wait_on_copygc, ratelimit() waiting while copygc runs.
 ///
@@ -257,9 +205,6 @@ pub unsafe fn bch2_moving_ctxt_init(ctxt: *mut c::moving_context, c: &Fs, stats:
         (*ctxt).wait_on_copygc = wait_on_copygc;
         c::closure_init_stack((*ctxt).cl.as_ptr());
     }
-
-    // SAFETY: @ctxt stays where it is till exit() takes it off, under the lock
-    c.moving_contexts(|l| unsafe { l.push_back(&*ctxt) });
 }
 
 /// bch2_moving_ctxt_init() undone, once what's in flight is done.
@@ -280,9 +225,6 @@ pub unsafe fn bch2_moving_ctxt_exit(ctxt: *mut c::moving_context) {
                 assert!(n.load(Relaxed) == 0, "a moving context's IO still counted at exit");
             }
         }
-
-        // on this list, if any
-        moving.trans().fs().moving_contexts(|l| l.remove(&*ctxt));
         (*ctxt).trans
     };
 
@@ -342,8 +284,7 @@ impl<'a> Moving<'a> {
         unsafe { BtreeTrans::borrow_raw(self.0.trans) }
     }
 
-    /// Count moves from here on into @stats - as the listing has it, which
-    /// reads the pointer racily, as it does in C.
+    /// Count moves from here on into @stats.
     pub fn set_stats(&self, stats: &'a MoveStats) {
         self.0.stats.store(core::ptr::from_ref(stats).cast_mut(), Relaxed)
     }
@@ -519,29 +460,8 @@ impl<'a> Moving<'a> {
     }
 
     pub(crate) fn runq(&self) -> core::pin::Pin<&RunQueue> {
-        // SAFETY: the context's, pinned - it's on c->moving_context_list -
-        // and live while borrowed
+        // SAFETY: the context's, pinned, and live while borrowed
         unsafe { core::pin::Pin::new_unchecked(&self.0.runq) }
-    }
-
-    #[cold]
-    fn to_text(&self, out: &mut Printbuf) {
-        let opts = self.trans().fs().opts();
-        let (ios, sectors) = (opts.move_ios_in_flight.get(), opts.move_bytes_in_flight.get() >> 9);
-
-        if out.nr_tabstops() == 0 {
-            out.tabstop_push(32);
-        }
-        if let Some(stats) = self.stats_opt() {
-            stats.to_text(out);
-        }
-
-        let io = self.io();
-        let mut out = out.indent(2);
-        write!(out, "reads: ios {}/{ios} sectors {}/{sectors}\n",
-               io.read_ios.load(Relaxed), io.read_sectors.load(Relaxed));
-        write!(out, "writes: ios {}/{ios} sectors {}/{sectors}\n",
-               io.write_ios.load(Relaxed), io.write_sectors.load(Relaxed));
     }
 
     pub fn io_mark(&self) -> IoMark {
@@ -551,22 +471,6 @@ impl<'a> Moving<'a> {
     /// Whether everything issued before @mark has completed.
     pub fn io_done(&self, mark: IoMark) -> bool {
         self.with_updates(|f| f.front_idx()) >= mark.0
-    }
-}
-
-impl Fs {
-    /// The moving contexts' listing: every context, its stats and IO in flight.
-    #[cold]
-    pub fn moving_ctxts_to_text(&self, out: &mut Printbuf) {
-        self.moving_contexts(|l| {
-            let mut cursor = l.cursor_mut();
-            while let Some(ctxt) = cursor.current() {
-                // SAFETY: on the list from init() to exit(), which takes it
-                // off under the lock
-                unsafe { Moving::from_raw(core::ptr::from_ref(ctxt).cast_mut()) }.to_text(out);
-                cursor.move_next();
-            }
-        })
     }
 }
 
