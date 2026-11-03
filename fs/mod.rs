@@ -48,6 +48,8 @@
 #![allow(internal_features)]
 // A type's record says which type each name it writes is: type_name(), const.
 #![cfg_attr(bch_cstruct_records, feature(const_type_name))]
+// ret_ip!(), C's _RET_IP_ - see util/kernel.rs.
+#![cfg_attr(bch_return_address, feature(core_intrinsics))]
 // A cfg the build doesn't declare is an error, not a warning: a misspelled
 // CONFIG_ is code silently compiled out. And the kernel version checks,
 // cfg(linux_ge = "X.Y"), are declared only by a kernel build: userspace has

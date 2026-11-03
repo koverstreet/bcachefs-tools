@@ -139,6 +139,21 @@ pub fn cond_resched() {
     unsafe { c::bch2_cond_resched() }
 }
 
+/// C's _RET_IP_: the return address of the function it's expanded in, after
+/// inlining - so a macro, not a function. 0 from a rustc before 1.97, which
+/// hasn't core::intrinsics::return_address().
+#[cfg(bch_return_address)]
+#[macro_export]
+macro_rules! ret_ip {
+    () => { core::intrinsics::return_address() as core::ffi::c_ulong };
+}
+
+#[cfg(not(bch_return_address))]
+#[macro_export]
+macro_rules! ret_ip {
+    () => { 0 as core::ffi::c_ulong };
+}
+
 /// Forward, so @dst may be below an overlapping @src. Raw pointers: through
 /// slices, LLVM makes the loop a memcpy() call again.
 ///

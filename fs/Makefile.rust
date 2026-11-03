@@ -176,12 +176,13 @@ RUSTFLAGS_REMOVE_mod.o += --edition=2021
 RUSTFLAGS_mod.o += --edition=2024
 
 # mod.rs's cfi_encoding, auto_traits, negative_impls, min_specialization,
-# rustc_attrs, context_ext, local_waker and const_type_name, which kbuild's
+# rustc_attrs, context_ext, local_waker, const_type_name and core_intrinsics
+# (for bch_return_address), which kbuild's
 # -Zallow-features doesn't list - and it's after RUSTFLAGS_mod.o, the last one
 # being what rustc takes. So another, its list and ours, after it:
 # rust_common_cmd is expanded when mod.o's recipe runs, by then with kbuild's
 # list. (The vendored path allows any feature.)
-$(obj)/mod.o: private rust_common_cmd += -Zallow-features=$(rust_allowed_features),cfi_encoding,auto_traits,negative_impls,min_specialization,rustc_attrs,context_ext,local_waker,const_type_name
+$(obj)/mod.o: private rust_common_cmd += -Zallow-features=$(rust_allowed_features),cfi_encoding,auto_traits,negative_impls,min_specialization,rustc_attrs,context_ext,local_waker,const_type_name,core_intrinsics
 
 # And our CONFIG defines, which the kernel's rustc_cfg doesn't have, not being
 # in its .config: -DCONFIG_FOO=1 is --cfg CONFIG_FOO. The Rust tests them as
@@ -239,6 +240,11 @@ quiet_cmd_bch_procmacro = RUSTC P  $@
 bch-rustc-version := $(shell $(RUSTC) --version 2>/dev/null | \
 	awk '{ split($$2, v, "."); print v[1] * 100000 + v[2] * 100 + v[3] }')
 bch-rustc-min = $(shell [ "$(bch-rustc-version)" -ge $(1) ] 2>/dev/null && echo y)
+
+# core::intrinsics::return_address(), for C's _RET_IP_: rustc 1.97+.
+ifeq ($(call bch-rustc-min,109700),y)
+RUSTFLAGS_mod.o += --cfg bch_return_address
+endif
 
 # proc-macro2, quote, syn: host rlibs, for the proc-macros - bitfield-struct's
 # here, the vendored stack's in Makefile.rust.vendor - with either Rust: the
