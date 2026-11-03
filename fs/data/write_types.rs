@@ -117,7 +117,6 @@ nest! {
         pub start_time: u64,
 
         /* its slot on its async object list */
-        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
         pub list_idx: c_uint,
 
         pub written: c_uint, /* sectors */

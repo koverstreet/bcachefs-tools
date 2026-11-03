@@ -20,7 +20,6 @@ pub struct btree_write_bio {
     pub sector_offset: c_uint,
     pub start_time: u64,
     /* its slot on its async object list */
-    #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
     pub list_idx: c_uint,
     pub wbio: c::bch_write_bio,
 }

@@ -79,9 +79,7 @@ static inline struct bch_read_bio *rbio_init_fragment(struct bio *bio,
 	rbio->opts		= orig->opts;
 	rbio->failed		= failed;
 	rbio->err_report	= orig->err_report;
-#ifdef CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS
 	rbio->list_idx	= 0;
-#endif
 	return rbio;
 }
 
@@ -101,9 +99,7 @@ static inline struct bch_read_bio *rbio_init(struct bio *bio,
 	rbio->err_report	= NULL;
 	rbio->opts		= opts;
 	rbio->bio.bi_end_io	= end_io;
-#ifdef CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS
 	rbio->list_idx	= 0;
-#endif
 	return rbio;
 }
 

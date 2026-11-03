@@ -553,7 +553,6 @@ impl Fs {
         }
 
         blacklist_table_initialize(self)?;
-        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
         crate::debug::async_objs::lists::async_obj_init(self)?;
         ret_to_result(unsafe { bch2_fs_btree_init(p) })?;
         compress_init(self)?;
@@ -1021,7 +1020,6 @@ unsafe fn release(p: *mut Fs) {
         bch2_fs_btree_exit(p);
         accounting_exit(fs);
     }
-    #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
     crate::debug::async_objs::lists::async_obj_exit(fs);
     unsafe {
         fs.writes.exit();

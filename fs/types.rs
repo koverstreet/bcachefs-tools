@@ -759,7 +759,6 @@ pub struct Fs {
     pub errors: c::bch_fs_errors,
 
     /* What's in flight, for debugfs: debug/async_objs.rs */
-    #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
     #[pin]
     pub async_objs: [c::async_obj_list; c::BCH_ASYNC_OBJ_NR as usize],
 

@@ -80,7 +80,6 @@ nest! {
         },
         pub ret: i16,
         /* its slot on its async object list */
-        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
         pub list_idx: c_uint,
 
         pub pick: c::extent_ptr_decoded,
@@ -134,8 +133,7 @@ impl c::bch_read_bio {
         self.err_report   = core::ptr::null_mut();
         self.opts         = opts;
         self.bio.bi_end_io = end_io;
-        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
-        { self.list_idx = 0; }
+        self.list_idx = 0;
     }
 
     /// Initializes it as a split of @orig - all but the bio, which is the
@@ -150,18 +148,14 @@ impl c::bch_read_bio {
         self.failed       = failed;
         self.err_report   = orig.err_report;
         self.completion.parent = core::ptr::from_mut(orig);
-        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
-        { self.list_idx = 0; }
+        self.list_idx = 0;
     }
 
     pub fn async_list_del(&mut self, fs: &crate::fs::Fs) {
-        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
         // SAFETY: its slot, from the read path's async_object_list_add()
         unsafe {
             crate::debug::async_objs::list_del(fs, c::bch_async_obj_lists::BCH_ASYNC_OBJ_LIST_rbio, &mut self.list_idx)
         };
-        #[cfg(not(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS))]
-        let _ = fs;
     }
 }
 

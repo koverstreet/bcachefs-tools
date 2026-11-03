@@ -53,7 +53,6 @@ nest! {
             __pad: u1,
         },
         /* its slot on its async object list */
-        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
         pub list_idx: c_uint,
         pub pick: c::extent_ptr_decoded,
         pub work: c::work_struct,

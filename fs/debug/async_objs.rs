@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The async object lists - c->async_objs[], built in the kernel with
-//! CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS, and always in userspace - and debugfs
-//! async_objs/, a file per list.
+//! The async object lists - c->async_objs[] - and debugfs async_objs/, a
+//! file per list.
 //!
 //! Everything in flight is to be introspectable, even what's short-lived and
 //! high-rate: a fast_list makes listing an object about as cheap as taking a
@@ -24,15 +23,9 @@
 use crate::c;
 use crate::fs::Fs;
 use crate::util::Printbuf;
-use cstruct_macros::{c_enum, c_xmacro};
-
-// The lists, where Fs has them: only with the lists configured
-#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
-use {
-    core::ffi::c_uint,
-    cstruct_macros::{placed, CStruct, Init},
-    pin_init::pin_data,
-};
+use core::ffi::c_uint;
+use cstruct_macros::{c_enum, c_xmacro, placed, CStruct, Init};
+use pin_init::pin_data;
 
 c_xmacro! {
     BCH_ASYNC_OBJ_LISTS(x) {
@@ -52,7 +45,6 @@ c_enum! {
     }
 }
 
-#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
 #[placed(Fs.async_objs[], index = idx: c_uint)]
 #[pin_data]
 #[repr(C)]
@@ -61,7 +53,6 @@ pub struct async_obj_list {
     pub list: c::fast_list,
 }
 
-#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
 use core::ptr::NonNull;
 
 // ── Listing an object ────────────────────────────────────────────────────
@@ -76,11 +67,9 @@ pub unsafe trait AsyncObj {
     fn to_text(&self, out: &mut Printbuf, fs: &Fs);
 }
 
-/// An object's place on its list; empty without the lists configured.
+/// An object's place on its list.
 pub struct AsyncObjSlot {
-    #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
     list: Option<NonNull<c::fast_list>>,
-    #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
     idx:  core::ffi::c_uint,
 }
 
@@ -93,9 +82,7 @@ impl AsyncObjSlot {
     /// On no list: for an object not listed yet, or that couldn't be.
     pub const fn none() -> Self {
         AsyncObjSlot {
-            #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
             list: None,
-            #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
             idx:  0,
         }
     }
@@ -106,22 +93,17 @@ impl AsyncObjSlot {
     /// # Safety
     /// @obj stays where it is, and live, while this is held - it's a field of
     /// it - and @fs outlives this.
-    #[allow(unused_variables)]
     pub unsafe fn new<T: AsyncObj>(fs: &Fs, obj: &T) -> Self {
-        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
-        {
-            let list = &fs.async_objs[T::LIST as usize].list;
-            if let Ok(idx) = list.add(NonNull::from(obj).cast()) {
-                return AsyncObjSlot { list: Some(NonNull::from(list)), idx };
-            }
+        let list = &fs.async_objs[T::LIST as usize].list;
+        match list.add(NonNull::from(obj).cast()) {
+            Ok(idx) => AsyncObjSlot { list: Some(NonNull::from(list)), idx },
+            Err(_)  => Self::none(),
         }
-        Self::none()
     }
 }
 
 impl Drop for AsyncObjSlot {
     fn drop(&mut self) {
-        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
         if let Some(list) = self.list {
             // SAFETY: the filesystem's list, which the caller of new() said
             // outlives us
@@ -135,7 +117,6 @@ impl Drop for AsyncObjSlot {
 ///
 /// # Safety
 /// @idx is the object's, from async_object_list_add() on that list.
-#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
 pub unsafe fn list_del(fs: &Fs, list: c::bch_async_obj_lists, idx: &mut core::ffi::c_uint) {
     fs.async_objs[list as usize].list.remove(*idx);
     *idx = 0;
@@ -143,10 +124,8 @@ pub unsafe fn list_del(fs: &Fs, list: c::bch_async_obj_lists, idx: &mut core::ff
 
 // ── The lists, and their debugfs files ───────────────────────────────────
 
-#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
 pub(crate) use lists::debugfs_init;
 
-#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
 pub mod lists {
 use core::ffi::{c_void, CStr};
 use core::ptr::NonNull;

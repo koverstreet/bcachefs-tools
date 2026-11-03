@@ -492,7 +492,6 @@ pub fn debug_init(fs: &Fs) {
         debugfs::create_file::<Once<WritePoints>>(c"write_points", dir, fs);
     }
 
-    #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
     crate::debug::async_objs::debugfs_init(fs, dir);
 
     let btrees = debugfs::create_dir(c"btrees", Some(dir));
