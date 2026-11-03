@@ -181,11 +181,6 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
         unsafe { self.data.get_unchecked_mut(key_u64s..) }
     }
 
-    fn high_word(&self, f: &c::bkey_format) -> *const u64 {
-        let w = self.data.as_ptr();
-        if cfg!(target_endian = "little") { w.wrapping_add(f.key_u64s as usize - 1) } else { w }
-    }
-
     fn unpacked_header(&self) -> &c::bkey {
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
             assert!(self.is_bkey_i());
@@ -290,7 +285,7 @@ impl BtreeNode {
         }
         invariant!(f.key_u64s != 0);
 
-        let ret = unsafe { cmp_bits(l.high_word(f), r.high_word(f), self.nr_key_bits as u32) };
+        let ret = f.cmp_bits(self.nr_key_bits as u32, l, r);
 
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
             assert!(ret == l.unpack_pos(self).cmp(&r.unpack_pos(self)));
@@ -355,41 +350,3 @@ impl c::bkey_format {
 /// Where a packed key's position bits start in its high word: past the header,
 /// on big endian.
 pub const HIGH_BIT_OFFSET: u32 = if cfg!(target_endian = "little") { 0 } else { c::KEY_PACKED_BITS_START };
-
-#[inline(always)]
-unsafe fn cmp_bits(mut l: *const u64, mut r: *const u64, mut nr_key_bits: u32) -> Ordering {
-    let next_word = |p: *const u64| {
-        if cfg!(target_endian = "little") { p.wrapping_sub(1) } else { p.wrapping_add(1) }
-    };
-
-    if nr_key_bits == 0 {
-        return Ordering::Equal;
-    }
-
-    /* for big endian, skip past header */
-    nr_key_bits += HIGH_BIT_OFFSET;
-    let mut l_v = unsafe { *l } & (!0u64 >> HIGH_BIT_OFFSET);
-    let mut r_v = unsafe { *r } & (!0u64 >> HIGH_BIT_OFFSET);
-
-    loop {
-        if nr_key_bits < 64 {
-            l_v >>= 64 - nr_key_bits;
-            r_v >>= 64 - nr_key_bits;
-            nr_key_bits = 0;
-        } else {
-            nr_key_bits -= 64;
-        }
-
-        if nr_key_bits == 0 || l_v != r_v {
-            break;
-        }
-
-        l = next_word(l);
-        r = next_word(r);
-
-        l_v = unsafe { *l };
-        r_v = unsafe { *r };
-    }
-
-    l_v.cmp(&r_v)
-}

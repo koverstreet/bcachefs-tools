@@ -406,6 +406,46 @@ impl bkey_format {
 
         0
     }
+
+    #[inline(always)]
+    pub(super) fn cmp_bits(&self, mut nr_key_bits: u32,
+                           l: &BkeyP<impl ?Sized>, r: &BkeyP<impl ?Sized>) -> Ordering {
+        let (l, r) = (l.as_slice(), r.as_slice());
+        let mut p = high_word_offset(self);
+
+        if nr_key_bits == 0 {
+            return Ordering::Equal;
+        }
+
+        invariant!((p as usize) < l.len(), (p as usize) < r.len());
+
+        /* for big endian, skip past header */
+        nr_key_bits += HIGH_BIT_OFFSET;
+        let mut l_v = l[p as usize] & (!0u64 >> HIGH_BIT_OFFSET);
+        let mut r_v = r[p as usize] & (!0u64 >> HIGH_BIT_OFFSET);
+
+        loop {
+            if nr_key_bits < 64 {
+                l_v >>= 64 - nr_key_bits;
+                r_v >>= 64 - nr_key_bits;
+                nr_key_bits = 0;
+            } else {
+                nr_key_bits -= 64;
+            }
+
+            if nr_key_bits == 0 || l_v != r_v {
+                break;
+            }
+
+            p = next_word(p);
+            invariant!((p as usize) < l.len(), (p as usize) < r.len());
+
+            l_v = l[p as usize];
+            r_v = r[p as usize];
+        }
+
+        l_v.cmp(&r_v)
+    }
 }
 
 fn packed_to_binary_text(out: &mut Printbuf, f: &bkey_format, k: &[u64]) {
