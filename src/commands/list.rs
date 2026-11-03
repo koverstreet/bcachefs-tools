@@ -256,23 +256,9 @@ fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
 
     match crate::device_scan::open_online_or_offline(&opt.devices, fs_opts)? {
         OpenedFs::Online(handle) => {
-            // The filesystem is mounted: read keys through the kernel. For
-            // formatting them we still want a bch_fs - everything to_text
-            // needs is derived from the superblock - so open one
-            // noexcl|nostart: no exclusive claim on the mounted devices,
-            // never started, journal never read. Opened from the member
-            // block devices (from sysfs) - the path we were given may be a
-            // mount point or UUID, which aren't openable as devices.
             log::info!("filesystem is mounted, listing via the kernel");
 
-            let devs = handle.member_devices()
-                .map_err(|e| anyhow::anyhow!("getting member devices from sysfs: {}", e))?;
-
-            fs_opts.set_nostart(true);
-            let fs = crate::device_scan::open_scan(&devs, fs_opts)
-                .map_err(|e| anyhow::anyhow!(
-                    "opening {:?} (noexcl/nostart, for formatting keys): {}", devs, e))?;
-
+            let fs = crate::device_scan::open_mounted_for_decoding(&handle, fs_opts)?;
             list_online(&handle, &fs, opt)
         }
         OpenedFs::Offline(fs) => match opt.mode {
