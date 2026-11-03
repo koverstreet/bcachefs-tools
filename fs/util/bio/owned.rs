@@ -19,12 +19,14 @@
 //! layer; the endio turns it back, and hands it to Endio::endio().
 
 use core::alloc::Layout;
+use core::cell::UnsafeCell;
 use core::marker::PhantomData;
+use core::sync::atomic::{AtomicBool, Ordering::{Acquire, Release}};
 use core::ops::Deref;
 use core::pin::Pin;
 use core::ptr::NonNull;
 
-use pin_init::PinInit;
+use pin_init::{pin_data, PinInit};
 
 use super::{pages, Bio, BioOwner, BioRange};
 use crate::c;
@@ -57,30 +59,38 @@ unsafe impl HasBio for Bio {
 }
 
 /// A struct's bio field: a Bio, or a C-shared struct's c::bio - the same
-/// memory, Bio being transparent.
-pub trait BioField {}
-impl BioField for Bio {}
-impl BioField for c::bio {}
+/// memory, Bio being transparent - or a BioLend, its bio AT into it.
+///
+/// # Safety
+/// A bio is AT bytes into the field, and ends it.
+pub unsafe trait BioField {
+    const AT: usize = 0;
+}
+unsafe impl BioField for Bio {}
+unsafe impl BioField for c::bio {}
 
-/// HasBio for $t, by its bio field $f: checked to be a Bio or a c::bio, and
+#[doc(hidden)]
+pub const fn bio_field_at<B: BioField>(_: *const B) -> usize {
+    B::AT
+}
+
+/// HasBio for $t, by its bio field $f: checked to be a BioField, and its bio
 /// last - not that it's #[pin], which HasBio asks of a struct with
 /// #[pin_data].
 #[macro_export]
 macro_rules! has_bio {
     ($t:ty, $($f:ident).+) => {
-        // SAFETY: a bio field, below, that ends the struct
+        // SAFETY: a bio field, below, its bio ending the struct
         unsafe impl $crate::util::bio::HasBio for $t {
             const BIO_OFFSET: usize = {
-                let off = ::core::mem::offset_of!($t, $($f).+);
+                let t = ::core::mem::MaybeUninit::<$t>::uninit();
+                let field = unsafe { &raw const (*t.as_ptr()).$($f).+ };
+                let off = ::core::mem::offset_of!($t, $($f).+) + $crate::util::bio::bio_field_at(field);
                 assert!(off + ::core::mem::size_of::<$crate::util::bio::Bio>() == ::core::mem::size_of::<$t>(),
                         concat!(stringify!($t), ": its bio isn't last"));
                 off
             };
         }
-        const _: fn(&$t) = |t| {
-            fn bio_field<B: $crate::util::bio::BioField>(_: &B) {}
-            bio_field(&t.$($f).+)
-        };
     };
 }
 
@@ -107,6 +117,93 @@ impl BioInPlace {
                 Ok(())
             })
         }
+    }
+}
+
+/// A bio in something shared by & - a read bio, which each fragment of its
+/// read holds - lent &mut to one holder at a time: lend() hands it out, and
+/// its Lent's drop gives it back. Lending twice at once is a bug, and
+/// panics.
+#[pin_data]
+#[repr(C)]
+pub struct BioLend {
+    lent: AtomicBool,
+    #[pin]
+    bio:  UnsafeCell<Bio>,
+}
+
+// SAFETY: this is what makes a &BioLend's bio writable, so here's the whole
+// of it.
+//
+// A &mut Bio is made only through a Lent, and only one Lent is out at a time:
+// lend() takes it by an atomic swap of `lent`, Acquire, and the Lent's drop
+// gives it back, Release - so one holder's writes happen before the next's,
+// whichever CPU each runs on. It's atomic, not a RefCell, because the holders
+// are tasks, which run on any CPU, and not one task: a read's walk lends its
+// bio to each step and each page cache hook - to advance it, grow it by a
+// folio, set its folios' state, trim it - and then, if the read isn't split,
+// lends it to its one fragment, whose task holds it through the IO. The walk
+// is done with the bio before that: a fragment that's lent the read's bio is
+// the walk's last. A data update's read bio is lent by the update before its
+// read - to set its position and priority - and then to the fragment reading
+// into it. So the flag never actually sees two at once; it says so if that's
+// ever broken.
+//
+// What's read through & while the bio's lent isn't ordered against the
+// holder, so a & reader reads only what the holder doesn't change: the bvecs
+// as mapped, and the data through a BioRange - which borrows BioData, a ZST,
+// none of the bio's fields - or it's the holder itself, reading its own.
+//
+// The bio is where its bioset placed it, pinned, and the cell never moves.
+unsafe impl Sync for BioLend {}
+
+impl BioLend {
+    pub fn new<E>(bio: BioInPlace) -> impl PinInit<Self, E> {
+        let bio = unsafe { ::pin_init::cast_pin_init::<Bio, UnsafeCell<Bio>, E>(bio.init()) };
+        ::pin_init::pin_init!(BioLend { lent: AtomicBool::new(false), bio <- bio }? E)
+    }
+
+    pub fn lend(&self) -> Lent<'_> {
+        assert!(!self.lent.swap(true, Acquire), "a bio lent while it's lent already");
+        Lent(self)
+    }
+
+    /// For C to make the bio in place: bio_init(), before anything's lent it.
+    pub fn as_ptr(&self) -> *mut c::bio {
+        self.bio.get().cast()
+    }
+}
+
+unsafe impl BioField for BioLend {
+    const AT: usize = core::mem::offset_of!(BioLend, bio);
+}
+
+/// A BioLend's bio, lent: given back as it's dropped.
+#[must_use = "dropped, the bio's given back"]
+pub struct Lent<'a>(&'a BioLend);
+
+impl Lent<'_> {
+    pub fn bio_mut(&mut self) -> Pin<&mut Bio> {
+        unsafe { Pin::new_unchecked(&mut *self.0.bio.get()) }
+    }
+
+    /// For C to change it, through the lend.
+    pub fn as_ptr(&mut self) -> *mut c::bio {
+        self.0.as_ptr()
+    }
+}
+
+impl Deref for Lent<'_> {
+    type Target = Bio;
+
+    fn deref(&self) -> &Bio {
+        unsafe { &*self.0.bio.get() }
+    }
+}
+
+impl Drop for Lent<'_> {
+    fn drop(&mut self) {
+        self.0.lent.store(false, Release);
     }
 }
 

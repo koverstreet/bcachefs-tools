@@ -79,7 +79,10 @@ pub use iter::{FolioVec, Folios};
 pub use iter::{Chunk, Chunks, Segment, Segments, Walk};
 #[cfg(kernel)]
 pub(crate) use iter::nth_page;
-pub use owned::{of_bio, BioBox, BioBoxData, BioBuf, BioBufPtr, BioClone, BioField, BioInPlace, BioSet, Either, Endio, FrontPad, HasBio, RawBio};
+#[doc(hidden)]
+pub use owned::bio_field_at;
+pub use owned::{of_bio, BioBox, BioBoxData, BioBuf, BioBufPtr, BioClone, BioField, BioInPlace, BioLend, BioSet, Either,
+                Endio, FrontPad, HasBio, Lent, RawBio};
 
 // A bvec_iter's offset into its bvec, as a place: bi_offset - bi_bvec_done
 // before 7.3, and in the shim.
@@ -303,6 +306,15 @@ impl Bio {
     /// Its size, for a bio with no data to size it by: a discard's.
     pub fn set_size(self: Pin<&mut Self>, bytes: u32) {
         self.raw_mut().bi_iter.bi_size = bytes;
+    }
+
+    /// Its bvecs after the first @nr dropped, and its position with them -
+    /// their pages given back by whoever has them.
+    pub fn truncate_vecs(self: Pin<&mut Self>, nr: u16) {
+        let bio = self.raw_mut();
+        assert!(nr <= bio.bi_vcnt, "truncating a bio to more bvecs than it has");
+        bio.bi_vcnt = nr;
+        bio.bi_iter.bi_size = 0;
     }
 
     /// Its completed IO's result: a BCH_ERR_BLK_STS_* errcode on failure.
