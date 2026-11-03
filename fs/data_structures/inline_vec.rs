@@ -4,97 +4,179 @@
 //! holds it - that moves them to the heap when it needs more: C's
 //! DARRAY_PREALLOCATED(), for what's usually small and occasionally isn't.
 //!
-//! The inline half is arrayvec's; the heap half a KVVec, so spilling is the
-//! kernel's allocation, with its flags, and fallible - an AllocError, where
-//! darray_make_room() is -ENOMEM - never the global allocator's, which the
-//! kernel build doesn't have. Once on the heap it stays there: shrinking back
-//! would move the elements again for nothing.
+//! A union of the two, told apart by the low bit of the first word: on the
+//! heap it's a DstVec, a pointer, its low bit clear; inline, that word's low
+//! bytes are an @L holding the length shifted up past a set low bit, and the
+//! elements follow. So an inline length is at most @L's half, and N may be no
+//! more. Spilling is a DstVec's allocation, and fallible - an AllocError,
+//! where darray_make_room() is -ENOMEM. Once on the heap it stays there:
+//! shrinking back would move the elements again for nothing.
 //!
 //! Its elements are a slice, Deref'd: the slice's methods - iteration,
 //! indexing, sort_unstable - are its. Growing it is reserve(), push() and
 //! insert(), each fallible as the allocation under it is.
 
-use crate::util::alloc::{AllocError, Flags, KVVec};
-use crate::data_structures::array_vec::ArrayVec;
+use crate::data_structures::array_vec::LenUint;
+use crate::data_structures::dst_vec::DstVec;
+use crate::util::alloc::AllocError;
+use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
+use core::ptr;
+use core::slice;
 
-pub enum InlineVec<T, const N: usize> {
-    Inline(ArrayVec<T, N>),
-    Heap(KVVec<T>),
+pub struct InlineVec<T, const N: usize, L: LenUint = u32> {
+    repr: Repr<T, N, L>,
 }
 
-impl<T, const N: usize> InlineVec<T, N> {
+#[repr(C)]
+union Repr<T, const N: usize, L: LenUint> {
+    heap: ManuallyDrop<DstVec<T, L>>,
+    inline: ManuallyDrop<Inline<T, N, L>>,
+}
+
+#[repr(C)]
+struct Inline<T, const N: usize, L: LenUint> {
+    pad: L::WordPad,
+    /* the length << 1 | 1 */
+    tag: L,
+    elems: [MaybeUninit<T>; N],
+}
+
+unsafe impl<T: Send, const N: usize, L: LenUint> Send for InlineVec<T, N, L> {}
+unsafe impl<T: Sync, const N: usize, L: LenUint> Sync for InlineVec<T, N, L> {}
+
+impl<T, const N: usize, L: LenUint> InlineVec<T, N, L> {
     pub const fn new() -> Self {
-        Self::Inline(ArrayVec::new_const())
+        const { assert!(N <= L::MAX >> 1, "InlineVec: its inline capacity doesn't fit its length type") };
+
+        let inline = Inline { pad: L::WORD_PAD, tag: L::ONE, elems: [const { MaybeUninit::uninit() }; N] };
+        Self { repr: Repr { inline: ManuallyDrop::new(inline) } }
+    }
+
+    /// Whether its elements are on the heap.
+    pub fn spilled(&self) -> bool {
+        // spilled, these are the pointer's low bytes
+        unsafe { self.repr.inline.tag.to_usize() & 1 == 0 }
+    }
+
+    pub fn len(&self) -> usize {
+        if self.spilled() {
+            unsafe { self.repr.heap.len() }
+        } else {
+            unsafe { self.repr.inline.tag.to_usize() >> 1 }
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        if self.spilled() { unsafe { self.repr.heap.capacity() } } else { N }
+    }
+
+    /// # Safety
+    /// It isn't spilled; the first @len are initialized, and @len is at most N.
+    unsafe fn set_inline_len(&mut self, len: usize) {
+        unsafe { (*self.repr.inline).tag = L::from_usize(len << 1 | 1) };
+    }
+
+    /// Its elements moved to a DstVec with room for @cap.
+    fn spill(&mut self, cap: usize) -> Result<(), AllocError> {
+        if cap > L::MAX {
+            return Err(AllocError);
+        }
+        let len = self.len();
+        let mut heap = DstVec::with_capacity(cap.max(N.saturating_mul(2)).min(L::MAX))?;
+        unsafe {
+            ptr::copy_nonoverlapping(self.repr.inline.elems.as_ptr().cast(), heap.as_mut_ptr(), len);
+            heap.set_len(len);
+        }
+        self.repr = Repr { heap: ManuallyDrop::new(heap) };
+        Ok(())
     }
 
     /// Room for @additional more, moving to the heap if they don't fit
     /// inline: darray_make_room().
-    pub fn reserve(&mut self, additional: usize, flags: Flags) -> Result<(), AllocError> {
-        match self {
-            Self::Inline(v) if v.len() + additional <= N => Ok(()),
-            Self::Inline(v) => {
-                let mut heap = KVVec::with_capacity(v.len() + additional, flags)?;
-                for x in v.drain(..) {
-                    heap.push(x, flags).expect("pushing within reserved capacity doesn't allocate");
-                }
-                *self = Self::Heap(heap);
-                Ok(())
-            }
-            Self::Heap(v) => v.reserve(additional, flags),
+    pub fn reserve(&mut self, additional: usize) -> Result<(), AllocError> {
+        if self.spilled() {
+            return unsafe { (*self.repr.heap).reserve(additional) };
         }
+
+        let want = self.len().checked_add(additional).ok_or(AllocError)?;
+        if want > N { self.spill(want) } else { Ok(()) }
     }
 
     /// @x, added last.
-    pub fn push(&mut self, x: T, flags: Flags) -> Result<(), AllocError> {
-        self.reserve(1, flags)?;
-        match self {
-            Self::Inline(v) => v.push(x),
-            Self::Heap(v) => v.push(x, flags).expect("pushing within reserved capacity doesn't allocate"),
+    pub fn push(&mut self, x: T) -> Result<(), AllocError> {
+        let len = self.len();
+        if !self.spilled() && len < N {
+            unsafe {
+                (*self.repr.inline).elems[len].write(x);
+                self.set_inline_len(len + 1);
+            }
+            return Ok(());
         }
-        Ok(())
+
+        self.reserve(1)?;
+        unsafe { (*self.repr.heap).push(x) }
     }
 
     /// Empty, keeping what it's allocated: a darray's nr = 0.
     pub fn clear(&mut self) {
-        match self {
-            Self::Inline(v) => v.clear(),
-            Self::Heap(v) => v.clear(),
+        if self.spilled() {
+            unsafe { (*self.repr.heap).clear() };
+            return;
+        }
+
+        let elems: *mut [T] = &mut **self;
+        unsafe {
+            self.set_inline_len(0);
+            ptr::drop_in_place(elems);
         }
     }
 
     /// @x, inserted at @i, the elements from @i on moving up. Panics past the
     /// end, as slices do.
-    pub fn insert(&mut self, i: usize, x: T, flags: Flags) -> Result<(), AllocError> {
+    pub fn insert(&mut self, i: usize, x: T) -> Result<(), AllocError> {
         assert!(i <= self.len(), "inserting at {i} of {}", self.len());
-        self.push(x, flags)?;
+        self.push(x)?;
         self[i..].rotate_right(1);
         Ok(())
     }
 }
 
-impl<T, const N: usize> Default for InlineVec<T, N> {
+impl<T, const N: usize, L: LenUint> Drop for InlineVec<T, N, L> {
+    fn drop(&mut self) {
+        if self.spilled() {
+            unsafe { ManuallyDrop::drop(&mut self.repr.heap) };
+        } else {
+            self.clear();
+        }
+    }
+}
+
+impl<T, const N: usize, L: LenUint> Default for InlineVec<T, N, L> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T, const N: usize> Deref for InlineVec<T, N> {
+impl<T, const N: usize, L: LenUint> Deref for InlineVec<T, N, L> {
     type Target = [T];
 
     fn deref(&self) -> &[T] {
-        match self {
-            Self::Inline(v) => v,
-            Self::Heap(v) => v,
+        if self.spilled() {
+            unsafe { &self.repr.heap }
+        } else {
+            unsafe { slice::from_raw_parts(self.repr.inline.elems.as_ptr().cast(), self.len()) }
         }
     }
 }
 
-impl<T, const N: usize> DerefMut for InlineVec<T, N> {
+impl<T, const N: usize, L: LenUint> DerefMut for InlineVec<T, N, L> {
     fn deref_mut(&mut self) -> &mut [T] {
-        match self {
-            Self::Inline(v) => v,
-            Self::Heap(v) => v,
+        let len = self.len();
+        if self.spilled() {
+            unsafe { &mut *self.repr.heap }
+        } else {
+            unsafe { slice::from_raw_parts_mut((*self.repr.inline).elems.as_mut_ptr().cast(), len) }
         }
     }
 }
@@ -102,29 +184,44 @@ impl<T, const N: usize> DerefMut for InlineVec<T, N> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::alloc::flags::GFP_KERNEL;
 
     #[test]
     fn spills_past_n_keeping_order() {
         let mut v = InlineVec::<u32, 2>::new();
-        v.push(1, GFP_KERNEL).unwrap();
-        v.insert(0, 0, GFP_KERNEL).unwrap();
-        assert!(matches!(v, InlineVec::Inline(_)));
+        v.push(1).unwrap();
+        v.insert(0, 0).unwrap();
+        assert!(!v.spilled());
 
         // a third doesn't fit inline: the first two move with it
-        v.insert(1, 5, GFP_KERNEL).unwrap();
-        assert!(matches!(v, InlineVec::Heap(_)));
-        v.push(9, GFP_KERNEL).unwrap();
+        v.insert(1, 5).unwrap();
+        assert!(v.spilled());
+        v.push(9).unwrap();
         assert_eq!(*v, [0, 5, 1, 9]);
     }
 
     #[test]
     fn reserve_spills_ahead() {
         let mut v = InlineVec::<u32, 4>::new();
-        v.reserve(4, GFP_KERNEL).unwrap();
-        assert!(matches!(v, InlineVec::Inline(_)), "four fit");
-        v.reserve(5, GFP_KERNEL).unwrap();
-        assert!(matches!(v, InlineVec::Heap(_)), "five don't");
+        v.reserve(4).unwrap();
+        assert!(!v.spilled(), "four fit");
+        v.reserve(5).unwrap();
+        assert!(v.spilled(), "five don't");
         assert!(v.is_empty());
+    }
+
+    #[test]
+    fn a_u8_length() {
+        let mut v = InlineVec::<u16, 3, u8>::new();
+        for i in 0..200 {
+            v.push(i).unwrap();
+        }
+        assert_eq!(v.len(), 200);
+        assert_eq!(v[199], 199);
+        assert!(v.reserve(100).is_err(), "past u8::MAX");
+    }
+
+    #[test]
+    fn small_is_small() {
+        assert_eq!(size_of::<InlineVec<u8, 7, u8>>(), size_of::<usize>());
     }
 }

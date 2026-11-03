@@ -60,7 +60,6 @@ use crate::percpu_field;
 use crate::sb::counters::events;
 use crate::sb::members::{data_types_to_text, member_state_str};
 use crate::types::{RustOnly, c_default, rust_only};
-use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::alloc::init_at;
 use crate::util::closure::{closure_has_waiters, closure_wait, closure_wake_up, StackClosure};
 use crate::util::time_stats::TimeStats;
@@ -857,7 +856,7 @@ impl c::alloc_request {
             wake_counter_snapshot,
             free_buckets,
         };
-        if self.trace.push(e, GFP_KERNEL).is_err() {
+        if self.trace.push(e).is_err() {
             self.bits.set_trace_alloc_failed(true);
         }
     }

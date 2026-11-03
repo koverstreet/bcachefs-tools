@@ -27,6 +27,12 @@ mod sealed {
 pub trait LenUint: Copy + sealed::Sealed {
     const MAX: usize;
     const ZERO: Self;
+    const ONE: Self;
+
+    /// Bytes that, before one, put it where a pointer's low byte is: InlineVec
+    /// tags a length there.
+    type WordPad: Copy;
+    const WORD_PAD: Self::WordPad;
 
     fn from_usize(n: usize) -> Self;
     fn to_usize(self) -> usize;
@@ -39,6 +45,16 @@ macro_rules! len_uint {
         impl LenUint for $t {
             const MAX: usize = <$t>::MAX as usize;
             const ZERO: Self = 0;
+            const ONE: Self = 1;
+
+            #[cfg(target_endian = "little")]
+            type WordPad = [u8; 0];
+            #[cfg(target_endian = "little")]
+            const WORD_PAD: Self::WordPad = [];
+            #[cfg(target_endian = "big")]
+            type WordPad = [u8; size_of::<usize>() - size_of::<$t>()];
+            #[cfg(target_endian = "big")]
+            const WORD_PAD: Self::WordPad = [0; size_of::<usize>() - size_of::<$t>()];
 
             #[inline(always)]
             fn from_usize(n: usize) -> Self { n as $t }

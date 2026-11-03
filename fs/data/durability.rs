@@ -21,7 +21,6 @@ use crate::data::ec::stripe::ptr_matches_stripe;
 use crate::data::ptrs::{crc_is_compressed, BkeyVPtrs, BkeyVPtrsMut, Branded, BtreePtrs, PtrMask, Ptrs, PtrsMut};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::ffi::Opaque;
 use crate::data_structures::inline_vec::InlineVec;
 use crate::util::rcu::{read_lock, ReadGuard};
@@ -95,7 +94,7 @@ fn stripe_durability(t: &TransAttempt<'_, '_>, p: &c::extent_ptr_decoded, ret: &
 
     // nothing allocates in the read-side section
     let mut devs = InlineVec::<StripeDev, { c::BCH_BKEY_PTRS_MAX as usize }>::new();
-    devs.reserve(v.nr_blocks.into(), GFP_KERNEL)?;
+    devs.reserve(v.nr_blocks.into())?;
     {
         let rcu = read_lock();
         for sp in s.v().block_ptrs() {
@@ -105,7 +104,7 @@ fn stripe_durability(t: &TransAttempt<'_, '_>, p: &c::extent_ptr_decoded, ret: &
                 durability:         fs.dev_durability(dev, &rcu) as u8,
                 durability_desired: fs.dev_durability_desired(dev, &rcu) as u8,
                 online:             fs.dev_online(dev),
-            }, GFP_KERNEL).expect("pushing within reserved room doesn't allocate");
+            }).expect("pushing within reserved room doesn't allocate");
         }
     }
 
