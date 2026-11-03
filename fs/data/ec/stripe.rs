@@ -33,7 +33,7 @@ use crate::util::rcu::read_lock;
 use crate::util::vstructs::{cast_mut, cast_plain, cast_plain_mut, cast_plain_slice, cast_plain_slice_mut, plain_bytes,
                             plain_bytes_mut, Validated};
 use crate::util::Printbuf;
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::c_int;
 use core::mem::{offset_of, size_of};
 use core::ops::Range;

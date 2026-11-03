@@ -31,7 +31,7 @@ use crate::util::backref::BackRef;
 use crate::util::task::{Resumable, Resume, Spawn, TaskBox};
 use crate::util::vstructs::{cast_plain, Head, SelfSized, Unvalidated};
 use crate::util::Printbuf;
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use core::mem::offset_of;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, bitfield, c_extern};

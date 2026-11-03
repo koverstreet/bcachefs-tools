@@ -42,7 +42,7 @@ use crate::util::time_stats::TimeStats;
 use crate::util::sleep::Sleep;
 use crate::util::{Printbuf, ToText};
 use crate::warn_on_once;
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::c_int;
 use core::sync::atomic::{AtomicI32, AtomicU64, Ordering::{AcqRel, Relaxed}};
 use cstruct_macros::{c_export, c_const};

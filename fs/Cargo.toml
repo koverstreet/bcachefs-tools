@@ -30,7 +30,6 @@ nestify = { path = "vendor/nestify" }
 bitfield = { path = "vendor/bitfield" }
 bitflags = { path = "vendor/bitflags" }
 num-traits = { path = "vendor/num-traits", default-features = false }
-arrayvec = { path = "vendor/arrayvec", default-features = false }
 paste    = { path = "vendor/paste" }
 # Userspace only: std's legacy-mangled names, in backtraces. v0 names are
 # util/demangle.rs's, and in the kernel every Rust name is v0

@@ -30,7 +30,7 @@ use crate::util::log::{LogLevel, LogMsg, Ratelimit};
 use crate::util::sleep::Sleep;
 use crate::util::vstructs::Validated;
 use crate::{c_function_name, prt};
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::CStr;
 use core::pin::Pin;
 use core::ptr::NonNull;

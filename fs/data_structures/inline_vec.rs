@@ -15,7 +15,7 @@
 //! insert(), each fallible as the allocation under it is.
 
 use crate::util::alloc::{AllocError, Flags, KVVec};
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use core::ops::{Deref, DerefMut};
 
 pub enum InlineVec<T, const N: usize> {

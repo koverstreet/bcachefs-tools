@@ -162,7 +162,7 @@ use crate::util::kernel::NSEC_PER_SEC;
 use crate::util::time_stats::TimeStats;
 use cstruct_macros::{c_const, c_export, CStruct, TypeInfo, c_enum};
 use core::mem::{size_of, size_of_val};
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use core::pin::Pin;
 use pin_init::PinInit;
 use crate::published;

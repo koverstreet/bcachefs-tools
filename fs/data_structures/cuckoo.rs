@@ -81,7 +81,7 @@
 //! table - and Seen, counts of how often each rare path ran. Without, Faults
 //! is zero sized and every hook a constant.
 
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use core::borrow::Borrow;
 use core::hash::{BuildHasher, Hash};
 use core::marker::PhantomData;

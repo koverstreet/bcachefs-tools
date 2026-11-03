@@ -28,7 +28,7 @@ use crate::util::refcount::RefGuard;
 use crate::util::task::{waiter, Resume};
 use crate::util::vstructs::Validated;
 use crate::{bch_err, btree_trans, fs_inconsistent, inode_opts, logged_ops, prt};
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use core::ptr::NonNull;
 use pin_init::{init, init_zeroed, stack_pin_init, Init};
 use crate::format::Btree;

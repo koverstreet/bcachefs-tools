@@ -5,7 +5,7 @@ use core::ffi::{c_int, c_uint};
 use core::mem::{offset_of, replace, size_of};
 use core::ptr::NonNull;
 
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use cstruct_macros::c_export;
 
 use crate::btree::bkey::{BkeyI, BkeyV, POS_MIN, SPOS_MAX};

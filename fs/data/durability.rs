@@ -26,7 +26,7 @@ use crate::util::ffi::Opaque;
 use crate::data_structures::inline_vec::InlineVec;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::Validated;
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::c_uint;
 use cstruct_macros::c_export;
 use crate::format::{Btree, MemberState};

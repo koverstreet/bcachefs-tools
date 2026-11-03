@@ -12,7 +12,7 @@ use crate::types::{c_default, Le64};
 use crate::util::kernel::{copy_u64s_small, local_clock, mem_alloc_profiling_enabled};
 use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::{plain_bytes, Head};
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use core::cmp::Ordering;
 use core::ffi::c_uint;
 use core::mem::offset_of;

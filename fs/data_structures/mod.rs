@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+pub mod array_vec;
 pub mod bitmap;
 pub mod cuckoo;
 pub mod eytzinger;

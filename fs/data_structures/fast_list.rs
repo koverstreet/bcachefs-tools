@@ -29,7 +29,7 @@ use crate::c;
 use crate::util::alloc::AllocError;
 use crate::util::percpu::{IrqGuard, PerCpu, PerCpuRef};
 use crate::util::rcu::ReadGuard;
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::{c_int, c_uint, c_void};
 use core::iter;
 use core::ptr::{null_mut, NonNull};

@@ -46,7 +46,7 @@ use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
 use crate::{bch_err, fsck_err, fsck_err_on, inode_fsck_err, prt};
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use bitflags::bitflags;
 use core::ffi::{c_int, c_uint};
 use core::mem::size_of;

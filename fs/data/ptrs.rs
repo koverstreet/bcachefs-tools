@@ -33,7 +33,7 @@ use crate::typeinfo::{AccessError, ResolveError};
 use crate::types::{Le32, Le64};
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, EntryWalk, Validated};
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
 use crate::format::{Bversion, CompressionType, DataType, MemberState, Nonce};

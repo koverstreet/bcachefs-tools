@@ -1,29 +1,184 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// Copyright (c) Ulrik Sverdrup "bluss" 2015-2023
+//
+// Forked from arrayvec 0.7.8: its ArrayVec, with the error type, helpers and
+// the impl trait it shares with ArrayString, in one file; the crate's
+// optional std, serde, borsh and zeroize support left out.
 
-use std::cmp;
-use std::iter;
-use std::mem;
-use std::ops::{Bound, Deref, DerefMut, RangeBounds};
-use std::ptr;
-use std::slice;
+use core::fmt;
+use core::marker::PhantomData;
+use core::mem::MaybeUninit;
+use core::ptr;
+use core::slice;
+use core::cmp;
+use core::iter;
+use core::mem;
+use core::ops::{Bound, Deref, DerefMut, RangeBounds};
+use core::borrow::{Borrow, BorrowMut};
+use core::hash::{Hash, Hasher};
+use core::mem::ManuallyDrop;
+
+pub(crate) type LenUint = u32;
+
+macro_rules! assert_capacity_limit {
+    ($cap:expr) => {
+        if core::mem::size_of::<usize>() > core::mem::size_of::<LenUint>() {
+            if $cap > LenUint::MAX as usize {
+                panic!("ArrayVec: largest supported capacity is u32::MAX");
+            }
+        }
+    }
+}
+
+macro_rules! assert_capacity_limit_const {
+    ($cap:expr) => {
+        if core::mem::size_of::<usize>() > core::mem::size_of::<LenUint>() {
+            if $cap > LenUint::MAX as usize {
+                [/*ArrayVec: largest supported capacity is u32::MAX*/][$cap]
+            }
+        }
+    }
+}
+
+// ── errors ──
+
+/// Error value indicating insufficient capacity
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub struct CapacityError<T = ()> {
+    element: T,
+}
+
+impl<T> CapacityError<T> {
+    /// Create a new `CapacityError` from `element`.
+    pub const fn new(element: T) -> CapacityError<T> {
+        CapacityError {
+            element: element,
+        }
+    }
+
+    /// Extract the overflowing element
+    pub fn element(self) -> T {
+        self.element
+    }
+
+    /// Convert into a `CapacityError` that does not carry an element.
+    pub fn simplify(self) -> CapacityError {
+        CapacityError { element: () }
+    }
+}
+
+const CAPERROR: &'static str = "insufficient capacity";
+
+impl<T> fmt::Display for CapacityError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", CAPERROR)
+    }
+}
+
+impl<T> fmt::Debug for CapacityError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}: {}", "CapacityError", CAPERROR)
+    }
+}
+
+// ── utils ──
+
+pub(crate) struct MakeMaybeUninit<T, const N: usize>(PhantomData<fn() -> T>);
+
+impl<T, const N: usize> MakeMaybeUninit<T, N> {
+    pub(crate) const VALUE: MaybeUninit<T> = MaybeUninit::uninit();
+
+    pub(crate) const ARRAY: [MaybeUninit<T>; N] = [Self::VALUE; N];
+}
+
+// ── ArrayVecImpl ──
+
+/// Implements basic arrayvec methods - based on a few required methods
+/// for length and element access.
+pub(crate) trait ArrayVecImpl {
+    type Item;
+    const CAPACITY: usize;
+
+    fn len(&self) -> usize;
+
+    unsafe fn set_len(&mut self, new_len: usize);
+
+    /// Return a slice containing all elements of the vector.
+    fn as_slice(&self) -> &[Self::Item] {
+        let len = self.len();
+        unsafe {
+            slice::from_raw_parts(self.as_ptr(), len)
+        }
+    }
+
+    /// Return a mutable slice containing all elements of the vector.
+    fn as_mut_slice(&mut self) -> &mut [Self::Item] {
+        let len = self.len();
+        unsafe {
+            core::slice::from_raw_parts_mut(self.as_mut_ptr(), len)
+        }
+    }
+
+    /// Return a raw pointer to the vector's buffer.
+    fn as_ptr(&self) -> *const Self::Item;
+
+    /// Return a raw mutable pointer to the vector's buffer.
+    fn as_mut_ptr(&mut self) -> *mut Self::Item;
+
+    #[track_caller]
+    fn push(&mut self, element: Self::Item) {
+        self.try_push(element).unwrap()
+    }
+
+    fn try_push(&mut self, element: Self::Item) -> Result<(), CapacityError<Self::Item>> {
+        if self.len() < Self::CAPACITY {
+            unsafe {
+                self.push_unchecked(element);
+            }
+            Ok(())
+        } else {
+            Err(CapacityError::new(element))
+        }
+    }
+
+    unsafe fn push_unchecked(&mut self, element: Self::Item) {
+        let len = self.len();
+        debug_assert!(len < Self::CAPACITY);
+        ptr::write(self.as_mut_ptr().add(len), element);
+        self.set_len(len + 1);
+    }
+
+    fn pop(&mut self) -> Option<Self::Item> {
+        if self.len() == 0 {
+            return None;
+        }
+        unsafe {
+            let new_len = self.len() - 1;
+            self.set_len(new_len);
+            Some(ptr::read(self.as_ptr().add(new_len)))
+        }
+    }
+
+    fn clear(&mut self) {
+        self.truncate(0)
+    }
+
+    fn truncate(&mut self, new_len: usize) {
+        unsafe {
+            let len = self.len();
+            if new_len < len {
+                self.set_len(new_len);
+                let tail = slice::from_raw_parts_mut(self.as_mut_ptr().add(new_len), len - new_len);
+                ptr::drop_in_place(tail);
+            }
+        }
+    }
+}
+
+// ── ArrayVec ──
 
 // extra traits
-use std::borrow::{Borrow, BorrowMut};
-use std::hash::{Hash, Hasher};
-use std::fmt;
-
-#[cfg(feature="std")]
-use std::io;
-
-use std::mem::ManuallyDrop;
-use std::mem::MaybeUninit;
-
-#[cfg(feature="serde")]
-use serde::{Serialize, Deserialize, Serializer, Deserializer};
-
-use crate::LenUint;
-use crate::errors::CapacityError;
-use crate::arrayvec_impl::ArrayVecImpl;
-use crate::utils::MakeMaybeUninit;
 
 /// A vector with a fixed capacity.
 ///
@@ -70,7 +225,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// The maximum capacity is given by the generic parameter `CAP`.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::<_, 16>::new();
     /// array.push(1);
@@ -92,7 +247,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// The maximum capacity is given by the generic parameter `CAP`.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// static ARRAY: ArrayVec<u8, 1024> = ArrayVec::new_const();
     /// ```
@@ -104,7 +259,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// Return the number of elements in the `ArrayVec`.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::from([1, 2, 3]);
     /// array.pop();
@@ -116,7 +271,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// Returns whether the `ArrayVec` is empty.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::from([1]);
     /// array.pop();
@@ -128,7 +283,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// Return the capacity of the `ArrayVec`.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let array = ArrayVec::from([1, 2, 3]);
     /// assert_eq!(array.capacity(), 3);
@@ -139,7 +294,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// Return true if the `ArrayVec` is completely filled to its capacity, false otherwise.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::<_, 1>::new();
     /// assert!(!array.is_full());
@@ -151,7 +306,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// Returns the capacity left in the `ArrayVec`.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::from([1, 2, 3]);
     /// array.pop();
@@ -166,7 +321,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// ***Panics*** if the vector is already full.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::<_, 2>::new();
     ///
@@ -186,7 +341,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// is already full.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::<_, 2>::new();
     ///
@@ -214,7 +369,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// This method uses *debug assertions* to check that the arrayvec is not full.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::<_, 2>::new();
     ///
@@ -238,7 +393,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// effect.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::from([1, 2, 3, 4, 5]);
     /// array.truncate(3);
@@ -254,7 +409,6 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     pub fn clear(&mut self) {
         ArrayVecImpl::clear(self)
     }
-
 
     /// Get pointer to where element at `index` would be
     unsafe fn get_unchecked_ptr(&mut self, index: usize) -> *mut T {
@@ -272,7 +426,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// `try_insert` for fallible version.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::<_, 2>::new();
     ///
@@ -296,7 +450,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// ***Panics*** `index` is out of bounds.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::<_, 2>::new();
     ///
@@ -337,7 +491,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// Return `Some(` *element* `)` if the vector is non-empty, else `None`.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::<_, 2>::new();
     ///
@@ -359,7 +513,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// ***Panics*** if the `index` is out of bounds.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::from([1, 2, 3]);
     ///
@@ -384,7 +538,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// Return `Some(` *element* `)` if the index is in bounds, else `None`.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::from([1, 2, 3]);
     ///
@@ -409,7 +563,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// ***Panics*** if the `index` is out of bounds.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::from([1, 2, 3]);
     ///
@@ -430,7 +584,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// is no element at `index`. Otherwise, return the element inside `Some`.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::from([1, 2, 3]);
     ///
@@ -455,7 +609,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// elements.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut array = ArrayVec::from([1, 2, 3, 4]);
     /// array.retain(|x| *x & 1 != 0 );
@@ -547,7 +701,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// # Examples
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// // Allocate vector big enough for 10 elements.
     /// let mut v: ArrayVec<i32, 10> = ArrayVec::new();
@@ -586,7 +740,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// Copy all elements from the slice and append to the `ArrayVec`.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut vec: ArrayVec<usize, 10> = ArrayVec::new();
     /// vec.push(1);
@@ -630,7 +784,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// the end point is greater than the length of the vector.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut v1 = ArrayVec::from([1, 2, 3]);
     /// let v2: ArrayVec<_, 3> = v1.drain(0..2).collect();
@@ -711,7 +865,7 @@ impl<T, const CAP: usize> ArrayVec<T, CAP> {
     /// Returns the ArrayVec, replacing the original with a new empty ArrayVec.
     ///
     /// ```
-    /// use arrayvec::ArrayVec;
+    /// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
     ///
     /// let mut v = ArrayVec::from([0, 1, 2, 3]);
     /// assert_eq!([0, 1, 2, 3], v.take().into_inner().unwrap());
@@ -777,11 +931,10 @@ impl<T, const CAP: usize> DerefMut for ArrayVec<T, CAP> {
     }
 }
 
-
 /// Create an `ArrayVec` from an array.
 ///
 /// ```
-/// use arrayvec::ArrayVec;
+/// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
 ///
 /// let mut array = ArrayVec::from([1, 2, 3]);
 /// assert_eq!(array.len(), 3);
@@ -801,19 +954,18 @@ impl<T, const CAP: usize> From<[T; CAP]> for ArrayVec<T, CAP> {
     }
 }
 
-
 /// Try to create an `ArrayVec` from a slice. This will return an error if the slice was too big to
 /// fit.
 ///
 /// ```
-/// use arrayvec::ArrayVec;
-/// use std::convert::TryInto as _;
+/// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
+/// use core::convert::TryInto as _;
 ///
 /// let array: ArrayVec<_, 4> = (&[1, 2, 3] as &[_]).try_into().unwrap();
 /// assert_eq!(array.len(), 3);
 /// assert_eq!(array.capacity(), 4);
 /// ```
-impl<T, const CAP: usize> std::convert::TryFrom<&[T]> for ArrayVec<T, CAP>
+impl<T, const CAP: usize> core::convert::TryFrom<&[T]> for ArrayVec<T, CAP>
     where T: Clone,
 {
     type Error = CapacityError;
@@ -829,11 +981,10 @@ impl<T, const CAP: usize> std::convert::TryFrom<&[T]> for ArrayVec<T, CAP>
     }
 }
 
-
 /// Iterate the `ArrayVec` with references to each element.
 ///
 /// ```
-/// use arrayvec::ArrayVec;
+/// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
 ///
 /// let array = ArrayVec::from([1, 2, 3]);
 ///
@@ -850,7 +1001,7 @@ impl<'a, T: 'a, const CAP: usize> IntoIterator for &'a ArrayVec<T, CAP> {
 /// Iterate the `ArrayVec` with mutable references to each element.
 ///
 /// ```
-/// use arrayvec::ArrayVec;
+/// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
 ///
 /// let mut array = ArrayVec::from([1, 2, 3]);
 ///
@@ -869,7 +1020,7 @@ impl<'a, T: 'a, const CAP: usize> IntoIterator for &'a mut ArrayVec<T, CAP> {
 /// The vector is consumed by this operation.
 ///
 /// ```
-/// use arrayvec::ArrayVec;
+/// use bcachefs_kernel::data_structures::array_vec::ArrayVec;
 ///
 /// for elt in ArrayVec::from([1, 2, 3]) {
 ///     // ...
@@ -880,33 +1031,6 @@ impl<T, const CAP: usize> IntoIterator for ArrayVec<T, CAP> {
     type IntoIter = IntoIter<T, CAP>;
     fn into_iter(self) -> IntoIter<T, CAP> {
         IntoIter { index: 0, v: self, }
-    }
-}
-
-
-#[cfg(feature = "zeroize")]
-/// "Best efforts" zeroing of the `ArrayVec`'s buffer when the `zeroize` feature is enabled.
-///
-/// The length is set to 0, and the buffer is dropped and zeroized.
-/// Cannot ensure that previous moves of the `ArrayVec` did not leave values on the stack.
-///
-/// ```
-/// use arrayvec::ArrayVec;
-/// use zeroize::Zeroize;
-/// let mut array = ArrayVec::from([1, 2, 3]);
-/// array.zeroize();
-/// assert_eq!(array.len(), 0);
-/// let data = unsafe { core::slice::from_raw_parts(array.as_ptr(), array.capacity()) };
-/// assert_eq!(data, [0, 0, 0]);
-/// ```
-impl<Z: zeroize::Zeroize, const CAP: usize> zeroize::Zeroize for ArrayVec<Z, CAP> {
-    fn zeroize(&mut self) {
-        // Zeroize all the contained elements.
-        self.iter_mut().zeroize();
-        // Drop all the elements and set the length to 0.
-        self.clear();
-        // Zeroize the backing array.
-        self.xs.zeroize();
     }
 }
 
@@ -1079,8 +1203,6 @@ impl<T, Data, F> Drop for ScopeExitGuard<T, Data, F>
         (self.f)(&self.data, &mut self.value)
     }
 }
-
-
 
 /// Extend the `ArrayVec` with an iterator.
 /// 
@@ -1289,100 +1411,5 @@ impl<T, const CAP: usize> PartialOrd for ArrayVec<T, CAP> where T: PartialOrd {
 impl<T, const CAP: usize> Ord for ArrayVec<T, CAP> where T: Ord {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
         (**self).cmp(other)
-    }
-}
-
-#[cfg(feature="std")]
-/// `Write` appends written data to the end of the vector.
-///
-/// Requires `features="std"`.
-impl<const CAP: usize> io::Write for ArrayVec<u8, CAP> {
-    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        let len = cmp::min(self.remaining_capacity(), data.len());
-        let _result = self.try_extend_from_slice(&data[..len]);
-        debug_assert!(_result.is_ok());
-        Ok(len)
-    }
-    fn flush(&mut self) -> io::Result<()> { Ok(()) }
-}
-
-#[cfg(feature="serde")]
-/// Requires crate feature `"serde"`
-impl<T: Serialize, const CAP: usize> Serialize for ArrayVec<T, CAP> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where S: Serializer
-    {
-        serializer.collect_seq(self)
-    }
-}
-
-#[cfg(feature="serde")]
-/// Requires crate feature `"serde"`
-impl<'de, T: Deserialize<'de>, const CAP: usize> Deserialize<'de> for ArrayVec<T, CAP> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where D: Deserializer<'de>
-    {
-        use serde::de::{Visitor, SeqAccess, Error};
-        use std::marker::PhantomData;
-
-        struct ArrayVecVisitor<'de, T: Deserialize<'de>, const CAP: usize>(PhantomData<(&'de (), [T; CAP])>);
-
-        impl<'de, T: Deserialize<'de>, const CAP: usize> Visitor<'de> for ArrayVecVisitor<'de, T, CAP> {
-            type Value = ArrayVec<T, CAP>;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                write!(formatter, "an array with no more than {} items", CAP)
-            }
-
-            fn visit_seq<SA>(self, mut seq: SA) -> Result<Self::Value, SA::Error>
-                where SA: SeqAccess<'de>,
-            {
-                let mut values = ArrayVec::<T, CAP>::new();
-
-                while let Some(value) = seq.next_element()? {
-                    if let Err(_) = values.try_push(value) {
-                        return Err(SA::Error::invalid_length(CAP + 1, &self));
-                    }
-                }
-
-                Ok(values)
-            }
-        }
-
-        deserializer.deserialize_seq(ArrayVecVisitor::<T, CAP>(PhantomData))
-    }
-}
-
-#[cfg(feature = "borsh")]
-/// Requires crate feature `"borsh"`
-impl<T, const CAP: usize> borsh::BorshSerialize for ArrayVec<T, CAP>
-where
-    T: borsh::BorshSerialize,
-{
-    fn serialize<W: borsh::io::Write>(&self, writer: &mut W) -> borsh::io::Result<()> {
-        <[T] as borsh::BorshSerialize>::serialize(self.as_slice(), writer)
-    }
-}
-
-#[cfg(feature = "borsh")]
-/// Requires crate feature `"borsh"`
-impl<T, const CAP: usize> borsh::BorshDeserialize for ArrayVec<T, CAP>
-where
-    T: borsh::BorshDeserialize,
-{
-    fn deserialize_reader<R: borsh::io::Read>(reader: &mut R) -> borsh::io::Result<Self> {
-        let mut values = Self::new();
-        let len = <u32 as borsh::BorshDeserialize>::deserialize_reader(reader)?;
-        for _ in 0..len {
-            let elem = <T as borsh::BorshDeserialize>::deserialize_reader(reader)?;
-            if let Err(_) = values.try_push(elem) {
-                return Err(borsh::io::Error::new(
-                    borsh::io::ErrorKind::InvalidData,
-                    format!("Expected an array with no more than {} items", CAP),
-                ));
-            }
-        }
-
-        Ok(values)
     }
 }

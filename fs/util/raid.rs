@@ -23,7 +23,7 @@
 
 use crate::c;
 use crate::util::kernel::PAGE_SIZE;
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::{c_int, c_void};
 
 /// The most blocks a stripe has.

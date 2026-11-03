@@ -36,7 +36,7 @@ use crate::util::kernel::{cold_path, unlikely};
 use crate::util::log::LogMsg;
 use crate::util::vstructs::plain_bytes;
 use crate::{accounting, bch_err, fs_inconsistent, fsck_err_on, prt};
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use core::ops::ControlFlow;
 use cstruct_macros::{c_export, c_extern};
 use core::ffi::c_int;

@@ -161,7 +161,7 @@ use crate::util::workqueue::Queue;
 use crate::util::projections::Volatile;
 use crate::util::{HumanReadable, Nsecs, Printbuf};
 use crate::{new_lock, published, prt};
-use arrayvec::ArrayVec;
+use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::c_void;
 use core::pin::Pin;
 use core::ptr::NonNull;
