@@ -34,6 +34,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::ptr::NonNull;
 use core::slice;
 use core::ops::ControlFlow;
+use crate::btree::cache::btree_ptr_hash_val;
 use crate::data::ptrs::BtreePtrs;
 use crate::util::vstructs::{State, Validated};
 use crate::types::c_default;
@@ -1684,6 +1685,18 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let mut node_iter = BtreeNodeIter::new(self, btree, pos, level + 1, level - 1, BtreeIterFlags::empty());
         let b = node_iter.peek_ref()?.expect("the node a btree node pointer points to");
         self.btree_node_rewrite(node_iter.iter(), b, target, flags, write_flags)
+    }
+
+    /// The node @k points to, at @level of @btree, rewritten - if @k is still
+    /// its pointer; ENOENT if the node's been replaced since.
+    pub fn btree_node_rewrite_key<V: ?Sized + BkeyVal>(&self, btree: Btree, level: u32, k: BkeySC<'_, V>,
+                                                       flags: impl Into<CommitOpts>) -> Result<(), BchError> {
+        let mut node_iter = BtreeNodeIter::new(self, btree, k.k.p, c::BTREE_MAX_DEPTH, level, BtreeIterFlags::empty());
+        match node_iter.peek_ref()? {
+            Some(b) if btree_ptr_hash_val(b.key_sc()) == btree_ptr_hash_val(k) =>
+                self.btree_node_rewrite(node_iter.iter(), b, 0, flags, c::bch_write_flags::empty()),
+            _ => Err(BchError::from(c::ENOENT)),
+        }
     }
 
     /// One replica of the node @k points to, on @dev, read and checked - the

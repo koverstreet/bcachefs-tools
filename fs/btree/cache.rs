@@ -6,11 +6,13 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::bkey::{BkeySC, BkeyVal};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
+use core::mem::offset_of;
 use core::ops::RangeInclusive;
 use core::ptr::NonNull;
 use crate::util::ffi::c_char;
@@ -93,6 +95,19 @@ impl Drop for Bounce<'_> {
     fn drop(&mut self) {
         unsafe { bch2_btree_bounce_free(self.fs.as_ptr(), self.bytes, self.mempool, self.p.as_ptr().cast()) }
     }
+}
+
+/// A node pointer's identity in the node cache - a v2's seq, a v1's first
+/// pointer - read as C reads it, the bytes as they are: btree_ptr_hash_val().
+/// 0 for a v1 with no pointer, which C reads past its value for.
+pub fn btree_ptr_hash_val<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> u64 {
+    let offset = match k.k.key_type() {
+        c::bch_bkey_type::KEY_TYPE_btree_ptr    => 0,
+        c::bch_bkey_type::KEY_TYPE_btree_ptr_v2 => offset_of!(c::BtreePtrV2, repr.seq),
+        _ => return 0,
+    };
+    k.val_bytes().get(offset..offset + 8)
+        .map_or(0, |b| u64::from_ne_bytes(b.try_into().expect("8 bytes")))
 }
 
 impl ToText for c::bch_fs_btree_cache {

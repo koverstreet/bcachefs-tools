@@ -3395,20 +3395,6 @@ err_free_update:
 	goto out;
 }
 
-int bch2_btree_node_rewrite_key(struct btree_trans *trans,
-				enum btree_id btree, unsigned level,
-				struct bkey_i *k,
-				enum bch_trans_commit_flags flags)
-{
-	CLASS(btree_node_iter, iter)(trans, btree, k->k.p, BTREE_MAX_DEPTH, level, 0);
-	struct btree *b = errptr_try(bch2_btree_iter_peek_node(&iter));
-
-	bool found = b && btree_ptr_hash_val(&b->key) == btree_ptr_hash_val(k);
-	return found
-		? bch2_btree_node_rewrite(trans, &iter, b, 0, flags, 0)
-		: -ENOENT;
-}
-
 /*
  * Async btree ops (rewrite on read error, merge of an underfull node)
  * identify their node by position plus the node's random cookie

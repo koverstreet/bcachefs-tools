@@ -93,11 +93,6 @@ static inline int bch2_foreground_maybe_merge(struct btree_trans *trans,
 
 int bch2_btree_node_get_iter(struct btree_trans *, struct btree_iter *, struct btree *);
 
-int bch2_btree_node_rewrite_key(struct btree_trans *,
-				enum btree_id, unsigned,
-				struct bkey_i *,
-				enum bch_trans_commit_flags);
-
 void bch2_btree_set_root_for_read(struct bch_fs *, struct btree *);
 
 int bch2_btree_root_alloc_fake_trans(struct btree_trans *, enum btree_id, unsigned);

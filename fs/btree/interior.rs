@@ -8,7 +8,10 @@
 use core::ffi::{c_ulong, c_int, c_uint};
 use core::mem::size_of;
 use cstruct_macros::{c_export, CStruct, Init, Late, c_const, c_extern, TypeInfo};
+use crate::btree::bkey::BkeyI;
+use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
+use crate::errcode::ret_to_c;
 use crate::c;
 use crate::fs::Fs;
 use crate::journal::entries::{EntryWriter, NoRoom};
@@ -195,4 +198,11 @@ pub unsafe fn bch2_btree_roots_to_journal_entries(c: &Opaque<Fs>, end: *mut Head
     push_roots(fs, &root_lock, skip.into(), &mut w).expect("sized for them, under the same lock");
     // SAFETY: as long as what was written
     unsafe { end.byte_add(bytes) }
+}
+
+#[c_export]
+pub unsafe extern "C" fn bch2_btree_node_rewrite_key(trans: &BtreeTrans<'_>, btree: Btree, level: c_uint,
+                                                     k: *const c::bkey_i, flags: c::bch_trans_commit_flags) -> c_int {
+    let k = unsafe { &*BkeyI::from_raw(k) };
+    ret_to_c(unsafe { trans.attempt_in_progress() }.btree_node_rewrite_key(btree, level, k.into(), flags))
 }
