@@ -263,23 +263,30 @@ impl InodeInfo {
         UpdateLock { inode: self, _guard: Locked::from_c(&self.ei_update_lock).lock() }
     }
 
-    /// Take the update locks of @inodes, together: in address order, each
-    /// once, each a lockdep subclass of its own - as C's bch2_lock_inodes()
-    /// does, so the two can't deadlock.
-    pub fn update_lock_all<const N: usize>(mut inodes: [&InodeInfo; N]) -> UpdateLocks<'_, N> {
-        inodes.sort_unstable_by_key(|i| core::ptr::from_ref(*i));
-
-        let mut locks = ArrayVec::new();
-        for (i, inode) in inodes.iter().enumerate() {
-            if i > 0 && core::ptr::eq(*inode, inodes[i - 1]) {
-                continue;
-            }
-            // C's subclasses start at 1
-            let guard = Locked::from_c(&inode.ei_update_lock).lock_nested(i as u32 + 1);
-            locks.push(UpdateLock { inode, _guard: guard });
-        }
-        UpdateLocks(locks)
+    /// Take the update locks of @inodes, together, in lock_order().
+    pub fn update_lock_all<const N: usize>(inodes: [&InodeInfo; N]) -> UpdateLocks<'_, N> {
+        UpdateLocks(lock_order(inodes).map(|(subclass, inode)| {
+            UpdateLock { inode, _guard: Locked::from_c(&inode.ei_update_lock).lock_nested(subclass) }
+        }).collect())
     }
+
+    /// Block page cache adds to @inodes, together, in lock_order().
+    pub fn pagecache_block_all<const N: usize>(inodes: [&InodeInfo; N])
+        -> ArrayVec<c::TwoStateGuard<'_, c::PagecacheBlock>, N>
+    {
+        lock_order(inodes).map(|(_, inode)| inode.ei_pagecache_lock.lock()).collect()
+    }
+}
+
+/// @inodes in address order, each once, with its lockdep subclass - as C's
+/// bch2_lock_inodes() takes them, so two lockers of the same inodes can't
+/// deadlock.
+fn lock_order<const N: usize>(mut inodes: [&InodeInfo; N]) -> impl Iterator<Item = (u32, &InodeInfo)> {
+    inodes.sort_unstable_by_key(|i| core::ptr::from_ref(*i));
+
+    // C's subclasses start at 1
+    (0..N).filter(move |&i| i == 0 || !core::ptr::eq(inodes[i], inodes[i - 1]))
+          .map(move |i| (i as u32 + 1, inodes[i]))
 }
 
 pub struct UpdateLocks<'i, const N: usize>(ArrayVec<UpdateLock<'i>, N>);
