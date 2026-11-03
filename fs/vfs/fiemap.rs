@@ -37,18 +37,9 @@ use crate::data::reflink::lookup_indirect_extent;
 use crate::errcode::{bch_errcode, ret_to_result, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
-use cstruct_macros::c_extern;
 
 use super::inode::InodeInfo;
 use crate::format::Btree;
-
-c_extern! {
-    // pagecache.c's, until it's Rust:
-    fn bch2_seek_pagecache_data(vinode: *mut c::inode, start: c::loff_t, end: c::loff_t,
-                                state: core::ffi::c_uint, nonblock: bool) -> c::loff_t;
-    fn bch2_seek_pagecache_hole(vinode: *mut c::inode, start: c::loff_t, end: c::loff_t,
-                                state: core::ffi::c_uint, nonblock: bool) -> c::loff_t;
-}
 
 enum Mapping {
     Extent(BkeyBuf),
@@ -133,19 +124,17 @@ impl Mapping {
 fn pagecache_dirty(t: &TransAttempt<'_, '_>, inode: &InodeInfo, start: u64, end: u64)
     -> Result<Range<u64>, BchError>
 {
-    let vinode = inode.vfs().as_ptr();
-    let (start, end) = ((start << 9) as c::loff_t, (end << 9) as c::loff_t);
-    let loff = |r: c::loff_t| if r < 0 { Err(BchError::from_raw(-r as i32)) } else { Ok(r) };
+    let pagecache = inode.vfs().mapping();
+    let (start, end) = (start << 9, end << 9);
 
     let scan = |nonblock| {
-        // SAFETY: an inode the VFS holds
-        let data = loff(unsafe { bch2_seek_pagecache_data(vinode, start, end, 0, nonblock) })?;
+        let data = pagecache.seek_data(start, end, 0, nonblock)?;
         if data == end {
-            return Ok(end as u64 >> 9..end as u64 >> 9);
+            return Ok(end >> 9..end >> 9);
         }
-        let hole = loff(unsafe { bch2_seek_pagecache_hole(vinode, data, end, 0, nonblock) })?;
+        let hole = pagecache.seek_hole(data, end, 0, nonblock)?;
         assert!(data != hole, "fiemap: pagecache data at {data} with a hole at the same offset");
-        Ok(data as u64 >> 9..hole as u64 >> 9)
+        Ok(data >> 9..hole >> 9)
     };
 
     match scan(true) {
