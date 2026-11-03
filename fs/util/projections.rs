@@ -252,14 +252,19 @@ atomic_word!(bool => AtomicBool, u8 => AtomicU8, u16 => AtomicU16, u32 => Atomic
 
 /// A value whose readers are fine with seeing it torn - each word as some
 /// write left it, not all from the same one: a position read for progress,
-/// say. That a torn one is a valid value is Plain's; that it's an acceptable
-/// one is the type's to say. An AtomicWord whose storage is Torn, so a
-/// Volatile of it is read and written a word at a time. One word at its
-/// alignment can't tear: one_word!() says so, checked.
+/// say. An AtomicWord whose storage is Torn, so a Volatile of it is read and
+/// written a word at a time. One word at its alignment can't tear:
+/// one_word!() says so, checked.
+///
+/// Its words are only ever stored whole, from values of it: a torn one is
+/// each word of some value, never bytes no value had. So a bool field is
+/// fine - it's 0 or 1 in every value - where Plain, any bytes at all, would
+/// rule it out.
 ///
 /// # Safety
-/// A torn value is one its readers can take.
-pub unsafe trait TearSafe: Plain + Copy {}
+/// All zeroes is a value of it; so is any value whose every word is the same
+/// word of some value; and a torn value is one its readers can take.
+pub unsafe trait TearSafe: Copy {}
 
 /// A TearSafe value as a Volatile holds it: loaded and stored a word at a
 /// time - of its alignment, up to a u64 - by relaxed atomics.
@@ -323,8 +328,9 @@ impl<T: TearSafe> Torn<T> {
     pub fn load(&self) -> T {
         let mut v = MaybeUninit::<T>::uninit();
         let (src, dst) = (self.0.get(), v.as_mut_ptr());
-        // SAFETY: the cell's words, aligned as T is, into @v's; T is Plain, so
-        // every byte written, whatever the words are is a T
+        // SAFETY: the cell's words, aligned as T is, into @v's; each word is
+        // as a store() of a T or zeroing left it, so the words are a T's: T
+        // is TearSafe
         unsafe {
             match Self::WORD {
                 1 => load_words::<u8>(src.cast(), dst.cast(), Self::WORDS),
@@ -350,7 +356,7 @@ impl<T: TearSafe> Torn<T> {
     }
 }
 
-// SAFETY: Torn is laid out as @T is, and @T is Plain: zeroes are one
+// SAFETY: Torn is laid out as @T is, and @T is TearSafe: zeroes are one
 unsafe impl<T: TearSafe> AtomicWord for T {
     type Atomic = Torn<T>;
 
@@ -371,6 +377,11 @@ macro_rules! one_word {
         const _: () = assert!($crate::util::projections::Torn::<$t>::WORDS == 1,
                               ::core::concat!(::core::stringify!($t),
                                               ": more than a word at its alignment - unsafe impl TearSafe"));
+        /* Plain is what makes zeroes one: a closed enum without a 0 isn't */
+        const _: fn() = || {
+            fn plain<T: $crate::util::vstructs::Plain>() {}
+            plain::<$t>();
+        };
         unsafe impl $crate::util::projections::TearSafe for $t {}
     )* };
 }
