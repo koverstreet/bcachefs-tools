@@ -192,6 +192,9 @@ pub fn qid(u: &c::bch_inode_unpacked) -> c::bch_qid {
 #[cfg(CONFIG_BCACHEFS_QUOTA)]
 pub use vfs::*;
 
+/// The space counter, as acct() takes it.
+pub const Q_SPC: usize = c::quota_counters::Q_SPC.0 as usize;
+
 /// Without quotas, nothing's counted.
 #[cfg(not(CONFIG_BCACHEFS_QUOTA))]
 pub fn acct(_fs: &Fs, _qid: c::bch_qid, _counter: usize, _v: i64, _mode: c::quota_acct_mode)
@@ -232,7 +235,6 @@ mod vfs {
     const SB_RDONLY_BIT: u32 = 0;
 
     const QTYP_NR: usize = c::QTYP_NR as usize;
-    const Q_SPC: usize = c::quota_counters::Q_SPC.0 as usize;
     const Q_INO: usize = c::quota_counters::Q_INO.0 as usize;
 
     /// @s's fieldmask, in hex, then @fields: one a line, names in a column 20
