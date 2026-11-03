@@ -1158,7 +1158,7 @@ static noinline int read_extent_hole(struct bch_fs *c,
 	}));
 
 	/*
-	 * won't normally happen in the data update (bch2_move_extent()) path,
+	 * won't normally happen in the data update (move_extent()) path,
 	 * but if we retry and the extent we wanted to read no longer exists we
 	 * have to signal that:
 	 */

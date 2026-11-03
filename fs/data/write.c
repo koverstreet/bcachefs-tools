@@ -1708,7 +1708,7 @@ static int bch2_write_op_decode(struct bch_write_op *op, struct bio *bio)
 
 	/*
 	 * XXX: don't have a good way to assert that the bio was allocated with
-	 * enough space, we depend on bch2_move_extent doing the right thing
+	 * enough space, we depend on move_extent() doing the right thing
 	 */
 	bio->bi_iter.bi_size = crc->live_size << 9;
 

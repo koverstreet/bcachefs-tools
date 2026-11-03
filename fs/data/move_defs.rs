@@ -27,7 +27,7 @@ use cstruct_macros::CStruct;
  * both account through these counters.
  *
  * Lifetime: every in-flight IO holds closure_get(&ctxt->cl).
- * bch2_moving_ctxt_flush_all() waits for all IO via closure_sync(),
+ * Moving::flush_all() waits for all IO via closure_sync(),
  * and bch2_moving_ctxt_exit() asserts all counters are zero.
  */
 #[repr(C)]

@@ -55,14 +55,11 @@ use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{writepoint_hashed, Fs};
 use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
 use crate::sb::counters::events;
-use crate::util::ffi::Opaque;
 use crate::util::kernel::current_id;
 use crate::util::Printbuf;
 use crate::{bch_err_msg, warn_once};
-use core::ffi::{c_int, c_uint};
 use core::ops::Range;
 use core::ptr::NonNull;
-use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree, DataType};
 
 /// What to move: of @k, in @btree, with @io_opts, the move's options filled
@@ -176,28 +173,6 @@ impl<'a> Moving<'a> {
         }
         ret
     }
-}
-
-/// For the journal scrub, until it's Rust - its walk's progress counted here,
-/// as C's was.
-///
-/// # Safety
-/// @ctxt's transaction is in an attempt, at @iter.
-#[c_export]
-pub unsafe fn bch2_move_extent(ctxt: &Opaque<c::moving_context>, bucket: Option<&c::move_bucket>,
-                               opts: &c::bch_inode_opts, data_opts: &c::data_update_opts, iter: &BtreeIter<'_>,
-                               level: c_uint, k: BkeySC<'_>) -> c_int {
-    let moving = Moving::from_c(ctxt);
-    // SAFETY: the caller's
-    let t = unsafe { moving.trans().attempt_in_progress() };
-    let sectors = key_sectors(t.fs(), k);
-    let ret = moving.move_extent(&t, bucket, opts, data_opts, iter, level, k, None);
-    if !matches!(&ret, Err(e) if is_restart(e)) {
-        if let Some(stats) = moving.stats_opt() {
-            stats.walked(iter, sectors);
-        }
-    }
-    ret_to_c(ret)
 }
 
 /// What a walk moves with: the context, the bucket each move holds a count on,

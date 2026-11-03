@@ -32,7 +32,6 @@ use crate::fs::Fs;
 use crate::function_name;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError, Flags};
 use crate::util::closure::ClosureRef;
-use crate::util::ffi::Opaque;
 use crate::util::refcount::Refcount;
 use crate::util::kthread::Kthread;
 use crate::util::task::{waiter, RunQueue};
@@ -253,13 +252,6 @@ impl<'a> Moving<'a> {
         unsafe { &*ctxt.cast() }
     }
 
-    /// For an entry point C calls with its context: safe, as an Opaque is
-    /// always a live one.
-    pub fn from_c(ctxt: &'a Opaque<c::moving_context>) -> &'a Self {
-        // SAFETY: as above
-        unsafe { Self::from_raw(ctxt.as_ptr()) }
-    }
-
     /// For a data update's pointer back to the context it's in flight in.
     pub(crate) fn raw(&self) -> *mut c::moving_context {
         core::ptr::from_ref(&self.0).cast_mut()
@@ -476,11 +468,6 @@ impl c::data_update {
         // and the context's flush_all() waits for it before the context goes
         NonNull::new(self.ctxt).map(|c| unsafe { Moving::from_raw(c.as_ptr()) })
     }
-}
-
-#[c_export]
-pub fn bch2_moving_ctxt_flush_all(ctxt: &Opaque<c::moving_context>) {
-    Moving::from_c(ctxt).flush_all()
 }
 
 impl Drop for MovingCtxt<'_> {
