@@ -385,8 +385,7 @@ pub fn scrub(fs: &Fs) -> Result<u64, BchError> {
     let stats = MoveStats::default();
     stats.reset();
 
-    let ctxt = MovingCtxt::new(fs, &stats, c::write_point_specifier::default(), false)
-        .map_err(|_| BchError::from(c::ENOMEM))?;
+    let ctxt = MovingCtxt::new(fs, &stats, c::write_point_specifier::default(), false)?;
 
     /*
      * Scrub one flush range at a time, newest first. Within each range,

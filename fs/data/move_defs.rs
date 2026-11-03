@@ -9,7 +9,8 @@ use crate::types::Fifo;
 use core::cell::{Cell, UnsafeCell};
 use crate::util::task::RunQueue;
 use core::sync::atomic::{AtomicI32, AtomicPtr};
-use crate::util::ffi::Opaque;
+use crate::util::gather::Gather;
+use crate::util::task::waiter;
 use cstruct_macros::CStruct;
 use pin_init::pin_data;
 
@@ -27,9 +28,9 @@ use pin_init::pin_data;
  * Moves (Moving::move_extent()) and stripe repairs (ec/repair.rs)
  * both account through these counters.
  *
- * Lifetime: every in-flight IO holds closure_get(&ctxt->cl).
- * Moving::flush_all() waits for all IO via closure_sync(),
- * and MovingCtxt's drop asserts all counters are zero.
+ * Lifetime: every in-flight IO holds a ref on in_flight.
+ * Moving::flush_all() waits for the counters to drain, and MovingCtxt's
+ * drop asserts they have, then waits in_flight's refs out.
  */
 #[pin_data]
 #[repr(C)]
@@ -42,10 +43,9 @@ pub struct moving_context {
     pub wp: c::write_point_specifier,
     pub wait_on_copygc: bool,
 
-    /* For waiting on outstanding reads and writes: */
-    #[c("struct closure cl")]
+    /* A ref each for what's in flight - MovingIo's - which drop waits out */
     #[pin]
-    pub cl: Opaque<c::closure>,
+    pub in_flight: Gather<(), waiter::Sync>,
 
     pub io: moving_io_counts,
 

@@ -15,7 +15,7 @@
 //! IoMark is: an update's seq, done once everything issued before it is. The
 //! mover's thread's alone, issuing and finishing, so not locked.
 //!
-//! The context is pinned - its closure waited on in place - and owns its
+//! The context is pinned - its IO holds refs on it - and owns its
 //! transaction, trans(), which ratelimit(), flush_all() and move_extent()
 //! unlock: keys borrowed from it are stale after, as after any unlock.
 //! MovingCtxt owns one; moving through it is Moving's, a borrow of one. IO
@@ -31,20 +31,18 @@ use crate::format::DataType;
 use crate::fs::Fs;
 use crate::function_name;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError, Flags};
-use crate::util::closure::ClosureRef;
 use crate::util::refcount::Refcount;
 use crate::util::kthread::Kthread;
 use crate::util::task::{waiter, RunQueue};
 use crate::util::sleep::Sleep;
 use crate::types::Fifo;
-use crate::util::ffi::Opaque;
-use crate::util::gather::GatherRef;
+use crate::util::gather::{Gather, GatherRef};
 use core::cell::{Cell, UnsafeCell};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, AtomicPtr};
 use core::sync::atomic::Ordering::Relaxed;
-use pin_init::{pin_init, pin_init_from_closure};
+use pin_init::pin_init;
 
 pub use c::MoveStats;
 
@@ -119,9 +117,9 @@ pub struct MovingCtxt<'a> {
 pub struct Moving<'a>(c::moving_context, PhantomData<(&'a Fs, &'a MoveStats)>);
 
 /// A read or a write in flight: counted in the context's read or write
-/// counts, which ratelimit() throttles on, with a ref on the context's
-/// closure, which flush_all() and the context's teardown wait for. Dropping
-/// it ends the IO: it gives the counts back, wakes the context's waiters, and
+/// counts, which ratelimit() throttles on and flush_all() waits out, with a
+/// ref on the context's in_flight, which its teardown waits for. Dropping it
+/// ends the IO: it gives the counts back, wakes the context's waiters, and
 /// puts the ref.
 #[must_use = "the IO is done as soon as it's dropped"]
 pub struct MovingIo {
@@ -129,11 +127,11 @@ pub struct MovingIo {
     write:   bool,
     sectors: u32,
     /// Dropped last: once it's put, the context may be gone
-    _cl:     ClosureRef,
+    _ref:    GatherRef<(), waiter::Sync>,
 }
 
-// SAFETY: it touches only the context's counters, which are atomics, its wait
-// queue and its closure: any thread's. Its closure ref keeps the context.
+// SAFETY: it touches only the context's counters, which are atomics, and its
+// wait queue: any thread's. Its ref keeps the context.
 unsafe impl Send for MovingIo {}
 
 // SAFETY: evacuate_bucket()'s callers keep a bucket in flight until its count
@@ -154,7 +152,7 @@ fn io_counts(io: &c::moving_io_counts, write: bool) -> (&AtomicI32, &AtomicI32) 
 
 impl Drop for MovingIo {
     fn drop(&mut self) {
-        // SAFETY: our closure ref keeps the context
+        // SAFETY: our ref keeps the context
         let moving = unsafe { Moving::from_raw(self.ctxt.as_ptr()) };
         let (sectors, ios) = io_counts(moving.io(), self.write);
         sectors.fetch_sub(self.sectors as i32, Relaxed);
@@ -167,7 +165,7 @@ impl<'a> MovingCtxt<'a> {
     /// Moves counted into @stats, written to @wp; with @wait_on_copygc,
     /// ratelimit() waits while copygc runs.
     pub fn new(fs: &'a Fs, stats: &'a MoveStats, wp: c::write_point_specifier, wait_on_copygc: bool)
-        -> Result<MovingCtxt<'a>, AllocError>
+        -> Result<MovingCtxt<'a>, BchError>
     {
         static FN: TransFnName = TransFnName::new();
         let init = pin_init!(c::moving_context {
@@ -175,17 +173,12 @@ impl<'a> MovingCtxt<'a> {
             stats:          AtomicPtr::new(core::ptr::from_ref(stats).cast_mut()),
             wp,
             wait_on_copygc,
-            cl <- unsafe {
-                pin_init_from_closure(|cl: *mut Opaque<c::closure>| {
-                    c::closure_init_stack(cl.cast());
-                    Ok(())
-                })
-            },
+            in_flight <- Gather::new(),
             io:             Default::default(),
             runq:           pin_init::zeroed(),
             updates:        UnsafeCell::new(Fifo::new()),
             write_next:     Cell::new(0),
-        }? AllocError);
+        }? BchError);
         let ctxt = alloc_pinned(init)?;
         Ok(MovingCtxt { ctxt: NonNull::new(ctxt).expect("alloc_pinned() returns its allocation"), life: PhantomData })
     }
@@ -220,7 +213,7 @@ impl<'a> Moving<'a> {
         let (s, ios) = io_counts(self.io(), write);
         s.fetch_add(sectors as i32, Relaxed);
         ios.fetch_add(1, Relaxed);
-        MovingIo { ctxt: NonNull::from(&self.0), write, sectors, _cl: unsafe { ClosureRef::get(&self.0.cl) } }
+        MovingIo { ctxt: NonNull::from(&self.0), write, sectors, _ref: self.0.in_flight.get() }
     }
 
     pub fn trans(&self) -> &BtreeTrans<'a> {
@@ -362,19 +355,14 @@ impl<'a> Moving<'a> {
     }
 
     /// Waits for everything in flight in the context, including reads waiting
-    /// their turn to write, and the closure refs of anything else moving
-    /// through it.
+    /// their turn to write.
     pub fn flush_all(&self) {
         let io = self.io();
-        // Waited for freezably: the closure_sync() after only covers the
-        // closure_put() that follows each completion's wakeup
         self.wait_until(|| {
             (io.read_ios.load(Relaxed) == 0 && io.write_ios.load(Relaxed) == 0 &&
              self.updates_idle()).then_some(())
         });
         self.trans().unlock_long();
-        // SAFETY: the context's closure, which this thread owns
-        unsafe { c::closure_sync(self.0.cl.as_ptr()) };
     }
 
     /// Waits until @cond, running the context's tasks as they become ready and
@@ -438,6 +426,8 @@ impl Drop for MovingCtxt<'_> {
                 assert!(n.load(Relaxed) == 0, "a moving context's IO still counted at exit");
             }
         }
+        // an IO's counts are given back, and its waiters woken, before its ref
+        self.0.in_flight.wait_sync();
 
         // Putting a transaction mid-restart is an unhandled restart, but a mover
         // can be told to exit before it's retried: so begin first
