@@ -48,14 +48,9 @@ use cstruct_macros::c_export;
 pub use c::MoveStats;
 
 impl MoveStats {
-    /// Zeroed, and named @name - field by field, as a data job's progress may
-    /// be read meanwhile.
-    pub fn reset(&self, name: &str) {
-        let name = name.as_bytes();
-        let len = name.len().min(self.name.len() - 1);
-        for (i, b) in self.name.iter().enumerate() {
-            b.set(if i < len { name[i] } else { 0 });
-        }
+    /// Zeroed - field by field, as a data job's progress may be read
+    /// meanwhile.
+    pub fn reset(&self) {
         self.ret.set(c::bch_ioctl_data_event_ret(0));
         self.at.data_type.set(DataType::user);
         self.at.pos.set(c::bbpos::default());
@@ -265,7 +260,7 @@ impl<'a> Moving<'a> {
         unsafe { Self::from_raw(ctxt.as_ptr()) }
     }
 
-    /// For C that takes the context: stripe repair, which moves through it.
+    /// For a data update's pointer back to the context it's in flight in.
     pub(crate) fn raw(&self) -> *mut c::moving_context {
         core::ptr::from_ref(&self.0).cast_mut()
     }

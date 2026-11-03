@@ -383,7 +383,7 @@ pub fn scrub(fs: &Fs) -> Result<u64, BchError> {
 
     let mut found = Bad::default();
     let stats = MoveStats::default();
-    stats.reset("journal_scrub");
+    stats.reset();
 
     let ctxt = MovingCtxt::new(fs, &stats, c::write_point_specifier::default(), false)
         .map_err(|_| BchError::from(c::ENOMEM))?;
@@ -533,7 +533,7 @@ pub fn do_repairs(fs: &Fs) {
     }
 
     let stats = MoveStats::default();
-    stats.reset("journal_scrub_repair");
+    stats.reset();
 
     let Ok(ctxt) = MovingCtxt::new(fs, &stats, writepoint_ptr(&fs.allocator.reconcile_write_point), true) else {
         bch_err!(fs, "journal scrub: no memory for a moving context, not repairing {} extents/btree nodes",

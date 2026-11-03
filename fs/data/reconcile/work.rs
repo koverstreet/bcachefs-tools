@@ -844,7 +844,7 @@ impl<'f> Reconciler<'f, '_> {
         };
 
         let work_stats = &fs.reconcile.work_stats;
-        work_stats.reset("reconcile_work");
+        work_stats.reset();
         self.ctxt.flush_all();
         set_status(fs, Status::Running { phase: None, pos: POS_MIN });
 

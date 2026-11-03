@@ -13,15 +13,13 @@ use crate::format::{Bpos, DataType};
 
 nest! {
     /// What moves count into - whoever issues them, and their completions,
-    /// on any thread - and what the moving contexts' listing and a data job's
-    /// progress read as it goes. Shared throughout, so every field is a
-    /// Volatile, written one writer at a time, or an atomic, by many.
+    /// on any thread - and what a data job's progress reads as it goes.
+    /// Shared throughout, so every field is a Volatile, written one writer at
+    /// a time, or an atomic, by many.
     #[c_name(bch_move_stats)]
     #[derive(CStruct, TypeInfo)]*
     #[repr(C)]*
     pub struct MoveStats {
-        #[c("char name[32]")]
-        pub name: [Volatile<u8>; 32],
         #[c("enum bch_ioctl_data_event_ret ret")]
         pub ret: Volatile<c::bch_ioctl_data_event_ret>,
 

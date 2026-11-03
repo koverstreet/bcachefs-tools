@@ -576,17 +576,9 @@ fn scrub(fs: &Fs, stats: &MoveStats, arg: c::bch_ioctl_data_scrub) -> Result<(),
     })
 }
 
-macro_rules! data_op_names {
-    ($(($name:tt, $n:tt)),* $(,)?) => { const DATA_OP_NAMES: &[&str] = &[$(stringify!($name),)*]; };
-}
-c::BCH_DATA_OPS!(data_op_names);
-
 /// The ioctl's data job @op, counted into @stats. Scrub is the only op.
 pub fn data_job(fs: &Fs, stats: &MoveStats, op: &c::bch_ioctl_data) -> Result<(), BchError> {
-    let Some(name) = DATA_OP_NAMES.get(usize::from(op.op)) else {
-        return fs.throw(err::BCH_ERR_EINVAL_data_job_bad_op);
-    };
-    stats.reset(name);
+    stats.reset();
 
     match u32::from(op.op) {
         c::BCH_DATA_OP_scrub => {

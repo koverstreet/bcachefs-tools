@@ -424,7 +424,6 @@ c_xmacro! {
         (EINVAL, EINVAL_reflink_gc_table_mismatch, 355),
         (EINVAL, EINVAL_ec_stripe_create_existing_key, 356),
         (EINVAL, EINVAL_finsert_offset_past_eof, 357),
-        (EINVAL, EINVAL_data_job_bad_op, 358),
         (EINVAL, EINVAL_snapshot_parent_already_has_children, 359),
         (EINVAL, EINVAL_snapshot_delete_has_two_children, 360),
         (EINVAL, EINVAL_snapshot_delete_interior_at_runtime, 361),
