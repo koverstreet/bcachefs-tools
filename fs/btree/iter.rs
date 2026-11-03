@@ -382,6 +382,17 @@ impl<'f> BtreeTrans<'f> {
         }
     }
 
+    /// IO it submitted may hold its SRCU lock a long while: not a stuck
+    /// codepath, to bch2_trans_unlock_long().
+    pub fn set_srcu_io_submitted(&self, v: bool) {
+        unsafe { (*self.raw()).bits.set_srcu_io_submitted(v) }
+    }
+
+    /// Relock failures after IO it submitted are expected, not counted.
+    pub fn set_notrace_relock_fail(&self) {
+        unsafe { (*self.raw()).bits.set_notrace_relock_fail(true) }
+    }
+
     /// What's left of the second the SRCU lock may be held for, or None if
     /// it isn't held - or if the second is used up, and it's dropped now.
     fn srcu_wait_budget(&self) -> Option<core::ffi::c_ulong> {
