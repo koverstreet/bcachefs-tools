@@ -160,8 +160,7 @@ fn file_ioctl(file: &File, inode: &InodeInfo, cmd: c_uint, user: UserPtr) -> Res
 }
 
 pub(crate) fn fs_file_ioctl(file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
-    // SAFETY: an open file of ours: its inode's referenced while it's open
-    let inode = unsafe { InodeInfo::from_inode((*file.as_ptr()).f_inode) };
+    let inode = unsafe { InodeInfo::of_file(file) };
     ioctl_ret(file_ioctl(file, inode, cmd, UserPtr::from_addr(arg as usize)))
 }
 

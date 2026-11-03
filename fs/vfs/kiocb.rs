@@ -30,9 +30,8 @@ impl<'a> Kiocb<'a> {
         unsafe { File::from_raw(self.0.ki_filp) }
     }
 
-    /// file_bch_inode()
     pub fn inode(&self) -> &'a InodeInfo {
-        unsafe { InodeInfo::from_inode((*self.0.ki_filp).f_inode) }
+        unsafe { InodeInfo::of_file(self.file()) }
     }
 
     pub fn pos(&self) -> u64 {

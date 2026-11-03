@@ -48,6 +48,7 @@ use crate::inode_opts::InodeOpt;
 use crate::locking::{Guard, Locked};
 use crate::quota;
 use crate::util::ffi::Opaque;
+use crate::util::file::File;
 use cstruct_macros::{c_export, c_extern};
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
 
@@ -110,6 +111,15 @@ impl InodeInfo {
     pub unsafe fn from_inode<'a>(vinode: *mut c::inode) -> &'a InodeInfo {
         // SAFETY: the caller's; @v is first
         unsafe { &*vinode.cast::<InodeInfo>() }
+    }
+
+    /// @file's: file_bch_inode().
+    ///
+    /// # Safety
+    /// @file is one of ours.
+    pub unsafe fn of_file(file: &File) -> &InodeInfo {
+        // an open file's inode is referenced while it's open
+        unsafe { Self::from_inode((*file.as_ptr()).f_inode) }
     }
 
     /// An inode C returns referenced, or an ERR_PTR(): the reference ours

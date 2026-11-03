@@ -160,8 +160,7 @@ impl FileOps for Dir {
     }
 
     fn iterate_shared(&self, file: &File, ctx: *mut c::dir_context) -> Result<(), BchError> {
-        // SAFETY: an open file's inode
-        let inode = unsafe { InodeInfo::from_inode((*file.as_ptr()).f_inode) };
+        let inode = unsafe { InodeInfo::of_file(file) };
         let fs = inode.fs();
         let hash = &mut str_hash::hash_info_init(fs, &inode.inode())?;
 
