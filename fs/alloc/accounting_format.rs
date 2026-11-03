@@ -92,6 +92,20 @@ c_enum! {
 /// C's name, as bindgen's declarations of C functions spell it.
 pub type bch_data_type = DataType;
 
+c_enum! {
+    #[flags]
+    #[c_name(bch_data_types)]
+    pub enum DataTypes: u16 {
+        BCH_DATA_TYPES(t, n) => concat(BCH_DATA_MASK_, t) = 1 << n,
+    }
+}
+
+impl From<DataType> for DataTypes {
+    fn from(t: DataType) -> Self {
+        Self::from_bits_retain(1 << t.0)
+    }
+}
+
 c_xmacro! {
     /*
      * field 1: name

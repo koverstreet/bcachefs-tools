@@ -27,7 +27,7 @@ use core::sync::atomic::Ordering;
 use cstruct_macros::{c_export, CStruct, Plain, TypeInfo};
 use super::io::*;
 use crate::types::c_default;
-use crate::format::{Bpos, DataType, MemberState};
+use crate::format::{Bpos, DataType, DataTypes, MemberState};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -51,9 +51,10 @@ pub struct bch_member_cpu {
     pub bucket_size: u16, /* sectors */
     pub group: u16,
     pub failure_domain: u16,
+    #[c("u16 data_allowed")]
+    pub data_allowed: DataTypes,
     pub state: MemberState,
     pub discard: u8,
-    pub data_allowed: u8,
     pub durability: u8,
     pub freespace_initialized: u8,
     pub initialized: u8,
@@ -62,7 +63,7 @@ pub struct bch_member_cpu {
     pub valid: u8,
     pub btree_bitmap_shift: u8,
     /* explicit: copied a word at a time, it has no padding to copy */
-    pub __pad: [u8; 6],
+    pub __pad: [u8; 5],
     pub btree_allocated_bitmap: u64,
 }
 
@@ -663,7 +664,7 @@ impl c::bch_member {
             failure_domain:         0,
             state:                  MemberState(self.state() as u8),
             discard:                self.discard() as u8,
-            data_allowed:           self.data_allowed() as u8,
+            data_allowed:           DataTypes::from_bits_retain(self.data_allowed() as u16),
             // one-biased on disk: 0 is the default, 1
             durability:             self.durability().checked_sub(1).unwrap_or(1) as u8,
             freespace_initialized:  self.freespace_initialized() as u8,
@@ -672,7 +673,7 @@ impl c::bch_member {
             rotational:             self.rotational() as u8,
             valid:                  self.alive() as u8,
             btree_bitmap_shift:     self.btree_bitmap_shift,
-            __pad:                  [0; 6],
+            __pad:                  [0; 5],
             btree_allocated_bitmap: self.btree_allocated_bitmap.get(),
         }
     }

@@ -964,7 +964,7 @@ impl Fs {
            !self.dev_in_target(ca.dev_idx.into(), Target::decode(req.target), &read_lock()) {
             return false;
         }
-        ca.is_rw() && ca.is_online() && u32::from(ca.mi.get().data_allowed) & 1 << req.data_type.0 != 0
+        ca.is_rw() && ca.is_online() && ca.mi.get().data_allowed.contains(req.data_type.into())
     }
 
     #[cold]
@@ -1014,7 +1014,7 @@ impl Fs {
             write!(out, " (offline)");
         }
         write!(out, "\nData allowed:\t");
-        data_types_to_text(out, ca.mi.get().data_allowed.into());
+        data_types_to_text(out, ca.mi.get().data_allowed.bits().into());
         write!(out, "\n");
         ca.alloc_debug_to_text(&mut out.indent(2));
         write!(out, "\n");

@@ -442,7 +442,7 @@ pub(crate) fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::bc
 
         let is_online = devs.d.test(ca.dev_idx.into());
         for (i, (h, o)) in have.iter_mut().zip(&mut online).enumerate() {
-            if u32::from(ca.mi.get().data_allowed) & 1 << i != 0 {
+            if ca.mi.get().data_allowed.contains(DataType(i as u32).into()) {
                 *h += durability;
                 *o += durability * is_online as u32;
             }

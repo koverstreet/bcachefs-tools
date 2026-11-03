@@ -80,7 +80,7 @@ use cstruct_macros::{c_name, bitfield, c_bitmask, c_const, c_enum, c_verbatim, c
 use cstruct_macros::c_typedef;
 
 #[path = "alloc/accounting_format.rs"] pub mod accounting;
-pub use accounting::DataType;
+pub use accounting::{DataType, DataTypes};
 #[path = "sb/members_format.rs"] pub mod members;
 pub use members::MemberState;
 

@@ -164,7 +164,7 @@ impl Fs {
 /// user data of a device of durability 0; the rest, what it allows, with
 /// durability.
 fn dev_allocator_set_rw(fs: &Fs, ca: &Dev, rw: bool) {
-    let allowed = |t: DataType| u64::from(ca.mi.get().data_allowed) & (1 << t.0) != 0;
+    let allowed = |t: DataType| ca.mi.get().data_allowed.contains(t.into());
 
     for (i, devs) in fs.allocator.rw_devs.iter().enumerate() {
         let t = DataType(i as u32);

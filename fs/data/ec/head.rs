@@ -154,7 +154,7 @@ impl Fs {
             // rw set, which a device leaves going offline
             if mi.state == MemberState::rw &&
                mi.durability != 0 &&
-               mi.data_allowed & (1 << DataType::user.0) != 0 &&
+               mi.data_allowed.contains(DataType::user.into()) &&
                u32::from(mi.bucket_size) == blocksize
             {
                 devs.d.set(ca.dev_idx.into());

@@ -138,7 +138,7 @@ impl Fs {
 
         let rcu = read_lock();
         let (total, max) = self.rw_devs_rcu(&rcu)
-            .filter(|ca| u32::from(ca.mi.get().data_allowed) & 1 << req.data_type.0 != 0)
+            .filter(|ca| ca.mi.get().data_allowed.contains(req.data_type.into()))
             .fold((0, 0), |(total, max), ca| (total + ca.mi.get().nbuckets, u64::max(max, ca.mi.get().nbuckets)));
         max > total - max
     }
