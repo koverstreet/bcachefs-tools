@@ -67,6 +67,16 @@
 
 extern char __start_bch_percpu[], __stop_bch_percpu[];
 
+/*
+ * The linker defines __start_bch_percpu and __stop_bch_percpu only for a
+ * section that something's in, and dynamic percpu pointers are relative to
+ * __start_bch_percpu too: so the section has to exist with no DEFINE_PER_CPU()
+ * in the build. retain, as well as used: lld's --gc-sections drops a section
+ * that only __start_/__stop_ refer to.
+ */
+static char bch_percpu_section_anchor
+	__attribute__((section("bch_percpu"), used, retain));
+
 __thread void *bch_percpu_my_chunk;
 __thread int   bch_percpu_my_id = -1;
 
@@ -263,7 +273,14 @@ void bch_percpu_thread_init(void)
 	pthread_mutex_lock(&bch_percpu_lock);
 
 	if (!bch_percpu_static_size) {
-		bch_percpu_static_size = __stop_bch_percpu - __start_bch_percpu;
+		/*
+		 * Rounded up to the grain: the dynamic arena starts here, and
+		 * its offsets are grain-aligned on the assumption that it is
+		 * too - a misaligned arena is misaligned atomics, which arm64
+		 * faults on. The section's size is only what's in it.
+		 */
+		bch_percpu_static_size =
+			round_up(__stop_bch_percpu - __start_bch_percpu, BCH_PERCPU_GRAIN);
 
 		/*
 		 * The arena is address space, not memory, so on 64 bit we can
@@ -443,10 +460,9 @@ void free_percpu(void *p)
 	 * Returning quietly turns any of those into an arena slot that is
 	 * never reused and never reported - so say so instead.
 	 *
-	 * is_static_percpu() is the same test as chunk_off <
-	 * bch_percpu_static_size, since static_size is exactly
-	 * __stop_bch_percpu - __start_bch_percpu; one bounds check covers
-	 * both ends.
+	 * A static variable's chunk_off is below bch_percpu_static_size -
+	 * the section, rounded up to the grain - so off underflows; one
+	 * bounds check covers both ends.
 	 */
 	size_t off = ((uintptr_t)p - (uintptr_t)__start_bch_percpu) -
 		bch_percpu_static_size;
