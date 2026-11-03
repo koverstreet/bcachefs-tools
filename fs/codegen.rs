@@ -78,6 +78,7 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/hash.h",
     "linux/mm.h",
     "linux/fs.h",
+    "linux/fs/super.h",			// sb_start_pagefault(), from 7.1
     "linux/mount.h",
     "linux/statfs.h",
     "linux/fileattr.h",
@@ -131,6 +132,10 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "rust_folio_zero_segment", "rust_folio_mkclean", "rust_filemap_dirty_folio",
     "folio_lock", "folio_trylock", "filemap_get_folios",
     "folio_batch_init", "folio_batch_count", "folio_batch_release",
+    // vfs/pagecache.rs
+    "__filemap_get_folio", "folio_attach_private", "folio_test_writeback", "folio_wait_stable",
+    "rust_folio_mapping", "folio_test_locked", "invalidate_inode_pages2_range",
+    "sb_start_pagefault", "sb_end_pagefault",
     "rust_page_highmem", "rust_page_address", "rust_is_sync",
     "rust_poll_wait", "rust_fault_in_writeable",
     "rust_fault_in_readable", "rust_filemap_write_and_wait_range", "rust_filemap_flush",

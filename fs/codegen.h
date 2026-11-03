@@ -49,6 +49,9 @@ const blk_opf_t RUST_CONST_HELPER_REQ_META		= REQ_META;
 const blk_opf_t RUST_CONST_HELPER_REQ_IDLE		= REQ_IDLE;
 const blk_opf_t RUST_CONST_HELPER_REQ_FUA		= REQ_FUA;
 const blk_opf_t RUST_CONST_HELPER_REQ_PREFLUSH	= REQ_PREFLUSH;
+const fgf_t RUST_CONST_HELPER_FGP_LOCK		= FGP_LOCK;
+const fgf_t RUST_CONST_HELPER_FGP_CREAT		= FGP_CREAT;
+const fgf_t RUST_CONST_HELPER_FGP_NOWAIT		= FGP_NOWAIT;
 
 /*
  * ioctl numbers' layout, the arch's own: powerpc, mips, sparc, alpha and
@@ -226,6 +229,12 @@ static inline struct folio *rust_filemap_lock_folio_create(struct address_space 
 							   pgoff_t index, gfp_t gfp)
 {
 	return __filemap_get_folio(mapping, index, FGP_LOCK|FGP_CREAT, gfp);
+}
+
+/* in a union in struct folio, which bindgen names by number */
+static inline struct address_space *rust_folio_mapping(struct folio *folio)
+{
+	return folio->mapping;
 }
 
 /* highmem.h's, rmap.h's and writeback.h's, which aren't bound */
