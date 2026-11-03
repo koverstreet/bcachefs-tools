@@ -364,7 +364,7 @@ int bch2_mark_pagecache_reserved(struct bch_inode_info *inode,
 			else if (!folio_trylock(folio)) {
 				folio_batch_release(&fbatch);
 				ret = -EAGAIN;
-				break;
+				goto out;
 			}
 
 			u64 folio_start = folio_sector(folio);
@@ -391,7 +391,7 @@ int bch2_mark_pagecache_reserved(struct bch_inode_info *inode,
 		folio_batch_release(&fbatch);
 		cond_resched();
 	}
-
+out:
 	bch2_i_sectors_acct(c, inode, NULL, i_sectors_delta);
 	return ret;
 }
