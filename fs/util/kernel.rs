@@ -298,6 +298,13 @@ pub fn ktime_get_ns() -> u64 {
     unsafe { c::bch2_ktime_get_ns() }
 }
 
+/// The wall clock, at the coarse clock's granularity: ktime_get_coarse_real_ts64().
+pub fn ktime_get_coarse_real_ts64() -> c::timespec64 {
+    let mut now: c::timespec64 = pin_init::Zeroable::zeroed();
+    unsafe { c::ktime_get_coarse_real_ts64(&mut now) };
+    now
+}
+
 /// The number of CPUs online; in userspace, how many threads can run at once.
 pub fn num_online_cpus() -> u32 {
     #[cfg(kernel)]

@@ -448,9 +448,7 @@ impl Fs {
 
     /// In the filesystem's time units.
     pub fn current_time(&self) -> u64 {
-        let mut now: c::timespec64 = pin_init::Zeroable::zeroed();
-        unsafe { c::ktime_get_coarse_real_ts64(&mut now) };
-        self.timespec_to_time(now) as u64
+        self.timespec_to_time(crate::util::kernel::ktime_get_coarse_real_ts64()) as u64
     }
 
     pub fn set_loglevel(&self, level: u32) {
