@@ -7,6 +7,7 @@ use std::process;
 use anyhow::{anyhow, Result};
 use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::c;
+use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::metadata_version;
 use bcachefs_kernel::util::vstructs::Head;
@@ -339,9 +340,10 @@ fn run_userspace_fsck(devices: &[String], fs_opts: c::bch_opts) -> Result<()> {
         eprint!("{}", buf);
     }
 
+    // shutdown_with_errors reports the errors fsck_errcode() already counted:
+    // not a shutdown that failed
     let ret2 = fs.exit();
-
-    if ret2 != 0 {
+    if ret2 != 0 && !BchError::from_raw(ret2).matches(c::bch_errcode::BCH_ERR_shutdown_with_errors) {
         eprintln!("error shutting down filesystem: {}", crate::wrappers::bch_err_str(ret2));
         process::exit(ret | 8);
     }
