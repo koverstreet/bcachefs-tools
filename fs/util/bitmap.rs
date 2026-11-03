@@ -75,6 +75,10 @@ impl Bitmap {
         &self.0
     }
 
+    pub fn words_mut(&mut self) -> &mut [usize] {
+        &mut self.0
+    }
+
     /// test_bit(): false past the end.
     pub fn test(&self, bit: usize) -> bool {
         let (i, m) = pos(bit);
@@ -241,6 +245,16 @@ impl AtomicBitmap {
     pub fn test_and_clear(&self, bit: usize) -> bool {
         let (i, m) = pos(bit);
         self.0[i].fetch_and(!m, Ordering::SeqCst) & m != 0
+    }
+
+    /// Its bits moved to @out, a word at a time: a bit set after its word's
+    /// taken stays, for the next take. A word read clear isn't written.
+    pub fn take(&self, out: &mut Bitmap) {
+        for (w, o) in self.0.iter().zip(out.words_mut()) {
+            if w.load(Ordering::Relaxed) != 0 {
+                *o |= w.swap(0, Ordering::SeqCst);
+            }
+        }
     }
 
     /// bitmap_weight().
