@@ -17,7 +17,7 @@ use crate::util::projections::Volatile;
 #[cfg(CONFIG_SMP)]
 use crate::util::rcu;
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
-use core::ptr::null_mut;
+use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
 use core::sync::atomic::{fence, AtomicBool, AtomicI32, AtomicPtr};
 use cstruct_macros::{c_const, c_enum, c_export, c_typedef, CStruct};
@@ -379,6 +379,25 @@ fn __do_six_trylock(lock: &six_lock, ty: six_lock_type, task: *mut c::task_struc
 #[inline(always)]
 unsafe fn wf_slots<'a>(wf: *mut six_lock_wait_fifo) -> &'a [six_lock_wait_slot] {
     unsafe { core::slice::from_raw_parts((&raw mut (*wf).data).cast(), (*wf).size as usize) }
+}
+
+impl six_lock {
+    /// Its waiters and the lock type each wants, read without wait_lock: for
+    /// the cycle detector. A slot's waiter is read with acquire, before its
+    /// start_time - the publish in six_lock_wait_fifo_insert() is a release.
+    pub fn waiters<'a>(&'a self, _rcu: &'a crate::util::rcu::ReadGuard)
+        -> impl Iterator<Item = (NonNull<six_lock_waiter>, six_lock_type)> + 'a
+    {
+        let wf = self.wait_fifo.load(Acquire);
+        let (nr, slots) = unsafe { (&(*wf).nr, wf_slots(wf)) };
+
+        (0..)
+            .take_while(move |&i| i < nr.get() as usize && i < slots.len())
+            .filter_map(move |i| {
+                let w = NonNull::new(slots[i].w.load(Acquire))?;
+                Some((w, six_lock_type::from_bits((slots[i].start_time.get() & SIX_LOCK_WANT_MASK as u64) as u32)))
+            })
+    }
 }
 
 /*

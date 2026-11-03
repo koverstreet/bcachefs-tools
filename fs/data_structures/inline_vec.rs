@@ -55,6 +55,14 @@ impl<T, const N: usize> InlineVec<T, N> {
         Ok(())
     }
 
+    /// Empty, keeping what it's allocated: a darray's nr = 0.
+    pub fn clear(&mut self) {
+        match self {
+            Self::Inline(v) => v.clear(),
+            Self::Heap(v) => v.clear(),
+        }
+    }
+
     /// @x, inserted at @i, the elements from @i on moving up. Panics past the
     /// end, as slices do.
     pub fn insert(&mut self, i: usize, x: T, flags: Flags) -> Result<(), AllocError> {
