@@ -32,7 +32,7 @@ use crate::data_structures::inline_vec::InlineVec;
 use crate::types::CStatic;
 use crate::util::alloc::{init_at, kzalloc, KBox};
 use crate::util::kernel::PAGE_SECTORS_SHIFT;
-use crate::util::bio::Bio;
+use crate::util::bio::{Bio, BioRange};
 use crate::util::ffi::Opaque;
 
 use super::buffered_write::{self, WriteBegun};
@@ -351,7 +351,11 @@ impl InodeInfo {
 
 #[c_export]
 pub fn bch2_bio_page_state_set(c: &Opaque<Fs>, bio: *mut c::bio, k: BkeySC<'_>) {
-    let fs = Fs::from_c(c);
+    bio_page_state_set(Fs::from_c(c), unsafe { Bio::from_raw(bio) }.range(), k);
+}
+
+/// The sectors of @range's folios, set as @k has them.
+pub fn bio_page_state_set(fs: &Fs, range: BioRange<'_>, k: BkeySC<'_>) {
     let nr_ptrs = if k.k.key_type() == BkeyType::reflink_v {
         0
     } else {
@@ -359,7 +363,7 @@ pub fn bch2_bio_page_state_set(c: &Opaque<Fs>, bio: *mut c::bio, k: BkeySC<'_>) 
     };
     let state = SectorState::of_key(fs, k);
 
-    for fv in unsafe { Bio::from_raw(bio) }.range().folios() {
+    for fv in range.folios() {
         unsafe { Folio::from_raw(fv.folio.as_ptr()) }.lock_state()
             .set_sectors(fv.offset >> 9..(fv.offset >> 9) + (fv.len >> 9), nr_ptrs, state);
     }
