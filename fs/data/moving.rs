@@ -31,7 +31,7 @@ use crate::errcode::BchError;
 use crate::format::DataType;
 use crate::fs::Fs;
 use crate::function_name;
-use crate::locking::Locked;
+use crate::locking::{Locked, RawLock};
 use crate::prt;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError, Flags};
 use crate::util::list::List;
@@ -214,6 +214,18 @@ impl<'a> MovingCtxt<'a> {
 
 /// c->moving_context_list, for the listing: every context, from init to exit.
 type ContextList = List<c::moving_context, { core::mem::offset_of!(c::moving_context, list) }>;
+
+/// The moving contexts' list and its lock, as the filesystem is made.
+///
+/// # Safety
+/// @p is the filesystem being made: nothing else sees it yet.
+pub(crate) unsafe fn contexts_init(p: *mut Fs) {
+    unsafe {
+        ContextList::from_c(&raw mut (*p).moving_context_list).init();
+        let Ok(()) = c::mutex::init(&raw mut (*p).moving_context_lock, c"&c->moving_context_lock",
+                                    crate::new_lock!(@key));
+    }
+}
 
 impl Fs {
     /// The moving contexts, @f's alone - under moving_context_lock - while it

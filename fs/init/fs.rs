@@ -507,6 +507,7 @@ impl Fs {
             c::bch2_fs_btree_gc_init_early(p);
             bch2_fs_btree_init_early(p);
             c::bch2_fs_journal_init_early(&raw mut (*p).journal);
+            crate::data::moving::contexts_init(p);
             c::bch2_fs_move_init(p);
 
             let Ok(()) = c::mutex::init(&raw mut (*p).bio_bounce_pages_lock, c"&c->bio_bounce_pages_lock",

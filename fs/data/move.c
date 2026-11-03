@@ -602,8 +602,6 @@ void bch2_fs_move_exit(struct bch_fs *c)
 
 void bch2_fs_move_init(struct bch_fs *c)
 {
-	INIT_LIST_HEAD(&c->moving_context_list);
-	mutex_init(&c->moving_context_lock);
 	darray_init(&c->scrub_journal_repairs);
 	mutex_init(&c->scrub_journal_repairs_lock);
 }
