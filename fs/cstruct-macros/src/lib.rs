@@ -1236,6 +1236,7 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
                 impl #name {
                     pub const fn into_bits(self) -> #repr { self.bits() }
                 }
+                unsafe impl crate::util::vstructs::Plain for #name {}
             },
         });
     }
