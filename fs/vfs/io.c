@@ -1041,7 +1041,7 @@ static loff_t bch2_seek_data(struct file *file, u64 offset)
 			if (bkey_extent_is_data(k.k)) {
 				next_data = max(offset, bkey_start_offset(k.k) << 9);
 				break;
-			} else if (k.k->p.offset >> 9 > isize)
+			} else if (k.k->p.offset << 9 > isize)
 				break;
 			0;
 		}))));
