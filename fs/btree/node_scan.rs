@@ -261,7 +261,10 @@ impl<'f> DevScan<'f> {
             ptrs:            ArrayVec::from_iter([ptr]),
         };
 
-        let _ = self.read(offset, fs.opts.btree_node_size.get() as usize);
+        if let Err(e) = self.read(offset, fs.opts.btree_node_size.get() as usize) {
+            bch_err_dev_ratelimited!(ca, "IO error in try_read_btree_node() at {} reading the whole node: {}",
+                                     offset, e);
+        }
 
         let b = self.buf.node();
         b.set_key(n.to_key().as_bkey_i());
