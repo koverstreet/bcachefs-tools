@@ -60,14 +60,19 @@ impl Bpos {
     /// The previous position, snapshot field first. None before POS_MIN:
     /// panics.
     pub fn predecessor(self) -> Self {
+        self.checked_predecessor().expect("no position before POS_MIN")
+    }
+
+    /// predecessor(), or None at POS_MIN.
+    pub fn checked_predecessor(self) -> Option<Self> {
         let (inode, offset, snapshot) = (self.inode, self.offset, self.snapshot);
 
-        if let Some(snapshot) = snapshot.checked_sub(1) {
+        Some(if let Some(snapshot) = snapshot.checked_sub(1) {
             spos(inode, offset, snapshot)
         } else if let Some(offset) = offset.checked_sub(1) {
             spos(inode, offset, u32::MAX)
         } else {
-            spos(inode.checked_sub(1).expect("no position before POS_MIN"), u64::MAX, u32::MAX)
-        }
+            spos(inode.checked_sub(1)?, u64::MAX, u32::MAX)
+        })
     }
 }
