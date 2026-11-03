@@ -340,8 +340,10 @@ static CLOSURE_CALLBACK(journal_write_done)
 		 */
 		percpu_down_read(&j->pin_resize_lock);
 		struct journal_entry_pin_list *pin = journal_seq_pin(j, seq_wrote);
+		bool write_failed = !bch2_io_failures_empty(&w->failed);
+		bool flush_failed = bch2_journal_buf_flush_failed(w);
 
-		if (unlikely(!bch2_io_failures_empty(&w->failed))) {
+		if (unlikely(write_failed || flush_failed)) {
 			union bch_replicas_padded r;
 			journal_pin_devs_to_replicas(&r, pin);
 			bch2_replicas_entry_put(c, &r.e);
@@ -356,11 +358,15 @@ static CLOSURE_CALLBACK(journal_write_done)
 				journal_pin_set_devs(pin, &w->devs_written);
 		}
 
-		if (unlikely(!bch2_io_failures_empty(&w->failed) || err)) {
+		if (unlikely(write_failed || flush_failed || err)) {
 			CLASS(bch_log_msg, msg)(c);
 
 			prt_printf(&msg.m, "error writing journal entry %llu\n", seq_wrote);
 			bch2_io_failures_to_text(&msg.m, c, &w->failed);
+			if (flush_failed) {
+				prt_printf(&msg.m, "preflush errors:\n");
+				bch2_journal_buf_flush_failures_to_text(&msg.m, c, w);
+			}
 
 			if (!w->devs_written.nr)
 				err = bch_err_throw(c, journal_write_err);
@@ -375,7 +381,9 @@ static CLOSURE_CALLBACK(journal_write_done)
 			 * and that must still be said - we're going emergency
 			 * read-only on it.
 			 */
-			if (!err && bch2_io_failures_all_dev_removed(&w->failed)) {
+			if (!err &&
+			    bch2_io_failures_all_dev_removed(&w->failed) &&
+			    bch2_journal_buf_flush_all_dev_removed(w)) {
 				msg.m.suppress = true;
 			} else {
 				/* Separate ratelimit_states for hard and soft errors */
@@ -385,9 +393,11 @@ static CLOSURE_CALLBACK(journal_write_done)
 			}
 
 			if (!err) {
-				prt_printf(&msg.m, "wrote degraded to ");
-				bch2_devs_list_to_text(&msg.m, c, &w->devs_written);
-				prt_newline(&msg.m);
+				if (w->devs_written.nr < bch2_bkey_devs(c, bkey_i_to_s_c(&w->key)).nr) {
+					prt_printf(&msg.m, "wrote degraded to ");
+					bch2_devs_list_to_text(&msg.m, c, &w->devs_written);
+					prt_newline(&msg.m);
+				}
 			} else {
 				prt_printf(&msg.m, "error %s\n", bch2_err_str(err));
 				percpu_up_read(&j->pin_resize_lock);
@@ -571,7 +581,9 @@ static CLOSURE_CALLBACK(journal_write_done_flush)
 	 * we're not taking j->lock and updating the various seq_ondisk fields
 	 * yet:
 	 */
-	if (bch2_io_failures_empty(&w->failed) && w->wait.list.first > JOURNAL_BUF_FLUSH_NO_WAIT) {
+	if (bch2_io_failures_empty(&w->failed) &&
+	    !bch2_journal_buf_flush_failed(w) &&
+	    w->wait.list.first > JOURNAL_BUF_FLUSH_NO_WAIT) {
 		struct closure_waitlist	wait = {{ xchg(&w->wait.list.first, NULL) }};
 		closure_wake_up(&wait);
 	}
@@ -589,13 +601,34 @@ static void journal_write_endio(struct bio *bio)
 
 	bch2_account_io_completion(ca, BCH_MEMBER_ERROR_write,
 				   jbio->submit_time, !bio->bi_status);
-	/* The preflush bios have no data: */
-	if (bio->bi_vcnt)
-		bch2_dev_write_unflushed(ca);
+	bch2_dev_write_unflushed(ca);
 
 	if (bio->bi_status) {
 		guard(spinlock_irqsave)(&j->err_lock);
 		bch2_io_failures_set_errcode(&w->failed, ca->dev_idx,
+			__bch2_err_throw(c, -blk_status_to_bch_err(bio->bi_status)));
+		bch2_dev_list_drop_dev(&w->devs_written, ca->dev_idx);
+	}
+
+	closure_put(&w->io);
+	enumerated_ref_put(&ca->io_ref[WRITE], BCH_DEV_WRITE_REF_journal_write);
+	bio_put(bio);
+}
+
+static void journal_write_preflush_endio(struct bio *bio)
+{
+	struct journal_bio *jbio = container_of(bio, struct journal_bio, bio);
+	struct bch_dev *ca = jbio->ca;
+	struct journal_buf *w = jbio->buf;
+	struct journal *j = w->j;
+	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+
+	bch2_account_io_completion(ca, BCH_MEMBER_ERROR_write,
+				   jbio->submit_time, !bio->bi_status);
+
+	if (bio->bi_status) {
+		guard(spinlock_irqsave)(&j->err_lock);
+		bch2_journal_buf_flush_error(w, ca->dev_idx,
 			__bch2_err_throw(c, -blk_status_to_bch_err(bio->bi_status)));
 		bch2_dev_list_drop_dev(&w->devs_written, ca->dev_idx);
 	}
@@ -704,7 +737,7 @@ static CLOSURE_CALLBACK(journal_write_preflush)
 			jbio->buf		= w;
 			jbio->submit_time	= local_clock();
 
-			bio->bi_end_io		= journal_write_endio;
+			bio->bi_end_io		= journal_write_preflush_endio;
 			bio->bi_private		= ca;
 			closure_bio_submit(bio, cl);
 		}

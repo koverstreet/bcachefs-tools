@@ -7,6 +7,7 @@ use crate::format::{Btree, MemberState, Nonce};
 #[path = "sb.rs"] pub mod sb;
 #[path = "seq_blacklist.rs"] pub mod seq_blacklist;
 #[path = "validate.rs"] pub mod validate;
+#[path = "write.rs"] pub mod write;
 
 use crate::c;
 use crate::util::Printbuf;

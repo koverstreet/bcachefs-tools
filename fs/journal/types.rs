@@ -4,6 +4,7 @@
 
 use crate::fs::Dev;
 use crate::cstructs::c;
+use crate::data::ptrs::IoFailures;
 use crate::types::{CacheAligned, DArray, Fifo, c_default};
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
@@ -58,6 +59,8 @@ nest! {
         pub cas: [*mut Dev; c::BCH_REPLICAS_MAX as usize],
         pub devs_written: c::bch_devs_list,
         pub failed: c::bch_io_failures,
+        /* preflushes go to every rw member with unflushed writes */
+        pub flush_failed: IoFailures<{ c::BCH_SB_MEMBERS_MAX as usize }>,
 
         pub last_seq: u64, /* copy of data->last_seq */
 

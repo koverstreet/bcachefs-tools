@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_JOURNAL_WRITE_H
 #define _BCACHEFS_JOURNAL_WRITE_H
 
+#include "journal/write_gen.h"
+
 CLOSURE_CALLBACK(bch2_journal_write);
 void bch2_journal_do_writes_locked(struct journal *);
 void bch2_journal_do_writes(struct journal *);
