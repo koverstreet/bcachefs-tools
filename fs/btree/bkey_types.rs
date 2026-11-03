@@ -9,14 +9,13 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC};
-use crate::btree::node::BtreeNode;
 use crate::cstructs::c as cs;
 use crate::cstructs::c::BCH_BKEY_TYPES;
 use crate::types::c_default;
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_same, c_verbatim, c_xmacro};
+use cstruct_macros::{CStruct, bitfield, c_enum, c_same, c_verbatim, c_xmacro};
 use nestify::nest;
-use crate::format::{Bpos, Btree};
+use crate::format::Btree;
 
 /* DOC_LATEX(bkey-structures)
  *
@@ -246,24 +245,4 @@ nest! {
         pub journal_offset: c_uint,
         pub journal_seq: u64,
     }
-}
-
-c_extern! {
-    pub fn bch2_bpos_swab(p: *mut Bpos);
-    pub fn __bch2_bkey_unpack_key(format: *const cs::bkey_format, out: *mut cs::bkey,
-                                  in_: *const cs::bkey_packed);
-    pub fn __bch2_bkey_unpack_key_b(b: *const BtreeNode, out: *mut cs::bkey,
-                                    in_: *const cs::bkey_packed);
-    pub fn __bkey_unpack_pos_b(b: *const BtreeNode, in_: *const cs::bkey_packed) -> cs::Bpos;
-    pub fn bch2_bkey_greatest_differing_bit(b: *const BtreeNode, l: *const cs::bkey_packed,
-                                            r: *const cs::bkey_packed) -> c_uint;
-    pub fn bch2_bkey_pack_pos(out: *mut cs::bkey_packed, in_: Bpos, b: *const BtreeNode) -> bool;
-    pub fn bch2_bkey_pack_key(out: *mut cs::bkey_packed, in_: *const cs::bkey,
-                              format: *const cs::bkey_format) -> bool;
-    pub fn bch2_bkey_pack_pos_lossy(out: *mut cs::bkey_packed, in_: *const Bpos,
-                                    b: *const BtreeNode) -> cs::bkey_pack_pos_ret;
-    pub fn bch2_bkey_transform(out_f: *const cs::bkey_format, out: *mut cs::bkey_packed,
-                               in_f: *const cs::bkey_format, in_: *const cs::bkey_packed) -> bool;
-    pub fn bch2_bkey_unpack(b: *const BtreeNode, dst: *mut cs::bkey_i, src: *const cs::bkey_packed);
-    pub static bch2_bkey_format_current: cs::bkey_format;
 }

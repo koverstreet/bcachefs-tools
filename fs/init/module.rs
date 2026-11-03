@@ -26,11 +26,6 @@ c_extern! {
     fn bch2_btree_key_cache_exit();
 }
 
-#[cfg(CONFIG_BCACHEFS_DEBUG)]
-c_extern! {
-    fn bch2_bkey_pack_test();
-}
-
 #[cfg(not(NO_BCACHEFS_FS))]
 c_extern! {
     fn bch2_vfs_init() -> c_int;
@@ -102,7 +97,7 @@ fn bcachefs_exit() {
 #[cfg_attr(kernel, unsafe(link_section = ".init.text"))]
 fn bcachefs_init() -> c_int {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    unsafe { bch2_bkey_pack_test() };
+    crate::btree::bkey::pack_test();
 
     crate::util::futex::bch2_futex_init();
     unsafe { bch2_dirent_init() };

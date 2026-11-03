@@ -3,14 +3,13 @@
 
 use core::cmp::Ordering;
 use core::marker::PhantomData;
-use core::mem::MaybeUninit;
 
 use super::{AllTypes, BkeyI, BkeyS, BkeySC, FamilyVal, ValidatedVal, BKEY_U64S};
 use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::format::Bpos;
 use crate::util::kernel::likely;
-use crate::util::vstructs::{cast_plain_slice, plain_bytes, Unsized, Unvalidated};
+use crate::util::vstructs::{cast_plain_slice, plain_bytes, plain_bytes_mut, Unsized, Unvalidated};
 
 /// V, as a BkeyI's, is the key's type and state - only a marker: where the
 /// value starts is the node's format's.
@@ -194,49 +193,31 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
         unsafe { &*self.as_ffi().cast::<c::bkey>() }
     }
 
-    fn unpack_format_checked(&self, b: &BtreeNode) -> c::bkey {
-        let mut out = MaybeUninit::<c::bkey>::uninit();
-        let out = unsafe {
-            c::__bch2_bkey_unpack_key_b(b, out.as_mut_ptr(), self.as_ffi());
-            out.assume_init()
-        };
-
-        if cfg!(CONFIG_BCACHEFS_DEBUG) && crate::debug::params::debug_check_bkey_unpack() {
-            self.unpack_verify(b, &out);
-        }
-        out
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn unpack_verify(&self, b: &BtreeNode, out: &c::bkey) {
-        let mut check = MaybeUninit::<c::bkey>::uninit();
-        let check = unsafe {
-            c::__bch2_bkey_unpack_key(&b.format, check.as_mut_ptr(), self.as_ffi());
-            check.assume_init()
-        };
-        assert!(plain_bytes(out) == plain_bytes(&check),
-                "unpacked by its node's constants to {out}, by its format to {check}");
-    }
-
     /// Just the key, not the value.
     pub fn unpack(&self, b: &BtreeNode) -> c::bkey {
         if likely(self.is_packed()) {
-            self.unpack_format_checked(b)
+            b.format.unpack_key(self)
         } else {
             *self.unpacked_header()
         }
     }
 
-    pub fn unpack_pos(&self, b: &BtreeNode) -> Bpos {
-        unsafe { self.unpack_pos_raw(b) }
+    /// The key and the value, into @dst.
+    pub fn unpack_into(&self, b: &BtreeNode, dst: &mut [u64]) {
+        self.unpacked_into(&b.format, self.unpack(b), dst);
     }
 
-    /// @b is read only for its format, its unpack constants and its key bits,
-    /// so the rest of it may be borrowed mutably.
-    pub(crate) unsafe fn unpack_pos_raw(&self, b: *const BtreeNode) -> Bpos {
+    /// unpack_into(), of the key unpacked already: @k.
+    pub(crate) fn unpacked_into(&self, f: &c::bkey_format, k: c::bkey, dst: &mut [u64]) {
+        let val = self.val(f);
+
+        plain_bytes_mut(&mut dst[..BKEY_U64S]).copy_from_slice(plain_bytes(&k));
+        dst[BKEY_U64S..][..val.len()].copy_from_slice(val);
+    }
+
+    pub fn unpack_pos(&self, b: &BtreeNode) -> Bpos {
         if likely(self.is_packed()) {
-            unsafe { c::__bkey_unpack_pos_b(b, self.as_ffi()) }
+            b.format.unpack_pos(self)
         } else {
             self.unpacked_header().p
         }

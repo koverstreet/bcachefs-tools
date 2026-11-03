@@ -121,7 +121,7 @@ fn parse_accounting_entries(data: &[u8]) -> anyhow::Result<Vec<AccountingEntry>>
 
             let mut p = k.k.p;
             if need_swab {
-                unsafe { c::bch2_bpos_swab(&mut p) };
+                p.swab();
             }
             Ok(AccountingEntry { pos: DiskAccountingPos::from_bpos(p), counters: a.v().d.to_vec() })
         })

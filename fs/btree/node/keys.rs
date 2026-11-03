@@ -7,7 +7,7 @@
 use super::bset::{BsetTree, BSET_NO_AUX_TREE_VAL};
 use super::{BtreeNode, BtreeNrKeys};
 use crate::types::L1_CACHE_BYTES;
-use crate::btree::bkey::BkeyP;
+use crate::btree::bkey::{BkeyP, BkeySC};
 use crate::c;
 use crate::cstructs::c as cs;
 use crate::format::Bpos;
@@ -184,8 +184,18 @@ impl<'a> Keys<'a> {
         bkey_p_next(self.buf, k)
     }
 
-    pub fn unpack_pos(&self, k: &BkeyP) -> Bpos {
-        unsafe { k.unpack_pos_raw(self.node) }
+    pub fn unpack_pos(&self, k: u16) -> Bpos {
+        self.node().unpack_pos_at(self.buf, k)
+    }
+
+    /// Just the key at @k, not the value.
+    pub fn unpack(&self, k: u16) -> c::bkey {
+        self.node().unpack_key_at(self.buf, k)
+    }
+
+    /// The key at @k unpacked into @u, the value where it is.
+    pub fn disassemble<'u>(&self, k: u16, u: &'u mut c::bkey) -> BkeySC<'u> where 'a: 'u {
+        self.key_at(k).disassembled(&self.node().format, self.unpack(k), u)
     }
 
     pub fn key_offset(&self, k: &BkeyP) -> u16 {
@@ -260,10 +270,6 @@ impl KeysMut<'_> {
             Some(k) => k.cast_mut(),
             None    => no_key_at(offset.into(), len),
         }
-    }
-
-    pub fn unpack_pos(&self, k: &BkeyP) -> Bpos {
-        unsafe { k.unpack_pos_raw(self.node) }
     }
 
     /// Set @set's bset is at @data_offset.

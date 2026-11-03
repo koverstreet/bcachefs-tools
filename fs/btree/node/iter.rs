@@ -169,7 +169,7 @@ impl KeyIter {
         self.init_from_start(keys);
 
         while let Some(k) = self.peek(keys) {
-            if !b.bkey_iter_pos_cmp(keys.key_at(k), search).is_lt() {
+            if !keys.bkey_iter_pos_cmp(k, search).is_lt() {
                 break;
             }
             self.advance(keys);
@@ -232,7 +232,8 @@ impl KeyIter {
 
         *self = Self::default();
 
-        let exact = match unsafe { c::bch2_bkey_pack_pos_lossy(&mut p.k, search, b) } {
+        let (buf, at) = p.as_buf_mut();
+        let exact = match b.pack_pos_lossy(buf, at, *search) {
             c::bkey_pack_pos_ret::BKEY_PACK_POS_EXACT   => true,
             c::bkey_pack_pos_ret::BKEY_PACK_POS_SMALLER => false,
             c::bkey_pack_pos_ret::BKEY_PACK_POS_FAIL    => {
@@ -424,7 +425,7 @@ impl KeyIter {
     pub fn peek_unpack<'u>(&mut self, keys: &Keys<'u>, u: &'u mut c::bkey) -> Option<BkeySC<'u>> {
         let k = self.peek(keys)?;
 
-        Some(keys.key_at(k).disassemble(keys.node(), u))
+        Some(keys.disassemble(k, u))
     }
 
     fn __next_check(&self, keys: &Keys<'_>) {

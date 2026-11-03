@@ -8,13 +8,13 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 
 use bcachefs_kernel::btree;
-use bcachefs_kernel::btree::bkey::{BkeyI, BkeyS};
+use bcachefs_kernel::btree::bkey::{BkeyI, BkeyP, BkeyS};
 use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::{entry_type, journal_entry_type};
-use bcachefs_kernel::util::vstructs::{assume_validated, cast_plain, Head, SelfSized, Unvalidated};
+use bcachefs_kernel::util::vstructs::{assume_validated, cast_plain, cast_plain_slice, Head, SelfSized, Unvalidated};
 use bcachefs_kernel::POS_MIN;
 
 use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
@@ -370,14 +370,11 @@ fn sanitize_btree(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result
                 // sanitize_val's edits land on the buffer.
                 let mut u: c::bkey;
                 let k = if key_format == 0 {
-                    u = unsafe { std::mem::zeroed() };
-                    unsafe {
-                        c::__bch2_bkey_unpack_key(
-                            format_ptr,
-                            &mut u,
-                            buf.as_ptr().add(key_pos) as *const c::bkey_packed,
-                        );
-                    }
+                    let key = cast_plain_slice(&buf[key_pos..][..key_bytes])
+                        .and_then(BkeyP::from_slice)
+                        .ok_or_else(|| anyhow!("btree node bset at {pos:#x}: key at {key_pos:#x} not 8 byte aligned"))?;
+
+                    u = unsafe { &*format_ptr }.unpack_key(key);
                     let v = unsafe { buf.as_mut_ptr().add(vs) as *mut c::bch_val };
                     // SAFETY: the value after the packed key, in the node's
                     // buffer: as long as the unpacked key's u64s says

@@ -15,7 +15,7 @@ use crate::types::Le64;
 use crate::util::kernel::{likely, random_u64};
 use crate::util::log::{log_no_fs, print_lines, LogLevel};
 use crate::util::printbuf::Msg;
-use crate::util::vstructs::{cast_plain_mut, cast_plain_slice, plain_bytes, plain_bytes_mut, Head};
+use crate::util::vstructs::{cast_plain_mut, cast_plain_slice, cast_plain_slice_mut, plain_bytes, plain_bytes_mut, Head};
 use crate::util::Printbuf;
 use core::cmp::Ordering;
 use core::fmt;
@@ -572,7 +572,8 @@ impl KeysMut<'_> {
         self.as_keys().bset_verify_rw_aux_tree(&self.sets[set]);
         self.as_keys().verify_insert_pos(where_, insert_p, clobber_u64s);
 
-        let (src_u64s, src_key): (u16, &[u64]) = if unsafe { c::bch2_bkey_pack_key(&mut packed, &insert.k, f) } {
+        let words = cast_plain_slice_mut(plain_bytes_mut(&mut packed)).expect("a bkey_packed is whole u64s");
+        let (src_u64s, src_key): (u16, &[u64]) = if f.pack_key(words, &insert.k) {
             let key: &[u64] = cast_plain_slice(plain_bytes(&packed)).expect("a bkey_packed is whole u64s");
             (packed.u64s as u16, &key[..f.key_u64s as usize])
         } else {
@@ -632,23 +633,32 @@ impl KeysMut<'_> {
 
 /* Lookup */
 
-impl BtreeNode {
+impl Keys<'_> {
     /* packed or unpacked */
     #[inline]
-    pub(super) fn cmp_p_or_unp(&self, l: &BkeyP, r_packed: Option<&BkeyP>, r: &Bpos) -> Ordering {
+    pub(super) fn cmp_p_or_unp(&self, l: u16, r_packed: Option<&BkeyP>, r: &Bpos) -> Ordering {
         ebug_assert!(r_packed.is_none_or(|r| r.is_packed()));
 
+        let k = self.key_at(l);
         match r_packed {
-            Some(r_packed) if likely(l.is_packed()) => self.cmp_packed_format_checked(l, r_packed),
-            _ => self.cmp_left_packed(l, r),
+            Some(r_packed) if likely(k.is_packed()) => self.node().cmp_packed_format_checked(k, r_packed),
+            _ => self.unpack_pos(l).cmp(r),
         }
     }
 
-    fn bkey_iter_cmp_p_or_unp(&self, l: &BkeyP, r_packed: Option<&BkeyP>, r: &Bpos) -> Ordering {
+    fn bkey_iter_cmp_p_or_unp(&self, l: u16, r_packed: Option<&BkeyP>, r: &Bpos) -> Ordering {
         self.cmp_p_or_unp(l, r_packed, r)
-            .then_with(|| if l.key_type().is_deleted() { Ordering::Less } else { Ordering::Equal })
+            .then_with(|| if self.key_at(l).key_type().is_deleted() { Ordering::Less } else { Ordering::Equal })
     }
 
+    /* These assume r (the search key) is not a deleted key: */
+    pub(super) fn bkey_iter_pos_cmp(&self, l: u16, r: &Bpos) -> Ordering {
+        self.unpack_pos(l).cmp(r)
+            .then_with(|| if self.key_at(l).key_type().is_deleted() { Ordering::Less } else { Ordering::Equal })
+    }
+}
+
+impl BtreeNode {
     /*
      * When keys compare equal, deleted keys compare first:
      *
@@ -659,12 +669,6 @@ impl BtreeNode {
         self.cmp_packed(l, r)
             .then_with(|| r.key_type().is_deleted().cmp(&l.key_type().is_deleted()))
             .then_with(|| l.as_ffi().cmp(&r.as_ffi()))
-    }
-
-    /* These assume r (the search key) is not a deleted key: */
-    pub(super) fn bkey_iter_pos_cmp(&self, l: &BkeyP, r: &Bpos) -> Ordering {
-        self.cmp_left_packed(l, r)
-            .then_with(|| if l.key_type().is_deleted() { Ordering::Less } else { Ordering::Equal })
     }
 }
 
@@ -696,22 +700,21 @@ impl Keys<'_> {
     pub(super) fn bset_search_linear(&self, t: &BsetTree, search: &Bpos,
                                           packed_search: Option<&BkeyP>,
                                           lossy_packed_search: &BkeyP, mut m: u16) -> u16 {
-        let b = self.node();
         let end = t.end_offset;
 
         m = self.keys_between(m, end)
-            .find(|(_, k)| !b.bkey_iter_cmp_p_or_unp(k, Some(lossy_packed_search), search).is_lt())
+            .find(|&(at, _)| !self.bkey_iter_cmp_p_or_unp(at, Some(lossy_packed_search), search).is_lt())
             .map_or(end, |(at, _)| at);
 
         if packed_search.is_none() {
             m = self.keys_between(m, end)
-                .find(|(_, k)| !b.bkey_iter_pos_cmp(k, search).is_lt())
+                .find(|&(at, _)| !self.bkey_iter_pos_cmp(at, search).is_lt())
                 .map_or(end, |(at, _)| at);
         }
 
         if check_lookups() {
             if let Some(prev) = self.bkey_prev_all(t, m) {
-                assert!(b.bkey_iter_cmp_p_or_unp(self.key_at(prev), packed_search, search).is_lt(),
+                assert!(self.bkey_iter_cmp_p_or_unp(prev, packed_search, search).is_lt(),
                         "bset search for {search}: key at {prev}, before the result at {m}, isn't before it");
             }
         }

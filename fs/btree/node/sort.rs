@@ -4,7 +4,7 @@ use super::bset::{BsetTree, MAX_BSETS};
 use super::iter::KeyIter;
 use super::keys::{key_at, keys_in, Keys};
 use super::{BtreeNode, BtreeNrKeys};
-use crate::btree::bkey::{BkeyP, BKEY_U64S};
+use crate::btree::bkey::{self, BkeyP, BKEY_FORMAT_CURRENT, BKEY_U64S};
 use crate::btree::cache::Bounce;
 use crate::c;
 use crate::fs::Fs;
@@ -273,7 +273,7 @@ pub fn bch2_sort_whiteouts(fs: &Fs, b: &mut BtreeNode) {
     }
 
     /*
-     * __bch2_bkey_unpack_key_b reads one byte before the key for its
+     * BtreeNode::unpack_key_b() reads one byte before the key for its
      * header trick; pad the start of the bounce buffer so that read is
      * always against valid memory.
      */
@@ -490,11 +490,11 @@ pub fn bch2_btree_sort_into(fs: &Fs, dst: &mut BtreeNode, src: &BtreeNode) {
             assert!(room.len() >= BKEY_U64S + k.val_u64s(in_f),
                     "repacking a {} u64 key into a node with {} u64s left", k.u64s(), room.len());
 
-            let k_f = if k.is_packed() { in_f } else { unsafe { &*&raw const c::bch2_bkey_format_current } };
-            if unsafe { c::bch2_bkey_transform(out_f, room.as_mut_ptr().cast(), k_f, k.as_ffi()) } {
+            let k_f = if k.is_packed() { in_f } else { &BKEY_FORMAT_CURRENT };
+            if bkey::transform(out_f, room, k_f, k) {
                 BkeyP::from_slice_mut(room).expect("a transformed key").set_format(c::KEY_FORMAT_LOCAL_BTREE as u8);
             } else {
-                unsafe { c::bch2_bkey_unpack(src, room.as_mut_ptr().cast(), k.as_ffi()) }
+                k.unpack_into(src, room);
             }
         }
 

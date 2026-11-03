@@ -79,7 +79,13 @@
 #![allow(non_camel_case_types)]
 
 mod bpos;
+#[path = "../bkey_c_export.rs"]
+mod c_export;
 mod cmp;
+#[cfg(target_arch = "x86_64")]
+mod compile;
+mod format;
+mod pack;
 mod packed;
 #[cfg(test)]
 mod tests;
@@ -88,6 +94,8 @@ mod types;
 
 pub use self::bpos::*;
 pub use self::cmp::*;
+pub use self::format::*;
+pub use self::pack::*;
 pub use self::packed::*;
 pub use self::text::*;
 pub use self::types::*;

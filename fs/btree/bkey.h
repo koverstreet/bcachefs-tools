@@ -25,10 +25,6 @@
 #endif
 #endif
 
-void bch2_bkey_packed_to_binary_text(struct printbuf *,
-				     const struct bkey_format *,
-				     const struct bkey_packed *);
-
 #include "btree/bkey_defs_gen.h"
 
 #define bkey_lr_packed(_l, _r)						\
@@ -52,29 +48,6 @@ static inline void bkey_val_copy(struct bkey_i *dst, const struct bkey_i *src)
 }
 
 extern struct static_key_false bch2_debug_check_bkey_unpack;
-
-__pure
-unsigned bch2_bkey_ffs(const struct btree *, const struct bkey_packed *);
-
-__pure
-int __bch2_bkey_cmp_packed_format_checked(const struct bkey_packed *,
-				     const struct bkey_packed *,
-				     const struct btree *);
-
-__pure
-int __bch2_bkey_cmp_left_packed_format_checked(const struct btree *,
-					  const struct bkey_packed *,
-					  const struct bpos *);
-
-__pure
-int bch2_bkey_cmp_packed(const struct btree *,
-			 const struct bkey_packed *,
-			 const struct bkey_packed *);
-
-__pure
-int __bch2_bkey_cmp_left_packed(const struct btree *,
-				const struct bkey_packed *,
-				const struct bpos *);
 
 static inline __pure
 int bkey_cmp_left_packed(const struct btree *b,
@@ -189,8 +162,6 @@ static inline struct bpos bkey_max(struct bpos l, struct bpos r)
 {
 	return bkey_gt(l, r) ? l : r;
 }
-
-void bch2_bkey_swab_key(const struct bkey_format *, struct bkey_packed *);
 
 static __always_inline int bversion_cmp(struct bversion l, struct bversion r)
 {
@@ -369,13 +340,6 @@ static inline void set_bkeyp_val_u64s(const struct bkey_format *format,
 #define bkeyp_val(_format, _k)						\
 	 ((struct bch_val *) ((u64 *) (_k)->_data + bkeyp_key_u64s(_format, _k)))
 
-void bch2_compute_bkey_unpack_consts(struct btree *);
-
-#ifndef HAVE_BCACHEFS_COMPILED_UNPACK
-struct bpos __bkey_unpack_pos(const struct bkey_format *,
-			      const struct bkey_packed *);
-#endif
-
 static inline void
 __bkey_unpack_key_format_checked(const struct btree *b,
 			       struct bkey *dst,
@@ -538,56 +502,5 @@ static inline unsigned high_word_offset(const struct bkey_format *f)
 #define high_word(f, k)		((u64 *) (k)->_data + high_word_offset(f))
 #define next_word(p)		nth_word(p, 1)
 #define prev_word(p)		nth_word(p, -1)
-
-#ifdef CONFIG_BCACHEFS_DEBUG
-void bch2_bkey_pack_test(void);
-#endif
-
-void bch2_bkey_format_init(struct bkey_format_state *);
-
-static inline void __bkey_format_add(struct bkey_format_state *s, unsigned field, u64 v)
-{
-	s->field_min[field] = min(s->field_min[field], v);
-	s->field_max[field] = max(s->field_max[field], v);
-}
-
-/*
- * Changes @format so that @k can be successfully packed with @format
- */
-static inline void bch2_bkey_format_add_key(struct bkey_format_state *s, const struct bkey *k)
-{
-#define x(id, field) __bkey_format_add(s, id, k->field);
-	bkey_fields()
-#undef x
-}
-
-void bch2_bkey_format_add_pos(struct bkey_format_state *, struct bpos);
-struct bkey_format bch2_bkey_format_done(struct bkey_format_state *);
-
-static inline bool bch2_bkey_format_field_overflows(struct bkey_format *f, unsigned i)
-{
-	unsigned f_bits = f->bits_per_field[i];
-	unsigned unpacked_bits = bch2_bkey_format_current.bits_per_field[i];
-	u64 unpacked_mask = ~((~0ULL << 1) << (unpacked_bits - 1));
-	u64 field_offset = le64_to_cpu(f->field_offset[i]);
-
-	if (f_bits > unpacked_bits)
-		return true;
-
-	if ((f_bits == unpacked_bits) && field_offset)
-		return true;
-
-	u64 f_mask = f_bits
-		? ~((~0ULL << (f_bits - 1)) << 1)
-		: 0;
-
-	if (((field_offset + f_mask) & unpacked_mask) < field_offset)
-		return true;
-	return false;
-}
-
-int bch2_bkey_format_invalid(struct bch_fs *, struct bkey_format *,
-			     enum bch_validate_flags, struct printbuf *);
-void bch2_bkey_format_to_text(struct printbuf *, const struct bkey_format *);
 
 #endif /* _BCACHEFS_BKEY_H */

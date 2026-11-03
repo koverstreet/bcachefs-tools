@@ -149,7 +149,7 @@ fn rw_aux_tree_entry(node: *const BtreeNode, buf: &[u64], t: &BsetTree, k: u16) 
     RwAuxEntry {
         offset: k,
         _pad:   0,
-        k:      unsafe { key_at(buf, k).unpack_pos_raw(node) },
+        k:      unsafe { &*node }.unpack_pos_at(buf, k),
     }
 }
 
@@ -187,11 +187,11 @@ impl<'a> Keys<'a> {
             assert!(rw[j].offset > rw[j - 1].offset,
                     "rw aux tree entry {j} at {}, not past entry {} at {}", rw[j].offset, j - 1, rw[j - 1].offset);
 
-            let (k, key) = keys.find(|&(k, _)| k == rw[j].offset)
+            let (k, _) = keys.find(|&(k, _)| k == rw[j].offset)
                 .unwrap_or_else(|| panic!("rw aux tree entry {j} at {}, not at a key of its set", rw[j].offset));
 
-            assert!(rw[j].k == self.unpack_pos(key),
-                    "rw aux tree entry {j} at {}: {}, its key at {}", k, rw[j].k, self.unpack_pos(key));
+            assert!(rw[j].k == self.unpack_pos(k),
+                    "rw aux tree entry {j} at {}: {}, its key at {}", k, rw[j].k, self.unpack_pos(k));
         }
     }
 
@@ -309,8 +309,9 @@ fn bkey_mantissa_search(k: &c::bkey_packed, f: &BkeyFloat) -> u16 {
 /// @pos packed, if it packs, or unpacked: a bound for make_bfloat().
 fn pack_pos_or_unpacked(node: *const BtreeNode, pos: Bpos) -> c::bkey_packed_padded {
     let mut k = c::bkey_packed_padded::default();
+    let (buf, at) = k.as_buf_mut();
 
-    if !unsafe { c::bch2_bkey_pack_pos(&mut k.k, pos, node) } {
+    if !unsafe { &*node }.pack_pos(buf, at, pos) {
         let u = c::bkey { p: pos, ..c::bkey::new() };
         plain_bytes_mut(&mut k.k).copy_from_slice(plain_bytes(&u));
     }
@@ -359,7 +360,7 @@ impl KeysMut<'_> {
          * Note that this may be negative - we may be running off the low end
          * of the key: we handle this later:
          */
-        let differing = unsafe { c::bch2_bkey_greatest_differing_bit(self.node, l.as_ffi(), r.as_ffi()) };
+        let differing = self.format.greatest_differing_bit(self.nr_key_bits.into(), l, r);
         let high_bit = (differing as i32).max(nr_key_bits.min(BKEY_MANTISSA_BITS as i32) - 1);
         let exponent = high_bit - (BKEY_MANTISSA_BITS as i32 - 1);
 
@@ -661,7 +662,7 @@ pub(super) fn bset_search_tree(keys: &Keys<'_>, t: &BsetTree, ro: RoAuxTree<'_>,
             }
 
             let k = ro.tree_to_bkey(t, n);
-            let cmp = b.cmp_p_or_unp(keys.key_at(k), Some(packed), search);
+            let cmp = keys.cmp_p_or_unp(k, Some(packed), search);
             if cmp.is_eq() {
                 return k;
             }
