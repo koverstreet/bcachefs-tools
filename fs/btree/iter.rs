@@ -932,16 +932,33 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// allocate_dropping_locks() and its variants. @alloc names its ENOMEM
     /// (an Option's None by .ok_or()), and it's thrown if the second try
     /// fails too; any other error is returned as is.
-    pub fn allocate_dropping_locks<T>(&self, mut alloc: impl FnMut(c::gfp_t) -> Result<T, BchError>)
+    pub fn allocate_dropping_locks<T>(&self, alloc: impl FnMut(c::gfp_t) -> Result<T, BchError>)
+        -> Result<T, BchError>
+    {
+        self.allocate_dropping(alloc, || self.unlock())
+    }
+
+    /// allocate_dropping_locks(), for what can take a while to get - megabytes:
+    /// the GFP_KERNEL try lets go of SRCU too, unlock_long().
+    pub fn allocate_dropping_locks_big<T>(&self, alloc: impl FnMut(c::gfp_t) -> Result<T, BchError>)
+        -> Result<T, BchError>
+    {
+        self.allocate_dropping(alloc, || self.trans.unlock_long())
+    }
+
+    fn allocate_dropping<T>(&self, mut alloc: impl FnMut(c::gfp_t) -> Result<T, BchError>, unlock: impl FnOnce())
         -> Result<T, BchError>
     {
         match alloc(c::GFP_NOWAIT) {
             Err(e) if e.matches(c::ENOMEM) => {}
             r => return r,
         }
-        self.drop_locks_do(|| alloc(c::GFP_KERNEL).map_err(|e| {
+        unlock();
+        let v = alloc(c::GFP_KERNEL).map_err(|e| {
             if e.matches(c::ENOMEM) { self.fs().err(bch_errcode(e.raw() as u32)) } else { e }
-        }))
+        })?;
+        self.relock_or_nested()?;
+        Ok(v)
     }
 
     /// Run @f as a nested transaction, as C's nested_lockrestart_do(): @f
