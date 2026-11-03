@@ -2846,7 +2846,7 @@ impl<'t> BtreeIter<'t> {
     /// passed up from a helper: they name *a* loop, and one that travels
     /// through a helper's own loop names the wrong one. Helpers return what
     /// happened; the body decides what that means for the walk.
-    fn walk_commit<F>(
+    pub(crate) fn walk_commit<F>(
         &mut self,
         trans:  &BtreeTrans<'t>,
         keys:   Keys,

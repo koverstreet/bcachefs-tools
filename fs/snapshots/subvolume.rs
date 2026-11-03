@@ -23,9 +23,10 @@ use crate::util::vstructs::{Validated, Whole};
 use crate::btree::bkey_methods::TriggerOp;
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
-    commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, KeyFn, Keys,
-    LoopControl, TransAttempt, UpdateTriggerFlags,
+    commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, KeyFn,
+    Keys, LoopControl, TransAttempt, UpdateTriggerFlags,
 };
+use crate::alloc::capacity::DiskReservation;
 use crate::c;
 use crate::c::bch_recovery_pass::*;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
@@ -199,6 +200,25 @@ where
     R: LoopControl,
 {
     iter.walk(trans, Keys::InSubvolume(end, flags, subvol), f)
+}
+
+/// for_each_in_subvolume_max(), committing @f's updates after each key, as
+/// BtreeIter::for_each_max_commit().
+#[allow(clippy::too_many_arguments)]
+pub fn for_each_in_subvolume_max_commit<'t, F>(
+    trans:    &BtreeTrans<'t>,
+    iter:     &mut BtreeIter<'t>,
+    end:      Bpos,
+    subvol:   u32,
+    flags:    BtreeIterFlags,
+    disk_res: Option<&DiskReservation<'_>>,
+    commit:   impl Into<CommitOpts>,
+    f:        F,
+) -> Result<(), BchError>
+where
+    F: KeyFn<'t, ()>,
+{
+    iter.walk_commit(trans, Keys::InSubvolume(end, flags, subvol), Some((disk_res, commit.into())), f)
 }
 
 /// for_each_in_subvolume_max(), in one attempt for the walk, not one per key

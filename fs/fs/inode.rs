@@ -1585,13 +1585,12 @@ fn may_delete_deleted_inum(t: &TransAttempt<'_, '_>, inum: c::subvol_inum,
     may_delete_deleted_inode(t, spos(0, inum.inum, snapshot), inode, false)
 }
 
-/// Delete inode @inum's keys in @btree, in its own begin and commit loop:
-/// as bch2_inode_delete_keys(). An extent is deleted whole.
+/// Delete inode @inum's keys in @btree, a commit each: as
+/// bch2_inode_delete_keys(). An extent is deleted whole.
 fn delete_keys(trans: &BtreeTrans<'_>, inum: c::subvol_inum, btree: Btree)
     -> Result<(), BchError>
 {
     let fs = trans.fs();
-    let end = pos(inum.inum, u64::MAX);
 
     // Deleting a compressed extent that straddles a snapshot boundary splits
     // it, and the commit charges the split's extra_disk_res to our disk
@@ -1602,33 +1601,15 @@ fn delete_keys(trans: &BtreeTrans<'_>, inum: c::subvol_inum, btree: Btree)
     let mut iter = BtreeIter::new(trans, btree, pos(inum.inum, 0),
                                   BtreeIterFlags::INTENT | BtreeIterFlags::TRIM);
 
-    loop {
-        let t = trans.begin();
-
-        let ret = (|| {
-            let snapshot = subvolume::get_snapshot(&t, inum.subvol as u32)?;
-            iter.set_snapshot(snapshot);
-
-            let Some(k) = iter.peek_max(&t, end)? else { return Ok(true) };
-            let size = k.k.size;
-
-            let mut delete = t.bkey_alloc_init::<c::Deleted>(0, iter.pos())?;
-            if iter.is_extents() {
-                delete.k_mut().resize(size);
-            }
-
-            t.update(&iter, &delete, UpdateTriggerFlags::empty())?;
-            t.commit(Some(&res), CommitFlags::NO_ENOSPC)?;
-            Ok(false)
-        })();
-
-        match ret {
-            Ok(true)                    => return Ok(()),
-            Ok(false)                   => {}
-            Err(e) if is_restart(&e)    => {}
-            Err(e)                      => return Err(e),
+    subvolume::for_each_in_subvolume_max_commit(trans, &mut iter, pos(inum.inum, u64::MAX), inum.subvol as u32,
+                                                BtreeIterFlags::empty(), Some(&res), CommitFlags::NO_ENOSPC,
+                                                |t, iter, k| {
+        let mut delete = t.bkey_alloc_init::<c::Deleted>(0, iter.pos())?;
+        if iter.is_extents() {
+            delete.k_mut().resize(k.k.size);
         }
-    }
+        t.update(iter, &delete, UpdateTriggerFlags::empty())
+    })
 }
 
 /// Delete the inode @inum's key, and its damage record; its snapshot. As
