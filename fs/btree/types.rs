@@ -11,13 +11,15 @@ use crate::cstructs::c as cs;
 use crate::errcode::bch_errcode;
 use crate::errcode::BchError;
 use crate::locking::{Guard, Locked};
-use crate::util::alloc::{flags::GFP_KERNEL, DArrayLoan};
+use crate::util::alloc::{flags::GFP_KERNEL, DArrayLoan, KVVec};
 use crate::util::bio::{BioSet, Either};
 use crate::util::late::Late;
 use crate::util::Printbuf;
 use crate::util::mempool::Mempool;
 use crate::util::workqueue::{Workqueue, WqFlags};
-use crate::types::{CacheAligned, DArray, NeBytes, bits_to_longs, c_default};
+use crate::types::{CacheAligned, DArray, NeBytes, RustOnly, bits_to_longs, c_default, rust_only};
+use crate::btree::node_scan::NodeScan;
+use crate::new_lock;
 use crate::util::projections::Volatile;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
@@ -1091,7 +1093,9 @@ pub struct bch_fs_btree {
     pub interior_updates: cs::bch_fs_btree_interior_updates,
     #[late]
     pub node_rewrites: cs::bch_fs_btree_node_rewrites,
-    pub node_scan: cs::find_btree_nodes,
+    #[pin]
+    #[init(RustOnly::new(new_lock!(KVVec::new())))]
+    pub(crate) node_scan: rust_only!(NodeScan),
 }
 
 fn fill_iter_pool(opts: &c::bch_opts) -> impl PinInit<Mempool, BchError> {

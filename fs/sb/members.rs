@@ -815,6 +815,20 @@ impl Dev {
         self.mi.get().btree_allocated_bitmap & gc & want == want
     }
 
+    /// Whether any of [@start, @start + @sectors) is marked in its member's
+    /// bitmap.
+    pub(crate) fn btree_bitmap_marked_sectors_any(&self, start: u64, sectors: u32) -> bool {
+        let shift = self.mi.get().btree_bitmap_shift;
+        let bitmap_end = 64u64 << shift;
+        if start >= bitmap_end {
+            return false;
+        }
+
+        /* a bucket can run past the bitmap's end, and its bit 64 past a u64 */
+        let end = (start + u64::from(sectors)).min(bitmap_end);
+        self.mi.get().btree_allocated_bitmap & bitmap_bits(start, end, shift) != 0
+    }
+
     /// ca->btree_allocated_bitmap_gc made @v: written under sb_lock, @_sb,
     /// and read without it, as ca->mi.
     fn set_btree_bitmap_gc(&self, _sb: &SbLockGuard<'_>, v: u64) {

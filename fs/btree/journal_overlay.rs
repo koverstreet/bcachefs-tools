@@ -752,7 +752,7 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
 }
 
 /// insert_take() of a copy of @k.
-fn insert(fs: &Fs, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
+pub(crate) fn insert(fs: &Fs, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
     let bytes = k.k.bytes();
     let n = crate::util::alloc::kmalloc(bytes, GFP_KERNEL).map_err(|_| fs.err(e::BCH_ERR_ENOMEM_journal_key_insert))?;
     // SAFETY: @bytes of key, into as many of ours; then ours to hand over

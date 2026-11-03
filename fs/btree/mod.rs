@@ -38,6 +38,7 @@ pub mod iter;
 pub mod journal_overlay;
 pub mod locking;
 pub mod node;
+pub mod node_scan;
 pub mod read;
 pub mod types;
 pub mod update;

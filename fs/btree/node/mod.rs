@@ -204,6 +204,17 @@ impl BtreeNode {
         unsafe { &*BkeyI::from_raw(&raw const self.key) }
     }
 
+    pub fn data(&self) -> &Head<cs::btree_node> {
+        unsafe { &*self.data }
+    }
+
+    pub fn set_key(&mut self, k: &BkeyI) {
+        let bytes = k.as_bytes();
+        let room = size_of_val(&self.key) + size_of_val(&self.key_pad);
+        assert!(bytes.len() <= room, "a btree node's key: {} bytes", bytes.len());
+        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), (&raw mut self.key).cast::<u8>(), bytes.len()) }
+    }
+
     pub fn is_fake(&self) -> bool {
         self.flags.get(c::btree_flags::BTREE_NODE_fake)
     }

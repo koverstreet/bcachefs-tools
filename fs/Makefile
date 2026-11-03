@@ -76,7 +76,6 @@ bcachefs-y		:=			\
 	btree/iter.o				\
 	btree/key_cache.o			\
 	btree/locking.o				\
-	btree/node_scan.o			\
 	btree/read.o				\
 	btree/update.o				\
 	btree/write.o				\

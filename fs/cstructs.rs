@@ -19,7 +19,6 @@
 #[path = "btree/write_buffer_defs.rs"] pub mod btree_write_buffer_defs;
 #[path = "btree/check_types.rs"] pub mod btree_check_types;
 #[path = "btree/key_cache_types.rs"] pub mod btree_key_cache_types;
-#[path = "btree/node_scan_types.rs"] pub mod btree_node_scan_types;
 #[path = "btree/write_types.rs"] pub mod btree_write_types;
 #[path = "data/ec/create_types.rs"] pub mod data_ec_create_types;
 #[path = "data/ec/format.rs"] pub mod data_ec_format;
@@ -134,7 +133,6 @@ pub mod c {
     pub use crate::btree::locking::{BTREE_NODE_INTENT_LOCKED, BTREE_NODE_READ_LOCKED, BTREE_NODE_UNLOCKED, BTREE_NODE_WRITE_LOCKED, btree_node_locked_type};
     pub use crate::btree::locking::{bch2_check_for_deadlock, lock_graph, rust_bch2_inode_shard_idx, trans_waiting_for_lock, trans_waiting_for_lock_bits};
     pub(crate) use crate::btree::locking::{__trans_waiting_for_lock_bits_forward};
-    pub use super::btree_node_scan_types::*;
     pub use crate::btree::read::{bch2_btree_node_scrub, btree_node_scrub_report_fn, btree_read_bio, btree_read_bio_bits};
     pub(crate) use crate::btree::read::{__btree_read_bio_bits_forward};
     pub use crate::btree::update::{BCH_TRANS_COMMIT_journal_reclaim, BCH_TRANS_COMMIT_journal_replay, BCH_TRANS_COMMIT_no_check_rw, BCH_TRANS_COMMIT_no_enospc, BCH_TRANS_COMMIT_no_journal_res, BCH_TRANS_COMMIT_no_skip_noops, BCH_TRANS_COMMIT_skip_accounting_apply, __BCH_TRANS_COMMIT_FLAGS_START, __BCH_TRANS_COMMIT_journal_reclaim, __BCH_TRANS_COMMIT_journal_replay, __BCH_TRANS_COMMIT_no_check_rw, __BCH_TRANS_COMMIT_no_enospc, __BCH_TRANS_COMMIT_no_journal_res, __BCH_TRANS_COMMIT_no_skip_noops, __BCH_TRANS_COMMIT_skip_accounting_apply, __bch2_insert_snapshot_whiteouts, __bch2_trans_commit, __bch2_trans_subbuf_alloc, __bch_trans_commit_flags, bch2_bkey_get_empty_slot, bch2_btree_bit_mod, bch2_btree_bit_mod_buffered, bch2_btree_bit_mod_iter, bch2_btree_delete, bch2_btree_delete_at, bch2_btree_delete_range, bch2_btree_delete_range_trans, bch2_btree_insert, bch2_btree_insert_nonextent, bch2_btree_insert_trans, bch2_fs_log_msg, bch2_trans_commit_hook, bch2_trans_update_extent_overwrite, bch2_trans_update_ip, bch2_trigger_get_mutable_new, bch_trans_commit_flags, rust_bch2_trans_update_buffered};

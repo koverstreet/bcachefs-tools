@@ -15,6 +15,7 @@ use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::types::{Le32, c_default};
 use crate::util::vstructs::{Head, Unvalidated};
+use crate::util::Printbuf;
 use core::mem::offset_of;
 use core::ffi::{c_int, c_uint, c_void};
 use cstruct_macros::{CStruct, bitfield, c_extern, c_typedef};
@@ -55,6 +56,8 @@ c_extern! {
     pub fn bch2_btree_node_scrub(trans: *mut c::btree_trans, btree: Btree, level: c_uint,
                                  k: c::bkey_s_c, dev: c_uint) -> c_int;
     pub fn bch2_btree_flush_all_reads(c: *mut Fs) -> bool;
+    pub fn bch2_btree_node_read_done(c: *mut Fs, ca: *mut Dev, b: *mut BtreeNode,
+                                     failed: *mut c::bch_io_failures, err: *mut Printbuf) -> c_int;
     pub fn bch2_btree_root_read(c: *mut Fs, btree: Btree, k: *const c::bkey_i, level: c_uint) -> c_int;
 }
 

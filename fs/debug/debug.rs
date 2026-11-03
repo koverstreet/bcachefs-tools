@@ -339,17 +339,14 @@ impl DebugFile for BtreeNodeScan {
     type Obj = Fs;
 
     fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
-        let f = &fs.btree.node_scan;
         out.print_each(|out| {
-            let _lock = Locked::from_c(&f.lock).lock();
-            let nr = f.nodes.nr;
-            if self.next >= nr {
+            let nodes = fs.btree.node_scan.lock();
+            if self.next >= nodes.len() {
                 return Ok(false);
             }
 
             // the nodes are kept in eytzinger order, for searching
-            let idx = Eytzinger0::<usize>::new(nr).from_inorder(self.next);
-            unsafe { c::bch2_found_btree_node_to_text(out.as_raw(), fs.as_ptr(), f.nodes.data.add(idx)) };
+            nodes[Eytzinger0::<usize>::of(&nodes).from_inorder(self.next)].to_text(out, fs);
             self.next += 1;
             Ok(true)
         })
