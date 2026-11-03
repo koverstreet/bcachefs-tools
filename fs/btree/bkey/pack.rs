@@ -7,7 +7,7 @@ use core::mem::offset_of;
 
 use super::format::{fls64, u64_bitmask, BKEY_FORMAT_CURRENT, FIELDS, NR_FIELDS};
 use super::packed::Header;
-use super::{spos, BkeyP, BKEY_U64S, HIGH_BIT_OFFSET};
+use super::{spos, BkeyP, BKEY_U64S};
 use crate::btree::node::{BkeyUnpackField, BtreeNode};
 use crate::c;
 use crate::cstructs::c::{bkey_fields, bkey_pack_pos_ret};
@@ -19,6 +19,10 @@ use crate::util::vstructs::{cast_plain_slice_mut, plain_bytes, plain_bytes_mut};
 use crate::util::{Printbuf, ToText};
 
 const POS_FIELDS: [bch_bkey_fields; 3] = [BKEY_FIELD_INODE, BKEY_FIELD_OFFSET, BKEY_FIELD_SNAPSHOT];
+
+/// Where a packed key's position bits start in its high word: past the header,
+/// on big endian.
+pub const HIGH_BIT_OFFSET: u32 = if cfg!(target_endian = "little") { 0 } else { c::KEY_PACKED_BITS_START };
 
 /* byte order helpers */
 

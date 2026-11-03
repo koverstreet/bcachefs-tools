@@ -56,6 +56,11 @@ impl bkey_format {
         self.field_offset[f as usize].get()
     }
 
+    /// The bits of a key's position.
+    pub fn key_bits(&self) -> u32 {
+        self.bits(BKEY_FIELD_INODE) + self.bits(BKEY_FIELD_OFFSET) + self.bits(BKEY_FIELD_SNAPSHOT)
+    }
+
     /*
      * We don't want it to be possible for the packed format to represent fields
      * bigger than a u64... that will cause confusion and issues (like with

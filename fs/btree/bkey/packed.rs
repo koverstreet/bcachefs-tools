@@ -338,15 +338,3 @@ impl<'a, V: ?Sized + Unsized> TryFrom<&'a mut BkeyP<V>> for &'a mut BkeyI<V> {
     }
 }
 
-impl c::bkey_format {
-    /// The bits of a key's position.
-    pub fn key_bits(&self) -> u32 {
-        self.bits_per_field[c::bch_bkey_fields::BKEY_FIELD_INODE as usize] as u32 +
-        self.bits_per_field[c::bch_bkey_fields::BKEY_FIELD_OFFSET as usize] as u32 +
-        self.bits_per_field[c::bch_bkey_fields::BKEY_FIELD_SNAPSHOT as usize] as u32
-    }
-}
-
-/// Where a packed key's position bits start in its high word: past the header,
-/// on big endian.
-pub const HIGH_BIT_OFFSET: u32 = if cfg!(target_endian = "little") { 0 } else { c::KEY_PACKED_BITS_START };

@@ -27,9 +27,6 @@
 
 #include "btree/bkey_defs_gen.h"
 
-#define bkey_lr_packed(_l, _r)						\
-	((_l)->format + ((_r)->format << 1))
-
 static inline void bkey_p_copy(struct bkey_packed *dst, const struct bkey_packed *src)
 {
 	memcpy_u64s_small(dst, src, src->u64s);
@@ -438,15 +435,6 @@ static inline struct bkey_s __bkey_disassemble(const struct btree *b,
 	__bkey_unpack_key(b, u, k);
 
 	return (struct bkey_s) { .k = u, .v = bkeyp_val(&b->format, k), };
-}
-
-static inline u64 bkey_field_max(const struct bkey_format *f,
-				 enum bch_bkey_fields nr)
-{
-	return f->bits_per_field[nr] < 64
-		? (le64_to_cpu(f->field_offset[nr]) +
-		   ~(~0ULL << f->bits_per_field[nr]))
-		: U64_MAX;
 }
 
 static inline void bkey_reassemble(struct bkey_i *dst,

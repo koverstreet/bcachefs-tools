@@ -5,23 +5,13 @@
 use crate::cstructs::c;
 use cstruct_macros::{c_enum, c_typedef, c_xmacro, CStruct, Plain};
 
-c_enum! {
-    #[closed]
-    pub enum bkey_lr_packed: u32 {
-        BKEY_PACKED_BOTH,
-        BKEY_PACKED_RIGHT,
-        BKEY_PACKED_LEFT,
-        BKEY_PACKED_NONE,
-    }
-}
-
 /*
  * Wrapper for stack-allocated struct bkey_packed.
  *
- * The byte-aligned fast-path unpackers (__bch2_bkey_unpack_key_b,
- * __bkey_unpack_pos_b) issue an 8-byte unaligned load at @bytes +
+ * The byte-aligned fast paths (BtreeNode::unpack_key_at(), unpack_pos_at(),
+ * pack_pos()) issue an 8-byte unaligned load at @bytes +
  * uf->byte_offset, where byte_offset is signed and can be as low as -7
- * (and __bch2_bkey_unpack_key_b's header trick reads @bytes - 1). This
+ * (and unpack_key_at()'s header trick reads @bytes - 1). This
  * is safe for bkeys inside a bset (preceded by the bset header or by
  * another bkey), but reads into the stack redzone for a bare stack-local
  * struct bkey_packed. Wrap stack copies in this to provide the leading
@@ -32,14 +22,6 @@ c_enum! {
 pub struct bkey_packed_padded {
     pub _pad: [u8; 8],
     pub k: c::bkey_packed,
-}
-
-/* Same trick for stack-local struct bkey_i (when used as pack target). */
-#[repr(C)]
-#[derive(Default, CStruct)]
-pub struct bkey_i_padded {
-    pub _pad: [u8; 8],
-    pub k: c::bkey_i,
 }
 
 c_enum! {

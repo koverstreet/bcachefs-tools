@@ -15,7 +15,7 @@ use crate::util::vstructs::{cast_plain, from_bytes, plain_bytes, Head};
 use core::ops::{Deref, DerefMut};
 
 pub struct Keys<'a> {
-    /// For C's unpack, which reads only the format fields.
+    /// For the fast paths, which read only its format and unpack constants.
     node:              *const BtreeNode,
     pub sets:          &'a [BsetTree],
     /// The node's buffer, 1 << byte_order bytes: its bsets, and the
@@ -28,7 +28,8 @@ pub struct Keys<'a> {
 
 /// Keys, to change: the node's parts, borrowed apart.
 pub struct KeysMut<'a> {
-    /// For C's unpack, which reads only the format fields, borrowed below.
+    /// For the fast paths, which read only its format, borrowed below, and
+    /// unpack constants.
     pub(super) node:   *const BtreeNode,
     pub format:        &'a c::bkey_format,
     pub nr_key_bits:   u8,
