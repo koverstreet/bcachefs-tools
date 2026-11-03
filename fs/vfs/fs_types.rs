@@ -6,6 +6,8 @@ use crate::cstructs::c;
 use crate::locking::Locked;
 use crate::types::c_default;
 use crate::data_structures::bitmap::AtomicBitflags;
+use crate::util::projections::Volatile;
+use crate::util::workqueue::DelayedWork;
 use crate::vfs::vfs_inode::VfsInode;
 use core::ffi::{c_uint, c_ulong};
 #[cfg(not(NO_BCACHEFS_FS))]
@@ -45,7 +47,7 @@ pub struct InodeInfo {
     pub ei_flags: AtomicBitflags<c::bch_inode_info_flags>,
 
     pub ei_update_lock: c::mutex,
-    pub ei_last_dirtied: c_ulong,
+    pub ei_last_dirtied: Volatile<c_ulong>,
     pub ei_pagecache_lock: c::two_state_lock_t,
 
     /*
@@ -76,7 +78,8 @@ pub struct InodeInfo {
     #[c("struct bch_inode_unpacked ei_inode")]
     pub ei_inode: c::VolatileInodeUnpacked,
 
-    pub ei_writeback_timer: c::delayed_work,
+    #[c("struct delayed_work ei_writeback_timer")]
+    pub ei_writeback_timer: DelayedWork,
 }
 c_default!(InodeInfo);
 

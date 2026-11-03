@@ -4,6 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use crate::util::projections::Volatile;
 use core::ffi::c_ulong;
 use cstruct_macros::{c_const, CStruct};
 
@@ -19,10 +20,11 @@ c_const! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct fdm_slot {
-    pub task: *mut c::task_struct,
-    pub mapping: c_ulong, /* address_space * | dropped_locks bit */
+    #[c("struct task_struct *task")]
+    pub task: Volatile<usize>,
+    pub mapping: Volatile<c_ulong>, /* address_space * | dropped_locks bit */
 }
 c_default!(fdm_slot);
 
