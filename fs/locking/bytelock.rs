@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! ByteLock: a sleeping lock in one byte, for what there are millions of and
-//! no room in - a bucket's gc state, a gc stripe's. Not for contention: it
-//! has no fairness and no lockdep.
+//! no room in - a bucket's gc state, a gc stripe's - and for what's waited
+//! for with a timeout, which a kernel mutex can't do. It has no fairness and
+//! no lockdep.
 //!
 //! The futex mutex of Drepper's "Futexes Are Tricky", on util/futex.rs. The
 //! byte is 0, unlocked; 1, locked; 2, locked and maybe waited on:
@@ -11,6 +12,8 @@
 //!   get 0 - and when it does, it's ours, as 2, as there may be others.
 //! - unlock: swap in 0, and futex_wake() one waiter if it was 2. Uncontended,
 //!   lock and unlock are one atomic each.
+//! - try_lock_timeout: lock, given up at the deadline. It leaves the byte 2,
+//!   so a wake it took on its way out is passed on by the next unlock.
 //!
 //! It sleeps, where a spinlock would do for how briefly it's held: holders
 //! fsck_err(), which takes a mutex and may allocate.
@@ -25,12 +28,13 @@
 //! to the word's other bytes only makes the LL/SC or CAS retry. C, while it
 //! still takes them, does so through bch2_byte_lock() and bch2_byte_unlock().
 
-use super::{Locked, RawLock, RawTryLock};
+use super::{Locked, RawLock, RawTimedLock, RawTryLock};
 use core::sync::atomic::{AtomicU8, Ordering};
 use crate::util::futex::{futex_wait, futex_wake};
+use crate::util::kernel::jiffies;
 use crate::util::sleep::Sleep;
 use core::convert::Infallible;
-use core::ffi::{c_void, CStr};
+use core::ffi::{c_long, c_ulong, c_void, CStr};
 use cstruct_macros::c_export;
 use pin_init::Zeroable;
 
@@ -70,6 +74,18 @@ impl ByteLock {
         }
     }
 
+    #[cold]
+    fn take_contended_until(&self, end: c_ulong) -> bool {
+        while self.0.swap(CONTENDED, Ordering::Acquire) != UNLOCKED {
+            let left = end.wrapping_sub(jiffies()) as c_long;
+            if left <= 0 {
+                return false;
+            }
+            let _ = futex_wait(&self.0, CONTENDED, Sleep::UNINTERRUPTIBLE.timeout(left as c_ulong));
+        }
+        true
+    }
+
     fn release(&self) {
         if self.0.swap(UNLOCKED, Ordering::Release) == CONTENDED {
             futex_wake(core::ptr::from_ref(&self.0).cast(), 1);
@@ -102,6 +118,15 @@ unsafe impl RawLock for ByteLock {
 unsafe impl RawTryLock for ByteLock {
     unsafe fn try_lock(&self) -> Option<()> {
         self.try_take().then_some(())
+    }
+}
+
+unsafe impl RawTimedLock for ByteLock {
+    unsafe fn try_lock_timeout(&self, timeout: c_ulong) -> Option<()> {
+        #[cfg(kernel)]
+        ::kernel::task::might_sleep();
+
+        (self.try_take() || self.take_contended_until(jiffies().wrapping_add(timeout))).then_some(())
     }
 }
 

@@ -2,7 +2,7 @@
 
 use crate::util::projections::Publish;
 use core::cell::UnsafeCell;
-use core::ffi::{c_void, CStr};
+use core::ffi::{c_ulong, c_void, CStr};
 use core::marker::{PhantomData, PhantomPinned};
 use core::ops::{Deref, DerefMut};
 
@@ -50,6 +50,15 @@ pub unsafe trait RawLock {
 /// taken, and nothing's left to release.
 pub unsafe trait RawTryLock: RawLock {
     unsafe fn try_lock(&self) -> Option<Self::GuardState>;
+}
+
+/// A RawTryLock that can be waited for, for a while.
+///
+/// # Safety
+/// try_lock_timeout() is RawTryLock's try_lock(), but waiting up to @timeout
+/// jiffies for it.
+pub unsafe trait RawTimedLock: RawTryLock {
+    unsafe fn try_lock_timeout(&self, timeout: c_ulong) -> Option<Self::GuardState>;
 }
 
 /// A RawLock that can be taken as one of several of its lockdep class held
@@ -183,6 +192,15 @@ impl<R: RawLock, G, P> Locked<R, G, P> {
         R: RawTryLock,
     {
         let state = unsafe { self.raw.try_lock() }?;
+        Some(Guard { lock: self, state: Some(state), _not_send: PhantomData })
+    }
+
+    /// lock(), if it's free within @timeout jiffies.
+    pub fn try_lock_timeout(&self, timeout: c_ulong) -> Option<Guard<'_, R, G, P>>
+    where
+        R: RawTimedLock,
+    {
+        let state = unsafe { self.raw.try_lock_timeout(timeout) }?;
         Some(Guard { lock: self, state: Some(state), _not_send: PhantomData })
     }
 
