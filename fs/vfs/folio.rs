@@ -7,7 +7,7 @@
 //! and takes no ref; get() and put() are for the refs a caller has besides.
 //! Its bcachefs state - bch_folio, vfs/pagecache.c's - is created on it before
 //! it's read into, and partially_uptodate is the read's to keep; the rest is
-//! under the state's lock, lock_state_if_any()'s.
+//! under the state's lock, lock_state()'s.
 //!
 //! A LockedFolio is one looked up locked and with a ref, both its own: a
 //! Folio until it's dropped, which unlocks and puts it. A FolioRef is one
@@ -21,34 +21,17 @@
 
 use super::inode::InodeInfo;
 use crate::c;
-use crate::errcode::{errptr_to_result, loff_to_result, ret_to_result_void, BchError};
-use crate::fs::Fs;
+use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
 use crate::locking::Guard;
 use crate::util::kernel::{cond_resched, loff};
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_int;
 use core::marker::PhantomData;
 use core::ops::{ControlFlow, Deref, DerefMut};
 use core::ptr::NonNull;
+use kernel::page::PAGE_SHIFT;
 use cstruct_macros::c_extern;
 
 c_extern! {
-    pub fn __bch2_folio_create(folio: *mut c::folio, gfp: c::gfp_t) -> *mut c::bch_folio;
-    pub fn bch2_folio_create(folio: *mut c::folio, gfp: c::gfp_t) -> *mut c::bch_folio;
-    fn bch2_seek_pagecache_data(vinode: *mut c::inode, start: c::loff_t, end: c::loff_t,
-                                min_replicas: c_uint, nonblock: bool) -> c::loff_t;
-    fn bch2_write_invalidate_inode_pages_range(mapping: *mut c::address_space, start: c::loff_t,
-                                               end: c::loff_t) -> c_int;
-    fn bch2_mark_pagecache_unallocated(inode: *mut c::bch_inode_info, start: u64, end: u64);
-    fn bch2_seek_pagecache_hole(vinode: *mut c::inode, start: c::loff_t, end: c::loff_t,
-                                min_replicas: c_uint, nonblock: bool) -> c::loff_t;
-    fn bch2_clamp_data_hole(vinode: *mut c::inode, hole_start: *mut u64, hole_end: *mut u64,
-                            min_replicas: c_uint, nonblock: bool) -> c_int;
-    fn bch2_mark_pagecache_reserved(inode: *mut c::bch_inode_info, start: *mut u64, end: u64,
-                                    nonblock: bool) -> c_int;
-    fn bch2_folio_set(c: *mut Fs, inode: *mut c::bch_inode_info, folios: *mut *mut c::folio,
-                      nr: c_uint) -> c_int;
-    fn bch2_get_folio_disk_reservation(c: *mut Fs, inode: *mut c::bch_inode_info, folio: *mut c::folio,
-                                       check_enospc: bool) -> c_int;
     // buffered.c's:
     fn bch2_read_single_folio(folio: *mut c::folio, mapping: *mut c::address_space, extend: bool) -> c_int;
 }
@@ -159,52 +142,34 @@ impl Folio {
         unsafe { c::folio_put(self.as_ptr()) }
     }
 
-    fn bch(self) -> Option<NonNull<c::bch_folio>> {
+    pub(super) fn state_ptr(self) -> Option<NonNull<c::bch_folio>> {
         NonNull::new(unsafe { c::rust_folio_get_private(self.as_ptr()) }.cast())
     }
 
-    /// Its bcachefs state, made if it has none; false if that fails.
-    pub fn bch_create(self, gfp: c::gfp_t) -> bool {
-        !unsafe { bch2_folio_create(self.as_ptr(), gfp) }.is_null()
-    }
-
-    /// bch_create(), for a folio not yet in the page cache.
-    pub fn bch_create_new(self, gfp: c::gfp_t) -> bool {
-        !unsafe { __bch2_folio_create(self.as_ptr(), gfp) }.is_null()
-    }
-
-    /// Its bcachefs state freed: the folio's never been read into.
-    pub fn bch_release(self) {
+    /// Its bcachefs state freed.
+    pub fn free_state(self) {
         unsafe { c::kfree(c::folio_detach_private(self.as_ptr())) }
     }
 
     /// Panics if it has no bcachefs state.
     pub fn partially_uptodate(self) -> u16 {
-        unsafe { (*self.bch().expect("a folio's bch_folio").as_ptr()).partially_uptodate }
+        unsafe { (*self.state_ptr().expect("a folio's bch_folio").as_ptr()).partially_uptodate }
     }
 
     pub fn set_partially_uptodate(self, sectors: u16) {
-        unsafe { (*self.bch().expect("a folio's bch_folio").as_ptr()).partially_uptodate = sectors }
+        unsafe { (*self.state_ptr().expect("a folio's bch_folio").as_ptr()).partially_uptodate = sectors }
     }
 
     /// Its bcachefs state, locked, if it has any.
     pub fn lock_state_if_any(&self) -> Option<FolioStateGuard<'_>> {
-        let s = unsafe { self.bch()?.as_ref() };
+        let s = unsafe { self.state_ptr()?.as_ref() };
         Some(FolioStateGuard { guard: s.state.lock(), sectors: self.nr_sectors() })
     }
 
-    /// Its bcachefs state brought up to date with the btree: bch2_folio_set().
-    pub fn bch_set(self, inode: &InodeInfo) -> Result<(), BchError> {
-        let mut folio = self.as_ptr();
-        ret_to_result_void(unsafe { bch2_folio_set(inode.fs().as_ptr(), inode.raw(), &mut folio, 1) })
-    }
-
-    /// The disk and quota reservation for writing all of it back:
-    /// bch2_get_folio_disk_reservation().
-    pub fn disk_reservation(self, inode: &InodeInfo, check_enospc: bool) -> Result<(), BchError> {
-        ret_to_result_void(unsafe {
-            bch2_get_folio_disk_reservation(inode.fs().as_ptr(), inode.raw(), self.as_ptr(), check_enospc)
-        })
+    /// Its bcachefs state, locked: its caller made it first. Panics if it
+    /// has none.
+    pub fn lock_state(&self) -> FolioStateGuard<'_> {
+        self.lock_state_if_any().expect("a folio's bch_folio")
     }
 }
 
@@ -288,6 +253,11 @@ impl FolioRef<'_> {
     pub fn try_lock(&self) -> Option<FolioGuard<'_>> {
         unsafe { c::folio_trylock(self.0.as_ptr()) }.then(|| FolioGuard(self.0, PhantomData))
     }
+
+    /// Locked: EAGAIN if @nonblock and that would wait.
+    pub fn lock_or_eagain(&self, nonblock: bool) -> Result<FolioGuard<'_>, BchError> {
+        if nonblock { self.try_lock().ok_or_else(|| c::EAGAIN.into()) } else { Ok(self.lock()) }
+    }
 }
 
 /// A FolioRef's folio, locked: unlocked when dropped.
@@ -363,23 +333,6 @@ impl Mapping {
         ret_to_result_void(unsafe { c::rust_filemap_write_and_wait_range(self.as_ptr(), loff(start), loff(end)) })
     }
 
-    /// The first data in [@start, @end), or @end: dirty sectors of at least
-    /// @min_replicas replicas, reserved ones counted. EAGAIN if @nonblock and
-    /// it would have to wait on a folio lock: bch2_seek_pagecache_data().
-    pub fn seek_data(self, start: u64, end: u64, min_replicas: u32, nonblock: bool) -> Result<u64, BchError> {
-        loff_to_result(unsafe {
-            bch2_seek_pagecache_data((*self.as_ptr()).host, loff(start), loff(end), min_replicas, nonblock)
-        })
-    }
-
-    /// The first hole in [@start, @end), or @end - as seek_data() has data:
-    /// bch2_seek_pagecache_hole().
-    pub fn seek_hole(self, start: u64, end: u64, min_replicas: u32, nonblock: bool) -> Result<u64, BchError> {
-        loff_to_result(unsafe {
-            bch2_seek_pagecache_hole((*self.as_ptr()).host, loff(start), loff(end), min_replicas, nonblock)
-        })
-    }
-
     /// Its folios from index @start to @end, inclusive, to @f in order until
     /// it breaks or errors: unlocked, for @f to lock or try to. A batch at a
     /// time, as filemap_get_folios() finds them, with a cond_resched() between.
@@ -412,9 +365,30 @@ impl Mapping {
     }
 
     /// Its pages from @start to @end, inclusive, written and dropped:
-    /// bch2_write_invalidate_inode_pages_range().
+    /// pagecache_block must be held.
     pub fn write_invalidate_range(self, start: u64, end: u64) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { bch2_write_invalidate_inode_pages_range(self.as_ptr(), loff(start), loff(end)) })
+        /*
+         * XXX: the way this is currently implemented, we can spin if a process
+         * is continually redirtying a specific page
+         */
+        loop {
+            if self.is_empty() {
+                return Ok(());
+            }
+
+            self.write_and_wait_range(start, end)?;
+
+            if self.is_empty() {
+                return Ok(());
+            }
+
+            match ret_to_result_void(unsafe {
+                c::invalidate_inode_pages2_range(self.as_ptr(), (start >> PAGE_SHIFT) as _, (end >> PAGE_SHIFT) as _)
+            }) {
+                Err(e) if e.matches(c::EBUSY) => {}
+                r => return r,
+            }
+        }
     }
 
     /// The folio at @index, if there is one: filemap_lock_folio().
@@ -440,29 +414,6 @@ impl Mapping {
     /// @folio marked dirty: filemap_dirty_folio().
     pub fn dirty_folio(self, folio: Folio) -> bool {
         unsafe { c::rust_filemap_dirty_folio(self.as_ptr(), folio.as_ptr()) }
-    }
-
-    /// The hole [@start, @end), in sectors, shrunk to where the page cache
-    /// has no data: its start past the data at the front, its end at the next.
-    /// EAGAIN if @nonblock and it would have to wait on a folio lock:
-    /// bch2_clamp_data_hole().
-    pub fn clamp_data_hole(self, start: &mut u64, end: &mut u64, min_replicas: u32, nonblock: bool)
-        -> Result<(), BchError>
-    {
-        ret_to_result_void(unsafe { bch2_clamp_data_hole((*self.as_ptr()).host, start, end, min_replicas, nonblock) })
-    }
-
-    /// Its folios' sectors from @start to @end, in sectors, marked reserved,
-    /// @start advanced past those done. EAGAIN if @nonblock and it would have
-    /// to wait on a folio lock: bch2_mark_pagecache_reserved().
-    pub fn mark_reserved(self, start: &mut u64, end: u64, nonblock: bool) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { bch2_mark_pagecache_reserved(self.inode().raw(), start, end, nonblock) })
-    }
-
-    /// Its folios' sectors from @start to @end, in sectors, marked
-    /// unallocated: bch2_mark_pagecache_unallocated().
-    pub fn mark_unallocated(self, start: u64, end: u64) {
-        unsafe { bch2_mark_pagecache_unallocated(self.inode().raw(), start, end) }
     }
 
     pub fn readahead_gfp(self) -> c::gfp_t {
@@ -521,7 +472,7 @@ impl Readahead<'_> {
     /// @folio given back unread, its bcachefs state freed: the VFS unlocks it.
     /// Back to front, so readahead_control's window stays contiguous.
     pub fn unread(&mut self, folio: Folio) {
-        folio.bch_release();
+        folio.free_state();
         let n = folio.nr_pages();
         self.0._nr_pages += n as u32;
         self.0._index -= n as core::ffi::c_ulong;

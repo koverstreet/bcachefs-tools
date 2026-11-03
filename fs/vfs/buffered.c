@@ -776,7 +776,7 @@ do_io:
 	/*
 	 * Things get really hairy with errors during writeback:
 	 */
-	ret = bch2_get_folio_disk_reservation(c, inode, folio, false);
+	ret = bch2_get_folio_disk_reservation(c, inode, folio);
 	BUG_ON(ret);
 
 	/* Before unlocking the page, get copy of reservations: */

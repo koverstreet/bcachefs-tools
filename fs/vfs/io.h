@@ -56,11 +56,6 @@ static inline struct address_space *faults_disabled_mapping(struct bch_fs *c)
 	return fdm_get(&c->fdm_table);
 }
 
-static inline void set_fdm_dropped_locks(struct bch_fs *c)
-{
-	fdm_set_dropped_locks(&c->fdm_table);
-}
-
 static inline bool bch2_fdm_dropped_locks(struct bch_fs *c)
 {
 	return fdm_dropped_locks(&c->fdm_table);

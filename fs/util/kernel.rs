@@ -12,6 +12,12 @@ pub const PAGE_SIZE: usize = kernel::page::PAGE_SIZE;
 #[cfg(not(kernel))]
 pub const PAGE_SIZE: usize = 4096;
 
+/// PAGE_SIZE, for byte positions.
+pub const PAGE_BYTES: u64 = PAGE_SIZE as u64;
+/// A page's sectors: PAGE_SECTORS, and its shift.
+pub const PAGE_SECTORS_SHIFT: usize = PAGE_SIZE.trailing_zeros() as usize - 9;
+pub const PAGE_SECTORS: u64 = 1 << PAGE_SECTORS_SHIFT;
+
 /// C's unlikely(): @b, and the branch it decides is a slowpath to the
 /// compiler - laid out of line, kept out of the fastpath's registers.
 #[inline(always)]

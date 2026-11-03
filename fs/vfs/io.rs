@@ -2,6 +2,7 @@
 
 use core::ffi::c_int;
 use core::ops::ControlFlow;
+use kernel::alloc::flags::GFP_KERNEL;
 use kernel::page::PAGE_SHIFT;
 
 use cstruct_macros::c_export;
@@ -25,7 +26,7 @@ use crate::util::bio::{Bio, BioBox, Endio, RawBio};
 use crate::data_structures::bitmap::AtomicBitmap;
 use crate::util::file::File;
 use crate::util::gather::{Gather, GatherRef};
-use crate::util::kernel::{current_id, ktime_get_coarse_real_ts64, ktime_get_ns, PAGE_SIZE};
+use crate::util::kernel::{current_id, ktime_get_coarse_real_ts64, ktime_get_ns, PAGE_BYTES, PAGE_SECTORS, PAGE_SECTORS_SHIFT};
 use crate::util::log::LogMsg;
 use crate::util::refcount::TryRefcount;
 use crate::util::rcu::read_lock;
@@ -170,9 +171,6 @@ pub(super) fn fsync(inode: &InodeInfo, file: &File, start: c::loff_t, end: c::lo
 
 /* truncate: */
 
-const PAGE_BYTES: u64 = PAGE_SIZE as u64;
-const PAGE_SECTORS_SHIFT: usize = PAGE_SHIFT - 9;
-const PAGE_SECTORS: u64 = 1 << PAGE_SECTORS_SHIFT;
 const MAX_LFS_FILESIZE: u64 = c::MAX_LFS_FILESIZE as u64;
 
 fn range_has_data(fs: &Fs, subvol: u32, start: Bpos, end: Bpos) -> Result<bool, BchError> {
@@ -240,7 +238,7 @@ impl InodeInfo {
             return Ok(false);
         }
 
-        if !folio.bch_create(c::GFP_KERNEL) {
+        if !folio.create_state(GFP_KERNEL) {
             return Err(c::ENOMEM.into());
         }
 
@@ -248,16 +246,16 @@ impl InodeInfo {
             folio.read_single(mapping)?;
         }
 
-        folio.bch_set(self)?;
+        folio.update_state(self)?;
 
         let block_bytes = fs.block_bytes() as usize;
         let blocks = start_offset.next_multiple_of(block_bytes) >> 9..(end_offset / block_bytes * block_bytes) >> 9;
         let mut i_sectors_delta = 0;
-        for s in folio.lock_state_if_any().expect("bch_set()'s bch_folio").sectors().get_mut(blocks).into_iter().flatten() {
+        for s in folio.lock_state().sectors().get_mut(blocks).into_iter().flatten() {
             s.bits.set_nr_replicas(0);
 
-            i_sectors_delta -= i64::from(s.state == SECTOR_dirty as u8);
-            s.state = SECTOR_unallocated as u8;
+            i_sectors_delta -= i64::from(s.state() == SECTOR_dirty);
+            s.set_state(SECTOR_unallocated);
         }
 
         self.i_sectors_acct(None, i_sectors_delta);
@@ -281,8 +279,8 @@ impl InodeInfo {
         if i_size > folio.pos() {
             end_pos = end_pos.min(i_size);
         }
-        let ret = folio.lock_state_if_any().expect("bch_set()'s bch_folio")
-            .sectors()[((end_pos - 1 - folio.pos()) >> 9) as usize].state >= SECTOR_dirty as u8;
+        let ret = folio.lock_state()
+            .sectors()[((end_pos - 1 - folio.pos()) >> 9) as usize].has_data();
 
         folio.zero_segment(start_offset, end_offset);
 
@@ -292,7 +290,7 @@ impl InodeInfo {
          * XXX: because we aren't currently tracking whether the folio has actual
          * data in it (vs. just 0s, or only partially written) this wrong. ick.
          */
-        folio.disk_reservation(self, false)
+        folio.reserve_writeback(self)
             .expect("truncate_folio: a disk reservation that doesn't check for ENOSPC");
 
         /*

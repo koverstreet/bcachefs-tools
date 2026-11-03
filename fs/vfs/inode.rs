@@ -34,7 +34,7 @@
 //! transaction.
 
 use arrayvec::ArrayVec;
-use core::ffi::{c_int, c_uint, c_void, CStr};
+use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
 use core::mem::offset_of;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
@@ -52,6 +52,7 @@ use crate::quota;
 use crate::prt;
 use crate::util::ffi::Opaque;
 use crate::util::file::File;
+use crate::util::kernel::HZ;
 use crate::util::log::LogMsg;
 use cstruct_macros::{c_export, c_extern};
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
@@ -103,8 +104,8 @@ const _: () = assert!(offset_of!(InodeInfo, v) == 0);
 // SAFETY: the kernel's inode, shared by every thread with it open or in a VFS
 // call. What Rust reaches through &InodeInfo is atomic, behind a lock, or the
 // VFS inode's, read and written as VfsInode has it. The plain fields -
-// ei_last_dirtied, ei_inodes_idx, the inode cache's hash entries - are C's,
-// under its locks: Rust doesn't touch them.
+// ei_inodes_idx, the inode cache's hash entries - are C's, under its locks:
+// Rust doesn't touch them. ei_last_dirtied is a hint, written racily by both.
 unsafe impl Send for InodeInfo {}
 unsafe impl Sync for InodeInfo {}
 
@@ -255,12 +256,23 @@ impl InodeInfo {
         inode::write(t, &mut iter, &mut bi)
     }
 
+    /// Writeback of it scheduled, writeback_timeout from now.
+    pub(crate) fn queue_writeback(&self) {
+        let fs = self.fs();
+        let timeout = fs.opts.writeback_timeout.get();
+
+        if timeout != 0 {
+            self.ei_writeback_timer.queue(&fs.vfs.writeback_wq, c_ulong::from(timeout) * HZ);
+        }
+    }
+
     /// Forget the cached allocation state, as anything that deallocates must:
     /// see InodeReserved.
     pub fn clear_reserved(&self) {
         let mut r = self.ei_reserved.lock();
-        r.ei_reserved_start = 0;
-        r.ei_reserved_end = 0;
+        let range = r.published();
+        range.ei_reserved_start.set(0);
+        range.ei_reserved_end.set(0);
     }
 
     pub fn update_lock(&self) -> UpdateLock<'_> {
@@ -555,7 +567,11 @@ pub struct QuotaReservation<'i> {
     res:   c::quota_res,
 }
 
-impl QuotaReservation<'_> {
+impl<'i> QuotaReservation<'i> {
+    pub fn inode(&self) -> &'i InodeInfo {
+        self.inode
+    }
+
     pub fn add(&mut self, sectors: u64, check_enospc: bool) -> Result<(), BchError> {
         self.inode.quota_reservation_add(&mut self.res, sectors, check_enospc)
     }

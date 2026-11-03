@@ -4,6 +4,7 @@
 
 use crate::cstructs::c;
 use crate::locking::Locked;
+use crate::published;
 use crate::types::c_default;
 use crate::data_structures::bitmap::AtomicBitflags;
 use crate::util::projections::Volatile;
@@ -40,7 +41,7 @@ pub struct InodeInfo {
     pub ei_inum_hash: c::bch_inum_hash_entry,
 
     #[c_lock("spinlock_t ei_reserved_lock")]
-    pub ei_reserved: Locked<c::spinlock_t, InodeReserved>,
+    pub ei_reserved: Locked<c::spinlock_t, InodeReserved, InodeReservedRange>,
 
     pub ei_inodes_idx: c_uint,
     #[c("unsigned long ei_flags")]
@@ -127,10 +128,18 @@ c_enum! {
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct InodeReserved {
-    pub ei_reserved_start: u64,
-    pub ei_reserved_end: u64,
     pub ei_reserved_replicas: u8,
     pub ei_reserved_state: u8,
+}
+
+published! {
+    /// InodeReserved's range: written under ei_reserved_lock, and read without
+    /// it by the buffered write path, to take the lock only for a folio in it.
+    #[derive(CStruct)]
+    pub struct InodeReservedRange {
+        pub ei_reserved_start: Volatile<u64>,
+        pub ei_reserved_end: Volatile<u64>,
+    }
 }
 
 /// An inode's quota accounting, under ei_quota_lock.

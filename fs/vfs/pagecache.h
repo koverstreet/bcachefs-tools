@@ -7,10 +7,7 @@
 #include <linux/pagemap.h>
 
 #include "vfs/pagecache_gen.h"
-
-int bch2_filemap_get_contig_folios_d(struct address_space *, loff_t,
-				     u64, fgf_t, gfp_t, folios *);
-int bch2_write_invalidate_inode_pages_range(struct address_space *, loff_t, loff_t);
+#include "vfs/folio_reservation_gen.h"
 
 /*
  * Use u64 for the end pos and sector helpers because if the folio covers the
@@ -46,15 +43,6 @@ static inline void bch2_folio_sector_set(struct folio *folio,
 	s->s[i].state = n;
 }
 
-/* file offset (to folio offset) to bch_folio_sector index */
-static inline int folio_pos_to_s(struct folio *folio, loff_t pos)
-{
-	u64 f_offset = pos - folio_pos(folio);
-
-	BUG_ON(pos < folio_pos(folio) || pos >= folio_end_pos(folio));
-	return f_offset >> SECTOR_SHIFT;
-}
-
 /* for newly allocated folios: */
 static inline void __bch2_folio_release(struct folio *folio)
 {
@@ -71,72 +59,5 @@ static inline struct bch_folio *bch2_folio(struct folio *folio)
 {
 	return folio_get_private(folio);
 }
-
-struct bch_folio *__bch2_folio_create(struct folio *, gfp_t);
-struct bch_folio *bch2_folio_create(struct folio *, gfp_t);
-
-static inline unsigned inode_nr_replicas(struct bch_fs *c, struct bch_inode_info *inode)
-{
-	/* XXX: this should not be open coded */
-	return inode->ei_inode.bi_data_replicas
-		? inode->ei_inode.bi_data_replicas - 1
-		: c->opts.data_replicas;
-}
-
-static inline void bch2_folio_reservation_init(struct bch_fs *c,
-			struct bch_inode_info *inode,
-			struct bch2_folio_reservation *res)
-{
-	memset(res, 0, sizeof(*res));
-
-	res->disk.c = c;
-	res->disk.nr_replicas = inode_nr_replicas(c, inode);
-}
-
-int bch2_folio_set(struct bch_fs *, struct bch_inode_info *,
-		   struct folio **, unsigned);
-void bch2_bio_page_state_set(const struct bch_fs *, struct bio *, struct bkey_s_c);
-
-void bch2_mark_pagecache_unallocated(struct bch_inode_info *, u64, u64);
-int bch2_mark_pagecache_reserved(struct bch_inode_info *, u64 *, u64, bool);
-
-int bch2_get_folio_disk_reservation(struct bch_fs *,
-				struct bch_inode_info *,
-				struct folio *, bool);
-
-void bch2_folio_reservation_put(struct bch_fs *,
-			struct bch_inode_info *,
-			struct bch2_folio_reservation *);
-int bch2_folio_reservation_get(struct bch_fs *,
-			struct bch_inode_info *,
-			struct folio *,
-			struct bch2_folio_reservation *,
-			size_t, size_t);
-ssize_t bch2_folio_reservation_get_partial(struct bch_fs *,
-			struct bch_inode_info *,
-			struct folio *,
-			struct bch2_folio_reservation *,
-			size_t, size_t);
-
-void bch2_set_folio_undirty(struct bch_fs *c,
-			    struct bch_inode_info *inode,
-			    struct folio *folio,
-			    size_t offset, size_t len);
-bool bch2_set_folio_dirty(struct bch_fs *,
-			  struct bch_inode_info *,
-			  struct folio *,
-			  struct bch2_folio_reservation *,
-			  size_t, size_t);
-
-bool bch2_vfs_dirty_folio(struct address_space *mapping, struct folio *folio);
-
-vm_fault_t bch2_page_fault(struct vm_fault *);
-vm_fault_t bch2_page_mkwrite(struct vm_fault *);
-void bch2_invalidate_folio(struct folio *, size_t, size_t);
-bool bch2_release_folio(struct folio *, gfp_t);
-
-loff_t bch2_seek_pagecache_data(struct inode *, loff_t, loff_t, unsigned, bool);
-loff_t bch2_seek_pagecache_hole(struct inode *, loff_t, loff_t, unsigned, bool);
-int bch2_clamp_data_hole(struct inode *, u64 *, u64 *, unsigned, bool);
 
 #endif /* _BCACHEFS_FS_IO_PAGECACHE_H */

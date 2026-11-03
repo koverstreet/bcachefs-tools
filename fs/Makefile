@@ -104,8 +104,7 @@ bcachefs-y		:=			\
 	vendor/min_heap.o			\
 	vfs/fs.o				\
 	vfs/buffered.o				\
-	vfs/direct.o				\
-	vfs/pagecache.o
+	vfs/direct.o
 
 ifdef KBUILD_EXTMOD
 ifneq ($(wildcard $(src)/module-version.c),)

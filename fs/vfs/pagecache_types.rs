@@ -6,7 +6,7 @@
 
 use crate::cstructs::c;
 use crate::locking::Locked;
-use crate::types::{DArray, c_default};
+use crate::types::{rust_only, DArray, c_default};
 use cstruct_macros::{bitfield, c_enum, c_typedef, c_xmacro, CStruct, TypeInfo};
 use nestify::nest;
 use core::sync::atomic::AtomicI32;
@@ -74,6 +74,11 @@ nest! {
             /* Owns PAGE_SECTORS * replicas_reserved sized in memory reservation: */
             replicas_reserved: u4,
         },
+        /*
+         * FIXME: a bch_folio_sector_state, once buffered.c is Rust: C can't
+         * have it as one - an enum bitfield takes the enum's alignment, and
+         * would make this 4 bytes, not 2.
+         */
         pub state: u8,
     }
 }
@@ -98,7 +103,7 @@ pub struct FolioState {
     pub replicas_reserved_at: u8,
     /*
      * A foreground reservation fell back: writeback shouldn't insist on the
-     * inode's count - see bch2_get_folio_disk_reservation().
+     * inode's count - see Folio::reserve_writeback().
      */
     pub reserved_degraded: bool,
     pub s: [c::bch_folio_sector; 0],
@@ -123,8 +128,5 @@ c_default!(bch_folio);
 #[repr(C)]
 #[derive(CStruct)]
 pub struct bch2_folio_reservation {
-    pub disk: c::disk_reservation,
-    pub quota: c::quota_res,
-    /* @disk fell back to fewer replicas than the inode asks for */
-    pub degraded: bool,
+    pub r: rust_only!(crate::vfs::folio_reservation::FolioReservation<'static>),
 }

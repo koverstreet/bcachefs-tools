@@ -7,8 +7,8 @@
 //! are InodeInfo's, &self the file's inode - FileVTable over InodeFile,
 //! whose ops_of() is f_inode. Open checks and release flushes, making and
 //! dropping nothing. llseek, fsync, fallocate and remap_file_range are
-//! vfs/io.rs's; read and write and a mapping's faults are C's still, or the
-//! kernel's generics, set in the tables as they are.
+//! vfs/io.rs's; read and write are C's still. A mapping's ops are InodeInfo's
+//! VmOps, its map_pages the kernel's generic, set in the table as it is.
 //!
 //! A shared writable mapping of a filesystem gone emergency read-only is
 //! refused: its first write fault couldn't get a disk reservation, and
@@ -75,30 +75,120 @@ use crate::fs::Fs;
 use crate::snapshots::subvolume;
 use crate::types::CStatic;
 use crate::util::file::{File, FileData, FileOps, FileVTable};
+use crate::util::kernel::{current_id, PAGE_SIZE};
+use crate::util::vm::{VmFault, VmFaultRet, VmOps, VmVTable};
+use core::cmp::{max, min};
+use kernel::page::PAGE_SHIFT;
 use cstruct_macros::{c_export, c_extern, vtable};
 
 use super::inode::InodeInfo;
 use super::io;
+use super::folio_reservation::FolioReservation;
 use super::ioctl::fs_file_ioctl;
 
 c_extern! {
     // The data path's, C's still:
     fn bch2_read_iter(iocb: *mut c::kiocb, iter: *mut c::iov_iter) -> isize;
     fn bch2_write_iter(iocb: *mut c::kiocb, iter: *mut c::iov_iter) -> isize;
-    fn bch2_page_fault(vmf: *mut c::vm_fault) -> c::vm_fault_t;
-    fn bch2_page_mkwrite(vmf: *mut c::vm_fault) -> c::vm_fault_t;
 }
 
 // SAFETY, of the CStatic: immutable, its only parts that aren't Sync pointers
 static VM_OPS: CStatic<c::vm_operations_struct> = unsafe {
-    CStatic::new(c::vm_operations_struct {
-        fault:        Some(bch2_page_fault),
-        map_pages:    Some(c::filemap_map_pages),
-        page_mkwrite: Some(bch2_page_mkwrite),
-        // SAFETY: zero is NULL, an op not implemented
-        ..core::mem::zeroed()
+    CStatic::new({
+        let mut ops = VmVTable::<InodeInfo>::OPS;
+        ops.map_pages = Some(c::filemap_map_pages);
+        ops
     })
 };
+
+#[vtable]
+impl VmOps for InodeInfo {
+    fn fault(vmf: &VmFault) -> VmFaultRet {
+        let mapping = vmf.file().mapping();
+        let inode = unsafe { InodeInfo::of_file(vmf.file()) };
+        let fs = inode.fs();
+        let fdm = fs.fdm_table.get();
+
+        if fdm == Some(mapping) {
+            return VmFaultRet::SIGBUS;
+        }
+
+        /* Lock ordering: */
+        let _add = match fdm {
+            Some(fdm) if fdm > mapping => match inode.ei_pagecache_lock.try_lock::<c::PagecacheAdd>() {
+                Some(add) => add,
+                None => {
+                    // the DIO that disabled faults on @fdm has its pagecache_block
+                    unsafe {
+                        fdm.inode().ei_pagecache_lock.unlocked_while::<c::PagecacheBlock, _>(|| {
+                            drop(inode.ei_pagecache_lock.lock::<c::PagecacheAdd>())
+                        })
+                    };
+
+                    /* Signal that lock has been dropped: */
+                    fs.fdm_table.set_dropped_locks();
+                    return VmFaultRet::SIGBUS;
+                }
+            },
+            _ => inode.ei_pagecache_lock.lock::<c::PagecacheAdd>(),
+        };
+
+        vmf.filemap_fault()
+    }
+
+    fn page_mkwrite(vmf: &VmFault) -> VmFaultRet {
+        let file = vmf.file();
+        let inode = unsafe { InodeInfo::of_file(file) };
+        let mapping = file.mapping();
+        let fs = inode.fs();
+        let block_bytes = fs.block_bytes();
+        let folio = vmf.folio();
+
+        let file_offset = (vmf.pgoff() << PAGE_SHIFT) / block_bytes * block_bytes;
+        let offset = (file_offset - folio.pos()) as usize;
+        let mut len = max(PAGE_SIZE, block_bytes as usize);
+
+        assert!(offset + len <= folio.size());
+
+        let mut res = FolioReservation::new(inode);
+
+        let _create_lock = fs.snapshots.create_lock.read();
+        let _write = inode.vfs().sb().start_pagefault();
+        let _ = file.update_time();
+
+        /*
+         * Not strictly necessary, but helps avoid dio writes livelocking in
+         * bch2_write_invalidate_inode_pages_range() - can drop this if/when we get
+         * a bch2_write_invalidate_inode_pages_range() that works without dropping
+         * page lock before invalidating page
+         */
+        let _add = inode.ei_pagecache_lock.lock::<c::PagecacheAdd>();
+
+        let locked = folio.lock();
+        let isize = inode.vfs().size();
+
+        if locked.mapping() != Some(mapping) || file_offset >= isize {
+            return VmFaultRet::NOPAGE;
+        }
+
+        len = min(len as u64, isize - file_offset) as usize;
+
+        if locked.update_state(inode).and_then(|()| res.add(*locked, offset, len)).is_err() {
+            return VmFaultRet::SIGBUS;
+        }
+
+        inode.ei_last_dirtied.set(current_id() as _);
+
+        res.dirty(*locked, offset, len);
+        drop(res);
+
+        locked.keep_locked().wait_stable();
+
+        inode.queue_writeback();
+
+        VmFaultRet::LOCKED
+    }
+}
 
 /// A regular file's state: its inode's. Never made: there's nothing to make.
 /// FileVTable::<InodeInfo> would take the inode for private data - the

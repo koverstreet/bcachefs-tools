@@ -68,17 +68,6 @@ static inline bool fdm_dropped_locks(struct fdm_hash *ht)
 	return false;
 }
 
-static inline void fdm_set_dropped_locks(struct fdm_hash *ht)
-{
-	for (unsigned i = 0; i < FDM_NR_HASH; i++) {
-		unsigned h = fdm_hash(ht, i, current);
-		if (READ_ONCE(ht->slots[h].task) == current) {
-			ht->slots[h].mapping |= 1;
-			return;
-		}
-	}
-}
-
 /*
  * Insert current task's mapping. Only current ever inserts for itself,
  * so no lock needed. With 3-way hashing at ~3% occupancy, all three

@@ -181,9 +181,11 @@ pub mod vfs {
     #[cfg(kernel)] pub mod dentry;
     #[cfg(kernel)] pub mod dir;
     #[cfg(kernel)] pub mod export;
+    #[cfg(kernel)] pub mod fdm;
     #[cfg(kernel)] pub mod fiemap;
     #[cfg(kernel)] pub mod file;
     #[cfg(kernel)] pub mod folio;
+    #[cfg(kernel)] pub mod folio_reservation;
     #[cfg(kernel)] pub mod fs_type;
     #[cfg(kernel)] pub mod iattr;
     #[cfg(kernel)] pub mod idmap;
@@ -194,6 +196,7 @@ pub mod vfs {
     #[cfg(kernel)] pub mod mount;
     #[cfg(kernel)] pub mod namei;
     #[cfg(kernel)] pub mod ops;
+    #[cfg(kernel)] pub mod pagecache;
     #[cfg(kernel)] pub mod path;
     #[cfg(kernel)] pub mod status_fd;
     #[cfg(kernel)] pub mod super_block;
