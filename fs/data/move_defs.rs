@@ -11,6 +11,7 @@ use crate::util::task::RunQueue;
 use core::sync::atomic::{AtomicI32, AtomicPtr};
 use crate::util::ffi::Opaque;
 use cstruct_macros::CStruct;
+use pin_init::pin_data;
 
 /*
  * Tracks in-flight data movement IO for ratelimiting.
@@ -28,8 +29,9 @@ use cstruct_macros::CStruct;
  *
  * Lifetime: every in-flight IO holds closure_get(&ctxt->cl).
  * Moving::flush_all() waits for all IO via closure_sync(),
- * and bch2_moving_ctxt_exit() asserts all counters are zero.
+ * and MovingCtxt's drop asserts all counters are zero.
  */
+#[pin_data]
 #[repr(C)]
 #[derive(CStruct)]
 pub struct moving_context {
@@ -42,6 +44,7 @@ pub struct moving_context {
 
     /* For waiting on outstanding reads and writes: */
     #[c("struct closure cl")]
+    #[pin]
     pub cl: Opaque<c::closure>,
 
     pub io: moving_io_counts,
@@ -50,6 +53,7 @@ pub struct moving_context {
      * Its updates' tasks, run in its waits - data/moving_update.rs - whose
      * EventCount every completion wakes: Moving::wake()
      */
+    #[pin]
     pub runq: RunQueue,
     /*
      * Its data updates in flight, in the order they were issued, by seq - an

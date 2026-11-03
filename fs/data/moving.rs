@@ -17,9 +17,9 @@
 //!
 //! The context is pinned - its closure waited on in place - and owns its
 //! transaction, trans(), which ratelimit(), flush_all() and move_extent()
-//! unlock: keys borrowed from it are stale after, as after any unlock. MovingCtxt owns one; moving through it is
-//! Moving's, a borrow - of a MovingCtxt, or of a context C hands Rust. IO that
-//! outlives the borrow, counted in the context, is a MovingIo.
+//! unlock: keys borrowed from it are stale after, as after any unlock.
+//! MovingCtxt owns one; moving through it is Moving's, a borrow of one. IO
+//! that outlives the borrow, counted in the context, is a MovingIo.
 
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{BtreeIter, BtreeTrans, TransFnName};
@@ -37,12 +37,14 @@ use crate::util::kthread::Kthread;
 use crate::util::task::{waiter, RunQueue};
 use crate::util::sleep::Sleep;
 use crate::types::Fifo;
+use crate::util::ffi::Opaque;
 use crate::util::gather::GatherRef;
+use core::cell::{Cell, UnsafeCell};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, AtomicPtr};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::c_export;
+use pin_init::{pin_init, pin_init_from_closure};
 
 pub use c::MoveStats;
 
@@ -167,70 +169,25 @@ impl<'a> MovingCtxt<'a> {
     pub fn new(fs: &'a Fs, stats: &'a MoveStats, wp: c::write_point_specifier, wait_on_copygc: bool)
         -> Result<MovingCtxt<'a>, AllocError>
     {
-        // SAFETY: bch2_moving_ctxt_init() initializes all of it, in place
-        let init = unsafe {
-            ::pin_init::pin_init_from_closure(move |slot: *mut c::moving_context| {
-                bch2_moving_ctxt_init(slot, fs, core::ptr::from_ref(stats).cast_mut(), wp, wait_on_copygc);
-                Ok::<(), AllocError>(())
-            })
-        };
+        static FN: TransFnName = TransFnName::new();
+        let init = pin_init!(c::moving_context {
+            trans:          unsafe { c::__bch2_trans_get(fs.as_ptr(), FN.idx(function_name!())) },
+            stats:          AtomicPtr::new(core::ptr::from_ref(stats).cast_mut()),
+            wp,
+            wait_on_copygc,
+            cl <- unsafe {
+                pin_init_from_closure(|cl: *mut Opaque<c::closure>| {
+                    c::closure_init_stack(cl.cast());
+                    Ok(())
+                })
+            },
+            io:             Default::default(),
+            runq:           pin_init::zeroed(),
+            updates:        UnsafeCell::new(Fifo::new()),
+            write_next:     Cell::new(0),
+        }? AllocError);
         let ctxt = alloc_pinned(init)?;
         Ok(MovingCtxt { ctxt: NonNull::new(ctxt).expect("alloc_pinned() returns its allocation"), life: PhantomData })
-    }
-}
-
-/// A moving context at @ctxt: its moves counted into @stats, written to @wp,
-/// and with @wait_on_copygc, ratelimit() waiting while copygc runs.
-///
-/// # Safety
-/// @ctxt doesn't move until bch2_moving_ctxt_exit(), and @stats - null, or
-/// not - outlives it.
-#[c_export]
-pub unsafe fn bch2_moving_ctxt_init(ctxt: *mut c::moving_context, c: &Fs, stats: *mut c::bch_move_stats,
-                                    wp: c::write_point_specifier, wait_on_copygc: bool) {
-    static FN: TransFnName = TransFnName::new();
-    // SAFETY: the caller's. Zeroed, a context is empty: what's left zero is
-    // valid so
-    unsafe {
-        ctxt.write_bytes(0, 1);
-        (*ctxt).trans = c::__bch2_trans_get(c.as_ptr(), FN.idx(function_name!()));
-        (*ctxt).stats = AtomicPtr::new(stats);
-        (*ctxt).wp = wp;
-        (*ctxt).wait_on_copygc = wait_on_copygc;
-        c::closure_init_stack((*ctxt).cl.as_ptr());
-    }
-}
-
-/// bch2_moving_ctxt_init() undone, once what's in flight is done.
-///
-/// # Safety
-/// @ctxt is bch2_moving_ctxt_init()'s, and nothing else uses it meanwhile.
-#[c_export]
-pub unsafe fn bch2_moving_ctxt_exit(ctxt: *mut c::moving_context) {
-    // SAFETY: the caller's
-    let trans = unsafe {
-        let moving = Moving::from_raw(ctxt);
-        moving.flush_all();
-
-        #[cfg(CONFIG_BCACHEFS_DEBUG)]
-        {
-            let io = moving.io();
-            for n in [&io.read_sectors, &io.write_sectors, &io.read_ios, &io.write_ios] {
-                assert!(n.load(Relaxed) == 0, "a moving context's IO still counted at exit");
-            }
-        }
-        (*ctxt).trans
-    };
-
-    // Putting a transaction mid-restart is an unhandled restart, but a mover
-    // can be told to exit before it's retried: so begin first
-    // SAFETY: the context's, no longer borrowed; zeroed, it's as init()
-    // found it, its fifo's buffer freed first
-    unsafe {
-        c::bch2_trans_begin(trans);
-        c::bch2_trans_put(trans);
-        drop(core::mem::take(&mut *(*ctxt).updates.get()));
-        ctxt.write_bytes(0, 1);
     }
 }
 
@@ -472,10 +429,22 @@ impl c::data_update {
 
 impl Drop for MovingCtxt<'_> {
     fn drop(&mut self) {
-        // SAFETY: ours, from new(); bch2_moving_ctxt_exit() waits for what's
-        // in flight before taking it off the list and putting the transaction
+        self.flush_all();
+
+        #[cfg(CONFIG_BCACHEFS_DEBUG)]
+        {
+            let io = self.io();
+            for n in [&io.read_sectors, &io.write_sectors, &io.read_ios, &io.write_ios] {
+                assert!(n.load(Relaxed) == 0, "a moving context's IO still counted at exit");
+            }
+        }
+
+        // Putting a transaction mid-restart is an unhandled restart, but a mover
+        // can be told to exit before it's retried: so begin first
         unsafe {
-            bch2_moving_ctxt_exit(self.ctxt.as_ptr());
+            let trans = self.ctxt.as_ref().trans;
+            c::bch2_trans_begin(trans);
+            c::bch2_trans_put(trans);
             free_pinned(self.ctxt.as_ptr());
         }
     }
