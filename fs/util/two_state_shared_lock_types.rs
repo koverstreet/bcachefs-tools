@@ -77,6 +77,17 @@ impl two_state_lock_t {
     pub fn try_lock<S: TwoState>(&self) -> Option<TwoStateGuard<'_, S>> {
         self.trylock(S::S).then_some(TwoStateGuard { lock: self, _s: PhantomData })
     }
+
+    /// @f with the lock dropped, and taken again after.
+    ///
+    /// # Safety
+    /// Our caller holds it in @S - not a guard we have.
+    pub unsafe fn unlocked_while<S: TwoState, R>(&self, f: impl FnOnce() -> R) -> R {
+        self.unlock_raw(S::S);
+        let r = f();
+        self.lock_raw(S::S);
+        r
+    }
 }
 
 pub struct TwoStateGuard<'a, S: TwoState> {
