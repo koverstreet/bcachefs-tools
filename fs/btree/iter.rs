@@ -74,12 +74,8 @@ c_extern! {
     pub fn bch2_btree_increase_depth(trans: *mut BtreeTrans<'_>, path: PathIdx, flags: c_uint) -> c_int;
     pub fn bch2_btree_iter_peek_root(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter, btree: Btree,
                                      level: c_uint) -> c::bkey_s_c;
-    pub fn __bch2_trans_relock(trans: *mut BtreeTrans<'_>, trace: bool) -> c_int;
-    pub fn bch2_trans_relock_notrace(trans: *mut BtreeTrans<'_>) -> c_int;
     pub fn __bch2_trans_kmalloc(trans: *mut BtreeTrans<'_>, size: usize,
                                 ip: c_ulong) -> *mut c_void;
-    pub fn bch2_trans_unlock(trans: *mut BtreeTrans<'_>);
-    pub fn bch2_trans_unlock_long(trans: *mut BtreeTrans<'_>);
     pub fn __bch2_assert_pos_locked(trans: *mut BtreeTrans<'_>, id: Btree, pos: Bpos);
     pub fn bch2_trans_restart_error(trans: *mut BtreeTrans<'_>, restart_count: u32) -> !;
     pub fn bch2_trans_unlocked_or_in_restart_error(trans: *mut BtreeTrans<'_>) -> !;
@@ -288,22 +284,6 @@ impl<'f> BtreeTrans<'f> {
         unsafe { c::bch2_trans_begin(self.raw()) }
     }
 
-    /// Take back the locks unlock() dropped: a transaction restart if they've
-    /// changed hands meanwhile.
-    pub fn relock(&self) -> Result<(), BchError> {
-        let trans = unsafe { &*self.raw() };
-        if trans.locked() && trans.restarted().0 == 0 {
-            return Ok(());
-        }
-        crate::errcode::ret_to_result(unsafe { c::__bch2_trans_relock(self.raw(), true) }).map(|_| ())
-    }
-
-    /// relock(), always attempted and without the tracepoint: as
-    /// bch2_trans_relock_notrace().
-    pub fn relock_notrace(&self) -> Result<(), BchError> {
-        crate::errcode::ret_to_result(unsafe { c::bch2_trans_relock_notrace(self.raw()) }).map(|_| ())
-    }
-
     pub fn begin<'a>(&'a self) -> TransAttempt<'a, 'f> {
         TransAttempt {
             trans:         self,
@@ -326,6 +306,11 @@ impl<'f> BtreeTrans<'f> {
     /// For C, which has it by pointer.
     pub fn raw(&self) -> *mut BtreeTrans<'f> {
         ptr::from_ref(self).cast_mut()
+    }
+
+    /// C's path - trans->paths.
+    pub(crate) fn path_idx_of(&self, path: *const BtreePath) -> PathIdx {
+        unsafe { path.offset_from(self.paths.get()) as PathIdx }
     }
 
     /// The paths in use, by index - from 1: path 0 is never handed out.
@@ -381,13 +366,6 @@ impl<'f> BtreeTrans<'f> {
         self.c
     }
 
-    pub fn unlock(&self) {
-        unsafe { c::bch2_trans_unlock(self.raw()) };
-    }
-
-    pub fn unlock_long(&self) {
-        unsafe { c::bch2_trans_unlock_long(self.raw()) };
-    }
 
     /// That a path of this transaction has @pos in @btree locked - as one an
     /// update went through stays, after its commit, until the transaction's
@@ -3252,7 +3230,7 @@ impl ListedTrans {
 
     /// The cycle, if it's in one, written to @out.
     pub fn check_for_deadlock(&self, out: &mut Printbuf) -> bool {
-        unsafe { c::bch2_check_for_deadlock(self.trans, out.as_raw()) != 0 }
+        crate::btree::lock_graph::check_for_deadlock(self.trans, Some(out)).is_err()
     }
 }
 

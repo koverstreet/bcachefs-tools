@@ -498,13 +498,6 @@ impl BtreeIter<'_> {
 /// C's name, as FFI declarations spell it: *mut c::btree_iter.
 pub type btree_iter = BtreeIter<'static>;
 
-#[repr(C)]
-#[derive(Clone, Copy, CStruct)]
-pub struct get_locks_fail {
-    pub l: c_uint,
-    pub b: *mut BtreeNode,
-}
-c_default!(get_locks_fail);
 
 /* Key cache: */
 

@@ -12,20 +12,9 @@
 
 #include "btree/cache.h"
 #include "btree/iter.h"
+#include "btree/lock_graph_gen.h"
 #include "btree/locking_gen.h"
 #include "locking/six.h"
-
-void bch2_btree_lock_init(struct btree_bkey_cached_common *, enum six_lock_init_flags, gfp_t gfp);
-
-DECLARE_PER_CPU(struct lock_graph, bch2_lock_graph);
-
-void bch2_lock_graph_init_one(struct lock_graph *);
-void bch2_lock_graph_exit_one(struct lock_graph *);
-
-int bch2_lock_graph_init(void);
-void bch2_lock_graph_exit(void);
-
-void bch2_trans_unlock_write(struct btree_trans *);
 
 static inline bool is_btree_node(struct btree_path *path, unsigned l)
 {
@@ -92,22 +81,6 @@ static inline void trans_set_unlocked(struct btree_trans *trans)
 		if (!trans->pf_memalloc_noio)
 			current->flags &= ~PF_MEMALLOC_NOIO;
 	}
-}
-
-/*
- * Shard index for inode-number allocation. We used to use the current CPU id,
- * but threads migrate across CPUs and the win from per-CPU allocator
- * separation evaporates — concurrent allocators end up sharing shards (and
- * fighting on the same alloc_cursor btree node) any time the scheduler
- * shuffles them onto the same core. Hashing the task's pid is stable per
- * thread, so concurrent allocators in different threads keep their separation
- * regardless of which CPU they're currently running on.
- */
-static inline u64 bch2_inode_shard_idx(struct bch_fs *c)
-{
-	return c->opts.shard_inode_numbers_bits
-		? hash_64((u64) current->pid, c->opts.shard_inode_numbers_bits)
-		: 0;
 }
 
 static inline unsigned bch2_inode_shard_cpu(struct bch_fs *c)
@@ -226,9 +199,6 @@ static inline int btree_path_highest_level_locked(struct btree_path *path)
 
 /* unlock: */
 
-void bch2_btree_node_unlock_write(struct btree_trans *,
-			struct btree_path *, struct btree *);
-
 /*
  * Updates the saved lock sequence number, so that bch2_btree_node_relock() will
  * succeed:
@@ -286,8 +256,6 @@ static inline void __bch2_btree_path_unlock(struct btree_trans *trans,
 
 /* lock: */
 
-int bch2_six_check_for_deadlock(struct six_lock *lock, struct six_lock_waiter *);
-
 static inline void bch2_btree_node_unlock_with_path(struct btree_trans *trans,
 						    btree_path_idx_t path_idx,
 						    unsigned level)
@@ -339,12 +307,6 @@ static inline int btree_node_lock_nopath(struct btree_trans *trans,
 	return ret;
 }
 
-int bch2_btree_node_lock_slowpath(struct btree_trans *trans,
-			struct btree_path *path,
-			struct btree_bkey_cached_common *b,
-			unsigned level,
-			enum six_lock_type type);
-
 static inline int btree_node_lock(struct btree_trans *trans,
 			struct btree_path *path,
 			struct btree_bkey_cached_common *b,
@@ -362,9 +324,6 @@ static inline int btree_node_lock(struct btree_trans *trans,
 #endif
 	return 0;
 }
-
-int bch2_btree_node_lock_write_contended(struct btree_trans *, struct btree_path *,
-					 struct btree_bkey_cached_common *b, bool);
 
 static inline int __btree_node_lock_write(struct btree_trans *trans,
 					  struct btree_path *path,
@@ -403,16 +362,7 @@ static inline void bch2_btree_node_lock_write_nofail(struct btree_trans *trans,
 	BUG_ON(ret);
 }
 
-int __must_check
-bch2_btree_node_lock_with_path(struct btree_trans *,
-			       struct btree_bkey_cached_common *,
-			       enum six_lock_type, u64 hash_val,
-			       btree_path_idx_t *);
-
 /* relock: */
-
-bool bch2_btree_path_relock_norestart(struct btree_trans *, struct btree_path *);
-int __bch2_btree_path_relock(struct btree_trans *, struct btree_path *);
 
 static inline int bch2_btree_path_relock(struct btree_trans *trans, struct btree_path *path)
 {
@@ -420,8 +370,6 @@ static inline int bch2_btree_path_relock(struct btree_trans *trans, struct btree
 		? 0
 		: __bch2_btree_path_relock(trans, path);
 }
-
-bool __bch2_btree_node_relock(struct btree_trans *, struct btree_path *, unsigned, bool trace);
 
 static inline bool bch2_btree_node_relock(struct btree_trans *trans,
 					  struct btree_path *path, unsigned level)
@@ -449,8 +397,6 @@ static inline bool bch2_btree_node_relock_notrace(struct btree_trans *trans,
 
 /* upgrade */
 
-bool __bch2_btree_path_upgrade_norestart(struct btree_trans *, struct btree_path *, unsigned);
-
 static inline bool bch2_btree_path_upgrade_norestart(struct btree_trans *trans,
 			       struct btree_path *path,
 			       unsigned new_locks_want)
@@ -459,9 +405,6 @@ static inline bool bch2_btree_path_upgrade_norestart(struct btree_trans *trans,
 		? __bch2_btree_path_upgrade_norestart(trans, path, new_locks_want)
 		: true;
 }
-
-int __bch2_btree_path_upgrade(struct btree_trans *,
-			      struct btree_path *, unsigned);
 
 static inline int bch2_btree_path_upgrade(struct btree_trans *trans,
 					  struct btree_path *path,
@@ -506,16 +449,6 @@ static inline void btree_path_set_level_up(struct btree_trans *trans,
 }
 
 /* debug */
-
-struct six_lock_count bch2_btree_node_lock_counts(struct btree_trans *,
-				struct btree_path *,
-				struct btree_bkey_cached_common *b,
-				unsigned);
-
-int bch2_check_for_deadlock(struct btree_trans *, struct printbuf *);
-
-void __bch2_btree_path_verify_locks(struct btree_trans *, struct btree_path *);
-void __bch2_trans_verify_locks(struct btree_trans *);
 
 static inline void bch2_btree_path_verify_locks(struct btree_trans *trans,
 						struct btree_path *path)

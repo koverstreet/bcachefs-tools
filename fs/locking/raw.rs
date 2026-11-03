@@ -48,6 +48,7 @@ unsafe impl ::pin_init::Zeroable for rw_semaphore {}
 unsafe impl ::pin_init::Zeroable for percpu_rw_semaphore {}
 
 c_extern! {
+    pub fn rust_six_lockdep_set_notrack_class(lock: *mut c_void);
     pub fn rust_mutex_init(lock: *mut c::mutex, name: *const c_char, key: *mut c_void);
     pub fn rust_mutex_assert_held(lock: *mut c::mutex);
 

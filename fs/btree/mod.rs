@@ -36,6 +36,7 @@ pub mod cow_key;
 pub mod interior;
 pub mod iter;
 pub mod journal_overlay;
+pub mod lock_graph;
 pub mod locking;
 pub mod node;
 pub mod node_scan;

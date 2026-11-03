@@ -16,8 +16,16 @@
 
 #include "bcachefs.h"
 #include "locking/locking.h"
+#include "locking/six.h"
 
 #include <trace/events/lock.h>
+
+/* btree/locking.rs: btree node locks, which lockdep doesn't track */
+
+void rust_six_lockdep_set_notrack_class(void *lock)
+{
+	lockdep_set_notrack_class((struct six_lock *) lock);
+}
 
 /* raw.rs: struct mutex */
 

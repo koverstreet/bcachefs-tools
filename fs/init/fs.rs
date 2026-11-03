@@ -137,8 +137,22 @@ impl Fs {
         self.block_bits as u32
     }
 
+    /*
+     * Shard index for inode-number allocation. We used to use the current CPU id,
+     * but threads migrate across CPUs and the win from per-CPU allocator
+     * separation evaporates — concurrent allocators end up sharing shards (and
+     * fighting on the same alloc_cursor btree node) any time the scheduler
+     * shuffles them onto the same core. Hashing the task's pid is stable per
+     * thread, so concurrent allocators in different threads keep their separation
+     * regardless of which CPU they're currently running on.
+     */
     pub fn inode_shard_idx(&self) -> u64 {
-        unsafe { c::rust_bch2_inode_shard_idx(self.as_ptr()) }
+        let bits = self.opts().shard_inode_numbers_bits.get();
+        if bits == 0 {
+            return 0;
+        }
+        let pid = unsafe { crate::util::percpu::bch2_task_pid(c::bch2_current()) };
+        crate::util::hash::hash_64(pid as u64, bits.into())
     }
 
     /// Never unset once set

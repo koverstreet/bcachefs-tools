@@ -54,5 +54,6 @@ pub use noio::{mutex_noio, percpu_rwsem_noio, MemallocFlags, MutexNoio, Noio, Pe
 pub(crate) use noio::{memalloc_flags_restore, memalloc_flags_save, PF_MEMALLOC_NOIO};
 #[cfg(kernel)]
 pub(crate) use noio::{memalloc_flags, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
+pub(crate) use raw::rust_six_lockdep_set_notrack_class;
 pub use seqlock::SeqLock;
 pub use seqmutex::SeqMutexSeq;

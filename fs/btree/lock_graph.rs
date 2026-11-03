@@ -1,0 +1,708 @@
+// SPDX-License-Identifier: GPL-2.0
+
+//! The cycle detector, and the graph of waiting transactions it walks: see
+//! "Cycle detection" in locking.rs.
+
+use crate::btree::iter::BtreeTrans;
+use crate::btree::locking::btree_node_locked_type;
+use crate::btree::node::BtreeNode;
+use crate::btree::path::BtreePath;
+use crate::c;
+use crate::errcode::{bch_errcode, errptr_or_null, BchError};
+use crate::fs::Fs;
+use crate::locking::MemallocFlags;
+use crate::debug::trace::events;
+use crate::util::alloc::AllocError;
+use crate::util::backtrace::prt_task_backtrace;
+use crate::util::closure::ClosureRef;
+use crate::data_structures::inline_vec::InlineVec;
+use crate::util::kernel::time_after64;
+use crate::util::percpu::{bch2_raw_smp_processor_id, bch2_set_current_wake_cpu, bch2_task_pid, CpuGuard, PerCpu,
+                          PerCpuRef};
+use crate::util::log::{print_str, LogLevel};
+use crate::util::rcu::{self, ReadGuard};
+use crate::util::Printbuf;
+use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
+use core::mem::offset_of;
+use core::ptr::{self, null_mut};
+use core::sync::atomic::{fence, AtomicPtr, Ordering::{Acquire, Relaxed, Release, SeqCst}};
+use cstruct_macros::{c_export, c_extern};
+
+c_extern! {
+    pub fn bch2_trans_restart_foreign_task(trans: *mut BtreeTrans<'_>, err: c_int, ip: c_ulong) -> c_int;
+}
+
+/// A transaction the walk reaches, of whichever thread: it's read as C reads
+/// it, never through a reference - another thread's is changing under us.
+/// Its memory is RCU-freed (bch2_trans_put()), and the walk is in an RCU
+/// read-side section.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Trans(*mut BtreeTrans<'static>);
+
+impl Trans {
+    fn locking(self) -> *mut c::btree_bkey_cached_common {
+        unsafe { (&raw const (*self.0).locking).cast::<*mut c::btree_bkey_cached_common>().read_volatile() }
+    }
+
+    fn lock_want(self) -> c::six_lock_type {
+        unsafe { (&raw const (*(*self.0).locking_wait.as_ptr()).lock_want).read_volatile() }
+    }
+
+    fn task(self) -> *mut c::task_struct {
+        unsafe { (&raw const (*(*self.0).locking_wait.as_ptr()).task).read_volatile() }
+    }
+
+    fn start_time(self) -> u64 {
+        unsafe { (&raw const (*(*self.0).locking_wait.as_ptr()).trans_start_time).read_volatile() }
+    }
+
+    fn may_not_fail(self) -> bool {
+        unsafe { (&raw const (*self.0).bits).cast::<c::btree_trans_bits>().read_volatile() }.lock_may_not_fail()
+    }
+
+    fn must_abort(self) -> bool {
+        unsafe { (*self.0).lock_must_abort.load(Relaxed) != 0 }
+    }
+
+    fn set_must_abort(self) {
+        unsafe { (*self.0).lock_must_abort.store(1, Relaxed) }
+    }
+
+    fn paths(self) -> *mut BtreePath {
+        unsafe { (*(&raw const (*self.0).paths).cast::<AtomicPtr<BtreePath>>()).load(Acquire) }
+    }
+
+    fn fs(self) -> &'static Fs {
+        unsafe { (*self.0).c }
+    }
+
+    fn fn_name(self) -> &'static str {
+        unsafe { CStr::from_ptr((*self.0).fn_.cast()) }.to_str().unwrap_or("?")
+    }
+
+    /// For the waiting transaction's own thread: the one the walk starts from.
+    fn own(&self) -> &BtreeTrans<'_> {
+        unsafe { BtreeTrans::borrow_raw(self.0) }
+    }
+
+    fn wake_up(self) {
+        if let Some(_r) = ClosureRef::tryget(unsafe { &(*self.0).ref_ }) {
+            unsafe { c::wake_up_process(self.task()) };
+        }
+    }
+
+    fn restart_foreign_task(self, err: bch_errcode) -> BchError {
+        let ip = Self::restart_foreign_task as *const () as c_ulong;
+        BchError::from_raw(unsafe { bch2_trans_restart_foreign_task(self.0, err.0 as c_int, ip) })
+    }
+
+    /// container_of(@w, struct btree_trans, locking_wait): every waiter on a
+    /// btree node lock is a transaction's.
+    fn of_waiter(w: *mut c::six_lock_waiter) -> Self {
+        Trans(unsafe { w.byte_sub(offset_of!(BtreeTrans<'_>, locking_wait)) }.cast())
+    }
+}
+
+/// btree_node_locked_type() of a path another thread may be changing.
+fn path_locked_type(path: *const BtreePath, level: usize) -> btree_node_locked_type {
+    btree_node_locked_type::of(unsafe { (&raw const (*path).nodes_locked).read_volatile() }, level)
+}
+
+/// trans_paths_allocated() and trans_paths_nr(), of a path table another
+/// thread may be using: the bitmap, then nr_paths, sit before the paths.
+fn paths_allocated(paths: *mut BtreePath) -> (*const c_ulong, usize) {
+    unsafe {
+        let p = paths.byte_sub(offset_of!(c::btree_trans_paths, paths)).cast::<c::btree_trans_paths>();
+        let nr = (*p).nr_paths as usize;
+        (p.cast::<c_ulong>().sub(nr.div_ceil(c_ulong::BITS as usize)), nr)
+    }
+}
+
+/// find_next_bit(), of a bitmap another thread is changing.
+fn next_bit(words: *const c_ulong, nr: usize, from: usize) -> Option<usize> {
+    const BITS: usize = c_ulong::BITS as usize;
+
+    let mut idx = from;
+    while idx < nr {
+        let w = unsafe { words.add(idx / BITS).read_volatile() } >> (idx % BITS);
+        if w != 0 {
+            return Some(idx + w.trailing_zeros() as usize).filter(|&i| i < nr);
+        }
+        idx = (idx | (BITS - 1)) + 1;
+    }
+    None
+}
+
+fn lock_type_conflicts(t1: btree_node_locked_type, t2: c::six_lock_type) -> bool {
+    t1 as i32 + t2 as i32 > 1
+}
+
+/// Why a walk stopped short.
+pub(crate) enum Cycle {
+    /// For a check - debugfs, of a transaction that may not be waiting at
+    /// all: a cycle, written out - or no memory to look.
+    Found,
+    /// The waiting transaction restarted: to break a cycle, or because the
+    /// walk couldn't finish.
+    Restart(BchError),
+}
+
+/* State used for the cycle detector */
+/*
+ * @trans wants to lock @b with type @type
+ */
+struct TransWaitingForLock {
+    trans:        *mut BtreeTrans<'static>,
+    node_want:    *mut c::btree_bkey_cached_common,
+    lock_want:    c::six_lock_type,
+
+    /* for iterating over held locks :*/
+    level:        usize,
+    path_idx:     usize,
+    waitlist_idx: usize,
+    node_have:    *mut c::btree_bkey_cached_common,
+
+    /*
+     * Conflicting waiters we found on the lock at (@path_idx, @level),
+     * cached at snapshot time so iteration is stable against concurrent
+     * wakeup activity. @waitlist_idx is the next entry to descend into.
+     */
+    waitlist:     InlineVec<*mut BtreeTrans<'static>, 16>,
+}
+
+impl TransWaitingForLock {
+    const fn new() -> Self {
+        Self {
+            trans:        null_mut(),
+            node_want:    null_mut(),
+            lock_want:    c::six_lock_type::SIX_LOCK_read,
+            level:        0,
+            path_idx:     0,
+            waitlist_idx: 0,
+            node_have:    null_mut(),
+            waitlist:     InlineVec::new(),
+        }
+    }
+}
+
+const LOCK_GRAPH_DEPTH: usize = 8;
+
+struct LockGraph {
+    g:             [TransWaitingForLock; LOCK_GRAPH_DEPTH],
+    nr:            usize,
+    printed_chain: bool,
+}
+
+/// Where the walk goes from a frame whose held locks it's scanned: into the
+/// waiters it found, or back up.
+enum Step {
+    Next,
+    Up,
+}
+
+impl LockGraph {
+    const fn new() -> Self {
+        Self { g: [const { TransWaitingForLock::new() }; LOCK_GRAPH_DEPTH], nr: 0, printed_chain: false }
+    }
+
+    fn frames(&self) -> &[TransWaitingForLock] {
+        &self.g[..self.nr]
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn print_cycle(&self, out: &mut Printbuf) {
+        write!(out, "Found lock cycle ({} entries):\n", self.nr);
+
+        for (n, i) in self.frames().iter().enumerate() {
+            let task = Trans(i.trans).task();
+            if task.is_null() {
+                continue;
+            }
+
+            unsafe { c::bch2_btree_trans_to_text(out.as_raw(), i.trans) };
+            let _ = prt_task_backtrace(out, task, if n == 0 { 5 } else { 1 });
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn print_chain(&mut self, out: &mut Printbuf) {
+        if self.printed_chain || self.nr <= 1 {
+            return;
+        }
+        self.printed_chain = true;
+
+        for (n, i) in self.frames().iter().enumerate() {
+            let task = Trans(i.trans).task();
+            if n != 0 {
+                write!(out, "<- ");
+            }
+            write!(out, "{} ", if task.is_null() { 0 } else { unsafe { bch2_task_pid(task) } });
+        }
+        out.newline();
+    }
+
+    fn down(&mut self, trans: Trans) {
+        /*
+         * Field-by-field init rather than aggregate: we keep waitlist_snap's
+         * data/size across walks so any grown heap buffer is reused.
+         */
+        let top = &mut self.g[self.nr];
+        self.nr += 1;
+
+        top.trans        = trans.0;
+        top.node_want    = trans.locking();
+        top.lock_want    = trans.lock_want();
+        top.level        = 0;
+        top.path_idx     = 0;
+        top.waitlist_idx = 0;
+        top.node_have    = null_mut();
+        top.waitlist.clear();
+
+        self.printed_chain = false;
+
+        if self.nr > 1 && self.g[self.nr - 1].node_want != self.g[self.nr - 2].node_have {
+            self.nr -= 1;
+        }
+    }
+
+    /*
+     * Revalidate the "who is blocked on whom" chain we've built up in @g before
+     * acting on a suspected cycle.
+     *
+     * Between the time we descended into frame @i and now, @i's trans could have
+     * acquired its lock and moved on (possibly blocked waiting on something else
+     * entirely). Two staleness checks, per frame:
+     *
+     *   - @from->trans->locking != @from->node_want
+     *     @from's trans is no longer waiting for the node we recorded at descent.
+     *
+     *   - i[0].node_have != i[1].node_want
+     *     The parent frame is no longer looking at the node the child frame was
+     *     blocked on - the edge we built between them is stale.
+     *
+     * Either makes the cycle hypothesis invalid; pop from the stale frame down
+     * and let the caller retry.
+     */
+    fn remove_non_waiters(&mut self, from: usize) -> bool {
+        if Trans(self.g[from].trans).locking() != self.g[from].node_want {
+            self.nr = from;
+            return true;
+        }
+
+        for i in from + 1..self.nr {
+            if self.g[i - 1].node_have != self.g[i].node_want {
+                self.nr = i;
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn trace_would_deadlock(&self, trans: Trans) {
+        trans.fs().event_inc_trace(events::trans_restart_would_deadlock, |out| {
+            write!(out, "{}\n", trans.fn_name());
+            self.print_cycle(out);
+        });
+    }
+
+    fn abort_lock(&self, i: usize) -> Result<(), Cycle> {
+        let trans = Trans(self.g[i].trans);
+
+        if i == 0 {
+            self.trace_would_deadlock(trans);
+            Err(Cycle::Restart(trans.restart_foreign_task(bch_errcode::BCH_ERR_transaction_restart_would_deadlock)))
+        } else {
+            trans.set_must_abort();
+            trans.wake_up();
+            Ok(())
+        }
+    }
+
+    fn abort_preference(&self, l: usize, r: usize) -> usize {
+        let (lt, rt) = (Trans(self.g[l].trans), Trans(self.g[r].trans));
+
+        if lt.may_not_fail() != rt.may_not_fail() {
+            return if lt.may_not_fail() { r } else { l };
+        }
+
+        if time_after64(lt.start_time(), rt.start_time()) { l } else { r }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn break_cycle_fail(&self) -> ! {
+        let trans = Trans(self.g[0].trans);
+        let fs = trans.fs();
+        let mut out = Printbuf::new();
+
+        #[cfg(kernel)]
+        write!(out, "bcachefs ({}): ", fs.name().to_str().unwrap_or("?"));
+        write!(out, "cycle of nofail locks\n");
+
+        for i in self.frames() {
+            unsafe { c::bch2_btree_trans_to_text(out.as_raw(), i.trans) };
+
+            write!(out, "backtrace:\n");
+            {
+                let out = &mut *out.indent(2);
+                let _ = prt_task_backtrace(out, Trans(i.trans).task(), 2);
+            }
+            out.newline();
+        }
+
+        print_str(fs, LogLevel::ERR, &mut out);
+        panic!("cycle of nofail locks");
+    }
+
+    #[inline(never)]
+    fn break_cycle(&mut self, cycle: Option<&mut Printbuf>, from: usize) -> Result<(), Cycle> {
+        if self.remove_non_waiters(from) {
+            return Ok(());
+        }
+
+        /* Only checking, for debugfs: */
+        if let Some(out) = cycle {
+            self.print_cycle(out);
+            self.nr = 0;
+            return Err(Cycle::Found);
+        }
+
+        let abort = (from..self.nr).reduce(|a, i| self.abort_preference(a, i)).expect("a cycle has frames");
+
+        if Trans(self.g[abort].trans).may_not_fail() {
+            self.break_cycle_fail();
+        }
+
+        let ret = self.abort_lock(abort);
+        self.nr = if ret.is_err() { 0 } else { abort };
+        ret
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn recursion_limit(&mut self, trans: Trans, cycle: Option<&mut Printbuf>) -> Result<(), Cycle> {
+        if cycle.is_none() {
+            trans.fs().event_inc_trace(events::trans_restart_would_deadlock_recursion_limit, |out| {
+                write!(out, "{}", trans.fn_name());
+            });
+        }
+
+        if Trans(self.g[0].trans).may_not_fail() {
+            /* Other threads will have to rerun the cycle detector: */
+            for i in &self.frames()[1..] {
+                Trans(i.trans).wake_up();
+            }
+            return Ok(());
+        }
+
+        self.break_cycle(cycle, 0)
+    }
+
+    fn descend(&mut self, trans: Trans, cycle: Option<&mut Printbuf>) -> Result<(), Cycle> {
+        if let Some(i) = self.frames().iter().position(|f| f.trans == trans.0) {
+            return self.break_cycle(cycle, i);
+        }
+
+        if self.nr == LOCK_GRAPH_DEPTH {
+            return self.recursion_limit(trans, cycle);
+        }
+
+        self.down(trans);
+        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn waitlist_alloc_failed(&self, cycle: bool) -> Cycle {
+        if cycle {
+            return Cycle::Found;
+        }
+
+        let trans = Trans(self.g[0].trans);
+        trans.fs().event_inc_trace(events::trans_restart_deadlock_waitlist_alloc, |out| {
+            write!(out, "{}", trans.fn_name());
+        });
+
+        Cycle::Restart(trans.own().restart(bch_errcode::BCH_ERR_transaction_restart_deadlock_waitlist_alloc))
+    }
+
+    fn scan_held_locks(&mut self, rcu: &ReadGuard, cycle: bool) -> Result<Step, Cycle> {
+        let top = self.nr - 1;
+
+        let paths = Trans(self.g[top].trans).paths();
+        if paths.is_null() {
+            return Ok(Step::Up);
+        }
+
+        let (allocated, nr_paths) = paths_allocated(paths);
+        let mut from = self.g[top].path_idx;
+
+        while let Some(path_idx) = next_bit(allocated, nr_paths, from) {
+            from = path_idx + 1;
+
+            let path = unsafe { paths.add(path_idx) };
+            if unsafe { (&raw const (*path).nodes_locked).read_volatile() } == 0 {
+                continue;
+            }
+
+            if path_idx != self.g[top].path_idx {
+                self.g[top].path_idx = path_idx;
+                self.g[top].level    = 0;
+            }
+
+            while self.g[top].level < c::BTREE_MAX_DEPTH as usize {
+                let level = self.g[top].level;
+                let lock_held = path_locked_type(path, level);
+
+                if matches!(lock_held, btree_node_locked_type::BTREE_NODE_UNLOCKED) {
+                    self.g[top].level += 1;
+                    continue;
+                }
+
+                let b = unsafe { (&raw const (*path).l[level].b).read_volatile() };
+                self.g[top].node_have = b;
+                if !matches!(errptr_or_null(b), Ok(Some(_))) {
+                    /*
+                     * If we get here, it means we raced with the
+                     * other thread updating its btree_path
+                     * structures - which means it can't be blocked
+                     * waiting on a lock:
+                     */
+                    if !self.remove_non_waiters(0) {
+                        /*
+                         * If lock_graph_remove_non_waiters()
+                         * didn't do anything, it must be
+                         * because we're being called by debugfs
+                         * checking for lock cycles, which
+                         * invokes us on btree_transactions that
+                         * aren't actually waiting on anything.
+                         * Just bail out:
+                         */
+                        self.nr = 0;
+                    }
+
+                    return Ok(Step::Next);
+                }
+
+                /*
+                 * Lockless walk of wait_fifo: we're under guard(rcu).
+                 * The fifo is rcu_dereference'd and, on realloc, the old
+                 * buffer is freed via kfree_rcu_mightsleep; trans memory
+                 * is RCU-deferred in bch2_trans_put; and slots only
+                 * transition between NULL and a valid pointer (never torn -
+                 * insert publishes .w via smp_store_release). Per-CPU cache
+                 * reuse inside a grace period can aim us at a reused trans —
+                 * benign, cycles missed this pass are caught next.
+                 *
+                 * Snapshot the conflicting trans pointers into a per-frame
+                 * darray so iteration is stable across concurrent wakeups.
+                 * Heap allocation is GFP_NOWAIT|__GFP_NOWARN (can't sleep
+                 * under rcu+preempt). If growth past the inline buffer
+                 * fails, silently truncating would risk missing a cycle;
+                 * bail out with a dedicated restart type + counter so we
+                 * can tell if this ever actually fires in the wild.
+                 */
+                let lock = unsafe { (*self.g[top].node_have).lock.six() };
+                let _nowarn = MemallocFlags::nowarn();
+                for (w, want) in lock.waiters(rcu) {
+                    let trans = Trans::of_waiter(w.as_ptr());
+
+                    if trans.0 != self.g[top].trans &&
+                       lock_type_conflicts(lock_held, want) &&
+                       self.g[top].waitlist.push(trans.0).is_err() {
+                        return Err(self.waitlist_alloc_failed(cycle));
+                    }
+                }
+
+                self.g[top].level += 1;
+
+                if self.g[top].waitlist_idx < self.g[top].waitlist.len() {
+                    return Ok(Step::Next);
+                }
+            }
+        }
+
+        Ok(Step::Up)
+    }
+}
+
+/// The per-CPU graphs: a PerCpu's pointer, allocated at module init.
+static GRAPHS: AtomicPtr<LockGraph> = AtomicPtr::new(null_mut());
+
+unsafe extern "C" fn graph_init(g: *mut LockGraph, _ctx: *mut c_void, _cpu: c_uint) {
+    unsafe { g.write(LockGraph::new()) }
+}
+
+pub(crate) fn graphs_init() -> Result<(), AllocError> {
+    let graphs = unsafe { PerCpu::alloc_init(graph_init, null_mut::<c_void>()) }?;
+    GRAPHS.store(graphs.into_raw(), Release);
+    Ok(())
+}
+
+pub(crate) fn graphs_exit() {
+    let graphs = GRAPHS.swap(null_mut(), Acquire);
+    if graphs.is_null() {
+        return;
+    }
+
+    for g in unsafe { PerCpuRef::from_raw(graphs) }.cpus() {
+        unsafe { ptr::drop_in_place(g.as_ptr().cast_mut()) };
+    }
+    unsafe { c::free_percpu(graphs.cast()) };
+}
+
+/// With @cycle, a check, as debugfs's: see Cycle.
+pub(crate) fn check_for_deadlock(trans: *mut BtreeTrans<'_>, mut cycle: Option<&mut Printbuf>)
+    -> Result<(), Cycle>
+{
+    let trans = Trans(trans.cast());
+
+    /* trans->paths is rcu protected vs. freeing */
+    let rcu = rcu::read_lock();
+    let cpu = CpuGuard::new();
+
+    let g = unsafe { PerCpuRef::from_raw(GRAPHS.load(Acquire)).this_cpu(&cpu).as_mut() };
+    g.nr = 0;
+
+    if trans.must_abort() && !trans.may_not_fail() {
+        if cycle.is_some() {
+            return Err(Cycle::Found);
+        }
+
+        g.trace_would_deadlock(trans);
+        return Err(Cycle::Restart(trans.own().restart(bch_errcode::BCH_ERR_transaction_restart_would_deadlock)));
+    }
+
+    g.down(trans);
+
+    while g.nr != 0 {
+        let top = g.nr - 1;
+
+        if g.g[top].waitlist_idx < g.g[top].waitlist.len() {
+            let next = Trans(g.g[top].waitlist[g.g[top].waitlist_idx]);
+            g.g[top].waitlist_idx += 1;
+
+            g.descend(next, cycle.as_deref_mut())?;
+            continue;
+        }
+
+        g.g[top].waitlist_idx = 0;
+        g.g[top].waitlist.clear();
+
+        if let Step::Up = g.scan_held_locks(&rcu, cycle.is_some())? {
+            if let Some(out) = cycle.as_deref_mut() {
+                g.print_chain(out);
+            }
+            g.nr -= 1;
+        }
+    }
+
+    Ok(())
+}
+
+fn locking_node(lock: *mut c::six_lock) -> Option<&'static BtreeNode> {
+    let b = unsafe { lock.byte_sub(offset_of!(c::btree_bkey_cached_common, lock)) }.cast::<c::btree_bkey_cached_common>();
+
+    if unsafe { (*b).cached } {
+        return None;
+    }
+    Some(unsafe { &*b.byte_sub(offset_of!(BtreeNode, c)).cast::<BtreeNode>() })
+}
+
+fn node_reuse_race(trans: &BtreeTrans<'_>, b: &BtreeNode) -> bool {
+    let (hash_val, root_id) = (trans.locking_hash_val.get(), trans.locking_root_id.get());
+    if hash_val != 0 {
+        hash_val != unsafe { (&raw const b.hash_val).read_volatile() }
+    } else if root_id.0 != u32::MAX {
+        !trans.c.btree_id_root(root_id.0).is_some_and(|root| ptr::eq(root, b))
+    } else {
+        false
+    }
+}
+
+/// The six lock's should_sleep_fn, for btree node locks: before the waiting
+/// transaction sleeps on @lock.
+#[c_export]
+pub unsafe extern "C" fn bch2_six_check_for_deadlock(lock: *mut c::six_lock, w: *mut c::six_lock_waiter) -> c_int {
+    /*
+     * Store->load fence: orders publishing ourselves as a waiter (done by
+     * six_lock_wait_fifo_insert before should_sleep_fn ran) before the two
+     * reads of shared state that follow. Both are the store-buffer litmus
+     * test - {publish self; read shared state} racing the mirror op on
+     * another CPU - and only a full barrier forbids the both-miss outcome.
+     * smp_rmb() is not enough (it orders load->load, but the publish is a
+     * store), and the fence cannot fold into the publish as a release: a
+     * release is one-way, it orders the publish after prior writes but
+     * can't fence it before these later reads. So one full barrier here,
+     * serving both reads:
+     *
+     *  1. The walk below reads every other waiter. Two waiters closing a
+     *     cycle each do {publish; look for the other}; both missing means
+     *     both park with the cycle undetected - and once every participant
+     *     is parked there is no next lock request, hence no next pass to
+     *     catch it ("missed this pass, caught next" does not fire). The
+     *     cycle must be caught on the spot.
+     *
+     *  2. The node-reuse check just below reads b->hash_val, pairing with
+     *     the reclaim side (clear hash_val; smp_mb; six_lock_wakeup_all in
+     *     bch2_btree_node_transition_state_locked). Both missing means we
+     *     read a stale-valid hash_val and park on a reused node while the
+     *     waker misses our just-published entry.
+     *
+     * Per-edge ordering - reading a waiter's held-lock state once we
+     * observe its slot - is the separate smp_store_release(&.w)/
+     * smp_load_acquire(&.w) pair in the wait_fifo, not this barrier.
+     */
+    fence(SeqCst);
+
+    /*
+     * The btree node we're about to sleep on may have been reclaimed/reused
+     * since the caller picked the lock — the path's b pointer is still
+     * valid memory, but the identity behind it is gone. Don't sleep on a
+     * phantom; force a restart so the trans re-traverses to the real
+     * current node (or learns there isn't one).
+     *
+     * Only btree nodes need this: interior updates take node locks
+     * off-path (e.g. via btree_node_reclaim's six_trylock_intent), so the
+     * cycle detector can't see the holder. Key cache entries don't have
+     * that pattern — they're always held via a path the detector walks.
+     *
+     * Compare against the hash_val snapshotted at lock-attempt time in
+     * btree_node_lock_nopath. Checking !hash_val alone is insufficient:
+     * the node may already have been freed *and* re-hashed to a different
+     * identity, in which case hash_val is non-zero but ≠ what we wanted.
+     *
+     * The store->load ordering against the reclaim side
+     * (bch2_btree_node_transition_state_locked) is the smp_mb() above,
+     * point 2.
+     */
+    let trans = Trans::of_waiter(w);
+    let t = unsafe { &*trans.0 };
+    if let Some(b) = locking_node(lock) {
+        if node_reuse_race(t, b) {
+            return -trans.fs().err(bch_errcode::BCH_ERR_no_btree_node_reused).raw();
+        }
+    }
+
+    /*
+     * Wake-CPU hint, set at the moment of sleep: nudge the scheduler
+     * toward the CPU whose L1/L2 owns this task's shard's btree-node
+     * working set. Soft — sched is free to override under load; writes
+     * nothing when already matched. Placed here (vs. trans_begin)
+     * because select_task_rq_fair() consults wake_cpu only at wakeup,
+     * so the hint has to survive from the schedule() that follows.
+     */
+    let shard_cpu = t.shard_cpu.get();
+    if shard_cpu >= 0 && shard_cpu as c_uint != unsafe { bch2_raw_smp_processor_id() } {
+        unsafe { bch2_set_current_wake_cpu(shard_cpu.into()) };
+    }
+
+    match check_for_deadlock(trans.0, None) {
+        Ok(())                 => 0,
+        Err(Cycle::Restart(e)) => -e.raw(),
+        Err(Cycle::Found)      => -1,
+    }
+}

@@ -214,10 +214,6 @@ impl BtreePath {
         matches!(self.locked_type(level), btree_node_locked_type::BTREE_NODE_INTENT_LOCKED)
     }
 
-    pub(crate) fn read_locked(&self, level: usize) -> bool {
-        matches!(self.locked_type(level), btree_node_locked_type::BTREE_NODE_READ_LOCKED)
-    }
-
     pub(crate) fn locked(&self, level: usize) -> bool {
         !matches!(self.locked_type(level), btree_node_locked_type::BTREE_NODE_UNLOCKED)
     }
@@ -238,7 +234,6 @@ impl BtreePath {
         }
     }
 
-    /// __btree_lock_want()
     pub(crate) fn lock_want_six(&self, level: usize) -> c::six_lock_type {
         if level < self.locks_want() as usize {
             c::six_lock_type::SIX_LOCK_intent

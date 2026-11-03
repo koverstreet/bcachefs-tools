@@ -9,6 +9,7 @@
 #include "btree/path_gen.h"
 #include "btree/types_gen.h"
 #include "btree/node_gen.h"
+#include "btree/locking_gen.h"
 
 #include "closure.h"
 #include "sb/counters.h"
@@ -344,8 +345,6 @@ static inline struct bkey_s_c bch2_btree_path_peek_slot_exact(struct btree_path 
 
 void bch2_btree_path_level_init(struct btree_trans *, struct btree_path *, unsigned, struct btree *);
 
-int __bch2_trans_mutex_lock(struct btree_trans *, struct mutex *);
-
 static inline int bch2_trans_mutex_lock(struct btree_trans *trans, struct mutex *lock)
 {
 	return mutex_trylock(lock)
@@ -549,11 +548,6 @@ static inline int trans_maybe_inject_restart(struct btree_trans *trans, unsigned
 	return 0;
 }
 
-bool bch2_btree_node_upgrade(struct btree_trans *,
-			     struct btree_path *, unsigned);
-
-void __bch2_btree_path_downgrade(struct btree_trans *, struct btree_path *, unsigned);
-
 static inline void bch2_btree_path_downgrade(struct btree_trans *trans,
 					     struct btree_path *path)
 {
@@ -564,8 +558,6 @@ static inline void bch2_btree_path_downgrade(struct btree_trans *trans,
 	if (path->locks_want > new_locks_want)
 		__bch2_btree_path_downgrade(trans, path, new_locks_want);
 }
-
-void bch2_trans_downgrade(struct btree_trans *);
 
 void bch2_trans_revalidate_updates_in_node(struct btree_trans *, struct btree *);
 void bch2_trans_node_add(struct btree_trans *trans, struct btree *);
