@@ -79,11 +79,6 @@ pub unsafe fn bch2_bkey_pack_key(out: *mut c::bkey_packed, in_: &c::bkey, format
 }
 
 #[c_export]
-pub fn bch2_compute_bkey_unpack_consts(b: &mut BtreeNode) {
-    b.compute_unpack_consts();
-}
-
-#[c_export]
 pub unsafe fn __bch2_bkey_unpack_key_b(b: &BtreeNode, out: *mut c::bkey, in_: *const c::bkey_packed) {
     unsafe { out.write(b.unpack_key_at(padded(in_), 1)) }
 }

@@ -230,6 +230,12 @@ impl BsetTree {
         self.aux_tree_type() == AuxTreeType::BSET_RW_AUX_TREE
     }
 
+    pub fn set_no_aux_tree(&mut self) {
+        self.size            = 0;
+        self.extra           = BSET_NO_AUX_TREE_VAL;
+        self.aux_data_offset = u16::MAX;
+    }
+
     /// Its first key's offset in the node.
     pub fn first_offset(&self) -> u16 {
         let first = self.data_offset as usize + offset_of!(Head<c::bset>, _data) / size_of::<u64>();
@@ -723,7 +729,30 @@ impl Keys<'_> {
     }
 }
 
+impl BtreeNode {
+    /// The format, and what's derived from it: the key bits and the unpack
+    /// constants; the aux trees, built for the old one, go.
+    pub fn set_format(&mut self, f: c::bkey_format) {
+        self.format      = f;
+        self.nr_key_bits = f.key_bits() as u8;
+
+        self.compute_unpack_consts();
+
+        /* the compiled unpack is off: bkey.h's HAVE_BCACHEFS_COMPILED_UNPACK */
+        self.unpack_fn_len = 0;
+
+        for t in &mut self.set {
+            t.set_no_aux_tree();
+        }
+    }
+}
+
 /* For C: pointers into the node in, offsets inside */
+
+#[c_export]
+pub fn btree_node_set_format(b: &mut BtreeNode, f: c::bkey_format) {
+    b.set_format(f);
+}
 
 #[c_export]
 pub fn bch2_btree_keys_init(b: &mut BtreeNode) {

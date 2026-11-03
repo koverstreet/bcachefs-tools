@@ -4,7 +4,7 @@
 //! a view is made of them once per operation, not per access. Keys and bsets
 //! are referred to, as in C, by their offsets in u64s from the node's start.
 
-use super::bset::{BsetTree, BSET_NO_AUX_TREE_VAL};
+use super::bset::BsetTree;
 use super::{BtreeNode, BtreeNrKeys};
 use crate::types::L1_CACHE_BYTES;
 use crate::btree::bkey::{BkeyP, BkeySC};
@@ -310,9 +310,7 @@ impl Sets<'_> {
     /// From set @from on, to the last there could be: none has an aux tree.
     pub fn set_no_aux_tree(&mut self, from: usize) {
         for t in &mut self.set[from..] {
-            t.size            = 0;
-            t.extra           = BSET_NO_AUX_TREE_VAL;
-            t.aux_data_offset = u16::MAX;
+            t.set_no_aux_tree();
         }
     }
 }

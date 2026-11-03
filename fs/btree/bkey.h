@@ -449,17 +449,6 @@ static inline u64 bkey_field_max(const struct bkey_format *f,
 		: U64_MAX;
 }
 
-#ifdef HAVE_BCACHEFS_COMPILED_UNPACK
-
-int bch2_compile_bkey_format(const struct bkey_format *, void *);
-
-#else
-
-static inline int bch2_compile_bkey_format(const struct bkey_format *format,
-					  void *out) { return 0; }
-
-#endif
-
 static inline void bkey_reassemble(struct bkey_i *dst,
 				   struct bkey_s_c src)
 {
