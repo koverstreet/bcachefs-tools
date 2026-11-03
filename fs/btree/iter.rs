@@ -1038,6 +1038,23 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(v)
     }
 
+    /// allocate_dropping_locks(), the locks left dropped if it took the
+    /// blocking try: for a caller that relocks once, after more of them.
+    pub fn allocate_dropping_locks_norelock<T>(&self, mut alloc: impl FnMut() -> Result<T, BchError>)
+        -> Result<T, BchError>
+    {
+        let first = {
+            let _noreclaim = MemallocFlags::noreclaim();
+            alloc()
+        };
+        match first {
+            Err(e) if e.matches(c::ENOMEM) => {}
+            r => return r,
+        }
+        self.unlock();
+        alloc()
+    }
+
     /// Run @f as a nested transaction, as C's nested_lockrestart_do(): @f
     /// carries on this attempt - no bch2_trans_begin() - and is retried on
     /// restart.
