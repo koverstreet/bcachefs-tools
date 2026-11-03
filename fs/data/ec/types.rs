@@ -7,7 +7,7 @@ use crate::data::ec::delete::delete_empty_stripes;
 use crate::data::ec::io::EcBio;
 use crate::data::ec::stripe_new::NewStripes;
 use crate::fs::Fs;
-use crate::locking::{ByteLock, Locked};
+use crate::locking::{ByteLock, Locked, Lockdep};
 use crate::new_lock;
 use crate::types::{rust_only, RustOnly};
 use crate::util::alloc::{KBox, KVVec};
@@ -83,13 +83,13 @@ pub struct bch_fs_ec {
     /// without this lock: Rust's alone.
     #[pin]
     #[init(RustOnly::new(new_lock!(KVVec::new())))]
-    pub(crate) stripe_heads: rust_only!(Locked<ByteLock, KVVec<Pin<KBox<c::ec_stripe_head>>>>),
+    pub(crate) stripe_heads: rust_only!(Locked<Lockdep<ByteLock>, KVVec<Pin<KBox<c::ec_stripe_head>>>>),
 
     /// Each disk label's ec_dev_stripe_state, made on first use - boxed, as
     /// stripe heads point at them: Rust's alone.
     #[pin]
     #[init(RustOnly::new(new_lock!(KVVec::new())))]
-    pub(crate) dev_stripe_states: rust_only!(Locked<ByteLock, KVVec<Pin<KBox<c::ec_dev_stripe_state>>>>),
+    pub(crate) dev_stripe_states: rust_only!(Locked<Lockdep<ByteLock>, KVVec<Pin<KBox<c::ec_dev_stripe_state>>>>),
 
     /// The stripes being made, once their heads or repairs hand them on,
     /// until their task is done with them; and room for those held. Boxed,

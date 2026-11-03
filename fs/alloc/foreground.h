@@ -142,7 +142,7 @@ static inline void bch2_alloc_sectors_done_inlined(struct bch_fs *c, struct writ
 		prt_str(&buf, bch2_data_type_str(wp->data_type));
 	}));
 
-	bch2_byte_unlock(&wp->lock);
+	byte_lock_lockdep_unlock(&wp->lock);
 
 	bch2_open_buckets_put(c, &ptrs);
 }

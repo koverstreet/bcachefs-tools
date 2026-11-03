@@ -7,7 +7,7 @@ use crate::fs::Fs;
 use crate::alloc::discard::{do_discards_work, DiscardBio, DiscardState};
 use crate::format::DataType;
 use crate::util::alloc::KVVec;
-use crate::locking::{ByteLock, Locked, SeqLock};
+use crate::locking::{ByteLock, Locked, Lockdep, SeqLock};
 use crate::{new_lock, new_work};
 use crate::types::{CacheAligned, RustOnly, c_default, rust_only};
 use crate::util::bio::BioSet;
@@ -337,8 +337,8 @@ pub struct write_point_alloc {
     pub data_type: DataType,
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&wp->lock"))]
-    #[c_lock("u8 lock")]
-    pub lock: Locked<ByteLock, WritePointLocked, WritePointId>,
+    #[c_lock("struct byte_lock_lockdep lock")]
+    pub lock: Locked<Lockdep<ByteLock>, WritePointLocked, WritePointId>,
 }
 
 #[pin_data]
@@ -524,8 +524,8 @@ pub struct bch_fs_allocator {
     /* the write point hash's writers, and write_points_nr's */
     #[pin]
     #[init(new_lock!((), ::pin_init::zeroed(), "&c->allocator.write_points_hash_lock"))]
-    #[c_lock("u8 write_points_hash_lock")]
-    pub write_points_hash_lock: Locked<ByteLock, (), WritePointsHash>,
+    #[c_lock("struct byte_lock_lockdep write_points_hash_lock")]
+    pub write_points_hash_lock: Locked<Lockdep<ByteLock>, (), WritePointsHash>,
 
     #[pin]
     #[init(c::write_point::init(DataType::btree))]
