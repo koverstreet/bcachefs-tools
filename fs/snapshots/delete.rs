@@ -73,7 +73,7 @@ use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::eytzinger::Eytzinger1;
 use crate::util::log::{self, LogLevel, LogMsg};
 use crate::util::Printbuf;
-use crate::{bch_err, bch_err_msg, bch_info, bch_notice, fs_inconsistent, fsck_err, prt,
+use crate::{bch_err, bch_err_msg, bch_notice, bch_verbose, fs_inconsistent, fsck_err, prt,
             trans_inconsistent};
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -351,9 +351,10 @@ fn check_no_data(t: &TransAttempt<'_, '_>, id: u32, op: &str, run: Option<&Run<'
     fs.throw(bch_errcode::BCH_ERR_EINVAL_snapshot_delete_with_data)
 }
 
-/// Every node we're about to delete, and what it holds going in - the same
+/// What the nodes we're about to delete hold going in, in total - the same
 /// counters check_no_data reads on the way out, so whatever is still there at
-/// the end is what the migration didn't move.
+/// the end is what the migration didn't move. One line: deletion runs every
+/// time a snapshot is deleted, and a run can be thousands of nodes.
 struct NodesData<'a> {
     fs:    &'a Fs,
     nodes: &'a DeleteNodes,
@@ -361,19 +362,13 @@ struct NodesData<'a> {
 
 impl fmt::Display for NodesData<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "snapshot deletion, data accounted per node:")?;
+        let d = self.nodes;
+        let ids = d.delete_leaves.iter().copied().chain(d.delete_interior.iter().map(|i| i.id));
+        let (keys, sectors) = ids.map(|id| self.fs.snapshots.accounting(id))
+            .fold((0, 0), |(k, s), a| (k + a.keys(), s + a.sectors()));
 
-        let leaves = self.nodes.delete_leaves.iter().map(|&id| InteriorDelete { id, live_child: 0 });
-        for i in leaves.chain(self.nodes.delete_interior.iter().copied()) {
-            let acct = self.fs.snapshots.accounting(i.id);
-
-            match i.live_child {
-                0  => write!(f, "\n  leaf {}", i.id)?,
-                lc => write!(f, "\n  interior {} -> {lc}", i.id)?,
-            }
-            write!(f, ": {} keys, {} sectors{acct}", acct.keys(), acct.sectors())?;
-        }
-        Ok(())
+        write!(f, "deleting {} leaf and {} interior snapshot nodes: {keys} keys, {sectors} sectors",
+               d.delete_leaves.len(), d.delete_interior.len())
     }
 }
 
@@ -1309,11 +1304,14 @@ fn delete_dead_snapshots_locked(fs: &Fs) -> Result<(), BchError> {
         dying:   &dying,
     };
 
+    let data = NodesData { fs, nodes: run.nodes };
+
     let mut buf = Printbuf::new();
     nodes_to_text(&mut buf, Some(run.nodes), false);
+    prt!(&mut buf, "{data}");
     commit_do(&trans, None, CommitFlags::empty(), |t| t.log_msg(&mut buf))?;
 
-    bch_info!(fs, "{}", NodesData { fs, nodes: run.nodes });
+    bch_verbose!(fs, "{data}");
 
     if fs.request_incompat_feature(
             c::bcachefs_metadata_version::bcachefs_metadata_version_snapshot_deletion_v2).is_ok() {
