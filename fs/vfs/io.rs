@@ -240,7 +240,7 @@ impl InodeInfo {
             return Ok(false);
         }
 
-        if !folio.bch_create(0) {
+        if !folio.bch_create(c::GFP_KERNEL) {
             return Err(c::ENOMEM.into());
         }
 
