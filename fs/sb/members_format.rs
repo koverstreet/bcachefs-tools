@@ -170,7 +170,8 @@ c_xmacro! {
 
 c_enum! {
     #[open]
-    pub enum bch_member_initialized: u32 {
+    #[c_name(bch_member_initialized)]
+    pub enum MemberInitialized: u8 {
         BCH_MEMBER_INITIALIZED_STATES(t, n) => concat(BCH_MEMBER_INITIALIZED_, t) = n,
         BCH_MEMBER_INITIALIZED_NR,
     }

@@ -225,7 +225,7 @@ use crate::debug::sysfs::{DevDir, DEV_GROUPS};
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Fs, StateLockWrite};
 use crate::init::error::bch2_io_error_work;
-use crate::format::{DataType, MemberState};
+use crate::format::{DataType, MemberInitialized, MemberState};
 use crate::locking::MemallocFlags;
 use crate::opts::c_export::__bch2_data_types;
 use crate::sb::io::{read_super, SbReadScratch};
@@ -1283,34 +1283,34 @@ impl Fs {
         Ok(())
     }
 
-    fn dev_set_initialized(&self, ca: &Dev, state: c::bch_member_initialized) -> Result<(), BchError> {
+    fn dev_set_initialized(&self, ca: &Dev, state: MemberInitialized) -> Result<(), BchError> {
         let mut sb = self.sb_lock();
         sb.fs_member_mut(ca.dev_idx.into()).set_initialized(state.0.into());
         self.write_super_flags(&mut sb, c::bch_sb_write_flags::empty())
     }
 
     pub fn dev_add_initialize(&self, ca: &Dev) -> Result<(), BchError> {
-        use c::bch_member_initialized as I;
-        let mut state = I(ca.mi.get().initialized.into());
+        use MemberInitialized as I;
+        let mut state = ca.mi.get().initialized;
 
-        if state == I::BCH_MEMBER_INITIALIZED_pre_dev_usage {
+        if state == I::pre_dev_usage {
             ret_to_result_void(bch2_dev_usage_init(ca, false))?;
-            self.dev_set_initialized(ca, I::BCH_MEMBER_INITIALIZED_pre_mark_sb)?;
-            state = I::BCH_MEMBER_INITIALIZED_pre_mark_sb;
+            self.dev_set_initialized(ca, I::pre_mark_sb)?;
+            state = I::pre_mark_sb;
         }
-        if state == I::BCH_MEMBER_INITIALIZED_pre_mark_sb {
+        if state == I::pre_mark_sb {
             self.trans_mark_dev_sb(ca, UpdateTriggerFlags::TRANSACTIONAL)?;
-            self.dev_set_initialized(ca, I::BCH_MEMBER_INITIALIZED_pre_freespace_init)?;
-            state = I::BCH_MEMBER_INITIALIZED_pre_freespace_init;
+            self.dev_set_initialized(ca, I::pre_freespace_init)?;
+            state = I::pre_freespace_init;
         }
-        if state == I::BCH_MEMBER_INITIALIZED_pre_freespace_init {
+        if state == I::pre_freespace_init {
             fs_freespace_init(self)?;
-            self.dev_set_initialized(ca, I::BCH_MEMBER_INITIALIZED_pre_journal_alloc)?;
-            state = I::BCH_MEMBER_INITIALIZED_pre_journal_alloc;
+            self.dev_set_initialized(ca, I::pre_journal_alloc)?;
+            state = I::pre_journal_alloc;
         }
-        if state == I::BCH_MEMBER_INITIALIZED_pre_journal_alloc {
+        if state == I::pre_journal_alloc {
             ret_to_result_void(unsafe { bch2_dev_journal_alloc(ca.as_ptr(), false) })?;
-            self.dev_set_initialized(ca, I::BCH_MEMBER_INITIALIZED_initialized)?;
+            self.dev_set_initialized(ca, I::initialized)?;
         }
 
         Ok(())
@@ -1368,7 +1368,7 @@ impl Fs {
                 /* success: */
 
                 dev_mi.last_mount = (ktime_get_real_seconds() as u64).into();
-                dev_mi.set_initialized(c::bch_member_initialized::BCH_MEMBER_INITIALIZED_pre_dev_usage.0.into());
+                dev_mi.set_initialized(MemberInitialized::pre_dev_usage.0.into());
 
                 *w.fs_member_mut(dev_idx) = dev_mi;
 

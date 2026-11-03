@@ -27,7 +27,7 @@ use core::sync::atomic::Ordering;
 use cstruct_macros::{c_export, CStruct, Plain, TypeInfo};
 use super::io::*;
 use crate::types::c_default;
-use crate::format::{Bpos, DataType, DataTypes, MemberState};
+use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -57,7 +57,7 @@ pub struct bch_member_cpu {
     pub discard: u8,
     pub durability: u8,
     pub freespace_initialized: u8,
-    pub initialized: u8,
+    pub initialized: MemberInitialized,
     pub resize_on_mount: u8,
     pub rotational: u8,
     pub valid: u8,
@@ -668,7 +668,7 @@ impl c::bch_member {
             // one-biased on disk: 0 is the default, 1
             durability:             self.durability().checked_sub(1).unwrap_or(1) as u8,
             freespace_initialized:  self.freespace_initialized() as u8,
-            initialized:            self.initialized() as u8,
+            initialized:            MemberInitialized(self.initialized() as u8),
             resize_on_mount:        self.resize_on_mount() as u8,
             rotational:             self.rotational() as u8,
             valid:                  self.alive() as u8,
