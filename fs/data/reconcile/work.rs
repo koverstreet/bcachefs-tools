@@ -538,7 +538,7 @@ impl<'a, 'f> Walker<'a, 'f> {
         }
 
         let sectors = key_sectors(fs, k);
-        let ret = ctxt.move_extent(t, None, &opts, &d, iter, level, k);
+        let ret = ctxt.move_extent(t, None, &opts, &d, iter, level, k, None);
         if !matches!(&ret, Err(e) if is_restart(e)) {
             ctxt.stats().walked(iter, sectors);
         }

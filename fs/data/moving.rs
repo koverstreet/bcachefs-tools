@@ -53,8 +53,8 @@ use cstruct_macros::c_export;
 pub use c::MoveStats;
 
 impl MoveStats {
-    /// Zeroed, and named @name for the moving contexts' listing, as
-    /// bch2_move_stats_init() - field by field, as it may be read meanwhile.
+    /// Zeroed, and named @name for the moving contexts' listing - field by
+    /// field, as it may be read meanwhile.
     pub fn reset(&self, name: &str) {
         let name = name.as_bytes();
         let len = name.len().min(self.name.len() - 1);
@@ -71,7 +71,6 @@ impl MoveStats {
                   &self.sectors_raced, &self.sectors_error_corrected, &self.sectors_error_uncorrected] {
             n.store(0, Relaxed);
         }
-        self.devs_error_uncorrected.store(&Default::default());
     }
 
     pub fn sectors_seen(&self) -> u64 {

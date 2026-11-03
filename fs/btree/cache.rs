@@ -30,6 +30,7 @@ c_extern! {
     pub fn bch2_btree_id_str(btree: Btree) -> *const c_char;
     pub fn bch2_btree_id_to_text(out: *mut Printbuf, btree: Btree);
     pub fn bch2_btree_id_level_to_text(out: *mut Printbuf, btree: Btree, level: c_uint);
+    pub fn __bch2_btree_pos_to_text(out: *mut Printbuf, c: *mut Fs, btree: Btree, level: c_uint, k: c::bkey_s_c);
     pub fn bch2_btree_node_to_text(out: *mut Printbuf, c: *mut Fs, b: *const BtreeNode);
     pub fn __bch2_btree_node_mem_alloc(c: *mut Fs) -> *mut BtreeNode;
     pub fn bch2_btree_node_data_free(b: *mut BtreeNode);

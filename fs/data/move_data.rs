@@ -39,6 +39,7 @@ use crate::alloc::check_backpointers::check_one_bucket_backpointer_mismatch;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC};
 use crate::btree::bkey_buf::BkeyBuf;
+use crate::btree::read::btree_node_scrub;
 use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeLevels, CommitFlags, CommitOpts, TransAttempt};
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
@@ -48,6 +49,7 @@ use crate::data::moving::{key_sectors, MoveStats, Moving, MovingCtxt};
 use crate::data::moving_update;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
+use crate::data::scrub_journal::BadRef;
 use crate::data::update::{fail_should_trace, is_scrub};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{writepoint_hashed, Fs};
@@ -100,7 +102,8 @@ impl<'a> Moving<'a> {
     /// its read, @k copied first. The read retries itself - restarts in its
     /// erasure coded fallback - which aren't the attempt's.
     ///
-    /// The move holds a count on @bucket until it's done.
+    /// The move holds a count on @bucket until it's done. A journal scrub's
+    /// extent puts what's bad to @found.
     pub fn move_extent(
         &self,
         t:         &TransAttempt<'_, 'a>,
@@ -110,6 +113,7 @@ impl<'a> Moving<'a> {
         iter:      &BtreeIter<'_>,
         level:     u32,
         k:         BkeySC<'_>,
+        found:     Option<BadRef>,
     ) -> Result<(), BchError> {
         let fs = t.fs();
 
@@ -118,15 +122,15 @@ impl<'a> Moving<'a> {
         }
 
         let ret = if !k.k.is_btree_ptr() {
-            moving_update::move_extent(self, t, bucket, iter, k, opts, data_opts)
+            moving_update::move_extent(self, t, bucket, iter, k, opts, data_opts, found)
         } else if !is_scrub(data_opts.type_) {
             self.move_btree_node(t, opts, data_opts, iter, level, k)
         } else if data_opts.type_ == c::bch_data_update_types::BCH_DATA_UPDATE_scrub {
-            t.btree_node_scrub(iter.btree(), level, k, data_opts.read_dev)
+            btree_node_scrub(fs, iter.btree(), level, k, data_opts.read_dev)
         } else {
             // scrub_no_repair: node scrub repairs, and the journal scrub
-            // checks nodes itself with a report callback - scrub_journal_node()
-            // - so nothing should send one here
+            // checks nodes itself - scrub_journal.rs - so nothing should send
+            // one here
             warn_once!(true, fs, "move_extent(): a btree node with scrub_no_repair");
             fs.throw(err::BCH_ERR_invalid)
         };
@@ -187,7 +191,7 @@ pub unsafe fn bch2_move_extent(ctxt: &Opaque<c::moving_context>, bucket: Option<
     // SAFETY: the caller's
     let t = unsafe { moving.trans().attempt_in_progress() };
     let sectors = key_sectors(t.fs(), k);
-    let ret = moving.move_extent(&t, bucket, opts, data_opts, iter, level, k);
+    let ret = moving.move_extent(&t, bucket, opts, data_opts, iter, level, k, None);
     if !matches!(&ret, Err(e) if is_restart(e)) {
         if let Some(stats) = moving.stats_opt() {
             stats.walked(iter, sectors);
@@ -235,7 +239,7 @@ impl Mover<'_, '_> {
         if !ret? {
             return Ok(());
         }
-        self.moving.move_extent(t, self.bucket, &opts, &data_opts, iter, level, k)
+        self.moving.move_extent(t, self.bucket, &opts, &data_opts, iter, level, k, None)
     }
 }
 

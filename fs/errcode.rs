@@ -655,7 +655,6 @@ c_xmacro! {
         (EINVAL, EINVAL_test_stripe_open_relock_not_invalidated, 615),
         (EAGAIN, test_no_quiet_window, 616),
         (ENOMEM, ENOMEM_perf_test_job, 617),
-        (ENOMEM, ENOMEM_scrub_journal_node, 618),
         (EROFS, erofs_sb_write_before_start, 619),
         (EINVAL, EINVAL_will_not_start, 620),
         (EROFS, erofs_sb_never_started, 621),

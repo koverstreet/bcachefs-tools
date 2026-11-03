@@ -30,6 +30,7 @@ use crate::c::bch_errcode;
 use crate::data::durability::{drop_extra_durability, drop_extra_ec_durability, extent_ptr_durability,
                                BkeyVDurability};
 use crate::data::moving::Moving;
+use crate::data::scrub_journal;
 use crate::data::nocow_locking::{self, NocowKind};
 use crate::data::ptrs::{brand, BkeyVPtrs, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
@@ -342,8 +343,6 @@ pub fn bch2_data_update_inflight_to_text(out: &mut Printbuf, m: &c::data_update)
 // ── init, read_done, exit ────────────────────────────────────────────────
 
 c_extern! {
-    fn bch2_scrub_journal_queue(c: *mut Fs, btree: Btree, level: c_uint, k: *mut c::bkey_i,
-                                ptr_bits: c_uint, err: c_int);
     fn bch2_data_read_sb_err(err: c_int) -> c::bch_sb_error_id;
     fn bch2_write(ws: *mut c::work_struct);
 }
@@ -385,7 +384,7 @@ impl c::data_update_opts {
     }
 }
 
-fn dev_ptr_bit(fs: &Fs, k: BkeySC<'_>, dev: u32) -> u32 {
+pub(crate) fn dev_ptr_bit(fs: &Fs, k: BkeySC<'_>, dev: u32) -> u32 {
     k.arm::<Ptrs>()
         .and_then(|k| k.ptrs(fs).position(|ptr| u32::from(ptr.dev()) == dev))
         .map_or(0, |i| 1 << i)
@@ -794,7 +793,7 @@ impl c::data_update {
     /// A failed read's error, recorded where the data is: at btree_id, not
     /// the read path's read_pos, which for an indirect extent is a reflink
     /// position. A scrub that can't repair queues it for the journal scrub,
-    /// which can't commit - see bch2_scrub_journal_queue().
+    /// which can't commit - see scrub_journal::queue().
     #[cold]
     #[inline(never)]
     fn read_err_record(&self, e: BchError) {
@@ -804,8 +803,7 @@ impl c::data_update {
         let fs = self.fs();
         if self.opts.type_ == Type::BCH_DATA_UPDATE_scrub_no_repair {
             let bit = dev_ptr_bit(fs, self.key(), self.rbio.pick.ptr.dev().into());
-            // SAFETY: its key, which the queue copies
-            unsafe { bch2_scrub_journal_queue(fs.as_ptr(), self.btree_id, 0, self.k.k, bit, self.rbio.ret.into()) };
+            self.found(scrub_journal::queue(fs, self.btree_id, 0, self.key(), bit, self.rbio.ret.into()));
         } else {
             // SAFETY: maps an error code; no pointers
             let err = unsafe { bch2_data_read_sb_err(self.rbio.ret.into()) };
@@ -884,10 +882,7 @@ impl c::data_update {
 
         if type_ == Type::BCH_DATA_UPDATE_scrub_no_repair {
             if self.opts.ptrs_io_error != 0 {
-                // SAFETY: its key, which the queue copies
-                unsafe {
-                    bch2_scrub_journal_queue(fs.as_ptr(), self.btree_id, 0, self.k.k, self.opts.ptrs_io_error.into(), 0)
-                };
+                self.found(scrub_journal::queue(fs, self.btree_id, 0, self.key(), self.opts.ptrs_io_error.into(), 0));
             }
             return false;
         }

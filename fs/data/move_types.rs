@@ -2,16 +2,14 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::Fs;
 use crate::cstructs::c;
-use crate::errcode::{ret_to_result_void, BchError};
-use crate::types::{DArray, c_default};
+use crate::types::c_default;
 use crate::util::projections::Volatile;
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use core::sync::atomic::{AtomicI32, AtomicI64};
-use cstruct_macros::{c_extern, c_name, CStruct, c_typedef, TypeInfo};
+use cstruct_macros::{c_name, CStruct, TypeInfo};
 use nestify::nest;
-use crate::format::{Bpos, Btree, DataType};
+use crate::format::{Bpos, DataType};
 
 nest! {
     /// What moves count into - whoever issues them, and their completions,
@@ -45,8 +43,6 @@ nest! {
         pub sectors_raced: AtomicI64,
         pub sectors_error_corrected: AtomicI64,
         pub sectors_error_uncorrected: AtomicI64,
-        #[c("struct bch_devs_mask devs_error_uncorrected")]
-        pub devs_error_uncorrected: c::AtomicDevsMask,
     }
 }
 c_default!(MoveStats);
@@ -70,50 +66,4 @@ pub struct move_bucket_key {
 #[derive(CStruct)]
 pub struct move_bucket {
     pub count: AtomicI32,
-}
-
-/*
- * What the journal scrub found wrong with an extent, for
- * bch2_scrub_journal_do_repairs() once we're rw: the scrub runs with journal
- * keys frozen, so it can neither repair nor record damage itself.
- *
- * @bad_devs is a mask of pointers by their position in @k, like ptrs_io_error,
- * not of device indices. @read_err is set when reading them failed outright,
- * rather than a replica being found bad on a read that succeeded.
- *
- * @level is 0 for an extent; for a btree node pointer it's the level @k lives
- * at, one above the node's.
- */
-#[repr(C)]
-#[derive(CStruct)]
-#[c_typedef]
-pub struct scrub_journal_repair {
-    pub btree_id: Btree,
-    pub level: c_uint,
-    pub bad_devs: c_uint,
-    pub read_err: c_int,
-    pub k: c::bkey_i,
-    pub k_pad: [u64; c::BKEY_EXTENT_VAL_U64s_MAX],
-}
-c_default!(scrub_journal_repair);
-
-c_typedef! {
-    pub type darray_scrub_journal_repair = DArray<c::scrub_journal_repair>;
-}
-
-c_extern! {
-    pub fn bch2_scrub_journal_do_repairs(c: *mut Fs) -> c_int;
-    pub fn bch2_fs_move_exit(c: *mut Fs);
-    pub fn bch2_fs_move_init(c: *mut Fs);
-    pub fn bch2_scrub_journal(c: *mut Fs, rewind_seq: *mut u64) -> c_int;
-}
-
-impl Fs {
-    /// The seq to rewind the journal to, if the scrub found the device
-    /// didn't honor flush/FUA: 0 if not.
-    pub fn scrub_journal(&self) -> Result<u64, BchError> {
-        let mut rewind_seq = 0;
-        ret_to_result_void(unsafe { bch2_scrub_journal(self.as_ptr(), &mut rewind_seq) })?;
-        Ok(rewind_seq)
-    }
 }

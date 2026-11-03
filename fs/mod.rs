@@ -241,6 +241,7 @@ pub mod data {
         pub mod work;
     }
     pub mod reflink;
+    pub mod scrub_journal;
     pub mod update;
     pub mod update_feasible;
     pub mod update_task;

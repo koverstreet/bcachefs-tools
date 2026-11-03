@@ -508,7 +508,6 @@ impl Fs {
             bch2_fs_btree_init_early(p);
             c::bch2_fs_journal_init_early(&raw mut (*p).journal);
             crate::data::moving::contexts_init(p);
-            c::bch2_fs_move_init(p);
 
             let Ok(()) = c::mutex::init(&raw mut (*p).bio_bounce_pages_lock, c"&c->bio_bounce_pages_lock",
                                         new_lock!(@key));
@@ -1019,7 +1018,6 @@ unsafe fn release(p: *mut Fs) {
     reconcile_exit(fs);
     unsafe { c::bch2_fs_journal_exit(&raw mut (*p).journal) };
     ec_exit(fs);
-    unsafe { c::bch2_fs_move_exit(p) };
     fs.counters_recent.cancel_sync();
     unsafe {
         (*p).counters.now.free();

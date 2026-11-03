@@ -23,6 +23,7 @@ use crate::c;
 use crate::c::bch_errcode;
 use crate::data::moving::{Moving, MovingIo};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
+use crate::data::scrub_journal::BadRef;
 use crate::data::update::{read_err_benign, IOPRIO_IDLE};
 use crate::errcode::BchError;
 use crate::data::update_task::{Body, Update, UpdateTask};
@@ -61,7 +62,6 @@ fn read_error_stats(u: &c::data_update, moving: &Moving<'_>, size: u32) {
         // nothing was read, and nothing was lost
     } else if ret.is_err() || poisoned {
         stats.sectors_error_uncorrected.fetch_add(size.into(), Relaxed);
-        stats.devs_error_uncorrected.assign(u.rbio.pick.ptr.dev().into(), true);
     } else if u.rbio.bits().saw_error() != 0 {
         stats.sectors_error_corrected.fetch_add(size.into(), Relaxed);
     }
@@ -138,7 +138,7 @@ unsafe extern "C" fn move_read_endio(bio: *mut c::bio) {
 /// there's nothing to read.
 pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_in_flight: Option<&c::move_bucket>,
                           iter: &BtreeIter<'_>, k: BkeySC<'_>, io_opts: &c::bch_inode_opts,
-                          data_opts: &c::data_update_opts) -> Result<(), BchError> {
+                          data_opts: &c::data_update_opts, found: Option<BadRef>) -> Result<(), BchError> {
     let btree = iter.btree();
 
     t.allocate_dropping_locks(|gfp| moving.updates_reserve(gfp_flags(gfp)).map_err(|_| c::ENOMEM.into()))
@@ -156,6 +156,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
     };
     u.rbio.bio.bi_end_io = Some(move_read_endio);
     u.rbio.bio.bi_ioprio = IOPRIO_IDLE;
+    u.set_found(found);
     u.io_seq = moving.update_issue(u.turn().get());
 
     let size = BkeySC::from(u.k.key()).k.size;

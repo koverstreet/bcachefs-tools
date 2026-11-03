@@ -1699,16 +1699,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         }
     }
 
-    /// One replica of the node @k points to, on @dev, read and checked - the
-    /// node rewritten if it's bad. Async: the read is only submitted.
-    /// bch2_btree_node_scrub().
-    pub fn btree_node_scrub(&self, btree: Btree, level: u32, k: BkeySC<'_>, dev: u32)
-        -> Result<(), BchError>
-    {
-        // SAFETY: our transaction; @k, which C copies
-        self.result(unsafe { c::bch2_btree_node_scrub(self.raw(), btree, level, k.into(), dev) })
-    }
-
     pub fn delete(
         &self,
         btree: impl Into<u32>,

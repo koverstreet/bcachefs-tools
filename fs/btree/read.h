@@ -95,12 +95,6 @@ void bch2_btree_node_read(struct btree_trans *, struct btree *, bool);
 
 void bch2_btree_read_bio_to_text(struct printbuf *, struct btree_read_bio *);
 
-int bch2_btree_node_scrub_report(struct btree_trans *, enum btree_id, unsigned,
-				 struct bkey_s_c, unsigned,
-				 btree_node_scrub_report_fn, void *);
-int bch2_btree_node_scrub(struct btree_trans *, enum btree_id, unsigned,
-			  struct bkey_s_c, unsigned);
-
 bool bch2_btree_flush_all_reads(struct bch_fs *);
 
 static inline void compat_bformat(unsigned level, enum btree_id btree_id,

@@ -2,23 +2,39 @@
 
 //! Rust's part of reading btree nodes (btree/read.c): so far, a bset's
 //! checksum and encryption - its nonce, and a node's and a node entry's
-//! checksum() and encrypt().
+//! checksum() and encrypt() - and scrub, a node's replica read back and
+//! checked.
 
 #![allow(non_camel_case_types)]
 
 use crate::fs::Dev;
-use crate::btree::bkey::BkeyI;
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{BkeyI, BkeySC};
+use crate::btree::bkey_buf::BtreeKeyBuf;
+use crate::btree::cache::{__bch2_btree_pos_to_text, Bounce};
+use crate::btree::iter::{commit_do, CommitFlags};
 use crate::btree::node::BtreeNode;
 use crate::c;
-use crate::data::checksum::{csum_vstruct, BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
+use crate::data::checksum::{csum_err_msg, csum_vstruct, BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
+use crate::data::ptrs::BkeyVRead;
+use crate::data::update::dev_ptr_bit;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
+use crate::fs::WriteRef;
+use crate::prt;
+use crate::sb::members::DevIoRef;
 use crate::types::{Le32, c_default};
-use crate::util::vstructs::{Head, Unvalidated};
+use crate::util::alloc::flags::GFP_KERNEL;
+use crate::util::bio::{buf_nr_bvecs, Bio, BioBuf, BioOwner};
+use crate::util::refcount::TryRefcount;
+use crate::util::backref::BackRef;
+use crate::util::task::{Resumable, Resume, Spawn, TaskBox};
+use crate::util::vstructs::{cast_plain, Head, SelfSized, Unvalidated};
 use crate::util::Printbuf;
+use arrayvec::ArrayVec;
 use core::mem::offset_of;
-use core::ffi::{c_int, c_uint, c_void};
-use cstruct_macros::{CStruct, bitfield, c_extern, c_typedef};
+use core::ffi::{c_int, c_uint};
+use cstruct_macros::{CStruct, bitfield, c_extern};
 use nestify::nest;
 use crate::format::{Btree, Nonce};
 
@@ -47,14 +63,7 @@ nest! {
 c_default!(btree_read_bio);
 crate::has_bio!(btree_read_bio, bio);
 
-c_typedef! {
-    pub type btree_node_scrub_report_fn = Option<unsafe extern "C" fn(priv_: *mut c_void,
-                                                                     dev: c_uint, good: bool)>;
-}
-
 c_extern! {
-    pub fn bch2_btree_node_scrub(trans: *mut c::btree_trans, btree: Btree, level: c_uint,
-                                 k: c::bkey_s_c, dev: c_uint) -> c_int;
     pub fn bch2_btree_flush_all_reads(c: *mut Fs) -> bool;
     pub fn bch2_btree_node_read_done(c: *mut Fs, ca: *mut Dev, b: *mut BtreeNode,
                                      failed: *mut c::bch_io_failures, err: *mut Printbuf) -> c_int;
@@ -125,5 +134,190 @@ impl c::btree_node_entry<Unvalidated> {
         let (ty, nonce) = (self.keys.checksum_type(), self.keys.nonce(offset));
         let keys = keys_offset(offset_of!(Head<c::btree_node_entry>, keys));
         fs.encrypt(ty, nonce, &mut self.as_bytes_mut()[keys..])
+    }
+}
+
+/// Whether @buf, read from a replica of the node @k points to, is that node:
+/// its magic, its seq if @k has one, and every bset - the first and those
+/// appended since - checksummed, as far as @k says was written; if it doesn't
+/// say, till the first bset of another node. If not, what's wrong, to @err.
+pub fn node_replica_good(fs: &Fs, k: BkeySC<'_>, buf: &[u8], err: &mut Printbuf) -> bool {
+    const FITS: &str = "a bset inside the node, checked against its end";
+
+    let v2 = k.arm::<c::BtreePtrV2>();
+    let ptr_written = v2.as_ref().map_or(0, |v2| v2.v().sectors_written.get() as usize);
+    // A corrupt key's sectors_written can't take the walk past the buffer
+    let end = if ptr_written != 0 { ptr_written } else { fs.btree_sectors() as usize }
+        .min(buf.len() >> 9);
+    let block_bits = fs.block_bits();
+
+    let bn = cast_plain::<Head<c::btree_node>>(buf).expect("a btree node's worth of buffer");
+    if bn.magic.get() != fs.bset_magic() {
+        prt!(err, "bad magic: want {:x}, got {:x}", fs.bset_magic(), bn.magic.get());
+        return false;
+    }
+
+    if let Some(v2) = v2.as_ref().filter(|v2| bn.keys.seq.get() != v2.v().seq.get()) {
+        prt!(err, "wrong btree node: seq {:x}, want {:x}", bn.keys.seq.get(), v2.v().seq.get());
+        return false;
+    }
+
+    let mut written = 0;
+    while written < end {
+        let offset = written << 9;
+        let (keys, sectors) = if written == 0 {
+            (&bn.keys, bn.sectors(block_bits))
+        } else {
+            let bne = cast_plain::<Head<c::btree_node_entry>>(&buf[offset..]).expect(FITS);
+            if bne.keys.seq != bn.keys.seq {
+                break;
+            }
+            (&bne.keys, bne.sectors(block_bits))
+        };
+
+        if written + sectors > end {
+            prt!(err, "bset past end of btree node (offset {written} len {sectors} but written {end})");
+            return false;
+        }
+
+        let ty = keys.checksum_type();
+        if ty.valid(fs) {
+            let bytes = &buf[offset..(written + sectors) << 9];
+            let (stored, csum) = if written == 0 {
+                let n = c::btree_node::<Unvalidated>::from_bytes(bytes).expect(FITS);
+                (n.csum, n.checksum(fs))
+            } else {
+                let n = c::btree_node_entry::<Unvalidated>::from_bytes(bytes).expect(FITS);
+                (n.csum, n.checksum(fs, offset as u32))
+            };
+            if stored != csum {
+                csum_err_msg(err, ty, stored, csum);
+                return false;
+            }
+        }
+
+        written += sectors;
+    }
+
+    if ptr_written != 0 && written < ptr_written {
+        prt!(err, "btree node data missing: expected {ptr_written} sectors, found {written}");
+        return false;
+    }
+
+    true
+}
+
+// ── Scrub ────────────────────────────────────────────────────────────────
+
+/// One of something per pointer of a key.
+pub type Replicas<T> = ArrayVec<T, { c::BCH_BKEY_PTRS_MAX as usize }>;
+
+/// A replica of a btree node, set up to be read back and checked against its
+/// pointer: its buffer and bio, and a ref on its device.
+pub struct ReplicaRead<'f> {
+    fs:      &'f Fs,
+    ca:      DevIoRef<c::bch_dev_read_ref>,
+    buf:     Bounce<'f>,
+    bio:     BioBuf<Bio>,
+    /// Its pointer's, by position in the key, as ptrs_io_error's bits are
+    pub ptr_bit: u32,
+}
+
+impl<'f> ReplicaRead<'f> {
+    /// The replica on @dev of the node @k points to - None if there's none
+    /// there to read.
+    pub fn new(fs: &'f Fs, k: BkeySC<'_>, dev: u32) -> Result<Option<Self>, BchError> {
+        let pick = k.pick_read_device(fs, None, dev, c::bch_read_flags::BCH_READ_hard_require_read_device)?;
+        let Some(pick) = pick else { return Ok(None) };
+        let ptr_bit = dev_ptr_bit(fs, k, pick.ptr.dev().into());
+
+        let ca = fs.dev_get_ioref::<c::bch_dev_read_ref>(pick.ptr.dev().into())
+            .ok_or_else(|| fs.err(c::bch_errcode::BCH_ERR_device_offline))?;
+
+        let bytes = fs.opts.btree_node_size.get() as usize;
+        let buf = Bounce::new(fs, bytes);
+        let nr_vecs = buf_nr_bvecs(buf.as_bytes().as_ptr(), bytes).try_into().expect("bvecs for a btree node");
+        let mut bio = BioBuf::<Bio>::new::<BchError, _>(ca.disk_sb.bdev, nr_vecs, c::req_op_REQ_OP_READ,
+                                                         |b| b.init())?;
+        bio.bio_mut().set_sector(pick.ptr.offset());
+
+        Ok(Some(Self { fs, ca, buf, bio, ptr_bit }))
+    }
+
+    /// Whether the replica, read by read_replicas() - @read, how that went - is
+    /// the node @key points to. If not it's said, with @action - what's done
+    /// about it.
+    pub fn good(&self, read: Result<(), BchError>, key: &BtreeKeyBuf, action: &str) -> bool {
+        let (fs, k) = (self.fs, key.key());
+        let mut err = Printbuf::new();
+        let good = match read {
+            Ok(()) => node_replica_good(fs, k, self.buf.as_bytes(), &mut err),
+            Err(e) => {
+                prt!(&mut err, "read error: {e}");
+                false
+            }
+        };
+
+        if !good {
+            let ca: &Dev = &self.ca;
+            let mut msg = Printbuf::new();
+            prt!(&mut msg, "btree node scrub: bad replica on {ca}{action}:\n");
+            unsafe { __bch2_btree_pos_to_text(msg.as_raw(), fs.as_ptr(), key.btree, key.level, k.into()) };
+            prt!(&mut msg, "\n{}", err.as_str());
+            crate::bch_err_ratelimited!(fs, "{}", msg.as_str());
+        }
+        good
+    }
+}
+
+/// @reads read, all of them in flight at once - submitted before any is
+/// waited on, as a task waits on one thing at a time: how each went.
+pub async fn read_replicas(reads: &mut [ReplicaRead<'_>]) -> Replicas<Result<(), BchError>> {
+    let mut mapped: Replicas<_> = reads.iter_mut().map(|r| r.bio.map_read(r.buf.as_bytes_mut())).collect();
+
+    let mut submitted = Replicas::new();
+    for m in mapped.iter_mut() {
+        submitted.push(m.submit().await);
+    }
+
+    let mut ret = Replicas::new();
+    for s in submitted {
+        ret.push(s.resume_on(Resume::Spawned).await);
+    }
+    ret
+}
+
+/// One replica of the node @k points to, at @level of @btree, on @dev: read
+/// asynchronously, and if it's bad, the node rewritten from another.
+pub fn btree_node_scrub(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, dev: u32) -> Result<(), BchError> {
+    // A v1 pointer carries nothing to check a replica against
+    if k.arm::<c::BtreePtrV2>().is_none() {
+        return Ok(());
+    }
+
+    let write = fs.writes.tryget_live().ok_or_else(|| fs.err(c::bch_errcode::BCH_ERR_erofs_no_writes))?;
+    // the task holds it, and its write ref: going read-only waits for that
+    let fs_ref = unsafe { BackRef::new(fs) };
+    let fs = unsafe { fs_ref.get() };
+    let Some(r) = ReplicaRead::new(fs, k, dev)? else { return Ok(()) };
+    let key = BtreeKeyBuf::new(btree, level, k);
+
+    TaskBox::new(Spawn::Queue(&fs.btree.read_complete_wq), rewrite_if_bad(write, fs_ref, key, r), GFP_KERNEL)
+        .map(TaskBox::start)
+}
+
+async fn rewrite_if_bad(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, mut r: ReplicaRead<'static>) {
+    let fs = &*fs;
+    let read = read_replicas(core::slice::from_mut(&mut r)).await[0];
+    if r.good(read, &key, ", rewriting node") {
+        return;
+    }
+
+    let trans = crate::btree_trans!(fs);
+    let ret = commit_do(&trans, None, CommitFlags::empty(), |t| {
+        t.btree_node_rewrite_key(key.btree, key.level - 1, key.key(), CommitFlags::empty())
+    });
+    if let Some(e) = ret.err().filter(|e| !e.matches(c::ENOENT) && !e.matches(c::EROFS)) {
+        crate::bch_err_ratelimited!(fs, "btree node scrub: error rewriting node: {}", e.msg());
     }
 }

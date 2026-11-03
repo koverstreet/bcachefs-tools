@@ -825,7 +825,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
 
     if fs.journal_scrub_will_run() {
         fs.flags.set(Flag::BCH_FS_scrub_journal, true);
-        let rewind_seq = fs.scrub_journal()?;
+        let rewind_seq = crate::data::scrub_journal::scrub(fs)?;
         fs.flags.set(Flag::BCH_FS_scrub_journal, false);
 
         /*

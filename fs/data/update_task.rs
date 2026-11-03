@@ -35,6 +35,7 @@ use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::c;
 use crate::data::moving::Moving;
+use crate::data::scrub_journal::{Bad, BadRef};
 use crate::data::update::Held;
 use crate::debug::async_objs::{AsyncObj, AsyncObjSlot};
 use crate::errcode::BchError;
@@ -68,6 +69,8 @@ pub struct Update {
     /// A mover's turn to write - moving_update.rs; a promote's is never used
     #[pin]
     turn:      Gather<(), waiter::Async>,
+    /// A journal scrub's: where what it finds bad is put
+    found:     Option<BadRef>,
     listed:    AsyncObjSlot,
     /// From init() till exit()
     held:      Option<Held>,
@@ -101,6 +104,7 @@ impl<B: Future<Output = ()> + Send> UpdateTask<B> {
                     read:      None,
                     write:     None,
                     turn <- Gather::new(),
+                    found:     None,
                     listed:    AsyncObjSlot::none(),
                     held:      None,
                     u:         UnsafeCell::new(MaybeUninit::zeroed()),
@@ -214,6 +218,15 @@ impl Update {
     }
 }
 
+impl c::data_update {
+    /// What a journal scrub's update found bad, put where it's gathered.
+    pub(crate) fn found(&self, bad: Bad) {
+        if let Some(r) = unsafe { &(*Update::of(core::ptr::from_ref(self).cast_mut())).found } {
+            r.get().put(bad);
+        }
+    }
+}
+
 /// # Safety
 /// @op is an Update's update's write op.
 unsafe extern "C" fn write_done(op: *mut c::bch_write_op) {
@@ -280,6 +293,10 @@ impl Body {
         unsafe { Pin::new_unchecked(&self.update().turn) }
     }
 
+    pub fn set_found(&mut self, found: Option<BadRef>) {
+        unsafe { (*self.up.as_ptr()).found = found };
+    }
+
     /// Issues the read, from the task, and waits for it: @issue submits it, or
     /// fails before it touches the rbio, so it never went out.
     pub async fn issue_read(&mut self, issue: impl FnOnce(&mut c::data_update) -> Result<(), BchError>)
@@ -319,10 +336,10 @@ impl Body {
     /// Takes the update off its async object list, and exit()s it.
     pub fn exit(mut self, ret: c_int) {
         // SAFETY: only we touch these - the walk reads the list, not the slot
-        let held = unsafe {
+        let (held, _found) = unsafe {
             let up = self.up.as_ptr();
             (*up).listed = AsyncObjSlot::none();
-            (*up).held.take()
+            ((*up).held.take(), (*up).found.take())
         };
         c::data_update::exit(&mut self, held.expect("a data update exit()ed twice"), ret)
     }

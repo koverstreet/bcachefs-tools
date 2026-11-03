@@ -369,10 +369,8 @@ impl StateLockWrite<'_> {
         fs.do_discards_async();
         fs.do_invalidates();
         fs.do_stripe_deletes();
-        unsafe {
-            bch2_do_pending_node_rewrites(p);
-            c::bch2_scrub_journal_do_repairs(p);
-        }
+        unsafe { bch2_do_pending_node_rewrites(p) };
+        crate::data::scrub_journal::do_repairs(fs);
         BtreeBitmapGcSchedule::run(fs);
         Ok(())
     }

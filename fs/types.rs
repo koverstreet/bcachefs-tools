@@ -881,8 +881,10 @@ pub struct Fs {
     pub moving_context_lock: c::mutex,
 
     /* Journal scrub: extents needing repair after recovery */
-    pub scrub_journal_repairs: c::darray_scrub_journal_repair,
-    pub scrub_journal_repairs_lock: c::mutex,
+    #[pin]
+    #[init(RustOnly::new(crate::new_lock!(crate::util::alloc::KVVec::new())))]
+    pub(crate) scrub_journal_repairs:
+        rust_only!(Locked<c::mutex, crate::util::alloc::KVVec<crate::data::scrub_journal::Repair>>),
 
     /* Extents btree ranges from lost btree nodes, awaiting attribution: init/damage.rs */
     #[pin]
