@@ -5,6 +5,7 @@
 #![cfg(not(NO_BCACHEFS_FS))]
 
 use crate::cstructs::c;
+use crate::locking::Locked;
 use crate::types::{DArray, c_default};
 use cstruct_macros::{bitfield, c_enum, c_typedef, c_xmacro, CStruct, TypeInfo};
 use nestify::nest;
@@ -85,11 +86,12 @@ nest! {
 pub const BCH_WRITEPAGE_BUF_BYTES: usize =
     ((crate::util::kernel::PAGE_SIZE >> 9) << crate::c::MAX_PAGECACHE_ORDER) * core::mem::size_of::<c::bch_folio_sector>();
 
+/// A folio's sector state, under its bch_folio's lock: written by writeback
+/// completion with the folio unlocked, so the folio lock doesn't cover it.
+/// s[] has a sector of the folio each.
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
-pub struct bch_folio {
-    pub lock: c::spinlock_t,
-    pub write_count: AtomicI32,
+pub struct FolioState {
     /* is s[] up to date with the btree? says nothing about the data */
     pub state_uptodate: bool,
     /* the count s[].replicas_reserved is charged at, and released at */
@@ -99,6 +101,13 @@ pub struct bch_folio {
      * inode's count - see bch2_get_folio_disk_reservation().
      */
     pub reserved_degraded: bool,
+    pub s: [c::bch_folio_sector; 0],
+}
+
+#[repr(C)]
+#[derive(CStruct, TypeInfo)]
+pub struct bch_folio {
+    pub write_count: AtomicI32,
     /*
      * The data: sectors [0, partially_uptodate) are read but the folio
      * isn't uptodate. One offset suffices because reads start at the front
@@ -106,7 +115,8 @@ pub struct bch_folio {
      * readpage_bio_drop_unissued() maintains this.
      */
     pub partially_uptodate: u16,
-    pub s: [c::bch_folio_sector; 0],
+    #[c_lock("spinlock_t lock")]
+    pub state: Locked<c::spinlock_t, FolioState>,
 }
 c_default!(bch_folio);
 

@@ -253,14 +253,12 @@ impl InodeInfo {
         let block_bytes = fs.block_bytes() as usize;
         let blocks = start_offset.next_multiple_of(block_bytes) >> 9..(end_offset / block_bytes * block_bytes) >> 9;
         let mut i_sectors_delta = 0;
-        folio.with_bch_sectors(|s| {
-            for s in s.get_mut(blocks).into_iter().flatten() {
-                s.bits.set_nr_replicas(0);
+        for s in folio.lock_state_if_any().expect("bch_set()'s bch_folio").sectors().get_mut(blocks).into_iter().flatten() {
+            s.bits.set_nr_replicas(0);
 
-                i_sectors_delta -= i64::from(s.state == SECTOR_dirty as u8);
-                s.state = SECTOR_unallocated as u8;
-            }
-        });
+            i_sectors_delta -= i64::from(s.state == SECTOR_dirty as u8);
+            s.state = SECTOR_unallocated as u8;
+        }
 
         self.i_sectors_acct(None, i_sectors_delta);
 
@@ -283,9 +281,8 @@ impl InodeInfo {
         if i_size > folio.pos() {
             end_pos = end_pos.min(i_size);
         }
-        let ret = folio.with_bch_sectors(|s| {
-            s[((end_pos - 1 - folio.pos()) >> 9) as usize].state >= SECTOR_dirty as u8
-        });
+        let ret = folio.lock_state_if_any().expect("bch_set()'s bch_folio")
+            .sectors()[((end_pos - 1 - folio.pos()) >> 9) as usize].state >= SECTOR_dirty as u8;
 
         folio.zero_segment(start_offset, end_offset);
 

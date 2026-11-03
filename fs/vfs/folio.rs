@@ -6,7 +6,8 @@
 //! folios it fills: the lock keeps it in the page cache, so a Folio is Copy
 //! and takes no ref; get() and put() are for the refs a caller has besides.
 //! Its bcachefs state - bch_folio, vfs/pagecache.c's - is created on it before
-//! it's read into, and partially_uptodate is the read's to keep.
+//! it's read into, and partially_uptodate is the read's to keep; the rest is
+//! under the state's lock, lock_state_if_any()'s.
 //!
 //! A LockedFolio is one looked up locked and with a ref, both its own: a
 //! Folio until it's dropped, which unlocks and puts it.
@@ -19,10 +20,10 @@ use super::inode::InodeInfo;
 use crate::c;
 use crate::errcode::{errptr_to_result, loff_to_result, ret_to_result_void, BchError};
 use crate::fs::Fs;
-use crate::locking::Locked;
+use crate::locking::Guard;
 use crate::util::kernel::loff;
 use core::ffi::{c_int, c_uint};
-use core::ops::Deref;
+use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use cstruct_macros::c_extern;
 
@@ -158,14 +159,10 @@ impl Folio {
         unsafe { (*self.bch().expect("a folio's bch_folio").as_ptr()).partially_uptodate = sectors }
     }
 
-    /// @f on its bcachefs state's sectors, one a sector of the folio, under
-    /// the state's lock: the folio lock isn't enough, as writeback completion
-    /// writes them with the folio unlocked. Panics if it has no bcachefs
-    /// state.
-    pub fn with_bch_sectors<R>(self, f: impl FnOnce(&mut [c::bch_folio_sector]) -> R) -> R {
-        let s = self.bch().expect("a folio's bch_folio").as_ptr();
-        let _lock = Locked::from_c(unsafe { &(*s).lock }).lock();
-        f(unsafe { core::slice::from_raw_parts_mut((&raw mut (*s).s).cast(), self.size() >> 9) })
+    /// Its bcachefs state, locked, if it has any.
+    pub fn lock_state_if_any(&self) -> Option<FolioStateGuard<'_>> {
+        let s = unsafe { self.bch()?.as_ref() };
+        Some(FolioStateGuard { guard: s.state.lock(), sectors: self.size() >> 9 })
     }
 
     /// Its bcachefs state brought up to date with the btree: bch2_folio_set().
@@ -180,6 +177,33 @@ impl Folio {
         ret_to_result_void(unsafe {
             bch2_get_folio_disk_reservation(inode.fs().as_ptr(), inode.raw(), self.as_ptr(), check_enospc)
         })
+    }
+}
+
+/// A folio's bcachefs state, its lock held.
+pub struct FolioStateGuard<'a> {
+    guard:   Guard<'a, c::spinlock_t, c::FolioState>,
+    sectors: usize,
+}
+
+impl Deref for FolioStateGuard<'_> {
+    type Target = c::FolioState;
+
+    fn deref(&self) -> &c::FolioState {
+        &self.guard
+    }
+}
+
+impl DerefMut for FolioStateGuard<'_> {
+    fn deref_mut(&mut self) -> &mut c::FolioState {
+        &mut self.guard
+    }
+}
+
+impl FolioStateGuard<'_> {
+    /// s[], a sector of the folio each.
+    pub fn sectors(&mut self) -> &mut [c::bch_folio_sector] {
+        unsafe { core::slice::from_raw_parts_mut((&raw mut self.guard.s).cast(), self.sectors) }
     }
 }
 
