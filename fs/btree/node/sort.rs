@@ -272,13 +272,8 @@ pub fn bch2_sort_whiteouts(fs: &Fs, b: &mut BtreeNode) {
         return;
     }
 
-    /*
-     * BtreeNode::unpack_key_b() reads one byte before the key for its
-     * header trick; pad the start of the bounce buffer so that read is
-     * always against valid memory.
-     */
-    let mut bounce = Bounce::new(fs, (1 + u64s) * size_of::<u64>());
-    let buf = bounce.u64s();
+    let mut bounce = Bounce::new(fs, u64s * size_of::<u64>());
+    let buf = &mut bounce.u64s()[..u64s];
     let keys = b.keys();
     let start = keys.buf.len() - u64s;
 
@@ -288,7 +283,7 @@ pub fn bch2_sort_whiteouts(fs: &Fs, b: &mut BtreeNode) {
          * no key is smaller, so copying in the nth key leaves the offsets
          * after it unwritten
          */
-        let new = &mut buf[1..];
+        let new = &mut *buf;
         let mut ptrs = u64s;
 
         for (k, _) in keys_in(keys.buf, start, keys.buf.len()) {
@@ -305,9 +300,9 @@ pub fn bch2_sort_whiteouts(fs: &Fs, b: &mut BtreeNode) {
         }
     }
 
-    verify_no_dups(keys.node(), buf, 1, 1 + u64s);
+    verify_no_dups(keys.node(), buf, 0, u64s);
 
-    b.keys_mut().buf[start..].copy_from_slice(&buf[1..]);
+    b.keys_mut().buf[start..].copy_from_slice(buf);
 }
 
 fn should_compact_bset_lazy(nr: &BtreeNrKeys, set: usize, t: &BsetTree) -> bool {
