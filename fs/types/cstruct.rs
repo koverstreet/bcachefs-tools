@@ -3080,9 +3080,10 @@ pub fn emit_items(items: &[CItem],
                         None => t.push_str(&format!("\t{},\n", v.name)),
                     }
                 }
-                // a byte wide, where a field holds it: GCC's packed enum is
-                // the smallest type its values fit
-                let end = if matches!(e.repr.as_str(), "u8" | "i8") { "} __packed;\n" } else { "};\n" };
+                // a byte or two wide, where a field holds it: GCC's packed enum
+                // is the smallest type its values fit - a 16 bit one whose
+                // values fit a byte is one, and its size assert says so
+                let end = if matches!(e.repr.as_str(), "u8" | "i8" | "u16" | "i16") { "} __packed;\n" } else { "};\n" };
                 under_cfg(&e.cfg, t + end)?
             }
             CItem::Const(c) => under_cfg(&c.cfg, format!("#define {}\t{}\n", c.name, c.c_value()?))?,
