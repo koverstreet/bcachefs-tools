@@ -125,8 +125,9 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "folio_get", "folio_put", "folio_detach_private", "folio_test_uptodate", "folio_test_dirty",
     "folio_mark_uptodate", "folio_end_read", "filemap_add_folio", "readahead_gfp_mask",
     "mapping_min_folio_order", "mapping_max_folio_order", "__readahead_folio", "xa_load", "xa_is_value",
-    "bio_add_folio_nofail",
-    "rust_page_highmem", "rust_page_address",
+    "bio_add_folio_nofail", "folio_unlock", "filemap_lock_folio", "rust_filemap_lock_folio_create",
+    "rust_folio_zero_segment", "rust_folio_mkclean", "rust_filemap_dirty_folio",
+    "rust_page_highmem", "rust_page_address", "rust_is_sync",
     "rust_poll_wait", "rust_fault_in_writeable",
     "rust_fault_in_readable", "rust_filemap_write_and_wait_range", "rust_filemap_flush",
     "totalram_pages", "set_freezable", "freezing", "try_to_freeze",
@@ -189,7 +190,7 @@ const BLOCKLIST_TYPE: &[&str] = &["inode", "file", "dir_context", "user_namespac
                                      "super_block", "super_operations", "percpu_ref", "ida",
                                      "blk_holder_ops", "bio_set", "xarray"];
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
-                                 "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*",
+                                 "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*", "FALLOC_FL_.*",
                                  "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*",
                                  // before 7.1/7.2, as above
                                  "raid6_call", "raid6_2data_recov", "raid6_datap_recov", "MAX_XOR_BLOCKS",

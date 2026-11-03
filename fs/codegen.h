@@ -10,7 +10,9 @@
 
 #include <linux/blkdev.h>
 #include <linux/compat.h>
+#include <linux/falloc.h>
 #include <linux/fs.h>
+#include <linux/highmem.h>
 #include <linux/kallsyms.h>
 #include <linux/key.h>
 #include <linux/lz4.h>
@@ -20,8 +22,10 @@
 #include <linux/notifier.h>
 #include <linux/pagemap.h>
 #include <linux/poll.h>
+#include <linux/rmap.h>
 #include <linux/version.h>
 #include <linux/vmalloc.h>
+#include <linux/writeback.h>
 #include <asm/ioctl.h>
 #include <keys/user-type.h>
 
@@ -38,6 +42,7 @@ const blk_opf_t RUST_CONST_HELPER_REQ_SYNC		= REQ_SYNC;
 const blk_opf_t RUST_CONST_HELPER_REQ_META		= REQ_META;
 const blk_opf_t RUST_CONST_HELPER_REQ_IDLE		= REQ_IDLE;
 const blk_opf_t RUST_CONST_HELPER_REQ_FUA		= REQ_FUA;
+const blk_opf_t RUST_CONST_HELPER_REQ_PREFLUSH	= REQ_PREFLUSH;
 
 /*
  * ioctl numbers' layout, the arch's own: powerpc, mips, sparc, alpha and
@@ -205,6 +210,38 @@ static inline struct folio *rust_filemap_alloc_folio(gfp_t gfp, unsigned int ord
 #else
 	return filemap_alloc_folio(gfp, order, NULL);
 #endif
+}
+
+/*
+ * A folio looked up locked, made if there's none: __filemap_get_folio() is a
+ * static inline in newer kernels, and FGP_* are __force casts
+ */
+static inline struct folio *rust_filemap_lock_folio_create(struct address_space *mapping,
+							   pgoff_t index, gfp_t gfp)
+{
+	return __filemap_get_folio(mapping, index, FGP_LOCK|FGP_CREAT, gfp);
+}
+
+/* highmem.h's, rmap.h's and writeback.h's, which aren't bound */
+static inline void rust_folio_zero_segment(struct folio *folio, size_t start, size_t xend)
+{
+	folio_zero_segment(folio, start, xend);
+}
+
+static inline int rust_folio_mkclean(struct folio *folio)
+{
+	return folio_mkclean(folio);
+}
+
+static inline bool rust_filemap_dirty_folio(struct address_space *mapping, struct folio *folio)
+{
+	return filemap_dirty_folio(mapping, folio);
+}
+
+/* fs.h's IS_SYNC(), a macro */
+static inline bool rust_is_sync(struct inode *inode)
+{
+	return IS_SYNC(inode);
 }
 
 static inline bool rust_page_highmem(struct page *page)
