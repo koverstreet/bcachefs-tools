@@ -30,18 +30,12 @@ use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::inode;
 use crate::inode_opts::InodeOpt;
 use crate::snapshots::subvolume;
-use cstruct_macros::{c_export, c_extern};
+use cstruct_macros::c_export;
 
 use super::dentry::Dentry;
 use super::iattr::Iattr;
 use super::idmap::MntIdmap;
 use super::inode::{InodeInfo, ATTR_CTIME, ATTR_SIZE};
-
-c_extern! {
-    // io.c's, until it's Rust:
-    fn bchfs_truncate(idmap: *mut c::mnt_idmap, inode: *mut c::bch_inode_info,
-                      attr: *mut c::iattr) -> c_int;
-}
 
 use c::bch_inode_flags as F;
 
@@ -263,7 +257,7 @@ impl InodeInfo {
         })?;
 
         if attr.ia_valid & ATTR_SIZE != 0 {
-            ret_to_result_void(unsafe { bchfs_truncate(idmap.as_ptr(), self.raw(), attr) })
+            self.truncate(idmap, attr)
         } else {
             self.setattr_nonsize(idmap, Iattr::of(attr))
         }

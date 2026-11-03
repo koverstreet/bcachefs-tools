@@ -62,7 +62,7 @@ pub struct bch_fs_vfs {
     #[cfg(not(NO_BCACHEFS_FS))]
     #[late(BioSet::new(1, false), ENOMEM_nocow_flush_bioset_init)]
     #[c("struct bio_set nocow_flush_bioset")]
-    pub nocow_flush_bioset: Late<BioSet<c::nocow_flush>>,
+    pub nocow_flush_bioset: Late<BioSet<crate::vfs::io::NocowFlush>>,
     #[cfg(not(NO_BCACHEFS_FS))]
     #[late(Mempool::kvmalloc(4, c::BCH_WRITEPAGE_BUF_BYTES), ENOMEM_writepage_buf_pool_init)]
     #[c("mempool_t writepage_buf_pool")]

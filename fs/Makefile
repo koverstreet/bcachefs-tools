@@ -105,7 +105,6 @@ bcachefs-y		:=			\
 	vendor/closure.o			\
 	vendor/min_heap.o			\
 	vfs/fs.o				\
-	vfs/io.o				\
 	vfs/buffered.o				\
 	vfs/direct.o				\
 	vfs/pagecache.o

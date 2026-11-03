@@ -36,6 +36,7 @@
 use arrayvec::ArrayVec;
 use core::ffi::{c_int, c_uint, c_void, CStr};
 use core::mem::offset_of;
+use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
 use crate::btree::bkey::pos;
@@ -43,12 +44,15 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, 
 use crate::c;
 use crate::errcode::{errptr_to_result, ret_to_c, ret_to_result, BchError};
 use crate::fs::Fs;
+use crate::init::error::{count_fsck_err, id};
 use crate::inode;
 use crate::inode_opts::InodeOpt;
 use crate::locking::{Guard, Locked};
 use crate::quota;
+use crate::prt;
 use crate::util::ffi::Opaque;
 use crate::util::file::File;
+use crate::util::log::LogMsg;
 use cstruct_macros::{c_export, c_extern};
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
 
@@ -421,6 +425,160 @@ impl<'i> UpdateLock<'i> {
         }
         Ok(wrote)
     }
+
+    /// i_size to @new_size, and the times of @fields to now.
+    pub fn write_size(&self, new_size: u64, fields: u32) -> Result<(), BchError> {
+        let now = self.inode.fs().current_time();
+
+        self.write_inode(fields, |_, bi| {
+            bi.bi_size = new_size;
+            if fields & ATTR_ATIME != 0 {
+                bi.bi_atime = now;
+            }
+            if fields & ATTR_MTIME != 0 {
+                bi.bi_mtime = now;
+            }
+            if fields & ATTR_CTIME != 0 {
+                bi.bi_ctime = now;
+            }
+            Ok(())
+        })
+    }
+}
+
+/// i_blocks and quota reservations, under ei_quota_lock: the _locked() forms
+/// take it as @q.
+impl InodeInfo {
+    /// i_blocks changed by @sectors, and the quota charged - from @quota_res
+    /// for an allocation it reserved.
+    fn i_sectors_acct_locked(&self, q: &mut c::InodeQuota, quota_res: Option<&mut c::quota_res>,
+                                 mut sectors: i64) {
+        let blocks = self.vfs().blocks();
+        if (blocks as i64) + sectors < 0 {
+            sectors = self.i_blocks_underflow(blocks, sectors);
+        }
+
+        self.vfs().set_blocks(blocks.wrapping_add_signed(sectors));
+
+        if !cfg!(CONFIG_BCACHEFS_QUOTA) || self.ei_flags.get(c::bch_inode_info_flags::EI_INODE_SNAPSHOT) {
+            return;
+        }
+
+        match quota_res {
+            Some(res) if sectors > 0 => {
+                let sectors = sectors as u64;
+                assert!(sectors <= res.sectors && sectors <= q.ei_quota_reserved,
+                        "i_sectors_acct: {sectors} sectors from a quota reservation of {}, {} reserved",
+                        res.sectors, q.ei_quota_reserved);
+
+                res.sectors -= sectors;
+                q.ei_quota_reserved -= sectors;
+            }
+            _ => {
+                let _ = quota::acct(self.fs(), q.ei_qid, quota::Q_SPC, sectors,
+                                    c::quota_acct_mode::KEY_TYPE_QUOTA_WARN);
+            }
+        }
+    }
+
+    pub fn i_sectors_acct(&self, quota_res: Option<&mut c::quota_res>, sectors: i64) {
+        if sectors != 0 {
+            self.i_sectors_acct_locked(&mut self.ei_quota.lock(), quota_res, sectors);
+        }
+    }
+
+    /// What's left of @sectors once i_blocks is clamped at zero.
+    #[cold]
+    #[inline(never)]
+    fn i_blocks_underflow(&self, blocks: u64, sectors: i64) -> i64 {
+        let fs = self.fs();
+        let inum = self.inum();
+        let mut msg = LogMsg::new(fs);
+        prt!(&mut msg, "subvol {} inode {} i_blocks underflow: {} + {} < 0 (ondisk {})",
+             inum.subvol, inum.inum, blocks, sectors, self.inode().bi_sectors as i64);
+
+        let log = count_fsck_err(fs, id::vfs_inode_i_blocks_underflow, &mut msg);
+        msg.set_suppressed(!log);
+
+        if sectors < 0 { -(blocks as i64) } else { 0 }
+    }
+
+    fn quota_reservation_add(&self, res: &mut c::quota_res, sectors: u64, check_enospc: bool)
+        -> Result<(), BchError>
+    {
+        if !cfg!(CONFIG_BCACHEFS_QUOTA) || self.ei_flags.get(c::bch_inode_info_flags::EI_INODE_SNAPSHOT) {
+            return Ok(());
+        }
+
+        let mut q = self.ei_quota.lock();
+        let mode = if check_enospc {
+            c::quota_acct_mode::KEY_TYPE_QUOTA_PREALLOC
+        } else {
+            c::quota_acct_mode::KEY_TYPE_QUOTA_NOCHECK
+        };
+        quota::acct(self.fs(), q.ei_qid, quota::Q_SPC, sectors as i64, mode)?;
+
+        q.ei_quota_reserved += sectors;
+        res.sectors += sectors;
+        Ok(())
+    }
+
+    fn quota_reservation_put_locked(&self, q: &mut c::InodeQuota, res: &mut c::quota_res) {
+        if !cfg!(CONFIG_BCACHEFS_QUOTA) {
+            return;
+        }
+
+        assert!(res.sectors <= q.ei_quota_reserved,
+                "quota_reservation_put: a reservation of {} sectors, {} reserved",
+                res.sectors, q.ei_quota_reserved);
+
+        let _ = quota::acct(self.fs(), q.ei_qid, quota::Q_SPC, -(res.sectors as i64),
+                            c::quota_acct_mode::KEY_TYPE_QUOTA_PREALLOC);
+        q.ei_quota_reserved -= res.sectors;
+        res.sectors = 0;
+    }
+
+    fn quota_reservation_put(&self, res: &mut c::quota_res) {
+        if cfg!(CONFIG_BCACHEFS_QUOTA) && res.sectors != 0 {
+            self.quota_reservation_put_locked(&mut self.ei_quota.lock(), res);
+        }
+    }
+
+    /// An empty quota reservation of @self's: added to, and put when dropped.
+    pub fn quota_reservation(&self) -> QuotaReservation<'_> {
+        QuotaReservation { inode: self, res: c::quota_res::default() }
+    }
+}
+
+pub struct QuotaReservation<'i> {
+    inode: &'i InodeInfo,
+    res:   c::quota_res,
+}
+
+impl QuotaReservation<'_> {
+    pub fn add(&mut self, sectors: u64, check_enospc: bool) -> Result<(), BchError> {
+        self.inode.quota_reservation_add(&mut self.res, sectors, check_enospc)
+    }
+}
+
+impl Deref for QuotaReservation<'_> {
+    type Target = c::quota_res;
+
+    fn deref(&self) -> &c::quota_res {
+        &self.res
+    }
+}
+
+impl DerefMut for QuotaReservation<'_> {
+    fn deref_mut(&mut self) -> &mut c::quota_res {
+        &mut self.res
+    }
+}
+
+impl Drop for QuotaReservation<'_> {
+    fn drop(&mut self) {
+        self.inode.quota_reservation_put(&mut self.res)
+    }
 }
 
 /// For C's inode writes, until they're Rust: @set, if not NULL, with @p -
@@ -438,4 +596,43 @@ pub fn bch2_write_inode(_c: &Opaque<Fs>, inode: &c::bch_inode_info, set: c::inod
             .map(|r| r == 0),
         None      => Ok(true),
     }).map(|_| ()))
+}
+
+#[must_use]
+#[c_export]
+pub fn bch2_write_inode_size(_c: &Opaque<Fs>, inode: &c::bch_inode_info, new_size: c::loff_t,
+                             fields: c_uint) -> c_int {
+    // every C caller holds @inode's ei_update_lock
+    ret_to_c(unsafe { UpdateLock::held(inode) }.write_size(new_size as u64, fields))
+}
+
+#[c_export]
+pub fn bch2_i_sectors_acct(_c: &Opaque<Fs>, inode: &c::bch_inode_info, quota_res: Option<&mut c::quota_res>,
+                           sectors: i64) {
+    inode.i_sectors_acct(quota_res, sectors)
+}
+
+/// With ei_quota_lock held.
+#[c_export]
+pub fn __bch2_i_sectors_acct(_c: &Opaque<Fs>, inode: &c::bch_inode_info, quota_res: Option<&mut c::quota_res>,
+                             sectors: i64) {
+    inode.i_sectors_acct_locked(&mut *unsafe { inode.ei_quota.held() }, quota_res, sectors)
+}
+
+#[must_use]
+#[c_export]
+pub fn bch2_quota_reservation_add(_c: &Opaque<Fs>, inode: &c::bch_inode_info, res: &mut c::quota_res,
+                                  sectors: u64, check_enospc: bool) -> c_int {
+    ret_to_c(inode.quota_reservation_add(res, sectors, check_enospc))
+}
+
+#[c_export]
+pub fn bch2_quota_reservation_put(_c: &Opaque<Fs>, inode: &c::bch_inode_info, res: &mut c::quota_res) {
+    inode.quota_reservation_put(res)
+}
+
+/// With ei_quota_lock held.
+#[c_export]
+pub fn __bch2_quota_reservation_put(_c: &Opaque<Fs>, inode: &c::bch_inode_info, res: &mut c::quota_res) {
+    inode.quota_reservation_put_locked(&mut *unsafe { inode.ei_quota.held() }, res)
 }

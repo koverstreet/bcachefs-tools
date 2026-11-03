@@ -35,7 +35,7 @@ use kernel::ffi::{c_long, c_ulong};
 
 use crate::c;
 use crate::dirent::{self, DirContext};
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::errcode::BchError;
 use crate::locking::LockedBy;
 use crate::str_hash;
 use crate::util::alloc::{flags, KBox};
@@ -43,7 +43,7 @@ use crate::util::ffi::{c_char, Opaque};
 use crate::util::file::{File, FileOps, FileVTable, UserBuf};
 use cstruct_macros::{c_export, vtable};
 
-use super::file::bch2_fsync;
+use super::io::fsync;
 use super::inode::InodeInfo;
 use super::ioctl::fs_file_ioctl;
 
@@ -206,7 +206,7 @@ impl FileOps for Dir {
     }
 
     fn fsync(&self, file: &File, start: i64, end: i64, datasync: c_int) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { bch2_fsync(file.as_ptr(), start, end, datasync) })
+        fsync(unsafe { InodeInfo::of_file(file) }, file, start, end, datasync)
     }
 
     fn unlocked_ioctl(&self, file: &File, cmd: c_uint, arg: c_ulong) -> c_long {

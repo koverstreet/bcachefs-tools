@@ -4,21 +4,9 @@
 // The VFS's: kernel only, as C's #ifndef NO_BCACHEFS_FS
 #![cfg(not(NO_BCACHEFS_FS))]
 
-use crate::fs::Dev;
 use crate::cstructs::c;
 use crate::types::c_default;
 use cstruct_macros::CStruct;
-
-#[repr(C)]
-#[derive(CStruct)]
-pub struct nocow_flush {
-    pub cl: *mut c::closure,
-    pub ca: *mut Dev,
-    pub bio: c::bio,
-}
-c_default!(nocow_flush);
-
-crate::has_bio!(nocow_flush, bio);
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]

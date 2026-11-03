@@ -6,8 +6,8 @@
 //! A regular file has no private data: its state is its inode's, so its ops
 //! are InodeInfo's, &self the file's inode - FileVTable over InodeFile,
 //! whose ops_of() is f_inode. Open checks and release flushes, making and
-//! dropping nothing. The data path's ops - read and write, llseek, fsync,
-//! fallocate, remap_file_range, a mapping's faults - are C's still, or the
+//! dropping nothing. llseek, fsync, fallocate and remap_file_range are
+//! vfs/io.rs's; read and write and a mapping's faults are C's still, or the
 //! kernel's generics, set in the tables as they are.
 //!
 //! A shared writable mapping of a filesystem gone emergency read-only is
@@ -78,17 +78,13 @@ use crate::util::file::{File, FileData, FileOps, FileVTable};
 use cstruct_macros::{c_export, c_extern, vtable};
 
 use super::inode::InodeInfo;
+use super::io;
 use super::ioctl::fs_file_ioctl;
 
 c_extern! {
     // The data path's, C's still:
-    fn bch2_llseek(file: *mut c::file, offset: c::loff_t, whence: c_int) -> c::loff_t;
     fn bch2_read_iter(iocb: *mut c::kiocb, iter: *mut c::iov_iter) -> isize;
     fn bch2_write_iter(iocb: *mut c::kiocb, iter: *mut c::iov_iter) -> isize;
-    pub(super) fn bch2_fsync(file: *mut c::file, start: c::loff_t, end: c::loff_t, datasync: c_int) -> c_int;
-    fn bch2_fallocate_dispatch(file: *mut c::file, mode: c_int, offset: c::loff_t, len: c::loff_t) -> c_long;
-    fn bch2_remap_file_range(file_src: *mut c::file, pos_src: c::loff_t, file_dst: *mut c::file,
-                             pos_dst: c::loff_t, len: c::loff_t, remap_flags: c_uint) -> c::loff_t;
     fn bch2_page_fault(vmf: *mut c::vm_fault) -> c::vm_fault_t;
     fn bch2_page_mkwrite(vmf: *mut c::vm_fault) -> c::vm_fault_t;
 }
@@ -172,6 +168,23 @@ impl FileOps for InodeInfo {
         Ok(())
     }
 
+    fn llseek(&self, file: &File, offset: i64, whence: c_int) -> Result<u64, BchError> {
+        io::llseek(self, file, offset, whence)
+    }
+
+    fn fsync(&self, file: &File, start: i64, end: i64, datasync: c_int) -> Result<(), BchError> {
+        io::fsync(self, file, start, end, datasync)
+    }
+
+    fn fallocate(&self, file: &File, mode: c_int, offset: i64, len: i64) -> Result<(), BchError> {
+        io::fallocate(self, file, mode, offset, len)
+    }
+
+    fn remap_file_range(&self, file_in: &File, pos_in: i64, file_out: &File, pos_out: i64, len: i64,
+                        remap_flags: c_uint) -> Result<u64, BchError> {
+        io::remap_file_range(self, file_in, pos_in, file_out, pos_out, len, remap_flags)
+    }
+
     fn unlocked_ioctl(&self, file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
         fs_file_ioctl(file, cmd, arg)
     }
@@ -205,17 +218,13 @@ pub static bch2_file_ops: c::file_operations = {
     // mount holds one, and an open of a regular file is hot
     ops.owner            = core::ptr::null_mut();
     ops.open             = Some(open);
-    ops.llseek           = Some(bch2_llseek);
     ops.read_iter        = Some(bch2_read_iter);
     ops.write_iter       = Some(bch2_write_iter);
     #[cfg(CONFIG_TRANSPARENT_HUGEPAGE)]
     {
         ops.get_unmapped_area = Some(c::thp_get_unmapped_area);
     }
-    ops.fsync            = Some(bch2_fsync);
     ops.splice_read      = Some(c::filemap_splice_read);
     ops.splice_write     = Some(c::iter_file_splice_write);
-    ops.fallocate        = Some(bch2_fallocate_dispatch);
-    ops.remap_file_range = Some(bch2_remap_file_range);
     ops
 };
