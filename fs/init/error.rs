@@ -145,25 +145,19 @@ pub mod id {
 /// __bch2_fsck_err() can drop its locks while it waits on a question; an error
 /// reported against just the filesystem must not have one held.
 pub trait FsckErrCtx {
-    fn fsck_err_ctx(&self) -> (&Fs, Option<&BtreeTrans<'_>>);
+    fn fsck_err_ctx(&self) -> (&Fs, Option<&TransAttempt<'_, '_>>);
 }
 
 impl FsckErrCtx for Fs {
-    fn fsck_err_ctx(&self) -> (&Fs, Option<&BtreeTrans<'_>>) {
+    fn fsck_err_ctx(&self) -> (&Fs, Option<&TransAttempt<'_, '_>>) {
         crate::warn_on!(unsafe { c::bch2_current_has_btree_trans(self.as_ptr()) });
         (self, None)
     }
 }
 
-impl FsckErrCtx for BtreeTrans<'_> {
-    fn fsck_err_ctx(&self) -> (&Fs, Option<&BtreeTrans<'_>>) {
-        (self.fs(), Some(self))
-    }
-}
-
 impl FsckErrCtx for TransAttempt<'_, '_> {
-    fn fsck_err_ctx(&self) -> (&Fs, Option<&BtreeTrans<'_>>) {
-        (self.fs(), Some(self.trans()))
+    fn fsck_err_ctx(&self) -> (&Fs, Option<&TransAttempt<'_, '_>>) {
+        (self.fs(), Some(self))
     }
 }
 
@@ -542,7 +536,7 @@ fn error_action_name(a: c::bch_error_actions) -> &'static str {
 /// takes @trans; with @trans, a fix is logged in the journal with the repair,
 /// and asking drops its locks.
 #[cold]
-pub fn fsck_err_verdict(fs: &Fs, trans: Option<&BtreeTrans<'_>>, pos: Bpos, mut flags: bch_fsck_flags,
+pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos, mut flags: bch_fsck_flags,
                         err: bch_sb_error_id, msg: &dyn ToText) -> BchError {
     use bch_errcode as e;
     use bch_fsck_flags as f;
@@ -553,8 +547,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&BtreeTrans<'_>>, pos: Bpos, mut 
 
     // the error is the damage, whatever's decided: recorded first
     if pos != POS_MIN && !crate::warn_on!(trans.is_none()) {
-        let t = unsafe { trans.expect("checked").attempt_in_progress() };
-        if let Err(r) = crate::init::damage::record(&t, pos, err) {
+        if let Err(r) = crate::init::damage::record(trans.expect("checked"), pos, err) {
             return r;
         }
     }
@@ -651,7 +644,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&BtreeTrans<'_>>, pos: Bpos, mut 
                 if fix == c::fsck_err_opts::FSCK_FIX_ask {
                     cnt.print = false;
 
-                    let answer = match ask(fs, trans, &mut out, action) {
+                    let answer = match ask(fs, trans.map(|t| t.trans()), &mut out, action) {
                         Ok(ans) => ans,
                         // relocking after the question restarted: undecided
                         Err(r) => break 'unlock r,
@@ -735,7 +728,7 @@ fn report(fs: &Fs, out: &mut Printbuf, s: Option<&mut FsckErrState>, cnt: Counte
 
 /// After the lock: a fix logged in the journal with its repair, and the
 /// filesystem's error flags.
-fn finish(fs: &Fs, trans: Option<&BtreeTrans<'_>>, flags: bch_fsck_flags, err: bch_sb_error_id,
+fn finish(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, flags: bch_fsck_flags, err: bch_sb_error_id,
           st: impl Sized, mut ret: BchError) -> BchError {
     use bch_errcode as e;
     use c::bch_fs_flags as fl;
@@ -746,8 +739,7 @@ fn finish(fs: &Fs, trans: Option<&BtreeTrans<'_>>, flags: bch_fsck_flags, err: b
         if !flags.contains(bch_fsck_flags::FSCK_ERR_NO_LOG) && ret == BchError::from(e::BCH_ERR_fsck_fix) {
             let mut name = Printbuf::new();
             err.to_text(&mut name);
-            // SAFETY: the caller's transaction, in an attempt
-            if let Err(r) = unsafe { t.attempt_in_progress() }.log_str(name.as_bytes()) {
+            if let Err(r) = t.log_str(name.as_bytes()) {
                 ret = r;
             }
         }
@@ -820,7 +812,8 @@ pub fn bkey_fsck_err_verdict(fs: &Fs, k: BkeySC<'_>, from: &c::bkey_validate_con
 pub unsafe fn bch2_fsck_err_str(c: Option<&Opaque<Fs>>, trans: Option<&BtreeTrans<'_>>, pos: Bpos,
                                 flags: c::bch_fsck_flags, err: c::bch_sb_error_id, msg: &Printbuf) -> c_int {
     let fs = c.map_or_else(|| trans.expect("a filesystem or a transaction").fs(), Fs::from_c);
-    ret_to_c(Err::<(), _>(fsck_err_verdict(fs, trans, pos, flags, err, msg)))
+    let t = trans.map(|t| unsafe { t.attempt_in_progress() });
+    ret_to_c(Err::<(), _>(fsck_err_verdict(fs, t.as_ref(), pos, flags, err, msg)))
 }
 
 /// # Safety
