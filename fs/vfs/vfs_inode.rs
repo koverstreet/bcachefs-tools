@@ -20,9 +20,10 @@ use {
     core::ffi::c_int,
     core::ptr::{read_volatile, write_volatile, NonNull},
     crate::acl::{AclType, PosixAcl},
-    crate::errcode::{ret_to_result_void as ret_to_result, BchError},
+    crate::errcode::{ret_to_result_void, BchError},
     crate::util::kernel::loff,
     kernel::sync::aref::AlwaysRefCounted,
+    super::folio::Mapping,
     super::super_block::SuperBlock,
     crate::locking::Locked,
 };
@@ -87,6 +88,7 @@ impl VfsInode {
         generation() -> u32                 = READ_ONCE(i_generation);
         /// Changed under ei_quota_lock: hold it for a stable value.
         blocks() -> u64                     = READ_ONCE(i_blocks);
+        set_blocks(u64)                     = WRITE_ONCE(i_blocks);
         nlink() -> u32                      = READ_ONCE(__bindgen_anon_1.i_nlink);
         set_nlink(u32)                      = set_nlink;
         /// Now, at the granularity its times are kept at.
@@ -168,8 +170,87 @@ impl VfsInode {
 
     // ── The page cache ───────────────────────────────────────────────────
 
+    pub fn mapping(&self) -> Mapping {
+        unsafe { Mapping::from_raw((*self.as_ptr()).i_mapping) }
+    }
+
     pub fn write_and_wait(&self) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::rust_filemap_write_and_wait_range((*self.as_ptr()).i_mapping, 0, i64::MAX) })
+        self.mapping().write_and_wait_range(0, u64::MAX)
+    }
+
+    /// Its page cache from @size on dropped: truncate_pagecache().
+    pub fn truncate_pagecache(&self, size: u64) {
+        unsafe { c::truncate_pagecache(self.as_ptr(), loff(size)) }
+    }
+
+    /// Its page cache from @start to @end, inclusive, dropped:
+    /// truncate_pagecache_range().
+    pub fn truncate_pagecache_range(&self, start: u64, end: u64) {
+        unsafe { c::truncate_pagecache_range(self.as_ptr(), loff(start), loff(end)) }
+    }
+
+    /// i_size to @size, and the page cache past it dropped: truncate_setsize().
+    pub fn truncate_setsize(&self, size: u64) {
+        unsafe { c::truncate_setsize(self.as_ptr(), loff(size)) }
+    }
+
+    /// Whether it may be @size long - its rlimit and its filesystem's limit:
+    /// inode_newsize_ok().
+    pub fn newsize_ok(&self, size: u64) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::inode_newsize_ok(self.as_ptr(), loff(size)) })
+    }
+
+    /// i_rwsem, held for write until the guard's dropped: inode_lock().
+    pub fn lock(&self) -> InodeLocked<'_> {
+        unsafe { c::inode_lock(self.as_ptr()) };
+        InodeLocked(self)
+    }
+
+    /// Its dirty metadata written, and waited on: sync_inode_metadata().
+    pub fn sync_metadata(&self) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::sync_inode_metadata(self.as_ptr(), 1) })
+    }
+
+    /// Its direct IO in flight done: inode_dio_wait().
+    pub fn dio_wait(&self) {
+        unsafe { c::inode_dio_wait(self.as_ptr()) }
+    }
+
+    /// i_size raised to @size, if it's below: under i_lock, against the other
+    /// extenders.
+    pub fn size_extend(&self, size: u64) {
+        let i_lock = unsafe { &*(&raw const (*self.as_ptr()).i_lock).cast::<c::spinlock_t>() };
+        let _guard = Locked::from_c(i_lock).lock();
+        if size > self.size() {
+            self.set_size(size);
+        }
+    }
+
+    /// The i_rwsems of @a and @b, in the VFS's order, held for write until the
+    /// guard's dropped: lock_two_nondirectories().
+    pub fn lock_two_nondirectories<'a>(a: &'a VfsInode, b: &'a VfsInode) -> TwoNondirsLocked<'a> {
+        unsafe { c::lock_two_nondirectories(a.as_ptr(), b.as_ptr()) };
+        TwoNondirsLocked(a, b)
+    }
+}
+
+#[cfg(kernel)]
+pub struct InodeLocked<'a>(&'a VfsInode);
+
+#[cfg(kernel)]
+impl Drop for InodeLocked<'_> {
+    fn drop(&mut self) {
+        unsafe { c::inode_unlock(self.0.as_ptr()) }
+    }
+}
+
+#[cfg(kernel)]
+pub struct TwoNondirsLocked<'a>(&'a VfsInode, &'a VfsInode);
+
+#[cfg(kernel)]
+impl Drop for TwoNondirsLocked<'_> {
+    fn drop(&mut self) {
+        unsafe { c::unlock_two_nondirectories(self.0.as_ptr(), self.1.as_ptr()) }
     }
 }
 
