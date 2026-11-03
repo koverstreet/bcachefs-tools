@@ -809,7 +809,8 @@ nest! {
         pub btree_path_down_pad: [u64; cs::BKEY_BTREE_PTR_VAL_U64s_MAX],
 
         #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-        pub dep_map: cs::lockdep_map,
+        #[c("struct lockdep_map dep_map")]
+        pub dep_map: crate::locking::LockdepMap,
         /* Entries before this are zeroed out on every bch2_trans_get() call */
 
         pub list: cs::list_head,

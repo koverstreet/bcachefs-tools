@@ -112,6 +112,11 @@ c_extern! {
     pub fn bch2_cpu_possible_next(cpu: c_int) -> c_int;
     pub fn bch2_preempt_disable();
     pub fn bch2_preempt_enable();
+    pub fn bch2_migrate_disable();
+    pub fn bch2_migrate_enable();
+    pub fn bch2_raw_smp_processor_id() -> c_uint;
+    pub fn bch2_task_pid(task: *mut c::task_struct) -> c_int;
+    pub fn bch2_set_current_wake_cpu(cpu: c_int);
 }
 
 // ── The operations, an arch's own ────────────────────────────────────────

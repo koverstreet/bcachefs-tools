@@ -32,6 +32,7 @@ use cstruct_macros::{c_extern, c_verbatim};
 c_extern! {
     pub fn rust_memalloc_noio_save() -> c_uint;
     pub fn rust_memalloc_flags_restore(flags: c_uint);
+    pub fn rust_memalloc_noio_clear();
 }
 
 /// A PF_MEMALLOC_NOIO scope: allocations may not recurse into reclaim IO

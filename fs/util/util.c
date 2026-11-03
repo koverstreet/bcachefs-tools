@@ -1020,7 +1020,7 @@ int bch2_cpu_possible_next(int cpu)
 #endif
 }
 
-/* ...this CPU's: its copy, and preemption */
+/* ...this CPU's: its copy, preemption and migration, and its id */
 void *bch2_this_cpu_ptr(void *pcp)
 {
 	return this_cpu_ptr((void __percpu *) (unsigned long) pcp);
@@ -1034,6 +1034,38 @@ void bch2_preempt_disable(void)
 void bch2_preempt_enable(void)
 {
 	preempt_enable();
+}
+
+unsigned bch2_raw_smp_processor_id(void)
+{
+	return raw_smp_processor_id();
+}
+
+void bch2_migrate_disable(void)
+{
+	migrate_disable();
+}
+
+void bch2_migrate_enable(void)
+{
+	migrate_enable();
+}
+
+/* ...and a task's: its pid, and the CPU it's to be woken on */
+int bch2_task_pid(struct task_struct *task)
+{
+	return task->pid;
+}
+
+/*
+ * Compiled out under CONFIG_SCHED_ALT (BMQ/PDS): those schedulers don't have
+ * select_task_rq_fair() and drop task_struct.wake_cpu.
+ */
+void bch2_set_current_wake_cpu(int cpu)
+{
+#if defined(__KERNEL__) && !defined(CONFIG_SCHED_ALT)
+	WRITE_ONCE(current->wake_cpu, cpu);
+#endif
 }
 
 /*

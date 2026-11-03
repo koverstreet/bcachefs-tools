@@ -31,6 +31,11 @@ void rust_memalloc_flags_restore(unsigned int flags)
 	memalloc_flags_restore(flags);
 }
 
+void rust_memalloc_noio_clear(void)
+{
+	memalloc_flags_restore(PF_MEMALLOC_NOIO);
+}
+
 /* raw.rs: struct mutex */
 
 void rust_mutex_init(struct mutex *lock, const char *name, void *key)
