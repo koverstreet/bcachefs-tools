@@ -262,7 +262,7 @@ crate::vfs_ops! {
     fn compat_ioctl(&self = file, file: &File, cmd: c_uint, arg: CUlong) -> CLong;
     /// The new position.
     #[cfg(kernel)]
-    fn llseek(&self = file, file: &File, offset: i64, whence: c_int) -> c::loff_t;
+    fn llseek(&self = file, file: &File, offset: i64, whence: c_int) -> Result<u64, BchError>;
     #[cfg(kernel)]
     fn iterate_shared(&self = file, file: &File, ctx: *mut c::dir_context) -> Result<(), BchError>;
     #[cfg(kernel)]

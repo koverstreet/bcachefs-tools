@@ -106,6 +106,8 @@ impl<T> FromRaw for *const T {
 
 into_raw! {
     Result<(), BchError> => c_int: |r| ret_to_class(r);
+    /// A position: llseek's.
+    Result<u64, BchError> => i64: |r| r.map_or_else(|e| e.class().into(), |pos| pos as i64);
 }
 
 /// See the file comment.

@@ -151,12 +151,12 @@ impl FileOps for Dir {
     }
 
     /// A 32-bit reader's positions are cookies, up to READDIR_32_EOF.
-    fn llseek(&self, file: &File, offset: i64, whence: c_int) -> c::loff_t {
-        let max = if dirents_32bit(file) { READDIR_32_EOF } else { i64::MAX };
+    fn llseek(&self, file: &File, offset: i64, whence: c_int) -> Result<u64, BchError> {
+        let max = if dirents_32bit(file) { READDIR_32_EOF as u64 } else { u64::MAX };
 
         // SAFETY: llseek
         unsafe { self.cookie() }.valid = false;
-        unsafe { c::generic_file_llseek_size(file.as_ptr(), offset, whence, max, max) }
+        file.generic_llseek_size(offset, whence, max, max)
     }
 
     fn iterate_shared(&self, file: &File, ctx: *mut c::dir_context) -> Result<(), BchError> {
