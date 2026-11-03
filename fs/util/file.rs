@@ -36,7 +36,9 @@ use core::pin::Pin;
 
 #[cfg(kernel)]
 use {
-    crate::errcode::errptr_to_result,
+    crate::errcode::{errptr_to_result, loff_to_result, ret_to_result_void},
+    crate::util::kernel::loff,
+    crate::vfs::folio::Mapping,
     core::ffi::{c_uint, c_void},
     core::marker::PhantomData,
     core::mem::MaybeUninit,
@@ -91,18 +93,88 @@ impl File {
         self.flags() & c::O_NONBLOCK != 0
     }
 
+    #[cfg(kernel)]
+    pub fn mapping(&self) -> Mapping {
+        unsafe { Mapping::from_raw((*self.as_ptr()).f_mapping) }
+    }
+
     /// Whether it has pages in the page cache.
     #[cfg(kernel)]
     pub fn has_pagecache(&self) -> bool {
-        unsafe { (*(*self.as_ptr()).f_mapping).nrpages != 0 }
+        !self.mapping().is_empty()
     }
 
     /// Its page cache's dirty pages from @start to @end, inclusive, written and
-    /// waited on: filemap_write_and_wait_range().
+    /// waited on, and a writeback error since this file last saw one:
+    /// file_write_and_wait_range().
     #[cfg(kernel)]
-    pub fn write_and_wait_range(&self, start: i64, end: i64) -> Result<(), BchError> {
-        let ret = unsafe { c::rust_filemap_write_and_wait_range((*self.as_ptr()).f_mapping, start, end) };
-        crate::errcode::ret_to_result_void(ret)
+    pub fn write_and_wait_range(&self, start: u64, end: u64) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::file_write_and_wait_range(self.as_ptr(), loff(start), loff(end)) })
+    }
+
+    /// A writeback error since this file last saw one, now seen:
+    /// file_check_and_advance_wb_err().
+    #[cfg(kernel)]
+    pub fn check_and_advance_wb_err(&self) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::file_check_and_advance_wb_err(self.as_ptr()) })
+    }
+
+    /// SEEK_SET, SEEK_CUR or SEEK_END: the new position, at most the
+    /// filesystem's s_maxbytes - generic_file_llseek().
+    #[cfg(kernel)]
+    pub fn generic_llseek(&self, offset: i64, whence: c_int) -> Result<u64, BchError> {
+        loff_to_result(unsafe { c::generic_file_llseek(self.as_ptr(), offset, whence) })
+    }
+
+    /// generic_llseek(), within @max, SEEK_END from @eof:
+    /// generic_file_llseek_size().
+    #[cfg(kernel)]
+    pub fn generic_llseek_size(&self, offset: i64, whence: c_int, max: u64, eof: u64)
+        -> Result<u64, BchError>
+    {
+        loff_to_result(unsafe { c::generic_file_llseek_size(self.as_ptr(), offset, whence, loff(max), loff(eof)) })
+    }
+
+    /// The position set to @offset, EINVAL past @max: vfs_setpos().
+    #[cfg(kernel)]
+    pub fn setpos(&self, offset: u64, max: u64) -> Result<u64, BchError> {
+        loff_to_result(unsafe { c::vfs_setpos(self.as_ptr(), loff(offset), loff(max)) })
+    }
+
+    /// Whether writes to it are synchronous: O_SYNC, O_DSYNC, or its inode's
+    /// or filesystem's sync flag.
+    #[cfg(kernel)]
+    pub fn is_dsync(&self) -> bool {
+        self.flags() & (c::__O_SYNC | c::O_DSYNC) != 0 ||
+            unsafe { c::rust_is_sync((*self.as_ptr()).f_inode) }
+    }
+
+    /// For a write: its mtime and ctime to now, and setuid and setgid
+    /// dropped - file_modified().
+    #[cfg(kernel)]
+    pub fn modified(&self) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::file_modified(self.as_ptr()) })
+    }
+
+    /// file_update_time(): its mtime and ctime to now, for a write.
+    #[cfg(kernel)]
+    pub fn update_time(&self) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::file_update_time(self.as_ptr()) })
+    }
+
+    /// The VFS's checks of a remap from @pos_in to @dst at @pos_out, and its
+    /// flushes; @len shortened to what's to be remapped, 0 for nothing:
+    /// generic_remap_file_range_prep().
+    #[cfg(kernel)]
+    pub fn remap_range_prep(&self, pos_in: u64, dst: &File, pos_out: u64, len: &mut u64, flags: u32)
+        -> Result<(), BchError>
+    {
+        let mut l = loff(*len);
+        let ret = ret_to_result_void(unsafe {
+            c::generic_remap_file_range_prep(self.as_ptr(), loff(pos_in), dst.as_ptr(), loff(pos_out), &mut l, flags)
+        });
+        *len = l as u64;
+        ret
     }
 
     /// file_accessed(): its atime touched.
