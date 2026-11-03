@@ -358,6 +358,15 @@ impl<T: HasBio> BioBox<T> {
         // flight has given up its box; never moved from where its set made it
         unsafe { Pin::new_unchecked(self.0.as_mut()) }
     }
+
+    /// The T dropped, and the bio's ref given up raw, for a put that may come
+    /// later - bch2_bio_check_pages_dirty()'s, from a workqueue.
+    #[cfg(kernel)]
+    pub(super) fn into_bio(self) -> *mut c::bio {
+        let t = core::mem::ManuallyDrop::new(self).0;
+        unsafe { core::ptr::drop_in_place(t.as_ptr()) };
+        bio_of(t.as_ptr())
+    }
 }
 
 // SAFETY: the box's bio, its only ref

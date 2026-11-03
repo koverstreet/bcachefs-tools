@@ -59,6 +59,20 @@ use pin_init::pin_data;
 mod iter;
 mod owned;
 pub mod pages;
+#[cfg(kernel)]
+mod user_pages;
+
+/// @f with the block layer's plug held: the bios it submits held back to be
+/// merged, then issued together - blk_start_plug() and blk_finish_plug(). The
+/// plug's the task's, so it can't move while it's held.
+#[cfg(kernel)]
+pub fn plugged<R>(f: impl FnOnce() -> R) -> R {
+    let mut plug = core::mem::MaybeUninit::<c::blk_plug>::uninit();
+    unsafe { c::blk_start_plug(plug.as_mut_ptr()) };
+    let ret = f();
+    unsafe { c::blk_finish_plug(plug.as_mut_ptr()) };
+    ret
+}
 
 #[cfg(kernel)]
 pub use iter::{FolioVec, Folios};

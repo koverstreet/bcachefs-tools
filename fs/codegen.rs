@@ -52,7 +52,8 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/percpu-refcount.h",		// percpu_ref_get(), _put(): a DevRef's ca->ref, static inlines
     "linux/idr.h",			// ida_init(), ida_find_first(): fast_list.rs's slots - static inlines
     "linux/console.h",			// console_trylock(): util/log.rs holds the console across a message
-    "linux/bio.h",			// bio_iov_vecs_to_alloc(), util/iov_iter.rs's - a static inline
+    "linux/bio.h",			// bio_iov_vecs_to_alloc(), util/iov_iter.rs's; bio_release_pages(),
+					// util/bio/user_pages.rs's - static inlines
 ];
 
 /// Headers under fs/ bound, by path - which the clang args have as an -I:
@@ -128,7 +129,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "rust_poll_wait", "rust_fault_in_writeable",
     "rust_fault_in_readable", "rust_filemap_write_and_wait_range", "rust_filemap_flush",
     "totalram_pages", "set_freezable", "freezing", "try_to_freeze",
-    "bio_iov_vecs_to_alloc",
+    "bio_iov_vecs_to_alloc", "bio_release_pages",
     "i_uid_write", "i_gid_write", "i_size_read", "i_size_write", "uuid_to_fsid",
     "fileattr_fill_xflags", "in_compat_syscall", "dir_emit_dots", "finish_open_simple", "file_accessed",
     "i_user_ns", "inode_get_atime", "inode_get_mtime", "inode_get_ctime",
