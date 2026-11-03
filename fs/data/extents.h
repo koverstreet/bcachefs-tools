@@ -349,14 +349,9 @@ out:									\
 
 /* utility code common to all keys with pointers: */
 
-static inline void bch2_io_failures_exit(struct bch_io_failures *f)
-{
-	printbuf_exit(&f->ec_msg);
-}
-
 DEFINE_CLASS(bch_io_failures, struct bch_io_failures,
 	     bch2_io_failures_exit(&_T),
-	     ((struct bch_io_failures) { .ec_msg = PRINTBUF }),
+	     bch2_io_failures_init(),
 	     void)
 
 /* KEY_TYPE_btree_ptr: */

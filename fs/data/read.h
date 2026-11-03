@@ -7,11 +7,6 @@
 #include "data/extents_gen.h"
 #include "data/reflink.h"
 
-#define BCH_READ_ERR_checksum		(1U << 0)
-#define BCH_READ_ERR_io			(1U << 1)
-#define BCH_READ_ERR_decompression	(1U << 2)
-#define BCH_READ_ERR_ec_reconstruct	(1U << 3)
-
 #include "data/read_gen.h"
 
 #define to_rbio(_bio)		container_of((_bio), struct bch_read_bio, bio)

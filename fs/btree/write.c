@@ -99,12 +99,12 @@ static int btree_node_write_update_key(struct btree_trans *trans,
 		bkey_i_to_btree_ptr_v2(&wbio->key)->v.sectors_written;
 
 	bch2_bkey_drop_ptrs_noerror(bkey_i_to_s(n), p, entry,
-		bch2_dev_io_failures(&wbio->wbio.failed, p.ptr.dev));
+		bch2_io_failures_has_dev(&wbio->wbio.failed, p.ptr.dev));
 
 	if (!bch2_bkey_durability_safe(c, bkey_i_to_s_c(n)).nr_ptrs)
 		return bch_err_throw(c, btree_node_write_all_failed);
 
-	if (wbio->wbio.failed.nr) {
+	if (!bch2_io_failures_empty(&wbio->wbio.failed)) {
 		struct bch_inode_opts opts;
 		try(bch2_bkey_get_io_opts(trans, NULL, bkey_i_to_s_c(n), &opts));
 		try(bch2_bkey_set_needs_reconcile(trans, NULL, &opts, bkey_i_to_s(n),
@@ -117,7 +117,7 @@ static int btree_node_write_update_key(struct btree_trans *trans,
 					  BCH_TRANS_COMMIT_journal_reclaim|
 					  BCH_TRANS_COMMIT_no_enospc|
 					  BCH_TRANS_COMMIT_no_check_rw,
-					  !wbio->wbio.failed.nr);
+					  bch2_io_failures_empty(&wbio->wbio.failed));
 }
 
 static void btree_node_write_work(struct work_struct *work)
@@ -140,13 +140,13 @@ static void btree_node_write_work(struct work_struct *work)
 	 * BTREE_NODE_write_in_flight clears and flushers/cancellers drain.
 	 */
 	if (!bch2_journal_error(&c->journal) &&
-	    (!wbio->wbio.first_btree_write || wbio->wbio.failed.nr)) {
+	    (!wbio->wbio.first_btree_write || !bch2_io_failures_empty(&wbio->wbio.failed))) {
 		int ret = lockrestart_do(trans, btree_node_write_update_key(trans, wbio, b));
 		if (ret)
 			set_btree_node_noevict(b);
 
 		if ((ret && !bch2_err_matches(ret, EROFS)) ||
-		    wbio->wbio.failed.nr) {
+		    !bch2_io_failures_empty(&wbio->wbio.failed)) {
 			CLASS(bch_log_msg, msg)(c);
 
 			/*
@@ -216,8 +216,8 @@ static void btree_node_write_endio(struct bio *bio)
 
 	if (unlikely(bio->bi_status)) {
 		guard(spinlock_irqsave)(&c->write_error_lock);
-		bch2_dev_io_failures_mut(&orig->failed, wbio->dev)->errcode =
-			__bch2_err_throw(c, -blk_status_to_bch_err(bio->bi_status));
+		bch2_io_failures_set_errcode(&orig->failed, wbio->dev,
+			__bch2_err_throw(c, -blk_status_to_bch_err(bio->bi_status)));
 	}
 
 	/*

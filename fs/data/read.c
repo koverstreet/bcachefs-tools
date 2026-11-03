@@ -81,7 +81,7 @@ static void bch2_read_bio_to_text_atomic(struct printbuf *, struct bch_read_bio 
 
 static inline bool have_io_error(struct bch_io_failures *failed)
 {
-	return failed && failed->nr;
+	return failed && !bch2_io_failures_empty(failed);
 }
 
 static inline struct data_update *rbio_data_update(struct bch_read_bio *rbio)
@@ -301,24 +301,6 @@ static void propagate_io_error_to_data_update(struct bch_fs *c,
 	}
 }
 
-static u32 bch2_io_failures_to_err_mask(struct bch_io_failures *failed)
-{
-	u32 errors = 0;
-	for (unsigned i = 0; i < failed->nr; i++) {
-		struct bch_dev_io_failures *f = &failed->data[i];
-
-		if (f->csum_nr)
-			errors |= BCH_READ_ERR_checksum;
-		if (f->ec_errcode)
-			errors |= BCH_READ_ERR_ec_reconstruct;
-		if (bch2_err_matches(f->errcode, BCH_ERR_decompress))
-			errors |= BCH_READ_ERR_decompression;
-		else if (f->errcode)
-			errors |= BCH_READ_ERR_io;
-	}
-	return errors;
-}
-
 static int rbio_mark_io_failure(struct bch_read_bio *rbio,
 				struct extent_ptr_decoded *pick,
 				struct bch_io_failures *failed,
@@ -332,9 +314,11 @@ static int rbio_mark_io_failure(struct bch_read_bio *rbio,
 	}
 
 	if (ret == -BCH_ERR_BLK_STS_INVAL) {
-		prt_printf(&failed->ec_msg, "Failing bio, after block layer completion:\n");
-		guard(printbuf_indent)(&failed->ec_msg);
-		bch2_bio_to_text(&failed->ec_msg, &rbio->bio);
+		struct printbuf *ec_msg = bch2_io_failures_ec_msg(failed);
+
+		prt_printf(ec_msg, "Failing bio, after block layer completion:\n");
+		guard(printbuf_indent)(ec_msg);
+		bch2_bio_to_text(ec_msg, &rbio->bio);
 	}
 
 	return ret;
@@ -431,7 +415,7 @@ static void bch2_rbio_retry(struct work_struct *work)
 		     bch2_err_matches(ret, BCH_ERR_data_read_ptr_stale_race)))
 			ret = 0;
 
-		if (failed.nr || failed.ec_msg.pos || ret) {
+		if (!bch2_io_failures_empty(&failed) || bch2_io_failures_ec_msg(&failed)->pos || ret) {
 			struct printbuf *out;
 			CLASS(bch_log_msg, msg)(c);
 
@@ -474,7 +458,7 @@ static void bch2_rbio_retry(struct work_struct *work)
 		 * failure doesn't fail the read. Only user reads name an inum
 		 * (a data update read may be an indirect extent):
 		 */
-		if (failed.nr || ret) {
+		if (!bch2_io_failures_empty(&failed) || ret) {
 			enum bch_sb_error_id e = !ret
 				? (data_read_err_is_csum(orig_ret)
 				   ? BCH_FSCK_ERR_data_read_csum_err_recovered
@@ -498,12 +482,7 @@ static void bch2_rbio_retry(struct work_struct *work)
 			 * Decompression failures are counted where they happen,
 			 * in bch2_bio_uncompress().
 			 */
-			darray_for_each(failed, f) {
-				if (bch2_err_matches(f->errcode, BCH_ERR_blockdev_io_error))
-					bch2_sb_error_count(c, bch2_blk_sts_sb_err(f->errcode));
-				if (bch2_err_matches(f->ec_errcode, BCH_ERR_blockdev_io_error))
-					bch2_sb_error_count(c, bch2_blk_sts_sb_err(f->ec_errcode));
-			}
+			bch2_io_failures_count_blk_errors(c, &failed);
 
 			/*
 			 * A read that recovered has nothing to name beyond the
@@ -1376,7 +1355,7 @@ int __bch2_read_extent(struct btree_trans *trans,
 		}
 
 		/* Attempting reconstruct read: */
-		ret = bch2_ec_read_extent(trans, rbio, k, &failed->ec_msg);
+		ret = bch2_ec_read_extent(trans, rbio, k, bch2_io_failures_ec_msg(failed));
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
 			bch2_rbio_free(rbio);
 			return ret;
@@ -1459,7 +1438,7 @@ int bch2_read(struct btree_trans *trans, struct bch_read_bio *rbio,
 
 		if (unlikely(flags & BCH_READ_in_retry) &&
 		    !bkey_and_val_eq(k, bkey_i_to_s_c(prev_read->k))) {
-			failed->nr = 0;
+			bch2_io_failures_reset_devs(failed);
 			bch2_bkey_buf_copy(prev_read, sk.k);
 		}
 

@@ -1282,7 +1282,7 @@ static noinline int bch2_write_drop_io_error_ptrs(struct bch_write_op *op)
 
 		if (bkey_extent_is_direct_data(&src->k)) {
 			bch2_bkey_drop_ptrs_noerror(bkey_i_to_s(src), p, entry,
-				bch2_dev_io_failures(&op->wbio.failed, p.ptr.dev));
+				bch2_io_failures_has_dev(&op->wbio.failed, p.ptr.dev));
 
 			if (!bch2_bkey_durability_safe(c, bkey_i_to_s_c(src)).nr_ptrs)
 				return bch_err_throw(c, data_write_io);
@@ -1377,9 +1377,7 @@ static void __bch2_write_index(struct bch_write_op *op)
 	}
 out:
 	/* If some a bucket wasn't written, we can't erasure code it: */
-	darray_for_each(op->wbio.failed, i)
-		bch2_open_bucket_write_error(c, &op->open_buckets, i->dev,
-					     i->errcode ?: -BCH_ERR_data_write_io);
+	bch2_open_buckets_write_errors(c, &op->open_buckets, &op->wbio.failed);
 
 	bch2_open_buckets_put(c, &op->open_buckets);
 	return;
@@ -1503,8 +1501,8 @@ static void bch2_write_endio(struct bio *bio)
 
 	if (unlikely(bio->bi_status)) {
 		guard(spinlock_irqsave)(&c->write_error_lock);
-		bch2_dev_io_failures_mut(&op->wbio.failed, wbio->dev)->errcode =
-			__bch2_err_throw(c, -blk_status_to_bch_err(bio->bi_status));
+		bch2_io_failures_set_errcode(&op->wbio.failed, wbio->dev,
+			__bch2_err_throw(c, -blk_status_to_bch_err(bio->bi_status)));
 		op->io_error = true;
 	}
 
@@ -2480,7 +2478,7 @@ static void __bch2_write(struct bch_write_op *op)
 	    bch2_nocow_write(op))
 		return;
 again:
-	op->wbio.failed.nr = 0;
+	bch2_io_failures_reset_devs(&op->wbio.failed);
 
 	do {
 		struct bkey_i *key_to_write;
@@ -2521,7 +2519,7 @@ again:
 			    wait_on_allocator_sync) {
 				ret2 = bch2_wait_on_allocator(trans, req, ret2, &op->cl);
 				__bch2_write_index(op);
-				op->wbio.failed.nr = 0;
+				bch2_io_failures_reset_devs(&op->wbio.failed);
 				ret2 = ret2 ?: btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
 			}
 			ret2;
@@ -2624,7 +2622,7 @@ static void bch2_write_data_inline(struct bch_write_op *op, unsigned data_len)
 	unsigned sectors;
 	int ret;
 
-	op->wbio.failed.nr = 0;
+	bch2_io_failures_reset_devs(&op->wbio.failed);
 
 	op->flags |= BCH_WRITE_wrote_data_inline;
 	op->flags |= BCH_WRITE_submitted;

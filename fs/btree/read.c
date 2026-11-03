@@ -181,9 +181,10 @@ static int __btree_err(enum bch_fsck_flags flags,
 		va_end(args);
 
 		/* not over keys_lost, from earlier in this replica: */
-		struct bch_dev_io_failures *f = bch2_dev_io_failures_mut(failed, ca->dev_idx);
-		if (!bch2_err_matches(f->errcode, BCH_ERR_btree_node_validate_err))
-			f->errcode = bch_err_throw(c, btree_node_validate_err);
+		if (!bch2_err_matches(bch2_io_failures_dev_errcode(failed, ca->dev_idx),
+				      BCH_ERR_btree_node_validate_err))
+			bch2_io_failures_set_errcode(failed, ca->dev_idx,
+						     bch_err_throw(c, btree_node_validate_err));
 
 		struct extent_ptr_decoded pick;
 		bool have_retry = bch2_bkey_pick_read_device(c,
@@ -251,8 +252,8 @@ static void btree_node_read_keys_lost(struct bch_fs *c, struct bch_dev *ca,
 				      struct bch_io_failures *failed)
 {
 	if (failed)
-		bch2_dev_io_failures_mut(failed, ca->dev_idx)->errcode =
-			bch_err_throw(c, btree_node_validate_err_keys_lost);
+		bch2_io_failures_set_errcode(failed, ca->dev_idx,
+					     bch_err_throw(c, btree_node_validate_err_keys_lost));
 }
 
 /*
@@ -1038,18 +1039,18 @@ static void btree_node_read_work(struct work_struct *work)
 		bch2_btree_lost_data(c, &buf, b->c.btree_id);
 		bch2_damage_note_lost_extents(c, b->c.btree_id, bkey_i_to_s_c(&b->key));
 		prt_printf(&buf, "error %s\n", bch2_err_str(ret));
-	} else if (failed.nr) {
+	} else if (!bch2_io_failures_empty(&failed)) {
 		/* Separate ratelimit states for soft vs. hard errors */
 		buf.suppress = __bch2_ratelimit(c, &c->btree.read_errors_soft);
 
-		struct bch_dev_io_failures *used = bch2_dev_io_failures(&failed, rb->pick.ptr.dev);
+		bool used = bch2_io_failures_has_dev(&failed, rb->pick.ptr.dev);
 
 		if (!used)
 			prt_printf(&buf, "retry success");
 		else
 			prt_printf(&buf, "repair success");
 
-		if ((failed.nr || btree_node_need_rewrite(b)) &&
+		if ((!bch2_io_failures_empty(&failed) || btree_node_need_rewrite(b)) &&
 		    c->recovery.current_pass != BCH_RECOVERY_PASS_scan_for_btree_nodes) {
 			prt_printf(&buf, " (rewriting node)");
 			bch2_async_btree_op(c, b, ASYNC_BTREE_rewrite);
@@ -1059,7 +1060,8 @@ static void btree_node_read_work(struct work_struct *work)
 
 		/* the replica we're using lost keys: the btree lost data */
 		if (used &&
-		    bch2_err_matches(used->errcode, BCH_ERR_btree_node_validate_err_keys_lost))
+		    bch2_err_matches(bch2_io_failures_dev_errcode(&failed, rb->pick.ptr.dev),
+				     BCH_ERR_btree_node_validate_err_keys_lost))
 			bch2_btree_lost_data(c, &buf, b->c.btree_id);
 	} else {
 		buf.suppress = true;

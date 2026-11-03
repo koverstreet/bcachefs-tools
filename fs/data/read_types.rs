@@ -8,9 +8,16 @@ use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::Printbuf;
 use core::ffi::c_uint;
-use cstruct_macros::{bitfield, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, c_const, CStruct, TypeInfo};
 use nestify::nest;
 use crate::format::{Bpos, Btree, Bversion};
+
+c_const! {
+    pub const BCH_READ_ERR_checksum: u32 = 1 << 0;
+    pub const BCH_READ_ERR_io: u32 = 1 << 1;
+    pub const BCH_READ_ERR_decompression: u32 = 1 << 2;
+    pub const BCH_READ_ERR_ec_reconstruct: u32 = 1 << 3;
+}
 
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]

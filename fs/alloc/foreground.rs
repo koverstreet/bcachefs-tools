@@ -1318,12 +1318,20 @@ pub unsafe fn __bch2_open_bucket_put(c: &Opaque<Fs>, ob: &c::open_bucket) {
     Fs::from_c(c).open_bucket_close(unsafe { OpenBucketRef::from_c(ob) })
 }
 
-/// The stripes the buckets of @obs on @dev are blocks of, cancelled with
-/// @err: the writes to @dev failed.
+/// The stripes the buckets of @obs on each device of @failed are blocks of,
+/// cancelled with its error: the writes to it failed.
 #[c_export]
-pub fn bch2_open_bucket_write_error(c: &Opaque<Fs>, obs: &c::open_buckets, dev: c_uint, err: c_int) {
-    let Err(err) = ret_to_result_void(err) else { panic!("a write error without an error") };
-    obs.iter(Fs::from_c(c)).filter(|ob| u32::from(ob.id().dev()) == dev).filter_map(|ob| ob.into_ref().stripe()).for_each(|s| s.err.set(err));
+pub fn bch2_open_buckets_write_errors(c: &Opaque<Fs>, obs: &c::open_buckets, failed: &c::bch_io_failures) {
+    let fs = Fs::from_c(c);
+    for f in failed.devs() {
+        let err = if f.errcode != 0 {
+            BchError::from_raw(f.errcode.into())
+        } else {
+            bch_errcode::BCH_ERR_data_write_io.into()
+        };
+        obs.iter(fs).filter(|ob| u32::from(ob.id().dev()) == u32::from(f.dev))
+            .filter_map(|ob| ob.into_ref().stripe()).for_each(|s| s.err.set(err));
+    }
 }
 
 /// # Safety

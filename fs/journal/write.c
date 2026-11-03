@@ -341,7 +341,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 		percpu_down_read(&j->pin_resize_lock);
 		struct journal_entry_pin_list *pin = journal_seq_pin(j, seq_wrote);
 
-		if (unlikely(w->failed.nr)) {
+		if (unlikely(!bch2_io_failures_empty(&w->failed))) {
 			union bch_replicas_padded r;
 			journal_pin_devs_to_replicas(&r, pin);
 			bch2_replicas_entry_put(c, &r.e);
@@ -356,7 +356,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 				journal_pin_set_devs(pin, &w->devs_written);
 		}
 
-		if (unlikely(w->failed.nr || err)) {
+		if (unlikely(!bch2_io_failures_empty(&w->failed) || err)) {
 			CLASS(bch_log_msg, msg)(c);
 
 			prt_printf(&msg.m, "error writing journal entry %llu\n", seq_wrote);
@@ -571,7 +571,7 @@ static CLOSURE_CALLBACK(journal_write_done_flush)
 	 * we're not taking j->lock and updating the various seq_ondisk fields
 	 * yet:
 	 */
-	if (!w->failed.nr && w->wait.list.first > JOURNAL_BUF_FLUSH_NO_WAIT) {
+	if (bch2_io_failures_empty(&w->failed) && w->wait.list.first > JOURNAL_BUF_FLUSH_NO_WAIT) {
 		struct closure_waitlist	wait = {{ xchg(&w->wait.list.first, NULL) }};
 		closure_wake_up(&wait);
 	}
@@ -595,8 +595,8 @@ static void journal_write_endio(struct bio *bio)
 
 	if (bio->bi_status) {
 		guard(spinlock_irqsave)(&j->err_lock);
-		bch2_dev_io_failures_mut(&w->failed, ca->dev_idx)->errcode =
-			__bch2_err_throw(c, -blk_status_to_bch_err(bio->bi_status));
+		bch2_io_failures_set_errcode(&w->failed, ca->dev_idx,
+			__bch2_err_throw(c, -blk_status_to_bch_err(bio->bi_status)));
 		bch2_dev_list_drop_dev(&w->devs_written, ca->dev_idx);
 	}
 

@@ -14,6 +14,7 @@ use super::*;
 use crate::debug::params as debug_params;
 use crate::errcode::bch_errcode;
 use crate::util::Printbuf;
+use crate::sb::errors::bch2_blk_sts_sb_err;
 use crate::util::kernel::{cold_path, unlikely, READ};
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -30,12 +31,21 @@ impl c::bch_io_failures {
         &self.data[..self.nr.into()]
     }
 
-    /// @dev's record, if it has one: bch2_dev_io_failures().
+    pub fn is_empty(&self) -> bool {
+        self.nr == 0
+    }
+
+    /// Forget every device's failures - not the reconstruct's message.
+    pub fn reset_devs(&mut self) {
+        self.nr = 0;
+    }
+
+    /// @dev's record, if it has one.
     pub fn dev(&self, dev: u32) -> Option<&c::bch_dev_io_failures> {
         self.devs().iter().find(|f| u32::from(f.dev) == dev)
     }
 
-    /// @dev's record, a new one if it has none: bch2_dev_io_failures_mut().
+    /// @dev's record, a new one if it has none.
     /// Panics if there's no room for one - one per replica, and one more.
     pub fn dev_mut(&mut self, dev: u32) -> &mut c::bch_dev_io_failures {
         let nr = usize::from(self.nr);
@@ -67,6 +77,40 @@ impl c::bch_io_failures {
             f.bits.update_csum_nr(|n| n.wrapping_add(1) & 0x7f);
         } else {
             f.errcode = code;
+        }
+    }
+
+    /// The BCH_READ_ERR_* kinds of error, for a read's error report.
+    pub fn err_mask(&self) -> u32 {
+        let mut errors = 0;
+        for f in self.devs() {
+            if f.bits.csum_nr() != 0 {
+                errors |= c::BCH_READ_ERR_checksum;
+            }
+            if f.ec_errcode != 0 {
+                errors |= c::BCH_READ_ERR_ec_reconstruct;
+            }
+            if f.errcode != 0 {
+                errors |= if BchError::from_raw(-i32::from(f.errcode)).matches(bch_errcode::BCH_ERR_decompress) {
+                    c::BCH_READ_ERR_decompression
+                } else {
+                    c::BCH_READ_ERR_io
+                };
+            }
+        }
+        errors
+    }
+
+    /// Count, by status, each failure that came back from the block layer.
+    pub fn count_blk_errors(&self, fs: &Fs) {
+        let count = |code: i16| {
+            if code != 0 && BchError::from_raw(-i32::from(code)).matches(bch_errcode::BCH_ERR_blockdev_io_error) {
+                fs.sb_error_count(bch2_blk_sts_sb_err(code.into()));
+            }
+        };
+        for f in self.devs() {
+            count(f.errcode);
+            count(f.ec_errcode);
         }
     }
 

@@ -112,6 +112,16 @@ pub fn bch2_extents_match(c: &Fs, k1: BkeySC<'_>, k2: BkeySC<'_>) -> bool {
 
 // ── reading ──────────────────────────────────────────────────────────────
 
+#[c_export]
+pub fn bch2_io_failures_init() -> c::bch_io_failures {
+    Default::default()
+}
+
+#[c_export]
+pub fn bch2_io_failures_exit(failed: &mut c::bch_io_failures) {
+    failed.ec_msg = Printbuf::new();
+}
+
 #[cold]
 #[c_export]
 pub fn bch2_io_failures_to_text(out: &mut Printbuf, c: &Opaque<Fs>, failed: &c::bch_io_failures) {
@@ -123,16 +133,46 @@ pub fn bch2_io_failures_all_dev_removed(failed: &c::bch_io_failures) -> bool {
     failed.all_dev_removed()
 }
 
-/// Mutable, as C's: a caller may update the record.
 #[c_export]
-pub fn bch2_dev_io_failures(failed: &mut c::bch_io_failures, dev: c_uint) -> *mut c::bch_dev_io_failures {
-    let nr = usize::from(failed.nr);
-    failed.data[..nr].iter_mut().find(|f| u32::from(f.dev) == dev).map_or(core::ptr::null_mut(), |f| f)
+pub fn bch2_io_failures_empty(failed: &c::bch_io_failures) -> bool {
+    failed.is_empty()
 }
 
 #[c_export]
-pub fn bch2_dev_io_failures_mut(failed: &mut c::bch_io_failures, dev: c_uint) -> *mut c::bch_dev_io_failures {
-    failed.dev_mut(dev)
+pub fn bch2_io_failures_reset_devs(failed: &mut c::bch_io_failures) {
+    failed.reset_devs()
+}
+
+#[c_export]
+pub fn bch2_io_failures_has_dev(failed: &c::bch_io_failures, dev: c_uint) -> bool {
+    failed.dev(dev).is_some()
+}
+
+/// @dev's io error, 0 for none.
+#[c_export]
+pub fn bch2_io_failures_dev_errcode(failed: &c::bch_io_failures, dev: c_uint) -> c_int {
+    failed.dev(dev).map_or(0, |f| f.errcode.into())
+}
+
+#[c_export]
+pub fn bch2_io_failures_set_errcode(failed: &mut c::bch_io_failures, dev: c_uint, err: c_int) {
+    failed.dev_mut(dev).errcode = err as i16;
+}
+
+/// The erasure coded reconstruct's message, for the read path to write.
+#[c_export]
+pub fn bch2_io_failures_ec_msg(failed: &mut c::bch_io_failures) -> *mut Printbuf {
+    &mut failed.ec_msg
+}
+
+#[c_export]
+pub fn bch2_io_failures_to_err_mask(failed: &c::bch_io_failures) -> u32 {
+    failed.err_mask()
+}
+
+#[c_export]
+pub fn bch2_io_failures_count_blk_errors(c: &Opaque<Fs>, failed: &c::bch_io_failures) {
+    failed.count_blk_errors(Fs::from_c(c))
 }
 
 #[c_export]
