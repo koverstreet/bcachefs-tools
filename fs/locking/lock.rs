@@ -452,14 +452,14 @@ macro_rules! new_lock {
         let key = $crate::new_lock!(@key);
         let g = $g;
         let p = $p;
-        let name = unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked($name.as_bytes()) };
+        let name = const { $crate::util::ffi::c_str($name) };
         unsafe { $crate::locking::Locked::new(g, p, name, key) }
     }};
     (@init_in_place $g:expr, $p:expr, $name:expr) => {{
         let key = $crate::new_lock!(@key);
         let g = $g;
         let p = $p;
-        let name = unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked($name.as_bytes()) };
+        let name = const { $crate::util::ffi::c_str($name) };
         unsafe { $crate::locking::Locked::new_init(g, p, name, key) }
     }};
     (<- $g:expr $(,)?) => {

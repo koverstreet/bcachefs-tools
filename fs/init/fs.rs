@@ -1291,15 +1291,11 @@ macro_rules! fs_delayed_work {
             $vis fn init() -> impl ::pin_init::PinInit<$crate::util::workqueue::DelayedWork> {
                 #[cfg(kernel)]
                 {
-                    // SAFETY: NUL-terminated
-                    let name = |s: &'static str| unsafe {
-                        ::core::ffi::CStr::from_bytes_with_nul_unchecked(s.as_bytes())
-                    };
                     $crate::util::workqueue::DelayedWork::new(
                         Self::work_fn,
-                        name(concat!(stringify!($name), "\0")),
+                        const { $crate::util::ffi::c_str(concat!(stringify!($name), "\0")) },
                         ::kernel::static_lock_class!(),
-                        name(concat!(stringify!($name), ".timer\0")),
+                        const { $crate::util::ffi::c_str(concat!(stringify!($name), ".timer\0")) },
                         ::kernel::static_lock_class!())
                 }
                 #[cfg(not(kernel))]

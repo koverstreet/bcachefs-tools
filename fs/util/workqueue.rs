@@ -254,8 +254,7 @@ macro_rules! new_work {
         #[cfg(kernel)]
         let w = $crate::util::workqueue::work_init(
             $func,
-            // SAFETY: NUL-terminated
-            unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked(::core::concat!($name, "\0").as_bytes()) },
+            const { $crate::util::ffi::c_str(::core::concat!($name, "\0")) },
             ::kernel::static_lock_class!());
         #[cfg(not(kernel))]
         let w = $crate::util::workqueue::work_init($func);
