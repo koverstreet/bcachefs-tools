@@ -68,6 +68,14 @@ impl<'f> Bounce<'f> {
         unsafe { core::slice::from_raw_parts_mut(self.p.as_ptr(), self.bytes / size_of::<u64>()) }
     }
 
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.p.as_ptr().cast(), self.bytes) }
+    }
+
+    pub fn as_bytes_mut(&mut self) -> &mut [u8] {
+        unsafe { core::slice::from_raw_parts_mut(self.p.as_ptr().cast(), self.bytes) }
+    }
+
     /// The node's buffer this, and this the node's old one.
     pub fn swap(&mut self, b: &mut BtreeNode) {
         assert!(self.bytes == b.buf_bytes(), "swapping a {} byte bounce for a {} byte node buffer",
@@ -78,6 +86,8 @@ impl<'f> Bounce<'f> {
         self.p = NonNull::new(old.cast()).expect("a node's buffer");
     }
 }
+
+unsafe impl Send for Bounce<'_> {}
 
 impl Drop for Bounce<'_> {
     fn drop(&mut self) {
