@@ -1000,7 +1000,7 @@ static loff_t bch2_remap_file_range_errcode(struct file *file_src, loff_t pos_sr
 	if ((file_dst->f_flags & (__O_SYNC | O_DSYNC)) ||
 	    IS_SYNC(file_inode(file_dst))) {
 		u64 unused;
-		ret = bch2_flush_inode(c, dst, &unused);
+		ret = bch2_flush_inode(c, dst, &unused) ?: ret;
 	}
 err:
 	bch2_quota_reservation_put(c, dst, &quota_res);
