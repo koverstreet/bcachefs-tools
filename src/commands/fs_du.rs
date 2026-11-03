@@ -17,6 +17,11 @@
 //! it crosses subvolumes and snapshots, where the sharing is, and never enters
 //! another filesystem mounted below.
 //!
+//! --compression breaks disk, uncompressed and referenced down by compression
+//! type. Uncompressed is per region, like disk, so disk / uncompressed is the
+//! compression ratio whatever the replication; referenced goes to the type of
+//! the key's first dirty pointer.
+//!
 //! Only what's in the btree is counted: dirty pagecache isn't, and inline data
 //! and reservations are referenced but take no device space.
 
@@ -29,10 +34,10 @@ use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::btree::bkey::{pos, spos, BkeySC};
 use bcachefs_kernel::c;
 use bcachefs_kernel::data::ptrs::{BkeyVPtrs, Ptrs};
-use bcachefs_kernel::format::Btree;
+use bcachefs_kernel::format::{Btree, CompressionType};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::util::printbuf::Printbuf;
-use bcachefs_kernel::util::Sectors;
+use bcachefs_kernel::util::{Sectors, ToText};
 use bch_bindgen::c::DegradedAction;
 use clap::Parser;
 
@@ -60,6 +65,10 @@ pub struct Cli {
     #[arg(short = 'h', long = "human-readable")]
     human_readable: bool,
 
+    /// Break the total down by compression type
+    #[arg(short = 'c', long)]
+    compression: bool,
+
     /// Files and directories on a mounted bcachefs
     #[arg(default_value = ".")]
     paths: Vec<PathBuf>,
@@ -68,38 +77,88 @@ pub struct Cli {
 /// A dirty pointer's region of a device, in sectors.
 #[derive(Clone, Copy)]
 struct Region {
-    dev:   u32,
-    start: u64,
-    len:   u64,
+    dev:          u32,
+    start:        u64,
+    len:          u64,
+    uncompressed: u64,
+    ctype:        u8,
 }
 
 /// What one file contributes.
 #[derive(Default)]
 struct FileUsage {
-    referenced: u64,
-    regions:    Vec<Region>,
+    referenced:         u64,
+    referenced_by_type: BTreeMap<u8, u64>,
+    regions:            Vec<Region>,
 }
 
 #[derive(Default)]
 struct Usage {
-    referenced: u64,
-    /// device -> region start -> longest region seen starting there
-    regions:    BTreeMap<u32, BTreeMap<u64, u64>>,
+    referenced:         u64,
+    referenced_by_type: BTreeMap<u8, u64>,
+    /// (compression type, device) -> region start -> (longest region seen
+    /// starting there, its uncompressed size)
+    regions:            BTreeMap<(u8, u32), BTreeMap<u64, (u64, u64)>>,
+}
+
+/// One row of the --compression table, in sectors.
+struct TypeUsage {
+    ctype:        u8,
+    disk:         u64,
+    uncompressed: u64,
+    referenced:   u64,
 }
 
 impl Usage {
     fn add(&mut self, f: &FileUsage) {
         self.referenced += f.referenced;
+        for (&ctype, &sectors) in &f.referenced_by_type {
+            *self.referenced_by_type.entry(ctype).or_default() += sectors;
+        }
         for r in &f.regions {
-            let len = self.regions.entry(r.dev).or_default().entry(r.start).or_default();
-            *len = (*len).max(r.len);
+            let e = self.regions.entry((r.ctype, r.dev)).or_default().entry(r.start).or_default();
+            *e = (e.0.max(r.len), r.uncompressed);
         }
     }
 
     fn disk(&self) -> u64 {
-        self.regions.values()
-            .map(|dev| union_len(dev.iter().map(|(&start, &len)| (start, len))))
+        let mut by_dev: BTreeMap<u32, Vec<(u64, u64)>> = BTreeMap::new();
+        for (&(_, dev), regions) in &self.regions {
+            by_dev.entry(dev).or_default().extend(regions.iter().map(|(&start, &(len, _))| (start, len)));
+        }
+        by_dev.into_values()
+            .map(|mut regions| {
+                regions.sort_unstable();
+                union_len(regions)
+            })
             .sum()
+    }
+
+    fn by_type(&self) -> Vec<TypeUsage> {
+        fn row(rows: &mut BTreeMap<u8, TypeUsage>, ctype: u8) -> &mut TypeUsage {
+            rows.entry(ctype).or_insert(TypeUsage { ctype, disk: 0, uncompressed: 0, referenced: 0 })
+        }
+        let mut rows = BTreeMap::new();
+
+        for (&(ctype, _), regions) in &self.regions {
+            let disk = union_len(regions.iter().map(|(&start, &(len, _))| (start, len)));
+            let compressed = ctype as u32 != CompressionType::none.0 &&
+                ctype as u32 != CompressionType::incompressible.0;
+
+            let r = row(&mut rows, ctype);
+            r.disk += disk;
+            // a compressed region is decompressed whole; an uncompressed one
+            // may be a fragment overlapping another
+            r.uncompressed += if compressed {
+                regions.values().map(|&(_, uncompressed)| uncompressed).sum()
+            } else {
+                disk
+            };
+        }
+        for (&ctype, &sectors) in &self.referenced_by_type {
+            row(&mut rows, ctype).referenced += sectors;
+        }
+        rows.into_values().collect()
     }
 }
 
@@ -160,14 +219,22 @@ impl Walk<'_> {
     fn ptrs(&mut self, k: BkeySC<'_>, live: &Range<u64>, out: &mut FileUsage) {
         let Some(p) = k.arm::<Ptrs>() else { return self.skip(k) };
 
-        out.referenced += overlap(&(k.k.start_offset()..k.k.p.offset), live);
+        let first = out.regions.len();
         out.regions.extend(p.ptrs_decoded(self.fs)
             .filter(|d| d.p.ptr.cached() == 0)
             .map(|d| Region {
-                dev:   d.p.ptr.dev() as u32,
-                start: d.p.ptr.offset(),
-                len:   d.p.crc.compressed_size as u64,
+                dev:          d.p.ptr.dev() as u32,
+                start:        d.p.ptr.offset(),
+                len:          d.p.crc.compressed_size as u64,
+                uncompressed: d.p.crc.uncompressed_size as u64,
+                ctype:        d.p.crc.compression_type,
             }));
+
+        let referenced = overlap(&(k.k.start_offset()..k.k.p.offset), live);
+        out.referenced += referenced;
+        if let Some(r) = out.regions.get(first) {
+            *out.referenced_by_type.entry(r.ctype).or_default() += referenced;
+        }
     }
 
     fn file_usage(&mut self, subvol: u64, inum: u64) -> Result<FileUsage> {
@@ -323,6 +390,7 @@ fn fs_du(cli: Cli) -> Result<()> {
         walk.walk(path, &mut usage, &mut total, &mut seen_total)?;
         usages.push((path.display().to_string(), usage));
     }
+    let types = cli.compression.then(|| total.by_type());
     if usages.len() > 1 {
         usages.push(("total".to_string(), total));
     }
@@ -335,6 +403,19 @@ fn fs_du(cli: Cli) -> Result<()> {
             write!(sub, "{}\r{}\r  {name}\n", Sectors(usage.referenced), Sectors(usage.disk()));
         }
     });
+    if let Some(types) = types {
+        out.aligned(|sub| {
+            write!(sub, "type\tdisk\runcompressed\rreferenced\rratio\r\n");
+            for t in &types {
+                CompressionType(t.ctype as u32).to_text(sub);
+                write!(sub, "\t{}\r{}\r{}\r", Sectors(t.disk), Sectors(t.uncompressed), Sectors(t.referenced));
+                match (t.disk * 1000).checked_div(t.uncompressed) {
+                    Some(pm) => write!(sub, "{}.{}%\r\n", pm / 10, pm % 10),
+                    None => write!(sub, "-\r\n"),
+                }
+            }
+        });
+    }
     print!("{out}");
 
     for (ty, nr) in &walk.skipped {
@@ -368,7 +449,10 @@ mod tests {
     fn usage_counts_a_region_once() {
         let file = |referenced, regions: &[(u32, u64, u64)]| FileUsage {
             referenced,
-            regions: regions.iter().map(|&(dev, start, len)| Region { dev, start, len }).collect(),
+            regions: regions.iter()
+                .map(|&(dev, start, len)| Region { dev, start, len, uncompressed: len, ctype: 0 })
+                .collect(),
+            ..Default::default()
         };
         let mut u = Usage::default();
         u.add(&file(8, &[(0, 100, 4)]));
@@ -377,5 +461,33 @@ mod tests {
         u.add(&file(4, &[(1, 100, 4)]));
         assert_eq!(u.referenced, 22);
         assert_eq!(u.disk(), 8);
+    }
+
+    /// A zstd extent split by an overwrite, on two replicas, and an
+    /// uncompressed fragment: each compressed region decompresses once per
+    /// replica, so the ratio is the compression ratio.
+    #[test]
+    fn by_type_counts_compressed_regions_once() {
+        let zstd = CompressionType::zstd.0 as u8;
+        let region = |dev, start, len, uncompressed, ctype| Region { dev, start, len, uncompressed, ctype };
+        let fragment = |referenced| FileUsage {
+            referenced,
+            referenced_by_type: [(zstd, referenced)].into(),
+            regions: vec![region(0, 100, 8, 32, zstd), region(1, 500, 8, 32, zstd)],
+        };
+        let mut u = Usage::default();
+        u.add(&fragment(10));
+        u.add(&fragment(12));
+        u.add(&FileUsage {
+            referenced: 4,
+            referenced_by_type: [(0, 4)].into(),
+            regions: vec![region(0, 200, 4, 4, 0)],
+        });
+
+        let rows = u.by_type();
+        let row = |ctype| rows.iter().find(|r| r.ctype == ctype).expect("a row");
+        assert_eq!((row(zstd).disk, row(zstd).uncompressed, row(zstd).referenced), (16, 64, 22));
+        assert_eq!((row(0).disk, row(0).uncompressed, row(0).referenced), (4, 4, 4));
+        assert_eq!(u.disk(), 20);
     }
 }
