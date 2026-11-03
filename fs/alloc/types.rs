@@ -83,13 +83,6 @@ impl OpenBucketIdx {
         core::num::NonZero::new(idx).map(OpenBucketIdx)
     }
 
-    /// # Safety
-    /// @idx isn't 0.
-    pub unsafe fn new_unchecked(idx: c::open_bucket_idx_t) -> Self {
-        // SAFETY: the caller's
-        OpenBucketIdx(unsafe { core::num::NonZero::new_unchecked(idx) })
-    }
-
     pub fn get(self) -> usize {
         self.0.get().into()
     }
