@@ -40,7 +40,7 @@ use core::future::Future;
 use core::marker::{PhantomData, PhantomPinned};
 use core::pin::Pin;
 use core::ptr::NonNull;
-use core::sync::atomic::Ordering::Relaxed;
+use core::sync::atomic::{AtomicI32, Ordering::Relaxed};
 use core::task::{ready, Context, Poll};
 
 use crate::c;
@@ -79,7 +79,7 @@ pub use iter::{FolioVec, Folios};
 pub use iter::{Chunk, Chunks, Segment, Segments, Walk};
 #[cfg(kernel)]
 pub(crate) use iter::nth_page;
-pub use owned::{of_bio, BioBox, BioBoxData, BioBuf, BioBufPtr, BioClone, BioEnd, BioField, BioInPlace, BioSet, Either, Endio, FrontPad, HasBio, RawBio, Remaining};
+pub use owned::{of_bio, BioBox, BioBoxData, BioBuf, BioBufPtr, BioClone, BioField, BioInPlace, BioSet, Either, Endio, FrontPad, HasBio, RawBio};
 
 // A bvec_iter's offset into its bvec, as a place: bi_offset - bi_bvec_done
 // before 7.3, and in the shim.
@@ -348,7 +348,8 @@ impl ToText for Bio {
         write!(out, "bi_iter.bi_idx\t{}\n", b.bi_iter.bi_idx);
         write!(out, concat!("bi_iter.", bi_offset!(@name), "\t{}\n"), bi_offset!(b.bi_iter));
 
-        write!(out, "bi_remaining:\t{}\n", HasBio::remaining(self).count().load(Relaxed) as u32);
+        let remaining = unsafe { AtomicI32::from_ptr((&raw const b.__bi_remaining.counter).cast_mut()) };
+        write!(out, "bi_remaining:\t{}\n", remaining.load(Relaxed) as u32);
         write!(out, "bi_end_io:\t");
         prt_symbol(out, b.bi_end_io.map_or(0, |f| f as usize as c_ulong));
         out.newline();

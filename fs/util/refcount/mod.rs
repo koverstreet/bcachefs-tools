@@ -24,10 +24,6 @@
 //! the bucket, the rest from one that's held - is a Refcount and not a
 //! TryRefcount, rather than having a tryget() that can't fail.
 //!
-//! A TestRefcount's put can tell it was the last: put_and_test(), for a count
-//! whose last put is where what it counts ends - a bio's __bi_remaining. It's
-//! a trait of its own as a percpu count can't tell without going atomic.
-//!
 //! Refs are RefGuards: a RefGuard<T> is a ref on T's count, and derefs to
 //! the T. Cloning one takes another, dropping it puts it. What an
 //! implementation supplies are the raw counting - inc(), dec(), try_inc() -
@@ -94,12 +90,6 @@ pub unsafe trait TryRefcount: Refcount {
     }
 }
 
-/// # Safety
-/// dec_and_test() puts a ref, as dec(), and is true for the last.
-pub unsafe trait TestRefcount: Refcount {
-    unsafe fn dec_and_test(&self) -> bool;
-}
-
 /// A ref on T's count: T, kept by it.
 #[must_use = "the ref is put as soon as it's dropped"]
 pub struct RefGuard<T: Refcount + ?Sized> {
@@ -131,13 +121,6 @@ impl<T: Refcount + ?Sized> RefGuard<T> {
     /// Its ref handed over without a guard, to be adopt()ed - not put.
     pub(crate) fn leak(self) {
         core::mem::forget(self);
-    }
-}
-
-impl<T: TestRefcount + ?Sized> RefGuard<T> {
-    pub fn put_and_test(self) -> bool {
-        let t = core::mem::ManuallyDrop::new(self).t;
-        unsafe { t.as_ref().dec_and_test() }
     }
 }
 
