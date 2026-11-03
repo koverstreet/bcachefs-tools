@@ -695,18 +695,23 @@ pub fn bch2_sb_members_to_cpu(c: &Opaque<Fs>) {
     let _ = c::bch_sb_field_members_v2::to_cpu(fs, &mut unsafe { fs.sb_lock_held() });
 }
 
-/// The worst IO latency seen, reading or writing as @rw, of @devs, in jiffies:
-/// to scale timeouts and "held too long" warnings so slow storage doesn't
-/// trip them.
+impl Fs {
+    /// The worst IO latency seen, reading or writing as @rw, of @devs, in
+    /// jiffies: to scale timeouts and "held too long" warnings so slow storage
+    /// doesn't trip them.
+    pub fn dev_latency_max(&self, devs: &c::bch_devs_mask, rw: c_int) -> c_ulong {
+        let rcu = read_lock();
+        let ns = self.devs_rcu_in(devs.d.iter(), &rcu)
+            .map(|ca| ca.io_latency[rw as usize].stats.lock.lock().max_duration)
+            .max()
+            .unwrap_or(0);
+        nsecs_to_jiffies(ns)
+    }
+}
+
 #[c_export]
 pub fn bch2_dev_latency_max(c: &Opaque<Fs>, devs: &c::bch_devs_mask, rw: c_int) -> c_ulong {
-    let fs = Fs::from_c(c);
-    let rcu = read_lock();
-    let ns = fs.devs_rcu_in(devs.d.iter(), &rcu)
-        .map(|ca| ca.io_latency[rw as usize].stats.lock.lock().max_duration)
-        .max()
-        .unwrap_or(0);
-    nsecs_to_jiffies(ns)
+    Fs::from_c(c).dev_latency_max(devs, rw)
 }
 
 // ── Device identity, recorded in the member ──────────────────────────────
