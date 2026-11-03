@@ -961,6 +961,15 @@ pub fn ret_to_result_void(ret: c_int) -> Result<(), BchError> {
     ret_to_result(ret).map(|_| ())
 }
 
+/// ret_to_result(), of a loff_t: a position, or a -errcode.
+pub fn loff_to_result(ret: i64) -> Result<u64, BchError> {
+    if ret < 0 && ret > -4096 {
+        Err(BchError(-ret as c_int))
+    } else {
+        Ok(ret as u64)
+    }
+}
+
 /// The other way: a result as C's int, 0 or -errcode - for Rust that C calls.
 pub fn ret_to_c<E: Into<BchError>>(ret: Result<(), E>) -> c_int {
     match ret {
