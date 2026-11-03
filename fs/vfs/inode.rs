@@ -99,8 +99,8 @@ const _: () = assert!(offset_of!(InodeInfo, v) == 0);
 // SAFETY: the kernel's inode, shared by every thread with it open or in a VFS
 // call. What Rust reaches through &InodeInfo is atomic, behind a lock, or the
 // VFS inode's, read and written as VfsInode has it. The plain fields -
-// ei_reserved_*, ei_last_dirtied, ei_inodes_idx, the inode cache's hash
-// entries - are C's, under its locks: Rust doesn't touch them.
+// ei_last_dirtied, ei_inodes_idx, the inode cache's hash entries - are C's,
+// under its locks: Rust doesn't touch them.
 unsafe impl Send for InodeInfo {}
 unsafe impl Sync for InodeInfo {}
 
@@ -249,6 +249,14 @@ impl InodeInfo {
         let mut bi = inode::peek(t, &mut iter, self.inum(), BtreeIterFlags::INTENT)?;
         self.fold_times(&mut bi);
         inode::write(t, &mut iter, &mut bi)
+    }
+
+    /// Forget the cached allocation state, as anything that deallocates must:
+    /// see InodeReserved.
+    pub fn clear_reserved(&self) {
+        let mut r = self.ei_reserved.lock();
+        r.ei_reserved_start = 0;
+        r.ei_reserved_end = 0;
     }
 
     pub fn update_lock(&self) -> UpdateLock<'_> {

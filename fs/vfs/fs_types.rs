@@ -37,25 +37,8 @@ pub struct InodeInfo {
      */
     pub ei_inum_hash: c::bch_inum_hash_entry,
 
-    /*
-     * Cached extent allocation state for [start, end), for skipping btree
-     * lookups when initializing bch_folio state in sequential buffered
-     * writes.
-     *
-     * Staleness contract: extents may change toward allocated without
-     * notice (worst case we over-reserve); anything that deallocates must
-     * clear the range, under pagecache_block so no fill (under
-     * pagecache_add) can straddle the deallocation. Fillers build their
-     * result in locals and publish it in one go: fillers aren't
-     * serialized against each other (page_mkwrite fills without i_rwsem),
-     * and incremental publishing would let two fills interleave into a
-     * range neither of them scanned.
-     */
-    pub ei_reserved_start: u64,
-    pub ei_reserved_end: u64,
-    pub ei_reserved_replicas: u8,
-    pub ei_reserved_state: u8,
-    pub ei_reserved_lock: c::spinlock_t,
+    #[c_lock("spinlock_t ei_reserved_lock")]
+    pub ei_reserved: Locked<c::spinlock_t, InodeReserved>,
 
     pub ei_inodes_idx: c_uint,
     #[c("unsigned long ei_flags")]
@@ -122,6 +105,29 @@ c_enum! {
          */
         EI_INODE_FLUSH_ON_CLOSE = 3,
     }
+}
+
+/*
+ * Cached extent allocation state for [start, end), for skipping btree
+ * lookups when initializing bch_folio state in sequential buffered
+ * writes.
+ *
+ * Staleness contract: extents may change toward allocated without
+ * notice (worst case we over-reserve); anything that deallocates must
+ * clear the range, under pagecache_block so no fill (under
+ * pagecache_add) can straddle the deallocation. Fillers build their
+ * result in locals and publish it in one go: fillers aren't
+ * serialized against each other (page_mkwrite fills without i_rwsem),
+ * and incremental publishing would let two fills interleave into a
+ * range neither of them scanned.
+ */
+#[repr(C)]
+#[derive(CStruct, TypeInfo)]
+pub struct InodeReserved {
+    pub ei_reserved_start: u64,
+    pub ei_reserved_end: u64,
+    pub ei_reserved_replicas: u8,
+    pub ei_reserved_state: u8,
 }
 
 /// An inode's quota accounting, under ei_quota_lock.
