@@ -98,6 +98,11 @@ pub fn reset_bvec_offset(iter: &mut c::bvec_iter) {
     bi_offset!(iter) = 0;
 }
 
+/// How far into its bvec @iter is.
+pub fn bvec_offset(iter: &c::bvec_iter) -> u32 {
+    bi_offset!(iter)
+}
+
 /// How many bvecs mapping @len bytes at @p takes: a page each for vmalloc
 /// memory, one for the direct map.
 pub fn buf_nr_bvecs(p: *const u8, len: usize) -> usize {
@@ -209,7 +214,7 @@ impl Bio {
     /// # Safety
     /// @buf is the allocators' - in the direct map, or vmalloc - and outlives
     /// its place in the bvecs; nothing has the bio in flight.
-    pub(crate) unsafe fn map(self: Pin<&mut Self>, buf: *mut u8, len: usize) {
+    pub unsafe fn map(self: Pin<&mut Self>, buf: *mut u8, len: usize) {
         let len = u32::try_from(len).expect("mapping a buffer of 4G or more into a bio");
         let bio = self.raw_mut();
         #[cfg(kernel)]
@@ -222,6 +227,17 @@ impl Bio {
         assert!(bio.bi_vcnt < bio.bi_max_vecs, "mapping {len} bytes: the bio's bvecs are full");
         // SAFETY: the caller's, and a bvec free
         unsafe { c::bio_add_virt_nofail(bio, buf.cast(), len) };
+    }
+
+    /// Panics if the bio's bvecs are full.
+    ///
+    /// # Safety
+    /// @folio stays locked till the bio's done with it.
+    #[cfg(kernel)]
+    pub unsafe fn add_folio(self: Pin<&mut Self>, folio: crate::vfs::folio::Folio) {
+        let bio = self.raw_mut();
+        assert!(bio.bi_vcnt < bio.bi_max_vecs, "adding a folio: the bio's bvecs are full");
+        unsafe { c::bio_add_folio_nofail(bio, folio.as_ptr(), folio.size(), 0) }
     }
 
     pub fn reset(self: Pin<&mut Self>, bdev: *mut c::block_device, opf: u32) {
@@ -253,6 +269,31 @@ impl Bio {
         let mut r = self.range();
         r.advance(random_u64_below(u64s.into()) as u32 * 8);
         r.take(8).copy_from(&random_u64().to_ne_bytes());
+    }
+
+    pub fn set_dev(self: Pin<&mut Self>, bdev: *mut c::block_device) {
+        #[cfg(kernel)]
+        unsafe { c::bio_set_dev(self.raw_mut(), bdev) }
+        #[cfg(not(kernel))]
+        { self.raw_mut().bi_bdev = bdev }
+    }
+
+    /// # Safety
+    /// @iter is a position of its bvecs.
+    pub unsafe fn set_iter(self: Pin<&mut Self>, iter: c::bvec_iter) {
+        self.raw_mut().bi_iter = iter;
+    }
+
+    pub fn set_opf(self: Pin<&mut Self>, opf: u32) {
+        self.raw_mut().bi_opf = opf as _;
+    }
+
+    pub fn set_ioprio(self: Pin<&mut Self>, prio: u16) {
+        self.raw_mut().bi_ioprio = prio;
+    }
+
+    pub fn set_status(self: Pin<&mut Self>, status: u8) {
+        self.raw_mut().bi_status = status;
     }
 
     pub fn set_sector(self: Pin<&mut Self>, sector: u64) {
