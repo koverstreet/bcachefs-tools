@@ -1429,19 +1429,6 @@ impl DevOuterRef {
     pub fn as_mut_ptr(&self) -> *mut Dev {
         self.0
     }
-
-    /// The ref, for a C function that puts it: bch2_dev_remove().
-    pub fn into_raw(self) -> *mut Dev {
-        core::mem::ManuallyDrop::new(self).0
-    }
-
-    /// A ref into_raw() gave up, back to put.
-    ///
-    /// # Safety
-    /// @ca holds an outer ref no one else will put.
-    pub unsafe fn from_raw(ca: *mut Dev) -> Self {
-        DevOuterRef(ca)
-    }
 }
 
 impl core::ops::Deref for DevOuterRef {

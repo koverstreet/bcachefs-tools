@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::alloc::discard::{do_discards_fast, do_invalidates_work};
+use crate::init::error::io_error_work;
 use crate::cstructs::c;
 use crate::new_lock;
 use crate::util::alloc::KVVec;
@@ -497,7 +498,9 @@ pub struct Dev {
     pub journal: c::journal_device,
     pub prev_journal_sector: u64,
 
-    pub io_error_work: c::work_struct,
+    #[c("struct work_struct io_error_work")]
+    #[pin]
+    pub(crate) io_error_work: ReffedWork<io_error_work, crate::field!(ref_outer)>,
 
     /* The rest of this all shows up in sysfs */
     pub cur_latency: [AtomicI64; 2],

@@ -224,7 +224,6 @@ use crate::data::migrate::{dev_data_drop, dev_data_drop_by_backpointers, dev_rem
 use crate::debug::sysfs::{DevDir, DEV_GROUPS};
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Fs, StateLockWrite};
-use crate::init::error::bch2_io_error_work;
 use crate::format::{DataType, MemberInitialized, MemberState};
 use crate::locking::MemallocFlags;
 use crate::opts::c_export::__bch2_data_types;
@@ -232,7 +231,7 @@ use crate::sb::io::{read_super, SbReadScratch};
 use crate::sb::members::{bch2_mi_to_cpu, member_exists, member_state_str, mi_field_upgrades, sb_member,
                          sb_member_alloc, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
 use crate::types::CStatic;
-use crate::util::alloc::{alloc_pinned, free_pinned, init_at, kbox_pin_init};
+use crate::util::alloc::{alloc_pinned, free_pinned, kbox_pin_init};
 use crate::util::file::read_file;
 use crate::util::kernel::{ktime_get_real_seconds, READ, WRITE};
 use crate::util::kobject::{GroupList, KobjOwner, Kobject};
@@ -635,13 +634,8 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<NewDev> {
     let p = alloc_pinned(Dev::init(fs)).ok()?;
     let ca = unsafe { &mut *p };
 
-    let io_error_work = crate::new_work!(bch2_io_error_work, "bch_dev.io_error_work");
-    unsafe {
-        #[cfg(CONFIG_BCACHEFS_DEBUG)]
-        c::init_completion(&mut ca.ref_completion);
-
-        let _ = init_at(io_error_work, &raw mut ca.io_error_work);
-    }
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    unsafe { c::init_completion(&mut ca.ref_completion) };
 
     ca.mi.set(bch2_mi_to_cpu(member));
     ca.btree_allocated_bitmap_gc = member.btree_allocated_bitmap.get();

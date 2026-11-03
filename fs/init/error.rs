@@ -37,7 +37,6 @@ use crate::c::{bch_fsck_flags, bch_sb_error_id};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::prt;
-use crate::sb::members::DevOuterRef;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::{jiffies, time_after, HZ};
@@ -1147,24 +1146,11 @@ impl Dev {
             self.write_errors_start.store(jiffies() as usize, Relaxed);
         }
 
-        // a ref per queued instance
-        let r = self.outer_ref();
-        // SAFETY: the device's work, initialized with it, which the ref
-        // keeps until it runs
-        if unsafe { Queue::system_long().queue_work((&raw const self.io_error_work).cast_mut()) } {
-            let _ = r.into_raw();
-        }
+        self.io_error_work.queue(Queue::system_long());
     }
 }
 
-/// # Safety
-/// @work is a bch_dev's io_error_work, queued by io_error() with an outer ref.
-#[c_export]
-pub unsafe extern "C" fn bch2_io_error_work(work: *mut c::work_struct) {
-    // SAFETY: the caller's - and the ref, ours to put
-    let ca = unsafe {
-        DevOuterRef::from_raw(work.byte_sub(core::mem::offset_of!(Dev, io_error_work)).cast())
-    };
+pub(crate) fn io_error_work(ca: &Dev) {
     let fs = ca.fs();
 
     // XXX: if it's reads or checksums that are failing, set it to failed
@@ -1185,7 +1171,7 @@ pub unsafe extern "C" fn bch2_io_error_work(work: *mut c::work_struct) {
     log_msg_start(&mut buf, ca.name());
     write!(buf, "writes erroring for {timeout} seconds\n");
 
-    let dev = state.dev_set_state(&ca, MemberState::ro,
+    let dev = state.dev_set_state(ca, MemberState::ro,
                                   c::BCH_FORCE_IF_DEGRADED, &mut buf).is_ok();
     write!(buf, "setting {} ro", if dev { "device" } else { "filesystem" });
     if dev || fs.emergency_read_only(&mut buf) {
