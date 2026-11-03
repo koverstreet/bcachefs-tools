@@ -42,12 +42,13 @@
 
 use core::ffi::c_int;
 use core::marker::PhantomData;
-use core::mem::{align_of, size_of};
+use core::mem::size_of;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use cstruct_macros::c_extern;
 
 use crate::c;
+use crate::data_structures::dst_array::{DstArray, DstHead};
 use crate::util::alloc::AllocError;
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::projections::Publish;
@@ -639,17 +640,9 @@ impl<T: ?Sized + RcuPointee> Drop for RcuBuf<T> {
 
 // ── RcuArray ─────────────────────────────────────────────────────────────
 
-/// C's `struct { struct rcu_head rcu; size_t nr; T s[]; }` - or with fields
-/// of its own between nr and s[], as @H: bucket gens' first_bucket.
-#[repr(C)]
-pub struct RcuArrayBuf<T, H = ()> {
-    rcu: c::rcu_head,
-    nr:  usize,
-    h:   H,
-    s:   [T],
-}
-
-/// What C's pointer is to.
+/// The head of C's `struct { struct rcu_head rcu; size_t nr; T s[]; }`, what
+/// its pointer is to - with fields of its own between nr and s[] as @H:
+/// bucket gens' first_bucket.
 #[repr(C)]
 pub struct RcuArrayHead<H = ()> {
     rcu: c::rcu_head,
@@ -657,23 +650,30 @@ pub struct RcuArrayHead<H = ()> {
     h:   H,
 }
 
-// as its elements and header: rcu is touched only by kvfree_rcu(), freeing it
-unsafe impl<T: Send, H: Send> Send for RcuArrayBuf<T, H> {}
-unsafe impl<T: Sync, H: Sync> Sync for RcuArrayBuf<T, H> {}
-
-impl<T, H> RcuArrayBuf<T, H> {
-    /// offsetof(), for checking a C struct's layout matches.
-    pub const NR: usize = core::mem::offset_of!(RcuArrayHead<H>, nr);
-    pub const HEAD: usize = core::mem::offset_of!(RcuArrayHead<H>, h);
-    pub const TAIL: usize = size_of::<RcuArrayHead<H>>().next_multiple_of(align_of::<T>());
+impl<H> RcuArrayHead<H> {
+    fn new(nr: usize, h: H) -> Self {
+        // an rcu_head is two pointers, and kvfree_rcu() fills it in
+        Self { rcu: unsafe { core::mem::zeroed() }, nr, h }
+    }
 }
+
+// as its header: rcu is touched only by kvfree_rcu(), freeing it
+unsafe impl<H: Send> Send for RcuArrayHead<H> {}
+unsafe impl<H: Sync> Sync for RcuArrayHead<H> {}
+
+unsafe impl<H> DstHead for RcuArrayHead<H> {
+    fn nr(&self) -> usize {
+        self.nr
+    }
+}
+
+pub type RcuArrayBuf<T, H = ()> = DstArray<RcuArrayHead<H>, T>;
 
 unsafe impl<T: RcuElement, H: RcuElement> RcuPointee for RcuArrayBuf<T, H> {
     type Head = RcuArrayHead<H>;
 
     unsafe fn from_thin(p: *mut RcuArrayHead<H>) -> *mut Self {
-        // a slice pointer's length is the DST's tail's
-        core::ptr::slice_from_raw_parts_mut(p.cast::<T>(), unsafe { (*p).nr }) as *mut Self
+        unsafe { RcuArrayBuf::<T, H>::from_thin(p) }
     }
 }
 
@@ -701,33 +701,33 @@ unsafe impl<T: RcuElement, H: RcuElement> ::pin_init::Zeroable for RcuArray<T, H
 
 impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
     /// For c_rcu_array!'s record, which C's definition is checked against.
-    pub const NR: usize = RcuArrayBuf::<T, H>::NR;
-    pub const HEAD: usize = RcuArrayBuf::<T, H>::HEAD;
+    pub const NR: usize = core::mem::offset_of!(RcuArrayHead<H>, nr);
+    pub const HEAD: usize = core::mem::offset_of!(RcuArrayHead<H>, h);
     pub const TAIL: usize = RcuArrayBuf::<T, H>::TAIL;
 
     /// None published reads as none.
     pub fn read<'a>(&'a self, g: &'a ReadGuard) -> &'a [T] {
-        self.0.read(g).map_or(&[], |b| &b.s)
+        self.0.read(g).map_or(&[], |b| &b.elems)
     }
 
     pub fn read_head<'a>(&'a self, g: &'a ReadGuard) -> Option<(&'a H, &'a [T])> {
-        self.0.read(g).map(|b| (&b.h, &b.s))
+        self.0.read(g).map(|b| (&b.head.h, &b.elems))
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&[T]) -> R) -> R {
-        self.0.with(|b| f(b.map_or(&[], |b| &b.s)))
+        self.0.with(|b| f(b.map_or(&[], |b| &b.elems)))
     }
 
     /// # Safety
     /// As RcuBuf::get_locked().
     pub unsafe fn get_locked(&self) -> &[T] {
-        unsafe { self.0.get_locked() }.map_or(&[], |b| &b.s)
+        unsafe { self.0.get_locked() }.map_or(&[], |b| &b.elems)
     }
 
     /// # Safety
     /// As RcuBuf::get_locked().
     pub unsafe fn get_head_locked(&self) -> Option<(&H, &[T])> {
-        unsafe { self.0.get_locked() }.map(|b| (&b.h, &b.s))
+        unsafe { self.0.get_locked() }.map(|b| (&b.head.h, &b.elems))
     }
 
     /// A zeroed buffer of exactly @nr elements, and header @h, filled by
@@ -740,23 +740,12 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
     pub unsafe fn rebuild_head<E>(&self, nr: usize, h: H, fill: impl FnOnce(&mut [T]) -> Result<(), E>)
         -> Result<Result<(), E>, AllocError>
     {
-        const { assert!(size_of::<T>() != 0) };
-
-        let tail = RcuArrayBuf::<T, H>::TAIL;
-        let bytes = nr.checked_mul(size_of::<T>())
-            .and_then(|b| b.checked_add(tail))
-            .filter(|&b| b <= i32::MAX as usize)
-            .ok_or(AllocError)?;
-
-        let new = NonNull::new(unsafe { c::rust_kvzalloc(bytes) }.cast::<RcuArrayHead<H>>())
-            .ok_or(AllocError)?;
+        let new = RcuArrayBuf::<T, H>::alloc(RcuArrayHead::new(nr, h))?;
 
         // no reader sees it until replace() publishes it
         unsafe {
-            (*new.as_ptr()).nr = nr;
-            (&raw mut (*new.as_ptr()).h).write(h);
-            if let Err(e) = fill(core::slice::from_raw_parts_mut(new.as_ptr().byte_add(tail).cast::<T>(), nr)) {
-                c::rust_kvfree(new.as_ptr().cast());
+            if let Err(e) = fill(&mut (*RcuArrayBuf::<T, H>::from_thin(new.as_ptr())).elems) {
+                RcuArrayBuf::<T, H>::free(new);
                 return Ok(Err(e));
             }
             self.0.replace(new);
@@ -799,12 +788,15 @@ impl<T: RcuElement> RcuArray<T> {
             .and_then(usize::checked_next_power_of_two)
             .ok_or(AllocError)?;
 
-        // the old elements don't change under the writers' lock
-        unsafe {
-            self.rebuild((bytes - tail) / size_of::<T>(), |new| {
-                core::ptr::copy_nonoverlapping(old.as_ptr(), new.as_mut_ptr(), old.len())
-            })
-        }
+        let head = RcuArrayHead::new((bytes - tail) / size_of::<T>(), ());
+        // the old elements don't change under the writers' lock, and readers
+        // keep reading them until the grace period after replace()
+        let new = match NonNull::new(self.0.p.load(Ordering::Relaxed)) {
+            Some(p) => unsafe { RcuArrayBuf::<T>::realloc(p, old.len(), head)? },
+            None => RcuArrayBuf::<T>::alloc(head)?,
+        };
+        unsafe { self.0.replace(new) };
+        Ok(())
     }
 
     /// # Safety

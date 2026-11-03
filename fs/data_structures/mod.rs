@@ -3,6 +3,7 @@
 pub mod array_vec;
 pub mod bitmap;
 pub mod cuckoo;
+pub mod dst_array;
 pub mod eytzinger;
 pub mod fast_list;
 pub mod fifo;

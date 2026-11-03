@@ -1,0 +1,82 @@
+// SPDX-License-Identifier: GPL-2.0
+
+//! DstArray<H, T>: a header and the array after it in one allocation, reached
+//! by a thin pointer to the header, which says how long the array is - as C's
+//! flexible array members are sized by a field before them. For DstVec, and
+//! for util/rcu.rs's RcuArray.
+//!
+//! Allocated as RcuArray's always were, by kvzalloc() - so kvfree_rcu() can
+//! free one - and so at least 8-aligned: a thin pointer's low bits are its
+//! holder's to tag.
+
+use crate::c;
+use crate::util::alloc::AllocError;
+use core::ptr::{self, NonNull};
+
+/// # Safety
+/// nr() is the length of the array after it.
+pub unsafe trait DstHead {
+    fn nr(&self) -> usize;
+}
+
+#[repr(C)]
+pub struct DstArray<H, T> {
+    pub head: H,
+    pub elems: [T],
+}
+
+impl<H, T> DstArray<H, T> {
+    /// The array's offset.
+    pub const TAIL: usize = size_of::<H>().next_multiple_of(align_of::<T>());
+}
+
+impl<H: DstHead, T> DstArray<H, T> {
+    /// What a thin pointer to its header is to.
+    ///
+    /// # Safety
+    /// @p points to a valid H, followed by its nr() Ts.
+    pub unsafe fn from_thin(p: *mut H) -> *mut Self {
+        // a slice pointer's length is the DST's tail's
+        ptr::slice_from_raw_parts_mut(p.cast::<T>(), unsafe { (*p).nr() }) as *mut Self
+    }
+
+    /// One with @head, whose nr() it's sized by, and its elements all zero.
+    /// An error past INT_MAX bytes, which kvmalloc() won't do.
+    pub fn alloc(head: H) -> Result<NonNull<H>, AllocError> {
+        const { assert!(size_of::<T>() != 0, "a DstArray of a zero sized type") };
+        const { assert!(align_of::<H>() <= 8 && align_of::<T>() <= 8, "kvzalloc() aligns to 8") };
+
+        let bytes = head.nr().checked_mul(size_of::<T>())
+            .and_then(|b| b.checked_add(Self::TAIL))
+            .filter(|&b| b <= i32::MAX as usize)
+            .ok_or(AllocError)?;
+
+        let p = NonNull::new(unsafe { c::rust_kvzalloc(bytes) }.cast::<H>()).ok_or(AllocError)?;
+        unsafe { p.write(head) };
+        Ok(p)
+    }
+
+    /// One with @head, @old's first @keep elements moved into it, the rest
+    /// zero. @old stays allocated: freeing it is its owner's, now or after a
+    /// grace period.
+    ///
+    /// # Safety
+    /// @old is valid, and @keep within both. Its first @keep are moved, not
+    /// copied: they're not to be dropped in @old.
+    pub unsafe fn realloc(old: NonNull<H>, keep: usize, head: H) -> Result<NonNull<H>, AllocError> {
+        let new = Self::alloc(head)?;
+        unsafe {
+            let from = (*Self::from_thin(old.as_ptr())).elems.as_ptr();
+            let to = (*Self::from_thin(new.as_ptr())).elems.as_mut_ptr();
+            ptr::copy_nonoverlapping(from, to, keep);
+        }
+        Ok(new)
+    }
+
+    /// # Safety
+    /// @p is alloc()'s, its elements dropped or moved, and nothing uses it
+    /// after.
+    pub unsafe fn free(p: NonNull<H>) {
+        unsafe { c::rust_kvfree(p.as_ptr().cast()) };
+    }
+}
