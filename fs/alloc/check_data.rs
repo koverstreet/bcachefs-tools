@@ -26,14 +26,15 @@
 use crate::alloc::buckets::gen_cmp;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN};
+use crate::btree::read::node_replica_good;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, BtreeTrans, CommitOpts,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::c::bch_errcode;
+use crate::data::checksum::csum_err_msg;
 use crate::data::ec::stripe::ptr_matches_stripe_m;
 use crate::data::ptrs::{brand, extent_nonce, ptr_data_type, BkeyVPtrs, BkeyVPtrsMut, DecodedPtr, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
-use crate::fs::Fs;
 use crate::init::damage;
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
@@ -43,7 +44,6 @@ use crate::util::kernel::PAGE_SIZE;
 use crate::util::bio::{buf_nr_bvecs, Bio, BioBuf, BioOwner};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
-use crate::util::vstructs::{cast_plain, Head, Unvalidated};
 use crate::util::Printbuf;
 use crate::{bch_err, fsck_err, fsck_err_on, inode_fsck_err, prt};
 use arrayvec::ArrayVec;
@@ -125,26 +125,6 @@ pub fn bkey_drop_device_and_update(t: &TransAttempt<'_, '_>, btree: Btree, level
     t.update(iter.iter(), &n, UpdateTriggerFlags::empty())
 }
 
-/// Whether btree node @buf isn't the node @k points to, read from one of its
-/// replicas: not a btree node, a bad checksum, or another seq. A node whose
-/// first bset says it's longer than @buf is bad.
-fn btree_node_bad(fs: &Fs, buf: &[u8], k: BkeySC<'_>) -> bool {
-    let bn = cast_plain::<Head<c::btree_node>>(buf).expect("a btree node's worth of buffer");
-
-    if bn.magic.get() != fs.bset_magic() {
-        return true;
-    }
-
-    if c::bch_csum_type(bn.keys.csum_type() as u32).valid(fs) {
-        let Ok(n) = c::btree_node::<Unvalidated>::from_bytes(buf) else { return true };
-        if n.checksum(fs) != n.csum {
-            return true;
-        }
-    }
-
-    k.arm::<c::BtreePtrV2>().is_some_and(|v2| bn.keys.seq.get() != v2.v().seq.get())
-}
-
 /// Whether @k's replica on @dev was bad, and dropped: read back, its checksum
 /// wrong - or for a btree node, not the node @k points to. @other_k, in
 /// @other_btree, is the key with a replica in the same space, for the report.
@@ -184,20 +164,25 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
     bio.bio_mut().set_sector(p.ptr.offset());
     bio.map_read(&mut buf).submit_wait()?;
 
-    let bad = if is_btree_ptr {
-        btree_node_bad(fs, &buf, k.into())
+    let mut why = Printbuf::new();
+    let good = if is_btree_ptr {
+        node_replica_good(fs, k.into(), &buf, &mut why)
     } else {
         let ty = c::bch_csum_type(p.crc.csum_type.into());
-        fs.checksum(ty, extent_nonce(k.k.bversion, &p.crc), &buf[..bytes]) != p.crc.csum
+        let csum = fs.checksum(ty, extent_nonce(k.k.bversion, &p.crc), &buf[..bytes]);
+        if csum != p.crc.csum {
+            csum_err_msg(&mut why, ty, p.crc.csum, csum);
+        }
+        csum == p.crc.csum
     };
-    if !bad {
+    if good {
         return Ok(false);
     }
 
     let mut msg = Printbuf::new();
     prt!(&mut msg, "duplicate extents pointing to same space on dev {dev}, \
-                    checksum bad or wrong btree node - dropping:\n{btree} {}\n{other_btree} {}",
-         k.to_text(fs), other_k.to_text(fs));
+                    checksum bad or wrong btree node - dropping:\n{btree} {}\n{other_btree} {}\n{}",
+         k.to_text(fs), other_k.to_text(fs), why.as_str());
 
     // only an extent's position names an inum - not a btree node pointer's,
     // in the extents btree or not; elsewhere report without recording
