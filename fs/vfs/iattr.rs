@@ -34,6 +34,10 @@ impl Iattr {
         self.valid() & attr != 0
     }
 
+    pub fn size(&self) -> Option<u64> {
+        self.has(ATTR_SIZE).then_some(self.0.ia_size as u64)
+    }
+
     pub fn vfsuid(&self) -> Option<c::vfsuid_t> {
         // SAFETY: either arm of the union is an id, any value of which is one
         self.has(ATTR_UID).then(|| unsafe { *self.0.__bindgen_anon_1.ia_vfsuid.as_ref() })
@@ -46,7 +50,6 @@ impl Iattr {
 
     fields! {
         mode:  c::umode_t    = ATTR_MODE,  ia_mode;
-        size:  i64           = ATTR_SIZE,  ia_size;
         atime: c::timespec64 = ATTR_ATIME, ia_atime;
         mtime: c::timespec64 = ATTR_MTIME, ia_mtime;
         ctime: c::timespec64 = ATTR_CTIME, ia_ctime;

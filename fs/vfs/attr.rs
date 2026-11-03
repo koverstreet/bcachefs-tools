@@ -115,7 +115,7 @@ impl InodeInfo {
         stat.nlink   = v.nlink();
         (stat.uid, stat.gid) = idmap.owner(v);
         stat.rdev    = v.rdev();
-        stat.size    = v.size();
+        stat.size    = v.size() as i64;
         if stat.size == 0 && v.is_dir() {
             stat.size = block_bytes as i64;
         }
@@ -231,7 +231,7 @@ impl InodeInfo {
         }
 
         if let Some(size) = attr.size() {
-            bi.bi_size = size as u64;
+            bi.bi_size = size;
         }
 
         for (ts, t) in [(attr.atime(), &mut bi.bi_atime), (attr.mtime(), &mut bi.bi_mtime),

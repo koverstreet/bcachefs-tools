@@ -21,6 +21,7 @@ use {
     core::ptr::{read_volatile, write_volatile, NonNull},
     crate::acl::{AclType, PosixAcl},
     crate::errcode::{ret_to_result_void as ret_to_result, BchError},
+    crate::util::kernel::loff,
     kernel::sync::aref::AlwaysRefCounted,
     super::super_block::SuperBlock,
     crate::locking::Locked,
@@ -88,8 +89,6 @@ impl VfsInode {
         blocks() -> u64                     = READ_ONCE(i_blocks);
         nlink() -> u32                      = READ_ONCE(__bindgen_anon_1.i_nlink);
         set_nlink(u32)                      = set_nlink;
-        size() -> i64                       = i_size_read;
-        set_size(i64)                       = i_size_write;
         /// Now, at the granularity its times are kept at.
         current_time() -> c::timespec64     = current_time;
         atime() -> c::timespec64            = inode_get_atime;
@@ -98,6 +97,16 @@ impl VfsInode {
         set_atime(c::timespec64)            = inode_set_atime_to_ts;
         set_mtime(c::timespec64)            = inode_set_mtime_to_ts;
         set_ctime(c::timespec64)            = inode_set_ctime_to_ts;
+    }
+
+    /// i_size_read().
+    pub fn size(&self) -> u64 {
+        unsafe { c::i_size_read(self.as_ptr()) as u64 }
+    }
+
+    /// i_size_write().
+    pub fn set_size(&self, size: u64) {
+        unsafe { c::i_size_write(self.as_ptr(), loff(size)) }
     }
 
     // ── Ownership ────────────────────────────────────────────────────────

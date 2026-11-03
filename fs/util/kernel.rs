@@ -298,6 +298,12 @@ pub fn ktime_get_ns() -> u64 {
     unsafe { c::bch2_ktime_get_ns() }
 }
 
+/// A byte position as the kernel takes it: a loff_t, past whose top - LLONG_MAX
+/// - there's nothing, so u64::MAX is "to the end".
+pub fn loff(pos: u64) -> c::loff_t {
+    pos.min(i64::MAX as u64) as c::loff_t
+}
+
 /// The wall clock, at the coarse clock's granularity: ktime_get_coarse_real_ts64().
 pub fn ktime_get_coarse_real_ts64() -> c::timespec64 {
     let mut now: c::timespec64 = pin_init::Zeroable::zeroed();

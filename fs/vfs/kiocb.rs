@@ -35,12 +35,12 @@ impl<'a> Kiocb<'a> {
         unsafe { InodeInfo::from_inode((*self.0.ki_filp).f_inode) }
     }
 
-    pub fn pos(&self) -> i64 {
-        self.0.ki_pos
+    pub fn pos(&self) -> u64 {
+        self.0.ki_pos as u64
     }
 
-    pub fn advance(&mut self, bytes: i64) {
-        self.0.ki_pos += bytes;
+    pub fn advance(&mut self, bytes: u64) {
+        self.0.ki_pos += bytes as i64;
     }
 
     pub fn direct(&self) -> bool {

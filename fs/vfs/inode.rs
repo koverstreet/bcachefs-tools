@@ -200,7 +200,7 @@ impl InodeInfo {
         v.set_mode(bi.bi_mode);
 
         if fields & ATTR_SIZE != 0 {
-            v.set_size(bi.bi_size as i64);
+            v.set_size(bi.bi_size);
         }
         if fields & ATTR_ATIME != 0 {
             v.set_atime(fs.time_to_timespec(bi.bi_atime as i64));
