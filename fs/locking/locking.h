@@ -16,6 +16,7 @@
 #include <linux/sched/mm.h>
 
 #include "locking/bytelock_gen.h"
+#include "locking/lockdep_gen.h"
 #include "locking/noio_gen.h"
 #include "locking/raw_gen.h"
 

@@ -8,9 +8,16 @@
 //! struct C shares declares one either way. (C's is empty without
 //! CONFIG_LOCKDEP; everything that turns that on turns on
 //! CONFIG_DEBUG_LOCK_ALLOC, which the hooks are under.)
+//!
+//! Lockdep<R> is any of those locks R, which lockdep knows about: R, then its
+//! map - Lockdep<ByteLock> is C's struct byte_lock_lockdep. Taken as C's
+//! LOCK_CONTENDED() takes a mutex. Not for what there are millions of: a
+//! ByteLock in an array stays one byte.
 
+use super::{RawLock, RawTimedLock, RawTryLock};
 use crate::util::ffi::c_char;
-use core::ffi::{c_ulong, c_void};
+use core::ffi::{c_ulong, c_void, CStr};
+use cstruct_macros::c_verbatim;
 
 #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
 use super::raw::{rust_lock_acquire, rust_lock_acquired, rust_lock_contended, rust_lock_release,
@@ -61,4 +68,85 @@ impl LockdepMap {
     pub fn release(&self, _ip: c_ulong) {}
     pub fn contended(&self, _ip: c_ulong) {}
     pub fn acquired(&self, _ip: c_ulong) {}
+}
+
+/// Lock @R, which lockdep knows about. No caller ip: C's is the call site's,
+/// _THIS_IP_, which Rust has no equivalent of.
+#[repr(C)]
+pub struct Lockdep<R> {
+    raw:     R,
+    dep_map: LockdepMap,
+}
+
+c_verbatim!(r#"
+/* Lockdep<ByteLock>: */
+struct byte_lock_lockdep {
+	u8			lock;
+	struct lockdep_map	dep_map;
+};
+
+static inline void byte_lock_lockdep_unlock(struct byte_lock_lockdep *l)
+{
+	lock_release(&l->dep_map, _THIS_IP_);
+	bch2_byte_unlock(&l->lock);
+}
+"#);
+
+unsafe impl<R: RawTryLock> RawLock for Lockdep<R> {
+    type GuardState = R::GuardState;
+    type InitError = R::InitError;
+
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), R::InitError> {
+        unsafe {
+            R::init(&raw mut (*l).raw, name, key)?;
+            LockdepMap::init(&raw mut (*l).dep_map, name.as_ptr().cast(), key);
+        }
+        Ok(())
+    }
+
+    unsafe fn lock(&self) -> R::GuardState {
+        self.dep_map.acquire(false, false, 0);
+        let g = unsafe { self.raw.try_lock() }.unwrap_or_else(|| {
+            self.dep_map.contended(0);
+            unsafe { self.raw.lock() }
+        });
+        self.dep_map.acquired(0);
+        g
+    }
+
+    unsafe fn unlock(&self, g: R::GuardState) {
+        self.dep_map.release(0);
+        unsafe { self.raw.unlock(g) }
+    }
+
+    unsafe fn assert_held(&self) {
+        unsafe { self.raw.assert_held() }
+    }
+
+    unsafe fn destroy(&self) {
+        unsafe { self.raw.destroy() }
+    }
+}
+
+unsafe impl<R: RawTryLock> RawTryLock for Lockdep<R> {
+    unsafe fn try_lock(&self) -> Option<R::GuardState> {
+        let g = unsafe { self.raw.try_lock() }?;
+        self.dep_map.acquire(true, false, 0);
+        Some(g)
+    }
+}
+
+unsafe impl<R: RawTimedLock> RawTimedLock for Lockdep<R> {
+    unsafe fn try_lock_timeout(&self, timeout: c_ulong) -> Option<R::GuardState> {
+        self.dep_map.acquire(false, false, 0);
+        let g = unsafe { self.raw.try_lock() }.or_else(|| {
+            self.dep_map.contended(0);
+            unsafe { self.raw.try_lock_timeout(timeout) }
+        });
+        match g {
+            Some(_) => self.dep_map.acquired(0),
+            None    => self.dep_map.release(0),
+        }
+        g
+    }
 }
