@@ -33,6 +33,7 @@
 pub mod bytelock;
 mod compat;
 mod lock;
+mod lockdep;
 mod noio;
 mod raw;
 mod seqlock;
@@ -41,6 +42,7 @@ pub mod six;
 
 pub use crate::new_lock;
 pub use bytelock::ByteLock;
+pub use lockdep::LockdepMap;
 pub use raw::{mutex, percpu_rw_semaphore, raw_spinlock_t, rw_semaphore, spinlock_t};
 // for util/percpu.rs's LocalLockGuard and IrqGuard
 pub(crate) use raw::{rust_local_irq_restore, rust_local_irq_save, rust_local_lock_init, rust_local_lock_irqsave,

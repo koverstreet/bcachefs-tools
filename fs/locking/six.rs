@@ -3,10 +3,9 @@
 #![allow(non_camel_case_types, non_upper_case_globals)]
 
 #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-use super::raw::{rust_debug_check_no_locks_freed, rust_lock_acquire, rust_lock_acquired, rust_lock_contended,
-                 rust_lock_release, rust_lockdep_init_map};
+use super::raw::rust_debug_check_no_locks_freed;
 use super::raw::{rust_trace_contention_begin, rust_trace_contention_end};
-use super::{Guard, Locked, RawLock};
+use super::{Guard, Locked, LockdepMap, RawLock};
 use crate::cstructs::c;
 #[cfg(CONFIG_SMP)]
 use crate::debug::params::six_optimistic_spin_disabled;
@@ -106,9 +105,8 @@ pub struct six_lock {
 
     pub inline_fifo: c::six_lock_wait_fifo,
     pub inline_fifo_data: [c::six_lock_wait_slot; c::SIX_LOCK_INLINE_WAITERS as usize],
-    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
     #[c("struct lockdep_map dep_map")]
-    pub dep_map: crate::util::ffi::Opaque<c::lockdep_map>,
+    pub dep_map: LockdepMap,
 }
 c_default!(six_lock);
 
@@ -146,34 +144,6 @@ c_const! {
     pub const SIX_LOCK_WANT_BITS: u32 = 2;
     #[c_int]
     pub const SIX_LOCK_WANT_MASK: u32 = (1 << SIX_LOCK_WANT_BITS) - 1;
-}
-
-fn six_acquire(lock: &six_lock, trylock: bool, read: bool, ip: c_ulong) {
-    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-    unsafe { rust_lock_acquire(lock.dep_map.as_ptr().cast(), trylock as c_int, read as c_int, ip) };
-    #[cfg(not(CONFIG_DEBUG_LOCK_ALLOC))]
-    let _ = (lock, trylock, read, ip);
-}
-
-fn six_release(lock: &six_lock, ip: c_ulong) {
-    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-    unsafe { rust_lock_release(lock.dep_map.as_ptr().cast(), ip) };
-    #[cfg(not(CONFIG_DEBUG_LOCK_ALLOC))]
-    let _ = (lock, ip);
-}
-
-fn lock_contended(lock: &six_lock, ip: c_ulong) {
-    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-    unsafe { rust_lock_contended(lock.dep_map.as_ptr().cast(), ip) };
-    #[cfg(not(CONFIG_DEBUG_LOCK_ALLOC))]
-    let _ = (lock, ip);
-}
-
-fn lock_acquired(lock: &six_lock, ip: c_ulong) {
-    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-    unsafe { rust_lock_acquired(lock.dep_map.as_ptr().cast(), ip) };
-    #[cfg(not(CONFIG_DEBUG_LOCK_ALLOC))]
-    let _ = (lock, ip);
 }
 
 const SIX_LOCK_HELD_read_OFFSET: u32 = 0;
@@ -699,7 +669,7 @@ pub fn six_trylock_ip(lock: &c::six_lock, ty: c::six_lock_type, ip: c_ulong) -> 
     }
 
     if ty != six_lock_type::SIX_LOCK_write {
-        six_acquire(lock, true, ty == six_lock_type::SIX_LOCK_read, ip);
+        lock.dep_map.acquire(true, ty == six_lock_type::SIX_LOCK_read, ip);
     }
     six_lock_record_acquire(lock, ty);
     true
@@ -817,7 +787,7 @@ unsafe fn __six_lock_slowpath(lock: &six_lock, ty: six_lock_type, wait: *mut six
     }
 
     unsafe { rust_trace_contention_begin(core::ptr::from_ref(lock).cast(), 0) };
-    lock_contended(lock, ip);
+    lock.dep_map.contended(ip);
 
     unsafe {
         (*wait).task = c::bch2_current();
@@ -974,7 +944,7 @@ unsafe fn six_lock_slowpath(lock: &six_lock, ty: six_lock_type, wait: *mut six_l
 pub unsafe fn six_lock_ip_waiter(lock: &c::six_lock, ty: c::six_lock_type, wait: *mut c::six_lock_waiter,
                                  should_sleep_fn: c::six_lock_should_sleep_fn, ip: c_ulong) -> c_int {
     if ty != six_lock_type::SIX_LOCK_write {
-        six_acquire(lock, false, ty == six_lock_type::SIX_LOCK_read, ip);
+        lock.dep_map.acquire(false, ty == six_lock_type::SIX_LOCK_read, ip);
     }
 
     let ret = if do_six_trylock(lock, ty, true) {
@@ -984,10 +954,10 @@ pub unsafe fn six_lock_ip_waiter(lock: &c::six_lock, ty: c::six_lock_type, wait:
     };
 
     if ret != 0 && ty != six_lock_type::SIX_LOCK_write {
-        six_release(lock, ip);
+        lock.dep_map.release(ip);
     }
     if ret == 0 {
-        lock_acquired(lock, ip);
+        lock.dep_map.acquired(ip);
         six_lock_record_acquire(lock, ty);
     }
 
@@ -1014,16 +984,16 @@ pub unsafe fn six_lock_ip_waiter(lock: &c::six_lock, ty: c::six_lock_type, wait:
 pub unsafe fn six_lock_contended(lock: &c::six_lock, ty: c::six_lock_type, wait: *mut c::six_lock_waiter,
                                  should_sleep_fn: c::six_lock_should_sleep_fn, ip: c_ulong) -> c_int {
     if ty != six_lock_type::SIX_LOCK_write {
-        six_acquire(lock, false, ty == six_lock_type::SIX_LOCK_read, ip);
+        lock.dep_map.acquire(false, ty == six_lock_type::SIX_LOCK_read, ip);
     }
 
     let ret = unsafe { __six_lock_slowpath(lock, ty, wait, should_sleep_fn, ip) };
 
     if ret != 0 && ty != six_lock_type::SIX_LOCK_write {
-        six_release(lock, ip);
+        lock.dep_map.release(ip);
     }
     if ret == 0 {
-        lock_acquired(lock, ip);
+        lock.dep_map.acquired(ip);
         six_lock_record_acquire(lock, ty);
     }
 
@@ -1082,7 +1052,7 @@ pub fn six_unlock_ip(lock: &c::six_lock, ty: c::six_lock_type, ip: c_ulong) {
                    lock.owner.load(Relaxed) != unsafe { c::bch2_current() }));
 
     if ty != SIX_LOCK_write {
-        six_release(lock, ip);
+        lock.dep_map.release(ip);
     }
 
     if ty == SIX_LOCK_intent && lock.intent_lock_recurse.get() != 0 {
@@ -1200,7 +1170,7 @@ pub fn six_trylock_convert(lock: &c::six_lock, from: c::six_lock_type, to: c::si
 pub fn six_lock_increment_ip(lock: &c::six_lock, ty: c::six_lock_type, ip: c_ulong) {
     use six_lock_type::*;
 
-    six_acquire(lock, false, ty == SIX_LOCK_read, ip);
+    lock.dep_map.acquire(false, ty == SIX_LOCK_read, ip);
 
     /* XXX: assert already locked, and that we don't overflow: */
 
@@ -1359,12 +1329,8 @@ pub unsafe fn __six_lock_init(lock: *mut c::six_lock, name: *const c_char, key: 
         (*lock).inline_fifo.next_free_hint.set(0);
         (*lock).wait_fifo.store(&raw mut (*lock).inline_fifo, Relaxed);
         #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-        {
-            rust_debug_check_no_locks_freed(lock.cast(), size_of::<six_lock>() as c_ulong);
-            rust_lockdep_init_map((*lock).dep_map.as_ptr().cast(), name, key);
-        }
-        #[cfg(not(CONFIG_DEBUG_LOCK_ALLOC))]
-        let _ = (name, key);
+        rust_debug_check_no_locks_freed(lock.cast(), size_of::<six_lock>() as c_ulong);
+        LockdepMap::init(&raw mut (*lock).dep_map, name, key);
 
         /*
          * Don't assume that we have real percpu variables available in

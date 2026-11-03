@@ -2,6 +2,7 @@
 #define __TOOLS_LINUX_LOCKDEP_H
 
 struct lock_class_key {};
+struct lockdep_map {};
 struct task_struct;
 
 # define lock_acquire(l, s, t, r, c, n, i)	do { } while (0)
