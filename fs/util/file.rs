@@ -268,6 +268,12 @@ crate::vfs_ops! {
     #[cfg(kernel)]
     fn fsync(&self = file, file: &File, start: i64, end: i64, datasync: c_int)
         -> Result<(), BchError>;
+    #[cfg(kernel)]
+    fn fallocate(&self = file, file: &File, mode: c_int, offset: i64, len: i64) -> Result<(), BchError>;
+    /// How much was remapped.
+    #[cfg(kernel)]
+    fn remap_file_range(&self = file_in, file_in: &File, pos_in: i64, file_out: &File, pos_out: i64,
+                        len: i64, remap_flags: c_uint) -> Result<u64, BchError>;
     /// A mapping about to be made: its vm_ops, and whether it may be.
     #[cfg(kernel)]
     #[cfg(linux_ge = "6.17")]

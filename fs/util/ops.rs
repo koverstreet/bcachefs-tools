@@ -110,6 +110,12 @@ into_raw! {
     Result<u64, BchError> => i64: |r| r.map_or_else(|e| e.class().into(), |pos| pos as i64);
 }
 
+// The kernel's long, isize: fallocate's
+#[cfg(kernel)]
+into_raw! {
+    Result<(), BchError> => kernel::ffi::c_long: |r| ret_to_class(r) as kernel::ffi::c_long;
+}
+
 /// See the file comment.
 #[macro_export]
 macro_rules! vfs_ops {
