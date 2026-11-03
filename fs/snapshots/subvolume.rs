@@ -23,8 +23,8 @@ use crate::util::vstructs::{Validated, Whole};
 use crate::btree::bkey_methods::TriggerOp;
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
-    commit_do, is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
-    LoopControl, Step, TransAttempt, UpdateTriggerFlags,
+    commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, KeyFn, Keys,
+    LoopControl, TransAttempt, UpdateTriggerFlags,
 };
 use crate::c;
 use crate::c::bch_recovery_pass::*;
@@ -184,8 +184,26 @@ pub fn require_no_children(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), 
 }
 
 /// Walk @iter to @end at @subvol's snapshot, calling @f on each key - with
-/// the iterator, to update at - until it breaks. A restart re-reads the
-/// snapshot and retries the current key, so @f must not restart after doing
+/// the iterator, to update at - until it breaks. Each key in an attempt of
+/// its own, the snapshot read again for each: a restart retries the key.
+pub fn for_each_in_subvolume_max<'t, F, R>(
+    trans:  &BtreeTrans<'t>,
+    iter:   &mut BtreeIter<'t>,
+    end:    Bpos,
+    subvol: u32,
+    flags:  BtreeIterFlags,
+    f:      F,
+) -> Result<R::Break, BchError>
+where
+    F: KeyFn<'t, R>,
+    R: LoopControl,
+{
+    iter.walk(trans, Keys::InSubvolume(end, flags, subvol), f)
+}
+
+/// for_each_in_subvolume_max(), in one attempt for the walk, not one per key
+/// - readdir doesn't need a begin per key. A restart re-reads the snapshot
+/// and retries the current key, so @f must not restart after doing
 /// something it can't redo. @f may unlock: the next peek relocks. An attempt
 /// @f ends with ignore_restarts() is followed by a new one, as a restart's
 /// is.
@@ -195,54 +213,13 @@ pub fn for_each_in_subvolume_max_in_trans<'t, F, R>(
     end:    Bpos,
     subvol: u32,
     flags:  BtreeIterFlags,
-    mut f:  F,
+    f:      F,
 ) -> Result<R::Break, BchError>
 where
-    F: FnMut(&TransAttempt<'_, 't>, &BtreeIter<'t>, BkeySC<'_>) -> Result<R, BchError>,
+    F: KeyFn<'t, R>,
     R: LoopControl,
 {
-    // One attempt for the walk, not one per key - readdir doesn't need a
-    // begin per key; a restart begins the next.
-    let mut t = trans.begin();
-    let mut snapshot = 0;
-
-    loop {
-        if t.is_spent() {
-            t = trans.begin();
-            snapshot = 0;
-        }
-
-        let ret = (|| -> Result<Step<R::Break>, BchError> {
-            t.relock()?;
-            if snapshot == 0 {
-                snapshot = get_snapshot(&t, subvol)?;
-                iter.set_snapshot(snapshot);
-            }
-            Ok(match iter.peek_max_type_with(&t, end, flags)? {
-                Some((iter, k)) => f(&t, iter, k)?.into_step(),
-                None    => Step::Break(Default::default()),
-            })
-        })();
-
-        match ret {
-            Ok(Step::Break(b)) => return Ok(b),
-            Ok(Step::Next)     => {
-                t.verify_not_restarted();
-                if !iter.advance() {
-                    return Ok(Default::default());
-                }
-            }
-            Ok(Step::From(pos)) => {
-                t.verify_not_restarted();
-                iter.set_pos(pos);
-            }
-            Err(e) if is_restart(&e) => {
-                t = trans.begin();
-                snapshot = 0;
-            }
-            Err(e) => return Err(e),
-        }
-    }
+    iter.walk_in_trans(trans, Keys::InSubvolume(end, flags, subvol), f)
 }
 
 // ── The state field ──────────────────────────────────────────────────────

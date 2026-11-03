@@ -617,6 +617,77 @@ impl<B: Default> LoopControl for LoopFlow<B> {
     }
 }
 
+/// A for_each loop's body, called on each key with the key's attempt and the
+/// iterator.
+///
+/// Its result is two things, kept apart: whether its work succeeded
+/// (`Result`), and whether to go on (@R, LoopControl: `()` for a body that
+/// always goes on, `ControlFlow` for one that can stop early - what it
+/// breaks with is what the loop returns).
+///
+/// What it does beyond reading the key - a lookup, an update - is in the
+/// key's attempt.
+///
+/// It gets the iterator as the C loop bodies do - to update at its position,
+/// or read where it is - shared, borrowed with the key: the key's header is
+/// in the iterator, and its value in the node the iterator's path holds, so
+/// nothing may move the iterator while the key is in use. A body that needs
+/// to move it is a loop of its own.
+pub trait KeyFn<'t, R>:
+    for<'a> FnMut(&'a TransAttempt<'_, 't>, &'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>
+{}
+
+impl<'t, R, F> KeyFn<'t, R> for F
+where
+    F: for<'a> FnMut(&'a TransAttempt<'_, 't>, &'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+{}
+
+/// The keys a for_each loop walks, and how it goes on from one.
+#[derive(Clone, Copy)]
+pub(crate) enum Keys {
+    /// Forwards, up to @end, peeking as the flags say.
+    Max(Bpos, BtreeIterFlags),
+    /// Backwards, down to @min.
+    Reverse(Bpos),
+    /// As Max, at a subvolume's snapshot, read again in each attempt:
+    /// snapshotting the subvolume gives it a new one.
+    InSubvolume(Bpos, BtreeIterFlags, u32),
+}
+
+impl Keys {
+    /// At the start of each attempt.
+    fn begin(self, t: &TransAttempt<'_, '_>, iter: &mut BtreeIter<'_>) -> Result<(), BchError> {
+        if let Keys::InSubvolume(_, _, subvol) = self {
+            iter.set_snapshot(crate::snapshots::subvolume::get_snapshot(t, subvol)?);
+        }
+        Ok(())
+    }
+
+    /// The next key, under attempt @t, and @iter, which it borrows, shared -
+    /// so nothing moves the iterator while they're in use.
+    fn peek<'k, 't>(self, t: &'k TransAttempt<'_, 't>, iter: &'k mut BtreeIter<'t>)
+        -> Result<Option<(&'k BtreeIter<'t>, BkeySC<'k>)>, BchError>
+    {
+        match self {
+            Keys::Max(end, flags) | Keys::InSubvolume(end, flags, _) =>
+                iter.peek_with(t, &mut |raw| unsafe { (*raw).peek_max_type_raw(end, flags) }),
+            Keys::Reverse(min) =>
+                iter.peek_with(t, &mut |raw| unsafe { c::bch2_btree_iter_peek_prev_min(raw, min) }),
+        }
+    }
+
+    /// Past the key peeked: false at the btree's end - or for a walk forwards,
+    /// when the key ended at SPOS_MAX and the position can't move on, as the
+    /// rightmost key of any interior node level does. Looping again would
+    /// peek the same key forever.
+    fn advance(self, iter: &mut BtreeIter<'_>) -> bool {
+        match self {
+            Keys::Reverse(_) => iter.rewind(),
+            _                => iter.advance(),
+        }
+    }
+}
+
 /// A key to update with, valid and ours to edit while the attempt runs - in
 /// the transaction's memory, or a buffer C hands over (from_raw_room()): of
 /// key type @V, its value whole - as the typed constructors make one - or,
@@ -2536,15 +2607,6 @@ impl<'t> BtreeIter<'t> {
         self.peek_with(t, &mut |raw| unsafe { c::bch2_btree_iter_peek_slot(raw) })
     }
 
-    /// peek_max_type(), and the iterator with the key, shared: for a loop
-    /// whose step updates at the key's position, as for_each()'s do.
-    pub fn peek_max_type_with<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>, end: Bpos,
-                                  flags: BtreeIterFlags)
-        -> Result<Option<(&'k BtreeIter<'t>, BkeySC<'k>)>, BchError>
-    {
-        self.peek_with(t, &mut |raw| unsafe { (*raw).peek_max_type_raw(end, flags) })
-    }
-
     pub fn peek<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>)
         -> Result<Option<BkeySC<'k>>, BchError>
     {
@@ -2568,62 +2630,103 @@ impl<'t> BtreeIter<'t> {
         t.result(ret)
     }
 
-    /// The loop behind the for_each family: get a key with @peek, hand it to
-    /// @f, move on with @step.
-    ///
-    /// @f's result is two things, kept apart: whether its work succeeded
-    /// (`Result`), and whether to go on (LoopControl: `()` for a body that
-    /// always goes on, `ControlFlow` for one that can stop early - what it
-    /// breaks with is what the loop returns). A transaction restart, from
-    /// the peek or from @f, retries the same position; any other error is
-    /// returned.
-    ///
-    /// @f runs in the attempt begun for its key, and gets it: what it does
-    /// beyond reading the key - a lookup, an update - is in that attempt.
-    ///
-    /// @f gets the iterator too, as the C loop bodies do - to update at its
-    /// position, or read where it is - shared, borrowed with the key: the
-    /// key's header is in the iterator, and its value in the node the
-    /// iterator's path holds, so nothing may move the iterator while the key
-    /// is in use. A body that needs to move it is a loop of its own.
-    fn for_each_inner<P, S, F, R>(
-        &mut self,
-        trans:    &BtreeTrans<'t>,
-        mut peek: P,
-        mut step: S,
-        mut f:    F,
-    ) -> Result<R::Break, BchError>
+    /// The next key of the walk @keys, given to @f in attempt @t: where the
+    /// walk goes from it, None at the walk's end.
+    fn key<F, R>(&mut self, t: &TransAttempt<'_, 't>, keys: Keys, f: &mut F)
+        -> Result<Option<Step<R::Break>>, BchError>
     where
-        P: FnMut(*mut c::btree_iter) -> c::bkey_s_c,
-        S: FnMut(*mut c::btree_iter) -> bool,
-        F: for<'a> FnMut(&'a TransAttempt<'_, 't>, &'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: KeyFn<'t, R>,
+        R: LoopControl,
+    {
+        match keys.peek(t, self)? {
+            Some((iter, k)) => Ok(Some(f(t, iter, k)?.into_step())),
+            None => Ok(None),
+        }
+    }
+
+    /// On from a key, as the walk @keys goes: Some, what the walk returns.
+    fn move_on<B: Default>(&mut self, keys: Keys, step: Option<Step<B>>) -> Option<B> {
+        match step {
+            None                  => Some(B::default()),
+            Some(Step::Break(b))  => Some(b),
+            Some(Step::From(pos)) => {
+                self.set_pos(pos);
+                None
+            }
+            Some(Step::Next)      => (!keys.advance(self)).then(B::default),
+        }
+    }
+
+    /// The loop behind the for_each family: each key of the walk @keys in an
+    /// attempt of its own, given to @f. A transaction restart, from the peek
+    /// or from @f, retries the key; any other error is returned.
+    pub(crate) fn walk<F, R>(&mut self, trans: &BtreeTrans<'t>, keys: Keys, mut f: F) -> Result<R::Break, BchError>
+    where
+        F: KeyFn<'t, R>,
         R: LoopControl,
     {
         loop {
-            let t = trans.begin();
+            let step = lockrestart_do(trans, |t| {
+                keys.begin(t, self)?;
+                self.key(t, keys, &mut f)
+            })?;
+            if let Some(b) = self.move_on(keys, step) {
+                return Ok(b);
+            }
+        }
+    }
 
-            let (iter, k) = match self.peek_with(&t, &mut peek) {
-                Err(e) if is_restart(&e) => continue,
-                Err(e) => return Err(e),
-                Ok(None) => return Ok(Default::default()),
-                Ok(Some(ik)) => ik,
-            };
+    /// walk(), inside the caller's attempt @t: a restart is returned, for the
+    /// loop the caller is in.
+    fn walk_norestart<F, R>(&mut self, t: &TransAttempt<'_, 't>, keys: Keys, mut f: F)
+        -> Result<R::Break, BchError>
+    where
+        F: KeyFn<'t, R>,
+        R: LoopControl,
+    {
+        keys.begin(t, self)?;
+        loop {
+            let step = self.key(t, keys, &mut f)?;
+            if let Some(b) = self.move_on(keys, step) {
+                return Ok(b);
+            }
+        }
+    }
 
-            let step_to = match f(&t, iter, k) {
-                Err(e) if is_restart(&e) => continue,
-                Err(e) => return Err(e),
-                Ok(flow) => {
-                    t.verify_not_restarted();
-                    flow.into_step()
-                }
-            };
+    /// walk(), the keys in one attempt, not one each: a restart begins
+    /// another at the key that restarted, as does a key ended with
+    /// ignore_restarts(). @f may unlock: the next key relocks.
+    pub(crate) fn walk_in_trans<F, R>(&mut self, trans: &BtreeTrans<'t>, keys: Keys, mut f: F)
+        -> Result<R::Break, BchError>
+    where
+        F: KeyFn<'t, R>,
+        R: LoopControl,
+    {
+        loop {
+            if let Some(b) = lockrestart_do(trans, |t| self.walk_attempt(t, keys, &mut f))? {
+                return Ok(b);
+            }
+        }
+    }
 
-            match step_to {
-                Step::Next => if !step(self.raw_mut()) {
-                    return Ok(Default::default());
-                },
-                Step::From(pos) => self.set_pos(pos),
-                Step::Break(b)  => return Ok(b),
+    /// walk_in_trans()'s keys in attempt @t: what the walk returns, or None
+    /// if a key ended the attempt with ignore_restarts().
+    fn walk_attempt<F, R>(&mut self, t: &TransAttempt<'_, 't>, keys: Keys, f: &mut F)
+        -> Result<Option<R::Break>, BchError>
+    where
+        F: KeyFn<'t, R>,
+        R: LoopControl,
+    {
+        keys.begin(t, self)?;
+        loop {
+            t.relock()?;
+            let step = self.key(t, keys, f)?;
+            t.verify_not_restarted();
+            if let Some(b) = self.move_on(keys, step) {
+                return Ok(Some(b));
+            }
+            if t.is_spent() {
+                return Ok(None);
             }
         }
     }
@@ -2641,31 +2744,21 @@ impl<'t> BtreeIter<'t> {
         Ok(k.map(|k| (&*self, k)))
     }
 
-    /// The next key up to @end, peeking as the iterator's own flags say - for a
-    /// SLOTS iterator, a slot at a time, holes included. The for_each family
-    /// peeks with this, as C's loops do, so no loop can ignore its iterator's
+    /// The keys up to @end, peeking as the iterator's own flags say - for a
+    /// SLOTS iterator, a slot at a time, holes included: the for_each
+    /// family's, as C's loops' are, so no loop can ignore its iterator's
     /// flags.
-    fn peek_own_type(raw: *mut c::btree_iter, end: Bpos) -> c::bkey_s_c {
-        unsafe {
-            let flags = (*raw).iter_flags();
-            (*raw).peek_max_type_raw(end, flags)
-        }
+    fn keys_to(&self, end: Bpos) -> Keys {
+        Keys::Max(end, self.iter_flags())
     }
 
     pub fn for_each_max<F, R>(&mut self, trans: &BtreeTrans<'t>, end: Bpos, f: F)
         -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&'a TransAttempt<'_, 't>, &'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: KeyFn<'t, R>,
         R: LoopControl,
     {
-        self.for_each_inner(trans,
-            |raw| Self::peek_own_type(raw, end),
-            // advance() returns false when the key just visited ended at
-            // SPOS_MAX and the position can't move forward — true for the
-            // rightmost key of any interior node level. Looping again would
-            // peek the same key forever.
-            |raw| unsafe { c::bch2_btree_iter_advance(raw) },
-            f)
+        self.walk(trans, self.keys_to(end), f)
     }
 
     /// Walk the keys from the iterator's position, inside the caller's attempt
@@ -2687,20 +2780,7 @@ impl<'t> BtreeIter<'t> {
         F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
     {
-        loop {
-            let Some((iter, k)) = self.peek_with(t, &mut |raw| Self::peek_own_type(raw, end))?
-            else {
-                return Ok(Default::default());
-            };
-
-            match f(iter, k)?.into_step() {
-                Step::Next => if !self.advance() {
-                    return Ok(Default::default());
-                },
-                Step::From(pos) => self.set_pos(pos),
-                Step::Break(b)  => return Ok(b),
-            }
-        }
+        self.walk_norestart(t, self.keys_to(end), |_, iter, k| f(iter, k))
     }
 
     /// As for_each_max_norestart(), stopping at the first key @f picks: that
@@ -2713,8 +2793,7 @@ impl<'t> BtreeIter<'t> {
         F: for<'k> FnMut(&'k BtreeIter<'t>, BkeySC<'k>) -> Result<bool, BchError>,
     {
         loop {
-            let Some((iter, k)) = self.peek_with(t, &mut |raw| Self::peek_own_type(raw, end))?
-            else {
+            let Some((iter, k)) = self.keys_to(end).peek(t, self)? else {
                 return Ok(None);
             };
 
@@ -2736,34 +2815,20 @@ impl<'t> BtreeIter<'t> {
         F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
     {
-        loop {
-            let Some((iter, k)) =
-                self.peek_with(t, &mut |raw| unsafe { c::bch2_btree_iter_peek_prev_min(raw, min) })?
-            else {
-                return Ok(Default::default());
-            };
-
-            match f(iter, k)?.into_step() {
-                Step::Next => if !self.rewind() {
-                    return Ok(Default::default());
-                },
-                Step::From(pos) => self.set_pos(pos),
-                Step::Break(b)  => return Ok(b),
-            }
-        }
+        self.walk_norestart(t, Keys::Reverse(min), |_, iter, k| f(iter, k))
     }
 
     pub fn for_each<F, R>(&mut self, trans: &BtreeTrans<'t>, f: F) -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&'a TransAttempt<'_, 't>, &'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: KeyFn<'t, R>,
         R: LoopControl,
     {
         self.for_each_max(trans, SPOS_MAX, f)
     }
 
-    /// As for_each_inner(), @f getting the attempt, and committing its updates
-    /// after each key when @commit says how (None: @f commits for itself). A
-    /// restart from @f or the commit retries the key.
+    /// As walk(), committing @f's updates after each key when @commit says
+    /// how (None: @f commits for itself). A restart from @f or the commit
+    /// retries the key.
     ///
     /// @f finishes a key in one of three ways:
     ///  - Ok(()): commit what it queued, and go on to the next key - also
@@ -2778,62 +2843,34 @@ impl<'t> BtreeIter<'t> {
     /// passed up from a helper: they name *a* loop, and one that travels
     /// through a helper's own loop names the wrong one. Helpers return what
     /// happened; the body decides what that means for the walk.
-    fn for_each_attempt_inner<P, S, F>(
+    fn walk_commit<F>(
         &mut self,
-        trans:    &BtreeTrans<'t>,
-        commit:   Option<(Option<&DiskReservation<'_>>, CommitOpts)>,
-        mut peek: P,
-        mut step: S,
-        mut f:    F,
+        trans:  &BtreeTrans<'t>,
+        keys:   Keys,
+        commit: Option<(Option<&DiskReservation<'_>>, CommitOpts)>,
+        mut f:  F,
     ) -> Result<(), BchError>
     where
-        P: FnMut(*mut c::btree_iter) -> c::bkey_s_c,
-        S: FnMut(*mut c::btree_iter) -> bool,
-        F: for<'a, 'k> FnMut(
-            &'k TransAttempt<'a, 't>,
-            &'k BtreeIter<'t>,
-            BkeySC<'k>,
-        ) -> Result<(), BchError>,
+        F: KeyFn<'t, ()>,
     {
         loop {
-            let t = trans.begin();
-
-            let (iter, k) = match self.peek_with(&t, &mut peek) {
-                Err(e) if is_restart(&e) => continue,
-                Err(e) => return Err(e),
-                Ok(None) => return Ok(()),
-                Ok(Some(ik)) => ik,
-            };
-
-            match f(&t, iter, k) {
-                Ok(()) => {}
-                Err(e) if is_restart(&e) => continue,
-                Err(e) if e.matches(bch_errcode::BCH_ERR_fc_continue) => {
-                    t.verify_not_restarted();
-                    if !step(self.raw_mut()) {
-                        return Ok(());
+            let step = lockrestart_do(trans, |t| {
+                keys.begin(t, self)?;
+                match self.key(t, keys, &mut f) {
+                    Err(e) if e.matches(bch_errcode::BCH_ERR_fc_continue) => Ok(Some(Step::Next)),
+                    Err(e) if e.matches(bch_errcode::BCH_ERR_fc_break)    => Ok(Some(Step::Break(()))),
+                    Ok(Some(step)) => {
+                        // a spent attempt's step has nothing queued: what
+                        // ignore_restarts() ran committed for itself
+                        if let Some((disk_res, flags)) = commit.filter(|_| !t.is_spent()) {
+                            t.commit(disk_res, flags)?;
+                        }
+                        Ok(Some(step))
                     }
-                    continue;
+                    r => r,
                 }
-                Err(e) if e.matches(bch_errcode::BCH_ERR_fc_break) => {
-                    t.verify_not_restarted();
-                    return Ok(());
-                }
-                Err(e) => return Err(e),
-            }
-
-            // a spent attempt's step has nothing queued: what ignore_restarts()
-            // ran committed for itself
-            if let Some((disk_res, flags)) = commit.filter(|_| !t.is_spent()) {
-                match t.commit(disk_res, flags) {
-                    Err(e) if is_restart(&e) => continue,
-                    r => r?,
-                }
-            }
-
-            t.verify_not_restarted();
-
-            if !step(self.raw_mut()) {
+            })?;
+            if let Some(()) = self.move_on(keys, step) {
                 return Ok(());
             }
         }
@@ -2845,16 +2882,9 @@ impl<'t> BtreeIter<'t> {
     /// for_each_commit().
     pub fn for_each_attempt<F>(&mut self, trans: &BtreeTrans<'t>, f: F) -> Result<(), BchError>
     where
-        F: for<'a, 'k> FnMut(
-            &'k TransAttempt<'a, 't>,
-            &'k BtreeIter<'t>,
-            BkeySC<'k>,
-        ) -> Result<(), BchError>,
+        F: KeyFn<'t, ()>,
     {
-        self.for_each_attempt_inner(trans, None,
-            |raw| unsafe { c::bch2_btree_iter_peek_max(raw, &SPOS_MAX) },
-            |raw| unsafe { c::bch2_btree_iter_advance(raw) },
-            f)
+        self.walk_commit(trans, Keys::Max(SPOS_MAX, BtreeIterFlags::empty()), None, f)
     }
 
     pub fn for_each_commit<F>(
@@ -2865,16 +2895,9 @@ impl<'t> BtreeIter<'t> {
         f:        F,
     ) -> Result<(), BchError>
     where
-        F: for<'a, 'k> FnMut(
-            &'k TransAttempt<'a, 't>,
-            &'k BtreeIter<'t>,
-            BkeySC<'k>,
-        ) -> Result<(), BchError>,
+        F: KeyFn<'t, ()>,
     {
-        self.for_each_attempt_inner(trans, Some((disk_res, flags.into())),
-            |raw| unsafe { c::bch2_btree_iter_peek_max(raw, &SPOS_MAX) },
-            |raw| unsafe { c::bch2_btree_iter_advance(raw) },
-            f)
+        self.walk_commit(trans, Keys::Max(SPOS_MAX, BtreeIterFlags::empty()), Some((disk_res, flags.into())), f)
     }
 
     /// As for_each_commit(), from the iterator's position back down to @min.
@@ -2887,16 +2910,9 @@ impl<'t> BtreeIter<'t> {
         f:        F,
     ) -> Result<(), BchError>
     where
-        F: for<'a, 'k> FnMut(
-            &'k TransAttempt<'a, 't>,
-            &'k BtreeIter<'t>,
-            BkeySC<'k>,
-        ) -> Result<(), BchError>,
+        F: KeyFn<'t, ()>,
     {
-        self.for_each_attempt_inner(trans, Some((disk_res, flags.into())),
-            |raw| unsafe { c::bch2_btree_iter_peek_prev_min(raw, min) },
-            |raw| unsafe { c::bch2_btree_iter_rewind(raw) },
-            f)
+        self.walk_commit(trans, Keys::Reverse(min), Some((disk_res, flags.into())), f)
     }
 
     pub fn for_each_max_commit<F>(
@@ -2909,28 +2925,18 @@ impl<'t> BtreeIter<'t> {
         f:          F,
     ) -> Result<(), BchError>
     where
-        F: for<'a, 'k> FnMut(
-            &'k TransAttempt<'a, 't>,
-            &'k BtreeIter<'t>,
-            BkeySC<'k>,
-        ) -> Result<(), BchError>,
+        F: KeyFn<'t, ()>,
     {
-        self.for_each_attempt_inner(trans, Some((disk_res, flags.into())),
-            |raw| unsafe { (*raw).peek_max_type_raw(end, iter_flags) },
-            |raw| unsafe { c::bch2_btree_iter_advance(raw) },
-            f)
+        self.walk_commit(trans, Keys::Max(end, iter_flags), Some((disk_res, flags.into())), f)
     }
 
     pub fn for_each_reverse<F, R>(&mut self, trans: &BtreeTrans<'t>, min: Bpos, f: F)
         -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&'a TransAttempt<'_, 't>, &'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: KeyFn<'t, R>,
         R: LoopControl,
     {
-        self.for_each_inner(trans,
-            |raw| unsafe { c::bch2_btree_iter_peek_prev_min(raw, min) },
-            |raw| unsafe { c::bch2_btree_iter_rewind(raw) },
-            f)
+        self.walk(trans, Keys::Reverse(min), f)
     }
 
     /// Step past the key just returned: false at the end of the btree.
