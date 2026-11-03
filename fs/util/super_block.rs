@@ -32,6 +32,18 @@ use super::fs_type::{FsType, SuperData};
 #[repr(transparent)]
 pub struct SuperBlock<T>(Opaque<c::super_block>, PhantomData<T>);
 
+/// A superblock held against freezing for a page fault's write: until it's
+/// dropped, sb_end_pagefault().
+#[cfg(kernel)]
+pub struct PagefaultWrite<'a>(*mut c::super_block, PhantomData<&'a ()>);
+
+#[cfg(kernel)]
+impl Drop for PagefaultWrite<'_> {
+    fn drop(&mut self) {
+        unsafe { c::sb_end_pagefault(self.0) }
+    }
+}
+
 impl<T> SuperBlock<T> {
     /// # Safety
     /// @sb is live for 'a, and its s_fs_info is a T: set at creation, before
@@ -60,6 +72,13 @@ impl<T> SuperBlock<T> {
 
     pub fn rdonly(&self) -> bool {
         self.flags() & c::SB_RDONLY as c_ulong != 0
+    }
+
+    /// Held against freezing while a page fault writes: sb_start_pagefault().
+    #[cfg(kernel)]
+    pub fn start_pagefault(&self) -> PagefaultWrite<'_> {
+        unsafe { c::sb_start_pagefault(self.as_ptr()) };
+        PagefaultWrite(self.as_ptr(), PhantomData)
     }
 
     /// sync_filesystem(), if s_umount can be had for reading without waiting:
