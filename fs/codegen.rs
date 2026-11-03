@@ -105,6 +105,9 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/idr.h",
     "linux/console.h",
     "linux/bio.h",
+    "linux/pagemap.h",
+    "linux/page-flags.h",
+    "linux/xarray.h",
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
@@ -115,6 +118,12 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "closure_sync_timeout",
     "bch2_closure_wait", "closure_wake_up", "closure_nr_remaining",
     "rust_page_folio", "rust_folio_page_idx", "rust_folio_size",
+    // vfs/folio.rs: folios, mappings and readahead
+    "rust_folio_get_private", "rust_filemap_alloc_folio", "folio_pos", "folio_nr_pages",
+    "folio_get", "folio_put", "folio_detach_private", "folio_test_uptodate", "folio_test_dirty",
+    "folio_mark_uptodate", "folio_end_read", "filemap_add_folio", "readahead_gfp_mask",
+    "mapping_min_folio_order", "mapping_max_folio_order", "__readahead_folio", "xa_load", "xa_is_value",
+    "bio_add_folio_nofail",
     "rust_page_highmem", "rust_page_address",
     "rust_poll_wait", "rust_fault_in_writeable",
     "rust_fault_in_readable", "rust_filemap_write_and_wait_range", "rust_filemap_flush",
@@ -166,7 +175,8 @@ const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "
                                   "xattr_handler", "kstatfs", "export_operations", "fid_type",
                                   "xxh64_state", "chacha_state", "poly1305_desc_ctx",
                                   // the kernel crate's fs_context and fs_parameter are opaque
-                                  "fs_context", "fs_parameter", "fs_context_operations"];
+                                  "fs_context", "fs_parameter", "fs_context_operations",
+                                  "readahead_control"];
 /// Structs in an unblocklisted header - defined there, or only declared, as
 /// uidgid.h declares user_namespace - that kernel::bindings binds: a second
 /// copy would be a different type - and bindgen, stopped at one, doesn't
@@ -175,7 +185,7 @@ const BLOCKLIST_TYPE: &[&str] = &["inode", "file", "dir_context", "user_namespac
                                      "fiemap_extent_info", "address_space", "vm_fault",
                                      "vm_operations_struct", "vm_area_struct", "vm_area_desc", "kiocb",
                                      "super_block", "super_operations", "percpu_ref", "ida",
-                                     "blk_holder_ops", "bio_set"];
+                                     "blk_holder_ops", "bio_set", "xarray"];
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
                                  "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*",
                                  "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*",

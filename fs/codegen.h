@@ -20,6 +20,7 @@
 #include <linux/notifier.h>
 #include <linux/pagemap.h>
 #include <linux/poll.h>
+#include <linux/version.h>
 #include <linux/vmalloc.h>
 #include <asm/ioctl.h>
 #include <keys/user-type.h>
@@ -188,6 +189,22 @@ static inline void __user *rust_compat_ptr(u32 uptr)
 static inline size_t rust_folio_size(struct folio *folio)
 {
 	return folio_size(folio);
+}
+
+/* mm_types.h's, as above */
+static inline void *rust_folio_get_private(struct folio *folio)
+{
+	return folio_get_private(folio);
+}
+
+/* alloc_hooks()'s macro; from 6.19 it takes a mempolicy */
+static inline struct folio *rust_filemap_alloc_folio(gfp_t gfp, unsigned int order)
+{
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,19,0)
+	return filemap_alloc_folio(gfp, order);
+#else
+	return filemap_alloc_folio(gfp, order, NULL);
+#endif
 }
 
 static inline bool rust_page_highmem(struct page *page)
