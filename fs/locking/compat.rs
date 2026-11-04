@@ -4,7 +4,7 @@
 //! C does: a C struct's lock borrowed as a Locked, a Locked whose caller already
 //! holds it, and a Locked C carries held from one Rust call to another.
 
-use super::{Guard, Locked, RawLock, RawRwLock, ReadGuard};
+use super::{ExclusiveGuard, Locked, RawLock, RawRwLock, SharedGuard};
 use core::mem::{align_of, size_of};
 
 impl<R: RawLock> Locked<R> {
@@ -26,23 +26,23 @@ impl<R: RawLock, G, P> Locked<R, G, P> {
     /// The caller holds the lock exclusively - not as one of its readers -
     /// and holds it for as long as this guard lives; nothing else this task
     /// holds has the G.
-    pub unsafe fn held(&self) -> Guard<'_, R, G, P> {
+    pub unsafe fn held(&self) -> ExclusiveGuard<'_, R, G, P> {
         self.assert_held();
-        unsafe { Guard::from_held(self, None) }
+        unsafe { ExclusiveGuard::from_held(self, None) }
     }
 }
 
 impl<R: RawRwLock, G, P> Locked<R, G, P> {
-    pub unsafe fn read_held(&self) -> ReadGuard<'_, R, G, P> {
+    pub unsafe fn read_held(&self) -> SharedGuard<'_, R, G, P> {
         unsafe { self.raw().assert_held_any() };
-        unsafe { ReadGuard::from_held(self, None) }
+        unsafe { SharedGuard::from_held(self, None) }
     }
 }
 
 // Locked in Rust and released by C, which carries it between: until the C
 // between converts.
 
-impl<R: RawLock<GuardState = ()>, G, P> Guard<'_, R, G, P> {
+impl<R: RawLock<GuardState = ()>, G, P> ExclusiveGuard<'_, R, G, P> {
     /// Leave the lock held, for C to release.
     pub fn leave_locked(self) {
         core::mem::forget(self)

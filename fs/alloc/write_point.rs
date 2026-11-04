@@ -29,7 +29,7 @@ use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::data::ec::head::stripe_heads_stop;
 use crate::fs::Fs;
-use crate::locking::{ByteLock, Guard, Lockdep};
+use crate::locking::{ByteLock, ExclusiveGuard, Lockdep};
 use crate::prt;
 use crate::util::ffi::Opaque;
 use crate::util::hash::hash_64;
@@ -39,10 +39,10 @@ use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::c_export;
 
 /// write_points_hash_lock, held.
-type HashGuard<'a> = Guard<'a, Lockdep<ByteLock>, (), c::WritePointsHash>;
+type HashGuard<'a> = ExclusiveGuard<'a, Lockdep<ByteLock>, (), c::WritePointsHash>;
 
 /// A write point's lock, held.
-pub(crate) type WritePointGuard<'a> = Guard<'a, Lockdep<ByteLock>, c::WritePointLocked, c::WritePointId>;
+pub(crate) type WritePointGuard<'a> = ExclusiveGuard<'a, Lockdep<ByteLock>, c::WritePointLocked, c::WritePointId>;
 
 /// A write point, as a write names it.
 #[derive(Clone, Copy)]

@@ -62,7 +62,7 @@ use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
                          AtomicU64, AtomicU8, AtomicUsize, Ordering};
 
-use crate::locking::{Guard, RawLock};
+use crate::locking::{ExclusiveGuard, RawLock};
 use crate::util::vstructs::{Native, Plain};
 
 // ── Places ───────────────────────────────────────────────────────────────
@@ -480,13 +480,13 @@ impl<T: AtomicWord, G> VolatilePublish<T, G> {
         v
     }
 
-    pub fn set<R: RawLock, P>(&self, v: T, _: &Guard<'_, R, G, P>) {
+    pub fn set<R: RawLock, P>(&self, v: T, _: &ExclusiveGuard<'_, R, G, P>) {
         self.0.set(v)
     }
 
     /// set(), ordered after the stores before it: for what get_acquire()'s
     /// reader goes on to read.
-    pub fn set_release<R: RawLock, P>(&self, v: T, _: &Guard<'_, R, G, P>) {
+    pub fn set_release<R: RawLock, P>(&self, v: T, _: &ExclusiveGuard<'_, R, G, P>) {
         core::sync::atomic::fence(Ordering::Release);
         self.0.set(v)
     }

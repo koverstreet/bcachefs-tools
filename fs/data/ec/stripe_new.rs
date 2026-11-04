@@ -147,7 +147,7 @@ use crate::data::ec::stripe_new_tasks::{stripe_done, stripe_task};
 use crate::data::moving::MovingIo;
 use crate::errcode::{bch_errcode, BchError, FirstErr};
 use crate::fs::Fs;
-use crate::locking::{Guard, Locked};
+use crate::locking::{ExclusiveGuard, Locked};
 use crate::util::alloc::{AllocError, KBox, KVVec};
 use crate::util::backref::BackRef;
 use crate::util::ffi::Opaque;
@@ -222,7 +222,7 @@ impl BlockDevsWriter {
 
 /// A stripe being made's lock, held: its internal state, and the writer of
 /// what it publishes.
-pub(crate) type InternalGuard<'a> = Guard<'a, c::mutex, Internal, BlockDevs>;
+pub(crate) type InternalGuard<'a> = ExclusiveGuard<'a, c::mutex, Internal, BlockDevs>;
 
 /// What a stripe being made holds on one of its blocks' buckets: a pin, or -
 /// once a writer's claimed the block - the bucket's ->ec. Given back when

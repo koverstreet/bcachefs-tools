@@ -44,7 +44,7 @@ use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{btree_id_is_alloc, Fs};
 use crate::init::recovery::NotRw;
-use crate::locking::{Guard, Locked};
+use crate::locking::{ExclusiveGuard, Locked};
 use crate::util::projections::VolatilePublish;
 use crate::util::alloc::{darray_exit, DArrayLoan, KVVec};
 use crate::util::ffi::Opaque;
@@ -212,7 +212,7 @@ pub struct journal_keys {
     pub overwrites: Locked<c::mutex, OverwriteRanges, OverwriteRangesLive>,
 }
 
-type OverwriteGuard<'a> = Guard<'a, c::mutex, c::OverwriteRanges, c::OverwriteRangesLive>;
+type OverwriteGuard<'a> = ExclusiveGuard<'a, c::mutex, c::OverwriteRanges, c::OverwriteRangesLive>;
 
 pub type JournalKeysRef = RefGuard<Placed<AtomicRef<c::journal_keys>, crate::at!(Fs.journal_keys)>>;
 

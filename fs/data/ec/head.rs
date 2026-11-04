@@ -25,7 +25,7 @@ use crate::data::ec::stripe_new_blocks::stripe_alloc_or_reuse;
 use crate::errcode::{bch_errcode, BchError};
 use crate::format::{DataType, MemberState};
 use crate::fs::Fs;
-use crate::locking::{ByteLock, Guard, Lockdep};
+use crate::locking::{ByteLock, ExclusiveGuard, Lockdep};
 use crate::sb::counters::events;
 use crate::util::alloc::kbox_pin_init;
 use crate::util::ffi::Opaque;
@@ -180,7 +180,7 @@ impl Fs {
 // block's claimed, when its devices change under a stripe not yet allocated,
 // or when allocation stops: on the filesystem, or a device, going read-only.
 
-pub(crate) type HeadGuard<'f> = Guard<'f, Lockdep<ByteLock>, c::HeadState>;
+pub(crate) type HeadGuard<'f> = ExclusiveGuard<'f, Lockdep<ByteLock>, c::HeadState>;
 
 /// The stripe @g is filling, if it has one.
 fn head_stripe<'g>(g: &'g HeadGuard<'_>) -> Option<&'g StripeNew> {

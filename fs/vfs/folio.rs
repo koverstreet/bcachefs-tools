@@ -22,7 +22,7 @@
 use super::inode::InodeInfo;
 use crate::c;
 use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
-use crate::locking::Guard;
+use crate::locking::ExclusiveGuard;
 use crate::util::kernel::{cond_resched, loff};
 use core::ffi::c_int;
 use core::marker::PhantomData;
@@ -175,7 +175,7 @@ impl Folio {
 
 /// A folio's bcachefs state, its lock held.
 pub struct FolioStateGuard<'a> {
-    guard:   Guard<'a, c::spinlock_t, c::FolioState>,
+    guard:   ExclusiveGuard<'a, c::spinlock_t, c::FolioState>,
     sectors: usize,
 }
 

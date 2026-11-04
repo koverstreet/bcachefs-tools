@@ -299,7 +299,7 @@ use crate::prt;
 use crate::util::vstructs::{Validated, Whole};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
-use crate::locking::Guard;
+use crate::locking::ExclusiveGuard;
 use crate::{bch_err, bkey_fsck_err_on};
 use crate::init::error::{id, BkeyValidate};
 use crate::c;
@@ -497,7 +497,7 @@ impl c::snapshot_t {
 /// table_lock, held: the table's write side, and the only way to it.
 pub(crate) struct TableWrite<'a> {
     table: &'a RcuArray<c::snapshot_t>,
-    _lock: Guard<'a, c::mutex>,
+    _lock: ExclusiveGuard<'a, c::mutex>,
 }
 
 impl TableWrite<'_> {

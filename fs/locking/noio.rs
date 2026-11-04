@@ -25,7 +25,7 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{Guard, Locked, RawLock, RawLockBase, RawRwLock, RawTryLock, ReadGuard};
+use super::{ExclusiveGuard, Locked, RawLock, RawLockBase, RawRwLock, RawTryLock, SharedGuard};
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::{c_uint, c_void, CStr};
@@ -199,8 +199,8 @@ unsafe impl<R: RawRwLock> RawRwLock for Noio<R> {
 
 unsafe impl<R: ::pin_init::Zeroable> ::pin_init::Zeroable for Noio<R> {}
 
-impl<'a, R: RawRwLock<GuardState = ()>, G: Sync, P> ReadGuard<'a, Noio<R>, G, P> {
-    pub fn with_write<T>(&mut self, f: impl FnOnce(&mut Guard<'_, Noio<R>, G, P>) -> T) -> T {
+impl<'a, R: RawRwLock<GuardState = ()>, G: Sync, P> SharedGuard<'a, Noio<R>, G, P> {
+    pub fn with_write<T>(&mut self, f: impl FnOnce(&mut ExclusiveGuard<'_, Noio<R>, G, P>) -> T) -> T {
         /*
          * Raw of the inner rwsem: our caller holds the lock read via the noio
          * guard, so PF_MEMALLOC_NOIO stays set across this temporary upgrade
@@ -215,7 +215,7 @@ impl<'a, R: RawRwLock<GuardState = ()>, G: Sync, P> ReadGuard<'a, Noio<R>, G, P>
     }
 }
 
-impl<'a, R: RawLock<GuardState = ()>, G, P> Guard<'a, Noio<R>, G, P> {
+impl<'a, R: RawLock<GuardState = ()>, G, P> ExclusiveGuard<'a, Noio<R>, G, P> {
     pub fn with_unlocked<T>(&mut self, f: impl FnOnce() -> T) -> T {
         /*
          * Raw drop/retake of just the lock: the guard keeps PF_MEMALLOC_NOIO

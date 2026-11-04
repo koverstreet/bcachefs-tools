@@ -54,7 +54,7 @@ use crate::data::copygc::can_make_progress;
 use crate::errcode::{err_ptr, ret_to_c, ret_to_result_void, BchError};
 use crate::format::DataType;
 use crate::fs::Fs;
-use crate::locking::Guard;
+use crate::locking::ExclusiveGuard;
 use crate::opts::data_type_str;
 use crate::percpu_field;
 use crate::sb::counters::events;
@@ -415,10 +415,10 @@ impl Drop for OpenBucketsDrain<'_, '_> {
 }
 
 /// freelist_lock, held.
-pub(crate) type FreelistGuard<'a> = Guard<'a, c::spinlock_t, c::OpenBucketsFree, c::OpenBucketsFreeNr>;
+pub(crate) type FreelistGuard<'a> = ExclusiveGuard<'a, c::spinlock_t, c::OpenBucketsFree, c::OpenBucketsFreeNr>;
 
 /// An open bucket's lock, held.
-pub(crate) type ObGuard<'a> = Guard<'a, c::spinlock_t, (), c::OpenBucketIdentity>;
+pub(crate) type ObGuard<'a> = ExclusiveGuard<'a, c::spinlock_t, (), c::OpenBucketIdentity>;
 
 impl c::open_bucket {
     pub const ON_PARTIAL_LIST: u8  = 1 << 0;

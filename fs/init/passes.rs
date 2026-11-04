@@ -161,7 +161,7 @@ use crate::c;
 use self::bch_recovery_runner as Runner;
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::locking::Guard;
+use crate::locking::ExclusiveGuard;
 use crate::sb::io::{SbFieldOps, SbWrite};
 use crate::snapshots::subvolume;
 use crate::types::{Le32, Le64};
@@ -491,7 +491,7 @@ fn set_btree_clean_to(fs: &Fs, btree: Btree, clean: bool) {
 
 /// The runner's lock, held: its state, and permission to write what of
 /// recovery's is published. Nothing sleeps while it's held.
-type Recovery<'a> = Guard<'a, c::spinlock_t, Runner, RecoveryWords>;
+type Recovery<'a> = ExclusiveGuard<'a, c::spinlock_t, Runner, RecoveryWords>;
 
 fn lock(fs: &Fs) -> Recovery<'_> {
     fs.recovery.runner.lock()
@@ -537,7 +537,7 @@ pub fn assert_run_lock_held(fs: &Fs) {
 
 /// recovery.run_lock, held: no recovery pass runs - to run one's work outside
 /// the pass framework.
-pub fn run_lock(fs: &Fs) -> Guard<'_, c::mutex> {
+pub fn run_lock(fs: &Fs) -> ExclusiveGuard<'_, c::mutex> {
     fs.recovery.run_lock.lock()
 }
 

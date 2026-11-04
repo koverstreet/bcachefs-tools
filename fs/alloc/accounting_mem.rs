@@ -14,7 +14,7 @@ use crate::format::{self, bcachefs_metadata_version, Bpos, DataType};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id, FsckErrCtx};
 use crate::init::passes;
-use crate::locking::{percpu_rwsem_noio, Guard, ReadGuard};
+use crate::locking::{percpu_rwsem_noio, ExclusiveGuard, SharedGuard};
 use crate::sb::counters::events;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::eytzinger::Eytzinger0;
@@ -41,8 +41,8 @@ impl<'a> From<BkeySC<'a, Accounting<Validated>>> for Delta<'a> {
     }
 }
 
-pub(crate) type MarkRead<'a> = ReadGuard<'a, percpu_rwsem_noio>;
-pub(crate) type MarkWrite<'a> = Guard<'a, percpu_rwsem_noio>;
+pub(crate) type MarkRead<'a> = SharedGuard<'a, percpu_rwsem_noio>;
+pub(crate) type MarkWrite<'a> = ExclusiveGuard<'a, percpu_rwsem_noio>;
 
 pub(crate) trait MarkHeld {
     fn insert(&mut self, fs: &Fs, a: Delta<'_>) -> Result<(), BchError>;

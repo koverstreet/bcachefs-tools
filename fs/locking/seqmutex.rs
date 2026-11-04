@@ -7,7 +7,7 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{Guard, Locked, RawLock, RawLockBase, RawTryLock};
+use super::{ExclusiveGuard, Locked, RawLock, RawLockBase, RawTryLock};
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::convert::Infallible;
@@ -57,7 +57,7 @@ pub struct SeqMutexSeq(u32);
 
 impl<G, P> Locked<seqmutex, G, P> {
     /// Held again, if no one has taken it since the unlock that gave @at.
-    pub fn relock(&self, at: SeqMutexSeq) -> Option<Guard<'_, seqmutex, G, P>> {
+    pub fn relock(&self, at: SeqMutexSeq) -> Option<ExclusiveGuard<'_, seqmutex, G, P>> {
         let l = self.raw();
         if l.seq.load(Ordering::Relaxed) != at.0 {
             return None;
@@ -65,7 +65,7 @@ impl<G, P> Locked<seqmutex, G, P> {
 
         // retaken, not counted: no one else has taken it
         unsafe { l.lock.try_lock() }?;
-        let g = unsafe { Guard::from_held(self, Some(())) };
+        let g = unsafe { ExclusiveGuard::from_held(self, Some(())) };
 
         if l.seq.load(Ordering::Relaxed) != at.0 {
             return None;    // unlocked, as the guard drops
@@ -74,7 +74,7 @@ impl<G, P> Locked<seqmutex, G, P> {
     }
 }
 
-impl<G, P> Guard<'_, seqmutex, G, P> {
+impl<G, P> ExclusiveGuard<'_, seqmutex, G, P> {
     /// Released, with the count relock() takes.
     pub fn unlock(self) -> SeqMutexSeq {
         SeqMutexSeq(self.lock().raw().seq.load(Ordering::Relaxed))

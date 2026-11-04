@@ -30,7 +30,7 @@ use crate::init::registry::register;
 use crate::init::rw::writes_disabled;
 use crate::inode::shard_cpu_init;
 use crate::journal::seq_blacklist::blacklist_table_initialize;
-use crate::locking::{Guard, MutexNoio, Noio, PercpuRwsemNoio, RawLockBase, ReadGuard};
+use crate::locking::{ExclusiveGuard, MutexNoio, Noio, PercpuRwsemNoio, RawLockBase, SharedGuard};
 use crate::{bch_verbose, new_lock, prt};
 use crate::sb::counters::counters_init;
 use crate::sb::io::{read_super, sb_to_fs, version, Holder};
@@ -67,7 +67,7 @@ c_extern! {
 }
 
 /// sb_lock, held: the superblock, and c->sb, which it publishes
-pub type SbLockGuard<'a> = Guard<'a, Noio<c::mutex>, c::bch_fs_sb, c::bch_sb_cpu>;
+pub type SbLockGuard<'a> = ExclusiveGuard<'a, Noio<c::mutex>, c::bch_fs_sb, c::bch_sb_cpu>;
 
 impl SbLockGuard<'_> {
     pub fn fs_member_mut(&mut self, dev_idx: u32) -> &mut c::bch_member {
@@ -78,12 +78,12 @@ impl SbLockGuard<'_> {
 
 pub struct StateLockRead<'a> {
     fs:     &'a Fs,
-    _guard: ReadGuard<'a, c::rw_semaphore>,
+    _guard: SharedGuard<'a, c::rw_semaphore>,
 }
 
 pub struct StateLockWrite<'a> {
     fs:     &'a Fs,
-    _guard: Guard<'a, c::rw_semaphore>,
+    _guard: ExclusiveGuard<'a, c::rw_semaphore>,
 }
 
 impl<'a> StateLockWrite<'a> {

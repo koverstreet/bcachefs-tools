@@ -27,7 +27,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
-use crate::locking::{Guard, Locked};
+use crate::locking::{ExclusiveGuard, Locked};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::kernel::{local_clock, time_after64};
 use crate::util::percpu::{PerCpu, PerCpuRef, CpuShared};
@@ -197,7 +197,7 @@ fn nsecs_aligned(out: &mut Printbuf, ns: u64) {
 
 // ── Counting ─────────────────────────────────────────────────────────────
 
-type StatsGuard<'a> = Guard<'a, c::spinlock_t, c::TimeStatsLocked>;
+type StatsGuard<'a> = ExclusiveGuard<'a, c::spinlock_t, c::TimeStatsLocked>;
 
 /// What an event's duration goes to besides the stats' own: a
 /// bch2_time_stats_quantiles' quantiles, or nothing - ().

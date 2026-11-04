@@ -12,7 +12,7 @@ use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::fs::Fs;
 use crate::journal::entries::{EntryWriter, NoRoom};
-use crate::locking::{Guard, Locked};
+use crate::locking::{ExclusiveGuard, Locked};
 use crate::util::ffi::Opaque;
 use crate::util::vstructs::Head;
 use crate::new_lock;
@@ -146,7 +146,7 @@ impl Fs {
     }
 }
 
-type RootsGuard<'a> = Guard<'a, c::mutex, c::BtreeRoots, c::BtreeRootsLive>;
+type RootsGuard<'a> = ExclusiveGuard<'a, c::mutex, c::BtreeRoots, c::BtreeRootsLive>;
 
 /// The live roots, but those whose bit is set in @skip - a btree past bit 63
 /// can't be. Under root_lock, which owns their on-disk fields: key, level,

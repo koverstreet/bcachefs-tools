@@ -10,7 +10,7 @@ use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
 use crate::errcode::bch_errcode;
 use crate::errcode::BchError;
-use crate::locking::{Guard, Locked};
+use crate::locking::{ExclusiveGuard, Locked};
 use crate::util::alloc::{DArrayLoan, KVVec};
 use crate::util::bio::{BioSet, Either};
 use crate::util::late::Late;
@@ -171,7 +171,7 @@ impl BtreeRoots {
 }
 
 /// root_lock, held: the roots, and what it publishes of them.
-pub type BtreeRootsGuard<'a> = Guard<'a, cs::mutex, BtreeRoots, BtreeRootsLive>;
+pub type BtreeRootsGuard<'a> = ExclusiveGuard<'a, cs::mutex, BtreeRoots, BtreeRootsLive>;
 
 impl BtreeRootsGuard<'_> {
     /// Slots up to btree @id's, empty, and how many there are published: for

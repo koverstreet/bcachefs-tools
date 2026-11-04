@@ -89,7 +89,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{fence, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize};
 use core::sync::atomic::Ordering::{self, Acquire, Relaxed, Release};
 
-use crate::locking::{ByteLock, Guard, Locked};
+use crate::locking::{ByteLock, ExclusiveGuard, Locked};
 use crate::types::CacheAligned;
 use crate::util::alloc::AllocError;
 use crate::util::backref::BackRef;
@@ -466,7 +466,7 @@ pub struct Cuckoo<I: CuckooItem = u64, S = SipHash13Key, const W: usize = 2, M: 
 }
 
 /// The writers' lock, held.
-type Held<'a> = Guard<'a, ByteLock>;
+type Held<'a> = ExclusiveGuard<'a, ByteLock>;
 
 // SAFETY: atomics, an RcuArray, no bytes, an unlocked ByteLock, Faults'
 // integers and atomics, and PhantomDatas: all valid zeroed

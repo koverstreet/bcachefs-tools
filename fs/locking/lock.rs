@@ -190,37 +190,37 @@ impl<R: RawLockBase, G, P> Locked<R, G, P> {
 }
 
 impl<R: RawLock, G, P> Locked<R, G, P> {
-    pub fn lock(&self) -> Guard<'_, R, G, P> {
+    pub fn lock(&self) -> ExclusiveGuard<'_, R, G, P> {
         let state = unsafe { self.raw.lock() };
-        Guard { lock: self, state: Some(state), _not_send: PhantomData }
+        ExclusiveGuard { lock: self, state: Some(state), _not_send: PhantomData }
     }
 
     /// lock(), as lockdep subclass @subclass: for locks of one class taken
     /// together, always in the same order.
-    pub fn lock_nested(&self, subclass: u32) -> Guard<'_, R, G, P>
+    pub fn lock_nested(&self, subclass: u32) -> ExclusiveGuard<'_, R, G, P>
     where
         R: RawNestedLock,
     {
         let state = unsafe { self.raw.lock_nested(subclass) };
-        Guard { lock: self, state: Some(state), _not_send: PhantomData }
+        ExclusiveGuard { lock: self, state: Some(state), _not_send: PhantomData }
     }
 
     /// lock(), if no one holds it.
-    pub fn try_lock(&self) -> Option<Guard<'_, R, G, P>>
+    pub fn try_lock(&self) -> Option<ExclusiveGuard<'_, R, G, P>>
     where
         R: RawTryLock,
     {
         let state = unsafe { self.raw.try_lock() }?;
-        Some(Guard { lock: self, state: Some(state), _not_send: PhantomData })
+        Some(ExclusiveGuard { lock: self, state: Some(state), _not_send: PhantomData })
     }
 
     /// lock(), if it's free within @timeout jiffies.
-    pub fn try_lock_timeout(&self, timeout: c_ulong) -> Option<Guard<'_, R, G, P>>
+    pub fn try_lock_timeout(&self, timeout: c_ulong) -> Option<ExclusiveGuard<'_, R, G, P>>
     where
         R: RawTimedLock,
     {
         let state = unsafe { self.raw.try_lock_timeout(timeout) }?;
-        Some(Guard { lock: self, state: Some(state), _not_send: PhantomData })
+        Some(ExclusiveGuard { lock: self, state: Some(state), _not_send: PhantomData })
     }
 
     /// Held exclusively - by the writer, for a lock readers share.
@@ -238,12 +238,12 @@ impl<R: RawLockBase, G, P> Deref for Locked<R, G, P> {
 }
 
 impl<R: RawRwLock, G: Sync, P> Locked<R, G, P> {
-    pub fn read(&self) -> ReadGuard<'_, R, G, P> {
+    pub fn read(&self) -> SharedGuard<'_, R, G, P> {
         let state = unsafe { self.raw.lock_shared() };
-        ReadGuard { lock: self, state: Some(state), _not_send: PhantomData }
+        SharedGuard { lock: self, state: Some(state), _not_send: PhantomData }
     }
 
-    pub fn write(&self) -> Guard<'_, R, G, P> {
+    pub fn write(&self) -> ExclusiveGuard<'_, R, G, P> {
         self.lock()
     }
 
@@ -262,7 +262,7 @@ impl<R: RawLockBase, G, P> Drop for Locked<R, G, P> {
 /// by the task that took it, as lockdep checks - and a spin_lock_irqsave()'s
 /// interrupt state is its CPU's.
 #[must_use = "the lock is released as soon as the guard is dropped"]
-pub struct Guard<'a, R: RawLock, G = (), P = ()> {
+pub struct ExclusiveGuard<'a, R: RawLock, G = (), P = ()> {
     lock:      &'a Locked<R, G, P>,
     /// None for a lock held by its caller - compat.rs's held(): not ours to
     /// release
@@ -270,12 +270,12 @@ pub struct Guard<'a, R: RawLock, G = (), P = ()> {
     _not_send: PhantomData<*mut ()>,
 }
 
-impl<'a, R: RawLock, G, P> Guard<'a, R, G, P> {
+impl<'a, R: RawLock, G, P> ExclusiveGuard<'a, R, G, P> {
     /// # Safety
     /// @lock is held exclusively: taken with @state, or by our caller for as
     /// long as the guard lives, if None.
     pub(super) unsafe fn from_held(lock: &'a Locked<R, G, P>, state: Option<R::GuardState>) -> Self {
-        Guard { lock, state, _not_send: PhantomData }
+        ExclusiveGuard { lock, state, _not_send: PhantomData }
     }
 
     pub(crate) fn lock(&self) -> &'a Locked<R, G, P> {
@@ -283,7 +283,7 @@ impl<'a, R: RawLock, G, P> Guard<'a, R, G, P> {
     }
 }
 
-impl<R: RawLock, G, P> Guard<'_, R, G, P> {
+impl<R: RawLock, G, P> ExclusiveGuard<'_, R, G, P> {
     pub fn protected(&mut self) -> &mut G {
         self
     }
@@ -311,7 +311,7 @@ impl<R: RawLock, G, P> Guard<'_, R, G, P> {
     }
 }
 
-impl<R: RawLock, G, P> Deref for Guard<'_, R, G, P> {
+impl<R: RawLock, G, P> Deref for ExclusiveGuard<'_, R, G, P> {
     type Target = G;
 
     fn deref(&self) -> &G {
@@ -319,13 +319,13 @@ impl<R: RawLock, G, P> Deref for Guard<'_, R, G, P> {
     }
 }
 
-impl<R: RawLock, G, P> DerefMut for Guard<'_, R, G, P> {
+impl<R: RawLock, G, P> DerefMut for ExclusiveGuard<'_, R, G, P> {
     fn deref_mut(&mut self) -> &mut G {
         unsafe { &mut *self.lock.protected.get() }
     }
 }
 
-impl<R: RawLock, G, P> Drop for Guard<'_, R, G, P> {
+impl<R: RawLock, G, P> Drop for ExclusiveGuard<'_, R, G, P> {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
             unsafe { self.lock.raw.unlock(state) }
@@ -334,16 +334,16 @@ impl<R: RawLock, G, P> Drop for Guard<'_, R, G, P> {
 }
 
 #[must_use = "the lock is released as soon as the guard is dropped"]
-pub struct ReadGuard<'a, R: RawRwLock, G = (), P = ()> {
+pub struct SharedGuard<'a, R: RawRwLock, G = (), P = ()> {
     lock:      &'a Locked<R, G, P>,
     // an Option only to be taken in drop()
     state:     Option<R::GuardState>,
     _not_send: PhantomData<*mut ()>,
 }
 
-impl<'a, R: RawRwLock, G, P> ReadGuard<'a, R, G, P> {
+impl<'a, R: RawRwLock, G, P> SharedGuard<'a, R, G, P> {
     pub(super) unsafe fn from_held(lock: &'a Locked<R, G, P>, state: Option<R::GuardState>) -> Self {
-        ReadGuard { lock, state, _not_send: PhantomData }
+        SharedGuard { lock, state, _not_send: PhantomData }
     }
 
     pub(super) fn lock(&self) -> &'a Locked<R, G, P> {
@@ -359,7 +359,7 @@ impl<'a, R: RawRwLock, G, P> ReadGuard<'a, R, G, P> {
     }
 }
 
-impl<R: RawRwLock, G, P> Deref for ReadGuard<'_, R, G, P> {
+impl<R: RawRwLock, G, P> Deref for SharedGuard<'_, R, G, P> {
     type Target = G;
 
     fn deref(&self) -> &G {
@@ -367,7 +367,7 @@ impl<R: RawRwLock, G, P> Deref for ReadGuard<'_, R, G, P> {
     }
 }
 
-impl<R: RawRwLock, G, P> Drop for ReadGuard<'_, R, G, P> {
+impl<R: RawRwLock, G, P> Drop for SharedGuard<'_, R, G, P> {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
             unsafe { self.lock.raw.unlock_shared(state) }

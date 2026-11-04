@@ -47,7 +47,7 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::inode;
 use crate::inode_opts::InodeOpt;
-use crate::locking::{Guard, Locked};
+use crate::locking::{ExclusiveGuard, Locked};
 use crate::quota;
 use crate::prt;
 use crate::util::ffi::Opaque;
@@ -325,7 +325,7 @@ pub fn bch2_inode_update_after_write(trans: &BtreeTrans<'_>, inode: &c::bch_inod
 /// ei_update_lock, held.
 pub struct UpdateLock<'i> {
     inode:  &'i InodeInfo,
-    _guard: Guard<'i, c::mutex>,
+    _guard: ExclusiveGuard<'i, c::mutex>,
 }
 
 impl<'i> UpdateLock<'i> {

@@ -5,7 +5,7 @@
 #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
 use super::raw::rust_debug_check_no_locks_freed;
 use super::raw::{rust_trace_contention_begin, rust_trace_contention_end};
-use super::{Guard, Locked, LockdepMap, RawLockBase};
+use super::{ExclusiveGuard, Locked, LockdepMap, RawLockBase};
 use crate::cstructs::c;
 #[cfg(CONFIG_SMP)]
 use crate::debug::params::six_optimistic_spin_disabled;
@@ -492,7 +492,7 @@ unsafe fn six_lock_wait_fifo_insert(lock: &six_lock, wait: *mut six_lock_waiter)
 
 enum Realloc<'a> {
     /// Into the list allocated last time, and @wait inserted.
-    Grown(Guard<'a, c::raw_spinlock_t>),
+    Grown(ExclusiveGuard<'a, c::raw_spinlock_t>),
     /// wait_lock dropped for a list to grow into, in *@new_wf: try again.
     Allocated,
     NoMem,
@@ -501,7 +501,7 @@ enum Realloc<'a> {
 #[inline(never)]
 unsafe fn six_lock_wait_fifo_realloc<'a>(lock: &'a six_lock, wait: *mut six_lock_waiter,
                                          new_wf_ret: &mut *mut six_lock_wait_fifo,
-                                         g: Guard<'a, c::raw_spinlock_t>) -> Realloc<'a> {
+                                         g: ExclusiveGuard<'a, c::raw_spinlock_t>) -> Realloc<'a> {
     let old_wf = lock.wait_fifo.load(Relaxed);
     let new_wf = *new_wf_ret;
 
