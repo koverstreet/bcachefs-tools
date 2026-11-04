@@ -8,21 +8,16 @@
 
 #include <linux/bio.h>
 #include <linux/blkdev.h>
-#include <linux/console.h>
 #include <linux/ctype.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
-#include <linux/freezer.h>
 #include <linux/kthread.h>
-#include <linux/log2.h>
 #include <linux/math64.h>
 #include <linux/percpu.h>
 #include <linux/preempt.h>
 #include <linux/random.h>
 #include <linux/rcupdate.h>
 #include <linux/rhashtable.h>
-#include <linux/seq_buf.h>
-#include <linux/seq_file.h>
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/sched/clock.h>
@@ -195,46 +190,6 @@ int bch2_ ## name ## _h(const char *cp, type *res)		\
 
 STRTO_H(strtoull, unsigned long long)
 STRTO_H(strtou64, u64)
-
-u64 bch2_read_flag_list_mask(const char *opt, const char * const list[], u64 choices_allowed_mask)
-{
-	u64 ret = 0;
-
-	char *d __free(kfree) = kstrdup(opt, GFP_KERNEL);
-	if (!d)
-		return -ENOMEM;
-
-	char *p, *s = strim(d);
-
-	bool invert = *s == '-';
-	if (invert)
-		s++;
-
-	while ((p = strsep(&s, ",;"))) {
-		int flag = match_string(list, -1, p);
-		if (flag < 0)
-			return -1;
-		if (!(choices_allowed_mask & BIT_ULL(flag)))
-			return -1;
-
-		ret |= BIT_ULL(flag);
-	}
-
-	if (invert) {
-		u64 choices_mask = 0;
-		for (unsigned i = 0; list[i]; i++)
-			choices_mask |= BIT_ULL(i);
-
-		ret = ~ret & choices_mask & choices_allowed_mask;
-	}
-
-	return ret;
-}
-
-u64 bch2_read_flag_list(const char *opt, const char * const list[])
-{
-	return bch2_read_flag_list_mask(opt, list, U64_MAX);
-}
 
 bool bch2_is_zero(const void *_p, size_t n)
 {

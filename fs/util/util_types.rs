@@ -88,7 +88,6 @@ c_extern! {
     pub fn bch2_debugfs_create_file(name: *const c_char, mode: c::umode_t, parent: *mut c::dentry,
                                     data: *mut c_void, fops: *const c::file_operations) -> *mut c::dentry;
     pub fn bch2_strtoull_h(cp: *const c_char, res: *mut c_ulonglong) -> c_int;
-    pub fn bch2_read_flag_list(opt: *const c_char, list: *const *const c_char) -> u64;
     pub fn bch2_get_random_u64_below(ceil: u64) -> u64;
     pub fn rust_kzalloc_nofail(size: usize) -> *mut c_void;
     pub fn rust_kfree(p: *const c_void);
