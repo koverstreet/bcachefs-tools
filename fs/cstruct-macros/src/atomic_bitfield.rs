@@ -255,6 +255,49 @@ fn generate(d: &Decl) -> syn::Result<TokenStream> {
         }
     });
 
+    // on the futex's words: waits on the value, and a one-bit field as a lock
+    let bit_locks = fields.iter().copied().filter(|f| is_bool(f)).map(|f| {
+        let m = &f.name;
+        let (lock, unlock, swap) = (format_ident!("lock_{m}"), format_ident!("unlock_{m}"), format_ident!("swap_{m}"));
+        let mask = mask(m);
+        quote! {
+            /// Set, by whoever finds it clear - waiting while it's set; with
+            /// the unlock, a lock.
+            #vis fn #lock<E: crate::util::sleep::SleepEnd>(&self, how: crate::util::sleep::Sleep<E>) -> Result<(), E> {
+                while self.#swap(true) {
+                    self.wait_until(how, |v| !v.#m())?;
+                }
+                Ok(())
+            }
+
+            /// Cleared, releasing what it locked, and its waiters woken.
+            #vis fn #unlock(&self) {
+                self.0.fetch_and(!#mask, #ordering::Release);
+                self.wake();
+            }
+        }
+    });
+    let waits = matches!(word.to_string().as_str(), "u8" | "u32" | "usize").then(|| quote! {
+        /// Sleep until @cond of the value holds; woken by wake().
+        #vis fn wait_until<E: crate::util::sleep::SleepEnd>(&self, how: crate::util::sleep::Sleep<E>,
+                                                           mut cond: impl FnMut(#name) -> bool) -> Result<(), E> {
+            crate::locking::bitlock::wait_until(&self.0, how, |w| cond(#name::from_bits(w as #bits)))
+        }
+
+        /// wait_until(), given up after @timeout jiffies: whether @cond held.
+        #vis fn wait_until_timeout(&self, how: crate::util::sleep::Sleep, timeout: ::core::ffi::c_ulong,
+                                   mut cond: impl FnMut(#name) -> bool) -> bool {
+            crate::locking::bitlock::wait_until_timeout(&self.0, how, timeout, |w| cond(#name::from_bits(w as #bits)))
+        }
+
+        /// Wake wait_until()'s waiters, after the change they wait for.
+        #vis fn wake(&self) {
+            crate::locking::bitlock::wake(&self.0)
+        }
+
+        #(#bit_locks)*
+    });
+
     let doc = format!("{name}, atomic: one-bit fields by one atomic op each, the rest - and any \
                        change of several - by cmpxchg over the value.");
     Ok(quote! {
@@ -315,6 +358,8 @@ fn generate(d: &Decl) -> syn::Result<TokenStream> {
             }
 
             #(#accessors)*
+
+            #waits
         }
 
         impl crate::util::ToText for #atomic {
