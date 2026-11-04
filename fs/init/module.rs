@@ -83,6 +83,8 @@ fn bcachefs_exit() {
     #[cfg(not(NO_BCACHEFS_FS))]
     unsafe { bch2_vfs_exit() };
     #[cfg(kernel)]
+    crate::util::bio::dirty_pages_exit();
+    #[cfg(kernel)]
     crate::init::chardev::bch2_chardev_exit();
     unsafe {
         bch2_btree_key_cache_exit();
@@ -99,6 +101,8 @@ fn bcachefs_init() -> c_int {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     crate::btree::bkey::pack_test();
 
+    #[cfg(kernel)]
+    crate::util::bio::dirty_pages_init();
     crate::util::futex::bch2_futex_init();
     unsafe { bch2_dirent_init() };
     crate::init::registry::bch2_fs_registry_init();

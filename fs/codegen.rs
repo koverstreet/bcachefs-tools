@@ -132,6 +132,8 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "rust_folio_zero_segment", "rust_folio_mkclean", "rust_filemap_dirty_folio",
     "folio_lock", "folio_trylock", "filemap_get_folios",
     "folio_batch_init", "folio_batch_count", "folio_batch_release",
+    // util/bio/user_pages.rs
+    "folio_mark_dirty",
     // vfs/pagecache.rs
     "__filemap_get_folio", "folio_attach_private", "folio_test_writeback", "folio_wait_stable",
     "rust_folio_mapping", "folio_test_locked", "invalidate_inode_pages2_range",

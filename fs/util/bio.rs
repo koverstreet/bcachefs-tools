@@ -79,6 +79,8 @@ pub use iter::{FolioVec, Folios};
 pub use iter::{Chunk, Chunks, Segment, Segments, Walk};
 #[cfg(kernel)]
 pub(crate) use iter::nth_page;
+#[cfg(kernel)]
+pub(crate) use user_pages::{dirty_pages_exit, dirty_pages_init};
 #[doc(hidden)]
 pub use owned::bio_field_at;
 pub use owned::{of_bio, BioBox, BioBoxData, BioBuf, BioBufPtr, BioClone, BioField, BioInPlace, BioLend, BioSet, Either,
@@ -188,6 +190,20 @@ impl Bio {
     // bios this way throughout.
     pub unsafe fn range_at(&self, pos: c::bvec_iter) -> BioRange<'_> {
         BioRange { data: &self.data, iter: pos }
+    }
+
+    /// All its bvecs, wherever its position is: its owner's walk -
+    /// BioOwner::range_all() - or, for C, a bio's whose ref we were given.
+    /// Panics on a clone.
+    fn range_all(&self) -> BioRange<'_> {
+        assert!(!self.cloned(), "the _all walk of a cloned bio: its bvecs are its parent's");
+        // SAFETY: its own bvecs, bi_vcnt of them
+        let size = (0..u32::from(self.bio.bi_vcnt)).map(|i| unsafe { self.bvec(i) }.bv_len).sum();
+        // INVARIANT: from its first bvec, all of them
+        BioRange {
+            data: &self.data,
+            iter: c::bvec_iter { bi_size: size, ..Default::default() },
+        }
     }
 
     /// It, then the bios chained after it by bi_next.
@@ -480,15 +496,7 @@ pub unsafe trait BioOwner {
 
     /// Panics on a clone.
     fn range_all(&self) -> BioRange<'_> {
-        let bio = self.bio();
-        assert!(!bio.cloned(), "the _all walk of a cloned bio: its bvecs are its parent's");
-        // SAFETY: its own bvecs, bi_vcnt of them
-        let size = (0..u32::from(bio.bio.bi_vcnt)).map(|i| unsafe { bio.bvec(i) }.bv_len).sum();
-        // INVARIANT: from its first bvec, all of them
-        BioRange {
-            data: &bio.data,
-            iter: c::bvec_iter { bi_size: size, ..Default::default() },
-        }
+        self.bio().range_all()
     }
 
     // TODO: once submitted, a bio's bi_iter is undefined - the block layer
