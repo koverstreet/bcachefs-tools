@@ -1324,6 +1324,15 @@ unsafe impl RawLockBase for c::six_lock {
     }
 }
 
+impl<G, P> Locked<c::six_lock, G, P> {
+    /// The lock's state, for what reads it - its seq, its counts - and for
+    /// six's functions, while btree locking takes node locks through them
+    /// rather than a guard.
+    pub fn six(&self) -> &c::six_lock {
+        self.raw()
+    }
+}
+
 impl c::six_lock {
     /// six_lock_ip(), without a should_sleep_fn: it can't fail.
     fn lock_type(&self, ty: six_lock_type) {

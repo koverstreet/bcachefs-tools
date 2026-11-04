@@ -42,9 +42,10 @@ pub struct btree_write {
 }
 
 #[repr(C)]
-#[derive(Default, CStruct)]
+#[derive(CStruct)]
 pub struct btree_bkey_cached_common {
-    pub lock: cs::six_lock,
+    #[c_lock("struct six_lock lock")]
+    pub lock: Locked<cs::six_lock>,
     pub level: u8,
     pub btree_id: u8,
     pub cached: bool,

@@ -181,7 +181,7 @@ fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
 
     prt!(out, "flags:\t{}\n", b.flags);
 
-    prt!(out, "pcpu read locks:\t{}\n",     b.c.lock.readers.allocated() as u32);
+    prt!(out, "pcpu read locks:\t{}\n",     b.c.lock.six().readers.allocated() as u32);
     prt!(out, "written:\t{}\n",             b.written.get());
     prt!(out, "writes blocked:\t{}\n",      !list_empty_careful(&b.write_blocked) as u32);
     prt!(out, "will make reachable:\t{:x}\n", b.will_make_reachable.load(Ordering::Relaxed));
