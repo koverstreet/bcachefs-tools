@@ -509,6 +509,11 @@ impl<G, P> LockedBy<G, P> {
     pub unsafe fn protected_mut(&self) -> &mut G {
         unsafe { &mut *self.protected.get() }
     }
+
+    /// G, had through the only reference to its owner.
+    pub fn get_mut(&mut self) -> &mut G {
+        self.protected.get_mut()
+    }
 }
 
 impl<G, P: crate::util::projections::Publish> LockedBy<G, P> {
