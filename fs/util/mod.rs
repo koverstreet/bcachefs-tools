@@ -40,7 +40,6 @@ pub mod place;
 pub mod plymouth;
 pub mod printbuf;
 pub mod projections;
-#[cfg(not(kernel))]
 pub mod prompt;
 pub mod raid;
 pub mod rcu;
