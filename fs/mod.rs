@@ -333,25 +333,7 @@ pub mod c {
     #[cfg(not(linux_ge = "6.17"))]
     pub use self::system_unbound_wq as system_dfl_wq;
 
-    use bitfield::bitfield;
-    bitfield! {
-        pub struct bch_scrypt_flags(u64);
-        pub N, _: 15, 0;
-        pub R, _: 31, 16;
-        pub P, _: 47, 32;
-    }
-    bitfield! {
-        pub struct bch_crypt_flags(u64);
-        pub TYPE, _: 4, 0;
-    }
     impl bch_sb_field_crypt {
-        pub fn scrypt_flags(&self) -> Option<bch_scrypt_flags> {
-            use core::convert::TryInto;
-            match bch_kdf_types(bch_crypt_flags(self.flags.get()).TYPE().try_into().ok()?) {
-                bch_kdf_types::BCH_KDF_SCRYPT => Some(bch_scrypt_flags(self.kdf_flags.get())),
-                _ => None,
-            }
-        }
         pub fn key(&self) -> &bch_encrypted_key {
             &self.key
         }

@@ -122,7 +122,6 @@ dependencies = [
  "aligned-vec",
  "bcachefs-cstruct-macros",
  "bcachefs-shim",
- "bitfield 0.14.0",
  "bitfield-struct",
  "bitflags 2.11.1",
  "linux-raw-sys",
@@ -188,7 +187,6 @@ dependencies = [
  "anyhow",
  "bcachefs-kernel",
  "bindgen",
- "bitfield 0.14.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitflags 1.3.2",
  "cc",
  "libc",
@@ -216,16 +214,6 @@ dependencies = [
  "shlex 1.3.0",
  "syn",
 ]
-
-[[package]]
-name = "bitfield"
-version = "0.14.0"
-
-[[package]]
-name = "bitfield"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d7e60934ceec538daadb9d8432424ed043a904d8e0243f3c6446bce549a46ac"
 
 [[package]]
 name = "bitfield-struct"
