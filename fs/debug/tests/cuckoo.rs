@@ -52,7 +52,7 @@ use crate::fs::Fs;
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::prt;
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::data_structures::cuckoo::{Cuckoo, CuckooItem, Entry, Faults, Registration};
 use crate::util::hash::GoldenRatio;
 use crate::util::siphash::SipHash13Key;
@@ -146,7 +146,7 @@ impl TestItem for Entry<TestEntry> {
     fn pool(keys: &[u64]) -> Result<Self::Pool, BchError> {
         let mut pool = KVVec::new();
         for &key in keys {
-            pool.push(core::array::from_fn(|_| TestEntry { key, val: AtomicU64::new(0) }), GFP_KERNEL)?;
+            pool.push(core::array::from_fn(|_| TestEntry { key, val: AtomicU64::new(0) }))?;
         }
         Ok(pool)
     }
@@ -173,7 +173,7 @@ fn model<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(name: &st
     let key = |i: usize| (i as u64).wrapping_mul(0x9E3779B97F4A7C15);
     let mut keys = KVVec::new();
     for i in 0..NR {
-        keys.push(key(i), GFP_KERNEL)?;
+        keys.push(key(i))?;
     }
     let pool = I::pool(&keys)?;
 
@@ -183,7 +183,7 @@ fn model<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(name: &st
     // heap, as a kernel stack is small
     let mut st = KVVec::new();
     for _ in 0..NR {
-        st.push((0u64, 0u64), GFP_KERNEL)?;
+        st.push((0u64, 0u64))?;
     }
 
     for op in 0..20_000u64 {
@@ -438,8 +438,8 @@ fn round<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(table: &s
 
     let (mut keys, mut key_vals) = (KVVec::new(), KVVec::new());
     for i in 0..KEYS {
-        keys.push(KeyState::default(), GFP_KERNEL)?;
-        key_vals.push(key(i), GFP_KERNEL)?;
+        keys.push(KeyState::default())?;
+        key_vals.push(key(i))?;
     }
     let keys = &keys[..];
     let pool = I::pool(&key_vals)?;
@@ -650,8 +650,8 @@ fn bench<S: BuildHasher + From<[u64; 2]>, const W: usize>(table: &str) -> TestRe
         let mut rng = random_u64() | 1;
         let (mut keys, mut misses) = (KVVec::new(), KVVec::new());
         for _ in 0..n {
-            keys.push((xorshift(&mut rng) | 1) & !(1 << 63), GFP_KERNEL)?;
-            misses.push(xorshift(&mut rng) & !1, GFP_KERNEL)?;
+            keys.push((xorshift(&mut rng) | 1) & !(1 << 63))?;
+            misses.push(xorshift(&mut rng) & !1)?;
         }
 
         let t = Cuckoo::<u64, S, W>::default();

@@ -114,7 +114,7 @@ impl<T, F: FnMut(&T, &T) -> Ordering> Drop for PeekMut<'_, T, F> {
 #[cfg(test)]
 mod tests {
     use super::{MinHeap, PeekMut};
-    use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+    use crate::util::alloc::KVVec;
 
     // A wrong heap is silent: node scan would resolve overlapping nodes out
     // of order and keep the wrong one.
@@ -127,7 +127,7 @@ mod tests {
             for _ in 0..n {
                 s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                 let x = (s >> 40) as u32 % 50;
-                v.push(x, GFP_KERNEL).unwrap();
+                v.push(x).unwrap();
                 want.push(x);
             }
             let mut heap = MinHeap::new(v, |l: &u32, r: &u32| l.cmp(r));

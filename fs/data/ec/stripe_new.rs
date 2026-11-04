@@ -364,7 +364,7 @@ impl NewStripes {
 
     /// Room for one more stripe, held by its maker until it's handed on.
     pub(crate) fn reserve(&mut self) -> Result<(), AllocError> {
-        self.v.reserve(self.held + 1, GFP_KERNEL)?;
+        self.v.reserve(self.held + 1)?;
         self.held += 1;
         Ok(())
     }
@@ -380,7 +380,7 @@ impl NewStripes {
     pub(crate) fn push_reserved(&mut self, b: StripeNewBox) {
         self.release();
         assert!(self.v.len() < self.v.capacity(), "no room kept for a held stripe");
-        let Ok(()) = self.v.push(b, GFP_KERNEL) else { unreachable!("pushed within capacity") };
+        let Ok(()) = self.v.push(b) else { unreachable!("pushed within capacity") };
     }
 
     fn take(&mut self, p: NonNull<StripeNew>) -> StripeNewBox {

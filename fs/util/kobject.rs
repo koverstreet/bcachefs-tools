@@ -258,13 +258,13 @@ impl Kobject {
     /// A KOBJ_CHANGE uevent, @env its VAR=value strings.
     #[cfg(kernel)]
     pub fn uevent_change(&self, env: &[&CStr]) -> Result<(), BchError> {
-        use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+        use crate::util::alloc::KVVec;
 
-        let mut envp = KVVec::with_capacity(env.len() + 1, GFP_KERNEL)?;
+        let mut envp = KVVec::with_capacity(env.len() + 1)?;
         for e in env {
-            envp.push(e.as_ptr().cast_mut(), GFP_KERNEL)?;
+            envp.push(e.as_ptr().cast_mut())?;
         }
-        envp.push(core::ptr::null_mut(), GFP_KERNEL)?;
+        envp.push(core::ptr::null_mut())?;
         ret_to_result_void(unsafe {
             c::kobject_uevent_env(self.as_ptr(), c::kobject_action_KOBJ_CHANGE, envp.as_mut_ptr().cast())
         })

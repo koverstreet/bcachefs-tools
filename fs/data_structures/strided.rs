@@ -14,7 +14,7 @@
 //! its owner's to read; an index is one the owner has, so past the end is a
 //! bug, as a slice's.
 
-use crate::util::alloc::{flags, AllocError, KVVec};
+use crate::util::alloc::{AllocError, KVVec};
 use crate::util::projections::View;
 use crate::util::vstructs::{cast_plain_mut, Plain};
 use core::marker::PhantomData;
@@ -105,7 +105,7 @@ impl StridedBuf {
     /// @nr slots of @stride bytes, zeroed.
     pub fn zeroed(nr: usize, stride: usize) -> Result<Self, AllocError> {
         let len = nr.checked_mul(stride).ok_or(AllocError)?;
-        Ok(StridedBuf { bytes: KVVec::from_elem(0, len, flags::GFP_KERNEL)?, stride })
+        Ok(StridedBuf { bytes: KVVec::from_elem(0, len)?, stride })
     }
 
     pub fn len(&self) -> usize {

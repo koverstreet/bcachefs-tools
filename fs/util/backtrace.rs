@@ -82,7 +82,7 @@ fn save_stack(stack: &mut KVVec<c_ulong>, task: *mut c::task_struct, skipnr: u32
     #[cfg(CONFIG_STACKTRACE)]
     {
         stack.clear();
-        stack.reserve(32, crate::util::alloc::flags::GFP_KERNEL)?;
+        stack.reserve(32)?;
 
         let skipnr = skipnr + (task == unsafe { c::bch2_current() }) as u32;
         loop {
@@ -93,7 +93,7 @@ fn save_stack(stack: &mut KVVec<c_ulong>, task: *mut c::task_struct, skipnr: u32
             if nr < size {
                 return Ok(());
             }
-            stack.reserve(size, crate::util::alloc::flags::GFP_KERNEL)?;
+            stack.reserve(size)?;
         }
     }
     #[cfg(not(CONFIG_STACKTRACE))]

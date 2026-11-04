@@ -25,7 +25,7 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::{prt, sb_err_on};
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
-use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
+use crate::util::alloc::{kvvec_insert, KVVec};
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::ktime_get_real_seconds;
 use crate::util::names;
@@ -253,7 +253,7 @@ fn to_text<E: ErrorEntry>(out: &mut Printbuf, entries: &[E]) {
     }
 
     let mut sorted = KVVec::new();
-    let entries = match sorted.extend_from_slice(entries, GFP_KERNEL) {
+    let entries = match sorted.extend_from_slice(entries) {
         Ok(()) => {
             sorted.sort_unstable_by_key(|e: &E| Reverse(e.last()));
             &sorted[..]
@@ -308,7 +308,7 @@ impl SbFieldOps for c::bch_sb_field_errors_v2 {
 
         let mut counts = fs.errors.counts.lock();
         counts.clear();
-        counts.reserve(v2.len() + v1.len(), GFP_KERNEL)?;
+        counts.reserve(v2.len() + v1.len())?;
 
         // validated strictly ascending by id: a sorted merge, a section
         // that's run out reading as past every id
@@ -322,7 +322,7 @@ impl SbFieldOps for c::bch_sb_field_errors_v2 {
                 Ordering::Equal if a == u64::MAX => return Ok(()),
                 Ordering::Equal   => merge(v2.next().unwrap().into(), v1.next().unwrap().into()),
             };
-            counts.push(e, GFP_KERNEL)?;
+            counts.push(e)?;
         }
     }
 

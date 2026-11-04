@@ -16,7 +16,7 @@ use crate::init::error::{count_fsck_err, id, FsckErrCtx};
 use crate::init::passes;
 use crate::locking::{percpu_rwsem_noio, Guard, ReadGuard};
 use crate::sb::counters::events;
-use crate::util::alloc::{flags, AllocError, KVVec};
+use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::util::percpu::{Counters as _, CpuGuard, PerCpuRef, PerCpuU64s};
@@ -174,8 +174,8 @@ pub fn replicas_usage_read(fs: &Fs) -> Result<KVVec<u8>, BchError> {
         let Some(r) = replicas_entry(&pos) else { continue };
 
         let sectors = accounting::ReplicasCounters::from_slice(&e.sum(false)).sectors;
-        out.extend_from_slice(&sectors.to_ne_bytes(), flags::GFP_KERNEL)?;
-        out.extend_from_slice(bytes_of(r), flags::GFP_KERNEL)?;
+        out.extend_from_slice(&sectors.to_ne_bytes())?;
+        out.extend_from_slice(bytes_of(r))?;
     }
     Ok(out)
 }
@@ -195,8 +195,8 @@ pub fn to_keys(fs: &Fs, types_mask: u32) -> Result<KVVec<u8>, BchError> {
             continue;
         }
 
-        out.extend_from_slice(plain_bytes(&accounting_bkey(e.pos, v.len())), flags::GFP_KERNEL)?;
-        out.extend_from_slice(v.as_bytes(), flags::GFP_KERNEL)?;
+        out.extend_from_slice(plain_bytes(&accounting_bkey(e.pos, v.len())))?;
+        out.extend_from_slice(v.as_bytes())?;
     }
     Ok(out)
 }
@@ -223,7 +223,7 @@ fn insert_locked(fs: &Fs, a: Delta<'_>, mark: &mut MarkWrite<'_>) -> Result<(), 
     }
 
     let nr = Entry::new(a.p, pos.nr_counters(), acc.gc_running)
-        .and_then(|e| acc.with_entries(|entries| entries.push(e, flags::GFP_KERNEL).map(|()| entries.len())))
+        .and_then(|e| acc.with_entries(|entries| entries.push(e).map(|()| entries.len())))
         .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_disk_accounting))?;
 
     fs.event_trace(events::accounting_mem_insert, |out| {
@@ -403,7 +403,7 @@ fn read_key(fs: &Fs, entries: &mut KVVec<Entry>, k: BkeySC<'_>) -> Result<(), Bc
     let mut e = Entry::new(k.k.p, pos.nr_counters(), false)
         .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_disk_accounting))?;
     e.live.set(d);
-    entries.push(e, flags::GFP_KERNEL).map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_disk_accounting))
+    entries.push(e).map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_disk_accounting))
 }
 
 /// Journal key @i's newer deltas, the keys after it at its position, added

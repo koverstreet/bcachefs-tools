@@ -126,11 +126,11 @@ pub fn strscpy(buf: &mut [c_char], s: &[u8]) {
 pub fn with_cstr<R>(s: &str, f: impl FnOnce(&core::ffi::CStr) -> R)
     -> Result<R, crate::util::alloc::AllocError>
 {
-    use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+    use crate::util::alloc::KVVec;
 
     let mut buf = KVVec::new();
-    buf.extend_from_slice(s.as_bytes(), GFP_KERNEL)?;
-    buf.push(0, GFP_KERNEL)?;
+    buf.extend_from_slice(s.as_bytes())?;
+    buf.push(0)?;
 
     // can't fail: the NUL pushed ends it, if nothing in @s did
     Ok(f(core::ffi::CStr::from_bytes_until_nul(&buf).unwrap()))

@@ -24,7 +24,7 @@ use crate::fs::Fs;
 use crate::fsck_err_on;
 use crate::init::error::id;
 use crate::inode;
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::{bch_err, bch_err_fn};
 use core::cmp::max;
 use core::ops::ControlFlow;
@@ -41,14 +41,14 @@ fn add_nlink(fs: &Fs, t: &mut KVVec<Nlink>, inum: u64, snapshot: u32) -> Result<
     if t.len() == t.capacity() {
         let new_size = max(128, t.capacity() * 2);
 
-        if t.reserve(new_size - t.len(), GFP_KERNEL).is_err() {
+        if t.reserve(new_size - t.len()).is_err() {
             bch_err!(fs, "fsck: error allocating memory for nlink_table, size {}", new_size);
             return fs.throw(bch_errcode::BCH_ERR_ENOMEM_fsck_add_nlink);
         }
     }
 
     // Can't fail: there's room.
-    t.push(Nlink { inum, snapshot, count: 0 }, GFP_KERNEL)
+    t.push(Nlink { inum, snapshot, count: 0 })
         .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_fsck_add_nlink))
 }
 

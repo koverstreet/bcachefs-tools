@@ -308,7 +308,7 @@ use crate::fs::Fs;
 use crate::init::passes;
 use crate::snapshots::{check_snapshots, delete, subvolume};
 use crate::util::log::{LogLevel, LogMsg};
-use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
+use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::bitmap::BitArray;
 use crate::util::rcu::RcuArray;
 use crate::util::ffi::Opaque;
@@ -1512,7 +1512,7 @@ pub fn overwrites(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos)
         let id = k.k.p.snapshot;
         if is_ancestor(t, id, pos.snapshot) &&
            !ids.iter().any(|&i| is_ancestor(t, id, i)) {
-            ids.push(id, GFP_KERNEL)?;
+            ids.push(id)?;
         }
         Ok(())
     })?;

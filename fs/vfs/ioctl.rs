@@ -33,7 +33,7 @@ use crate::ioctl::{get_damage, get_label, readdir_flags, reflink_p_propagate_opt
 use crate::init::chardev::ioctl_ret;
 use crate::init::damage;
 use crate::namei;
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::file::File;
 use crate::util::ioctl::{arg, dir, input, no_arg, output, vstruct, Ioctl, UserArg, UserStr};
 use crate::util::kernel::{capable, current_fsgid, current_fsuid, Capability};
@@ -493,7 +493,7 @@ fn path_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
         }
         let Some(i) = get(p)? else { return Ok(false) };
         p = parent(&i, p);
-        dirs.push(i, GFP_KERNEL)?;
+        dirs.push(i)?;
     }
 
     permitted(t, idmap, &dirs, c::MAY_READ)
@@ -524,7 +524,7 @@ fn subvol_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
     while dir != 0 {
         let i = InodeInfo::get_trans(t, c::subvol_inum { subvol: parent_sv.into(), inum: dir })?;
         let (subvol, _, next) = up(&i);
-        dirs.push(i, GFP_KERNEL)?;
+        dirs.push(i)?;
         if subvol == parent {
             return permitted(t, idmap, &dirs, c::MAY_EXEC);
         }

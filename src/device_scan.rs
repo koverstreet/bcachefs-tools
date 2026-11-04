@@ -29,7 +29,7 @@ use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{filter_dead, Fs, OpenFs};
-use bcachefs_kernel::util::alloc::{flags::GFP_KERNEL, KVVec};
+use bcachefs_kernel::util::alloc::KVVec;
 use c::bch_sb_handle;
 use c::bch_opts;
 use uuid::Uuid;
@@ -253,9 +253,9 @@ pub fn filter_current_sbs(
 		}
 	}
 
-	let mut handles = KVVec::with_capacity(sbs.len(), GFP_KERNEL)?;
+	let mut handles = KVVec::with_capacity(sbs.len())?;
 	for (_, sb) in sbs {
-		handles.push(sb, GFP_KERNEL)?;
+		handles.push(sb)?;
 	}
 	filter_dead(&mut handles, opts, None)?;
 

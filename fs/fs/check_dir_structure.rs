@@ -35,7 +35,7 @@ use crate::init::progress::Progress;
 use crate::snapshots::subvolume;
 use crate::dirent::{self, Dirent};
 use crate::{inode, lostfound, namei};
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::Printbuf;
 use crate::util::log::LogMsg;
 use crate::{bch_err_fn, bch_err_msg, bch_warn, c_function_name, inode_fsck_err, prt};
@@ -129,7 +129,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
             return Ok(());
         }
 
-        subvol_path.push(s.k.p.offset as u32, GFP_KERNEL)?;
+        subvol_path.push(s.k.p.offset as u32)?;
 
         let root = c::subvol_inum { subvol: s.k.p.offset, inum: sv.inode.get() };
 
@@ -273,7 +273,7 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
             return Err(e);
         }
 
-        path.push(inode.bi_inum, GFP_KERNEL)?;
+        path.push(inode.bi_inum)?;
 
         inode_iter.set_pos(spos(0, inode.bi_dir, snapshot));
         // Should have been caught in dirents pass

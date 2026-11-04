@@ -5,7 +5,7 @@ use core::fmt::{self, Write as _};
 use core::ops::{Deref, DerefMut};
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::kernel::PAGE_SIZE;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::ffi::c_char;
@@ -300,7 +300,7 @@ impl Printbuf {
         let mut col = 0;
 
         for (s, c) in cols() {
-            if col == col_widths.len() && col_widths.push(0, GFP_KERNEL).is_err() {
+            if col == col_widths.len() && col_widths.push(0).is_err() {
                 return;
             }
             col_widths[col] = col_widths[col].max(s.len());

@@ -176,7 +176,7 @@ impl<'scope, 'env> Scope<'scope, 'env> {
             }, job_done, GFP_KERNEL)
         }?;
         // not pushed, it's dropped: discarded
-        self.jobs.borrow_mut().push(job, GFP_KERNEL)?;
+        self.jobs.borrow_mut().push(job)?;
         Ok(())
     }
 }

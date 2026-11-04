@@ -38,7 +38,7 @@ use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists,
 use crate::sb::version::prep_for_start;
 use crate::util::names;
 use crate::util::Printbuf;
-use crate::util::alloc::{flags::GFP_KERNEL, Arc, KVVec};
+use crate::util::alloc::{Arc, KVVec};
 use crate::util::backref::BackRef;
 use crate::util::enumerated_ref::EnumeratedRef;
 use crate::util::ffi::c_char;
@@ -800,9 +800,9 @@ impl OpenFs {
             return Err(c::EINVAL.into());
         }
 
-        let mut sbs = KVVec::with_capacity(devs.len(), GFP_KERNEL)?;
+        let mut sbs = KVVec::with_capacity(devs.len())?;
         for path in devs {
-            sbs.push(read_super(path, opts, Some(holder))?, GFP_KERNEL)?;
+            sbs.push(read_super(path, opts, Some(holder))?)?;
         }
         filter_dead(&mut sbs, opts, Some(out))?;
         Ok(sbs)
@@ -1042,7 +1042,7 @@ pub fn filter_dead(sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts,
         return Ok(());
     };
 
-    let mut dead = KVVec::from_elem(false, sbs.len(), GFP_KERNEL)?;
+    let mut dead = KVVec::from_elem(false, sbs.len())?;
     for i in (0..sbs.len()).rev() {
         let name = sbs[i].dev.name().to_str().unwrap_or("?");
         match dev_in_fs(sbs[best].io.buf.sb(), Some(sbs[best].dev.bdev()), &sbs[i], opts) {

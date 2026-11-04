@@ -355,7 +355,7 @@ fn vmap<'a>(fs: &'a Fs, r: BioRange<'a>, rw: usize) -> Option<Bbuf<'a>> {
     let pages: &mut [*mut c::page] = if nr <= stack.len() {
         &mut stack[..nr]
     } else {
-        heap = KVVec::from_elem(ptr::null_mut(), nr, GFP_KERNEL).ok()?;
+        heap = KVVec::from_elem(ptr::null_mut(), nr).ok()?;
         &mut heap
     };
 
@@ -720,7 +720,7 @@ fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], sr
     let owned_ws = {
         let _noreclaim = MemallocFlags::noreclaim();
         let _nowarn = MemallocFlags::nowarn();
-        KVVec::with_capacity(ws_size, GFP_KERNEL)
+        KVVec::with_capacity(ws_size)
     };
     let ws: &mut [MaybeUninit<u8>] = match owned_ws {
         Ok(v) => &mut owned.insert(v).spare_capacity_mut()[..ws_size],

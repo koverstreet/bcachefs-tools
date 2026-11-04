@@ -40,7 +40,7 @@ use crate::inode::{self, bkey_is_inode};
 use crate::sb::errors::{merge, prt_error_nr, ErrorEntry};
 use crate::snapshots::subvolume;
 use crate::util::{DateTime, Printbuf};
-use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
+use crate::util::alloc::{kvvec_insert, KVVec};
 use crate::util::ffi::Opaque;
 use crate::util::kernel::ktime_get_real_seconds;
 use crate::util::vstructs::Validated;
@@ -333,7 +333,7 @@ pub fn note_lost_extents(fs: &Fs, btree: Btree, k: BkeySC<'_>) {
     let Some(p) = k.arm::<c::BtreePtrV2>() else { return };
     let (start, end) = (p.v().min_key, k.k.p);
 
-    if fs.lost_extents_ranges.lock().push(start..end, GFP_KERNEL).is_err() {
+    if fs.lost_extents_ranges.lock().push(start..end).is_err() {
         bch_err!(fs, "couldn't record lost extents {}:{}-{}:{}",
                  { start.inode }, { start.offset }, { end.inode }, { end.offset });
     }

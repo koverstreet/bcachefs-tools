@@ -60,7 +60,7 @@ use crate::c;
 use crate::errcode::{BchError, FirstErr};
 use crate::locking::Locked;
 use crate::new_lock;
-use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
+use crate::util::alloc::{AllocError, KVVec};
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::task::{waiter, Completion, Done, Resumable, Resume, TaskEnd, Waiter};
 use core::future::Future;
@@ -164,7 +164,7 @@ impl<T: Send> Fold for KVVec<T> {
             return Ok(());
         }
 
-        let mut new = KVVec::with_capacity((len + refs).max(cap * 2), GFP_KERNEL)?;
+        let mut new = KVVec::with_capacity((len + refs).max(cap * 2))?;
         let mut v = acc.lock();
         for x in v.drain_all() {
             // puts since are no more than the refs that were out: they fit
@@ -416,7 +416,7 @@ impl<T: Send, Wt: Waiter, W: Width> Gather<KVVec<T>, Wt, W> {
         // only the owner - us - changes it
         let cap = self.acc.lock().capacity();
         if out.capacity() < cap {
-            out.reserve(cap, GFP_KERNEL)?;
+            out.reserve(cap)?;
         }
         core::mem::swap(&mut *self.acc.lock(), out);
         Ok(())

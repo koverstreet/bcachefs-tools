@@ -69,7 +69,7 @@ use crate::locking::Locked;
 use crate::new_lock;
 use crate::snapshots::check_snapshots;
 use crate::snapshots::snapshot;
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::data_structures::eytzinger::Eytzinger1;
 use crate::util::log::{self, LogLevel, LogMsg};
 use crate::util::Printbuf;
@@ -1087,7 +1087,7 @@ fn check_should_delete_leaf(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, v: &c::Snap
 
 fn add_nodup(fs: &Fs, list: &mut KVVec<u32>, id: u32) -> Result<(), BchError> {
     if !list.contains(&id) {
-        list.push(id, GFP_KERNEL).inspect_err(|_| {
+        list.push(id).inspect_err(|_| {
             bch_err!(fs, "error reallocating snapshot_id_list (size {})", list.capacity());
         })?;
     }
@@ -1179,7 +1179,7 @@ fn check_should_delete_snapshot(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, coll: &
         // deleting parents, above:
         let list = if !no_keys { &mut coll.nodes.delete_interior } else { &mut coll.no_keys };
         if live_child_of(list, n.id).is_none() {
-            list.push(n, GFP_KERNEL)?;
+            list.push(n)?;
         }
     }
 
@@ -1287,10 +1287,10 @@ fn delete_dead_snapshots_locked(fs: &Fs) -> Result<(), BchError> {
     // Eytzinger trees with 1-based indexing are faster than 0-based indexing
     // due to better cacheline alignment:
     let mut dying = KVVec::new();
-    dying.push(InteriorDelete::default(), GFP_KERNEL)?;
-    dying.extend_from_slice(&coll.nodes.delete_interior, GFP_KERNEL)?;
+    dying.push(InteriorDelete::default())?;
+    dying.extend_from_slice(&coll.nodes.delete_interior)?;
     for &id in coll.nodes.delete_leaves.iter() {
-        dying.push(InteriorDelete { id, live_child: 0 }, GFP_KERNEL)?;
+        dying.push(InteriorDelete { id, live_child: 0 })?;
     }
     Eytzinger1::sort_by(&mut dying, |l, r| l.id.cmp(&r.id));
 
@@ -1410,7 +1410,7 @@ fn get_dead_interior_snapshots(k: BkeySC<'_>, delete: &mut KVVec<InteriorDelete>
     let Some(child) = only_child(&v) else { return Ok(()) };
 
     let live_child = live_child_of(delete, child).unwrap_or(child);
-    delete.push(InteriorDelete { id: k.k.p.offset as u32, live_child }, GFP_KERNEL)?;
+    delete.push(InteriorDelete { id: k.k.p.offset as u32, live_child })?;
     Ok(())
 }
 

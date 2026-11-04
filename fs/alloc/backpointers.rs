@@ -53,7 +53,7 @@ use crate::init::error::{id, BkeyValidate};
 use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::locking::MemallocFlags;
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{totalram_bytes, unlikely, PAGE_SIZE};
 use crate::util::log::LogMsg;
@@ -578,7 +578,7 @@ impl c::bp_scan_iter {
                 let bp = iter.peek_slot(t)?.and_then(BkeyI::from_key);
                 self.batch.pop();
                 if let Some(bp) = bp {
-                    self.batch.push(bp, GFP_KERNEL)?;
+                    self.batch.push(bp)?;
                 }
             }
             self.nr_flushes = last_flushed.nr_flushes();
@@ -624,7 +624,7 @@ impl c::bp_scan_iter {
                 let more = self.batch.len().max(PAGE_SIZE / bp_size);
                 let grew = {
                     let _nowarn = MemallocFlags::nowarn();
-                    self.batch.reserve(more, GFP_KERNEL).is_ok()
+                    self.batch.reserve(more).is_ok()
                 };
                 if grew {
                     return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_backpointer_scan_grow));
@@ -634,7 +634,7 @@ impl c::bp_scan_iter {
                 }
                 return Ok(ControlFlow::Break(()));
             }
-            self.batch.push(bp, GFP_KERNEL)?;
+            self.batch.push(bp)?;
             self.pos = k.k.p.nosnap_successor();
             if let Some(p) = progress {
                 p.update(t, iter)?;

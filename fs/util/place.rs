@@ -99,7 +99,7 @@
 //! as any field's type is (util/workqueue.rs).
 
 use crate::errcode::BchError;
-use crate::util::alloc::{flags::GFP_KERNEL, kbox_pin_init, AllocError, KBox, KVVec};
+use crate::util::alloc::{kbox_pin_init, AllocError, KBox, KVVec};
 use crate::util::rcu::FreeAnytime;
 use core::cell::UnsafeCell;
 use core::marker::{PhantomData, PhantomPinned};
@@ -603,9 +603,9 @@ unsafe impl<T: FreeAnytime> Holds<T> for KVVec<Pin<KBox<T>>> {
     }
 
     fn insert<E: From<AllocError>>(&mut self, init: impl PinInit<T, E>) -> Result<(), E> {
-        self.reserve(1, GFP_KERNEL)?;
+        self.reserve(1)?;
         let b = kbox_pin_init(init)?;
-        self.push(b, GFP_KERNEL).expect("room reserved");
+        self.push(b).expect("room reserved");
         Ok(())
     }
 

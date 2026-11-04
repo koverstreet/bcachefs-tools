@@ -101,7 +101,7 @@ mod user {
     use super::{dir, Ioctl};
     use crate::c;
     use crate::errcode::BchError;
-    use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+    use crate::util::alloc::KVVec;
     use crate::util::vstructs::{FlexArray, Head, Unsized};
     use core::ffi::CStr;
     use core::marker::PhantomData;
@@ -192,7 +192,7 @@ mod user {
 
     impl UserStr {
         pub fn read(addr: u64, max: usize) -> Result<Self, BchError> {
-            let mut buf = KVVec::from_elem(0u8, max + 1, GFP_KERNEL)?;
+            let mut buf = KVVec::from_elem(0u8, max + 1)?;
             let len = UserSlice::new(UserPtr::from_addr(addr as usize), max + 1).reader()
                 .strcpy_into_buf(&mut buf)?.to_bytes().len();
             if len >= max {

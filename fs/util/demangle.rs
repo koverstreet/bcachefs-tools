@@ -26,7 +26,6 @@
 //! steps between Skip and Unskip print nothing, and don't follow backrefs.
 
 use crate::locking::MemallocFlags;
-use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::util::Printbuf;
 use core::fmt::Write;
@@ -110,7 +109,7 @@ impl<'s> Demangler<'s, '_> {
             return Err(Raw);
         }
         let _noreclaim = MemallocFlags::noreclaim();
-        Ok(self.steps.push(s, GFP_KERNEL)?)
+        Ok(self.steps.push(s)?)
     }
 
     fn print(&mut self, s: &str) -> Result<(), Raw> {
@@ -638,7 +637,7 @@ fn v0(out: &mut Printbuf, sym: &str) -> Result<(), Raw> {
     };
     {
         let _noreclaim = MemallocFlags::noreclaim();
-        d.steps.reserve(32, GFP_KERNEL)?;
+        d.steps.reserve(32)?;
     }
 
     d.run(Step::Path { in_value: true })?;

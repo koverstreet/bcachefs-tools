@@ -27,7 +27,7 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::snapshots::{snapshot, subvolume};
-use crate::util::alloc::{darray_exit, flags, DArrayLoan};
+use crate::util::alloc::{darray_exit, DArrayLoan};
 use crate::util::ffi::{c_str, Opaque};
 use crate::util::kernel::unlikely;
 use crate::util::{Printbuf, ToText};
@@ -411,7 +411,7 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_o
                                 snapshot: inode_k.k.p.snapshot,
                                 io_opts:  get_inode(fs, &inode),
                             };
-                            d.push(e, flags::GFP_KERNEL)?;
+                            d.push(e)?;
                         }
                         Ok(())
                     })?;

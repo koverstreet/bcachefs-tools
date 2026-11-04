@@ -19,7 +19,7 @@ use crate::init::recovery::NotRw;
 use crate::locking::Locked;
 use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
-use crate::util::alloc::{flags::GFP_KERNEL, init_at, kvzalloc, ABox, AVec, AllocError, ConstAlign, DArrayLoan,
+use crate::util::alloc::{init_at, kvzalloc, ABox, AVec, AllocError, ConstAlign, DArrayLoan,
                          KVVec};
 use crate::util::bio::{buf_nr_bvecs, Bio, BioBuf, BioOwner};
 use crate::util::kernel::{local_clock, PAGE_SIZE};
@@ -538,7 +538,7 @@ impl ReadState<'_> {
             prt!(&mut buf, " ");
             journal_ptr_to_text(&mut buf, fs, &entry_ptr);
 
-            dup.ptrs.push(entry_ptr, GFP_KERNEL).map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_entry_add))?;
+            dup.ptrs.push(entry_ptr).map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_entry_add))?;
 
             fsck_err_on!(fs, same_device, id::journal_entry_dup_same_device,
                          "duplicate journal entry on same device\n{}", buf)?;
@@ -555,8 +555,8 @@ impl ReadState<'_> {
 
         match slot.take() {
             /* The first ptr should represent the jset we kept: */
-            Some(dup) => i.ptrs.extend_from_slice(dup.ptrs(), GFP_KERNEL),
-            None      => i.ptrs.push(entry_ptr, GFP_KERNEL),
+            Some(dup) => i.ptrs.extend_from_slice(dup.ptrs()),
+            None      => i.ptrs.push(entry_ptr),
         }.map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_entry_add))?;
 
         *slot = Some(i);
@@ -655,7 +655,7 @@ fn walk_inuse(nr: usize, head: usize, seq: &mut impl FnMut(usize) -> u64, order:
         return Ok(false);
     }
 
-    order.push((head, prev_seq), GFP_KERNEL)?;
+    order.push((head, prev_seq))?;
 
     for idx in ring_back(head, nr) {
         let s = seq(idx);
@@ -666,7 +666,7 @@ fn walk_inuse(nr: usize, head: usize, seq: &mut impl FnMut(usize) -> u64, order:
             return Ok(false);       /* non-decreasing — fallback */
         }
 
-        order.push((idx, s), GFP_KERNEL)?;
+        order.push((idx, s))?;
         prev_seq = s;
     }
     Ok(true)
@@ -719,7 +719,7 @@ fn bsearch_collect(nr: usize, mut seq: impl FnMut(usize) -> u64) -> Result<KVVec
     for i in 0..nr {
         let s = seq(i);
         if s != 0 {
-            order.push((i, s), GFP_KERNEL)?;
+            order.push((i, s))?;
         }
     }
     Ok(order)
@@ -982,7 +982,7 @@ impl<'a> DevReader<'a> {
              * bsearch / walk fails). An empty order on return means the
              * journal itself is empty -> slow full-bucket-read.
              */
-            let mut peeked = KVVec::from_elem(false, nr, GFP_KERNEL)?;
+            let mut peeked = KVVec::from_elem(false, nr)?;
             bsearch_collect(nr, |i| self.peek_once(&mut peeked, i))?
         } else {
             KVVec::new()
@@ -1048,7 +1048,7 @@ fn journal_devs(fs: &Fs, want: impl Fn(&Dev) -> bool, degraded: bool)
             .then(|| fs.dev_get_ioref::<c::bch_dev_read_ref>(ca.dev_idx.into()))
             .flatten();
         match ioref {
-            Some(ca) => devs.push(ca, GFP_KERNEL)?,
+            Some(ca) => devs.push(ca)?,
             None if degraded => fs.journal.flags.set(c::journal_flags::JOURNAL_degraded, true),
             None => {}
         }
@@ -1434,7 +1434,7 @@ fn validate_kept(fs: &Fs, not_rw: &NotRw<'_>, entries: &mut JournalEntries, drop
                 }
                 Ok(c::JsetEntryRef::rewind(r)) => {
                     let range = c::journal_rewind_range { from: r.from.get(), to: r.to.get() };
-                    let _ = unsafe { not_rw.journal_rewind_ranges() }.push(range, GFP_KERNEL);
+                    let _ = unsafe { not_rw.journal_rewind_ranges() }.push(range);
                 }
                 _ => {}
             }

@@ -27,7 +27,7 @@ use crate::inode_opts::get_io_opts;
 use crate::namei;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::Printbuf;
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::ioctl::{UserArg, UserVstruct};
 use crate::util::kernel::{capable, Capability};
 use crate::util::os_str::OsStrExt;
@@ -91,9 +91,9 @@ impl Entries {
         }
 
         self.rec.clear();
-        self.rec.extend_from_slice(plain_bytes(&hdr(reclen as u32)), GFP_KERNEL)?;
-        self.rec.extend_from_slice(name, GFP_KERNEL)?;
-        self.rec.extend_from_slice(&[0; 8][..reclen - hdr_bytes - name.len()], GFP_KERNEL)?;
+        self.rec.extend_from_slice(plain_bytes(&hdr(reclen as u32)))?;
+        self.rec.extend_from_slice(name)?;
+        self.rec.extend_from_slice(&[0; 8][..reclen - hdr_bytes - name.len()])?;
 
         t.unlock();
         let at = UserPtr::from_addr((self.buf as usize).wrapping_add(self.used as usize));

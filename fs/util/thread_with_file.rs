@@ -54,7 +54,7 @@ use crate::errcode::BchError;
 use crate::locking::{Guard, Locked};
 use crate::new_lock;
 use crate::types::Fifo;
-use crate::util::alloc::{flags, kbox_pin_init, KBox, KVVec};
+use crate::util::alloc::{kbox_pin_init, KBox, KVVec};
 use crate::util::ffi::c_char;
 use crate::util::rcu::{FreeAnytime, NothingToDetach};
 use crate::util::file::{file_data, File, FileData, FileOps, NewFile, PollQueue, PollTable, UserBuf};
@@ -266,7 +266,7 @@ impl StdioRedirect {
 
             let wrote = {
                 let mut b = out.lock();
-                b.data.reserve(msg.len(), flags::GFP_KERNEL).is_ok() &&
+                b.data.reserve(msg.len()).is_ok() &&
                     b.data.extend_from_slice(msg).is_ok()
             };
 
@@ -303,13 +303,13 @@ impl StdioRedirect {
 
             if n > line.capacity() {
                 line.clear();
-                line.reserve(n, flags::GFP_KERNEL)?;
+                line.reserve(n)?;
                 continue;
             }
 
             line.clear();
             let mut b = input.lock();
-            b.data.drain_with(n, |s| line.extend_from_slice(s, flags::GFP_KERNEL).is_ok());
+            b.data.drain_with(n, |s| line.extend_from_slice(s).is_ok());
             b.waiting_for_line = false;
             drop(b);
 
@@ -361,7 +361,7 @@ impl StdioRedirect {
                 if !b.waiting_for_line || b.data.iter().any(|&ch| ch == b'\n') {
                     makeroom = makeroom.min(STDIO_REDIRECT_BUFSIZE.saturating_sub(b.data.len()));
                 }
-                let _ = b.data.reserve(makeroom, flags::GFP_KERNEL);
+                let _ = b.data.reserve(makeroom);
 
                 let n = readable.min(b.data.free());
                 // SAFETY: a stretch copied is filled

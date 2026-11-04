@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 //! Userspace stand-in for the subset of `kernel::alloc` that fs/ uses, with
-//! the same names and signatures, so fs/ code is written once against the
-//! kernel's API.
+//! the same names and signatures as fs/util/alloc.rs's, so fs/ code is written
+//! once against them.
 //!
 //! Allocation is fallible, as in-kernel: push() reports a failed allocation
-//! as AllocError instead of aborting, via try_reserve(). Flags are accepted
-//! and ignored - userspace has one way to allocate.
+//! as AllocError instead of aborting, via try_reserve(). Flags, where they're
+//! taken, are ignored - userspace has one way to allocate.
 
 use std::ops::{Deref, DerefMut};
 
@@ -74,7 +74,7 @@ impl<T> KVVec<T> {
         KVVec(Vec::new())
     }
 
-    pub fn with_capacity(capacity: usize, _flags: Flags) -> Result<Self, AllocError> {
+    pub fn with_capacity(capacity: usize) -> Result<Self, AllocError> {
         let mut v = Vec::new();
         v.try_reserve(capacity).map_err(|_| AllocError)?;
         Ok(KVVec(v))
@@ -87,14 +87,18 @@ impl<T> KVVec<T> {
 
     /// Make room for @additional more: grows to max(capacity * 2, len +
     /// additional), as the kernel's does.
-    pub fn reserve(&mut self, additional: usize, _flags: Flags) -> Result<(), AllocError> {
+    pub fn reserve(&mut self, additional: usize) -> Result<(), AllocError> {
         self.0.try_reserve(additional).map_err(|_| AllocError)
     }
 
-    pub fn push(&mut self, v: T, _flags: Flags) -> Result<(), AllocError> {
+    pub fn push(&mut self, v: T) -> Result<(), AllocError> {
         self.0.try_reserve(1).map_err(|_| AllocError)?;
         self.0.push(v);
         Ok(())
+    }
+
+    pub fn push_gfp(&mut self, v: T, _flags: Flags) -> Result<(), AllocError> {
+        self.push(v)
     }
 
     /// @v pushed if there's room, else given back.
@@ -112,7 +116,7 @@ impl<T> KVVec<T> {
         self.0.drain(..)
     }
 
-    pub fn extend_from_slice(&mut self, other: &[T], _flags: Flags) -> Result<(), AllocError>
+    pub fn extend_from_slice(&mut self, other: &[T]) -> Result<(), AllocError>
     where
         T: Clone,
     {
@@ -122,7 +126,7 @@ impl<T> KVVec<T> {
     }
 
     /// @n clones of @value.
-    pub fn from_elem(value: T, n: usize, _flags: Flags) -> Result<Self, AllocError>
+    pub fn from_elem(value: T, n: usize) -> Result<Self, AllocError>
     where
         T: Clone,
     {

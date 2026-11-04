@@ -70,7 +70,7 @@ use crate::fs::{writepoint_ptr, Fs};
 use crate::sb::counters::events;
 use crate::types::{Fifo, RustOnly, rust_only};
 use crate::prt;
-use crate::util::alloc::{flags::GFP_KERNEL, kbox_pin_init, KBox, KVVec};
+use crate::util::alloc::{kbox_pin_init, KBox, KVVec};
 use crate::util::backtrace::prt_task_backtrace;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, Private, RegisterError, Registration};
 use crate::util::siphash::SipHash13Key;
@@ -368,7 +368,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let mut wait = u64::MAX;
 
         devs.clear();
-        devs.reserve(fs.nr_devices() as usize, GFP_KERNEL)?;
+        devs.reserve(fs.nr_devices() as usize)?;
 
         {
             let mark = fs.mark_lock().read();
@@ -388,7 +388,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
                 /* No allocating under rcu - skip if a device raced in: */
                 if v <= 0 && devs.len() < devs.capacity() {
                     let d = CopygcDev { dev: ca.dev_idx.into(), wait: v, pos: Bpos::default(), done: false };
-                    devs.push(d, GFP_KERNEL).expect("within capacity");
+                    devs.push(d).expect("within capacity");
                 } else if v > 0 {
                     wait = wait.min(v as u64);
                 }
@@ -464,14 +464,14 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let Some(generation) = Self::bucket_is_movable(t, bucket, time)? else { return Ok(false) };
         let key = c::move_bucket_key { bucket, generation };
 
-        batch.reserve(1, GFP_KERNEL)?;
+        batch.reserve(1)?;
         let b = match kbox_pin_init(InFlight::new(self.fs, self.set, key)) {
             Ok(b) => b,
             // in flight already
             Err(RegisterError::Exists) => return Ok(false),
             Err(RegisterError::Alloc)  => return Err(c::ENOMEM.into()),
         };
-        batch.push(b, GFP_KERNEL).expect("reserved");
+        batch.push(b).expect("reserved");
         Ok(true)
     }
 
@@ -668,7 +668,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         }
 
         *picked = batch.len();
-        self.in_flight.reserve(batch.len(), GFP_KERNEL)?;
+        self.in_flight.reserve(batch.len())?;
         // popped from the end: in the order picked
         batch.reverse();
         while !batch.is_empty() {

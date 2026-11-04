@@ -24,7 +24,7 @@ use crate::sb::io::{check_version_downgrade, sb_upgrade, SbWrite};
 use crate::snapshots::snapshot::snapshots_read;
 use crate::snapshots::subvolume;
 use crate::types::Le64;
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{cond_resched, sort_nonatomic, unlikely};
 use crate::util::log::LogMsg;
@@ -443,7 +443,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
                       if !k.allocated() { CommitFlags::NO_JOURNAL_RES } else { CommitFlags::empty() },
                       |t| journal_replay_key(t, jk, idx)).is_ok();
         if !replayed {
-            keys_sorted.push(idx, GFP_KERNEL)?;
+            keys_sorted.push(idx)?;
         }
     }
 

@@ -813,7 +813,7 @@ pub fn unlink(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
         {
             let mut unlinked = fs.snapshots.unlinked.lock();
             if !unlinked.contains(&subvol) {
-                unlinked.push(subvol, crate::util::alloc::flags::GFP_KERNEL)?;
+                unlinked.push(subvol)?;
             }
         }
 

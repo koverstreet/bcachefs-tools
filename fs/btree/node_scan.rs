@@ -22,7 +22,7 @@ use crate::fs::{btree_id_can_reconstruct, Dev, Fs};
 use crate::init::passes;
 use crate::locking::Locked;
 use crate::types::{Le16, Le64};
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::bio::{buf_nr_bvecs, Bio, BioBuf, BioOwner};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::ffi::Opaque;
@@ -291,7 +291,7 @@ impl<'f> DevScan<'f> {
             bch_err!(fs, "try_read_btree_node() can't handle endian conversion");
             return Err(c::EINVAL.into());
         }
-        nodes.push(n, GFP_KERNEL)?;
+        nodes.push(n)?;
         Ok(())
     }
 
@@ -431,7 +431,7 @@ fn scan_for_btree_nodes(fs: &Fs) -> Result<(), BchError> {
                                 |l: &FoundBtreeNode, r: &FoundBtreeNode| l.pos().cmp(&r.pos()));
     while let Some(n) = heap.pop() {
         let i = nodes.len();
-        nodes.push(n, GFP_KERNEL)?;
+        nodes.push(n)?;
         handle_overwrites(&mut nodes[i], &mut heap);
     }
 

@@ -13,7 +13,7 @@
 //! one. Growing is reserve()'s, apart from insert(), so an element that owns
 //! something is never handed over to an allocation that fails.
 
-use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
+use crate::util::alloc::{AllocError, KVVec};
 use core::ops::Index;
 use core::ptr;
 
@@ -103,7 +103,7 @@ impl<T> GapBuffer<T> {
         }
 
         let size = self.size.max(8) * 2;
-        let mut new = KVVec::<T>::with_capacity(size, GFP_KERNEL)?;
+        let mut new = KVVec::<T>::with_capacity(size)?;
         // SAFETY: full, so no gap: nr elements, into room for size
         unsafe {
             if self.nr != 0 {

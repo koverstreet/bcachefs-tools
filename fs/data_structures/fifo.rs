@@ -19,7 +19,7 @@
 //! has none again (free_fifo() NULLs it), so dropping it frees nothing.
 
 use crate::types::Fifo;
-use crate::util::alloc::{kvfree_sized, kvrealloc, AllocError, Flags};
+use crate::util::alloc::{flags, kvfree_sized, kvrealloc, AllocError};
 use core::mem::{needs_drop, size_of, MaybeUninit};
 use core::ptr::NonNull;
 use num_traits::{AsPrimitive, ConstZero, PrimInt, Unsigned, WrappingAdd, WrappingSub};
@@ -217,8 +217,8 @@ impl<T, I: FifoIdx> Fifo<T, I> {
     }
 
     /// Room for @more entries past those there, the buffer grown if it must
-    /// be - to a power of two, every index kept. @gfp as kvrealloc()'s.
-    pub fn reserve(&mut self, more: usize, gfp: Flags) -> Result<(), AllocError> {
+    /// be - to a power of two, every index kept.
+    pub fn reserve(&mut self, more: usize) -> Result<(), AllocError> {
         const { assert!(size_of::<T>() != 0, "a fifo of zero sized entries") };
 
         let want = self.len().checked_add(more).ok_or(AllocError)?;
@@ -231,7 +231,7 @@ impl<T, I: FifoIdx> Fifo<T, I> {
         // size, the largest index field, holds the whole buffer
         let size: I = num_traits::cast(new).ok_or(AllocError)?;
 
-        let p = kvrealloc(self.data.cast(), old * size_of::<T>(), new * size_of::<T>(), gfp)?
+        let p = kvrealloc(self.data.cast(), old * size_of::<T>(), new * size_of::<T>(), flags::GFP_KERNEL)?
             .cast::<T>().as_ptr();
         if old != 0 {
             for k in 1..new / old {
@@ -318,12 +318,11 @@ impl<T, I: FifoIdx> Drop for Fifo<T, I> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::alloc::flags::GFP_KERNEL;
 
     #[test]
     fn indices_survive_wrap_and_grow() {
         let mut f = Fifo::<u32, u16>::new();
-        f.reserve(4, GFP_KERNEL).unwrap();
+        f.reserve(4).unwrap();
 
         // walk the indices past the u16 wrap, the buffer wrapping too
         for i in 0..70000u32 {
@@ -335,7 +334,7 @@ mod tests {
         }
         let front = f.front_idx();
 
-        f.reserve(13, GFP_KERNEL).unwrap();
+        f.reserve(13).unwrap();
         assert_eq!(f.capacity(), 16);
         for i in 0..3u32 {
             assert_eq!(f.get(Fifo::<u32, u16>::add(front, i as usize)), Some(&i));
@@ -346,7 +345,7 @@ mod tests {
     #[test]
     fn slices_wrap() {
         let mut f = Fifo::<u8>::new();
-        f.reserve(8, GFP_KERNEL).unwrap();
+        f.reserve(8).unwrap();
         f.extend_from_slice(b"abcdef").unwrap();
         assert_eq!(f.drain_with(5, |s| s == b"abcde"), 5);
         f.extend_from_slice(b"ghijk").unwrap();

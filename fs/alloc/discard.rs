@@ -65,7 +65,7 @@ use crate::init::error::id;
 use crate::locking::{MemallocFlags, SeqLock};
 use crate::sb::counters::events;
 use crate::sb::members::DevIoRef;
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::bio::{Bio, BioBox, BioOwner, Endio, RawBio};
 use crate::util::ffi::Opaque;
 use crate::util::time_stats::TimeStats;
@@ -320,7 +320,7 @@ impl Discard {
         if !ca.discard_slot_get(fastpath) {
             return Err(NotAdded::Full(fs.err(bch_errcode::BCH_ERR_max_discards_in_flight)));
         }
-        if claimed.push(dev_bucket, GFP_KERNEL).is_err() {
+        if claimed.push(dev_bucket).is_err() {
             ca.discard_slot_put();
             return Err(NotAdded::Full(BchError::from(c::ENOMEM)));
         }
@@ -794,7 +794,7 @@ pub(crate) fn do_discards_fast(ca: &Dev) {
 /// trigger's, for a bucket emptied by a transaction that needed no flush -
 /// or the open bucket's close, if it was emptied while open.
 pub(crate) fn fast_discard_bucket_add(ca: &Dev, bucket: u64) {
-    if ca.discard_fast.lock().push(bucket, GFP_KERNEL).is_err() {
+    if ca.discard_fast.lock().push(bucket).is_err() {
         return;
     }
     if dev_is_rw(ca) {

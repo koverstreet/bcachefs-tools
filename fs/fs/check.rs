@@ -16,7 +16,7 @@ use crate::dirent::{Dirent, DirentTarget};
 use crate::errcode::Found;
 use crate::snapshots::{snapshot, subvolume};
 use crate::alloc::capacity::DiskReservation;
-use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
+use crate::util::alloc::{kvvec_insert, KVVec};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err, prt};
 use core::ops::ControlFlow;
@@ -45,7 +45,7 @@ impl SnapshotsSeen {
         self.pos = pos;
 
         if !self.has_id(pos.snapshot) {
-            self.ids.push(pos.snapshot, GFP_KERNEL)?;
+            self.ids.push(pos.snapshot)?;
         }
         Ok(())
     }
@@ -91,9 +91,9 @@ impl SnapshotsSeen {
 
     /// A copy, to keep the list as it was at this key while the walk goes on.
     pub fn try_clone(&self) -> Result<Self, BchError> {
-        let mut ids = KVVec::with_capacity(self.ids.len(), GFP_KERNEL)?;
+        let mut ids = KVVec::with_capacity(self.ids.len())?;
         for &i in self.ids.iter() {
-            ids.push(i, GFP_KERNEL)?;
+            ids.push(i)?;
         }
         Ok(SnapshotsSeen { pos: self.pos, ids })
     }
@@ -103,7 +103,7 @@ impl SnapshotsSeen {
         match self.ids.iter().position(|&i| i >= id) {
             Some(idx) if self.ids[idx] == id => {}
             Some(idx) => kvvec_insert(&mut self.ids, idx, id)?,
-            None => self.ids.push(id, GFP_KERNEL)?,
+            None => self.ids.push(id)?,
         }
         Ok(())
     }
@@ -258,7 +258,7 @@ impl InodeWalker {
         let mut iter = BtreeIter::new(t, Btree::inodes, pos(0, inum),
                                       BtreeIterFlags::ALL_SNAPSHOTS);
         iter.for_each_max_norestart(t, spos(0, inum, u32::MAX), |_, k| {
-            inodes.push(WalkerEntry::new(fs, k), GFP_KERNEL)?;
+            inodes.push(WalkerEntry::new(fs, k))?;
             Ok(())
         })?;
 
@@ -506,9 +506,9 @@ impl InodeWalker {
             }
 
             if inode::bkey_is_inode(k.k) {
-                inodes.push(WalkerEntry::new(fs, k), GFP_KERNEL)?;
+                inodes.push(WalkerEntry::new(fs, k))?;
             } else {
-                deletes.push(id, GFP_KERNEL)?;
+                deletes.push(id)?;
             }
             Ok(())
         })?;
@@ -906,9 +906,9 @@ pub mod ioctl {
         let mut opts = user_opts(arg.opts)?;
 
         let user_devs = user.tail(&arg);
-        let mut devs = KVVec::with_capacity(user_devs.len(), GFP_KERNEL)?;
+        let mut devs = KVVec::with_capacity(user_devs.len())?;
         for i in 0..user_devs.len() {
-            devs.push(UserStr::read(user_devs.get(i)?, c::PATH_MAX as usize)?, GFP_KERNEL)?;
+            devs.push(UserStr::read(user_devs.get(i)?, c::PATH_MAX as usize)?)?;
         }
 
         let thr = ThreadWithFile::new_stdio(Ok(()))?;

@@ -11,7 +11,7 @@ use crate::cstructs::c as cs;
 use crate::errcode::bch_errcode;
 use crate::errcode::BchError;
 use crate::locking::{Guard, Locked};
-use crate::util::alloc::{flags::GFP_KERNEL, DArrayLoan, KVVec};
+use crate::util::alloc::{DArrayLoan, KVVec};
 use crate::util::bio::{BioSet, Either};
 use crate::util::late::Late;
 use crate::util::Printbuf;
@@ -180,7 +180,7 @@ impl BtreeRootsGuard<'_> {
         {
             let mut extra = unsafe { DArrayLoan::new(&mut self.roots_extra) };
             while id >= extra.len() as u32 + u32::from(Btree::nr) {
-                extra.push(cs::btree_root::default(), GFP_KERNEL)?;
+                extra.push(cs::btree_root::default())?;
             }
         }
         let nr = self.roots_extra.nr as u32;

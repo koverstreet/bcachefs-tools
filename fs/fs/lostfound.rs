@@ -24,7 +24,7 @@ use crate::{inode, inode_opts};
 use crate::namei;
 use crate::snapshots::{snapshot, subvolume};
 use crate::str_hash;
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
 use crate::util::log::{LogLevel, LogMsg};
@@ -445,7 +445,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
             } else {
                 maybe_delete_dirent(t, spos(lostfound.bi_inum, inode.bi_dir_offset,
                                             dirent_snapshot), id)?;
-                whiteouts_done.push(id, GFP_KERNEL)?;
+                whiteouts_done.push(id)?;
             }
         }
 

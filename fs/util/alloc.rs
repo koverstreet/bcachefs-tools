@@ -66,9 +66,138 @@ pub type KBox<T> = kernel::alloc::Box<T, Kmalloc>;
 #[cfg(kernel)]
 pub type KVBox<T> = kernel::alloc::Box<T, KVmalloc>;
 #[cfg(kernel)]
-pub type KVec<T> = kernel::alloc::Vec<T, Kmalloc>;
+pub type KVec<T> = Vec<T, Kmalloc>;
 #[cfg(kernel)]
-pub type KVVec<T> = kernel::alloc::Vec<T, KVmalloc>;
+pub type KVVec<T> = Vec<T, KVmalloc>;
+
+/// kernel::alloc's Vec, without flags: how to allocate is the task's memalloc
+/// scope's. Its API is bcachefs-shim's KVVec's, so what builds against one
+/// builds against the other.
+#[cfg(kernel)]
+pub struct Vec<T, A: kernel::alloc::Allocator>(kernel::alloc::Vec<T, A>);
+
+#[cfg(kernel)]
+impl<T, A: kernel::alloc::Allocator> Vec<T, A> {
+    pub const fn new() -> Self {
+        Vec(kernel::alloc::Vec::new())
+    }
+
+    pub fn with_capacity(capacity: usize) -> Result<Self, AllocError> {
+        kernel::alloc::Vec::with_capacity(capacity, flags::GFP_KERNEL).map(Vec)
+    }
+
+    pub fn spare_capacity_mut(&mut self) -> &mut [core::mem::MaybeUninit<T>] {
+        self.0.spare_capacity_mut()
+    }
+
+    pub fn reserve(&mut self, additional: usize) -> Result<(), AllocError> {
+        self.0.reserve(additional, flags::GFP_KERNEL)
+    }
+
+    pub fn push(&mut self, v: T) -> Result<(), AllocError> {
+        self.0.push(v, flags::GFP_KERNEL)
+    }
+
+    /// push(), with flags of its own: what may run in interrupt context.
+    pub fn push_gfp(&mut self, v: T, gfp: Flags) -> Result<(), AllocError> {
+        self.0.push(v, gfp)
+    }
+
+    pub fn push_within_capacity(&mut self, v: T) -> Result<(), kernel::alloc::kvec::PushError<T>> {
+        self.0.push_within_capacity(v)
+    }
+
+    pub fn drain_all(&mut self) -> kernel::alloc::kvec::DrainAll<'_, T> {
+        self.0.drain_all()
+    }
+
+    pub fn extend_from_slice(&mut self, other: &[T]) -> Result<(), AllocError>
+    where
+        T: Clone,
+    {
+        self.0.extend_from_slice(other, flags::GFP_KERNEL)
+    }
+
+    pub fn from_elem(value: T, n: usize) -> Result<Self, AllocError>
+    where
+        T: Clone,
+    {
+        kernel::alloc::Vec::from_elem(value, n, flags::GFP_KERNEL).map(Vec)
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear()
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.0.truncate(len)
+    }
+
+    pub fn pop(&mut self) -> Option<T> {
+        self.0.pop()
+    }
+
+    pub fn retain(&mut self, f: impl FnMut(&mut T) -> bool) {
+        self.0.retain(f)
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.0.capacity()
+    }
+
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        self.0.as_mut_ptr()
+    }
+
+    /// # Safety
+    /// As kernel::alloc::Vec::inc_len().
+    pub unsafe fn inc_len(&mut self, additional: usize) {
+        unsafe { self.0.inc_len(additional) }
+    }
+
+    /// # Safety
+    /// As kernel::alloc::Vec::from_raw_parts().
+    pub unsafe fn from_raw_parts(ptr: *mut T, length: usize, capacity: usize) -> Self {
+        Vec(unsafe { kernel::alloc::Vec::from_raw_parts(ptr, length, capacity) })
+    }
+
+    pub fn into_raw_parts(self) -> (*mut T, usize, usize) {
+        self.0.into_raw_parts()
+    }
+}
+
+#[cfg(kernel)]
+impl<T, A: kernel::alloc::Allocator> Default for Vec<T, A> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(kernel)]
+impl<T, A: kernel::alloc::Allocator> core::ops::Deref for Vec<T, A> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        &self.0
+    }
+}
+
+#[cfg(kernel)]
+impl<T, A: kernel::alloc::Allocator> core::ops::DerefMut for Vec<T, A> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        &mut self.0
+    }
+}
+
+#[cfg(kernel)]
+impl<T, A: kernel::alloc::Allocator> IntoIterator for Vec<T, A> {
+    type Item = T;
+    type IntoIter = kernel::alloc::kvec::IntoIter<T, A>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
 
 /// @flags as the task's memalloc scope says, as the kernel's
 /// current_gfp_context() does for NOIO and NOFS - which the page allocator
@@ -617,7 +746,7 @@ pub unsafe fn darray_take<T>(d: &mut crate::types::DArray<T>) -> KVVec<T> {
 /// Insert @v at @idx, moving what's after it up one: neither build's KVVec
 /// has insert(), so it's a push and a rotate.
 pub fn kvvec_insert<T>(vec: &mut KVVec<T>, idx: usize, v: T) -> Result<(), AllocError> {
-    vec.push(v, flags::GFP_KERNEL)?;
+    vec.push(v)?;
     vec[idx..].rotate_right(1);
     Ok(())
 }

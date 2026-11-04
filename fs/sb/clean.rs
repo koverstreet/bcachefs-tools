@@ -22,7 +22,7 @@ use crate::journal::entries::{EntryWriter, NoRoom};
 use crate::journal::validate::{journal_entry_to_text, journal_entry_validate};
 use crate::sb::io::{entries_end, SbFieldOps};
 use crate::types::{Le32, Le64};
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::ffi::Opaque;
 use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, UnvalidatedEntriesMut, Validated, VstructRef};
 use crate::util::{Printbuf, ToText};
@@ -106,7 +106,7 @@ impl Fs {
         };
 
         let bytes = f.as_bytes();
-        let mut copy = KVVec::from_elem(0u64, bytes.len() / size_of::<u64>(), GFP_KERNEL)
+        let mut copy = KVVec::from_elem(0u64, bytes.len() / size_of::<u64>())
             .map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_read_superblock_clean))?;
         copy.as_mut_bytes().copy_from_slice(bytes);
 

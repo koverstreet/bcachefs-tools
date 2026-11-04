@@ -37,7 +37,7 @@ use crate::c::{bch_fsck_flags, bch_sb_error_id};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::prt;
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::{jiffies, time_after, HZ};
 use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg};
@@ -390,7 +390,7 @@ fn count_locked<'a>(fs: &Fs, st: &'a mut ErrorsLocked, id: bch_sb_error_id, msg:
     let mut c = Counted { print: true, ..Default::default() };
     let i = match st.msgs.iter().position(|s| s.id == id) {
         Some(i) => i,
-        None if st.msgs.push(FsckErrState::new(id), GFP_KERNEL).is_ok() => st.msgs.len() - 1,
+        None if st.msgs.push(FsckErrState::new(id)).is_ok() => st.msgs.len() - 1,
         None => {
             if !st.msgs_alloc_err {
                 crate::bch_err!(fs, "kmalloc err, cannot ratelimit fsck errs");
@@ -408,7 +408,7 @@ fn count_locked<'a>(fs: &Fs, st: &'a mut ErrorsLocked, id: bch_sb_error_id, msg:
     }
 
     let mut last = KVVec::new();
-    s.last_msg = last.extend_from_slice(msg, GFP_KERNEL).is_ok().then_some(last);
+    s.last_msg = last.extend_from_slice(msg).is_ok().then_some(last);
 
     if fs.opts.ratelimit_errors.get() != 0 && s.nr >= FSCK_ERR_RATELIMIT_NR {
         if s.nr == FSCK_ERR_RATELIMIT_NR {
@@ -894,7 +894,7 @@ pub fn fsck_damaged(fs: &Fs, pos: Bpos, err: bch_sb_error_id) {
 
     let mut p = c::fsck_damaged_path { inum, snapshot: pos.snapshot, nr_errors: 1, ..Default::default() };
     p.errors[0] = err.0 as u16;
-    if paths.len() >= DAMAGED_PATHS_MAX || paths.push(p, GFP_KERNEL).is_err() {
+    if paths.len() >= DAMAGED_PATHS_MAX || paths.push(p).is_err() {
         st.damaged_paths_alloc_err = true;
     }
 }

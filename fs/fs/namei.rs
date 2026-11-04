@@ -41,7 +41,7 @@ use crate::inode;
 use crate::inode_opts::reinherit_attrs;
 use crate::snapshots::subvolume;
 use crate::str_hash;
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::kernel::{capable, Capability};
 use crate::util::os_str::{qstr_name, OsStr, OsStrExt};
 use crate::util::{Printbuf, ToText};
@@ -717,8 +717,8 @@ impl PathUp {
     }
 
     fn push(&mut self, name: &OsStr) -> Result<(), BchError> {
-        self.names.extend_from_slice(name.as_bytes(), GFP_KERNEL)?;
-        self.ends.push(self.names.len(), GFP_KERNEL)?;
+        self.names.extend_from_slice(name.as_bytes())?;
+        self.ends.push(self.names.len())?;
         Ok(())
     }
 
@@ -786,7 +786,7 @@ fn inum_to_path_up(
             break;
         }
 
-        seen.push(n, GFP_KERNEL)?;
+        seen.push(n)?;
 
         let inode = match inode::find_by_inum_snapshot(t, inum, snapshot, BtreeIterFlags::empty()) {
             Ok(inode) => inode,
@@ -926,7 +926,7 @@ pub fn inum_is_descendant(
         if seen.contains(&n) {
             return Ok(false);
         }
-        seen.push(n, GFP_KERNEL)?;
+        seen.push(n)?;
 
         let Some(inode) = inode::find_by_inum_snapshot(t, cur, snapshot,
                                                        BtreeIterFlags::empty()).found()? else {

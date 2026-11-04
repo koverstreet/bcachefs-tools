@@ -19,7 +19,7 @@ use crate::{prt, sb_err_on};
 use crate::sb::errors::prt_error_ids;
 use crate::sb::io::{entries_as_read, entries_end, SbFieldOps};
 use crate::types::Le64;
-use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
+use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::bitmap::LeBitmap;
 use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, Validated, ValidatedEntries};
 use crate::util::Printbuf;
@@ -347,12 +347,12 @@ fn downgrade_entries(major: u64, version_incompat: u32, have_stripes: bool) -> R
 
         let errors = src.errors.iter()
             .chain(extra.then_some(&c::bch_sb_error_id::BCH_FSCK_ERR_alloc_key_dirty_sectors_wrong));
-        table.extend_from_slice(&(src.version.0 as u16).to_le_bytes(), GFP_KERNEL)?;
-        table.extend_from_slice(&passes.to_le_bytes(), GFP_KERNEL)?;
-        table.extend_from_slice(&0u64.to_le_bytes(), GFP_KERNEL)?;
-        table.extend_from_slice(&(nr_errors as u16).to_le_bytes(), GFP_KERNEL)?;
+        table.extend_from_slice(&(src.version.0 as u16).to_le_bytes())?;
+        table.extend_from_slice(&passes.to_le_bytes())?;
+        table.extend_from_slice(&0u64.to_le_bytes())?;
+        table.extend_from_slice(&(nr_errors as u16).to_le_bytes())?;
         for e in errors {
-            table.extend_from_slice(&(e.0 as u16).to_le_bytes(), GFP_KERNEL)?;
+            table.extend_from_slice(&(e.0 as u16).to_le_bytes())?;
         }
     }
     Ok(table)

@@ -34,7 +34,7 @@ use crate::fs::Fs;
 use crate::fs::{Claimed, OpenFs};
 use crate::init::registry::{self, Claim, FsHandle, Key, Opener, Opening};
 use crate::opt_id;
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::fs_context::{FsContext, FsParam, ParamValue};
 use crate::util::fs_type::{FsType, FsTypeTable, SuperData};
 use crate::util::printbuf::Printbuf;
@@ -83,9 +83,9 @@ struct DevPath(KVVec<u8>);
 
 impl DevPath {
     fn new(path: &[u8]) -> Result<Self, BchError> {
-        let mut v = KVVec::with_capacity(path.len() + 1, GFP_KERNEL)?;
-        v.extend_from_slice(path, GFP_KERNEL)?;
-        v.push(0, GFP_KERNEL)?;
+        let mut v = KVVec::with_capacity(path.len() + 1)?;
+        v.extend_from_slice(path)?;
+        v.push(0)?;
         Ok(DevPath(v))
     }
 
@@ -329,7 +329,7 @@ impl FsType for Bcachefs {
                                                           core::str::from_utf8(s).unwrap_or("?"))));
                     }
                     let path = DevPath::new(path)?;
-                    fc.ctx().devs.push(path, GFP_KERNEL)?;
+                    fc.ctx().devs.push(path)?;
                 }
 
                 source_append(fc, s)?;

@@ -72,7 +72,6 @@ use crate::fs::{writepoint_ptr, Fs};
 use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
 use crate::sb::counters::events;
 use crate::prt;
-use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::alloc::KVVec;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::data_structures::cuckoo::Cuckoo;
@@ -253,7 +252,7 @@ struct WorkBuf {
 
 impl WorkBuf {
     fn new() -> Result<Self, BchError> {
-        Ok(WorkBuf { pos: KVVec::with_capacity(WORK_BUF_NR, GFP_KERNEL)?, next: 0 })
+        Ok(WorkBuf { pos: KVVec::with_capacity(WORK_BUF_NR)?, next: 0 })
     }
 
     fn clear(&mut self) {
@@ -282,7 +281,7 @@ impl WorkBuf {
                     return Ok(ControlFlow::Continue(()));
                 }
 
-                self.pos.push(k.k.p, GFP_KERNEL).expect("room: WORK_BUF_NR reserved");
+                self.pos.push(k.k.p).expect("room: WORK_BUF_NR reserved");
                 work_pos.pos = iter.pos().successor();
                 Ok(if self.pos.len() == WORK_BUF_NR { ControlFlow::Break(()) } else { ControlFlow::Continue(()) })
             })?;
@@ -381,7 +380,7 @@ fn reconcile_stripe(ctxt: &MovingCtxt<'_>, t: &TransAttempt<'_, '_>, iter: &mut 
             t.restarts_handled();
             if let Some(retry) = retry {
                 // not queued, for no memory: the next pass finds it again
-                let _ = retry.push(StripeRetry { idx, mark: ctxt.io_mark() }, GFP_KERNEL);
+                let _ = retry.push(StripeRetry { idx, mark: ctxt.io_mark() });
             } else {
                 // what the retry waited for - an evacuation - didn't finish it
                 let mut msg = log_msg_ratelimited!(fs);
@@ -665,7 +664,7 @@ fn phys_dev(fs: &Fs, phase: &Phase, dev: u32) -> Result<(), BchError> {
 fn reconcile_phys(fs: &Fs, phase: &'static Phase) -> Result<(), BchError> {
     let mut devs = KVVec::new();
     for ca in fs.members().filter(|ca| ca.mi.get().rotational && ca.is_online()) {
-        devs.push(u32::from(ca.dev_idx), GFP_KERNEL)?;
+        devs.push(u32::from(ca.dev_idx))?;
     }
     let name = fs.name().to_str().unwrap_or("?");
 

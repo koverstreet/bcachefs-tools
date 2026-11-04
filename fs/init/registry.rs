@@ -22,7 +22,7 @@ use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
 use crate::fs::{Claimed, Fs, OpenFs};
 use crate::locking::Locked;
 use crate::sb::io::Holder;
-use crate::util::alloc::{flags::GFP_KERNEL, Arc, KVVec};
+use crate::util::alloc::{Arc, KVVec};
 use crate::util::backref::BackRef;
 use crate::util::futex::EventCount;
 use crate::util::log::{log_no_fs, LogLevel};
@@ -66,7 +66,7 @@ pub fn devs<'a>(paths: impl Iterator<Item = &'a CStr>) -> Result<KVVec<c::dev_t>
             log_no_fs(LogLevel::ERR, crate::message!("cannot open with device {}: {}",
                                                      path.to_str().unwrap_or("?"), e.msg()));
         })?;
-        devs.push(dev, GFP_KERNEL)?;
+        devs.push(dev)?;
     }
     if devs.is_empty() {
         return Err(c::EINVAL.into());
@@ -201,9 +201,9 @@ impl FsHandle {
             }
 
             let holder = Holder::new()?;
-            let mut d = KVVec::with_capacity(devs.len(), GFP_KERNEL)?;
-            d.extend_from_slice(devs, GFP_KERNEL)?;
-            registry.opening.push(OpeningEntry { holder: holder.clone(), by, devs: d, uuid: None }, GFP_KERNEL)?;
+            let mut d = KVVec::with_capacity(devs.len())?;
+            d.extend_from_slice(devs)?;
+            registry.opening.push(OpeningEntry { holder: holder.clone(), by, devs: d, uuid: None })?;
             return Ok(FsHandle::Opening(Opening { holder, by }));
         }
     }
@@ -264,7 +264,7 @@ pub fn register(fs: &Fs) -> Result<(), BchError> {
         return fs.throw(bch_errcode::BCH_ERR_filesystem_uuid_already_open);
     }
     // SAFETY: exit() deregisters it before freeing it
-    Ok(registry.open.push(unsafe { BackRef::new(fs) }, GFP_KERNEL)?)
+    Ok(registry.open.push(unsafe { BackRef::new(fs) })?)
 }
 
 pub fn deregister(fs: &Fs) {

@@ -57,7 +57,7 @@ pub struct Repair {
 /// Queued for do_repairs(): see Repair. What's bad, for the scrub's Gather.
 pub fn queue(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, bad_devs: u32, read_err: c_int) -> Bad {
     let r = Repair { key: BtreeKeyBuf::new(btree, level, k), bad_devs, read_err };
-    let repair = fs.scrub_journal_repairs.lock().push(r, GFP_KERNEL).is_ok();
+    let repair = fs.scrub_journal_repairs.lock().push(r).is_ok();
     if !repair {
         bch_err!(fs, "journal scrub: no memory to queue a repair, not repairing:\n{}", k.to_text(fs));
     }
@@ -256,7 +256,7 @@ fn flush_window(fs: &Fs, jk: &c::journal_keys) -> Result<KVVec<u64>, BchError> {
         if t != 0 && newest_time != 0 && t + max_rewind_secs < newest_time {
             continue;
         }
-        flushes.push(i.jset().seq.get(), GFP_KERNEL)?;
+        flushes.push(i.jset().seq.get())?;
     }
     Ok(flushes)
 }

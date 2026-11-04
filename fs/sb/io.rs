@@ -2280,7 +2280,7 @@ impl<'a> SbIos<'a> {
 
     fn submit(self: Pin<&mut Self>, f: Frozen<'a>, opf: u32, sector: u64, bytes: usize) -> Result<(), BchError> {
         let this = self.project();
-        this.frozen.push(f, crate::util::alloc::flags::GFP_KERNEL)
+        this.frozen.push(f)
             .map_err(|_| BchError::from(c::ENOMEM))?;
         let f = this.frozen.last_mut().expect("just pushed");
         let r = this.gather.get();
@@ -2418,7 +2418,6 @@ struct Copies {
 fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_devs_mask>,
                       flags: c::bch_sb_write_flags) -> Result<(), BchError> {
     use c::bch_fs_flags as f;
-    use crate::util::alloc::flags::GFP_KERNEL;
 
     if !fs.flags.get(f::BCH_FS_may_upgrade_downgrade) {
         return Ok(());
@@ -2446,7 +2445,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
         if devs.is_some_and(|d| !d.d.test(ca.dev_idx.into())) {
             continue;
         }
-        if cas.push(ca, GFP_KERNEL).is_err() {
+        if cas.push(ca).is_err() {
             crate::fs_fatal_error!(fs, "error allocating online devices");
             return Err(c::ENOMEM.into());
         }
@@ -2589,7 +2588,6 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
 /// Each layout slot's copy to every device that has one, a slot at a time,
 /// each round waited on before the next.
 fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Copies, BchError> {
-    use crate::util::alloc::flags::GFP_KERNEL;
     const WRITE: c::bch_member_error_type = c::bch_member_error_type::BCH_MEMBER_ERROR_write;
 
     let mut copies = Copies { written: Default::default(), failed: KVVec::new(), any_failed: false };
@@ -2617,7 +2615,7 @@ fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Co
                 }
                 Err(err) => {
                     let offset = dev_sb.io.buf.sb().layout.sb_offset[idx].get();
-                    let _ = copies.failed.push(CopyFailed { dev: ca.dev_idx.into(), offset, err }, GFP_KERNEL);
+                    let _ = copies.failed.push(CopyFailed { dev: ca.dev_idx.into(), offset, err });
                     copies.any_failed = true;
                 }
             }
@@ -2823,7 +2821,7 @@ impl Fs {
 
         for ca in self.online_members() {
             let sectors = ca.usage_full_read_fast().d[DataType::btree.0 as usize].sectors;
-            if m.push((ca.dev_idx, sectors), crate::util::alloc::flags::GFP_KERNEL).is_err() {
+            if m.push((ca.dev_idx, sectors)).is_err() {
                 return self.write_super_flags(sb, c::bch_sb_write_flags::empty());
             }
             devs.d.set(ca.dev_idx.into());

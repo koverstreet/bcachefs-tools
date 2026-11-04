@@ -443,8 +443,8 @@ fn query_btree_keys(fs: &Fs, arg: &mut c::bch_ioctl_query_btree_keys) -> Result<
                 /* buffer full - or, if empty, can't fit even one key: */
                 return if out.is_empty() { Err(c::ERANGE.into()) } else { Ok(ControlFlow::Break(true)) };
             }
-            out.extend_from_slice(plain_bytes(k.k), GFP_KERNEL)?;
-            out.extend_from_slice(k.val_bytes(), GFP_KERNEL)?;
+            out.extend_from_slice(plain_bytes(k.k))?;
+            out.extend_from_slice(k.val_bytes())?;
             Ok(ControlFlow::Continue(()))
         })?
     };
@@ -833,7 +833,7 @@ impl Fs {
             let fs = Some(NonNull::from(self));
             match minors.0.iter().position(Option::is_none) {
                 Some(i) => { minors.0[i] = fs; i as u32 }
-                None if (minors.0.len() as u32) < MINOR_GLOBAL && minors.0.push(fs, GFP_KERNEL).is_ok() =>
+                None if (minors.0.len() as u32) < MINOR_GLOBAL && minors.0.push(fs).is_ok() =>
                     minors.0.len() as u32 - 1,
                 None => return self.throw(bch_errcode::BCH_ERR_chardev_init_error),
             }

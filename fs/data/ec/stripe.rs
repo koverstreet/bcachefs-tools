@@ -26,7 +26,6 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::types::Le16;
-use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::alloc::KVVec;
 use crate::util::ffi::Opaque;
 use crate::util::rcu::read_lock;
@@ -432,7 +431,7 @@ impl WidenCache {
             Ok(i) => Ok(self.0[i].1),
             Err(i) => {
                 let nr = fs.ec_rw_member_devs_nr(disk_label, sectors);
-                self.0.push((key, nr), GFP_KERNEL)?;
+                self.0.push((key, nr))?;
                 self.0[i..].rotate_right(1);
                 Ok(nr)
             }

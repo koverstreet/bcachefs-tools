@@ -717,7 +717,7 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
 
     if !fs.flags.get(f::BCH_FS_btree_running) {
         // SAFETY: before the btree runs, the keys are recovery's alone
-        return unsafe { jk.pre_sort() }.push(n, GFP_KERNEL)
+        return unsafe { jk.pre_sort() }.push(n)
             .map_err(|_| fs.err(e::BCH_ERR_ENOMEM_journal_key_insert));
     }
 

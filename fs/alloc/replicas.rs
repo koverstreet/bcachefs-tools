@@ -30,7 +30,7 @@ use crate::sb::members::member_exists;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{cold_path, likely};
 use crate::util::rcu::read_lock;
-use crate::util::alloc::{flags, AllocError, KVVec};
+use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::data_structures::strided::StridedBuf;
 use crate::util::vstructs::{bytes_of, bytes_of_mut, from_ffi, from_ffi_mut, Head, Unsized, Unvalidated,
@@ -533,9 +533,9 @@ impl ReplicasCpu {
 
     /// @nr slots of @stride bytes, zeroed, their refs 0.
     fn zeroed(nr: usize, stride: usize) -> Result<Self, AllocError> {
-        let mut refs = KVVec::with_capacity(nr, flags::GFP_KERNEL)?;
+        let mut refs = KVVec::with_capacity(nr)?;
         for _ in 0..nr {
-            refs.push(AtomicI32::new(0), flags::GFP_KERNEL)?;
+            refs.push(AtomicI32::new(0))?;
         }
         Ok(ReplicasCpu { entries: StridedBuf::zeroed(nr, stride)?, refs })
     }
@@ -582,12 +582,12 @@ impl ReplicasCpu {
         let e = bytes_of(e);
         let mut new = ReplicasCpu {
             entries: self.entries.restrided(self.entries.stride().max(e.len()), 1)?,
-            refs:    KVVec::with_capacity(self.len() + 1, flags::GFP_KERNEL)?,
+            refs:    KVVec::with_capacity(self.len() + 1)?,
         };
         for r in self.refs.iter() {
-            new.refs.push(AtomicI32::new(r.load(Ordering::Relaxed)), flags::GFP_KERNEL)?;
+            new.refs.push(AtomicI32::new(r.load(Ordering::Relaxed)))?;
         }
-        new.refs.push(AtomicI32::new(0), flags::GFP_KERNEL)?;
+        new.refs.push(AtomicI32::new(0))?;
         new.entries.slot_mut(self.len())[..e.len()].copy_from_slice(e);
         new.sort();
         Ok(new)

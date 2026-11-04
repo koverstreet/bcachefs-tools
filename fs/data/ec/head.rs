@@ -27,7 +27,6 @@ use crate::format::{DataType, MemberState};
 use crate::fs::Fs;
 use crate::locking::{ByteLock, Guard, Lockdep};
 use crate::sb::counters::events;
-use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::alloc::kbox_pin_init;
 use crate::util::ffi::Opaque;
 use crate::util::rcu::{read_lock, ReadGuard};
@@ -261,7 +260,7 @@ pub(crate) fn stripe_head_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32, alg
                 redundancy,
                 watermark,
             }? BchError));
-            let pushed = new.and_then(|h| Ok(heads.push(h, GFP_KERNEL)?));
+            let pushed = new.and_then(|h| Ok(heads.push(h)?));
             if pushed.is_err() {
                 return fs.throw(bch_errcode::BCH_ERR_ENOMEM_stripe_head_alloc);
             }
@@ -384,7 +383,7 @@ pub(crate) fn dev_stripe_state_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32
                 lock <- new_lock!(c::DevStripes::default()),
                 disk_label,
             }? BchError))?;
-            states.push(s, GFP_KERNEL)?;
+            states.push(s)?;
             states.last().expect("just pushed")
         }
     };

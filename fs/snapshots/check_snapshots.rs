@@ -45,7 +45,7 @@ use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::inode;
 use crate::snapshots::{delete, snapshot, subvolume};
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::{Join, Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err, prt};
 use core::fmt;
@@ -1142,7 +1142,7 @@ impl TreeReconstruct {
             }
         }
 
-        self.trees.push(tree, GFP_KERNEL)?;
+        self.trees.push(tree)?;
         Ok(())
     }
 
@@ -1157,7 +1157,7 @@ impl TreeReconstruct {
 
 fn add_nodup(ids: &mut KVVec<u32>, id: u32) -> Result<(), BchError> {
     if !ids.contains(&id) {
-        ids.push(id, GFP_KERNEL)?;
+        ids.push(id)?;
     }
     Ok(())
 }
@@ -1218,7 +1218,7 @@ fn reconstruct_snapshots(fs: &Fs) -> Result<(), BchError> {
     let mut btrees: KVVec<Btree> = KVVec::new();
     for &btree in crate::BTREE_IDS_KNOWN {
         if crate::BTREE_HAS_SNAPSHOTS_MASK & (1 << btree.0) != 0 {
-            btrees.push(btree, GFP_KERNEL)?;
+            btrees.push(btree)?;
         }
     }
     let progress = Progress::recovery(fs, c"bch2_reconstruct_snapshots", &btrees, &[]);

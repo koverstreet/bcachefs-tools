@@ -46,7 +46,7 @@ use crate::init::damage;
 use crate::init::error::id;
 use crate::init::progress::Progress;
 use crate::snapshots::snapshot;
-use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
+use crate::util::alloc::{kvvec_insert, KVVec};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, bch_err_ratelimited, fsck_err_on, inode_fsck_err, prt};
 use crate::namei;
@@ -75,7 +75,7 @@ impl ExtentEnds {
         match self.e.iter().position(|i| i.snapshot >= k.snapshot) {
             Some(idx) if self.e[idx].snapshot == k.snapshot => self.e[idx] = n,
             Some(idx) => kvvec_insert(&mut self.e, idx, n)?,
-            None => self.e.push(n, GFP_KERNEL)?,
+            None => self.e.push(n)?,
         }
         Ok(())
     }

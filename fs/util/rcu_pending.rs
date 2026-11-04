@@ -399,7 +399,7 @@ impl PcpuState {
         if let Some(i) = self.objs.iter().rposition(|o| o.seq == seq) {
             return Some(&mut self.objs[i]);
         }
-        self.objs.push(Seq::new(seq), flags::GFP_ATOMIC).ok()?;
+        self.objs.push_gfp(Seq::new(seq), flags::GFP_ATOMIC).ok()?;
         self.objs.last_mut()
     }
 }

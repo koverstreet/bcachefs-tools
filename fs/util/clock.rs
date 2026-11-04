@@ -32,7 +32,7 @@ use crate::fs::Fs;
 use crate::locking::Locked;
 use crate::{new_lock, prt};
 use crate::types::{rust_only, RustOnly};
-use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
+use crate::util::alloc::{AllocError, KVVec};
 use crate::util::kernel::HZ;
 use crate::util::ffi::Opaque;
 use crate::util::percpu::{CpuGuard, PerCpu};
@@ -117,7 +117,7 @@ impl io_clock {
     /// allocated unlocked, swapped in under the lock, and the old buffer -
     /// empty - freed once the lock's dropped.
     fn grow(&self, cap: usize) -> Result<(), AllocError> {
-        let mut new = KVVec::with_capacity((cap * 2).max(4), GFP_KERNEL)?;
+        let mut new = KVVec::with_capacity((cap * 2).max(4))?;
         let mut timers = self.timers.lock();
         if timers.capacity() == cap {
             for t in timers.drain_all() {

@@ -17,7 +17,6 @@ use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
-use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::Printbuf;
 use crate::{fs_fatal_error, fsck_err_on};
 use core::sync::atomic::{Ordering, AtomicU32};
@@ -173,7 +172,7 @@ fn resume_logged_ops(fs: &Fs, early: bool) -> Result<(), BchError> {
  */
 pub(crate) fn note_unfinished(fs: &Fs) -> Result<(), BchError> {
     for_each_logged_op(fs, |_, k| {
-        Ok(fs.logged_ops.unfinished.lock().push(k.k.p.offset, GFP_KERNEL)?)
+        Ok(fs.logged_ops.unfinished.lock().push(k.k.p.offset)?)
     })
 }
 
