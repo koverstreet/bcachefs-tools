@@ -1169,8 +1169,9 @@ impl ToText for DateTime {
     }
 }
 
-/// A number with an optional unit suffix - 4k, 1.5M, 2 G: k M G ... are powers
-/// of 1024. One trailing newline, as sysfs stores have.
+/// A number with an optional unit suffix - 4k, 1.5M, 2 GiB, 10MB: k M G ...
+/// and KiB MiB ... are powers of 1024, kB MB ... powers of 1000. One trailing
+/// newline, as sysfs stores have.
 pub fn parse_human_u64(s: &str) -> Result<u64, BchError> {
     let einval = || BchError::from(c::EINVAL);
     let erange = || BchError::from(c::ERANGE);
@@ -1193,14 +1194,15 @@ pub fn parse_human_u64(s: &str) -> Result<u64, BchError> {
         let adv = usize::from(s.first() == Some(&b' '));
         let t = &s[adv..];
 
-        if let Some(u) = t.first().and_then(|c| b"kMGTPEZY".iter().position(|u| u == c)) {
-            return Ok((pow(1024, u + 1)?, adv + 1));
-        }
+        /* before the single letters, or the M of MiB and MB is all that's read */
         for (base, units) in [(1024, ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB"]),
                               (1000, ["B", "kB",  "MB",  "GB",  "TB",  "PB",  "EB",  "ZB",  "YB"])] {
             if let Some((u, name)) = units.iter().enumerate().find(|(_, n)| t.starts_with(n.as_bytes())) {
                 return Ok((pow(base, u)?, adv + name.len()));
             }
+        }
+        if let Some(u) = t.first().and_then(|c| b"kMGTPEZY".iter().position(|u| u == c)) {
+            return Ok((pow(1024, u + 1)?, adv + 1));
         }
         Ok((1, 0))
     };
@@ -1489,11 +1491,11 @@ mod tests {
         }
     }
 
-    /* what util.c's bch2_strtou64_h() returned for each */
     #[test]
     fn strtou64_h() {
         for (s, ret, v) in [(c"4k", 0, 4096), (c"1.5M", 0, 1572864), (c"2KiB", 0, 2048),
-                            (c"2MiB", -22, 0), (c"10MB", -22, 0), (c"1kB", -22, 0), (c"3B", 0, 3),
+                            (c"2MiB", 0, 2097152), (c"10MB", 0, 10000000), (c"1kB", 0, 1000),
+                            (c"1.5 GB", 0, 1500000000), (c"1kiB", -22, 0), (c"3B", 0, 3),
                             (c"2 G", 0, 2147483648), (c"1\n", 0, 1), (c"-0", 0, 0), (c"-1", -34, 0),
                             (c"+7", 0, 7), (c"", -22, 0), (c"1.", -22, 0), (c"1.5", 0, 1),
                             (c"16E", -34, 0), (c"15.9E", 0, 18331451923248866918), (c"1x", -22, 0),
