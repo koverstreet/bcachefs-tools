@@ -1289,14 +1289,27 @@ bool bch2_journal_noflush_seq(struct journal *j, u64 start, u64 end)
 	if (!(c->sb.features & (1ULL << BCH_FEATURE_journal_no_flush)))
 		return false;
 
-	if (c->journal.flushed_seq_ondisk >= start)
+	/*
+	 * Under j->lock, so in_flight can't move - an entry popped, its slot
+	 * given to a newer seq - between finding a seq's buf and claiming it.
+	 * Waiters still attach without it: hence the cmpxchg.
+	 */
+	guard(spinlock)(&j->lock);
+
+	/* the first write since the filesystem was clean flushes regardless: */
+	if (test_bit(JOURNAL_need_flush_write, &j->flags))
 		return false;
 
-	for (u64 seq = start; seq < end; seq++) {
-		struct journal_buf *buf = &fifo_entry(&j->in_flight, seq);
-		if (!journal_buf_try_noflush(buf))
+	if (j->flushed_seq_ondisk >= start)
+		return false;
+
+	/*
+	 * What's below in_flight.front is written - and was noflush, or
+	 * flushed_seq_ondisk would be past it:
+	 */
+	for (u64 seq = max(start, j->in_flight.front); seq < end; seq++)
+		if (!journal_buf_try_noflush(journal_seq_to_buf(j, seq)))
 			return false;
-	}
 
 	return true;
 }
