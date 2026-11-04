@@ -5,7 +5,7 @@
 #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
 use super::raw::rust_debug_check_no_locks_freed;
 use super::raw::{rust_trace_contention_begin, rust_trace_contention_end};
-use super::{ExclusiveGuard, Locked, LockdepMap, RawLockBase};
+use super::{ExclusiveGuard, Locked, LockdepMap, RawLockBase, RawReadLock, RawSixLock};
 use crate::cstructs::c;
 #[cfg(CONFIG_SMP)]
 use crate::debug::params::six_optimistic_spin_disabled;
@@ -17,7 +17,8 @@ use crate::util::percpu::{CpuGuard, PerCpu};
 use crate::util::projections::Volatile;
 #[cfg(CONFIG_SMP)]
 use crate::util::rcu;
-use core::ffi::{c_int, c_uint, c_ulong, c_void};
+use core::convert::Infallible;
+use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
 use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
 use core::sync::atomic::{fence, AtomicBool, AtomicI32, AtomicPtr};
@@ -1306,6 +1307,57 @@ pub fn six_lock_readers_add(lock: &c::six_lock, nr: c_int) {
         ebug_assert!((atomic_read(lock) & SIX_LOCK_HELD_read) as c_int + nr >= 0);
         /* reader count starts at bit 0 */
         lock.state.fetch_add(nr, Relaxed);
+    }
+}
+
+unsafe impl RawLockBase for c::six_lock {
+    type GuardState = ();
+    type InitError = Infallible;
+
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
+        unsafe { __six_lock_init(l, name.as_ptr().cast(), key, six_lock_init_flags::empty(), 0) };
+        Ok(())
+    }
+
+    unsafe fn destroy(&self) {
+        unsafe { six_lock_exit(core::ptr::from_ref(self).cast_mut()) }
+    }
+}
+
+impl c::six_lock {
+    /// six_lock_ip(), without a should_sleep_fn: it can't fail.
+    fn lock_type(&self, ty: six_lock_type) {
+        let mut wait = c::six_lock_waiter::default();
+        let ret = unsafe { six_lock_ip_waiter(self, ty, &mut wait, None, 0) };
+        ebug_assert!(ret == 0, "six lock without should_sleep_fn failed: {ret}");
+    }
+}
+
+unsafe impl RawReadLock for c::six_lock {
+    unsafe fn lock_read(&self) {
+        self.lock_type(six_lock_type::SIX_LOCK_read)
+    }
+
+    unsafe fn unlock_read(&self, _: ()) {
+        six_unlock_ip(self, six_lock_type::SIX_LOCK_read, 0)
+    }
+}
+
+unsafe impl RawSixLock for c::six_lock {
+    unsafe fn lock_intent(&self) {
+        self.lock_type(six_lock_type::SIX_LOCK_intent)
+    }
+
+    unsafe fn unlock_intent(&self, _: ()) {
+        six_unlock_ip(self, six_lock_type::SIX_LOCK_intent, 0)
+    }
+
+    unsafe fn lock_write(&self) {
+        self.lock_type(six_lock_type::SIX_LOCK_write)
+    }
+
+    unsafe fn unlock_write(&self, _: ()) {
+        six_unlock_ip(self, six_lock_type::SIX_LOCK_write, 0)
     }
 }
 
