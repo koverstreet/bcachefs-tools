@@ -36,8 +36,12 @@ pub mod os_str;
 pub mod par;
 pub mod percpu;
 pub mod place;
+#[cfg(not(kernel))]
+pub mod plymouth;
 pub mod printbuf;
 pub mod projections;
+#[cfg(not(kernel))]
+pub mod prompt;
 pub mod raid;
 pub mod rcu;
 pub mod rcu_pending;

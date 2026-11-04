@@ -36,7 +36,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::key::{Passphrase, PassphraseCorrect};
-use crate::prompt::{Stirred, Watch};
+use bcachefs_kernel::util::prompt::{Stirred, Watch};
 
 const DIR: &str = "/run/bcachefs/unlock";
 

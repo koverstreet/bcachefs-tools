@@ -781,17 +781,17 @@ impl DeviceWatch {
 	}
 }
 
-impl crate::prompt::Watch for DeviceWatch {
+impl bcachefs_kernel::util::prompt::Watch for DeviceWatch {
 	fn raw_fd(&self) -> std::os::fd::RawFd {
 		self.socket.as_raw_fd()
 	}
 
 	/// A device arriving never *answers* "mount without it?" - it withdraws the
 	/// question.
-	fn stirred(&mut self) -> crate::prompt::Stirred {
+	fn stirred(&mut self) -> bcachefs_kernel::util::prompt::Stirred {
 		match self.every_member_present() {
-			true  => crate::prompt::Stirred::Moot,
-			false => crate::prompt::Stirred::Nothing,
+			true  => bcachefs_kernel::util::prompt::Stirred::Moot,
+			false => bcachefs_kernel::util::prompt::Stirred::Nothing,
 		}
 	}
 }

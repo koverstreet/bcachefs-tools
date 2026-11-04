@@ -100,7 +100,7 @@ impl<'a> RecoveryDisplay<'a> {
         // blanks the splash for as long as it takes us to draw the first block.
         let sink = if io::stderr().is_terminal() {
             Sink::Terminal { out: io::stderr(), rows: 0 }
-        } else if crate::plymouth::connect().is_ok() {
+        } else if bcachefs_kernel::util::plymouth::connect().is_ok() {
             Sink::Plymouth
         } else {
             Sink::Console { file: open_console()?, cols: 0 }
@@ -230,7 +230,7 @@ impl<'a> RecoveryDisplay<'a> {
                 let msg = lines.join("\n");
 
                 // The splash may have exited; not the mount's problem.
-                let _ = crate::plymouth::send(&msg);
+                let _ = bcachefs_kernel::util::plymouth::send(&msg);
                 Ok(())
             }
             Sink::Console { file, cols } => {

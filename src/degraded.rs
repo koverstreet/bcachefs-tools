@@ -23,7 +23,7 @@
 //! degraded= value that needs is ours to work out, not theirs.
 
 use std::path::PathBuf;
-use crate::prompt::{fs_name, Choice, Prompt, Question, Watch, NO_ONE_TO_ASK, PROMPT_TIMEOUT};
+use bcachefs_kernel::util::prompt::{fs_name, Choice, Prompt, Question, Watch, NO_ONE_TO_ASK, PROMPT_TIMEOUT};
 
 use anyhow::Result;
 use bcachefs_kernel::errcode::{self, BchError};

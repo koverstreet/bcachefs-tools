@@ -6,8 +6,6 @@ mod device_scan;
 mod fs_context;
 mod key;
 mod logging;
-mod plymouth;
-mod prompt;
 mod unlock_socket;
 mod qcow2;
 mod recovery_display;

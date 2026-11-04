@@ -11,7 +11,7 @@
 //! Hence [`agent_plausibly_listening`]: there is no direct test, so we want
 //! evidence before handing a question over.
 //!
-//! key.rs keeps its own path - a passphrase needs termios echo-off with the
+//! src/key.rs keeps its own path - a passphrase needs termios echo-off with the
 //! ICRNL/ICANON repair for an unconfigured initramfs console, zeroizing, and
 //! keyring caching.
 
@@ -21,7 +21,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use std::io::Result;
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use log::debug;
 
@@ -31,7 +31,7 @@ pub const PROMPT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Its label, or its UUID - several filesystems come up at once at boot, and
 /// someone facing two questions needs to see whether they are the same disk.
-pub fn fs_name(sb: &bcachefs_kernel::c::bch_sb_buf) -> String {
+pub fn fs_name(sb: &crate::c::bch_sb_buf) -> String {
     let label = String::from_utf8_lossy(sb.sb().label());
 
     if label.is_empty() {
@@ -195,7 +195,7 @@ impl Prompt {
     pub fn detect() -> Option<Prompt> {
         let tty = stdin().is_terminal();
 
-        if tty && !crate::plymouth::active() {
+        if tty && !super::plymouth::active() {
             debug!("asking on the terminal");
             return Some(Prompt::Terminal);
         }

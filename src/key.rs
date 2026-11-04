@@ -17,12 +17,12 @@ use bch_bindgen::keyutils::{self, keyctl_search};
 use log::info;
 use rustix::termios;
 
-use crate::prompt::{Waited, Watch};
+use bcachefs_kernel::util::prompt::{Waited, Watch};
 use crate::unlock_socket::UnlockSocket;
 use uuid::Uuid;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
-use crate::prompt::Prompt;
+use bcachefs_kernel::util::prompt::Prompt;
 use crate::ErrnoError;
 
 /// Check if a superblock has an encrypted passphrase set.
@@ -267,7 +267,7 @@ impl Passphrase {
 
     fn ask_from_systemd_and_check(sb: &bcachefs_kernel::c::bch_sb_buf) -> Result<PassphraseCorrect> {
         let uuid = sb.sb().uuid();
-        let label = crate::prompt::fs_name(sb);
+        let label = bcachefs_kernel::util::prompt::fs_name(sb);
         for i in 0..3 {
             let mut command = Command::new("systemd-ask-password");
             command
@@ -334,7 +334,7 @@ impl Passphrase {
         // ICANON above is what makes this safe to poll: stdin only becomes
         // readable once a whole line has been typed, so the read below has one
         // waiting and does not block either.
-        let waited = crate::prompt::wait(stdin().as_fd(), None, watch);
+        let waited = bcachefs_kernel::util::prompt::wait(stdin().as_fd(), None, watch);
 
         let mut line = Zeroizing::new(String::new());
         let read = match waited {
@@ -472,7 +472,7 @@ impl StdinType {
     fn detect() -> StdinType {
         if stdin().is_terminal() {
             StdinType::Terminal
-        } else if crate::prompt::stdin_is_dev_null() {
+        } else if bcachefs_kernel::util::prompt::stdin_is_dev_null() {
             StdinType::DevNull
         } else {
             StdinType::Other

@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use log::warn;
 
-use crate::prompt::{fs_name, Choice, Prompt, Question, NO_ONE_TO_ASK, PROMPT_TIMEOUT};
+use bcachefs_kernel::util::prompt::{fs_name, Choice, Prompt, Question, NO_ONE_TO_ASK, PROMPT_TIMEOUT};
 use bcachefs_kernel::c;
 use bcachefs_kernel::init::dev::dev_in_fs;
 use bcachefs_kernel::fs::newest;
