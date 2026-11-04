@@ -199,6 +199,12 @@ fn main() {
     }
     wrappers.compile("bcachefs_shim_static_wrappers");
 
+    // And what the wrappers call in libbcachefs.a - chacha_zeroize_state()'s
+    // memzero_explicit(): linked after them too, as ld.bfd takes an archive's
+    // member only for what comes before it. -bundle, as fs/build.rs links it.
+    println!("cargo:rustc-link-search={}", root.display());
+    println!("cargo:rustc-link-lib=static:-bundle=bcachefs");
+
     // dh-cargo Built-Using (Debian): point at the workspace root (== the dpkg
     // build's $PWD) so dh-cargo-built-using sees this lib as built from our own
     // in-tree source and skips it, rather than aborting on a build path no
