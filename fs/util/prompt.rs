@@ -1,7 +1,21 @@
-//! Putting a question to whoever is at the machine, during a mount.
+//! Putting a question to whoever is at the machine.
+//!
+//! A question is a [`Question`], answered by one of its [`Choice`]s; where it
+//! goes is a [`Prompt`]. In userspace that's the terminal, or systemd's
+//! password agents. In the kernel it's the stdio redirect of whoever's running
+//! us, the question rendered and framed as a record ([`Question::record()`]):
+//! the redirect's other end, src/thread_with_file.rs's relay, shows it as the
+//! tools would and writes back what was said, for the kernel to parse.
 
 use core::time::Duration;
 
+use crate::prt;
+use crate::util::Printbuf;
+
+#[cfg(kernel)]
+mod in_kernel;
+#[cfg(kernel)]
+pub use in_kernel::*;
 #[cfg(not(kernel))]
 mod userspace;
 #[cfg(not(kernel))]
@@ -50,11 +64,19 @@ pub struct Question<'a, A> {
 /// the question is asked again.
 pub enum Reply<A> {
     Answer(A),
-    /// A watch's: see [`Watch`].
+    /// A watch's: see Watch.
     Settled,
     /// Input ended, or a timeout with no silence to take.
     Unanswered,
 }
+
+/// A question's framing, in a stdio redirect: SOH, its fields separated by US,
+/// ETX.
+pub const RECORD_START: u8 = 0x01;
+pub const RECORD_END: u8 = 0x03;
+const US: char = '\x1f';
+/// The reply line that's no answer: EOT.
+pub const UNANSWERED: &str = "\x04";
 
 /// @s, if it's one character.
 fn single(s: &str) -> Option<char> {
@@ -79,6 +101,56 @@ impl<A: Copy + PartialEq> Question<'_, A> {
                     || c.aliases.iter().any(|a| reply.eq_ignore_ascii_case(a))
             }))
             .map(|c| c.answer)
+    }
+
+    /// The choices with a blurb, a line each.
+    pub fn lines(&self, out: &mut Printbuf) {
+        for (i, c) in self.choices.iter().filter(|c| !c.blurb.is_empty()).enumerate() {
+            if i > 0 {
+                prt!(out, "\n");
+            }
+            prt!(out, "  {}  {}", c.key, c.blurb);
+        }
+    }
+
+    /// The answer silence resolves to is the one shown capitalised.
+    pub fn brief(&self, out: &mut Printbuf) {
+        prt!(out, "[");
+        for (i, c) in self.choices.iter().enumerate() {
+            if i > 0 {
+                prt!(out, " / ");
+            }
+            if Some(c.answer) == self.silence {
+                prt!(out, "{}", c.key.to_ascii_uppercase());
+            } else if c.short.is_empty() {
+                prt!(out, "{}", c.key);
+            } else {
+                prt!(out, "{}={}", c.key, c.short);
+            }
+        }
+        prt!(out, "]");
+    }
+
+    /// Framed, for a stdio redirect's relay to show: each field a name, '='
+    /// and a value. The answer comes back as a line: what was said, empty for
+    /// silence, or UNANSWERED.
+    pub fn record(&self, out: &mut Printbuf) {
+        out.write_bytes(&[RECORD_START]);
+        prt!(out, "prompt={}{US}lines=", self.prompt);
+        self.lines(out);
+        prt!(out, "{US}brief=");
+        self.brief(out);
+        if self.silence.is_some() {
+            prt!(out, "{US}silence=1");
+        }
+        if self.alarm {
+            prt!(out, "{US}alarm=1");
+        }
+        prt!(out, "{US}uuid={}", self.uuid);
+        if let Some(t) = self.timeout {
+            prt!(out, "{US}timeout={}", t.as_secs());
+        }
+        out.write_bytes(&[RECORD_END]);
     }
 }
 

@@ -7,16 +7,12 @@
 //! for the answers - so both callers want the same relay, differing only in
 //! where the filesystem's side is written.
 //!
-//! Bytes pass through unchanged in both directions. The kernel writes its
-//! questions without a trailing newline, because the answer belongs on the same
-//! line, and it reads them back with a readline that waits for one - so neither
-//! direction survives being tidied into lines here.
-//!
-//! Both fds are put in non-blocking mode so that neither direction can stall the
-//! other: a question written while nobody is draining must not stop us reading
-//! the answer, and vice versa. stdin's original flags are restored on the way
-//! out, because it does not belong to us - the mount path has its own prompts to
-//! put on it afterwards.
+//! What the filesystem says passes through unchanged, but for its questions:
+//! those come framed (fs/util/prompt.rs), and are put here as any of ours are -
+//! on the terminal, or through systemd's agents - the answer written back as a
+//! line. stdin goes to the filesystem only as those answers: forwarded as it
+//! came, a line typed ahead would answer the next question before it was
+//! shown, and every answer after it would be one question late.
 //!
 //! A caller may also keep a live display below the conversation - mount draws
 //! recovery progress there. The relay drives it rather than the other way round
@@ -25,10 +21,12 @@
 
 use std::{
     io,
-    os::fd::{AsFd, BorrowedFd},
+    os::fd::BorrowedFd,
     time::Duration,
 };
 
+use bcachefs_kernel::util::prompt::{self, RECORD_END, RECORD_START};
+use log::warn;
 use rustix::{
     event::{poll, PollFd, PollFlags, Timespec},
     fs::{fcntl_getfl, fcntl_setfl, OFlags},
@@ -52,42 +50,74 @@ pub trait StatusDisplay {
     fn draw(&mut self) -> io::Result<()>;
 }
 
-fn set_nonblocking(fd: BorrowedFd<'_>) -> io::Result<OFlags> {
-    let flags = fcntl_getfl(fd)?;
-    fcntl_setfl(fd, flags | OFlags::NONBLOCK)?;
-    Ok(flags)
-}
-
-/// Move what's readable on `rfd` to `wfd`.
-///
-/// `Ok(true)` on end of file, `Ok(false)` when something moved or there was
-/// nothing to move yet.
-fn splice(rfd: BorrowedFd<'_>, wfd: BorrowedFd<'_>) -> io::Result<bool> {
-    let mut buf = [0u8; 4096];
-    let n = match rustix::io::read(rfd, &mut buf) {
-        Ok(0) => return Ok(true),
-        Ok(n) => n,
-        Err(rustix::io::Errno::AGAIN) => return Ok(false),
-        Err(e) => return Err(e.into()),
-    };
-
+/// All of @buf to @fd, waiting for room where it's non-blocking.
+fn write_all(fd: BorrowedFd<'_>, buf: &[u8]) -> io::Result<()> {
     let mut off = 0;
-    while off < n {
-        match rustix::io::write(wfd, &buf[off..n]) {
+    while off < buf.len() {
+        match rustix::io::write(fd, &buf[off..]) {
             Ok(w) => off += w,
             Err(rustix::io::Errno::AGAIN) => {
-                poll(&mut [PollFd::new(&wfd, PollFlags::OUT)], None)?;
+                poll(&mut [PollFd::new(&fd, PollFlags::OUT)], None)?;
             }
             Err(e) => return Err(e.into()),
         }
     }
+    Ok(())
+}
 
-    Ok(false)
+/// The filesystem's side: where what it says goes, and what it's said so far
+/// of a question it's part way through.
+struct Conversation<'a> {
+    fd:       BorrowedFd<'a>,
+    out:      BorrowedFd<'a>,
+    question: Option<Vec<u8>>,
+}
+
+impl Conversation<'_> {
+    /// What's readable on the fd, passed on - and a question in it, answered.
+    /// `Ok(true)` on end of file.
+    fn hear(&mut self) -> io::Result<bool> {
+        let mut buf = [0u8; 4096];
+        let n = match rustix::io::read(self.fd, &mut buf) {
+            Ok(0) => return Ok(true),
+            Ok(n) => n,
+            Err(rustix::io::Errno::AGAIN) => return Ok(false),
+            Err(e) => return Err(e.into()),
+        };
+
+        for chunk in buf[..n].split_inclusive(|&b| b == RECORD_START || b == RECORD_END) {
+            let (text, mark) = match chunk.split_last() {
+                Some((&m, text)) if m == RECORD_START || m == RECORD_END => (text, Some(m)),
+                _ => (chunk, None),
+            };
+            match &mut self.question {
+                Some(q) => q.extend_from_slice(text),
+                None    => write_all(self.out, text)?,
+            }
+            match mark {
+                Some(RECORD_START) => self.question = Some(Vec::new()),
+                Some(RECORD_END)   => if let Some(q) = self.question.take() { self.answer(&q)? },
+                _ => {}
+            }
+        }
+        Ok(false)
+    }
+
+    /// A question that couldn't be put still gets its reply - none - or the
+    /// filesystem would wait on it forever.
+    fn answer(&self, q: &[u8]) -> io::Result<()> {
+        let mut reply = prompt::answer_record(q).unwrap_or_else(|e| {
+            warn!("putting the filesystem's question: {e}");
+            prompt::UNANSWERED.to_string()
+        });
+        reply.push('\n');
+        write_all(self.fd, reply.as_bytes())
+    }
 }
 
 /// Carry the conversation on `fd` until the kernel side is finished with it:
-/// what the filesystem says goes to `out`, and stdin goes back to the
-/// filesystem.
+/// what the filesystem says goes to `out`, and its questions are put, their
+/// answers going back.
 ///
 /// Returns when the kernel marks the channel done, which it does on every path
 /// out of the operation - so this ends on its own without the caller arranging
@@ -95,54 +125,28 @@ fn splice(rfd: BorrowedFd<'_>, wfd: BorrowedFd<'_>) -> io::Result<bool> {
 pub fn relay(
     fd: BorrowedFd<'_>,
     out: BorrowedFd<'_>,
-    display: Option<&mut dyn StatusDisplay>,
-) -> io::Result<()> {
-    let stdin = io::stdin();
-    let stdin_flags = set_nonblocking(stdin.as_fd())?;
-
-    let ret = relay_locked(fd, out, stdin.as_fd(), display);
-
-    let _ = fcntl_setfl(stdin.as_fd(), stdin_flags);
-    ret
-}
-
-fn relay_locked(
-    fd: BorrowedFd<'_>,
-    out: BorrowedFd<'_>,
-    stdin: BorrowedFd<'_>,
     mut display: Option<&mut dyn StatusDisplay>,
 ) -> io::Result<()> {
-    set_nonblocking(fd)?;
+    // Non-blocking: the poll below times out for the display, and reading
+    // after it mustn't wait
+    fcntl_setfl(fd, fcntl_getfl(fd)? | OFlags::NONBLOCK)?;
 
-    let mut stdin_closed = false;
+    let mut c = Conversation { fd, out, question: None };
 
     loop {
-        let mut pollfds = vec![PollFd::new(&fd, PollFlags::IN)];
-        if !stdin_closed {
-            pollfds.push(PollFd::new(&stdin, PollFlags::IN));
-        }
-
         let timeout = display.as_deref().map(|d| {
             let i = d.interval();
             Timespec { tv_sec: i.as_secs() as _, tv_nsec: i.subsec_nanos() as _ }
         });
-        let _ = poll(&mut pollfds, timeout.as_ref());
+        let _ = poll(&mut [PollFd::new(&fd, PollFlags::IN)], timeout.as_ref());
 
         if let Some(d) = display.as_deref_mut() {
             d.erase()?;
         }
 
-        let eof = splice(fd, out)?;
-
-        // Our own end running dry is not the end of the conversation: the
-        // filesystem may have a great deal left to say.
-        if !stdin_closed && splice(stdin, fd)? {
-            stdin_closed = true;
-        }
-
         // Leave the terminal as we found it - the caller has its own result to
         // print, and it doesn't belong under a stale progress block.
-        if eof {
+        if c.hear()? {
             return Ok(());
         }
 

@@ -13,7 +13,7 @@
 //! ICRNL/ICANON repair for an unconfigured initramfs console, zeroizing, and
 //! keyring caching.
 
-use std::io::{stdin, IsTerminal, Read};
+use std::io::{self, stdin, IsTerminal, Read};
 use std::os::fd::{AsFd, BorrowedFd, RawFd};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -24,7 +24,8 @@ use std::io::Result;
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use log::debug;
 
-use super::{Question, Reply};
+use super::{Question, Reply, UNANSWERED, US};
+use crate::util::Printbuf;
 
 const ASK_PASSWORD_DIR: &str = "/run/systemd/ask-password";
 
@@ -40,37 +41,47 @@ pub fn fs_name(sb: &crate::c::bch_sb_buf) -> String {
     }
 }
 
-impl<A: Copy + PartialEq> Question<'_, A> {
-    pub fn lines(&self) -> Vec<String> {
-        self.choices.iter()
-            .filter(|c| !c.blurb.is_empty())
-            .map(|c| format!("  {}  {}", c.key, c.blurb))
-            .collect()
+/// The reply line to a question the kernel framed - @rec, between
+/// RECORD_START and RECORD_END - put as any of ours are.
+pub fn answer_record(rec: &[u8]) -> Result<String> {
+    let rec = std::str::from_utf8(rec).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    let mut ask = Ask::default();
+    let mut silence = false;
+    for f in rec.split(US) {
+        let Some((name, v)) = f.split_once('=') else { continue };
+        match name {
+            "prompt"  => ask.prompt = v,
+            "lines"   => ask.lines = v,
+            "brief"   => ask.brief = v,
+            "silence" => silence = true,
+            "alarm"   => ask.alarm = true,
+            "uuid"    => ask.uuid = v,
+            "timeout" => ask.timeout = v.parse().ok().map(Duration::from_secs),
+            // a newer kernel's
+            _ => {}
+        }
     }
 
-    /// The answer silence resolves to is the one shown capitalised.
-    pub fn brief(&self) -> String {
-        let parts = self.choices.iter().map(|c| {
-            if Some(c.answer) == self.silence {
-                c.key.to_uppercase().to_string()
-            } else if c.short.is_empty() {
-                c.key.to_string()
-            } else {
-                format!("{}={}", c.key, c.short)
-            }
-        });
-
-        format!("[{}]", parts.collect::<Vec<_>>().join(" / "))
-    }
+    let answer = match Prompt::detect() {
+        Some(p) => p.ask(&ask, None)?,
+        None    => Answer::Ended,
+    };
+    Ok(match answer {
+        Answer::Said(reply)        => reply.trim_end_matches(['\n', '\r']).to_string(),
+        Answer::Silence if silence => String::new(),
+        _                          => UNANSWERED.to_string(),
+    })
 }
 
-/// The rendered question, in both the forms its destinations need.
+/// A question as it's shown, by us or by the kernel's relay.
+#[derive(Default)]
 struct Ask<'a> {
-    prompt: &'a str,
-    choices: Vec<String>,
-    brief: String,
-    alarm: bool,
-    id: String,
+    prompt:  &'a str,
+    lines:   &'a str,
+    brief:   &'a str,
+    alarm:   bool,
+    uuid:    &'a str,
     timeout: Option<Duration>,
 }
 
@@ -177,22 +188,22 @@ impl Prompt {
         q: &Question<'_, A>,
         mut watch: Option<&mut dyn Watch>,
     ) -> Result<Reply<A>> {
+        let (mut lines, mut brief) = (Printbuf::new(), Printbuf::new());
+        q.lines(&mut lines);
+        q.brief(&mut brief);
         let ask = Ask {
             prompt:  q.prompt,
-            choices: q.lines(),
-            brief:   q.brief(),
+            lines:   lines.as_str(),
+            brief:   brief.as_str(),
             alarm:   q.alarm,
-            id:      format!("bcachefs:UUID={}", q.uuid),
+            uuid:    q.uuid,
             timeout: q.timeout,
         };
 
         loop {
             let watch = watch.as_mut().map(|w| &mut **w as &mut dyn Watch);
 
-            return Ok(match match self {
-                Prompt::Agent => ask_via_agent(&ask, watch),
-                Prompt::Stdin => ask_on_terminal(&ask, watch),
-            }? {
+            return Ok(match self.ask(&ask, watch)? {
                 Answer::Said(reply) => match q.parse(&reply) {
                     Some(a) => Reply::Answer(a),
                     None    => continue,
@@ -201,6 +212,13 @@ impl Prompt {
                 Answer::Ended   => Reply::Unanswered,
                 Answer::Settled => Reply::Settled,
             });
+        }
+    }
+
+    fn ask(&self, ask: &Ask<'_>, watch: Option<&mut dyn Watch>) -> Result<Answer> {
+        match self {
+            Prompt::Agent => ask_via_agent(ask, watch),
+            Prompt::Stdin => ask_on_terminal(ask, watch),
         }
     }
 }
@@ -291,7 +309,7 @@ fn ask_via_agent(ask: &Ask<'_>, watch: Option<&mut dyn Watch>) -> Result<Answer>
         .arg("--no-tty")
         .arg("--echo=yes")
         .arg("--icon=drive-harddisk")
-        .arg(format!("--id={}", ask.id))
+        .arg(format!("--id=bcachefs:UUID={}", ask.uuid))
         // 0 is systemd-ask-password's own spelling of "wait indefinitely".
         .arg(format!("--timeout={}", ask.timeout.map_or(0, |t| t.as_secs())))
         .arg("-n")
@@ -327,14 +345,14 @@ fn ask_on_terminal(ask: &Ask<'_>, watch: Option<&mut dyn Watch>) -> Result<Answe
     // stdout, not stdin: the question is read where it is drawn, and the two
     // can be different files. With no choices to list, the summary goes on the
     // prompt's line.
-    let sep = if ask.choices.is_empty() { " " } else { "\n" };
+    let sep = if ask.lines.is_empty() { " " } else { "\n" };
     if ask.alarm && stdout().is_terminal() {
         print!("{}{sep}", ask.prompt.red().bold());
     } else {
         print!("{}{sep}", ask.prompt);
     }
-    for choice in &ask.choices {
-        println!("{choice}");
+    if !ask.lines.is_empty() {
+        println!("{}", ask.lines);
     }
     print!("{} ", ask.brief);
     stdout().flush()?;

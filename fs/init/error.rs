@@ -42,6 +42,7 @@ use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::{jiffies, time_after, HZ};
 use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg};
 use crate::util::printbuf::Msg;
+use crate::util::prompt::{Choice, Prompt, Question, Reply};
 use crate::util::workqueue::Queue;
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_ulong, CStr};
@@ -430,73 +431,52 @@ enum Answer {
     AllYes,
 }
 
-fn parse_answer(line: &[u8]) -> Option<Answer> {
-    match line.trim_ascii() {
-        b"n" => Some(Answer::No),
-        b"y" => Some(Answer::Yes),
-        b"N" => Some(Answer::AllNo),
-        b"Y" => Some(Answer::AllYes),
-        _    => None,
-    }
-}
-
-const ASK: &[u8] = b" (y,n, or Y,N for all errors of this type) ";
+const CHOICES: &[Choice<Answer>] = &[
+    Choice { key: 'y', aliases: &[], short: "",                  blurb: "", answer: Answer::Yes },
+    Choice { key: 'n', aliases: &[], short: "",                  blurb: "", answer: Answer::No },
+    Choice { key: 'Y', aliases: &[], short: "all of this type",  blurb: "", answer: Answer::AllYes },
+    Choice { key: 'N', aliases: &[], short: "none of this type", blurb: "", answer: Answer::AllNo },
+];
 
 /// The answer from whoever's running fsck, through its stdio redirect - No
 /// without one: with @trans unlocked, and after two seconds, unlocked long.
 #[cfg(kernel)]
-fn ask_answer(fs: &Fs, trans: Option<&BtreeTrans<'_>>) -> Answer {
-    use kernel::ffi::{c_long, c_ulong};
+fn ask_answer(fs: &Fs, trans: Option<&BtreeTrans<'_>>, q: &Question<'_, Answer>) -> Answer {
+    use crate::util::prompt::Slow;
 
-    let Some(stdio) = crate::util::log::stdio_redirect(fs, true) else { return Answer::No };
+    let Some(p) = Prompt::for_fs(fs) else {
+        crate::util::log::print_user(fs, q.prompt.as_bytes());
+        return Answer::No;
+    };
 
     if let Some(t) = trans {
         t.unlock();
     }
-    let mut unlock_long_at = trans.map(|_| jiffies().wrapping_add(HZ * 2));
-    let mut line = KVVec::new();
+    let mut unlock_long = trans.map(|t| move || t.unlock_long());
+    let slow = unlock_long.as_mut()
+        .map(|then| Slow { after: core::time::Duration::from_secs(2), then });
 
-    loop {
-        crate::util::log::print_user(fs, ASK);
-        loop {
-            let timeout = match unlock_long_at {
-                Some(at) => (at.wrapping_sub(jiffies()) as c_long).max(0) as c_ulong,
-                None     => c_long::MAX as c_ulong,
-            };
-            match stdio.readline_timeout(&mut line, timeout) {
-                Ok(()) => break,
-                Err(e) if e.matches(c::ETIME) => {
-                    if let Some(t) = trans {
-                        t.unlock_long();
-                    }
-                    unlock_long_at = None;
-                }
-                Err(_) => return Answer::No,
-            }
-        }
-        if let Some(a) = parse_answer(&line) {
-            return a;
-        }
+    match p.put(q, slow) {
+        Reply::Answer(a) => a,
+        Reply::Settled | Reply::Unanswered => Answer::No,
     }
 }
 
-/// The answer on stdin; its end is fatal.
+/// The answer on stdin, or through an agent; its end is fatal.
 #[cfg(not(kernel))]
-fn ask_answer(_: &Fs, _: Option<&BtreeTrans<'_>>) -> Answer {
-    use std::io::{BufRead, Write};
-
-    loop {
-        let mut out = std::io::stdout();
-        let _ = out.write_all(ASK);
-        let _ = out.flush();
-
-        let mut line = std::string::String::new();
-        if !matches!(std::io::stdin().lock().read_line(&mut line), Ok(n) if n > 0) {
+fn ask_answer(fs: &Fs, _: Option<&BtreeTrans<'_>>, q: &Question<'_, Answer>) -> Answer {
+    let reply = match Prompt::detect() {
+        Some(p) => p.put(q, None).ok(),
+        None => {
+            crate::util::log::print_user(fs, q.prompt.as_bytes());
+            None
+        }
+    };
+    match reply {
+        Some(Reply::Answer(a)) => a,
+        _ => {
             std::eprintln!("error reading from standard input");
             std::process::exit(1);
-        }
-        if let Some(a) = parse_answer(line.as_bytes()) {
-            return a;
         }
     }
 }
@@ -508,9 +488,18 @@ fn ask(fs: &Fs, trans: Option<&BtreeTrans<'_>>, question: &mut Printbuf, action:
 {
     write!(question, ", ");
     question.write_bytes(action);
-    crate::util::log::print_user(fs, question.as_bytes());
 
-    let a = ask_answer(fs, trans);
+    let mut uuid = Printbuf::new();
+    prt!(&mut uuid, "{}", fs.sb.user_uuid());
+    let q = Question {
+        prompt:  question.as_str(),
+        choices: CHOICES,
+        silence: None,
+        alarm:   false,
+        uuid:    uuid.as_str(),
+        timeout: None,
+    };
+    let a = ask_answer(fs, trans, &q);
     if let Some(t) = trans {
         t.relock()?;
     }

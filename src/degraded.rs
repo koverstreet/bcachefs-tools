@@ -268,6 +268,7 @@ pub fn append_opt(fs_opts: Option<String>, opt: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bcachefs_kernel::util::Printbuf;
 
     fn q(prompt: &str) -> Question<'_, Answer> {
         Question {
@@ -297,13 +298,16 @@ mod tests {
     /// Enter will do.
     #[test]
     fn the_summary_names_the_answers_and_marks_the_default() {
-        assert_eq!(q("").brief(), "[y / r=read-only / N]");
+        let (mut brief, mut lines) = (Printbuf::new(), Printbuf::new());
+        q("").brief(&mut brief);
+        q("").lines(&mut lines);
 
-        assert_eq!(q("").lines(), [
+        assert_eq!(brief.as_str(), "[y / r=read-only / N]");
+        assert_eq!(lines.as_str(), [
             "  y  mount",
             "  r  mount read-only: nothing gets written or re-replicated",
             "  n  don't mount",
-        ]);
+        ].join("\n"));
     }
 
     #[test]
