@@ -4,20 +4,19 @@
 
 /* Included after btree/types_gen.h. */
 
-static inline size_t btree_cache_list_nr(const struct btree_cache_list *l)
+static inline size_t btree_cache_list_nr(const struct bch_fs_btree_cache *bc, unsigned i)
 {
-	return l->nr_clean + l->nr_dirty;
+	return bc->live_nr[i].nr_clean + bc->live_nr[i].nr_dirty;
 }
 
 static inline size_t btree_cache_nr_live(const struct bch_fs_btree_cache *bc)
 {
-	return btree_cache_list_nr(&bc->live[0]) +
-		btree_cache_list_nr(&bc->live[1]);
+	return btree_cache_list_nr(bc, 0) + btree_cache_list_nr(bc, 1);
 }
 
 static inline size_t btree_cache_nr_dirty(const struct bch_fs_btree_cache *bc)
 {
-	return bc->live[0].nr_dirty + bc->live[1].nr_dirty;
+	return bc->live_nr[0].nr_dirty + bc->live_nr[1].nr_dirty;
 }
 
 /* iter flags must fit in struct btree_iter.flags: */

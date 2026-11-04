@@ -107,8 +107,6 @@ c_enum! {
 pub struct btree_cache_list {
     pub idx: c_uint,
     pub shrink: *mut cs::shrinker,
-    pub nr_clean: usize,
-    pub nr_dirty: usize,
     pub clean: cs::list_head,
     pub dirty: cs::list_head,
 }
@@ -225,10 +223,12 @@ impl BtreeRootsLive {
     }
 }
 
-/// bc->lock's: the freeable and freed lists, and the counts.
+/// bc->lock's: the live lists - unpinned and pinned - the freeable and freed
+/// lists, and the counts.
 #[repr(C)]
 #[derive(CStruct)]
 pub struct BtreeCacheLists {
+    pub live: [cs::btree_cache_list; 2],
     pub freeable: cs::list_head,
     pub freed_pcpu: cs::list_head,
     pub freed_nonpcpu: cs::list_head,
@@ -237,6 +237,33 @@ pub struct BtreeCacheLists {
     pub nr_freeable: usize,
     pub nr_reserve: usize,
     pub nr_by_btree: [usize; cs::BTREE_ID_NR as usize],
+}
+
+crate::published! {
+    /// A live list's nodes, clean and dirty: changed with its list, read
+    /// without bc->lock - the shrinker's count, the write throttle.
+    #[derive(CStruct)]
+    pub struct BtreeCacheLiveNr {
+        pub nr_clean: Volatile<usize>,
+        pub nr_dirty: Volatile<usize>,
+    }
+}
+
+crate::published! {
+    #[derive(CStruct)]
+    pub struct BtreeCacheLive {
+        pub live_nr: [BtreeCacheLiveNr; 2],
+    }
+}
+
+impl BtreeCacheLive {
+    pub fn nr_live(&self) -> usize {
+        self.live_nr.iter().map(|l| l.nr_clean.get() + l.nr_dirty.get()).sum()
+    }
+
+    pub fn nr_dirty(&self) -> usize {
+        self.live_nr.iter().map(|l| l.nr_dirty.get()).sum()
+    }
 }
 
 #[pin_data]
@@ -264,10 +291,9 @@ pub struct bch_fs_btree_cache {
      * should never grow past ~2-3 nodes in practice.
      */
     #[pin]
-    #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), (), "&bc->lock"))]
+    #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&bc->lock"))]
     #[c_lock("struct mutex_noio lock")]
-    pub lock: Locked<cs::mutex_noio, BtreeCacheLists>,
-    pub live: [cs::btree_cache_list; 2],
+    pub lock: Locked<cs::mutex_noio, BtreeCacheLists, BtreeCacheLive>,
 
     /* Number of nodes with BTREE_NODE_write_in_flight set. */
     pub nr_in_flight: AtomicIsize,

@@ -118,15 +118,11 @@ impl ToText for c::bch_fs_btree_cache {
 }
 
 impl c::bch_fs_btree_cache {
-    /// Ask the shrinker to free @nr nodes, as memory pressure would.
+    /// Ask the shrinker to free @nr nodes, as memory pressure would. Not
+    /// under bc->lock: the scan takes it.
     pub fn shrink(&self, nr: core::ffi::c_ulong) {
-        unsafe { crate::util::kernel::shrinker_scan(self.live[0].shrink, nr) }
-    }
-}
-
-impl c::btree_cache_list {
-    pub fn nr(&self) -> usize {
-        self.nr_clean + self.nr_dirty
+        let shrink = self.lock.lock().live[0].shrink;
+        unsafe { crate::util::kernel::shrinker_scan(shrink, nr) }
     }
 }
 
@@ -134,7 +130,7 @@ impl Fs {
     /// Bytes of btree nodes cached.
     pub fn btree_cache_size(&self) -> u64 {
         let bc = &self.btree.cache;
-        ((bc.live[0].nr() + bc.live[1].nr()) * self.opts.btree_node_size.get() as usize) as u64
+        (bc.lock.nr_live() * self.opts.btree_node_size.get() as usize) as u64
     }
 }
 

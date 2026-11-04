@@ -229,7 +229,7 @@ impl StateLockWrite<'_> {
            fs.recovery.runner.pass_done.get() >= c::bch_recovery_pass::BCH_RECOVERY_PASS_journal_replay {
             assert_eq!(fs.journal.lock.lock().last_empty_seq, fs.journal_cur_seq());
             assert!(fs.sb.clean.get() != 0);
-            assert!(fs.btree.cache.live.iter().all(|l| l.nr_dirty == 0));
+            assert!(fs.btree.cache.lock.nr_dirty() == 0);
             assert_eq!(fs.btree.key_cache.nr_dirty.load(Relaxed), 0);
             for wb in &fs.btree.write_buffer {
                 assert_eq!(wb.inc.keys.nr, 0);

@@ -39,9 +39,9 @@
  *   CLEAN     — bc->live[btree_node_pinned(b)].clean, hashed, b->data set,
  *               BTREE_NODE_dirty clear. Findable by lookup; the shrinker
  *               walks this list to reclaim. Counted in
- *               bc->live[pinned].nr_clean and bc->nr_by_btree[].
+ *               bc->live_nr[pinned].nr_clean and bc->nr_by_btree[].
  *   DIRTY     — bc->live[btree_node_pinned(b)].dirty, hashed, b->data set,
- *               BTREE_NODE_dirty set. Counted in bc->live[pinned].nr_dirty
+ *               BTREE_NODE_dirty set. Counted in bc->live_nr[pinned].nr_dirty
  *               and bc->nr_by_btree[]. Not shrinker-eligible until written
  *               out and transitioned to CLEAN.
  *
@@ -364,13 +364,13 @@ void bch2_node_pin(struct bch_fs *c, struct btree *b)
 
 		switch (b->cache_state) {
 		case BTREE_NODE_CACHE_CLEAN:
-			--bc->live[0].nr_clean;
-			++bc->live[1].nr_clean;
+			--bc->live_nr[0].nr_clean;
+			++bc->live_nr[1].nr_clean;
 			list_move_tail(&b->list, &bc->live[1].clean);
 			break;
 		case BTREE_NODE_CACHE_DIRTY:
-			--bc->live[0].nr_dirty;
-			++bc->live[1].nr_dirty;
+			--bc->live_nr[0].nr_dirty;
+			++bc->live_nr[1].nr_dirty;
 			list_move_tail(&b->list, &bc->live[1].dirty);
 			break;
 		default:
@@ -396,10 +396,10 @@ void bch2_btree_cache_unpin(struct bch_fs *c)
 	list_splice_tail_init(&bc->live[1].clean, &bc->live[0].clean);
 	list_splice_tail_init(&bc->live[1].dirty, &bc->live[0].dirty);
 
-	bc->live[0].nr_clean += bc->live[1].nr_clean;
-	bc->live[0].nr_dirty += bc->live[1].nr_dirty;
-	bc->live[1].nr_clean = 0;
-	bc->live[1].nr_dirty = 0;
+	bc->live_nr[0].nr_clean += bc->live_nr[1].nr_clean;
+	bc->live_nr[0].nr_dirty += bc->live_nr[1].nr_dirty;
+	bc->live_nr[1].nr_clean = 0;
+	bc->live_nr[1].nr_dirty = 0;
 }
 
 /*
@@ -565,10 +565,10 @@ int bch2_btree_node_transition_state_locked(struct bch_fs_btree_cache *bc, struc
 	/* Undo current state's bookkeeping. */
 	switch (b->cache_state) {
 	case BTREE_NODE_CACHE_CLEAN:
-		--bc->live[pinned].nr_clean;
+		--bc->live_nr[pinned].nr_clean;
 		break;
 	case BTREE_NODE_CACHE_DIRTY:
-		--bc->live[pinned].nr_dirty;
+		--bc->live_nr[pinned].nr_dirty;
 		break;
 	case BTREE_NODE_CACHE_FREEABLE:
 		--bc->nr_freeable;
@@ -585,11 +585,11 @@ int bch2_btree_node_transition_state_locked(struct bch_fs_btree_cache *bc, struc
 	case BTREE_NODE_CACHE_NONE:
 		break;
 	case BTREE_NODE_CACHE_CLEAN:
-		bc->live[pinned].nr_clean++;
+		bc->live_nr[pinned].nr_clean++;
 		list_add_tail(&b->list, &bc->live[pinned].clean);
 		break;
 	case BTREE_NODE_CACHE_DIRTY:
-		bc->live[pinned].nr_dirty++;
+		bc->live_nr[pinned].nr_dirty++;
 		list_add_tail(&b->list, &bc->live[pinned].dirty);
 		break;
 	case BTREE_NODE_CACHE_FREEABLE:
@@ -693,7 +693,7 @@ static inline size_t btree_cache_can_free(struct btree_cache_list *list)
 	struct bch_fs_btree_cache *bc =
 		container_of(list, struct bch_fs_btree_cache, live[list->idx]);
 
-	size_t can_free = list->nr_clean;
+	size_t can_free = bc->live_nr[list->idx].nr_clean;
 	if (!list->idx)
 		can_free = max_t(ssize_t, 0, can_free - bc->nr_reserve);
 	return can_free;
@@ -822,7 +822,7 @@ static unsigned long __bch2_btree_cache_scan(struct shrinker *shrink,
 	if (nr > can_free) {
 		/* during journal replay, dirty nodes get written instead: */
 		if (btree_cache_replay_writeback(c))
-			writeback = min_t(unsigned long, nr - can_free, list->nr_dirty);
+			writeback = min_t(unsigned long, nr - can_free, bc->live_nr[list->idx].nr_dirty);
 
 		bc->not_freed[BCH_BTREE_CACHE_NOT_FREED_cache_reserve] += nr - can_free - writeback;
 		nr = can_free;
@@ -901,7 +901,7 @@ static unsigned long bch2_btree_cache_count(struct shrinker *shrink,
 		return 0;
 
 	return btree_cache_can_free(list) +
-		(btree_cache_replay_writeback(c) ? READ_ONCE(list->nr_dirty) : 0);
+		(btree_cache_replay_writeback(c) ? READ_ONCE(bc->live_nr[list->idx].nr_dirty) : 0);
 }
 
 /*
@@ -915,7 +915,7 @@ static struct btree *btree_cache_replay_write_pick(struct bch_fs_btree_cache *bc
 
 	for (unsigned i = 0; i < ARRAY_SIZE(bc->live); i++) {
 		struct list_head *dirty = &bc->live[i].dirty;
-		size_t nr = bc->live[i].nr_dirty;
+		size_t nr = bc->live_nr[i].nr_dirty;
 		struct btree *b, *t;
 
 		list_for_each_entry_safe(b, t, dirty, list) {
@@ -1923,7 +1923,7 @@ void bch2_fs_btree_cache_exit(struct bch_fs *c)
 			btree_cache_exit_drain_node(c, bc, b);
 
 		BUG_ON(!bch2_journal_error(&c->journal) &&
-		       (bc->live[0].nr_dirty || bc->live[1].nr_dirty));
+		       (bc->live_nr[0].nr_dirty || bc->live_nr[1].nr_dirty));
 
 		list_splice(&bc->freed_pcpu, &bc->freed_nonpcpu);
 
@@ -1934,10 +1934,10 @@ void bch2_fs_btree_cache_exit(struct bch_fs *c)
 
 		for (unsigned i = 0; i < ARRAY_SIZE(bc->nr_by_btree); i++)
 			BUG_ON(bc->nr_by_btree[i]);
-		WARN_ON(bc->live[0].nr_clean);
-		WARN_ON(bc->live[0].nr_dirty);
-		WARN_ON(bc->live[1].nr_clean);
-		WARN_ON(bc->live[1].nr_dirty);
+		WARN_ON(bc->live_nr[0].nr_clean);
+		WARN_ON(bc->live_nr[0].nr_dirty);
+		WARN_ON(bc->live_nr[1].nr_clean);
+		WARN_ON(bc->live_nr[1].nr_dirty);
 		WARN_ON(bc->nr_freeable);
 		WARN_ON(atomic_long_read(&bc->nr_in_flight));
 		WARN_ON(atomic_long_read(&bc->nr_in_flight_inner));
@@ -2087,12 +2087,12 @@ __cold void bch2_btree_cache_to_text(struct printbuf *out, const struct bch_fs_b
 	if (!out->nr_tabstops)
 		printbuf_tabstop_push(out, 32);
 
-	prt_btree_cache_line(out, c, "live:",		btree_cache_list_nr(&bc->live[0]));
-	prt_btree_cache_line(out, c, "pinned:",		btree_cache_list_nr(&bc->live[1]));
+	prt_btree_cache_line(out, c, "live:",		btree_cache_list_nr(bc, 0));
+	prt_btree_cache_line(out, c, "pinned:",		btree_cache_list_nr(bc, 1));
 	prt_btree_cache_line(out, c, "vmalloc:",	bc->nr_vmalloc);
 	prt_btree_cache_line(out, c, "reserve:",	bc->nr_reserve);
 	prt_btree_cache_line(out, c, "freeable:",	bc->nr_freeable);
-	prt_btree_cache_line(out, c, "dirty:",		bc->live[0].nr_dirty + bc->live[1].nr_dirty);
+	prt_btree_cache_line(out, c, "dirty:",		bc->live_nr[0].nr_dirty + bc->live_nr[1].nr_dirty);
 	prt_btree_cache_line(out, c, "in flight:",	atomic_long_read(&bc->nr_in_flight));
 	prt_printf(out, "cannibalize lock:\t%s\n",	bc->alloc_lock ? "held" : "not held");
 	prt_newline(out);
