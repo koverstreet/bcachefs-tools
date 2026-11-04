@@ -413,7 +413,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 		if (err && (!j->err_seq || seq_wrote < j->err_seq))
 			j->err_seq = seq_wrote;
 
-		j->flushes_outstanding -= w->flush;
+		j->flushes_outstanding -= !JSET_NO_FLUSH(w->data);
 
 		if (!j->free_buf || j->free_buf_size < w->buf_size) {
 			swap(j->free_buf,	w->data);
@@ -477,7 +477,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 
 		struct closure_waitlist	wait = {{ xchg(&w->wait.list.first, JOURNAL_BUF_NOT_IN_FLIGHT) }};
 
-		if (wait.list.first > JOURNAL_BUF_FLUSH_NO_WAIT)
+		if (journal_buf_waiters(wait.list.first))
 			closure_wake_up(&wait);
 
 		completed = true;
@@ -583,8 +583,8 @@ static CLOSURE_CALLBACK(journal_write_done_flush)
 	 */
 	if (bch2_io_failures_empty(&w->failed) &&
 	    !bch2_journal_buf_flush_failed(w) &&
-	    w->wait.list.first > JOURNAL_BUF_FLUSH_NO_WAIT) {
-		struct closure_waitlist	wait = {{ xchg(&w->wait.list.first, NULL) }};
+	    journal_buf_waiters(w->wait.list.first)) {
+		struct closure_waitlist	wait = {{ xchg(&w->wait.list.first, JOURNAL_BUF_FLUSH) }};
 		closure_wake_up(&wait);
 	}
 
@@ -1048,7 +1048,7 @@ static bool journal_waitlist_add_batch(struct llist_node *first,
 		if (old && old <= JOURNAL_BUF_FLUSH_NO_WAIT)
 			return false;
 
-		last->next = old;
+		last->next = journal_buf_waiters(old) ? old : NULL;
 	} while (!try_cmpxchg(&wait->list.first, &old, first));
 
 	return true;
@@ -1059,7 +1059,7 @@ static bool journal_waitlist_splice(struct journal_buf *from,
 {
 	struct llist_node *first = xchg(&from->wait.list.first, JOURNAL_BUF_NOFLUSH), *last;
 
-	if (!first || first <= JOURNAL_BUF_FLUSH_NO_WAIT)
+	if (!journal_buf_waiters(first))
 		return true;
 
 	for (last = first; last->next; last = last->next)
@@ -1133,7 +1133,7 @@ static int __should_flush(struct journal *j, struct journal_buf *w, u64 seq)
 	 * none (flushers skip it) and must stay a flush write - and splicing
 	 * it would clobber the sentinel:
 	 */
-	if (w->wait.list.first > JOURNAL_BUF_FLUSH_NO_WAIT &&
+	if (journal_buf_waiters(w->wait.list.first) &&
 	    j->flushes_outstanding > 1) {
 		struct journal_buf *next = seq < journal_cur_seq(j)
 			? journal_seq_to_buf(j, seq + 1)
@@ -1190,63 +1190,67 @@ void bch2_journal_do_writes_locked(struct journal *j)
 
 	EBUG_ON(seq != le64_to_cpu(w->data->seq));
 
-	if (!w->flush_picked) {
-		int flush = should_flush(j, w, seq);
-		if (flush < 0)
+	int flush = should_flush(j, w, seq);
+	if (flush < 0)
+		return;
+
+	if (flush) {
+		/*
+		 * A flush waits for the writes before it to complete, and for
+		 * outstanding flushes to drain - and is decided only then, as it's
+		 * started: the wait word is the decision, made once, and until
+		 * it's made the write may yet become a noflush.
+		 */
+		if (j->flushes_outstanding > 1 ||
+		    j->seq_ondisk + 1 != seq)
 			return;
 
-		if (!flush) {
-			SET_JSET_NO_FLUSH(w->data, true);
-			w->data->last_seq	= 0;
-			w->last_seq		= 0;
-
-			j->nr_noflush_writes++;
-		} else {
-			/* We have to defer until outstanding journal writes are
-			 * drained - if we also defer setting w->flush, we might
-			 * be able to convert it to a nonflush and submit it
-			 * later
-			 */
-			if (j->flushes_outstanding > 1)
-				return;
-
-			struct jset *jset = w->data;
-
-			w->flush	= true;
-			j->last_flush_write = jiffies;
-			j->nr_flush_writes++;
-
-			clear_bit(JOURNAL_need_flush_write, &j->flags);
-			j->flushes_outstanding++;
-
-			/*
-			 * (Re-)arm the auto-commit timer: if nothing else
-			 * commits first, close + write the open entry in at most
-			 * journal_flush_delay.
-			 */
-			if (seq != journal_cur_seq(j))
-				mod_delayed_work(j->wq, &j->write_work,
-						 msecs_to_jiffies(c->opts.journal_flush_delay));
-			else
-				cancel_delayed_work(&j->write_work);
-
-			if (!c->opts.journal_rewind_discard_buffer_percent)
-				j->rewind_seq = le64_to_cpu(jset->seq) + 1;
-
-			struct jset_entry *end = vstruct_last(jset);
-			struct jset_entry_rewind_limit *r =
-				container_of(jset_entry_init(&end, sizeof(*r)),
-					     struct jset_entry_rewind_limit, entry);
-			r->entry.type	= BCH_JSET_ENTRY_rewind_limit;
-			r->seq		= cpu_to_le64(min(j->rewind_seq, seq  + 1));
-			le32_add_cpu(&jset->u64s, sizeof(*r) / sizeof(u64));
-		}
-
-		w->flush_picked = true;
+		/*
+		 * Lost to bch2_journal_noflush_seq(): a noflush, unless it's the
+		 * first write since the filesystem was clean, which must be a
+		 * flush whatever was promised - as __should_flush() asks first:
+		 */
+		flush = journal_buf_try_flush(w) ||
+			test_bit(JOURNAL_need_flush_write, &j->flags);
 	}
 
-	if (w->flush && j->seq_ondisk + 1 != seq)
-		return;
+	if (!flush) {
+		SET_JSET_NO_FLUSH(w->data, true);
+		w->data->last_seq	= 0;
+		w->last_seq		= 0;
+
+		j->nr_noflush_writes++;
+	} else {
+		struct jset *jset = w->data;
+
+		j->last_flush_write = jiffies;
+		j->nr_flush_writes++;
+
+		clear_bit(JOURNAL_need_flush_write, &j->flags);
+		j->flushes_outstanding++;
+
+		/*
+		 * (Re-)arm the auto-commit timer: if nothing else
+		 * commits first, close + write the open entry in at most
+		 * journal_flush_delay.
+		 */
+		if (seq != journal_cur_seq(j))
+			mod_delayed_work(j->wq, &j->write_work,
+					 msecs_to_jiffies(c->opts.journal_flush_delay));
+		else
+			cancel_delayed_work(&j->write_work);
+
+		if (!c->opts.journal_rewind_discard_buffer_percent)
+			j->rewind_seq = le64_to_cpu(jset->seq) + 1;
+
+		struct jset_entry *end = vstruct_last(jset);
+		struct jset_entry_rewind_limit *r =
+			container_of(jset_entry_init(&end, sizeof(*r)),
+				     struct jset_entry_rewind_limit, entry);
+		r->entry.type	= BCH_JSET_ENTRY_rewind_limit;
+		r->seq		= cpu_to_le64(min(j->rewind_seq, seq  + 1));
+		le32_add_cpu(&jset->u64s, sizeof(*r) / sizeof(u64));
+	}
 
 	j->seq_write_started = seq;
 	w->write_started = true;

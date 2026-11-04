@@ -73,10 +73,6 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u16)]
         pub bits: pub struct journal_buf_bits {
-            /* write has already been or waiting to be kicked off */
-            flush_picked:               bool,
-            flush:                      bool,
-
             separate_flush:             bool,
             need_flush_to_write_buffer: bool,
             write_started:              bool,
@@ -84,7 +80,7 @@ nest! {
             write_done:                 bool,
             empty:                      bool,
             has_overwrites:             bool,
-            __pad:                      u7,
+            __pad:                      u9,
         },
 
         /* must not be memset, only manipulated by xchg/cmpxchg */

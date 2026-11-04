@@ -179,6 +179,9 @@ static __cold void bch2_journal_buf_to_text(struct printbuf *out, struct journal
 	case (unsigned long) JOURNAL_BUF_FLUSH_NO_WAIT:
 		prt_str(out, "flush no wait");
 		break;
+	case (unsigned long) JOURNAL_BUF_FLUSH:
+		prt_str(out, "flush");
+		break;
 	default:
 		prt_str(out, "(waiters)");
 		break;
@@ -1065,10 +1068,10 @@ static int journal_buf_wait(struct journal_buf *buf, struct closure *cl)
 			atomic_sub(CLOSURE_WAITING + 1, &cl->remaining);
 			return first == JOURNAL_BUF_NOT_IN_FLIGHT ? -1 : 0;
 		}
-		cl->list.next = first;
+		cl->list.next = journal_buf_waiters(first) ? first : NULL;
 	} while (!try_cmpxchg(&buf->wait.list.first, &first, &cl->list));
 
-	return 1 + (first != NULL);
+	return 1 + journal_buf_waiters(first);
 }
 
 struct closure_waitlist *
@@ -1139,7 +1142,7 @@ __bch2_journal_flush_seq_async(struct journal *j, u64 seq, struct closure *cl)
 static noinline void journal_flush_seq_err_wake(struct closure_waitlist *wait)
 {
 	struct closure_waitlist w = {{ xchg(&wait->list.first, NULL) }};
-	if (w.list.first > JOURNAL_BUF_FLUSH_NO_WAIT)
+	if (journal_buf_waiters(w.list.first))
 		closure_wake_up(&w);
 }
 

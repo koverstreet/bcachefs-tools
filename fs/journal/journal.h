@@ -164,6 +164,14 @@ journal_seq_to_buf(struct journal *j, u64 seq)
 		: NULL;
 }
 
+/*
+ * buf->wait.list.first is the write's flush decision, and its flush waiters:
+ * NULL is undecided; NOFLUSH decided noflush; FLUSH, FLUSH_NO_WAIT or a list
+ * of waiters decided flush. It's decided by cmpxchg on this word, so the writer
+ * and bch2_journal_noflush_seq() don't both win - but for the first write after
+ * the filesystem was clean, see bch2_journal_do_writes_locked(). JSET_NO_FLUSH
+ * records the outcome in the jset.
+ */
 #define JOURNAL_BUF_NOT_IN_FLIGHT	((struct llist_node *) 1)
 #define JOURNAL_BUF_NOFLUSH		((struct llist_node *) 2)
 /*
@@ -175,6 +183,18 @@ journal_seq_to_buf(struct journal *j, u64 seq)
  * later entry, which by construction completes only after this one's sb write.
  */
 #define JOURNAL_BUF_FLUSH_NO_WAIT	((struct llist_node *) 3)
+/*
+ * A flush with no waiters, which flushers may attach to: the writer's pick, or
+ * what the early flush-completion signal leaves once it has woken the waiters.
+ * A waiter attached to it ends the list at NULL, not at the sentinel.
+ */
+#define JOURNAL_BUF_FLUSH		((struct llist_node *) 4)
+
+/* Real waiters, not one of the sentinels: */
+static inline bool journal_buf_waiters(struct llist_node *first)
+{
+	return first > JOURNAL_BUF_FLUSH;
+}
 
 static inline bool journal_buf_must_flush(struct journal_buf *buf)
 {
@@ -205,6 +225,15 @@ static inline bool journal_buf_try_noflush(struct journal_buf *buf)
 	} while (!try_cmpxchg(&buf->wait.list.first, &old, JOURNAL_BUF_NOFLUSH));
 
 	return true;
+}
+
+/* Decided a flush - false if journal_buf_try_noflush() got there first: */
+static inline bool journal_buf_try_flush(struct journal_buf *buf)
+{
+	struct llist_node *old = NULL;
+
+	return try_cmpxchg(&buf->wait.list.first, &old, JOURNAL_BUF_FLUSH) ||
+		old != JOURNAL_BUF_NOFLUSH;
 }
 
 static inline u64 journal_last_unallocated_seq(struct journal *j)
