@@ -701,44 +701,37 @@ fn keyring_key(desc: &core::ffi::CStr) -> Result<c::bch_key, BchError> {
     Err(BchError::from_raw(std::io::Error::last_os_error().raw_os_error().unwrap_or(0)))
 }
 
-/// The key derived from a passphrase, asked for on the terminal, if it's the
-/// one @sb's key is encrypted with.
+/// The key derived from a passphrase, asked for, if it's the one @sb's key is
+/// encrypted with.
 ///
 /// Whether it was the right passphrase used to be thrown away here: a wrong
 /// one handed back a garbage key and success, and the caller found out as a
 /// checksum error somewhere further on.
 #[cfg(not(kernel))]
 fn passphrase_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
-    use core::ffi::{c_char, CStr};
-
-    // c_src/crypto.h's
-    unsafe extern "C" {
-        fn read_passphrase(prompt: *const c_char) -> *mut c_char;
-    }
-
-    // SAFETY: the prompt a string; the passphrase a malloc()ed one, ours
-    let passphrase = unsafe {
-        let p = read_passphrase(c"Enter passphrase: ".as_ptr());
-        let len = CStr::from_ptr(p).count_bytes();
-        let passphrase = zeroize::Zeroizing::new(core::slice::from_raw_parts(p.cast::<u8>(), len).to_vec());
-        c::wipe(core::slice::from_raw_parts_mut(p.cast::<u8>(), len));
-        c::rust_kfree(p.cast());
-        passphrase
-    };
+    use crate::util::prompt::{read_passphrase, Given};
 
     let crypt = sb.crypt().expect("filesystem is not encrypted");
-    let mut sb_key = crypt.key.clone();
-    assert!(sb_key.is_encrypted(), "filesystem does not have encryption key");
+    assert!(crypt.key.is_encrypted(), "filesystem does not have encryption key");
 
-    let key = crypt.derive_passphrase(&passphrase)
-        .unwrap_or_else(|e| panic!("error deriving key from passphrase: {e}"));
-    sb_key.chacha20(&key, sb.nonce());
+    let reply = read_passphrase(sb, None, |passphrase| {
+        let key = crypt.derive_passphrase(passphrase)
+            .unwrap_or_else(|e| panic!("error deriving key from passphrase: {e}"));
+        let mut sb_key = crypt.key.clone();
+        sb_key.chacha20(&key, sb.nonce());
 
-    /*
-     * sb_key has just been decrypted in place: the right passphrase leaves
-     * the magic intact, so it is no longer "encrypted".
-     */
-    if sb_key.is_encrypted() { Err(BchError::from(c::ENOKEY)) } else { Ok(key) }
+        /*
+         * sb_key has just been decrypted in place: the right passphrase leaves
+         * the magic intact, so it is no longer "encrypted".
+         */
+        (!sb_key.is_encrypted()).then_some(key)
+    });
+
+    match reply {
+        Ok(Given::Taken(key)) => Ok(key),
+        Ok(Given::Rejected)   => Err(BchError::from(c::ENOKEY)),
+        _ => panic!("error reading passphrase"),
+    }
 }
 
 /// The user's key, for @sb: from the keyring - or in userspace, failing
