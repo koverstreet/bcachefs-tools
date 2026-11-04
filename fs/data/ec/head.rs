@@ -28,7 +28,7 @@ use crate::fs::Fs;
 use crate::locking::{ByteLock, Guard, Lockdep};
 use crate::sb::counters::events;
 use crate::util::alloc::flags::GFP_KERNEL;
-use crate::util::alloc::{gfp_flags, kbox_pin_init};
+use crate::util::alloc::kbox_pin_init;
 use crate::util::ffi::Opaque;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::Printbuf;
@@ -486,17 +486,17 @@ fn head_stage(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, h: &c::ec_st
         });
     }
 
-    // The buffers are the stripe's as soon as they're made: the GFP_KERNEL
-    // try, or the attempt after a restart from its relock, makes only what's
-    // still missing.
-    t.allocate_dropping_locks_big(|gfp| {
+    // The buffers are the stripe's as soon as they're made: the second try,
+    // with the locks dropped, or the attempt after a restart from its relock,
+    // makes only what's still missing.
+    t.allocate_dropping_locks_big(|| {
         if i.new_buf.is_none() {
             let wait = NonNull::new(req.cl).map_or(MemWait::Never, MemWait::Closure);
-            i.new_buf = Some(StripeBuf::new_whole_gfp(fs, i.new_stripe.stripe(), wait, gfp_flags(gfp))?);
+            i.new_buf = Some(StripeBuf::new_whole(fs, i.new_stripe.stripe(), wait)?);
         }
 
         if let Some(r) = i.reuse.as_mut().filter(|r| r.read == OldRead::NoBuf) {
-            r.buf = Some(StripeBuf::new_whole_gfp(fs, r.stripe.stripe(), MemWait::Never, gfp_flags(gfp))?);
+            r.buf = Some(StripeBuf::new_whole(fs, r.stripe.stripe(), MemWait::Never)?);
             r.read = OldRead::ToRead;
         }
         Ok(())

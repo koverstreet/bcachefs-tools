@@ -15,8 +15,8 @@
 //! Callers print a lock owner's stack from lock debugging - anywhere, as deep
 //! as the stack goes - so a symbol costs the stack little: the kernel's
 //! scratch for it is on the stack, a symbol's length, and demangling is on
-//! the heap (util/demangle.rs), GFP_NOWAIT, the name printed raw if that
-//! fails.
+//! the heap (util/demangle.rs), in a NORECLAIM scope, the name printed raw if
+//! that fails.
 
 use crate::c;
 use crate::errcode::ret_to_c;

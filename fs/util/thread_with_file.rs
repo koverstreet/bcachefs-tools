@@ -33,8 +33,9 @@
 //!  - The soft limit, STDIO_REDIRECT_BUFSIZE: a write may go past it rather
 //!    than split a line the thread is waiting for - waiting_for_line - and
 //!    the thread's own messages go in whole or not at all.
-//!  - Under the lock, a spinlock: each buffer is a Fifo<u8>, grown with
-//!    GFP_NOWAIT, or reserved before the lock where it mustn't fail. Copies
+//!  - Under the lock, a spinlock: each buffer is a Fifo<u8>, grown there -
+//!    the lock's NORECLAIM scope - or reserved before the lock where it
+//!    mustn't fail. Copies
 //!    to and from userspace are made there too, copy_*_user_nofault() after
 //!    faulting in: what doesn't copy stays where it was, and a copy is only
 //!    of what was faulted in - past that, it could fail every time.
@@ -265,7 +266,7 @@ impl StdioRedirect {
 
             let wrote = {
                 let mut b = out.lock();
-                b.data.reserve(msg.len(), flags::GFP_NOWAIT).is_ok() &&
+                b.data.reserve(msg.len(), flags::GFP_KERNEL).is_ok() &&
                     b.data.extend_from_slice(msg).is_ok()
             };
 
@@ -308,7 +309,7 @@ impl StdioRedirect {
 
             line.clear();
             let mut b = input.lock();
-            b.data.drain_with(n, |s| line.extend_from_slice(s, flags::GFP_NOWAIT).is_ok());
+            b.data.drain_with(n, |s| line.extend_from_slice(s, flags::GFP_KERNEL).is_ok());
             b.waiting_for_line = false;
             drop(b);
 
@@ -360,7 +361,7 @@ impl StdioRedirect {
                 if !b.waiting_for_line || b.data.iter().any(|&ch| ch == b'\n') {
                     makeroom = makeroom.min(STDIO_REDIRECT_BUFSIZE.saturating_sub(b.data.len()));
                 }
-                let _ = b.data.reserve(makeroom, flags::GFP_NOWAIT);
+                let _ = b.data.reserve(makeroom, flags::GFP_KERNEL);
 
                 let n = readable.min(b.data.free());
                 // SAFETY: a stretch copied is filled

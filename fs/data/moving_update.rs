@@ -28,7 +28,6 @@ use crate::data::update::{read_err_benign, IOPRIO_IDLE};
 use crate::errcode::BchError;
 use crate::data::update_task::{Body, Update, UpdateTask};
 use crate::util::refcount::RefGuard;
-use crate::util::alloc::gfp_flags;
 use crate::util::task::{Resume, Spawn};
 use core::ffi::{c_int, c_uint};
 use core::sync::atomic::Ordering::Relaxed;
@@ -141,7 +140,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
                           data_opts: &c::data_update_opts, found: Option<BadRef>) -> Result<(), BchError> {
     let btree = iter.btree();
 
-    t.allocate_dropping_locks(|gfp| moving.updates_reserve(gfp_flags(gfp)).map_err(|_| c::ENOMEM.into()))
+    t.allocate_dropping_locks(|| moving.updates_reserve().map_err(|_| c::ENOMEM.into()))
         .map_err(|e| if e.matches(c::ENOMEM) { t.fs().err(bch_errcode::BCH_ERR_ENOMEM_move_extent) } else { e })?;
 
     // SAFETY: flush_all() waits for every task before the context goes

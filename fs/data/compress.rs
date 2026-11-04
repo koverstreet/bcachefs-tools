@@ -47,7 +47,8 @@ use crate::{bch_err, btree::iter::lockrestart_do, btree_trans, fs::{Fs, SbLockGu
 use crate::errcode::{ret_to_c, BchError};
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
-use crate::util::{alloc::{flags::{GFP_KERNEL, GFP_NOWAIT, __GFP_NOWARN}, kmalloc, KVVec}, bio::{Bio, BioRange},
+use crate::locking::MemallocFlags;
+use crate::util::{alloc::{flags::GFP_KERNEL, kmalloc, KVVec}, bio::{Bio, BioRange},
                   ffi::Opaque, kernel::{unlikely, READ, WRITE}, late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
                   volatile::VolatileSlice, Printbuf, ToText};
 use core::ffi::{c_int, c_uint, c_void};
@@ -296,7 +297,11 @@ fn bounce_alloc(fs: &Fs, size: usize, rw: usize) -> Bbuf<'_> {
      * userspace - but it is root-only and explicitly unsafe, so we ignore
      * it.
      */
-    match kmalloc(size, GFP_KERNEL | __GFP_NOWARN) {
+    let p = {
+        let _nowarn = MemallocFlags::nowarn();
+        kmalloc(size, GFP_KERNEL)
+    };
+    match p {
         Ok(p) => Bbuf::new(fs, p, bb::BB_kmalloc, rw, size),
         Err(_) => Bbuf::new(fs, fs.compress.bounce[rw].alloc_raw(c::GFP_KERNEL), bb::BB_mempool, rw, size),
     }
@@ -707,12 +712,17 @@ fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], sr
      * the reserve that guarantees forward progress when memory is tight,
      * which is the only reason it has to exist at all.
      *
-     * GFP_NOWAIT because we're in the write path: if this can't be had
+     * NORECLAIM because we're in the write path: if this can't be had
      * cheaply, the reserve is right there.
      */
     let ws_size = compress_workspace_size(fs, t, level);
     let (mut owned, mut pooled) = (None, None);
-    let ws: &mut [MaybeUninit<u8>] = match KVVec::with_capacity(ws_size, GFP_NOWAIT | __GFP_NOWARN) {
+    let owned_ws = {
+        let _noreclaim = MemallocFlags::noreclaim();
+        let _nowarn = MemallocFlags::nowarn();
+        KVVec::with_capacity(ws_size, GFP_KERNEL)
+    };
+    let ws: &mut [MaybeUninit<u8>] = match owned_ws {
         Ok(v) => &mut owned.insert(v).spare_capacity_mut()[..ws_size],
         Err(_) => pooled.insert(fs.compress.workspace[t].alloc()).as_uninit_mut(),
     };

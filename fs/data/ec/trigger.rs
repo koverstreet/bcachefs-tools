@@ -509,8 +509,8 @@ pub fn ec_stripe_mem_alloc(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>) -> Re
     let fs = t.fs();
     let idx = iter.pos().offset;
 
-    t.allocate_dropping_locks(|gfp| {
-        if fs.gc.phase() != c::gc_phase::GC_PHASE_not_running && fs.ec.gc_stripe_alloc(idx, gfp).is_err() {
+    t.allocate_dropping_locks(|| {
+        if fs.gc.phase() != c::gc_phase::GC_PHASE_not_running && fs.ec.gc_stripe_alloc(idx, c::GFP_KERNEL).is_err() {
             return fs.throw(bch_errcode::BCH_ERR_ENOMEM_ec_stripe_mem_alloc);
         }
         Ok(())

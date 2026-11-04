@@ -22,7 +22,7 @@ use crate::data::ec::stripe::{shape, Shape, StripeKey, MAX_BLOCKS};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::util::{raid, Printbuf};
-use crate::util::alloc::{flags, kbox_pin_init, ABox, AVec, AllocError, ConstAlign, Flags, KBox};
+use crate::util::alloc::{kbox_pin_init, ABox, AVec, AllocError, ConstAlign, KBox};
 use crate::util::backref::BackRef;
 use crate::util::closure::{closure_wait, closure_wake_up};
 use crate::util::kernel::PAGE_SIZE;
@@ -146,16 +146,9 @@ pub struct StripeBuf {
 pub(crate) type BlockBuf = ABox<[u8], ConstAlign<PAGE_SIZE>>;
 
 /// A block's buffer of @bytes, not zeroed.
-fn block_buf(bytes: usize, gfp: Flags) -> Result<BlockBuf, AllocError> {
+fn block_buf(bytes: usize) -> Result<BlockBuf, AllocError> {
     let mut v = AVec::<u8, ConstAlign<PAGE_SIZE>>::new(PAGE_SIZE);
-    #[cfg(kernel)]
-    v.try_reserve_exact_gfp(bytes, gfp)?;
-    // aligned-vec's takes no flags
-    #[cfg(not(kernel))]
-    {
-        let _ = gfp;
-        v.try_reserve_exact(bytes).map_err(|_| AllocError)?;
-    }
+    v.try_reserve_exact(bytes).map_err(|_| AllocError)?;
     // SAFETY: within its capacity. Its bytes are as kvmalloc() left them,
     // as C's buffers were: read into, or written, before they're read
     unsafe { v.set_len(bytes) };
@@ -174,13 +167,6 @@ impl StripeBuf {
     /// them inline. Drop it when pin-init can.
     pub(crate) fn new(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, blocks: u32, offset: u32, size: u32,
                       wait: MemWait) -> Result<KBox<Self>, BchError> {
-        Self::new_gfp(fs, s, blocks, offset, size, wait, flags::GFP_KERNEL)
-    }
-
-    /// new(), as @gfp allows: allocate_dropping_locks()'s tries.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_gfp(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, blocks: u32, offset: u32, size: u32,
-                          wait: MemWait, gfp: Flags) -> Result<KBox<Self>, BchError> {
         let sh = shape(s);
         let granularity = 1u32 << sh.csum_granularity_bits;
         let end = offset + size;
@@ -212,7 +198,7 @@ impl StripeBuf {
             // got
             buf.blocks = blocks;
             for i in blocks_in(blocks) {
-                match block_buf(bytes, gfp) {
+                match block_buf(bytes) {
                     Ok(b) => buf.data[i] = Some(b),
                     Err(_) => return fs.throw(bch_errcode::BCH_ERR_ENOMEM_stripe_buf),
                 }
@@ -231,14 +217,8 @@ impl StripeBuf {
     pub(crate) fn new_whole(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, wait: MemWait)
         -> Result<KBox<Self>, BchError>
     {
-        Self::new_whole_gfp(fs, s, wait, flags::GFP_KERNEL)
-    }
-
-    pub(crate) fn new_whole_gfp(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, wait: MemWait, gfp: Flags)
-        -> Result<KBox<Self>, BchError>
-    {
         let sectors = s.v().sectors.get().into();
-        Self::new_gfp(fs, s, EC_BLOCKS_ALL, 0, sectors, wait, gfp)
+        Self::new(fs, s, EC_BLOCKS_ALL, 0, sectors, wait)
     }
 
     /// The window moved to the granule at @offset, for scrub's walk along a

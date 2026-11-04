@@ -13,7 +13,7 @@ use crate::errcode::{
     ret_to_result_void as ret_to_result,
 };
 use crate::fs::Fs;
-use crate::locking::{Guard, Locked, RawTimedLock};
+use crate::locking::{Guard, Locked, MemallocFlags, RawTimedLock};
 use crate::util::closure::ClosureRef;
 use crate::util::percpu::Counters;
 use crate::util::futex::EventCount;
@@ -1001,34 +1001,38 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.relock()
     }
 
-    /// What @alloc makes: tried GFP_NOWAIT, the locks held, and on ENOMEM
-    /// again GFP_KERNEL with them dropped - drop_locks_do(). C's
+    /// What @alloc makes: tried in a NORECLAIM scope, the locks held, and on
+    /// ENOMEM again with them dropped - drop_locks_do(). C's
     /// allocate_dropping_locks() and its variants. @alloc names its ENOMEM
     /// (an Option's None by .ok_or()), and it's thrown if the second try
     /// fails too; any other error is returned as is.
-    pub fn allocate_dropping_locks<T>(&self, alloc: impl FnMut(c::gfp_t) -> Result<T, BchError>)
+    pub fn allocate_dropping_locks<T>(&self, alloc: impl FnMut() -> Result<T, BchError>)
         -> Result<T, BchError>
     {
         self.allocate_dropping(alloc, || self.unlock())
     }
 
     /// allocate_dropping_locks(), for what can take a while to get - megabytes:
-    /// the GFP_KERNEL try lets go of SRCU too, unlock_long().
-    pub fn allocate_dropping_locks_big<T>(&self, alloc: impl FnMut(c::gfp_t) -> Result<T, BchError>)
+    /// the second try lets go of SRCU too, unlock_long().
+    pub fn allocate_dropping_locks_big<T>(&self, alloc: impl FnMut() -> Result<T, BchError>)
         -> Result<T, BchError>
     {
         self.allocate_dropping(alloc, || self.trans.unlock_long())
     }
 
-    fn allocate_dropping<T>(&self, mut alloc: impl FnMut(c::gfp_t) -> Result<T, BchError>, unlock: impl FnOnce())
+    fn allocate_dropping<T>(&self, mut alloc: impl FnMut() -> Result<T, BchError>, unlock: impl FnOnce())
         -> Result<T, BchError>
     {
-        match alloc(c::GFP_NOWAIT) {
+        let first = {
+            let _noreclaim = MemallocFlags::noreclaim();
+            alloc()
+        };
+        match first {
             Err(e) if e.matches(c::ENOMEM) => {}
             r => return r,
         }
         unlock();
-        let v = alloc(c::GFP_KERNEL).map_err(|e| {
+        let v = alloc().map_err(|e| {
             if e.matches(c::ENOMEM) { self.fs().err(bch_errcode(e.raw() as u32)) } else { e }
         })?;
         self.relock_or_nested()?;

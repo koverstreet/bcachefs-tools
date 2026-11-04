@@ -25,7 +25,8 @@
 //! step to move it back. An impl's own path is parsed and not printed: the
 //! steps between Skip and Unskip print nothing, and don't follow backrefs.
 
-use crate::util::alloc::flags::GFP_NOWAIT;
+use crate::locking::MemallocFlags;
+use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::util::Printbuf;
 use core::fmt::Write;
@@ -108,7 +109,8 @@ impl<'s> Demangler<'s, '_> {
         if self.steps.len() == MAX_STEPS {
             return Err(Raw);
         }
-        Ok(self.steps.push(s, GFP_NOWAIT)?)
+        let _noreclaim = MemallocFlags::noreclaim();
+        Ok(self.steps.push(s, GFP_KERNEL)?)
     }
 
     fn print(&mut self, s: &str) -> Result<(), Raw> {
@@ -634,7 +636,10 @@ fn v0(out: &mut Printbuf, sym: &str) -> Result<(), Raw> {
         bound: 0,
         steps: KVVec::new(),
     };
-    d.steps.reserve(32, GFP_NOWAIT)?;
+    {
+        let _noreclaim = MemallocFlags::noreclaim();
+        d.steps.reserve(32, GFP_KERNEL)?;
+    }
 
     d.run(Step::Path { in_value: true })?;
 

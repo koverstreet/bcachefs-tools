@@ -219,8 +219,8 @@ mod vfs {
         /// An ACL of @nr entries, to be filled in: unlocking @t to allocate
         /// if it has to - a restart then.
         fn alloc(t: &TransAttempt<'_, '_>, nr: u32) -> Result<PosixAcl, BchError> {
-            t.allocate_dropping_locks(|gfp| {
-                let gfp = crate::util::alloc::current_gfp_context_raw(gfp);
+            t.allocate_dropping_locks(|| {
+                let gfp = crate::util::alloc::current_gfp_context_raw(c::GFP_KERNEL);
                 NonNull::new(unsafe { c::posix_acl_alloc(nr, gfp) }).map(PosixAcl)
                     .ok_or(BchError::from(bch_errcode::BCH_ERR_ENOMEM_acl))
             })
@@ -295,11 +295,11 @@ mod vfs {
         /// a new one, as __posix_acl_chmod() makes, unlocking @t to allocate
         /// if it has to.
         fn chmod(self, t: &TransAttempt<'_, '_>, mode: c::umode_t) -> Result<PosixAcl, BchError> {
-            t.allocate_dropping_locks(|gfp| {
+            t.allocate_dropping_locks(|| {
                 // __posix_acl_chmod() consumes the reference it's given -
                 // failing too - so each try gets its own:
                 let mut acl = self.clone().into_raw();
-                let gfp = crate::util::alloc::current_gfp_context_raw(gfp);
+                let gfp = crate::util::alloc::current_gfp_context_raw(c::GFP_KERNEL);
                 let ret = ret_to_result(unsafe { c::__posix_acl_chmod(&mut acl, gfp, mode) });
                 let acl = NonNull::new(acl).map(PosixAcl);
                 ret?;

@@ -169,8 +169,7 @@ pub unsafe fn free_pinned<T>(p: *mut T) {
     drop(unsafe { MaybeRcuAlloc::<T, KVmalloc>::from_raw(core::ptr::NonNull::new_unchecked(p)) })
 }
 
-/// The allocator's Flags for @gfp, which is GFP_NOWAIT or GFP_KERNEL - the
-/// two allocate_dropping_locks() tries.
+/// The allocator's Flags for @gfp, a C caller's: GFP_NOWAIT or GFP_KERNEL.
 pub fn gfp_flags(gfp: crate::c::gfp_t) -> Flags {
     if gfp == crate::c::GFP_NOWAIT {
         flags::GFP_NOWAIT
@@ -340,10 +339,8 @@ pub fn kvrealloc_zeroed(p: *mut u8, old: usize, new: usize) -> Result<core::ptr:
 }
 
 /// @p, @old bytes of kvmalloc()'d memory - or none, null - as @new bytes,
-/// what was there kept: kvrealloc(). @gfp for where it can't sleep -
-/// GFP_NOWAIT, under a spinlock; elsewhere GFP_KERNEL, the caller's memalloc
-/// scope saying the rest. Aligned as kmalloc() aligns @new; kvfree_sized()
-/// takes it back.
+/// what was there kept: kvrealloc(), as @gfp and the task's memalloc scope
+/// say. Aligned as kmalloc() aligns @new; kvfree_sized() takes it back.
 pub fn kvrealloc(p: *mut u8, old: usize, new: usize, gfp: Flags)
     -> Result<core::ptr::NonNull<u8>, AllocError>
 {
@@ -405,7 +402,7 @@ mod abox {
     use core::marker::PhantomData;
     use core::ptr::NonNull;
     use super::KVmalloc;
-    use kernel::alloc::{flags::GFP_KERNEL, Allocator, Flags, NumaNode};
+    use kernel::alloc::{flags::GFP_KERNEL, Allocator, NumaNode};
 
     /// An alignment, as aligned-vec's: here only the compile-time one.
     pub trait Alignment {
@@ -447,12 +444,6 @@ mod abox {
 
         /// Room for exactly @additional more.
         pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), AllocError> {
-            self.try_reserve_exact_gfp(additional, GFP_KERNEL)
-        }
-
-        /// try_reserve_exact(), as @gfp allows - allocate_dropping_locks()'s
-        /// GFP_NOWAIT try: not the crate's.
-        pub fn try_reserve_exact_gfp(&mut self, additional: usize, gfp: Flags) -> Result<(), AllocError> {
             if additional <= self.cap - self.len {
                 return Ok(());
             }
@@ -460,7 +451,7 @@ mod abox {
             let old = (self.cap != 0).then_some(self.p.cast());
             // SAFETY: @old is KVmalloc's, of its layout, or none
             let p = unsafe {
-                KVmalloc::realloc(old, layout::<T, A>(cap)?, layout::<T, A>(self.cap)?, gfp, NumaNode::NO_NODE)
+                KVmalloc::realloc(old, layout::<T, A>(cap)?, layout::<T, A>(self.cap)?, GFP_KERNEL, NumaNode::NO_NODE)
             }?;
             self.p = p.cast();
             self.cap = cap;

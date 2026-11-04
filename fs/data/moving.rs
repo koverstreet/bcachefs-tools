@@ -30,7 +30,7 @@ use crate::errcode::BchError;
 use crate::format::DataType;
 use crate::fs::Fs;
 use crate::function_name;
-use crate::util::alloc::{alloc_pinned, free_pinned, AllocError, Flags};
+use crate::util::alloc::{alloc_pinned, flags::GFP_KERNEL, free_pinned, AllocError};
 use crate::util::refcount::Refcount;
 use crate::util::kthread::Kthread;
 use crate::util::task::{waiter, RunQueue};
@@ -301,8 +301,8 @@ impl<'a> Moving<'a> {
     }
 
     /// Room for one more update, for update_issue().
-    pub(crate) fn updates_reserve(&self, gfp: Flags) -> Result<(), AllocError> {
-        self.with_updates(|f| f.reserve(1, gfp))
+    pub(crate) fn updates_reserve(&self) -> Result<(), AllocError> {
+        self.with_updates(|f| f.reserve(1, GFP_KERNEL))
     }
 
     /// An update issued: its seq. @turn holds its turn to write till every

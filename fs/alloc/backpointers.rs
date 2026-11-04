@@ -52,7 +52,8 @@ use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::init::passes;
 use crate::init::progress::Progress;
-use crate::util::alloc::{flags::{GFP_KERNEL, __GFP_NOWARN}, KVVec};
+use crate::locking::MemallocFlags;
+use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{totalram_bytes, unlikely, PAGE_SIZE};
 use crate::util::log::LogMsg;
@@ -621,7 +622,11 @@ impl c::bp_scan_iter {
                 // warning, and a failed vmalloc() warns too
                 t.trans().unlock_long();
                 let more = self.batch.len().max(PAGE_SIZE / bp_size);
-                if self.batch.reserve(more, GFP_KERNEL | __GFP_NOWARN).is_ok() {
+                let grew = {
+                    let _nowarn = MemallocFlags::nowarn();
+                    self.batch.reserve(more, GFP_KERNEL).is_ok()
+                };
+                if grew {
                     return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_backpointer_scan_grow));
                 }
                 if self.batch.is_empty() {
