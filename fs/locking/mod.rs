@@ -30,6 +30,7 @@
 //! seqmutex API; locking.c, the C that Rust calls where C has a macro, or a
 //! static inline in one build or the other.
 
+pub mod bitlock;
 pub mod bytelock;
 mod compat;
 mod lock;
