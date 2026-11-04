@@ -202,7 +202,7 @@ static __cold void bch2_journal_buf_to_text(struct printbuf *out, struct journal
 static __cold void bch2_journal_bufs_to_text(struct printbuf *out, struct journal *j)
 {
 	lockdep_assert_held(&j->lock);
-	guard(printbuf_atomic)(out);
+	guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 
 	if (!out->nr_tabstops)
 		printbuf_tabstop_push(out, 24);
@@ -336,7 +336,7 @@ static void __journal_entry_close_one(struct journal *j, unsigned closed_val, bo
 
 	if (trace)
 		event_trace(c, journal_entry_close, msg, ({
-			guard(printbuf_atomic)(&msg);
+			guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 
 			prt_str(&msg, "entry size: ");
 			prt_human_readable_u64(&msg, vstruct_bytes(buf->data));
@@ -347,7 +347,8 @@ static void __journal_entry_close_one(struct journal *j, unsigned closed_val, bo
 	sectors = vstruct_blocks_plus(buf->data, c->block_bits,
 				      buf->u64s_reserved) << c->block_bits;
 	if (unlikely(sectors > buf->sectors)) {
-		CLASS(bch_log_msg_atomic, msg)(c);
+		guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
+		CLASS(bch_log_msg, msg)(c);
 		prt_printf(&msg.m, "journal entry overran reserved space: %u > %u\n",
 			   sectors, buf->sectors);
 		prt_printf(&msg.m, "buf u64s %u u64s reserved %u cur_entry_u64s %u block_bits %u\n",
@@ -459,14 +460,16 @@ static int __journal_entry_open_one(struct journal *j)
 		return bch_err_throw(c, journal_max_open);
 
 	if (unlikely(journal_cur_seq(j) >= JOURNAL_SEQ_MAX)) {
-		CLASS(bch_log_msg_atomic, msg)(c);
+		guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
+		CLASS(bch_log_msg, msg)(c);
 		prt_printf(&msg.m, "cannot start: journal seq overflow\n");
 		bch2_fs_emergency_read_only_locked(c, &msg.m);
 		return bch_err_throw(c, journal_shutdown);
 	}
 
 	if (unlikely(bch2_journal_seq_is_blacklisted(c, journal_cur_seq(j) + 1, false))) {
-		CLASS(bch_log_msg_atomic, msg)(c);
+		guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
+		CLASS(bch_log_msg, msg)(c);
 		prt_printf(&msg.m, "attempting to open blacklisted journal seq %llu\n",
 			   journal_cur_seq(j) + 1);
 		bch2_fs_emergency_read_only_locked(c, &msg.m);
@@ -1480,7 +1483,7 @@ __cold void __bch2_journal_debug_to_text(struct printbuf *out, struct journal *j
 	printbuf_tabstops_reset(out);
 	printbuf_tabstop_push(out, 28);
 
-	guard(printbuf_atomic)(out);
+	guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 	guard(rcu)();
 
 	s = READ_ONCE(j->reservations);

@@ -1044,16 +1044,15 @@ impl Fs {
 
             let (mut free, mut need_discard, mut reserve) = (0u64, 0u64, 0u64);
             {
-                let mut out = out.atomic();
                 let rcu = read_lock();
 
                 write!(out, "Devices eligible for allocation\n");
                 for ca in self.devs_rcu(&rcu).filter(|ca| self.dev_may_alloc(ca, req)) {
-                    Self::dev_alloc_debug_header(&mut out, ca);
+                    Self::dev_alloc_debug_header(out, ca);
                 }
                 write!(out, "Devices ineligible for allocation\n");
                 for ca in self.devs_rcu(&rcu).filter(|ca| !self.dev_may_alloc(ca, req)) {
-                    Self::dev_alloc_debug_header(&mut out, ca);
+                    Self::dev_alloc_debug_header(out, ca);
                 }
 
                 for ca in self.devs_rcu(&rcu) {
@@ -1250,19 +1249,17 @@ impl Dev {
 impl Fs {
     /// The open buckets - on @ca, or all of them.
     pub fn open_buckets_to_text(&self, out: &mut Printbuf, ca: Option<&Dev>) {
-        let mut out = out.atomic();
         for ob in &self.allocator.open_buckets {
             let l = ob.lock.lock();
             if let Some(ob) = ob.open_ref(&l).filter(|ob| ca.is_none_or(|ca| ob.id().dev() == ca.dev_idx)) {
-                ob.to_text(&mut out);
+                ob.to_text(out);
             }
         }
     }
 
     pub fn open_buckets_partial_to_text(&self, out: &mut Printbuf) {
-        let mut out = out.atomic();
         let g = self.allocator.freelist_lock.lock();
-        self.allocator.partial(&g).for_each(|ob| ob.to_text(&mut out));
+        self.allocator.partial(&g).for_each(|ob| ob.to_text(out));
     }
 }
 

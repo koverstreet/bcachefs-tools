@@ -11,7 +11,7 @@
 bool bch2_fs_inconsistent(struct bch_fs *c, const char *fmt, ...)
 {
 	CLASS(printbuf, buf)();
-	guard(printbuf_atomic)(&buf);
+	guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 
 	va_list args;
 	va_start(args, fmt);
@@ -24,7 +24,7 @@ bool bch2_fs_inconsistent(struct bch_fs *c, const char *fmt, ...)
 bool bch2_trans_inconsistent(struct btree_trans *trans, const char *fmt, ...)
 {
 	CLASS(printbuf, buf)();
-	guard(printbuf_atomic)(&buf);
+	guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 
 	va_list args;
 	va_start(args, fmt);

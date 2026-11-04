@@ -292,7 +292,7 @@ static bool lock_graph_remove_non_waiters(struct lock_graph *g,
 static void trace_would_deadlock(struct lock_graph *g, struct btree_trans *trans)
 {
 	event_inc_trace(trans->c, trans_restart_would_deadlock, buf, ({
-		guard(printbuf_atomic)(&buf);
+		guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 		prt_printf(&buf, "%s\n", trans->fn);
 		print_cycle(&buf, g);
 	}));
@@ -337,7 +337,7 @@ btree_trans_abort_preference(struct trans_waiting_for_lock *l,
 static noinline __noreturn void break_cycle_fail(struct lock_graph *g)
 {
 	CLASS(printbuf, buf)();
-	guard(printbuf_atomic)(&buf);
+	guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 
 	prt_printf(&buf, bch2_fmt(g->g->trans->c, "cycle of nofail locks"));
 
@@ -393,7 +393,7 @@ static int lock_graph_recursion_limit(struct lock_graph *g, struct btree_trans *
 {
 	if (!cycle)
 		event_inc_trace(trans->c, trans_restart_would_deadlock_recursion_limit, buf, ({
-			guard(printbuf_atomic)(&buf);
+			guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 			prt_str(&buf, trans->fn);
 		}));
 
@@ -437,7 +437,7 @@ static int waitlist_alloc_failed(struct lock_graph *g, struct printbuf *cycle)
 		return -1;
 
 	event_inc_trace(c, trans_restart_deadlock_waitlist_alloc, buf, ({
-		guard(printbuf_atomic)(&buf);
+		guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 		prt_str(&buf, g->g->trans->fn);
 	}));
 
@@ -448,11 +448,10 @@ int bch2_check_for_deadlock(struct btree_trans *trans, struct printbuf *cycle)
 {
 	btree_path_idx_t path_idx;
 
-	EBUG_ON(cycle && !cycle->atomic);
-
 	/* trans->paths is rcu protected vs. freeing */
 	guard(rcu)();
 	guard(preempt)();
+	guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 
 	struct lock_graph *g = this_cpu_ptr(&bch2_lock_graph);
 	g->nr = 0;

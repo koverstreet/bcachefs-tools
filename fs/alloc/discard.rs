@@ -208,7 +208,6 @@ impl Fs {
 
         prt!(out, "In flight:\n");
         let mut out = out.indent(2);
-        let mut out = out.atomic();
         // a mutex: taken before RCU, never under it
         let in_flight = d.in_flight.lock();
         let rcu = read_lock();

@@ -101,7 +101,6 @@ impl FoundBtreeNode {
         out.newline();
 
         let mut out = out.indent(2);
-        let mut out = out.atomic();
         let rcu = read_lock();
         for ptr in &self.ptrs {
             extent_ptr_to_text(&mut out, Some(fs), ptr, &rcu);

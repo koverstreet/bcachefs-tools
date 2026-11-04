@@ -442,11 +442,9 @@ static inline void bch2_log_msg_exit(struct bch_log_msg *msg)
 
 static inline struct bch_log_msg bch2_log_msg_init(struct bch_fs *c,
 						   unsigned loglevel,
-						   bool suppress,
-						   bool atomic)
+						   bool suppress)
 {
 	struct printbuf buf = PRINTBUF;
-	buf.atomic = atomic;
 	buf.suppress = suppress;
 	bch2_log_msg_start(c, &buf);
 	return (struct bch_log_msg) {
@@ -458,16 +456,12 @@ static inline struct bch_log_msg bch2_log_msg_init(struct bch_fs *c,
 
 DEFINE_CLASS(bch_log_msg, struct bch_log_msg,
 	     bch2_log_msg_exit(&_T),
-	     bch2_log_msg_init(c, LOGLEVEL_err, false, false),
+	     bch2_log_msg_init(c, LOGLEVEL_err, false),
 	     struct bch_fs *c)
 
 EXTEND_CLASS(bch_log_msg, _level,
-	     bch2_log_msg_init(c, loglevel, false, false),
+	     bch2_log_msg_init(c, loglevel, false),
 	     struct bch_fs *c, unsigned loglevel)
-
-EXTEND_CLASS(bch_log_msg, _atomic,
-	     bch2_log_msg_init(c, LOGLEVEL_err, false, true),
-	     struct bch_fs *c)
 
 /*
  * Open coded EXTEND_CLASS, because we need the constructor to be a macro for
@@ -485,6 +479,6 @@ static inline bool bch2_btree_is_clean(struct bch_fs *c, enum btree_id btree)
 	return c->sb.btrees_clean & BIT_ULL(btree);
 }
 #define class_bch_log_msg_ratelimited_constructor(_c)		\
-	bch2_log_msg_init(_c, 3, bch2_ratelimit(_c), false)
+	bch2_log_msg_init(_c, 3, bch2_ratelimit(_c))
 
 #endif /* _BCACHEFS_TYPES_H */

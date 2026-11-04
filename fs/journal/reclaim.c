@@ -105,7 +105,7 @@ void bch2_journal_set_watermark(struct journal *j)
 
 	if (changed)
 		event_inc_trace(c, journal_full, buf, ({
-			guard(printbuf_atomic)(&buf);
+			guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 			prt_printf(&buf, "low_on_space %u\n",	low_on_space);
 			prt_printf(&buf, "low_on_pin %u\n",	low_on_pin);
 			prt_printf(&buf, "watermark_open_buckets %u\n", j->watermark_open_buckets);
@@ -335,7 +335,7 @@ void bch2_journal_space_available(struct journal *j)
 	if (!nr_online) {
 		if (!(c->sb.features & BIT_ULL(BCH_FEATURE_small_image))) {
 			CLASS(printbuf, buf)();
-			guard(printbuf_atomic)(&buf);
+			guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 			prt_printf(&buf, "no writeable journal devices available\n");
 
 			for_each_member_device_rcu(c, ca, &c->allocator.rw_devs[BCH_DATA_journal])
@@ -1426,7 +1426,7 @@ __cold bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *
 	if (!atomic_read(&pin_list->count))
 		return false;
 
-	guard(printbuf_atomic)(out);
+	guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 
 	prt_printf(out, "%llu: count %u", *seq, atomic_read(&pin_list->count));
 	if (pin_list->unreplayed)

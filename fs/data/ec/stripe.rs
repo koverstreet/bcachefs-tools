@@ -319,7 +319,6 @@ pub fn bch2_stripe_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
     }
 
     let mut out = out.indent(2);
-    let mut out = out.atomic();
     let rcu = read_lock();
 
     let tail = &val[STRIPE_PTRS..];

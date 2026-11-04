@@ -121,8 +121,8 @@ static void bch2_print_maybe_redirect(struct stdio_redirect *stdio, const char *
 			fmt += 2;
 
 		/* We may be in atomic context, and nonblocking drops what won't fit */
+		guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 		CLASS(printbuf, buf)();
-		printbuf_atomic_inc(&buf);
 		prt_vprintf(&buf, fmt, args);
 		if (!buf.allocation_failure)
 			bch2_stdio_redirect_write(stdio, true, buf.buf, buf.pos);

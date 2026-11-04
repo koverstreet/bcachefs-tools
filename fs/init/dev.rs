@@ -1632,7 +1632,6 @@ impl Fs {
     pub fn devs_list_to_text(&self, out: &mut Printbuf, devs: &c::bch_devs_list) {
         // room first: under RCU it can only allocate atomically
         out.make_room_gfp(1024, c::GFP_KERNEL);
-        let mut out = out.atomic();
         let rcu = read_lock();
 
         for (i, &dev) in devs.as_slice().iter().enumerate() {

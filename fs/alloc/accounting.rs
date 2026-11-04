@@ -307,7 +307,6 @@ pub fn key_to_text(out: &mut Printbuf, fs: Option<&Fs>, pos: &DiskAccountingPos<
         Ok(A::dev_leaving(a)) => {
             let dev = a.dev;
             let rcu = rcu::read_lock();
-            let out = &mut *out.atomic();
             match fs.and_then(|fs| fs.dev_rcu(dev, &rcu)) {
                 Some(ca) => write!(out, "{} ", ca.name().to_str().unwrap_or("?")),
                 None => write!(out, "{dev} "),

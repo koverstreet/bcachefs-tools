@@ -47,7 +47,7 @@ use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_ulong, CStr};
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_export, CStruct, Init, TypeInfo};
-use crate::locking::Locked;
+use crate::locking::{Locked, MemallocFlags};
 use crate::new_lock;
 use crate::types::{RustOnly, rust_only};
 use pin_init::pin_data;
@@ -1071,10 +1071,10 @@ fn panic_after_error(fs: &Fs) -> ! {
 
 /// The inconsistency @msg says - in @t, whose queued updates go with it -
 /// acted on, and printed: whether we're going read-only. From atomic context
-/// too: the message doesn't sleep to grow.
+/// too: in a NORECLAIM scope, the message doesn't sleep to grow.
 fn fs_trans_inconsistent(fs: &Fs, t: Option<&TransAttempt<'_, '_>>, msg: &dyn ToText) -> bool {
-    let mut buf = Printbuf::new();
-    let mut out = buf.atomic();
+    let _noreclaim = MemallocFlags::noreclaim();
+    let mut out = Printbuf::new();
 
     log_msg_start(&mut out, fs.name());
     msg.to_text(&mut out);
@@ -1092,8 +1092,8 @@ fn fs_trans_inconsistent(fs: &Fs, t: Option<&TransAttempt<'_, '_>>, msg: &dyn To
 #[c_export]
 pub fn bch2_inconsistent_error(c: &Opaque<Fs>) -> bool {
     let fs = Fs::from_c(c);
-    let mut buf = Printbuf::new();
-    let mut out = buf.atomic();
+    let _noreclaim = MemallocFlags::noreclaim();
+    let mut out = Printbuf::new();
     out.indent_add_nextline(2);
 
     let ret = fs.inconsistent_error(&mut out);

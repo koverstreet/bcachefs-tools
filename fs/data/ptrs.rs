@@ -629,7 +629,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
 
         fs.event_add_trace(events::cached_ptr_drop, k.k.size.into(), |out| {
             write!(out, "{why}\ndropping pointer\n  ");
-            extent_ptr_to_text(&mut out.atomic(), Some(fs), &ptr, &read_lock());
+            extent_ptr_to_text(out, Some(fs), &ptr, &read_lock());
             crate::prt!(out, "\nfrom:\n{}", k.to_text(fs));
         });
 

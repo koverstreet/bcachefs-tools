@@ -175,7 +175,6 @@ impl<const N: usize> IoFailures<N> {
             for f in self.devs() {
                 out.make_room_gfp(1024, c::GFP_KERNEL);
                 {
-                    let mut out = out.atomic();
                     let rcu = read_lock();
                     match fs.dev_rcu(f.dev.into(), &rcu) {
                         Some(ca) => write!(out, "{ca}"),

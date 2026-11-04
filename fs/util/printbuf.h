@@ -27,10 +27,8 @@
  *
  * Memory allocation: Outputing to a printbuf may allocate memory. This
  * allocation is done with GFP_KERNEL, by default: use the newer
- * memalloc_*_(save|restore) functions as needed.
- *
- * Since no equivalent yet exists for GFP_ATOMIC/GFP_NOWAIT, memory allocations
- * will be done with GFP_NOWAIT if printbuf->atomic is nonzero.
+ * memalloc_*_(save|restore) functions as needed - PF_MEMALLOC_NORECLAIM in
+ * atomic context.
  *
  * It's allowed to grab the output buffer and free it later with kfree() instead
  * of using printbuf_exit(), if the user just needs a heap allocated string at
@@ -132,26 +130,6 @@ static inline void printbuf_reset(struct printbuf *buf)
 {
 	bch2_printbuf_reset(buf);
 }
-
-/**
- * printbuf_atomic_inc - mark as entering an atomic section
- */
-static inline void printbuf_atomic_inc(struct printbuf *buf)
-{
-	buf->atomic++;
-}
-
-/**
- * printbuf_atomic_inc - mark as leaving an atomic section
- */
-static inline void printbuf_atomic_dec(struct printbuf *buf)
-{
-	buf->atomic--;
-}
-
-DEFINE_GUARD(printbuf_atomic, struct printbuf *,
-	     printbuf_atomic_inc(_T),
-	     printbuf_atomic_dec(_T));
 
 DEFINE_GUARD(printbuf_indent, struct printbuf *,
 	     bch2_printbuf_indent_add(_T, 2),

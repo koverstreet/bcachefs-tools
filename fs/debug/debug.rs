@@ -211,9 +211,8 @@ impl DebugFile for CachedBtreeNodes {
                 return Ok(false);
             }
 
-            let mut out = out.atomic();
             for b in table.bucket(self.bucket) {
-                cached_btree_node_to_text(&mut out, fs, b);
+                cached_btree_node_to_text(out, fs, b);
             }
             self.bucket += 1;
             Ok(true)
@@ -436,7 +435,7 @@ impl PrintOnce for BtreeDeadlock {
     fn print(fs: &Fs, out: &mut Printbuf) {
         let mut cursor = 0;
         let Ok(()) = fs.for_each_trans_from(&mut cursor, |_| true, |t| {
-            let found = t.check_for_deadlock(&mut out.atomic());
+            let found = t.check_for_deadlock(out);
             drop(t);
             Ok::<_, Infallible>(if found { ControlFlow::Break(()) } else { ControlFlow::Continue(()) })
         });

@@ -384,7 +384,6 @@ impl Fs {
         match target {
             Target::Null => write!(out, "none"),
             Target::Dev(d) => {
-                let mut out = out.atomic();
                 let rcu = read_lock();
 
                 match self.dev_rcu(d, &rcu) {
@@ -436,11 +435,10 @@ pub trait SbDiskGroupsMut: SbResize {
 impl<T: SbResize + ?Sized> SbDiskGroupsMut for T {}
 
 fn disk_path_to_text(out: &mut Printbuf, fs: Option<&Fs>, v: u32) {
-    let mut out = out.atomic();
     let rcu = read_lock();
     let groups = fs.map_or(&[][..], |fs| fs.disk_groups.read(&rcu));
 
-    disk_path_to_text_in(&mut out, groups, v);
+    disk_path_to_text_in(out, groups, v);
 }
 
 fn target_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, target: Target) {
@@ -524,7 +522,6 @@ impl Fs {
     pub fn disk_groups_to_text(&self, out: &mut Printbuf) {
         out.make_room_gfp(4096, c::GFP_KERNEL);
 
-        let mut out = out.atomic();
         let rcu = read_lock();
         let groups = self.disk_groups.read(&rcu);
 
@@ -532,7 +529,7 @@ impl Fs {
             write!(out, "{i:2}: ");
 
             if !e.deleted {
-                disk_path_to_text_in(&mut out, groups, i as u32);
+                disk_path_to_text_in(out, groups, i as u32);
 
                 write!(out, " devs");
                 for ca in self.devs_rcu_in(e.devs.d.iter(), &rcu) {

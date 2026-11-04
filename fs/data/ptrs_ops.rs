@@ -260,7 +260,6 @@ pub fn bkey_ptrs_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
         write!(out, "durability: {} ", k.durability_safe(fs).total);
     }
 
-    let mut out = out.atomic();
     let rcu = read_lock();
 
     for e in p.extent_entries(fs) {
@@ -274,13 +273,13 @@ pub fn bkey_ptrs_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
         }
 
         match e {
-            ExtentEntry::ptr(ptr) => extent_ptr_to_text(&mut out, Some(fs), ptr, &rcu),
+            ExtentEntry::ptr(ptr) => extent_ptr_to_text(out, Some(fs), ptr, &rcu),
             ExtentEntry::crc32(_) | ExtentEntry::crc64(_) | ExtentEntry::crc128(_) =>
-                crc_unpacked_to_text(&mut out, &crc_unpack(k.k, e).expect("a crc")),
+                crc_unpacked_to_text(out, &crc_unpack(k.k, e).expect("a crc")),
             ExtentEntry::stripe_ptr(ec) => write!(out, "idx {} block {}", ec.idx(), ec.block()),
-            ExtentEntry::rebalance_v1(r) => extent_rebalance_v1_to_text(&mut out, Some(fs), r),
-            ExtentEntry::reconcile(r) => extent_reconcile_to_text(&mut out, Some(fs), r),
-            ExtentEntry::flags(f) => crate::util::names::prt_set::<c::bch_extent_flags_e>(&mut out, f.flags()),
+            ExtentEntry::rebalance_v1(r) => extent_rebalance_v1_to_text(out, Some(fs), r),
+            ExtentEntry::reconcile(r) => extent_reconcile_to_text(out, Some(fs), r),
+            ExtentEntry::flags(f) => crate::util::names::prt_set::<c::bch_extent_flags_e>(out, f.flags()),
             ExtentEntry::reconcile_bp(r) => write!(out, "idx {}", r.idx()),
             ExtentEntry::Unknown { bytes, .. } | ExtentEntry::Invalid { bytes, .. } |
             ExtentEntry::PastEnd { bytes, .. } => {

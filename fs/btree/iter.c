@@ -4451,7 +4451,7 @@ void bch2_btree_trans_to_text(struct printbuf *out, struct btree_trans *trans)
 
 	/* trans->paths is rcu protected vs. freeing */
 	guard(rcu)();
-	guard(printbuf_atomic)(out);
+	guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 
 	struct btree_path *paths = rcu_dereference(trans->paths);
 	if (!paths)

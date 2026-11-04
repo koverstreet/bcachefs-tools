@@ -899,7 +899,6 @@ impl Fs {
         {
             let mark = self.mark_lock().read();
             let rcu = read_lock();
-            let mut out = out.atomic();
             write!(out, "Currently calculated wait:\n");
             for ca in self.rw_devs_rcu(&rcu) {
                 prt!(out, "  {}:\t{}\n", ca, HumanReadable(dev_wait_amount(ca, &mark).0));

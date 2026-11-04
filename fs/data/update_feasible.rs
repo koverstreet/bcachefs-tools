@@ -65,7 +65,6 @@ impl Fs {
             out.newline();
         }
         let mut trace = trace.map(|out| out.indent(2));
-        let mut trace = trace.as_deref_mut().map(Printbuf::atomic);
 
         let watermark = watermark(data_opts);
         let cached = data_opts.write_flags.contains(w::BCH_WRITE_cached);

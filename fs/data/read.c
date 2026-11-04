@@ -748,7 +748,7 @@ noinline __cold
 static void data_read_reuse_race_trace(struct bch_read_bio *rbio)
 {
 	__event_trace(rbio->c, data_read_reuse_race, buf, ({
-		guard(printbuf_atomic)(&buf);
+		guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 		bch2_read_bio_to_text_atomic(&buf, rbio);
 	}));
 }

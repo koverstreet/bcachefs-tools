@@ -7,6 +7,7 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
+use crate::locking::MemallocFlags;
 use crate::{prt, sb_err_on};
 use crate::util::kernel::{ktime_get_real_seconds, nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
 use crate::util::workqueue::Queue;
@@ -1099,7 +1100,6 @@ impl Fs {
             write!(out, "(none)");
             return;
         }
-        let mut out = out.atomic();
         let rcu = read_lock();
         match self.dev_rcu(dev, &rcu) {
             Some(ca) => write!(out, "{ca}"),
@@ -1295,14 +1295,14 @@ impl Fs {
 
     /// A pointer to device @dev, which there isn't, from where there's no key
     /// to show: logged, with a backtrace, as an inconsistency. Safe from
-    /// atomic context - nothing it allocates can sleep.
+    /// atomic context - in a NORECLAIM scope, nothing it allocates can sleep.
     fn dev_missing_atomic(&self, dev: u32) {
         if dev == c::BCH_SB_MEMBER_INVALID {
             return;
         }
 
+        let _noreclaim = MemallocFlags::noreclaim();
         let mut buf = Printbuf::new();
-        let mut buf = buf.atomic();
 
         crate::util::log::log_msg_start(&mut buf, self.name());
         write!(buf, "pointer to {} device {dev}\n",

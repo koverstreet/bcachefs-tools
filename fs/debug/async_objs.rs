@@ -239,9 +239,8 @@ impl DebugFile for AsyncObjList {
                 return Ok(false);
             };
 
-            // atomic: under RCU, the printbuf mustn't sleep to grow. SAFETY:
-            // an object of the list's kind - but see the XXX
-            unsafe { to_text(&mut out.atomic(), fs, obj) };
+            // SAFETY: an object of the list's kind - but see the XXX
+            unsafe { to_text(out, fs, obj) };
             self.next = idx + 1;
             Ok(true)
         })

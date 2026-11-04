@@ -38,10 +38,8 @@ nest! {
         pub last_newline: c_uint,
         pub last_field: c_uint,
         pub indent: c_uint,
-        /*
-         * If nonzero, allocations will be done with GFP_ATOMIC:
-         */
-        pub atomic: u8,
+        /// Set by Probe::Job, until the job's write.
+        fmt_job: bool,
         #[c_bitfield]
         #>[bitfield(u8)]
         pub bits: pub struct printbuf_bits {
@@ -104,30 +102,10 @@ impl DerefMut for PrintbufIndent<'_> {
     fn deref_mut(&mut self) -> &mut Printbuf { self.buf }
 }
 
-/// Undoes Printbuf::atomic() on drop.
-pub struct PrintbufAtomic<'a> {
-    buf: &'a mut Printbuf,
-}
-
-impl Drop for PrintbufAtomic<'_> {
-    fn drop(&mut self) {
-        self.buf.atomic -= 1;
-    }
-}
-
-impl Deref for PrintbufAtomic<'_> {
-    type Target = Printbuf;
-    fn deref(&self) -> &Printbuf { self.buf }
-}
-
-impl DerefMut for PrintbufAtomic<'_> {
-    fn deref_mut(&mut self) -> &mut Printbuf { self.buf }
-}
-
 impl Printbuf {
     const fn empty() -> Self {
         Printbuf {
-            buf: core::ptr::null_mut(), size: 0, pos: 0, last_newline: 0, last_field: 0, indent: 0, atomic: 0,
+            buf: core::ptr::null_mut(), size: 0, pos: 0, last_newline: 0, last_field: 0, indent: 0, fmt_job: false,
             bits: printbuf_bits::new(), nr_tabstops: 0, cur_tabstop: 0,
             _tabstops: [0; c::PRINTBUF_INLINE_TABSTOPS as usize],
         }
@@ -269,13 +247,6 @@ impl Printbuf {
 
         self.indent += spaces;
         self.set_has_indent_or_tabstops(true);
-    }
-
-    /// Allocating as from atomic context - under RCU, a spinlock - until the
-    /// guard drops.
-    pub fn atomic(&mut self) -> PrintbufAtomic<'_> {
-        self.atomic += 1;
-        PrintbufAtomic { buf: self }
     }
 
     /*
@@ -440,18 +411,13 @@ impl Printbuf {
 
         let new_size = (self.size as usize + extra + 1).next_power_of_two();
 
-        let may_vmalloc = self.may_vmalloc() && self.atomic == 0;
-
         /* Sanity check... */
-        let max = if may_vmalloc { i32::MAX as usize } else { PAGE_SIZE << c::MAX_PAGE_ORDER };
+        let max = if self.may_vmalloc() { i32::MAX as usize } else { PAGE_SIZE << c::MAX_PAGE_ORDER };
 
         /*
          * Note: output buffer must be freeable with kfree(), it's not required
          * that the user use printbuf_exit().
          */
-        let gfp = if self.atomic == 0 { gfp } else { c::GFP_NOWAIT };
-        // what may be vmalloc()'d already is kvrealloc()'d atomic or not:
-        // krealloc() of a vmalloc() address is a bug
         let buf = if new_size <= max {
             unsafe { realloc(self.buf, new_size, gfp, self.may_vmalloc()) }
         } else {
@@ -1039,8 +1005,8 @@ pub fn prt_bdevname(out: &mut Printbuf, bdev: Option<&c::block_device>) {
 
 impl fmt::Write for Printbuf {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        if self.atomic & Printbuf::FMT_JOB != 0 {
-            self.atomic &= !Printbuf::FMT_JOB;
+        if self.fmt_job {
+            self.fmt_job = false;
             // after Probe::Job, pass_through()'s empty str: its address is
             // that of a job on pass_through()'s stack, exposed
             let job = unsafe {
@@ -1053,7 +1019,7 @@ impl fmt::Write for Printbuf {
         match Probe::of(s) {
             Some(Probe::IsPrintbuf) => return Err(fmt::Error),
             Some(Probe::Job) => {
-                self.atomic |= Printbuf::FMT_JOB;
+                self.fmt_job = true;
                 return Ok(());
             }
             None => {}
@@ -1315,7 +1281,7 @@ macro_rules! display_via_to_text {
 enum Probe {
     /// Answered with Err - the one bit write_str() returns - by a Printbuf.
     IsPrintbuf,
-    /// The next write is pass_through()'s job: Printbuf::FMT_JOB.
+    /// The next write is pass_through()'s job: Printbuf::fmt_job.
     Job,
 }
 
@@ -1332,13 +1298,6 @@ impl Probe {
     fn of(s: &str) -> Option<Probe> {
         Probe::ALL.into_iter().find(|q| core::ptr::eq(s.as_ptr(), q.as_str().as_ptr()))
     }
-}
-
-impl Printbuf {
-    /// Set by Probe::Job, until the job's write: the top bit of atomic, a
-    /// nesting count that never gets near it. Set only between two writes
-    /// that allocate nothing, so C's test of atomic never sees it.
-    const FMT_JOB: u8 = 1 << 7;
 }
 
 /// Whether @f writes to a Printbuf - not through a Formatter's PadAdapter
@@ -1360,7 +1319,7 @@ fn pass_through(f: &mut fmt::Formatter<'_>, job: &dyn Fn(&mut Printbuf)) -> fmt:
 }
 
 /// @t as Display: to_text() into the destination, if that's a Printbuf - its
-/// indent, tabstops and atomic as they are; else via a printbuf of its own.
+/// indent and tabstops as they are; else via a printbuf of its own.
 #[doc(hidden)]
 pub fn text_fmt(t: &(impl ToText + ?Sized), f: &mut fmt::Formatter<'_>) -> fmt::Result {
     if is_printbuf(f) {

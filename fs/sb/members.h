@@ -415,7 +415,7 @@ static inline void bch2_prt_member_name(struct printbuf *out, struct bch_fs *c, 
 		prt_str(out, "(none)");
 	} else {
 		guard(rcu)();
-		guard(printbuf_atomic)(out);
+		guard(memalloc_flags)(PF_MEMALLOC_NORECLAIM);
 		struct bch_dev *ca = c ? bch2_dev_rcu_noerror(c, idx) : NULL;
 		if (ca)
 			prt_str(out, ca->name);

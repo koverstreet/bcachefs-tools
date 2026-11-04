@@ -215,7 +215,6 @@ impl ToText for io_clock {
         out.tabstop_push(40);
         prt!(out, "current time:\t{}\n", self.now());
 
-        let mut out = out.atomic();
         for t in self.timers.lock().iter().rev() {
             prt!(out, "{}:\t{}\n", t.caller, t.expire);
         }
