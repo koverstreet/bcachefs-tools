@@ -20,7 +20,8 @@
 //! drop, as memalloc_flags_save() and _restore() pair: scoped (LIFO) use
 //! only. NOIO's, or NORECLAIM's or NOWARN's: those two are ours, in sched.h's
 //! PF__HOLE__ bits, so the page allocator doesn't know them - util::alloc
-//! applies them.
+//! applies them. What can't sleep - spinlocks, RCU, preemption or interrupts
+//! off - holds a NORECLAIM scope with its guard.
 
 #![allow(non_camel_case_types)]
 

@@ -97,7 +97,7 @@ use cstruct_macros::c_extern;
 
 use crate::c;
 use crate::locking::{rust_local_irq_restore, rust_local_irq_save, rust_local_lock_init, rust_local_lock_irqsave,
-                     rust_local_unlock_irqrestore};
+                     rust_local_unlock_irqrestore, MemallocFlags};
 use crate::util::alloc::{current_gfp_context_raw, AllocError};
 use crate::util::ffi::Opaque;
 use crate::util::projections::{AtomicWord, FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};
@@ -275,8 +275,12 @@ use arch::this_cpu_ptr;
 /// this CPU's.
 pub unsafe trait Pinned {}
 
-/// Preemption off while it lives. Not Send or Sync: it's this CPU's.
-pub struct CpuGuard(PhantomData<*const ()>);
+/// Preemption off while it lives, and a NORECLAIM scope. Not Send or Sync:
+/// it's this CPU's.
+pub struct CpuGuard {
+    _noreclaim: MemallocFlags,
+    _p:         PhantomData<*const ()>,
+}
 
 // SAFETY: preemption's off
 unsafe impl Pinned for CpuGuard {}
@@ -285,7 +289,7 @@ impl CpuGuard {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         unsafe { bch2_preempt_disable() };
-        CpuGuard(PhantomData)
+        CpuGuard { _noreclaim: MemallocFlags::noreclaim(), _p: PhantomData }
     }
 }
 
@@ -295,12 +299,14 @@ impl Drop for CpuGuard {
     }
 }
 
-/// This CPU's interrupts off while it lives, as local_irq_save(): for a slot
-/// interrupt handlers change too - a read bio's completion - which a
-/// CpuGuard's ThisCpu would race. Not Send or Sync: it's this CPU's.
+/// This CPU's interrupts off while it lives, as local_irq_save(), and a
+/// NORECLAIM scope: for a slot interrupt handlers change too - a read bio's
+/// completion - which a CpuGuard's ThisCpu would race. Not Send or Sync: it's
+/// this CPU's.
 pub struct IrqGuard {
-    flags: c_ulong,
-    _p:    PhantomData<*const ()>,
+    flags:      c_ulong,
+    _noreclaim: MemallocFlags,
+    _p:         PhantomData<*const ()>,
 }
 
 // SAFETY: interrupts off, so no preemption either
@@ -309,7 +315,8 @@ unsafe impl Pinned for IrqGuard {}
 impl IrqGuard {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        IrqGuard { flags: unsafe { rust_local_irq_save() }, _p: PhantomData }
+        let flags = unsafe { rust_local_irq_save() };
+        IrqGuard { flags, _noreclaim: MemallocFlags::noreclaim(), _p: PhantomData }
     }
 }
 
@@ -326,9 +333,10 @@ impl Drop for IrqGuard {
 /// lock with migration off, so what it guards may take sleeping locks. A
 /// ThisCpu under it is whole only for what the lock guards.
 pub struct LocalLockGuard<'a> {
-    pcp:   *mut c::local_lock_t,
-    flags: c_ulong,
-    _p:    PhantomData<(&'a c::local_lock_t, *const ())>,
+    pcp:        *mut c::local_lock_t,
+    flags:      c_ulong,
+    _noreclaim: MemallocFlags,
+    _p:         PhantomData<(&'a c::local_lock_t, *const ())>,
 }
 
 // SAFETY: migration's off while it's held - by the lock on RT, interrupts
@@ -584,7 +592,7 @@ impl<'a> PerCpuRef<'a, Opaque<c::local_lock_t>> {
         let pcp = self.0.cast::<c::local_lock_t>();
         // SAFETY: live for 'a, and initialized
         let flags = unsafe { rust_local_lock_irqsave(pcp) };
-        LocalLockGuard { pcp, flags, _p: PhantomData }
+        LocalLockGuard { pcp, flags, _noreclaim: MemallocFlags::noreclaim(), _p: PhantomData }
     }
 }
 

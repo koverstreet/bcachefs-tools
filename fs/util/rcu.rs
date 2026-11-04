@@ -49,6 +49,7 @@ use cstruct_macros::c_extern;
 
 use crate::c;
 use crate::data_structures::dst_array::{DstArray, DstHead};
+use crate::locking::MemallocFlags;
 use crate::util::alloc::AllocError;
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::projections::Publish;
@@ -67,11 +68,12 @@ unsafe extern "C" {
 
 // ── Reading ──────────────────────────────────────────────────────────────
 
-/// Not Send: the section is the thread's.
+/// Not Send: the section is the thread's. A NORECLAIM scope while it lives.
 pub struct ReadGuard {
     #[cfg(kernel)]
-    _guard:   kernel::sync::rcu::Guard,
-    _not_send: PhantomData<*mut ()>,
+    _guard:     kernel::sync::rcu::Guard,
+    _noreclaim: MemallocFlags,
+    _not_send:  PhantomData<*mut ()>,
 }
 
 pub fn read_lock() -> ReadGuard {
@@ -80,8 +82,9 @@ pub fn read_lock() -> ReadGuard {
 
     ReadGuard {
         #[cfg(kernel)]
-        _guard:   kernel::sync::rcu::read_lock(),
-        _not_send: PhantomData,
+        _guard:     kernel::sync::rcu::read_lock(),
+        _noreclaim: MemallocFlags::noreclaim(),
+        _not_send:  PhantomData,
     }
 }
 

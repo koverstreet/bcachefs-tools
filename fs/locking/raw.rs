@@ -17,7 +17,7 @@
 
 use super::RawLock;
 use super::RawRwLock;
-use super::{RawNestedLock, RawTryLock};
+use super::{MemallocFlags, RawNestedLock, RawTryLock};
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::ffi::{c_char, Opaque};
@@ -150,7 +150,7 @@ unsafe impl RawNestedLock for c::mutex {
 // SpinLock leaves interrupts on. In userspace, where there are no
 // interrupts, it's the shim's spinlock, a pthread mutex.
 unsafe impl RawLock for c::spinlock_t {
-    type GuardState = c_ulong;
+    type GuardState = (c_ulong, MemallocFlags);
     type InitError = Infallible;
 
     unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
@@ -158,11 +158,12 @@ unsafe impl RawLock for c::spinlock_t {
         Ok(())
     }
 
-    unsafe fn lock(&self) -> c_ulong {
-        unsafe { rust_spin_lock_irqsave(self.as_ptr().cast()) }
+    unsafe fn lock(&self) -> (c_ulong, MemallocFlags) {
+        let flags = unsafe { rust_spin_lock_irqsave(self.as_ptr().cast()) };
+        (flags, MemallocFlags::noreclaim())
     }
 
-    unsafe fn unlock(&self, flags: c_ulong) {
+    unsafe fn unlock(&self, (flags, _noreclaim): (c_ulong, MemallocFlags)) {
         unsafe { rust_spin_unlock_irqrestore(self.as_ptr().cast(), flags) }
     }
 
@@ -176,7 +177,7 @@ unsafe impl RawLock for c::spinlock_t {
 // Taken with interrupts as they are, for what no interrupt takes - a lock's
 // wait list. A spinning lock on PREEMPT_RT too, where spinlock_t sleeps.
 unsafe impl RawLock for c::raw_spinlock_t {
-    type GuardState = ();
+    type GuardState = MemallocFlags;
     type InitError = Infallible;
 
     unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
@@ -184,11 +185,12 @@ unsafe impl RawLock for c::raw_spinlock_t {
         Ok(())
     }
 
-    unsafe fn lock(&self) {
-        unsafe { rust_raw_spin_lock(self.0.as_ptr().cast()) }
+    unsafe fn lock(&self) -> MemallocFlags {
+        unsafe { rust_raw_spin_lock(self.0.as_ptr().cast()) };
+        MemallocFlags::noreclaim()
     }
 
-    unsafe fn unlock(&self, _: ()) {
+    unsafe fn unlock(&self, _noreclaim: MemallocFlags) {
         unsafe { rust_raw_spin_unlock(self.0.as_ptr().cast()) }
     }
 
