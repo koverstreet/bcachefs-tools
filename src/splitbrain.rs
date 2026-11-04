@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use log::warn;
 
-use bcachefs_kernel::util::prompt::{fs_name, Choice, Prompt, Question, NO_ONE_TO_ASK, PROMPT_TIMEOUT};
+use bcachefs_kernel::util::prompt::{fs_name, Choice, Prompt, Question, Reply, NO_ONE_TO_ASK, PROMPT_TIMEOUT};
 use bcachefs_kernel::c;
 use bcachefs_kernel::init::dev::dev_in_fs;
 use bcachefs_kernel::fs::newest;
@@ -201,23 +201,23 @@ pub fn ask(sb: &bch_sb_handle) -> Result<bool> {
 
     // Moot cannot happen: a device arriving does not un-diverge anything, so
     // no watch is passed.
-    Ok(p.put(&Question {
+    Ok(matches!(p.put(&Question {
         prompt:  &format!("Continue with {name}'s surviving history?"),
         choices: CHOICES,
-        silence: false,
+        silence: Some(false),
         // Not an alarm: what this question risks is in the report the scan
         // already printed above it, not in the one line here.
         alarm:   false,
         uuid:    &uuid,
         timeout: Some(PROMPT_TIMEOUT),
-    }, None)?.unwrap_or(false))
+    }, None)?, Reply::Answer(true)))
 }
 
 /// Only an explicit `c` continues, and note what is *not* here: `y`.
 ///
 /// This is not a yes/no. Someone answering a prompt they did not read out of
 /// habit should not thereby choose which of two histories to keep - so `y`
-/// matches nothing and falls to silence, which refuses.
+/// matches nothing, and is asked again.
 const CHOICES: &[Choice<bool>] = &[
     Choice { key: 'c', aliases: &["continue"], short: "continue",
              blurb: "continue, leaving the diverged device(s) out of this mount",
@@ -246,21 +246,25 @@ fn other_side(sbs: &[(PathBuf, bch_sb_handle)], divergent: &[Divergent]) -> Stri
 mod tests {
     use super::*;
 
-    fn parse(reply: &str) -> bool {
+    fn parse(reply: &str) -> Option<bool> {
         Question {
             prompt: "", choices: CHOICES,
-            silence: false, alarm: false, uuid: "", timeout: None,
+            silence: Some(false), alarm: false, uuid: "", timeout: None,
         }.parse(reply)
     }
 
     #[test]
     fn only_an_explicit_c_continues() {
         for yes in ["c", "C", "continue", "Continue", " c ", "c\n"] {
-            assert!(parse(yes), "{yes:?} should continue");
+            assert_eq!(parse(yes), Some(true), "{yes:?} should continue");
         }
-        // "" is a bare Enter, and "y" is the habit this question must not honour.
-        for no in ["", " ", "n", "N", "no", "y", "Y", "yes", "f", "very", "cc", "x"] {
-            assert!(!parse(no), "{no:?} must not continue");
+        // "" is a bare Enter
+        for no in ["", " ", "n", "N", "no"] {
+            assert_eq!(parse(no), Some(false), "{no:?} must not continue");
+        }
+        // and "y" is the habit this question must not honour
+        for unknown in ["y", "Y", "yes", "f", "very", "cc", "x"] {
+            assert_eq!(parse(unknown), None, "{unknown:?} must be asked again");
         }
     }
 }

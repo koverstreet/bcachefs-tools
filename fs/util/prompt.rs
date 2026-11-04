@@ -19,6 +19,7 @@ use std::io::{stdin, IsTerminal, Read};
 use std::os::fd::{AsFd, BorrowedFd, RawFd};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use std::io::Result;
@@ -44,12 +45,13 @@ pub fn fs_name(sb: &crate::c::bch_sb_buf) -> String {
 /// The only place an answer is written down: both rendered forms and the parse
 /// derive from this, so a question cannot offer a letter it will not accept.
 pub struct Choice<A> {
-    /// Matched case-insensitively, as are the aliases.
+    /// Matched exactly, and failing that case-insensitively, as are the
+    /// aliases: `y` and `Y` can be two answers, and are one where only one is.
     pub key: char,
     pub aliases: &'static [&'static str],
     /// For the bracketed summary; "" shows the bare key.
     pub short: &'static str,
-    /// For a terminal, which has room for a sentence.
+    /// For a terminal, which has room for a sentence; "" for none.
     pub blurb: &'static str,
     pub answer: A,
 }
@@ -63,8 +65,9 @@ pub struct Question<'a, A> {
     pub prompt: &'a str,
     pub choices: &'a [Choice<A>],
     /// Also what a bare Enter and a timed-out boot prompt mean. Shown
-    /// capitalised in the summary.
-    pub silence: A,
+    /// capitalised in the summary. None: Enter asks again, and a timeout goes
+    /// unanswered.
+    pub silence: Option<A>,
     /// This question is about losing data, and the prompt says so. Drawn in
     /// red where there is a terminal to draw it on; everywhere else the words
     /// have to carry it alone, which is why they are in `prompt` and not in a
@@ -76,9 +79,27 @@ pub struct Question<'a, A> {
     pub timeout: Option<Duration>,
 }
 
+/// What came of a question. A reply that's none of its answers is never one:
+/// the question is asked again.
+pub enum Reply<A> {
+    Answer(A),
+    /// A watch's: see [`Watch`].
+    Settled,
+    /// Input ended, or a timeout with no silence to take.
+    Unanswered,
+}
+
+/// @s, if it's one character.
+fn single(s: &str) -> Option<char> {
+    let mut c = s.chars();
+    let k = c.next()?;
+    c.next().is_none().then_some(k)
+}
+
 impl<A: Copy + PartialEq> Question<'_, A> {
     pub fn lines(&self) -> Vec<String> {
         self.choices.iter()
+            .filter(|c| !c.blurb.is_empty())
             .map(|c| format!("  {}  {}", c.key, c.blurb))
             .collect()
     }
@@ -86,7 +107,7 @@ impl<A: Copy + PartialEq> Question<'_, A> {
     /// The answer silence resolves to is the one shown capitalised.
     pub fn brief(&self) -> String {
         let parts = self.choices.iter().map(|c| {
-            if c.answer == self.silence {
+            if Some(c.answer) == self.silence {
                 c.key.to_uppercase().to_string()
             } else if c.short.is_empty() {
                 c.key.to_string()
@@ -98,15 +119,21 @@ impl<A: Copy + PartialEq> Question<'_, A> {
         format!("[{}]", parts.collect::<Vec<_>>().join(" / "))
     }
 
-    pub fn parse(&self, reply: &str) -> A {
+    /// @reply as one of the answers: None if it's none of them.
+    pub fn parse(&self, reply: &str) -> Option<A> {
         let reply = reply.trim();
+        if reply.is_empty() {
+            return self.silence;
+        }
 
+        let key = single(reply);
         self.choices.iter()
-            .find(|c| {
-                reply.eq_ignore_ascii_case(&c.key.to_string())
+            .find(|c| key == Some(c.key))
+            .or_else(|| self.choices.iter().find(|c| {
+                key.is_some_and(|k| k.eq_ignore_ascii_case(&c.key))
                     || c.aliases.iter().any(|a| reply.eq_ignore_ascii_case(a))
-            })
-            .map_or(self.silence, |c| c.answer)
+            }))
+            .map(|c| c.answer)
     }
 }
 
@@ -143,8 +170,10 @@ pub enum Waited {
 
 enum Answer {
     Said(String),
-    /// Timed out, declined, or nobody was there.
+    /// Timed out, or declined.
     Silence,
+    /// Input ended.
+    Ended,
     Settled,
 }
 
@@ -152,12 +181,12 @@ enum Answer {
 #[derive(Clone, Copy)]
 pub enum Prompt {
     Agent,
-    Terminal,
+    /// stdin: a terminal, or a script's pipe or file with its answers.
+    Stdin,
 }
 
 /// Plymouth answering a ping is an agent itself; stdin on /dev/null is what a
 /// unit started by init gets, which puts us in the boot where the agents live.
-/// A pipe or a file is a script redirecting us, with nobody behind it.
 fn agent_plausibly_listening(tty: bool) -> bool {
     (tty || stdin_is_dev_null()) && ask_password_installed()
 }
@@ -166,22 +195,29 @@ fn agent_plausibly_listening(tty: bool) -> bool {
 /// its own refusal.
 ///
 /// There is one such reason because there is one such return: reaching it
-/// means stdin is not a terminal - the last branch tests that - and that no
-/// agent was plausibly listening either. Somebody reading this in a boot log
-/// needs the concrete condition, not "nobody was there": the fix is a console
-/// or an installed systemd-ask-password, and which one is what they have to
-/// work out.
-pub const NO_ONE_TO_ASK: &str = "no terminal to ask on, and no systemd password agent";
+/// means stdin is /dev/null - a terminal, a pipe or a file would have been
+/// asked on - and that no agent was plausibly listening either. Somebody
+/// reading this in a boot log needs the concrete condition, not "nobody was
+/// there": the fix is a console or an installed systemd-ask-password, and which
+/// one is what they have to work out.
+pub const NO_ONE_TO_ASK: &str = "nothing on stdin to answer, and no systemd password agent";
 
 impl Prompt {
     /// `None` when nobody can be reached; callers take their safe answer
     /// without composing a question, and say [`NO_ONE_TO_ASK`] when they do.
+    ///
+    /// Decided once: what we were started with doesn't change.
     pub fn detect() -> Option<Prompt> {
+        static DETECTED: OnceLock<Option<Prompt>> = OnceLock::new();
+        *DETECTED.get_or_init(Self::detect_uncached)
+    }
+
+    fn detect_uncached() -> Option<Prompt> {
         let tty = stdin().is_terminal();
 
         if tty && !super::plymouth::active() {
             debug!("asking on the terminal");
-            return Some(Prompt::Terminal);
+            return Some(Prompt::Stdin);
         }
 
         if agent_plausibly_listening(tty) {
@@ -193,23 +229,27 @@ impl Prompt {
         // but better than refusing without asking.
         if tty {
             debug!("asking on the terminal (plymouth is up but has no agent)");
-            return Some(Prompt::Terminal);
+            return Some(Prompt::Stdin);
+        }
+
+        // A script's: its answers are on stdin.
+        if rustix::fs::fstat(stdin().as_fd()).is_ok() && !stdin_is_dev_null() {
+            debug!("asking on stdin");
+            return Some(Prompt::Stdin);
         }
 
         debug!("{NO_ONE_TO_ASK}");
         None
     }
 
-    /// Put the question and interpret the reply.
-    ///
-    /// `None` means a watch settled it - see [`Watch`]. Anything else resolves
-    /// to one of the question's own answers, including silence, so a caller
-    /// never has to decide what an unrecognised reply meant.
+    /// Put the question and interpret the reply: one of the question's own
+    /// answers, silence included, so a caller never has to decide what an
+    /// unrecognised reply meant.
     pub fn put<A: Copy + PartialEq>(
         &self,
         q: &Question<'_, A>,
-        watch: Option<&mut dyn Watch>,
-    ) -> Result<Option<A>> {
+        mut watch: Option<&mut dyn Watch>,
+    ) -> Result<Reply<A>> {
         let ask = Ask {
             prompt:  q.prompt,
             choices: q.lines(),
@@ -219,14 +259,22 @@ impl Prompt {
             timeout: q.timeout,
         };
 
-        Ok(match match self {
-            Prompt::Agent    => ask_via_agent(&ask, watch),
-            Prompt::Terminal => ask_on_terminal(&ask, watch),
-        }? {
-            Answer::Said(reply) => Some(q.parse(&reply)),
-            Answer::Silence     => Some(q.silence),
-            Answer::Settled     => None,
-        })
+        loop {
+            let watch = watch.as_mut().map(|w| &mut **w as &mut dyn Watch);
+
+            return Ok(match match self {
+                Prompt::Agent => ask_via_agent(&ask, watch),
+                Prompt::Stdin => ask_on_terminal(&ask, watch),
+            }? {
+                Answer::Said(reply) => match q.parse(&reply) {
+                    Some(a) => Reply::Answer(a),
+                    None    => continue,
+                },
+                Answer::Silence => q.silence.map_or(Reply::Unanswered, Reply::Answer),
+                Answer::Ended   => Reply::Unanswered,
+                Answer::Settled => Reply::Settled,
+            });
+        }
     }
 }
 
@@ -350,11 +398,13 @@ fn ask_on_terminal(ask: &Ask<'_>, watch: Option<&mut dyn Watch>) -> Result<Answe
     use owo_colors::OwoColorize;
 
     // stdout, not stdin: the question is read where it is drawn, and the two
-    // can be different files.
+    // can be different files. With no choices to list, the summary goes on the
+    // prompt's line.
+    let sep = if ask.choices.is_empty() { " " } else { "\n" };
     if ask.alarm && stdout().is_terminal() {
-        println!("{}", ask.prompt.red().bold());
+        print!("{}{sep}", ask.prompt.red().bold());
     } else {
-        println!("{}", ask.prompt);
+        print!("{}{sep}", ask.prompt);
     }
     for choice in &ask.choices {
         println!("{choice}");
@@ -365,8 +415,10 @@ fn ask_on_terminal(ask: &Ask<'_>, watch: Option<&mut dyn Watch>) -> Result<Answe
     let answer = match wait(stdin().as_fd(), ask.timeout, watch)? {
         Waited::Readable => {
             let mut answer = String::new();
-            stdin().read_line(&mut answer)?;
-            return Ok(Answer::Said(answer));
+            if stdin().read_line(&mut answer)? > 0 {
+                return Ok(Answer::Said(answer));
+            }
+            Answer::Ended
         }
         Waited::Timeout => Answer::Silence,
         Waited::Settled => Answer::Settled,
@@ -375,4 +427,32 @@ fn ask_on_terminal(ask: &Ask<'_>, watch: Option<&mut dyn Watch>) -> Result<Answe
     // whatever comes next start mid-line.
     println!();
     Ok(answer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CHOICES: &[Choice<u8>] = &[
+        Choice { key: 'y', aliases: &["yes"], short: "", blurb: "", answer: 0 },
+        Choice { key: 'n', aliases: &["no"], short: "", blurb: "", answer: 1 },
+        Choice { key: 'Y', aliases: &[], short: "all", blurb: "", answer: 2 },
+    ];
+
+    fn question(silence: Option<u8>) -> Question<'static, u8> {
+        Question { prompt: "fix?", choices: CHOICES, silence, alarm: false, uuid: "u", timeout: None }
+    }
+
+    /// y and Y are two answers here; N is n, there being no N.
+    #[test]
+    fn exact_case_first() {
+        let q = question(None);
+        assert!(q.parse("y") == Some(0));
+        assert!(q.parse("Y") == Some(2));
+        assert!(q.parse("N") == Some(1));
+        assert!(q.parse("YES") == Some(0));
+        assert!(q.parse("maybe").is_none());
+        assert!(q.parse("").is_none());
+        assert!(question(Some(1)).parse("\n") == Some(1));
+    }
 }

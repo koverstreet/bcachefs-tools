@@ -23,7 +23,7 @@
 //! degraded= value that needs is ours to work out, not theirs.
 
 use std::path::PathBuf;
-use bcachefs_kernel::util::prompt::{fs_name, Choice, Prompt, Question, Watch, NO_ONE_TO_ASK, PROMPT_TIMEOUT};
+use bcachefs_kernel::util::prompt::{fs_name, Choice, Prompt, Question, Reply, Watch, NO_ONE_TO_ASK, PROMPT_TIMEOUT};
 
 use anyhow::Result;
 use bcachefs_kernel::errcode::{self, BchError};
@@ -221,18 +221,20 @@ impl Ask {
 
         let id = self.uuid.hyphenated().to_string();
 
-        let answer = p.put(&Question {
+        let answer = match p.put(&Question {
             prompt:  &q,
             choices: CHOICES,
-            silence: Answer::No,
+            silence: Some(Answer::No),
             alarm:   s == Situation::DataLost,
             uuid:    &id,
             timeout: Some(PROMPT_TIMEOUT),
-        }, watch)?;
-
-        let Some(answer) = answer else {
-            warn!("device turned up while asking; mounting normally");
-            return Ok(Outcome::Rescan);
+        }, watch)? {
+            Reply::Answer(a) => a,
+            Reply::Settled => {
+                warn!("device turned up while asking; mounting normally");
+                return Ok(Outcome::Rescan);
+            }
+            Reply::Unanswered => Answer::No,
         };
 
         if answer == Answer::No {
@@ -270,11 +272,11 @@ mod tests {
     fn q(prompt: &str) -> Question<'_, Answer> {
         Question {
             prompt, choices: CHOICES,
-            silence: Answer::No, alarm: false, uuid: "", timeout: None,
+            silence: Some(Answer::No), alarm: false, uuid: "", timeout: None,
         }
     }
 
-    fn parse(reply: &str) -> Answer {
+    fn parse(reply: &str) -> Option<Answer> {
         q("").parse(reply)
     }
 
@@ -307,16 +309,16 @@ mod tests {
     #[test]
     fn answer_parses_the_three_things_there_are_to_say() {
         for s in ["y", "Y", "yes", "Yes", " y \n"] {
-            assert_eq!(parse(s), Answer::Yes, "{s:?}");
+            assert_eq!(parse(s), Some(Answer::Yes), "{s:?}");
         }
         for s in ["r", "R", "ro", "readonly", "ReadOnly"] {
-            assert_eq!(parse(s), Answer::ReadOnly, "{s:?}");
+            assert_eq!(parse(s), Some(Answer::ReadOnly), "{s:?}");
         }
     }
 
-    /// Anything not positively recognised as consent is a refusal - including
-    /// an empty answer, which is what a bare Enter and a timed-out systemd
-    /// prompt both produce.
+    /// An empty answer is a refusal - what a bare Enter and a timed-out systemd
+    /// prompt both produce - and anything not recognised is asked again, never
+    /// taken as consent.
     ///
     /// `f`, `force` and `very` are in there because they used to be answers:
     /// the question no longer asks how hard to try, and a user typing what an
@@ -324,9 +326,11 @@ mod tests {
     /// they would by saying yes.
     #[test]
     fn answer_defaults_to_refusing() {
-        for s in ["", "\n", "n", "N", "no", "q", "yolo", "degraded",
-                  "f", "force", "very"] {
-            assert_eq!(parse(s), Answer::No, "{s:?}");
+        for s in ["", "\n", "n", "N", "no"] {
+            assert_eq!(parse(s), Some(Answer::No), "{s:?}");
+        }
+        for s in ["q", "yolo", "degraded", "f", "force", "very"] {
+            assert_eq!(parse(s), None, "{s:?}");
         }
     }
 
