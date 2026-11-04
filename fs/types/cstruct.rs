@@ -2658,7 +2658,9 @@ pub fn in_place_def<'a>(f: &CFieldDef, items: &'a [CItem]) -> Option<&'a CStruct
     if !in_place(f) {
         return None;
     }
-    let (elem, dims) = array_of(&f.ty)?;
+    // a LockedBy<G>, publishing nothing: G, which it holds at its start
+    let ty = type_of(&f.ty).and_then(|t| arg_of(&t, "LockedBy").map(rust_text)).unwrap_or_else(|| f.ty.clone());
+    let (elem, dims) = array_of(&ty)?;
     if !dims.is_empty() && !f.inline {
         return None;
     }
