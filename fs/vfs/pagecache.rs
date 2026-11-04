@@ -7,13 +7,12 @@
 
 use core::cmp::{max, min};
 use core::ffi::c_int;
-use core::mem::size_of;
+use core::alloc::Layout;
+use core::mem::{align_of, size_of};
 use core::ops::{ControlFlow, Range};
 use core::ptr::NonNull;
 
 use cstruct_macros::{c_export, c_extern};
-use kernel::alloc::flags::{GFP_KERNEL, __GFP_ZERO};
-use kernel::alloc::Flags;
 use kernel::page::PAGE_SHIFT;
 
 use crate::btree::bkey::{pos, BkeySC};
@@ -27,7 +26,8 @@ use crate::format::Btree;
 use crate::fs::Fs;
 use crate::new_lock;
 use crate::snapshots::subvolume;
-use crate::util::alloc::{current_gfp_context_raw, gfp_flags, init_at, kmalloc};
+use crate::locking::MemallocFlags;
+use crate::util::alloc::{current_gfp_context_raw, init_at, kzalloc};
 use crate::util::kernel::PAGE_SECTORS_SHIFT;
 use crate::util::bio::Bio;
 use crate::util::ffi::Opaque;
@@ -111,9 +111,10 @@ impl c::bch_folio_sector {
 
 impl Folio {
     /* for newly allocated folios: */
-    fn alloc_state(self, gfp: Flags) -> Option<NonNull<c::bch_folio>> {
+    fn alloc_state(self) -> Option<NonNull<c::bch_folio>> {
         let size = size_of::<c::bch_folio>() + size_of::<c::bch_folio_sector>() * self.nr_sectors();
-        let s = kmalloc(size, gfp | __GFP_ZERO).ok()?.cast::<c::bch_folio>();
+        let layout = Layout::from_size_align(size, align_of::<c::bch_folio>()).ok()?;
+        let s = kzalloc(layout).ok()?.cast::<c::bch_folio>();
         let state = c::FolioState { state_uptodate: false, replicas_reserved_at: 0, reserved_degraded: false, s: [] };
         let Ok(()) = unsafe { init_at(new_lock!(state), &raw mut (*s.as_ptr()).state) };
         unsafe { c::folio_attach_private(self.as_ptr(), s.as_ptr().cast()) };
@@ -121,10 +122,10 @@ impl Folio {
     }
 
     /// Its bcachefs state, made if it has none; false if that fails.
-    pub fn create_state(self, gfp: Flags) -> bool {
+    pub fn create_state(self) -> bool {
         debug_assert!(self.locked());
 
-        self.state_ptr().is_some() || self.alloc_state(gfp).is_some()
+        self.state_ptr().is_some() || self.alloc_state().is_some()
     }
 
     /// Its bcachefs state brought up to date with the btree.
@@ -164,13 +165,15 @@ pub(super) fn blocks_in(fs: &Fs, offset: usize, len: usize) -> Range<usize> {
 
 #[c_export]
 pub fn __bch2_folio_create(folio: *mut c::folio, gfp: c::gfp_t) -> *mut c::bch_folio {
-    unsafe { Folio::from_raw(folio) }.alloc_state(gfp_flags(gfp)).map_or(core::ptr::null_mut(), NonNull::as_ptr)
+    let _scope = MemallocFlags::for_gfp(gfp);
+    unsafe { Folio::from_raw(folio) }.alloc_state().map_or(core::ptr::null_mut(), NonNull::as_ptr)
 }
 
 #[c_export]
 pub fn bch2_folio_create(folio: *mut c::folio, gfp: c::gfp_t) -> *mut c::bch_folio {
+    let _scope = MemallocFlags::for_gfp(gfp);
     let folio = unsafe { Folio::from_raw(folio) };
-    folio.create_state(gfp_flags(gfp));
+    folio.create_state();
     folio.state_ptr().map_or(core::ptr::null_mut(), NonNull::as_ptr)
 }
 
@@ -205,7 +208,7 @@ impl InodeInfo {
         let mut need_set = false;
 
         for &f in folios {
-            if !f.create_state(GFP_KERNEL) {
+            if !f.create_state() {
                 return Err(c::ENOMEM.into());
             }
 

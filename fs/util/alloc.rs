@@ -266,7 +266,7 @@ pub fn arc_new<T: Send + Sync + FreeAnytime>(v: T) -> Result<Arc<T>, AllocError>
 /// A @T for C to hold: a MaybeRcuAlloc's, kvmalloc()'d, given up to a raw
 /// pointer, which free_pinned() takes back.
 pub fn alloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>) -> Result<*mut T, E> {
-    MaybeRcuAlloc::<T, KVmalloc>::new(init, flags::GFP_KERNEL).map(|b| b.into_raw().as_ptr())
+    MaybeRcuAlloc::<T, KVmalloc>::new(init).map(|b| b.into_raw().as_ptr())
 }
 
 /// alloc_pinned(), the allocation failing with @err - @init with its own.
@@ -296,16 +296,6 @@ pub fn alloc_pinned_or<T>(init: impl ::pin_init::PinInit<T, crate::errcode::BchE
 /// @p is from alloc_pinned(), and nothing but RCU readers uses it after.
 pub unsafe fn free_pinned<T>(p: *mut T) {
     drop(unsafe { MaybeRcuAlloc::<T, KVmalloc>::from_raw(core::ptr::NonNull::new_unchecked(p)) })
-}
-
-/// The allocator's Flags for @gfp, a C caller's: GFP_NOWAIT or GFP_KERNEL.
-pub fn gfp_flags(gfp: crate::c::gfp_t) -> Flags {
-    if gfp == crate::c::GFP_NOWAIT {
-        flags::GFP_NOWAIT
-    } else {
-        assert!(gfp == crate::c::GFP_KERNEL, "gfp_flags() of a mask that's neither GFP_NOWAIT nor GFP_KERNEL");
-        flags::GFP_KERNEL
-    }
 }
 
 /// @b's value, out of its box: *b, for a std Box - which the kernel's isn't,
@@ -408,20 +398,20 @@ pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<core::ptr::NonNull<u8>,
     core::ptr::NonNull::new(unsafe { bcachefs_shim::alloc::krealloc(p, new, crate::c::GFP_KERNEL) }).ok_or(AllocError)
 }
 
-/// @size bytes kmalloc()'d, uninitialized, as @gfp says: for a buffer of no
-/// size anyone keeps - C's kfree(), or c::rust_kfree(), takes it back.
-pub fn kmalloc(size: usize, gfp: Flags) -> Result<core::ptr::NonNull<u8>, AllocError> {
+/// @size bytes kmalloc()'d, uninitialized: for a buffer of no size anyone
+/// keeps - C's kfree(), or c::rust_kfree(), takes it back.
+pub fn kmalloc(size: usize) -> Result<core::ptr::NonNull<u8>, AllocError> {
     #[cfg(kernel)]
     {
         use kernel::alloc::{Allocator, NumaNode};
 
         let layout = core::alloc::Layout::from_size_align(size, 1).map_err(|_| AllocError)?;
-        Ok(Kmalloc::alloc(layout, gfp, NumaNode::NO_NODE)?.cast())
+        Ok(Kmalloc::alloc(layout, flags::GFP_KERNEL, NumaNode::NO_NODE)?.cast())
     }
     // SAFETY: a new allocation
     #[cfg(not(kernel))]
     {
-        core::ptr::NonNull::new(unsafe { bcachefs_shim::alloc::krealloc(core::ptr::null_mut(), size, gfp.gfp()) })
+        core::ptr::NonNull::new(unsafe { bcachefs_shim::alloc::krealloc(core::ptr::null_mut(), size, crate::c::GFP_KERNEL) })
             .ok_or(AllocError)
     }
 }
@@ -468,11 +458,9 @@ pub fn kvrealloc_zeroed(p: *mut u8, old: usize, new: usize) -> Result<core::ptr:
 }
 
 /// @p, @old bytes of kvmalloc()'d memory - or none, null - as @new bytes,
-/// what was there kept: kvrealloc(), as @gfp and the task's memalloc scope
-/// say. Aligned as kmalloc() aligns @new; kvfree_sized() takes it back.
-pub fn kvrealloc(p: *mut u8, old: usize, new: usize, gfp: Flags)
-    -> Result<core::ptr::NonNull<u8>, AllocError>
-{
+/// what was there kept: kvrealloc(). Aligned as kmalloc() aligns @new;
+/// kvfree_sized() takes it back.
+pub fn kvrealloc(p: *mut u8, old: usize, new: usize) -> Result<core::ptr::NonNull<u8>, AllocError> {
     #[cfg(kernel)]
     {
         use kernel::alloc::{Allocator, NumaNode};
@@ -480,14 +468,13 @@ pub fn kvrealloc(p: *mut u8, old: usize, new: usize, gfp: Flags)
         // SAFETY: @p is KVmalloc's, of @old bytes, or null
         Ok(unsafe {
             KVmalloc::realloc(core::ptr::NonNull::new(p), kv_layout(new)?, kv_layout(old)?,
-                              gfp, NumaNode::NO_NODE)
+                              flags::GFP_KERNEL, NumaNode::NO_NODE)
         }?.cast())
     }
     // A new allocation and a copy: realloc() keeps the old one's alignment
     #[cfg(not(kernel))]
     // SAFETY: @p is std::alloc's, of @old bytes, or null
     unsafe {
-        let _ = gfp;
         let q = core::ptr::NonNull::new(std::alloc::alloc(kv_layout(new)?)).ok_or(AllocError)?;
         if let Some(p) = core::ptr::NonNull::new(p) {
             q.as_ptr().copy_from_nonoverlapping(p.as_ptr(), old.min(new));

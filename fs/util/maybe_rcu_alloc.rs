@@ -18,7 +18,7 @@ use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering::{Acquire, Relaxed, Rele
 use pin_init::{pin_init_from_closure, PinInit};
 
 use crate::c;
-use crate::util::alloc::{init_at, AllocError, Flags, KVmalloc, Kmalloc, Vmalloc};
+use crate::util::alloc::{flags, init_at, AllocError, Flags, KVmalloc, Kmalloc, Vmalloc};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::rcu::{Detach, DropAnytime, DropAtomic, Flavor, FreeAnytime, HasRcuHead, HeadKind, NothingToDetach,
                        RcuHead, RcuWorkHead};
@@ -96,10 +96,10 @@ unsafe impl<T, A: Alloc> DropAtomic for MaybeRcuAlloc<T, A> {}
 unsafe impl<T, A: Alloc> NothingToDetach for MaybeRcuAlloc<T, A> {}
 
 impl<T, A: Alloc> MaybeRcuAlloc<T, A> {
-    /// @init's T, in memory that starts zeroed - padding too - as @gfp says.
-    /// Fails with @init's error, or the allocation's.
-    pub fn new<E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<Self, E> {
-        Ok(Self { p: <T as RcuFreeing>::alloc::<A, E>(init, gfp)?, _p: PhantomData })
+    /// @init's T, in memory that starts zeroed - padding too. Fails with
+    /// @init's error, or the allocation's.
+    pub fn new<E: From<AllocError>>(init: impl PinInit<T, E>) -> Result<Self, E> {
+        Ok(Self { p: <T as RcuFreeing>::alloc::<A, E>(init, flags::GFP_KERNEL)?, _p: PhantomData })
     }
 
     pub fn as_pin_mut(&mut self) -> Pin<&mut T> {

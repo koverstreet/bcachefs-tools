@@ -19,7 +19,7 @@
 //! has none again (free_fifo() NULLs it), so dropping it frees nothing.
 
 use crate::types::Fifo;
-use crate::util::alloc::{flags, kvfree_sized, kvrealloc, AllocError};
+use crate::util::alloc::{kvfree_sized, kvrealloc, AllocError};
 use core::mem::{needs_drop, size_of, MaybeUninit};
 use core::ptr::NonNull;
 use num_traits::{AsPrimitive, ConstZero, PrimInt, Unsigned, WrappingAdd, WrappingSub};
@@ -231,7 +231,7 @@ impl<T, I: FifoIdx> Fifo<T, I> {
         // size, the largest index field, holds the whole buffer
         let size: I = num_traits::cast(new).ok_or(AllocError)?;
 
-        let p = kvrealloc(self.data.cast(), old * size_of::<T>(), new * size_of::<T>(), flags::GFP_KERNEL)?
+        let p = kvrealloc(self.data.cast(), old * size_of::<T>(), new * size_of::<T>())?
             .cast::<T>().as_ptr();
         if old != 0 {
             for k in 1..new / old {

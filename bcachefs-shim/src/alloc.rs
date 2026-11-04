@@ -23,13 +23,6 @@ impl core::ops::BitOr for Flags {
     }
 }
 
-impl Flags {
-    /// As C's gfp_t: what krealloc()'s shrinkers are run as.
-    pub fn gfp(self) -> crate::c::gfp_t {
-        if self.0 & flags::GFP_NOWAIT.0 != 0 { crate::c::GFP_NOWAIT } else { crate::c::GFP_KERNEL }
-    }
-}
-
 pub mod flags {
     use super::Flags;
 

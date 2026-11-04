@@ -46,7 +46,7 @@ use crate::fs::{btree_id_is_alloc, Fs};
 use crate::init::recovery::NotRw;
 use crate::locking::{Guard, Locked};
 use crate::util::projections::VolatilePublish;
-use crate::util::alloc::{darray_exit, flags::GFP_KERNEL, DArrayLoan, KVVec};
+use crate::util::alloc::{darray_exit, DArrayLoan, KVVec};
 use crate::util::ffi::Opaque;
 use crate::data_structures::gap_buffer::GapBuffer;
 use crate::util::kernel::cond_resched;
@@ -754,7 +754,7 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
 /// insert_take() of a copy of @k.
 pub(crate) fn insert(fs: &Fs, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
     let bytes = k.k.bytes();
-    let n = crate::util::alloc::kmalloc(bytes, GFP_KERNEL).map_err(|_| fs.err(e::BCH_ERR_ENOMEM_journal_key_insert))?;
+    let n = crate::util::alloc::kmalloc(bytes).map_err(|_| fs.err(e::BCH_ERR_ENOMEM_journal_key_insert))?;
     // SAFETY: @bytes of key, into as many of ours; then ours to hand over
     unsafe {
         ptr::copy_nonoverlapping(k.as_ffi().cast::<u8>(), n.as_ptr(), bytes);

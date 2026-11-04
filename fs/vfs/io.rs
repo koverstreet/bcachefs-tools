@@ -2,7 +2,6 @@
 
 use core::ffi::c_int;
 use core::ops::ControlFlow;
-use kernel::alloc::flags::GFP_KERNEL;
 use kernel::page::PAGE_SHIFT;
 
 use cstruct_macros::c_export;
@@ -234,7 +233,7 @@ impl InodeInfo {
             return Ok(false);
         }
 
-        if !folio.create_state(GFP_KERNEL) {
+        if !folio.create_state() {
             return Err(c::ENOMEM.into());
         }
 

@@ -6,7 +6,7 @@
 //! spawn_detached() is one started at once, for a task nothing joins.
 
 use crate::errcode::BchError;
-use crate::util::alloc::{flags, Kmalloc};
+use crate::util::alloc::Kmalloc;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::rcu::RcuHead;
 use crate::util::workqueue::Queue;
@@ -25,7 +25,7 @@ pub struct TaskBox<'q, F: Future<Output = ()>>(MaybeRcuAlloc<Task<'q, F>, Kmallo
 
 impl<'q, F: Future<Output = ()> + Send> TaskBox<'q, F> {
     pub fn new(at: Spawn<'q, '_>, future: impl PinInit<F>) -> Result<Self, BchError> {
-        MaybeRcuAlloc::new(Task::new(at, future, Self::free), flags::GFP_KERNEL).map(Self)
+        MaybeRcuAlloc::new(Task::new(at, future, Self::free)).map(Self)
     }
 
     pub fn get(&mut self) -> Pin<&mut Task<'q, F>> {
@@ -141,7 +141,7 @@ impl<'q, H: Send + Sync> BoxWithTask<'q, H> {
                 Ok(())
             })
         };
-        let w = MaybeRcuAlloc::<WithTask<'q, H, F>, Kmalloc>::new(init, flags::GFP_KERNEL)?.into_raw().as_ptr();
+        let w = MaybeRcuAlloc::<WithTask<'q, H, F>, Kmalloc>::new(init)?.into_raw().as_ptr();
         unsafe {
             Ok(BoxWithTask { home: NonNull::new_unchecked((&raw mut (*w).home).cast()),
                              task: (*w).task.task(),

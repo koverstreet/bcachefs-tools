@@ -48,7 +48,7 @@ use crate::errcode::{ret_to_c, BchError};
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
 use crate::locking::MemallocFlags;
-use crate::util::{alloc::{flags::GFP_KERNEL, kmalloc, KVVec}, bio::{Bio, BioRange},
+use crate::util::{alloc::{kmalloc, KVVec}, bio::{Bio, BioRange},
                   ffi::Opaque, kernel::{unlikely, READ, WRITE}, late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
                   volatile::VolatileSlice, Printbuf, ToText};
 use core::ffi::{c_int, c_uint, c_void};
@@ -299,7 +299,7 @@ fn bounce_alloc(fs: &Fs, size: usize, rw: usize) -> Bbuf<'_> {
      */
     let p = {
         let _nowarn = MemallocFlags::nowarn();
-        kmalloc(size, GFP_KERNEL)
+        kmalloc(size)
     };
     match p {
         Ok(p) => Bbuf::new(fs, p, bb::BB_kmalloc, rw, size),

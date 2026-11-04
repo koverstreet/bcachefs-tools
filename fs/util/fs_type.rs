@@ -20,7 +20,7 @@ use core::marker::PhantomData;
 use core::ptr::NonNull;
 
 use crate::c;
-use crate::util::alloc::{flags::GFP_KERNEL, AllocError};
+use crate::util::alloc::AllocError;
 use crate::util::alloc::Kmalloc;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use kernel::error::to_result;
@@ -143,7 +143,7 @@ fn ret_val<T: FsType>(r: Result<c_int, T::Error>) -> c_int {
 unsafe extern "C" fn init_fs_context<T: FsType>(fc: *mut kernel::bindings::fs_context) -> c_int {
     let fc = fc.cast::<c::fs_context>();
     ret::<T>((|| {
-        let ctx = MaybeRcuAlloc::<T::Context, Kmalloc>::new(T::new_context(), GFP_KERNEL)?.into_raw();
+        let ctx = MaybeRcuAlloc::<T::Context, Kmalloc>::new(T::new_context())?.into_raw();
 
         // SAFETY: a context being set up, ours
         unsafe {
