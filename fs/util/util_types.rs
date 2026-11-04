@@ -3,7 +3,6 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::util::Printbuf;
 use crate::types::DArray;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
@@ -76,10 +75,6 @@ pub struct memalloc_flags {
 }
 
 c_extern! {
-    pub fn bch2_prt_task_backtrace(out: *mut Printbuf, task: *mut c::task_struct, skipnr: c_uint,
-                                   gfp: c::gfp_t) -> c_int;
-    pub fn bch2_save_backtrace(stack: *mut c::bch_stacktrace, task: *mut c::task_struct, skipnr: c_uint,
-                               gfp: c::gfp_t) -> c_int;
     pub fn bch2_rht_table(ht: *const c::rhashtable) -> *const c::bucket_table;
     pub fn bch2_rht_nr_buckets(tbl: *const c::bucket_table) -> c_uint;
     pub fn bch2_rht_bucket(tbl: *const c::bucket_table, hash: c_uint) -> *mut *mut c_void;
@@ -103,7 +98,6 @@ c_extern! {
     pub fn bch2_ktime_get_ns() -> u64;
     pub fn bch2_num_online_cpus() -> c_uint;
     pub fn bch2_bdev_rot(bdev: *mut c::block_device) -> bool;
-    pub fn bch2_prt_current_backtrace(out: *mut Printbuf, skipnr: c_uint, gfp: c::gfp_t) -> c_int;
     pub fn bch2_get_random_u64() -> u64;
     pub fn bch2_queue_work(wq: *mut c::workqueue_struct, work: *mut c::work_struct) -> bool;
     pub fn bch2_init_delayed_work(dwork: *mut c::delayed_work,

@@ -22,6 +22,8 @@ use crate::util::sleep::Sleep;
 use crate::util::refcount::TryRefcount;
 use crate::util::ffi::{Opaque, c_char};
 use crate::util::log::CFnName;
+use crate::util::alloc::flags::GFP_KERNEL;
+use crate::util::backtrace::prt_task_backtrace;
 use crate::util::{Printbuf, ToText};
 use crate::SPOS_MAX;
 use bitflags::bitflags;
@@ -3183,10 +3185,8 @@ impl ListedTrans {
     }
 
     pub fn backtrace_to_text(&self, out: &mut Printbuf) {
-        unsafe {
-            let task = core::ptr::read_volatile(&raw const (*self.trans).locking_wait.task);
-            c::bch2_prt_task_backtrace(out.as_raw(), task, 0, c::GFP_KERNEL);
-        }
+        let task = unsafe { core::ptr::read_volatile(&raw const (*self.trans).locking_wait.task) };
+        let _ = prt_task_backtrace(out, task, 0, GFP_KERNEL);
     }
 
     /// The cycle, if it's in one, written to @out.

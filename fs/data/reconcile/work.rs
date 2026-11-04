@@ -74,6 +74,7 @@ use crate::sb::counters::events;
 use crate::prt;
 use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::alloc::KVVec;
+use crate::util::backtrace::prt_task_backtrace;
 use crate::data_structures::cuckoo::Cuckoo;
 use crate::util::kernel::{cond_resched, ktime_get_ns, WRITE};
 use crate::util::kthread::{Kthread, KthreadSelf};
@@ -1124,8 +1125,7 @@ impl Fs {
         } else if let Some(task) = task {
             write!(out, "Reconcile thread backtrace:\n");
             out.indent_add(2);
-            // SAFETY: our ref
-            unsafe { c::bch2_prt_task_backtrace(out.as_raw(), task, 0, c::GFP_KERNEL) };
+            let _ = prt_task_backtrace(out, task, 0, GFP_KERNEL);
             out.indent_sub(2);
         } else {
             write!(out, "Reconcile thread not running\n");

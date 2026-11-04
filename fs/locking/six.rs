@@ -225,7 +225,10 @@ fn six_set_owner(lock: &six_lock, ty: six_lock_type, old: u32, owner: *mut c::ta
 fn six_lock_record_acquire(lock: &six_lock, ty: six_lock_type) {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     if ty == six_lock_type::SIX_LOCK_intent {
-        unsafe { c::bch2_save_backtrace(lock.owner_stack.as_ptr(), c::bch2_current(), 1, c::GFP_ATOMIC) };
+        let _ = unsafe {
+            crate::util::backtrace::save_backtrace(&mut *lock.owner_stack.as_ptr(), c::bch2_current(), 1,
+                                                   crate::util::alloc::flags::GFP_ATOMIC)
+        };
     }
     #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
     let _ = (lock, ty);

@@ -496,6 +496,8 @@ use crate::util::log::LogMsg;
 use crate::util::varint;
 use crate::util::Join;
 use crate::util::vstructs::{ArmRef, Validated};
+use crate::util::alloc::flags::GFP_KERNEL;
+use crate::util::backtrace::prt_current_backtrace;
 use crate::util::{Printbuf, ToText};
 use crate::{bkey_fsck_err_on, btree_trans, prt};
 use core::ffi::{c_int, c_uint};
@@ -1310,8 +1312,8 @@ fn transition_text(fs: &Fs, what: core::fmt::Arguments<'_>, old: BkeySC<'_>, new
     let mut buf = Printbuf::new();
     let out = &mut buf;
     prt!(out, "{what}\nold: {}\nnew: {}\n", old.to_text(fs), new.to_text(fs));
-    // SAFETY: a printbuf; skipping this frame, as C's from the trigger did
-    unsafe { c::bch2_prt_current_backtrace(buf.as_raw(), 1, c::GFP_KERNEL) };
+    // skipping this frame, as C's from the trigger did
+    let _ = prt_current_backtrace(&mut buf, 1, GFP_KERNEL);
     buf
 }
 

@@ -153,6 +153,16 @@ impl<T> KVVec<T> {
         self.0.capacity()
     }
 
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        self.0.as_mut_ptr()
+    }
+
+    /// # Safety
+    /// The @additional elements past its length are initialized.
+    pub unsafe fn inc_len(&mut self, additional: usize) {
+        unsafe { self.0.set_len(self.0.len() + additional) }
+    }
+
     /// # Safety
     /// As Vec::from_raw_parts(): @ptr from this allocator - malloc()'s, which
     /// a kvmalloc()'d buffer in userspace is - @capacity long, @length of it

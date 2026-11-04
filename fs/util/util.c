@@ -39,41 +39,6 @@ bool bch2_is_zero(const void *_p, size_t n)
 	return true;
 }
 
-int bch2_save_backtrace(bch_stacktrace *stack, struct task_struct *task, unsigned skipnr,
-			gfp_t gfp)
-{
-#ifdef CONFIG_STACKTRACE
-	unsigned nr_entries = 0;
-	int ret = 0;
-
-	stack->nr = 0;
-	try(darray_make_room_gfp(stack, 32, gfp));
-
-	skipnr += task == current;
-
-	do {
-		nr_entries = stack_trace_save_tsk(task, stack->data, stack->size, skipnr);
-	} while (nr_entries == stack->size &&
-		 !(ret = darray_make_room_gfp(stack, stack->size * 2, gfp)));
-
-	stack->nr = nr_entries;
-	return ret;
-#else
-	return 0;
-#endif
-}
-
-int bch2_prt_task_backtrace(struct printbuf *out, struct task_struct *task, unsigned skipnr, gfp_t gfp)
-{
-	skipnr += task == current;
-
-	CLASS(bch_stacktrace, stack)();
-	int ret = bch2_save_backtrace(&stack, task, skipnr, gfp);
-
-	bch2_prt_backtrace(out, &stack);
-	return ret;
-}
-
 static struct bio *__bio_chain_endio(struct bio *bio)
 {
 	struct bio *parent = bio->bi_private;
@@ -394,11 +359,6 @@ unsigned bch2_num_online_cpus(void)
 bool bch2_bdev_rot(struct block_device *bdev)
 {
 	return bdev_rot(bdev);
-}
-
-int bch2_prt_current_backtrace(struct printbuf *out, unsigned skipnr, gfp_t gfp)
-{
-	return bch2_prt_task_backtrace(out, current, skipnr, gfp);
 }
 
 u64 bch2_get_random_u64(void)

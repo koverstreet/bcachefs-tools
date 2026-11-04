@@ -71,6 +71,7 @@ use crate::sb::counters::events;
 use crate::types::{Fifo, RustOnly, rust_only};
 use crate::prt;
 use crate::util::alloc::{flags::GFP_KERNEL, kbox_pin_init, KBox, KVVec};
+use crate::util::backtrace::prt_task_backtrace;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, Private, RegisterError, Registration};
 use crate::util::siphash::SipHash13Key;
 use crate::util::kernel::{cond_resched, WRITE};
@@ -913,10 +914,8 @@ impl Fs {
         });
         if let Some(task) = task {
             // SAFETY: our ref, put after
-            unsafe {
-                c::bch2_prt_task_backtrace(out.as_raw(), task, 0, c::GFP_KERNEL);
-                c::put_task_struct(task);
-            }
+            let _ = prt_task_backtrace(out, task, 0, GFP_KERNEL);
+            unsafe { c::put_task_struct(task) };
         }
     }
 }

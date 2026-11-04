@@ -10,6 +10,8 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::{prt, sb_err_on};
 use crate::util::kernel::{ktime_get_real_seconds, nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
 use crate::util::workqueue::Queue;
+use crate::util::alloc::flags::GFP_ATOMIC;
+use crate::util::backtrace::prt_current_backtrace;
 use crate::util::{Bytes, DateTime, HumanReadable, Nsecs, Printbuf, Sectors, ToText};
 use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::init::error::{count_fsck_err, id};
@@ -1305,7 +1307,7 @@ impl Fs {
         crate::util::log::log_msg_start(&mut buf, self.name());
         write!(buf, "pointer to {} device {dev}\n",
                if self.devs_removed.test(dev as usize) { "removed" } else { "nonexistent" });
-        unsafe { c::bch2_prt_current_backtrace(buf.as_raw(), 1, c::GFP_ATOMIC) };
+        let _ = prt_current_backtrace(&mut buf, 1, GFP_ATOMIC);
         self.inconsistent_error(&mut buf);
         print_str(self, LogLevel::ERR, &mut buf);
     }

@@ -107,9 +107,6 @@ DEFINE_FREE(bio_put, struct bio *, if (_T) bio_put(_T))
 
 bool bch2_is_zero(const void *, size_t);
 
-int bch2_save_backtrace(bch_stacktrace *stack, struct task_struct *, unsigned, gfp_t);
-int bch2_prt_task_backtrace(struct printbuf *, struct task_struct *, unsigned, gfp_t);
-
 #define ewma_add(ewma, val, weight)					\
 ({									\
 	typeof(ewma) _ewma = (ewma);					\
