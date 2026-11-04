@@ -1,0 +1,22 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+#ifndef _BCACHEFS_UTIL_MEMALLOC_H
+#define _BCACHEFS_UTIL_MEMALLOC_H
+
+#include <linux/sched.h>
+
+#ifndef PF_MEMALLOC_NORECLAIM
+#if defined(PF__HOLE__00800000) && defined(PF__HOLE__01000000)
+#define PF_MEMALLOC_NORECLAIM	PF__HOLE__00800000
+#define PF_MEMALLOC_NOWARN	PF__HOLE__01000000
+#elif defined(PF__HOLE__01000000) && defined(PF__HOLE__02000000)
+#define PF_MEMALLOC_NORECLAIM	PF__HOLE__01000000
+#define PF_MEMALLOC_NOWARN	PF__HOLE__02000000
+#elif defined(PF__HOLE__02000000) && defined(PF__HOLE__40000000)
+#define PF_MEMALLOC_NORECLAIM	PF__HOLE__02000000
+#define PF_MEMALLOC_NOWARN	PF__HOLE__40000000
+#else
+#error "PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN: sched.h PF__HOLE__* bits taken - pick two still free"
+#endif
+#endif
+
+#endif /* _BCACHEFS_UTIL_MEMALLOC_H */

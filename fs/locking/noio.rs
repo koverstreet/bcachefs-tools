@@ -34,9 +34,7 @@ use cstruct_macros::c_verbatim;
 #[cfg(kernel)]
 mod pf {
     pub const PF_MEMALLOC_NOIO: u32 = kernel::bindings::PF_MEMALLOC_NOIO;
-    // util.h's, from the same holes
-    pub const PF_MEMALLOC_NORECLAIM: u32 = kernel::bindings::PF__HOLE__00800000;
-    pub const PF_MEMALLOC_NOWARN: u32 = kernel::bindings::PF__HOLE__01000000;
+    pub use crate::c::{PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
 }
 #[cfg(not(kernel))]
 mod pf {

@@ -34,6 +34,7 @@
 #include <linux/writeback.h>
 #include <asm/ioctl.h>
 #include <keys/user-type.h>
+#include "util/memalloc.h"
 
 #ifdef __BINDGEN__
 /*
@@ -41,6 +42,8 @@
  * binds - the kernel's bindings_helper.h has its own the same way, and
  * codegen.rs strips the prefix as rust/Makefile does.
  */
+const unsigned int RUST_CONST_HELPER_PF_MEMALLOC_NORECLAIM	= PF_MEMALLOC_NORECLAIM;
+const unsigned int RUST_CONST_HELPER_PF_MEMALLOC_NOWARN		= PF_MEMALLOC_NOWARN;
 const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_READ	= BLK_OPEN_READ;
 const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_WRITE	= BLK_OPEN_WRITE;
 const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_EXCL	= BLK_OPEN_EXCL;
