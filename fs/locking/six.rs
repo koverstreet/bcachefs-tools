@@ -716,7 +716,7 @@ pub fn six_relock_ip(lock: &c::six_lock, ty: c::six_lock_type, seq: c_uint, ip: 
     }
 
     if lock.seq.get() != seq {
-        six_unlock_ip(lock, ty, ip);
+        unsafe { six_unlock_ip(lock, ty, ip) };
         return false;
     }
 
@@ -1067,8 +1067,10 @@ fn do_six_unlock_type(lock: &six_lock, ty: six_lock_type) {
  * six_lock_unlock(&foo->lock, SIX_LOCK_read);		read count 1
  * six_lock_unlock(&foo->lock, SIX_LOCK_read);		read count 0
  */
+/// # Safety
+/// @lock is held as @ty, by the caller.
 #[c_export]
-pub fn six_unlock_ip(lock: &c::six_lock, ty: c::six_lock_type, ip: c_ulong) {
+pub unsafe fn six_unlock_ip(lock: &c::six_lock, ty: c::six_lock_type, ip: c_ulong) {
     use six_lock_type::*;
 
     ebug_assert!(!(ty == SIX_LOCK_write && atomic_read(lock) & SIX_LOCK_HELD_intent == 0));
@@ -1102,12 +1104,16 @@ pub fn six_unlock_ip(lock: &c::six_lock, ty: c::six_lock_type, ip: c_ulong) {
  *
  * @lock will have read count incremented and intent count decremented
  */
+/// # Safety
+/// @lock is held for intent, by the caller.
 #[c_export]
-pub fn six_lock_downgrade(lock: &c::six_lock) {
+pub unsafe fn six_lock_downgrade(lock: &c::six_lock) {
     let ip = six_lock_downgrade as *const () as c_ulong;
 
-    six_lock_increment_ip(lock, six_lock_type::SIX_LOCK_read, ip);
-    six_unlock_ip(lock, six_lock_type::SIX_LOCK_intent, ip);
+    unsafe {
+        six_lock_increment_ip(lock, six_lock_type::SIX_LOCK_read, ip);
+        six_unlock_ip(lock, six_lock_type::SIX_LOCK_intent, ip);
+    }
 }
 
 /*
@@ -1119,8 +1125,10 @@ pub fn six_lock_downgrade(lock: &c::six_lock) {
  *
  * Return: true on success, false on failure
  */
+/// # Safety
+/// @lock is held for read, by the caller.
 #[c_export]
-pub fn six_lock_tryupgrade(lock: &c::six_lock) -> bool {
+pub unsafe fn six_lock_tryupgrade(lock: &c::six_lock) -> bool {
     let mut old = atomic_read(lock);
 
     loop {
@@ -1163,8 +1171,10 @@ pub fn six_lock_tryupgrade(lock: &c::six_lock) -> bool {
  *
  * Return: true on success, false on failure
  */
+/// # Safety
+/// @lock is held as @from, by the caller.
 #[c_export]
-pub fn six_trylock_convert(lock: &c::six_lock, from: c::six_lock_type, to: c::six_lock_type) -> bool {
+pub unsafe fn six_trylock_convert(lock: &c::six_lock, from: c::six_lock_type, to: c::six_lock_type) -> bool {
     ebug_assert!(to != six_lock_type::SIX_LOCK_write && from != six_lock_type::SIX_LOCK_write);
 
     if to == from {
@@ -1172,10 +1182,10 @@ pub fn six_trylock_convert(lock: &c::six_lock, from: c::six_lock_type, to: c::si
     }
 
     if to == six_lock_type::SIX_LOCK_read {
-        six_lock_downgrade(lock);
+        unsafe { six_lock_downgrade(lock) };
         true
     } else {
-        six_lock_tryupgrade(lock)
+        unsafe { six_lock_tryupgrade(lock) }
     }
 }
 
@@ -1190,8 +1200,10 @@ pub fn six_trylock_convert(lock: &c::six_lock, from: c::six_lock_type, to: c::si
  * A corresponding six_unlock_type() call will be required for @lock to be fully
  * unlocked.
  */
+/// # Safety
+/// @lock is held as @ty or stronger, by the caller.
 #[c_export]
-pub fn six_lock_increment_ip(lock: &c::six_lock, ty: c::six_lock_type, ip: c_ulong) {
+pub unsafe fn six_lock_increment_ip(lock: &c::six_lock, ty: c::six_lock_type, ip: c_ulong) {
     use six_lock_type::*;
 
     lock.dep_map.acquire(false, ty == SIX_LOCK_read, ip);
@@ -1299,8 +1311,11 @@ pub fn six_lock_counts(lock: &c::six_lock) -> c::six_lock_count {
  * As in any other situation when taking a write lock, @lock must be held for
  * intent one (or more) times, so @lock will never be left unlocked.
  */
+/// # Safety
+/// @lock is held for intent by the caller, and @nr takes away only read locks
+/// it holds, or gives back those it took.
 #[c_export]
-pub fn six_lock_readers_add(lock: &c::six_lock, nr: c_int) {
+pub unsafe fn six_lock_readers_add(lock: &c::six_lock, nr: c_int) {
     if lock.readers.allocated() {
         lock.readers.get().add(nr as u32);
     } else {
@@ -1348,7 +1363,7 @@ unsafe impl RawReadLock for c::six_lock {
     }
 
     unsafe fn unlock_read(&self, _: ()) {
-        six_unlock_ip(self, six_lock_type::SIX_LOCK_read, 0)
+        unsafe { six_unlock_ip(self, six_lock_type::SIX_LOCK_read, 0) }
     }
 }
 
@@ -1358,7 +1373,7 @@ unsafe impl RawSixLock for c::six_lock {
     }
 
     unsafe fn unlock_intent(&self, _: ()) {
-        six_unlock_ip(self, six_lock_type::SIX_LOCK_intent, 0)
+        unsafe { six_unlock_ip(self, six_lock_type::SIX_LOCK_intent, 0) }
     }
 
     unsafe fn lock_write(&self) {
@@ -1366,7 +1381,7 @@ unsafe impl RawSixLock for c::six_lock {
     }
 
     unsafe fn unlock_write(&self, _: ()) {
-        six_unlock_ip(self, six_lock_type::SIX_LOCK_write, 0)
+        unsafe { six_unlock_ip(self, six_lock_type::SIX_LOCK_write, 0) }
     }
 }
 
