@@ -40,7 +40,6 @@ use crate::data::update::Held;
 use crate::debug::async_objs::{AsyncObj, AsyncObjSlot};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::task::{Completion, Done};
 use crate::util::gather::Gather;
 use crate::util::task::{waiter, Resumable, Resume, Spawn};
@@ -110,7 +109,7 @@ impl<B: Future<Output = ()> + Send> UpdateTask<B> {
                     u:         UnsafeCell::new(MaybeUninit::zeroed()),
                 }),
             });
-            TaskBox::new(at, init, GFP_KERNEL)
+            TaskBox::new(at, init)
         })
         .map(Spawned)
         .map_err(|e| if e.matches(c::ENOMEM) { fs.err(enomem) } else { e })

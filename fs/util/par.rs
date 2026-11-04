@@ -37,7 +37,7 @@
 
 use crate::c;
 use crate::errcode::BchError;
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::kthread::Kthread;
 use crate::util::task::{waiter, BoxWithTask, Spawn};
@@ -173,7 +173,7 @@ impl<'scope, 'env> Scope<'scope, 'env> {
                     c::bch2_set_worker_desc(desc.as_ptr().cast());
                 }
                 *home.ret.get() = Some(f());
-            }, job_done, GFP_KERNEL)
+            }, job_done)
         }?;
         // not pushed, it's dropped: discarded
         self.jobs.borrow_mut().push(job)?;

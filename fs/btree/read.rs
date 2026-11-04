@@ -24,7 +24,6 @@ use crate::fs::WriteRef;
 use crate::prt;
 use crate::sb::members::DevIoRef;
 use crate::types::{Le32, c_default};
-use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::bio::{buf_nr_bvecs, Bio, BioBuf, BioOwner};
 use crate::util::refcount::TryRefcount;
 use crate::util::backref::BackRef;
@@ -301,7 +300,7 @@ pub fn btree_node_scrub(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, dev: u
     let Some(r) = ReplicaRead::new(fs, k, dev)? else { return Ok(()) };
     let key = BtreeKeyBuf::new(btree, level, k);
 
-    TaskBox::new(Spawn::Queue(&fs.btree.read_complete_wq), rewrite_if_bad(write, fs_ref, key, r), GFP_KERNEL)
+    TaskBox::new(Spawn::Queue(&fs.btree.read_complete_wq), rewrite_if_bad(write, fs_ref, key, r))
         .map(TaskBox::start)
 }
 

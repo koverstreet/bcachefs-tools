@@ -149,7 +149,6 @@ use crate::errcode::{bch_errcode, BchError, FirstErr};
 use crate::fs::Fs;
 use crate::locking::{Guard, Locked};
 use crate::util::alloc::{AllocError, KBox, KVVec};
-use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::backref::BackRef;
 use crate::util::ffi::Opaque;
 use crate::util::gather::{Gather, GatherRefSlot};
@@ -437,7 +436,7 @@ impl StripeNew {
         let b = unsafe {
             let wq = Queue::from_raw(fs.ec.stripe_create_wq.as_ptr());
             BoxWithTask::new(Spawn::Queue(wq), init,
-                             |s| stripe_task(fs, BackRef::new(s)), stripe_done, GFP_KERNEL)
+                             |s| stripe_task(fs, BackRef::new(s)), stripe_done)
         }?;
         {
             let mut s = b.lock();

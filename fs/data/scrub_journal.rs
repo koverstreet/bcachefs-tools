@@ -23,7 +23,6 @@ use crate::init::error::id;
 use crate::init::recovery::btree_lost_data;
 use crate::inode_opts::{get_fs, get_io_opts};
 use crate::sb::counters::events;
-use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::alloc::KVVec;
 use crate::util::log::LogMsg;
 use crate::locking::Locked;
@@ -200,7 +199,7 @@ fn scrub_node(fs: &Fs, found: &Gather<Bad, waiter::Sync>, btree: Btree, level: u
     if !reads.is_empty() {
         let (key, found) = (BtreeKeyBuf::new(btree, level, k), found.get());
         let task = TaskBox::new(Spawn::Queue(&fs.btree.read_complete_wq),
-                                async move { found.put(node_verdict(fs_ref, key, reads).await) }, GFP_KERNEL);
+                                async move { found.put(node_verdict(fs_ref, key, reads).await) });
         ret = ret.and(task.map(TaskBox::start));
     }
     ret

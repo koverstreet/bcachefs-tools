@@ -6,8 +6,7 @@
 //! spawn_detached() is one started at once, for a task nothing joins.
 
 use crate::errcode::BchError;
-use crate::util::alloc::Flags;
-use crate::util::alloc::Kmalloc;
+use crate::util::alloc::{flags, Kmalloc};
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::rcu::RcuHead;
 use crate::util::workqueue::Queue;
@@ -25,8 +24,8 @@ use pin_init::PinInit;
 pub struct TaskBox<'q, F: Future<Output = ()>>(MaybeRcuAlloc<Task<'q, F>, Kmalloc>);
 
 impl<'q, F: Future<Output = ()> + Send> TaskBox<'q, F> {
-    pub fn new(at: Spawn<'q, '_>, future: impl PinInit<F>, gfp: Flags) -> Result<Self, BchError> {
-        MaybeRcuAlloc::new(Task::new(at, future, Self::free), gfp).map(Self)
+    pub fn new(at: Spawn<'q, '_>, future: impl PinInit<F>) -> Result<Self, BchError> {
+        MaybeRcuAlloc::new(Task::new(at, future, Self::free), flags::GFP_KERNEL).map(Self)
     }
 
     pub fn get(&mut self) -> Pin<&mut Task<'q, F>> {
@@ -62,10 +61,10 @@ impl<F: Future<Output = ()>> TaskBox<'_, F> {
 ///
 /// # Safety
 /// Its queue, and what the future borrows, outlive the task.
-pub unsafe fn spawn_detached<F: Future<Output = ()> + Send>(at: Spawn<'_, '_>, future: impl PinInit<F>, gfp: Flags)
+pub unsafe fn spawn_detached<F: Future<Output = ()> + Send>(at: Spawn<'_, '_>, future: impl PinInit<F>)
     -> Result<(), BchError>
 {
-    unsafe { TaskBox::new(at, future, gfp)?.start_unchecked() };
+    unsafe { TaskBox::new(at, future)?.start_unchecked() };
     Ok(())
 }
 
@@ -116,7 +115,7 @@ impl<'q, H: Send + Sync> BoxWithTask<'q, H> {
     /// What the future borrows outlives the task; @done is the box's owner's
     /// cue that it may drop it, and touches the task no more.
     pub unsafe fn new<'h, M, F>(at: Spawn<'q, '_>, home: impl PinInit<H, BchError>, make: M,
-                                done: unsafe fn(NonNull<H>), gfp: Flags) -> Result<Self, BchError>
+                                done: unsafe fn(NonNull<H>)) -> Result<Self, BchError>
     where
         H: 'h,
         M: FnOnce(&'h H) -> F,
@@ -142,7 +141,7 @@ impl<'q, H: Send + Sync> BoxWithTask<'q, H> {
                 Ok(())
             })
         };
-        let w = MaybeRcuAlloc::<WithTask<'q, H, F>, Kmalloc>::new(init, gfp)?.into_raw().as_ptr();
+        let w = MaybeRcuAlloc::<WithTask<'q, H, F>, Kmalloc>::new(init, flags::GFP_KERNEL)?.into_raw().as_ptr();
         unsafe {
             Ok(BoxWithTask { home: NonNull::new_unchecked((&raw mut (*w).home).cast()),
                              task: (*w).task.task(),

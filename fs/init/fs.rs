@@ -1256,7 +1256,7 @@ impl Fs {
             crate::util::task::spawn_detached(crate::util::task::Spawn::Queue(wq), async move {
                 let _w = w;
                 make(fs).await
-            }, crate::util::alloc::flags::GFP_KERNEL)
+            })
         }
     }
 }
