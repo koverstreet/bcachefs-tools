@@ -113,7 +113,7 @@ static int wb_key_seq_cmp(const void *_l, const void *_r, const void *priv)
 		       wb_keys_idx(keys, r->idx)->journal_seq);
 }
 
-/* Compare excluding idx, the low 24 bits: */
+/* Compare excluding idx, the low 32 bits: */
 static inline bool wb_key_eq(const void *_l, const void *_r)
 {
 	const struct wb_key_ref *l = _l;
@@ -121,7 +121,7 @@ static inline bool wb_key_eq(const void *_l, const void *_r)
 
 	return !((l->hi ^ r->hi)|
 		 (l->mi ^ r->mi)|
-		 ((l->lo >> 24) ^ (r->lo >> 24)));
+		 ((l->lo >> 32) ^ (r->lo >> 32)));
 }
 
 static noinline void wb_sort(struct wb_key_ref *base, size_t num)
