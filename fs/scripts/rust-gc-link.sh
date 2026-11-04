@@ -30,7 +30,11 @@
 # modpost takes those for symbols the module needs: they're stripped - only
 # those no relocation names, which objcopy enforces, refusing the rest.
 #
-# Takes LD (with its flags), NM, OBJCOPY and READELF from the environment.
+# And no symbol may be KSYM_NAME_LEN bytes or more - kallsyms writes before
+# its buffer printing one: ksym_len renames them, and checks.
+#
+# Takes LD (with its flags), NM, OBJCOPY, READELF and KSYM_LEN from the
+# environment.
 
 set -e
 
@@ -68,3 +72,9 @@ comm -23 "$work/gc.undef" "$work/gc.relocated" > "$work/gc.unneeded"
 if [ -s "$work/gc.unneeded" ]; then
 	$OBJCOPY --strip-symbols="$work/gc.unneeded" "$out"
 fi
+
+$NM --defined-only "$out" | $KSYM_LEN > "$work/gc.redefine"
+if [ -s "$work/gc.redefine" ]; then
+	$OBJCOPY --redefine-syms="$work/gc.redefine" "$out"
+fi
+$NM --defined-only "$out" | $KSYM_LEN --check

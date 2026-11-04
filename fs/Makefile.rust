@@ -423,7 +423,8 @@ $(obj)/rust.o: private objtool-args += --link
 
 quiet_cmd_bch_rust_gc = LD $(quiet_modtag)  $@
       cmd_bch_rust_gc = LD='$(LD) $(ld_flags)' NM='$(NM)' OBJCOPY='$(OBJCOPY)' \
-	READELF='$(READELF)' $(CONFIG_SHELL) $(src)/scripts/rust-gc-link.sh \
+	READELF='$(READELF)' KSYM_LEN='$(obj)/ksym_len' \
+	$(CONFIG_SHELL) $(src)/scripts/rust-gc-link.sh \
 	$@ $(obj)/rust $(bch-rust-gc-objs) $(cmd_objtool)
 
 define rule_bch_rust_gc
@@ -431,10 +432,14 @@ define rule_bch_rust_gc
 	$(call cmd,gen_objtooldep)
 endef
 
-$(obj)/rust.o: $(bch-rust-gc-objs) $(src)/scripts/rust-gc-link.sh FORCE
+$(obj)/rust.o: $(bch-rust-gc-objs) $(src)/scripts/rust-gc-link.sh $(obj)/ksym_len FORCE
 	$(call if_changed_rule,bch_rust_gc)
 
-targets += $(bch-rust-gc-in)
+# rust.o's symbols short enough for kallsyms: scripts/ksym_len.rs.
+$(obj)/ksym_len: $(src)/scripts/ksym_len.rs FORCE
+	$(call if_changed,bch_codegen_host)
+
+targets += $(bch-rust-gc-in) ksym_len
 
 # ---- the C of the types defined in Rust ------------------------------------
 # foo/types_gen.h for foo/types.rs (types/lib.rs), written from mod.o's
