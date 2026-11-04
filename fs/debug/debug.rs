@@ -179,10 +179,7 @@ fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
 
     prt!(out, "{}\n", b.key_i().to_text(fs));
 
-    prt!(out, "flags:\t");
-    // SAFETY: the BTREE_FLAGS() names, NULL-terminated
-    unsafe { out.prt_bitflags((&raw const c::bch2_btree_node_flags).cast(), b.flags.first_word() as u64) };
-    prt!(out, "\n");
+    prt!(out, "flags:\t{}\n", b.flags);
 
     prt!(out, "pcpu read locks:\t{}\n",     b.c.lock.readers.allocated() as u32);
     prt!(out, "written:\t{}\n",             b.written.get());

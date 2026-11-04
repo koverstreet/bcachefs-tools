@@ -18,7 +18,6 @@ use crate::c;
 use crate::cstructs::c as cs;
 use crate::fs::Fs;
 use crate::types::c_default;
-use crate::data_structures::bitmap::AtomicBitflags;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use crate::util::{Printbuf, ToText};
@@ -87,7 +86,7 @@ pub struct BtreeNode {
     pub hash_val: u64,
 
     #[c("unsigned long flags")]
-    pub flags: AtomicBitflags<cs::btree_flags>,
+    pub flags: cs::AtomicBtreeNodeFlags,
     /*
      * XXX: written and whiteout_u64s are the node writer's: the thread that
      * cleared BTREE_NODE_dirty, which may hold only a read lock. They want a
@@ -216,12 +215,12 @@ impl BtreeNode {
     }
 
     pub fn is_fake(&self) -> bool {
-        self.flags.get(c::btree_flags::BTREE_NODE_fake)
+        self.flags.fake()
     }
 
     /// Not yet reachable: an interior update in flight will make it so.
     pub fn will_make_reachable(&self) -> bool {
-        self.flags.get(c::btree_flags::BTREE_NODE_will_make_reachable)
+        self.flags.will_make_reachable()
     }
 
     /// The node's keys, unpacked, in order.

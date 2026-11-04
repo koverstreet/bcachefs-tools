@@ -361,12 +361,6 @@ impl<T: BitEnum> AtomicBitflags<T> {
     pub fn swap(&self, f: T, v: bool) -> bool {
         if v { self.0.test_and_set(f.bit()) } else { self.0.test_and_clear(f.bit()) }
     }
-
-    /// The first word, whole - with the bits C keeps in it beside T's, as a
-    /// btree node's write type.
-    pub fn first_word(&self) -> usize {
-        self.0.0[0].load(Ordering::Relaxed)
-    }
 }
 
 impl<T: BitEnum + crate::util::ToText> crate::util::ToText for AtomicBitflags<T> {

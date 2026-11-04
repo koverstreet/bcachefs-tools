@@ -24,7 +24,8 @@ use crate::util::projections::Volatile;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicIsize};
-use cstruct_macros::{c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, Late, TypeInfo};
+use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, Late,
+                     TypeInfo};
 use pin_init::{pin_data, PinInit};
 use nestify::nest;
 #[cfg(feature = "std")]
@@ -951,6 +952,25 @@ c_enum! {
         BTREE_FLAGS(flag) => concat(BTREE_NODE_, flag),
     }
 }
+
+atomic_bitfield! {
+    /// struct btree's flags: the pending write's type, then BTREE_FLAGS().
+    pub struct BtreeNodeFlags: u32 in usize {
+        #[bits(3)] write_type: btree_write_type,
+        BTREE_FLAGS(flag) => flag: bool,
+    }
+}
+
+// Where C's set_bit()s and masks have them, until btree/write.c, commit.c
+// and interior.c are Rust
+macro_rules! btree_node_flags_at_c_bits {
+    ([] $(($f:ident)),* $(,)?) => { ::paste::paste! { $(
+        const _: () = assert!(BtreeNodeFlags::[<$f:upper _OFFSET>] == btree_flags::[<BTREE_NODE_ $f>] as usize);
+    )* } };
+}
+crate::cstructs::c::BTREE_FLAGS!(btree_node_flags_at_c_bits []);
+const _: () = assert!(BtreeNodeFlags::WRITE_TYPE_OFFSET == 0 &&
+                      BtreeNodeFlags::WRITE_TYPE_BITS == cs::BTREE_WRITE_TYPE_BITS as usize);
 
 c_xmacro! {
     BTREE_NODE_REWRITE_REASON(x) {

@@ -24,6 +24,8 @@
 //!                        marker type for each, its opcode and argument type
 //!   c_enum! { .. }       an enum, #[open], #[closed] or #[flags]: Rust gets
 //!                        the type that is, and its values as constants
+//!   atomic_bitfield! { .. }
+//!                        a bitfield's value, and an atomic word of it; no C
 //!   #[open_enum]         an open enum Rust alone has: c_enum!'s #[open],
 //!                        without the C
 //!   c_const! { .. }      integer constants: C gets a #define each
@@ -77,6 +79,7 @@ use cstruct::{bitfield_type, enum_text, expand_enum_list, parse_c_export, parse_
               spell_concat, CEnumDef, CEnumKind, CEnumVariant, CItem, CXEntry};
 
 mod args_stored_once;
+mod atomic_bitfield;
 mod detach;
 mod rcu_head;
 mod fieldwise;
@@ -1051,6 +1054,21 @@ pub fn c_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 }
 
 const C_ENUM_SYNTAX: &str = "#[open|closed|flags] pub enum NAME: REPR { ... }";
+
+/// `atomic_bitfield! { pub struct NAME: uN [in uM] { fields } }`: a
+/// bitfield's value, NAME, and AtomicNAME, a word of it that's atomic - see
+/// atomic_bitfield.rs.
+#[proc_macro]
+pub fn atomic_bitfield(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("atomic_bitfield!", || atomic_bitfield::atomic_bitfield(input.into()))
+}
+
+/// atomic_bitfield!'s list's callback: { [decl] (row), (row), ... }.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __atomic_bitfield(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("atomic_bitfield!", || atomic_bitfield::rows(input.into()))
+}
 
 /// `#[open_enum]` on `#[repr(uN)] pub enum NAME { a = 0, b, ... }`: an enum
 /// Rust alone has, whose values can be anything - read off disk, written by
