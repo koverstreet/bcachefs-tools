@@ -67,7 +67,7 @@ use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::data::reconcile::plan::{park, parks_on, pending_mod, plan, Plan};
 use crate::data::reconcile::scan::ScanCookie;
 use crate::data::reconcile::trigger::{rb_work_to_data_pos, reconcile_bp_get_key};
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::{writepoint_ptr, Fs};
 use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
 use crate::sb::counters::events;
@@ -85,7 +85,7 @@ use crate::{bch_err, log_msg_ratelimited, warn_once, SPOS_MAX};
 use c::bch_errcode as err;
 use c::reconcile_work_id as w;
 use core::cell::Cell;
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use core::ops::ControlFlow;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_export, CStruct, TypeInfo, c_enum, c_typedef, c_xmacro, tagged_union};
@@ -1162,6 +1162,7 @@ impl Fs {
 mod power {
     use super::*;
     use crate::util::place::{container_of, Contained};
+    use core::ffi::c_int;
 
     fn on_battery() -> bool {
         // SAFETY: plain
@@ -1218,7 +1219,6 @@ pub fn bch2_reconcile_wakeup(c: &Fs) {
     c.reconcile_wakeup()
 }
 
-#[c_export]
-pub fn bch2_fs_reconcile_init(c: &Fs) -> c_int {
-    ret_to_c(power::register(c))
+pub fn reconcile_init(fs: &Fs) -> Result<(), BchError> {
+    power::register(fs)
 }

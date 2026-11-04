@@ -15,7 +15,7 @@ use crate::c;
 use crate::data::extents::{BkeyVExtents, Extents};
 use crate::data::moving::{key_sectors, MoveStats, Moving, MovingCtxt};
 use crate::data::ptrs::{extents_match, BkeyVPtrs, Ptrs};
-use crate::data::update_index::ptr_mask_remap;
+use crate::data::update_index::remap_bits;
 use crate::errcode::BchError;
 use crate::fs::{writepoint_ptr, Fs};
 use crate::init::damage;
@@ -491,7 +491,7 @@ fn repair_one(m: &Moving<'_>, t: &TransAttempt<'_, '_>, r: &Repair) -> Result<Ou
         e.cut_back_in_place(stashed.k.p);
     }
 
-    let bad_devs = ptr_mask_remap(fs, stashed, r.bad_devs, trimmed.as_sc());
+    let bad_devs = u32::from(remap_bits(fs, stashed, r.bad_devs, trimmed.as_sc()));
     if bad_devs == 0 {
         return Ok(Outcome::Unchanged);
     }

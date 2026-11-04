@@ -211,7 +211,7 @@
 
 use crate::fs::Dev;
 use crate::c;
-use crate::accounting::{self, bch2_dev_usage_init};
+use crate::accounting::{self, dev_usage_init};
 use crate::btree::iter::{trans_commit_do, CommitFlags};
 use crate::sb::io::SbFieldOps;
 use crate::alloc::capacity::recalc_capacity;
@@ -1288,7 +1288,7 @@ impl Fs {
         let mut state = ca.mi.get().initialized;
 
         if state == I::pre_dev_usage {
-            ret_to_result_void(bch2_dev_usage_init(ca, false))?;
+            dev_usage_init(ca, false)?;
             self.dev_set_initialized(ca, I::pre_mark_sb)?;
             state = I::pre_mark_sb;
         }

@@ -947,13 +947,8 @@ pub fn bch2_printbuf_do_indent(out: &mut Printbuf, pos: c_uint) {
 }
 
 #[c_export]
-pub fn bch2_printbuf_make_room_gfp(out: &mut Printbuf, extra: c_uint, gfp: c::gfp_t) -> c_int {
-    out.grow(extra as usize, gfp).map_or_else(|e| -(e as c_int), |()| 0)
-}
-
-#[c_export]
 pub fn bch2_printbuf_make_room(out: &mut Printbuf, extra: c_uint) -> c_int {
-    bch2_printbuf_make_room_gfp(out, extra, c::GFP_KERNEL)
+    out.grow(extra as usize, c::GFP_KERNEL).map_or_else(|e| -(e as c_int), |()| 0)
 }
 
 /*

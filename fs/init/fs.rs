@@ -1120,7 +1120,7 @@ impl Fs {
 
         self.may_start(err)?;
 
-        ret_to_result(crate::data::reconcile::work::bch2_fs_reconcile_init(self))?;
+        crate::data::reconcile::work::reconcile_init(self)?;
         crate::sb::counters::RecentCounters::queue(self);
 
         // now, so it's persisted before user-data accounting fires: a fresh

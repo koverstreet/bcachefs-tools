@@ -47,7 +47,7 @@ use crate::sb::counters::events;
 use crate::util::log::LogMsg;
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err_fn, log_msg_ratelimited};
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_int;
 use core::mem::size_of;
 use core::sync::atomic::{fence, Ordering};
 use cstruct_macros::c_export;
@@ -93,15 +93,9 @@ fn with_remapped<'b, 't, R>(fs: &Fs, old: BkeySC<'_, Ptrs>, insert: &'b mut Tran
 }
 
 /// @bits, a mask of @old's pointers, as @new's - none, of a key without them.
-fn remap_bits(fs: &Fs, old: BkeySC<'_>, bits: u32, new: BkeySC<'_>) -> u16 {
+pub(crate) fn remap_bits(fs: &Fs, old: BkeySC<'_>, bits: u32, new: BkeySC<'_>) -> u16 {
     let (Some(old), Some(new)) = (old.arm::<Ptrs>(), new.arm::<Ptrs>()) else { return 0 };
     brand(old, |o| brand(new, |n| o.remap(fs, o.assume(fs, bits), &n).bits()))
-}
-
-/// For move.c's journal scrub, until it's Rust.
-#[c_export]
-pub fn ptr_mask_remap(c: &Fs, old: BkeySC<'_>, oldmask: c_uint, new: BkeySC<'_>) -> c_uint {
-    remap_bits(c, old, oldmask, new).into()
 }
 
 /// Index update keys, for the key fail traces and the messages of an update

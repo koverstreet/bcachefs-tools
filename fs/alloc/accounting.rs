@@ -494,11 +494,10 @@ impl Fs {
     }
 }
 
-#[c_export]
-pub fn bch2_dev_usage_init(ca: &Dev, gc: bool) -> c_int {
+pub fn dev_usage_init(ca: &Dev, gc: bool) -> Result<(), BchError> {
     let fs = ca.fs();
     let trans = btree_trans!(fs);
-    ret_to_c(bch_err_fn!(fs, lockrestart_do(&trans, |t| {
+    bch_err_fn!(fs, lockrestart_do(&trans, |t| {
         /*
          * Set, not add: subtract whatever's currently accounted so the
          * free count lands at exactly nbuckets. This makes
@@ -523,7 +522,12 @@ pub fn bch2_dev_usage_init(ca: &Dev, gc: bool) -> c_int {
             t.commit(None, CommitFlags::empty())?;
         }
         Ok(())
-    })))
+    }))
+}
+
+#[c_export]
+pub fn bch2_dev_usage_init(ca: &Dev, gc: bool) -> c_int {
+    ret_to_c(dev_usage_init(ca, gc))
 }
 
 #[c_export]
