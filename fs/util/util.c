@@ -243,25 +243,6 @@ int bch2_prt_task_backtrace(struct printbuf *out, struct task_struct *task, unsi
 	return ret;
 }
 
-#ifndef __KERNEL__
-#include <time.h>
-void bch2_prt_datetime(struct printbuf *out, time64_t sec)
-{
-	time_t t = sec;
-	char buf[64];
-	ctime_r(&t, buf);
-	strim(buf);
-	prt_str(out, buf);
-}
-#else
-void bch2_prt_datetime(struct printbuf *out, time64_t sec)
-{
-	char buf[64];
-	snprintf(buf, sizeof(buf), "%ptT", &sec);
-	prt_u64(out, sec);
-}
-#endif
-
 /* misc: */
 
 void bch2_bio_map(struct bio *bio, void *base, size_t size)

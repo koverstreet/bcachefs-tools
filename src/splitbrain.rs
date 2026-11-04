@@ -27,7 +27,7 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::init::dev::dev_in_fs;
 use bcachefs_kernel::fs::newest;
 use bcachefs_kernel::sb::members;
-use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::util::printbuf::DateTime;
 use c::bch_sb_handle;
 
 pub struct Divergent {
@@ -98,13 +98,6 @@ pub fn find(sbs: &[(PathBuf, bch_sb_handle)], opts: &c::bch_opts) -> Vec<Diverge
     out
 }
 
-fn datetime(secs: u64) -> String {
-    let mut out = Printbuf::new();
-    // SAFETY: writing into a printbuf we own; the value is a plain time64_t.
-    unsafe { c::bch2_prt_datetime(out.as_raw(), secs as i64) };
-    out.as_str().to_owned()
-}
-
 fn name(path: &Path) -> String {
     path.display().to_string()
 }
@@ -132,7 +125,7 @@ pub fn report(sbs: &[(PathBuf, bch_sb_handle)], divergent: &[Divergent]) -> Stri
             "  {} (device {}) last written {}, seq {}",
             name(&d.path),
             d.dev_idx,
-            datetime(d.write_time),
+            DateTime(d.write_time as i64),
             d.seq
         );
 
@@ -151,7 +144,7 @@ pub fn report(sbs: &[(PathBuf, bch_sb_handle)], divergent: &[Divergent]) -> Stri
         let _ = writeln!(
             out,
             "  {other} last written {}, seq {}.",
-            datetime(write_time(best)),
+            DateTime(write_time(best) as i64),
             seq(best)
         );
     }

@@ -1145,9 +1145,26 @@ impl ToText for HumanReadable<i64> {
     }
 }
 
+/// UTC, as the kernel's %ptT prints it: 2026-11-03T22:41:07. Ours, not
+/// %ptT or ctime_r(), so the kernel and the tools print the same thing.
 impl ToText for DateTime {
     fn to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_prt_datetime(out, self.0) };
+        let days = self.0.div_euclid(86400);
+        let secs = self.0.rem_euclid(86400);
+
+        /* civil_from_days(), from Howard Hinnant's chrono-Compatible Low-Level Date Algorithms */
+        let z = days + 719468;
+        let era = z.div_euclid(146097);
+        let doe = z.rem_euclid(146097);
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = yoe + era * 400 + i64::from(month <= 2);
+
+        write!(out, "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}",
+               secs / 3600, secs / 60 % 60, secs % 60);
     }
 }
 
@@ -1371,4 +1388,22 @@ macro_rules! message {
     ($msg:expr) => {
         &$msg as &dyn $crate::util::ToText
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn datetime() {
+        for (t, s) in [(0,          "1970-01-01T00:00:00"),
+                       (-1,         "1969-12-31T23:59:59"),
+                       (951782400,  "2000-02-29T00:00:00"),
+                       (4107542399, "2100-02-28T23:59:59"),
+                       (1762209667, "2025-11-03T22:41:07")] {
+            let mut out = Printbuf::new();
+            DateTime(t).to_text(&mut out);
+            assert_eq!(out.as_str(), s);
+        }
+    }
 }

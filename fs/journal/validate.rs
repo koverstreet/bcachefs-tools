@@ -14,7 +14,7 @@ use crate::util::ffi::Opaque;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::{bytes_of, cast_plain, cast_plain_mut, ArmRef, Head, SelfSized,
                             Unvalidated, VStruct};
-use crate::util::{Printbuf, ToText};
+use crate::util::{DateTime, Printbuf, ToText};
 use crate::{message, prt};
 use c::bch_validate_flags as Flags;
 use cstruct_macros::{c_const, c_export};
@@ -507,7 +507,7 @@ impl EntryOps for c::jset_entry_datetime<Unvalidated> {
     const SIZE: Size = Size::AtLeast(id::journal_entry_datetime_bad_size);
 
     fn to_text(&self, out: &mut Printbuf, _fs: Option<&Fs>) {
-        unsafe { c::bch2_prt_datetime(out.as_raw(), self.seconds.get() as c::time64_t) };
+        DateTime(self.seconds.get() as i64).to_text(out);
     }
 }
 
