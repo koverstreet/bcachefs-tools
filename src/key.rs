@@ -203,18 +203,18 @@ impl KeyHandle {
 }
 
 #[derive(ZeroizeOnDrop)]
-pub struct Passphrase(CString);
+pub struct Passphrase(Vec<u8>);
 
 impl Passphrase {
-    pub(crate) fn get(&self) -> &CStr {
+    pub(crate) fn get(&self) -> &[u8] {
         &self.0
     }
 
     /// From a line somebody typed or sent. The line ending is theirs, not part
     /// of the passphrase - and it is CR, LF or both, because an initramfs
     /// console that nothing has configured sends CR for enter.
-    pub fn from_line(line: &str) -> Result<Self> {
-        Ok(Self(CString::new(line.trim_end_matches(['\n', '\r']))?))
+    pub fn from_line(line: &str) -> Self {
+        Self(line.trim_end_matches(['\n', '\r']).as_bytes().to_vec())
     }
 
     /// Ask, and take the passphrase from whoever supplies one first.
@@ -229,7 +229,7 @@ impl Passphrase {
         match read_passphrase(
             sb.sb(),
             socket.as_deref_mut().map(|s| s as &mut dyn Watch),
-            |p| Self(CString::new(p).ok()?).check(sb),
+            |p| Self(p.to_vec()).check(sb),
         )? {
             Given::Taken(p)   => Ok(p),
             // The socket answers by ending the prompt, so a passphrase
@@ -241,11 +241,10 @@ impl Passphrase {
         }
     }
 
-    /// Prompt for a passphrase with echo disabled.
     /// A line of stdin, @prompt shown where it's a terminal.
     fn read(prompt: &str) -> Result<Self> {
         match read_secret_line(prompt, None)? {
-            Given::Taken(line) => Ok(Self(CString::new(line.as_slice())?)),
+            Given::Taken(mut line) => Ok(Self(std::mem::take(&mut *line))),
             _ => bail!("no passphrase read: end of file on stdin"),
         }
     }
@@ -257,7 +256,7 @@ impl Passphrase {
             return Ok(pass1);
         }
         let pass2 = Self::read("Enter same passphrase again: ")?;
-        ensure!(pass1.get().to_bytes() == pass2.get().to_bytes(), "Passphrases do not match");
+        ensure!(pass1.get() == pass2.get(), "Passphrases do not match");
         Ok(pass1)
     }
 
@@ -271,7 +270,7 @@ impl Passphrase {
 
         let passphrase = Zeroizing::new(fs::read_to_string(passphrase_file)?);
 
-        Self::from_line(&passphrase)
+        Ok(Self::from_line(&passphrase))
     }
 
     /// Re-encrypt a filesystem key with this passphrase.
@@ -284,7 +283,7 @@ impl Passphrase {
         let crypt = sb.sb().crypt().expect("called on encrypted fs");
         let mut new_key = bch_encrypted_key::new_unencrypted(key);
 
-        let passphrase_key = crypt.derive_passphrase(self.get().to_bytes())
+        let passphrase_key = crypt.derive_passphrase(self.get())
             .map_err(|e| anyhow!("deriving key from passphrase: {e}"))?;
         new_key.chacha20(&passphrase_key, sb.sb().nonce());
 
@@ -305,7 +304,7 @@ impl Passphrase {
         // it, so the KDF parameters exist. Failing here means a corrupt
         // superblock, not a wrong passphrase - returning None would report it
         // as the latter.
-        let passphrase_key = crypt.derive_passphrase(self.get().to_bytes())
+        let passphrase_key = crypt.derive_passphrase(self.get())
             .expect("sb key is encrypted, so its KDF parameters must be usable");
 
         let mut cleartext_sb_key = crypt.key().clone();

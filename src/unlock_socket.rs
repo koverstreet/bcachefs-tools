@@ -124,7 +124,7 @@ impl UnlockSocket<'_> {
         let mut line = Zeroizing::new(String::new());
         BufReader::new(&conn).read_line(&mut line)?;
 
-        let passphrase = Passphrase::from_line(&line)?;
+        let passphrase = Passphrase::from_line(&line);
 
         match passphrase.check(self.sb) {
             Some(correct) => {

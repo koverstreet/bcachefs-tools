@@ -342,7 +342,7 @@ pub fn format(
 
         if let Some(passphrase) = opts.passphrase {
             crypt.kdf_init();
-            let passphrase_key = crypt.derive_passphrase(passphrase.get().to_bytes())
+            let passphrase_key = crypt.derive_passphrase(passphrase.get())
                 .unwrap_or_else(|e| die(&format!("error deriving key from passphrase: {e}")));
             sb_key.chacha20(&passphrase_key, nonce);
         }
