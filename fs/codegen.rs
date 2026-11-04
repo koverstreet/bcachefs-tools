@@ -172,7 +172,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "zstd_dctx_workspace_bound", "zstd_init_dctx", "zstd_decompress_dctx",
     "rust_vmap", "rust_vunmap",
     "xxh64_reset", "xxh64_update", "xxh64_digest",
-    "chacha_init", "chacha20_crypt", "chacha_zeroize_state",
+    "chacha_init", "chacha20_crypt",
     "poly1305_init", "poly1305_update", "poly1305_final",
     "rust_request_user_key", "rust_user_key_data",
     // util/fs_context.rs and util/super_block.rs: static inlines, and the

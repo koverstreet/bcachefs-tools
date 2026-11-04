@@ -365,8 +365,7 @@ impl Chacha {
 
 impl Drop for Chacha {
     fn drop(&mut self) {
-        // SAFETY: ours
-        unsafe { c::chacha_zeroize_state(&mut self.0) }
+        c::wipe(&mut self.0)
     }
 }
 
