@@ -16,13 +16,15 @@ pub mod sort;
 use crate::btree::bkey::{BkeyI, BkeyP, BkeySC};
 use crate::c;
 use crate::cstructs::c as cs;
+use crate::format::Btree;
 use crate::fs::Fs;
 use crate::types::c_default;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use crate::util::{Printbuf, ToText};
 use core::ffi::c_void;
-use core::ops::ControlFlow;
+use core::mem::offset_of;
+use core::ops::{ControlFlow, Range};
 use core::sync::atomic::AtomicUsize;
 use bset::{BsetTree, BSET_CACHELINE};
 use iter::KeyIter;
@@ -276,6 +278,84 @@ impl BtreeNode {
 
     pub fn aux_data_u64s(&self) -> usize {
         self.aux_data_bytes() / size_of::<u64>()
+    }
+}
+
+pub const WRITE_SET_U64S_BITS: u32 = 9;
+
+/*
+ * Could buffer up larger amounts of keys for btrees with larger keys,
+ * pending benchmarking:
+ */
+const WRITE_SET_BUFFER: usize = 8 << WRITE_SET_U64S_BITS;
+
+impl BtreeNode {
+    pub fn written_end(&self) -> usize {
+        self.written.get() as usize * (512 / size_of::<u64>())
+    }
+
+    pub fn bset_written(&self, t: &BsetTree) -> bool {
+        (t.data_offset as usize) < self.written_end()
+    }
+
+    pub fn unwritten_whiteouts(&self) -> Range<usize> {
+        let end = self.buf_bytes() / size_of::<u64>();
+        end - self.whiteout_u64s.get() as usize..end
+    }
+
+    pub fn u64s_remaining(&self, end: usize) -> isize {
+        let total = self.buf_bytes() / size_of::<u64>();
+        /* Always leave one extra u64, slack for varint::decode_fast(): */
+        total as isize - (end + self.whiteout_u64s.get() as usize + 1) as isize
+    }
+
+    pub fn want_new_bset(&self, fs: &Fs) -> Option<u16> {
+        let t = self.last_set();
+        let bne = self.written_end().max(t.end_offset as usize);
+        let keys = (offset_of!(Head<c::btree_node_entry>, keys) + offset_of!(Head<c::bset>, _data)) / size_of::<u64>();
+
+        let want = if self.bset_written(t) {
+            self.written.get() as u32 + fs.block_sectors() <= fs.btree_sectors()
+        } else {
+            t.u64s() * size_of::<u64>() > WRITE_SET_BUFFER &&
+                self.u64s_remaining(bne + keys) > (WRITE_SET_BUFFER / size_of::<u64>()) as isize
+        };
+        want.then(|| u16::try_from(bne).expect("a bset offset in a node's u16 range"))
+    }
+
+    /*
+     * If we have MAX_BSETS (3) bsets, should we sort them all down to just one?
+     *
+     * The first bset is going to be of similar order to the size of the node, the
+     * last bset is bounded by btree_write_set_buffer(), which is set to keep the
+     * memmove on insert from being too expensive: the middle bset should, ideally,
+     * be the geometric mean of the first and the last.
+     *
+     * Returns true if the middle bset is greater than that geometric mean:
+     */
+    pub fn should_compact_all(&self, fs: &Fs) -> bool {
+        let mid_u64s_bits = (fs.btree_max_u64s().ilog2() + WRITE_SET_U64S_BITS) / 2;
+        self.set[1].u64s() > 1 << mid_u64s_bits
+    }
+
+    pub fn current_write(&self) -> &cs::btree_write {
+        &self.writes[self.flags.write_idx() as usize]
+    }
+
+    pub fn prev_write(&self) -> &cs::btree_write {
+        &self.writes[self.flags.write_idx() as usize ^ 1]
+    }
+
+    pub fn shard(&self, fs: &Fs) -> Option<usize> {
+        let bits = fs.opts().shard_inode_numbers_bits.get() as u32;
+        let field = match Btree(self.c.btree_id.into()) {
+            Btree::inodes => self.key.k.p.offset,
+            Btree::extents |
+            Btree::dirents |
+            Btree::xattrs  => self.key.k.p.inode,
+            _ => return None,
+        };
+        (bits != 0).then(|| ((field << 1) >> (64 - bits)) as usize)
     }
 }
 

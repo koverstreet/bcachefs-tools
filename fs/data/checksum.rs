@@ -300,6 +300,13 @@ impl Fs {
         c::bch_csum_opt(opts.data_checksum.into()).to_type(self, true)
     }
 
+    pub fn meta_checksum_type(&self) -> c::bch_csum_type {
+        if self.sb.encryption_type.get() != 0 {
+            return c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128;
+        }
+        c::bch_csum_opt(self.opts().metadata_checksum.get().into()).to_type(self, false)
+    }
+
     /// The checksum type data reconciled to @r is written with - encrypted,
     /// whatever @r says, on an encrypted filesystem: bch2_data_checksum_type_rb().
     pub fn data_checksum_type_rb(&self, r: &c::bch_extent_reconcile) -> c::bch_csum_type {

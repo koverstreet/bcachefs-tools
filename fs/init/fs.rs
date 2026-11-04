@@ -405,8 +405,16 @@ impl Fs {
         self.opts().block_size.get() as u64
     }
 
+    pub fn block_sectors(&self) -> u32 {
+        u32::from(self.opts().block_size.get()) >> 9
+    }
+
     pub fn btree_sectors(&self) -> u32 {
         self.opts().btree_node_size.get() >> 9
+    }
+
+    pub fn btree_max_u64s(&self) -> usize {
+        (self.opts().btree_node_size.get() as usize - size_of::<crate::util::vstructs::Head<c::btree_node>>()) / size_of::<u64>()
     }
 
     pub fn time_to_timespec(&self, time: i64) -> c::timespec64 {
