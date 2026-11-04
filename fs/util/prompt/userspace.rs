@@ -9,11 +9,11 @@
 //! Hence [`agent_plausibly_listening`]: there is no direct test, so we want
 //! evidence before handing a question over.
 //!
-//! src/key.rs keeps its own path - a passphrase needs termios echo-off with the
-//! ICRNL/ICANON repair for an unconfigured initramfs console, zeroizing, and
-//! keyring caching.
+//! A passphrase is [`read_passphrase`]'s: read with echo off and the
+//! ICRNL/ICANON repair for an unconfigured initramfs console, zeroized, and
+//! through the agents with their keyring caching.
 
-use std::io::{self, stdin, IsTerminal, Read};
+use std::io::{self, stdin, BufRead, IsTerminal, Read};
 use std::os::fd::{AsFd, BorrowedFd, RawFd};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -22,7 +22,9 @@ use std::time::{Duration, Instant};
 
 use std::io::Result;
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
+use rustix::termios;
 use log::debug;
+use zeroize::Zeroizing;
 
 use super::{Question, Reply, UNANSWERED, US};
 use crate::util::Printbuf;
@@ -31,11 +33,11 @@ const ASK_PASSWORD_DIR: &str = "/run/systemd/ask-password";
 
 /// Its label, or its UUID - several filesystems come up at once at boot, and
 /// someone facing two questions needs to see whether they are the same disk.
-pub fn fs_name(sb: &crate::c::bch_sb_buf) -> String {
-    let label = String::from_utf8_lossy(sb.sb().label());
+pub fn fs_name(sb: &crate::c::bch_sb) -> String {
+    let label = String::from_utf8_lossy(sb.label());
 
     if label.is_empty() {
-        sb.sb().uuid().hyphenated().to_string()
+        sb.uuid().hyphenated().to_string()
     } else {
         label.into_owned()
     }
@@ -100,7 +102,7 @@ pub trait Watch {
 }
 
 /// What ended a [`wait`].
-pub enum Waited {
+enum Waited {
     Readable,
     Settled,
     Timeout,
@@ -237,7 +239,7 @@ fn ask_password_installed() -> bool {
 /// Stdin being /dev/null is the signature of a process started by init: a
 /// terminal means a person, a pipe or a file means a script, /dev/null means
 /// neither, so the question has to go wherever init's own prompts go.
-pub fn stdin_is_dev_null() -> bool {
+fn stdin_is_dev_null() -> bool {
     let Ok(stat) = rustix::fs::fstat(stdin().as_fd()) else {
         return false;
     };
@@ -252,7 +254,7 @@ pub fn stdin_is_dev_null() -> bool {
 ///
 /// Callers that poll a terminal want it already in ICANON: then readable means a
 /// whole line has been typed, and the read that follows will not block either.
-pub fn wait(
+fn wait(
     fd: BorrowedFd<'_>,
     timeout: Option<Duration>,
     mut watch: Option<&mut dyn Watch>,
@@ -298,6 +300,26 @@ pub fn wait(
     }
 }
 
+/// systemd-ask-password, as every question is put through it: the message is
+/// the caller's, last.
+fn ask_password(id: &str, timeout: Option<Duration>) -> Command {
+    let mut command = Command::new("systemd-ask-password");
+    command
+        // Reached either with no tty, where this is a no-op (measured:
+        // identical timeout behaviour with and without), or with one
+        // plymouth is covering, where it is what stops us prompting
+        // onto the invisible terminal we just declined to use.
+        .arg("--no-tty")
+        .arg("--icon=drive-harddisk")
+        .arg(format!("--id={id}"))
+        // 0 is systemd-ask-password's own spelling of "wait indefinitely".
+        .arg(format!("--timeout={}", timeout.map_or(0, |t| t.as_secs())))
+        .arg("-n")
+        .stdin(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    command
+}
+
 /// --echo=yes because this isn't a password: the default is `masked`, an
 /// asterisk per character plus a lock-and-key emoji.
 ///
@@ -305,18 +327,10 @@ pub fn wait(
 /// the question can stop applying while the agent is still displaying it, and
 /// leaving it on someone's screen after the fact is worse than not asking.
 fn ask_via_agent(ask: &Ask<'_>, watch: Option<&mut dyn Watch>) -> Result<Answer> {
-    let mut child = Command::new("systemd-ask-password")
-        .arg("--no-tty")
+    let mut child = ask_password(&format!("bcachefs:UUID={}", ask.uuid), ask.timeout)
         .arg("--echo=yes")
-        .arg("--icon=drive-harddisk")
-        .arg(format!("--id=bcachefs:UUID={}", ask.uuid))
-        // 0 is systemd-ask-password's own spelling of "wait indefinitely".
-        .arg(format!("--timeout={}", ask.timeout.map_or(0, |t| t.as_secs())))
-        .arg("-n")
         .arg(format!("{} {}", ask.prompt, ask.brief))
-        .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
         .spawn()?;
 
     let mut stdout = child.stdout.take().expect("stdout is piped");
@@ -372,4 +386,139 @@ fn ask_on_terminal(ask: &Ask<'_>, watch: Option<&mut dyn Watch>) -> Result<Answe
     // whatever comes next start mid-line.
     println!();
     Ok(answer)
+}
+
+/// What came of asking for a passphrase.
+pub enum Given<T> {
+    /// What @accept made of the one it took.
+    Taken(T),
+    /// A pipe's, wrong: a script gets one go.
+    Rejected,
+    /// The watch has it.
+    Settled,
+    /// Input ended, or the agent was declined.
+    Unanswered,
+}
+
+/// @sb's passphrase, asked for until @accept takes one - an agent can give
+/// several at once, from its cache. The cache and id are cryptsetup's, so a
+/// passphrase given for one disk at boot is tried for the next. A watch is the
+/// terminal's.
+pub fn read_passphrase<T>(
+    sb: &crate::c::bch_sb,
+    mut watch: Option<&mut dyn Watch>,
+    mut accept: impl FnMut(&[u8]) -> Option<T>,
+) -> Result<Given<T>> {
+    let Some(p) = Prompt::detect() else {
+        return Err(io::Error::other(NO_ONE_TO_ASK));
+    };
+    let mut first = true;
+
+    loop {
+        match p {
+            Prompt::Stdin => {
+                let watch = watch.as_mut().map(|w| &mut **w as &mut dyn Watch);
+                let line = match read_secret_line("Enter passphrase: ", watch)? {
+                    Given::Taken(line) => line,
+                    Given::Settled     => return Ok(Given::Settled),
+                    _                  => return Ok(Given::Unanswered),
+                };
+                if let Some(t) = accept(&line) {
+                    return Ok(Given::Taken(t));
+                }
+                if !stdin().is_terminal() {
+                    return Ok(Given::Rejected);
+                }
+                eprintln!("incorrect passphrase");
+            }
+            Prompt::Agent => {
+                let Some(given) = ask_agent_for_passphrase(sb, first)? else {
+                    return Ok(Given::Unanswered);
+                };
+                if let Some(t) = given.split(|b| *b == 0).find_map(&mut accept) {
+                    return Ok(Given::Taken(t));
+                }
+            }
+        }
+        first = false;
+    }
+}
+
+/// A line from stdin, not echoed where it's a terminal. Its ending is theirs,
+/// not part of it - and it is CR, LF or both, because an initramfs console that
+/// nothing has configured sends CR for enter. Taken is the line read.
+pub fn read_secret_line(prompt: &str, watch: Option<&mut dyn Watch>) -> Result<Given<Zeroizing<Vec<u8>>>> {
+    let mut line = Zeroizing::new(Vec::new());
+    let trim = |line: &mut Vec<u8>| while matches!(line.last(), Some(b'\n' | b'\r')) {
+        line.pop();
+    };
+
+    if !stdin().is_terminal() {
+        if stdin().lock().read_until(b'\n', &mut line)? == 0 {
+            return Ok(Given::Unanswered);
+        }
+        trim(&mut line);
+        return Ok(Given::Taken(line));
+    }
+
+    let old = termios::tcgetattr(stdin())?;
+    let mut new = old.clone();
+    new.local_modes.remove(termios::LocalModes::ECHO);
+    /*
+     * We may be prompting on an early-boot console (initramfs) that no
+     * shell has ever configured: without ICRNL, enter sends '\r', which
+     * read_line() doesn't terminate on - keystrokes appear eaten, and
+     * the eventually-assembled passphrase has embedded '\r's and is
+     * rejected. Ensure line-input sanity rather than inheriting it:
+     */
+    new.input_modes.insert(termios::InputModes::ICRNL);
+    new.local_modes.insert(termios::LocalModes::ICANON);
+    termios::tcsetattr(stdin(), termios::OptionalActions::Flush, &new)?;
+
+    eprint!("{}", prompt);
+
+    // ICANON above is what makes this safe to poll: stdin only becomes
+    // readable once a whole line has been typed, so the read below has one
+    // waiting and does not block either.
+    let waited = wait(stdin().as_fd(), None, watch);
+
+    let read = match waited {
+        Ok(Waited::Readable) => stdin().lock().read_until(b'\n', &mut line),
+        _ => Ok(0),
+    };
+
+    termios::tcsetattr(stdin(), termios::OptionalActions::Flush, &old)?;
+    eprintln!();
+    let read = read?;
+
+    Ok(match waited? {
+        // End of file, not an empty passphrase: stdin closed, or input
+        // that arrived before the prompt and was discarded by the flush
+        // above. Calling that a wrong passphrase sends whoever hits it
+        // looking for the wrong thing entirely.
+        Waited::Readable if read == 0 => Given::Unanswered,
+        Waited::Readable => {
+            trim(&mut line);
+            Given::Taken(line)
+        }
+        // No timeout is passed
+        _ => Given::Settled,
+    })
+}
+
+/// What an agent was given, NUL-separated, or None: it was declined.
+fn ask_agent_for_passphrase(sb: &crate::c::bch_sb, first: bool) -> Result<Option<Zeroizing<Vec<u8>>>> {
+    let mut command = ask_password(&format!("cryptsetup:UUID={}", sb.uuid().as_hyphenated()), None);
+    command.args(["--multiple", "--keyname=cryptsetup", "--credential=cryptsetup.passphrase"]);
+    if first {
+        command.arg("--accept-cached");
+    }
+    let output = command
+        .arg(format!("Please enter passphrase for disk {}:", fs_name(sb)))
+        .output()?;
+    if !output.status.success() {
+        debug!("systemd-ask-password declined");
+        return Ok(None);
+    }
+    Ok(Some(Zeroizing::new(output.stdout)))
 }

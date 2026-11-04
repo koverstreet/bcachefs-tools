@@ -175,7 +175,7 @@ impl Ask {
         }
 
         Some(Ask {
-            name:     fs_name(first),
+            name:     fs_name(first.sb()),
             uuid:     first.sb().uuid(),
             missing:  expected - present,
             expected,

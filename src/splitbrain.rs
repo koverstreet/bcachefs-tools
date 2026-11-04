@@ -196,7 +196,7 @@ pub fn ask(sb: &bch_sb_handle) -> Result<bool> {
         return Ok(false);
     }
 
-    let name = fs_name(sb);
+    let name = fs_name(sb.sb());
     let uuid = sb.sb().uuid().hyphenated().to_string();
 
     // Moot cannot happen: a device arriving does not un-diverge anything, so

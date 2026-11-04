@@ -4,25 +4,21 @@ use std::{
     fs,
     io::{stdin, IsTerminal},
     mem,
-    os::fd::AsFd,
     path::Path,
-    process::{Command, Stdio},
     ptr, thread,
     time::Duration,
 };
 
 use anyhow::{anyhow, bail, ensure, Result};
 use bcachefs_kernel::c::{bch_key, bch_sb_handle, bch_encrypted_key};
+use bcachefs_kernel::util::prompt::{read_passphrase, read_secret_line, Given, Watch};
 use bch_bindgen::keyutils::{self, keyctl_search};
 use log::info;
-use rustix::termios;
 
-use bcachefs_kernel::util::prompt::{Waited, Watch};
 use crate::unlock_socket::UnlockSocket;
 use uuid::Uuid;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
-use bcachefs_kernel::util::prompt::Prompt;
 use crate::ErrnoError;
 
 /// Check if a superblock has an encrypted passphrase set.
@@ -124,7 +120,7 @@ impl Unlocked {
 }
 
 impl UnlockPolicy {
-    pub fn apply(&self, sb: &bcachefs_kernel::c::bch_sb_buf) -> Result<Unlocked> {
+    pub fn apply(&self, sb: &bch_sb_handle) -> Result<Unlocked> {
         let uuid = sb.sb().uuid();
 
         info!("Using filesystem unlock policy '{self}' on {uuid}");
@@ -133,18 +129,10 @@ impl UnlockPolicy {
             // Somebody else's key, in a keyring: we never see the bytes.
             Self::Fail => KeyHandle::new_from_search(&uuid).map(|_| Unlocked::InKeyring),
             Self::Wait => KeyHandle::wait_for_unlock(&uuid).map(|_| Unlocked::InKeyring),
-            Self::Ask => {
-                let passphrase = Passphrase::ask_in_terminal()?;
-                Ok(Unlocked::Key(passphrase
-                    .check(sb)
-                    .ok_or_else(|| anyhow!("incorrect passphrase"))?))
-            }
-            Self::Stdin => {
-                let passphrase = Passphrase::read_from_stdin()?;
-                Ok(Unlocked::Key(passphrase
-                    .check(sb)
-                    .ok_or_else(|| anyhow!("incorrect passphrase"))?))
-            }
+            Self::Ask => Ok(Unlocked::Key(Passphrase::ask_and_check(sb, None)?)),
+            Self::Stdin => Ok(Unlocked::Key(Passphrase::read("")?
+                .check(sb)
+                .ok_or_else(|| anyhow!("incorrect passphrase"))?)),
         }
     }
 }
@@ -238,157 +226,39 @@ impl Passphrase {
         sb: &bch_sb_handle,
         mut socket: Option<&mut UnlockSocket<'_>>,
     ) -> Result<PassphraseCorrect> {
-        let typed = match StdinType::detect() {
-            // A terminal plymouth is drawing over shows nothing, and this
-            // prompt has no timeout - it waits there for a person who cannot
-            // see it. Which way a question should go when that happens is
-            // Prompt::detect()'s decision, and asking it is not the same as
-            // copying it: it answers Agent for a covered terminal only where
-            // there is an agent framework to reach plymouth by, and Terminal
-            // where there isn't - an initramfs that isn't systemd, which
-            // leaves the invisible terminal as the only thing we have.
-            StdinType::Terminal if matches!(Prompt::detect(), Some(Prompt::Agent)) =>
-                Some(Self::ask_from_systemd_and_check(sb)?),
-            StdinType::Terminal => Self::read_from_terminal(
-                    "Enter passphrase: ",
-                    socket.as_deref_mut().map(|s| s as &mut dyn Watch),
-                )?
-                .and_then(|p| p.check(sb)),
-            StdinType::DevNull => Some(Self::ask_from_systemd_and_check(sb)?),
-            StdinType::Other => Self::read_from_stdin()?.check(sb),
-        };
-
-        // Nothing typed was right - but the socket answers by ending the
-        // prompt, so a passphrase waiting there is why we are here.
-        typed
-            .or_else(|| socket.and_then(UnlockSocket::take))
-            .ok_or_else(|| anyhow!("incorrect passphrase"))
-    }
-
-    fn ask_from_systemd_and_check(sb: &bcachefs_kernel::c::bch_sb_buf) -> Result<PassphraseCorrect> {
-        let uuid = sb.sb().uuid();
-        let label = bcachefs_kernel::util::prompt::fs_name(sb);
-        for i in 0..3 {
-            let mut command = Command::new("systemd-ask-password");
-            command
-                // Reached either with no tty, where this is a no-op (measured:
-                // identical timeout behaviour with and without), or with one
-                // plymouth is covering, where it is what stops us prompting
-                // onto the invisible terminal we just declined to use.
-                .arg("--no-tty")
-                .arg("--icon=drive-harddisk")
-                .arg(format!("--id=cryptsetup:UUID={}", uuid.as_hyphenated()))
-                .arg("--keyname=cryptsetup")
-                .arg("--credential=cryptsetup.passphrase")
-                .arg("--timeout=0")
-                .arg("--multiple")
-                .arg("-n");
-            if i == 0 {
-                command.arg("--accept-cached");
-            }
-            let output = command
-                .arg(format!("Please enter passphrase for disk {label}:"))
-                .stdin(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .output()?;
-            if !output.status.success() {
-                bail!("systemd-ask-password returned an error");
-            }
-            for passphrase in output.stdout.split(|b| *b == b'\0') {
-                let p = Self(
-                    CString::new(passphrase)
-                        .expect("passphrase should not contain a NUL byte because the output was split on NUL bytes")
-                );
-                if let Some(passphrase_correct) = p.check(sb) {
-                    return Ok(passphrase_correct);
-                }
-            }
+        match read_passphrase(
+            sb.sb(),
+            socket.as_deref_mut().map(|s| s as &mut dyn Watch),
+            |p| Self(CString::new(p).ok()?).check(sb),
+        )? {
+            Given::Taken(p)   => Ok(p),
+            // The socket answers by ending the prompt, so a passphrase
+            // waiting there is why we are here.
+            Given::Settled    => socket.and_then(UnlockSocket::take)
+                .ok_or_else(|| anyhow!("incorrect passphrase")),
+            Given::Rejected   => bail!("incorrect passphrase"),
+            Given::Unanswered => bail!("no passphrase read"),
         }
-        bail!("incorrect passphrase limit reached");
     }
 
     /// Prompt for a passphrase with echo disabled.
-    fn ask_in_terminal_with_prompt(prompt: &str) -> Result<Self> {
-        Ok(Self::read_from_terminal(prompt, None)?
-            .expect("no watch was given, so nothing else could have answered"))
-    }
-
-    /// `None` when @watch answered before anything was typed.
-    fn read_from_terminal(prompt: &str, watch: Option<&mut dyn Watch>) -> Result<Option<Self>> {
-        let old = termios::tcgetattr(stdin())?;
-        let mut new = old.clone();
-        new.local_modes.remove(termios::LocalModes::ECHO);
-        /*
-         * We may be prompting on an early-boot console (initramfs) that no
-         * shell has ever configured: without ICRNL, enter sends '\r', which
-         * read_line() doesn't terminate on - keystrokes appear eaten, and
-         * the eventually-assembled passphrase has embedded '\r's and is
-         * rejected. Ensure line-input sanity rather than inheriting it:
-         */
-        new.input_modes.insert(termios::InputModes::ICRNL);
-        new.local_modes.insert(termios::LocalModes::ICANON);
-        termios::tcsetattr(stdin(), termios::OptionalActions::Flush, &new)?;
-
-        eprint!("{}", prompt);
-
-        // ICANON above is what makes this safe to poll: stdin only becomes
-        // readable once a whole line has been typed, so the read below has one
-        // waiting and does not block either.
-        let waited = bcachefs_kernel::util::prompt::wait(stdin().as_fd(), None, watch);
-
-        let mut line = Zeroizing::new(String::new());
-        let read = match waited {
-            Ok(Waited::Readable) => stdin().read_line(&mut line),
-            _ => Ok(0),
-        };
-
-        termios::tcsetattr(stdin(), termios::OptionalActions::Flush, &old)?;
-        eprintln!();
-        let read = read?;
-
-        match waited? {
-            Waited::Readable => {
-                // End of file, not an empty passphrase: stdin closed, or input
-                // that arrived before the prompt and was discarded by the flush
-                // above. Calling that a wrong passphrase sends whoever hits it
-                // looking for the wrong thing entirely.
-                ensure!(read > 0, "no passphrase read: end of file on stdin");
-                Ok(Some(Self::from_line(&line)?))
-            }
-            // Settled, as Timeout can't arrive: none is passed.
-            _ => Ok(None),
+    /// A line of stdin, @prompt shown where it's a terminal.
+    fn read(prompt: &str) -> Result<Self> {
+        match read_secret_line(prompt, None)? {
+            Given::Taken(line) => Ok(Self(CString::new(line.as_slice())?)),
+            _ => bail!("no passphrase read: end of file on stdin"),
         }
-    }
-
-    // blocks indefinitely if no input is available on stdin
-    pub fn ask_in_terminal() -> Result<Self> {
-        Self::ask_in_terminal_with_prompt("Enter passphrase: ")
     }
 
     /// Prompt for a new passphrase twice and verify they match.
     pub fn ask_for_new_passphrase() -> Result<Self> {
+        let pass1 = Self::read("Enter new passphrase: ")?;
         if !stdin().is_terminal() {
-            return Self::read_from_stdin();
+            return Ok(pass1);
         }
-        let pass1 = Self::ask_in_terminal_with_prompt("Enter new passphrase: ")?;
-        let pass2 = Self::ask_in_terminal_with_prompt("Enter same passphrase again: ")?;
+        let pass2 = Self::read("Enter same passphrase again: ")?;
         ensure!(pass1.get().to_bytes() == pass2.get().to_bytes(), "Passphrases do not match");
         Ok(pass1)
-    }
-
-    // blocks indefinitely if no input is available on stdin
-    pub fn read_from_stdin() -> Result<Self> {
-        info!("Trying to read passphrase from stdin...");
-
-        let mut line = Zeroizing::new(String::new());
-        // Zero bytes is end of file, not an empty passphrase: whoever piped us
-        // nothing would otherwise be told their passphrase was wrong.
-        ensure!(
-            stdin().read_line(&mut line)? > 0,
-            "no passphrase read: end of file on stdin"
-        );
-
-        Self::from_line(&line)
     }
 
     pub fn read_from_file(passphrase_file: impl AsRef<Path>) -> Result<Self> {
@@ -456,25 +326,4 @@ pub struct PassphraseCorrect {
     pub fs_uuid:          Uuid,
     pub passphrase_key:   bch_key,
     pub cleartext_sb_key: bch_encrypted_key,
-}
-
-/// A passphrase is the one question a pipe can answer, which is why this
-/// doesn't go through crate::prompt: Other reads the passphrase off stdin
-/// rather than meaning nobody is there.
-enum StdinType {
-    Terminal,
-    DevNull,
-    Other,
-}
-
-impl StdinType {
-    fn detect() -> StdinType {
-        if stdin().is_terminal() {
-            StdinType::Terminal
-        } else if bcachefs_kernel::util::prompt::stdin_is_dev_null() {
-            StdinType::DevNull
-        } else {
-            StdinType::Other
-        }
-    }
 }
