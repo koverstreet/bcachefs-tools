@@ -19,7 +19,8 @@ use crate::init::recovery::NotRw;
 use crate::locking::Locked;
 use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
-use crate::util::alloc::{flags::GFP_KERNEL, init_at, ABox, AVec, AllocError, ConstAlign, DArrayLoan, KVVec};
+use crate::util::alloc::{flags::GFP_KERNEL, init_at, kvzalloc, ABox, AVec, AllocError, ConstAlign, DArrayLoan,
+                         KVVec};
 use crate::util::bio::{buf_nr_bvecs, Bio, BioBuf, BioOwner};
 use crate::util::kernel::{local_clock, PAGE_SIZE};
 use crate::util::log::LogMsg;
@@ -134,8 +135,8 @@ unsafe impl pin_init::ZeroableOption for Replay {}
 impl Replay {
     fn new(fs: &Fs, j: &[u8], csum_good: bool) -> Result<Self, BchError> {
         let bytes = offset_of!(c::journal_replay, j) + j.len();
-        let p = NonNull::new(unsafe { c::rust_kvzalloc(bytes) }.cast::<c::journal_replay>())
-            .ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_entry_add))?;
+        let p = kvzalloc(bytes).map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_entry_add))?
+            .cast::<c::journal_replay>();
         unsafe {
             let Ok(()) = init_at(crate::types::RustOnly::new(KVVec::new()), &raw mut (*p.as_ptr()).ptrs);
             (*p.as_ptr()).csum_good = csum_good;

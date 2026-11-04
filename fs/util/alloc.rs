@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Fallible allocation for code shared by both builds: the kernel's
-//! kernel::alloc in-kernel, bcachefs-shim's copy of the same API in userspace.
-//! An allocation failure is an AllocError to handle, never an abort.
+//! Fallible allocation for code shared by both builds: in-kernel, the
+//! kernel's kernel::alloc over allocators of ours; bcachefs-shim's copy of the
+//! same API in userspace. An allocation failure is an AllocError to handle,
+//! never an abort.
 
 #[cfg(kernel)]
-pub use kernel::alloc::{flags, AllocError, Flags, KBox, KVBox, KVVec};
+pub use kernel::alloc::{flags, AllocError, Flags};
 
 #[cfg(not(kernel))]
 pub use bcachefs_shim::alloc::{flags, AllocError, Flags, KVVec};
@@ -21,8 +22,52 @@ pub use kernel::sync::Arc;
 #[cfg(not(kernel))]
 pub use std::sync::Arc;
 
-use crate::util::maybe_rcu_alloc::{KVmalloc, Kmalloc, MaybeRcuAlloc};
+use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::rcu::FreeAnytime;
+
+// ── Allocators ───────────────────────────────────────────────────────────
+//
+// The kernel's, as types of ours: what KVVec, KBox and everything built on
+// them allocate through. In userspace, std's allocator takes no flags.
+
+pub struct Kmalloc;
+pub struct Vmalloc;
+pub struct KVmalloc;
+
+#[cfg(kernel)]
+macro_rules! allocators {
+    ($($a:ident),*) => {$(
+        unsafe impl kernel::alloc::Allocator for $a {
+            const MIN_ALIGN: usize = <kernel::alloc::allocator::$a as kernel::alloc::Allocator>::MIN_ALIGN;
+
+            unsafe fn realloc(ptr: Option<core::ptr::NonNull<u8>>, layout: core::alloc::Layout,
+                              old_layout: core::alloc::Layout, flags: Flags, nid: kernel::alloc::NumaNode)
+                -> Result<core::ptr::NonNull<[u8]>, AllocError>
+            {
+                unsafe {
+                    <kernel::alloc::allocator::$a as kernel::alloc::Allocator>::realloc(
+                        ptr, layout, old_layout, flags, nid)
+                }
+            }
+
+            unsafe fn free(ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
+                unsafe { <kernel::alloc::allocator::$a as kernel::alloc::Allocator>::free(ptr, layout) }
+            }
+        }
+    )*};
+}
+
+#[cfg(kernel)]
+allocators!(Kmalloc, Vmalloc, KVmalloc);
+
+#[cfg(kernel)]
+pub type KBox<T> = kernel::alloc::Box<T, Kmalloc>;
+#[cfg(kernel)]
+pub type KVBox<T> = kernel::alloc::Box<T, KVmalloc>;
+#[cfg(kernel)]
+pub type KVec<T> = kernel::alloc::Vec<T, Kmalloc>;
+#[cfg(kernel)]
+pub type KVVec<T> = kernel::alloc::Vec<T, KVmalloc>;
 
 /// The last ref's put frees it at once: what RCU readers may reach, which
 /// isn't FreeAnytime, can't be in one.
@@ -88,6 +133,11 @@ pub fn kbox_into_inner<T>(b: KBox<T>) -> T {
     { *b }
 }
 
+/// @size bytes kzalloc()'d, __GFP_NOFAIL: never null. For C's kfree().
+pub fn kzalloc_nofail(size: usize) -> *mut core::ffi::c_void {
+    unsafe { crate::c::rust_kzalloc_nofail(size) }
+}
+
 /// A zeroed KBox that can't fail to allocate: __GFP_NOFAIL, which the
 /// kernel's Rust allocator API doesn't offer - so kzalloc()'d through C,
 /// kmalloc()'s memory, what a KBox frees. Userspace's allocator aborts rather
@@ -98,8 +148,7 @@ pub fn kbox_zeroed_nofail<T: ::pin_init::Zeroable + FreeAnytime>() -> KBox<T> {
 
     #[cfg(kernel)]
     {
-        // SAFETY: a size; zeroed is a valid T
-        let p = unsafe { crate::c::rust_kzalloc_nofail(size_of::<T>()) }.cast::<T>();
+        let p = kzalloc_nofail(size_of::<T>()).cast::<T>();
         assert!(!p.is_null(), "__GFP_NOFAIL allocation returned NULL");
         // SAFETY: kmalloc()'d, a T's size and alignment
         unsafe { KBox::from_raw(p) }
@@ -132,7 +181,7 @@ pub fn kbox_pin_init<T: FreeAnytime, E: From<AllocError>>(init: impl ::pin_init:
 pub fn kzalloc(layout: core::alloc::Layout) -> Result<core::ptr::NonNull<u8>, AllocError> {
     #[cfg(kernel)]
     {
-        use kernel::alloc::{allocator::Kmalloc, flags::__GFP_ZERO, Allocator, NumaNode};
+        use kernel::alloc::{flags::__GFP_ZERO, Allocator, NumaNode};
 
         Ok(Kmalloc::alloc(layout, flags::GFP_KERNEL | __GFP_ZERO, NumaNode::NO_NODE)?.cast())
     }
@@ -146,7 +195,7 @@ pub fn kzalloc(layout: core::alloc::Layout) -> Result<core::ptr::NonNull<u8>, Al
 pub unsafe fn kfree(p: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
     // SAFETY: the caller's
     #[cfg(kernel)]
-    unsafe { <kernel::alloc::allocator::Kmalloc as kernel::alloc::Allocator>::free(p, layout) };
+    unsafe { <Kmalloc as kernel::alloc::Allocator>::free(p, layout) };
     // SAFETY: the caller's
     #[cfg(not(kernel))]
     unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
@@ -178,7 +227,7 @@ pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<core::ptr::NonNull<u8>,
 pub fn kmalloc(size: usize, gfp: Flags) -> Result<core::ptr::NonNull<u8>, AllocError> {
     #[cfg(kernel)]
     {
-        use kernel::alloc::{allocator::Kmalloc, Allocator, NumaNode};
+        use kernel::alloc::{Allocator, NumaNode};
 
         let layout = core::alloc::Layout::from_size_align(size, 1).map_err(|_| AllocError)?;
         Ok(Kmalloc::alloc(layout, gfp, NumaNode::NO_NODE)?.cast())
@@ -199,13 +248,19 @@ fn kv_layout(n: usize) -> Result<core::alloc::Layout, AllocError> {
     core::alloc::Layout::from_size_align(n, align).map_err(|_| AllocError)
 }
 
+/// @size bytes kvmalloc()'d, zeroed: for C's kvfree(), or kvfree_rcu(), to
+/// take back.
+pub fn kvzalloc(size: usize) -> Result<core::ptr::NonNull<u8>, AllocError> {
+    kvrealloc_zeroed(core::ptr::null_mut(), 0, size)
+}
+
 /// @p, @old bytes of kvmalloc()'d memory - or none, null - as @new bytes,
 /// what was there kept and the rest zeroed: kvrealloc(), __GFP_ZERO.
 /// Aligned as kmalloc() aligns @new. kvfree_sized() takes it back.
 pub fn kvrealloc_zeroed(p: *mut u8, old: usize, new: usize) -> Result<core::ptr::NonNull<u8>, AllocError> {
     #[cfg(kernel)]
     {
-        use kernel::alloc::{allocator::KVmalloc, flags::__GFP_ZERO, Allocator, NumaNode};
+        use kernel::alloc::{flags::__GFP_ZERO, Allocator, NumaNode};
 
         // SAFETY: @p is KVmalloc's, of @old bytes, or null
         Ok(unsafe {
@@ -236,7 +291,7 @@ pub fn kvrealloc(p: *mut u8, old: usize, new: usize, gfp: Flags)
 {
     #[cfg(kernel)]
     {
-        use kernel::alloc::{allocator::KVmalloc, Allocator, NumaNode};
+        use kernel::alloc::{Allocator, NumaNode};
 
         // SAFETY: @p is KVmalloc's, of @old bytes, or null
         Ok(unsafe {
@@ -265,7 +320,7 @@ pub unsafe fn kvfree_sized(p: core::ptr::NonNull<u8>, size: usize) {
     let layout = kv_layout(size).expect("its allocation's");
     // SAFETY: the caller's
     #[cfg(kernel)]
-    unsafe { <kernel::alloc::allocator::KVmalloc as kernel::alloc::Allocator>::free(p, layout) };
+    unsafe { <KVmalloc as kernel::alloc::Allocator>::free(p, layout) };
     // SAFETY: the caller's
     #[cfg(not(kernel))]
     unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
@@ -291,7 +346,8 @@ mod abox {
     use core::alloc::Layout;
     use core::marker::PhantomData;
     use core::ptr::NonNull;
-    use kernel::alloc::{allocator::KVmalloc, flags::GFP_KERNEL, Allocator, Flags, NumaNode};
+    use super::KVmalloc;
+    use kernel::alloc::{flags::GFP_KERNEL, Allocator, Flags, NumaNode};
 
     /// An alignment, as aligned-vec's: here only the compile-time one.
     pub trait Alignment {

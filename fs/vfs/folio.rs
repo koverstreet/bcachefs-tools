@@ -407,8 +407,14 @@ impl Mapping {
     /// which has FGP_LOCK.
     pub fn get_folio(self, index: u64, fgp: c::fgf_t, gfp: c::gfp_t) -> Result<LockedFolio, BchError> {
         debug_assert!(fgp & c::FGP_LOCK != 0);
+        self.get_folio_raw(index, fgp, gfp).map(|f| LockedFolio(Folio(f)))
+    }
+
+    /// The folio at @index, as __filemap_get_folio() finds it with @fgp: a
+    /// ref, and locked if @fgp has FGP_LOCK - for C, which takes both.
+    pub fn get_folio_raw(self, index: u64, fgp: c::fgf_t, gfp: c::gfp_t) -> Result<NonNull<c::folio>, BchError> {
         let folio = unsafe { c::__filemap_get_folio(self.as_ptr(), index as _, fgp, gfp) };
-        errptr_to_result(NonNull::new(folio).expect("a folio, or an error")).map(|f| LockedFolio(Folio(f)))
+        errptr_to_result(NonNull::new(folio).expect("a folio, or an error"))
     }
 
     /// @folio marked dirty: filemap_dirty_folio().

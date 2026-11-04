@@ -22,7 +22,7 @@
 
 use crate::c;
 use crate::types::GenRadix;
-use crate::util::alloc::AllocError;
+use crate::util::alloc::{AllocError};
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::mem::size_of;
@@ -155,7 +155,7 @@ impl NewNode {
     /// GFP_KERNEL - and with @nofail, __GFP_NOFAIL.
     pub fn alloc(&mut self, nofail: bool) -> Result<(), AllocError> {
         *self = NewNode(if nofail {
-            unsafe { c::rust_kzalloc_nofail(NODE_SIZE) }.cast()
+            crate::util::alloc::kzalloc_nofail(NODE_SIZE).cast()
         } else {
             crate::util::alloc::kzalloc(Self::LAYOUT)?.as_ptr().cast()
         });

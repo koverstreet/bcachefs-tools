@@ -82,7 +82,6 @@ c_extern! {
                                     data: *mut c_void, fops: *const c::file_operations) -> *mut c::dentry;
     pub fn rust_kzalloc_nofail(size: usize) -> *mut c_void;
     pub fn rust_kfree(p: *const c_void);
-    pub fn rust_kvzalloc(size: usize) -> *mut c_void;
     pub fn rust_kvfree(p: *mut c_void);
     pub fn rust_kvfree_rcu(p: *mut c_void, head: *mut c::rcu_head);
     pub fn mempool_kvmalloc(gfp_mask: c::gfp_t, pool_data: *mut c_void) -> *mut c_void;

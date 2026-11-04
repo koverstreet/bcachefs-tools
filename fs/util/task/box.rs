@@ -7,7 +7,8 @@
 
 use crate::errcode::BchError;
 use crate::util::alloc::Flags;
-use crate::util::maybe_rcu_alloc::{Kmalloc, MaybeRcuAlloc};
+use crate::util::alloc::Kmalloc;
+use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::rcu::RcuHead;
 use crate::util::workqueue::Queue;
 use super::{Spawn, Task, TaskRef};

@@ -10,7 +10,7 @@
 //! holder's to tag.
 
 use crate::c;
-use crate::util::alloc::AllocError;
+use crate::util::alloc::{kvzalloc, AllocError};
 use core::ptr::{self, NonNull};
 
 /// # Safety
@@ -51,7 +51,7 @@ impl<H: DstHead, T> DstArray<H, T> {
             .filter(|&b| b <= i32::MAX as usize)
             .ok_or(AllocError)?;
 
-        let p = NonNull::new(unsafe { c::rust_kvzalloc(bytes) }.cast::<H>()).ok_or(AllocError)?;
+        let p = kvzalloc(bytes)?.cast::<H>();
         unsafe { p.write(head) };
         Ok(p)
     }

@@ -19,7 +19,7 @@ use crate::c;
 use crate::format::Btree;
 use core::mem::size_of;
 use crate::types::c_default;
-use crate::util::alloc::{kbox_zeroed_nofail, KBox};
+use crate::util::alloc::{kbox_zeroed_nofail, kzalloc_nofail, KBox};
 use cstruct_macros::CStruct;
 
 #[repr(C)]
@@ -151,7 +151,7 @@ impl c::bkey_buf {
         const { assert!(size_of::<[u64; ONSTACK_U64S]>() == size_of::<c::bkey_buf>() - size_of::<*mut c::bkey_i>()) };
 
         if self.k == self.onstack_ptr() && k.k.u64s as usize > ONSTACK_U64S {
-            let p = unsafe { c::rust_kzalloc_nofail(HEAP_U64S * size_of::<u64>()) }.cast::<u64>();
+            let p = kzalloc_nofail(HEAP_U64S * size_of::<u64>()).cast::<u64>();
             assert!(!p.is_null(), "__GFP_NOFAIL allocation returned NULL");
             // SAFETY: a fresh buffer, room for any key
             unsafe { core::ptr::copy_nonoverlapping(self.onstack.as_ptr(), p, ONSTACK_U64S) };

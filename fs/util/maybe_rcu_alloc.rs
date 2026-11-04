@@ -18,7 +18,7 @@ use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering::{Acquire, Relaxed, Rele
 use pin_init::{pin_init_from_closure, PinInit};
 
 use crate::c;
-use crate::util::alloc::{init_at, AllocError, Flags};
+use crate::util::alloc::{init_at, AllocError, Flags, KVmalloc, Kmalloc, Vmalloc};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::rcu::{Detach, DropAnytime, DropAtomic, Flavor, FreeAnytime, HasRcuHead, HeadKind, NothingToDetach,
                        RcuHead, RcuWorkHead};
@@ -38,15 +38,13 @@ pub unsafe trait Alloc {
 
 macro_rules! allocators {
     ($($a:ident),*) => {$(
-        pub struct $a;
-
         unsafe impl Alloc for $a {
             fn alloc(layout: Layout, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
                 #[cfg(kernel)]
                 {
                     use kernel::alloc::{flags::__GFP_ZERO, Allocator, NumaNode};
 
-                    Ok(<kernel::alloc::allocator::$a as Allocator>::alloc(layout, gfp | __GFP_ZERO, NumaNode::NO_NODE)?.cast())
+                    Ok(<$a as Allocator>::alloc(layout, gfp | __GFP_ZERO, NumaNode::NO_NODE)?.cast())
                 }
                 #[cfg(not(kernel))]
                 {
@@ -57,7 +55,7 @@ macro_rules! allocators {
 
             unsafe fn free(p: NonNull<u8>, layout: Layout) {
                 #[cfg(kernel)]
-                unsafe { <kernel::alloc::allocator::$a as kernel::alloc::Allocator>::free(p, layout) };
+                unsafe { <$a as kernel::alloc::Allocator>::free(p, layout) };
                 #[cfg(not(kernel))]
                 unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
             }

@@ -269,11 +269,6 @@ void rust_kfree(const void *p)
 }
 
 /* For util/rcu.rs: kvfree_rcu() is a macro, of a struct's rcu_head field */
-void *rust_kvzalloc(size_t size)
-{
-	return kvzalloc(size, GFP_KERNEL);
-}
-
 void rust_kvfree(void *p)
 {
 	kvfree(p);

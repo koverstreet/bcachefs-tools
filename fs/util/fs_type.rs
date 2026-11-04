@@ -21,7 +21,8 @@ use core::ptr::NonNull;
 
 use crate::c;
 use crate::util::alloc::{flags::GFP_KERNEL, AllocError};
-use crate::util::maybe_rcu_alloc::{Kmalloc, MaybeRcuAlloc};
+use crate::util::alloc::Kmalloc;
+use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use kernel::error::to_result;
 use pin_init::Init;
 

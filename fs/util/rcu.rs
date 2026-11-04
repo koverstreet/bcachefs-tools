@@ -599,7 +599,7 @@ impl<T: ?Sized + RcuPointee> RcuBuf<T> {
 
     /// # Safety
     /// The caller holds the writers' lock. @new is a valid T from
-    /// rust_kvzalloc(), which this takes.
+    /// kvzalloc(), which this takes.
     pub unsafe fn replace(&self, new: NonNull<T::Head>) {
         let old = self.p.swap(new.as_ptr(), Ordering::Release);
         if !old.is_null() {

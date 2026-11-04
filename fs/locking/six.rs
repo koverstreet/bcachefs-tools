@@ -10,6 +10,7 @@ use crate::cstructs::c;
 #[cfg(CONFIG_SMP)]
 use crate::debug::params::six_optimistic_spin_disabled;
 use crate::types::c_default;
+use crate::util::alloc::kvzalloc;
 use crate::util::ffi::c_char;
 use crate::util::kernel::time_after64;
 use crate::util::percpu::{CpuGuard, PerCpu};
@@ -529,12 +530,11 @@ unsafe fn six_lock_wait_fifo_realloc<'a>(lock: &'a six_lock, wait: *mut six_lock
         }
 
         let new_size = old_size * 2;
-        let new_wf = c::rust_kvzalloc(size_of::<six_lock_wait_fifo>() +
-                                      new_size as usize * size_of::<six_lock_wait_slot>())
-            .cast::<six_lock_wait_fifo>();
-        if new_wf.is_null() {
+        let Ok(new_wf) = kvzalloc(size_of::<six_lock_wait_fifo>() +
+                                  new_size as usize * size_of::<six_lock_wait_slot>()) else {
             return Realloc::NoMem;
-        }
+        };
+        let new_wf = new_wf.as_ptr().cast::<six_lock_wait_fifo>();
 
         (*new_wf).size = new_size;
         *new_wf_ret = new_wf;

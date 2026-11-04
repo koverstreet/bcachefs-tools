@@ -65,7 +65,7 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
 use core::ffi::{c_void, CStr};
 use cstruct_macros::{c_export, vtable};
-use kernel::alloc::KVec;
+use crate::util::alloc::KVec;
 use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
 use kernel::uaccess::{UserPtr, UserSlice};
 use crate::format::{Btree, DataType, MemberState};

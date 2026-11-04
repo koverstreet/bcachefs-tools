@@ -62,8 +62,8 @@ pub fn bch2_filemap_get_contig_folios_d(mapping: *mut c::address_space, start: c
             }
         }
 
-        let f = unsafe { c::__filemap_get_folio(mapping, (pos >> PAGE_SHIFT) as _, fgp_flags, gfp) };
-        let Ok(f) = errptr_to_result(NonNull::new(f).expect("a folio, or an error")) else { break };
+        let mapping = unsafe { Mapping::from_raw(mapping) };
+        let Ok(f) = mapping.get_folio_raw(pos >> PAGE_SHIFT, fgp_flags, gfp) else { break };
         let folio = unsafe { Folio::from_raw(f.as_ptr()) };
 
         assert!(fs.nr == 0 || folio.pos() == pos);
