@@ -23,7 +23,7 @@ use crate::new_lock;
 use crate::util::projections::Volatile;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
-use core::sync::atomic::{AtomicI64, AtomicIsize};
+use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize};
 use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, Late,
                      TypeInfo};
 use pin_init::{pin_data, PinInit};
@@ -274,7 +274,8 @@ pub struct bch_fs_btree_cache {
     pub nr_in_flight_inner: AtomicIsize,
     pub nr_in_flight_wait: cs::closure_waitlist,
     pub __should_throttle_align: CacheAligned,
-    pub should_throttle: bool,
+    #[c("bool should_throttle")]
+    pub should_throttle: AtomicBool,
 
     /* shrinker stats */
     pub nr_freed: usize,
