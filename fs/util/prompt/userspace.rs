@@ -444,14 +444,19 @@ pub fn read_passphrase<T>(
     }
 }
 
-/// A line from stdin, not echoed where it's a terminal. Its ending is theirs,
-/// not part of it - and it is CR, LF or both, because an initramfs console that
-/// nothing has configured sends CR for enter. Taken is the line read.
+/// @line, without its ending: that's theirs, not part of what they said - and
+/// it is CR, LF or both, because an initramfs console that nothing has
+/// configured sends CR for enter.
+pub fn without_line_ending(line: &[u8]) -> &[u8] {
+    let n = line.iter().rposition(|b| !matches!(b, b'\n' | b'\r')).map_or(0, |i| i + 1);
+    &line[..n]
+}
+
+/// A line from stdin, not echoed where it's a terminal: Taken is the line
+/// read, without_line_ending().
 pub fn read_secret_line(prompt: &str, watch: Option<&mut dyn Watch>) -> Result<Given<Zeroizing<Vec<u8>>>> {
     let mut line = Zeroizing::new(Vec::new());
-    let trim = |line: &mut Vec<u8>| while matches!(line.last(), Some(b'\n' | b'\r')) {
-        line.pop();
-    };
+    let trim = |line: &mut Vec<u8>| line.truncate(without_line_ending(line).len());
 
     if !stdin().is_terminal() {
         if stdin().lock().read_until(b'\n', &mut line)? == 0 {

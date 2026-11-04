@@ -12,7 +12,7 @@ use std::{
 use anyhow::{anyhow, bail, ensure, Result};
 use bcachefs_kernel::c::{bch_key, bch_sb_handle, bch_encrypted_key};
 use bcachefs_kernel::data::checksum::key_description;
-use bcachefs_kernel::util::prompt::{read_passphrase, read_secret_line, Given, Watch};
+use bcachefs_kernel::util::prompt::{read_passphrase, read_secret_line, without_line_ending, Given, Watch};
 use bch_bindgen::keyutils::{self, keyctl_search};
 use log::info;
 
@@ -208,11 +208,9 @@ impl Passphrase {
         &self.0
     }
 
-    /// From a line somebody typed or sent. The line ending is theirs, not part
-    /// of the passphrase - and it is CR, LF or both, because an initramfs
-    /// console that nothing has configured sends CR for enter.
+    /// From a line somebody typed or sent.
     pub fn from_line(line: &str) -> Self {
-        Self(line.trim_end_matches(['\n', '\r']).as_bytes().to_vec())
+        Self(without_line_ending(line.as_bytes()).to_vec())
     }
 
     /// Ask, and take the passphrase from whoever supplies one first.
