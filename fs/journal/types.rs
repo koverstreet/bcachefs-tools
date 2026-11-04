@@ -131,13 +131,14 @@ c_typedef! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct journal_entry_pin {
     pub list: c::list_head,
     pub flush: c::journal_pin_flush_fn,
     pub seq: u64,
 }
-c_default!(journal_entry_pin);
+
+unsafe impl ::pin_init::Zeroable for crate::util::ffi::Opaque<journal_entry_pin> {}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]

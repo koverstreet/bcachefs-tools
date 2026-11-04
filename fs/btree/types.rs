@@ -35,9 +35,10 @@ use crate::format::{Bpos, Btree};
 /* Btree nodes: */
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(CStruct)]
 pub struct btree_write {
-    pub journal: cs::journal_entry_pin,
+    #[c("struct journal_entry_pin journal")]
+    pub journal: crate::util::ffi::Opaque<cs::journal_entry_pin>,
 }
 
 #[repr(C)]
@@ -549,7 +550,8 @@ pub struct bkey_cached {
 
     pub hash: cs::rhash_head,
 
-    pub journal: cs::journal_entry_pin,
+    #[c("struct journal_entry_pin journal")]
+    pub journal: crate::util::ffi::Opaque<cs::journal_entry_pin>,
     pub seq: u64,
 
     pub k: *mut cs::bkey_i,

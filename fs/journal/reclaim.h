@@ -131,11 +131,6 @@ static inline bool __bch2_journal_pin_put(struct journal *j, u64 seq)
 	return atomic_dec_and_test(&pin_list->count);
 }
 
-void bch2_journal_pin_drop(struct journal *, struct journal_entry_pin *);
-
-void bch2_journal_pin_set(struct journal *, u64, struct journal_entry_pin *,
-			  journal_pin_flush_fn);
-
 static inline void bch2_journal_pin_add(struct journal *j, u64 seq,
 					struct journal_entry_pin *pin,
 					journal_pin_flush_fn flush_fn)
@@ -144,11 +139,6 @@ static inline void bch2_journal_pin_add(struct journal *j, u64 seq,
 		bch2_journal_pin_set(j, seq, pin, flush_fn);
 }
 
-void bch2_journal_pin_copy(struct journal *,
-			   struct journal_entry_pin *,
-			   struct journal_entry_pin *,
-			   journal_pin_flush_fn);
-
 static inline void bch2_journal_pin_update(struct journal *j, u64 seq,
 					   struct journal_entry_pin *pin,
 					   journal_pin_flush_fn flush_fn)
@@ -156,8 +146,6 @@ static inline void bch2_journal_pin_update(struct journal *j, u64 seq,
 	if (unlikely(!journal_pin_active(pin) || pin->seq < seq))
 		bch2_journal_pin_set(j, seq, pin, flush_fn);
 }
-
-void bch2_journal_pin_flush(struct journal *, struct journal_entry_pin *);
 
 void bch2_journal_discard_work(struct work_struct *);
 void bch2_journal_do_discards(struct journal *);

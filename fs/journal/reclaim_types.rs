@@ -5,6 +5,7 @@
 use crate::cstructs::c;
 use crate::util::Printbuf;
 use crate::types::DArray;
+use crate::util::ffi::Opaque;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, c_extern, c_typedef};
 
@@ -30,9 +31,53 @@ c_extern! {
     pub fn bch2_journal_reclaim_start(j: *mut c::journal) -> c_int;
     pub fn bch2_journal_reclaim_stop(j: *mut c::journal);
     pub fn bch2_journal_replay_pins_put(j: *mut c::journal, seq: u64);
+    pub fn bch2_journal_pin_drop(j: *mut c::journal, pin: *mut c::journal_entry_pin);
+    pub fn bch2_journal_pin_set(j: *mut c::journal, seq: u64, pin: *mut c::journal_entry_pin,
+                                flush_fn: c::journal_pin_flush_fn);
+    pub fn bch2_journal_pin_copy(j: *mut c::journal, dst: *mut c::journal_entry_pin,
+                                 src: *mut c::journal_entry_pin, flush_fn: c::journal_pin_flush_fn);
+    pub fn bch2_journal_pin_flush(j: *mut c::journal, pin: *mut c::journal_entry_pin);
+}
+
+impl Opaque<c::journal_entry_pin> {
+    /// The entry it holds, 0 for none.
+    pub fn seq(&self) -> u64 {
+        unsafe { (&raw const (*self.as_ptr()).seq).read_volatile() }
+    }
 }
 
 impl c::journal {
+    pub fn pin_drop(&self, pin: &Opaque<c::journal_entry_pin>) {
+        unsafe { bch2_journal_pin_drop(self.as_ptr(), pin.as_ptr()) }
+    }
+
+    pub fn pin_set(&self, seq: u64, pin: &Opaque<c::journal_entry_pin>, flush_fn: c::journal_pin_flush_fn) {
+        unsafe { bch2_journal_pin_set(self.as_ptr(), seq, pin.as_ptr(), flush_fn) }
+    }
+
+    pub fn pin_add(&self, seq: u64, pin: &Opaque<c::journal_entry_pin>, flush_fn: c::journal_pin_flush_fn) {
+        let held = pin.seq();
+        if held == 0 || held > seq {
+            self.pin_set(seq, pin, flush_fn)
+        }
+    }
+
+    pub fn pin_update(&self, seq: u64, pin: &Opaque<c::journal_entry_pin>, flush_fn: c::journal_pin_flush_fn) {
+        let held = pin.seq();
+        if held == 0 || held < seq {
+            self.pin_set(seq, pin, flush_fn)
+        }
+    }
+
+    pub fn pin_copy(&self, dst: &Opaque<c::journal_entry_pin>, src: &Opaque<c::journal_entry_pin>,
+                    flush_fn: c::journal_pin_flush_fn) {
+        unsafe { bch2_journal_pin_copy(self.as_ptr(), dst.as_ptr(), src.as_ptr(), flush_fn) }
+    }
+
+    pub fn pin_flush(&self, pin: &Opaque<c::journal_entry_pin>) {
+        unsafe { bch2_journal_pin_flush(self.as_ptr(), pin.as_ptr()) }
+    }
+
     /// The pins up to @seq flushed: whether any were.
     pub fn flush_pins(&self, seq: u64) -> bool {
         unsafe { bch2_journal_flush_pins(self.as_ptr(), seq) }
