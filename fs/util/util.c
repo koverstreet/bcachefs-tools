@@ -74,16 +74,6 @@ int bch2_prt_task_backtrace(struct printbuf *out, struct task_struct *task, unsi
 	return ret;
 }
 
-/* misc: */
-
-void bch2_bio_map(struct bio *bio, void *base, size_t size)
-{
-	if (is_vmalloc_addr(base))
-		bio_add_vmalloc(bio, base, size);
-	else
-		bio_add_virt_nofail(bio, base, size);
-}
-
 static struct bio *__bio_chain_endio(struct bio *bio)
 {
 	struct bio *parent = bio->bi_private;
@@ -107,6 +97,8 @@ void bio_chain(struct bio *bio, struct bio *parent)
 	bio->bi_end_io	= bio_chain_endio;
 	bio_inc_remaining(parent);
 }
+
+/* misc: */
 
 /*
  * Allocate a bio (possibly a chain of bios via bio_chain()) covering
@@ -135,7 +127,7 @@ struct bio *bch2_bio_map_and_chain(struct block_device *bdev,
 				   struct bio_set *bs)
 {
 	struct bio *tail	= NULL;
-	unsigned nr_bvecs	= buf_nr_bvecs(base, size);
+	unsigned nr_bvecs	= bch2_buf_nr_bvecs(base, size);
 
 	while (size) {
 		size_t chunk_size = size;
@@ -174,77 +166,6 @@ struct bio *bch2_bio_map_and_chain(struct block_device *bdev,
 	}
 
 	return tail;
-}
-
-void memcpy_to_bio(struct bio *dst, struct bvec_iter dst_iter, const void *src)
-{
-	struct bio_vec bv;
-	struct bvec_iter iter;
-
-	__bio_for_each_segment(bv, dst, iter, dst_iter) {
-		void *dstp = bvec_kmap_local(&bv);
-		memcpy(dstp, src, bv.bv_len);
-		kunmap_local(dstp);
-
-		src += bv.bv_len;
-	}
-}
-
-void memcpy_from_bio(void *dst, struct bio *src, struct bvec_iter src_iter)
-{
-	struct bio_vec bv;
-	struct bvec_iter iter;
-
-	__bio_for_each_segment(bv, src, iter, src_iter) {
-		void *srcp = bvec_kmap_local(&bv);
-		memcpy(dst, srcp, bv.bv_len);
-		kunmap_local(srcp);
-
-		dst += bv.bv_len;
-	}
-}
-
-/*
- * Copy between two bios at caller-supplied iters, advancing both. Equivalent to
- * the kernel's old bio_copy_data_iter(), which 7.2 removed in favour of the
- * whole-bio bio_copy_data().
- */
-void bch2_bio_copy_data_iter(struct bio *dst, struct bvec_iter *dst_iter,
-			     struct bio *src, struct bvec_iter *src_iter)
-{
-	while (src_iter->bi_size && dst_iter->bi_size) {
-		struct bio_vec src_bv = bio_iter_iovec(src, *src_iter);
-		struct bio_vec dst_bv = bio_iter_iovec(dst, *dst_iter);
-		unsigned int bytes = min(src_bv.bv_len, dst_bv.bv_len);
-		void *src_buf = bvec_kmap_local(&src_bv);
-		void *dst_buf = bvec_kmap_local(&dst_bv);
-
-		memcpy(dst_buf, src_buf, bytes);
-
-		kunmap_local(dst_buf);
-		kunmap_local(src_buf);
-
-		bio_advance_iter(src, src_iter, bytes);
-		bio_advance_iter(dst, dst_iter, bytes);
-	}
-}
-
-/*
- * Zero-fill a bio starting at a caller-supplied iter. Equivalent to the kernel's
- * old zero_fill_bio_iter(), which 7.2 removed in favour of the whole-bio
- * zero_fill_bio().
- */
-void bch2_zero_fill_bio_iter(struct bio *bio, struct bvec_iter start)
-{
-	struct bio_vec bv;
-	struct bvec_iter iter;
-
-	__bio_for_each_segment(bv, bio, iter, start) {
-		void *p = bvec_kmap_local(&bv);
-
-		memset(p, 0, bv.bv_len);
-		kunmap_local(p);
-	}
 }
 
 #ifdef __KERNEL__

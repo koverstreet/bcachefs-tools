@@ -1569,6 +1569,7 @@ static struct bio *bch2_write_bio_alloc(struct bch_fs *c,
 	struct bio *bio;
 	unsigned output_available =
 		min(wp->sectors_free << 9, src->bi_iter.bi_size);
+	unsigned offset = buf ? (unsigned long) buf & (PAGE_SIZE - 1) : 0;
 
 	/*
 	 * XXX: we'll want to delete this later, there's no reason we can't
@@ -1576,18 +1577,14 @@ static struct bio *bch2_write_bio_alloc(struct bch_fs *c,
 	 *
 	 * But bch2_bio_alloc_pages() BUGS() if we ask it to allocate more pages
 	 * than fit in the bio, and we're using bio_alloc_bioset() which is
-	 * limited to BIO_MAX_VECS
+	 * limited to BIO_MAX_VECS - and a vmalloc'd @buf not on a page boundary,
+	 * an ec stripe's, takes a page more than its size:
 	 */
-	output_available = min(output_available, BIO_MAX_VECS * PAGE_SIZE);
+	output_available = min_t(unsigned, output_available, BIO_MAX_VECS * PAGE_SIZE - offset);
 
 	BUG_ON(output_available & (c->opts.block_size - 1));
 
-	unsigned pages = DIV_ROUND_UP(output_available +
-				      (buf
-				       ? ((unsigned long) buf & (PAGE_SIZE - 1))
-				       : 0), PAGE_SIZE);
-
-	pages = min(pages, BIO_MAX_VECS);
+	unsigned pages = DIV_ROUND_UP(output_available + offset, PAGE_SIZE);
 
 	bio = bio_alloc_bioset(NULL, pages, 0, GFP_NOIO, &c->bio_write);
 	wbio			= wbio_init(bio);

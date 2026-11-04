@@ -1149,7 +1149,7 @@ void bch2_btree_node_read(struct btree_trans *trans, struct btree *b,
 	ca = bch2_dev_get_ioref(c, pick.ptr.dev, READ, BCH_DEV_READ_REF_btree_node_read);
 
 	bio = bio_alloc_bioset(NULL,
-			       buf_nr_bvecs(b->data, btree_buf_bytes(b)),
+			       bch2_buf_nr_bvecs(b->data, btree_buf_bytes(b)),
 			       REQ_OP_READ|REQ_SYNC|REQ_META,
 			       GFP_NOIO,
 			       &c->btree.bio);

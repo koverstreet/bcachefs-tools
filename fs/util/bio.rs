@@ -35,7 +35,7 @@
 //! it's over c::bio here, in both builds - the shim's bio_vec laid out as the
 //! kernel's.
 
-use core::ffi::c_ulong;
+use core::ffi::{c_ulong, c_void};
 use core::future::Future;
 use core::marker::{PhantomData, PhantomPinned};
 use core::pin::Pin;
@@ -417,6 +417,57 @@ impl ToText for Bio {
 #[c_export]
 pub unsafe fn bch2_bio_to_text(out: &mut Printbuf, bio: *mut c::bio) {
     unsafe { Bio::from_raw(bio) }.to_text(out)
+}
+
+#[c_export]
+pub fn bch2_buf_nr_bvecs(p: *const c_void, len: usize) -> usize {
+    buf_nr_bvecs(p.cast(), len)
+}
+
+/// # Safety
+/// As Bio::map()'s; @bio is a bio nothing else has.
+#[c_export]
+pub unsafe fn bch2_bio_map(bio: *mut c::bio, base: *mut c_void, size: usize) {
+    unsafe { Bio::from_raw_mut(bio).map(base.cast(), size) }
+}
+
+/// # Safety
+/// @dst_iter is a position of @dst; @src has its bi_size bytes.
+#[c_export]
+pub unsafe fn memcpy_to_bio(dst: *mut c::bio, dst_iter: c::bvec_iter, src: *const c_void) {
+    let dst = unsafe { Bio::from_raw(dst).range_at(dst_iter) };
+    dst.copy_from(unsafe { core::slice::from_raw_parts(src.cast(), dst.len() as usize) });
+}
+
+/// # Safety
+/// @src_iter is a position of @src; @dst has room for its bi_size bytes.
+#[c_export]
+pub unsafe fn memcpy_from_bio(dst: *mut c_void, src: *mut c::bio, src_iter: c::bvec_iter) {
+    let src = unsafe { Bio::from_raw(src).range_at(src_iter) };
+    src.copy_to(unsafe { core::slice::from_raw_parts_mut(dst.cast(), src.len() as usize) });
+}
+
+/// As much as both have, copied, both iters advanced past it.
+///
+/// # Safety
+/// Each iter is a position of its bio.
+#[c_export]
+pub unsafe fn bch2_bio_copy_data_iter(dst: *mut c::bio, dst_iter: &mut c::bvec_iter,
+                                      src: *mut c::bio, src_iter: &mut c::bvec_iter) {
+    let mut d = unsafe { Bio::from_raw(dst).range_at(*dst_iter) };
+    let mut s = unsafe { Bio::from_raw(src).range_at(*src_iter) };
+    let n = d.copy_from_range(s);
+    d.advance(n);
+    s.advance(n);
+    *dst_iter = d.pos();
+    *src_iter = s.pos();
+}
+
+/// # Safety
+/// @start is a position of @bio.
+#[c_export]
+pub unsafe fn bch2_zero_fill_bio_iter(bio: *mut c::bio, start: c::bvec_iter) {
+    unsafe { Bio::from_raw(bio).range_at(start) }.zero()
 }
 
 /// # Safety

@@ -40,6 +40,7 @@
 #include <linux/sched/mm.h>
 #include "util/util_gen.h"
 #include "util/backtrace_gen.h"
+#include "util/bio_gen.h"
 
 #ifdef CONFIG_BCACHEFS_DEBUG
 #define EBUG_ON(cond)		BUG_ON(cond)
@@ -81,19 +82,6 @@ static inline bool bdev_rot(struct block_device *bdev)
 #endif
 
 DEFINE_FREE(bio_put, struct bio *, if (_T) bio_put(_T))
-
-/*
- * Number of bvecs needed to describe [p, p+len) in a bio, matching how
- * bch2_bio_map() will add it: physically contiguous buffers take one bvec,
- * vmalloc buffers take one bvec per page.
- */
-static inline size_t buf_nr_bvecs(void *p, size_t len)
-{
-	return is_vmalloc_addr(p)
-		? DIV_ROUND_UP(len + ((unsigned long) p & (PAGE_SIZE - 1)),
-			       PAGE_SIZE)
-		: 1;
-}
 
 #include "printbuf.h"
 
@@ -149,7 +137,6 @@ static inline struct list_head *list_pop(struct list_head *head)
 #define list_pop_entry(head, type, member)		\
 	container_of_or_null(list_pop(head), type, member)
 
-void bch2_bio_map(struct bio *bio, void *base, size_t);
 struct bio *bch2_bio_map_and_chain(struct block_device *, void *, size_t,
 				   sector_t, blk_opf_t, gfp_t,
 				   struct bio_set *);
@@ -190,11 +177,6 @@ static inline u64 u64_bitmask(unsigned bits)
 	return bits ? ~0ULL >> (64 - bits) : 0;
 }
 
-void memcpy_to_bio(struct bio *, struct bvec_iter, const void *);
-void memcpy_from_bio(void *, struct bio *, struct bvec_iter);
-void bch2_bio_copy_data_iter(struct bio *, struct bvec_iter *,
-			     struct bio *, struct bvec_iter *);
-void bch2_zero_fill_bio_iter(struct bio *, struct bvec_iter);
 void bch2_bio_set_pages_dirty(struct bio *);
 void bch2_bio_check_pages_dirty(struct bio *);
 
@@ -209,8 +191,6 @@ static inline void bch2_maybe_corrupt_bio(struct bio *bio, unsigned ratio)
 #else
 #define bch2_maybe_corrupt_bio(...)	do {} while (0)
 #endif
-
-void bch2_bio_to_text(struct printbuf *, struct bio *);
 
 static inline void __memcpy_u64s(void *dst, const void *src,
 				 unsigned u64s)
