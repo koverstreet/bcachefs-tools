@@ -25,7 +25,7 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{ExclusiveGuard, Locked, RawLock, RawLockBase, RawRwLock, RawTryLock, SharedGuard};
+use super::{ExclusiveGuard, Locked, RawLock, RawLockBase, RawReadLock, RawRwLock, RawTryLock, SharedGuard};
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::{c_uint, c_void, CStr};
@@ -181,17 +181,19 @@ unsafe impl<R: RawTryLock> RawTryLock for Noio<R> {
     }
 }
 
-unsafe impl<R: RawRwLock> RawRwLock for Noio<R> {
-    unsafe fn lock_shared(&self) -> Self::GuardState {
+unsafe impl<R: RawReadLock> RawReadLock for Noio<R> {
+    unsafe fn lock_read(&self) -> Self::GuardState {
         let noio = MemallocFlags::noio();
-        (noio, unsafe { self.0.lock_shared() })
+        (noio, unsafe { self.0.lock_read() })
     }
 
-    unsafe fn unlock_shared(&self, (noio, g): Self::GuardState) {
-        unsafe { self.0.unlock_shared(g) };
+    unsafe fn unlock_read(&self, (noio, g): Self::GuardState) {
+        unsafe { self.0.unlock_read(g) };
         drop(noio);
     }
+}
 
+unsafe impl<R: RawRwLock> RawRwLock for Noio<R> {
     unsafe fn assert_held_any(&self) {
         unsafe { self.0.assert_held_any() }
     }
@@ -208,9 +210,9 @@ impl<'a, R: RawRwLock<GuardState = ()>, G: Sync, P> SharedGuard<'a, Noio<R>, G, 
          * scope.
          */
         let lock = self.lock();
-        unsafe { lock.raw().0.unlock_shared(()) };
+        unsafe { lock.raw().0.unlock_read(()) };
         let ret = f(&mut lock.write());
-        unsafe { lock.raw().0.lock_shared() };
+        unsafe { lock.raw().0.lock_read() };
         ret
     }
 }

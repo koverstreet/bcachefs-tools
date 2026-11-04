@@ -77,15 +77,22 @@ pub unsafe trait RawNestedLock: RawLock {
     unsafe fn lock_nested(&self, subclass: u32) -> Self::GuardState;
 }
 
+/// A lock readers share, whatever else it has - RawRwLock's writer.
+///
+/// # Safety
+/// lock_read() excludes only what writes, until unlock_read(); as
+/// RawLockBase's otherwise.
+pub unsafe trait RawReadLock: RawLockBase {
+    unsafe fn lock_read(&self) -> Self::GuardState;
+    unsafe fn unlock_read(&self, g: Self::GuardState);
+}
+
 /// A RawLock that readers can share: RawLock's lock() and unlock() are the
 /// writer's, alone.
 ///
 /// # Safety
-/// lock_shared() excludes the writer, and only the writer, until
-/// unlock_shared(); as RawLock's otherwise.
-pub unsafe trait RawRwLock: RawLock {
-    unsafe fn lock_shared(&self) -> Self::GuardState;
-    unsafe fn unlock_shared(&self, g: Self::GuardState);
+/// lock() excludes readers too; as RawLock's and RawReadLock's otherwise.
+pub unsafe trait RawRwLock: RawLock + RawReadLock {
     /// lockdep_assert_held(): by a reader or the writer.
     unsafe fn assert_held_any(&self);
 }
@@ -237,12 +244,14 @@ impl<R: RawLockBase, G, P> Deref for Locked<R, G, P> {
     }
 }
 
-impl<R: RawRwLock, G: Sync, P> Locked<R, G, P> {
+impl<R: RawReadLock, G: Sync, P> Locked<R, G, P> {
     pub fn read(&self) -> SharedGuard<'_, R, G, P> {
-        let state = unsafe { self.raw.lock_shared() };
+        let state = unsafe { self.raw.lock_read() };
         SharedGuard { lock: self, state: Some(state), _not_send: PhantomData }
     }
+}
 
+impl<R: RawRwLock, G: Sync, P> Locked<R, G, P> {
     pub fn write(&self) -> ExclusiveGuard<'_, R, G, P> {
         self.lock()
     }
@@ -260,7 +269,7 @@ impl<R: RawLockBase, G, P> Drop for Locked<R, G, P> {
 
 /// How a guard's lock is released: which of its kind's unlocks. A guard's
 /// type says how it was taken - a six lock's read and intent are both shared,
-/// and unlocked differently.
+/// and released differently.
 pub trait Unlock<R: RawLockBase> {
     /// # Safety
     /// @raw is held as this unlock releases, taken with @state.
@@ -276,12 +285,12 @@ impl<R: RawLock> Unlock<R> for Exclusive {
     }
 }
 
-/// RawRwLock's unlock_shared().
+/// RawReadLock's unlock_read().
 pub struct Shared;
 
-impl<R: RawRwLock> Unlock<R> for Shared {
+impl<R: RawReadLock> Unlock<R> for Shared {
     unsafe fn unlock(raw: &R, state: R::GuardState) {
-        unsafe { raw.unlock_shared(state) }
+        unsafe { raw.unlock_read(state) }
     }
 }
 

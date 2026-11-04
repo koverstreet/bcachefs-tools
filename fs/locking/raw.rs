@@ -16,7 +16,7 @@
 #![allow(non_camel_case_types)]
 
 use super::{RawLock, RawLockBase};
-use super::RawRwLock;
+use super::{RawReadLock, RawRwLock};
 use super::{MemallocFlags, RawNestedLock, RawTryLock};
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
@@ -231,15 +231,17 @@ unsafe impl RawLock for c::rw_semaphore {
     }
 }
 
-unsafe impl RawRwLock for c::rw_semaphore {
-    unsafe fn lock_shared(&self) {
+unsafe impl RawReadLock for c::rw_semaphore {
+    unsafe fn lock_read(&self) {
         unsafe { c::down_read(self.as_ptr().cast()) }
     }
 
-    unsafe fn unlock_shared(&self, _: ()) {
+    unsafe fn unlock_read(&self, _: ()) {
         unsafe { c::up_read(self.as_ptr().cast()) }
     }
+}
 
+unsafe impl RawRwLock for c::rw_semaphore {
     unsafe fn assert_held_any(&self) {
         unsafe { rust_rwsem_assert_held(self.as_ptr().cast()) }
     }
@@ -275,15 +277,17 @@ unsafe impl RawLock for c::percpu_rw_semaphore {
     }
 }
 
-unsafe impl RawRwLock for c::percpu_rw_semaphore {
-    unsafe fn lock_shared(&self) {
+unsafe impl RawReadLock for c::percpu_rw_semaphore {
+    unsafe fn lock_read(&self) {
         unsafe { rust_percpu_down_read(self.as_ptr().cast()) }
     }
 
-    unsafe fn unlock_shared(&self, _: ()) {
+    unsafe fn unlock_read(&self, _: ()) {
         unsafe { rust_percpu_up_read(self.as_ptr().cast()) }
     }
+}
 
+unsafe impl RawRwLock for c::percpu_rw_semaphore {
     unsafe fn assert_held_any(&self) {
         unsafe { rust_percpu_rwsem_assert_held(self.as_ptr().cast()) }
     }
