@@ -2,8 +2,8 @@
 
 /*
  * The C that Rust's locks call (locking/): what C has as a macro - lockdep's
- * classes and asserts, spin_lock_irqsave(), PF_MEMALLOC_NOIO - or as a static
- * inline in one build or the other.
+ * classes and asserts, spin_lock_irqsave() - or as a static inline in one
+ * build or the other.
  *
  * A lock initialized from Rust has a lockdep class per call site, as C's
  * init macros give theirs: Rust passes its own, @key.
@@ -18,23 +18,6 @@
 #include "locking/locking.h"
 
 #include <trace/events/lock.h>
-
-/* noio.rs: the NOIO scope */
-
-unsigned int rust_memalloc_noio_save(void)
-{
-	return memalloc_flags_save(PF_MEMALLOC_NOIO);
-}
-
-void rust_memalloc_flags_restore(unsigned int flags)
-{
-	memalloc_flags_restore(flags);
-}
-
-void rust_memalloc_noio_clear(void)
-{
-	memalloc_flags_restore(PF_MEMALLOC_NOIO);
-}
 
 /* raw.rs: struct mutex */
 

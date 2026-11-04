@@ -18,8 +18,7 @@
 //!
 //! MemallocFlags is the scope alone - saved on construction, restored on
 //! drop, as memalloc_flags_save() and _restore() pair: scoped (LIFO) use
-//! only. The flag itself stays on the C side (locking.c): the
-//! PF_MEMALLOC_* #defines don't reach Rust.
+//! only.
 
 #![allow(non_camel_case_types)]
 
@@ -27,30 +26,66 @@ use super::{Guard, Locked, RawLock, RawRwLock, RawTryLock, ReadGuard};
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::{c_uint, c_void, CStr};
-use cstruct_macros::{c_extern, c_verbatim};
+use cstruct_macros::c_verbatim;
 
-c_extern! {
-    pub fn rust_memalloc_noio_save() -> c_uint;
-    pub fn rust_memalloc_flags_restore(flags: c_uint);
-    pub fn rust_memalloc_noio_clear();
+#[cfg(kernel)]
+mod pf {
+    pub const PF_MEMALLOC_NOIO: u32 = kernel::bindings::PF_MEMALLOC_NOIO;
+}
+#[cfg(not(kernel))]
+mod pf {
+    pub use crate::cstructs::c::PF_MEMALLOC_NOIO;
+}
+pub(crate) use pf::*;
+
+/// current->flags, which only current writes. None in a userspace thread the
+/// shim didn't start, which has no task: and no scope, which its allocator
+/// doesn't take anyway.
+fn current_flags() -> Option<&'static mut c_uint> {
+    #[cfg(kernel)]
+    let t = kernel::task::Task::current_raw();
+    #[cfg(not(kernel))]
+    let t = unsafe { c::bch2_current() };
+
+    unsafe { t.as_mut() }.map(|t| &mut t.flags)
 }
 
-/// A PF_MEMALLOC_NOIO scope: allocations may not recurse into reclaim IO
-/// until it's dropped, which restores the flags it saved.
+/// Set @flag in current->flags: whether it was, for memalloc_flags_restore().
+pub(crate) fn memalloc_flags_save(flag: u32) -> bool {
+    let Some(f) = current_flags() else { return true };
+    let was = *f & flag != 0;
+    *f |= flag;
+    was
+}
+
+/// @flag back as memalloc_flags_save() found it.
+pub(crate) fn memalloc_flags_restore(flag: u32, was: bool) {
+    if let Some(f) = current_flags() {
+        if was { *f |= flag } else { *f &= !flag }
+    }
+}
+
+/// A PF_MEMALLOC_* scope, until it's dropped. NOIO: allocations may not
+/// recurse into reclaim IO.
 #[must_use = "the memalloc scope ends as soon as the guard is dropped"]
 pub struct MemallocFlags {
-    saved: u32,
+    flag: u32,
+    was:  bool,
 }
 
 impl MemallocFlags {
+    fn new(flag: u32) -> Self {
+        Self { flag, was: memalloc_flags_save(flag) }
+    }
+
     pub fn noio() -> Self {
-        Self { saved: unsafe { rust_memalloc_noio_save() } }
+        Self::new(PF_MEMALLOC_NOIO)
     }
 }
 
 impl Drop for MemallocFlags {
     fn drop(&mut self) {
-        unsafe { rust_memalloc_flags_restore(self.saved) }
+        memalloc_flags_restore(self.flag, self.was)
     }
 }
 
