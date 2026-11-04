@@ -31,18 +31,7 @@ use crate::types::c_default;
 use core::ffi::{c_uint, c_void, CStr};
 use cstruct_macros::c_verbatim;
 
-#[cfg(kernel)]
-mod pf {
-    pub const PF_MEMALLOC_NOIO: u32 = kernel::bindings::PF_MEMALLOC_NOIO;
-    // util.h's, from the same holes
-    pub const PF_MEMALLOC_NORECLAIM: u32 = kernel::bindings::PF__HOLE__00800000;
-    pub const PF_MEMALLOC_NOWARN: u32 = kernel::bindings::PF__HOLE__01000000;
-}
-#[cfg(not(kernel))]
-mod pf {
-    pub use crate::cstructs::c::{PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
-}
-pub(crate) use pf::*;
+pub(crate) use crate::c::{PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
 
 /// current->flags, which only current writes. None in a userspace thread the
 /// shim didn't start, which has no task: and no scope, which its allocator

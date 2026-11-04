@@ -441,18 +441,7 @@ do {									\
 
 #include <linux/sched/mm.h>
 
-/*
- * Upstream's, until the revert gave their bits back to sched.h's holes - so
- * the page allocator doesn't see them: our Rust allocation entry points apply
- * them (util/alloc.rs, current_gfp_context()), and nothing else does.
- */
-#ifndef PF_MEMALLOC_NORECLAIM
-#if !defined(PF__HOLE__00800000) || !defined(PF__HOLE__01000000)
-#error "PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN: PF__HOLE__00800000 and PF__HOLE__01000000 are taken - pick two of sched.h's PF__HOLE__* still free"
-#endif
-#define PF_MEMALLOC_NORECLAIM	PF__HOLE__00800000
-#define PF_MEMALLOC_NOWARN	PF__HOLE__01000000
-#endif
+#include "util/pf_memalloc.h"
 
 DEFINE_CLASS(memalloc_flags, struct memalloc_flags,
 	     memalloc_flags_restore(_T.flags),
