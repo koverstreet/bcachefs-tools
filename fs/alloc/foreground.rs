@@ -1040,7 +1040,7 @@ impl Fs {
             self.alloc_debug_to_text(&mut out.indent(2));
             write!(out, "\n");
 
-            out.make_room_gfp(4096, c::GFP_KERNEL);
+            out.make_room(4096);
 
             let (mut free, mut need_discard, mut reserve) = (0u64, 0u64, 0u64);
             {

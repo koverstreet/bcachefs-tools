@@ -656,7 +656,7 @@ pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags
         return Ok(());
     }
 
-    out.make_room_gfp(1024, c::GFP_KERNEL);
+    out.make_room(1024);
     let mut r = lock(fs);
     let rec = &fs.recovery.runner;
 

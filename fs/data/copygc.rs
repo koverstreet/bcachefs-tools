@@ -894,7 +894,7 @@ impl Fs {
         prt!(out, "Currently waiting since:\t{}\n",
              HumanReadable((now.wrapping_sub(cg.wait_at.get()).max(0) as u64) << 9));
 
-        out.make_room_gfp(4096, c::GFP_KERNEL);
+        out.make_room(4096);
 
         {
             let mark = self.mark_lock().read();

@@ -384,19 +384,14 @@ impl Printbuf {
         self.indent
     }
 
-    /// Room for @extra more bytes, allocated with @gfp: false if it
-    /// couldn't.
-    pub fn make_room_gfp(&mut self, extra: u32, gfp: c::gfp_t) -> bool {
-        self.grow(extra as usize, gfp).is_ok()
-    }
-
-    fn make_room(&mut self, extra: usize) -> bool {
-        self.grow(extra, c::GFP_KERNEL).is_ok()
+    /// Room for @extra more bytes: false if it couldn't.
+    pub fn make_room(&mut self, extra: usize) -> bool {
+        self.grow(extra).is_ok()
     }
 
     /// Room for @extra more bytes and the nul: ENOSPC if the buffer isn't ours
     /// to grow, ENOMEM if it can't be.
-    fn grow(&mut self, extra: usize, gfp: c::gfp_t) -> Result<(), u32> {
+    fn grow(&mut self, extra: usize) -> Result<(), u32> {
         /* Reserved space for terminating nul: */
         let need = self.pos() + extra + 1;
 
@@ -419,7 +414,7 @@ impl Printbuf {
          * that the user use printbuf_exit().
          */
         let buf = if new_size <= max {
-            unsafe { realloc(self.buf, new_size, gfp, self.may_vmalloc()) }
+            unsafe { realloc(self.buf, new_size, self.may_vmalloc()) }
         } else {
             core::ptr::null_mut()
         };
@@ -823,17 +818,17 @@ impl Printbuf {
     }
 }
 
-/// krealloc(), or kvrealloc() if @vmalloc, as @gfp says: what C's kfree() or
-/// kvfree() takes back. Userspace's are both krealloc().
+/// krealloc(), or kvrealloc() if @vmalloc, as the task's memalloc scope says:
+/// what C's kfree() or kvfree() takes back. Userspace's are both krealloc().
 ///
 /// # Safety
 /// @p is null, or this's, and not used after unless this fails.
-unsafe fn realloc(p: *mut c_char, size: usize, gfp: c::gfp_t, vmalloc: bool) -> *mut c_char {
+unsafe fn realloc(p: *mut c_char, size: usize, vmalloc: bool) -> *mut c_char {
     #[cfg(kernel)]
     unsafe {
-        use kernel::bindings::{krealloc_node_align, kvrealloc_node_align, NUMA_NO_NODE};
+        use kernel::bindings::{krealloc_node_align, kvrealloc_node_align, GFP_KERNEL, NUMA_NO_NODE};
 
-        let gfp = crate::util::alloc::current_gfp_context_raw(gfp);
+        let gfp = crate::util::alloc::current_gfp_context_raw(GFP_KERNEL);
         if vmalloc {
             kvrealloc_node_align(p.cast(), size, 1, gfp, NUMA_NO_NODE).cast()
         } else {
@@ -843,7 +838,7 @@ unsafe fn realloc(p: *mut c_char, size: usize, gfp: c::gfp_t, vmalloc: bool) -> 
     #[cfg(not(kernel))]
     {
         let _ = vmalloc;
-        unsafe { bcachefs_shim::alloc::krealloc(p.cast(), size, gfp) }.cast()
+        unsafe { bcachefs_shim::alloc::krealloc(p.cast(), size, c::GFP_KERNEL) }.cast()
     }
 }
 
@@ -916,7 +911,7 @@ pub fn bch2_printbuf_do_indent(out: &mut Printbuf, pos: c_uint) {
 
 #[c_export]
 pub fn bch2_printbuf_make_room(out: &mut Printbuf, extra: c_uint) -> c_int {
-    out.grow(extra as usize, c::GFP_KERNEL).map_or_else(|e| -(e as c_int), |()| 0)
+    out.grow(extra as usize).map_or_else(|e| -(e as c_int), |()| 0)
 }
 
 /*

@@ -520,7 +520,7 @@ impl Fs {
     /// sysfs disk_groups.
     #[cold]
     pub fn disk_groups_to_text(&self, out: &mut Printbuf) {
-        out.make_room_gfp(4096, c::GFP_KERNEL);
+        out.make_room(4096);
 
         let rcu = read_lock();
         let groups = self.disk_groups.read(&rcu);

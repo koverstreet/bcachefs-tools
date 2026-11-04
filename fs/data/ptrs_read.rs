@@ -173,7 +173,7 @@ impl<const N: usize> IoFailures<N> {
             let mut out = out.indent(2);
 
             for f in self.devs() {
-                out.make_room_gfp(1024, c::GFP_KERNEL);
+                out.make_room(1024);
                 {
                     let rcu = read_lock();
                     match fs.dev_rcu(f.dev.into(), &rcu) {
