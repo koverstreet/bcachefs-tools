@@ -5,7 +5,7 @@ use core::cmp::Ordering;
 use core::marker::PhantomData;
 
 use super::{AllTypes, BkeyI, BkeyS, BkeySC, FamilyVal, ValidatedVal, BKEY_U64S};
-use crate::btree::node::BtreeNode;
+use crate::btree::node::NodeContents;
 use crate::c;
 use crate::format::Bpos;
 use crate::util::kernel::likely;
@@ -189,7 +189,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
     }
 
     /// Just the key, not the value.
-    pub fn unpack(&self, b: &BtreeNode) -> c::bkey {
+    pub fn unpack(&self, b: &NodeContents) -> c::bkey {
         if likely(self.is_packed()) {
             b.format.unpack_key(self)
         } else {
@@ -198,7 +198,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
     }
 
     /// The key and the value, into @dst.
-    pub fn unpack_into(&self, b: &BtreeNode, dst: &mut [u64]) {
+    pub fn unpack_into(&self, b: &NodeContents, dst: &mut [u64]) {
         self.unpacked_into(&b.format, self.unpack(b), dst);
     }
 
@@ -210,7 +210,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
         dst[BKEY_U64S..][..val.len()].copy_from_slice(val);
     }
 
-    pub fn unpack_pos(&self, b: &BtreeNode) -> Bpos {
+    pub fn unpack_pos(&self, b: &NodeContents) -> Bpos {
         if likely(self.is_packed()) {
             b.format.unpack_pos(self)
         } else {
@@ -219,7 +219,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
     }
 
     /// The key unpacked into @u, the value where it is.
-    pub fn disassemble<'a>(&'a self, b: &BtreeNode, u: &'a mut c::bkey) -> BkeySC<'a, V> {
+    pub fn disassemble<'a>(&'a self, b: &NodeContents, u: &'a mut c::bkey) -> BkeySC<'a, V> {
         self.disassembled(&b.format, self.unpack(b), u)
     }
 
@@ -235,7 +235,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
         }
     }
 
-    pub fn disassemble_mut<'a>(&'a mut self, b: &BtreeNode, u: &'a mut c::bkey) -> BkeyS<'a, V> {
+    pub fn disassemble_mut<'a>(&'a mut self, b: &NodeContents, u: &'a mut c::bkey) -> BkeyS<'a, V> {
         *u = self.unpack(b);
         BkeyS {
             k:   u,
@@ -245,7 +245,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
     }
 }
 
-impl BtreeNode {
+impl NodeContents {
     pub fn cmp_packed(&self,
                       l: &BkeyP<impl ?Sized + ValidatedVal>,
                       r: &BkeyP<impl ?Sized + ValidatedVal>) -> Ordering {

@@ -5,7 +5,7 @@
 //! are referred to, as in C, by their offsets in u64s from the node's start.
 
 use super::bset::BsetTree;
-use super::{BtreeNode, BtreeNrKeys};
+use super::{BtreeNode, BtreeNrKeys, NodeContents};
 use crate::types::L1_CACHE_BYTES;
 use crate::btree::bkey::{BkeyP, BkeySC};
 use crate::c;
@@ -41,7 +41,7 @@ pub struct KeysMut<'a> {
 }
 
 /// The node's sets, the first nsets of them: nsets and the array are apart
-/// in BtreeNode.
+/// in NodeContents.
 pub struct Sets<'a> {
     set: &'a mut [BsetTree; cs::MAX_BSETS as usize],
     nr:  &'a mut u8,
@@ -50,40 +50,46 @@ pub struct Sets<'a> {
 impl BtreeNode {
     /// The aux trees' cachelines are the buffer's, by offset: rounding an
     /// offset is rounding the address only if the buffer is L1-aligned.
-    fn buf_aligned(&self) {
-        ebug_assert!(self.data as usize % L1_CACHE_BYTES == 0,
-                     "btree node buffer at {:p}, not {L1_CACHE_BYTES} byte aligned", self.data);
+    fn buf_aligned(data: *const Head<c::btree_node>) {
+        ebug_assert!(data as usize % L1_CACHE_BYTES == 0,
+                     "btree node buffer at {data:p}, not {L1_CACHE_BYTES} byte aligned");
+    }
+
+    fn own_contents(&self, contents: *const NodeContents) {
+        ebug_assert!(core::ptr::eq(contents, (&raw const self.contents).cast()), "another node's contents");
     }
 
     #[inline]
-    pub fn keys(&self) -> Keys<'_> {
-        self.buf_aligned();
+    pub fn keys<'a>(&'a self, contents: &'a NodeContents) -> Keys<'a> {
+        self.own_contents(contents);
+        Self::buf_aligned(contents.data);
         unsafe {
             Keys {
                 node:          self,
-                sets:          self.sets(),
-                buf:           core::slice::from_raw_parts(self.data.cast::<u64>(), self.buf_bytes() / size_of::<u64>()),
+                sets:          contents.sets(),
+                buf:           core::slice::from_raw_parts(contents.data.cast::<u64>(), self.buf_bytes() / size_of::<u64>()),
                 aux:           core::slice::from_raw_parts(self.aux_data.cast::<u64>(), self.aux_data_u64s()),
-                unpack_fn_len: self.unpack_fn_len,
+                unpack_fn_len: contents.unpack_fn_len,
             }
         }
     }
 
-    pub fn keys_mut(&mut self) -> KeysMut<'_> {
-        self.buf_aligned();
-        let node = self as *const BtreeNode;
+    /// The buffer and the aux trees are the contents', had mutably with them.
+    pub fn keys_mut<'a>(&'a self, contents: &'a mut NodeContents) -> KeysMut<'a> {
+        self.own_contents(contents);
+        Self::buf_aligned(contents.data);
         let (buf_u64s, aux_u64s) = (self.buf_bytes() / size_of::<u64>(), self.aux_data_u64s());
-        let BtreeNode { format, nr_key_bits, unpack_fn_len, set, nsets, nr, data, aux_data, .. } = self;
+        let NodeContents { data, format, nr_key_bits, unpack_fn_len, set, nsets, nr, .. } = contents;
         unsafe {
             KeysMut {
-                node,
+                node:          self,
                 format,
                 nr_key_bits:   *nr_key_bits,
                 unpack_fn_len: *unpack_fn_len,
                 sets:          Sets { set, nr: nsets },
                 nr,
                 buf:           core::slice::from_raw_parts_mut(data.cast::<u64>(), buf_u64s),
-                aux:           core::slice::from_raw_parts_mut(aux_data.cast::<u64>(), aux_u64s),
+                aux:           core::slice::from_raw_parts_mut(self.aux_data.cast::<u64>(), aux_u64s),
             }
         }
     }
@@ -169,10 +175,15 @@ pub(super) fn set_keys<'a>(buf: &'a [u64], t: &BsetTree) -> impl Iterator<Item =
 }
 
 impl<'a> Keys<'a> {
-    /// For its format fields: through a KeysMut's view, what that borrows
-    /// mutably isn't read through this.
     pub fn node(&self) -> &'a BtreeNode {
         unsafe { &*self.node }
+    }
+
+    /// For its format fields: through a KeysMut's view, what that borrows
+    /// mutably isn't read through this. A Keys is made from the node's
+    /// contents, so the node is locked while it lives.
+    pub fn contents(&self) -> &'a NodeContents {
+        unsafe { self.node().contents.protected() }
     }
 
     #[inline(always)]
@@ -186,17 +197,17 @@ impl<'a> Keys<'a> {
     }
 
     pub fn unpack_pos(&self, k: u16) -> Bpos {
-        self.node().unpack_pos_at(self.buf, k)
+        self.contents().unpack_pos_at(self.buf, k)
     }
 
     /// Just the key at @k, not the value.
     pub fn unpack(&self, k: u16) -> c::bkey {
-        self.node().unpack_key_at(self.buf, k)
+        self.contents().unpack_key_at(self.buf, k)
     }
 
     /// The key at @k unpacked into @u, the value where it is.
     pub fn disassemble<'u>(&self, k: u16, u: &'u mut c::bkey) -> BkeySC<'u> where 'a: 'u {
-        self.key_at(k).disassembled(&self.node().format, self.unpack(k), u)
+        self.key_at(k).disassembled(&self.contents().format, self.unpack(k), u)
     }
 
     pub fn key_offset(&self, k: &BkeyP) -> u16 {

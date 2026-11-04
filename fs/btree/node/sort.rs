@@ -3,7 +3,7 @@
 use super::bset::{BsetTree, MAX_BSETS};
 use super::iter::KeyIter;
 use super::keys::{key_at, keys_in, Keys};
-use super::{BtreeNode, BtreeNrKeys};
+use super::{BtreeNode, BtreeNrKeys, NodeContents};
 use crate::btree::bkey::{self, BkeyP, BKEY_FORMAT_CURRENT, BKEY_U64S};
 use crate::btree::cache::Bounce;
 use crate::c;
@@ -95,7 +95,7 @@ impl<'a, T: Fn(usize, &BkeyP, usize, &BkeyP) -> Ordering> Merge<'a, T> {
     fn key_cmp(&self, l: usize, r: usize) -> Ordering {
         let (lk, rk) = (self.key_at(l), self.key_at(r));
 
-        self.keys.node().cmp_packed_inlined(lk, rk).then((self.tie_break)(l, lk, r, rk))
+        self.keys.contents().cmp_packed_inlined(lk, rk).then((self.tie_break)(l, lk, r, rk))
     }
 
     #[inline(always)]
@@ -147,7 +147,7 @@ impl<'a, T: Fn(usize, &BkeyP, usize, &BkeyP) -> Ordering> Merge<'a, T> {
     #[inline]
     fn should_drop_next_key(&self) -> bool {
         match &*self.sets {
-            [l, r, ..] => self.keys.node().cmp_packed_inlined(self.key_at(l.k as usize),
+            [l, r, ..] => self.keys.contents().cmp_packed_inlined(self.key_at(l.k as usize),
                                                               self.key_at(r.k as usize)).is_eq(),
             _ => false,
         }
@@ -208,7 +208,7 @@ fn move_down(buf: &mut [u64], from: usize, len: usize, to: usize) {
     unsafe { copy_u64s_small(p.add(to), p.add(from), len) };
 }
 
-fn verify_no_dups(b: &BtreeNode, buf: &[u64], start: usize, end: usize) {
+fn verify_no_dups(b: &NodeContents, buf: &[u64], start: usize, end: usize) {
     if !cfg!(CONFIG_BCACHEFS_DEBUG) {
         return;
     }
@@ -220,7 +220,7 @@ fn verify_no_dups(b: &BtreeNode, buf: &[u64], start: usize, end: usize) {
 }
 
 fn sort_bkey_ptrs(keys: &Keys<'_>, ptrs: &mut [u64]) {
-    let cmp = |l: u64, r: u64| keys.node().cmp_packed(key_at(keys.buf, l as usize), key_at(keys.buf, r as usize));
+    let cmp = |l: u64, r: u64| keys.contents().cmp_packed(key_at(keys.buf, l as usize), key_at(keys.buf, r as usize));
     let (mut n, mut a) = (ptrs.len(), ptrs.len() / 2);
 
     if a == 0 {
@@ -265,7 +265,7 @@ fn sort_bkey_ptrs(keys: &Keys<'_>, ptrs: &mut [u64]) {
 }
 
 #[c_export]
-pub fn bch2_sort_whiteouts(fs: &Fs, b: &mut BtreeNode) {
+pub fn bch2_sort_whiteouts(fs: &Fs, b: &BtreeNode) {
     let u64s = b.whiteout_u64s.get() as usize;
 
     if u64s == 0 {
@@ -274,7 +274,8 @@ pub fn bch2_sort_whiteouts(fs: &Fs, b: &mut BtreeNode) {
 
     let mut bounce = Bounce::new(fs, u64s * size_of::<u64>());
     let buf = &mut bounce.u64s()[..u64s];
-    let keys = b.keys();
+    let contents = unsafe { b.contents_mut() };
+    let keys = b.keys(contents);
     let start = keys.buf.len() - u64s;
 
     {
@@ -300,9 +301,9 @@ pub fn bch2_sort_whiteouts(fs: &Fs, b: &mut BtreeNode) {
         }
     }
 
-    verify_no_dups(keys.node(), buf, 0, u64s);
+    verify_no_dups(keys.contents(), buf, 0, u64s);
 
-    b.keys_mut().buf[start..].copy_from_slice(buf);
+    b.keys_mut(contents).buf[start..].copy_from_slice(buf);
 }
 
 fn should_compact_bset_lazy(nr: &BtreeNrKeys, set: usize, t: &BsetTree) -> bool {
@@ -312,35 +313,40 @@ fn should_compact_bset_lazy(nr: &BtreeNrKeys, set: usize, t: &BsetTree) -> bool 
     dead_u64s > 64 && dead_u64s * 3 > total_u64s
 }
 
-fn should_compact_bset(b: &BtreeNode, set: usize, compacting: bool, mode: CompactMode) -> bool {
-    let t = &b.set[set];
+fn should_compact_bset(b: &BtreeNode, contents: &NodeContents, set: usize, compacting: bool,
+                       mode: CompactMode) -> bool {
+    let t = &contents.set[set];
 
-    if t.u64s() == b.nr.bset_u64s[set] as usize {
+    if t.u64s() == contents.nr.bset_u64s[set] as usize {
         return false;
     }
 
     match mode {
-        CompactMode::COMPACT_LAZY => should_compact_bset_lazy(&b.nr, set, t) ||
+        CompactMode::COMPACT_LAZY => should_compact_bset_lazy(&contents.nr, set, t) ||
             (compacting && !bset_written(b, t)),
         CompactMode::COMPACT_ALL  => true,
     }
 }
 
 #[c_export]
-pub fn bch2_drop_whiteouts(b: &mut BtreeNode, mode: CompactMode) -> bool {
+pub fn bch2_drop_whiteouts(b: &BtreeNode, mode: CompactMode) -> bool {
+    drop_whiteouts(b, unsafe { b.contents_mut() }, mode)
+}
+
+fn drop_whiteouts(b: &BtreeNode, contents: &mut NodeContents, mode: CompactMode) -> bool {
     let write_block = b.written.get() as usize * SECTOR_U64S;
     let mut ret = false;
 
-    for set in 0..b.nsets as usize {
-        let t = b.set[set];
+    for set in 0..contents.nsets as usize {
+        let t = contents.set[set];
         let moved = (set != 0 && !bset_written(b, &t))
-            .then(|| (t.data_offset as usize - ENTRY_KEYS, write_block.max(b.set[set - 1].end_offset as usize)))
+            .then(|| (t.data_offset as usize - ENTRY_KEYS, write_block.max(contents.set[set - 1].end_offset as usize)))
             .filter(|(src, dst)| src != dst);
 
         ret |= moved.is_some();
 
-        let compact = should_compact_bset(b, set, ret, mode);
-        let mut keys = b.keys_mut();
+        let compact = should_compact_bset(b, contents, set, ret, mode);
+        let mut keys = b.keys_mut(contents);
 
         if let Some((src, dst)) = moved {
             let u64s = ENTRY_U64S + if compact { 0 } else { t.u64s() };
@@ -377,18 +383,18 @@ pub fn bch2_drop_whiteouts(b: &mut BtreeNode, mode: CompactMode) -> bool {
         ret = true;
     }
 
-    b.keys_mut().verify_btree_nr_keys();
+    b.keys_mut(contents).verify_btree_nr_keys();
 
-    bch2_btree_build_aux_trees(b);
+    build_aux_trees(b, contents);
 
     ret
 }
 
-fn btree_node_sort(fs: &Fs, b: &mut BtreeNode, start_idx: usize, end_idx: usize) {
+fn btree_node_sort(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, start_idx: usize, end_idx: usize) {
     let shift = end_idx - start_idx - 1;
-    let sorting_entire_node = start_idx == 0 && end_idx == b.nsets as usize;
+    let sorting_entire_node = start_idx == 0 && end_idx == contents.nsets as usize;
 
-    let keys = b.keys();
+    let keys = b.keys(contents);
     let sets = &keys.sets[start_idx..end_idx];
     let mut runs: ArrayVec<SortIterSet, { MAX_BSETS as usize }> = sets.iter()
         .filter(|t| t.u64s() != 0)
@@ -422,7 +428,7 @@ fn btree_node_sort(fs: &Fs, b: &mut BtreeNode, start_idx: usize, end_idx: usize)
     /* Make sure we preserve bset journal_seq: */
     let seq = sets.iter().map(|t| keys.bset(t).journal_seq.get()).max().unwrap_or(0);
     let (start_offset, first) = (sets[0].data_offset, sets[0].first_offset() as usize);
-    b.keys_mut().bset_head_mut(start_offset).journal_seq = Le64::new(seq);
+    b.keys_mut(contents).bset_head_mut(start_offset).journal_seq = Le64::new(seq);
 
     if sorting_entire_node &&
        !mem_alloc_profiling_enabled() {
@@ -431,20 +437,20 @@ fn btree_node_sort(fs: &Fs, b: &mut BtreeNode, start_idx: usize, end_idx: usize)
          * buffer, we can just swap buffers instead of doing a big
          * memcpy()
          */
-        out.u64s()[..NODE_U64S].copy_from_slice(&b.keys().buf[..NODE_U64S]);
-        out.swap(b);
+        out.u64s()[..NODE_U64S].copy_from_slice(&b.keys(contents).buf[..NODE_U64S]);
+        out.swap(b, contents);
     } else {
-        b.keys_mut().buf[first..][..u64s].copy_from_slice(&out.u64s()[NODE_U64S..][..u64s]);
+        b.keys_mut(contents).buf[first..][..u64s].copy_from_slice(&out.u64s()[NODE_U64S..][..u64s]);
     }
 
-    let nsets = b.nsets as usize;
-    b.nr.bset_u64s[start_idx] += b.nr.bset_u64s[start_idx + 1..end_idx].iter().sum::<u16>();
-    b.nr.bset_u64s.copy_within(end_idx..nsets, start_idx + 1);
-    b.set.copy_within(end_idx..nsets, start_idx + 1);
-    b.nsets -= shift as u8;
-    b.nr.bset_u64s[b.nsets as usize..].fill(0);
+    let nsets = contents.nsets as usize;
+    contents.nr.bset_u64s[start_idx] += contents.nr.bset_u64s[start_idx + 1..end_idx].iter().sum::<u16>();
+    contents.nr.bset_u64s.copy_within(end_idx..nsets, start_idx + 1);
+    contents.set.copy_within(end_idx..nsets, start_idx + 1);
+    contents.nsets -= shift as u8;
+    contents.nr.bset_u64s[contents.nsets as usize..].fill(0);
 
-    let mut keys = b.keys_mut();
+    let mut keys = b.keys_mut(contents);
     keys.bset_head_mut(start_offset).set_u64s(u64s);
     keys.set_bset_end(start_idx);
     keys.sets.set_no_aux_tree(start_idx);
@@ -455,20 +461,22 @@ fn btree_node_sort(fs: &Fs, b: &mut BtreeNode, start_idx: usize, end_idx: usize)
 }
 
 #[c_export]
-pub fn bch2_btree_sort_into(fs: &Fs, dst: &mut BtreeNode, src: &BtreeNode) {
+pub fn bch2_btree_sort_into(fs: &Fs, dst: &BtreeNode, src: &BtreeNode) {
     let start_time = local_clock();
 
-    assert!(dst.nsets == 1, "sorting into a node with {} bsets", dst.nsets);
+    let dst_contents = unsafe { dst.contents_mut() };
+    assert!(dst_contents.nsets == 1, "sorting into a node with {} bsets", dst_contents.nsets);
 
-    let mut dst = dst.keys_mut();
+    let mut dst = dst.keys_mut(dst_contents);
     dst.sets.set_no_aux_tree(0);
 
-    let src_keys = src.keys();
+    let src_contents = unsafe { src.contents() };
+    let src_keys = src.keys(src_contents);
     let mut src_iter = KeyIter::default();
     src_iter.init_from_start(&src_keys);
 
     /* Sort + repack in a new format: */
-    let (in_f, out_f) = (&src.format, dst.format);
+    let (in_f, out_f) = (&src_contents.format, dst.format);
     let transform = plain_bytes(out_f) != plain_bytes(in_f);
     let t = dst.sets[0];
     let mut out = t.end_offset as usize;
@@ -489,7 +497,7 @@ pub fn bch2_btree_sort_into(fs: &Fs, dst: &mut BtreeNode, src: &BtreeNode) {
             if bkey::transform(out_f, room, k_f, k) {
                 BkeyP::from_slice_mut(room).expect("a transformed key").set_format(c::KEY_FORMAT_LOCAL_BTREE as u8);
             } else {
-                k.unpack_into(src, room);
+                k.unpack_into(src_contents, room);
             }
         }
 
@@ -514,14 +522,15 @@ pub fn bch2_btree_sort_into(fs: &Fs, dst: &mut BtreeNode, src: &BtreeNode) {
  * too many bsets - sort some of them together:
  */
 #[c_export]
-pub fn bch2_btree_node_compact(fs: &Fs, b: &mut BtreeNode) -> bool {
-    let nsets = b.nsets as usize;
-    let unwritten_idx = b.sets().iter().position(|t| !bset_written(b, t)).unwrap_or(nsets);
+pub fn bch2_btree_node_compact(fs: &Fs, b: &BtreeNode) -> bool {
+    let contents = unsafe { b.contents_mut() };
+    let nsets = contents.nsets as usize;
+    let unwritten_idx = contents.sets().iter().position(|t| !bset_written(b, t)).unwrap_or(nsets);
     let mut ret = false;
 
     for (start, end) in [(unwritten_idx, nsets), (0, unwritten_idx)] {
         if end - start > 1 {
-            btree_node_sort(fs, b, start, end);
+            btree_node_sort(fs, b, contents, start, end);
             ret = true;
         }
     }
@@ -529,17 +538,25 @@ pub fn bch2_btree_node_compact(fs: &Fs, b: &mut BtreeNode) -> bool {
 }
 
 #[c_export]
-pub fn bch2_btree_build_aux_trees(b: &mut BtreeNode) {
-    let nsets = b.nsets as usize;
-    let written: [bool; MAX_BSETS as usize] = core::array::from_fn(|i| i < nsets && bset_written(b, &b.set[i]));
-    let mut keys = b.keys_mut();
+pub fn bch2_btree_build_aux_trees(b: &BtreeNode) {
+    build_aux_trees(b, unsafe { b.contents_mut() })
+}
+
+fn build_aux_trees(b: &BtreeNode, contents: &mut NodeContents) {
+    let nsets = contents.nsets as usize;
+    let written: [bool; MAX_BSETS as usize] = core::array::from_fn(|i| i < nsets && bset_written(b, &contents.set[i]));
+    let mut keys = b.keys_mut(contents);
 
     for set in 0..nsets {
         keys.bset_build_aux_tree(set, !written[set] && set + 1 == nsets);
     }
 }
 
-/* For C: pointers into the node in, offsets inside */
+/*
+ * For C: pointers into the node in, offsets inside. A node C passes is
+ * locked, so its contents can be read - and written, by those that change
+ * the node, which C calls with it held for write.
+ */
 
 /// # Safety
 /// @iter is sort_iter_init()'s, its runs sort_iter_add()'s.
@@ -573,7 +590,8 @@ pub unsafe fn sort_iter_add(iter: *mut SortIter, k: *const c::bkey_packed, end: 
         let (used, size) = ((*iter).used, (*iter).size);
         assert!(used < size, "adding to a sort iterator of {size} runs, full");
 
-        let keys = (*(*iter).b).keys();
+        let b = &*(*iter).b;
+        let keys = b.keys(b.contents());
         let (k, end) = (buf_offset(&keys, k), buf_offset(&keys, end));
 
         if k != end {
@@ -596,7 +614,7 @@ pub unsafe fn bch2_key_sort_fix_overlapping(_fs: &Fs, dst: *mut Head<c::bset>, i
     /*
      * If keys compare equal, compare by pointer order:
      */
-    let u64s = Merge::new(&b.keys(), runs, |l, _, r, _| l.cmp(&r))
+    let u64s = Merge::new(&b.keys(unsafe { b.contents() }), runs, |l, _, r, _| l.cmp(&r))
         .unique(|_, k| !k.key_type().is_deleted())
         .fold(0, |out, (_, k)| {
             nr.account_key_add(0, k);
@@ -615,7 +633,7 @@ pub unsafe fn bch2_key_sort_fix_overlapping(_fs: &Fs, dst: *mut Head<c::bset>, i
 pub unsafe fn bch2_sort_keys_keep_unwritten_whiteouts(dst: *mut c::bkey_packed, iter: *mut SortIter) -> c_uint {
     let (b, runs) = unsafe { sort_iter(iter) };
     let room = unsafe { core::slice::from_raw_parts_mut(dst.cast(), runs_u64s(runs)) };
-    let keys = b.keys();
+    let keys = b.keys(unsafe { b.contents() });
     let unwritten_whiteouts = keys.buf.len() - b.whiteout_u64s.get() as usize;
 
     /*
@@ -630,18 +648,19 @@ pub unsafe fn bch2_sort_keys_keep_unwritten_whiteouts(dst: *mut c::bkey_packed, 
 }
 
 #[c_export]
-pub fn bch2_btree_node_set_needs_whiteout(b: &mut BtreeNode) {
-    b.keys_mut().iter_mut().for_each(|k| k.set_needs_whiteout(true));
+pub fn bch2_btree_node_set_needs_whiteout(b: &BtreeNode) {
+    b.keys_mut(unsafe { b.contents_mut() }).iter_mut().for_each(|k| k.set_needs_whiteout(true));
 }
 
 #[c_export]
-pub fn bch2_maybe_compact_whiteouts(_fs: &Fs, b: &mut BtreeNode) -> bool {
-    let compact = b.sets().iter().enumerate().any(|(set, t)| should_compact_bset_lazy(&b.nr, set, t));
+pub fn bch2_maybe_compact_whiteouts(_fs: &Fs, b: &BtreeNode) -> bool {
+    let contents = unsafe { b.contents_mut() };
+    let compact = contents.sets().iter().enumerate().any(|(set, t)| should_compact_bset_lazy(&contents.nr, set, t));
 
-    compact && bch2_drop_whiteouts(b, CompactMode::COMPACT_LAZY)
+    compact && drop_whiteouts(b, contents, CompactMode::COMPACT_LAZY)
 }
 
 #[c_export]
-pub fn bch2_btree_node_sort(fs: &Fs, b: &mut BtreeNode, start_idx: c_uint, end_idx: c_uint) {
-    btree_node_sort(fs, b, start_idx as usize, end_idx as usize)
+pub fn bch2_btree_node_sort(fs: &Fs, b: &BtreeNode, start_idx: c_uint, end_idx: c_uint) {
+    btree_node_sort(fs, b, unsafe { b.contents_mut() }, start_idx as usize, end_idx as usize)
 }

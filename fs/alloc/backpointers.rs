@@ -467,7 +467,7 @@ fn get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
 
     assert_eq!(u32::from(b.c.level), u32::from(v.level) - 1, "node at the wrong level");
 
-    let node_k = BkeySC::from(b.key_i());
+    let node_k = BkeySC::from(unsafe { b.contents() }.key_i());
     if extent_matches_bp(fs, btree, v.level.into(), node_k, bp) {
         return Ok(Some(b));
     }
@@ -512,7 +512,7 @@ pub(super) fn get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Bac
     }
 
     match get_node(t, bp, iter, last_flushed, commit) {
-        Ok(b) => Ok(b.map(|b| BkeySC::from(b.key_i()))),
+        Ok(b) => Ok(b.map(|b| BkeySC::from(unsafe { b.contents() }.key_i()))),
         Err(e) if e.matches(bch_errcode::BCH_ERR_backpointer_to_overwritten_btree_node) => Ok(None),
         Err(e) => Err(e),
     }

@@ -161,7 +161,7 @@ impl<'f> NodeBuf<'f> {
     }
 
     fn bytes(&mut self, bytes: usize) -> &mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.node().data.cast::<u8>(), bytes) }
+        unsafe { core::slice::from_raw_parts_mut(self.node().contents.get_mut().data.cast::<u8>(), bytes) }
     }
 }
 
@@ -188,7 +188,7 @@ impl<'f> DevScan<'f> {
             return Err(c::ENOMEM.into());
         };
 
-        let nr_vecs = buf_nr_bvecs(buf.node().data.cast(), fs.opts.btree_node_size.get() as usize)
+        let nr_vecs = buf_nr_bvecs(buf.node().contents.get_mut().data.cast(), fs.opts.btree_node_size.get() as usize)
             .try_into().expect("bvecs for a btree node");
         let Ok(bio) = BioBuf::<Bio>::new::<BchError, _>(ca.disk_sb.bdev, nr_vecs, c::req_op_REQ_OP_READ, |b| b.init())
         else {
@@ -219,7 +219,7 @@ impl<'f> DevScan<'f> {
             return Ok(());
         }
 
-        let bn = self.buf.node().data();
+        let bn = self.buf.node().contents.get_mut().data();
         if bn.magic.get() != fs.bset_magic() {
             return Ok(());
         }
@@ -235,7 +235,7 @@ impl<'f> DevScan<'f> {
             let _ = fs.encrypt(csum_type, nonce, &mut self.buf.bytes(keys)[flags..]);
         }
 
-        let bn = self.buf.node().data();
+        let bn = self.buf.node().contents.get_mut().data();
         let id = bn.id_lo() | bn.id_hi() << 4;
         if btree_id_can_reconstruct(id as u32) ||
            bn.level() >= c::BTREE_MAX_DEPTH as u64 ||
@@ -266,7 +266,7 @@ impl<'f> DevScan<'f> {
         }
 
         let b = self.buf.node();
-        b.set_key(n.to_key().as_bkey_i());
+        b.contents.get_mut().set_key(n.to_key().as_bkey_i());
 
         let mut err = Printbuf::new();
         let ret = unsafe {
@@ -277,7 +277,7 @@ impl<'f> DevScan<'f> {
         }
 
         /* read_done will swap out b->data for another buffer */
-        let bn = b.data();
+        let bn = b.contents.get_mut().data();
         /*
          * Grab journal_seq here because we want the max journal_seq of
          * any bset; read_done sorts down to a single set and picks the
@@ -466,9 +466,10 @@ fn in_range(nodes: &[FoundBtreeNode], btree: Btree, level: u8, min: Bpos, max: B
 #[c_export]
 pub fn bch2_btree_node_is_stale(c: &Opaque<Fs>, b: &BtreeNode) -> bool {
     let nodes = Fs::from_c(c).btree.node_scan.lock();
-    let bn = b.data();
+    let contents = unsafe { b.contents() };
+    let bn = contents.data();
 
-    in_range(&nodes, Btree(b.c.btree_id.into()), b.c.level, bn.min_key, b.key.k.p)
+    in_range(&nodes, Btree(b.c.btree_id.into()), b.c.level, bn.min_key, contents.key.k.p)
         .any(|n| u64::from(n.seq) > bn.seq())
 }
 

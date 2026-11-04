@@ -8,7 +8,7 @@
 
 use crate::btree::bkey::{BkeySC, BkeyVal};
 use crate::btree::iter::BtreeTrans;
-use crate::btree::node::BtreeNode;
+use crate::btree::node::{BtreeNode, NodeContents};
 use crate::btree::types::{BtreeCacheLists, BtreeCacheLive};
 use crate::locking::ExclusiveGuard;
 use crate::util::ffi::Opaque;
@@ -88,12 +88,12 @@ impl<'f> Bounce<'f> {
     }
 
     /// The node's buffer this, and this the node's old one.
-    pub fn swap(&mut self, b: &mut BtreeNode) {
+    pub fn swap(&mut self, b: &BtreeNode, contents: &mut NodeContents) {
         assert!(self.bytes == b.buf_bytes(), "swapping a {} byte bounce for a {} byte node buffer",
                 self.bytes, b.buf_bytes());
 
-        let old = core::mem::replace(&mut b.data, self.p.as_ptr().cast());
-        btree_node_buf_swap_account(self.fs, old.cast(), b.data.cast());
+        let old = core::mem::replace(&mut contents.data, self.p.as_ptr().cast());
+        btree_node_buf_swap_account(self.fs, old.cast(), contents.data.cast());
         self.p = NonNull::new(old.cast()).expect("a node's buffer");
     }
 }

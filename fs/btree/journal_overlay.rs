@@ -912,7 +912,7 @@ impl c::btree_and_journal_iter {
 
             let btree_k = loop {
                 // SAFETY: the node's iterator, of node b
-                let keys = unsafe { (*self.b).keys() };
+                let keys = unsafe { (*self.b).keys((*self.b).contents()) };
                 let k = self.node_iter.peek_unpack(&keys, &mut self.unpacked).map_or(null, Into::into);
                 // SAFETY: a key of the node's
                 if k.k.is_null() || unsafe { (*k.k).p } >= self.pos {
@@ -944,7 +944,7 @@ impl c::btree_and_journal_iter {
             };
 
             // SAFETY: the node, and its data, while the iterator's on it
-            if !ret.k.is_null() && unsafe { (*ret.k).p > (*(*self.b).data).max_key } {
+            if !ret.k.is_null() && unsafe { (*ret.k).p > (*(*self.b).contents().data).max_key } {
                 ret = null;
             }
 
@@ -976,7 +976,7 @@ impl c::btree_and_journal_iter {
             b,
             node_iter,
             // SAFETY: the caller's
-            pos: unsafe { (*(*b).data).min_key },
+            pos: unsafe { (*(*b).contents().data).min_key },
             ..Default::default()
         };
 
@@ -1025,8 +1025,8 @@ pub unsafe fn bch2_btree_and_journal_iter_init_node_iter(trans: *mut c::btree_tr
     let mut node_iter = KeyIter::default();
     // SAFETY: the caller's
     unsafe {
-        node_iter.init_from_start(&(*b).keys());
-        iter.write(c::btree_and_journal_iter::new(trans, b, node_iter, (*(*b).data).min_key));
+        node_iter.init_from_start(&(*b).keys((*b).contents()));
+        iter.write(c::btree_and_journal_iter::new(trans, b, node_iter, (*(*b).contents().data).min_key));
     }
 }
 

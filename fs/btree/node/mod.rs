@@ -18,6 +18,7 @@ use crate::c;
 use crate::cstructs::c as cs;
 use crate::format::Btree;
 use crate::fs::Fs;
+use crate::locking::LockedBy;
 use crate::types::c_default;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
@@ -97,60 +98,15 @@ pub struct BtreeNode {
      * conversion.
      */
     pub written: Volatile<u16>,
-    pub nsets: u8,
-    pub nr_key_bits: u8,
-    pub version_ondisk: u16,
-
-    pub format: cs::bkey_format,
-
-    /*
-     * Per-field unpack constants, derived from @format at node init.
-     * Extract each field with:
-     *
-     *   field = (load_8_unaligned(bytes + byte_offset) >> (64 - bits))
-     *           + field_offset
-     *
-     * Load position chosen so the field ends at the top of the loaded
-     * value (load_offset + 8 == byte after field's MSB byte); junk from
-     * earlier-in-memory fields lands in the low bits and shifts off.
-     *
-     * byte_offset is signed: for a field near the start of @in, the
-     * load can need to start before @in. The byte(s) before @in are
-     * always valid memory in the callers we care about (bset payload
-     * after the bset header, or other bkeys in the same bset).
-     *
-     * Only handles formats where every field's MSB sits at a byte
-     * boundary (field_msb_bit % 8 == 7). bch2_bkey_format_done()
-     * rounds fields up to byte width when there are spare bits, so
-     * this is the common case. Formats too tight to byte-align take
-     * the slow path via byte_aligned_fields = false.
-     */
-    pub byte_aligned_fields: bool,
-    pub unpack: [BkeyUnpackField; cs::BKEY_NR_FIELDS as usize],
-
-    pub data: *mut Head<cs::btree_node>,
-    pub aux_data: *mut c_void,
-
-    /*
-     * Sets of sorted keys - the real btree node - plus a binary search tree
-     *
-     * set[0] is special; set[0]->tree, set[0]->prev and set[0]->data point
-     * to the memory we have allocated for this btree node. Additionally,
-     * set[0]->data points to the entire btree node as it exists on disk.
-     */
-    pub set: [BsetTree; cs::MAX_BSETS as usize],
-
-    pub nr: BtreeNrKeys,
-    pub sib_u64s: [u16; 2],
     pub whiteout_u64s: Volatile<u16>,
+
+    pub aux_data: *mut c_void,
     pub byte_order: u8,
-    pub unpack_fn_len: u8,
+
+    #[c_anon]
+    pub contents: LockedBy<NodeContents>,
 
     pub writes: [cs::btree_write; 2],
-
-    /* Key/pointer for this btree node */
-    pub key: cs::bkey_i,
-    pub key_pad: [u64; cs::BKEY_BTREE_PTR_VAL_U64s_MAX],
 
     /*
      * XXX: add a delete sequence number, so when bch2_btree_node_relock()
@@ -188,6 +144,64 @@ pub struct BtreeNode {
 }
 c_default!(BtreeNode);
 
+/// A node's keys, their buffer, their format and its key: the node lock's -
+/// written with it held for write, read with it held any way.
+#[repr(C)]
+#[derive(CStruct)]
+pub struct NodeContents {
+    /* swapped for a sort's bounce buffer, with the node held for write */
+    pub data: *mut Head<cs::btree_node>,
+
+    pub nsets: u8,
+    pub nr_key_bits: u8,
+    pub version_ondisk: u16,
+
+    pub format: cs::bkey_format,
+
+    /*
+     * Per-field unpack constants, derived from @format at node init.
+     * Extract each field with:
+     *
+     *   field = (load_8_unaligned(bytes + byte_offset) >> (64 - bits))
+     *           + field_offset
+     *
+     * Load position chosen so the field ends at the top of the loaded
+     * value (load_offset + 8 == byte after field's MSB byte); junk from
+     * earlier-in-memory fields lands in the low bits and shifts off.
+     *
+     * byte_offset is signed: for a field near the start of @in, the
+     * load can need to start before @in. The byte(s) before @in are
+     * always valid memory in the callers we care about (bset payload
+     * after the bset header, or other bkeys in the same bset).
+     *
+     * Only handles formats where every field's MSB sits at a byte
+     * boundary (field_msb_bit % 8 == 7). bch2_bkey_format_done()
+     * rounds fields up to byte width when there are spare bits, so
+     * this is the common case. Formats too tight to byte-align take
+     * the slow path via byte_aligned_fields = false.
+     */
+    pub byte_aligned_fields: bool,
+    pub unpack: [BkeyUnpackField; cs::BKEY_NR_FIELDS as usize],
+
+    /*
+     * Sets of sorted keys - the real btree node - plus a binary search tree
+     *
+     * set[0] is special; set[0]->tree, set[0]->prev and set[0]->data point
+     * to the memory we have allocated for this btree node. Additionally,
+     * set[0]->data points to the entire btree node as it exists on disk.
+     */
+    pub set: [BsetTree; cs::MAX_BSETS as usize],
+
+    pub nr: BtreeNrKeys,
+    pub sib_u64s: [u16; 2],
+    pub unpack_fn_len: u8,
+
+    /* Key/pointer for this btree node */
+    pub key: cs::bkey_i,
+    pub key_pad: [u64; cs::BKEY_BTREE_PTR_VAL_U64s_MAX],
+}
+c_default!(NodeContents);
+
 impl<'b, 'f> BtreeNode {
     pub fn to_text(&'b self, fs: &'f Fs) -> BtreeNodeToText<'b, 'f> {
         BtreeNodeToText { b: self, fs }
@@ -199,21 +213,22 @@ impl<'b, 'f> BtreeNode {
 }
 
 impl BtreeNode {
-    /// The node's key, all of it - its value runs past bkey_i, into key_pad.
-    pub fn key_i(&self) -> &BkeyI {
-        // SAFETY: the node's key, from a pointer to all of the node
-        unsafe { &*BkeyI::from_raw(&raw const self.key) }
+    /// The node's contents, on the caller's word that it holds the node lock,
+    /// until btree paths hand out its guards.
+    ///
+    /// # Safety
+    /// The node lock is held, any way, for as long as the reference lives, and
+    /// nothing has them mutably.
+    pub unsafe fn contents(&self) -> &NodeContents {
+        unsafe { self.contents.protected() }
     }
 
-    pub fn data(&self) -> &Head<cs::btree_node> {
-        unsafe { &*self.data }
-    }
-
-    pub fn set_key(&mut self, k: &BkeyI) {
-        let bytes = k.as_bytes();
-        let room = size_of_val(&self.key) + size_of_val(&self.key_pad);
-        assert!(bytes.len() <= room, "a btree node's key: {} bytes", bytes.len());
-        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), (&raw mut self.key).cast::<u8>(), bytes.len()) }
+    /// # Safety
+    /// The node lock is held for write, for as long as the reference lives,
+    /// and nothing else refers to them.
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn contents_mut(&self) -> &mut NodeContents {
+        unsafe { self.contents.protected_mut() }
     }
 
     pub fn is_fake(&self) -> bool {
@@ -226,11 +241,11 @@ impl BtreeNode {
     }
 
     /// The node's keys, unpacked, in order.
-    pub fn for_each_key<F>(&self, mut f: F) -> ControlFlow<()>
+    pub fn for_each_key<F>(&self, contents: &NodeContents, mut f: F) -> ControlFlow<()>
     where
         F: for<'a> FnMut(BkeySC<'a>) -> ControlFlow<()>,
     {
-        let keys = self.keys();
+        let keys = self.keys(contents);
         let mut node_iter = KeyIter::default();
         let mut unpacked = c::bkey::new();
 
@@ -244,7 +259,23 @@ impl BtreeNode {
     }
 }
 
-impl BtreeNode {
+impl NodeContents {
+    pub fn data(&self) -> &Head<cs::btree_node> {
+        unsafe { &*self.data }
+    }
+
+    /// The node's key, all of it - its value runs past bkey_i, into key_pad.
+    pub fn key_i(&self) -> &BkeyI {
+        unsafe { &*BkeyI::from_raw(&raw const self.key) }
+    }
+
+    pub fn set_key(&mut self, k: &BkeyI) {
+        let bytes = k.as_bytes();
+        let room = size_of_val(&self.key) + size_of_val(&self.key_pad);
+        assert!(bytes.len() <= room, "a btree node's key: {} bytes", bytes.len());
+        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), (&raw mut self.key).cast::<u8>(), bytes.len()) }
+    }
+
     pub fn sets(&self) -> &[BsetTree] {
         invariant!(self.nsets as usize <= self.set.len());
         &self.set[..self.nsets as usize]
@@ -263,6 +294,23 @@ impl BtreeNode {
         self.sets().last().expect("a btree node with no bsets")
     }
 
+    /*
+     * If we have MAX_BSETS (3) bsets, should we sort them all down to just one?
+     *
+     * The first bset is going to be of similar order to the size of the node, the
+     * last bset is bounded by btree_write_set_buffer(), which is set to keep the
+     * memmove on insert from being too expensive: the middle bset should, ideally,
+     * be the geometric mean of the first and the last.
+     *
+     * Returns true if the middle bset is greater than that geometric mean:
+     */
+    pub fn should_compact_all(&self, fs: &Fs) -> bool {
+        let mid_u64s_bits = (fs.btree_max_u64s().ilog2() + WRITE_SET_U64S_BITS) / 2;
+        self.set[1].u64s() > 1 << mid_u64s_bits
+    }
+}
+
+impl BtreeNode {
     pub fn buf_bytes(&self) -> usize {
         invariant!((self.byte_order as u32) < usize::BITS);
         1 << self.byte_order
@@ -309,8 +357,8 @@ impl BtreeNode {
         total as isize - (end + self.whiteout_u64s.get() as usize + 1) as isize
     }
 
-    pub fn want_new_bset(&self, fs: &Fs) -> Option<u16> {
-        let t = self.last_set();
+    pub fn want_new_bset(&self, contents: &NodeContents, fs: &Fs) -> Option<u16> {
+        let t = contents.last_set();
         let bne = self.written_end().max(t.end_offset as usize);
         let keys = (offset_of!(Head<c::btree_node_entry>, keys) + offset_of!(Head<c::bset>, _data)) / size_of::<u64>();
 
@@ -323,21 +371,6 @@ impl BtreeNode {
         want.then(|| u16::try_from(bne).expect("a bset offset in a node's u16 range"))
     }
 
-    /*
-     * If we have MAX_BSETS (3) bsets, should we sort them all down to just one?
-     *
-     * The first bset is going to be of similar order to the size of the node, the
-     * last bset is bounded by btree_write_set_buffer(), which is set to keep the
-     * memmove on insert from being too expensive: the middle bset should, ideally,
-     * be the geometric mean of the first and the last.
-     *
-     * Returns true if the middle bset is greater than that geometric mean:
-     */
-    pub fn should_compact_all(&self, fs: &Fs) -> bool {
-        let mid_u64s_bits = (fs.btree_max_u64s().ilog2() + WRITE_SET_U64S_BITS) / 2;
-        self.set[1].u64s() > 1 << mid_u64s_bits
-    }
-
     pub fn current_write(&self) -> &cs::btree_write {
         &self.writes[self.flags.write_idx() as usize]
     }
@@ -346,13 +379,14 @@ impl BtreeNode {
         &self.writes[self.flags.write_idx() as usize ^ 1]
     }
 
-    pub fn shard(&self, fs: &Fs) -> Option<usize> {
+    pub fn shard(&self, contents: &NodeContents, fs: &Fs) -> Option<usize> {
         let bits = fs.opts().shard_inode_numbers_bits.get() as u32;
+        let p = contents.key.k.p;
         let field = match Btree(self.c.btree_id.into()) {
-            Btree::inodes => self.key.k.p.offset,
+            Btree::inodes => p.offset,
             Btree::extents |
             Btree::dirents |
-            Btree::xattrs  => self.key.k.p.inode,
+            Btree::xattrs  => p.inode,
             _ => return None,
         };
         (bits != 0).then(|| ((field << 1) >> (64 - bits)) as usize)

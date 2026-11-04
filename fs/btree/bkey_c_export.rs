@@ -1,6 +1,7 @@
 //! What C calls of btree/bkey: key formats, and packing keys to and from one.
 //! A key C passes in is whole, as long as its u64s say; one packed for C is as
-//! many words as its format says.
+//! many words as its format says. A node C passes is locked, so its contents
+//! - its format - can be read.
 
 use core::ffi::c_int;
 use core::mem::offset_of;
@@ -80,16 +81,19 @@ pub unsafe fn bch2_bkey_pack_key(out: *mut c::bkey_packed, in_: &c::bkey, format
 
 #[c_export]
 pub unsafe fn __bch2_bkey_unpack_key_b(b: &BtreeNode, out: *mut c::bkey, in_: *const c::bkey_packed) {
+    let b = unsafe { b.contents() };
     unsafe { out.write(b.unpack_key_at(padded(in_), 1)) }
 }
 
 #[c_export]
 pub unsafe fn __bkey_unpack_pos_b(b: &BtreeNode, in_: *const c::bkey_packed) -> Bpos {
+    let b = unsafe { b.contents() };
     b.unpack_pos_at(unsafe { padded(in_) }, 1)
 }
 
 #[c_export]
 pub unsafe fn bch2_bkey_pack_pos(out: *mut c::bkey_packed, in_: Bpos, b: &BtreeNode) -> bool {
+    let b = unsafe { b.contents() };
     b.pack_pos(unsafe { padded_mut(out, b.format.key_u64s as usize) }, 1, in_)
 }
 
@@ -104,6 +108,7 @@ pub unsafe fn bch2_bkey_transform(out_f: &c::bkey_format, out: *mut c::bkey_pack
 
 #[c_export]
 pub unsafe fn bch2_bkey_unpack(b: &BtreeNode, dst: *mut c::bkey_i, src: *const c::bkey_packed) {
+    let b = unsafe { b.contents() };
     let k = unsafe { &*BkeyP::from_raw(src) };
     let u = b.unpack_key_at(unsafe { padded(src) }, 1);
     let u64s = BKEY_U64S + k.val_u64s(&b.format);
@@ -113,11 +118,13 @@ pub unsafe fn bch2_bkey_unpack(b: &BtreeNode, dst: *mut c::bkey_i, src: *const c
 
 #[c_export]
 pub unsafe fn bch2_bkey_cmp_packed(b: &BtreeNode, l: *const c::bkey_packed, r: *const c::bkey_packed) -> c_int {
+    let b = unsafe { b.contents() };
     unsafe { b.cmp_packed(&*BkeyP::from_raw(l), &*BkeyP::from_raw(r)) as c_int }
 }
 
 #[c_export]
 pub unsafe fn __bch2_bkey_cmp_left_packed(b: &BtreeNode, l: *const c::bkey_packed, r: &Bpos) -> c_int {
+    let b = unsafe { b.contents() };
     b.unpack_pos_at(unsafe { padded(l) }, 1).cmp(r) as c_int
 }
 

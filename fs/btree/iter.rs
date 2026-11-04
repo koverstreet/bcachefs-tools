@@ -727,7 +727,7 @@ impl BtreeNodeRef {
 
     pub(crate) fn key(&self) -> &BkeyI {
         // SAFETY: a node we hold
-        unsafe { self.raw.as_ref() }.key_i()
+        unsafe { self.raw.as_ref().contents() }.key_i()
     }
 
     pub(crate) fn key_sc(&self) -> BkeySC<'_, BtreePtrs> {
@@ -3048,7 +3048,7 @@ impl<'t> BtreeNodeIter<'t> {
             // max_key. set_pos + bpos_successor re-traverses from the root, so
             // the journal overlay applies and journal-only nodes aren't skipped
             // the way next_node()'s sibling walk did. Matches for_each_btree_node().
-            let end = b.key.k.p;
+            let end = unsafe { b.contents() }.key.k.p;
             match f(b).map(LoopControl::into_step) {
                 Err(e) if is_restart(&e) => continue,
                 Err(e) => return Err(e),
@@ -3168,7 +3168,10 @@ impl<'a> PathLeaf<'a> {
     /// the node's bfloat_to_text(). Peeks the node iterator, moving it past deleted
     /// keys.
     pub fn bfloat_to_text(&self, out: &mut Printbuf) {
-        unsafe { (*(*self.l).b).btree_node_iter_bfloat_to_text(out, &mut (*self.l).iter) }
+        unsafe {
+            let b = &*(*self.l).b;
+            b.btree_node_iter_bfloat_to_text(b.contents(), out, &mut (*self.l).iter)
+        }
     }
 }
 

@@ -4,7 +4,7 @@
 
 use super::bset::BsetTree;
 use super::keys::Keys;
-use super::{check_lookups, BtreeNode};
+use super::{check_lookups, BtreeNode, NodeContents};
 use crate::btree::bkey::{BkeyP, BkeySC, BkeyV};
 use crate::c;
 use crate::cstructs::c as cs;
@@ -56,7 +56,7 @@ fn prefetch_four_cachelines(p: *const u64) {
 impl Keys<'_> {
     #[inline(always)]
     fn btree_node_iter_cmp(&self, l: KeyIterSet, r: KeyIterSet) -> Ordering {
-        self.node().bkey_iter_cmp(self.key_at(l.k), self.key_at(r.k))
+        self.contents().bkey_iter_cmp(self.key_at(l.k), self.key_at(r.k))
     }
 
     fn bset_tree_find(&self, end_offset: u16) -> Option<&BsetTree> {
@@ -222,7 +222,7 @@ impl KeyIter {
      *    past any extents that compare equal to the position we searched for.
      */
     pub fn init(&mut self, fs: &Fs, keys: &Keys<'_>, search: &Bpos) {
-        let b = keys.node();
+        let b = keys.contents();
         let mut p = c::bkey_packed_padded::default();
         let mut k = [0u16; NR];
 
@@ -380,7 +380,7 @@ impl KeyIter {
      * Expensive:
      */
     pub fn prev_all(&mut self, keys: &Keys<'_>) -> Option<u16> {
-        let b = keys.node();
+        let b = keys.contents();
         let mut prev: Option<u16> = None;
         let mut end = 0;
 
@@ -429,7 +429,7 @@ impl KeyIter {
     }
 
     fn __next_check(&self, keys: &Keys<'_>) {
-        let b = keys.node();
+        let b = keys.contents();
         let mut iter = *self;
 
         let k = iter.__peek_all();
@@ -461,7 +461,7 @@ impl KeyIter {
     }
 
     pub fn __verify(&self, keys: &Keys<'_>) {
-        let b = keys.node();
+        let b = keys.contents();
 
         /*
          * Before the early return, and before anything that iterates with
@@ -515,7 +515,7 @@ impl KeyIter {
 
     #[cold]
     pub fn dump(&self, keys: &Keys<'_>) {
-        let b = keys.node();
+        let b = keys.contents();
         let mut buf = Printbuf::new();
 
         prt!(&mut buf, "btree node iter with {}/{} sets:\n", self.__used(), keys.sets.len());
@@ -531,8 +531,8 @@ impl KeyIter {
 
 impl BtreeNode {
     #[cold]
-    pub fn btree_node_keys_to_text(&self, out: &mut Printbuf, fs: &Fs) {
-        let _ = self.for_each_key(|k| {
+    pub fn btree_node_keys_to_text(&self, contents: &NodeContents, out: &mut Printbuf, fs: &Fs) {
+        let _ = self.for_each_key(contents, |k| {
             prt!(out, "{}\n", k.to_text(fs));
             core::ops::ControlFlow::Continue(())
         });
@@ -540,41 +540,45 @@ impl BtreeNode {
 
     /* For Rust, which doesn't see a packed key: that of the key @iter is at. */
     #[cold]
-    pub fn btree_node_iter_bfloat_to_text(&self, out: &mut Printbuf, iter: &mut KeyIter) {
-        if let Some(k) = iter.peek(&self.keys()) {
-            self.bfloat_to_text(out, k);
+    pub fn btree_node_iter_bfloat_to_text(&self, contents: &NodeContents, out: &mut Printbuf, iter: &mut KeyIter) {
+        if let Some(k) = iter.peek(&self.keys(contents)) {
+            self.bfloat_to_text(contents, out, k);
         }
     }
 }
 
-/* For C: pointers into the node in, offsets inside */
+/*
+ * For C: pointers into the node in, offsets inside. A node C passes is
+ * locked, so its contents can be read.
+ */
 
 #[c_export]
 pub fn bch2_btree_node_iter_push(iter: &mut KeyIter, b: &BtreeNode,
                                  k: *const c::bkey_packed, end: *const c::bkey_packed) {
-    let keys = b.keys();
+    let keys = b.keys(unsafe { b.contents() });
     iter.push(&keys, keys.offset_of(k), keys.offset_of(end));
 }
 
 #[c_export]
 pub fn bch2_btree_node_iter_init(c: &Opaque<Fs>, b: &BtreeNode, iter: &mut KeyIter, search: &Bpos) {
-    iter.init(Fs::from_c(c), &b.keys(), search);
+    iter.init(Fs::from_c(c), &b.keys(unsafe { b.contents() }), search);
 }
 
 #[c_export]
 pub fn bch2_btree_node_iter_init_from_start(iter: &mut KeyIter, b: &BtreeNode) {
-    iter.init_from_start(&b.keys());
+    iter.init_from_start(&b.keys(unsafe { b.contents() }));
 }
 
 #[c_export]
 pub fn bch2_btree_node_iter_bset_pos(iter: &KeyIter, b: &BtreeNode, t: *mut BsetTree) -> *mut c::bkey_packed {
-    let t = &b.set[b.set_index(t)];
-    b.keys().ptr_at(iter.bset_pos(t))
+    let contents = unsafe { b.contents() };
+    let t = &contents.set[contents.set_index(t)];
+    b.keys(contents).ptr_at(iter.bset_pos(t))
 }
 
 #[c_export]
 pub fn bch2_btree_node_iter_sort(iter: &mut KeyIter, b: &BtreeNode) {
-    iter.sort(&b.keys());
+    iter.sort(&b.keys(unsafe { b.contents() }));
 }
 
 #[c_export]
@@ -585,28 +589,28 @@ pub fn bch2_btree_node_iter_set_drop(iter: &mut KeyIter, set: *mut KeyIterSet) {
 
 #[c_export]
 pub fn bch2_btree_node_iter_advance(iter: &mut KeyIter, b: &BtreeNode) {
-    iter.advance(&b.keys());
+    iter.advance(&b.keys(unsafe { b.contents() }));
 }
 
 #[c_export]
 pub fn bch2_btree_node_iter_prev_all(iter: &mut KeyIter, b: &BtreeNode) -> *mut c::bkey_packed {
-    let keys = b.keys();
+    let keys = b.keys(unsafe { b.contents() });
     iter.prev_all(&keys).map_or(core::ptr::null_mut(), |k| keys.ptr_at(k))
 }
 
 #[c_export]
 pub fn bch2_btree_node_iter_prev(iter: &mut KeyIter, b: &BtreeNode) -> *mut c::bkey_packed {
-    let keys = b.keys();
+    let keys = b.keys(unsafe { b.contents() });
     iter.prev(&keys).map_or(core::ptr::null_mut(), |k| keys.ptr_at(k))
 }
 
 #[c_export]
 pub fn bch2_btree_node_iter_peek_unpack(iter: &mut KeyIter, b: &BtreeNode, u: &mut c::bkey) -> c::bkey_s_c {
-    iter.peek_unpack(&b.keys(), u)
+    iter.peek_unpack(&b.keys(unsafe { b.contents() }), u)
         .map_or(c::bkey_s_c { k: core::ptr::null_mut(), v: core::ptr::null_mut() }, Into::into)
 }
 
 #[c_export]
 pub fn __bch2_btree_node_iter_verify(iter: &KeyIter, b: &BtreeNode) {
-    iter.__verify(&b.keys());
+    iter.__verify(&b.keys(unsafe { b.contents() }));
 }

@@ -8,7 +8,7 @@ use core::mem::offset_of;
 use super::format::{fls64, u64_bitmask, BKEY_FORMAT_CURRENT, FIELDS, NR_FIELDS};
 use super::packed::Header;
 use super::{spos, BkeyP, BKEY_U64S};
-use crate::btree::node::{BkeyUnpackField, BtreeNode};
+use crate::btree::node::{BkeyUnpackField, NodeContents};
 use crate::c;
 use crate::cstructs::c::{bkey_fields, bkey_pack_pos_ret};
 use crate::debug::params::debug_check_bkey_unpack;
@@ -581,7 +581,7 @@ impl c::bkey_packed_padded {
     }
 }
 
-impl BtreeNode {
+impl NodeContents {
     /*
      * Precompute per-field unpack constants from b->format, stored in struct btree.
      *

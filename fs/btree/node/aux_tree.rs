@@ -4,7 +4,7 @@
 
 use super::bset::{AuxTreeType, BsetTree, BSET_CACHELINE, BSET_NO_AUX_TREE_VAL, BSET_RW_AUX_TREE_VAL};
 use super::keys::{bkey_p_next, key_at, keys_between, set_keys, Keys, KeysMut};
-use super::{check_lookups, BtreeNode};
+use super::{check_lookups, BtreeNode, NodeContents};
 use crate::btree::bkey::{BkeyP, HIGH_BIT_OFFSET};
 use crate::c;
 use crate::format::Bpos;
@@ -149,7 +149,7 @@ fn rw_aux_tree_entry(node: *const BtreeNode, buf: &[u64], t: &BsetTree, k: u16) 
     RwAuxEntry {
         offset: k,
         _pad:   0,
-        k:      unsafe { &*node }.unpack_pos_at(buf, k),
+        k:      unsafe { (*node).contents.protected() }.unpack_pos_at(buf, k),
     }
 }
 
@@ -311,7 +311,7 @@ fn pack_pos_or_unpacked(node: *const BtreeNode, pos: Bpos) -> c::bkey_packed_pad
     let mut k = c::bkey_packed_padded::default();
     let (buf, at) = k.as_buf_mut();
 
-    if !unsafe { &*node }.pack_pos(buf, at, pos) {
+    if !unsafe { (*node).contents.protected() }.pack_pos(buf, at, pos) {
         let u = c::bkey { p: pos, ..c::bkey::new() };
         plain_bytes_mut(&mut k.k).copy_from_slice(plain_bytes(&u));
     }
@@ -621,7 +621,7 @@ pub(super) fn bset_search_write_set(rw: &[RwAuxEntry], search: &Bpos) -> u16 {
     rw[l].offset
 }
 
-fn bkey_mantissa_bits_dropped(b: &BtreeNode, f: &BkeyFloat) -> bool {
+fn bkey_mantissa_bits_dropped(b: &NodeContents, f: &BkeyFloat) -> bool {
     invariant!(b.format.key_u64s as u32 * 64 >= b.nr_key_bits as u32);
 
     if cfg!(target_endian = "little") {
@@ -637,7 +637,7 @@ fn bkey_mantissa_bits_dropped(b: &BtreeNode, f: &BkeyFloat) -> bool {
 
 pub(super) fn bset_search_tree(keys: &Keys<'_>, t: &BsetTree, ro: RoAuxTree<'_>,
                                search: &Bpos, packed_search: &c::bkey_packed) -> u16 {
-    let b = keys.node();
+    let b = keys.contents();
     let packed: &BkeyP = BkeyP::from_packed(packed_search).expect("a packed search key").cast();
     /* t.size bounds it, so n * 2 can't overflow: the optimizer sees that */
     let base = &ro.f[..t.size as usize];
