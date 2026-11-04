@@ -35,8 +35,6 @@ fsck_err:
 	return ret;
 }
 
-void bch2_btree_node_io_unlock(struct btree *);
-void bch2_btree_node_io_lock(struct btree *);
 void bch2_btree_node_wait_on_read(struct btree_trans *, struct btree *);
 void bch2_btree_node_wait_on_write(struct btree_trans *, struct btree *);
 

@@ -82,28 +82,12 @@ static __cold void bch2_btree_node_header_to_text(struct printbuf *out, struct b
 	bch2_bpos_to_text(out, bn->max_key);
 }
 
-void bch2_btree_node_io_unlock(struct btree *b)
-{
-	EBUG_ON(!btree_node_write_in_flight(b));
-
-	clear_btree_node_write_in_flight_inner(b);
-	clear_btree_node_write_in_flight(b);
-	smp_mb__after_atomic();
-	wake_up_bit(&b->flags, BTREE_NODE_write_in_flight);
-}
-
-void bch2_btree_node_io_lock(struct btree *b)
-{
-	wait_on_bit_lock_io(&b->flags, BTREE_NODE_write_in_flight,
-			    TASK_UNINTERRUPTIBLE);
-}
-
 void bch2_btree_node_wait_on_read(struct btree_trans *trans, struct btree *b)
 {
 	if (unlikely(trans->queued_write_bios))
 		bch2_trans_submit_write_bios(trans);
 
-	trans_wait_on_bit_io(trans, &b->flags, BTREE_NODE_read_in_flight);
+	trans_wait_on_node_flag(trans, b, BTREE_NODE_read_in_flight);
 }
 
 void bch2_btree_node_wait_on_write(struct btree_trans *trans, struct btree *b)
@@ -117,7 +101,7 @@ void bch2_btree_node_wait_on_write(struct btree_trans *trans, struct btree *b)
 	if (unlikely(trans->queued_write_bios))
 		bch2_trans_submit_write_bios(trans);
 
-	trans_wait_on_bit_io(trans, &b->flags, BTREE_NODE_write_in_flight);
+	trans_wait_on_node_flag(trans, b, BTREE_NODE_write_in_flight);
 }
 
 __printf(7, 0)
@@ -1091,7 +1075,7 @@ static void btree_node_read_work(struct work_struct *work)
 	bio_put(&rb->bio);
 	clear_btree_node_read_in_flight(b);
 	smp_mb__after_atomic();
-	wake_up_bit(&b->flags, BTREE_NODE_read_in_flight);
+	bch2_btree_node_wake_flags(b);
 }
 
 static void btree_node_read_endio(struct bio *bio)
@@ -1142,7 +1126,7 @@ void bch2_btree_node_read(struct btree_trans *trans, struct btree *b,
 		set_btree_node_read_error(b);
 		clear_btree_node_read_in_flight(b);
 		smp_mb__after_atomic();
-		wake_up_bit(&b->flags, BTREE_NODE_read_in_flight);
+		bch2_btree_node_wake_flags(b);
 		return;
 	}
 

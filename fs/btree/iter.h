@@ -486,21 +486,21 @@ static inline void trans_closure_sync(struct btree_trans *trans, struct closure 
 	trans_wait_event_timeout(_trans, _waitlist, _condition, MAX_SCHEDULE_TIMEOUT)
 
 /*
- * SRCU-aware wrapper around wait_on_bit_io(): under SRCU, do bounded
+ * SRCU-aware wait on a node's flag clearing: under SRCU, do bounded
  * io_schedule_timeout() waits; once the SRCU short-wait budget is
  * exhausted, drop SRCU and fall through to an unbounded io_schedule()
  * wait.
  */
-static inline void trans_wait_on_bit_io(struct btree_trans *trans,
-					unsigned long *word, int bit)
+static inline void trans_wait_on_node_flag(struct btree_trans *trans,
+					   struct btree *b, enum btree_flags bit)
 {
-	while (test_bit_acquire(bit, word)) {
+	while (test_bit_acquire(bit, &b->flags)) {
 		long budget = bch2_trans_short_wait_budget(trans, MAX_SCHEDULE_TIMEOUT);
 
 		if (budget == MAX_SCHEDULE_TIMEOUT)
-			wait_on_bit_io(word, bit, TASK_UNINTERRUPTIBLE);
+			bch2_btree_node_wait_on_flag(b, bit);
 		else
-			wait_on_bit_io_timeout(word, bit, TASK_UNINTERRUPTIBLE, budget);
+			bch2_btree_node_wait_on_flag_timeout(b, bit, budget);
 	}
 }
 

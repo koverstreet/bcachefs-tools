@@ -12,6 +12,7 @@ use crate::btree::node::BtreeNode;
 use crate::btree::types::{BtreeCacheLists, BtreeCacheLive};
 use crate::locking::ExclusiveGuard;
 use crate::util::ffi::Opaque;
+use crate::util::sleep::Sleep;
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
@@ -21,7 +22,7 @@ use core::ptr::NonNull;
 use crate::util::ffi::c_char;
 use crate::util::kernel::is_vmalloc_addr;
 use crate::util::{Printbuf, ToText};
-use core::ffi::{c_int, c_uint, c_void};
+use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_const, c_export, c_extern};
 use crate::format::Btree;
@@ -178,6 +179,23 @@ impl BtreeNode {
 #[c_export]
 pub fn btree_node_live_state(b: &BtreeNode) -> c::btree_node_cache_state {
     b.live_state()
+}
+
+#[c_export]
+pub fn bch2_btree_node_wait_on_flag(b: &BtreeNode, bit: c::btree_flags) {
+    let m = 1 << bit as u32;
+    let Ok(()) = b.flags.wait_until(Sleep::UNINTERRUPTIBLE.io(), |f| f.into_bits() & m == 0);
+}
+
+#[c_export]
+pub fn bch2_btree_node_wait_on_flag_timeout(b: &BtreeNode, bit: c::btree_flags, timeout: c_ulong) -> bool {
+    let m = 1 << bit as u32;
+    b.flags.wait_until_timeout(Sleep::UNINTERRUPTIBLE.io(), timeout, |f| f.into_bits() & m == 0)
+}
+
+#[c_export]
+pub fn bch2_btree_node_wake_flags(b: &BtreeNode) {
+    b.flags.wake()
 }
 
 #[c_export]

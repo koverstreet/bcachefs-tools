@@ -30,10 +30,11 @@ use crate::util::backref::BackRef;
 use crate::util::task::{Resumable, Resume, Spawn, TaskBox};
 use crate::util::vstructs::{cast_plain, Head, SelfSized, Unvalidated};
 use crate::util::Printbuf;
+use crate::util::sleep::Sleep;
 use crate::data_structures::array_vec::ArrayVec;
 use core::mem::offset_of;
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, bitfield, c_extern};
+use cstruct_macros::{CStruct, bitfield, c_export, c_extern};
 use nestify::nest;
 use crate::format::{Btree, Nonce};
 
@@ -318,4 +319,28 @@ async fn rewrite_if_bad(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, mut
     if let Some(e) = ret.err().filter(|e| !e.matches(c::ENOENT) && !e.matches(c::EROFS)) {
         crate::bch_err_ratelimited!(fs, "btree node scrub: error rewriting node: {}", e.msg());
     }
+}
+
+impl BtreeNode {
+    /// The node's io lock: its write_in_flight bit, taken by whoever finds it
+    /// clear - no write starts while it's held.
+    pub fn io_lock(&self) {
+        let Ok(()) = self.flags.lock_write_in_flight(Sleep::UNINTERRUPTIBLE.io());
+    }
+
+    pub fn io_unlock(&self) {
+        ebug_assert!(self.flags.write_in_flight(), "io unlock of a node not io locked");
+        self.flags.set_write_in_flight_inner(false);
+        self.flags.unlock_write_in_flight();
+    }
+}
+
+#[c_export]
+pub fn bch2_btree_node_io_lock(b: &BtreeNode) {
+    b.io_lock()
+}
+
+#[c_export]
+pub fn bch2_btree_node_io_unlock(b: &BtreeNode) {
+    b.io_unlock()
 }

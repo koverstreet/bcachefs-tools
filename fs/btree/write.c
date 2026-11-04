@@ -76,7 +76,7 @@ static void __btree_node_write_done(struct btree_trans *trans, struct btree *b)
 		atomic_long_dec(&c->btree.cache.nr_in_flight);
 		bch2_btree_node_write_done_clean(c, b);
 		smp_mb__after_atomic();
-		wake_up_bit(&b->flags, BTREE_NODE_write_in_flight);
+		bch2_btree_node_wake_flags(b);
 	}
 }
 
@@ -245,7 +245,7 @@ static void btree_node_write_endio(struct bio *bio)
 
 	clear_btree_node_write_in_flight_inner(b);
 	smp_mb__after_atomic();
-	wake_up_bit(&b->flags, BTREE_NODE_write_in_flight_inner);
+	bch2_btree_node_wake_flags(b);
 	INIT_WORK(&wb->work, btree_node_write_work);
 #ifdef __KERNEL__
 	int shard = btree_node_shard(c, b);
@@ -760,7 +760,7 @@ static bool __bch2_btree_flush_all(struct bch_fs *c, unsigned flag)
 		if (!waiting)
 			break;
 
-		wait_on_bit_io(&waiting->flags, flag, TASK_UNINTERRUPTIBLE);
+		bch2_btree_node_wait_on_flag(waiting, flag);
 		ret = true;
 	}
 
@@ -792,7 +792,7 @@ static bool __bch2_btree_flush_all(struct bch_fs *c, unsigned flag)
 		if (!waiting)
 			break;
 
-		wait_on_bit_io(&waiting->flags, flag, TASK_UNINTERRUPTIBLE);
+		bch2_btree_node_wait_on_flag(waiting, flag);
 		ret = true;
 	}
 

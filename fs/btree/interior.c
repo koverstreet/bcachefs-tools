@@ -990,8 +990,7 @@ static void btree_update_nodes_written(struct btree_update *as)
 		bch2_trans_unlock_long(trans);
 
 		if (seq_matches)
-			wait_on_bit_io(&i->b->flags, BTREE_NODE_write_in_flight_inner,
-				       TASK_UNINTERRUPTIBLE);
+			bch2_btree_node_wait_on_flag(i->b, BTREE_NODE_write_in_flight_inner);
 	}
 
 	/*
