@@ -1,5 +1,5 @@
 use std::{
-    ffi::{CStr, CString},
+    ffi::CStr,
     fmt::Write as _,
     fs,
     io::{stdin, IsTerminal},
@@ -11,6 +11,7 @@ use std::{
 
 use anyhow::{anyhow, bail, ensure, Result};
 use bcachefs_kernel::c::{bch_key, bch_sb_handle, bch_encrypted_key};
+use bcachefs_kernel::data::checksum::key_description;
 use bcachefs_kernel::util::prompt::{read_passphrase, read_secret_line, Given, Watch};
 use bch_bindgen::keyutils::{self, keyctl_search};
 use log::info;
@@ -142,13 +143,9 @@ impl UnlockPolicy {
 pub struct KeyHandle;
 
 impl KeyHandle {
-    pub fn format_key_name(uuid: &Uuid) -> CString {
-        CString::new(format!("bcachefs:{uuid}")).unwrap()
-    }
-
     pub fn new(passphrase_correct: &PassphraseCorrect, keyring: Keyring) -> Result<Self> {
-        let key_name = Self::format_key_name(&passphrase_correct.fs_uuid);
-        let key_name = CStr::as_ptr(&key_name);
+        let key_name = key_description(&passphrase_correct.fs_uuid);
+        let key_name = key_name.as_c_str().as_ptr();
         let key_type = c"user";
 
         let key_id = unsafe {
@@ -184,11 +181,12 @@ impl KeyHandle {
     }
 
     pub fn new_from_search(uuid: &Uuid) -> Result<Self> {
-        let key_name = Self::format_key_name(uuid);
+        let key_name = key_description(uuid);
+        let key_name = key_name.as_c_str();
 
-        Self::search_keyring(keyutils::KEY_SPEC_SESSION_KEYRING, &key_name)
-            .or_else(|_| Self::search_keyring(keyutils::KEY_SPEC_USER_KEYRING, &key_name))
-            .or_else(|_| Self::search_keyring(keyutils::KEY_SPEC_USER_SESSION_KEYRING, &key_name))
+        Self::search_keyring(keyutils::KEY_SPEC_SESSION_KEYRING, key_name)
+            .or_else(|_| Self::search_keyring(keyutils::KEY_SPEC_USER_KEYRING, key_name))
+            .or_else(|_| Self::search_keyring(keyutils::KEY_SPEC_USER_SESSION_KEYRING, key_name))
             .map(|_| KeyHandle)
     }
 

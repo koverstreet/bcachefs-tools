@@ -653,10 +653,11 @@ impl c::bch_sb_field_crypt {
 
 // ── The key ──────────────────────────────────────────────────────────────
 
-/// What the keyring has @sb's key under.
-fn key_description(sb: &c::bch_sb) -> Printbuf {
+/// What the keyring has the filesystem @uuid's key under: the tools put it
+/// there, and we look.
+pub fn key_description(uuid: &uuid::Uuid) -> Printbuf {
     let mut out = Printbuf::new();
-    write!(out, "bcachefs:{}", sb.uuid());
+    write!(out, "bcachefs:{uuid}");
     out
 }
 
@@ -737,7 +738,7 @@ fn passphrase_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
 /// The user's key, for @sb: from the keyring - or in userspace, failing
 /// that, a passphrase.
 pub fn request_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
-    let ret = keyring_key(key_description(sb).as_c_str());
+    let ret = keyring_key(key_description(&sb.uuid()).as_c_str());
     #[cfg(not(kernel))]
     let ret = ret.or_else(|_| passphrase_key(sb));
     ret
@@ -746,7 +747,7 @@ pub fn request_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
 /// @sb's key taken out of the user keyring: its passphrase is changing.
 #[cfg(not(kernel))]
 pub fn revoke_key(sb: &c::bch_sb) -> Result<(), BchError> {
-    let desc = key_description(sb);
+    let desc = key_description(&sb.uuid());
     // SAFETY: strings
     let id = unsafe {
         c::request_key(c"user".as_ptr(), desc.as_c_str().as_ptr(), core::ptr::null(), c::KEY_SPEC_USER_KEYRING)
