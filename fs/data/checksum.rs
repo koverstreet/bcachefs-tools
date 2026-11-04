@@ -617,9 +617,15 @@ impl c::bch_sb_field_crypt {
          * mean nothing ever initialized them - the key in this
          * superblock was never wrapped with a passphrase.
          */
-        let n_log = self.bch_kdf_scrypt_n();
-        let r = 1u64 << self.bch_kdf_scrypt_r();
-        let p = 1u64 << self.bch_kdf_scrypt_p();
+        let (n_log, r_log, p_log) = (self.bch_kdf_scrypt_n(), self.bch_kdf_scrypt_r(), self.bch_kdf_scrypt_p());
+        // A corrupt superblock's: scrypt takes N as a u64, r and p as u32s
+        if n_log >= 64 || r_log >= 32 || p_log >= 32 {
+            std::eprintln!("cannot derive a key from a passphrase: scrypt parameters out of range \
+                            (N=2^{n_log}, r=2^{r_log}, p=2^{p_log})");
+            return Err(bch_errcode::BCH_ERR_crypt_kdf_failed.into());
+        }
+        let r = 1u64 << r_log;
+        let p = 1u64 << p_log;
 
         if n_log == 0 {
             std::eprintln!(
