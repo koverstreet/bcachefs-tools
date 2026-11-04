@@ -788,10 +788,7 @@ impl bcachefs_kernel::util::prompt::Watch for DeviceWatch {
 
 	/// A device arriving never *answers* "mount without it?" - it withdraws the
 	/// question.
-	fn stirred(&mut self) -> bcachefs_kernel::util::prompt::Stirred {
-		match self.every_member_present() {
-			true  => bcachefs_kernel::util::prompt::Stirred::Moot,
-			false => bcachefs_kernel::util::prompt::Stirred::Nothing,
-		}
+	fn settled(&mut self) -> bool {
+		self.every_member_present()
 	}
 }

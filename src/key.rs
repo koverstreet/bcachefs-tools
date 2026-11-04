@@ -355,8 +355,7 @@ impl Passphrase {
                 ensure!(read > 0, "no passphrase read: end of file on stdin");
                 Ok(Some(Self::from_line(&line)?))
             }
-            // Moot and Timeout can't arrive: no timeout is passed, and nothing
-            // withdraws a passphrase prompt.
+            // Settled, as Timeout can't arrive: none is passed.
             _ => Ok(None),
         }
     }

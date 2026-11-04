@@ -36,7 +36,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::key::{Passphrase, PassphraseCorrect};
-use bcachefs_kernel::util::prompt::{Stirred, Watch};
+use bcachefs_kernel::util::prompt::Watch;
 
 const DIR: &str = "/run/bcachefs/unlock";
 
@@ -111,7 +111,7 @@ impl UnlockSocket<'_> {
             .with_context(|| format!("removing stale {}", path.display()))
     }
 
-    /// The passphrase that checked out, once [`Watch::stirred`] has said one
+    /// The passphrase that checked out, once [`Watch::settled`] has said one
     /// did.
     pub fn take(&mut self) -> Option<PassphraseCorrect> {
         self.got.take()
@@ -148,7 +148,7 @@ impl Watch for UnlockSocket<'_> {
         self.listener.as_raw_fd()
     }
 
-    fn stirred(&mut self) -> Stirred {
+    fn settled(&mut self) -> bool {
         // Non-blocking, so a spurious wakeup costs us an EAGAIN and nothing
         // else. A connection that goes wrong is that caller's problem, not a
         // reason to stop listening or to disturb the prompt.
@@ -158,18 +158,14 @@ impl Watch for UnlockSocket<'_> {
                 if e.kind() != std::io::ErrorKind::WouldBlock {
                     debug!("remote unlock: accept failed: {e}");
                 }
-                return Stirred::Nothing;
+                return false;
             }
         };
 
-        match self.serve(conn) {
-            Ok(true)  => Stirred::Answered,
-            Ok(false) => Stirred::Nothing,
-            Err(e) => {
-                debug!("remote unlock: {e:#}");
-                Stirred::Nothing
-            }
-        }
+        self.serve(conn).unwrap_or_else(|e| {
+            debug!("remote unlock: {e:#}");
+            false
+        })
     }
 }
 

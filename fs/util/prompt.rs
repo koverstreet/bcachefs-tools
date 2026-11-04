@@ -120,40 +120,24 @@ struct Ask<'a> {
     timeout: Option<Duration>,
 }
 
-/// What a [`Watch`] waking the poll turned out to mean.
-pub enum Stirred {
-    /// Not the thing we were watching for - any block device arriving wakes a
-    /// device watch, and most of them are somebody else's.
-    Nothing,
-    /// The question no longer applies.
-    Moot,
-    /// Somebody answered it by this route rather than by typing, and the watch
-    /// is holding what they said.
-    Answered,
-}
-
 /// Something that can settle a question by happening.
 ///
 /// Someone asked whether to mount without a disk, who responds by plugging the
 /// disk in, has answered - and so has someone who supplies the passphrase over
-/// a socket while the terminal prompt is up. The first makes the question moot,
-/// the second answers it; [`Stirred`] is the difference.
+/// a socket while the terminal prompt is up. Either way the question is over,
+/// and what settled it is the watch's to say.
 pub trait Watch {
     fn raw_fd(&self) -> RawFd;
-    /// Readiness alone is not an answer, so this decides whether *this* wakeup
-    /// settled anything.
-    fn stirred(&mut self) -> Stirred;
+    /// Readiness alone is not an answer - any block device arriving wakes a
+    /// device watch, and most of them are somebody else's - so this decides
+    /// whether *this* wakeup settled anything.
+    fn settled(&mut self) -> bool;
 }
 
 /// What ended a [`wait`].
 pub enum Waited {
-    /// The descriptor we were polling has something for us.
     Readable,
-    /// A watch answered; it is holding the answer.
-    Answered,
-    /// A watch says the question stopped applying.
-    Moot,
-    /// The deadline passed with none of the above.
+    Settled,
     Timeout,
 }
 
@@ -161,7 +145,7 @@ enum Answer {
     Said(String),
     /// Timed out, declined, or nobody was there.
     Silence,
-    Moot,
+    Settled,
 }
 
 /// Copy so one detection serves a later question too - see degraded.rs's Retry.
@@ -218,10 +202,9 @@ impl Prompt {
 
     /// Put the question and interpret the reply.
     ///
-    /// `None` means the question stopped applying while it was up - see
-    /// [`Watch`]. Anything else resolves to one of the question's own answers,
-    /// including silence, so a caller never has to decide what an unrecognised
-    /// reply meant.
+    /// `None` means a watch settled it - see [`Watch`]. Anything else resolves
+    /// to one of the question's own answers, including silence, so a caller
+    /// never has to decide what an unrecognised reply meant.
     pub fn put<A: Copy + PartialEq>(
         &self,
         q: &Question<'_, A>,
@@ -242,7 +225,7 @@ impl Prompt {
         }? {
             Answer::Said(reply) => Some(q.parse(&reply)),
             Answer::Silence     => Some(q.silence),
-            Answer::Moot        => None,
+            Answer::Settled     => None,
         })
     }
 }
@@ -272,11 +255,7 @@ pub fn stdin_is_dev_null() -> bool {
 }
 
 /// Block until @fd is readable, the deadline passes, or @watch settles the
-/// question.
-///
-/// A watch firing is not by itself an answer: any block device arriving wakes a
-/// device watch, and a wrong passphrase wakes an unlock socket, so ask the watch
-/// whether *this* wakeup settled anything and go back to waiting if it did not.
+/// question - and only then: a watch firing is not by itself an answer.
 ///
 /// Callers that poll a terminal want it already in ICANON: then readable means a
 /// whole line has been typed, and the read that follows will not block either.
@@ -319,32 +298,11 @@ pub fn wait(
             return Ok(Waited::Readable);
         }
 
-        if stirred {
-            match watch.as_mut().map(|w| w.stirred()) {
-                Some(Stirred::Moot) => {
-                    debug!("the question stopped applying while it was up");
-                    return Ok(Waited::Moot);
-                }
-                Some(Stirred::Answered) => return Ok(Waited::Answered),
-                Some(Stirred::Nothing) | None => (),
-            }
+        if stirred && watch.as_mut().is_some_and(|w| w.settled()) {
+            debug!("a watch settled the question while it was up");
+            return Ok(Waited::Settled);
         }
     }
-}
-
-/// [`wait`], in the terms a posted question is answered in.
-fn wait_for_answer(
-    fd: BorrowedFd<'_>,
-    timeout: Option<Duration>,
-    watch: Option<&mut dyn Watch>,
-) -> Result<Answer> {
-    Ok(match wait(fd, timeout, watch)? {
-        Waited::Readable => Answer::Said(String::new()),
-        Waited::Timeout  => Answer::Silence,
-        // Nothing that answers a multiple-choice question this way exists yet;
-        // the socket answers the passphrase prompt, which has its own path.
-        Waited::Moot | Waited::Answered => Answer::Moot,
-    })
 }
 
 /// --echo=yes because this isn't a password: the default is `masked`, an
@@ -372,24 +330,19 @@ fn ask_via_agent(ask: &Ask<'_>, watch: Option<&mut dyn Watch>) -> Result<Answer>
 
     // systemd-ask-password enforces its own --timeout, so let it: passing None
     // here means we wait on the child rather than racing it.
-    let waited = wait_for_answer(stdout.as_fd(), None, watch);
-
-    match waited? {
-        Answer::Moot => {
-            let _ = child.kill();
-            let _ = child.wait();
-            Ok(Answer::Moot)
-        }
-        _ => {
-            let mut buf = String::new();
-            stdout.read_to_string(&mut buf)?;
-            if !child.wait()?.success() {
-                debug!("systemd-ask-password declined or timed out");
-                return Ok(Answer::Silence);
-            }
-            Ok(Answer::Said(buf))
-        }
+    if let Waited::Settled = wait(stdout.as_fd(), None, watch)? {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Ok(Answer::Settled);
     }
+
+    let mut buf = String::new();
+    stdout.read_to_string(&mut buf)?;
+    if !child.wait()?.success() {
+        debug!("systemd-ask-password declined or timed out");
+        return Ok(Answer::Silence);
+    }
+    Ok(Answer::Said(buf))
 }
 
 fn ask_on_terminal(ask: &Ask<'_>, watch: Option<&mut dyn Watch>) -> Result<Answer> {
@@ -409,17 +362,17 @@ fn ask_on_terminal(ask: &Ask<'_>, watch: Option<&mut dyn Watch>) -> Result<Answe
     print!("{} ", ask.brief);
     stdout().flush()?;
 
-    match wait_for_answer(stdin().as_fd(), ask.timeout, watch)? {
-        Answer::Said(_) => {
+    let answer = match wait(stdin().as_fd(), ask.timeout, watch)? {
+        Waited::Readable => {
             let mut answer = String::new();
             stdin().read_line(&mut answer)?;
-            Ok(Answer::Said(answer))
+            return Ok(Answer::Said(answer));
         }
-        // Leave the half-written prompt behind a newline rather than letting
-        // whatever comes next start mid-line.
-        other => {
-            println!();
-            Ok(other)
-        }
-    }
+        Waited::Timeout => Answer::Silence,
+        Waited::Settled => Answer::Settled,
+    };
+    // Leave the half-written prompt behind a newline rather than letting
+    // whatever comes next start mid-line.
+    println!();
+    Ok(answer)
 }
