@@ -1127,14 +1127,16 @@ static int __should_flush(struct journal *j, struct journal_buf *w, u64 seq)
 	bool must_flush = journal_buf_must_flush(w);
 
 	/*
-	 * To demote a flush, we have to move waiters to the next entry - if
-	 * there isn't a next entry, we can't demote. Only entries with real
-	 * flush waiters can be demoted; a FLUSH_NO_WAIT transition entry has
-	 * none (flushers skip it) and must stay a flush write - and splicing
-	 * it would clobber the sentinel:
+	 * With a flush outstanding, demote rather than queue a second flush
+	 * behind it: the waiters move to the next entry, whose flush - once the
+	 * outstanding one is done - takes this entry to disk with it. If there
+	 * isn't a next entry, we can't demote. Only entries with real flush
+	 * waiters can be demoted; a FLUSH_NO_WAIT transition entry has none
+	 * (flushers skip it) and must stay a flush write - and splicing it
+	 * would clobber the sentinel:
 	 */
 	if (journal_buf_waiters(w->wait.list.first) &&
-	    j->flushes_outstanding > 1) {
+	    j->flushes_outstanding) {
 		struct journal_buf *next = seq < journal_cur_seq(j)
 			? journal_seq_to_buf(j, seq + 1)
 			: NULL;
@@ -1196,13 +1198,12 @@ void bch2_journal_do_writes_locked(struct journal *j)
 
 	if (flush) {
 		/*
-		 * A flush waits for the writes before it to complete, and for
-		 * outstanding flushes to drain - and is decided only then, as it's
-		 * started: the wait word is the decision, made once, and until
-		 * it's made the write may yet become a noflush.
+		 * A flush waits for the writes before it to complete - so for an
+		 * outstanding flush to drain, too - and is decided only then, as
+		 * it's started: the wait word is the decision, made once, and
+		 * until it's made the write may yet become a noflush.
 		 */
-		if (j->flushes_outstanding > 1 ||
-		    j->seq_ondisk + 1 != seq)
+		if (j->seq_ondisk + 1 != seq)
 			return;
 
 		/*
