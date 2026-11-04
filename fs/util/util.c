@@ -31,8 +31,6 @@
 #include <linux/static_key.h>
 #include <linux/version.h>
 
-#include "data_structures/eytzinger.h"
-#include "mean_and_variance.h"
 #include "util.h"
 #include "util/jump_label_gen.h"
 #include "util/percpu_gen.h"
@@ -195,9 +193,6 @@ int bch2_ ## name ## _h(const char *cp, type *res)		\
 	return ret;						\
 }
 
-STRTO_H(strtoint, int)
-STRTO_H(strtouint, unsigned int)
-STRTO_H(strtoll, long long)
 STRTO_H(strtoull, unsigned long long)
 STRTO_H(strtou64, u64)
 
@@ -258,11 +253,6 @@ void bch2_prt_u64_base2_nbits(struct printbuf *out, u64 v, unsigned nr_bits)
 		prt_char(out, '0' + ((v >> --nr_bits) & 1));
 }
 
-void bch2_prt_u64_base2(struct printbuf *out, u64 v)
-{
-	bch2_prt_u64_base2_nbits(out, v, fls64(v) ?: 1);
-}
-
 int bch2_save_backtrace(bch_stacktrace *stack, struct task_struct *task, unsigned skipnr,
 			gfp_t gfp)
 {
@@ -317,137 +307,6 @@ void bch2_prt_datetime(struct printbuf *out, time64_t sec)
 }
 #endif
 
-/* ratelimit: */
-
-/**
- * bch2_ratelimit_delay() - return how long to delay until the next time to do
- *		some work
- * @d:		the struct bch_ratelimit to update
- * Returns:	the amount of time to delay by, in jiffies
- */
-u64 bch2_ratelimit_delay(struct bch_ratelimit *d)
-{
-	u64 now = local_clock();
-
-	return time_after64(d->next, now)
-		? nsecs_to_jiffies(d->next - now)
-		: 0;
-}
-
-/**
- * bch2_ratelimit_increment() - increment @d by the amount of work done
- * @d:		the struct bch_ratelimit to update
- * @done:	the amount of work done, in arbitrary units
- */
-void bch2_ratelimit_increment(struct bch_ratelimit *d, u64 done)
-{
-	u64 now = local_clock();
-
-	d->next += div_u64(done * NSEC_PER_SEC, d->rate);
-
-	if (time_before64(now + NSEC_PER_SEC, d->next))
-		d->next = now + NSEC_PER_SEC;
-
-	if (time_after64(now - NSEC_PER_SEC * 2, d->next))
-		d->next = now - NSEC_PER_SEC * 2;
-}
-
-/* pd controller: */
-
-/*
- * Updates pd_controller. Attempts to scale inputed values to units per second.
- * @target: desired value
- * @actual: current value
- *
- * @sign: 1 or -1; 1 if increasing the rate makes actual go up, -1 if increasing
- * it makes actual go down.
- */
-void bch2_pd_controller_update(struct bch_pd_controller *pd,
-			      s64 target, s64 actual, int sign)
-{
-	s64 proportional, derivative, change;
-
-	unsigned long seconds_since_update = (jiffies - pd->last_update) / HZ;
-
-	if (seconds_since_update == 0)
-		return;
-
-	pd->last_update = jiffies;
-
-	proportional = actual - target;
-	proportional *= seconds_since_update;
-	proportional = div_s64(proportional, pd->p_term_inverse);
-
-	derivative = actual - pd->last_actual;
-	derivative = div_s64(derivative, seconds_since_update);
-	derivative = ewma_add(pd->smoothed_derivative, derivative,
-			      (pd->d_term / seconds_since_update) ?: 1);
-	derivative = derivative * pd->d_term;
-	derivative = div_s64(derivative, pd->p_term_inverse);
-
-	change = proportional + derivative;
-
-	/* Don't increase rate if not keeping up */
-	if (change > 0 &&
-	    pd->backpressure &&
-	    time_after64(local_clock(),
-			 pd->rate.next + NSEC_PER_MSEC))
-		change = 0;
-
-	change *= (sign * -1);
-
-	pd->rate.rate = clamp_t(s64, (s64) pd->rate.rate + change,
-				1, UINT_MAX);
-
-	pd->last_actual		= actual;
-	pd->last_derivative	= derivative;
-	pd->last_proportional	= proportional;
-	pd->last_change		= change;
-	pd->last_target		= target;
-}
-
-void bch2_pd_controller_init(struct bch_pd_controller *pd)
-{
-	pd->rate.rate		= 1024;
-	pd->last_update		= jiffies;
-	pd->p_term_inverse	= 6000;
-	pd->d_term		= 30;
-	pd->d_smooth		= pd->d_term;
-	pd->backpressure	= 1;
-}
-
-__cold void bch2_pd_controller_debug_to_text(struct printbuf *out, struct bch_pd_controller *pd)
-{
-	if (!out->nr_tabstops)
-		printbuf_tabstop_push(out, 20);
-
-	prt_printf(out, "rate:\t");
-	prt_human_readable_s64(out, pd->rate.rate);
-	prt_newline(out);
-
-	prt_printf(out, "target:\t");
-	prt_human_readable_u64(out, pd->last_target);
-	prt_newline(out);
-
-	prt_printf(out, "actual:\t");
-	prt_human_readable_u64(out, pd->last_actual);
-	prt_newline(out);
-
-	prt_printf(out, "proportional:\t");
-	prt_human_readable_s64(out, pd->last_proportional);
-	prt_newline(out);
-
-	prt_printf(out, "derivative:\t");
-	prt_human_readable_s64(out, pd->last_derivative);
-	prt_newline(out);
-
-	prt_printf(out, "change:\t");
-	prt_human_readable_s64(out, pd->last_change);
-	prt_newline(out);
-
-	prt_printf(out, "next io:\t%llims\n", div64_s64(pd->rate.next - local_clock(), NSEC_PER_MSEC));
-}
-
 /* misc: */
 
 void bch2_bio_map(struct bio *bio, void *base, size_t size)
@@ -456,6 +315,30 @@ void bch2_bio_map(struct bio *bio, void *base, size_t size)
 		bio_add_vmalloc(bio, base, size);
 	else
 		bio_add_virt_nofail(bio, base, size);
+}
+
+static struct bio *__bio_chain_endio(struct bio *bio)
+{
+	struct bio *parent = bio->bi_private;
+
+	if (bio->bi_status && !parent->bi_status)
+		parent->bi_status = bio->bi_status;
+	bio_put(bio);
+	return parent;
+}
+
+static void bio_chain_endio(struct bio *bio)
+{
+	BUG();
+}
+
+void bio_chain(struct bio *bio, struct bio *parent)
+{
+	BUG_ON(bio->bi_private || bio->bi_end_io);
+
+	bio->bi_private = parent;
+	bio->bi_end_io	= bio_chain_endio;
+	bio_inc_remaining(parent);
 }
 
 /*
@@ -524,18 +407,6 @@ struct bio *bch2_bio_map_and_chain(struct block_device *bdev,
 	}
 
 	return tail;
-}
-
-int bch2_bio_submit_buf_wait(struct block_device *bdev,
-			     void *buf, size_t count,
-			     sector_t offset,
-			     blk_opf_t opf)
-{
-	struct bio *bio = bch2_bio_map_and_chain(bdev, buf, count, offset, opf,
-						 GFP_KERNEL, &fs_bio_set);
-	int ret = submit_bio_wait(bio);
-	bio_put(bio);
-	return ret;
 }
 
 u64 bch2_get_random_u64_below(u64 ceil)
@@ -698,281 +569,6 @@ defer:
 }
 #endif /* __KERNEL__ */
 
-#if 0
-void eytzinger1_test(void)
-{
-	unsigned inorder, size;
-
-	pr_info("1 based eytzinger test:\n");
-
-	for (size = 2;
-	     size < 65536;
-	     size++) {
-		unsigned extra = eytzinger1_extra(size);
-
-		if (!(size % 4096))
-			pr_info("tree size %u\n", size);
-
-		inorder = 1;
-		eytzinger1_for_each(eytz, size) {
-			BUG_ON(__inorder_to_eytzinger1(inorder, size, extra) != eytz);
-			BUG_ON(__eytzinger1_to_inorder(eytz, size, extra) != inorder);
-			BUG_ON(eytz != eytzinger1_last(size) &&
-			       eytzinger1_prev(eytzinger1_next(eytz, size), size) != eytz);
-
-			inorder++;
-		}
-		BUG_ON(inorder - 1 != size);
-	}
-}
-
-void eytzinger0_test(void)
-{
-
-	unsigned inorder, size;
-
-	pr_info("0 based eytzinger test:\n");
-
-	for (size = 1;
-	     size < 65536;
-	     size++) {
-		unsigned extra = eytzinger0_extra(size);
-
-		if (!(size % 4096))
-			pr_info("tree size %u\n", size);
-
-		inorder = 0;
-		eytzinger0_for_each(eytz, size) {
-			BUG_ON(__inorder_to_eytzinger0(inorder, size, extra) != eytz);
-			BUG_ON(__eytzinger0_to_inorder(eytz, size, extra) != inorder);
-			BUG_ON(eytz != eytzinger0_last(size) &&
-			       eytzinger0_prev(eytzinger0_next(eytz, size), size) != eytz);
-
-			inorder++;
-		}
-		BUG_ON(inorder != size);
-
-		inorder = size - 1;
-		eytzinger0_for_each_prev(eytz, size) {
-			BUG_ON(eytz != eytzinger0_first(size) &&
-			       eytzinger0_next(eytzinger0_prev(eytz, size), size) != eytz);
-
-			inorder--;
-		}
-		BUG_ON(inorder != -1);
-	}
-}
-
-static inline int cmp_u16(const void *_l, const void *_r)
-{
-	const u16 *l = _l, *r = _r;
-
-	return (*l > *r) - (*r > *l);
-}
-
-static void eytzinger0_find_test_le(u16 *test_array, unsigned nr, u16 search)
-{
-	int r, s;
-	bool bad;
-
-	r = eytzinger0_find_le(test_array, nr,
-			       sizeof(test_array[0]),
-			       cmp_u16, &search);
-	if (r >= 0) {
-		if (test_array[r] > search) {
-			bad = true;
-		} else {
-			s = eytzinger0_next(r, nr);
-			bad = s >= 0 && test_array[s] <= search;
-		}
-	} else {
-		s = eytzinger0_last(nr);
-		bad = s >= 0 && test_array[s] <= search;
-	}
-
-	if (bad) {
-		s = -1;
-		eytzinger0_for_each_prev(j, nr) {
-			if (test_array[j] <= search) {
-				s = j;
-				break;
-			}
-		}
-
-		eytzinger0_for_each(j, nr)
-			pr_info("[%3u] = %12u\n", j, test_array[j]);
-		pr_info("find_le(%12u) = %3i should be %3i\n",
-			search, r, s);
-		BUG();
-	}
-}
-
-static void eytzinger0_find_test_gt(u16 *test_array, unsigned nr, u16 search)
-{
-	int r, s;
-	bool bad;
-
-	r = eytzinger0_find_gt(test_array, nr,
-			       sizeof(test_array[0]),
-			       cmp_u16, &search);
-	if (r >= 0) {
-		if (test_array[r] <= search) {
-			bad = true;
-		} else {
-			s = eytzinger0_prev(r, nr);
-			bad = s >= 0 && test_array[s] > search;
-		}
-	} else {
-		s = eytzinger0_first(nr);
-		bad = s >= 0 && test_array[s] > search;
-	}
-
-	if (bad) {
-		s = -1;
-		eytzinger0_for_each(j, nr) {
-			if (test_array[j] > search) {
-				s = j;
-				break;
-			}
-		}
-
-		eytzinger0_for_each(j, nr)
-			pr_info("[%3u] = %12u\n", j, test_array[j]);
-		pr_info("find_gt(%12u) = %3i should be %3i\n",
-			search, r, s);
-		BUG();
-	}
-}
-
-static void eytzinger0_find_test_ge(u16 *test_array, unsigned nr, u16 search)
-{
-	int r, s;
-	bool bad;
-
-	r = eytzinger0_find_ge(test_array, nr,
-			       sizeof(test_array[0]),
-			       cmp_u16, &search);
-	if (r >= 0) {
-		if (test_array[r] < search) {
-			bad = true;
-		} else {
-			s = eytzinger0_prev(r, nr);
-			bad = s >= 0 && test_array[s] >= search;
-		}
-	} else {
-		s = eytzinger0_first(nr);
-		bad = s >= 0 && test_array[s] >= search;
-	}
-
-	if (bad) {
-		s = -1;
-		eytzinger0_for_each(j, nr) {
-			if (test_array[j] >= search) {
-				s = j;
-				break;
-			}
-		}
-
-		eytzinger0_for_each(j, nr)
-			pr_info("[%3u] = %12u\n", j, test_array[j]);
-		pr_info("find_ge(%12u) = %3i should be %3i\n",
-			search, r, s);
-		BUG();
-	}
-}
-
-static void eytzinger0_find_test_eq(u16 *test_array, unsigned nr, u16 search)
-{
-	unsigned r;
-	int s;
-	bool bad;
-
-	r = eytzinger0_find(test_array, nr,
-			    sizeof(test_array[0]),
-			    cmp_u16, &search);
-
-	if (r < nr) {
-		bad = test_array[r] != search;
-	} else {
-		s = eytzinger0_find_le(test_array, nr,
-				       sizeof(test_array[0]),
-				       cmp_u16, &search);
-		bad = s >= 0 && test_array[s] == search;
-	}
-
-	if (bad) {
-		eytzinger0_for_each(j, nr)
-			pr_info("[%3u] = %12u\n", j, test_array[j]);
-		pr_info("find(%12u) = %3i is incorrect\n",
-			search, r);
-		BUG();
-	}
-}
-
-static void eytzinger0_find_test_val(u16 *test_array, unsigned nr, u16 search)
-{
-	eytzinger0_find_test_le(test_array, nr, search);
-	eytzinger0_find_test_gt(test_array, nr, search);
-	eytzinger0_find_test_ge(test_array, nr, search);
-	eytzinger0_find_test_eq(test_array, nr, search);
-}
-
-void eytzinger0_find_test(void)
-{
-	unsigned i, nr, allocated = 1 << 12;
-	u16 *test_array __free(kfree) = kmalloc_array(allocated, sizeof(test_array[0]), GFP_KERNEL);
-
-	for (nr = 1; nr < allocated; nr++) {
-		u16 prev = 0;
-
-		pr_info("testing %u elems\n", nr);
-
-		get_random_bytes(test_array, nr * sizeof(test_array[0]));
-		eytzinger0_sort(test_array, nr, sizeof(test_array[0]), cmp_u16, NULL);
-
-		/* verify array is sorted correctly: */
-		eytzinger0_for_each(j, nr) {
-			BUG_ON(test_array[j] < prev);
-			prev = test_array[j];
-		}
-
-		for (i = 0; i < U16_MAX; i += 1 << 12)
-			eytzinger0_find_test_val(test_array, nr, i);
-
-		for (i = 0; i < nr; i++) {
-			eytzinger0_find_test_val(test_array, nr, test_array[i] - 1);
-			eytzinger0_find_test_val(test_array, nr, test_array[i]);
-			eytzinger0_find_test_val(test_array, nr, test_array[i] + 1);
-		}
-	}
-}
-#endif
-
-/*
- * Accumulate percpu counters onto one cpu's copy - only valid when access
- * against any percpu counter is guarded against
- */
-u64 *bch2_acc_percpu_u64s(u64 __percpu *p, unsigned nr)
-{
-	u64 *ret;
-	int cpu;
-
-	/* access to pcpu vars has to be blocked by other locking */
-	scoped_guard(preempt)
-		ret = this_cpu_ptr(p);
-
-	for_each_possible_cpu(cpu) {
-		u64 *i = per_cpu_ptr(p, cpu);
-
-		if (i != ret) {
-			acc_u64s(ret, i, nr);
-			memset(i, 0, nr * sizeof(u64));
-		}
-	}
-
-	return ret;
-}
-
 /*
  * this_cpu_add() and _cmpxchg(), for Rust where it has no asm of its own
  * (util/percpu.rs). @pcp is a _t __percpu *: the prototype Rust generates
@@ -1066,45 +662,6 @@ void bch2_set_current_wake_cpu(int cpu)
 #if defined(__KERNEL__) && !defined(CONFIG_SCHED_ALT)
 	WRITE_ONCE(current->wake_cpu, cpu);
 #endif
-}
-
-/*
- * Split a colon-separated device list and APPEND it to @ret, which the caller
- * must have initialized and which the caller owns either way - including a
- * partially built list after an error.
- *
- * It appends rather than initializing because mounting can hand us the devices
- * across several "source" parameters instead of one string; see
- * bch2_fs_parse_param().
- *
- * An empty component is refused with -EINVAL rather than skipped: "a::b" and a
- * bare "" are typos, and a device list we silently shorten is a filesystem
- * mounted with fewer devices than the caller asked for. -EINVAL is the only
- * failure that isn't -ENOMEM, which is what lets the caller name it.
- */
-int bch2_split_devs(const char *_dev_name, darray_const_str *ret)
-{
-	char *orig __free(kfree) = kstrdup(_dev_name, GFP_KERNEL);
-	if (!orig)
-		return -ENOMEM;
-
-	char *dev_name = orig, *s;
-
-	while ((s = strsep(&dev_name, ":"))) {
-		if (!*s)
-			return -EINVAL;
-
-		char *p = kstrdup(s, GFP_KERNEL);
-		if (!p)
-			return -ENOMEM;
-
-		if (darray_push(ret, p)) {
-			kfree(p);
-			return -ENOMEM;
-		}
-	}
-
-	return 0;
 }
 
 #if !defined(__KERNEL__) || LINUX_VERSION_CODE >= KERNEL_VERSION(6,19,0)

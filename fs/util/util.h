@@ -95,37 +95,6 @@ static inline size_t buf_nr_bvecs(void *p, size_t len)
 		: 1;
 }
 
-static inline void *bch2_kvmalloc_noprof(size_t n, gfp_t flags)
-{
-#if defined(__KERNEL__) && LINUX_VERSION_CODE < KERNEL_VERSION(6,18,0)
-	void *p = unlikely(n >= INT_MAX)
-		? vmalloc_noprof(n)
-		: kvmalloc_noprof(n, flags & ~__GFP_ZERO);
-#else
-	void *p = unlikely(n >= INT_MAX)
-		? vmalloc_noprof(n)
-		: kvmalloc_node_align_noprof(n, 1, flags & ~__GFP_ZERO, NUMA_NO_NODE);
-#endif
-	if (p && (flags & __GFP_ZERO))
-		memset(p, 0, n);
-	return p;
-}
-#define bch2_kvmalloc(...)			alloc_hooks(bch2_kvmalloc_noprof(__VA_ARGS__))
-
-#define init_heap(heap, _size, gfp)					\
-({									\
-	(heap)->nr = 0;						\
-	(heap)->size = (_size);						\
-	(heap)->data = kvmalloc((heap)->size * sizeof((heap)->data[0]),\
-				 (gfp));				\
-})
-
-#define free_heap(heap)							\
-do {									\
-	kvfree((heap)->data);						\
-	(heap)->data = NULL;						\
-} while (0)
-
 #define ANYSINT_MAX(t)							\
 	((((t) 1 << (sizeof(t) * 8 - 2)) - (t) 1) * (t) 2 + (t) 1)
 
@@ -133,11 +102,9 @@ do {									\
 
 #define prt_vprintf(_out, ...)		bch2_prt_vprintf(_out, __VA_ARGS__)
 #define prt_printf(_out, ...)		bch2_prt_printf(_out, __VA_ARGS__)
-#define printbuf_str(_buf)		bch2_printbuf_str(_buf)
 #define printbuf_exit(_buf)		bch2_printbuf_exit(_buf)
 
 #define printbuf_tabstops_reset(_buf)	bch2_printbuf_tabstops_reset(_buf)
-#define printbuf_tabstop_pop(_buf)	bch2_printbuf_tabstop_pop(_buf)
 #define printbuf_tabstop_push(_buf, _n)	bch2_printbuf_tabstop_push(_buf, _n)
 
 #define printbuf_indent_add(_out, _n)	bch2_printbuf_indent_add(_out, _n)
@@ -148,112 +115,18 @@ do {									\
 #define prt_tab(_out)			bch2_prt_tab(_out)
 #define prt_tab_rjust(_out)		bch2_prt_tab_rjust(_out)
 
-#define prt_bytes_indented(...)		bch2_prt_bytes_indented(__VA_ARGS__)
 #define prt_u64(_out, _v)		prt_printf(_out, "%llu", (u64) (_v))
 #define prt_human_readable_u64(...)	bch2_prt_human_readable_u64(__VA_ARGS__)
-#define prt_human_readable_s64(...)	bch2_prt_human_readable_s64(__VA_ARGS__)
-#define prt_units_u64(...)		bch2_prt_units_u64(__VA_ARGS__)
-#define prt_units_s64(...)		bch2_prt_units_s64(__VA_ARGS__)
 #define prt_string_option(...)		bch2_prt_string_option(__VA_ARGS__)
 #define prt_bitflags(...)		bch2_prt_bitflags(__VA_ARGS__)
-#define prt_bitflags_vector(...)	bch2_prt_bitflags_vector(__VA_ARGS__)
 
-#ifdef __KERNEL__
-static inline void uuid_unparse_lower(u8 *uuid, char *out)
-{
-	sprintf(out, "%pUb", uuid);
-}
-#else
-#include <uuid/uuid.h>
-#endif
-
-static inline void pr_uuid(struct printbuf *out, u8 *uuid)
-{
-	char uuid_str[40];
-
-	uuid_unparse_lower(uuid, uuid_str);
-	prt_printf(out, "%s", uuid_str);
-}
-
-int bch2_strtoint_h(const char *, int *);
-int bch2_strtouint_h(const char *, unsigned int *);
-int bch2_strtoll_h(const char *, long long *);
 int bch2_strtou64_h(const char *, u64 *);
-
-static inline int bch2_strtol_h(const char *cp, long *res)
-{
-#if BITS_PER_LONG == 32
-	return bch2_strtoint_h(cp, (int *) res);
-#else
-	return bch2_strtoll_h(cp, (long long *) res);
-#endif
-}
-
-static inline int bch2_strtoul_h(const char *cp, long *res)
-{
-#if BITS_PER_LONG == 32
-	return bch2_strtouint_h(cp, (unsigned int *) res);
-#else
-	return bch2_strtoull_h(cp, (unsigned long long *) res);
-#endif
-}
-
-#define strtoi_h(cp, res)						\
-	( type_is(*res, int)		? bch2_strtoint_h(cp, (void *) res)\
-	: type_is(*res, long)		? bch2_strtol_h(cp, (void *) res)\
-	: type_is(*res, long long)	? bch2_strtoll_h(cp, (void *) res)\
-	: type_is(*res, unsigned)	? bch2_strtouint_h(cp, (void *) res)\
-	: type_is(*res, unsigned long)	? bch2_strtoul_h(cp, (void *) res)\
-	: type_is(*res, unsigned long long) ? bch2_strtoull_h(cp, (void *) res)\
-	: -EINVAL)
-
-#define strtoul_safe(cp, var)						\
-({									\
-	unsigned long _v;						\
-	int _r = kstrtoul(cp, 10, &_v);					\
-	if (!_r)							\
-		var = _v;						\
-	_r;								\
-})
-
-#define strtoul_safe_clamp(cp, var, min, max)				\
-({									\
-	unsigned long _v;						\
-	int _r = kstrtoul(cp, 10, &_v);					\
-	if (!_r)							\
-		var = clamp_t(typeof(var), _v, min, max);		\
-	_r;								\
-})
-
-#define strtoul_safe_restrict(cp, var, min, max)			\
-({									\
-	unsigned long _v;						\
-	int _r = kstrtoul(cp, 10, &_v);					\
-	if (!_r && _v >= min && _v <= max)				\
-		var = _v;						\
-	else								\
-		_r = -EINVAL;						\
-	_r;								\
-})
-
-#define snprint(out, var)						\
-	prt_printf(out,							\
-		   type_is(var, int)		? "%i\n"		\
-		 : type_is(var, unsigned)	? "%u\n"		\
-		 : type_is(var, long)		? "%li\n"		\
-		 : type_is(var, unsigned long)	? "%lu\n"		\
-		 : type_is(var, s64)		? "%lli\n"		\
-		 : type_is(var, u64)		? "%llu\n"		\
-		 : type_is(var, char *)		? "%s\n"		\
-		 : "%i\n", var)
 
 bool bch2_is_zero(const void *, size_t);
 
 u64 bch2_read_flag_list_mask(const char *, const char * const[], u64);
 
 void bch2_prt_u64_base2_nbits(struct printbuf *, u64, unsigned);
-void bch2_prt_u64_base2(struct printbuf *, u64);
-
 
 int bch2_save_backtrace(bch_stacktrace *stack, struct task_struct *, unsigned, gfp_t);
 int bch2_prt_task_backtrace(struct printbuf *, struct task_struct *, unsigned, gfp_t);
@@ -265,54 +138,6 @@ int bch2_prt_task_backtrace(struct printbuf *, struct task_struct *, unsigned, g
 									\
 	(((_ewma << _weight) - _ewma) + (val)) >> _weight;		\
 })
-
-static inline void bch2_ratelimit_reset(struct bch_ratelimit *d)
-{
-	d->next = local_clock();
-}
-
-u64 bch2_ratelimit_delay(struct bch_ratelimit *);
-void bch2_ratelimit_increment(struct bch_ratelimit *, u64);
-
-void bch2_pd_controller_update(struct bch_pd_controller *, s64, s64, int);
-void bch2_pd_controller_init(struct bch_pd_controller *);
-void bch2_pd_controller_debug_to_text(struct printbuf *, struct bch_pd_controller *);
-
-#define sysfs_pd_controller_attribute(name)				\
-	rw_attribute(name##_rate);					\
-	rw_attribute(name##_rate_bytes);				\
-	rw_attribute(name##_rate_d_term);				\
-	rw_attribute(name##_rate_p_term_inverse);			\
-	read_attribute(name##_rate_debug)
-
-#define sysfs_pd_controller_files(name)					\
-	&sysfs_##name##_rate,						\
-	&sysfs_##name##_rate_bytes,					\
-	&sysfs_##name##_rate_d_term,					\
-	&sysfs_##name##_rate_p_term_inverse,				\
-	&sysfs_##name##_rate_debug
-
-#define sysfs_pd_controller_show(name, var)				\
-do {									\
-	sysfs_hprint(name##_rate,		(var)->rate.rate);	\
-	sysfs_print(name##_rate_bytes,		(var)->rate.rate);	\
-	sysfs_print(name##_rate_d_term,		(var)->d_term);		\
-	sysfs_print(name##_rate_p_term_inverse,	(var)->p_term_inverse);	\
-									\
-	if (attr == &sysfs_##name##_rate_debug)				\
-		bch2_pd_controller_debug_to_text(out, var);		\
-} while (0)
-
-#define sysfs_pd_controller_store(name, var)				\
-do {									\
-	sysfs_strtoul_clamp(name##_rate,				\
-			    (var)->rate.rate, 1, UINT_MAX);		\
-	sysfs_strtoul_clamp(name##_rate_bytes,				\
-			    (var)->rate.rate, 1, UINT_MAX);		\
-	sysfs_strtoul(name##_rate_d_term,	(var)->d_term);		\
-	sysfs_strtoul_clamp(name##_rate_p_term_inverse,			\
-			    (var)->p_term_inverse, 1, INT_MAX);		\
-} while (0)
 
 #define container_of_or_null(ptr, type, member)				\
 ({									\
@@ -333,49 +158,16 @@ static inline struct list_head *list_pop(struct list_head *head)
 #define list_pop_entry(head, type, member)		\
 	container_of_or_null(list_pop(head), type, member)
 
-/* Does linear interpolation between powers of two */
-static inline unsigned fract_exp_two(unsigned x, unsigned fract_bits)
-{
-	unsigned fract = x & ~(~0 << fract_bits);
-
-	x >>= fract_bits;
-	x   = 1 << x;
-	x  += (x * fract) >> fract_bits;
-
-	return x;
-}
-
 void bch2_bio_map(struct bio *bio, void *base, size_t);
 struct bio *bch2_bio_map_and_chain(struct block_device *, void *, size_t,
 				   sector_t, blk_opf_t, gfp_t,
 				   struct bio_set *);
-int bch2_bio_submit_buf_wait(struct block_device *, void *, size_t, sector_t, blk_opf_t);
 
 #define closure_bio_submit(bio, cl)					\
 do {									\
 	closure_get(cl);						\
 	submit_bio(bio);						\
 } while (0)
-
-#define kthread_wait(cond)						\
-({									\
-	int _ret = 0;							\
-									\
-	while (1) {							\
-		set_current_state(TASK_INTERRUPTIBLE);			\
-		if (kthread_should_stop()) {				\
-			_ret = -1;					\
-			break;						\
-		}							\
-									\
-		if (cond)						\
-			break;						\
-									\
-		schedule();						\
-	}								\
-	set_current_state(TASK_RUNNING);				\
-	_ret;								\
-})
 
 #define kthread_wait_freezable(cond)					\
 ({									\
@@ -461,15 +253,6 @@ static inline void memcpy_u64s(void *dst, const void *src,
 	__memcpy_u64s(dst, src, u64s);
 }
 
-static inline void memset_u64s_small(void *dst, u64 c,
-			       unsigned u64s)
-{
-	u64 *d = dst;
-
-	while (u64s--)
-		*d++ = c;
-}
-
 /*
  * Fortify can't see the real object size for u64s-array copies, same as
  * __memcpy_u64s() - but there's no unsafe_memmove(), so go underneath
@@ -524,29 +307,6 @@ static inline void memmove_u64s_up_small(void *dst, const void *src,
 	EBUG_ON(dst < src);
 
 	__memmove_u64s_up_small(dst, src, u64s);
-}
-
-static inline void memmove_u64s_up(void *dst, void *src,
-				   unsigned u64s)
-{
-	EBUG_ON(dst < src);
-
-	__memmove_u64s(dst, src, u64s);
-}
-
-static inline void memmove_u64s(void *dst, void *src,
-				unsigned u64s)
-{
-	__memmove_u64s(dst, src, u64s);
-}
-
-/* Set the last few bytes up to a u64 boundary given an offset into a buffer. */
-static inline void memset_u64s_tail(void *s, int c, unsigned bytes)
-{
-	while (bytes & 7) {
-		((char *) s)[bytes] = c;
-		bytes++;
-	}
 }
 
 /* just the memmove, doesn't update @_nr */
@@ -635,30 +395,6 @@ static inline u64 percpu_u64_get(u64 __percpu *src)
 	return per_cpu_sum(src);
 }
 
-static inline void percpu_u64_set(u64 __percpu *dst, u64 src)
-{
-	int cpu;
-
-	for_each_possible_cpu(cpu)
-		*per_cpu_ptr(dst, cpu) = 0;
-	this_cpu_write(*dst, src);
-}
-
-static inline void acc_u64s(u64 *acc, const u64 *src, unsigned nr)
-{
-	for (unsigned i = 0; i < nr; i++)
-		acc[i] += src[i];
-}
-
-static inline void acc_u64s_percpu(u64 *acc, const u64 __percpu *src,
-				   unsigned nr)
-{
-	int cpu;
-
-	for_each_possible_cpu(cpu)
-		acc_u64s(acc, per_cpu_ptr(src, cpu), nr);
-}
-
 /*
  * For counters of signed deltas, added to on any cpu: a sum taken while they
  * change can be negative, which as a u64 is nearly 2^64.
@@ -668,60 +404,7 @@ static inline u64 percpu_u64_get_nonnegative(u64 __percpu *src)
 	return max_t(s64, percpu_u64_get(src), 0);
 }
 
-static inline void percpu_u64s_get_nonnegative(u64 *dst, const u64 __percpu *src,
-					       unsigned nr)
-{
-	memset(dst, 0, nr * sizeof(u64));
-	acc_u64s_percpu(dst, src, nr);
-
-	for (unsigned i = 0; i < nr; i++)
-		dst[i] = max_t(s64, dst[i], 0);
-}
-
-static inline void percpu_memset(void __percpu *p, int c, size_t bytes)
-{
-	int cpu;
-
-	for_each_possible_cpu(cpu)
-		memset(per_cpu_ptr(p, cpu), c, bytes);
-}
-
-u64 *bch2_acc_percpu_u64s(u64 __percpu *, unsigned);
-
-static inline int u8_cmp(u8 l, u8 r)
-{
-	return cmp_int(l, r);
-}
-
-static inline int cmp_le32(__le32 l, __le32 r)
-{
-	return cmp_int(le32_to_cpu(l), le32_to_cpu(r));
-}
-
 #include <linux/uuid.h>
-
-static inline bool qstr_eq(const struct qstr l, const struct qstr r)
-{
-	return l.len == r.len && !memcmp(l.name, r.name, l.len);
-}
-
-int bch2_split_devs(const char *, darray_const_str *);
-
-#ifdef __KERNEL__
-
-__must_check
-static inline int copy_to_user_errcode(void __user *to, const void *from, unsigned long n)
-{
-	return copy_to_user(to, from, n) ? -EFAULT : 0;
-}
-
-__must_check
-static inline int copy_from_user_errcode(void *to, const void __user *from, unsigned long n)
-{
-	return copy_from_user(to, from, n) ? -EFAULT : 0;
-}
-
-#endif
 
 static inline void mod_bit(long nr, volatile unsigned long *addr, bool v)
 {
@@ -773,33 +456,6 @@ do {									\
 			(_out) &= ~_map[_i];				\
 } while (0)
 
-#define map_flags(_map, _in)						\
-({									\
-	unsigned _out = 0;						\
-									\
-	set_flags(_map, _in, _out);					\
-	_out;								\
-})
-
-#define map_flags_rev(_map, _in)					\
-({									\
-	unsigned _i, _out = 0;						\
-									\
-	for (_i = 0; _i < ARRAY_SIZE(_map); _i++)			\
-		if ((_in) & _map[_i]) {					\
-			(_out) |= 1 << _i;				\
-			(_in) &= ~_map[_i];				\
-		}							\
-	(_out);								\
-})
-
-#define map_defined(_map)						\
-({									\
-	unsigned _in = ~0;						\
-									\
-	map_flags_rev(_map, _in);					\
-})
-
 #define try(_do)							\
 do {									\
 	typeof(_do) _ret = (_do);					\
@@ -831,16 +487,6 @@ static inline void *class_memalloc_flags_lock_ptr(class_memalloc_flags_t *_T)
 #if !defined(__KERNEL__) || LINUX_VERSION_CODE >= KERNEL_VERSION(6,19,0)
 void *mempool_kvmalloc(gfp_t gfp_mask, void *pool_data);
 void mempool_kvfree(void *element, void *pool_data);
-
-static inline int mempool_init_kvmalloc_pool(mempool_t *pool, int min_nr, size_t size)
-{
-        return mempool_init(pool, min_nr, mempool_kvmalloc, mempool_kvfree, (void *) size);
-}
-
-static inline mempool_t *mempool_create_kvmalloc_pool(int min_nr, size_t size)
-{
-        return mempool_create(min_nr, mempool_kvmalloc, mempool_kvfree, (void *) size);
-}
 #endif
 
 #include <linux/wait_bit.h>
