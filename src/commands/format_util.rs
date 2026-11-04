@@ -321,10 +321,22 @@ pub fn format(
     if opts.encrypted {
         let crypt_u64s =
             std::mem::size_of::<c::bch_sb_field_crypt>() / std::mem::size_of::<u64>();
+        let nonce = sb.sb().nonce();
         let crypt = sb.field_resize::<c::bch_sb_field_crypt>(crypt_u64s as u32)
             .unwrap_or_else(|| die("failed to create crypt field"));
-        let crypt_ptr: *mut c::bch_sb_field_crypt = crypt;
-        unsafe { c::bch_sb_crypt_init(sb.sb, crypt_ptr, opts.passphrase) };
+
+        let mut key = c::bch_key::default();
+        unsafe { c::get_random_bytes((&raw mut key).cast(), size_of_val(&key) as _) };
+        let mut sb_key = c::bch_encrypted_key::new_unencrypted(key);
+
+        if !opts.passphrase.is_null() {
+            let passphrase = unsafe { CStr::from_ptr(opts.passphrase) };
+            crypt.kdf_init();
+            let passphrase_key = crypt.derive_passphrase(passphrase.to_bytes())
+                .unwrap_or_else(|e| die(&format!("error deriving key from passphrase: {e}")));
+            sb_key.chacha20(&passphrase_key, nonce);
+        }
+        crypt.key = sb_key;
         sb.sb_mut().set_encryption_type(1);
     }
 

@@ -12,7 +12,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, ensure, Result};
-use bcachefs_kernel::c::{bch_key, bch_sb_handle, bch_encrypted_key, bch_sb_field_crypt};
+use bcachefs_kernel::c::{bch_key, bch_sb_handle, bch_encrypted_key};
 use bch_bindgen::keyutils::{self, keyctl_search};
 use log::info;
 use rustix::termios;
@@ -405,21 +405,6 @@ impl Passphrase {
         Self::from_line(&passphrase)
     }
 
-    /// Errors if the superblock's KDF parameters are unusable - notably when
-    /// the key was never wrapped with a passphrase, so nothing ever set them.
-    fn derive(&self, crypt: &bch_sb_field_crypt) -> Result<bch_key> {
-        let crypt_ptr = core::ptr::from_ref(crypt).cast_mut();
-        let mut key = bch_key::default();
-
-        let ret = unsafe {
-            bch_bindgen::c::derive_passphrase(crypt_ptr, self.get().as_ptr(), &mut key)
-        };
-        ensure!(ret == 0, "deriving key from passphrase: {}",
-                crate::wrappers::bch_err_str(ret));
-
-        Ok(key)
-    }
-
     /// Re-encrypt a filesystem key with this passphrase.
     /// Returns the encrypted key suitable for writing to crypt->key.
     pub fn encrypt_key(
@@ -430,7 +415,8 @@ impl Passphrase {
         let crypt = sb.sb().crypt().expect("called on encrypted fs");
         let mut new_key = bch_encrypted_key::new_unencrypted(key);
 
-        let passphrase_key: bch_key = self.derive(crypt)?;
+        let passphrase_key = crypt.derive_passphrase(self.get().to_bytes())
+            .map_err(|e| anyhow!("deriving key from passphrase: {e}"))?;
         new_key.chacha20(&passphrase_key, sb.sb().nonce());
 
         Ok(new_key)
@@ -450,8 +436,7 @@ impl Passphrase {
         // it, so the KDF parameters exist. Failing here means a corrupt
         // superblock, not a wrong passphrase - returning None would report it
         // as the latter.
-        let passphrase_key: bch_key = self
-            .derive(crypt)
+        let passphrase_key = crypt.derive_passphrase(self.get().to_bytes())
             .expect("sb key is encrypted, so its KDF parameters must be usable");
 
         let mut cleartext_sb_key = crypt.key().clone();

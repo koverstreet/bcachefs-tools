@@ -27,7 +27,7 @@ use clap::Parser;
 
 use crate::commands::format::take_opt_value;
 use crate::commands::opts::{bch_opt_lookup_negated, parse_opt_val};
-use crate::key::Passphrase;
+use crate::key::{KeyHandle, Keyring, Passphrase};
 use crate::commands::format_util::{format_opts_default, DevOpts};
 use crate::util::fmt_bytes_human;
 use crate::wrappers::super_io;
@@ -345,6 +345,7 @@ fn migrate_fs(
     fs_opt_strs: &[(c::bch_opt_id, String)],
     mut fs_opts: c::bch_opts,
     format_opts: c::format_opts,
+    passphrase: Option<&Passphrase>,
     force: bool,
 ) -> Result<()> {
     if !path_is_fs_root(fs_path)? {
@@ -418,20 +419,19 @@ fn migrate_fs(
 
     // format() consumes format_opts (it's no longer Copy — has a blocklisted
     // bch_opts field), so capture the fields used afterward first.
-    let passphrase = format_opts.passphrase;
     let superblock_size = format_opts.superblock_size;
 
-    let Some(mut sb) = crate::commands::format_util::format(fs_opt_strs, fs_opts, format_opts, std::slice::from_mut(&mut c_dev)) else {
+    let Some(sb) = crate::commands::format_util::format(fs_opt_strs, fs_opts, format_opts, std::slice::from_mut(&mut c_dev)) else {
         bail!("format failed");
     };
 
     let sb_offset_val = sb.sb().layout.sb_offset[0].get();
 
     // Add encryption key if needed
-    if !passphrase.is_null() {
-        let type_cstr = CString::new("user").unwrap();
-        let desc_cstr = CString::new("user").unwrap();
-        unsafe { c::bch2_add_key(sb.sb_mut().as_ffi_mut(), type_cstr.as_ptr(), desc_cstr.as_ptr(), passphrase) };
+    if let Some(passphrase) = passphrase {
+        let correct = passphrase.check(&sb)
+            .expect("the passphrase the filesystem was just formatted with");
+        KeyHandle::new(&correct, Keyring::User)?;
     }
     drop(sb);
 
@@ -716,7 +716,7 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
         fmt_opts.passphrase = p.get().as_ptr() as *mut c_char;
     }
 
-    migrate_fs(&fs_path, &deferred_opts, fs_opts, fmt_opts, force)
+    migrate_fs(&fs_path, &deferred_opts, fs_opts, fmt_opts, passphrase.as_ref(), force)
 }
 
 /// Migrate superblock to standard location

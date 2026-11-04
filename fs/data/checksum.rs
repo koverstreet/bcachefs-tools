@@ -588,6 +588,64 @@ impl SbFieldOps for c::bch_sb_field_crypt<Validated> {
     }
 }
 
+// libsodium's
+#[cfg(not(kernel))]
+unsafe extern "C" {
+    fn crypto_pwhash_scryptsalsa208sha256_ll(passwd: *const u8, passwdlen: usize, salt: *const u8, saltlen: usize,
+                                             n: u64, r: u32, p: u32, buf: *mut u8, buflen: usize) -> c_int;
+}
+
+#[cfg(not(kernel))]
+impl c::bch_sb_field_crypt {
+    /// The scrypt parameters a passphrase is derived with. A key stored
+    /// unencrypted - formatted with --no_passphrase - never had any, so this
+    /// has to run before the first passphrase is set on it.
+    pub fn kdf_init(&mut self) {
+        self.set_bch_crypt_kdf_type(c::bch_kdf_types::BCH_KDF_SCRYPT.0.into());
+        self.set_bch_kdf_scrypt_n(16384u64.ilog2().into());
+        self.set_bch_kdf_scrypt_r(8u64.ilog2().into());
+        self.set_bch_kdf_scrypt_p(16u64.ilog2().into());
+    }
+
+    pub fn derive_passphrase(&self, passphrase: &[u8]) -> Result<c::bch_key, BchError> {
+        let kdf = self.bch_crypt_kdf_type();
+        assert!(kdf == u64::from(c::bch_kdf_types::BCH_KDF_SCRYPT.0), "unknown kdf type {kdf}");
+
+        /*
+         * Stored as log2, so r and p of 1 are legal and only N can be
+         * out of range: scrypt requires N >= 2. All-zero parameters
+         * mean nothing ever initialized them - the key in this
+         * superblock was never wrapped with a passphrase.
+         */
+        let n_log = self.bch_kdf_scrypt_n();
+        let r = 1u64 << self.bch_kdf_scrypt_r();
+        let p = 1u64 << self.bch_kdf_scrypt_p();
+
+        if n_log == 0 {
+            std::eprintln!(
+                "cannot derive a key from a passphrase: this superblock has no scrypt\n\
+                 parameters (N=1, r={r}, p={p}; N must be at least 2). Its master key\n\
+                 is stored unencrypted, and whatever is setting a passphrase did not\n\
+                 initialize the KDF parameters first.");
+            return Err(bch_errcode::BCH_ERR_EINVAL_crypt_no_kdf_params.into());
+        }
+
+        let salt = b"bcache\0";
+        let mut key = c::bch_key::default();
+        let ret = unsafe {
+            crypto_pwhash_scryptsalsa208sha256_ll(passphrase.as_ptr(), passphrase.len(), salt.as_ptr(), salt.len(),
+                                                  1 << n_log, r as u32, p as u32,
+                                                  (&raw mut key).cast(), size_of_val(&key))
+        };
+        if ret != 0 {
+            std::eprintln!("scrypt returned {ret} ({}) deriving a key with N={}, r={r}, p={p}",
+                           std::io::Error::last_os_error(), 1u64 << n_log);
+            return Err(bch_errcode::BCH_ERR_crypt_kdf_failed.into());
+        }
+        Ok(key)
+    }
+}
+
 // ── The key ──────────────────────────────────────────────────────────────
 
 /// What the keyring has @sb's key under.
@@ -646,25 +704,36 @@ fn keyring_key(desc: &core::ffi::CStr) -> Result<c::bch_key, BchError> {
 /// checksum error somewhere further on.
 #[cfg(not(kernel))]
 fn passphrase_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
-    use crate::util::vstructs::Head;
     use core::ffi::{c_char, CStr};
 
     // c_src/crypto.h's
     unsafe extern "C" {
         fn read_passphrase(prompt: *const c_char) -> *mut c_char;
-        fn bch2_passphrase_check(sb: *const Head<c::bch_sb>, passphrase: *const c_char,
-                                 passphrase_key: *mut c::bch_key, sb_key: *mut c::bch_encrypted_key) -> bool;
     }
 
-    let (mut key, mut sb_key) = (c::bch_key::default(), c::bch_encrypted_key::default());
     // SAFETY: the prompt a string; the passphrase a malloc()ed one, ours
-    unsafe {
-        let passphrase = read_passphrase(c"Enter passphrase: ".as_ptr());
-        let ok = bch2_passphrase_check(sb.as_ffi(), passphrase, &mut key, &mut sb_key);
-        c::wipe(core::slice::from_raw_parts_mut(passphrase.cast::<u8>(), CStr::from_ptr(passphrase).count_bytes()));
-        c::rust_kfree(passphrase.cast());
-        if ok { Ok(key) } else { Err(BchError::from(c::ENOKEY)) }
-    }
+    let passphrase = unsafe {
+        let p = read_passphrase(c"Enter passphrase: ".as_ptr());
+        let len = CStr::from_ptr(p).count_bytes();
+        let passphrase = zeroize::Zeroizing::new(core::slice::from_raw_parts(p.cast::<u8>(), len).to_vec());
+        c::wipe(core::slice::from_raw_parts_mut(p.cast::<u8>(), len));
+        c::rust_kfree(p.cast());
+        passphrase
+    };
+
+    let crypt = sb.crypt().expect("filesystem is not encrypted");
+    let mut sb_key = crypt.key.clone();
+    assert!(sb_key.is_encrypted(), "filesystem does not have encryption key");
+
+    let key = crypt.derive_passphrase(&passphrase)
+        .unwrap_or_else(|e| panic!("error deriving key from passphrase: {e}"));
+    sb_key.chacha20(&key, sb.nonce());
+
+    /*
+     * sb_key has just been decrypted in place: the right passphrase leaves
+     * the magic intact, so it is no longer "encrypted".
+     */
+    if sb_key.is_encrypted() { Err(BchError::from(c::ENOKEY)) } else { Ok(key) }
 }
 
 /// The user's key, for @sb: from the keyring - or in userspace, failing

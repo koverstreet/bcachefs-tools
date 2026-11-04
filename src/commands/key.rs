@@ -135,14 +135,6 @@ fn set_crypt_key(sb: &mut bcachefs_kernel::c::bch_sb_buf, key: c::bch_encrypted_
         .key = key;
 }
 
-/// Give the crypt field scrypt parameters, for a key that has never been
-/// wrapped with a passphrase: --no_passphrase leaves them unset.
-fn init_crypt_kdf(sb: &mut bcachefs_kernel::c::bch_sb_buf) {
-    let crypt = sb.field_mut::<c::bch_sb_field_crypt>()
-        .expect("filesystem has no crypt field");
-    unsafe { c::bch_crypt_kdf_init(crypt) };
-}
-
 /// Write the changed crypt field out. The open was will_not_start, so the
 /// in-memory superblock is what's on disk plus our edit.
 fn write_crypt_super(fs: &Fs, sb: &mut SbLockGuard) -> Result<()> {
@@ -168,7 +160,9 @@ fn cmd_set_passphrase(cli: SetPassphraseCli) -> Result<()> {
 
     let mut sb = fs.sb_lock();
     if !sb_is_encrypted(&sb) {
-        init_crypt_kdf(&mut sb);
+        sb.field_mut::<c::bch_sb_field_crypt>()
+            .expect("filesystem has no crypt field")
+            .kdf_init();
     }
 
     let encrypted_key = new_passphrase.encrypt_key(&sb, raw_key)?;
