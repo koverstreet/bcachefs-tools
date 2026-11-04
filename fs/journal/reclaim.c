@@ -1054,7 +1054,7 @@ static int __bch2_journal_reclaim(struct journal *j, bool direct, bool kicked)
 			break;
 
 		closure_wait_event(&bc->nr_in_flight_wait,
-				   atomic_long_read(&bc->nr_in_flight_inner) < BTREE_WRITE_IO_LIMIT(c));
+				   atomic_long_read(&bc->nr_in_flight_inner) < BTREE_WRITE_IO_LIMIT);
 
 		seq_to_flush = journal_seq_to_flush(j);
 		min_nr = 0;

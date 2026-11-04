@@ -20,8 +20,6 @@ void bch2_btree_node_mem_free(struct bch_fs *, struct btree *);
 
 int bch2_btree_node_transition_state(struct bch_fs_btree_cache *, struct btree *,
 				     enum btree_node_cache_state);
-int bch2_btree_node_transition_state_locked(struct bch_fs_btree_cache *, struct btree *,
-					    enum btree_node_cache_state);
 
 u64 bch2_btree_cache_pin_budget(struct bch_fs *);
 void bch2_node_pin(struct bch_fs *, struct btree *);
@@ -30,7 +28,6 @@ int bch2_btree_cache_pin(struct btree_trans *, u64, u64,
 			 struct bbpos, struct bbpos, struct bbpos *);
 
 void bch2_btree_node_set_dirty(struct bch_fs *, struct btree *);
-void bch2_btree_node_write_done_clean(struct bch_fs *, struct btree *);
 
 void bch2_btree_cache_cannibalize_unlock(struct btree_trans *);
 int bch2_btree_cache_cannibalize_lock(struct btree_trans *, struct closure *);
@@ -141,23 +138,6 @@ static inline enum btree_node_cache_state btree_node_cache_state(struct btree *b
 	return b->cache_state;
 }
 
-/*
- * The hashed (live) cache state derived from b's flag bits. A node belongs on
- * live[].dirty whenever there's pending work — either BTREE_NODE_dirty (needs
- * a write) or BTREE_NODE_write_in_flight (one is outstanding); otherwise it
- * belongs on live[].clean.
- *
- * Use this anywhere you need to compute the right cache_state from the
- * current bits — passing it to bch2_btree_node_transition_state_locked() is a
- * no-op when the node is already in the right state, so callers don't need
- * "do we need to transition?" conditionals.
- */
-static inline enum btree_node_cache_state btree_node_live_state(const struct btree *b)
-{
-	return (btree_node_dirty(b) || btree_node_write_in_flight(b))
-		? BTREE_NODE_CACHE_DIRTY
-		: BTREE_NODE_CACHE_CLEAN;
-}
 
 #define for_each_cached_btree(_b, _c, _tbl, _iter, _pos)		\
 	for ((_tbl) = rht_dereference_rcu((_c)->btree.cache.table.tbl,	\
@@ -190,23 +170,9 @@ static inline unsigned btree_blocks(const struct bch_fs *c)
 	return btree_sectors(c) >> c->block_bits;
 }
 
-#define BTREE_WRITE_IO_LIMIT(c)			64
-
 static inline bool bch2_btree_cache_should_throttle(struct bch_fs *c)
 {
 	return READ_ONCE(c->btree.cache.should_throttle);
-}
-
-static inline void bch2_btree_cache_update_throttle(struct bch_fs *c)
-{
-	struct bch_fs_btree_cache *bc = &c->btree.cache;
-	size_t live	= btree_cache_nr_live(bc);
-	size_t dirty	= btree_cache_nr_dirty(bc);
-	bool throttle	= atomic_long_read(&bc->nr_in_flight_inner) > BTREE_WRITE_IO_LIMIT(c) ||
-			  (live && dirty > live * 3 / 4);
-
-	if (throttle != READ_ONCE(bc->should_throttle))
-		WRITE_ONCE(bc->should_throttle, throttle);
 }
 
 #define BTREE_SPLIT_THRESHOLD(c)		(btree_max_u64s(c) * 3 / 4)

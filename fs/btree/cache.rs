@@ -9,6 +9,9 @@
 use crate::btree::bkey::{BkeySC, BkeyVal};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
+use crate::btree::types::{BtreeCacheLists, BtreeCacheLive};
+use crate::locking::ExclusiveGuard;
+use crate::util::ffi::Opaque;
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
@@ -19,7 +22,8 @@ use crate::util::ffi::c_char;
 use crate::util::kernel::is_vmalloc_addr;
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_uint, c_void};
-use cstruct_macros::{c_export, c_extern};
+use core::sync::atomic::Ordering::Relaxed;
+use cstruct_macros::{c_const, c_export, c_extern};
 use crate::format::Btree;
 
 c_extern! {
@@ -47,6 +51,9 @@ c_extern! {
     pub static bch2_btree_node_flags: [*const c_char; 0];
     pub fn bch2_btree_bounce_alloc_noprof(c: *mut Fs, size: usize, used_mempool: *mut bool) -> *mut c_void;
     pub fn bch2_btree_bounce_free(c: *mut Fs, size: usize, used_mempool: bool, p: *mut c_void);
+    pub fn bch2_btree_node_transition_state_locked(bc: *mut c::bch_fs_btree_cache, b: *mut BtreeNode,
+                                                   target: c::btree_node_cache_state) -> c_int;
+    pub fn bch2_btree_node_write_done_clean(c: *mut Fs, b: *mut BtreeNode);
 }
 
 /// Up to a node's size, to sort a node's keys into: kvmalloc()'d, or the
@@ -117,7 +124,29 @@ impl ToText for c::bch_fs_btree_cache {
     }
 }
 
+c_const! {
+    pub const BTREE_WRITE_IO_LIMIT: u32 = 64;
+}
+
 impl c::bch_fs_btree_cache {
+    pub fn update_throttle(&self) {
+        let (live, dirty) = (self.lock.nr_live(), self.lock.nr_dirty());
+        let throttle = self.nr_in_flight_inner.load(Relaxed) > BTREE_WRITE_IO_LIMIT as isize ||
+            (live != 0 && dirty > live * 3 / 4);
+
+        if throttle != self.should_throttle.load(Relaxed) {
+            self.should_throttle.store(throttle, Relaxed);
+        }
+    }
+
+    pub fn transition_state_locked(&self, _lists: &mut ExclusiveGuard<'_, c::mutex_noio, BtreeCacheLists, BtreeCacheLive>,
+                                   b: &BtreeNode, target: c::btree_node_cache_state) -> Result<(), BchError> {
+        ret_to_result_void(unsafe {
+            bch2_btree_node_transition_state_locked(core::ptr::from_ref(self).cast_mut(),
+                                                    core::ptr::from_ref(b).cast_mut(), target)
+        })
+    }
+
     /// Ask the shrinker to free @nr nodes, as memory pressure would. Not
     /// under bc->lock: the scan takes it.
     pub fn shrink(&self, nr: core::ffi::c_ulong) {
@@ -126,7 +155,41 @@ impl c::bch_fs_btree_cache {
     }
 }
 
+impl BtreeNode {
+    /// The hashed (live) cache state derived from b's flag bits. A node
+    /// belongs on live[].dirty whenever there's pending work - either
+    /// BTREE_NODE_dirty (needs a write) or BTREE_NODE_write_in_flight (one is
+    /// outstanding); otherwise it belongs on live[].clean.
+    ///
+    /// Use this anywhere you need to compute the right cache_state from the
+    /// current bits - passing it to transition_state_locked() is a no-op when
+    /// the node is already in the right state, so callers don't need "do we
+    /// need to transition?" conditionals.
+    pub fn live_state(&self) -> c::btree_node_cache_state {
+        let f = self.flags.load();
+        if f.dirty() || f.write_in_flight() {
+            c::btree_node_cache_state::BTREE_NODE_CACHE_DIRTY
+        } else {
+            c::btree_node_cache_state::BTREE_NODE_CACHE_CLEAN
+        }
+    }
+}
+
+#[c_export]
+pub fn btree_node_live_state(b: &BtreeNode) -> c::btree_node_cache_state {
+    b.live_state()
+}
+
+#[c_export]
+pub fn bch2_btree_cache_update_throttle(c: &Opaque<Fs>) {
+    Fs::from_c(c).btree.cache.update_throttle()
+}
+
 impl Fs {
+    pub fn btree_node_write_done_clean(&self, b: &BtreeNode) {
+        unsafe { bch2_btree_node_write_done_clean(self.as_ptr(), core::ptr::from_ref(b).cast_mut()) }
+    }
+
     /// Bytes of btree nodes cached.
     pub fn btree_cache_size(&self) -> u64 {
         let bc = &self.btree.cache;
