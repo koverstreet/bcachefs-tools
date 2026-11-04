@@ -77,7 +77,8 @@ pub unsafe trait RawNestedLock: RawLock {
     unsafe fn lock_nested(&self, subclass: u32) -> Self::GuardState;
 }
 
-/// A lock readers share, whatever else it has - RawRwLock's writer.
+/// A lock readers share, whatever else it has - RawRwLock's writer,
+/// RawSixLock's intent and write.
 ///
 /// # Safety
 /// lock_read() excludes only what writes, until unlock_read(); as
@@ -95,6 +96,22 @@ pub unsafe trait RawReadLock: RawLockBase {
 pub unsafe trait RawRwLock: RawLock + RawReadLock {
     /// lockdep_assert_held(): by a reader or the writer.
     unsafe fn assert_held_any(&self);
+}
+
+/// A six lock: read; intent, shared with readers but held by one at a time;
+/// and write, which only the intent holder takes, excluding readers. Not a
+/// RawLock: there's no taking it alone but through intent, which is how an
+/// intent holder gets to write without deadlocking against another.
+///
+/// # Safety
+/// The modes exclude as they say. lock_write() is taken only by the intent
+/// holder, and released by unlock_write() before its unlock_intent(); as
+/// RawReadLock's otherwise.
+pub unsafe trait RawSixLock: RawReadLock {
+    unsafe fn lock_intent(&self) -> Self::GuardState;
+    unsafe fn unlock_intent(&self, g: Self::GuardState);
+    unsafe fn lock_write(&self) -> Self::GuardState;
+    unsafe fn unlock_write(&self, g: Self::GuardState);
 }
 
 /// Two things locked by @R: @G, protected - reached only with it held, its
@@ -261,6 +278,13 @@ impl<R: RawRwLock, G: Sync, P> Locked<R, G, P> {
     }
 }
 
+impl<R: RawSixLock, G: Sync, P> Locked<R, G, P> {
+    pub fn intent(&self) -> SharedGuard<'_, R, G, P, SixIntent> {
+        let state = unsafe { self.raw.lock_intent() };
+        SharedGuard { lock: self, state: Some(state), _not_send: PhantomData }
+    }
+}
+
 impl<R: RawLockBase, G, P> Drop for Locked<R, G, P> {
     fn drop(&mut self) {
         unsafe { self.raw.destroy() }
@@ -291,6 +315,23 @@ pub struct Shared;
 impl<R: RawReadLock> Unlock<R> for Shared {
     unsafe fn unlock(raw: &R, state: R::GuardState) {
         unsafe { raw.unlock_read(state) }
+    }
+}
+
+pub struct SixIntent;
+
+impl<R: RawSixLock> Unlock<R> for SixIntent {
+    unsafe fn unlock(raw: &R, state: R::GuardState) {
+        unsafe { raw.unlock_intent(state) }
+    }
+}
+
+/// Back to intent alone.
+pub struct SixWrite;
+
+impl<R: RawSixLock> Unlock<R> for SixWrite {
+    unsafe fn unlock(raw: &R, state: R::GuardState) {
+        unsafe { raw.unlock_write(state) }
     }
 }
 
@@ -393,6 +434,26 @@ impl<'a, R: RawLockBase, G, P, U: Unlock<R>> SharedGuard<'a, R, G, P, U> {
 
     pub fn published(&self) -> &'a P {
         &self.lock.published
+    }
+}
+
+impl<R: RawSixLock, G, P> SharedGuard<'_, R, G, P, SixIntent> {
+    /// Write, with intent held: G exclusively, once readers drain. Borrows
+    /// the guard mutably, so nothing had through it as intent is held across;
+    /// dropped, back to intent alone.
+    pub fn write(&mut self) -> ExclusiveGuard<'_, R, G, P, SixWrite> {
+        let state = unsafe { self.lock.raw.lock_write() };
+        ExclusiveGuard { lock: self.lock, state: Some(state), _not_send: PhantomData }
+    }
+
+    /// P as its writer has it: the intent holder is the only one, with
+    /// readers still about.
+    pub fn published_writer(&mut self) -> &P::Writer
+    where
+        P: Publish,
+    {
+        // P::Writer is laid out as P (Publish)
+        unsafe { &*core::ptr::from_ref(&self.lock.published).cast::<P::Writer>() }
     }
 }
 
