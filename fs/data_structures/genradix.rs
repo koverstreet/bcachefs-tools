@@ -81,9 +81,9 @@ impl<T: Zeroable> GenRadix<T> {
     /// The entry at @idx, allocating its node - zeroed - if it hasn't been:
     /// as genradix_ptr_alloc().
     #[inline]
-    pub fn get_or_alloc(&mut self, idx: usize, gfp: c::gfp_t) -> Result<&mut T, AllocError> {
+    pub fn get_or_alloc(&mut self, idx: usize) -> Result<&mut T, AllocError> {
         let offset = Self::offset(idx).ok_or(AllocError)?;
-        let gfp = current_gfp_context_raw(gfp);
+        let gfp = current_gfp_context_raw(c::GFP_KERNEL);
         let p = unsafe { c::__genradix_ptr_alloc(&mut self.tree, offset, core::ptr::null_mut(), gfp) };
         // SAFETY: as get_mut()'s
         NonNull::new(p.cast::<T>()).map(|mut p| unsafe { p.as_mut() }).ok_or(AllocError)
@@ -214,9 +214,9 @@ impl<T: Zeroable> SharedGenRadix<T> {
     /// Allocate @idx's node, zeroed, if it hasn't been - as
     /// genradix_ptr_alloc(), without the entry.
     #[inline]
-    pub fn prealloc(&self, idx: usize, gfp: c::gfp_t) -> Result<(), AllocError> {
+    pub fn prealloc(&self, idx: usize) -> Result<(), AllocError> {
         let offset = GenRadix::<T>::offset(idx).ok_or(AllocError)?;
-        let gfp = current_gfp_context_raw(gfp);
+        let gfp = current_gfp_context_raw(c::GFP_KERNEL);
         let p = unsafe { c::__genradix_ptr_alloc(self.tree(), offset, core::ptr::null_mut(), gfp) };
         if p.is_null() { Err(AllocError) } else { Ok(()) }
     }

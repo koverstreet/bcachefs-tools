@@ -26,6 +26,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
+use crate::locking::MemallocFlags;
 use crate::util::alloc::AllocError;
 use crate::util::percpu::{IrqGuard, PerCpu, PerCpuRef};
 use crate::util::rcu::ReadGuard;
@@ -119,12 +120,12 @@ impl c::fast_list {
     }
 
     /// A new slot from the IDA, its radix node allocated.
-    fn alloc_idx(&self, gfp: c::gfp_t) -> Option<u32> {
+    fn alloc_idx(&self) -> Option<u32> {
         // SAFETY: init()'s ida
-        let raw_gfp = crate::util::alloc::current_gfp_context_raw(gfp);
-        let idx = unsafe { c::ida_alloc_range(self.ida(), 1, i32::MAX as c_uint, raw_gfp) };
+        let gfp = crate::util::alloc::current_gfp_context_raw(c::GFP_KERNEL);
+        let idx = unsafe { c::ida_alloc_range(self.ida(), 1, i32::MAX as c_uint, gfp) };
         let idx = u32::try_from(idx).ok()?;
-        if self.items.prealloc(idx as usize, gfp).is_err() {
+        if self.items.prealloc(idx as usize).is_err() {
             self.free_slots([idx]);
             return None;
         }
@@ -133,12 +134,12 @@ impl c::fast_list {
 
     /// A slot for an item to be set later, its allocation failing now if it's
     /// to fail.
-    pub fn get_idx(&self, gfp: c::gfp_t) -> Result<u32, AllocError> {
+    pub fn get_idx(&self) -> Result<u32, AllocError> {
         if let Some(idx) = self.with_cache(|lp| lp.pop()) {
             return Ok(idx);
         }
 
-        let mut got: ArrayVec<u32, BATCH> = iter::from_fn(|| self.alloc_idx(gfp)).take(BATCH).collect();
+        let mut got: ArrayVec<u32, BATCH> = iter::from_fn(|| self.alloc_idx()).take(BATCH).collect();
         let idx = self.with_cache(|lp| {
             let fit = got.len().min(lp.remaining_capacity());
             lp.extend(got.drain(got.len() - fit..));
@@ -166,7 +167,7 @@ impl c::fast_list {
 
     /// @item in a new slot: the slot, for remove().
     pub fn add(&self, item: NonNull<c_void>) -> Result<u32, AllocError> {
-        let idx = self.get_idx(c::GFP_KERNEL)?;
+        let idx = self.get_idx()?;
         self.slot(idx).store(item.as_ptr(), Release);
         Ok(idx)
     }
@@ -217,7 +218,8 @@ impl c::fast_list {
 /// A slot, or -ENOMEM.
 #[c_export]
 pub fn fast_list_get_idx(l: &c::fast_list, gfp: c::gfp_t) -> c_int {
-    l.get_idx(gfp).map_or(-(c::ENOMEM as c_int), |idx| idx as c_int)
+    let _scope = MemallocFlags::for_gfp(gfp);
+    l.get_idx().map_or(-(c::ENOMEM as c_int), |idx| idx as c_int)
 }
 
 #[c_export]

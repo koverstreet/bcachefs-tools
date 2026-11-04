@@ -494,7 +494,7 @@ mod vfs {
         let qtypes = enabled_qtypes(fs);
 
         for i in set_qtypes(qtypes) {
-            fs.quotas.get(i).table.prealloc(qid.q[i] as usize, c::GFP_KERNEL)?;
+            fs.quotas.get(i).table.prealloc(qid.q[i] as usize)?;
         }
 
         with_locks(fs, qtypes, qid, |locked, msgs| {
@@ -535,8 +535,8 @@ mod vfs {
 
         for i in set_qtypes(qtypes) {
             let table = &fs.quotas.get(i).table;
-            table.prealloc(src.q[i] as usize, c::GFP_KERNEL)?;
-            table.prealloc(dst.q[i] as usize, c::GFP_KERNEL)?;
+            table.prealloc(src.q[i] as usize)?;
+            table.prealloc(dst.q[i] as usize)?;
         }
 
         with_locks(fs, qtypes, dst, |locked, msgs| {
@@ -591,7 +591,7 @@ mod vfs {
 
         let id = k.k.p.offset as usize;
         let mut l = Locked::new(fs, ty);
-        l.q.table.prealloc(id, c::GFP_KERNEL)?;
+        l.q.table.prealloc(id)?;
         let mq = l.get_mut(id);
 
         for (m, d) in mq.c.iter_mut().zip(dq.c) {

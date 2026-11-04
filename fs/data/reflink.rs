@@ -375,7 +375,7 @@ fn gc_reflink_add(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
         }
     }
 
-    let r = table.get_or_alloc(nr, c::GFP_KERNEL)
+    let r = table.get_or_alloc(nr)
         .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_gc_reflink_start))?;
     r.offset   = offset;
     r.size     = k.k.size;

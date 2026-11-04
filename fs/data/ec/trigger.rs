@@ -72,8 +72,8 @@ impl c::bch_fs_ec {
     }
 
     /// gc_stripe(), allocated - zeroed, not alive - if it wasn't.
-    pub fn gc_stripe_alloc(&self, idx: u64, gfp: c::gfp_t) -> Result<&c::gc_stripe, AllocError> {
-        self.gc_stripes.prealloc(idx as usize, gfp)?;
+    pub fn gc_stripe_alloc(&self, idx: u64) -> Result<&c::gc_stripe, AllocError> {
+        self.gc_stripes.prealloc(idx as usize)?;
         Ok(self.gc_stripe(idx).expect("an entry, allocated"))
     }
 }
@@ -459,7 +459,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchEr
     // and mark the new - with locking
     let m = if gc {
         let new = new.expect("gc marks keys going in");
-        let Ok(m) = fs.ec.gc_stripe_alloc(idx, c::GFP_KERNEL) else {
+        let Ok(m) = fs.ec.gc_stripe_alloc(idx) else {
             bch_err!(fs, "error allocating memory for gc_stripes, idx {idx}");
             return fs.throw(bch_errcode::BCH_ERR_ENOMEM_mark_stripe);
         };
@@ -510,7 +510,7 @@ pub fn ec_stripe_mem_alloc(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>) -> Re
     let idx = iter.pos().offset;
 
     t.allocate_dropping_locks(|| {
-        if fs.gc.phase() != c::gc_phase::GC_PHASE_not_running && fs.ec.gc_stripe_alloc(idx, c::GFP_KERNEL).is_err() {
+        if fs.gc.phase() != c::gc_phase::GC_PHASE_not_running && fs.ec.gc_stripe_alloc(idx).is_err() {
             return fs.throw(bch_errcode::BCH_ERR_ENOMEM_ec_stripe_mem_alloc);
         }
         Ok(())

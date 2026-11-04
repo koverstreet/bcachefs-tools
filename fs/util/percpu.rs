@@ -449,9 +449,9 @@ pub struct PerCpuU64s {
 }
 
 impl PerCpuU64s {
-    pub fn new(n: usize, gfp: c::gfp_t) -> Result<Self, AllocError> {
+    pub fn new(n: usize) -> Result<Self, AllocError> {
         let size = n * size_of::<u64>();
-        let gfp = current_gfp_context_raw(gfp);
+        let gfp = current_gfp_context_raw(c::GFP_KERNEL);
         #[cfg(kernel)]
         let p = unsafe { c::pcpu_alloc_noprof(size, align_of::<u64>(), false, gfp) };
         #[cfg(not(kernel))]

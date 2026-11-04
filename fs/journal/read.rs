@@ -222,7 +222,7 @@ impl JournalEntries {
     }
 
     fn slot(&mut self, fs: &Fs, seq: u64) -> Result<&mut Option<Replay>, BchError> {
-        self.0.get_or_alloc(Self::idx(fs, seq), c::GFP_KERNEL)
+        self.0.get_or_alloc(Self::idx(fs, seq))
             .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_entry_add))
     }
 

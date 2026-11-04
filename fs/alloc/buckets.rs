@@ -644,7 +644,7 @@ fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &c::extent_ptr
     }
 
     if flags.contains(UpdateTriggerFlags::GC) {
-        let Ok(m) = fs.ec.gc_stripe_alloc(idx, c::GFP_KERNEL) else {
+        let Ok(m) = fs.ec.gc_stripe_alloc(idx) else {
             bch_err!(fs, "error allocating memory for gc_stripes, idx {idx}");
             return fs.throw(bch_errcode::BCH_ERR_ENOMEM_mark_stripe_ptr);
         };

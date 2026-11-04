@@ -106,7 +106,7 @@ impl Table {
 
 impl Entry {
     fn new(pos: Bpos, nr: usize, gc: bool) -> Result<Self, AllocError> {
-        let mut e = Entry { pos, live: PerCpuU64s::new(nr, c::GFP_KERNEL)?, gc: None };
+        let mut e = Entry { pos, live: PerCpuU64s::new(nr)?, gc: None };
         if gc {
             e.alloc_gc()?;
         }
@@ -135,7 +135,7 @@ impl Entry {
     }
 
     fn alloc_gc(&mut self) -> Result<(), AllocError> {
-        self.gc = Some(PerCpuU64s::new(self.nr_counters(), c::GFP_KERNEL)?);
+        self.gc = Some(PerCpuU64s::new(self.nr_counters())?);
         Ok(())
     }
 }
