@@ -26,8 +26,8 @@
 use core::ffi::CStr;
 
 use crate::c;
-use crate::errcode::{ret_to_result_void, BchError};
-use crate::util::ffi::{c_char, with_cstr};
+use crate::errcode::BchError;
+use crate::util::ffi::c_char;
 use crate::util::kobject::KobjPlace;
 use crate::util::Printbuf;
 
@@ -284,13 +284,6 @@ pub unsafe fn store_buf(buf: *const c_char, size: usize,
         Ok(())  => size as isize,
         Err(e)  => e.class() as isize,
     }
-}
-
-/// A number with an optional unit suffix - 4k, 1M: bch2_strtoull_h().
-pub fn parse_human_u64(s: &str) -> Result<u64, BchError> {
-    let mut v = 0;
-    with_cstr(s, |s| ret_to_result_void(unsafe { c::bch2_strtoull_h(s.as_ptr().cast(), &mut v) }))??;
-    Ok(v)
 }
 
 /// What a store writes as a number: kstrto*(), base 10 - one trailing newline

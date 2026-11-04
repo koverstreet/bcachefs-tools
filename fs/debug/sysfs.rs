@@ -46,7 +46,8 @@ use crate::util::time_stats::TimeStats;
 use crate::util::refcount::TryRefcount;
 use crate::util::kobject::{BinFile, BinFiles, Group, Groups, Kobject};
 use crate::util::place::Placed;
-use crate::util::sysfs::{self, parse_human_u64, parse_int, Attr, Dir, Files, ListAttrs};
+use crate::util::printbuf::parse_human_u64;
+use crate::util::sysfs::{self, parse_int, Attr, Dir, Files, ListAttrs};
 use crate::util::{HumanReadable, Printbuf, ToText};
 
 // ── the fs dir ──────────────────────────────────────────────────────────────

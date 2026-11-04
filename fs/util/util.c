@@ -8,11 +8,9 @@
 
 #include <linux/bio.h>
 #include <linux/blkdev.h>
-#include <linux/ctype.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/kthread.h>
-#include <linux/math64.h>
 #include <linux/percpu.h>
 #include <linux/preempt.h>
 #include <linux/random.h>
@@ -30,167 +28,6 @@
 #include "util/jump_label_gen.h"
 #include "util/percpu_gen.h"
 
-static const char si_units[] = "?kMGTPEZY";
-
-/* string_get_size units: */
-static const char *const units_2[] = {
-	"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB"
-};
-static const char *const units_10[] = {
-	"B", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"
-};
-
-static int parse_u64(const char *cp, u64 *res)
-{
-	const char *start = cp;
-	u64 v = 0;
-
-	if (!isdigit(*cp))
-		return -EINVAL;
-
-	do {
-		if (v > U64_MAX / 10)
-			return -ERANGE;
-		v *= 10;
-		if (v > U64_MAX - (*cp - '0'))
-			return -ERANGE;
-		v += *cp - '0';
-		cp++;
-	} while (isdigit(*cp));
-
-	*res = v;
-	return cp - start;
-}
-
-static int bch2_pow(u64 n, u64 p, u64 *res)
-{
-	*res = 1;
-
-	while (p--) {
-		if (*res > div64_u64(U64_MAX, n))
-			return -ERANGE;
-		*res *= n;
-	}
-	return 0;
-}
-
-static int parse_unit_suffix(const char *cp, u64 *res)
-{
-	unsigned adv = *cp == ' ';
-	cp += adv;
-
-	for (unsigned u = 1; u < strlen(si_units); u++)
-		if (*cp == si_units[u]) {
-			try(bch2_pow(1024, u, res));
-			return adv + 1;
-		}
-
-	for (unsigned u = 0; u < ARRAY_SIZE(units_2); u++)
-		if (!strncmp(cp, units_2[u], strlen(units_2[u]))) {
-			try(bch2_pow(1024, u, res));
-			return adv + strlen(units_2[u]);
-		}
-
-	for (unsigned u = 0; u < ARRAY_SIZE(units_10); u++)
-		if (!strncmp(cp, units_10[u], strlen(units_10[u]))) {
-			try(bch2_pow(1000, u, res));
-			return adv + strlen(units_10[u]);
-		}
-
-	*res = 1;
-	return 0;
-}
-
-
-#define parse_or_ret(cp, _f)			\
-do {						\
-	int _ret = _f;				\
-	if (_ret < 0)				\
-		return _ret;			\
-	cp += _ret;				\
-} while (0)
-
-static int __bch2_strtou64_h(const char *cp, u64 *res)
-{
-	const char *start = cp;
-	u64 v = 0, b, f_n = 0, f_d = 1;
-	int ret;
-
-	parse_or_ret(cp, parse_u64(cp, &v));
-
-	if (*cp == '.') {
-		cp++;
-		ret = parse_u64(cp, &f_n);
-		if (ret < 0)
-			return ret;
-		cp += ret;
-
-		try(bch2_pow(10, ret, &f_d));
-	}
-
-	parse_or_ret(cp, parse_unit_suffix(cp, &b));
-
-	if (v > div64_u64(U64_MAX, b))
-		return -ERANGE;
-	v *= b;
-
-	if (f_n > div64_u64(U64_MAX, b))
-		return -ERANGE;
-
-	f_n = div64_u64(f_n * b, f_d);
-	if (v + f_n < v)
-		return -ERANGE;
-	v += f_n;
-
-	*res = v;
-	return cp - start;
-}
-
-static int __bch2_strtoh(const char *cp, u64 *res,
-			 u64 t_max, bool t_signed)
-{
-	bool positive = *cp != '-';
-	u64 v = 0;
-
-	if (*cp == '+' || *cp == '-')
-		cp++;
-
-	parse_or_ret(cp, __bch2_strtou64_h(cp, &v));
-
-	if (*cp == '\n')
-		cp++;
-	if (*cp)
-		return -EINVAL;
-
-	if (positive) {
-		if (v > t_max)
-			return -ERANGE;
-	} else {
-		if (v && !t_signed)
-			return -ERANGE;
-
-		if (v > t_max + 1)
-			return -ERANGE;
-		v = -v;
-	}
-
-	*res = v;
-	return 0;
-}
-
-#define STRTO_H(name, type)					\
-int bch2_ ## name ## _h(const char *cp, type *res)		\
-{								\
-	u64 v = 0;						\
-	int ret = __bch2_strtoh(cp, &v, ANYSINT_MAX(type),	\
-			ANYSINT_MAX(type) != ((type) ~0ULL));	\
-	*res = v;						\
-	return ret;						\
-}
-
-STRTO_H(strtoull, unsigned long long)
-STRTO_H(strtou64, u64)
-
 bool bch2_is_zero(const void *_p, size_t n)
 {
 	const char *p = _p;
@@ -200,12 +37,6 @@ bool bch2_is_zero(const void *_p, size_t n)
 		if (p[i])
 			return false;
 	return true;
-}
-
-void bch2_prt_u64_base2_nbits(struct printbuf *out, u64 v, unsigned nr_bits)
-{
-	while (nr_bits)
-		prt_char(out, '0' + ((v >> --nr_bits) & 1));
 }
 
 int bch2_save_backtrace(bch_stacktrace *stack, struct task_struct *task, unsigned skipnr,
@@ -343,27 +174,6 @@ struct bio *bch2_bio_map_and_chain(struct block_device *bdev,
 	}
 
 	return tail;
-}
-
-u64 bch2_get_random_u64_below(u64 ceil)
-{
-	if (ceil <= U32_MAX)
-		return __get_random_u32_below(ceil);
-
-	/* this is the same (clever) algorithm as in __get_random_u32_below() */
-	u64 rand = get_random_u64();
-	u64 mult = ceil * rand;
-
-	if (unlikely(mult < ceil)) {
-		u64 bound;
-		div64_u64_rem(-ceil, ceil, &bound);
-		while (unlikely(mult < bound)) {
-			rand = get_random_u64();
-			mult = ceil * rand;
-		}
-	}
-
-	return mul_u64_u64_shr(ceil, rand, 64);
 }
 
 void memcpy_to_bio(struct bio *dst, struct bvec_iter dst_iter, const void *src)

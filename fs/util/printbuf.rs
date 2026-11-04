@@ -4,6 +4,7 @@ use core::ffi::{CStr, c_int, c_uint, c_ulong};
 use core::fmt::{self, Write as _};
 use core::ops::{Deref, DerefMut};
 use crate::c;
+use crate::errcode::{ret_to_c, BchError};
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::kernel::PAGE_SIZE;
 use crate::util::os_str::{OsStr, OsStrExt};
@@ -1168,6 +1169,87 @@ impl ToText for DateTime {
     }
 }
 
+/// A number with an optional unit suffix - 4k, 1.5M, 2 G: k M G ... are powers
+/// of 1024. One trailing newline, as sysfs stores have.
+pub fn parse_human_u64(s: &str) -> Result<u64, BchError> {
+    let einval = || BchError::from(c::EINVAL);
+    let erange = || BchError::from(c::ERANGE);
+
+    let digits = |s: &[u8]| -> Result<(u64, usize), BchError> {
+        let n = s.iter().take_while(|c| c.is_ascii_digit()).count();
+        if n == 0 {
+            return Err(einval());
+        }
+        let v = s[..n].iter()
+            .try_fold(0u64, |v, &c| v.checked_mul(10)?.checked_add(u64::from(c - b'0')))
+            .ok_or_else(erange)?;
+        Ok((v, n))
+    };
+
+    let pow = |n: u64, p: usize| u32::try_from(p).ok().and_then(|p| n.checked_pow(p)).ok_or_else(erange);
+
+    /* the multiplier, and how much of @s it took - one space before it allowed */
+    let unit = |s: &[u8]| -> Result<(u64, usize), BchError> {
+        let adv = usize::from(s.first() == Some(&b' '));
+        let t = &s[adv..];
+
+        if let Some(u) = t.first().and_then(|c| b"kMGTPEZY".iter().position(|u| u == c)) {
+            return Ok((pow(1024, u + 1)?, adv + 1));
+        }
+        for (base, units) in [(1024, ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB"]),
+                              (1000, ["B", "kB",  "MB",  "GB",  "TB",  "PB",  "EB",  "ZB",  "YB"])] {
+            if let Some((u, name)) = units.iter().enumerate().find(|(_, n)| t.starts_with(n.as_bytes())) {
+                return Ok((pow(base, u)?, adv + name.len()));
+            }
+        }
+        Ok((1, 0))
+    };
+
+    let s = s.as_bytes();
+    let (negative, s) = match s.first() {
+        Some(b'-') => (true, &s[1..]),
+        Some(b'+') => (false, &s[1..]),
+        _          => (false, s),
+    };
+
+    let (v, n) = digits(s)?;
+    let mut s = &s[n..];
+
+    let (mut f_n, mut f_d) = (0u64, 1);
+    if let Some(rest) = s.strip_prefix(b".") {
+        let n;
+        (f_n, n) = digits(rest)?;
+        f_d = pow(10, n)?;
+        s = &rest[n..];
+    }
+
+    let (b, n) = unit(s)?;
+    let s = &s[n..];
+
+    let v = v.checked_mul(b).ok_or_else(erange)?
+        .checked_add(f_n.checked_mul(b).ok_or_else(erange)? / f_d).ok_or_else(erange)?;
+
+    if !s.strip_prefix(b"\n").unwrap_or(s).is_empty() {
+        return Err(einval());
+    }
+    if negative && v != 0 {
+        return Err(erange());
+    }
+    Ok(v)
+}
+
+/// parse_human_u64() for C: @res is 0 if it fails.
+///
+/// # Safety
+/// @cp is a C string.
+#[c_export]
+pub unsafe fn bch2_strtou64_h(cp: *const c_char, res: &mut u64) -> c_int {
+    let s = unsafe { CStr::from_ptr(cp.cast()) }.to_str().map_err(|_| BchError::from(c::EINVAL));
+    let ret = s.and_then(parse_human_u64);
+    *res = ret.unwrap_or(0);
+    ret_to_c(ret.map(drop))
+}
+
 /// @iter's items with @sep between each: `prt!(out, "{}", Join(", ", offsets))`.
 pub struct Join<'s, I>(pub &'s str, pub I);
 
@@ -1404,6 +1486,22 @@ mod tests {
             let mut out = Printbuf::new();
             DateTime(t).to_text(&mut out);
             assert_eq!(out.as_str(), s);
+        }
+    }
+
+    /* what util.c's bch2_strtou64_h() returned for each */
+    #[test]
+    fn strtou64_h() {
+        for (s, ret, v) in [(c"4k", 0, 4096), (c"1.5M", 0, 1572864), (c"2KiB", 0, 2048),
+                            (c"2MiB", -22, 0), (c"10MB", -22, 0), (c"1kB", -22, 0), (c"3B", 0, 3),
+                            (c"2 G", 0, 2147483648), (c"1\n", 0, 1), (c"-0", 0, 0), (c"-1", -34, 0),
+                            (c"+7", 0, 7), (c"", -22, 0), (c"1.", -22, 0), (c"1.5", 0, 1),
+                            (c"16E", -34, 0), (c"15.9E", 0, 18331451923248866918), (c"1x", -22, 0),
+                            (c"1 ", -22, 0), (c"18446744073709551615", 0, u64::MAX),
+                            (c"18446744073709551616", -34, 0)] {
+            let mut r = 1;
+            assert_eq!(unsafe { bch2_strtou64_h(s.as_ptr().cast(), &mut r) }, ret, "{s:?}");
+            assert_eq!(r, v, "{s:?}");
         }
     }
 }

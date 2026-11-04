@@ -125,14 +125,9 @@ pub fn sb_error_name(id: u32) -> String {
     c::bch_sb_error_id(id).to_string()
 }
 
-/// Parse a human-readable size string (e.g. "1G", "512M") via bch2_strtoull_h.
+/// Parse a human-readable size string (e.g. "1G", "512M").
 pub fn parse_human_size(s: &str) -> Result<u64> {
-    let cstr = CString::new(s)?;
-    let mut val: u64 = 0;
-    if unsafe { c::bch2_strtoull_h(cstr.as_ptr(), &mut val) } != 0 {
-        return Err(anyhow!("invalid size: {}", s));
-    }
-    Ok(val)
+    bcachefs_kernel::util::printbuf::parse_human_u64(s).map_err(|_| anyhow!("invalid size: {}", s))
 }
 
 pub fn fmt_sectors_human(sectors: u64) -> String {

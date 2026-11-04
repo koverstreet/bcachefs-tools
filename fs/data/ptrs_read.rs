@@ -15,7 +15,7 @@ use crate::debug::params as debug_params;
 use crate::errcode::bch_errcode;
 use crate::util::Printbuf;
 use crate::sb::errors::bch2_blk_sts_sb_err;
-use crate::util::kernel::{cold_path, unlikely, READ};
+use crate::util::kernel::{cold_path, random_u64_below, unlikely, READ};
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::c_int;
 use core::ops::{Deref, DerefMut};
@@ -263,9 +263,9 @@ fn ptr_better(fs: &Fs, p1: &c::extent_ptr_decoded, mut l1: u64, p2: &c::extent_p
         }
     }
 
-    // at random, biased toward the faster device - C's: a sum of zero is 0
-    // SAFETY: plain
-    unsafe { c::bch2_get_random_u64_below(l1.wrapping_add(l2)) > l1 }
+    // at random, biased toward the faster device
+    let sum = l1.wrapping_add(l2);
+    sum != 0 && random_u64_below(sum) > l1
 }
 
 /// Which replica of a key to read, in whichever form it's held, of any type.

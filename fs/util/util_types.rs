@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::util::Printbuf;
 use crate::types::DArray;
 use crate::util::ffi::c_char;
-use core::ffi::{c_int, c_uint, c_ulong, c_ulonglong, c_void};
+use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use cstruct_macros::{CStruct, c_const, c_extern, c_typedef, TypeInfo};
 
 c_typedef! {
@@ -76,7 +76,6 @@ pub struct memalloc_flags {
 }
 
 c_extern! {
-    pub fn bch2_prt_u64_base2_nbits(out: *mut Printbuf, v: u64, nr_bits: c_uint);
     pub fn bch2_prt_task_backtrace(out: *mut Printbuf, task: *mut c::task_struct, skipnr: c_uint,
                                    gfp: c::gfp_t) -> c_int;
     pub fn bch2_save_backtrace(stack: *mut c::bch_stacktrace, task: *mut c::task_struct, skipnr: c_uint,
@@ -86,8 +85,6 @@ c_extern! {
     pub fn bch2_rht_bucket(tbl: *const c::bucket_table, hash: c_uint) -> *mut *mut c_void;
     pub fn bch2_debugfs_create_file(name: *const c_char, mode: c::umode_t, parent: *mut c::dentry,
                                     data: *mut c_void, fops: *const c::file_operations) -> *mut c::dentry;
-    pub fn bch2_strtoull_h(cp: *const c_char, res: *mut c_ulonglong) -> c_int;
-    pub fn bch2_get_random_u64_below(ceil: u64) -> u64;
     pub fn rust_kzalloc_nofail(size: usize) -> *mut c_void;
     pub fn rust_kfree(p: *const c_void);
     pub fn rust_kvzalloc(size: usize) -> *mut c_void;

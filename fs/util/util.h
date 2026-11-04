@@ -95,9 +95,6 @@ static inline size_t buf_nr_bvecs(void *p, size_t len)
 		: 1;
 }
 
-#define ANYSINT_MAX(t)							\
-	((((t) 1 << (sizeof(t) * 8 - 2)) - (t) 1) * (t) 2 + (t) 1)
-
 #include "printbuf.h"
 
 #define prt_vprintf(_out, ...)		bch2_prt_vprintf(_out, __VA_ARGS__)
@@ -120,11 +117,7 @@ static inline size_t buf_nr_bvecs(void *p, size_t len)
 #define prt_string_option(...)		bch2_prt_string_option(__VA_ARGS__)
 #define prt_bitflags(...)		bch2_prt_bitflags(__VA_ARGS__)
 
-int bch2_strtou64_h(const char *, u64 *);
-
 bool bch2_is_zero(const void *, size_t);
-
-void bch2_prt_u64_base2_nbits(struct printbuf *, u64, unsigned);
 
 int bch2_save_backtrace(bch_stacktrace *stack, struct task_struct *, unsigned, gfp_t);
 int bch2_prt_task_backtrace(struct printbuf *, struct task_struct *, unsigned, gfp_t);

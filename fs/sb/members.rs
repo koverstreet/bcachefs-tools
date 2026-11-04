@@ -570,9 +570,7 @@ pub fn member_to_text<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &c:
         s if s < 64 => prt!(out, "Btree allocated bitmap blocksize:\t{}\n", Bytes(1 << s)),
         s           => prt!(out, "Btree allocated bitmap blocksize:\t(invalid shift {s})\n"),
     }
-    write!(out, "Btree allocated bitmap:\t");
-    // SAFETY: only formats
-    unsafe { c::bch2_prt_u64_base2_nbits(out.as_raw(), m.btree_allocated_bitmap.get(), 64) };
+    write!(out, "Btree allocated bitmap:\t{:064b}", m.btree_allocated_bitmap.get());
     out.newline();
 
     write!(out, "Durability:\t{}\n", m.durability().checked_sub(1).unwrap_or(1));

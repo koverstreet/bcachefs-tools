@@ -123,9 +123,20 @@ pub fn random_u64() -> u64 {
     unsafe { c::bch2_get_random_u64() }
 }
 
+/// __get_random_u32_below()'s algorithm, widened: the high half of
+/// @ceil * random, rejecting the few that would bias it.
 pub fn random_u64_below(ceil: u64) -> u64 {
     assert!(ceil > 0);
-    unsafe { c::bch2_get_random_u64_below(ceil) }
+    let mut m = u128::from(ceil) * u128::from(random_u64());
+
+    if (m as u64) < ceil {
+        let bound = ceil.wrapping_neg() % ceil;
+        while (m as u64) < bound {
+            m = u128::from(ceil) * u128::from(random_u64());
+        }
+    }
+
+    (m >> 64) as u64
 }
 
 // local_clock() is a static inline and cond_resched() a macro, so neither has
