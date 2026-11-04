@@ -28,7 +28,8 @@
 
 #include <stdio.h>
 
-#include "libbcachefs.h"
+#include "bcachefs.h"
+#include "tools-util.h"
 
 #include "fs/data_structures/darray.h"
 #include "fs/data_structures/eytzinger.h"

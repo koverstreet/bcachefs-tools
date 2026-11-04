@@ -18,7 +18,8 @@
 #include <pthread.h>
 #include <stdio.h>
 
-#include "libbcachefs.h"
+#include "bcachefs.h"
+#include "tools-util.h"
 
 #include <linux/percpu.h>
 

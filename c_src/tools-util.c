@@ -19,7 +19,7 @@
 #include "util/printbuf.h"
 #include "util/util.h"
 
-#include "libbcachefs.h"
+#include "bcachefs.h"
 #include "tools-util.h"
 #include "src/rust_to_c.h"
 

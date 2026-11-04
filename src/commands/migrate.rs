@@ -12,7 +12,7 @@
 // bcachefs is using, and removing it would corrupt both filesystems.
 
 use bcachefs_kernel::fs::Dev;
-use std::ffi::{CString, c_char};
+use std::ffi::CString;
 use std::fs;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
@@ -28,7 +28,7 @@ use clap::Parser;
 use crate::commands::format::take_opt_value;
 use crate::commands::opts::{bch_opt_lookup_negated, parse_opt_val};
 use crate::key::{KeyHandle, Keyring, Passphrase};
-use crate::commands::format_util::{format_opts_default, DevOpts};
+use crate::commands::format_util::{format_opts_default, DevOpts, FormatOpts};
 use crate::util::fmt_bytes_human;
 use crate::wrappers::super_io;
 
@@ -344,8 +344,7 @@ fn migrate_fs(
     fs_path: &str,
     fs_opt_strs: &[(c::bch_opt_id, String)],
     mut fs_opts: c::bch_opts,
-    format_opts: c::format_opts,
-    passphrase: Option<&Passphrase>,
+    format_opts: FormatOpts<'_>,
     force: bool,
 ) -> Result<()> {
     if !path_is_fs_root(fs_path)? {
@@ -417,10 +416,6 @@ fn migrate_fs(
     c_dev.sb_offset = sb_offset;
     c_dev.sb_end = sb_end;
 
-    // format() consumes format_opts (it's no longer Copy — has a blocklisted
-    // bch_opts field), so capture the fields used afterward first.
-    let superblock_size = format_opts.superblock_size;
-
     let Some(sb) = crate::commands::format_util::format(fs_opt_strs, fs_opts, format_opts, std::slice::from_mut(&mut c_dev)) else {
         bail!("format failed");
     };
@@ -428,7 +423,7 @@ fn migrate_fs(
     let sb_offset_val = sb.sb().layout.sb_offset[0].get();
 
     // Add encryption key if needed
-    if let Some(passphrase) = passphrase {
+    if let Some(passphrase) = format_opts.passphrase {
         let correct = passphrase.check(&sb)
             .expect("the passphrase the filesystem was just formatted with");
         KeyHandle::new(&correct, Keyring::User)?;
@@ -467,7 +462,7 @@ fn migrate_fs(
     // Calculate reserve_start: round up (superblock_size * 2 + BCH_SB_SECTOR) sectors
     // to bucket boundary (in bytes)
     let bucket_bytes = unsafe { (*fs.devs[0].as_ptr()).mi.get().bucket_size as u64 } << 9;
-    let reserve_start = (((superblock_size as u64 * 2 + c::BCH_SB_SECTOR as u64) << 9)
+    let reserve_start = (((format_opts.superblock_size as u64 * 2 + c::BCH_SB_SECTOR as u64) << 9)
         .div_ceil(bucket_bytes)) * bucket_bytes;
 
     // Copy the filesystem tree
@@ -701,22 +696,18 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
         anyhow!("please specify a filesystem to migrate")
     })?;
 
-    // Build format_opts with version detection
-    let mut fmt_opts = format_opts_default();
-    fmt_opts.encrypted = encrypted;
-
-    // Handle encryption passphrase
     let passphrase: Option<Passphrase> = if encrypted && !no_passphrase {
         Some(Passphrase::ask_for_new_passphrase()?)
     } else {
         None
     };
+    let fmt_opts = FormatOpts {
+        encrypted,
+        passphrase: passphrase.as_ref(),
+        ..format_opts_default()
+    };
 
-    if let Some(ref p) = passphrase {
-        fmt_opts.passphrase = p.get().as_ptr() as *mut c_char;
-    }
-
-    migrate_fs(&fs_path, &deferred_opts, fs_opts, fmt_opts, passphrase.as_ref(), force)
+    migrate_fs(&fs_path, &deferred_opts, fs_opts, fmt_opts, force)
 }
 
 /// Migrate superblock to standard location

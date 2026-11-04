@@ -4,7 +4,7 @@
 // primary device, then migrates metadata to the primary and drops the temp device.
 
 use bcachefs_kernel::fs::Dev;
-use std::ffi::{CString, c_char};
+use std::ffi::CString;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::process;
@@ -31,7 +31,7 @@ use clap::Parser;
 use crate::commands::format::{
     take_opt_value, take_short_value, metadata_version_current, version_parse,
 };
-use crate::commands::format_util::DevOpts;
+use crate::commands::format_util::{DevOpts, FormatOpts};
 use crate::wrappers::bdev;
 use crate::commands::opts::{bch_opt_lookup_negated, opts_usage_str, parse_opt_val};
 use crate::key::Passphrase;
@@ -405,7 +405,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
 fn image_create_inner(
     fs_opt_strs: &[(c::bch_opt_id, String)],
     fs_opts: c::bch_opts,
-    mut format_opts: c::format_opts,
+    mut format_opts: FormatOpts<'_>,
     dev_opts: DevOpts,
     src_path: &str,
     keep_alloc: bool,
@@ -918,26 +918,18 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
         }
     });
 
-    // Build C format_opts
-    let label_cstr = fs_label.as_ref().map(|l| CString::new(l.as_str())).transpose()?;
     let dev_label_cstr = dev_label.as_ref().map(|l| CString::new(l.as_str())).transpose()?;
     let path_cstr = CString::new(image_path.as_str())?;
 
-    let mut fmt_opts = c::format_opts {
+    let fmt_opts = FormatOpts {
+        label:           fs_label.as_deref(),
+        uuid:            uuid_bytes,
         version,
         superblock_size,
         encrypted,
-        ..Default::default()
+        passphrase:      passphrase.as_ref(),
+        no_sb_at_end:    false,
     };
-    if let Some(ref l) = label_cstr {
-        fmt_opts.label = l.as_ptr() as *mut c_char;
-    }
-    if let Some(bytes) = uuid_bytes {
-        fmt_opts.uuid.b = bytes;
-    }
-    if let Some(ref p) = passphrase {
-        fmt_opts.passphrase = p.get().as_ptr() as *mut c_char;
-    }
 
     // Build DevOpts
     let mut d = DevOpts::new(path_cstr);

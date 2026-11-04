@@ -5,7 +5,8 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#include "libbcachefs.h"
+#include "bcachefs.h"
+#include "tools-util.h"
 #include "fs/journal/read.h"
 #include "fs/journal/seq_blacklist.h"
 #include "fs/sb/io.h"

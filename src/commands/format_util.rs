@@ -2,7 +2,7 @@
 
 //! Rust implementation of bch2_format and bch2_format_for_device_add.
 
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::fs::FileExt;
 use std::os::unix::io::RawFd;
@@ -17,6 +17,23 @@ use bcachefs_kernel::util::vstructs::Head;
 use bcachefs_kernel::sb::io::SbResize;
 use bcachefs_kernel::sb::members::SbMembersMut;
 use bcachefs_kernel::alloc::disk_groups::SbDiskGroupsMut;
+
+use crate::key::Passphrase;
+
+/// What's formatted beside the filesystem's options: its identity, and its
+/// superblock's.
+#[derive(Clone, Copy, Default)]
+pub struct FormatOpts<'a> {
+    pub label:           Option<&'a str>,
+    /// None: a new one.
+    pub uuid:            Option<[u8; 16]>,
+    pub version:         u32,
+    pub superblock_size: u32,
+    pub encrypted:       bool,
+    /// Encrypted without one, the key's stored as it is.
+    pub passphrase:      Option<&'a Passphrase>,
+    pub no_sb_at_end:    bool,
+}
 
 /// Device options for formatting — Rust replacement for C struct dev_opts.
 ///
@@ -137,7 +154,7 @@ fn opt_set_sb_all(sb: &mut c::bch_sb_buf, dev_idx: Option<u32>, opts: &mut c::bc
 pub fn format(
     fs_opt_strs: &[(c::bch_opt_id, String)],
     mut fs_opts: c::bch_opts,
-    mut opts: c::format_opts,
+    opts: FormatOpts<'_>,
     dev_slice: &mut [DevOpts],
 ) -> Option<c::bch_sb_handle> {
 
@@ -192,11 +209,6 @@ pub fn format(
         ));
     }
 
-    // UUID
-    if opts.uuid.b == [0u8; 16] {
-        opts.uuid.b = *uuid::Uuid::new_v4().as_bytes();
-    }
-
     let mut sb = c::bch_sb_handle::default();
     if sb.sb_realloc(0).is_err() {
         die("insufficient memory");
@@ -205,7 +217,7 @@ pub fn format(
     sb.sb_mut().version = (opts.version as u16).into();
     sb.sb_mut().version_min = (opts.version as u16).into();
     sb.sb_mut().magic.b = BCHFS_MAGIC;
-    sb.sb_mut().user_uuid = opts.uuid;
+    sb.sb_mut().user_uuid.b = opts.uuid.unwrap_or_else(|| *uuid::Uuid::new_v4().as_bytes());
     sb.sb_mut().nr_devices = dev_slice.len() as u8;
 
     sb.sb_mut().set_version_incompat_allowed(opts.version as u64);
@@ -225,9 +237,8 @@ pub fn format(
     sb.sb_mut().uuid.b = *uuid::Uuid::new_v4().as_bytes();
 
     // Label
-    if !opts.label.is_null() {
-        let label = unsafe { CStr::from_ptr(opts.label) };
-        let label_bytes = label.to_bytes();
+    if let Some(label) = opts.label {
+        let label_bytes = label.as_bytes();
         if label_bytes.len() >= sb.sb().label.len() {
             die(&format!(
                 "filesystem label too long (max {} characters)",
@@ -329,10 +340,9 @@ pub fn format(
         unsafe { c::get_random_bytes((&raw mut key).cast(), size_of_val(&key) as _) };
         let mut sb_key = c::bch_encrypted_key::new_unencrypted(key);
 
-        if !opts.passphrase.is_null() {
-            let passphrase = unsafe { CStr::from_ptr(opts.passphrase) };
+        if let Some(passphrase) = opts.passphrase {
             crypt.kdf_init();
-            let passphrase_key = crypt.derive_passphrase(passphrase.to_bytes())
+            let passphrase_key = crypt.derive_passphrase(passphrase.get().to_bytes())
                 .unwrap_or_else(|e| die(&format!("error deriving key from passphrase: {e}")));
             sb_key.chacha20(&passphrase_key, nonce);
         }
@@ -424,8 +434,8 @@ pub fn format_for_device_add(
     0
 }
 
-/// Mirrors the C `format_opts_default()` inline function.
-pub(crate) fn format_opts_default() -> c::format_opts {
+/// The newest version the running kernel mounts, and the default superblock.
+pub(crate) fn format_opts_default() -> FormatOpts<'static> {
     // Try to load bcachefs module to detect kernel version
     let _ = std::process::Command::new("modprobe")
         .arg("bcachefs")
@@ -443,7 +453,7 @@ pub(crate) fn format_opts_default() -> c::format_opts {
         current
     };
 
-    c::format_opts {
+    FormatOpts {
         version,
         superblock_size: SUPERBLOCK_SIZE_DEFAULT,
         ..Default::default()

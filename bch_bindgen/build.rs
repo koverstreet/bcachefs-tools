@@ -134,9 +134,7 @@ fn main() {
         .allowlist_function("add_key")
         .allowlist_function("keyctl_search")
         .allowlist_function("match_string")
-        // tools-util and libbcachefs types/functions for Rust command conversions
-        .allowlist_type("format_opts")
-        .allowlist_type("dev_opts")
+        // tools-util functions for Rust command conversions
         .allowlist_function("ask_yn")
         .allowlist_function("read_file_str")
         .allowlist_function("read_file_u64")

@@ -9,7 +9,7 @@
 #include <errno.h>
 #include <string.h>
 
-#include "libbcachefs.h"
+#include "tools-util.h"
 #include "fs/bcachefs.h"
 #include "fs/fs/dirent.h"
 #include "fs/fs/namei.h"

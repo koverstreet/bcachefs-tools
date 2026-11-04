@@ -17,7 +17,7 @@
 // per-device options preceded it.
 
 use std::collections::HashMap;
-use std::ffi::{CString, c_char};
+use std::ffi::CString;
 use std::io;
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
@@ -30,7 +30,7 @@ use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::sb::sb_field_type;
 use bcachefs_kernel::metadata_version;
 
-use crate::commands::format_util::DevOpts;
+use crate::commands::format_util::{DevOpts, FormatOpts};
 use crate::commands::opts::{bch_opt_lookup_negated, opts_usage_str, parse_opt_val};
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::key::Passphrase;
@@ -544,28 +544,15 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         }
     }
 
-    // Build C format_opts
-    let label_cstr = cfg.fs_label.as_ref().map(|l| CString::new(l.as_str())).transpose()?;
-    let source_cstr = cfg.source.as_ref().map(|s| CString::new(s.as_str())).transpose()?;
-
-    let mut fmt_opts = c::format_opts {
+    let fmt_opts = FormatOpts {
+        label:           cfg.fs_label.as_deref(),
+        uuid:            cfg.uuid_bytes,
         version,
         superblock_size: cfg.superblock_size,
-        encrypted: cfg.encrypted,
-        ..Default::default()
+        encrypted:       cfg.encrypted,
+        passphrase:      passphrase.as_ref(),
+        no_sb_at_end:    false,
     };
-    if let Some(ref l) = label_cstr {
-        fmt_opts.label = l.as_ptr() as *mut c_char;
-    }
-    if let Some(ref s) = source_cstr {
-        fmt_opts.source = s.as_ptr() as *mut c_char;
-    }
-    if let Some(bytes) = cfg.uuid_bytes {
-        fmt_opts.uuid.b = bytes;
-    }
-    if let Some(ref p) = passphrase {
-        fmt_opts.passphrase = p.get().as_ptr() as *mut c_char;
-    }
 
     let mut devices: Vec<DevOpts> = cfg.devices.iter()
         .map(|dev| {
