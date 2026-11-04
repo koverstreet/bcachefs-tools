@@ -913,7 +913,7 @@ impl Fs {
         });
         if let Some(task) = task {
             // SAFETY: our ref, put after
-            let _ = prt_task_backtrace(out, task, 0, GFP_KERNEL);
+            let _ = prt_task_backtrace(out, task, 0);
             unsafe { c::put_task_struct(task) };
         }
     }

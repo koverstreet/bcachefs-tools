@@ -226,9 +226,10 @@ fn six_set_owner(lock: &six_lock, ty: six_lock_type, old: u32, owner: *mut c::ta
 fn six_lock_record_acquire(lock: &six_lock, ty: six_lock_type) {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     if ty == six_lock_type::SIX_LOCK_intent {
+        // a trylock's caller may hold a C spinlock, which isn't a scope
+        let _noreclaim = super::MemallocFlags::noreclaim();
         let _ = unsafe {
-            crate::util::backtrace::save_backtrace(&mut *lock.owner_stack.as_ptr(), c::bch2_current(), 1,
-                                                   crate::util::alloc::flags::GFP_ATOMIC)
+            crate::util::backtrace::save_backtrace(&mut *lock.owner_stack.as_ptr(), c::bch2_current(), 1)
         };
     }
     #[cfg(not(CONFIG_BCACHEFS_DEBUG))]

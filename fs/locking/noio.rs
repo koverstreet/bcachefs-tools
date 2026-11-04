@@ -62,18 +62,19 @@ pub(crate) fn memalloc_flags() -> u32 {
     current_flags().map_or(0, |f| *f)
 }
 
-/// Set @flag in current->flags: whether it was, for memalloc_flags_restore().
-pub(crate) fn memalloc_flags_save(flag: u32) -> bool {
-    let Some(f) = current_flags() else { return true };
-    let was = *f & flag != 0;
-    *f |= flag;
+/// Set @flags in current->flags: those of them that were, for
+/// memalloc_flags_restore().
+pub(crate) fn memalloc_flags_save(flags: u32) -> u32 {
+    let Some(f) = current_flags() else { return flags };
+    let was = *f & flags;
+    *f |= flags;
     was
 }
 
-/// @flag back as memalloc_flags_save() found it.
-pub(crate) fn memalloc_flags_restore(flag: u32, was: bool) {
+/// @flags back as memalloc_flags_save() found them: @was set, the rest not.
+pub(crate) fn memalloc_flags_restore(flags: u32, was: u32) {
     if let Some(f) = current_flags() {
-        if was { *f |= flag } else { *f &= !flag }
+        *f = *f & !flags | was;
     }
 }
 
@@ -83,13 +84,14 @@ pub(crate) fn memalloc_flags_restore(flag: u32, was: bool) {
 /// and __GFP_NOWARN.
 #[must_use = "the memalloc scope ends as soon as the guard is dropped"]
 pub struct MemallocFlags {
-    flag: u32,
-    was:  bool,
+    flags: u32,
+    /// Those of @flags already set, which stay set
+    was:   u32,
 }
 
 impl MemallocFlags {
-    fn new(flag: u32) -> Self {
-        Self { flag, was: memalloc_flags_save(flag) }
+    fn new(flags: u32) -> Self {
+        Self { flags, was: memalloc_flags_save(flags) }
     }
 
     pub fn noio() -> Self {
@@ -103,11 +105,37 @@ impl MemallocFlags {
     pub fn nowarn() -> Self {
         Self::new(PF_MEMALLOC_NOWARN)
     }
+
+    /// The scope a C caller's @gfp says, for Rust that takes none, in the
+    /// flags we use: NORECLAIM without direct reclaim, else NOIO without
+    /// __GFP_IO; NOWARN. The rest of @gfp has no scope, and goes.
+    /// In userspace, whose allocators take no scope, none.
+    pub fn for_gfp(gfp: crate::c::gfp_t) -> Self {
+        #[cfg(kernel)]
+        let flags = {
+            use crate::c::{GFP_KERNEL, GFP_NOIO, GFP_NOWAIT, __GFP_NOWARN};
+
+            // __GFP_DIRECT_RECLAIM and __GFP_IO, which bindgen doesn't name
+            let mut flags = 0;
+            if gfp & (GFP_NOIO & !GFP_NOWAIT) == 0 {
+                flags |= PF_MEMALLOC_NORECLAIM;
+            } else if gfp & (GFP_KERNEL & !GFP_NOIO) == 0 {
+                flags |= PF_MEMALLOC_NOIO;
+            }
+            if gfp & __GFP_NOWARN != 0 {
+                flags |= PF_MEMALLOC_NOWARN;
+            }
+            flags
+        };
+        #[cfg(not(kernel))]
+        let flags = { let _ = gfp; 0 };
+        Self::new(flags)
+    }
 }
 
 impl Drop for MemallocFlags {
     fn drop(&mut self) {
-        memalloc_flags_restore(self.flag, self.was)
+        memalloc_flags_restore(self.flags, self.was)
     }
 }
 

@@ -1125,7 +1125,7 @@ impl Fs {
         } else if let Some(task) = task {
             write!(out, "Reconcile thread backtrace:\n");
             out.indent_add(2);
-            let _ = prt_task_backtrace(out, task, 0, GFP_KERNEL);
+            let _ = prt_task_backtrace(out, task, 0);
             out.indent_sub(2);
         } else {
             write!(out, "Reconcile thread not running\n");
