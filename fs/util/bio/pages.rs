@@ -18,7 +18,7 @@ use crate::c;
 use crate::fs::Fs;
 use crate::locking::Locked;
 use crate::errcode::BchError;
-use crate::util::alloc::AllocError;
+use crate::util::alloc::{current_gfp_context_raw, AllocError};
 use crate::util::ffi::Opaque;
 use crate::util::kernel::PAGE_SIZE;
 use crate::util::mempool::Mempool;
@@ -56,7 +56,7 @@ pub fn alloc_pages(bio: &mut c::bio, bs: u32, size: usize, gfp: c::gfp_t) -> Res
         assert!(b % bs == 0, "a bio's pages {b} bytes, not a multiple of its {bs} byte blocks");
 
         // SAFETY: no pointers in
-        let p = NonNull::new(unsafe { c::rust_bio_pages_alloc(b, gfp) }).ok_or(AllocError)?;
+        let p = NonNull::new(unsafe { c::rust_bio_pages_alloc(b, current_gfp_context_raw(gfp)) }).ok_or(AllocError)?;
         // SAFETY: a fresh allocation of @b bytes, the bio's now
         unsafe { c::bio_add_virt_nofail(bio, p.as_ptr(), b as u32) };
     }

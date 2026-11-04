@@ -220,6 +220,7 @@ mod vfs {
         /// if it has to - a restart then.
         fn alloc(t: &TransAttempt<'_, '_>, nr: u32) -> Result<PosixAcl, BchError> {
             t.allocate_dropping_locks(|gfp| {
+                let gfp = crate::util::alloc::current_gfp_context_raw(gfp);
                 NonNull::new(unsafe { c::posix_acl_alloc(nr, gfp) }).map(PosixAcl)
                     .ok_or(BchError::from(bch_errcode::BCH_ERR_ENOMEM_acl))
             })
@@ -298,6 +299,7 @@ mod vfs {
                 // __posix_acl_chmod() consumes the reference it's given -
                 // failing too - so each try gets its own:
                 let mut acl = self.clone().into_raw();
+                let gfp = crate::util::alloc::current_gfp_context_raw(gfp);
                 let ret = ret_to_result(unsafe { c::__posix_acl_chmod(&mut acl, gfp, mode) });
                 let acl = NonNull::new(acl).map(PosixAcl);
                 ret?;

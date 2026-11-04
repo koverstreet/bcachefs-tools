@@ -18,7 +18,9 @@
 //!
 //! MemallocFlags is the scope alone - saved on construction, restored on
 //! drop, as memalloc_flags_save() and _restore() pair: scoped (LIFO) use
-//! only.
+//! only. NOIO's, or NORECLAIM's or NOWARN's: those two are ours, in sched.h's
+//! PF__HOLE__ bits, so the page allocator doesn't know them - util::alloc
+//! applies them.
 
 #![allow(non_camel_case_types)]
 
@@ -31,10 +33,13 @@ use cstruct_macros::c_verbatim;
 #[cfg(kernel)]
 mod pf {
     pub const PF_MEMALLOC_NOIO: u32 = kernel::bindings::PF_MEMALLOC_NOIO;
+    // util.h's, from the same holes
+    pub const PF_MEMALLOC_NORECLAIM: u32 = kernel::bindings::PF__HOLE__00800000;
+    pub const PF_MEMALLOC_NOWARN: u32 = kernel::bindings::PF__HOLE__01000000;
 }
 #[cfg(not(kernel))]
 mod pf {
-    pub use crate::cstructs::c::PF_MEMALLOC_NOIO;
+    pub use crate::cstructs::c::{PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
 }
 pub(crate) use pf::*;
 
@@ -48,6 +53,12 @@ fn current_flags() -> Option<&'static mut c_uint> {
     let t = unsafe { c::bch2_current() };
 
     unsafe { t.as_mut() }.map(|t| &mut t.flags)
+}
+
+/// current->flags: the scopes the task is in.
+#[cfg(kernel)]
+pub(crate) fn memalloc_flags() -> u32 {
+    current_flags().map_or(0, |f| *f)
 }
 
 /// Set @flag in current->flags: whether it was, for memalloc_flags_restore().
@@ -66,7 +77,9 @@ pub(crate) fn memalloc_flags_restore(flag: u32, was: bool) {
 }
 
 /// A PF_MEMALLOC_* scope, until it's dropped. NOIO: allocations may not
-/// recurse into reclaim IO.
+/// recurse into reclaim IO. NORECLAIM and NOWARN, which only our allocation
+/// entry points apply (util::alloc::current_gfp_context()): as GFP_NOWAIT,
+/// and __GFP_NOWARN.
 #[must_use = "the memalloc scope ends as soon as the guard is dropped"]
 pub struct MemallocFlags {
     flag: u32,
@@ -80,6 +93,14 @@ impl MemallocFlags {
 
     pub fn noio() -> Self {
         Self::new(PF_MEMALLOC_NOIO)
+    }
+
+    pub fn noreclaim() -> Self {
+        Self::new(PF_MEMALLOC_NORECLAIM)
+    }
+
+    pub fn nowarn() -> Self {
+        Self::new(PF_MEMALLOC_NOWARN)
     }
 }
 

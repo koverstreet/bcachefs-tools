@@ -413,6 +413,7 @@ impl Mapping {
     /// The folio at @index, as __filemap_get_folio() finds it with @fgp: a
     /// ref, and locked if @fgp has FGP_LOCK - for C, which takes both.
     pub fn get_folio_raw(self, index: u64, fgp: c::fgf_t, gfp: c::gfp_t) -> Result<NonNull<c::folio>, BchError> {
+        let gfp = crate::util::alloc::current_gfp_context_raw(gfp);
         let folio = unsafe { c::__filemap_get_folio(self.as_ptr(), index as _, fgp, gfp) };
         errptr_to_result(NonNull::new(folio).expect("a folio, or an error"))
     }
@@ -446,12 +447,14 @@ impl Mapping {
 
     /// A folio for this page cache, locked and with a ref, in none yet.
     pub fn alloc_folio(self, gfp: c::gfp_t, order: u32) -> Option<Folio> {
+        let gfp = crate::util::alloc::current_gfp_context_raw(gfp);
         NonNull::new(unsafe { c::rust_filemap_alloc_folio(gfp, order) }).map(Folio)
     }
 
     /// @folio, alloc_folio()'s, at @index: locked, and the ref the caller
     /// keeps.
     pub fn add_folio(self, folio: Folio, index: u64, gfp: c::gfp_t) -> Result<(), BchError> {
+        let gfp = crate::util::alloc::current_gfp_context_raw(gfp);
         let ret = unsafe { c::filemap_add_folio(self.as_ptr(), folio.as_ptr(), index as _, gfp) };
         if ret < 0 { Err(BchError::from_raw(ret)) } else { Ok(()) }
     }

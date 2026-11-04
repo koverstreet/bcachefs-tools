@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! Fallible allocation for code shared by both builds: in-kernel, the
-//! kernel's kernel::alloc over allocators of ours; bcachefs-shim's copy of the
-//! same API in userspace. An allocation failure is an AllocError to handle,
-//! never an abort.
+//! kernel's kernel::alloc over allocators of ours, which apply the task's
+//! memalloc scope; bcachefs-shim's copy of the same API in userspace. An
+//! allocation failure is an AllocError to handle, never an abort.
 
 #[cfg(kernel)]
 pub use kernel::alloc::{flags, AllocError, Flags};
@@ -27,8 +27,9 @@ use crate::util::rcu::FreeAnytime;
 
 // ── Allocators ───────────────────────────────────────────────────────────
 //
-// The kernel's, as types of ours: what KVVec, KBox and everything built on
-// them allocate through. In userspace, std's allocator takes no flags.
+// The kernel's, with the flags the task's memalloc scope says - so KVVec,
+// KBox and everything built on them honour NORECLAIM and NOWARN, which the
+// page allocator doesn't know. In userspace, std's allocator takes no flags.
 
 pub struct Kmalloc;
 pub struct Vmalloc;
@@ -46,7 +47,7 @@ macro_rules! allocators {
             {
                 unsafe {
                     <kernel::alloc::allocator::$a as kernel::alloc::Allocator>::realloc(
-                        ptr, layout, old_layout, flags, nid)
+                        ptr, layout, old_layout, current_gfp_context(flags), nid)
                 }
             }
 
@@ -69,11 +70,66 @@ pub type KVec<T> = kernel::alloc::Vec<T, Kmalloc>;
 #[cfg(kernel)]
 pub type KVVec<T> = kernel::alloc::Vec<T, KVmalloc>;
 
+/// @flags as the task's memalloc scope says, as the kernel's
+/// current_gfp_context() does for NOIO and NOFS - which the page allocator
+/// applies itself: NORECLAIM takes away direct reclaim, so GFP_KERNEL is
+/// GFP_NOWAIT, and NOWARN adds __GFP_NOWARN.
+pub fn current_gfp_context(flags: Flags) -> Flags {
+    #[cfg(kernel)]
+    {
+        use crate::locking::{memalloc_flags, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
+
+        let pf = memalloc_flags();
+        let mut flags = flags;
+        if pf & PF_MEMALLOC_NORECLAIM != 0 {
+            // __GFP_DIRECT_RECLAIM, which kernel::alloc doesn't name - and
+            // __GFP_IO and __GFP_FS, which mean nothing without it
+            flags = flags & !(flags::GFP_KERNEL & !flags::GFP_NOWAIT);
+        }
+        if pf & PF_MEMALLOC_NOWARN != 0 {
+            flags = flags | flags::__GFP_NOWARN;
+        }
+        flags
+    }
+    #[cfg(not(kernel))]
+    flags
+}
+
+/// current_gfp_context(), for what takes a C gfp_t.
+pub fn current_gfp_context_raw(gfp: crate::c::gfp_t) -> crate::c::gfp_t {
+    #[cfg(kernel)]
+    {
+        use crate::c;
+        use crate::locking::{memalloc_flags, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
+
+        let pf = memalloc_flags();
+        let mut gfp = gfp;
+        if pf & PF_MEMALLOC_NORECLAIM != 0 {
+            gfp &= !(c::GFP_KERNEL & !c::GFP_NOWAIT);
+        }
+        if pf & PF_MEMALLOC_NOWARN != 0 {
+            gfp |= c::__GFP_NOWARN;
+        }
+        gfp
+    }
+    #[cfg(not(kernel))]
+    gfp
+}
+
+/// For an allocation that can't fail - a mempool's, that waits for an
+/// element, or __GFP_NOFAIL: never in a NORECLAIM scope, where it would fail,
+/// or lock up.
+pub fn assert_may_reclaim() {
+    #[cfg(kernel)]
+    ebug_assert!(crate::locking::memalloc_flags() & crate::locking::PF_MEMALLOC_NORECLAIM == 0,
+                 "an allocation that can't fail, in a NORECLAIM scope");
+}
+
 /// The last ref's put frees it at once: what RCU readers may reach, which
 /// isn't FreeAnytime, can't be in one.
 pub fn arc_new<T: Send + Sync + FreeAnytime>(v: T) -> Result<Arc<T>, AllocError> {
     #[cfg(kernel)]
-    { Arc::new(v, flags::GFP_KERNEL) }
+    { Arc::new(v, current_gfp_context(flags::GFP_KERNEL)) }
     #[cfg(not(kernel))]
     { Ok(Arc::new(v)) }
 }
@@ -135,6 +191,7 @@ pub fn kbox_into_inner<T>(b: KBox<T>) -> T {
 
 /// @size bytes kzalloc()'d, __GFP_NOFAIL: never null. For C's kfree().
 pub fn kzalloc_nofail(size: usize) -> *mut core::ffi::c_void {
+    assert_may_reclaim();
     unsafe { crate::c::rust_kzalloc_nofail(size) }
 }
 
@@ -214,7 +271,8 @@ pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<core::ptr::NonNull<u8>,
         use kernel::bindings::{krealloc_node_align, GFP_KERNEL, NUMA_NO_NODE};
 
         // SAFETY: the caller's
-        core::ptr::NonNull::new(unsafe { krealloc_node_align(p.cast(), new, 1, GFP_KERNEL, NUMA_NO_NODE) }.cast())
+        let gfp = current_gfp_context_raw(GFP_KERNEL);
+        core::ptr::NonNull::new(unsafe { krealloc_node_align(p.cast(), new, 1, gfp, NUMA_NO_NODE) }.cast())
             .ok_or(AllocError)
     }
     // SAFETY: the caller's

@@ -50,5 +50,7 @@ pub(crate) use raw::{rust_local_irq_restore, rust_local_irq_save, rust_local_loc
 pub use lock::{Guard, Locked, LockedBy, RawLock, RawNestedLock, RawRwLock, RawTimedLock, RawTryLock, ReadGuard};
 pub use noio::{mutex_noio, percpu_rwsem_noio, MemallocFlags, MutexNoio, Noio, PercpuRwsemNoio};
 pub(crate) use noio::{memalloc_flags_restore, memalloc_flags_save, PF_MEMALLOC_NOIO};
+#[cfg(kernel)]
+pub(crate) use noio::{memalloc_flags, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
 pub use seqlock::SeqLock;
 pub use seqmutex::SeqMutexSeq;

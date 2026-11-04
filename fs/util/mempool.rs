@@ -64,6 +64,7 @@ impl Mempool {
 
     /// An element, for C to hold: free_raw() takes it back. @gfp may sleep.
     pub fn alloc_raw(&self, gfp: c::gfp_t) -> NonNull<u8> {
+        crate::util::alloc::assert_may_reclaim();
         NonNull::new(unsafe { c::mempool_alloc_noprof(self.0.as_ptr(), gfp) }.cast())
             .expect("mempool_alloc() waits for an element")
     }

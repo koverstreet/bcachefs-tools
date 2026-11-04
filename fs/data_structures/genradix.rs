@@ -22,7 +22,7 @@
 
 use crate::c;
 use crate::types::GenRadix;
-use crate::util::alloc::{AllocError};
+use crate::util::alloc::{current_gfp_context_raw, AllocError};
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::mem::size_of;
@@ -83,6 +83,7 @@ impl<T: Zeroable> GenRadix<T> {
     #[inline]
     pub fn get_or_alloc(&mut self, idx: usize, gfp: c::gfp_t) -> Result<&mut T, AllocError> {
         let offset = Self::offset(idx).ok_or(AllocError)?;
+        let gfp = current_gfp_context_raw(gfp);
         let p = unsafe { c::__genradix_ptr_alloc(&mut self.tree, offset, core::ptr::null_mut(), gfp) };
         // SAFETY: as get_mut()'s
         NonNull::new(p.cast::<T>()).map(|mut p| unsafe { p.as_mut() }).ok_or(AllocError)
@@ -96,6 +97,7 @@ impl<T: Zeroable> GenRadix<T> {
         -> Result<&mut T, AllocError>
     {
         let offset = Self::offset(idx).ok_or(AllocError)?;
+        let gfp = current_gfp_context_raw(gfp);
         let p = unsafe { c::__genradix_ptr_alloc(&mut self.tree, offset, &mut node.0, gfp) };
         // SAFETY: as get_mut()'s
         NonNull::new(p.cast::<T>()).map(|mut p| unsafe { p.as_mut() }).ok_or(AllocError)
@@ -214,6 +216,7 @@ impl<T: Zeroable> SharedGenRadix<T> {
     #[inline]
     pub fn prealloc(&self, idx: usize, gfp: c::gfp_t) -> Result<(), AllocError> {
         let offset = GenRadix::<T>::offset(idx).ok_or(AllocError)?;
+        let gfp = current_gfp_context_raw(gfp);
         let p = unsafe { c::__genradix_ptr_alloc(self.tree(), offset, core::ptr::null_mut(), gfp) };
         if p.is_null() { Err(AllocError) } else { Ok(()) }
     }

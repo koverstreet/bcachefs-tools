@@ -867,6 +867,7 @@ unsafe fn realloc(p: *mut c_char, size: usize, gfp: c::gfp_t, vmalloc: bool) -> 
     unsafe {
         use kernel::bindings::{krealloc_node_align, kvrealloc_node_align, NUMA_NO_NODE};
 
+        let gfp = crate::util::alloc::current_gfp_context_raw(gfp);
         if vmalloc {
             kvrealloc_node_align(p.cast(), size, 1, gfp, NUMA_NO_NODE).cast()
         } else {

@@ -51,7 +51,8 @@ impl PercpuRef {
                 (&raw mut (*slot).released).write(AtomicU32::new(0));
                 (&raw mut (*slot)._pin).write(PhantomData);
                 ret_to_result_void(c::percpu_ref_init(UnsafeCell::raw_get(&raw const (*slot).r),
-                                                      Some(release), 0, c::GFP_KERNEL))
+                                                      Some(release), 0,
+                                                      crate::util::alloc::current_gfp_context_raw(c::GFP_KERNEL)))
             })
         }
     }

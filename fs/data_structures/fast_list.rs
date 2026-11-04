@@ -121,7 +121,8 @@ impl c::fast_list {
     /// A new slot from the IDA, its radix node allocated.
     fn alloc_idx(&self, gfp: c::gfp_t) -> Option<u32> {
         // SAFETY: init()'s ida
-        let idx = unsafe { c::ida_alloc_range(self.ida(), 1, i32::MAX as c_uint, gfp) };
+        let raw_gfp = crate::util::alloc::current_gfp_context_raw(gfp);
+        let idx = unsafe { c::ida_alloc_range(self.ida(), 1, i32::MAX as c_uint, raw_gfp) };
         let idx = u32::try_from(idx).ok()?;
         if self.items.prealloc(idx as usize, gfp).is_err() {
             self.free_slots([idx]);

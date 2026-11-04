@@ -85,7 +85,8 @@ impl<T: FsType> FsContext<T> {
 
     /// Replace the source: the VFS kfree()s whatever's there.
     pub fn set_source(&mut self, s: &CStr) -> Result {
-        let new = unsafe { c::kstrdup(s.as_ptr().cast(), c::GFP_KERNEL) };
+        let gfp = crate::util::alloc::current_gfp_context_raw(c::GFP_KERNEL);
+        let new = unsafe { c::kstrdup(s.as_ptr().cast(), gfp) };
         if new.is_null() {
             return Err(ENOMEM);
         }

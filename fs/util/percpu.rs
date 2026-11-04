@@ -98,7 +98,7 @@ use cstruct_macros::c_extern;
 use crate::c;
 use crate::locking::{rust_local_irq_restore, rust_local_irq_save, rust_local_lock_init, rust_local_lock_irqsave,
                      rust_local_unlock_irqrestore};
-use crate::util::alloc::AllocError;
+use crate::util::alloc::{current_gfp_context_raw, AllocError};
 use crate::util::ffi::Opaque;
 use crate::util::projections::{AtomicWord, FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};
 
@@ -381,6 +381,7 @@ impl<T: ::pin_init::Zeroable> PerCpu<T> {
         // In the kernel, __alloc_percpu_gfp() is a macro - alloc_hooks() over
         // pcpu_alloc_noprof() - which kernel Rust calls directly, as its
         // allocator does krealloc_noprof()
+        let gfp = current_gfp_context_raw(gfp);
         #[cfg(kernel)]
         let p = unsafe { c::pcpu_alloc_noprof(size_of::<T>(), align_of::<T>(), false, gfp) };
         #[cfg(not(kernel))]
@@ -442,6 +443,7 @@ pub struct PerCpuU64s {
 impl PerCpuU64s {
     pub fn new(n: usize, gfp: c::gfp_t) -> Result<Self, AllocError> {
         let size = n * size_of::<u64>();
+        let gfp = current_gfp_context_raw(gfp);
         #[cfg(kernel)]
         let p = unsafe { c::pcpu_alloc_noprof(size, align_of::<u64>(), false, gfp) };
         #[cfg(not(kernel))]

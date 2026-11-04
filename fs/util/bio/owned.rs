@@ -33,7 +33,7 @@ use crate::c;
 use crate::fs::Fs;
 use crate::util::kernel::PAGE_SIZE;
 use crate::errcode::{ret_to_result_void, BchError};
-use crate::util::alloc::{init_at, kfree, kzalloc, KBox};
+use crate::util::alloc::{current_gfp_context_raw, init_at, kfree, kzalloc, KBox};
 use crate::util::ffi::Opaque;
 
 /// # Safety
@@ -271,7 +271,8 @@ impl<T: HasBio> BioSet<T> {
         E: From<BchError>,
     {
         // SAFETY: a live bioset
-        let bio = unsafe { c::bio_alloc_bioset(bdev, nr_vecs as _, opf as _, c::GFP_KERNEL, self.set.as_ptr()) };
+        let gfp = current_gfp_context_raw(c::GFP_KERNEL);
+        let bio = unsafe { c::bio_alloc_bioset(bdev, nr_vecs as _, opf as _, gfp, self.set.as_ptr()) };
         Self::init_new(bio, init)
     }
 
@@ -285,8 +286,8 @@ impl<T: HasBio> BioSet<T> {
     {
         // SAFETY: a live bioset; @src's bio only read
         let bio = unsafe {
-            c::bio_alloc_clone(bdev, core::ptr::from_ref(src.bio().raw()).cast_mut(), c::GFP_KERNEL,
-                               self.set.as_ptr())
+            c::bio_alloc_clone(bdev, core::ptr::from_ref(src.bio().raw()).cast_mut(),
+                               current_gfp_context_raw(c::GFP_KERNEL), self.set.as_ptr())
         };
         let mut b = Self::init_new(bio, init)?;
         b.bio_mut().raw_mut().bi_iter = src.pos();

@@ -27,7 +27,7 @@ use crate::format::Btree;
 use crate::fs::Fs;
 use crate::new_lock;
 use crate::snapshots::subvolume;
-use crate::util::alloc::{gfp_flags, init_at, kmalloc};
+use crate::util::alloc::{current_gfp_context_raw, gfp_flags, init_at, kmalloc};
 use crate::util::kernel::PAGE_SECTORS_SHIFT;
 use crate::util::bio::Bio;
 use crate::util::ffi::Opaque;
@@ -55,7 +55,7 @@ pub fn bch2_filemap_get_contig_folios_d(mapping: *mut c::address_space, start: c
         if fs.nr + 1 > fs.size {
             ret = unsafe {
                 __bch2_darray_resize_noprof((&raw mut *fs).cast(), size_of::<*mut c::folio>(), fs.nr + 1,
-                                            gfp & c::GFP_KERNEL, false, false)
+                                            current_gfp_context_raw(gfp & c::GFP_KERNEL), false, false)
             };
             if ret != 0 {
                 break;
