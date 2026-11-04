@@ -792,7 +792,9 @@ static int bch2_journal_write_prep(struct journal *j, struct journal_buf *w)
 		if (!u64s)
 			continue;
 
-		if (i->type == BCH_JSET_ENTRY_btree_keys)
+		/* write buffer keys are retyped to btree keys below: */
+		if (i->type == BCH_JSET_ENTRY_btree_keys ||
+		    i->type == BCH_JSET_ENTRY_write_buffer_keys)
 			empty = false;
 
 		/*
