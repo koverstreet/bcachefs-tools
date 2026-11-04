@@ -7,7 +7,7 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{Guard, Locked, RawLock, RawTryLock};
+use super::{Guard, Locked, RawLock, RawLockBase, RawTryLock};
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::convert::Infallible;
@@ -25,7 +25,7 @@ pub struct seqmutex {
 }
 c_default!(seqmutex);
 
-unsafe impl RawLock for seqmutex {
+unsafe impl RawLockBase for seqmutex {
     type GuardState = ();
     type InitError = Infallible;
 
@@ -35,7 +35,9 @@ unsafe impl RawLock for seqmutex {
             c::mutex::init(&raw mut (*l).lock, name, key)
         }
     }
+}
 
+unsafe impl RawLock for seqmutex {
     unsafe fn lock(&self) {
         unsafe { self.lock.lock() };
         self.seq.fetch_add(1, Ordering::Relaxed);

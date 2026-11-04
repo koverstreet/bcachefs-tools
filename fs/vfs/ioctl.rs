@@ -40,7 +40,7 @@ use crate::util::kernel::{capable, current_fsgid, current_fsuid, Capability};
 use crate::util::log::LogMsg;
 use crate::util::printbuf::Printbuf;
 use crate::init::chardev::{copy_err_msg, fs_ioctl, ErrMsg, V2};
-use crate::locking::{Locked, RawLock};
+use crate::locking::{Locked, RawLockBase};
 use crate::vfs::dentry::Dentry;
 use crate::vfs::idmap::MntIdmap;
 use crate::vfs::inode::{InodeInfo, InodeRef};
@@ -385,7 +385,7 @@ fn pread_raw(file: &File, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_ra
     // stays, for the call
     let mut report = c::bch_read_err_report::default();
     report.msg = Printbuf::new();
-    unsafe { <c::mutex as RawLock>::init(&raw mut report.lock, c"bch_read_err_report", crate::new_lock!(@key)) };
+    unsafe { <c::mutex as RawLockBase>::init(&raw mut report.lock, c"bch_read_err_report", crate::new_lock!(@key)) };
 
     let ret = unsafe { bch2_direct_IO_read(kiocb.as_mut_ptr(), iter.as_mut_ptr(), flags, &mut report) };
     let mut ret = if ret < 0 { Err(BchError::from_raw(-ret)) } else { Ok(ret as c_long) };

@@ -48,7 +48,7 @@ pub use raw::{mutex, percpu_rw_semaphore, raw_spinlock_t, rw_semaphore, spinlock
 // for util/percpu.rs's LocalLockGuard and IrqGuard
 pub(crate) use raw::{rust_local_irq_restore, rust_local_irq_save, rust_local_lock_init, rust_local_lock_irqsave,
                      rust_local_unlock_irqrestore};
-pub use lock::{Guard, Locked, LockedBy, RawLock, RawNestedLock, RawRwLock, RawTimedLock, RawTryLock, ReadGuard};
+pub use lock::{Guard, Locked, LockedBy, RawLock, RawLockBase, RawNestedLock, RawRwLock, RawTimedLock, RawTryLock, ReadGuard};
 pub use noio::{mutex_noio, percpu_rwsem_noio, MemallocFlags, MutexNoio, Noio, PercpuRwsemNoio};
 pub(crate) use noio::{memalloc_flags_restore, memalloc_flags_save, PF_MEMALLOC_NOIO};
 #[cfg(kernel)]

@@ -5,7 +5,7 @@
 #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
 use super::raw::rust_debug_check_no_locks_freed;
 use super::raw::{rust_trace_contention_begin, rust_trace_contention_end};
-use super::{Guard, Locked, LockdepMap, RawLock};
+use super::{Guard, Locked, LockdepMap, RawLockBase};
 use crate::cstructs::c;
 #[cfg(CONFIG_SMP)]
 use crate::debug::params::six_optimistic_spin_disabled;

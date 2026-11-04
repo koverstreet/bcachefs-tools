@@ -14,7 +14,7 @@
 //! LOCK_CONTENDED() takes a mutex. Not for what there are millions of: a
 //! ByteLock in an array stays one byte.
 
-use super::{RawLock, RawTimedLock, RawTryLock};
+use super::{RawLock, RawLockBase, RawTimedLock, RawTryLock};
 use crate::util::ffi::c_char;
 use core::ffi::{c_ulong, c_void, CStr};
 use cstruct_macros::c_verbatim;
@@ -92,7 +92,7 @@ static inline void byte_lock_lockdep_unlock(struct byte_lock_lockdep *l)
 }
 "#);
 
-unsafe impl<R: RawTryLock> RawLock for Lockdep<R> {
+unsafe impl<R: RawLockBase> RawLockBase for Lockdep<R> {
     type GuardState = R::GuardState;
     type InitError = R::InitError;
 
@@ -104,6 +104,12 @@ unsafe impl<R: RawTryLock> RawLock for Lockdep<R> {
         Ok(())
     }
 
+    unsafe fn destroy(&self) {
+        unsafe { self.raw.destroy() }
+    }
+}
+
+unsafe impl<R: RawTryLock> RawLock for Lockdep<R> {
     unsafe fn lock(&self) -> R::GuardState {
         self.dep_map.acquire(false, false, 0);
         let g = unsafe { self.raw.try_lock() }.unwrap_or_else(|| {
@@ -121,10 +127,6 @@ unsafe impl<R: RawTryLock> RawLock for Lockdep<R> {
 
     unsafe fn assert_held(&self) {
         unsafe { self.raw.assert_held() }
-    }
-
-    unsafe fn destroy(&self) {
-        unsafe { self.raw.destroy() }
     }
 }
 

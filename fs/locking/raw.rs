@@ -15,7 +15,7 @@
 
 #![allow(non_camel_case_types)]
 
-use super::RawLock;
+use super::{RawLock, RawLockBase};
 use super::RawRwLock;
 use super::{MemallocFlags, RawNestedLock, RawTryLock};
 use crate::c;
@@ -102,7 +102,7 @@ c_extern! {
 
 // ── struct mutex ─────────────────────────────────────────────────────────
 
-unsafe impl RawLock for c::mutex {
+unsafe impl RawLockBase for c::mutex {
     type GuardState = ();
     type InitError = Infallible;
 
@@ -110,7 +110,9 @@ unsafe impl RawLock for c::mutex {
         unsafe { rust_mutex_init(l, name.as_ptr().cast(), key) };
         Ok(())
     }
+}
 
+unsafe impl RawLock for c::mutex {
     unsafe fn lock(&self) {
         unsafe { c::mutex_lock(self.as_ptr().cast()) }
     }
@@ -149,7 +151,7 @@ unsafe impl RawNestedLock for c::mutex {
 // context takes too, an endio; held, it mustn't sleep. The kernel crate's
 // SpinLock leaves interrupts on. In userspace, where there are no
 // interrupts, it's the shim's spinlock, a pthread mutex.
-unsafe impl RawLock for c::spinlock_t {
+unsafe impl RawLockBase for c::spinlock_t {
     type GuardState = (c_ulong, MemallocFlags);
     type InitError = Infallible;
 
@@ -157,7 +159,9 @@ unsafe impl RawLock for c::spinlock_t {
         unsafe { rust_spin_lock_init(l, name.as_ptr().cast(), key) };
         Ok(())
     }
+}
 
+unsafe impl RawLock for c::spinlock_t {
     unsafe fn lock(&self) -> (c_ulong, MemallocFlags) {
         let flags = unsafe { rust_spin_lock_irqsave(self.as_ptr().cast()) };
         (flags, MemallocFlags::noreclaim())
@@ -176,7 +180,7 @@ unsafe impl RawLock for c::spinlock_t {
 
 // Taken with interrupts as they are, for what no interrupt takes - a lock's
 // wait list. A spinning lock on PREEMPT_RT too, where spinlock_t sleeps.
-unsafe impl RawLock for c::raw_spinlock_t {
+unsafe impl RawLockBase for c::raw_spinlock_t {
     type GuardState = MemallocFlags;
     type InitError = Infallible;
 
@@ -184,7 +188,9 @@ unsafe impl RawLock for c::raw_spinlock_t {
         unsafe { rust_raw_spin_lock_init(l, name.as_ptr().cast(), key) };
         Ok(())
     }
+}
 
+unsafe impl RawLock for c::raw_spinlock_t {
     unsafe fn lock(&self) -> MemallocFlags {
         unsafe { rust_raw_spin_lock(self.0.as_ptr().cast()) };
         MemallocFlags::noreclaim()
@@ -201,7 +207,7 @@ unsafe impl RawLock for c::raw_spinlock_t {
 
 // ── rw_semaphore ─────────────────────────────────────────────────────────
 
-unsafe impl RawLock for c::rw_semaphore {
+unsafe impl RawLockBase for c::rw_semaphore {
     type GuardState = ();
     type InitError = Infallible;
 
@@ -209,7 +215,9 @@ unsafe impl RawLock for c::rw_semaphore {
         unsafe { rust_init_rwsem(l, name.as_ptr().cast(), key) };
         Ok(())
     }
+}
 
+unsafe impl RawLock for c::rw_semaphore {
     unsafe fn lock(&self) {
         unsafe { c::down_write(self.as_ptr().cast()) }
     }
@@ -239,7 +247,7 @@ unsafe impl RawRwLock for c::rw_semaphore {
 
 // ── percpu_rw_semaphore ──────────────────────────────────────────────────
 
-unsafe impl RawLock for c::percpu_rw_semaphore {
+unsafe impl RawLockBase for c::percpu_rw_semaphore {
     type GuardState = ();
     /// The per-CPU counts couldn't be allocated
     type InitError = BchError;
@@ -248,6 +256,12 @@ unsafe impl RawLock for c::percpu_rw_semaphore {
         ret_to_result_void(unsafe { rust_percpu_init_rwsem(l, name.as_ptr().cast(), key) })
     }
 
+    unsafe fn destroy(&self) {
+        unsafe { rust_percpu_free_rwsem(self.as_ptr().cast()) }
+    }
+}
+
+unsafe impl RawLock for c::percpu_rw_semaphore {
     unsafe fn lock(&self) {
         unsafe { rust_percpu_down_write(self.as_ptr().cast()) }
     }
@@ -258,10 +272,6 @@ unsafe impl RawLock for c::percpu_rw_semaphore {
 
     unsafe fn assert_held(&self) {
         unsafe { rust_percpu_rwsem_assert_held_write(self.as_ptr().cast()) }
-    }
-
-    unsafe fn destroy(&self) {
-        unsafe { rust_percpu_free_rwsem(self.as_ptr().cast()) }
     }
 }
 

@@ -28,7 +28,7 @@
 //! to the word's other bytes only makes the LL/SC or CAS retry. C, while it
 //! still takes them, does so through bch2_byte_lock() and bch2_byte_unlock().
 
-use super::{Locked, RawLock, RawTimedLock, RawTryLock};
+use super::{Locked, RawLock, RawLockBase, RawTimedLock, RawTryLock};
 use core::sync::atomic::{AtomicU8, Ordering};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::kernel::jiffies;
@@ -93,7 +93,7 @@ impl ByteLock {
     }
 }
 
-unsafe impl RawLock for ByteLock {
+unsafe impl RawLockBase for ByteLock {
     type GuardState = ();
     type InitError = Infallible;
 
@@ -101,7 +101,9 @@ unsafe impl RawLock for ByteLock {
         unsafe { l.write(ByteLock(AtomicU8::new(UNLOCKED))) };
         Ok(())
     }
+}
 
+unsafe impl RawLock for ByteLock {
     unsafe fn lock(&self) {
         self.take()
     }

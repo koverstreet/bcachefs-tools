@@ -30,7 +30,7 @@ use crate::init::registry::register;
 use crate::init::rw::writes_disabled;
 use crate::inode::shard_cpu_init;
 use crate::journal::seq_blacklist::blacklist_table_initialize;
-use crate::locking::{Guard, MutexNoio, Noio, PercpuRwsemNoio, RawLock, ReadGuard};
+use crate::locking::{Guard, MutexNoio, Noio, PercpuRwsemNoio, RawLockBase, ReadGuard};
 use crate::{bch_verbose, new_lock, prt};
 use crate::sb::counters::counters_init;
 use crate::sb::io::{read_super, sb_to_fs, version, Holder};

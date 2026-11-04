@@ -25,7 +25,7 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{Guard, Locked, RawLock, RawRwLock, RawTryLock, ReadGuard};
+use super::{Guard, Locked, RawLock, RawLockBase, RawRwLock, RawTryLock, ReadGuard};
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::{c_uint, c_void, CStr};
@@ -144,7 +144,7 @@ impl Drop for MemallocFlags {
 #[repr(transparent)]
 pub struct Noio<R>(R);
 
-unsafe impl<R: RawLock> RawLock for Noio<R> {
+unsafe impl<R: RawLockBase> RawLockBase for Noio<R> {
     type GuardState = (MemallocFlags, R::GuardState);
     type InitError = R::InitError;
 
@@ -152,6 +152,12 @@ unsafe impl<R: RawLock> RawLock for Noio<R> {
         unsafe { R::init(l.cast(), name, key) }
     }
 
+    unsafe fn destroy(&self) {
+        unsafe { self.0.destroy() }
+    }
+}
+
+unsafe impl<R: RawLock> RawLock for Noio<R> {
     unsafe fn lock(&self) -> Self::GuardState {
         let noio = MemallocFlags::noio();
         (noio, unsafe { self.0.lock() })
@@ -164,10 +170,6 @@ unsafe impl<R: RawLock> RawLock for Noio<R> {
 
     unsafe fn assert_held(&self) {
         unsafe { self.0.assert_held() }
-    }
-
-    unsafe fn destroy(&self) {
-        unsafe { self.0.destroy() }
     }
 }
 
