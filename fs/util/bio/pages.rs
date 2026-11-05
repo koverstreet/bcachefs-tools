@@ -129,7 +129,7 @@ pub unsafe fn free_pages(bio: &mut c::bio) {
 unsafe fn free(pool: Option<&BouncePool>, bio: &mut c::bio) {
     for i in 0..bio.bi_vcnt as usize {
         // SAFETY: one of its bvecs
-        let bv = unsafe { *bio.bi_io_vec.add(i) };
+        let bv = unsafe { *bi_io_vec!(bio).add(i) };
         // SAFETY: the caller's: an allocation of bv_len, at its page's address
         unsafe {
             let p = page_address(NonNull::new(bv.bv_page).expect("a bvec's page")).add(bv.bv_offset as usize);

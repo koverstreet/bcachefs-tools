@@ -132,7 +132,7 @@ unsafe impl<'a> Buffers for BioClone<'a> {
         b.bi_ioprio = s.bi_ioprio;
         clone_hints(b, s);
         b.bi_iter = src.pos();
-        b.bi_io_vec = s.bi_io_vec;
+        bi_io_vec!(clone b, s);
         Ok(Self(PhantomData))
     }
 

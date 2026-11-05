@@ -74,9 +74,27 @@ mod compat {
     macro_rules! bi_offset { (@name) => { "bi_offset" }; ($i:expr) => { $i.bi_offset } }
     #[cfg(not(linux_ge = "7.3"))]
     macro_rules! bi_offset { (@name) => { "bi_bvec_done" }; ($i:expr) => { $i.bi_bvec_done } }
+
+    // A bio's bvecs: from 7.4 in an anonymous union, with a dma-buf map; a
+    // clone copies the union, as __bio_clone() copies one or the other
+    #[cfg(linux_ge = "7.4")]
+    macro_rules! bi_io_vec {
+        ($b:expr) => { $b.__bindgen_anon_1.bi_io_vec };
+        (clone $b:expr, $s:expr) => { $b.__bindgen_anon_1 = $s.__bindgen_anon_1 };
+    }
+    #[cfg(not(linux_ge = "7.4"))]
+    macro_rules! bi_io_vec {
+        ($b:expr) => { $b.bi_io_vec };
+        (clone $b:expr, $s:expr) => { $b.bi_io_vec = $s.bi_io_vec };
+    }
 }
 #[cfg(not(kernel))]
 macro_rules! bi_offset { (@name) => { "bi_bvec_done" }; ($i:expr) => { $i.bi_bvec_done } }
+#[cfg(not(kernel))]
+macro_rules! bi_io_vec {
+    ($b:expr) => { $b.bi_io_vec };
+    (clone $b:expr, $s:expr) => { $b.bi_io_vec = $s.bi_io_vec };
+}
 
 mod buffers;
 mod iter;
@@ -359,7 +377,7 @@ impl Bio {
     /// @idx is one of its bvecs - bi_vcnt of them, or its parent's, a clone's.
     unsafe fn bvec(&self, idx: u32) -> c::bio_vec {
         // SAFETY: the caller's
-        unsafe { *self.bio.bi_io_vec.add(idx as usize) }
+        unsafe { *bi_io_vec!(self.bio).add(idx as usize) }
     }
 }
 
