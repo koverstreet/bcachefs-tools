@@ -19,7 +19,9 @@ use core::iter::FusedIterator;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 
-use super::BioRange;
+use super::{Bio, BioData};
+use crate::util::place::Contained;
+use crate::util::volatile::VolatileSlice;
 use crate::c;
 use crate::util::kernel::PAGE_SIZE;
 
@@ -82,6 +84,220 @@ unsafe fn chunk_at(page: NonNull<c::page>, offset: u32, len: u32) -> (At, u32) {
     // SAFETY: lowmem, and @offset into it
     (At::Direct(unsafe { page_address(page).add(offset as usize) }), len)
 }
+
+pub fn reset_bvec_offset(iter: &mut c::bvec_iter) {
+    bi_offset!(iter) = 0;
+}
+
+/// How far into its bvec @iter is.
+pub fn bvec_offset(iter: &c::bvec_iter) -> u32 {
+    bi_offset!(iter)
+}
+
+/// # Invariants
+/// @iter is a position of @bio: within its bvecs, bi_size bytes of them
+/// after it.
+#[derive(Clone, Copy)]
+pub struct BioRange<'a> {
+    pub(super) data: &'a BioData,
+    pub(super) iter: c::bvec_iter,
+}
+
+impl<'a> BioRange<'a> {
+    pub(super) fn bio(&self) -> &Bio {
+        self.data.container()
+    }
+
+    pub fn is_of(&self, bio: &Bio) -> bool {
+        core::ptr::eq(self.bio(), bio)
+    }
+
+    pub fn len(&self) -> u32 {
+        self.iter.bi_size
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Where it starts, to save for range_at().
+    pub fn pos(&self) -> c::bvec_iter {
+        self.iter
+    }
+
+    /// Panics past its end.
+    pub fn advance(&mut self, mut bytes: u32) {
+        assert!(bytes <= self.len(), "advancing a bio range of {} bytes by {bytes}", self.len());
+        if self.bio().no_advance_iter() {
+            self.iter.bi_sector += u64::from(bytes >> 9);
+            self.iter.bi_size -= bytes;
+            return;
+        }
+        while bytes != 0 {
+            let n = bytes.min(self.mp_len());
+            self.advance_in_bvec(n);
+            bytes -= n;
+        }
+    }
+
+    /// Its first @bytes. Panics past its end.
+    pub fn take(mut self, bytes: u32) -> Self {
+        assert!(bytes <= self.len(), "the first {bytes} bytes of a bio range of {}", self.len());
+        self.iter.bi_size = bytes;
+        self
+    }
+
+    pub fn segments(self) -> Segments<'a> {
+        Walk::new(self, segment)
+    }
+
+    #[cfg(kernel)]
+    pub fn folios(self) -> Folios<'a> {
+        Walk::new(self, folio)
+    }
+
+    /// As much as both have, copied: how much.
+    pub fn copy_to(&self, dst: &mut [u8]) -> usize {
+        let mut done = 0;
+        for chunk in *self {
+            if done == dst.len() {
+                break;
+            }
+            done += chunk.copy_to(&mut dst[done..]);
+        }
+        done
+    }
+
+    /// As copy_to().
+    pub fn copy_from(&self, src: &[u8]) -> usize {
+        let mut done = 0;
+        for chunk in *self {
+            if done == src.len() {
+                break;
+            }
+            done += chunk.copy_from(&src[done..]);
+        }
+        done
+    }
+
+    /// As much as both have, into @dst: as copy_to(), for memory that can't be
+    /// a slice.
+    pub fn copy_to_volatile(&self, dst: VolatileSlice<'_>) -> usize {
+        let mut done = 0;
+        for chunk in *self {
+            if done == dst.len() {
+                break;
+            }
+            let n = (chunk.len() as usize).min(dst.len() - done);
+            // SAFETY: n of the chunk's bytes, mapped, into n of @dst
+            chunk.with_mapped(|p, _| unsafe { core::ptr::copy_nonoverlapping(p, dst.as_ptr().add(done), n) });
+            done += n;
+        }
+        done
+    }
+
+    /// As copy_to_volatile().
+    pub fn copy_from_volatile(&self, src: VolatileSlice<'_>) -> usize {
+        let mut done = 0;
+        for chunk in *self {
+            if done == src.len() {
+                break;
+            }
+            let n = (chunk.len() as usize).min(src.len() - done);
+            // SAFETY: n of @src into n of the chunk's bytes, mapped
+            chunk.with_mapped(|p, _| unsafe { core::ptr::copy_nonoverlapping(src.as_ptr().add(done), p, n) });
+            done += n;
+        }
+        done
+    }
+
+    /// As much as both have, from @src - another bio's - copied: how much. The
+    /// kernel's old bio_copy_data_iter(), which 7.2 removed.
+    pub fn copy_from_range(&self, src: BioRange<'_>) -> u32 {
+        let mut dst = *self;
+        for chunk in src {
+            if dst.is_empty() {
+                break;
+            }
+            // SAFETY: the chunk's bytes, mapped while they're copied
+            let n = chunk.with_mapped(|p, len| dst.copy_from_volatile(unsafe {
+                VolatileSlice::from_raw(NonNull::new_unchecked(p), len)
+            }));
+            dst.advance(n as u32);
+        }
+        self.len() - dst.len()
+    }
+
+    pub fn zero(&self) {
+        for chunk in *self {
+            chunk.zero();
+        }
+    }
+
+    // ── bvec.h's arithmetic, on the position: each as the function named ──
+
+    /// __bvec_iter_bvec()
+    fn bvec(&self) -> c::bio_vec {
+        debug_assert!(!self.is_empty());
+        // SAFETY: the invariant - not empty, so its start is in a bvec
+        unsafe { self.bio().bvec(self.iter.bi_idx) }
+    }
+
+    /// mp_bvec_iter_offset(): past the bvec's first page, if it spans pages
+    fn mp_offset(&self) -> u32 {
+        self.bvec().bv_offset + bi_offset!(self.iter)
+    }
+
+    /// mp_bvec_iter_len()
+    fn mp_len(&self) -> u32 {
+        self.len().min(self.bvec().bv_len - bi_offset!(self.iter))
+    }
+
+    /// bio_advance_iter_single(): @bytes within the bvec
+    fn advance_in_bvec(&mut self, bytes: u32) {
+        debug_assert!(bytes <= self.mp_len());
+        let bv_len = self.bvec().bv_len;
+        self.iter.bi_sector += u64::from(bytes >> 9);
+        self.iter.bi_size -= bytes;
+        bi_offset!(self.iter) += bytes;
+        if bi_offset!(self.iter) == bv_len {
+            // INVARIANT: the next bvec, if there's anything left
+            self.iter.bi_idx += 1;
+            bi_offset!(self.iter) = 0;
+        }
+    }
+}
+
+impl<'a> IntoIterator for BioRange<'a> {
+    type Item = Chunk<'a>;
+    type IntoIter = Chunks<'a>;
+
+    fn into_iter(self) -> Chunks<'a> {
+        Walk::new(self, chunk)
+    }
+}
+
+/// # Invariants
+/// @bio is None, or a bio valid for 'a.
+pub struct BioIterator<'a> {
+    pub(super) bio: Option<NonNull<Bio>>,
+    pub(super) _p:  PhantomData<&'a Bio>,
+}
+
+impl<'a> Iterator for BioIterator<'a> {
+    type Item = &'a Bio;
+
+    fn next(&mut self) -> Option<&'a Bio> {
+        let bio = self.bio.take()?;
+        // SAFETY: by the invariant
+        let bio = unsafe { bio.as_ref() };
+        // INVARIANT: the next is a bio of the chain too
+        self.bio = NonNull::new(bio.bio.bi_next.cast());
+        Some(bio)
+    }
+}
+
+impl core::iter::FusedIterator for BioIterator<'_> {}
 
 impl BioRange<'_> {
     fn walkable(&self) -> bool {

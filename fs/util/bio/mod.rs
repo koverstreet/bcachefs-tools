@@ -29,6 +29,14 @@
 //!   and changed only through Pin<&mut Bio> - its own methods, given one by
 //!   its owner's bio_mut().
 //!
+//! The generics, below, are those terms as traits. A bio is the last field
+//! of a struct of its user's - an rbio, a write op - and HasBio is that
+//! struct, found from its bio by the offset has_bio!() checks; BioField is
+//! what the field may be. BioOwner is whatever holds a bio to build and
+//! submit; RawBio, an owner that becomes its bio for the block layer and
+//! is given back to an Endio when the IO completes. The owners themselves -
+//! BioBox, BioBuf, BioClone - are owned.rs's.
+//!
 //! After Andreas Hindborg's kernel::block::bio, from his rnull series
 //! (git.kernel.org a.hindborg/linux.git, rnull-v6.19-rc5, 41e04e1bb2e6): the
 //! kernel crate vendored here hasn't got it, and couldn't serve userspace. So
@@ -51,10 +59,21 @@ use crate::util::task::{waiter, Completion, Done};
 use crate::util::gather::GatherRef;
 use crate::util::task::Resumable;
 use crate::util::{Printbuf, ToText};
-use crate::util::volatile::VolatileSlice;
-use crate::util::place::Contained;
 use cstruct_macros::{c_export, Init};
 use pin_init::pin_data;
+
+// A bvec_iter's offset into its bvec, as a place: bi_offset - bi_bvec_done
+// before 7.3, and in the shim.
+#[cfg(kernel)]
+#[macro_use]
+mod compat {
+    #[cfg(linux_ge = "7.3")]
+    macro_rules! bi_offset { (@name) => { "bi_offset" }; ($i:expr) => { $i.bi_offset } }
+    #[cfg(not(linux_ge = "7.3"))]
+    macro_rules! bi_offset { (@name) => { "bi_bvec_done" }; ($i:expr) => { $i.bi_bvec_done } }
+}
+#[cfg(not(kernel))]
+macro_rules! bi_offset { (@name) => { "bi_bvec_done" }; ($i:expr) => { $i.bi_bvec_done } }
 
 mod iter;
 mod owned;
@@ -76,37 +95,13 @@ pub fn plugged<R>(f: impl FnOnce() -> R) -> R {
 
 #[cfg(kernel)]
 pub use iter::{FolioVec, Folios};
-pub use iter::{Chunk, Chunks, Segment, Segments, Walk};
+pub use iter::{bvec_offset, reset_bvec_offset, BioIterator, BioRange, Chunk, Chunks, Segment, Segments, Walk};
 #[cfg(kernel)]
 pub(crate) use iter::nth_page;
 #[cfg(kernel)]
 pub(crate) use user_pages::{dirty_pages_exit, dirty_pages_init};
-#[doc(hidden)]
-pub use owned::bio_field_at;
-pub use owned::{of_bio, BioBox, BioBoxData, BioBuf, BioBufPtr, BioClone, BioField, BioInPlace, BioLend, BioSet, Either,
-                Endio, FrontPad, HasBio, Lent, RawBio};
-
-// A bvec_iter's offset into its bvec, as a place: bi_offset - bi_bvec_done
-// before 7.3, and in the shim.
-#[cfg(kernel)]
-#[macro_use]
-mod compat {
-    #[cfg(linux_ge = "7.3")]
-    macro_rules! bi_offset { (@name) => { "bi_offset" }; ($i:expr) => { $i.bi_offset } }
-    #[cfg(not(linux_ge = "7.3"))]
-    macro_rules! bi_offset { (@name) => { "bi_bvec_done" }; ($i:expr) => { $i.bi_bvec_done } }
-}
-#[cfg(not(kernel))]
-macro_rules! bi_offset { (@name) => { "bi_bvec_done" }; ($i:expr) => { $i.bi_bvec_done } }
-
-pub fn reset_bvec_offset(iter: &mut c::bvec_iter) {
-    bi_offset!(iter) = 0;
-}
-
-/// How far into its bvec @iter is.
-pub fn bvec_offset(iter: &c::bvec_iter) -> u32 {
-    bi_offset!(iter)
-}
+pub use owned::{BioBox, BioBoxData, BioBuf, BioBufPtr, BioClone, BioInPlace, BioLend, BioSet, Either, FrontPad,
+                Lent};
 
 /// How many bvecs mapping @len bytes at @p takes: a page each for vmalloc
 /// memory, one for the direct map.
@@ -355,14 +350,6 @@ impl Bio {
     }
 }
 
-/// # Safety
-/// @bio is a bio, not in flight, nothing else has it.
-#[cfg(CONFIG_BCACHEFS_DEBUG)]
-#[c_export]
-pub unsafe fn bch2_corrupt_bio(bio: *mut c::bio) {
-    unsafe { Bio::from_raw_mut(bio) }.corrupt()
-}
-
 fn request_op_str(op: u32) -> &'static str {
     macro_rules! ops {
         ($($op:ident),*) => { ::paste::paste! {
@@ -429,62 +416,74 @@ impl ToText for Bio {
 }
 
 /// # Safety
-/// @bio is a bio, not in flight.
-#[c_export]
-pub unsafe fn bch2_bio_to_text(out: &mut Printbuf, bio: *mut c::bio) {
-    unsafe { Bio::from_raw(bio) }.to_text(out)
+/// BIO_OFFSET is the offset of a Bio field that ends the struct, #[repr(C)]. If the
+/// struct projects its pinning - #[pin_data] - that field is #[pin]: so
+/// BioBox::as_mut()'s Pin<&mut Self> never hands it out unpinned, to be
+/// moved off its bvecs.
+pub unsafe trait HasBio: Sized {
+    const BIO_OFFSET: usize;
+
+    fn bio(&self) -> &Bio {
+        unsafe { Bio::from_raw(bio_of(core::ptr::from_ref(self).cast_mut())) }
+    }
+
+    fn bio_mut(self: Pin<&mut Self>) -> Pin<&mut Bio> {
+        unsafe { Bio::from_raw_mut(bio_of(self.get_unchecked_mut())) }
+    }
 }
 
-#[c_export]
-pub fn bch2_buf_nr_bvecs(p: *const c_void, len: usize) -> usize {
-    buf_nr_bvecs(p.cast(), len)
+// SAFETY: a bio, at its own start
+unsafe impl HasBio for Bio {
+    const BIO_OFFSET: usize = 0;
 }
 
-/// # Safety
-/// As Bio::map()'s; @bio is a bio nothing else has.
-#[c_export]
-pub unsafe fn bch2_bio_map(bio: *mut c::bio, base: *mut c_void, size: usize) {
-    unsafe { Bio::from_raw_mut(bio).map(base.cast(), size) }
-}
-
-/// # Safety
-/// @dst_iter is a position of @dst; @src has its bi_size bytes.
-#[c_export]
-pub unsafe fn memcpy_to_bio(dst: *mut c::bio, dst_iter: c::bvec_iter, src: *const c_void) {
-    let dst = unsafe { Bio::from_raw(dst).range_at(dst_iter) };
-    dst.copy_from(unsafe { core::slice::from_raw_parts(src.cast(), dst.len() as usize) });
-}
-
-/// # Safety
-/// @src_iter is a position of @src; @dst has room for its bi_size bytes.
-#[c_export]
-pub unsafe fn memcpy_from_bio(dst: *mut c_void, src: *mut c::bio, src_iter: c::bvec_iter) {
-    let src = unsafe { Bio::from_raw(src).range_at(src_iter) };
-    src.copy_to(unsafe { core::slice::from_raw_parts_mut(dst.cast(), src.len() as usize) });
-}
-
-/// As much as both have, copied, both iters advanced past it.
+/// A struct's bio field: a Bio, or a C-shared struct's c::bio - the same
+/// memory, Bio being transparent - or a BioLend, its bio AT into it.
 ///
 /// # Safety
-/// Each iter is a position of its bio.
-#[c_export]
-pub unsafe fn bch2_bio_copy_data_iter(dst: *mut c::bio, dst_iter: &mut c::bvec_iter,
-                                      src: *mut c::bio, src_iter: &mut c::bvec_iter) {
-    let mut d = unsafe { Bio::from_raw(dst).range_at(*dst_iter) };
-    let mut s = unsafe { Bio::from_raw(src).range_at(*src_iter) };
-    let n = d.copy_from_range(s);
-    d.advance(n);
-    s.advance(n);
-    *dst_iter = d.pos();
-    *src_iter = s.pos();
+/// A bio is AT bytes into the field, and ends it.
+pub unsafe trait BioField {
+    const AT: usize = 0;
+}
+unsafe impl BioField for Bio {}
+unsafe impl BioField for c::bio {}
+
+#[doc(hidden)]
+pub const fn bio_field_at<B: BioField>(_: *const B) -> usize {
+    B::AT
+}
+
+/// HasBio for $t, by its bio field $f: checked to be a BioField, and its bio
+/// last - not that it's #[pin], which HasBio asks of a struct with
+/// #[pin_data].
+#[macro_export]
+macro_rules! has_bio {
+    ($t:ty, $($f:ident).+) => {
+        // SAFETY: a bio field, below, its bio ending the struct
+        unsafe impl $crate::util::bio::HasBio for $t {
+            const BIO_OFFSET: usize = {
+                let t = ::core::mem::MaybeUninit::<$t>::uninit();
+                let field = unsafe { &raw const (*t.as_ptr()).$($f).+ };
+                let off = ::core::mem::offset_of!($t, $($f).+) + $crate::util::bio::bio_field_at(field);
+                assert!(off + ::core::mem::size_of::<$crate::util::bio::Bio>() == ::core::mem::size_of::<$t>(),
+                        concat!(stringify!($t), ": its bio isn't last"));
+                off
+            };
+        }
+    };
+}
+
+fn bio_of<T: HasBio>(t: *mut T) -> *mut c::bio {
+    t.cast::<u8>().wrapping_add(T::BIO_OFFSET).cast()
 }
 
 /// # Safety
-/// @start is a position of @bio.
-#[c_export]
-pub unsafe fn bch2_zero_fill_bio_iter(bio: *mut c::bio, start: c::bvec_iter) {
-    unsafe { Bio::from_raw(bio).range_at(start) }.zero()
+/// @bio is a T's.
+pub unsafe fn of_bio<T: HasBio>(bio: *mut c::bio) -> *mut T {
+    // SAFETY: the caller's
+    unsafe { bio.byte_sub(T::BIO_OFFSET).cast() }
 }
+
 
 /// # Safety
 /// bio() is the implementor's own, which nothing else has - in flight, or
@@ -550,6 +549,46 @@ pub unsafe trait BioOwner {
         Mapped { owner: self, _buf: PhantomData }
     }
 }
+
+/// # Safety
+/// from_raw() of into_raw()'s bio is the owner given up.
+pub unsafe trait RawBio: BioOwner + Sized {
+    fn into_raw(self) -> *mut c::bio;
+
+    /// # Safety
+    /// @bio is into_raw()'s, of an owner of this type, not since taken back.
+    unsafe fn from_raw(bio: *mut c::bio) -> Self;
+
+    /// 'static: the IO has it for as long as it takes.
+    fn submit<E: Endio<Self>>(self)
+    where
+        Self: Send + 'static,
+    {
+        let bio = self.into_raw();
+        // SAFETY: the bio, the owner's: endio::<Self, E>() takes it back
+        unsafe {
+            (*bio).bi_end_io = Some(endio::<Self, E>);
+            c::submit_bio(bio);
+        }
+    }
+}
+
+/// The result is bio().status(). A type of its own, not O's: one struct's
+/// bios may complete differently by the path that submitted them.
+///
+/// It runs where the IO completes - softirq, or an interrupt - so it may not
+/// sleep, nor may T's Drop, if it drops the owner: what would goes to a
+/// workqueue, with the owner.
+pub trait Endio<O> {
+    fn endio(bio: O);
+}
+
+unsafe extern "C" fn endio<O: RawBio, E: Endio<O>>(bio: *mut c::bio) {
+    // SAFETY: armed by submit() alone, on an O's bio, given up with it
+    E::endio(unsafe { O::from_raw(bio) })
+}
+
+// ── Mapping and submission ───────────────────────────────────────────────
 
 /// An owner's bio mapped to a buffer it borrows: B is the borrow, &mut [u8]
 /// for a read and & for a write. Dropping it resets the bio, so no bvec
@@ -631,207 +670,70 @@ impl<O: BioOwner, B> Drop for Mapped<'_, O, B> {
     }
 }
 
-/// # Invariants
-/// @iter is a position of @bio: within its bvecs, bi_size bytes of them
-/// after it.
-#[derive(Clone, Copy)]
-pub struct BioRange<'a> {
-    data: &'a BioData,
-    iter: c::bvec_iter,
+// ── For C ────────────────────────────────────────────────────────────────
+
+/// # Safety
+/// @bio is a bio, not in flight, nothing else has it.
+#[cfg(CONFIG_BCACHEFS_DEBUG)]
+#[c_export]
+pub unsafe fn bch2_corrupt_bio(bio: *mut c::bio) {
+    unsafe { Bio::from_raw_mut(bio) }.corrupt()
 }
 
-impl<'a> BioRange<'a> {
-    fn bio(&self) -> &Bio {
-        self.data.container()
-    }
-
-    pub fn is_of(&self, bio: &Bio) -> bool {
-        core::ptr::eq(self.bio(), bio)
-    }
-
-    pub fn len(&self) -> u32 {
-        self.iter.bi_size
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Where it starts, to save for range_at().
-    pub fn pos(&self) -> c::bvec_iter {
-        self.iter
-    }
-
-    /// Panics past its end.
-    pub fn advance(&mut self, mut bytes: u32) {
-        assert!(bytes <= self.len(), "advancing a bio range of {} bytes by {bytes}", self.len());
-        if self.bio().no_advance_iter() {
-            self.iter.bi_sector += u64::from(bytes >> 9);
-            self.iter.bi_size -= bytes;
-            return;
-        }
-        while bytes != 0 {
-            let n = bytes.min(self.mp_len());
-            self.advance_in_bvec(n);
-            bytes -= n;
-        }
-    }
-
-    /// Its first @bytes. Panics past its end.
-    pub fn take(mut self, bytes: u32) -> Self {
-        assert!(bytes <= self.len(), "the first {bytes} bytes of a bio range of {}", self.len());
-        self.iter.bi_size = bytes;
-        self
-    }
-
-    pub fn segments(self) -> Segments<'a> {
-        Walk::new(self, iter::segment)
-    }
-
-    #[cfg(kernel)]
-    pub fn folios(self) -> Folios<'a> {
-        Walk::new(self, iter::folio)
-    }
-
-    /// As much as both have, copied: how much.
-    pub fn copy_to(&self, dst: &mut [u8]) -> usize {
-        let mut done = 0;
-        for chunk in *self {
-            if done == dst.len() {
-                break;
-            }
-            done += chunk.copy_to(&mut dst[done..]);
-        }
-        done
-    }
-
-    /// As copy_to().
-    pub fn copy_from(&self, src: &[u8]) -> usize {
-        let mut done = 0;
-        for chunk in *self {
-            if done == src.len() {
-                break;
-            }
-            done += chunk.copy_from(&src[done..]);
-        }
-        done
-    }
-
-    /// As much as both have, into @dst: as copy_to(), for memory that can't be
-    /// a slice.
-    pub fn copy_to_volatile(&self, dst: VolatileSlice<'_>) -> usize {
-        let mut done = 0;
-        for chunk in *self {
-            if done == dst.len() {
-                break;
-            }
-            let n = (chunk.len() as usize).min(dst.len() - done);
-            // SAFETY: n of the chunk's bytes, mapped, into n of @dst
-            chunk.with_mapped(|p, _| unsafe { core::ptr::copy_nonoverlapping(p, dst.as_ptr().add(done), n) });
-            done += n;
-        }
-        done
-    }
-
-    /// As copy_to_volatile().
-    pub fn copy_from_volatile(&self, src: VolatileSlice<'_>) -> usize {
-        let mut done = 0;
-        for chunk in *self {
-            if done == src.len() {
-                break;
-            }
-            let n = (chunk.len() as usize).min(src.len() - done);
-            // SAFETY: n of @src into n of the chunk's bytes, mapped
-            chunk.with_mapped(|p, _| unsafe { core::ptr::copy_nonoverlapping(src.as_ptr().add(done), p, n) });
-            done += n;
-        }
-        done
-    }
-
-    /// As much as both have, from @src - another bio's - copied: how much. The
-    /// kernel's old bio_copy_data_iter(), which 7.2 removed.
-    pub fn copy_from_range(&self, src: BioRange<'_>) -> u32 {
-        let mut dst = *self;
-        for chunk in src {
-            if dst.is_empty() {
-                break;
-            }
-            // SAFETY: the chunk's bytes, mapped while they're copied
-            let n = chunk.with_mapped(|p, len| dst.copy_from_volatile(unsafe {
-                VolatileSlice::from_raw(NonNull::new_unchecked(p), len)
-            }));
-            dst.advance(n as u32);
-        }
-        self.len() - dst.len()
-    }
-
-    pub fn zero(&self) {
-        for chunk in *self {
-            chunk.zero();
-        }
-    }
-
-    // ── bvec.h's arithmetic, on the position: each as the function named ──
-
-    /// __bvec_iter_bvec()
-    fn bvec(&self) -> c::bio_vec {
-        debug_assert!(!self.is_empty());
-        // SAFETY: the invariant - not empty, so its start is in a bvec
-        unsafe { self.bio().bvec(self.iter.bi_idx) }
-    }
-
-    /// mp_bvec_iter_offset(): past the bvec's first page, if it spans pages
-    fn mp_offset(&self) -> u32 {
-        self.bvec().bv_offset + bi_offset!(self.iter)
-    }
-
-    /// mp_bvec_iter_len()
-    fn mp_len(&self) -> u32 {
-        self.len().min(self.bvec().bv_len - bi_offset!(self.iter))
-    }
-
-    /// bio_advance_iter_single(): @bytes within the bvec
-    fn advance_in_bvec(&mut self, bytes: u32) {
-        debug_assert!(bytes <= self.mp_len());
-        let bv_len = self.bvec().bv_len;
-        self.iter.bi_sector += u64::from(bytes >> 9);
-        self.iter.bi_size -= bytes;
-        bi_offset!(self.iter) += bytes;
-        if bi_offset!(self.iter) == bv_len {
-            // INVARIANT: the next bvec, if there's anything left
-            self.iter.bi_idx += 1;
-            bi_offset!(self.iter) = 0;
-        }
-    }
+/// # Safety
+/// @bio is a bio, not in flight.
+#[c_export]
+pub unsafe fn bch2_bio_to_text(out: &mut Printbuf, bio: *mut c::bio) {
+    unsafe { Bio::from_raw(bio) }.to_text(out)
 }
 
-impl<'a> IntoIterator for BioRange<'a> {
-    type Item = Chunk<'a>;
-    type IntoIter = Chunks<'a>;
-
-    fn into_iter(self) -> Chunks<'a> {
-        Walk::new(self, iter::chunk)
-    }
+#[c_export]
+pub fn bch2_buf_nr_bvecs(p: *const c_void, len: usize) -> usize {
+    buf_nr_bvecs(p.cast(), len)
 }
 
-/// # Invariants
-/// @bio is None, or a bio valid for 'a.
-pub struct BioIterator<'a> {
-    bio: Option<NonNull<Bio>>,
-    _p:  PhantomData<&'a Bio>,
+/// # Safety
+/// As Bio::map()'s; @bio is a bio nothing else has.
+#[c_export]
+pub unsafe fn bch2_bio_map(bio: *mut c::bio, base: *mut c_void, size: usize) {
+    unsafe { Bio::from_raw_mut(bio).map(base.cast(), size) }
 }
 
-impl<'a> Iterator for BioIterator<'a> {
-    type Item = &'a Bio;
-
-    fn next(&mut self) -> Option<&'a Bio> {
-        let bio = self.bio.take()?;
-        // SAFETY: by the invariant
-        let bio = unsafe { bio.as_ref() };
-        // INVARIANT: the next is a bio of the chain too
-        self.bio = NonNull::new(bio.bio.bi_next.cast());
-        Some(bio)
-    }
+/// # Safety
+/// @dst_iter is a position of @dst; @src has its bi_size bytes.
+#[c_export]
+pub unsafe fn memcpy_to_bio(dst: *mut c::bio, dst_iter: c::bvec_iter, src: *const c_void) {
+    let dst = unsafe { Bio::from_raw(dst).range_at(dst_iter) };
+    dst.copy_from(unsafe { core::slice::from_raw_parts(src.cast(), dst.len() as usize) });
 }
 
-impl core::iter::FusedIterator for BioIterator<'_> {}
+/// # Safety
+/// @src_iter is a position of @src; @dst has room for its bi_size bytes.
+#[c_export]
+pub unsafe fn memcpy_from_bio(dst: *mut c_void, src: *mut c::bio, src_iter: c::bvec_iter) {
+    let src = unsafe { Bio::from_raw(src).range_at(src_iter) };
+    src.copy_to(unsafe { core::slice::from_raw_parts_mut(dst.cast(), src.len() as usize) });
+}
+
+/// As much as both have, copied, both iters advanced past it.
+///
+/// # Safety
+/// Each iter is a position of its bio.
+#[c_export]
+pub unsafe fn bch2_bio_copy_data_iter(dst: *mut c::bio, dst_iter: &mut c::bvec_iter,
+                                      src: *mut c::bio, src_iter: &mut c::bvec_iter) {
+    let mut d = unsafe { Bio::from_raw(dst).range_at(*dst_iter) };
+    let mut s = unsafe { Bio::from_raw(src).range_at(*src_iter) };
+    let n = d.copy_from_range(s);
+    d.advance(n);
+    s.advance(n);
+    *dst_iter = d.pos();
+    *src_iter = s.pos();
+}
+
+/// # Safety
+/// @start is a position of @bio.
+#[c_export]
+pub unsafe fn bch2_zero_fill_bio_iter(bio: *mut c::bio, start: c::bvec_iter) {
+    unsafe { Bio::from_raw(bio).range_at(start) }.zero()
+}

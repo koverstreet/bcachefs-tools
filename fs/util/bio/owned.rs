@@ -28,82 +28,13 @@ use core::ptr::NonNull;
 
 use pin_init::{pin_data, PinInit};
 
-use super::{pages, Bio, BioOwner, BioRange};
+use super::{bio_of, of_bio, pages, Bio, BioField, BioOwner, BioRange, HasBio, RawBio};
 use crate::c;
 use crate::fs::Fs;
 use crate::util::kernel::PAGE_SIZE;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::alloc::{current_gfp_context_raw, init_at, kfree, kzalloc, KBox};
 use crate::util::ffi::Opaque;
-
-/// # Safety
-/// BIO_OFFSET is the offset of a Bio field that ends the struct, #[repr(C)]. If the
-/// struct projects its pinning - #[pin_data] - that field is #[pin]: so
-/// BioBox::as_mut()'s Pin<&mut Self> never hands it out unpinned, to be
-/// moved off its bvecs.
-pub unsafe trait HasBio: Sized {
-    const BIO_OFFSET: usize;
-
-    fn bio(&self) -> &Bio {
-        unsafe { Bio::from_raw(bio_of(core::ptr::from_ref(self).cast_mut())) }
-    }
-
-    fn bio_mut(self: Pin<&mut Self>) -> Pin<&mut Bio> {
-        unsafe { Bio::from_raw_mut(bio_of(self.get_unchecked_mut())) }
-    }
-}
-
-// SAFETY: a bio, at its own start
-unsafe impl HasBio for Bio {
-    const BIO_OFFSET: usize = 0;
-}
-
-/// A struct's bio field: a Bio, or a C-shared struct's c::bio - the same
-/// memory, Bio being transparent - or a BioLend, its bio AT into it.
-///
-/// # Safety
-/// A bio is AT bytes into the field, and ends it.
-pub unsafe trait BioField {
-    const AT: usize = 0;
-}
-unsafe impl BioField for Bio {}
-unsafe impl BioField for c::bio {}
-
-#[doc(hidden)]
-pub const fn bio_field_at<B: BioField>(_: *const B) -> usize {
-    B::AT
-}
-
-/// HasBio for $t, by its bio field $f: checked to be a BioField, and its bio
-/// last - not that it's #[pin], which HasBio asks of a struct with
-/// #[pin_data].
-#[macro_export]
-macro_rules! has_bio {
-    ($t:ty, $($f:ident).+) => {
-        // SAFETY: a bio field, below, its bio ending the struct
-        unsafe impl $crate::util::bio::HasBio for $t {
-            const BIO_OFFSET: usize = {
-                let t = ::core::mem::MaybeUninit::<$t>::uninit();
-                let field = unsafe { &raw const (*t.as_ptr()).$($f).+ };
-                let off = ::core::mem::offset_of!($t, $($f).+) + $crate::util::bio::bio_field_at(field);
-                assert!(off + ::core::mem::size_of::<$crate::util::bio::Bio>() == ::core::mem::size_of::<$t>(),
-                        concat!(stringify!($t), ": its bio isn't last"));
-                off
-            };
-        }
-    };
-}
-
-fn bio_of<T: HasBio>(t: *mut T) -> *mut c::bio {
-    t.cast::<u8>().wrapping_add(T::BIO_OFFSET).cast()
-}
-
-/// # Safety
-/// @bio is a T's.
-pub unsafe fn of_bio<T: HasBio>(bio: *mut c::bio) -> *mut T {
-    // SAFETY: the caller's
-    unsafe { bio.byte_sub(T::BIO_OFFSET).cast() }
-}
 
 pub struct BioInPlace(*mut c::bio);
 
@@ -631,44 +562,4 @@ impl<T: HasBio> Drop for BioBufPtr<T> {
         // SAFETY: a BioBuf's bio, from into_raw(), given back once
         drop(unsafe { BioBuf::<T>::from_raw(bio_of(self.0.as_ptr())) })
     }
-}
-
-// ── Submission ───────────────────────────────────────────────────────────
-
-/// # Safety
-/// from_raw() of into_raw()'s bio is the owner given up.
-pub unsafe trait RawBio: BioOwner + Sized {
-    fn into_raw(self) -> *mut c::bio;
-
-    /// # Safety
-    /// @bio is into_raw()'s, of an owner of this type, not since taken back.
-    unsafe fn from_raw(bio: *mut c::bio) -> Self;
-
-    /// 'static: the IO has it for as long as it takes.
-    fn submit<E: Endio<Self>>(self)
-    where
-        Self: Send + 'static,
-    {
-        let bio = self.into_raw();
-        // SAFETY: the bio, the owner's: endio::<Self, E>() takes it back
-        unsafe {
-            (*bio).bi_end_io = Some(endio::<Self, E>);
-            c::submit_bio(bio);
-        }
-    }
-}
-
-/// The result is bio().status(). A type of its own, not O's: one struct's
-/// bios may complete differently by the path that submitted them.
-///
-/// It runs where the IO completes - softirq, or an interrupt - so it may not
-/// sleep, nor may T's Drop, if it drops the owner: what would goes to a
-/// workqueue, with the owner.
-pub trait Endio<O> {
-    fn endio(bio: O);
-}
-
-unsafe extern "C" fn endio<O: RawBio, E: Endio<O>>(bio: *mut c::bio) {
-    // SAFETY: armed by submit() alone, on an O's bio, given up with it
-    E::endio(unsafe { O::from_raw(bio) })
 }
