@@ -241,6 +241,21 @@ static void btree_node_read_keys_lost(struct bch_fs *c, struct bch_dev *ca,
 }
 
 /*
+ * A bset of the replica being read failed its checksum, and was kept: if it's
+ * the replica the read ends up using, nothing vouches for what it holds, and
+ * the read says so rather than reporting a repair. Lost keys say more.
+ */
+static void btree_node_read_csum_bad(struct bch_fs *c, struct bch_dev *ca,
+				     struct bch_io_failures *failed)
+{
+	if (failed && ca &&
+	    !bch2_err_matches(bch2_io_failures_dev_errcode(failed, ca->dev_idx),
+			      BCH_ERR_btree_node_validate_err_keys_lost))
+		bch2_io_failures_set_errcode(failed, ca->dev_idx,
+					     bch_err_throw(c, btree_node_validate_err_csum));
+}
+
+/*
  * When btree topology repair changes the start or end of a node, that might
  * mean we have to drop keys that are no longer inside the node:
  */
@@ -698,8 +713,10 @@ int bch2_btree_node_read_done(struct bch_fs *c, struct bch_dev *ca,
 			if (good_csum_type) {
 				struct bch_csum csum = csum_vstruct(c, BSET_CSUM_TYPE(i), nonce, b->data);
 				bool csum_bad = bch2_crc_cmp(b->data->csum, csum);
-				if (csum_bad)
+				if (csum_bad) {
 					bch2_io_error(ca, BCH_MEMBER_ERROR_checksum);
+					btree_node_read_csum_bad(c, ca, failed);
+				}
 
 				btree_err_on(csum_bad,
 					     FSCK_CAN_FIX,
@@ -764,8 +781,10 @@ int bch2_btree_node_read_done(struct bch_fs *c, struct bch_dev *ca,
 			if (good_csum_type) {
 				struct bch_csum csum = csum_vstruct(c, BSET_CSUM_TYPE(i), nonce, bne);
 				bool csum_bad = bch2_crc_cmp(bne->csum, csum);
-				if (ca && csum_bad)
+				if (ca && csum_bad) {
 					bch2_io_error(ca, BCH_MEMBER_ERROR_checksum);
+					btree_node_read_csum_bad(c, ca, failed);
+				}
 
 				btree_err_on(csum_bad,
 					     FSCK_CAN_FIX,
@@ -1031,6 +1050,9 @@ static void btree_node_read_work(struct work_struct *work)
 
 		if (!used)
 			prt_printf(&buf, "retry success");
+		else if (bch2_err_matches(bch2_io_failures_dev_errcode(&failed, rb->pick.ptr.dev),
+					  BCH_ERR_btree_node_validate_err_csum))
+			prt_printf(&buf, "checksum error, no good replica: read as is, contents unverified");
 		else
 			prt_printf(&buf, "repair success");
 

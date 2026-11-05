@@ -664,6 +664,7 @@ c_xmacro! {
         (BCH_ERR_transaction_restart, transaction_restart_backpointer_scan_grow, 627),
         (ENOMEM, ENOMEM_stripe_open, 628),
         (ENOMEM, ENOMEM_stripe_new_bucket, 629),
+        (BCH_ERR_btree_node_validate_err, btree_node_validate_err_csum, 630),
     }
 }
 
