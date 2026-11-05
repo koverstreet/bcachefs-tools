@@ -7,6 +7,7 @@
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::locking::{btree_node_locked_type, BTREE_NODE_UNLOCKED};
+use crate::btree::node::{BtreeNode, NodeContents};
 use crate::c;
 use crate::cstructs::c as cs;
 use crate::errcode::{bch_errcode, err_ptr, errptr_or_null, BchError};
@@ -15,8 +16,9 @@ use crate::types::c_default;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::util::kernel::local_clock;
 use cstruct_macros::{bitfield, c_name, c_typedef, CStruct};
+use crate::locking::LockedBy;
+use core::mem::offset_of;
 use core::ops::{Deref, DerefMut, Index, IndexMut};
-use nestify::nest;
 
 c_typedef! {
     #[c_name(btree_path_idx_t)]
@@ -24,11 +26,11 @@ c_typedef! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
-pub struct btree_path_level {
+#[derive(CStruct)]
+pub struct btree_path_level<T: PathNode = cs::btree_bkey_cached_common> {
     /* a cached path's is a struct bkey_cached's */
     #[c("struct btree *b")]
-    pub b: *mut cs::btree_bkey_cached_common,
+    pub b: *mut T,
     pub iter: KeyIter,
     pub lock_seq: u32,
     #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
@@ -36,42 +38,61 @@ pub struct btree_path_level {
 }
 c_default!(btree_path_level);
 
-nest! {
-    #[repr(C)]
-    #[c_name(btree_path)]
-    #[derive(Clone, Copy, CStruct)]
-    pub struct BtreePath {
-        pub sorted_idx: cs::PathIdx,
-        pub ref_: u8,
-        pub intent_ref: u8,
-
-        /* btree_iter_copy starts here: */
-        pub pos: Bpos,
-
-        #[c_bitfield]
-        #>[bitfield(u16, ty = u32)]
-        pub bits: pub struct btree_path_bits {
-            #[bits(7)] pub btree_id: Btree,
-            cached:           bool,
-            preserve:         bool,
-            /*
-             * When true, failing to relock this path will cause the transaction to
-             * restart:
-             */
-            should_be_locked: bool,
-            level:            u3,
-            locks_want:       u3,
-        },
-        pub nodes_locked: u8,
-
-        pub l: [cs::btree_path_level; cs::BTREE_MAX_DEPTH as usize],
-        /* C's TRACK_PATH_ALLOCATED, which btree/types_inline.h defines from
-         * these: rustc sees only the configuration */
-        #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
-        pub ip_allocated: core::ffi::c_ulong,
+impl<T: PathNode> Clone for btree_path_level<T> {
+    fn clone(&self) -> Self {
+        *self
     }
 }
+
+impl<T: PathNode> Copy for btree_path_level<T> {}
+
+#[bitfield(u16, ty = u32)]
+pub struct btree_path_bits {
+    #[bits(7)] pub btree_id: Btree,
+    cached:           bool,
+    preserve:         bool,
+    /*
+     * When true, failing to relock this path will cause the transaction to
+     * restart:
+     */
+    should_be_locked: bool,
+    level:            u3,
+    locks_want:       u3,
+}
+
+/// A path whose levels are Ts: BtreePath<BtreeNode>, a key cache path's
+/// BtreePath<bkey_cached>, or - the default - any path, its levels seen as
+/// their common parts. All are C's struct btree_path.
+#[repr(C)]
+#[c_name(btree_path)]
+#[derive(CStruct)]
+pub struct BtreePath<T: PathNode = cs::btree_bkey_cached_common> {
+    pub sorted_idx: cs::PathIdx,
+    pub ref_: u8,
+    pub intent_ref: u8,
+
+    /* btree_iter_copy starts here: */
+    pub pos: Bpos,
+
+    #[c_bitfield]
+    pub bits: btree_path_bits,
+    pub nodes_locked: u8,
+
+    pub l: [cs::btree_path_level<T>; cs::BTREE_MAX_DEPTH as usize],
+    /* C's TRACK_PATH_ALLOCATED, which btree/types_inline.h defines from
+     * these: rustc sees only the configuration */
+    #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
+    pub ip_allocated: core::ffi::c_ulong,
+}
 c_default!(BtreePath);
+
+impl<T: PathNode> Clone for BtreePath<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: PathNode> Copy for BtreePath<T> {}
 
 /// A transaction's path table, borrowed: one borrow at a time, by a bit in
 /// the transaction's flags - a RefCell's - so a Rust entry into the btree code
@@ -141,16 +162,80 @@ impl IndexMut<PathIdx> for Paths<'_> {
     }
 }
 
+/// What a path's levels point at: a btree node, or - a cached path's - a key
+/// cache entry, each starting with a btree_bkey_cached_common. The common part
+/// is one too, for code over any path: relocking, the cycle detector.
+///
+/// # Safety
+/// Self starts with a btree_bkey_cached_common, and a common part whose cached
+/// flag is CACHED is the start of one.
+pub unsafe trait PathNode {
+    /// The cached flag of a common part that's one of these; None for any.
+    const CACHED: Option<bool>;
+
+    fn common(&self) -> &c::btree_bkey_cached_common;
+}
+
+unsafe impl PathNode for c::btree_bkey_cached_common {
+    const CACHED: Option<bool> = None;
+
+    fn common(&self) -> &c::btree_bkey_cached_common {
+        self
+    }
+}
+
+unsafe impl PathNode for BtreeNode {
+    const CACHED: Option<bool> = Some(false);
+
+    fn common(&self) -> &c::btree_bkey_cached_common {
+        &self.c
+    }
+}
+
+unsafe impl PathNode for c::bkey_cached {
+    const CACHED: Option<bool> = Some(true);
+
+    fn common(&self) -> &c::btree_bkey_cached_common {
+        &self.c
+    }
+}
+
+const _: () = assert!(offset_of!(BtreeNode, c) == 0 && offset_of!(c::bkey_cached, c) == 0);
+
+impl BtreePath {
+    /// As a path of Ts, if it is one: by its cached flag.
+    pub fn downcast<T: PathNode>(&self) -> Option<&BtreePath<T>> {
+        T::CACHED.map_or(true, |cached| cached == self.bits.cached())
+            .then(|| unsafe { &*core::ptr::from_ref(self).cast() })
+    }
+}
+
+/// A PathNode whose lock protects only part of it: the part only a hold on the
+/// lock reaches.
+pub trait PathNodeContents: PathNode {
+    type Contents;
+
+    fn locked_contents(&self) -> &LockedBy<Self::Contents>;
+}
+
+impl PathNodeContents for BtreeNode {
+    type Contents = NodeContents;
+
+    fn locked_contents(&self) -> &LockedBy<NodeContents> {
+        &self.contents
+    }
+}
+
 /// What every level of a path table the transaction has reallocated away from
 /// holds, in debug builds: for a path pointer kept across the realloc.
 pub(crate) fn btree_path_poison() -> *mut c::btree_bkey_cached_common {
     err_ptr(BchError::from(bch_errcode::BCH_ERR_no_btree_node_stale_paths))
 }
 
-impl BtreePath {
+impl<T: PathNode> BtreePath<T> {
     /// NULL above the root, or an error pointer: why there's no node. A
     /// cached path's is a key cache entry's.
-    pub(crate) fn node(&self, level: usize) -> *mut c::btree_bkey_cached_common {
+    pub(crate) fn node(&self, level: usize) -> *mut T {
         if level >= c::BTREE_MAX_DEPTH as usize {
             return core::ptr::null_mut();
         }
@@ -165,18 +250,18 @@ impl BtreePath {
          * take a plausible wrong branch.
          */
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
-            crate::warn_once!(b == btree_path_poison(), no_fs,
+            crate::warn_once!(b.cast() == btree_path_poison(), no_fs,
                               "using a btree path that outlived trans->paths");
         }
         b
     }
 
-    pub(crate) fn lock_seq_matches(&self, b: &c::btree_bkey_cached_common, level: usize) -> bool {
-        self.l[level].lock_seq == b.lock.six().seq.get()
+    pub(crate) fn lock_seq_matches(&self, b: &T, level: usize) -> bool {
+        self.l[level].lock_seq == b.common().lock.six().seq.get()
     }
 
-    pub(crate) fn has_node(&self, b: &c::btree_bkey_cached_common) -> bool {
-        let level = b.level as usize;
+    pub(crate) fn has_node(&self, b: &T) -> bool {
+        let level = b.common().level as usize;
 
         core::ptr::eq(self.l[level].b, b) && self.lock_seq_matches(b, level)
     }
@@ -190,7 +275,7 @@ impl btree_node_locked_type {
     }
 }
 
-impl BtreePath {
+impl<T: PathNode> BtreePath<T> {
     pub(crate) fn is_btree_node(&self, level: usize) -> bool {
         level < c::BTREE_MAX_DEPTH as usize && matches!(errptr_or_null(self.l[level].b), Ok(Some(_)))
     }

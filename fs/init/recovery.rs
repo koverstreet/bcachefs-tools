@@ -293,7 +293,7 @@ fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, idx: usize
     let mut iter = BtreeNodeIter::new(t, k.btree_id(), bk.k.p, c::BTREE_MAX_DEPTH, k.level().into(), iter_flags);
     iter.iter().traverse(t)?;
 
-    if unlikely(iter.iter().node_at_iter_level(t).is_none()) {
+    if unlikely(!iter.iter().has_node_at_iter_level(t)) {
         drop(iter);
         return journal_replay_key_no_node(t, jk, idx, iter_flags);
     }

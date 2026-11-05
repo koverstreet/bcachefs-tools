@@ -4,7 +4,7 @@ use super::bkey::*;
 pub use super::types::{BtreeIter, BtreeTrans};
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{BtreePath, PathIdx};
+use crate::btree::path::{btree_path_level, BtreePath, PathIdx};
 use crate::c;
 use crate::errcode::{
     BchError,
@@ -2368,6 +2368,14 @@ impl<'t> BtreeIter<'t> {
         Ok(k.map(|k| (&*self, k)))
     }
 
+    /// Whether the iterator's path holds a node at its level - a btree node,
+    /// or a cached path's key cache entry: btree_path_node().
+    pub(crate) fn has_node_at_iter_level(&self, t: &TransAttempt<'_, 't>) -> bool {
+        let paths = t.trans().paths();
+        let path = &paths[self.path];
+        matches!(errptr_or_null(path.l[path.level() as usize].b), Ok(Some(_)))
+    }
+
     /// The node the iterator's path holds at its level, if it has one - a
     /// level without one holds NULL or an error pointer, as IS_ERR_OR_NULL().
     pub(crate) fn node_at_iter_level<'a>(
@@ -2375,9 +2383,9 @@ impl<'t> BtreeIter<'t> {
         t: &TransAttempt<'a, 't>,
     ) -> Option<BtreeNodeRef> {
         let paths = t.trans().paths();
-        let path = &paths[self.path];
-        // an iterator's path isn't cached: its key cache path is
-        let node = BtreeNode::from_common(path.l[path.level() as usize].b);
+        let path = paths[self.path].downcast::<BtreeNode>()
+            .expect("node_at_iter_level() of a cached iterator, which holds no btree node");
+        let node = path.l[path.level() as usize].b;
 
         errptr_or_null(node).ok()?.map(|raw| BtreeNodeRef { raw })
     }
@@ -2401,7 +2409,8 @@ impl<'t> BtreeIter<'t> {
     /// doesn't see to that, as unlock() takes &self.
     pub unsafe fn leaf<'a>(&self, t: &'a TransAttempt<'_, 't>) -> Option<PathLeaf<'a>> {
         unsafe {
-            let path = t.trans().paths.get().add(self.path as usize);
+            // an iterator's path isn't cached: its key cache path is
+            let path = t.trans().paths.get().add(self.path as usize).cast::<BtreePath<BtreeNode>>();
             let l = &raw mut (*path).l[0];
             // NULL above the root, or an error pointer
             errptr_or_null((*l).b).ok()??;
@@ -3187,14 +3196,13 @@ impl BtreeLevels {
 }
 
 pub struct PathLeaf<'a> {
-    l:      *mut c::btree_path_level,
+    l:      *mut btree_path_level<BtreeNode>,
     _trans: PhantomData<&'a ()>,
 }
 
 impl<'a> PathLeaf<'a> {
-    /// An iterator's path isn't cached: its key cache path is.
     pub fn node(&self) -> &'a BtreeNode {
-        unsafe { &*BtreeNode::from_common((*self.l).b) }
+        unsafe { &*(*self.l).b }
     }
 
     /// Where the bset search tree failed at the path's key, if it did:
