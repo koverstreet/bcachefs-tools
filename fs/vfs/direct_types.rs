@@ -34,9 +34,11 @@ nest! {
     #[derive(CStruct)]
     pub struct dio_write {
         pub req: *mut c::kiocb,
-        pub mapping: *mut c::address_space,
+        #[c("struct address_space *mapping")]
+        pub mapping: crate::vfs::folio::Mapping,
         pub inode: *mut c::bch_inode_info,
-        pub mm: *mut c::mm_struct,
+        #[c("struct mm_struct *mm")]
+        pub mm: Option<crate::util::kernel::Mm>,
         pub iov: *const c::iovec,
         #[c_bitfield]
         #>[bitfield(u8, ty = u32)]
@@ -53,6 +55,13 @@ nest! {
 
         pub iter: c::iov_iter,
         pub inline_vecs: [c::iovec; 2],
+
+        /* the dio count and the page cache blocked, and c->writes: till it's
+         * done */
+        #[c("void *started")]
+        pub started: Option<crate::vfs::inode::DioStarted>,
+        #[c("void *write_ref")]
+        pub write_ref: Option<crate::util::refcount::RefGuard<crate::util::enumerated_ref::EnumeratedRef>>,
 
         /* must be last: */
         pub op: c::bch_write_op,

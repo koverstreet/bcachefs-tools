@@ -1,40 +1,29 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Keylists: whole keys back to back, from keys to top, in a buffer that's
-//! inline in its owner - a write op's insert_keys, a btree split's parent
-//! keys - until bch2_keylist_realloc() moves it to the heap: kmalloc()'d, as
-//! keylist.h's bch2_keylist_free() kfree()s it. Keys go on at the top
-//! (bch2_keylist_add(), keylist.h's) and come off the front, the rest moving
-//! down.
+//! Keylists: whole keys back to back, added at the top and taken off the
+//! front, the rest moving down.
 //!
-//! keylist.h keeps C's inlines; what keylist.c was is here, with what Rust
-//! reads a keylist through.
+//! Keylist is a write op's: an InlineVec of u64s, in the op until its keys
+//! outgrow it. C's struct keylist - keys..top, pointing into a buffer of its
+//! owner's - is a btree split's parent keys, keylist.h's inlines keeping it;
+//! Rust only checks one is sorted.
 //!
-//! What's trusted is the keylist's invariant: keys..top is one buffer's,
-//! written, top at or past keys. C keeps it - keylist.h, and the write path
-//! and btree splits, which write keys at top, move top and index keys_p
-//! themselves. as_u64s() takes it on trust, once, and everything else goes
-//! through the slice - the keys walked as vstructs, each one's u64s checked
-//! against what's left of it.
-//!
-//! The unsafe left is that boundary's, and goes when C stops touching the
-//! fields - write.c's keylist handling and interior.c's in Rust:
-//! - as_u64s(): the fields private, push()/add() Rust's, the invariant this
-//!   module's own to keep.
-//! - iter()'s assume_validated(): add() taking a validated key, so what's in
-//!   a keylist is by type.
-//! - krealloc() and the inline buffer's copy: free() Rust's too, the heap
-//!   buffer an allocation that records its capacity - popping shrinks u64s,
-//!   not the buffer, so today nothing knows its size.
+//! What's trusted is that the u64s hold whole keys, each made in memory by
+//! what added it: the keys are walked as vstructs, each one's u64s checked
+//! against what's left of the list, and taken as validated - add() taking a
+//! validated key would make that by type. A key is built in a KeyRoom - at
+//! the top, in room reserve() made, by push_with() - which checks what's
+//! appended to it against the room.
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::bkey::{BkeyI, BkeyV};
+use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BKEY_U64S};
+use crate::btree::iter::NoRoom;
 use crate::c;
+use crate::data_structures::inline_vec::InlineVec;
 use crate::locking::MemallocFlags;
-use crate::util::alloc::krealloc;
+use crate::util::alloc::AllocError;
 use crate::util::vstructs::{assume_validated, plain_bytes, plain_bytes_mut, VstructRefEntries, VstructRefEntriesMut};
-use core::ffi::c_int;
 use core::mem::size_of;
 use cstruct_macros::CStruct;
 use crate::types::c_default;
@@ -51,60 +40,64 @@ pub struct keylist {
 }
 c_default!(keylist);
 
+#[cfg(CONFIG_BCACHEFS_DEBUG)]
 impl c::keylist {
-    /// # Safety
-    /// @inline_keys is a buffer that outlives the list, keys written at its
-    /// top() staying in it.
-    pub unsafe fn init(&mut self, inline_keys: *mut u64) {
-        self.keys_p = inline_keys;
-        self.top_p = inline_keys;
-    }
-
-    /// Its heap buffer freed, if it has one: bch2_keylist_free().
-    ///
-    /// # Safety
-    /// @inline_keys is its buffer if it isn't kmalloc()'s, and the list isn't
-    /// used after.
-    pub unsafe fn free(&mut self, inline_keys: *mut u64) {
-        if self.keys_p != inline_keys {
-            unsafe { c::rust_kfree(self.keys_p.cast()) };
+    fn as_u64s(&self) -> &[u64] {
+        if self.top_p == self.keys_p {
+            return &[];
         }
+        let u64s = (self.top_p.addr() - self.keys_p.addr()) / size_of::<u64>();
+        // SAFETY: the keylist's invariant
+        unsafe { core::slice::from_raw_parts(self.keys_p, u64s) }
     }
+}
 
-    pub fn top(&self) -> *mut c::bkey_i {
-        self.top_p.cast()
-    }
+/// Whole keys back to back, the first @N u64s of them inline.
+#[repr(transparent)]
+pub struct Keylist<const N: usize>(InlineVec<u64, N>);
 
-    /// # Safety
-    /// A whole key is at top(), in the list's buffer.
-    pub unsafe fn push(&mut self) {
-        // SAFETY: the caller's
-        let u64s = unsafe { (*self.top()).k.u64s };
-        self.top_p = unsafe { self.top_p.add(u64s.into()) };
+impl<const N: usize> Keylist<N> {
+    pub const fn new() -> Self {
+        Keylist(InlineVec::new())
     }
 
     pub fn u64s(&self) -> usize {
-        (self.top_p.addr() - self.keys_p.addr()) / size_of::<u64>()
+        self.0.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.top_p == self.keys_p
+        self.0.is_empty()
     }
 
-    fn as_u64s(&self) -> &[u64] {
-        if self.is_empty() {
-            return &[];
-        }
-        // SAFETY: the keylist's invariant
-        unsafe { core::slice::from_raw_parts(self.keys_p, self.u64s()) }
+    pub fn clear(&mut self) {
+        self.0.clear()
     }
 
-    fn as_u64s_mut(&mut self) -> &mut [u64] {
-        if self.is_empty() {
-            return &mut [];
+    /// Room for @u64s more: allocated noio, as it's the write path's.
+    pub fn reserve(&mut self, u64s: usize) -> Result<(), AllocError> {
+        let _noio = MemallocFlags::noio();
+        self.0.reserve(u64s)
+    }
+
+    /// A key built by @f at the top, in @room u64s of what reserve() made,
+    /// added. Panics if the room wasn't reserved.
+    pub fn push_with<R>(&mut self, room: usize, f: impl FnOnce(&mut KeyRoom<'_>) -> R) -> R {
+        let (len, cap) = (self.0.len(), self.0.capacity());
+        assert!(len + room <= cap, "a key built in {room} u64s of a keylist with {} reserved", cap - len);
+        for _ in 0..room {
+            self.0.push(0).expect("reserved");
         }
-        // SAFETY: the keylist's invariant, and its holder lends it by &mut
-        unsafe { core::slice::from_raw_parts_mut(self.keys_p, self.u64s()) }
+
+        let mut k = KeyRoom::new(&mut self.0[len..]);
+        let r = f(&mut k);
+        let u64s = usize::from(k.k().u64s);
+        self.0.truncate(len + u64s);
+        r
+    }
+
+    /// A copy of @k added, in room reserve() made.
+    pub fn push_key(&mut self, k: &BkeyI) {
+        self.push_with(k.k().u64s.into(), |r| r.reassemble(k.into()).expect("room for its u64s"))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &BkeyI> + '_ {
@@ -113,11 +106,7 @@ impl c::keylist {
 
     /// The keys from @offset u64s in: where a key starts.
     pub fn iter_from(&self, offset: usize) -> impl Iterator<Item = &BkeyI> + '_ {
-        VstructRefEntries::<c::bkey_i>::new(plain_bytes(&self.as_u64s()[offset..])).map(|k| {
-            let k = k.unwrap_or_else(|e| panic!("a key overruns its keylist, of {} u64s: {e}", self.u64s()));
-            // SAFETY: a keylist's keys are made in memory, by what adds them
-            unsafe { assume_validated(k) }.key()
-        })
+        keys(&self.0[offset..])
     }
 
     pub fn front(&self) -> Option<&BkeyI> {
@@ -125,29 +114,27 @@ impl c::keylist {
     }
 
     pub fn front_mut(&mut self) -> Option<&mut BkeyI> {
-        let u64s = self.as_u64s_mut();
-        (!u64s.is_empty()).then(|| key_mut(u64s))
+        (!self.is_empty()).then(|| key_mut(&mut self.0))
     }
 
     /// @f on each key, which may shrink it, the keys after it moving down -
     /// stopping at @f's error, which leaves the list partly moved.
     pub fn try_for_each_shrink<E>(&mut self, mut f: impl FnMut(&mut BkeyI) -> Result<(), E>) -> Result<(), E> {
-        let u64s = self.as_u64s_mut();
         let (mut src, mut dst) = (0, 0);
 
-        while src < u64s.len() {
-            let k = key_mut(&mut u64s[src..]);
+        while src < self.0.len() {
+            let k = key_mut(&mut self.0[src..]);
             let n = usize::from(k.k().u64s);
             f(&mut *k)?;
             let shrunk = usize::from(k.k().u64s);
             assert!(shrunk <= n, "a key grown in its keylist, {n} u64s to {shrunk}");
 
-            u64s.copy_within(src..src + shrunk, dst);
+            self.0.copy_within(src..src + shrunk, dst);
             dst += shrunk;
             src += n;
         }
 
-        self.top_p = self.keys_p.wrapping_add(dst);
+        self.0.truncate(dst);
         Ok(())
     }
 
@@ -156,60 +143,108 @@ impl c::keylist {
         let n = usize::from(self.front().expect("popping the front of an empty keylist").k().u64s);
         let u64s = self.u64s();
 
-        self.as_u64s_mut().copy_within(n.., 0);
-        self.top_p = self.keys_p.wrapping_add(u64s - n);
+        self.0.copy_within(n.., 0);
+        self.0.truncate(u64s - n);
     }
 }
 
-/// The key at the front of @u64s, some of a keylist's.
+/// A key built in place: at the front of a buffer, the rest of it room its
+/// value can grow into - a keylist's top, or a builder's own buffer. What
+/// grows it is checked against the room, and every view of it, its u64s.
+pub struct KeyRoom<'b> {
+    buf: &'b mut [u64],
+}
+
+impl<'b> KeyRoom<'b> {
+    /// A deleted key at the front of @buf, as bkey_init() leaves one.
+    pub fn new(buf: &'b mut [u64]) -> Self {
+        assert!(buf.len() >= BKEY_U64S, "room of {} u64s, short of a key's header", buf.len());
+        plain_bytes_mut(&mut buf[..BKEY_U64S]).copy_from_slice(plain_bytes(&c::bkey::new()));
+        KeyRoom { buf }
+    }
+
+    pub fn key(&self) -> &BkeyI {
+        keys(self.buf).next().expect("a key in its room")
+    }
+
+    pub fn key_mut(&mut self) -> &mut BkeyI {
+        key_mut(self.buf)
+    }
+
+    pub fn k(&self) -> &c::bkey {
+        &self.key().k
+    }
+
+    /// Its header - its u64s, set_val_u64s()'s.
+    pub fn k_mut(&mut self) -> &mut c::bkey {
+        &mut self.key_mut().k
+    }
+
+    /// Its value, as long as its u64s say.
+    pub fn val_mut(&mut self) -> &mut [u64] {
+        let u64s = usize::from(self.k().u64s);
+        &mut self.buf[BKEY_U64S..u64s]
+    }
+
+    /// Its value made @val_u64s long; grown, the new u64s are zeroes. NoRoom
+    /// past the room, or what a key's u8 of u64s holds.
+    pub fn set_val_u64s(&mut self, val_u64s: usize) -> Result<(), NoRoom> {
+        let need_u64s = BKEY_U64S + val_u64s;
+        let have_u64s = self.buf.len().min(u8::MAX.into());
+        if need_u64s > have_u64s {
+            return Err(NoRoom { need_u64s, have_u64s });
+        }
+
+        let u64s = usize::from(self.k().u64s);
+        if need_u64s > u64s {
+            self.buf[u64s..need_u64s].fill(0);
+        }
+        self.k_mut().u64s = need_u64s as u8;
+        Ok(())
+    }
+
+    /// @words appended to its value.
+    pub fn append_val(&mut self, words: &[u64]) -> Result<(), NoRoom> {
+        let n = self.val_mut().len();
+        self.set_val_u64s(n + words.len())?;
+        self.val_mut()[n..].copy_from_slice(words);
+        Ok(())
+    }
+
+    /// A copy of @k, header and value.
+    pub fn reassemble(&mut self, k: BkeySC<'_>) -> Result<(), NoRoom> {
+        let val = k.val_bytes();
+        self.set_val_u64s(val.len() / size_of::<u64>())?;
+        *self.k_mut() = *k.k;
+        plain_bytes_mut(self.val_mut()).copy_from_slice(val);
+        Ok(())
+    }
+}
+
+/// The keys in @u64s, from where a key starts.
+fn keys(u64s: &[u64]) -> impl Iterator<Item = &BkeyI> + '_ {
+    let len = u64s.len();
+    VstructRefEntries::<c::bkey_i>::new(plain_bytes(u64s)).map(move |k| {
+        let k = k.unwrap_or_else(|e| panic!("a key overruns its buffer, of {len} u64s: {e}"));
+        // SAFETY: a keylist's keys are made in memory, by what adds them
+        unsafe { assume_validated(k) }.key()
+    })
+}
+
+/// The key at the front of @u64s.
 fn key_mut(u64s: &mut [u64]) -> &mut BkeyI {
     let len = u64s.len();
     let k = VstructRefEntriesMut::<c::bkey_i>::new(plain_bytes_mut(u64s)).next()
-        .expect("a key in an empty keylist")
-        .unwrap_or_else(|e| panic!("a key overruns its keylist, of {len} u64s: {e}"));
+        .expect("a key in an empty buffer")
+        .unwrap_or_else(|e| panic!("a key overruns its buffer, of {len} u64s: {e}"));
     unsafe { assume_validated(k) }.into_key_mut()
-}
-
-/// Room in @l for @new_u64s more: its buffer grown to the power of two that
-/// holds them - kmalloc()'d, the inline buffer copied - unless what it has
-/// already does. 0, or -ENOMEM.
-///
-/// # Safety
-/// @l's buffer is @inline_u64s, @nr_inline_u64s long, or kmalloc()'s.
-pub unsafe fn bch2_keylist_realloc(l: &mut c::keylist, inline_u64s: *mut u64, nr_inline_u64s: usize,
-                                   new_u64s: usize) -> c_int {
-    let oldsize = l.u64s();
-    let newsize = (oldsize + new_u64s).next_power_of_two();
-    let old_buf = (l.keys_p != inline_u64s).then_some(l.keys_p);
-
-    if newsize <= nr_inline_u64s || (old_buf.is_some() && oldsize.next_power_of_two() == newsize) {
-        return 0;
-    }
-
-    let new = {
-        let _noio = MemallocFlags::noio();
-        // SAFETY: the keylist's heap buffer, or none: the caller's
-        match unsafe { krealloc(old_buf.unwrap_or(core::ptr::null_mut()).cast(), newsize * size_of::<u64>()) } {
-            Ok(p) => p.as_ptr().cast::<u64>(),
-            Err(_) => return -(c::ENOMEM as c_int),
-        }
-    };
-
-    if old_buf.is_none() {
-        // SAFETY: the new buffer holds @newsize u64s, @oldsize or more
-        unsafe { core::ptr::copy_nonoverlapping(l.as_u64s().as_ptr(), new, oldsize) };
-    }
-
-    l.keys_p = new;
-    l.top_p = new.wrapping_add(oldsize);
-    0
 }
 
 /// Its keys in increasing order - debug builds': keylist.h's no-op otherwise.
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 #[cstruct_macros::c_export]
 pub fn bch2_verify_keylist_sorted(l: &c::keylist) {
-    let mut keys = l.iter().peekable();
+    let mut keys = keys(l.as_u64s()).peekable();
     while let Some(k) = keys.next() {
         if let Some(next) = keys.peek() {
             assert!(k.k().p < next.k().p, "keylist out of order: {} before {}", k.k(), next.k());

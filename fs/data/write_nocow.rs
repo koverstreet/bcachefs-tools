@@ -3,19 +3,20 @@
 //! The write path's in place writes, over extents that allow them: nocow.
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{bkey_ge, pos, spos, BkeyI, BkeySC, Typed, BKEY_U64S};
+use crate::btree::bkey::{bkey_ge, pos, spos, BkeyI, BkeySC, Typed};
 use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
+use crate::data::keylist::KeyRoom;
 use crate::data::nocow_locking::{bkey_lock_cas, bkey_unlock_cas, NocowKind};
 use crate::data::ptrs::{crc_is_encoded, extents_match, Ptrs, PtrsMut};
 use crate::data::write::{index_update_wq, to_wbio, wbio_init, submit_wbio_replicas, write_done,
-                         write_endio, write_op_error};
+                         write_endio, write_op_error, DevWriteRef};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Dev, Fs};
 use crate::format::{Btree, DataType};
 use crate::snapshots::subvolume;
 use crate::util::closure::Running;
-use crate::util::kernel::{unlikely, WRITE};
+use crate::util::kernel::unlikely;
 use crate::util::rcu::read_lock;
 use crate::{btree_trans, fs_inconsistent, inode};
 use c::bch_write_flags as w;
@@ -133,33 +134,18 @@ extern "C" fn nocow_write_done(mut op: Running<Op>) {
 /*
  * Take an io_ref per ptr, populating @cas (parallel to @ptrs) and
  * returning the number of refs taken on success.  On partial failure,
- * walks back through cas[] to drop the refs taken so far — never
- * re-derives ca via c->devs[idx], which dev_remove may have cleared
- * while our io_ref still pins the dev.
+ * the refs taken so far go with cas[] — never re-derived via
+ * c->devs[idx], which dev_remove may have cleared while our io_ref
+ * still pins the dev.
  */
-fn bkey_get_dev_iorefs<'f>(fs: &'f Fs, k: BkeySC<'_, Ptrs>, cas: &mut [Option<&'f Dev>]) -> Option<usize> {
+fn bkey_get_dev_iorefs(fs: &Fs, k: BkeySC<'_, Ptrs>, cas: &mut [Option<DevWriteRef>]) -> Option<usize> {
     let mut i = 0;
     for ptr in k.ptrs(fs) {
-        cas[i] = fs.dev_get_ioref_kind(ptr.dev().into(), WRITE, IO_WRITE);
-        if cas[i].is_none() {
-            unsafe { put_iorefs(&cas[..i]) };
-            return None;
-        }
+        cas[i] = Some(fs.dev_get_ioref(ptr.dev().into())?);
         i += 1;
     }
 
     Some(i)
-}
-
-const IO_WRITE: u32 = c::bch_dev_write_ref::BCH_DEV_WRITE_REF_io_write as u32;
-
-/// # Safety
-/// Each of @cas is a device whose io ref, from bkey_get_dev_iorefs(), is the
-/// caller's to give up.
-unsafe fn put_iorefs(cas: &[Option<&Dev>]) {
-    for ca in cas.iter().flatten() {
-        unsafe { ca.io_ref[WRITE].put_kind(IO_WRITE) };
-    }
 }
 
 fn inode_get_i_size(t: &TransAttempt<'_, '_>, inode_pos: crate::format::Bpos) -> Result<u64, BchError> {
@@ -170,16 +156,6 @@ fn inode_get_i_size(t: &TransAttempt<'_, '_>, inode_pos: crate::format::Bpos) ->
         Typed::inode_v3(i) => i.v().bi_size.get(),
         _ => inode::unpack(t.fs(), k).bi_size,
     })
-}
-
-/// # Safety
-/// @dst has room for @k.
-unsafe fn bkey_reassemble(dst: *mut c::bkey_i, k: BkeySC<'_>) {
-    let val_u64s = usize::from(k.k.u64s) - BKEY_U64S;
-    unsafe {
-        (*dst).k = *k.k;
-        core::ptr::copy_nonoverlapping(k.v.cast::<u64>(), dst.cast::<u64>().add(BKEY_U64S), val_u64s);
-    }
 }
 
 /// The op's bio written in place, as much as its extents allow, in @t: the
@@ -223,25 +199,31 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
             return Ok(());
         }
 
-        if op.keys_realloc(k.k.u64s.into()).is_err() {
+        if op.insert_keys.reserve(k.k.u64s.into()).is_err() {
             return Ok(());
         }
 
         /* Get iorefs before dropping btree locks: */
-        let mut cas = [None; c::BCH_BKEY_PTRS_MAX as usize];
+        let mut cas = [const { None }; c::BCH_BKEY_PTRS_MAX as usize];
         let Some(nr_cas) = bkey_get_dev_iorefs(fs, k.arm::<Ptrs>().expect("a writeable extent"), &mut cas) else {
             return Ok(());
         };
-        let cas = &cas[..nr_cas];
+        let cas = &mut cas[..nr_cas];
+        let devs: [Option<&Dev>; c::BCH_BKEY_PTRS_MAX as usize] =
+            core::array::from_fn(|i| cas.get(i).and_then(Option::as_deref).map(|ca| &**ca));
+        let devs = &devs[..nr_cas];
 
         /* Unlock before taking nocow locks, doing IO: */
-        let top = op.insert_keys.top();
-        unsafe { bkey_reassemble(top, k) };
-        let k = BkeySC::from(unsafe { &*BkeyI::from_raw(top) });
+        let mut buf = [0u64; c::BKEY_EXTENT_U64s_MAX as usize];
+        let mut copy = KeyRoom::new(&mut buf);
+        if copy.reassemble(k).is_err() {
+            return Ok(());
+        }
+        let k = BkeySC::from(copy.key());
 
         t.unlock();
 
-        bkey_lock_cas(fs, Some(t.trans()), k, cas, NocowKind::Update);
+        bkey_lock_cas(fs, Some(t.trans()), k, devs, NocowKind::Update);
 
         /*
          * This could be handled better: If we're able to trylock the
@@ -251,7 +233,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
         {
             let rcu = read_lock();
             let ptrs = k.arm::<Ptrs>().expect("a writeable extent");
-            for (ptr, ca) in ptrs.ptrs(fs).zip(cas.iter().flatten()) {
+            for (ptr, ca) in ptrs.ptrs(fs).zip(devs.iter().flatten()) {
                 let stale = ca.ptr_stale(ptr, &rcu);
                 if unlikely(stale != Some(0)) {
                     let ret = if stale.is_none() {
@@ -263,8 +245,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
                         fs.err(bch_errcode::BCH_ERR_transaction_restart)
                     };
 
-                    bkey_unlock_cas(fs, k, cas, NocowKind::Update);
-                    unsafe { put_iorefs(cas) };
+                    bkey_unlock_cas(fs, k, devs, NocowKind::Update);
 
                     /* Fall back to COW path: */
                     return Err(ret);
@@ -303,10 +284,10 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
 
         op.closure().get().leak();
 
-        unsafe { submit_wbio_replicas(to_wbio(bio), fs, DataType::user, &*BkeyI::from_raw(top), Some(cas)) };
+        unsafe { submit_wbio_replicas(to_wbio(bio), op.fs(), DataType::user, copy.key(), Some(cas)) };
 
         if op.has(w::BCH_WRITE_convert_unwritten) {
-            unsafe { op.insert_keys.push() };
+            op.insert_keys.push_key(copy.key());
         }
         if op.has(w::BCH_WRITE_submitted) {
             return Ok(());
@@ -346,7 +327,7 @@ pub(crate) fn nocow_write(mut op: Running<Op>) -> Result<(), Running<Op>> {
         /* fallback to cow write path */
         op.sync();
         __nocow_write_done(&mut op);
-        op.insert_keys.top_p = op.insert_keys.keys_p;
+        op.insert_keys.clear();
         Err(op)
     } else if op.has(w::BCH_WRITE_sync) {
         op.sync();

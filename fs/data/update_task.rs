@@ -224,7 +224,7 @@ impl c::data_update {
 
 /// # Safety
 /// @op is an Update's update's write op.
-unsafe extern "C" fn write_done(op: *mut c::bch_write_op) {
+unsafe fn write_done(op: *mut c::bch_write_op) {
     // SAFETY: the caller's; as in read_done()
     unsafe {
         let u = op.byte_sub(core::mem::offset_of!(c::data_update, op)).cast::<c::data_update>();

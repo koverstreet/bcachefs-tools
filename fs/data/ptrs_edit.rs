@@ -6,6 +6,7 @@
 use super::*;
 use crate::btree::bkey::BKEY_U64S;
 use crate::btree::iter::{NoRoom, TransBkey};
+use crate::data::keylist::KeyRoom;
 
 /// What a PtrsMut key does, in whichever form it's held: dropping only
 /// shrinks it, so any mutable key can; inserting grows it, so that's
@@ -223,20 +224,14 @@ impl TransBkey<'_, '_, PtrsMut> {
 }
 
 /// @crc appended to @k's entries, as the smallest entry it packs into:
-/// bch2_extent_crc_append().
-///
-/// # Safety
-/// @k is a key with pointers, its entries running to its value's end, with
-/// room for the largest extent value - a write's, from its keylist.
-pub(crate) unsafe fn extent_crc_append(k: *mut c::bkey_i, crc: &c::bch_extent_crc_unpacked) {
+/// bch2_extent_crc_append(). @k is a key with pointers, its entries running
+/// to its value's end.
+pub(crate) fn extent_crc_append(k: &mut KeyRoom<'_>, crc: &c::bch_extent_crc_unpacked) -> Result<(), NoRoom> {
     let e = crc_entry(crc, c::bch_extent_entry_type::BCH_EXTENT_ENTRY_crc32);
-    unsafe {
-        let u64s = usize::from((*k).k.u64s);
-        assert!(u64s + e.len() - crate::btree::bkey::BKEY_U64S <= c::BKEY_EXTENT_VAL_U64s_MAX as usize,
-                "appending a crc past an extent's largest value");
-        core::ptr::copy_nonoverlapping(e.as_ptr(), k.cast::<u64>().add(u64s), e.len());
-        (*k).k.u64s += e.len() as u8;
-    }
+    let val_u64s = usize::from(k.k().u64s) - BKEY_U64S;
+    assert!(val_u64s + e.len() <= c::BKEY_EXTENT_VAL_U64s_MAX as usize,
+            "appending a crc past an extent's largest value");
+    k.append_val(&e)
 }
 
 /// @crc as the smallest crc entry it packs into, of type @min or larger, in

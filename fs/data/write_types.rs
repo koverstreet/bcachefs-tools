@@ -7,8 +7,9 @@ use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::types::{NeBytes, c_default};
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, bitfield, c_enum, c_xmacro, TypeInfo};
+use cstruct_macros::{CStruct, Init, bitfield, c_enum, c_xmacro, TypeInfo};
 use nestify::nest;
+use pin_init::pin_data;
 use crate::format::{Bpos, Bversion};
 
 c_xmacro! {
@@ -64,7 +65,9 @@ nest! {
     pub struct bch_write_bio {
         #[c_struct_group]
         pub wbio: pub struct bch_write_bio_wbio {
-            pub c: *mut Fs,
+            /* set at submit: 'static as a write op's fs() is */
+            #[c("struct bch_fs *c")]
+            pub c: Option<&'static Fs>,
             pub parent: *mut c::bch_write_bio,
             /*
              * Stashed at submit so endio doesn't have to re-derive the dev pointer
@@ -72,7 +75,8 @@ nest! {
              * lookup table before draining refs).  Non-NULL iff we hold an io_ref;
              * doubles as the "we hold the ref" indicator.
              */
-            pub ca: *mut Dev,
+            #[c("struct bch_dev *ca")]
+            pub ca: Option<&'static Dev>,
 
             pub submit_time: u64,
             pub inode_offset: u64,
@@ -103,14 +107,19 @@ c_default!(bch_write_bio);
 crate::has_bio!(c::bch_write_bio, bio);
 
 nest! {
+    /* made by init(): bch2_write_op_init() */
+    #[pin_data]
     #[repr(C)]
-    #[derive(CStruct, TypeInfo)]
+    #[derive(CStruct, TypeInfo, Init)]
+    #[init_args(fs: &Fs, opts: c::bch_inode_opts)]
     pub struct bch_write_op {
         #[c("struct closure cl")]
         pub cl: crate::util::ffi::Opaque<c::closure>,
         #[c("struct bch_fs *c")]
+        #[init(unsafe { crate::util::backref::BackRef::new(fs) })]
         pub c: crate::util::backref::BackRef<Fs>,
-        pub end_io: Option<unsafe extern "C" fn(*mut c::bch_write_op)>,
+        #[c("void (*end_io)(struct bch_write_op *)")]
+        pub end_io: Option<unsafe fn(*mut c::bch_write_op)>,
         pub start_time: u64,
 
         /* its slot on its async object list */
@@ -122,6 +131,10 @@ nest! {
         pub io_error: u8,
 
         #[c_bitfield]
+        #[init(bch_write_op_bits::new()
+               .with_csum_type(fs.data_checksum_type(&opts).0 as u8)
+               .with_compression_opt(opts.compression)
+               .with_watermark(c::bch_watermark::BCH_WATERMARK_normal as u8))]
         #>[bitfield(u32, repr = NeBytes<3>, from = NeBytes::<3>::from_u32, into = NeBytes::<3>::to_u32)]
         pub bits: pub struct bch_write_op_bits {
             /*
@@ -166,9 +179,11 @@ nest! {
          * can carry the effective opts per extent too, and
          * read_extent_rbio_alloc() stops looking up a reflink_v's own.
          */
+        #[init(opts)]
         pub opts: c::bch_inode_opts,
 
         pub subvol: u32,
+        #[init(crate::POS_MAX)]
         pub pos: Bpos,
         pub version: Bversion,
 
@@ -187,36 +202,51 @@ nest! {
 
         pub write_point: c::write_point_specifier,
 
-        pub wp: *mut c::write_point,
+        /* the filesystem's, so 'static: as the op's fs() */
+        #[c("struct write_point *wp")]
+        pub wp: Option<&'static c::write_point>,
         pub wp_list: c::list_head,
 
         /* Reserved at @res.nr_replicas, which is not @nr_replicas - see above */
+        #[init(c::DiskReservation::new(unsafe { crate::util::backref::BackRef::new(fs).get() }))]
         pub res: c::disk_reservation,
 
         pub open_buckets: c::open_buckets,
 
+        #[init(u64::MAX)]
         pub new_i_size: u64,
         pub i_sectors_delta: i64,
 
-        pub insert_keys: c::keylist,
-        #[c("u64 inline_keys[BKEY_EXTENT_U64s_MAX * 2]")]
-        pub inline_keys: [u64; c::BKEY_EXTENT_U64s_MAX * 2],
+        #[c("u64 insert_keys[1 + BKEY_EXTENT_U64s_MAX * 2]")]
+        #[init(crate::data::keylist::Keylist::new())]
+        pub insert_keys: crate::data::keylist::Keylist<{ c::BKEY_EXTENT_U64s_MAX * 2 }>,
 
         /*
          * Bitmask of devices that have had nocow writes issued to them since
          * last flush:
          */
-        pub devs_need_flush: *mut c::bch_devs_mask,
+        #[c("struct bch_devs_mask *devs_need_flush")]
+        pub devs_need_flush: *const c::AtomicDevsMask,
 
         /* what failed writing this round's buckets: */
+        #[init(c::bch_io_failures::default())]
         pub failed: c::bch_io_failures,
 
-        /* Must be last: */
+        /* c->writes, held till it's done - a data update's holds its own */
+        #[c("void *write_ref")]
+        #[init(None)]
+        pub write_ref: Option<crate::util::refcount::RefGuard<crate::util::enumerated_ref::EnumeratedRef>>,
+
+        /* Must be last - and its bio set up by the op's owner, before init() */
+        #[init(unsafe { crate::util::alloc::untouched() })]
         pub wbio: c::bch_write_bio,
     }
 }
 
 crate::has_closure!(c::bch_write_op, cl);
+
+/// A write point's writes, waiting for their index updates.
+pub type WriteOpList = crate::list!(c::bch_write_op, wp_list);
 
 const _: () = assert!((c::__bch_write_flags::__BCH_WRITE_convert_unwritten as u32) < u16::BITS,
                       "the write flags don't fit in bch_write_op's flags");
@@ -229,36 +259,14 @@ impl c::bch_write_op {
         unsafe { self.c.get() }
     }
 
+    /// An op for @fs, with @opts, made at @op by init(): its wbio's bio left as
+    /// its owner set it up.
+    ///
     /// # Safety
-    /// @fs outlives the op. The reservation is overwritten without being put,
-    /// so it must hold nothing yet.
-    pub unsafe fn init(&mut self, fs: &Fs, opts: c::bch_inode_opts) {
-        // SAFETY: the caller's
-        self.c          = unsafe { crate::util::backref::BackRef::new(fs) };
-        let fs = self.fs();
-        self.end_io     = None;
-        self.flags      = 0;
-        self.io_error   = 0;
-        self.written    = 0;
-        self.error      = 0;
-        self.bits.set_csum_type(fs.data_checksum_type(&opts).0 as u8);
-        self.bits.set_compression_opt(opts.compression);
-        self.bits.set_nr_replicas(0);
-        self.bits.set_watermark(c::bch_watermark::BCH_WATERMARK_normal as u8);
-        self.bits.set_incompressible(0);
-        self.open_buckets.nr = 0;
-        self.devs_have.nr = 0;
-        self.target     = 0;
-        self.opts       = opts;
-        self.subvol     = 0;
-        self.pos        = crate::POS_MAX;
-        self.version    = Bversion::default();
-        self.write_point = c::write_point_specifier { v: 0 };
-        // SAFETY: the caller's - not put, and not dropped
-        unsafe { core::ptr::write(&mut self.res, c::DiskReservation::new(fs)) };
-        self.new_i_size = u64::MAX;
-        self.i_sectors_delta = 0;
-        self.devs_need_flush = core::ptr::null_mut();
-        unsafe { core::ptr::write(&mut self.failed, Default::default()) };
+    /// @fs outlives the op, and @op holds nothing to drop: new memory, or an
+    /// op whose write's done - its reservation put, its keys and refs gone.
+    pub unsafe fn init_at(op: *mut Self, fs: &Fs, opts: c::bch_inode_opts) {
+        unsafe { crate::util::alloc::init_at(Self::init(fs, opts), op) }
+            .unwrap_or_else(|e| panic!("a write op's init, which can't fail: {e}"));
     }
 }

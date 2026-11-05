@@ -15,7 +15,7 @@ use crate::util::bio::{plugged, Bio, BioBuffersUnmanaged, BioOwner};
 use crate::util::closure::{self, closure_wait, StackClosure};
 use crate::util::kernel::{local_clock, unlikely, PAGE_SIZE};
 use crate::util::time_stats::TimeStats;
-use crate::vfs::folio::{Folio, Mapping};
+use crate::vfs::folio::{Folio, FolioGuard, Mapping};
 use crate::vfs::inode::InodeInfo;
 use c::bch_folio_sector_state as SectorState;
 use c::bch_write_flags as w;
@@ -31,6 +31,24 @@ struct WritepageState {
     io:   Option<NonNull<Io>>,
     opts: c::bch_inode_opts,
     tmp:  *mut c::bch_folio_sector,
+}
+
+/// The VFS's writeback of a mapping, for the bch2_writepages() it's passed to.
+struct Wbc(NonNull<c::writeback_control>);
+
+impl Wbc {
+    /// The next folio to write back, locked - after @prev, which writing
+    /// returned @err: writeback_iter().
+    fn next(&self, mapping: Mapping, prev: Option<Folio>, err: &mut c_int) -> Option<FolioGuard<'_>> {
+        let prev = prev.map_or(core::ptr::null_mut(), Folio::as_ptr);
+        let folio = unsafe { c::writeback_iter(mapping.as_ptr(), self.0.as_ptr(), prev, err) };
+        (!folio.is_null()).then(|| unsafe { FolioGuard::adopt(Folio::from_raw(folio)) })
+    }
+
+    /// wbc_to_write_flags(): what its writes are submitted as.
+    fn write_flags(&self) -> c::blk_opf_t {
+        unsafe { c::wbc_to_write_flags(self.0.as_ptr()) }
+    }
 }
 
 impl c::bch_writepage_io {
@@ -91,7 +109,7 @@ fn folios_clear_replicas(io: &Io, f: impl Fn(Folio)) {
     }
 }
 
-unsafe extern "C" fn writepage_io_done(op: *mut c::bch_write_op) {
+unsafe fn writepage_io_done(op: *mut c::bch_write_op) {
     let io = unsafe { &mut *of_op(op) };
     let inode = io.inode();
 
@@ -99,8 +117,7 @@ unsafe extern "C" fn writepage_io_done(op: *mut c::bch_write_op) {
         inode.ei_flags.set(c::bch_inode_info_flags::EI_INODE_ERROR, true);
 
         folios_clear_replicas(io, |folio| {
-            let mapping = folio.mapping().expect("a folio in writeback with no mapping");
-            unsafe { c::mapping_set_error(mapping.as_ptr(), -(c::EIO as c_int)) }
+            folio.mapping().expect("a folio in writeback with no mapping").set_error(-(c::EIO as c_int))
         });
     }
 
@@ -132,7 +149,7 @@ unsafe extern "C" fn writepage_io_done(op: *mut c::bch_write_op) {
         let s = unsafe { folio.state_ptr().expect("a folio in writeback with no bch_folio").as_ref() };
 
         if s.write_count.fetch_sub(1, AcqRel) == 1 {
-            unsafe { c::folio_end_writeback(folio.as_ptr()) };
+            unsafe { folio.end_writeback() };
         }
     }
 
@@ -149,7 +166,7 @@ fn writepage_do_io(w: &mut WritepageState) {
  * Get a bch_writepage_io and add @page to it - appending to an existing one if
  * possible, else allocating a new one:
  */
-fn writepage_io_alloc(fs: &Fs, wbc: *mut c::writeback_control, w: &mut WritepageState, inode: &InodeInfo,
+fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeInfo,
                       sector: u64, nr_replicas: u32, res_nr_replicas: u32) {
     let bio = unsafe {
         c::bio_alloc_bioset(core::ptr::null_mut(), c::BIO_MAX_VECS as u16, c::req_op_REQ_OP_WRITE,
@@ -159,8 +176,8 @@ fn writepage_io_alloc(fs: &Fs, wbc: *mut c::writeback_control, w: &mut Writepage
     let i = unsafe { &mut *io };
 
     i.inode = inode.raw();
+    unsafe { c::bch_write_op::init_at(&raw mut i.op, fs, w.opts) };
     let op = &mut i.op;
-    unsafe { op.init(fs, w.opts) };
     op.target          = w.opts.foreground_target;
     op.bits.set_nr_replicas(nr_replicas as u8);
     op.res.nr_replicas.set(res_nr_replicas);
@@ -168,9 +185,9 @@ fn writepage_io_alloc(fs: &Fs, wbc: *mut c::writeback_control, w: &mut Writepage
     op.subvol          = inode.inum().subvol as u32;
     op.pos             = pos(inode.inum().inum, sector);
     op.end_io          = Some(writepage_io_done);
-    op.devs_need_flush = core::ptr::from_ref(&inode.ei_devs_need_flush).cast_mut().cast();
+    op.devs_need_flush = &inode.ei_devs_need_flush;
     op.wbio.bio.bi_iter.bi_sector = sector;
-    op.wbio.bio.bi_opf = unsafe { c::wbc_to_write_flags(wbc) };
+    op.wbio.bio.bi_opf = wbc.write_flags();
 
     w.io = NonNull::new(io);
 }
@@ -209,7 +226,7 @@ fn throttle_writes(fs: &Fs, cl: &StackClosure) {
     }
 }
 
-fn writepage(folio: Folio, wbc: *mut c::writeback_control, w: &mut WritepageState) -> c_int {
+fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState) -> c_int {
     let inode = folio.mapping().expect("a folio in writeback with no mapping").inode();
     let fs = inode.fs();
     let mut nr_replicas_this_write = u32::MAX;
@@ -225,8 +242,7 @@ fn writepage(folio: Folio, wbc: *mut c::writeback_control, w: &mut WritepageStat
 
         /* Is the folio fully outside i_size? (truncate in progress) */
         if folio.pos() >= i_size {
-            inode.undirty_folio(folio, 0, folio.size());
-            unsafe { c::folio_unlock(folio.as_ptr()) };
+            inode.undirty_folio(*folio, 0, folio.size());
             return 0;
         }
 
@@ -240,7 +256,7 @@ fn writepage(folio: Folio, wbc: *mut c::writeback_control, w: &mut WritepageStat
         let f_offset = (i_size - folio.pos()) as usize;
         folio.zero_segment(f_offset, folio.size());
 
-        inode.undirty_folio(folio, f_offset, folio.size() - f_offset);
+        inode.undirty_folio(*folio, f_offset, folio.size() - f_offset);
     }
 
     let f_sectors = folio.nr_sectors();
@@ -276,9 +292,7 @@ fn writepage(folio: Folio, wbc: *mut c::writeback_control, w: &mut WritepageStat
     s.write_count.store(1, Relaxed);
 
     assert!(!folio.writeback(), "a folio already under writeback, written back again");
-    unsafe { c::rust_folio_start_writeback(folio.as_ptr()) };
-
-    unsafe { c::folio_unlock(folio.as_ptr()) };
+    let folio = folio.start_writeback();
 
     let mut offset = 0;
     loop {
@@ -334,7 +348,7 @@ fn writepage(folio: Folio, wbc: *mut c::writeback_control, w: &mut WritepageStat
     }
 
     if s.write_count.fetch_sub(1, AcqRel) == 1 {
-        unsafe { c::folio_end_writeback(folio.as_ptr()) };
+        unsafe { folio.end_writeback() };
     }
 
     0
@@ -344,7 +358,8 @@ fn writepage(folio: Folio, wbc: *mut c::writeback_control, w: &mut WritepageStat
 /// The VFS's: @mapping one of our inodes', @wbc its writeback.
 #[c_export]
 pub unsafe fn bch2_writepages(mapping: *mut c::address_space, wbc: *mut c::writeback_control) -> c_int {
-    let inode = unsafe { Mapping::from_raw(mapping) }.inode();
+    let (mapping, wbc) = unsafe { (Mapping::from_raw(mapping), Wbc(NonNull::new_unchecked(wbc))) };
+    let inode = mapping.inode();
     let fs = inode.fs();
     let pool = &fs.vfs.writepage_buf_pool;
     let mut w = WritepageState {
@@ -356,15 +371,14 @@ pub unsafe fn bch2_writepages(mapping: *mut c::address_space, wbc: *mut c::write
     let ret = plugged(|| {
         pin_init::stack_pin_init!(let cl = StackClosure::new());
 
-        let mut folio = core::ptr::null_mut();
+        let mut prev = None;
         let mut ret = 0;
 
-        while {
+        loop {
             throttle_writes(fs, &cl);
-            folio = unsafe { c::writeback_iter(mapping, wbc, folio, &mut ret) };
-            !folio.is_null()
-        } {
-            ret = writepage(unsafe { Folio::from_raw(folio) }, wbc, &mut w);
+            let Some(folio) = wbc.next(mapping, prev, &mut ret) else { break };
+            prev = Some(*folio);
+            ret = writepage(folio, &wbc, &mut w);
         }
 
         if w.io.is_some() {

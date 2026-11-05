@@ -17,21 +17,20 @@ use crate::fs::{writepoint_hashed, Fs};
 use crate::inode_opts;
 use crate::snapshots::subvolume;
 use crate::util::alloc::kmalloc;
-use crate::util::backref::BackRef;
 use crate::util::bio::Bio;
 use crate::util::closure;
-use crate::util::iov_iter::IovIterFields;
-use crate::util::kernel::{likely, unlikely};
+use crate::util::iov_iter::{IovIter, IovIterFields};
+use crate::util::kernel::{current_id, likely, task_io_account_write, unlikely, Mm};
+use crate::util::refcount::TryRefcount;
 use crate::vfs::folio::Mapping;
 use crate::vfs::inode::InodeInfo;
+use crate::vfs::kiocb::Kiocb;
 use c::bch_write_flags as w;
 use core::ops::ControlFlow;
 use core::ptr::NonNull;
 use cstruct_macros::c_export;
 
 type Dio = c::dio_write;
-
-const DIO_WRITE_REF: u32 = c::bch_write_ref::BCH_WRITE_REF_dio_write as u32;
 
 fn check_range_allocated(fs: &Fs, inum: c::subvol_inum, mut offset: u64, size: u64,
                          nr_replicas: u32, compressed: bool) -> bool {
@@ -62,7 +61,8 @@ fn check_range_allocated(fs: &Fs, inum: c::subvol_inum, mut offset: u64, size: u
 }
 
 impl c::dio_write {
-    /// i_dio_count is the dio's ref on it, and thus on the filesystem.
+    /// 'static for the dio: its DioStarted, the i_dio_count, is its ref on
+    /// the inode, and thus on the filesystem.
     fn inode(&self) -> &'static InodeInfo {
         unsafe { InodeInfo::from_inode(self.inode.cast()) }
     }
@@ -138,20 +138,18 @@ unsafe fn dio_write_done(dio: *mut Dio) -> isize {
     let d = unsafe { &mut *dio };
     let fs = d.op.fs();
     let req = d.req;
-    let inode = d.inode();
     let sync = d.bits.sync() != 0;
-
-    c::bch2_two_state_unlock(&inode.ei_pagecache_lock, 1);
 
     unsafe { c::rust_kfree(d.iov.cast()) };
 
     let mut ret = if d.op.error != 0 { isize::from(d.op.error) } else { (d.written << 9) as isize };
+    let (write_ref, started) = (d.write_ref.take(), d.started.take());
     unsafe { c::bio_put(d.bio_mut()) };
 
-    unsafe { fs.writes.put_kind(DIO_WRITE_REF) };
+    drop(write_ref);
 
     /* inode->i_dio_count is our ref on inode and thus bch_fs */
-    unsafe { c::inode_dio_end(inode.v.as_ptr()) };
+    drop(started);
 
     if ret < 0 {
         ret = BchError::from_raw(ret as i32).class() as isize;
@@ -187,7 +185,7 @@ fn dio_write_end(dio: &mut Dio) {
     }
 }
 
-unsafe extern "C" fn dio_write_sync_done(op: *mut c::bch_write_op) {
+unsafe fn dio_write_sync_done(op: *mut c::bch_write_op) {
     let dio = unsafe { &mut *of_op(op) };
 
     dio.bits.set_sync_done(1);
@@ -198,10 +196,10 @@ unsafe extern "C" fn dio_write_sync_done(op: *mut c::bch_write_op) {
 #[inline(always)]
 unsafe fn dio_write_loop(dio: *mut Dio) -> isize {
     let d = unsafe { &mut *dio };
-    let fs = d.op.fs();
     let req = d.req;
     let mapping = d.mapping;
     let inode = d.inode();
+    let fs = inode.fs();
     let opts = inode_opts::get_inode(fs, &inode.inode());
     let mut sync = d.bits.sync() != 0;
 
@@ -210,14 +208,13 @@ unsafe fn dio_write_loop(dio: *mut Dio) -> isize {
         let iter_count = d.iter.count();
 
         debug_assert!(fs.fdm_table.get().is_none(), "a DIO write with page faults disabled already");
-        fs.fdm_table.set(mapping);
+        let fdm = fs.fdm_table.set(mapping);
 
         let mut ret = unsafe { Bio::from_raw_mut(d.bio_mut()) }
-            .pin_user_pages(&mut unsafe { crate::util::iov_iter::IovIter::from_raw(&mut d.iter) });
+            .pin_user_pages(&mut unsafe { IovIter::from_raw(&mut d.iter) });
 
-        let dropped_locks = fs.fdm_table.dropped_locks();
-
-        fs.fdm_table.clear();
+        let dropped_locks = fdm.dropped_locks();
+        drop(fdm);
 
         /*
          * If the fault handler returned an error but also signalled
@@ -234,8 +231,7 @@ unsafe fn dio_write_loop(dio: *mut Dio) -> isize {
 
         let ki_pos = unsafe { (*req).ki_pos } as u64;
         if unlikely(dropped_locks) {
-            let r = unsafe { Mapping::from_raw(mapping) }
-                .write_invalidate_range(ki_pos, ki_pos + iter_count as u64 - 1);
+            let r = mapping.write_invalidate_range(ki_pos, ki_pos + iter_count as u64 - 1);
             if let Err(e) = r {
                 break Err(e);
             }
@@ -257,15 +253,15 @@ unsafe fn dio_write_loop(dio: *mut Dio) -> isize {
             break Err(c::EFAULT.into());
         }
 
+        unsafe { c::bch_write_op::init_at(&raw mut d.op, fs, opts) };
         let op = &mut d.op;
-        unsafe { op.init(fs, opts) };
         op.end_io      = Some(if sync { dio_write_sync_done } else { dio_write_loop_async });
         op.target      = op.opts.foreground_target;
-        op.write_point = writepoint_hashed(unsafe { c::get_current() }.addr());
+        op.write_point = writepoint_hashed(current_id());
         op.bits.set_nr_replicas(op.opts.data_replicas);
         op.subvol      = inode.inum().subvol as u32;
         op.pos         = pos(inode.inum().inum, ki_pos >> 9);
-        op.devs_need_flush = core::ptr::from_ref(&inode.ei_devs_need_flush).cast_mut().cast();
+        op.devs_need_flush = &inode.ei_devs_need_flush;
 
         if sync {
             op.set(w::BCH_WRITE_sync);
@@ -292,7 +288,7 @@ unsafe fn dio_write_loop(dio: *mut Dio) -> isize {
             }
         }
 
-        unsafe { c::task_io_account_write(d.op.wbio.bio.bi_iter.bi_size as usize) };
+        task_io_account_write(d.op.wbio.bio.bi_iter.bi_size as usize);
 
         if unlikely(d.iter.count() != 0) &&
            d.bits.sync() == 0 &&
@@ -344,16 +340,11 @@ unsafe fn dio_write_continue(dio: *mut Dio) {
 
     unsafe { c::bio_reset((*dio).bio_mut(), core::ptr::null_mut(), c::req_op_REQ_OP_WRITE) };
 
-    if !mm.is_null() {
-        unsafe { c::kthread_use_mm(mm) };
-    }
+    let _mm = mm.map(|mm| unsafe { mm.use_in_kthread() });
     unsafe { dio_write_loop(dio) };
-    if !mm.is_null() {
-        unsafe { c::kthread_unuse_mm(mm) };
-    }
 }
 
-unsafe extern "C" fn dio_write_loop_async(op: *mut c::bch_write_op) {
+unsafe fn dio_write_loop_async(op: *mut c::bch_write_op) {
     let dio = unsafe { of_op(op) };
     let d = unsafe { &mut *dio };
 
@@ -370,90 +361,78 @@ unsafe extern "C" fn dio_write_loop_async(op: *mut c::bch_write_op) {
 /// The VFS's: @req a kiocb of one of our files, @iter its buffer.
 #[c_export]
 pub unsafe fn bch2_direct_write(req: *mut c::kiocb, iter: *mut c::iov_iter) -> isize {
-    let file = unsafe { (*req).ki_filp };
-    let mapping = unsafe { (*file).f_mapping };
-    let inode = unsafe { InodeInfo::from_inode((*file).f_inode) };
+    let (mut k, mut it) = unsafe { (Kiocb::from_raw(req), IovIter::from_raw(iter)) };
+    let mapping = k.file().mapping();
+    let inode = k.inode();
     let fs = inode.fs();
-    let mut locked = true;
 
-    if !fs.writes.tryget_kind(DIO_WRITE_REF) {
+    let Some(write_ref) = fs.writes.tryget_live() else {
         return -(c::EROFS as isize);
-    }
-
-    unsafe { c::inode_lock(inode.v.as_ptr()) };
-
-    let ret = 'out: {
-        let ret = 'err_put_write_ref: {
-            let ret = unsafe { c::generic_write_checks(req, iter) };
-            if unlikely(ret <= 0) {
-                break 'err_put_write_ref ret;
-            }
-
-            let ret = unsafe { c::file_remove_privs(file) };
-            if unlikely(ret != 0) {
-                break 'err_put_write_ref ret as isize;
-            }
-
-            let ret = unsafe { c::file_update_time(file) };
-            if unlikely(ret != 0) {
-                break 'err_put_write_ref ret as isize;
-            }
-
-            let (ki_pos, count) = unsafe { ((*req).ki_pos as u64, (*iter).count() as u64) };
-            if unlikely((ki_pos | count) & (fs.block_bytes() - 1) != 0) {
-                break 'err_put_write_ref -(fs.err(bch_errcode::BCH_ERR_EINVAL_unaligned_io).raw() as isize);
-            }
-
-            unsafe { c::inode_dio_begin(inode.v.as_ptr()) };
-            c::bch2_two_state_lock(&inode.ei_pagecache_lock, 1);
-
-            let extending = ki_pos + count > inode.v.size();
-            if !extending {
-                unsafe { c::inode_unlock(inode.v.as_ptr()) };
-                locked = false;
-            }
-
-            let bio = unsafe {
-                c::bio_alloc_bioset(core::ptr::null_mut(),
-                                    c::bio_iov_vecs_to_alloc(iter, c::BIO_MAX_VECS as i32) as u16,
-                                    c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE,
-                                    c::GFP_KERNEL, fs.vfs.dio_write_bioset.as_ptr())
-            };
-            let dio = unsafe { crate::util::bio::of_bio::<Dio>(bio) };
-            let d = unsafe { &mut *dio };
-            d.req           = req;
-            d.mapping       = mapping;
-            d.inode         = inode.raw();
-            d.mm            = unsafe { (*c::get_current()).mm };
-            d.iov           = core::ptr::null();
-            d.bits.set_loop_(0);
-            d.bits.set_extending(extending.into());
-            d.bits.set_sync((unsafe { (*req).ki_complete.is_none() } || extending).into());
-            d.bits.set_flush((unsafe { c::iocb_is_dsync(req) } && fs.opts().journal_flush_disabled.get() == 0).into());
-            d.quota_res.sectors = 0;
-            d.written       = 0;
-            d.iter          = unsafe { core::ptr::read(iter) };
-            d.op.c          = unsafe { BackRef::new(fs) };
-
-            if unlikely(unsafe { (*mapping).nrpages } != 0) {
-                let r = unsafe { Mapping::from_raw(mapping) }.write_invalidate_range(ki_pos, ki_pos + count - 1);
-                if let Err(e) = r {
-                    c::bch2_two_state_unlock(&inode.ei_pagecache_lock, 1);
-                    unsafe { c::bio_put(bio) };
-                    unsafe { c::inode_dio_end(inode.v.as_ptr()) };
-                    break 'err_put_write_ref -(e.raw() as isize);
-                }
-            }
-
-            break 'out unsafe { dio_write_loop(dio) };
-        };
-
-        unsafe { fs.writes.put_kind(DIO_WRITE_REF) };
-        ret
     };
 
-    if locked {
-        unsafe { c::inode_unlock(inode.v.as_ptr()) };
-    }
+    let mut locked = Some(inode.v.lock());
+
+    let ret = 'out: {
+        match k.write_checks(&mut it) {
+            Ok(0) => break 'out 0,
+            Err(e) => break 'out -(e.raw() as isize),
+            Ok(_) => {}
+        }
+
+        if let Err(e) = k.file().remove_privs().and_then(|()| k.file().update_time()) {
+            break 'out -(e.raw() as isize);
+        }
+
+        let (ki_pos, count) = (k.pos(), it.count() as u64);
+        if unlikely((ki_pos | count) & (fs.block_bytes() - 1) != 0) {
+            break 'out -(fs.err(bch_errcode::BCH_ERR_EINVAL_unaligned_io).raw() as isize);
+        }
+
+        let started = inode.dio_start();
+
+        let extending = ki_pos + count > inode.v.size();
+        if !extending {
+            locked = None;
+        }
+
+        let bio = unsafe {
+            c::bio_alloc_bioset(core::ptr::null_mut(),
+                                c::bio_iov_vecs_to_alloc(it.as_ptr(), c::BIO_MAX_VECS as i32) as u16,
+                                c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE,
+                                c::GFP_KERNEL, fs.vfs.dio_write_bioset.as_ptr())
+        };
+        let dio = unsafe { crate::util::bio::of_bio::<Dio>(bio) };
+        let d = unsafe { &mut *dio };
+        d.req           = k.as_ptr();
+        d.mapping       = mapping;
+        d.inode         = inode.raw();
+        d.mm            = Mm::current();
+        d.iov           = core::ptr::null();
+        d.bits.set_loop_(0);
+        d.bits.set_extending(extending.into());
+        d.bits.set_sync((k.is_sync() || extending).into());
+        d.bits.set_flush((k.is_dsync() && fs.opts().journal_flush_disabled.get() == 0).into());
+        d.quota_res.sectors = 0;
+        d.written       = 0;
+        d.iter          = unsafe { core::ptr::read(it.as_ptr()) };
+
+        if unlikely(!mapping.is_empty()) {
+            if let Err(e) = mapping.write_invalidate_range(ki_pos, ki_pos + count - 1) {
+                unsafe { c::bio_put(bio) };
+                drop(started);
+                break 'out -(e.raw() as isize);
+            }
+        }
+
+        // the dio's memory, a bio's front pad: not a dio's yet, nothing to drop
+        unsafe {
+            core::ptr::write(&mut d.started, Some(started));
+            core::ptr::write(&mut d.write_ref, Some(write_ref));
+        }
+
+        unsafe { dio_write_loop(dio) }
+    };
+
+    drop(locked);
     ret
 }

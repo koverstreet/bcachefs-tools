@@ -47,19 +47,18 @@ fn init_append_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>, version: Bvers
      */
     op.pos.offset += u64::from(crc.live_size);
 
-    let e = op.insert_keys.top();
-    unsafe {
-        (*e).k = c::bkey { type_: c::bch_bkey_type::KEY_TYPE_extent.0 as u8, p: op.pos, bversion: version,
-                           ..c::bkey::new() };
-        (*e).k.size = crc.live_size;
+    let (pos, cached) = (op.pos, op.has(w::BCH_WRITE_cached));
+    op.insert_keys.push_with(c::BKEY_EXTENT_U64s_MAX as usize, |e| {
+        *e.k_mut() = c::bkey { type_: c::bch_bkey_type::KEY_TYPE_extent.0 as u8, p: pos, bversion: version,
+                               ..c::bkey::new() };
+        e.k_mut().size = crc.live_size;
 
         if crc.csum_type != 0 || crc.compression_type != 0 || crc.nonce != 0 {
-            extent_crc_append(e, &crc);
+            extent_crc_append(e, &crc).unwrap_or_else(|err| panic!("an extent's crc past its room: {err}"));
         }
 
-        wp.append_ptrs(e, crc.compressed_size, op.has(w::BCH_WRITE_cached));
-        op.insert_keys.push();
-    }
+        wp.append_ptrs(e, crc.compressed_size, cached);
+    });
 }
 
 fn write_bio_alloc(fs: &Fs, wp: &LockedWritePoint<'_>, src: *mut c::bio, buf: *mut c_void) -> *mut c::bio {
@@ -566,7 +565,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
             if !(size(dst) != 0 &&
                  size(src) != 0 &&
                  wp.sectors_free() != 0 &&
-                 op.keys_realloc(c::BKEY_EXTENT_U64s_MAX as usize).is_ok()) {
+                 op.insert_keys.reserve(c::BKEY_EXTENT_U64s_MAX as usize).is_ok()) {
                 return Ok(());
             }
         }

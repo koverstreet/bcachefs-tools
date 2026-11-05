@@ -489,8 +489,6 @@ impl c::data_update {
     fn update_unwritten_extent(&mut self, trans: &BtreeTrans<'_>) -> Result<(), BchError> {
         let fs = self.fs();
         stack_pin_init!(let cl = StackClosure::new());
-        // SAFETY: the op's own buffer, which the keys stay in
-        unsafe { self.op.insert_keys.init(self.op.inline_keys.as_mut_ptr()) };
 
         let end = self.key().k.p;
         let ret = (|| {
@@ -511,7 +509,7 @@ impl c::data_update {
                 let nr = op.bits.nr_replicas().into();
                 let r = t.alloc_request(op.target.into(), false, &mut op.devs_have, nr, nr,
                                         c::bch_watermark::from_bits(op.bits.watermark().into()),
-                                        c::bch_write_flags::from_bits_retain(op.flags.into()), cl.as_ptr())
+                                        op.flags(), cl.as_ptr())
                     .and_then(|mut req| t.alloc_sectors(&mut req, op.write_point));
                 let wp = match r {
                     Ok(wp) => wp,
@@ -528,15 +526,12 @@ impl c::data_update {
                         return Err(e);
                     }
                 };
-                // SAFETY: the keylist's room for the next key, at top(): the
-                // op's inline keys hold an extent of any width
-                let sectors = unsafe {
-                    wp.unwritten_extent(op.insert_keys.top(), op.pos, (end.offset - op.pos.offset) as u32,
-                                        &mut op.open_buckets)
-                };
+                op.insert_keys.reserve(c::BKEY_EXTENT_U64s_MAX as usize)?;
+                let (pos, obs) = (op.pos, &mut op.open_buckets);
+                let sectors = op.insert_keys.push_with(c::BKEY_EXTENT_U64s_MAX as usize, |k| {
+                    wp.unwritten_extent(k, pos, (end.offset - pos.offset) as u32, obs)
+                });
                 op.pos.offset += u64::from(sectors);
-                // SAFETY: as above
-                unsafe { op.insert_keys.push() };
 
                 let r = crate::data::update_index::index_update(trans, self);
                 drop(self.op.open_buckets.drain(fs));
@@ -577,14 +572,14 @@ impl c::data_update {
         self.ctxt = moving.map_or(core::ptr::null_mut(), Moving::raw);
 
         // SAFETY: an update is done before the filesystem goes
-        unsafe { self.op.init(fs, *io_opts) };
+        unsafe { c::bch_write_op::init_at(&raw mut self.op, fs, *io_opts) };
         self.op.pos = self.k.key().k().start_pos();
         self.op.version = self.k.key().k().bversion;
         self.op.target = data_opts.target;
         self.op.write_point = wp;
         use c::bch_write_flags as w;
-        self.op.flags |= (w::BCH_WRITE_pages_stable | w::BCH_WRITE_pages_owned | w::BCH_WRITE_data_encoded |
-                          w::BCH_WRITE_move | data_opts.write_flags).bits() as u16;
+        self.op.set(w::BCH_WRITE_pages_stable | w::BCH_WRITE_pages_owned | w::BCH_WRITE_data_encoded |
+                    w::BCH_WRITE_move | data_opts.write_flags);
         self.op.bits.set_compression_opt(io_opts.background_compression);
         let watermark = (data_opts.commit_flags.bits() & c::BCH_WATERMARK_MASK)
             .max(c::bch_watermark::BCH_WATERMARK_normal as u32);
@@ -629,7 +624,7 @@ impl c::data_update {
         }
 
         if self.opts.extra_replicas != 0 {
-            // the reservation's first charge: op.init() zeroed it
+            // the reservation's first charge: the op's init() made it empty
             self.op.res.add(k.k.size.into(), self.opts.extra_replicas.into(), c::bch_reservation_flags::empty())?;
         }
 
@@ -682,7 +677,7 @@ impl c::data_update {
             // lost durability needs every copy it asks for
             let d = k.durability(t)?;
             if d.online >= io_opts.data_replicas {
-                self.op.flags |= c::bch_write_flags::BCH_WRITE_replicas_best_effort.bits() as u16;
+                self.op.set(c::bch_write_flags::BCH_WRITE_replicas_best_effort);
             }
 
             // Short of data_replicas, don't rereplicate up to it unless
@@ -692,7 +687,7 @@ impl c::data_update {
                 self.op.res.nr_replicas.get();
             if keeping == 0 {
                 nr = nr.max(1);
-                self.op.flags &= !(c::bch_write_flags::BCH_WRITE_cached.bits() as u16);
+                self.op.clear(c::bch_write_flags::BCH_WRITE_cached);
             }
             self.op.bits.set_nr_replicas(nr as u8);
 

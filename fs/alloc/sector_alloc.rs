@@ -28,11 +28,12 @@
 use crate::alloc::disk_groups::Target;
 use crate::alloc::write_point::{WritePointGuard, WritePointSpec};
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{BkeyI, BkeyS};
+use crate::btree::bkey::BkeyS;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::extents::bkey_append_ptr;
+use crate::data::keylist::KeyRoom;
 use crate::data::ptrs::PtrsMut;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
@@ -368,12 +369,10 @@ impl LockedWritePoint<'_> {
 
     /// Appends to @k a pointer to the next @sectors of each of its buckets -
     /// cached if @cached, or on a device of durability 0 for user data - and
-    /// takes them from what's free.
-    ///
-    /// # Safety
-    /// @k is a key with pointers - btree_ptr, btree_ptr_v2, extent - with
-    /// room after its value for one per bucket, on none of their devices.
-    pub unsafe fn append_ptrs(&mut self, k: *mut c::bkey_i, sectors: u32, cached: bool) {
+    /// takes them from what's free. @k is a key with pointers - btree_ptr,
+    /// btree_ptr_v2, extent - on none of their devices, with room for one per
+    /// bucket.
+    pub fn append_ptrs(&mut self, k: &mut KeyRoom<'_>, sectors: u32, cached: bool) {
         let (fs, user) = (self.fs, self.wp.alloc.data_type == DataType::user);
         let g = self.g.as_mut().expect("locked till it's dropped");
         assert!(sectors <= g.sectors_free, "{sectors} sectors from a write point with {} free", g.sectors_free);
@@ -382,8 +381,7 @@ impl LockedWritePoint<'_> {
 
         for ob in g.ptrs.iter(fs) {
             let ptr = ob.ptr().with_cached(u8::from(cached || (user && ob.ca().mi.get().durability == 0)));
-            // SAFETY: the caller's
-            unsafe { bkey_append_ptr(k, ptr) };
+            bkey_append_ptr(k, ptr).unwrap_or_else(|e| panic!("a write point's pointers past their key's room: {e}"));
 
             let free = ob.sectors_free.get();
             assert!(sectors <= free, "{sectors} sectors from open bucket {} with {free} free", ob.idx().get());
@@ -391,28 +389,19 @@ impl LockedWritePoint<'_> {
         }
     }
 
-    /// Builds at @k an unwritten extent from @pos: up to @sectors, as many as
+    /// Builds in @k an unwritten extent from @pos: up to @sectors, as many as
     /// are free, its buckets pinned in @ptrs for the index update. Returns
     /// its size.
-    ///
-    /// # Safety
-    /// @k has room for an extent with a pointer per bucket.
-    pub unsafe fn unwritten_extent(mut self, k: *mut c::bkey_i, pos: Bpos, sectors: u32,
-                                   ptrs: &mut c::open_buckets) -> u32 {
+    pub fn unwritten_extent(mut self, k: &mut KeyRoom<'_>, pos: Bpos, sectors: u32,
+                            ptrs: &mut c::open_buckets) -> u32 {
         let sectors = sectors.min(self.sectors_free());
-        // SAFETY: the caller's
-        unsafe {
-            (*k).k = c::bkey { type_: c::bch_bkey_type::KEY_TYPE_extent.0 as u8, p: pos, ..c::bkey::new() };
-            (*k).k.resize(sectors);
-        }
+        *k.k_mut() = c::bkey { type_: c::bch_bkey_type::KEY_TYPE_extent.0 as u8, p: pos, ..c::bkey::new() };
+        k.k_mut().resize(sectors);
 
         self.open_buckets_get(ptrs);
-        // SAFETY: an extent with no pointers yet, and the caller's room
-        unsafe { self.append_ptrs(k, sectors, false) };
+        self.append_ptrs(k, sectors, false);
 
-        // SAFETY: the whole key, ours
-        let k = unsafe { &mut *BkeyI::from_raw_mut(k) };
-        if let Some(mut e) = BkeyS::from(k).arm::<PtrsMut>() {
+        if let Some(mut e) = BkeyS::from(k.key_mut()).arm::<PtrsMut>() {
             e.ptrs_mut(self.fs).for_each(|p| p.set_unwritten(1));
         }
         sectors

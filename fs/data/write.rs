@@ -713,6 +713,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_ge, BkeyI, BkeyS, BkeySC};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
 use crate::c;
+use crate::data::keylist::Keylist;
 use crate::data::ptrs::{Ptrs, PtrsMut};
 use crate::data::write_extent::write_extent;
 use crate::data::write_nocow::nocow_write;
@@ -722,12 +723,15 @@ use crate::fs::{Dev, Fs};
 use crate::format::{Bpos, DataType};
 use crate::locking::{Locked, MemallocFlags};
 use crate::sb::counters::events;
+use crate::sb::members::{DevIo, DevIoRef};
 use crate::snapshots::subvolume;
 use crate::util::bio::{of_bio, Bio};
+use crate::util::vstructs::plain_bytes_mut;
 use crate::util::closure::{ClosureRef, HasClosure, Running};
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{current_runtime, local_clock, unlikely, READ, WRITE};
 use crate::util::log::{LogMsg, Ratelimit};
+use crate::util::refcount::TryRefcount;
 use crate::util::time_stats::TimeStats;
 use crate::util::workqueue::Queue;
 use crate::util::{Nsecs, Printbuf};
@@ -747,7 +751,14 @@ crate::module_param! {
 
 type Op = c::bch_write_op;
 
+/// A write bio's io ref on its device.
+pub(crate) type DevWriteRef = DevIoRef<c::bch_dev_write_ref>;
+
 impl c::bch_write_op {
+    pub(crate) fn flags(&self) -> w {
+        w::from_bits_retain(self.flags.into())
+    }
+
     pub(crate) fn has(&self, f: w) -> bool {
         u32::from(self.flags) & f.bits() != 0
     }
@@ -764,25 +775,9 @@ impl c::bch_write_op {
         self.error = -e.raw() as i16;
     }
 
-    /// insert_keys empty, in the op's inline buffer.
-    fn keys_init(&mut self) {
-        let inline = self.inline_keys.as_mut_ptr();
-        unsafe { self.insert_keys.init(inline) }
-    }
-
-    /// insert_keys' heap buffer freed, if it has one: back to the inline one.
+    /// insert_keys' heap buffer freed, if it has one: an op isn't dropped.
     fn keys_free(&mut self) {
-        let inline = self.inline_keys.as_mut_ptr();
-        unsafe { self.insert_keys.free(inline) };
-        self.keys_init();
-    }
-
-    /// Room on insert_keys for @u64s more.
-    pub(crate) fn keys_realloc(&mut self, u64s: usize) -> Result<(), BchError> {
-        let inline = self.inline_keys.as_mut_ptr();
-        let nr_inline = self.inline_keys.len();
-        let ret = unsafe { crate::data::keylist::bch2_keylist_realloc(&mut self.insert_keys, inline, nr_inline, u64s) };
-        crate::errcode::ret_to_result_void(ret)
+        self.insert_keys = Keylist::new();
     }
 
     /// A move's op is its data update's.
@@ -881,12 +876,12 @@ pub(crate) unsafe fn wbio_init<'a>(bio: *mut c::bio) -> &'a mut c::bch_write_bio
 impl c::bch_write_bio {
     /// Set when it's submitted.
     fn fs(&self) -> &'static Fs {
-        unsafe { &*self.wbio.c }
+        self.wbio.c.expect("a write bio's filesystem, before it's submitted")
     }
 
     /// The device it went to, if it holds an io ref on it.
     fn ca(&self) -> Option<&'static Dev> {
-        unsafe { self.wbio.ca.as_ref() }
+        self.wbio.ca
     }
 
     /// While it's ours, not in flight: the write path's bios are always
@@ -905,7 +900,7 @@ pub(crate) fn index_update_wq(op: &Op) -> &'static Queue {
     }
 }
 
-fn keylist_sectors(keys: &c::keylist) -> u64 {
+fn keylist_sectors<const N: usize>(keys: &Keylist<N>) -> u64 {
     keys.iter().map(|k| u64::from(k.k().size)).sum()
 }
 
@@ -940,16 +935,10 @@ pub(crate) fn write_op_error(op: &Op, offset: u64, msg: fmt::Arguments<'_>) {
 /// # Safety
 /// @wbio's bio is set up to submit, and ours; @k a key with pointers. With
 /// @cas, a nocow write's: an io ref of each of its devices, given to the bios.
-pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &Fs, ty: DataType, k: &BkeyI,
-                                          cas: Option<&[Option<&Dev>]>) {
+pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &'static Fs, ty: DataType, k: &BkeyI,
+                                          mut cas: Option<&mut [Option<DevWriteRef>]>) {
     let ptrs = BkeySC::from(k).arm::<Ptrs>().expect("submitting a key with no pointers");
     let nocow = cas.is_some();
-    let ref_rw = if ty == DataType::btree { READ } else { WRITE };
-    let ref_idx = if ty == DataType::btree {
-        c::bch_dev_read_ref::BCH_DEV_READ_REF_btree_node_write as u32
-    } else {
-        c::bch_dev_write_ref::BCH_DEV_WRITE_REF_io_write as u32
-    };
 
     assert!(fs.opts().nochanges.get() == 0, "writing with nochanges");
 
@@ -965,9 +954,21 @@ pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &Fs, 
          * aren't retrying failed btree writes yet (due to device
          * removal/ro):
          */
-        let ca = match cas {
-            Some(cas) => Some(cas[i].expect("a nocow write without its io refs")),
-            None => fs.dev_get_ioref_kind(ptr.dev().into(), ref_rw, ref_idx),
+        let ca = if ty == DataType::btree {
+            /* btree/write.c's endio puts it, as its kind */
+            fs.dev_get_ioref_kind(ptr.dev().into(), READ,
+                                  c::bch_dev_read_ref::BCH_DEV_READ_REF_btree_node_write as u32)
+        } else {
+            let r = match &mut cas {
+                Some(cas) => Some(cas[i].take().expect("a nocow write without its io refs")),
+                None => fs.dev_get_ioref(ptr.dev().into()),
+            };
+            /* the bio's, till write_endio() takes it back */
+            r.map(|r| {
+                let ca = unsafe { &*core::ptr::from_ref::<Dev>(&**r) };
+                r.leak();
+                ca
+            })
         };
 
         let n: &mut c::bch_write_bio = if i + 1 != last {
@@ -990,8 +991,8 @@ pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &Fs, 
             &mut *wbio
         };
 
-        n.wbio.c            = core::ptr::from_ref(fs).cast_mut();
-        n.wbio.ca           = ca.map_or(core::ptr::null_mut(), |ca| core::ptr::from_ref(ca).cast_mut());
+        n.wbio.c            = Some(fs);
+        n.wbio.ca           = ca;
         n.wbio.dev          = ptr.dev();
         n.wbio.bits.set_nocow(nocow.into());
         n.wbio.submit_time  = local_clock();
@@ -1026,7 +1027,9 @@ pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &Fs, 
 pub unsafe fn bch2_submit_wbio_replicas(wbio: &mut c::bch_write_bio, c: &Opaque<Fs>, ty: c::bch_data_type,
                                         k: *const c::bkey_i) {
     let k = unsafe { &*BkeyI::from_raw(k) };
-    unsafe { submit_wbio_replicas(wbio, Fs::from_c(c), DataType(ty.0), k, None) }
+    // its bios are done before the filesystem goes, as a write op's are
+    let fs: &'static Fs = unsafe { &*core::ptr::from_ref(Fs::from_c(c)) };
+    unsafe { submit_wbio_replicas(wbio, fs, DataType(ty.0), k, None) }
 }
 
 extern "C" fn __write_done(mut op: Running<Op>) {
@@ -1041,9 +1044,7 @@ extern "C" fn __write_done(mut op: Running<Op>) {
     fs.times[c::bch_time_stats::BCH_TIME_data_write as usize].update(op.start_time);
     op.res.put();
 
-    if !op.has(w::BCH_WRITE_move) {
-        unsafe { fs.writes.put_kind(c::bch_write_ref::BCH_WRITE_REF_write as u32) };
-    }
+    drop(op.write_ref.take());
     op.keys_free();
 
     debug_assert!(!op.cl.has_parent(), "a write op's closure with a parent");
@@ -1164,7 +1165,7 @@ fn __write_index(op: &mut Op) {
     })();
 
     if let Err(e) = ret {
-        op.insert_keys.top_p = op.insert_keys.keys_p;
+        op.insert_keys.clear();
         op.set_error(e);
         op.set(w::BCH_WRITE_submitted);
     }
@@ -1199,7 +1200,7 @@ fn __wp_update_state(w: &mut WritePointWrites, s: &WritePointStateWriter, state:
 }
 
 fn wp_update_state(w: &mut WritePointWrites, s: &WritePointStateWriter, running: bool) {
-    let empty = unsafe { OpList::from_c(&mut w.writes) }.is_empty();
+    let empty = w.writes.is_empty();
     let state = if running {
         c::write_point_state::WRITE_POINT_runnable
     } else if !empty {
@@ -1212,7 +1213,7 @@ fn wp_update_state(w: &mut WritePointWrites, s: &WritePointStateWriter, running:
 }
 
 extern "C" fn write_index(mut op: Running<Op>) {
-    let wp = unsafe { &*op.wp };
+    let wp = op.wp.expect("an index update queued on no write point");
     let wq = index_update_wq(&op);
 
     if op.has(w::BCH_WRITE_submitted) && op.has(w::BCH_WRITE_move) {
@@ -1228,17 +1229,14 @@ extern "C" fn write_index(mut op: Running<Op>) {
         if s.state.get() == c::write_point_state::WRITE_POINT_waiting_io as u32 {
             __wp_update_state(w, s, c::write_point_state::WRITE_POINT_waiting_work);
         }
-        unsafe { OpList::from_c(&mut w.writes).push_back(op.as_ref()) };
+        unsafe { w.writes.push_back(op.as_ref()) };
     }
 
     unsafe { wq.queue_work(core::ptr::from_ref(&wp.io.index_update_work).cast_mut()) };
 }
 
-/// A write point's writes, waiting for their index updates.
-type OpList = crate::list!(Op, wp_list);
-
-fn write_queue(op: &mut Op, wp: &c::write_point) {
-    op.wp = core::ptr::from_ref(wp).cast_mut();
+fn write_queue(op: &mut Op, wp: &'static c::write_point) {
+    op.wp = Some(wp);
 
     if wp.io.writes_lock.state.get() == c::write_point_state::WRITE_POINT_stopped as u32 {
         let mut g = wp.io.writes_lock.lock();
@@ -1259,7 +1257,7 @@ pub unsafe extern "C" fn write_point_do_index_updates(work: *mut c::work_struct)
         let op = {
             let mut g = wp.io.writes_lock.lock();
             let (w, s) = g.parts();
-            let op = unsafe { OpList::from_c(&mut w.writes) }.cursor_mut().remove_current().map(NonNull::from);
+            let op = w.writes.cursor_mut().remove_current().map(NonNull::from);
             wp_update_state(w, s, op.is_some());
             op
         };
@@ -1308,12 +1306,12 @@ pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
         fs.nocow_locks.unlock_bucket(crate::btree::bkey::pos(ca.dev_idx.into(), wbio.wbio.nocow_bucket),
                                      crate::data::nocow_locking::NocowKind::Update);
         if !fua {
-            unsafe { (*op.devs_need_flush.cast::<c::AtomicDevsMask>()).set(wbio.wbio.dev.into()) };
+            unsafe { (*op.devs_need_flush).set(wbio.wbio.dev.into()) };
         }
     }
 
     if let Some(ca) = ca {
-        unsafe { ca.io_ref[WRITE].put_kind(c::bch_dev_write_ref::BCH_DEV_WRITE_REF_io_write as u32) };
+        drop(unsafe { DevWriteRef::adopt(DevIo::of(ca)) });
     }
 
     if wbio.wbio.bits.bounce() != 0 {
@@ -1364,7 +1362,7 @@ pub(crate) fn __write(mut op: Running<Op>) {
                 break;
             }
 
-            if op.keys_realloc(c::BKEY_EXTENT_U64s_MAX as usize).is_err() {
+            if op.insert_keys.reserve(c::BKEY_EXTENT_U64s_MAX as usize).is_err() {
                 break;
             }
 
@@ -1379,7 +1377,7 @@ pub(crate) fn __write(mut op: Running<Op>) {
                                               op.bits.nr_replicas().into(),
                                               op.opts.data_replicas.into(),
                                               c::bch_watermark::from_bits(op.bits.watermark().into()),
-                                              c::bch_write_flags::from_bits_retain(op.flags.into()),
+                                              op.flags(),
                                               cl)?;
                 req.ec_max_data_blocks = fs.opts().ec_max_data_blocks.get() as _;
 
@@ -1512,33 +1510,24 @@ fn write_data_inline(mut op: Running<Op>, data_len: u32) {
 
     fs.check_set_feature(c::bch_sb_feature::BCH_FEATURE_inline_data);
 
-    let ret = op.keys_realloc(crate::btree::bkey::BKEY_U64S + (data_len as usize).div_ceil(8));
-    if let Err(e) = ret {
-        op.set_error(e);
+    let room = crate::btree::bkey::BKEY_U64S + (data_len as usize).div_ceil(8);
+    if let Err(e) = op.insert_keys.reserve(room) {
+        op.set_error(e.into());
         return write_done(op);
     }
 
     let sectors = op.wbio.bio.bi_iter.bi_size >> 9;
     op.pos.offset += u64::from(sectors);
 
-    let id = op.insert_keys.top();
-    unsafe {
-        (*id).k = c::bkey { type_: c::bch_bkey_type::KEY_TYPE_inline_data.0 as u8, p: op.pos,
-                            size: sectors, bversion: op.version, ..c::bkey::new() };
+    let o = &mut *op;
+    o.insert_keys.push_with(room, |id| {
+        *id.k_mut() = c::bkey { type_: c::bch_bkey_type::KEY_TYPE_inline_data.0 as u8, p: o.pos,
+                                size: sectors, bversion: o.version, ..c::bkey::new() };
 
-        let data = id.cast::<u64>().add(crate::btree::bkey::BKEY_U64S).cast::<u8>();
-        let mut iter = op.wbio.bio.bi_iter;
-        iter.bi_size = data_len;
-        crate::util::bio::memcpy_from_bio(data.cast(), &raw mut op.wbio.bio, iter);
-
-        let mut len = data_len as usize;
-        while len & 7 != 0 {
-            *data.add(len) = 0;
-            len += 1;
-        }
-        (*id).k.set_val_bytes(len);
-        op.insert_keys.push();
-    }
+        let len = data_len as usize;
+        id.set_val_u64s(len.div_ceil(8)).expect("reserved");
+        o.wbio.bio_mut().range().copy_to(&mut plain_bytes_mut(id.val_mut())[..len]);
+    });
 
     __write_index(&mut op);
     write_done(op);
@@ -1588,7 +1577,6 @@ pub extern "C" fn bch2_write(mut op: Running<Op>) {
     }
 
     op.start_time = local_clock();
-    op.keys_init();
     unsafe { wbio_init(&raw mut op.wbio.bio) }.wbio.bits.set_put_bio(0);
 
     let ret = (|| -> Result<(), BchError> {
@@ -1602,9 +1590,8 @@ pub extern "C" fn bch2_write(mut op: Running<Op>) {
             return Err(fs.err(bch_errcode::BCH_ERR_erofs_no_writes));
         }
 
-        if !op.has(w::BCH_WRITE_move) &&
-           !fs.writes.tryget_kind(c::bch_write_ref::BCH_WRITE_REF_write as u32) {
-            return Err(fs.err(bch_errcode::BCH_ERR_erofs_no_writes));
+        if !op.has(w::BCH_WRITE_move) {
+            op.write_ref = Some(fs.writes.tryget_live().ok_or_else(|| fs.err(bch_errcode::BCH_ERR_erofs_no_writes))?);
         }
         Ok(())
     })();
@@ -1640,7 +1627,7 @@ pub fn __write_op_to_text(out: &mut Printbuf, op: &Op) {
     prt!(out, "started:\t{}\n", Nsecs(local_clock().wrapping_sub(op.start_time)));
 
     prt!(out, "flags:\t");
-    c::bch_write_flags::from_bits_retain(op.flags.into()).to_text(&mut out);
+    op.flags().to_text(&mut out);
     out.newline();
 
     prt!(out, "watermark:\t{}\n", c::bch_watermark::from_bits(op.bits.watermark().into()).name());

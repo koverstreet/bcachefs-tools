@@ -354,7 +354,8 @@ pub struct write_point {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct WritePointWrites {
-    pub writes: c::list_head,
+    #[c("struct list_head writes")]
+    pub writes: c::WriteOpList,
     pub last_state_change: u64,
     pub last_runtime: u64,
 }
@@ -367,8 +368,8 @@ impl WritePointWrites {
         unsafe {
             ::pin_init::pin_init_from_closure(|slot: *mut Self| {
                 let writes = &raw mut (*slot).writes;
-                (&raw mut (*writes).next).write(writes);
-                (&raw mut (*writes).prev).write(writes);
+                writes.write_bytes(0, 1);
+                (*writes).init();
                 (&raw mut (*slot).last_state_change).write(0);
                 (&raw mut (*slot).last_runtime).write(0);
                 Ok(())

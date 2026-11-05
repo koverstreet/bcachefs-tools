@@ -22,7 +22,6 @@ use bcachefs_kernel::data::write::bch2_write;
 use bcachefs_kernel::errcode::{self, BchError};
 use bcachefs_kernel::fs::{writepoint_hashed, Fs};
 use bcachefs_kernel::inode_opts;
-use bcachefs_kernel::util::backref::BackRef;
 use bcachefs_kernel::util::bio::Bio;
 use bcachefs_kernel::util::closure;
 
@@ -66,7 +65,7 @@ unsafe impl Sync for WriteState {}
 
 /// end_io callback for bch_write_op — signals completion and wakes
 /// the Rust future.
-unsafe extern "C" fn write_endio(op: *mut c::bch_write_op) {
+unsafe fn write_endio(op: *mut c::bch_write_op) {
     // WriteState has op at offset 0
     let state = op as *mut WriteState;
 
@@ -96,24 +95,19 @@ impl WriteOp {
         data: &[u8],
         new_i_size: u64,
     ) -> Self {
-        // The op zeroed but for its references to the filesystem, which
-        // can't be null, then made by init()
+        // Made in place: the op's bio first, which the op's init() leaves be
         let mut state = Box::new(std::mem::MaybeUninit::<WriteState>::zeroed());
         let p = state.as_mut_ptr();
         let mut state = unsafe {
-            let c = BackRef::new(fs);
-            (&raw mut (*p).op.res).write(c::DiskReservation::new(c.get()));
-            (&raw mut (*p).op.c).write(c);
+            let bio = &raw mut (*p).op.wbio.bio;
+            bcachefs_kernel::c::bio_init(bio, std::ptr::null_mut(), (&raw mut (*p).bvecs).cast(),
+                                         MAX_BVECS as u16, 0);
+            Bio::from_raw_mut(bio).map(data.as_ptr().cast_mut(), data.len());
+            c::bch_write_op::init_at(&raw mut (*p).op, fs, inode_opts::get_fs(fs, false));
             (&raw mut (*p).waker).write(UnsafeCell::new(None));
             state.assume_init()
         };
-        let WriteState { op, bvecs, .. } = &mut *state;
-
-        unsafe {
-            bcachefs_kernel::c::bio_init(&mut op.wbio.bio, std::ptr::null_mut(), bvecs.as_mut_ptr(), MAX_BVECS as u16, 0);
-            Bio::from_raw_mut(&mut op.wbio.bio).map(data.as_ptr().cast_mut(), data.len());
-            op.init(fs, inode_opts::get_fs(fs, false));
-        }
+        let WriteState { op, .. } = &mut *state;
         op.end_io      = Some(write_endio);
         op.write_point = writepoint_hashed(0);
         op.bits.set_nr_replicas(replicas as u8);
