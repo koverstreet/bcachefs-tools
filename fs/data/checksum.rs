@@ -359,7 +359,8 @@ impl Chacha {
     /// @p is @len bytes, ours to write.
     unsafe fn crypt(&mut self, p: *mut u8, len: usize) {
         // SAFETY: the caller's
-        unsafe { c::chacha20_crypt(&mut self.0, p, p, len as c_uint) }
+        // a size_t from 7.4, an unsigned int before
+        unsafe { c::chacha20_crypt(&mut self.0, p, p, len as _) }
     }
 }
 
