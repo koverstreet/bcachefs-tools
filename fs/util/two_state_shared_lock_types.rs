@@ -51,7 +51,9 @@ impl two_state_lock_t {
         }
     }
 
-    fn lock_raw(&self, s: bool) {
+    /// Held in @s without a guard: for an owner that keeps it past a borrow -
+    /// a DIO write's DioStarted - and unlocks it with unlock_raw().
+    pub(crate) fn lock_raw(&self, s: bool) {
         loop {
             let seen = self.wait.snapshot();
             if self.trylock(s) {
@@ -61,7 +63,7 @@ impl two_state_lock_t {
         }
     }
 
-    fn unlock_raw(&self, s: bool) {
+    pub(crate) fn unlock_raw(&self, s: bool) {
         debug_assert!(self.v.load(Relaxed) != 0, "a two-state lock unlocked, not held");
         let i = delta(s);
         if self.v.fetch_sub(i, Release) == i {

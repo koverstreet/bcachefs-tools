@@ -515,7 +515,7 @@ impl InodeInfo {
         if sectors < 0 { -(blocks as i64) } else { 0 }
     }
 
-    fn quota_reservation_add(&self, res: &mut c::quota_res, sectors: u64, check_enospc: bool)
+    pub(crate) fn quota_reservation_add(&self, res: &mut c::quota_res, sectors: u64, check_enospc: bool)
         -> Result<(), BchError>
     {
         if !cfg!(CONFIG_BCACHEFS_QUOTA) || self.ei_flags.get(c::bch_inode_info_flags::EI_INODE_SNAPSHOT) {
@@ -550,15 +550,52 @@ impl InodeInfo {
         res.sectors = 0;
     }
 
-    fn quota_reservation_put(&self, res: &mut c::quota_res) {
+    pub(crate) fn quota_reservation_put(&self, res: &mut c::quota_res) {
         if cfg!(CONFIG_BCACHEFS_QUOTA) && res.sectors != 0 {
             self.quota_reservation_put_locked(&mut self.ei_quota.lock(), res);
         }
     }
 
+    /// i_sectors_acct() from @res, and what's left of it put, under one hold
+    /// of the quota lock: a DIO write's, as each of its bios is written.
+    pub(crate) fn i_sectors_acct_put(&self, res: &mut c::quota_res, sectors: i64) {
+        let mut q = self.ei_quota.lock();
+        self.i_sectors_acct_locked(&mut q, Some(&mut *res), sectors);
+        self.quota_reservation_put_locked(&mut q, res);
+    }
+
+    /// A direct write started: inode_dio_begin(), and the page cache blocked,
+    /// till the DioStarted is dropped.
+    pub(crate) fn dio_start(&self) -> DioStarted {
+        unsafe { c::inode_dio_begin(self.v.as_ptr()) };
+        self.ei_pagecache_lock.lock_raw(<c::PagecacheBlock as c::TwoState>::S);
+        DioStarted(NonNull::from(self))
+    }
+
     /// An empty quota reservation of @self's: added to, and put when dropped.
     pub fn quota_reservation(&self) -> QuotaReservation<'_> {
         QuotaReservation { inode: self, res: c::quota_res::default() }
+    }
+}
+
+/// A direct write in flight on an inode: its i_dio_count, and the page cache
+/// blocked. Owned, borrowing nothing, so it outlives the call that started
+/// the write: the count is a ref on the inode - dio_wait() waits it out -
+/// and so on its filesystem.
+pub(crate) struct DioStarted(NonNull<InodeInfo>);
+
+impl DioStarted {
+    pub(crate) fn inode(&self) -> &InodeInfo {
+        unsafe { self.0.as_ref() }
+    }
+}
+
+impl Drop for DioStarted {
+    fn drop(&mut self) {
+        let inode = self.inode();
+        inode.ei_pagecache_lock.unlock_raw(<c::PagecacheBlock as c::TwoState>::S);
+        /* the count is our ref on the inode: last */
+        unsafe { c::inode_dio_end(inode.v.as_ptr()) };
     }
 }
 
