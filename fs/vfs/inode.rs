@@ -63,14 +63,14 @@ pub use c::InodeInfo;
 use crate::format::Btree;
 
 c_extern! {
-    pub fn bch2_vfs_inode_get_trans(trans: *mut c::btree_trans, inum: c::subvol_inum,
+    pub fn bch2_vfs_inode_get_trans(trans: *mut BtreeTrans<'_>, inum: c::subvol_inum,
                                     func: *const crate::util::ffi::c_char) -> *mut c::bch_inode_info;
     fn bch2_vfs_inode_get(c: *mut Fs, inum: c::subvol_inum,
                           warn: *const crate::util::ffi::c_char) -> *mut c::inode;
     // fs.c's inode cache, for lookup:
-    fn bch2_inode_hash_find(c: *mut Fs, trans: *mut c::btree_trans,
+    fn bch2_inode_hash_find(c: *mut Fs, trans: *mut BtreeTrans<'_>,
                             inum: c::subvol_inum) -> *mut c::bch_inode_info;
-    fn bch2_inode_hash_init_insert(trans: *mut c::btree_trans, inum: c::subvol_inum,
+    fn bch2_inode_hash_init_insert(trans: *mut BtreeTrans<'_>, inum: c::subvol_inum,
                                    bi: *mut c::bch_inode_unpacked,
                                    subvol: *mut c::Subvolume) -> *mut c::bch_inode_info;
 }

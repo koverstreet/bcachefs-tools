@@ -18,6 +18,8 @@ use cstruct_macros::{c_name, c_enum, CStruct, TypeInfo};
 use cstruct_macros::{c_extern, c_typedef};
 #[cfg(not(NO_BCACHEFS_FS))]
 use crate::format::Bpos;
+#[cfg(not(NO_BCACHEFS_FS))]
+use crate::btree::iter::BtreeTrans;
 
 /*
  * The VFS's inode, and what we keep beside it. Shared - the kernel and C use it
@@ -163,7 +165,7 @@ c_enum! {
 /* returns 0 if we want to do the update, or error is passed up */
 #[cfg(not(NO_BCACHEFS_FS))]
 c_typedef! {
-    pub type inode_set_fn = Option<unsafe extern "C" fn(*mut c::btree_trans,
+    pub type inode_set_fn = Option<unsafe extern "C" fn(*mut BtreeTrans<'_>,
                                                         *mut c::bch_inode_info,
                                                         *mut c::bch_inode_unpacked, *mut c_void)
                                                         -> c_int>;
@@ -183,7 +185,7 @@ impl c::TwoState for PagecacheBlock {
 
 #[cfg(not(NO_BCACHEFS_FS))]
 c_extern! {
-    pub fn bch2_inode_or_descendents_is_open(trans: *mut c::btree_trans, pos: Bpos) -> c_int;
+    pub fn bch2_inode_or_descendents_is_open(trans: *mut BtreeTrans<'_>, pos: Bpos) -> c_int;
     pub fn bch2_evict_subvolume_inodes(c: *mut crate::fs::Fs, s: *mut c::snapshot_id_list);
     pub fn bch2_fs_vfs_exit(c: *mut crate::fs::Fs);
     pub fn bch2_fs_vfs_init(c: *mut crate::fs::Fs) -> c_int;

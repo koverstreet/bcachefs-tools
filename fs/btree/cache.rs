@@ -43,10 +43,10 @@ c_extern! {
     pub fn bch2_btree_cache_to_text(out: *mut Printbuf, bc: *const c::bch_fs_btree_cache);
     pub fn bch2_btree_cache_pin_budget(c: *mut Fs) -> u64;
     pub fn bch2_node_pin(c: *mut Fs, b: *mut BtreeNode);
-    pub fn bch2_btree_node_prefetch(trans: *mut c::btree_trans, path: *mut c::btree_path,
+    pub fn bch2_btree_node_prefetch(trans: *mut BtreeTrans<'_>, path: *mut c::btree_path,
                                     k: *const c::bkey_i, btree: Btree, level: c_uint) -> c_int;
     pub fn bch2_btree_cache_unpin(c: *mut Fs);
-    pub fn bch2_btree_cache_pin(trans: *mut c::btree_trans, leaf_mask: u64, interior_mask: u64,
+    pub fn bch2_btree_cache_pin(trans: *mut BtreeTrans<'_>, leaf_mask: u64, interior_mask: u64,
                                 start: c::bbpos, end: c::bbpos, pinned_end: *mut c::bbpos)
                                 -> core::ffi::c_int;
     pub static bch2_btree_node_flags: [*const c_char; 0];

@@ -12,6 +12,7 @@ use crate::fs::Fs;
 use crate::journal::entries::EntryWriter;
 use crate::util::ffi::Opaque;
 use crate::util::{Printbuf, ToText};
+use core::cell::Cell;
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::mem::size_of;
 use core::ops::Range;
@@ -58,48 +59,48 @@ c_extern! {
     pub fn bch2_fs_log_msg(c: *mut Fs, fmt: *const core::ffi::c_char, ...) -> c_int;
     #[c_printf(2, 3)]
     pub fn bch2_journal_log_msg(c: *mut Fs, fmt: *const core::ffi::c_char, ...) -> c_int;
-    pub fn __bch2_trans_subbuf_alloc(trans: *mut c::btree_trans, buf: *mut c::btree_trans_subbuf, u64s: c_uint,
+    pub fn __bch2_trans_subbuf_alloc(trans: *mut BtreeTrans<'_>, buf: *mut c::btree_trans_subbuf, u64s: c_uint,
                                      ip: core::ffi::c_ulong) -> *mut core::ffi::c_void;
-    pub fn rust_bch2_trans_update_buffered(trans: *mut c::btree_trans, btree: Btree, k: *mut c::bkey_i) -> c_int;
-    pub fn bch2_trigger_get_mutable_new(trans: *mut c::btree_trans, op: c::btree_trigger_op, needed_u64s: c_uint,
+    pub fn rust_bch2_trans_update_buffered(trans: *mut BtreeTrans<'_>, btree: Btree, k: *mut c::bkey_i) -> c_int;
+    pub fn bch2_trigger_get_mutable_new(trans: *mut BtreeTrans<'_>, op: c::btree_trigger_op, needed_u64s: c_uint,
                                         out: *mut c::bkey_s) -> c_int;
-    pub fn bch2_btree_delete_at(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
+    pub fn bch2_btree_delete_at(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter,
                                 flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_delete(trans: *mut c::btree_trans, btree: Btree, pos: Bpos,
+    pub fn bch2_btree_delete(trans: *mut BtreeTrans<'_>, btree: Btree, pos: Bpos,
                              flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_insert_nonextent(trans: *mut c::btree_trans, btree: Btree,
+    pub fn bch2_btree_insert_nonextent(trans: *mut BtreeTrans<'_>, btree: Btree,
                                        k: *mut c::bkey_i, k_buf_u64s: c_uint,
                                        flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_insert_trans(trans: *mut c::btree_trans, btree: Btree,
+    pub fn bch2_btree_insert_trans(trans: *mut BtreeTrans<'_>, btree: Btree,
                                    k: *mut c::bkey_i,
                                    flags: c::btree_iter_update_trigger_flags) -> c_int;
     pub fn bch2_btree_insert(c: *mut Fs, id: Btree, k: *mut c::bkey_i,
                              disk_res: *mut c::disk_reservation,
                              commit_flags: c::bch_trans_commit_flags,
                              iter_flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_delete_range_trans(trans: *mut c::btree_trans, btree: Btree,
+    pub fn bch2_btree_delete_range_trans(trans: *mut BtreeTrans<'_>, btree: Btree,
                                          start: Bpos, end: Bpos,
                                          flags: c::btree_iter_update_trigger_flags) -> c_int;
     pub fn bch2_btree_delete_range(c: *mut Fs, id: Btree, start: Bpos, end: Bpos,
                                    flags: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn bch2_btree_bit_mod(trans: *mut c::btree_trans, btree: Btree, pos: Bpos,
+    pub fn bch2_btree_bit_mod(trans: *mut BtreeTrans<'_>, btree: Btree, pos: Bpos,
                               set: bool) -> c_int;
-    pub fn bch2_btree_bit_mod_buffered(trans: *mut c::btree_trans, btree: Btree, pos: Bpos,
+    pub fn bch2_btree_bit_mod_buffered(trans: *mut BtreeTrans<'_>, btree: Btree, pos: Bpos,
                                        set: bool) -> c_int;
-    pub fn bch2_btree_bit_mod_iter(trans: *mut c::btree_trans, iter: *mut c::btree_iter, set: bool) -> c_int;
-    pub fn __bch2_insert_snapshot_whiteouts(trans: *mut c::btree_trans, btree: Btree,
+    pub fn bch2_btree_bit_mod_iter(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter, set: bool) -> c_int;
+    pub fn __bch2_insert_snapshot_whiteouts(trans: *mut BtreeTrans<'_>, btree: Btree,
                                             pos: Bpos, s: *mut c::snapshot_id_list) -> c_int;
     #[must_use]
-    pub fn bch2_trans_update_ip(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
+    pub fn bch2_trans_update_ip(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter,
                                 k: *mut c::bkey_i, k_buf_u64s: c_uint,
                                 flags: c::btree_iter_update_trigger_flags, ip: c_ulong) -> c_int;
-    pub fn bch2_trans_update_extent_overwrite(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
+    pub fn bch2_trans_update_extent_overwrite(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter,
                                               flags: c::btree_iter_update_trigger_flags,
                                               old: c::bkey_s_c, new: c::bkey_s_c) -> c_int;
-    pub fn bch2_bkey_get_empty_slot(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
+    pub fn bch2_bkey_get_empty_slot(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter,
                                     btree: Btree, start: Bpos, end: Bpos) -> c_int;
-    pub fn bch2_trans_commit_hook(trans: *mut c::btree_trans, h: *mut c::btree_trans_commit_hook);
-    pub fn __bch2_trans_commit(trans: *mut c::btree_trans, flags: c::bch_trans_commit_flags,
+    pub fn bch2_trans_commit_hook(trans: *mut BtreeTrans<'_>, h: *mut c::btree_trans_commit_hook);
+    pub fn __bch2_trans_commit(trans: *mut BtreeTrans<'_>, flags: c::bch_trans_commit_flags,
                                lazy: bool) -> c_int;
 }
 
@@ -153,35 +154,30 @@ impl TransAttempt<'_, '_> {
         unsafe { c::bch2_trans_updates_to_text(out.as_raw(), self.raw()) }
     }
 
-    fn subbuf_raw(&self, which: Subbuf) -> *mut c::btree_trans_subbuf {
-        let trans = self.raw();
-        unsafe {
-            match which {
-                Subbuf::JournalEntries => &raw mut (*trans).journal_entries,
-                Subbuf::Accounting     => &raw mut (*trans).accounting,
-            }
+    fn subbuf_cell(&self, which: Subbuf) -> &Cell<c::btree_trans_subbuf> {
+        match which {
+            Subbuf::JournalEntries => &self.trans().journal_entries,
+            Subbuf::Accounting     => &self.trans().accounting,
         }
     }
 
     pub unsafe fn subbuf(&self, which: Subbuf) -> &mut [u64] {
-        let buf = self.subbuf_raw(which);
+        let buf = self.subbuf_cell(which).get();
         unsafe {
-            let base = (*self.raw()).mem.cast::<u64>().add(usize::from((*buf).base));
-            slice::from_raw_parts_mut(base, usize::from((*buf).u64s))
+            let base = self.trans().mem.get().cast::<u64>().add(usize::from(buf.base));
+            slice::from_raw_parts_mut(base, usize::from(buf.u64s))
         }
     }
 
     pub fn subbuf_alloc(&self, which: Subbuf, u64s: usize) -> Result<&mut [u64], BchError> {
-        let trans = self.raw();
-        let buf = self.subbuf_raw(which);
-        let p = unsafe {
-            if usize::from((*buf).u64s) + u64s > usize::from((*buf).size) {
-                c::__bch2_trans_subbuf_alloc(trans, buf, u64s as c_uint, 0)
-            } else {
-                let p = (*trans).mem.cast::<u64>().add(usize::from((*buf).base + (*buf).u64s));
-                (*buf).u64s += u64s as u16;
-                p.cast()
-            }
+        let cell = self.subbuf_cell(which);
+        let buf = cell.get();
+        let p = if usize::from(buf.u64s) + u64s > usize::from(buf.size) {
+            unsafe { c::__bch2_trans_subbuf_alloc(self.raw(), cell.as_ptr(), u64s as c_uint, 0) }
+        } else {
+            let p = unsafe { self.trans().mem.get().cast::<u64>().add(usize::from(buf.base + buf.u64s)) };
+            cell.set(c::btree_trans_subbuf { u64s: buf.u64s + u64s as u16, ..buf });
+            p.cast()
         };
         let p = errptr_to_result(NonNull::new(p).expect("a sub-buffer's u64s, or an error"))?;
         Ok(unsafe { slice::from_raw_parts_mut(p.as_ptr().cast::<u64>(), u64s) })
@@ -190,7 +186,8 @@ impl TransAttempt<'_, '_> {
     pub fn subbuf_remove(&self, which: Subbuf, range: Range<usize>) {
         let len = range.len();
         unsafe { self.subbuf(which) }.copy_within(range.end.., range.start);
-        unsafe { (*self.subbuf_raw(which)).u64s -= len as u16 };
+        let cell = self.subbuf_cell(which);
+        cell.set(c::btree_trans_subbuf { u64s: cell.get().u64s - len as u16, ..cell.get() });
     }
 
     /// An entry of @ty for @btree at @level, holding @data, with this
@@ -227,7 +224,7 @@ impl TransAttempt<'_, '_> {
     }
 
     pub fn set_journal_seq_to_pin(&self, seq: u64) {
-        unsafe { (*self.raw()).journal_seq_to_pin = seq }
+        self.trans().journal_seq_to_pin.set(seq)
     }
 }
 

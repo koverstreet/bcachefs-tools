@@ -16,6 +16,7 @@
 //! counted as a write once its write starts; in between, the fifo is what
 //! flush_all() waits on.
 
+use crate::btree::iter::BtreeTrans;
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::btree::iter::lockrestart_do;
@@ -35,7 +36,7 @@ use cstruct_macros::{args_stored_once, c_extern};
 use crate::format::{Bpos, Btree};
 
 c_extern! {
-    fn __bch2_read_extent(trans: *mut c::btree_trans, rbio: *mut c::bch_read_bio, iter: c::bvec_iter,
+    fn __bch2_read_extent(trans: *mut BtreeTrans<'_>, rbio: *mut c::bch_read_bio, iter: c::bvec_iter,
                           read_pos: Bpos, btree: Btree, k: c::bkey_s_c, offset_into_extent: c_uint,
                           failed: *mut c::bch_io_failures, flags: c::bch_read_flags, dev: c_int) -> c_int;
 }

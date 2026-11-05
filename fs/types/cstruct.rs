@@ -1692,12 +1692,11 @@ fn parse_extern(m: &syn::Macro) -> Result<CExtern, String> {
 const C_EXPORT_TYPES: &[(&str, &str)] = &[
     ("BkeySC<'_>",     "c::bkey_s_c"),
     ("BkeyS<'_>",      "c::bkey_s"),
-    ("BtreeTrans<'_>", "c::btree_trans"),
     ("BtreeIter<'_>",  "c::btree_iter"),
 ];
 
-/// Of C_EXPORT_TYPES, those over an Opaque, which C changes behind a shared
-/// reference: their pointer isn't const, as an Opaque's isn't.
+/// Of C_EXPORT_TYPES, those C changes behind a shared reference - an Opaque,
+/// or Cells: their pointer isn't const.
 const C_EXPORT_OPAQUE: &[&str] = &["BtreeTrans<'_>"];
 
 /// @ty with each path's qualifiers dropped: `&crate::util::ffi::Opaque<crate::fs::Fs>`

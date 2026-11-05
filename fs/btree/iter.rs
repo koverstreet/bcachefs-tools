@@ -1,7 +1,7 @@
 #![allow(non_camel_case_types)]
 
 use super::bkey::*;
-pub use super::types::BtreeIter;
+pub use super::types::{BtreeIter, BtreeTrans};
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::node::BtreeNode;
 use crate::c;
@@ -32,7 +32,7 @@ use core::fmt;
 use core::marker::PhantomData;
 use core::mem::{size_of, MaybeUninit};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use core::ptr::NonNull;
+use core::ptr::{self, NonNull};
 use core::slice;
 use core::ops::ControlFlow;
 use crate::btree::cache::btree_ptr_hash_val;
@@ -57,31 +57,31 @@ pub struct trans_for_each_path_inorder_iter {
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct trans_may_drop_updates {
-    pub trans: *mut c::btree_trans,
+    pub trans: *mut BtreeTrans<'static>,
     pub old: bool,
 }
 c_default!(trans_may_drop_updates);
 
 c_extern! {
-    pub fn bch2_btree_trans_to_text(out: *mut Printbuf, trans: *mut c::btree_trans);
-    pub fn bch2_trans_updates_to_text(out: *mut Printbuf, trans: *mut c::btree_trans);
+    pub fn bch2_btree_trans_to_text(out: *mut Printbuf, trans: *mut BtreeTrans<'_>);
+    pub fn bch2_trans_updates_to_text(out: *mut Printbuf, trans: *mut BtreeTrans<'_>);
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
     pub fn bch2_trans_kmalloc_trace_to_text(out: *mut Printbuf,
                                             trace: *mut c::darray_trans_kmalloc_trace);
-    pub fn bch2_path_put(trans: *mut c::btree_trans, path_idx: c::btree_path_idx_t, intent: bool);
+    pub fn bch2_path_put(trans: *mut BtreeTrans<'_>, path_idx: c::btree_path_idx_t, intent: bool);
     pub fn bch2_btree_path_peek_slot(path: *mut c::btree_path, u: *mut c::bkey) -> c::bkey_s_c;
-    pub fn bch2_btree_increase_depth(trans: *mut c::btree_trans, path: c::btree_path_idx_t, flags: c_uint) -> c_int;
-    pub fn bch2_btree_iter_peek_root(trans: *mut c::btree_trans, iter: *mut c::btree_iter, btree: Btree,
+    pub fn bch2_btree_increase_depth(trans: *mut BtreeTrans<'_>, path: c::btree_path_idx_t, flags: c_uint) -> c_int;
+    pub fn bch2_btree_iter_peek_root(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter, btree: Btree,
                                      level: c_uint) -> c::bkey_s_c;
-    pub fn __bch2_trans_relock(trans: *mut c::btree_trans, trace: bool) -> c_int;
-    pub fn bch2_trans_relock_notrace(trans: *mut c::btree_trans) -> c_int;
-    pub fn __bch2_trans_kmalloc(trans: *mut c::btree_trans, size: usize,
+    pub fn __bch2_trans_relock(trans: *mut BtreeTrans<'_>, trace: bool) -> c_int;
+    pub fn bch2_trans_relock_notrace(trans: *mut BtreeTrans<'_>) -> c_int;
+    pub fn __bch2_trans_kmalloc(trans: *mut BtreeTrans<'_>, size: usize,
                                 ip: c_ulong) -> *mut c_void;
-    pub fn bch2_trans_unlock(trans: *mut c::btree_trans);
-    pub fn bch2_trans_unlock_long(trans: *mut c::btree_trans);
-    pub fn __bch2_assert_pos_locked(trans: *mut c::btree_trans, id: Btree, pos: Bpos);
-    pub fn bch2_trans_restart_error(trans: *mut c::btree_trans, restart_count: u32) -> !;
-    pub fn bch2_trans_restart_ip(trans: *mut c::btree_trans, err: c_int, ip: c_ulong) -> c_int;
+    pub fn bch2_trans_unlock(trans: *mut BtreeTrans<'_>);
+    pub fn bch2_trans_unlock_long(trans: *mut BtreeTrans<'_>);
+    pub fn __bch2_assert_pos_locked(trans: *mut BtreeTrans<'_>, id: Btree, pos: Bpos);
+    pub fn bch2_trans_restart_error(trans: *mut BtreeTrans<'_>, restart_count: u32) -> !;
+    pub fn bch2_trans_restart_ip(trans: *mut BtreeTrans<'_>, err: c_int, ip: c_ulong) -> c_int;
     #[must_use]
     pub fn bch2_btree_iter_traverse(iter: *mut c::btree_iter) -> c_int;
     #[must_use]
@@ -98,16 +98,16 @@ c_extern! {
                                         flags: c::btree_iter_update_trigger_flags) -> bool;
     pub fn bch2_btree_iter_rewind(iter: *mut c::btree_iter) -> bool;
     pub fn bch2_trans_iter_exit(iter: *mut c::btree_iter);
-    pub fn bch2_trans_iter_init_outlined(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
+    pub fn bch2_trans_iter_init_outlined(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter,
                                          btree_id: Btree, pos: Bpos,
                                          flags: c::btree_iter_update_trigger_flags, ip: c_ulong);
     pub fn bch2_trans_copy_iter(dst: *mut c::btree_iter, src: *mut c::btree_iter);
-    pub fn __bch2_trans_node_iter_init(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
+    pub fn __bch2_trans_node_iter_init(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter,
                                        btree_id: Btree, pos: Bpos, locks_want: c_uint,
                                        depth: c_uint, flags: c::btree_iter_update_trigger_flags);
-    pub fn bch2_trans_begin(trans: *mut c::btree_trans) -> u32;
-    pub fn __bch2_trans_get(c: *mut Fs, fn_idx: c_uint) -> *mut c::btree_trans;
-    pub fn bch2_trans_put(trans: *mut c::btree_trans);
+    pub fn bch2_trans_begin(trans: *mut BtreeTrans<'_>) -> u32;
+    pub fn __bch2_trans_get(c: *mut Fs, fn_idx: c_uint) -> *mut BtreeTrans<'static>;
+    pub fn bch2_trans_put(trans: *mut BtreeTrans<'_>);
     pub fn bch2_current_has_btree_trans(c: *mut Fs) -> bool;
     pub static mut bch2_btree_transaction_fns: [*const c_char; c::BCH_TRANSACTIONS_NR as usize];
     pub fn bch2_trans_get_fn_idx(fn_: *const c_char) -> c_uint;
@@ -166,16 +166,6 @@ impl TransFnName {
     }
 }
 
-/// A btree transaction, on filesystem 'f: what C's struct btree_trans *
-/// points at, its fields C's. Rust has it borrowed - &'t BtreeTrans, from the
-/// TransGuard that got it or from C, at an entry point - and an iterator's
-/// lifetime is that borrow.
-#[repr(transparent)]
-pub struct BtreeTrans<'f> {
-    inner: Opaque<c::btree_trans>,
-    fs:    PhantomData<&'f Fs>,
-}
-
 /// A transaction Rust got, and puts when dropped: btree_trans!()'s, used as
 /// the &BtreeTrans it derefs to - nothing else names it.
 #[doc(hidden)]
@@ -212,33 +202,32 @@ impl<'f> BtreeTrans<'f> {
     ///
     /// # Safety
     /// @raw is a live transaction, for 'a, on a filesystem that lives for 'f.
-    pub unsafe fn borrow_raw<'a>(raw: *mut c::btree_trans) -> &'a BtreeTrans<'f> {
+    pub unsafe fn borrow_raw<'a>(raw: *mut BtreeTrans<'_>) -> &'a BtreeTrans<'f> {
         unsafe { &*raw.cast() }
     }
 
     /// How many times this transaction has committed: what's cached from the
     /// btree is stale once it moves on.
     pub fn commit_count(&self) -> u32 {
-        unsafe { (*self.raw()).commit_count }
+        self.commit_count.get()
     }
 
     /// The journal sequence number the commit in progress is going into: for
     /// atomic triggers, which run with the journal reservation held.
     pub fn journal_res_seq(&self) -> u64 {
-        unsafe { (*self.raw()).journal_res.seq }
+        self.journal_res.get().seq
     }
 
     /// The function that got it, for messages: trans->fn.
     pub fn fn_name(&self) -> &str {
         // SAFETY: a string literal, set when it's got
-        unsafe { core::ffi::CStr::from_ptr((*self.raw()).fn_.cast()) }.to_str().unwrap_or("?")
+        unsafe { core::ffi::CStr::from_ptr(self.fn_.cast()) }.to_str().unwrap_or("?")
     }
 
     /// Journal space for keys a trigger adds in the commit's atomic phase,
     /// through the write buffer, reserved with the transaction's own.
     pub fn reserve_extra_journal_u64s(&self, u64s: u32) {
-        // SAFETY: the transaction's, ours while we have it
-        unsafe { (*self.raw()).extra_journal_u64s += u64s }
+        self.extra_journal_u64s.set(self.extra_journal_u64s.get() + u64s)
     }
 
     /// Delete [@start, @end) in @btree, committing as it goes. It drives its
@@ -285,7 +274,7 @@ impl<'f> BtreeTrans<'f> {
     pub(crate) unsafe fn attempt_in_progress<'a>(&'a self) -> TransAttempt<'a, 'f> {
         TransAttempt {
             trans:         self,
-            restart_count: Cell::new(unsafe { (*self.raw()).restart_count }),
+            restart_count: Cell::new(self.restart_count.get()),
             spent:         Cell::new(false),
             t:             PhantomData,
         }
@@ -323,29 +312,26 @@ impl<'f> BtreeTrans<'f> {
     }
 
     pub fn verify_not_restarted(&self, restart_count: u32) {
-        unsafe {
-            if (*self.raw()).restart_count != restart_count {
-                c::bch2_trans_restart_error(self.raw(), restart_count);
-            }
+        if self.restart_count.get() != restart_count {
+            unsafe { c::bch2_trans_restart_error(self.raw(), restart_count) };
         }
     }
 
     pub fn restart_count(&self) -> u32 {
-        unsafe { (*self.raw()).restart_count }
+        self.restart_count.get()
     }
 
-    pub fn raw(&self) -> *mut c::btree_trans {
-        self.inner.as_ptr()
+    /// For C, which has it by pointer.
+    pub fn raw(&self) -> *mut BtreeTrans<'f> {
+        ptr::from_ref(self).cast_mut()
     }
 
     pub fn fs_usage_delta_add(&self, d: c::bch_fs_usage_base) {
-        let usage = unsafe { &mut (*self.raw()).fs_usage_delta };
-        *usage = usage.wrapping_add(d);
+        self.fs_usage_delta.set(self.fs_usage_delta.get().wrapping_add(d));
     }
 
     pub(crate) fn fs(&self) -> &'f Fs {
-        // SAFETY: trans->c, as the type says, outlives it
-        unsafe { Fs::borrow_raw((*self.raw()).c) }
+        self.c
     }
 
     pub fn unlock(&self) {
@@ -384,22 +370,10 @@ impl<'f> BtreeTrans<'f> {
         }
     }
 
-    /// IO it submitted may hold its SRCU lock a long while: not a stuck
-    /// codepath, to bch2_trans_unlock_long().
-    pub fn set_srcu_io_submitted(&self, v: bool) {
-        unsafe { (*self.raw()).bits.set_srcu_io_submitted(v) }
-    }
-
-    /// Relock failures after IO it submitted are expected, not counted.
-    pub fn set_notrace_relock_fail(&self) {
-        unsafe { (*self.raw()).bits.set_notrace_relock_fail(true) }
-    }
-
     /// What's left of the second the SRCU lock may be held for, or None if
     /// it isn't held - or if the second is used up, and it's dropped now.
     fn srcu_wait_budget(&self) -> Option<core::ffi::c_ulong> {
-        // SAFETY: ours; only this thread changes either
-        let (held, since) = unsafe { ((*self.raw()).bits.srcu_held(), (*self.raw()).srcu_lock_time) };
+        let (held, since) = (self.srcu_held(), self.srcu_lock_time.get());
         if !held {
             return None;
         }
@@ -464,13 +438,10 @@ impl<'f> BtreeTrans<'f> {
         flags:    CommitOpts,
         lazy:     bool,
     ) -> Result<(), BchError> {
-        let ret = unsafe {
-            let trans = self.raw();
-            (*trans).disk_res    = disk_res.map_or(core::ptr::null_mut(), |r| r.as_mut_ptr());
-            (*trans).journal_seq = core::ptr::null_mut();
-            (*trans).flush       = flush.map_or(core::ptr::null_mut(), Opaque::as_ptr);
-            c::__bch2_trans_commit(trans, flags.to_c(), lazy)
-        };
+        self.disk_res.set(disk_res.map_or(core::ptr::null_mut(), |r| r.as_mut_ptr()));
+        self.journal_seq.set(core::ptr::null_mut());
+        self.flush.set(flush.map_or(core::ptr::null_mut(), Opaque::as_ptr));
+        let ret = unsafe { c::__bch2_trans_commit(self.raw(), flags.to_c(), lazy) };
         ret_to_result(ret)
     }
 }
@@ -520,25 +491,25 @@ pub struct TransAttempt<'a, 't> {
 /// attempt - and like the macro it's begun before the iterator's made. An
 /// attempt's is a _norestart walk's, inside it: nothing's begun.
 pub trait TransRef<'t> {
-    fn trans_raw(&self) -> *mut c::btree_trans;
+    fn trans_raw(&self) -> *mut BtreeTrans<'_>;
 }
 
 impl<'i, 'f> TransRef<'i> for &'i BtreeTrans<'f> {
-    fn trans_raw(&self) -> *mut c::btree_trans {
+    fn trans_raw(&self) -> *mut BtreeTrans<'_> {
         self.begin_raw();
         self.raw()
     }
 }
 
 impl<'i, 'f> TransRef<'i> for &'i TransGuard<'f> {
-    fn trans_raw(&self) -> *mut c::btree_trans {
+    fn trans_raw(&self) -> *mut BtreeTrans<'_> {
         self.begin_raw();
         self.raw()
     }
 }
 
 impl<'a, 't> TransRef<'a> for &TransAttempt<'a, 't> {
-    fn trans_raw(&self) -> *mut c::btree_trans { self.trans.raw() }
+    fn trans_raw(&self) -> *mut BtreeTrans<'_> { self.trans.raw() }
 }
 
 /// Exempts bch2_trans_begin() from the dropped-updates warning while it lives
@@ -551,16 +522,15 @@ struct TransMayDropUpdates<'a, 't> {
 
 impl<'a, 't> TransMayDropUpdates<'a, 't> {
     fn new(trans: &'a BtreeTrans<'t>) -> Self {
-        let raw = unsafe { &mut *trans.raw() };
-        let old = raw.begin_may_drop_updates();
-        raw.set_begin_may_drop_updates(true);
+        let old = trans.begin_may_drop_updates();
+        trans.set_begin_may_drop_updates(true);
         TransMayDropUpdates { trans, old }
     }
 }
 
 impl Drop for TransMayDropUpdates<'_, '_> {
     fn drop(&mut self) {
-        unsafe { (*self.trans.raw()).set_begin_may_drop_updates(self.old) };
+        self.trans.set_begin_may_drop_updates(self.old);
     }
 }
 
@@ -772,7 +742,7 @@ impl From<&BtreeNode> for BtreeNodeRef {
 }
 
 impl<'a, 't> TransAttempt<'a, 't> {
-    pub fn raw(&self) -> *mut c::btree_trans {
+    pub fn raw(&self) -> *mut BtreeTrans<'_> {
         self.trans.raw()
     }
 
@@ -783,8 +753,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// What the commit in progress changes usage by, as its triggers
     /// accounted it.
     pub fn fs_usage_delta(&self) -> c::bch_fs_usage_base {
-        // SAFETY: the transaction's, ours while we have it
-        unsafe { (*self.raw()).fs_usage_delta }
+        self.trans.fs_usage_delta.get()
     }
 
     /// The disk reservation the commit in progress charges, if it was given
@@ -792,7 +761,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn disk_res(&self) -> Option<&DiskReservation<'t>> {
         // SAFETY: commit()'s caller's, which outlives the commit - and the
         // attempt
-        unsafe { (*self.raw()).disk_res.as_ref() }
+        unsafe { self.trans.disk_res.get().as_ref() }
     }
 
     pub fn verify_not_restarted(&self) {
@@ -873,35 +842,29 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// Whether anything is queued for the next commit: key updates, journal
     /// entries or accounting.
     pub fn has_updates(&self) -> bool {
-        let trans = unsafe { &*self.raw() };
-        trans.nr_updates != 0 ||
-            trans.journal_entries.u64s != 0 ||
-            trans.accounting.u64s != 0
+        let t = self.trans;
+        t.nr_updates.get() != 0 ||
+            t.journal_entries.get().u64s != 0 ||
+            t.accounting.get().u64s != 0
     }
 
     /// Drop everything queued for the next commit: as C's
     /// bch2_trans_reset_updates(), which every commit and begin runs.
     fn reset_updates(&self) {
-        let raw = self.raw();
-        unsafe {
-            // bch2_path_put() changes the transaction: no reference to it
-            // is held across the calls
-            for i in 0..(*raw).nr_updates as usize {
-                c::bch2_path_put(raw, (*(*raw).updates.add(i)).path, true);
-            }
-
-            let trans = &mut *raw;
-            trans.nr_updates               = 0;
-            trans.journal_entries.u64s     = 0;
-            trans.journal_entries.size     = 0;
-            trans.accounting.u64s          = 0;
-            trans.accounting.size          = 0;
-            trans.hooks                    = core::ptr::null_mut();
-            trans.extra_disk_res           = 0;
-            trans.extra_disk_res_replicas  = 0;
-            trans.extra_journal_u64s       = 0;
-            trans.set_has_interior_updates(false);
+        let t = self.trans;
+        for i in 0..t.nr_updates.get() as usize {
+            unsafe { c::bch2_path_put(t.raw(), (*t.updates.get().add(i)).path, true) };
         }
+
+        let emptied = |b: c::btree_trans_subbuf| c::btree_trans_subbuf { u64s: 0, size: 0, ..b };
+        t.nr_updates.set(0);
+        t.journal_entries.set(emptied(t.journal_entries.get()));
+        t.accounting.set(emptied(t.accounting.get()));
+        t.hooks.set(core::ptr::null_mut());
+        t.extra_disk_res.set(0);
+        t.extra_disk_res_replicas.set(0);
+        t.extra_journal_u64s.set(0);
+        t.set_has_interior_updates(false);
     }
 
     // ── The attempt's operations ─────────────────────────────────────────
@@ -983,7 +946,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn commit_lazy_if_full(&self, flags: impl Into<CommitOpts>) -> Result<(), BchError> {
         // disk_accounting_mod allocations grow by powers of 2; max / 2 is too
         // small of a limit to avoid hitting ENOMEMs
-        if unsafe { (*self.raw()).mem_top } < c::BTREE_TRANS_MEM_MAX / 4 {
+        if self.trans.mem_top.get() < c::BTREE_TRANS_MEM_MAX / 4 {
             return Ok(());
         }
         self.commit_lazy(None, flags)
@@ -1099,7 +1062,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         F: for<'b> FnMut(&TransAttempt<'b, 't>) -> Result<T, BchError>,
     {
         let trans = self.trans;
-        let orig_restart_count = unsafe { (*trans.raw()).restart_count };
+        let orig_restart_count = trans.restart_count.get();
         let _may_drop = TransMayDropUpdates::new(trans);
 
         let mut retry;
@@ -1109,7 +1072,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 Ok(v) => {
                     t.verify_not_restarted();
 
-                    if unsafe { (*trans.raw()).restart_count } != orig_restart_count {
+                    if trans.restart_count.get() != orig_restart_count {
                         return Err(BchError::from_raw(
                             bch_errcode::BCH_ERR_transaction_restart_nested.0 as i32));
                     }
@@ -1127,8 +1090,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// Whether @p is in memory this attempt has allocated: a key read back
     /// from an update queued in it, rather than from a btree node.
     pub fn in_mem(&self, p: *const u8) -> bool {
-        // SAFETY: our transaction's buffer bounds
-        let (mem, top) = unsafe { ((*self.raw()).mem as *const u8, (*self.raw()).mem_top as usize) };
+        let (mem, top) = (self.trans.mem.get() as *const u8, self.trans.mem_top.get() as usize);
         (mem..mem.wrapping_add(top)).contains(&p)
     }
 
@@ -1171,20 +1133,18 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// record of the allocation.
     fn kmalloc_raw(&self, bytes: usize) -> Result<*mut u8, BchError> {
         let size = bytes.next_multiple_of(size_of::<u64>());
-        let trans = self.raw();
+        let t = self.trans;
 
-        unsafe {
-            let top = (*trans).mem_top as usize;
-            if top + size > (*trans).mem_bytes as usize {
-                let p = NonNull::new(c::__bch2_trans_kmalloc(trans, size, 0)).expect("memory, or an error");
-                return Ok(errptr_to_result(p)?.as_ptr().cast());
-            }
-
-            let p = ((*trans).mem as *mut u8).add(top);
-            (*trans).mem_top += size as u32;
-            p.write_bytes(0, size);
-            Ok(p)
+        let top = t.mem_top.get() as usize;
+        if top + size > t.mem_bytes.get() as usize {
+            let p = NonNull::new(unsafe { c::__bch2_trans_kmalloc(t.raw(), size, 0) }).expect("memory, or an error");
+            return Ok(errptr_to_result(p)?.as_ptr().cast());
         }
+
+        let p = unsafe { (t.mem.get() as *mut u8).add(top) };
+        t.mem_top.set((top + size) as u32);
+        unsafe { p.write_bytes(0, size) };
+        Ok(p)
     }
 
     /// Run @f in this attempt's commit, under its btree write locks. It runs
@@ -1204,7 +1164,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         }
 
         unsafe extern "C" fn run<F>(
-            trans: *mut c::btree_trans,
+            trans: *mut BtreeTrans<'_>,
             h:     *mut c::btree_trans_commit_hook,
         ) -> core::ffi::c_int
         where
@@ -1456,9 +1416,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// Have the commit reserve @sectors more, at @nr_replicas, for data an
     /// update rewrites.
     pub fn extra_disk_res_add(&self, sectors: u64, nr_replicas: u32) {
-        let trans = unsafe { &mut *self.raw() };
-        trans.extra_disk_res += sectors;
-        trans.extra_disk_res_replicas = trans.extra_disk_res_replicas.max(nr_replicas as u8);
+        let t = self.trans;
+        t.extra_disk_res.set(t.extra_disk_res.get() + sectors);
+        t.extra_disk_res_replicas.set(t.extra_disk_res_replicas.get().max(nr_replicas as u8));
     }
 
     /// Queue @key as an update at @iter's position. Takes the iterator
@@ -2392,7 +2352,7 @@ impl<'t> BtreeIter<'t> {
         t: &TransAttempt<'a, 't>,
     ) -> Option<BtreeNodeRef> {
         unsafe {
-            let path = (*t.raw()).paths.add(self.path as usize);
+            let path = t.trans().paths.get().add(self.path as usize);
             let node = (*path).l[(*path).level() as usize].b;
 
             errptr_or_null(node).ok()?.map(|raw| BtreeNodeRef { raw })
@@ -2403,7 +2363,7 @@ impl<'t> BtreeIter<'t> {
     /// keys over it, which a peek sees - unpacked into @u if it's packed.
     pub(crate) fn path_peek_slot<'k>(&'k self, t: &TransAttempt<'_, 't>, u: &'k mut c::bkey) -> BkeySC<'k> {
         unsafe {
-            let path = (*t.raw()).paths.add(self.path as usize);
+            let path = t.trans().paths.get().add(self.path as usize);
             bkey_s_c_to_result::<'k>(bch2_btree_path_peek_slot(path, u))
                 .ok()
                 .flatten()
@@ -2418,7 +2378,7 @@ impl<'t> BtreeIter<'t> {
     /// doesn't see to that, as unlock() takes &self.
     pub unsafe fn leaf<'a>(&self, t: &'a TransAttempt<'_, 't>) -> Option<PathLeaf<'a>> {
         unsafe {
-            let path = (*t.raw()).paths.add(self.path as usize);
+            let path = t.trans().paths.get().add(self.path as usize);
             let l = &raw mut (*path).l[0];
             // NULL above the root, or an error pointer
             errptr_or_null((*l).b).ok()??;
@@ -2433,7 +2393,7 @@ impl<'t> BtreeIter<'t> {
     /// @k is a key at the iterator's level, above the leaves.
     pub fn prefetch_child(&self, t: &TransAttempt<'_, 't>, k: &BkeyI) -> Result<(), BchError> {
         let ret = unsafe {
-            let path = (*t.raw()).paths.add(self.path as usize);
+            let path = t.trans().paths.get().add(self.path as usize);
             assert!((*path).level() != 0, "prefetching below the leaves");
             c::bch2_btree_node_prefetch(t.raw(), path, k.as_ffi(), (*path).btree_id(),
                                         u32::from((*path).level()) - 1)
@@ -3229,7 +3189,7 @@ impl<'a> PathLeaf<'a> {
 
 /// A transaction off the list, kept live - its paths, its task - by the ref.
 pub struct ListedTrans {
-    trans: *mut c::btree_trans,
+    trans: *mut BtreeTrans<'static>,
     _ref:  ClosureRef,
 }
 
@@ -3237,11 +3197,11 @@ impl ListedTrans {
     /// Whether it holds the SRCU lock btree nodes are freed under.
     pub fn srcu_held(&self) -> bool {
         // its own thread changes it: READ_ONCE()
-        unsafe { core::ptr::read_volatile(&raw const (*self.trans).bits) }.srcu_held()
+        unsafe { (&raw const (*self.trans).bits).cast::<c::btree_trans_bits>().read_volatile() }.srcu_held()
     }
 
     pub fn backtrace_to_text(&self, out: &mut Printbuf) {
-        let task = unsafe { core::ptr::read_volatile(&raw const (*self.trans).locking_wait.task) };
+        let task = unsafe { (&raw const (*(*self.trans).locking_wait.as_ptr()).task).read_volatile() };
         let _ = prt_task_backtrace(out, task, 0);
     }
 
@@ -3275,13 +3235,13 @@ impl Fs {
         // SAFETY, throughout: the list, under its lock
         'restart: loop {
             let mut guard = lock.lock();
-            unsafe { <crate::list!(c::btree_trans, list)>::from_c(head) }
+            unsafe { <crate::list!(BtreeTrans<'static>, list)>::from_c(head) }
                 .sort(|a, b| core::ptr::from_ref(a).cmp(&core::ptr::from_ref(b)));
 
             let mut pos = unsafe { (*head).next };
             while pos != head {
-                let trans: *mut c::btree_trans =
-                    unsafe { pos.byte_sub(core::mem::offset_of!(c::btree_trans, list)) }.cast();
+                let trans: *mut BtreeTrans<'_> =
+                    unsafe { pos.byte_sub(core::mem::offset_of!(BtreeTrans<'_>, list)) }.cast();
 
                 if trans as usize > *cursor {
                     *cursor = trans as usize;

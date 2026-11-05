@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::iter::BtreeTrans;
 use crate::btree::node::{iter::KeyIter, BtreeNode};
 use crate::cstructs::c;
 use crate::types::c_default;
@@ -30,7 +31,7 @@ c_default!(journal_iter);
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct btree_and_journal_iter {
-    pub trans: *mut c::btree_trans,
+    pub trans: *mut BtreeTrans<'static>,
     pub b: *mut BtreeNode,
     pub node_iter: KeyIter,
     pub unpacked: c::bkey,

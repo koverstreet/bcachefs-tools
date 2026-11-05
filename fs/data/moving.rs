@@ -127,7 +127,7 @@ pub struct InFlightUpdate {
  */
 #[pin_data]
 pub struct MovingContext {
-    trans:          *mut c::btree_trans,
+    trans:          *mut BtreeTrans<'static>,
     stats:          Cell<NonNull<MoveStats>>,
     wp:             c::write_point_specifier,
     wait_on_copygc: bool,

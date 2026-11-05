@@ -36,6 +36,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::iter::BtreeTrans;
 use crate::accounting;
 use crate::btree::bkey::{BkeyI, BkeySC, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -660,16 +661,15 @@ pub unsafe fn bch2_journal_keys_peek_slot(c: &Opaque<Fs>, btree: Btree, level: c
 /// # Safety
 /// @trans is live.
 #[c_export]
-pub unsafe fn bch2_key_deleted_in_journal(trans: *mut c::btree_trans, btree: Btree, level: c_uint,
+pub unsafe fn bch2_key_deleted_in_journal(trans: *mut BtreeTrans<'_>, btree: Btree, level: c_uint,
                                           pos: Bpos) -> bool {
     // SAFETY: the caller's
     let trans = unsafe { &*trans };
-    if !trans.bits.journal_replay_not_finished() {
+    if !trans.journal_replay_not_finished() {
         return false;
     }
 
-    // SAFETY: trans->c outlives it
-    let jk = unsafe { Fs::borrow_raw(trans.c).journal_keys_held() };
+    let jk = unsafe { trans.c.journal_keys_held() };
     let Some(k) = jk.keys().get(jk.search(btree, level, pos)) else { return false };
     if k.btree_id() != btree || u32::from(k.level()) != level {
         return false;
@@ -859,7 +859,7 @@ impl c::journal_iter {
 impl c::btree_and_journal_iter {
     fn replay_not_finished(&self) -> bool {
         // SAFETY: the iterator's transaction outlives it
-        unsafe { (*self.trans).bits.journal_replay_not_finished() }
+        unsafe { (*self.trans).journal_replay_not_finished() }
     }
 
     fn advance(&mut self) {
@@ -974,11 +974,11 @@ impl c::btree_and_journal_iter {
     ///
     /// # Safety
     /// @trans and @b are live, @b locked, for as long as the iterator.
-    unsafe fn new(trans: *mut c::btree_trans, b: *mut BtreeNode, node_iter: KeyIter, pos: Bpos)
+    unsafe fn new(trans: *mut BtreeTrans<'_>, b: *mut BtreeNode, node_iter: KeyIter, pos: Bpos)
         -> Self
     {
         let mut iter = Self {
-            trans,
+            trans: trans.cast(),
             b,
             node_iter,
             // SAFETY: the caller's
@@ -988,7 +988,7 @@ impl c::btree_and_journal_iter {
 
         if iter.replay_not_finished() {
             // SAFETY: the caller's
-            let (fs, btree, level) = unsafe { (Fs::borrow_raw((*trans).c), (*b).c.btree_id, (*b).c.level) };
+            let (fs, btree, level) = unsafe { ((*trans).c, (*b).c.btree_id, (*b).c.level) };
             iter.journal = c::journal_iter::new(unsafe { fs.journal_keys_held() }, Btree(btree.into()),
                                                 level.into(), pos);
         }
@@ -1011,7 +1011,7 @@ pub fn bch2_btree_and_journal_iter_peek(c: &Opaque<Fs>, iter: &mut c::btree_and_
 /// # Safety
 /// As btree_and_journal_iter::new()'s; @iter is the caller's to overwrite.
 #[c_export]
-pub unsafe fn __bch2_btree_and_journal_iter_init_node_iter(trans: *mut c::btree_trans,
+pub unsafe fn __bch2_btree_and_journal_iter_init_node_iter(trans: *mut BtreeTrans<'_>,
                                                           iter: *mut c::btree_and_journal_iter,
                                                           b: *mut BtreeNode, node_iter: KeyIter,
                                                           pos: Bpos) {
@@ -1025,7 +1025,7 @@ pub unsafe fn __bch2_btree_and_journal_iter_init_node_iter(trans: *mut c::btree_
 /// # Safety
 /// As __bch2_btree_and_journal_iter_init_node_iter()'s.
 #[c_export]
-pub unsafe fn bch2_btree_and_journal_iter_init_node_iter(trans: *mut c::btree_trans,
+pub unsafe fn bch2_btree_and_journal_iter_init_node_iter(trans: *mut BtreeTrans<'_>,
                                                         iter: *mut c::btree_and_journal_iter,
                                                         b: *mut BtreeNode) {
     let mut node_iter = KeyIter::default();

@@ -21,9 +21,10 @@ use crate::types::{CacheAligned, DArray, NeBytes, RustOnly, bits_to_longs, c_def
 use crate::btree::node_scan::NodeScan;
 use crate::new_lock;
 use crate::util::projections::Volatile;
-use crate::util::ffi::c_char;
+use crate::util::ffi::{c_char, Opaque};
+use core::cell::Cell;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
-use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize};
+use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8};
 use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, Late,
                      TypeInfo};
 use pin_init::{pin_data, PinInit};
@@ -499,7 +500,7 @@ nest! {
     #[c_name(btree_iter)]
     #[derive(CStruct)]
     pub struct BtreeIter<'t> {
-        pub(in crate::btree) trans: *mut cs::btree_trans,
+        pub(in crate::btree) trans: *mut BtreeTrans<'static>,
         pub(in crate::btree) path: cs::btree_path_idx_t,
         pub(in crate::btree) update_path: cs::btree_path_idx_t,
         #[c("btree_path_idx_t key_cache_path")]
@@ -533,7 +534,7 @@ nest! {
 
         /* It mustn't outlive the transaction its paths are in */
         #[c_anon("")]
-        _trans: core::marker::PhantomData<&'t cs::btree_trans>,
+        _trans: core::marker::PhantomData<&'t BtreeTrans<'t>>,
     }
 }
 
@@ -647,7 +648,7 @@ c_const! {
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct btree_trans_commit_hook {
-    pub fn_: Option<unsafe extern "C" fn(*mut cs::btree_trans, *mut cs::btree_trans_commit_hook) -> c_int>,
+    pub fn_: Option<unsafe extern "C" fn(*mut BtreeTrans<'_>, *mut cs::btree_trans_commit_hook) -> c_int>,
     pub next: *mut cs::btree_trans_commit_hook,
 }
 c_default!(btree_trans_commit_hook);
@@ -698,170 +699,201 @@ pub struct btree_trans_subbuf {
  *  - SRCU read lock protects btree node memory from being freed;
  *    released periodically to avoid stalling reclaim
  */
-nest! {
-    #[repr(C)]
-    #[derive(CStruct)]
-    pub struct btree_trans {
-        pub c: *mut Fs,
+#[bitfield(u64, repr = NeBytes<6>, from = NeBytes::<6>::from_u64, into = NeBytes::<6>::to_u64)]
+pub struct btree_trans_bits {
+    lock_may_not_fail:              bool,
+    locked:                         bool,
+    migrate_disabled:               bool,
+    write_locked:                   bool,
+    srcu_held:                      bool,
+    /*
+     * IO was submitted under the srcu read lock (submit_bio() can block for
+     * an unbounded time): suppress the next bch2_trans_unlock_long() "held
+     * too long" warning. Scoped to one locked attempt — cleared on relock /
+     * bch2_trans_begin().
+     */
+    srcu_io_submitted:              bool,
+    btree_cache_cannibalize_locked: bool,
+    pf_memalloc_noio:               bool,
+    used_mempool:                   bool,
+    in_traverse_all:                bool,
+    paths_sorted:                   bool,
+    memory_allocation_failure:      bool,
+    journal_transaction_names:      bool,
+    journal_replay_not_finished:    bool,
+    pub(self) notrace_relock_fail:  bool,
+    /*
+     * Exempt bch2_trans_begin() from the dropped-updates warning. Set
+     * around a nested transaction - one that grabs trans->restart_count,
+     * does work whose inner commits discard the outer's queued updates, and
+     * returns trans_was_restarted() (e.g. fsck counting i_sectors, which
+     * spans too many extents to be a single transaction). The begin can't
+     * see the restart that's about to be returned, so the caller vouches
+     * for it here. Set it with CLASS(trans_may_drop_updates), which
+     * restores it at the end of the scope.
+     */
+    begin_may_drop_updates:         bool,
+    has_interior_updates:           bool,
+    __pad17:                        u15,
+    #[bits(16)] pub restarted: cs::bch_errcode,
+    __pad:                          u16,
+}
 
-        pub paths_allocated: *mut c_ulong,
-        pub paths: *mut cs::btree_path,
-        pub sorted: *mut cs::btree_path_idx_t,
-        pub updates: *mut cs::btree_insert_entry,
+/*
+ * Transaction context for btree operations.
+ *
+ * Holds iterators/paths, pending updates, locks, and a memory arena for a
+ * single logical btree operation.  On lock contention or memory pressure,
+ * the transaction restarts: releases all locks, resets state, and retries
+ * (via lockrestart_do() or similar retry loops).
+ *
+ *  - mem/mem_top: bump allocator, invalidated on every restart
+ *  - Paths kept sorted in lock order to prevent deadlocks
+ *  - SRCU read lock protects btree node memory from being freed;
+ *    released periodically to avoid stalling reclaim
+ */
+#[repr(C)]
+#[c_name(btree_trans)]
+#[derive(CStruct)]
+pub struct BtreeTrans<'f> {
+    #[c("struct bch_fs *c")]
+    pub c: &'f Fs,
 
-        /* bump allocator, invalidated on transaction restart */
-        pub mem: *mut c_void,
-        pub mem_top: c_uint,
-        pub mem_bytes: c_uint,
-        pub realloc_bytes_required: c_uint,
-        #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-        pub trans_kmalloc_trace: cs::darray_trans_kmalloc_trace,
+    pub paths_allocated: Cell<*mut c_ulong>,
+    pub paths: Cell<*mut cs::btree_path>,
+    pub sorted: Cell<*mut cs::btree_path_idx_t>,
+    pub updates: Cell<*mut cs::btree_insert_entry>,
 
-        pub nr_sorted: cs::btree_path_idx_t,
-        pub nr_paths: cs::btree_path_idx_t,
-        pub nr_paths_max: cs::btree_path_idx_t,
-        pub nr_updates: cs::btree_path_idx_t,
-        pub shard_cpu: i16,
-        pub fn_idx: u8,
-        pub lock_must_abort: u8,
-        #[c_bitfield]
-        #>[bitfield(u64, repr = NeBytes<6>, from = NeBytes::<6>::from_u64, into = NeBytes::<6>::to_u64)]
-        pub bits: pub struct btree_trans_bits {
-            lock_may_not_fail:              bool,
-            locked:                         bool,
-            migrate_disabled:               bool,
-            write_locked:                   bool,
-            srcu_held:                      bool,
-            /*
-             * IO was submitted under the srcu read lock (submit_bio() can block for
-             * an unbounded time): suppress the next bch2_trans_unlock_long() "held
-             * too long" warning. Scoped to one locked attempt — cleared on relock /
-             * bch2_trans_begin().
-             */
-            srcu_io_submitted:              bool,
-            btree_cache_cannibalize_locked: bool,
-            pf_memalloc_noio:               bool,
-            used_mempool:                   bool,
-            in_traverse_all:                bool,
-            paths_sorted:                   bool,
-            memory_allocation_failure:      bool,
-            journal_transaction_names:      bool,
-            journal_replay_not_finished:    bool,
-            notrace_relock_fail:            bool,
-            /*
-             * Exempt bch2_trans_begin() from the dropped-updates warning. Set
-             * around a nested transaction - one that grabs trans->restart_count,
-             * does work whose inner commits discard the outer's queued updates, and
-             * returns trans_was_restarted() (e.g. fsck counting i_sectors, which
-             * spans too many extents to be a single transaction). The begin can't
-             * see the restart that's about to be returned, so the caller vouches
-             * for it here. Set it with CLASS(trans_may_drop_updates), which
-             * restores it at the end of the scope.
-             */
-            begin_may_drop_updates:         bool,
-            has_interior_updates:           bool,
-            __pad17:                        u15,
-            #[bits(16)] pub restarted: cs::bch_errcode,
-            __pad:                          u16,
-        },
-        pub restart_count: u32,
-        #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
-        pub restart_count_this_trans: u32,
-        /*
-         * Incremented on every successful (non-empty) commit; for detecting
-         * that cached state derived from btree reads may be stale:
-         */
-        pub commit_count: u32,
+    /* bump allocator, invalidated on transaction restart */
+    pub mem: Cell<*mut c_void>,
+    pub mem_top: Cell<c_uint>,
+    pub mem_bytes: Cell<c_uint>,
+    pub realloc_bytes_required: c_uint,
+    #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
+    pub trans_kmalloc_trace: cs::darray_trans_kmalloc_trace,
 
-        pub last_begin_time: u64,
-        pub last_begin_ip: c_ulong,
-        pub last_restarted_ip: c_ulong,
-        #[cfg(CONFIG_BCACHEFS_DEBUG)]
-        pub last_restarted_trace: cs::bch_stacktrace,
-        pub last_unlock_ip: c_ulong,
-        pub srcu_lock_time: c_ulong,
-        pub srcu_idx: c_int,
-        pub locking_root_id: Btree,
+    pub nr_sorted: cs::btree_path_idx_t,
+    pub nr_paths: Cell<cs::btree_path_idx_t>,
+    pub nr_paths_max: cs::btree_path_idx_t,
+    pub nr_updates: Cell<cs::btree_path_idx_t>,
+    pub shard_cpu: Cell<i16>,
+    pub fn_idx: u8,
+    #[c("u8 lock_must_abort")]
+    pub lock_must_abort: AtomicU8,
+    #[c_bitfield]
+    pub bits: Cell<btree_trans_bits>,
+    pub restart_count: Cell<u32>,
+    #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
+    pub restart_count_this_trans: u32,
+    /*
+     * Incremented on every successful (non-empty) commit; for detecting
+     * that cached state derived from btree reads may be stale:
+     */
+    pub commit_count: Cell<u32>,
 
-        pub locking_hash_val: u64,
-        pub locking: *mut cs::btree_bkey_cached_common,
-        /*
-         * Snapshot of locking->{btree}.hash_val at lock-attempt time, used by
-         * bch2_six_check_for_deadlock() to detect that the node identity
-         * rotated while we were about to sleep on it. 0 for cached entries.
-         */
-        pub locking_wait: cs::six_lock_waiter,
+    pub last_begin_time: u64,
+    pub last_begin_ip: c_ulong,
+    pub last_restarted_ip: c_ulong,
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    pub last_restarted_trace: cs::bch_stacktrace,
+    pub last_unlock_ip: Cell<c_ulong>,
+    pub srcu_lock_time: Cell<c_ulong>,
+    pub srcu_idx: Cell<c_int>,
+    pub locking_root_id: Cell<Btree>,
 
-        /*
-         * btree node writes issued in this trans's context are queued here
-         * (singly linked via bi_next) instead of being submitted directly —
-         * no block layer work happens while we hold btree node locks.
-         * Submitted when the trans unlocks, and before waiting on btree
-         * node IO (see bch2_btree_node_wait_on_write()).
-         */
-        pub queued_write_bios: *mut cs::bio,
+    pub locking_hash_val: Cell<u64>,
+    pub locking: Cell<*mut cs::btree_bkey_cached_common>,
+    /*
+     * Snapshot of locking->{btree}.hash_val at lock-attempt time, used by
+     * bch2_six_check_for_deadlock() to detect that the node identity
+     * rotated while we were about to sleep on it. 0 for cached entries.
+     */
+    #[c("struct six_lock_waiter locking_wait")]
+    pub locking_wait: Opaque<cs::six_lock_waiter>,
 
-        pub fn_: *const c_char,
+    /*
+     * btree node writes issued in this trans's context are queued here
+     * (singly linked via bi_next) instead of being submitted directly —
+     * no block layer work happens while we hold btree node locks.
+     * Submitted when the trans unlocks, and before waiting on btree
+     * node IO (see bch2_btree_node_wait_on_write()).
+     */
+    pub queued_write_bios: Cell<*mut cs::bio>,
 
-        /* update path: */
-        pub journal_entries: cs::btree_trans_subbuf,
-        pub accounting: cs::btree_trans_subbuf,
+    pub fn_: *const c_char,
 
-        pub hooks: *mut cs::btree_trans_commit_hook,
-        pub journal_pin: *mut cs::journal_entry_pin,
+    /* update path: */
+    pub journal_entries: Cell<cs::btree_trans_subbuf>,
+    pub accounting: Cell<cs::btree_trans_subbuf>,
 
-        pub journal_res: cs::journal_res,
-        /*
-         * Input for BCH_TRANS_COMMIT_no_journal_res: with no reservation to
-         * derive a seq from, the caller names the journal entry the btree node
-         * write has to pin.
-         */
-        pub journal_seq_to_pin: u64,
-        pub journal_seq: *mut u64,
-        pub disk_res: *mut cs::disk_reservation,
-        pub flush: *mut cs::closure,
+    pub hooks: Cell<*mut cs::btree_trans_commit_hook>,
+    pub journal_pin: *mut cs::journal_entry_pin,
 
-        pub fs_usage_delta: cs::bch_fs_usage_base,
+    pub journal_res: Cell<cs::journal_res>,
+    /*
+     * Input for BCH_TRANS_COMMIT_no_journal_res: with no reservation to
+     * derive a seq from, the caller names the journal entry the btree node
+     * write has to pin.
+     */
+    pub journal_seq_to_pin: Cell<u64>,
+    pub journal_seq: Cell<*mut u64>,
+    pub disk_res: Cell<*mut cs::disk_reservation>,
+    pub flush: Cell<*mut cs::closure>,
 
-        pub journal_u64s: c_uint,
-        pub extra_journal_u64s: u32,
+    pub fs_usage_delta: Cell<cs::bch_fs_usage_base>,
 
-        /*
-         * Space a trigger needs on top of @disk_res, charged at commit.
-         * Charge sites may disagree on the count, so keep the max: erring
-         * high only over-reserves.
-         */
-        pub extra_disk_res: u64,
-        pub extra_disk_res_replicas: u8,
+    pub journal_u64s: c_uint,
+    pub extra_journal_u64s: Cell<u32>,
 
-        pub btree_path_down: cs::bkey_i,
-        pub btree_path_down_pad: [u64; cs::BKEY_BTREE_PTR_VAL_U64s_MAX],
+    /*
+     * Space a trigger needs on top of @disk_res, charged at commit.
+     * Charge sites may disagree on the count, so keep the max: erring
+     * high only over-reserves.
+     */
+    pub extra_disk_res: Cell<u64>,
+    pub extra_disk_res_replicas: Cell<u8>,
 
-        #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-        #[c("struct lockdep_map dep_map")]
-        pub dep_map: crate::locking::LockdepMap,
-        /* Entries before this are zeroed out on every bch2_trans_get() call */
+    pub btree_path_down: cs::bkey_i,
+    pub btree_path_down_pad: [u64; cs::BKEY_BTREE_PTR_VAL_U64s_MAX],
 
-        pub list: cs::list_head,
-        #[c("struct closure ref")]
-        pub ref_: crate::util::ffi::Opaque<cs::closure>,
-        pub rcu: cs::rcu_head,
+    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+    #[c("struct lockdep_map dep_map")]
+    pub dep_map: crate::locking::LockdepMap,
+    /* Entries before this are zeroed out on every bch2_trans_get() call */
 
-        #[c("unsigned long _paths_allocated[BITS_TO_LONGS(BTREE_ITER_INITIAL)]")]
-        pub _paths_allocated: [c_ulong; bits_to_longs(cs::BTREE_ITER_INITIAL as usize)],
-        pub trans_paths: cs::btree_trans_paths,
-        pub _paths: [cs::btree_path; cs::BTREE_ITER_INITIAL as usize],
-        #[c("btree_path_idx_t _sorted[BTREE_ITER_INITIAL + 4]")]
-        pub _sorted: [cs::btree_path_idx_t; cs::BTREE_ITER_INITIAL as usize + 4],
-        pub _updates: [cs::btree_insert_entry; cs::BTREE_ITER_INITIAL as usize],
+    pub list: cs::list_head,
+    #[c("struct closure ref")]
+    pub ref_: Opaque<cs::closure>,
+    pub rcu: cs::rcu_head,
+
+    /* the first path table: Paths borrows into it */
+    #[c("unsigned long _paths_allocated[BITS_TO_LONGS(BTREE_ITER_INITIAL)]")]
+    pub _paths_allocated: Opaque<[c_ulong; bits_to_longs(cs::BTREE_ITER_INITIAL as usize)]>,
+    #[c("struct btree_trans_paths trans_paths")]
+    pub trans_paths: Opaque<cs::btree_trans_paths>,
+    #[c("struct btree_path _paths[BTREE_ITER_INITIAL]")]
+    pub _paths: Opaque<[cs::btree_path; cs::BTREE_ITER_INITIAL as usize]>,
+    #[c("btree_path_idx_t _sorted[BTREE_ITER_INITIAL + 4]")]
+    pub _sorted: Opaque<[cs::btree_path_idx_t; cs::BTREE_ITER_INITIAL as usize + 4]>,
+    #[c("struct btree_insert_entry _updates[BTREE_ITER_INITIAL]")]
+    pub _updates: Opaque<[cs::btree_insert_entry; cs::BTREE_ITER_INITIAL as usize]>,
+}
+
+impl BtreeTrans<'_> {
+    pub fn notrace_relock_fail(&self) -> bool {
+        self.bits.get().notrace_relock_fail()
+    }
+
+    /// Relock failures after IO it submitted are expected, not counted.
+    pub fn set_notrace_relock_fail(&self) {
+        self.bits.set(self.bits.get().with_notrace_relock_fail(true))
     }
 }
-c_default!(btree_trans);
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct btree_trans_buf {
-    pub trans: *mut cs::btree_trans,
+    pub trans: *mut BtreeTrans<'static>,
 }
 c_default!(btree_trans_buf);
 
@@ -898,7 +930,7 @@ pub struct bch_fs_btree_trans {
     pub lock: cs::seqmutex,
     pub list: cs::list_head,
     #[pin]
-    #[init(Mempool::kmalloc(1, core::mem::size_of::<c::btree_trans>()))]
+    #[init(Mempool::kmalloc(1, core::mem::size_of::<BtreeTrans<'_>>()))]
     #[c("mempool_t pool")]
     pub pool: Mempool,
     #[pin]

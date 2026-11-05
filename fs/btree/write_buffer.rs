@@ -6,6 +6,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::iter::BtreeTrans;
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::TransAttempt;
 use crate::c;
@@ -188,9 +189,9 @@ pub struct bch_fs_btree_write_buffer {
 c_default!(bch_fs_btree_write_buffer);
 
 c_extern! {
-    pub fn bch2_btree_write_buffer_flush_sync(trans: *mut c::btree_trans) -> c_int;
-    pub fn bch2_btree_write_buffer_tryflush(trans: *mut c::btree_trans) -> c_int;
-    pub fn bch2_btree_write_buffer_maybe_flush(trans: *mut c::btree_trans, referring_k: c::bkey_s_c,
+    pub fn bch2_btree_write_buffer_flush_sync(trans: *mut BtreeTrans<'_>) -> c_int;
+    pub fn bch2_btree_write_buffer_tryflush(trans: *mut BtreeTrans<'_>) -> c_int;
+    pub fn bch2_btree_write_buffer_maybe_flush(trans: *mut BtreeTrans<'_>, referring_k: c::bkey_s_c,
                                                f: *mut c::wb_maybe_flush) -> c_int;
     pub fn bch2_btree_write_buffer_to_text(out: *mut Printbuf, c: *mut Fs);
     pub fn bch2_btree_write_buffer_flush_going_ro(c: *mut Fs) -> bool;

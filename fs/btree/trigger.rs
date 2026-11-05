@@ -159,8 +159,7 @@ pub unsafe fn bch2_verify_update_old_key(trans: &BtreeTrans<'_>, i: &c::btree_in
         return;
     }
 
-    let raw = trans.raw();
-    let path = unsafe { (*raw).paths.add(i.path as usize) };
+    let path = unsafe { trans.paths.get().add(i.path as usize) };
     let mut u = c::bkey::new();
     let mut k = unsafe { crate::btree::iter::bch2_btree_path_peek_slot(path, &mut u) };
 
@@ -172,7 +171,7 @@ pub unsafe fn bch2_verify_update_old_key(trans: &BtreeTrans<'_>, i: &c::btree_in
         k = c::bkey_s_c { k: &u, v: core::ptr::null() };
     }
 
-    if unsafe { (*raw).bits.journal_replay_not_finished() } {
+    if trans.journal_replay_not_finished() {
         let j = unsafe { crate::btree::journal_overlay::peek_slot(
             trans.fs(), i.bits.btree_id(), i.bits.level().into(), (*i.k).k.p) };
         if let Some(j) = unsafe { j.as_ref() } {
@@ -315,14 +314,14 @@ unsafe fn run_one_trans_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>
 /// transactional trigger queues more, and a path it allocates can move them
 /// all, to a bigger array.
 fn nr_updates(trans: &BtreeTrans<'_>) -> usize {
-    unsafe { (*trans.raw()).nr_updates.into() }
+    trans.nr_updates.get().into()
 }
 
 /// # Safety
 /// @idx is below nr_updates(), and the update not otherwise borrowed.
 #[allow(clippy::mut_from_ref)]
 unsafe fn update<'a>(trans: &'a BtreeTrans<'_>, idx: usize) -> &'a mut c::btree_insert_entry {
-    unsafe { &mut *(*trans.raw()).updates.add(idx) }
+    unsafe { &mut *trans.updates.get().add(idx) }
 }
 
 fn trans_triggers_run(i: &c::btree_insert_entry) -> bool {

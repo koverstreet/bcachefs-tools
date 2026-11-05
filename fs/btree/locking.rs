@@ -6,7 +6,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::fs::Fs;
-use crate::btree::iter::TransAttempt;
+use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::errcode::BchError;
 use crate::locking::{ExclusiveGuard, Locked, RawTimedLock};
 use crate::c;
@@ -31,7 +31,7 @@ c_enum! {
 
 c_extern! {
     pub fn rust_bch2_inode_shard_idx(c: *mut Fs) -> u64;
-    pub fn bch2_check_for_deadlock(trans: *mut c::btree_trans, cycle: *mut Printbuf) -> c_int;
+    pub fn bch2_check_for_deadlock(trans: *mut BtreeTrans<'_>, cycle: *mut Printbuf) -> c_int;
 }
 
 /* State used for the cycle detector */
@@ -42,7 +42,7 @@ nest! {
     #[repr(C)]
     #[derive(CStruct)]
     pub struct trans_waiting_for_lock {
-        pub trans: *mut c::btree_trans,
+        pub trans: *mut BtreeTrans<'static>,
         pub node_want: *mut c::btree_bkey_cached_common,
         #[c_bitfield]
         #>[bitfield(u8)]
@@ -61,7 +61,7 @@ nest! {
          * cached at snapshot time so iteration is stable against concurrent
          * wakeup activity. @waitlist_idx is the next entry to descend into.
          */
-        pub waitlist: DArray<*mut c::btree_trans, 16>,
+        pub waitlist: DArray<*mut BtreeTrans<'static>, 16>,
     }
 }
 c_default!(trans_waiting_for_lock);
