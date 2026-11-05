@@ -258,3 +258,37 @@ pub unsafe fn bch2_bkey_extent_flags_set(trans: &BtreeTrans<'_>, k: *mut c::bkey
         Ok(())
     })())
 }
+
+/// @k is in @trans's memory, @buf_u64s long: room for a crc128 entry more
+/// than it has. narrow_crc(), for read.c until it's Rust.
+///
+/// # Safety
+/// C has an attempt in progress on @trans, and @k is a key in its memory,
+/// @buf_u64s u64s of it its.
+#[c_export]
+pub unsafe fn bch2_bkey_narrow_crc(trans: &BtreeTrans<'_>, k: *mut c::bkey_i, buf_u64s: c_uint,
+                                   old: c::bch_extent_crc_unpacked, new: c::bch_extent_crc_unpacked) -> bool {
+    let t = unsafe { trans.attempt_in_progress() };
+    let k = unsafe { TransBkey::from_raw_room(&t, k, buf_u64s) };
+    k.arm::<PtrsMut>().expect("narrowing a crc of a key whose entries can't be edited")
+        .narrow_crc(t.fs(), old, new)
+}
+
+/// @crc appended to @k's entries, as the smallest entry it packs into:
+/// bch2_extent_crc_append(), for write.c until it's Rust.
+///
+/// # Safety
+/// @k is a key with pointers, its entries running to its value's end, with
+/// room for the largest extent value - a write's, from its keylist.
+#[c_export]
+pub unsafe fn bch2_extent_crc_append(_c: &Opaque<Fs>, k: *mut c::bkey_i, crc: c::bch_extent_crc_unpacked) {
+    let e = super::edit::crc_entry(&crc, c::bch_extent_entry_type::BCH_EXTENT_ENTRY_crc32);
+    // SAFETY: the caller's: room past the value for it
+    unsafe {
+        let u64s = usize::from((*k).k.u64s);
+        assert!(u64s + e.len() - crate::btree::bkey::BKEY_U64S <= c::BKEY_EXTENT_VAL_U64s_MAX as usize,
+                "appending a crc past an extent's largest value");
+        core::ptr::copy_nonoverlapping(e.as_ptr(), k.cast::<u64>().add(u64s), e.len());
+        (*k).k.u64s += e.len() as u8;
+    }
+}

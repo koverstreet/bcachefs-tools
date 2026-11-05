@@ -79,7 +79,6 @@ bcachefs-y		:=			\
 	btree/write.o				\
 	btree/write_buffer.o			\
 	data/ec/trigger.o			\
-	data/extents.o				\
 	data/read.o				\
 	data/write.o				\
 	data_structures/darray.o		\

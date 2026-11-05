@@ -40,8 +40,6 @@
 		(union bch_extent_entry *) (_entry));			\
 })
 
-extern const char * const bch2_extent_entry_types[];
-
 static inline unsigned extent_entry_type(const union bch_extent_entry *e)
 {
 	return e->type ? __ffs64(e->type) : ~0U;
@@ -393,14 +391,6 @@ DEFINE_CLASS(bch_io_failures, struct bch_io_failures,
 	.trigger	= bch2_trigger_reservation,		\
 })
 
-/* Extent checksum entries: */
-
-bool bch2_bkey_narrow_crc(const struct bch_fs *, struct bkey_i *,
-			  struct bch_extent_crc_unpacked,
-			  struct bch_extent_crc_unpacked);
-void bch2_extent_crc_append(const struct bch_fs *, struct bkey_i *,
-			    struct bch_extent_crc_unpacked);
-
 /* Generic code for keys with pointers: */
 
 static inline bool bkey_is_btree_ptr(const struct bkey *k)
@@ -564,9 +554,6 @@ static inline void bch2_bkey_append_ptr(const struct bch_fs *c, struct bkey_i *k
 		BUG();
 	}
 }
-
-void bch2_extent_ptr_decoded_append(const struct bch_fs *, struct bkey_i *,
-				    struct extent_ptr_decoded *);
 
 #define bch2_bkey_drop_ptrs_noerror(_k, _p, _entry, _cond)			\
 do {										\

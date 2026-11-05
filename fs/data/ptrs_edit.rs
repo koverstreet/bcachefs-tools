@@ -148,8 +148,9 @@ impl TransBkey<'_, '_, PtrsMut> {
     }
 
     /// @p inserted where its crc applies: its pointer, after its stripe_ptr if
-    /// it has one. With no crc, first, after the extent flags entry if there
-    /// is one; with a crc the key has an entry for, just after that entry;
+    /// it has one. With no crc, first - after the extent flags entry if there
+    /// is one, which has to come first; with a crc the key has an entry for,
+    /// just after that entry;
     /// else after a new one, at the end. Only the last is an append: the
     /// others go ahead of pointers already there, renumbering them. NoRoom if
     /// the buffer can't hold it, and the key's as it was.
@@ -168,7 +169,7 @@ impl TransBkey<'_, '_, PtrsMut> {
         {
             at
         } else {
-            entries.extend(crc_entry(&p.crc));
+            entries.extend(crc_entry(&p.crc, c::bch_extent_entry_type::BCH_EXTENT_ENTRY_crc32));
             self.entries_end()
         };
 
@@ -178,15 +179,58 @@ impl TransBkey<'_, '_, PtrsMut> {
         entries.push(p.ptr.into_bits().0);
         self.insert_entry(at, &entries)
     }
+
+    /// We're writing another replica for this extent, so while we've got the
+    /// data in memory we'll be computing a new checksum for the currently live
+    /// data.
+    ///
+    /// If there are other replicas we aren't moving, and they are checksummed
+    /// but not compressed, we can modify them to point to only the data that
+    /// is currently live (so that readers won't have to bounce) while we've
+    /// got the checksum we need: those under crc @old, to @new. False if it
+    /// has no entry for @old.
+    pub fn narrow_crc(&mut self, fs: &Fs, old: c::bch_extent_crc_unpacked, new: c::bch_extent_crc_unpacked)
+        -> bool
+    {
+        assert!(!crc_is_compressed(&new) && new.offset == 0 && new.uncompressed_size == new.live_size,
+                "narrowing to a crc that isn't of all its data, uncompressed");
+
+        let k = *self.k();
+        let Some((n, at, old_ty)) = self.extent_entries_at(fs).enumerate()
+            .find(|(_, (_, e))| crc_unpack(&k, *e) == Some(old))
+            .map(|(n, (at, e))| (n, at, e.ty()))
+        else {
+            return false;
+        };
+
+        for e in self.extent_entries_mut(fs).skip(n + 1) {
+            match e {
+                ExtentEntryMut::crc32(_) | ExtentEntryMut::crc64(_) | ExtentEntryMut::crc128(_) => break,
+                ExtentEntryMut::ptr(p) => p.set_offset(p.offset() + u64::from(old.offset)),
+                _ => {}
+            }
+        }
+
+        // Narrowing advances the nonce by the old offset (encrypted extents),
+        // which may no longer fit the old entry's nonce field: replace it with
+        // a larger entry in the same position. The caller leaves room for a
+        // crc128.
+        let entry = crc_entry(&new, c::bch_extent_entry_type(old_ty));
+        self.drop_entry(fs, at);
+        self.insert_entry(at, &entry).expect("room for a crc128: narrowing's caller makes it");
+        true
+    }
 }
 
-/// @crc as the smallest crc entry it packs into, in u64s.
-fn crc_entry(crc: &c::bch_extent_crc_unpacked) -> ArrayVec<u64, 3> {
+/// @crc as the smallest crc entry it packs into, of type @min or larger, in
+/// u64s.
+pub(crate) fn crc_entry(crc: &c::bch_extent_crc_unpacked, min: c::bch_extent_entry_type) -> ArrayVec<u64, 3> {
+    use c::bch_extent_entry_type as t;
     let words = |b: &[u8]| b.chunks(8).map(|w| u64::from_ne_bytes(w.try_into().unwrap())).collect();
 
-    if let Some(e) = c::bch_extent_crc32::pack(crc) {
+    if let Some(e) = (min.0 <= t::BCH_EXTENT_ENTRY_crc32.0).then(|| c::bch_extent_crc32::pack(crc)).flatten() {
         [e.into_bits().0].into_iter().collect()
-    } else if let Some(e) = c::bch_extent_crc64::pack(crc) {
+    } else if let Some(e) = (min.0 <= t::BCH_EXTENT_ENTRY_crc64.0).then(|| c::bch_extent_crc64::pack(crc)).flatten() {
         words(plain_bytes(&e))
     } else {
         let e = c::bch_extent_crc128::pack(crc)

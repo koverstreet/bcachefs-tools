@@ -551,7 +551,9 @@ static int __bch2_rbio_narrow_crcs(struct btree_trans *trans,
 
 	bkey_reassemble(new, k);
 
-	if (!bch2_bkey_narrow_crc(c, new, rbio->pick.crc, *new_crc))
+	if (!bch2_bkey_narrow_crc(trans, new,
+				  k.k->u64s + sizeof(struct bch_extent_crc128) / sizeof(u64),
+				  rbio->pick.crc, *new_crc))
 		return bch_err_throw(c, rbio_narrow_crcs_fail);
 
 	return bch2_trans_update(trans, &iter, new, BTREE_UPDATE_internal_snapshot_node);
