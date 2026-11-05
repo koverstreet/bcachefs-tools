@@ -132,6 +132,30 @@ impl<T, const N: usize, L: LenUint> InlineVec<T, N, L> {
         }
     }
 
+    /// The first @len kept, the rest dropped; nothing, if it's no longer.
+    pub fn truncate(&mut self, len: usize) {
+        if len >= self.len() {
+            return;
+        }
+
+        let tail: *mut [T] = &mut self[len..];
+        unsafe {
+            self.set_len(len);
+            ptr::drop_in_place(tail);
+        }
+    }
+
+    /// # Safety
+    /// @len is at most its capacity, and the first @len are initialized: as
+    /// Vec::set_len().
+    unsafe fn set_len(&mut self, len: usize) {
+        if self.spilled() {
+            unsafe { (*self.repr.heap).set_len(len) };
+        } else {
+            unsafe { self.set_inline_len(len) };
+        }
+    }
+
     /// @x, inserted at @i, the elements from @i on moving up. Panics past the
     /// end, as slices do.
     pub fn insert(&mut self, i: usize, x: T) -> Result<(), AllocError> {
