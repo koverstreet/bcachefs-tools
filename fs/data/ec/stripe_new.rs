@@ -701,14 +701,7 @@ impl StripeNew {
 
 /// Where @wp's write goes in its stripe's buffer, if one of its open buckets
 /// is a block of a stripe being made: NULL if none is.
-///
-/// # Safety
-/// @wp is a write point, locked.
-#[c_export]
-pub unsafe fn bch2_writepoint_ec_buf(c: &Opaque<Fs>, wp: &c::write_point) -> *mut c_void {
-    let fs = Fs::from_c(c);
-    // SAFETY: the caller's
-    let wp = unsafe { wp.alloc.lock.held() };
+pub(crate) fn writepoint_ec_buf(fs: &Fs, wp: &c::WritePointLocked) -> *mut c_void {
     // the write point's pins, which its lock keeps
     let Some((ob, s)) = wp.ptrs.iter(fs).find_map(|ob| Some((ob, ob.into_ref().stripe()?))) else {
         return core::ptr::null_mut()
@@ -719,6 +712,14 @@ pub unsafe fn bch2_writepoint_ec_buf(c: &Opaque<Fs>, wp: &c::write_point) -> *mu
     let buf = s.new_buf.as_mut().expect("a stripe with blocks claimed has its buffer");
     // its writer's to write, at its write point's free space
     buf.block_mut(usize::from(ob.ec_idx.get()))[(offset as usize) << 9..].as_mut_ptr().cast()
+}
+
+/// # Safety
+/// @wp is a write point, locked.
+#[c_export]
+pub unsafe fn bch2_writepoint_ec_buf(c: &Opaque<Fs>, wp: &c::write_point) -> *mut c_void {
+    let wp = unsafe { wp.alloc.lock.held() };
+    writepoint_ec_buf(Fs::from_c(c), &*wp)
 }
 
 

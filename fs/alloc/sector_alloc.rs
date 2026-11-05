@@ -367,13 +367,13 @@ impl LockedWritePoint<'_> {
     }
 
     /// Appends to @k a pointer to the next @sectors of each of its buckets -
-    /// cached, on a device of durability 0 for user data - and takes them
-    /// from what's free.
+    /// cached if @cached, or on a device of durability 0 for user data - and
+    /// takes them from what's free.
     ///
     /// # Safety
     /// @k is a key with pointers - btree_ptr, btree_ptr_v2, extent - with
     /// room after its value for one per bucket, on none of their devices.
-    pub unsafe fn append_ptrs(&mut self, k: *mut c::bkey_i, sectors: u32) {
+    pub unsafe fn append_ptrs(&mut self, k: *mut c::bkey_i, sectors: u32, cached: bool) {
         let (fs, user) = (self.fs, self.wp.alloc.data_type == DataType::user);
         let g = self.g.as_mut().expect("locked till it's dropped");
         assert!(sectors <= g.sectors_free, "{sectors} sectors from a write point with {} free", g.sectors_free);
@@ -381,7 +381,7 @@ impl LockedWritePoint<'_> {
         g.sectors_allocated += u64::from(sectors);
 
         for ob in g.ptrs.iter(fs) {
-            let ptr = ob.ptr().with_cached(u8::from(user && ob.ca().mi.get().durability == 0));
+            let ptr = ob.ptr().with_cached(u8::from(cached || (user && ob.ca().mi.get().durability == 0)));
             // SAFETY: the caller's
             unsafe { bkey_append_ptr(k, ptr) };
 
@@ -408,7 +408,7 @@ impl LockedWritePoint<'_> {
 
         self.open_buckets_get(ptrs);
         // SAFETY: an extent with no pointers yet, and the caller's room
-        unsafe { self.append_ptrs(k, sectors) };
+        unsafe { self.append_ptrs(k, sectors, false) };
 
         // SAFETY: the whole key, ours
         let k = unsafe { &mut *BkeyI::from_raw_mut(k) };
@@ -416,6 +416,32 @@ impl LockedWritePoint<'_> {
             e.ptrs_mut(self.fs).for_each(|p| p.set_unwritten(1));
         }
         sectors
+    }
+}
+
+impl<'f> LockedWritePoint<'f> {
+    /// Where its write goes in its stripe's buffer, if one of its buckets is
+    /// a block of a stripe being made: NULL if none is.
+    pub fn ec_buf(&self) -> *mut core::ffi::c_void {
+        crate::data::ec::stripe_new::writepoint_ec_buf(self.fs, self.guard())
+    }
+
+    /// Done with, unlocked: the write point, for queueing the write's index
+    /// update on.
+    pub fn done(self) -> &'f c::write_point {
+        self.wp
+    }
+
+    /// Its buckets with less than @sectors free given up, and done with: the
+    /// next allocation gets fresh ones instead of handing the same too-small
+    /// write point straight back. Only ask for something a fresh bucket can
+    /// hold, or the caller loops.
+    pub fn retire_short(self, sectors: u32) {
+        for ob in self.guard().ptrs.iter(self.fs) {
+            if ob.sectors_free.get() < sectors {
+                ob.sectors_free.set(0);
+            }
+        }
     }
 }
 
