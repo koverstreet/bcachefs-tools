@@ -1699,12 +1699,16 @@ fn unqualified(ty: &syn::Type) -> String {
 /// reference is C's pointer: &T const T *, &mut T T *, and Option<&T> one
 /// that may be NULL; Opaque<T> and MaybeUninit<T> are T, and an Opaque's
 /// pointer isn't const, as C changes what's behind it. C_EXPORT_TYPES' are
-/// as it has them. Any other type is C's own: a path to it written c::NAME,
-/// as `crate::c::foo` from a macro_rules! isn't.
+/// as it has them, and a closure fn's Running<T> is what C calls it with, a
+/// struct work_struct *. Any other type is C's own: a path to it written
+/// c::NAME, as `crate::c::foo` from a macro_rules! isn't.
 fn c_export_type(ty: &syn::Type) -> (String, bool) {
     let is = |r: &str, t: &syn::Type| type_of(r).is_some_and(|r| unqualified(&r) == unqualified(t));
     if let Some(r @ syn::Type::Reference(_)) = arg_of(ty, "Option") {
         return c_export_type(r);
+    }
+    if arg_of(ty, "Running").is_some() {
+        return ("*mut c::work_struct".into(), true);
     }
     if let syn::Type::Reference(r) = ty {
         let (mut mutable, mut pointee) = (r.mutability.is_some(), &*r.elem);
