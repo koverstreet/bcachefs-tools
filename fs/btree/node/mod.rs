@@ -213,6 +213,13 @@ impl<'b, 'f> BtreeNode {
 }
 
 impl BtreeNode {
+    /// The node @b is the common part of: container_of(), for a @b that isn't
+    /// a key cache entry's. NULL and error pointers stay what they were.
+    pub fn from_common(b: *mut cs::btree_bkey_cached_common) -> *mut BtreeNode {
+        const { assert!(core::mem::offset_of!(BtreeNode, c) == 0) };
+        b.cast()
+    }
+
     /// The node's contents, on the caller's word that it holds the node lock,
     /// until btree paths hand out its guards.
     ///

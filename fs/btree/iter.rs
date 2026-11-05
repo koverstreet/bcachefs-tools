@@ -2398,7 +2398,8 @@ impl<'t> BtreeIter<'t> {
     ) -> Option<BtreeNodeRef> {
         let paths = t.trans().paths();
         let path = &paths[self.path];
-        let node = path.l[path.level() as usize].b;
+        // an iterator's path isn't cached: its key cache path is
+        let node = BtreeNode::from_common(path.l[path.level() as usize].b);
 
         errptr_or_null(node).ok()?.map(|raw| BtreeNodeRef { raw })
     }
@@ -3213,8 +3214,9 @@ pub struct PathLeaf<'a> {
 }
 
 impl<'a> PathLeaf<'a> {
+    /// An iterator's path isn't cached: its key cache path is.
     pub fn node(&self) -> &'a BtreeNode {
-        unsafe { &*(*self.l).b }
+        unsafe { &*BtreeNode::from_common((*self.l).b) }
     }
 
     /// Where the bset search tree failed at the path's key, if it did:
@@ -3222,7 +3224,7 @@ impl<'a> PathLeaf<'a> {
     /// keys.
     pub fn bfloat_to_text(&self, out: &mut Printbuf) {
         unsafe {
-            let b = &*(*self.l).b;
+            let b = self.node();
             b.btree_node_iter_bfloat_to_text(b.contents(), out, &mut (*self.l).iter)
         }
     }

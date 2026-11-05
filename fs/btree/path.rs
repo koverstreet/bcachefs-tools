@@ -7,7 +7,6 @@
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::locking::{btree_node_locked_type, BTREE_NODE_UNLOCKED};
-use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::cstructs::c as cs;
 use crate::errcode::{bch_errcode, err_ptr, errptr_or_null, BchError};
@@ -27,7 +26,9 @@ c_typedef! {
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct btree_path_level {
-    pub b: *mut BtreeNode,
+    /* a cached path's is a struct bkey_cached's */
+    #[c("struct btree *b")]
+    pub b: *mut cs::btree_bkey_cached_common,
     pub iter: KeyIter,
     pub lock_seq: u32,
     #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
@@ -142,13 +143,14 @@ impl IndexMut<PathIdx> for Paths<'_> {
 
 /// What every level of a path table the transaction has reallocated away from
 /// holds, in debug builds: for a path pointer kept across the realloc.
-pub(crate) fn btree_path_poison() -> *mut BtreeNode {
+pub(crate) fn btree_path_poison() -> *mut c::btree_bkey_cached_common {
     err_ptr(BchError::from(bch_errcode::BCH_ERR_no_btree_node_stale_paths))
 }
 
 impl BtreePath {
-    /// NULL above the root, or an error pointer: why there's no node.
-    pub(crate) fn node(&self, level: usize) -> *mut BtreeNode {
+    /// NULL above the root, or an error pointer: why there's no node. A
+    /// cached path's is a key cache entry's.
+    pub(crate) fn node(&self, level: usize) -> *mut c::btree_bkey_cached_common {
         if level >= c::BTREE_MAX_DEPTH as usize {
             return core::ptr::null_mut();
         }
@@ -169,12 +171,12 @@ impl BtreePath {
         b
     }
 
-    pub(crate) fn lock_seq_matches(&self, b: &BtreeNode, level: usize) -> bool {
-        self.l[level].lock_seq == b.c.lock.six().seq.get()
+    pub(crate) fn lock_seq_matches(&self, b: &c::btree_bkey_cached_common, level: usize) -> bool {
+        self.l[level].lock_seq == b.lock.six().seq.get()
     }
 
-    pub(crate) fn has_node(&self, b: &BtreeNode) -> bool {
-        let level = b.c.level as usize;
+    pub(crate) fn has_node(&self, b: &c::btree_bkey_cached_common) -> bool {
+        let level = b.level as usize;
 
         core::ptr::eq(self.l[level].b, b) && self.lock_seq_matches(b, level)
     }
