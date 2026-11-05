@@ -84,6 +84,8 @@ c_extern! {
     pub fn bch2_trans_restart_ip(trans: *mut c::btree_trans, err: c_int, ip: c_ulong) -> c_int;
     #[must_use]
     pub fn bch2_btree_iter_traverse(iter: *mut c::btree_iter) -> c_int;
+    #[must_use]
+    pub fn __bch2_btree_iter_traverse(iter: *mut c::btree_iter) -> c_int;
     pub fn bch2_btree_iter_peek_node(iter: *mut c::btree_iter) -> *mut BtreeNode;
     pub fn bch2_btree_iter_peek_max(iter: *mut c::btree_iter, end: *const Bpos) -> c::bkey_s_c;
     pub fn bch2_btree_iter_peek_prev_min(iter: *mut c::btree_iter, end: Bpos) -> c::bkey_s_c;
@@ -2676,6 +2678,13 @@ impl<'t> BtreeIter<'t> {
 
     pub fn traverse(&mut self, t: &TransAttempt<'_, 't>) -> Result<(), BchError> {
         let ret = unsafe { c::bch2_btree_iter_traverse(self.raw_mut()) };
+        t.result(ret)
+    }
+
+    /// traverse(), its path at the iterator's position, not its search key -
+    /// one past it, for extents: __bch2_btree_iter_traverse().
+    pub fn traverse_at_pos(&mut self, t: &TransAttempt<'_, 't>) -> Result<(), BchError> {
+        let ret = unsafe { __bch2_btree_iter_traverse(self.raw_mut()) };
         t.result(ret)
     }
 
