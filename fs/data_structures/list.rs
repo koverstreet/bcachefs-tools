@@ -119,7 +119,7 @@ pub struct List<T, const OFFSET: usize> {
 macro_rules! list {
     ($T:ty, $member:ident) => {
         $crate::data_structures::list::List<$T, {
-            fn _member_is_links(t: &$T) -> &impl $crate::data_structures::list::IsLinks { &t.$member }
+            fn _member_is_links(t: &$T) -> &dyn $crate::data_structures::list::IsLinks { &t.$member }
             ::core::mem::offset_of!($T, $member)
         }>
     };
