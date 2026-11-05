@@ -2605,9 +2605,12 @@ err:
 			goto again;
 
 		bch2_write_done(op);
-	} else {
+	} else if (likely(wp)) {
 		bch2_write_queue(op, wp);
 		continue_at(&op->cl, bch2_write_index, NULL);
+	} else {
+		/* failed before finding a write point: nothing in flight */
+		bch2_write_done(op);
 	}
 }
 
