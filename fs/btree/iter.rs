@@ -448,16 +448,17 @@ impl<'f> BtreeTrans<'f> {
         disk_res: Option<&DiskReservation<'_>>,
         flags: impl Into<CommitOpts>,
     ) -> Result<(), BchError> {
-        self.commit_inner(disk_res, flags.into(), false)
+        self.commit_inner(disk_res, None, flags.into(), false)
     }
 
-    /// The static inline bch2_trans_commit(), with __bch2_trans_commit()'s
-    /// @lazy. journal_seq and flush are reset, as C's every commit does: a C
-    /// commit before ours, in the same transaction, may have left a pointer to
-    /// its stack there.
+    /// The static inline bch2_trans_commit_flush(), with
+    /// __bch2_trans_commit()'s @lazy. journal_seq and flush are set, as C's
+    /// every commit does: a C commit before ours, in the same transaction, may
+    /// have left a pointer to its stack there.
     fn commit_inner(
         &self,
         disk_res: Option<&DiskReservation<'_>>,
+        flush:    Option<&Opaque<c::closure>>,
         flags:    CommitOpts,
         lazy:     bool,
     ) -> Result<(), BchError> {
@@ -465,7 +466,7 @@ impl<'f> BtreeTrans<'f> {
             let trans = self.raw();
             (*trans).disk_res    = disk_res.map_or(core::ptr::null_mut(), |r| r.as_mut_ptr());
             (*trans).journal_seq = core::ptr::null_mut();
-            (*trans).flush       = core::ptr::null_mut();
+            (*trans).flush       = flush.map_or(core::ptr::null_mut(), Opaque::as_ptr);
             c::__bch2_trans_commit(trans, flags.to_c(), lazy)
         };
         ret_to_result(ret)
@@ -919,6 +920,18 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.trans.commit(disk_res, flags)
     }
 
+    /// commit(), with a ref on @flush until the commit's journal entry is
+    /// flushed.
+    pub fn commit_flush(
+        &self,
+        disk_res: Option<&DiskReservation<'_>>,
+        flush:    Option<&Opaque<c::closure>>,
+        flags:    impl Into<CommitOpts>,
+    ) -> Result<(), BchError> {
+        assert!(!self.spent.get(), "commit in an attempt ignore_restarts() ended");
+        self.trans.commit_inner(disk_res, flush, flags.into(), false)
+    }
+
     /// Commit what's queued, if anything - and having committed, return
     /// transaction_restart_commit, so the caller's loop re-runs against the
     /// committed state.
@@ -929,7 +942,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             return Ok(());
         }
 
-        self.trans.commit_inner(disk_res, flags.into(), true)
+        self.trans.commit_inner(disk_res, None, flags.into(), true)
     }
 
     /// Close this attempt, for work at the transaction level - work that runs
