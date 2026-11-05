@@ -132,6 +132,14 @@ impl Folio {
         unsafe { c::folio_end_read(self.as_ptr(), uptodate) }
     }
 
+    /// folio_end_writeback().
+    ///
+    /// # Safety
+    /// Its writeback is ours: FolioGuard::start_writeback()'s, ended once.
+    pub unsafe fn end_writeback(self) {
+        unsafe { c::folio_end_writeback(self.as_ptr()) }
+    }
+
     pub fn get(self) {
         unsafe { c::folio_get(self.as_ptr()) }
     }
@@ -264,9 +272,28 @@ impl FolioRef<'_> {
 pub struct FolioGuard<'a>(Folio, PhantomData<&'a ()>);
 
 impl FolioGuard<'_> {
+    /// A folio handed to us locked - writeback_iter()'s - as its guard.
+    ///
+    /// # Safety
+    /// @folio is locked, ours to unlock, and kept for 'a.
+    pub unsafe fn adopt(folio: Folio) -> Self {
+        FolioGuard(folio, PhantomData)
+    }
+
     /// Left locked, for whoever we return it to: a fault's VM_FAULT_LOCKED.
     pub fn keep_locked(self) -> Folio {
         core::mem::ManuallyDrop::new(self).0
+    }
+
+    /// Under writeback, and unlocked: folio_start_writeback(), then
+    /// folio_unlock(). Its writeback is ours to end - end_writeback().
+    pub fn start_writeback(self) -> Folio {
+        let folio = self.keep_locked();
+        unsafe {
+            c::rust_folio_start_writeback(folio.as_ptr());
+            c::folio_unlock(folio.as_ptr());
+        }
+        folio
     }
 }
 
@@ -324,6 +351,12 @@ impl Mapping {
 
     pub fn is_empty(self) -> bool {
         unsafe { (*self.as_ptr()).nrpages == 0 }
+    }
+
+    /// @errno - a negative one - recorded for whoever next checks for a
+    /// writeback error: mapping_set_error().
+    pub fn set_error(self, errno: c_int) {
+        unsafe { c::mapping_set_error(self.as_ptr(), errno) }
     }
 
     /// Its dirty pages from @start to @end, inclusive, written and waited on:
