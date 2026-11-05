@@ -52,6 +52,22 @@ unsafe impl TryRefcount for Opaque<c::closure> {
     }
 }
 
+// A zeroed closure is one closure_init() hasn't run on yet, as in C's
+// kzalloc()'d structs: what closure::call() starts
+unsafe impl ::pin_init::Zeroable for Opaque<c::closure> {}
+
+impl Opaque<c::closure> {
+    /// Its refs: the running ref, while it runs, and every other.
+    pub fn nr_remaining(&self) -> u32 {
+        unsafe { c::closure_nr_remaining(self.as_ptr()) }
+    }
+
+    /// Whether it puts a ref on a parent when it's done.
+    pub fn has_parent(&self) -> bool {
+        !unsafe { (*self.as_ptr()).parent }.is_null()
+    }
+}
+
 /// C's CLASS(closure_stack). Dropped, it syncs, so nothing's left holding it.
 #[pin_data(PinnedDrop)]
 pub struct StackClosure {
@@ -83,8 +99,7 @@ impl StackClosure {
 
     /// Its refs: one of its own, and one for each waitlist it's on.
     pub fn nr_remaining(&self) -> u32 {
-        // SAFETY: initialized; the count is atomic
-        unsafe { c::closure_nr_remaining(self.as_ptr()) }
+        self.as_opaque().nr_remaining()
     }
 
     pub fn sync(&self) {
@@ -151,12 +166,25 @@ pub fn closure_wait_event(list: &c::closure_waitlist, mut cond: impl FnMut() -> 
 ///
 /// # Safety
 /// Every T has a c::closure at CLOSURE.
-pub unsafe trait HasClosure {
+pub unsafe trait HasClosure: Sized {
     const CLOSURE: usize;
+
+    /// The T @cl is the closure of.
+    ///
+    /// # Safety
+    /// @cl is a T's closure.
+    unsafe fn of_closure(cl: *mut c::closure) -> *mut Self {
+        cl.wrapping_byte_sub(Self::CLOSURE).cast()
+    }
 }
 
 #[doc(hidden)]
-pub const fn closure_field(_: *const c::closure) {}
+pub trait ClosureField {}
+impl ClosureField for c::closure {}
+impl ClosureField for Opaque<c::closure> {}
+
+#[doc(hidden)]
+pub const fn closure_field<C: ClosureField>(_: *const C) {}
 
 /// HasClosure for $t, by its closure field $f.
 #[macro_export]
@@ -230,7 +258,7 @@ impl<T: HasClosure> Running<T> {
 
     /// The running ref, and every other.
     pub fn nr_remaining(&self) -> u32 {
-        unsafe { c::closure_nr_remaining(self.cl()) }
+        self.closure().nr_remaining()
     }
 
     /// Sleeps until the running ref is the only one.
