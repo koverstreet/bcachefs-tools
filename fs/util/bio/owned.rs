@@ -166,6 +166,11 @@ impl<A: HasBio, B: HasBio> FrontPad for Either<A, B> {
 }
 
 impl<T: FrontPad> BioSet<T> {
+    /// For C's bio_alloc_bioset() and bio_split(), allocating a T's bio.
+    pub fn as_ptr(&self) -> *mut c::bio_set {
+        self.set.as_ptr()
+    }
+
     /// @pool_size bios held in reserve, and bvecs with them if @need_bvecs:
     /// for bios allocated with more than fit inline. Nothing to undo if it
     /// fails.
