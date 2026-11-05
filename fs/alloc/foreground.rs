@@ -61,7 +61,7 @@ use crate::sb::counters::events;
 use crate::sb::members::{data_types_to_text, member_state_str};
 use crate::types::{RustOnly, c_default, rust_only};
 use crate::util::alloc::init_at;
-use crate::util::closure::{closure_has_waiters, closure_wait, closure_wake_up, StackClosure};
+use crate::util::closure::{closure_has_waiters, closure_wait, closure_wake_up};
 use crate::util::time_stats::TimeStats;
 use crate::util::ffi::Opaque;
 use crate::util::hash::{hash_64, Fold};
@@ -782,11 +782,11 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// to retry - if @cl went on a waitlist for it - then Ok, for the caller
     /// to retry, unless the filesystem's gone emergency read-only, which
     /// won't allocate again.
-    pub fn wait_on_allocator(&self, req: &mut c::alloc_request, err: BchError, cl: &StackClosure)
+    pub fn wait_on_allocator(&self, req: &mut c::alloc_request, err: BchError, cl: &Opaque<c::closure>)
         -> Result<(), BchError>
     {
-        if cl.nr_remaining() > 1 {
-            self.trans().sleep_on_allocator(req, err, cl.as_opaque());
+        if unsafe { c::closure_nr_remaining(cl.as_ptr()) } > 1 {
+            self.trans().sleep_on_allocator(req, err, cl);
         }
         let fs = self.fs();
         if fs.flags.get(c::bch_fs_flags::BCH_FS_emergency_ro) {

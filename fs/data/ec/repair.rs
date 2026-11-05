@@ -671,7 +671,7 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: Ope
         let ret = new_stripe_alloc_buckets(t, &mut req, dev_stripe, &mut ns.lock(), true);
         match ret {
             Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {
-                t.wait_on_allocator(&mut req, e, &cl)?;
+                t.wait_on_allocator(&mut req, e, cl.as_opaque())?;
                 Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))
             }
             ret => ret,

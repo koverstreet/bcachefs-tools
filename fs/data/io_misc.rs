@@ -107,7 +107,7 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
         let wp = match t.alloc_sectors(&mut req, write_point) {
             Ok(wp) => wp,
             Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {
-                t.wait_on_allocator(&mut req, e, &cl)?;
+                t.wait_on_allocator(&mut req, e, cl.as_opaque())?;
                 return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested));
             }
             Err(e) => return Err(e),
