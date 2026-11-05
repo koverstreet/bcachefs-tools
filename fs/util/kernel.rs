@@ -306,6 +306,66 @@ pub fn current_fsgid() -> c::kgid_t {
     unsafe { (*(*c::get_current()).cred).fsgid }
 }
 
+/// A user task's address space, for a kthread to do the task's IO in.
+#[cfg(kernel)]
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct Mm(core::ptr::NonNull<c::mm_struct>);
+
+#[cfg(kernel)]
+impl Mm {
+    /// This task's: None for a kthread's.
+    pub fn current() -> Option<Self> {
+        core::ptr::NonNull::new(unsafe { (*c::get_current()).mm }).map(Mm)
+    }
+
+    /// kthread_use_mm(): this kthread in it, till the guard's dropped.
+    ///
+    /// # Safety
+    /// It's live while the guard is: its task's IO, which this is, holds it.
+    pub unsafe fn use_in_kthread(self) -> KthreadMm {
+        unsafe { c::kthread_use_mm(self.0.as_ptr()) };
+        KthreadMm(self)
+    }
+}
+
+/// A kthread in a user task's address space: kthread_unuse_mm() on drop.
+#[cfg(kernel)]
+pub struct KthreadMm(Mm);
+
+#[cfg(kernel)]
+impl Drop for KthreadMm {
+    fn drop(&mut self) {
+        unsafe { c::kthread_unuse_mm(self.0.0.as_ptr()) }
+    }
+}
+
+/// What this task has run, as of @now: 0 where the scheduler doesn't say,
+/// or in userspace, which has no scheduler.
+pub fn current_runtime(now: u64) -> u64 {
+    #[cfg(all(kernel, not(any(CONFIG_SCHED_ALT, CONFIG_SCHED_MUQSS))))]
+    {
+        let se = unsafe { &(*c::get_current()).se };
+        se.sum_exec_runtime.wrapping_add(now.wrapping_sub(se.exec_start))
+    }
+    /*
+     * BMQ/PDS (CONFIG_SCHED_ALT) and MuQSS replace CFS and drop
+     * task_struct.se; this is only write-point runtime accounting,
+     * so skip it there.
+     */
+    #[cfg(not(all(kernel, not(any(CONFIG_SCHED_ALT, CONFIG_SCHED_MUQSS)))))]
+    {
+        let _ = now;
+        0
+    }
+}
+
+/// @bytes written, to this task's io accounting.
+#[cfg(kernel)]
+pub fn task_io_account_write(bytes: usize) {
+    unsafe { c::task_io_account_write(bytes) }
+}
+
 /// A number identifying this task while it lives - C's (unsigned long)current
 /// - for hashing by task. In userspace, the thread's.
 pub fn current_id() -> usize {
