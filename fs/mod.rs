@@ -185,6 +185,7 @@ pub mod vfs {
     #[cfg(kernel)] pub mod attr;
     #[cfg(kernel)] pub mod dentry;
     #[cfg(kernel)] pub mod dir;
+    #[cfg(kernel)] pub mod direct_write;
     #[cfg(kernel)] pub mod export;
     #[cfg(kernel)] pub mod fdm;
     #[cfg(kernel)] pub mod fiemap;
@@ -206,6 +207,7 @@ pub mod vfs {
     #[cfg(kernel)] pub mod status_fd;
     #[cfg(kernel)] pub mod super_block;
     #[cfg(kernel)] pub mod ioctl;
+    #[cfg(kernel)] pub mod writeback;
     pub mod vfs_inode;
 }
 #[path = "fs/xattr.rs"]        pub mod xattr;
@@ -256,6 +258,9 @@ pub mod data {
     pub mod update_feasible;
     pub mod update_task;
     pub mod update_index;
+    pub mod write;
+    pub mod write_extent;
+    pub mod write_nocow;
 }
 pub mod errcode;
 /// The on-disk format: bcachefs_format.h's types.

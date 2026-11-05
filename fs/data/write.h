@@ -9,58 +9,6 @@
 #define to_wbio(_bio)			\
 	container_of((_bio), struct bch_write_bio, bio)
 
-
-void bch2_submit_wbio_replicas(struct bch_write_bio *, struct bch_fs *,
-			       enum bch_data_type, const struct bkey_i *,
-			       bool, struct bch_dev **);
-
-__printf(4, 5)
-void bch2_write_op_error(struct bch_write_op *op, bool, u64, const char *, ...);
-
-static inline struct workqueue_struct *index_update_wq(struct bch_write_op *op)
-{
-	return op->watermark == BCH_WATERMARK_copygc
-		? op->c->copygc.wq
-		: op->c->btree_update_wq;
-}
-
-int bch2_sum_sector_overwrites(struct btree_trans *, struct btree_iter *,
-			       struct bkey_i *, bool *, s64 *, s64 *, unsigned *);
-
-static inline void bch2_write_op_init(struct bch_write_op *op, struct bch_fs *c,
-				      struct bch_inode_opts opts)
-{
-	BUILD_BUG_ON(__BCH_WRITE_convert_unwritten >= BITS_PER_TYPE(op->flags));
-
-	op->c			= c;
-	op->end_io		= NULL;
-	op->flags		= 0;
-	op->io_error		= false;
-	op->written		= 0;
-	op->error		= 0;
-	op->csum_type		= bch2_data_checksum_type(c, opts);
-	op->compression_opt	= opts.compression;
-	op->nr_replicas		= 0;
-	op->watermark		= BCH_WATERMARK_normal;
-	op->incompressible	= 0;
-	op->open_buckets.nr	= 0;
-	op->devs_have.nr	= 0;
-	op->target		= 0;
-	op->opts		= opts;
-	op->subvol		= 0;
-	op->pos			= POS_MAX;
-	op->version		= ZERO_VERSION;
-	op->write_point		= (struct write_point_specifier) { 0 };
-	op->res			= (struct disk_reservation) { .c = c };
-	op->new_i_size		= U64_MAX;
-	op->i_sectors_delta	= 0;
-	op->devs_need_flush	= NULL;
-	op->failed		= bch2_io_failures_init();
-}
-
-CLOSURE_CALLBACK(bch2_write);
-void bch2_write_point_do_index_updates(struct work_struct *);
-
 static inline struct bch_write_bio *wbio_init(struct bio *bio)
 {
 	struct bch_write_bio *wbio = to_wbio(bio);
@@ -68,10 +16,5 @@ static inline struct bch_write_bio *wbio_init(struct bio *bio)
 	memset(&wbio->wbio, 0, sizeof(wbio->wbio));
 	return wbio;
 }
-
-extern const char * const bch2_write_flags[];
-
-void __bch2_write_op_to_text(struct printbuf *, struct bch_write_op *);
-void bch2_write_op_to_text(struct printbuf *, struct bch_write_op *);
 
 #endif /* _BCACHEFS_IO_WRITE_H */

@@ -1659,8 +1659,8 @@ impl Dev {
 
         #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
         if ty != T::BCH_MEMBER_ERROR_checksum {
-            // SAFETY: a device; @ty is read or write, the rw it takes
-            unsafe { c::bch2_latency_acct(core::ptr::from_ref(self).cast_mut(), submit_time, ty.0 as c_int) };
+            // @ty is read or write: the rw it takes
+            self.latency_acct(submit_time, ty.0 as usize);
         }
         #[cfg(CONFIG_BCACHEFS_NO_LATENCY_ACCT)]
         let _ = submit_time;

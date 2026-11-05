@@ -160,7 +160,6 @@ pub fn async_obj_exit(fs: &Fs) {
 }
 
 cstruct_macros::c_extern! {
-    fn bch2_write_op_to_text(out: *mut Printbuf, op: *mut c::bch_write_op);
     fn bch2_btree_read_bio_to_text(out: *mut Printbuf, rbio: *mut c::btree_read_bio);
 }
 
@@ -181,7 +180,7 @@ unsafe fn rbio_obj_to_text(out: &mut Printbuf, fs: &Fs, obj: NonNull<c_void>) {
 
 #[cold]
 unsafe fn write_op_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
-    unsafe { bch2_write_op_to_text(out.as_raw(), obj.as_ptr().cast()) }
+    crate::data::write::write_op_to_text(out, unsafe { obj.cast::<c::bch_write_op>().as_ref() })
 }
 
 #[cold]

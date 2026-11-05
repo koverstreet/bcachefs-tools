@@ -50,6 +50,7 @@ pub mod c_export;
 mod mask;
 
 pub use edit::BkeyVPtrsMut;
+pub(crate) use edit::extent_crc_append;
 pub use mask::{brand, Branded, PtrMask};
 pub use read::{BkeyVRead, DevIoFailures, IoFailures};
 pub use ops::{bkey_ptrs_to_text, bkey_ptrs_validate, btree_ptr_v2_compat, btree_ptr_v2_to_text, ptr_swab};

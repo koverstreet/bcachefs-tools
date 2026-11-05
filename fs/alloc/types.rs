@@ -395,7 +395,7 @@ published! {
 pub struct write_point_io {
     pub __align: CacheAligned,
     #[pin]
-    #[init(new_work!(c::bch2_write_point_do_index_updates, "&wp->index_update_work"))]
+    #[init(new_work!(crate::data::write::write_point_do_index_updates, "&wp->index_update_work"))]
     pub index_update_work: c::work_struct,
 
     #[pin]

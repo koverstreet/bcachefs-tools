@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! An extent update cut to what one transaction can do: extent_trim_atomic().
+//! An extent update - extent_update(), with its inode's - cut to what one
+//! transaction can do: extent_trim_atomic().
 //!
 //! A transaction has a fixed number of btree iterators, and an extent update
 //! needs more than its own: one for each key it overwrites, and, through the
@@ -17,19 +18,23 @@
 //! update's end ends the walk: key start positions, extent_whiteouts included,
 //! only go up (btree/update.rs's extent_whiteout_type()).
 
-use crate::btree::bkey::{bkey_ge, bkey_gt, pos, BkeySC, BkeyV, BkeyVMut};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey};
+use crate::alloc::capacity::DiskReservation;
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{bkey_ge, bkey_gt, pos, spos, BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut, Typed};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::update::extent_whiteout_type;
 use crate::c;
 use crate::data::extents::{BkeyVExtents, Extents};
 use crate::data::ptrs::{BkeyVPtrs, ExtentEntry, Ptrs};
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::prt;
+use crate::init::error::count_fsck_err;
 use crate::sb::counters::events;
-use core::ffi::c_int;
+use crate::util::ffi::Opaque;
+use crate::util::kernel::{likely, unlikely};
+use crate::util::log::LogMsg;
+use crate::{inode, inode_opts, prt};
 use core::ops::ControlFlow;
-use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree};
 
 /// The most btree iterators an extent update's transaction may need.
@@ -175,17 +180,244 @@ impl<'t> TransAttempt<'_, 't> {
     }
 }
 
-/// extent_trim_atomic(), for C: data/write.c's bch2_extent_update().
-///
-/// # Safety
-/// C has an attempt in progress on @trans, and @k is a key in its memory, in
-/// an extents btree.
-#[c_export]
-pub unsafe fn bch2_extent_trim_atomic(trans: &BtreeTrans<'_>, iter: &mut BtreeIter<'_>, k: *mut c::bkey_i) -> c_int {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    // SAFETY: the caller's - and a key it cuts back only shrinks
-    let mut k = unsafe { TransBkey::from_raw_room(&t, k, (*k).k.u64s.into()) }
-        .arm::<Extents>().expect("trimming a key an extents btree can't hold");
-    ret_to_c(t.extent_trim_atomic(iter, &mut k))
+/// What writing @new over what it overwrites does to the inode and the disk:
+/// bch2_sum_sector_overwrites().
+pub struct SectorOverwrites {
+    /// Whether it takes space the overwritten keys don't give back: a
+    /// snapshot's overwrite, more replicas, or uncompressed over compressed.
+    /// An enospc check is due.
+    pub usage_increasing:   bool,
+    pub i_sectors_delta:    i64,
+    pub disk_sectors_delta: i64,
+    /// What disk_sectors_delta is weighted by: what topping a reservation up
+    /// to cover it charges at.
+    pub new_nr_replicas:    u32,
+}
+
+impl<'t> TransAttempt<'_, 't> {
+    /// @new's SectorOverwrites, from @extent_iter at @new's start.
+    pub fn sum_sector_overwrites(&self, extent_iter: &BtreeIter<'t>, new: &BkeyI) -> Result<SectorOverwrites, BchError> {
+        let fs = self.fs();
+        let new_k = *new.k();
+        let new_d = BkeySC::from(new).durability_safe(fs);
+
+        let mut s = SectorOverwrites {
+            usage_increasing:   false,
+            i_sectors_delta:    0,
+            disk_sectors_delta: 0,
+            /*
+             * @disk_sectors_delta is weighted by this below, so a caller topping up
+             * a reservation to cover it needs to know the count it's charging at:
+             */
+            new_nr_replicas:    new_d.nr_replicas.into(),
+        };
+
+        /* @extent_iter is at @new's start: each slot, trimmed, is what @new overwrites */
+        let mut iter = extent_iter.copy();
+        iter.set_flags(BtreeIterFlags::TRIM);
+
+        while let Some(old) = iter.peek_max_type(self, new_k.p, BtreeIterFlags::SLOTS)? {
+            let sectors = i64::from(old.k.size);
+
+            let old_d = old.durability_safe(fs);
+
+            s.i_sectors_delta += sectors *
+                (i64::from(new_k.extent_is_allocation()) -
+                 i64::from(old.k.extent_is_allocation()));
+
+            /*
+             * What the new key will occupy, less what overwriting the old
+             * one gives back. Only the old key's uncompressed replicas
+             * count against us: a compressed extent holds fewer sectors
+             * than it covers, so crediting its full extent would hand back
+             * space that was never taken.
+             *
+             * nr_replicas, not total: this is space accounting, and it must
+             * not depend on mi.durability. Durability is OPT_RUNTIME while
+             * accounting is persistent, so weighting by it would let a
+             * device setting change retroactively invalidate space already
+             * accounted for.
+             */
+            s.disk_sectors_delta += sectors * i64::from(new_d.nr_replicas);
+            s.disk_sectors_delta -= if new_k.p.snapshot == old.k.p.snapshot {
+                sectors * i64::from(old_d.nr_overwritable)
+            } else {
+                0
+            };
+
+            if !s.usage_increasing &&
+               (new_k.p.snapshot != old.k.p.snapshot ||
+                new_d.replicas > old_d.replicas ||
+                (new_d.sectors_compressed == 0 && old_d.sectors_compressed != 0)) {
+                s.usage_increasing = true;
+            }
+
+            if bkey_ge(old.k.p, new_k.p) {
+                break;
+            }
+            iter.advance();
+        }
+
+        Ok(s)
+    }
+
+    #[cold]
+    fn bi_sectors_underflow(&self, inode: Bpos, bi_sectors: i64, i_sectors_delta: &mut i64) {
+        let fs = self.fs();
+        let (inum, snapshot) = (inode.offset, inode.snapshot);
+
+        let mut msg = LogMsg::new(fs);
+        prt!(&mut *msg, "inode {inum} snapshot {snapshot} i_sectors underflow: {} + {} < 0",
+             bi_sectors, *i_sectors_delta);
+
+        let counted = count_fsck_err(fs, c::bch_sb_error_id::BCH_FSCK_ERR_inode_i_sectors_underflow, &mut msg);
+        msg.set_suppressed(!counted);
+
+        *i_sectors_delta = if *i_sectors_delta < 0 { -bi_sectors } else { 0 };
+    }
+
+    /// The update of the inode @extent_iter's extents are in: i_size raised
+    /// to @new_i_size, i_sectors by @i_sectors_delta, at @extent_iter's
+    /// snapshot. Its io options in @opts.
+    pub(crate) fn extent_update_i_size_sectors(&self, extent_iter: &BtreeIter<'t>, new_i_size: u64,
+                                    mut i_sectors_delta: i64, opts: &mut c::bch_inode_opts)
+        -> Result<(), BchError>
+    {
+        let fs = self.fs();
+
+        let mut iter = BtreeIter::new(self, Btree::BTREE_ID_inodes,
+                                      spos(0, extent_iter.pos().inode, extent_iter.snapshot()),
+                                      BtreeIterFlags::INTENT | BtreeIterFlags::CACHED);
+        let k = iter.peek_slot(self)?.expect("a slot");
+
+        /* Slack for varint::decode_fast(), which reads up to 7 bytes past the end: */
+        let mut k_mut: TransBkey<'_, 't> = self.bkey_reassemble_room(k, 0)?;
+
+        if unlikely(k_mut.k().key_type() != c::bch_bkey_type::KEY_TYPE_inode_v3) {
+            k_mut = inode::to_v3(self, k_mut.as_ref())?;
+        }
+
+        let mut inode_update_flags = UpdateTriggerFlags::NOJOURNAL;
+        {
+            let mut ks = BkeyS::from(&mut k_mut);
+            let Typed::inode_v3(mut inode) = ks.as_s().typed() else {
+                unreachable!("an inode_v3, made so above")
+            };
+
+            /*
+             * Fast path: if the inode has no per-inode io opts (the common case),
+             * skip the full unpack and use fs defaults. has_inode_opts is set on
+             * existing inodes by the upgrade's scheduled passes; version upgrades
+             * always run, so by the time we're doing io the flags are trustworthy:
+             */
+            *opts = if likely(inode.v().bi_flags.get() & u64::from(c::bch_inode_flags::BCH_INODE_has_inode_opts.bits()) == 0) {
+                inode_opts::get_fs(fs, false)
+            } else {
+                inode_opts::get_inode(fs, &inode::unpack(fs, k))
+            };
+
+            /*
+             * Crazy performance optimization:
+             * Every extent update needs to also update the inode: the inode trigger
+             * will set bi->journal_seq to the journal sequence number of this
+             * transaction - for fsync.
+             *
+             * But if that's the only reason we're updating the inode (we're not
+             * updating bi_size or bi_sectors), then we don't need the inode update
+             * to be journalled - if we crash, the bi_journal_seq update will be
+             * lost, but that's fine.
+             */
+            if new_i_size > inode.v().bi_size.get() {
+                inode.v_mut().bi_size = new_i_size.into();
+                inode_update_flags = UpdateTriggerFlags::empty();
+            }
+
+            if i_sectors_delta != 0 {
+                let bi_sectors = inode.v().bi_sectors.get() as i64;
+                if unlikely(bi_sectors + i_sectors_delta < 0) {
+                    self.bi_sectors_underflow(inode.k.p, bi_sectors, &mut i_sectors_delta);
+                }
+
+                inode.v_mut().bi_sectors = ((bi_sectors + i_sectors_delta) as u64).into();
+                inode_update_flags = UpdateTriggerFlags::empty();
+            }
+        }
+
+        /*
+         * extents, dirents and xattrs updates require that an inode update also
+         * happens - to ensure that if a key exists in one of those btrees with
+         * a given snapshot ID an inode is also present - so we may have to skip
+         * the nojournal optimization:
+         */
+        if k_mut.k().p.snapshot != iter.snapshot() {
+            k_mut.k_mut().p.snapshot = iter.snapshot();
+            inode_update_flags = UpdateTriggerFlags::empty();
+        }
+
+        self.update(&iter, &k_mut, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | inode_update_flags)
+    }
+
+    /// @k written at @iter and committed, with the inode's update: i_size
+    /// raised to @new_i_size - no further than @k reaches - and i_sectors by
+    /// what @k adds, which @i_sectors_delta_total gets too. @k is cut to what
+    /// one commit takes, @iter moved to its end, and it may grow into its room
+    /// for a reconcile entry. @disk_res is topped up for the space @k takes;
+    /// that fails for want of space only if @check_enospc and @k takes space
+    /// what it overwrites doesn't give back. @flush, if given, waits on the
+    /// commit's journal flush - unless @k was cut, the commit not the last.
+    #[allow(clippy::too_many_arguments)]
+    pub fn extent_update<V: ?Sized>(&self, _inum: c::subvol_inum, iter: &mut BtreeIter<'t>,
+                                    k: &mut TransBkey<'_, 't, V>, disk_res: &DiskReservation<'_>,
+                                    new_i_size: u64, i_sectors_delta_total: Option<&mut i64>,
+                                    check_enospc: bool, change_cookie: u32,
+                                    mut flush: Option<&Opaque<c::closure>>) -> Result<(), BchError>
+    {
+        let mut k: TransBkey<'_, 't> = unsafe { k.reborrow().cast() };
+
+        /*
+         * This traverses us the iterator without changing iter->path->pos to
+         * search_key() (which is pos + 1 for extents): we want there to be a
+         * path already traversed at iter->pos because
+         * bch2_trans_extent_update() will use it to attempt extent merging
+         */
+        iter.traverse_at_pos(self)?;
+
+        let mut next_pos = k.k().p;
+
+        self.extent_trim_atomic(iter, &mut k.reborrow().arm::<Extents>()
+                                .expect("an update of a key an extents btree can't hold"))?;
+
+        if next_pos != k.k().p {
+            next_pos = k.k().p;
+            /* trim split us: only the actually-last commit gets the flush */
+            flush = None;
+        }
+
+        let s = self.sum_sector_overwrites(iter, k.as_ref())?;
+
+        if s.disk_sectors_delta > disk_res.sectors() as i64 {
+            disk_res.add_physical((s.disk_sectors_delta - disk_res.sectors() as i64) as u64, s.new_nr_replicas,
+                                  if !check_enospc || !s.usage_increasing {
+                                      c::bch_reservation_flags::BCH_DISK_RESERVATION_NOFAIL
+                                  } else {
+                                      c::bch_reservation_flags::empty()
+                                  })?;
+        }
+
+        let mut opts = c::bch_inode_opts::default();
+        self.extent_update_i_size_sectors(iter, (k.k().p.offset << 9).min(new_i_size),
+                                          s.i_sectors_delta, &mut opts)?;
+
+        k.set_needs_reconcile(self, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_foreground,
+                              change_cookie)?;
+        self.update(iter, &k, UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
+
+        self.commit_flush(Some(disk_res), flush, CommitFlags::NO_CHECK_RW | CommitFlags::NO_ENOSPC)?;
+
+        if let Some(total) = i_sectors_delta_total {
+            *total += s.i_sectors_delta;
+        }
+        iter.set_pos(next_pos);
+        Ok(())
+    }
 }

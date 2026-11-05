@@ -106,11 +106,6 @@ impl Folio {
     }
 }
 
-#[c_export]
-pub fn bch2_get_folio_disk_reservation(_c: &Opaque<Fs>, inode: &InodeInfo, folio: *mut c::folio) -> c_int {
-    ret_to_c(unsafe { Folio::from_raw(folio) }.reserve_writeback(inode))
-}
-
 /// How FolioReservation::reserve() gets its disk space: all of it or
 /// nothing, as much as there is, or all of it regardless - the quota then
 /// not checked either.
@@ -324,11 +319,6 @@ impl InodeInfo {
         self.i_sectors_acct(None, dirty_sectors);
     }
 
-}
-
-#[c_export]
-pub fn bch2_set_folio_undirty(_c: &Opaque<Fs>, inode: &InodeInfo, folio: *mut c::folio, offset: usize, len: usize) {
-    inode.undirty_folio(unsafe { Folio::from_raw(folio) }, offset, len)
 }
 
 #[c_export]

@@ -710,7 +710,6 @@ pub unsafe fn memcpy_to_bio(dst: *mut c::bio, dst_iter: c::bvec_iter, src: *cons
     dst.copy_from(unsafe { core::slice::from_raw_parts(src.cast(), dst.len() as usize) });
 }
 
-#[c_export]
 pub unsafe fn memcpy_from_bio(dst: *mut c_void, src: *mut c::bio, src_iter: c::bvec_iter) {
     let src = unsafe { Bio::from_raw(src).range_at(src_iter) };
     src.copy_to(unsafe { core::slice::from_raw_parts_mut(dst.cast(), src.len() as usize) });

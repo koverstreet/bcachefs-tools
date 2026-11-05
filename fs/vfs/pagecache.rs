@@ -80,12 +80,6 @@ pub fn bch2_filemap_get_contig_folios_d(mapping: *mut c::address_space, start: c
     if fs.nr != 0 { 0 } else { ret }
 }
 
-#[c_export]
-pub fn bch2_write_invalidate_inode_pages_range(mapping: *mut c::address_space, start: c::loff_t,
-                                               end: c::loff_t) -> c_int {
-    ret_to_c(unsafe { Mapping::from_raw(mapping) }.write_invalidate_range(start as u64, end as u64))
-}
-
 impl c::bch_folio_sector {
     pub(crate) fn state(&self) -> SectorState {
         SectorState::from_bits(self.state.into())

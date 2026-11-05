@@ -11,7 +11,7 @@
 //! pool. Pages that never did - a bio's that mustn't take from it - are
 //! free_pages()'s.
 
-use core::ffi::{c_int, c_uint, c_void};
+use core::ffi::{c_uint, c_void};
 use core::ptr::NonNull;
 
 use crate::c;
@@ -143,16 +143,6 @@ unsafe fn free(pool: Option<&BouncePool>, bio: &mut c::bio) {
 }
 
 // ── For C ────────────────────────────────────────────────────────────────
-
-#[c_export]
-pub fn bch2_bio_alloc_pages(bio: &mut c::bio, bs: c_uint, size: usize, gfp: c::gfp_t) -> c_int {
-    alloc_pages(bio, bs, size, gfp).map_or(-(c::ENOMEM as c_int), |()| 0)
-}
-
-#[c_export]
-pub fn __bch2_bio_alloc_pages_pool(fs: &Fs, bio: &mut c::bio, size: usize, gfp: c::gfp_t) {
-    fs.bio_bounce.alloc(bio, size, gfp)
-}
 
 #[c_export]
 pub fn bch2_bio_alloc_pages_pool(fs: &Fs, bio: &mut c::bio, bs: c_uint, size: usize, gfp: c::gfp_t) {

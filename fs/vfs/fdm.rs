@@ -1,21 +1,29 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The faults-disabled-mapping table, as the page fault handler reads it:
-//! vfs/fdm.h has the DIO path's side, and the design.
+//! The faults-disabled-mapping table: the DIO write path's side, which sets a
+//! task's mapping while it pins user pages, and the page fault handler's,
+//! which reads it. vfs/fdm.h has the design.
 
 use crate::c;
+use crate::util::closure::{closure_wait_event, closure_wake_up};
 use crate::util::hash::hash_64;
 use crate::util::kernel::current_id;
 use core::ptr::NonNull;
-use core::sync::atomic::{fence, Ordering::Acquire};
+use core::sync::atomic::{fence, Ordering::{Acquire, Release}};
 
 use super::folio::Mapping;
 
 impl c::fdm_hash {
-    fn slot(&self) -> Option<&c::fdm_slot> {
+    /// The current task's slots, one per hash.
+    fn slots_of_current(&self) -> impl Iterator<Item = &c::fdm_slot> {
         let current = current_id();
         (0..c::FDM_NR_HASH as usize)
-            .map(|i| &self.slots[hash_64(current as u64 ^ self.hash_seeds[i], c::FDM_HASH_BITS) as usize])
+            .map(move |i| &self.slots[hash_64(current as u64 ^ self.hash_seeds[i], c::FDM_HASH_BITS) as usize])
+    }
+
+    fn slot(&self) -> Option<&c::fdm_slot> {
+        let current = current_id();
+        self.slots_of_current()
             .find(|s| s.task.get() == current)
             /* pair with smp_wmb() in fdm_set */
             .inspect(|_| fence(Acquire))
@@ -31,6 +39,47 @@ impl c::fdm_hash {
     pub fn set_dropped_locks(&self) {
         if let Some(s) = self.slot() {
             s.mapping.set(s.mapping.get() | 1);
+        }
+    }
+
+    /// Whether a fault dropped this task's locks since set().
+    pub fn dropped_locks(&self) -> bool {
+        self.slot().is_some_and(|s| s.mapping.get() & 1 != 0)
+    }
+
+    /*
+     * Insert current task's mapping. Only current ever inserts for itself,
+     * so no lock needed. With 3-way hashing at ~3% occupancy, all three
+     * slots being occupied is vanishingly rare (~0.003%). If it does
+     * happen, sleep on the closure waitlist until a slot frees up.
+     */
+    pub fn set(&self, mapping: *mut c::address_space) {
+        let current = current_id();
+        debug_assert!(self.slots_of_current().all(|s| s.task.get() != current),
+                      "faults disabled on a second mapping");
+
+        loop {
+            closure_wait_event(&self.wait, || self.slots_of_current().any(|s| s.task.get() == 0));
+
+            if let Some(s) = self.slots_of_current().find(|s| s.task.get() == 0) {
+                s.mapping.set(mapping.addr() as _);
+                /* mapping must be visible before task (task acts as "valid" marker) */
+                fence(Release);
+                s.task.set(current);
+                return;
+            }
+
+            /* Lost race after wakeup — retry */
+        }
+    }
+
+    pub fn clear(&self) {
+        let current = current_id();
+        if let Some(s) = self.slots_of_current().find(|s| s.task.get() == current) {
+            s.task.set(0);
+            /* Ensure task is cleared before mapping could be reused */
+            fence(Release);
+            closure_wake_up(&self.wait);
         }
     }
 }

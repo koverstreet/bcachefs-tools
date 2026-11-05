@@ -3,14 +3,11 @@
 #![allow(non_camel_case_types)]
 
 use crate::fs::Dev;
-use crate::btree::bkey::BkeyI;
-use crate::btree::iter::{BtreeIter, TransAttempt, TransBkey};
 use crate::cstructs::c;
-use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::types::{NeBytes, c_default};
-use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro, TypeInfo};
+use core::ffi::c_uint;
+use cstruct_macros::{CStruct, bitfield, c_enum, c_xmacro, TypeInfo};
 use nestify::nest;
 use crate::format::{Bpos, Bversion};
 
@@ -109,7 +106,8 @@ nest! {
     #[repr(C)]
     #[derive(CStruct, TypeInfo)]
     pub struct bch_write_op {
-        pub cl: c::closure,
+        #[c("struct closure cl")]
+        pub cl: crate::util::ffi::Opaque<c::closure>,
         #[c("struct bch_fs *c")]
         pub c: crate::util::backref::BackRef<Fs>,
         pub end_io: Option<unsafe extern "C" fn(*mut c::bch_write_op)>,
@@ -220,34 +218,8 @@ nest! {
 
 crate::has_closure!(c::bch_write_op, cl);
 
-c_extern! {
-    pub fn bch2_write_point_do_index_updates(work: *mut c::work_struct);
-    pub fn bch2_sum_sector_overwrites(trans: *mut c::btree_trans, extent_iter: *mut c::btree_iter,
-                                      new: *mut c::bkey_i, usage_increasing: *mut bool,
-                                      i_sectors_delta: *mut i64, disk_sectors_delta: *mut i64,
-                                      new_nr_replicas: *mut c_uint) -> c_int;
-    fn bch2_extent_update(trans: *mut c::btree_trans, inum: c::subvol_inum,
-                          iter: *mut c::btree_iter, k: *mut c::bkey_i, k_buf_u64s: c_uint,
-                          disk_res: *mut c::disk_reservation, new_i_size: u64,
-                          i_sectors_delta_total: *mut i64, check_enospc: bool,
-                          change_cookie: u32, flush: *mut c::closure) -> c_int;
-    #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-    pub fn bch2_latency_acct(ca: *mut Dev, submit_time: u64, rw: c_int);
-}
-
-/// What writing @new over what it overwrites does to the inode and the disk:
-/// bch2_sum_sector_overwrites().
-pub struct SectorOverwrites {
-    /// Whether it takes space the overwritten keys don't give back: a
-    /// snapshot's overwrite, more replicas, or uncompressed over compressed.
-    /// An enospc check is due.
-    pub usage_increasing:   bool,
-    pub i_sectors_delta:    i64,
-    pub disk_sectors_delta: i64,
-    /// What disk_sectors_delta is weighted by: what topping a reservation up
-    /// to cover it charges at.
-    pub new_nr_replicas:    u32,
-}
+const _: () = assert!((c::__bch_write_flags::__BCH_WRITE_convert_unwritten as u32) < u16::BITS,
+                      "the write flags don't fit in bch_write_op's flags");
 
 impl c::bch_write_op {
     /// The op's filesystem, as 'static: an op is done before its filesystem
@@ -288,45 +260,5 @@ impl c::bch_write_op {
         self.i_sectors_delta = 0;
         self.devs_need_flush = core::ptr::null_mut();
         unsafe { core::ptr::write(&mut self.failed, Default::default()) };
-    }
-}
-
-impl TransAttempt<'_, '_> {
-    /// @new's SectorOverwrites, from @iter at @new's start.
-    pub fn sum_sector_overwrites(&self, iter: &BtreeIter<'_>, new: &BkeyI) -> Result<SectorOverwrites, BchError> {
-        let mut s = SectorOverwrites {
-            usage_increasing: false, i_sectors_delta: 0, disk_sectors_delta: 0, new_nr_replicas: 0,
-        };
-        // SAFETY: @iter only copied, @new only read
-        let ret = unsafe {
-            bch2_sum_sector_overwrites(self.raw(), iter.raw(), new.as_ffi().cast_mut(), &mut s.usage_increasing,
-                                       &mut s.i_sectors_delta, &mut s.disk_sectors_delta, &mut s.new_nr_replicas)
-        };
-        self.result(ret).map(|()| s)
-    }
-
-    /// @k written at @iter and committed, with the inode's update: i_size
-    /// raised to @new_i_size - no further than @k reaches - and i_sectors by
-    /// what @k adds, which @i_sectors_delta gets too. @k is cut to what one
-    /// commit takes, @iter moved to its end, and it may grow into its room
-    /// for a reconcile entry. @res is topped up for the space @k takes; that
-    /// fails for want of space only if @check_enospc and @k takes space what
-    /// it overwrites doesn't give back.
-    ///
-    /// bch2_extent_update(), less a data update's change cookie and a write's
-    /// flush, which no Rust caller has.
-    pub fn extent_update<V: ?Sized>(&self, inum: c::subvol_inum, iter: &mut BtreeIter<'_>,
-                                    k: &mut TransBkey<'_, '_, V>, res: &c::DiskReservation<'_>, new_i_size: u64,
-                                    i_sectors_delta: Option<&mut i64>, check_enospc: bool)
-        -> Result<(), BchError>
-    {
-        let buf = k.as_mut_u64s();
-        let delta = i_sectors_delta.map_or(core::ptr::null_mut(), core::ptr::from_mut);
-        // SAFETY: @k's whole buffer, ours to grow it into while it's borrowed
-        let ret = unsafe {
-            bch2_extent_update(self.raw(), inum, iter.raw_mut(), buf.as_mut_ptr().cast(), buf.len() as u32,
-                               res.as_mut_ptr(), new_i_size, delta, check_enospc, 0, core::ptr::null_mut())
-        };
-        self.result(ret)
     }
 }

@@ -186,9 +186,13 @@ impl<'a, S: KeyState> crate::util::vstructs::VstructRef<'a, c::bkey_i, S> {
     }
 }
 
-impl<S: KeyState> crate::util::vstructs::VstructMut<'_, c::bkey_i, S> {
+impl<'a, S: KeyState> crate::util::vstructs::VstructMut<'a, c::bkey_i, S> {
     pub fn key_mut(&mut self) -> &mut BkeyI<FamilyVal<AllTypes, S>> {
         // SAFETY: the walk checked its u64s against its bytes
+        unsafe { &mut *cast_unsized_mut(self.as_mut_ptr()) }
+    }
+
+    pub fn into_key_mut(mut self) -> &'a mut BkeyI<FamilyVal<AllTypes, S>> {
         unsafe { &mut *cast_unsized_mut(self.as_mut_ptr()) }
     }
 }

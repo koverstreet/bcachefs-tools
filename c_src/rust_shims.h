@@ -93,24 +93,6 @@ void rust_strip_alloc_do(struct bch_fs *c);
 #define RUST_IO_MAX	(1 << 20)
 
 /*
- * Submit a write — Rust handles completion via op->end_io.
- * Caller must heap-allocate op and bvecs (they must outlive the IO).
- * Sets BCH_WRITE_sync so completion is inline for now; Rust can drop
- * the flag later to go fully async.
- * Returns 0 on successful submit, or -errno from disk reservation.
- */
-
-struct bch_write_op;
-int rust_write_submit(struct bch_fs *c,
-		      struct bch_write_op *op,
-		      struct bio_vec *bvecs, unsigned nr_bvecs,
-		      const void *buf, size_t len,
-		      __u64 inum, __u64 offset,
-		      __u32 subvol, __u32 replicas,
-		      __u64 new_i_size,
-		      void (*end_io)(struct bch_write_op *));
-
-/*
  * Submit a read without waiting — Rust handles completion via endio.
  * Caller must heap-allocate rbio and bvecs (they must outlive the IO).
  */

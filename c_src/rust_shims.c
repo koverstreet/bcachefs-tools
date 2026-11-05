@@ -14,7 +14,6 @@
 #include "alloc/buckets_gen.h"
 #include "fs/data/checksum.h"
 #include "fs/data/read.h"
-#include "fs/data/write.h"
 #include "fs/btree/journal_overlay.h"
 #include "fs/btree/read.h"
 #include "fs/init/error.h"
@@ -75,52 +74,6 @@ void rust_strip_alloc_do(struct bch_fs *c)
 	bch2_write_super(c);
 }
 
-
-/*
- * Data IO shims — bridge Rust async IO to kernel closure-based completion.
- *
- * The mapping:
- *   Rust Future construction  ↔  write_op_init / bio setup
- *   Future::poll (first)      ↔  closure_call(bch2_write) / bch2_read
- *   Future::poll (Ready)      ↔  closure_sync completion
- *
- * Currently synchronous (complete on first "poll"). When the closure
- * subsystem moves to Rust async, these shims become native Futures
- * where closure completion drives the Waker.
- */
-
-int rust_write_submit(struct bch_fs *c,
-		      struct bch_write_op *op,
-		      struct bio_vec *bvecs, unsigned nr_bvecs,
-		      const void *buf, size_t len,
-		      u64 inum, u64 offset,
-		      u32 subvol, u32 replicas,
-		      u64 new_i_size,
-		      void (*end_io)(struct bch_write_op *))
-{
-	bio_init(&op->wbio.bio, NULL, bvecs, nr_bvecs, 0);
-	bch2_bio_map(&op->wbio.bio, (void *) buf, len);
-
-	struct bch_inode_opts opts;
-	bch2_inode_opts_get(c, &opts, false);
-
-	bch2_write_op_init(op, c, opts);
-	op->end_io	= end_io;
-	op->write_point	= writepoint_hashed(0);
-	op->nr_replicas	= replicas;
-	op->subvol	= subvol;
-	op->pos		= SPOS(inum, offset >> 9, U32_MAX);
-	op->new_i_size	= new_i_size;
-	op->flags	|= BCH_WRITE_sync;
-
-	int ret = bch2_disk_reservation_add(c, &op->res, len >> 9,
-					    replicas, 0);
-	if (ret)
-		return ret;
-
-	closure_call(&op->cl, bch2_write, NULL, NULL);
-	return 0;
-}
 
 void rust_read_submit(struct bch_fs *c,
 		     struct bch_read_bio *rbio,

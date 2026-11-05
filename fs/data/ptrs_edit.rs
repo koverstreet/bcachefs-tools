@@ -222,6 +222,23 @@ impl TransBkey<'_, '_, PtrsMut> {
     }
 }
 
+/// @crc appended to @k's entries, as the smallest entry it packs into:
+/// bch2_extent_crc_append().
+///
+/// # Safety
+/// @k is a key with pointers, its entries running to its value's end, with
+/// room for the largest extent value - a write's, from its keylist.
+pub(crate) unsafe fn extent_crc_append(k: *mut c::bkey_i, crc: &c::bch_extent_crc_unpacked) {
+    let e = crc_entry(crc, c::bch_extent_entry_type::BCH_EXTENT_ENTRY_crc32);
+    unsafe {
+        let u64s = usize::from((*k).k.u64s);
+        assert!(u64s + e.len() - crate::btree::bkey::BKEY_U64S <= c::BKEY_EXTENT_VAL_U64s_MAX as usize,
+                "appending a crc past an extent's largest value");
+        core::ptr::copy_nonoverlapping(e.as_ptr(), k.cast::<u64>().add(u64s), e.len());
+        (*k).k.u64s += e.len() as u8;
+    }
+}
+
 /// @crc as the smallest crc entry it packs into, of type @min or larger, in
 /// u64s.
 pub(crate) fn crc_entry(crc: &c::bch_extent_crc_unpacked, min: c::bch_extent_entry_type) -> ArrayVec<u64, 3> {

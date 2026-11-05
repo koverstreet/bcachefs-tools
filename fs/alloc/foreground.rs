@@ -531,7 +531,7 @@ impl Fs {
 
 /// The open buckets kept back from allocations at @watermark: more, the lower
 /// it is, so what frees open buckets can still get them.
-fn open_buckets_reserved(watermark: c::bch_watermark) -> u32 {
+pub(crate) fn open_buckets_reserved(watermark: c::bch_watermark) -> u32 {
     use c::bch_watermark::*;
     match watermark {
         BCH_WATERMARK_interior_updates                   => 0,
@@ -1315,19 +1315,19 @@ pub unsafe fn __bch2_open_bucket_put(c: &Opaque<Fs>, ob: &c::open_bucket) {
     Fs::from_c(c).open_bucket_close(unsafe { OpenBucketRef::from_c(ob) })
 }
 
-/// The stripes the buckets of @obs on each device of @failed are blocks of,
-/// cancelled with its error: the writes to it failed.
-#[c_export]
-pub fn bch2_open_buckets_write_errors(c: &Opaque<Fs>, obs: &c::open_buckets, failed: &c::bch_io_failures) {
-    let fs = Fs::from_c(c);
-    for f in failed.devs() {
-        let err = if f.errcode != 0 {
-            BchError::from_raw(f.errcode.into())
-        } else {
-            bch_errcode::BCH_ERR_data_write_io.into()
-        };
-        obs.iter(fs).filter(|ob| u32::from(ob.id().dev()) == u32::from(f.dev))
-            .filter_map(|ob| ob.into_ref().stripe()).for_each(|s| s.err.set(err));
+impl c::open_buckets {
+    /// The stripes its buckets on each device of @failed are blocks of,
+    /// cancelled with its error: the writes to it failed.
+    pub fn write_errors(&self, fs: &Fs, failed: &c::bch_io_failures) {
+        for f in failed.devs() {
+            let err = if f.errcode != 0 {
+                BchError::from_raw(f.errcode.into())
+            } else {
+                bch_errcode::BCH_ERR_data_write_io.into()
+            };
+            self.iter(fs).filter(|ob| u32::from(ob.id().dev()) == u32::from(f.dev))
+                .filter_map(|ob| ob.into_ref().stripe()).for_each(|s| s.err.set(err));
+        }
     }
 }
 

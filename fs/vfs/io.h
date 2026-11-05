@@ -51,16 +51,6 @@ static inline struct folio_vec bio_iter_iovec_folio(struct bio *bio,
 #define bio_for_each_folio(bvl, bio, iter)				\
 	__bio_for_each_folio(bvl, bio, iter, (bio)->bi_iter)
 
-static inline struct address_space *faults_disabled_mapping(struct bch_fs *c)
-{
-	return fdm_get(&c->fdm_table);
-}
-
-static inline bool bch2_fdm_dropped_locks(struct bch_fs *c)
-{
-	return fdm_dropped_locks(&c->fdm_table);
-}
-
 #endif
 
 #endif /* _BCACHEFS_FS_IO_H */

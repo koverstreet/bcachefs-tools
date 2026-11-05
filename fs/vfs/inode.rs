@@ -659,33 +659,3 @@ pub fn bch2_write_inode_size(_c: &Opaque<Fs>, inode: &c::bch_inode_info, new_siz
     ret_to_c(unsafe { UpdateLock::held(inode) }.write_size(new_size as u64, fields))
 }
 
-#[c_export]
-pub fn bch2_i_sectors_acct(_c: &Opaque<Fs>, inode: &c::bch_inode_info, quota_res: Option<&mut c::quota_res>,
-                           sectors: i64) {
-    inode.i_sectors_acct(quota_res, sectors)
-}
-
-/// With ei_quota_lock held.
-#[c_export]
-pub fn __bch2_i_sectors_acct(_c: &Opaque<Fs>, inode: &c::bch_inode_info, quota_res: Option<&mut c::quota_res>,
-                             sectors: i64) {
-    inode.i_sectors_acct_locked(&mut *unsafe { inode.ei_quota.held() }, quota_res, sectors)
-}
-
-#[must_use]
-#[c_export]
-pub fn bch2_quota_reservation_add(_c: &Opaque<Fs>, inode: &c::bch_inode_info, res: &mut c::quota_res,
-                                  sectors: u64, check_enospc: bool) -> c_int {
-    ret_to_c(inode.quota_reservation_add(res, sectors, check_enospc))
-}
-
-#[c_export]
-pub fn bch2_quota_reservation_put(_c: &Opaque<Fs>, inode: &c::bch_inode_info, res: &mut c::quota_res) {
-    inode.quota_reservation_put(res)
-}
-
-/// With ei_quota_lock held.
-#[c_export]
-pub fn __bch2_quota_reservation_put(_c: &Opaque<Fs>, inode: &c::bch_inode_info, res: &mut c::quota_res) {
-    inode.quota_reservation_put_locked(&mut *unsafe { inode.ei_quota.held() }, res)
-}

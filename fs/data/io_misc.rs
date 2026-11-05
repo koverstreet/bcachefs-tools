@@ -96,7 +96,7 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
             let mut r = t.bkey_alloc_init::<c::Reservation>(1, iter.pos())?;
             r.k_mut().resize(sectors as u32);
             r.v_mut().nr_replicas = nr_replicas as u8;
-            return t.extent_update(inum, iter, &mut r, &res, 0, Some(&mut *i_sectors_delta), true);
+            return t.extent_update(inum, iter, &mut r, &res, 0, Some(&mut *i_sectors_delta), true, 0, None);
         }
 
         let mut e = t.bkey_alloc(c::BKEY_EXTENT_U64s_MAX as u32)?;
@@ -115,7 +115,7 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
         // SAFETY: room for the most pointers
         let got = unsafe { wp.unwritten_extent(e.as_ptr(), iter.pos(), sectors as u32, &mut obs) };
         sectors_allocated = got.into();
-        t.extent_update(inum, iter, &mut e, &res, 0, Some(&mut *i_sectors_delta), true)
+        t.extent_update(inum, iter, &mut e, &res, 0, Some(&mut *i_sectors_delta), true, 0, None)
     })();
 
     match &ret {
@@ -213,7 +213,7 @@ pub fn fpunch_at<'t>(
             let mut delete = t.bkey_alloc_init::<c::Deleted>(0, start)?;
             delete.k_mut().resize(sectors);
 
-            t.extent_update(inum, iter, &mut delete, &res, 0, i_sectors_delta.as_deref_mut(), false)?;
+            t.extent_update(inum, iter, &mut delete, &res, 0, i_sectors_delta.as_deref_mut(), false, 0, None)?;
             Ok(false)
         })();
 

@@ -33,10 +33,10 @@ use crate::btree::bkey::{BkeyI, BkeyV};
 use crate::c;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::krealloc;
-use crate::util::vstructs::{assume_validated, plain_bytes, VstructRefEntries};
+use crate::util::vstructs::{assume_validated, plain_bytes, plain_bytes_mut, VstructRefEntries, VstructRefEntriesMut};
 use core::ffi::c_int;
 use core::mem::size_of;
-use cstruct_macros::{c_export, CStruct};
+use cstruct_macros::CStruct;
 use crate::types::c_default;
 
 /// keys..top, whole keys back to back: C reads each pointer as a bkey_i * or
@@ -58,6 +58,17 @@ impl c::keylist {
     pub unsafe fn init(&mut self, inline_keys: *mut u64) {
         self.keys_p = inline_keys;
         self.top_p = inline_keys;
+    }
+
+    /// Its heap buffer freed, if it has one: bch2_keylist_free().
+    ///
+    /// # Safety
+    /// @inline_keys is its buffer if it isn't kmalloc()'s, and the list isn't
+    /// used after.
+    pub unsafe fn free(&mut self, inline_keys: *mut u64) {
+        if self.keys_p != inline_keys {
+            unsafe { c::rust_kfree(self.keys_p.cast()) };
+        }
     }
 
     pub fn top(&self) -> *mut c::bkey_i {
@@ -97,7 +108,12 @@ impl c::keylist {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &BkeyI> + '_ {
-        VstructRefEntries::<c::bkey_i>::new(plain_bytes(self.as_u64s())).map(|k| {
+        self.iter_from(0)
+    }
+
+    /// The keys from @offset u64s in: where a key starts.
+    pub fn iter_from(&self, offset: usize) -> impl Iterator<Item = &BkeyI> + '_ {
+        VstructRefEntries::<c::bkey_i>::new(plain_bytes(&self.as_u64s()[offset..])).map(|k| {
             let k = k.unwrap_or_else(|e| panic!("a key overruns its keylist, of {} u64s: {e}", self.u64s()));
             // SAFETY: a keylist's keys are made in memory, by what adds them
             unsafe { assume_validated(k) }.key()
@@ -106,6 +122,33 @@ impl c::keylist {
 
     pub fn front(&self) -> Option<&BkeyI> {
         self.iter().next()
+    }
+
+    pub fn front_mut(&mut self) -> Option<&mut BkeyI> {
+        let u64s = self.as_u64s_mut();
+        (!u64s.is_empty()).then(|| key_mut(u64s))
+    }
+
+    /// @f on each key, which may shrink it, the keys after it moving down -
+    /// stopping at @f's error, which leaves the list partly moved.
+    pub fn try_for_each_shrink<E>(&mut self, mut f: impl FnMut(&mut BkeyI) -> Result<(), E>) -> Result<(), E> {
+        let u64s = self.as_u64s_mut();
+        let (mut src, mut dst) = (0, 0);
+
+        while src < u64s.len() {
+            let k = key_mut(&mut u64s[src..]);
+            let n = usize::from(k.k().u64s);
+            f(&mut *k)?;
+            let shrunk = usize::from(k.k().u64s);
+            assert!(shrunk <= n, "a key grown in its keylist, {n} u64s to {shrunk}");
+
+            u64s.copy_within(src..src + shrunk, dst);
+            dst += shrunk;
+            src += n;
+        }
+
+        self.top_p = self.keys_p.wrapping_add(dst);
+        Ok(())
     }
 
     /// The rest of the keys move down.
@@ -118,13 +161,21 @@ impl c::keylist {
     }
 }
 
+/// The key at the front of @u64s, some of a keylist's.
+fn key_mut(u64s: &mut [u64]) -> &mut BkeyI {
+    let len = u64s.len();
+    let k = VstructRefEntriesMut::<c::bkey_i>::new(plain_bytes_mut(u64s)).next()
+        .expect("a key in an empty keylist")
+        .unwrap_or_else(|e| panic!("a key overruns its keylist, of {len} u64s: {e}"));
+    unsafe { assume_validated(k) }.into_key_mut()
+}
+
 /// Room in @l for @new_u64s more: its buffer grown to the power of two that
 /// holds them - kmalloc()'d, the inline buffer copied - unless what it has
 /// already does. 0, or -ENOMEM.
 ///
 /// # Safety
 /// @l's buffer is @inline_u64s, @nr_inline_u64s long, or kmalloc()'s.
-#[c_export]
 pub unsafe fn bch2_keylist_realloc(l: &mut c::keylist, inline_u64s: *mut u64, nr_inline_u64s: usize,
                                    new_u64s: usize) -> c_int {
     let oldsize = l.u64s();
@@ -154,14 +205,9 @@ pub unsafe fn bch2_keylist_realloc(l: &mut c::keylist, inline_u64s: *mut u64, nr
     0
 }
 
-#[c_export]
-pub fn bch2_keylist_pop_front(l: &mut c::keylist) {
-    l.pop_front();
-}
-
 /// Its keys in increasing order - debug builds': keylist.h's no-op otherwise.
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
-#[c_export]
+#[cstruct_macros::c_export]
 pub fn bch2_verify_keylist_sorted(l: &c::keylist) {
     let mut keys = l.iter().peekable();
     while let Some(k) = keys.next() {

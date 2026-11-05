@@ -8,11 +8,11 @@
 
 #include "data/write_gen.h"
 #include "vfs/buffered_gen.h"
+#include "vfs/writeback_gen.h"
 
 int bch2_read_single_folio(struct folio *, struct address_space *, bool);
 int bch2_read_folio(struct file *, struct folio *);
 
-int bch2_writepages(struct address_space *, struct writeback_control *);
 void bch2_readahead(struct readahead_control *);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,17,0)

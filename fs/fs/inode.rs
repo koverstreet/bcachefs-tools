@@ -33,7 +33,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::c;
-use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError, Found};
+use crate::errcode::{bch_errcode, ret_to_c, BchError, Found};
 use crate::fs::Fs;
 use crate::dirent::{self, DirentTarget};
 use crate::namei;
@@ -867,22 +867,6 @@ pub fn to_v3<'a, 't>(t: &TransAttempt<'a, 't>, k: &BkeyI) -> Result<TransBkey<'a
         return Err(BchError::from(c::ENOENT));
     }
     pack_trans(t, &unpack(t.fs(), BkeySC::from(k)))
-}
-
-/// For C's data write path, converting an old inode: bch2_inode_to_v3().
-///
-/// # Safety
-/// @k a key, its u64s covering its value.
-#[c_export]
-pub unsafe extern "C" fn bch2_inode_to_v3(trans: &BtreeTrans<'_>, k: *const c::bkey_i)
-    -> *mut c::bkey_i
-{
-    // SAFETY: the caller's - C's pointer reaches all of the key
-    let k = unsafe { &*BkeyI::from_raw(k) };
-    match to_v3(&unsafe { trans.attempt_in_progress() }, k) {
-        Ok(k)  => k.as_ptr(),
-        Err(e) => err_ptr(e),
-    }
 }
 
 // ── Validate, to_text ────────────────────────────────────────────────────

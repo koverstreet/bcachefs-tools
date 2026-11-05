@@ -30,7 +30,7 @@
 
 //! An opt is a compression option's value, a type and a level; an extent's
 //! type is an opt's, or incompressible, or lz4_old. A bounce buffer - C's
-//! struct bbuf, which write.c holds too - is an extent's data as one buffer:
+//! struct bbuf - is an extent's data as one buffer:
 //! the bio's own memory if it's virtually contiguous or can be vmapped, else
 //! a copy. A bio's memory is only ever a pointer here: it can change under us
 //! (util/bio/iter.rs).
@@ -215,9 +215,9 @@ pub struct Compress {
 
 // ── Bounce buffers ───────────────────────────────────────────────────────
 
-/// Freed on drop, unless given to C. 'a is what it borrows: the bio whose
-/// pages it maps, or the filesystem whose pool it's from.
-struct Bbuf<'a> {
+/// Freed on drop. 'a is what it borrows: the bio whose pages it maps, or the
+/// filesystem whose pool it's from.
+pub(crate) struct Bbuf<'a> {
     raw: c::bbuf,
     len: usize,
     _a:  PhantomData<&'a ()>,
@@ -229,7 +229,7 @@ impl<'a> Bbuf<'a> {
     }
 
     /// Ours, or the bio's - which may be written meanwhile.
-    fn data(&self) -> VolatileSlice<'_> {
+    pub(crate) fn data(&self) -> VolatileSlice<'_> {
         // SAFETY: @len bytes, until it's dropped
         unsafe { VolatileSlice::from_raw(NonNull::new(self.raw.b.cast()).expect("a bounce buffer"), self.len) }
     }
@@ -238,23 +238,18 @@ impl<'a> Bbuf<'a> {
     fn mapped(&self) -> bool {
         matches!(self.raw.type_, bb::BB_none | bb::BB_vmap)
     }
-
-    fn into_c(self) -> c::bbuf {
-        core::mem::ManuallyDrop::new(self).raw
-    }
 }
 
 impl Drop for Bbuf<'_> {
     fn drop(&mut self) {
         // SAFETY: ours
-        unsafe { bch2_bbuf_exit(&mut self.raw) }
+        unsafe { bbuf_exit(&mut self.raw) }
     }
 }
 
 /// # Safety
 /// @buf is one of ours, not used after.
-#[c_export]
-pub unsafe fn bch2_bbuf_exit(buf: &mut c::bbuf) {
+unsafe fn bbuf_exit(buf: &mut c::bbuf) {
     let Some(p) = NonNull::new(buf.b.cast::<u8>()) else { return };
     // SAFETY: the caller's; its type is how it was allocated
     unsafe {
@@ -270,7 +265,7 @@ pub unsafe fn bch2_bbuf_exit(buf: &mut c::bbuf) {
     }
 }
 
-fn bounce_alloc(fs: &Fs, size: usize, rw: usize) -> Bbuf<'_> {
+pub(crate) fn bounce_alloc(fs: &Fs, size: usize, rw: usize) -> Bbuf<'_> {
     assert!(size <= extent_max(fs), "bounce buffer of {size} bytes, past encoded_extent_max {}", extent_max(fs));
 
     /*
@@ -307,7 +302,7 @@ fn bounce_alloc(fs: &Fs, size: usize, rw: usize) -> Bbuf<'_> {
     }
 }
 
-fn bio_bounce<'f>(fs: &'f Fs, r: BioRange<'_>, rw: usize) -> Bbuf<'f> {
+pub(crate) fn bio_bounce<'f>(fs: &'f Fs, r: BioRange<'_>, rw: usize) -> Bbuf<'f> {
     let b = bounce_alloc(fs, r.len() as usize, rw);
     if rw == READ {
         r.copy_to_volatile(b.data());
@@ -374,7 +369,7 @@ fn vmap<'a>(fs: &'a Fs, r: BioRange<'a>, rw: usize) -> Option<Bbuf<'a>> {
     Some(Bbuf::new(fs, unsafe { NonNull::new(data.cast::<u8>())?.add(offset) }, bb::BB_vmap, rw, r.len() as usize))
 }
 
-fn map_or_bounce<'a>(fs: &'a Fs, r: BioRange<'a>, rw: usize) -> Bbuf<'a> {
+pub(crate) fn map_or_bounce<'a>(fs: &'a Fs, r: BioRange<'a>, rw: usize) -> Bbuf<'a> {
     assert!(r.len() as usize <= extent_max(fs), "mapping {} bytes, past encoded_extent_max {}",
             r.len(), extent_max(fs));
 
@@ -387,27 +382,6 @@ fn map_or_bounce<'a>(fs: &'a Fs, r: BioRange<'a>, rw: usize) -> Bbuf<'a> {
         return b;
     }
     bio_bounce(fs, r, rw)
-}
-
-#[c_export]
-pub fn bch2_bounce_alloc(c: &Opaque<Fs>, size: c_uint, rw: c_int) -> c::bbuf {
-    bounce_alloc(Fs::from_c(c), size as usize, rw as usize).into_c()
-}
-
-/// # Safety
-/// @start is a position of @bio.
-#[c_export]
-pub unsafe fn bch2_bio_bounce(c: &Opaque<Fs>, bio: *mut c::bio, start: c::bvec_iter, rw: c_int) -> c::bbuf {
-    // SAFETY: the caller's
-    bio_bounce(Fs::from_c(c), unsafe { Bio::from_raw(bio).range_at(start) }, rw as usize).into_c()
-}
-
-/// # Safety
-/// @bio is a bio.
-#[c_export]
-pub unsafe fn bch2_bio_map_or_bounce(c: &Opaque<Fs>, bio: *mut c::bio, rw: c_int) -> c::bbuf {
-    // SAFETY: the caller's
-    map_or_bounce(Fs::from_c(c), unsafe { Bio::from_raw(bio).range() }, rw as usize).into_c()
 }
 
 // ── Decompression ────────────────────────────────────────────────────────
@@ -424,7 +398,7 @@ fn z_stream(src: *const u8, src_len: usize, dst: *mut u8, dst_len: usize,
     }
 }
 
-fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice<'_>, crc: &c::bch_extent_crc_unpacked)
+pub(crate) fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice<'_>, crc: &c::bch_extent_crc_unpacked)
     -> Result<(), BchError>
 {
     let t = CompressionType(crc.compression_type.into());
@@ -502,18 +476,6 @@ fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice<'_>, crc: 
     Ok(())
 }
 
-/// # Safety
-/// @dst and @src are @crc's uncompressed and compressed sizes.
-#[c_export]
-pub unsafe fn bch2_buf_uncompress(c: &Opaque<Fs>, dst: *mut c_void, src: *mut c_void,
-                                  crc: c::bch_extent_crc_unpacked) -> c_int {
-    let buf = |p: *mut c_void, sectors: u32| {
-        // SAFETY: the caller's
-        unsafe { VolatileSlice::from_raw(NonNull::new(p.cast()).expect("a buffer"), (sectors as usize) << 9) }
-    };
-    ret_to_c(buf_uncompress(Fs::from_c(c), buf(dst, crc.uncompressed_size), buf(src, crc.compressed_size), &crc))
-}
-
 /*
  * Every failed decompression attempt gets counted, from the read path and
  * from the write path both - the move path decompresses when it can't
@@ -525,19 +487,13 @@ pub unsafe fn bch2_buf_uncompress(c: &Opaque<Fs>, dst: *mut c_void, src: *mut c_
  * Not under no_data_io, where decompressing whatever was in the buffer is
  * expected to fail and says nothing about the filesystem.
  */
-fn decompress_err(fs: &Fs, ret: Result<(), BchError>) -> Result<(), BchError> {
+pub(crate) fn decompress_err(fs: &Fs, ret: Result<(), BchError>) -> Result<(), BchError> {
     if let Err(err) = ret {
         if fs.opts().no_data_io.get() == 0 {
             fs.sb_error_count(bch2_decompress_sb_err(err.raw()));
         }
     }
     ret
-}
-
-#[c_export]
-pub fn bch2_decompress_err(c: &Opaque<Fs>, ret: c_int) -> c_int {
-    let ret = if ret != 0 { Err(BchError::from_raw(-ret)) } else { Ok(()) };
-    ret_to_c(decompress_err(Fs::from_c(c), ret))
 }
 
 /// # Safety
@@ -798,12 +754,9 @@ fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: 
 
 /// # Safety
 /// @dst and @src are bios, ours.
-#[c_export]
-pub unsafe fn bch2_bio_compress(c: &Opaque<Fs>, dst: *mut c::bio, dst_len: &mut usize,
-                                src: *mut c::bio, src_len: &mut usize, compression_opt: c_uint,
-                                write_pos: Bpos, bounce_source: bool) -> c_uint {
-    let fs = Fs::from_c(c);
-
+pub(crate) unsafe fn bio_compress(fs: &Fs, dst: *mut c::bio, dst_len: &mut usize,
+                                  src: *mut c::bio, src_len: &mut usize, compression_opt: c_uint,
+                                  write_pos: Bpos, bounce_source: bool) -> c_uint {
     // SAFETY: the caller's - their sizes ours to clamp, and put back
     let (dst_size, src_size) = unsafe { ((*dst).bi_iter.bi_size, (*src).bi_iter.bi_size) };
     // Don't consume more than encoded_extent_max from @src, or make more than it:

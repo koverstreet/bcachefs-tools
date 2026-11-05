@@ -80,7 +80,6 @@ bcachefs-y		:=			\
 	btree/write_buffer.o			\
 	data/ec/trigger.o			\
 	data/read.o				\
-	data/write.o				\
 	data_structures/darray.o		\
 	data_structures/eytzinger.o		\
 	debug/debug.o				\

@@ -1042,7 +1042,7 @@ pub fn remap_range(
 
             let res = DiskReservation::new(fs);
             t.extent_update(dst_inum, &mut dst_iter, &mut dst_p, &res, new_i_size,
-                            Some(&mut *i_sectors_delta), true)
+                            Some(&mut *i_sectors_delta), true, 0, None)
         })();
     }
 

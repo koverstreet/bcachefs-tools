@@ -9,8 +9,8 @@
 //! the pages its bios share. exit() gives all of it back. Between them the
 //! caller reads into rbio, and read_done() decides whether there's a write.
 //!
-//! C holds pointers into the update - the read path into rbio, the write path
-//! into op - so it doesn't move after init(). It's freed an RCU grace period
+//! The read and write paths hold pointers into the update - into rbio and op -
+//! so it doesn't move after init(). It's freed an RCU grace period
 //! after exit(), as in-flight table lookups may still be reading its key.
 //!
 //! The in-flight table allows one update per position, except that copygc
@@ -39,7 +39,7 @@ use crate::util::bio::pages;
 use crate::util::closure::StackClosure;
 use crate::sb::members::DevRef;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
-use crate::util::ffi::{c_str, Opaque};
+use crate::util::ffi::c_str;
 use crate::util::kernel::unlikely;
 use crate::util::rcu::read_lock;
 use crate::util::{Printbuf, ToText};
@@ -157,7 +157,6 @@ macro_rules! type_names {
 c::BCH_DATA_UPDATE_TYPES!(type_names);
 
 c_extern! {
-    fn __bch2_write_op_to_text(out: *mut Printbuf, op: *mut c::bch_write_op);
     pub fn bch2_read_bio_to_text(out: *mut Printbuf, c: *mut Fs, rbio: *mut c::bch_read_bio);
 }
 
@@ -286,17 +285,6 @@ impl Fs {
     }
 }
 
-#[cold]
-#[c_export]
-pub fn bch2_data_update_opts_to_text(out: &mut Printbuf, c: &Opaque<Fs>, io_opts: &c::bch_inode_opts,
-                                     data_opts: &c::data_update_opts) {
-    Fs::from_c(c).data_update_opts_to_text(out, io_opts, data_opts)
-}
-
-fn write_op_to_text(out: &mut Printbuf, op: &c::bch_write_op) {
-    // SAFETY: read only
-    unsafe { __bch2_write_op_to_text(out.as_raw(), core::ptr::from_ref(op).cast_mut()) }
-}
 
 impl ToText for c::data_update {
     #[cold]
@@ -309,7 +297,7 @@ impl ToText for c::data_update {
         out.newline();
 
         prt!(out, "write: ");
-        write_op_to_text(out, &self.op);
+        crate::data::write::__write_op_to_text(out, &self.op);
     }
 }
 
@@ -333,7 +321,7 @@ pub fn bch2_data_update_inflight_to_text(out: &mut Printbuf, m: &c::data_update)
     } else {
         prt!(out, "write:\n");
         let mut out = out.indent(2);
-        write_op_to_text(&mut out, &m.op);
+        crate::data::write::__write_op_to_text(&mut out, &m.op);
     }
 }
 
@@ -341,7 +329,6 @@ pub fn bch2_data_update_inflight_to_text(out: &mut Printbuf, m: &c::data_update)
 
 c_extern! {
     fn bch2_data_read_sb_err(err: c_int) -> c::bch_sb_error_id;
-    fn bch2_write(ws: *mut c::work_struct);
 }
 
 /// IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0): background IO yields to everyone else's.
@@ -899,7 +886,7 @@ impl c::data_update {
     /// Issues the write read_done() set up; it completes to op.end_io().
     pub fn write(&mut self) {
         // SAFETY: its op, ready to write
-        unsafe { c::closure_call(&mut self.op.cl, Some(bch2_write), core::ptr::null_mut(), core::ptr::null_mut()) };
+        unsafe { crate::util::closure::call(core::ptr::NonNull::from(&mut self.op), crate::data::write::bch2_write, None) };
     }
 
     /// Gives back what init() took: @held, the reservation, its place in its

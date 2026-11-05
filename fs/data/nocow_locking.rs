@@ -17,8 +17,8 @@
 //! wait on the other - except on a full hash bucket, where the locker drops
 //! everything and waits for it to empty.
 //!
-//! C holds them by bucket - an in-place write till each bio's endio, a data
-//! update from init to exit - through the c_exports below.
+//! An in-place write holds them by bucket, till each bio's endio; a data
+//! update from init to exit.
 
 #![allow(non_camel_case_types)]
 
@@ -43,9 +43,8 @@ use crate::util::sleep::Sleep;
 use crate::util::{Printbuf, ToText};
 use crate::warn_on_once;
 use crate::data_structures::array_vec::ArrayVec;
-use core::ffi::c_int;
 use core::sync::atomic::{AtomicI32, AtomicU64, Ordering::{AcqRel, Relaxed}};
-use cstruct_macros::{c_export, c_const};
+use cstruct_macros::c_const;
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 use crate::format::Bpos;
 
@@ -73,11 +72,6 @@ pub enum NocowKind {
 }
 
 impl NocowKind {
-    /// C's flags: BUCKET_NOCOW_LOCK_UPDATE, or 0 for copy.
-    fn from_flags(flags: c_int) -> Self {
-        if flags != 0 { NocowKind::Update } else { NocowKind::Copy }
-    }
-
     fn count(self) -> i32 {
         match self {
             NocowKind::Update => 1,
@@ -318,7 +312,7 @@ impl ToText for NocowLocks {
     }
 }
 
-// ── For C ────────────────────────────────────────────────────────────────
+// ── A key's buckets ──────────────────────────────────────────────────────
 
 /// The buckets of @k's pointers that @dev gives a device for, by pointer
 /// index; a pointer without one isn't locked.
@@ -329,15 +323,10 @@ fn buckets<'a>(fs: &Fs, k: BkeySC<'_>, dev: impl Fn(usize) -> Option<&'a Dev>) -
         .collect()
 }
 
-/// buckets(), from C's cas[]: cas[i] is the device of @k's i'th pointer if
-/// the caller holds a ref on it, or NULL.
-///
-/// # Safety
-/// @cas has an entry per pointer of @k, each NULL or a device the caller
-/// holds a ref on.
-unsafe fn cas_buckets(fs: &Fs, k: BkeySC<'_>, cas: *const *mut Dev) -> Buckets {
-    // SAFETY: the caller's
-    buckets(fs, k, |i| unsafe { (*cas.add(i)).as_ref() })
+/// buckets(), from the write path's cas[]: cas[i] is the device of @k's i'th
+/// pointer if the caller holds a ref on it.
+fn cas_buckets(fs: &Fs, k: BkeySC<'_>, cas: &[Option<&Dev>]) -> Buckets {
+    buckets(fs, k, |i| cas.get(i).copied().flatten())
 }
 
 fn devs_buckets(fs: &Fs, k: BkeySC<'_>, devs: &[Option<DevRef>]) -> Buckets {
@@ -375,28 +364,16 @@ pub(crate) fn bkey_lock(fs: &'static Fs, trans: Option<&BtreeTrans<'_>>, k: Bkey
     Locked { locks: &fs.nocow_locks, buckets, kind }
 }
 
-/// # Safety
-/// As cas_buckets(); @trans is NULL or the caller's, and waiting drops its
-/// btree locks.
-#[c_export]
-pub unsafe fn bch2_bkey_nocow_lock(c: &Fs, trans: Option<&BtreeTrans<'_>>, k: BkeySC<'_>,
-                                   cas: *const *mut Dev, flags: c_int) {
-    // SAFETY: the caller's
-    let buckets = unsafe { cas_buckets(c, k, cas) };
-    c.nocow_locks.lock(c, trans, &buckets, NocowKind::from_flags(flags))
+/// Locks @k's buckets on the devices of @cas, waiting as NocowLocks::lock()
+/// does: the write path's, which unlocks them bucket by bucket as its bios
+/// complete.
+pub(crate) fn bkey_lock_cas(fs: &Fs, trans: Option<&BtreeTrans<'_>>, k: BkeySC<'_>, cas: &[Option<&Dev>],
+                            kind: NocowKind) {
+    fs.nocow_locks.lock(fs, trans, &cas_buckets(fs, k, cas), kind)
 }
 
-/// # Safety
-/// As cas_buckets(), with @cas as it was when they were locked.
-#[c_export]
-pub unsafe fn bch2_bkey_nocow_unlock(c: &Fs, k: BkeySC<'_>, cas: *const *mut Dev, flags: c_int) {
-    // SAFETY: the caller's
-    let buckets = unsafe { cas_buckets(c, k, cas) };
-    c.nocow_locks.unlock(&buckets, NocowKind::from_flags(flags))
-}
-
-#[c_export]
-pub fn bch2_bucket_nocow_unlock(c: &Fs, bucket: Bpos, flags: c_int) {
-    c.nocow_locks.unlock_bucket(bucket, NocowKind::from_flags(flags))
+/// With @cas as it was when they were locked.
+pub(crate) fn bkey_unlock_cas(fs: &Fs, k: BkeySC<'_>, cas: &[Option<&Dev>], kind: NocowKind) {
+    fs.nocow_locks.unlock(&cas_buckets(fs, k, cas), kind)
 }
 

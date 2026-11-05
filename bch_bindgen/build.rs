@@ -145,7 +145,6 @@ fn main() {
         .blocklist_function("bch2_inode_opts_get_inode")
         .blocklist_function("linux_shrinkers_init")
         .blocklist_function("rust_read_submit")
-        .blocklist_function("rust_write_submit")
         .blocklist_type("rhash_lock_head")
         .blocklist_type("rhash.*")
         .blocklist_type("srcu_struct")

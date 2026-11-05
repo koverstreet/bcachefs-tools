@@ -10,6 +10,5 @@
 
 #include "data/update_gen.h"
 #include "data/update_feasible_gen.h"
-#include "data/update_index_gen.h"
 
 #endif /* _BCACHEFS_DATA_UPDATE_H */

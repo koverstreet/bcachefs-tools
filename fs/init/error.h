@@ -5,6 +5,7 @@
 #include <linux/list.h>
 #include <linux/printk.h>
 #include "btree/bkey_gen.h"
+#include "init/dev_gen.h"
 #include "sb/errors.h"
 
 /*
@@ -251,10 +252,8 @@ do {									\
  * want to shut down the fs:
  */
 
-#ifndef CONFIG_BCACHEFS_NO_LATENCY_ACCT
-void bch2_latency_acct(struct bch_dev *, u64, int);
-#else
-static inline void bch2_latency_acct(struct bch_dev *ca, u64 submit_time, int rw) {}
+#ifdef CONFIG_BCACHEFS_NO_LATENCY_ACCT
+static inline void bch2_latency_acct(const struct bch_dev *ca, u64 submit_time, int rw) {}
 #endif
 
 static inline void bch2_account_io_success_fail(struct bch_dev *ca,

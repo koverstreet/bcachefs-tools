@@ -714,14 +714,6 @@ pub(crate) fn writepoint_ec_buf(fs: &Fs, wp: &c::WritePointLocked) -> *mut c_voi
     buf.block_mut(usize::from(ob.ec_idx.get()))[(offset as usize) << 9..].as_mut_ptr().cast()
 }
 
-/// # Safety
-/// @wp is a write point, locked.
-#[c_export]
-pub unsafe fn bch2_writepoint_ec_buf(c: &Opaque<Fs>, wp: &c::write_point) -> *mut c_void {
-    let wp = unsafe { wp.alloc.lock.held() };
-    writepoint_ec_buf(Fs::from_c(c), &*wp)
-}
-
 
 // ── Waiting for them ─────────────────────────────────────────────────────
 

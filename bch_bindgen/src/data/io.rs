@@ -14,9 +14,17 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker};
 
+use std::ptr::NonNull;
+
 use crate::c;
+use bcachefs_kernel::btree::bkey::spos;
+use bcachefs_kernel::data::write::bch2_write;
 use bcachefs_kernel::errcode::{self, BchError};
-use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::fs::{writepoint_hashed, Fs};
+use bcachefs_kernel::inode_opts;
+use bcachefs_kernel::util::backref::BackRef;
+use bcachefs_kernel::util::bio::Bio;
+use bcachefs_kernel::util::closure;
 
 /// Maximum single IO size (must match RUST_IO_MAX in rust_shims.h).
 pub const MAX_IO_SIZE: usize = 1 << 20;
@@ -24,21 +32,6 @@ const PAGE_SIZE: usize = 4096;
 const MAX_BVECS: usize = MAX_IO_SIZE / PAGE_SIZE;
 
 unsafe extern "C" {
-    fn rust_write_submit(
-        c: *mut Fs,
-        op: *mut c::bch_write_op,
-        bvecs: *mut c::bio_vec,
-        nr_bvecs: u32,
-        buf: *const std::ffi::c_void,
-        len: usize,
-        inum: u64,
-        offset: u64,
-        subvol: u32,
-        replicas: u32,
-        new_i_size: u64,
-        end_io: Option<unsafe extern "C" fn(*mut c::bch_write_op)>,
-    ) -> i32;
-
     fn rust_read_submit(
         c: *mut Fs,
         rbio: *mut c::bch_read_bio,
@@ -89,8 +82,8 @@ unsafe extern "C" fn write_endio(op: *mut c::bch_write_op) {
 /// IO is submitted in new(); poll checks for completion.
 pub struct WriteOp {
     state: Pin<Box<WriteState>>,
-    /// Set if rust_write_submit returned an error (disk reservation failure).
-    submit_err: Option<i32>,
+    /// Set if the disk reservation failed, and nothing was submitted.
+    submit_err: Option<BchError>,
 }
 
 impl WriteOp {
@@ -103,35 +96,39 @@ impl WriteOp {
         data: &[u8],
         new_i_size: u64,
     ) -> Self {
-        // The op is initialized in place, by rust_write_submit()'s
-        // bch2_write_op_init(), before anything there can fail: until then
-        // it's no bch_write_op, its reservation's filesystem unset
-        let mut state = Box::<WriteState>::new_uninit();
+        // The op zeroed but for its references to the filesystem, which
+        // can't be null, then made by init()
+        let mut state = Box::new(std::mem::MaybeUninit::<WriteState>::zeroed());
         let p = state.as_mut_ptr();
-
-        let ret = unsafe {
-            (&raw mut (*p).bvecs).write(std::mem::zeroed());
-            (&raw mut (*p).completed).write(AtomicBool::new(false));
+        let mut state = unsafe {
+            let c = BackRef::new(fs);
+            (&raw mut (*p).op.res).write(c::DiskReservation::new(c.get()));
+            (&raw mut (*p).op.c).write(c);
             (&raw mut (*p).waker).write(UnsafeCell::new(None));
-            rust_write_submit(
-                fs.as_ptr(),
-                &raw mut (*p).op,
-                (&raw mut (*p).bvecs).cast(),
-                MAX_BVECS as u32,
-                data.as_ptr() as *const _,
-                data.len(),
-                inum,
-                offset,
-                subvol,
-                replicas,
-                new_i_size,
-                Some(write_endio),
-            )
+            state.assume_init()
         };
+        let WriteState { op, bvecs, .. } = &mut *state;
 
-        let submit_err = if ret != 0 { Some(ret) } else { None };
-        // SAFETY: every field written, above
-        Self { state: Box::into_pin(unsafe { state.assume_init() }), submit_err }
+        unsafe {
+            bcachefs_kernel::c::bio_init(&mut op.wbio.bio, std::ptr::null_mut(), bvecs.as_mut_ptr(), MAX_BVECS as u16, 0);
+            Bio::from_raw_mut(&mut op.wbio.bio).map(data.as_ptr().cast_mut(), data.len());
+            op.init(fs, inode_opts::get_fs(fs, false));
+        }
+        op.end_io      = Some(write_endio);
+        op.write_point = writepoint_hashed(0);
+        op.bits.set_nr_replicas(replicas as u8);
+        op.subvol      = subvol;
+        op.pos         = spos(inum, offset >> 9, u32::MAX);
+        op.new_i_size  = new_i_size;
+        op.set(c::bch_write_flags::BCH_WRITE_sync);
+
+        let submit_err = op.res.add((data.len() >> 9) as u64, replicas, c::bch_reservation_flags::empty()).err();
+        if submit_err.is_none() {
+            // BCH_WRITE_sync: done when this returns, so @data outlives it
+            unsafe { closure::call(NonNull::from(&mut *op), bch2_write, None) };
+        }
+
+        Self { state: Box::into_pin(state), submit_err }
     }
 }
 
@@ -142,8 +139,8 @@ impl Future for WriteOp {
         let this = self.get_mut();
 
         // Submit-time error (e.g. disk reservation failure)
-        if let Some(ret) = this.submit_err {
-            return Poll::Ready(Err(BchError::from_raw(-ret)));
+        if let Some(e) = this.submit_err {
+            return Poll::Ready(Err(e));
         }
 
         if this.state.completed.load(Ordering::Acquire) {

@@ -1684,6 +1684,76 @@ impl Dev {
         }
         congested.clamp(0, c::CONGESTED_MAX.into()) as u32
     }
+
+    fn congested_acct(&self, io_latency: u64, now: u64, rw: usize) {
+        let latency_capable = self.io_latency[rw].quantiles.at(1);
+        /* ideally we'd be taking into account the device's variance here: */
+        let latency_threshold = latency_capable << if rw == READ { 2 } else { 3 };
+        let latency_over = io_latency.wrapping_sub(latency_threshold) as i64;
+
+        if latency_threshold != 0 && latency_over > 0 {
+            if self.congested.load(Relaxed) < c::CONGESTED_MAX as i32 {
+                self.congested.fetch_add((io_latency.wrapping_mul(2).min(u32::MAX.into()) as u32 /
+                                          latency_threshold.min(u32::MAX.into()) as u32) as i32, Relaxed);
+            }
+
+            self.congested_last.store(now, Relaxed);
+        } else if self.congested.load(Relaxed) > 0 {
+            self.congested.fetch_sub(1, Relaxed);
+        }
+    }
+
+    /// An IO of @rw's, submitted at @submit_time, completed: its latency in
+    /// the device's average and quantiles, and - a read's - its congestion.
+    pub fn latency_acct(&self, submit_time: u64, rw: usize) {
+        use crate::util::kernel::{local_clock, time_after64};
+        use crate::util::time_stats::__bch2_time_stats_quantiles_update;
+        use core::sync::atomic::Ordering::SeqCst;
+
+        let latency = &self.cur_latency[rw];
+        let now = local_clock();
+        let io_latency = if time_after64(now, submit_time) { now - submit_time } else { 0 };
+
+        let mut old = latency.load(Relaxed) as u64;
+        loop {
+            /*
+             * If the io latency was reasonably close to the current
+             * latency, skip doing the update and atomic operation - most of
+             * the time:
+             */
+            if old.abs_diff(io_latency) < (old >> 1) && now & u64::from(!(!0u32 << 5)) != 0 {
+                break;
+            }
+
+            let new = ewma_add(old, io_latency, 5);
+            match latency.compare_exchange(old as i64, new as i64, SeqCst, Relaxed) {
+                Ok(_)  => break,
+                Err(v) => old = v as u64,
+            }
+        }
+
+        /*
+         * Only track read latency for congestion accounting: writes are subject
+         * to heavy queuing delays from page cache writeback:
+         */
+        if rw == READ {
+            self.congested_acct(io_latency, now, rw);
+        }
+
+        __bch2_time_stats_quantiles_update(&self.io_latency[rw], submit_time, now);
+    }
+}
+
+/// util.h's ewma_add().
+#[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+fn ewma_add(ewma: u64, val: u64, weight: u32) -> u64 {
+    ((ewma << weight).wrapping_sub(ewma).wrapping_add(val)) >> weight
+}
+
+#[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+#[c_export]
+pub fn bch2_latency_acct(ca: &Dev, submit_time: u64, rw: c_int) {
+    ca.latency_acct(submit_time, rw as usize)
 }
 
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]

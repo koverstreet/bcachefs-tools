@@ -39,7 +39,7 @@ use crate::data::extents::{BkeyVExtents, Extents};
 use crate::data::update::{ptr_bits_to_text, TYPE_NAMES};
 use crate::data::ptrs::{brand, extents_match, BkeyVPtrs, Branded, PtrMask, Ptrs, PtrsMut};
 use crate::data::reconcile::plan::pending_mod;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::inode_opts::get_io_opts;
@@ -47,10 +47,8 @@ use crate::sb::counters::events;
 use crate::util::log::LogMsg;
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err_fn, log_msg_ratelimited};
-use core::ffi::c_int;
 use core::mem::size_of;
 use core::sync::atomic::{fence, Ordering};
-use cstruct_macros::c_export;
 use crate::format::Bpos;
 
 /// Room past a key for set_needs_reconcile(): an entry, and a padding pointer
@@ -388,14 +386,6 @@ pub(crate) fn index_update(trans: &BtreeTrans<'_>, u: &mut c::data_update) -> Re
             _ => LoopFlow::Break(()),
         })
     })
-}
-
-/// @u's index update, in a transaction of its own: the write path's, once the
-/// write op is done.
-#[c_export]
-pub fn bch2_data_update_index_update(u: &mut c::data_update) -> c_int {
-    let trans = crate::btree_trans!(u.op.fs());
-    ret_to_c(index_update(&trans, u))
 }
 
 /// @f on each slot @u's extent covered, an attempt and a commit each.
