@@ -98,6 +98,8 @@ fn main() {
         // And a zstd error a u32, as in-kernel: a code from a newer libzstd
         // than these bindings would be no value of a Rust enum.
         .constified_enum("ZSTD_ErrorCode")
+        // closure_state_CLOSURE_RUNNING, as in-kernel
+        .constified_enum("closure_state")
         // Own only what's defined under include/ — the kernel-compat surface.
         // allowlist_recursively (default) pulls in the system primitives these
         // reference (__u64 etc.), so they're emitted here too.

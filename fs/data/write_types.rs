@@ -218,6 +218,8 @@ nest! {
     }
 }
 
+crate::has_closure!(c::bch_write_op, cl);
+
 c_extern! {
     pub fn bch2_write_point_do_index_updates(work: *mut c::work_struct);
     pub fn bch2_sum_sector_overwrites(trans: *mut c::btree_trans, extent_iter: *mut c::btree_iter,

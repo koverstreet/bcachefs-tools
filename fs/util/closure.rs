@@ -8,13 +8,17 @@
 //! - a closure on the stack, to hand to C that waits by putting it on a
 //!   waitlist - the allocator - and to sync on;
 //! - a waitlist, for what C waits on with its closure: a stripe buffer's
-//!   memory, whose waiters are the write path's.
+//!   memory, whose waiters are the write path's;
+//! - a closure as the frame of an op its fns run in turn: Running, the
+//!   write path's.
 
 use crate::c;
 use crate::util::ffi::Opaque;
-use crate::util::refcount::{RefGuard, Refcount, TryRefcount};
+use crate::util::refcount::{RefBorrow, RefGuard, Refcount, TryRefcount};
+use crate::util::workqueue::Queue;
 use core::cell::UnsafeCell;
-use core::marker::PhantomPinned;
+use core::marker::{PhantomData, PhantomPinned};
+use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
 use core::ptr::NonNull;
 use pin_init::{pin_data, pinned_drop, PinInit};
@@ -141,4 +145,143 @@ pub fn closure_wait_event(list: &c::closure_waitlist, mut cond: impl FnMut() -> 
     }
     // off the waitlist, before it goes
     closure_wake_up(list);
+}
+
+/// T's closure, CLOSURE bytes into it: has_closure!().
+///
+/// # Safety
+/// Every T has a c::closure at CLOSURE.
+pub unsafe trait HasClosure {
+    const CLOSURE: usize;
+}
+
+#[doc(hidden)]
+pub const fn closure_field(_: *const c::closure) {}
+
+/// HasClosure for $t, by its closure field $f.
+#[macro_export]
+macro_rules! has_closure {
+    ($t:ty, $($f:ident).+) => {
+        unsafe impl $crate::util::closure::HasClosure for $t {
+            const CLOSURE: usize = {
+                let t = ::core::mem::MaybeUninit::<$t>::uninit();
+                $crate::util::closure::closure_field(unsafe { &raw const (*t.as_ptr()).$($f).+ });
+                ::core::mem::offset_of!($t, $($f).+)
+            };
+        }
+    };
+}
+
+/// A closure fn: C's CLOSURE_CALLBACK(), closure_type() its argument's.
+pub type ClosureFn<T> = extern "C" fn(Running<T>);
+
+/// The ref a closure's running code holds, which keeps its T: closure_call()'s,
+/// or the one a closure fn is run with. There's one, and it's given up by
+/// continue_at(), end() or into_raw() - never dropped.
+///
+/// What C passes a closure fn, &cl->work - work is first in the closure - so a
+/// ClosureFn<T> is a closure_fn: transparent over the same pointer type, which
+/// is what kCFI hashes it as.
+#[repr(transparent)]
+pub struct Running<T: HasClosure> {
+    work: *mut c::work_struct,
+    _t:   PhantomData<*mut T>,
+}
+
+const _: () = assert!(core::mem::offset_of!(c::closure, __bindgen_anon_1) == 0);
+
+fn closure_fn<T: HasClosure>(f: ClosureFn<T>) -> c::closure_fn {
+    Some(unsafe { core::mem::transmute::<ClosureFn<T>, unsafe extern "C" fn(*mut c::work_struct)>(f) })
+}
+
+fn wq_ptr(wq: Option<&Queue>) -> *mut c::workqueue_struct {
+    wq.map_or(core::ptr::null_mut(), Queue::as_ptr)
+}
+
+impl<T: HasClosure> Running<T> {
+    /// A running ref handed on, as into_raw() gave it up.
+    ///
+    /// # Safety
+    /// @this's closure's running ref is the caller's, to give to this.
+    pub unsafe fn from_raw(this: NonNull<T>) -> Self {
+        Running { work: this.as_ptr().wrapping_byte_add(T::CLOSURE).cast(), _t: PhantomData }
+    }
+
+    /// Given up to whoever from_raw()s it: still running, its ref not put.
+    pub fn into_raw(self) -> NonNull<T> {
+        let this = self.this();
+        core::mem::forget(self);
+        this
+    }
+
+    fn this(&self) -> NonNull<T> {
+        unsafe { NonNull::new_unchecked(self.work.wrapping_byte_sub(T::CLOSURE).cast()) }
+    }
+
+    fn cl(&self) -> *mut c::closure {
+        self.work.cast()
+    }
+
+    /// For a ref of its own - a bio's - and to wait on: the allocator, a
+    /// commit's journal flush.
+    pub fn closure(&self) -> RefBorrow<'_, Opaque<c::closure>> {
+        unsafe { RefBorrow::new(&*self.cl().cast::<Opaque<c::closure>>()) }
+    }
+
+    /// The running ref, and every other.
+    pub fn nr_remaining(&self) -> u32 {
+        unsafe { c::closure_nr_remaining(self.cl()) }
+    }
+
+    /// Sleeps until the running ref is the only one.
+    pub fn sync(&self) {
+        unsafe { c::closure_sync(self.cl()) }
+    }
+
+    /// Runs @f, out of @wq or by the last closure_put() if None, once every
+    /// other ref is put: C's continue_at().
+    pub fn continue_at(self, f: ClosureFn<T>, wq: Option<&Queue>) {
+        let cl = self.cl();
+        core::mem::forget(self);
+        unsafe {
+            c::set_closure_fn(cl, closure_fn(f), wq_ptr(wq));
+            c::bch2_closure_sub(cl, (c::closure_state_CLOSURE_RUNNING + 1) as core::ffi::c_int);
+        }
+    }
+
+    /// Done, the running ref never put: T is the caller's, to free.
+    pub fn end(self) -> NonNull<T> {
+        unsafe { c::closure_debug_destroy(self.cl()) };
+        self.into_raw()
+    }
+}
+
+impl<T: HasClosure> Deref for Running<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        unsafe { self.this().as_ref() }
+    }
+}
+
+impl<T: HasClosure> DerefMut for Running<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        unsafe { self.this().as_mut() }
+    }
+}
+
+impl<T: HasClosure> Drop for Running<T> {
+    fn drop(&mut self) {
+        panic!("{}: a closure fn returned holding its running ref", core::any::type_name::<T>());
+    }
+}
+
+/// Runs @f out of @this's closure, initialized now, as Running: C's
+/// closure_call().
+///
+/// # Safety
+/// @this's closure isn't in use, and @this lives until a closure fn end()s it.
+pub unsafe fn call<T: HasClosure>(this: NonNull<T>, f: ClosureFn<T>, wq: Option<&Queue>) {
+    let cl = this.as_ptr().wrapping_byte_add(T::CLOSURE).cast::<c::closure>();
+    unsafe { c::closure_call(cl, closure_fn(f), wq_ptr(wq), core::ptr::null_mut()) }
 }
