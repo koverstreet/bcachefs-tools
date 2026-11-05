@@ -351,6 +351,8 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
     // (#[bitfield]), by the type's own path - a Cell's setting through &self.
     // Not a Volatile one's: that's a word, read and written whole.
     let mut forward = TokenStream::new();
+    let (generics, over) = def.impl_generics();
+    let (generics, over) = (tokens(&generics), tokens(&over));
     for f in def.fields.iter().filter(|f| f.bitfield) {
         let bt = bitfield_type(&f.ty);
         let suffix = match bitfield_wrapper(&f.ty) {
@@ -361,7 +363,7 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         let (path, ty) = bt.rsplit_once("::").map_or(("", bt.as_str()), |(p, t)| (p, t));
         let path = if path.is_empty() { String::new() } else { format!("{path}::") };
         let (fwd, field) = (tokens(&format!("{path}__{ty}{suffix}")), tokens(&f.rust_name()));
-        forward.extend(quote!(#fwd!(#inst, #field);));
+        forward.extend(quote!(#fwd!([#generics] #over, #field);));
     }
     let mut nums = size_align(&inst);
     for f in &def.fields {
@@ -382,7 +384,7 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
     }
     // a pointer field C reads is a thin one: as c_extern!'s parameters
     let thin: TokenStream = def.fields.iter()
-        .map(|f| thin_pointers(name, &f.cfg, &[(f.rust_name(), static_lifetimes(&f.ty, &def.lifetimes))], None))
+        .map(|f| thin_pointers(name, &f.cfg, &[(f.rust_name(), at_default(&f.ty, &def))], None))
         .collect();
     let flex = tokens(&vstructs::flex_array(&def)?);
     let zeroable = maybe_zeroable(&def);
@@ -409,7 +411,7 @@ fn maybe_zeroable(def: &cstruct::CStructDef) -> TokenStream {
     quote! {
         // SAFETY: every field is Zeroable, and padding may be zero
         #[automatically_derived]
-        unsafe impl #generics ::pin_init::Zeroable for #ty #whr {}
+        unsafe impl<#generics> ::pin_init::Zeroable for #ty #whr {}
     }
 }
 
@@ -425,7 +427,7 @@ pub(crate) fn is_core_atomic(ty: &str) -> bool {
                    "AtomicULong")
 }
 
-/// bitfield_struct::bitfield, recorded - and __NAME_forward!(STRUCT, field),
+/// bitfield_struct::bitfield, recorded - and __NAME_forward!([GENERICS] STRUCT, field),
 /// which #[derive(CStruct)] invokes for a #[c_bitfield] field of this type:
 /// each member's getter and setter on the struct that holds it, as C has a
 /// bitfield's members on its struct. Not `_` members: those are padding.
@@ -618,7 +620,7 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
                 #vis fn #update(&mut self, f: impl FnOnce(#ty) -> #ty) {
                     let mut b = self.$field; b.#set(f(b.#m())); self.$field = b;
                 }
-            });
+            }).collect::<Vec<_>>();
         let cell_fns = members.iter().filter(|(.., vis)| vis.to_string().replace(' ', "") != "pub(self)")
             .map(|(m, set, update, ty, vis)| quote! {
                 #vis fn #m(&self) -> #ty { self.$field.get().#m() }
@@ -626,16 +628,20 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
                 #vis fn #update(&self, f: impl FnOnce(#ty) -> #ty) {
                     let mut b = self.$field.get(); b.#set(f(b.#m())); self.$field.set(b);
                 }
-            });
+            }).collect::<Vec<_>>();
         let fwd = format_ident!("__{name}_forward");
         let fwd_cell = format_ident!("__{name}_forward_cell");
         out.extend(quote! {
             #[allow(unused_macros)]
-            macro_rules! #fwd { ($s:ty, $field:ident) => { impl $s { #(#fns)* } } }
+            macro_rules! #fwd {
+                ([$($g:tt)*] $s:ty, $field:ident) => { impl<$($g)*> $s { #(#fns)* } };
+            }
             #[allow(unused_imports)]
             pub(crate) use #fwd;
             #[allow(unused_macros)]
-            macro_rules! #fwd_cell { ($s:ty, $field:ident) => { impl $s { #(#cell_fns)* } } }
+            macro_rules! #fwd_cell {
+                ([$($g:tt)*] $s:ty, $field:ident) => { impl<$($g)*> $s { #(#cell_fns)* } };
+            }
             #[allow(unused_imports)]
             pub(crate) use #fwd_cell;
         });
@@ -1464,18 +1470,24 @@ fn ret(ret: &Option<String>) -> Option<TokenStream> {
     ret.as_deref().map(tokens).map(|r| quote!(-> #r))
 }
 
-/// @ty, a field's type, with @lifetimes - its struct's - 'static: for a check
-/// outside the struct's generics, of what no lifetime changes.
-fn static_lifetimes(ty: &str, lifetimes: &[String]) -> String {
+/// @ty, a field's type, at its struct's default instance - its lifetimes
+/// 'static, its type parameters their defaults: for a check outside the
+/// struct's generics, of what neither changes.
+fn at_default(ty: &str, def: &cstruct::CStructDef) -> String {
     let mut out = String::new();
     let mut rest = ty;
-    while let Some(i) = rest.find('\'') {
+    while let Some(i) = rest.find(|ch: char| ch == '\'' || ch.is_alphabetic() || ch == '_') {
         out.push_str(&rest[..i]);
-        let after = &rest[i + 1..];
-        let len = after.find(|ch: char| !(ch.is_alphanumeric() || ch == '_')).unwrap_or(after.len());
-        let lt = &rest[i..i + 1 + len];
-        out.push_str(if lifetimes.iter().any(|l| l == lt) { "'static" } else { lt });
-        rest = &after[len..];
+        let start = i + usize::from(rest[i..].starts_with('\''));
+        let len = rest[start..].find(|ch: char| !(ch.is_alphanumeric() || ch == '_')).unwrap_or(rest.len() - start);
+        let word = &rest[i..start + len];
+        let default = if start > i {
+            def.lifetimes.iter().any(|l| l == word).then_some("'static")
+        } else {
+            def.type_params.iter().find(|p| p.name == word).map(|p| p.default.as_str())
+        };
+        out.push_str(default.unwrap_or(word));
+        rest = &rest[start + len..];
     }
     out.push_str(rest);
     out

@@ -157,6 +157,14 @@ impl CRepr {
     }
 }
 
+/// A type parameter of a CStruct: its bounds and default, as written.
+#[derive(Debug)]
+pub struct TypeParam {
+    pub name:    String,
+    pub bounds:  String,
+    pub default: String,
+}
+
 /// A #[derive(CStruct)] struct or union: its name and fields, in order. Its
 /// repr may be per configuration: cfg_attr(PRED, repr(...)).
 #[derive(Debug)]
@@ -169,6 +177,9 @@ pub struct CStructDef {
     pub rust_name: Option<String>,
     /// Its lifetime parameters, as written.
     pub lifetimes: Vec<String>,
+    /// Its type parameters, each with a default, which is what C's one
+    /// struct is: one layout for every T.
+    pub type_params: Vec<TypeParam>,
     pub kind:      CKind,
     pub cfg:       Option<Cfg>,
     pub repr:      CRepr,
@@ -206,16 +217,20 @@ impl CStructDef {
         self.rust_type_with(&vec!["'_".to_string(); self.lifetimes.len()])
     }
 
-    /// impl<'a> and X<'a>: for an impl whose bounds name its lifetimes.
-    #[allow(dead_code)]
+    /// 'a, T: Bound and X<'a, T>: for an impl over all of the struct's
+    /// generics.
     pub fn impl_generics(&self) -> (String, String) {
-        let g = if self.lifetimes.is_empty() { String::new() } else { format!("<{}>", self.lifetimes.join(", ")) };
-        (g, self.rust_type_with(&self.lifetimes))
+        let params: Vec<String> = self.lifetimes.iter().cloned()
+            .chain(self.type_params.iter().map(|p| if p.bounds.is_empty() { p.name.clone() } else { format!("{}: {}", p.name, p.bounds) }))
+            .collect();
+        let args: Vec<String> = self.lifetimes.iter().cloned()
+            .chain(self.type_params.iter().map(|p| p.name.clone()))
+            .collect();
+        (params.join(", "), self.rust_type_with(&args))
     }
 
-    #[allow(dead_code)]
-    fn rust_type_with(&self, lifetimes: &[String]) -> String {
-        match lifetimes {
+    fn rust_type_with(&self, args: &[String]) -> String {
+        match args {
             [] => self.rust_ident().to_string(),
             l  => format!("{}<{}>", self.rust_ident(), l.join(", ")),
         }
@@ -991,11 +1006,20 @@ fn parse_struct(d: &syn::DeriveInput, a: ItemAttrs) -> Result<Option<CStructDef>
         syn::Data::Union(u) => (CKind::Union, Some(&u.fields.named)),
         syn::Data::Enum(_) => return Ok(None),
     };
-    let fields_of = fields.filter(|_| d.generics.type_params().next().is_none() && d.generics.const_params().next().is_none())
-        .ok_or_else(|| format!("{name}: a CStruct has named fields, and no generics - an unsized vstruct's \
-                                states are each its own definition: #[unsized_vstruct]"))?;
-    // what it borrows, which C has no notion of - the only generics a CStruct
-    // takes
+    let fields_of = fields
+        .filter(|_| d.generics.type_params().all(|p| p.default.is_some()) && d.generics.const_params().next().is_none())
+        .ok_or_else(|| format!("{name}: a CStruct has named fields, and no generics but lifetimes and type \
+                                parameters with defaults - an unsized vstruct's states are each its \
+                                own definition: #[unsized_vstruct]"))?;
+    // a type parameter C has no notion of: one layout for every T
+    let type_params = d.generics.type_params()
+        .map(|p| TypeParam {
+            name:    ident(&p.ident),
+            bounds:  p.bounds.iter().map(rust_text).collect::<Vec<_>>().join(" + "),
+            default: p.default.as_ref().map(rust_text).expect("checked above"),
+        })
+        .collect();
+    // what it borrows, which C has no notion of
     let lifetimes = d.generics.lifetimes().map(|l| format!("'{}", l.lifetime.ident)).collect();
 
     let mut fields = Vec::new();
@@ -1100,7 +1124,7 @@ fn parse_struct(d: &syn::DeriveInput, a: ItemAttrs) -> Result<Option<CStructDef>
     let typedef_anon = matches!(a.typedef, Some(None));
     let typedef = a.typedef.map(|t| t.unwrap_or_else(|| name.clone()));
     Ok(Some(CStructDef {
-        name, rust_name, lifetimes, kind, cfg: a.cfg, repr: a.repr, cfg_reprs: a.cfg_reprs, fields, typedef,
+        name, rust_name, lifetimes, type_params, kind, cfg: a.cfg, repr: a.repr, cfg_reprs: a.cfg_reprs, fields, typedef,
         typedef_anon, c_align,
     }))
 }
@@ -2381,9 +2405,13 @@ fn proto_ty(ty: &syn::Type, decl: String, konst: bool, last: bool,
         syn::Type::Paren(p) => proto_ty(&p.elem, decl, konst, last, kind),
         syn::Type::Group(g) => proto_ty(&g.elem, decl, konst, last, kind),
         // c::NAME, or a type of ours by its Rust name, by any path: C's, from
-        // the struct map
+        // the struct map - a CStruct by its name whatever its arguments, being
+        // one layout for every T
         _ => {
-            let name = path_names(ty).and_then(|p| p.last().cloned());
+            let name = match ty {
+                syn::Type::Path(p) if p.qself.is_none() => p.path.segments.last().map(|s| ident(&s.ident)),
+                _ => None,
+            };
             let base = name.and_then(|n| kind(&n)).or_else(|| canon_base(ty))?;
             Some(base_decl(q, &base, &decl))
         }
@@ -3168,8 +3196,9 @@ pub fn written_types(text: &str) -> Vec<String> {
     for item in &items {
         match item {
             CItem::Struct(d) => {
-                // by name alone, its lifetimes elided: type_name() erases them
-                if generics.is_empty() {
+                // by name alone, its lifetimes elided - type_name() erases them -
+                // and its type parameters defaulted, which is C's struct
+                if d.type_params.len() == generics.len() {
                     tys.push(d.rust_ident().to_string());
                 }
                 tys.extend(d.family().map(str::to_string));
