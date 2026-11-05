@@ -51,6 +51,63 @@ impl<'a> IovIter<'a> {
     }
 }
 
+/// An iov_iter's fields, as a DIO write reads its copy of the VFS's, held for
+/// an IO that outlives the call.
+#[cfg(kernel)]
+pub trait IovIterFields {
+    fn count(&self) -> usize;
+
+    /// iter_is_ubuf(): one buffer, held in the iter itself.
+    fn is_ubuf(&self) -> bool;
+
+    /// iter_is_iovec()
+    fn is_iovec(&self) -> bool;
+
+    fn nr_segs(&self) -> usize;
+
+    /// An iovec iter's iovecs.
+    fn iov(&self) -> *const kernel::bindings::iovec;
+
+    /// # Safety
+    /// An iovec iter's, @iov a copy of its iovecs, which lives as long as it's
+    /// used.
+    unsafe fn set_iov(&mut self, iov: *const kernel::bindings::iovec);
+
+    /// iov_iter_revert(): back over the last @bytes taken.
+    fn revert(&mut self, bytes: usize);
+}
+
+#[cfg(kernel)]
+impl IovIterFields for c::iov_iter {
+    fn count(&self) -> usize {
+        unsafe { self.__bindgen_anon_1.__bindgen_anon_1.as_ref().count }
+    }
+
+    fn is_ubuf(&self) -> bool {
+        self.iter_type == c::iter_type_ITER_UBUF as u8
+    }
+
+    fn is_iovec(&self) -> bool {
+        self.iter_type == c::iter_type_ITER_IOVEC as u8
+    }
+
+    fn nr_segs(&self) -> usize {
+        unsafe { self.__bindgen_anon_2.nr_segs as usize }
+    }
+
+    fn iov(&self) -> *const kernel::bindings::iovec {
+        unsafe { self.__bindgen_anon_1.__bindgen_anon_1.as_ref().__bindgen_anon_1.__iov }
+    }
+
+    unsafe fn set_iov(&mut self, iov: *const kernel::bindings::iovec) {
+        unsafe { self.__bindgen_anon_1.__bindgen_anon_1.as_mut().__bindgen_anon_1.__iov = iov }
+    }
+
+    fn revert(&mut self, bytes: usize) {
+        unsafe { c::iov_iter_revert(self, bytes) }
+    }
+}
+
 pub struct HeldBack<'b, 'a> {
     iter: &'b mut IovIter<'a>,
     n:    usize,
