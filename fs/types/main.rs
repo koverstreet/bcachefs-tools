@@ -375,7 +375,15 @@ fn file_h(header: &str, records: &[&Record], paths: &BTreeMap<String, String>,
     // each name these records write, as the type rustc resolved it to: two
     // files' Btrees are different types - and in one header, one is
     let mut resolved: BTreeMap<&str, &str> = BTreeMap::new();
-    for (w, p) in records.iter().flat_map(|r| &r.names).filter(|(w, _)| !w.contains('<')) {
+    // a generic one by its base name if its arguments are only lifetimes,
+    // which C doesn't see; not at all otherwise
+    fn base(w: &str) -> Option<&str> {
+        match w.split_once('<') {
+            None => Some(w),
+            Some((b, args)) => args.trim_end_matches('>').split(',').all(|a| a.trim().starts_with('\'')).then_some(b),
+        }
+    }
+    for (w, p) in records.iter().flat_map(|r| &r.names).filter_map(|(w, p)| Some((base(w)?, p))) {
         let n = w.rsplit("::").next().unwrap_or(w);
         if let Some(old) = resolved.insert(n, p).filter(|&old| old != p) {
             return Err(format!("{header}: {n} is written for two types, {old} and {p}"));

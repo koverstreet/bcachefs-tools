@@ -2320,10 +2320,16 @@ fn arg_of<'a>(ty: &'a syn::Type, name: &str) -> Option<&'a syn::Type> {
     }
 }
 
-/// @ty's path's names, if it's a plain path - no generics.
+/// @ty's path's names, if it's a plain path - no generics but lifetimes, which
+/// C doesn't see.
 fn path_names(ty: &syn::Type) -> Option<Vec<String>> {
+    let lifetimes_only = |a: &syn::PathArguments| match a {
+        syn::PathArguments::None => true,
+        syn::PathArguments::AngleBracketed(a) => a.args.iter().all(|a| matches!(a, syn::GenericArgument::Lifetime(_))),
+        syn::PathArguments::Parenthesized(_) => false,
+    };
     match ty {
-        syn::Type::Path(p) if p.qself.is_none() && p.path.segments.iter().all(|s| s.arguments.is_none()) =>
+        syn::Type::Path(p) if p.qself.is_none() && p.path.segments.iter().all(|s| lifetimes_only(&s.arguments)) =>
             Some(p.path.segments.iter().map(|s| ident(&s.ident)).collect()),
         _ => None,
     }
@@ -2333,9 +2339,9 @@ fn proto_ty(ty: &syn::Type, decl: String, konst: bool, last: bool,
             kind: &dyn Fn(&str) -> Option<String>)
     -> Option<String>
 {
-    // Head<T>, a family's C definition (util/vstructs.rs), and Volatile<T>, a
-    // published word (util/projections.rs): to C, T itself
-    if let Some(t) = arg_of(ty, "Head").or_else(|| arg_of(ty, "Volatile")) {
+    // Head<T>, a family's C definition (util/vstructs.rs), Volatile<T>, a
+    // published word (util/projections.rs), and Cell<T>: to C, T itself
+    if let Some(t) = arg_of(ty, "Head").or_else(|| arg_of(ty, "Volatile")).or_else(|| arg_of(ty, "Cell")) {
         return proto_ty(t, decl, konst, last, kind);
     }
     let q = if konst { "const " } else { "" };
@@ -2898,13 +2904,19 @@ fn emit_members(def: &CStructDef, items: &[CItem],
 /// @ty's type arguments, Rust source, if it's @name<...> - one of
 /// types/lib.rs's containers of C's, by any path.
 /// A #[c_bitfield] field's bitfield type, from its type @ty: the type, or a
-/// Volatile<T>'s T - a published word, read and written whole, whose members
-/// C declares in its place all the same.
+/// Volatile<T>'s or Cell<T>'s T - a word read and written whole, whose
+/// members C declares in its place all the same.
 pub fn bitfield_type(ty: &str) -> String {
-    match container_args(ty, "Volatile") {
-        Ok(Some(args)) if args.len() == 1 => args[0].trim().to_string(),
-        _ => ty.trim().to_string(),
-    }
+    bitfield_wrapper(ty).and_then(|w| match container_args(ty, w) {
+        Ok(Some(args)) if args.len() == 1 => Some(args[0].trim().to_string()),
+        _ => None,
+    }).unwrap_or_else(|| ty.trim().to_string())
+}
+
+/// What a #[c_bitfield] field's bitfield is wrapped in, if anything:
+/// "Volatile" or "Cell".
+pub fn bitfield_wrapper(ty: &str) -> Option<&'static str> {
+    ["Volatile", "Cell"].into_iter().find(|w| matches!(container_args(ty, w), Ok(Some(a)) if a.len() == 1))
 }
 
 fn container_args(ty: &str, name: &str) -> Result<Option<Vec<String>>, String> {
@@ -3156,7 +3168,8 @@ pub fn written_types(text: &str) -> Vec<String> {
     for item in &items {
         match item {
             CItem::Struct(d) => {
-                if generics.is_empty() && d.lifetimes.is_empty() {
+                // by name alone, its lifetimes elided: type_name() erases them
+                if generics.is_empty() {
                     tys.push(d.rust_ident().to_string());
                 }
                 tys.extend(d.family().map(str::to_string));

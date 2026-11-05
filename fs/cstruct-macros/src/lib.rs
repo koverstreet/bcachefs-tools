@@ -75,7 +75,7 @@ use quote::{format_ident, quote, ToTokens};
 mod cstruct {
     include!("../../types/cstruct.rs");
 }
-use cstruct::{bitfield_type, enum_text, expand_enum_list, parse_c_export, parse_cstruct, parse_items, rust_ident,
+use cstruct::{bitfield_type, bitfield_wrapper, enum_text, expand_enum_list, parse_c_export, parse_cstruct, parse_items, rust_ident,
               spell_concat, CEnumDef, CEnumKind, CEnumVariant, CItem, CXEntry};
 
 mod args_stored_once;
@@ -348,14 +348,19 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
     let name = def.rust_ident();
     let inst = tokens(&def.rust_type());
     // A #[c_bitfield] field's members, on the struct: its type's forwarders
-    // (#[bitfield]), by the type's own path. Not a Volatile one's: that's a
-    // word, read and written whole.
+    // (#[bitfield]), by the type's own path - a Cell's setting through &self.
+    // Not a Volatile one's: that's a word, read and written whole.
     let mut forward = TokenStream::new();
-    for f in def.fields.iter().filter(|f| f.bitfield && bitfield_type(&f.ty) == f.ty.trim()) {
-        let ty = f.ty.trim();
-        let (path, ty) = ty.rsplit_once("::").map_or(("", ty), |(p, t)| (p, t));
+    for f in def.fields.iter().filter(|f| f.bitfield) {
+        let bt = bitfield_type(&f.ty);
+        let suffix = match bitfield_wrapper(&f.ty) {
+            None         => "_forward",
+            Some("Cell") => "_forward_cell",
+            Some(_)      => continue,
+        };
+        let (path, ty) = bt.rsplit_once("::").map_or(("", bt.as_str()), |(p, t)| (p, t));
         let path = if path.is_empty() { String::new() } else { format!("{path}::") };
-        let (fwd, field) = (tokens(&format!("{path}__{ty}_forward")), tokens(&f.rust_name()));
+        let (fwd, field) = (tokens(&format!("{path}__{ty}{suffix}")), tokens(&f.rust_name()));
         forward.extend(quote!(#fwd!(#inst, #field);));
     }
     let mut nums = size_align(&inst);
@@ -614,12 +619,25 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
                     let mut b = self.$field; b.#set(f(b.#m())); self.$field = b;
                 }
             });
+        let cell_fns = members.iter().filter(|(.., vis)| vis.to_string().replace(' ', "") != "pub(self)")
+            .map(|(m, set, update, ty, vis)| quote! {
+                #vis fn #m(&self) -> #ty { self.$field.get().#m() }
+                #vis fn #set(&self, v: #ty) { let mut b = self.$field.get(); b.#set(v); self.$field.set(b); }
+                #vis fn #update(&self, f: impl FnOnce(#ty) -> #ty) {
+                    let mut b = self.$field.get(); b.#set(f(b.#m())); self.$field.set(b);
+                }
+            });
         let fwd = format_ident!("__{name}_forward");
+        let fwd_cell = format_ident!("__{name}_forward_cell");
         out.extend(quote! {
             #[allow(unused_macros)]
             macro_rules! #fwd { ($s:ty, $field:ident) => { impl $s { #(#fns)* } } }
             #[allow(unused_imports)]
             pub(crate) use #fwd;
+            #[allow(unused_macros)]
+            macro_rules! #fwd_cell { ($s:ty, $field:ident) => { impl $s { #(#cell_fns)* } } }
+            #[allow(unused_imports)]
+            pub(crate) use #fwd_cell;
         });
     }
 
@@ -1397,7 +1415,7 @@ pub fn c_same(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 /// What Rust calls of a C header:
 ///
 ///   c_extern! {
-///       pub fn bch2_trans_begin(trans: *mut c::btree_trans) -> u32;
+///       pub fn bch2_trans_begin(trans: *mut BtreeTrans<'_>) -> u32;
 ///       pub static bch2_bkey_ops: [c::bkey_ops; 0];
 ///   }
 ///
