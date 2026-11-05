@@ -396,8 +396,10 @@ pub enum Given<T> {
     Rejected,
     /// The watch has it.
     Settled,
-    /// Input ended, or the agent was declined.
-    Unanswered,
+    /// End of file on stdin: not an empty passphrase.
+    Ended,
+    /// The agent was declined.
+    Declined,
 }
 
 /// @sb's passphrase, asked for until @accept takes one - an agent can give
@@ -421,7 +423,7 @@ pub fn read_passphrase<T>(
                 let line = match read_secret_line("Enter passphrase: ", watch)? {
                     Given::Taken(line) => line,
                     Given::Settled     => return Ok(Given::Settled),
-                    _                  => return Ok(Given::Unanswered),
+                    _                  => return Ok(Given::Ended),
                 };
                 if let Some(t) = accept(&line) {
                     return Ok(Given::Taken(t));
@@ -433,7 +435,7 @@ pub fn read_passphrase<T>(
             }
             Prompt::Agent => {
                 let Some(given) = ask_agent_for_passphrase(sb, first)? else {
-                    return Ok(Given::Unanswered);
+                    return Ok(Given::Declined);
                 };
                 if let Some(t) = given.split(|b| *b == 0).find_map(&mut accept) {
                     return Ok(Given::Taken(t));
@@ -460,7 +462,7 @@ pub fn read_secret_line(prompt: &str, watch: Option<&mut dyn Watch>) -> Result<G
 
     if !stdin().is_terminal() {
         if stdin().lock().read_until(b'\n', &mut line)? == 0 {
-            return Ok(Given::Unanswered);
+            return Ok(Given::Ended);
         }
         trim(&mut line);
         return Ok(Given::Taken(line));
@@ -501,7 +503,7 @@ pub fn read_secret_line(prompt: &str, watch: Option<&mut dyn Watch>) -> Result<G
         // that arrived before the prompt and was discarded by the flush
         // above. Calling that a wrong passphrase sends whoever hits it
         // looking for the wrong thing entirely.
-        Waited::Readable if read == 0 => Given::Unanswered,
+        Waited::Readable if read == 0 => Given::Ended,
         Waited::Readable => {
             trim(&mut line);
             Given::Taken(line)

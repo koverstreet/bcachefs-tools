@@ -233,7 +233,8 @@ impl Passphrase {
             Given::Settled    => socket.and_then(UnlockSocket::take)
                 .ok_or_else(|| anyhow!("incorrect passphrase")),
             Given::Rejected   => bail!("incorrect passphrase"),
-            Given::Unanswered => bail!("no passphrase read"),
+            Given::Ended      => bail!("no passphrase read: end of file on stdin"),
+            Given::Declined   => bail!("no passphrase given: systemd-ask-password was declined"),
         }
     }
 
