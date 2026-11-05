@@ -162,6 +162,13 @@ impl File {
         ret_to_result_void(unsafe { c::file_update_time(self.as_ptr()) })
     }
 
+    /// file_remove_privs(): setuid, setgid and security capabilities dropped,
+    /// for a write.
+    #[cfg(kernel)]
+    pub fn remove_privs(&self) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::file_remove_privs(self.as_ptr()) })
+    }
+
     /// The VFS's checks of a remap from @pos_in to @dst at @pos_out, and its
     /// flushes; @len shortened to what's to be remapped, 0 for nothing:
     /// generic_remap_file_range_prep().

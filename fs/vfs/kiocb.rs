@@ -5,6 +5,7 @@
 
 use super::inode::InodeInfo;
 use crate::c;
+use crate::errcode::BchError;
 use crate::util::file::File;
 use crate::util::iov_iter::IovIter;
 use core::ffi::c_int;
@@ -54,6 +55,19 @@ impl<'a> Kiocb<'a> {
     /// is_sync_kiocb(): done by the call, not completed later.
     pub fn is_sync(&self) -> bool {
         self.0.ki_complete.is_none()
+    }
+
+    /// iocb_is_dsync(): a write to be durable when it's done - O_DSYNC, or a
+    /// sync inode.
+    pub fn is_dsync(&self) -> bool {
+        unsafe { c::iocb_is_dsync(&*self.0) }
+    }
+
+    /// generic_write_checks(): @iter cut to what may be written at pos() -
+    /// moved to the end for O_APPEND. How much that is: 0, nothing to write.
+    pub fn write_checks(&mut self, iter: &mut IovIter<'_>) -> Result<usize, BchError> {
+        let ret = unsafe { c::generic_write_checks(self.0, iter.as_ptr()) };
+        if ret < 0 { Err(BchError::from_raw(ret as i32)) } else { Ok(ret as usize) }
     }
 
     /// An async kiocb's completion, for once the call's returned -EIOCBQUEUED:
