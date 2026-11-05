@@ -635,12 +635,12 @@ fn check_btree_root_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToB
     let mut iter = BtreeIter::new_level(t, btree, POS_MIN, root_level.into(), BtreeIterFlags::empty());
     let b = iter.peek_node(t)?.expect("a btree's root node");
 
-    if !fs.btree_id_root(b.c.btree_id.into()).is_some_and(|root| core::ptr::eq(root, b)) {
+    if !fs.btree_id_root(b.c.btree_id.into()).is_some_and(|root| core::ptr::eq(root, b.node())) {
         return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_lock_root_race));
     }
 
     let level = u32::from(b.c.level);
-    check_extent_to_backpointers(t, s, btree, level + 1, BkeySC::from(unsafe { b.contents() }.key_i()))?;
+    check_extent_to_backpointers(t, s, btree, level + 1, BkeySC::from(b.contents().key_i()))?;
     Ok(level)
 }
 
@@ -758,7 +758,7 @@ fn btree_node_get_and_pin(t: &TransAttempt<'_, '_>, pins: &BtreeCachePins<'_>, k
                           level: u32) -> Result<(), BchError> {
     let mut iter = BtreeIter::new_level(t, btree, k.k.p, level, BtreeIterFlags::empty());
     if let Some(b) = iter.peek_node(t)? {
-        pins.node(b);
+        pins.node(b.node());
     }
     Ok(())
 }

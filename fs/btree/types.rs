@@ -603,7 +603,7 @@ c_const! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Default, CStruct)]
 pub struct btree_trans_paths {
     pub nr_paths: c_ulong,
     pub paths: [BtreePath; 0],

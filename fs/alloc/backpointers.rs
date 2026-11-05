@@ -43,6 +43,7 @@ use crate::btree::iter::{is_restart, polonius_key, BtreeIter, BtreeIterFlags, Bt
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbFlush;
 use crate::btree::node::BtreeNode;
+use crate::btree::path::LockedNode;
 use crate::c;
 use crate::data::ptrs::{ptr_data_type, ptr_disk_sectors, DecodedPtr, Ptrs};
 use crate::data::reconcile::trigger::BkeyVReconcile;
@@ -441,7 +442,7 @@ fn backpointer_target_not_found(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Back
 /// None if it isn't there, which is reported.
 fn get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
                     iter: &'i mut BtreeIter<'t>, last_flushed: Option<WbFlush<'_>>, commit: bool)
-    -> Result<Option<&'i BtreeNode>, BchError>
+    -> Result<Option<LockedNode<'i, BtreeNode>>, BchError>
 {
     let fs = t.fs();
     let v = *bp.v();
@@ -459,7 +460,7 @@ fn get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
 
     assert_eq!(u32::from(b.c.level), u32::from(v.level) - 1, "node at the wrong level");
 
-    let node_k = BkeySC::from(unsafe { b.contents() }.key_i());
+    let node_k = BkeySC::from(b.contents().key_i());
     if extent_matches_bp(fs, btree, v.level.into(), node_k, bp) {
         return Ok(Some(b));
     }
@@ -504,7 +505,7 @@ pub(super) fn get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Bac
     }
 
     match get_node(t, bp, iter, last_flushed, commit) {
-        Ok(b) => Ok(b.map(|b| BkeySC::from(unsafe { b.contents() }.key_i()))),
+        Ok(b) => Ok(b.map(|b| BkeySC::from(b.contents().key_i()))),
         Err(e) if e.matches(bch_errcode::BCH_ERR_backpointer_to_overwritten_btree_node) => Ok(None),
         Err(e) => Err(e),
     }
@@ -525,7 +526,7 @@ pub fn backpointer_get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c
 
 pub fn backpointer_get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
                                     iter: &'i mut BtreeIter<'t>, last_flushed: WbFlush<'_>)
-    -> Result<Option<&'i BtreeNode>, BchError>
+    -> Result<Option<LockedNode<'i, BtreeNode>>, BchError>
 {
     get_node(t, bp, iter, Some(last_flushed), true)
 }

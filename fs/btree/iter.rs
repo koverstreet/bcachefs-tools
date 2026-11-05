@@ -4,7 +4,7 @@ use super::bkey::*;
 pub use super::types::{BtreeIter, BtreeTrans};
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{btree_path_level, BtreePath, PathIdx};
+use crate::btree::path::{btree_path_level, BtreePath, LockedNode, PathIdx};
 use crate::c;
 use crate::errcode::{
     BchError,
@@ -760,9 +760,9 @@ impl BtreeNodeRef {
 
 /// A node an iterator returned - backpointer_get_node()'s, say: held by that
 /// iterator's path, as peek_ref()'s is.
-impl From<&BtreeNode> for BtreeNodeRef {
-    fn from(b: &BtreeNode) -> Self {
-        Self { raw: NonNull::from(b) }
+impl From<LockedNode<'_, BtreeNode>> for BtreeNodeRef {
+    fn from(b: LockedNode<'_, BtreeNode>) -> Self {
+        Self { raw: NonNull::from(b.node()) }
     }
 }
 
@@ -2552,14 +2552,14 @@ impl<'t> BtreeIter<'t> {
 
     /// At the iterator's level - new_level()'s; None if the btree isn't that deep.
     pub fn peek_node<'k>(&'k mut self, _t: &'k TransAttempt<'_, 't>)
-        -> Result<Option<&'k BtreeNode>, BchError>
+        -> Result<Option<LockedNode<'k, BtreeNode>>, BchError>
     {
-        // SAFETY: the node is locked by the iterator's path, while self is
-        // borrowed, within the attempt
+        // the node is locked by the iterator's path, while self is borrowed,
+        // within the attempt
         unsafe {
             let b = c::bch2_btree_iter_peek_node(self.raw_mut());
             // NULL past the last
-            Ok(errptr_or_null(b)?.map(|b| b.as_ref()))
+            Ok(errptr_or_null(b)?.map(|b| LockedNode::new(b.as_ref())))
         }
     }
 
@@ -3035,11 +3035,11 @@ impl<'t> BtreeNodeIter<'t> {
         }
     }
 
-    pub fn peek(&mut self) -> Result<Option<&BtreeNode>, BchError> {
+    pub fn peek(&mut self) -> Result<Option<LockedNode<'_, BtreeNode>>, BchError> {
         unsafe {
             let b = c::bch2_btree_iter_peek_node(self.raw.raw_mut());
             // NULL past the last
-            Ok(errptr_or_null(b)?.map(|b| b.as_ref()))
+            Ok(errptr_or_null(b)?.map(|b| LockedNode::new(b.as_ref())))
         }
     }
 
@@ -3067,7 +3067,7 @@ impl<'t> BtreeNodeIter<'t> {
     /// restart retries the node.
     pub fn for_each<F, R>(&mut self, trans: &BtreeTrans<'_>, mut f: F) -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&'a BtreeNode) -> Result<R, BchError>,
+        F: for<'a> FnMut(LockedNode<'a, BtreeNode>) -> Result<R, BchError>,
         R: LoopControl,
     {
         let raw = self.raw.raw_mut();
@@ -3078,7 +3078,7 @@ impl<'t> BtreeNodeIter<'t> {
                 Err(e) if is_restart(&e) => continue,
                 Err(e) => return Err(e),
                 Ok(None) => return Ok(Default::default()),
-                Ok(Some(b)) => unsafe { b.as_ref() },
+                Ok(Some(b)) => unsafe { LockedNode::new(b.as_ref()) },
             };
 
             t.verify_not_restarted();
@@ -3089,7 +3089,7 @@ impl<'t> BtreeNodeIter<'t> {
             // max_key. set_pos + bpos_successor re-traverses from the root, so
             // the journal overlay applies and journal-only nodes aren't skipped
             // the way next_node()'s sibling walk did. Matches for_each_btree_node().
-            let end = unsafe { b.contents() }.key.k.p;
+            let end = b.contents().key.k.p;
             match f(b).map(LoopControl::into_step) {
                 Err(e) if is_restart(&e) => continue,
                 Err(e) => return Err(e),
@@ -3201,18 +3201,16 @@ pub struct PathLeaf<'a> {
 }
 
 impl<'a> PathLeaf<'a> {
-    pub fn node(&self) -> &'a BtreeNode {
-        unsafe { &*(*self.l).b }
+    pub fn node(&self) -> LockedNode<'a, BtreeNode> {
+        unsafe { LockedNode::new(&*(*self.l).b) }
     }
 
     /// Where the bset search tree failed at the path's key, if it did:
     /// the node's bfloat_to_text(). Peeks the node iterator, moving it past deleted
     /// keys.
     pub fn bfloat_to_text(&self, out: &mut Printbuf) {
-        unsafe {
-            let b = self.node();
-            b.btree_node_iter_bfloat_to_text(b.contents(), out, &mut (*self.l).iter)
-        }
+        let b = self.node();
+        unsafe { b.btree_node_iter_bfloat_to_text(b.contents(), out, &mut (*self.l).iter) }
     }
 }
 

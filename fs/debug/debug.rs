@@ -93,7 +93,7 @@ impl DebugFile for Formats {
                                               BtreeIterFlags::empty());
             let full = iter.for_each(&trans, |b| {
                 prt!(out, "{}", b.to_text(fs));
-                let end = unsafe { b.contents() }.key.k.p;
+                let end = b.contents().key.k.p;
                 self.from = if end != SPOS_MAX { end.successor() } else { end };
 
                 // C's drop_locks_do(): the next level's iterator is made
@@ -138,7 +138,7 @@ impl DebugFile for BfloatFailed {
             // SAFETY: used before the unlock below
             if let Some(l) = unsafe { iter.leaf(t) } {
                 let b = l.node();
-                let end = unsafe { b.contents() }.key.k.p;
+                let end = b.contents().key.k.p;
                 if end > self.prev_node {
                     prt!(out, "{}", b.to_text(fs));
                     self.prev_node = end;

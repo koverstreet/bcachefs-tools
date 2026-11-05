@@ -605,7 +605,7 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
             );
 
             node_iter.for_each(&trans, |b| {
-                dump_node(fs, &mut devs, btree::BkeySC::from(unsafe { b.contents() }.key_i()), btree_node_size,
+                dump_node(fs, &mut devs, btree::BkeySC::from(b.contents().key_i()), btree_node_size,
                           cli.single_replica);
                 Ok(())
             }).map_err(|e| anyhow!("error walking btree {}: {}",
