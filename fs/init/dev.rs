@@ -1706,6 +1706,11 @@ impl Dev {
     }
 }
 
+#[c_export]
+pub fn bch2_dev_bdev(ca: &Dev) -> *mut c::block_device {
+    ca.disk_sb.bdev
+}
+
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
 #[c_export]
 pub fn bch2_dev_congested_read(ca: &Dev, now: u64) -> u32 {

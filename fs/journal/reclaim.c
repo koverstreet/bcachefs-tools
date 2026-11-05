@@ -399,8 +399,8 @@ static void bch2_journal_dev_do_discards(struct journal_device *ja)
 	while (should_discard_bucket(j, ja)) {
 		if (!c->opts.nochanges &&
 		    bch2_discard_opt_enabled(c, ca) &&
-		    bdev_max_discard_sectors(ca->disk_sb.bdev))
-			blkdev_issue_discard(ca->disk_sb.bdev,
+		    bdev_max_discard_sectors(bch2_dev_bdev(ca)))
+			blkdev_issue_discard(bch2_dev_bdev(ca),
 					     bucket_to_sector(ca,
 							      ja->buckets[ja->discard_idx]),
 					     ca->mi.bucket_size, GFP_NOIO);

@@ -996,7 +996,7 @@ static void btree_node_read_work(struct work_struct *work)
 		bio->bi_iter.bi_size	= btree_buf_bytes(b);
 
 		if (rb->ca) {
-			bio_set_dev(bio, ca->disk_sb.bdev);
+			bio_set_dev(bio, bch2_dev_bdev(ca));
 			submit_bio_wait(bio);
 		} else {
 			bio->bi_status = BLK_STS_REMOVED;
@@ -1153,7 +1153,7 @@ void bch2_btree_node_read(struct btree_trans *trans, struct btree *b,
 	if (rb->ca) {
 		this_cpu_add(ca->io_done->sectors[READ][BCH_DATA_btree],
 			     bio_sectors(bio));
-		bio_set_dev(bio, ca->disk_sb.bdev);
+		bio_set_dev(bio, bch2_dev_bdev(ca));
 
 		/*
 		 * Callers drop btree locks before reading a node but not srcu

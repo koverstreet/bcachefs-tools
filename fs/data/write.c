@@ -1222,7 +1222,7 @@ void bch2_submit_wbio_replicas(struct bch_write_bio *wbio, struct bch_fs *c,
 			this_cpu_add(ca->io_done->sectors[WRITE][type],
 				     bio_sectors(&n->bio));
 
-			bio_set_dev(&n->bio, ca->disk_sb.bdev);
+			bio_set_dev(&n->bio, bch2_dev_bdev(ca));
 
 			if (type != BCH_DATA_btree && unlikely(c->opts.no_data_io)) {
 				bio_endio(&n->bio);

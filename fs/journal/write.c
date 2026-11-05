@@ -680,7 +680,7 @@ static CLOSURE_CALLBACK(journal_write_submit)
 		 * contiguous buffers fit in a single bvec and the helper
 		 * returns one bio.
 		 */
-		struct bio *bio = bch2_bio_map_and_chain(ca->disk_sb.bdev,
+		struct bio *bio = bch2_bio_map_and_chain(bch2_dev_bdev(ca),
 				w->data, sectors << 9, ptr->offset,
 				opf, GFP_NOIO, &ja->bio_set);
 		struct journal_bio *jbio =
@@ -727,7 +727,7 @@ static CLOSURE_CALLBACK(journal_write_preflush)
 					   BCH_DEV_WRITE_REF_journal_write);
 
 			struct journal_device *ja = &ca->journal;
-			struct bio *bio = bio_alloc_bioset(ca->disk_sb.bdev, 0,
+			struct bio *bio = bio_alloc_bioset(bch2_dev_bdev(ca), 0,
 					REQ_OP_WRITE|REQ_SYNC|REQ_IDLE|
 					REQ_META|REQ_PREFLUSH,
 					GFP_NOIO, &ja->bio_set);

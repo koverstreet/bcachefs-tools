@@ -44,7 +44,7 @@ __cold void bch2_btree_node_ondisk_to_text(struct printbuf *out, struct bch_fs *
 		goto out;
 	}
 
-	bio = bio_alloc_bioset(ca->disk_sb.bdev,
+	bio = bio_alloc_bioset(bch2_dev_bdev(ca),
 			       bch2_buf_nr_bvecs(n_ondisk, btree_buf_bytes(b)),
 			       REQ_OP_READ|REQ_META,
 			       GFP_NOIO,
