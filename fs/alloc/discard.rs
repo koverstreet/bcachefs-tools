@@ -66,7 +66,7 @@ use crate::locking::{MemallocFlags, SeqLock};
 use crate::sb::counters::events;
 use crate::sb::members::DevIoRef;
 use crate::util::alloc::KVVec;
-use crate::util::bio::{Bio, BioBox, BioOwner, Endio, RawBio};
+use crate::util::bio::{Bio, BioOwner, Gathered};
 use crate::util::ffi::Opaque;
 use crate::util::time_stats::TimeStats;
 use crate::util::futex::{futex_wait, futex_wake};
@@ -79,6 +79,7 @@ use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
 use crate::util::{HumanReadable, Printbuf};
 use crate::{bch_err_fn, bch_err_msg, fsck_err, has_bio, prt};
+use core::pin::Pin;
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
 use pin_init::{pin_data, pin_init, stack_pin_init};
@@ -153,7 +154,6 @@ struct Worker<'a> {
 #[pin_data]
 #[repr(C)]
 pub(crate) struct DiscardBio {
-    done:    Option<GatherRef<KVVec<Discard>, waiter::Sync>>,
     discard: Option<Discard>,
     #[pin]
     bio:     Bio,
@@ -335,18 +335,12 @@ impl Drop for Discard {
     }
 }
 
-struct DiscardEndio;
-
-impl Endio<BioBox<DiscardBio>> for DiscardEndio {
-    fn endio(mut bio: BioBox<DiscardBio>) {
-        let this = bio.as_mut().project();
-        let done = this.done.take().expect("a discard bio, with its Gather ref");
-        let d = this.discard.take().expect("a discard bio, with its discard");
-        drop(bio);
-
+impl Gathered<KVVec<Discard>> for DiscardBio {
+    fn done(self: Pin<&mut Self>, _: Result<(), BchError>) -> Discard {
+        let d = self.project().discard.take().expect("a discard bio, with its discard");
         // while its io ref is ours: once put, it may be reaped
         d.ca.discard_slot_put();
-        done.put(d);
+        d
     }
 }
 
@@ -361,7 +355,6 @@ impl Discard {
         let _noio = MemallocFlags::noio();
         let mut bio = fs.discards.bioset
             .alloc::<BchError, _>(bdev, 0, c::req_op_REQ_OP_DISCARD, |b| pin_init!(DiscardBio {
-                done:    Some(done),
                 discard: Some(self),
                 bio      <- b.init::<BchError>(),
             }? BchError))
@@ -369,7 +362,7 @@ impl Discard {
 
         bio.bio_mut().set_sector(sector);
         bio.bio_mut().set_size(size);
-        bio.submit::<DiscardEndio>();
+        bio.submit_gathered(done);
     }
 }
 

@@ -277,28 +277,6 @@ impl<'a> IntoIterator for BioRange<'a> {
     }
 }
 
-/// # Invariants
-/// @bio is None, or a bio valid for 'a.
-pub struct BioIterator<'a> {
-    pub(super) bio: Option<NonNull<Bio>>,
-    pub(super) _p:  PhantomData<&'a Bio>,
-}
-
-impl<'a> Iterator for BioIterator<'a> {
-    type Item = &'a Bio;
-
-    fn next(&mut self) -> Option<&'a Bio> {
-        let bio = self.bio.take()?;
-        // SAFETY: by the invariant
-        let bio = unsafe { bio.as_ref() };
-        // INVARIANT: the next is a bio of the chain too
-        self.bio = NonNull::new(bio.bio.bi_next.cast());
-        Some(bio)
-    }
-}
-
-impl core::iter::FusedIterator for BioIterator<'_> {}
-
 impl BioRange<'_> {
     fn walkable(&self) -> bool {
         !self.is_empty() && !self.bio().no_advance_iter()
@@ -482,7 +460,7 @@ pub(super) fn folio<'a>(rest: &mut BioRange<'a>) -> Option<FolioVec<'a>> {
 
 #[cfg(all(test, not(kernel)))]
 mod tests {
-    use super::super::{Bio, BioBuf, BioOwner, BioRange};
+    use super::super::{Bio, BioBox, BioOwner, BioRange};
     use crate::c;
     use crate::errcode::BchError;
 
@@ -494,7 +472,7 @@ mod tests {
     #[test]
     fn ranges_and_chunks() {
         let (mut a, mut b, mut c_) = ([1u8; 8], [2u8; 4], [3u8; 6]);
-        let mut buf = BioBuf::<Bio>::new::<BchError, _>(core::ptr::null_mut(), 3, 0, |bio| bio.init()).unwrap();
+        let mut buf = BioBox::<Bio>::new::<BchError, _>(core::ptr::null_mut(), 3, 0, |bio| bio.init()).unwrap();
         for x in [&mut a[..], &mut b[..], &mut c_[..]] {
             // SAFETY: a buffer that outlives the bio, into one of its 3 bvecs
             unsafe { buf.bio_mut().map(x.as_mut_ptr(), x.len()) };
@@ -535,14 +513,14 @@ mod tests {
         assert_eq!((a, b, c_), ([1; 8], [2, 2, 9, 9], [9, 3, 3, 3, 0, 0]));
     }
 
-    /// A mapping's bvecs are its own: dropped, the bio has none, so none
+    /// A remapping's bvecs are its own: dropped, the bio has none, so none
     /// outlives the buffer's borrow.
     #[test]
-    fn mapping_ends_with_its_borrow() {
+    fn remapping_ends_with_its_borrow() {
         let buf = [5u8; 512];
-        let mut bio = BioBuf::<Bio>::new::<BchError, _>(core::ptr::null_mut(), 1,
+        let mut bio = BioBox::<Bio>::new::<BchError, _>(core::ptr::null_mut(), 1,
                                                         c::req_op_REQ_OP_WRITE, |b| b.init()).unwrap();
-        let m = bio.map_write(&buf);
+        let m = unsafe { bio.remap_write(&buf) };
         assert_eq!(m.owner.range_all().len(), 512);
         drop(m);
         assert_eq!(bio.range_all().len(), 0);

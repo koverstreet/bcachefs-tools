@@ -21,7 +21,7 @@ use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
 use crate::util::alloc::{init_at, kvzalloc, ABox, AVec, AllocError, ConstAlign, DArrayLoan,
                          KVVec};
-use crate::util::bio::{buf_nr_bvecs, Bio, BioBuf, BioOwner};
+use crate::util::bio::{Bio, BioBox, BioBuffersMapped, BioOwner};
 use crate::util::kernel::{local_clock, PAGE_SIZE};
 use crate::util::log::LogMsg;
 use crate::util::par::{self, Backend};
@@ -759,9 +759,8 @@ struct DevReader<'a> {
     ca:  &'a Dev,
     /* ca.journal, which the reader writes: read it here, never through ca */
     ja:  &'a mut c::journal_device,
-    /* page aligned: userspace reads into it O_DIRECT */
-    buf: ABox<[u8], ConstAlign<PAGE_SIZE>>,
-    bio: BioBuf<Bio>,
+    /* its buffer page aligned: userspace reads into it O_DIRECT */
+    bio: BioBox<Bio, BioBuffersMapped<ABox<[u8], ConstAlign<PAGE_SIZE>>>>,
 }
 
 impl<'a> DevReader<'a> {
@@ -772,15 +771,16 @@ impl<'a> DevReader<'a> {
         unsafe { buf.set_len(bytes) };
         let mut buf = buf.into_boxed_slice();
         buf.fill(0);
-        let nr_vecs = buf_nr_bvecs(buf.as_ptr(), bytes).try_into().expect("bvecs for a journal bucket");
-        let bio = BioBuf::<Bio>::new::<BchError, _>(ca.disk_sb.bdev, nr_vecs, c::req_op_REQ_OP_READ, |b| b.init())?;
-        Ok(DevReader { fs, ca, ja, buf, bio })
+        let bio = BioBox::<Bio, BioBuffersMapped<_>>::new_with::<BchError, _>(
+            ca.disk_sb.bdev, c::req_op_REQ_OP_READ, buf, |b| b.init())?;
+        Ok(DevReader { fs, ca, ja, bio })
     }
 
     fn read(&mut self, sector: u64, bytes: usize) -> Result<(), BchError> {
-        self.bio.bio_mut().reset(self.ca.disk_sb.bdev, c::req_op_REQ_OP_READ);
+        self.bio.reset(self.ca.disk_sb.bdev, c::req_op_REQ_OP_READ);
         self.bio.bio_mut().set_sector(sector);
-        self.bio.map_read(&mut self.buf[..bytes]).submit_wait()
+        self.bio.bio_mut().shrink(bytes.try_into().expect("a journal read of 4G or more"));
+        self.bio.submit_wait()
     }
 
     fn bucket_to_sector(&self, bucket: usize) -> u64 {
@@ -811,7 +811,7 @@ impl<'a> DevReader<'a> {
         }
 
         while offset < end {
-            let j = &mut self.buf[((offset - start) << 9) as usize..];
+            let j = &mut self.bio.buf_mut()[((offset - start) << 9) as usize..];
             let h = cast_plain_mut::<Head<c::jset>>(j).expect("a jset's header");
 
             let sectors = match validate::jset_validate_early(fs, Some(ca), h, offset, (end - offset) as u32)? {
@@ -893,7 +893,7 @@ impl<'a> DevReader<'a> {
             return; /* not fatal - bucket may be readable on another device */
         }
 
-        let j = cast_plain::<Head<c::jset>>(&self.buf).expect("a jset's header");
+        let j = cast_plain::<Head<c::jset>>(self.bio.buf()).expect("a jset's header");
         if j.magic.get() != self.fs.jset_magic() {
             return;
         }

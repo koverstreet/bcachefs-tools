@@ -253,8 +253,8 @@ use cstruct_macros::{c_export, CStruct, bitfield, c_extern, c_typedef, TypeInfo}
 use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
      crate::util::place::Contained, crate::util::refcount::TryRefcount, crate::util::sleep::Sleep,
      core::sync::atomic::Ordering::Acquire};
-use crate::types::{DArray, bits_to_longs, c_default};
-use crate::util::bio::{Bio, BioBufPtr};
+use crate::types::{DArray, RustOnly, bits_to_longs, c_default, rust_only};
+use crate::util::bio::{Bio, BioBox};
 use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::{bytes_in, c_char, strscpy};
 use crate::util::refcount::{ARef, AlwaysRefCounted, WaitableRef};
@@ -299,6 +299,8 @@ impl core::ops::DerefMut for bch_fs_sb {
     }
 }
 
+pub type SbBio = rust_only!(Option<BioBox<Bio>>);
+
 nest! {
     /// A device's superblock, and what reads and writes it: what changes
     /// while the device is a filesystem's, under its sb_lock.
@@ -308,8 +310,7 @@ nest! {
         #[c_anon("struct bch_sb *sb; size_t buffer_size; u64 dirty")]
         pub buf: c::bch_sb_buf,
         /// Its bio, as big as the buffer, if @have_bio: Rust's alone
-        #[c("struct bio *bio")]
-        pub bio: Option<BioBufPtr<Bio>>,
+        pub bio: SbBio,
         #[c_bitfield]
         #>[bitfield(u8, ty = u32)]
         pub bits: pub struct bch_sb_handle_bits {
@@ -324,7 +325,7 @@ nest! {
 
 impl Default for bch_sb_io {
     fn default() -> Self {
-        bch_sb_io { buf: Default::default(), bio: None, bits: bch_sb_handle_bits::new(), seq: 0 }
+        bch_sb_io { buf: Default::default(), bio: RustOnly::from_value(None), bits: bch_sb_handle_bits::new(), seq: 0 }
     }
 }
 

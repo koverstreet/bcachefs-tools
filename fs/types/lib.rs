@@ -306,6 +306,16 @@ where
             })
         }
     }
+
+    /// A RustOnly holding @t, for a struct made by value.
+    pub fn from_value(t: T) -> Self {
+        let () = Self::FITS;
+        let mut this = core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            (&raw mut (*this.as_mut_ptr()).storage).cast::<T>().write(t);
+            this.assume_init()
+        }
+    }
 }
 
 impl<T, const U64S: usize, const ALIGN: usize> Drop for RustOnly<T, U64S, ALIGN>

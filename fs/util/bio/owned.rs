@@ -3,37 +3,38 @@
 //! A bio's owners. Each owns a T that ends in its bio - HasBio: the bio is
 //! the T's last field, and the T is found from it by that offset.
 //!
-//! - BioBox<T>: a ref on a bio from a BioSet<T>, a bioset whose front_pad is
-//!   the rest of the T. bio_put() on drop.
-//! - BioBuf<T>: a T and its inline bvecs, in one allocation of their own.
-//!   BioBufPtr<T> is one as a thin pointer, for C's struct bio * fields.
+//! - BioBox<T>: a T from a BioSet<T>, a bioset whose front_pad is the rest of
+//!   the T - or, from BioBox::new(), a T and its inline bvecs, in one
+//!   allocation of their own. Dropped, it's put to its set, or freed.
 //!
 //! They deref to the T, and change it through Pin<&mut T>: the T holds its
 //! bio, which is pinned.
 //!
-//! A T is made around its bio: the bioset, or BioBuf::new(), puts the bio
+//! A T is made around its bio: the bioset, or BioBox::new(), puts the bio
 //! where it goes, then the caller's initializer does the rest of the T - its
 //! bio field from BioInPlace::init(), which writes nothing.
 //!
-//! Submitting (RawBio::submit()) turns the owner into its bio for the block
-//! layer; the endio turns it back, and hands it to Endio::endio().
+//! A box submitted to a Gather (BioBox::submit_gathered()) is given up to its
+//! IO, and its endio has it back from the bio, drops it, then puts what its T
+//! makes of the IO's status (Gathered) to the gather.
 
 use core::alloc::Layout;
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicBool, Ordering::{Acquire, Release}};
-use core::ops::Deref;
+use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
 use core::ptr::NonNull;
 
 use pin_init::{pin_data, PinInit};
 
-use super::{bio_of, of_bio, pages, Bio, BioField, BioOwner, BioRange, HasBio, RawBio};
+use super::{bio_of, of_bio, Bio, BioBuffersMapped, BioBuffersUnmanaged, BioField, BioOwner, Buffers, HasBio,
+            MapBuf};
+use crate::util::gather::{Fold, GatherRef, Width};
+use crate::util::task::Waiter;
 use crate::c;
-use crate::fs::Fs;
-use crate::util::kernel::PAGE_SIZE;
 use crate::errcode::{ret_to_result_void, BchError};
-use crate::util::alloc::{current_gfp_context_raw, init_at, kfree, kzalloc, KBox};
+use crate::util::alloc::{current_gfp_context_raw, init_at, kfree, kzalloc};
 use crate::util::ffi::Opaque;
 
 pub struct BioInPlace(*mut c::bio);
@@ -201,43 +202,24 @@ impl<T: HasBio> BioSet<T> {
         I: PinInit<T, E>,
         E: From<BchError>,
     {
+        self.alloc_with(bdev, opf, nr_vecs, init)
+    }
+
+    /// alloc(), with its bvecs filled from @src: B's, released as the box is
+    /// dropped.
+    pub fn alloc_with<B: Buffers, E, I>(&self, bdev: *mut c::block_device, opf: u32, src: B::Src<'_>,
+                                        init: impl FnOnce(BioInPlace) -> I) -> Result<BioBox<T, B>, E>
+    where
+        I: PinInit<T, E>,
+        E: From<BchError>,
+    {
         // SAFETY: a live bioset
         let gfp = current_gfp_context_raw(c::GFP_KERNEL);
-        let bio = unsafe { c::bio_alloc_bioset(bdev, nr_vecs as _, opf as _, gfp, self.set.as_ptr()) };
-        Self::init_new(bio, init)
-    }
-
-    /// alloc(), the bio a clone of @src's bio, at @src: its bvecs shared, so it
-    /// borrows them as @src does.
-    pub fn alloc_clone<'a, E, I>(&self, bdev: *mut c::block_device, src: BioRange<'a>,
-                                 init: impl FnOnce(BioInPlace) -> I) -> Result<BioClone<'a, T>, E>
-    where
-        I: PinInit<T, E>,
-        E: From<BchError>,
-    {
-        // SAFETY: a live bioset; @src's bio only read
-        let bio = unsafe {
-            c::bio_alloc_clone(bdev, core::ptr::from_ref(src.bio().raw()).cast_mut(),
-                               current_gfp_context_raw(c::GFP_KERNEL), self.set.as_ptr())
-        };
+        let bio = unsafe { c::bio_alloc_bioset(bdev, B::nr_vecs(&src) as _, opf as _, gfp, self.set.as_ptr()) };
         let mut b = Self::init_new(bio, init)?;
-        b.bio_mut().raw_mut().bi_iter = src.pos();
-        Ok(BioClone { b, _src: PhantomData })
-    }
-
-    /// alloc(), with @size bytes of data of its own, @gfp's - what that can't
-    /// have from the page allocator from the bounce pool, so it doesn't fail
-    /// for want of it.
-    pub fn alloc_data<'f, E, I>(&self, fs: &'f Fs, size: usize, gfp: c::gfp_t,
-                                init: impl FnOnce(BioInPlace) -> I) -> Result<BioBoxData<'f, T>, E>
-    where
-        I: PinInit<T, E>,
-        E: From<BchError>,
-    {
-        let nr_vecs = size.div_ceil(PAGE_SIZE).try_into().expect("a bio's data of more than 64k pages");
-        let mut b = self.alloc(core::ptr::null_mut(), nr_vecs, 0, init)?;
-        pages::alloc_pages_pool(fs, b.bio_mut().raw_mut(), size, gfp);
-        Ok(BioBoxData { b, fs })
+        let buffers = B::fill(b.bio_mut(), src)?;
+        let t = core::mem::ManuallyDrop::new(b).t;
+        Ok(BioBox { t, buffers })
     }
 
     fn init_new<E, I>(bio: *mut c::bio, init: impl FnOnce(BioInPlace) -> I) -> Result<BioBox<T>, E>
@@ -253,7 +235,7 @@ impl<T: HasBio> BioSet<T> {
         // SAFETY: the T, its bio there, the rest for @init
         match unsafe { init_at(init(BioInPlace(bio)), t) } {
             // SAFETY: a bio's T
-            Ok(()) => Ok(BioBox(unsafe { NonNull::new_unchecked(t) })),
+            Ok(()) => Ok(BioBox { t: unsafe { NonNull::new_unchecked(t) }, buffers: BioBuffersUnmanaged }),
             Err(e) => {
                 // SAFETY: the bio just allocated, its one ref
                 unsafe { c::bio_put(bio) };
@@ -287,179 +269,113 @@ impl<T: FrontPad> Drop for BioSet<T> {
     }
 }
 
-pub struct BioBox<T: HasBio>(NonNull<T>);
+pub struct BioBox<T: HasBio, B: Buffers = BioBuffersUnmanaged> {
+    t:       NonNull<T>,
+    buffers: B,
+}
 
 // SAFETY: a T, as a Box's: what has the box has the T
-unsafe impl<T: HasBio + Send> Send for BioBox<T> {}
-unsafe impl<T: HasBio + Sync> Sync for BioBox<T> {}
+unsafe impl<T: HasBio + Send, B: Buffers + Send> Send for BioBox<T, B> {}
+unsafe impl<T: HasBio + Sync, B: Buffers + Sync> Sync for BioBox<T, B> {}
 
-// SAFETY: the T's bio, and back - container_of()
-unsafe impl<T: HasBio> RawBio for BioBox<T> {
-    fn into_raw(self) -> *mut c::bio {
-        let bio = bio_of(self.0.as_ptr());
+/// A bio submitted to a Gather: what its T makes of its IO's status, to put
+/// to the gather. It runs where the IO completes - softirq, or an interrupt -
+/// so it may not sleep, nor may T's Drop: what would goes to a workqueue.
+pub trait Gathered<F: Fold>: HasBio {
+    fn done(self: Pin<&mut Self>, status: Result<(), BchError>) -> F::Item;
+}
+
+// B is Default: it has nothing the bio doesn't, so the box is its bio
+impl<T: HasBio, B: Buffers + Default> BioBox<T, B> {
+    /// Submitted, given up to the IO with its ref to @r's Gather: once it's
+    /// done, what its T makes of the IO's status (Gathered) is put - after
+    /// the box is dropped, so its bio's freed before the gather's waiter can
+    /// wake. 'static: the IO has it for as long as it takes.
+    pub fn submit_gathered<F: Fold, Wt: Waiter, W: Width>(self, r: GatherRef<F, Wt, W>)
+    where
+        T: Gathered<F>,
+        Self: Send + 'static,
+    {
+        let bio = bio_of(self.t.as_ptr());
         core::mem::forget(self);
-        bio
-    }
-
-    unsafe fn from_raw(bio: *mut c::bio) -> Self {
-        // SAFETY: the caller's
-        Self(unsafe { NonNull::new_unchecked(of_bio::<T>(bio)) })
+        unsafe {
+            (*bio).bi_private = r.into_raw().cast_mut().cast();
+            (*bio).bi_end_io = Some(gathered_endio::<T, B, F, Wt, W>);
+            c::submit_bio(bio);
+        }
     }
 }
 
-impl<T: HasBio> Deref for BioBox<T> {
+unsafe extern "C" fn gathered_endio<T, B, F, Wt, W>(bio: *mut c::bio)
+where
+    T: Gathered<F>,
+    B: Buffers + Default,
+    F: Fold,
+    Wt: Waiter,
+    W: Width,
+{
+    let (r, mut b) = unsafe {
+        (GatherRef::<F, Wt, W>::from_raw((*bio).bi_private.cast()),
+         BioBox::<T, B> { t: NonNull::new_unchecked(of_bio::<T>(bio)), buffers: B::default() })
+    };
+    let status = b.bio().status();
+    let v = b.as_mut().done(status);
+    drop(b);
+    r.put(v);
+}
+
+impl<T: HasBio, B: Buffers> Deref for BioBox<T, B> {
     type Target = T;
 
     fn deref(&self) -> &T {
         // SAFETY: the T, live while it's had
-        unsafe { self.0.as_ref() }
+        unsafe { self.t.as_ref() }
     }
 }
 
-impl<T: HasBio> BioBox<T> {
+impl<T: HasBio, B: Buffers> BioBox<T, B> {
     /// The T, for an owner that keeps the box and reaches it by pointer.
     pub fn as_ptr(&self) -> *mut T {
-        self.0.as_ptr()
+        self.t.as_ptr()
     }
 
     pub fn as_mut(&mut self) -> Pin<&mut T> {
         // SAFETY: the T, live while it's had, and the box's alone - a bio in
         // flight has given up its box; never moved from where its set made it
-        unsafe { Pin::new_unchecked(self.0.as_mut()) }
+        unsafe { Pin::new_unchecked(self.t.as_mut()) }
     }
+}
 
+impl<T: HasBio> BioBox<T> {
     /// The T dropped, and the bio's ref given up raw, for a put that may come
-    /// later - bch2_bio_check_pages_dirty()'s, from a workqueue.
+    /// later - bch2_bio_check_pages_dirty()'s, from a workqueue. A bioset's
+    /// bio: bio_put() can't free one with its bvecs inline.
     #[cfg(kernel)]
     pub(super) fn into_bio(self) -> *mut c::bio {
-        let t = core::mem::ManuallyDrop::new(self).0;
+        let t = core::mem::ManuallyDrop::new(self).t;
+        let bio = bio_of(t.as_ptr());
+        assert!(unsafe { !(*bio).bi_pool.is_null() }, "into_bio() of a bio with its bvecs inline");
         unsafe { core::ptr::drop_in_place(t.as_ptr()) };
-        bio_of(t.as_ptr())
-    }
-}
-
-// SAFETY: the box's bio, its only ref
-unsafe impl<T: HasBio> BioOwner for BioBox<T> {
-    fn bio(&self) -> &Bio {
-        HasBio::bio(&**self)
+        bio
     }
 
-    fn bio_mut(&mut self) -> Pin<&mut Bio> {
-        HasBio::bio_mut(self.as_mut())
-    }
-}
-
-impl<T: HasBio> Drop for BioBox<T> {
-    fn drop(&mut self) {
-        // SAFETY: the T and its ref, dropped then put - which frees it to its
-        // set, if the ref's the last
-        unsafe {
-            core::ptr::drop_in_place(self.0.as_ptr());
-            c::bio_put(bio_of(self.0.as_ptr()));
-        }
-    }
-}
-
-/// A BioBox of a clone: alloc_clone()'s, borrowing the bio it shares the
-/// bvecs of.
-pub struct BioClone<'a, T: HasBio> {
-    b:    BioBox<T>,
-    _src: PhantomData<BioRange<'a>>,
-}
-
-impl<T: HasBio> Deref for BioClone<'_, T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        &self.b
-    }
-}
-
-// SAFETY: its box's
-unsafe impl<T: HasBio> BioOwner for BioClone<'_, T> {
-    fn bio(&self) -> &Bio {
-        self.b.bio()
-    }
-
-    fn bio_mut(&mut self) -> Pin<&mut Bio> {
-        self.b.bio_mut()
-    }
-}
-
-/// A BioBox and its data: alloc_data()'s, freed with it.
-pub struct BioBoxData<'f, T: HasBio> {
-    b:  BioBox<T>,
-    fs: &'f Fs,
-}
-
-impl<T: HasBio> Deref for BioBoxData<'_, T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        &self.b
-    }
-}
-
-// SAFETY: its box's
-unsafe impl<T: HasBio> BioOwner for BioBoxData<'_, T> {
-    fn bio(&self) -> &Bio {
-        self.b.bio()
-    }
-
-    fn bio_mut(&mut self) -> Pin<&mut Bio> {
-        self.b.bio_mut()
-    }
-}
-
-impl<T: HasBio> Drop for BioBoxData<'_, T> {
-    fn drop(&mut self) {
-        // what's in its bvecs is alloc_data()'s, or more of the same: nothing
-        // safe puts anything else there for longer than a borrow of the box
-        unsafe { pages::free_pages_pool(self.fs, self.b.bio_mut().raw_mut()) }
-    }
-}
-
-// ── BioBuf ───────────────────────────────────────────────────────────────
-
-/// A T, then its bio's bvecs.
-#[repr(C)]
-struct Inline<T> {
-    t:    T,
-    vecs: [c::bio_vec],
-}
-
-/// A DST, sized when made. A KBox, not a KVBox: an endio may drop it, and
-/// kvfree() isn't safe in interrupt context.
-pub struct BioBuf<T: HasBio>(KBox<Inline<T>>);
-
-// SAFETY: as BioBox's
-unsafe impl<T: HasBio + Send> Send for BioBuf<T> {}
-
-impl<T: HasBio> BioBuf<T> {
-    /// As BioSet::alloc(), the bvecs inline.
+    /// As BioSet::alloc(), the bvecs inline. kzalloc(), not kvzalloc(): an
+    /// endio may drop it, and kvfree() isn't safe in interrupt context.
     pub fn new<E, I>(bdev: *mut c::block_device, nr_vecs: u16, opf: u32,
                      init: impl FnOnce(BioInPlace) -> I) -> Result<Self, E>
     where
         I: PinInit<T, E>,
         E: From<BchError>,
     {
-        let layout = Layout::new::<T>()
-            .extend(Layout::array::<c::bio_vec>(nr_vecs.into()).expect("a u16's worth of bvecs"))
-            .expect("a T and its bvecs").0
-            .pad_to_align();
+        let (layout, vecs) = inline_layout::<T>(nr_vecs);
         let p = kzalloc(layout).map_err(|_| BchError::from(c::ENOMEM))?;
-        let inline = core::ptr::slice_from_raw_parts_mut(p.as_ptr().cast::<c::bio_vec>(), nr_vecs.into())
-            as *mut Inline<T>;
+        let t = p.as_ptr().cast::<T>();
+        let bio = bio_of(t);
 
-        // SAFETY: the allocation, laid out as Inline<T> with nr_vecs bvecs:
-        // its bio, given its own bvecs, then the rest of the T by @init -
-        // and then a KBox's, as kzalloc() is
         unsafe {
-            let t = &raw mut (*inline).t;
-            let bio = bio_of(t);
-            c::bio_init(bio, bdev, (&raw mut (*inline).vecs).cast(), nr_vecs, opf as _);
+            c::bio_init(bio, bdev, p.as_ptr().add(vecs).cast(), nr_vecs, opf as _);
             match init_at(init(BioInPlace(bio)), t) {
-                Ok(()) => Ok(Self(KBox::from_raw(inline))),
+                Ok(()) => Ok(BioBox { t: p.cast(), buffers: BioBuffersUnmanaged }),
                 Err(e) => {
                     c::bio_uninit(bio);
                     kfree(p, layout);
@@ -470,96 +386,75 @@ impl<T: HasBio> BioBuf<T> {
     }
 }
 
-impl<T: HasBio> Deref for BioBuf<T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        &self.0.t
+impl<T: HasBio, B: Buffers> BioBox<T, B> {
+    /// As BioSet::alloc_with(), the bvecs inline.
+    pub fn new_with<E, I>(bdev: *mut c::block_device, opf: u32, src: B::Src<'_>,
+                          init: impl FnOnce(BioInPlace) -> I) -> Result<Self, E>
+    where
+        I: PinInit<T, E>,
+        E: From<BchError>,
+    {
+        let mut b = BioBox::<T>::new(bdev, B::nr_vecs(&src), opf, init)?;
+        let buffers = B::fill(b.bio_mut(), src)?;
+        let t = core::mem::ManuallyDrop::new(b).t;
+        Ok(BioBox { t, buffers })
     }
 }
 
-// SAFETY: the buffer's bio, its own
-unsafe impl<T: HasBio> BioOwner for BioBuf<T> {
-    fn bio(&self) -> &Bio {
-        HasBio::bio(&self.0.t)
+impl<T: HasBio, B: MapBuf> BioBox<T, BioBuffersMapped<B>> {
+    pub fn buf(&self) -> &B::Target {
+        &self.buffers.0
     }
 
-    fn bio_mut(&mut self) -> Pin<&mut Bio> {
-        HasBio::bio_mut(unsafe { Pin::new_unchecked(&mut self.0.t) })
-    }
-}
-
-// SAFETY: the T's bio, and back: container_of(), and its bvecs' count -
-// bi_max_vecs, which bio_init() set from it and bio_reset() keeps
-unsafe impl<T: HasBio> RawBio for BioBuf<T> {
-    fn into_raw(self) -> *mut c::bio {
-        let this = core::mem::ManuallyDrop::new(self);
-        // SAFETY: the box, moved out of what's never dropped
-        let inline = KBox::into_raw(unsafe { core::ptr::read(&this.0) });
-        // SAFETY: the box's
-        bio_of(unsafe { &raw mut (*inline).t })
-    }
-
-    unsafe fn from_raw(bio: *mut c::bio) -> Self {
-        // SAFETY: the caller's - a BioBuf<T>'s bio
-        unsafe {
-            let nr = (*bio).bi_max_vecs as usize;
-            let inline = core::ptr::slice_from_raw_parts_mut(of_bio::<T>(bio).cast::<c::bio_vec>(), nr);
-            Self(KBox::from_raw(inline as *mut Inline<T>))
-        }
+    pub fn buf_mut(&mut self) -> &mut B::Target
+    where
+        B: DerefMut,
+    {
+        &mut self.buffers.0
     }
 }
 
-impl<T: HasBio> Drop for BioBuf<T> {
-    fn drop(&mut self) {
-        // SAFETY: its bio, idle: the box then drops the T, and frees it all
-        unsafe { c::bio_uninit(self.bio_mut().raw_mut()) }
-    }
+fn inline_layout<T>(nr_vecs: u16) -> (Layout, usize) {
+    let (layout, vecs) = Layout::new::<T>()
+        .extend(Layout::array::<c::bio_vec>(nr_vecs.into()).expect("a u16's worth of bvecs"))
+        .expect("a T and its bvecs");
+    (layout.pad_to_align(), vecs)
 }
 
-/// For a field C shares as a struct bio *: an Option of one is a nullable
-/// pointer, zeroed None, where a BioBuf is a fat one. For as long as such
-/// structs are C's.
-#[repr(transparent)]
-pub struct BioBufPtr<T: HasBio>(NonNull<T>);
+// An Option of one is None as its pointer is null, all zeroes; Unmanaged
+// buffers are nothing
+unsafe impl<T: HasBio> ::pin_init::ZeroableOption for BioBox<T> {}
 
-// SAFETY: as BioBuf's
-unsafe impl<T: HasBio + Send> Send for BioBufPtr<T> {}
+// SAFETY: the box's bio, its only ref
+unsafe impl<T: HasBio, B: Buffers> BioOwner for BioBox<T, B> {
+    type Buffers = B;
 
-// SAFETY: a NonNull, repr(transparent): an Option of one is a nullable
-// pointer, all zeroes None
-unsafe impl<T: HasBio> ::pin_init::ZeroableOption for BioBufPtr<T> {}
-
-impl<T: HasBio> From<BioBuf<T>> for BioBufPtr<T> {
-    fn from(b: BioBuf<T>) -> Self {
-        // SAFETY: a bio's T: into_raw()'s
-        BioBufPtr(unsafe { NonNull::new_unchecked(of_bio::<T>(b.into_raw())) })
-    }
-}
-
-impl<T: HasBio> Deref for BioBufPtr<T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        // SAFETY: its T, live while it's had
-        unsafe { self.0.as_ref() }
-    }
-}
-
-// SAFETY: the buffer's bio, its own
-unsafe impl<T: HasBio> BioOwner for BioBufPtr<T> {
     fn bio(&self) -> &Bio {
         HasBio::bio(&**self)
     }
 
     fn bio_mut(&mut self) -> Pin<&mut Bio> {
-        HasBio::bio_mut(unsafe { Pin::new_unchecked(self.0.as_mut()) })
+        HasBio::bio_mut(self.as_mut())
     }
 }
 
-impl<T: HasBio> Drop for BioBufPtr<T> {
+impl<T: HasBio, B: Buffers> Drop for BioBox<T, B> {
+    /// A bioset's bio is put to its set - bio_put() - and one with its bvecs
+    /// inline, which has no set, freed as new() laid it out: its bvecs'
+    /// count is bi_max_vecs, which bio_init() set and bio_reset() keeps.
     fn drop(&mut self) {
-        // SAFETY: a BioBuf's bio, from into_raw(), given back once
-        drop(unsafe { BioBuf::<T>::from_raw(bio_of(self.0.as_ptr())) })
+        let t = self.t.as_ptr();
+        let bio = bio_of(t);
+        self.buffers.release(unsafe { Bio::from_raw_mut(bio) });
+        unsafe {
+            let (pool, nr_vecs) = ((*bio).bi_pool, (*bio).bi_max_vecs);
+            core::ptr::drop_in_place(t);
+            if !pool.is_null() {
+                c::bio_put(bio);
+            } else {
+                c::bio_uninit(bio);
+                kfree(self.t.cast(), inline_layout::<T>(nr_vecs).0);
+            }
+        }
     }
 }

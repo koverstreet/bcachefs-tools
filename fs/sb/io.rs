@@ -154,7 +154,7 @@ use crate::util::vstructs::VStructError;
 use core::ffi::{c_int, c_uint, CStr, c_ulong};
 use crate::util::alloc::{Arc, KVVec};
 use core::sync::atomic::AtomicPtr;
-use crate::util::bio::{Bio, BioBuf, BioBufPtr, BioOwner};
+use crate::util::bio::{Bio, BioBox, BioOwner};
 use crate::util::gather::Gather;
 use crate::util::task::waiter;
 use crate::util::ffi::{c_char, Opaque};
@@ -1145,11 +1145,11 @@ impl c::bch_sb_io {
                 return Ok(());
             }
 
-            let bio = BioBuf::<Bio>::new::<BchError, _>(core::ptr::null_mut(),
+            let bio = BioBox::<Bio>::new::<BchError, _>(core::ptr::null_mut(),
                                                         nr.try_into().expect("a superblock's worth of bvecs"),
                                                         0, |b| b.init())
                 .map_err(|_| BchError::from(c::bch_errcode::BCH_ERR_ENOMEM_sb_bio_realloc))?;
-            self.bio = Some(bio.into());
+            *self.bio = Some(bio);
         }
         Ok(())
     }
@@ -1174,7 +1174,7 @@ impl c::bch_sb_io {
 
     /// The buffer and bio freed.
     fn free(&mut self) {
-        self.bio = None;
+        *self.bio = None;
         self.buf.free();
     }
 }
@@ -1272,9 +1272,9 @@ pub fn bch2_free_super(sb: &mut c::bch_sb_handle) {
 impl c::bch_sb_io {
     /// The bio, set up for an IO by @opf at @sector of @dev - with the
     /// buffer it maps, borrowed apart.
-    fn bio(&mut self, dev: &c::bch_sb_bdev, opf: u32, sector: u64) -> (&mut BioBufPtr<Bio>, &mut [u8]) {
+    fn bio(&mut self, dev: &c::bch_sb_bdev, opf: u32, sector: u64) -> (&mut BioBox<Bio>, &mut [u8]) {
         let bio = self.bio.as_mut().expect("superblock IO without a bio: have_bio wasn't set");
-        bio.bio_mut().reset(dev.bdev, opf);
+        bio.reset(dev.bdev, opf);
         bio.bio_mut().set_sector(sector);
         (bio, self.buf.buffer_mut())
     }
@@ -1282,8 +1282,8 @@ impl c::bch_sb_io {
     /// @bytes from @sector of @dev into the buffer.
     fn read(&mut self, dev: &c::bch_sb_bdev, sector: u64, bytes: usize) -> Result<(), BchError> {
         let (bio, buf) = self.bio(dev, c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META, sector);
-        // bound, so the Mapped drops before the bio it borrows
-        let ret = bio.map_read(&mut buf[..bytes]).submit_wait();
+        // bound, so the Remapped drops before the bio it borrows
+        let ret = unsafe { bio.remap_read(&mut buf[..bytes]) }.submit_wait();
         ret
     }
 
@@ -1292,7 +1292,7 @@ impl c::bch_sb_io {
         let (bio, buf) = self.bio(dev, c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_META | c::REQ_FUA,
                                   sector);
         // as read()'s
-        let ret = bio.map_write(&buf[..bytes]).submit_wait();
+        let ret = unsafe { bio.remap_write(&buf[..bytes]) }.submit_wait();
         ret
     }
 }
@@ -2290,8 +2290,8 @@ impl<'a> SbIos<'a> {
         // wait() has waited on the gather
         unsafe {
             match &mut f.buf {
-                Some(buf) => bio.map_read(buf).submit_gathered(r),
-                None      => bio.map_write(&sb_buf[..bytes]).submit_gathered(r),
+                Some(buf) => bio.remap_read(buf).submit_gathered(r),
+                None      => bio.remap_write(&sb_buf[..bytes]).submit_gathered(r),
             }
         }
         Ok(())

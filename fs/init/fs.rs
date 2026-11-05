@@ -511,9 +511,6 @@ impl Fs {
             bch2_fs_btree_init_early(p);
             c::bch2_fs_journal_init_early(&raw mut (*p).journal);
 
-            let Ok(()) = c::mutex::init(&raw mut (*p).bio_bounce_pages_lock, c"&c->bio_bounce_pages_lock",
-                                        new_lock!(@key));
-
             let Ok(()) = c::spinlock_t::init(&raw mut (*p).write_error_lock, c"&c->write_error_lock",
                                              new_lock!(@key));
 

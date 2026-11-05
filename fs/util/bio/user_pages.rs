@@ -65,8 +65,6 @@ impl<T: HasBio> BioBox<T> {
     }
 }
 
-/// # Safety
-/// @bio is a bio, not in flight, nothing else has it.
 #[c_export]
 pub unsafe fn bch2_bio_set_pages_dirty(bio: *mut c::bio) {
     unsafe { Bio::from_raw_mut(bio) }.set_pages_dirty()
@@ -74,9 +72,6 @@ pub unsafe fn bch2_bio_set_pages_dirty(bio: *mut c::bio) {
 
 /// @bio given back, its pages released - those cleaned since
 /// set_pages_dirty() dirtied again first, from DIRTY_WORK.
-///
-/// # Safety
-/// @bio's ref is ours, given up; it's done, and nothing else has it.
 #[c_export]
 pub unsafe fn bch2_bio_check_pages_dirty(bio: *mut c::bio) {
     let all_dirty = unsafe { Bio::from_raw(bio) }.range_all().folios()

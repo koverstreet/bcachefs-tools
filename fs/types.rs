@@ -14,7 +14,6 @@ use crate::util::kobject::Kobject;
 use crate::util::projections::Volatile;
 use crate::util::bio::BioSet;
 use crate::util::late::Late;
-use crate::util::mempool::Mempool;
 use crate::util::place::Placed;
 use crate::util::refcount::AtomicRef;
 use crate::util::workqueue::{ReffedWork, Workqueue, WqFlags};
@@ -866,11 +865,9 @@ pub struct Fs {
     #[late(BioSet::new(4, false), ENOMEM_bio_write_init)]
     #[c("struct bio_set replica_set")]
     pub replica_set: Late<BioSet<c::bch_write_bio>>,
-    pub bio_bounce_pages_lock: c::mutex,
     #[pin]
-    #[init(crate::util::bio::pages::bounce_pool(options), ENOMEM_bio_bounce_pages_init)]
-    #[c("mempool_t bio_bounce_bufs")]
-    pub bio_bounce_bufs: Mempool,
+    #[init(RustOnly::new(crate::util::bio::pages::BouncePool::new(options)), ENOMEM_bio_bounce_pages_init)]
+    pub(crate) bio_bounce: rust_only!(crate::util::bio::pages::BouncePool),
     #[pin]
     #[init(RustOnly::new(crate::data::nocow_locking::NocowLocks::new()))]
     pub(crate) nocow_locks: rust_only!(crate::data::nocow_locking::NocowLocks),

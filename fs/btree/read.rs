@@ -24,10 +24,10 @@ use crate::fs::WriteRef;
 use crate::prt;
 use crate::sb::members::DevIoRef;
 use crate::types::{Le32, c_default};
-use crate::util::bio::{buf_nr_bvecs, Bio, BioBuf, BioOwner};
+use crate::util::bio::{Bio, BioBox, BioBuffersMapped, BioOwner};
 use crate::util::refcount::TryRefcount;
 use crate::util::backref::BackRef;
-use crate::util::task::{spawn_static, Resumable, Resume, Spawn};
+use crate::util::task::{spawn_static, waiter, Resumable, Resume, Spawn};
 use crate::util::vstructs::{cast_plain, Head, SelfSized, Unvalidated};
 use crate::util::Printbuf;
 use crate::util::sleep::Sleep;
@@ -216,8 +216,7 @@ pub type Replicas<T> = ArrayVec<T, { c::BCH_BKEY_PTRS_MAX as usize }>;
 pub struct ReplicaRead<'f> {
     fs:      &'f Fs,
     ca:      DevIoRef<c::bch_dev_read_ref>,
-    buf:     Bounce<'f>,
-    bio:     BioBuf<Bio>,
+    bio:     BioBox<Bio, BioBuffersMapped<Bounce<'f>>>,
     /// Its pointer's, by position in the key, as ptrs_io_error's bits are
     pub ptr_bit: u32,
 }
@@ -234,13 +233,11 @@ impl<'f> ReplicaRead<'f> {
             .ok_or_else(|| fs.err(c::bch_errcode::BCH_ERR_device_offline))?;
 
         let bytes = fs.opts.btree_node_size.get() as usize;
-        let buf = Bounce::new(fs, bytes);
-        let nr_vecs = buf_nr_bvecs(buf.as_bytes().as_ptr(), bytes).try_into().expect("bvecs for a btree node");
-        let mut bio = BioBuf::<Bio>::new::<BchError, _>(ca.disk_sb.bdev, nr_vecs, c::req_op_REQ_OP_READ,
-                                                         |b| b.init())?;
+        let mut bio = BioBox::<Bio, BioBuffersMapped<_>>::new_with::<BchError, _>(
+            ca.disk_sb.bdev, c::req_op_REQ_OP_READ, Bounce::new(fs, bytes), |b| b.init())?;
         bio.bio_mut().set_sector(pick.ptr.offset());
 
-        Ok(Some(Self { fs, ca, buf, bio, ptr_bit }))
+        Ok(Some(Self { fs, ca, bio, ptr_bit }))
     }
 
     /// Whether the replica, read by read_replicas() - @read, how that went - is
@@ -250,7 +247,7 @@ impl<'f> ReplicaRead<'f> {
         let (fs, k) = (self.fs, key.key());
         let mut err = Printbuf::new();
         let good = match read {
-            Ok(()) => node_replica_good(fs, k, self.buf.as_bytes(), &mut err),
+            Ok(()) => node_replica_good(fs, k, self.bio.buf(), &mut err),
             Err(e) => {
                 prt!(&mut err, "read error: {e}");
                 false
@@ -272,11 +269,10 @@ impl<'f> ReplicaRead<'f> {
 /// @reads read, all of them in flight at once - submitted before any is
 /// waited on, as a task waits on one thing at a time: how each went.
 pub async fn read_replicas(reads: &mut [ReplicaRead<'_>]) -> Replicas<Result<(), BchError>> {
-    let mut mapped: Replicas<_> = reads.iter_mut().map(|r| r.bio.map_read(r.buf.as_bytes_mut())).collect();
-
+    let waiter = waiter::Async::current().await;
     let mut submitted = Replicas::new();
-    for m in mapped.iter_mut() {
-        submitted.push(m.submit().await);
+    for r in reads.iter_mut() {
+        submitted.push(r.bio.submit(waiter));
     }
 
     let mut ret = Replicas::new();

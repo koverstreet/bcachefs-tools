@@ -23,7 +23,7 @@ use crate::init::passes;
 use crate::locking::Locked;
 use crate::types::{Le16, Le64};
 use crate::util::alloc::KVVec;
-use crate::util::bio::{buf_nr_bvecs, Bio, BioBuf, BioOwner};
+use crate::util::bio::{buf_nr_bvecs, Bio, BioBox, BioOwner};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::ffi::Opaque;
 use crate::data_structures::heap::{MinHeap, PeekMut};
@@ -178,7 +178,7 @@ struct DevScan<'f> {
     fs:  &'f Fs,
     ca:  &'f Dev,
     buf: NodeBuf<'f>,
-    bio: BioBuf<Bio>,
+    bio: BioBox<Bio>,
 }
 
 impl<'f> DevScan<'f> {
@@ -190,7 +190,7 @@ impl<'f> DevScan<'f> {
 
         let nr_vecs = buf_nr_bvecs(buf.node().contents.get_mut().data.cast(), fs.opts.btree_node_size.get() as usize)
             .try_into().expect("bvecs for a btree node");
-        let Ok(bio) = BioBuf::<Bio>::new::<BchError, _>(ca.disk_sb.bdev, nr_vecs, c::req_op_REQ_OP_READ, |b| b.init())
+        let Ok(bio) = BioBox::<Bio>::new::<BchError, _>(ca.disk_sb.bdev, nr_vecs, c::req_op_REQ_OP_READ, |b| b.init())
         else {
             bch_err!(fs, "read_btree_nodes_worker: error allocating bio");
             return Err(c::ENOMEM.into());
@@ -202,11 +202,12 @@ impl<'f> DevScan<'f> {
     fn read(&mut self, offset: u64, bytes: usize) -> Result<(), BchError> {
         let DevScan { ca, buf, bio, .. } = self;
 
-        bio.bio_mut().reset(ca.disk_sb.bdev, c::req_op_REQ_OP_READ);
+        bio.reset(ca.disk_sb.bdev, c::req_op_REQ_OP_READ);
         bio.bio_mut().set_sector(offset);
 
         let submit_time = local_clock();
-        let ret = bio.map_read(buf.bytes(bytes)).submit_wait();
+        // remapped each read: read_done swaps the node's buffer
+        let ret = unsafe { bio.remap_read(buf.bytes(bytes)) }.submit_wait();
         ca.account_io_completion(c::bch_member_error_type::BCH_MEMBER_ERROR_read, submit_time, ret.is_ok());
         ret
     }

@@ -471,7 +471,7 @@ impl c::data_update {
         // SAFETY: the pages are alloc_pages()'s, the bvecs bios_init()'s
         // kzalloc(); neither bio is in flight
         unsafe {
-            pages::free_pages_pool(self.fs(), &mut self.op.wbio.bio);
+            pages::free_pages_pool(&self.fs().bio_bounce, &mut self.op.wbio.bio);
             c::rust_kfree(self.bvecs.cast());
         }
         self.bvecs = core::ptr::null_mut();

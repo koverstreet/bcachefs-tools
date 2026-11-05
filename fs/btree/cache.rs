@@ -100,6 +100,28 @@ impl<'f> Bounce<'f> {
 
 unsafe impl Send for Bounce<'_> {}
 
+impl core::ops::Deref for Bounce<'_> {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl core::ops::DerefMut for Bounce<'_> {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        self.as_bytes_mut()
+    }
+}
+
+// Its buffer, until it's dropped: swap() trades it, but isn't reached
+// through the bytes
+unsafe impl crate::util::bio::MapBuf for Bounce<'_> {
+    fn as_raw(&self) -> (*mut u8, usize) {
+        (self.p.as_ptr().cast(), self.bytes)
+    }
+}
+
 impl Drop for Bounce<'_> {
     fn drop(&mut self) {
         unsafe { bch2_btree_bounce_free(self.fs.as_ptr(), self.bytes, self.mempool, self.p.as_ptr().cast()) }

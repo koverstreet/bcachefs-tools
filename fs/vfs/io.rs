@@ -2,6 +2,7 @@
 
 use core::ffi::c_int;
 use core::ops::ControlFlow;
+use core::pin::Pin;
 use kernel::page::PAGE_SHIFT;
 
 use cstruct_macros::c_export;
@@ -21,9 +22,9 @@ use crate::{inode, inode_opts};
 use crate::sb::counters::events;
 use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume;
-use crate::util::bio::{Bio, BioBox, Endio, RawBio};
+use crate::util::bio::{Bio, Gathered};
 use crate::util::file::File;
-use crate::util::gather::{Gather, GatherRef};
+use crate::util::gather::Gather;
 use crate::util::kernel::{current_id, ktime_get_coarse_real_ts64, ktime_get_ns, PAGE_BYTES, PAGE_SECTORS, PAGE_SECTORS_SHIFT};
 use crate::util::log::LogMsg;
 use crate::util::refcount::TryRefcount;
@@ -40,19 +41,14 @@ use super::vfs_inode::VfsInode;
 #[pin_data]
 #[repr(C)]
 pub(crate) struct NocowFlush {
-    done: GatherRef<(), waiter::Sync>,
     ca:   DevIoRef<c::bch_dev_write_ref>,
     #[pin]
     bio:  Bio,
 }
 has_bio!(NocowFlush, bio);
 
-struct NocowFlushEndio;
-
-impl Endio<BioBox<NocowFlush>> for NocowFlushEndio {
-    fn endio(bio: BioBox<NocowFlush>) {
-        drop(bio);
-    }
+impl Gathered<()> for NocowFlush {
+    fn done(self: Pin<&mut Self>, _: Result<(), BchError>) {}
 }
 
 impl InodeInfo {
@@ -79,16 +75,14 @@ impl InodeInfo {
             let ca = fs.dev_rcu(dev as u32, &read_lock()).and_then(|ca| fs.io_ref_tryget::<c::bch_dev_write_ref>(ca));
             let Some(ca) = ca else { continue };
             let bdev = ca.disk_sb.bdev;
-            let done = g.get();
 
             let bio = fs.vfs.nocow_flush_bioset
                 .alloc::<BchError, _>(bdev, 0, c::req_op_REQ_OP_WRITE | c::REQ_PREFLUSH, |b| pin_init!(NocowFlush {
-                    done,
                     ca,
                     bio <- b.init::<BchError>(),
                 }? BchError))
                 .expect("a nocow flush bio: the bioset's mempool waits rather than fail");
-            bio.submit::<NocowFlushEndio>();
+            bio.submit_gathered(g.get());
         }
         g.wait_sync();
     }

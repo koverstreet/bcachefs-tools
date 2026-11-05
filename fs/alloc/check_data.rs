@@ -41,7 +41,7 @@ use crate::inode_opts::get_io_opts;
 use crate::opts::data_type_str;
 use crate::util::alloc::{AVec, ConstAlign};
 use crate::util::kernel::PAGE_SIZE;
-use crate::util::bio::{buf_nr_bvecs, Bio, BioBuf, BioOwner};
+use crate::util::bio::{Bio, BioBox, BioBuffersMapped, BioOwner};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
@@ -158,15 +158,15 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
     let mut buf = buf.into_boxed_slice();
     buf.fill(0);
 
-    let nr_vecs = buf_nr_bvecs(buf.as_ptr(), bytes).try_into().expect("bvecs for a btree node or an extent");
-    let mut bio = BioBuf::<Bio>::new::<BchError, _>(ca.disk_sb.bdev, nr_vecs, c::req_op_REQ_OP_READ as u32,
-                                                     |b| b.init())?;
+    let mut bio = BioBox::<Bio, BioBuffersMapped<_>>::new_with::<BchError, _>(
+        ca.disk_sb.bdev, c::req_op_REQ_OP_READ as u32, buf, |b| b.init())?;
     bio.bio_mut().set_sector(p.ptr.offset());
-    bio.map_read(&mut buf).submit_wait()?;
+    bio.submit_wait()?;
+    let buf = bio.buf();
 
     let mut why = Printbuf::new();
     let good = if is_btree_ptr {
-        node_replica_good(fs, k.into(), &buf, &mut why)
+        node_replica_good(fs, k.into(), buf, &mut why)
     } else {
         let ty = c::bch_csum_type(p.crc.csum_type.into());
         let csum = fs.checksum(ty, extent_nonce(k.k.bversion, &p.crc), &buf[..bytes]);
