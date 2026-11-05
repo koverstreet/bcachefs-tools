@@ -31,6 +31,7 @@
 //! slice::swap() are.
 
 use core::cmp::Ordering;
+use crate::util::alloc::{AllocError, KVVec};
 
 /// A one-based eytzinger tree of `size` nodes.
 #[derive(Clone, Copy, Debug)]
@@ -404,6 +405,31 @@ impl Eytzinger0<usize> {
         sort_by_impl(v, v.len(), 1, cmp)
     }
 
+    pub fn insert_at_inorder<T>(v: &mut KVVec<T>, rank: usize, value: T) -> Result<(), AllocError> {
+        let old = Self::of(v);
+        assert!(rank <= old.size());
+        let len = old.size().checked_add(1).filter(|&n| n <= usize::MAX / 2).ok_or(AllocError)?;
+        let new = Self::new(len);
+        let mut out = KVVec::<T>::with_capacity(len)?;
+        let slots = out.spare_capacity_mut();
+
+        // Drain in physical order to move ownership, mapping each old inorder
+        // rank to its new slot with the insertion's rank skipped.
+        for (i, e) in v.drain_all().enumerate() {
+            let r = old.to_inorder(i);
+            let dst = new.from_inorder(r + usize::from(r >= rank));
+            slots[dst].write(e);
+            if i & 1023 == 0 {
+                crate::util::kernel::cond_resched();
+            }
+        }
+        slots[new.from_inorder(rank)].write(value);
+        // The rank mapping covers every slot except the insertion, now filled.
+        unsafe { out.inc_len(len) };
+        *v = out;
+        Ok(())
+    }
+
     // By index, for nodes that aren't a slice's - a table of runtime-sized
     // entries:
 
@@ -423,6 +449,68 @@ impl Eytzinger0<usize> {
 #[cfg(test)]
 mod tests {
     use super::{Eytzinger0, Eytzinger1};
+    use crate::util::alloc::KVVec;
+
+    #[test]
+    fn insert_owned_every_rank() {
+        use std::{cell::Cell, rc::Rc};
+
+        struct Item {
+            key: usize,
+            drops: Rc<Vec<Cell<usize>>>,
+        }
+        impl Drop for Item {
+            fn drop(&mut self) {
+                self.drops[self.key].set(self.drops[self.key].get() + 1);
+            }
+        }
+
+        for n in (0..130).chain([255, 256, 257, 511, 512, 513]) {
+            for rank in 0..=n {
+                let drops = Rc::new((0..=2 * n).map(|_| Cell::new(0)).collect::<Vec<_>>());
+                let mut v = KVVec::new();
+                for i in 0..n {
+                    v.push(Item { key: 2 * i + 1, drops: drops.clone() }).unwrap();
+                }
+                Eytzinger0::sort_by(&mut v, |a, b| a.key.cmp(&b.key));
+                Eytzinger0::insert_at_inorder(&mut v, rank, Item { key: 2 * rank, drops: drops.clone() }).unwrap();
+
+                let expected: Vec<_> = (0..=n).map(|i| {
+                    if i < rank { 2 * i + 1 } else if i == rank { 2 * rank } else { 2 * i - 1 }
+                }).collect();
+                let actual: Vec<_> = Eytzinger0::of(&v).iter().map(|i| v[i].key).collect();
+                assert_eq!(actual, expected, "n={n} rank={rank}");
+                assert!(drops.iter().all(|d| d.get() == 0));
+                for &key in &expected {
+                    assert_eq!(Eytzinger0::find_by(&v, |e| e.key.cmp(&key)).map(|i| v[i].key), Some(key));
+                }
+                drop(v);
+                for (key, d) in drops.iter().enumerate() {
+                    assert_eq!(d.get(), usize::from(key % 2 == 1 || key == 2 * rank));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn insert_repeated_with_duplicates() {
+        let mut v = KVVec::<u32>::new();
+        let mut expected = Vec::new();
+        for i in 0..1024 {
+            let value = (i * 53) % 129;
+            let tree = Eytzinger0::of(&v);
+            let rank = Eytzinger0::find_ge_by(&v, |e| e.cmp(&value))
+                .map_or(tree.size(), |i| tree.to_inorder(i));
+            Eytzinger0::insert_at_inorder(&mut v, rank, value).unwrap();
+            expected.push(value);
+            expected.sort_unstable();
+            assert!(Eytzinger0::of(&v).iter().map(|i| v[i]).eq(expected.iter().copied()));
+        }
+        for key in 0..=130 {
+            assert_eq!(Eytzinger0::find_ge_by(&v, |e| e.cmp(&key)).map(|i| v[i]),
+                       expected.iter().copied().find(|&v| v >= key));
+        }
+    }
 
     /// A permutation of 0, 2, 4.. (2n - 2), from an LCG: deterministic, no
     /// dependencies.
