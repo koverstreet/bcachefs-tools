@@ -6,12 +6,15 @@
 
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::iter::KeyIter;
+use crate::btree::locking::{btree_node_locked_type, BTREE_NODE_UNLOCKED};
 use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::cstructs::c as cs;
-use crate::errcode::{bch_errcode, err_ptr, BchError};
+use crate::errcode::{bch_errcode, err_ptr, errptr_or_null, BchError};
 use crate::format::{Bpos, Btree};
 use crate::types::c_default;
+#[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
+use crate::util::kernel::local_clock;
 use cstruct_macros::{bitfield, c_name, c_typedef, CStruct};
 use core::ops::{Deref, DerefMut, Index, IndexMut};
 use nestify::nest;
@@ -174,5 +177,95 @@ impl BtreePath {
         let level = b.c.level as usize;
 
         core::ptr::eq(self.l[level].b, b) && self.lock_seq_matches(b, level)
+    }
+}
+
+impl btree_node_locked_type {
+    /// The lock at @level in a path's nodes_locked: two bits a level, the six
+    /// lock type plus one.
+    pub fn of(nodes_locked: u8, level: usize) -> Self {
+        Self::from_bits(BTREE_NODE_UNLOCKED + ((i32::from(nodes_locked) >> (level << 1)) & 3))
+    }
+}
+
+impl BtreePath {
+    pub(crate) fn is_btree_node(&self, level: usize) -> bool {
+        level < c::BTREE_MAX_DEPTH as usize && matches!(errptr_or_null(self.l[level].b), Ok(Some(_)))
+    }
+
+    pub(crate) fn locked_type(&self, level: usize) -> btree_node_locked_type {
+        btree_node_locked_type::of(self.nodes_locked, level)
+    }
+
+    pub(crate) fn locked_type_nowrite(&self, level: usize) -> btree_node_locked_type {
+        match self.locked_type(level) {
+            btree_node_locked_type::BTREE_NODE_WRITE_LOCKED => btree_node_locked_type::BTREE_NODE_INTENT_LOCKED,
+            have => have,
+        }
+    }
+
+    pub(crate) fn write_locked(&self, level: usize) -> bool {
+        matches!(self.locked_type(level), btree_node_locked_type::BTREE_NODE_WRITE_LOCKED)
+    }
+
+    pub(crate) fn intent_locked(&self, level: usize) -> bool {
+        matches!(self.locked_type(level), btree_node_locked_type::BTREE_NODE_INTENT_LOCKED)
+    }
+
+    pub(crate) fn read_locked(&self, level: usize) -> bool {
+        matches!(self.locked_type(level), btree_node_locked_type::BTREE_NODE_READ_LOCKED)
+    }
+
+    pub(crate) fn locked(&self, level: usize) -> bool {
+        !matches!(self.locked_type(level), btree_node_locked_type::BTREE_NODE_UNLOCKED)
+    }
+
+    pub(crate) fn mark_locked_noreset(&mut self, level: usize, ty: btree_node_locked_type) {
+        /* relying on this to avoid a branch */
+        const { assert!(c::SIX_LOCK_read as i32 == 0 && c::SIX_LOCK_intent as i32 == 1) };
+
+        self.nodes_locked &= !(3 << (level << 1));
+        self.nodes_locked |= ((ty as i32 + 1) as u8) << (level << 1);
+    }
+
+    pub(crate) fn mark_locked(&mut self, level: usize, ty: btree_node_locked_type) {
+        self.mark_locked_noreset(level, ty);
+        #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
+        {
+            self.l[level].lock_taken_time = local_clock();
+        }
+    }
+
+    /// __btree_lock_want()
+    pub(crate) fn lock_want_six(&self, level: usize) -> c::six_lock_type {
+        if level < self.locks_want() as usize {
+            c::six_lock_type::SIX_LOCK_intent
+        } else {
+            c::six_lock_type::SIX_LOCK_read
+        }
+    }
+
+    pub(crate) fn lock_want(&self, level: usize) -> btree_node_locked_type {
+        let (path_level, locks_want) = (self.level() as usize, self.locks_want() as usize);
+
+        if level < path_level {
+            btree_node_locked_type::BTREE_NODE_UNLOCKED
+        } else if level < locks_want {
+            btree_node_locked_type::BTREE_NODE_INTENT_LOCKED
+        } else if level == path_level {
+            btree_node_locked_type::BTREE_NODE_READ_LOCKED
+        } else {
+            btree_node_locked_type::BTREE_NODE_UNLOCKED
+        }
+    }
+
+    /// Only with something locked.
+    pub(crate) fn lowest_level_locked(&self) -> usize {
+        self.nodes_locked.trailing_zeros() as usize >> 1
+    }
+
+    /// Only with something locked.
+    pub(crate) fn highest_level_locked(&self) -> usize {
+        (u8::BITS - 1 - self.nodes_locked.leading_zeros()) as usize >> 1
     }
 }

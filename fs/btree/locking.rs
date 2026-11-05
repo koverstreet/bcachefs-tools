@@ -7,13 +7,16 @@
 
 use crate::fs::Fs;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
-use crate::btree::path::PathIdx;
+use crate::btree::path::{BtreePath, PathIdx};
 use crate::errcode::BchError;
-use crate::locking::{ExclusiveGuard, Locked, RawTimedLock};
+use crate::locking::{memalloc_flags_restore, memalloc_flags_save, ExclusiveGuard, Locked, RawTimedLock, PF_MEMALLOC_NOIO};
 use crate::c;
+use crate::util::percpu::{bch2_migrate_disable, bch2_migrate_enable, bch2_raw_smp_processor_id};
+#[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
+use crate::util::{kernel::local_clock, time_stats::TimeStats};
 use crate::util::Printbuf;
 use crate::types::{DArray, c_default};
-use core::ffi::{c_int, c_uint};
+use core::ffi::{c_int, c_uint, c_ulong};
 use cstruct_macros::{bitfield, c_extern, CStruct, c_enum};
 use nestify::nest;
 
@@ -27,6 +30,83 @@ c_enum! {
         BTREE_NODE_READ_LOCKED = c::SIX_LOCK_read as i32,
         BTREE_NODE_INTENT_LOCKED = c::SIX_LOCK_intent as i32,
         BTREE_NODE_WRITE_LOCKED = c::SIX_LOCK_write as i32,
+    }
+}
+
+/* trans locked state */
+
+impl BtreeTrans<'_> {
+    #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
+    pub(crate) fn stats(&self) -> Option<&c::btree_transaction_stats> {
+        self.fs().btree.trans.stats.get(self.fn_idx as usize)
+    }
+
+    pub(crate) fn lock_hold_time_update(&self, path: &BtreePath, level: usize) {
+        #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
+        if let Some(s) = self.stats() {
+            s.lock_hold_times.update_at(path.l[level].lock_taken_time, local_clock());
+        }
+        #[cfg(not(CONFIG_BCACHEFS_LOCK_TIME_STATS))]
+        let _ = (path, level);
+    }
+
+    pub(crate) fn maybe_disable_migrate(&self) {
+        /*
+         * Pin to CPU while btree locks are held: keeps cache footprint
+         * hot, and per-CPU cursors (e.g. inode allocation) stable
+         * across transaction restarts. Released in trans_set_unlocked,
+         * so any wait that goes through bch2_trans_unlock(_long)
+         * happens with migration enabled - including the cond_resched
+         * in bch2_trans_begin and the freezer-visible window during
+         * suspend.
+         */
+        let shard_cpu = self.shard_cpu.get();
+        if !self.migrate_disabled() &&
+           shard_cpu >= 0 &&
+           shard_cpu as c_uint == unsafe { bch2_raw_smp_processor_id() } {
+            self.set_migrate_disabled(true);
+            unsafe { bch2_migrate_disable() };
+        }
+    }
+
+    pub(crate) fn enable_migrate(&self) {
+        if self.migrate_disabled() {
+            self.set_migrate_disabled(false);
+            unsafe { bch2_migrate_enable() };
+        }
+    }
+
+    /// Lockdep gets no caller ip, which Rust can't name.
+    pub(crate) fn mark_locked(&self, trylock: bool) {
+        if self.locked() {
+            return;
+        }
+
+        self.set_locked(true);
+        self.last_unlock_ip.set(0);
+        #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+        self.dep_map.acquire(trylock, false, 0);
+        #[cfg(not(CONFIG_DEBUG_LOCK_ALLOC))]
+        let _ = trylock;
+
+        self.set_pf_memalloc_noio(memalloc_flags_save(PF_MEMALLOC_NOIO) != 0);
+
+        self.maybe_disable_migrate();
+    }
+
+    /// @ret_ip is C's _RET_IP_ - ret_ip!() in the entry point - for
+    /// bch2_trans_unlocked_or_in_restart_error().
+    pub(crate) fn mark_unlocked(&self, ret_ip: c_ulong) {
+        if !self.locked() {
+            return;
+        }
+
+        self.set_locked(false);
+        self.last_unlock_ip.set(ret_ip);
+        #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+        self.dep_map.release(0);
+
+        memalloc_flags_restore(PF_MEMALLOC_NOIO, if self.pf_memalloc_noio() { PF_MEMALLOC_NOIO } else { 0 });
     }
 }
 
