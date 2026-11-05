@@ -142,7 +142,7 @@ impl Csum {
                 Csum::Crc32c { seed, .. } => *seed = c::crc32c(*seed as u32, p.cast(), len).into(),
                 Csum::Crc64 { seed, .. } => *seed = c::crc64_be(*seed, p.cast(), len),
                 Csum::Xxhash(s) => { c::xxh64_update(s, p.cast(), len); }
-                Csum::Poly1305(ctx, _) => c::poly1305_update(ctx, p, len as c_uint),
+                Csum::Poly1305(ctx, _) => c::poly1305_update(ctx, p, len as _),
             }
         }
     }
