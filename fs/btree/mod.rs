@@ -39,6 +39,7 @@ pub mod journal_overlay;
 pub mod locking;
 pub mod node;
 pub mod node_scan;
+pub mod path;
 pub mod read;
 pub mod trigger;
 pub mod types;
