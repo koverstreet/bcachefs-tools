@@ -713,6 +713,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_ge, BkeyI, BkeyS, BkeySC};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
 use crate::c;
+use crate::data::inline_data::{InlineDataMut, DATA};
 use crate::data::keylist::Keylist;
 use crate::data::ptrs::{Ptrs, PtrsMut};
 use crate::data::write_extent::write_extent;
@@ -726,7 +727,6 @@ use crate::debug::trace::events;
 use crate::sb::members::{DevIo, DevIoRef};
 use crate::snapshots::subvolume;
 use crate::util::bio::{of_bio, Bio};
-use crate::util::vstructs::plain_bytes_mut;
 use crate::util::closure::{ClosureRef, HasClosure, Running};
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{current_runtime, local_clock, unlikely, READ, WRITE};
@@ -1510,23 +1510,37 @@ fn write_data_inline(mut op: Running<Op>, data_len: u32) {
 
     fs.check_set_feature(c::bch_sb_feature::BCH_FEATURE_inline_data);
 
-    let room = crate::btree::bkey::BKEY_U64S + (data_len as usize).div_ceil(8);
+    // with a checksum of its own, if the filesystem may have them
+    let ty = if fs.request_incompat_feature(
+        c::bcachefs_metadata_version::bcachefs_metadata_version_inline_data_csum).is_ok() {
+        c::bch_bkey_type::KEY_TYPE_inline_data_v2
+    } else {
+        c::bch_bkey_type::KEY_TYPE_inline_data
+    };
+
+    let sectors = op.wbio.bio.bi_iter.bi_size >> 9;
+    let p = Bpos { offset: op.pos.offset + u64::from(sectors), ..op.pos };
+    let k = c::bkey { type_: ty.0 as u8, p, size: sectors, bversion: op.version, ..c::bkey::new() };
+
+    let len = data_len as usize;
+    let val_u64s = (DATA.of(&k).expect("an inline data type") + len).div_ceil(8);
+    let room = crate::btree::bkey::BKEY_U64S + val_u64s;
     if let Err(e) = op.insert_keys.reserve(room) {
         op.set_error(e.into());
         return write_done(op);
     }
-
-    let sectors = op.wbio.bio.bi_iter.bi_size >> 9;
-    op.pos.offset += u64::from(sectors);
+    op.pos = p;
 
     let o = &mut *op;
     o.insert_keys.push_with(room, |id| {
-        *id.k_mut() = c::bkey { type_: c::bch_bkey_type::KEY_TYPE_inline_data.0 as u8, p: o.pos,
-                                size: sectors, bversion: o.version, ..c::bkey::new() };
+        *id.k_mut() = k;
+        id.set_val_u64s(val_u64s).expect("reserved");
 
-        let len = data_len as usize;
-        id.set_val_u64s(len.div_ceil(8)).expect("reserved");
-        o.wbio.bio_mut().range().copy_to(&mut plain_bytes_mut(id.val_mut())[..len]);
+        let d = InlineDataMut::of(BkeyS::from(id.key_mut())).expect("an inline data key");
+        o.wbio.bio_mut().range().copy_to(&mut d.data[..len]);
+        if let Some(h) = d.csum {
+            *h = c::InlineDataCsum::new(fs, &o.opts, d.data);
+        }
     });
 
     __write_index(&mut op);
