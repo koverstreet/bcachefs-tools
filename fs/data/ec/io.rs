@@ -145,16 +145,17 @@ fn block_done<R: IoRefIdx>(ca: DevIoRef<R>, ptr: &c::bch_extent_ptr, submit_time
     }
 }
 
-/// A round of block IO on @buf: reads, or writes, as @R's io ref is; waited
+/// A round of block IO on @buf: reads, or writes, as @Rw's io ref is; waited
 /// on by @Wt.
+// Not R: 7.4's #[pin_data] generates projections generic over an R of its own
 #[pin_data]
-pub(crate) struct BlockIo<'a, R: IoRefIdx, Wt: Waiter> {
+pub(crate) struct BlockIo<'a, Rw: IoRefIdx, Wt: Waiter> {
     /// Waited on, or its drop waits, before the buffer's had back
     #[pin]
     done:    Gather<BlockErrs, Wt>,
     fs:      &'a Fs,
     buf:     &'a mut StripeBuf,
-    _r:      PhantomData<fn() -> R>,
+    _r:      PhantomData<fn() -> Rw>,
 }
 
 impl<'a, Wt: Waiter> BlockIo<'a, c::bch_dev_read_ref, Wt> {

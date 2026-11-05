@@ -253,7 +253,9 @@ struct Header {
     started:   Cell<bool>,
     finished:  Cell<bool>,
     runq_next: AtomicPtr<Header>,
-    poll:      unsafe fn(NonNull<Header>, &mut Context<'_>) -> Poll<()>,
+    // Not Context<'_>: 7.4's #[pin_data] takes a lifetime it doesn't know
+    // for a field it borrows
+    poll:      for<'c> unsafe fn(NonNull<Header>, &mut Context<'c>) -> Poll<()>,
     finish:    unsafe fn(NonNull<Header>),
     _rcu:      RcuMember,
 }
