@@ -461,13 +461,8 @@ mod vfs {
     use crate::opts::{self, OptChange};
     use crate::types::CStatic;
     use crate::vfs::dentry::Dentry;
+    use crate::vfs::idmap::RawIdmap;
     use crate::vfs::inode::{InodeInfo, ATTR_CTIME};
-
-    /// An xattr_handler's ->set() idmap: const from 7.4.
-    #[cfg(linux_ge = "7.4")]
-    type SetIdmap = *const c::mnt_idmap;
-    #[cfg(not(linux_ge = "7.4"))]
-    type SetIdmap = *mut c::mnt_idmap;
 
     /// What listxattr writes into: as C's struct xattr_buf. Without a buffer,
     /// only how much would be written is counted.
@@ -576,7 +571,7 @@ mod vfs {
     #[allow(clippy::too_many_arguments)]
     pub unsafe extern "C" fn bch2_xattr_set_handler(
         handler: *const c::xattr_handler,
-        _idmap:  SetIdmap,
+        _idmap:  RawIdmap,
         _dentry: *mut c::dentry,
         vinode:  *mut c::inode,
         name:    *const c_char,
@@ -786,7 +781,7 @@ mod vfs {
     #[allow(clippy::too_many_arguments)]
     pub unsafe extern "C" fn bch2_xattr_bcachefs_set(
         _handler: *const c::xattr_handler,
-        _idmap:   SetIdmap,
+        _idmap:   RawIdmap,
         dentry:   *mut c::dentry,
         vinode:   *mut c::inode,
         name:     *const c_char,
@@ -806,7 +801,7 @@ mod vfs {
     #[allow(clippy::too_many_arguments)]
     pub extern "C" fn bch2_xattr_bcachefs_set_effective(
         _handler: *const c::xattr_handler,
-        _idmap:   SetIdmap,
+        _idmap:   RawIdmap,
         _dentry:  *mut c::dentry,
         _vinode:  *mut c::inode,
         _name:    *const c_char,

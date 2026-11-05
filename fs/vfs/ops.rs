@@ -17,7 +17,7 @@ use crate::util::seq_file::SeqFile;
 
 use super::dentry::Dentry;
 use super::export::NameBuf;
-use super::idmap::MntIdmap;
+use super::idmap::{MntIdmap, RawIdmap};
 use super::inode::InodeInfo;
 use super::path::Path;
 use super::super_block::SuperBlock;
@@ -53,7 +53,7 @@ from_raw! {
     /// get_link's, None in an RCU walk.
     Option<Dentry<'a>>    = *mut c::dentry      => |r| (!r.is_null()).then(|| Dentry::borrow_raw(r));
     &'a Path              = *const c::path      => |r| &*r.cast();
-    MntIdmap<'a>          = *mut c::mnt_idmap   => |r| MntIdmap::borrow_raw(r);
+    MntIdmap<'a>          = RawIdmap            => |r| MntIdmap::borrow_raw(r);
     /// One this thread is writing.
     &'a SeqFile           = *mut c::seq_file    => |r| SeqFile::from_raw(r);
     &'a CStr              = *const c_char       => |r| CStr::from_ptr(r.cast());

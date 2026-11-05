@@ -56,8 +56,10 @@ impl InodeInfo {
                          rdev: c::dev_t, snapshot_src: c::subvol_inum, flags: u32)
         -> Result<InodeRef, BchError>
     {
+        // fs.c's takes it mut: before 7.4, mapped_fsuid() does
+        let idmap = idmap.as_ptr() as *mut c::mnt_idmap;
         unsafe {
-            InodeInfo::from_c(__bch2_create(idmap.as_ptr(), self.raw(), dentry.as_ptr(), mode, rdev,
+            InodeInfo::from_c(__bch2_create(idmap, self.raw(), dentry.as_ptr(), mode, rdev,
                                             snapshot_src, flags))
         }
     }

@@ -18,15 +18,21 @@ use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::util::file::File;
 use crate::vfs::vfs_inode::VfsInode;
 
+/// The VFS's idmap pointer: const from 7.4.
+#[cfg(linux_ge = "7.4")]
+pub type RawIdmap = *const c::mnt_idmap;
+#[cfg(not(linux_ge = "7.4"))]
+pub type RawIdmap = *mut c::mnt_idmap;
+
 /// The idmap of a mount, for 'f: the file opened through it is borrowed - an
 /// open file pins its mount - or the VFS call it was passed to runs.
 #[derive(Clone, Copy)]
-pub struct MntIdmap<'f>(*mut c::mnt_idmap, PhantomData<&'f c::mnt_idmap>);
+pub struct MntIdmap<'f>(RawIdmap, PhantomData<&'f c::mnt_idmap>);
 
 impl<'f> MntIdmap<'f> {
     /// # Safety
     /// @idmap is the mount's, live for 'f.
-    pub unsafe fn borrow_raw(idmap: *mut c::mnt_idmap) -> Self {
+    pub unsafe fn borrow_raw(idmap: RawIdmap) -> Self {
         MntIdmap(idmap, PhantomData)
     }
 
@@ -45,7 +51,7 @@ impl<'f> MntIdmap<'f> {
         MntIdmap(idmap, PhantomData)
     }
 
-    pub fn as_ptr(self) -> *mut c::mnt_idmap {
+    pub fn as_ptr(self) -> RawIdmap {
         self.0
     }
 
