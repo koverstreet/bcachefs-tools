@@ -55,6 +55,8 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/bio.h",			// bio_set_dev(), util/bio.rs's; bio_iov_vecs_to_alloc(),
 					// util/iov_iter.rs's; bio_release_pages(),
 					// util/bio/user_pages.rs's - static inlines
+    "linux/task_io_accounting_ops.h",	// task_io_account_write(): vfs/direct_write.rs's
+    "linux/kthread.h",			// kthread_use_mm(): an async DIO write's continuation
 ];
 
 /// Headers under fs/ bound, by path - which the clang args have as an -I:
@@ -108,6 +110,9 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/idr.h",
     "linux/console.h",
     "linux/bio.h",
+    "linux/task_io_accounting_ops.h",
+    "linux/kthread.h",
+    "linux/writeback.h",
     "linux/pagemap.h",
     "linux/pagevec.h",			// struct folio_batch, before 7.1
     "linux/folio_batch.h",
@@ -144,6 +149,14 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "rust_fault_in_readable", "rust_filemap_write_and_wait_range", "rust_filemap_flush",
     "totalram_pages", "set_freezable", "freezing", "try_to_freeze",
     "bio_set_dev", "bio_iov_vecs_to_alloc", "bio_release_pages",
+    // data/write.rs
+    "bio_split", "bio_inc_remaining",
+    // vfs/direct_write.rs: static inlines, and the VFS's write checks
+    "inode_dio_begin", "inode_dio_end", "iocb_is_dsync", "generic_write_checks", "file_remove_privs",
+    "task_io_account_write", "kthread_use_mm", "kthread_unuse_mm",
+    // vfs/writeback.rs
+    "writeback_iter", "wbc_to_write_flags", "rust_folio_start_writeback", "folio_end_writeback",
+    "mapping_set_error",
     "i_uid_write", "i_gid_write", "i_size_read", "i_size_write", "uuid_to_fsid",
     "fileattr_fill_xflags", "in_compat_syscall", "dir_emit_dots", "finish_open_simple", "file_accessed",
     "i_user_ns", "inode_get_atime", "inode_get_mtime", "inode_get_ctime",
@@ -201,7 +214,7 @@ const BLOCKLIST_TYPE: &[&str] = &["inode", "file", "dir_context", "user_namespac
                                      "fiemap_extent_info", "address_space", "vm_fault",
                                      "vm_operations_struct", "vm_area_struct", "vm_area_desc", "kiocb",
                                      "super_block", "super_operations", "percpu_ref", "ida",
-                                     "blk_holder_ops", "bio_set", "xarray"];
+                                     "blk_holder_ops", "bio_set", "xarray", "writeback_control"];
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
                                  "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*", "FALLOC_FL_.*",
                                  "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*",

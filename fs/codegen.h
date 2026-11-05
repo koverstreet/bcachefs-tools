@@ -245,6 +245,12 @@ static inline int rust_folio_mkclean(struct folio *folio)
 	return folio_mkclean(folio);
 }
 
+/* a macro: */
+static inline void rust_folio_start_writeback(struct folio *folio)
+{
+	folio_start_writeback(folio);
+}
+
 static inline bool rust_filemap_dirty_folio(struct address_space *mapping, struct folio *folio)
 {
 	return filemap_dirty_folio(mapping, folio);
