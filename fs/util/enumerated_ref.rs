@@ -49,6 +49,10 @@ c_extern! {
                                stop_fn: Option<unsafe extern "C" fn(*mut c::enumerated_ref)>) -> c_int;
     pub fn enumerated_ref_to_text(out: *mut Printbuf, r: *mut c::enumerated_ref,
                                   names: *const *const crate::util::ffi::c_char);
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    pub fn enumerated_ref_tryget(r: *mut c::enumerated_ref, idx: c_uint) -> bool;
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    pub fn enumerated_ref_put(r: *mut c::enumerated_ref, idx: c_uint);
 }
 
 impl enumerated_ref {
@@ -123,6 +127,30 @@ impl EnumeratedRef {
     /// @names has an entry for each of this ref's kinds.
     pub unsafe fn to_text(&self, out: &mut Printbuf, names: *const *const crate::util::ffi::c_char) {
         unsafe { (*self.r.get()).to_text(out, names) }
+    }
+
+    /// A ref of C's kind @idx, if it's live: enumerated_ref_tryget(), for a
+    /// ref C puts as that kind.
+    pub fn tryget_kind(&self, idx: u32) -> bool {
+        #[cfg(CONFIG_BCACHEFS_DEBUG)]
+        return unsafe { enumerated_ref_tryget(self.r.get(), idx) };
+        #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
+        {
+            let _ = idx;
+            self.try_inc_live()
+        }
+    }
+
+    /// # Safety
+    /// A ref of kind @idx is held, and given up: enumerated_ref_put().
+    pub unsafe fn put_kind(&self, idx: u32) {
+        #[cfg(CONFIG_BCACHEFS_DEBUG)]
+        unsafe { enumerated_ref_put(self.r.get(), idx) }
+        #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
+        {
+            let _ = idx;
+            unsafe { self.dec() }
+        }
     }
 }
 

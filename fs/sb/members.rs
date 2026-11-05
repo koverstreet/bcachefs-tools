@@ -1215,11 +1215,29 @@ impl Fs {
         (R::RW == READ || ca.mi.get().state == MemberState::rw).then_some(ca)
     }
 
+    /// dev_get_ioref(), the ref of C's kind @idx, for one C puts - the caller
+    /// puts it with put_kind(): bch2_dev_get_ioref().
+    pub fn dev_get_ioref_kind(&self, dev: u32, rw: usize, idx: u32) -> Option<&Dev> {
+        let rcu = read_lock();
+        let ca = self.dev_rcu(dev, &rcu)?;
+        if !ca.io_ref[rw].tryget_kind(idx) {
+            return None;
+        }
+
+        if ca.mi.get().state == MemberState::rw || rw == READ {
+            // the ref keeps the device past the section
+            return Some(unsafe { &*core::ptr::from_ref(ca) });
+        }
+
+        unsafe { ca.io_ref[rw].put_kind(idx) };
+        None
+    }
+
     /// An io ref on @ca, one of ours found under RCU: the ref keeps the device
     /// past the section, and the guard hands it out only while it's held.
     pub(crate) fn io_ref_tryget<R: IoRefIdx>(&self, ca: &Dev) -> Option<DevIoRef<R>> {
         // SAFETY: as above
-        DevIoRef::tryget_live(unsafe { &*core::ptr::from_ref(ca).cast::<DevIo<R>>() })
+        DevIoRef::tryget_live(DevIo::<R>::of(unsafe { &*core::ptr::from_ref(ca) }))
     }
 
     /// What @f makes of each device it doesn't skip: each step its own RCU
@@ -1484,6 +1502,13 @@ impl IoRefIdx for c::bch_dev_write_ref {
 /// A device, counted by its io refs for R: io_ref[R::RW].
 #[repr(transparent)]
 pub struct DevIo<R>(Dev, PhantomData<R>);
+
+impl<R> DevIo<R> {
+    /// @ca, counted by its io refs for R.
+    pub fn of(ca: &Dev) -> &Self {
+        unsafe { &*core::ptr::from_ref(ca).cast() }
+    }
+}
 
 impl<R> Deref for DevIo<R> {
     type Target = Dev;
