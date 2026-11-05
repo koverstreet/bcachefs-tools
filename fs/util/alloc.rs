@@ -654,6 +654,15 @@ pub unsafe fn init_at<T, E>(init: impl ::pin_init::PinInit<T, E>, slot: *mut T) 
     return unsafe { init.__pinned_init(slot) };
 }
 
+/// An initializer that writes nothing, for a field its owner made already: a
+/// write op's bio, a bioset's or its owner's.
+///
+/// # Safety
+/// The field's initialized by the time its struct's initializer runs.
+pub unsafe fn untouched<T>() -> impl ::pin_init::Init<T> {
+    unsafe { ::pin_init::init_from_closure(|_| Ok(())) }
+}
+
 /// @init, failing with @err: an allocation's ENOMEM, as the error that says
 /// which it was
 pub fn init_or<T, E>(init: impl ::pin_init::PinInit<T, E>, err: crate::errcode::bch_errcode)
