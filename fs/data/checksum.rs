@@ -716,8 +716,13 @@ fn passphrase_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
     assert!(crypt.key.is_encrypted(), "filesystem does not have encryption key");
 
     let reply = read_passphrase(sb, None, |passphrase| {
-        let key = crypt.derive_passphrase(passphrase)
-            .unwrap_or_else(|e| panic!("error deriving key from passphrase: {e}"));
+        let key = match crypt.derive_passphrase(passphrase) {
+            Ok(key) => key,
+            Err(e) => {
+                eprintln!("error deriving key from passphrase: {e}");
+                return Some(Err(BchError::from(c::bch_errcode::BCH_ERR_crypt_kdf_failed)));
+            }
+        };
         let mut sb_key = crypt.key.clone();
         sb_key.chacha20(&key, sb.nonce());
 
@@ -725,14 +730,19 @@ fn passphrase_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
          * sb_key has just been decrypted in place: the right passphrase leaves
          * the magic intact, so it is no longer "encrypted".
          */
-        (!sb_key.is_encrypted()).then_some(key)
+        (!sb_key.is_encrypted()).then_some(Ok(key))
     });
 
-    match reply {
-        Ok(Given::Taken(key)) => Ok(key),
-        Ok(Given::Rejected)   => Err(BchError::from(c::ENOKEY)),
-        _ => panic!("error reading passphrase"),
-    }
+    let why: String = match reply {
+        Ok(Given::Taken(key)) => return key,
+        Ok(Given::Rejected)   => return Err(BchError::from(c::ENOKEY)),
+        Ok(Given::Ended)      => "no passphrase read: end of file on stdin".into(),
+        Ok(Given::Declined)   => "no passphrase given: systemd-ask-password was declined".into(),
+        Ok(Given::Settled)    => "no passphrase read".into(),
+        Err(e)                => format!("error reading passphrase: {e}"),
+    };
+    eprintln!("{why}");
+    Err(c::bch_errcode::BCH_ERR_no_encryption_key.into())
 }
 
 /// The user's key, for @sb: from the keyring - or in userspace, failing
