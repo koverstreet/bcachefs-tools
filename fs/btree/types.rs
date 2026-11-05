@@ -684,7 +684,9 @@ pub struct btree_trans_bits {
      */
     begin_may_drop_updates:         bool,
     has_interior_updates:           bool,
-    __pad17:                        u15,
+    /* Rust's: the path table is borrowed (btree/path.rs's Paths) */
+    paths_borrowed:                 bool,
+    __pad18:                        u14,
     #[bits(16)] pub restarted: cs::bch_errcode,
     __pad:                          u16,
 }

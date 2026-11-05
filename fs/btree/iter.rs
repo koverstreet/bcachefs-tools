@@ -82,6 +82,7 @@ c_extern! {
     pub fn bch2_trans_unlock_long(trans: *mut BtreeTrans<'_>);
     pub fn __bch2_assert_pos_locked(trans: *mut BtreeTrans<'_>, id: Btree, pos: Bpos);
     pub fn bch2_trans_restart_error(trans: *mut BtreeTrans<'_>, restart_count: u32) -> !;
+    pub fn bch2_trans_unlocked_or_in_restart_error(trans: *mut BtreeTrans<'_>) -> !;
     pub fn bch2_trans_restart_ip(trans: *mut BtreeTrans<'_>, err: c_int, ip: c_ulong) -> c_int;
     #[must_use]
     pub fn bch2_btree_iter_traverse(iter: *mut c::btree_iter) -> c_int;
@@ -325,6 +326,51 @@ impl<'f> BtreeTrans<'f> {
     /// For C, which has it by pointer.
     pub fn raw(&self) -> *mut BtreeTrans<'f> {
         ptr::from_ref(self).cast_mut()
+    }
+
+    /// The paths in use, by index - from 1: path 0 is never handed out.
+    /// trans_for_each_path(): paths_allocated is read as it goes, as C reads
+    /// it, so the loop may get and put paths.
+    pub(crate) fn path_idxs(&self) -> impl Iterator<Item = PathIdx> + '_ {
+        let mut idx = 1;
+        core::iter::from_fn(move || {
+            let i = self.next_path_idx(idx)?;
+            idx = i + 1;
+            Some(i)
+        })
+    }
+
+    fn next_path_idx(&self, idx: PathIdx) -> Option<PathIdx> {
+        const BITS: usize = c_ulong::BITS as usize;
+        let (nr, allocated) = (self.nr_paths.get() as usize, self.paths_allocated.get());
+        let mut idx = idx as usize;
+
+        while idx < nr {
+            let w = unsafe { *allocated.add(idx / BITS) } >> (idx % BITS);
+            if w != 0 {
+                return Some((idx + w.trailing_zeros() as usize) as PathIdx);
+            }
+            idx = (idx | (BITS - 1)) + 1;
+        }
+        None
+    }
+
+    /// TransAttempt::restart(), for what C calls in the middle of an attempt
+    /// without one: the lock paths.
+    pub(crate) fn restart(&self, error: bch_errcode) -> BchError {
+        let ip = Self::restart as *const () as c_ulong;
+        let ret = unsafe { c::bch2_trans_restart_ip(self.raw(), error.0 as i32, ip) };
+        BchError::from_raw(-ret)
+    }
+
+    /// A panic, in debug builds, if the transaction's unlocked or in a
+    /// restart: for what reads the nodes its paths hold.
+    pub(crate) fn verify_not_unlocked_or_in_restart(&self) {
+        if cfg!(CONFIG_BCACHEFS_DEBUG) {
+            if self.restarted().0 != 0 || !self.locked() {
+                unsafe { c::bch2_trans_unlocked_or_in_restart_error(self.raw()) }
+            }
+        }
     }
 
     pub fn fs_usage_delta_add(&self, d: c::bch_fs_usage_base) {
@@ -960,9 +1006,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// The transaction has to know: it's marked restarted and its restart_count
     /// bumped, which bch2_trans_begin() and verify_not_restarted() go by.
     pub fn restart(&self, error: bch_errcode) -> BchError {
-        let ip = Self::restart as *const () as core::ffi::c_ulong;
-        let ret = unsafe { c::bch2_trans_restart_ip(self.raw(), error.0 as i32, ip) };
-        BchError::from_raw(-ret)
+        self.trans.restart(error)
     }
 
     /// Drop the btree locks for @f - to block, sleep, do IO - and take them
@@ -2352,20 +2396,19 @@ impl<'t> BtreeIter<'t> {
         &self,
         t: &TransAttempt<'a, 't>,
     ) -> Option<BtreeNodeRef> {
-        unsafe {
-            let path = t.trans().paths.get().add(self.path as usize);
-            let node = (*path).l[(*path).level() as usize].b;
+        let paths = t.trans().paths();
+        let path = &paths[self.path];
+        let node = path.l[path.level() as usize].b;
 
-            errptr_or_null(node).ok()?.map(|raw| BtreeNodeRef { raw })
-        }
+        errptr_or_null(node).ok()?.map(|raw| BtreeNodeRef { raw })
     }
 
     /// The btree's key at the iterator's path's position - not the journal
     /// keys over it, which a peek sees - unpacked into @u if it's packed.
     pub(crate) fn path_peek_slot<'k>(&'k self, t: &TransAttempt<'_, 't>, u: &'k mut c::bkey) -> BkeySC<'k> {
+        let mut paths = t.trans().paths();
         unsafe {
-            let path = t.trans().paths.get().add(self.path as usize);
-            bkey_s_c_to_result::<'k>(bch2_btree_path_peek_slot(path, u))
+            bkey_s_c_to_result::<'k>(bch2_btree_path_peek_slot(&mut paths[self.path], u))
                 .ok()
                 .flatten()
                 .expect("a slot always has a key")
@@ -2393,12 +2436,11 @@ impl<'t> BtreeIter<'t> {
 
     /// @k is a key at the iterator's level, above the leaves.
     pub fn prefetch_child(&self, t: &TransAttempt<'_, 't>, k: &BkeyI) -> Result<(), BchError> {
-        let ret = unsafe {
-            let path = t.trans().paths.get().add(self.path as usize);
-            assert!((*path).level() != 0, "prefetching below the leaves");
-            c::bch2_btree_node_prefetch(t.raw(), path, k.as_ffi(), (*path).btree_id(),
-                                        u32::from((*path).level()) - 1)
-        };
+        let mut paths = t.trans().paths();
+        let path = &mut paths[self.path];
+        assert!(path.level() != 0, "prefetching below the leaves");
+        let (btree, level) = (path.btree_id(), u32::from(path.level()));
+        let ret = unsafe { c::bch2_btree_node_prefetch(t.raw(), path, k.as_ffi(), btree, level - 1) };
         t.result(ret)
     }
 

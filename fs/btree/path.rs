@@ -4,12 +4,16 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::iter::BtreeTrans;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::BtreeNode;
+use crate::c;
 use crate::cstructs::c as cs;
+use crate::errcode::{bch_errcode, err_ptr, BchError};
 use crate::format::{Bpos, Btree};
 use crate::types::c_default;
 use cstruct_macros::{bitfield, c_name, c_typedef, CStruct};
+use core::ops::{Deref, DerefMut, Index, IndexMut};
 use nestify::nest;
 
 c_typedef! {
@@ -64,3 +68,111 @@ nest! {
     }
 }
 c_default!(BtreePath);
+
+/// A transaction's path table, borrowed: one borrow at a time, by a bit in
+/// the transaction's flags - a RefCell's - so a Rust entry into the btree code
+/// made while it's in there panics rather than aliasing the table. Growing it
+/// will take it &mut, so it can't grow under a path borrowed from it.
+pub struct Paths<'t> {
+    trans: &'t BtreeTrans<'t>,
+    /// false for the borrow C lent an export
+    took:  bool,
+}
+
+impl BtreeTrans<'_> {
+    /// The path table, for a Rust entry into the btree code.
+    pub(crate) fn paths(&self) -> Paths<'_> {
+        assert!(!self.paths_borrowed(), "{}: the path table borrowed twice - the btree code reentered",
+                self.fn_name());
+        self.set_paths_borrowed(true);
+        Paths { trans: self, took: true }
+    }
+
+    /// The path table, for a C export: C's to lend for the call, its own
+    /// caller holding no reference into it - a Rust caller's borrow, if there
+    /// is one, idle across the call into C.
+    ///
+    /// # Safety
+    /// As above.
+    pub(crate) unsafe fn paths_lent(&self) -> Paths<'_> {
+        Paths { trans: self, took: false }
+    }
+}
+
+impl Drop for Paths<'_> {
+    fn drop(&mut self) {
+        if self.took {
+            self.trans.set_paths_borrowed(false);
+        }
+    }
+}
+
+impl Deref for Paths<'_> {
+    type Target = [BtreePath];
+
+    fn deref(&self) -> &[BtreePath] {
+        let t = self.trans;
+        unsafe { core::slice::from_raw_parts(t.paths.get(), t.nr_paths.get() as usize) }
+    }
+}
+
+impl DerefMut for Paths<'_> {
+    fn deref_mut(&mut self) -> &mut [BtreePath] {
+        let t = self.trans;
+        unsafe { core::slice::from_raw_parts_mut(t.paths.get(), t.nr_paths.get() as usize) }
+    }
+}
+
+impl Index<PathIdx> for Paths<'_> {
+    type Output = BtreePath;
+
+    fn index(&self, idx: PathIdx) -> &BtreePath {
+        &(**self)[idx as usize]
+    }
+}
+
+impl IndexMut<PathIdx> for Paths<'_> {
+    fn index_mut(&mut self, idx: PathIdx) -> &mut BtreePath {
+        &mut (**self)[idx as usize]
+    }
+}
+
+/// What every level of a path table the transaction has reallocated away from
+/// holds, in debug builds: for a path pointer kept across the realloc.
+pub(crate) fn btree_path_poison() -> *mut BtreeNode {
+    err_ptr(BchError::from(bch_errcode::BCH_ERR_no_btree_node_stale_paths))
+}
+
+impl BtreePath {
+    /// NULL above the root, or an error pointer: why there's no node.
+    pub(crate) fn node(&self, level: usize) -> *mut BtreeNode {
+        if level >= c::BTREE_MAX_DEPTH as usize {
+            return core::ptr::null_mut();
+        }
+
+        let b = self.l[level].b;
+
+        /*
+         * Spot check, deliberately not exhaustive: most level accesses go
+         * direct to path->l[] rather than through here. Sites that dereference
+         * b fault on the poison unaided; this catches some of the ones that
+         * only compare it, which otherwise read as "not the node I wanted" and
+         * take a plausible wrong branch.
+         */
+        if cfg!(CONFIG_BCACHEFS_DEBUG) {
+            crate::warn_once!(b == btree_path_poison(), no_fs,
+                              "using a btree path that outlived trans->paths");
+        }
+        b
+    }
+
+    pub(crate) fn lock_seq_matches(&self, b: &BtreeNode, level: usize) -> bool {
+        self.l[level].lock_seq == b.c.lock.six().seq.get()
+    }
+
+    pub(crate) fn has_node(&self, b: &BtreeNode) -> bool {
+        let level = b.c.level as usize;
+
+        core::ptr::eq(self.l[level].b, b) && self.lock_seq_matches(b, level)
+    }
+}
