@@ -75,7 +75,9 @@ impl two_state_lock_t {
     }
 
     pub fn try_lock<S: TwoState>(&self) -> Option<TwoStateGuard<'_, S>> {
-        self.trylock(S::S).then_some(TwoStateGuard { lock: self, _s: PhantomData })
+        // then(), not then_some(): a guard built for a failed trylock would
+        // unlock on drop
+        self.trylock(S::S).then(|| TwoStateGuard { lock: self, _s: PhantomData })
     }
 
     /// @f with the lock dropped, and taken again after.
