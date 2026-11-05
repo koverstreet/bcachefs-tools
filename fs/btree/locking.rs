@@ -7,6 +7,7 @@
 
 use crate::fs::Fs;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
+use crate::btree::path::PathIdx;
 use crate::errcode::BchError;
 use crate::locking::{ExclusiveGuard, Locked, RawTimedLock};
 use crate::c;
@@ -52,7 +53,7 @@ nest! {
 
         /* for iterating over held locks :*/
         pub level: u8,
-        pub path_idx: c::btree_path_idx_t,
+        pub path_idx: PathIdx,
         pub waitlist_idx: u16,
         pub node_have: *mut c::btree_bkey_cached_common,
 

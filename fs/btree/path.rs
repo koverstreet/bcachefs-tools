@@ -9,11 +9,12 @@ use crate::btree::node::BtreeNode;
 use crate::cstructs::c as cs;
 use crate::format::{Bpos, Btree};
 use crate::types::c_default;
-use cstruct_macros::{bitfield, c_typedef, CStruct};
+use cstruct_macros::{bitfield, c_name, c_typedef, CStruct};
 use nestify::nest;
 
 c_typedef! {
-    pub type btree_path_idx_t = u16;
+    #[c_name(btree_path_idx_t)]
+    pub type PathIdx = u16;
 }
 
 #[repr(C)]
@@ -29,9 +30,10 @@ c_default!(btree_path_level);
 
 nest! {
     #[repr(C)]
+    #[c_name(btree_path)]
     #[derive(Clone, Copy, CStruct)]
-    pub struct btree_path {
-        pub sorted_idx: cs::btree_path_idx_t,
+    pub struct BtreePath {
+        pub sorted_idx: cs::PathIdx,
         pub ref_: u8,
         pub intent_ref: u8,
 
@@ -61,4 +63,4 @@ nest! {
         pub ip_allocated: core::ffi::c_ulong,
     }
 }
-c_default!(btree_path);
+c_default!(BtreePath);

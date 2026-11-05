@@ -9,6 +9,7 @@
 use crate::btree::bkey::{BkeySC, BkeyVal};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::{BtreeNode, NodeContents};
+use crate::btree::path::BtreePath;
 use crate::btree::types::{BtreeCacheLists, BtreeCacheLive};
 use crate::locking::ExclusiveGuard;
 use crate::util::ffi::Opaque;
@@ -43,7 +44,7 @@ c_extern! {
     pub fn bch2_btree_cache_to_text(out: *mut Printbuf, bc: *const c::bch_fs_btree_cache);
     pub fn bch2_btree_cache_pin_budget(c: *mut Fs) -> u64;
     pub fn bch2_node_pin(c: *mut Fs, b: *mut BtreeNode);
-    pub fn bch2_btree_node_prefetch(trans: *mut BtreeTrans<'_>, path: *mut c::btree_path,
+    pub fn bch2_btree_node_prefetch(trans: *mut BtreeTrans<'_>, path: *mut BtreePath,
                                     k: *const c::bkey_i, btree: Btree, level: c_uint) -> c_int;
     pub fn bch2_btree_cache_unpin(c: *mut Fs);
     pub fn bch2_btree_cache_pin(trans: *mut BtreeTrans<'_>, leaf_mask: u64, interior_mask: u64,

@@ -19,6 +19,7 @@ use crate::util::mempool::Mempool;
 use crate::util::workqueue::{Workqueue, WqFlags};
 use crate::types::{CacheAligned, DArray, NeBytes, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::btree::node_scan::NodeScan;
+use crate::btree::path::BtreePath;
 use crate::new_lock;
 use crate::util::projections::Volatile;
 use crate::util::ffi::{c_char, Opaque};
@@ -450,10 +451,10 @@ nest! {
     #[derive(CStruct)]
     pub struct BtreeIter<'t> {
         pub(in crate::btree) trans: *mut BtreeTrans<'static>,
-        pub(in crate::btree) path: cs::btree_path_idx_t,
-        pub(in crate::btree) update_path: cs::btree_path_idx_t,
+        pub(in crate::btree) path: cs::PathIdx,
+        pub(in crate::btree) update_path: cs::PathIdx,
         #[c("btree_path_idx_t key_cache_path")]
-        pub(in crate::btree) key_cache_path: core::cell::Cell<cs::btree_path_idx_t>,
+        pub(in crate::btree) key_cache_path: core::cell::Cell<cs::PathIdx>,
 
         #[c_bitfield]
         #>[bitfield(u8)]
@@ -561,7 +562,7 @@ nest! {
          */
         pub old_btree_u64s: u8,
         pub k_buf_u64s: u8,
-        pub path: cs::btree_path_idx_t,
+        pub path: cs::PathIdx,
         pub k: *mut cs::bkey_i,
         /* key being overwritten: */
         pub old_k: cs::bkey,
@@ -612,7 +613,7 @@ c_const! {
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct btree_trans_paths {
     pub nr_paths: c_ulong,
-    pub paths: [cs::btree_path; 0],
+    pub paths: [BtreePath; 0],
 }
 
 #[repr(C)]
@@ -709,8 +710,8 @@ pub struct BtreeTrans<'f> {
     pub c: &'f Fs,
 
     pub paths_allocated: Cell<*mut c_ulong>,
-    pub paths: Cell<*mut cs::btree_path>,
-    pub sorted: Cell<*mut cs::btree_path_idx_t>,
+    pub paths: Cell<*mut BtreePath>,
+    pub sorted: Cell<*mut cs::PathIdx>,
     pub updates: Cell<*mut cs::btree_insert_entry>,
 
     /* bump allocator, invalidated on transaction restart */
@@ -721,10 +722,10 @@ pub struct BtreeTrans<'f> {
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
     pub trans_kmalloc_trace: cs::darray_trans_kmalloc_trace,
 
-    pub nr_sorted: cs::btree_path_idx_t,
-    pub nr_paths: Cell<cs::btree_path_idx_t>,
-    pub nr_paths_max: cs::btree_path_idx_t,
-    pub nr_updates: Cell<cs::btree_path_idx_t>,
+    pub nr_sorted: cs::PathIdx,
+    pub nr_paths: Cell<cs::PathIdx>,
+    pub nr_paths_max: cs::PathIdx,
+    pub nr_updates: Cell<cs::PathIdx>,
     pub shard_cpu: Cell<i16>,
     pub fn_idx: u8,
     #[c("u8 lock_must_abort")]
@@ -821,9 +822,9 @@ pub struct BtreeTrans<'f> {
     #[c("struct btree_trans_paths trans_paths")]
     pub trans_paths: Opaque<cs::btree_trans_paths>,
     #[c("struct btree_path _paths[BTREE_ITER_INITIAL]")]
-    pub _paths: Opaque<[cs::btree_path; cs::BTREE_ITER_INITIAL as usize]>,
+    pub _paths: Opaque<[BtreePath; cs::BTREE_ITER_INITIAL as usize]>,
     #[c("btree_path_idx_t _sorted[BTREE_ITER_INITIAL + 4]")]
-    pub _sorted: Opaque<[cs::btree_path_idx_t; cs::BTREE_ITER_INITIAL as usize + 4]>,
+    pub _sorted: Opaque<[cs::PathIdx; cs::BTREE_ITER_INITIAL as usize + 4]>,
     #[c("struct btree_insert_entry _updates[BTREE_ITER_INITIAL]")]
     pub _updates: Opaque<[cs::btree_insert_entry; cs::BTREE_ITER_INITIAL as usize]>,
 }

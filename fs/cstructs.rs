@@ -96,7 +96,7 @@ pub mod c {
     pub const INT_MAX: i32 = i32::MAX;
 
     pub use crate::btree::types::*;
-    pub use crate::btree::path::{btree_path, btree_path_bits, btree_path_idx_t, btree_path_level};
+    pub use crate::btree::path::{BtreePath, btree_path_bits, PathIdx, btree_path_level};
     pub(crate) use crate::btree::path::__btree_path_bits_forward;
     pub use crate::dirent::format::*;
     pub use crate::format::accounting::*;
