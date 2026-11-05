@@ -404,6 +404,36 @@ impl Eytzinger0<usize> {
         sort_by_impl(v, v.len(), 1, cmp)
     }
 
+    /// @v's last node, just pushed - the others in eytzinger order - moved
+    /// into its place. The tree one node bigger is the one before plus that
+    /// leaf, and a new leaf leaves the others' inorder order as it was: so
+    /// only the nodes between it and its place move, one each along it.
+    pub fn insert_last_by<T>(v: &mut [T], mut cmp: impl FnMut(&T, &T) -> Ordering) {
+        let Some(mut i) = v.len().checked_sub(1) else { return };
+        let e = Self::of(v);
+        while let Some(p) = e.prev(i).filter(|&p| cmp(&v[p], &v[i]) == Ordering::Greater) {
+            v.swap(p, i);
+            i = p;
+        }
+        while let Some(n) = e.next(i).filter(|&n| cmp(&v[n], &v[i]) == Ordering::Less) {
+            v.swap(n, i);
+            i = n;
+        }
+    }
+
+    /// Node @i moved to @v's last slot, the others left in eytzinger order
+    /// without it, for the caller to pop: insert_last_by() in reverse.
+    pub fn remove_to_last<T>(v: &mut [T], mut i: usize) {
+        let e = Self::of(v);
+        let last = v.len() - 1;
+        let forward = e.to_inorder(i) < e.to_inorder(last);
+        while i != last {
+            let j = if forward { e.next(i) } else { e.prev(i) }.expect("the last node is on the way");
+            v.swap(i, j);
+            i = j;
+        }
+    }
+
     // By index, for nodes that aren't a slice's - a table of runtime-sized
     // entries:
 
@@ -494,6 +524,31 @@ mod tests {
                            sorted.iter().copied().find(|&e| e > x));
                 assert_eq!(val(Eytzinger0::find_ge_by(&v, |e| e.cmp(&x))),
                            sorted.iter().copied().find(|&e| e >= x));
+            }
+        }
+    }
+
+    // Checked against the sort, which has one answer for distinct nodes: a
+    // walk that strays leaves an order the sort would change.
+    #[test]
+    fn eytzinger0_insert_remove() {
+        let in_order = |v: &Vec<u32>| {
+            let mut sorted = v.clone();
+            Eytzinger0::sort_by(&mut sorted, |a, b| a.cmp(b));
+            sorted == *v
+        };
+        for n in 0..300 {
+            let mut v = Vec::new();
+            for x in shuffled(n, n as u64 + 2000) {
+                v.push(x);
+                Eytzinger0::insert_last_by(&mut v, |a, b| a.cmp(b));
+                assert!(in_order(&v), "n {n}: insert {x}");
+            }
+            for x in shuffled(n, n as u64 + 3000) {
+                let i = Eytzinger0::find_by(&v, |e| e.cmp(&x)).expect("inserted");
+                Eytzinger0::remove_to_last(&mut v, i);
+                assert_eq!(v.pop(), Some(x));
+                assert!(in_order(&v), "n {n}: remove {x}");
             }
         }
     }

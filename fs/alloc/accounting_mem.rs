@@ -91,6 +91,17 @@ impl Table {
         Eytzinger0::find_ge_by(&self.entries, |e| e.pos.cmp(&p))
     }
 
+    fn insert(&mut self, e: Entry) -> Result<(), AllocError> {
+        self.entries.push(e)?;
+        Eytzinger0::insert_last_by(&mut self.entries, |l, r| l.pos.cmp(&r.pos));
+        Ok(())
+    }
+
+    fn remove(&mut self, i: usize) {
+        Eytzinger0::remove_to_last(&mut self.entries, i);
+        self.entries.pop();
+    }
+
     fn free_gc(&mut self) {
         for e in self.entries.iter_mut() {
             e.gc = None;
@@ -222,9 +233,10 @@ fn insert_locked(fs: &Fs, a: Delta<'_>, mark: &mut MarkWrite<'_>) -> Result<(), 
         return Ok(());
     }
 
-    let nr = Entry::new(a.p, pos.nr_counters(), acc.gc_running)
-        .and_then(|e| acc.with_entries(|entries| entries.push(e).map(|()| entries.len())))
+    Entry::new(a.p, pos.nr_counters(), acc.gc_running)
+        .and_then(|e| acc.insert(e))
         .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_disk_accounting))?;
+    let nr = acc.entries.len();
 
     fs.event_trace(events::accounting_mem_insert, |out| {
         write!(out, "entries {nr} added ");
@@ -252,11 +264,7 @@ pub fn maybe_kill(fs: &Fs, p: Bpos) {
             return;
         }
 
-        acc.with_entries(|entries| {
-            let last = entries.len() - 1;
-            entries.swap(i, last);
-            entries.pop();
-        });
+        acc.remove(i);
 
         fs.replicas_entry_kill(&mut sb, &mark, e);
     }
