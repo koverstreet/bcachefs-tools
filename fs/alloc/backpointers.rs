@@ -16,8 +16,6 @@
 //! device, "dev" is synthetic: (stripe idx << 8) | block - at least 256,
 //! never a real device's.
 //!
-//! backpointers.h's inlines are the same encoding, for C's callers.
-//!
 //! What's here:
 //! - the key type, and an extent pointer's backpointer: extent_ptr_to_bp()
 //! - inserting and deleting them, from the triggers: bucket_backpointer_mod()
