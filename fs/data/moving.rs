@@ -23,7 +23,7 @@
 
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{BtreeIter, BtreeTrans};
-use crate::btree::trans::{__bch2_trans_get, bch2_trans_begin, bch2_trans_put, TransFnName};
+use crate::btree::trans::{__bch2_trans_get, TransFnName, TransGuard};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::copygc::bch2_copygc_wait_not_running;
@@ -128,7 +128,7 @@ pub struct InFlightUpdate {
  */
 #[pin_data]
 pub struct MovingContext {
-    trans:          *mut BtreeTrans<'static>,
+    trans:          TransGuard<'static>,
     stats:          Cell<NonNull<MoveStats>>,
     wp:             c::write_point_specifier,
     wait_on_copygc: bool,
@@ -232,7 +232,7 @@ impl<'a> MovingCtxt<'a> {
     {
         static FN: TransFnName = TransFnName::new();
         let init = pin_init!(MovingContext {
-            trans:          __bch2_trans_get(fs, FN.idx(function_name!())).cast(),
+            trans:          unsafe { TransGuard::from_raw(__bch2_trans_get(fs, FN.idx(function_name!()))) },
             stats:          Cell::new(NonNull::from(stats)),
             wp,
             wait_on_copygc,
@@ -281,7 +281,7 @@ impl<'a> Moving<'a> {
 
     pub fn trans(&self) -> &BtreeTrans<'a> {
         // SAFETY: the context's, live as long as it is
-        unsafe { BtreeTrans::borrow_raw(self.0.trans) }
+        unsafe { BtreeTrans::borrow_raw(self.0.trans.raw()) }
     }
 
     /// Count moves from here on into @stats.
@@ -490,9 +490,7 @@ impl Drop for MovingCtxt<'_> {
         // Putting a transaction mid-restart is an unhandled restart, but a mover
         // can be told to exit before it's retried: so begin first
         unsafe {
-            let trans = self.ctxt.as_ref().trans;
-            bch2_trans_begin(&*trans);
-            bch2_trans_put(trans);
+            self.ctxt.as_ref().trans.begin_raw();
             free_pinned(self.ctxt.as_ptr());
         }
     }

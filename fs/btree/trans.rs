@@ -101,36 +101,6 @@ impl TransFnName {
     }
 }
 
-/// A transaction Rust got, and puts when dropped: btree_trans!()'s, used as
-/// the &BtreeTrans it derefs to - nothing else names it.
-#[doc(hidden)]
-pub struct TransGuard<'f> {
-    trans: NonNull<BtreeTrans<'f>>,
-}
-
-impl<'f> TransGuard<'f> {
-    /// Use btree_trans!(), which names the transaction for its caller.
-    #[doc(hidden)]
-    pub fn new_fn(fs: &'f Fs, fn_idx: u32) -> TransGuard<'f> {
-        TransGuard { trans: NonNull::new(__bch2_trans_get(fs, fn_idx).cast()).expect("bch2_trans_get() never fails") }
-    }
-}
-
-impl<'f> core::ops::Deref for TransGuard<'f> {
-    type Target = BtreeTrans<'f>;
-
-    fn deref(&self) -> &BtreeTrans<'f> {
-        // SAFETY: ours until dropped
-        unsafe { self.trans.as_ref() }
-    }
-}
-
-impl Drop for TransGuard<'_> {
-    fn drop(&mut self) {
-        unsafe { bch2_trans_put(self.raw()) }
-    }
-}
-
 impl<'f> BtreeTrans<'f> {
     /// A transaction C has, for Rust that C calls with one.
     ///
@@ -446,7 +416,7 @@ impl Fs {
 
 // ── Getting and putting ─────────────────────────────────────────────────────
 
-fn bch2_trans_alloc(c: &Fs) -> *mut BtreeTrans<'_> {
+fn bch2_trans_alloc(c: &Fs) -> NonNull<BtreeTrans<'_>> {
     #[cfg(kernel)]
     {
         let cpu = CpuGuard::new();
@@ -455,7 +425,7 @@ fn bch2_trans_alloc(c: &Fs) -> *mut BtreeTrans<'_> {
         slot.set(ptr::null_mut());
         drop(cpu);
 
-        if !trans.is_null() {
+        if let Some(trans) = NonNull::new(trans) {
             /* not ->c: it stays on the list, where walkers read it */
             let start = offset_of!(BtreeTrans<'_>, paths_allocated);
             unsafe { trans.cast::<u8>().add(start).write_bytes(0, offset_of!(BtreeTrans<'_>, list) - start) };
@@ -463,10 +433,11 @@ fn bch2_trans_alloc(c: &Fs) -> *mut BtreeTrans<'_> {
         }
     }
 
-    let trans = c.btree.trans.pool.alloc_raw(c::GFP_NOIO).cast::<BtreeTrans<'_>>().as_ptr();
+    let trans = c.btree.trans.pool.alloc_raw(c::GFP_NOIO).cast::<BtreeTrans<'_>>();
+    let p = trans.as_ptr();
     unsafe {
-        trans.write_bytes(0, 1);
-        (&raw mut (*trans).c).write(c);
+        p.write_bytes(0, 1);
+        (&raw mut (*p).c).write(c);
     }
 
     let lock = Locked::from_c(&c.btree.trans.lock);
@@ -476,7 +447,7 @@ fn bch2_trans_alloc(c: &Fs) -> *mut BtreeTrans<'_> {
     if cfg!(CONFIG_BCACHEFS_DEBUG) {
         let pid = unsafe { bch2_task_pid(sched::current()) };
 
-        unsafe { (*trans).locking_wait.task.store(sched::current(), Ordering::Relaxed) };
+        unsafe { (*p).locking_wait.task.store(sched::current(), Ordering::Relaxed) };
 
         for pos in list.iter() {
             let pos_task = pos.locking_wait.task.load(Ordering::Relaxed);
@@ -492,81 +463,126 @@ fn bch2_trans_alloc(c: &Fs) -> *mut BtreeTrans<'_> {
         }
     }
 
-    unsafe { list.push_front(&*trans.cast()) };
+    unsafe { list.push_front(trans.cast().as_ref()) };
     trans
+}
+
+/// A transaction, owned: got by new_fn(), put when dropped. btree_trans!()'s,
+/// and C's from __bch2_trans_get() to bch2_trans_put(); used as the
+/// &BtreeTrans it derefs to.
+pub struct TransGuard<'f> {
+    trans: NonNull<BtreeTrans<'f>>,
+}
+
+impl<'f> core::ops::Deref for TransGuard<'f> {
+    type Target = BtreeTrans<'f>;
+
+    fn deref(&self) -> &BtreeTrans<'f> {
+        // SAFETY: ours until dropped
+        unsafe { self.trans.as_ref() }
+    }
+}
+
+impl<'f> TransGuard<'f> {
+    /// For C, which holds it until bch2_trans_put().
+    pub fn into_raw(self) -> *mut BtreeTrans<'f> {
+        core::mem::ManuallyDrop::new(self).trans.as_ptr()
+    }
+
+    /// # Safety
+    /// @trans is into_raw()'s, and given back once.
+    pub unsafe fn from_raw(trans: *mut BtreeTrans<'f>) -> Self {
+        TransGuard { trans: unsafe { NonNull::new_unchecked(trans) } }
+    }
 }
 
 #[c_export]
 pub fn __bch2_trans_get(c: &Fs, fn_idx: c_uint) -> *mut BtreeTrans<'static> {
-    /*
-     * No multithreaded btree access until we've gone RW and are no longer
-     * modifying the journal keys gap buffer
-     */
-    ebug_assert!(c.flags.get(c::bch_fs_flags::BCH_FS_may_go_rw) ||
-                 c.flags.get(c::bch_fs_flags::BCH_FS_scrub_journal) ||
-                 sched::current() == c.recovery_task.load(Ordering::Relaxed));
+    TransGuard::new_fn(c, fn_idx).into_raw().cast()
+}
 
-    let trans = bch2_trans_alloc(c);
+/// # Safety
+/// @trans is __bch2_trans_get()'s, and isn't used after.
+#[c_export]
+pub unsafe fn bch2_trans_put(trans: *mut BtreeTrans<'_>) {
+    drop(unsafe { TransGuard::from_raw(trans) })
+}
 
-    /*
-     * Warm the known btrees' root pointer cache lines: every btree access in
-     * this trans goes through c->btree.cache.roots_b[], and the cold-line miss
-     * shows up as ~3-7% of cycles in bch2_btree_path_traverse_one's
-     * lock_root path. Issuing the prefetches here lets them complete
-     * during the rest of trans_get's setup work.
-     */
-    let roots_b = &c.btree.cache.roots.roots_b;
-    let roots = roots_b.as_ptr().cast::<u8>();
-    for i in (0..c::BTREE_ID_NR as usize * size_of_val(&roots_b[0])).step_by(64) {
-        prefetch(roots.wrapping_add(i));
-    }
+impl<'f> TransGuard<'f> {
+    /// Use btree_trans!(), which names the transaction for its caller.
+    #[doc(hidden)]
+    pub fn new_fn(c: &'f Fs, fn_idx: u32) -> Self {
+        /*
+         * No multithreaded btree access until we've gone RW and are no longer
+         * modifying the journal keys gap buffer
+         */
+        ebug_assert!(c.flags.get(c::bch_fs_flags::BCH_FS_may_go_rw) ||
+                     c.flags.get(c::bch_fs_flags::BCH_FS_scrub_journal) ||
+                     sched::current() == c.recovery_task.load(Ordering::Relaxed));
 
-    let stats = (fn_idx < c::BCH_TRANSACTIONS_NR).then(|| &c.btree.trans.stats[fn_idx as usize]);
+        let trans = bch2_trans_alloc(c);
+        let p = trans.as_ptr();
 
-    unsafe {
-        (*trans).fn_idx = fn_idx as u8;
-        if let Some(s) = stats {
-            (*trans).fn_ = TRANSACTION_FNS[fn_idx as usize].load(Ordering::Relaxed);
-            (*trans).nr_paths_max = s.nr_max_paths as _;
+        /*
+         * Warm the known btrees' root pointer cache lines: every btree access in
+         * this trans goes through c->btree.cache.roots_b[], and the cold-line miss
+         * shows up as ~3-7% of cycles in bch2_btree_path_traverse_one's
+         * lock_root path. Issuing the prefetches here lets them complete
+         * during the rest of trans_get's setup work.
+         */
+        let roots_b = &c.btree.cache.roots.roots_b;
+        let roots = roots_b.as_ptr().cast::<u8>();
+        for i in (0..c::BTREE_ID_NR as usize * size_of_val(&roots_b[0])).step_by(64) {
+            prefetch(roots.wrapping_add(i));
         }
-        #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-        let _ = ::pin_init::PinInit::__pinned_init(crate::new_lockdep_map!("bcachefs_btree"), &raw mut (*trans).dep_map);
-    }
 
-    let t = unsafe { &*trans };
+        let stats = (fn_idx < c::BCH_TRANSACTIONS_NR).then(|| &c.btree.trans.stats[fn_idx as usize]);
 
-    t.shard_cpu.set(if c.opts().shard_inode_numbers_bits.get() != 0 {
-        c.inode_shard_cpu[c.inode_shard_idx() as usize] as i16
-    } else {
-        -1
-    });
-    t.locking_wait.task.store(sched::current(), Ordering::Relaxed);
-    t.set_journal_replay_not_finished(
-        !c.journal.flags.get(c::journal_flags::JOURNAL_replay_done) &&
-        c.journal_keys_get().map(RefGuard::leak).is_some());
-    bch2_trans_paths_init(t);
+        unsafe {
+            (*p).fn_idx = fn_idx as u8;
+            if let Some(s) = stats {
+                (*p).fn_ = TRANSACTION_FNS[fn_idx as usize].load(Ordering::Relaxed);
+                (*p).nr_paths_max = s.nr_max_paths as _;
+            }
+            #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+            let _ = ::pin_init::PinInit::__pinned_init(crate::new_lockdep_map!("bcachefs_btree"), &raw mut (*p).dep_map);
+        }
 
-    if let Some(s) = stats {
-        if s.max_mem != 0 {
-            let expected_mem_bytes = s.max_mem.next_power_of_two();
+        let t = unsafe { trans.as_ref() };
 
-            let _nowarn = MemallocFlags::nowarn();
-            if let Ok(mem) = kmalloc(expected_mem_bytes as usize) {
-                t.mem.set(mem.as_ptr().cast());
-                t.mem_bytes.set(expected_mem_bytes);
+        t.shard_cpu.set(if c.opts().shard_inode_numbers_bits.get() != 0 {
+            c.inode_shard_cpu[c.inode_shard_idx() as usize] as i16
+        } else {
+            -1
+        });
+        t.locking_wait.task.store(sched::current(), Ordering::Relaxed);
+        t.set_journal_replay_not_finished(
+            !c.journal.flags.get(c::journal_flags::JOURNAL_replay_done) &&
+            c.journal_keys_get().map(RefGuard::leak).is_some());
+        bch2_trans_paths_init(t);
+
+        if let Some(s) = stats {
+            if s.max_mem != 0 {
+                let expected_mem_bytes = s.max_mem.next_power_of_two();
+
+                let _nowarn = MemallocFlags::nowarn();
+                if let Ok(mem) = kmalloc(expected_mem_bytes as usize) {
+                    t.mem.set(mem.as_ptr().cast());
+                    t.mem_bytes.set(expected_mem_bytes);
+                }
             }
         }
+
+        bch2_trans_srcu_lock(t);
+        t.mark_locked(false);
+
+        let now = local_clock();
+        t.locking_wait.trans_start_time.set(now);
+        t.last_begin_time.set(now);
+
+        unsafe { c::closure_init_stack_release(t.ref_.as_ptr()) };
+        TransGuard { trans }
     }
-
-    bch2_trans_srcu_lock(t);
-    t.mark_locked(false);
-
-    let now = local_clock();
-    t.locking_wait.trans_start_time.set(now);
-    t.last_begin_time.set(now);
-
-    unsafe { c::closure_init_stack_release(t.ref_.as_ptr()) };
-    trans.cast()
 }
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -598,83 +614,84 @@ unsafe extern "C" fn trans_rcu_free(rcu: *mut c::rcu_head) {
     }
 }
 
-/// # Safety
-/// @trans is __bch2_trans_get()'s, and isn't used after.
-#[c_export]
-pub unsafe fn bch2_trans_put(trans: *mut BtreeTrans<'_>) {
-    let t = unsafe { &*trans };
-    let c = t.fs();
+impl Drop for TransGuard<'_> {
+    fn drop(&mut self) {
+        let t = &**self;
+        let c = t.fs();
 
-    if t.restarted().0 != 0 {
-        bch2_trans_in_restart_error(t);
-    }
-
-    {
-        let mut paths = t.paths();
-
-        bch2_trans_unlock_long(t, &mut paths);
-
-        let updates = unsafe { core::slice::from_raw_parts(t.updates.get(), t.nr_updates.get() as usize) };
-        for i in updates {
-            paths.put_ll(i.path, true);
+        if t.restarted().0 != 0 {
+            bch2_trans_in_restart_error(t);
         }
-        t.nr_updates.set(0);
 
-        check_btree_paths_leaked(t, &paths);
-    }
+        {
+            let mut paths = t.paths();
 
-    if t.journal_replay_not_finished() {
-        drop(unsafe { RefGuard::adopt(&c.journal_keys) });
-    }
+            bch2_trans_unlock_long(t, &mut paths);
 
-    /*
-     * trans->ref protects trans->locking_wait.task, btree_paths array; used
-     * by cycle detector
-     */
-    unsafe { c::bch2_closure_return_sync(t.ref_.as_ptr()) };
-    t.locking_wait.task.store(ptr::null_mut(), Ordering::Relaxed);
+            let updates = unsafe { core::slice::from_raw_parts(t.updates.get(), t.nr_updates.get() as usize) };
+            for i in updates {
+                paths.put_ll(i.path, true);
+            }
+            t.nr_updates.set(0);
 
-    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    unsafe { darray_exit(&mut *t.last_restarted_trace.as_ptr()) };
-    #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-    unsafe { darray_exit(&mut *t.trans_kmalloc_trace.as_ptr()) };
-
-    bch2_trans_paths_exit(t);
-
-    if let Some(mem) = NonNull::new(t.mem.get()) {
-        if t.used_mempool() {
-            unsafe { c.btree.trans.malloc_pool.free_raw(mem.cast()) };
-        } else {
-            unsafe { c::rust_kfree(mem.as_ptr()) };
+            check_btree_paths_leaked(t, &paths);
         }
-    }
 
-    /* Userspace doesn't have a real percpu implementation: */
-    #[cfg(kernel)]
-    let trans = {
-        let cpu = CpuGuard::new();
-        let slot = crate::percpu_field!(c.btree.trans.bufs.this_cpu(&cpu), trans);
-        let old = slot.get();
-        slot.set(trans.cast());
-        old
-    };
-
-    if !trans.is_null() {
-        let lock = Locked::from_c(&c.btree.trans.lock);
-        let guard = lock.lock();
-        unsafe { TransList::from_c((&raw const c.btree.trans.list).cast_mut()).remove(&*trans.cast()) };
-        drop(guard);
+        if t.journal_replay_not_finished() {
+            drop(unsafe { RefGuard::adopt(&c.journal_keys) });
+        }
 
         /*
-         * RCU-defer the mempool return: the cycle detector walks
-         * wait_fifos under RCU without holding closure refs, so other
-         * threads may be mid-access of this trans via a pointer they
-         * read from a wait_fifo slot. Grace period ensures the memory
-         * isn't reused for a different struct before those walks
-         * finish; per-CPU cache reuse within a grace period is
-         * identity-confusion (acceptable per probabilistic detection).
+         * trans->ref protects trans->locking_wait.task, btree_paths array; used
+         * by cycle detector
          */
-        unsafe { rcu::Flavor::RCU.call(&raw mut (*trans).rcu, trans_rcu_free) };
+        unsafe { c::bch2_closure_return_sync(t.ref_.as_ptr()) };
+        t.locking_wait.task.store(ptr::null_mut(), Ordering::Relaxed);
+
+        #[cfg(CONFIG_BCACHEFS_DEBUG)]
+        unsafe { darray_exit(&mut *t.last_restarted_trace.as_ptr()) };
+        #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
+        unsafe { darray_exit(&mut *t.trans_kmalloc_trace.as_ptr()) };
+
+        bch2_trans_paths_exit(t);
+
+        if let Some(mem) = NonNull::new(t.mem.get()) {
+            if t.used_mempool() {
+                unsafe { c.btree.trans.malloc_pool.free_raw(mem.cast()) };
+            } else {
+                unsafe { c::rust_kfree(mem.as_ptr()) };
+            }
+        }
+
+        let trans = self.trans.as_ptr();
+
+        /* Userspace doesn't have a real percpu implementation: */
+        #[cfg(kernel)]
+        let trans = {
+            let cpu = CpuGuard::new();
+            let slot = crate::percpu_field!(c.btree.trans.bufs.this_cpu(&cpu), trans);
+            let old = slot.get();
+            slot.set(trans.cast());
+            old
+        };
+
+        if !trans.is_null() {
+            let lock = Locked::from_c(&c.btree.trans.lock);
+            let guard = lock.lock();
+            unsafe { TransList::from_c((&raw const c.btree.trans.list).cast_mut()).remove(&*trans.cast()) };
+            drop(guard);
+
+            /*
+             * RCU-defer the mempool return: the cycle detector walks
+             * wait_fifos under RCU without holding closure refs, so other
+             * threads may be mid-access of this trans via a pointer they
+             * read from a wait_fifo slot. Grace period ensures the memory
+             * isn't reused for a different struct before those walks
+             * finish; per-CPU cache reuse within a grace period is
+             * identity-confusion (acceptable per probabilistic detection).
+             */
+            unsafe { rcu::Flavor::RCU.call(&raw mut (*trans).rcu, trans_rcu_free) };
+        }
     }
 }
 
