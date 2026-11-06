@@ -99,11 +99,11 @@ impl Drop for ReadGuard {
 }
 
 c_extern! {
-    pub fn rust_init_srcu_struct(ssp: *mut c::srcu_struct, name: *const c_char, key: *mut c_void) -> c_int;
-    pub fn rust_synchronize_srcu_expedited(ssp: *mut c::srcu_struct);
-    pub fn rust_cleanup_srcu_struct(ssp: *mut c::srcu_struct);
-    pub fn rust_srcu_read_lock(ssp: *mut c::srcu_struct) -> c_int;
-    pub fn rust_srcu_read_unlock(ssp: *mut c::srcu_struct, idx: c_int);
+    fn rust_init_srcu_struct(ssp: *mut c::srcu_struct, name: *const c_char, key: *mut c_void) -> c_int;
+    fn rust_synchronize_srcu_expedited(ssp: *mut c::srcu_struct);
+    fn rust_cleanup_srcu_struct(ssp: *mut c::srcu_struct);
+    fn rust_srcu_read_lock(ssp: *mut c::srcu_struct) -> c_int;
+    fn rust_srcu_read_unlock(ssp: *mut c::srcu_struct, idx: c_int);
 }
 
 /// An SRCU domain, C's srcu_struct: cleaned up when it drops.
@@ -139,7 +139,7 @@ impl Srcu {
         }
     }
 
-    pub fn as_ptr(&self) -> *mut c::srcu_struct {
+    fn as_ptr(&self) -> *mut c::srcu_struct {
         #[cfg(kernel)]
         return self.0.as_ptr();
         #[cfg(not(kernel))]
@@ -171,6 +171,20 @@ impl Drop for Srcu {
 pub struct SrcuReadGuard<'a> {
     srcu: &'a Srcu,
     idx:  c_int,
+}
+
+impl<'a> SrcuReadGuard<'a> {
+    /// The section left held, for what holds it where a guard can't be - a
+    /// transaction's, across its unlocks: its index, for from_raw().
+    pub fn into_raw(self) -> c_int {
+        core::mem::ManuallyDrop::new(self).idx
+    }
+
+    /// # Safety
+    /// @idx is into_raw()'s, of a read_lock() of @srcu, taken back once.
+    pub unsafe fn from_raw(srcu: &'a Srcu, idx: c_int) -> Self {
+        SrcuReadGuard { srcu, idx }
+    }
 }
 
 impl Drop for SrcuReadGuard<'_> {
@@ -221,10 +235,6 @@ impl<'a> Flavor<'a> {
     /// this.
     pub unsafe fn srcu(srcu: *mut c::srcu_struct) -> Self {
         Flavor(srcu, PhantomData)
-    }
-
-    pub fn as_ptr(self) -> *mut c::srcu_struct {
-        self.0
     }
 
     #[cfg(kernel)]

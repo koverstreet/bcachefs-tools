@@ -25,7 +25,7 @@ use crate::util::ffi::Opaque;
 use crate::util::futex::EventCount;
 use crate::util::kernel::{jiffies, msecs_to_jiffies, race_fault, time_after, HZ, READ};
 use crate::util::percpu::{bch2_migrate_disable, bch2_migrate_enable, bch2_raw_smp_processor_id};
-use crate::util::rcu::{rust_srcu_read_lock, rust_srcu_read_unlock};
+use crate::util::rcu::SrcuReadGuard;
 use crate::util::sleep::Sleep;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::util::{kernel::local_clock, time_stats::TimeStats};
@@ -975,14 +975,14 @@ impl BtreeTrans<'_> {
             let _ = prt_current_backtrace(&mut msg, 1);
         }
 
-        unsafe { rust_srcu_read_unlock(fs.btree.trans.barrier.as_ptr(), self.srcu_idx.get()) };
+        drop(unsafe { SrcuReadGuard::from_raw(&fs.btree.trans.barrier, self.srcu_idx.get()) });
         self.set_srcu_held(false);
     }
 
     /// The SRCU read lock btree nodes are freed under, if it isn't held.
     pub(crate) fn srcu_lock(&self) {
         if !self.srcu_held() {
-            self.srcu_idx.set(unsafe { rust_srcu_read_lock(self.fs().btree.trans.barrier.as_ptr()) });
+            self.srcu_idx.set(self.fs().btree.trans.barrier.read_lock().into_raw());
             self.srcu_lock_time.set(jiffies());
             self.set_srcu_held(true);
         }
