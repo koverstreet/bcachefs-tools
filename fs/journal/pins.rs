@@ -13,7 +13,7 @@
 use core::ffi::{c_int, c_uint, c_void};
 use core::mem::offset_of;
 use core::ptr;
-use core::sync::atomic::{fence, AtomicI32, Ordering::{Acquire, Relaxed, SeqCst}};
+use core::sync::atomic::{fence, AtomicI32, Ordering::{Acquire, Relaxed, Release, SeqCst}};
 
 use cstruct_macros::c_export;
 use pin_init::{pin_data, PinInit, Zeroable};
@@ -649,9 +649,13 @@ impl<'a> PinsRead<'a> {
                 g.protected().flushed.push_front(pin);
             }
         }
-        self.j.flush_in_progress.store(ptr::null_mut(), Relaxed);
         self.j.flush_in_progress_fn.store(ptr::null_mut(), Relaxed);
         self.j.flush_in_progress_dropped.set(false);
+        /*
+         * Last, and Release: pin_flush() frees the pin once it sees this, and
+         * the flush's writes to the pin's owner must be done by then
+         */
+        self.j.flush_in_progress.store(ptr::null_mut(), Release);
     }
 
     fn still_flushing(&self, seq_to_flush: u64, types: u32) -> bool {
