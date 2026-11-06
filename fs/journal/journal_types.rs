@@ -8,7 +8,8 @@ use crate::fs::Fs;
 use crate::types::c_default;
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_uint};
-use core::sync::atomic::Ordering;
+use core::ptr;
+use core::sync::atomic::{AtomicPtr, Ordering::{self, Relaxed, SeqCst}};
 use cstruct_macros::{CStruct, c_enum, c_export, c_extern};
 
 c_enum! {
@@ -102,6 +103,89 @@ impl c::journal {
     }
 }
 
+/*
+ * buf->wait.list.first is the write's flush decision, and its flush waiters:
+ * journal.h's JOURNAL_BUF_* sentinels, which C names too while journal.c is C
+ */
+pub const JOURNAL_BUF_NOT_IN_FLIGHT: *mut c::llist_node = 1 as _;
+pub const JOURNAL_BUF_NOFLUSH: *mut c::llist_node = 2 as _;
+pub const JOURNAL_BUF_FLUSH_NO_WAIT: *mut c::llist_node = 3 as _;
+pub const JOURNAL_BUF_FLUSH: *mut c::llist_node = 4 as _;
+
+/* Real waiters, not one of the sentinels: */
+pub fn buf_waiters(first: *mut c::llist_node) -> bool {
+    first > JOURNAL_BUF_FLUSH
+}
+
+impl c::journal_buf {
+    fn wait_word(&self) -> &AtomicPtr<c::llist_node> {
+        unsafe { AtomicPtr::from_ptr((&raw const self.wait.list.first).cast_mut()) }
+    }
+
+    pub fn must_flush(&self) -> bool {
+        /*
+         * "must be written as a flush" - true for entries with real flush
+         * waiters AND for the FLUSH_NO_WAIT transition entry (which has no
+         * waiters but must still flush, to mark the fs dirty). The close/cycle
+         * logic keys on this, so FLUSH_NO_WAIT must count here or its entry
+         * never gets closed and written.
+         */
+        self.wait_word().load(Relaxed) > JOURNAL_BUF_NOFLUSH
+    }
+
+    pub fn try_noflush(&self) -> bool {
+        let w = self.wait_word();
+        let mut old = w.load(Relaxed);
+        loop {
+            if old == JOURNAL_BUF_NOFLUSH {
+                return true;
+            }
+            if !old.is_null() {
+                return false;
+            }
+            match w.compare_exchange(old, JOURNAL_BUF_NOFLUSH, SeqCst, Relaxed) {
+                Ok(_) => return true,
+                Err(o) => old = o,
+            }
+        }
+    }
+}
+
+impl c::JournalLocked {
+    /*
+     * Look up the buffer for @seq via the in_flight FIFO: under j->lock, since
+     * the FIFO front moves with seq_ondisk and buffers are freed on pop.
+     *
+     * A reservation holder doesn't need its buf: journal_res_data() and
+     * ring_has_overwrites are its ring slot's, pinned by the reservation.
+     */
+    pub fn seq_to_buf(&self, seq: u64) -> Option<&c::journal_buf> {
+        self.in_flight.get(seq)
+    }
+
+    pub fn seq_to_buf_mut(&mut self, seq: u64) -> Option<&mut c::journal_buf> {
+        self.in_flight.get_mut(seq)
+    }
+}
+
+impl c::journal_res_state {
+    pub fn count(self, idx: u32) -> u32 {
+        (unsafe { self.word.v } >> (c::JOURNAL_STATE_BUF0_SHIFT + idx * c::JOURNAL_STATE_BUF_COUNT_BITS)) as u32
+            & c::JOURNAL_STATE_BUF_COUNT_MAX
+    }
+}
+
+impl c::journal {
+    /// @seq's buf's reservation count in @s, 0 for a seq too old to have one.
+    pub fn state_seq_count(&self, s: c::journal_res_state, seq: u64) -> u32 {
+        if self.fs().journal_cur_seq().wrapping_sub(seq) < u64::from(c::JOURNAL_STATE_BUF_NR) {
+            s.count((seq & u64::from(c::JOURNAL_STATE_BUF_MASK)) as u32)
+        } else {
+            0
+        }
+    }
+}
+
 impl ToText for c::journal {
     fn to_text(&self, out: &mut Printbuf) {
         unsafe { bch2_journal_debug_to_text(out.as_raw(), self.as_ptr()) }
@@ -153,4 +237,38 @@ impl Fs {
 #[c_export]
 pub fn bch2_journal_replicas(c: &Fs) -> c_uint {
     c.journal_replicas()
+}
+
+#[c_export]
+pub fn journal_wake(j: &c::journal) {
+    j.wake_async_wait()
+}
+
+/// # Safety
+/// The caller holds j->lock.
+#[c_export]
+pub unsafe fn journal_seq_to_buf(j: &c::journal, seq: u64) -> *mut c::journal_buf {
+    ebug_assert!(seq <= j.fs().journal_cur_seq(), "journal buf for seq {seq}, past the current");
+    let mut g = unsafe { j.lock.held() };
+    g.seq_to_buf_mut(seq).map_or(ptr::null_mut(), ptr::from_mut)
+}
+
+#[c_export]
+pub fn journal_state_seq_count(j: &c::journal, s: c::journal_res_state, seq: u64) -> c_int {
+    j.state_seq_count(s, seq) as c_int
+}
+
+#[c_export]
+pub fn journal_buf_waiters(first: *mut c::llist_node) -> bool {
+    buf_waiters(first)
+}
+
+#[c_export]
+pub fn journal_buf_must_flush(buf: &c::journal_buf) -> bool {
+    buf.must_flush()
+}
+
+#[c_export]
+pub fn journal_buf_try_noflush(buf: &c::journal_buf) -> bool {
+    buf.try_noflush()
 }

@@ -20,9 +20,6 @@ use crate::util::closure::closure_wait_event;
 use crate::util::kernel::jiffies;
 use crate::{bch_err, fsck_err_on, warn_on};
 
-/* journal.h's JOURNAL_BUF_NOT_IN_FLIGHT: a buf's wait list, while it isn't */
-const NOT_IN_FLIGHT: *mut c::llist_node = 1 as *mut c::llist_node;
-
 impl c::journal {
     /* startup/shutdown: */
 
@@ -226,7 +223,7 @@ impl c::journal {
         let mut in_flight: Fifo<c::journal_buf, u64> = Fifo::new();
         in_flight.reserve(256).map_err(|_| enomem())?;
         in_flight.init_spare(|buf| unsafe {
-            (&raw mut (*buf.as_mut_ptr()).wait.list.first).write(NOT_IN_FLIGHT)
+            (&raw mut (*buf.as_mut_ptr()).wait.list.first).write(c::JOURNAL_BUF_NOT_IN_FLIGHT)
         });
 
         /* the old ones freed outside the lock: kvfree can sleep */

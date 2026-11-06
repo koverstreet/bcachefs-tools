@@ -116,11 +116,6 @@
 #include "journal/buckets_gen.h"
 #include "journal/journal_gen.h"
 
-static inline void journal_wake(struct journal *j)
-{
-	closure_wake_up(&j->async_wait);
-}
-
 static inline bool journal_low_on_space(struct journal *j)
 {
 	return test_bit(JOURNAL_low_on_space, &j->flags) ||
@@ -132,26 +127,6 @@ static inline bool journal_low_on_space(struct journal *j)
 static inline u64 journal_cur_seq(struct journal *j)
 {
 	return atomic64_read(&j->seq);
-}
-
-/*
- * Look up the buffer for @seq via the in_flight FIFO. Caller must hold
- * j->lock (or otherwise be serialized against seq_ondisk advancing and
- * FIFO mutation), since the FIFO front moves with seq_ondisk and
- * buffers are freed on pop.
- *
- * A reservation holder doesn't need its buf: journal_res_data() and
- * ring_has_overwrites are its ring slot's, pinned by the reservation.
- */
-static inline struct journal_buf *
-journal_seq_to_buf(struct journal *j, u64 seq)
-{
-	lockdep_assert_held(&j->lock);
-	EBUG_ON(seq > journal_cur_seq(j));
-
-	return seq >= j->in_flight.front
-		? &fifo_entry(&j->in_flight, seq)
-		: NULL;
 }
 
 /*
@@ -180,41 +155,9 @@ journal_seq_to_buf(struct journal *j, u64 seq)
  */
 #define JOURNAL_BUF_FLUSH		((struct llist_node *) 4)
 
-/* Real waiters, not one of the sentinels: */
-static inline bool journal_buf_waiters(struct llist_node *first)
-{
-	return first > JOURNAL_BUF_FLUSH;
-}
-
-static inline bool journal_buf_must_flush(struct journal_buf *buf)
-{
-	/*
-	 * "must be written as a flush" - true for entries with real flush
-	 * waiters AND for the FLUSH_NO_WAIT transition entry (which has no
-	 * waiters but must still flush, to mark the fs dirty). The close/cycle
-	 * logic keys on this, so FLUSH_NO_WAIT must count here or its entry
-	 * never gets closed and written.
-	 */
-	return buf->wait.list.first > JOURNAL_BUF_NOFLUSH;
-}
-
 static inline bool journal_buf_must_not_flush(struct journal_buf *buf)
 {
 	return buf->wait.list.first == JOURNAL_BUF_NOFLUSH;
-}
-
-static inline bool journal_buf_try_noflush(struct journal_buf *buf)
-{
-	struct llist_node *old = READ_ONCE(buf->wait.list.first);
-
-	do {
-		if (old == JOURNAL_BUF_NOFLUSH)
-			return true;
-		if (old)
-			return false;
-	} while (!try_cmpxchg(&buf->wait.list.first, &old, JOURNAL_BUF_NOFLUSH));
-
-	return true;
 }
 
 /* Decided a flush - false if journal_buf_try_noflush() got there first: */
@@ -257,15 +200,6 @@ static inline int journal_state_count(union journal_res_state s, int idx)
 {
 	return (s.v >> (JOURNAL_STATE_BUF0_SHIFT + idx * JOURNAL_STATE_BUF_COUNT_BITS))
 		& JOURNAL_STATE_BUF_COUNT_MAX;
-}
-
-static inline int journal_state_seq_count(struct journal *j,
-					  union journal_res_state s, u64 seq)
-{
-	if (journal_cur_seq(j) - seq < JOURNAL_STATE_BUF_NR)
-		return journal_state_count(s, seq & JOURNAL_STATE_BUF_MASK);
-	else
-		return 0;
 }
 
 /* Returns false (without incrementing) if the count would overflow: */
