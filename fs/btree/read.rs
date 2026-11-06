@@ -9,10 +9,10 @@
 
 use crate::fs::Dev;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{BkeyI, BkeySC};
+use crate::btree::bkey::{types_with, BkeyI, BkeySC};
 use crate::btree::bkey_buf::BtreeKeyBuf;
 use crate::btree::cache::{__bch2_btree_pos_to_text, Bounce};
-use crate::btree::iter::{commit_do, CommitFlags};
+use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags};
 use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::data::checksum::{csum_err_msg, csum_vstruct, BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
@@ -29,6 +29,7 @@ use crate::util::refcount::TryRefcount;
 use crate::util::backref::BackRef;
 use crate::util::task::{spawn_static, waiter, Resumable, Resume, Spawn};
 use crate::util::vstructs::{cast_plain, Head, SelfSized, Unvalidated};
+use crate::data::inline_data::InlineDataRef;
 use crate::util::Printbuf;
 use crate::util::sleep::Sleep;
 use crate::data::moving::{Moving, MovingIo};
@@ -308,11 +309,56 @@ pub fn btree_node_scrub(m: &Moving<'_>, btree: Btree, level: u32, k: BkeySC<'_>,
     spawn_static(Spawn::Queue(&fs.btree.read_complete_wq), rewrite_if_bad(write, fs_ref, key, r, io))
 }
 
+/// The inline data keys of the leaf @key points to checked against their own
+/// checksums, through the btree: a node rewritten from a bset that failed its
+/// checksum has good checksums after, whatever its keys hold - and every
+/// replica the same keys. Each that doesn't match is said, and its sectors
+/// are what's returned: data lost, with no copy to repair it from.
+fn inline_data_bad(fs: &Fs, key: &BtreeKeyBuf) -> u64 {
+    let k = key.key();
+    let Some(min_key) = k.arm::<c::BtreePtrV2>().map(|v2| v2.v().min_key) else { return 0 };
+
+    let trans = crate::btree_trans!(fs);
+    let (mut bad, mut seen) = (0u64, None);
+    let ret = BtreeIter::new(&trans, key.btree, min_key, BtreeIterFlags::ALL_SNAPSHOTS)
+        .for_each_max(&trans, k.k.p, |_, _, k| {
+            // a restart runs a key again
+            if seen >= Some(k.k.p) {
+                return Ok(());
+            }
+            seen = Some(k.k.p);
+
+            let Some(Err(e)) = InlineDataRef::of(k).map(|d| d.verify()) else { return Ok(()) };
+            bad += u64::from(k.k.size);
+
+            let mut msg = Printbuf::new();
+            prt!(&mut msg, "btree node scrub: inline data doesn't match its checksum, and there's no \
+                            other copy of it:\n  ");
+            e.to_text(&mut msg);
+            prt!(&mut msg, "\n  {}", k.to_text(fs));
+            crate::bch_err_ratelimited!(fs, "{}", msg.as_str());
+            Ok(())
+        });
+    if let Err(e) = ret {
+        crate::bch_err_ratelimited!(fs, "btree node scrub: checking inline data: {}", e.msg());
+    }
+    bad
+}
+
 async fn rewrite_if_bad(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, mut r: ReplicaRead<'static>,
                         io: MovingIo) {
     let fs = &*fs;
     let read = read_replicas(core::slice::from_mut(&mut r)).await[0];
-    if r.good(read, &key, ", rewriting node") {
+    let good = r.good(read, &key, ", rewriting node");
+    drop(r);
+
+    // the btree's keys, whichever replica they were read from
+    if key.level == 1 && key.btree.key_types() & types_with(c::BKEY_TYPE_inline_data) != 0 {
+        let bad = inline_data_bad(fs, &key);
+        io.stats().sectors_error_uncorrected.fetch_add(bad as i64, Relaxed);
+    }
+
+    if good {
         return;
     }
 
