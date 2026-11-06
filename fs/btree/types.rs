@@ -23,6 +23,7 @@ use crate::btree::path::BtreePath;
 use crate::new_lock;
 use crate::util::projections::Volatile;
 use crate::util::ffi::{c_char, Opaque};
+use crate::util::percpu::PerCpu;
 use core::cell::Cell;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8};
@@ -713,9 +714,10 @@ pub struct BtreeTrans<'f> {
     pub mem: Cell<*mut c_void>,
     pub mem_top: Cell<c_uint>,
     pub mem_bytes: Cell<c_uint>,
-    pub realloc_bytes_required: c_uint,
+    pub realloc_bytes_required: Cell<c_uint>,
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-    pub trans_kmalloc_trace: cs::darray_trans_kmalloc_trace,
+    #[c("darray_trans_kmalloc_trace trans_kmalloc_trace")]
+    pub trans_kmalloc_trace: Opaque<cs::darray_trans_kmalloc_trace>,
 
     pub nr_sorted: cs::PathIdx,
     pub nr_paths: Cell<cs::PathIdx>,
@@ -729,18 +731,19 @@ pub struct BtreeTrans<'f> {
     pub bits: Cell<btree_trans_bits>,
     pub restart_count: Cell<u32>,
     #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
-    pub restart_count_this_trans: u32,
+    pub restart_count_this_trans: Cell<u32>,
     /*
      * Incremented on every successful (non-empty) commit; for detecting
      * that cached state derived from btree reads may be stale:
      */
     pub commit_count: Cell<u32>,
 
-    pub last_begin_time: u64,
-    pub last_begin_ip: c_ulong,
-    pub last_restarted_ip: c_ulong,
+    pub last_begin_time: Cell<u64>,
+    pub last_begin_ip: Cell<c_ulong>,
+    pub last_restarted_ip: Cell<c_ulong>,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub last_restarted_trace: cs::bch_stacktrace,
+    #[c("bch_stacktrace last_restarted_trace")]
+    pub last_restarted_trace: Opaque<cs::bch_stacktrace>,
     pub last_unlock_ip: Cell<c_ulong>,
     pub srcu_lock_time: Cell<c_ulong>,
     pub srcu_idx: Cell<c_int>,
@@ -883,7 +886,7 @@ pub struct bch_fs_btree_trans {
     #[c("mempool_t malloc_pool")]
     pub malloc_pool: Mempool,
     #[c("struct btree_trans_buf __percpu *bufs")]
-    pub bufs: *mut cs::btree_trans_buf,
+    pub bufs: PerCpu<cs::btree_trans_buf>,
 
     pub barrier: cs::srcu_struct,
     pub barrier_initialized: bool,
