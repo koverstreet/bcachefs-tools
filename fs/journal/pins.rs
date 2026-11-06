@@ -784,6 +784,29 @@ fn resize(j: &c::journal) -> Result<(), BchError> {
 }
 
 /*
+ * Worker for the pin fifo resize trigger — journal_entry_open queues this when
+ * bch2_journal_pin_fifo_want_resize(). Off the open path because the open is
+ * sometimes called from NONBLOCK contexts holding btree locks, where we can't
+ * sleep on percpu_down_write / kvmalloc.
+ */
+pub(crate) unsafe extern "C" fn pin_resize_work(work: *mut c::work_struct) {
+    let j = unsafe { &*work.byte_sub(offset_of!(c::journal, pin_resize_work)).cast::<c::journal>() };
+    let _ = resize(j);
+}
+
+/*
+ * Queued by bch2_dev_online(): journal written while a device was offline is
+ * under-replicated, and those replicas entries go on refusing to take the
+ * devices that stayed online offline until the pins are flushed.
+ *
+ * Errors are journal errors, reported at the source - nothing to do here.
+ */
+pub(crate) unsafe extern "C" fn flush_degraded_work(work: *mut c::work_struct) {
+    let j = unsafe { work.byte_sub(offset_of!(c::journal, flush_degraded_work)).cast::<c::journal>() };
+    unsafe { c::bch2_journal_flush_device_pins(j, -1) };
+}
+
+/*
  * The fifo for [last_seq, cur_seq), each entry unreplayed with a ref replay
  * puts. However many dirty entries there are, we have to replay them: no cap
  * here. Filesystems from before JOURNAL_PIN_MAX can have millions; reclaim
@@ -852,10 +875,6 @@ pub fn bch2_journal_pin_fifo_want_resize(j: &c::journal) -> bool {
     want_size(j.pin_range()) != j.pin_range().pin_size.get()
 }
 
-#[c_export]
-pub fn bch2_journal_pin_fifo_resize(j: &c::journal) -> c_int {
-    ret_to_c(resize(j))
-}
 
 #[c_export]
 pub fn bch2_journal_pins_start(j: &c::journal, last_seq: u64, cur_seq: u64) -> c_int {

@@ -18,7 +18,7 @@ use core::cell::Cell;
 use crate::util::late::Late;
 use crate::{new_lock, published};
 use pin_init::pin_data;
-use crate::util::workqueue::{ReffedWork, Workqueue, WqFlags};
+use crate::util::workqueue::{DelayedWork, ReffedWork, Workqueue, WqFlags};
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, placed, CStruct, Init, Late};
 use nestify::nest;
 
@@ -368,6 +368,15 @@ published! {
     }
 }
 
+impl JournalPublished {
+    /* No entry open */
+    fn closed() -> Self {
+        let p: Self = ::pin_init::Zeroable::zeroed();
+        p.hot.reservations.store(c::JOURNAL_ENTRY_CLOSED_VAL.into(), core::sync::atomic::Ordering::Relaxed);
+        p
+    }
+}
+
 /* pin_resize_lock's: the journal pin fifo's entries, a power of two of them */
 #[repr(C)]
 #[derive(CStruct)]
@@ -401,13 +410,14 @@ nest! {
         pub __align: CacheAligned,
 
         #[pin]
-        #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&j->lock"))]
+        #[init(new_lock!(<- ::pin_init::init_zeroed(), JournalPublished::closed(), "&j->lock"))]
         #[c_lock("spinlock_t lock")]
         pub lock: Locked<c::spinlock_t, JournalLocked, JournalPublished>,
 
         #[c("unsigned long flags")]
         pub flags: crate::data_structures::bitmap::AtomicBitflags<c::journal_flags>,
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
+        #[init((-(c::EROFS as isize)) as *mut c::task_struct)]
         pub stop_thread: *mut c::task_struct,
 
         pub buf_size_want: c_uint,
@@ -422,7 +432,10 @@ nest! {
          * reservation: for synchronization between the btree write buffer code
          * and the journal write path:
          */
-        pub buf_lock: c::mutex_noio,
+        #[pin]
+        #[init(new_lock!((), "&j->buf_lock"))]
+        #[c_lock("struct mutex_noio buf_lock")]
+        pub buf_lock: Locked<c::mutex_noio>,
 
         /*
          * FIFO of in-flight journal bufs, one entry per seq in
@@ -445,7 +458,10 @@ nest! {
         pub async_wait: c::closure_waitlist,
         pub reclaim_flush_wait: c::closure_waitlist,
 
-        pub write_work: c::delayed_work,
+        #[pin]
+        #[init(crate::new_delayed_work!(c::bch2_journal_write_work, "&j->write_work"))]
+        #[c("struct delayed_work write_work")]
+        pub write_work: DelayedWork,
         #[late(Workqueue::new(c"bcachefs_journal",
                               WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::PERCPU, 512),
                ENOMEM_fs_other_alloc)]
@@ -494,9 +510,13 @@ nest! {
                          "&j->pin_resize_lock"))]
         #[c_lock("struct percpu_rw_semaphore pin_resize_lock")]
         pub pin_resize_lock: Locked<c::percpu_rw_semaphore, PinBuf, PinRange>,
+        #[pin]
+        #[init(crate::new_work!(crate::journal::pins::pin_resize_work, "&j->pin_resize_work"))]
         pub pin_resize_work: c::work_struct,
 
         /* Flushes under-replicated pins when a device comes back: */
+        #[pin]
+        #[init(crate::new_work!(crate::journal::pins::flush_degraded_work, "&j->flush_degraded_work"))]
         pub flush_degraded_work: c::work_struct,
 
         /* Drops retired journal buckets reclaim is done with: buckets.rs */
@@ -520,13 +540,21 @@ nest! {
          * prefers - same protection as wp_domain_keys:
          */
         pub wp_prev_devs: c::bch_devs_mask,
-        pub err_lock: c::spinlock_t,
+        #[pin]
+        #[init(new_lock!((), "&j->err_lock"))]
+        #[c_lock("spinlock_t err_lock")]
+        pub err_lock: Locked<c::spinlock_t>,
 
-        pub reclaim_lock: c::mutex,
+        #[pin]
+        #[init(new_lock!((), "&j->reclaim_lock"))]
+        #[c_lock("struct mutex reclaim_lock")]
+        pub reclaim_lock: Locked<c::mutex>,
         /*
          * Used for waiting until journal reclaim has freed up space in the
          * journal:
          */
+        #[pin]
+        #[init(crate::new_waitqueue!("&j->reclaim_wait"))]
         pub reclaim_wait: c::wait_queue_head_t,
         pub reclaim_thread: *mut c::task_struct,
         pub reclaim_kicked: bool,
@@ -541,6 +569,8 @@ nest! {
         /* its flush function, for messages: the pin can be freed under them */
         #[c("void *flush_in_progress_fn")]
         pub flush_in_progress_fn: AtomicPtr<c_void>,
+        #[pin]
+        #[init(crate::new_waitqueue!("&j->pin_flush_wait"))]
         pub pin_flush_wait: c::wait_queue_head_t,
 
         pub write_start_time: u64,
@@ -552,7 +582,10 @@ nest! {
         pub flush_seq_time: *mut c::bch2_time_stats,
 
         #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-        pub res_map: c::lockdep_map,
+        #[pin]
+        #[init(crate::new_lockdep_map!("journal res"))]
+        #[c("struct lockdep_map res_map")]
+        pub res_map: crate::locking::LockdepMap,
     }
 }
 const _: () = assert!(core::mem::size_of::<JournalHot>() == core::mem::align_of::<JournalHot>(),
@@ -593,7 +626,12 @@ pub struct journal_device {
      */
     pub bio_set: c::bio_set,
 
-    pub discard_lock: c::mutex,
+    #[pin]
+    #[init(new_lock!((), "&ca->journal.discard_lock"))]
+    #[c_lock("struct mutex discard_lock")]
+    pub discard_lock: Locked<c::mutex>,
+    #[pin]
+    #[init(crate::new_work!(c::bch2_journal_discard_work, "&ca->journal.discard"))]
     pub discard: c::work_struct,
 
     pub highest_seq_found: u64,

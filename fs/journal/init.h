@@ -11,12 +11,9 @@ void bch2_dev_journal_stop(struct journal *, struct bch_dev *);
 void bch2_fs_journal_stop(struct journal *);
 
 void bch2_dev_journal_exit(struct bch_dev *);
-void bch2_dev_journal_init_early(struct bch_dev *);
 int bch2_dev_journal_init(struct bch_dev *);
 
 void bch2_fs_journal_exit(struct journal *);
-void bch2_fs_journal_init_early(struct journal *);
 int bch2_fs_journal_init_rw(struct journal *);
-int bch2_fs_journal_init(struct journal *);
 
 #endif /* _BCACHEFS_JOURNAL_INIT_H */

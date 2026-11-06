@@ -197,33 +197,6 @@ int bch2_fs_journal_alloc(struct bch_fs *c)
 	return 0;
 }
 
-/*
- * Worker for the pin fifo resize trigger — journal_entry_open queues this when
- * bch2_journal_pin_fifo_want_resize(). Off the open path because the open is
- * sometimes called from NONBLOCK contexts holding btree locks, where we can't
- * sleep on percpu_down_write / kvmalloc.
- */
-static void bch2_journal_pin_fifo_resize_work(struct work_struct *work)
-{
-	struct journal *j = container_of(work, struct journal, pin_resize_work);
-
-	bch2_journal_pin_fifo_resize(j);
-}
-
-/*
- * Queued by bch2_dev_online(): journal written while a device was offline is
- * under-replicated, and those replicas entries go on refusing to take the
- * devices that stayed online offline until the pins are flushed.
- *
- * Errors are journal errors, reported at the source - nothing to do here.
- */
-static void bch2_journal_flush_degraded_work(struct work_struct *work)
-{
-	struct journal *j = container_of(work, struct journal, flush_degraded_work);
-
-	bch2_journal_flush_device_pins(j, -1);
-}
-
 /* startup/shutdown: */
 
 static bool bch2_journal_writing_to_device(struct journal *j, unsigned dev_idx)
@@ -416,12 +389,6 @@ void bch2_dev_journal_exit(struct bch_dev *ca)
 	bioset_exit(&ja->bio_set);
 }
 
-void bch2_dev_journal_init_early(struct bch_dev *ca)
-{
-	mutex_init(&ca->journal.discard_lock);
-	INIT_WORK(&ca->journal.discard, bch2_journal_discard_work);
-}
-
 int bch2_dev_journal_init(struct bch_dev *ca)
 {
 	struct bch_fs *c = ca->fs;
@@ -464,26 +431,6 @@ void bch2_fs_journal_exit(struct journal *j)
 	cancel_work_sync(&j->flush_degraded_work);
 }
 
-void bch2_fs_journal_init_early(struct journal *j)
-{
-	static struct lock_class_key res_key;
-
-	mutex_noio_init(&j->buf_lock);
-	spin_lock_init(&j->err_lock);
-	INIT_DELAYED_WORK(&j->write_work, bch2_journal_write_work);
-	INIT_WORK(&j->pin_resize_work, bch2_journal_pin_fifo_resize_work);
-	INIT_WORK(&j->flush_degraded_work, bch2_journal_flush_degraded_work);
-	init_waitqueue_head(&j->reclaim_wait);
-	init_waitqueue_head(&j->pin_flush_wait);
-	mutex_init(&j->reclaim_lock);
-
-	lockdep_init_map(&j->res_map, "journal res", &res_key, 0);
-
-	atomic64_set(&j->reservations.counter,
-		((union journal_res_state)
-		 { .cur_entry_offset = JOURNAL_ENTRY_CLOSED_VAL }).v);
-}
-
 int bch2_fs_journal_init_rw(struct journal *j)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
@@ -516,13 +463,5 @@ int bch2_fs_journal_init_rw(struct journal *j)
 	     buf++)
 		buf->wait.list.first = JOURNAL_BUF_NOT_IN_FLIGHT;
 
-	return 0;
-}
-
-int bch2_fs_journal_init(struct journal *j)
-{
-#ifdef CONFIG_BCACHEFS_DEBUG
-	j->stop_thread = ERR_PTR(-EROFS);
-#endif
 	return 0;
 }

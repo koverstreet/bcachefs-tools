@@ -70,6 +70,23 @@ impl LockdepMap {
     pub fn acquired(&self, _ip: c_ulong) {}
 }
 
+/// A LockdepMap's initializer, its class the call site's, named @name:
+/// lockdep_init_map().
+#[macro_export]
+macro_rules! new_lockdep_map {
+    ($name:literal $(,)?) => {{
+        let key = $crate::new_lock!(@key);
+        let name = const { $crate::util::ffi::c_str(::core::concat!($name, "\0")) };
+        // SAFETY: before anything takes it; a static key per call site
+        unsafe {
+            ::pin_init::pin_init_from_closure(move |m: *mut $crate::locking::LockdepMap| {
+                $crate::locking::LockdepMap::init(m, name.as_ptr().cast(), key);
+                Ok::<(), ::core::convert::Infallible>(())
+            })
+        }
+    }};
+}
+
 /// Lock @R, which lockdep knows about. No caller ip: C's is the call site's,
 /// _THIS_IP_, which Rust has no equivalent of.
 #[repr(C)]

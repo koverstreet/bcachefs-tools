@@ -391,13 +391,11 @@ pub struct bch_devs_list {
 }
 
 c_extern! {
-    pub fn bch2_dev_journal_init_early(ca: *mut Dev);
     pub fn bch2_dev_journal_init(ca: *mut Dev) -> c_int;
     pub fn bch2_dev_journal_exit(ca: *mut Dev);
     pub fn bch2_dev_journal_stop(j: *mut c::journal, ca: *mut Dev);
     pub fn bch2_dev_journal_alloc(ca: *mut Dev, new_fs: bool) -> c_int;
     pub fn bch2_journal_flush_dev_ro(j: *mut c::journal, dev_idx: c_uint);
-    pub fn bch2_journal_flush_device_pins(j: *mut c::journal, dev_idx: c_int) -> c_int;
 }
 
 static DEV_READ_REF_NAMES: CStatic<[*const c_char; names::c_table_len::<c::bch_dev_read_ref>()]> =
@@ -651,8 +649,6 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<NewDev> {
 
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     ca.ref_.store(1, Relaxed);
-
-    unsafe { bch2_dev_journal_init_early(ca) };
 
     let ok = unsafe { ca.io_ref[READ].init(c::bch_dev_read_ref::BCH_DEV_READ_REF_NR as u32, None) }.is_ok() &&
         unsafe { ca.io_ref[WRITE].init(c::bch_dev_write_ref::BCH_DEV_WRITE_REF_NR as u32, None) }.is_ok() &&
@@ -1127,7 +1123,7 @@ impl StateLockWrite<'_> {
             fs.journal_flush_outstanding_pins();
 
             let j = fs.journal.as_ptr();
-            ret_to_result_void(unsafe { bch2_journal_flush_device_pins(j, ca.dev_idx.into()) })
+            ret_to_result_void(unsafe { c::bch2_journal_flush_device_pins(j, ca.dev_idx.into()) })
                 .inspect_err(|e| prt!(err, "bch2_journal_flush_device_pins() error: {}\n", e.msg()))?;
 
             fs.journal_flush()

@@ -262,6 +262,24 @@ macro_rules! new_work {
     }};
 }
 
+/// A DelayedWork's initializer, running C's @func, its work's and timer's
+/// lockdep classes the call site's, named for @name: INIT_DELAYED_WORK().
+#[macro_export]
+macro_rules! new_delayed_work {
+    ($func:expr, $name:literal $(,)?) => {{
+        #[cfg(kernel)]
+        let w = $crate::util::workqueue::DelayedWork::new(
+            $func,
+            const { $crate::util::ffi::c_str(::core::concat!($name, "\0")) },
+            ::kernel::static_lock_class!(),
+            const { $crate::util::ffi::c_str(::core::concat!($name, ".timer\0")) },
+            ::kernel::static_lock_class!());
+        #[cfg(not(kernel))]
+        let w = $crate::util::workqueue::DelayedWork::new($func);
+        w
+    }};
+}
+
 /// A ReffedWork's function as a type, and the field it runs from: for a
 /// field `w: ReffedWork<f, R>`, the parent's #[derive(Init)] makes f - a
 /// braced struct, a type only, beside the fn f - and this.

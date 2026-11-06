@@ -26,6 +26,8 @@ c_extern! {
     pub fn __bch2_journal_set_alloc_watermark(j: *mut c::journal, p: *mut u8, watermark: c_uint);
     pub fn bch2_journal_space_available(j: *mut c::journal);
     pub fn bch2_journal_do_discards(j: *mut c::journal);
+    pub fn bch2_journal_discard_work(work: *mut c::work_struct);
+    pub fn bch2_journal_flush_device_pins(j: *mut c::journal, dev_idx: c_int) -> c_int;
     pub fn bch2_journal_update_last_seq(j: *mut c::journal);
     pub fn bch2_journal_reclaim_start(j: *mut c::journal) -> c_int;
     pub fn bch2_journal_reclaim_stop(j: *mut c::journal);
