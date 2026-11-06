@@ -582,7 +582,7 @@ static noinline int bch2_trans_commit_run_gc_triggers(struct btree_trans *trans)
 	trans_for_each_update(trans, i)
 		if (btree_node_type_has_triggers(i->bkey_type) &&
 		    !(i->flags & BTREE_TRIGGER_norun) &&
-		    gc_visited(trans->c, gc_pos_btree(i->btree_id, i->level, i->k->k.p)))
+		    bch2_gc_visited(trans->c, gc_pos_btree(i->btree_id, i->level, i->k->k.p)))
 			try(run_one_mem_trigger(trans, i, i->flags|BTREE_TRIGGER_gc));
 
 	return 0;
@@ -1156,7 +1156,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 				return trans_commit_fatal_err(trans, ret);
 		}
 
-	if (unlikely(c->gc.pos.phase)) {
+	if (unlikely(bch2_gc_phase(c))) {
 		ret = bch2_trans_commit_run_gc_triggers(trans);
 		if (unlikely(ret))
 			return trans_commit_fatal_err(trans, ret);

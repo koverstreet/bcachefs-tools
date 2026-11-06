@@ -73,20 +73,6 @@ static struct bkey_s unsafe_bkey_s_c_to_s(struct bkey_s_c k)
 	}}};
 }
 
-static inline void __gc_pos_set(struct bch_fs *c, struct gc_pos new_pos)
-{
-	guard(preempt)();
-	write_seqcount_begin(&c->gc.pos_lock);
-	c->gc.pos = new_pos;
-	write_seqcount_end(&c->gc.pos_lock);
-}
-
-static inline void gc_pos_set(struct bch_fs *c, struct gc_pos new_pos)
-{
-	BUG_ON(gc_pos_cmp(new_pos, c->gc.pos) < 0);
-	__gc_pos_set(c, new_pos);
-}
-
 static void btree_ptr_to_v2(struct btree *b, struct bkey_i_btree_ptr_v2 *dst)
 {
 	switch (b->key.k.type) {
@@ -843,7 +829,7 @@ static int bch2_gc_btree_root(struct btree_trans *trans, enum btree_id btree, bo
 	if (b != btree_node_root(c, b))
 		return btree_trans_restart(trans, BCH_ERR_transaction_restart_lock_root_race);
 
-	gc_pos_set(c, gc_pos_btree(btree, b->c.level + 1, SPOS_MAX));
+	bch2_gc_pos_set(c, gc_pos_btree(btree, b->c.level + 1, SPOS_MAX));
 	struct bkey_s_c k = bkey_i_to_s_c(&b->key);
 	return bch2_gc_mark_key(trans, btree, b->c.level + 1, NULL, NULL, k, initial);
 }
@@ -858,7 +844,7 @@ static int bch2_gc_btree(struct btree_trans *trans,
 		CLASS(btree_node_iter, iter)(trans, btree, POS_MIN, 0, level, BTREE_ITER_prefetch);
 
 		try(for_each_btree_key_continue(trans, iter, 0, k, ({
-			gc_pos_set(trans->c, gc_pos_btree(btree, level, k.k->p));
+			bch2_gc_pos_set(trans->c, gc_pos_btree(btree, level, k.k->p));
 			bch2_progress_update_iter(trans, progress, &iter) ?:
 			bch2_gc_mark_key(trans, btree, level, &prev, &iter, k, initial);
 		})));
@@ -869,7 +855,7 @@ static int bch2_gc_btree(struct btree_trans *trans,
 
 static inline int btree_id_gc_phase_cmp(enum btree_id l, enum btree_id r)
 {
-	return cmp_int(gc_btree_order(l), gc_btree_order(r));
+	return cmp_int(bch2_gc_btree_order(l), bch2_gc_btree_order(r));
 }
 
 static int bch2_gc_btrees(struct bch_fs *c)
@@ -914,7 +900,7 @@ static int bch2_gc_btrees(struct bch_fs *c)
 
 static int bch2_mark_superblocks(struct bch_fs *c)
 {
-	gc_pos_set(c, gc_phase(GC_PHASE_sb));
+	bch2_gc_pos_set(c, gc_phase(GC_PHASE_sb));
 
 	return bch2_trans_mark_dev_sbs_flags(c, BTREE_TRIGGER_gc);
 }
@@ -1196,7 +1182,7 @@ int bch2_check_allocations(struct bch_fs *c)
 	if (ret)
 		goto out;
 
-	gc_pos_set(c, gc_phase(GC_PHASE_start));
+	bch2_gc_pos_set(c, gc_phase(GC_PHASE_start));
 
 	ret = bch2_mark_superblocks(c);
 	bch_err_msg(c, ret, "marking superblocks");
@@ -1214,7 +1200,7 @@ int bch2_check_allocations(struct bch_fs *c)
 out:
 	scoped_guard(percpu_write_noio, &c->capacity.mark_lock) {
 		/* Indicates that gc is no longer in progress: */
-		__gc_pos_set(c, gc_phase(GC_PHASE_not_running));
+		bch2_gc_pos_set_not_running(c);
 		bch2_gc_free(c);
 	}
 
@@ -1534,7 +1520,6 @@ int bch2_presplit_shard_boundaries(struct bch_fs *c)
 
 void bch2_fs_btree_gc_init_early(struct bch_fs *c)
 {
-	seqcount_init(&c->gc.pos_lock);
 	INIT_WORK(&c->gc_gens.work, bch2_gc_gens_work);
 
 	init_rwsem(&c->gc.lock);

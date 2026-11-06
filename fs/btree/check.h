@@ -50,44 +50,6 @@ static inline struct gc_pos gc_pos_btree(enum btree_id btree, unsigned level,
 	};
 }
 
-/*
- * reflink before the btrees with reflink_ps: gc's table of indirect extents is
- * built walking it, after their repair, and the reflink_ps are counted against
- * it - one a repair left nothing to point to is found missing in the same pass
- */
-static inline int gc_btree_order(enum btree_id btree)
-{
-	if (btree == BTREE_ID_alloc)
-		return -3;
-	if (btree == BTREE_ID_stripes)
-		return -2;
-	if (btree == BTREE_ID_reflink)
-		return -1;
-	return btree;
-}
-
-static inline int gc_pos_cmp(struct gc_pos l, struct gc_pos r)
-{
-	return  cmp_int(l.phase, r.phase) ?:
-		cmp_int(gc_btree_order(l.btree),
-			gc_btree_order(r.btree)) ?:
-		cmp_int(l.level, r.level) ?:
-		bpos_cmp(l.pos, r.pos);
-}
-
-static inline bool gc_visited(struct bch_fs *c, struct gc_pos pos)
-{
-	unsigned seq;
-	bool ret;
-
-	do {
-		seq = read_seqcount_begin(&c->gc.pos_lock);
-		ret = gc_pos_cmp(pos, c->gc.pos) <= 0;
-	} while (read_seqcount_retry(&c->gc.pos_lock, seq));
-
-	return ret;
-}
-
 void bch2_gc_pos_to_text(struct printbuf *, struct gc_pos *);
 
 int bch2_gc_gens(struct bch_fs *);

@@ -140,9 +140,9 @@ unsafe impl ::pin_init::Zeroable for GcEntry {}
  *    as gc walks the reflink btree - from each key as check_repair left it, so
  *    a reflink_v repaired into an error key isn't in it. Nothing else reads
  *    it then: the readers are reflink_ps' gc triggers, and commits run those
- *    only for keys gc_visited(), and gc walks reflink before any btree with
- *    reflink_ps - gc_btree_order(). gc_pos_set() is a seqcount write, which
- *    the read in gc_visited() pairs with: a reader that sees gc past reflink
+ *    only for keys gc.visited(), and gc walks reflink before any btree with
+ *    reflink_ps - bch2_gc_btree_order(). gc.set_pos() is a SeqLock write, which
+ *    the read in gc.visited() pairs with: a reader that sees gc past reflink
  *    sees the table as built.
  *
  *  - Read while gc marks: by gc's thread, and by commits' gc triggers, at
@@ -155,11 +155,11 @@ unsafe impl ::pin_init::Zeroable for GcEntry {}
  *    under mark_lock for write.
  *
  * Not fenced: the free from commits' gc triggers. A commit runs those outside
- * mark_lock, after gc_visited(), so one that saw gc running can still be
+ * mark_lock, after gc.visited(), so one that saw gc running can still be
  * counting into the table when it's freed. Nothing commits during
  * check_allocations today, so it isn't reached; nothing stops it either. The
  * fix is a grace period between not_running and the free - a dedicated SRCU,
- * read around commit's gc trigger run, gc_visited() rechecked inside. Not
+ * read around commit's gc trigger run, gc.visited() rechecked inside. Not
  * btree.trans.barrier, which every transaction already holds: gc would wait
  * for it holding gc.lock, which a btree update waits for holding it.
  *

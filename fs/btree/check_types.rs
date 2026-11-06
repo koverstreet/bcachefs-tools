@@ -3,11 +3,14 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::c_default;
+use crate::types::{c_default, rust_only};
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
+use crate::locking::SeqLock;
+use crate::util::ffi::Opaque;
+use core::cmp::Ordering;
 use core::ffi::c_int;
-use cstruct_macros::{bitfield, c_enum, c_extern, c_xmacro, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, c_enum, c_export, c_extern, c_xmacro, CStruct, TypeInfo};
 use nestify::nest;
 use crate::format::{Bpos, Btree};
 
@@ -42,11 +45,49 @@ nest! {
     }
 }
 
+/*
+ * reflink before the btrees with reflink_ps: gc's table of indirect extents is
+ * built walking it, after their repair, and the reflink_ps are counted against
+ * it - one a repair left nothing to point to is found missing in the same pass
+ */
+#[c_export]
+pub fn bch2_gc_btree_order(btree: Btree) -> c_int {
+    match btree {
+        Btree::BTREE_ID_alloc   => -3,
+        Btree::BTREE_ID_stripes => -2,
+        Btree::BTREE_ID_reflink => -1,
+        b                       => b.0 as c_int,
+    }
+}
+
+impl Ord for gc_pos {
+    fn cmp(&self, r: &Self) -> Ordering {
+        (self.bits.phase() as u32).cmp(&(r.bits.phase() as u32))
+            .then(bch2_gc_btree_order(self.bits.btree()).cmp(&bch2_gc_btree_order(r.bits.btree())))
+            .then(self.level.cmp(&r.level))
+            .then(self.pos.cmp(&r.pos))
+    }
+}
+
+impl PartialOrd for gc_pos {
+    fn partial_cmp(&self, r: &Self) -> Option<Ordering> {
+        Some(self.cmp(r))
+    }
+}
+
+impl PartialEq for gc_pos {
+    fn eq(&self, r: &Self) -> bool {
+        self.cmp(r) == Ordering::Equal
+    }
+}
+
+impl Eq for gc_pos {}
+
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_gc {
-    pub pos_lock: c::seqcount_t,
-    pub pos: c::gc_pos,
+    /// How far gc's walk has got: not_running, when there's none.
+    pub pos: rust_only!(SeqLock<c::gc_pos>),
 
     /*
      * The allocation code needs gc_mark in struct bucket to be correct, but
@@ -57,12 +98,48 @@ pub struct bch_fs_gc {
 c_default!(bch_fs_gc);
 
 impl bch_fs_gc {
-    /// Its phase - not_running, unless a gc is walking - read once, without
-    /// pos_lock: as C's reads of c->gc.pos.phase.
     pub fn phase(&self) -> c::gc_phase {
-        // SAFETY: read once, volatile, as C's plain reads
-        unsafe { core::ptr::read_volatile(&self.pos.bits) }.phase()
+        self.pos.read().bits.phase()
     }
+
+    /// Whether gc's walk has got to @pos: gc_visited().
+    pub fn visited(&self, pos: c::gc_pos) -> bool {
+        pos <= self.pos.read()
+    }
+
+    /// gc's walk on to @pos - never back.
+    pub fn set_pos(&self, pos: c::gc_pos) {
+        let cur = self.pos.read();
+        assert!(pos >= cur, "gc position going backwards, from phase {} {} level {} {} to phase {} {} level {} {}",
+                cur.bits.phase() as u32, cur.bits.btree(), cur.level, { cur.pos },
+                pos.bits.phase() as u32, pos.bits.btree(), pos.level, { pos.pos });
+        self.pos.write(|p| *p = pos);
+    }
+
+    /// gc's walk done: not_running.
+    pub fn set_not_running(&self) {
+        self.pos.write(|p| *p = c::gc_pos::default());
+    }
+}
+
+#[c_export]
+pub fn bch2_gc_pos_set(c: &Opaque<Fs>, pos: c::gc_pos) {
+    Fs::from_c(c).gc.set_pos(pos)
+}
+
+#[c_export]
+pub fn bch2_gc_pos_set_not_running(c: &Opaque<Fs>) {
+    Fs::from_c(c).gc.set_not_running()
+}
+
+#[c_export]
+pub fn bch2_gc_phase(c: &Opaque<Fs>) -> c::gc_phase {
+    Fs::from_c(c).gc.phase()
+}
+
+#[c_export]
+pub fn bch2_gc_visited(c: &Opaque<Fs>, pos: c::gc_pos) -> bool {
+    Fs::from_c(c).gc.visited(pos)
 }
 
 #[repr(C)]
