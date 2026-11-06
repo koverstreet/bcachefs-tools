@@ -21,6 +21,32 @@
 //!       }
 //!   }
 //!
+//! Or as an enum, its arms the variants - each with its payload's type, or
+//! the type defined in place, and the tag's value as the discriminant - and
+//! the rest attributes:
+//!
+//!   tagged_union! {
+//!       #[storage(c::jset_entry)]
+//!       #[tag(type_: u8)]
+//!       #[tag_enum(bch_jset_entry_type: u32, prefix = BCH_JSET_ENTRY_, nr = BCH_JSET_ENTRY_NR)]
+//!       #[size(header)]
+//!       pub enum jset_entry {
+//!           /// Btree key updates
+//!           btree_keys(c::jset_entry_btree_keys) = 0,
+//!           ...
+//!       }
+//!   }
+//!
+//! `#[storage(S)]` is `union NAME in S`, `#[tag(..)]`, `#[pad(..)]`,
+//! `#[size(..)]`, `#[packed]` and `#[plain]` the items of the same names.
+//! `#[tag_enum([closed,] NAME: REPR, prefix = P[, nr = NR])]` is the tag's
+//! enum, generated from the arms: P and an arm's name its variant, labelled
+//! the arm's name, then NR - open, or closed, the tag stored as it,
+//! `#[tag(FIELD)]`; an open one's values are its constants by the arms'
+//! names too, jset_entry's btree_keys, and nr. A discriminant not written is
+//! the last's plus one, as an enum's. And NAME_arms!(cb) is cb! { (name,
+//! value), .. }, an entry per arm, for what's made from each.
+//!
 //! A type whose bytes come from outside - disk, or C - with a tag that says
 //! which of its arms it holds, and that may be one this version doesn't know.
 //! The layout is given, not chosen: the storage is the C, plain #[repr(C)]
@@ -164,22 +190,285 @@
 //! arms are; a type defined here that isn't one's is an error. The
 //! declaration reaches the list as tokens, so an error in a definition is
 //! reported where it's written.
-
 use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
 
-use crate::cstruct::{parse_items, tagged_union_arms, tagged_union_record_text, CItem, CTaggedArm,
-                     CTaggedSize, CTaggedUnion};
+use crate::cstruct::{parse_items, rust_text, tagged_union_arms, tagged_union_record_text, CItem, CTaggedArm,
+                     CTaggedDef, CTaggedSize, CTaggedUnion};
 use crate::{comma_list, list_callback, record, through_list, tokens};
 
-/// tagged_union!: the arms from a list go through the list; written-out
-/// arms are generated directly. The declaration goes to the list as tokens,
-/// not text: an arm type defined in it keeps its spans, so an error in one
-/// is reported where it is.
+/// tagged_union!: the enum form; or the struct|union form, its arms written
+/// out, or from a list - which it goes through: the declaration goes to the
+/// list as tokens, not text, so an arm type defined in it keeps its spans.
 pub(crate) fn tagged_union(input: TokenStream) -> Result<TokenStream, String> {
+    if is_enum_form(&input) {
+        let (decl, tu, mut out) = enum_form(&input)?;
+        out.extend(generate(&decl, &tu)?);
+        return Ok(out);
+    }
     let tu = parse(&input)?;
     match &tu.from {
         Some(f) => Ok(through_list(&f.list, "cstruct_macros::__tagged_union", input)),
-        None => generate(&input, &tu, &tu.arms),
+        None => generate(&decl_of(&input), &tu),
+    }
+}
+
+/// Whether it's the enum form: [#[..]]* [pub] enum.
+fn is_enum_form(input: &TokenStream) -> bool {
+    let t: Vec<TokenTree> = input.clone().into_iter().collect();
+    let mut k = 0;
+    while matches!(t.get(k), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
+        k += 2;
+        if matches!(t.get(k), Some(TokenTree::Punct(p)) if p.as_char() == '*') {
+            k += 1;
+        }
+    }
+    if matches!(t.get(k), Some(TokenTree::Ident(i)) if i == "pub") {
+        k += 1 + usize::from(matches!(t.get(k + 1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis));
+    }
+    matches!(t.get(k), Some(TokenTree::Ident(i)) if i == "enum")
+}
+
+/// The declaration's parts generate() passes on - the arm types as their
+/// tokens, so an error in one is reported where it's written.
+struct Decl {
+    attrs:     String,
+    vis:       String,
+    arm_attrs: TokenStream,
+    defs:      Vec<TokenStream>,
+}
+
+struct TagEnum {
+    closed: bool,
+    name:   String,
+    repr:   String,
+    prefix: String,
+    nr:     Option<String>,
+}
+
+/// The union the declaration says, and what's generated from its arms
+/// besides it: the tag enum, its aliases and NAME_arms!.
+fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), String> {
+    let trees: Vec<TokenTree> = input.clone().into_iter().collect();
+    let is_ident = |t: Option<&TokenTree>, s: &str| matches!(t, Some(TokenTree::Ident(i)) if i == s);
+    let is_punct = |t: Option<&TokenTree>, c: char| matches!(t, Some(TokenTree::Punct(p)) if p.as_char() == c);
+
+    let mut attrs = String::new();
+    let mut arm_attrs = TokenStream::new();
+    let mut c_name = None;
+    let mut ours: Vec<(String, TokenStream)> = Vec::new();
+    let mut k = 0;
+    while is_punct(trees.get(k), '#') {
+        let Some(TokenTree::Group(g)) = trees.get(k + 1) else { break };
+        let star = is_punct(trees.get(k + 2), '*');
+        let mut inner = g.stream().into_iter();
+        let head = match inner.next() {
+            Some(TokenTree::Ident(i)) => i.to_string(),
+            _ => String::new(),
+        };
+        let args = match inner.next() {
+            Some(TokenTree::Group(a)) => a.stream(),
+            _ => TokenStream::new(),
+        };
+        let n = 2 + usize::from(star);
+        if star {
+            arm_attrs.extend(trees[k..k + n].iter().cloned());
+        } else if head == "c_name" {
+            c_name = Some(rust_text(&args));
+        } else if matches!(head.as_str(), "tag" | "tag_enum" | "storage" | "pad" | "size" | "packed" | "plain") {
+            ours.push((head, args));
+        } else {
+            attrs.push_str(&format!("#{g}\n"));
+        }
+        k += n;
+    }
+    let vis_start = k;
+    if is_ident(trees.get(k), "pub") {
+        k += 1 + usize::from(matches!(trees.get(k + 1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis));
+    }
+    if !is_ident(trees.get(k), "enum") {
+        return Err("tagged_union!: expected [#[..]] pub enum NAME { .. }".into());
+    }
+    let vis = rust_text(&trees[vis_start..k].iter().cloned().collect::<TokenStream>());
+    let (Some(TokenTree::Ident(name)), Some(TokenTree::Group(body))) = (trees.get(k + 1), trees.get(k + 2)) else {
+        return Err("tagged_union!: expected pub enum NAME { .. }".into());
+    };
+    let name = name.to_string();
+    let err = |m: &str| format!("tagged_union! {name}: {m}");
+
+    let text = |ts: &TokenStream| rust_text(ts);
+    let mut tag: Option<(String, Option<String>)> = None;
+    let mut tag_enum: Option<TagEnum> = None;
+    let (mut storage, mut pad, mut size, mut packed, mut plain) = (None, None, None, false, false);
+    for (head, args) in &ours {
+        match head.as_str() {
+            "tag" => {
+                let a: Vec<TokenTree> = args.clone().into_iter().collect();
+                tag = Some(match a.as_slice() {
+                    [TokenTree::Ident(f)] => (f.to_string(), None),
+                    [TokenTree::Ident(f), c, ty @ ..] if is_punct(Some(c), ':') && !ty.is_empty() =>
+                        (f.to_string(), Some(text(&ty.iter().cloned().collect()))),
+                    _ => return Err(err("#[tag(FIELD: TYPE)], or #[tag(FIELD)] for a closed tag enum")),
+                });
+            }
+            "tag_enum" => {
+                let mut e = TagEnum { closed: false, name: String::new(), repr: String::new(),
+                                      prefix: String::new(), nr: None };
+                for part in comma_list(args.clone()) {
+                    match part.as_slice() {
+                        [TokenTree::Ident(c)] if c == "closed" => e.closed = true,
+                        [TokenTree::Ident(c)] if c == "open" => {}
+                        [TokenTree::Ident(n), c, TokenTree::Ident(r)] if is_punct(Some(c), ':') =>
+                            (e.name, e.repr) = (n.to_string(), r.to_string()),
+                        [TokenTree::Ident(k), eq, TokenTree::Ident(v)] if is_punct(Some(eq), '=') && k == "prefix" =>
+                            e.prefix = v.to_string(),
+                        [TokenTree::Ident(k), eq, TokenTree::Ident(v)] if is_punct(Some(eq), '=') && k == "nr" =>
+                            e.nr = Some(v.to_string()),
+                        _ => return Err(err("#[tag_enum([closed,] NAME: REPR, prefix = PREFIX[, nr = NR])]")),
+                    }
+                }
+                if e.name.is_empty() || e.prefix.is_empty() {
+                    return Err(err("#[tag_enum(..)] needs NAME: REPR and prefix = PREFIX"));
+                }
+                tag_enum = Some(e);
+            }
+            "storage" => storage = Some(text(args)),
+            "pad"     => pad = Some(text(args)),
+            "size"    => size = Some(match text(args).as_str() {
+                "pad"    => CTaggedSize::Pad,
+                "header" => CTaggedSize::Header,
+                "arm"    => CTaggedSize::Arm,
+                of => return Err(err(&format!("#[size({of})] - its size is a function of nothing, \
+                                               its pad's, size(pad); of its header's count, \
+                                               size(header); or of its tag, its arm's, size(arm)"))),
+            }),
+            "packed"  => packed = true,
+            "plain"   => plain = true,
+            _ => unreachable!(),
+        }
+    }
+    let (tag_field, tag_ty) = tag.ok_or_else(|| err("no #[tag(..)]"))?;
+
+    struct Arm { docs: TokenStream, name: String, ty: String, value: String }
+    let mut arms = Vec::new();
+    let mut defs: Vec<TokenStream> = Vec::new();
+    let mut def_names = Vec::new();
+    let mut next: u64 = 0;
+    for v in comma_list(body.stream()).into_iter().filter(|v| !v.is_empty()) {
+        let mut j = 0;
+        let mut docs = TokenStream::new();
+        while is_punct(v.get(j), '#') {
+            docs.extend(v[j..j + 2].iter().cloned());
+            j += 2;
+        }
+        let (Some(TokenTree::Ident(arm)), Some(TokenTree::Group(payload))) = (v.get(j), v.get(j + 1)) else {
+            return Err(err("an arm is `name(Type) [= value]`"));
+        };
+        if payload.delimiter() != Delimiter::Parenthesis {
+            return Err(err(&format!("{arm}: an arm is `name(Type) [= value]`")));
+        }
+        let p: Vec<TokenTree> = payload.stream().into_iter().collect();
+        let mut d = 0;
+        while is_punct(p.get(d), '#') {
+            d += 2;
+        }
+        if is_ident(p.get(d), "pub") {
+            d += 1 + usize::from(matches!(p.get(d + 1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis));
+        }
+        let ty = match (p.get(d), p.get(d + 1), p.get(d + 2)) {
+            (Some(TokenTree::Ident(kw)), Some(TokenTree::Ident(n)), Some(TokenTree::Group(g)))
+                if (kw == "struct" || kw == "union") && g.delimiter() == Delimiter::Brace => {
+                defs.push(payload.stream());
+                def_names.push(n.to_string());
+                n.to_string()
+            }
+            _ => text(&payload.stream()),
+        };
+        let value = match (v.get(j + 2), &v[(j + 3).min(v.len())..]) {
+            (None, _) => None,
+            (Some(eq), val) if is_punct(Some(eq), '=') && !val.is_empty() =>
+                Some(text(&val.iter().cloned().collect())),
+            _ => return Err(err(&format!("{arm}: expected `= value`, or nothing"))),
+        };
+        let n = match &value {
+            Some(val) => parse_int(val).ok_or_else(|| err(&format!("{arm}: = {val}: a value is an integer literal")))?,
+            None => next,
+        };
+        next = n + 1;
+        let value = value.unwrap_or_else(|| n.to_string());
+        arms.push(Arm { docs, name: arm.to_string(), ty, value });
+    }
+
+    let mut out = TokenStream::new();
+    let (tag_ty, tag_enum_ty, tag_is_enum) = match (&tag_enum, tag_ty) {
+        (Some(e), None) if e.closed => (format!("c::{}", e.name), String::new(), true),
+        (Some(e), Some(ty)) if !e.closed => (ty, format!("c::{}", e.name), false),
+        (None, Some(ty)) => (ty, String::new(), false),
+        _ => return Err(err("#[tag(FIELD: TYPE)] with an open #[tag_enum], #[tag(FIELD)] with a closed one")),
+    };
+
+    if let Some(e) = &tag_enum {
+        let variants: String = arms.iter()
+            .map(|a| format!("#[label({:?})] {}{} = {},", a.name, e.prefix, a.name, a.value))
+            .chain(e.nr.iter().map(|nr| format!("{nr},")))
+            .collect();
+        let kind = if e.closed { "closed" } else { "open" };
+        out.extend(format!("::cstruct_macros::c_enum! {{ #[{kind}] {vis} enum {}: {} {{ {variants} }} }}",
+                           e.name, e.repr).parse::<TokenStream>().map_err(|e| e.to_string())?);
+
+        if !e.closed {
+            let mut aliases = TokenStream::new();
+            for a in &arms {
+                aliases.extend(a.docs.clone());
+                aliases.extend(format!("pub const {}: Self = Self::{}{};", a.name, e.prefix, a.name)
+                    .parse::<TokenStream>().map_err(|e| e.to_string())?);
+            }
+            if let Some(nr) = &e.nr {
+                aliases.extend(format!("pub const nr: Self = Self::{nr};").parse::<TokenStream>().map_err(|e| e.to_string())?);
+            }
+            out.extend(tokens(&format!("#[allow(non_upper_case_globals)] impl {}", e.name)));
+            out.extend([TokenTree::Group(Group::new(Delimiter::Brace, aliases))]);
+        }
+    }
+
+    let entries: String = arms.iter().map(|a| format!("({}, {}),", a.name, a.value)).collect();
+    out.extend(format!("#[allow(unused_macros)] macro_rules! {name}_arms {{ \
+                            ($($cb:tt)+) => {{ $($cb)+ ! {{ {entries} }} }}; \
+                        }} \
+                        #[allow(unused_imports)] pub(crate) use {name}_arms;")
+        .parse::<TokenStream>().map_err(|e| e.to_string())?);
+
+    let arm_value = |a: &Arm| match &tag_enum {
+        Some(e) if e.closed => format!("c::{}::{}{}", e.name, e.prefix, a.name),
+        _ => a.value.clone(),
+    };
+    let tu = CTaggedUnion {
+        cfg: None,
+        name: name.clone(),
+        c_name,
+        union: storage.is_some(),
+        storage,
+        tag_field,
+        tag_ty,
+        tag_enum: tag_enum_ty,
+        tag_is_enum,
+        plain,
+        from: None,
+        arms: arms.iter().map(|a| CTaggedArm { name: a.name.clone(), ty: a.ty.clone(), value: arm_value(a) }).collect(),
+        pad,
+        packed,
+        size: size.ok_or_else(|| err("no #[size(..)] - what it's a function of, pad, header or arm"))?,
+        defs: def_names.into_iter().map(|name| CTaggedDef { name }).collect(),
+    };
+    tu.check()?;
+    Ok((Decl { attrs, vis, arm_attrs, defs }, tu, out))
+}
+
+/// An integer literal, decimal or 0x hex, as a discriminant is written.
+fn parse_int(s: &str) -> Option<u64> {
+    let s = s.replace('_', "");
+    match s.strip_prefix("0x") {
+        Some(h) => u64::from_str_radix(h, 16).ok(),
+        None => s.parse().ok(),
     }
 }
 
@@ -230,12 +519,19 @@ fn arm_attrs_and_defs(decl: &TokenStream) -> (TokenStream, Vec<TokenStream>) {
     (attrs, defs)
 }
 
+/// decl's Decl: the struct|union form's attributes, visibility, arm types.
+fn decl_of(decl: &TokenStream) -> Decl {
+    let (arm_attrs, defs) = arm_attrs_and_defs(decl);
+    let (attrs, vis) = attrs_and_vis(decl);
+    Decl { attrs, vis, arm_attrs, defs }
+}
+
 /// The list's callback: its arms are the list's entries.
 pub(crate) fn from_list(input: TokenStream) -> Result<TokenStream, String> {
     let (decl, entries) = list_callback(input)?;
-    let tu = parse(&decl)?;
-    let arms = tagged_union_arms(&tu, &entries).map_err(|e| format!("{}: {e}", tu.name))?;
-    generate(&decl, &tu, &arms)
+    let mut tu = parse(&decl)?;
+    tu.arms = tagged_union_arms(&tu, &entries).map_err(|e| format!("{}: {e}", tu.name))?;
+    generate(&decl_of(&decl), &tu)
 }
 
 fn parse(input: &TokenStream) -> Result<CTaggedUnion, String> {
@@ -295,7 +591,8 @@ fn camel(name: &str) -> String {
         .collect()
 }
 
-fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Result<TokenStream, String> {
+fn generate(d: &Decl, tu: &CTaggedUnion) -> Result<TokenStream, String> {
+    let arms = &tu.arms;
     if arms.is_empty() {
         return Err(format!("{}: no arms", tu.name));
     }
@@ -305,15 +602,14 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
     // The arm types defined in the block: nestify::nest!, given the
     // declaration's `#[...]*` - propagating, for any types nested in them -
     // as the tokens they were written as.
-    let (arm_attrs, def_tokens) = arm_attrs_and_defs(decl);
     let mut defs = TokenStream::new();
-    for d in def_tokens {
-        let mut body = arm_attrs.clone();
-        body.extend(d);
+    for def in &d.defs {
+        let mut body = d.arm_attrs.clone();
+        body.extend(def.clone());
         defs.extend(tokens("::nestify::nest!"));
         defs.extend([TokenTree::Group(Group::new(Delimiter::Brace, body))]);
     }
-    let (attrs, vis) = attrs_and_vis(decl);
+    let (attrs, vis) = (&d.attrs, &d.vis);
     let name = &tu.name;
     let c_name = tu.c_name.as_deref().unwrap_or(name);
     let en = camel(name);

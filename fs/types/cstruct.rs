@@ -872,7 +872,7 @@ fn flat(ts: &proc_macro2::TokenStream) -> Vec<Flat> {
 }
 
 /// @t's Rust source, as tokens_to_rust() writes it.
-fn rust_text(t: &impl quote::ToTokens) -> String {
+pub fn rust_text(t: &impl quote::ToTokens) -> String {
     join_flat(&flat(&t.to_token_stream()), false)
 }
 
@@ -1991,33 +1991,41 @@ fn parse_tagged_union(m: &syn::Macro) -> Result<CTaggedUnion, String> {
     }
     tu.size = size.ok_or_else(|| format!("tagged_union! {}: no size - what it's a function of, \
                                           `size: pad`, `size: header` or `size: arm`", tu.name))?;
-    // a constant size is a struct's, its own storage, which holds its arms; a
-    // header's count or the arm's own size, a union's over another's storage,
-    // the head its arms start with
-    let ok = match tu.size {
-        CTaggedSize::Pad                       => !tu.union && tu.storage.is_none() && tu.pad.is_some(),
-        CTaggedSize::Header | CTaggedSize::Arm => tu.union && tu.storage.is_some() && tu.pad.is_none(),
-    };
-    if !ok {
-        return Err(format!("tagged_union! {}: `struct NAME {{ .., pad: TYPE, size: pad }}` - its \
-                            own storage, which holds its arms, the pad's size - or `union NAME \
-                            in STORAGE {{ .., size: header }}` - over another's storage, whose \
-                            arms run past its header as far as its count says - or `union NAME \
-                            in HEAD {{ .., size: arm }}` - the head every arm starts with, each \
-                            as long as its arm", tu.name));
-    }
-    if (tu.plain || tu.tag_is_enum) && tu.size != CTaggedSize::Pad {
-        return Err(format!("tagged_union! {}: `plain` and `tag NAME: enum TYPE` are for a \
-                            struct's own storage, `size: pad`", tu.name));
-    }
-    if tu.storage.is_some() {
-        if let Some(d) = tu.defs.first() {
-            return Err(format!("tagged_union! {}: {} is defined here, but the storage is \
-                                another's - `in STORAGE` - and so are its arms' types",
-                               tu.name, d.name));
-        }
-    }
+    tu.check()?;
     Ok(tu)
+}
+
+impl CTaggedUnion {
+    pub fn check(&self) -> Result<(), String> {
+        let tu = self;
+        // a constant size is a struct's, its own storage, which holds its arms; a
+        // header's count or the arm's own size, a union's over another's storage,
+        // the head its arms start with
+        let ok = match tu.size {
+            CTaggedSize::Pad                       => !tu.union && tu.storage.is_none() && tu.pad.is_some(),
+            CTaggedSize::Header | CTaggedSize::Arm => tu.union && tu.storage.is_some() && tu.pad.is_none(),
+        };
+        if !ok {
+            return Err(format!("tagged_union! {}: `struct NAME {{ .., pad: TYPE, size: pad }}` - its \
+                                own storage, which holds its arms, the pad's size - or `union NAME \
+                                in STORAGE {{ .., size: header }}` - over another's storage, whose \
+                                arms run past its header as far as its count says - or `union NAME \
+                                in HEAD {{ .., size: arm }}` - the head every arm starts with, each \
+                                as long as its arm", tu.name));
+        }
+        if (tu.plain || tu.tag_is_enum) && tu.size != CTaggedSize::Pad {
+            return Err(format!("tagged_union! {}: `plain` and `tag NAME: enum TYPE` are for a \
+                                struct's own storage, `size: pad`", tu.name));
+        }
+        if tu.storage.is_some() {
+            if let Some(d) = tu.defs.first() {
+                return Err(format!("tagged_union! {}: {} is defined here, but the storage is \
+                                    another's - `in STORAGE` - and so are its arms' types",
+                                   tu.name, d.name));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// `LIST(params) => template` at @item - the rest of a tagged_union!'s `arms
