@@ -619,7 +619,7 @@ pub struct trans_kmalloc_trace {
 
 c_typedef! {
     #[c("DARRAY(struct trans_kmalloc_trace) darray_trans_kmalloc_trace")]
-    pub type darray_trans_kmalloc_trace = DArray<cs::trans_kmalloc_trace>;
+    pub type darray_trans_kmalloc_trace = KVVec<cs::trans_kmalloc_trace>;
 }
 
 #[repr(C)]
@@ -729,7 +729,7 @@ pub struct BtreeTrans<'f> {
     pub mem: Cell<TransMem>,
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
     #[c("darray_trans_kmalloc_trace trans_kmalloc_trace")]
-    pub trans_kmalloc_trace: Opaque<cs::darray_trans_kmalloc_trace>,
+    pub trans_kmalloc_trace: Cell<cs::darray_trans_kmalloc_trace>,
 
     pub nr_sorted: cs::PathIdx,
     pub nr_paths: Cell<cs::PathIdx>,
@@ -755,7 +755,7 @@ pub struct BtreeTrans<'f> {
     pub last_restarted_ip: Cell<c_ulong>,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     #[c("bch_stacktrace last_restarted_trace")]
-    pub last_restarted_trace: Opaque<cs::bch_stacktrace>,
+    pub last_restarted_trace: Cell<cs::bch_stacktrace>,
     pub last_unlock_ip: Cell<c_ulong>,
     pub srcu_lock_time: Cell<c_ulong>,
     pub srcu_idx: Cell<c_int>,

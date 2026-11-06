@@ -19,8 +19,6 @@ use crate::journal::validate::journal_entry_to_text;
 use crate::locking::{Locked, MemallocFlags};
 use crate::prt;
 use crate::types::bits_to_longs;
-#[cfg(any(CONFIG_BCACHEFS_DEBUG, CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE))]
-use crate::util::alloc::darray_exit;
 use crate::util::alloc::{AllocError, Vec};
 use crate::util::mempool::Mempool;
 use super::types::TransMem;
@@ -627,9 +625,9 @@ impl Drop for TransGuard<'_> {
         t.locking_wait.task.store(ptr::null_mut(), Ordering::Relaxed);
 
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
-        unsafe { darray_exit(&mut *t.last_restarted_trace.as_ptr()) };
+        drop(t.last_restarted_trace.take());
         #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-        unsafe { darray_exit(&mut *t.trans_kmalloc_trace.as_ptr()) };
+        drop(t.trans_kmalloc_trace.take());
 
         bch2_trans_paths_exit(t);
 
@@ -729,11 +727,11 @@ impl BtreeTrans<'_> {
 
 #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
 #[cold]
-pub(crate) fn kmalloc_trace_to_text(out: &mut Printbuf, trace: &c::darray_trans_kmalloc_trace) {
+pub(crate) fn kmalloc_trace_to_text(out: &mut Printbuf, trace: &[c::trans_kmalloc_trace]) {
     out.tabstops_reset();
     out.tabstop_push(60);
 
-    for i in trace.as_slice() {
+    for i in trace {
         prt_symbol(out, i.ip);
         prt!(out, "\t{}\n", i.bytes);
     }
@@ -782,7 +780,9 @@ impl BtreeTrans<'_> {
                 let mut msg = LogMsg::new(c);
                 prt!(&mut *msg, "bump allocator exceeded BTREE_TRANS_MEM_MAX ({})\n", c::BTREE_TRANS_MEM_MAX);
 
-                kmalloc_trace_to_text(&mut msg, unsafe { &*self.trans_kmalloc_trace.as_ptr() });
+                let trace = self.trans_kmalloc_trace.take();
+                kmalloc_trace_to_text(&mut msg, &trace);
+                self.trans_kmalloc_trace.set(trace);
             }
         }
 
@@ -795,12 +795,13 @@ impl BtreeTrans<'_> {
             let s = ptr::from_ref(s).cast_mut();
             #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
             {
-                let trace = unsafe { &*self.trans_kmalloc_trace.as_ptr() }.as_slice();
-                let mut v = unsafe { crate::util::alloc::DArrayLoan::new(&mut (*s).trans_kmalloc_trace) };
+                let trace = self.trans_kmalloc_trace.take();
+                let v = unsafe { &mut (*s).trans_kmalloc_trace };
                 v.clear();
                 let _ = v.reserve(trace.len());
                 let nr = v.capacity().min(trace.len());
                 let _ = v.extend_from_slice(&trace[..nr]);
+                self.trans_kmalloc_trace.set(trace);
             }
             unsafe { (*s).max_mem = new_bytes };
         }
@@ -953,7 +954,11 @@ impl BtreeTrans<'_> {
         }
 
         #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-        unsafe { (*self.trans_kmalloc_trace.as_ptr()).nr = 0 };
+        {
+            let mut trace = self.trans_kmalloc_trace.take();
+            trace.clear();
+            self.trans_kmalloc_trace.set(trace);
+        }
 
         if self.restarted().0 != 0 {
             /* restart is hot — skip the resched check */
@@ -1037,11 +1042,9 @@ impl BtreeTrans<'_> {
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         {
             let _noreclaim = MemallocFlags::noreclaim();
-            unsafe {
-                let trace = &mut *self.last_restarted_trace.as_ptr();
-                darray_exit(trace);
-                let _ = save_backtrace(trace, sched::current(), 0);
-            }
+            let mut trace = self.last_restarted_trace.take();
+            let _ = save_backtrace(&mut trace, sched::current(), 0);
+            self.last_restarted_trace.set(trace);
         }
         err.into()
     }
@@ -1061,7 +1064,7 @@ impl BtreeTrans<'_> {
         let mut by = Printbuf::new();
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         {
-            prt_backtrace(&mut by, unsafe { &*self.last_restarted_trace.as_ptr() }.as_slice());
+            prt_backtrace(&mut by, &self.last_restarted_trace.take());
             panic!("in transaction restart: {}, last restarted by\n{by}", err.msg());
         }
         #[cfg(not(CONFIG_BCACHEFS_DEBUG))]

@@ -1520,7 +1520,7 @@ pub unsafe fn six_lock_exit(lock: *mut c::six_lock) {
 
         ManuallyDrop::drop(&mut (*(&(*lock).wait_lock).data_ptr().cast_mut()).list);
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
-        crate::util::alloc::darray_exit(&mut *(*lock).owner_stack.as_ptr());
+        drop(core::mem::take(&mut *(*lock).owner_stack.as_ptr()));
     }
 }
 

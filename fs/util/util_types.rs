@@ -3,13 +3,13 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::DArray;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use cstruct_macros::{CStruct, c_const, c_extern, c_typedef, TypeInfo};
 
 c_typedef! {
-    pub type bch_stacktrace = DArray<c_ulong>;
+    #[c("DARRAY(unsigned long) bch_stacktrace")]
+    pub type bch_stacktrace = crate::util::alloc::KVVec<c_ulong>;
 }
 
 c_const! {

@@ -22,7 +22,7 @@ use crate::c;
 use crate::errcode::ret_to_c;
 use crate::prt;
 use crate::locking::MemallocFlags;
-use crate::util::alloc::{AllocError, DArrayLoan, KVVec};
+use crate::util::alloc::{AllocError, KVVec};
 use crate::util::demangle::prt_demangled;
 use crate::util::sched;
 use crate::util::Printbuf;
@@ -79,7 +79,7 @@ pub fn prt_backtrace(out: &mut Printbuf, stack: &[c_ulong]) {
 
 /// @task's stack, @skipnr frames in - and the frame saving it, for current -
 /// into @stack, grown till it fits: an error if it can't be, what fit kept.
-fn save_stack(stack: &mut KVVec<c_ulong>, task: *mut c::task_struct, skipnr: u32) -> Result<(), AllocError> {
+pub fn save_backtrace(stack: &mut KVVec<c_ulong>, task: *mut c::task_struct, skipnr: u32) -> Result<(), AllocError> {
     #[cfg(CONFIG_STACKTRACE)]
     {
         stack.clear();
@@ -104,24 +104,13 @@ fn save_stack(stack: &mut KVVec<c_ulong>, task: *mut c::task_struct, skipnr: u32
     }
 }
 
-/// save_stack(), into a darray C owns.
-///
-/// # Safety
-/// @stack is a darray: DArrayLoan::new()'s.
-pub unsafe fn save_backtrace(stack: &mut c::bch_stacktrace, task: *mut c::task_struct, skipnr: u32)
-    -> Result<(), AllocError>
-{
-    let mut stack = unsafe { DArrayLoan::new(stack) };
-    save_stack(&mut stack, task, skipnr)
-}
-
 /// @task's stack, @skipnr frames in, to @out: what fit, if growing to fit
 /// failed.
 pub fn prt_task_backtrace(out: &mut Printbuf, task: *mut c::task_struct, skipnr: u32) -> Result<(), AllocError> {
     let skipnr = skipnr + (task == sched::current()) as u32;
 
     let mut stack = KVVec::new();
-    let ret = save_stack(&mut stack, task, skipnr);
+    let ret = save_backtrace(&mut stack, task, skipnr);
     prt_backtrace(out, &stack);
     ret
 }
@@ -130,13 +119,11 @@ pub fn prt_current_backtrace(out: &mut Printbuf, skipnr: u32) -> Result<(), Allo
     prt_task_backtrace(out, sched::current(), skipnr)
 }
 
-/// # Safety
-/// @stack is a darray.
 #[c_export]
-pub unsafe fn bch2_save_backtrace(stack: &mut c::bch_stacktrace, task: *mut c::task_struct, skipnr: c_uint,
-                                  gfp: c::gfp_t) -> c_int {
+pub fn bch2_save_backtrace(stack: &mut c::bch_stacktrace, task: *mut c::task_struct, skipnr: c_uint,
+                           gfp: c::gfp_t) -> c_int {
     let _scope = MemallocFlags::for_gfp(gfp);
-    ret_to_c(unsafe { save_backtrace(stack, task, skipnr) })
+    ret_to_c(save_backtrace(stack, task, skipnr))
 }
 
 #[c_export]
@@ -147,15 +134,7 @@ pub fn bch2_prt_task_backtrace(out: &mut Printbuf, task: *mut c::task_struct, sk
     ret_to_c(prt_task_backtrace(out, task, skipnr))
 }
 
-/// # Safety
-/// @stack is a darray C filled: @nr addresses at @data.
 #[c_export]
-pub unsafe fn bch2_prt_backtrace(out: &mut Printbuf, stack: &c::bch_stacktrace) {
-    let frames = if stack.nr == 0 {
-        &[][..]
-    } else {
-        // SAFETY: the caller's - nr addresses at data, nonnull as nr isn't 0
-        unsafe { core::slice::from_raw_parts(stack.data, stack.nr) }
-    };
-    prt_backtrace(out, frames);
+pub fn bch2_prt_backtrace(out: &mut Printbuf, stack: &c::bch_stacktrace) {
+    prt_backtrace(out, stack);
 }

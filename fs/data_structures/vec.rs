@@ -27,6 +27,9 @@ unsafe impl<T: Sync, A: Alloc, L: LenUint> Sync for Vec<T, A, L> {}
 // Its elements are on the heap, and don't move with it: as a Box's
 impl<T, A: Alloc, L: LenUint> Unpin for Vec<T, A, L> {}
 
+// zeroed is empty: nr and size 0, data NULL - as a kzalloc()'d darray
+unsafe impl<T, A: Alloc, L: LenUint> ::pin_init::Zeroable for Vec<T, A, L> {}
+
 /// push_within_capacity()'s, with what wasn't pushed.
 pub struct PushError<T>(pub T);
 
