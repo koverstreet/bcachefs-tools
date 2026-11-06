@@ -206,58 +206,51 @@ static inline enum btree_node_type btree_node_type(struct btree *b)
 	return __btree_node_type(b->c.level, b->c.btree_id);
 }
 
-/*
- * Mask of btree ids that have snapshots; defined here, ahead of the other
- * btree-id masks below, because the trigger masks build on it: every snapshot
- * btree needs trans triggers so that bch2_trigger_snapshot_nr_keys() runs for
- * its keys. (<< 1 maps btree_id space to btree_node_type space, where a leaf's
- * node type is id + 1.)
- */
 static const u64 btree_has_snapshots_mask = 0
 #define x(name, nr, flags, ...)	|((!!((flags) & BTREE_IS_snapshots)) << nr)
 BCH_BTREE_IDS()
 #undef x
 ;
 
-#define BTREE_NODE_TYPE_HAS_TRANS_TRIGGERS		\
-	(BIT_ULL(BKEY_TYPE_extents)|			\
-	 BIT_ULL(BKEY_TYPE_alloc)|			\
-	 BIT_ULL(BKEY_TYPE_inodes)|			\
-	 BIT_ULL(BKEY_TYPE_stripes)|			\
-	 BIT_ULL(BKEY_TYPE_reflink)|			\
-	 BIT_ULL(BKEY_TYPE_subvolumes)|			\
-	 BIT_ULL(BKEY_TYPE_snapshots)|			\
-	 BIT_ULL(BKEY_TYPE_btree)|			\
-	 (btree_has_snapshots_mask << 1))
+/*
+ * Btrees whose leaves' updates run transactional triggers - every btree with
+ * snapshots does, so that bch2_trigger_snapshot_nr_keys() runs for its keys -
+ * and atomic triggers. << 1 maps btree_id space to btree_node_type space,
+ * where a leaf's node type is id + 1; interior nodes run transactional
+ * triggers.
+ */
+static const u64 btree_has_trans_triggers_mask = 0
+#define x(name, nr, flags, ...)	|((u64) !!((flags) & (BTREE_IS_trans_triggers|BTREE_IS_snapshots)) << nr)
+BCH_BTREE_IDS()
+#undef x
+;
 
-#define BTREE_NODE_TYPE_HAS_ATOMIC_TRIGGERS		\
-	(BIT_ULL(BKEY_TYPE_alloc)|			\
-	 BIT_ULL(BKEY_TYPE_inodes)|			\
-	 BIT_ULL(BKEY_TYPE_stripes)|			\
-	 BIT_ULL(BKEY_TYPE_snapshots))
-
-#define BTREE_NODE_TYPE_HAS_TRIGGERS			\
-	(BTREE_NODE_TYPE_HAS_TRANS_TRIGGERS|		\
-	 BTREE_NODE_TYPE_HAS_ATOMIC_TRIGGERS)
+static const u64 btree_has_atomic_triggers_mask = 0
+#define x(name, nr, flags, ...)	|((u64) !!((flags) & BTREE_IS_atomic_triggers) << nr)
+BCH_BTREE_IDS()
+#undef x
+;
 
 static inline bool btree_node_type_has_trans_triggers(enum btree_node_type type)
 {
-	return BIT_ULL(type) & BTREE_NODE_TYPE_HAS_TRANS_TRIGGERS;
+	return BIT_ULL(type) & (BIT_ULL(BKEY_TYPE_btree) | btree_has_trans_triggers_mask << 1);
 }
 
 static inline bool btree_node_type_has_atomic_triggers(enum btree_node_type type)
 {
-	return BIT_ULL(type) & BTREE_NODE_TYPE_HAS_ATOMIC_TRIGGERS;
+	return BIT_ULL(type) & (btree_has_atomic_triggers_mask << 1);
 }
 
 static inline bool btree_node_type_has_triggers(enum btree_node_type type)
 {
-	return BIT_ULL(type) & BTREE_NODE_TYPE_HAS_TRIGGERS;
+	return btree_node_type_has_trans_triggers(type) ||
+		btree_node_type_has_atomic_triggers(type);
 }
 
 /* A mask of btree id bits that have triggers for their leaves */
 __maybe_unused
-static const u64 btree_leaf_has_triggers_mask = BTREE_NODE_TYPE_HAS_TRIGGERS >> 1;
+static const u64 btree_leaf_has_triggers_mask =
+	btree_has_trans_triggers_mask | btree_has_atomic_triggers_mask;
 
 static const u64 btree_is_extents_mask = 0
 #define x(name, nr, flags, ...)	|((!!((flags) & BTREE_IS_extents)) << nr)

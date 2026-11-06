@@ -724,6 +724,8 @@ c_enum! {
         BTREE_IS_snapshot_field = 1 << 2,
         BTREE_IS_data = 1 << 3,
         BTREE_IS_write_buffer = 1 << 4,
+        BTREE_IS_trans_triggers = 1 << 5,
+        BTREE_IS_atomic_triggers = 1 << 6,
     }
 }
 
@@ -732,7 +734,8 @@ c_xmacro! {
         (extents,               0,
          BTREE_IS_extents |
          BTREE_IS_snapshots |
-         BTREE_IS_data,
+         BTREE_IS_data |
+         BTREE_IS_trans_triggers,
          BIT_ULL(KEY_TYPE_whiteout) |
          BIT_ULL(KEY_TYPE_extent_whiteout) |
          BIT_ULL(KEY_TYPE_error) |
@@ -743,7 +746,9 @@ c_xmacro! {
          BIT_ULL(KEY_TYPE_inline_data),
          "File data extent pointers and reservations"),
         (inodes,                1,
-         BTREE_IS_snapshots,
+         BTREE_IS_snapshots |
+         BTREE_IS_trans_triggers |
+         BTREE_IS_atomic_triggers,
          BIT_ULL(KEY_TYPE_whiteout) |
          BIT_ULL(KEY_TYPE_inode) |
          BIT_ULL(KEY_TYPE_inode_v2) |
@@ -763,7 +768,9 @@ c_xmacro! {
          BIT_ULL(KEY_TYPE_hash_whiteout) |
          BIT_ULL(KEY_TYPE_xattr),
          "Extended attributes"),
-        (alloc,                 4,  0,
+        (alloc,                 4,
+         BTREE_IS_trans_triggers |
+         BTREE_IS_atomic_triggers,
          BIT_ULL(KEY_TYPE_alloc) |
          BIT_ULL(KEY_TYPE_alloc_v2) |
          BIT_ULL(KEY_TYPE_alloc_v3) |
@@ -773,20 +780,26 @@ c_xmacro! {
          BIT_ULL(KEY_TYPE_quota),
          "User, group, and project quota counters"),
         (stripes,               6,
-         BTREE_IS_data,
+         BTREE_IS_data |
+         BTREE_IS_trans_triggers |
+         BTREE_IS_atomic_triggers,
          BIT_ULL(KEY_TYPE_stripe),
          "Erasure coding stripe descriptors"),
         (reflink,               7,
          BTREE_IS_extents |
-         BTREE_IS_data,
+         BTREE_IS_data |
+         BTREE_IS_trans_triggers,
          BIT_ULL(KEY_TYPE_reflink_v) |
          BIT_ULL(KEY_TYPE_indirect_inline_data) |
          BIT_ULL(KEY_TYPE_error),
          "Reflink shared extent pointers"),
-        (subvolumes,            8,  0,
+        (subvolumes,            8,
+         BTREE_IS_trans_triggers,
          BIT_ULL(KEY_TYPE_subvolume),
          "Subvolume metadata"),
-        (snapshots,             9,  0,
+        (snapshots,             9,
+         BTREE_IS_trans_triggers |
+         BTREE_IS_atomic_triggers,
          BIT_ULL(KEY_TYPE_snapshot),
          "Snapshot tree structure"),
         (lru,                   10,

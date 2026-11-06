@@ -1167,6 +1167,38 @@ macro_rules! btree_ids_mask {
     ($(($name:ident, $nr:literal $(, $($rest:tt)*)?)),* $(,)?) => { 0u64 $(| 1 << $nr)* };
 }
 
+/*
+ * The node types whose updates run triggers, a bit each: a leaf's node type
+ * is its btree's id + 1. Every snapshotted btree runs transactional triggers,
+ * so that bch2_trigger_snapshot_nr_keys() runs for its keys; and interior
+ * nodes do, for their pointers.
+ */
+const TRANS_TRIGGERS: u64 = 1 << btree_node_type::BKEY_TYPE_btree as u32 |
+    (c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_trans_triggers => btree_ids_mask]) |
+     c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_snapshots => btree_ids_mask])) << 1;
+const ATOMIC_TRIGGERS: u64 =
+    c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_atomic_triggers => btree_ids_mask]) << 1;
+
+/// An update's node type - which may be a btree's this code doesn't know - in
+/// @mask.
+const fn node_type_in(bkey_type: u8, mask: u64) -> bool {
+    bkey_type < 64 && mask & (1 << bkey_type) != 0
+}
+
+impl btree_insert_entry {
+    pub const fn has_trans_triggers(&self) -> bool {
+        node_type_in(self.bkey_type, TRANS_TRIGGERS)
+    }
+
+    pub const fn has_atomic_triggers(&self) -> bool {
+        node_type_in(self.bkey_type, ATOMIC_TRIGGERS)
+    }
+
+    pub const fn has_triggers(&self) -> bool {
+        node_type_in(self.bkey_type, TRANS_TRIGGERS | ATOMIC_TRIGGERS)
+    }
+}
+
 /// BCH_BTREE_IDS()' key types, by id: deleted, which every btree may hold,
 /// and each's own - a bit each, by number.
 macro_rules! btree_key_types {
