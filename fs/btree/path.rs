@@ -12,7 +12,7 @@ use crate::c;
 use crate::cstructs::c as cs;
 use crate::errcode::{bch_errcode, err_ptr, errptr_or_null, BchError};
 use crate::format::{Bpos, Btree};
-use crate::types::c_default;
+use crate::types::{c_default, Lent};
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::util::kernel::local_clock;
 use cstruct_macros::{bitfield, c_name, c_typedef, CStruct};
@@ -181,15 +181,14 @@ impl BtreeTrans<'_> {
         self.set_paths_borrowed(true);
         Paths { trans: self, took: true }
     }
+}
 
-    /// The path table, for a C export: C's to lend for the call, its own
-    /// caller holding no reference into it - a Rust caller's borrow, if there
-    /// is one, idle across the call into C.
-    ///
-    /// # Safety
-    /// As above.
-    pub(crate) unsafe fn paths_lent(&self) -> Paths<'_> {
-        Paths { trans: self, took: false }
+/// The path table, for a C export: C's to lend for the call, its own caller
+/// holding no reference into it - a Rust caller's borrow, if there is one, idle
+/// across the call into C.
+impl<'t> Lent<'t, BtreeTrans<'_>> for Paths<'t> {
+    unsafe fn lent(trans: &'t BtreeTrans<'_>) -> Self {
+        Paths { trans, took: false }
     }
 }
 
@@ -203,8 +202,7 @@ impl Paths<'_> {
                                     should_sleep_fn: c::six_lock_should_sleep_fn, ip: c_ulong) -> Result<(), c_int> {
         ebug_assert!(self[idx].write_locked(level), "taking write at a level not marked for it");
         let node = self[idx].held_node(level);
-        let readers = self.trans.node_lock_counts(self, core::ptr::null(), node.as_ptr(), level)
-            .n[c::SIX_LOCK_read as usize] as c_int;
+        let readers = self.trans.node_lock_counts(self, None, node, level).n[c::SIX_LOCK_read as usize] as c_int;
 
         match unsafe {
             SixHold::from_raw(&node.as_ref().lock, six_lock_type::SIX_LOCK_intent)
