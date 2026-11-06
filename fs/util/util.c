@@ -442,15 +442,15 @@ bool bch2_signal_pending_state(unsigned int state)
 	return signal_pending_state(state, current);
 }
 
-#ifdef CONFIG_SMP
-#include <linux/sched/rt.h>
-
-/* For locking/six.rs's optimistic spin: inlines over current and its owner */
 bool bch2_need_resched(void)
 {
 	return need_resched();
 }
 
+#ifdef CONFIG_SMP
+#include <linux/sched/rt.h>
+
+/* For locking/six.rs's optimistic spin: inlines over current and its owner */
 bool bch2_owner_on_cpu(struct task_struct *owner)
 {
 	return owner_on_cpu(owner);

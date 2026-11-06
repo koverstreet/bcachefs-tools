@@ -113,7 +113,6 @@ c_extern! {
     pub fn bch2_set_current_state(state: c_uint);
     pub fn bch2_set_current_state_running();
     pub fn bch2_signal_pending_state(state: c_uint) -> bool;
-    #[cfg(CONFIG_SMP)]
     pub fn bch2_need_resched() -> bool;
     #[cfg(CONFIG_SMP)]
     pub fn bch2_owner_on_cpu(owner: *mut c::task_struct) -> bool;

@@ -27,7 +27,6 @@ pub fn sched_clock() -> u64 {
     unsafe { c::bch2_sched_clock() }
 }
 
-#[cfg(CONFIG_SMP)]
 #[inline(always)]
 pub fn need_resched() -> bool {
     unsafe { c::bch2_need_resched() }
