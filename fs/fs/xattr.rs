@@ -228,7 +228,7 @@ pub fn to_text(out: &mut Printbuf, k: BkeySC<'_>) {
     }
 }
 
-impl crate::btree::bkey_methods::BkeyOps for c::Xattr {
+impl crate::btree::bkey::BkeyOps for c::Xattr {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         validate(v)
     }

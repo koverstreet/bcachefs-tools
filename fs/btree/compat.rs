@@ -175,7 +175,7 @@ pub unsafe fn __bch2_bkey_compat(fs: Option<&Fs>, level: c_uint, btree: Btree, v
                     let v = unsafe { k.cast::<u64>().add(fmt().key_u64s.into()) }.cast::<c::bch_val>();
                     unsafe { BkeyS::from_parts(&mut uk, v) }
                 };
-                let ops = crate::btree::bkey_methods::key_ops(unsafe { (*k).type_ });
+                let ops = crate::btree::bkey::key_ops(unsafe { (*k).type_ });
 
                 if big_endian != cfg!(target_endian = "big") {
                     let u = unsafe { BkeyS::from_parts(&mut *u.k, u.v) };

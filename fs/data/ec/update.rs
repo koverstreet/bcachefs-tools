@@ -349,7 +349,7 @@ pub fn resume_logged_op(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), 
     stripe_update_extents(trans, stripe(&old), stripe(&new), map, create_watermark(c::bch_watermark::BCH_WATERMARK_normal).into())
 }
 
-impl crate::btree::bkey_methods::BkeyOps for c::LoggedOpStripeUpdate {
+impl crate::btree::bkey::BkeyOps for c::LoggedOpStripeUpdate {
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
         logged_op_stripe_update_to_text(out, fs, k)
     }

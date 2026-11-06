@@ -81,7 +81,7 @@ fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     Ok(())
 }
 
-impl crate::btree::bkey_methods::BkeyOps for c::Damage {
+impl crate::btree::bkey::BkeyOps for c::Damage {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         validate(v)
     }

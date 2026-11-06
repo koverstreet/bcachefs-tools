@@ -5,7 +5,7 @@
 //! and where in each type's value the data is.
 
 use crate::btree::bkey::{BkeyFamily, BkeyS, BkeySC, BkeyV, ByFlag, FamilyVal, FieldOffsets};
-use crate::btree::bkey_methods::BkeyOps;
+use crate::btree::bkey::BkeyOps;
 use crate::c;
 use crate::fs::Fs;
 use crate::prt;

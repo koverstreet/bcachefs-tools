@@ -482,7 +482,8 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyWhole, POS_MIN};
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, LoopFlow, TransAttempt,
                          TransBkey, UpdateTriggerFlags};
-use crate::btree::bkey_methods::{BkeyOps, Trigger, TriggerOp};
+use crate::btree::bkey::BkeyOps;
+use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::errcode::{err_ptr, ret_to_c, BchError};

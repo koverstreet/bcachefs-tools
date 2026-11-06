@@ -85,6 +85,7 @@ mod cmp;
 #[cfg(target_arch = "x86_64")]
 mod compile;
 mod format;
+mod ops;
 mod pack;
 mod packed;
 #[cfg(test)]
@@ -95,6 +96,7 @@ mod types;
 pub use self::bpos::*;
 pub use self::cmp::*;
 pub use self::format::*;
+pub use self::ops::*;
 pub use self::pack::*;
 pub use self::packed::*;
 pub use self::text::*;

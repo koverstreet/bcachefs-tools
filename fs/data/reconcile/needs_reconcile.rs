@@ -8,7 +8,7 @@
 use crate::fsck_err;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeyS, BkeySC, BkeyV, BkeyVMut, BkeyVal};
-use crate::btree::bkey_methods::TriggerOp;
+use crate::btree::trigger::TriggerOp;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::durability::BkeyVDurability;

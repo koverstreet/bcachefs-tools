@@ -27,7 +27,7 @@ use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
-use crate::btree::bkey_methods::BkeyOps;
+use crate::btree::bkey::BkeyOps;
 use crate::init::error::{id, BkeyValidate};
 use crate::init::progress::Progress;
 use crate::util::rcu::read_lock;

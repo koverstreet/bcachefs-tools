@@ -40,6 +40,7 @@ pub mod locking;
 pub mod node;
 pub mod node_scan;
 pub mod read;
+pub mod trigger;
 pub mod types;
 pub mod update;
 pub mod write_buffer;

@@ -294,7 +294,8 @@
  */
 
 use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole, POS_MAX, POS_MIN};
-use crate::btree::bkey_methods::{BkeyOps, Trigger, TriggerOp};
+use crate::btree::bkey::BkeyOps;
+use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::prt;
 use crate::util::vstructs::{Validated, Whole};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans,

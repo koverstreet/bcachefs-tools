@@ -62,7 +62,7 @@ use crate::c::bch_validate_flags;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{self, Bpos};
 use crate::fs::Fs;
-use crate::btree::bkey_methods::BkeyOps;
+use crate::btree::bkey::BkeyOps;
 use crate::init::error::{id, BkeyValidate};
 use crate::types::ArmOf;
 use crate::util::rcu;

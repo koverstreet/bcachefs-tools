@@ -8,7 +8,7 @@ use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
 use crate::alloc::replicas::{bkey_replicas_acct, entry_acct, replicas_acct};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeySC};
-use crate::btree::bkey_methods::{Trigger, TriggerOp};
+use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
 use crate::c;

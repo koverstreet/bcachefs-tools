@@ -4,8 +4,9 @@
 
 #include "btree/bkey.h"
 
-#include "btree/bkey_methods_gen.h"
+#include "btree/bkey/ops_gen.h"
 #include "btree/compat_gen.h"
+#include "btree/trigger_gen.h"
 
 static inline bool bch2_bkey_maybe_mergable(const struct bkey *l, const struct bkey *r)
 {

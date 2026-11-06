@@ -49,7 +49,7 @@ use crate::data::reconcile::trigger::BkeyVReconcile;
 use crate::debug::params as debug_params;
 use crate::errcode::{bch_errcode, err_ptr, BchError};
 use crate::fs::Fs;
-use crate::btree::bkey_methods::BkeyOps;
+use crate::btree::bkey::BkeyOps;
 use crate::init::error::{id, BkeyValidate};
 use crate::init::passes;
 use crate::init::progress::Progress;

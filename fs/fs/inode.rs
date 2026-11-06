@@ -43,7 +43,8 @@ use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC, Typed, POS_
 use crate::init::passes;
 use crate::util::varint;
 use core::mem::{offset_of, align_of};
-use crate::btree::bkey_methods::{BkeyOps, Trigger, TriggerOp};
+use crate::btree::bkey::BkeyOps;
+use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::init::progress::Progress;
 use crate::{bch_verbose_ratelimited, fs_inconsistent, fsck_err, fsck_err_on};
 use crate::btree::iter::{

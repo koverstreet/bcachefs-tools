@@ -236,7 +236,7 @@ fn journal_validate_key(ctx: &Ctx<'_>, e: &mut [u8], at: usize) -> Result<Key, B
     }
 
     let k = key_at(e, at);
-    let ret = crate::btree::bkey_methods::bkey_validate(
+    let ret = crate::btree::bkey::bkey_validate(
         &BkeyValidate { fs: ctx.fs, k: unsafe { BkeySC::from_c(&k) }, from: &ctx.from });
     if let Err(err) = ret {
         if journal_entry_err_on!(ctx, true, journal_entry_bkey_bad_format,
@@ -295,7 +295,7 @@ fn journal_entry_btree_keys_to_text(out: &mut Printbuf, fs: Option<&Fs>, e: &[u8
 
         prt!(out, "btree={} level={} ", Btree(h.btree_id.into()), h.level);
         let k = key_at(e, at);
-        crate::btree::bkey_methods::bkey_val_to_text(out, fs, unsafe { BkeySC::from_c(&k) });
+        crate::btree::bkey::bkey_val_to_text(out, fs, unsafe { BkeySC::from_c(&k) });
         first = false;
         at += u64s * 8;
     }

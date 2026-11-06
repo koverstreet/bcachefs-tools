@@ -7,7 +7,8 @@
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{bkey_ge, bkey_gt, bkey_le, bkey_lt, types_with, AllTypes, BkeyFamily, ByFlag, FamilyTypes, FamilyVal, InFamily, KeyState, BkeyS, BkeySC, BkeyV, BkeyVal,
                          BkeyVMut};
-use crate::btree::bkey_methods::{BkeyOps, Trigger};
+use crate::btree::bkey::BkeyOps;
+use crate::btree::trigger::Trigger;
 use crate::btree::iter::NoRoom;
 use crate::c;
 use crate::data::inline_data::{InlineDataMut, InlineDataRef};

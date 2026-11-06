@@ -53,7 +53,7 @@
 //! #[derive(SizedVal)].
 
 use super::BkeyP;
-use crate::btree::bkey_methods::{ops, Ops};
+use crate::btree::bkey::{ops, Ops};
 use crate::btree::iter::{BtreeIter, TransBkey};
 use crate::c;
 use crate::typeinfo::{StructInfo, TypeInfo};

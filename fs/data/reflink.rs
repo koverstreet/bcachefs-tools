@@ -31,7 +31,8 @@ use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_gt, bkey_lt, pos, BkeyFamily, BkeyI, BkeyS, BkeySC,
                          BkeyV, BkeyVMut, ByFlag, FamilyVal, FieldOffsets, POS_MAX, POS_MIN};
-use crate::btree::bkey_methods::{BkeyOps, Trigger, TriggerOp};
+use crate::btree::bkey::BkeyOps;
+use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;

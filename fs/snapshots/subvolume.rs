@@ -20,7 +20,8 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
 use crate::util::vstructs::{Validated, Whole};
-use crate::btree::bkey_methods::{BkeyOps, Trigger, TriggerOp};
+use crate::btree::bkey::BkeyOps;
+use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
     commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, KeyFn,

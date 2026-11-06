@@ -155,7 +155,7 @@ fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                       "invalid quota type ({ty} >= {})", c::QTYP_NR)
 }
 
-impl crate::btree::bkey_methods::BkeyOps for c::Quota {
+impl crate::btree::bkey::BkeyOps for c::Quota {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         validate(v)
     }

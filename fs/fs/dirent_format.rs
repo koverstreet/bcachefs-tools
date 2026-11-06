@@ -296,7 +296,7 @@ pub fn d_type_str(d_type: u8) -> &'static str {
     }
 }
 
-impl crate::btree::bkey_methods::BkeyOps for Dirent {
+impl crate::btree::bkey::BkeyOps for Dirent {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         validate(v).map(|_| ())
     }

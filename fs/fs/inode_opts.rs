@@ -644,7 +644,7 @@ fn propagate_one(
     Ok(ControlFlow::Continue(()))
 }
 
-impl crate::btree::bkey_methods::BkeyOps for c::LoggedOpInodeOptPropagate {
+impl crate::btree::bkey::BkeyOps for c::LoggedOpInodeOptPropagate {
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
         logged_op_inode_opt_propagate_to_text(out, fs, k)
     }

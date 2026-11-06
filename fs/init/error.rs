@@ -782,7 +782,7 @@ pub fn bkey_fsck_err_verdict(fs: &Fs, k: BkeySC<'_>, from: &c::bkey_validate_con
         }
         let btree = from.btree;
         write!(out, " btree={btree} level={}: ", from.level);
-        crate::btree::bkey_methods::bkey_val_to_text(out, Some(fs), k.into());
+        crate::btree::bkey::bkey_val_to_text(out, Some(fs), k.into());
         out.newline();
         msg.to_text(out);
         write!(out, ", delete?");
