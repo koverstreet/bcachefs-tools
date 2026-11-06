@@ -43,8 +43,19 @@
 //! enum, made from the arms: P and an arm's name its variant, labelled the
 //! arm's name, then NR - open, or closed and the tag stored as it,
 //! `#[tag(FIELD)]`. An open one's values are its constants by the arms' names
-//! too, jset_entry's btree_keys, and nr. NAME_arms!(cb) is cb! { (name,
-//! value), .. }, an entry per arm, for what's made from each.
+//! too, jset_entry's btree_keys, and nr. NAME_arms!(cb [pre]) is cb! { [pre]
+//! (name, value, Type, [column]..), .. }, an entry per arm, for what's made
+//! from each - a list's form, so xmacro_select can select from it.
+//!
+//! `#[arm_columns(NAME: FLAGS, ..)]` gives each arm a set of a #[flags]
+//! c_enum!'s flags, by their #[prefix]-less names: `#[NAME(a, b)]` on its
+//! variant, none without - a key type's. The tag enum has `const fn NAME()`,
+//! each arm's set, none for a tag no arm has; an entry has it as `[a, b]`,
+//! which xmacro_select selects by. `#[c_list(LIST)]` is C's x-macro of the
+//! arms, for C that still expands one: x(name, value, each column's value,
+//! "doc"). `#[key_value]`: the arms are a key's value types, the tag its
+//! header's - what's generated is the tag enum, the entries and the list; the
+//! key forms (btree/bkey/) are the views.
 //!
 //! A type whose bytes come from outside - disk, or C - with a tag that says
 //! which of its arms it holds, and that may be one this version doesn't know.
@@ -165,9 +176,10 @@ use crate::cstruct::{rust_text, tagged_union_record_text, CTaggedArm, CTaggedDef
 use crate::{comma_list, record, tokens};
 
 pub(crate) fn tagged_union(input: TokenStream) -> Result<TokenStream, String> {
-    let (decl, tu, out) = enum_form(&input)?;
-    let mut out = out;
-    out.extend(generate(&decl, &tu)?);
+    let (union, mut out) = enum_form(&input)?;
+    if let Some((decl, tu)) = union {
+        out.extend(generate(&decl, &tu)?);
+    }
     Ok(out)
 }
 
@@ -188,9 +200,10 @@ struct TagEnum {
     nr:     Option<String>,
 }
 
-/// The union the declaration says, and what's generated from its arms
-/// besides it: the tag enum, its aliases and NAME_arms!.
-fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), String> {
+/// The union the declaration says - none for #[key_value], whose views are the
+/// key forms' - and what's generated from its arms besides it: the tag enum,
+/// its aliases, NAME_arms! and C's list.
+fn enum_form(input: &TokenStream) -> Result<(Option<(Decl, CTaggedUnion)>, TokenStream), String> {
     let trees: Vec<TokenTree> = input.clone().into_iter().collect();
     let is_ident = |t: Option<&TokenTree>, s: &str| matches!(t, Some(TokenTree::Ident(i)) if i == s);
     let is_punct = |t: Option<&TokenTree>, c: char| matches!(t, Some(TokenTree::Punct(p)) if p.as_char() == c);
@@ -217,7 +230,8 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
             arm_attrs.extend(trees[k..k + n].iter().cloned());
         } else if head == "c_name" {
             c_name = Some(rust_text(&args));
-        } else if matches!(head.as_str(), "tag" | "tag_enum" | "storage" | "pad" | "size" | "packed" | "plain") {
+        } else if matches!(head.as_str(), "tag" | "tag_enum" | "storage" | "pad" | "size" | "packed" | "plain" |
+                                          "key_value" | "c_list" | "arm_columns") {
             ours.push((head, args));
         } else {
             attrs.push_str(&format!("#{g}\n"));
@@ -242,6 +256,8 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
     let mut tag: Option<(String, Option<String>)> = None;
     let mut tag_enum: Option<TagEnum> = None;
     let (mut storage, mut pad, mut size, mut packed, mut plain) = (None, None, None, false, false);
+    let (mut key_value, mut c_list) = (false, None);
+    let mut columns: Vec<(String, String)> = Vec::new();
     for (head, args) in &ours {
         match head.as_str() {
             "tag" => {
@@ -286,12 +302,25 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
             }),
             "packed"  => packed = true,
             "plain"   => plain = true,
+            "key_value" => key_value = true,
+            "c_list"  => c_list = Some(text(args)),
+            "arm_columns" => for c in comma_list(args.clone()) {
+                match c.as_slice() {
+                    [TokenTree::Ident(n), colon, ty @ ..] if is_punct(Some(colon), ':') && !ty.is_empty() =>
+                        columns.push((n.to_string(), text(&ty.iter().cloned().collect()))),
+                    _ => return Err(err("#[arm_columns(NAME: FLAGS, ..)]")),
+                }
+            },
             _ => unreachable!(),
         }
     }
-    let (tag_field, tag_ty) = tag.ok_or_else(|| err("no #[tag(..)]"))?;
+    let (tag_field, tag_ty) = match (tag, key_value) {
+        (Some(t), _)   => t,
+        (None, true)   => (String::new(), None),
+        (None, false)  => return Err(err("no #[tag(..)]")),
+    };
 
-    struct Arm { docs: TokenStream, name: String, ty: String, value: String }
+    struct Arm { docs: TokenStream, name: String, ty: String, value: String, cols: Vec<Vec<String>> }
     let mut arms = Vec::new();
     let mut defs: Vec<TokenStream> = Vec::new();
     let mut def_names = Vec::new();
@@ -299,8 +328,28 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
     for v in comma_list(body.stream()).into_iter().filter(|v| !v.is_empty()) {
         let mut j = 0;
         let mut docs = TokenStream::new();
+        let mut cols: Vec<Vec<String>> = vec![Vec::new(); columns.len()];
         while is_punct(v.get(j), '#') {
-            docs.extend(v[j..j + 2].iter().cloned());
+            let col = match v.get(j + 1) {
+                Some(TokenTree::Group(g)) => {
+                    let mut inner = g.stream().into_iter();
+                    match (inner.next(), inner.next()) {
+                        (Some(TokenTree::Ident(n)), Some(TokenTree::Group(a))) =>
+                            columns.iter().position(|(c, _)| *c == n.to_string()).map(|i| (i, a.stream())),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            match col {
+                Some((i, a)) => for f in comma_list(a) {
+                    match f.as_slice() {
+                        [TokenTree::Ident(f)] => cols[i].push(f.to_string()),
+                        _ => return Err(err(&format!("#[{}(..)]: a flag is its name", columns[i].0))),
+                    }
+                },
+                None => docs.extend(v[j..j + 2].iter().cloned()),
+            }
             j += 2;
         }
         let (Some(TokenTree::Ident(arm)), Some(TokenTree::Group(payload))) = (v.get(j), v.get(j + 1)) else {
@@ -338,17 +387,10 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
         };
         next = n + 1;
         let value = value.unwrap_or_else(|| n.to_string());
-        arms.push(Arm { docs, name: arm.to_string(), ty, value });
+        arms.push(Arm { docs, name: arm.to_string(), ty, value, cols });
     }
 
     let mut out = TokenStream::new();
-    let (tag_ty, tag_enum_ty, tag_is_enum) = match (&tag_enum, tag_ty) {
-        (Some(e), None) if e.closed => (format!("c::{}", e.name), String::new(), true),
-        (Some(e), Some(ty)) if !e.closed => (ty, format!("c::{}", e.name), false),
-        (None, Some(ty)) => (ty, String::new(), false),
-        _ => return Err(err("#[tag(FIELD: TYPE)] with an open #[tag_enum], #[tag(FIELD)] with a closed one")),
-    };
-
     if let Some(e) = &tag_enum {
         let variants: String = arms.iter()
             .map(|a| format!("#[label({:?})] {}{} = {},", a.name, e.prefix, a.name, a.value))
@@ -371,14 +413,68 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
             out.extend(tokens(&format!("#[allow(non_upper_case_globals)] impl {}", e.name)));
             out.extend([TokenTree::Group(Group::new(Delimiter::Brace, aliases))]);
         }
+
+        let fns: String = columns.iter().enumerate()
+            .map(|(i, (col, ty))| {
+                let arms: String = arms.iter()
+                    .map(|a| format!("Self::{}{} => {},\n", e.prefix, a.name, flags_value(ty, &a.cols[i])))
+                    .collect();
+                let other = match e.closed && e.nr.is_none() {
+                    true  => String::new(),
+                    false => format!("_ => {ty}::empty(),\n"),
+                };
+                format!("pub const fn {col}(self) -> {ty} {{\n match self {{\n{arms}{other}}}\n}}\n")
+            })
+            .collect();
+        if !fns.is_empty() {
+            out.extend(tokens(&format!("#[allow(dead_code)] impl {} {{\n{fns}}}", e.name)));
+        }
+    } else if !columns.is_empty() {
+        return Err(err("#[arm_columns(..)] are the tag enum's: no #[tag_enum(..)]"));
     }
 
-    let entries: String = arms.iter().map(|a| format!("({}, {}),", a.name, a.value)).collect();
+    let entries: String = arms.iter()
+        .map(|a| [a.name.clone(), a.value.clone(), arm_path(&a.ty)].into_iter()
+             .chain(a.cols.iter().map(|c| format!("[{}]", c.join(", "))))
+             .collect::<Vec<_>>().join(", "))
+        .map(|row| format!("({row}),"))
+        .collect();
     out.extend(format!("#[allow(unused_macros)] macro_rules! {name}_arms {{ \
-                            ($($cb:tt)+) => {{ $($cb)+ ! {{ {entries} }} }}; \
+                            ($($cb:ident)::+ $([$($pre:tt)*])?) => {{ \
+                                $($cb)::+ ! {{ $([$($pre)*])? {entries} }} \
+                            }}; \
                         }} \
                         #[allow(unused_imports)] pub(crate) use {name}_arms;")
         .parse::<TokenStream>().map_err(|e| e.to_string())?);
+
+    // A column's values go to C as rustc evaluates them: the generator puts
+    // each in for its __bch_num_N
+    if let Some(list) = &c_list {
+        let mut nums = Vec::new();
+        let rows: Vec<String> = arms.iter()
+            .map(|a| {
+                let cells: Vec<String> = columns.iter().zip(&a.cols)
+                    .map(|((_, ty), c)| {
+                        nums.push(tokens(&format!("({}).bits() as u64", flags_value(ty, c))));
+                        format!("__bch_num_{}", nums.len() - 1)
+                    })
+                    .collect();
+                format!("({}, {}, {}{:?})", a.name, a.value,
+                        cells.iter().map(|c| format!("{c}, ")).collect::<String>(), doc_text(&a.docs))
+            })
+            .collect();
+        out.extend(record(&format!("c_xmacro! {{ {list}(x) {{ {} }} }}", rows.join(", ")), &nums));
+    }
+    if key_value {
+        return Ok((None, out));
+    }
+
+    let (tag_ty, tag_enum_ty, tag_is_enum) = match (&tag_enum, tag_ty) {
+        (Some(e), None) if e.closed => (format!("c::{}", e.name), String::new(), true),
+        (Some(e), Some(ty)) if !e.closed => (ty, format!("c::{}", e.name), false),
+        (None, Some(ty)) => (ty, String::new(), false),
+        _ => return Err(err("#[tag(FIELD: TYPE)] with an open #[tag_enum], #[tag(FIELD)] with a closed one")),
+    };
 
     let arm_value = |a: &Arm| match &tag_enum {
         Some(e) if e.closed => format!("c::{}::{}{}", e.name, e.prefix, a.name),
@@ -402,7 +498,35 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
         defs: def_names.into_iter().map(|name| CTaggedDef { name }).collect(),
     };
     tu.check()?;
-    Ok((Decl { attrs, vis, arm_attrs, defs }, tu, out))
+    Ok((Some((Decl { attrs, vis, arm_attrs, defs }, tu)), out))
+}
+
+fn doc_text(docs: &TokenStream) -> String {
+    let attrs = syn::parse::Parser::parse2(syn::Attribute::parse_outer, docs.clone()).unwrap_or_default();
+    attrs.iter()
+        .filter_map(|a| match &a.meta {
+            syn::Meta::NameValue(nv) if nv.path.is_ident("doc") => match &nv.value {
+                syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => Some(s.value().trim().to_string()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Flags @flags of #[flags] c_enum! @ty, as a const expression.
+fn flags_value(ty: &str, flags: &[String]) -> String {
+    flags.iter().fold(format!("{ty}::empty()"), |v, f| format!("{v}.union({ty}::{f})"))
+}
+
+/// An arm's type as a path from anywhere in the crate, for macros that expand
+/// at their callers.
+fn arm_path(ty: &str) -> String {
+    match ty.trim().strip_prefix("c::") {
+        Some(rest) => format!("crate::c::{rest}"),
+        None => ty.trim().to_string(),
+    }
 }
 
 /// An integer literal, decimal or 0x hex, as a discriminant is written.
@@ -878,12 +1002,6 @@ fn generate(d: &Decl, tu: &CTaggedUnion) -> Result<TokenStream, String> {
                      \n")
             })
             .collect();
-        // The arms' types as paths from anywhere in the crate: the macros
-        // below expand at their callers
-        let arm_path = |ty: &str| match ty.trim().strip_prefix("c::") {
-            Some(rest) => format!("crate::c::{rest}"),
-            None => ty.trim().to_string(),
-        };
         let match_arms: String = arms.iter()
             .map(|a| format!("crate::c::{en}Ref::{}($a) => {{ $(type $A<S> = {}<S>;)? $body }}\n",
                              a.name, arm_path(&a.ty)))

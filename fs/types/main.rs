@@ -476,6 +476,17 @@ fn file_h(header: &str, records: &[&Record], paths: &BTreeMap<String, String>,
                 offsets.extend(tu.arms.iter().map(|a| (c_ident(&a.name), *payload)));
                 sames.push((tu.c_type(), *size, *align, offsets));
             }
+            // A cell rustc evaluated - a tagged_union!'s column, its
+            // __bch_num_N - as the value it is
+            CItem::XMacro(x) => {
+                for e in &mut x.entries {
+                    if let CXEntry::Args(a) = e {
+                        for (i, v) in r.nums.iter().enumerate().rev() {
+                            *a = a.replace(&format!("__bch_num_{i}"), &format!("{v:#x}"));
+                        }
+                    }
+                }
+            }
             _ => {}
         }
         push_item(&mut items, item);

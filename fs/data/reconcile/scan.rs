@@ -455,7 +455,7 @@ fn update_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>
     let msg = |out: &mut Printbuf| write!(out, "{}", k.to_text(fs));
 
     macro_rules! trace {
-        ($(($n:ident, $v:expr)),* $(,)?) => { crate::paste! {
+        ($(($n:ident, $v:expr, $ty:ty)),* $(,)?) => { crate::paste! {
             match scan.type_() {
                 $(c::reconcile_scan_type::[<RECONCILE_SCAN_ $n>] =>
                     fs.event_add_trace(events::[<reconcile_scan_ $n>], sectors, msg),)*

@@ -146,7 +146,7 @@ pub fn is_mem<S>(pos: &DiskAccountingPos<S>) -> bool {
 const TYPE_NR: usize = disk_accounting_type::BCH_DISK_ACCOUNTING_TYPE_NR.0 as usize;
 
 macro_rules! type_nr_counters {
-    ($(($t:ident, $id:expr)),* $(,)?) => { ::paste::paste! {{
+    ($(($t:ident, $id:expr, $ty:ty)),* $(,)?) => { ::paste::paste! {{
         let mut a = [0; TYPE_NR];
         $(a[$id] = [<$t:camel Counters>]::NR;)*
         a
