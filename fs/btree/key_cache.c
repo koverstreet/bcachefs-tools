@@ -773,7 +773,7 @@ void bch2_btree_insert_key_cached(struct btree_trans *trans,
 	bkey_cached_check_pin(c, ck);
 
 	if (kick_reclaim)
-		journal_reclaim_kick(&c->journal);
+		bch2_journal_reclaim_kick(&c->journal);
 }
 
 void bch2_btree_key_cache_drop(struct btree_trans *trans,

@@ -249,6 +249,11 @@ pub fn time_after(a: core::ffi::c_ulong, b: core::ffi::c_ulong) -> bool {
     (b.wrapping_sub(a) as core::ffi::c_long) < 0
 }
 
+/// Whether jiffies @a is in [@b, @c], across a wrap: time_in_range().
+pub fn time_in_range(a: core::ffi::c_ulong, b: core::ffi::c_ulong, c: core::ffi::c_ulong) -> bool {
+    !time_after(b, a) && !time_after(a, c)
+}
+
 /// time_after(), of u64 times - local_clock()'s: time_after64().
 pub fn time_after64(a: u64, b: u64) -> bool {
     (b.wrapping_sub(a) as i64) < 0
@@ -263,6 +268,16 @@ pub fn nsecs_to_jiffies(ns: u64) -> core::ffi::c_ulong {
 /// Jiffies in @ms milliseconds, rounded up: msecs_to_jiffies().
 pub const fn msecs_to_jiffies(ms: core::ffi::c_ulong) -> core::ffi::c_ulong {
     (ms * HZ).div_ceil(1000)
+}
+
+/// Milliseconds in @j jiffies: jiffies_to_msecs(), wrapping as its unsigned
+/// int does - @j is often a difference of jiffies, racing.
+pub const fn jiffies_to_msecs(j: core::ffi::c_ulong) -> core::ffi::c_uint {
+    if 1000 % HZ == 0 {
+        (1000 / HZ).wrapping_mul(j) as core::ffi::c_uint
+    } else {
+        (j.wrapping_mul(1000) / HZ) as core::ffi::c_uint
+    }
 }
 
 /// The jiffies count. In the kernel it's a variable the timer interrupt

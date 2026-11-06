@@ -590,8 +590,8 @@ static int __journal_entry_open_one(struct journal *j)
 
 	journal_wake(j);
 
-	if (was_empty && j->reclaim_thread)
-		wake_up_process(j->reclaim_thread);
+	if (was_empty)
+		bch2_journal_reclaim_wake(j);
 
 	if (j->early_journal_entries.nr)
 		darray_exit(&j->early_journal_entries);
@@ -1526,7 +1526,6 @@ __cold void __bch2_journal_debug_to_text(struct printbuf *out, struct journal *j
 	prt_printf(out, "free buf:\t%u\n",			j->free_buf ? j->free_buf_size : 0);
 	prt_printf(out, "nr direct reclaim:\t%llu\n",		j->nr_direct_reclaim);
 	prt_printf(out, "nr background reclaim:\t%llu\n",	j->nr_background_reclaim);
-	prt_printf(out, "reclaim kicked:\t%u\n",		j->reclaim_kicked);
 	prt_printf(out, "reclaim runs in:\t%u ms\n",		time_after(j->next_reclaim, now)
 	       ? jiffies_to_msecs(j->next_reclaim - jiffies) : 0);
 	prt_printf(out, "blocked:\t%u\n",			j->blocked);

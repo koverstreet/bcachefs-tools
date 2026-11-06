@@ -226,7 +226,7 @@ fn new_entries(nr: usize) -> Result<KVVec<PinList>, AllocError> {
 }
 
 impl c::PinRange {
-    fn used(&self) -> u64 {
+    pub(crate) fn used(&self) -> u64 {
         self.pin_back.get() - self.pin_front.get()
     }
 }
@@ -244,11 +244,11 @@ impl c::journal {
 
     /// # Safety
     /// The caller holds pin_resize_lock for read, for as long as these live.
-    unsafe fn pins_held(&self) -> PinsRead<'_> {
+    pub(crate) unsafe fn pins_held(&self) -> PinsRead<'_> {
         PinsRead { j: self, g: unsafe { self.pin_resize_lock.read_held() } }
     }
 
-    fn pin_range(&self) -> &c::PinRange {
+    pub(crate) fn pin_range(&self) -> &c::PinRange {
         &self.pin_resize_lock
     }
 
@@ -393,8 +393,7 @@ impl<'a> PinsRead<'a> {
 
     fn maybe_update_last_seq(&self) {
         if self.slot(self.last_seq()).count.load(Relaxed) == 0 {
-            let _j = self.j.lock.lock();
-            unsafe { c::bch2_journal_update_last_seq(self.j.as_ptr()) }
+            self.j.update_last_seq(self, &mut self.j.lock.lock());
         }
     }
 
@@ -595,7 +594,7 @@ impl<'a> PinsRead<'a> {
      * a type allowed: up to @seq_to_flush, of those in @below; any, of those in
      * @above - now the flush in progress, with its seq, flush function and type
      */
-    fn next_to_flush(&self, seq_to_flush: u64, below: u32, above: u32)
+    pub(crate) fn next_to_flush(&self, seq_to_flush: u64, below: u32, above: u32)
         -> Option<(*mut Pin, u64, c::journal_pin_flush_fn, PinType)>
     {
         for seq in self.front()..self.back() {
@@ -635,7 +634,7 @@ impl<'a> PinsRead<'a> {
      * failed, or the pin was dropped or rearmed meanwhile: no longer the flush
      * in progress
      */
-    fn flushed(&self, pin: &Pin, seq: u64, ok: bool) {
+    pub(crate) fn flushed(&self, pin: &Pin, seq: u64, ok: bool) {
         /*
          * Unchecked: if flush_fn dropped the pin, @seq may have retired since.
          * If it didn't, the pin still holds @seq, and the move below checks it:
@@ -658,7 +657,7 @@ impl<'a> PinsRead<'a> {
         self.j.flush_in_progress.store(ptr::null_mut(), Release);
     }
 
-    fn still_flushing(&self, seq_to_flush: u64, types: u32) -> bool {
+    pub(crate) fn still_flushing(&self, seq_to_flush: u64, types: u32) -> bool {
         let end = self.back().min(seq_to_flush.saturating_add(1));
 
         (self.front()..end).any(|seq| {
@@ -670,7 +669,7 @@ impl<'a> PinsRead<'a> {
     }
 
     /* The last entry written to @dev - or, @dev < 0, written to fewer than @replicas */
-    fn last_dev_seq(&self, dev: c_int, replicas: c_uint) -> u64 {
+    pub(crate) fn last_dev_seq(&self, dev: c_int, replicas: c_uint) -> u64 {
         (self.front()..self.back()).rev()
             .find(|&seq| {
                 let devs = self.slot(seq).devs.get();
@@ -806,8 +805,8 @@ pub(crate) unsafe extern "C" fn pin_resize_work(work: *mut c::work_struct) {
  * Errors are journal errors, reported at the source - nothing to do here.
  */
 pub(crate) unsafe extern "C" fn flush_degraded_work(work: *mut c::work_struct) {
-    let j = unsafe { work.byte_sub(offset_of!(c::journal, flush_degraded_work)).cast::<c::journal>() };
-    unsafe { c::bch2_journal_flush_device_pins(j, -1) };
+    let j = unsafe { &*work.byte_sub(offset_of!(c::journal, flush_degraded_work)).cast::<c::journal>() };
+    let _ = j.flush_device_pins(-1);
 }
 
 /*

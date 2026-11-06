@@ -561,7 +561,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 		 * journal.stop():
 		 */
 		if (j->watermark != BCH_WATERMARK_stripe)
-			journal_reclaim_kick(&c->journal);
+			bch2_journal_reclaim_kick(&c->journal);
 
 		bch2_journal_update_last_seq(j);
 		bch2_journal_space_available(j);

@@ -162,7 +162,7 @@ impl StateLockWrite<'_> {
         let fs = self.fs();
 
         if !fs.flags.get(Flag::BCH_FS_rw) {
-            unsafe { c::bch2_journal_reclaim_stop(&raw mut (*fs.as_ptr()).journal) };
+            fs.journal.reclaim_stop();
             return;
         }
 
@@ -257,7 +257,7 @@ impl StateLockWrite<'_> {
         unsafe {
             ret_to_result(bch2_fs_btree_init_rw(p))?;
             (*p).journal.init_rw()?;
-            ret_to_result(c::bch2_journal_reclaim_start(&raw mut (*p).journal))?;
+            (*p).journal.reclaim_start()?;
             ret_to_result(bch2_btree_write_buffer_start(p))?;
         }
         fs.copygc_start()?;
@@ -328,12 +328,12 @@ impl StateLockWrite<'_> {
          * at least one non-flush write in the journal or recovery will fail:
          */
         {
-            let _j = fs.journal.lock.lock();
+            let mut g = fs.journal.lock.lock();
             fs.journal.flags.set(Journal::JOURNAL_need_flush_write, true);
             fs.journal.flags.set(Journal::JOURNAL_running, true);
             #[cfg(CONFIG_BCACHEFS_DEBUG)]
             fs.journal.stop_thread.store(core::ptr::null_mut(), Relaxed);
-            unsafe { c::bch2_journal_space_available(&raw mut (*p).journal) };
+            fs.journal.space_available(&mut g);
         }
 
         /*
@@ -351,7 +351,7 @@ impl StateLockWrite<'_> {
         fs.writes.start();
 
         let ret = (|| {
-            ret_to_result(unsafe { c::bch2_journal_reclaim_start(&raw mut (*p).journal) })?;
+            fs.journal.reclaim_start()?;
             ret_to_result(unsafe { bch2_btree_write_buffer_start(p) })?;
             fs.copygc_start()?;
             if fs.opts().read_only.get() == 0 {

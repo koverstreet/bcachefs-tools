@@ -3,10 +3,9 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::util::Printbuf;
 use crate::types::DArray;
-use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, c_extern, c_typedef};
+use core::ffi::c_uint;
+use cstruct_macros::{CStruct, c_typedef};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -18,55 +17,4 @@ pub struct replicas_entry_refs {
 
 c_typedef! {
     pub type darray_replicas_entry_refs = DArray<c::replicas_entry_refs, 16>;
-}
-
-c_extern! {
-    pub fn bch2_journal_flush_pins(j: *mut c::journal, seq_to_flush: u64) -> bool;
-    pub fn bch2_journal_reclaim_to_text(out: *mut Printbuf, j: *mut c::journal);
-    pub fn __bch2_journal_set_alloc_watermark(j: *mut c::journal, p: *mut u8, watermark: c_uint);
-    pub fn bch2_journal_space_available(j: *mut c::journal);
-    pub fn bch2_journal_do_discards(j: *mut c::journal);
-    pub fn bch2_journal_discard_work(work: *mut c::work_struct);
-    pub fn bch2_journal_flush_device_pins(j: *mut c::journal, dev_idx: c_int) -> c_int;
-    pub fn bch2_journal_update_last_seq(j: *mut c::journal);
-    pub fn bch2_journal_reclaim_start(j: *mut c::journal) -> c_int;
-    pub fn bch2_journal_reclaim_stop(j: *mut c::journal);
-    pub fn bch2_journal_replay_pins_put(j: *mut c::journal, seq: u64);
-    pub fn bch2_journal_pin_flush(j: *mut c::journal, pin: *mut c::journal_entry_pin);
-}
-
-impl c::journal {
-    pub fn pin_flush(&self, pin: &c::journal_entry_pin) {
-        unsafe { bch2_journal_pin_flush(self.as_ptr(), pin.as_ptr()) }
-    }
-
-    /// The pins up to @seq flushed: whether any were.
-    pub fn flush_pins(&self, seq: u64) -> bool {
-        unsafe { bch2_journal_flush_pins(self.as_ptr(), seq) }
-    }
-
-    pub fn replay_pins_put(&self, seq: u64) {
-        unsafe { bch2_journal_replay_pins_put(self.as_ptr(), seq) }
-    }
-
-    /// The lowest watermark it takes reservations at, read without the
-    /// journal's lock, which it's written under.
-    pub fn watermark(&self) -> c::bch_watermark {
-        c::bch_watermark::from_bits(self.lock.hot.watermark.get())
-    }
-
-    /// The open bucket pool can't serve below @watermark - 0 for all of them:
-    /// the journal throttles work that would need what it can't have. The
-    /// unchanged case a compare, as C's bch2_journal_set_alloc_watermark()
-    /// - the allocator's fast paths report on every bucket.
-    pub fn set_open_buckets_watermark(&self, watermark: u32) {
-        if u32::from(self.lock.watermark_open_buckets.get()) != watermark {
-            // SAFETY: ours, and its field - a Volatile<u8>, laid out as a u8 -
-            // set under the journal's lock, which C takes
-            unsafe {
-                __bch2_journal_set_alloc_watermark(self.as_ptr(),
-                    (&raw const self.lock.watermark_open_buckets).cast_mut().cast(), watermark)
-            }
-        }
-    }
 }

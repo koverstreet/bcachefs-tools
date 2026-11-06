@@ -222,7 +222,7 @@ use crate::alloc::replicas::can_write_with_devs;
 use crate::btree::iter::UpdateTriggerFlags;
 use crate::data::migrate::{dev_data_drop, dev_data_drop_by_backpointers, dev_remove_stripes, DevDrop};
 use crate::debug::sysfs::{DevDir, DEV_GROUPS};
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, StateLockWrite};
 use crate::format::{DataType, MemberInitialized, MemberState};
 use crate::locking::MemallocFlags;
@@ -248,7 +248,7 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use pin_init::pinned_drop;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{c_export, CStruct, bitfield, c_extern, c_typedef, TypeInfo};
+use cstruct_macros::{c_export, CStruct, bitfield, c_typedef, TypeInfo};
 #[cfg(kernel)]
 use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
      crate::util::place::Contained, crate::util::refcount::TryRefcount, crate::util::sleep::Sleep,
@@ -390,9 +390,6 @@ pub struct bch_devs_list {
     pub data: [u8; c::BCH_BKEY_PTRS_MAX as usize],
 }
 
-c_extern! {
-    pub fn bch2_journal_flush_dev_ro(j: *mut c::journal, dev_idx: c_uint);
-}
 
 static DEV_READ_REF_NAMES: CStatic<[*const c_char; names::c_table_len::<c::bch_dev_read_ref>()]> =
     unsafe { CStatic::new(crate::c_names_table!(c::bch_dev_read_ref)) };
@@ -886,10 +883,10 @@ impl StateLockWrite<'_> {
          * Push journal reclaim so the remaining devices have free journal space
          * before we drop ca from the journal write set below. Otherwise, if ca
          * held the journal's only free space, dropping it strands the journal in
-         * journal_full (see bch2_journal_flush_dev_ro()). Must come before
+         * journal_full (see journal.flush_dev_ro()). Must come before
          * bch2_dev_allocator_remove(), which pulls ca from rw_devs[journal].
          */
-        unsafe { bch2_journal_flush_dev_ro(fs.journal.as_ptr(), ca.dev_idx.into()) };
+        fs.journal.flush_dev_ro(ca.dev_idx.into());
 
         /*
          * The allocator thread itself allocates btree nodes, so stop it first:
@@ -1117,8 +1114,7 @@ impl StateLockWrite<'_> {
              */
             fs.journal_flush_outstanding_pins();
 
-            let j = fs.journal.as_ptr();
-            ret_to_result_void(unsafe { c::bch2_journal_flush_device_pins(j, ca.dev_idx.into()) })
+            fs.journal.flush_device_pins(ca.dev_idx.into())
                 .inspect_err(|e| prt!(err, "bch2_journal_flush_device_pins() error: {}\n", e.msg()))?;
 
             fs.journal_flush()

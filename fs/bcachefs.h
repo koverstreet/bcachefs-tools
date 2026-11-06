@@ -380,19 +380,6 @@ static inline struct stdio_redirect *bch2_fs_stdio_redirect_log(struct bch_fs *c
 #define BKEY_PADDED_ONSTACK(key, pad)				\
 	struct { struct bkey_i key; __u64 key ## _pad[pad]; }
 
-/*
- * This is needed because discard is both a filesystem option and a device
- * option, and mount options are supposed to apply to that mount and not be
- * persisted, i.e. if it's set as a mount option we can't propagate it to the
- * device.
- */
-static inline bool bch2_discard_opt_enabled(struct bch_fs *c, struct bch_dev *ca)
-{
-	return test_bit(BCH_FS_discard_mount_opt_set, &c->flags)
-		? c->opts.discard
-		: ca->mi.discard;
-}
-
 static inline int bch2_fs_casefold_enabled(struct bch_fs *c)
 {
 	if (!IS_ENABLED(CONFIG_UNICODE))

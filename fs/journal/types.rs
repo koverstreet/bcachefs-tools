@@ -14,9 +14,11 @@ use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64};
 use crate::journal::buckets::{drop_retired, JournalBuckets};
 use crate::data_structures::list::ListLinks;
-use crate::locking::{Locked, LockedBy};
+use crate::locking::{ExclusiveGuard, Locked, LockedBy};
 use core::cell::Cell;
 use crate::util::bio::BioSet;
+use crate::util::futex::EventCount;
+use crate::util::kthread::Daemon;
 use crate::util::late::Late;
 use crate::{new_lock, published};
 use pin_init::pin_data;
@@ -411,6 +413,8 @@ impl JournalPublished {
     }
 }
 
+pub type JournalGuard<'a> = ExclusiveGuard<'a, c::spinlock_t, JournalLocked, JournalPublished>;
+
 /* pin_resize_lock's: the journal pin fifo's entries, a power of two of them */
 #[repr(C)]
 #[derive(CStruct)]
@@ -432,6 +436,7 @@ pub struct PinRange {
 
 /* The filesystem's write refs, from the journal: nest!() takes no macro in a type */
 type FsWrites = crate::field!(super.writes);
+pub type ReclaimThread = rust_only!(Daemon);
 
 /* Embedded in struct bch_fs */
 nest! {
@@ -591,22 +596,23 @@ nest! {
         #[pin]
         #[init(crate::new_waitqueue!("&j->reclaim_wait"))]
         pub reclaim_wait: c::wait_queue_head_t,
-        pub reclaim_thread: *mut c::task_struct,
-        pub reclaim_kicked: bool,
-        pub next_reclaim: c_ulong,
-        pub nr_direct_reclaim: u64,
-        pub nr_background_reclaim: u64,
+        /* from reclaim_start() to reclaim_stop(): journal/reclaim.rs */
+        #[pin]
+        #[init(RustOnly::new(Daemon::new()))]
+        pub reclaim_thread: ReclaimThread,
+        pub next_reclaim: Volatile<c_ulong>,
+        pub nr_direct_reclaim: Volatile<u64>,
+        pub nr_background_reclaim: Volatile<u64>,
 
-        pub last_flushed: c_ulong,
+        pub last_flushed: Volatile<c_ulong>,
         #[c("struct journal_entry_pin *flush_in_progress")]
         pub flush_in_progress: AtomicPtr<c::journal_entry_pin>,
         pub flush_in_progress_dropped: Volatile<bool>,
         /* its flush function, for messages: the pin can be freed under them */
         #[c("void *flush_in_progress_fn")]
         pub flush_in_progress_fn: AtomicPtr<c_void>,
-        #[pin]
-        #[init(crate::new_waitqueue!("&j->pin_flush_wait"))]
-        pub pin_flush_wait: c::wait_queue_head_t,
+        /* Woken as a pin's flush ends: journal/reclaim.rs */
+        pub pin_flush_wait: EventCount,
 
         pub write_start_time: u64,
 
@@ -667,7 +673,7 @@ pub struct journal_device {
     #[c_lock("struct mutex discard_lock")]
     pub discard_lock: Locked<c::mutex>,
     #[pin]
-    #[init(crate::new_work!(c::bch2_journal_discard_work, "&ca->journal.discard"))]
+    #[init(crate::new_work!(crate::journal::reclaim::discard_work, "&ca->journal.discard"))]
     pub discard: c::work_struct,
 
     pub highest_seq_found: u64,

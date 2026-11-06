@@ -45,7 +45,7 @@ impl c::journal {
             return;
         }
 
-        unsafe { c::bch2_journal_reclaim_stop(self.as_ptr()) };
+        self.reclaim_stop();
 
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         self.stop_thread.store(crate::util::sched::current(), Relaxed);
@@ -194,8 +194,8 @@ impl c::journal {
          * journal_space_available must happen before setting JOURNAL_running
          * JOURNAL_running must happen before JOURNAL_replay_done
          */
-        let _j = self.lock.lock();
-        unsafe { c::bch2_journal_space_available(self.as_ptr()) };
+        let mut g = self.lock.lock();
+        self.space_available(&mut g);
 
         self.flags.set(JOURNAL_need_flush_write, true);
         self.flags.set(JOURNAL_running, true);

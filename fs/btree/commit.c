@@ -588,7 +588,7 @@ static int journal_reclaim_wait_done(struct bch_fs *c)
 	try(bch2_journal_error(&c->journal));
 	try(bch2_btree_key_cache_wait_done(c));
 
-	journal_reclaim_kick(&c->journal);
+	bch2_journal_reclaim_kick(&c->journal);
 	return 0;
 }
 

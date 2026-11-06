@@ -29,7 +29,8 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::DataType;
 use crate::fs::{Dev, Fs, SbLockGuard};
 use crate::journal::sb::buckets_to_sb;
-use crate::locking::{ExclusiveGuard, LockedBy};
+use crate::c::JournalGuard;
+use crate::locking::LockedBy;
 use crate::util::alloc::KVVec;
 use crate::util::closure::StackClosure;
 use crate::util::kernel::totalram_bytes;
@@ -267,8 +268,6 @@ pub fn new() -> JournalBuckets {
     LockedBy::new(ring, pin_init::Zeroable::zeroed())
 }
 
-type JournalGuard<'a> = ExclusiveGuard<'a, c::spinlock_t, c::JournalLocked, c::JournalPublished>;
-
 impl Dev {
     pub fn journal_ring<'g>(&'g self, j: &'g mut JournalGuard<'_>) -> &'g mut JournalRing {
         assert!(core::ptr::eq(j.lock(), &self.fs().journal.lock), "journal_ring(): another filesystem's journal lock");
@@ -382,8 +381,7 @@ fn splice(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev, removed: usize, inserted:
 }
 
 fn space_available(fs: &Fs) {
-    let _j = fs.journal.lock.lock();
-    unsafe { c::bch2_journal_space_available(fs.journal.as_ptr()) };
+    fs.journal.space_available(&mut fs.journal.lock.lock());
 }
 
 /// @new, into the free stage: before discard's bucket, the oldest, so the
@@ -588,7 +586,7 @@ pub(crate) fn drop_retired(j: &c::journal) {
     }
 
     space_available(fs);
-    unsafe { c::bch2_journal_do_discards(j.as_ptr()) };
+    j.do_discards();
 }
 
 /* C's: with the journal lock held */

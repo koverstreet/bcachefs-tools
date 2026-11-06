@@ -239,6 +239,12 @@ fn dev_bucket_nouse(fs: &Fs, bucket: Bpos) -> bool {
     fs.dev_rcu(bucket.inode as u32, &rcu).is_none_or(|ca| ca.bucket_nouse(bucket.offset))
 }
 
+/*
+ * This is needed because discard is both a filesystem option and a device
+ * option, and mount options are supposed to apply to that mount and not be
+ * persisted, i.e. if it's set as a mount option we can't propagate it to the
+ * device.
+ */
 /// Discards on, for @ca: the mount option, if it was given, or the device's
 /// own.
 pub(crate) fn discard_opt_enabled(fs: &Fs, ca: &Dev) -> bool {

@@ -7,6 +7,7 @@ use crate::format::{Btree, MemberState, Nonce};
 #[path = "entries.rs"] pub mod entries;
 #[path = "init.rs"] pub mod init;
 #[path = "pins.rs"] pub mod pins;
+#[path = "reclaim.rs"] pub mod reclaim;
 #[path = "sb.rs"] pub mod sb;
 #[path = "seq_blacklist.rs"] pub mod seq_blacklist;
 #[path = "validate.rs"] pub mod validate;

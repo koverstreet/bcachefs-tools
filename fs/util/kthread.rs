@@ -201,6 +201,11 @@ impl Kthread {
         self.task.0.clone()
     }
 
+    /// The kicks it's had, for messages.
+    pub fn kicks(&self) -> u32 {
+        self.thread.kicks.load(Ordering::Relaxed)
+    }
+
     /// Whether the current thread is a kthread told to stop:
     /// kthread_should_stop() - false on a thread that isn't one.
     pub fn should_stop() -> bool {
@@ -301,6 +306,16 @@ impl Daemon {
         if let Some(t) = &*self.thread.lock() {
             t.kick();
         }
+    }
+
+    pub fn wake(&self) {
+        if let Some(t) = &*self.thread.lock() {
+            t.wake();
+        }
+    }
+
+    pub fn kicks(&self) -> Option<u32> {
+        self.thread.lock().as_ref().map(Kthread::kicks)
     }
 
     /// Its task, for a backtrace: printed outside the lock, as that allocates.

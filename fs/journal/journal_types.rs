@@ -52,6 +52,7 @@ c_extern! {
     pub fn bch2_journal_write_work(work: *mut c::work_struct);
     pub fn __bch2_journal_meta(j: *mut c::journal) -> c_int;
     pub fn bch2_journal_shutdown_quiesce(j: *mut c::journal);
+    pub fn bch2_journal_cycle(j: *mut c::journal, flags: c::journal_cycle_flags);
     pub fn bch2_journal_block(j: *mut c::journal);
     pub fn bch2_journal_unblock(j: *mut c::journal);
 }
@@ -136,7 +137,7 @@ impl Fs {
     }
 
     pub fn journal_reclaim_to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_journal_reclaim_to_text(out.as_raw(), self.journal.as_ptr()) }
+        self.journal.reclaim_to_text(out)
     }
 
     /* journal_replicas, or metadata_replicas when it isn't set: */
