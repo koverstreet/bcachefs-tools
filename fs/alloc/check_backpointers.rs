@@ -409,7 +409,16 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
     let fs = t.fs();
     let a = alloc_to_v4(alloc_k);
 
-    if matches!(DataType(a.data_type.into()), DataType::sb | DataType::journal | DataType::parity) {
+    // Stripe backpointers are zero length, so they never show up in the sector
+    // counts: count them against stripe_refcount, one per stripe referencing
+    // the bucket - from 1.40, when each stripe has its own. A parity bucket's
+    // only backpointers are the stripes', so its sector counts aren't checked
+    // at all.
+    let data_type = DataType(a.data_type.into());
+    let count_stripes = fs.version() >= c::bcachefs_metadata_version::bcachefs_metadata_version_inline_data_csum;
+    let check_sectors = data_type != DataType::parity;
+
+    if matches!(data_type, DataType::sb | DataType::journal) || (!check_sectors && !count_stripes) {
         return Ok(false);
     }
 
@@ -419,6 +428,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
         c::bcachefs_metadata_version::bcachefs_metadata_version_backpointer_bucket_gen.0;
 
     let mut sectors = BucketSectors::default();
+    let mut nr_stripe_bps = 0u32;
     let mut nr_deletes = 0u32;
     let mut need_commit = false;
 
@@ -442,6 +452,10 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
         }
 
         if v.bucket_gen == a.generation {
+            // a stripe key's; level > 0 is a stripes btree node's
+            if count_stripes && v.level == 0 && Btree(v.btree_id.into()) == Btree::stripes {
+                nr_stripe_bps += 1;
+            }
             sectors.add(&v);
         }
         Ok(ControlFlow::<()>::Continue(()))
@@ -452,8 +466,12 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
     }
 
     let have = BucketSectors::of(&a);
+    let sectors_over = check_sectors && sectors.any_over(&have);
+    let sectors_mismatch = check_sectors && sectors != have;
+    let stripes_over = count_stripes && nr_stripe_bps > a.stripe_refcount;
+    let stripes_mismatch = count_stripes && nr_stripe_bps != a.stripe_refcount;
 
-    if sectors.any_over(&have) {
+    if sectors_over || stripes_over {
         if *checked_bad != alloc_k.k.p {
             *checked_bad = alloc_k.k.p;
             check_bucket_backpointers_to_extents(t.trans(), &ca, alloc_k.k.p, last_flushed)?;
@@ -464,7 +482,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
 
         let p = alloc_k.k.p;
         let mut msg = LogMsg::new(fs);
-        prt!(&mut msg, "backpointer sectors > bucket sectors, but found no bad backpointers\n\
+        prt!(&mut msg, "more backpointers than the bucket accounts for, but found no bad backpointers\n\
                         bucket {}:{} data type ", { p.inode }, { p.offset });
         DataType(a.data_type.into()).to_text(&mut msg);
         prt!(&mut msg, ", counters\n");
@@ -477,6 +495,9 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
         if sectors.stripe > have.stripe {
             prt!(&mut msg, "stripe: {} > {}\n", sectors.stripe, have.stripe);
         }
+        if stripes_over {
+            prt!(&mut msg, "stripe backpointers: {nr_stripe_bps} > stripe_refcount {}\n", { a.stripe_refcount });
+        }
 
         // as C's: whatever of the bucket it reads
         let mut iter = BtreeIter::new(t, Btree::backpointers, *bp_range.start(), BtreeIterFlags::empty());
@@ -487,7 +508,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
         crate::warn_on!(true);
     }
 
-    if sectors == have {
+    if !sectors_mismatch && !stripes_mismatch {
         return Ok(false);
     }
 
@@ -505,7 +526,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
     }
 
     ca.bucket_backpointer_mismatch.set(&ca, alloc_k.k.p.offset)?;
-    if sectors.is_empty() {
+    if sectors.is_empty() && nr_stripe_bps == 0 {
         ca.bucket_backpointer_empty.set(&ca, alloc_k.k.p.offset)?;
     }
     Ok(true)
