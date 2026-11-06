@@ -62,7 +62,7 @@ use crate::data::reconcile::trigger::{rb_work_id, BkeyVReconcile};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::{log_msg_ratelimited, warn_on_once};
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::rcu::read_lock;
 use core::mem::size_of;
 

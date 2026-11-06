@@ -54,7 +54,7 @@ use crate::data::update::{fail_should_trace, is_scrub};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{writepoint_hashed, Fs};
 use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::kernel::current_id;
 use crate::util::Printbuf;
 use crate::{bch_err_msg, warn_once};

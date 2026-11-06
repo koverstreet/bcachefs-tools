@@ -43,7 +43,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::inode_opts::get_io_opts;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::log::LogMsg;
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err_fn, log_msg_ratelimited};

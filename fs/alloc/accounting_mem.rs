@@ -15,7 +15,7 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id, FsckErrCtx};
 use crate::init::passes;
 use crate::locking::{percpu_rwsem_noio, ExclusiveGuard, SharedGuard};
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::log::{print_str, LogLevel, LogMsg};

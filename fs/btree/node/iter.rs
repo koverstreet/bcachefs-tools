@@ -11,7 +11,7 @@ use crate::cstructs::c as cs;
 use crate::format::Bpos;
 use crate::fs::Fs;
 use crate::prt;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::kernel::unlikely;
 use crate::util::ffi::Opaque;
 use crate::util::log::{print_lines, LogLevel};

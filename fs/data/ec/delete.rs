@@ -10,7 +10,7 @@ use crate::c;
 use crate::data::ec::stripe::STRIPE_LRU_POS_EMPTY;
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::ffi::Opaque;
 use crate::util::place::Contained;
 use crate::{btree_trans, fs_inconsistent, prt};

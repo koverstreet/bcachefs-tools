@@ -19,7 +19,7 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::Validated;
 use crate::util::{Join, Printbuf};

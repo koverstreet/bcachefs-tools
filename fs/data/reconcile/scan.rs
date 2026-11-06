@@ -32,7 +32,7 @@ use crate::namei::inum_snapshot_to_path;
 use crate::fs::Fs;
 use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
 use crate::locking::Locked;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::kthread::Kthread;
 use crate::util::Printbuf;
 use crate::{bch_err, SPOS_MAX};

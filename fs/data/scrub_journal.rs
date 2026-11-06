@@ -22,7 +22,7 @@ use crate::init::damage;
 use crate::init::error::id;
 use crate::init::recovery::btree_lost_data;
 use crate::inode_opts::{get_fs, get_io_opts};
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::alloc::KVVec;
 use crate::util::log::LogMsg;
 use crate::locking::Locked;

@@ -38,7 +38,7 @@ use crate::data::ptrs::PtrsMut;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::opts::data_type_str;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::kernel::unlikely;
 use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;

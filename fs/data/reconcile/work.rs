@@ -70,7 +70,7 @@ use crate::data::reconcile::trigger::{rb_work_to_data_pos, reconcile_bp_get_key}
 use crate::errcode::BchError;
 use crate::fs::{writepoint_ptr, Fs};
 use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::prt;
 use crate::util::alloc::KVVec;
 use crate::util::backtrace::prt_task_backtrace;

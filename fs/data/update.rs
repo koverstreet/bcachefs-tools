@@ -45,7 +45,7 @@ use crate::util::rcu::read_lock;
 use crate::util::{Printbuf, ToText};
 use crate::util::log::should_print_err;
 use crate::{bch_err_ratelimited, function_name, prt};
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use core::ffi::{c_int, c_uint, CStr};
 use pin_init::stack_pin_init;
 use core::ptr::NonNull;

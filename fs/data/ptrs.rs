@@ -28,7 +28,7 @@ use crate::data::extents::BkeyVExtents;
 use crate::errcode::BchError;
 use crate::c;
 use crate::fs::Fs;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::typeinfo::{AccessError, ResolveError};
 use crate::types::{Le32, Le64};
 use crate::util::rcu::{read_lock, ReadGuard};

@@ -27,7 +27,7 @@ use crate::data::update_task::{self, Body, Update};
 use crate::errcode::{err_ptr, BchError};
 use crate::fs::{writepoint_hashed, Fs, WriteRef};
 use crate::prt;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::backref::BackRef;
 use crate::util::kernel::{current_id, local_clock, num_online_cpus};
 use crate::util::refcount::TryRefcount;

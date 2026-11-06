@@ -2435,7 +2435,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
         return fs.throw(bch_errcode::BCH_ERR_erofs_sb_write_before_start);
     }
 
-    fs.event_inc_trace(crate::sb::counters::events::write_super, |_| {});
+    fs.event_inc_trace(crate::debug::trace::events::write_super, |_| {});
 
     // Note: we do writes to RO devices here, and we might want to change that
     // in the future. For now, we expect to be able to call write_super() when

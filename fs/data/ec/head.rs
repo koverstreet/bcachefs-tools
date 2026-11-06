@@ -26,7 +26,7 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::format::{DataType, MemberState};
 use crate::fs::Fs;
 use crate::locking::{ByteLock, ExclusiveGuard, Lockdep};
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::alloc::kbox_pin_init;
 use crate::util::ffi::Opaque;
 use crate::util::rcu::{read_lock, ReadGuard};

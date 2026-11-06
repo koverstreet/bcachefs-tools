@@ -26,7 +26,7 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::DataType;
 use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, SharedGuard};
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::alloc::{init_at, AllocError, KVVec};
 use crate::util::closure::{closure_has_waiters, closure_wake_up};
 use crate::util::projections::{TearSafe, Volatile};

@@ -722,7 +722,7 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Dev, Fs};
 use crate::format::{Bpos, DataType};
 use crate::locking::{Locked, MemallocFlags};
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::sb::members::{DevIo, DevIoRef};
 use crate::snapshots::subvolume;
 use crate::util::bio::{of_bio, Bio};

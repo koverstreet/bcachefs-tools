@@ -114,6 +114,7 @@ pub mod debug {
     pub mod params;
     pub mod sysfs;
     pub mod tests;
+    pub mod trace;
 }
 #[path = "fs/acl.rs"]          pub mod acl;
 #[path = "fs/check.rs"]        pub mod check;

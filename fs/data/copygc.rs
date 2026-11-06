@@ -67,7 +67,7 @@ use crate::c::bch_errcode;
 use crate::data::moving::{MoveStats, MovingCtxt};
 use crate::errcode::BchError;
 use crate::fs::{writepoint_ptr, Fs};
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::types::{Fifo, RustOnly, rust_only};
 use crate::prt;
 use crate::util::alloc::{kbox_pin_init, KBox, KVVec};

@@ -23,7 +23,7 @@ use crate::fs::Fs;
 use crate::inode_opts;
 use crate::locking::Locked;
 use crate::prt;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::kernel::ktime_get_ns;
 use crate::util::{Nsecs, Printbuf};
 use crate::util::rcu::read_lock;

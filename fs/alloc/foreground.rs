@@ -57,7 +57,7 @@ use crate::fs::Fs;
 use crate::locking::ExclusiveGuard;
 use crate::opts::data_type_str;
 use crate::percpu_field;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::sb::members::{data_types_to_text, member_state_str};
 use crate::types::{RustOnly, c_default, rust_only};
 use crate::util::alloc::init_at;

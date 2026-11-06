@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! The tracepoints that have no counter: debug/trace.h's DEFINE_EVENT()s
-//! besides BCH_PERSISTENT_COUNTERS()'s, and sb/counters.rs's trace-only
+//! besides BCH_PERSISTENT_COUNTERS()'s, and debug/trace.rs's trace-only
 //! events.
 
 use cstruct_macros::c_xmacro;

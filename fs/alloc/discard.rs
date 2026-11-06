@@ -63,7 +63,7 @@ use crate::fs::Fs;
 use crate::init::damage;
 use crate::init::error::id;
 use crate::locking::{MemallocFlags, SeqLock};
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::sb::members::DevIoRef;
 use crate::util::alloc::KVVec;
 use crate::util::bio::{Bio, BioOwner, Gathered};

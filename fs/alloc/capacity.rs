@@ -40,7 +40,7 @@ use crate::format::DataType;
 use crate::fs::Fs;
 use crate::init::error::trans_inconsistent;
 use crate::percpu_field;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::backtrace::prt_symbol;
 use crate::util::closure::{closure_wait_event, closure_wake_up};
 use crate::util::ffi::Opaque;

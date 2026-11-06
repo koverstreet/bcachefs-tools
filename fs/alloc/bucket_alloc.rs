@@ -42,7 +42,7 @@ use crate::data::copygc::{can_make_progress, dev_wait_amount};
 use crate::errcode::{err_ptr, BchError};
 use crate::fs::Fs;
 use crate::opts::data_type_str;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::Printbuf;
 use crate::util::kernel::{unlikely, WRITE};
 use crate::util::rcu::read_lock;

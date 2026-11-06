@@ -19,7 +19,7 @@ use crate::data::ec::stripe_new_reuse::{OldRead, Reuse};
 use crate::data::ec::update::{create_watermark, stripe_update_extents};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::sb::members::DevIoRef;
 use crate::util::alloc::KBox;
 use crate::util::rcu::read_lock;

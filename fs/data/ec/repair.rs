@@ -32,7 +32,7 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::damage;
 use crate::inode_opts::get_io_opts;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::alloc::KBox;
 use crate::util::closure::StackClosure;
 use crate::util::rcu::read_lock;

@@ -19,7 +19,7 @@ use crate::format::{Bpos, Btree};
 use crate::fs::{writepoint_hashed, Fs};
 use crate::init::error::{count_fsck_err, id};
 use crate::{inode, inode_opts};
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::sb::members::DevIoRef;
 use crate::snapshots::subvolume;
 use crate::util::bio::{Bio, Gathered};

@@ -20,7 +20,7 @@
 use crate::fs::Dev;
 use crate::c;
 use crate::fs::Fs;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::likely;
 use crate::util::projections::Volatile;

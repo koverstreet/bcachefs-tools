@@ -25,7 +25,7 @@ use crate::c::bch_errcode;
 use crate::data::ec::head::{head_get, stripe_head_put};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::ToText;
 use crate::data_structures::array_vec::ArrayVec;
 use core::sync::atomic::Ordering::Relaxed;

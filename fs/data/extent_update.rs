@@ -29,7 +29,7 @@ use crate::data::ptrs::{BkeyVPtrs, ExtentEntry, Ptrs};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::count_fsck_err;
-use crate::sb::counters::events;
+use crate::debug::trace::events;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{likely, unlikely};
 use crate::util::log::LogMsg;
