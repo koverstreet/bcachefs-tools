@@ -1375,8 +1375,11 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
         });
 
         if let Some(prefix) = &e.prefix {
+            // a name that isn't an identifier past it - 31bit_dirent_offset - has none
             let (short, long): (Vec<_>, Vec<_>) = e.variants.iter()
-                .filter_map(|v| v.name.strip_prefix(prefix.as_str()).map(|s| (format_ident!("{s}"), format_ident!("{}", v.name))))
+                .filter_map(|v| v.name.strip_prefix(prefix.as_str())
+                    .filter(|s| s.starts_with(|c: char| c.is_alphabetic() || c == '_'))
+                    .map(|s| (format_ident!("{s}"), format_ident!("{}", v.name))))
                 .unzip();
             out.extend(quote! {
                 #[allow(non_upper_case_globals)]
