@@ -50,6 +50,8 @@ c_extern! {
     pub fn bch2_journal_halt_locked(j: *mut c::journal);
     pub fn bch2_journal_add_rewind_range(c: *mut Fs, start: u64, end: u64) -> c_int;
     pub fn bch2_journal_write_work(work: *mut c::work_struct);
+    pub fn __bch2_journal_meta(j: *mut c::journal) -> c_int;
+    pub fn bch2_journal_shutdown_quiesce(j: *mut c::journal);
     pub fn bch2_journal_block(j: *mut c::journal);
     pub fn bch2_journal_unblock(j: *mut c::journal);
 }

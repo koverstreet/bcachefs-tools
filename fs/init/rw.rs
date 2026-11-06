@@ -101,7 +101,7 @@ impl Fs {
             self.flags.set(Flag::BCH_FS_clean_shutdown, true);
         }
 
-        unsafe { c::bch2_fs_journal_stop(&raw mut (*p).journal) };
+        self.journal.stop();
 
         bch_info!(self, "{}clean shutdown complete, journal seq {}",
                   if self.flags.get(Flag::BCH_FS_clean_shutdown) { "" } else { "un" },
@@ -256,7 +256,7 @@ impl StateLockWrite<'_> {
         fs.init_late(self).map_err(|e| fs.err(e))?;
         unsafe {
             ret_to_result(bch2_fs_btree_init_rw(p))?;
-            ret_to_result(c::bch2_fs_journal_init_rw(&raw mut (*p).journal))?;
+            (*p).journal.init_rw()?;
             ret_to_result(c::bch2_journal_reclaim_start(&raw mut (*p).journal))?;
             ret_to_result(bch2_btree_write_buffer_start(p))?;
         }
@@ -332,7 +332,7 @@ impl StateLockWrite<'_> {
             fs.journal.flags.set(Journal::JOURNAL_need_flush_write, true);
             fs.journal.flags.set(Journal::JOURNAL_running, true);
             #[cfg(CONFIG_BCACHEFS_DEBUG)]
-            unsafe { (*p).journal.stop_thread = core::ptr::null_mut() };
+            fs.journal.stop_thread.store(core::ptr::null_mut(), Relaxed);
             unsafe { c::bch2_journal_space_available(&raw mut (*p).journal) };
         }
 

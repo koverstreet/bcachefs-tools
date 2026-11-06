@@ -1024,7 +1024,7 @@ unsafe fn release(p: *mut Fs) {
     #[cfg(not(NO_BCACHEFS_FS))]
     unsafe { c::bch2_fs_vfs_exit(p) };
     reconcile_exit(fs);
-    unsafe { c::bch2_fs_journal_exit(&raw mut (*p).journal) };
+    unsafe { c::journal::exit(&raw mut (*p).journal) };
     ec_exit(fs);
     fs.counters_recent.cancel_sync();
     unsafe {

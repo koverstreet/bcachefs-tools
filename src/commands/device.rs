@@ -510,13 +510,8 @@ fn resize_journal_offline(device: &str, size_sectors: u64) -> Result<()> {
     let nbuckets = size_sectors / ca.mi.get().bucket_size as u64;
 
     println!("resizing journal to {} buckets", nbuckets);
-    let ret = unsafe {
-        c::bch2_set_nr_journal_buckets(fs.as_ptr(), ca.as_mut_ptr(), nbuckets as u32)
-    };
-    if ret != 0 {
-        bail!("resize error: {}", crate::wrappers::bch_err_str(ret));
-    }
-    Ok(())
+    bcachefs_kernel::journal::buckets::set_nr_journal_buckets(&fs, &ca, nbuckets as u32)
+        .map_err(|e| anyhow!("resize error: {e}"))
 }
 
 #[derive(Parser, Debug)]

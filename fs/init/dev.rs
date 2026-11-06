@@ -391,10 +391,6 @@ pub struct bch_devs_list {
 }
 
 c_extern! {
-    pub fn bch2_dev_journal_init(ca: *mut Dev) -> c_int;
-    pub fn bch2_dev_journal_exit(ca: *mut Dev);
-    pub fn bch2_dev_journal_stop(j: *mut c::journal, ca: *mut Dev);
-    pub fn bch2_dev_journal_alloc(ca: *mut Dev, new_fs: bool) -> c_int;
     pub fn bch2_journal_flush_dev_ro(j: *mut c::journal, dev_idx: c_uint);
 }
 
@@ -514,7 +510,7 @@ impl PinnedDrop for Dev {
 
         unsafe {
             ca.sb_handle().free();
-            bch2_dev_journal_exit(ca);
+            Dev::journal_exit(ca);
         }
 
         ca.io_done.free();
@@ -604,7 +600,7 @@ impl StateLockWrite<'_> {
 
         unsafe {
             ca.sb_handle().free();
-            bch2_dev_journal_exit(ca.as_ptr());
+            Dev::journal_exit(ca.as_ptr());
         }
     }
 }
@@ -834,7 +830,7 @@ fn attach_bdev(ca: &Dev, sb: &mut c::bch_sb_handle, err: &mut Printbuf) -> Resul
 
     let ca_p = ca.as_ptr();
     crate::journal::buckets::load(&ca, sb.io.buf.sb())?;
-    ret_to_result_void(unsafe { bch2_dev_journal_init(ca_p) })?;
+    ca.journal_init()?;
 
     let mut name = Printbuf::new();
     prt_bdevname(&mut name, Some(sb.dev.bdev()));
@@ -914,7 +910,7 @@ impl StateLockWrite<'_> {
          */
         ca.io_ref_stop(WRITE);
 
-        unsafe { bch2_dev_journal_stop(fs.journal.as_ptr(), ca.as_ptr()) };
+        fs.journal.dev_stop(&ca);
         fs.do_discards_async();
 
         /*
@@ -1301,7 +1297,7 @@ impl Fs {
             state = I::pre_journal_alloc;
         }
         if state == I::pre_journal_alloc {
-            ret_to_result_void(unsafe { bch2_dev_journal_alloc(ca.as_ptr(), false) })?;
+            crate::journal::buckets::dev_journal_alloc(ca, false)?;
             self.dev_set_initialized(ca, I::initialized)?;
         }
 
@@ -1499,7 +1495,7 @@ impl Fs {
         }
 
         if ca.journal.nr() == 0 {
-            ret_to_result_void(unsafe { bch2_dev_journal_alloc(ca.as_ptr(), false) })
+            crate::journal::buckets::dev_journal_alloc(&ca, false)
                 .inspect_err(|e| prt!(err, "bch2_dev_journal_alloc() error: {}\n", e.msg()))?;
         }
 

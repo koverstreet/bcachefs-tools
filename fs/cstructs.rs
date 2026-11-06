@@ -61,7 +61,6 @@
 #[path = "vfs/io_types.rs"] pub mod vfs_io_types;
 #[path = "vfs/pagecache_types.rs"] pub mod vfs_pagecache_types;
 #[path = "vfs/types.rs"] pub mod vfs_types;
-#[path = "journal/init_types.rs"] pub mod journal_init_types;
 
 /// What C's types are to Rust: every type and constant above, and the
 /// kernel's - C's one namespace. The converted types name each other through
@@ -246,5 +245,4 @@ pub mod c {
     pub use crate::data::ec::trigger::{bch2_stripe_tryget_existing};
     pub use crate::namei::{BCH_CREATE_SNAPSHOT, BCH_CREATE_SNAPSHOT_RO, BCH_CREATE_SUBVOL, BCH_CREATE_TMPFILE};
     pub use crate::fs::bch2_write_refs;
-    pub use super::journal_init_types::*;
 }

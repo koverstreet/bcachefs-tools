@@ -86,7 +86,6 @@ bcachefs-y		:=			\
 	fs/dirent.o				\
 	init/error.o				\
 	init/fs.o				\
-	journal/init.o				\
 	journal/journal.o			\
 	journal/reclaim.o			\
 	journal/write.o				\

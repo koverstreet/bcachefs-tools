@@ -21,14 +21,21 @@ use crate::c;
 use crate::c::journal_bucket_stage::{self as Stage, JOURNAL_BUCKET_cur as CUR, JOURNAL_BUCKET_dirty as DIRTY,
                                      JOURNAL_BUCKET_dirty_ondisk as DIRTY_ONDISK,
                                      JOURNAL_BUCKET_discard as DISCARD};
+use pin_init::stack_pin_init;
+
+use crate::alloc::buckets::{trans_mark_metadata_bucket, DiskReservation};
+use crate::btree::iter::{lockrestart_do, UpdateTriggerFlags};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::format::DataType;
 use crate::fs::{Dev, Fs, SbLockGuard};
 use crate::journal::sb::buckets_to_sb;
 use crate::locking::{ExclusiveGuard, LockedBy};
 use crate::util::alloc::KVVec;
+use crate::util::closure::StackClosure;
+use crate::util::kernel::totalram_bytes;
 use crate::util::projections::Volatile;
 use crate::util::Printbuf;
-use crate::{bch_err_dev, prt};
+use crate::{bch_err, bch_err_dev, bch_err_fn, bch_err_fn_dev, bch_err_msg, btree_trans, prt};
 
 const STAGES: [Stage; 4] = [DISCARD, DIRTY_ONDISK, DIRTY, CUR];
 
@@ -387,6 +394,151 @@ pub fn add(fs: &Fs, ca: &Dev, new: &[u64]) -> Result<(), BchError> {
         0 => ring.nr() as usize,
         d => d as usize,
     }))).map(|_| ())
+}
+
+/* allocate journal on a device: */
+
+fn set_nr_iter(fs: &Fs, ca: &Dev, nr: u32, watermark: c::bch_watermark, cl: &StackClosure)
+    -> Result<(), BchError>
+{
+    let have = ca.journal.nr();
+    assert!(nr > have, "growing {ca}'s journal to {nr} buckets, from {have}");
+    let want = (nr - have) as usize;
+
+    let mut obs = KVVec::with_capacity(want).map_err(enomem(fs))?;
+    let mut bu = KVVec::with_capacity(want).map_err(enomem(fs))?;
+
+    let ret = (|| -> Result<(), BchError> {
+        while bu.len() < want {
+            let trans = btree_trans!(fs);
+            let first = bu.is_empty();
+            let ob = lockrestart_do(&trans, |t| {
+                let mut req = t.alloc_request(0, false, core::ptr::null_mut(), 1, 0, watermark,
+                                              c::bch_write_flags::empty(),
+                                              if first { cl.as_ptr() } else { core::ptr::null_mut() })?;
+                req.ca = ca.as_ptr();
+                req.data_type = DataType::journal;
+                match t.bucket_alloc(&mut req, ca) {
+                    Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {
+                        t.wait_on_allocator(&mut req, e, cl.as_opaque())?;
+                        Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))
+                    }
+                    ob => ob,
+                }
+            })?;
+
+            let b = ob.id().bucket();
+            let marked = trans_mark_metadata_bucket(&trans, ca, b, DataType::journal,
+                                                    ca.mi.get().bucket_size.into(), UpdateTriggerFlags::TRANSACTIONAL);
+            bch_err_msg!(fs, marked, "marking new journal buckets")?;
+
+            let Ok(()) = obs.push_within_capacity(ob) else { unreachable!() };
+            let Ok(()) = bu.push_within_capacity(b) else { unreachable!() };
+        }
+        Ok(())
+    })();
+
+    if bu.is_empty() {
+        return ret;
+    }
+
+    /* Don't return an error if we successfully allocated some buckets: */
+    let ret = {
+        let _blocked = fs.journal.block();
+        add(fs, ca, &bu)
+    };
+
+    if ret.is_err() {
+        let trans = btree_trans!(fs);
+        for &b in bu.iter() {
+            let _ = trans_mark_metadata_bucket(&trans, ca, b, DataType::free, 0, UpdateTriggerFlags::TRANSACTIONAL);
+        }
+    }
+
+    ret
+}
+
+fn set_nr_loop(fs: &Fs, ca: &Dev, nr: u32, new_fs: bool) -> Result<(), BchError> {
+    let watermark = if new_fs {
+        c::bch_watermark::BCH_WATERMARK_btree
+    } else {
+        c::bch_watermark::BCH_WATERMARK_normal
+    };
+
+    stack_pin_init!(let cl = StackClosure::new());
+
+    /* don't handle reducing nr of buckets yet: */
+    if nr < ca.journal.nr() {
+        return Ok(());
+    }
+
+    while ca.journal.nr() < nr {
+        /*
+         * note: journal buckets aren't really counted as _sectors_ used yet, so
+         * we don't need the disk reservation to avoid the BUG_ON() in buckets.c
+         * when space used goes up without a reservation - but we do need the
+         * reservation to ensure we'll actually be able to allocate:
+         *
+         * XXX: that's not right, disk reservations only ensure a
+         * filesystem-wide allocation will succeed, this is a device
+         * specific allocation - we can hang here:
+         *
+         * A device outside the capacity (durability 0) takes nothing
+         * anyone reserved, so there's nothing to reserve against - and
+         * when initializing a new filesystem, the devices after it
+         * don't have their free space counted yet.
+         */
+        let res = DiskReservation::new(fs);
+        if !new_fs && ca.has_capacity() {
+            res.add(ca.bucket_to_sector((nr - ca.journal.nr()).into()), 1, c::bch_reservation_flags::empty())?;
+        }
+
+        set_nr_iter(fs, ca, nr, watermark, &cl)?;
+    }
+    Ok(())
+}
+
+/*
+ * Allocate more journal space at runtime - not currently making use if it, but
+ * the code works:
+ */
+pub fn set_nr_journal_buckets(fs: &Fs, ca: &Dev, nr: u32) -> Result<(), BchError> {
+    let _state = fs.state_lock_write();
+
+    if ca.removing.get() {
+        return fs.throw(bch_errcode::BCH_ERR_device_has_been_removed);
+    }
+
+    bch_err_fn!(fs, set_nr_loop(fs, ca, nr, false))
+}
+
+pub fn dev_journal_alloc(ca: &Dev, new_fs: bool) -> Result<(), BchError> {
+    let fs = ca.fs();
+
+    if !ca.mi.get().data_allowed.contains(DataType::journal.into()) {
+        return Ok(());
+    }
+
+    if fs.feature(c::bch_sb_feature::BCH_FEATURE_small_image) {
+        bch_err!(fs, "cannot allocate journal, filesystem is an unresized image file");
+        return fs.throw(bch_errcode::BCH_ERR_erofs_filesystem_full);
+    }
+
+    /* 1/128th of the device by default: */
+    let nr = (ca.mi.get().nbuckets >> 7) as u32;
+
+    /* but no more than a quarter of RAM: */
+    let ram = (totalram_bytes() as u64 / 4 / ca.bucket_bytes()) as u32;
+    let nr = nr.max(c::BCH_JOURNAL_BUCKETS_MIN).min(ram);
+
+    bch_err_fn_dev!(ca, set_nr_loop(fs, ca, nr, new_fs))
+}
+
+#[c_export]
+pub fn bch2_fs_journal_alloc(fs: &Fs) -> c_int {
+    ret_to_c(fs.online_members()
+        .filter(|ca| ca.journal.nr() == 0)
+        .try_for_each(|ca| dev_journal_alloc(&ca, true)))
 }
 
 /// @bucket, which fsck found another user's data in, no longer the journal's:

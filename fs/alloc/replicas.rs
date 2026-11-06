@@ -293,6 +293,25 @@ pub(crate) fn bkey_replicas_padded(fs: &Fs, k: BkeySC<'_>) -> c::bch_replicas_pa
     r
 }
 
+/// The entry for @data_type data on @devs, in room of its own.
+pub(crate) struct DevlistEntry(c::bch_replicas_padded);
+
+impl DevlistEntry {
+    pub(crate) fn new(data_type: DataType, devs: c::bch_devs_list) -> Self {
+        let mut r = c::bch_replicas_padded::default();
+        unsafe { bch2_devlist_to_replicas(&raw mut r.e, data_type, devs) };
+        DevlistEntry(r)
+    }
+}
+
+impl core::ops::Deref for DevlistEntry {
+    type Target = Entry;
+
+    fn deref(&self) -> &Entry {
+        unsafe { from_ffi(&raw const self.0.e) }
+    }
+}
+
 /// replicas_acct() of @k's entry, as bkey_to_replicas() makes it, for
 /// @data_type data.
 pub(crate) fn bkey_replicas_acct(fs: &Fs, k: BkeySC<'_>, data_type: DataType) -> DiskAccountingPos {

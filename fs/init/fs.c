@@ -52,7 +52,6 @@
 #include "init/passes.h"
 #include "init/fs.h"
 
-#include "journal/init.h"
 #include "journal/journal.h"
 #include "journal/reclaim.h"
 #include "journal/seq_blacklist.h"

@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::bkey::BkeyI;
 use crate::fs::{Dev, Fs};
 use crate::cstructs::c;
 use crate::data::ptrs::IoFailures;
@@ -92,6 +93,13 @@ nest! {
     }
 }
 c_default!(journal_buf);
+
+impl journal_buf {
+    /// Its value runs on past key, into key_pad.
+    pub fn key(&self) -> &BkeyI {
+        unsafe { &*BkeyI::from_raw(&raw const self.key) }
+    }
+}
 
 /*
  * Something that makes a journal entry dirty - i.e. a btree node that has to be
@@ -417,10 +425,11 @@ nest! {
         #[c("unsigned long flags")]
         pub flags: crate::data_structures::bitmap::AtomicBitflags<c::journal_flags>,
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
-        #[init((-(c::EROFS as isize)) as *mut c::task_struct)]
-        pub stop_thread: *mut c::task_struct,
+        #[init(AtomicPtr::new((-(c::EROFS as isize)) as *mut c::task_struct))]
+        #[c("struct task_struct *stop_thread")]
+        pub stop_thread: AtomicPtr<c::task_struct>,
 
-        pub buf_size_want: c_uint,
+        pub buf_size_want: Volatile<c_uint>,
         /*
          * We may queue up some things to be journalled (log messages) before
          * the journal has actually started - stash them here:
@@ -650,7 +659,7 @@ pub struct journal_entry_res {
 
 /*
  * Computed by bch2_journal_read(), consumed by bch2_fs_recovery() and
- * bch2_fs_journal_start():
+ * journal.start():
  *
  * After journal read we have three sequence number zones:
  *

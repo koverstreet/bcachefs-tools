@@ -521,7 +521,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 		 * more buckets:
 		 *
 		 * Must come before signaling write completion, for
-		 * bch2_fs_journal_stop():
+		 * journal.stop():
 		 */
 		if (j->watermark != BCH_WATERMARK_stripe)
 			journal_reclaim_kick(&c->journal);

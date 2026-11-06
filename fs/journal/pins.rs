@@ -812,7 +812,7 @@ pub(crate) unsafe extern "C" fn flush_degraded_work(work: *mut c::work_struct) {
  * here. Filesystems from before JOURNAL_PIN_MAX can have millions; reclaim
  * works them back down and the fifo shrinks to the ceiling.
  */
-fn start(j: &c::journal, last_seq: u64, cur_seq: u64) -> Result<(), BchError> {
+pub(crate) fn start(j: &c::journal, last_seq: u64, cur_seq: u64) -> Result<(), BchError> {
     let fs = j.fs();
     let mut nr = cur_seq - last_seq;
 

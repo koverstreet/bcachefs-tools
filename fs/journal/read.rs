@@ -5,6 +5,7 @@ use crate::format::{Btree, MemberState, Nonce};
 
 #[path = "buckets.rs"] pub mod buckets;
 #[path = "entries.rs"] pub mod entries;
+#[path = "init.rs"] pub mod init;
 #[path = "pins.rs"] pub mod pins;
 #[path = "sb.rs"] pub mod sb;
 #[path = "seq_blacklist.rs"] pub mod seq_blacklist;
@@ -85,7 +86,7 @@ impl c::jset<Unvalidated> {
             .unwrap_or(0)
     }
 
-    fn empty(&self) -> bool {
+    pub(crate) fn empty(&self) -> bool {
         self.seq == self.last_seq &&
             !self.entries().flatten().any(|e| {
                 entry_type(e) == c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_keys && e.u64s() != 0
@@ -161,7 +162,7 @@ impl Replay {
         unsafe { c::journal_replay::jset(self.0.as_ptr()) }
     }
 
-    fn jset_unvalidated(&self) -> &c::jset<Unvalidated> {
+    pub(crate) fn jset_unvalidated(&self) -> &c::jset<Unvalidated> {
         c::jset::<Unvalidated>::from_bytes(self.jset_bytes()).expect("a replay holds its jset")
     }
 
@@ -180,7 +181,7 @@ impl Replay {
         unsafe { core::slice::from_raw_parts_mut((&raw mut (*self.0.as_ptr()).j).cast(), bytes) }
     }
 
-    fn seq(&self) -> u64 {
+    pub(crate) fn seq(&self) -> u64 {
         self.j.seq.get()
     }
 }

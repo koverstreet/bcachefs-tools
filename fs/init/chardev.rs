@@ -661,9 +661,7 @@ fn disk_resize_journal(fs: &Fs, a: c::bch_ioctl_disk_resize_journal, msg: ErrMsg
     }
     let ca = dev_lookup_outer(fs, a.dev, a.flags)?;
 
-    let ret = ret_to_result_void(unsafe {
-        c::bch2_set_nr_journal_buckets(fs.as_ptr().cast(), ca.as_mut_ptr(), a.nbuckets as c_uint)
-    });
+    let ret = crate::journal::buckets::set_nr_journal_buckets(fs, &ca, a.nbuckets as u32);
     msg.report(&mut Printbuf::new(), ret, |ret, _| ret)
 }
 
