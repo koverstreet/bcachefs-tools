@@ -62,7 +62,7 @@ pub unsafe trait Mode: Sized {
 
     /// # Safety
     /// @item's grace period is over.
-    unsafe fn process(&self, _pending: &RcuPending<Self>, item: Self::Item) {
+    unsafe fn process(&self, _pending: &RcuPending<'_, Self>, item: Self::Item) {
         drop(item)
     }
 }
@@ -100,7 +100,7 @@ unsafe impl Mode for CProcess {
         CHead(p.cast())
     }
 
-    unsafe fn process(&self, pending: &RcuPending<Self>, item: CHead) {
+    unsafe fn process(&self, pending: &RcuPending<'_, Self>, item: CHead) {
         unsafe { (self.0)(ptr::from_ref(pending).cast_mut().cast(), item.as_ptr()) }
     }
 }
@@ -129,7 +129,7 @@ unsafe impl<T> Mode for KvFree<T> {
         unsafe { Retired::from_head(p.cast()) }
     }
 
-    unsafe fn process(&self, _pending: &RcuPending<Self>, item: Retired<T, KVmalloc>) {
+    unsafe fn process(&self, _pending: &RcuPending<'_, Self>, item: Retired<T, KVmalloc>) {
         unsafe { item.free() }
     }
 }
@@ -360,7 +360,7 @@ impl PcpuState {
         self.objs.iter().any(|o| o.nr != 0) || self.lists.iter().any(|l| l.head.is_some())
     }
 
-    fn merge_expired_lists(&mut self, srcu: Flavor) {
+    fn merge_expired_lists(&mut self, srcu: Flavor<'_>) {
         let (active, expired) = self.lists.split_at_mut(ACTIVE);
         for i in active {
             if i.head.is_some() && srcu.poll(i.seq) {
@@ -371,7 +371,7 @@ impl PcpuState {
 
     /// The first Seq, if its grace period is over, and the expired lists:
     /// None if there's nothing to process.
-    fn take_expired(&mut self, srcu: Flavor) -> Option<Expired> {
+    fn take_expired(&mut self, srcu: Flavor<'_>) -> Option<Expired> {
         /*
          * XXX: we should grab the gp seq once and avoid multiple function
          * calls, this is called from __rcu_pending_enqueue() fastpath in
@@ -405,8 +405,8 @@ impl PcpuState {
 }
 
 #[repr(C)]
-struct Pcpu<M: Mode> {
-    parent: *const RcuPending<M>,
+struct Pcpu<'f, M: Mode> {
+    parent: *const RcuPending<'f, M>,
     lock:   Locked<c::spinlock_t, PcpuState>,
     cpu:    c_uint,
     cb:     Opaque<c::rcu_head>,
@@ -414,7 +414,7 @@ struct Pcpu<M: Mode> {
 }
 
 // what other CPUs change is under the lock, or C's - cb and work
-unsafe impl<M: Mode> CpuShared for Pcpu<M> {}
+unsafe impl<M: Mode> CpuShared for Pcpu<'_, M> {}
 
 /// Why enqueue_list() couldn't: what to do with the lock dropped, before
 /// trying again.
@@ -425,21 +425,21 @@ enum ListBlocked {
     Expired,
 }
 
-/// C's struct rcu_pending, of any mode: RcuPending<CProcess> is the struct C
+/// C's struct rcu_pending, of any mode: RcuPending<'_, CProcess> is the struct C
 /// has. Pinned: each CPU's state points back to it.
 #[repr(C)]
-pub struct RcuPending<M: Mode> {
-    p:       *mut Pcpu<M>,
-    srcu:    Flavor,
+pub struct RcuPending<'f, M: Mode> {
+    p:       *mut Pcpu<'f, M>,
+    srcu:    Flavor<'f>,
     process: M,
     _pin:    PhantomData<PhantomPinned>,
 }
 
-unsafe impl<M: Mode + Send> Send for RcuPending<M> {}
-unsafe impl<M: Mode + Sync> Sync for RcuPending<M> {}
+unsafe impl<M: Mode + Send> Send for RcuPending<'_, M> {}
+unsafe impl<M: Mode + Sync> Sync for RcuPending<'_, M> {}
 
 const _: () = {
-    type C = RcuPending<CProcess>;
+    type C = RcuPending<'static, CProcess>;
     assert!(size_of::<C>() == size_of::<c::rcu_pending>() &&
             offset_of!(C, p) == offset_of!(c::rcu_pending, p) &&
             offset_of!(C, srcu) == offset_of!(c::rcu_pending, srcu) &&
@@ -447,14 +447,14 @@ const _: () = {
             "RcuPending isn't laid out as struct rcu_pending");
 };
 
-impl<M: Mode> RcuPending<M> {
+impl<'f, M: Mode> RcuPending<'f, M> {
     /// With @srcu's grace periods, @process done with what's queued once its
     /// grace period has completed.
-    pub fn new(srcu: Flavor, process: M) -> impl PinInit<Self, AllocError> {
+    pub fn new(srcu: Flavor<'f>, process: M) -> impl PinInit<Self, AllocError> {
         unsafe { pin_init_from_closure(move |slot: *mut Self| Self::init(slot, srcu, process)) }
     }
 
-    fn pcpu(&self) -> PerCpuRef<'_, Pcpu<M>> {
+    fn pcpu(&self) -> PerCpuRef<'_, Pcpu<'f, M>> {
         unsafe { PerCpuRef::from_raw(self.p) }
     }
 
@@ -493,7 +493,7 @@ impl<M: Mode> RcuPending<M> {
     }
 
     unsafe extern "C" fn work_fn(work: *mut c::work_struct) {
-        let p = unsafe { &*work.byte_sub(offset_of!(Pcpu<M>, work)).cast::<Pcpu<M>>() };
+        let p = unsafe { &*work.byte_sub(offset_of!(Pcpu<'f, M>, work)).cast::<Pcpu<'f, M>>() };
         let pending = unsafe { &*p.parent };
 
         loop {
@@ -504,7 +504,7 @@ impl<M: Mode> RcuPending<M> {
     }
 
     unsafe extern "C" fn rcu_cb(rcu: *mut c::rcu_head) {
-        let p = unsafe { &*rcu.byte_sub(offset_of!(Pcpu<M>, cb)).cast::<Pcpu<M>>() };
+        let p = unsafe { &*rcu.byte_sub(offset_of!(Pcpu<'f, M>, cb)).cast::<Pcpu<'f, M>>() };
         let pending = unsafe { &*p.parent };
 
         unsafe { Queue::system().queue_work_on(p.cpu, p.work.as_ptr()) };
@@ -668,7 +668,7 @@ impl<M: Mode> RcuPending<M> {
         }
     }
 
-    fn pcpu_dequeue(&self, p: &Pcpu<M>, mut try_claim: impl FnMut(&M::Item) -> bool) -> Option<M::Item> {
+    fn pcpu_dequeue(&self, p: &Pcpu<'f, M>, mut try_claim: impl FnMut(&M::Item) -> bool) -> Option<M::Item> {
         let mut claimed = |raw: Raw| try_claim(&ManuallyDrop::new(unsafe { M::from_raw(raw) }));
         let mut s = p.lock.lock();
 
@@ -707,7 +707,7 @@ impl<M: Mode> RcuPending<M> {
         })
     }
 
-    unsafe extern "C" fn init_pcpu(slot: *mut Pcpu<M>, this: *mut Self, cpu: c_uint) {
+    unsafe extern "C" fn init_pcpu(slot: *mut Pcpu<'f, M>, this: *mut Self, cpu: c_uint) {
         let lock = new_lock!(PcpuState {
             objs:     KVVec::new(),
             lists:    Default::default(),
@@ -726,7 +726,7 @@ impl<M: Mode> RcuPending<M> {
     ///
     /// # Safety
     /// @this doesn't move until it's freed.
-    unsafe fn init(this: *mut Self, srcu: Flavor, process: M) -> Result<(), AllocError> {
+    unsafe fn init(this: *mut Self, srcu: Flavor<'f>, process: M) -> Result<(), AllocError> {
         let p = unsafe { PerCpu::alloc_init(Self::init_pcpu, this) }?.into_raw();
 
         unsafe {
@@ -773,7 +773,7 @@ impl<M: Mode> RcuPending<M> {
     }
 }
 
-impl<M: Mode> Drop for RcuPending<M> {
+impl<M: Mode> Drop for RcuPending<'_, M> {
     fn drop(&mut self) {
         self.drain();
         // SAFETY: drained, and dropped
@@ -783,7 +783,7 @@ impl<M: Mode> Drop for RcuPending<M> {
 
 // ── For C ────────────────────────────────────────────────────────────────
 
-type CPending = RcuPending<CProcess>;
+type CPending = RcuPending<'static, CProcess>;
 
 unsafe fn c_pending<'a>(pending: *mut c::rcu_pending) -> &'a CPending {
     unsafe { &*pending.cast() }

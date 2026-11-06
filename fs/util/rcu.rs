@@ -149,10 +149,17 @@ impl Srcu {
     pub fn read_lock(&self) -> SrcuReadGuard<'_> {
         SrcuReadGuard { srcu: self, idx: unsafe { rust_srcu_read_lock(self.as_ptr()) } }
     }
+
+    /// Its grace periods, for what waits on or queues to them.
+    pub fn flavor(&self) -> Flavor<'_> {
+        Flavor(self.as_ptr(), PhantomData)
+    }
 }
 
 impl Drop for Srcu {
     fn drop(&mut self) {
+        // what's queued through a flavor() outlives its borrow
+        self.flavor().barrier();
         unsafe {
             rust_synchronize_srcu_expedited(self.as_ptr());
             rust_cleanup_srcu_struct(self.as_ptr());
@@ -194,23 +201,26 @@ impl PartialEq for GpCookie {
     }
 }
 
-/// Which RCU: the kernel's, or an SRCU domain's - C's srcu_struct pointer,
-/// null for RCU. In userspace, SRCU is RCU.
+/// Which RCU: the kernel's, or an SRCU domain's, borrowed - C's srcu_struct
+/// pointer, null for RCU. In userspace, SRCU is RCU.
 #[repr(transparent)]
 #[derive(Clone, Copy)]
-pub struct Flavor(*mut c::srcu_struct);
+pub struct Flavor<'a>(*mut c::srcu_struct, PhantomData<&'a Srcu>);
 
 // an srcu_struct is any thread's to wait on and queue on
-unsafe impl Send for Flavor {}
-unsafe impl Sync for Flavor {}
+unsafe impl Send for Flavor<'_> {}
+unsafe impl Sync for Flavor<'_> {}
 
-impl Flavor {
-    pub const RCU: Flavor = Flavor(core::ptr::null_mut());
+impl Flavor<'static> {
+    pub const RCU: Self = Flavor(core::ptr::null_mut(), PhantomData);
+}
 
+impl<'a> Flavor<'a> {
     /// # Safety
-    /// @srcu outlives everything waited for or queued on it through this.
-    pub unsafe fn srcu(srcu: *mut c::srcu_struct) -> Flavor {
-        Flavor(srcu)
+    /// @srcu outlives 'a, and everything waited for or queued on it through
+    /// this.
+    pub unsafe fn srcu(srcu: *mut c::srcu_struct) -> Self {
+        Flavor(srcu, PhantomData)
     }
 
     pub fn as_ptr(self) -> *mut c::srcu_struct {
