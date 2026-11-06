@@ -21,6 +21,7 @@ use crate::locking::six::SixHold;
 use crate::c::six_lock_type;
 use crate::util::ffi::Opaque;
 use core::ffi::{c_int, c_ulong};
+use core::marker::PhantomData;
 use core::mem::{offset_of, ManuallyDrop};
 use core::ops::{Deref, DerefMut, Index, IndexMut};
 use core::ptr::NonNull;
@@ -30,26 +31,82 @@ c_typedef! {
     pub type PathIdx = u16;
 }
 
+/// Clone and Copy, which #[derive] would bound on T: these have their T only
+/// by pointer.
+macro_rules! copy {
+    ([$($g:tt)*] $t:ty) => {
+        impl<$($g)*> Clone for $t {
+            fn clone(&self) -> Self {
+                *self
+            }
+        }
+
+        impl<$($g)*> Copy for $t {}
+    };
+}
+
+/// A path level's node, as C has it: NULL above the root, an error pointer
+/// saying why there's no node, or the node - only had by decoding it. An
+/// enum can't be one pointer, as Rust's only pointer niche is NULL.
+#[repr(transparent)]
+#[derive(::pin_init::Zeroable)]
+pub struct NodePtr<T>(*mut T);
+copy!([T] NodePtr<T>);
+
+impl<T> PartialEq for NodePtr<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<T> NodePtr<T> {
+    pub fn null() -> Self {
+        NodePtr(core::ptr::null_mut())
+    }
+
+    pub fn err(e: BchError) -> Self {
+        NodePtr(err_ptr(e))
+    }
+
+    pub fn node(node: NonNull<T>) -> Self {
+        NodePtr(node.as_ptr())
+    }
+
+    pub fn get(self) -> Result<Option<NonNull<T>>, BchError> {
+        errptr_or_null(self.0)
+    }
+
+    pub fn is_null(self) -> bool {
+        self.0.is_null()
+    }
+
+    pub fn is_node(self) -> bool {
+        matches!(self.get(), Ok(Some(_)))
+    }
+
+    /// Whether it's @b: by address, reading nothing.
+    pub fn is(self, b: *const T) -> bool {
+        core::ptr::eq(self.0, b)
+    }
+
+    pub fn as_ptr(self) -> *mut T {
+        self.0
+    }
+}
+
 #[repr(C)]
 #[derive(CStruct)]
 pub struct btree_path_level<T: PathNode = cs::btree_bkey_cached_common> {
     /* a cached path's is a struct bkey_cached's */
     #[c("struct btree *b")]
-    pub b: *mut T,
+    pub b: NodePtr<T>,
     pub iter: KeyIter,
     pub lock_seq: u32,
     #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
     pub lock_taken_time: u64,
 }
 c_default!(btree_path_level);
-
-impl<T: PathNode> Clone for btree_path_level<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T: PathNode> Copy for btree_path_level<T> {}
+copy!([T: PathNode] btree_path_level<T>);
 
 #[bitfield(u16, ty = u32)]
 pub struct btree_path_bits {
@@ -290,14 +347,7 @@ impl PathNodeContents for BtreeNode {
 pub struct LockedNode<'p, T: PathNode> {
     node: &'p T,
 }
-
-impl<T: PathNode> Clone for LockedNode<'_, T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T: PathNode> Copy for LockedNode<'_, T> {}
+copy!([T: PathNode] LockedNode<'_, T>);
 
 impl<'p, T: PathNode> LockedNode<'p, T> {
     /// # Safety
@@ -325,6 +375,24 @@ impl<T: PathNode> Deref for LockedNode<'_, T> {
     }
 }
 
+/// A path level's node, its lock not had through this: see unlocked_node().
+pub struct UnlockedNode<'p, T: PathNode> {
+    node:  NonNull<T>,
+    _path: PhantomData<&'p BtreePath<T>>,
+}
+copy!([T: PathNode] UnlockedNode<'_, T>);
+
+impl<'p, T: PathNode> UnlockedNode<'p, T> {
+    pub fn ptr(self) -> NonNull<T> {
+        self.node
+    }
+
+    /// Its lock: of a node, what's had without it.
+    pub fn lock(self) -> &'p Locked<c::six_lock> {
+        unsafe { &*self.node.as_ptr().cast::<Locked<c::six_lock>>() }
+    }
+}
+
 impl<T: PathNode> BtreePath<T> {
     /// Another hold on the level's node, as @want, if the level's is no
     /// weaker.
@@ -339,7 +407,7 @@ impl<T: PathNode> BtreePath<T> {
     /// The level's node, relocked as @ty if nothing's written it since the
     /// level's lock_seq: if it's still the node the level had.
     pub fn relock_level(&mut self, level: usize, ty: six_lock_type) -> bool {
-        let Some(node) = errptr_or_null(self.l[level].b).ok().flatten() else { return false };
+        let Some(node) = self.l[level].b.get().ok().flatten() else { return false };
         let node = unsafe { node.as_ref() };
         let Some(hold) = node.common().lock.relock_as(ty, self.l[level].lock_seq) else { return false };
         self.put_level(level, node, hold);
@@ -366,7 +434,7 @@ impl<T: PathNode> BtreePath<T> {
         ebug_assert!(!self.locked(level), "a level already locked");
         assert!(core::ptr::eq(hold.lock().six(), node.common().lock.six()), "a level given a hold on another node's lock");
 
-        self.l[level].b = core::ptr::from_ref(node).cast_mut();
+        self.l[level].b = NodePtr::node(NonNull::from(node));
         self.l[level].lock_seq = node.common().lock.six().seq.get();
         self.mark_locked_noreset(level, btree_node_locked_type::from_six(hold.into_raw()));
     }
@@ -424,7 +492,7 @@ impl<T: PathNode> BtreePath<T> {
 
     /// The node of a level nodes_locked says is held.
     fn held_node(&self, level: usize) -> NonNull<T> {
-        NonNull::new(self.l[level].b).expect("a locked level has its node")
+        self.l[level].b.get().ok().flatten().expect("a locked level has its node")
     }
 
     /// The level's node, if the path holds its lock: what makes it the path's,
@@ -432,20 +500,28 @@ impl<T: PathNode> BtreePath<T> {
     pub fn locked_node(&self, level: usize) -> Option<LockedNode<'_, T>> {
         self.locked(level).then(|| unsafe { LockedNode::new(self.held_node(level).as_ref()) })
     }
+
+    /// The level's node, as far as it's known without its lock: its memory
+    /// the transaction's SRCU read lock keeps, but whether it's still the
+    /// path's node, only a relock against the level's lock_seq says.
+    pub fn unlocked_node(&self, level: usize) -> Option<UnlockedNode<'_, T>> {
+        let node = self.l[level].b.get().ok()??;
+        Some(UnlockedNode { node, _path: PhantomData })
+    }
 }
 
 /// What every level of a path table the transaction has reallocated away from
 /// holds, in debug builds: for a path pointer kept across the realloc.
-pub(crate) fn btree_path_poison() -> *mut c::btree_bkey_cached_common {
-    err_ptr(BchError::from(bch_errcode::BCH_ERR_no_btree_node_stale_paths))
+pub(crate) fn btree_path_poison<T>() -> NodePtr<T> {
+    NodePtr::err(BchError::from(bch_errcode::BCH_ERR_no_btree_node_stale_paths))
 }
 
 impl<T: PathNode> BtreePath<T> {
     /// NULL above the root, or an error pointer: why there's no node. A
     /// cached path's is a key cache entry's.
-    pub(crate) fn node(&self, level: usize) -> *mut T {
+    pub(crate) fn node(&self, level: usize) -> NodePtr<T> {
         if level >= c::BTREE_MAX_DEPTH as usize {
-            return core::ptr::null_mut();
+            return NodePtr::null();
         }
 
         let b = self.l[level].b;
@@ -458,7 +534,7 @@ impl<T: PathNode> BtreePath<T> {
          * take a plausible wrong branch.
          */
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
-            crate::warn_once!(b.cast() == btree_path_poison(), no_fs,
+            crate::warn_once!(b == btree_path_poison(), no_fs,
                               "using a btree path that outlived trans->paths");
         }
         b
@@ -470,7 +546,7 @@ impl<T: PathNode> BtreePath<T> {
 
     /// Whether the level has @b, as of its lock's seq @seq.
     pub(crate) fn has_node(&self, level: usize, b: *const T, seq: u32) -> bool {
-        core::ptr::eq(self.l[level].b, b) && self.l[level].lock_seq == seq
+        self.l[level].b.is(b) && self.l[level].lock_seq == seq
     }
 }
 
@@ -494,7 +570,7 @@ impl btree_node_locked_type {
 
 impl<T: PathNode> BtreePath<T> {
     pub(crate) fn is_btree_node(&self, level: usize) -> bool {
-        level < c::BTREE_MAX_DEPTH as usize && matches!(errptr_or_null(self.l[level].b), Ok(Some(_)))
+        level < c::BTREE_MAX_DEPTH as usize && self.l[level].b.is_node()
     }
 
     pub(crate) fn locked_type(&self, level: usize) -> btree_node_locked_type {

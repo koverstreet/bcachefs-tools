@@ -2373,7 +2373,7 @@ impl<'t> BtreeIter<'t> {
     pub(crate) fn has_node_at_iter_level(&self, t: &TransAttempt<'_, 't>) -> bool {
         let paths = t.trans().paths();
         let path = &paths[self.path];
-        matches!(errptr_or_null(path.l[path.level() as usize].b), Ok(Some(_)))
+        matches!(path.l[path.level() as usize].b.get(), Ok(Some(_)))
     }
 
     /// The node the iterator's path holds at its level, if it has one - a
@@ -2385,9 +2385,7 @@ impl<'t> BtreeIter<'t> {
         let paths = t.trans().paths();
         let path = paths[self.path].downcast::<BtreeNode>()
             .expect("node_at_iter_level() of a cached iterator, which holds no btree node");
-        let node = path.l[path.level() as usize].b;
-
-        errptr_or_null(node).ok()?.map(|raw| BtreeNodeRef { raw })
+        path.l[path.level() as usize].b.get().ok()?.map(|raw| BtreeNodeRef { raw })
     }
 
     /// The btree's key at the iterator's path's position - not the journal
@@ -2413,7 +2411,7 @@ impl<'t> BtreeIter<'t> {
             let path = t.trans().paths.get().add(self.path as usize).cast::<BtreePath<BtreeNode>>();
             let l = &raw mut (*path).l[0];
             // NULL above the root, or an error pointer
-            errptr_or_null((*l).b).ok()??;
+            (*l).b.get().ok()??;
             Some(PathLeaf { l, _trans: PhantomData })
         }
     }
@@ -3202,7 +3200,7 @@ pub struct PathLeaf<'a> {
 
 impl<'a> PathLeaf<'a> {
     pub fn node(&self) -> LockedNode<'a, BtreeNode> {
-        unsafe { LockedNode::new(&*(*self.l).b) }
+        unsafe { LockedNode::new((*self.l).b.get().ok().flatten().expect("a leaf with no node").as_ref()) }
     }
 
     /// Where the bset search tree failed at the path's key, if it did:

@@ -462,7 +462,7 @@ impl LockGraph {
                     continue;
                 }
 
-                let b = unsafe { (&raw const (*path).l[level].b).read_volatile() };
+                let b = unsafe { (&raw const (*path).l[level].b).read_volatile() }.as_ptr();
                 self.g[top].node_have = b;
                 if !matches!(errptr_or_null(b), Ok(Some(_))) {
                     /*

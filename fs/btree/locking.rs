@@ -9,10 +9,10 @@
 use crate::btree::iter::{bch2_path_put, BtreeTrans, TransAttempt};
 use crate::btree::lock_graph::bch2_six_check_for_deadlock;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{btree_path_poison, BtreePath, PathIdx, PathSnapshot, Paths};
+use crate::btree::path::{btree_path_poison, BtreePath, NodePtr, PathIdx, PathSnapshot, Paths};
 use crate::c;
 use crate::debug::params::debug_check_btree_locking;
-use crate::errcode::{bch_errcode, err_ptr, errptr_or_null, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, errptr_or_null, ret_to_c, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::locking::six::{__six_lock_init, six_lock_counts, SixHold};
@@ -245,13 +245,16 @@ fn btree_node_pos(b: &c::btree_bkey_cached_common) -> Bpos {
 
 #[derive(Clone, Copy)]
 struct GetLocksFail {
-    l: usize,
-    b: *mut c::btree_bkey_cached_common,
+    l:    usize,
+    b:    NodePtr<c::btree_bkey_cached_common>,
+    /// the node's lock seq and counts, when it failed: the level loses its
+    /// node right after
+    lock: Option<(u32, c::six_lock_count)>,
 }
 
 impl Default for GetLocksFail {
     fn default() -> Self {
-        Self { l: 0, b: ptr::null_mut() }
+        Self { l: 0, b: NodePtr::null(), lock: None }
     }
 }
 
@@ -278,7 +281,7 @@ impl BtreeTrans<'_> {
 
         for i in self.path_idxs() {
             let path = &paths[i];
-            if !ptr::eq(path, skip) && ptr::eq(path.l[level].b, b) {
+            if !ptr::eq(path, skip) && path.l[level].b.is(b) {
                 let t = path.locked_type(level);
 
                 if !matches!(t, btree_node_locked_type::BTREE_NODE_UNLOCKED) {
@@ -345,7 +348,7 @@ impl BtreeTrans<'_> {
     fn node_lock_holder(&self, paths: &Paths<'_>, idx: PathIdx, b: *const c::btree_bkey_cached_common, level: usize,
                         want: btree_node_locked_type) -> Option<PathIdx> {
         self.path_idxs().find(|&i| {
-            i != idx && ptr::eq(paths[i].l[level].b, b) && paths[i].locked_type(level) as i32 >= want as i32
+            i != idx && paths[i].l[level].b.is(b) && paths[i].locked_type(level) as i32 >= want as i32
         })
     }
 
@@ -369,8 +372,9 @@ impl BtreeTrans<'_> {
     /// still the path's.
     fn level_relock_from(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize, want: btree_node_locked_type) -> bool {
         let path = &paths[idx];
-        let b = path.l[level].b;
-        path.lock_seq_matches(unsafe { &(*b).lock }, level) && self.level_lock_from(paths, idx, level, b, want)
+        let Some(b) = path.unlocked_node(level).filter(|b| path.lock_seq_matches(b.lock(), level)) else { return false };
+        let b = b.ptr().as_ptr();
+        self.level_lock_from(paths, idx, level, b, want)
     }
 
     /// @b's lock, by @lock: given the transaction's waiter, which the cycle
@@ -523,16 +527,15 @@ impl BtreeTrans<'_> {
                               f: &GetLocksFail) {
         let path = &paths[idx];
         prt!(out, "{} {} l={} seq={} node seq=", path.pos, path.btree_id(), f.l, path.l[f.l].lock_seq);
-        match errptr_or_null(f.b) {
+        match f.b.get() {
             Ok(Some(b)) => {
-                let b = unsafe { b.as_ref() };
-                prt!(out, "{}", b.lock.six().seq.get());
+                let (seq, total) = f.lock.expect("a failure at a node records its lock");
+                prt!(out, "{}", seq);
 
-                let c = self.node_lock_counts(paths, ptr::null(), b, f.l);
+                let c = self.node_lock_counts(paths, ptr::null(), b.as_ptr(), f.l);
                 prt!(out, " self locked {}.{}.{}", c.n[0], c.n[1], c.n[2]);
 
-                let c = six_lock_counts(b.lock.six());
-                prt!(out, " total locked {}.{}.{}", c.n[0], c.n[1], c.n[2]);
+                prt!(out, " total locked {}.{}.{}", total.n[0], total.n[1], total.n[2]);
             }
             Ok(None) => prt!(out, "{}", BchError::from_raw(0).msg()),
             Err(e)   => prt!(out, "{}", e.msg()),
@@ -571,6 +574,8 @@ impl BtreeTrans<'_> {
         if let Some(f) = f {
             f.l = l;
             f.b = paths[idx].l[l].b;
+            f.lock = paths[idx].unlocked_node(l)
+                .map(|b| (b.lock().six().seq.get(), six_lock_counts(b.lock().six())));
         }
 
         /*
@@ -600,7 +605,7 @@ impl BtreeTrans<'_> {
         };
         let path = &mut paths[idx];
         loop {
-            path.l[l].b = err_ptr(err.into());
+            path.l[l].b = NodePtr::err(err.into());
             if l == 0 {
                 break;
             }
@@ -617,14 +622,14 @@ impl BtreeTrans<'_> {
                             "relocking level {level}: held lock isn't the one wanted");
 
         path.locked(level) ||
-            (matches!(errptr_or_null(path.l[level].b), Ok(Some(_))) && self.node_relock_slowpath(paths, idx, level, true))
+            (path.l[level].b.is_node() && self.node_relock_slowpath(paths, idx, level, true))
     }
 
     pub(crate) fn node_relock_slowpath(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize, trace: bool) -> bool {
         let want = paths[idx].lock_want_six(level);
 
         let relocked = !race_fault() && {
-            assert!(matches!(errptr_or_null(paths[idx].l[level].b), Ok(Some(_))), "relocking a level with no node");
+            assert!(paths[idx].l[level].b.is_node(), "relocking a level with no node");
             paths[idx].relock_level(level, want) ||
                 self.level_relock_from(paths, idx, level, btree_node_locked_type::from_six(want))
         };
@@ -816,17 +821,15 @@ impl BtreeTrans<'_> {
             out.newline();
             prt!(out, "locks want {} -> {} level {}\n", old_locks_want, new_locks_want, f.l);
             prt!(out, "nodes_locked {:x} -> {:x}\n", old_locks, path.nodes_locked);
-            let node = match errptr_or_null(f.b) {
+            let node = match f.b.get() {
                 Err(e)      => e.msg(),
                 Ok(None)    => "(null)",
                 Ok(Some(_)) => "(node)",
             };
             prt!(out, "node {} ", node);
-            let b = errptr_or_null(f.b).ok().flatten().map(|b| unsafe { b.as_ref() });
-            prt!(out, "path seq {} node seq {}", b.map_or(0, |b| b.lock.six().seq.get()), path.l[f.l].lock_seq);
+            prt!(out, "path seq {} node seq {}", f.lock.map_or(0, |(seq, _)| seq), path.l[f.l].lock_seq);
 
-            if let Some(b) = b {
-                let c = six_lock_counts(b.lock.six());
+            if let Some((_, c)) = f.lock {
                 prt!(out, " locked {}.{}.{}", c.n[0], c.n[1], c.n[2]);
             }
             prt!(out, "\npath idx {}", idx);
@@ -1048,7 +1051,7 @@ impl BtreeTrans<'_> {
         for i in self.path_idxs() {
             let path = &mut paths[i];
             if path.cached() && !path.locked(0) {
-                path.l[0].b = err_ptr(bch_errcode::BCH_ERR_no_btree_node_srcu_reset.into());
+                path.l[0].b = NodePtr::err(bch_errcode::BCH_ERR_no_btree_node_srcu_reset.into());
             }
         }
 
@@ -1193,7 +1196,7 @@ pub unsafe fn bch2_btree_node_unlock_write(trans: &BtreeTrans<'_>, path: *mut Bt
     let level = unsafe { (*b).c.level } as usize;
     let mut paths = unsafe { trans.paths_lent() };
     let idx = trans.path_idx_of(path);
-    ebug_assert!(ptr::eq(paths[idx].l[level].b, b.cast()), "unlocking a node for write through a path that hasn't it");
+    ebug_assert!(paths[idx].l[level].b.is(b.cast()), "unlocking a node for write through a path that hasn't it");
     trans.node_unlock_write(&mut paths, idx, level)
 }
 
