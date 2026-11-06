@@ -627,11 +627,9 @@ impl<'a> PinsRead<'a> {
     /*
      * The next pin to flush - an unflushed one of the oldest entry with one of
      * a type allowed: up to @seq_to_flush, of those in @below; any, of those in
-     * @above - now the flush in progress, with its seq, flush function and type
+     * @above - now the flush in progress, until the Flushing is dropped
      */
-    pub(crate) fn next_to_flush(&self, seq_to_flush: u64, below: u32, above: u32)
-        -> Option<(*mut Pin, u64, c::journal_pin_flush_fn, PinType)>
-    {
+    pub(crate) fn next_to_flush(&self, seq_to_flush: u64, below: u32, above: u32) -> Option<Flushing<'a>> {
         for seq in self.front()..self.back() {
             let l = self.slot(seq);
             let g = l.lists.lock();
@@ -654,11 +652,19 @@ impl<'a> PinsRead<'a> {
                 assert!(self.j.flush_in_progress.load(Relaxed).is_null(),
                         "journal pin flush started with one in progress");
                 let locked = self.locked(pin, &g);
-                let flush = locked.flush.get();
+                let flush = locked.flush.get().expect("a journal pin with no flush function");
                 self.j.flush_in_progress.store(pin.as_ptr(), Relaxed);
-                self.j.flush_in_progress_fn.store(flush_addr(flush), Relaxed);
+                self.j.flush_in_progress_fn.store(flush_addr(Some(flush)), Relaxed);
                 self.j.flush_in_progress_dropped.set(false);
-                return Some((pin.as_ptr(), seq, flush, locked.pin_type.get()));
+                return Some(Flushing {
+                    j:     self.j,
+                    /* past the lock: its owner waits in pin_flush() until our drop */
+                    pin:   unsafe { &*pin.as_ptr() },
+                    seq,
+                    ty:    locked.pin_type.get(),
+                    flush,
+                    ok:    false,
+                });
             }
         }
         None
@@ -669,7 +675,7 @@ impl<'a> PinsRead<'a> {
      * failed, or the pin was dropped or rearmed meanwhile: no longer the flush
      * in progress
      */
-    pub(crate) fn flushed(&self, pin: &Pin, seq: u64, ok: bool) {
+    fn flushed(&self, pin: &Pin, seq: u64, ok: bool) {
         /*
          * Unchecked: if flush_fn dropped the pin, @seq may have retired since.
          * If it didn't, the pin still holds @seq, and the move below checks it:
@@ -739,6 +745,34 @@ impl<'a> PinsRead<'a> {
                 }
             }
         }
+    }
+}
+
+/*
+ * The flush in progress, from next_to_flush() to its drop - which is the only
+ * way it ends: flushed(), then pin_flush()'s waiters woken
+ */
+pub(crate) struct Flushing<'a> {
+    j:      &'a c::journal,
+    pin:    &'a Pin,
+    seq:    u64,
+    pub ty: PinType,
+    flush:  unsafe extern "C" fn(*mut c::journal, *mut Pin, u64) -> c_int,
+    ok:     bool,
+}
+
+impl Flushing<'_> {
+    /* The pin's flush function: whether it succeeded */
+    pub(crate) fn run(&mut self) -> bool {
+        self.ok = unsafe { (self.flush)(self.j.as_ptr(), self.pin.as_ptr(), self.seq) } == 0;
+        self.ok
+    }
+}
+
+impl Drop for Flushing<'_> {
+    fn drop(&mut self) {
+        self.j.pins().flushed(self.pin, self.seq, self.ok);
+        self.j.pin_flush_wait.wake();
     }
 }
 

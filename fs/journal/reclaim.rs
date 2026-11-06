@@ -477,10 +477,11 @@ impl c::journal {
 
             reclaim.published().last_flushed.set(jiffies());
 
-            let Some((pin, seq, flush_fn, ty)) =
+            let Some(mut flushing) =
                 self.pins().next_to_flush(seq_to_flush, allowed_below, allowed_above) else {
                 break;
             };
+            let ty = flushing.ty;
 
             if min_key_cache != 0 && ty == JOURNAL_PIN_TYPE_key_cache {
                 min_key_cache -= 1;
@@ -489,8 +490,7 @@ impl c::journal {
             min_any = min_any.saturating_sub(1);
 
             let start_time = local_clock();
-            let flush_fn = flush_fn.expect("a journal pin with no flush function");
-            let err = unsafe { flush_fn(self.as_ptr(), pin, seq) };
+            let ok = flushing.run();
 
             let flush_time = if (ty as u32) <= JOURNAL_PIN_TYPE_btree0 as u32 {
                 BCH_TIME_journal_pin_flush_btree
@@ -501,11 +501,9 @@ impl c::journal {
             };
             fs.times[flush_time as usize].update(start_time);
 
-            self.pins().flushed(unsafe { &*pin }, seq, err == 0);
+            drop(flushing);
 
-            self.pin_flush_wait.wake();
-
-            if err != 0 {
+            if !ok {
                 break;
             }
 
