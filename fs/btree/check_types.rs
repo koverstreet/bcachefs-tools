@@ -60,6 +60,17 @@ pub fn bch2_gc_btree_order(btree: Btree) -> c_int {
     }
 }
 
+impl gc_pos {
+    /// gc_pos_btree(): @pos at @level of @btree, in gc's walk of the btrees.
+    pub fn in_btree(btree: Btree, level: u16, pos: Bpos) -> Self {
+        Self {
+            bits: c::gc_pos_bits::new().with_phase(c::gc_phase::GC_PHASE_btree).with_btree(btree),
+            level,
+            pos,
+        }
+    }
+}
+
 impl Ord for gc_pos {
     fn cmp(&self, r: &Self) -> Ordering {
         (self.bits.phase() as u32).cmp(&(r.bits.phase() as u32))
@@ -130,16 +141,6 @@ pub fn bch2_gc_pos_set(c: &Opaque<Fs>, pos: c::gc_pos) {
 #[c_export]
 pub fn bch2_gc_pos_set_not_running(c: &Opaque<Fs>) {
     Fs::from_c(c).gc.set_not_running()
-}
-
-#[c_export]
-pub fn bch2_gc_phase(c: &Opaque<Fs>) -> c::gc_phase {
-    Fs::from_c(c).gc.phase()
-}
-
-#[c_export]
-pub fn bch2_gc_visited(c: &Opaque<Fs>, pos: c::gc_pos) -> bool {
-    Fs::from_c(c).gc.visited(pos)
 }
 
 #[repr(C)]

@@ -475,84 +475,6 @@ static inline int btree_key_can_insert_cached(struct btree_trans *trans,
 		: btree_key_can_insert_cached_slowpath(trans, flags, path, u64s);
 }
 
-/* Triggers: */
-
-static int run_one_mem_trigger(struct btree_trans *trans,
-			       struct btree_insert_entry *i,
-			       unsigned flags)
-{
-	bch2_verify_update_old_key(trans, i);
-	return bch2_run_one_mem_trigger(trans, i, flags);
-}
-
-static int run_one_trans_trigger(struct btree_trans *trans, struct btree_insert_entry *i)
-{
-	bch2_verify_update_old_key(trans, i);
-	return bch2_run_one_trans_trigger(trans, i);
-}
-
-static int bch2_trans_commit_run_triggers(struct btree_trans *trans)
-{
-	unsigned sort_id_start = 0;
-
-	while (sort_id_start < trans->nr_updates) {
-		unsigned idx, sort_id = trans->updates[sort_id_start].sort_order;
-		bool trans_trigger_run;
-
-		/*
-		 * For a given btree, this algorithm runs insert triggers before
-		 * overwrite triggers: this is so that when extents are being
-		 * moved (e.g. by FALLOCATE_FL_INSERT_RANGE), we don't drop
-		 * references before they are re-added.
-		 *
-		 * Running triggers will append more updates to the list of
-		 * updates as we're walking it:
-		 */
-		do {
-			trans_trigger_run = false;
-
-			for (idx = sort_id_start;
-			     idx < trans->nr_updates && trans->updates[idx].sort_order <= sort_id;
-			     idx++) {
-				struct btree_insert_entry *i = trans->updates + idx;
-				if (i->sort_order < sort_id) {
-					sort_id_start = idx;
-					continue;
-				}
-
-				if ((i->flags & BTREE_TRIGGER_norun) ||
-				    !btree_node_type_has_trans_triggers(i->bkey_type) ||
-				    (i->insert_trigger_run && i->overwrite_trigger_run))
-					continue;
-
-				try(run_one_trans_trigger(trans, i));
-				trans_trigger_run = true;
-			}
-		} while (trans_trigger_run);
-
-		sort_id_start = idx;
-	}
-
-#ifdef CONFIG_BCACHEFS_DEBUG
-	trans_for_each_update(trans, i)
-		BUG_ON(!(i->flags & BTREE_TRIGGER_norun) &&
-		       btree_node_type_has_trans_triggers(i->bkey_type) &&
-		       (!i->insert_trigger_run || !i->overwrite_trigger_run));
-#endif
-	return 0;
-}
-
-static noinline int bch2_trans_commit_run_gc_triggers(struct btree_trans *trans)
-{
-	trans_for_each_update(trans, i)
-		if (btree_node_type_has_triggers(i->bkey_type) &&
-		    !(i->flags & BTREE_TRIGGER_norun) &&
-		    bch2_gc_visited(trans->c, gc_pos_btree(i->btree_id, i->level, i->k->k.p)))
-			try(run_one_mem_trigger(trans, i, i->flags|BTREE_TRIGGER_gc));
-
-	return 0;
-}
-
 static int bch2_trans_commit_journal_pin_flush(struct journal *j,
 				struct journal_entry_pin *_pin, u64 seq)
 {
@@ -1113,19 +1035,9 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 			bch2_trans_account_disk_usage_change(trans);
 	}
 
-	trans_for_each_update(trans, i)
-		if (btree_node_type_has_atomic_triggers(i->bkey_type) &&
-		    !(i->flags & BTREE_TRIGGER_norun)) {
-			ret = run_one_mem_trigger(trans, i, BTREE_TRIGGER_atomic|i->flags);
-			if (unlikely(ret))
-				return trans_commit_fatal_err(trans, ret);
-		}
-
-	if (unlikely(bch2_gc_phase(c))) {
-		ret = bch2_trans_commit_run_gc_triggers(trans);
-		if (unlikely(ret))
-			return trans_commit_fatal_err(trans, ret);
-	}
+	ret = bch2_trans_commit_run_mem_triggers(trans);
+	if (unlikely(ret))
+		return trans_commit_fatal_err(trans, ret);
 
 #ifdef CONFIG_BCACHEFS_DEBUG
 	struct bkey_validate_context validate_context = { .from	= BKEY_VALIDATE_commit };
