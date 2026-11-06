@@ -888,20 +888,6 @@ pub fn inum_snapshot_to_path(
     __inum_to_path(t, 0, inum, snapshot, 0, false, out)
 }
 
-/// For C's error reporting and reconcile: bch2_inum_snapshot_to_path(). Its
-/// snapshot list was never used.
-#[c_export]
-pub extern "C" fn bch2_inum_snapshot_to_path(
-    trans:     &BtreeTrans<'_>,
-    inum:      u64,
-    snapshot:  u32,
-    _snapshot_overwrites: *mut c::snapshot_id_list,
-    out:       &mut Printbuf,
-) -> c_int {
-    ret_to_c(inum_snapshot_to_path(&unsafe { trans.attempt_in_progress() }, inum,
-                                   snapshot, out))
-}
-
 /// Whether @inum is @ancestor or below it: the walk from inum_to_path(),
 /// without the names - up through each inode's directory, crossing into
 /// parent subvolumes - until @ancestor or the root. A walk that's

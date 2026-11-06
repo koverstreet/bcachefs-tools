@@ -17,20 +17,18 @@
 
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeySC, BkeyV};
-use crate::btree::iter::{BtreeTrans, TransAttempt};
+use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::copygc;
 use crate::data::durability::{extent_ptr_durability, BkeyVDurability};
 use crate::data::ec::head::{head_get, stripe_head_put};
 use crate::data::ptrs::{BkeyVPtrs, BtreePtrs, Ptrs};
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::format::{DataType, MemberState};
 use crate::fs::Fs;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
-use core::ffi::c_int;
-use cstruct_macros::c_export;
 
 use c::bch_write_flags as w;
 
@@ -250,15 +248,4 @@ impl TransAttempt<'_, '_> {
         }
         Ok(())
     }
-}
-
-/// # Safety
-/// @trans is in an attempt.
-#[c_export]
-pub unsafe fn bch2_can_do_data_update<'t>(trans: &'t BtreeTrans<'t>, opts: &c::bch_inode_opts,
-                                          data_opts: &c::data_update_opts, k: BkeySC<'_>,
-                                          trace: Option<&mut Printbuf>) -> c_int {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(t.can_do_data_update(opts, data_opts, k, trace))
 }

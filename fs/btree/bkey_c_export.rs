@@ -75,11 +75,6 @@ pub unsafe fn __bch2_bkey_unpack_key(format: &c::bkey_format, out: *mut c::bkey,
 }
 
 #[c_export]
-pub unsafe fn bch2_bkey_pack_key(out: *mut c::bkey_packed, in_: &c::bkey, format: &c::bkey_format) -> bool {
-    format.pack_key(unsafe { words_mut(out, format.key_u64s as usize) }, in_)
-}
-
-#[c_export]
 pub unsafe fn __bch2_bkey_unpack_key_b(b: &BtreeNode, out: *mut c::bkey, in_: *const c::bkey_packed) {
     let b = unsafe { b.contents() };
     unsafe { out.write(b.unpack_key_at(padded(in_), 1)) }

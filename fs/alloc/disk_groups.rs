@@ -69,20 +69,19 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::Dev;
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::DataType;
 use crate::fs::{Fs, SbLockGuard};
 use crate::opts::OptFn;
 use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState};
 use crate::sb::members;
 use crate::{prt, sb_err_on};
-use crate::util::ffi::{c_char, Opaque};
+use crate::util::ffi::Opaque;
 use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::vstructs::{Head, Unvalidated, Validated};
+use crate::util::vstructs::Unvalidated;
 use crate::util::Printbuf;
-use core::ffi::{c_int, c_uint, CStr};
+use core::ffi::c_uint;
 use cstruct_macros::{c_export, CStruct, c_rcu_array, TypeInfo, c_const, c_enum};
 use crate::sb::io::SbResize;
 use crate::types::c_default;
@@ -492,26 +491,6 @@ fn dev_label_resolve(sb: &mut (impl SbResize + ?Sized), name: &[u8]) -> Result<u
     Ok(sb.disk_path_find_or_create(name)? + 1)
 }
 
-/// # Safety
-/// @name is a C string.
-#[c_export]
-pub unsafe fn __bch2_dev_group_set(c: &Opaque<Fs>, ca: &Dev, name: *const c_char) -> c_int {
-    // SAFETY: the caller's
-    let name = unsafe { CStr::from_ptr(name.cast()) };
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    ret_to_c(dev_group_set(fs, &mut unsafe { fs.sb_lock_held() }, ca.dev_idx.into(), name.to_bytes()))
-}
-
-/// # Safety
-/// @sb is a superblock that's been validated.
-#[cold]
-#[c_export]
-pub unsafe fn bch2_disk_path_to_text_sb(out: &mut Printbuf, sb: *mut Head<c::bch_sb>, v: c_uint) {
-    // SAFETY: the caller's
-    disk_path_to_text_sb(out, unsafe { c::bch_sb::<Validated>::from_ffi(sb) }, v);
-}
-
 pub fn disk_path_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, v: u32) {
     disk_path_to_text_in(out, sb_groups(sb), v);
 }
@@ -740,6 +719,7 @@ impl SbFieldOps for c::bch_sb_field_disk_groups {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::vstructs::Head;
 
     fn new_sb() -> c::bch_sb_handle {
         let mut sb = c::bch_sb_handle::default();

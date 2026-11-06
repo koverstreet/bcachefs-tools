@@ -88,7 +88,7 @@ use core::cell::Cell;
 use core::ffi::c_uint;
 use core::ops::ControlFlow;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{c_export, CStruct, TypeInfo, c_typedef, tagged_union};
+use cstruct_macros::{CStruct, TypeInfo, c_typedef, tagged_union};
 use crate::format::{Bpos, Btree, BkeyType};
 
 c_typedef! {
@@ -1174,11 +1174,6 @@ pub fn reconcile_exit(fs: &Fs) {
 }
 
 // ── C's ──────────────────────────────────────────────────────────────────
-
-#[c_export]
-pub fn bch2_reconcile_wakeup(c: &Fs) {
-    c.reconcile_wakeup()
-}
 
 pub fn reconcile_init(fs: &Fs) -> Result<(), BchError> {
     power::register(fs)

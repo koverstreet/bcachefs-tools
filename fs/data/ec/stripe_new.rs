@@ -150,7 +150,6 @@ use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked};
 use crate::util::alloc::{AllocError, KBox, KVVec};
 use crate::util::backref::BackRef;
-use crate::util::ffi::Opaque;
 use crate::util::gather::{Gather, GatherRefSlot};
 use crate::util::refcount::{RefGuard, Refcount};
 use crate::util::kernel::local_clock;
@@ -165,7 +164,6 @@ use core::ffi::c_void;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
-use cstruct_macros::c_export;
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 use c::ec_stripe_new_state as State;
 
@@ -750,11 +748,6 @@ impl Fs {
             seq != 0 && seq <= wait_seq
         }))
     }
-}
-
-#[c_export]
-pub fn bch2_fs_ec_flush_outstanding(c: &Opaque<Fs>) {
-    Fs::from_c(c).ec_flush_outstanding()
 }
 
 /// A held stripe's room let go, the stripe never handed on: the flushes

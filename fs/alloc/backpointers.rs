@@ -36,7 +36,7 @@
 
 use crate::fs::Dev;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, spos, BkeyI, BkeyS, BkeySC, BkeyVal};
+use crate::btree::bkey::{pos, spos, BkeyI, BkeyS, BkeySC};
 use crate::btree::iter::{is_restart, polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbFlush;
@@ -46,7 +46,7 @@ use crate::c;
 use crate::data::ptrs::{ptr_data_type, ptr_disk_sectors, DecodedPtr, Ptrs};
 use crate::data::reconcile::trigger::BkeyVReconcile;
 use crate::debug::params as debug_params;
-use crate::errcode::{bch_errcode, err_ptr, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::btree::bkey::BkeyOps;
 use crate::init::error::{id, BkeyValidate};
@@ -61,10 +61,9 @@ use crate::data_structures::sort::heapsort_by;
 use crate::util::vstructs::plain_bytes;
 use crate::util::{Printbuf, ToText};
 use crate::{bkey_fsck_err_on, fsck_err, prt};
-use core::ffi::c_uint;
 use core::marker::PhantomData;
 use core::ops::{ControlFlow, RangeInclusive};
-use cstruct_macros::{c_export, CStruct};
+use cstruct_macros::CStruct;
 use crate::format::{Bpos, Btree, DataType, BkeyType};
 
 /// A backpointer scan in progress: alloc/backpointers.rs's BpScanIter.
@@ -538,28 +537,6 @@ pub fn backpointer_get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, 
     -> Result<Option<LockedNode<'i, BtreeNode>>, BchError>
 {
     get_node(t, bp, iter, Some(last_flushed), true)
-}
-
-/// An error as an ERR_PTR().
-fn key_or_err_to_c<V: ?Sized + BkeyVal>(r: Result<Option<BkeySC<'_, V>>, BchError>) -> c::bkey_s_c {
-    match r {
-        Ok(Some(k)) => k.into(),
-        Ok(None)    => c::bkey_s_c { k: core::ptr::null_mut(), v: core::ptr::null_mut() },
-        Err(e)      => c::bkey_s_c { k: err_ptr(e), v: core::ptr::null_mut() },
-    }
-}
-
-/// # Safety
-/// @trans is in an attempt; @last_flushed is NULL, or the caller's.
-#[c_export]
-pub unsafe fn bch2_backpointer_get_key<'t>(trans: &'t BtreeTrans<'t>, bp: c::bkey_s_c_backpointer,
-                                           iter: &mut BtreeIter<'t>, iter_flags: c_uint,
-                                           last_flushed: *mut c::wb_maybe_flush) -> c::bkey_s_c {
-    let t = unsafe { trans.attempt_in_progress() };
-    let bp = c::bkey_s_c::from(bp);
-    let bp = unsafe { BkeySC::from_c(&bp) }.arm::<c::Backpointer>().expect("a backpointer");
-    let flags = BtreeIterFlags::from_bits_retain(iter_flags);
-    key_or_err_to_c(get_key(&t, bp, iter, flags, unsafe { WbFlush::from_raw(last_flushed) }, true))
 }
 
 // ── Backpointers in the order of what they point to ──────────────────────

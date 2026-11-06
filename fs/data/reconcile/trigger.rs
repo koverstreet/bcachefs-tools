@@ -24,7 +24,7 @@ use crate::prt;
 use crate::util::printbuf::Msg;
 use crate::util::{Printbuf, ToText};
 use core::mem::size_of;
-use cstruct_macros::{c_export, c_enum, CStruct};
+use cstruct_macros::{c_enum, CStruct};
 use crate::types::DArray;
 use crate::format::{Bpos, Btree};
 
@@ -493,11 +493,3 @@ fn delete_bp(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Backpointer>) -> Result
     t.delete(Btree::reconcile_scan, bp.k.p, UpdateTriggerFlags::empty())?;
     t.commit(None, CommitFlags::NO_ENOSPC)
 }
-
-// ── C's ──────────────────────────────────────────────────────────────────
-
-#[c_export]
-pub fn bch2_bkey_reconcile_work_id(c: &Fs, k: BkeySC<'_>) -> c::reconcile_work_id {
-    k.reconcile_work_id(c)
-}
-

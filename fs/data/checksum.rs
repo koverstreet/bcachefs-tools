@@ -449,14 +449,6 @@ pub unsafe fn bch2_encrypt(c: &Opaque<Fs>, type_: c_uint, nonce: Nonce,
 }
 
 /// # Safety
-/// @data is @len bytes.
-#[c_export]
-pub unsafe fn bch2_chacha20(key: &c::bch_key, nonce: Nonce, data: *mut c_void, len: usize) {
-    // SAFETY: the caller's
-    unsafe { Chacha::new(key, nonce).crypt(data.cast(), len) }
-}
-
-/// # Safety
 /// @bio is a bio, not in flight.
 #[c_export]
 pub unsafe fn bch2_checksum_bio(c: &Opaque<Fs>, type_: c_uint, nonce: Nonce,

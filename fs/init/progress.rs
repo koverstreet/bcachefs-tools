@@ -375,22 +375,6 @@ pub unsafe extern "C" fn bch2_progress_init(
     s.init_masks(Fs::from_c(c), unsafe { c_msg(msg) }, leaf_btree_id_mask, inner_btree_id_mask)
 }
 
-/// bch2_progress_init_count(): for work that isn't a btree walk - no node to
-/// count and no position to report, so the caller supplies the total and
-/// counts its own units. Journal replay goes through a sorted array of keys.
-///
-/// # Safety
-/// @msg is NULL or a string that lives for good.
-#[c_export]
-pub unsafe extern "C" fn bch2_progress_init_count(
-    s:     &c::progress_indicator,
-    msg:   *const c_char,
-    units: c::bch_progress_units,
-    total: u64,
-) {
-    s.init_count(unsafe { c_msg(msg) }, units, total)
-}
-
 /// bch2_progress_update_iter().
 #[c_export]
 pub fn bch2_progress_update_iter<'t>(
@@ -399,10 +383,4 @@ pub fn bch2_progress_update_iter<'t>(
     iter:  &mut BtreeIter<'t>,
 ) -> core::ffi::c_int {
     ret_to_c(s.update(&unsafe { trans.attempt_in_progress() }, iter))
-}
-
-/// bch2_progress_update_count().
-#[c_export]
-pub fn bch2_progress_update_count(c: &Opaque<Fs>, s: &c::progress_indicator) {
-    s.update_count(Fs::from_c(c))
 }

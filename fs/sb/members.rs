@@ -160,17 +160,6 @@ pub(crate) fn sb_member_alloc(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<u32, 
     Ok(dev)
 }
 
-/// The new member's index, or an error.
-#[c_export]
-pub fn bch2_sb_member_alloc(c: &Opaque<Fs>) -> c_int {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    match sb_member_alloc(fs, &mut unsafe { fs.sb_lock_held() }) {
-        Ok(dev) => dev as c_int,
-        Err(e)  => -e.raw(),
-    }
-}
-
 /// Deleted members' slots made free: fsck's, once nothing points to them.
 #[c_export]
 pub fn bch2_sb_members_clean_deleted(c: &Opaque<Fs>) {
@@ -623,12 +612,6 @@ pub(crate) fn dev_to_text_short(out: &mut Printbuf, sb: &c::bch_sb, dev: u32) {
     member_to_text_short(out, &sb_member(sb, dev).unwrap_or_default(), sb, dev);
 }
 
-#[c_export]
-pub fn bch2_member_to_text_short(out: &mut Printbuf, c: &Opaque<Fs>, ca: &Dev) {
-    let fs = Fs::from_c(c);
-    dev_to_text_short(out, fs.sb_lock().sb(), ca.dev_idx.into());
-}
-
 /// Each of @devs that's a device of @fs's, short: bch2_devs_mask_to_text_locked().
 pub(crate) fn devs_mask_to_text(out: &mut Printbuf, fs: &Fs, sb: &c::bch_sb, devs: &c::bch_devs_mask) {
     for dev in devs.d.iter() {
@@ -681,13 +664,6 @@ fn failure_domain_id(sb: &c::bch_sb, dev: u32, m: &c::bch_member) -> u16 {
     }
     (0..=dev).find(|&i| sb_member(sb, i).unwrap_or_default().failure_domain == m.failure_domain)
         .map_or(0, |i| i as u16 + 1)
-}
-
-#[c_export]
-pub fn bch2_sb_members_to_cpu(c: &Opaque<Fs>) {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    let _ = c::bch_sb_field_members_v2::to_cpu(fs, &mut unsafe { fs.sb_lock_held() });
 }
 
 impl Fs {
@@ -745,23 +721,6 @@ pub(crate) fn mi_field_upgrades(sb: &mut SbLockGuard<'_>, dev: u32, id: &c::bch_
         dirty = true;
     }
     dirty
-}
-
-/// @w, the caller's superblock write, is dirtied if anything changed.
-#[c_export]
-pub fn bch2_dev_mi_field_upgrades_locked(c: &Opaque<Fs>, ca: &Dev,
-                                         id: &c::bch_dev_identity, w: &mut c::sb_write) {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock, with its CLASS(sb_write)
-    let mut w = unsafe { SbWrite::from_c(fs, w) };
-    if mi_field_upgrades(&mut w, ca.dev_idx.into(), id) {
-        w.dirty();
-    }
-}
-
-#[c_export]
-pub fn bch2_dev_mi_field_read(ca: &Dev, id: &mut c::bch_dev_identity) {
-    *id = ca.identity();
 }
 
 #[c_export]
@@ -1461,27 +1420,6 @@ impl Drop for DevOuterRef {
     fn drop(&mut self) {
         // SAFETY: our ref, put once
         unsafe { (*self.0).ref_outer.dec() }
-    }
-}
-
-/// bch2_dev_get_outer(), for C: an outer ref, as Dev::outer_ref().
-///
-/// # Safety
-/// @ca is live - a ref held on it, or in hand under RCU.
-#[c_export]
-pub unsafe fn bch2_dev_get_outer(ca: *mut Dev) {
-    unsafe { (*ca).ref_outer.inc() }
-}
-
-/// bch2_dev_put_outer(), for C: an outer ref put, as DevOuterRef's drop - of
-/// nothing, for NULL or an error pointer.
-///
-/// # Safety
-/// @ca holds an outer ref, which this puts.
-#[c_export]
-pub unsafe fn bch2_dev_put_outer(ca: *mut Dev) {
-    if !ca.is_null() && ca.addr() < (-4095isize) as usize {
-        unsafe { (*ca).ref_outer.dec() }
     }
 }
 

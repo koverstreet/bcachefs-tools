@@ -493,14 +493,6 @@ impl BkeyOps for c::ReflinkV {
 /*
  * Currently disabled, needs to be debugged:
  */
-#[cfg(any())]
-#[c_export]
-pub fn bch2_reflink_v_merge(c: &Opaque<Fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
-    l.as_sc().arm::<Indirect>().expect("a reflink_v").refcount() ==
-        r.arm::<Indirect>().expect("a reflink_v").refcount() &&
-        crate::data::extents::extent_merge(Fs::from_c(c), l, r)
-}
-
 // ── indirect inline data ─────────────────────────────────────────────────
 
 #[cold]
@@ -1053,25 +1045,5 @@ pub fn remap_range(
     match dst_done {
         0 => ret.and(ret2).map(|()| 0),
         n => Ok(n),
-    }
-}
-
-#[c_export]
-#[allow(clippy::too_many_arguments)]
-pub fn bch2_remap_range(
-    c:                           &Opaque<Fs>,
-    dst_inum:                    c::subvol_inum,
-    dst_offset:                  u64,
-    src_inum:                    c::subvol_inum,
-    src_offset:                  u64,
-    remap_sectors:               u64,
-    new_i_size:                  u64,
-    i_sectors_delta:             &mut i64,
-    may_change_src_io_path_opts: bool,
-) -> i64 {
-    match remap_range(Fs::from_c(c), dst_inum, dst_offset, src_inum, src_offset, remap_sectors,
-                      new_i_size, i_sectors_delta, may_change_src_io_path_opts) {
-        Ok(done) => done as i64,
-        Err(e)   => -(e.raw() as i64),
     }
 }

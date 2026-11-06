@@ -16,7 +16,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::Dev;
 use crate::accounting::DiskAccountingPos;
 use crate::alloc::accounting_mem::{self, MarkWrite};
 use crate::btree::bkey::{BkeySC, BkeyV};
@@ -33,7 +32,7 @@ use crate::util::rcu::read_lock;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::data_structures::strided::StridedBuf;
-use crate::util::vstructs::{bytes_of, bytes_of_mut, from_ffi, from_ffi_mut, Head, Unsized, Unvalidated,
+use crate::util::vstructs::{bytes_of, bytes_of_mut, from_ffi, Head, Unsized, Unvalidated,
                             Validated};
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_uint};
@@ -161,37 +160,6 @@ impl Entry {
     pub(crate) fn validate(&self, dev_ok: impl Fn(u8) -> bool, err: &mut Printbuf) -> Result<(), BchError> {
         SbEntry::from(self).validate(dev_ok, err)
     }
-}
-
-/// # Safety
-/// @e is an entry, as long as its nr_devs says.
-#[c_export]
-pub unsafe fn bch2_replicas_entry_to_text(out: &mut Printbuf, e: *const Head<c::bch_replicas_entry_v1>) {
-    // SAFETY: the caller's
-    unsafe { from_ffi::<Entry>(e) }.to_text(out)
-}
-
-/// Against the devices the filesystem has.
-///
-/// # Safety
-/// @e is an entry, as long as its nr_devs says.
-#[c_export]
-pub unsafe fn bch2_replicas_entry_validate(e: *const Head<c::bch_replicas_entry_v1>, c: &Opaque<Fs>,
-                                           err: &mut Printbuf) -> c_int {
-    let fs = Fs::from_c(c);
-    // SAFETY: the caller's
-    let e = unsafe { from_ffi::<Entry>(e) };
-    ret_to_c(e.validate(|d| fs.dev_exists(d.into()), err))
-}
-
-/// Its devices in order.
-///
-/// # Safety
-/// @e is an entry, as long as its nr_devs says.
-#[c_export]
-pub unsafe fn bch2_replicas_entry_sort(e: *mut Head<c::bch_replicas_entry_v1>) {
-    // SAFETY: the caller's
-    unsafe { from_ffi_mut::<Entry>(e) }.devs.sort_unstable();
 }
 
 /// An entry with room for a key's worth of devices, in bytes: EntryBuf's, and
@@ -381,11 +349,6 @@ impl<S: SbState> c::bch_sb<S> {
     }
 }
 
-#[c_export]
-pub fn bch2_dev_has_data(_c: &Opaque<Fs>, ca: &Dev) -> c_uint {
-    ca.has_data()
-}
-
 // ── Can we read, can we write ────────────────────────────────────────────
 
 /// Whether data that @e lists can be read with @devs: none of its devices
@@ -427,16 +390,6 @@ pub(crate) fn can_read_with_devs(e: &Entry, devs: &c::bch_devs_mask, flags: u32,
         return false;
     }
     true
-}
-
-/// # Safety
-/// @e is an entry, as long as its nr_devs says.
-#[c_export]
-pub unsafe fn bch2_can_read_replicas_with_devs(_c: &Opaque<Fs>, devs: &c::bch_devs_mask,
-                                               e: *const Head<c::bch_replicas_entry_v1>, flags: c_uint,
-                                               err: Option<&mut Printbuf>) -> bool {
-    // SAFETY: the caller's
-    can_read_with_devs(unsafe { from_ffi::<Entry>(e) }, devs, flags, err)
 }
 
 /// Whether the filesystem can write with @devs - at start, the rw set; for a
@@ -498,12 +451,6 @@ pub(crate) fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::bc
     want(j, c::BCH_FORCE_IF_METADATA_DEGRADED, "journal", journal_replicas, err) &&
     want(b, c::BCH_FORCE_IF_METADATA_DEGRADED, "btree", opts.metadata_replicas.get(), err) &&
     want(u, c::BCH_FORCE_IF_DATA_DEGRADED, "user data", opts.data_replicas.get(), err)
-}
-
-#[c_export]
-pub fn bch2_can_write_fs_with_devs(c: &Opaque<Fs>, devs: c::bch_devs_mask, check: c::bch_write_check,
-                                   flags: c_uint, err: &mut Printbuf) -> bool {
-    can_write_with_devs(Fs::from_c(c), &devs, check, flags, err)
 }
 
 // ── In memory: c->replicas ───────────────────────────────────────────────
@@ -978,22 +925,6 @@ impl Fs {
 /// # Safety
 /// @e is an entry, as long as its nr_devs says.
 #[c_export]
-pub unsafe fn bch2_replicas_marked(c: &Opaque<Fs>, e: *const Head<c::bch_replicas_entry_v1>) -> bool {
-    // SAFETY: the caller's
-    Fs::from_c(c).replicas_marked(unsafe { from_ffi(e) })
-}
-
-/// # Safety
-/// @e is an entry, as long as its nr_devs says.
-#[c_export]
-pub unsafe fn bch2_mark_replicas(c: &Opaque<Fs>, e: *const Head<c::bch_replicas_entry_v1>) -> c_int {
-    // SAFETY: the caller's
-    ret_to_c(Fs::from_c(c).mark_replicas(unsafe { from_ffi(e) }))
-}
-
-/// # Safety
-/// @e is an entry, as long as its nr_devs says.
-#[c_export]
 pub unsafe fn bch2_replicas_entry_get(c: &Opaque<Fs>, e: *const Head<c::bch_replicas_entry_v1>) -> c_int {
     // SAFETY: the caller's
     ret_to_c(Fs::from_c(c).replicas_entry_get(unsafe { from_ffi(e) }))
@@ -1017,22 +948,6 @@ impl Fs {
             None => warn(self, format_args!("replicas entry not found in sb: {e}")),
         }
     }
-}
-
-#[c_export]
-pub fn bch2_replicas_gc_reffed(c: &Opaque<Fs>) -> c_int {
-    ret_to_c(Fs::from_c(c).replicas_gc_reffed())
-}
-
-#[c_export]
-pub fn bch2_replicas_gc_accounted(c: &Opaque<Fs>) -> c_int {
-    ret_to_c(Fs::from_c(c).replicas_gc_accounted())
-}
-
-#[c_export]
-pub fn bch2_can_read_fs_with_devs(c: &Opaque<Fs>, devs: &c::bch_devs_mask, flags: c_uint,
-                                  err: Option<&mut Printbuf>) -> bool {
-    Fs::from_c(c).can_read_fs_with_devs(devs, flags, err)
 }
 
 impl Fs {

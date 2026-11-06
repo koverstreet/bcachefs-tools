@@ -35,11 +35,11 @@ use crate::alloc::background::{FREESPACE_GENBITS_NR, FREESPACE_GENBITS_SHIFT, al
 use crate::alloc::check::{check_freespace_key, FreespaceCheck};
 use crate::alloc::foreground::OpenBucket;
 use crate::btree::bkey::pos;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::copygc::{can_make_progress, dev_wait_amount};
-use crate::errcode::{err_ptr, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::opts::data_type_str;
 use crate::debug::trace::events;
@@ -48,7 +48,6 @@ use crate::util::kernel::{unlikely, WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::time_stats::TimeStats;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::c_export;
 
 use c::alloc_btree_bitmap::{BTREE_BITMAP_ANY, BTREE_BITMAP_NO, BTREE_BITMAP_YES};
 use crate::format::{Bpos, Btree, DataType};
@@ -549,22 +548,5 @@ impl TransAttempt<'_, '_> {
 
         req.trace_add(ca.dev_idx, ret.as_ref().err().copied(), wake_counter_snapshot, avail, copygc_can_make_progress);
         ret
-    }
-}
-
-/// For C: @req.ca the device.
-///
-/// # Safety
-/// @trans is in an attempt; @req.ca is a device the caller holds a ref on.
-#[c_export]
-pub unsafe fn bch2_bucket_alloc_trans(trans: &BtreeTrans<'_>, req: &mut c::alloc_request) -> *mut c::open_bucket {
-    // SAFETY: the caller's
-    let (t, ca) = unsafe { (trans.attempt_in_progress(), req.ca.as_ref().expect("a device to allocate on")) };
-    match t.bucket_alloc(req, ca) {
-        Ok(ob) => {
-            let idx = ob.into_idx();
-            core::ptr::from_ref(&t.fs().allocator.open_buckets[idx.get()]).cast_mut()
-        }
-        Err(e) => err_ptr(e),
     }
 }

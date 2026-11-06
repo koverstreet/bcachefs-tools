@@ -1,6 +1,6 @@
 #![allow(non_camel_case_types)]
 
-use core::ffi::{CStr, c_int, c_uint, c_ulong};
+use core::ffi::{CStr, c_int, c_uint};
 use core::fmt::{self, Write as _};
 use core::ops::{Deref, DerefMut};
 use crate::c;
@@ -939,18 +939,6 @@ pub unsafe fn bch2_prt_bytes_indented(out: &mut Printbuf, str: *const c_char, co
     out.write_bytes_indented(unsafe { core::slice::from_raw_parts(str.cast(), count as usize) })
 }
 
-#[c_export]
-pub fn bch2_prt_human_readable_s64(out: &mut Printbuf, v: i64) {
-    out.write_bytes(if v < 0 { b"-" } else { b"" });
-    out.human_readable_u64(v.unsigned_abs())
-}
-
-#[c_export]
-pub fn bch2_prt_units_s64(out: &mut Printbuf, v: i64) {
-    out.write_bytes(if v < 0 { b"-" } else { b"" });
-    out.units_u64(v.unsigned_abs())
-}
-
 /// # Safety
 /// @list is NULL-terminated.
 #[c_export]
@@ -968,15 +956,6 @@ pub unsafe fn bch2_prt_string_option(out: &mut Printbuf, list: *const *const c_c
 #[c_export]
 pub unsafe fn bch2_prt_bitflags(out: &mut Printbuf, list: *const *const c_char, flags: u64) {
     unsafe { out.prt_bitflags(list, flags) }
-}
-
-/// # Safety
-/// @list is NULL-terminated, and @v @nr bits.
-#[c_export]
-pub unsafe fn bch2_prt_bitflags_vector(out: &mut Printbuf, list: *const *const c_char, v: *mut c_ulong, nr: c_uint) {
-    let bits = c_ulong::BITS as usize;
-    out.set_names(unsafe { c_strs(list) }.take(nr as usize).map(CStr::to_bytes),
-                  |i| unsafe { *v.add(i / bits) } >> (i % bits) & 1 != 0);
 }
 
 /// @bdev's name: as the kernel's %pg prints it, its disk's and partition's;

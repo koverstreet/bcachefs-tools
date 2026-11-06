@@ -324,11 +324,6 @@ pub fn bkey_swab_val(fs: Option<&Fs>, k: BkeyS<'_>) {
     (k.k.key_type().ops().swab)(fs, k)
 }
 
-#[c_export]
-pub fn bch2_bkey_swab_val(c: Option<&Fs>, k: BkeyS<'_>) {
-    bkey_swab_val(c, k)
-}
-
 /// @r might be merged into @l - the same type and version, @r starting where
 /// @l ends.
 #[c_export]

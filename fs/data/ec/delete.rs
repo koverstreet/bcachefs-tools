@@ -11,10 +11,8 @@ use crate::data::ec::stripe::STRIPE_LRU_POS_EMPTY;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::debug::trace::events;
-use crate::util::ffi::Opaque;
 use crate::util::place::Contained;
 use crate::{btree_trans, fs_inconsistent, prt};
-use cstruct_macros::c_export;
 use crate::format::Btree;
 
 // ── Stripe deletion ──────────────────────────────────────────────────────
@@ -78,9 +76,4 @@ impl Fs {
     pub fn do_stripe_deletes(&self) {
         self.ec.stripe_delete_work.queue(self.write_ref_wq());
     }
-}
-
-#[c_export]
-pub fn bch2_do_stripe_deletes(c: &Opaque<Fs>) {
-    Fs::from_c(c).do_stripe_deletes()
 }

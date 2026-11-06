@@ -652,11 +652,3 @@ pub fn bch2_write_inode(_c: &Opaque<Fs>, inode: &c::bch_inode_info, set: c::inod
     }).map(|_| ()))
 }
 
-#[must_use]
-#[c_export]
-pub fn bch2_write_inode_size(_c: &Opaque<Fs>, inode: &c::bch_inode_info, new_size: c::loff_t,
-                             fields: c_uint) -> c_int {
-    // every C caller holds @inode's ei_update_lock
-    ret_to_c(unsafe { UpdateLock::held(inode) }.write_size(new_size as u64, fields))
-}
-

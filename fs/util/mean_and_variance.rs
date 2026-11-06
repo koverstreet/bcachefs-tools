@@ -12,7 +12,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
-use cstruct_macros::{c_export, CStruct};
+use cstruct_macros::CStruct;
 
 /*
  * Streaming median + MAD (median absolute deviation), via a
@@ -113,31 +113,6 @@ impl c::mean_and_variance {
 }
 
 // ── For C ────────────────────────────────────────────────────────────────
-
-#[c_export]
-pub fn mean_and_variance_update(s: &mut c::mean_and_variance, x: i64, weight: u8) {
-    s.update(x, weight)
-}
-
-#[c_export]
-pub fn mean_and_variance_get_mean(s: c::mean_and_variance) -> i64 {
-    s.mean()
-}
-
-#[c_export]
-pub fn mean_and_variance_get_median(s: c::mean_and_variance) -> i64 {
-    s.median()
-}
-
-#[c_export]
-pub fn mean_and_variance_get_mad(s: c::mean_and_variance) -> u64 {
-    s.mad()
-}
-
-#[c_export]
-pub fn mean_and_variance_get_stddev(s: c::mean_and_variance) -> u32 {
-    s.stddev()
-}
 
 #[cfg(test)]
 mod tests {

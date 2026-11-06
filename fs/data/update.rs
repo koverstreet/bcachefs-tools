@@ -50,7 +50,7 @@ use core::ffi::{c_int, c_uint, CStr};
 use pin_init::stack_pin_init;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{c_export, c_extern, CStruct, bitfield, c_enum, c_xmacro};
+use cstruct_macros::{c_extern, CStruct, bitfield, c_enum, c_xmacro};
 use c::bch_data_update_types as Type;
 use crate::types::c_default;
 use core::sync::atomic::AtomicBool;
@@ -183,11 +183,6 @@ pub fn fail_should_trace(type_: Type, e: BchError) -> bool {
       (e.matches(bch_errcode::BCH_ERR_ec_alloc_failed) &&
        !e.matches(bch_errcode::BCH_ERR_ec_alloc_failed_transient)) ||
       parks)
-}
-
-#[c_export]
-pub fn bch2_data_update_fail_should_trace(type_: c::bch_data_update_types, ret: c_int) -> bool {
-    ret_to_result_void(ret).err().is_none_or(|e| fail_should_trace(type_, e))
 }
 
 // ── In flight ────────────────────────────────────────────────────────────

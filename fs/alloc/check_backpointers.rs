@@ -40,7 +40,7 @@ use crate::c;
 use crate::data::extents::Extents;
 use crate::data::ptrs::{crc_is_compressed, extents_match, BkeyVPtrs, Ptrs};
 use crate::data::reflink::make_extent_indirect;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::damage;
 use crate::init::error::id;
@@ -52,10 +52,8 @@ use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg, Ratelimit};
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::{Printbuf, ToText};
 use crate::{fsck_err, inode_fsck_err, prt};
-use core::ffi::c_int;
 use core::ops::{ControlFlow, RangeInclusive};
 use core::sync::atomic::Ordering;
-use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree, DataType, ErrorKeyReason, BkeyType};
 
 // ── fsck: check_btree_backpointers ───────────────────────────────────────
@@ -586,16 +584,6 @@ pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: 
     Ok(())
 }
 
-/// # Safety
-/// @trans isn't in an attempt; @last_flushed is the caller's.
-#[c_export]
-pub unsafe fn bch2_check_bucket_backpointer_mismatch<'t>(trans: &'t BtreeTrans<'t>, ca: &Dev,
-                                                         bucket: u64, copygc: bool,
-                                                         last_flushed: *mut c::wb_maybe_flush) -> c_int {
-    let last_flushed = unsafe { WbFlush::from_raw(last_flushed) }.expect("a wb_maybe_flush");
-    ret_to_c(check_one_bucket_backpointer_mismatch(trans, ca, bucket, copygc, last_flushed))
-}
-
 struct ExtentsToBpState {
     bp_range:     RangeInclusive<Bpos>,
     last_flushed: WbMaybeFlush,
@@ -1044,9 +1032,4 @@ impl c::bucket_bitmap {
         w.buckets.clear();
         w.nr.set(0);
     }
-}
-
-#[c_export]
-pub fn bch2_bucket_bitmap_free(b: &c::bucket_bitmap) {
-    b.free()
 }

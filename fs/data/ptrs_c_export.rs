@@ -13,15 +13,6 @@ use core::ffi::{c_int, c_uint};
 use core::mem::MaybeUninit;
 use cstruct_macros::c_export;
 
-// ── bkey methods ─────────────────────────────────────────────────────────
-
-/// For C, which may or may not be in a read-side section: this takes its own.
-#[cold]
-#[c_export]
-pub fn bch2_extent_ptr_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, ptr: &c::bch_extent_ptr) {
-    extent_ptr_to_text(out, c.map(Fs::from_c), ptr, &read_lock());
-}
-
 // ── queries ──────────────────────────────────────────────────────────────
 
 #[c_export]
@@ -34,11 +25,6 @@ pub fn bch2_bkey_has_device_c(c: &Fs, k: BkeySC<'_>, dev: c_uint) -> *const c::b
 #[c_export]
 pub fn bch2_bkey_devs_rw(c: &Opaque<Fs>, k: BkeySC<'_>) -> bool {
     k.arm::<Ptrs>().is_none_or(|k| k.devs_rw(Fs::from_c(c)))
-}
-
-#[c_export]
-pub fn bch2_bkey_has_target(c: &Opaque<Fs>, k: BkeySC<'_>, target: c_uint) -> bool {
-    k.arm::<Ptrs>().is_some_and(|k| k.has_target(Fs::from_c(c), Target::decode(target)))
 }
 
 #[c_export]

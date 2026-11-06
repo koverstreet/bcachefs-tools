@@ -321,13 +321,3 @@ impl InodeInfo {
         ret
     }
 }
-
-/// For C's truncate, until it's Rust.
-///
-/// # Safety
-/// @idmap is the mount's, for the call.
-#[c_export]
-pub unsafe fn bch2_setattr_nonsize(idmap: *mut c::mnt_idmap, inode: &c::bch_inode_info,
-                                   attr: &c::iattr) -> c_int {
-    ret_to_c(inode.setattr_nonsize(unsafe { MntIdmap::borrow_raw(idmap) }, Iattr::of(attr)))
-}

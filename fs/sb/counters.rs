@@ -14,8 +14,7 @@
 
 #![allow(non_camel_case_types)]
 
-use core::ffi::c_int;
-use cstruct_macros::{c_export, CStruct, c_const, TypeInfo};
+use cstruct_macros::{CStruct, c_const, TypeInfo};
 use crate::c;
 use crate::debug::trace::{events, TraceEvent};
 use crate::errcode::BchError;
@@ -24,7 +23,6 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::prt;
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::types::{Le64, c_default};
-use crate::util::ffi::Opaque;
 use crate::util::kernel::{nsecs_to_jiffies, NSEC_PER_SEC};
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
@@ -283,12 +281,6 @@ pub fn counters_init(fs: &Fs) {
         // SAFETY: filesystem init, before anything reads them
         unsafe { (*ctrs).mount[i] = d.get(ctr.stable_id as usize).map_or(0, |v| v.get()) };
     }
-}
-
-#[c_export]
-pub fn bch2_fs_counters_init_late(c: &Opaque<Fs>) -> c_int {
-    RecentCounters::queue(Fs::from_c(c));
-    0
 }
 
 // ── BCH_IOCTL_QUERY_COUNTERS ─────────────────────────────────────────────────

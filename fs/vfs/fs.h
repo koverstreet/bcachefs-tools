@@ -108,7 +108,6 @@ struct bch_inode_info *
 __bch2_create(struct mnt_idmap *, struct bch_inode_info *,
 	      struct dentry *, umode_t, dev_t, subvol_inum, unsigned);
 
-#include "vfs/attr_gen.h"
 #include "vfs/dir_gen.h"
 #include "vfs/file_gen.h"
 #include "vfs/inode_gen.h"

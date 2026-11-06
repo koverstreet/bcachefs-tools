@@ -708,12 +708,3 @@ pub unsafe fn bch2_jset_validate(c: &Opaque<Fs>, ca: *mut Dev, jset: *mut Head<c
     let bytes = unsafe { core::slice::from_raw_parts_mut(jset.cast::<u8>(), (*jset).bytes()) };
     jset_ret(jset_validate(Fs::from_c(c), unsafe { ca.as_ref() }, bytes, sector, flags))
 }
-
-/// # Safety
-/// @jset is a jset's header.
-#[c_export]
-pub unsafe fn bch2_jset_validate_early(c: &Opaque<Fs>, ca: *mut Dev, jset: *mut Head<c::jset>,
-                                       sector: u64, bucket_sectors_left: c_uint) -> c_int {
-    jset_ret(jset_validate_early(Fs::from_c(c), unsafe { ca.as_ref() }, unsafe { &mut *jset },
-                                 sector, bucket_sectors_left))
-}

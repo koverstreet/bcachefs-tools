@@ -57,7 +57,6 @@ use core::future::Future;
 use core::mem::size_of;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::c_export;
 pub use crate::sb::members::DevRef;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::c_extern;
@@ -1237,12 +1236,6 @@ impl Fs {
             }
         }
     }
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_missing_devs_to_text(out: &mut Printbuf, c: &Fs) {
-    c.missing_devs_to_text(out)
 }
 
 /// While one is held, the filesystem can't finish going read-only

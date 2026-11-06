@@ -220,23 +220,10 @@ impl Fs {
     }
 }
 
-#[c_export]
-pub fn bch2_dev_allocator_remove(c: &Opaque<Fs>, ca: &Dev) {
-    Fs::from_c(c).dev_allocator_remove(ca)
-}
-
 impl crate::fs::StateLockWrite<'_> {
     pub fn dev_allocator_add(&self, ca: &Dev) {
         dev_allocator_set_rw(self.fs(), ca, true);
     }
-}
-
-/// @ca going read-write: into rw_devs[].
-#[c_export]
-pub fn bch2_dev_allocator_add(c: &Opaque<Fs>, ca: &Dev) {
-    let fs = Fs::from_c(c);
-    fs.state_lock.assert_held_any();
-    dev_allocator_set_rw(fs, ca, true);
 }
 
 // ── Usage ────────────────────────────────────────────────────────────────

@@ -1024,14 +1024,6 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_trans_mark_metadata_bucket<'t>(trans: &'t BtreeTrans<'t>, ca: &Dev, b: u64,
-                                           data_type: DataType, sectors: c_uint,
-                                           flags: c::btree_iter_update_trigger_flags) -> c_int {
-    ret_to_c(trans_mark_metadata_bucket(trans, ca, b, data_type, sectors,
-                                        UpdateTriggerFlags::from_bits_retain(flags.bits())))
-}
-
-#[c_export]
 pub fn bch2_trans_mark_dev_sbs_flags(c: &Opaque<Fs>, flags: c::btree_iter_update_trigger_flags) -> c_int {
     ret_to_c(Fs::from_c(c).trans_mark_dev_sbs(UpdateTriggerFlags::from_bits_retain(flags.bits())))
 }
@@ -1109,18 +1101,6 @@ impl Dev {
         }
         self.usage.free();
     }
-}
-
-/// @ca is being set up: nothing else has it yet.
-#[c_export]
-pub fn bch2_dev_buckets_alloc(_c: &Opaque<Fs>, ca: &mut Dev) -> c_int {
-    ret_to_c(ca.buckets_alloc())
-}
-
-/// @ca is being freed: nothing else has it any more.
-#[c_export]
-pub fn bch2_dev_buckets_free(ca: &mut Dev) {
-    ca.buckets_free()
 }
 
 // ── Usage ────────────────────────────────────────────────────────────────

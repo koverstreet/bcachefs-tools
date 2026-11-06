@@ -1188,11 +1188,6 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
     Ok(())
 }
 
-#[c_export]
-pub fn bch2_journal_keys_sort(c: &Opaque<Fs>) -> c_int {
-    ret_to_c(keys_sort(Fs::from_c(c)))
-}
-
 /// The last ref's put: the keys freed, and the journal entries they're read
 /// from.
 #[pinned_drop]

@@ -157,7 +157,7 @@ use core::sync::atomic::AtomicPtr;
 use crate::util::bio::{Bio, BioBox, BioOwner};
 use crate::util::gather::Gather;
 use crate::util::task::waiter;
-use crate::util::ffi::{c_char, Opaque};
+use crate::util::ffi::Opaque;
 use crate::util::kernel::NSEC_PER_SEC;
 use crate::util::time_stats::TimeStats;
 use cstruct_macros::{c_const, c_export, CStruct, TypeInfo, c_enum};
@@ -717,11 +717,6 @@ impl ToText for c::bcachefs_metadata_version {
 }
 crate::display_via_to_text!(c::bcachefs_metadata_version);
 
-#[c_export]
-pub fn bch2_version_to_text(out: &mut Printbuf, v: c::bcachefs_metadata_version) {
-    v.to_text(out)
-}
-
 impl Fs {
     /// Whether features of @version may be used, without asking:
     /// bch2_incompat_feature_allowed().
@@ -1262,11 +1257,6 @@ impl Drop for bch_sb_handle {
     }
 }
 
-#[c_export]
-pub fn bch2_free_super(sb: &mut c::bch_sb_handle) {
-    sb.free();
-}
-
 // ── Reading a device's superblock ────────────────────────────────────────
 
 impl c::bch_sb_io {
@@ -1633,18 +1623,6 @@ pub fn read_super(path: &CStr, opts: &mut c::bch_opts, holder: Option<&Arc<Holde
 /// read_super(), printing nothing: for mount.bcachefs.
 pub fn read_super_silent(path: &CStr, opts: &mut c::bch_opts) -> Result<bch_sb_handle, BchError> {
     read_super_err(path, opts, None, &mut Printbuf::new())
-}
-
-/// read_super() for a device of @c's: device add and online.
-///
-/// # Safety
-/// @path is a C string; @sb holds nothing, and is written over.
-#[c_export]
-pub unsafe fn bch2_read_super(c: &Opaque<Fs>, path: *const c_char, opts: &mut c::bch_opts,
-                              sb: *mut c::bch_sb_handle) -> c_int {
-    let holder = Fs::from_c(c).holder();
-    // SAFETY: the caller's
-    ret_to_c(read_super(unsafe { CStr::from_ptr(path.cast()) }, opts, Some(holder)).map(|h| unsafe { sb.write(h) }))
 }
 
 /// What the block layer is told claims a device: one per open, a ref held by

@@ -136,17 +136,6 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
     ret
 }
 
-/// # Safety
-/// @trans is in an attempt, @iter in it.
-#[c_export]
-pub unsafe fn bch2_extent_fallocate<'t>(trans: &'t BtreeTrans<'t>, inum: c::subvol_inum, iter: &mut BtreeIter<'t>,
-                                        sectors: u64, opts: c::bch_inode_opts, i_sectors_delta: &mut i64,
-                                        write_point: c::write_point_specifier) -> c_int {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(extent_fallocate(&t, inum, iter, sectors, &opts, i_sectors_delta, write_point))
-}
-
 // ── fpunch ───────────────────────────────────────────────────────────────
 
 /// For fsck: delete the extents from @start to @end in @start's snapshot, in a
@@ -225,19 +214,6 @@ pub fn fpunch_at<'t>(
             Err(e)                   => return Err(e),
         }
     }
-}
-
-/// # Safety
-/// @i_sectors_delta is NULL, or valid for the call.
-#[c_export]
-pub unsafe extern "C" fn bch2_fpunch_at<'t>(
-    trans:           &'t BtreeTrans<'t>,
-    iter:            &mut BtreeIter<'t>,
-    inum:            c::subvol_inum,
-    end:             u64,
-    i_sectors_delta: *mut i64,
-) -> c_int {
-    ret_to_c(fpunch_at(trans, iter, inum, end, unsafe { i_sectors_delta.as_mut() }))
 }
 
 /// Delete @inum's extents from @start to @end.
@@ -343,21 +319,6 @@ pub fn truncate(fs: &Fs, inum: c::subvol_inum, new_i_size: u64, i_sectors_delta:
     commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| logged_ops::start(t, op.as_mut()))?;
     let ret = __resume_truncate(&trans, &op, Some(i_sectors_delta));
     logged_ops::finish(&trans, op.as_ref(), ret, CommitOpts::new())
-}
-
-/// C's i_sectors_delta is a u64 * here, where it's an s64 * everywhere else,
-/// fpunch_at() included: the same delta.
-///
-/// # Safety
-/// @i_sectors_delta is valid for the call.
-#[c_export]
-pub unsafe extern "C" fn bch2_truncate(
-    c:               &Opaque<Fs>,
-    inum:            c::subvol_inum,
-    new_i_size:      u64,
-    i_sectors_delta: *mut u64,
-) -> c_int {
-    ret_to_c(truncate(Fs::from_c(c), inum, new_i_size, unsafe { &mut *i_sectors_delta.cast() }))
 }
 
 // ── finsert/fcollapse ────────────────────────────────────────────────────
@@ -644,18 +605,4 @@ pub fn fcollapse_finsert(
     commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| logged_ops::start(t, op.as_mut()))?;
     let ret = __resume_finsert(&trans, &mut op, Some(i_sectors_delta));
     logged_ops::finish(&trans, op.as_ref(), ret, CommitOpts::new())
-}
-
-/// # Safety
-/// @i_sectors_delta is valid for the call.
-#[c_export]
-pub unsafe extern "C" fn bch2_fcollapse_finsert(
-    c:               &Opaque<Fs>,
-    inum:            c::subvol_inum,
-    offset:          u64,
-    len:             u64,
-    insert:          bool,
-    i_sectors_delta: *mut i64,
-) -> c_int {
-    ret_to_c(fcollapse_finsert(Fs::from_c(c), inum, offset, len, insert, unsafe { &mut *i_sectors_delta }))
 }

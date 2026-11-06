@@ -12,7 +12,7 @@ use crate::btree::node::BtreeNode;
 use crate::btree::path::{btree_path_poison, BtreePath, NodePtr, PathIdx, PathNode, PathSnapshot, Paths};
 use crate::c;
 use crate::debug::params::debug_check_btree_locking;
-use crate::errcode::{bch_errcode, errptr_or_null, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::locking::six::{__six_lock_init, six_lock_contended, six_lock_counts, six_lock_ip_waiter, SixHold};
@@ -1184,16 +1184,6 @@ pub unsafe fn bch2_btree_lock_init(b: *mut c::btree_bkey_cached_common, flags: c
     }
 }
 
-#[c_export]
-pub fn bch2_btree_node_lock_counts(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &Paths<'_>, skip: *const BtreePath,
-                                   b: *const c::btree_bkey_cached_common, level: c_uint) -> c::six_lock_count {
-    let skip = (!skip.is_null()).then(|| trans.path_idx_of(skip));
-    match errptr_or_null(b.cast_mut()) {
-        Ok(Some(b)) => trans.node_lock_counts(paths, skip, b, level as usize),
-        _           => c::six_lock_count::default(),
-    }
-}
-
 /// # Safety
 /// @b is a path level's: a struct btree, or a cached path's bkey_cached.
 #[c_export]
@@ -1252,12 +1242,6 @@ pub fn __bch2_btree_node_relock(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &m
 }
 
 #[c_export]
-pub fn bch2_btree_node_upgrade(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: *mut BtreePath,
-                               level: c_uint) -> bool {
-    trans.node_upgrade(paths, trans.path_idx_of(path), level as usize)
-}
-
-#[c_export]
 pub fn bch2_btree_path_relock_norestart(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
                                         path: *mut BtreePath) -> bool {
     trans.path_relock_norestart(paths, trans.path_idx_of(path))
@@ -1296,11 +1280,6 @@ pub fn bch2_trans_downgrade(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut P
 #[c_export]
 pub fn __bch2_trans_relock(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, trace: bool) -> c_int {
     ret_to_c(trans.relock_traced(paths, trace))
-}
-
-#[c_export]
-pub fn bch2_trans_relock_notrace(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) -> c_int {
-    ret_to_c(trans.relock_traced(paths, false))
 }
 
 #[c_export]

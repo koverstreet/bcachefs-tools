@@ -453,14 +453,3 @@ pub unsafe fn bch2_bkey_set_needs_reconcile(trans: &BtreeTrans<'_>, s: Option<&m
     let mut k = unsafe { TransBkey::from_raw_room(&t, core::ptr::from_mut(k.k).cast(), buf_u64s) };
     ret_to_c(k.set_needs_reconcile(&t, s, opts, ctx, opt_change_cookie))
 }
-
-/// # Safety
-/// C has an attempt in progress on @trans, @iter one of its iterators.
-#[c_export]
-pub unsafe fn bch2_update_reconcile_opts(trans: &BtreeTrans<'_>, s: Option<&mut c::per_snapshot_io_opts>,
-                                         opts: &c::bch_inode_opts, iter: &mut BtreeIter<'_>, level: c_uint,
-                                         k: BkeySC<'_>, ctx: c::set_needs_reconcile_ctx) -> c_int {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(update_reconcile_opts(&t, s, opts, iter, level, k, ctx))
-}

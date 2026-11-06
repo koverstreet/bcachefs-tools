@@ -37,7 +37,6 @@ use crate::init::passes;
 use crate::inode;
 use crate::snapshots::snapshot;
 use crate::util::alloc::KVVec;
-use crate::util::ffi::Opaque;
 use crate::util::place::Contained;
 use crate::util::Printbuf;
 use crate::util::log::{LogLevel, LogMsg};
@@ -167,11 +166,6 @@ pub fn is_ro_trans(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<u32, BchErro
 pub fn is_ro(fs: &Fs, subvol: u32) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     lockrestart_do(&trans, |t| is_ro_trans(t, subvol).map(|_| ()))
-}
-
-#[c_export]
-pub fn bch2_subvol_is_ro(c: &Opaque<Fs>, subvol: u32) -> core::ffi::c_int {
-    ret_to_c(is_ro(Fs::from_c(c), subvol))
 }
 
 /// ENOTEMPTY_subvol_not_empty if @subvol has subvolumes under it.

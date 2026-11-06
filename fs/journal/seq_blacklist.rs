@@ -217,21 +217,6 @@ pub fn bch2_journal_seq_is_blacklisted(c: &Opaque<Fs>, seq: u64, dirty: bool) ->
     Fs::from_c(c).journal_seq_is_blacklisted(seq, dirty)
 }
 
-#[c_export]
-pub fn bch2_journal_seq_next_blacklisted(c: &Opaque<Fs>, seq: u64) -> u64 {
-    Fs::from_c(c).journal_seq_blacklist.next_blacklisted(seq)
-}
-
-#[c_export]
-pub fn bch2_journal_seq_next_nonblacklisted(c: &Opaque<Fs>, seq: u64) -> u64 {
-    Fs::from_c(c).journal_seq_blacklist.next_nonblacklisted(seq)
-}
-
-#[c_export]
-pub fn bch2_journal_last_blacklisted_seq(c: &Opaque<Fs>) -> u64 {
-    Fs::from_c(c).journal_seq_blacklist.last_blacklisted()
-}
-
 /// At mount.
 pub fn blacklist_table_initialize(fs: &Fs) -> Result<(), BchError> {
     Section::to_cpu(fs, &mut fs.sb_lock())

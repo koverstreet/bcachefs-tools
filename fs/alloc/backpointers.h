@@ -12,8 +12,6 @@
 
 #include "init/error.h"
 
-struct wb_maybe_flush;
 #include "alloc/backpointers_gen.h"
-#include "alloc/check_backpointers_gen.h"
 
 #endif /* _BCACHEFS_BACKPOINTERS_BACKGROUND_H */

@@ -817,16 +817,6 @@ pub fn require(fs: &Fs, out: &mut Printbuf, pass: Pass) -> Result<(), BchError> 
 }
 
 #[c_export]
-pub fn __bch2_run_explicit_recovery_pass(c: &Opaque<Fs>, out: &mut Printbuf, pass: c::bch_recovery_pass,
-                                         flags: c::bch_run_recovery_pass_flags,
-                                         w: Option<&mut c::sb_write>) -> c_int {
-    let fs = Fs::from_c(c);
-    // SAFETY: C's - its CLASS(sb_write), under its sb_lock
-    let mut w = w.map(|w| unsafe { SbWrite::from_c(fs, w) });
-    ret_to_c(run_explicit_sb(fs, out, pass, flags, w.as_mut()))
-}
-
-#[c_export]
 pub fn bch2_run_explicit_recovery_pass(c: &Opaque<Fs>, out: &mut Printbuf, pass: c::bch_recovery_pass,
                                        flags: c::bch_run_recovery_pass_flags) -> c_int {
     ret_to_c(run_explicit(Fs::from_c(c), out, pass, flags))

@@ -20,9 +20,8 @@ use core::cmp::{Ordering, Reverse};
 use core::ffi::c_int;
 use cstruct_macros::{c_export, CStruct, bitfield, c_typedef, c_xmacro, TypeInfo};
 use crate::c;
-use crate::format::ErrorKeyReason;
 use crate::util::vstructs::Unvalidated;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::{prt, sb_err_on};
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
@@ -30,7 +29,7 @@ use crate::util::alloc::{kvvec_insert, KVVec};
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::ktime_get_real_seconds;
 use crate::util::names;
-use crate::util::{DateTime, Printbuf, ToText};
+use crate::util::{DateTime, Printbuf};
 use crate::sb::io::SbResize;
 use crate::types::DArray;
 use nestify::nest;
@@ -136,11 +135,6 @@ c_xmacro! {
 #[c("const char * const bch2_sb_error_strs[]")]
 pub static bch2_sb_error_strs: [*const c_char; names::c_table_len::<c::bch_sb_error_id>()] =
     crate::c_names_table!(c::bch_sb_error_id);
-
-#[c_export]
-pub fn bch2_sb_error_id_to_text(out: &mut Printbuf, id: c::bch_sb_error_id) {
-    id.to_text(out)
-}
 
 /// @ids by name, comma separated.
 pub fn prt_error_ids(out: &mut Printbuf, ids: impl IntoIterator<Item = c::bch_sb_error_id>) {
@@ -385,14 +379,6 @@ pub fn bch2_decompress_sb_err(err: c_int) -> c::bch_sb_error_id {
     c::BCH_DECOMPRESS_SB_ERRS!(decompress_map [err, bch_sb_error_id, BCH_FSCK_ERR_data_decompress_err_])
 }
 
-/// The same, as the reason stamped into the KEY_TYPE_error key when it's
-/// what we finally gave up on: the count says how often decompression failed
-/// this way, the key which extent it cost us.
-#[c_export]
-pub fn bch2_decompress_key_type_error(err: c_int) -> ErrorKeyReason {
-    c::BCH_DECOMPRESS_SB_ERRS!(decompress_map [err, ErrorKeyReason, decompress_])
-}
-
 // ── The counts, in memory ────────────────────────────────────────────────────
 //
 // c->errors.counts, sorted by id: read in from the superblock at mount, counted
@@ -465,11 +451,5 @@ impl Fs {
 #[c_export]
 pub fn bch2_sb_error_count(c: &Opaque<Fs>, err: c::bch_sb_error_id) {
     Fs::from_c(c).sb_error_count(err)
-}
-
-#[c_export]
-pub fn bch2_sb_errors_to_cpu(c: &Opaque<Fs>) -> c_int {
-    let fs = Fs::from_c(c);
-    ret_to_c(c::bch_sb_field_errors_v2::to_cpu(fs, &mut fs.sb_lock()))
 }
 
