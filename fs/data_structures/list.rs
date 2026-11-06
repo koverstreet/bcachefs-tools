@@ -56,6 +56,13 @@ impl ListHead {
         self.prev.set(self);
     }
 
+    /// As init(), for one never init()ed - zeroed: before its first add.
+    fn init_if_zeroed(&self) {
+        if self.next.get().is_null() {
+            self.init();
+        }
+    }
+
     /// No entries - or never init()ed, which is none either.
     fn is_empty(&self) -> bool {
         let next = self.next.get();
@@ -86,6 +93,25 @@ impl ListHead {
         }
         self.init();
     }
+
+    /// list_replace_init(): this one's entries onto @new, this one left empty.
+    ///
+    /// # Safety
+    /// Both are held, and @new has nothing on it.
+    unsafe fn replace_init(&self, new: &ListHead) {
+        if self.is_empty() {
+            new.init();
+            return;
+        }
+        let (prev, next) = (self.prev.get(), self.next.get());
+        new.next.set(next);
+        new.prev.set(prev);
+        unsafe {
+            (*next).prev.set(new);
+            (*prev).next.set(new);
+        }
+        self.init();
+    }
 }
 
 /// What a list's item embeds, to be on it.
@@ -95,6 +121,9 @@ pub struct ListLinks(ListHead);
 // SAFETY: touched only through its list, under the list's lock
 unsafe impl Send for ListLinks {}
 unsafe impl Sync for ListLinks {}
+
+// Null links are on no list: is_empty()'s never init()ed
+unsafe impl pin_init::Zeroable for ListLinks {}
 
 impl ListLinks {
     pub const fn new() -> Self {
@@ -128,11 +157,15 @@ macro_rules! list {
 // SAFETY: the thread holding it is handed &T - T: Sync
 unsafe impl<T: Sync, const OFFSET: usize> Send for List<T, OFFSET> {}
 
+// Zeroed, it's empty: see init()
+unsafe impl<T, const OFFSET: usize> pin_init::Zeroable for List<T, OFFSET> {}
+
 impl<T, const OFFSET: usize> List<T, OFFSET> {
     const FITS: () = assert!(OFFSET + size_of::<ListHead>() <= size_of::<T>(),
                              "List: links past the end of their item");
 
-    /// INIT_LIST_HEAD(): empty - from zeroed, which isn't a list yet.
+    /// INIT_LIST_HEAD(): empty, whatever was on it forgotten. A zeroed list
+    /// is empty too, and set up by its first push.
     ///
     /// # Safety
     /// It doesn't move while it has anything on it.
@@ -169,11 +202,21 @@ impl<T, const OFFSET: usize> List<T, OFFSET> {
     /// list_add_tail().
     ///
     /// # Safety
-    /// The list is init()ed. @item is on no list, and is live and doesn't move
-    /// until it's off this one and the list's lock has been released since:
-    /// its owner takes the lock before freeing it.
+    /// The list doesn't move while it has anything on it. @item is on no list,
+    /// and is live and doesn't move until it's off this one and the list's lock
+    /// has been released since: its owner takes the lock before freeing it.
     pub unsafe fn push_back(&mut self, item: &T) {
+        self.head.init_if_zeroed();
         unsafe { self.head.add_tail(Self::links(item)) }
+    }
+
+    /// list_add().
+    ///
+    /// # Safety
+    /// As push_back().
+    pub unsafe fn push_front(&mut self, item: &T) {
+        self.head.init_if_zeroed();
+        unsafe { (*self.head.next.get()).add_tail(Self::links(item)) }
     }
 
     /// Takes @item off, if it's on: whether it was.
@@ -181,12 +224,53 @@ impl<T, const OFFSET: usize> List<T, OFFSET> {
     /// # Safety
     /// If it's on a list, it's this one.
     pub unsafe fn remove(&mut self, item: &T) -> bool {
+        unsafe { Self::unlink(item) }
+    }
+
+    /// Takes @item off whichever list it's on, if any: for an item that can
+    /// be on any of several, all held.
+    ///
+    /// # Safety
+    /// The list it's on, if any, is held.
+    pub unsafe fn unlink(item: &T) -> bool {
         let l = Self::links(item);
         let on = !l.is_empty();
         if on {
             unsafe { l.del_init() };
         }
         on
+    }
+
+    /// On a list - this one or another; racy unless that list is held.
+    pub fn linked(item: &T) -> bool {
+        !Self::links(item).is_empty()
+    }
+
+    pub fn first(&self) -> Option<&T> {
+        (!self.is_empty()).then(|| unsafe { Self::item(self.head.next.get()) })
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        let head: *const ListHead = &self.head;
+        let mut pos = if self.is_empty() { head } else { self.head.next.get() };
+        core::iter::from_fn(move || {
+            (!ptr::eq(pos, head)).then(|| {
+                unsafe {
+                    let item = Self::item(pos);
+                    pos = (*pos).next.get();
+                    item
+                }
+            })
+        })
+    }
+
+    /// Everything on it moved to @new, which is left holding it - this one
+    /// empty: for a list whose head moves.
+    ///
+    /// # Safety
+    /// @new is empty, and doesn't move while it has anything on it.
+    pub unsafe fn move_to(&mut self, new: &mut Self) {
+        unsafe { self.head.replace_init(&new.head) }
     }
 
     /// From the front: a place in the list, which can take its item off.
