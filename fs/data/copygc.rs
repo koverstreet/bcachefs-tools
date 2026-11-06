@@ -75,7 +75,7 @@ use crate::util::backtrace::prt_task_backtrace;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, Private, RegisterError, Registration};
 use crate::util::siphash::SipHash13Key;
 use crate::util::kernel::{cond_resched, WRITE};
-use crate::util::kthread::{Kthread, KthreadSelf};
+use crate::util::kthread::{Daemon, Kthread, KthreadSelf};
 use crate::util::late::Late;
 use crate::util::rcu::{read_lock, Detach};
 use crate::util::sleep::{sleep_until, Sleep};
@@ -90,8 +90,6 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering::{Acquire, Relaxed}};
 use cstruct_macros::{c_export, CStruct, Init, Late, TypeInfo};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
-use crate::locking::Locked;
-use crate::new_lock;
 use crate::util::futex::EventCount;
 use crate::util::projections::Volatile;
 use crate::format::{Bpos, Btree, DataType};
@@ -102,8 +100,8 @@ use crate::format::{Bpos, Btree, DataType};
 pub struct bch_fs_copygc {
     /* The thread, from start to stop: data/copygc.rs */
     #[pin]
-    #[init(RustOnly::new(new_lock!(None)))]
-    pub(crate) thread: rust_only!(Locked<c::spinlock_t, Option<Kthread>>),
+    #[init(RustOnly::new(Daemon::new()))]
+    pub(crate) thread: rust_only!(Daemon),
     #[pin]
     #[init(c::write_point::init(DataType::user))]
     pub write_point: c::write_point,
@@ -835,9 +833,7 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
 
 impl Fs {
     pub fn copygc_wakeup(&self) {
-        if let Some(t) = &*self.copygc.thread.lock() {
-            t.kick();
-        }
+        self.copygc.thread.kick();
     }
 
     /// And its workqueue, for the btree updates of its moves.
@@ -846,26 +842,16 @@ impl Fs {
             return Ok(());
         }
 
-        let cg = &self.copygc;
-        if cg.thread.lock().is_some() {
-            return Ok(());
-        }
-
         // SAFETY: the thread's stopped before the filesystem goes -
         // copygc_stop(), on the way to read-only
         let fs: &'static Fs = unsafe { &*self.as_ptr() };
-        let t = Kthread::create(format_args!("bch-copygc/{}", self.name().to_str().unwrap_or("?")),
-                                move |me| { let _ = thread(fs, me); });
-        let t = bch_err_msg!(self, t, "creating copygc thread")?;
-
-        cg.thread.lock().insert(t).wake();
-        Ok(())
+        let ret = self.copygc.thread.start(format_args!("bch-copygc/{}", self.name().to_str().unwrap_or("?")),
+                                           move |me| { let _ = thread(fs, me); });
+        bch_err_msg!(self, ret, "creating copygc thread")
     }
 
-    /// Outside the lock, which kicks take: kthread_stop() waits.
     pub fn copygc_stop(&self) {
-        let t = self.copygc.thread.lock().take();
-        drop(t);
+        self.copygc.thread.stop();
     }
 
     /// Until a copygc run ends after @run_count, or this kthread's told to
@@ -905,16 +891,8 @@ impl Fs {
             }
         }
 
-        // a ref of our own, to print it outside the lock: that allocates
-        let task = cg.thread.lock().as_ref().map(|t| {
-            // SAFETY: the Kthread's task, live while it's in the lock
-            unsafe { c::get_task_struct(t.as_ptr()) };
-            t.as_ptr()
-        });
-        if let Some(task) = task {
-            // SAFETY: our ref, put after
-            let _ = prt_task_backtrace(out, task, 0);
-            unsafe { c::put_task_struct(task) };
+        if let Some(task) = cg.thread.task() {
+            let _ = prt_task_backtrace(out, task.as_ptr(), 0);
         }
     }
 }

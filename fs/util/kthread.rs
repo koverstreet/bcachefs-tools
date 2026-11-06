@@ -9,7 +9,8 @@
 //! task's, util::task - may be the one dropping it.
 //!
 //! Kthread is a kthread Rust owns, stopped by its drop: for a long-lived
-//! thread, a daemon: the reconcile thread, copygc, journal reclaim. Jobs
+//! thread, a daemon: the reconcile thread, copygc, journal reclaim - each a
+//! Daemon, which holds it from start to stop for whoever kicks it. Jobs
 //! fanned out and joined are util::par's.
 //!
 //! The thread's closure is in an allocation the Kthread owns, freed once the
@@ -28,6 +29,7 @@
 
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
+use crate::locking::Locked;
 use crate::util::alloc::{kbox_pin_init, AllocError, KBox};
 use crate::util::rcu::{FreeAnytime, NothingToDetach};
 use crate::util::Printbuf;
@@ -38,6 +40,7 @@ use core::mem::{align_of, needs_drop, size_of, ManuallyDrop};
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU32, Ordering};
+use pin_init::{pin_data, pin_init, PinInit};
 
 unsafe extern "C" fn run_raw<F: FnOnce()>(data: *mut c_void) -> c_int {
     // SAFETY: create() wrote an F here
@@ -46,12 +49,34 @@ unsafe extern "C" fn run_raw<F: FnOnce()>(data: *mut c_void) -> c_int {
     0
 }
 
-/// A kthread, by a ref on its task_struct.
-pub struct KthreadRef(NonNull<c::task_struct>);
+/// A ref on a kthread's task_struct: to look at it - its backtrace - from
+/// another thread, after it's exited too.
+pub struct KthreadTask(NonNull<c::task_struct>);
 
-// SAFETY: a ref any thread may put, on a thread any thread may wake or stop
-unsafe impl Send for KthreadRef {}
-unsafe impl Sync for KthreadRef {}
+unsafe impl Send for KthreadTask {}
+unsafe impl Sync for KthreadTask {}
+
+impl KthreadTask {
+    pub fn as_ptr(&self) -> *mut c::task_struct {
+        self.0.as_ptr()
+    }
+}
+
+impl Clone for KthreadTask {
+    fn clone(&self) -> Self {
+        unsafe { c::get_task_struct(self.0.as_ptr()) };
+        Self(self.0)
+    }
+}
+
+impl Drop for KthreadTask {
+    fn drop(&mut self) {
+        unsafe { c::put_task_struct(self.0.as_ptr()) };
+    }
+}
+
+/// A kthread, by a ref on its task_struct.
+pub struct KthreadRef(KthreadTask);
 
 impl KthreadRef {
     /// Created stopped, to run @f once it's woken - or, in userspace, once
@@ -80,7 +105,7 @@ impl KthreadRef {
         let task = errptr_to_result(NonNull::new(task).expect("kthread_create() gives a task or an error"))?;
         // so it can be stopped after it's exited
         unsafe { c::get_task_struct(task.as_ptr()) };
-        Ok(Self(task))
+        Ok(Self(KthreadTask(task)))
     }
 
     /// Start it, or wake it from a sleep: wake_up_process().
@@ -88,21 +113,10 @@ impl KthreadRef {
         unsafe { c::wake_up_process(self.0.as_ptr()) };
     }
 
-    /// The task, for C that wakes it by pointer.
-    pub fn as_ptr(&self) -> *mut c::task_struct {
-        self.0.as_ptr()
-    }
-
     /// Tell it to stop, and wait for it to: never from the thread itself. It
     /// may have returned already, or never have run.
     pub fn stop(self) {
         unsafe { c::bch2_kthread_stop(self.0.as_ptr()) };
-    }
-}
-
-impl Drop for KthreadRef {
-    fn drop(&mut self) {
-        unsafe { c::put_task_struct(self.0.as_ptr()) };
     }
 }
 
@@ -183,9 +197,8 @@ impl Kthread {
         self.wake();
     }
 
-    /// The task, for C that wakes it by pointer.
-    pub fn as_ptr(&self) -> *mut c::task_struct {
-        self.task.as_ptr()
+    pub fn task(&self) -> KthreadTask {
+        self.task.0.clone()
     }
 
     /// Whether the current thread is a kthread told to stop:
@@ -234,5 +247,64 @@ impl Drop for Kthread {
     fn drop(&mut self) {
         // SAFETY: taken once, here; @thread's dropped after
         unsafe { ManuallyDrop::take(&mut self.task) }.stop();
+    }
+}
+
+/// A daemon's thread, from its start to its stop: kicked, woken and looked at
+/// under its lock, started and stopped outside it - kthread_stop() sleeps.
+#[pin_data]
+pub struct Daemon {
+    #[pin]
+    thread: Locked<c::spinlock_t, Option<Kthread>>,
+}
+
+impl Daemon {
+    pub fn new() -> impl PinInit<Self> {
+        pin_init!(Self { thread <- crate::new_lock!(None, "daemon thread") })
+    }
+
+    /// Started, and not yet stopped - though it may have returned.
+    pub fn started(&self) -> bool {
+        self.thread.lock().is_some()
+    }
+
+    /// Start it, unless it's started: Kthread::create(), then woken.
+    pub fn start<F: FnOnce(&KthreadSelf<'_>) + Send + FreeAnytime + NothingToDetach + 'static>(
+        &self, name: fmt::Arguments<'_>, f: F) -> Result<(), BchError>
+    {
+        if self.started() {
+            return Ok(());
+        }
+
+        let t = Kthread::create(name, f)?;
+        // another start got there first: ours is stopped outside the lock
+        let lost = {
+            let mut slot = self.thread.lock();
+            if slot.is_some() {
+                Some(t)
+            } else {
+                slot.insert(t).wake();
+                None
+            }
+        };
+        drop(lost);
+        Ok(())
+    }
+
+    /// Stop it, and wait for it to.
+    pub fn stop(&self) {
+        let t = self.thread.lock().take();
+        drop(t);
+    }
+
+    pub fn kick(&self) {
+        if let Some(t) = &*self.thread.lock() {
+            t.kick();
+        }
+    }
+
+    /// Its task, for a backtrace: printed outside the lock, as that allocates.
+    pub fn task(&self) -> Option<KthreadTask> {
+        self.thread.lock().as_ref().map(Kthread::task)
     }
 }

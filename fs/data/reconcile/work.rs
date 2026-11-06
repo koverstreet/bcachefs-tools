@@ -981,9 +981,7 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
 impl Fs {
     /// Kick the reconcile thread: there's work.
     pub fn reconcile_wakeup(&self) {
-        if let Some(t) = &*self.reconcile.thread.lock() {
-            t.kick();
-        }
+        self.reconcile.thread.kick();
     }
 
     /// Have reconcile scan for pending work, and kick it: as
@@ -1000,7 +998,7 @@ impl Fs {
         if r.thread_exit_ret.load(Relaxed) != 0 {
             self.reconcile_stop();
         }
-        if r.thread.lock().is_some() || self.opts().nochanges.get() != 0 {
+        if r.thread.started() || self.opts().nochanges.get() != 0 {
             return Ok(());
         }
 
@@ -1009,8 +1007,8 @@ impl Fs {
         // SAFETY: the thread's stopped before the filesystem goes -
         // reconcile_stop(), on the way to read-only
         let fs: &'static Fs = unsafe { &*self.as_ptr() };
-        let t = Kthread::create(format_args!("bch-reconcile/{}", self.name().to_str().unwrap_or("?")),
-                                move |me| {
+        r.thread.start(format_args!("bch-reconcile/{}", self.name().to_str().unwrap_or("?")),
+                       move |me| {
             if let Err(e) = thread(fs, me) {
                 // going read-only isn't an error, as do_reconcile() has it
                 if !e.matches(c::EROFS) {
@@ -1018,17 +1016,12 @@ impl Fs {
                 }
                 fs.reconcile.thread_exit_ret.store(e.raw(), Relaxed);
             }
-        }).inspect_err(|e| bch_err!(self, "error creating reconcile thread: {e}"))?;
-
-        r.thread.lock().insert(t).wake();
-        Ok(())
+        }).inspect_err(|e| bch_err!(self, "error creating reconcile thread: {e}"))
     }
 
-    /// Stop the thread, and wait for it to - outside the lock, which wakeups
-    /// take: bch2_reconcile_stop().
+    /// Stop the thread, and wait for it to: bch2_reconcile_stop().
     pub fn reconcile_stop(&self) {
-        let t = self.reconcile.thread.lock().take();
-        drop(t);
+        self.reconcile.thread.stop();
     }
 }
 
@@ -1091,27 +1084,17 @@ impl Fs {
 
         write!(out, "\n");
         let exit_ret = self.reconcile.thread_exit_ret.load(Relaxed);
-        // a ref of our own, to print it outside the lock: that allocates
-        let task = self.reconcile.thread.lock().as_ref().map(|t| {
-            // SAFETY: the Kthread's task, live while it's in the lock
-            unsafe { c::get_task_struct(t.as_ptr()) };
-            t.as_ptr()
-        });
+        let task = self.reconcile.thread.task();
 
         if exit_ret != 0 {
             write!(out, "Reconcile thread exited: {}\n", BchError::from_raw(exit_ret));
         } else if let Some(task) = task {
             write!(out, "Reconcile thread backtrace:\n");
             out.indent_add(2);
-            let _ = prt_task_backtrace(out, task, 0);
+            let _ = prt_task_backtrace(out, task.as_ptr(), 0);
             out.indent_sub(2);
         } else {
             write!(out, "Reconcile thread not running\n");
-        }
-
-        if let Some(task) = task {
-            // SAFETY: ours, from above
-            unsafe { c::put_task_struct(task) };
         }
     }
 

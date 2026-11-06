@@ -10,7 +10,7 @@ use crate::locking::{Locked, SeqLock};
 use crate::new_lock;
 use crate::data::reconcile::work::StripesPending;
 use crate::types::{RustOnly, rust_only};
-use crate::util::kthread::Kthread;
+use crate::util::kthread::Daemon;
 use core::sync::atomic::{AtomicBool, AtomicI32};
 use cstruct_macros::{placed, CStruct, Init, TypeInfo};
 use pin_init::pin_data;
@@ -25,8 +25,8 @@ pub struct bch_fs_reconcile {
      * also exits on its own if a pass fails, with thread_exit_ret its error
      */
     #[pin]
-    #[init(RustOnly::new(new_lock!(None)))]
-    pub(crate) thread: rust_only!(Locked<c::spinlock_t, Option<Kthread>>),
+    #[init(RustOnly::new(Daemon::new()))]
+    pub(crate) thread: rust_only!(Daemon),
     #[pin]
     #[init(RustOnly::new(AtomicI32::new(0)))]
     pub(crate) thread_exit_ret: rust_only!(AtomicI32),
