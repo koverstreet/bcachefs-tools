@@ -47,14 +47,8 @@ impl c::journal {
 
         unsafe { c::bch2_journal_reclaim_stop(self.as_ptr()) };
 
-        /* userspace's current is C's __thread variable, which Rust can't name: unchecked there */
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
-        {
-            #[cfg(kernel)]
-            self.stop_thread.store(unsafe { c::get_current() }, Relaxed);
-            #[cfg(not(kernel))]
-            self.stop_thread.store(core::ptr::null_mut(), Relaxed);
-        }
+        self.stop_thread.store(crate::util::sched::current(), Relaxed);
         self.flush_pins(u64::MAX);
 
         /*

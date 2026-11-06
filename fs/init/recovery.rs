@@ -61,9 +61,7 @@ impl Fs {
         assert!(!self.flags.get(Flag::BCH_FS_rw));
         /* the journal keys are frozen for the scrub, whose reads run on workqueues */
         assert!(!self.flags.get(Flag::BCH_FS_scrub_journal));
-        /* userspace's current is C's __thread variable, which Rust can't name */
-        #[cfg(kernel)]
-        assert!(self.recovery_task.load(Relaxed) == unsafe { c::get_current() });
+        assert!(self.recovery_task.load(Relaxed) == crate::util::sched::current());
 
         NotRw { fs: self, _task: core::marker::PhantomData }
     }
