@@ -89,7 +89,7 @@ use core::ffi::c_uint;
 use core::ops::ControlFlow;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{CStruct, TypeInfo, c_typedef, tagged_union};
-use crate::format::{Bpos, Btree, BkeyType};
+use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 
 c_typedef! {
     pub type reconcile_scan_device = c_uint;
@@ -1032,7 +1032,6 @@ impl Fs {
     /// features: bch2_reconcile_status_to_text().
     #[cold]
     pub fn reconcile_status_to_text(&self, out: &mut Printbuf) {
-        use c::bcachefs_metadata_version as v;
         out.tabstop_push(24);
         out.tabstop_push(12);
         out.tabstop_push(12);
@@ -1040,15 +1039,15 @@ impl Fs {
         // Marking work needs incompatible features: without them every scan
         // completes, finds nothing to do, and the only other sign is a notice
         // once per boot (#1052, #946)
-        let data_ok = self.incompat_feature_allowed(v::bcachefs_metadata_version_sb_field_extent_type_u64s);
-        let meta_ok = self.incompat_feature_allowed(v::bcachefs_metadata_version_reconcile);
+        let data_ok = self.incompat_feature_allowed(MetadataVersion::sb_field_extent_type_u64s);
+        let meta_ok = self.incompat_feature_allowed(MetadataVersion::reconcile);
         if !data_ok || !meta_ok {
-            let need = if data_ok { v::bcachefs_metadata_version_reconcile }
-                       else { v::bcachefs_metadata_version_sb_field_extent_type_u64s };
+            let need = if data_ok { MetadataVersion::reconcile }
+                       else { MetadataVersion::sb_field_extent_type_u64s };
             write!(out, "Reconcile disabled{}: needs incompatible feature ", if data_ok { " for metadata" } else { "" });
             need.to_text(out);
             write!(out, ", allowed up to ");
-            c::bcachefs_metadata_version(self.sb.version_incompat_allowed.get().into()).to_text(out);
+            MetadataVersion(self.sb.version_incompat_allowed.get().into()).to_text(out);
             write!(out, "\n  set version_upgrade=incompatible to enable\n\n");
         }
 

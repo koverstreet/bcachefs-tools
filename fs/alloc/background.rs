@@ -479,10 +479,9 @@ use crate::accounting;
 use crate::alloc::check::need_discard_or_freespace_err;
 use crate::alloc::lru::{dev_remove_lrus, lru_change, LruId};
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyWhole, POS_MIN};
+use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyWhole, POS_MIN, BkeyOps};
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, LoopFlow, TransAttempt,
                          TransBkey, UpdateTriggerFlags};
-use crate::btree::bkey::BkeyOps;
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::c;
 use crate::c::bch_errcode;
@@ -503,7 +502,7 @@ use core::ffi::{c_int, c_uint};
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::Ordering;
 use cstruct_macros::{c_export, c_const};
-use crate::format::{Bpos, Btree, DataType};
+use crate::format::{Bpos, Btree, DataType, MetadataVersion};
 
 c_const! {
     /// How far a bucket's generation may get past its oldest pointer's before
@@ -1159,7 +1158,7 @@ fn alloc_read(fs: &Fs) -> Result<(), BchError> {
     let mut ca = None;
 
     let ver = fs.version_upgrade_complete().0;
-    if ver >= c::bcachefs_metadata_version::bcachefs_metadata_version_bucket_gens.0 {
+    if ver >= MetadataVersion::bucket_gens.0 {
         let mut iter = BtreeIter::new(&trans, Btree::bucket_gens, POS_MIN, BtreeIterFlags::PREFETCH);
         iter.for_each(&trans, |_, _, k| {
             let Some(g) = k.arm::<c::BucketGens>() else { return Ok(LoopFlow::Continue) };

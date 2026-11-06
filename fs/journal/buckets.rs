@@ -26,7 +26,7 @@ use pin_init::stack_pin_init;
 use crate::alloc::buckets::{trans_mark_metadata_bucket, DiskReservation};
 use crate::btree::iter::{lockrestart_do, UpdateTriggerFlags};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
-use crate::format::DataType;
+use crate::format::{DataType, SbFeature};
 use crate::fs::{Dev, Fs, SbLockGuard};
 use crate::journal::sb::buckets_to_sb;
 use crate::c::JournalGuard;
@@ -554,7 +554,7 @@ pub fn dev_journal_alloc(ca: &Dev, new_fs: bool) -> Result<(), BchError> {
         return Ok(());
     }
 
-    if fs.feature(c::bch_sb_feature::BCH_FEATURE_small_image) {
+    if fs.feature(SbFeature::small_image) {
         bch_err!(fs, "cannot allocate journal, filesystem is an unresized image file");
         return fs.throw(bch_errcode::BCH_ERR_erofs_filesystem_full);
     }

@@ -7,12 +7,12 @@ use crate::{bkey_fsck_err, bkey_fsck_err_on};
 use crate::data::durability::BkeyVDurability;
 use crate::data::reconcile::trigger::{extent_rebalance_v1_to_text, extent_reconcile_to_text,
                                       extent_reconcile_validate};
-use crate::btree::bkey::BkeyOps;
+use crate::btree::bkey::{BkeyOps, ValidateFlags};
 use crate::btree::trigger::Trigger;
 use crate::init::error::{id, BkeyValidate};
 use crate::util::rcu::ReadGuard;
 use crate::util::{Printbuf, ToText};
-use crate::format::{Btree, CompressionType, BkeyType};
+use crate::format::{Btree, CompressionType, BkeyType, MetadataVersion};
 
 // ── validate ─────────────────────────────────────────────────────────────
 
@@ -134,8 +134,8 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                                   "checksum offset + key size > uncompressed size")?;
                 bkey_fsck_err_on!(v, crc_is_encoded(&crc) &&
                                      crc.uncompressed_size > fs.opts().encoded_extent_max.get() >> 9 &&
-                                     v.from.flags().intersects(c::bch_validate_flags::BCH_VALIDATE_write |
-                                                               c::bch_validate_flags::BCH_VALIDATE_commit),
+                                     v.from.flags().intersects(ValidateFlags::write |
+                                                               ValidateFlags::commit),
                                   id::ptr_crc_uncompressed_size_too_big, "too large encoded extent")?;
                 bkey_fsck_err_on!(v, !crc_is_compressed(&crc) && crc.compressed_size != crc.uncompressed_size,
                                   id::ptr_crc_uncompressed_size_mismatch,
@@ -347,8 +347,8 @@ impl BkeyOps for c::BtreePtrV2 {
         bkey_fsck_err_on!(v, bp.v().min_key >= bp.k.p, id::btree_ptr_v2_min_key_bad,
                           "min_key > key")?;
 
-        if v.from.flags().contains(c::bch_validate_flags::BCH_VALIDATE_write) &&
-           u32::from(v.fs.sb.version_min.get()) >= c::bcachefs_metadata_version::btree_ptr_sectors_written.0 {
+        if v.from.flags().contains(ValidateFlags::write) &&
+           u32::from(v.fs.sb.version_min.get()) >= MetadataVersion::btree_ptr_sectors_written.0 {
             bkey_fsck_err_on!(v, bp.v().sectors_written.get() == 0, id::btree_ptr_v2_written_0,
                               "sectors_written == 0")?;
         }
@@ -374,7 +374,7 @@ impl BkeyOps for c::BtreePtrV2 {
     /// writes past.
     ///
     /// XXX: as ptr_swab() - this should take an Unvalidated key.
-    fn compat(_btree: Btree, _version: c::bcachefs_metadata_version, big_endian: bool,
+    fn compat(_btree: Btree, _version: MetadataVersion, big_endian: bool,
                                _write: bool, k: BkeyS<'_>) {
         let Some(mut bp) = k.arm::<c::BtreePtrV2>() else { return };
         let Some(v) = <c::BtreePtrV2 as ArmRef>::arm_mut(bp.val_bytes_mut()) else { return };

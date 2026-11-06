@@ -1,7 +1,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::fs::Dev;
-use crate::btree::bkey::{BkeySC, BkeyV, POS_MIN};
+use crate::btree::bkey::{BkeySC, BkeyV, POS_MIN, ValidateFlags};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::c;
@@ -29,7 +29,7 @@ use core::sync::atomic::Ordering;
 use cstruct_macros::{c_export, CStruct, TypeInfo};
 use super::io::*;
 use crate::types::c_default;
-use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState};
+use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState, MetadataVersion, SbFeature};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -287,7 +287,7 @@ pub trait SbMembersMut: SbResize {
     /// members_v1, the mirror of members_v2 that versions before
     /// extent_flags read - or none, for a superblock they can't.
     fn members_cpy_v2_v1(&mut self) -> Result<(), BchError> {
-        if self.sb().version_incompat() > c::bcachefs_metadata_version::extent_flags.0.into() {
+        if self.sb().version_incompat() > MetadataVersion::extent_flags.0.into() {
             self.field_resize::<c::bch_sb_field_members_v1>(0);
             return Ok(());
         }
@@ -395,7 +395,7 @@ fn validate_member(err: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb<Unvalid
                BCH_ERR_invalid_sb_members, "device {i}: invalid btree_bitmap_shift {}",
                m.btree_bitmap_shift)?;
 
-    let no_alloc_info = sb.features[0].get() & (1 << c::bch_sb_feature::BCH_FEATURE_no_alloc_info.0) != 0;
+    let no_alloc_info = sb.features[0].get() & (1 << SbFeature::no_alloc_info.0) != 0;
     sb_err_on!(err, m.freespace_initialized() && no_alloc_info, BCH_ERR_invalid_sb_members,
                "device {i}: freespace initialized but fs has no alloc info")?;
     Ok(())
@@ -440,7 +440,7 @@ fn members_to_text<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, members: O
 
 impl SbFieldOps for c::bch_sb_field_members_v1 {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_members_v1<Unvalidated>,
-                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+                _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         members_validate(sb, members_in(f.as_bytes(), MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES), err)
     }
 
@@ -452,7 +452,7 @@ impl SbFieldOps for c::bch_sb_field_members_v1 {
 
 impl SbFieldOps for c::bch_sb_field_members_v2 {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_members_v2<Unvalidated>,
-                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+                _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         members_validate(sb, members_in(f.as_bytes(), MEMBERS_V2_HEAD, f.member_bytes.get().into()), err)
     }
 
@@ -1819,7 +1819,7 @@ mod tests {
             assert_eq!(plain_bytes(&m)[..BCH_MEMBER_V1_BYTES], plain_bytes(&member(i))[..BCH_MEMBER_V1_BYTES]);
         }
 
-        sb.sb_mut().set_version_incompat(c::bcachefs_metadata_version::extent_flags.0 as u64 + 1);
+        sb.sb_mut().set_version_incompat(MetadataVersion::extent_flags.0 as u64 + 1);
         sb.members_cpy_v2_v1().unwrap();
         assert!(sb.field::<c::bch_sb_field_members_v1>().is_none());
     }

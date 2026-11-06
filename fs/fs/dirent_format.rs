@@ -20,11 +20,10 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::bkey_fsck_err_on;
-use crate::btree::bkey::BkeySC;
+use crate::btree::bkey::{BkeySC, ValidateFlags};
 use crate::btree::bkey_methods::{self, SetError};
 use crate::btree::iter::TransBkey;
 use crate::c;
-use crate::c::bch_validate_flags;
 use crate::cstructs::c as cs;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -330,7 +329,7 @@ pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<super::Dirent<'k>, BchEr
     let names = raw.names().expect("names within the name block");
     let name = names.name().as_bytes();
 
-    bkey_fsck_err_on!(v, v.from.flags().contains(bch_validate_flags::BCH_VALIDATE_commit) &&
+    bkey_fsck_err_on!(v, v.from.flags().contains(ValidateFlags::commit) &&
                       name.len() > c::BCH_NAME_MAX as usize,
                       id::dirent_name_too_long,
                       "dirent name too big ({} > {})", name.len(), c::BCH_NAME_MAX)?;

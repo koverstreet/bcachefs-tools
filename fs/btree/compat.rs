@@ -15,7 +15,7 @@
 use crate::btree::bkey::{BkeyP, BkeyS};
 use crate::c;
 use crate::fs::Fs;
-use crate::format::{Bpos, Btree, BkeyType};
+use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 use core::ffi::{c_int, c_uint};
 
 impl Bpos {
@@ -40,7 +40,7 @@ pub unsafe fn __bch2_bkey_compat(fs: Option<&Fs>, _level: c_uint, btree: Btree, 
                                  k: *mut c::bkey_packed) {
 
     let (big_endian, write) = (big_endian != 0, write != 0);
-    let version = c::bcachefs_metadata_version(version);
+    let version = MetadataVersion(version);
     let packed = |k: *mut c::bkey_packed| unsafe { (*BkeyP::from_raw(k)).is_packed() };
     // a journal key's has none: it's never packed
     let fmt = || f.expect("a packed key, with no format");

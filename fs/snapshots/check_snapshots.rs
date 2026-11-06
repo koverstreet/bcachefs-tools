@@ -50,7 +50,7 @@ use crate::util::{Join, Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err, prt};
 use core::fmt;
 use cstruct_macros::c_export;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, MetadataVersion};
 
 /// Snapshot node @id's key, None if there's none: fsck can't assume a node
 /// exists, and absence as a value can't be returned as an error by mistake.
@@ -242,7 +242,7 @@ fn check_state<'a, 't>(
     // migrated. Silent mid-upgrade, autofix after.
     if n.v().state().get() == 0 {
         let upgrading = fs.version_upgrade_complete() <
-            c::bcachefs_metadata_version::per_dev_fragmentation_lru;
+            MetadataVersion::per_dev_fragmentation_lru;
         if upgrading ||
            fsck_err!(t, id::snapshot_state_bad,
                      "snapshot state unset, recovering from legacy flags:\n{}", n.to_text(fs))? {

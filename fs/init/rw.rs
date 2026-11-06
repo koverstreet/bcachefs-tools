@@ -17,7 +17,6 @@
 
 use core::sync::atomic::Ordering::Relaxed;
 
-use crate::format::MemberState;
 use crate::accounting::verify_accounting_clean;
 use crate::alloc::capacity::recalc_capacity;
 use crate::btree::cache::bch2_fs_btree_init_rw;
@@ -29,6 +28,7 @@ use crate::c::bch_fs_flags as Flag;
 use crate::c::journal_flags as Journal;
 use crate::data::ec::head::stripe_heads_stop;
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
+use crate::format::{MemberState, SbFeature};
 use crate::fs::{Fs, StateLockWrite};
 use crate::sb::members::{BtreeBitmapGcSchedule, SbMembersMut};
 use crate::util::futex::EventCount;
@@ -273,7 +273,7 @@ impl StateLockWrite<'_> {
 
         assert!(fs.flags.get(Flag::BCH_FS_may_go_rw));
 
-        if warn_on!(fs.feature(c::bch_sb_feature::BCH_FEATURE_no_alloc_info)) {
+        if warn_on!(fs.feature(SbFeature::no_alloc_info)) {
             return fs.throw(bch_errcode::BCH_ERR_erofs_no_alloc_info);
         }
 
@@ -284,12 +284,12 @@ impl StateLockWrite<'_> {
             return fs.throw(bch_errcode::BCH_ERR_erofs_unfixed_errors);
         }
 
-        if fs.feature(c::bch_sb_feature::BCH_FEATURE_small_image) {
+        if fs.feature(SbFeature::small_image) {
             bch_err!(fs, "cannot go rw, filesystem is an unresized image file");
             return fs.throw(bch_errcode::BCH_ERR_erofs_filesystem_full);
         }
 
-        if fs.feature(c::bch_sb_feature::BCH_FEATURE_no_default_sb) {
+        if fs.feature(SbFeature::no_default_sb) {
             bch_err!(fs, "cannot go rw, run bcachefs migrate-superblock first");
             return fs.throw(bch_errcode::BCH_ERR_erofs_sb_not_migrated);
         }
@@ -388,7 +388,7 @@ impl StateLockWrite<'_> {
             return fs.throw(bch_errcode::BCH_ERR_erofs_nochanges);
         }
 
-        if fs.feature(c::bch_sb_feature::BCH_FEATURE_no_alloc_info) {
+        if fs.feature(SbFeature::no_alloc_info) {
             return fs.throw(bch_errcode::BCH_ERR_erofs_no_alloc_info);
         }
 

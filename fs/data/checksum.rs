@@ -26,6 +26,7 @@
 //! the keyring under "bcachefs:<uuid>", or, in userspace, from a passphrase
 //! prompted for.
 
+use crate::btree::bkey::ValidateFlags;
 use crate::sb_err_on;
 use crate::c;
 use crate::util::vstructs::{bytes_of, Unsized, Unvalidated, Validated};
@@ -564,7 +565,7 @@ impl Fs {
 /// short to be one.
 impl SbFieldOps for c::bch_sb_field_crypt<Validated> {
     fn validate(_sb: &c::bch_sb<Unvalidated>, crypt: &c::bch_sb_field_crypt<Unvalidated>,
-                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+                _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         let kdf = crypt.bch_crypt_kdf_type();
         sb_err_on!(err, kdf != u64::from(c::bch_kdf_types::BCH_KDF_SCRYPT.0), BCH_ERR_invalid_sb_crypt,
                    "bad kdf type {kdf}")?;

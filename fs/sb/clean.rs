@@ -13,7 +13,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
 use zerocopy::IntoBytes;
 
-use crate::btree::bkey::BkeySCToText;
+use crate::btree::bkey::{BkeySCToText, ValidateFlags};
 use crate::btree::interior::btree_roots_to_journal_entries;
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
@@ -68,7 +68,7 @@ fn validate_late(fs: &Fs, version: u16, big_endian: bool, f: &mut Section, write
 {
     let mut from = c::bkey_validate_context::default();
     from.set_from(c::bkey_validate_from::BKEY_VALIDATE_superblock);
-    from.set_flags(if write { c::bch_validate_flags::BCH_VALIDATE_write } else { c::bch_validate_flags::empty() });
+    from.set_flags(if write { ValidateFlags::write } else { ValidateFlags::empty() });
 
     for e in UnvalidatedEntriesMut::<c::jset_entry<Unvalidated>>::new(&mut bytes_of_mut(f)[SECTION_HEAD..]) {
         // whole: sb_field_validate() has repaired or refused a section with
@@ -156,7 +156,7 @@ impl Fs {
             return Ok(false);
         }
 
-        for id in 0..Btree::BTREE_ID_NR.0 {
+        for id in 0..Btree::nr.0 {
             let sb = btree_root(clean.entries(), id);
             let journal = btree_root(j.entries(), id);
             if sb.is_none() && journal.is_none() {

@@ -293,8 +293,7 @@
  * mount by re-scanning for snapshots still marked for deletion.
  */
 
-use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole, POS_MAX, POS_MIN};
-use crate::btree::bkey::BkeyOps;
+use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole, POS_MAX, POS_MIN, BkeyOps};
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::prt;
 use crate::util::vstructs::{Validated, Whole};
@@ -320,7 +319,7 @@ use core::fmt;
 use core::ops::ControlFlow;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cstruct_macros::c_export;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, MetadataVersion};
 
 // ── The table ────────────────────────────────────────────────────────────
 
@@ -805,7 +804,7 @@ impl c::bch_fs_snapshots {
     pub fn accounting(&self, id: u32) -> SnapshotAccounting {
         let fs = self.fs();
         let trust_keys = fs.version_upgrade_complete().0 >=
-            c::bcachefs_metadata_version::bcachefs_metadata_version_per_dev_fragmentation_lru.0;
+            MetadataVersion::per_dev_fragmentation_lru.0;
 
         let mut btrees = crate::btrees_in(crate::BTREE_HAS_SNAPSHOTS_MASK);
         SnapshotAccounting(core::array::from_fn(|_| {

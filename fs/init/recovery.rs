@@ -39,7 +39,7 @@ use core::cmp::Ordering;
 use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
-use crate::format::{Btree, MemberInitialized, BkeyType};
+use crate::format::{Btree, MemberInitialized, BkeyType, SbFeature};
 use zerocopy::IntoBytes;
 
 type Pass = c::bch_recovery_pass;
@@ -77,34 +77,32 @@ macro_rules! passes {
 /// as runtime errors - a dirents btree flagged lost in one boot is a dirent to
 /// a missing inode weeks after.
 fn lost_data_passes(btree: Btree) -> &'static [Pass] {
-    use Btree as b;
-
     match btree {
-        b::BTREE_ID_alloc |
-        b::BTREE_ID_need_discard |
-        b::BTREE_ID_freespace |
-        b::BTREE_ID_bucket_gens |
-        b::BTREE_ID_lru                 => passes![check_alloc_info],
-        b::BTREE_ID_backpointers        => passes![check_btree_backpointers, check_extents_to_backpointers],
-        b::BTREE_ID_accounting          => passes![check_allocations],
-        b::BTREE_ID_snapshots           => passes![reconstruct_snapshots, check_topology, scan_for_btree_nodes],
-        b::BTREE_ID_snapshot_trees      => passes![check_snapshot_trees, check_snapshots],
-        b::BTREE_ID_extents             => passes![check_extents, check_inodes, check_extents_to_backpointers],
-        b::BTREE_ID_inodes              => passes![check_inodes, check_extents, check_dirents, check_xattrs,
-                                                   check_nlinks],
-        b::BTREE_ID_dirents             => passes![check_dirents, check_inodes, check_nlinks,
-                                                   check_directory_structure],
-        b::BTREE_ID_xattrs              => passes![check_xattrs],
-        b::BTREE_ID_reflink             => passes![check_indirect_extents, check_extents],
-        b::BTREE_ID_subvolumes          => passes![check_subvols, check_subvol_children,
-                                                   check_subvolume_structure, check_root],
-        b::BTREE_ID_subvolume_children  => passes![check_subvol_children, check_subvols],
-        b::BTREE_ID_deleted_inodes      => passes![check_inodes],
+        Btree::alloc |
+        Btree::need_discard |
+        Btree::freespace |
+        Btree::bucket_gens |
+        Btree::lru                 => passes![check_alloc_info],
+        Btree::backpointers        => passes![check_btree_backpointers, check_extents_to_backpointers],
+        Btree::accounting          => passes![check_allocations],
+        Btree::snapshots           => passes![reconstruct_snapshots, check_topology, scan_for_btree_nodes],
+        Btree::snapshot_trees      => passes![check_snapshot_trees, check_snapshots],
+        Btree::extents             => passes![check_extents, check_inodes, check_extents_to_backpointers],
+        Btree::inodes              => passes![check_inodes, check_extents, check_dirents, check_xattrs,
+                                              check_nlinks],
+        Btree::dirents             => passes![check_dirents, check_inodes, check_nlinks,
+                                              check_directory_structure],
+        Btree::xattrs              => passes![check_xattrs],
+        Btree::reflink             => passes![check_indirect_extents, check_extents],
+        Btree::subvolumes          => passes![check_subvols, check_subvol_children,
+                                              check_subvolume_structure, check_root],
+        Btree::subvolume_children  => passes![check_subvol_children, check_subvols],
+        Btree::deleted_inodes      => passes![check_inodes],
         /* check_allocations re-derives bucket state from the stripes: */
-        b::BTREE_ID_stripes |
-        b::BTREE_ID_bucket_to_stripe |
-        b::BTREE_ID_stripe_backpointers => passes![check_extents_to_backpointers],
-        _                               => passes![check_topology, scan_for_btree_nodes],
+        Btree::stripes |
+        Btree::bucket_to_stripe |
+        Btree::stripe_backpointers => passes![check_extents_to_backpointers],
+        _                          => passes![check_topology, scan_for_btree_nodes],
     }
 }
 
@@ -147,7 +145,7 @@ pub fn btree_lost_data(fs: &Fs, msg: &mut Printbuf, btree: Btree) -> Result<(), 
               id::reconcile_work_incorrectly_set] {
         w.set_err_silent(e);
     }
-    if btree == Btree::BTREE_ID_alloc {
+    if btree == Btree::alloc {
         for e in [id::alloc_key_gen_wrong, id::alloc_key_cached_sectors_wrong, id::alloc_key_stripe_wrong,
                   id::alloc_key_stripe_redundancy_wrong] {
             w.set_err_silent(e);
@@ -202,7 +200,7 @@ fn reconstruct_alloc(fs: &Fs) {
         let opts = fs.opts_writer(&mut w);
         opts.recovery_passes.set(opts.recovery_passes.get() | passes::passes_from_stable(v));
 
-        w.sb_mut().features[0] &= !(1 << c::bch_sb_feature::BCH_FEATURE_no_alloc_info.0);
+        w.sb_mut().features[0] &= !(1 << SbFeature::no_alloc_info.0);
         w.dirty();
     }
 
@@ -280,7 +278,7 @@ fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, idx: usize
      * btrees use BTREE_ITER_filter_snapshots, which isn't available until
      * the snapshots recovery pass runs.
      */
-    if k.level() == 0 && k.btree_id() == Btree::BTREE_ID_alloc {
+    if k.level() == 0 && k.btree_id() == Btree::alloc {
         iter_flags |= BtreeIterFlags::CACHED;
     } else {
         update_flags |= UpdateTriggerFlags::KEY_CACHE_RECLAIM;
@@ -470,7 +468,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
             return bch_err_msg!(fs, Err(e), "while replaying key at btree={} level={}:", k.btree_id(), k.level());
         }
 
-        assert!(k.btree_id() == Btree::BTREE_ID_accounting || k.is_overwritten(),
+        assert!(k.btree_id() == Btree::accounting || k.is_overwritten(),
                 "journal key {idx} replayed, but not overwritten");
     }
 
@@ -618,7 +616,7 @@ fn set_may_go_rw(fs: &Fs) -> Result<(), BchError> {
     logged_ops::note_unfinished(fs)?;
 
     if passes::go_rw_in_recovery(fs) {
-        if fs.feature(c::bch_sb_feature::BCH_FEATURE_no_alloc_info) {
+        if fs.feature(SbFeature::no_alloc_info) {
             bch_info!(fs, "mounting a filesystem with no alloc info read-write; will recreate");
             reconstruct_alloc(fs);
         }
@@ -739,17 +737,17 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
         fs.resize_on_mount()?;
     }
 
-    if fs.feature(c::bch_sb_feature::BCH_FEATURE_small_image) {
+    if fs.feature(SbFeature::small_image) {
         bch_info!(fs, "filesystem is an unresized image file, mounting ro");
         fs.opts_writer(&mut fs.sb_lock()).read_only.set(1);
     }
 
-    if fs.feature(c::bch_sb_feature::BCH_FEATURE_no_default_sb) {
+    if fs.feature(SbFeature::no_default_sb) {
         bch_info!(fs, "filesystem does not have default superblock layout, mounting ro");
         fs.opts_writer(&mut fs.sb_lock()).read_only.set(1);
     }
 
-    if fs.opts.read_only.get() == 0 && fs.feature(c::bch_sb_feature::BCH_FEATURE_no_alloc_info) {
+    if fs.opts.read_only.get() == 0 && fs.feature(SbFeature::no_alloc_info) {
         bch_info!(fs, "mounting a filesystem with no alloc info read-write; will recreate");
 
         reconstruct_alloc(fs);
@@ -766,7 +764,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
         journal_reread_for_rewind(fs)?;
     }
 
-    if fs.feature(c::bch_sb_feature::BCH_FEATURE_no_alloc_info) {
+    if fs.feature(SbFeature::no_alloc_info) {
         /* We can't go RW to fix errors without alloc info */
         let mut sb = fs.sb_lock();
         let w = fs.opts_writer(&mut sb);
@@ -1098,7 +1096,7 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
     let mut packed_inode = inode::pack(&root_inode);
     packed_inode.inode.k.p.snapshot = u32::MAX;
 
-    bch_err_msg!(fs, fs.btree_insert(Btree::BTREE_ID_inodes, packed_inode.as_mut(), None,
+    bch_err_msg!(fs, fs.btree_insert(Btree::inodes, packed_inode.as_mut(), None,
                                      CommitFlags::empty(), BtreeIterFlags::empty()),
                  "creating root directory")?;
 

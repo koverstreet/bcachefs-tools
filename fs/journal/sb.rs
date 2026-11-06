@@ -4,6 +4,7 @@
 //! bucket per entry, and journal_v2, which replaced it, a run of contiguous
 //! buckets per entry. Both are validated as runs - v1's of one bucket.
 
+use crate::btree::bkey::ValidateFlags;
 use crate::fs::Dev;
 use core::ops::Range;
 
@@ -54,7 +55,7 @@ fn runs_validate<S: SbState>(sb: &c::bch_sb<S>, mut runs: KVVec<Range<u64>>, err
 
 impl SbFieldOps for c::bch_sb_field_journal {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_journal<Unvalidated>,
-                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+                _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         let mut runs = KVVec::with_capacity(f.buckets.len())?;
         for b in &f.buckets {
             runs.push(b.get()..b.get().saturating_add(1))?;
@@ -74,7 +75,7 @@ impl SbFieldOps for c::bch_sb_field_journal {
 
 impl SbFieldOps for c::bch_sb_field_journal_v2 {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_journal_v2<Unvalidated>,
-                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+                _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         let mut runs = KVVec::with_capacity(f.d.len())?;
         for d in &f.d {
             let (start, nr) = (d.start.get(), d.nr.get());

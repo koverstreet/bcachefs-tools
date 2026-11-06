@@ -270,7 +270,7 @@ pub mod format;
 pub mod opts;
 
 pub use paste::paste;
-use crate::format::{Btree, BtreeFlags, CompressionType, DataType, BkeyType};
+use crate::format::{Btree, BtreeFlags, CompressionType, DataType, BkeyType, MetadataVersion};
 
 pub mod c {
     #![allow(clippy::missing_safety_doc)]
@@ -443,8 +443,6 @@ pub mod c {
 }
 
 #[allow(non_camel_case_types)]
-pub type metadata_version = c::bcachefs_metadata_version;
-#[allow(non_camel_case_types)]
 pub type opt_id = c::bch_opt_id;
 #[allow(non_camel_case_types)]
 pub type btree_id = Btree;
@@ -466,7 +464,6 @@ macro_rules! newtype_enum_aliases {
     } };
     (@alias $prefix:ident $name:tt) => {};
 }
-c::BCH_METADATA_VERSIONS!(newtype_enum_aliases [bcachefs_metadata_version, bcachefs_metadata_version, max = bcachefs_metadata_version_max]);
 c::BCH_DATA_TYPES!(newtype_enum_aliases [DataType, BCH_DATA, nr = BCH_DATA_NR]);
 c::BCH_MEMBER_STATES!(newtype_enum_aliases [MemberState, BCH_MEMBER_STATE, nr = BCH_MEMBER_STATE_NR]);
 c::BCH_MEMBER_INITIALIZED_STATES!(newtype_enum_aliases [MemberInitialized, BCH_MEMBER_INITIALIZED, nr = BCH_MEMBER_INITIALIZED_NR]);
@@ -616,8 +613,8 @@ impl From<CompressionType> for u32 {
     }
 }
 
-impl From<c::bcachefs_metadata_version> for u32 {
-    fn from(v: c::bcachefs_metadata_version) -> u32 {
+impl From<MetadataVersion> for u32 {
+    fn from(v: MetadataVersion) -> u32 {
         v.0
     }
 }

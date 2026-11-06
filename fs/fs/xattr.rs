@@ -436,6 +436,7 @@ pub use vfs::*;
 #[cfg(kernel)]
 mod vfs {
     use super::*;
+    use crate::format::MetadataVersion;
     use crate::format::BkeyType;
     use core::ffi::CStr;
     use crate::btree::bkey::pos;
@@ -673,7 +674,7 @@ mod vfs {
 
         if opt.id() == c::inode_opt_id::Inode_opt_inodes_32bit &&
            fs.request_incompat_feature(
-               c::bcachefs_metadata_version::bcachefs_metadata_version_31bit_dirent_offset).is_ok() {
+               MetadataVersion::bcachefs_metadata_version_31bit_dirent_offset).is_ok() {
             // Make sure the dir is empty, as otherwise we'd need to
             // rehash everything and update the dirent keys.
             crate::dirent::empty_dir_trans(t, inum)?;

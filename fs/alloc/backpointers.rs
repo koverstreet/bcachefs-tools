@@ -36,7 +36,7 @@
 
 use crate::fs::Dev;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, spos, BkeyI, BkeyS, BkeySC};
+use crate::btree::bkey::{pos, spos, BkeyI, BkeyS, BkeySC, BkeyOps};
 use crate::btree::iter::{is_restart, polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbFlush;
@@ -48,7 +48,6 @@ use crate::data::reconcile::trigger::BkeyVReconcile;
 use crate::debug::params as debug_params;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
-use crate::btree::bkey::BkeyOps;
 use crate::init::error::{id, BkeyValidate};
 use crate::init::passes;
 use crate::init::progress::Progress;
@@ -64,7 +63,7 @@ use crate::{bkey_fsck_err_on, fsck_err, prt};
 use core::marker::PhantomData;
 use core::ops::{ControlFlow, RangeInclusive};
 use cstruct_macros::CStruct;
-use crate::format::{Bpos, Btree, DataType, BkeyType};
+use crate::format::{Bpos, Btree, DataType, BkeyType, MetadataVersion};
 
 /// A backpointer scan in progress: alloc/backpointers.rs's BpScanIter.
 #[repr(C)]
@@ -244,7 +243,7 @@ fn extent_ptr_to_bp_pos(fs: &Fs, k: BkeySC<'_>, p: &c::extent_ptr_decoded) -> Bp
 
     if let Some(s) = k.arm::<c::Stripe>() {
         // 1.40's, with inline data's checksums
-        let snapshot = if fs.version() >= c::bcachefs_metadata_version::bcachefs_metadata_version_inline_data_csum {
+        let snapshot = if fs.version() >= MetadataVersion::inline_data_csum {
             s.k.p.offset as u32
         } else {
             0

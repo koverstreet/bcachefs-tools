@@ -54,7 +54,7 @@ use crate::util::{Printbuf, ToText};
 use crate::{fsck_err, inode_fsck_err, prt};
 use core::ops::{ControlFlow, RangeInclusive};
 use core::sync::atomic::Ordering;
-use crate::format::{Bpos, Btree, DataType, ErrorKeyReason, BkeyType};
+use crate::format::{Bpos, Btree, DataType, ErrorKeyReason, BkeyType, MetadataVersion};
 
 // ── fsck: check_btree_backpointers ───────────────────────────────────────
 
@@ -413,7 +413,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
     // only backpointers are the stripes', so its sector counts aren't checked
     // at all.
     let data_type = DataType(a.data_type.into());
-    let count_stripes = fs.version() >= c::bcachefs_metadata_version::bcachefs_metadata_version_inline_data_csum;
+    let count_stripes = fs.version() >= MetadataVersion::inline_data_csum;
     let check_sectors = data_type != DataType::parity;
 
     if matches!(data_type, DataType::sb | DataType::journal) || (!check_sectors && !count_stripes) {
@@ -423,7 +423,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
     let Some(ca) = fs.dev_bucket_tryget_noerror(alloc_k.k.p) else { return Ok(false) };
     let bp_range = BackpointerPos::bucket_range(&ca, alloc_k.k.p);
     let before_bucket_gen = fs.version_upgrade_complete().0 <
-        c::bcachefs_metadata_version::bcachefs_metadata_version_backpointer_bucket_gen.0;
+        MetadataVersion::backpointer_bucket_gen.0;
 
     let mut sectors = BucketSectors::default();
     let mut nr_stripe_bps = 0u32;

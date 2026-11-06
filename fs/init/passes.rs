@@ -27,7 +27,7 @@ use crate::util::projections::Volatile;
 use crate::util::workqueue::ReffedWork;
 use cstruct_macros::{placed, CStruct, Init, TypeInfo, c_enum};
 use pin_init::pin_data;
-use crate::format::Btree;
+use crate::format::{Btree, SbFeature};
 
 c_enum! {
     #[flags]
@@ -913,7 +913,7 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
     let rec = &fs.recovery.runner;
     let mut r = lock(fs);
 
-    if fs.sb.features.get() & 1 << c::bch_sb_feature::BCH_FEATURE_no_alloc_info.0 != 0 {
+    if fs.sb.features.get() & 1 << SbFeature::no_alloc_info.0 != 0 {
         passes &= !passes_match(c::PASS_ALLOC);
     }
 
@@ -1187,7 +1187,7 @@ pub fn go_rw_in_recovery(fs: &Fs) -> bool {
          fs.opts().recovery_passes.get() != 0 ||
          fs.sb.recovery_passes_required.get() != 0 ||
          fs.recovery.runner.scheduled_passes_ephemeral.get() != 0 ||
-         (fs.opts().fsck.get() != 0 && !fs.feature(c::bch_sb_feature::BCH_FEATURE_no_alloc_info)))
+         (fs.opts().fsck.get() != 0 && !fs.feature(SbFeature::no_alloc_info)))
 }
 
 #[cfg(test)]

@@ -101,6 +101,7 @@ pub use self::pack::*;
 pub use self::packed::*;
 pub use self::text::*;
 pub use self::types::*;
+pub use crate::cstructs::btree_bkey_types::ValidateFlags;
 
 use crate::c;
 use crate::format::{Bpos, BkeyType};

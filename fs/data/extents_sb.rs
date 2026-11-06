@@ -5,6 +5,7 @@
 //! in-memory copy is c->sb.extent_type_u64s, a fixed size array: the
 //! section's sizes, then ours over the types we know.
 
+use crate::btree::bkey::ValidateFlags;
 use crate::sb_err_on;
 use crate::c;
 use crate::data::ptrs::{extent_entry_type_name, extent_entry_type_u64s};
@@ -39,7 +40,7 @@ fn sizes_to_cpu(theirs: &[u8]) -> ([u8; 31], u8) {
 
 impl SbFieldOps for c::bch_sb_field_extent_type_u64s {
     fn validate(_sb: &c::bch_sb<Unvalidated>, e: &c::bch_sb_field_extent_type_u64s<Unvalidated>,
-                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+                _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         for (ty, (&theirs, ours)) in sizes(&e.d).iter().zip(ours()).enumerate() {
             sb_err_on!(err, theirs != ours, BCH_ERR_invalid_sb_extent_type_u64s,
                        "extent_type_u64s for {} does not match in-mem ({theirs} != {ours})",
@@ -135,7 +136,7 @@ mod tests {
         let sb_bytes = plain_bytes_mut(&mut sb[..]);
         cast_plain_mut::<Head<c::bch_sb>>(sb_bytes).unwrap().set_val_u64s(0);
         let sb = c::bch_sb::<Unvalidated>::from_bytes(sb_bytes).unwrap();
-        let flags = c::bch_validate_flags::from_bits_retain(0);
+        let flags = ValidateFlags::from_bits_retain(0);
         let validate = |sizes: &[u8]| {
             let mut buf = [0u64; 4];
             let mut err = Printbuf::new();

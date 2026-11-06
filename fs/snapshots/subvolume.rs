@@ -18,9 +18,8 @@
 //! subvolume, maintained by the trigger.
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
+use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyWhole, POS_MIN, BkeyOps};
 use crate::util::vstructs::{Validated, Whole};
-use crate::btree::bkey::BkeyOps;
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
@@ -44,7 +43,7 @@ use crate::{bch_err, bch_err_msg, bkey_fsck_err_on, fs_inconsistent, fsck_err,
             fsck_err_on, fsck_err_report, prt};
 use core::mem::offset_of;
 use cstruct_macros::c_export;
-use crate::format::{Bpos, Btree, BkeyType};
+use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 
 /// Whether subvolume key @k is long enough to have @field.
 macro_rules! has_field {
@@ -414,7 +413,7 @@ fn check_subvol<'a, 't>(
     // after.
     if s.v().state().get() == 0 {
         let upgrading = fs.version_upgrade_complete() <
-            c::bcachefs_metadata_version::per_dev_fragmentation_lru;
+            MetadataVersion::per_dev_fragmentation_lru;
         if upgrading ||
            fsck_err!(t, id::subvol_state_bad,
                      "subvolume state unset, recovering from legacy flags:\n{}", s.to_text(fs))? {

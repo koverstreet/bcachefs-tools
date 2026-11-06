@@ -9,9 +9,9 @@ use std::os::unix::io::RawFd;
 
 use bch_bindgen::c;
 use bcachefs_kernel::alloc::disk_groups::Target;
-use bcachefs_kernel::metadata_version;
 
 use crate::wrappers::super_io::{die, SUPERBLOCK_SIZE_DEFAULT};
+use bcachefs_kernel::format::{MetadataVersion, SbFeature};
 use bcachefs_kernel::sb::io::BCHFS_MAGIC;
 use bcachefs_kernel::util::vstructs::Head;
 use bcachefs_kernel::sb::io::SbResize;
@@ -99,17 +99,17 @@ impl DevOpts {
 /// Must match BCH_SB_FEATURES_ALL in bcachefs_format_types.h.
 const BCH_SB_FEATURES_ALL: u64 = {
     // BCH_SB_FEATURES_ALWAYS:
-    (1 << c::bch_sb_feature::BCH_FEATURE_new_extent_overwrite.0 as u64) |
-    (1 << c::bch_sb_feature::BCH_FEATURE_extents_above_btree_updates.0 as u64) |
-    (1 << c::bch_sb_feature::BCH_FEATURE_btree_updates_journalled.0 as u64) |
-    (1 << c::bch_sb_feature::BCH_FEATURE_alloc_v2.0 as u64) |
-    (1 << c::bch_sb_feature::BCH_FEATURE_extents_across_btree_nodes.0 as u64) |
+    (1 << SbFeature::new_extent_overwrite.0 as u64) |
+    (1 << SbFeature::extents_above_btree_updates.0 as u64) |
+    (1 << SbFeature::btree_updates_journalled.0 as u64) |
+    (1 << SbFeature::alloc_v2.0 as u64) |
+    (1 << SbFeature::extents_across_btree_nodes.0 as u64) |
     // Plus FEATURES_ALL additions:
-    (1 << c::bch_sb_feature::BCH_FEATURE_new_siphash.0 as u64) |
-    (1 << c::bch_sb_feature::BCH_FEATURE_btree_ptr_v2.0 as u64) |
-    (1 << c::bch_sb_feature::BCH_FEATURE_new_varint.0 as u64) |
-    (1 << c::bch_sb_feature::BCH_FEATURE_journal_no_flush.0 as u64) |
-    (1 << c::bch_sb_feature::BCH_FEATURE_incompat_version_field.0 as u64)
+    (1 << SbFeature::new_siphash.0 as u64) |
+    (1 << SbFeature::btree_ptr_v2.0 as u64) |
+    (1 << SbFeature::new_varint.0 as u64) |
+    (1 << SbFeature::journal_no_flush.0 as u64) |
+    (1 << SbFeature::incompat_version_field.0 as u64)
 };
 
 /// Resolve a target string (device path or disk group name) to a target id.
@@ -227,7 +227,7 @@ pub fn format(
     sb.sb_mut().set_extent_bp_shift(16);
 
     let version_threshold =
-        u32::from(metadata_version::disk_accounting_big_endian);
+        u32::from(MetadataVersion::disk_accounting_big_endian);
     if opts.version > version_threshold {
         let f = &mut sb.sb_mut().features[0];
         f.set(f.get() | BCH_SB_FEATURES_ALL);
@@ -445,7 +445,7 @@ pub(crate) fn format_opts_default() -> FormatOpts<'static> {
 
     let kernel_version = crate::wrappers::sysfs::bcachefs_kernel_version() as u32;
     let current =
-        u32::from(metadata_version::max) - 1;
+        u32::from(MetadataVersion::max) - 1;
 
     let version = if kernel_version > 0 {
         current.min(kernel_version)

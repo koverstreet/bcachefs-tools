@@ -97,7 +97,7 @@ fn nocow_write_convert_unwritten(op: &mut Op) {
             done_u64s += usize::from(orig.k().u64s);
             let is_last = done_u64s == nr_u64s;
 
-            let mut iter = BtreeIter::new(&trans, Btree::BTREE_ID_extents, orig.k().start_pos(),
+            let mut iter = BtreeIter::new(&trans, Btree::extents, orig.k().start_pos(),
                                           BtreeIterFlags::INTENT | BtreeIterFlags::TRIM);
             iter.for_each_max(&trans, orig.k().p, |t, iter, k| {
                 let flush = op.has(w::BCH_WRITE_flush) && is_last && bkey_ge(k.k.p, orig.k().p);
@@ -149,7 +149,7 @@ fn bkey_get_dev_iorefs(fs: &Fs, k: BkeySC<'_, Ptrs>, cas: &mut [Option<DevWriteR
 }
 
 fn inode_get_i_size(t: &TransAttempt<'_, '_>, inode_pos: crate::format::Bpos) -> Result<u64, BchError> {
-    let mut iter = BtreeIter::new(t, Btree::BTREE_ID_inodes, inode_pos, BtreeIterFlags::CACHED);
+    let mut iter = BtreeIter::new(t, Btree::inodes, inode_pos, BtreeIterFlags::CACHED);
     let k = iter.peek_slot(t)?.expect("a slot");
 
     Ok(match k.typed() {
@@ -172,7 +172,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
         op.set(w::BCH_WRITE_convert_unwritten);
     }
 
-    let mut iter = BtreeIter::new(t, Btree::BTREE_ID_extents, spos(op.pos.inode, op.pos.offset, snapshot),
+    let mut iter = BtreeIter::new(t, Btree::extents, spos(op.pos.inode, op.pos.offset, snapshot),
                                   BtreeIterFlags::SLOTS | BtreeIterFlags::TRIM);
     loop {
         let sectors = u64::from(op.wbio.bio.bi_iter.bi_size >> 9);

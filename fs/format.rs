@@ -1263,7 +1263,9 @@ c_xmacro! {
 c_enum! {
     #[open]
     #[own_to_text]
-    pub enum bcachefs_metadata_version: u32 {
+    #[c_name(bcachefs_metadata_version)]
+    #[prefix(bcachefs_metadata_version_)]
+    pub enum MetadataVersion: u32 {
         bcachefs_metadata_version_min = bcachefs_metadata_version_btree_ptr_sectors_written,
         BCH_METADATA_VERSIONS(t, n, ..) => concat(bcachefs_metadata_version_, t) = n,
         bcachefs_metadata_version_max,
@@ -1587,7 +1589,9 @@ c_const! {
 
 c_enum! {
     #[open]
-    pub enum bch_sb_feature: u32 {
+    #[c_name(bch_sb_feature)]
+    #[prefix(BCH_FEATURE_)]
+    pub enum SbFeature: u32 {
         BCH_SB_FEATURES(f, ..) => concat(BCH_FEATURE_, f),
         BCH_FEATURE_NR,
     }

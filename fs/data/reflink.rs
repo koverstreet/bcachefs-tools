@@ -56,7 +56,7 @@ use core::mem::size_of;
 use core::ops::Range;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering::Relaxed};
 use cstruct_macros::c_export;
-use crate::format::{Btree, BkeyType, BkeyTypeFlags};
+use crate::format::{Btree, BkeyType, BkeyTypeFlags, MetadataVersion, SbFeature};
 
 pub type IndirectTypes = ByFlag<{ BkeyTypeFlags::indirect.bits() }>;
 
@@ -835,7 +835,7 @@ unsafe fn __make_extent_indirect(
     let orig = unsafe { &mut *BkeyI::from_raw_mut(orig) };
 
     if orig.k.key_type() == BkeyType::inline_data {
-        fs.check_set_feature(c::bch_sb_feature::BCH_FEATURE_reflink_inline_data);
+        fs.check_set_feature(SbFeature::reflink_inline_data);
     }
 
     /*
@@ -939,13 +939,13 @@ pub fn remap_range(
     let dst_end   = pos(dst_inum.inum, dst_offset + remap_sectors);
     let src_end   = pos(src_inum.inum, src_offset + remap_sectors);
     let reflink_p_may_update_opts_field = fs.request_incompat_feature(
-        c::bcachefs_metadata_version::bcachefs_metadata_version_reflink_p_may_update_opts).is_ok();
+        MetadataVersion::reflink_p_may_update_opts).is_ok();
 
     let Some(_write_ref) = fs.writes.tryget_live() else {
         return fs.throw(bch_errcode::BCH_ERR_erofs_no_writes);
     };
 
-    fs.check_set_feature(c::bch_sb_feature::BCH_FEATURE_reflink);
+    fs.check_set_feature(SbFeature::reflink);
 
     let trans = crate::btree_trans!(fs);
     let mut src_iter = BtreeIter::new(&trans, Btree::extents, src_start, BtreeIterFlags::INTENT);

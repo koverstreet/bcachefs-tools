@@ -17,7 +17,7 @@ use crate::btree::read::bch2_btree_node_read_done;
 use crate::c::{self, bch_errcode, BtreePtrV2};
 use crate::data::ptrs::extent_ptr_to_text;
 use crate::errcode::{ret_to_c, BchError};
-use crate::format::{Bpos, Btree, DataType, BkeyType};
+use crate::format::{Bpos, Btree, DataType, BkeyType, MetadataVersion};
 use crate::fs::{btree_id_can_reconstruct, Dev, Fs};
 use crate::init::passes;
 use crate::locking::Locked;
@@ -302,7 +302,7 @@ impl<'f> DevScan<'f> {
 
         let mi = ca.mi.get();
         let bitmap_on = fs.version_upgrade_complete().0 >=
-            c::bcachefs_metadata_version::bcachefs_metadata_version_mi_btree_bitmap.0;
+            MetadataVersion::mi_btree_bitmap.0;
         let buckets = || (u64::from(mi.first_bucket)..mi.nbuckets).filter(|&bucket| {
             !bitmap_on || ca.btree_bitmap_marked_sectors_any(ca.bucket_to_sector(bucket), mi.bucket_size.into())
         });

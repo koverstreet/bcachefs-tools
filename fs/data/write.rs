@@ -721,7 +721,7 @@ use crate::data::write_nocow::nocow_write;
 use crate::debug::async_objs;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Dev, Fs};
-use crate::format::{Bpos, DataType, BkeyType};
+use crate::format::{Bpos, DataType, BkeyType, MetadataVersion, SbFeature};
 use crate::locking::{Locked, MemallocFlags};
 use crate::debug::trace::events;
 use crate::sb::members::{DevIo, DevIoRef};
@@ -835,7 +835,7 @@ fn write_index_default(op: &mut Op) -> Result<(), BchError> {
 
             sk.k_mut().p.snapshot = subvolume::get_snapshot(t, subvol)?;
 
-            let mut iter = BtreeIter::new(t, crate::format::Btree::BTREE_ID_extents, sk.k().start_pos(),
+            let mut iter = BtreeIter::new(t, crate::format::Btree::extents, sk.k().start_pos(),
                                           BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT);
 
             t.extent_update(inum, &mut iter, &mut sk, &op.res, op.new_i_size, Some(&mut op.i_sectors_delta),
@@ -1508,11 +1508,11 @@ fn write_data_inline(mut op: Running<Op>, data_len: u32) {
     op.set(w::BCH_WRITE_wrote_data_inline);
     op.set(w::BCH_WRITE_submitted);
 
-    fs.check_set_feature(c::bch_sb_feature::BCH_FEATURE_inline_data);
+    fs.check_set_feature(SbFeature::inline_data);
 
     // with a checksum of its own, if the filesystem may have them
     let ty = if fs.request_incompat_feature(
-        c::bcachefs_metadata_version::bcachefs_metadata_version_inline_data_csum).is_ok() {
+        MetadataVersion::inline_data_csum).is_ok() {
         BkeyType::inline_data_v2
     } else {
         BkeyType::inline_data

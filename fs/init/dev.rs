@@ -224,7 +224,7 @@ use crate::data::migrate::{dev_data_drop, dev_data_drop_by_backpointers, dev_rem
 use crate::debug::sysfs::{DevDir, DEV_GROUPS};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, StateLockWrite};
-use crate::format::{DataType, MemberInitialized, MemberState};
+use crate::format::{DataType, MemberInitialized, MemberState, MetadataVersion, SbFeature};
 use crate::locking::MemallocFlags;
 use crate::opts::c_export::__bch2_data_types;
 use crate::sb::io::{read_super, SbReadScratch};
@@ -748,7 +748,7 @@ pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&c::block_device>, sb: &c::bch_
         return Err(bch_errcode::BCH_ERR_mismatched_block_size.into());
     }
 
-    let member_seq = c::bcachefs_metadata_version::member_seq.0;
+    let member_seq = MetadataVersion::member_seq.0;
     if u32::from(fs.version.get()) < member_seq || u32::from(dev.version.get()) < member_seq ||
        opts.no_splitbrain_check_or_default() {
         return Ok(());
@@ -1225,7 +1225,7 @@ impl Fs {
         let ca_p = ca.as_mut_ptr();
         let dev_idx = ca.dev_idx;
         let fast_device_removal = self.sb.compat.get() & (1 << c::bch_sb_compat::BCH_COMPAT_no_stale_ptrs.0) != 0 &&
-            self.request_incompat_feature(c::bcachefs_metadata_version::fast_device_removal).is_ok();
+            self.request_incompat_feature(MetadataVersion::fast_device_removal).is_ok();
 
         let slot = {
             let state = self.state_lock_write();
@@ -1888,7 +1888,7 @@ impl Fs {
                 m.set_resize_on_mount(false);
 
                 let s = sb.sb_mut();
-                s.features[0] = (s.features[0].get() & !(1 << c::bch_sb_feature::BCH_FEATURE_small_image.0)).into();
+                s.features[0] = (s.features[0].get() & !(1 << SbFeature::small_image.0)).into();
                 self.write_super(&mut sb);
             }
 

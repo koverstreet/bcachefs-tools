@@ -9,7 +9,7 @@ use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::metadata_version;
+use bcachefs_kernel::format::MetadataVersion;
 use bcachefs_kernel::util::vstructs::Head;
 use clap::Parser;
 
@@ -97,7 +97,7 @@ fn should_use_kernel_fsck(devs: &[String]) -> bool {
         return false;
     }
 
-    let current = u32::from(metadata_version::max) as u64 - 1;
+    let current = u32::from(MetadataVersion::max) as u64 - 1;
     if kernel_version == current {
         return false;
     }
@@ -120,7 +120,7 @@ fn should_use_kernel_fsck(devs: &[String]) -> bool {
               (sb_version <= kernel_version && kernel_version < current);
 
     if ret {
-        let v = |v| c::bcachefs_metadata_version(v as u32);
+        let v = |v| MetadataVersion(v as u32);
         println!("fsck binary is version {} but filesystem is {} and kernel is {}, using kernel fsck",
                  v(current), v(sb_version), v(kernel_version));
     }

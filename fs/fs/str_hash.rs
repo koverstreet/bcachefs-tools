@@ -27,7 +27,7 @@ use bitflags::bitflags;
 use core::ffi::{c_int, c_void};
 use cstruct_macros::{c_export, CStruct, TypeInfo};
 use crate::types::c_default;
-use crate::format::{Bpos, Btree, BkeyType};
+use crate::format::{Bpos, Btree, BkeyType, SbFeature};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -383,7 +383,7 @@ pub fn new_inode_type(fs: &Fs) -> c::bch_str_hash_type {
         c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc32c  => c::bch_str_hash_type::BCH_STR_HASH_crc32c,
         c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc64   => c::bch_str_hash_type::BCH_STR_HASH_crc64,
         c::bch_str_hash_opts::BCH_STR_HASH_OPT_siphash => {
-            if fs.feature(c::bch_sb_feature::BCH_FEATURE_new_siphash) {
+            if fs.feature(SbFeature::new_siphash) {
                 c::bch_str_hash_type::BCH_STR_HASH_siphash
             } else {
                 c::bch_str_hash_type::BCH_STR_HASH_siphash_old

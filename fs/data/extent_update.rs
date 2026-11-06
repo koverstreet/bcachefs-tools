@@ -91,7 +91,7 @@ impl<'t> TransAttempt<'_, 't> {
             BkeyType::reflink_p => {
                 let idx = k.arm::<c::ReflinkP>().expect("a reflink_p").v().idx();
                 let sectors = n.end.min(k.k.p).offset - k.k.start_offset();
-                let mut iter = BtreeIter::new(self, Btree::BTREE_ID_reflink, pos(0, idx + offset),
+                let mut iter = BtreeIter::new(self, Btree::reflink, pos(0, idx + offset),
                                               BtreeIterFlags::SLOTS);
 
                 iter.for_each_norestart(self, |_, r_k| {
@@ -284,7 +284,7 @@ impl<'t> TransAttempt<'_, 't> {
     {
         let fs = self.fs();
 
-        let mut iter = BtreeIter::new(self, Btree::BTREE_ID_inodes,
+        let mut iter = BtreeIter::new(self, Btree::inodes,
                                       spos(0, extent_iter.pos().inode, extent_iter.snapshot()),
                                       BtreeIterFlags::INTENT | BtreeIterFlags::CACHED);
         let k = iter.peek_slot(self)?.expect("a slot");

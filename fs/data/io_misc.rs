@@ -19,8 +19,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
-use crate::btree::bkey::{bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole};
-use crate::btree::bkey::BkeyOps;
+use crate::btree::bkey::{bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole, BkeyOps};
 use crate::btree::iter::{commit_do, is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
@@ -39,7 +38,7 @@ use crate::{bch_err_fn, bch_err_ratelimited, inode, logged_ops};
 use core::ffi::c_int;
 use cstruct_macros::c_export;
 use pin_init::stack_pin_init;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, MetadataVersion, SbFeature};
 
 /// MAX_LFS_FILESIZE: as far as the page cache indexes - a 32 bit kernel's
 /// ULONG_MAX pages, else LLONG_MAX.
@@ -59,7 +58,7 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
                             write_point: c::write_point_specifier) -> Result<(), BchError> {
     let fs = t.fs();
     let unwritten = opts.nocow != 0 &&
-        fs.version() >= c::bcachefs_metadata_version::bcachefs_metadata_version_unwritten_extents;
+        fs.version() >= MetadataVersion::unwritten_extents;
 
     // the slot, trimmed whatever @iter's flags
     let (mut sectors, nr_overwritable) = {
@@ -384,9 +383,9 @@ fn finsert_take_ancestor_extent<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>)
      * As remap; asked for only here, as it may set the superblock's
      * incompat version:
      */
-    fs.check_set_feature(c::bch_sb_feature::BCH_FEATURE_reflink);
+    fs.check_set_feature(SbFeature::reflink);
     let reflink_p_may_update_opts = fs.request_incompat_feature(
-        c::bcachefs_metadata_version::bcachefs_metadata_version_reflink_p_may_update_opts).is_ok();
+        MetadataVersion::reflink_p_may_update_opts).is_ok();
 
     let mut src_iter = BtreeIter::new(t, Btree::extents, k.k.p,
                                       BtreeIterFlags::INTENT |

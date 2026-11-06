@@ -1,5 +1,6 @@
 #![allow(non_camel_case_types)]
 
+use crate::btree::bkey::ValidateFlags;
 use crate::format::{Btree, MemberState, Nonce};
 
 #[path = "buckets.rs"] pub mod buckets;
@@ -32,7 +33,6 @@ use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, SelfSized, Unvalid
 use crate::util::workqueue::Queue;
 use crate::util::ToText;
 use crate::{bch_err, bch_err_dev, bch_info, bch_info_dev, fs_fatal_error, fsck_err, fsck_err_on, new_lock, prt};
-use c::bch_validate_flags as Flags;
 use core::mem::offset_of;
 use core::ops::Range;
 use core::ptr::NonNull;
@@ -1270,7 +1270,7 @@ fn newest_flush(fs: &Fs, entries: &mut JournalEntries) -> Result<Newest, BchErro
             continue;
         }
 
-        validate::jset_last_seq_check(fs, &mut i.j, Flags::empty())?;
+        validate::jset_last_seq_check(fs, &mut i.j, ValidateFlags::empty())?;
 
         return Ok(Newest::Flush(c::journal_start_info {
             cur_seq,
@@ -1410,10 +1410,10 @@ fn validate_kept(fs: &Fs, not_rw: &NotRw<'_>, entries: &mut JournalEntries, drop
 
         let p = i.ptrs()[0];
         let ca = fs.dev_get(p.dev.into());
-        match validate::jset_validate(fs, ca.as_deref(), i.jset_bytes_mut(), p.sector, Flags::empty())? {
+        match validate::jset_validate(fs, ca.as_deref(), i.jset_bytes_mut(), p.sector, ValidateFlags::empty())? {
             Jset::Ok => {}
             /* its last_seq was past its seq, and repaired: its entries still need validating */
-            Jset::Bad => validate::jset_validate_entries(fs, i.jset_bytes_mut(), Flags::empty())?,
+            Jset::Bad => validate::jset_validate_entries(fs, i.jset_bytes_mut(), ValidateFlags::empty())?,
             Jset::None => unreachable!("a kept entry's magic was checked when it was read"),
         }
 

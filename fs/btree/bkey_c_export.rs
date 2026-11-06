@@ -8,6 +8,7 @@ use core::mem::offset_of;
 use core::slice;
 
 use super::{transform, BkeyP, BKEY_FORMAT_CURRENT, BKEY_U64S};
+use crate::btree::bkey::ValidateFlags;
 use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::errcode::ret_to_c;
@@ -59,7 +60,7 @@ pub fn bch2_bkey_format_done(s: &mut c::bkey_format_state) -> c::bkey_format {
 
 #[c_export]
 pub fn bch2_bkey_format_invalid(_c: Option<&Opaque<Fs>>, f: &c::bkey_format,
-                                _flags: c::bch_validate_flags, err: &mut Printbuf) -> c_int {
+                                _flags: ValidateFlags, err: &mut Printbuf) -> c_int {
     ret_to_c(f.validate(err))
 }
 

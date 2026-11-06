@@ -53,9 +53,9 @@ nest! {
 #[c_export]
 pub fn bch2_gc_btree_order(btree: Btree) -> c_int {
     match btree {
-        Btree::BTREE_ID_alloc   => -3,
-        Btree::BTREE_ID_stripes => -2,
-        Btree::BTREE_ID_reflink => -1,
+        Btree::alloc   => -3,
+        Btree::stripes => -2,
+        Btree::reflink => -1,
         b                       => b.0 as c_int,
     }
 }

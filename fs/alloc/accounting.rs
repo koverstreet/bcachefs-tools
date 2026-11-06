@@ -53,16 +53,14 @@ use crate::alloc::accounting_mem::{self, mem_read, mem_read_locked, usage_of, De
 use crate::alloc::buckets::bch_fs_usage_base;
 use crate::alloc::replicas::{replicas_acct, SbEntry};
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyTag, BKEY_U64S, POS_MIN};
+use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyTag, BKEY_U64S, POS_MIN, ValidateFlags, BkeyOps};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, LoopFlow,
                          TransAttempt};
 use crate::btree::update::Subbuf;
 use crate::c;
-use crate::c::bch_validate_flags;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{self, Bpos};
 use crate::fs::Fs;
-use crate::btree::bkey::BkeyOps;
 use crate::init::error::{id, BkeyValidate};
 use crate::types::ArmOf;
 use crate::util::rcu;
@@ -270,7 +268,7 @@ impl BkeyOps for c::Accounting {
         };
 
         let ver = v.k.k.bversion;
-        bkey_fsck_err_on!(v, v.from.flags().contains(bch_validate_flags::BCH_VALIDATE_commit) &&
+        bkey_fsck_err_on!(v, v.from.flags().contains(ValidateFlags::commit) &&
                           ver.hi == 0 && ver.lo == 0,
                           id::accounting_key_version_0, "accounting key with version=0")?;
 

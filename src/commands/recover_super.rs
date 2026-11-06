@@ -3,6 +3,7 @@ use std::os::unix::fs::FileExt;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use anyhow::{anyhow, bail, Result};
+use bcachefs_kernel::btree::bkey::ValidateFlags;
 use bcachefs_kernel::c;
 use bcachefs_kernel::util::vstructs::Head;
 use bch_bindgen::sb::io as sb_io;
@@ -66,7 +67,7 @@ fn sb_last_mount_time(sb: &c::bch_sb) -> u64 {
 
 fn validate_sb(sb: SbBuf<Unvalidated>, offset_sectors: u64) -> Result<SbBuf, Printbuf> {
     let mut err = Printbuf::new();
-    sb.validate(&c::bch_opts::default(), offset_sectors, c::bch_validate_flags::empty(), &mut err)
+    sb.validate(&c::bch_opts::default(), offset_sectors, ValidateFlags::empty(), &mut err)
         .map_err(|_| err)
 }
 

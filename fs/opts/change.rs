@@ -6,7 +6,7 @@
 //! starts. The pre-set hooks run at mount too, for every option, with no
 //! change to register: opts_hooks_pre_set().
 
-use crate::format::MemberState;
+use crate::format::{MemberState, SbFeature};
 use crate::fs::Dev;
 use super::{opt_id, opt_to_text, Opt, OPTS};
 use crate::c;
@@ -102,7 +102,7 @@ fn opt_hook_pre_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64, ch
         }
         opt_id::Opt_erasure_code => {
             if v != 0 {
-                fs.check_set_feature(c::bch_sb_feature::BCH_FEATURE_ec);
+                fs.check_set_feature(SbFeature::ec);
             }
         }
         opt_id::Opt_rotational => {
@@ -114,7 +114,7 @@ fn opt_hook_pre_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64, ch
             }
         }
         opt_id::Opt_casefold_disabled => {
-            if v != 0 && fs.sb.features.get() & 1 << c::bch_sb_feature::BCH_FEATURE_casefolding.0 != 0 {
+            if v != 0 && fs.sb.features.get() & 1 << SbFeature::casefolding.0 != 0 {
                 crate::bch_err!(fs, "cannot mount with casefolding disabled: casefolding already in use");
                 return fs.throw(bch_errcode::BCH_ERR_casefolding_in_use);
             }

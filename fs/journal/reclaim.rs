@@ -18,7 +18,7 @@ use crate::c::JournalGuard;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
-use crate::format::DataType;
+use crate::format::{DataType, SbFeature};
 use crate::fs::{Dev, Fs};
 use crate::journal::pins::PinsRead;
 use crate::locking::{ExclusiveGuard, MemallocFlags};
@@ -303,7 +303,7 @@ impl c::journal {
         g.can_discard = can_discard;
 
         if nr_online == 0 {
-            if !fs.feature(c::bch_sb_feature::BCH_FEATURE_small_image) {
+            if !fs.feature(SbFeature::small_image) {
                 let _f = MemallocFlags::noreclaim();
                 let mut buf = Printbuf::new();
                 prt!(&mut buf, "no writeable journal devices available\n");

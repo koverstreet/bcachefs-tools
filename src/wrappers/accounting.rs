@@ -1,7 +1,7 @@
 use bcachefs_kernel::btree::bkey::prelude::*;
 use anyhow::anyhow;
 use bch_bindgen::c;
-use bcachefs_kernel::metadata_version;
+use bcachefs_kernel::format::MetadataVersion;
 use bcachefs_kernel::util::vstructs::{Unvalidated, VstructRefEntries};
 
 use super::handle::BcachefsHandle;
@@ -110,7 +110,7 @@ fn parse_accounting_entries(data: &[u8]) -> anyhow::Result<Vec<AccountingEntry>>
     // Kernels before disk_accounting_big_endian wrote the pos byte swapped
     let kernel_version = bcachefs_kernel_version();
     let need_swab = kernel_version > 0
-        && kernel_version < u32::from(metadata_version::disk_accounting_big_endian) as u64;
+        && kernel_version < u32::from(MetadataVersion::disk_accounting_big_endian) as u64;
 
     VstructRefEntries::<c::bkey_i>::new(data)
         .map(|k| {

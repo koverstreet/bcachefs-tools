@@ -105,14 +105,13 @@ impl c::reconcile_work_id {
 /// reflink at 1 - its inode 0, moved up - and extents, whose inodes start at
 /// BCACHEFS_ROOT_INO, after them. data_to_rb_work_pos().
 pub fn data_to_rb_work_pos(btree: Btree, mut p: Bpos) -> Bpos {
-    use Btree as b;
-    if btree == b::reflink || btree == b::stripes {
+    if btree == Btree::reflink || btree == Btree::stripes {
         p = p.min(pos(0, u64::MAX));
     }
-    if btree == b::extents {
+    if btree == Btree::extents {
         p = p.max(pos(c::BCACHEFS_ROOT_INO as u64, 0));
     }
-    if btree == b::reflink {
+    if btree == Btree::reflink {
         p.inode += 1;
     }
     p

@@ -58,7 +58,7 @@ use core::ptr::{self, NonNull};
 use cstruct_macros::{c_export, bitfield, c_enum, CStruct, TypeInfo};
 use crate::types::c_default;
 use nestify::nest;
-use crate::format::{Bpos, CompressionType};
+use crate::format::{Bpos, CompressionType, SbFeature};
 
 nest! {
     #[derive(Clone, Copy, CStruct, TypeInfo)]*
@@ -176,7 +176,7 @@ fn opt_feature(t: usize) -> u64 {
         ((none, $n0:literal), $(($t:ident, $n:literal)),* $(,)?) => { ::paste::paste! {
             match t {
                 $n0 => 1,
-                $($n => 1 << c::bch_sb_feature::[<BCH_FEATURE_ $t>].0,)*
+                $($n => 1 << SbFeature::[<BCH_FEATURE_ $t>].0,)*
                 _ => panic!("compression opt type {t}"),
             }
         } };

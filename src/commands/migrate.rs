@@ -11,6 +11,7 @@
 // the file is what keeps the old filesystem's allocator away from blocks
 // bcachefs is using, and removing it would corrupt both filesystems.
 
+use bcachefs_kernel::format::SbFeature;
 use bcachefs_kernel::fs::Dev;
 use std::ffi::CString;
 use std::fs;
@@ -454,7 +455,7 @@ fn migrate_fs(
     {
         let mut sb = fs.sb_lock();
         let f = &mut sb.sb_mut().features[0];
-        f.set(f.get() | (1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64));
+        f.set(f.get() | (1u64 << SbFeature::no_default_sb.0 as u64));
         fs.write_super_ret(&mut sb)
             .map_err(|e| anyhow!("Error writing superblock: {}", e))?;
     }
@@ -568,9 +569,9 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
     {
         let mut sb = fs.sb_lock();
         let f = &mut sb.sb_mut().features[0];
-        f.set(f.get() & !(1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64));
+        f.set(f.get() & !(1u64 << SbFeature::no_default_sb.0 as u64));
         // Also update the cached copy — c->sb.features is host-endian
-        *sb.published().features.place() &= !(1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64);
+        *sb.published().features.place() &= !(1u64 << SbFeature::no_default_sb.0 as u64);
         fs.write_super_ret(&mut sb)
             .map_err(|e| anyhow!("Error writing superblock: {}", e))?;
 

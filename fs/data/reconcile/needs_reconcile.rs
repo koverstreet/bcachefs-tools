@@ -15,7 +15,7 @@ use crate::data::durability::BkeyVDurability;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
 use crate::data::reconcile::trigger::{extent_reconcile_to_text, BkeyVReconcile};
 use crate::errcode::{ret_to_c, BchError};
-use crate::format::{CompressionType, BkeyType};
+use crate::format::{CompressionType, BkeyType, MetadataVersion};
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
 use crate::util::kernel::unlikely;
@@ -66,7 +66,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
     let fs = t.fs();
     let btree = k.k.is_btree_ptr();
 
-    if btree && fs.request_incompat_feature(c::bcachefs_metadata_version::reconcile).is_err() {
+    if btree && fs.request_incompat_feature(MetadataVersion::reconcile).is_err() {
         return Ok(None);
     }
 
@@ -176,7 +176,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
         .min(invalid as i32);
 
     // more than one pointer to BCH_SB_MEMBER_INVALID is an incompat feature
-    if invalid_devs < 0 && fs.request_incompat_feature(c::bcachefs_metadata_version::reconcile).is_err() {
+    if invalid_devs < 0 && fs.request_incompat_feature(MetadataVersion::reconcile).is_err() {
         invalid_devs = 0;
     }
 
@@ -194,7 +194,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
         None      => should_have,
     };
 
-    Ok((changed && fs.request_incompat_feature(c::bcachefs_metadata_version::sb_field_extent_type_u64s).is_ok())
+    Ok((changed && fs.request_incompat_feature(MetadataVersion::sb_field_extent_type_u64s).is_ok())
         .then_some(NeedsReconcile { r, invalid_devs }))
 }
 

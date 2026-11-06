@@ -18,11 +18,11 @@
 
 use crate::accounting::DiskAccountingPos;
 use crate::alloc::accounting_mem::{self, MarkWrite};
-use crate::btree::bkey::{BkeySC, BkeyV};
+use crate::btree::bkey::{BkeySC, BkeyV, ValidateFlags};
 use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
-use crate::format::DataType;
+use crate::format::{DataType, MetadataVersion};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{entries_as_read, entries_end, SbField, SbFieldOps, SbState};
 use crate::sb::members::member_exists;
@@ -708,7 +708,7 @@ fn section_to_text<'a>(out: &mut Printbuf, entries: impl Iterator<Item = SbEntry
 
 impl SbFieldOps for c::bch_sb_field_replicas {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_replicas<Unvalidated>,
-                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+                _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         section_validate(sb, || v1_entries(f.as_bytes()), err)
     }
 
@@ -736,7 +736,7 @@ impl SbFieldOps for c::bch_sb_field_replicas {
 
 impl SbFieldOps for c::bch_sb_field_replicas_v0 {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_replicas_v0<Unvalidated>,
-                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+                _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         section_validate(sb, || v0_entries(f.as_bytes()), err)
     }
 
@@ -766,7 +766,7 @@ impl Fs {
     /// data's don't, past no_sb_user_data_replicas.
     fn replicas_obsolete(&self, data_type: u8) -> bool {
         u32::from(data_type) > DataType::btree.0 &&
-            u32::from(self.sb.version_incompat.get()) >= c::bcachefs_metadata_version::no_sb_user_data_replicas.0
+            u32::from(self.sb.version_incompat.get()) >= MetadataVersion::no_sb_user_data_replicas.0
     }
 
     /// Whether @e is marked in the superblock - or needn't be: obsolete, or
@@ -1056,7 +1056,7 @@ mod tests {
             let f = sb.field_resize::<V0>(3).unwrap();
             bytes_of_mut(f)[SECTION_HEAD + 3..][..2].copy_from_slice(&[BTREE, 20]);
 
-            let flags = if write { c::bch_validate_flags::BCH_VALIDATE_write } else { c::bch_validate_flags::empty() };
+            let flags = if write { ValidateFlags::write } else { ValidateFlags::empty() };
             let mut err = Printbuf::new();
             let ret = crate::errcode::ret_to_c(crate::sb::io::validate_section::<V0>(&mut sb, flags, &mut err));
             (sb, ret, err)

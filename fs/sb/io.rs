@@ -136,6 +136,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::bkey::ValidateFlags;
 use crate::fs::Dev;
 use crate::c;
 use crate::c::{bch_sb, bch_sb_buf, bch_sb_field_crypt, bch_sb_handle, block_device};
@@ -166,7 +167,7 @@ use crate::data_structures::array_vec::ArrayVec;
 use core::pin::Pin;
 use pin_init::PinInit;
 use crate::published;
-use crate::format::{Btree, DataType, Nonce};
+use crate::format::{Btree, DataType, Nonce, MetadataVersion, SbFeature};
 
 /*
  * bringup: this write is part of bringing the filesystem up - allowed before
@@ -272,7 +273,7 @@ impl<F: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef + ?Sized> SbField for F {}
 /// And which way it's kept in step with memory: to_cpu() where the superblock
 /// is the master copy, from_cpu() where memory is.
 pub trait SbFieldOps: SbField + InState {
-    fn validate(_sb: &bch_sb<Unvalidated>, _f: &Self::In<Unvalidated>, _flags: c::bch_validate_flags,
+    fn validate(_sb: &bch_sb<Unvalidated>, _f: &Self::In<Unvalidated>, _flags: ValidateFlags,
                 _err: &mut Printbuf) -> Result<(), BchError> {
         Ok(())
     }
@@ -370,7 +371,7 @@ fn field_head(sb: &bch_sb<Unvalidated>, off: usize) -> &Head<c::bch_sb_field> {
 /// The section at @off of @sb validated as its type says: a partial entry at
 /// its end repaired at read, invalid at write; then its type's own checks.
 /// Nothing to do for a type this version doesn't know.
-fn validate_at(sb: &mut bch_sb<Unvalidated>, off: usize, flags: c::bch_validate_flags, err: &mut Printbuf)
+fn validate_at(sb: &mut bch_sb<Unvalidated>, off: usize, flags: ValidateFlags, err: &mut Printbuf)
     -> Result<(), BchError>
 {
     let ty = field_head(sb, off).type_.get();
@@ -390,7 +391,7 @@ fn validate_at(sb: &mut bch_sb<Unvalidated>, off: usize, flags: c::bch_validate_
         return too_short(err, len);
     };
     if end.next_multiple_of(size_of::<u64>()) < len {
-        if flags.contains(c::bch_validate_flags::BCH_VALIDATE_write) {
+        if flags.contains(ValidateFlags::write) {
             write!(err, "{} bytes past its last whole entry", len - end);
             return invalid();
         }
@@ -419,7 +420,7 @@ impl c::bch_sb_field<Unvalidated> {
     }
 
     /// Its type's validate(): None if it can't be read as one.
-    fn validate(&self, sb: &bch_sb<Unvalidated>, flags: c::bch_validate_flags, err: &mut Printbuf)
+    fn validate(&self, sb: &bch_sb<Unvalidated>, flags: ValidateFlags, err: &mut Printbuf)
         -> Option<Result<(), BchError>>
     {
         let r = self.typed().ok()?;
@@ -446,7 +447,7 @@ impl c::bch_sb_field_type {
 /// said so in @err, with what it holds. A repair made as it's read is said
 /// too.
 fn field_validate(sb: &mut bch_sb<Unvalidated>, off: usize,
-                  flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+                  flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
     let ty = field_head(sb, off).type_.get();
     let name = c::bch_sb_field_type(ty).name().unwrap_or("(unknown)");
     let mut field_err = Printbuf::new();
@@ -522,8 +523,8 @@ pub(crate) fn version_compatible(version: u16) -> bool {
         u32::from(version) >= c::bcachefs_metadata_version_min as u32
 }
 
-pub(crate) fn version(v: impl Into<u32>) -> c::bcachefs_metadata_version {
-    c::bcachefs_metadata_version(v.into())
+pub(crate) fn version(v: impl Into<u32>) -> MetadataVersion {
+    MetadataVersion(v.into())
 }
 
 fn sb_compatible(sb: &Head<bch_sb>, out: &mut Printbuf) -> Result<(), BchError> {
@@ -548,8 +549,8 @@ fn sb_compatible(sb: &Head<bch_sb>, out: &mut Printbuf) -> Result<(), BchError> 
 /// incompat_allowed older versions didn't downgrade, a partial entry at a
 /// section's end. What passes is Validated.
 pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_offset: u64,
-                    flags: c::bch_validate_flags, out: &mut Printbuf) -> Result<&'a mut bch_sb, BchError> {
-    let write = flags.contains(c::bch_validate_flags::BCH_VALIDATE_write);
+                    flags: ValidateFlags, out: &mut Printbuf) -> Result<&'a mut bch_sb, BchError> {
+    let write = flags.contains(ValidateFlags::write);
 
     sb_compatible(sb, out)?;
 
@@ -565,7 +566,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
 
         sb_err_on!(out, incompat_bit != 0, BCH_ERR_invalid_sb_features,
                    "Filesystem has incompatible feature bit {incompat_bit}, highest supported {} ({})",
-                   c::bch_sb_feature(c::BCH_FEATURE_NR - 1), c::BCH_FEATURE_NR - 1)?;
+                   SbFeature(c::BCH_FEATURE_NR - 1), c::BCH_FEATURE_NR - 1)?;
 
         let current = c::bcachefs_metadata_version_current as u64;
         sb_err_on!(out, c::BCH_VERSION_MAJOR(sb.version.get().into()) > c::BCH_VERSION_MAJOR(current) ||
@@ -670,7 +671,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
 /// validate(), of the superblock at the start of @buf - read into it whole:
 /// its count saying it's longer than @buf is an error too.
 pub fn validate_bytes<'a>(buf: &'a mut [u8], opts: &c::bch_opts, read_offset: u64,
-                          flags: c::bch_validate_flags, out: &mut Printbuf) -> Result<&'a mut bch_sb, BchError> {
+                          flags: ValidateFlags, out: &mut Printbuf) -> Result<&'a mut bch_sb, BchError> {
     let sb = bch_sb::<Unvalidated>::from_bytes_mut(buf).map_err(|e| {
         write!(out, "Invalid superblock: {e}");
         BchError::from(bch_errcode::BCH_ERR_invalid_sb_too_big)
@@ -691,7 +692,7 @@ macro_rules! metadata_versions {
 }
 c::BCH_METADATA_VERSIONS!(metadata_versions);
 
-impl c::bcachefs_metadata_version {
+impl MetadataVersion {
     /// Its name, if it's a version this one knows.
     pub fn name(self) -> Option<&'static str> {
         VERSIONS.iter().find(|&&(v, _)| v == self.0).map(|&(_, name)| name)
@@ -709,28 +710,28 @@ impl c::bcachefs_metadata_version {
 }
 
 /// The version's name and number.
-impl ToText for c::bcachefs_metadata_version {
+impl ToText for MetadataVersion {
     fn to_text(&self, out: &mut Printbuf) {
         let v = u64::from(self.0);
         prt!(out, "{} ({}.{})", self.name().unwrap_or("(unknown version)"),
              c::BCH_VERSION_MAJOR(v), c::BCH_VERSION_MINOR(v));
     }
 }
-crate::display_via_to_text!(c::bcachefs_metadata_version);
+crate::display_via_to_text!(MetadataVersion);
 
 impl Fs {
     /// Whether features of @version may be used, without asking:
     /// bch2_incompat_feature_allowed().
-    pub(crate) fn incompat_feature_allowed(&self, version: c::bcachefs_metadata_version) -> bool {
+    pub(crate) fn incompat_feature_allowed(&self, version: MetadataVersion) -> bool {
         version.0 <= self.sb.version_incompat.get().into() ||
-            (self.feature(c::bch_sb_feature::BCH_FEATURE_incompat_version_field) &&
+            (self.feature(SbFeature::incompat_version_field) &&
              version.0 <= self.sb.version_incompat_allowed.get().into())
     }
 
     /// Make the filesystem incompatible with versions before @version, if
     /// that's allowed, writing the superblock: bch2_set_version_incompat().
     /// If it isn't, the first request for each version says so.
-    pub fn set_version_incompat(&self, version: c::bcachefs_metadata_version) -> Result<(), BchError> {
+    pub fn set_version_incompat(&self, version: MetadataVersion) -> Result<(), BchError> {
         if self.incompat_feature_allowed(version) {
             let mut sb = self.sb_lock();
             if version.0 > self.sb.version_incompat.get().into() {
@@ -756,7 +757,7 @@ impl Fs {
 
     /// Mark the filesystem as using @feature, writing the superblock if it
     /// didn't - checked again under sb_lock: __bch2_check_set_feature().
-    pub(crate) fn set_feature(&self, feature: c::bch_sb_feature) {
+    pub(crate) fn set_feature(&self, feature: SbFeature) {
         let mut sb = self.sb_lock();
         if !self.feature(feature) {
             sb.sb_mut().features[0] |= 1 << feature.0;
@@ -790,13 +791,13 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_set_version_incompat(c: &Opaque<Fs>, version: c::bcachefs_metadata_version) -> c_int {
+pub fn bch2_set_version_incompat(c: &Opaque<Fs>, version: MetadataVersion) -> c_int {
     ret_to_c(Fs::from_c(c).set_version_incompat(version))
 }
 
 #[c_export]
 pub fn __bch2_check_set_feature(c: &Opaque<Fs>, feat: c_uint) {
-    Fs::from_c(c).set_feature(c::bch_sb_feature(feat))
+    Fs::from_c(c).set_feature(SbFeature(feat))
 }
 
 /// A superblock newer than this version brought down to it - what it's at
@@ -903,7 +904,7 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
 
     let have = sb.entries().map_while(Result::ok).fold(0u64, |m, f| m | 1u64.checked_shl(f.type_.get()).unwrap_or(0));
     prt!(out, "Sections:\t{}\n", names::set::<c::bch_sb_field_type>(have));
-    prt!(out, "Features:\t{}\n", names::set::<c::bch_sb_feature>(sb.features[0].get()));
+    prt!(out, "Features:\t{}\n", names::set::<SbFeature>(sb.features[0].get()));
     prt!(out, "Compat features:\t{}\n", names::set::<c::bch_sb_compat>(sb.compat[0].get()));
 
     prt!(out, "\nOptions:\n");
@@ -1182,8 +1183,6 @@ impl bch_sb_handle {
 
     /// The defaults an older version left unset, filled in
     pub fn set_compat_defaults(&mut self) -> Result<(), BchError> {
-        use c::bcachefs_metadata_version as V;
-
         let s = self.sb_mut();
         let version = u32::from(s.version.get());
 
@@ -1197,16 +1196,16 @@ impl bch_sb_handle {
         if s.version_upgrade_complete() == 0 {
             s.set_version_upgrade_complete(version.into());
         }
-        if version <= V::bcachefs_metadata_version_disk_accounting_v2.0 && s.allocator_stuck_timeout() == 0 {
+        if version <= MetadataVersion::disk_accounting_v2.0 && s.allocator_stuck_timeout() == 0 {
             s.set_allocator_stuck_timeout(30);
         }
-        if version <= V::bcachefs_metadata_version_disk_accounting_v2.0 {
+        if version <= MetadataVersion::disk_accounting_v2.0 {
             s.set_promote_whole_extents(true);
         }
         if s.write_error_timeout() == 0 {
             s.set_write_error_timeout(30);
         }
-        if version <= V::bcachefs_metadata_version_extent_flags.0 && s.csum_err_retry_nr() == 0 {
+        if version <= MetadataVersion::extent_flags.0 && s.csum_err_retry_nr() == 0 {
             s.set_csum_err_retry_nr(3);
         }
 
@@ -1223,7 +1222,7 @@ impl bch_sb_handle {
         if ext.btree_cache_shrinker_seeks() == 0 {
             ext.set_btree_cache_shrinker_seeks(4);
         }
-        if version <= V::bcachefs_metadata_version_erasure_coding.0 && ext.discard_buffer() == 0 {
+        if version <= MetadataVersion::erasure_coding.0 && ext.discard_buffer() == 0 {
             ext.set_discard_buffer(4);
         }
         Ok(())
@@ -1562,7 +1561,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
     }
 
     sb.io.bits.set_have_layout(1);
-    validate_bytes(sb.buffer_mut(), opts, sb_offset, c::bch_validate_flags::empty(), err)?;
+    validate_bytes(sb.buffer_mut(), opts, sb_offset, ValidateFlags::empty(), err)?;
 
     if primary_bad && sb.dev.mode & c::BLK_OPEN_WRITE != 0 {
         match rewrite_primary_super(&mut sb) {
@@ -2315,7 +2314,7 @@ impl DevSbMut<'_> {
     /// Valid to be written, as validate() checks one about to be.
     fn validate_write(&mut self, err: &mut Printbuf) -> Result<(), BchError> {
         let opts = c::bch_opts::default();
-        validate_bytes(self.io.buf.buffer_mut(), &opts, 0, c::bch_validate_flags::BCH_VALIDATE_write, err)
+        validate_bytes(self.io.buf.buffer_mut(), &opts, 0, ValidateFlags::write, err)
             .map(drop)
     }
 
@@ -2460,8 +2459,8 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
     let version = u32::from(sb.sb().version.get());
     if version > c::bcachefs_metadata_version_current {
         crate::fs_fatal_error!(fs, ": attempting to write superblock that wasn't version downgraded ({} > {})",
-                               c::bcachefs_metadata_version(version),
-                               c::bcachefs_metadata_version(c::bcachefs_metadata_version_current));
+                               MetadataVersion(version),
+                               MetadataVersion(c::bcachefs_metadata_version_current));
         return fs.throw(bch_errcode::BCH_ERR_sb_not_downgraded);
     }
 
@@ -3119,7 +3118,7 @@ impl SbBuf<Unvalidated> {
     }
 
     /// validate(), as read from @read_offset: Validated if it passes.
-    pub fn validate(mut self, opts: &c::bch_opts, read_offset: u64, flags: c::bch_validate_flags,
+    pub fn validate(mut self, opts: &c::bch_opts, read_offset: u64, flags: ValidateFlags,
                     out: &mut Printbuf) -> Result<SbBuf<Validated>, BchError> {
         validate(self.sb_mut(), opts, read_offset, flags, out)?;
         Ok(SbBuf { buf: self.buf, _state: core::marker::PhantomData })
@@ -3149,7 +3148,7 @@ impl SbBuf<Validated> {
 /// validate_at(), of @sb's section of type F, as a read or a write of it
 /// would: for tests.
 #[cfg(test)]
-pub(crate) fn validate_section<F: SbField + ?Sized>(sb: &mut bch_sb_handle, flags: c::bch_validate_flags,
+pub(crate) fn validate_section<F: SbField + ?Sized>(sb: &mut bch_sb_handle, flags: ValidateFlags,
                                                     err: &mut Printbuf) -> Result<(), BchError> {
     let off = field_offset(sb.sb(), F::FIELD_TYPE).expect("the section");
     let s = bch_sb::<Unvalidated>::from_bytes_mut(sb.buffer_mut()).expect("a superblock within its buffer");
@@ -3160,6 +3159,7 @@ pub(crate) fn validate_section<F: SbField + ?Sized>(sb: &mut bch_sb_handle, flag
 mod tests {
     use super::SbResize;
     use super::{sb_field_u64s, validate_section};
+    use crate::btree::bkey::ValidateFlags;
     use crate::c;
     use crate::types::Le32;
     use crate::util::vstructs::{Head, Unvalidated, Validated, VStruct, VStructError};
@@ -3206,7 +3206,7 @@ mod tests {
             sb.field_resize_id(ty, u64s as u32).unwrap();
 
             let mut err = Printbuf::new();
-            let ret = validate_section::<F>(&mut sb, c::bch_validate_flags::empty(), &mut err);
+            let ret = validate_section::<F>(&mut sb, ValidateFlags::empty(), &mut err);
             assert_eq!(crate::errcode::ret_to_c(ret), -(c::bch_errcode::BCH_ERR_invalid_sb_field_size.0 as i32));
 
             let mut out = Printbuf::new();
@@ -3313,7 +3313,7 @@ mod tests {
     /// A superblock with an errors_v2 section of two entries and a partial
     /// third - 8 bytes of one - then a counters section; and validate() of the
     /// errors_v2 section, as a read or a write would.
-    fn validate_partial(flags: c::bch_validate_flags) -> (c::bch_sb_handle, c_int, Printbuf) {
+    fn validate_partial(flags: ValidateFlags) -> (c::bch_sb_handle, c_int, Printbuf) {
         type E = c::bch_sb_field_errors_v2;
         type Ctrs = c::bch_sb_field_counters;
 
@@ -3338,14 +3338,14 @@ mod tests {
     /// with a warning - the sections after it intact - and invalid at write.
     #[test]
     fn partial_entry() {
-        let (sb, ret, err) = validate_partial(c::bch_validate_flags::empty());
+        let (sb, ret, err) = validate_partial(ValidateFlags::empty());
         assert_eq!((ret, err.as_str()), (0, "8 bytes past its last whole entry, dropped"));
         let ids: Vec<u16> = sb.field::<c::bch_sb_field_errors_v2>().unwrap().entries.iter().map(|e| e.v.id()).collect();
         assert_eq!(ids, [3, 4]);
         let d: Vec<u64> = sb.field::<c::bch_sb_field_counters>().unwrap().d.iter().map(|d| d.get()).collect();
         assert_eq!(d, [100, 101, 102]);
 
-        let (_, ret, err) = validate_partial(c::bch_validate_flags::BCH_VALIDATE_write);
+        let (_, ret, err) = validate_partial(ValidateFlags::write);
         assert!(ret != 0);
         assert_eq!(err.as_str(), "8 bytes past its last whole entry");
     }

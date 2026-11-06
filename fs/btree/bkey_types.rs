@@ -199,7 +199,9 @@ bkey_val_arms!(__bkey_typed);
 
 c_enum! {
     #[flags]
-    pub enum bch_validate_flags: u32 {
+    #[c_name(bch_validate_flags)]
+    #[prefix(BCH_VALIDATE_)]
+    pub enum ValidateFlags: u32 {
         BCH_VALIDATE_write = 1 << 0,
         BCH_VALIDATE_commit = 1 << 1,
         BCH_VALIDATE_silent = 1 << 2,
@@ -232,7 +234,7 @@ nest! {
         #>[bitfield(u16)]
         pub bits: pub struct bkey_validate_context_bits {
             #[bits(8)] pub from: cs::bkey_validate_from,
-            #[bits(8, from = cs::bch_validate_flags::from_bits_retain)] pub flags: cs::bch_validate_flags,
+            #[bits(8, from = ValidateFlags::from_bits_retain)] pub flags: ValidateFlags,
         },
         pub level: u8,
         pub btree: Btree,

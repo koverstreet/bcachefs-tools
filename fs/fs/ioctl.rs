@@ -33,7 +33,7 @@ use crate::util::kernel::{capable, Capability};
 use crate::util::os_str::OsStrExt;
 use crate::util::vstructs::{plain_bytes, Plain};
 use kernel::uaccess::{UserPtr, UserSlice};
-use crate::format::{Btree, BkeyType};
+use crate::format::{Btree, BkeyType, MetadataVersion};
 
 /// FS_IOC_GETFSLABEL's: the label, without its NUL - and if it fills its
 /// field, without its last byte, as C had it.
@@ -642,7 +642,7 @@ pub fn reflink_p_set_may_update_opts(fs: &Fs, inum: c::subvol_inum) -> Result<()
     if !capable(Capability::SysAdmin) {
         return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin);
     }
-    fs.request_incompat_feature(c::bcachefs_metadata_version::reflink_p_may_update_opts)?;
+    fs.request_incompat_feature(MetadataVersion::reflink_p_may_update_opts)?;
 
     let trans = btree_trans!(fs);
     let res = DiskReservation::new(fs);
@@ -698,7 +698,7 @@ fn unpoison_extent(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_>
     if flags & EXTENT_POISONED == 0 {
         return Ok(());
     }
-    fs.request_incompat_feature(c::bcachefs_metadata_version::extent_flags)?;
+    fs.request_incompat_feature(MetadataVersion::extent_flags)?;
 
     // room for a flags entry, if it has none
     let room = (usize::from(k.k.u64s) + size_of::<c::bch_extent_flags>() / size_of::<u64>()) * size_of::<u64>();

@@ -39,11 +39,10 @@ use crate::dirent::{self, DirentTarget};
 use crate::namei;
 use crate::util::kernel::random_u64;
 use crate::{bch_err_ratelimited, bch_warn, trans_inconsistent};
-use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC, Typed, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC, Typed, POS_MIN, SPOS_MAX, BkeyOps};
 use crate::init::passes;
 use crate::util::varint;
 use core::mem::{offset_of, align_of};
-use crate::btree::bkey::BkeyOps;
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::init::progress::Progress;
 use crate::{bch_verbose_ratelimited, fs_inconsistent, fsck_err, fsck_err_on};
@@ -66,7 +65,7 @@ use cstruct_macros::{c_export, CStruct, c_bitmask, c_typedef, c_verbatim, TypeIn
 use crate::cstructs::c::BCH_INODE_FIELDS_v3;
 use crate::types::{c_default, Le64};
 use crate::util::projections::Volatile;
-use crate::format::{Bpos, Btree, BkeyType};
+use crate::format::{Bpos, Btree, BkeyType, MetadataVersion, SbFeature};
 
 c_typedef! {
     pub type u96 = u64;
@@ -1937,9 +1936,9 @@ pub fn set_casefold(
 
     dirent::empty_dir_trans(t, inum)?;
     fs.request_incompat_feature(
-        c::bcachefs_metadata_version::bcachefs_metadata_version_casefolding)?;
+        MetadataVersion::casefolding)?;
 
-    fs.check_set_feature(c::bch_sb_feature::BCH_FEATURE_casefolding);
+    fs.check_set_feature(SbFeature::casefolding);
 
     inode.bi_casefold = v.wrapping_add(1) as _; // stored +1, 0 for unset
     inode.bi_fields_set |= 1 << c::inode_opt_id::Inode_opt_casefold.0;

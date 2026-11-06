@@ -28,13 +28,13 @@ use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::sb::sb_field_type;
-use bcachefs_kernel::metadata_version;
 
 use crate::commands::format_util::{DevOpts, FormatOpts};
 use crate::commands::opts::{bch_opt_lookup_negated, opts_usage_str, parse_opt_val};
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
+use bcachefs_kernel::format::MetadataVersion;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;
 use crate::wrappers::sysfs;
@@ -42,7 +42,7 @@ use crate::wrappers::sysfs;
 const BCH_REPLICAS_MAX: u32 = 4;
 
 pub(crate) fn metadata_version_current() -> u32 {
-    u32::from(metadata_version::max) - 1
+    u32::from(MetadataVersion::max) - 1
 }
 
 /// Parse a version string "major.minor" or just "minor" (major defaults to 0).

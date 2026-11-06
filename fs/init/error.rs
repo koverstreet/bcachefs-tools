@@ -30,7 +30,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::fs::Dev;
-use crate::btree::bkey::{pos, BkeySC, POS_MIN};
+use crate::btree::bkey::{pos, BkeySC, POS_MIN, ValidateFlags};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};use crate::c;
 use crate::c::{bch_fsck_flags, bch_sb_error_id};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
@@ -758,15 +758,13 @@ fn validate_from_name(from: c::bkey_validate_from) -> &'static str {
 /// to delete it - fixed without asking, but where it's a write's or a commit's.
 pub fn bkey_fsck_err_verdict(fs: &Fs, k: BkeySC<'_>, from: &c::bkey_validate_context, err: bch_sb_error_id,
                              msg: &dyn ToText) -> BchError {
-    use c::bch_validate_flags as v;
-
     let vflags = from.bits.flags();
-    if vflags.contains(v::BCH_VALIDATE_silent) {
+    if vflags.contains(ValidateFlags::silent) {
         return fs.err(bch_errcode::BCH_ERR_fsck_delete_bkey);
     }
 
     let mut flags = bch_fsck_flags::empty();
-    if !vflags.intersects(v::BCH_VALIDATE_write | v::BCH_VALIDATE_commit) {
+    if !vflags.intersects(ValidateFlags::write | ValidateFlags::commit) {
         if error_silent(fs, err) {
             return fs.err(bch_errcode::BCH_ERR_fsck_delete_bkey);
         }

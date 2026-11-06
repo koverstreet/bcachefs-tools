@@ -19,7 +19,7 @@ use crate::fs::Dev;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::buckets::u64_to_bucket;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN, SPOS_MAX, BkeyOps};
 use crate::btree::cache::BtreeCachePins;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          TransAttempt, UpdateTriggerFlags};
@@ -27,7 +27,6 @@ use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
-use crate::btree::bkey::BkeyOps;
 use crate::init::error::{id, BkeyValidate};
 use crate::init::progress::Progress;
 use crate::util::rcu::read_lock;
@@ -36,7 +35,7 @@ use crate::{bkey_fsck_err_on, fsck_err};
 use core::ffi::c_int;
 use core::ops::RangeInclusive;
 use cstruct_macros::c_export;
-use crate::format::{Bpos, Btree, BkeyType};
+use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 
 /// What an lru id says: which lru, and for a per-device one, the device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -252,7 +251,7 @@ pub(crate) fn dev_remove_lrus(fs: &Fs, ca: &Dev) -> Result<(), BchError> {
 /// it, entries can be in the old fs-wide one.
 pub(crate) fn per_dev_fragmentation_lru(fs: &Fs) -> bool {
     fs.version_upgrade_complete().0 >=
-        c::bcachefs_metadata_version::bcachefs_metadata_version_per_dev_fragmentation_lru.0
+        MetadataVersion::per_dev_fragmentation_lru.0
 }
 
 // ── fsck ─────────────────────────────────────────────────────────────────

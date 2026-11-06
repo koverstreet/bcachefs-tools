@@ -184,7 +184,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
 
     // only an extent's position names an inum - not a btree node pointer's,
     // in the extents btree or not; elsewhere report without recording
-    let damage_pos = if btree == Btree::BTREE_ID_extents && !is_btree_ptr { k.k.p } else { POS_MIN };
+    let damage_pos = if btree == Btree::extents && !is_btree_ptr { k.k.p } else { POS_MIN };
 
     if inode_fsck_err!(t, damage_pos, id::dup_backpointer_to_bad_csum_extent, "{}", msg)? {
         bkey_drop_device_and_update(t, btree, level, k, dev,
@@ -395,7 +395,7 @@ fn no_valid_pointers_fix<'a, 't>(t: &TransAttempt<'_, '_>, btree: Btree, mut new
     // Inode-scoped when we can attribute it: an extents btree position names
     // an inum, so the error records damage against the file. An indirect
     // extent's doesn't - POS_MIN reports without recording
-    let damage_pos = if btree == Btree::BTREE_ID_extents { new.k().p } else { POS_MIN };
+    let damage_pos = if btree == Btree::extents { new.k().p } else { POS_MIN };
 
     if found_good_cached_ptr {
         inode_fsck_err!(t, damage_pos, id::extent_ptrs_all_invalid_but_cached,

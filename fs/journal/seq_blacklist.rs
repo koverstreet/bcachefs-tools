@@ -35,6 +35,8 @@ use core::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 use cstruct_macros::c_export;
 
+use crate::btree::bkey::ValidateFlags;
+use crate::format::SbFeature;
 use crate::sb_err_on;
 use crate::bch_verbose;
 use crate::c;
@@ -53,7 +55,7 @@ type Section = c::bch_sb_field_journal_seq_blacklist;
 
 impl SbFieldOps for Section {
     fn validate(_sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_journal_seq_blacklist<Unvalidated>,
-                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+                _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         for (i, e) in f.start.iter().enumerate() {
             let (start, end) = (e.start.get(), e.end.get());
             sb_err_on!(err, start >= end, BCH_ERR_invalid_sb_journal_seq_blacklist,
@@ -191,7 +193,7 @@ fn section_add(sb: &mut (impl SbResize + ?Sized), mut start: u64, mut end: u64) 
     f.start[i..].rotate_right(1);
     f.start[i] = c::journal_seq_blacklist_entry { start: Le64::new(start), end: Le64::new(end) };
 
-    sb.sb_mut().features[0] |= 1 << c::bch_sb_feature::BCH_FEATURE_journal_seq_blacklist_v3.0;
+    sb.sb_mut().features[0] |= 1 << SbFeature::journal_seq_blacklist_v3.0;
     true
 }
 

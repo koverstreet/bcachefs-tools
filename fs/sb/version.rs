@@ -8,7 +8,7 @@ use crate::c;
 use crate::c::bch_fs_flags as Flag;
 use crate::c::bch_recovery_pass as Pass;
 use crate::c::bch_version_upgrade_opts as Upgrade;
-use crate::format::Btree;
+use crate::format::{Btree, MetadataVersion};
 use crate::fs::{Fs, SbLockGuard};
 use crate::init::passes::{passes_from_stable, passes_to_stable, prt_stable};
 use crate::prt;
@@ -23,7 +23,7 @@ use crate::util::Printbuf;
 
 /// Older than this, an upgrade isn't optional
 const REQUIRED_UPGRADE_BELOW: u32 =
-    c::bcachefs_metadata_version::bcachefs_metadata_version_btree_node_accounting.0;
+    MetadataVersion::btree_node_accounting.0;
 
 fn check_version_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, out: &mut Printbuf) -> bool {
     let latest_version = c::bcachefs_metadata_version_current;
@@ -154,7 +154,7 @@ pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
     fs.opts_writer(&mut sb).recovery_passes.set(recovery_passes);
 
     if u32::from(fs.sb.version_upgrade_complete.get()) <
-       c::bcachefs_metadata_version::bcachefs_metadata_version_autofix_errors.0 {
+       MetadataVersion::autofix_errors.0 {
         sb.sb_mut().set_error_action(c::bch_error_actions::BCH_ON_ERROR_fix_safe.0.into());
     }
 

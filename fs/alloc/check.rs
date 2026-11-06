@@ -47,7 +47,7 @@ use crate::c::bch_errcode;
 use crate::c::bch_fsck_flags as F;
 use core::ffi::c_int;
 use cstruct_macros::c_export;
-use crate::format::{Bpos, Btree, DataType, BkeyType};
+use crate::format::{Bpos, Btree, DataType, BkeyType, SbFeature};
 
 // ── Walking the alloc btree, holes and all ───────────────────────────────
 
@@ -803,7 +803,7 @@ pub(crate) fn dev_freespace_init(fs: &Fs, ca: &Dev, bucket_start: u64, bucket_en
 /// Every device whose freespace isn't initialized - checked on every mount,
 /// for a crash in the middle of adding a device: bch2_fs_freespace_init().
 pub(crate) fn fs_freespace_init(fs: &Fs) -> Result<(), BchError> {
-    if fs.sb.features.get() & (1 << c::bch_sb_feature::BCH_FEATURE_small_image.0) != 0 {
+    if fs.sb.features.get() & (1 << SbFeature::small_image.0) != 0 {
         return Ok(());
     }
 

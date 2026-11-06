@@ -50,7 +50,7 @@ use crate::{fs_inconsistent, fsck_err, fsck_err_on, prt};
 use core::ffi::{c_int, c_uint};
 use core::ops::ControlFlow;
 use cstruct_macros::{c_export, c_const};
-use crate::format::Btree;
+use crate::format::{Btree, MetadataVersion};
 
 // bch2_create_trans()'s flags:
 c_const! { pub const BCH_CREATE_TMPFILE: u32 = 1 << 0; }
@@ -1237,7 +1237,7 @@ pub fn check_inode_has_case_insensitive(
     }
 
     if fs.version() <
-       c::bcachefs_metadata_version::bcachefs_metadata_version_inode_has_case_insensitive {
+       MetadataVersion::inode_has_case_insensitive {
         return Ok(());
     }
 

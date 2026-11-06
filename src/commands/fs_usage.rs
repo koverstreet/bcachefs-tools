@@ -6,10 +6,10 @@ use clap::Parser;
 use crate::commands::DeviceNameArgs;
 use crate::wrappers::accounting::{AccountingEntry, CompressionType, disk_accounting_type, ReconcileType};
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
-use bcachefs_kernel::format::DataType;
+use bcachefs_kernel::format::{DataType, MetadataVersion};
 use bcachefs_kernel::util::vstructs::ArmError;
 use crate::wrappers::handle::{BcachefsHandle, DevUsage};
-use bcachefs_kernel::{btree, metadata_version};
+use bcachefs_kernel::btree;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::util::{Bytes, Sectors, ToText};
 use crate::wrappers::sysfs::{self, DeviceNameMode, DevInfo, bcachefs_kernel_version};
@@ -126,7 +126,7 @@ fn fs_usage_v1_to_text(
         accounting_types |= disk_accounting_type::btree.bit();
     }
     if has(Field::RebalanceWork) {
-        let version_reconcile = u32::from(metadata_version::reconcile) as u64;
+        let version_reconcile = u32::from(MetadataVersion::reconcile) as u64;
         if bcachefs_kernel_version() < version_reconcile {
             accounting_types |= disk_accounting_type::rebalance_work.bit();
         } else {

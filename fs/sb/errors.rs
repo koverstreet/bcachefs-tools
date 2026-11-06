@@ -19,6 +19,7 @@
 use core::cmp::{Ordering, Reverse};
 use core::ffi::c_int;
 use cstruct_macros::{c_export, CStruct, bitfield, c_typedef, c_xmacro, TypeInfo};
+use crate::btree::bkey::ValidateFlags;
 use crate::c;
 use crate::util::vstructs::Unvalidated;
 use crate::errcode::{bch_errcode, BchError};
@@ -270,7 +271,7 @@ fn to_text<E: ErrorEntry>(out: &mut Printbuf, entries: &[E]) {
 
 impl SbFieldOps for c::bch_sb_field_errors {
     fn validate(_sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_errors<Unvalidated>,
-                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+                _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         validate(&f.entries, err)
     }
 
@@ -282,7 +283,7 @@ impl SbFieldOps for c::bch_sb_field_errors {
 
 impl SbFieldOps for c::bch_sb_field_errors_v2 {
     fn validate(_sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_errors_v2<Unvalidated>,
-                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+                _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         validate(&f.entries, err)
     }
 

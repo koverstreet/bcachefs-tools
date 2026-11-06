@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{BkeyS, BkeySC, ValidateFlags};
 use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt};
 use crate::btree::trigger::Trigger;
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
-use crate::format::{Bpos, Btree, ErrorKeyReason, BkeyType, BkeyTypeFlags};
+use crate::format::{Bpos, Btree, ErrorKeyReason, BkeyType, BkeyTypeFlags, MetadataVersion};
 use crate::fs::Fs;
 use crate::init::error::BkeyValidate;
 use crate::prt;
@@ -37,7 +37,7 @@ pub trait BkeyOps {
 
     /// An older version's value made the current one, on read, or the other
     /// way on write.
-    fn compat(_btree: Btree, _version: c::bcachefs_metadata_version, _big_endian: bool, _write: bool,
+    fn compat(_btree: Btree, _version: MetadataVersion, _big_endian: bool, _write: bool,
               _k: BkeyS<'_>) {}
 
     fn check_repair(_t: &TransAttempt<'_, '_>, _iter: &BtreeIter<'_>, _btree: Btree, _level: u32,
@@ -55,7 +55,7 @@ pub struct Ops {
     pub to_text:      fn(&mut Printbuf, Option<&Fs>, BkeySC<'_>),
     pub swab:         fn(Option<&Fs>, BkeyS<'_>),
     pub merge:        fn(&Fs, BkeyS<'_>, BkeySC<'_>) -> bool,
-    pub compat:       fn(Btree, c::bcachefs_metadata_version, bool, bool, BkeyS<'_>),
+    pub compat:       fn(Btree, MetadataVersion, bool, bool, BkeyS<'_>),
     pub check_repair: fn(&TransAttempt<'_, '_>, &BtreeIter<'_>, Btree, u32, BkeySC<'_>) -> Result<(), BchError>,
     pub trigger:      Option<&'static Trigger>,
 }
@@ -265,7 +265,7 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
     let ty = k.key_type();
     let known = ty.info().is_some();
-    let strict = v.from.bits.flags().contains(c::bch_validate_flags::BCH_VALIDATE_commit) ||
+    let strict = v.from.bits.flags().contains(ValidateFlags::commit) ||
         btree.is_none() ||
         known && !ty.flags().contains(BkeyTypeFlags::generic);
     let allowed = match btree {

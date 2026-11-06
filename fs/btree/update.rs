@@ -19,7 +19,7 @@ use core::ops::Range;
 use core::ptr::NonNull;
 use core::slice;
 use cstruct_macros::{c_export, c_enum, c_extern, c_xmacro};
-use crate::format::{Bpos, Btree, BkeyType};
+use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 use zerocopy::IntoBytes;
 
 c_xmacro! {
@@ -114,7 +114,7 @@ pub fn extent_whiteout_type(fs: &Fs, btree: Btree, k: &c::bkey) -> BkeyType {
     if btree.is_extents_snapshots() &&
        k.key_type().is_deleted() &&
        fs.snapshots.is_leaf(k.p.snapshot) != Ok(false) &&
-       fs.request_incompat_feature(c::bcachefs_metadata_version::extent_snapshot_whiteouts).is_ok() {
+       fs.request_incompat_feature(MetadataVersion::extent_snapshot_whiteouts).is_ok() {
         BkeyType::extent_whiteout
     } else {
         BkeyType::whiteout

@@ -69,6 +69,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::bkey::ValidateFlags;
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::format::DataType;
@@ -682,7 +683,7 @@ fn disk_groups_validate<S: SbState>(sb: &c::bch_sb<S>, groups: &[c::bch_disk_gro
 
 impl SbFieldOps for c::bch_sb_field_disk_groups {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_disk_groups<Unvalidated>,
-                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+                _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         disk_groups_validate(sb, &f.entries, err)
     }
 

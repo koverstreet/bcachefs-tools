@@ -11,6 +11,7 @@ use core::ffi::c_ulong;
 use core::mem::size_of;
 
 
+use crate::btree::bkey::ValidateFlags;
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
@@ -24,7 +25,7 @@ use crate::data_structures::bitmap::LeBitmap;
 use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, Validated, ValidatedEntries};
 use crate::util::Printbuf;
 use crate::sb::io::SbResize;
-use crate::format::Btree;
+use crate::format::{Btree, MetadataVersion};
 
 type Section = c::bch_sb_field_downgrade;
 type Entry = c::bch_sb_field_downgrade_entry<Validated>;
@@ -46,7 +47,7 @@ fn entries_read(f: &c::bch_sb_field_downgrade<Unvalidated>)
 
 impl SbFieldOps for Section {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_downgrade<Unvalidated>,
-                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+                _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         let sb_major = c::BCH_VERSION_MAJOR(sb.version.get().into());
         for e in entries_read(f) {
             let major = c::BCH_VERSION_MAJOR(e.version.get().into());
@@ -63,7 +64,7 @@ impl SbFieldOps for Section {
         }
 
         for e in entries_read(f) {
-            prt!(out, "version:\t{}\n", c::bcachefs_metadata_version(e.version.get().into()));
+            prt!(out, "version:\t{}\n", MetadataVersion(e.version.get().into()));
 
             write!(out, "recovery passes:\t");
             passes::prt_stable(out, e.recovery_passes[0].get());
@@ -120,7 +121,7 @@ impl SbFieldOps for Section {
 /// What upgrading to - or downgrading from - @version needs: recovery passes
 /// to run, and errors they'll find that are to be fixed silently.
 struct UpDown {
-    version:  c::bcachefs_metadata_version,
+    version:  MetadataVersion,
     /// Every fsck pass, as well as @passes.
     all_fsck: bool,
     /// BCH_RECOVERY_PASS_* bits.
@@ -132,7 +133,7 @@ struct UpDown {
 macro_rules! table {
     ($( $ver:ident => [$($pass:ident),*] $(+ $all:ident)?, [$($err:ident),*]; )*) => { ::paste::paste! {
         &[$(UpDown {
-            version:  c::bcachefs_metadata_version::[<bcachefs_metadata_version_ $ver>],
+            version:  MetadataVersion::[<bcachefs_metadata_version_ $ver>],
             all_fsck: false $(|| table!(@$all))?,
             passes:   0 $(| 1 << c::bch_recovery_pass::[<BCH_RECOVERY_PASS_ $pass>] as u64)*,
             errors:   &[$(c::bch_sb_error_id::[<BCH_FSCK_ERR_ $err>]),*],
@@ -279,7 +280,7 @@ impl Fs {
     /// Whether there's a stripes btree: a root read, not a fake one.
     fn have_stripes(&self) -> bool {
         // None, or the root: a failed read is the root's error, not its node
-        self.btree_id_root(Btree::BTREE_ID_stripes.0).is_some_and(|b| !b.is_fake())
+        self.btree_id_root(Btree::stripes.0).is_some_and(|b| !b.is_fake())
     }
 
     /// What an upgrade needs on a filesystem with stripes: UPGRADE_STRIPES'.

@@ -6,7 +6,7 @@ use crate::fs::Fs;
 use super::*;
 use crate::util::ToText;
 use cstruct_macros::c_export;
-use crate::format::{Btree, DataType, MemberState};
+use crate::format::{Btree, DataType, MemberState, SbFeature};
 
 #[c_export]
 pub static bch2_opts_default: c::bch_opts = DEFAULTS;
@@ -22,7 +22,7 @@ macro_rules! c_names {
 }
 c_names! {
     "const char * const bch2_error_actions[]"  bch2_error_actions: c::bch_error_actions;
-    "const char * const bch2_sb_features[]"    bch2_sb_features: c::bch_sb_feature;
+    "const char * const bch2_sb_features[]"    bch2_sb_features: SbFeature;
     "const char * const __bch2_btree_ids[]"    __bch2_btree_ids: Btree;
     "const char * const __bch2_csum_types[]"   __bch2_csum_types: c::bch_csum_type;
     "const char * const __bch2_data_types[]"   __bch2_data_types: DataType;

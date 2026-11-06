@@ -33,7 +33,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{NoRoom, TransBkey};
 use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::format::{BkeyType, ErrorKeyReason};
+use crate::format::{BkeyType, ErrorKeyReason, MetadataVersion};
 use crate::fs::Fs;
 use crate::{dirent, inode};
 use crate::snapshot_states::{SNAPSHOT_STATE_VALUES, SUBVOLUME_STATE_VALUES};
@@ -136,7 +136,7 @@ impl TransBkey<'_, '_> {
         self.k_mut().set_key_type(BkeyType::error);
 
         if fs.request_incompat_feature(
-            c::bcachefs_metadata_version::bcachefs_metadata_version_extented_key_type_error).is_ok() {
+            MetadataVersion::extented_key_type_error).is_ok() {
             self.k_mut().set_val_bytes(size_of::<c::Error>());
             let v = self.val_bytes_mut();
             v.fill(0);

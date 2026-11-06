@@ -13,7 +13,7 @@ use crate::btree::iter::{
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::format::Btree;
+use crate::format::{Btree, MetadataVersion};
 
 fn fix_reflink_p_key<'t>(
     t:    &TransAttempt<'_, 't>,
@@ -38,7 +38,7 @@ fn fix_reflink_p_key<'t>(
 }
 
 fn fix_reflink_p(fs: &Fs) -> Result<(), BchError> {
-    if fs.version() >= c::bcachefs_metadata_version::reflink_p_fix {
+    if fs.version() >= MetadataVersion::reflink_p_fix {
         return Ok(());
     }
 

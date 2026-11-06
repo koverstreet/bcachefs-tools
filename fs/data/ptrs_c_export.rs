@@ -3,6 +3,7 @@
 //! isn't, keys untyped, a key without pointers answered as an empty list of
 //! them.
 
+use crate::format::MetadataVersion;
 use crate::fs::Fs;
 use super::*;
 use crate::btree::iter::{BtreeTrans, TransBkey};
@@ -177,7 +178,7 @@ pub unsafe fn bch2_bkey_extent_flags_set(trans: &BtreeTrans<'_>, k: *mut c::bkey
     let fs = t.fs();
 
     ret_to_c((|| -> Result<(), BchError> {
-        fs.request_incompat_feature(c::bcachefs_metadata_version::extent_flags)?;
+        fs.request_incompat_feature(MetadataVersion::extent_flags)?;
 
         // SAFETY: the caller's
         let k = unsafe { TransBkey::from_raw_room(&t, k, buf_u64s) };

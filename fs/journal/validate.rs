@@ -8,7 +8,7 @@ use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{Btree, DataType};
 use crate::fs::{Dev, Fs};
-use crate::btree::bkey::BkeySC;
+use crate::btree::bkey::{BkeySC, ValidateFlags};
 use crate::init::error::{fs_inconsistent, id, mustfix_fsck_err, sb_error_count, BkeyValidate};
 use crate::init::recovery::btree_lost_data;
 use crate::util::ffi::Opaque;
@@ -17,7 +17,6 @@ use crate::util::vstructs::{bytes_of, cast_plain, cast_plain_mut, ArmRef, Head, 
                             Unvalidated, VStruct};
 use crate::util::{DateTime, Printbuf, ToText};
 use crate::{message, prt};
-use c::bch_validate_flags as Flags;
 use cstruct_macros::{c_const, c_export};
 
 c_const! {
@@ -93,7 +92,7 @@ struct Ctx<'a> {
 }
 
 impl<'a> Ctx<'a> {
-    fn jset(fs: &'a Fs, h: &Head<c::jset>, flags: Flags) -> Self {
+    fn jset(fs: &'a Fs, h: &Head<c::jset>, flags: ValidateFlags) -> Self {
         let mut from = c::bkey_validate_context::default();
         from.bits.set_flags(flags);
         from.bits.set_from(c::bkey_validate_from::BKEY_VALIDATE_journal);
@@ -110,7 +109,7 @@ impl<'a> Ctx<'a> {
     }
 
     fn write(&self) -> bool {
-        self.from.bits.flags().contains(Flags::BCH_VALIDATE_write)
+        self.from.bits.flags().contains(ValidateFlags::write)
     }
 
     fn err(&self, err: c::bch_sb_error_id, msg: &dyn ToText) -> Result<(), BchError> {
@@ -158,7 +157,7 @@ fn head_mut(e: &mut [u8]) -> &mut Head<c::jset_entry> {
  * are roots, and a missing root recovery handles itself.
  */
 fn journal_key_lost(fs: &Fs, from: &c::bkey_validate_context) {
-    if from.bits.flags().contains(Flags::BCH_VALIDATE_write) ||
+    if from.bits.flags().contains(ValidateFlags::write) ||
        from.bits.from() != c::bkey_validate_from::BKEY_VALIDATE_journal {
         return;
     }
@@ -367,7 +366,7 @@ fn journal_entry_btree_root_validate(ctx: &Ctx<'_>, e: &mut [u8]) -> Result<(), 
 
 fn journal_entry_overwrite_validate(ctx: &Ctx<'_>, e: &mut [u8]) -> Result<(), BchError> {
     let mut ctx = *ctx;
-    ctx.from.bits.set_flags(Flags::empty());
+    ctx.from.bits.set_flags(ValidateFlags::empty());
     journal_entry_btree_keys_validate(&ctx, e)
 }
 
@@ -566,7 +565,7 @@ fn jset_head_mut(j: &mut [u8]) -> &mut Head<c::jset> {
     cast_plain_mut(j).expect("a jset's header")
 }
 
-pub(crate) fn jset_validate_entries(fs: &Fs, j: &mut [u8], flags: Flags) -> Result<(), BchError> {
+pub(crate) fn jset_validate_entries(fs: &Fs, j: &mut [u8], flags: ValidateFlags) -> Result<(), BchError> {
     let mut ctx = Ctx::jset(fs, jset_head(j), flags);
     let u64s = jset_head(j).u64s();
     let data = &mut j[JSET_HEAD..JSET_HEAD + u64s * 8];
@@ -603,7 +602,7 @@ fn dev_or_fs_name<'a>(fs: &'a Fs, ca: Option<&'a Dev>) -> &'a str {
 
 /// Jset @j - its bytes, as long as its u64s says - checked, its entries
 /// repaired in place.
-pub(crate) fn jset_validate(fs: &Fs, ca: Option<&Dev>, j: &mut [u8], sector: u64, flags: Flags)
+pub(crate) fn jset_validate(fs: &Fs, ca: Option<&Dev>, j: &mut [u8], sector: u64, flags: ValidateFlags)
     -> Result<Jset, BchError>
 {
     let h = jset_head(j);
@@ -637,7 +636,7 @@ pub(crate) fn jset_validate(fs: &Fs, ca: Option<&Dev>, j: &mut [u8], sector: u64
     Ok(Jset::Ok)
 }
 
-pub(crate) fn jset_last_seq_check(fs: &Fs, h: &mut Head<c::jset>, flags: Flags) -> Result<bool, BchError> {
+pub(crate) fn jset_last_seq_check(fs: &Fs, h: &mut Head<c::jset>, flags: ValidateFlags) -> Result<bool, BchError> {
     let ctx = Ctx::jset(fs, h, flags);
     let seq = h.seq.get();
 
@@ -660,7 +659,7 @@ pub(crate) fn jset_validate_early(fs: &Fs, ca: Option<&Dev>, h: &mut Head<c::jse
         return Ok(Jset::None);
     }
 
-    let ctx = Ctx::jset(fs, h, Flags::empty());
+    let ctx = Ctx::jset(fs, h, ValidateFlags::empty());
     let name = dev_or_fs_name(fs, ca);
 
     if journal_entry_err_on!(ctx, !crate::sb::io::version_compatible(version as u16), jset_unsupported_version,
@@ -704,7 +703,7 @@ pub unsafe fn bch2_journal_entry_to_text(out: &mut Printbuf, c: Option<&Opaque<F
 /// @jset is a jset, as long as its u64s says.
 #[c_export]
 pub unsafe fn bch2_jset_validate(c: &Opaque<Fs>, ca: *mut Dev, jset: *mut Head<c::jset>, sector: u64,
-                                 flags: Flags) -> c_int {
+                                 flags: ValidateFlags) -> c_int {
     let bytes = unsafe { core::slice::from_raw_parts_mut(jset.cast::<u8>(), (*jset).bytes()) };
     jset_ret(jset_validate(Fs::from_c(c), unsafe { ca.as_ref() }, bytes, sector, flags))
 }

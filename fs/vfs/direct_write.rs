@@ -41,7 +41,7 @@ fn check_range_allocated(fs: &Fs, inum: c::subvol_inum, mut offset: u64, size: u
     let ret = lockrestart_do(&trans, |t| {
         let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
 
-        let mut iter = BtreeIter::new(t, Btree::BTREE_ID_extents, spos(inum.inum, offset, snapshot),
+        let mut iter = BtreeIter::new(t, Btree::extents, spos(inum.inum, offset, snapshot),
                                       BtreeIterFlags::SLOTS | BtreeIterFlags::TRIM);
         iter.for_each_max_norestart(t, pos(inum.inum, end), |iter, k| {
             offset = iter.pos().offset;

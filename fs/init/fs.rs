@@ -60,7 +60,7 @@ use core::sync::atomic::Ordering::Relaxed;
 pub use crate::sb::members::DevRef;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::c_extern;
-use crate::format::{Bpos, Btree, MemberState};
+use crate::format::{Bpos, Btree, MemberState, MetadataVersion, SbFeature};
 
 c_extern! {
     pub static bch2_write_refs: [*const crate::util::ffi::c_char; 0];
@@ -182,13 +182,13 @@ impl Fs {
         }
     }
 
-    pub fn version(&self) -> c::bcachefs_metadata_version {
-        c::bcachefs_metadata_version(self.sb.version.get() as u32)
+    pub fn version(&self) -> MetadataVersion {
+        MetadataVersion(self.sb.version.get() as u32)
     }
 
     /// Below version() while an upgrade's migrations are still running
-    pub fn version_upgrade_complete(&self) -> c::bcachefs_metadata_version {
-        c::bcachefs_metadata_version(self.sb.version_upgrade_complete.get() as u32)
+    pub fn version_upgrade_complete(&self) -> MetadataVersion {
+        MetadataVersion(self.sb.version_upgrade_complete.get() as u32)
     }
 
     /// Topology repair dropped nodes from btree @id
@@ -308,7 +308,7 @@ impl Fs {
         crate::data::io_misc::truncate(self, inum, new_i_size, &mut 0)
     }
 
-    pub fn request_incompat_feature(&self, version: c::bcachefs_metadata_version)
+    pub fn request_incompat_feature(&self, version: MetadataVersion)
         -> Result<(), BchError>
     {
         if version.0 <= self.sb.version_incompat.get().into() {
@@ -317,11 +317,11 @@ impl Fs {
         self.set_version_incompat(version)
     }
 
-    pub fn feature(&self, feature: c::bch_sb_feature) -> bool {
+    pub fn feature(&self, feature: SbFeature) -> bool {
         self.sb.features.get() & (1u64 << feature.0) != 0
     }
 
-    pub fn check_set_feature(&self, feature: c::bch_sb_feature) {
+    pub fn check_set_feature(&self, feature: SbFeature) {
         if !self.feature(feature) {
             self.set_feature(feature)
         }
@@ -592,7 +592,7 @@ impl Fs {
             }
         }
         #[cfg(not(CONFIG_UNICODE))]
-        if self.feature(c::bch_sb_feature::BCH_FEATURE_casefolding) {
+        if self.feature(SbFeature::casefolding) {
             prt!(out, "Cannot mount a filesystem with casefolding on a kernel without CONFIG_UNICODE\n");
             return self.throw(bch_errcode::BCH_ERR_EINVAL_casefolding_no_unicode);
         }
@@ -641,7 +641,6 @@ impl Fs {
     #[inline(never)]
     fn opt_version_init(&self, out: &mut Printbuf) -> Result<(), BchError> {
         use c::bch_fs_flags as Flag;
-        use c::bch_sb_feature as Feature;
         let opts = self.opts();
 
         {
@@ -670,7 +669,7 @@ impl Fs {
             }
         }
 
-        if !(self.feature(Feature::BCH_FEATURE_small_image) || self.feature(Feature::BCH_FEATURE_no_default_sb)) ||
+        if !(self.feature(SbFeature::small_image) || self.feature(SbFeature::no_default_sb)) ||
            self.will_resize_on_mount() {
             self.flags.set(Flag::BCH_FS_may_upgrade_downgrade, true);
         }
@@ -691,7 +690,7 @@ impl Fs {
         }
 
         if opts.verbose.get() != 0 {
-            prt!(out, "features: {}\n", names::set::<Feature>(self.sb.features.get()));
+            prt!(out, "features: {}\n", names::set::<SbFeature>(self.sb.features.get()));
         }
 
         if self.sb.multi_device.get() {
@@ -734,7 +733,7 @@ impl Fs {
         }
 
         if self.sb_lock().sb().initialized() {
-            if !self.feature(Feature::BCH_FEATURE_new_extent_overwrite) {
+            if !self.feature(SbFeature::new_extent_overwrite) {
                 prt!(out, "feature new_extent_overwrite not set, filesystem no longer supported\n");
                 return self.throw(bch_errcode::BCH_ERR_EINVAL_missing_new_extent_overwrite);
             }
@@ -1136,7 +1135,7 @@ impl Fs {
         // now, so it's persisted before user-data accounting fires: a fresh
         // filesystem shut down before then would never record it, and its next
         // mount would find replicas missing from the superblock
-        let _ = self.request_incompat_feature(c::bcachefs_metadata_version::no_sb_user_data_replicas);
+        let _ = self.request_incompat_feature(MetadataVersion::no_sb_user_data_replicas);
 
         // allocated now if it may be needed: a mount failing on
         // kthread_create() is very annoying
