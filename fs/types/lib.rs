@@ -291,6 +291,9 @@ impl<T, const U64S: usize, const ALIGN: usize> RustOnly<T, U64S, ALIGN>
 where
     Align<ALIGN>: AlignMarker,
 {
+    /// Where the @T is in a RustOnly.
+    pub const T_OFFSET: usize = core::mem::offset_of!(Self, storage);
+
     /// The storage holds a @T: rust_only!() sizes and aligns it.
     const FITS: () = assert!(core::mem::size_of::<T>() <= U64S * 8 && core::mem::align_of::<T>() <= ALIGN,
                              "RustOnly: storage too small, or too little aligned, for its T");
