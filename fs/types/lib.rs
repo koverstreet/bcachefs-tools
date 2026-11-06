@@ -394,6 +394,14 @@ pub(crate) use rust_only;
 
 // ---- Rust's own, that C reads ------------------------------------------------
 
+/// A #[c_export] fn's parameter C doesn't pass: lent, for the call, by one it
+/// does - #[lent(param)].
+pub trait Lent<'a, A: ?Sized>: Sized {
+    /// # Safety
+    /// As the export's caller - C - promises for the call.
+    unsafe fn lent(from: &'a A) -> Self;
+}
+
 /// A static C reads, defined in Rust - a #[c_export] static, C's `extern const
 /// T`. Sync for the pointers a C struct holds, which aren't: C reads it from
 /// anywhere, and nothing writes it.

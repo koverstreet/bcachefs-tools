@@ -1529,6 +1529,13 @@ fn thin_pointers(name: &str, cfg: &Option<cstruct::Cfg>, params: &[(String, Stri
 /// in Rust's types (&Opaque<Fs>, BkeySC) never hashes as C's prototype
 /// does.
 ///
+/// A parameter C doesn't pass is #[lent(from)]: made for the call, by
+/// types::Lent, of @from, which C does - a transaction's path table, of the
+/// transaction.
+///
+///   #[c_export]
+///   pub fn bch2_trans_unlock(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) { .. }
+///
 /// And a static C reads - an ops table:
 ///
 ///   #[c_export]
@@ -1566,9 +1573,32 @@ fn c_export_text(item: TokenStream) -> String {
     format!("#[c_export] {item}").replace("$crate", "crate")
 }
 
-fn c_export_fn(item: syn::ItemFn) -> Result<TokenStream, String> {
-    // What the record has: the signature, the body dropped
-    let (vis, sig) = (&item.vis, &item.sig);
+/// A #[c_export] fn's parameters C doesn't pass - #[lent(from)], each made for
+/// the call of the one C passes as @from (types/lib.rs, Lent) - their
+/// attributes taken off: their index, name, the reference they're had as, and
+/// @from.
+fn take_lent(sig: &mut syn::Signature) -> Result<Vec<(usize, syn::Ident, syn::TypeReference, syn::Ident)>, String> {
+    let mut lent = Vec::new();
+    for (i, input) in sig.inputs.iter_mut().enumerate() {
+        let syn::FnArg::Typed(p) = input else { continue };
+        let Some(at) = p.attrs.iter().position(|a| a.path().is_ident("lent")) else { continue };
+        let from = p.attrs.remove(at).parse_args::<syn::Ident>().map_err(|e| format!("#[lent(param)] - {e}"))?;
+        let (syn::Pat::Ident(name), syn::Type::Reference(ty)) = (&*p.pat, &*p.ty) else {
+            return Err("#[lent] is on a named parameter, of a reference".into());
+        };
+        lent.push((i, name.ident.clone(), ty.clone(), from));
+    }
+    Ok(lent)
+}
+
+fn c_export_fn(mut item: syn::ItemFn) -> Result<TokenStream, String> {
+    let lent = take_lent(&mut item.sig)?;
+    let is_lent = |i: usize| lent.iter().any(|l| l.0 == i);
+
+    // What the record has: the signature, the body dropped - C's parameters
+    let mut sig = item.sig.clone();
+    sig.inputs = sig.inputs.into_iter().enumerate().filter(|(i, _)| !is_lent(*i)).map(|(_, p)| p).collect();
+    let vis = &item.vis;
     let text = |attrs: Vec<&syn::Attribute>| c_export_text(quote!(#(#attrs)* #vis #sig {}));
     let e = parse_c_export(&text(item.attrs.iter().collect()))?;
     let f = &e.ex.fns[0];
@@ -1582,20 +1612,30 @@ fn c_export_fn(item: syn::ItemFn) -> Result<TokenStream, String> {
 
     // extern "C": the fn is C's symbol itself
     if e.extern_c {
+        if !lent.is_empty() {
+            return Err("#[lent] parameters are made by the definition C calls - not an extern \"C\" fn".into());
+        }
         return Ok(quote!(#[unsafe(no_mangle)] #item #record));
     }
 
     let (name, params) = (tokens(&f.name), params(&f.params));
-    let args = f.params.iter().zip(&e.params).map(|((n, c), r)| {
-        let n = tokens(n);
-        match r {
-            Some(r) => {
-                let (c, r) = (tokens(c), tokens(r));
-                quote!(::core::mem::transmute::<#c, #r>(#n))
-            }
-            None => n,
-        }
+    let converted = f.params.iter().zip(&e.params).filter_map(|((n, c), r)| {
+        let (n, c, r) = (tokens(n), tokens(c), tokens(r.as_ref()?));
+        Some(quote!(let #n = ::core::mem::transmute::<#c, #r>(#n);))
     });
+    let lent_name = |name: &syn::Ident| format_ident!("__lent_{name}");
+    let lents = lent.iter().map(|(_, name, ty, from)| {
+        let (l, elem, m) = (lent_name(name), &ty.elem, ty.mutability);
+        quote!(let #m #l: #elem = crate::types::Lent::lent(#from);)
+    });
+    let mut c_args = f.params.iter().map(|(n, _)| tokens(n));
+    let args = (0..item.sig.inputs.len()).map(|i| match lent.iter().find(|l| l.0 == i) {
+        Some((_, name, ty, _)) => {
+            let (l, m) = (lent_name(name), ty.mutability);
+            quote!(&#m #l)
+        }
+        None => c_args.next().expect("a parameter for each of C's"),
+    }).collect::<Vec<_>>();
     let call = quote!(self::#name(#(#args),*));
     let call = match (&f.ret, &e.ret) {
         (Some(c), Some(r)) => {
@@ -1614,7 +1654,11 @@ fn c_export_fn(item: syn::ItemFn) -> Result<TokenStream, String> {
             #[unsafe(no_mangle)]
             #[allow(unused_unsafe, clippy::transmute_ptr_to_ref)]
             unsafe extern "C" fn #name(#(#params),*) #ret {
-                unsafe { #call }
+                unsafe {
+                    #(#converted)*
+                    #(#lents)*
+                    #call
+                }
             }
             const _: () = { #thin };
         };
