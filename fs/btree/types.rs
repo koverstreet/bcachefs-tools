@@ -1172,8 +1172,10 @@ fn fill_iter_pool(opts: &c::bch_opts) -> impl PinInit<Mempool, BchError> {
 
 /* Btree ID properties: */
 c_enum! {
-    #[closed]
-    pub enum btree_node_type: u32 {
+    #[open]
+    #[c_name(btree_node_type)]
+    #[prefix(BKEY_TYPE_)]
+    pub enum BtreeNodeType: u32 {
         BKEY_TYPE_btree,
         BCH_BTREE_IDS(kwd, val, ..) => concat(BKEY_TYPE_, kwd) = (val as u32) + 1,
         BKEY_TYPE_NR,
@@ -1191,7 +1193,7 @@ macro_rules! btree_ids_mask {
  * so that bch2_trigger_snapshot_nr_keys() runs for its keys; and interior
  * nodes do, for their pointers.
  */
-const TRANS_TRIGGERS: u64 = 1 << btree_node_type::BKEY_TYPE_btree as u32 |
+const TRANS_TRIGGERS: u64 = 1 << BtreeNodeType::btree.0 |
     (c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_trans_triggers => btree_ids_mask]) |
      c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_snapshots => btree_ids_mask])) << 1;
 const ATOMIC_TRIGGERS: u64 =
