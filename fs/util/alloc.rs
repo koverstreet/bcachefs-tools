@@ -9,7 +9,10 @@
 pub use kernel::alloc::{flags, AllocError, Flags};
 
 #[cfg(not(kernel))]
-pub use bcachefs_shim::alloc::{flags, AllocError, Flags, KVVec};
+pub use bcachefs_shim::alloc::{flags, AllocError, Flags};
+
+use core::alloc::Layout;
+use core::ptr::NonNull;
 /// In userspace, a Box is a KBox.
 #[cfg(not(kernel))]
 pub type KBox<T> = std::boxed::Box<T>;
@@ -61,147 +64,87 @@ macro_rules! allocators {
 #[cfg(kernel)]
 allocators!(Kmalloc, Vmalloc, KVmalloc);
 
+/// An allocator, as both builds have it: in-kernel, ours above - the task's
+/// memalloc scope applied - and in userspace, std's, which takes no flags.
+///
+/// # Safety
+/// alloc() gives @layout's bytes, zeroed and aligned to it; realloc() the
+/// new layout's, what was there kept up to the smaller of the two; free(),
+/// and in-kernel kvfree(), free them, from any context.
+pub unsafe trait Alloc {
+    fn alloc(layout: Layout, gfp: Flags) -> Result<NonNull<u8>, AllocError>;
+
+    /// @p - None for a new allocation - as @layout, not zeroed: @p freed if
+    /// it moves, and kept if this fails.
+    ///
+    /// # Safety
+    /// @p is this allocator's, of @old.
+    unsafe fn realloc(p: Option<NonNull<u8>>, layout: Layout, old: Layout, gfp: Flags)
+        -> Result<NonNull<u8>, AllocError>;
+
+    /// # Safety
+    /// @p is alloc()'s or realloc()'s, of @layout, and nothing uses it after.
+    unsafe fn free(p: NonNull<u8>, layout: Layout);
+}
+
+macro_rules! allocs {
+    ($($a:ident),*) => {$(
+        unsafe impl Alloc for $a {
+            fn alloc(layout: Layout, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
+                #[cfg(kernel)]
+                {
+                    use kernel::alloc::{flags::__GFP_ZERO, Allocator, NumaNode};
+
+                    Ok(<$a as Allocator>::alloc(layout, gfp | __GFP_ZERO, NumaNode::NO_NODE)?.cast())
+                }
+                #[cfg(not(kernel))]
+                {
+                    let _ = gfp;
+                    NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }).ok_or(AllocError)
+                }
+            }
+
+            unsafe fn realloc(p: Option<NonNull<u8>>, layout: Layout, old: Layout, gfp: Flags)
+                -> Result<NonNull<u8>, AllocError>
+            {
+                #[cfg(kernel)]
+                {
+                    use kernel::alloc::{Allocator, NumaNode};
+
+                    Ok(unsafe { <$a as Allocator>::realloc(p, layout, old, gfp, NumaNode::NO_NODE) }?.cast())
+                }
+                #[cfg(not(kernel))]
+                {
+                    let _ = gfp;
+                    let p = match p {
+                        Some(p) => unsafe { std::alloc::realloc(p.as_ptr(), old, layout.size()) },
+                        None    => unsafe { std::alloc::alloc(layout) },
+                    };
+                    NonNull::new(p).ok_or(AllocError)
+                }
+            }
+
+            unsafe fn free(p: NonNull<u8>, layout: Layout) {
+                #[cfg(kernel)]
+                unsafe { <$a as kernel::alloc::Allocator>::free(p, layout) };
+                #[cfg(not(kernel))]
+                unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
+            }
+        }
+    )*};
+}
+
+allocs!(Kmalloc, KVmalloc, Vmalloc);
+
 #[cfg(kernel)]
 pub type KBox<T> = kernel::alloc::Box<T, Kmalloc>;
 #[cfg(kernel)]
 pub type KVBox<T> = kernel::alloc::Box<T, KVmalloc>;
-#[cfg(kernel)]
+
+pub use crate::data_structures::vec::{DrainAll, IntoIter, PushError, Vec};
+
 pub type KVec<T> = Vec<T, Kmalloc>;
-#[cfg(kernel)]
 pub type KVVec<T> = Vec<T, KVmalloc>;
-
-/// kernel::alloc's Vec, without flags: how to allocate is the task's memalloc
-/// scope's. Its API is bcachefs-shim's KVVec's, so what builds against one
-/// builds against the other.
-#[cfg(kernel)]
-pub struct Vec<T, A: kernel::alloc::Allocator>(kernel::alloc::Vec<T, A>);
-
-// Its elements are on the heap, and don't move with it: as a Box is
-#[cfg(kernel)]
-impl<T, A: kernel::alloc::Allocator> Unpin for Vec<T, A> {}
-
-#[cfg(kernel)]
-impl<T, A: kernel::alloc::Allocator> Vec<T, A> {
-    pub const fn new() -> Self {
-        Vec(kernel::alloc::Vec::new())
-    }
-
-    pub fn with_capacity(capacity: usize) -> Result<Self, AllocError> {
-        kernel::alloc::Vec::with_capacity(capacity, flags::GFP_KERNEL).map(Vec)
-    }
-
-    pub fn spare_capacity_mut(&mut self) -> &mut [core::mem::MaybeUninit<T>] {
-        self.0.spare_capacity_mut()
-    }
-
-    pub fn reserve(&mut self, additional: usize) -> Result<(), AllocError> {
-        self.0.reserve(additional, flags::GFP_KERNEL)
-    }
-
-    pub fn push(&mut self, v: T) -> Result<(), AllocError> {
-        self.0.push(v, flags::GFP_KERNEL)
-    }
-
-    /// push(), with flags of its own: what may run in interrupt context.
-    pub fn push_gfp(&mut self, v: T, gfp: Flags) -> Result<(), AllocError> {
-        self.0.push(v, gfp)
-    }
-
-    pub fn push_within_capacity(&mut self, v: T) -> Result<(), kernel::alloc::kvec::PushError<T>> {
-        self.0.push_within_capacity(v)
-    }
-
-    pub fn drain_all(&mut self) -> kernel::alloc::kvec::DrainAll<'_, T> {
-        self.0.drain_all()
-    }
-
-    pub fn extend_from_slice(&mut self, other: &[T]) -> Result<(), AllocError>
-    where
-        T: Clone,
-    {
-        self.0.extend_from_slice(other, flags::GFP_KERNEL)
-    }
-
-    pub fn from_elem(value: T, n: usize) -> Result<Self, AllocError>
-    where
-        T: Clone,
-    {
-        kernel::alloc::Vec::from_elem(value, n, flags::GFP_KERNEL).map(Vec)
-    }
-
-    pub fn clear(&mut self) {
-        self.0.clear()
-    }
-
-    pub fn truncate(&mut self, len: usize) {
-        self.0.truncate(len)
-    }
-
-    pub fn pop(&mut self) -> Option<T> {
-        self.0.pop()
-    }
-
-    pub fn retain(&mut self, f: impl FnMut(&mut T) -> bool) {
-        self.0.retain(f)
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.0.capacity()
-    }
-
-    pub fn as_mut_ptr(&mut self) -> *mut T {
-        self.0.as_mut_ptr()
-    }
-
-    /// # Safety
-    /// As kernel::alloc::Vec::inc_len().
-    pub unsafe fn inc_len(&mut self, additional: usize) {
-        unsafe { self.0.inc_len(additional) }
-    }
-
-    /// # Safety
-    /// As kernel::alloc::Vec::from_raw_parts().
-    pub unsafe fn from_raw_parts(ptr: *mut T, length: usize, capacity: usize) -> Self {
-        Vec(unsafe { kernel::alloc::Vec::from_raw_parts(ptr, length, capacity) })
-    }
-
-    pub fn into_raw_parts(self) -> (*mut T, usize, usize) {
-        self.0.into_raw_parts()
-    }
-}
-
-#[cfg(kernel)]
-impl<T, A: kernel::alloc::Allocator> Default for Vec<T, A> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(kernel)]
-impl<T, A: kernel::alloc::Allocator> core::ops::Deref for Vec<T, A> {
-    type Target = [T];
-
-    fn deref(&self) -> &[T] {
-        &self.0
-    }
-}
-
-#[cfg(kernel)]
-impl<T, A: kernel::alloc::Allocator> core::ops::DerefMut for Vec<T, A> {
-    fn deref_mut(&mut self) -> &mut [T] {
-        &mut self.0
-    }
-}
-
-#[cfg(kernel)]
-impl<T, A: kernel::alloc::Allocator> IntoIterator for Vec<T, A> {
-    type Item = T;
-    type IntoIter = kernel::alloc::kvec::IntoIter<T, A>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
 
 /// @flags as the task's memalloc scope says, as the kernel's
 /// current_gfp_context() does for NOIO and NOFS - which the page allocator
@@ -369,7 +312,7 @@ pub fn kzalloc(layout: core::alloc::Layout) -> Result<core::ptr::NonNull<u8>, Al
     {
         use kernel::alloc::{flags::__GFP_ZERO, Allocator, NumaNode};
 
-        Ok(Kmalloc::alloc(layout, flags::GFP_KERNEL | __GFP_ZERO, NumaNode::NO_NODE)?.cast())
+        Ok(<Kmalloc as Allocator>::alloc(layout, flags::GFP_KERNEL | __GFP_ZERO, NumaNode::NO_NODE)?.cast())
     }
     // SAFETY: not zero sized, by the caller's use
     #[cfg(not(kernel))]
@@ -417,7 +360,7 @@ pub fn kmalloc(size: usize) -> Result<core::ptr::NonNull<u8>, AllocError> {
         use kernel::alloc::{Allocator, NumaNode};
 
         let layout = core::alloc::Layout::from_size_align(size, 1).map_err(|_| AllocError)?;
-        Ok(Kmalloc::alloc(layout, flags::GFP_KERNEL, NumaNode::NO_NODE)?.cast())
+        Ok(<Kmalloc as Allocator>::alloc(layout, flags::GFP_KERNEL, NumaNode::NO_NODE)?.cast())
     }
     // SAFETY: a new allocation
     #[cfg(not(kernel))]
@@ -451,8 +394,8 @@ pub fn kvrealloc_zeroed(p: *mut u8, old: usize, new: usize) -> Result<core::ptr:
 
         // SAFETY: @p is KVmalloc's, of @old bytes, or null
         Ok(unsafe {
-            KVmalloc::realloc(core::ptr::NonNull::new(p), kv_layout(new)?, kv_layout(old)?,
-                              flags::GFP_KERNEL | __GFP_ZERO, NumaNode::NO_NODE)
+            <KVmalloc as Allocator>::realloc(core::ptr::NonNull::new(p), kv_layout(new)?, kv_layout(old)?,
+                                             flags::GFP_KERNEL | __GFP_ZERO, NumaNode::NO_NODE)
         }?.cast())
     }
     // A new allocation and a copy: realloc() keeps the old one's alignment
@@ -478,8 +421,8 @@ pub fn kvrealloc(p: *mut u8, old: usize, new: usize) -> Result<core::ptr::NonNul
 
         // SAFETY: @p is KVmalloc's, of @old bytes, or null
         Ok(unsafe {
-            KVmalloc::realloc(core::ptr::NonNull::new(p), kv_layout(new)?, kv_layout(old)?,
-                              flags::GFP_KERNEL, NumaNode::NO_NODE)
+            <KVmalloc as Allocator>::realloc(core::ptr::NonNull::new(p), kv_layout(new)?, kv_layout(old)?,
+                                             flags::GFP_KERNEL, NumaNode::NO_NODE)
         }?.cast())
     }
     // A new allocation and a copy: realloc() keeps the old one's alignment

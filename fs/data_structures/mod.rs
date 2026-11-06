@@ -16,3 +16,4 @@ pub mod list;
 pub mod rhashtable;
 pub mod sort;
 pub mod strided;
+pub mod vec;

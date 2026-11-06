@@ -18,52 +18,12 @@ use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering::{Acquire, Relaxed, Rele
 use pin_init::{pin_init_from_closure, PinInit};
 
 use crate::c;
-use crate::util::alloc::{flags, init_at, AllocError, Flags, KVmalloc, Kmalloc, Vmalloc};
+use crate::util::alloc::{flags, init_at, Alloc, AllocError, Flags, KVmalloc};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::rcu::{Detach, DropAnytime, DropAtomic, Flavor, FreeAnytime, HasRcuHead, HeadKind, NothingToDetach,
                        RcuHead, RcuWorkHead};
 use crate::util::sleep::Sleep;
 use crate::util::workqueue::{Queue, Workqueue, WqFlags};
-
-/// # Safety
-/// alloc() gives @layout's bytes, zeroed and aligned to it; free() and,
-/// in-kernel, kvfree() free them, from any context.
-pub unsafe trait Alloc {
-    fn alloc(layout: Layout, gfp: Flags) -> Result<NonNull<u8>, AllocError>;
-
-    /// # Safety
-    /// @p is alloc()'s, of @layout, and nothing uses it after.
-    unsafe fn free(p: NonNull<u8>, layout: Layout);
-}
-
-macro_rules! allocators {
-    ($($a:ident),*) => {$(
-        unsafe impl Alloc for $a {
-            fn alloc(layout: Layout, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
-                #[cfg(kernel)]
-                {
-                    use kernel::alloc::{flags::__GFP_ZERO, Allocator, NumaNode};
-
-                    Ok(<$a as Allocator>::alloc(layout, gfp | __GFP_ZERO, NumaNode::NO_NODE)?.cast())
-                }
-                #[cfg(not(kernel))]
-                {
-                    let _ = gfp;
-                    NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }).ok_or(AllocError)
-                }
-            }
-
-            unsafe fn free(p: NonNull<u8>, layout: Layout) {
-                #[cfg(kernel)]
-                unsafe { <$a as kernel::alloc::Allocator>::free(p, layout) };
-                #[cfg(not(kernel))]
-                unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
-            }
-        }
-    )*};
-}
-
-allocators!(Kmalloc, KVmalloc, Vmalloc);
 
 pub(crate) fn alloc_at<T, A: Alloc, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags)
     -> Result<NonNull<T>, E>
