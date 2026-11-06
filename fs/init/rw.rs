@@ -115,7 +115,7 @@ impl Fs {
             self.dev_allocator_remove(&ca);
 
             /*
-             * Queued from bch2_journal_space_available(); not cancelled
+             * Queued from the journal's space_available(); not cancelled
              * anywhere else on the going-RO path, so cancel it here, after
              * the journal is stopped, or it can run against a freed device.
              */

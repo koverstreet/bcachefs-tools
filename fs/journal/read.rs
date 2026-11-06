@@ -1,6 +1,5 @@
 #![allow(non_camel_case_types)]
 
-use cstruct_macros::c_export;
 use crate::format::{Btree, MemberState, Nonce};
 
 #[path = "buckets.rs"] pub mod buckets;
@@ -119,8 +118,7 @@ impl c::journal_replay {
 /// The devices replay @i's copies are on, each once - or, said, none, for more
 /// than BCH_REPLICAS_MAX: no one write puts an entry on more, so they aren't
 /// its replicas, and a crafted image can claim any number.
-#[c_export]
-pub fn bch2_journal_replay_devs(fs: &Fs, i: &c::journal_replay) -> c::bch_devs_list {
+pub fn replay_devs(fs: &Fs, i: &c::journal_replay) -> c::bch_devs_list {
     let mut devs = c::bch_devs_list::default();
     for p in i.ptrs() {
         if !devs.has(p.dev) && u32::from(devs.nr) >= c::BCH_REPLICAS_MAX {

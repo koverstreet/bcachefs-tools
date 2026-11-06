@@ -29,8 +29,8 @@ use crate::util::kernel::{bdev_max_discard_sectors, blkdev_issue_discard, cond_r
 use crate::util::kthread::{Kthread, KthreadSelf};
 use crate::util::rcu::read_lock;
 use crate::util::sleep::{sleep_until, wake_up, Sleep};
-use crate::util::time_stats::{bch2_pr_time_units, TimeStats};
-use crate::util::Printbuf;
+use crate::util::time_stats::TimeStats;
+use crate::util::{Nsecs, Printbuf};
 use crate::{bch_err, bch_err_msg, prt};
 use cstruct_macros::c_export;
 
@@ -49,8 +49,8 @@ impl c::journal {
 
     /// The open bucket pool can't serve below @watermark - 0 for all of them:
     /// the journal throttles work that would need what it can't have. The
-    /// unchanged case a compare, as C's bch2_journal_set_alloc_watermark()
-    /// - the allocator's fast paths report on every bucket.
+    /// unchanged case is a compare: the allocator's fast paths report on
+    /// every bucket.
     pub fn set_open_buckets_watermark(&self, watermark: u32) {
         let p = &self.lock.watermark_open_buckets;
         if u32::from(p.get()) != watermark {
@@ -134,10 +134,10 @@ impl c::journal {
          * can't keep more than RAM/4 of journal dirty in memory, so the space
          * the watermark sees is bounded by RAM, not by raw device capacity.
          * (A global budget, applied per-device; the nr_devs_want-th largest
-         * pick in __journal_space_available() keeps the aggregate bounded.)
+         * pick in space_available_from() keeps the aggregate bounded.)
          *
          * The cap is asymmetric, and that asymmetry is the point: the watermark
-         * ratio (clean * 4 <= total, see bch2_journal_set_watermark()) has to
+         * ratio (clean * 4 <= total, see set_watermark()) has to
          * measure how full the dirty budget is, not how big the disk is. So:
          *
          *  - journal_space_total is capped at a flat RAM/4 - dirty is NOT
@@ -451,34 +451,23 @@ impl c::journal {
      */
 
     /* returns true if we did work */
-    fn flush_pins_locked(&self, reclaim: &mut ReclaimGuard<'_>, seq_to_flush: u64,
-                         allowed_below_seq: u32, allowed_above_seq: u32,
+    fn flush_pins_locked(&self, reclaim: &mut ReclaimGuard<'_>, seq_to_flush: u64, allowed_below_seq: u32,
                          mut min_any: usize, mut min_key_cache: usize) -> usize {
         use c::bch_time_stats::*;
         let fs = self.fs();
-        let key_cache = 1 << JOURNAL_PIN_TYPE_key_cache as u32;
         let mut nr_flushed = 0;
 
         loop {
-            let mut allowed_above = allowed_above_seq;
-            let mut allowed_below = allowed_below_seq;
-
-            if min_any != 0 {
-                allowed_above = !0;
-                allowed_below = !0;
-            }
-
-            if min_key_cache != 0 {
-                allowed_above |= key_cache;
-                allowed_below |= key_cache;
-            }
+            let any = if min_any != 0 { !0 } else { 0 };
+            let key_cache = if min_key_cache != 0 { 1 << JOURNAL_PIN_TYPE_key_cache as u32 } else { 0 };
+            let allowed_above = any | key_cache;
 
             cond_resched();
 
             reclaim.published().last_flushed.set(jiffies());
 
             let Some(mut flushing) =
-                self.pins().next_to_flush(seq_to_flush, allowed_below, allowed_above) else {
+                self.pins().next_to_flush(seq_to_flush, allowed_below_seq | allowed_above, allowed_above) else {
                 break;
             };
             let ty = flushing.ty;
@@ -526,7 +515,7 @@ impl c::journal {
             .unwrap_or(0);
 
         /* Also flush if the pin fifo is more than half full */
-        (seq_to_flush as i64).max(fs.journal_cur_seq() as i64 - (self.pin_limit() >> 1) as i64) as u64
+        seq_to_flush.max(fs.journal_cur_seq().saturating_sub(self.pin_limit() / 2))
     }
 
     /*
@@ -562,37 +551,25 @@ impl c::journal {
          */
         let _noio = MemallocFlags::noio();
 
-        loop {
-            if Kthread::should_stop() {
-                break;
-            }
-
+        while !Kthread::should_stop() {
             self.error()?;
 
             closure_wait_event(&bc.nr_in_flight_wait,
                 || bc.nr_in_flight_inner.load(Relaxed) < BTREE_WRITE_IO_LIMIT as isize);
 
             let seq_to_flush = self.seq_to_flush();
-            let mut min_nr = 0;
+
+            let btree_cache_live = bc.lock.nr_live();
+            let btree_cache_dirty = bc.lock.nr_dirty();
+            let delay = msecs_to_jiffies(fs.opts().journal_reclaim_delay.get().into());
 
             /*
              * If it's been longer than j->reclaim_delay_ms since we last flushed,
              * make sure to flush at least one journal pin:
              */
-            let delay = msecs_to_jiffies(fs.opts().journal_reclaim_delay.get().into());
-            if time_after(jiffies(), self.reclaim_lock.last_flushed.get().wrapping_add(delay)) {
-                min_nr = 1;
-            }
-
-            if self.flags.get(JOURNAL_med_on_space) {
-                min_nr = 1;
-            }
-
-            let btree_cache_live = bc.lock.nr_live();
-            let btree_cache_dirty = bc.lock.nr_dirty();
-            if btree_cache_dirty * 2 > btree_cache_live {
-                min_nr = 1;
-            }
+            let min_nr = (time_after(jiffies(), self.reclaim_lock.last_flushed.get().wrapping_add(delay)) ||
+                          self.flags.get(JOURNAL_med_on_space) ||
+                          btree_cache_dirty * 2 > btree_cache_live) as usize;
 
             let min_key_cache = kc.nr_keys_need_flush().min(128);
 
@@ -603,7 +580,7 @@ impl c::journal {
                      kc.nr_dirty.load(Relaxed), kc.nr_keys.load(Relaxed));
             });
 
-            let nr_flushed = self.flush_pins_locked(reclaim, seq_to_flush, !0, 0, min_nr, min_key_cache);
+            let nr_flushed = self.flush_pins_locked(reclaim, seq_to_flush, !0, min_nr, min_key_cache);
 
             let p = reclaim.published();
             let nr = if direct { &p.nr_direct_reclaim } else { &p.nr_background_reclaim };
@@ -655,7 +632,7 @@ impl c::journal {
     }
 
     fn flush_pins_or_still_flushing(&self, reclaim: &mut ReclaimGuard<'_>, seq_to_flush: u64, types: u32) -> bool {
-        self.flush_pins_locked(reclaim, seq_to_flush, types, 0, 0, 0) != 0 ||
+        self.flush_pins_locked(reclaim, seq_to_flush, types, 0, 0) != 0 ||
             self.pins().still_flushing(seq_to_flush, types)
     }
 
@@ -899,11 +876,7 @@ fn time_stats_summary_to_text(out: &mut Printbuf, name: &str, stats: &c::bch2_ti
         (s.duration_stats.n, s.duration_stats.mean(), s.max_duration)
     };
 
-    prt!(out, "{name}:\t{n}\t");
-    bch2_pr_time_units(out, mean as u64);
-    out.tab();
-    bch2_pr_time_units(out, max);
-    out.newline();
+    prt!(out, "{name}:\t{n}\t{}\t{}\n", Nsecs(mean as u64), Nsecs(max));
 }
 
 /*

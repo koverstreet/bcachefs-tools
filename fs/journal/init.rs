@@ -80,9 +80,9 @@ impl c::journal {
          * All pins have been flushed and the journal quiesced, so every dirty
          * entry has been reclaimed - dirty_entry_bytes must have drained to 0.
          * A nonzero remainder means the accounting (journal.c entry-close +/
-         * bch2_journal_update_last_seq_ondisk -) has leaked, which silently
+         * write.c's update_last_seq_ondisk() -) has leaked, which silently
          * shrinks the in-memory journal-space budget (see mem_limit in
-         * bch2_journal_space_available()).
+         * reclaim.rs's dev_space_available()).
          */
         if replay_done && dirty_entry_bytes != 0 {
             bch_err!(fs, "journal shutdown error: {dirty_entry_bytes} dirty entry bytes remaining after flushing all pins");
@@ -156,7 +156,7 @@ impl c::journal {
                 self.lock.lock().last_empty_seq = seq;
             }
 
-            let seq_devs = if !info.clean { c::bch2_journal_replay_devs(fs, i) } else { Default::default() };
+            let seq_devs = if !info.clean { crate::journal::replay_devs(fs, i) } else { Default::default() };
 
             if seq_devs.nr != 0 {
                 let r = DevlistEntry::new(DataType::journal, seq_devs);

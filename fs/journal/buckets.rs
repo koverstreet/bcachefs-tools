@@ -661,11 +661,3 @@ ring_exports! {
     set_cur_seq(seq: u64);
     to_text(out: &mut Printbuf);
 }
-
-/// # Safety
-/// @new is @nr u64s.
-#[c_export]
-pub unsafe fn bch2_journal_buckets_add(ca: &Dev, new: *const u64, nr: c_uint) -> c_int {
-    let new = unsafe { core::slice::from_raw_parts(new, nr as usize) };
-    ret_to_c(add(ca.fs(), ca, new))
-}

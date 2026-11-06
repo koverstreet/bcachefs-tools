@@ -189,7 +189,6 @@ pub mod c {
     pub use crate::init::passes::{RecoveryWords, RecoveryWordsWriter, bch_fs_recovery, bch_recovery_runner};
     pub use crate::init::progress::{progress_indicator};
     pub use super::journal_journal_types::*;
-    pub use crate::journal::bch2_journal_replay_devs;
     pub use super::journal_reclaim_types::*;
     pub use super::journal_seq_blacklist_format::*;
     pub use super::journal_types::*;

@@ -99,7 +99,7 @@ unsafe impl TearSafe for PinDevs {}
 impl PinDevs {
     /*
      * @d is bounded by metadata_replicas <= BCH_REPLICAS_MAX (journal write),
-     * and by bch2_journal_replay_devs() (journal start)
+     * and by replay_devs() (journal start)
      */
     fn new(d: &c::bch_devs_list) -> Self {
         debug_assert!(u32::from(d.nr) <= c::BCH_REPLICAS_MAX,
@@ -867,7 +867,7 @@ pub(crate) unsafe extern "C" fn pin_resize_work(work: *mut c::work_struct) {
 }
 
 /*
- * Queued by bch2_dev_online(): journal written while a device was offline is
+ * Queued by dev_bring_online(): journal written while a device was offline is
  * under-replicated, and those replicas entries go on refusing to take the
  * devices that stayed online offline until the pins are flushed.
  *

@@ -58,7 +58,5 @@ static inline struct nonce journal_nonce(const struct jset *jset)
 	}};
 }
 
-#include "journal/read_gen.h"
-
 
 #endif /* _BCACHEFS_JOURNAL_READ_H */
