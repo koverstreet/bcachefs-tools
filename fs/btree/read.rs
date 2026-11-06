@@ -31,6 +31,8 @@ use crate::util::task::{spawn_static, waiter, Resumable, Resume, Spawn};
 use crate::util::vstructs::{cast_plain, Head, SelfSized, Unvalidated};
 use crate::util::Printbuf;
 use crate::util::sleep::Sleep;
+use crate::data::moving::{Moving, MovingIo};
+use core::sync::atomic::Ordering::Relaxed;
 use crate::data_structures::array_vec::ArrayVec;
 use core::mem::offset_of;
 use core::ffi::{c_int, c_uint};
@@ -283,24 +285,31 @@ pub async fn read_replicas(reads: &mut [ReplicaRead<'_>]) -> Replicas<Result<(),
 }
 
 /// One replica of the node @k points to, at @level of @btree, on @dev: read
-/// asynchronously, and if it's bad, the node rewritten from another.
-pub fn btree_node_scrub(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, dev: u32) -> Result<(), BchError> {
+/// asynchronously, and if it's bad, the node rewritten from another. In
+/// flight in @m till it's done, and counted in its stats: the node's sectors
+/// corrected, or uncorrected if the rewrite fails.
+pub fn btree_node_scrub(m: &Moving<'_>, btree: Btree, level: u32, k: BkeySC<'_>, dev: u32)
+    -> Result<(), BchError>
+{
     // A v1 pointer carries nothing to check a replica against
     if k.arm::<c::BtreePtrV2>().is_none() {
         return Ok(());
     }
 
+    let fs = m.trans().fs();
     let write = fs.writes.tryget_live().ok_or_else(|| fs.err(c::bch_errcode::BCH_ERR_erofs_no_writes))?;
     // the task holds it, and its write ref: going read-only waits for that
     let fs_ref = unsafe { BackRef::new(fs) };
     let fs = unsafe { fs_ref.get() };
     let Some(r) = ReplicaRead::new(fs, k, dev)? else { return Ok(()) };
     let key = BtreeKeyBuf::new(btree, level, k);
+    let io = m.io_start(false, fs.btree_sectors());
 
-    spawn_static(Spawn::Queue(&fs.btree.read_complete_wq), rewrite_if_bad(write, fs_ref, key, r))
+    spawn_static(Spawn::Queue(&fs.btree.read_complete_wq), rewrite_if_bad(write, fs_ref, key, r, io))
 }
 
-async fn rewrite_if_bad(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, mut r: ReplicaRead<'static>) {
+async fn rewrite_if_bad(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, mut r: ReplicaRead<'static>,
+                        io: MovingIo) {
     let fs = &*fs;
     let read = read_replicas(core::slice::from_mut(&mut r)).await[0];
     if r.good(read, &key, ", rewriting node") {
@@ -311,6 +320,14 @@ async fn rewrite_if_bad(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, mut
     let ret = commit_do(&trans, None, CommitFlags::empty(), |t| {
         t.btree_node_rewrite_key(key.btree, key.level - 1, key.key(), CommitFlags::empty())
     });
+
+    // ENOENT: the node was rewritten since, its bad replica with it
+    if !ret.as_ref().is_err_and(|e| e.matches(c::ENOENT)) {
+        let stats = io.stats();
+        let n = if ret.is_ok() { &stats.sectors_error_corrected } else { &stats.sectors_error_uncorrected };
+        n.fetch_add(fs.btree_sectors().into(), Relaxed);
+    }
+
     if let Some(e) = ret.err().filter(|e| !e.matches(c::ENOENT) && !e.matches(c::EROFS)) {
         crate::bch_err_ratelimited!(fs, "btree node scrub: error rewriting node: {}", e.msg());
     }

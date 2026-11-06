@@ -205,6 +205,13 @@ fn io_counts(io: &IoCounts, write: bool) -> (&AtomicI32, &AtomicI32) {
     if write { (&io.write_sectors, &io.write_ios) } else { (&io.read_sectors, &io.read_ios) }
 }
 
+impl MovingIo {
+    /// What the context it's in flight in counts into.
+    pub fn stats(&self) -> &MoveStats {
+        unsafe { Moving::from_raw(self.ctxt.as_ptr()) }.stats()
+    }
+}
+
 impl Drop for MovingIo {
     fn drop(&mut self) {
         // SAFETY: our ref keeps the context

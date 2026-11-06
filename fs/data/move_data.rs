@@ -123,7 +123,7 @@ impl<'a> Moving<'a> {
         } else if !is_scrub(data_opts.type_) {
             self.move_btree_node(t, opts, data_opts, iter, level, k)
         } else if data_opts.type_ == c::bch_data_update_types::BCH_DATA_UPDATE_scrub {
-            btree_node_scrub(fs, iter.btree(), level, k, data_opts.read_dev)
+            btree_node_scrub(self, iter.btree(), level, k, data_opts.read_dev)
         } else {
             // scrub_no_repair: node scrub repairs, and the journal scrub
             // checks nodes itself - scrub_journal.rs - so nothing should send
