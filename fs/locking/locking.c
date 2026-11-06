@@ -58,6 +58,14 @@ unsigned long rust_spin_lock_irqsave(spinlock_t *lock)
 	return flags;
 }
 
+unsigned long rust_spin_lock_irqsave_nested(spinlock_t *lock, unsigned subclass)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave_nested(lock, flags, subclass);
+	return flags;
+}
+
 void rust_spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
 {
 	spin_unlock_irqrestore(lock, flags);

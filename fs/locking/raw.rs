@@ -53,6 +53,7 @@ c_extern! {
 
     pub fn rust_spin_lock_init(lock: *mut c::spinlock_t, name: *const c_char, key: *mut c_void);
     pub fn rust_spin_lock_irqsave(lock: *mut c::spinlock_t) -> c_ulong;
+    pub fn rust_spin_lock_irqsave_nested(lock: *mut c::spinlock_t, subclass: c_uint) -> c_ulong;
     pub fn rust_spin_unlock_irqrestore(lock: *mut c::spinlock_t, flags: c_ulong);
     pub fn rust_spin_lock_assert_held(lock: *mut c::spinlock_t);
 
@@ -173,6 +174,13 @@ unsafe impl RawLock for c::spinlock_t {
 
     unsafe fn assert_held(&self) {
         unsafe { rust_spin_lock_assert_held(self.as_ptr().cast()) }
+    }
+}
+
+unsafe impl RawNestedLock for c::spinlock_t {
+    unsafe fn lock_nested(&self, subclass: u32) -> (c_ulong, MemallocFlags) {
+        let flags = unsafe { rust_spin_lock_irqsave_nested(self.as_ptr().cast(), subclass) };
+        (flags, MemallocFlags::noreclaim())
     }
 }
 

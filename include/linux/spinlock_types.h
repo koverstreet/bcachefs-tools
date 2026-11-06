@@ -61,6 +61,7 @@ typedef raw_spinlock_t spinlock_t;
 #define spin_unlock_irq(lock)		raw_spin_unlock(lock)
 
 #define spin_lock_irqsave(lock, flags)	raw_spin_lock_irqsave(lock, flags)
+#define spin_lock_irqsave_nested(lock, flags, n) spin_lock_irqsave(lock, flags)
 #define spin_unlock_irqrestore(lock, flags) raw_spin_unlock_irqrestore(lock, flags)
 #define spin_trylock(lock)		raw_spin_trylock(lock)
 

@@ -251,6 +251,17 @@ impl<R: RawLock, G, P> Locked<R, G, P> {
     pub fn assert_held(&self) {
         unsafe { self.raw.assert_held() }
     }
+
+    /// What it protects, unlocked: for a racy peek, one that can live with
+    /// what it reads changing under it.
+    pub fn data_ptr(&self) -> *const G {
+        self.protected.get()
+    }
+
+    /// What it protects, had by &mut - no one else's to lock.
+    pub fn get_mut(&mut self) -> &mut G {
+        self.protected.get_mut()
+    }
 }
 
 impl<R: RawLockBase, G, P> Deref for Locked<R, G, P> {
@@ -492,8 +503,16 @@ unsafe impl<G: Send, P: Sync> Sync for LockedBy<G, P> {}
 unsafe impl<G: ::pin_init::Zeroable, P: ::pin_init::Zeroable> ::pin_init::Zeroable for LockedBy<G, P> {}
 
 impl<G, P> LockedBy<G, P> {
+    /// Where the G is in a LockedBy.
+    pub const PROTECTED_OFFSET: usize = core::mem::offset_of!(Self, protected);
+
     pub const fn new(protected: G, published: P) -> Self {
         LockedBy { protected: UnsafeCell::new(protected), published }
+    }
+
+    /// What it protects, unlocked: for a racy peek, as Locked::data_ptr().
+    pub fn data_ptr(&self) -> *const G {
+        self.protected.get()
     }
 
     /// # Safety
