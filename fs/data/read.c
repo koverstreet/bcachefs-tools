@@ -918,7 +918,7 @@ static inline struct bch_read_bio *read_extent_rbio_alloc(struct btree_trans *tr
 	 * the effective opts per extent, and this goes.
 	 */
 	struct bch_inode_opts indirect_opts, *opts = &orig->opts;
-	if (bkey_is_indirect(k.k)) {
+	if (bch2_bkey_is_indirect(k.k)) {
 		int ret = bch2_bkey_get_io_opts(trans, NULL, k, &indirect_opts);
 		if (ret)
 			return ERR_PTR(ret);
@@ -1206,7 +1206,7 @@ int __bch2_read_extent(struct btree_trans *trans,
 	bool bounce = false, read_full = false;
 	int ret = 0;
 
-	if (bkey_extent_is_inline_data(k.k))
+	if (bch2_bkey_is_inline_data(k.k))
 		return read_extent_inline(c, orig, iter, k, offset_into_extent, flags);
 
 	if (unlikely((bch2_bkey_extent_flags(k) & BIT_ULL(BCH_EXTENT_FLAG_poisoned))) &&

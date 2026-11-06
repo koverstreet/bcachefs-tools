@@ -9,6 +9,7 @@ use crate::btree::bkey::{bkey_ge, bkey_gt, bkey_le, bkey_lt, types_with, AllType
                          BkeyVMut};
 use crate::btree::iter::NoRoom;
 use crate::c;
+use crate::data::inline_data::{InlineDataMut, InlineDataRef};
 use crate::data::keylist::KeyRoom;
 use crate::data::ptrs::{crc_is_compressed, crc_unpack, BkeyVPtrs, ExtentEntry, ExtentEntryMut, IoFailures, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, BchError};
@@ -214,32 +215,28 @@ impl FamilyTypes for ExtentsTypes {
 // SAFETY: every key is one of AllTypes'
 unsafe impl<S: KeyState> InFamily<AllTypes> for FamilyVal<ExtentsTypes, S> {}
 
+/// A key counted in its inode's i_sectors, BKEY_TYPE_allocation.
+pub type Allocation = FamilyVal<ByFlag<{ c::BKEY_TYPE_allocation }>>;
+
+/// Data a file reads, BKEY_TYPE_data: pointers to it, the data inline, or a
+/// reflink_p to it.
+pub type Data = FamilyVal<ByFlag<{ c::BKEY_TYPE_data }>>;
+
+/// A file's data in the extents btree, not through a reflink_p,
+/// BKEY_TYPE_user_data.
+pub type UserData = FamilyVal<ByFlag<{ c::BKEY_TYPE_user_data }>>;
+
 impl c::bkey {
-    /// Whether it's counted in its inode's i_sectors.
     pub fn extent_is_allocation(&self) -> bool {
-        use c::bch_bkey_type as t;
-
-        matches!(self.key_type(),
-                 t::KEY_TYPE_extent | t::KEY_TYPE_reservation | t::KEY_TYPE_reflink_p |
-                 t::KEY_TYPE_reflink_v | t::KEY_TYPE_inline_data |
-                 t::KEY_TYPE_indirect_inline_data | t::KEY_TYPE_error)
+        <Allocation as BkeyFamily>::contains(self)
     }
 
-    /// Whether it's data a file reads: pointers to it, the data inline, or a
-    /// reflink_p to it - bkey_extent_is_data().
     pub fn extent_is_data(&self) -> bool {
-        use c::bch_bkey_type as t;
-
-        self.extent_is_direct_data() ||
-            matches!(self.key_type(),
-                     t::KEY_TYPE_inline_data | t::KEY_TYPE_indirect_inline_data | t::KEY_TYPE_reflink_p)
+        <Data as BkeyFamily>::contains(self)
     }
 
-    /// Whether it's a file's data in the extents btree, not through a
-    /// reflink_p: bkey_is_user_data().
     pub fn is_user_data(&self) -> bool {
-        use c::bch_bkey_type as t;
-        matches!(self.key_type(), t::KEY_TYPE_extent | t::KEY_TYPE_inline_data | t::KEY_TYPE_reservation)
+        <UserData as BkeyFamily>::contains(self)
     }
 
     /// Whether its value is pointers to its data, and not to another key's:
@@ -352,13 +349,11 @@ pub trait BkeyVExtents: BkeyV {
                 let v = p.v_mut();
                 v.update_idx(|i| i + sub);
             }
-            ty @ (t::KEY_TYPE_inline_data | t::KEY_TYPE_indirect_inline_data) => {
-                let off = inline_data_offset(ty);
-                let val = k.val_bytes_mut();
-                let bytes = val.len() - off;
-                let sub = (sub << 9).min(bytes as u64) as usize;
+            _ if k.k.extent_is_inline_data() => {
+                let d = InlineDataMut::of(k.as_s()).expect("inline data");
+                let sub = (sub << 9).min(d.data.len() as u64) as usize;
 
-                val.copy_within(off + sub.., off);
+                d.data.copy_within(sub.., 0);
                 new_val_u64s -= sub / size_of::<u64>();
             }
             _ => {}
@@ -391,10 +386,9 @@ pub trait BkeyVExtents: BkeyV {
             new_val_u64s = 0;
         }
 
-        if let ty @ (t::KEY_TYPE_inline_data | t::KEY_TYPE_indirect_inline_data) = k.k.key_type() {
-            let off = inline_data_offset(ty);
-            let bytes = k.k.val_bytes() - off;
-            new_val_u64s = (off + bytes.min((k.k.size as usize) << 9)) / size_of::<u64>();
+        if let Some(d) = InlineDataRef::of(k.as_sc()) {
+            let off = k.k.val_bytes() - d.data.len();
+            new_val_u64s = (off + d.data.len().min((k.k.size as usize) << 9)) / size_of::<u64>();
         }
 
         shrink_val(k, new_val_u64s);
@@ -402,16 +396,6 @@ pub trait BkeyVExtents: BkeyV {
 }
 
 impl<K: BkeyV> BkeyVExtents for K {}
-
-/// Where an inline data key's data starts in its value - after an indirect
-/// one's refcount: bkey_inline_data_offset().
-fn inline_data_offset(ty: c::bch_bkey_type) -> usize {
-    match ty {
-        c::bch_bkey_type::KEY_TYPE_inline_data          => size_of::<c::InlineData>(),
-        c::bch_bkey_type::KEY_TYPE_indirect_inline_data => size_of::<c::IndirectInlineData>(),
-        _ => unreachable!("inline data offset of a {ty:?}"),
-    }
-}
 
 /// @k's value made @val_u64s long, the u64s past it zeroed: a cut's end. It
 /// never grows.

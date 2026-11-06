@@ -85,6 +85,7 @@ fn bkey_edit_short_value() {
 /// types' structs by name: where offset_of! says it is.
 #[test]
 fn key_type_table() {
+    use crate::data::inline_data::DATA;
     use crate::data::reflink::REFCOUNT;
     use c::bch_bkey_type as t;
 
@@ -97,9 +98,11 @@ fn key_type_table() {
 
     let r = k(t::KEY_TYPE_reflink_v);
     assert_eq!(REFCOUNT.of(&r), Some(core::mem::offset_of!(c::ReflinkV, repr.refcount)));
+    assert_eq!(DATA.of(&r), None);
 
     let i = k(t::KEY_TYPE_indirect_inline_data);
     assert_eq!(REFCOUNT.of(&i), Some(core::mem::offset_of!(c::IndirectInlineData, repr.refcount)));
+    assert_eq!(DATA.of(&i),     Some(size_of::<c::IndirectInlineData>()));
 }
 
 #[test]

@@ -106,7 +106,7 @@ impl Mapping {
         }
 
         match k.k.key_type() {
-            t::KEY_TYPE_inline_data | t::KEY_TYPE_indirect_inline_data =>
+            _ if k.k.extent_is_inline_data() =>
                 fill(start, 0, len, flags | c::FIEMAP_EXTENT_DATA_INLINE),
             t::KEY_TYPE_reservation =>
                 fill(start, 0, len, flags | c::FIEMAP_EXTENT_DELALLOC | c::FIEMAP_EXTENT_UNWRITTEN),

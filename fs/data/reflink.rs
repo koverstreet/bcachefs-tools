@@ -29,7 +29,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
-use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_gt, bkey_lt, pos, BkeyI, BkeyS, BkeySC,
+use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_gt, bkey_lt, pos, BkeyFamily, BkeyI, BkeyS, BkeySC,
                          BkeyV, BkeyVMut, ByFlag, FamilyVal, FieldOffsets, POS_MAX, POS_MIN};
 use crate::btree::bkey_methods::TriggerOp;
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
@@ -38,6 +38,7 @@ use crate::c;
 use crate::data::extents::Extents;
 use crate::data::io_misc::fpunch_at;
 use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
+use crate::data::inline_data::InlineDataRef;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::snapshots::subvolume;
@@ -92,6 +93,12 @@ pub trait BkeyVIndirect: BkeyV<V = Indirect> {
 }
 
 impl<K: BkeyV<V = Indirect>> BkeyVIndirect for K {}
+
+/// bkey_is_indirect(), for C.
+#[c_export]
+pub fn bch2_bkey_is_indirect(k: &c::bkey) -> bool {
+    <Indirect as BkeyFamily>::contains(k)
+}
 
 impl c::bkey {
     /// The type a direct extent of its type is, made indirect: deleted for a
@@ -505,12 +512,8 @@ pub fn bch2_indirect_inline_data_validate(c: &Opaque<Fs>, k: BkeySC<'_>,
 #[cold]
 #[c_export]
 pub fn bch2_indirect_inline_data_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
-    let data = &k.val_bytes()[size_of::<c::IndirectInlineData>()..];
-
-    write!(out, "refcount {} datalen {}: ", k.arm::<Indirect>().expect("indirect inline data").refcount().get(), data.len());
-    for b in &data[..data.len().min(32)] {
-        write!(out, "{b:02x}");
-    }
+    write!(out, "refcount {} ", k.arm::<Indirect>().expect("indirect inline data").refcount().get());
+    InlineDataRef::of(k).expect("inline data").to_text(out);
 }
 
 // ── lookup ───────────────────────────────────────────────────────────────

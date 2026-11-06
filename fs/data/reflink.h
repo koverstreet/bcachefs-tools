@@ -26,10 +26,4 @@
 	.trigger	= bch2_trigger_indirect_inline_data,	\
 })
 
-static inline bool bkey_is_indirect(const struct bkey *k)
-{
-	return  k->type == KEY_TYPE_reflink_v ||
-		k->type == KEY_TYPE_indirect_inline_data;
-}
-
 #endif /* _BCACHEFS_REFLINK_H */

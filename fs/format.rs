@@ -354,6 +354,14 @@ c_enum! {
         BKEY_TYPE_ptrs_mut            = 1 << 4,
         /* A btree node pointer: a key above the leaves, or a btree root's */
         BKEY_TYPE_btree_ptr           = 1 << 5,
+        /* Counted in its inode's i_sectors */
+        BKEY_TYPE_allocation          = 1 << 6,
+        /* Data a file reads: pointers to it, the data inline, or a reflink_p to it */
+        BKEY_TYPE_data                = 1 << 7,
+        /* A file's data in the extents btree, not through a reflink_p */
+        BKEY_TYPE_user_data           = 1 << 8,
+        /* The data itself, inline in the value, direct or indirect */
+        BKEY_TYPE_inline_data         = 1 << 9,
     }
 }
 
@@ -389,7 +397,7 @@ c_xmacro! {
          "Stripped during btree node writes."),
         (whiteout,              1,  BKEY_TYPE_extent, _,
          "Blocks visibility of ancestor snapshot versions of a key"),
-        (error,                 2,  BKEY_TYPE_extent, err,
+        (error,                 2,  BKEY_TYPE_extent | BKEY_TYPE_allocation, err,
          "Marks an extent as containing unrecoverable errors"),
         (cookie,                3,  BKEY_TYPE_extent, _,
          "Used by reconcile to track option changes via "
@@ -399,10 +407,12 @@ c_xmacro! {
          "preserves hash chain integrity"),
         (btree_ptr,             5,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut | BKEY_TYPE_btree_ptr, _,
          "Btree node pointer (v1, legacy)"),
-        (extent,                6,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut | BKEY_TYPE_extent, _,
+        (extent,                6,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut | BKEY_TYPE_extent |
+                                    BKEY_TYPE_allocation | BKEY_TYPE_data | BKEY_TYPE_user_data, _,
          "File data extent with device pointers, checksums, and "
          "optional compression metadata"),
-        (reservation,           7,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
+        (reservation,           7,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent |
+                                    BKEY_TYPE_allocation | BKEY_TYPE_user_data, _,
          "Disk space reservation for a file region"),
         (inode,                 8,  BKEY_TYPE_strict_btree_checks, _,
          "Inode metadata (v1, legacy)"),
@@ -418,17 +428,21 @@ c_xmacro! {
          "Quota counters for a user, group, or project"),
         (stripe,                14, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs, _,
          "Erasure code stripe metadata with parity pointers"),
-        (reflink_p,             15, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
+        (reflink_p,             15, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent |
+                                    BKEY_TYPE_allocation | BKEY_TYPE_data, _,
          "Pointer from the extents btree to an indirect extent "
          "in the reflink btree"),
-        (reflink_v,             16, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut | BKEY_TYPE_extent | BKEY_TYPE_indirect, _,
+        (reflink_v,             16, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut | BKEY_TYPE_extent | BKEY_TYPE_indirect |
+                                    BKEY_TYPE_allocation | BKEY_TYPE_data, _,
          "Indirect extent with refcount in the reflink btree"),
-        (inline_data,           17, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
+        (inline_data,           17, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent |
+                                    BKEY_TYPE_allocation | BKEY_TYPE_data | BKEY_TYPE_user_data | BKEY_TYPE_inline_data, _,
          "Small file data stored inline in the btree"),
         (btree_ptr_v2,          18, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut | BKEY_TYPE_btree_ptr, _,
          "Btree node pointer (v2) with sequence number and "
          "min_key for more efficient traversal"),
-        (indirect_inline_data,  19, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent | BKEY_TYPE_indirect, _,
+        (indirect_inline_data,  19, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent | BKEY_TYPE_indirect |
+                                    BKEY_TYPE_allocation | BKEY_TYPE_data | BKEY_TYPE_inline_data, _,
          "Reflinked inline data with refcount"),
         (alloc_v2,              20, BKEY_TYPE_strict_btree_checks, _,
          "Bucket allocation metadata (v2, legacy)"),

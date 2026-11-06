@@ -235,6 +235,7 @@ pub mod data {
     pub mod extent_update;
     pub mod extents;
     pub mod extents_sb;
+    pub mod inline_data;
     pub mod io_misc;
     pub mod keylist;
     pub mod migrate;

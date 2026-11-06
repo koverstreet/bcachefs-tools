@@ -7,6 +7,7 @@
 #include "btree/bkey.h"
 #include "data/durability_gen.h"
 #include "data/extents_gen.h"
+#include "data/inline_data_gen.h"
 #include "data/ptrs_gen.h"
 
 
@@ -404,32 +405,6 @@ static inline bool bkey_is_btree_ptr(const struct bkey *k)
 	}
 }
 
-static inline bool bkey_extent_is_direct_data(const struct bkey *k)
-{
-	switch (k->type) {
-	case KEY_TYPE_btree_ptr:
-	case KEY_TYPE_btree_ptr_v2:
-	case KEY_TYPE_extent:
-	case KEY_TYPE_reflink_v:
-		return true;
-	default:
-		return false;
-	}
-}
-
-static inline bool bkey_is_user_data(const struct bkey *k)
-{
-	return  k->type == KEY_TYPE_extent ||
-		k->type == KEY_TYPE_inline_data ||
-		k->type == KEY_TYPE_reservation;
-}
-
-static inline bool bkey_extent_is_inline_data(const struct bkey *k)
-{
-	return  k->type == KEY_TYPE_inline_data ||
-		k->type == KEY_TYPE_indirect_inline_data;
-}
-
 static inline unsigned bkey_inline_data_offset(const struct bkey *k)
 {
 	switch (k->type) {
@@ -448,32 +423,6 @@ static inline unsigned bkey_inline_data_bytes(const struct bkey *k)
 }
 
 #define bkey_inline_data_p(_k)	(((void *) (_k).v) + bkey_inline_data_offset((_k).k))
-
-static inline bool bkey_extent_is_data(const struct bkey *k)
-{
-	return  bkey_extent_is_direct_data(k) ||
-		bkey_extent_is_inline_data(k) ||
-		k->type == KEY_TYPE_reflink_p;
-}
-
-/*
- * Should extent be counted under inode->i_sectors?
- */
-static inline bool bkey_extent_is_allocation(const struct bkey *k)
-{
-	switch (k->type) {
-	case KEY_TYPE_extent:
-	case KEY_TYPE_reservation:
-	case KEY_TYPE_reflink_p:
-	case KEY_TYPE_reflink_v:
-	case KEY_TYPE_inline_data:
-	case KEY_TYPE_indirect_inline_data:
-	case KEY_TYPE_error:
-		return true;
-	default:
-		return false;
-	}
-}
 
 static inline bool bkey_extent_is_unwritten(const struct bch_fs *c, struct bkey_s_c k)
 {

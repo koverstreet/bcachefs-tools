@@ -9,6 +9,7 @@ use clap::Parser;
 
 use bcachefs_kernel::btree;
 use bcachefs_kernel::btree::bkey::{BkeyI, BkeyP, BkeyS};
+use bcachefs_kernel::data::inline_data::InlineDataMut;
 use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
@@ -199,20 +200,13 @@ fn derep(fs: &Fs, k: BkeyS) -> bool {
 fn sanitize_val(fs: &Fs, mut k: BkeyS, opts: SanitizeOpts) -> bool {
     const BTREE_PTR:            c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_btree_ptr;
     const BTREE_PTR_V2:         c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_btree_ptr_v2;
-    const INLINE_DATA:          c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_inline_data;
-    const INDIRECT_INLINE_DATA: c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_indirect_inline_data;
     const DIRENT:               c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_dirent;
 
     match k.k.key_type() {
         BTREE_PTR | BTREE_PTR_V2 if opts.single_replica => derep(fs, k),
-        INLINE_DATA if opts.sanitize => {
-            k.val_bytes_mut().fill(0);
-            true
-        }
-        INDIRECT_INLINE_DATA if opts.sanitize => {
-            let val = k.val_bytes_mut();
-            if val.len() > 8 {
-                val[8..].fill(0);
+        _ if opts.sanitize && k.k.extent_is_inline_data() => {
+            if let Some(d) = InlineDataMut::of(k.as_s()) {
+                d.data.fill(0);
             }
             true
         }
