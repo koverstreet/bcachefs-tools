@@ -1,29 +1,24 @@
 // SPDX-License-Identifier: GPL-2.0
-//! tagged_union!: a tagged union with a stable representation.
+//! tagged_union!: a tagged union with a stable representation, declared as
+//! an enum - its arms the variants, each with its payload's type and the
+//! tag's value as the discriminant:
 //!
 //!   tagged_union! {
-//!       /// ...
+//!       #[derive(Clone, Copy, CStruct, TypeInfo)]*
 //!       #[c_name(disk_accounting_pos)]
-//!       pub struct DiskAccountingPos {
-//!           tag type_: u8 = disk_accounting_type,
-//!           arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: camel(f) = nr,
-//!           pad: Bpos,
-//!           size: pad,
-//!           packed,
+//!       #[tag(type_: u8)]
+//!       #[tag_enum(disk_accounting_type: u32, prefix = BCH_DISK_ACCOUNTING_,
+//!                  nr = BCH_DISK_ACCOUNTING_TYPE_NR)]
+//!       #[pad(Bpos)]
+//!       #[size(pad)]
+//!       #[packed]
+//!       pub enum DiskAccountingPos {
+//!           /* No subtypes - number of inodes in the entire filesystem */
+//!           nr_inodes(#[repr(C)] #[c_name(bch_acct_nr_inodes)] pub struct NrInodes {}) = 0,
+//!           replicas(Replicas) = 2,
+//!           ...
 //!       }
 //!   }
-//!
-//!   tagged_union! {
-//!       pub union jset_entry in c::jset_entry {
-//!           tag type_: u8 = c::bch_jset_entry_type,
-//!           arms from BCH_JSET_ENTRY_TYPES(f, nr, ..) => f: c::concat(jset_entry_, f) = nr,
-//!           size: header,
-//!       }
-//!   }
-//!
-//! Or as an enum, its arms the variants - each with its payload's type, or
-//! the type defined in place, and the tag's value as the discriminant - and
-//! the rest attributes:
 //!
 //!   tagged_union! {
 //!       #[storage(c::jset_entry)]
@@ -37,39 +32,42 @@
 //!       }
 //!   }
 //!
-//! `#[storage(S)]` is `union NAME in S`, `#[tag(..)]`, `#[pad(..)]`,
-//! `#[size(..)]`, `#[packed]` and `#[plain]` the items of the same names.
+//! A discriminant not written is the last's plus one, as an enum's. An arm's
+//! type may be defined in its variant, `[#[..]] [pub] struct|union NAME {
+//! .. }`: it goes to nestify::nest!, so it can nest types of its own, with
+//! the declaration's `#[...]*` - nestify's propagating attributes, for each
+//! arm type and what it nests, not for the storage. It's reported where it's
+//! written: the definition keeps its tokens' spans.
+//!
 //! `#[tag_enum([closed,] NAME: REPR, prefix = P[, nr = NR])]` is the tag's
-//! enum, generated from the arms: P and an arm's name its variant, labelled
-//! the arm's name, then NR - open, or closed, the tag stored as it,
-//! `#[tag(FIELD)]`; an open one's values are its constants by the arms'
-//! names too, jset_entry's btree_keys, and nr. A discriminant not written is
-//! the last's plus one, as an enum's. And NAME_arms!(cb) is cb! { (name,
+//! enum, made from the arms: P and an arm's name its variant, labelled the
+//! arm's name, then NR - open, or closed and the tag stored as it,
+//! `#[tag(FIELD)]`. An open one's values are its constants by the arms' names
+//! too, jset_entry's btree_keys, and nr. NAME_arms!(cb) is cb! { (name,
 //! value), .. }, an entry per arm, for what's made from each.
 //!
 //! A type whose bytes come from outside - disk, or C - with a tag that says
 //! which of its arms it holds, and that may be one this version doesn't know.
 //! The layout is given, not chosen: the storage is the C, plain #[repr(C)]
-//! data - a `struct` is the tag, then a union of the arms, overlaid with the
-//! pad.
+//! data - without #[storage], a struct of the tag, then a union of the arms,
+//! overlaid with the pad.
 //!
-//! `size:` says what its size is a function of, and what's generated follows
-//! from that: nothing, a constant - `size: pad`, a struct, every value the
-//! pad's size, a value of plain data; its header's count - `size: header`,
-//! a union over another's storage, below, a view of bytes as long as the
-//! header says; or its tag - `size: arm`, a value as long as the arm its tag
-//! selects, below.
+//! `#[size(..)]` says what its size is a function of, and what's generated
+//! follows from that: nothing, a constant - `size(pad)`, a struct, every
+//! value the pad's size, a value of plain data; its header's count -
+//! `size(header)`, a union over another's storage, below, a view of bytes as
+//! long as the header says; or its tag - `size(arm)`, a value as long as the
+//! arm its tag selects, below.
 //!
-//! `packed` is C's __packed: for an on-disk struct, the payload right after
+//! `#[packed]` is C's __packed: for an on-disk struct, the payload right after
 //! the tag, whatever the arms' alignment - a struct of the tag and the union
 //! otherwise puts the union at its alignment, and a new arm could move every
 //! payload.
 //!
 //! The tag is a function of the whole value: a crate::types::Determinant,
 //! stabby's idea (docs.rs/stabby), n-way - generated, returning the tag
-//! field, `tag NAME`. It's handed out as TAG_ENUM, `tag NAME: TYPE =
-//! TAG_ENUM`, a newtype over an integer the tag widens to - or with none,
-//! `tag NAME: TYPE`, as it is.
+//! field, `#[tag(FIELD: TYPE)]`. It's handed out as its open #[tag_enum], a
+//! newtype over an integer the tag widens to - or with none, as it is.
 //!
 //! Generated, for the first declaration:
 //!
@@ -110,13 +108,13 @@
 //! A struct C hands over in memory - a request, not a record off disk - can
 //! say so, with either or both of:
 //!
-//!  - `tag NAME: enum TYPE`: the tag's a closed C enum, the storage holds it
+//!  - a closed #[tag_enum]: the tag's a closed C enum, the storage holds it
 //!    as one - C keeps its enum type, its switches their -Wswitch - and the
 //!    arms' values are its variants, compared as themselves. A value from
 //!    outside could hold one that isn't a variant, so there's no Unvalidated
 //!    view, no from_bytes(); and the storage isn't Plain. new() starts from
 //!    zeroes: a const asserts 0 is a variant.
-//!  - `plain`: every arm is plain data, so an arm type not defined in the
+//!  - `#[plain]`: every arm is plain data, so an arm type not defined in the
 //!    block - a typedef of an integer, for C's `.device` where a struct
 //!    would make it `.device.dev` - is one of its own, not a #[counted]
 //!    family's head.
@@ -126,106 +124,51 @@
 //! as_bytes() can read any of them. A literal of the storage could leave
 //! some unwritten, as could an arm with padding; nothing makes either.
 //!
-//! Or, `union NAME in STORAGE { .., size: header }`, the storage is
-//! another's: a header its arms embed and run past, as far as its count
-//! says - a journal entry's, a superblock field's: an unsized vstruct
-//! (util/vstructs.rs), each reference to which has its arm's bytes, and its
-//! own C. Then what's generated is the Ref enum, ArmOf, and on the storage
-//! in each state - X<Unvalidated>, X<Validated> - typed(): the arm its tag
-//! selects, over its bytes, in the storage's state - every arm type has a
-//! family (util/vstructs.rs), so an Unvalidated storage's arms are
-//! Unvalidated. An arm may be shorter than its type - written by an older
-//! version, before the type grew - so it's what its definition's ArmRef says:
-//! a grown type's at the arm's length, its later fields zero past the end.
-//! arm::<A>() is typed() for one arm, if the tag is A's - A in the storage's
-//! state, X<Unvalidated> for an Unvalidated one - and arm_mut::<A>() the
-//! same, to edit. And for what's done to whichever arm it is - an ops trait's
-//! methods - NAME_match!(r, a => ..) on what typed() gave, and
-//! NAME_by_tag!(tag, A => .., _ => ..) by the tag alone: `a: A`, or A, names
-//! the arm's type, A<S> in state S.
+//! Or, `#[storage(STORAGE)] #[size(header)]`, the storage is another's: a
+//! header its arms embed and run past, as far as its count says - a journal
+//! entry's, a superblock field's: an unsized vstruct (util/vstructs.rs), each
+//! reference to which has its arm's bytes, and its own C. Then what's
+//! generated is the Ref enum, ArmOf, and on the storage in each state -
+//! X<Unvalidated>, X<Validated> - typed(): the arm its tag selects, over its
+//! bytes, in the storage's state - every arm type has a family
+//! (util/vstructs.rs), so an Unvalidated storage's arms are Unvalidated. An
+//! arm may be shorter than its type - written by an older version, before the
+//! type grew - so it's what its definition's ArmRef says: a grown type's at
+//! the arm's length, its later fields zero past the end. arm::<A>() is
+//! typed() for one arm, if the tag is A's - A in the storage's state,
+//! X<Unvalidated> for an Unvalidated one - and arm_mut::<A>() the same, to
+//! edit. And for what's done to whichever arm it is - an ops trait's methods
+//! - NAME_match!(r, a => ..) on what typed() gave, and NAME_by_tag!(tag, A =>
+//! .., _ => ..) by the tag alone: `a: A`, or A, names the arm's type, A<S> in
+//! state S.
 //!
-//! Or, `union NAME in HEAD { .., size: arm }`, each value is as long as the
-//! arm its tag selects - an ACL's entries: no count to step by, so a tag this
-//! version doesn't know is one there's no stepping past. HEAD is what every
-//! arm starts with, the tag in it, and the arms are plain data, packed: an
+//! Or, `#[storage(HEAD)] #[size(arm)]`, each value is as long as the arm its
+//! tag selects - an ACL's entries: no count to step by, so a tag this version
+//! doesn't know is one there's no stepping past. HEAD is what every arm
+//! starts with, the tag in it, and the arms are plain data, packed: an
 //! on-disk type asks no alignment of where it is, so a value is read at any
 //! offset. Arms may share a type, the variant saying which. What's generated
-//! is the enum, the arm by value, and on it read(),
-//! from bytes, an error if the tag isn't ours or the bytes are fewer than
-//! its arm (crate::util::vstructs::ArmSized); bytes(), its arm's size;
-//! head(), the fields every arm shares; name(), its arm's; write(), its
-//! arm's bytes then its tag; walk(), over a run of them (ArmWalk). No C:
-//! HEAD and the arms have their own.
+//! is the enum, the arm by value, and on it read(), from bytes, an error if
+//! the tag isn't ours or the bytes are fewer than its arm
+//! (crate::util::vstructs::ArmSized); bytes(), its arm's size; head(), the
+//! fields every arm shares; name(), its arm's; write(), its arm's bytes then
+//! its tag; walk(), over a run of them (ArmWalk). No C: HEAD and the arms
+//! have their own.
 //!
-//! The arms come from an x-macro list: tagged_union! hands the declaration to
-//! it - LIST!(cstruct_macros::__tagged_union [decl]) - and the list calls
-//! back with its entries, each bound to the params, `..` the rest, and
-//! `concat(A, b)` pasting - not paste!'s `[<A b>]`, which a list wrapping its
-//! callback in paste! would paste before we saw it -
-//! and `camel(a)`, a_b as AB.
-//!
-//! The arms' types can be defined in the block, each next to the others, as
-//! a Rust enum's variants are - comments and all:
-//!
-//!   tagged_union! {
-//!       #[derive(Clone, Copy, CStruct, TypeInfo)]*
-//!       #[c_typedef]*
-//!       #[c_name(disk_accounting_pos)]
-//!       pub struct DiskAccountingPos {
-//!           tag type_: u8 = disk_accounting_type,
-//!           arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: camel(f) = nr,
-//!           ...
-//!           /* Metadata accounting per btree id: ... */
-//!           #[repr(C, packed)]
-//!           #[c_name(bch_acct_btree)]
-//!           pub struct Btree {
-//!               pub id: u32,
-//!           },
-//!       }
-//!   }
-//!
-//! Each goes to nestify::nest!, so it can nest types of its own, with the
-//! declaration's `#[...]*` - nestify's propagating attributes, for each arm
-//! type and what it nests, not for the storage. The list still says what the
-//! arms are; a type defined here that isn't one's is an error. The
-//! declaration reaches the list as tokens, so an error in a definition is
-//! reported where it's written.
+//! The declaration is parsed into a CTaggedUnion (fs/types/cstruct.rs),
+//! which generate() takes; the record C's header is written from is that,
+//! as the struct|union form rust_types_gen parses.
+
 use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
 
-use crate::cstruct::{parse_items, rust_text, tagged_union_arms, tagged_union_record_text, CItem, CTaggedArm,
-                     CTaggedDef, CTaggedSize, CTaggedUnion};
-use crate::{comma_list, list_callback, record, through_list, tokens};
+use crate::cstruct::{rust_text, tagged_union_record_text, CTaggedArm, CTaggedDef, CTaggedSize, CTaggedUnion};
+use crate::{comma_list, record, tokens};
 
-/// tagged_union!: the enum form; or the struct|union form, its arms written
-/// out, or from a list - which it goes through: the declaration goes to the
-/// list as tokens, not text, so an arm type defined in it keeps its spans.
 pub(crate) fn tagged_union(input: TokenStream) -> Result<TokenStream, String> {
-    if is_enum_form(&input) {
-        let (decl, tu, mut out) = enum_form(&input)?;
-        out.extend(generate(&decl, &tu)?);
-        return Ok(out);
-    }
-    let tu = parse(&input)?;
-    match &tu.from {
-        Some(f) => Ok(through_list(&f.list, "cstruct_macros::__tagged_union", input)),
-        None => generate(&decl_of(&input), &tu),
-    }
-}
-
-/// Whether it's the enum form: [#[..]]* [pub] enum.
-fn is_enum_form(input: &TokenStream) -> bool {
-    let t: Vec<TokenTree> = input.clone().into_iter().collect();
-    let mut k = 0;
-    while matches!(t.get(k), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
-        k += 2;
-        if matches!(t.get(k), Some(TokenTree::Punct(p)) if p.as_char() == '*') {
-            k += 1;
-        }
-    }
-    if matches!(t.get(k), Some(TokenTree::Ident(i)) if i == "pub") {
-        k += 1 + usize::from(matches!(t.get(k + 1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis));
-    }
-    matches!(t.get(k), Some(TokenTree::Ident(i)) if i == "enum")
+    let (decl, tu, out) = enum_form(&input)?;
+    let mut out = out;
+    out.extend(generate(&decl, &tu)?);
+    Ok(out)
 }
 
 /// The declaration's parts generate() passes on - the arm types as their
@@ -452,7 +395,6 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
         tag_enum: tag_enum_ty,
         tag_is_enum,
         plain,
-        from: None,
         arms: arms.iter().map(|a| CTaggedArm { name: a.name.clone(), ty: a.ty.clone(), value: arm_value(a) }).collect(),
         pad,
         packed,
@@ -470,114 +412,6 @@ fn parse_int(s: &str) -> Option<u64> {
         Some(h) => u64::from_str_radix(h, 16).ok(),
         None => s.parse().ok(),
     }
-}
-
-/// The declaration's `#[...]*`s, and the arm types defined in its block -
-/// as the tokens they were written as, spans and all.
-fn arm_attrs_and_defs(decl: &TokenStream) -> (TokenStream, Vec<TokenStream>) {
-    let trees: Vec<TokenTree> = decl.clone().into_iter().collect();
-    let mut attrs = TokenStream::new();
-    let mut k = 0;
-    while let (Some(TokenTree::Punct(p)), Some(TokenTree::Group(g))) = (trees.get(k), trees.get(k + 1)) {
-        if p.as_char() != '#' || g.delimiter() != Delimiter::Bracket {
-            break;
-        }
-        if let Some(TokenTree::Punct(star)) = trees.get(k + 2).filter(|t| matches!(t, TokenTree::Punct(s) if s.as_char() == '*')) {
-            attrs.extend(trees[k..k + 2].iter().cloned());
-            attrs.extend([TokenTree::Punct(star.clone())]);
-            k += 3;
-        } else {
-            k += 2;
-        }
-    }
-    let body = trees.iter().rev().find_map(|t| match t {
-        TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => Some(g.stream()),
-        _ => None,
-    });
-    let items = body.map(comma_list).unwrap_or_default();
-    // [#[..]]... [pub [(..)]] struct|union NAME { .. }
-    let is_def = |item: &[TokenTree]| {
-        let mut j = 0;
-        while matches!(item.get(j), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
-            j += 2;
-        }
-        if matches!(item.get(j), Some(TokenTree::Ident(i)) if i.to_string() == "pub") {
-            j += 1;
-            if matches!(item.get(j), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis) {
-                j += 1;
-            }
-        }
-        matches!((item.get(j), item.get(j + 1), item.get(j + 2)),
-                 (Some(TokenTree::Ident(kw)), Some(TokenTree::Ident(_)), Some(TokenTree::Group(g)))
-                 if (kw.to_string() == "struct" || kw.to_string() == "union")
-                    && g.delimiter() == Delimiter::Brace)
-    };
-    let defs = items.into_iter()
-        .filter(|item| is_def(item))
-        .map(|item| item.into_iter().collect())
-        .collect();
-    (attrs, defs)
-}
-
-/// decl's Decl: the struct|union form's attributes, visibility, arm types.
-fn decl_of(decl: &TokenStream) -> Decl {
-    let (arm_attrs, defs) = arm_attrs_and_defs(decl);
-    let (attrs, vis) = attrs_and_vis(decl);
-    Decl { attrs, vis, arm_attrs, defs }
-}
-
-/// The list's callback: its arms are the list's entries.
-pub(crate) fn from_list(input: TokenStream) -> Result<TokenStream, String> {
-    let (decl, entries) = list_callback(input)?;
-    let mut tu = parse(&decl)?;
-    tu.arms = tagged_union_arms(&tu, &entries).map_err(|e| format!("{}: {e}", tu.name))?;
-    generate(&decl_of(&decl), &tu)
-}
-
-fn parse(input: &TokenStream) -> Result<CTaggedUnion, String> {
-    let mut items = parse_items(&format!("tagged_union! {{ {input} }}"))?;
-    match (items.pop(), items.is_empty()) {
-        (Some(CItem::TaggedUnion(tu)), true) => Ok(tu),
-        _ => Err("expected struct NAME { tag ..., arms ..., pad ... }".into()),
-    }
-}
-
-/// The declaration's attributes - its doc comment, a cfg - and visibility, as
-/// source, for what's generated.
-fn attrs_and_vis(decl: &TokenStream) -> (String, String) {
-    let trees: Vec<TokenTree> = decl.clone().into_iter().collect();
-    let mut attrs = String::new();
-    let mut k = 0;
-    while let (Some(TokenTree::Punct(p)), Some(TokenTree::Group(g))) = (trees.get(k), trees.get(k + 1)) {
-        if p.as_char() != '#' || g.delimiter() != Delimiter::Bracket {
-            break;
-        }
-        k += 2;
-        // `#[...]*` is the arm types', not the storage's
-        if let Some(TokenTree::Punct(star)) = trees.get(k) {
-            if star.as_char() == '*' {
-                k += 1;
-                continue;
-            }
-        }
-        // #[c_name], the C storage's, which is generated with it
-        if matches!(g.stream().into_iter().next(), Some(TokenTree::Ident(i)) if i.to_string() == "c_name") {
-            continue;
-        }
-        attrs.push_str(&format!("#{g}\n"));
-    }
-    let mut vis = String::new();
-    if let Some(TokenTree::Ident(i)) = trees.get(k) {
-        if i.to_string() == "pub" {
-            vis.push_str("pub");
-            if let Some(TokenTree::Group(g)) = trees.get(k + 1) {
-                if g.delimiter() == Delimiter::Parenthesis {
-                    vis.push_str(&g.to_string());
-                }
-            }
-        }
-    }
-    (attrs, vis)
 }
 
 /// foo_bar -> FooBar.

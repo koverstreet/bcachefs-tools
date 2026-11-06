@@ -39,8 +39,8 @@
 //!                        unless it's extern "C", a definition with C's
 //!                        signature, calling the fn
 //!   tagged_union! { .. } a tagged union with a stable representation: C's
-//!                        storage, the tag a Determinant of it, arms from an
-//!                        x-macro list, read as an enum (tagged_union.rs)
+//!                        storage, the tag a Determinant of it, declared as
+//!                        an enum, the arms its variants (tagged_union.rs)
 //!   #[derive(TypeInfo)]  runtime type information, for kvdb: no record, no
 //!                        C (typeinfo.rs)
 //!   #[derive(Plain)]     util/vstructs.rs's Plain, checked at compile time;
@@ -97,13 +97,6 @@ mod vstructs;
 #[proc_macro]
 pub fn tagged_union(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("tagged_union!", || tagged_union::tagged_union(input.into()))
-}
-
-/// tagged_union!'s callback from its list, with the list's entries.
-#[doc(hidden)]
-#[proc_macro]
-pub fn __tagged_union(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand("tagged_union!", || tagged_union::from_list(input.into()))
 }
 
 /// message!()'s format string written into a printbuf, ToText arguments

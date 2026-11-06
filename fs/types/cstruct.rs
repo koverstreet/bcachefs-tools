@@ -679,24 +679,21 @@ pub struct CTaggedArm {
     pub value: String,
 }
 
-/// tagged_union!: a tagged union with a stable representation.
+/// tagged_union!: a tagged union with a stable representation - what the
+/// enum form (cstruct-macros' tagged_union.rs) is parsed into, and its
+/// record, which is this struct|union form:
 ///
-///   tagged_union! {
-///       #[c_name(disk_accounting_pos)]
-///       pub struct DiskAccountingPos {
-///           tag type_: u8 = disk_accounting_type,
-///           arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: camel(f) = nr,
-///           pad: Bpos,
-///           size: pad,
-///           packed,
-///       }
+///   pub struct DiskAccountingPos {
+///       tag type_: u8 = c::disk_accounting_type,
+///       arm nr_inodes: NrInodes = 0, ...
+///       pad: Bpos,
+///       size: pad,
+///       packed,
 ///   }
 ///
 /// The storage is what C has: the tag, then a union of the arms, overlaid
-/// with the pad, if any. The arms come from an x-macro list, `arms from
-/// LIST(params) => template`, its entries bound to the params and `concat()`
-/// pasting tokens - or are written out, `arm name: Type = value`, which is
-/// the form its record has. The arms' types can be defined in the block too,
+/// with the pad, if any. The arms are `arm name: Type = value`. Their types
+/// can be defined in the block too,
 /// `[#[...]] [pub] struct|union NAME { ... }`: they go to nestify::nest!,
 /// with the declaration's `#[...]*`.
 ///
@@ -740,8 +737,6 @@ pub struct CTaggedUnion {
     /// `plain`: every arm is plain data - one not defined here a type of its
     /// own's, not a #[counted] family's head.
     pub plain:     bool,
-    /// `arms from LIST(params) => template`.
-    pub from:      Option<CFromList>,
     pub arms:      Vec<CTaggedArm>,
     pub pad:       Option<String>,
     /// `packed`: C's __packed - for a struct, the payload right after the
@@ -1924,7 +1919,7 @@ fn parse_tagged_union(m: &syn::Macro) -> Result<CTaggedUnion, String> {
     let mut size = None;
     let mut tu = CTaggedUnion { cfg: None, name, c_name, union, storage, tag_field: String::new(),
                                 tag_ty: String::new(), tag_enum: String::new(), tag_is_enum: false,
-                                plain: false, from: None,
+                                plain: false,
                                 arms: Vec::new(), pad: None, packed: false,
                                 size: CTaggedSize::Pad, defs: Vec::new() };
     for item in split_commas(inner) {
@@ -1959,10 +1954,6 @@ fn parse_tagged_union(m: &syn::Macro) -> Result<CTaggedUnion, String> {
                    (tu.tag_is_enum && eq < rest.len()) {
                     return Err("tagged_union!: tag NAME: TYPE [= TAG_ENUM], or tag NAME: enum TYPE".into());
                 }
-            }
-            [TokenTree::Ident(kw), TokenTree::Ident(from), rest @ ..] if kw == "arms" && from == "from" => {
-                tu.from = Some(parse_from_list(&rest.iter().cloned().collect())
-                    .ok_or("tagged_union!: arms from LIST(params) => name: Type = value")?);
             }
             [TokenTree::Ident(kw), TokenTree::Ident(arm), c, ..] if kw == "arm" && colon(c) => {
                 let eq = eq.ok_or("tagged_union!: arm NAME: TYPE = VALUE")?;
@@ -2028,9 +2019,7 @@ impl CTaggedUnion {
     }
 }
 
-/// `LIST(params) => template` at @item - the rest of a tagged_union!'s `arms
-/// from`, or a c_enum! variant - if it is one.
-/// `LIST(params) => template`, if @item is one.
+/// `LIST(params) => template` at @item - a c_enum! variant - if it is one.
 fn parse_from_list(item: &proc_macro2::TokenStream) -> Option<CFromList> {
     use proc_macro2::{Delimiter, TokenTree};
     let t: Vec<TokenTree> = item.clone().into_iter().collect();
@@ -2133,30 +2122,6 @@ fn from_list_entry(f: &CFromList, entry: &str) -> Result<Vec<proc_macro2::TokenT
         Ok(out)
     }
     paste(subst(lex(&f.template)?, &bound), &name, &bad)
-}
-
-/// tagged_union!'s arms from its list's entries - each the source of one
-/// entry's arguments.
-#[allow(dead_code)]
-pub fn tagged_union_arms(tu: &CTaggedUnion, entries: &[String]) -> Result<Vec<CTaggedArm>, String> {
-    let f = tu.from.as_ref().ok_or("tagged_union!: no arms from a list")?;
-    let mut arms = Vec::new();
-    for entry in entries {
-        let out = from_list_entry(f, entry)?;
-        let text = |t: &[proc_macro2::TokenTree]| rust_text(&t.iter().cloned().collect::<proc_macro2::TokenStream>());
-        let punct = |t: &proc_macro2::TokenTree, c| matches!(t, proc_macro2::TokenTree::Punct(p) if p.as_char() == c);
-        let colon = out.iter().position(|t| punct(t, ':'));
-        let eq = out.iter().rposition(|t| punct(t, '='));
-        match (&out[..], colon, eq) {
-            ([proc_macro2::TokenTree::Ident(name), ..], Some(1), Some(eq)) if eq > 2 => arms.push(CTaggedArm {
-                name:  ident(name),
-                ty:    text(&out[2..eq]),
-                value: text(&out[eq + 1..]),
-            }),
-            _ => return Err(format!("{}: the template gives {} - not name: Type = value", f.list, text(&out))),
-        }
-    }
-    Ok(arms)
 }
 
 /// c_enum! @e's variants from its first list, @entries each the source of one
