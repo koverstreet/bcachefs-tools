@@ -3,7 +3,6 @@
 //! A write's data made into extents at its write point: bch2_write_extent(),
 //! with the bios and encoding that takes.
 
-use crate::format::BkeyType;
 use crate::alloc::sector_alloc::LockedWritePoint;
 use crate::c;
 use crate::data::compress::{bio_bounce, bio_compress, bounce_alloc, buf_uncompress, decompress_err, map_or_bounce};
@@ -15,7 +14,7 @@ use crate::util::bio::{pages, Bio};
 use crate::util::kernel::{unlikely, PAGE_SECTORS, PAGE_SIZE, READ, WRITE};
 use c::bch_write_flags as w;
 use core::ffi::c_void;
-use crate::format::Bversion;
+use crate::format::{Bversion, BkeyType};
 
 type Op = c::bch_write_op;
 

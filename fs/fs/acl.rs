@@ -13,11 +13,11 @@
 
 use core::mem::size_of;
 
-use crate::xattr::XattrType;
 use crate::c::{self, AclEntry, BCH_ACL_VERSION};
 use crate::init::error::id;
 use crate::util::vstructs::{cast_plain, plain_bytes, ArmSized, ArmWalkError};
 use crate::util::Printbuf;
+use crate::xattr::XattrType;
 
 impl AclEntry {
     /// From the VFS's (tag, perm, id) - @id only for ACL_USER and ACL_GROUP:

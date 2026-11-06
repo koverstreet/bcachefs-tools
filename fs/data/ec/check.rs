@@ -13,7 +13,6 @@
 //! stripe's ref should have kept it - is reported, not repaired (GH #960):
 //! what to do with such a stripe is still open.
 
-use crate::format::BkeyType;
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::alloc::lru::{lru_check_set, LruId, LruPos};
 use crate::btree::bkey::{pos, BkeySC, BkeyV, POS_MIN};
@@ -26,7 +25,7 @@ use crate::init::error::id;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;
 use crate::{fsck_err, fsck_err_flags, fsck_err_on};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 /// Bucket @bucket's reference to stripe @stripe, added or (!@set) dropped:
 /// its bucket_to_stripe entry, and its alloc key's stripe_refcount.

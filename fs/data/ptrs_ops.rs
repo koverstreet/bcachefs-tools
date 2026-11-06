@@ -3,7 +3,6 @@
 //! seen, or rejected - and btree_ptr(_v2)'s own on top of them.
 
 use super::*;
-use crate::format::BkeyType;
 use crate::{bkey_fsck_err, bkey_fsck_err_on};
 use crate::btree::bkey::{bkey_eq, POS_MIN};
 use crate::data::durability::BkeyVDurability;
@@ -14,7 +13,7 @@ use crate::btree::trigger::Trigger;
 use crate::init::error::{id, BkeyValidate};
 use crate::util::rcu::ReadGuard;
 use crate::util::{Printbuf, ToText};
-use crate::format::{Btree, CompressionType};
+use crate::format::{Btree, CompressionType, BkeyType};
 
 // ── validate ─────────────────────────────────────────────────────────────
 

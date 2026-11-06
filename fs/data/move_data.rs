@@ -32,7 +32,6 @@
 //! A stripe isn't moved: the phys walk of a scrub checks its blocks against
 //! their checksums instead (ec/repair.rs's scrub_stripe_block()).
 
-use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
 use crate::alloc::capacity::DiskReservation;
@@ -61,7 +60,7 @@ use crate::util::Printbuf;
 use crate::{bch_err_msg, warn_once};
 use core::ops::Range;
 use core::ptr::NonNull;
-use crate::format::{Bpos, Btree, DataType};
+use crate::format::{Bpos, Btree, DataType, BkeyType};
 
 /// What to move: of @k, in @btree, with @io_opts, the move's options filled
 /// in, and whether to. In the walk's attempt, so it can look things up - an

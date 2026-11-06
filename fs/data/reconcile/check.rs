@@ -16,7 +16,6 @@
 //! key at the walk's position, where C overwrote its iter->k with a deleted
 //! one.
 
-use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::alloc::backpointers::{backpointer_get_key, backpointers_match, bp_reconcile_phys, extent_ptr_to_bp};
 use crate::alloc::capacity::DiskReservation;
@@ -44,7 +43,7 @@ use crate::{fsck_err, fsck_err_on, prt, SPOS_MAX};
 use core::ffi::c_int;
 use core::mem::size_of;
 use cstruct_macros::c_export;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 const NO_ENOSPC: CommitFlags = CommitFlags::NO_ENOSPC;
 

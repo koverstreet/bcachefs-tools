@@ -2,7 +2,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::accounting::{self, mod_dev_cached_sectors};
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
@@ -38,7 +37,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use cstruct_macros::{c_export, c_name, CStruct, bitfield, c_const, c_rcu_array, Fieldwise, TypeInfo, c_enum};
 use core::cell::Cell;
 use nestify::nest;
-use crate::format::{Bpos, Btree, DataType};
+use crate::format::{Bpos, Btree, DataType, BkeyType};
 
 c_enum! {
     #[flags]

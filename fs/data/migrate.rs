@@ -33,8 +33,6 @@
 //! repaired is rewritten without the device, so the scan goes again until
 //! it's met none.
 
-use crate::format::ErrorKeyReason;
-use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::accounting;
 use crate::alloc::backpointers::{backpointer_get_key, backpointer_get_node, BpScanIter};
@@ -64,7 +62,7 @@ use crate::prt;
 use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
 use cstruct_macros::c_export;
-use crate::format::{Btree, DataType, MemberState};
+use crate::format::{Btree, DataType, MemberState, ErrorKeyReason, BkeyType};
 
 /// A backpointer to a node being replaced: its replacement isn't reachable
 /// yet, and has backpointers of its own for the next scan.

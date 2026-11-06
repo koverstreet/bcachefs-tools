@@ -12,7 +12,6 @@ use std::process;
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::accounting;
-use bcachefs_kernel::format::BkeyType;
 use bcachefs_kernel::alloc::{accounting_mem, replicas::replicas_acct};
 use bcachefs_kernel::btree_id;
 use bcachefs_kernel::util::{HumanReadable, ToText};
@@ -39,7 +38,7 @@ use crate::util::parse_human_size;
 use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;
 use crate::wrappers::sysfs;
 use bcachefs_kernel::sb::io::SbResize;
-use bcachefs_kernel::format::{Btree, CompressionType, DataType};
+use bcachefs_kernel::format::{Btree, CompressionType, DataType, BkeyType};
 
 const BCH_REPLICAS_MAX: u32 = 4;
 const BTREE_MAX_DEPTH: u32 = 4;

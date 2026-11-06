@@ -709,7 +709,6 @@
  * \texttt{bcachefs data scrub}. Nocow data cannot be scrubbed (no checksums).
  */
 
-use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_ge, BkeyI, BkeyS, BkeySC};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
@@ -722,7 +721,7 @@ use crate::data::write_nocow::nocow_write;
 use crate::debug::async_objs;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Dev, Fs};
-use crate::format::{Bpos, DataType};
+use crate::format::{Bpos, DataType, BkeyType};
 use crate::locking::{Locked, MemallocFlags};
 use crate::debug::trace::events;
 use crate::sb::members::{DevIo, DevIoRef};

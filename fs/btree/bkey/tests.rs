@@ -1,6 +1,6 @@
 use super::*;
-use crate::format::BkeyType;
 use crate::c;
+use crate::format::BkeyType;
 use crate::util::vstructs::ArmRef;
 use crate::types::Le32;
 

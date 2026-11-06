@@ -36,7 +36,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::BkeyType;
 use crate::btree::iter::BtreeTrans;
 use crate::accounting;
 use crate::btree::bkey::{BkeyI, BkeySC, SPOS_MAX};
@@ -73,7 +72,7 @@ use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, AtomicUsize};
 use nestify::nest;
 use pin_init::{pin_data, pinned_drop};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]

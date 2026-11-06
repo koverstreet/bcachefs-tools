@@ -34,7 +34,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeyS, BkeySC, BkeyVal};
@@ -66,7 +65,7 @@ use core::ffi::c_uint;
 use core::marker::PhantomData;
 use core::ops::{ControlFlow, RangeInclusive};
 use cstruct_macros::{c_export, CStruct};
-use crate::format::{Bpos, Btree, DataType};
+use crate::format::{Bpos, Btree, DataType, BkeyType};
 
 /// A backpointer scan in progress: alloc/backpointers.rs's BpScanIter.
 #[repr(C)]

@@ -4,7 +4,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::BkeyType;
 use crate::btree::bkey::BkeyI;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
@@ -20,7 +19,7 @@ use core::ops::Range;
 use core::ptr::NonNull;
 use core::slice;
 use cstruct_macros::{c_export, c_enum, c_extern, c_xmacro};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 use zerocopy::IntoBytes;
 
 c_xmacro! {

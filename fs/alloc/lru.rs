@@ -15,7 +15,6 @@
 //!
 //! lru.h's inlines are the same encoding, for C's callers.
 
-use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::buckets::u64_to_bucket;
@@ -37,7 +36,7 @@ use crate::{bkey_fsck_err_on, fsck_err};
 use core::ffi::c_int;
 use core::ops::RangeInclusive;
 use cstruct_macros::c_export;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 /// What an lru id says: which lru, and for a per-device one, the device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -19,8 +19,8 @@
 use core::cmp::{Ordering, Reverse};
 use core::ffi::c_int;
 use cstruct_macros::{c_export, CStruct, bitfield, c_typedef, c_xmacro, TypeInfo};
-use crate::format::ErrorKeyReason;
 use crate::c;
+use crate::format::ErrorKeyReason;
 use crate::util::vstructs::Unvalidated;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};

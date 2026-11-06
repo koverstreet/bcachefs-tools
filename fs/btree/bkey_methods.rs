@@ -28,13 +28,12 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::ErrorKeyReason;
-use crate::format::BkeyType;
 use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{NoRoom, TransBkey};
 use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
+use crate::format::{BkeyType, ErrorKeyReason};
 use crate::fs::Fs;
 use crate::{dirent, inode};
 use crate::snapshot_states::{SNAPSHOT_STATE_VALUES, SUBVOLUME_STATE_VALUES};

@@ -15,7 +15,6 @@ use core::ptr::NonNull;
 use cstruct_macros::{c_export, c_extern};
 use kernel::page::PAGE_SHIFT;
 
-use crate::format::BkeyType;
 use crate::btree::bkey::{pos, BkeySC};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags};
 use crate::c;
@@ -23,7 +22,7 @@ use crate::c::bch_folio_sector_state as SectorState;
 use crate::data::durability::BkeyVDurability;
 use crate::data::extents::BkeyVExtents;
 use crate::errcode::{errptr_to_result, ret_to_c, BchError};
-use crate::format::Btree;
+use crate::format::{Btree, BkeyType};
 use crate::fs::Fs;
 use crate::new_lock;
 use crate::snapshots::subvolume;

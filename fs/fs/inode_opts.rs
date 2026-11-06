@@ -15,7 +15,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{spos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
 use crate::btree::iter::{commit_do, is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
@@ -37,7 +36,7 @@ use core::ffi::{c_int, CStr};
 use core::mem::MaybeUninit;
 use core::ops::ControlFlow;
 use cstruct_macros::{c_export, CStruct};
-use crate::format::Btree;
+use crate::format::{Btree, BkeyType};
 
 /*
  * What changing an inode's options leaves for after the commit: an inode

@@ -5,10 +5,9 @@ use core::cmp::Ordering;
 use core::marker::PhantomData;
 
 use super::{AllTypes, BkeyI, BkeyS, BkeySC, FamilyVal, ValidatedVal, BKEY_U64S};
-use crate::format::BkeyType;
 use crate::btree::node::NodeContents;
 use crate::c;
-use crate::format::Bpos;
+use crate::format::{Bpos, BkeyType};
 use crate::util::kernel::likely;
 use crate::util::vstructs::{cast_plain_slice, plain_bytes, plain_bytes_mut, Unsized, Unvalidated};
 

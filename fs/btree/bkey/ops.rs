@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::format::ErrorKeyReason;
-use crate::format::{BkeyType, BkeyTypeFlags};
 use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt};
 use crate::btree::trigger::Trigger;
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, ErrorKeyReason, BkeyType, BkeyTypeFlags};
 use crate::fs::Fs;
 use crate::init::error::BkeyValidate;
 use crate::prt;

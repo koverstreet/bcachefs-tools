@@ -19,7 +19,6 @@
 //! masks of a key's pointers, ptrs_mask.rs's; C's names for all of it,
 //! ptrs_c_export.rs's.
 
-use crate::format::{BkeyType, BkeyTypeFlags};
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{bkey_family, types_with, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut, FamilyVal, InFamily, KeyState};
 use crate::btree::bkey_methods::SetError;
@@ -37,7 +36,7 @@ use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, Ent
 use crate::data_structures::array_vec::ArrayVec;
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
-use crate::format::{Bversion, CompressionType, DataType, MemberState, Nonce};
+use crate::format::{Bversion, CompressionType, DataType, MemberState, Nonce, BkeyType, BkeyTypeFlags};
 
 #[path = "ptrs_edit.rs"]
 mod edit;

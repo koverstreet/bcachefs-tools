@@ -31,7 +31,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError, Found};
@@ -67,7 +66,7 @@ use cstruct_macros::{c_export, CStruct, c_bitmask, c_typedef, c_verbatim, TypeIn
 use crate::cstructs::c::BCH_INODE_FIELDS_v3;
 use crate::types::{c_default, Le64};
 use crate::util::projections::Volatile;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 c_typedef! {
     pub type u96 = u64;

@@ -23,7 +23,6 @@
 //! The injection tests for every error here: ktest's alloc-inject.ktest and
 //! lru-inject.ktest.
 
-use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::alloc::background::{alloc_to_v4, bucket_do_freespace_index, BucketGensPos, FreespacePos, NeedDiscardPos};
 use crate::alloc::buckets::bucket_to_u64;
@@ -48,7 +47,7 @@ use crate::c::bch_errcode;
 use crate::c::bch_fsck_flags as F;
 use core::ffi::c_int;
 use cstruct_macros::c_export;
-use crate::format::{Bpos, Btree, DataType};
+use crate::format::{Bpos, Btree, DataType, BkeyType};
 
 // ── Walking the alloc btree, holes and all ───────────────────────────────
 

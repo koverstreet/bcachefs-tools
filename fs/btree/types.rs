@@ -2,7 +2,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::BkeyType;
 use crate::btree::bkey::BkeyI;
 use crate::fs::Fs;
 use crate::btree::node::{sort::{SortIter, SortIterSet}, BtreeNode};
@@ -33,7 +32,7 @@ use pin_init::{pin_data, PinInit};
 use nestify::nest;
 #[cfg(feature = "std")]
 use std::str::FromStr;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 /* Btree nodes: */
 

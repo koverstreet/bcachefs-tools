@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC};
-use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{BtreeTrans, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 use crate::prt;
 use crate::util::Printbuf;
 use core::ffi::c_int;

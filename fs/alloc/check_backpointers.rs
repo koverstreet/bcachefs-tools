@@ -22,8 +22,6 @@
 //! again - see backpointers.rs.
 
 
-use crate::format::ErrorKeyReason;
-use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_del, backpointers_match, backpointers_maybe_flush,
@@ -58,7 +56,7 @@ use core::ffi::c_int;
 use core::ops::{ControlFlow, RangeInclusive};
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
-use crate::format::{Bpos, Btree, DataType};
+use crate::format::{Bpos, Btree, DataType, ErrorKeyReason, BkeyType};
 
 // ── fsck: check_btree_backpointers ───────────────────────────────────────
 

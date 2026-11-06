@@ -5,7 +5,6 @@
 //! options call for, padding pointers for replicas it's short, a stripe's
 //! needs_reconcile bit; and whether new work is allowed, or an fsck error.
 
-use crate::format::BkeyType;
 use crate::fsck_err;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeyS, BkeySC, BkeyV, BkeyVMut, BkeyVal};
@@ -16,7 +15,7 @@ use crate::data::durability::BkeyVDurability;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
 use crate::data::reconcile::trigger::{extent_reconcile_to_text, BkeyVReconcile};
 use crate::errcode::{ret_to_c, BchError};
-use crate::format::CompressionType;
+use crate::format::{CompressionType, BkeyType};
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
 use crate::util::kernel::unlikely;

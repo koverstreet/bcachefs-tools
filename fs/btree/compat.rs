@@ -12,11 +12,10 @@
 //! points, ->swab and ->compat, should take Unvalidated keys. XXX: they don't
 //! yet - Rust has no unvalidated keys to give them.
 
-use crate::format::BkeyType;
 use crate::btree::bkey::{BkeyP, BkeyS};
 use crate::c;
 use crate::fs::Fs;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 use core::ffi::{c_int, c_uint};
 
 impl Bpos {

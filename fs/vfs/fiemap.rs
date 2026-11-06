@@ -26,7 +26,6 @@
 
 use core::ops::Range;
 
-use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeySC};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -40,7 +39,7 @@ use crate::fs::Fs;
 use crate::snapshots::subvolume;
 
 use super::inode::InodeInfo;
-use crate::format::Btree;
+use crate::format::{Btree, BkeyType};
 
 enum Mapping {
     Extent(BkeyBuf),

@@ -4,7 +4,6 @@
 //! stripe's, for the blocks the new one carries - as a logged op, resumed
 //! after a crash.
 
-use crate::format::BkeyType;
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyV, BkeyVMut, POS_MIN};
@@ -27,7 +26,7 @@ use crate::util::{Join, Printbuf};
 use crate::{bch_err, fs_inconsistent, fsck_err_flags, logged_ops, prt};
 use core::mem::size_of;
 use core::ops::RangeInclusive;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 // ── A stripe block's extents ─────────────────────────────────────────────
 //

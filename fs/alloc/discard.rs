@@ -42,7 +42,6 @@
 //! fast discard and invalidate works the device's write io ref and a write
 //! ref - so going read-only, and a device going offline, wait for them.
 
-use crate::format::ErrorKeyReason;
 use crate::fs::Dev;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
@@ -84,7 +83,7 @@ use core::pin::Pin;
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
 use pin_init::{pin_data, pin_init, stack_pin_init};
-use crate::format::{Bpos, Btree, DataType, MemberState};
+use crate::format::{Bpos, Btree, DataType, MemberState, ErrorKeyReason};
 
 /// Discards in flight at once on a device.
 const DEV_IN_FLIGHT_MAX: u8 = 4;

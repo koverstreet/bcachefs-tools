@@ -2,7 +2,6 @@
 
 //! The write path's in place writes, over extents that allow them: nocow.
 
-use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_ge, pos, spos, BkeyI, BkeySC, Typed};
 use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
@@ -14,7 +13,7 @@ use crate::data::write::{index_update_wq, to_wbio, wbio_init, submit_wbio_replic
                          write_endio, write_op_error, DevWriteRef};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Dev, Fs};
-use crate::format::{Btree, DataType};
+use crate::format::{Btree, DataType, BkeyType};
 use crate::snapshots::subvolume;
 use crate::util::closure::Running;
 use crate::util::kernel::unlikely;

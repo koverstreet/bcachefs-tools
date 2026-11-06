@@ -52,10 +52,10 @@
 //! #[derive(SizedVal)].
 
 use super::BkeyP;
-use crate::format::{BkeyType, BkeyTypeFlags};
 use crate::btree::bkey::{ops, BkeyOps, Ops};
 use crate::btree::iter::{BtreeIter, TransBkey};
 use crate::c;
+use crate::format::{BkeyType, BkeyTypeFlags};
 use crate::typeinfo::{StructInfo, TypeInfo};
 use crate::util::projections::Floored;
 use crate::util::vstructs::{ArmRef, InState, State, Unsized, Unvalidated, UnvalidatedSized, Validated, Whole};

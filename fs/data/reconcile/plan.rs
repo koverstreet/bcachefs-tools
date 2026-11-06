@@ -50,7 +50,6 @@
 //! combined under its brand, the drop simulation's copies adopted as it
 //! (ptrs_mask.rs), and erased into data_update_opts.
 
-use crate::format::BkeyType;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -61,6 +60,7 @@ use crate::data::ptrs::{brand, BkeyVPtrs, Branded, ExtentEntryMut, PtrMask, Ptrs
 use crate::data::reconcile::needs_reconcile::rb_bit;
 use crate::data::reconcile::trigger::{rb_work_id, BkeyVReconcile};
 use crate::errcode::BchError;
+use crate::format::BkeyType;
 use crate::fs::Fs;
 use crate::{log_msg_ratelimited, warn_on_once};
 use crate::debug::trace::events;

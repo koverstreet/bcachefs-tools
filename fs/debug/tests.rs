@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, BKEY_U64S, POS_MIN, SPOS_MAX};
@@ -33,7 +32,7 @@ use pin_init::{pin_data, pinned_drop};
 
 #[cfg(not(kernel))]
 use bcachefs_shim as kernel;
-use crate::format::Btree;
+use crate::format::{Btree, BkeyType};
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 mod cuckoo;

@@ -2,7 +2,6 @@
 //! name, and each a C name over a Rust function, with C's types - superblock
 //! pointers, C strings, an errcode returned. Deleted with the last C caller.
 
-use crate::format::ErrorKeyReason;
 use crate::fs::Fs;
 use super::*;
 use crate::errcode::ret_to_c;
@@ -11,7 +10,7 @@ use crate::util::vstructs::{Head, Validated};
 use core::ffi::{c_int, c_uint};
 use crate::util::ToText;
 use cstruct_macros::c_export;
-use crate::format::{Btree, CompressionType, DataType, MemberState};
+use crate::format::{Btree, CompressionType, DataType, MemberState, ErrorKeyReason};
 
 #[c_export]
 pub static bch2_opts_default: c::bch_opts = DEFAULTS;

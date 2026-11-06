@@ -19,7 +19,6 @@
 //! dirent commits; if the walker refetches partway through a directory, they're
 //! recounted from the btree (recalculate_sums).
 
-use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
@@ -38,7 +37,7 @@ use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, bch_err_ratelimited, bch_info, fsck_err, fsck_err_on, inode_fsck_err};
 use crate::{inode, namei, str_hash};
 use core::ops::ControlFlow;
-use crate::format::Btree;
+use crate::format::{Btree, BkeyType};
 
 struct CheckDirents {
     s:                SnapshotsSeen,

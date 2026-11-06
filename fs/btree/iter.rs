@@ -2,7 +2,6 @@
 
 use super::bkey::*;
 pub use super::types::{BtreeIter, BtreeTrans};
-use crate::format::BkeyType;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{btree_path_level, BtreePath, LockedNode, PathIdx};
@@ -40,7 +39,7 @@ use crate::util::vstructs::{State, Validated};
 use crate::data_structures::bitmap::Bitmap;
 use crate::types::{bits_to_longs, c_default};
 use cstruct_macros::{CStruct, c_extern};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]

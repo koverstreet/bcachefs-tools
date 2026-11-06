@@ -2,7 +2,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, AllTypes, BkeyFamily, BkeyI, BkeySC, InFamily, MutBkey, SPOS_MAX};
 use crate::btree::iter::{
@@ -28,7 +27,7 @@ use bitflags::bitflags;
 use core::ffi::{c_int, c_void};
 use cstruct_macros::{c_export, CStruct, TypeInfo};
 use crate::types::c_default;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]

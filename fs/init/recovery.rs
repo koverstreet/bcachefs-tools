@@ -3,7 +3,6 @@
 //! Recovery: a filesystem brought up from its superblock and journal, or a
 //! new one initialized.
 
-use crate::format::BkeyType;
 use crate::accounting;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
@@ -40,7 +39,7 @@ use core::cmp::Ordering;
 use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
-use crate::format::{Btree, MemberInitialized};
+use crate::format::{Btree, MemberInitialized, BkeyType};
 use zerocopy::IntoBytes;
 
 type Pass = c::bch_recovery_pass;

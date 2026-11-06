@@ -43,7 +43,6 @@ use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
 use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::btree::bkey_methods;
-use bcachefs_kernel::format::BkeyType;
 use bcachefs_kernel::btree::iter::{
     commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
     TransBkey, UpdateTriggerFlags,
@@ -61,7 +60,7 @@ use crate::device_scan::OpenedFs;
 use crate::logging;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
-use bcachefs_kernel::format::{Bpos, Btree};
+use bcachefs_kernel::format::{Bpos, Btree, BkeyType};
 
 const BKEY_U64S: usize = size_of::<c::bkey>() / size_of::<u64>();
 

@@ -17,7 +17,6 @@
 //! subvolume_children has a bit at (fs_path_parent, subvolume) for each nested
 //! subvolume, maintained by the trigger.
 
-use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
 use crate::util::vstructs::{Validated, Whole};
@@ -46,7 +45,7 @@ use crate::{bch_err, bch_err_msg, bkey_fsck_err_on, fs_inconsistent, fsck_err,
             fsck_err_on, fsck_err_report, prt};
 use core::mem::offset_of;
 use cstruct_macros::c_export;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 /// Whether subvolume key @k is long enough to have @field.
 macro_rules! has_field {

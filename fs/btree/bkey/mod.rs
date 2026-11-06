@@ -102,9 +102,8 @@ pub use self::packed::*;
 pub use self::text::*;
 pub use self::types::*;
 
-use crate::format::BkeyType;
 use crate::c;
-use crate::format::Bpos;
+use crate::format::{Bpos, BkeyType};
 
 pub const BKEY_U64S: usize = core::mem::size_of::<c::bkey>() / core::mem::size_of::<u64>();
 

@@ -29,7 +29,6 @@
 //! reported past an i_size of 0 and punched from block 0. Unverified; one for
 //! the error injection tests.
 
-use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
@@ -51,7 +50,7 @@ use crate::util::alloc::{kvvec_insert, KVVec};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, bch_err_ratelimited, fsck_err_on, inode_fsck_err, prt};
 use crate::namei;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 /// Where the last extent seen in a snapshot ended.
 struct ExtentEnd {

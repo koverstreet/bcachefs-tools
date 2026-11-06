@@ -28,7 +28,6 @@
 //! (the change cookie, reread after a barrier), one that would lose durability
 //! or have none takes the filesystem emergency read-only: it's a bug.
 
-use crate::format::BkeyType;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_le, BkeyFamily, BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, LoopFlow, TransAttempt,
@@ -50,7 +49,7 @@ use crate::util::{Printbuf, ToText};
 use crate::{bch_err_fn, log_msg_ratelimited};
 use core::mem::size_of;
 use core::sync::atomic::{fence, Ordering};
-use crate::format::Bpos;
+use crate::format::{Bpos, BkeyType};
 
 /// Room past a key for set_needs_reconcile(): an entry, and a padding pointer
 /// per replica.

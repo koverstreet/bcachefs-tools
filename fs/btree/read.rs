@@ -7,7 +7,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::BkeyTypeFlags;
 use crate::fs::Dev;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{types_with, BkeyI, BkeySC};
@@ -40,7 +39,7 @@ use core::mem::offset_of;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, bitfield, c_export, c_extern};
 use nestify::nest;
-use crate::format::{Btree, Nonce};
+use crate::format::{Btree, Nonce, BkeyTypeFlags};
 
 nest! {
     #[repr(C)]

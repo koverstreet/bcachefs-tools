@@ -8,7 +8,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::BkeyType;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey_buf::BkeyBuf;
@@ -27,7 +26,7 @@ use crate::new_lock;
 use crate::types::{RustOnly, rust_only};
 use crate::util::alloc::KVVec;
 use pin_init::pin_data;
-use crate::format::Btree;
+use crate::format::{Btree, BkeyType};
 
 #[pin_data]
 #[repr(C)]

@@ -50,7 +50,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::BkeyType;
 use crate::accounting::ReconcileType;
 use crate::accounting;
 use crate::alloc::capacity::DiskReservation;
@@ -90,7 +89,7 @@ use core::ffi::c_uint;
 use core::ops::ControlFlow;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_export, CStruct, TypeInfo, c_typedef, tagged_union};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 c_typedef! {
     pub type reconcile_scan_device = c_uint;

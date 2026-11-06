@@ -29,7 +29,6 @@
 //! are stashed, by range, where the node's lost, and attributed to inodes
 //! later, when the inodes btree can be walked: lost extents below.
 
-use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{spos, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
@@ -51,7 +50,7 @@ use core::cmp::Ordering;
 use core::ffi::c_int;
 use core::mem::size_of;
 use cstruct_macros::c_export;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 // ── The key ──────────────────────────────────────────────────────────────
 

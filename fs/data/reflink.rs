@@ -27,7 +27,6 @@
 //! refcount is read and edited through it (BkeyVIndirect), in whichever form
 //! it's held.
 
-use crate::format::{BkeyType, BkeyTypeFlags};
 use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_gt, bkey_lt, pos, BkeyFamily, BkeyI, BkeyS, BkeySC,
@@ -57,7 +56,7 @@ use core::mem::size_of;
 use core::ops::Range;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering::Relaxed};
 use cstruct_macros::c_export;
-use crate::format::Btree;
+use crate::format::{Btree, BkeyType, BkeyTypeFlags};
 
 pub type IndirectTypes = ByFlag<{ BkeyTypeFlags::indirect.bits() }>;
 

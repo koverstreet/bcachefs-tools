@@ -23,7 +23,6 @@
 //! only because gc's walk is single threaded today.
 
 
-use crate::format::ErrorKeyReason;
 use crate::alloc::buckets::gen_cmp;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN};
@@ -50,7 +49,7 @@ use crate::{bch_err, fsck_err, fsck_err_on, inode_fsck_err, prt};
 use crate::data_structures::array_vec::ArrayVec;
 use bitflags::bitflags;
 use core::mem::size_of;
-use crate::format::{Btree, DataType};
+use crate::format::{Btree, DataType, ErrorKeyReason};
 
 /// What a key with pointers is copied with room for: as large as one can get,
 /// for the reconcile entry and padding pointers set_needs_reconcile() may add.

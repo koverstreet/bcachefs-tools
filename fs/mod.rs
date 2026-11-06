@@ -270,8 +270,7 @@ pub mod format;
 pub mod opts;
 
 pub use paste::paste;
-use crate::format::BkeyType;
-use crate::format::{Btree, CompressionType, DataType};
+use crate::format::{Btree, CompressionType, DataType, BkeyType};
 
 pub mod c {
     #![allow(clippy::missing_safety_doc)]

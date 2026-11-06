@@ -33,7 +33,6 @@
 //! themselves: fold_times_trans() writes the folded times first, in the same
 //! transaction.
 
-use crate::quota::QuotaAcctMode;
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
 use core::mem::offset_of;
@@ -49,6 +48,7 @@ use crate::init::error::{count_fsck_err, id};
 use crate::inode;
 use crate::inode_opts::InodeOpt;
 use crate::locking::{ExclusiveGuard, Locked};
+use crate::quota::QuotaAcctMode;
 use crate::quota;
 use crate::prt;
 use crate::util::ffi::Opaque;

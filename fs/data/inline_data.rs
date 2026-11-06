@@ -6,7 +6,6 @@
 //! their _v2 types carry a checksum of their own over data[]: a node's bset
 //! checksum can't say which of its keys went bad.
 
-use crate::format::BkeyTypeFlags;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{BkeyFamily, BkeyS, BkeySC, BkeyV, BkeyVMut, ByFlag, FamilyVal, FieldOffsets};
 use crate::btree::bkey_buf::BtreeKeyBuf;
@@ -15,7 +14,7 @@ use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, Upda
 use crate::c;
 use crate::data::checksum::csum_err_msg;
 use crate::errcode::{ret_to_c, BchError};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyTypeFlags};
 use crate::fs::{Fs, WriteRef};
 use crate::init::damage;
 use crate::init::error::{id, BkeyValidate};

@@ -23,13 +23,13 @@
 
 use core::ffi::c_int;
 
-use crate::quota::QuotaAcctMode;
 use crate::acl::{self, AclType};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::inode;
 use crate::inode_opts::InodeOpt;
+use crate::quota::QuotaAcctMode;
 use crate::snapshots::subvolume;
 use cstruct_macros::c_export;
 

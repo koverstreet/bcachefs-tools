@@ -14,7 +14,6 @@
 
 use core::ffi::{c_int, c_uint, CStr};
 
-use crate::quota::QuotaAcctMode;
 use crate::btree::bkey::BkeyV;
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts,
                          TransAttempt};
@@ -24,6 +23,7 @@ use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::init::passes;
 use crate::inode;
 use crate::namei;
+use crate::quota::QuotaAcctMode;
 use crate::quota;
 use crate::snapshots::subvolume;
 use crate::str_hash;

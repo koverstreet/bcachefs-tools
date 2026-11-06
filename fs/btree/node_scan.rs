@@ -5,7 +5,6 @@ use core::ffi::{c_int, c_uint};
 use core::mem::{offset_of, replace, size_of};
 use core::ptr::NonNull;
 
-use crate::format::BkeyType;
 use crate::data_structures::array_vec::ArrayVec;
 use cstruct_macros::c_export;
 
@@ -18,7 +17,7 @@ use crate::btree::read::bch2_btree_node_read_done;
 use crate::c::{self, bch_errcode, BtreePtrV2};
 use crate::data::ptrs::extent_ptr_to_text;
 use crate::errcode::{ret_to_c, BchError};
-use crate::format::{Bpos, Btree, DataType};
+use crate::format::{Bpos, Btree, DataType, BkeyType};
 use crate::fs::{btree_id_can_reconstruct, Dev, Fs};
 use crate::init::passes;
 use crate::locking::Locked;

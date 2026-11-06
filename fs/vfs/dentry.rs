@@ -22,12 +22,12 @@ use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 
-use crate::xattr::XattrType;
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
 use crate::inode_opts::InodeOpt;
 use crate::locking::Locked;
 use crate::util::os_str::{qstr_name, OsStr};
+use crate::xattr::XattrType;
 
 use kernel::sync::aref::ARef;
 

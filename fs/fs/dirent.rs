@@ -11,10 +11,8 @@
 #![allow(non_camel_case_types)]
 
 use cstruct_macros::{c_enum, c_extern};
-use crate::format::BkeyType;
 use crate::btree::iter::BtreeTrans;
 use crate::util::Printbuf;
-use crate::format::{Bpos, Btree};
 
 c_enum! {
     #[closed]
@@ -55,6 +53,7 @@ use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 #[cfg(CONFIG_UNICODE)]
 use crate::errcode::ret_to_result_void as ret_to_result;
+use crate::format::{Bpos, Btree, BkeyType};
 use crate::fs::Fs;
 use crate::inode;
 use crate::snapshots::subvolume;

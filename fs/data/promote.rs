@@ -15,7 +15,6 @@
 //! The in-flight limit is one count for the filesystem, PROMOTES_PER_CPU per
 //! online CPU.
 
-use crate::format::BkeyType;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::{is_restart, BtreeTrans, TransAttempt};
@@ -40,7 +39,7 @@ use core::ffi::c_int;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{args_stored_once, c_export};
-use crate::format::Btree;
+use crate::format::{Btree, BkeyType};
 
 /// The in-flight limit, per online CPU.
 const PROMOTES_PER_CPU: u32 = 32;

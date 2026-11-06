@@ -5,8 +5,6 @@
 //! about other btrees (has_child_snapshot, has_inode_opts, the ACL flags) are
 //! right. Repairs edit an unpacked copy, written once at the end.
 
-use crate::xattr::XattrType;
-use crate::format::BkeyType;
 use crate::acl::AclType;
 use crate::btree::bkey::{spos, BkeySC, POS_MIN};
 use crate::btree::bkey::prelude::*;
@@ -21,12 +19,13 @@ use crate::init::error::id;
 use crate::init::progress::Progress;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::os_str::{OsStr, OsStrExt};
+use crate::xattr::XattrType;
 use crate::xattr::{self, Xattrs};
 use crate::{bch_err_msg, fsck_err, fsck_err_on, inode_fsck_err};
 use crate::dirent::{self, Dirent};
 use crate::{inode, inode_opts, namei, str_hash};
 use core::fmt;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 struct CheckInodes {
     /// The oldest version the current key sees: every version takes its hash

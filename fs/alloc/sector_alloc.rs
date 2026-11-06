@@ -25,7 +25,6 @@
 //! for the next write. C's callers have it locked by bch2_alloc_sectors_req()
 //! and use foreground.h's own append_ptrs and done, until they convert.
 
-use crate::format::BkeyType;
 use crate::alloc::disk_groups::Target;
 use crate::alloc::write_point::{WritePointGuard, WritePointSpec};
 use crate::btree::bkey::prelude::*;
@@ -46,7 +45,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
 
 use c::bch_write_flags as w;
-use crate::format::{Bpos, DataType};
+use crate::format::{Bpos, DataType, BkeyType};
 
 impl c::alloc_request {
     /// The devices it has copies on: its caller's, and the buckets it's got.

@@ -4,7 +4,6 @@
 //! rebuilding around what's left of it - and recording, or taking out of
 //! the stripe, the extents of blocks that are lost.
 
-use crate::format::ErrorKeyReason;
 use crate::fs::Dev;
 use crate::alloc::backpointers::BackpointerPos;
 use crate::alloc::capacity::DiskReservation;
@@ -42,7 +41,7 @@ use crate::{bch_err, c_function_name, log_msg_ratelimited, prt};
 use core::mem::size_of;
 use core::sync::atomic::Ordering::Relaxed;
 use pin_init::stack_pin_init;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, ErrorKeyReason};
 
 // ── Recording the extents of blocks lost ──
 

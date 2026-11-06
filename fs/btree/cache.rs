@@ -6,7 +6,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::BkeyType;
 use crate::btree::bkey::{BkeySC, BkeyVal};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::{BtreeNode, NodeContents};
@@ -27,7 +26,7 @@ use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_const, c_export, c_extern};
-use crate::format::Btree;
+use crate::format::{Btree, BkeyType};
 
 c_extern! {
     pub fn bch2_fs_btree_init_rw(c: *mut Fs) -> c_int;

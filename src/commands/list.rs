@@ -1,7 +1,6 @@
 use std::ops::ControlFlow;
 
 use anyhow::{bail, Result};
-use bcachefs_kernel::format::BkeyType;
 use bcachefs_kernel::{btree_id, c};
 use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::btree::iter::BtreeIter;
@@ -16,7 +15,7 @@ use crate::logging;
 use crate::device_scan::OpenedFs;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
-use bcachefs_kernel::format::{Bpos, Btree};
+use bcachefs_kernel::format::{Bpos, Btree, BkeyType};
 
 fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = bcachefs_kernel::btree_trans!(fs);

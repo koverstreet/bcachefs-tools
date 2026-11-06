@@ -18,12 +18,12 @@
 //! edited as its blocks are allocated. What only reads a key takes it
 //! borrowed, as a BkeySC.
 
-use crate::format::BkeyType;
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{bkey_eq, pos, BkeyI, BkeySC, BkeyV, POS_MIN};
 use crate::c;
 use crate::data::ptrs::{bkey_ptrs_validate, extent_ptr_to_text};
 use crate::errcode::{bch_errcode, BchError};
+use crate::format::BkeyType;
 use crate::fs::Fs;
 use crate::btree::bkey::BkeyOps;
 use crate::btree::trigger::Trigger;

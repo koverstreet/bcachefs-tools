@@ -18,7 +18,6 @@
 //! update's end ends the walk: key start positions, extent_whiteouts included,
 //! only go up (btree/update.rs's extent_whiteout_type()).
 
-use crate::format::BkeyType;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_ge, bkey_gt, pos, spos, BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut, Typed};
@@ -36,7 +35,7 @@ use crate::util::kernel::{likely, unlikely};
 use crate::util::log::LogMsg;
 use crate::{inode, inode_opts, prt};
 use core::ops::ControlFlow;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 /// The most btree iterators an extent update's transaction may need.
 const EXTENT_ITERS_MAX: u32 = 64;

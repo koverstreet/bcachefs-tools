@@ -4,7 +4,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::{BkeyType, BkeyTypeFlags};
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{bkey_ge, bkey_gt, bkey_le, bkey_lt, types_with, AllTypes, BkeyFamily, ByFlag, FamilyTypes, FamilyVal, InFamily, KeyState, BkeyS, BkeySC, BkeyV, BkeyVal,
                          BkeyVMut};
@@ -24,7 +23,7 @@ use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{c_export, CStruct, c_enum, c_xmacro, TypeInfo};
 use crate::types::c_default;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags};
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, TypeInfo)]

@@ -51,7 +51,6 @@
 //! an RwSem and holds it for read until it's done; the progress indicator is
 //! outside it, with its own lock.
 
-use crate::format::BkeyType;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, Typed, POS_MIN};
 use crate::btree::bkey::prelude::*;
@@ -79,7 +78,7 @@ use crate::{bch_err, bch_err_msg, bch_notice, bch_verbose, fs_inconsistent, fsck
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
 use pin_init::{pin_data, pin_init, PinInit};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BkeyType};
 
 crate::module_param! {
     /// Stop the key sweep after the extents/dirents/xattrs/damage pass and

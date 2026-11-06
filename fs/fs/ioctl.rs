@@ -9,7 +9,6 @@ use core::mem::offset_of;
 use core::mem::size_of;
 use core::ops::ControlFlow;
 use core::ops::Range;
-use crate::format::BkeyType;
 use crate::accounting;
 use crate::alloc::capacity::DiskReservation;
 use crate::bch_warn;
@@ -34,7 +33,7 @@ use crate::util::kernel::{capable, Capability};
 use crate::util::os_str::OsStrExt;
 use crate::util::vstructs::{plain_bytes, Plain};
 use kernel::uaccess::{UserPtr, UserSlice};
-use crate::format::Btree;
+use crate::format::{Btree, BkeyType};
 
 /// FS_IOC_GETFSLABEL's: the label, without its NUL - and if it fills its
 /// field, without its last byte, as C had it.
