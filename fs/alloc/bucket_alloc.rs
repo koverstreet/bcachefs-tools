@@ -98,7 +98,7 @@ impl Fs {
     /// Whether a bucket emptied at journal seq @journal_seq_empty may be
     /// taken: the emptying is on disk.
     fn may_alloc_bucket_journal_seq(&self, req: &mut c::alloc_request, journal_seq_empty: u64) -> bool {
-        if journal_seq_empty <= self.journal.flushed_seq_ondisk.get() {
+        if journal_seq_empty <= self.journal.lock.flushed_seq_ondisk.get() {
             return true;
         }
         if journal_seq_empty > self.journal.flushing_seq.load(Relaxed) as u64 {

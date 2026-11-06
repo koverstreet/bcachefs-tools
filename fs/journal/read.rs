@@ -1329,7 +1329,7 @@ pub fn journal_read(fs: &Fs) -> Result<c::journal_start_info, BchError> {
          */
         let rewind = fs.opts.journal_rewind.get();
         if rewind != 0 {
-            let rewind_seq = fs.journal.rewind_seq.get();
+            let rewind_seq = fs.journal.lock.rewind_seq.get();
             if rewind_seq != 0 && rewind < rewind_seq {
                 bch_err!(fs, "cannot rewind to {}: discards have invalidated journal entries before {}",
                          rewind, rewind_seq);
@@ -1430,8 +1430,10 @@ fn validate_kept(fs: &Fs, not_rw: &NotRw<'_>, entries: &mut JournalEntries, drop
         for entry in i.jset().entries() {
             match entry.typed() {
                 Ok(c::JsetEntryRef::rewind_limit(r)) => {
-                    fs.journal.rewind_seq.set(r.seq.get());
-                    fs.journal.rewind_seq_ondisk.set(r.seq.get());
+                    let mut g = fs.journal.lock.lock();
+                    let p = g.published();
+                    p.rewind_seq.set(r.seq.get());
+                    p.rewind_seq_ondisk.set(r.seq.get());
                 }
                 Ok(c::JsetEntryRef::rewind(r)) => {
                     let range = c::journal_rewind_range { from: r.from.get(), to: r.to.get() };

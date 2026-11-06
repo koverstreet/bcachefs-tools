@@ -28,9 +28,9 @@ impl c::journal {
 
     fn writing_to_device(&self, dev_idx: u32) -> bool {
         let fs = self.fs();
-        let _j = self.lock.lock();
+        let g = self.lock.lock();
 
-        self.in_flight.iter().any(|buf| {
+        g.in_flight.iter().any(|buf| {
             buf.key().as_sc().arm::<Ptrs>().is_some_and(|k| k.has_device(fs, dev_idx).is_some())
         })
     }
@@ -111,31 +111,32 @@ impl c::journal {
         crate::journal::pins::start(self, last_seq, cur_seq)?;
 
         self.replay_journal_seq.set(last_seq);
-        self.flushed_seq_ondisk.set(cur_seq - 1);
-        if self.rewind_seq.get() == 0 {
-            self.rewind_seq.set(last_seq);
-            self.rewind_seq_ondisk.set(last_seq);
-        }
         {
             let mut g = self.lock.lock();
             g.seq_write_started = cur_seq - 1;
+
+            /*
+             * Align the in_flight FIFO with seq numbering: front == seq_ondisk + 1
+             * == cur_seq initially (empty fifo), so fifo_entry(in_flight, seq)
+             * indexes by seq once entries start pushing.
+             */
+            g.in_flight.front = cur_seq;
+            g.in_flight.back = cur_seq;
+
+            let rewind_unset = self.lock.rewind_seq.get() == 0;
             let p = g.published();
             p.replay_journal_seq_end.set(cur_seq);
             p.last_seq_ondisk.set(last_seq);
+            p.flushed_seq_ondisk.set(cur_seq - 1);
             p.seq_ondisk.set(cur_seq - 1);
             p.last_seq.set(last_seq);
+            if rewind_unset {
+                p.rewind_seq.set(last_seq);
+                p.rewind_seq_ondisk.set(last_seq);
+            }
         }
         self.lock.seq.store((cur_seq - 1) as i64, Relaxed);
         self.lock.hot.res_seq.store((cur_seq - 1) as i64, Relaxed);
-
-        /*
-         * Align the in_flight FIFO with seq numbering: front == seq_ondisk + 1
-         * == cur_seq initially (empty fifo), so fifo_entry(in_flight, seq)
-         * indexes by seq once entries start pushing.
-         */
-        let in_flight = unsafe { self.in_flight_before_rw() };
-        in_flight.front = cur_seq;
-        in_flight.back = cur_seq;
 
         let mut had_entries = false;
         let jk = fs.journal_keys_get();
@@ -202,13 +203,6 @@ impl c::journal {
         self.flags.set(JOURNAL_replay_done, true);
     }
 
-    /// # Safety
-    /// Before we're rw, and before anything's pushed: no one else's.
-    unsafe fn in_flight_before_rw(&self) -> &mut Fifo<c::journal_buf, u64> {
-        assert!(!self.fs().flags.get(c::bch_fs_flags::BCH_FS_rw), "journal in_flight fifo set up while rw");
-        unsafe { &mut *(&raw const self.in_flight).cast_mut() }
-    }
-
     /* init/exit: */
 
     pub fn init_rw(&self) -> Result<(), BchError> {
@@ -216,11 +210,7 @@ impl c::journal {
         let enomem = || fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_buf);
         let size = c::JOURNAL_ENTRY_SIZE_MIN;
 
-        self.buf_size_want.set(size);
         let buf = c::JsetBuf::new(size).map_err(|_| enomem())?;
-        /* the old one freed outside the lock: kvfree can sleep */
-        let old = core::mem::replace(&mut self.lock.lock().free_buf, buf);
-        drop(old);
 
         /*
          * in_flight holds one entry per seq in (seq_ondisk, cur_seq]. Size is
@@ -229,15 +219,24 @@ impl c::journal {
          * workloads saturate this, journal_entry_open() returns ENOMEM and
          * the existing retry path throttles via completion backpressure.
          *
-         * Not reset: start() already set front/back to the correct
-         * seq-aligned value. Every slot is a buf not in flight - the one at
-         * back too, which the flushers' walk stops at.
+         * Allocated outside the lock, and given start()'s front/back, the
+         * correct seq-aligned value. Every slot is a buf not in flight - the
+         * one at back too, which the flushers' walk stops at.
          */
-        let in_flight = unsafe { self.in_flight_before_rw() };
+        let mut in_flight: Fifo<c::journal_buf, u64> = Fifo::new();
         in_flight.reserve(256).map_err(|_| enomem())?;
         in_flight.init_spare(|buf| unsafe {
             (&raw mut (*buf.as_mut_ptr()).wait.list.first).write(NOT_IN_FLIGHT)
         });
+
+        /* the old ones freed outside the lock: kvfree can sleep */
+        let old = {
+            let mut g = self.lock.lock();
+            g.published().buf_size_want.set(size);
+            (in_flight.front, in_flight.back) = (g.in_flight.front, g.in_flight.back);
+            (core::mem::replace(&mut g.free_buf, buf), core::mem::replace(&mut g.in_flight, in_flight))
+        };
+        drop(old);
         Ok(())
     }
 

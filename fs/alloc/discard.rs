@@ -203,8 +203,8 @@ impl Fs {
         let j = &self.journal;
         prt!(out, "journal seq:\t{}\n", self.journal_cur_seq());
         prt!(out, "journal flushed seq:\t{} -> {}\n",
-             j.flushing_seq.load(core::sync::atomic::Ordering::Relaxed), j.flushed_seq_ondisk.get());
-        prt!(out, "journal rewind seq:\t{} -> {}\n", j.rewind_seq.get(), j.rewind_seq_ondisk.get());
+             j.flushing_seq.load(core::sync::atomic::Ordering::Relaxed), j.lock.flushed_seq_ondisk.get());
+        prt!(out, "journal rewind seq:\t{} -> {}\n", j.lock.rewind_seq.get(), j.lock.rewind_seq_ondisk.get());
 
         prt!(out, "In flight:\n");
         let mut out = out.indent(2);
@@ -409,7 +409,7 @@ impl<'a> Worker<'a> {
         let k = iter.peek_slot(t)?.expect("a slot always has a key");
         let a = t.alloc_to_v4_mut(k)?;
         let (seq_empty, data_type) = (a.v().journal_seq_empty, a.v().data_type);
-        let (flushed, rewind_ondisk) = (fs.journal.flushed_seq_ondisk.get(), fs.journal.rewind_seq_ondisk.get());
+        let (flushed, rewind_ondisk) = (fs.journal.lock.flushed_seq_ondisk.get(), fs.journal.lock.rewind_seq_ondisk.get());
 
         // Why not yet, if not: the count it goes in
         let skip: Option<fn(&mut DiscardState) -> &mut u64> = if self.fastpath && seq_empty != 0 {
@@ -594,7 +594,7 @@ fn calculate_discard_sectors_to_release(trans: &BtreeTrans<'_>, s: &DiscardState
         }
 
         r.new_rewind_seq = r.new_rewind_seq.max(journal_seq + 1);
-        if short && fs.journal.flushed_seq_ondisk.get() < fs.journal_cur_seq() {
+        if short && fs.journal.lock.flushed_seq_ondisk.get() < fs.journal_cur_seq() {
             r.flush_journal = true;
         }
 
@@ -602,7 +602,7 @@ fn calculate_discard_sectors_to_release(trans: &BtreeTrans<'_>, s: &DiscardState
         Ok(if release <= 0 { LoopFlow::Break(()) } else { LoopFlow::Continue })
     });
 
-    if short && r.new_rewind_seq > fs.journal.rewind_seq.get() {
+    if short && r.new_rewind_seq > fs.journal.lock.rewind_seq.get() {
         r.flush_journal = true;
     }
     (r, walked)
@@ -631,7 +631,7 @@ fn do_discards(fs: &Fs) {
             let bucket_size = dev_bucket_size(fs, bucket.inode);
 
             let j = &fs.journal;
-            if journal_seq >= j.rewind_seq_ondisk.get().min(j.flushed_seq_ondisk.get() + 1) {
+            if journal_seq >= j.lock.rewind_seq_ondisk.get().min(j.lock.flushed_seq_ondisk.get() + 1) {
                 return Ok(LoopFlow::Break(()));
             }
 

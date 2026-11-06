@@ -344,6 +344,20 @@ pub struct JournalLocked {
     pub last_flush_write: c_ulong,
     pub nr_flush_writes: u64,
     pub nr_noflush_writes: u64,
+    pub entry_bytes_written: u64,
+
+    /*
+     * FIFO of in-flight journal bufs, one entry per seq in
+     * (seq_ondisk, cur_seq]. fifo.front = seq_ondisk + 1, fifo.back =
+     * cur_seq + 1, so seq-indexed lookup is O(1) via fifo_entry().
+     * Bufs live inline in the FIFO's backing array: pushed (and zeroed)
+     * in journal_entry_open(), freed (front-advanced) in
+     * journal_write_done() as seq_ondisk advances.
+     *
+     * The fifo is j->lock's; its bufs are used outside it, by their refs.
+     */
+    #[c("FIFO_U64_IDX(struct journal_buf) in_flight")]
+    pub in_flight: Fifo<c::journal_buf, u64>,
 }
 
 published! {
@@ -401,6 +415,23 @@ published! {
         pub err_seq: Volatile<u64>,
         pub last_seq: Volatile<u64>,
         pub replay_journal_seq_end: Volatile<u64>,
+
+        pub flushed_seq_ondisk: Volatile<u64>,
+        /* Oldest journal seq that is safe to rewind to — discards of buckets
+         * freed at >= this seq have not yet been issued */
+        pub rewind_seq: Volatile<u64>,
+        pub rewind_seq_ondisk: Volatile<u64>,
+        pub buf_size_want: Volatile<c_uint>,
+    }
+}
+
+published! {
+    /// reclaim_lock's: written by reclaim, read by anyone.
+    #[derive(CStruct)]
+    pub struct ReclaimPublished {
+        pub last_flushed: Volatile<c_ulong>,
+        pub nr_direct_reclaim: Volatile<u64>,
+        pub nr_background_reclaim: Volatile<u64>,
     }
 }
 
@@ -460,7 +491,6 @@ nest! {
         #[c("struct task_struct *stop_thread")]
         pub stop_thread: AtomicPtr<c::task_struct>,
 
-        pub buf_size_want: Volatile<c_uint>,
         /*
          * We may queue up some things to be journalled (log messages) before
          * the journal has actually started - stash them here:
@@ -476,17 +506,6 @@ nest! {
         #[init(new_lock!((), "&j->buf_lock"))]
         #[c_lock("struct mutex_noio buf_lock")]
         pub buf_lock: Locked<c::mutex_noio>,
-
-        /*
-         * FIFO of in-flight journal bufs, one entry per seq in
-         * (seq_ondisk, cur_seq]. fifo.front = seq_ondisk + 1, fifo.back =
-         * cur_seq + 1, so seq-indexed lookup is O(1) via fifo_entry().
-         * Bufs live inline in the FIFO's backing array: pushed (and zeroed)
-         * in journal_entry_open(), freed (front-advanced) in
-         * journal_write_done() as seq_ondisk advances.
-         */
-        #[c("FIFO_U64_IDX(struct journal_buf) in_flight")]
-        pub in_flight: Fifo<c::journal_buf, u64>,
 
         /*
          * When we need a flush but no open journal entry was flushable, wait
@@ -513,14 +532,8 @@ nest! {
         #[c("struct workqueue_struct *discard_wq")]
         pub discard_wq: Late<Workqueue>,
 
-        pub flushed_seq_ondisk: Volatile<u64>,
         pub flushing_seq: AtomicI64,
         pub oldest_seq_found_ondisk: Volatile<u64>,
-
-        /* Oldest journal seq that is safe to rewind to — discards of buckets
-         * freed at >= this seq have not yet been issued */
-        pub rewind_seq: Volatile<u64>,
-        pub rewind_seq_ondisk: Volatile<u64>,
 
         /*
          * Rewind ranges: keys from journal entries with seq
@@ -586,9 +599,9 @@ nest! {
         pub err_lock: Locked<c::spinlock_t>,
 
         #[pin]
-        #[init(new_lock!((), "&j->reclaim_lock"))]
+        #[init(new_lock!((), ::pin_init::zeroed(), "&j->reclaim_lock"))]
         #[c_lock("struct mutex reclaim_lock")]
-        pub reclaim_lock: Locked<c::mutex>,
+        pub reclaim_lock: Locked<c::mutex, (), ReclaimPublished>,
         /*
          * Used for waiting until journal reclaim has freed up space in the
          * journal:
@@ -601,10 +614,7 @@ nest! {
         #[init(RustOnly::new(Daemon::new()))]
         pub reclaim_thread: ReclaimThread,
         pub next_reclaim: Volatile<c_ulong>,
-        pub nr_direct_reclaim: Volatile<u64>,
-        pub nr_background_reclaim: Volatile<u64>,
 
-        pub last_flushed: Volatile<c_ulong>,
         #[c("struct journal_entry_pin *flush_in_progress")]
         pub flush_in_progress: AtomicPtr<c::journal_entry_pin>,
         pub flush_in_progress_dropped: Volatile<bool>,
@@ -615,8 +625,6 @@ nest! {
         pub pin_flush_wait: EventCount,
 
         pub write_start_time: u64,
-
-        pub entry_bytes_written: u64,
 
         pub flush_write_time: *mut c::bch2_time_stats,
         pub noflush_write_time: *mut c::bch2_time_stats,

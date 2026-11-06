@@ -37,7 +37,7 @@ use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, prt};
 use cstruct_macros::c_export;
 
-type ReclaimGuard<'a> = ExclusiveGuard<'a, c::mutex>;
+type ReclaimGuard<'a> = ExclusiveGuard<'a, c::mutex, (), c::ReclaimPublished>;
 
 fn round_down(x: u32, m: u32) -> u32 {
     x / m * m
@@ -182,7 +182,7 @@ impl c::journal {
          * We that we don't allocate the space for a journal entry
          * until we write it out - thus, account for it here:
          */
-        for buf in self.in_flight.iter() {
+        for buf in g.in_flight.iter() {
             let unwritten = buf.sectors;
             if unwritten == 0 {
                 continue;
@@ -457,7 +457,7 @@ impl c::journal {
      */
 
     /* returns true if we did work */
-    fn flush_pins_locked(&self, _reclaim: &ReclaimGuard<'_>, seq_to_flush: u64,
+    fn flush_pins_locked(&self, reclaim: &mut ReclaimGuard<'_>, seq_to_flush: u64,
                          allowed_below_seq: u32, allowed_above_seq: u32,
                          mut min_any: usize, mut min_key_cache: usize) -> usize {
         use c::bch_time_stats::*;
@@ -481,7 +481,7 @@ impl c::journal {
 
             cond_resched();
 
-            self.last_flushed.set(jiffies());
+            reclaim.published().last_flushed.set(jiffies());
 
             let Some((pin, seq, flush_fn, ty)) =
                 self.pins().next_to_flush(seq_to_flush, allowed_below, allowed_above) else {
@@ -557,7 +557,7 @@ impl c::journal {
      * 512 journal entries or 25% of all journal buckets, then
      * journal_next_bucket() should not stall.
      */
-    fn reclaim_pass(&self, reclaim: &ReclaimGuard<'_>, direct: bool, kicked: bool) -> Result<(), BchError> {
+    fn reclaim_pass(&self, reclaim: &mut ReclaimGuard<'_>, direct: bool, kicked: bool) -> Result<(), BchError> {
         let fs = self.fs();
         let bc = &fs.btree.cache;
         let kc = &fs.btree.key_cache;
@@ -588,7 +588,7 @@ impl c::journal {
              * make sure to flush at least one journal pin:
              */
             let delay = msecs_to_jiffies(fs.opts().journal_reclaim_delay.get().into());
-            if time_after(jiffies(), self.last_flushed.get().wrapping_add(delay)) {
+            if time_after(jiffies(), self.reclaim_lock.last_flushed.get().wrapping_add(delay)) {
                 min_nr = 1;
             }
 
@@ -613,7 +613,8 @@ impl c::journal {
 
             let nr_flushed = self.flush_pins_locked(reclaim, seq_to_flush, !0, 0, min_nr, min_key_cache);
 
-            let nr = if direct { &self.nr_direct_reclaim } else { &self.nr_background_reclaim };
+            let p = reclaim.published();
+            let nr = if direct { &p.nr_direct_reclaim } else { &p.nr_background_reclaim };
             nr.set(nr.get() + nr_flushed as u64);
 
             fs.event_inc_trace(events::journal_reclaim_finish, |out| prt!(out, "flushed {nr_flushed}"));
@@ -630,7 +631,7 @@ impl c::journal {
         Ok(())
     }
 
-    pub fn reclaim(&self, reclaim: &ReclaimGuard<'_>) -> Result<(), BchError> {
+    pub fn reclaim(&self, reclaim: &mut ReclaimGuard<'_>) -> Result<(), BchError> {
         self.reclaim_pass(reclaim, true, true)
     }
 
@@ -656,7 +657,7 @@ impl c::journal {
         self.reclaim_thread.kick();
     }
 
-    fn flush_pins_or_still_flushing(&self, reclaim: &ReclaimGuard<'_>, seq_to_flush: u64, types: u32) -> bool {
+    fn flush_pins_or_still_flushing(&self, reclaim: &mut ReclaimGuard<'_>, seq_to_flush: u64, types: u32) -> bool {
         self.flush_pins_locked(reclaim, seq_to_flush, types, 0, 0, 0) != 0 ||
             self.pins().still_flushing(seq_to_flush, types)
     }
@@ -666,10 +667,10 @@ impl c::journal {
             return true;
         }
 
-        let reclaim = self.reclaim_lock.lock();
+        let mut reclaim = self.reclaim_lock.lock();
 
         for ty in (0..JOURNAL_PIN_TYPE_NR as u32).rev() {
-            if self.flush_pins_or_still_flushing(&reclaim, seq_to_flush, 1 << ty) {
+            if self.flush_pins_or_still_flushing(&mut reclaim, seq_to_flush, 1 << ty) {
                 *did_work = true;
 
                 /*
@@ -813,7 +814,7 @@ impl c::journal {
             let ret = if flush_needed {
                 fs.journal_meta()
             } else {
-                self.reclaim(&self.reclaim_lock.lock())
+                self.reclaim(&mut self.reclaim_lock.lock())
             };
             if ret.is_err() {
                 /* filesystem read-only */
@@ -843,12 +844,12 @@ impl c::journal {
             out.tabstop_push(36);
         }
 
-        prt!(out, "nr direct reclaim:\t{}\n", self.nr_direct_reclaim.get());
-        prt!(out, "nr background reclaim:\t{}\n", self.nr_background_reclaim.get());
+        prt!(out, "nr direct reclaim:\t{}\n", self.reclaim_lock.nr_direct_reclaim.get());
+        prt!(out, "nr background reclaim:\t{}\n", self.reclaim_lock.nr_background_reclaim.get());
         if let Some(kicks) = self.reclaim_thread.kicks() {
             prt!(out, "reclaim kicks:\t{kicks}\n");
         }
-        prt!(out, "last flushed:\t{} ms ago\n", jiffies_to_msecs(now.wrapping_sub(self.last_flushed.get())));
+        prt!(out, "last flushed:\t{} ms ago\n", jiffies_to_msecs(now.wrapping_sub(self.reclaim_lock.last_flushed.get())));
         let next = self.next_reclaim.get();
         prt!(out, "next reclaim:\t{} ms\n",
              if time_after(next, now) { jiffies_to_msecs(next.wrapping_sub(now)) } else { 0 });
@@ -927,7 +928,7 @@ fn reclaim_thread(j: &c::journal, me: &KthreadSelf<'_>) {
     let _ = sleep_until(Sleep::INTERRUPTIBLE.freezable(),
         || (fs.flags.get(c::bch_fs_flags::BCH_FS_rw) || Kthread::should_stop()).then_some(()));
 
-    j.last_flushed.set(jiffies());
+    j.reclaim_lock.lock().published().last_flushed.set(jiffies());
 
     let mut kicks = me.kicks();
     let mut ret = Ok(());
@@ -937,11 +938,11 @@ fn reclaim_thread(j: &c::journal, me: &KthreadSelf<'_>) {
         let kicked = now_kicks != kicks;
         kicks = now_kicks;
 
-        ret = j.reclaim_pass(&j.reclaim_lock.lock(), false, kicked);
+        ret = j.reclaim_pass(&mut j.reclaim_lock.lock(), false, kicked);
 
         let now = jiffies();
         let delay = msecs_to_jiffies(fs.opts().journal_reclaim_delay.get().into());
-        let mut next = j.last_flushed.get().wrapping_add(delay);
+        let mut next = j.reclaim_lock.last_flushed.get().wrapping_add(delay);
 
         if !time_in_range(next, now, now.wrapping_add(delay)) {
             next = now.wrapping_add(delay);
@@ -1019,7 +1020,7 @@ pub fn bch2_journal_pin_flush(j: &c::journal, pin: &c::journal_entry_pin) {
 /// The caller holds reclaim_lock.
 #[c_export]
 pub unsafe fn bch2_journal_reclaim(j: &c::journal) -> c_int {
-    ret_to_c(j.reclaim(&unsafe { j.reclaim_lock.held() }))
+    ret_to_c(j.reclaim(&mut unsafe { j.reclaim_lock.held() }))
 }
 
 #[c_export]
