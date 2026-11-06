@@ -148,6 +148,11 @@ impl<'a> BkeySC<'a> {
     pub unsafe fn from_c(k: &'a c::bkey_s_c) -> Self {
         BkeySC { k: unsafe { &*k.k }, v: k.v, iter: PhantomData, val: PhantomData }
     }
+
+    /// bkey_i_to_s_c(): a whole key, header and value.
+    pub fn from_bkey_i(k: &'a c::bkey_i) -> Self {
+        BkeySC { k: &k.k, v: &k.v, iter: PhantomData, val: PhantomData }
+    }
 }
 
 impl<'a, V: ?Sized + BkeyVal> BkeyS<'a, V> {

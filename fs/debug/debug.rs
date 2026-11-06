@@ -299,7 +299,7 @@ impl DebugFile for TransactionStats {
 
             prt!(out, "Max mem used: {}\n", s.max_mem);
             #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-            crate::btree::trans::bch2_trans_kmalloc_trace_to_text(&mut out.indent(2), &s.trans_kmalloc_trace);
+            crate::btree::trans::kmalloc_trace_to_text(&mut out.indent(2), &s.trans_kmalloc_trace);
 
             prt!(out, "Transaction duration:\n");
             prt!(out.indent(2), "{}", s.duration);

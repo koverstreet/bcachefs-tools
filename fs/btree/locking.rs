@@ -984,7 +984,7 @@ impl BtreeTrans<'_> {
 
     /// An attempt's start, for the SRCU lock: dropped if it's been held for
     /// 10ms. @ret_ip is unlock_long's, C's _RET_IP_.
-    fn srcu_begin(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) {
+    pub(crate) fn srcu_begin(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) {
         if self.srcu_held() && time_after(jiffies(), self.srcu_lock_time.get().wrapping_add(msecs_to_jiffies(10))) {
             self.unlock_long_from(paths, ret_ip);
         }

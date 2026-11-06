@@ -280,8 +280,7 @@ impl<'a> Moving<'a> {
     }
 
     pub fn trans(&self) -> &BtreeTrans<'a> {
-        // SAFETY: the context's, live as long as it is
-        unsafe { BtreeTrans::borrow_raw(self.0.trans.raw()) }
+        &self.0.trans
     }
 
     /// Count moves from here on into @stats.

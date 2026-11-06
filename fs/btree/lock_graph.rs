@@ -7,7 +7,7 @@ use crate::btree::iter::BtreeTrans;
 use crate::btree::locking::{btree_node_locked_type, btree_node_pos};
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{table_allocated, table_header, BtreePath, PathNode};
-use crate::btree::trans::{bch2_trans_restart_foreign_task, foreign_bits};
+use crate::btree::trans::foreign_bits;
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::format::Btree;
@@ -94,7 +94,7 @@ impl Trans {
 
     fn restart_foreign_task(self, err: bch_errcode) -> BchError {
         let ip = Self::restart_foreign_task as *const () as c_ulong;
-        BchError::from_raw(bch2_trans_restart_foreign_task(self.own(), err.0 as c_int, ip))
+        self.own().restart_foreign_task(err, ip)
     }
 
     /// container_of(@w, struct btree_trans, locking_wait): every waiter on a

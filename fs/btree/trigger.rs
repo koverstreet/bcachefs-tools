@@ -201,10 +201,6 @@ fn as_s(k: &mut c::bkey_i) -> BkeyS<'_> {
     BkeyS { k: &mut k.k, v: &mut k.v, val: PhantomData }
 }
 
-fn as_sc(k: &c::bkey_i) -> BkeySC<'_> {
-    BkeySC { k: &k.k, v: &k.v, iter: PhantomData, val: PhantomData }
-}
-
 /// @i's update, as its triggers take it: @old_k is the entry's old key, copied
 /// out - a trigger can queue updates, and move the entry.
 ///
@@ -252,7 +248,7 @@ unsafe fn run_one_mem_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>, 
 
     if new_ops.trigger.is_some() {
         op.flags = flags | UpdateTriggerFlags::INSERT;
-        op.old   = as_sc(&no_old);
+        op.old   = BkeySC::from_bkey_i(&no_old);
         run_trigger(t, new_ops.trigger, &mut op)?;
     }
 
@@ -298,7 +294,7 @@ unsafe fn run_one_trans_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>
     } else if !i.bits.insert_trigger_run() {
         i.bits.set_insert_trigger_run(true);
         flags |= UpdateTriggerFlags::INSERT;
-        op.old = as_sc(&deleted);
+        op.old = BkeySC::from_bkey_i(&deleted);
         trigger = new_ops.trigger;
     }
     op.flags = flags;

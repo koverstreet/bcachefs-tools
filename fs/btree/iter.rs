@@ -13,7 +13,7 @@ use crate::errcode::{
     errptr_to_result,
     ret_to_result_void as ret_to_result,
 };
-use crate::btree::trans::{trans_kmalloc_grow, TransGuard};
+use crate::btree::trans::TransGuard;
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::util::ffi::Opaque;
@@ -761,7 +761,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         let top = t.mem_top.get() as usize;
         if top + size > t.mem_bytes.get() as usize {
-            return Ok(trans_kmalloc_grow(t, size, crate::ret_ip!())?.cast());
+            return Ok(t.kmalloc_grow(size, crate::ret_ip!())?.cast());
         }
 
         let p = unsafe { (t.mem.get() as *mut u8).add(top) };

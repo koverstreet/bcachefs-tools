@@ -31,9 +31,7 @@
 
 use crate::fs::Dev;
 use crate::btree::bkey::{pos, BkeySC, POS_MIN};
-use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
-use crate::btree::trans::bch2_current_has_btree_trans;
-use crate::c;
+use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};use crate::c;
 use crate::c::{bch_fsck_flags, bch_sb_error_id};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
@@ -151,7 +149,7 @@ pub trait FsckErrCtx {
 
 impl FsckErrCtx for Fs {
     fn fsck_err_ctx(&self) -> (&Fs, Option<&TransAttempt<'_, '_>>) {
-        crate::warn_on!(bch2_current_has_btree_trans(self));
+        crate::warn_on!(self.current_has_btree_trans());
         (self, None)
     }
 }
@@ -544,7 +542,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
     // Asking needs the transaction, to unlock it: bkey errors, which have
     // none, are all AUTOFIX, so there's no asking without one
     crate::warn_on!(flags.contains(f::FSCK_CAN_FIX) && !flags.contains(f::FSCK_AUTOFIX) && trans.is_none() &&
-                    bch2_current_has_btree_trans(fs));
+                    fs.current_has_btree_trans());
 
     if flags.contains(f::FSCK_ERR_SILENT) || error_silent(fs, err) {
         fs.flags.set(fl::BCH_FS_errors_fixed_silent, true);
