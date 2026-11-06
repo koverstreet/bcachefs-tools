@@ -106,36 +106,6 @@ impl From<DataType> for DataTypes {
     }
 }
 
-c_xmacro! {
-    /*
-     * field 1: name
-     * field 2: id
-     */
-    BCH_DISK_ACCOUNTING_TYPES(x) {
-        (nr_inodes, 0),
-        (persistent_reserved, 1),
-        (replicas, 2),
-        (dev_data_type, 3),
-        (compression, 4),
-        (snapshot, 5),
-        (btree, 6),
-        (rebalance_work, 7),
-        (inum, 8),
-        (reconcile_work, 9),
-        (dev_leaving, 10),
-        (stripe_frag, 11),
-        (dev_stripe_frag, 12),
-    }
-}
-
-c_enum! {
-    #[open]
-    pub enum disk_accounting_type: u32 {
-        BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => concat(BCH_DISK_ACCOUNTING_, f) = nr,
-        BCH_DISK_ACCOUNTING_TYPE_NR,
-    }
-}
-
 c_typedef! {
     #[c_name(bch_acct_replicas)]
     pub type Replicas = Head<c::bch_replicas_entry_v1>;
@@ -147,33 +117,38 @@ tagged_union! {
     #[c_typedef]*
     #[c_name(disk_accounting_pos)]
     #[derive(TypeInfo)]
-    pub struct DiskAccountingPos {
-        tag type_: u8 = disk_accounting_type,
-        arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: camel(f) = nr,
-        pad: Bpos,
-        size: pad,
-        packed,
-
+    #[tag(type_: u8)]
+    #[tag_enum(disk_accounting_type: u32, prefix = BCH_DISK_ACCOUNTING_, nr = BCH_DISK_ACCOUNTING_TYPE_NR)]
+    #[pad(Bpos)]
+    #[size(pad)]
+    #[packed]
+    pub enum DiskAccountingPos {
         /*
          * No subtypes - number of inodes in the entire filesystem
          *
          * XXX: perhaps we could add a per-subvolume counter?
          */
-        #[repr(C)]
-        #[c_name(bch_acct_nr_inodes)]
-        #[counters(nr)]
-        pub struct NrInodes {},
+        nr_inodes(
+            #[repr(C)]
+            #[c_name(bch_acct_nr_inodes)]
+            #[counters(nr)]
+            pub struct NrInodes {}
+        ) = 0,
 
         /*
          * Tracks KEY_TYPE_reservation sectors, broken out by number of replicas for the
          * reservation:
          */
-        #[repr(C)]
-        #[c_name(bch_acct_persistent_reserved)]
-        #[counters(sectors)]
-        pub struct PersistentReserved {
-            pub nr_replicas: u8,
-        },
+        persistent_reserved(
+            #[repr(C)]
+            #[c_name(bch_acct_persistent_reserved)]
+            #[counters(sectors)]
+            pub struct PersistentReserved {
+                pub nr_replicas: u8,
+            }
+        ) = 1,
+
+        replicas(Replicas) = 2,
 
         /*
          * device, data type counter fields:
@@ -194,13 +169,15 @@ tagged_union! {
          * The fragmentation counter handles this by first clamping bucket sector counts
          * to the bucket size.
          */
-        #[repr(C)]
-        #[c_name(bch_acct_dev_data_type)]
-        #[counters(buckets, sectors, fragmented)]
-        pub struct DevDataType {
-            pub dev: u8,
-            pub data_type: u8,
-        },
+        dev_data_type(
+            #[repr(C)]
+            #[c_name(bch_acct_dev_data_type)]
+            #[counters(buckets, sectors, fragmented)]
+            pub struct DevDataType {
+                pub dev: u8,
+                pub data_type: u8,
+            }
+        ) = 3,
 
         /*
          * Compression type fields:
@@ -212,12 +189,14 @@ tagged_union! {
          *
          * Compression ratio, average extent size (fragmentation).
          */
-        #[repr(C)]
-        #[c_name(bch_acct_compression)]
-        #[counters(nr_extents, uncompressed, compressed)]
-        pub struct Compression {
-            pub type_: u8,
-        },
+        compression(
+            #[repr(C)]
+            #[c_name(bch_acct_compression)]
+            #[counters(nr_extents, uncompressed, compressed)]
+            pub struct Compression {
+                pub type_: u8,
+            }
+        ) = 4,
 
         /*
          * Per-(snapshot id, btree) accounting, three counters:
@@ -232,13 +211,15 @@ tagged_union! {
          *     extents btree
          * ]
          */
-        #[repr(C, packed)]
-        #[c_name(bch_acct_snapshot)]
-        #[counters(keys, key_bytes, sectors)]
-        pub struct Snapshot {
-            pub id: u32,
-            pub btree: u32,
-        },
+        snapshot(
+            #[repr(C, packed)]
+            #[c_name(bch_acct_snapshot)]
+            #[counters(keys, key_bytes, sectors)]
+            pub struct Snapshot {
+                pub id: u32,
+                pub btree: u32,
+            }
+        ) = 5,
 
         /*
          * Metadata accounting per btree id:
@@ -248,21 +229,25 @@ tagged_union! {
          *   number of non-leaf btree nodes
          * ]
          */
-        #[repr(C, packed)]
-        #[c_name(bch_acct_btree)]
-        #[counters(sectors, nodes, interior)]
-        pub struct Btree {
-            pub id: u32,
-        },
+        btree(
+            #[repr(C, packed)]
+            #[c_name(bch_acct_btree)]
+            #[counters(sectors, nodes, interior)]
+            pub struct Btree {
+                pub id: u32,
+            }
+        ) = 6,
 
         /*
          * Simple counter of the amount of data (on disk sectors) rebalance needs to
          * move, extents counted here are also in the rebalance_work btree.
          */
-        #[repr(C)]
-        #[c_name(bch_acct_rebalance_work)]
-        #[counters(sectors)]
-        pub struct RebalanceWork {},
+        rebalance_work(
+            #[repr(C)]
+            #[c_name(bch_acct_rebalance_work)]
+            #[counters(sectors)]
+            pub struct RebalanceWork {}
+        ) = 7,
 
         /*
          * inum counter fields:
@@ -277,26 +262,32 @@ tagged_union! {
          *
          * This tracks on disk fragmentation.
          */
-        #[repr(C, packed)]
-        #[c_name(bch_acct_inum)]
-        #[counters(nr_extents, sectors, disk_sectors)]
-        pub struct Inum {
-            pub inum: u64,
-        },
+        inum(
+            #[repr(C, packed)]
+            #[c_name(bch_acct_inum)]
+            #[counters(nr_extents, sectors, disk_sectors)]
+            pub struct Inum {
+                pub inum: u64,
+            }
+        ) = 8,
 
-        #[repr(C)]
-        #[c_name(bch_acct_reconcile_work)]
-        #[counters(data, metadata)]
-        pub struct ReconcileWork {
-            pub type_: u8,
-        },
+        reconcile_work(
+            #[repr(C)]
+            #[c_name(bch_acct_reconcile_work)]
+            #[counters(data, metadata)]
+            pub struct ReconcileWork {
+                pub type_: u8,
+            }
+        ) = 9,
 
-        #[repr(C, packed)]
-        #[c_name(bch_acct_dev_leaving)]
-        #[counters(sectors)]
-        pub struct DevLeaving {
-            pub dev: u32,
-        },
+        dev_leaving(
+            #[repr(C, packed)]
+            #[c_name(bch_acct_dev_leaving)]
+            #[counters(sectors)]
+            pub struct DevLeaving {
+                pub dev: u32,
+            }
+        ) = 10,
 
         /*
          * Empty (reusable) blocks in stripes, keyed by how many the stripe has:
@@ -315,12 +306,14 @@ tagged_union! {
          * No upgrade/downgrade entry: informational, so it reads as zero or stale until
          * check_allocations recomputes it.
          */
-        #[repr(C)]
-        #[c_name(bch_acct_stripe_frag)]
-        #[counters(data, empty)]
-        pub struct StripeFrag {
-            pub nr_empty: u8,
-        },
+        stripe_frag(
+            #[repr(C)]
+            #[c_name(bch_acct_stripe_frag)]
+            #[counters(data, empty)]
+            pub struct StripeFrag {
+                pub nr_empty: u8,
+            }
+        ) = 11,
 
         /*
          * The same per device:
@@ -333,11 +326,13 @@ tagged_union! {
          * would move every block of a stripe between keys whenever any one emptied -
          * hence two keys, not one.
          */
-        #[repr(C)]
-        #[c_name(bch_acct_dev_stripe_frag)]
-        #[counters(data, empty)]
-        pub struct DevStripeFrag {
-            pub dev: u8,
-        },
+        dev_stripe_frag(
+            #[repr(C)]
+            #[c_name(bch_acct_dev_stripe_frag)]
+            #[counters(data, empty)]
+            pub struct DevStripeFrag {
+                pub dev: u8,
+            }
+        ) = 12,
     }
 }

@@ -474,7 +474,6 @@ c::BCH_MEMBER_STATES!(newtype_enum_aliases [MemberState, BCH_MEMBER_STATE, nr = 
 c::BCH_MEMBER_INITIALIZED_STATES!(newtype_enum_aliases [MemberInitialized, BCH_MEMBER_INITIALIZED, nr = BCH_MEMBER_INITIALIZED_NR]);
 c::BCH_COMPRESSION_TYPES!(newtype_enum_aliases [CompressionType, BCH_COMPRESSION_TYPE, nr = BCH_COMPRESSION_TYPE_NR]);
 c::BCH_SB_COMPAT!(newtype_enum_aliases [bch_sb_compat, BCH_COMPAT, nr = BCH_COMPAT_NR]);
-c::BCH_DISK_ACCOUNTING_TYPES!(newtype_enum_aliases [disk_accounting_type, BCH_DISK_ACCOUNTING, nr = BCH_DISK_ACCOUNTING_TYPE_NR]);
 
 // BCH_BTREE_IDS(): every btree id, and those whose keys are snapshotted - as
 // C's btree_has_snapshots_mask.
