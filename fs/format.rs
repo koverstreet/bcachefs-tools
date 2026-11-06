@@ -491,6 +491,13 @@ c_xmacro! {
         (logged_op_inode_opt_propagate, 39, BKEY_TYPE_strict_btree_checks, _,
          "Logged propagation of inode io options to ancestor "
          "snapshot versions"),
+        (inline_data_v2,        40, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent |
+                                    BKEY_TYPE_allocation | BKEY_TYPE_data | BKEY_TYPE_user_data | BKEY_TYPE_inline_data, _,
+         "Small file data stored inline in the btree, "
+         "with its own checksum"),
+        (indirect_inline_data_v2, 41, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent | BKEY_TYPE_indirect |
+                                    BKEY_TYPE_allocation | BKEY_TYPE_data | BKEY_TYPE_inline_data, _,
+         "Reflinked inline data with refcount and its own checksum"),
     }
 }
 
@@ -743,7 +750,8 @@ c_xmacro! {
          BIT_ULL(KEY_TYPE_extent) |
          BIT_ULL(KEY_TYPE_reservation) |
          BIT_ULL(KEY_TYPE_reflink_p) |
-         BIT_ULL(KEY_TYPE_inline_data),
+         BIT_ULL(KEY_TYPE_inline_data) |
+         BIT_ULL(KEY_TYPE_inline_data_v2),
          "File data extent pointers and reservations"),
         (inodes,                1,
          BTREE_IS_snapshots |
@@ -791,6 +799,7 @@ c_xmacro! {
          BTREE_IS_trans_triggers,
          BIT_ULL(KEY_TYPE_reflink_v) |
          BIT_ULL(KEY_TYPE_indirect_inline_data) |
+         BIT_ULL(KEY_TYPE_indirect_inline_data_v2) |
          BIT_ULL(KEY_TYPE_error),
          "Reflink shared extent pointers"),
         (subvolumes,            8,
@@ -1315,6 +1324,8 @@ c_xmacro! {
         (per_dev_fragmentation_lru,     BCH_VERSION(1, 39),
          "Per-device bucket fragmentation LRUs, so copygc can reason "
          "about fragmentation per device",              "2026-07"),
+        (inline_data_csum,              BCH_VERSION(1, 40),
+         "Inline data extents carry their own checksums",  "2026-11"),
     }
 }
 

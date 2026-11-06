@@ -464,7 +464,8 @@ c_xmacro! {
         (accounting_key_replicas_past_end, 438, FSCK_AUTOFIX),
         (alloc_v4_inline_backpointers, 439, FSCK_AUTOFIX),
         (journal_entry_datetime_bad_size, 440, 0),
-        (MAX, 441, 0),
+        (inline_data_csum_type_bad, 441, 0),
+        (MAX, 442, 0),
     }
 }
 

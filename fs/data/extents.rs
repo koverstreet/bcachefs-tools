@@ -351,10 +351,14 @@ pub trait BkeyVExtents: BkeyV {
             }
             _ if k.k.extent_is_inline_data() => {
                 let d = InlineDataMut::of(k.as_s()).expect("inline data");
-                let sub = (sub << 9).min(d.data.len() as u64) as usize;
+                if let Some(h) = d.csum {
+                    h.offset.set(h.offset.get() + sub as u32);
+                } else {
+                    let sub = (sub << 9).min(d.data.len() as u64) as usize;
 
-                d.data.copy_within(sub.., 0);
-                new_val_u64s -= sub / size_of::<u64>();
+                    d.data.copy_within(sub.., 0);
+                    new_val_u64s -= sub / size_of::<u64>();
+                }
             }
             _ => {}
         }
@@ -386,7 +390,7 @@ pub trait BkeyVExtents: BkeyV {
             new_val_u64s = 0;
         }
 
-        if let Some(d) = InlineDataRef::of(k.as_sc()) {
+        if let Some(d) = InlineDataRef::of(k.as_sc()).filter(|d| d.csum.is_none()) {
             let off = k.k.val_bytes() - d.data.len();
             new_val_u64s = (off + d.data.len().min((k.k.size as usize) << 9)) / size_of::<u64>();
         }

@@ -108,9 +108,10 @@ impl c::bkey {
         use c::bch_bkey_type as t;
 
         match self.key_type() {
-            t::KEY_TYPE_extent      => t::KEY_TYPE_reflink_v,
-            t::KEY_TYPE_inline_data => t::KEY_TYPE_indirect_inline_data,
-            _                       => t::KEY_TYPE_deleted,
+            t::KEY_TYPE_extent         => t::KEY_TYPE_reflink_v,
+            t::KEY_TYPE_inline_data    => t::KEY_TYPE_indirect_inline_data,
+            t::KEY_TYPE_inline_data_v2 => t::KEY_TYPE_indirect_inline_data_v2,
+            _                          => t::KEY_TYPE_deleted,
         }
     }
 }
@@ -512,6 +513,19 @@ fn indirect_inline_data_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<
 impl BkeyOps for c::IndirectInlineData {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         indirect_pos_validate(v)
+    }
+
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        indirect_inline_data_to_text(out, fs, k)
+    }
+
+    const TRIGGER: Option<&'static Trigger> = Some(&INDIRECT_INLINE_DATA);
+}
+
+impl BkeyOps for c::IndirectInlineDataV2 {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        indirect_pos_validate(v)?;
+        crate::data::inline_data::csum_validate(v)
     }
 
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {

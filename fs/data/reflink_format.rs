@@ -55,3 +55,14 @@ pub struct IndirectInlineData {
     pub refcount: Le64,
     pub data: [u8; 0],
 }
+
+#[whole(tail = data: [u8], bkey)]
+#[repr(C)]
+#[c_name(bch_indirect_inline_data_v2)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+pub struct IndirectInlineDataV2 {
+    pub v: c::bch_val,
+    pub refcount: Le64,
+    pub csum: c::InlineDataCsum,
+    pub data: [u8; 0],
+}

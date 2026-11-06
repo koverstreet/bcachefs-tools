@@ -149,10 +149,9 @@ fn cmd_undump(cli: UndumpCli) -> Result<()> {
 
 /// Sanitize a bkey value region in-place. Returns true if modified.
 ///
-/// On-disk value layout (bch_val = 0 bytes):
-///  - inline_data:          data at offset 0 — zero all
-///  - indirect_inline_data: refcount(8), data — zero data
-///  - dirent:               d_inum(8), d_type(1), d_name — fill with 'X'
+///  - inline data, any type: its data zeroed, and its checksum, if it has one,
+///    set to none
+///  - dirent: d_inum(8), d_type(1), d_name — fill with 'X'
 ///
 /// What the write path should do to each buffer before dumping it.
 #[derive(Clone, Copy)]
@@ -207,6 +206,10 @@ fn sanitize_val(fs: &Fs, mut k: BkeyS, opts: SanitizeOpts) -> bool {
         _ if opts.sanitize && k.k.extent_is_inline_data() => {
             if let Some(d) = InlineDataMut::of(k.as_s()) {
                 d.data.fill(0);
+                // zeroed, so no checksum: else every read of it fails
+                if let Some(h) = d.csum {
+                    *h = c::InlineDataCsum { offset: h.offset, ..Default::default() };
+                }
             }
             true
         }

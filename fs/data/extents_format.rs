@@ -410,3 +410,31 @@ pub struct InlineData {
     pub v: c::bch_val,
     pub data: [u8; 0],
 }
+
+/*
+ * An inline data extent's own checksum, over all of its data[] as it was
+ * written - padding included, never recomputed. A cut moves @offset, the
+ * sectors into data[] the key starts at, and shrinks the key; it doesn't touch
+ * data[]: the btree node's checksum covers a whole bset, and a node read past a
+ * bad one is rewritten, so this is what can still say which key's data went bad.
+ * Never an encryption type: an encrypted fs encrypts the node.
+ */
+#[repr(C)]
+#[c_name(bch_inline_data_csum)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+pub struct InlineDataCsum {
+    pub csum_type: u8,
+    pub pad: [u8; 3],
+    pub offset: Le32,
+    pub csum: c::bch_csum,
+}
+
+#[whole(tail = data: [u8], bkey)]
+#[repr(C)]
+#[c_name(bch_inline_data_v2)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+pub struct InlineDataV2 {
+    pub v: c::bch_val,
+    pub csum: InlineDataCsum,
+    pub data: [u8; 0],
+}

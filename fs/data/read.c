@@ -1091,18 +1091,59 @@ static inline int read_extent_done(struct bch_read_bio *rbio, enum bch_read_flag
 	return 0;
 }
 
-static noinline int read_extent_inline(struct bch_fs *c,
+/*
+ * An inline data extent with its own checksum failed it: there's no other copy
+ * to read, so the read fails. In the retry path, the retry reports it.
+ */
+static noinline int read_extent_inline_csum_err(struct btree_trans *trans,
+						struct bch_read_bio *rbio,
+						struct bpos read_pos,
+						struct bkey_s_c k,
+						enum bch_read_flags flags,
+						int ret, struct printbuf *csum_err)
+{
+	struct bch_fs *c = trans->c;
+
+	if (rbio->err_report) {
+		mutex_lock(&rbio->err_report->lock);
+		rbio->err_report->errors |= BCH_READ_ERR_checksum;
+		mutex_unlock(&rbio->err_report->lock);
+	}
+
+	if (!(flags & BCH_READ_in_retry)) {
+		bch2_sb_error_count(c, BCH_FSCK_ERR_data_read_csum_err);
+
+		CLASS(printbuf, buf)();
+		bch2_read_err_msg_trans(trans, &buf, rbio, read_pos);
+		prt_printf(&buf, "inline data %s\n  ", csum_err->buf);
+		bch2_bkey_val_to_text(&buf, c, k);
+		prt_printf(&buf, "\n  error %s", bch2_err_str(ret));
+		bch_err_ratelimited(c, "%s", buf.buf);
+	}
+
+	return read_extent_done(rbio, flags, ret);
+}
+
+static noinline int read_extent_inline(struct btree_trans *trans,
 				       struct bch_read_bio *rbio,
 				       struct bvec_iter iter,
+				       struct bpos read_pos,
 				       struct bkey_s_c k,
 				       unsigned offset_into_extent,
 				       enum bch_read_flags flags)
 {
+	struct bch_fs *c = trans->c;
+
 	event_add_trace(c, data_read_inline, bvec_iter_sectors(iter), buf, ({
 		bch2_bkey_val_to_text(&buf, c, k);
 		prt_newline(&buf);
 		bch2_read_bio_to_text_atomic(&buf, rbio);
 	}));
+
+	CLASS(printbuf, csum_err)();
+	int ret = bch2_inline_data_verify(c, k, &csum_err);
+	if (unlikely(ret))
+		return read_extent_inline_csum_err(trans, rbio, read_pos, k, flags, ret, &csum_err);
 
 	/* past the data, zeroes: */
 	unsigned bytes;
@@ -1203,7 +1244,7 @@ int __bch2_read_extent(struct btree_trans *trans,
 	int ret = 0;
 
 	if (bch2_bkey_is_inline_data(k.k))
-		return read_extent_inline(c, orig, iter, k, offset_into_extent, flags);
+		return read_extent_inline(trans, orig, iter, read_pos, k, offset_into_extent, flags);
 
 	if (unlikely((bch2_bkey_extent_flags(k) & BIT_ULL(BCH_EXTENT_FLAG_poisoned))) &&
 	    !orig->data_update) {
