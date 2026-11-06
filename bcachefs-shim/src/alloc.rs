@@ -62,6 +62,9 @@ pub struct PushError<T>(pub T);
 /// As the kernel's KVVec: a vector whose allocations can fail.
 pub struct KVVec<T>(Vec<T>);
 
+// Its elements are on the heap, and don't move with it: as a Box is
+impl<T> Unpin for KVVec<T> {}
+
 impl<T> KVVec<T> {
     pub const fn new() -> Self {
         KVVec(Vec::new())

@@ -76,6 +76,10 @@ pub type KVVec<T> = Vec<T, KVmalloc>;
 #[cfg(kernel)]
 pub struct Vec<T, A: kernel::alloc::Allocator>(kernel::alloc::Vec<T, A>);
 
+// Its elements are on the heap, and don't move with it: as a Box is
+#[cfg(kernel)]
+impl<T, A: kernel::alloc::Allocator> Unpin for Vec<T, A> {}
+
 #[cfg(kernel)]
 impl<T, A: kernel::alloc::Allocator> Vec<T, A> {
     pub const fn new() -> Self {
