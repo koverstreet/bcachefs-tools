@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::bkey::{key_ops, BkeyS, BkeySC};
+use crate::btree::bkey::{key_ops, BkeyI, BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{BtreeTrans, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
@@ -9,6 +9,7 @@ use crate::format::{Bpos, Btree};
 use crate::prt;
 use crate::util::Printbuf;
 use core::ffi::c_int;
+use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use cstruct_macros::c_export;
 
@@ -42,7 +43,7 @@ impl<'a> TriggerOp<'a> {
             btree: op.btree,
             level: op.level,
             old:   unsafe { BkeySC::from_c(&op.old) },
-            new:   BkeyS { k: unsafe { &mut *new.k }, v: new.v, val: core::marker::PhantomData },
+            new:   BkeyS { k: unsafe { &mut *new.k }, v: new.v, val: PhantomData },
             flags: UpdateTriggerFlags::from_bits_retain(op.flags.bits()),
             new_buf_u64s: op.new_buf_u64s,
         }
@@ -75,7 +76,7 @@ impl<'a> TriggerOp<'a> {
         // SAFETY: written on success - the update's key, in transaction
         // memory, which outlives the op
         let out = unsafe { out.assume_init().split.kv };
-        self.new = BkeyS { k: unsafe { &mut *out.k }, v: out.v, val: core::marker::PhantomData };
+        self.new = BkeyS { k: unsafe { &mut *out.k }, v: out.v, val: PhantomData };
         self.new_buf_u64s = self.new_buf_u64s.max(needed_u64s);
 
         // SAFETY: @new, @new_buf_u64s long, the trigger's to edit while the
@@ -113,29 +114,20 @@ fn same_trigger(a: Option<&'static Trigger>, b: Option<&'static Trigger>) -> boo
     }
 }
 
-/// # Safety
-/// @op is one the commit is running triggers for: both keys valid, @new the
-/// trigger's to edit.
-unsafe fn run_trigger(t: &TransAttempt<'_, '_>, trigger: Option<&'static Trigger>, op: &mut c::btree_trigger_op)
+fn run_trigger(t: &TransAttempt<'_, '_>, trigger: Option<&'static Trigger>, op: &mut TriggerOp<'_>)
     -> Result<(), BchError>
 {
-    match trigger {
-        Some(trigger) => (trigger.0)(t, &mut unsafe { TriggerOp::from_raw(op) }),
-        None          => Ok(()),
-    }
+    trigger.map_or(Ok(()), |trigger| (trigger.0)(t, op))
 }
 
 /// bch2_key_trigger(): @op's key's trigger - the old key's type's, the new
 /// key's if it's a deletion - then its snapshot's count of keys.
-///
-/// # Safety
-/// As run_trigger().
-unsafe fn key_trigger(t: &TransAttempt<'_, '_>, op: &mut c::btree_trigger_op) -> Result<(), BchError> {
-    let ty = match unsafe { (*op.old.k).type_ } {
-        0  => unsafe { (*op.new.split.kv.k).type_ },
+fn key_trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
+    let ty = match op.old.k.type_ {
+        0  => op.new.k.type_,
         ty => ty,
     };
-    unsafe { run_trigger(t, key_ops(ty).trigger, op) }?;
+    run_trigger(t, key_ops(ty).trigger, op)?;
 
     /*
      * Gate matches the trans-commit dispatch: only snapshotted btrees get
@@ -143,7 +135,7 @@ unsafe fn key_trigger(t: &TransAttempt<'_, '_>, op: &mut c::btree_trigger_op) ->
      * carry a snapshot in their bpos but must not be counted.
      */
     if op.btree.has_snapshots() {
-        crate::alloc::buckets::trigger_snapshot_nr_keys(t, &unsafe { TriggerOp::from_raw(op) })?;
+        crate::alloc::buckets::trigger_snapshot_nr_keys(t, op)?;
     }
     Ok(())
 }
@@ -153,7 +145,7 @@ unsafe fn key_trigger(t: &TransAttempt<'_, '_>, op: &mut c::btree_trigger_op) ->
 #[c_export]
 pub unsafe fn bch2_key_trigger(trans: &BtreeTrans<'_>, mut op: c::btree_trigger_op) -> c_int {
     let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(unsafe { key_trigger(&t, &mut op) })
+    ret_to_c(key_trigger(&t, &mut unsafe { TriggerOp::from_raw(&mut op) }))
 }
 
 /// verify_update_old_key(): @i's old key is the one at its position - the
@@ -206,16 +198,28 @@ fn deleted_at(p: Bpos) -> c::bkey_i {
     c::bkey_i { k: c::bkey { p, ..c::bkey::new() }, ..Default::default() }
 }
 
-fn raw_s(k: &mut c::bkey_i) -> c::bkey_s {
-    c::bkey_s { split: c::bkey_s_split { kv: c::bkey_s_kv { k: &mut k.k, v: &mut k.v } } }
+fn as_s(k: &mut c::bkey_i) -> BkeyS<'_> {
+    BkeyS { k: &mut k.k, v: &mut k.v, val: PhantomData }
 }
 
-fn raw_s_c(k: &c::bkey_i) -> c::bkey_s_c {
-    c::bkey_s_c { k: &k.k, v: &k.v }
+fn as_sc(k: &c::bkey_i) -> BkeySC<'_> {
+    BkeySC { k: &k.k, v: &k.v, iter: PhantomData, val: PhantomData }
 }
 
-fn raw_flags(f: UpdateTriggerFlags) -> c::btree_iter_update_trigger_flags {
-    c::btree_iter_update_trigger_flags::from_bits_retain(f.bits())
+/// @i's update, as its triggers take it: @old_k is the entry's old key, copied
+/// out - a trigger can queue updates, and move the entry.
+///
+/// # Safety
+/// As run_one_mem_trigger().
+unsafe fn update_op<'a>(i: &c::btree_insert_entry, old_k: &'a c::bkey, flags: UpdateTriggerFlags) -> TriggerOp<'a> {
+    TriggerOp {
+        btree:        i.bits.btree_id(),
+        level:        i.bits.level().into(),
+        old:          BkeySC { k: old_k, v: i.old_v, iter: PhantomData, val: PhantomData },
+        new:          BkeyS::from(unsafe { &mut *BkeyI::from_raw_mut(i.k) }),
+        flags,
+        new_buf_u64s: i.k_buf_u64s.into(),
+    }
 }
 
 /// run_one_mem_trigger(): @i's triggers in the atomic phase, or gc's, with
@@ -230,42 +234,35 @@ unsafe fn run_one_mem_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>, 
 {
     unsafe { bch2_verify_update_old_key(trans, i) };
 
-    let new = unsafe { &mut *i.k };
-    let mut deleted = deleted_at(new.k.p);
+    let p = unsafe { (*i.k).k.p };
+    let (no_old, mut no_new) = (deleted_at(p), deleted_at(p));
     let old_k = i.old_k;
-    let (old_ops, new_ops) = (key_ops(old_k.type_), key_ops(new.k.type_));
-
-    let mut op = c::btree_trigger_op {
-        btree:        i.bits.btree_id(),
-        level:        i.bits.level().into(),
-        old:          c::bkey_s_c { k: &old_k, v: i.old_v },
-        new:          raw_s(new),
-        new_buf_u64s: i.k_buf_u64s.into(),
-        flags:        raw_flags(flags),
-    };
+    let mut op = unsafe { update_op(i, &old_k, flags) };
+    let old = op.old;
+    let (old_ops, new_ops) = (key_ops(old.k.type_), key_ops(op.new.k.type_));
 
     // a net count, old to new: before the split below rewrites @op
     if op.btree.has_snapshots() {
-        crate::alloc::buckets::trigger_snapshot_nr_keys(t, &unsafe { TriggerOp::from_raw(&mut op) })?;
+        crate::alloc::buckets::trigger_snapshot_nr_keys(t, &op)?;
     }
 
     if old_ops.trigger.is_some() && same_trigger(old_ops.trigger, new_ops.trigger) {
-        op.flags = raw_flags(flags | UpdateTriggerFlags::INSERT | UpdateTriggerFlags::OVERWRITE);
-        return unsafe { run_trigger(t, old_ops.trigger, &mut op) };
+        op.flags = flags | UpdateTriggerFlags::INSERT | UpdateTriggerFlags::OVERWRITE;
+        return run_trigger(t, old_ops.trigger, &mut op);
     }
 
     if new_ops.trigger.is_some() {
-        op.flags = raw_flags(flags | UpdateTriggerFlags::INSERT);
-        op.old   = raw_s_c(&deleted);
-        unsafe { run_trigger(t, new_ops.trigger, &mut op) }?;
+        op.flags = flags | UpdateTriggerFlags::INSERT;
+        op.old   = as_sc(&no_old);
+        run_trigger(t, new_ops.trigger, &mut op)?;
     }
 
     if old_ops.trigger.is_some() {
-        op.flags        = raw_flags(flags | UpdateTriggerFlags::OVERWRITE);
-        op.old          = c::bkey_s_c { k: &old_k, v: i.old_v };
-        op.new          = raw_s(&mut deleted);
+        op.flags        = flags | UpdateTriggerFlags::OVERWRITE;
+        op.old          = old;
+        op.new          = as_s(&mut no_new);
         op.new_buf_u64s = 0;
-        unsafe { run_trigger(t, old_ops.trigger, &mut op) }?;
+        run_trigger(t, old_ops.trigger, &mut op)?;
     }
     Ok(())
 }
@@ -282,20 +279,11 @@ unsafe fn run_one_trans_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>
 {
     unsafe { bch2_verify_update_old_key(trans, i) };
 
-    let new = unsafe { &mut *i.k };
-    let mut deleted = deleted_at(new.k.p);
+    let mut deleted = deleted_at(unsafe { (*i.k).k.p });
     let old_k = i.old_k;
-    let (old_ops, new_ops) = (key_ops(old_k.type_), key_ops(new.k.type_));
     let mut flags = UpdateTriggerFlags::from_bits_retain(i.flags) | UpdateTriggerFlags::TRANSACTIONAL;
-
-    let mut op = c::btree_trigger_op {
-        btree:        i.bits.btree_id(),
-        level:        i.bits.level().into(),
-        old:          c::bkey_s_c { k: &old_k, v: i.old_v },
-        new:          raw_s(new),
-        new_buf_u64s: i.k_buf_u64s.into(),
-        flags:        raw_flags(flags),
-    };
+    let mut op = unsafe { update_op(i, &old_k, flags) };
+    let (old_ops, new_ops) = (key_ops(old_k.type_), key_ops(op.new.k.type_));
 
     let mut trigger = old_ops.trigger;
     if !i.bits.insert_trigger_run() && !i.bits.overwrite_trigger_run() &&
@@ -306,19 +294,19 @@ unsafe fn run_one_trans_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>
     } else if !i.bits.overwrite_trigger_run() {
         i.bits.set_overwrite_trigger_run(true);
         flags |= UpdateTriggerFlags::OVERWRITE;
-        op.new = raw_s(&mut deleted);
+        op.new = as_s(&mut deleted);
         op.new_buf_u64s = 0;
     } else if !i.bits.insert_trigger_run() {
         i.bits.set_insert_trigger_run(true);
         flags |= UpdateTriggerFlags::INSERT;
-        op.old = raw_s_c(&deleted);
+        op.old = as_sc(&deleted);
         trigger = new_ops.trigger;
     }
-    op.flags = raw_flags(flags);
+    op.flags = flags;
 
-    unsafe { run_trigger(t, trigger, &mut op) }?;
+    run_trigger(t, trigger, &mut op)?;
     if op.btree.has_snapshots() {
-        crate::alloc::buckets::trigger_snapshot_nr_keys(t, &unsafe { TriggerOp::from_raw(&mut op) })?;
+        crate::alloc::buckets::trigger_snapshot_nr_keys(t, &op)?;
     }
     Ok(())
 }
