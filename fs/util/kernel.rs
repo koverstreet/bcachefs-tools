@@ -250,6 +250,11 @@ pub fn nsecs_to_jiffies(ns: u64) -> core::ffi::c_ulong {
     unsafe { c::nsecs_to_jiffies(ns) as core::ffi::c_ulong }
 }
 
+/// Jiffies in @ms milliseconds, rounded up: msecs_to_jiffies().
+pub const fn msecs_to_jiffies(ms: core::ffi::c_ulong) -> core::ffi::c_ulong {
+    (ms * HZ).div_ceil(1000)
+}
+
 /// The jiffies count. In the kernel it's a variable the timer interrupt
 /// writes, read as READ_ONCE() would; in userspace C's macro computes it from
 /// sched_clock(), which is local_clock() there.

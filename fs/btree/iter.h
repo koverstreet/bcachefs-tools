@@ -387,30 +387,10 @@ static inline int bch2_trans_relock(struct btree_trans *trans)
 
 int bch2_trans_relock(struct btree_trans *);
 
-/*
- * Returns the timeout to use for the next blocking wait done by this trans.
- *
- * The trans takes an SRCU read lock on bch2_trans_begin(); holding it across
- * a long blocking wait stalls memory reclaim. So if SRCU has been held for
- * longer than HZ when we're about to wait, drop it now (via unlock_long) and
- * let the caller wait the full timeout SRCU-free.
- *
- * Otherwise cap the returned timeout at the unconsumed portion of HZ — the
- * caller's wait will time out before SRCU has been held too long, and on
- * the next call (after the caller's natural retry) we'll be in the
- * elapsed >= HZ branch and drop SRCU here.
- */
+/* bch2_trans_srcu_wait_budget(), for a wait that may have no trans */
 static inline long bch2_trans_short_wait_budget(struct btree_trans *trans, long timeout)
 {
-	if (!trans || !trans->srcu_held)
-		return timeout;
-
-	long elapsed = jiffies - trans->srcu_lock_time;
-	if (elapsed >= HZ) {
-		bch2_trans_unlock_long(trans);
-		return timeout;
-	}
-	return min(HZ - elapsed, timeout);
+	return trans ? bch2_trans_srcu_wait_budget(trans, timeout) : timeout;
 }
 
 /*

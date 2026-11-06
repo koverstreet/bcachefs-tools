@@ -183,7 +183,6 @@ static inline unsigned long btree_iter_ip_allocated(struct btree_iter *iter)
 }
 
 static btree_path_idx_t btree_path_alloc(struct btree_trans *, btree_path_idx_t);
-static void bch2_trans_srcu_lock(struct btree_trans *);
 
 static inline int __btree_path_cmp(const struct btree_path *l,
 				   enum btree_id	r_btree_id,
@@ -3901,15 +3900,6 @@ void *__bch2_trans_kmalloc(struct btree_trans *trans, size_t size, unsigned long
 	return p;
 }
 
-static void bch2_trans_srcu_lock(struct btree_trans *trans)
-{
-	if (!trans->srcu_held) {
-		trans->srcu_idx = srcu_read_lock(&trans->c->btree.trans.barrier);
-		trans->srcu_lock_time	= jiffies;
-		trans->srcu_held = true;
-	}
-}
-
 noinline __cold
 static void __bch2_trans_begin_trace(struct btree_trans *trans)
 {
@@ -4022,13 +4012,7 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 		__bch2_time_stats_update(&btree_trans_stats(trans)->duration,
 					 trans->last_begin_time, now);
 
-	if (unlikely(trans->srcu_held &&
-		     time_after(jiffies, trans->srcu_lock_time + msecs_to_jiffies(10))))
-		bch2_trans_unlock_long(trans);
-
-	/* Fresh attempt — re-arm the srcu-held-too-long warning (cleared after
-	 * the unlock_long above has had its chance to fire). */
-	trans->srcu_io_submitted = false;
+	bch2_trans_srcu_begin(trans);
 
 	if (!trans->restarted)
 		trans->locking_wait.trans_start_time = now;
@@ -4174,9 +4158,7 @@ struct btree_trans *__bch2_trans_get(struct bch_fs *c, unsigned fn_idx)
 		trans->nr_paths_max = s->nr_max_paths;
 	}
 
-	trans->srcu_idx		= srcu_read_lock(&c->btree.trans.barrier);
-	trans->srcu_lock_time	= jiffies;
-	trans->srcu_held	= true;
+	bch2_trans_srcu_lock(trans);
 	trans_set_locked(trans, false);
 
 	u64 now = local_clock();

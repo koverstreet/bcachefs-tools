@@ -23,14 +23,16 @@ use crate::debug::trace::{events, TraceEvent};
 use crate::sb::counters::bch2_sb_recent_counters_to_text;
 use crate::util::backtrace::{prt_current_backtrace, prt_symbol};
 use crate::util::ffi::Opaque;
-use crate::util::kernel::{jiffies, race_fault, time_after, HZ, READ};
+use crate::util::futex::EventCount;
+use crate::util::kernel::{jiffies, msecs_to_jiffies, race_fault, time_after, HZ, READ};
 use crate::util::percpu::{bch2_migrate_disable, bch2_migrate_enable, bch2_raw_smp_processor_id};
-use crate::util::rcu::rust_srcu_read_unlock;
+use crate::util::rcu::{rust_srcu_read_lock, rust_srcu_read_unlock};
+use crate::util::sleep::Sleep;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::util::{kernel::local_clock, time_stats::TimeStats};
 use crate::util::Printbuf;
 use core::sync::atomic::Ordering::Relaxed;
-use core::ffi::{c_int, c_uint, c_ulong};
+use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::{self, NonNull};
 use cstruct_macros::{c_enum, c_export, c_extern};
 
@@ -970,6 +972,107 @@ impl BtreeTrans<'_> {
         self.set_srcu_held(false);
     }
 
+    /// The SRCU read lock btree nodes are freed under, if it isn't held.
+    pub(crate) fn srcu_lock(&self) {
+        if !self.srcu_held() {
+            let barrier = ptr::from_ref(&self.fs().btree.trans.barrier).cast_mut();
+            self.srcu_idx.set(unsafe { rust_srcu_read_lock(barrier) });
+            self.srcu_lock_time.set(jiffies());
+            self.set_srcu_held(true);
+        }
+    }
+
+    /// An attempt's start, for the SRCU lock: dropped if it's been held for
+    /// 10ms. @ret_ip is unlock_long's, C's _RET_IP_.
+    fn srcu_begin(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) {
+        if self.srcu_held() && time_after(jiffies(), self.srcu_lock_time.get().wrapping_add(msecs_to_jiffies(10))) {
+            self.unlock_long_from(paths, ret_ip);
+        }
+
+        /* Fresh attempt — re-arm the srcu-held-too-long warning (cleared after
+         * the unlock_long above has had its chance to fire). */
+        self.set_srcu_io_submitted(false);
+    }
+
+    /*
+     * Returns the timeout to use for the next blocking wait done by this trans.
+     *
+     * The trans takes an SRCU read lock on bch2_trans_begin(); holding it across
+     * a long blocking wait stalls memory reclaim. So if SRCU has been held for
+     * longer than HZ when we're about to wait, drop it now (via unlock_long) and
+     * let the caller wait the full timeout SRCU-free.
+     *
+     * Otherwise cap the returned timeout at the unconsumed portion of HZ — the
+     * caller's wait will time out before SRCU has been held too long, and on
+     * the next call (after the caller's natural retry) we'll be in the
+     * elapsed >= HZ branch and drop SRCU here.
+     */
+    /// None for no cap: SRCU isn't held, or it's just been dropped.
+    fn srcu_wait_budget(&self, paths: &mut Paths<'_>) -> Option<c_ulong> {
+        if !self.srcu_held() {
+            return None;
+        }
+
+        let elapsed = jiffies().wrapping_sub(self.srcu_lock_time.get());
+        if elapsed >= HZ {
+            self.unlock_long_from(paths, crate::ret_ip!());
+            return None;
+        }
+        Some(HZ - elapsed)
+    }
+
+    /// Waits on @ev until @cond. For up to a second it keeps the SRCU lock
+    /// btree nodes are freed under, so a short wait can relock after; past
+    /// that it unlock_long()s, so a long wait doesn't hold up freeing. The
+    /// caller must have dropped its btree locks. @cond is called once per
+    /// wake, so it may be a trylock.
+    pub fn wait_until<T>(&self, ev: &EventCount, mut cond: impl FnMut() -> Option<T>) -> T {
+        loop {
+            let seen = ev.snapshot();
+            if let Some(v) = cond() {
+                return v;
+            }
+            match self.srcu_wait_budget(&mut self.paths()) {
+                // timing out is only the budget running out
+                Some(left) => { let _ = ev.wait(seen, Sleep::UNINTERRUPTIBLE.timeout(left)); }
+                None       => { let Ok(()) = ev.wait(seen, Sleep::UNINTERRUPTIBLE); }
+            }
+        }
+    }
+
+    /// Wait for @cl's refs - the waitlists it's on - to be put, for up to
+    /// @timeout jiffies, c_long::MAX for no limit: false if they weren't.
+    /// Under SRCU in short waits, then without it: trans_closure_sync_timeout().
+    pub fn closure_sync_timeout(&self, cl: &Opaque<c::closure>, timeout: c_long) -> bool {
+        let mut remaining = timeout;
+        while remaining > 0 {
+            // SAFETY: a live closure, its count atomic
+            if unsafe { c::closure_nr_remaining(cl.as_ptr()) } <= 1 {
+                return true;
+            }
+
+            let start = jiffies();
+            let wait = self.srcu_wait_budget(&mut self.paths()).map_or(remaining, |left| (left as c_long).min(remaining));
+            // SAFETY: as above; the waitlist's wake puts its ref
+            if unsafe { c::closure_sync_timeout(cl.as_ptr(), wait as c_ulong) } == 0 {
+                return true;
+            }
+            remaining -= jiffies().wrapping_sub(start) as c_long;
+        }
+        false
+    }
+
+    /// @l locked, waited for under SRCU as wait_until() waits. The caller
+    /// must have dropped its btree locks.
+    pub fn lock_timed<'l, R: RawTimedLock, G, P>(&self, l: &'l Locked<R, G, P>) -> ExclusiveGuard<'l, R, G, P> {
+        loop {
+            match self.srcu_wait_budget(&mut self.paths()) {
+                Some(left) => if let Some(g) = l.try_lock_timeout(left) { return g },
+                None       => return l.lock(),
+            }
+        }
+    }
+
     pub(crate) fn unlock_write(&self, paths: &mut Paths<'_>) {
         for i in self.path_idxs() {
             for l in 0..c::BTREE_MAX_DEPTH as usize {
@@ -1184,6 +1287,23 @@ pub fn bch2_trans_unlock(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Path
 #[c_export]
 pub fn bch2_trans_unlock_long(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) {
     trans.unlock_long_from(paths, crate::ret_ip!())
+}
+
+#[c_export]
+pub fn bch2_trans_srcu_lock(trans: &BtreeTrans<'_>) {
+    trans.srcu_lock()
+}
+
+#[c_export]
+#[inline(always)]
+pub fn bch2_trans_srcu_begin(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) {
+    trans.srcu_begin(paths, crate::ret_ip!())
+}
+
+#[c_export]
+pub fn bch2_trans_srcu_wait_budget(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
+                                   timeout: c_long) -> c_long {
+    trans.srcu_wait_budget(paths).map_or(timeout, |left| (left as c_long).min(timeout))
 }
 
 #[c_export]

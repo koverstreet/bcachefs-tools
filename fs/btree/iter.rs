@@ -14,12 +14,9 @@ use crate::errcode::{
     ret_to_result_void as ret_to_result,
 };
 use crate::fs::Fs;
-use crate::locking::{ExclusiveGuard, Locked, MemallocFlags, RawTimedLock};
+use crate::locking::{Locked, MemallocFlags};
 use crate::util::closure::ClosureRef;
 use crate::util::percpu::Counters;
-use crate::util::futex::EventCount;
-use crate::util::kernel::{jiffies, nsecs_to_jiffies, NSEC_PER_SEC};
-use crate::util::sleep::Sleep;
 use crate::util::refcount::TryRefcount;
 use crate::util::ffi::{Opaque, c_char};
 use crate::util::log::CFnName;
@@ -28,7 +25,7 @@ use crate::util::{Printbuf, ToText};
 use crate::SPOS_MAX;
 use bitflags::bitflags;
 use core::cell::Cell;
-use core::ffi::{c_long, c_ulong, c_int, c_uint, c_void};
+use core::ffi::{c_ulong, c_int, c_uint, c_void};
 use core::fmt;
 use core::marker::PhantomData;
 use core::mem::{size_of, MaybeUninit};
@@ -365,74 +362,6 @@ impl<'f> BtreeTrans<'f> {
     pub fn assert_pos_locked(&self, btree: Btree, pos: Bpos) {
         if cfg!(CONFIG_BCACHEFS_DEBUG) && crate::debug::params::debug_check_iterators() {
             unsafe { c::__bch2_assert_pos_locked(self.raw(), btree, pos) }
-        }
-    }
-
-    /// Waits on @ev until @cond. For up to a second it keeps the SRCU lock
-    /// btree nodes are freed under, so a short wait can relock after; past
-    /// that it unlock_long()s, so a long wait doesn't hold up freeing. The
-    /// caller must have dropped its btree locks. @cond is called once per
-    /// wake, so it may be a trylock.
-    pub fn wait_until<T>(&self, ev: &EventCount, mut cond: impl FnMut() -> Option<T>) -> T {
-        loop {
-            let seen = ev.snapshot();
-            if let Some(v) = cond() {
-                return v;
-            }
-            match self.srcu_wait_budget() {
-                // timing out is only the budget running out
-                Some(left) => { let _ = ev.wait(seen, Sleep::UNINTERRUPTIBLE.timeout(left)); }
-                None       => { let Ok(()) = ev.wait(seen, Sleep::UNINTERRUPTIBLE); }
-            }
-        }
-    }
-
-    /// What's left of the second the SRCU lock may be held for, or None if
-    /// it isn't held - or if the second is used up, and it's dropped now.
-    fn srcu_wait_budget(&self) -> Option<core::ffi::c_ulong> {
-        let (held, since) = (self.srcu_held(), self.srcu_lock_time.get());
-        if !held {
-            return None;
-        }
-        let second = nsecs_to_jiffies(NSEC_PER_SEC);
-        let elapsed = jiffies().wrapping_sub(since);
-        if elapsed >= second {
-            self.unlock_long();
-            return None;
-        }
-        Some(second - elapsed)
-    }
-
-    /// Wait for @cl's refs - the waitlists it's on - to be put, for up to
-    /// @timeout jiffies, c_long::MAX for no limit: false if they weren't.
-    /// Under SRCU in short waits, then without it: trans_closure_sync_timeout().
-    pub fn closure_sync_timeout(&self, cl: &Opaque<c::closure>, timeout: c_long) -> bool {
-        let mut remaining = timeout;
-        while remaining > 0 {
-            // SAFETY: a live closure, its count atomic
-            if unsafe { c::closure_nr_remaining(cl.as_ptr()) } <= 1 {
-                return true;
-            }
-
-            let start = jiffies();
-            let wait = self.srcu_wait_budget().map_or(remaining, |left| (left as c_long).min(remaining));
-            // SAFETY: as above; the waitlist's wake puts its ref
-            if unsafe { c::closure_sync_timeout(cl.as_ptr(), wait as c_ulong) } == 0 {
-                return true;
-            }
-            remaining -= jiffies().wrapping_sub(start) as c_long;
-        }
-        false
-    }
-
-    /// @l locked, waited for under SRCU as wait_until() waits. The caller
-    /// must have dropped its btree locks.
-    pub fn lock_timed<'l, R: RawTimedLock, G, P>(&self, l: &'l Locked<R, G, P>) -> ExclusiveGuard<'l, R, G, P> {
-        loop {
-            match self.srcu_wait_budget() {
-                Some(left) => if let Some(g) = l.try_lock_timeout(left) { return g },
-                None       => return l.lock(),
-            }
         }
     }
 
