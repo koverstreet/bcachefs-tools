@@ -4,13 +4,17 @@
 //! "Cycle detection" in locking.rs.
 
 use crate::btree::iter::BtreeTrans;
-use crate::btree::locking::btree_node_locked_type;
+use crate::btree::locking::{btree_node_locked_type, btree_node_pos};
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{table_allocated, table_header, BtreePath, PathNode};
+use crate::btree::trans::{bch2_trans_restart_foreign_task, foreign_bits};
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
+use crate::format::Btree;
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
+use crate::locking::six::six_lock_counts;
+use crate::prt;
 use crate::debug::trace::events;
 use crate::util::alloc::AllocError;
 use crate::util::backtrace::prt_task_backtrace;
@@ -28,11 +32,6 @@ use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
 use core::mem::offset_of;
 use core::ptr::{self, null_mut};
 use core::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering::{Acquire, Relaxed, Release, SeqCst}};
-use cstruct_macros::c_extern;
-
-c_extern! {
-    pub fn bch2_trans_restart_foreign_task(trans: *mut BtreeTrans<'_>, err: c_int, ip: c_ulong) -> c_int;
-}
 
 /// A transaction the walk reaches, of whichever thread: it's read as C reads
 /// it, never through a reference - another thread's is changing under us.
@@ -95,7 +94,7 @@ impl Trans {
 
     fn restart_foreign_task(self, err: bch_errcode) -> BchError {
         let ip = Self::restart_foreign_task as *const () as c_ulong;
-        BchError::from_raw(unsafe { bch2_trans_restart_foreign_task(self.0, err.0 as c_int, ip) })
+        BchError::from_raw(bch2_trans_restart_foreign_task(self.own(), err.0 as c_int, ip))
     }
 
     /// container_of(@w, struct btree_trans, locking_wait): every waiter on a
@@ -116,6 +115,95 @@ fn paths_allocated<'a>(paths: *mut BtreePath) -> (&'a AtomicBitmap, usize) {
     let nr = unsafe { (*table_header(paths)).nr_paths } as usize;
     let words = table_allocated(paths, nr).cast::<AtomicUsize>();
     (AtomicBitmap::from_words(unsafe { core::slice::from_raw_parts(words, bits_to_longs(nr)) }), nr)
+}
+
+fn bkey_cached_common_to_text(out: &mut Printbuf, b: &c::btree_bkey_cached_common) {
+    let c = six_lock_counts(b.lock.six());
+
+    let pid = {
+        let _rcu = rcu::read_lock();
+        let owner = b.lock.six().owner.load(Relaxed);
+        if owner.is_null() { 0 } else { unsafe { bch2_task_pid(owner) } }
+    };
+
+    prt!(out, "\t{:p} {} {} l={}:{}", b, if b.cached { 'c' } else { 'b' },
+         Btree(b.btree_id.into()), b.level, btree_node_pos(b));
+    prt!(out, "\t locks {}:{}:{} held by pid {}", c.n[0], c.n[1], c.n[2], pid);
+}
+
+fn btree_lock_type_char(lock_type: i32) -> char {
+    match lock_type {
+        0 => 'r',
+        1 => 'i',
+        2 => 'w',
+        _ => '?',
+    }
+}
+
+/// # Safety
+/// @trans is live - held by a ref on its closure, or reached under RCU - and
+/// any thread's.
+#[cold]
+pub(crate) unsafe fn bch2_btree_trans_to_text(out: &mut Printbuf, trans: *mut BtreeTrans<'static>) {
+    let trans = Trans(trans);
+    let task = trans.task();
+
+    /* before rcu_read_lock(): */
+    out.make_room(4096);
+
+    if out.nr_tabstops() == 0 {
+        out.tabstop_push(16);
+        out.tabstop_push(32);
+    }
+
+    prt!(out, "{} {}\n", if task.is_null() { 0 } else { unsafe { bch2_task_pid(task) } }, trans.fn_name());
+
+    if foreign_bits(trans.0).journal_replay_not_finished() {
+        prt!(out, "has journal_keys ref\n");
+    }
+
+    /* trans->paths is rcu protected vs. freeing */
+    let _rcu = rcu::read_lock();
+    let _noreclaim = MemallocFlags::noreclaim();
+
+    let paths = trans.paths();
+    if paths.is_null() {
+        return;
+    }
+
+    let (allocated, nr) = paths_allocated(paths);
+    let mut idx = 1;
+    while let Some(i) = allocated.next(idx, nr) {
+        idx = i + 1;
+
+        let path = unsafe { ptr::read_volatile(paths.add(i)) };
+        if path.nodes_locked == 0 {
+            continue;
+        }
+
+        prt!(out, "  path {} {} {} l={}:{}\n", i, if path.cached() { 'c' } else { 'b' },
+             path.btree_id(), path.level(), path.pos);
+
+        for l in 0..c::BTREE_MAX_DEPTH as usize {
+            let lock_type = btree_node_locked_type::of(path.nodes_locked, l);
+
+            if lock_type != btree_node_locked_type::BTREE_NODE_UNLOCKED {
+                if let Ok(Some(b)) = path.l[l].b.get() {
+                    prt!(out, "    {} l={} ", btree_lock_type_char(lock_type as i32), l);
+                    bkey_cached_common_to_text(out, unsafe { b.as_ref() });
+                    prt!(out, "\n");
+                }
+            }
+        }
+    }
+
+    let b = trans.locking();
+    if !b.is_null() {
+        prt!(out, "  blocked on:\n");
+        prt!(out, "    {}", btree_lock_type_char(trans.lock_want() as i32));
+        bkey_cached_common_to_text(out, unsafe { &*b });
+        prt!(out, "\n");
+    }
 }
 
 fn lock_type_conflicts(t1: btree_node_locked_type, t2: c::six_lock_type) -> bool {
@@ -205,7 +293,7 @@ impl LockGraph {
                 continue;
             }
 
-            unsafe { c::bch2_btree_trans_to_text(out.as_raw(), i.trans) };
+            unsafe { bch2_btree_trans_to_text(out, i.trans) };
             let _ = prt_task_backtrace(out, task, if n == 0 { 5 } else { 1 });
         }
     }
@@ -328,7 +416,7 @@ impl LockGraph {
         write!(out, "cycle of nofail locks\n");
 
         for i in self.frames() {
-            unsafe { c::bch2_btree_trans_to_text(out.as_raw(), i.trans) };
+            unsafe { bch2_btree_trans_to_text(&mut out, i.trans) };
 
             write!(out, "backtrace:\n");
             {

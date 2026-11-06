@@ -151,7 +151,7 @@ impl TransAttempt<'_, '_> {
     #[cold]
     pub fn updates_to_text(&self, out: &mut Printbuf) {
         // SAFETY: the transaction's, read
-        unsafe { c::bch2_trans_updates_to_text(out.as_raw(), self.raw()) }
+        crate::btree::trans::bch2_trans_updates_to_text(out, self.trans())
     }
 
     fn subbuf_cell(&self, which: Subbuf) -> &Cell<c::btree_trans_subbuf> {

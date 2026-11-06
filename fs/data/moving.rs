@@ -23,7 +23,7 @@
 
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{BtreeIter, BtreeTrans};
-use crate::btree::trans::TransFnName;
+use crate::btree::trans::{__bch2_trans_get, bch2_trans_begin, bch2_trans_put, TransFnName};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::copygc::bch2_copygc_wait_not_running;
@@ -232,7 +232,7 @@ impl<'a> MovingCtxt<'a> {
     {
         static FN: TransFnName = TransFnName::new();
         let init = pin_init!(MovingContext {
-            trans:          unsafe { c::__bch2_trans_get(fs.as_ptr(), FN.idx(function_name!())) },
+            trans:          __bch2_trans_get(fs, FN.idx(function_name!())).cast(),
             stats:          Cell::new(NonNull::from(stats)),
             wp,
             wait_on_copygc,
@@ -491,8 +491,8 @@ impl Drop for MovingCtxt<'_> {
         // can be told to exit before it's retried: so begin first
         unsafe {
             let trans = self.ctxt.as_ref().trans;
-            c::bch2_trans_begin(trans);
-            c::bch2_trans_put(trans);
+            bch2_trans_begin(&*trans);
+            bch2_trans_put(trans);
             free_pinned(self.ctxt.as_ptr());
         }
     }

@@ -12,7 +12,6 @@
 
 #include "btree/cache.h"
 #include "btree/iter.h"
-#include "btree/lock_graph_gen.h"
 #include "btree/locking_gen.h"
 #include "locking/six.h"
 

@@ -125,6 +125,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "mnt_want_write_file", "mnt_drop_write_file",
     "__genradix_ptr", "__genradix_ptr_alloc", "__genradix_iter_peek", "__genradix_iter_peek_prev", "__genradix_free",
     "closure_get", "closure_get_not_zero", "closure_put", "closure_init", "closure_init_stack", "closure_sync", "closure_call",
+    "closure_init_stack_release", "bch2_closure_return_sync",
     "closure_sync_timeout",
     "bch2_closure_wait", "closure_wake_up", "closure_nr_remaining",
     "set_closure_fn", "bch2_closure_sub", "closure_debug_destroy",

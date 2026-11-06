@@ -20,6 +20,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter};
 use crate::btree::BtreeIter;
 use crate::btree::node::BtreeNode;
+use crate::btree::trans::TRANSACTION_FNS;
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -264,7 +265,7 @@ impl DebugFile for JournalPins {
     }
 }
 
-/// By bch2_btree_transaction_fns[] index; 0, "(unknown)", is skipped.
+/// By TRANSACTION_FNS[] index; 0, "(unknown)", is skipped.
 struct TransactionStats {
     idx: usize,
 }
@@ -283,9 +284,9 @@ impl DebugFile for TransactionStats {
 
     fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
         out.print_each(|out| {
-            // SAFETY: a name, once registered, isn't changed
-            let fns = unsafe { &*(&raw const c::bch2_btree_transaction_fns) };
-            let Some(&name) = fns.get(self.idx).filter(|name| !name.is_null()) else {
+            let Some(name) = TRANSACTION_FNS.get(self.idx)
+                .map(|name| name.load(Ordering::Relaxed))
+                .filter(|name| !name.is_null()) else {
                 return Ok(false);
             };
             // SAFETY: registered names are __func__s, which live forever
@@ -298,10 +299,7 @@ impl DebugFile for TransactionStats {
 
             prt!(out, "Max mem used: {}\n", s.max_mem);
             #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-            unsafe {
-                c::bch2_trans_kmalloc_trace_to_text(out.indent(2).as_raw(),
-                                                    (&raw const s.trans_kmalloc_trace).cast_mut());
-            }
+            crate::btree::trans::bch2_trans_kmalloc_trace_to_text(&mut out.indent(2), &s.trans_kmalloc_trace);
 
             prt!(out, "Transaction duration:\n");
             prt!(out.indent(2), "{}", s.duration);

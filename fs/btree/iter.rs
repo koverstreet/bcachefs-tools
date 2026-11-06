@@ -13,15 +13,15 @@ use crate::errcode::{
     errptr_to_result,
     ret_to_result_void as ret_to_result,
 };
-use crate::btree::trans::TransGuard;
+use crate::btree::trans::{trans_kmalloc_grow, TransGuard};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
-use crate::util::ffi::{Opaque, c_char};
+use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use crate::SPOS_MAX;
 use bitflags::bitflags;
 use core::cell::Cell;
-use core::ffi::{c_ulong, c_int, c_uint, c_void};
+use core::ffi::{c_ulong, c_int, c_uint};
 use core::fmt;
 use core::marker::PhantomData;
 use core::mem::{size_of, MaybeUninit};
@@ -56,22 +56,12 @@ pub struct trans_may_drop_updates {
 c_default!(trans_may_drop_updates);
 
 c_extern! {
-    pub fn bch2_btree_trans_to_text(out: *mut Printbuf, trans: *mut BtreeTrans<'_>);
-    pub fn bch2_trans_updates_to_text(out: *mut Printbuf, trans: *mut BtreeTrans<'_>);
-    #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-    pub fn bch2_trans_kmalloc_trace_to_text(out: *mut Printbuf,
-                                            trace: *mut c::darray_trans_kmalloc_trace);
     pub fn bch2_path_put(trans: *mut BtreeTrans<'_>, path_idx: PathIdx, intent: bool);
     pub fn bch2_btree_path_peek_slot(path: *mut BtreePath, u: *mut c::bkey) -> c::bkey_s_c;
     pub fn bch2_btree_increase_depth(trans: *mut BtreeTrans<'_>, path: PathIdx, flags: c_uint) -> c_int;
     pub fn bch2_btree_iter_peek_root(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter, btree: Btree,
                                      level: c_uint) -> c::bkey_s_c;
-    pub fn __bch2_trans_kmalloc(trans: *mut BtreeTrans<'_>, size: usize,
-                                ip: c_ulong) -> *mut c_void;
     pub fn __bch2_assert_pos_locked(trans: *mut BtreeTrans<'_>, id: Btree, pos: Bpos);
-    pub fn bch2_trans_restart_error(trans: *mut BtreeTrans<'_>, restart_count: u32) -> !;
-    pub fn bch2_trans_unlocked_or_in_restart_error(trans: *mut BtreeTrans<'_>) -> !;
-    pub fn bch2_trans_restart_ip(trans: *mut BtreeTrans<'_>, err: c_int, ip: c_ulong) -> c_int;
     #[must_use]
     pub fn bch2_btree_iter_traverse(iter: *mut c::btree_iter) -> c_int;
     #[must_use]
@@ -95,12 +85,6 @@ c_extern! {
     pub fn __bch2_trans_node_iter_init(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter,
                                        btree_id: Btree, pos: Bpos, locks_want: c_uint,
                                        depth: c_uint, flags: c::btree_iter_update_trigger_flags);
-    pub fn bch2_trans_begin(trans: *mut BtreeTrans<'_>) -> u32;
-    pub fn __bch2_trans_get(c: *mut Fs, fn_idx: c_uint) -> *mut BtreeTrans<'static>;
-    pub fn bch2_trans_put(trans: *mut BtreeTrans<'_>);
-    pub fn bch2_current_has_btree_trans(c: *mut Fs) -> bool;
-    pub static mut bch2_btree_transaction_fns: [*const c_char; c::BCH_TRANSACTIONS_NR as usize];
-    pub fn bch2_trans_get_fn_idx(fn_: *const c_char) -> c_uint;
 }
 
 pub struct TransAttempt<'a, 't> {
@@ -506,29 +490,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// Whether anything is queued for the next commit: key updates, journal
     /// entries or accounting.
     pub fn has_updates(&self) -> bool {
-        let t = self.trans;
-        t.nr_updates.get() != 0 ||
-            t.journal_entries.get().u64s != 0 ||
-            t.accounting.get().u64s != 0
-    }
-
-    /// Drop everything queued for the next commit: as C's
-    /// bch2_trans_reset_updates(), which every commit and begin runs.
-    fn reset_updates(&self) {
-        let t = self.trans;
-        for i in 0..t.nr_updates.get() as usize {
-            unsafe { c::bch2_path_put(t.raw(), (*t.updates.get().add(i)).path, true) };
-        }
-
-        let emptied = |b: c::btree_trans_subbuf| c::btree_trans_subbuf { u64s: 0, size: 0, ..b };
-        t.nr_updates.set(0);
-        t.journal_entries.set(emptied(t.journal_entries.get()));
-        t.accounting.set(emptied(t.accounting.get()));
-        t.hooks.set(core::ptr::null_mut());
-        t.extra_disk_res.set(0);
-        t.extra_disk_res_replicas.set(0);
-        t.extra_journal_u64s.set(0);
-        t.set_has_interior_updates(false);
+        self.trans.has_updates()
     }
 
     // ── The attempt's operations ─────────────────────────────────────────
@@ -799,8 +761,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         let top = t.mem_top.get() as usize;
         if top + size > t.mem_bytes.get() as usize {
-            let p = NonNull::new(unsafe { c::__bch2_trans_kmalloc(t.raw(), size, 0) }).expect("memory, or an error");
-            return Ok(errptr_to_result(p)?.as_ptr().cast());
+            return Ok(trans_kmalloc_grow(t, size, crate::ret_ip!())?.cast());
         }
 
         let p = unsafe { (t.mem.get() as *mut u8).add(top) };
@@ -1790,7 +1751,7 @@ where
         // __commit_do().
         if let Err(e) = f(t) {
             if !is_restart(&e) {
-                t.reset_updates();
+                t.trans().reset_updates();
             }
             return Err(e);
         }

@@ -14,7 +14,6 @@
 #include "closure.h"
 #include "sb/counters.h"
 
-void bch2_trans_updates_to_text(struct printbuf *, struct btree_trans *);
 void bch2_btree_path_to_text_short(struct printbuf *, struct btree_trans *,
 				   btree_path_idx_t, struct btree_path *);
 void bch2_btree_path_to_text(struct printbuf *, struct btree_trans *,
@@ -246,6 +245,7 @@ static inline struct btree_path *prev_btree_path(struct btree_trans *trans, stru
 	     _iter.sorted_idx++)
 
 #include "btree/iter_gen.h"
+#include "btree/trans_gen.h"
 
 #define trans_for_each_path_inorder(_trans, _path, _iter)		\
 	for (_iter = (struct trans_for_each_path_inorder_iter) { 0 };	\
@@ -498,8 +498,6 @@ static inline void bch2_trans_verify_not_restarted(struct btree_trans *trans,
 		bch2_trans_restart_error(trans, restart_count);
 }
 
-void __noreturn bch2_trans_unlocked_or_in_restart_error(struct btree_trans *);
-
 static inline void bch2_trans_verify_not_unlocked_or_in_restart(struct btree_trans *trans)
 {
 #ifdef CONFIG_BCACHEFS_DEBUG
@@ -507,8 +505,6 @@ static inline void bch2_trans_verify_not_unlocked_or_in_restart(struct btree_tra
 		bch2_trans_unlocked_or_in_restart_error(trans);
 #endif
 }
-
-int bch2_trans_restart_foreign_task(struct btree_trans *, int, unsigned long);
 
 __always_inline
 static int btree_trans_restart(struct btree_trans *trans, int err)
@@ -1324,8 +1320,6 @@ struct bkey_s_c bch2_btree_iter_peek_and_restart_outlined(struct btree_iter *);
 	_p;								\
 })
 
-extern const char *bch2_btree_transaction_fns[BCH_TRANSACTIONS_NR];
-
 #define bch2_trans_get(_c)						\
 ({									\
 	static unsigned trans_fn_idx;					\
@@ -1361,8 +1355,6 @@ static inline void class_btree_trans_destructor(struct btree_trans **p)
 	CLASS(btree_trans, trans)(_c);					\
 	lockrestart_do(trans, _do);					\
 })
-
-void bch2_btree_trans_to_text(struct printbuf *, struct btree_trans *);
 
 void bch2_fs_btree_iter_exit(struct bch_fs *);
 void bch2_fs_btree_iter_init_early(struct bch_fs *);

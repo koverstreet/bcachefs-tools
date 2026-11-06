@@ -233,7 +233,7 @@ c_extern! {
     pub fn bch2_btree_cache_cannibalize_unlock(trans: *mut BtreeTrans<'_>);
 }
 
-fn btree_node_pos(b: &c::btree_bkey_cached_common) -> Bpos {
+pub(crate) fn btree_node_pos(b: &c::btree_bkey_cached_common) -> Bpos {
     match BtreeNode::from_common(b) {
         Some(b) => unsafe { b.contents() }.key.k.p,
         None    => c::bkey_cached::from_common(b).expect("a path node, neither btree node nor key cache entry").key.pos,

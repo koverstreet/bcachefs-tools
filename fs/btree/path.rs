@@ -10,6 +10,10 @@ use crate::btree::locking::btree_node_locked_type::{self, *};
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::c;
 use crate::cstructs::c as cs;
+#[cfg(CONFIG_BCACHEFS_DEBUG)]
+use crate::debug::trace::events;
+#[cfg(CONFIG_BCACHEFS_DEBUG)]
+use crate::prt;
 use crate::errcode::{bch_errcode, err_ptr, errptr_or_null, BchError};
 use crate::format::{Bpos, Btree};
 use crate::types::{bits_to_longs, c_default, Lent};
@@ -272,6 +276,50 @@ impl Paths<'_> {
             let (l, r) = self.split_at_mut(a);
             (&r[0], &mut l[b])
         }
+    }
+
+    fn check_live(&self, idx: PathIdx) {
+        #[cfg(CONFIG_BCACHEFS_DEBUG)]
+        {
+            /*
+             * Safe to read: the retired array is RCU-freed, so it's still mapped -
+             * that readability is exactly what makes this bug class silent.
+             */
+            crate::warn_once!(self[idx].l[0].b == btree_path_poison(), no_fs,
+                              "{}: btree path {:p} outlived trans->paths ({:p})",
+                              self.trans.fn_name(), &self[idx], self.trans.paths.get());
+        }
+        #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
+        let _ = idx;
+    }
+
+    /// A ref on path @idx put - an intent ref, with @intent: whether it was
+    /// the last.
+    pub(crate) fn put_ll(&mut self, idx: PathIdx, intent: bool) -> bool {
+        self.check_live(idx);
+
+        let t = self.trans;
+        ebug_assert!(idx < t.nr_paths.get());
+        ebug_assert!(t.path_allocated(idx));
+        ebug_assert!(self[idx].ref_ != 0);
+        ebug_assert!(self[idx].intent_ref != 0 || !intent);
+        #[cfg(CONFIG_BCACHEFS_DEBUG)]
+        t.fs().event_trace(events::btree_path_put_ll, |out| {
+            prt!(out, "{}: path {:3} ref {} btree {} pos {}",
+                 t.fn_name(), idx, self[idx].ref_, self[idx].btree_id(), self[idx].pos);
+        });
+
+        let path = &mut self[idx];
+        path.intent_ref -= u8::from(intent);
+        path.ref_ -= 1;
+        if path.ref_ != 0 {
+            return false;
+        }
+
+        crate::warn_once!(path.intent_ref != 0, no_fs,
+                          "path {} released with intent_ref {} - lock will never be dropped",
+                          idx, path.intent_ref);
+        true
     }
 }
 

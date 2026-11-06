@@ -836,6 +836,11 @@ impl BtreeTrans<'_> {
     pub fn set_notrace_relock_fail(&self) {
         self.bits.set(self.bits.get().with_notrace_relock_fail(true))
     }
+
+    /// For the next attempt: bch2_trans_begin()'s, after a restart.
+    pub fn clear_notrace_relock_fail(&self) {
+        self.bits.set(self.bits.get().with_notrace_relock_fail(false))
+    }
 }
 
 #[repr(C)]
