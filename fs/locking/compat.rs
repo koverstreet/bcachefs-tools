@@ -4,10 +4,10 @@
 //! C does: a C struct's lock borrowed as a Locked, a Locked whose caller already
 //! holds it, and a Locked C carries held from one Rust call to another.
 
-use super::{ExclusiveGuard, Locked, RawLock, RawRwLock, SharedGuard};
+use super::{ExclusiveGuard, Locked, RawLock, RawLockBase, RawRwLock, SharedGuard};
 use core::mem::{align_of, size_of};
 
-impl<R: RawLock> Locked<R> {
+impl<R: RawLockBase> Locked<R> {
     /// A lock in a C struct - C's to initialize and free - as a Locked over
     /// nothing, taken as C takes it.
     pub fn from_c(raw: &R) -> &Self {

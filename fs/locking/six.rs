@@ -5,13 +5,14 @@
 #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
 use super::raw::rust_debug_check_no_locks_freed;
 use super::raw::{rust_trace_contention_begin, rust_trace_contention_end};
-use super::{ExclusiveGuard, Locked, LockdepMap, RawLockBase, RawReadLock, RawSixLock};
+use super::{ExclusiveGuard, Locked, LockdepMap, RawLockBase, RawReadLock, RawSixLock, Shared, SharedGuard, SixIntent,
+            SixWriteIntent};
 use crate::cstructs::c;
 #[cfg(CONFIG_SMP)]
 use crate::debug::params::six_optimistic_spin_disabled;
 use crate::types::c_default;
 use crate::util::alloc::kvzalloc;
-use crate::util::ffi::c_char;
+use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::time_after64;
 use crate::util::percpu::{CpuGuard, PerCpu};
 use crate::util::projections::Volatile;
@@ -1108,12 +1109,8 @@ pub unsafe fn six_unlock_ip(lock: &c::six_lock, ty: c::six_lock_type, ip: c_ulon
 /// @lock is held for intent, by the caller.
 #[c_export]
 pub unsafe fn six_lock_downgrade(lock: &c::six_lock) {
-    let ip = six_lock_downgrade as *const () as c_ulong;
-
-    unsafe {
-        six_lock_increment_ip(lock, six_lock_type::SIX_LOCK_read, ip);
-        six_unlock_ip(lock, six_lock_type::SIX_LOCK_intent, ip);
-    }
+    let intent = unsafe { SixHold::from_raw(Locked::from_c(lock), six_lock_type::SIX_LOCK_intent) };
+    intent.downgrade().into_raw();
 }
 
 /*
@@ -1129,35 +1126,9 @@ pub unsafe fn six_lock_downgrade(lock: &c::six_lock) {
 /// @lock is held for read, by the caller.
 #[c_export]
 pub unsafe fn six_lock_tryupgrade(lock: &c::six_lock) -> bool {
-    let mut old = atomic_read(lock);
-
-    loop {
-        let mut new = old;
-
-        if new & SIX_LOCK_HELD_intent != 0 {
-            return false;
-        }
-
-        if !lock.readers.allocated() {
-            ebug_assert!(new & SIX_LOCK_HELD_read != 0);
-            new = new.wrapping_sub(L[SIX_LOCK_read as usize].lock_val);
-        }
-
-        new |= SIX_LOCK_HELD_intent;
-
-        match lock.state.compare_exchange_weak(old as i32, new as i32, Acquire, Relaxed) {
-            Ok(_)    => break,
-            Err(cur) => old = cur as u32,
-        }
-    }
-
-    if lock.readers.allocated() {
-        lock.readers.get().add(1u32.wrapping_neg());
-    }
-
-    six_set_owner(lock, six_lock_type::SIX_LOCK_intent, old, unsafe { c::bch2_current() });
-
-    true
+    let read = unsafe { SixHold::from_raw(Locked::from_c(lock), six_lock_type::SIX_LOCK_read) };
+    let (Ok(hold) | Err(hold)) = read.try_upgrade();
+    hold.into_raw() == six_lock_type::SIX_LOCK_intent
 }
 
 /*
@@ -1345,6 +1316,190 @@ impl<G, P> Locked<c::six_lock, G, P> {
     /// rather than a guard.
     pub fn six(&self) -> &c::six_lock {
         self.raw()
+    }
+}
+
+pub type SixReadGuard<'a, G = (), P = ()> = SharedGuard<'a, c::six_lock, G, P, Shared>;
+pub type SixIntentGuard<'a, G = (), P = ()> = SharedGuard<'a, c::six_lock, G, P, SixIntent>;
+/// Write, over intent: both the guard's.
+pub type SixWriteGuard<'a, G = (), P = ()> = ExclusiveGuard<'a, c::six_lock, G, P, SixWriteIntent>;
+
+impl<G: Sync, P> Locked<c::six_lock, G, P> {
+    /// As @ty, read or intent: write is had over intent,
+    /// SixHold::write_waiting_over().
+    pub fn try_lock_as(&self, ty: six_lock_type) -> Option<SixHold<'_, G, P>> {
+        assert!(ty != six_lock_type::SIX_LOCK_write, "a six write lock is taken over intent");
+        six_trylock_ip(self.raw(), ty, 0).then(|| unsafe { SixHold::from_raw(self, ty) })
+    }
+
+    /// As @ty, if the lock's seq is still @seq: nothing's written it since.
+    pub fn relock_as(&self, ty: six_lock_type, seq: c_uint) -> Option<SixHold<'_, G, P>> {
+        assert!(ty != six_lock_type::SIX_LOCK_write, "a six write lock is taken over intent");
+        six_relock_ip(self.raw(), ty, seq, 0).then(|| unsafe { SixHold::from_raw(self, ty) })
+    }
+
+    /// six_lock_ip_waiter() - six_lock_contended(), for a caller whose trylock
+    /// just failed: @wait on the lock's waitlist while it waits, where other
+    /// threads' cycle detection reads it; @should_sleep_fn's error if it gives
+    /// up.
+    pub fn lock_waiting_as(&self, ty: six_lock_type, wait: &Opaque<c::six_lock_waiter>,
+                           should_sleep_fn: c::six_lock_should_sleep_fn, ip: c_ulong,
+                           contended: bool) -> Result<SixHold<'_, G, P>, c_int> {
+        assert!(ty != six_lock_type::SIX_LOCK_write, "a six write lock is taken over intent");
+        match six_lock_waiting(self.raw(), ty, wait, should_sleep_fn, ip, contended) {
+            0 => Ok(unsafe { SixHold::from_raw(self, ty) }),
+            e => Err(e),
+        }
+    }
+}
+
+fn six_lock_waiting(lock: &c::six_lock, ty: six_lock_type, wait: &Opaque<c::six_lock_waiter>,
+                    should_sleep_fn: c::six_lock_should_sleep_fn, ip: c_ulong, contended: bool) -> c_int {
+    unsafe {
+        if contended {
+            six_lock_contended(lock, ty, wait.as_ptr(), should_sleep_fn, ip)
+        } else {
+            six_lock_ip_waiter(lock, ty, wait.as_ptr(), should_sleep_fn, ip)
+        }
+    }
+}
+
+/// A hold on a six lock, its mode had at runtime - as a btree path records
+/// its locks.
+pub enum SixHold<'a, G = (), P = ()> {
+    Read(SixReadGuard<'a, G, P>),
+    Intent(SixIntentGuard<'a, G, P>),
+    Write(SixWriteGuard<'a, G, P>),
+}
+
+impl<'a, G: Sync, P> SixHold<'a, G, P> {
+    /// @lock, held as @ty: what into_raw() gave up, taken back.
+    ///
+    /// # Safety
+    /// @lock is held as @ty by the caller, its to give the guard - or, for a
+    /// guard never dropped, for as long as the guard lives.
+    pub unsafe fn from_raw(lock: &'a Locked<c::six_lock, G, P>, ty: six_lock_type) -> Self {
+        unsafe {
+            match ty {
+                six_lock_type::SIX_LOCK_read   => SixHold::Read(SharedGuard::from_held(lock, Some(()))),
+                six_lock_type::SIX_LOCK_intent => SixHold::Intent(SharedGuard::from_held(lock, Some(()))),
+                six_lock_type::SIX_LOCK_write  => SixHold::Write(ExclusiveGuard::from_held(lock, Some(()))),
+            }
+        }
+    }
+
+    /// The hold, given up to what records it outside a guard - a btree path's
+    /// nodes_locked, or C: what it's held as.
+    pub fn into_raw(self) -> six_lock_type {
+        let ty = self.ty();
+        core::mem::forget(self);
+        ty
+    }
+
+    pub fn ty(&self) -> six_lock_type {
+        match self {
+            SixHold::Read(_)   => six_lock_type::SIX_LOCK_read,
+            SixHold::Intent(_) => six_lock_type::SIX_LOCK_intent,
+            SixHold::Write(_)  => six_lock_type::SIX_LOCK_write,
+        }
+    }
+
+    pub fn lock(&self) -> &'a Locked<c::six_lock, G, P> {
+        match self {
+            SixHold::Read(g)   => g.lock(),
+            SixHold::Intent(g) => g.lock(),
+            SixHold::Write(g)  => g.lock(),
+        }
+    }
+
+    /// Another hold, as @ty, no stronger than this one: six_lock_increment().
+    pub fn increment(&self, ty: six_lock_type) -> Self {
+        assert!(ty != six_lock_type::SIX_LOCK_write && ty as u32 <= self.ty() as u32,
+                "a six lock held as {} incremented as {}", self.ty() as u32, ty as u32);
+        unsafe {
+            six_lock_increment_ip(self.lock().raw(), ty, 0);
+            SixHold::from_raw(self.lock(), ty)
+        }
+    }
+
+    /// Intent to read, write to intent: another hold as the weaker, then this
+    /// one dropped.
+    pub fn downgrade(self) -> Self {
+        let weaker = match self.ty() {
+            six_lock_type::SIX_LOCK_write  => six_lock_type::SIX_LOCK_intent,
+            six_lock_type::SIX_LOCK_intent => six_lock_type::SIX_LOCK_read,
+            six_lock_type::SIX_LOCK_read   => panic!("a six read lock downgraded"),
+        };
+        let down = self.increment(weaker);
+        drop(self);
+        down
+    }
+
+    /// Read to intent, if no one else holds intent: six_lock_tryupgrade().
+    pub fn try_upgrade(self) -> Result<Self, Self> {
+        if self.ty() != six_lock_type::SIX_LOCK_read {
+            return Err(self);
+        }
+        let locked = self.lock();
+        let lock = locked.raw();
+        let mut old = atomic_read(lock);
+
+        loop {
+            let mut new = old;
+
+            if new & SIX_LOCK_HELD_intent != 0 {
+                return Err(self);
+            }
+
+            if !lock.readers.allocated() {
+                ebug_assert!(new & SIX_LOCK_HELD_read != 0);
+                new = new.wrapping_sub(L[SIX_LOCK_read as usize].lock_val);
+            }
+
+            new |= SIX_LOCK_HELD_intent;
+
+            match lock.state.compare_exchange_weak(old as i32, new as i32, Acquire, Relaxed) {
+                Ok(_)    => break,
+                Err(cur) => old = cur as u32,
+            }
+        }
+
+        if lock.readers.allocated() {
+            lock.readers.get().add(1u32.wrapping_neg());
+        }
+
+        six_set_owner(lock, six_lock_type::SIX_LOCK_intent, old, unsafe { c::bch2_current() });
+
+        self.into_raw();
+        Ok(unsafe { SixHold::from_raw(locked, six_lock_type::SIX_LOCK_intent) })
+    }
+
+    /// Write over this intent, as lock_waiting_as() waits, with @readers read
+    /// holds set aside meanwhile: write waits for every reader to go, the
+    /// intent holder's own too. On failure, intent still held.
+    ///
+    /// # Safety
+    /// @readers are read holds the caller has on the lock.
+    pub unsafe fn write_waiting_over(self, readers: c_int, wait: &Opaque<c::six_lock_waiter>,
+                                     should_sleep_fn: c::six_lock_should_sleep_fn,
+                                     ip: c_ulong) -> Result<Self, (Self, c_int)> {
+        assert!(self.ty() == six_lock_type::SIX_LOCK_intent, "a six write lock taken over a hold that isn't intent");
+        let locked = self.lock();
+        let lock = locked.raw();
+
+        if readers != 0 {
+            unsafe { six_lock_readers_add(lock, -readers) };
+        }
+        let ret = six_lock_waiting(lock, six_lock_type::SIX_LOCK_write, wait, should_sleep_fn, ip, readers == 0);
+        if readers != 0 {
+            unsafe { six_lock_readers_add(lock, readers) };
+        }
+
+        if ret != 0 {
+            return Err((self, ret));
+        }
+        self.into_raw();
+        Ok(unsafe { SixHold::from_raw(locked, six_lock_type::SIX_LOCK_write) })
     }
 }
 

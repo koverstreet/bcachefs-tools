@@ -346,6 +346,18 @@ impl<R: RawSixLock> Unlock<R> for SixWrite {
     }
 }
 
+/// Write and the intent under it, held by one guard: released, both go.
+pub struct SixWriteIntent;
+
+impl<R: RawSixLock<GuardState = ()>> Unlock<R> for SixWriteIntent {
+    unsafe fn unlock(raw: &R, (): ()) {
+        unsafe {
+            raw.unlock_write(());
+            raw.unlock_intent(());
+        }
+    }
+}
+
 /// A held Locked, had alone: released when dropped, by @U, if it was taken
 /// for the guard. Not Send: released by the task that took it, as lockdep
 /// checks - and a spin_lock_irqsave()'s interrupt state is its CPU's.
@@ -431,6 +443,8 @@ pub struct SharedGuard<'a, R: RawLockBase, G = (), P = (), U: Unlock<R> = Shared
 }
 
 impl<'a, R: RawLockBase, G, P, U: Unlock<R>> SharedGuard<'a, R, G, P, U> {
+    /// # Safety
+    /// As ExclusiveGuard's, but held shared.
     pub(super) unsafe fn from_held(lock: &'a Locked<R, G, P>, state: Option<R::GuardState>) -> Self {
         SharedGuard { lock, state, _not_send: PhantomData }
     }
