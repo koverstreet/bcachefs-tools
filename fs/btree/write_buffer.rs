@@ -6,21 +6,24 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::accounting::{self, DiskAccountingPos};
 use crate::btree::iter::BtreeTrans;
-use crate::btree::bkey::BkeySC;
+use crate::btree::bkey::{BkeyI, BkeySC};
 use crate::btree::iter::TransAttempt;
 use crate::c;
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::data_structures::eytzinger::Eytzinger0;
+use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError};
 use core::marker::PhantomData;
-use core::ptr::NonNull;
+use core::mem::{offset_of, size_of};
+use core::ptr::{self, NonNull};
 use crate::fs::Fs;
 use crate::util::Printbuf;
 use crate::types::{DArray, c_default};
 use core::ffi::c_int;
 use cstruct_macros::{CStruct, c_const, c_enum, c_export, c_extern, c_xmacro, TypeInfo};
 use nestify::nest;
-use crate::format::Bpos;
+use crate::format::{BkeyType, Bpos, Btree};
 
 c_xmacro! {
     /*
@@ -215,6 +218,147 @@ impl Fs {
 #[c_export]
 pub fn bch2_btree_write_buffer_must_wait(c: &Fs) -> bool {
     c.btree_write_buffer_must_wait()
+}
+
+// ── Journal keys into the write buffer ───────────────────────────────────
+
+c_extern! {
+    pub fn bch2_btree_write_buffer_insert_err(c: *mut Fs, btree: Btree, k: *mut c::bkey_i) -> c_int;
+    pub fn bch2_accounting_key_to_wb_slowpath(c: *mut Fs, btree: Btree, k: *mut c::bkey_i) -> c_int;
+    pub fn bch2_journal_key_to_wb_slowpath(c: *mut Fs, dst: *mut c::journal_keys_to_wb, idx: c::bch_wb_btree,
+                                           k: *mut c::bkey_i) -> c_int;
+}
+
+/// @btree's slot among the write buffered btrees.
+pub fn wb_btree_idx(btree: Btree) -> c::bch_wb_btree {
+    macro_rules! idx {
+        ($(($name:ident)),* $(,)?) => { ::paste::paste! {
+            $(if btree == Btree::$name {
+                return c::bch_wb_btree::[<BCH_WB_BTREE_ $name>];
+            })*
+        } };
+    }
+    c::BCH_WRITE_BUFFER_BTREES!(idx);
+    panic!("btree {btree} has no write buffer")
+}
+
+/// An update through the write buffer, for a btree that doesn't use it, is an
+/// error.
+pub fn insert_checks(fs: &Fs, btree: Btree, k: *mut c::bkey_i) -> Result<(), BchError> {
+    if !btree.uses_write_buffer() {
+        ret_to_result_void(unsafe { bch2_btree_write_buffer_insert_err(fs.as_ptr(), btree, k) })?;
+    }
+    Ok(())
+}
+
+/// Its size in the write buffer: the key, and its journal seq.
+fn wb_key_u64s(k: &c::bkey) -> usize {
+    usize::from(k.u64s) + offset_of!(c::btree_write_buffered_key, k) / size_of::<u64>()
+}
+
+fn is_accounting_mem(k: &c::bkey) -> bool {
+    k.key_type() == BkeyType::accounting && accounting::is_mem(&DiskAccountingPos::from_bpos(k.p))
+}
+
+/// # Safety
+/// @k is an accounting key.
+unsafe fn accounting_key_to_wb(fs: &Fs, btree: Btree, k: *mut c::bkey_i) -> Result<(), BchError> {
+    let wb = &fs.btree.write_buffer[wb_btree_idx(btree) as usize];
+    let p = unsafe { (*k).k.p };
+
+    let Some(idx) = Eytzinger0::find_by(wb.accounting.as_slice(), |e| e.k.k.p.cmp(&p)) else {
+        return ret_to_result_void(unsafe { bch2_accounting_key_to_wb_slowpath(fs.as_ptr(), btree, k) });
+    };
+
+    let dst = (&raw const wb.accounting.as_slice()[idx].k).cast_mut();
+    accounting::accumulate(unsafe { &mut *BkeyI::from_raw_mut(dst) }, BkeySC::from(unsafe { &*BkeyI::from_raw(k) }));
+    Ok(())
+}
+
+impl c::journal_keys_to_wb_btree {
+    /// # Safety
+    /// @k fits in this btree's buffer, acquired.
+    unsafe fn key_reserved(&mut self, seq: u64, k: *mut c::bkey_i) {
+        let u64s = wb_key_u64s(unsafe { &(*k).k });
+        let keys = unsafe { &mut (*self.wb).keys };
+        unsafe {
+            let wb_k = keys.data.add(keys.nr).cast::<c::btree_write_buffered_key>();
+            (&raw mut (*wb_k).journal_seq).write(seq);
+            ptr::copy_nonoverlapping(k.cast::<u64>(), (&raw mut (*wb_k).k).cast::<u64>(), usize::from((*k).k.u64s));
+        }
+        keys.nr += u64s;
+        self.room -= u64s;
+    }
+}
+
+impl c::journal_keys_to_wb {
+    /// # Safety
+    /// As key_to_wb()'s.
+    unsafe fn key_to_wb_idx(&mut self, fs: &Fs, idx: c::bch_wb_btree, k: *mut c::bkey_i) -> Result<(), BchError> {
+        let seq = self.seq;
+        let this: *mut Self = self;
+        let pb = &mut self.per_btree[idx as usize];
+
+        if pb.room < wb_key_u64s(unsafe { &(*k).k }) {
+            return ret_to_result_void(unsafe { bch2_journal_key_to_wb_slowpath(fs.as_ptr(), this, idx, k) });
+        }
+
+        unsafe { pb.key_reserved(seq, k) };
+        Ok(())
+    }
+
+    /// @k, from journal entry @seq, into @btree's write buffer.
+    ///
+    /// # Safety
+    /// @k is a whole key, and this is between bch2_journal_keys_to_write_buffer_start()
+    /// and _end().
+    pub unsafe fn key_to_wb(&mut self, fs: &Fs, btree: Btree, k: *mut c::bkey_i) -> Result<(), BchError> {
+        insert_checks(fs, btree, k)?;
+
+        ebug_assert!(self.seq != 0, "journal key to the write buffer outside a journal write");
+
+        if is_accounting_mem(unsafe { &(*k).k }) {
+            unsafe { accounting_key_to_wb(fs, btree, k) }
+        } else {
+            unsafe { self.key_to_wb_idx(fs, wb_btree_idx(btree), k) }
+        }
+    }
+}
+
+#[c_export]
+pub fn bch_wb_btree_idx(btree: Btree) -> c::bch_wb_btree {
+    wb_btree_idx(btree)
+}
+
+/// # Safety
+/// @k is a whole key.
+#[c_export]
+pub unsafe fn bch2_btree_write_buffer_insert_checks(c: &Fs, btree: Btree, k: *mut c::bkey_i) -> c_int {
+    ret_to_c(insert_checks(c, btree, k))
+}
+
+/// # Safety
+/// As key_reserved()'s.
+#[c_export]
+pub unsafe fn bch2_journal_key_to_wb_reserved(_c: &Fs, pb: &mut c::journal_keys_to_wb_btree, seq: u64,
+                                              k: *mut c::bkey_i) {
+    unsafe { pb.key_reserved(seq, k) }
+}
+
+/// # Safety
+/// As key_to_wb()'s.
+#[c_export]
+pub unsafe fn __bch2_journal_key_to_wb(c: &Fs, dst: &mut c::journal_keys_to_wb, idx: c::bch_wb_btree,
+                                       k: *mut c::bkey_i) -> c_int {
+    ret_to_c(unsafe { dst.key_to_wb_idx(c, idx, k) })
+}
+
+/// # Safety
+/// As key_to_wb()'s.
+#[c_export]
+pub unsafe fn bch2_journal_key_to_wb(c: &Fs, dst: &mut c::journal_keys_to_wb, btree: Btree,
+                                     k: *mut c::bkey_i) -> c_int {
+    ret_to_c(unsafe { dst.key_to_wb(c, btree, k) })
 }
 
 /// C's struct wb_maybe_flush: before an fsck pass calls a key missing that

@@ -1230,6 +1230,11 @@ impl Btree {
         self.flags().contains(BtreeFlags::extents.union(BtreeFlags::snapshots))
     }
 
+    /// Whether its updates go through the btree write buffer.
+    pub const fn uses_write_buffer(self) -> bool {
+        self.flags().contains(BtreeFlags::write_buffer)
+    }
+
     /// Convert from raw u32. Returns None for unknown built-in btree IDs.
     pub fn from_raw(id: u32) -> Option<Self> {
         crate::BTREE_IDS_KNOWN.get(id as usize).copied()

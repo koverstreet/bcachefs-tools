@@ -1280,17 +1280,17 @@ static void wb_accounting_sort(struct bch_fs_btree_write_buffer *wb)
 }
 
 int bch2_accounting_key_to_wb_slowpath(struct bch_fs *c, enum btree_id btree,
-				       struct bkey_i_accounting *k)
+				       struct bkey_i *k)
 {
 	struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[bch_wb_btree_idx(btree)];
 
 	event_inc_trace(c, accounting_key_to_wb_slowpath, buf, ({
 		prt_printf(&buf, "have: %zu\n", wb->accounting.nr);
-		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&k->k_i));
+		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(k));
 	}));
 
 	struct btree_write_buffered_key new = {};
-	bkey_copy(&new.k, &k->k_i);
+	bkey_copy(&new.k, k);
 
 	try(darray_push(&wb->accounting, new));
 
