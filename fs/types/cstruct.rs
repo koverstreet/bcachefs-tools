@@ -495,6 +495,9 @@ pub struct CEnumDef {
     pub own_to_text: bool,
     /// #[c_name(NAME)]: C's name for it, where Rust's differs.
     pub c_name:   Option<String>,
+    /// #[prefix(P)]: what its variants' names start with, which Rust names
+    /// them without too.
+    pub prefix:   Option<String>,
 }
 
 impl CEnumDef {
@@ -1358,6 +1361,7 @@ fn parse_enum(m: &syn::Macro) -> Result<CEnumDef, String> {
         let mut kind = None;
         let mut own_to_text = false;
         let mut c_name = None;
+        let mut prefix = None;
         for a in input.call(syn::Attribute::parse_outer)? {
             for (n, k) in [("open", CEnumKind::Open), ("closed", CEnumKind::Closed), ("flags", CEnumKind::Flags)] {
                 if a.path().is_ident(n) {
@@ -1367,6 +1371,9 @@ fn parse_enum(m: &syn::Macro) -> Result<CEnumDef, String> {
             own_to_text |= a.path().is_ident("own_to_text");
             if a.path().is_ident("c_name") {
                 c_name = a.parse_args::<syn::Ident>().ok().map(|n| ident(&n));
+            }
+            if a.path().is_ident("prefix") {
+                prefix = Some(ident(&a.parse_args::<syn::Ident>()?));
             }
         }
         input.parse::<syn::Visibility>()?;
@@ -1410,7 +1417,7 @@ fn parse_enum(m: &syn::Macro) -> Result<CEnumDef, String> {
                 Ok(CEnumVariant { name: ident(&vname), value, label })
             }).parse2(v)?);
         }
-        Ok(CEnumDef { cfg: None, kind, name, repr, variants, from, own_to_text, c_name })
+        Ok(CEnumDef { cfg: None, kind, name, repr, variants, from, own_to_text, c_name, prefix })
     }).map_err(syn_err("c_enum!: expected #[open|closed|flags] pub enum NAME: REPR { ... }"))
 }
 

@@ -1056,6 +1056,9 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
 /// only ever holds one of its values, as its type says; from_bits() of
 /// anything else is memory corruption, and panics.
 ///
+/// `#[prefix(P)]`: its variants by their names past P too, constants of the
+/// type - bch_bkey_type_flags::ptrs for BKEY_TYPE_ptrs.
+///
 /// `_` for the name: an anonymous enum, the constants alone. A variant with
 /// no value is the one before it plus one, as in C.
 #[proc_macro]
@@ -1129,7 +1132,7 @@ pub fn open_enum(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -
             variants.push(CEnumVariant { name, value, label: Some(label) });
         }
         let e = CEnumDef { cfg: None, kind: CEnumKind::Open, name: Some(item.ident.to_string()), repr: repr.to_string(),
-                           variants, from: Vec::new(), own_to_text, c_name: None };
+                           variants, from: Vec::new(), own_to_text, c_name: None, prefix: None };
         Ok(c_enum_gen(&e, EnumOf::Rust(&item.vis, &attrs)))
     })
 }
@@ -1274,6 +1277,18 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
                 unsafe impl crate::util::vstructs::Plain for #name {}
             },
         });
+
+        if let Some(prefix) = &e.prefix {
+            let (short, long): (Vec<_>, Vec<_>) = e.variants.iter()
+                .filter_map(|v| v.name.strip_prefix(prefix.as_str()).map(|s| (format_ident!("{s}"), format_ident!("{}", v.name))))
+                .unzip();
+            out.extend(quote! {
+                #[allow(non_upper_case_globals)]
+                impl #name {
+                    #(pub const #short: Self = Self::#long;)*
+                }
+            });
+        }
     }
 
     if let Some(name) = &e.name {
