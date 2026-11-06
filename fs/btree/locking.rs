@@ -1357,8 +1357,8 @@ pub fn __bch2_trans_verify_locks(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &
 }
 
 #[c_export]
-pub fn bch2_inode_shard_idx(c: &Opaque<Fs>) -> u64 {
-    Fs::from_c(c).inode_shard_idx()
+pub fn bch2_trans_set_locked(trans: &BtreeTrans<'_>, trylock: bool) {
+    trans.mark_locked(trylock)
 }
 
 impl<R: RawTimedLock, G, P> Locked<R, G, P> {

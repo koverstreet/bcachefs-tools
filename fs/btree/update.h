@@ -161,13 +161,6 @@ __printf(2, 3) int bch2_fs_log_msg(struct bch_fs *, const char *, ...);
 	     (_i) < (_trans)->updates + (_trans)->nr_updates;		\
 	     (_i)++)
 
-static inline bool bch2_trans_has_updates(struct btree_trans *trans)
-{
-	return trans->nr_updates ||
-		trans->journal_entries.u64s ||
-		trans->accounting.u64s;
-}
-
 /*
  * The sectors and the count they're charged at have to move together, or the
  * reservation can't say what slot it's in - so always go through here.
@@ -178,23 +171,6 @@ static inline void bch2_trans_extra_disk_res_add(struct btree_trans *trans,
 	trans->extra_disk_res		+= sectors;
 	trans->extra_disk_res_replicas	= max_t(u8, trans->extra_disk_res_replicas,
 						nr_replicas);
-}
-
-static inline void bch2_trans_reset_updates(struct btree_trans *trans)
-{
-	trans_for_each_update(trans, i)
-		bch2_path_put(trans, i->path, true);
-
-	trans->nr_updates		= 0;
-	trans->journal_entries.u64s	= 0;
-	trans->journal_entries.size	= 0;
-	trans->accounting.u64s		= 0;
-	trans->accounting.size		= 0;
-	trans->hooks			= NULL;
-	trans->extra_disk_res		= 0;
-	trans->extra_disk_res_replicas	= 0;
-	trans->extra_journal_u64s	= 0;
-	trans->has_interior_updates	= 0;
 }
 
 /**

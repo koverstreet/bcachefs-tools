@@ -385,8 +385,6 @@ static inline int bch2_trans_relock(struct btree_trans *trans)
 		: __bch2_trans_relock(trans, true);
 }
 
-int bch2_trans_relock(struct btree_trans *);
-
 /* bch2_trans_srcu_wait_budget(), for a wait that may have no trans */
 static inline long bch2_trans_short_wait_budget(struct btree_trans *trans, long timeout)
 {
@@ -515,13 +513,10 @@ static int btree_trans_restart(struct btree_trans *trans, int err)
 static inline int trans_maybe_inject_restart(struct btree_trans *trans, unsigned long ip)
 {
 #ifdef CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS
-	if (!(ktime_get_ns() & ~(~0ULL << min(63, (10 + trans->restart_count_this_trans))))) {
-		event_inc_trace(trans->c, trans_restart_injected, buf, prt_str(&buf, trans->fn));
-		return bch2_trans_restart_ip(trans,
-					BCH_ERR_transaction_restart_fault_inject, ip);
-	}
-#endif
+	return __bch2_trans_maybe_inject_restart(trans, ip);
+#else
 	return 0;
+#endif
 }
 
 static inline void bch2_btree_path_downgrade(struct btree_trans *trans,

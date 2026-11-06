@@ -1179,6 +1179,22 @@ pub fn bch2_trans_unlocked_or_in_restart_error(trans: &BtreeTrans<'_>) -> ! {
 }
 
 #[c_export]
+pub fn bch2_trans_has_updates(trans: &BtreeTrans<'_>) -> bool {
+    trans.has_updates()
+}
+
+#[c_export]
+pub fn bch2_trans_reset_updates(trans: &BtreeTrans<'_>) {
+    trans.reset_updates()
+}
+
+#[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
+#[c_export]
+pub fn __bch2_trans_maybe_inject_restart(trans: &BtreeTrans<'_>, ip: c_ulong) -> c_int {
+    crate::errcode::ret_to_c(trans.maybe_inject_restart(ip))
+}
+
+#[c_export]
 pub fn bch2_trans_updates_to_text(out: &mut Printbuf, trans: &BtreeTrans<'_>) {
     trans.updates_to_text(out)
 }

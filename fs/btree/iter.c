@@ -1293,7 +1293,7 @@ retry_all:
 	btree_trans_sort_paths(trans);
 
 	bch2_trans_unlock(trans);
-	trans_set_locked(trans, false);
+	bch2_trans_set_locked(trans, false);
 
 	if (unlikely(trans->memory_allocation_failure)) {
 		CLASS(closure_stack, cl)();
@@ -3767,7 +3767,7 @@ int bch2_fs_btree_iter_init(struct bch_fs *c)
 #ifdef CONFIG_LOCKDEP
 	fs_reclaim_acquire(GFP_KERNEL);
 	struct btree_trans *trans = bch2_trans_get(c);
-	trans_set_locked(trans, false);
+	bch2_trans_set_locked(trans, false);
 	bch2_trans_put(trans);
 	fs_reclaim_release(GFP_KERNEL);
 #endif

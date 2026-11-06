@@ -27,66 +27,6 @@ static inline struct btree_transaction_stats *btree_trans_stats(struct btree_tra
 		: NULL;
 }
 
-/* trans locked state */
-
-static inline void trans_maybe_disable_migrate(struct btree_trans *trans)
-{
-	/*
-	 * Pin to CPU while btree locks are held: keeps cache footprint
-	 * hot, and per-CPU cursors (e.g. inode allocation) stable
-	 * across transaction restarts. Released in trans_set_unlocked,
-	 * so any wait that goes through bch2_trans_unlock(_long)
-	 * happens with migration enabled - including the cond_resched
-	 * in bch2_trans_begin and the freezer-visible window during
-	 * suspend.
-	 */
-	if (!trans->migrate_disabled &&
-	    trans->shard_cpu >= 0 &&
-	    trans->shard_cpu == raw_smp_processor_id()) {
-		trans->migrate_disabled = true;
-		migrate_disable();
-	}
-}
-
-static inline void trans_enable_migrate(struct btree_trans *trans)
-{
-	if (trans->migrate_disabled) {
-		trans->migrate_disabled = false;
-		migrate_enable();
-	}
-}
-
-static inline void trans_set_locked(struct btree_trans *trans, bool try)
-{
-	if (!trans->locked) {
-		trans->locked = true;
-		trans->last_unlock_ip = 0;
-		lock_acquire_exclusive(&trans->dep_map, 0, try, NULL, _THIS_IP_);
-
-		trans->pf_memalloc_noio = (current->flags & PF_MEMALLOC_NOIO) != 0;
-		current->flags |= PF_MEMALLOC_NOIO;
-
-		trans_maybe_disable_migrate(trans);
-	}
-}
-
-static inline void trans_set_unlocked(struct btree_trans *trans)
-{
-	if (trans->locked) {
-		trans->locked = false;
-		trans->last_unlock_ip = _RET_IP_;
-		lock_release(&trans->dep_map, _THIS_IP_);
-
-		if (!trans->pf_memalloc_noio)
-			current->flags &= ~PF_MEMALLOC_NOIO;
-	}
-}
-
-static inline unsigned bch2_inode_shard_cpu(struct bch_fs *c)
-{
-	return c->inode_shard_cpu[bch2_inode_shard_idx(c)];
-}
-
 
 static inline int btree_node_locked_type(struct btree_path *path,
 					 unsigned level)
