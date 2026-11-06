@@ -156,6 +156,85 @@ fn parse_c_xmacro(source: &str, macro_name: &str) -> Option<Vec<Vec<String>>> {
     None
 }
 
+/// The arms of tagged_union! enum @name, as a C list's entries: name, value,
+/// and the arm's doc comment as a C string. An arm is `/// doc #[..]*
+/// name(Type) [= value]`, a value not written the last's plus one.
+fn parse_tagged_union(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
+    let decl = source.find(&format!("pub enum {name} {{"))?;
+    let tu = source[..decl].rfind("tagged_union! {")?;
+    if source[tu..decl].contains("\n}\n") {
+        return None;
+    }
+    let mut rest = &source[decl..];
+    rest = &rest[rest.find('{')? + 1..];
+
+    let mut entries = Vec::new();
+    let mut doc: Vec<&str> = Vec::new();
+    let mut next = 0u64;
+    loop {
+        rest = rest.trim_start();
+        if let Some(r) = rest.strip_prefix("///") {
+            let (line, r) = r.split_once('\n').unwrap_or((r, ""));
+            doc.push(line.trim());
+            rest = r;
+        } else if rest.starts_with("//") {
+            rest = rest.split_once('\n').map_or("", |(_, r)| r);
+        } else if let Some(r) = rest.strip_prefix("/*") {
+            rest = r.split_once("*/")?.1;
+        } else if let Some(r) = rest.strip_prefix('#') {
+            rest = skip_group(r)?;
+        } else if rest.starts_with('}') {
+            return Some(entries);
+        } else {
+            let paren = rest.find('(')?;
+            let arm = rest[..paren].trim().to_string();
+            rest = skip_group(&rest[paren..])?;
+            let end = rest.find([',', '}'])?;
+            let value = match rest[..end].trim().strip_prefix('=') {
+                Some(v) => {
+                    let v = v.trim();
+                    match v.strip_prefix("0x") {
+                        Some(hex) => u64::from_str_radix(hex, 16).ok()?,
+                        None => v.parse().ok()?,
+                    }
+                }
+                None => next,
+            };
+            next = value + 1;
+            rest = rest[end..].strip_prefix(',').unwrap_or(&rest[end..]);
+            let doc_str = doc.join(" ").replace('\\', "\\\\").replace('"', "\\\"");
+            entries.push(vec![arm, value.to_string(), format!("\"{doc_str}\"")]);
+            doc.clear();
+        }
+    }
+}
+
+/// @s past the bracketed group it starts with, nested groups and strings in it.
+fn skip_group(s: &str) -> Option<&str> {
+    let mut depth = 0;
+    let mut chars = s.char_indices();
+    while let Some((i, ch)) = chars.next() {
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&s[i + 1..]);
+                }
+            }
+            '"' => while let Some((_, c)) = chars.next() {
+                match c {
+                    '\\' => { chars.next(); }
+                    '"' => break,
+                    _ => {}
+                }
+            },
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Split comma-separated arguments, respecting nested parens and C strings.
 fn split_xmacro_args(s: &str) -> Vec<String> {
     let mut args = Vec::new();
@@ -687,7 +766,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "sb-fields",
-        macro_name: "BCH_SB_FIELDS",
+        macro_name: "bch_sb_field",
         default: None,
         doc_field: Some(2),
         flags_field: None,
@@ -697,7 +776,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "jset-entry-types",
-        macro_name: "BCH_JSET_ENTRY_TYPES",
+        macro_name: "jset_entry",
         default: None,
         doc_field: Some(2),
         flags_field: None,
@@ -933,9 +1012,9 @@ fn main() {
     }
 
     // --- Simple enum lists ---
-    // From each x-macro wherever in fs/ it lives - a C #define or a Rust
-    // c_xmacro! block - found by name, so a list moving between files, or
-    // from C to Rust, doesn't break the docs.
+    // From each x-macro wherever in fs/ it lives - a C #define, a Rust
+    // c_xmacro! block or a tagged_union! enum - found by name, so a list
+    // moving between files, or from C to Rust, doesn't break the docs.
     let mut sources = Vec::new();
     walk_c_files(&root.join("fs"), &mut |path| {
         if let Ok(source) = fs::read_to_string(path) {
@@ -945,10 +1024,15 @@ fn main() {
     });
     for el in ENUM_LISTS {
         let found = sources.iter().find_map(|(rust, s)| {
-            if *rust { parse_c_xmacro(s, el.macro_name) } else { parse_xmacro(s, el.macro_name) }
+            if *rust {
+                parse_c_xmacro(s, el.macro_name).or_else(|| parse_tagged_union(s, el.macro_name))
+            } else {
+                parse_xmacro(s, el.macro_name)
+            }
         });
         let Some(entries) = found else {
-            eprintln!("error: no x-macro {} in fs/ - neither a #define nor a c_xmacro!", el.macro_name);
+            eprintln!("error: no x-macro {} in fs/ - not a #define, a c_xmacro! or a tagged_union!",
+                      el.macro_name);
             errors += 1;
             continue;
         };
