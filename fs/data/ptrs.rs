@@ -20,7 +20,7 @@
 //! ptrs_c_export.rs's.
 
 use crate::alloc::disk_groups::Target;
-use crate::btree::bkey::{bkey_family, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut, FamilyVal, InFamily, KeyState};
+use crate::btree::bkey::{bkey_family, types_with, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut, FamilyVal, InFamily, KeyState};
 use crate::btree::bkey_methods::SetError;
 use crate::btree::iter::{BtreeIter, TransAttempt, UpdateTriggerFlags};
 use crate::data::checksum::BCH_NONCE_EXTENT;
@@ -319,9 +319,21 @@ impl PtrsBkey for c::Stripe<Validated> {
     }
 }
 
-bkey_family!(Ptrs);
-bkey_family!(PtrsMut);
-bkey_family!(BtreePtrs);
+bkey_family!(
+    /// Any of the key types with pointers, BKEY_TYPE_ptrs: a key armed to it -
+    /// BkeySC<'_, Ptrs>, BkeyS<'_, Ptrs>, &BkeyI<Ptrs> - has its value read
+    /// through typed().
+    Ptrs: BKEY_TYPE_ptrs);
+bkey_family!(
+    /// The key types with pointers that can be edited in place,
+    /// BKEY_TYPE_ptrs_mut: their extent entries run to the value's end, so
+    /// entries can be inserted and dropped - every Ptrs type but a stripe.
+    PtrsMut: BKEY_TYPE_ptrs_mut);
+bkey_family!(
+    /// A btree node pointer, BKEY_TYPE_btree_ptr - a key above the leaves, or a
+    /// btree root's: a key armed to it is a BkeySC<'_, BtreePtrs>,
+    /// BkeyS<'_, BtreePtrs>, &BkeyI<BtreePtrs>.
+    BtreePtrs: BKEY_TYPE_btree_ptr);
 
 /// A family of key types with pointers is a PtrsBkey as its member is.
 macro_rules! ptrs_bkey {
@@ -345,18 +357,10 @@ c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs => ptrs_bkey { 
 c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs_mut => ptrs_bkey { PtrsMut, PtrsMutTyped; }]);
 c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_btree_ptr => ptrs_bkey { BtreePtrs, BtreePtrsTyped; }]);
 
-macro_rules! key_types_mask {
-    ($mask:ident; $(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
-        const $mask: u64 = 0 $(| 1 << $nr)*;
-    };
-}
 const _: () = {
-    c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs => key_types_mask { PTRS_KEY_TYPES; }]);
-    c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs_mut => key_types_mask { PTRS_MUT_KEY_TYPES; }]);
-    c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_btree_ptr => key_types_mask { BTREE_PTR_KEY_TYPES; }]);
-    assert!(PTRS_MUT_KEY_TYPES & !PTRS_KEY_TYPES == 0,
+    assert!(types_with(c::BKEY_TYPE_ptrs_mut) & !types_with(c::BKEY_TYPE_ptrs) == 0,
             "a BKEY_TYPE_ptrs_mut type that isn't BKEY_TYPE_ptrs");
-    assert!(BTREE_PTR_KEY_TYPES & !PTRS_MUT_KEY_TYPES == 0,
+    assert!(types_with(c::BKEY_TYPE_btree_ptr) & !types_with(c::BKEY_TYPE_ptrs_mut) == 0,
             "a BKEY_TYPE_btree_ptr type that isn't BKEY_TYPE_ptrs_mut");
 };
 

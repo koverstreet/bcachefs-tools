@@ -81,6 +81,27 @@ fn bkey_edit_short_value() {
     assert_eq!((s.snapshot.get(), s.fs_path_parent().get()), (5, 0));
 }
 
+/// A key type by its number and its name, and a family's field found in its
+/// types' structs by name: where offset_of! says it is.
+#[test]
+fn key_type_table() {
+    use crate::data::reflink::REFCOUNT;
+    use c::bch_bkey_type as t;
+
+    let nr = t::KEY_TYPE_snapshot.0 as u8;
+    assert_eq!(key_type(nr).unwrap().info.name, "bch_snapshot");
+    assert_eq!(key_type_by_name("snapshot").unwrap().nr, nr);
+    assert!(key_type_by_name("no_such_type").is_none());
+
+    let k = |ty: t| c::bkey { type_: ty.0 as u8, ..Default::default() };
+
+    let r = k(t::KEY_TYPE_reflink_v);
+    assert_eq!(REFCOUNT.of(&r), Some(core::mem::offset_of!(c::ReflinkV, repr.refcount)));
+
+    let i = k(t::KEY_TYPE_indirect_inline_data);
+    assert_eq!(REFCOUNT.of(&i), Some(core::mem::offset_of!(c::IndirectInlineData, repr.refcount)));
+}
+
 #[test]
 fn bpos_successor_predecessor_carry() {
     let cases = [

@@ -57,6 +57,35 @@ pub struct StructInfo {
     pub fields: &'static [FieldInfo],
 }
 
+impl StructInfo {
+    /// Where its field @name is: a top level one, not a nested struct's.
+    pub const fn field_offset(&self, name: &str) -> Option<usize> {
+        let mut i = 0;
+        while i < self.fields.len() {
+            if str_eq(self.fields[i].name, name) {
+                return Some(self.fields[i].offset);
+            }
+            i += 1;
+        }
+        None
+    }
+}
+
+const fn str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 pub struct FieldInfo {
     pub name: &'static str,
     pub offset: usize,
@@ -576,32 +605,6 @@ pub fn struct_to_text(
     fields_to_text(out, info, buf, 0, 0)
 }
 
-/// A bkey type together with its val struct's type info.
-pub struct BkeyTypeInfo {
-    pub name: &'static str,
-    pub type_: u32,
-    pub info: &'static StructInfo,
-}
-
-// From BCH_BKEY_TYPES(): each key type and its val struct's StructInfo.
-macro_rules! bkey_type_info {
-    ($(($name:ident, $nr:literal $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        pub static BKEY_TYPE_INFO: &[BkeyTypeInfo] = &[$(
-            BkeyTypeInfo { name: stringify!($name), type_: $nr,
-                           info: <crate::c::[<$name:camel>] as TypeInfo>::INFO },
-        )*];
-    } };
-}
-crate::c::BCH_BKEY_TYPES!(bkey_type_info);
-
-pub fn bkey_val_info(type_: u32) -> Option<&'static StructInfo> {
-    BKEY_TYPE_INFO.iter().find(|t| t.type_ == type_).map(|t| t.info)
-}
-
-pub fn bkey_type_info_by_name(name: &str) -> Option<&'static BkeyTypeInfo> {
-    BKEY_TYPE_INFO.iter().find(|t| t.name == name)
-}
-
 // Every c_bitmask!'s table, which each asserts is here.
 macro_rules! bitmasks {
     ($($table:ident),* $(,)?) => {
@@ -628,15 +631,8 @@ bitmasks! {
 pub const fn bitmasks_listed(name: &str) -> bool {
     let mut i = 0;
     while i < BITMASKS_LISTED.len() {
-        let (a, b) = (BITMASKS_LISTED[i].as_bytes(), name.as_bytes());
-        if a.len() == b.len() {
-            let mut j = 0;
-            while j < a.len() && a[j] == b[j] {
-                j += 1;
-            }
-            if j == a.len() {
-                return true;
-            }
+        if str_eq(BITMASKS_LISTED[i], name) {
+            return true;
         }
         i += 1;
     }
@@ -804,16 +800,5 @@ mod tests {
         s.set_no_keys_obsolete(false);
         assert!(!s.no_keys_obsolete());
         assert_eq!(s.flags.get(), 0);
-    }
-
-    #[test]
-    fn bkey_type_dispatch() {
-        let snapshot_type = c::bch_bkey_type::KEY_TYPE_snapshot.0;
-        let info = bkey_val_info(snapshot_type).unwrap();
-        assert_eq!(info.name, "bch_snapshot");
-
-        let ti = bkey_type_info_by_name("snapshot").unwrap();
-        assert_eq!(ti.type_, snapshot_type);
-        assert!(bkey_type_info_by_name("no_such_type").is_none());
     }
 }

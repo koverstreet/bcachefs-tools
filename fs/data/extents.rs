@@ -5,7 +5,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::bkey_fsck_err_on;
-use crate::btree::bkey::{bkey_family, bkey_ge, bkey_gt, bkey_le, bkey_lt, BkeyFamily, BkeyS, BkeySC, BkeyV, BkeyVal,
+use crate::btree::bkey::{bkey_ge, bkey_gt, bkey_le, bkey_lt, types_with, AllTypes, BkeyFamily, ByFlag, FamilyTypes, FamilyVal, InFamily, KeyState, BkeyS, BkeySC, BkeyV, BkeyVal,
                          BkeyVMut};
 use crate::btree::iter::NoRoom;
 use crate::c;
@@ -191,20 +191,28 @@ macro_rules! extents_btrees_key_types {
     };
 }
 
-macro_rules! extent_types {
-    ($(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
-        const EXTENT_KEY_TYPES: u64 = 0 $(| 1 << $nr)*;
-    };
-}
-
 const _: () = {
     c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_extents => extents_btrees_key_types]);
-    c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_extent => extent_types]);
-    assert!(EXTENT_KEY_TYPES == EXTENTS_BTREES_KEY_TYPES,
+    assert!(types_with(c::BKEY_TYPE_extent) == EXTENTS_BTREES_KEY_TYPES,
             "BKEY_TYPE_extent isn't on exactly the key types BCH_BTREE_IDS()' extents btrees hold");
 };
 
-bkey_family!(Extents);
+/// Any key an extents btree may hold, its size nonzero - a range of its btree,
+/// start_pos() to k.p: a key armed to it is a BkeySC<'_, Extents>,
+/// BkeyS<'_, Extents>, &BkeyI<Extents>. A key is one by its size as well as its
+/// type: a deletion slot iteration makes is one or not by the iterator's mode.
+pub type Extents = FamilyVal<ExtentsTypes>;
+
+pub enum ExtentsTypes {}
+
+impl FamilyTypes for ExtentsTypes {
+    fn contains(k: &c::bkey) -> bool {
+        ByFlag::<{ c::BKEY_TYPE_extent }>::contains(k) && k.size != 0
+    }
+}
+
+// SAFETY: every key is one of AllTypes'
+unsafe impl<S: KeyState> InFamily<AllTypes> for FamilyVal<ExtentsTypes, S> {}
 
 impl c::bkey {
     /// Whether it's counted in its inode's i_sectors.

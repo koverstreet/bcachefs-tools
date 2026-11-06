@@ -29,8 +29,8 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
-use crate::btree::bkey::{bkey_eq, bkey_family, bkey_ge, bkey_gt, bkey_lt, pos, BkeyI, BkeyS, BkeySC,
-                         BkeyV, BkeyVal, BkeyVMut, POS_MAX, POS_MIN};
+use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_gt, bkey_lt, pos, BkeyI, BkeyS, BkeySC,
+                         BkeyV, BkeyVMut, ByFlag, FamilyVal, FieldOffsets, POS_MAX, POS_MIN};
 use crate::btree::bkey_methods::TriggerOp;
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
@@ -45,75 +45,53 @@ use crate::types::{GenRadix, Le32, Le64};
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{fatal_signal_pending, unlikely};
 use crate::util::refcount::TryRefcount;
-use crate::util::vstructs::{cast_plain, cast_plain_mut, Validated};
+use crate::util::vstructs::{cast_plain, cast_plain_mut};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, bkey_fsck_err_on, fsck_err_flags, fsck_err_on, inode, inode_fsck_err, prt};
 use core::cell::UnsafeCell;
 use core::ffi::{c_int, c_uint};
-use core::mem::{offset_of, size_of};
+use core::mem::size_of;
 use core::ops::Range;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering::Relaxed};
 use cstruct_macros::c_export;
 use crate::format::Btree;
 
-/// A value with a refcount - of a BKEY_TYPE_indirect type, or Indirect,
-/// either of them: where in it the refcount is.
-pub trait IndirectBkey: BkeyVal {
-    fn refcount_offset(k: BkeySC<'_, Self>) -> usize;
-}
+pub type IndirectTypes = ByFlag<{ c::BKEY_TYPE_indirect }>;
 
-macro_rules! refcount_at {
-    ($($ty:ident),*) => { $(
-        impl IndirectBkey for c::$ty<Validated> {
-            fn refcount_offset(_: BkeySC<'_, Self>) -> usize {
-                offset_of!(c::$ty, repr.refcount)
-            }
-        }
-    )* };
-}
-refcount_at!(ReflinkV, IndirectInlineData);
+/// An indirect extent, BKEY_TYPE_indirect - refcounted, in the reflink btree,
+/// what a reflink_p points to: a key armed to it is a BkeySC<'_, Indirect>,
+/// BkeyS<'_, Indirect>, &BkeyI<Indirect>.
+pub type Indirect = FamilyVal<IndirectTypes>;
 
-bkey_family!(Indirect);
+pub static REFCOUNT: FieldOffsets = FieldOffsets::new(c::BKEY_TYPE_indirect, "refcount");
 
-macro_rules! indirect_bkey {
-    ($(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
-        impl IndirectBkey for Indirect {
-            fn refcount_offset(k: BkeySC<'_, Indirect>) -> usize {
-                match k.typed() {
-                    $(IndirectTyped::$name(k) => IndirectBkey::refcount_offset(k),)*
-                }
-            }
-        }
-    };
+fn refcount_offset(k: &c::bkey) -> usize {
+    REFCOUNT.of(k).expect("an indirect extent's type has a refcount")
 }
-c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_indirect => indirect_bkey]);
 
 /// The refcount of an indirect extent, in whichever form it's held: any BkeyV
-/// whose value is an IndirectBkey - armed to Indirect, or to one of them.
-pub trait BkeyVIndirect: BkeyV {
+/// armed to Indirect.
+pub trait BkeyVIndirect: BkeyV<V = Indirect> {
     /// bkey_refcount_c().
-    fn refcount(&self) -> &Le64
-    where Self::V: IndirectBkey
-    {
+    fn refcount(&self) -> &Le64 {
         let k = self.as_sc();
-        k.val_bytes().get(<Self::V as IndirectBkey>::refcount_offset(k)..)
+        k.val_bytes().get(refcount_offset(k.k)..)
             .and_then(cast_plain)
             .unwrap_or_else(|| panic!("{}: {} bytes, shorter than validate passes", k.k, k.val_bytes().len()))
     }
 
     /// bkey_refcount().
     fn refcount_mut(&mut self) -> &mut Le64
-    where Self: BkeyVMut, Self::V: IndirectBkey
+    where Self: BkeyVMut
     {
         let k = *self.k();
-        let at = <Self::V as IndirectBkey>::refcount_offset(self.as_sc());
-        self.val_bytes_mut().get_mut(at..)
+        self.val_bytes_mut().get_mut(refcount_offset(&k)..)
             .and_then(cast_plain_mut)
             .unwrap_or_else(|| panic!("{k}: {} bytes, shorter than validate passes", k.val_bytes()))
     }
 }
 
-impl<K: BkeyV> BkeyVIndirect for K {}
+impl<K: BkeyV<V = Indirect>> BkeyVIndirect for K {}
 
 impl c::bkey {
     /// The type a direct extent of its type is, made indirect: deleted for a
@@ -500,7 +478,7 @@ pub fn bch2_reflink_v_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_val
 #[cold]
 #[c_export]
 pub fn bch2_reflink_v_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    write!(out, "refcount: {} ", k.arm::<c::ReflinkV>().expect("a reflink_v").refcount().get());
+    write!(out, "refcount: {} ", k.arm::<Indirect>().expect("a reflink_v").refcount().get());
 
     crate::data::ptrs::bkey_ptrs_to_text(out, Some(Fs::from_c(c)), k);
 }
@@ -511,8 +489,8 @@ pub fn bch2_reflink_v_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>)
 #[cfg(any())]
 #[c_export]
 pub fn bch2_reflink_v_merge(c: &Opaque<Fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
-    l.as_sc().arm::<c::ReflinkV>().expect("a reflink_v").refcount() ==
-        r.arm::<c::ReflinkV>().expect("a reflink_v").refcount() &&
+    l.as_sc().arm::<Indirect>().expect("a reflink_v").refcount() ==
+        r.arm::<Indirect>().expect("a reflink_v").refcount() &&
         crate::data::extents::extent_merge(Fs::from_c(c), l, r)
 }
 
@@ -529,7 +507,7 @@ pub fn bch2_indirect_inline_data_validate(c: &Opaque<Fs>, k: BkeySC<'_>,
 pub fn bch2_indirect_inline_data_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
     let data = &k.val_bytes()[size_of::<c::IndirectInlineData>()..];
 
-    write!(out, "refcount {} datalen {}: ", k.arm::<c::IndirectInlineData>().expect("indirect inline data").refcount().get(), data.len());
+    write!(out, "refcount {} datalen {}: ", k.arm::<Indirect>().expect("indirect inline data").refcount().get(), data.len());
     for b in &data[..data.len().min(32)] {
         write!(out, "{b:02x}");
     }

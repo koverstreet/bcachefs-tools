@@ -40,7 +40,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{anyhow, bail, Result};
-use bcachefs_kernel::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
+use bcachefs_kernel::btree::bkey::{key_type, key_type_by_name, BkeySC, POS_MIN, SPOS_MAX};
 use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::btree::bkey_methods;
 use bcachefs_kernel::btree::iter::{
@@ -331,9 +331,8 @@ fn render_key_fields(fs: &Fs, k: &BkeySC<'_>, paths: &[&str]) -> Result<String> 
 
 /// Fields of the value as stored, by its own struct: get -r, for update -r.
 fn render_raw_fields(k: &BkeySC<'_>, paths: &[&str]) -> Result<String> {
-    let info = typeinfo::bkey_val_info(k.k.type_ as u32)
-        .ok_or_else(|| anyhow!("unknown key type {}", k.k.type_))?;
-    render_fields(k.val_bytes(), info, paths)
+    let t = key_type(k.k.type_).ok_or_else(|| anyhow!("unknown key type {}", k.k.type_))?;
+    render_fields(k.val_bytes(), t.info, paths)
 }
 
 fn render_fields(val: &[u8], info: &'static StructInfo, paths: &[&str]) -> Result<String> {
@@ -789,7 +788,7 @@ fn cmd_set(
     in_snapshot: bool,
     raw: bool,
 ) -> Result<String> {
-    let ti = typeinfo::bkey_type_info_by_name(type_name)
+    let ti = key_type_by_name(type_name)
         .ok_or_else(|| anyhow!("unknown key type '{type_name}'"))?;
 
     let trans = bcachefs_kernel::btree_trans!(fs);
@@ -828,7 +827,7 @@ fn cmd_set(
             // beyond the struct:
             // of the type the user named: erased, then retyped
             let mut new: TransBkey<'_, '_> = t.bkey_alloc_init::<c::Deleted>(BKEY_VAL_U64S_MAX, pos)?.into();
-            new.k_mut().type_ = ti.type_ as u8;
+            new.k_mut().type_ = ti.nr;
             new.k_mut().u64s = (BKEY_U64S + ti.info.size.div_ceil(8)) as u8;
 
             set_fields(fs, &mut new, assigns, false, &mut user_err)?;

@@ -223,7 +223,7 @@ impl TransBkey<'_, '_> {
     /// In place; also dirent::set_field()'s fallback.
     pub(crate) fn set_fixed<'p>(&mut self, field: &'p str, val: &'p str) -> Result<(), SetError<'p>> {
         let type_ = self.k().type_;
-        let info = typeinfo::bkey_val_info(type_ as u32)
+        let info = crate::btree::bkey::key_type(type_).map(|t| t.info)
             .ok_or(SetError::Unsupported { type_ })?;
         let target = typeinfo::resolve_with_bits(info, field)?;
         let v = parse_val(type_, field, val)?;

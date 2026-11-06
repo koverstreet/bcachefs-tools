@@ -26,7 +26,9 @@
 //!  - BkeyTyped: what typed() switches a key over, by V - every type, or a
 //!    family's;
 //!  - FamilyTypes: a key family's types, F in FamilyVal<F> - its value, any of
-//!    theirs, as long as the key is: Ptrs, Extents, Indirect;
+//!    theirs, as long as the key is: ByFlag<F>, the key types with a
+//!    bch_bkey_type_flags, for most - Ptrs, Indirect - or a family's own,
+//!    Extents';
 //!  - BkeyWhole: a key type whose value can be had by value - BkeyI::new(),
 //!    from_key();
 //!  - MutBkey: what a mutable copy of a key read as V is - bkey_make_mut();
@@ -35,17 +37,25 @@
 //!    UnvalidatedSized. Unsized too, and its derive InState, so every key
 //!    type's BkeyFamily is the one impl.
 //!
-//! The macros generate the per-type impls from BCH_BKEY_TYPES(): bkey_val!
-//! per type, bkey_typed! the typed() enums, bkey_family! a family (Ptrs,
-//! Extents, Indirect), bkey_family_members! a family's InFamily markers, and
-//! bkey_family_conv! its From impls - one per form pair, generic over the
-//! key's type and state, so a single into() erases, narrows the family and
-//! weakens the state at once. What's per kind is at a value's definition:
-//! #[whole(bkey)], #[grown(.., bkey)], #[derive(SizedVal)].
+//! What's known of a key type as data is KEY_TYPES, one KeyType per
+//! BCH_BKEY_TYPES() row: its flags and its value's StructInfo. A family with
+//! a field to find - an indirect extent's refcount - has FieldOffsets, built
+//! from it in the family's file: the field by name in each of its types, not
+//! a trait per type.
+//!
+//! The macros generate what has to be an impl or an enum: bkey_types! per row
+//! its BkeyTag (bkey_val!) and its InFamily markers - AllTypes and each of its
+//! flags' - and the typed() enum of every type; bkey_family! a family read
+//! per type, with its typed() (Ptrs); bkey_family_conv! a family's From impls -
+//! one per form pair, generic over the key's type and state, so a single
+//! into() erases, narrows the family and weakens the state at once. What's per
+//! kind is at a value's definition: #[whole(bkey)], #[grown(.., bkey)],
+//! #[derive(SizedVal)].
 
 use super::BkeyP;
 use crate::btree::iter::{BtreeIter, TransBkey};
 use crate::c;
+use crate::typeinfo::{StructInfo, TypeInfo};
 use crate::util::projections::Floored;
 use crate::util::vstructs::{ArmRef, InState, State, Unsized, Unvalidated, UnvalidatedSized, Validated, Whole};
 use core::marker::PhantomData;
@@ -463,7 +473,7 @@ impl KeyState for Whole {
 pub type Narrowed<K, V> = <<V as BkeyVal>::State as KeyState>::Of<K>;
 
 /// A key whose value is Self is one of family F's, by its type alone - what
-/// a key converts to a family's by, From: bkey_family_members!, and a family
+/// a key converts to a family's by, From: bkey_types!' per row, and a family
 /// in a wider one.
 ///
 /// # Safety
@@ -629,6 +639,109 @@ impl FamilyTypes for AllTypes {
     }
 }
 
+/// A key type: its BCH_BKEY_TYPES() row, and its value's struct.
+#[derive(Clone, Copy)]
+pub struct KeyType {
+    pub nr: u8,
+    pub name: &'static str,
+    pub flags: u32,
+    pub info: &'static StructInfo,
+}
+
+macro_rules! key_types {
+    ($(($name:ident, $nr:literal, $($flag:ident)|+, $($rest:tt)*)),* $(,)?) => { crate::paste! {
+        const TABLE: [Option<KeyType>; NR_KEY_TYPES] = {
+            let mut t = [None; NR_KEY_TYPES];
+            $(t[$nr] = Some(KeyType { nr: $nr, name: stringify!($name), flags: 0 $(| c::$flag)+,
+                                      info: <c::[<$name:camel>] as TypeInfo>::INFO });)*
+            t
+        };
+    } };
+}
+c::BCH_BKEY_TYPES!(key_types);
+
+const NR_KEY_TYPES: usize = c::bch_bkey_type::KEY_TYPE_MAX.0 as usize;
+
+/// Every key type, by its number. A static, not TABLE, for a lookup: a const
+/// indexed at runtime may be copied whole to the stack first.
+pub static KEY_TYPES: [Option<KeyType>; NR_KEY_TYPES] = TABLE;
+
+/// Key type @ty: None for a type this code doesn't know.
+pub fn key_type(ty: u8) -> Option<&'static KeyType> {
+    KEY_TYPES.get(ty as usize)?.as_ref()
+}
+
+pub fn key_type_by_name(name: &str) -> Option<&'static KeyType> {
+    KEY_TYPES.iter().flatten().find(|t| t.name == name)
+}
+
+/// The key types with @flag, a bit each, by number.
+pub const fn types_with(flag: u32) -> u64 {
+    let (mut mask, mut i) = (0, 0);
+    while i < TABLE.len() {
+        if let Some(t) = TABLE[i] {
+            if t.flags & flag != 0 {
+                mask |= 1 << i;
+            }
+        }
+        i += 1;
+    }
+    mask
+}
+
+/// Where a family's field is in each of its types' values: the family a
+/// flag's, the field found by its name in each type's struct.
+pub struct FieldOffsets([Option<usize>; NR_KEY_TYPES]);
+
+impl FieldOffsets {
+    /// In every @flag type: a build error if one hasn't it.
+    pub const fn new(flag: u32, name: &str) -> Self {
+        let t = Self::optional(flag, name);
+        let mut i = 0;
+        while i < TABLE.len() {
+            if let Some(k) = TABLE[i] {
+                assert!(k.flags & flag == 0 || t.0[i].is_some(),
+                        "a key type with the flag hasn't the field its family reads");
+            }
+            i += 1;
+        }
+        t
+    }
+
+    /// In the @flag types that have it.
+    pub const fn optional(flag: u32, name: &str) -> Self {
+        let mut t = [None; NR_KEY_TYPES];
+        let mut i = 0;
+        while i < TABLE.len() {
+            if let Some(k) = TABLE[i] {
+                if k.flags & flag != 0 {
+                    t[i] = k.info.field_offset(name);
+                }
+            }
+            i += 1;
+        }
+        Self(t)
+    }
+
+    /// Where it is in @k's value: None if its type hasn't it.
+    pub fn of(&self, k: &c::bkey) -> Option<usize> {
+        *self.0.get(k.type_ as usize)?
+    }
+}
+
+/// The key types with flag F, a bch_bkey_type_flags: a family's types -
+/// FamilyVal<ByFlag<F>> - by their BCH_BKEY_TYPES() rows.
+pub enum ByFlag<const F: u32> {}
+
+impl<const F: u32> FamilyTypes for ByFlag<F> {
+    fn contains(k: &c::bkey) -> bool {
+        key_type(k.type_).is_some_and(|t| t.flags & F != 0)
+    }
+}
+
+// SAFETY: every key is one of AllTypes'
+unsafe impl<const F: u32, S: KeyState> InFamily<AllTypes> for FamilyVal<ByFlag<F>, S> {}
+
 // SAFETY: the value's u64s, all of them
 unsafe impl<F: 'static, S: State> Unsized for FamilyVal<F, S> {
     type Head = ();
@@ -725,106 +838,22 @@ macro_rules! bkey_typed {
 }
 pub(crate) use bkey_typed;
 
-/// `bkey_family!(Ptrs)`: a key family, defined where it's used - the rows its
-/// BCH_BKEY_TYPES() flag picks, and what a key of it requires past its type.
-/// Each family is an arm here.
+/// `bkey_family!(Ptrs: BKEY_TYPE_ptrs)`: the key family of the BCH_BKEY_TYPES()
+/// rows with that flag - FamilyVal<ByFlag<flag>> - and its typed(), for a
+/// family read per type. Its doc is the caller's: a family is defined where
+/// it's used.
 macro_rules! bkey_family {
-    (Ptrs) => {
-        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs =>
-            crate::btree::bkey::bkey_family { @def
-                /// Any of the key types with pointers, BKEY_TYPE_ptrs: a key armed
-                /// to it - BkeySC<'_, Ptrs>, BkeyS<'_, Ptrs>, &BkeyI<Ptrs> - has
-                /// its value read through typed().
-                Ptrs, |k| true;
-            }]);
-        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs =>
-            crate::btree::bkey::bkey_family_members { crate::data::ptrs::PtrsTypes; }]);
-    };
-    (PtrsMut) => {
-        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs_mut =>
-            crate::btree::bkey::bkey_family { @def
-                /// The key types with pointers that can be edited in place,
-                /// BKEY_TYPE_ptrs_mut: their extent entries run to the value's
-                /// end, so entries can be inserted and dropped - every Ptrs type
-                /// but a stripe.
-                PtrsMut, |k| true;
-            }]);
-        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs_mut =>
-            crate::btree::bkey::bkey_family_members { crate::data::ptrs::PtrsMutTypes; }]);
-    };
-    (BtreePtrs) => {
-        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_btree_ptr =>
-            crate::btree::bkey::bkey_family { @def
-                /// A btree node pointer, BKEY_TYPE_btree_ptr - a key above the
-                /// leaves, or a btree root's: a key armed to it is a
-                /// BkeySC<'_, BtreePtrs>, BkeyS<'_, BtreePtrs>, &BkeyI<BtreePtrs>.
-                BtreePtrs, |k| true;
-            }]);
-        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_btree_ptr =>
-            crate::btree::bkey::bkey_family_members { crate::data::ptrs::BtreePtrsTypes; }]);
-    };
-    (Extents) => {
-        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_extent =>
-            crate::btree::bkey::bkey_family { @def
-                /// Any key an extents btree may hold, its size nonzero - a range of
-                /// its btree, start_pos() to k.p: a key armed to it is a
-                /// BkeySC<'_, Extents>, BkeyS<'_, Extents>, &BkeyI<Extents>. A
-                /// key is one by its size as well as its type: a deletion slot
-                /// iteration makes is one or not by the iterator's mode.
-                Extents, |k| k.size != 0;
-            }]);
-    };
-    (Indirect) => {
-        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_indirect =>
-            crate::btree::bkey::bkey_family { @def
-                /// An indirect extent, BKEY_TYPE_indirect - refcounted, in the
-                /// reflink btree, what a reflink_p points to: a key armed to it
-                /// is a BkeySC<'_, Indirect>, BkeyS<'_, Indirect>, &BkeyI<Indirect>.
-                Indirect, |k| true;
-            }]);
-        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_indirect =>
-            crate::btree::bkey::bkey_family_members { crate::data::reflink::IndirectTypes; }]);
-    };
+    ($(#[$meta:meta])* $family:ident: $flag:ident) => { crate::paste! {
+        pub type [<$family Types>] = crate::btree::bkey::ByFlag<{ crate::c::$flag }>;
 
-    (@def $(#[$meta:meta])* $family:ident, |$k:ident| $contains:expr;
-     $(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => { crate::paste! {
         $(#[$meta])*
         pub type $family = crate::btree::bkey::FamilyVal<[<$family Types>]>;
 
-        pub enum [<$family Types>] {}
-
-        impl crate::btree::bkey::FamilyTypes for [<$family Types>] {
-            fn contains($k: &crate::c::bkey) -> bool {
-                matches!($k.type_ as u32, $($nr)|*) && $contains
-            }
-        }
-
-        crate::btree::bkey::bkey_typed! {
-            [<$family Typed>] for [<$family Types>];
-            $(($name, $nr, $($rest)*)),*
-        }
-
-        // SAFETY: every key is one of AllTypes'
-        unsafe impl<S: crate::btree::bkey::KeyState>
-            crate::btree::bkey::InFamily<crate::btree::bkey::AllTypes>
-            for crate::btree::bkey::FamilyVal<[<$family Types>], S> {}
+        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [$flag =>
+            crate::btree::bkey::bkey_typed { [<$family Typed>] for [<$family Types>]; }]);
     } };
 }
 pub(crate) use bkey_family;
-
-/// `bkey_family_members!(F; rows)`: the rows' types' keys are F's, by type -
-/// InFamily, each of their values in place. Only for a family whose keys are
-/// one by type alone: not Extents.
-macro_rules! bkey_family_members {
-    ($f:ty; $(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => { crate::paste! { $(
-        // SAFETY: a key whose value is one is of the type, which @f has
-        unsafe impl crate::btree::bkey::InFamily<$f>
-            for <crate::c::[<$name:camel>] as crate::btree::bkey::BkeyFamily>::Validated {}
-        unsafe impl crate::btree::bkey::InFamily<$f>
-            for <crate::c::[<$name:camel>] as crate::btree::bkey::BkeyFamily>::Unvalidated {}
-    )* } };
-}
-pub(crate) use bkey_family_members;
 
 /// `bkey_family_conv!(F)`: a key of F's - InFamily - becomes FamilyVal<F, S>
 /// by From, in any state its own implies, in its form or any it converts to:
@@ -899,21 +928,23 @@ macro_rules! bkey_val {
 }
 
 macro_rules! bkey_types {
-    ($(($name:ident, $nr:literal, $flags:expr, $field:tt $(, $($rest:tt)*)?)),* $(,)?) => {
+    ($(($name:ident, $nr:literal, $($flag:ident)|+, $field:tt $(, $($rest:tt)*)?)),* $(,)?) => {
         $(
         bkey_val!($name, $field);
+        bkey_types!(@in $name, AllTypes $(, ByFlag<{ c::$flag }>)+);
         )*
 
         bkey_typed! {
             Typed for AllTypes, unknown;
-            $(($name, $nr, $flags, $field $(, $($rest)*)?)),*
-        }
-
-        bkey_family_members! {
-            AllTypes;
-            $(($name, $nr, $flags, $field $(, $($rest)*)?)),*
+            $(($name, $nr, $($flag)|+, $field $(, $($rest)*)?)),*
         }
     };
+
+    (@in $name:ident $(, $f:ty)+) => { crate::paste! { $(
+        // SAFETY: a key whose value is one is of the type, which @f has
+        unsafe impl InFamily<$f> for <c::[<$name:camel>] as BkeyFamily>::Validated {}
+        unsafe impl InFamily<$f> for <c::[<$name:camel>] as BkeyFamily>::Unvalidated {}
+    )+ } };
 }
 
 c::BCH_BKEY_TYPES!(bkey_types);
