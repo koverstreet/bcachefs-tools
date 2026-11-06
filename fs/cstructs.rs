@@ -157,7 +157,6 @@ pub mod c {
     pub use crate::data::reconcile::trigger::{SET_NEEDS_RECONCILE_foreground, SET_NEEDS_RECONCILE_opt_change, SET_NEEDS_RECONCILE_opt_change_indirect, SET_NEEDS_RECONCILE_other, per_snapshot_io_opts, set_needs_reconcile_ctx, snapshot_io_opts_entry};
     pub use super::data_reconcile_types::*;
     pub use crate::data::reconcile::work::{RECONCILE_SCAN_device, RECONCILE_SCAN_fs, RECONCILE_SCAN_inum, RECONCILE_SCAN_metadata, RECONCILE_SCAN_pending, RECONCILE_SCAN_stripes, ReconcileScan, ReconcileScanRef, reconcile_scan, reconcile_scan__ffi, reconcile_scan_device, reconcile_scan_fs, reconcile_scan_inum, reconcile_scan_metadata, reconcile_scan_pending, reconcile_scan_stripes, reconcile_scan_type};
-    pub(crate) use crate::data::reconcile::work::{RECONCILE_SCAN_TYPES};
     pub use super::data_reflink_format::*;
     pub use crate::data::update::{BCH_DATA_UPDATE_copygc, BCH_DATA_UPDATE_other, BCH_DATA_UPDATE_promote, BCH_DATA_UPDATE_reconcile, BCH_DATA_UPDATE_scrub, BCH_DATA_UPDATE_scrub_no_repair, BCH_DATA_UPDATE_self_heal, bch_data_update_types, data_update, data_update_key, data_update_opts, data_update_opts_bits};
     pub(crate) use crate::data::update::{BCH_DATA_UPDATE_TYPES, __data_update_opts_bits_forward};

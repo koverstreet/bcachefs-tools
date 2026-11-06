@@ -455,14 +455,14 @@ fn update_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>
     let msg = |out: &mut Printbuf| write!(out, "{}", k.to_text(fs));
 
     macro_rules! trace {
-        ($(($n:ident)),* $(,)?) => { crate::paste! {
+        ($(($n:ident, $v:expr)),* $(,)?) => { crate::paste! {
             match scan.type_() {
                 $(c::reconcile_scan_type::[<RECONCILE_SCAN_ $n>] =>
                     fs.event_add_trace(events::[<reconcile_scan_ $n>], sectors, msg),)*
             }
         } };
     }
-    c::RECONCILE_SCAN_TYPES!(trace);
+    crate::data::reconcile::work::reconcile_scan_arms!(trace);
 
     update_reconcile_opts(t, s, opts, iter, level, k, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change)
 }
