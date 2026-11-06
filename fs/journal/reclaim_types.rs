@@ -33,9 +33,10 @@ c_extern! {
     pub fn bch2_journal_replay_pins_put(j: *mut c::journal, seq: u64);
     pub fn bch2_journal_pin_drop(j: *mut c::journal, pin: *mut c::journal_entry_pin);
     pub fn bch2_journal_pin_set(j: *mut c::journal, seq: u64, pin: *mut c::journal_entry_pin,
-                                flush_fn: c::journal_pin_flush_fn);
+                                pin_type: c::journal_pin_type, flush_fn: c::journal_pin_flush_fn);
     pub fn bch2_journal_pin_copy(j: *mut c::journal, dst: *mut c::journal_entry_pin,
-                                 src: *mut c::journal_entry_pin, flush_fn: c::journal_pin_flush_fn);
+                                 src: *mut c::journal_entry_pin, pin_type: c::journal_pin_type,
+                                 flush_fn: c::journal_pin_flush_fn);
     pub fn bch2_journal_pin_flush(j: *mut c::journal, pin: *mut c::journal_entry_pin);
 }
 
@@ -51,27 +52,30 @@ impl c::journal {
         unsafe { bch2_journal_pin_drop(self.as_ptr(), pin.as_ptr()) }
     }
 
-    pub fn pin_set(&self, seq: u64, pin: &Opaque<c::journal_entry_pin>, flush_fn: c::journal_pin_flush_fn) {
-        unsafe { bch2_journal_pin_set(self.as_ptr(), seq, pin.as_ptr(), flush_fn) }
+    pub fn pin_set(&self, seq: u64, pin: &Opaque<c::journal_entry_pin>, pin_type: c::journal_pin_type,
+                   flush_fn: c::journal_pin_flush_fn) {
+        unsafe { bch2_journal_pin_set(self.as_ptr(), seq, pin.as_ptr(), pin_type, flush_fn) }
     }
 
-    pub fn pin_add(&self, seq: u64, pin: &Opaque<c::journal_entry_pin>, flush_fn: c::journal_pin_flush_fn) {
+    pub fn pin_add(&self, seq: u64, pin: &Opaque<c::journal_entry_pin>, pin_type: c::journal_pin_type,
+                   flush_fn: c::journal_pin_flush_fn) {
         let held = pin.seq();
         if held == 0 || held > seq {
-            self.pin_set(seq, pin, flush_fn)
+            self.pin_set(seq, pin, pin_type, flush_fn)
         }
     }
 
-    pub fn pin_update(&self, seq: u64, pin: &Opaque<c::journal_entry_pin>, flush_fn: c::journal_pin_flush_fn) {
+    pub fn pin_update(&self, seq: u64, pin: &Opaque<c::journal_entry_pin>, pin_type: c::journal_pin_type,
+                      flush_fn: c::journal_pin_flush_fn) {
         let held = pin.seq();
         if held == 0 || held < seq {
-            self.pin_set(seq, pin, flush_fn)
+            self.pin_set(seq, pin, pin_type, flush_fn)
         }
     }
 
     pub fn pin_copy(&self, dst: &Opaque<c::journal_entry_pin>, src: &Opaque<c::journal_entry_pin>,
-                    flush_fn: c::journal_pin_flush_fn) {
-        unsafe { bch2_journal_pin_copy(self.as_ptr(), dst.as_ptr(), src.as_ptr(), flush_fn) }
+                    pin_type: c::journal_pin_type, flush_fn: c::journal_pin_flush_fn) {
+        unsafe { bch2_journal_pin_copy(self.as_ptr(), dst.as_ptr(), src.as_ptr(), pin_type, flush_fn) }
     }
 
     pub fn pin_flush(&self, pin: &Opaque<c::journal_entry_pin>) {

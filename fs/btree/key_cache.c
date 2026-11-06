@@ -598,6 +598,7 @@ int bch2_btree_key_cache_journal_flush(struct journal *j,
 					/* raced; nothing to do */
 				} else if (ck->seq != seq) {
 					bch2_journal_pin_update(&c->journal, ck->seq, &ck->journal,
+								JOURNAL_PIN_TYPE_key_cache,
 								bch2_btree_key_cache_journal_flush);
 				} else {
 					do_flush = true;
@@ -767,8 +768,8 @@ void bch2_btree_insert_key_cached(struct btree_trans *trans,
 		  seq, READ_ONCE(c->journal.last_seq), READ_ONCE(c->journal.pin.back),
 		  insert_entry->flags & BTREE_UPDATE_nojournal ? " (nojournal)" : "");
 
-	bch2_journal_pin_add(&c->journal, seq,
-			     &ck->journal, bch2_btree_key_cache_journal_flush);
+	bch2_journal_pin_add(&c->journal, seq, &ck->journal,
+			     JOURNAL_PIN_TYPE_key_cache, bch2_btree_key_cache_journal_flush);
 	bkey_cached_check_pin(c, ck);
 
 	if (kick_reclaim)

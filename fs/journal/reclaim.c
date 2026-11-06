@@ -596,26 +596,12 @@ void bch2_journal_pin_drop(struct journal *j,
 		bch2_journal_maybe_update_last_seq(j);
 }
 
-static enum journal_pin_type journal_pin_type(struct journal_entry_pin *pin,
-					      journal_pin_flush_fn fn)
-{
-	if (fn == bch2_btree_node_flush0 ||
-	    fn == bch2_btree_node_flush1) {
-		unsigned idx = fn == bch2_btree_node_flush1;
-		struct btree *b = container_of(pin, struct btree, writes[idx].journal);
-
-		return JOURNAL_PIN_TYPE_btree0 - b->c.level;
-	} else if (fn == bch2_btree_key_cache_journal_flush)
-		return JOURNAL_PIN_TYPE_key_cache;
-	else
-		return JOURNAL_PIN_TYPE_other;
-}
-
 static inline bool bch2_journal_pin_set_locked(struct journal *j,
 			struct journal_entry_pin_list *old_l,
 			struct journal_entry_pin_list *new_l,
 			struct journal_entry_pin *pin,
-			u64 seq, journal_pin_flush_fn flush_fn)
+			u64 seq, enum journal_pin_type type,
+			journal_pin_flush_fn flush_fn)
 {
 	bool reclaim = journal_pin_active(pin)
 		? journal_pin_drop_locked(j, old_l, pin)
@@ -637,8 +623,7 @@ static inline bool bch2_journal_pin_set_locked(struct journal *j,
 	atomic_inc(&new_l->count);
 	pin->seq	= seq;
 	pin->flush	= flush_fn;
-
-	enum journal_pin_type type = journal_pin_type(pin, flush_fn);
+	pin->pin_type	= type;
 
 	if (list_empty(&new_l->unflushed[type]) &&
 	    j->reclaim_flush_wait.list.first)
@@ -652,6 +637,7 @@ static inline bool bch2_journal_pin_set_locked(struct journal *j,
 void bch2_journal_pin_copy(struct journal *j,
 			   struct journal_entry_pin *dst,
 			   struct journal_entry_pin *src,
+			   enum journal_pin_type type,
 			   journal_pin_flush_fn flush_fn)
 {
 	guard(percpu_read)(&j->pin_resize_lock);
@@ -686,7 +672,7 @@ void bch2_journal_pin_copy(struct journal *j,
 		bool keep = dst_seq && dst_seq <= src_seq;
 		bool reclaim = false, race = src_seq != src->seq || dst_seq != dst->seq;
 		if (!race && !keep)
-			reclaim = bch2_journal_pin_set_locked(j, dst_l, src_l, dst, src_seq, flush_fn);
+			reclaim = bch2_journal_pin_set_locked(j, dst_l, src_l, dst, src_seq, type, flush_fn);
 
 		if (dst_l && dst_l != src_l)
 			spin_unlock(&dst_l->lock);
@@ -708,6 +694,7 @@ void bch2_journal_pin_copy(struct journal *j,
 
 void bch2_journal_pin_set(struct journal *j, u64 new_seq,
 			  struct journal_entry_pin *pin,
+			  enum journal_pin_type type,
 			  journal_pin_flush_fn flush_fn)
 {
 	guard(percpu_read)(&j->pin_resize_lock);
@@ -752,7 +739,7 @@ void bch2_journal_pin_set(struct journal *j, u64 new_seq,
 
 		bool reclaim = false, race = old_seq != pin->seq;
 		if (!race)
-			reclaim = bch2_journal_pin_set_locked(j, old_l, new_l, pin, new_seq, flush_fn);
+			reclaim = bch2_journal_pin_set_locked(j, old_l, new_l, pin, new_seq, type, flush_fn);
 
 		if (old_l && old_l != new_l)
 			spin_unlock(&old_l->lock);
@@ -884,7 +871,7 @@ static size_t journal_flush_pins(struct journal *j,
 		if (!pin)
 			break;
 
-		if (min_key_cache && pin->flush == bch2_btree_key_cache_journal_flush)
+		if (min_key_cache && pin->pin_type == JOURNAL_PIN_TYPE_key_cache)
 			min_key_cache--;
 
 		if (min_any)
@@ -902,7 +889,7 @@ static size_t journal_flush_pins(struct journal *j,
 			struct journal_entry_pin_list *pin_l = &fifo_entry(&j->pin, seq);
 
 			guard(spinlock)(&pin_l->lock);
-			enum journal_pin_type type = journal_pin_type(pin, flush_fn);
+			enum journal_pin_type type = pin->pin_type;
 
 			enum bch_time_stats flush_time =
 				type <= JOURNAL_PIN_TYPE_btree0
@@ -1174,7 +1161,7 @@ static bool journal_pins_still_flushing(struct journal *j, u64 seq_to_flush,
 
 		struct journal_entry_pin *pin;
 		list_for_each_entry(pin, &pin_list->flushed, list)
-			if (BIT(journal_pin_type(pin, pin->flush)) & types)
+			if (BIT(pin->pin_type) & types)
 				return true;
 
 	}

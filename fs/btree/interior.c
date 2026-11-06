@@ -1246,6 +1246,7 @@ static void btree_update_reparent(struct btree_update *as,
 	child->mode = BTREE_UPDATE_update;
 
 	bch2_journal_pin_copy(&c->journal, &as->journal, &child->journal,
+			      JOURNAL_PIN_TYPE_other,
 			      bch2_update_reparent_journal_pin_flush);
 }
 
@@ -1383,11 +1384,13 @@ static void bch2_btree_interior_update_will_free_node(struct btree_update *as,
 	 */
 	w = btree_current_write(b);
 	bch2_journal_pin_copy(&c->journal, &as->journal, &w->journal,
+			      JOURNAL_PIN_TYPE_other,
 			      bch2_btree_update_will_free_node_journal_pin_flush);
 	bch2_journal_pin_drop(&c->journal, &w->journal);
 
 	w = btree_prev_write(b);
 	bch2_journal_pin_copy(&c->journal, &as->journal, &w->journal,
+			      JOURNAL_PIN_TYPE_other,
 			      bch2_btree_update_will_free_node_journal_pin_flush);
 	bch2_journal_pin_drop(&c->journal, &w->journal);
 

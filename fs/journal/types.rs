@@ -137,6 +137,7 @@ pub struct journal_entry_pin {
     pub list: c::list_head,
     pub flush: c::journal_pin_flush_fn,
     pub seq: u64,
+    pub pin_type: c::journal_pin_type,
 }
 
 unsafe impl ::pin_init::Zeroable for crate::util::ffi::Opaque<journal_entry_pin> {}

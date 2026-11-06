@@ -317,6 +317,7 @@ inline void bch2_btree_add_journal_pin(struct bch_fs *c,
 	struct btree_write *w = btree_current_write(b);
 
 	bch2_journal_pin_add(&c->journal, seq, &w->journal,
+			     journal_pin_type_btree(b->c.level),
 			     btree_node_write_idx(b) == 0
 			     ? bch2_btree_node_flush0
 			     : bch2_btree_node_flush1);
@@ -1353,7 +1354,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 
 		if (unlikely(trans->journal_pin))
 			bch2_journal_pin_set(&c->journal, trans->journal_res.seq,
-					     trans->journal_pin,
+					     trans->journal_pin, JOURNAL_PIN_TYPE_other,
 					     bch2_trans_commit_journal_pin_flush);
 
 		if (trans->flush)

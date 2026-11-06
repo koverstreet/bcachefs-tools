@@ -331,7 +331,7 @@ static void move_keys_from_inc_to_flushing(struct bch_fs_btree_write_buffer *wb)
 		return;
 
 	bch2_journal_pin_add(j, wb_keys_start(&wb->inc)->journal_seq, &wb->flushing.pin,
-			     bch2_btree_write_buffer_journal_flush);
+			     JOURNAL_PIN_TYPE_other, bch2_btree_write_buffer_journal_flush);
 
 	/* Best-effort resizes; may fail under memory pressure - see WB_RESIZE_GFP */
 	darray_resize_gfp(&wb->flushing.keys,
@@ -389,7 +389,7 @@ out:
 		bch2_journal_pin_drop(j, &wb->inc.pin);
 	else
 		bch2_journal_pin_update(j, wb_keys_start(&wb->inc)->journal_seq, &wb->inc.pin,
-					bch2_btree_write_buffer_journal_flush);
+					JOURNAL_PIN_TYPE_other, bch2_btree_write_buffer_journal_flush);
 
 	if (test_bit(JOURNAL_low_on_wb, &j->flags) && !bch2_btree_write_buffer_must_wait(c)) {
 		guard(spinlock)(&j->lock);
@@ -772,7 +772,7 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans,
 
 			if (!could_not_insert)
 				bch2_journal_pin_update(j, k->journal_seq, &wb->flushing.pin,
-							bch2_btree_write_buffer_journal_flush);
+							JOURNAL_PIN_TYPE_other, bch2_btree_write_buffer_journal_flush);
 
 			bch2_trans_begin(trans);
 
@@ -1342,7 +1342,7 @@ retry:
 			if (pb->wb->keys.nr)
 				bch2_journal_pin_add(&c->journal, dst->seq,
 						     &pb->wb->pin,
-						     bch2_btree_write_buffer_journal_flush);
+						     JOURNAL_PIN_TYPE_other, bch2_btree_write_buffer_journal_flush);
 			mutex_unlock(&pb->wb->lock);
 #ifdef CONFIG_BCACHEFS_TESTS
 			if (force_alloc_failure) {
@@ -1371,7 +1371,7 @@ retry:
 #endif
 			pb->wb = &wb->inc;
 			bch2_journal_pin_add(&c->journal, dst->seq, &pb->wb->pin,
-					     bch2_btree_write_buffer_journal_flush);
+					     JOURNAL_PIN_TYPE_other, bch2_btree_write_buffer_journal_flush);
 			goto retry;
 		}
 
@@ -1467,7 +1467,7 @@ static int __bch2_journal_keys_to_write_buffer_end(struct bch_fs *c, struct jour
 
 		if (pb->wb->keys.nr)
 			bch2_journal_pin_add(&c->journal, dst->seq, &pb->wb->pin,
-					     bch2_btree_write_buffer_journal_flush);
+					     JOURNAL_PIN_TYPE_other, bch2_btree_write_buffer_journal_flush);
 	}
 
 	return ret;
