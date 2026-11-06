@@ -15,15 +15,25 @@
 //! Its elements are a slice, Deref'd: the slice's methods - iteration,
 //! indexing, sort_unstable - are its. Growing it is reserve(), push() and
 //! insert(), each fallible as the allocation under it is.
+//!
+//! RCU readers may read it - read_rcu() - while its writer, its lock's holder,
+//! changes it. A spill or a grow writes only the first word, with a release,
+//! and never the inline elements after it, which nothing writes again once
+//! they're spilled; what's grown out of is freed as its elements say, a grace
+//! period on if they aren't FreeAnytime.
 
 use crate::data_structures::array_vec::LenUint;
-use crate::data_structures::dst_vec::DstVec;
+use crate::data_structures::dst_array::assert_rcu_freed;
+use crate::data_structures::dst_vec::{DstVec, DstVecHead};
 use crate::util::alloc::AllocError;
-use core::mem::{ManuallyDrop, MaybeUninit};
+use crate::util::rcu;
+use core::mem::{offset_of, ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
 use core::ptr;
 use core::slice;
+use core::sync::atomic::{AtomicPtr, Ordering::{Acquire, Release}};
 
+#[repr(transparent)]
 pub struct InlineVec<T, const N: usize, L: LenUint = u32> {
     repr: Repr<T, N, L>,
 }
@@ -50,6 +60,19 @@ impl<T, const N: usize, L: LenUint> InlineVec<T, N, L> {
         const { assert!(N <= L::MAX >> 1, "InlineVec: its inline capacity doesn't fit its length type") };
 
         let inline = Inline { pad: L::WORD_PAD, tag: L::ONE, elems: [const { MaybeUninit::uninit() }; N] };
+        Self { repr: Repr { inline: ManuallyDrop::new(inline) } }
+    }
+
+    /// new(), its inline room zeroes: so what an RCU reader may see before
+    /// it's pushed - a length is published before the element it counts - is
+    /// an element.
+    pub const fn new_zeroed() -> Self
+    where
+        T: ::pin_init::Zeroable,
+    {
+        const { assert!(N <= L::MAX >> 1, "InlineVec: its inline capacity doesn't fit its length type") };
+
+        let inline = Inline { pad: L::WORD_PAD, tag: L::ONE, elems: [const { MaybeUninit::zeroed() }; N] };
         Self { repr: Repr { inline: ManuallyDrop::new(inline) } }
     }
 
@@ -88,8 +111,65 @@ impl<T, const N: usize, L: LenUint> InlineVec<T, N, L> {
             ptr::copy_nonoverlapping(self.repr.inline.elems.as_ptr().cast(), heap.as_mut_ptr(), len);
             heap.set_len(len);
         }
-        self.repr = Repr { heap: ManuallyDrop::new(heap) };
+        self.set_heap(heap);
         Ok(())
+    }
+
+    /// @heap where its elements are now: the first word alone written, by a
+    /// release - an RCU reader may be in the elements it had, and has to see
+    /// what was copied into @heap once it sees @heap.
+    fn set_heap(&mut self, heap: DstVec<T, L>) {
+        let word = unsafe { AtomicPtr::from_ptr((&raw mut self.repr.heap).cast::<*mut DstVecHead<L>>()) };
+        word.store(heap.into_raw().as_ptr(), Release);
+    }
+
+    /// Its elements moved into @into, if it has more room - allocated before,
+    /// as under a spinlock it must be - and what they were in freed, as they
+    /// say; else @into back.
+    pub fn grow_into(&mut self, mut into: DstVec<T, L>) -> Result<(), DstVec<T, L>> {
+        let len = self.len();
+        if into.capacity() <= self.capacity() || !into.is_empty() {
+            return Err(into);
+        }
+
+        unsafe {
+            ptr::copy_nonoverlapping(self.as_ptr(), into.as_mut_ptr(), len);
+            into.set_len(len);
+        }
+        if self.spilled() {
+            let old = unsafe { ManuallyDrop::take(&mut self.repr.heap) };
+            self.set_heap(into);
+            unsafe { old.free_moved() };
+        } else {
+            self.set_heap(into);
+        }
+        Ok(())
+    }
+
+    /// Its elements, for an RCU reader while its writer - its lock's holder -
+    /// changes it: what it's grown out of is freed a grace period on, its
+    /// elements not FreeAnytime, and what it's grown into published after
+    /// they're copied there. Its length isn't: a reader may see one before
+    /// the element it counts, which publishes itself, an atomic.
+    ///
+    /// # Safety
+    /// @v lives for 'a, its writer's stores to its elements are atomic, and
+    /// it's had only through &mut by its writer and read_rcu() by readers.
+    pub unsafe fn read_rcu<'a>(v: *const Self, _rcu: &'a rcu::ReadGuard) -> &'a [T] {
+        assert_rcu_freed::<MaybeUninit<T>>();
+        const { assert!(offset_of!(Inline<T, N, L>, elems) >= size_of::<usize>(),
+                        "InlineVec: RCU readers need its elements past the first word, which a spill rewrites") };
+
+        unsafe {
+            let inline = (&raw const (*v).repr.inline).cast::<Inline<T, N, L>>();
+            let tag = ptr::read_volatile(&raw const (*inline).tag).to_usize();
+            if tag & 1 != 0 {
+                slice::from_raw_parts((&raw const (*inline).elems).cast::<T>(), tag >> 1)
+            } else {
+                let word = AtomicPtr::from_ptr((&raw const (*v).repr.heap).cast::<*mut DstVecHead<L>>().cast_mut());
+                DstVec::<T, L>::read_rcu(word.load(Acquire))
+            }
+        }
     }
 
     /// Room for @additional more, moving to the heap if they don't fit
@@ -247,5 +327,19 @@ mod tests {
     #[test]
     fn small_is_small() {
         assert_eq!(size_of::<InlineVec<u8, 7, u8>>(), size_of::<usize>());
+    }
+
+    #[test]
+    fn grows_into_what_it_is_given() {
+        let mut v = InlineVec::<u32, 2>::new_zeroed();
+        v.push(1).unwrap();
+        v.push(2).unwrap();
+
+        assert!(v.grow_into(DstVec::with_capacity(2).unwrap()).is_err(), "no more room: handed back");
+        assert!(v.grow_into(DstVec::with_capacity(4).unwrap()).is_ok());
+        assert!(v.spilled());
+        v.push(3).unwrap();
+        assert!(v.grow_into(DstVec::with_capacity(8).unwrap()).is_ok());
+        assert_eq!((&*v, v.capacity()), (&[1, 2, 3][..], 8));
     }
 }

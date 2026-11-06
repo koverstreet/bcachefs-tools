@@ -7,10 +7,11 @@ use crate::data_structures::array_vec::LenUint;
 use crate::data_structures::dst_array::{DstArray, DstHead};
 use crate::util::alloc::AllocError;
 use core::marker::PhantomData;
-use core::mem::MaybeUninit;
+use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
 use core::slice;
+use core::sync::atomic::{AtomicPtr, Ordering::Release};
 
 #[repr(C)]
 pub struct DstVecHead<L> {
@@ -85,9 +86,38 @@ impl<T, L: LenUint> DstVec<T, L> {
         let cap = want.max(self.capacity().saturating_mul(2)).min(L::MAX);
         let head = DstVecHead { len: L::from_usize(len), cap: L::from_usize(cap) };
         let new = unsafe { Buf::<T, L>::realloc(self.head, len, head)? };
-        unsafe { Buf::<T, L>::free(self.head) };
-        self.head = new;
+        let old = self.head;
+        // by a release: an RCU reader that sees @new sees what was copied
+        unsafe { AtomicPtr::from_ptr((&raw mut self.head).cast::<*mut DstVecHead<L>>()) }.store(new.as_ptr(), Release);
+        unsafe { Buf::<T, L>::free(old) };
         Ok(())
+    }
+
+    /// Its buffer, owned by the caller.
+    pub(crate) fn into_raw(self) -> NonNull<DstVecHead<L>> {
+        ManuallyDrop::new(self).head
+    }
+
+    /// Its buffer freed, not its elements: they've been moved out.
+    ///
+    /// # Safety
+    /// Its first len() have been moved out, and nothing but RCU readers uses
+    /// it after.
+    pub(crate) unsafe fn free_moved(self) {
+        unsafe { Buf::<T, L>::free(self.into_raw()) };
+    }
+
+    /// The elements of the buffer at @head, as an RCU reader sees them,
+    /// their length read whole: as InlineVec::read_rcu().
+    ///
+    /// # Safety
+    /// As InlineVec::read_rcu()'s.
+    pub(crate) unsafe fn read_rcu<'a>(head: *mut DstVecHead<L>) -> &'a [T] {
+        unsafe {
+            let buf = Buf::<T, L>::from_thin(head);
+            let len = ptr::read_volatile(&raw const (*buf).head.len).to_usize();
+            slice::from_raw_parts((&raw const (*buf).elems).cast::<T>(), len)
+        }
     }
 
     pub fn push(&mut self, x: T) -> Result<(), AllocError> {
