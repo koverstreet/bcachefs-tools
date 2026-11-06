@@ -41,14 +41,15 @@ pub struct bch_acl_header {
 
 /* The tags are <uapi/linux/posix_acl.h>'s ACL_*, which C has from there: */
 tagged_union! {
-    pub union acl_entry in c::bch_acl_entry_short {
-        tag e_tag: u16,
-        arm user_obj:  c::bch_acl_entry_short = 0x01,
-        arm user:      c::bch_acl_entry       = 0x02,
-        arm group_obj: c::bch_acl_entry_short = 0x04,
-        arm group:     c::bch_acl_entry       = 0x08,
-        arm mask:      c::bch_acl_entry_short = 0x10,
-        arm other:     c::bch_acl_entry_short = 0x20,
-        size: arm,
+    #[storage(c::bch_acl_entry_short)]
+    #[tag(e_tag: u16)]
+    #[size(arm)]
+    pub enum acl_entry {
+        user_obj(c::bch_acl_entry_short)  = 0x01,
+        user(c::bch_acl_entry)            = 0x02,
+        group_obj(c::bch_acl_entry_short) = 0x04,
+        group(c::bch_acl_entry)           = 0x08,
+        mask(c::bch_acl_entry_short)      = 0x10,
+        other(c::bch_acl_entry_short)     = 0x20,
     }
 }
