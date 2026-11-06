@@ -54,9 +54,6 @@ static inline void journal_seq_devs_to_replicas(union bch_replicas_padded *r,
 	bch2_devlist_to_replicas(&r->e, BCH_DATA_journal, bch2_journal_seq_devs(j, seq));
 }
 
-int bch2_journal_update_last_seq_ondisk(struct journal *, u64,
-					darray_replicas_entry_refs *);
-
 static inline enum journal_pin_type journal_pin_type_btree(unsigned level)
 {
 	return JOURNAL_PIN_TYPE_btree0 - level;

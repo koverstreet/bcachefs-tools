@@ -265,6 +265,43 @@ static void replicas_refs_put(struct bch_fs *c, darray_replicas_entry_refs *refs
 	refs->nr = 0;
 }
 
+static int bch2_journal_update_last_seq_ondisk(struct journal *j, u64 last_seq_ondisk,
+					       darray_replicas_entry_refs *refs)
+{
+	BUG_ON(last_seq_ondisk > j->pin_back);
+
+	for (u64 seq = j->last_seq_ondisk; seq < last_seq_ondisk; seq++) {
+		struct bch_devs_list devs = bch2_journal_seq_devs(j, seq);
+
+		if (devs.nr) {
+			union bch_replicas_padded devs_r;
+			bch2_devlist_to_replicas(&devs_r.e, BCH_DATA_journal, devs);
+
+			replicas_entry_refs *e = darray_find_p(*refs, i,
+			    bch2_replicas_entry_eq(&i->replicas.e, &devs_r.e));
+
+			if (e) {
+				e->nr_refs++;
+			} else {
+				try(darray_push_gfp(refs, ((replicas_entry_refs) {
+						    .nr_refs = 1,
+						    .replicas = devs_r,
+				}), GFP_ATOMIC));
+			}
+
+			bch2_journal_seq_set_devs(j, seq, &(struct bch_devs_list) {});
+		}
+
+		unsigned bytes = bch2_journal_seq_take_bytes(j, seq);
+		if (WARN_ON(j->dirty_entry_bytes < bytes))
+			bytes = j->dirty_entry_bytes;
+
+		j->dirty_entry_bytes -= bytes;
+	}
+
+	return 0;
+}
+
 /*
  * write_done has two-state semantics that matter for concurrent
  * journal_write_done() callbacks:
