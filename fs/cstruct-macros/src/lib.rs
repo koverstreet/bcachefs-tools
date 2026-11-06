@@ -1069,11 +1069,32 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
 /// `#[prefix(P)]`: its variants by their names past P too, constants of the
 /// type - BkeyTypeFlags::ptrs for BKEY_TYPE_ptrs.
 ///
+/// The enum form, with `#[arm_columns(..)]` or `#[c_list(LIST)]`: a list's
+/// enum, declared as one - its variants by their names past `#[prefix(P)]`,
+/// C's P and theirs, each with its doc and columns, `#[nr(NR)]` its count -
+/// as tagged_union!'s #[key_value] has them:
+///
+///   c_enum! {
+///       #[open] #[c_name(btree_id)] #[prefix(BTREE_ID_)] #[nr(BTREE_ID_NR)]
+///       #[arm_columns(flags: BtreeFlags, holds: set(BkeyType))]
+///       #[c_list(BCH_BTREE_IDS)]
+///       pub enum Btree: u32 {
+///           /// File data extent pointers and reservations
+///           #[flags(extents, snapshots, data, trans_triggers)]
+///           #[holds(whiteout, extent, reservation, ..)]
+///           extents = 0,
+///           ...
+///       }
+///   }
+///
 /// `_` for the name: an anonymous enum, the constants alone. A variant with
 /// no value is the one before it plus one, as in C.
 #[proc_macro]
 pub fn c_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("c_enum!", || {
+        if let Some(form) = c_enum_form(input.clone().into())? {
+            return tagged_union::tagged_union(form);
+        }
         let text = format!("c_enum! {{ {input} }}");
         let e = one_item!(&text, Enum, C_ENUM_SYNTAX);
         Ok(match e.from.first() {
@@ -1084,6 +1105,71 @@ pub fn c_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 }
 
 const C_ENUM_SYNTAX: &str = "#[open|closed|flags] pub enum NAME: REPR { ... }";
+
+/// c_enum!'s enum form - #[arm_columns], #[c_list]: its variants by their
+/// names past #[prefix], with docs and columns, as tagged_union!'s
+/// #[key_value] declaration of the same enum: what it makes, with no union.
+fn c_enum_form(input: TokenStream) -> Result<Option<TokenStream>, String> {
+    let trees: Vec<TokenTree> = input.into_iter().collect();
+    let attr = |t: &[TokenTree]| match t {
+        [TokenTree::Punct(p), TokenTree::Group(g), ..] if p.as_char() == '#' => {
+            let mut inner = g.stream().into_iter();
+            let head = match inner.next() { Some(TokenTree::Ident(i)) => i.to_string(), _ => String::new() };
+            let args = match inner.next() { Some(TokenTree::Group(a)) => a.stream(), _ => TokenStream::new() };
+            Some((head, args, g.clone()))
+        }
+        _ => None,
+    };
+    let mut k = 0;
+    let mut heads = Vec::new();
+    while let Some(a) = attr(&trees[k..]) {
+        heads.push(a);
+        k += 2;
+    }
+    if !heads.iter().any(|(h, ..)| h == "arm_columns" || h == "c_list") {
+        return Ok(None);
+    }
+
+    let err = |m: &str| format!("c_enum!'s enum form: {m}");
+    let (mut kind, mut prefix, mut nr, mut c_name) = (None, None, None, None);
+    let mut rest = TokenStream::new();
+    for (head, args, g) in heads {
+        match head.as_str() {
+            "open" | "closed" => kind = Some(head),
+            "prefix" => prefix = Some(args.to_string()),
+            "nr"     => nr = Some(args.to_string()),
+            "c_name" => c_name = Some(args.to_string()),
+            "flags"  => return Err(err("a #[flags] enum's variants are bits, not a list's")),
+            _ => rest.extend([TokenTree::Punct(proc_macro2::Punct::new('#', Spacing::Alone)), TokenTree::Group(g)]),
+        }
+    }
+    let kind = kind.ok_or_else(|| err("#[open] or #[closed]"))?;
+    let prefix = prefix.ok_or_else(|| err("#[prefix(P)]: the variants' C names are P and theirs"))?;
+
+    // pub enum NAME: REPR { .. }
+    let (vis, after) = trees[k..].split_at(trees[k..].iter().position(|t| matches!(t, TokenTree::Ident(i) if i == "enum"))
+        .ok_or_else(|| err("expected pub enum NAME: REPR { .. }"))?);
+    let [_, TokenTree::Ident(name), TokenTree::Punct(colon), TokenTree::Ident(repr), TokenTree::Group(body)] = after else {
+        return Err(err("expected pub enum NAME: REPR { .. }"));
+    };
+    if colon.as_char() != ':' {
+        return Err(err("expected pub enum NAME: REPR { .. }"));
+    }
+    let vis: TokenStream = vis.iter().cloned().collect();
+
+    let mut tag_enum = format!("{name}: {repr}, prefix = {prefix}");
+    if kind == "closed" {
+        tag_enum = format!("closed, {tag_enum}");
+    }
+    if let Some(nr) = nr {
+        tag_enum.push_str(&format!(", nr = {nr}"));
+    }
+    if let Some(c) = c_name {
+        tag_enum.push_str(&format!(", c_name = {c}"));
+    }
+    let tag_enum: TokenStream = tag_enum.parse().map_err(|e: proc_macro2::LexError| e.to_string())?;
+    Ok(Some(quote!(#[key_value] #[tag_enum(#tag_enum)] #rest #vis enum #name #body)))
+}
 
 /// `atomic_bitfield! { pub struct NAME: uN [in uM] { fields } }`: a
 /// bitfield's value, NAME, and AtomicNAME, a word of it that's atomic - see
