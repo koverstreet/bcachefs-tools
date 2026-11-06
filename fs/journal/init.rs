@@ -224,7 +224,9 @@ impl c::journal {
 
         self.buf_size_want.set(size);
         let buf = c::JsetBuf::new(size).map_err(|_| enomem())?;
-        self.lock.lock().free_buf = buf;
+        /* the old one freed outside the lock: kvfree can sleep */
+        let old = core::mem::replace(&mut self.lock.lock().free_buf, buf);
+        drop(old);
 
         /*
          * in_flight holds one entry per seq in (seq_ondisk, cur_seq]. Size is
