@@ -1129,7 +1129,12 @@ impl Fs {
 
     /// The devices the allocator writes to: for_each_rw_member_rcu().
     pub fn rw_devs_rcu<'g>(&'g self, rcu: &'g ReadGuard) -> impl Iterator<Item = &'g Dev> {
-        self.devs_rcu_in(self.allocator.rw_devs[DataType::free.0 as usize].iter(), rcu)
+        self.rw_devs_for_rcu(DataType::free, rcu)
+    }
+
+    /// The devices the allocator writes @data_type to.
+    pub fn rw_devs_for_rcu<'g>(&'g self, data_type: DataType, rcu: &'g ReadGuard) -> impl Iterator<Item = &'g Dev> {
+        self.devs_rcu_in(self.allocator.rw_devs[data_type.0 as usize].iter(), rcu)
     }
 
     /// dev_rcu(), a missing device reported: bch2_dev_rcu().
