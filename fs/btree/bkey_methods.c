@@ -126,25 +126,8 @@ static __cold void key_type_cookie_to_text(struct printbuf *out, struct bch_fs *
 	.key_validate	= empty_val_key_validate,	\
 })
 
-static int key_type_inline_data_validate(struct bch_fs *c, struct bkey_s_c k,
-					 const struct bkey_validate_context *from)
-{
-	return 0;
-}
-
-static __cold void key_type_inline_data_to_text(struct printbuf *out, struct bch_fs *c,
-					 struct bkey_s_c k)
-{
-	struct bkey_s_c_inline_data d = bkey_s_c_to_inline_data(k);
-	unsigned datalen = bkey_inline_data_bytes(k.k);
-
-	prt_printf(out, "datalen %u: ", datalen);
-	prt_hex_bytes(out, d.v->data, min(datalen, 32U));
-}
-
 #define bch2_bkey_ops_inline_data ((struct bkey_ops) {		\
-	.key_validate	= key_type_inline_data_validate,	\
-	.val_to_text	= key_type_inline_data_to_text,		\
+	.val_to_text	= bch2_inline_data_to_text,		\
 })
 
 static bool key_type_set_merge(struct bch_fs *c, struct bkey_s l, struct bkey_s_c r)

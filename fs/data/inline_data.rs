@@ -6,8 +6,11 @@
 
 use crate::btree::bkey::{BkeyFamily, BkeyS, BkeySC, BkeyV, ByFlag, FamilyVal, FieldOffsets};
 use crate::c;
+use crate::fs::Fs;
 use crate::prt;
+use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
+use core::ffi::c_uint;
 use cstruct_macros::c_export;
 
 /// The data itself, inline in the value, direct or indirect,
@@ -60,4 +63,20 @@ impl<'a> InlineDataMut<'a> {
         let at = DATA.of(k.k())?;
         Some(Self { data: k.into_val_bytes_mut().get_mut(at..)? })
     }
+}
+
+#[cold]
+#[c_export]
+pub fn bch2_inline_data_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
+    InlineDataRef::of(k).expect("inline data").to_text(out)
+}
+
+/// For a read of @k @skip bytes past its start: its data from there, @len
+/// bytes of it - none past data[], which reads as zeroes.
+#[c_export]
+pub fn bch2_inline_data_from(k: BkeySC<'_>, skip: c_uint, len: &mut c_uint) -> *const u8 {
+    let d = InlineDataRef::of(k).expect("inline data");
+    let data = d.data.get(skip as usize..).unwrap_or_default();
+    *len = data.len() as c_uint;
+    data.as_ptr()
 }

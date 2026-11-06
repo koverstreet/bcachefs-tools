@@ -1104,17 +1104,13 @@ static noinline int read_extent_inline(struct bch_fs *c,
 		bch2_read_bio_to_text_atomic(&buf, rbio);
 	}));
 
-	unsigned bytes = min(iter.bi_size, offset_into_extent << 9);
-	swap(iter.bi_size, bytes);
-	bch2_zero_fill_bio_iter(&rbio->bio, iter);
-	swap(iter.bi_size, bytes);
-
-	bio_advance_iter(&rbio->bio, &iter, bytes);
-
-	bytes = min(iter.bi_size, bkey_inline_data_bytes(k.k));
+	/* past the data, zeroes: */
+	unsigned bytes;
+	const u8 *data = bch2_inline_data_from(k, offset_into_extent << 9, &bytes);
+	bytes = min(iter.bi_size, bytes);
 
 	swap(iter.bi_size, bytes);
-	memcpy_to_bio(&rbio->bio, iter, bkey_inline_data_p(k));
+	memcpy_to_bio(&rbio->bio, iter, data);
 	swap(iter.bi_size, bytes);
 
 	bio_advance_iter(&rbio->bio, &iter, bytes);
