@@ -127,8 +127,7 @@ pub struct btree_write_buffered_key {
 #[derive(CStruct)]
 pub struct btree_write_buffer_keys {
     pub keys: c::darray_u64,
-    #[c("struct journal_entry_pin pin")]
-    pub pin: crate::util::ffi::Opaque<c::journal_entry_pin>,
+    pub pin: c::journal_entry_pin,
     pub lock: c::mutex,
     /*
      * Back-references set at init so the journal-pin callback can recover

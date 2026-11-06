@@ -5,7 +5,6 @@
 use crate::cstructs::c;
 use crate::util::Printbuf;
 use crate::types::DArray;
-use crate::util::ffi::Opaque;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, c_extern, c_typedef};
 
@@ -34,7 +33,7 @@ c_extern! {
 }
 
 impl c::journal {
-    pub fn pin_flush(&self, pin: &Opaque<c::journal_entry_pin>) {
+    pub fn pin_flush(&self, pin: &c::journal_entry_pin) {
         unsafe { bch2_journal_pin_flush(self.as_ptr(), pin.as_ptr()) }
     }
 

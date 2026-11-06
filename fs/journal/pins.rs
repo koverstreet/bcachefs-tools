@@ -20,17 +20,15 @@ use pin_init::{pin_data, PinInit, Zeroable};
 
 use crate::c;
 use crate::c::journal_pin_type as PinType;
-use crate::alloc::replicas::{bch2_devlist_to_replicas, bch2_replicas_entry_to_text};
+use crate::alloc::replicas::SbEntry;
 use crate::data_structures::list::List;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::DataType;
 use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, SharedGuard};
 use crate::sb::counters::events;
-use crate::types::{rust_only, RustOnly};
 use crate::util::alloc::{init_at, AllocError, KVVec};
 use crate::util::closure::{closure_has_waiters, closure_wake_up};
-use crate::util::ffi::Opaque;
 use crate::util::projections::{TearSafe, Volatile};
 use crate::util::Printbuf;
 use crate::{bch_err, new_lock, prt, warn_once};
@@ -50,46 +48,40 @@ const JOURNAL_PIN: u64 = 32 * 1024;
  */
 const JOURNAL_PIN_MAX: u64 = 1024 * 1024;
 
-pub type Pin = Opaque<c::journal_entry_pin>;
+pub type Pin = c::journal_entry_pin;
 
-type PinListHead = List<Pin, { offset_of!(c::journal_entry_pin, list) }>;
+/* Where a pin's links are: in its locked half */
+const PIN_LIST: usize = offset_of!(Pin, locked) + c::PinLockedBy::T_OFFSET +
+    LockedBy::<c::PinLocked>::PROTECTED_OFFSET + offset_of!(c::PinLocked, list);
+
+type PinListHead = List<Pin, PIN_LIST>;
 
 impl Pin {
-    /// The entry it holds, 0 for none.
     pub fn seq(&self) -> u64 {
-        unsafe { (&raw const (*self.as_ptr()).seq).read_volatile() }
+        self.seq.get()
     }
 
-    fn flush_fn(&self) -> c::journal_pin_flush_fn {
-        unsafe { (*self.as_ptr()).flush }
+    pub fn as_ptr(&self) -> *mut Pin {
+        ptr::from_ref(self).cast_mut()
     }
 
-    fn pin_type(&self) -> PinType {
-        unsafe { (*self.as_ptr()).pin_type }
-    }
-
-    fn set_seq(&self, seq: u64) {
-        unsafe { (&raw mut (*self.as_ptr()).seq).write_volatile(seq) }
-    }
-
-    /* With the lists it's going on held */
-    fn arm(&self, seq: u64, ty: PinType, flush: c::journal_pin_flush_fn) {
-        self.set_seq(seq);
-        unsafe {
-            (*self.as_ptr()).flush    = flush;
-            (*self.as_ptr()).pin_type = ty;
-        }
+    /* Its flush function, without its lists held: for messages */
+    fn flush_peek(&self) -> c::journal_pin_flush_fn {
+        unsafe { (*self.locked.data_ptr()).flush.get() }
     }
 }
 
-/* A flush function, as %ps prints it */
-struct FlushFn(c::journal_pin_flush_fn);
+fn flush_addr(f: c::journal_pin_flush_fn) -> *mut c_void {
+    f.map_or(ptr::null_mut(), |f| f as *mut c_void)
+}
 
-impl core::fmt::Display for FlushFn {
+/* A function, as %ps prints it */
+struct Symbol(*const c_void);
+
+impl core::fmt::Display for Symbol {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut out = Printbuf::new();
-        let p = self.0.map_or(ptr::null(), |f| f as *const c_void);
-        unsafe { c::bch2_prt_printf(out.as_raw(), c"%ps".as_ptr().cast(), p) };
+        unsafe { c::bch2_prt_printf(out.as_raw(), c"%ps".as_ptr().cast(), self.0) };
         f.write_str(out.as_str())
     }
 }
@@ -112,53 +104,35 @@ impl PinDevs {
     fn new(d: &c::bch_devs_list) -> Self {
         debug_assert!(u32::from(d.nr) <= c::BCH_REPLICAS_MAX,
                       "journal entry on {} devices, past BCH_REPLICAS_MAX", d.nr);
-        let mut r = Self::default();
-        for (dst, &dev) in r.devs.iter_mut().zip(&d.data[..d.nr as usize]) {
-            *dst = dev;
-            r.nr += 1;
-        }
+        let devs = d.as_slice();
+        let devs = &devs[..devs.len().min(c::BCH_REPLICAS_MAX as usize)];
+        let mut r = Self { nr: devs.len() as u8, ..Self::default() };
+        r.devs[..devs.len()].copy_from_slice(devs);
         r
     }
 
+    fn as_slice(&self) -> &[u8] {
+        &self.devs[..self.nr as usize]
+    }
+
     fn list(self) -> c::bch_devs_list {
-        let mut l = c::bch_devs_list::default();
-        l.data[..self.nr as usize].copy_from_slice(&self.devs[..self.nr as usize]);
-        l.nr = self.nr;
+        let mut l = c::bch_devs_list { nr: self.nr, ..Default::default() };
+        l.data[..self.as_slice().len()].copy_from_slice(self.as_slice());
         l
     }
 
     fn has(self, dev: u8) -> bool {
-        self.devs[..self.nr as usize].contains(&dev)
+        self.as_slice().contains(&dev)
     }
 }
 
+#[derive(Zeroable)]
 struct PinLists {
     unflushed: [PinListHead; c::JOURNAL_PIN_TYPE_NR as usize],
     flushed:   PinListHead,
 }
 
-unsafe impl Send for PinLists {}
-
 impl PinLists {
-    /* Empty, in place: a list's head doesn't move */
-    fn new() -> impl PinInit<Self> {
-        unsafe {
-            pin_init::pin_init_from_closure(|slot: *mut Self| {
-                slot.write_bytes(0, 1);
-                (*slot).init();
-                Ok(())
-            })
-        }
-    }
-
-    /// # Safety
-    /// They're empty, or what's on them is forgotten.
-    unsafe fn init(&self) {
-        for l in self.all() {
-            unsafe { l.init() }
-        }
-    }
-
     fn all(&self) -> impl Iterator<Item = &PinListHead> {
         self.unflushed.iter().chain(core::iter::once(&self.flushed))
     }
@@ -185,7 +159,7 @@ pub struct PinList {
 impl PinList {
     fn new() -> impl PinInit<Self> {
         pin_init::pin_init!(PinList {
-            lists <- new_lock!(<- PinLists::new(), (), "&pin_list->lock"),
+            lists <- new_lock!(Zeroable::zeroed(), (), "&pin_list->lock"),
             count: AtomicI32::new(0),
             unreplayed: Zeroable::zeroed(),
             devs: Zeroable::zeroed(),
@@ -193,9 +167,9 @@ impl PinList {
         })
     }
 
-    /* Unlocked, as C's: it's under j->lock, and an entry being opened is no one else's */
+    /* Unlocked: an entry being opened is no one else's - and what was on it is forgotten */
     fn reset(&self, count: i32) {
-        unsafe { (*self.lists.data_ptr()).init() };
+        unsafe { self.lists.data_ptr().cast_mut().write(Zeroable::zeroed()) };
         self.count.store(count, Relaxed);
         self.unreplayed.set(false);
         self.devs.set(PinDevs::default());
@@ -251,54 +225,31 @@ fn new_entries(nr: usize) -> Result<KVVec<PinList>, AllocError> {
     Ok(v)
 }
 
-/* pin_resize_lock's */
-pub struct PinBuf {
-    /* a power of two of them */
-    entries: KVVec<PinList>,
-}
-
-/* j->lock's, written under pin_resize_lock too */
-pub struct PinRange {
-    front: Volatile<u64>,
-    back:  Volatile<u64>,
-    /* how many may be live */
-    size:  Volatile<u64>,
-}
-
-unsafe impl Zeroable for PinRange {}
-
-pub type Pins = rust_only!(LockedBy<PinBuf, PinRange>);
-
-pub fn new() -> impl PinInit<Pins, core::convert::Infallible> {
-    RustOnly::new(LockedBy::new(PinBuf { entries: KVVec::new() }, Zeroable::zeroed()))
+impl c::PinRange {
+    fn used(&self) -> u64 {
+        self.pin_back.get() - self.pin_front.get()
+    }
 }
 
 /* The live entries, with pin_resize_lock held for read */
 pub struct PinsRead<'a> {
-    j:   &'a c::journal,
-    buf: &'a PinBuf,
-    _g:  SharedGuard<'a, c::percpu_rw_semaphore>,
+    j: &'a c::journal,
+    g: SharedGuard<'a, c::percpu_rw_semaphore, c::PinBuf, c::PinRange>,
 }
 
 impl c::journal {
-    pub fn fs(&self) -> &Fs {
-        unsafe { &*ptr::from_ref(self).byte_sub(offset_of!(Fs, journal)).cast() }
-    }
-
     pub fn pins(&self) -> PinsRead<'_> {
-        let g = self.pin_resize_lock.read();
-        PinsRead { j: self, buf: unsafe { self.pins.protected() }, _g: g }
+        PinsRead { j: self, g: self.pin_resize_lock.read() }
     }
 
     /// # Safety
     /// The caller holds pin_resize_lock for read, for as long as these live.
     unsafe fn pins_held(&self) -> PinsRead<'_> {
-        let g = unsafe { self.pin_resize_lock.read_held() };
-        PinsRead { j: self, buf: unsafe { self.pins.protected() }, _g: g }
+        PinsRead { j: self, g: unsafe { self.pin_resize_lock.read_held() } }
     }
 
-    fn pin_range(&self) -> &PinRange {
-        &self.pins
+    fn pin_range(&self) -> &c::PinRange {
+        &self.pin_resize_lock
     }
 
     pub fn pin_set(&self, seq: u64, pin: &Pin, ty: PinType, flush: c::journal_pin_flush_fn) {
@@ -334,24 +285,24 @@ impl<'a> PinsRead<'a> {
     }
 
     pub fn front(&self) -> u64 {
-        self.j.pin_range().front.get()
+        self.j.pin_range().pin_front.get()
     }
 
     pub fn back(&self) -> u64 {
-        self.j.pin_range().back.get()
+        self.j.pin_range().pin_back.get()
     }
 
     fn last_seq(&self) -> u64 {
         self.j.lock.last_seq.get()
     }
 
-    fn slot(&self, seq: u64) -> &'a PinList {
-        let e = &self.buf.entries;
+    fn slot(&self, seq: u64) -> &PinList {
+        let e = &self.g.entries;
         &e[seq as usize & (e.len() - 1)]
     }
 
-    /* A live entry's */
-    fn get(&self, seq: u64) -> &'a PinList {
+    /* An entry in [front, back) */
+    fn get(&self, seq: u64) -> &PinList {
         debug_assert!(seq >= self.front() && seq < self.back(),
                       "journal seq {seq} outside live range [{}, {})", self.front(), self.back());
         self.slot(seq)
@@ -363,20 +314,27 @@ impl<'a> PinsRead<'a> {
      * whatever live entry shares its slot, silently, until some later pin
      * trips over the result.
      */
-    fn pin_slot(&self, pin: &Pin, seq: u64) -> &'a PinList {
+    fn pin_slot(&self, pin: &Pin, seq: u64) -> &PinList {
         warn_once!(seq < self.front() || seq >= self.back(), self.fs(),
                    "journal pin {} at seq {} outside live range [{}, {})",
-                   FlushFn(pin.flush_fn()), seq, self.front(), self.back());
+                   Symbol(flush_addr(pin.flush_peek())), seq, self.front(), self.back());
         self.slot(seq)
     }
 
-    /* The fifo's ends, and an entry's counts: with j->lock where they change */
+    /* @pin's locked half, through @lists - which must be its seq's, held */
+    fn locked<'l>(&self, pin: &'l Pin, lists: &'l PinLists) -> &'l c::PinLocked {
+        assert!(ptr::eq(lists, self.slot(pin.seq()).lists.data_ptr()),
+                "journal pin at seq {} reached without its seq's lists", pin.seq());
+        unsafe { pin.locked.protected() }
+    }
+
+    /* Opening and retiring entries, and their counts: under j->lock where they change */
 
     pub fn push(&self, seq: u64) {
         let back = self.back();
         assert_eq!(back, seq, "journal entry opened out of order");
         self.slot(back).reset(1);
-        self.j.pin_range().back.set(back + 1);
+        self.j.pin_range().pin_back.set(back + 1);
     }
 
     pub fn advance_front(&self, last_seq_ondisk: u64) {
@@ -384,7 +342,7 @@ impl<'a> PinsRead<'a> {
         for seq in self.front()..new_front {
             self.check_retired(self.slot(seq), seq);
         }
-        self.j.pin_range().front.set(new_front);
+        self.j.pin_range().pin_front.set(new_front);
     }
 
     /* The entry's own ref, from when it was opened: whether that was its last */
@@ -450,7 +408,7 @@ impl<'a> PinsRead<'a> {
         if !unsafe { PinListHead::unlink(pin) } {
             let _f = MemallocFlags::noreclaim();
             warn_once!(true, self.fs(), "journal pin {} active at seq {} but on no list",
-                       FlushFn(pin.flush_fn()), pin.seq());
+                       Symbol(flush_addr(pin.flush_peek())), pin.seq());
         }
 
         if self.j.flush_in_progress.load(Relaxed) == pin.as_ptr() {
@@ -477,7 +435,8 @@ impl<'a> PinsRead<'a> {
         /* inactive <=> on no list - or the push below corrupts the old one */
         if PinListHead::linked(pin) {
             let _f = MemallocFlags::noreclaim();
-            warn_once!(true, self.fs(), "journal pin {} inactive but still on a list", FlushFn(pin.flush_fn()));
+            warn_once!(true, self.fs(), "journal pin {} inactive but still on a list",
+                       Symbol(flush_addr(pin.flush_peek())));
         }
 
         /*
@@ -487,7 +446,10 @@ impl<'a> PinsRead<'a> {
         assert!(flush.is_some(), "journal pin set with no flush fn");
 
         new.count.fetch_add(1, Relaxed);
-        pin.arm(seq, ty, flush);
+        pin.seq.set(seq);
+        let locked = self.locked(pin, new_lists);
+        locked.flush.set(flush);
+        locked.pin_type.set(ty);
 
         let list = &mut new_lists.unflushed[ty as usize];
         if list.is_empty() {
@@ -517,7 +479,7 @@ impl<'a> PinsRead<'a> {
          */
         warn_once!(seq < self.last_seq(), self.fs(),
                    "journal pin {} set for seq {}, already retired (last_seq {})",
-                   FlushFn(flush), seq, self.last_seq());
+                   Symbol(flush_addr(flush)), seq, self.last_seq());
 
         loop {
             let old_seq = pin.seq();
@@ -530,15 +492,18 @@ impl<'a> PinsRead<'a> {
             }
             let reclaim = self.set_locked(old, new, locked.new_lists(), pin, seq, ty, flush);
             drop(locked);
+            return self.set_done(seq, reclaim);
+        }
+    }
 
-            /* If the journal is currently full, we might want to call flush_fn immediately: */
-            if seq == self.last_seq() {
-                closure_wake_up(&self.j.async_wait);
-            }
-            if reclaim {
-                self.maybe_update_last_seq();
-            }
-            return;
+    /* After set_locked(), with its locks dropped */
+    fn set_done(&self, seq: u64, reclaim: bool) {
+        /* If the journal is currently full, we might want to call flush_fn immediately: */
+        if seq == self.last_seq() {
+            closure_wake_up(&self.j.async_wait);
+        }
+        if reclaim {
+            self.maybe_update_last_seq();
         }
     }
 
@@ -552,6 +517,9 @@ impl<'a> PinsRead<'a> {
             let dst_l = (dst_seq != 0).then(|| self.pin_slot(dst, dst_seq));
 
             let mut locked = lock_pair(src_l, src_seq, dst_l, dst_seq);
+            if src_seq != src.seq() || dst_seq != dst.seq() {
+                continue;
+            }
 
             /*
              * Keep-oldest, like pin_add(): a dst already pinning an older seq
@@ -560,22 +528,13 @@ impl<'a> PinsRead<'a> {
              * will_free_node) copy several pins into one and need the min. A
              * pin at an older seq covers src_seq.
              */
-            let keep = dst_seq != 0 && dst_seq <= src_seq;
-            let race = src_seq != src.seq() || dst_seq != dst.seq();
-            let reclaim = !race && !keep &&
-                self.set_locked(dst_l, src_l, locked.new_lists(), dst, src_seq, ty, flush);
-            drop(locked);
-
-            if !race {
-                /* If the journal is currently full, we might want to call flush_fn immediately: */
-                if !keep && src_seq == self.last_seq() {
-                    closure_wake_up(&self.j.async_wait);
-                }
-                if reclaim {
-                    self.maybe_update_last_seq();
-                }
+            if dst_seq != 0 && dst_seq <= src_seq {
                 return;
             }
+
+            let reclaim = self.set_locked(dst_l, src_l, locked.new_lists(), dst, src_seq, ty, flush);
+            drop(locked);
+            return self.set_done(src_seq, reclaim);
         }
     }
 
@@ -591,7 +550,7 @@ impl<'a> PinsRead<'a> {
                 continue;
             }
             let reclaim = self.drop_locked(l, pin);
-            pin.set_seq(0);
+            pin.seq.set(0);
             break reclaim;
         };
 
@@ -618,30 +577,30 @@ impl<'a> PinsRead<'a> {
         fence(Acquire);
 
         let lists = unsafe { &*l.lists.data_ptr() };
-        let first = lists.all().find_map(|l| l.first()).map(|p| p.flush_fn());
+        let first = lists.all().find_map(|l| l.first()).map(|p| p.flush_peek());
         let count = l.count.load(Relaxed);
 
         if first.is_some() || count != 0 {
             let _f = MemallocFlags::noreclaim();
             warn_once!(true, self.fs(), "journal seq {} retired with count {}{}{}", seq, count,
                        if first.is_some() { ", pins still listed, first " } else { "" },
-                       FlushFn(first.flatten()));
+                       Symbol(flush_addr(first.flatten())));
         }
     }
 
-    /* Reclaim's */
+    /* Reclaim: picking pins to flush, and whether they're done */
 
     /*
      * The next pin to flush - an unflushed one of the oldest entry with one of
      * a type allowed: up to @seq_to_flush, of those in @below; any, of those in
-     * @above - now the flush in progress, with its seq and flush function
+     * @above - now the flush in progress, with its seq, flush function and type
      */
     fn next_to_flush(&self, seq_to_flush: u64, below: u32, above: u32)
-        -> Option<(*mut c::journal_entry_pin, u64, c::journal_pin_flush_fn)>
+        -> Option<(*mut Pin, u64, c::journal_pin_flush_fn, PinType)>
     {
         for seq in self.front()..self.back() {
             let l = self.slot(seq);
-            let mut g = l.lists.lock();
+            let g = l.lists.lock();
 
             /*
              * Flushing journal pins (writing btree nodes) requires
@@ -652,16 +611,20 @@ impl<'a> PinsRead<'a> {
                 break;
             }
 
-            for (i, list) in g.protected().unflushed.iter().enumerate() {
-                if ((1 << i) & below != 0 && seq <= seq_to_flush) || (1 << i) & above != 0 {
-                    if let Some(pin) = list.first() {
-                        assert!(self.j.flush_in_progress.load(Relaxed).is_null(),
-                                "journal pin flush started with one in progress");
-                        self.j.flush_in_progress.store(pin.as_ptr(), Relaxed);
-                        self.j.flush_in_progress_dropped.set(false);
-                        return Some((pin.as_ptr(), seq, pin.flush_fn()));
-                    }
-                }
+            let types = if seq <= seq_to_flush { below | above } else { above };
+            let pin = g.unflushed.iter().enumerate()
+                .filter(|&(i, _)| types & (1 << i) != 0)
+                .find_map(|(_, list)| list.first());
+
+            if let Some(pin) = pin {
+                assert!(self.j.flush_in_progress.load(Relaxed).is_null(),
+                        "journal pin flush started with one in progress");
+                let locked = self.locked(pin, &g);
+                let flush = locked.flush.get();
+                self.j.flush_in_progress.store(pin.as_ptr(), Relaxed);
+                self.j.flush_in_progress_fn.store(flush_addr(flush), Relaxed);
+                self.j.flush_in_progress_dropped.set(false);
+                return Some((pin.as_ptr(), seq, flush, locked.pin_type.get()));
             }
         }
         None
@@ -687,18 +650,18 @@ impl<'a> PinsRead<'a> {
             }
         }
         self.j.flush_in_progress.store(ptr::null_mut(), Relaxed);
+        self.j.flush_in_progress_fn.store(ptr::null_mut(), Relaxed);
         self.j.flush_in_progress_dropped.set(false);
     }
 
     fn still_flushing(&self, seq_to_flush: u64, types: u32) -> bool {
-        let end = if seq_to_flush != u64::MAX { self.back().min(seq_to_flush + 1) } else { self.back() };
+        let end = self.back().min(seq_to_flush.saturating_add(1));
 
         (self.front()..end).any(|seq| {
-            let mut g = self.slot(seq).lists.lock();
-            let lists = g.protected();
+            let g = self.slot(seq).lists.lock();
 
-            lists.unflushed.iter().enumerate().any(|(i, l)| types & (1 << i) != 0 && !l.is_empty()) ||
-                lists.flushed.iter().any(|p| types & (1 << p.pin_type() as u32) != 0)
+            g.unflushed.iter().enumerate().any(|(i, l)| types & (1 << i) != 0 && !l.is_empty()) ||
+                g.flushed.iter().any(|p| types & (1 << self.locked(p, &g).pin_type.get() as u32) != 0)
         })
     }
 
@@ -714,7 +677,7 @@ impl<'a> PinsRead<'a> {
 
     fn to_text(&self, out: &mut Printbuf, seq: u64, mut nr: Option<&mut c_uint>) {
         let l = self.slot(seq);
-        let mut g = l.lists.lock();
+        let g = l.lists.lock();
         let _f = MemallocFlags::noreclaim();
 
         prt!(out, "{}: count {}", seq, l.count.load(Relaxed));
@@ -724,30 +687,24 @@ impl<'a> PinsRead<'a> {
         out.newline();
         let out = &mut *out.indent(2);
 
-        let mut r = c::bch_replicas_padded::default();
-        unsafe {
-            bch2_devlist_to_replicas(&raw mut r.e, DataType::journal, l.devs.get().list());
-            bch2_replicas_entry_to_text(out, &raw const r.e);
-        }
+        let mut devs = l.devs.get();
+        devs.devs[..devs.nr as usize].sort_unstable();
+        SbEntry { data_type: DataType::journal.0 as u8, nr_required: Some(1), devs: devs.as_slice() }.to_text(out);
         out.newline();
 
-        let lists = g.protected();
-        let mut prt_pins = |out: &mut Printbuf, name: &str, lists: &mut dyn Iterator<Item = &PinListHead>| {
+        for (name, lists) in [("unflushed", &g.unflushed[..]), ("flushed", core::slice::from_ref(&g.flushed))] {
             prt!(out, "{}:\n", name);
-            for pin in lists.flat_map(|l| l.iter()) {
-                let f = pin.flush_fn().map_or(ptr::null(), |f| f as *const c_void);
-                unsafe { c::bch2_prt_printf(out.as_raw(), c"\t%px %ps\n".as_ptr().cast(), pin.as_ptr(), f) };
+            for pin in lists.iter().flat_map(|l| l.iter()) {
+                prt!(out, "\t{:p} {}\n", pin.as_ptr(), Symbol(flush_addr(self.locked(pin, &g).flush.get())));
                 if let Some(nr) = nr.as_deref_mut() {
                     *nr += 1;
                 }
             }
-        };
-        prt_pins(out, "unflushed", &mut lists.unflushed.iter());
-        prt_pins(out, "flushed", &mut core::iter::once(&lists.flushed));
+        }
     }
 }
 
-/* The fifo's own: its buffer, sized to the dirty entries */
+/* Sizing the fifo's buffer to the dirty entries */
 
 /*
  * The size the fifo should be: grown 4x while it's filling, up to
@@ -756,8 +713,8 @@ impl<'a> PinsRead<'a> {
  *
  * Returns the current size when there's nothing to do.
  */
-fn want_size(r: &PinRange) -> u64 {
-    let (size, used) = (r.size.get(), r.back.get() - r.front.get());
+fn want_size(r: &c::PinRange) -> u64 {
+    let (size, used) = (r.pin_size.get(), r.used());
     let max = JOURNAL_PIN_MAX;
 
     if size > max {
@@ -786,43 +743,41 @@ fn resize(j: &c::journal) -> Result<(), BchError> {
      * the percpu rwsem - so it grows 4x at a time
      */
     let new_size = want_size(r);
-    if new_size == r.size.get() {
+    if new_size == r.pin_size.get() {
         return Ok(());
     }
 
     let entries = new_entries(new_size.next_power_of_two() as usize);
     fs.event_inc_trace(events::journal_pin_resize, |out| prt!(out, "new size: {}", new_size));
-    let entries = entries.map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_pin_fifo))?;
+    let mut entries = entries.map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_pin_fifo))?;
 
-    let g = j.pin_resize_lock.write();
-    let buf = unsafe { j.pins.protected_mut() };
+    let mut g = j.pin_resize_lock.write();
 
     /*
      * Shrinking: entries opened since we decided may no longer fit - and
      * the fifo must never have more live than its size
      */
-    if r.back.get() - r.front.get() > new_size {
+    if r.used() > new_size {
         return Ok(());
     }
 
-    let mask = entries.len() - 1;
-    let old_mask = buf.entries.len() - 1;
-    for seq in r.front.get()..r.back.get() {
-        let (old, new) = (&buf.entries[seq as usize & old_mask], &entries[seq as usize & mask]);
+    let old = &mut *g.entries;
+    let (mask, old_mask) = (entries.len() - 1, old.len() - 1);
+    for seq in r.pin_front.get()..r.pin_back.get() {
+        let (o, n) = (&mut old[seq as usize & old_mask], &mut entries[seq as usize & mask]);
 
-        new.count.store(old.count.load(Relaxed), Relaxed);
-        new.unreplayed.set(old.unreplayed.get());
-        new.devs.set(old.devs.get());
-        new.bytes.set(old.bytes.get());
+        *n.count.get_mut() = *o.count.get_mut();
+        n.unreplayed.set(o.unreplayed.get());
+        n.devs.set(o.devs.get());
+        n.bytes.set(o.bytes.get());
 
-        let (mut og, mut ng) = (old.lists.lock(), new.lists.lock_nested(1));
-        for (o, n) in og.protected().all_mut().zip(ng.protected().all_mut()) {
+        for (o, n) in o.lists.get_mut().all_mut().zip(n.lists.get_mut().all_mut()) {
             unsafe { o.move_to(n) };
         }
     }
 
-    let old = core::mem::replace(&mut buf.entries, entries);
-    r.size.set(new_size);
+    let old = core::mem::replace(old, entries);
+    r.pin_size.set(new_size);
     drop(g);
     drop(old);
     Ok(())
@@ -864,38 +819,37 @@ fn start(j: &c::journal, last_seq: u64, cur_seq: u64) -> Result<(), BchError> {
         l.unreplayed.set(true);
     }
 
-    let g = j.pin_resize_lock.write();
-    let old = core::mem::replace(unsafe { &mut j.pins.protected_mut().entries }, entries);
+    let mut g = j.pin_resize_lock.write();
+    let old = core::mem::replace(&mut *g.entries, entries);
     let r = j.pin_range();
-    r.front.set(last_seq);
-    r.back.set(cur_seq);
-    r.size.set(size);
+    r.pin_front.set(last_seq);
+    r.pin_back.set(cur_seq);
+    r.pin_size.set(size);
     drop(g);
     drop(old);
     Ok(())
 }
 
 #[c_export]
-pub fn bch2_journal_pin_set(j: &c::journal, seq: u64, pin: &Opaque<c::journal_entry_pin>,
+pub fn bch2_journal_pin_set(j: &c::journal, seq: u64, pin: &c::journal_entry_pin,
                             ty: c::journal_pin_type, flush: c::journal_pin_flush_fn) {
-    j.pins().set(seq, pin, ty, flush)
+    j.pin_set(seq, pin, ty, flush)
 }
 
 #[c_export]
-pub fn bch2_journal_pin_copy(j: &c::journal, dst: &Opaque<c::journal_entry_pin>,
-                             src: &Opaque<c::journal_entry_pin>, ty: c::journal_pin_type,
-                             flush: c::journal_pin_flush_fn) {
-    j.pins().copy(dst, src, ty, flush)
+pub fn bch2_journal_pin_copy(j: &c::journal, dst: &c::journal_entry_pin, src: &c::journal_entry_pin,
+                             ty: c::journal_pin_type, flush: c::journal_pin_flush_fn) {
+    j.pin_copy(dst, src, ty, flush)
 }
 
 #[c_export]
-pub fn bch2_journal_pin_drop(j: &c::journal, pin: &Opaque<c::journal_entry_pin>) {
-    j.pins().drop_pin(pin)
+pub fn bch2_journal_pin_drop(j: &c::journal, pin: &c::journal_entry_pin) {
+    j.pin_drop(pin)
 }
 
 #[c_export]
 pub fn bch2_journal_pin_fifo_want_resize(j: &c::journal) -> bool {
-    want_size(j.pin_range()) != j.pin_range().size.get()
+    want_size(j.pin_range()) != j.pin_range().pin_size.get()
 }
 
 #[c_export]
@@ -908,31 +862,15 @@ pub fn bch2_journal_pins_start(j: &c::journal, last_seq: u64, cur_seq: u64) -> c
     ret_to_c(start(j, last_seq, cur_seq))
 }
 
-#[c_export]
-pub fn bch2_journal_pins_front(j: &c::journal) -> u64 {
-    j.pin_range().front.get()
-}
-
-#[c_export]
-pub fn bch2_journal_pins_back(j: &c::journal) -> u64 {
-    j.pin_range().back.get()
-}
-
-#[c_export]
-pub fn bch2_journal_pins_size(j: &c::journal) -> u64 {
-    j.pin_range().size.get()
-}
-
 /* The most dirty journal entries we let accumulate before reclaim must act */
 #[c_export]
 pub fn bch2_journal_pin_limit(j: &c::journal) -> u64 {
-    j.pin_range().size.get().min(JOURNAL_PIN_MAX)
+    j.pin_range().pin_size.get().min(JOURNAL_PIN_MAX)
 }
 
 #[c_export]
 pub fn bch2_journal_pins_used(j: &c::journal) -> u64 {
-    let r = j.pin_range();
-    r.back.get() - r.front.get()
+    j.pin_range().used()
 }
 
 macro_rules! held_exports {
@@ -962,21 +900,26 @@ held_exports! {
 
 #[c_export]
 pub fn bch2_journal_next_pin(j: &c::journal, seq_to_flush: u64, below: c_uint, above: c_uint,
-                             seq: &mut u64, flush: &mut c::journal_pin_flush_fn)
-    -> *mut c::journal_entry_pin
-{
-    let Some((pin, s, f)) = j.pins().next_to_flush(seq_to_flush, below, above) else {
+                             seq: &mut u64, flush: &mut c::journal_pin_flush_fn,
+                             ty: &mut c::journal_pin_type) -> *mut c::journal_entry_pin {
+    let Some((pin, s, f, t)) = j.pins().next_to_flush(seq_to_flush, below, above) else {
         return ptr::null_mut();
     };
-    *seq = s;
-    *flush = f;
+    (*seq, *flush, *ty) = (s, f, t);
     pin
 }
 
 #[c_export]
-pub fn bch2_journal_pin_flushed(j: &c::journal, pin: &Opaque<c::journal_entry_pin>, seq: u64,
-                                ok: bool) {
+pub fn bch2_journal_pin_flushed(j: &c::journal, pin: &c::journal_entry_pin, seq: u64, ok: bool) {
     j.pins().flushed(pin, seq, ok)
+}
+
+#[c_export]
+pub fn bch2_journal_flush_in_progress_to_text(out: &mut Printbuf, j: &c::journal) {
+    let f = j.flush_in_progress_fn.load(Relaxed);
+    if !f.is_null() {
+        prt!(out, "flush in progress:\t{}\n", Symbol(f));
+    }
 }
 
 #[c_export]

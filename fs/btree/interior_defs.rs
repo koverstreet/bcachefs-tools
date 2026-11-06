@@ -134,8 +134,7 @@ nest! {
          * btree_update operation, and release it when the new node(s)
          * are all persistent and reachable:
          */
-        #[c("struct journal_entry_pin journal")]
-        pub journal: crate::util::ffi::Opaque<c::journal_entry_pin>,
+        pub journal: c::journal_entry_pin,
 
         /*
          * Preallocated nodes we reserve when we start the update.

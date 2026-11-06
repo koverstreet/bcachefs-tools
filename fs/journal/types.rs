@@ -2,16 +2,19 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::Dev;
+use crate::fs::{Dev, Fs};
 use crate::cstructs::c;
 use crate::data::ptrs::IoFailures;
 use crate::types::{CacheAligned, DArray, Fifo, RustOnly, c_default, rust_only};
+use crate::util::alloc::KVVec;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64};
 use crate::journal::buckets::JournalBuckets;
-use crate::locking::Locked;
+use crate::data_structures::list::ListLinks;
+use crate::locking::{Locked, LockedBy};
+use core::cell::Cell;
 use crate::util::late::Late;
 use crate::{new_lock, published};
 use pin_init::pin_data;
@@ -112,16 +115,25 @@ c_typedef! {
                                                                 u64) -> c_int>;
 }
 
+/* A pin's, its seq's pin list lock's: the list it's on, and what it's on it as */
+pub struct PinLocked {
+    pub list:     ListLinks,
+    pub flush:    Cell<c::journal_pin_flush_fn>,
+    pub pin_type: Cell<c::journal_pin_type>,
+}
+
+// Zeroed, it's a pin never set: on no list, no flush function, JOURNAL_PIN_TYPE_btree3
+unsafe impl ::pin_init::Zeroable for PinLocked {}
+
+pub type PinLockedBy = rust_only!(LockedBy<PinLocked>);
+
 #[repr(C)]
 #[derive(CStruct)]
 pub struct journal_entry_pin {
-    pub list: c::list_head,
-    pub flush: c::journal_pin_flush_fn,
-    pub seq: u64,
-    pub pin_type: c::journal_pin_type,
+    pub locked: PinLockedBy,
+    /* the entry it holds, 0 for none */
+    pub seq:    Volatile<u64>,
 }
-
-unsafe impl ::pin_init::Zeroable for crate::util::ffi::Opaque<journal_entry_pin> {}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -356,6 +368,25 @@ published! {
     }
 }
 
+/* pin_resize_lock's: the journal pin fifo's entries, a power of two of them */
+#[repr(C)]
+#[derive(CStruct)]
+pub struct PinBuf {
+    pub entries: rust_only!(KVVec<crate::journal::pins::PinList>),
+}
+
+/*
+ * The fifo's live entries, [pin_front, pin_back), and how many there may be:
+ * j->lock's, and pin_resize_lock's writer's while it replaces the buffer
+ */
+#[repr(C)]
+#[derive(CStruct)]
+pub struct PinRange {
+    pub pin_front: Volatile<u64>,
+    pub pin_back:  Volatile<u64>,
+    pub pin_size:  Volatile<u64>,
+}
+
 /* Embedded in struct bch_fs */
 nest! {
     #[pin_data]
@@ -455,12 +486,10 @@ nest! {
          * longer needed, the bucket can be discarded and reused.
          */
         #[pin]
-        #[init(new_lock!((), "&j->pin_resize_lock"))]
+        #[init(new_lock!(PinBuf { entries: RustOnly::from_value(KVVec::new()) }, ::pin_init::zeroed(),
+                         "&j->pin_resize_lock"))]
         #[c_lock("struct percpu_rw_semaphore pin_resize_lock")]
-        pub pin_resize_lock: Locked<c::percpu_rw_semaphore>,
-        #[pin]
-        #[init(crate::journal::pins::new())]
-        pub pins: crate::journal::pins::Pins,
+        pub pin_resize_lock: Locked<c::percpu_rw_semaphore, PinBuf, PinRange>,
         pub pin_resize_work: c::work_struct,
 
         /* Flushes under-replicated pins when a device comes back: */
@@ -500,6 +529,9 @@ nest! {
         #[c("struct journal_entry_pin *flush_in_progress")]
         pub flush_in_progress: AtomicPtr<c::journal_entry_pin>,
         pub flush_in_progress_dropped: Volatile<bool>,
+        /* its flush function, for messages: the pin can be freed under them */
+        #[c("void *flush_in_progress_fn")]
+        pub flush_in_progress_fn: AtomicPtr<c_void>,
         pub pin_flush_wait: c::wait_queue_head_t,
 
         pub write_start_time: u64,
@@ -525,6 +557,12 @@ c_enum! {
         JOURNAL_BUCKET_dirty_ondisk,
         JOURNAL_BUCKET_dirty,
         JOURNAL_BUCKET_cur,
+    }
+}
+
+impl journal {
+    pub fn fs(&self) -> &Fs {
+        unsafe { &*core::ptr::from_ref(self).byte_sub(core::mem::offset_of!(Fs, journal)).cast() }
     }
 }
 

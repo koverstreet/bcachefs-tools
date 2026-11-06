@@ -429,7 +429,7 @@ static int __journal_entry_open_one(struct journal *j)
 
 	try(bch2_journal_error(j));
 
-	if (bch2_journal_pins_used(j) >= bch2_journal_pins_size(j))
+	if (bch2_journal_pins_used(j) >= j->pin_size)
 		return bch_err_throw(c, journal_pin_full);
 
 	/*
@@ -1506,7 +1506,7 @@ __cold void __bch2_journal_debug_to_text(struct printbuf *out, struct journal *j
 	prt_bitflags(out, bch2_journal_flags_strs, j->flags);
 	prt_newline(out);
 	prt_printf(out, "dirty journal entries:\t%llu/%llu\n",
-		   bch2_journal_pins_used(j), bch2_journal_pins_size(j));
+		   bch2_journal_pins_used(j), j->pin_size);
 	prt_printf(out, "seq:\t%llu\n",				journal_cur_seq(j));
 	prt_printf(out, "seq_ondisk:\t%llu\n",			j->seq_ondisk);
 	prt_printf(out, "last_seq:\t%llu\n",			j->last_seq);

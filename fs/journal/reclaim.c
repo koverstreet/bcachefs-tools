@@ -401,7 +401,7 @@ void bch2_journal_update_last_seq(struct journal *j)
 	 * all btree nodes got written out
 	 */
 	u64 old = j->last_seq;
-	while (j->last_seq <  bch2_journal_pins_back(j) &&
+	while (j->last_seq <  j->pin_back &&
 	       j->last_seq <= j->seq_ondisk &&
 	       bch2_journal_seq_unpinned(j, j->last_seq))
 		j->last_seq++;
@@ -415,7 +415,7 @@ void bch2_journal_update_last_seq(struct journal *j)
 int bch2_journal_update_last_seq_ondisk(struct journal *j, u64 last_seq_ondisk,
 					darray_replicas_entry_refs *refs)
 {
-	BUG_ON(last_seq_ondisk > bch2_journal_pins_back(j));
+	BUG_ON(last_seq_ondisk > j->pin_back);
 
 	for (u64 seq = j->last_seq_ondisk; seq < last_seq_ondisk; seq++) {
 		struct bch_devs_list devs = bch2_journal_seq_devs(j, seq);
@@ -520,12 +520,13 @@ static size_t journal_flush_pins(struct journal *j,
 
 		u64 seq;
 		journal_pin_flush_fn flush_fn;
+		enum journal_pin_type type;
 		pin = bch2_journal_next_pin(j, seq_to_flush, allowed_below, allowed_above,
-					    &seq, &flush_fn);
+					    &seq, &flush_fn, &type);
 		if (!pin)
 			break;
 
-		if (min_key_cache && pin->pin_type == JOURNAL_PIN_TYPE_key_cache)
+		if (min_key_cache && type == JOURNAL_PIN_TYPE_key_cache)
 			min_key_cache--;
 
 		if (min_any)
@@ -534,7 +535,6 @@ static size_t journal_flush_pins(struct journal *j,
 		u64 start_time = local_clock();
 		err = flush_fn(j, pin, seq);
 
-		enum journal_pin_type type = pin->pin_type;
 		enum bch_time_stats flush_time =
 			type <= JOURNAL_PIN_TYPE_btree0
 			? BCH_TIME_journal_pin_flush_btree
@@ -837,7 +837,7 @@ static int journal_flush_done(struct journal *j, u64 seq_to_flush,
 	guard(spinlock)(&j->lock);
 	return !test_bit(JOURNAL_replay_done, &j->flags) ||
 		j->last_seq > seq_to_flush ||
-		j->last_seq == bch2_journal_pins_back(j);
+		j->last_seq == j->pin_back;
 }
 
 bool bch2_journal_flush_pins(struct journal *j, u64 seq_to_flush)
@@ -984,9 +984,7 @@ __cold void bch2_journal_reclaim_to_text(struct printbuf *out, struct journal *j
 		   time_after(j->next_reclaim, now)
 		   ? jiffies_to_msecs(j->next_reclaim - now) : 0);
 
-	struct journal_entry_pin *pin = READ_ONCE(j->flush_in_progress);
-	if (pin)
-		prt_printf(out, "flush in progress:\t%ps\n", pin->flush);
+	bch2_journal_flush_in_progress_to_text(out, j);
 
 	printbuf_tabstops_reset(out);
 	printbuf_tabstop_push(out, 24);

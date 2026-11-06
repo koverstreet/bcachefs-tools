@@ -410,7 +410,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 		closure_debug_destroy(cl);
 
 		spin_lock(&j->lock);
-		BUG_ON(seq_wrote < bch2_journal_pins_front(j));
+		BUG_ON(seq_wrote < j->pin_front);
 		if (err && (!j->err_seq || seq_wrote < j->err_seq))
 			j->err_seq = seq_wrote;
 
