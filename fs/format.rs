@@ -338,8 +338,9 @@ impl FlexArray for bkey_i {
 
 c_enum! {
     #[flags]
+    #[c_name(bch_bkey_type_flags)]
     #[prefix(BKEY_TYPE_)]
-    pub enum bch_bkey_type_flags: u32 {
+    pub enum BkeyTypeFlags: u32 {
         /*
          * Free to be used in more btrees than list it - deleted, whiteouts,
          * error, cookie, set: in one that doesn't, it's invalid at commit, not
@@ -374,7 +375,7 @@ c_enum! {
 tagged_union! {
     #[key_value]
     #[tag_enum(BkeyType: u32, prefix = KEY_TYPE_, nr = KEY_TYPE_MAX, c_name = bch_bkey_type)]
-    #[arm_columns(flags: bch_bkey_type_flags)]
+    #[arm_columns(flags: BkeyTypeFlags)]
     #[c_list(BCH_BKEY_TYPES)]
     pub enum bkey_val {
         /// Transient during btree updates; inserting a deleted key removes any

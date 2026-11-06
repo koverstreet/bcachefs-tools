@@ -27,7 +27,7 @@
 //! refcount is read and edited through it (BkeyVIndirect), in whichever form
 //! it's held.
 
-use crate::format::BkeyType;
+use crate::format::{BkeyType, BkeyTypeFlags};
 use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_gt, bkey_lt, pos, BkeyFamily, BkeyI, BkeyS, BkeySC,
@@ -59,14 +59,14 @@ use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering::Relaxed};
 use cstruct_macros::c_export;
 use crate::format::Btree;
 
-pub type IndirectTypes = ByFlag<{ c::BKEY_TYPE_indirect }>;
+pub type IndirectTypes = ByFlag<{ BkeyTypeFlags::indirect.bits() }>;
 
 /// An indirect extent, BKEY_TYPE_indirect - refcounted, in the reflink btree,
 /// what a reflink_p points to: a key armed to it is a BkeySC<'_, Indirect>,
 /// BkeyS<'_, Indirect>, &BkeyI<Indirect>.
 pub type Indirect = FamilyVal<IndirectTypes>;
 
-pub static REFCOUNT: FieldOffsets = FieldOffsets::new(c::BKEY_TYPE_indirect, "refcount");
+pub static REFCOUNT: FieldOffsets = FieldOffsets::new(BkeyTypeFlags::indirect, "refcount");
 
 fn refcount_offset(k: &c::bkey) -> usize {
     REFCOUNT.of(k).expect("an indirect extent's type has a refcount")

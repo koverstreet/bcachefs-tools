@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! Inline data extents: a file's data in its extent key - inline_data, or
-//! reflinked, indirect_inline_data - the Inline family, BKEY_TYPE_inline_data,
+//! reflinked, indirect_inline_data - the Inline family, BkeyTypeFlags::inline_data,
 //! and where in each type's value the data is. From inline_data_csum (1.40)
 //! their _v2 types carry a checksum of their own over data[]: a node's bset
 //! checksum can't say which of its keys went bad.
 
+use crate::format::BkeyTypeFlags;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{BkeyFamily, BkeyS, BkeySC, BkeyV, BkeyVMut, ByFlag, FamilyVal, FieldOffsets};
 use crate::btree::bkey_buf::BtreeKeyBuf;
@@ -30,12 +31,12 @@ use core::ffi::{c_int, c_uint};
 use cstruct_macros::c_export;
 
 /// The data itself, inline in the value, direct or indirect,
-/// BKEY_TYPE_inline_data: a key armed to it is a BkeySC<'_, Inline>,
+/// BkeyTypeFlags::inline_data: a key armed to it is a BkeySC<'_, Inline>,
 /// BkeyS<'_, Inline>, &BkeyI<Inline>.
-pub type Inline = FamilyVal<ByFlag<{ c::BKEY_TYPE_inline_data }>>;
+pub type Inline = FamilyVal<ByFlag<{ BkeyTypeFlags::inline_data.bits() }>>;
 
-pub static DATA: FieldOffsets = FieldOffsets::new(c::BKEY_TYPE_inline_data, "data");
-pub static CSUM: FieldOffsets = FieldOffsets::optional(c::BKEY_TYPE_inline_data, "csum");
+pub static DATA: FieldOffsets = FieldOffsets::new(BkeyTypeFlags::inline_data, "data");
+pub static CSUM: FieldOffsets = FieldOffsets::optional(BkeyTypeFlags::inline_data, "csum");
 
 impl c::bkey {
     pub fn extent_is_inline_data(&self) -> bool {

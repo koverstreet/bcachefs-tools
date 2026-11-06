@@ -27,7 +27,7 @@
 //!    family's;
 //!  - FamilyTypes: a key family's types, F in FamilyVal<F> - its value, any of
 //!    theirs, as long as the key is: ByFlag<F>, the key types with a
-//!    bch_bkey_type_flags, for most - Ptrs, Indirect - or a family's own,
+//!    BkeyTypeFlags, for most - Ptrs, Indirect - or a family's own,
 //!    Extents';
 //!  - BkeyWhole: a key type whose value can be had by value - BkeyI::new(),
 //!    from_key();
@@ -53,7 +53,7 @@
 //! #[derive(SizedVal)].
 
 use super::BkeyP;
-use crate::format::BkeyType;
+use crate::format::{BkeyType, BkeyTypeFlags};
 use crate::btree::bkey::{ops, Ops};
 use crate::btree::iter::{BtreeIter, TransBkey};
 use crate::c;
@@ -644,7 +644,7 @@ impl FamilyTypes for AllTypes {
 pub struct KeyType {
     pub nr: u8,
     pub name: &'static str,
-    pub flags: u32,
+    pub flags: BkeyTypeFlags,
     pub info: &'static StructInfo,
     /// The shortest a valid value is: BkeyTag's
     pub min_val_size: usize,
@@ -655,7 +655,7 @@ macro_rules! key_types {
     ($(($name:ident, $nr:literal, $ty:ty, $flags:tt)),* $(,)?) => {
         const TABLE: [Option<KeyType>; NR_KEY_TYPES] = {
             let mut t = [None; NR_KEY_TYPES];
-            $(t[$nr] = Some(KeyType { nr: $nr, name: stringify!($name), flags: BkeyType($nr).flags().bits(),
+            $(t[$nr] = Some(KeyType { nr: $nr, name: stringify!($name), flags: BkeyType($nr).flags(),
                                       info: <$ty as TypeInfo>::INFO,
                                       min_val_size: <$ty as BkeyTag>::MIN_VAL_SIZE,
                                       ops: ops::<$ty>() });)*
@@ -681,11 +681,11 @@ pub fn key_type_by_name(name: &str) -> Option<&'static KeyType> {
 }
 
 /// The key types with @flag, a bit each, by number.
-pub const fn types_with(flag: u32) -> u64 {
+pub const fn types_with(flag: BkeyTypeFlags) -> u64 {
     let (mut mask, mut i) = (0, 0);
     while i < TABLE.len() {
         if let Some(t) = TABLE[i] {
-            if t.flags & flag != 0 {
+            if t.flags.intersects(flag) {
                 mask |= 1 << i;
             }
         }
@@ -700,12 +700,12 @@ pub struct FieldOffsets([Option<usize>; NR_KEY_TYPES]);
 
 impl FieldOffsets {
     /// In every @flag type: a build error if one hasn't it.
-    pub const fn new(flag: u32, name: &str) -> Self {
+    pub const fn new(flag: BkeyTypeFlags, name: &str) -> Self {
         let t = Self::optional(flag, name);
         let mut i = 0;
         while i < TABLE.len() {
             if let Some(k) = TABLE[i] {
-                assert!(k.flags & flag == 0 || t.0[i].is_some(),
+                assert!(!k.flags.intersects(flag) || t.0[i].is_some(),
                         "a key type with the flag hasn't the field its family reads");
             }
             i += 1;
@@ -714,12 +714,12 @@ impl FieldOffsets {
     }
 
     /// In the @flag types that have it.
-    pub const fn optional(flag: u32, name: &str) -> Self {
+    pub const fn optional(flag: BkeyTypeFlags, name: &str) -> Self {
         let mut t = [None; NR_KEY_TYPES];
         let mut i = 0;
         while i < TABLE.len() {
             if let Some(k) = TABLE[i] {
-                if k.flags & flag != 0 {
+                if k.flags.intersects(flag) {
                     t[i] = k.info.field_offset(name);
                 }
             }
@@ -734,13 +734,13 @@ impl FieldOffsets {
     }
 }
 
-/// The key types with flag F, a bch_bkey_type_flags: a family's types -
+/// The key types with flag F, a BkeyTypeFlags bit: a family's types -
 /// FamilyVal<ByFlag<F>> - by their bkey_val arms' flags.
 pub enum ByFlag<const F: u32> {}
 
 impl<const F: u32> FamilyTypes for ByFlag<F> {
     fn contains(k: &c::bkey) -> bool {
-        key_type(k.type_).is_some_and(|t| t.flags & F != 0)
+        key_type(k.type_).is_some_and(|t| t.flags.bits() & F != 0)
     }
 }
 
@@ -849,7 +849,7 @@ pub(crate) use bkey_typed;
 /// it's used.
 macro_rules! bkey_family {
     ($(#[$meta:meta])* $family:ident: $flag:ident) => { crate::paste! {
-        pub type [<$family Types>] = crate::btree::bkey::ByFlag<{ crate::c::bch_bkey_type_flags::$flag.bits() }>;
+        pub type [<$family Types>] = crate::btree::bkey::ByFlag<{ crate::format::BkeyTypeFlags::$flag.bits() }>;
 
         $(#[$meta])*
         pub type $family = crate::btree::bkey::FamilyVal<[<$family Types>]>;
@@ -914,7 +914,7 @@ macro_rules! bkey_types {
             const MIN_VAL_SIZE: usize =
                 size_of::<<<Self as BkeyFamily>::Validated as Unsized>::Head>();
         }
-        bkey_types!(@in $ty, AllTypes $(, ByFlag<{ c::bch_bkey_type_flags::$flag.bits() }>)*);
+        bkey_types!(@in $ty, AllTypes $(, ByFlag<{ BkeyTypeFlags::$flag.bits() }>)*);
         )*
 
         bkey_typed! {

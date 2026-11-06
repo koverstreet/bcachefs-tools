@@ -1067,7 +1067,7 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
 /// anything else is memory corruption, and panics.
 ///
 /// `#[prefix(P)]`: its variants by their names past P too, constants of the
-/// type - bch_bkey_type_flags::ptrs for BKEY_TYPE_ptrs.
+/// type - BkeyTypeFlags::ptrs for BKEY_TYPE_ptrs.
 ///
 /// `_` for the name: an anonymous enum, the constants alone. A variant with
 /// no value is the one before it plus one, as in C.

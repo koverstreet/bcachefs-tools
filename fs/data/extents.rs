@@ -4,7 +4,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::BkeyType;
+use crate::format::{BkeyType, BkeyTypeFlags};
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{bkey_ge, bkey_gt, bkey_le, bkey_lt, types_with, AllTypes, BkeyFamily, ByFlag, FamilyTypes, FamilyVal, InFamily, KeyState, BkeyS, BkeySC, BkeyV, BkeyVal,
                          BkeyVMut};
@@ -195,7 +195,7 @@ const _: () = {
         }
         id += 1;
     }
-    assert!(types_with(c::BKEY_TYPE_extent) == extents_btrees_key_types,
+    assert!(types_with(BkeyTypeFlags::extent) == extents_btrees_key_types,
             "BKEY_TYPE_extent isn't on exactly the key types BCH_BTREE_IDS()' extents btrees hold");
 };
 
@@ -209,23 +209,23 @@ pub enum ExtentsTypes {}
 
 impl FamilyTypes for ExtentsTypes {
     fn contains(k: &c::bkey) -> bool {
-        ByFlag::<{ c::BKEY_TYPE_extent }>::contains(k) && k.size != 0
+        ByFlag::<{ BkeyTypeFlags::extent.bits() }>::contains(k) && k.size != 0
     }
 }
 
 // SAFETY: every key is one of AllTypes'
 unsafe impl<S: KeyState> InFamily<AllTypes> for FamilyVal<ExtentsTypes, S> {}
 
-/// A key counted in its inode's i_sectors, BKEY_TYPE_allocation.
-pub type Allocation = FamilyVal<ByFlag<{ c::BKEY_TYPE_allocation }>>;
+/// A key counted in its inode's i_sectors, BkeyTypeFlags::allocation.
+pub type Allocation = FamilyVal<ByFlag<{ BkeyTypeFlags::allocation.bits() }>>;
 
-/// Data a file reads, BKEY_TYPE_data: pointers to it, the data inline, or a
+/// Data a file reads, BkeyTypeFlags::data: pointers to it, the data inline, or a
 /// reflink_p to it.
-pub type Data = FamilyVal<ByFlag<{ c::BKEY_TYPE_data }>>;
+pub type Data = FamilyVal<ByFlag<{ BkeyTypeFlags::data.bits() }>>;
 
 /// A file's data in the extents btree, not through a reflink_p,
-/// BKEY_TYPE_user_data.
-pub type UserData = FamilyVal<ByFlag<{ c::BKEY_TYPE_user_data }>>;
+/// BkeyTypeFlags::user_data.
+pub type UserData = FamilyVal<ByFlag<{ BkeyTypeFlags::user_data.bits() }>>;
 
 impl c::bkey {
     pub fn extent_is_allocation(&self) -> bool {

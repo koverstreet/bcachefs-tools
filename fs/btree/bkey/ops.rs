@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::format::ErrorKeyReason;
-use crate::format::BkeyType;
+use crate::format::{BkeyType, BkeyTypeFlags};
 use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt};
@@ -274,7 +274,7 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let kt = crate::btree::bkey::key_type(k.type_);
     let strict = v.from.bits.flags().contains(c::bch_validate_flags::BCH_VALIDATE_commit) ||
         btree.is_none() ||
-        kt.is_some_and(|t| t.flags & c::BKEY_TYPE_generic == 0);
+        kt.is_some_and(|t| !t.flags.contains(BkeyTypeFlags::generic));
     let allowed = match btree {
         None    => [BkeyType::deleted, BkeyType::btree_ptr,
                     BkeyType::btree_ptr_v2].iter().fold(0, |m, t| m | 1 << t.0),

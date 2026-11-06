@@ -7,6 +7,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::format::BkeyTypeFlags;
 use crate::fs::Dev;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{types_with, BkeyI, BkeySC};
@@ -353,7 +354,7 @@ async fn rewrite_if_bad(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, mut
     drop(r);
 
     // the btree's keys, whichever replica they were read from
-    if key.level == 1 && key.btree.key_types() & types_with(c::BKEY_TYPE_inline_data) != 0 {
+    if key.level == 1 && key.btree.key_types() & types_with(BkeyTypeFlags::inline_data) != 0 {
         let bad = inline_data_bad(fs, &key);
         io.stats().sectors_error_uncorrected.fetch_add(bad as i64, Relaxed);
     }
