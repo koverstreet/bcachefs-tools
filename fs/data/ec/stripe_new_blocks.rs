@@ -22,7 +22,7 @@ use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;
 use core::ffi::c_uint;
 use core::sync::atomic::Ordering;
-use crate::format::{Btree, DataType};
+use crate::format::{Bpos, Btree, DataType};
 
 // ── A new stripe's buckets ───────────────────────────────────────────────
 //
@@ -434,9 +434,9 @@ pub(crate) fn stripe_idx_alloc(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Re
 /// stripe shrunk to what it got, if they can't be had. Packed first, where
 /// devices are low on space.
 fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, dev_stripe: &c::ec_dev_stripe_state,
-                          s: &mut InternalGuard<'_>) -> Result<(), BchError> {
+                          s: &mut InternalGuard<'_>, reuse_pos: &mut Bpos) -> Result<(), BchError> {
     if s.reuse.is_none() && should_reuse_stripe(t.fs(), s) {
-        try_stripe_reuse(t, s)?;
+        try_stripe_reuse(t, s, Some(reuse_pos))?;
     }
 
     let saved = (req.watermark, req.flags);
@@ -451,7 +451,7 @@ fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, 
     }
 
     if s.reuse.is_none() {
-        try_stripe_reuse(t, s)?;
+        try_stripe_reuse(t, s, None)?;
     }
     new_stripe_alloc_buckets(t, req, dev_stripe, s, true)
 }
@@ -460,11 +460,11 @@ fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, 
 /// reservation for its parity, and its buckets in the table of new stripes'.
 pub(crate) fn stripe_alloc_or_reuse(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request,
                                     dev_stripe: &c::ec_dev_stripe_state, s: &mut InternalGuard<'_>,
-                                    stripe_fs: &BackRef<Fs>) -> Result<(), BchError> {
+                                    stripe_fs: &BackRef<Fs>, reuse_pos: &mut Bpos) -> Result<(), BchError> {
     if s.slot_claim.is_none() {
         stripe_idx_alloc(t, s)?;
     }
-    alloc_or_reuse_buckets(t, req, dev_stripe, s)?;
+    alloc_or_reuse_buckets(t, req, dev_stripe, s, reuse_pos)?;
 
     if s.res.as_ref().is_none_or(|r| r.sectors() == 0) {
         // NOFAIL: it doesn't fail

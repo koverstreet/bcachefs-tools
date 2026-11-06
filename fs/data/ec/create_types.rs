@@ -114,6 +114,7 @@ pub struct HeadState {
     pub devs: HeadDevs,
 
     pub nr_created: u64,
+    pub reuse_pos: c::bpos,
 
     #[c("struct ec_stripe_new *s")]
     pub s: Option<StripeNewBox>,
