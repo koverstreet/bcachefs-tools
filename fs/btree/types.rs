@@ -1239,8 +1239,8 @@ impl FromStr for BkeyType {
     type Err = BchError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        crate::btree::bkey::key_type_by_name(s)
-            .map(|t| BkeyType(t.nr.into()))
+        crate::util::names::value_of(<Self as crate::util::names::Names>::ENTRIES, s)
+            .map(|v| BkeyType(v as u32))
             .ok_or_else(|| bch_errcode::BCH_ERR_EINVAL_parse_bkey_type.into())
     }
 }

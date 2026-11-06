@@ -142,9 +142,9 @@ pub fn bch2_bpos_to_text(out: &mut Printbuf, pos: Bpos) {
 #[cold]
 pub fn bkey_to_text(out: &mut Printbuf, k: &c::bkey) {
     prt!(out, "u64s {} type ", k.u64s);
-    match crate::btree::bkey::key_type(k.type_) {
-        Some(t) => prt!(out, "{} ", t.name),
-        None    => prt!(out, "{} ", k.type_),
+    match k.key_type().name() {
+        Some(name) => prt!(out, "{name} "),
+        None       => prt!(out, "{} ", k.type_),
     }
     bpos_to_text(out, k.p);
     prt!(out, " len {} ver {}", k.size, { k.bversion.lo });
@@ -177,13 +177,13 @@ pub fn val_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
         return;
     }
 
-    let min = min_val_size(k.k.type_);
+    let min = k.k.key_type().min_val_size();
     if k.k.val_bytes() < min {
         prt!(out, "(value too small: {} < {min})", k.k.val_bytes());
         return;
     }
 
-    (key_ops(k.k.type_).to_text)(out, fs, k)
+    (k.k.key_type().ops().to_text)(out, fs, k)
 }
 
 #[c_export]
@@ -213,12 +213,6 @@ pub fn bch2_bkey_val_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: Bkey
     bkey_val_to_text(out, c.map(Fs::from_c), k)
 }
 
-/// The shortest valid value of type @ty: its struct up to its #[grown(from)]
-/// field, or all of it. A type this code doesn't know has no minimum.
-pub fn min_val_size(ty: u8) -> usize {
-    crate::btree::bkey::key_type(ty).map_or(0, |t| t.min_val_size)
-}
-
 /// bch2_bkey_val_validate(): the value, by its type's validate - checked
 /// first that it's as long as the type's shortest.
 pub fn bkey_val_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
@@ -226,11 +220,11 @@ pub fn bkey_val_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         return Ok(());
     }
 
-    let (have, min) = (v.k.k.val_bytes(), min_val_size(v.k.k.type_));
+    let (have, min) = (v.k.k.val_bytes(), v.k.k.key_type().min_val_size());
     crate::bkey_fsck_err_on!(v, have < min, crate::init::error::id::bkey_val_size_too_small,
                              "bad val size ({have} < {min})")?;
 
-    (key_ops(v.k.k.type_).validate)(v)
+    (v.k.k.key_type().ops().validate)(v)
 }
 
 #[c_export]
@@ -271,19 +265,20 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         return Ok(());
     }
 
-    let kt = crate::btree::bkey::key_type(k.type_);
+    let ty = k.key_type();
+    let known = ty.info().is_some();
     let strict = v.from.bits.flags().contains(c::bch_validate_flags::BCH_VALIDATE_commit) ||
         btree.is_none() ||
-        kt.is_some_and(|t| !t.flags.contains(BkeyTypeFlags::generic));
+        known && !ty.flags().contains(BkeyTypeFlags::generic);
     let allowed = match btree {
         None    => [BkeyType::deleted, BkeyType::btree_ptr,
                     BkeyType::btree_ptr_v2].iter().fold(0, |m, t| m | 1 << t.0),
         Some(b) => b.key_types(),
     };
 
-    bkey_fsck_err_on!(v, strict && kt.is_some() && allowed & (1 << k.type_) == 0,
+    bkey_fsck_err_on!(v, strict && known && allowed & (1 << k.type_) == 0,
                       id::bkey_invalid_type_for_btree, "invalid key type for btree {} ({})",
-                      NodeType(btree), kt.map_or("(unknown)", |t| t.name))?;
+                      NodeType(btree), ty.name().unwrap_or("(unknown)"))?;
 
     if btree.is_some_and(|b| b.is_extents()) && !k.key_type().is_extent_whiteout() {
         bkey_fsck_err_on!(v, k.size == 0, id::bkey_extent_size_zero, "size == 0")?;
@@ -328,7 +323,7 @@ pub fn bch2_bkey_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate
 
 /// bch2_bkey_swab_val(): the value byte swapped, by its type's swab.
 pub fn bkey_swab_val(fs: Option<&Fs>, k: BkeyS<'_>) {
-    (key_ops(k.k.type_).swab)(fs, k)
+    (k.k.key_type().ops().swab)(fs, k)
 }
 
 #[c_export]
@@ -349,7 +344,7 @@ pub fn bkey_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
     bch2_bkey_maybe_mergable(l.k, r.k) &&
         u64::from(l.k.size) + u64::from(r.k.size) <= u64::from(u32::MAX) &&
         !crate::debug::params::key_merging_disabled() &&
-        (key_ops(l.k.type_).merge)(fs, l, r)
+        (l.k.key_type().ops().merge)(fs, l, r)
 }
 
 #[c_export]
@@ -357,20 +352,11 @@ pub fn bch2_bkey_merge(c: &Opaque<Fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
     bkey_merge(Fs::from_c(c), l, r)
 }
 
-/// A key type's methods, by its number: none for a type this code doesn't know.
-pub fn key_ops(ty: u8) -> &'static Ops {
-    enum Unknown {}
-    impl BkeyOps for Unknown {}
-    static UNKNOWN: Ops = ops::<Unknown>();
-
-    crate::btree::bkey::key_type(ty).map_or(&UNKNOWN, |t| &t.ops)
-}
-
 #[c_export]
 pub fn bch2_bkey_check_repair<'t>(trans: &'t BtreeTrans<'t>, iter: &mut BtreeIter<'t>, btree: Btree,
                                   level: c_uint, k: BkeySC<'_>) -> c_int {
     let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c((key_ops(k.k.type_).check_repair)(&t, iter, btree, level, k))
+    ret_to_c((k.k.key_type().ops().check_repair)(&t, iter, btree, level, k))
 }
 
 pub const fn ops<T: BkeyOps>() -> Ops {

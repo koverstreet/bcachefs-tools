@@ -37,14 +37,13 @@
 //!    UnvalidatedSized. Unsized too, and its derive InState, so every key
 //!    type's BkeyFamily is the one impl.
 //!
-//! What's known of a key type as data is KEY_TYPES, one KeyType per
-//! bkey_val arm: its flags and its value's StructInfo. A family with
-//! a field to find - an indirect extent's refcount - has FieldOffsets, built
-//! from it in the family's file: the field by name in each of its types, not
-//! a trait per type.
+//! What's known of a key type as data is BkeyType's: its flags, its value's
+//! StructInfo, its methods. A family with a field to find - an indirect
+//! extent's refcount - has FieldOffsets, built from them in the family's file:
+//! the field by name in each of its types, not a trait per type.
 //!
 //! The macros generate what has to be an impl or an enum: bkey_types! per row
-//! its BkeyTag (bkey_val!) and its InFamily markers - AllTypes and each of its
+//! its BkeyTag and its InFamily markers - AllTypes and each of its
 //! flags' - and the typed() enum of every type; bkey_family! a family read
 //! per type, with its typed() (Ptrs); bkey_family_conv! a family's From impls -
 //! one per form pair, generic over the key's type and state, so a single
@@ -54,7 +53,7 @@
 
 use super::BkeyP;
 use crate::format::{BkeyType, BkeyTypeFlags};
-use crate::btree::bkey::{ops, Ops};
+use crate::btree::bkey::{ops, BkeyOps, Ops};
 use crate::btree::iter::{BtreeIter, TransBkey};
 use crate::c;
 use crate::typeinfo::{StructInfo, TypeInfo};
@@ -639,55 +638,51 @@ impl FamilyTypes for AllTypes {
     }
 }
 
-/// A key type: its bkey_val arm, its value's struct, and its methods.
-#[derive(Clone, Copy)]
-pub struct KeyType {
-    pub nr: u8,
-    pub name: &'static str,
-    pub flags: BkeyTypeFlags,
-    pub info: &'static StructInfo,
-    /// The shortest a valid value is: BkeyTag's
-    pub min_val_size: usize,
-    pub ops: Ops,
-}
-
+/// What's known of a key type as data, from its value type: its struct, its
+/// shortest valid value, its methods.
 macro_rules! key_types {
     ($(($name:ident, $nr:literal, $ty:ty, $flags:tt)),* $(,)?) => {
-        const TABLE: [Option<KeyType>; NR_KEY_TYPES] = {
-            let mut t = [None; NR_KEY_TYPES];
-            $(t[$nr] = Some(KeyType { nr: $nr, name: stringify!($name), flags: BkeyType($nr).flags(),
-                                      info: <$ty as TypeInfo>::INFO,
-                                      min_val_size: <$ty as BkeyTag>::MIN_VAL_SIZE,
-                                      ops: ops::<$ty>() });)*
-            t
-        };
+        impl BkeyType {
+            /// Its value's struct: None for a type this code doesn't know.
+            pub const fn info(self) -> Option<&'static StructInfo> {
+                match self {
+                    $(Self::$name => Some(<$ty as TypeInfo>::INFO),)*
+                    _ => None,
+                }
+            }
+
+            /// The shortest a valid value is, BkeyTag's - shorter than its
+            /// struct is an older version: 0 for a type this code doesn't know.
+            pub const fn min_val_size(self) -> usize {
+                match self {
+                    $(Self::$name => <$ty as BkeyTag>::MIN_VAL_SIZE,)*
+                    _ => 0,
+                }
+            }
+
+            /// Its methods: none for a type this code doesn't know.
+            pub fn ops(self) -> &'static Ops {
+                match self {
+                    $(Self::$name => { static OPS: Ops = ops::<$ty>(); &OPS })*
+                    _ => { static OPS: Ops = ops::<Unknown>(); &OPS }
+                }
+            }
+        }
     };
 }
 c::bkey_val_arms!(key_types);
 
+enum Unknown {}
+impl BkeyOps for Unknown {}
+
 const NR_KEY_TYPES: usize = BkeyType::nr.0 as usize;
-
-/// Every key type, by its number. A static, not TABLE, for a lookup: a const
-/// indexed at runtime may be copied whole to the stack first.
-pub static KEY_TYPES: [Option<KeyType>; NR_KEY_TYPES] = TABLE;
-
-/// Key type @ty: None for a type this code doesn't know.
-pub fn key_type(ty: u8) -> Option<&'static KeyType> {
-    KEY_TYPES.get(ty as usize)?.as_ref()
-}
-
-pub fn key_type_by_name(name: &str) -> Option<&'static KeyType> {
-    KEY_TYPES.iter().flatten().find(|t| t.name == name)
-}
 
 /// The key types with @flag, a bit each, by number.
 pub const fn types_with(flag: BkeyTypeFlags) -> u64 {
     let (mut mask, mut i) = (0, 0);
-    while i < TABLE.len() {
-        if let Some(t) = TABLE[i] {
-            if t.flags.intersects(flag) {
-                mask |= 1 << i;
-            }
+    while i < NR_KEY_TYPES {
+        if BkeyType(i as u32).flags().intersects(flag) {
+            mask |= 1 << i;
         }
         i += 1;
     }
@@ -703,11 +698,9 @@ impl FieldOffsets {
     pub const fn new(flag: BkeyTypeFlags, name: &str) -> Self {
         let t = Self::optional(flag, name);
         let mut i = 0;
-        while i < TABLE.len() {
-            if let Some(k) = TABLE[i] {
-                assert!(!k.flags.intersects(flag) || t.0[i].is_some(),
-                        "a key type with the flag hasn't the field its family reads");
-            }
+        while i < NR_KEY_TYPES {
+            assert!(!BkeyType(i as u32).flags().intersects(flag) || t.0[i].is_some(),
+                    "a key type with the flag hasn't the field its family reads");
             i += 1;
         }
         t
@@ -717,11 +710,10 @@ impl FieldOffsets {
     pub const fn optional(flag: BkeyTypeFlags, name: &str) -> Self {
         let mut t = [None; NR_KEY_TYPES];
         let mut i = 0;
-        while i < TABLE.len() {
-            if let Some(k) = TABLE[i] {
-                if k.flags.intersects(flag) {
-                    t[i] = k.info.field_offset(name);
-                }
+        while i < NR_KEY_TYPES {
+            let ty = BkeyType(i as u32);
+            if let (true, Some(info)) = (ty.flags().intersects(flag), ty.info()) {
+                t[i] = info.field_offset(name);
             }
             i += 1;
         }
@@ -740,7 +732,7 @@ pub enum ByFlag<const F: u32> {}
 
 impl<const F: u32> FamilyTypes for ByFlag<F> {
     fn contains(k: &c::bkey) -> bool {
-        key_type(k.type_).is_some_and(|t| t.flags.bits() & F != 0)
+        k.key_type().flags().bits() & F != 0
     }
 }
 

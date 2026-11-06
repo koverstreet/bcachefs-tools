@@ -82,17 +82,16 @@ fn bkey_edit_short_value() {
     assert_eq!((s.snapshot.get(), s.fs_path_parent().get()), (5, 0));
 }
 
-/// A key type by its number and its name, and a family's field found in its
-/// types' structs by name: where offset_of! says it is.
+/// A key type's struct, the type by its name, and a family's field found in
+/// its types' structs by name: where offset_of! says it is.
 #[test]
-fn key_type_table() {
+fn key_type_info() {
     use crate::data::inline_data::{CSUM, DATA};
     use crate::data::reflink::REFCOUNT;
 
-    let nr = BkeyType::snapshot.0 as u8;
-    assert_eq!(key_type(nr).unwrap().info.name, "bch_snapshot");
-    assert_eq!(key_type_by_name("snapshot").unwrap().nr, nr);
-    assert!(key_type_by_name("no_such_type").is_none());
+    assert_eq!(BkeyType::snapshot.info().unwrap().name, "bch_snapshot");
+    assert_eq!("snapshot".parse::<BkeyType>().ok(), Some(BkeyType::snapshot));
+    assert!("no_such_type".parse::<BkeyType>().is_err());
 
     let k = |ty: BkeyType| c::bkey { type_: ty.0 as u8, ..Default::default() };
 

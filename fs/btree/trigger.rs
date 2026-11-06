@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::bkey::{key_ops, BkeyI, BkeyS, BkeySC};
+use crate::btree::bkey::{BkeyI, BkeyS, BkeySC};
+use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{BtreeTrans, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
@@ -123,11 +124,11 @@ fn run_trigger(t: &TransAttempt<'_, '_>, trigger: Option<&'static Trigger>, op: 
 /// bch2_key_trigger(): @op's key's trigger - the old key's type's, the new
 /// key's if it's a deletion - then its snapshot's count of keys.
 fn key_trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
-    let ty = match op.old.k.type_ {
-        0  => op.new.k.type_,
+    let ty = match op.old.k.key_type() {
+        BkeyType::deleted => op.new.k.key_type(),
         ty => ty,
     };
-    run_trigger(t, key_ops(ty).trigger, op)?;
+    run_trigger(t, ty.ops().trigger, op)?;
 
     /*
      * Gate matches the trans-commit dispatch: only snapshotted btrees get
@@ -238,7 +239,7 @@ unsafe fn run_one_mem_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>, 
     let old_k = i.old_k;
     let mut op = unsafe { update_op(i, &old_k, flags) };
     let old = op.old;
-    let (old_ops, new_ops) = (key_ops(old.k.type_), key_ops(op.new.k.type_));
+    let (old_ops, new_ops) = (old.k.key_type().ops(), op.new.k.key_type().ops());
 
     // a net count, old to new: before the split below rewrites @op
     if op.btree.has_snapshots() {
@@ -282,7 +283,7 @@ unsafe fn run_one_trans_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>
     let old_k = i.old_k;
     let mut flags = UpdateTriggerFlags::from_bits_retain(i.flags) | UpdateTriggerFlags::TRANSACTIONAL;
     let mut op = unsafe { update_op(i, &old_k, flags) };
-    let (old_ops, new_ops) = (key_ops(old_k.type_), key_ops(op.new.k.type_));
+    let (old_ops, new_ops) = (old_k.key_type().ops(), op.new.k.key_type().ops());
 
     let mut trigger = old_ops.trigger;
     if !i.bits.insert_trigger_run() && !i.bits.overwrite_trigger_run() &&
