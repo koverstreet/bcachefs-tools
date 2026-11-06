@@ -81,6 +81,7 @@ c_extern! {
     pub fn bch2_debugfs_create_file(name: *const c_char, mode: c::umode_t, parent: *mut c::dentry,
                                     data: *mut c_void, fops: *const c::file_operations) -> *mut c::dentry;
     pub fn rust_kzalloc_nofail(size: usize) -> *mut c_void;
+    pub fn rust_kvzalloc_nofail(size: usize) -> *mut c_void;
     pub fn rust_kfree(p: *const c_void);
     pub fn rust_kvfree(p: *mut c_void);
     pub fn rust_kvfree_rcu(p: *mut c_void, head: *mut c::rcu_head);

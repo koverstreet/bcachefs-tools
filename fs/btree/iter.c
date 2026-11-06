@@ -2036,71 +2036,7 @@ static noinline btree_path_idx_t btree_paths_realloc(struct btree_trans *trans,
 	}
 
 	btree_path_idx_t idx = trans->nr_paths;
-	unsigned nr = trans->nr_paths * 2;
-
-	void *p = kvzalloc(BITS_TO_LONGS(nr) * sizeof(unsigned long) +
-			  sizeof(struct btree_trans_paths) +
-			  nr * sizeof(struct btree_path) +
-			  nr * sizeof(btree_path_idx_t) + 8 +
-			  nr * sizeof(struct btree_insert_entry), GFP_KERNEL|__GFP_NOFAIL);
-
-	unsigned long *paths_allocated = p;
-	memcpy(paths_allocated, trans->paths_allocated, BITS_TO_LONGS(trans->nr_paths) * sizeof(unsigned long));
-	p += BITS_TO_LONGS(nr) * sizeof(unsigned long);
-
-	p += sizeof(struct btree_trans_paths);
-	struct btree_path *paths = p;
-	*trans_paths_nr(paths) = nr;
-	memcpy(paths, trans->paths, trans->nr_paths * sizeof(struct btree_path));
-	p += nr * sizeof(struct btree_path);
-
-	btree_path_idx_t *sorted = p;
-	memcpy(sorted, trans->sorted, trans->nr_sorted * sizeof(btree_path_idx_t));
-	p += nr * sizeof(btree_path_idx_t) + 8;
-
-	struct btree_insert_entry *updates = p;
-	memcpy(updates, trans->updates, trans->nr_paths * sizeof(struct btree_insert_entry));
-
-	unsigned long *old = trans->paths_allocated;
-
-	/*
-	 * Anything still holding a pointer into the old arrays is now stale,
-	 * and the RCU grace period means it stays readable for a while yet -
-	 * so a stale access reads a correct-looking copy and silently diverges
-	 * instead of faulting. That's the whole reason this bug class has been
-	 * so quiet: neither KASAN nor valgrind sees anything, because nothing
-	 * is freed at the point of the bad access.
-	 *
-	 * Poison the node pointers so a stale path is instead obviously wrong
-	 * the moment it's used. IS_ERR() paths already exist all over the
-	 * iterator code, so this lands as no_btree_node rather than as a wild
-	 * pointer, and the specific errcode names what happened.
-	 *
-	 * #ifdef and not IS_ENABLED: the tools build passes
-	 * -DCONFIG_BCACHEFS_DEBUG=y, and IS_ENABLED() only recognizes 1, so
-	 * IS_ENABLED(CONFIG_BCACHEFS_DEBUG) is silently 0 in userspace.
-	 *
-	 * Note the first realloc retires trans->_paths, which is embedded in
-	 * the trans and never freed - so that poison has to be cleared when a
-	 * trans is initialized, or it shows up in the next transaction's live
-	 * paths. See bch2_trans_get().
-	 */
-#ifdef CONFIG_BCACHEFS_DEBUG
-	for (unsigned i = 0; i < trans->nr_paths; i++)
-		for (unsigned l = 0; l < BTREE_MAX_DEPTH; l++)
-			trans->paths[i].l[l].b =
-				ERR_PTR(-BCH_ERR_no_btree_node_stale_paths);
-#endif
-
-	rcu_assign_pointer(trans->paths_allocated,	paths_allocated);
-	rcu_assign_pointer(trans->paths,		paths);
-	rcu_assign_pointer(trans->sorted,		sorted);
-	rcu_assign_pointer(trans->updates,		updates);
-
-	trans->nr_paths		= nr;
-
-	if (old != trans->_paths_allocated)
-		kfree_rcu_mightsleep(old);
+	bch2_trans_paths_grow(trans);
 
 	/*
 	 * Do this before marking the new path as allocated, since it won't be
@@ -4217,31 +4153,7 @@ struct btree_trans *__bch2_trans_get(struct bch_fs *c, unsigned fn_idx)
 	trans->journal_replay_not_finished =
 		unlikely(!test_bit(JOURNAL_replay_done, &c->journal.flags)) &&
 		bch2_journal_keys_tryget(c);
-	trans->nr_paths		= ARRAY_SIZE(trans->_paths);
-	trans->paths_allocated	= trans->_paths_allocated;
-	trans->sorted		= trans->_sorted;
-	trans->paths		= trans->_paths;
-	trans->updates		= trans->_updates;
-
-#ifdef CONFIG_BCACHEFS_DEBUG
-	/*
-	 * If this trans previously grew out of _paths, btree_paths_realloc()
-	 * poisoned it on the way out - and _paths is embedded in the trans, so
-	 * it isn't freed and the poison outlives the transaction that retired
-	 * it. A trans off the percpu cache would then start with poison sitting
-	 * in paths that are live for this transaction. Clear it here rather
-	 * than skip poisoning _paths: growing out of _paths is the common
-	 * realloc, so it's where stale pointers most want catching.
-	 */
-	for (unsigned i = 0; i < ARRAY_SIZE(trans->_paths); i++)
-		for (unsigned l = 0; l < BTREE_MAX_DEPTH; l++)
-			trans->_paths[i].l[l].b = NULL;
-#endif
-
-	*trans_paths_nr(trans->paths) = BTREE_ITER_INITIAL;
-
-	/* Reserve path 0 for our sentinal value */
-	trans->paths_allocated[0] = 1;
+	bch2_trans_paths_init(trans);
 
 	static struct lock_class_key lockdep_key;
 	lockdep_init_map(&trans->dep_map, "bcachefs_btree", &lockdep_key, 0);
@@ -4350,12 +4262,7 @@ void bch2_trans_put(struct btree_trans *trans)
 	darray_exit(&trans->trans_kmalloc_trace);
 #endif
 
-	unsigned long *paths_allocated = trans->paths_allocated;
-	trans->paths_allocated	= NULL;
-	trans->paths		= NULL;
-
-	if (paths_allocated != trans->_paths_allocated)
-		kvfree_rcu_mightsleep(paths_allocated);
+	bch2_trans_paths_exit(trans);
 
 	if (trans->used_mempool)
 		mempool_free(trans->mem, &c->btree.trans.malloc_pool);

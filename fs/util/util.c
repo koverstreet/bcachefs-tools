@@ -263,6 +263,11 @@ void *rust_kzalloc_nofail(size_t size)
 	return kzalloc(size, GFP_KERNEL|__GFP_NOFAIL);
 }
 
+void *rust_kvzalloc_nofail(size_t size)
+{
+	return kvzalloc(size, GFP_KERNEL|__GFP_NOFAIL);
+}
+
 void rust_kfree(const void *p)
 {
 	kfree(p);

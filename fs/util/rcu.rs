@@ -558,6 +558,15 @@ pub unsafe fn kvfree_rcu<T>(p: *mut T) {
     unsafe { c::rust_kvfree_rcu(p.cast(), p.cast()) };
 }
 
+/// rcu_assign_pointer(), into a pointer of C's that other threads
+/// rcu_dereference(): a release store, so a reader that sees @p sees what was
+/// written to it first. The Cell isn't Sync, so other threads reach it only
+/// by pointer, reading it atomically: C's READ_ONCE(), the cycle detector's
+/// load.
+pub fn rcu_assign_pointer<T>(slot: &core::cell::Cell<*mut T>, p: *mut T) {
+    unsafe { AtomicPtr::from_ptr(slot.as_ptr()) }.store(p, Ordering::Release);
+}
+
 /// A buffer starting with an rcu_head, which a thin pointer - C's - reaches
 /// all of: sized, or a DST whose head records its length.
 ///

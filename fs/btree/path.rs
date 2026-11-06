@@ -12,10 +12,12 @@ use crate::c;
 use crate::cstructs::c as cs;
 use crate::errcode::{bch_errcode, err_ptr, errptr_or_null, BchError};
 use crate::format::{Bpos, Btree};
-use crate::types::{c_default, Lent};
+use crate::types::{bits_to_longs, c_default, Lent};
+use crate::util::alloc::kvzalloc_nofail;
+use crate::util::rcu::rcu_assign_pointer;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::util::kernel::local_clock;
-use cstruct_macros::{bitfield, c_name, c_typedef, CStruct};
+use cstruct_macros::{bitfield, c_export, c_name, c_typedef, CStruct};
 use crate::locking::{Locked, LockedBy};
 use crate::locking::six::SixHold;
 use crate::c::six_lock_type;
@@ -272,6 +274,169 @@ impl Paths<'_> {
             (&r[0], &mut l[b])
         }
     }
+}
+
+/// Where a path table's parts are, in bytes from its start, for @nr paths:
+/// the allocated bitmap, then the header's nr_paths right before the paths,
+/// then sorted and updates. One block, so that what reads another thread's -
+/// the cycle detector, bch2_btree_trans_to_text() - has all of it from the
+/// one pointer it rcu_dereference()s, trans->paths, stepping back from it as
+/// C's trans_paths_nr() and trans_paths_allocated() do; and so that one free
+/// retires it. A transaction's first table is embedded in it; past that, one
+/// is kvzalloc()ed.
+struct TableLayout {
+    header:  usize,
+    paths:   usize,
+    sorted:  usize,
+    updates: usize,
+    size:    usize,
+}
+
+impl TableLayout {
+    const fn of(nr: usize) -> Self {
+        let header  = bits_to_longs(nr) * size_of::<c_ulong>();
+        let paths   = header + offset_of!(c::btree_trans_paths, paths);
+        let sorted  = paths + nr * size_of::<BtreePath>();
+        let updates = sorted + (nr + 4) * size_of::<PathIdx>();
+        TableLayout { header, paths, sorted, updates, size: updates + nr * size_of::<c::btree_insert_entry>() }
+    }
+}
+
+/* the embedded table, laid out as any other */
+const _: () = {
+    let base = offset_of!(BtreeTrans<'static>, _paths_allocated);
+    let l = TableLayout::of(cs::BTREE_ITER_INITIAL as usize);
+    assert!(offset_of!(BtreeTrans<'static>, trans_paths) - base == l.header &&
+            offset_of!(BtreeTrans<'static>, _paths) - base == l.paths &&
+            offset_of!(BtreeTrans<'static>, _sorted) - base == l.sorted &&
+            offset_of!(BtreeTrans<'static>, _updates) - base == l.updates);
+};
+
+/// The header of the table whose paths start at @paths: trans_paths_nr()'s.
+pub(crate) fn table_header(paths: *mut BtreePath) -> *mut c::btree_trans_paths {
+    paths.wrapping_byte_sub(offset_of!(c::btree_trans_paths, paths)).cast()
+}
+
+/// Its allocated bitmap, of @nr paths: trans_paths_allocated()'s.
+pub(crate) fn table_allocated(paths: *mut BtreePath, nr: usize) -> *mut c_ulong {
+    table_header(paths).cast::<c_ulong>().wrapping_sub(bits_to_longs(nr))
+}
+
+impl BtreeTrans<'_> {
+    /// A table the transaction's done with, from its allocated bitmap: freed
+    /// once readers are done with it, unless it's the embedded one.
+    fn table_retire(&self, allocated: *mut c_ulong) {
+        if allocated != self._paths_allocated.as_ptr().cast() {
+            // kfree_rcu_mightsleep() is kvfree_rcu_mightsleep()
+            unsafe { c::rust_kfree_rcu_mightsleep(allocated.cast()) };
+        }
+    }
+}
+
+impl Paths<'_> {
+    /// The table at twice the size, what's in it copied over, and the old one
+    /// retired. Nothing borrowed from it outlives that - this takes &mut self
+    /// - but a pointer C kept into it can.
+    pub(crate) fn grow(&mut self) {
+        let t = self.trans;
+        let (old_nr, nr) = (t.nr_paths.get() as usize, t.nr_paths.get() as usize * 2);
+        let l = TableLayout::of(nr);
+        let p = kvzalloc_nofail(l.size).as_ptr();
+        let allocated = p.cast::<c_ulong>();
+        let paths     = p.wrapping_add(l.paths).cast::<BtreePath>();
+        let sorted    = p.wrapping_add(l.sorted).cast::<PathIdx>();
+        let updates   = p.wrapping_add(l.updates).cast::<c::btree_insert_entry>();
+
+        unsafe {
+            ptr::copy_nonoverlapping(t.paths_allocated.get(), allocated, bits_to_longs(old_nr));
+            (*table_header(paths)).nr_paths = nr as c_ulong;
+            ptr::copy_nonoverlapping(t.paths.get(), paths, old_nr);
+            ptr::copy_nonoverlapping(t.sorted.get(), sorted, t.nr_sorted as usize);
+            ptr::copy_nonoverlapping(t.updates.get(), updates, old_nr);
+        }
+
+        /*
+         * Anything still holding a pointer into the old arrays is now stale,
+         * and the RCU grace period means it stays readable for a while yet -
+         * so a stale access reads a correct-looking copy and silently diverges
+         * instead of faulting. That's the whole reason this bug class has been
+         * so quiet: neither KASAN nor valgrind sees anything, because nothing
+         * is freed at the point of the bad access.
+         *
+         * Poison the node pointers so a stale path is instead obviously wrong
+         * the moment it's used. IS_ERR() paths already exist all over the
+         * iterator code, so this lands as no_btree_node rather than as a wild
+         * pointer, and the specific errcode names what happened.
+         *
+         * Note the first realloc retires trans->_paths, which is embedded in
+         * the trans and never freed - so that poison has to be cleared when a
+         * trans is initialized, or it shows up in the next transaction's live
+         * paths. See bch2_trans_paths_init().
+         */
+        if cfg!(CONFIG_BCACHEFS_DEBUG) {
+            for path in self.iter_mut() {
+                for level in &mut path.l {
+                    level.b = btree_path_poison();
+                }
+            }
+        }
+
+        let old = t.paths_allocated.get();
+        rcu_assign_pointer(&t.paths_allocated, allocated);
+        rcu_assign_pointer(&t.paths, paths);
+        rcu_assign_pointer(&t.sorted, sorted);
+        rcu_assign_pointer(&t.updates, updates);
+
+        t.nr_paths.set(nr as PathIdx);
+
+        t.table_retire(old);
+    }
+}
+
+/// A transaction's path table, as it starts: its own, embedded.
+#[c_export]
+pub fn bch2_trans_paths_init(trans: &BtreeTrans<'_>) {
+    trans.nr_paths.set(cs::BTREE_ITER_INITIAL as PathIdx);
+    trans.paths_allocated.set(trans._paths_allocated.as_ptr().cast());
+    trans.sorted.set(trans._sorted.as_ptr().cast());
+    trans.paths.set(trans._paths.as_ptr().cast());
+    trans.updates.set(trans._updates.as_ptr().cast());
+
+    /*
+     * If this trans previously grew out of _paths, grow() poisoned it on the
+     * way out - and _paths is embedded in the trans, so it isn't freed and
+     * the poison outlives the transaction that retired it. A trans off the
+     * percpu cache would then start with poison sitting in paths that are
+     * live for this transaction. Clear it here rather than skip poisoning
+     * _paths: growing out of _paths is the common realloc, so it's where
+     * stale pointers most want catching.
+     */
+    if cfg!(CONFIG_BCACHEFS_DEBUG) {
+        for path in trans.paths().iter_mut() {
+            for level in &mut path.l {
+                level.b = NodePtr::null();
+            }
+        }
+    }
+
+    unsafe {
+        (*trans.trans_paths.as_ptr()).nr_paths = cs::BTREE_ITER_INITIAL.into();
+
+        /* Reserve path 0 for our sentinal value */
+        *trans.paths_allocated.get() = 1;
+    }
+}
+
+#[c_export]
+pub fn bch2_trans_paths_grow(_trans: &BtreeTrans<'_>, #[lent(_trans)] paths: &mut Paths<'_>) {
+    paths.grow()
+}
+
+#[c_export]
+pub fn bch2_trans_paths_exit(trans: &BtreeTrans<'_>) {
+    let allocated = trans.paths_allocated.replace(ptr::null_mut());
+    trans.paths.set(ptr::null_mut());
+    trans.table_retire(allocated);
 }
 
 /// What a path's levels point at: a btree node, or - a cached path's - a key

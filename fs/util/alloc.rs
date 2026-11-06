@@ -317,6 +317,13 @@ pub fn kzalloc_nofail(size: usize) -> *mut core::ffi::c_void {
     unsafe { crate::c::rust_kzalloc_nofail(size) }
 }
 
+/// @size bytes kvzalloc()'d, __GFP_NOFAIL. For C's kvfree(), or kvfree_rcu().
+pub fn kvzalloc_nofail(size: usize) -> core::ptr::NonNull<u8> {
+    assert_may_reclaim();
+    core::ptr::NonNull::new(unsafe { crate::c::rust_kvzalloc_nofail(size) }.cast())
+        .expect("__GFP_NOFAIL allocation returned NULL")
+}
+
 /// A zeroed KBox that can't fail to allocate: __GFP_NOFAIL, which the
 /// kernel's Rust allocator API doesn't offer - so kzalloc()'d through C,
 /// kmalloc()'s memory, what a KBox frees. Userspace's allocator aborts rather

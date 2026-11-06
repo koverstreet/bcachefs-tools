@@ -6,7 +6,7 @@
 use crate::btree::iter::BtreeTrans;
 use crate::btree::locking::btree_node_locked_type;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{BtreePath, PathNode};
+use crate::btree::path::{table_allocated, table_header, BtreePath, PathNode};
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
@@ -113,12 +113,9 @@ fn path_locked_type(path: *const BtreePath, level: usize) -> btree_node_locked_t
 /// trans_paths_allocated() and trans_paths_nr(), of a path table another
 /// thread may be using: the bitmap, then nr_paths, sit before the paths.
 fn paths_allocated<'a>(paths: *mut BtreePath) -> (&'a AtomicBitmap, usize) {
-    unsafe {
-        let p = paths.byte_sub(offset_of!(c::btree_trans_paths, paths)).cast::<c::btree_trans_paths>();
-        let nr = (*p).nr_paths as usize;
-        let words = p.cast::<AtomicUsize>().sub(bits_to_longs(nr));
-        (AtomicBitmap::from_words(core::slice::from_raw_parts(words, bits_to_longs(nr))), nr)
-    }
+    let nr = unsafe { (*table_header(paths)).nr_paths } as usize;
+    let words = table_allocated(paths, nr).cast::<AtomicUsize>();
+    (AtomicBitmap::from_words(unsafe { core::slice::from_raw_parts(words, bits_to_longs(nr)) }), nr)
 }
 
 fn lock_type_conflicts(t1: btree_node_locked_type, t2: c::six_lock_type) -> bool {
