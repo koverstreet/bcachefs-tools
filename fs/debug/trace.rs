@@ -2,8 +2,9 @@
 
 //! Tracepoints - sb/counters.h's event_trace() - for Rust, each a type,
 //! events::<name>: every counter's (BCH_PERSISTENT_COUNTERS(), sb/counters.rs),
-//! and those with no counter, BCH_NOCOUNTER_TRACEPOINTS()
-//! (debug/trace_types.rs).
+//! and those with no counter, BCH_NOCOUNTER_TRACEPOINTS() and
+//! BCH_PATH_TRACEPOINTS() (debug/trace_types.rs). A path tracepoint is never
+//! on without CONFIG_BCACHEFS_PATH_TRACEPOINTS, as C's are no-ops without it.
 //!
 //! A tracepoint is checked as C's trace_<name>_enabled() is, a static branch on
 //! its key - util/jump_label.rs's static_branch_unlikely!() - so a disabled one
@@ -20,7 +21,7 @@ use crate::fs::Fs;
 use crate::util::Printbuf;
 
 /// A tracepoint - one of BCH_PERSISTENT_COUNTERS()'s, or of debug/trace.h's
-/// that have no counter, BCH_NOCOUNTER_TRACEPOINTS().
+/// that have no counter, BCH_NOCOUNTER_TRACEPOINTS() and BCH_PATH_TRACEPOINTS().
 pub trait TraceEvent: Copy {
     /// Whether its tracepoint is on: trace_<name>_enabled().
     fn trace_enabled() -> bool;
@@ -45,13 +46,19 @@ pub mod events {
     use crate::c;
     c::BCH_PERSISTENT_COUNTERS!(event_types);
     c::BCH_NOCOUNTER_TRACEPOINTS!(event_types);
+    c::BCH_PATH_TRACEPOINTS!(event_types);
 }
 
+/// Their tracepoints, real where [on] holds - by default, a kernel build with
+/// tracepoints.
 macro_rules! trace_events {
-    ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
+    ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => {
+        trace_events! { [all(kernel, CONFIG_TRACEPOINTS)] $(($name)),* }
+    };
+    ([$on:meta] $(($name:ident)),*) => { ::paste::paste! {
         $(
             impl TraceEvent for events::$name {
-                #[cfg(all(kernel, CONFIG_TRACEPOINTS))]
+                #[cfg($on)]
                 #[inline(always)]
                 fn trace_enabled() -> bool {
                     // SAFETY: a tracepoint's key, which C defines
@@ -61,13 +68,13 @@ macro_rules! trace_events {
                     }
                 }
 
-                #[cfg(not(all(kernel, CONFIG_TRACEPOINTS)))]
+                #[cfg(not($on))]
                 #[inline(always)]
                 fn trace_enabled() -> bool {
                     false
                 }
 
-                #[cfg(all(kernel, CONFIG_TRACEPOINTS))]
+                #[cfg($on)]
                 fn trace(fs: &Fs, msg: &Printbuf) {
                     // SAFETY: @fs is live, and @msg a C string the tracepoint
                     // copies
@@ -76,7 +83,7 @@ macro_rules! trace_events {
                     }
                 }
 
-                #[cfg(not(all(kernel, CONFIG_TRACEPOINTS)))]
+                #[cfg(not($on))]
                 fn trace(_fs: &Fs, _msg: &Printbuf) {}
             }
         )*
@@ -84,6 +91,8 @@ macro_rules! trace_events {
 }
 c::BCH_PERSISTENT_COUNTERS!(trace_events);
 c::BCH_NOCOUNTER_TRACEPOINTS!(trace_events);
+c::BCH_PATH_TRACEPOINTS!(trace_events
+    [all(kernel, CONFIG_TRACEPOINTS, CONFIG_BCACHEFS_PATH_TRACEPOINTS)]);
 
 /// The tracepoints, C's: debug/trace.c's.
 #[cfg(all(kernel, CONFIG_TRACEPOINTS))]
@@ -103,6 +112,8 @@ mod tracepoints {
     }
     c::BCH_PERSISTENT_COUNTERS!(tracepoint_externs);
     c::BCH_NOCOUNTER_TRACEPOINTS!(tracepoint_externs);
+    #[cfg(CONFIG_BCACHEFS_PATH_TRACEPOINTS)]
+    c::BCH_PATH_TRACEPOINTS!(tracepoint_externs);
 }
 
 impl Fs {

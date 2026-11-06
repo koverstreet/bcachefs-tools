@@ -61,6 +61,7 @@ endif
 BCACHEFS_DKMS_FORWARD := BCACHEFS_DEBUG \
                         BCACHEFS_TESTS \
                         BCACHEFS_INJECT_TRANSACTION_RESTARTS \
+                        BCACHEFS_PATH_TRACEPOINTS \
                         BCACHEFS_WERROR
 
 # Vars persisted into the *local* build.vars across invocations - a

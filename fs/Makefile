@@ -25,7 +25,7 @@ endif
 # Our options: from the environment (ktest, build.vars), and quota as Kconfig
 # defaults it, with CONFIG_QUOTA.
 bcachefs-config-cppflags := \
-	$(foreach o,DEBUG INJECT_TRANSACTION_RESTARTS TESTS,$(if $(BCACHEFS_$(o)),-DCONFIG_BCACHEFS_$(o)=1)) \
+	$(foreach o,DEBUG INJECT_TRANSACTION_RESTARTS PATH_TRACEPOINTS TESTS,$(if $(BCACHEFS_$(o)),-DCONFIG_BCACHEFS_$(o)=1)) \
 	$(if $(CONFIG_QUOTA),-DCONFIG_BCACHEFS_QUOTA=1)
 endif
 

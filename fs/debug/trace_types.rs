@@ -18,3 +18,20 @@ c_xmacro! {
         (btree_iter_peek_prev_min),
     }
 }
+
+c_xmacro! {
+    BCH_PATH_TRACEPOINTS(x) {
+        (update_by_path),
+        (btree_path_traverse_start),
+        (btree_path_traverse_end),
+        (btree_path_set_pos),
+        (btree_path_lock),
+        (btree_path_should_be_locked),
+        (btree_path_clone),
+        (btree_path_get_ll),
+        (btree_path_put_ll),
+        (btree_path_get),
+        (btree_path_alloc),
+        (btree_path_free),
+    }
+}

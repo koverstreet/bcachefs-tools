@@ -23,36 +23,15 @@ DECLARE_EVENT_CLASS(fs_str,
 	TP_printk("%s: %s", __entry->fs, __get_str(str))
 );
 
-/* BCH_NOCOUNTER_TRACEPOINTS(): debug/trace_types.rs */
+/* BCH_NOCOUNTER_TRACEPOINTS(), BCH_PATH_TRACEPOINTS(): debug/trace_types.rs */
 #include "debug/trace_gen.h"
 
-#define __BCH_PATH_TRACEPOINTS()					\
-	x(update_by_path)						\
-	x(btree_path_traverse_start)					\
-	x(btree_path_traverse_end)					\
-	x(btree_path_set_pos)						\
-	x(btree_path_lock)						\
-	x(btree_path_should_be_locked)					\
-	x(btree_path_clone)						\
-	x(btree_path_get_ll)						\
-	x(btree_path_put_ll)						\
-	x(btree_path_get)						\
-	x(btree_path_alloc)						\
-	x(btree_path_free)
-
-#ifdef CONFIG_BCACHEFS_PATH_TRACEPOINTS
-#define BCH_PATH_TRACEPOINTS()		__BCH_PATH_TRACEPOINTS()
-#else
-#define BCH_PATH_TRACEPOINTS()
-
-#ifndef _TRACE_BCACHEFS_H
+#if !defined(CONFIG_BCACHEFS_PATH_TRACEPOINTS) && !defined(_TRACE_BCACHEFS_H)
 #define x(n, ...)							\
 	static inline void trace_##n(struct bch_fs *c, const char *s) {}\
 	static inline bool trace_##n##_enabled(void) { return false; }
-	__BCH_PATH_TRACEPOINTS()
+	BCH_PATH_TRACEPOINTS()
 #undef x
-#endif /* _TRACE_BCACHEFS_H */
-
 #endif
 
 #define x(n, ...)							\
@@ -62,7 +41,9 @@ DECLARE_EVENT_CLASS(fs_str,
 	);
 	BCH_PERSISTENT_COUNTERS()
 	BCH_NOCOUNTER_TRACEPOINTS()
+#ifdef CONFIG_BCACHEFS_PATH_TRACEPOINTS
 	BCH_PATH_TRACEPOINTS()
+#endif
 #undef x
 
 #define _TRACE_BCACHEFS_H
