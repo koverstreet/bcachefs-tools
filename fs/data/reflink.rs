@@ -466,24 +466,6 @@ impl BkeyOps for c::ReflinkP {
     const TRIGGER: Option<&'static Trigger> = Some(&REFLINK_P);
 }
 
-#[c_export]
-pub fn bch2_reflink_p_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
-    -> c_int
-{
-    ret_to_c(reflink_p_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_reflink_p_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    <c::ReflinkP as BkeyOps>::to_text(out, Some(Fs::from_c(c)), k)
-}
-
-#[c_export]
-pub fn bch2_reflink_p_merge(c: &Opaque<Fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
-    <c::ReflinkP as BkeyOps>::merge(Fs::from_c(c), l, r)
-}
-
 // ── indirect extents ─────────────────────────────────────────────────────
 
 /// Either kind: reflink_ps' indices are offsets in inode 0, so nothing past it
@@ -496,13 +478,6 @@ fn indirect_pos_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 fn reflink_v_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     indirect_pos_validate(v)?;
     crate::data::ptrs::bkey_ptrs_validate(v)
-}
-
-#[c_export]
-pub fn bch2_reflink_v_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
-    -> c_int
-{
-    ret_to_c(reflink_v_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
 impl BkeyOps for c::ReflinkV {
@@ -522,12 +497,6 @@ impl BkeyOps for c::ReflinkV {
     const TRIGGER: Option<&'static Trigger> = Some(&REFLINK_V);
 }
 
-#[cold]
-#[c_export]
-pub fn bch2_reflink_v_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    <c::ReflinkV as BkeyOps>::to_text(out, Some(Fs::from_c(c)), k)
-}
-
 /*
  * Currently disabled, needs to be debugged:
  */
@@ -540,12 +509,6 @@ pub fn bch2_reflink_v_merge(c: &Opaque<Fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool
 }
 
 // ── indirect inline data ─────────────────────────────────────────────────
-
-#[c_export]
-pub fn bch2_indirect_inline_data_validate(c: &Opaque<Fs>, k: BkeySC<'_>,
-                                          from: &c::bkey_validate_context) -> c_int {
-    ret_to_c(indirect_pos_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
 
 #[cold]
 fn indirect_inline_data_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
@@ -563,12 +526,6 @@ impl BkeyOps for c::IndirectInlineData {
     }
 
     const TRIGGER: Option<&'static Trigger> = Some(&INDIRECT_INLINE_DATA);
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_indirect_inline_data_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    indirect_inline_data_to_text(out, Some(Fs::from_c(c)), k)
 }
 
 // ── lookup ───────────────────────────────────────────────────────────────
@@ -828,21 +785,7 @@ fn trigger_reflink_p(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result
     Ok(())
 }
 
-crate::key_trigger!(bch2_trigger_reflink_p => trigger_reflink_p);
 static REFLINK_P: Trigger = Trigger(trigger_reflink_p);
-
-#[c_export]
-pub fn bch2_reflink_p_check_repair<'t>(
-    trans: &'t BtreeTrans<'t>,
-    iter:  &mut BtreeIter<'t>,
-    btree: Btree,
-    level: c_uint,
-    k:     BkeySC<'_>,
-) -> c_int {
-    // SAFETY: C calls check_repair in an attempt
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(<c::ReflinkP as BkeyOps>::check_repair(&t, iter, btree, level, k))
-}
 
 // ── indirect extent trigger ──────────────────────────────────────────────
 
@@ -865,7 +808,6 @@ fn trigger_reflink_v(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result
     crate::alloc::buckets::trigger_extent(t, op)
 }
 
-crate::key_trigger!(bch2_trigger_reflink_v => trigger_reflink_v);
 static REFLINK_V: Trigger = Trigger(trigger_reflink_v);
 
 fn trigger_indirect_inline_data(_t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
@@ -873,7 +815,6 @@ fn trigger_indirect_inline_data(_t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_
     Ok(())
 }
 
-crate::key_trigger!(bch2_trigger_indirect_inline_data => trigger_indirect_inline_data);
 static INDIRECT_INLINE_DATA: Trigger = Trigger(trigger_indirect_inline_data);
 
 // ── create ───────────────────────────────────────────────────────────────

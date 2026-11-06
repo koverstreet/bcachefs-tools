@@ -788,21 +788,6 @@ fn alloc_v4_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     }
 }
 
-#[c_export]
-pub fn bch2_alloc_v1_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
-    ret_to_c(alloc_v1_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
-#[c_export]
-pub fn bch2_alloc_v2_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
-    ret_to_c(<c::AllocV2 as BkeyOps>::validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
-#[c_export]
-pub fn bch2_alloc_v3_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
-    ret_to_c(<c::AllocV3 as BkeyOps>::validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
 #[cold]
 fn alloc_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
     alloc_v4_to_text(out, fs, k, &alloc_to_v4(k));
@@ -857,39 +842,29 @@ impl BkeyOps for c::AllocV4 {
         alloc_v4_to_text(out, fs, k, &a);
     }
 
-    fn swab(fs: Option<&Fs>, k: BkeyS<'_>) {
-        bch2_alloc_v4_swab(fs, k)
+    /// Each field in the value's bytes byte swapped - only those the value has:
+    /// one from before the struct grew ends short of the later fields.
+    fn swab(_fs: Option<&Fs>, mut k: BkeyS<'_>) {
+        fn swab<const N: usize>(v: &mut [u8], at: usize) {
+            if let Some(b) = v.get_mut(at..at + N) {
+                b.reverse();
+            }
+        }
+        let v = k.val_bytes_mut();
+
+        swab::<8>(v, offset_of!(c::AllocV4, repr.journal_seq_nonempty));
+        swab::<8>(v, offset_of!(c::AllocV4, repr.journal_seq_empty));
+        swab::<4>(v, offset_of!(c::AllocV4, repr.flags));
+        swab::<4>(v, offset_of!(c::AllocV4, repr.dirty_sectors));
+        swab::<4>(v, offset_of!(c::AllocV4, repr.cached_sectors));
+        swab::<8>(v, offset_of!(c::AllocV4, repr.io_time));
+        swab::<8>(v, offset_of!(c::AllocV4, repr.io_time) + size_of::<u64>());
+        swab::<4>(v, offset_of!(c::AllocV4, repr.stripe_refcount));
+        swab::<4>(v, offset_of!(c::AllocV4, repr.nr_external_backpointers));
+        swab::<4>(v, offset_of!(c::AllocV4, repr.stripe_sectors));
     }
 
     const TRIGGER: Option<&'static Trigger> = Some(&ALLOC);
-}
-
-#[c_export]
-pub fn bch2_alloc_v4_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
-    ret_to_c(alloc_v4_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
-/// Each field in the value's bytes byte swapped - only those the value has:
-/// one from before the struct grew ends short of the later fields.
-#[c_export]
-pub fn bch2_alloc_v4_swab(_c: Option<&Fs>, mut k: BkeyS<'_>) {
-    fn swab<const N: usize>(v: &mut [u8], at: usize) {
-        if let Some(b) = v.get_mut(at..at + N) {
-            b.reverse();
-        }
-    }
-    let v = k.val_bytes_mut();
-
-    swab::<8>(v, offset_of!(c::AllocV4, repr.journal_seq_nonempty));
-    swab::<8>(v, offset_of!(c::AllocV4, repr.journal_seq_empty));
-    swab::<4>(v, offset_of!(c::AllocV4, repr.flags));
-    swab::<4>(v, offset_of!(c::AllocV4, repr.dirty_sectors));
-    swab::<4>(v, offset_of!(c::AllocV4, repr.cached_sectors));
-    swab::<8>(v, offset_of!(c::AllocV4, repr.io_time));
-    swab::<8>(v, offset_of!(c::AllocV4, repr.io_time) + size_of::<u64>());
-    swab::<4>(v, offset_of!(c::AllocV4, repr.stripe_refcount));
-    swab::<4>(v, offset_of!(c::AllocV4, repr.nr_external_backpointers));
-    swab::<4>(v, offset_of!(c::AllocV4, repr.stripe_sectors));
 }
 
 /// @a, read from alloc key @k: what's printed of a v4's later fields depends
@@ -918,18 +893,6 @@ fn alloc_v4_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>, a: &c::A
         prt!(out, "fragmentation     {}\n", a.lru_idx_fragmentation(ca));
     }
     prt!(out, "bp_start          {}\n", a.backpointers_start());
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_alloc_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
-    alloc_to_text(out, c.map(Fs::from_c), k)
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_alloc_v4_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
-    <c::AllocV4 as BkeyOps>::to_text(out, c.map(Fs::from_c), k)
 }
 
 impl c::AllocV4 {
@@ -1137,11 +1100,6 @@ fn bucket_gens_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     bkey_fsck_err_on!(v, have != want, id::bucket_gens_val_size_bad, "bad val size ({have} != {want})")
 }
 
-#[c_export]
-pub fn bch2_bucket_gens_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
-    ret_to_c(bucket_gens_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
 impl BkeyOps for c::BucketGens {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         bucket_gens_validate(v)
@@ -1153,12 +1111,6 @@ impl BkeyOps for c::BucketGens {
             prt!(out, "{}", Join(" ", g.v().gens.iter()));
         }
     }
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_bucket_gens_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
-    <c::BucketGens as BkeyOps>::to_text(out, c.map(Fs::from_c), k)
 }
 
 /// The bucket_gens btree, made from the alloc btree: for the upgrade that
@@ -1753,7 +1705,6 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
     Ok(())
 }
 
-crate::key_trigger!(bch2_trigger_alloc => trigger_alloc);
 static ALLOC: Trigger = Trigger(trigger_alloc);
 
 // ── Removing a device ────────────────────────────────────────────────────

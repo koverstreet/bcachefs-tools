@@ -275,12 +275,6 @@ impl BkeyOps for c::LoggedOpTruncate {
 }
 
 #[cold]
-#[c_export]
-pub fn bch2_logged_op_truncate_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    logged_op_truncate_to_text(out, Some(Fs::from_c(c)), k)
-}
-
-#[cold]
 fn logged_op_truncate_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
     let op = c::LoggedOpTruncate::val_copy_pad(k).expect("a truncate op");
 
@@ -376,12 +370,6 @@ impl BkeyOps for c::LoggedOpFinsert {
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
         logged_op_finsert_to_text(out, fs, k)
     }
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_logged_op_finsert_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    logged_op_finsert_to_text(out, Some(Fs::from_c(c)), k)
 }
 
 #[cold]

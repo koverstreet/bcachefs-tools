@@ -81,13 +81,6 @@ fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     Ok(())
 }
 
-#[c_export]
-pub fn bch2_damage_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
-    -> core::ffi::c_int
-{
-    ret_to_c(validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
 impl crate::btree::bkey_methods::BkeyOps for c::Damage {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         validate(v)
@@ -96,12 +89,6 @@ impl crate::btree::bkey_methods::BkeyOps for c::Damage {
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
         damage_to_text(out, fs, k)
     }
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_damage_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    damage_to_text(out, Some(Fs::from_c(c)), k)
 }
 
 #[cold]

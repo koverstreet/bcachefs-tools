@@ -790,7 +790,6 @@ pub(crate) fn trigger_extent(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -
     trigger_extent_reconcile(t, op)
 }
 
-crate::key_trigger!(bch2_trigger_extent => trigger_extent);
 pub(crate) static EXTENT: Trigger = Trigger(trigger_extent);
 
 /// A reservation's sectors, by replica count - and in a snapshot, its key,
@@ -821,7 +820,6 @@ fn trigger_reservation(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(
     })
 }
 
-crate::key_trigger!(bch2_trigger_reservation => trigger_reservation);
 pub(crate) static RESERVATION: Trigger = Trigger(|t, op| trigger_reservation(t, op));
 
 /// Whether @k counts in its snapshot's keys: not a whiteout - iteration skips

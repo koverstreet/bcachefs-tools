@@ -888,16 +888,6 @@ fn validate_str_hash(v: &BkeyValidate<'_, '_>, str_hash: u64) -> Result<(), BchE
                       "invalid str hash type ({str_hash} >= {nr})")
 }
 
-/// A validate export, for an inode version's @validate.
-fn validate_c(
-    c:        &Opaque<Fs>,
-    k:        BkeySC<'_>,
-    from:     &c::bkey_validate_context,
-    validate: fn(&BkeyValidate<'_, '_>) -> Result<(), BchError>,
-) -> core::ffi::c_int {
-    ret_to_c(validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
 #[cold]
 fn inode_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
     // with no filesystem - show-super's sb_clean - nothing to report a bad one to
@@ -969,46 +959,6 @@ impl BkeyOps for c::InodeGeneration {
     }
 }
 
-/// For C's bkey_ops: bch2_inode_validate().
-#[c_export]
-pub fn bch2_inode_validate(
-    c:    &Opaque<Fs>,
-    k:    BkeySC<'_>,
-    from: &c::bkey_validate_context,
-) -> core::ffi::c_int {
-    validate_c(c, k, from, <c::Inode as BkeyOps>::validate)
-}
-
-/// For C's bkey_ops: bch2_inode_v2_validate().
-#[c_export]
-pub fn bch2_inode_v2_validate(
-    c:    &Opaque<Fs>,
-    k:    BkeySC<'_>,
-    from: &c::bkey_validate_context,
-) -> core::ffi::c_int {
-    validate_c(c, k, from, <c::InodeV2 as BkeyOps>::validate)
-}
-
-/// For C's bkey_ops: bch2_inode_v3_validate().
-#[c_export]
-pub fn bch2_inode_v3_validate(
-    c:    &Opaque<Fs>,
-    k:    BkeySC<'_>,
-    from: &c::bkey_validate_context,
-) -> core::ffi::c_int {
-    validate_c(c, k, from, <c::InodeV3 as BkeyOps>::validate)
-}
-
-/// For C's bkey_ops: bch2_inode_generation_validate().
-#[c_export]
-pub fn bch2_inode_generation_validate(
-    c:    &Opaque<Fs>,
-    k:    BkeySC<'_>,
-    from: &c::bkey_validate_context,
-) -> core::ffi::c_int {
-    validate_c(c, k, from, <c::InodeGeneration as BkeyOps>::validate)
-}
-
 /// Inode flags set in @flags, by name, comma separated - as far as the first
 /// that has no name: as bch2_prt_bitflags() with BCH_INODE_FLAGS().
 fn flags_to_text(out: &mut Printbuf, mut flags: u64) {
@@ -1075,28 +1025,6 @@ impl ToText for c::bch_inode_unpacked {
 #[cold]
 pub extern "C" fn bch2_inode_unpacked_to_text(out: &mut Printbuf, inode: &c::bch_inode_unpacked) {
     inode.to_text(out)
-}
-
-/// For C's bkey_ops: bch2_inode_to_text() - an inode key's fields, unpacked.
-#[cold]
-#[c_export]
-pub fn bch2_inode_to_text(
-    out: &mut Printbuf,
-    c:   &Opaque<Fs>,
-    k:   BkeySC<'_>,
-) {
-    inode_to_text(out, Some(Fs::from_c(c)), k)
-}
-
-/// For C's bkey_ops: bch2_inode_generation_to_text().
-#[cold]
-#[c_export]
-pub fn bch2_inode_generation_to_text(
-    out: &mut Printbuf,
-    c:   &Opaque<Fs>,
-    k:   BkeySC<'_>,
-) {
-    <c::InodeGeneration as BkeyOps>::to_text(out, Some(Fs::from_c(c)), k)
 }
 
 // ── Inode number allocation ──────────────────────────────────────────────
@@ -1276,28 +1204,6 @@ pub fn create<'a>(
 fn alloc_cursor_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     bkey_fsck_err_on!(v, v.k.k.p.inode != c::logged_ops_inums::LOGGED_OPS_INUM_inode_cursors.0 as u64,
                       id::inode_alloc_cursor_inode_bad, "k.p.inode bad")
-}
-
-/// For C's bkey_ops: bch2_inode_alloc_cursor_validate().
-#[c_export]
-pub fn bch2_inode_alloc_cursor_validate(
-    c:    &Opaque<Fs>,
-    k:    BkeySC<'_>,
-    from: &c::bkey_validate_context,
-) -> core::ffi::c_int {
-    ret_to_c(alloc_cursor_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
-/// For C's bkey_ops: bch2_inode_alloc_cursor_to_text() - the cursor, and the
-/// range it hands out.
-#[cold]
-#[c_export]
-pub fn bch2_inode_alloc_cursor_to_text(
-    out: &mut Printbuf,
-    c:   &Opaque<Fs>,
-    k:   BkeySC<'_>,
-) {
-    <c::InodeAllocCursor as BkeyOps>::to_text(out, Some(Fs::from_c(c)), k)
 }
 
 impl BkeyOps for c::InodeAllocCursor {
@@ -1512,7 +1418,6 @@ pub fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), B
     Ok(())
 }
 
-crate::key_trigger!(bch2_trigger_inode => trigger);
 static INODE: Trigger = Trigger(trigger);
 
 // ── Deleting inodes ──────────────────────────────────────────────────────

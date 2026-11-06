@@ -47,7 +47,7 @@ use crate::c;
 use crate::data::ptrs::{ptr_data_type, ptr_disk_sectors, DecodedPtr, Ptrs};
 use crate::data::reconcile::trigger::BkeyVReconcile;
 use crate::debug::params as debug_params;
-use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, err_ptr, BchError};
 use crate::fs::Fs;
 use crate::btree::bkey_methods::BkeyOps;
 use crate::init::error::{id, BkeyValidate};
@@ -55,7 +55,6 @@ use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::KVVec;
-use crate::util::ffi::Opaque;
 use crate::util::kernel::{totalram_bytes, unlikely, PAGE_SIZE};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
@@ -63,7 +62,7 @@ use crate::data_structures::sort::heapsort_by;
 use crate::util::vstructs::plain_bytes;
 use crate::util::{Printbuf, ToText};
 use crate::{bkey_fsck_err_on, fsck_err, prt};
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use core::marker::PhantomData;
 use core::ops::{ControlFlow, RangeInclusive};
 use cstruct_macros::{c_export, CStruct};
@@ -140,13 +139,6 @@ fn backpointer_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                       "backpointer for BCH_SB_MEMBER_INVALID")
 }
 
-#[c_export]
-pub fn bch2_backpointer_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
-    -> c_int
-{
-    ret_to_c(backpointer_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
 impl BkeyOps for c::Backpointer {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         backpointer_validate(v)
@@ -156,15 +148,16 @@ impl BkeyOps for c::Backpointer {
         backpointer_to_text(out, fs, k)
     }
 
-    fn swab(fs: Option<&Fs>, k: BkeyS<'_>) {
-        bch2_backpointer_swab(fs, k)
-    }
-}
+    fn swab(_fs: Option<&Fs>, k: BkeyS<'_>) {
+        let mut bp = k.arm::<c::Backpointer>().expect("a backpointer");
+        let v = bp.v_mut();
 
-#[cold]
-#[c_export]
-pub fn bch2_backpointer_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
-    backpointer_to_text(out, c.map(Fs::from_c), k)
+        v.flags = { v.flags }.swap_bytes();
+        v.bucket_len = { v.bucket_len }.swap_bytes();
+        let mut pos = v.pos;
+        pos.swab();
+        v.pos = pos;
+    }
 }
 
 #[cold]
@@ -204,18 +197,6 @@ fn backpointer_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
     if v.stripe_ptr() {
         prt!(out, " stripe");
     }
-}
-
-#[c_export]
-pub fn bch2_backpointer_swab(_c: Option<&Fs>, k: BkeyS<'_>) {
-    let mut bp = k.arm::<c::Backpointer>().expect("a backpointer");
-    let v = bp.v_mut();
-
-    v.flags = { v.flags }.swap_bytes();
-    v.bucket_len = { v.bucket_len }.swap_bytes();
-    let mut pos = v.pos;
-    pos.swab();
-    v.pos = pos;
 }
 
 // ── An extent pointer's backpointer ──────────────────────────────────────

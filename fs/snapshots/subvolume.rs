@@ -333,15 +333,6 @@ fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     Ok(())
 }
 
-#[c_export]
-pub fn bch2_subvolume_validate(
-    c:    &Opaque<Fs>,
-    k:    BkeySC<'_>,
-    from: &c::bkey_validate_context,
-) -> core::ffi::c_int {
-    ret_to_c(validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
 impl BkeyOps for c::Subvolume {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         validate(v)
@@ -352,12 +343,6 @@ impl BkeyOps for c::Subvolume {
     }
 
     const TRIGGER: Option<&'static Trigger> = Some(&SUBVOLUME);
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_subvolume_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    subvolume_to_text(out, Some(Fs::from_c(c)), k)
 }
 
 #[cold]
@@ -424,7 +409,6 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError>
     Ok(())
 }
 
-crate::key_trigger!(bch2_subvolume_trigger => trigger);
 static SUBVOLUME: Trigger = Trigger(|t, op| trigger(t, op));
 
 // ── fsck ─────────────────────────────────────────────────────────────────

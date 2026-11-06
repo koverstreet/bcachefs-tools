@@ -9,7 +9,6 @@ use crate::btree::bkey_methods::BkeyOps;
 use crate::c;
 use crate::fs::Fs;
 use crate::prt;
-use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use core::ffi::c_uint;
 use cstruct_macros::c_export;
@@ -64,12 +63,6 @@ impl<'a> InlineDataMut<'a> {
         let at = DATA.of(k.k())?;
         Some(Self { data: k.into_val_bytes_mut().get_mut(at..)? })
     }
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_inline_data_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
-    InlineDataRef::of(k).expect("inline data").to_text(out)
 }
 
 impl BkeyOps for c::InlineData {

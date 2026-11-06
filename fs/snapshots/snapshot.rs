@@ -311,7 +311,6 @@ use crate::util::log::{LogLevel, LogMsg};
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::bitmap::BitArray;
 use crate::util::rcu::RcuArray;
-use crate::util::ffi::Opaque;
 use crate::util::kernel::{cold_path, likely, unlikely};
 use crate::util::place::Contained;
 use crate::util::{HumanReadable, Printbuf};
@@ -1209,21 +1208,6 @@ fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     Ok(())
 }
 
-#[c_export]
-pub fn bch2_snapshot_validate(
-    c:    &Opaque<Fs>,
-    k:    BkeySC<'_>,
-    from: &c::bkey_validate_context,
-) -> c_int {
-    ret_to_c(validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_snapshot_key_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    <c::Snapshot as BkeyOps>::to_text(out, Some(Fs::from_c(c)), k)
-}
-
 impl BkeyOps for c::Snapshot {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         validate(v)
@@ -1247,7 +1231,6 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError>
     Ok(())
 }
 
-crate::key_trigger!(bch2_snapshot_trigger => trigger);
 static SNAPSHOT: Trigger = Trigger(|t, op| trigger(t, op));
 
 // ── snapshot_tree keys ───────────────────────────────────────────────────
@@ -1261,21 +1244,6 @@ fn tree_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     bkey_fsck_err_on!(v, bkey_gt(p, pos(0, u32::MAX as u64)) || bkey_lt(p, pos(0, 1)),
                       id::snapshot_tree_pos_bad, "bad pos")?;
     Ok(())
-}
-
-#[c_export]
-pub fn bch2_snapshot_tree_validate(
-    c:    &Opaque<Fs>,
-    k:    BkeySC<'_>,
-    from: &c::bkey_validate_context,
-) -> c_int {
-    ret_to_c(tree_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_snapshot_tree_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    <c::SnapshotTree as BkeyOps>::to_text(out, Some(Fs::from_c(c)), k)
 }
 
 impl BkeyOps for c::SnapshotTree {

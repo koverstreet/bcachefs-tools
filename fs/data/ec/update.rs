@@ -20,14 +20,12 @@ use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
 use crate::sb::counters::events;
-use crate::util::ffi::Opaque;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::Validated;
 use crate::util::{Join, Printbuf};
 use crate::{bch_err, fs_inconsistent, fsck_err_flags, logged_ops, prt};
 use core::mem::size_of;
 use core::ops::RangeInclusive;
-use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree};
 
 // ── A stripe block's extents ─────────────────────────────────────────────
@@ -355,12 +353,6 @@ impl crate::btree::bkey_methods::BkeyOps for c::LoggedOpStripeUpdate {
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
         logged_op_stripe_update_to_text(out, fs, k)
     }
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_logged_op_stripe_update_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    logged_op_stripe_update_to_text(out, Some(Fs::from_c(c)), k)
 }
 
 #[cold]

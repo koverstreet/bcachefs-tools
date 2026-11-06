@@ -65,7 +65,6 @@ use crate::fs::Fs;
 use crate::btree::bkey_methods::BkeyOps;
 use crate::init::error::{id, BkeyValidate};
 use crate::types::ArmOf;
-use crate::util::ffi::Opaque;
 use crate::util::rcu;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut, ArmError, EntryWalk, Head, Unvalidated,
                             VStructError, VstructRefEntries, VstructRefEntriesMut};
@@ -265,11 +264,6 @@ fn accounting_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                       "accounting key with {nr_counters} counters, should be {}", pos.nr_counters())
 }
 
-#[c_export]
-pub fn bch2_accounting_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
-    ret_to_c(accounting_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
 #[cold]
 pub fn key_to_text(out: &mut Printbuf, fs: Option<&Fs>, pos: &DiskAccountingPos<Unvalidated>) {
     use DiskAccountingPosRef as A;
@@ -328,21 +322,10 @@ impl BkeyOps for c::Accounting {
         write!(out, " {}", Join(" ", k.arm::<Accounting>().expect("an accounting key").v().d.iter().map(|&d| d as i64)));
     }
 
-    fn swab(fs: Option<&Fs>, k: BkeyS<'_>) {
-        bch2_accounting_swab(fs, k)
-    }
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_accounting_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
-    <c::Accounting as BkeyOps>::to_text(out, c.map(Fs::from_c), k)
-}
-
-#[c_export]
-pub fn bch2_accounting_swab(_c: Option<&Fs>, mut k: BkeyS<'_>) {
-    for d in k.val_bytes_mut().chunks_exact_mut(size_of::<u64>()) {
-        d.reverse();
+    fn swab(_fs: Option<&Fs>, mut k: BkeyS<'_>) {
+        for d in k.val_bytes_mut().chunks_exact_mut(size_of::<u64>()) {
+            d.reverse();
+        }
     }
 }
 

@@ -335,31 +335,6 @@ impl<'a> TriggerOp<'a> {
     }
 }
 
-/// @trigger, a `fn(&TransAttempt, &mut TriggerOp) -> Result<(), E>` (or taking
-/// `&TriggerOp`) with E converting to BchError, as @name, the key type
-/// trigger C's bkey_ops calls:
-///
-/// `key_trigger!(bch2_trigger_inode => trigger);`
-#[macro_export]
-macro_rules! key_trigger {
-    ($name:ident => $trigger:path) => {
-        /// # Safety
-        /// @op is the update the transaction is triggering for, in its
-        /// commit: bkey_ops' caller.
-        #[::cstruct_macros::c_export]
-        pub unsafe fn $name(
-            trans:  &$crate::btree::iter::BtreeTrans<'_>,
-            mut op: $crate::c::btree_trigger_op,
-        ) -> core::ffi::c_int {
-            let mut op = unsafe { $crate::btree::bkey_methods::TriggerOp::from_raw(&mut op) };
-            // SAFETY: C runs triggers in the transaction's attempt, in its commit
-            let t = unsafe { trans.attempt_in_progress() };
-
-            $crate::errcode::ret_to_c($trigger(&t, &mut op))
-        }
-    };
-}
-
 /// A key type's methods, on its value's type: each a no-op where the type
 /// has none.
 pub trait BkeyOps {

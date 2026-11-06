@@ -651,12 +651,6 @@ impl crate::btree::bkey_methods::BkeyOps for c::LoggedOpInodeOptPropagate {
 }
 
 #[cold]
-#[c_export]
-pub fn bch2_logged_op_inode_opt_propagate_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    logged_op_inode_opt_propagate_to_text(out, Some(Fs::from_c(c)), k)
-}
-
-#[cold]
 fn logged_op_inode_opt_propagate_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
     let op = c::LoggedOpInodeOptPropagate::val_copy_pad(k).expect("an inode_opt_propagate op");
 

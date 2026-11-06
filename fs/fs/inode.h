@@ -10,15 +10,7 @@
 #include <linux/sched.h>
 
 
-int bch2_inode_validate(struct bch_fs *, struct bkey_s_c,
-			const struct bkey_validate_context *);
-int bch2_inode_v2_validate(struct bch_fs *, struct bkey_s_c,
-			   const struct bkey_validate_context *);
-int bch2_inode_v3_validate(struct bch_fs *, struct bkey_s_c,
-			   const struct bkey_validate_context *);
-void bch2_inode_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
-int bch2_trigger_inode(struct btree_trans *, struct btree_trigger_op);
 
 static inline bool bkey_is_inode(const struct bkey *k)
 {
@@ -27,13 +19,7 @@ static inline bool bkey_is_inode(const struct bkey *k)
 		k->type == KEY_TYPE_inode_v3;
 }
 
-int bch2_inode_generation_validate(struct bch_fs *, struct bkey_s_c,
-				   const struct bkey_validate_context *);
-void bch2_inode_generation_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
-int bch2_inode_alloc_cursor_validate(struct bch_fs *, struct bkey_s_c,
-				     const struct bkey_validate_context *);
-void bch2_inode_alloc_cursor_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
 #include "fs/inode_gen.h"
 

@@ -25,7 +25,7 @@ use crate::init::error::{id, BkeyValidate};
 use crate::inode;
 use crate::snapshots::subvolume;
 use crate::str_hash::{self, HashTable};
-use crate::util::ffi::{bytes, c_char, opt_bytes, opt_bytes_mut, Opaque};
+use crate::util::ffi::{bytes, c_char, opt_bytes, opt_bytes_mut};
 use crate::util::os_str::{cstr_name, OsStr, OsStrExt};
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
@@ -195,18 +195,6 @@ pub fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                       "xattr name has invalid characters")
 }
 
-/// For C's bkey_ops: bch2_xattr_validate().
-#[c_export]
-pub fn bch2_xattr_validate(
-    c:    &Opaque<Fs>,
-    k:    BkeySC<'_>,
-    from: &c::bkey_validate_context,
-) -> c_int {
-    let fs = Fs::from_c(c);
-    let v = BkeyValidate { fs: fs, k, from };
-    ret_to_c(validate(&v))
-}
-
 /// The bytes of @b up to its first NUL, as printf's %.*s prints them.
 fn to_nul(b: &[u8]) -> &[u8] {
     b.iter().position(|&c| c == 0).map_or(b, |n| &b[..n])
@@ -249,17 +237,6 @@ impl crate::btree::bkey_methods::BkeyOps for c::Xattr {
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
         to_text(out, k)
     }
-}
-
-/// For C's bkey_ops: bch2_xattr_to_text().
-#[cold]
-#[c_export]
-pub fn bch2_xattr_to_text(
-    out: &mut Printbuf,
-    _c:  &Opaque<Fs>,
-    k:   BkeySC<'_>,
-) {
-    to_text(out, k)
 }
 
 // ── Get and set ──────────────────────────────────────────────────────────

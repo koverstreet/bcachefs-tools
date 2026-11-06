@@ -31,12 +31,10 @@ use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::typeinfo::AccessError;
 use crate::types::{c_default, Le32, Le64};
-use crate::util::ffi::Opaque;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
-use core::ffi::c_int;
 use core::mem::offset_of;
-use cstruct_macros::{c_name, bitfield, c_const, c_export, CStruct, TypeInfo, SizedVal};
+use cstruct_macros::{c_name, bitfield, c_const, CStruct, TypeInfo, SizedVal};
 use nestify::nest;
 use zerocopy::byteorder::little_endian as le;
 
@@ -309,21 +307,10 @@ impl crate::btree::bkey_methods::BkeyOps for Dirent {
     }
 }
 
-/// For C's bkey_ops: bch2_dirent_to_text().
-#[cold]
-#[c_export]
-pub fn bch2_dirent_to_text(
-    out: &mut Printbuf,
-    _c:  &Opaque<Fs>,
-    k:   BkeySC<'_>,
-) {
-    to_text(out, k)
-}
-
 // ── Validate: where a dirent becomes trusted ─────────────────────────────
 
-/// Check @v.k, a dirent, as bch2_dirent_validate(): the dirent, now valid,
-/// or the error the key fails with.
+/// Check @v.k, a dirent: the dirent, now valid, or the error the key fails
+/// with.
 ///
 /// Only new keys are held to BCH_NAME_MAX: it used to be bigger, and older
 /// keys can have longer names.
@@ -373,22 +360,6 @@ pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<super::Dirent<'k>, BchEr
     }
 
     Ok(super::Dirent { k, v: d, names })
-}
-
-/// For C's bkey_ops: bch2_dirent_validate().
-#[c_export]
-pub fn bch2_dirent_validate(
-    c:    &Opaque<Fs>,
-    k:    BkeySC<'_>,
-    from: &c::bkey_validate_context,
-) -> c_int {
-    let fs = Fs::from_c(c);
-    let v = BkeyValidate { fs: fs, k, from };
-
-    match validate(&v) {
-        Ok(_)  => 0,
-        Err(e) => -e.raw(),
-    }
 }
 
 // ── Writing fields, for kvdb ─────────────────────────────────────────────

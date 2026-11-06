@@ -22,22 +22,20 @@ use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{bkey_eq, pos, BkeyI, BkeySC, BkeyV, POS_MIN};
 use crate::c;
 use crate::data::ptrs::{bkey_ptrs_validate, extent_ptr_to_text};
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::btree::bkey_methods::{BkeyOps, Trigger};
 use crate::init::error::{id, BkeyValidate};
 use crate::types::Le16;
 use crate::util::alloc::KVVec;
-use crate::util::ffi::Opaque;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::{cast_mut, cast_plain, cast_plain_mut, cast_plain_slice, cast_plain_slice_mut, plain_bytes,
                             plain_bytes_mut, Validated};
 use crate::util::Printbuf;
 use crate::data_structures::array_vec::ArrayVec;
-use core::ffi::c_int;
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
-use cstruct_macros::{c_const, c_export};
+use cstruct_macros::c_const;
 
 /// The most blocks a stripe has: a pointer each, of the most a key holds.
 pub(crate) const MAX_BLOCKS: usize = c::BCH_BKEY_PTRS_MAX as usize;
@@ -275,22 +273,6 @@ fn stripe_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     bkey_fsck_err_on!(v, s.sectors.get() == 0, id::stripe_sectors_zero, "invalid sectors zero")?;
 
     bkey_ptrs_validate(v)
-}
-
-#[c_export]
-pub fn bch2_stripe_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
-    -> c_int
-{
-    ret_to_c(stripe_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
-/// Its header, then a line per block - each block's pointer, and its sector
-/// count where it can be found - as far as the value goes: this prints keys
-/// validate rejected.
-#[cold]
-#[c_export]
-pub fn bch2_stripe_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    stripe_to_text(out, Some(Fs::from_c(c)), k)
 }
 
 impl BkeyOps for c::Stripe {

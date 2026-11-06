@@ -27,14 +27,14 @@ use crate::alloc::buckets::gen_cmp;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN};
 use crate::btree::read::node_replica_good;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, BtreeTrans, CommitOpts,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitOpts,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::checksum::csum_err_msg;
 use crate::data::ec::stripe::ptr_matches_stripe_m;
 use crate::data::ptrs::{brand, extent_nonce, ptr_data_type, BkeyVPtrs, BkeyVPtrsMut, DecodedPtr, Ptrs, PtrsMut};
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::init::damage;
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
@@ -48,9 +48,7 @@ use crate::util::Printbuf;
 use crate::{bch_err, fsck_err, fsck_err_on, inode_fsck_err, prt};
 use crate::data_structures::array_vec::ArrayVec;
 use bitflags::bitflags;
-use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
-use cstruct_macros::c_export;
 use crate::format::{Btree, DataType};
 
 /// What a key with pointers is copied with room for: as large as one can get,
@@ -523,18 +521,4 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, lev
 
     t.btree_node_update_key_at_pos_raw(btree, level, new)?;
     Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_commit))
-}
-
-#[c_export]
-pub fn bch2_check_fix_ptrs<'t>(
-    trans: &'t BtreeTrans<'t>,
-    iter:  &mut BtreeIter<'t>,
-    btree: Btree,
-    level: c_uint,
-    k:     BkeySC<'_>,
-) -> c_int {
-    // SAFETY: C calls check_repair in an attempt
-    let t = unsafe { trans.attempt_in_progress() };
-    let k = k.arm::<Ptrs>().expect("the check_repair of a key type with pointers");
-    ret_to_c(check_fix_ptrs(&t, iter, btree, level, k))
 }

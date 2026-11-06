@@ -103,7 +103,7 @@ static __always_inline bool bch2_filldir64(struct dir_context *ctx, const char *
 	/*
 	 * Unlike fs/readdir.c's filldir64, no verify_dirent_name() here -
 	 * intentional: names handed to dir_emit come from dirents that
-	 * passed bch2_dirent_validate() (nonzero length, no '/', no NUL),
+	 * passed the dirent key type's validate (nonzero length, no '/', no NUL),
 	 * so the check would be redundant with our on-disk validation.
 	 */
 

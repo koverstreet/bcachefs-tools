@@ -4,10 +4,6 @@
 
 #include "str_hash.h"
 
-int bch2_dirent_validate(struct bch_fs *, struct bkey_s_c,
-			 const struct bkey_validate_context *);
-void bch2_dirent_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
-
 #include "fs/dirent_gen.h"
 
 #if IS_ENABLED(CONFIG_UNICODE)

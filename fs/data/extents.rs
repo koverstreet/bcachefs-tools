@@ -13,10 +13,9 @@ use crate::c;
 use crate::data::inline_data::{InlineDataMut, InlineDataRef};
 use crate::data::keylist::KeyRoom;
 use crate::data::ptrs::{crc_is_compressed, crc_unpack, BkeyVPtrs, ExtentEntry, ExtentEntryMut, IoFailures, Ptrs, PtrsMut};
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
-use crate::util::ffi::Opaque;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
@@ -603,11 +602,6 @@ pub fn extent_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
     true
 }
 
-#[c_export]
-pub fn bch2_extent_merge(c: &Opaque<Fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
-    extent_merge(Fs::from_c(c), l, r)
-}
-
 // ── reservations ─────────────────────────────────────────────────────────
 
 fn reservation_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
@@ -616,13 +610,6 @@ fn reservation_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     bkey_fsck_err_on!(v, r.nr_replicas == 0 || u32::from(r.nr_replicas) > c::BCH_REPLICAS_MAX,
                       id::reservation_key_nr_replicas_invalid,
                       "invalid nr_replicas ({})", r.nr_replicas)
-}
-
-#[c_export]
-pub fn bch2_reservation_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
-    -> c_int
-{
-    ret_to_c(reservation_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
 impl BkeyOps for c::Reservation {
@@ -651,15 +638,4 @@ impl BkeyOps for c::Reservation {
     }
 
     const TRIGGER: Option<&'static Trigger> = Some(&crate::alloc::buckets::RESERVATION);
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_reservation_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    <c::Reservation as BkeyOps>::to_text(out, Some(Fs::from_c(c)), k)
-}
-
-#[c_export]
-pub fn bch2_reservation_merge(c: &Opaque<Fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
-    <c::Reservation as BkeyOps>::merge(Fs::from_c(c), l, r)
 }

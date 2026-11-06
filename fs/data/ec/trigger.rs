@@ -498,7 +498,6 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchEr
     mark_stripe_buckets(t, old, new, flags)
 }
 
-crate::key_trigger!(bch2_trigger_stripe => trigger);
 pub(super) static STRIPE: Trigger = Trigger(trigger);
 
 // ── gc's copy, before the commit ─────────────────────────────────────────

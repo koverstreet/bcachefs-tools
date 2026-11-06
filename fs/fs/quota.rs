@@ -17,15 +17,13 @@
 use crate::btree::bkey::{BkeySC, BkeyWhole};
 use crate::c;
 use crate::util::vstructs::{Unvalidated, Validated};
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::sb::io::SbFieldOps;
-use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use crate::bkey_fsck_err_on;
-use core::ffi::c_int;
-use cstruct_macros::{c_export, c_enum, CStruct, TypeInfo};
+use cstruct_macros::{c_enum, CStruct, TypeInfo};
 use crate::locking::Locked;
 use crate::new_lock;
 use crate::data_structures::genradix::SharedGenRadix;
@@ -157,11 +155,6 @@ fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                       "invalid quota type ({ty} >= {})", c::QTYP_NR)
 }
 
-#[c_export]
-pub fn bch2_quota_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
-    ret_to_c(validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
-}
-
 impl crate::btree::bkey_methods::BkeyOps for c::Quota {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         validate(v)
@@ -170,12 +163,6 @@ impl crate::btree::bkey_methods::BkeyOps for c::Quota {
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
         quota_to_text(out, fs, k)
     }
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_quota_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    quota_to_text(out, Some(Fs::from_c(c)), k)
 }
 
 #[cold]
@@ -234,15 +221,16 @@ mod vfs {
     use crate::btree::bkey::{pos, BkeyI, POS_MIN};
     use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitOpts, LoopFlow,
                              TransAttempt, UpdateTriggerFlags};
-    use crate::errcode::{bch_errcode, ret_to_class};
+    use crate::errcode::{bch_errcode, ret_to_c, ret_to_class};
     use crate::locking::ExclusiveGuard;
     use crate::sb::io::SbResize;
-    use crate::util::ffi::c_char;
+    use crate::util::ffi::{c_char, Opaque};
     use crate::util::kernel::ktime_get_real_seconds;
     use crate::{bch_err_fn, bch_info, fs_inconsistent, inode};
     use crate::snapshots::snapshot;
-    use core::ffi::c_uint;
+    use core::ffi::{c_int, c_uint};
     use core::fmt;
+    use cstruct_macros::c_export;
     use core::sync::atomic::Ordering;
 
     /// SB_RDONLY is BIT(0), a macro bindgen doesn't evaluate. A bit number,
