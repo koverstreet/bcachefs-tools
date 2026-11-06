@@ -824,6 +824,7 @@ c_xmacro! {
          BIT_ULL(KEY_TYPE_set),
          "Buckets waiting for discard/TRIM"),
         (backpointers,          13,
+         BTREE_IS_snapshot_field |
          BTREE_IS_write_buffer,
          BIT_ULL(KEY_TYPE_backpointer),
          "Reverse pointers from data extents back to btree nodes"),
@@ -873,10 +874,12 @@ c_xmacro! {
          BIT_ULL(KEY_TYPE_backpointer),
          "Reconcile scan state"),
         (reconcile_work_phys,   24,
+         BTREE_IS_snapshot_field |
          BTREE_IS_write_buffer,
          BIT_ULL(KEY_TYPE_set),
          "Physical reconcile work items"),
         (reconcile_hipri_phys,  25,
+         BTREE_IS_snapshot_field |
          BTREE_IS_write_buffer,
          BIT_ULL(KEY_TYPE_set),
          "Physical high-priority reconcile work items"),
@@ -1325,7 +1328,9 @@ c_xmacro! {
          "Per-device bucket fragmentation LRUs, so copygc can reason "
          "about fragmentation per device",              "2026-07"),
         (inline_data_csum,              BCH_VERSION(1, 40),
-         "Inline data extents carry their own checksums",  "2026-11"),
+         "Inline data extents carry their own checksums; stripe "
+         "backpointers carry the stripe index, so stripes sharing a "
+         "block during reuse don't share a backpointer",  "2026-11"),
     }
 }
 

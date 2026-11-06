@@ -351,11 +351,12 @@ fn check_reconcile_work_phys(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
             fs.recovery.progress.update(t, &bp_iter)?;
             check_reconcile_work_phys_one(t, &mut bp_iter, &mut phys, &mut last_flushed, &mut cur_pos)
         })?;
-        if cur_pos == crate::POS_MAX {
+        // the iterators end at SPOS_MAX, now that they see snapshots
+        if cur_pos >= crate::POS_MAX {
             return Ok(());
         }
 
-        cur_pos = cur_pos.nosnap_successor();
+        cur_pos = cur_pos.successor();
         last_flushed.inc();
     }
 }

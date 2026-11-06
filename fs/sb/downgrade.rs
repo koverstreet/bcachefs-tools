@@ -192,9 +192,13 @@ const UPGRADE: &[UpDown] = table! {
 
 /// What only a filesystem with stripes needs, on top of the version's row:
 /// past bucket_stripe_sectors, check_allocations, and the bucket sector
-/// counts it fixes silently.
+/// counts it fixes silently; past inline_data_csum, the passes that move
+/// stripe backpointers, and their reconcile phys entries, to and from the
+/// stripe index's key.
 const UPGRADE_STRIPES: &[UpDown] = table! {
-    bucket_stripe_sectors => [check_allocations], [alloc_key_dirty_sectors_wrong, alloc_key_stripe_sectors_wrong];
+    bucket_stripe_sectors  => [check_allocations], [alloc_key_dirty_sectors_wrong, alloc_key_stripe_sectors_wrong];
+    inline_data_csum       => [check_backpointers_to_extents, check_extents_to_backpointers, check_reconcile_work],
+        [backpointer_to_missing_ptr, ptr_to_missing_backpointer, reconcile_work_phys_incorrectly_set];
 };
 
 /// For an incompatible upgrade: one past what version_incompat_allowed was.
@@ -227,12 +231,17 @@ const DOWNGRADE: &[UpDown] = table! {
          need_discard_freespace_key_to_invalid_dev_bucket];
     per_dev_fragmentation_lru   => [check_allocations, check_lrus, check_alloc_to_lru_refs],
         [lru_entry_bad, alloc_key_to_missing_lru_entry, accounting_mismatch];
+    inline_data_csum            => [], [];
 };
 
 /// UPGRADE_STRIPES', for a downgrade: added to the version's DOWNGRADE row,
 /// which it needs - an empty one, if that's all.
 const DOWNGRADE_STRIPES: &[UpDown] = table! {
-    bucket_stripe_sectors => [check_allocations], [alloc_key_dirty_sectors_wrong];
+    bucket_stripe_sectors  => [check_allocations], [alloc_key_dirty_sectors_wrong];
+    // older versions reject the keys with a stripe index
+    inline_data_csum       => [check_backpointers_to_extents, check_extents_to_backpointers, check_reconcile_work],
+        [backpointer_to_missing_ptr, ptr_to_missing_backpointer, reconcile_work_phys_incorrectly_set,
+         bkey_snapshot_nonzero];
 };
 
 // ── Applying them ────────────────────────────────────────────────────────────

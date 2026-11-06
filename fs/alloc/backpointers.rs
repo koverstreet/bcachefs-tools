@@ -36,7 +36,7 @@
 
 use crate::fs::Dev;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyVal};
+use crate::btree::bkey::{pos, spos, BkeyI, BkeyS, BkeySC, BkeyVal};
 use crate::btree::iter::{is_restart, polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbFlush;
@@ -122,7 +122,8 @@ impl BackpointerPos {
         let start = |b: u64| Self { dev: bucket.inode, sector: ca.bucket_to_sector(b), suboffset: 0 }
             .to_bpos(fs);
 
-        start(bucket.offset)..=start(bucket.offset + 1).nosnap_predecessor()
+        // stripe backpointers put the stripe index in the snapshot field
+        start(bucket.offset)..=Bpos { snapshot: u32::MAX, ..start(bucket.offset + 1).nosnap_predecessor() }
     }
 }
 
@@ -233,13 +234,23 @@ pub fn bp_reconcile_phys(fs: &Fs, level: u32, dev: u32, k: BkeySC<'_>) -> c::rec
     k.reconcile_work_id(fs).phys()
 }
 
-/// A stripe's is past the end of its blocks, clear of its extents' backpointers.
+/// A stripe's is past the end of its blocks, clear of its extents' backpointers
+/// - and, with the stripe index, of each other's: while a new stripe reuses an
+/// old stripe's block both reference it, and without the index, deleting the
+/// old stripe deletes the new one's backpointer. Stripe indices are below
+/// U32_MAX, so they fit.
 fn extent_ptr_to_bp_pos(fs: &Fs, k: BkeySC<'_>, p: &c::extent_ptr_decoded) -> Bpos {
     let shift = fs.sb.extent_bp_shift.get();
     let dev = u64::from(p.ptr.dev());
 
     if let Some(s) = k.arm::<c::Stripe>() {
-        return pos(dev, ((p.ptr.offset() + u64::from(s.v().sectors.get())) << shift).wrapping_sub(1));
+        // 1.40's, with inline data's checksums
+        let snapshot = if fs.version() >= c::bcachefs_metadata_version::bcachefs_metadata_version_inline_data_csum {
+            s.k.p.offset as u32
+        } else {
+            0
+        };
+        return spos(dev, ((p.ptr.offset() + u64::from(s.v().sectors.get())) << shift).wrapping_sub(1), snapshot);
     }
 
     let mut ret = pos(dev, (p.ptr.offset() << shift) + u64::from(p.crc.offset));
@@ -626,7 +637,7 @@ impl c::bp_scan_iter {
                 return Ok(ControlFlow::Break(()));
             }
             self.batch.push(bp)?;
-            self.pos = k.k.p.nosnap_successor();
+            self.pos = k.k.p.successor();
             if let Some(p) = progress {
                 p.update(t, iter)?;
             }
