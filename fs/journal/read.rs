@@ -290,7 +290,7 @@ pub fn journal_pos_from_member_info_set(fs: &Fs, sb: &mut crate::fs::SbLockGuard
 
         let cur = ca.with_journal_ring(|r| r.idx(c::journal_bucket_stage::JOURNAL_BUCKET_cur));
         m.last_journal_bucket = Le32::new(cur);
-        m.last_journal_bucket_offset = Le32::new(u32::from(ca.mi.get().bucket_size) - ja.sectors_free);
+        m.last_journal_bucket_offset = Le32::new(u32::from(ca.mi.get().bucket_size) - ja.sectors_free.get());
     }
 }
 
@@ -309,7 +309,7 @@ pub fn journal_pos_from_member_info_resume(fs: &Fs) {
         let offset = m.last_journal_bucket_offset.get();
         let bucket_size = u32::from(ca.mi.get().bucket_size);
         if offset <= bucket_size {
-            ja.sectors_free = bucket_size - offset;
+            ja.sectors_free.set(bucket_size - offset);
         }
     }
 }
@@ -836,7 +836,7 @@ impl<'a> DevReader<'a> {
             if seq > self.ja.highest_seq_found {
                 self.ja.highest_seq_found = seq;
                 self.ja.ring_mut().set_cur(bucket as u32);
-                self.ja.sectors_free = (end - offset - sectors) as u32;
+                self.ja.sectors_free.set((end - offset - sectors) as u32);
             }
 
             /*

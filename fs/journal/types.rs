@@ -11,15 +11,15 @@ use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64};
-use crate::journal::buckets::JournalBuckets;
+use crate::journal::buckets::{drop_retired, JournalBuckets};
 use crate::data_structures::list::ListLinks;
 use crate::locking::{Locked, LockedBy};
 use core::cell::Cell;
 use crate::util::late::Late;
 use crate::{new_lock, published};
 use pin_init::pin_data;
-use crate::util::workqueue::{Workqueue, WqFlags};
-use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, Late};
+use crate::util::workqueue::{ReffedWork, Workqueue, WqFlags};
+use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, placed, CStruct, Init, Late};
 use nestify::nest;
 
 c_const! {
@@ -387,8 +387,12 @@ pub struct PinRange {
     pub pin_size:  Volatile<u64>,
 }
 
+/* The filesystem's write refs, from the journal: nest!() takes no macro in a type */
+type FsWrites = crate::field!(super.writes);
+
 /* Embedded in struct bch_fs */
 nest! {
+    #[placed(Fs.journal)]
     #[pin_data]
     #[derive(CStruct)]*
     #[derive(Init, Late)]
@@ -495,6 +499,11 @@ nest! {
         /* Flushes under-replicated pins when a device comes back: */
         pub flush_degraded_work: c::work_struct,
 
+        /* Drops retired journal buckets reclaim is done with: buckets.rs */
+        #[c("struct work_struct drop_retired_work")]
+        #[pin]
+        pub(crate) drop_retired_work: ReffedWork<drop_retired, FsWrites>,
+
         pub replay_journal_seq: Volatile<u64>,
 
         /*
@@ -575,7 +584,7 @@ pub struct journal_device {
     #[init(RustOnly::new(crate::journal::buckets::new()))]
     pub buckets: rust_only!(JournalBuckets),
 
-    pub sectors_free: c_uint,
+    pub sectors_free: Volatile<c_uint>,
 
     /*
      * Bioset for journal write bios. Journal writes allocate from this at

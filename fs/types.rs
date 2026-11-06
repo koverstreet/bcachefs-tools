@@ -770,7 +770,6 @@ pub struct Fs {
     pub async_objs: [c::async_obj_list; c::BCH_ASYNC_OBJ_NR as usize],
 
     #[pin]
-    #[init(c::journal::init())]
     #[late]
     pub journal: c::journal,
     pub journal_replay_seq_start: Volatile<u64>,

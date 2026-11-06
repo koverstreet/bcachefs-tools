@@ -36,6 +36,11 @@ pub struct JournalRing {
     buckets: KVVec<u64>,
     seq:     KVVec<u64>,
     cursors: [u32; STAGES.len()],
+    /*
+     * Buckets fsck found another user's data in, still needed: never written
+     * again, and dropped once reclaim has them awaiting discard
+     */
+    retired: KVVec<u64>,
 }
 
 impl JournalRing {
@@ -73,9 +78,31 @@ impl JournalRing {
         if i + 1 == self.nr() { 0 } else { i + 1 }
     }
 
+    fn ahead(&self, from: u32, to: u32) -> u32 {
+        if to >= from { to - from } else { to + self.nr() - from }
+    }
+
     fn dist(&self, from: Stage, to: Stage) -> u32 {
-        let (f, t) = (self.idx(from), self.idx(to));
-        if t >= f { t - f } else { t + self.nr() - f }
+        self.ahead(self.idx(from), self.idx(to))
+    }
+
+    /* Bucket @i in [dirty_ondisk, cur]: what's in it needed, or being written */
+    fn needed(&self, i: u32) -> bool {
+        self.ahead(self.idx(DIRTY_ONDISK), i) <= self.dist(DIRTY_ONDISK, CUR)
+    }
+
+    fn retired(&self, b: u64) -> bool {
+        self.retired.contains(&b)
+    }
+
+    /// @b is the journal's: in the ring, and not retired.
+    pub fn owns(&self, b: u64) -> bool {
+        self.buckets.contains(&b) && !self.retired(b)
+    }
+
+    /* The first awaiting discard, if it's retired: dropped, not discarded */
+    fn retired_awaiting_discard(&self) -> Option<usize> {
+        (self.can_advance(DISCARD) && self.retired(self.bucket(DISCARD))).then(|| self.idx(DISCARD) as usize)
     }
 
     /* Not onto the next stage's start - nor cur, a bucket, onto discard */
@@ -131,7 +158,7 @@ impl JournalRing {
     }
 
     /// @bucket, first awaiting discard when it was issued, discarded - if
-    /// it's still first: remove() may have moved it.
+    /// it's still first: a splice may have moved it.
     pub fn discarded(&mut self, bucket: u64) {
         if self.can_advance(DISCARD) && self.bucket(DISCARD) == bucket {
             self.advance(DISCARD);
@@ -171,13 +198,19 @@ impl JournalRing {
         for c in &mut self.cursors {
             *c = s.cursor(*c, seq.len());
         }
-        self.replace(buckets, seq)
+        let old = self.replace(buckets, seq);
+        let buckets = &self.buckets;
+        self.retired.retain(|b| buckets.contains(b));
+        old
     }
 
     pub fn to_text(&self, out: &mut Printbuf) {
         prt!(out, "discard_idx\t{}\n", self.idx(DISCARD));
         for (name, s) in [("dirty_ondisk", DIRTY_ONDISK), ("dirty_idx", DIRTY), ("cur_idx", CUR)] {
             prt!(out, "{}\t{} (seq {})\n", name, self.idx(s), self.seq(s));
+        }
+        if !self.retired.is_empty() {
+            prt!(out, "retired\t{:?}\n", &self.retired[..]);
         }
     }
 }
@@ -218,7 +251,12 @@ impl Splice {
 pub type JournalBuckets = LockedBy<JournalRing, Volatile<u32>>;
 
 pub fn new() -> JournalBuckets {
-    let ring = JournalRing { buckets: KVVec::new(), seq: KVVec::new(), cursors: [0; STAGES.len()] };
+    let ring = JournalRing {
+        buckets: KVVec::new(),
+        seq:     KVVec::new(),
+        cursors: [0; STAGES.len()],
+        retired: KVVec::new(),
+    };
     LockedBy::new(ring, pin_init::Zeroable::zeroed())
 }
 
@@ -272,6 +310,7 @@ pub fn load(ca: &Dev, sb: &c::bch_sb) -> Result<(), BchError> {
     let old = ca.with_journal_ring(|ring| {
         ca.journal.buckets.set(buckets.len() as u32);
         ring.cursors = [0; STAGES.len()];
+        ring.retired.clear();
         ring.replace(buckets, seq)
     });
     drop(old);
@@ -291,53 +330,113 @@ pub(crate) fn sort(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev) -> Result<(), Bc
 
 /*
  * @removed buckets out of the list at @pos's position, and @inserted put in
- * there: the superblock first, then the journal
+ * there - or nothing, if @pos says None: whether the list changed.
+ *
+ * The superblock lists every bucket the ring might write: one going in goes
+ * into the superblock first, then the ring; one going out, out of the ring
+ * first - in the look @pos decided it in, its stage as @pos saw it.
  */
-fn splice(fs: &Fs, ca: &Dev, removed: usize, inserted: &[u64],
-          pos: impl FnOnce(&JournalRing) -> Result<usize, BchError>) -> Result<(), BchError> {
-    let mut sb = fs.sb_lock();
-
-    /* sb_lock held, the list doesn't change between our two looks at it */
+fn splice(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev, removed: usize, inserted: &[u64],
+          pos: impl FnOnce(&mut JournalRing) -> Result<Option<usize>, BchError>) -> Result<bool, BchError> {
+    /* sb_lock held, the list doesn't change between our looks at it */
     let nr = ca.journal.nr() as usize - removed + inserted.len();
-    let mut buckets = KVVec::from_elem(0, nr).map_err(enomem(fs))?;
-    let seq = KVVec::from_elem(0, nr).map_err(enomem(fs))?;
+    let alloc = || KVVec::from_elem(0, nr).map_err(enomem(fs));
+    let (mut list, mut buckets, seq) = (alloc()?, alloc()?, alloc()?);
 
-    let s = ca.with_journal_ring(|ring| {
-        let s = Splice { pos: pos(ring)?, removed, inserted: inserted.len() };
-        s.apply(&mut buckets, ring.buckets());
-        Ok::<_, BchError>(s)
-    })?;
-    buckets[s.pos..s.pos + s.inserted].copy_from_slice(inserted);
-
-    buckets_to_sb(fs, &mut sb, ca, &buckets)?;
-    fs.write_super_ret(&mut sb)?;
-
-    let old = ca.with_journal_ring(|ring| {
+    let commit = |ring: &mut JournalRing, s, buckets, seq| {
         ca.journal.buckets.set(nr as u32);
         ring.splice(s, buckets, seq)
-    });
+    };
+
+    let Some((old, pending)) = ca.with_journal_ring(|ring| {
+        let Some(pos) = pos(ring)? else { return Ok(None) };
+        let s = Splice { pos, removed, inserted: inserted.len() };
+        s.apply(&mut list, ring.buckets());
+        list[s.pos..s.pos + s.inserted].copy_from_slice(inserted);
+        buckets.copy_from_slice(&list);
+
+        Ok::<_, BchError>(Some(if removed != 0 {
+            (Some(commit(ring, s, buckets, seq)), None)
+        } else {
+            (None, Some((s, buckets, seq)))
+        }))
+    })? else {
+        return Ok(false);
+    };
     drop(old);
-    Ok(())
+
+    buckets_to_sb(fs, sb, ca, &list)?;
+    fs.write_super_ret(sb)?;
+
+    if let Some((s, buckets, seq)) = pending {
+        drop(ca.with_journal_ring(|ring| commit(ring, s, buckets, seq)));
+    }
+    Ok(true)
+}
+
+fn space_available(fs: &Fs) {
+    let _j = fs.journal.lock.lock();
+    unsafe { c::bch2_journal_space_available(fs.journal.as_ptr()) };
 }
 
 /// @new, into the free stage: before discard's bucket, the oldest, so the
 /// order stays the order they're written in. The journal is the caller's
 /// to block.
 pub fn add(fs: &Fs, ca: &Dev, new: &[u64]) -> Result<(), BchError> {
-    splice(fs, ca, 0, new, |ring| Ok(match ring.idx(DISCARD) {
+    splice(fs, &mut fs.sb_lock(), ca, 0, new, |ring| Ok(Some(match ring.idx(DISCARD) {
         0 => ring.nr() as usize,
         d => d as usize,
-    }))
+    }))).map(|_| ())
 }
 
-pub fn remove(fs: &Fs, ca: &Dev, bucket: u64) -> Result<(), BchError> {
-    splice(fs, ca, 1, &[], |ring| ring.buckets().iter().position(|&b| b == bucket)
-           .ok_or_else(|| fs.err(bch_errcode::BCH_ERR_EINVAL_journal_bucket_not_found)))
-        .inspect_err(|e| bch_err_dev!(ca, "error deleting journal bucket {}: {}", bucket, e))?;
+/// @bucket, which fsck found another user's data in, no longer the journal's:
+/// out of the ring now, if the journal's done with it - or retired, never
+/// written again, and dropped once reclaim has it awaiting discard.
+///
+/// Before we're rw: with nothing writing or discarding, its stage doesn't
+/// move under us, and sectors_free - the write path's - is ours to set.
+pub fn retire(fs: &Fs, ca: &Dev, bucket: u64) -> Result<(), BchError> {
+    if fs.flags.get(c::bch_fs_flags::BCH_FS_may_go_rw) {
+        return Err(fs.err(bch_errcode::BCH_ERR_EBUSY_journal_bucket_retire_rw));
+    }
 
-    let _j = fs.journal.lock.lock();
-    unsafe { c::bch2_journal_space_available(core::ptr::from_ref(&fs.journal).cast_mut()) };
+    splice(fs, &mut fs.sb_lock(), ca, 1, &[], |ring| {
+        let i = ring.buckets().iter().position(|&b| b == bucket)
+            .ok_or_else(|| fs.err(bch_errcode::BCH_ERR_EINVAL_journal_bucket_not_found))? as u32;
+        if !ring.needed(i) {
+            return Ok(Some(i as usize));
+        }
+
+        if i == ring.idx(CUR) {
+            /* Being written: closed, so the first write moves on - if there's a bucket to move to */
+            if ring.free(DIRTY_ONDISK) == 0 {
+                return Err(fs.err(bch_errcode::BCH_ERR_EBUSY_journal_bucket_retire_no_space));
+            }
+            ca.journal.sectors_free.set(0);
+        }
+        ring.retired.push(bucket).map_err(enomem(fs))?;
+        Ok(None)
+    }).inspect_err(|e| bch_err_dev!(ca, "error retiring journal bucket {}: {}", bucket, e))?;
+
+    space_available(fs);
     Ok(())
+}
+
+/*
+ * The retired buckets reclaim has awaiting discard - done with, but not
+ * ours to discard - out of the ring and the superblock: a worker's, as
+ * neither reclaim nor the write path's discards may take sb_lock
+ */
+pub(crate) fn drop_retired(j: &c::journal) {
+    let fs = j.fs();
+    for ca in fs.members() {
+        while splice(fs, &mut fs.sb_lock(), &ca, 1, &[], |ring| Ok(ring.retired_awaiting_discard()))
+            .inspect_err(|e| bch_err_dev!(&ca, "error dropping retired journal bucket: {}", e))
+            .unwrap_or(false) {}
+    }
+
+    space_available(fs);
+    unsafe { c::bch2_journal_do_discards(j.as_ptr()) };
 }
 
 /* C's: with the journal lock held */
@@ -374,9 +473,15 @@ pub fn bch2_journal_dev_buckets_available(j: &c::journal, ja: &c::journal_device
 
 #[c_export]
 pub fn bch2_journal_should_discard_bucket(j: &c::journal, ja: &c::journal_device) -> bool {
-    bch2_journal_dev_buckets_available(j, ja, c::journal_space_from::journal_space_discarded) <
-        (ja.nr() / 2).max(4) &&
-        locked(j, ja).can_advance(DISCARD)
+    let ring = locked(j, ja);
+    if ring.retired_awaiting_discard().is_some() {
+        j.drop_retired_work.queue(j.fs().write_ref_wq());
+        return false;
+    }
+
+    ring.can_advance(DISCARD) &&
+        bch2_journal_dev_buckets_available(j, ja, c::journal_space_from::journal_space_discarded) <
+        (ja.nr() / 2).max(4)
 }
 
 /* Each a ring method, as bch2_journal_buckets_NAME(j, ja, args) */

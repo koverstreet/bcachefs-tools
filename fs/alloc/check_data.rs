@@ -298,7 +298,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
                     "bucket {dev}:{b} gen {generation} different types of data in same bucket: {}, {}\n\
                      while marking {marking}", data_type_str(bucket_type), data_type_str(data_type))? {
         if bucket_type == DataType::journal {
-            crate::journal::buckets::remove(fs, &ca, b)?;
+            crate::journal::buckets::retire(fs, &ca, b)?;
 
             // gc already counted the bucket as journal when it marked it:
             // move it over, as marking does
