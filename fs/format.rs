@@ -672,56 +672,6 @@ pub struct bch_sb_field {
 }
 vstruct!(unsized bch_sb_field, u64s, start = 0);
 
-c_xmacro! {
-    BCH_SB_FIELDS(x) {
-        (journal,               0,
-         "Journal bucket list for this device"),
-        (members_v1,            1,
-         "Member device list (v1)"),
-        (crypt,                 2,
-         "Encryption key and KDF settings"),
-        (replicas_v0,           3,
-         "Replica entries (v0)"),
-        (quota,                 4,
-         "Quota timelimit and warnlimit fields"),
-        (disk_groups,           5,
-         "Device label strings and label path tree structure"),
-        (clean,                 6,
-         "Clean shutdown: btree roots and usage counters, "
-         "allowing journal replay to be skipped"),
-        (replicas,              7,
-         "Replica entries: lists of devices with "
-         "extents replicated across them"),
-        (journal_seq_blacklist, 8,
-         "Blacklisted journal sequence numbers"),
-        (journal_v2,            9,
-         "Journal bucket list (v2)"),
-        (counters,              10,
-         "Persistent counters: IO statistics, error counts, "
-         "and cumulative metrics across mounts"),
-        (members_v2,            11,
-         "Member device list (v2)"),
-        (errors,                12,
-         "Persistent error log: records errors detected "
-         "during operation or fsck so they survive "
-         "across mounts"),
-        (ext,                   13,
-         "Extended superblock: required recovery passes, "
-         "accumulated silenced errors, and other flags"),
-        (downgrade,             14,
-         "Minimum on-disk format version for safe "
-         "downgrade, with required recovery passes"),
-        (recovery_passes,       15,
-         "Tracks which recovery passes have been run "
-         "successfully"),
-        (extent_type_u64s,      16,
-         "Per-extent-type size limits"),
-        (errors_v2,             17,
-         "Persistent error log, v2: adds the time of "
-         "first occurrence to each entry"),
-    }
-}
-
 c_enum! {
     #[flags]
     #[c_name(btree_id_flags)]
@@ -961,20 +911,56 @@ c_verbatim!(r#"
 #include "snapshots/format_gen.h"
 "#);
 
-c_enum! {
-    #[open]
-    pub enum bch_sb_field_type: u32 {
-        BCH_SB_FIELDS(f, nr, ..) => concat(BCH_SB_FIELD_, f) = nr,
-        BCH_SB_FIELD_NR,
-    }
-}
-
 /* A superblock field is one of its sections, by its type: */
 tagged_union! {
-    pub union bch_sb_field in c::bch_sb_field {
-        tag type_: u32 = c::bch_sb_field_type,
-        arms from BCH_SB_FIELDS(f, nr, ..) => f: c::concat(bch_sb_field_, f) = nr,
-        size: header,
+    #[storage(c::bch_sb_field)]
+    #[tag(type_: u32)]
+    #[tag_enum(bch_sb_field_type: u32, prefix = BCH_SB_FIELD_, nr = BCH_SB_FIELD_NR)]
+    #[size(header)]
+    pub enum bch_sb_field {
+        /// Journal bucket list for this device
+        journal(c::bch_sb_field_journal) = 0,
+        /// Member device list (v1)
+        members_v1(c::bch_sb_field_members_v1) = 1,
+        /// Encryption key and KDF settings
+        crypt(c::bch_sb_field_crypt) = 2,
+        /// Replica entries (v0)
+        replicas_v0(c::bch_sb_field_replicas_v0) = 3,
+        /// Quota timelimit and warnlimit fields
+        quota(c::bch_sb_field_quota) = 4,
+        /// Device label strings and label path tree structure
+        disk_groups(c::bch_sb_field_disk_groups) = 5,
+        /// Clean shutdown: btree roots and usage counters, allowing journal
+        /// replay to be skipped
+        clean(c::bch_sb_field_clean) = 6,
+        /// Replica entries: lists of devices with extents replicated across
+        /// them
+        replicas(c::bch_sb_field_replicas) = 7,
+        /// Blacklisted journal sequence numbers
+        journal_seq_blacklist(c::bch_sb_field_journal_seq_blacklist) = 8,
+        /// Journal bucket list (v2)
+        journal_v2(c::bch_sb_field_journal_v2) = 9,
+        /// Persistent counters: IO statistics, error counts, and cumulative
+        /// metrics across mounts
+        counters(c::bch_sb_field_counters) = 10,
+        /// Member device list (v2)
+        members_v2(c::bch_sb_field_members_v2) = 11,
+        /// Persistent error log: records errors detected during operation or
+        /// fsck so they survive across mounts
+        errors(c::bch_sb_field_errors) = 12,
+        /// Extended superblock: required recovery passes, accumulated silenced
+        /// errors, and other flags
+        ext(c::bch_sb_field_ext) = 13,
+        /// Minimum on-disk format version for safe downgrade, with required
+        /// recovery passes
+        downgrade(c::bch_sb_field_downgrade) = 14,
+        /// Tracks which recovery passes have been run successfully
+        recovery_passes(c::bch_sb_field_recovery_passes) = 15,
+        /// Per-extent-type size limits
+        extent_type_u64s(c::bch_sb_field_extent_type_u64s) = 16,
+        /// Persistent error log, v2: adds the time of first occurrence to each
+        /// entry
+        errors_v2(c::bch_sb_field_errors_v2) = 17,
     }
 }
 
@@ -1908,64 +1894,48 @@ c_const! {
     pub const JSET_KEYS_U64s: usize = size_of::<Head<c::jset_entry>>() / size_of::<u64>();
 }
 
-c_xmacro! {
-    BCH_JSET_ENTRY_TYPES(x) {
-        (btree_keys,            0,
-         "Btree key updates"),
-        (btree_root,            1,
-         "Btree root pointers, recorded every journal write"),
-        (prio_ptrs,             2,
-         "Legacy, no longer used"),
-        (blacklist,             3,
-         "Blacklist a single journal sequence number"),
-        (blacklist_v2,          4,
-         "Blacklist a range of journal sequence numbers"),
-        (usage,                 5,
-         "Maximum key version for encryption nonce "
-         "derivation"),
-        (data_usage,            6,
-         "Legacy: usage accounting moved to accounting btree"),
-        (clock,                 7,
-         "IO clock: total reads and writes in sectors "
-         "since filesystem creation"),
-        (dev_usage,             8,
-         "Legacy: per-device usage moved to accounting btree"),
-        (log,                   9,
-         "Free-form log message for fsck actions "
-         "and diagnostic events"),
-        (overwrite,             10,
-         "Old value being overwritten, for debugging "
-         "and journal_rewind"),
-        (write_buffer_keys,     11,
-         "Write buffer keys, transformed to btree_keys "
-         "before writing to disk"),
-        (datetime,              12,
-         "Wall clock time at journal write"),
-        (log_bkey,              13,
-         "Structured log entry containing a btree key"),
-        (rewind_limit,          14,
-         "Oldest journal seq safe for rewind "
-         "(discards may have invalidated earlier seqs)"),
-        (rewind,                15,
-         "Rewind in progress: keys from entries in this "
-         "seq range use overwrite entries"),
-    }
-}
-
-c_enum! {
-    #[open]
-    pub enum bch_jset_entry_type: u32 {
-        BCH_JSET_ENTRY_TYPES(f, nr, ..) => concat(BCH_JSET_ENTRY_, f) = nr,
-        BCH_JSET_ENTRY_NR,
-    }
-}
-
 /* A journal entry is the type its type says: */
 tagged_union! {
-    pub union jset_entry in c::jset_entry {
-        tag type_: u8 = c::bch_jset_entry_type,
-        arms from BCH_JSET_ENTRY_TYPES(f, nr, ..) => f: c::concat(jset_entry_, f) = nr,
-        size: header,
+    #[storage(c::jset_entry)]
+    #[tag(type_: u8)]
+    #[tag_enum(bch_jset_entry_type: u32, prefix = BCH_JSET_ENTRY_, nr = BCH_JSET_ENTRY_NR)]
+    #[size(header)]
+    pub enum jset_entry {
+        /// Btree key updates
+        btree_keys(c::jset_entry_btree_keys) = 0,
+        /// Btree root pointers, recorded every journal write
+        btree_root(c::jset_entry_btree_root) = 1,
+        /// Legacy, no longer used
+        prio_ptrs(c::jset_entry_prio_ptrs) = 2,
+        /// Blacklist a single journal sequence number
+        blacklist(c::jset_entry_blacklist) = 3,
+        /// Blacklist a range of journal sequence numbers
+        blacklist_v2(c::jset_entry_blacklist_v2) = 4,
+        /// Maximum key version for encryption nonce derivation
+        usage(c::jset_entry_usage) = 5,
+        /// Legacy: usage accounting moved to accounting btree
+        data_usage(c::jset_entry_data_usage) = 6,
+        /// IO clock: total reads and writes in sectors since filesystem
+        /// creation
+        clock(c::jset_entry_clock) = 7,
+        /// Legacy: per-device usage moved to accounting btree
+        dev_usage(c::jset_entry_dev_usage) = 8,
+        /// Free-form log message for fsck actions and diagnostic events
+        log(c::jset_entry_log) = 9,
+        /// Old value being overwritten, for debugging and journal_rewind
+        overwrite(c::jset_entry_overwrite) = 10,
+        /// Write buffer keys, transformed to btree_keys before writing to disk
+        write_buffer_keys(c::jset_entry_write_buffer_keys) = 11,
+        /// Wall clock time at journal write
+        datetime(c::jset_entry_datetime) = 12,
+        /// Structured log entry containing a btree key
+        log_bkey(c::jset_entry_log_bkey) = 13,
+        /// Oldest journal seq safe for rewind (discards may have invalidated
+        /// earlier seqs)
+        rewind_limit(c::jset_entry_rewind_limit) = 14,
+        /// Rewind in progress: keys from entries in this seq range use
+        /// overwrite entries
+        rewind(c::jset_entry_rewind) = 15,
     }
 }
 

@@ -473,9 +473,7 @@ c::BCH_DATA_TYPES!(newtype_enum_aliases [DataType, BCH_DATA, nr = BCH_DATA_NR]);
 c::BCH_MEMBER_STATES!(newtype_enum_aliases [MemberState, BCH_MEMBER_STATE, nr = BCH_MEMBER_STATE_NR]);
 c::BCH_MEMBER_INITIALIZED_STATES!(newtype_enum_aliases [MemberInitialized, BCH_MEMBER_INITIALIZED, nr = BCH_MEMBER_INITIALIZED_NR]);
 c::BCH_COMPRESSION_TYPES!(newtype_enum_aliases [CompressionType, BCH_COMPRESSION_TYPE, nr = BCH_COMPRESSION_TYPE_NR]);
-c::BCH_JSET_ENTRY_TYPES!(newtype_enum_aliases [bch_jset_entry_type, BCH_JSET_ENTRY, nr = BCH_JSET_ENTRY_NR]);
 c::BCH_SB_COMPAT!(newtype_enum_aliases [bch_sb_compat, BCH_COMPAT, nr = BCH_COMPAT_NR]);
-c::BCH_SB_FIELDS!(newtype_enum_aliases [bch_sb_field_type, BCH_SB_FIELD, nr = BCH_SB_FIELD_NR]);
 c::BCH_DISK_ACCOUNTING_TYPES!(newtype_enum_aliases [disk_accounting_type, BCH_DISK_ACCOUNTING, nr = BCH_DISK_ACCOUNTING_TYPE_NR]);
 
 // BCH_BTREE_IDS(): every btree id, and those whose keys are snapshotted - as
