@@ -563,7 +563,9 @@ c_xmacro! {
 
 c_enum! {
     #[open]
-    pub enum bch_key_type_errors: u32 {
+    #[c_name(bch_key_type_errors)]
+    #[prefix(KEY_TYPE_ERROR_)]
+    pub enum ErrorKeyReason: u32 {
         KEY_TYPE_ERRORS(n, t) => concat(KEY_TYPE_ERROR_, n) = t,
     }
 }

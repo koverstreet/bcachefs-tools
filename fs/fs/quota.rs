@@ -40,7 +40,9 @@ pub struct bch_qid {
 
 c_enum! {
     #[closed]
-    pub enum quota_acct_mode: u32 {
+    #[c_name(quota_acct_mode)]
+    #[prefix(KEY_TYPE_QUOTA_)]
+    pub enum QuotaAcctMode: u32 {
         KEY_TYPE_QUOTA_PREALLOC,
         KEY_TYPE_QUOTA_WARN,
         KEY_TYPE_QUOTA_NOCHECK,
@@ -191,7 +193,7 @@ pub const Q_SPC: usize = c::quota_counters::Q_SPC.0 as usize;
 
 /// Without quotas, nothing's counted.
 #[cfg(not(CONFIG_BCACHEFS_QUOTA))]
-pub fn acct(_fs: &Fs, _qid: c::bch_qid, _counter: usize, _v: i64, _mode: c::quota_acct_mode)
+pub fn acct(_fs: &Fs, _qid: c::bch_qid, _counter: usize, _v: i64, _mode: QuotaAcctMode)
     -> Result<(), BchError> {
     Ok(())
 }
@@ -203,7 +205,7 @@ pub fn fs_quota_read(_fs: &Fs) -> Result<(), BchError> {
 
 #[cfg(not(CONFIG_BCACHEFS_QUOTA))]
 pub fn transfer(_fs: &Fs, _qtypes: u32, _dst: c::bch_qid, _src: c::bch_qid, _space: u64,
-                _mode: c::quota_acct_mode) -> Result<(), BchError> {
+                _mode: QuotaAcctMode) -> Result<(), BchError> {
     Ok(())
 }
 
@@ -409,7 +411,7 @@ mod vfs {
             idx:     usize,
             counter: usize,
             v:       i64,
-            mode:    c::quota_acct_mode,
+            mode:    QuotaAcctMode,
             msgs:    &mut QuotaMsgs,
         ) -> Result<(), BchError> {
             let (qtype, q) = (self.qtype, self.q);
@@ -418,7 +420,7 @@ mod vfs {
 
             assert!(n as i64 >= 0, "quota counter going negative");
 
-            if mode == c::quota_acct_mode::KEY_TYPE_QUOTA_NOCHECK {
+            if mode == QuotaAcctMode::NOCHECK {
                 return Ok(());
             }
 
@@ -484,7 +486,7 @@ mod vfs {
         qid:     c::bch_qid,
         counter: usize,
         v:       i64,
-        mode:    c::quota_acct_mode,
+        mode:    QuotaAcctMode,
     ) -> Result<(), BchError> {
         let qtypes = enabled_qtypes(fs);
 
@@ -510,7 +512,7 @@ mod vfs {
         qid:     c::bch_qid,
         counter: c::quota_counters,
         v:       i64,
-        mode:    c::quota_acct_mode,
+        mode:    QuotaAcctMode,
     ) -> c_int {
         ret_to_c(acct(Fs::from_c(c), qid, counter.0 as usize, v, mode))
     }
@@ -524,7 +526,7 @@ mod vfs {
         dst:    c::bch_qid,
         src:    c::bch_qid,
         space:  u64,
-        mode:   c::quota_acct_mode,
+        mode:   QuotaAcctMode,
     ) -> Result<(), BchError> {
         let qtypes = qtypes & enabled_qtypes(fs);
 
@@ -565,7 +567,7 @@ mod vfs {
         dst:    c::bch_qid,
         src:    c::bch_qid,
         space:  u64,
-        mode:   c::quota_acct_mode,
+        mode:   QuotaAcctMode,
     ) -> c_int {
         ret_to_c(transfer(Fs::from_c(c), qtypes, dst, src, space, mode))
     }
@@ -684,8 +686,8 @@ mod vfs {
             r => r?,
         };
 
-        let _ = acct(fs, qid(&u), Q_SPC, u.bi_sectors as i64, c::quota_acct_mode::KEY_TYPE_QUOTA_NOCHECK);
-        let _ = acct(fs, qid(&u), Q_INO, 1, c::quota_acct_mode::KEY_TYPE_QUOTA_NOCHECK);
+        let _ = acct(fs, qid(&u), Q_SPC, u.bi_sectors as i64, QuotaAcctMode::NOCHECK);
+        let _ = acct(fs, qid(&u), Q_INO, 1, QuotaAcctMode::NOCHECK);
         Ok(())
     }
 

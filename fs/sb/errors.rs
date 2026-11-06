@@ -19,6 +19,7 @@
 use core::cmp::{Ordering, Reverse};
 use core::ffi::c_int;
 use cstruct_macros::{c_export, CStruct, bitfield, c_typedef, c_xmacro, TypeInfo};
+use crate::format::ErrorKeyReason;
 use crate::c;
 use crate::util::vstructs::Unvalidated;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
@@ -389,8 +390,8 @@ pub fn bch2_decompress_sb_err(err: c_int) -> c::bch_sb_error_id {
 /// what we finally gave up on: the count says how often decompression failed
 /// this way, the key which extent it cost us.
 #[c_export]
-pub fn bch2_decompress_key_type_error(err: c_int) -> c::bch_key_type_errors {
-    c::BCH_DECOMPRESS_SB_ERRS!(decompress_map [err, bch_key_type_errors, KEY_TYPE_ERROR_decompress_])
+pub fn bch2_decompress_key_type_error(err: c_int) -> ErrorKeyReason {
+    c::BCH_DECOMPRESS_SB_ERRS!(decompress_map [err, ErrorKeyReason, decompress_])
 }
 
 // ── The counts, in memory ────────────────────────────────────────────────────

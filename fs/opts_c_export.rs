@@ -2,6 +2,7 @@
 //! name, and each a C name over a Rust function, with C's types - superblock
 //! pointers, C strings, an errcode returned. Deleted with the last C caller.
 
+use crate::format::ErrorKeyReason;
 use crate::fs::Fs;
 use super::*;
 use crate::errcode::ret_to_c;
@@ -59,7 +60,7 @@ pub fn bch2_prt_data_type(out: &mut Printbuf, t: DataType) {
 }
 
 #[c_export]
-pub fn bch2_prt_key_type_error_reason(out: &mut Printbuf, t: c::bch_key_type_errors) {
+pub fn bch2_prt_key_type_error_reason(out: &mut Printbuf, t: ErrorKeyReason) {
     t.to_text(out)
 }
 

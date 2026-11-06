@@ -22,6 +22,7 @@ use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 
+use crate::xattr::XattrType;
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
 use crate::inode_opts::InodeOpt;
@@ -191,7 +192,7 @@ impl<'a> Dentry<'a> {
 
     /// The prefix xattrs of @ty list under, here - None for a type that
     /// isn't listed, or that the caller may not see.
-    pub fn xattr_list_prefix(&self, ty: c::bch_xattr_type) -> Option<&'static CStr> {
+    pub fn xattr_list_prefix(&self, ty: XattrType) -> Option<&'static CStr> {
         crate::xattr::list_prefix(ty, self.raw)
     }
 }

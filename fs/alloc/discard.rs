@@ -42,6 +42,7 @@
 //! fast discard and invalidate works the device's write io ref and a write
 //! ref - so going read-only, and a device going offline, wait for them.
 
+use crate::format::ErrorKeyReason;
 use crate::fs::Dev;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
@@ -846,7 +847,7 @@ fn invalidate_one_bp(t: &TransAttempt<'_, '_>, ca: &Dev, bp: BkeySC<'_, c::Backp
     let mut n: TransBkey<'_, '_> = n.into();
 
     if !n.as_sc().can_read(fs) {
-        n.set_error(fs, c::bch_key_type_errors::KEY_TYPE_ERROR_device_removed);
+        n.set_error(fs, ErrorKeyReason::device_removed);
         damage::record_data_loss(t, Btree(bp.v().btree_id.into()), n.k().p, id::data_lost_device_removed)?;
     }
     Ok(())

@@ -33,6 +33,7 @@
 //! themselves: fold_times_trans() writes the folded times first, in the same
 //! transaction.
 
+use crate::quota::QuotaAcctMode;
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
 use core::mem::offset_of;
@@ -340,7 +341,7 @@ impl<'i> UpdateLock<'i> {
     /// Move the inode's quota charges - its usage, i_blocks +
     /// ei_quota_reserved, and the inode itself - to @qid, in the quota types
     /// of @qtypes that are accounted.
-    pub fn quota_transfer(&self, qid: c::bch_qid, qtypes: u32, mode: c::quota_acct_mode)
+    pub fn quota_transfer(&self, qid: c::bch_qid, qtypes: u32, mode: QuotaAcctMode)
         -> Result<(), BchError>
     {
         let inode = self.inode;
@@ -371,7 +372,7 @@ impl<'i> UpdateLock<'i> {
         let mut qid = self.inode.ei_quota.lock().ei_qid;
         qid.q[c::quota_types::QTYP_PRJ.0 as usize] = projid;
 
-        self.quota_transfer(qid, 1 << c::quota_types::QTYP_PRJ.0, c::quota_acct_mode::KEY_TYPE_QUOTA_PREALLOC)
+        self.quota_transfer(qid, 1 << c::quota_types::QTYP_PRJ.0, QuotaAcctMode::PREALLOC)
     }
 
     /// Move the inode to @dir's project, if moving it into @dir would: it has
@@ -488,7 +489,7 @@ impl InodeInfo {
             }
             _ => {
                 let _ = quota::acct(self.fs(), q.ei_qid, quota::Q_SPC, sectors,
-                                    c::quota_acct_mode::KEY_TYPE_QUOTA_WARN);
+                                    QuotaAcctMode::WARN);
             }
         }
     }
@@ -524,9 +525,9 @@ impl InodeInfo {
 
         let mut q = self.ei_quota.lock();
         let mode = if check_enospc {
-            c::quota_acct_mode::KEY_TYPE_QUOTA_PREALLOC
+            QuotaAcctMode::PREALLOC
         } else {
-            c::quota_acct_mode::KEY_TYPE_QUOTA_NOCHECK
+            QuotaAcctMode::NOCHECK
         };
         quota::acct(self.fs(), q.ei_qid, quota::Q_SPC, sectors as i64, mode)?;
 
@@ -545,7 +546,7 @@ impl InodeInfo {
                 res.sectors, q.ei_quota_reserved);
 
         let _ = quota::acct(self.fs(), q.ei_qid, quota::Q_SPC, -(res.sectors as i64),
-                            c::quota_acct_mode::KEY_TYPE_QUOTA_PREALLOC);
+                            QuotaAcctMode::PREALLOC);
         q.ei_quota_reserved -= res.sectors;
         res.sectors = 0;
     }

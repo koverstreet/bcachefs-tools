@@ -9,6 +9,7 @@
 //! with an empty name - and are acl.rs's.
 
 use crate::btree::bkey::prelude::*;
+pub use crate::cstructs::fs_xattr_format::XattrType;
 use core::ffi::{c_int, c_void};
 use core::mem::{offset_of, size_of};
 use cstruct_macros::c_export;
@@ -67,13 +68,13 @@ impl HashTable for Xattrs {
 
 /// An xattr's hash under @info: its type, then its name - as
 /// bch2_xattr_hash().
-fn hash(info: &c::bch_hash_info, ty: c::bch_xattr_type, name: &[u8]) -> u64 {
+fn hash(info: &c::bch_hash_info, ty: XattrType, name: &[u8]) -> u64 {
     str_hash::hash_parts(info, &[&[ty.0 as u8], name], false)
 }
 
 /// What an xattr lookup searches for.
 pub struct XattrKey<'k> {
-    pub ty:   c::bch_xattr_type,
+    pub ty:   XattrType,
     pub name: &'k OsStr,
 }
 
@@ -89,23 +90,23 @@ pub fn val_u64s(name_len: usize, val_len: usize) -> usize {
 
 /// The VFS's names for the types: a prefix, or for a POSIX ACL - whose
 /// handler has a name, not a prefix - the whole name.
-const TYPE_NAMES: [(&str, c::bch_xattr_type); 5] = [
-    ("user.",                    c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_USER),
-    ("trusted.",                 c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_TRUSTED),
-    ("security.",                c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_SECURITY),
-    ("system.posix_acl_access",  c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS),
-    ("system.posix_acl_default", c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT),
+const TYPE_NAMES: [(&str, XattrType); 5] = [
+    ("user.",                    XattrType::USER),
+    ("trusted.",                 XattrType::TRUSTED),
+    ("security.",                XattrType::SECURITY),
+    ("system.posix_acl_access",  XattrType::POSIX_ACL_ACCESS),
+    ("system.posix_acl_default", XattrType::POSIX_ACL_DEFAULT),
 ];
 
-impl c::bch_xattr_type {
+impl XattrType {
     /// Whether this version has a handler for it: bch2_xattr_type_to_handler().
     pub fn known(self) -> bool {
         TYPE_NAMES.iter().any(|&(_, ty)| ty == self)
     }
 
     pub fn is_acl(self) -> bool {
-        matches!(self, Self::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS |
-                       Self::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT)
+        matches!(self, Self::POSIX_ACL_ACCESS |
+                       Self::POSIX_ACL_DEFAULT)
     }
 
     /// What its xattrs are listed under - not a POSIX ACL's, which have a name.
@@ -122,8 +123,8 @@ impl c::bch_xattr_type {
 
 /// An xattr's value, as C reads it: valid, its lengths within it.
 impl c::Xattr<Validated> {
-    pub fn ty(&self) -> c::bch_xattr_type {
-        c::bch_xattr_type(self.x_type as u32)
+    pub fn ty(&self) -> XattrType {
+        XattrType(self.x_type as u32)
     }
 
     pub fn name(&self) -> &[u8] {
@@ -131,7 +132,7 @@ impl c::Xattr<Validated> {
     }
 
     /// What it's hashed and looked up by.
-    fn key(&self) -> (c::bch_xattr_type, &[u8]) {
+    fn key(&self) -> (XattrType, &[u8]) {
         (self.ty(), self.name())
     }
 }
@@ -155,7 +156,7 @@ pub fn value_mut<'k>(k: &'k mut TransBkey<'_, '_, c::Xattr<Validated>>) -> &'k m
 
 /// An xattr key of type @ty named @name, with @val_len bytes of value for
 /// the caller to fill in - value_mut(): None if they don't fit in a key.
-pub fn new_key<'a, 't>(t: &TransAttempt<'a, 't>, ty: c::bch_xattr_type, name: &[u8], val_len: usize)
+pub fn new_key<'a, 't>(t: &TransAttempt<'a, 't>, ty: XattrType, name: &[u8], val_len: usize)
     -> Result<Option<TransBkey<'a, 't, c::Xattr<Validated>>>, BchError>
 {
     let val_u64s = val_u64s(name.len(), val_len);
@@ -243,7 +244,7 @@ pub fn get_trans(
     t:      &TransAttempt<'_, '_>,
     inode:  &c::bch_inode_unpacked,
     inum:   c::subvol_inum,
-    ty:     c::bch_xattr_type,
+    ty:     XattrType,
     name:   &OsStr,
     buffer: Option<&mut [u8]>,
 ) -> Result<usize, BchError> {
@@ -259,7 +260,7 @@ pub fn lookup<'i, 'a>(
     iter:  &'i mut BtreeIter<'a>,
     inode: &c::bch_inode_unpacked,
     inum:  c::subvol_inum,
-    ty:    c::bch_xattr_type,
+    ty:    XattrType,
     name:  &OsStr,
     flags: BtreeIterFlags,
 ) -> Result<BkeySC<'i, c::Xattr<Validated>>, BchError> {
@@ -285,7 +286,7 @@ pub unsafe extern "C" fn bch2_xattr_get_trans(
     trans:  &BtreeTrans<'_>,
     inode:  &c::bch_inode_unpacked,
     inum:   c::subvol_inum,
-    ty:     c::bch_xattr_type,
+    ty:     XattrType,
     name:   *const c_char,
     buffer: *mut c_void,
     size:   usize,
@@ -313,7 +314,7 @@ pub fn set_key(
     hash_info: &c::bch_hash_info,
     name:      &OsStr,
     value:     &[u8],
-    ty:        c::bch_xattr_type,
+    ty:        XattrType,
     flags:     i32,
 ) -> Result<(), BchError> {
     let mut k = new_key(t, ty, name.as_bytes(), value.len())?
@@ -341,7 +342,7 @@ pub unsafe extern "C" fn __bch2_xattr_set(
     name:      *const c_char,
     value:     *const c_void,
     size:      usize,
-    ty:        c::bch_xattr_type,
+    ty:        XattrType,
     flags:     c_int,
 ) -> c_int {
     ret_to_c(set_key(&unsafe { trans.attempt_in_progress() }, inum, hash_info,
@@ -360,7 +361,7 @@ fn set_trans(
     inode: &mut c::bch_inode_unpacked,
     name:  &OsStr,
     value: Option<&[u8]>,
-    ty:    c::bch_xattr_type,
+    ty:    XattrType,
     flags: i32,
 ) -> Result<(), BchError> {
     let fs = t.fs();
@@ -399,7 +400,7 @@ pub fn set(
     inode: &mut c::bch_inode_unpacked,
     name:  &OsStr,
     val:   &[u8],
-    ty:    c::bch_xattr_type,
+    ty:    XattrType,
     flags: i32,
 ) -> Result<(), BchError> {
     set_trans(t, inum, inode, name, Some(val), ty, flags)
@@ -418,7 +419,7 @@ pub unsafe extern "C" fn bch2_xattr_set(
     name:  *const c_char,
     value: *const c_void,
     size:  usize,
-    ty:    c::bch_xattr_type,
+    ty:    XattrType,
     flags: c_int,
 ) -> c_int {
     let value = unsafe { opt_bytes(value, size) };
@@ -532,7 +533,7 @@ mod vfs {
         size:    usize,
     ) -> c_int {
         let v = unsafe { InodeInfo::from_inode(vinode) };
-        let ty = c::bch_xattr_type(unsafe { (*handler).flags } as u32);
+        let ty = XattrType(unsafe { (*handler).flags } as u32);
         let name = unsafe { cstr_name(name) };
         let mut buffer = unsafe { opt_bytes_mut(buffer, size) };
 
@@ -564,7 +565,7 @@ mod vfs {
         flags:   c_int,
     ) -> c_int {
         let v = unsafe { InodeInfo::from_inode(vinode) };
-        let ty = c::bch_xattr_type(unsafe { (*handler).flags } as u32);
+        let ty = XattrType(unsafe { (*handler).flags } as u32);
         let name = unsafe { cstr_name(name) };
         let value = unsafe { opt_bytes(value, size) };
         let mut inode = c::bch_inode_unpacked::default();
@@ -805,7 +806,7 @@ mod vfs {
 
     const fn handler(
         prefix: &'static CStr,
-        flags:  c::bch_xattr_type,
+        flags:  XattrType,
         list:   Option<unsafe extern "C" fn(*mut c::dentry) -> bool>,
     ) -> c::xattr_handler {
         c::xattr_handler {
@@ -822,14 +823,14 @@ mod vfs {
     // SAFETY, of the CStatics: immutable, their only parts that aren't Sync
     // pointers to static strings and fns
     static USER_HANDLER: CStatic<c::xattr_handler> = unsafe {
-        CStatic::new(handler(c"user.", c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_USER, None))
+        CStatic::new(handler(c"user.", XattrType::USER, None))
     };
     static TRUSTED_HANDLER: CStatic<c::xattr_handler> = unsafe {
-        CStatic::new(handler(c"trusted.", c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_TRUSTED,
+        CStatic::new(handler(c"trusted.", XattrType::TRUSTED,
                              Some(trusted_list)))
     };
     static SECURITY_HANDLER: CStatic<c::xattr_handler> = unsafe {
-        CStatic::new(handler(c"security.", c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_SECURITY, None))
+        CStatic::new(handler(c"security.", XattrType::SECURITY, None))
     };
     static BCACHEFS_HANDLER: CStatic<c::xattr_handler> = unsafe {
         CStatic::new(c::xattr_handler {
@@ -862,15 +863,14 @@ mod vfs {
     /// What an xattr of @ty lists under for @dentry's caller - None if it
     /// doesn't: the handler's prefix, or its name for a POSIX ACL's. As
     /// bch2_xattr_list_prefix().
-    pub fn list_prefix(ty: c::bch_xattr_type, dentry: *mut c::dentry) -> Option<&'static CStr> {
-        type T = c::bch_xattr_type;
+    pub fn list_prefix(ty: XattrType, dentry: *mut c::dentry) -> Option<&'static CStr> {
         let handler: &c::xattr_handler = match ty {
-            T::KEY_TYPE_XATTR_INDEX_USER              => &USER_HANDLER,
+            XattrType::USER              => &USER_HANDLER,
             // SAFETY: the kernel's, and immutable
-            T::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS  => unsafe { &c::nop_posix_acl_access },
-            T::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT => unsafe { &c::nop_posix_acl_default },
-            T::KEY_TYPE_XATTR_INDEX_TRUSTED           => &TRUSTED_HANDLER,
-            T::KEY_TYPE_XATTR_INDEX_SECURITY          => &SECURITY_HANDLER,
+            XattrType::POSIX_ACL_ACCESS  => unsafe { &c::nop_posix_acl_access },
+            XattrType::POSIX_ACL_DEFAULT => unsafe { &c::nop_posix_acl_default },
+            XattrType::TRUSTED           => &TRUSTED_HANDLER,
+            XattrType::SECURITY          => &SECURITY_HANDLER,
             _ => return None,
         };
 

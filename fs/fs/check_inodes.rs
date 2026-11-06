@@ -5,6 +5,7 @@
 //! about other btrees (has_child_snapshot, has_inode_opts, the ACL flags) are
 //! right. Repairs edit an unpacked copy, written once at the end.
 
+use crate::xattr::XattrType;
 use crate::format::BkeyType;
 use crate::acl::AclType;
 use crate::btree::bkey::{spos, BkeySC, POS_MIN};
@@ -91,7 +92,7 @@ fn on_deleted_list(t: &TransAttempt<'_, '_>, pos: Bpos) -> Result<bool, BchError
 }
 
 /// What the has_*_acl flags record.
-fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &c::bch_inode_unpacked, ty: c::bch_xattr_type)
+fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &c::bch_inode_unpacked, ty: XattrType)
     -> Result<bool, BchError>
 {
     let hash = str_hash::hash_info_init(t.fs(), u)?;

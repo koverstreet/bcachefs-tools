@@ -9,7 +9,9 @@ use cstruct_macros::{c_name, c_enum, whole, CStruct, TypeInfo};
 /* An xattr's type - its namespace; Xattr.x_type: */
 c_enum! {
     #[open]
-    pub enum bch_xattr_type: u32 {
+    #[c_name(bch_xattr_type)]
+    #[prefix(KEY_TYPE_XATTR_INDEX_)]
+    pub enum XattrType: u32 {
         KEY_TYPE_XATTR_INDEX_USER              = 0,
         KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS  = 1,
         KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT = 2,

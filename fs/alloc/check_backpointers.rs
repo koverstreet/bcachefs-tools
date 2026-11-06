@@ -22,6 +22,7 @@
 //! again - see backpointers.rs.
 
 
+use crate::format::ErrorKeyReason;
 use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::alloc::background::alloc_to_v4;
@@ -144,7 +145,7 @@ fn drop_double_allocation(t: &TransAttempt<'_, '_>, btree: Btree, level: u8, k: 
     -> Result<(), BchError>
 {
     bkey_drop_device_and_update(t, btree, level.into(), k, dev,
-                                c::bch_key_type_errors::KEY_TYPE_ERROR_double_allocation)
+                                ErrorKeyReason::double_allocation)
 }
 
 /// Of two keys claiming the same space, the loser's pointer has just been

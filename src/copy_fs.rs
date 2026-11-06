@@ -16,6 +16,7 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
 use bch_bindgen::data::io::{block_on, MAX_IO_SIZE};
+use bcachefs_kernel::xattr::XattrType;
 use bcachefs_kernel::btree;
 use bcachefs_kernel::btree::iter::CommitFlags;
 use bcachefs_kernel::data::io_misc;
@@ -320,7 +321,7 @@ fn copy_xattrs(
         let attr_name = &attrs_buf[pos..end];
         pos = end + 1;
 
-        let (xattr_type, stripped) = match c::bch_xattr_type::from_name(attr_name) {
+        let (xattr_type, stripped) = match XattrType::from_name(attr_name) {
             Some(v) => v,
             None => continue,
         };
@@ -344,7 +345,7 @@ fn copy_xattrs(
             };
             acl = v;
             acl_flags.push(
-                if xattr_type == c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS {
+                if xattr_type == XattrType::POSIX_ACL_ACCESS {
                     c::bch_inode_flags::BCH_INODE_has_access_acl
                 } else {
                     c::bch_inode_flags::BCH_INODE_has_default_acl

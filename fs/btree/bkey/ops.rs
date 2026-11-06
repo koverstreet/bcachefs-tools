@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use crate::format::ErrorKeyReason;
 use crate::format::BkeyType;
 use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
@@ -77,7 +78,7 @@ impl BkeyOps for c::Error {
     #[cold]
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
         let err = k.val_bytes().get(core::mem::offset_of!(c::Error, repr.err)).copied().unwrap_or(0);
-        crate::util::ToText::to_text(&c::bch_key_type_errors(err.into()), out)
+        crate::util::ToText::to_text(&ErrorKeyReason(err.into()), out)
     }
 }
 

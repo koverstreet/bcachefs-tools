@@ -28,6 +28,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::format::ErrorKeyReason;
 use crate::format::BkeyType;
 use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
@@ -130,7 +131,7 @@ fn write<'p>(buf: &mut [u8], field: &'p str, target: &FieldTarget, v: u64)
 impl TransBkey<'_, '_> {
     /// Made an error key, saying @err if the filesystem's version allows it:
     /// bch2_set_bkey_error().
-    pub fn set_error(&mut self, fs: &Fs, err: c::bch_key_type_errors) {
+    pub fn set_error(&mut self, fs: &Fs, err: ErrorKeyReason) {
         assert!(self.as_u64s().len() * 8 >= size_of::<c::bkey>() + size_of::<c::Error>(),
                 "no room in the key's buffer for an error key");
         self.k_mut().set_key_type(BkeyType::error);

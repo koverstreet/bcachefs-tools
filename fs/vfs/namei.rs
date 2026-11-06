@@ -14,6 +14,7 @@
 
 use core::ffi::{c_int, c_uint, CStr};
 
+use crate::quota::QuotaAcctMode;
 use crate::btree::bkey::BkeyV;
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts,
                          TransAttempt};
@@ -314,7 +315,7 @@ impl InodeOps for DirOps {
                                         None, None, c::subvol_inum::default(), 0)?;
                     if !src_dir.ei_flags.get(c::bch_inode_info_flags::EI_INODE_SNAPSHOT) {
                         quota::acct(fs, quota::qid(w), c::quota_counters::Q_INO.0 as usize, 1,
-                                    c::quota_acct_mode::KEY_TYPE_QUOTA_PREALLOC)?;
+                                    QuotaAcctMode::PREALLOC)?;
                     }
                 }
 
@@ -344,7 +345,7 @@ impl InodeOps for DirOps {
         let prj = 1 << c::quota_types::QTYP_PRJ.0;
         for inode in [Some(src_inode), dst_inode].into_iter().flatten() {
             let _ = locks.get(inode).quota_transfer(quota::qid(&inode.inode()), prj,
-                                                    c::quota_acct_mode::KEY_TYPE_QUOTA_NOCHECK);
+                                                    QuotaAcctMode::NOCHECK);
         }
         ret
     }

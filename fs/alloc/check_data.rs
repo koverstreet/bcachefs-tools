@@ -23,6 +23,7 @@
 //! only because gc's walk is single threaded today.
 
 
+use crate::format::ErrorKeyReason;
 use crate::alloc::buckets::gen_cmp;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN};
@@ -92,7 +93,7 @@ fn btree_ptr_unreadable<'a>(t: &TransAttempt<'a, '_>, btree: Btree, level: u32, 
 /// the btree flagged as having lost data; for any other key, an error key of
 /// type @error, the loss counted and recorded against its file.
 pub fn bkey_drop_device_and_update(t: &TransAttempt<'_, '_>, btree: Btree, level: u32,
-                                   k: BkeySC<'_, Ptrs>, dev: u32, error: c::bch_key_type_errors)
+                                   k: BkeySC<'_, Ptrs>, dev: u32, error: ErrorKeyReason)
     -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -188,7 +189,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
 
     if inode_fsck_err!(t, damage_pos, id::dup_backpointer_to_bad_csum_extent, "{}", msg)? {
         bkey_drop_device_and_update(t, btree, level, k, dev,
-                                    c::bch_key_type_errors::KEY_TYPE_ERROR_double_allocation)?;
+                                    ErrorKeyReason::double_allocation)?;
         return Ok(true);
     }
     Ok(false)
@@ -407,7 +408,7 @@ fn no_valid_pointers_fix<'a, 't>(t: &TransAttempt<'_, '_>, btree: Btree, mut new
         inode_fsck_err!(t, damage_pos, id::extent_ptrs_all_invalid,
                         "extent without valid pointers\n{}", new.as_sc().to_text(fs))?;
 
-        new.set_error(fs, c::bch_key_type_errors::KEY_TYPE_ERROR_no_valid_pointers_repair);
+        new.set_error(fs, ErrorKeyReason::no_valid_pointers_repair);
     }
     Ok(new)
 }

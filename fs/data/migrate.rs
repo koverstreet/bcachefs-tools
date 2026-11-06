@@ -33,6 +33,7 @@
 //! repaired is rewritten without the device, so the scan goes again until
 //! it's met none.
 
+use crate::format::ErrorKeyReason;
 use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::accounting;
@@ -112,7 +113,7 @@ impl DevDrop<'_> {
             let opts = get_io_opts(t, None, k.into())?;
             n.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
         } else if !metadata {
-            n.set_error(fs, c::bch_key_type_errors::KEY_TYPE_ERROR_device_removed);
+            n.set_error(fs, ErrorKeyReason::device_removed);
         }
         Ok(Some(n))
     }

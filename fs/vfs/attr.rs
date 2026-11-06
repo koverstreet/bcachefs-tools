@@ -23,6 +23,7 @@
 
 use core::ffi::c_int;
 
+use crate::quota::QuotaAcctMode;
 use crate::acl::{self, AclType};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
@@ -280,7 +281,7 @@ impl InodeInfo {
             qid.q[c::quota_types::QTYP_GRP.0 as usize] = v.gid_of(gid);
         }
 
-        lock.quota_transfer(qid, !0, c::quota_acct_mode::KEY_TYPE_QUOTA_PREALLOC)?;
+        lock.quota_transfer(qid, !0, QuotaAcctMode::PREALLOC)?;
 
         let trans = crate::btree_trans!(fs);
         let ret = lockrestart_do(&trans, |t| {
@@ -315,7 +316,7 @@ impl InodeInfo {
              * catches it. NOCHECK: it's a qid we just came from, which had
              * room.
              */
-            let _ = lock.quota_transfer(old_qid, !0, c::quota_acct_mode::KEY_TYPE_QUOTA_NOCHECK);
+            let _ = lock.quota_transfer(old_qid, !0, QuotaAcctMode::NOCHECK);
         }
         ret
     }

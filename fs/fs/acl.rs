@@ -13,6 +13,7 @@
 
 use core::mem::size_of;
 
+use crate::xattr::XattrType;
 use crate::c::{self, AclEntry, BCH_ACL_VERSION};
 use crate::init::error::id;
 use crate::util::vstructs::{cast_plain, plain_bytes, ArmSized, ArmWalkError};
@@ -136,14 +137,14 @@ pub enum AclType {
 impl AclType {
     pub const ALL: [Self; 2] = [Self::Access, Self::Default];
 
-    pub fn xattr_type(self) -> c::bch_xattr_type {
+    pub fn xattr_type(self) -> XattrType {
         match self {
-            Self::Access  => c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS,
-            Self::Default => c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT,
+            Self::Access  => XattrType::POSIX_ACL_ACCESS,
+            Self::Default => XattrType::POSIX_ACL_DEFAULT,
         }
     }
 
-    pub fn from_xattr_type(ty: c::bch_xattr_type) -> Option<Self> {
+    pub fn from_xattr_type(ty: XattrType) -> Option<Self> {
         Self::ALL.into_iter().find(|acl| acl.xattr_type() == ty)
     }
 

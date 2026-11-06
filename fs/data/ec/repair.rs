@@ -4,6 +4,7 @@
 //! rebuilding around what's left of it - and recording, or taking out of
 //! the stripe, the extents of blocks that are lost.
 
+use crate::format::ErrorKeyReason;
 use crate::fs::Dev;
 use crate::alloc::backpointers::BackpointerPos;
 use crate::alloc::capacity::DiskReservation;
@@ -163,7 +164,7 @@ fn drop_block_extent(t: &TransAttempt<'_, '_>, idx: u64, block: u32, bp: BkeySC<
         let opts = get_io_opts(t, None, k)?;
         n.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
     } else {
-        n.set_error(fs, c::bch_key_type_errors::KEY_TYPE_ERROR_device_removed);
+        n.set_error(fs, ErrorKeyReason::device_removed);
     }
 
     // reflink extents name no inode to record against
