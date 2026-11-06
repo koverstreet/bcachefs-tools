@@ -695,14 +695,14 @@ void *__bch2_trans_subbuf_alloc(struct btree_trans *trans,
 	if (IS_ERR(n))
 		return n;
 
-	unsigned offset = (u64 *) n - (u64 *) trans->mem;
+	unsigned offset = (u64 *) n - trans->mem.data;
 	BUG_ON(offset > U16_MAX);
 
 	if (buf->u64s)
 		memcpy(n,
 		       btree_trans_subbuf_base(trans, buf),
 		       buf->u64s * sizeof(u64));
-	buf->base = (u64 *) n - (u64 *) trans->mem;
+	buf->base = (u64 *) n - trans->mem.data;
 	buf->size = new_size;
 
 	void *p = btree_trans_subbuf_top(trans, buf);

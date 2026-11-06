@@ -572,7 +572,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn commit_lazy_if_full(&self, flags: impl Into<CommitOpts>) -> Result<(), BchError> {
         // disk_accounting_mod allocations grow by powers of 2; max / 2 is too
         // small of a limit to avoid hitting ENOMEMs
-        if self.trans.mem_top.get() < c::BTREE_TRANS_MEM_MAX / 4 {
+        if self.trans.mem_with(|m| m.top_bytes()) < c::BTREE_TRANS_MEM_MAX as usize / 4 {
             return Ok(());
         }
         self.commit_lazy(None, flags)
@@ -714,8 +714,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// Whether @p is in memory this attempt has allocated: a key read back
     /// from an update queued in it, rather than from a btree node.
     pub fn in_mem(&self, p: *const u8) -> bool {
-        let (mem, top) = (self.trans.mem.get() as *const u8, self.trans.mem_top.get() as usize);
-        (mem..mem.wrapping_add(top)).contains(&p)
+        self.trans.mem_with(|m| m.contains(p))
     }
 
     /// Freed when the transaction next begins.
@@ -759,15 +758,10 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let size = bytes.next_multiple_of(size_of::<u64>());
         let t = self.trans;
 
-        let top = t.mem_top.get() as usize;
-        if top + size > t.mem_bytes.get() as usize {
-            return Ok(t.kmalloc_grow(size, crate::ret_ip!())?.cast());
+        match t.mem_with(|m| m.alloc(size / size_of::<u64>())) {
+            Some(p) => Ok(p.as_ptr().cast()),
+            None    => Ok(t.kmalloc_grow(size, crate::ret_ip!())?.cast()),
         }
-
-        let p = unsafe { (t.mem.get() as *mut u8).add(top) };
-        t.mem_top.set((top + size) as u32);
-        unsafe { p.write_bytes(0, size) };
-        Ok(p)
     }
 
     /// Run @f in this attempt's commit, under its btree write locks. It runs

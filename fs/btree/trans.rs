@@ -21,7 +21,9 @@ use crate::prt;
 use crate::types::bits_to_longs;
 #[cfg(any(CONFIG_BCACHEFS_DEBUG, CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE))]
 use crate::util::alloc::darray_exit;
-use crate::util::alloc::{kmalloc, krealloc};
+use crate::util::alloc::{AllocError, Vec};
+use crate::util::mempool::Mempool;
+use super::types::TransMem;
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::util::backtrace::{prt_backtrace, save_backtrace};
 use crate::util::backtrace::{prt_symbol, prt_task_backtrace};
@@ -42,7 +44,7 @@ use crate::util::vstructs::{Unvalidated, UnvalidatedEntries, VstructRefEntries};
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::marker::PhantomData;
-use core::mem::{offset_of, size_of_val};
+use core::mem::{offset_of, size_of, size_of_val};
 use core::ops::ControlFlow;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
@@ -205,10 +207,10 @@ impl<'f> BtreeTrans<'f> {
             unsafe { c::bch2_path_put(self.raw(), (*self.updates.get().add(i)).path, true) };
         }
 
-        let emptied = |b: c::btree_trans_subbuf| c::btree_trans_subbuf { u64s: 0, size: 0, ..b };
         self.nr_updates.set(0);
-        self.journal_entries.set(emptied(self.journal_entries.get()));
-        self.accounting.set(emptied(self.accounting.get()));
+        // base too: begin empties the memory under it, and range() is bounded
+        self.journal_entries.set(Default::default());
+        self.accounting.set(Default::default());
         self.hooks.set(core::ptr::null_mut());
         self.extra_disk_res.set(0);
         self.extra_disk_res_replicas.set(0);
@@ -561,10 +563,7 @@ impl<'f> TransGuard<'f> {
                 let expected_mem_bytes = s.max_mem.next_power_of_two();
 
                 let _nowarn = MemallocFlags::nowarn();
-                if let Ok(mem) = kmalloc(expected_mem_bytes as usize) {
-                    t.mem.set(mem.as_ptr().cast());
-                    t.mem_bytes.set(expected_mem_bytes);
-                }
+                let _ = t.mem_with(|m| m.reserve(expected_mem_bytes as usize));
             }
         }
 
@@ -650,13 +649,7 @@ impl Drop for TransGuard<'_> {
 
         bch2_trans_paths_exit(t);
 
-        if let Some(mem) = NonNull::new(t.mem.get()) {
-            if t.used_mempool() {
-                unsafe { c.btree.trans.malloc_pool.free_raw(mem.cast()) };
-            } else {
-                unsafe { c::rust_kfree(mem.as_ptr()) };
-            }
-        }
+        t.mem.take().free(&c.btree.trans.malloc_pool);
 
         let trans = self.trans.as_ptr();
 
@@ -692,6 +685,62 @@ impl Drop for TransGuard<'_> {
 c_extern! {
     pub fn __bch2_path_free(trans: *mut BtreeTrans<'_>, path: PathIdx);
     pub fn bch2_btree_path_traverse_all(trans: *mut BtreeTrans<'_>) -> c_int;
+}
+
+impl TransMem {
+    /// @u64s zeroed, off the top - None if they don't fit: it's never
+    /// reallocated here, what it's handed out being in use.
+    pub(crate) fn alloc(&mut self, u64s: usize) -> Option<NonNull<u64>> {
+        self.buf.extend_zeroed_within_capacity(u64s).map(|s| NonNull::from(s).cast())
+    }
+
+    pub(crate) fn top_bytes(&self) -> usize {
+        self.buf.len() * size_of::<u64>()
+    }
+
+    pub(crate) fn bytes(&self) -> usize {
+        self.buf.capacity() * size_of::<u64>()
+    }
+
+    /// Whether @p is in what it's handed out.
+    pub(crate) fn contains(&self, p: *const u8) -> bool {
+        self.buf.as_ptr_range().contains(&p.cast())
+    }
+
+    /// @len u64s, from @start, of what it's handed out.
+    pub(crate) fn range(&mut self, start: usize, len: usize) -> NonNull<[u64]> {
+        NonNull::from(&mut self.buf[start..][..len])
+    }
+
+    /// Room for @bytes in all - the first buffer, or begin's: what's there is
+    /// kept if it can't be had.
+    fn reserve(&mut self, bytes: usize) -> Result<(), AllocError> {
+        self.buf.reserve((bytes / size_of::<u64>()).saturating_sub(self.buf.len()))
+    }
+
+    /// A mempool element, in place of what it had, which is freed.
+    fn adopt_pool_buf(&mut self, p: NonNull<u8>) {
+        self.buf = unsafe { Vec::from_raw_parts(p.as_ptr().cast(), 0, c::BTREE_TRANS_MEM_MAX as usize / size_of::<u64>()) };
+        self.used_mempool = true;
+    }
+
+    /// Its buffer freed: given back to the pool, if it's one of its elements.
+    fn free(self, pool: &Mempool) {
+        if self.used_mempool {
+            let (p, _, _) = self.buf.into_raw_parts();
+            unsafe { pool.free_raw(NonNull::new_unchecked(p).cast()) };
+        }
+    }
+}
+
+impl BtreeTrans<'_> {
+    /// @f on the transaction's memory, out of its cell meanwhile.
+    pub(crate) fn mem_with<R>(&self, f: impl FnOnce(&mut TransMem) -> R) -> R {
+        let mut mem = self.mem.take();
+        let ret = f(&mut mem);
+        self.mem.set(mem);
+        ret
+    }
 }
 
 #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
@@ -735,9 +784,9 @@ impl BtreeTrans<'_> {
     /// has: grown, or the transaction restarted to grow it.
     pub(crate) fn kmalloc_grow(&self, size: usize, ret_ip: c_ulong) -> Result<*mut c_void, BchError> {
         let c = self.fs();
-        let new_top = self.mem_top.get() + size as c_uint;
-        let old_bytes = self.mem_bytes.get();
-        let mut new_bytes = new_top.next_power_of_two();
+        let (top, old_bytes) = self.mem_with(|m| (m.top_bytes(), m.bytes()));
+        let new_top = (top + size) as c_uint;
+        let new_bytes = new_top.next_power_of_two();
 
         if crate::warn_on_once!(new_bytes > c::BTREE_TRANS_MEM_MAX) {
             #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
@@ -768,42 +817,35 @@ impl BtreeTrans<'_> {
             unsafe { (*s).max_mem = new_bytes };
         }
 
-        if self.used_mempool() || new_bytes > c::BTREE_TRANS_MEM_MAX {
-            ebug_assert!(self.mem_bytes.get() < new_bytes);
+        if self.mem_with(|m| m.used_mempool) || new_bytes > c::BTREE_TRANS_MEM_MAX {
+            ebug_assert!(old_bytes < new_bytes as usize);
             return Err(bch_errcode::BCH_ERR_ENOMEM_trans_kmalloc.into());
         }
 
         if old_bytes != 0 {
-            self.realloc_bytes_required.set(new_bytes);
+            self.mem_with(|m| m.realloc_bytes_required = new_bytes);
             c.event_inc_trace(events::trans_restart_mem_realloced, |out| {
                 prt!(out, "{}\nbytes {}\n", self.fn_name(), new_bytes);
             });
             return Err(self.restart_ip(bch_errcode::BCH_ERR_transaction_restart_mem_realloced, ret_ip));
         }
 
-        ebug_assert!(self.mem.get().is_null());
-        ebug_assert!(self.mem_bytes.get() == 0);
-        ebug_assert!(self.mem_top.get() == 0);
+        ebug_assert!(top == 0);
         ebug_assert!(new_bytes <= c::BTREE_TRANS_MEM_MAX);
 
-        let new_mem = self.allocate_dropping_locks_norelock(|| {
+        let reserved = self.allocate_dropping_locks_norelock(|| {
             let _nowarn = MemallocFlags::nowarn();
-            kmalloc(new_bytes as usize).ok()
-        }).unwrap_or_else(|| {
-            new_bytes = c::BTREE_TRANS_MEM_MAX;
-            self.set_used_mempool(true);
-            c.btree.trans.malloc_pool.alloc_raw(c::GFP_KERNEL)
+            self.mem_with(|m| m.reserve(new_bytes as usize)).ok()
         });
-
-        self.mem.set(new_mem.as_ptr().cast());
-        self.mem_bytes.set(new_bytes);
+        if reserved.is_none() {
+            let p = c.btree.trans.malloc_pool.alloc_raw(c::GFP_KERNEL);
+            self.mem_with(|m| m.adopt_pool_buf(p));
+        }
 
         self.relock()?;
 
-        let p = self.mem.get();
-        self.mem_top.set(self.mem_top.get() + size as c_uint);
-        unsafe { p.cast::<u8>().write_bytes(0, size) };
-        Ok(p)
+        let p = self.mem_with(|m| m.alloc(size / size_of::<u64>())).expect("room, just made");
+        Ok(p.as_ptr().cast())
     }
 
     /**
@@ -838,7 +880,7 @@ impl BtreeTrans<'_> {
         self.reset_updates();
 
         self.restart_count.set(self.restart_count.get() + 1);
-        self.mem_top.set(0);
+        self.mem_with(|m| m.buf.clear());
 
         /*
          * Long-lived trans (e.g. copygc) initialized before journal replay
@@ -854,23 +896,17 @@ impl BtreeTrans<'_> {
         }
 
         if self.restarted() == bch_errcode::BCH_ERR_transaction_restart_mem_realloced {
-            let mut new_bytes = self.realloc_bytes_required.get();
+            let new_bytes = self.mem_with(|m| m.realloc_bytes_required);
             ebug_assert!(new_bytes <= c::BTREE_TRANS_MEM_MAX);
-            ebug_assert!(!self.mem.get().is_null());
-            ebug_assert!(self.mem_bytes.get() != 0);
+            ebug_assert!(self.mem_with(|m| m.bytes()) != 0);
 
-            let new_mem = self.allocate_dropping_locks_norelock(|| {
-                unsafe { krealloc(self.mem.get().cast(), new_bytes as usize) }.ok()
-            }).unwrap_or_else(|| {
-                new_bytes = c::BTREE_TRANS_MEM_MAX;
-                self.set_used_mempool(true);
-                let p = c.btree.trans.malloc_pool.alloc_raw(c::GFP_KERNEL);
-                unsafe { c::rust_kfree(self.mem.get()) };
-                p
+            let reserved = self.allocate_dropping_locks_norelock(|| {
+                self.mem_with(|m| m.reserve(new_bytes as usize)).ok()
             });
-
-            self.mem.set(new_mem.as_ptr().cast());
-            self.mem_bytes.set(new_bytes);
+            if reserved.is_none() {
+                let p = c.btree.trans.malloc_pool.alloc_raw(c::GFP_KERNEL);
+                self.mem_with(|m| m.adopt_pool_buf(p));
+            }
         }
 
         for i in self.path_idxs() {
@@ -978,9 +1014,9 @@ impl BtreeTrans<'_> {
             prt!(out, "\n");
         }
 
-        let subbuf = |buf: c::btree_trans_subbuf| unsafe {
-            core::slice::from_raw_parts(self.mem.get().cast::<u64>().add(usize::from(buf.base)).cast::<u8>(),
-                                        usize::from(buf.u64s) * size_of::<u64>())
+        let subbuf = |buf: c::btree_trans_subbuf| {
+            let p = self.mem_with(|m| m.range(usize::from(buf.base), usize::from(buf.u64s)));
+            unsafe { core::slice::from_raw_parts(p.cast::<u8>().as_ptr(), p.len() * size_of::<u64>()) }
         };
 
         for e in UnvalidatedEntries::<c::jset_entry<Unvalidated>>::new(subbuf(self.journal_entries.get()))

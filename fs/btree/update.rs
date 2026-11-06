@@ -163,10 +163,7 @@ impl TransAttempt<'_, '_> {
 
     pub unsafe fn subbuf(&self, which: Subbuf) -> &mut [u64] {
         let buf = self.subbuf_cell(which).get();
-        unsafe {
-            let base = self.trans().mem.get().cast::<u64>().add(usize::from(buf.base));
-            slice::from_raw_parts_mut(base, usize::from(buf.u64s))
-        }
+        unsafe { self.trans().mem_with(|m| m.range(usize::from(buf.base), usize::from(buf.u64s))).as_mut() }
     }
 
     pub fn subbuf_alloc(&self, which: Subbuf, u64s: usize) -> Result<&mut [u64], BchError> {
@@ -175,9 +172,9 @@ impl TransAttempt<'_, '_> {
         let p = if usize::from(buf.u64s) + u64s > usize::from(buf.size) {
             unsafe { c::__bch2_trans_subbuf_alloc(self.raw(), cell.as_ptr(), u64s as c_uint, 0) }
         } else {
-            let p = unsafe { self.trans().mem.get().cast::<u64>().add(usize::from(buf.base + buf.u64s)) };
+            let p = self.trans().mem_with(|m| m.range(usize::from(buf.base + buf.u64s), u64s));
             cell.set(c::btree_trans_subbuf { u64s: buf.u64s + u64s as u16, ..buf });
-            p.cast()
+            p.as_ptr().cast()
         };
         let p = errptr_to_result(NonNull::new(p).expect("a sub-buffer's u64s, or an error"))?;
         Ok(unsafe { slice::from_raw_parts_mut(p.as_ptr().cast::<u64>(), u64s) })

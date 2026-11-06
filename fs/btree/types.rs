@@ -11,7 +11,7 @@ use crate::cstructs::c as cs;
 use crate::errcode::bch_errcode;
 use crate::errcode::BchError;
 use crate::locking::{ExclusiveGuard, Locked};
-use crate::util::alloc::{DArrayLoan, KVVec};
+use crate::util::alloc::{DArrayLoan, KVVec, Kmalloc};
 use crate::util::bio::{BioSet, Either};
 use crate::util::late::Late;
 use crate::util::Printbuf;
@@ -25,7 +25,7 @@ use crate::util::projections::Volatile;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::percpu::PerCpu;
 use core::cell::Cell;
-use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
+use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8};
 use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, Late,
                      TypeInfo};
@@ -630,6 +630,21 @@ pub struct btree_trans_subbuf {
     pub size: u16,
 }
 
+/// The transaction's memory: a vector of u64s, bump-allocated from - what it
+/// hands out is in use, by reference - and cleared on every begin; so it's
+/// reallocated only by begin, when nothing it handed out is used again.
+#[repr(C)]
+#[c_name(trans_mem)]
+#[derive(CStruct, Default)]
+pub struct TransMem {
+    #[c_anon("struct { u32 nr, size; u64 *data; }")]
+    pub(crate) buf:                    crate::util::alloc::Vec<u64, Kmalloc, u32>,
+    /* bytes: what the next begin grows it to, restarted for room */
+    pub(crate) realloc_bytes_required: u32,
+    /* a mempool element - kmalloc()'d, but the pool's to have back */
+    pub(crate) used_mempool:           bool,
+}
+
 /*
  * Transaction context for btree operations.
  *
@@ -659,7 +674,6 @@ pub struct btree_trans_bits {
     srcu_io_submitted:              bool,
     btree_cache_cannibalize_locked: bool,
     pf_memalloc_noio:               bool,
-    used_mempool:                   bool,
     in_traverse_all:                bool,
     paths_sorted:                   bool,
     memory_allocation_failure:      bool,
@@ -680,7 +694,7 @@ pub struct btree_trans_bits {
     has_interior_updates:           bool,
     /* Rust's: the path table is borrowed (btree/path.rs's Paths) */
     paths_borrowed:                 bool,
-    __pad18:                        u14,
+    __pad17:                        u15,
     #[bits(16)] pub restarted: cs::bch_errcode,
     __pad:                          u16,
 }
@@ -711,10 +725,8 @@ pub struct BtreeTrans<'f> {
     pub updates: Cell<*mut cs::btree_insert_entry>,
 
     /* bump allocator, invalidated on transaction restart */
-    pub mem: Cell<*mut c_void>,
-    pub mem_top: Cell<c_uint>,
-    pub mem_bytes: Cell<c_uint>,
-    pub realloc_bytes_required: Cell<c_uint>,
+    #[c("struct trans_mem mem")]
+    pub mem: Cell<TransMem>,
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
     #[c("darray_trans_kmalloc_trace trans_kmalloc_trace")]
     pub trans_kmalloc_trace: Opaque<cs::darray_trans_kmalloc_trace>,

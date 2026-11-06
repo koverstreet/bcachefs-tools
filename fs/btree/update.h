@@ -50,13 +50,13 @@ bch2_trans_update(struct btree_trans *trans, struct btree_iter *iter,
 static inline void *btree_trans_subbuf_base(struct btree_trans *trans,
 					    struct btree_trans_subbuf *buf)
 {
-	return (u64 *) trans->mem + buf->base;
+	return trans->mem.data + buf->base;
 }
 
 static inline void *btree_trans_subbuf_top(struct btree_trans *trans,
 					   struct btree_trans_subbuf *buf)
 {
-	return (u64 *) trans->mem + buf->base + buf->u64s;
+	return trans->mem.data + buf->base + buf->u64s;
 }
 
 void *__bch2_trans_subbuf_alloc(struct btree_trans *,
@@ -266,7 +266,7 @@ static inline int bch2_trans_commit_lazy_if_full(struct btree_trans *trans,
 	/* disk_accounting_mod allocations grow by powers of 2; max / 2 is too
 	 * small of a limit to avoid hiting ENOMEMS
 	 */
-	return likely(trans->mem_top < BTREE_TRANS_MEM_MAX / 4)
+	return likely(trans->mem.nr * sizeof(u64) < BTREE_TRANS_MEM_MAX / 4)
 		? 0
 		: bch2_trans_commit_lazy(trans, disk_res, journal_seq, flags);
 }

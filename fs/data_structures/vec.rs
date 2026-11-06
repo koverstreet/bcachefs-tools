@@ -124,6 +124,24 @@ impl<T, A: Alloc, L: LenUint> Vec<T, A, L> {
         Ok(())
     }
 
+    /// @n more, zeroed, if there's room for them: None, never a reallocation,
+    /// if there isn't.
+    pub fn extend_zeroed_within_capacity(&mut self, n: usize) -> Option<&mut [T]>
+    where
+        T: ::pin_init::Zeroable,
+    {
+        let len = self.len();
+        if n > self.capacity() - len {
+            return None;
+        }
+        unsafe {
+            let p = self.as_mut_ptr().add(len);
+            p.write_bytes(0, n);
+            self.inc_len(n);
+            Some(slice::from_raw_parts_mut(p, n))
+        }
+    }
+
     pub fn pop(&mut self) -> Option<T> {
         let len = self.len().checked_sub(1)?;
         self.nr = L::from_usize(len);

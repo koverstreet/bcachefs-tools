@@ -828,10 +828,10 @@ static __always_inline void *bch2_trans_kmalloc_nomemzero_ip(struct btree_trans 
 
 	bch2_trans_kmalloc_trace(trans, size, ip);
 
-	if (likely(trans->mem_top + size <= trans->mem_bytes)) {
-		void *p = trans->mem + trans->mem_top;
+	if (likely(trans->mem.nr + size / sizeof(u64) <= trans->mem.size)) {
+		void *p = trans->mem.data + trans->mem.nr;
 
-		trans->mem_top += size;
+		trans->mem.nr += size / sizeof(u64);
 		return p;
 	} else {
 		return __bch2_trans_kmalloc(trans, size, ip);
@@ -845,10 +845,10 @@ static __always_inline void *bch2_trans_kmalloc_ip(struct btree_trans *trans, si
 
 	bch2_trans_kmalloc_trace(trans, size, ip);
 
-	if (likely(trans->mem_top + size <= trans->mem_bytes)) {
-		void *p = trans->mem + trans->mem_top;
+	if (likely(trans->mem.nr + size / sizeof(u64) <= trans->mem.size)) {
+		void *p = trans->mem.data + trans->mem.nr;
 
-		trans->mem_top += size;
+		trans->mem.nr += size / sizeof(u64);
 		memset(p, 0, size);
 		return p;
 	} else {
