@@ -371,23 +371,6 @@ c_enum! {
     }
 }
 
-/*
- * - DELETED keys are used internally to mark keys that should be ignored but
- *   override keys in composition order.  Their version number is ignored.
- *
- * - DISCARDED keys indicate that the data is all 0s because it has been
- *   discarded. DISCARDs may have a version; if the version is nonzero the key
- *   will be persistent, otherwise the key will be dropped whenever the btree
- *   node is rewritten (like DELETED keys).
- *
- * - ERROR: any read of the data returns a read error, as the data was lost due
- *   to a failing device. Like DISCARDED keys, they can be removed (overridden)
- *   by new writes or cluster-wide GC. Node repair can also overwrite them with
- *   the same or a more recent version number, but not with an older version
- *   number.
- *
- * - WHITEOUT: for hash table btrees
- */
 tagged_union! {
     #[key_value]
     #[tag_enum(bch_bkey_type: u32, prefix = KEY_TYPE_, nr = KEY_TYPE_MAX)]
@@ -401,7 +384,9 @@ tagged_union! {
         /// Blocks visibility of ancestor snapshot versions of a key
         #[flags(extent, generic)]
         whiteout(c::Whiteout) = 1,
-        /// Marks an extent as containing unrecoverable errors
+        /// Marks an extent as containing unrecoverable errors: a read of it
+        /// fails, as the data was lost with a failed device; a write over it
+        /// replaces it
         #[flags(extent, allocation, generic)]
         error(c::Error) = 2,
         /// Used by reconcile to track option changes via incrementing version
