@@ -24,7 +24,6 @@ use crate::btree::trans::transaction_fn;
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::locking::Locked;
 use crate::util::debugfs::{self, DebugFile, DebugOut};
 use crate::data_structures::{eytzinger::Eytzinger0, rhashtable};
 use crate::util::place::Contained;
@@ -292,11 +291,11 @@ impl DebugFile for TransactionStats {
 
             let s = &fs.btree.trans.stats[self.idx];
             let mut out = out.indent(2);
-            let _lock = Locked::from_c(&s.lock).lock();
+            let locked = s.lock.lock();
 
-            prt!(out, "Max mem used: {}\n", s.max_mem);
+            prt!(out, "Max mem used: {}\n", s.lock.max_mem.get());
             #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-            crate::btree::trans::kmalloc_trace_to_text(&mut out.indent(2), &s.trans_kmalloc_trace);
+            crate::btree::trans::kmalloc_trace_to_text(&mut out.indent(2), &locked.trans_kmalloc_trace);
 
             prt!(out, "Transaction duration:\n");
             prt!(out.indent(2), "{}", s.duration);
@@ -309,10 +308,10 @@ impl DebugFile for TransactionStats {
                 prt!(out.indent(2), "{}", s.lock_wait_times);
             }
 
-            if !s.max_paths_text.is_null() {
-                prt!(out, "Maximum allocated btree paths ({}):\n", s.nr_max_paths);
+            if !locked.max_paths_text.is_null() {
+                prt!(out, "Maximum allocated btree paths ({}):\n", s.lock.nr_max_paths.get());
                 // SAFETY: a C string of its own, replaced under s->lock
-                out.indent(2).write_bytes(unsafe { CStr::from_ptr(s.max_paths_text.cast()) }.to_bytes());
+                out.indent(2).write_bytes(unsafe { CStr::from_ptr(locked.max_paths_text.cast()) }.to_bytes());
             }
 
             prt!(out, "\n");

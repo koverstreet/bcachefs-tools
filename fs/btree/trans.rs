@@ -528,7 +528,7 @@ impl<'f> TransGuard<'f> {
         t.fn_idx.set(fn_idx as u8);
         if let Some(s) = stats {
             t.fn_.set(transaction_fn(fn_idx as usize).map_or(ptr::null(), |f| f.as_ptr().cast()));
-            t.nr_paths_max.set(s.nr_max_paths as _);
+            t.nr_paths_max.set(s.lock.nr_max_paths.get() as _);
         }
         t.shard_cpu.set(if c.opts().shard_inode_numbers_bits.get() != 0 {
             c.inode_shard_cpu[c.inode_shard_idx() as usize] as i16
@@ -542,8 +542,9 @@ impl<'f> TransGuard<'f> {
         bch2_trans_paths_init(t);
 
         if let Some(s) = stats {
-            if s.max_mem != 0 {
-                let expected_mem_bytes = s.max_mem.next_power_of_two();
+            let max_mem = s.lock.max_mem.get();
+            if max_mem != 0 {
+                let expected_mem_bytes = max_mem.next_power_of_two();
 
                 let _nowarn = MemallocFlags::nowarn();
                 let _ = t.mem_with(|m| m.reserve(expected_mem_bytes as usize));
@@ -789,21 +790,19 @@ impl BtreeTrans<'_> {
         self.maybe_inject_restart(ret_ip)?;
 
         let s = &c.btree.trans.stats[self.fn_idx.get() as usize];
-        if new_bytes > s.max_mem {
-            let _lock = Locked::from_c(&s.lock).lock();
-            // these are the stats' lock's
-            let s = ptr::from_ref(s).cast_mut();
+        if new_bytes > s.lock.max_mem.get() {
+            let mut s = s.lock.lock();
             #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
             {
                 let trace = self.trans_kmalloc_trace.take();
-                let v = unsafe { &mut (*s).trans_kmalloc_trace };
+                let v = &mut s.trans_kmalloc_trace;
                 v.clear();
                 let _ = v.reserve(trace.len());
                 let nr = v.capacity().min(trace.len());
                 let _ = v.extend_from_slice(&trace[..nr]);
                 self.trans_kmalloc_trace.set(trace);
             }
-            unsafe { (*s).max_mem = new_bytes };
+            s.published().max_mem.set(new_bytes);
         }
 
         if self.mem_with(|m| m.used_mempool) || new_bytes > c::BTREE_TRANS_MEM_MAX {

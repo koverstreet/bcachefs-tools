@@ -198,7 +198,7 @@ fn trans_stats_json(c: &Fs, out: &mut Printbuf) {
         out.write_bytes(name);
         write!(out, "\":{{");
 
-        write!(out, "\"max_mem\":{},", s.max_mem);
+        write!(out, "\"max_mem\":{},", s.lock.max_mem.get());
 
         write!(out, "\"duration\":");
         s.duration.json_to_text(out);
@@ -251,19 +251,15 @@ unsafe extern "C" fn trans_stats_json_write(_file: *mut c::file, kobj: *mut c::k
     let c = unsafe { sysfs::obj_of::<FsDir>(kobj) };
 
     for (_, s) in trans_stats(c) {
-        let _lock = Locked::from_c(&s.lock).lock();
+        let mut locked = s.lock.lock();
         s.duration.reset();
         s.lock_hold_times.reset();
         s.lock_wait_times.reset();
 
-        // SAFETY: these are the stats' lock's
-        unsafe {
-            let s = core::ptr::from_ref(s).cast_mut();
-            (*s).nr_max_paths = 0;
-            (*s).max_mem = 0;
-            c::rust_kfree((*s).max_paths_text.cast());
-            (*s).max_paths_text = core::ptr::null_mut();
-        }
+        locked.published().nr_max_paths.set(0);
+        locked.published().max_mem.set(0);
+        unsafe { c::rust_kfree(locked.max_paths_text.cast()) };
+        locked.max_paths_text = core::ptr::null_mut();
     }
     count as isize
 }

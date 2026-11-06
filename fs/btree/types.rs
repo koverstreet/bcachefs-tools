@@ -862,6 +862,26 @@ pub struct btree_trans_buf {
 }
 c_default!(btree_trans_buf);
 
+/// A transaction function's stats' lock's: what's kept of its biggest - its
+/// memory's allocations, and its paths, as text.
+#[repr(C)]
+#[derive(CStruct)]
+pub struct TransStatsLocked {
+    #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
+    pub trans_kmalloc_trace: cs::darray_trans_kmalloc_trace,
+    pub max_paths_text: *mut c_char,
+}
+
+crate::published! {
+    /// Its high water marks: raised under the lock, read without it - by
+    /// bch2_trans_get(), sizing the transaction it gets.
+    #[derive(CStruct)]
+    pub struct TransStatsMax {
+        pub nr_max_paths: Volatile<c_uint>,
+        pub max_mem: Volatile<c_uint>,
+    }
+}
+
 #[pin_data]
 #[repr(C)]
 #[derive(CStruct, Init)]
@@ -875,12 +895,10 @@ pub struct btree_transaction_stats {
     #[pin]
     #[init(cs::bch2_time_stats::init())]
     pub lock_wait_times: cs::bch2_time_stats,
-    pub lock: cs::mutex,
-    pub nr_max_paths: c_uint,
-    pub max_mem: c_uint,
-    #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-    pub trans_kmalloc_trace: cs::darray_trans_kmalloc_trace,
-    pub max_paths_text: *mut c_char,
+    #[pin]
+    #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&s->lock"))]
+    #[c_lock("struct mutex lock")]
+    pub lock: Locked<cs::mutex, TransStatsLocked, TransStatsMax>,
 }
 
 c_const! {

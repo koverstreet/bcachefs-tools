@@ -3746,14 +3746,6 @@ void bch2_fs_btree_iter_exit(struct bch_fs *c)
 
 void bch2_fs_btree_iter_init_early(struct bch_fs *c)
 {
-	struct btree_transaction_stats *s;
-
-	for (s = c->btree.trans.stats;
-	     s < c->btree.trans.stats + ARRAY_SIZE(c->btree.trans.stats);
-	     s++) {
-		mutex_init(&s->lock);
-	}
-
 	INIT_LIST_HEAD(&c->btree.trans.list);
 	seqmutex_init(&c->btree.trans.lock);
 	mutex_init(&c->btree.trans.stats_json_lock);
