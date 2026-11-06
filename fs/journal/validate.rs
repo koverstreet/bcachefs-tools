@@ -8,7 +8,8 @@ use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{Btree, DataType};
 use crate::fs::{Dev, Fs};
-use crate::init::error::{fs_inconsistent, id, mustfix_fsck_err, sb_error_count};
+use crate::btree::bkey::BkeySC;
+use crate::init::error::{fs_inconsistent, id, mustfix_fsck_err, sb_error_count, BkeyValidate};
 use crate::init::recovery::btree_lost_data;
 use crate::util::ffi::Opaque;
 use crate::util::log::LogMsg;
@@ -186,9 +187,9 @@ fn bkey_compat(ctx: &Ctx<'_>, k: &mut [u8]) {
        ctx.big_endian != cfg!(target_endian = "big") ||
        cfg!(CONFIG_BCACHEFS_DEBUG) {
         unsafe {
-            crate::btree::bkey_methods::__bch2_bkey_compat(ctx.fs.as_ptr(), ctx.from.level.into(), ctx.from.btree, ctx.version,
-                                  ctx.big_endian.into(), ctx.write().into(), core::ptr::null_mut(),
-                                  k.as_mut_ptr().cast());
+            crate::btree::compat::__bch2_bkey_compat(Some(ctx.fs), ctx.from.level.into(), ctx.from.btree, ctx.version,
+                                                     ctx.big_endian.into(), ctx.write().into(), None,
+                                                     k.as_mut_ptr().cast());
         }
     }
 }
@@ -234,10 +235,14 @@ fn journal_validate_key(ctx: &Ctx<'_>, e: &mut [u8], at: usize) -> Result<Key, B
         bkey_compat(ctx, &mut e[at..at + bytes]);
     }
 
-    let ret = unsafe { crate::btree::bkey_methods::bch2_bkey_validate(ctx.fs.as_ptr(), key_at(e, at), &ctx.from) };
-    if journal_entry_err_on!(ctx, ret != 0, journal_entry_bkey_bad_format,
-                             "bkey validate error {}", BchError::from_raw(ret).msg()) {
-        return drop(e, bytes);
+    let k = key_at(e, at);
+    let ret = crate::btree::bkey_methods::bkey_validate(
+        &BkeyValidate { fs: ctx.fs, k: unsafe { BkeySC::from_c(&k) }, from: &ctx.from });
+    if let Err(err) = ret {
+        if journal_entry_err_on!(ctx, true, journal_entry_bkey_bad_format,
+                                 "bkey validate error {}", err.msg()) {
+            return drop(e, bytes);
+        }
     }
 
     if write {
@@ -289,7 +294,8 @@ fn journal_entry_btree_keys_to_text(out: &mut Printbuf, fs: Option<&Fs>, e: &[u8
         }
 
         prt!(out, "btree={} level={} ", Btree(h.btree_id.into()), h.level);
-        unsafe { c::bch2_bkey_val_to_text(out.as_raw(), fs.map_or(core::ptr::null_mut(), Fs::as_ptr), key_at(e, at)) };
+        let k = key_at(e, at);
+        crate::btree::bkey_methods::bkey_val_to_text(out, fs, unsafe { BkeySC::from_c(&k) });
         first = false;
         at += u64s * 8;
     }

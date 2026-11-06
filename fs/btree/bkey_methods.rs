@@ -38,50 +38,15 @@ use crate::util::Printbuf;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
-use crate::{dirent, inode};
+use crate::{dirent, inode, prt};
+use crate::util::ffi::Opaque;
 use crate::snapshot_states::{SNAPSHOT_STATE_VALUES, SUBVOLUME_STATE_VALUES};
 use crate::typeinfo::{self, AccessError, FieldTarget, ResolveError, TypeInfo};
 use core::fmt;
 use core::mem::{size_of, MaybeUninit};
-use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{c_export, CStruct, c_extern};
+use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree};
-
-/*
- * key_validate: checks validity of @k, returns 0 if good or -EINVAL if bad. If
- * invalid, entire key will be deleted.
- *
- * When invalid, error string is returned via @err. @rw indicates whether key is
- * being read or written; more aggressive checks can be enabled when rw == WRITE.
- */
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct bkey_ops {
-    pub key_validate: Option<unsafe extern "C" fn(c: *mut Fs, k: c::bkey_s_c,
-                                                  from: *const c::bkey_validate_context) -> c_int>,
-    pub val_to_text: Option<unsafe extern "C" fn(*mut Printbuf, *mut Fs, c::bkey_s_c)>,
-    pub swab: Option<unsafe extern "C" fn(*const Fs, c::bkey_s)>,
-    pub key_merge: Option<unsafe extern "C" fn(*mut Fs, c::bkey_s, c::bkey_s_c) -> bool>,
-    pub trigger: Option<unsafe extern "C" fn(*mut c::btree_trans, c::btree_trigger_op) -> c_int>,
-    pub check_repair: Option<unsafe extern "C" fn(*mut c::btree_trans, *mut c::btree_iter,
-                                                  Btree, c_uint, c::bkey_s_c) -> c_int>,
-    pub compat: Option<unsafe extern "C" fn(id: Btree, version: c_uint,
-                                            big_endian: c_uint, write: c_int,
-                                            c::bkey_s)>,
-
-}
-
-c_extern! {
-    pub static bch2_bkey_types: [*const c_char; 0];
-    pub fn bch2_bpos_to_text(out: *mut Printbuf, pos: Bpos);
-    pub fn bch2_bkey_to_text(out: *mut Printbuf, k: *const c::bkey);
-    pub fn bch2_bkey_val_to_text(out: *mut Printbuf, c: *mut Fs, k: c::bkey_s_c);
-    pub fn bch2_bkey_validate(c: *mut Fs, k: c::bkey_s_c, from: *const c::bkey_validate_context) -> c_int;
-    pub fn __bch2_bkey_compat(c: *const Fs, level: c_uint, btree: Btree, version: c_uint, big_endian: c_uint,
-                              write: c_int, f: *mut c::bkey_format, k: *mut c::bkey_packed);
-    pub fn bch2_set_bkey_error(c: *mut Fs, k: *mut c::bkey_i, err: c::bch_key_type_errors);
-}
 
 type EnumValues = &'static [(&'static str, u64)];
 
@@ -176,8 +141,17 @@ impl TransBkey<'_, '_> {
     pub fn set_error(&mut self, fs: &Fs, err: c::bch_key_type_errors) {
         assert!(self.as_u64s().len() * 8 >= size_of::<c::bkey>() + size_of::<c::Error>(),
                 "no room in the key's buffer for an error key");
-        // SAFETY: our key, with room for an error key
-        unsafe { c::bch2_set_bkey_error(fs.as_ptr(), self.as_ptr(), err) }
+        self.k_mut().type_ = c::bch_bkey_type::KEY_TYPE_error.0 as u8;
+
+        if fs.request_incompat_feature(
+            c::bcachefs_metadata_version::bcachefs_metadata_version_extented_key_type_error).is_ok() {
+            self.k_mut().set_val_bytes(size_of::<c::Error>());
+            let v = self.val_bytes_mut();
+            v.fill(0);
+            v[core::mem::offset_of!(c::Error, repr.err)] = err.0 as u8;
+        } else {
+            self.k_mut().set_val_bytes(0);
+        }
     }
 
     /// The key's buffer must have room for the result: a value grown to reach
@@ -387,7 +361,7 @@ macro_rules! key_trigger {
 }
 
 /// A key type's methods, on its value's type: each a no-op where the type
-/// has none - what bkey_ops was.
+/// has none.
 pub trait BkeyOps {
     fn validate(_v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         Ok(())
@@ -477,6 +451,256 @@ impl BkeyOps for c::Set {
         l.k.resize(l.k.size + r.k.size);
         true
     }
+}
+
+/// bch2_bpos_to_text().
+#[cold]
+pub fn bpos_to_text(out: &mut Printbuf, p: Bpos) {
+    use crate::btree::bkey::{POS_MAX, POS_MIN, SPOS_MAX};
+
+    if p == POS_MIN {
+        prt!(out, "POS_MIN");
+    } else if p == POS_MAX {
+        prt!(out, "POS_MAX");
+    } else if p == SPOS_MAX {
+        prt!(out, "SPOS_MAX");
+    } else {
+        match p.inode {
+            u64::MAX => prt!(out, "U64_MAX:"),
+            i        => prt!(out, "{i}:"),
+        }
+        match p.offset {
+            u64::MAX => prt!(out, "U64_MAX:"),
+            o        => prt!(out, "{o}:"),
+        }
+        match p.snapshot {
+            u32::MAX => prt!(out, "U32_MAX"),
+            s        => prt!(out, "{s}"),
+        }
+    }
+}
+
+#[c_export]
+pub fn bch2_bpos_to_text(out: &mut Printbuf, pos: Bpos) {
+    bpos_to_text(out, pos)
+}
+
+/// bch2_bkey_to_text(): the header.
+#[cold]
+pub fn bkey_to_text(out: &mut Printbuf, k: &c::bkey) {
+    prt!(out, "u64s {} type ", k.u64s);
+    match crate::btree::bkey::key_type(k.type_) {
+        Some(t) => prt!(out, "{} ", t.name),
+        None    => prt!(out, "{} ", k.type_),
+    }
+    bpos_to_text(out, k.p);
+    prt!(out, " len {} ver {}", k.size, { k.bversion.lo });
+}
+
+#[c_export]
+pub fn bch2_bkey_to_text(out: &mut Printbuf, k: Option<&c::bkey>) {
+    match k {
+        Some(k) => bkey_to_text(out, k),
+        None    => prt!(out, "(null)"),
+    }
+}
+
+/// bch2_val_to_text(): the value, by its type's to_text - which may not have
+/// validated: printing one that didn't is the point.
+#[cold]
+pub fn val_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    /*
+     * Printing a key that failed to validate is the entire point of being
+     * able to print it, so val_to_text() methods run on unvalidated values
+     * and can't be given a length they may not trust.
+     *
+     * bkey_val_u64s() is (u64s - BKEY_U64s): a __u8 against a size_t, so a
+     * truncated header doesn't yield a small length, it yields a huge one.
+     * bch2_bkey_val_to_text()'s "does it have a value?" test is then
+     * satisfied by precisely the corruption it ought to be catching.
+     */
+    if usize::from(k.k.u64s) < crate::btree::bkey::BKEY_U64S {
+        prt!(out, "(truncated key header: {} u64s)", k.k.u64s);
+        return;
+    }
+
+    let min = min_val_size(k.k.type_);
+    if k.k.val_bytes() < min {
+        prt!(out, "(value too small: {} < {min})", k.k.val_bytes());
+        return;
+    }
+
+    (key_ops(k.k.type_).to_text)(out, fs, k)
+}
+
+#[c_export]
+pub fn bch2_val_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
+    val_to_text(out, c.map(Fs::from_c), k)
+}
+
+/// bch2_bkey_val_to_text(): the header, and the value.
+#[cold]
+pub fn bkey_val_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    if usize::from(k.k.u64s) < crate::btree::bkey::BKEY_U64S {
+        prt!(out, "(invalid, u64s {} < {})", k.k.u64s, crate::btree::bkey::BKEY_U64S);
+        return;
+    }
+
+    bkey_to_text(out, k.k);
+
+    if k.k.val_bytes() != 0 {
+        let mut out = out.indent(2);
+        prt!(out, ": ");
+        val_to_text(&mut out, fs, k);
+    }
+}
+
+#[c_export]
+pub fn bch2_bkey_val_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
+    bkey_val_to_text(out, c.map(Fs::from_c), k)
+}
+
+/// The shortest valid value of type @ty: its struct up to BCH_BKEY_TYPES()'
+/// field, or all of it. A type this code doesn't know has no minimum.
+pub fn min_val_size(ty: u8) -> usize {
+    crate::btree::bkey::key_type(ty).map_or(0, |t| t.min_val_size)
+}
+
+/// bch2_bkey_val_validate(): the value, by its type's validate - checked
+/// first that it's as long as the type's shortest.
+pub fn bkey_val_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+    if v.fs.flags.get(c::bch_fs_flags::BCH_FS_no_invalid_checks) {
+        return Ok(());
+    }
+
+    let (have, min) = (v.k.k.val_bytes(), min_val_size(v.k.k.type_));
+    crate::bkey_fsck_err_on!(v, have < min, crate::init::error::id::bkey_val_size_too_small,
+                             "bad val size ({have} < {min})")?;
+
+    (key_ops(v.k.k.type_).validate)(v)
+}
+
+#[c_export]
+pub fn bch2_bkey_val_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
+    ret_to_c(bkey_val_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
+}
+
+/// bch2_btree_node_type_str(): an interior node's, or a leaf's btree's.
+struct NodeType(Option<Btree>);
+
+impl fmt::Display for NodeType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            None    => f.write_str("internal btree node"),
+            Some(b) => write!(f, "{b}"),
+        }
+    }
+}
+
+/// __bch2_bkey_validate(): the key's header - its type allowed in its btree,
+/// its size and position what its btree's keys' are.
+pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+    use crate::init::error::id;
+    use crate::bkey_fsck_err_on;
+    let k = v.k.k;
+
+    if v.fs.flags.get(c::bch_fs_flags::BCH_FS_no_invalid_checks) {
+        return Ok(());
+    }
+
+    bkey_fsck_err_on!(v, usize::from(k.u64s) < crate::btree::bkey::BKEY_U64S, id::bkey_u64s_too_small,
+                      "u64s too small ({} < {})", k.u64s, crate::btree::bkey::BKEY_U64S)?;
+
+    // a leaf's btree, None for an interior node; past the btrees this code
+    // knows, nothing's known of its keys
+    let btree = (v.from.level == 0).then_some(v.from.btree);
+    if btree.is_some_and(|b| b.0 >= c::BTREE_ID_NR as u32) {
+        return Ok(());
+    }
+
+    let kt = crate::btree::bkey::key_type(k.type_);
+    let strict = v.from.bits.flags().contains(c::bch_validate_flags::BCH_VALIDATE_commit) ||
+        btree.is_none() ||
+        kt.is_some_and(|t| t.flags & c::BKEY_TYPE_strict_btree_checks != 0);
+    let allowed = match btree {
+        None    => [c::bch_bkey_type::KEY_TYPE_deleted, c::bch_bkey_type::KEY_TYPE_btree_ptr,
+                    c::bch_bkey_type::KEY_TYPE_btree_ptr_v2].iter().fold(0, |m, t| m | 1 << t.0),
+        Some(b) => b.key_types(),
+    };
+
+    bkey_fsck_err_on!(v, strict && kt.is_some() && allowed & (1 << k.type_) == 0,
+                      id::bkey_invalid_type_for_btree, "invalid key type for btree {} ({})",
+                      NodeType(btree), kt.map_or("(unknown)", |t| t.name))?;
+
+    if btree.is_some_and(|b| b.is_extents()) && !k.key_type().is_extent_whiteout() {
+        bkey_fsck_err_on!(v, k.size == 0, id::bkey_extent_size_zero, "size == 0")?;
+        bkey_fsck_err_on!(v, u64::from(k.size) > k.p.offset, id::bkey_extent_size_greater_than_offset,
+                          "size greater than offset ({} > {})", k.size, { k.p.offset })?;
+    } else {
+        bkey_fsck_err_on!(v, k.size != 0, id::bkey_size_nonzero, "size != 0")?;
+    }
+
+    if let Some(b) = btree {
+        if b.has_snapshots() {
+            bkey_fsck_err_on!(v, k.p.snapshot == 0, id::bkey_snapshot_zero, "snapshot == 0")?;
+        } else if !b.has_snapshot_field() {
+            bkey_fsck_err_on!(v, k.p.snapshot != 0, id::bkey_snapshot_nonzero, "nonzero snapshot")?;
+        } else {
+            /*
+             * btree uses snapshot field but it's not required to be
+             * nonzero
+             */
+        }
+
+        bkey_fsck_err_on!(v, k.p == crate::btree::bkey::POS_MAX, id::bkey_at_pos_max, "key at POS_MAX")?;
+    }
+    Ok(())
+}
+
+#[c_export]
+pub fn __bch2_bkey_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
+    ret_to_c(bkey_header_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
+}
+
+/// bch2_bkey_validate(): the header, then the value.
+pub fn bkey_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+    bkey_header_validate(v)?;
+    bkey_val_validate(v)
+}
+
+#[c_export]
+pub fn bch2_bkey_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
+    ret_to_c(bkey_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
+}
+
+/// bch2_bkey_swab_val(): the value byte swapped, by its type's swab.
+pub fn bkey_swab_val(fs: Option<&Fs>, k: BkeyS<'_>) {
+    (key_ops(k.k.type_).swab)(fs, k)
+}
+
+#[c_export]
+pub fn bch2_bkey_swab_val(c: Option<&Fs>, k: BkeyS<'_>) {
+    bkey_swab_val(c, k)
+}
+
+/// bch2_bkey_maybe_mergable(): @r might be merged into @l - the same type and
+/// version, @r starting where @l ends.
+fn maybe_mergable(l: &c::bkey, r: &c::bkey) -> bool {
+    l.type_ == r.type_ && { l.bversion } == { r.bversion } && l.p == r.start_pos()
+}
+
+/// bch2_bkey_merge(): @r merged into @l, by its type's merge - if they're
+/// mergable, and the result isn't too big for a key.
+pub fn bkey_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
+    maybe_mergable(l.k, r.k) &&
+        u64::from(l.k.size) + u64::from(r.k.size) <= u64::from(u32::MAX) &&
+        !crate::debug::params::key_merging_disabled() &&
+        (key_ops(l.k.type_).merge)(fs, l, r)
+}
+
+#[c_export]
+pub fn bch2_bkey_merge(c: &Opaque<Fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
+    bkey_merge(Fs::from_c(c), l, r)
 }
 
 /// A key type's methods, by its number: none for a type this code doesn't know.

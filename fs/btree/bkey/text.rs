@@ -87,7 +87,8 @@ pub struct BkeySCToText<'a, 'f, V: ?Sized + BkeyVal = FamilyVal<AllTypes>> {
 
 impl<V: ?Sized + BkeyVal> ToText for BkeySCToText<'_, '_, V> {
     fn to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_bkey_val_to_text(out.as_raw(), self.fs.as_ptr(), self.k.into()) }
+        let k: c::bkey_s_c = self.k.into();
+        crate::btree::bkey_methods::bkey_val_to_text(out, Some(self.fs), unsafe { BkeySC::from_c(&k) })
     }
 }
 
@@ -96,7 +97,7 @@ crate::display_via_to_text!(impl[V: ?Sized + BkeyVal] BkeySCToText<'_, '_, V>);
 /// Without its value.
 impl ToText for c::bkey {
     fn to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_bkey_to_text(out.as_raw(), self) }
+        crate::btree::bkey_methods::bkey_to_text(out, self)
     }
 }
 crate::display_via_to_text!(c::bkey);

@@ -5,11 +5,6 @@
 #include "inode.h"
 #include "fs/quota_gen.h"
 
-#define bch2_bkey_ops_quota ((struct bkey_ops) {	\
-	.key_validate	= bch2_quota_validate,		\
-	.val_to_text	= bch2_quota_to_text,		\
-})
-
 static inline struct bch_qid bch_qid(struct bch_inode_unpacked *u)
 {
 	return (struct bch_qid) {

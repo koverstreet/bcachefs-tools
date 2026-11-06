@@ -5,29 +5,7 @@
 #include "btree/bkey.h"
 
 #include "btree/bkey_methods_gen.h"
-
-extern const char * const bch2_bkey_types[];
-extern const struct bkey_ops bch2_bkey_null_ops;
-
-extern const struct bkey_ops bch2_bkey_ops[];
-
-static inline const struct bkey_ops *bch2_bkey_type_ops(enum bch_bkey_type type)
-{
-	return likely(type < KEY_TYPE_MAX)
-		? &bch2_bkey_ops[type]
-		: &bch2_bkey_null_ops;
-}
-
-int bch2_bkey_val_validate(struct bch_fs *, struct bkey_s_c,
-			   const struct bkey_validate_context *);
-int __bch2_bkey_validate(struct bch_fs *, struct bkey_s_c,
-			 const struct bkey_validate_context *);
-int bch2_bkey_validate(struct bch_fs *, struct bkey_s_c,
-		       const struct bkey_validate_context *);
-void bch2_val_to_text(struct printbuf *, struct bch_fs *,
-		      struct bkey_s_c);
-
-void bch2_bkey_swab_val(const struct bch_fs *c, struct bkey_s);
+#include "btree/compat_gen.h"
 
 static inline bool bch2_bkey_maybe_mergable(const struct bkey *l, const struct bkey *r)
 {
@@ -35,8 +13,6 @@ static inline bool bch2_bkey_maybe_mergable(const struct bkey *l, const struct b
 		!bversion_cmp(l->bversion, r->bversion) &&
 		bpos_eq(l->p, bkey_start_pos(r));
 }
-
-bool bch2_bkey_merge(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 
 static inline int bch2_key_trigger_old(struct btree_trans *trans,
 			enum btree_id btree_id, unsigned level,
@@ -77,11 +53,6 @@ static inline int bch2_key_trigger_new(struct btree_trans *trans,
 		.flags		= BTREE_TRIGGER_insert|flags,
 	});
 }
-
-void bch2_bkey_renumber(enum btree_node_type, struct bkey_packed *, int);
-
-void __bch2_bkey_compat(const struct bch_fs *, unsigned, enum btree_id, unsigned, unsigned,
-			int, struct bkey_format *, struct bkey_packed *);
 
 static inline void bch2_bkey_compat(const struct bch_fs *c, unsigned level, enum btree_id btree_id,
 			       unsigned version, unsigned big_endian,

@@ -27,8 +27,4 @@ static inline u64 bch2_inode_opt_get(struct bch_inode_unpacked *inode,
 	}
 }
 
-#define bch2_bkey_ops_logged_op_inode_opt_propagate ((struct bkey_ops) {	\
-	.val_to_text	= bch2_logged_op_inode_opt_propagate_to_text,	\
-})
-
 #endif /* _BCACHEFS_INODE_OPTS_H */

@@ -5,9 +5,4 @@
 #include "str_hash.h"
 #include "fs/xattr_gen.h"
 
-#define bch2_bkey_ops_xattr ((struct bkey_ops) {	\
-	.key_validate	= bch2_xattr_validate,		\
-	.val_to_text	= bch2_xattr_to_text,		\
-})
-
 #endif /* _BCACHEFS_XATTR_H */

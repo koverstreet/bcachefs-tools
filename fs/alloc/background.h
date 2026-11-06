@@ -98,34 +98,4 @@ static inline const struct bch_alloc_v4 *bch2_alloc_to_v4(struct bkey_s_c k, str
 	return convert;
 }
 
-#define bch2_bkey_ops_alloc ((struct bkey_ops) {	\
-	.key_validate	= bch2_alloc_v1_validate,	\
-	.val_to_text	= bch2_alloc_to_text,		\
-	.trigger	= bch2_trigger_alloc,		\
-})
-
-#define bch2_bkey_ops_alloc_v2 ((struct bkey_ops) {	\
-	.key_validate	= bch2_alloc_v2_validate,	\
-	.val_to_text	= bch2_alloc_to_text,		\
-	.trigger	= bch2_trigger_alloc,		\
-})
-
-#define bch2_bkey_ops_alloc_v3 ((struct bkey_ops) {	\
-	.key_validate	= bch2_alloc_v3_validate,	\
-	.val_to_text	= bch2_alloc_to_text,		\
-	.trigger	= bch2_trigger_alloc,		\
-})
-
-#define bch2_bkey_ops_alloc_v4 ((struct bkey_ops) {	\
-	.key_validate	= bch2_alloc_v4_validate,	\
-	.val_to_text	= bch2_alloc_v4_to_text,	\
-	.swab		= bch2_alloc_v4_swab,		\
-	.trigger	= bch2_trigger_alloc,		\
-})
-
-#define bch2_bkey_ops_bucket_gens ((struct bkey_ops) {	\
-	.key_validate	= bch2_bucket_gens_validate,	\
-	.val_to_text	= bch2_bucket_gens_to_text,	\
-})
-
 #endif /* _BCACHEFS_ALLOC_BACKGROUND_H */

@@ -1043,7 +1043,7 @@ impl Drop for Printbuf {
 
 impl ToText for Bpos {
     fn to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_bpos_to_text(out.as_raw(), *self) }
+        crate::btree::bkey_methods::bpos_to_text(out, *self)
     }
 }
 crate::display_via_to_text!(Bpos);

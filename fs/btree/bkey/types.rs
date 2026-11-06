@@ -647,6 +647,8 @@ pub struct KeyType {
     pub name: &'static str,
     pub flags: u32,
     pub info: &'static StructInfo,
+    /// The shortest a valid value is: BkeyTag's
+    pub min_val_size: usize,
     pub ops: Ops,
 }
 
@@ -656,6 +658,7 @@ macro_rules! key_types {
             let mut t = [None; NR_KEY_TYPES];
             $(t[$nr] = Some(KeyType { nr: $nr, name: stringify!($name), flags: 0 $(| c::$flag)+,
                                       info: <c::[<$name:camel>] as TypeInfo>::INFO,
+                                      min_val_size: <c::[<$name:camel>] as BkeyTag>::MIN_VAL_SIZE,
                                       ops: ops::<c::[<$name:camel>]>() });)*
             t
         };

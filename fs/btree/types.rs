@@ -29,7 +29,7 @@ use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_const, c_enum, c_typed
 use pin_init::{pin_data, PinInit};
 use nestify::nest;
 #[cfg(feature = "std")]
-use std::{ffi::CString, str::FromStr};
+use std::str::FromStr;
 use crate::format::{Bpos, Btree};
 
 /* Btree nodes: */
@@ -1229,15 +1229,8 @@ impl FromStr for c::bch_bkey_type {
     type Err = BchError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = CString::new(s)
-            .map_err(|_| BchError::from(bch_errcode::BCH_ERR_EINVAL_parse_bkey_type))?;
-        let p = s.as_ptr();
-
-        let v = unsafe { c::match_string(c::bch2_bkey_types[..].as_ptr(), (-1_isize) as usize, p) };
-        if v >= 0 {
-            Ok(c::bch_bkey_type(v as u32))
-        } else {
-            Err(bch_errcode::BCH_ERR_EINVAL_parse_bkey_type.into())
-        }
+        crate::btree::bkey::key_type_by_name(s)
+            .map(|t| c::bch_bkey_type(t.nr.into()))
+            .ok_or_else(|| bch_errcode::BCH_ERR_EINVAL_parse_bkey_type.into())
     }
 }

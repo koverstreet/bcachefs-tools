@@ -21,12 +21,6 @@ static inline u64 swab40(u64 x)
 		((x & 0xff00000000ULL) >> 32));
 }
 
-#define bch2_bkey_ops_backpointer ((struct bkey_ops) {	\
-	.key_validate	= bch2_backpointer_validate,	\
-	.val_to_text	= bch2_backpointer_to_text,	\
-	.swab		= bch2_backpointer_swab,	\
-})
-
 /*
  * Convert from pos in backpointer btree to pos of corresponding bucket in alloc
  * btree:

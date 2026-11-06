@@ -355,42 +355,9 @@ DEFINE_CLASS(bch_io_failures, struct bch_io_failures,
 
 /* KEY_TYPE_btree_ptr: */
 
-#define bch2_bkey_ops_btree_ptr ((struct bkey_ops) {		\
-	.key_validate	= bch2_btree_ptr_validate,		\
-	.val_to_text	= bch2_btree_ptr_to_text,		\
-	.swab		= bch2_ptr_swab,			\
-	.trigger	= bch2_trigger_extent,			\
-	.check_repair	= bch2_check_fix_ptrs,			\
-})
-
-#define bch2_bkey_ops_btree_ptr_v2 ((struct bkey_ops) {		\
-	.key_validate	= bch2_btree_ptr_v2_validate,		\
-	.val_to_text	= bch2_btree_ptr_v2_to_text,		\
-	.swab		= bch2_ptr_swab,			\
-	.compat		= bch2_btree_ptr_v2_compat,		\
-	.trigger	= bch2_trigger_extent,			\
-	.check_repair	= bch2_check_fix_ptrs,			\
-})
-
 /* KEY_TYPE_extent: */
 
-#define bch2_bkey_ops_extent ((struct bkey_ops) {		\
-	.key_validate	= bch2_bkey_ptrs_validate,		\
-	.val_to_text	= bch2_bkey_ptrs_to_text,		\
-	.swab		= bch2_ptr_swab,			\
-	.key_merge	= bch2_extent_merge,			\
-	.trigger	= bch2_trigger_extent,			\
-	.check_repair	= bch2_check_fix_ptrs,			\
-})
-
 /* KEY_TYPE_reservation: */
-
-#define bch2_bkey_ops_reservation ((struct bkey_ops) {		\
-	.key_validate	= bch2_reservation_validate,		\
-	.val_to_text	= bch2_reservation_to_text,		\
-	.key_merge	= bch2_reservation_merge,		\
-	.trigger	= bch2_trigger_reservation,		\
-})
 
 /* Generic code for keys with pointers: */
 

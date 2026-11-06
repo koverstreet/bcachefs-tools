@@ -900,7 +900,11 @@ fn validate_c(
 
 #[cold]
 fn inode_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-    let inode = unpack(fs.expect("a filesystem: an inode is unpacked with its options"), k);
+    // with no filesystem - show-super's sb_clean - nothing to report a bad one to
+    let inode = match fs {
+        Some(fs) => unpack(fs, k),
+        None     => try_unpack(k).unwrap_or_else(|(u, _)| u),
+    };
     fields_to_text(out, &inode)
 }
 
@@ -1304,19 +1308,21 @@ impl BkeyOps for c::InodeAllocCursor {
     /// The cursor, and the range it hands out.
     #[cold]
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-        inode_alloc_cursor_to_text(out, fs.expect("a filesystem: the range is its"), k)
+        inode_alloc_cursor_to_text(out, fs, k)
     }
 }
 
 #[cold]
-fn inode_alloc_cursor_to_text(out: &mut Printbuf, fs: &Fs, k: BkeySC<'_>) {
+fn inode_alloc_cursor_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
     let v = k.arm::<c::InodeAllocCursor>().expect("an inode alloc cursor").v();
-
     let idx = v.idx.get();
-    let (min, max) = cursor_range(fs, k.k.p.offset);
 
-    write!(out, "min {min} max {max} consumed {} idx {idx} generation {}",
-           idx.wrapping_sub(min), v.generation.get());
+    // the range is the filesystem's options'
+    if let Some(fs) = fs {
+        let (min, max) = cursor_range(fs, k.k.p.offset);
+        write!(out, "min {min} max {max} consumed {} ", idx.wrapping_sub(min));
+    }
+    write!(out, "idx {idx} generation {}", v.generation.get());
 }
 
 // ── Versions in other snapshots, and the trigger ─────────────────────────

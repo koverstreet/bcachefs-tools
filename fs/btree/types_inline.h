@@ -206,8 +206,6 @@ static inline enum btree_node_type btree_node_type(struct btree *b)
 	return __btree_node_type(b->c.level, b->c.btree_id);
 }
 
-const char *bch2_btree_node_type_str(enum btree_node_type);
-
 /*
  * Mask of btree ids that have snapshots; defined here, ahead of the other
  * btree-id masks below, because the trigger masks build on it: every snapshot

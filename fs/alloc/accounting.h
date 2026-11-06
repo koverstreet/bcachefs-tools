@@ -80,12 +80,6 @@ do {									\
 	bch2_disk_accounting_mod(trans, &pos, _v, ARRAY_SIZE(_v), _gc);	\
 })
 
-#define bch2_bkey_ops_accounting ((struct bkey_ops) {	\
-	.key_validate	= bch2_accounting_validate,	\
-	.val_to_text	= bch2_accounting_to_text,	\
-	.swab		= bch2_accounting_swab,		\
-})
-
 static inline bool bch2_accounting_is_mem(struct disk_accounting_pos *acc)
 {
 	return acc->type < BCH_DISK_ACCOUNTING_TYPE_NR &&

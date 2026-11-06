@@ -80,7 +80,7 @@
 
 mod bpos;
 #[path = "../bkey_c_export.rs"]
-mod c_export;
+pub(crate) mod c_export;
 mod cmp;
 #[cfg(target_arch = "x86_64")]
 mod compile;

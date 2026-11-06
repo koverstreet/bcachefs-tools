@@ -118,7 +118,6 @@ pub mod c {
     pub(crate) use crate::btree::bbpos::{__blbpos_bits_forward};
     pub use crate::btree::bkey_buf::{bkey_buf};
     pub use super::btree_bkey_defs::*;
-    pub use crate::btree::bkey_methods::{bch2_bkey_to_text, bch2_bkey_types, bch2_bkey_val_to_text, bch2_bpos_to_text, bch2_set_bkey_error, bkey_ops};
     pub use super::btree_bkey_types::*;
     pub use crate::btree::node::bset::{BSET_TREE_NR_TYPES, MAX_BSETS};
     pub use super::btree_check_types::*;

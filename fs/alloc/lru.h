@@ -42,11 +42,6 @@ static inline u16 bucket_fragmentation_lru(unsigned dev)
 	return BCH_LRU_BUCKET_FRAGMENTATION_START + dev;
 }
 
-#define bch2_bkey_ops_lru ((struct bkey_ops) {	\
-	.key_validate	= bch2_lru_validate,	\
-	.val_to_text	= bch2_lru_to_text,	\
-})
-
 static inline int bch2_lru_change(struct btree_trans *trans,
 		      u16 lru_id, u64 dev_bucket,
 		      u64 old_time, u64 new_time)

@@ -5,17 +5,6 @@
 #include "snapshots/check_snapshots_gen.h"
 #include "snapshots/delete_gen.h"
 
-#define bch2_bkey_ops_snapshot_tree ((struct bkey_ops) {	\
-	.key_validate	= bch2_snapshot_tree_validate,		\
-	.val_to_text	= bch2_snapshot_tree_to_text,		\
-})
-
-#define bch2_bkey_ops_snapshot ((struct bkey_ops) {		\
-	.key_validate	= bch2_snapshot_validate,		\
-	.val_to_text	= bch2_snapshot_key_to_text,		\
-	.trigger	= bch2_snapshot_trigger,		\
-})
-
 /*
  * The raw state field. A key that predates it reads 0, which matches no state:
  * == SNAPSHOT_STATE_deleted is false for a deleted legacy node, and

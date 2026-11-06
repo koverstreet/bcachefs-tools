@@ -9,7 +9,7 @@ use crate::data_structures::array_vec::ArrayVec;
 use cstruct_macros::c_export;
 
 use crate::btree::bkey::{BkeyI, BkeyV, POS_MIN, SPOS_MAX};
-use crate::btree::bkey_methods::bch2_bkey_validate;
+use crate::init::error::BkeyValidate;
 use crate::btree::cache::{__bch2_btree_node_mem_alloc, bch2_btree_node_data_free, bch2_btree_node_mem_free};
 use crate::btree::journal_overlay;
 use crate::btree::node::BtreeNode;
@@ -513,7 +513,8 @@ fn get_scanned_nodes(fs: &Fs, btree: Btree, level: u32, node_min: Bpos, node_max
 
         let mut from = c::bkey_validate_context { level: (level + 1) as u8, btree, ..Default::default() };
         from.bits.set_from(c::bkey_validate_from::BKEY_VALIDATE_btree_node);
-        assert!(unsafe { bch2_bkey_validate(fs.as_ptr(), k.as_bkey_i().as_sc().into(), &from) } == 0);
+        assert!(crate::btree::bkey_methods::bkey_validate(
+            &BkeyValidate { fs, k: k.as_bkey_i().as_sc().into(), from: &from }).is_ok());
 
         if *nodes_found == 0 {
             prt!(out, "recovering from btree node scan at btree={btree} level={level}\n");

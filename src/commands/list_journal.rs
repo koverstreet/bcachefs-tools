@@ -327,9 +327,7 @@ fn journal_entry_keys_noval_to_text(out: &mut Printbuf, entry: &c::jset_entry) {
             write!(out, "(unknown btree {})", entry.btree_id);
         }
         write!(out, " ");
-        unsafe {
-            c::bch2_bkey_to_text(out.as_raw(), &k.k);
-        }
+        bcachefs_kernel::btree::bkey_methods::bkey_to_text(out, &k.k);
         out.newline();
     }
 }

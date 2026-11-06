@@ -177,7 +177,6 @@ fn main() {
         .blocklist_type("bch_opt_id")
         .blocklist_type("bch_opts.*")
         .allowlist_var("KEY_SPEC_.*")
-        .blocklist_item("bch2_bkey_ops")
         .allowlist_type("bch_.*")
         .allowlist_type("bkey_i_.*")
         .allowlist_type("bkey_s_c_.*")

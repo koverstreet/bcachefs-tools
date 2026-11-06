@@ -8,11 +8,6 @@ int bch2_dirent_validate(struct bch_fs *, struct bkey_s_c,
 			 const struct bkey_validate_context *);
 void bch2_dirent_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
-#define bch2_bkey_ops_dirent ((struct bkey_ops) {	\
-	.key_validate	= bch2_dirent_validate,		\
-	.val_to_text	= bch2_dirent_to_text,		\
-})
-
 #include "fs/dirent_gen.h"
 
 #if IS_ENABLED(CONFIG_UNICODE)

@@ -5,14 +5,6 @@
 #include "data/ec/stripe_gen.h"
 #include "data/ec/trigger_gen.h"
 
-#define bch2_bkey_ops_stripe ((struct bkey_ops) {	\
-	.key_validate	= bch2_stripe_validate,		\
-	.val_to_text	= bch2_stripe_to_text,		\
-	.swab		= bch2_ptr_swab,		\
-	.trigger	= bch2_trigger_stripe,		\
-	.check_repair	= bch2_check_fix_ptrs,		\
-})
-
 /*
  * A stripe's block counts, for btree/check.c's gc until it converts: the
  * layout is trigger.rs's.

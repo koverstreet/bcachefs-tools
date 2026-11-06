@@ -25,12 +25,6 @@ static inline enum bch_subvolume_state bch2_subvolume_state_compat(const struct 
 		: bch2_subvolume_state_from_flags(s);
 }
 
-#define bch2_bkey_ops_subvolume ((struct bkey_ops) {		\
-	.key_validate	= bch2_subvolume_validate,		\
-	.val_to_text	= bch2_subvolume_to_text,		\
-	.trigger	= bch2_subvolume_trigger,		\
-})
-
 static inline struct bkey_s_c
 bch2_btree_iter_peek_in_subvolume_max_type(struct btree_iter *iter, struct bpos end,
 					   u32 subvolid, u32 *snapshot, unsigned flags)
