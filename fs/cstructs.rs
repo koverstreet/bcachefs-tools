@@ -176,7 +176,7 @@ pub mod c {
     pub use super::fs_logged_ops_format::*;
     pub use crate::logged_ops::{bch_fs_logged_ops};
     pub use super::fs_quota_format::*;
-    pub use crate::quota::{KEY_TYPE_QUOTA_NOCHECK, KEY_TYPE_QUOTA_PREALLOC, KEY_TYPE_QUOTA_WARN, Memquota, MemquotaCounter, MemquotaType, QuotaAcctMode, QuotaLimit, Quotas, bch_qid};
+    pub use crate::quota::{Memquota, MemquotaCounter, MemquotaType, QuotaAcctMode, QuotaLimit, Quotas, bch_qid};
     pub use crate::str_hash::{bch_hash_info};
     pub use super::fs_xattr_format::*;
     pub use super::init_damage_format::*;
