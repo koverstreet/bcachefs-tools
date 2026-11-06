@@ -340,7 +340,12 @@ c_enum! {
     #[flags]
     #[prefix(BKEY_TYPE_)]
     pub enum bch_bkey_type_flags: u32 {
-        BKEY_TYPE_strict_btree_checks = 1 << 0,
+        /*
+         * Free to be used in more btrees than list it - deleted, whiteouts,
+         * error, cookie, set: in one that doesn't, it's invalid at commit, not
+         * on read
+         */
+        BKEY_TYPE_generic             = 1 << 0,
         /* Its value has pointers - extent entries: bch2_bkey_ptrs_c()'s types */
         BKEY_TYPE_ptrs                = 1 << 1,
         /* An extents btree may hold it - deleted, and what BCH_BTREE_IDS() allows them */
@@ -391,137 +396,112 @@ tagged_union! {
     pub enum bkey_val {
         /// Transient during btree updates; inserting a deleted key removes any
         /// existing key at that position. Stripped during btree node writes.
-        #[flags(extent)]
+        #[flags(extent, generic)]
         deleted(c::Deleted) = 0,
         /// Blocks visibility of ancestor snapshot versions of a key
-        #[flags(extent)]
+        #[flags(extent, generic)]
         whiteout(c::Whiteout) = 1,
         /// Marks an extent as containing unrecoverable errors
-        #[flags(extent, allocation)]
+        #[flags(extent, allocation, generic)]
         error(c::Error) = 2,
         /// Used by reconcile to track option changes via incrementing version
         /// numbers in the reconcile_scan btree
-        #[flags(extent)]
+        #[flags(extent, generic)]
         cookie(c::Cookie) = 3,
         /// Whiteout for hash table btrees (dirents, xattrs) that preserves hash
         /// chain integrity
-        #[flags(strict_btree_checks)]
         hash_whiteout(c::HashWhiteout) = 4,
         /// Btree node pointer (v1, legacy)
-        #[flags(strict_btree_checks, ptrs, ptrs_mut, btree_ptr)]
+        #[flags(ptrs, ptrs_mut, btree_ptr)]
         btree_ptr(c::BtreePtr) = 5,
         /// File data extent with device pointers, checksums, and optional
         /// compression metadata
-        #[flags(strict_btree_checks, ptrs, ptrs_mut, extent, allocation, data, user_data)]
+        #[flags(ptrs, ptrs_mut, extent, allocation, data, user_data)]
         extent(c::Extent) = 6,
         /// Disk space reservation for a file region
-        #[flags(strict_btree_checks, extent, allocation, user_data)]
+        #[flags(extent, allocation, user_data)]
         reservation(c::Reservation) = 7,
         /// Inode metadata (v1, legacy)
-        #[flags(strict_btree_checks)]
         inode(c::Inode) = 8,
         /// Tracks generation numbers for deleted inodes
-        #[flags(strict_btree_checks)]
         inode_generation(c::InodeGeneration) = 9,
         /// Directory entry with name hash, inode number, and type
-        #[flags(strict_btree_checks)]
         dirent(c::Dirent) = 10,
         /// Extended attribute with name hash and value
-        #[flags(strict_btree_checks)]
         xattr(c::Xattr) = 11,
         /// Bucket allocation metadata (v1, legacy)
-        #[flags(strict_btree_checks)]
         alloc(c::Alloc) = 12,
         /// Quota counters for a user, group, or project
-        #[flags(strict_btree_checks)]
         quota(c::Quota) = 13,
         /// Erasure code stripe metadata with parity pointers
-        #[flags(strict_btree_checks, ptrs)]
+        #[flags(ptrs)]
         stripe(c::Stripe) = 14,
         /// Pointer from the extents btree to an indirect extent in the reflink
         /// btree
-        #[flags(strict_btree_checks, extent, allocation, data)]
+        #[flags(extent, allocation, data)]
         reflink_p(c::ReflinkP) = 15,
         /// Indirect extent with refcount in the reflink btree
-        #[flags(strict_btree_checks, ptrs, ptrs_mut, extent, indirect, allocation, data)]
+        #[flags(ptrs, ptrs_mut, extent, indirect, allocation, data)]
         reflink_v(c::ReflinkV) = 16,
         /// Small file data stored inline in the btree
-        #[flags(strict_btree_checks, extent, allocation, data, user_data, inline_data)]
+        #[flags(extent, allocation, data, user_data, inline_data)]
         inline_data(c::InlineData) = 17,
         /// Btree node pointer (v2) with sequence number and min_key for more
         /// efficient traversal
-        #[flags(strict_btree_checks, ptrs, ptrs_mut, btree_ptr)]
+        #[flags(ptrs, ptrs_mut, btree_ptr)]
         btree_ptr_v2(c::BtreePtrV2) = 18,
         /// Reflinked inline data with refcount
-        #[flags(strict_btree_checks, extent, indirect, allocation, data, inline_data)]
+        #[flags(extent, indirect, allocation, data, inline_data)]
         indirect_inline_data(c::IndirectInlineData) = 19,
         /// Bucket allocation metadata (v2, legacy)
-        #[flags(strict_btree_checks)]
         alloc_v2(c::AllocV2) = 20,
         /// Subvolume metadata with root inode and snapshot ID
-        #[flags(strict_btree_checks)]
         subvolume(c::Subvolume) = 21,
         /// Snapshot tree node with parent, children, and subvolume references
-        #[flags(strict_btree_checks)]
         snapshot(c::Snapshot) = 22,
         /// Inode metadata (v2) with journal sequence number
-        #[flags(strict_btree_checks)]
         inode_v2(c::InodeV2) = 23,
         /// Bucket allocation metadata (v3, legacy)
-        #[flags(strict_btree_checks)]
         alloc_v3(c::AllocV3) = 24,
         /// Empty value; presence of the key is the information
-        #[flags(extent)]
+        #[flags(extent, generic)]
         set(c::Set) = 25,
         /// LRU tracking entry for cache eviction
-        #[flags(strict_btree_checks)]
         lru(c::Lru) = 26,
         /// Bucket allocation metadata (v4, current)
-        #[flags(strict_btree_checks)]
         alloc_v4(c::AllocV4) = 27,
         /// Reverse pointer from a bucket back to the extent referencing it
-        #[flags(strict_btree_checks)]
         backpointer(c::Backpointer) = 28,
         /// Inode metadata (v3, current) with compact encoding
-        #[flags(strict_btree_checks)]
         inode_v3(c::InodeV3) = 29,
         /// Packed bucket generation numbers (256 per key)
-        #[flags(strict_btree_checks)]
         bucket_gens(c::BucketGens) = 30,
         /// Root entry for a snapshot tree structure
-        #[flags(strict_btree_checks)]
         snapshot_tree(c::SnapshotTree) = 31,
         /// Logged truncate operation for crash recovery
-        #[flags(strict_btree_checks)]
         logged_op_truncate(c::LoggedOpTruncate) = 32,
         /// Logged file insert/collapse operation for crash recovery
-        #[flags(strict_btree_checks)]
         logged_op_finsert(c::LoggedOpFinsert) = 33,
         /// Disk accounting delta (replicas, compression, device usage)
-        #[flags(strict_btree_checks)]
         accounting(c::Accounting) = 34,
         /// Per-CPU inode number allocation cursor
-        #[flags(strict_btree_checks)]
         inode_alloc_cursor(c::InodeAllocCursor) = 35,
         /// Whiteout specific to the extents btree, blocking visibility of
         /// ancestor snapshot extent versions
-        #[flags(strict_btree_checks, extent)]
+        #[flags(extent)]
         extent_whiteout(c::ExtentWhiteout) = 36,
         /// Logged stripe creation/update operation for crash recovery
-        #[flags(strict_btree_checks)]
         logged_op_stripe_update(c::LoggedOpStripeUpdate) = 37,
         /// Errors that damaged an inode, recorded in the same transaction as
         /// the repair that did the damage: a sorted list of bch_sb_error_id
-        #[flags(strict_btree_checks)]
         damage(c::Damage) = 38,
         /// Logged propagation of inode io options to ancestor snapshot versions
-        #[flags(strict_btree_checks)]
         logged_op_inode_opt_propagate(c::LoggedOpInodeOptPropagate) = 39,
         /// Small file data stored inline in the btree, with its own checksum
-        #[flags(strict_btree_checks, extent, allocation, data, user_data, inline_data)]
+        #[flags(extent, allocation, data, user_data, inline_data)]
         inline_data_v2(c::InlineDataV2) = 40,
         /// Reflinked inline data with refcount and its own checksum
-        #[flags(strict_btree_checks, extent, indirect, allocation, data, inline_data)]
+        #[flags(extent, indirect, allocation, data, inline_data)]
         indirect_inline_data_v2(c::IndirectInlineDataV2) = 41,
     }
 }

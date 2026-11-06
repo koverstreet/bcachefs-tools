@@ -272,7 +272,7 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let kt = crate::btree::bkey::key_type(k.type_);
     let strict = v.from.bits.flags().contains(c::bch_validate_flags::BCH_VALIDATE_commit) ||
         btree.is_none() ||
-        kt.is_some_and(|t| t.flags & c::BKEY_TYPE_strict_btree_checks != 0);
+        kt.is_some_and(|t| t.flags & c::BKEY_TYPE_generic == 0);
     let allowed = match btree {
         None    => [c::bch_bkey_type::KEY_TYPE_deleted, c::bch_bkey_type::KEY_TYPE_btree_ptr,
                     c::bch_bkey_type::KEY_TYPE_btree_ptr_v2].iter().fold(0, |m, t| m | 1 << t.0),
