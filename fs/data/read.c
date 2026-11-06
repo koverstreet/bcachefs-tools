@@ -1093,16 +1093,24 @@ static inline int read_extent_done(struct bch_read_bio *rbio, enum bch_read_flag
 
 /*
  * An inline data extent with its own checksum failed it: there's no other copy
- * to read, so the read fails. In the retry path, the retry reports it.
+ * to read, so the read fails. In the retry path, the retry reports it, and
+ * records the damage.
+ *
+ * The key is poisoned, its damage recorded in the same transaction: once, by
+ * whichever read's poisoning commits first - reads of it fail early after.
  */
 static noinline int read_extent_inline_csum_err(struct btree_trans *trans,
 						struct bch_read_bio *rbio,
 						struct bpos read_pos,
+						enum btree_id data_btree,
 						struct bkey_s_c k,
 						enum bch_read_flags flags,
 						int ret, struct printbuf *csum_err)
 {
 	struct bch_fs *c = trans->c;
+
+	bch2_inline_data_poison(c, data_btree, k, read_pos,
+				!(flags & BCH_READ_in_retry) && !rbio->data_update);
 
 	if (rbio->err_report) {
 		mutex_lock(&rbio->err_report->lock);
@@ -1128,6 +1136,7 @@ static noinline int read_extent_inline(struct btree_trans *trans,
 				       struct bch_read_bio *rbio,
 				       struct bvec_iter iter,
 				       struct bpos read_pos,
+				       enum btree_id data_btree,
 				       struct bkey_s_c k,
 				       unsigned offset_into_extent,
 				       enum bch_read_flags flags)
@@ -1140,10 +1149,15 @@ static noinline int read_extent_inline(struct btree_trans *trans,
 		bch2_read_bio_to_text_atomic(&buf, rbio);
 	}));
 
+	if (unlikely(bch2_inline_data_poisoned(k)) &&
+	    !(flags & BCH_READ_no_poison_check))
+		return read_extent_done(rbio, flags, bch_err_throw(c, extent_poisoned));
+
 	CLASS(printbuf, csum_err)();
 	int ret = bch2_inline_data_verify(c, k, &csum_err);
 	if (unlikely(ret))
-		return read_extent_inline_csum_err(trans, rbio, read_pos, k, flags, ret, &csum_err);
+		return read_extent_inline_csum_err(trans, rbio, read_pos, data_btree, k,
+						   flags, ret, &csum_err);
 
 	/* past the data, zeroes: */
 	unsigned bytes;
@@ -1244,7 +1258,8 @@ int __bch2_read_extent(struct btree_trans *trans,
 	int ret = 0;
 
 	if (bch2_bkey_is_inline_data(k.k))
-		return read_extent_inline(trans, orig, iter, read_pos, k, offset_into_extent, flags);
+		return read_extent_inline(trans, orig, iter, read_pos, data_btree, k,
+					  offset_into_extent, flags);
 
 	if (unlikely((bch2_bkey_extent_flags(k) & BIT_ULL(BCH_EXTENT_FLAG_poisoned))) &&
 	    !orig->data_update) {

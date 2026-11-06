@@ -208,7 +208,7 @@ fn sanitize_val(fs: &Fs, mut k: BkeyS, opts: SanitizeOpts) -> bool {
                 d.data.fill(0);
                 // zeroed, so no checksum: else every read of it fails
                 if let Some(h) = d.csum {
-                    *h = c::InlineDataCsum { offset: h.offset, ..Default::default() };
+                    *h = c::InlineDataCsum { flags: h.flags, offset: h.offset, ..Default::default() };
                 }
             }
             true

@@ -418,16 +418,22 @@ pub struct InlineData {
  * data[]: the btree node's checksum covers a whole bset, and a node read past a
  * bad one is rewritten, so this is what can still say which key's data went bad.
  * Never an encryption type: an encrypted fs encrypts the node.
+ *
+ * BCH_INLINE_DATA_POISONED in @flags: it failed its checksum, and its damage was
+ * recorded - reads of it fail without checking it again.
  */
 #[repr(C)]
 #[c_name(bch_inline_data_csum)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct InlineDataCsum {
     pub csum_type: u8,
-    pub pad: [u8; 3],
+    pub flags: u8,
+    pub pad: [u8; 2],
     pub offset: Le32,
     pub csum: c::bch_csum,
 }
+
+pub const BCH_INLINE_DATA_POISONED: u8 = 1 << 0;
 
 #[whole(tail = data: [u8], bkey)]
 #[repr(C)]

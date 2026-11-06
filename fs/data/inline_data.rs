@@ -6,18 +6,26 @@
 //! their _v2 types carry a checksum of their own over data[]: a node's bset
 //! checksum can't say which of its keys went bad.
 
-use crate::bkey_fsck_err_on;
-use crate::btree::bkey::{BkeyFamily, BkeyS, BkeySC, BkeyV, ByFlag, FamilyVal, FieldOffsets};
+use crate::alloc::capacity::DiskReservation;
+use crate::btree::bkey::{BkeyFamily, BkeyS, BkeySC, BkeyV, BkeyVMut, ByFlag, FamilyVal, FieldOffsets};
+use crate::btree::bkey_buf::BtreeKeyBuf;
 use crate::btree::bkey::BkeyOps;
+use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, UpdateTriggerFlags};
 use crate::c;
 use crate::data::checksum::csum_err_msg;
 use crate::errcode::{ret_to_c, BchError};
-use crate::fs::Fs;
+use crate::format::{Bpos, Btree};
+use crate::fs::{Fs, WriteRef};
+use crate::init::damage;
 use crate::init::error::{id, BkeyValidate};
-use crate::prt;
+use crate::util::backref::BackRef;
 use crate::util::ffi::Opaque;
+use crate::util::refcount::TryRefcount;
+use crate::util::task::{spawn_static, Spawn};
 use crate::util::vstructs::{cast_plain, cast_plain_mut};
+use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
+use crate::{bch_err_ratelimited, bkey_fsck_err_on, btree_trans, prt};
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::c_export;
 
@@ -81,6 +89,9 @@ impl<'a> InlineDataRef<'a> {
             prt!(out, "csum {ty} ");
             h.csum.to_text(out, ty);
             prt!(out, " offset {} ", h.offset.get());
+            if h.poisoned() {
+                prt!(out, "poisoned ");
+            }
         }
         prt!(out, "datalen {}: ", self.data.len());
         for b in &self.data[..self.data.len().min(32)] {
@@ -133,6 +144,10 @@ impl c::InlineDataCsum {
         };
         Self { csum_type: ty.0 as u8, csum: ty.checksum_unkeyed(data), ..Default::default() }
     }
+
+    pub fn poisoned(&self) -> bool {
+        self.flags & c::BCH_INLINE_DATA_POISONED != 0
+    }
 }
 
 pub(crate) fn csum_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
@@ -170,10 +185,68 @@ pub fn bch2_inline_data_from(k: BkeySC<'_>, skip: c_uint, len: &mut c_uint) -> *
     data.as_ptr()
 }
 
+#[c_export]
+pub fn bch2_inline_data_poisoned(k: BkeySC<'_>) -> bool {
+    InlineDataRef::of(k).expect("inline data").csum.is_some_and(|h| h.poisoned())
+}
+
 /// For a read of @k: 0, or data_read_csum_err with the mismatch in @out.
 #[c_export]
 pub fn bch2_inline_data_verify(c: &Opaque<Fs>, k: BkeySC<'_>, out: &mut Printbuf) -> c_int {
     let Err(e) = InlineDataRef::of(k).expect("inline data").verify() else { return 0 };
     e.to_text(out);
     ret_to_c(Fs::from_c(c).throw::<()>(c::bch_errcode::BCH_ERR_data_read_csum_err))
+}
+
+/// @k, in @btree, failed its checksum, read at @read_pos: poisoned, and with
+/// @record its damage recorded at @read_pos, in the one transaction - so a
+/// key's damage is recorded once, as it's poisoned, however many reads fail
+/// on it before that's committed. In a task: a read may hold page locks a
+/// commit mustn't wait under. Nothing on a read-only filesystem, as a
+/// pointer extent's poisoning.
+#[c_export]
+pub fn bch2_inline_data_poison(c: &Opaque<Fs>, btree: Btree, k: BkeySC<'_>, read_pos: Bpos, record: bool) {
+    let fs = Fs::from_c(c);
+    let Some(write) = fs.writes.tryget_live() else { return };
+    // the task holds it, and its write ref: going read-only waits for that
+    let fs_ref = unsafe { BackRef::new(fs) };
+    let key = BtreeKeyBuf::new(btree, 0, k);
+
+    if let Err(e) = spawn_static(Spawn::Queue(Queue::system_dfl()), poison(write, fs_ref, key, read_pos, record)) {
+        bch_err_ratelimited!(fs, "poisoning inline data that failed its checksum: {}", e.msg());
+    }
+}
+
+async fn poison(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, read_pos: Bpos, record: bool) {
+    let fs = &*fs;
+    let trans = btree_trans!(fs);
+    // an extents update commits with a reservation: an empty one, the key's
+    // size unchanged
+    let res = DiskReservation::new(fs);
+    let ret = commit_do(&trans, Some(&res), CommitFlags::empty(), |t| {
+        let read = key.key();
+        let mut iter = BtreeIter::new(t, key.btree, read.k.start_pos(), BtreeIterFlags::INTENT);
+
+        // the key read, not one written since - and not poisoned already: by
+        // another read's task, or before a no_poison_check read
+        let Some(k) = iter.peek_slot(t)?.filter(|k| k.and_val_eq(read)) else { return Ok(()) };
+
+        let mut n = t.bkey_make_mut_noupdate(k)?;
+        let h = InlineDataMut::of(n.as_s()).and_then(|d| d.csum).expect("inline data with a checksum");
+        if h.poisoned() {
+            return Ok(());
+        }
+        h.flags |= c::BCH_INLINE_DATA_POISONED;
+        t.update(&iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+
+        if record {
+            damage::record(t, read_pos, id::data_read_csum_err)?;
+        }
+        Ok(())
+    });
+
+    if let Some(e) = ret.err().filter(|e| !e.matches(c::EROFS)) {
+        bch_err_ratelimited!(fs, "poisoning inline data that failed its checksum: {}\n  {}",
+                             e.msg(), key.key().to_text(fs));
+    }
 }
