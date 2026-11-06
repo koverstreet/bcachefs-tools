@@ -15,7 +15,7 @@ use crate::debug::params::debug_check_btree_locking;
 use crate::errcode::{bch_errcode, errptr_or_null, ret_to_c, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
-use crate::locking::six::{__six_lock_init, six_lock_counts, SixHold};
+use crate::locking::six::{__six_lock_init, six_lock_contended, six_lock_counts, six_lock_ip_waiter, SixHold};
 use crate::locking::{memalloc_flags_restore, memalloc_flags_save, rust_six_lockdep_set_notrack_class, ExclusiveGuard, Locked,
                      RawTimedLock, PF_MEMALLOC_NOIO};
 use crate::prt;
@@ -1203,6 +1203,26 @@ pub fn bch2_btree_node_lock_slowpath(trans: &BtreeTrans<'_>, #[lent(trans)] path
                                      path: *mut BtreePath, b: &c::btree_bkey_cached_common, level: c_uint,
                                      ty: c::six_lock_type) -> c_int {
     ret_to_c(trans.node_lock_slowpath(paths, trans.path_idx_of(path), b, level as usize, ty))
+}
+
+/// @b's lock as @ty, with no path to record it - C records it - waited for,
+/// past C's trylock if @contended.
+#[c_export]
+pub fn bch2_btree_node_lock_nopath(trans: &BtreeTrans<'_>, b: &c::btree_bkey_cached_common, ty: c::six_lock_type,
+                                   lock_may_not_fail: bool, ip: c_ulong, contended: bool) -> c_int {
+    ret_to_c(trans.node_lock_nopath(b, lock_may_not_fail, |wait, should_sleep_fn| {
+        let lock = b.lock.six();
+        match unsafe {
+            if contended {
+                six_lock_contended(lock, ty, wait.as_ptr(), should_sleep_fn, ip)
+            } else {
+                six_lock_ip_waiter(lock, ty, wait.as_ptr(), should_sleep_fn, ip)
+            }
+        } {
+            0 => Ok(()),
+            e => Err(e),
+        }
+    }))
 }
 
 #[c_export]

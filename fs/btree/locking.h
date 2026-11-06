@@ -271,40 +271,7 @@ static inline int btree_node_lock_nopath(struct btree_trans *trans,
 					 unsigned long ip,
 					 bool contended)
 {
-	trans->lock_may_not_fail = lock_may_not_fail;
-	trans->lock_must_abort	= false;
-	trans->locking		= b;
-
-	/* trans->locking_hash_val is set by the caller; it must be the
-	 * hash of the key used to look up this node (not the node's
-	 * current hash_val), so that bch2_six_check_for_deadlock catches
-	 * the case where the node was reclaimed AND re-hashed to a new
-	 * identity. 0 disables the check (lock_root, cached, relock). */
-
-	int ret = !contended
-		? six_lock_ip_waiter(&b->lock, type, &trans->locking_wait, bch2_six_check_for_deadlock, ip)
-		: six_lock_contended(&b->lock, type, &trans->locking_wait, bch2_six_check_for_deadlock, ip);
-
-	BUG_ON(lock_may_not_fail && ret);
-
-	if (unlikely(ret == -ENOMEM))
-		ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_lock_waitlist_alloc);
-
-	WRITE_ONCE(trans->locking, NULL);
-
-	trans_maybe_disable_migrate(trans);
-
-#ifdef CONFIG_BCACHEFS_DEBUG
-	event_trace(trans->c, btree_path_lock, buf,
-		prt_printf(&buf, "%s ret %s\n"
-			   "btree %s level %u lock seq %u node %px",
-			   trans->fn, bch2_err_str(ret),
-			   bch2_btree_id_str(b->btree_id),
-			   b->level,
-			   six_lock_seq(&b->lock),
-			   b));
-#endif
-	return ret;
+	return bch2_btree_node_lock_nopath(trans, b, type, lock_may_not_fail, ip, contended);
 }
 
 static inline int btree_node_lock(struct btree_trans *trans,
