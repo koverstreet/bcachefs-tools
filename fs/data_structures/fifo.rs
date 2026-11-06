@@ -208,6 +208,13 @@ impl<T, I: FifoIdx> Fifo<T, I> {
         }
     }
 
+    /// Its free slots, each as @f makes it - entries they aren't, still: for
+    /// a fifo whose C reads the slot at back.
+    pub fn init_spare(&mut self, mut f: impl FnMut(&mut MaybeUninit<T>)) {
+        let (a, b) = self.spare_mut();
+        a.iter_mut().chain(b).for_each(&mut f);
+    }
+
     /// @n slots from index @i: where the first stretch starts, its length,
     /// and the length of the second, from the buffer's start.
     fn stretches(&self, i: I, n: usize) -> (usize, usize, usize) {
