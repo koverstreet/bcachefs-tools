@@ -49,6 +49,18 @@ c_extern! {
     pub fn bch2_journal_halt(j: *mut c::journal);
     pub fn bch2_journal_halt_locked(j: *mut c::journal);
     pub fn bch2_journal_add_rewind_range(c: *mut Fs, start: u64, end: u64) -> c_int;
+    pub fn bch2_journal_block(j: *mut c::journal);
+    pub fn bch2_journal_unblock(j: *mut c::journal);
+}
+
+/// The journal blocked, as long as it lives: no reservations, the open entry
+/// closed and its writes quiesced. Blocks nest.
+pub struct JournalBlocked<'a>(&'a c::journal);
+
+impl Drop for JournalBlocked<'_> {
+    fn drop(&mut self) {
+        unsafe { bch2_journal_unblock(self.0.as_ptr()) }
+    }
 }
 
 impl c::journal {
@@ -60,6 +72,11 @@ impl c::journal {
     pub fn halted(&self) -> bool {
         self.lock.hot.reservations.load(Ordering::Relaxed) & u64::from(c::JOURNAL_ENTRY_OFFSET_MAX) ==
             u64::from(c::JOURNAL_ENTRY_ERROR_VAL)
+    }
+
+    pub fn block(&self) -> JournalBlocked<'_> {
+        unsafe { bch2_journal_block(self.as_ptr()) };
+        JournalBlocked(self)
     }
 
     /// journal_shutdown if it's halted: bch2_journal_error().
