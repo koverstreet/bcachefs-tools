@@ -286,15 +286,12 @@ fn sanitize_btree(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result
     let bset_magic = fs.sb_lock().sb().bset_magic();
     let block_bits = fs.block_bits();
 
-    // The node's packed-key format lives in the btree_node header at the start
-    // of the buffer; packed keys are unpacked against it.
-    let format_ptr = unsafe {
-        buf.as_ptr().add(std::mem::offset_of!(Head<c::btree_node>, format)) as *const c::bkey_format
-    };
+    // The node's packed-key format, from the btree_node header at the start of
+    // the buffer, once it's decrypted: packed keys are unpacked against it.
+    let mut format = c::bkey_format::default();
 
     let mut first = true;
     let mut seq: u64 = 0;
-    let mut format_key_u64s = c::BKEY_U64s;
     let mut pos = 0;
     let mut bset_byte_offset: usize = 0;
 
@@ -311,7 +308,6 @@ fn sanitize_btree(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result
                 break;
             }
             let n = c::btree_node::<Unvalidated>::from_bytes(&buf[pos..]).map_err(|e| overrun(pos, e))?;
-            format_key_u64s = n.format.key_u64s as usize;
             seq = n.keys.seq.get();
             (pos + std::mem::offset_of!(Head<c::btree_node>, keys), n.bytes(), n.sectors(block_bits),
              n.keys.csum_type() as u32)
@@ -336,6 +332,11 @@ fn sanitize_btree(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result
             modified = true;
         }
 
+        // the node's header from its flags on is encrypted with its first bset
+        if first {
+            format = cast_plain::<Head<c::btree_node>>(buf).expect("a btree node's header, read above").format;
+        }
+
         // Walk packed keys in bset data region
         let key_end = pos + vstruct_bytes;
         let mut key_pos = bset_off + std::mem::size_of::<Head<c::bset>>();
@@ -354,7 +355,7 @@ fn sanitize_btree(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result
             // KEY_FORMAT_LOCAL_BTREE (0) uses the btree node's packed format;
             // anything else (KEY_FORMAT_CURRENT = 1) is the canonical
             // unpacked layout.
-            let key_hdr_u64s = if key_format == 0 { format_key_u64s } else { c::BKEY_U64s };
+            let key_hdr_u64s = if key_format == 0 { format.key_u64s as usize } else { c::BKEY_U64s };
             let val_off = key_hdr_u64s * 8;
 
             if val_off < key_bytes {
@@ -371,7 +372,7 @@ fn sanitize_btree(fs_raw: *mut Fs, buf: &mut [u8], opts: SanitizeOpts) -> Result
                         .and_then(BkeyP::from_slice)
                         .ok_or_else(|| anyhow!("btree node bset at {pos:#x}: key at {key_pos:#x} not 8 byte aligned"))?;
 
-                    u = unsafe { &*format_ptr }.unpack_key(key);
+                    u = format.unpack_key(key);
                     let v = unsafe { buf.as_mut_ptr().add(vs) as *mut c::bch_val };
                     // SAFETY: the value after the packed key, in the node's
                     // buffer: as long as the unpacked key's u64s says
