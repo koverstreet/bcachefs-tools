@@ -618,19 +618,26 @@ macro_rules! warn_on_once {
     }};
 }
 
-/// As C's WARN_ONCE(): warn_on_once!(), with @msg logged before the warning.
-/// Evaluates to @cond.
+/// As C's WARN_ONCE(): warn_on_once!(), with @msg logged before the warning -
+/// of @fs, or of none: no_fs. Evaluates to @cond.
 #[macro_export]
 macro_rules! warn_once {
-    ($cond:expr, $fs:expr, $($msg:tt)*) => {{
+    (@once $cond:expr, $log:expr) => {{
         static WARNED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
         let cond: bool = $cond;
         if cond && !WARNED.swap(true, core::sync::atomic::Ordering::Relaxed) {
-            $crate::bch_err!($fs, $($msg)*);
+            $log;
             $crate::warn_on!(true);
         }
         cond
     }};
+    ($cond:expr, no_fs, $($msg:tt)*) => {
+        $crate::warn_once!(@once $cond,
+            $crate::util::log::log_no_fs($crate::util::log::LogLevel::ERR, $crate::message!($($msg)*)))
+    };
+    ($cond:expr, $fs:expr, $($msg:tt)*) => {
+        $crate::warn_once!(@once $cond, $crate::bch_err!($fs, $($msg)*))
+    };
 }
 
 /// The name of the function this is expanded in, as C's __func__ - the
