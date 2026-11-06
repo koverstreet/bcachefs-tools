@@ -379,7 +379,6 @@ c_xmacro! {
         (EINVAL, EINVAL_journal_replay_key_bad_btree_depth, 310),
         (EINVAL, EINVAL_dev_resize_shrink, 311),
         (EINVAL, EINVAL_missing_new_extent_overwrite, 312),
-        (EINVAL, EINVAL_version_min_too_old, 313),
         (EINVAL, EINVAL_block_size_needs_thp, 314),
         (EINVAL, EINVAL_utf8_load_failed, 315),
         (EINVAL, EINVAL_casefolding_no_unicode, 316),

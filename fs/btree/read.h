@@ -95,68 +95,13 @@ void bch2_btree_read_bio_to_text(struct printbuf *, struct btree_read_bio *);
 
 bool bch2_btree_flush_all_reads(struct bch_fs *);
 
-static inline void compat_bformat(unsigned level, enum btree_id btree_id,
-				  unsigned version, unsigned big_endian,
-				  int write, struct bkey_format *f)
+/* A node header as a machine of @big_endian wrote it, made this one's, or back */
+static inline void compat_btree_node(unsigned big_endian, struct btree_node *bn)
 {
-	if (version < bcachefs_metadata_version_inode_btree_change &&
-	    btree_id == BTREE_ID_inodes) {
-		swap(f->bits_per_field[BKEY_FIELD_INODE],
-		     f->bits_per_field[BKEY_FIELD_OFFSET]);
-		swap(f->field_offset[BKEY_FIELD_INODE],
-		     f->field_offset[BKEY_FIELD_OFFSET]);
+	if (big_endian != CPU_BIG_ENDIAN) {
+		bch2_bpos_swab(&bn->min_key);
+		bch2_bpos_swab(&bn->max_key);
 	}
-
-	if (version < bcachefs_metadata_version_snapshot &&
-	    (level || btree_type_has_snapshots(btree_id))) {
-		u64 max_packed =
-			~(~0ULL << f->bits_per_field[BKEY_FIELD_SNAPSHOT]);
-
-		f->field_offset[BKEY_FIELD_SNAPSHOT] = write
-			? 0
-			: cpu_to_le64(U32_MAX - max_packed);
-	}
-}
-
-static inline void compat_bpos(unsigned level, enum btree_id btree_id,
-			       unsigned version, unsigned big_endian,
-			       int write, struct bpos *p)
-{
-	if (big_endian != CPU_BIG_ENDIAN)
-		bch2_bpos_swab(p);
-
-	if (version < bcachefs_metadata_version_inode_btree_change &&
-	    btree_id == BTREE_ID_inodes)
-		swap(p->inode, p->offset);
-}
-
-static inline void compat_btree_node(unsigned level, enum btree_id btree_id,
-				     unsigned version, unsigned big_endian,
-				     int write,
-				     struct btree_node *bn)
-{
-	if (version < bcachefs_metadata_version_inode_btree_change &&
-	    btree_id_is_extents(btree_id) &&
-	    !bpos_eq(bn->min_key, POS_MIN) &&
-	    write)
-		bn->min_key = bpos_nosnap_predecessor(bn->min_key);
-
-	if (version < bcachefs_metadata_version_snapshot &&
-	    write)
-		bn->max_key.snapshot = 0;
-
-	compat_bpos(level, btree_id, version, big_endian, write, &bn->min_key);
-	compat_bpos(level, btree_id, version, big_endian, write, &bn->max_key);
-
-	if (version < bcachefs_metadata_version_snapshot &&
-	    !write)
-		bn->max_key.snapshot = U32_MAX;
-
-	if (version < bcachefs_metadata_version_inode_btree_change &&
-	    btree_id_is_extents(btree_id) &&
-	    !bpos_eq(bn->min_key, POS_MIN) &&
-	    !write)
-		bn->min_key = bpos_nosnap_successor(bn->min_key);
 }
 
 #endif /* _BCACHEFS_BTREE_READ_H */

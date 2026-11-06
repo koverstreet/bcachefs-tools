@@ -533,7 +533,8 @@ fn sb_compatible(sb: &Head<bch_sb>, out: &mut Printbuf) -> Result<(), BchError> 
 
     for (what, v) in [("version", v), ("version_min", v_min)] {
         sb_err_on!(out, !version_compatible(v), BCH_ERR_invalid_sb_version,
-                   "Unsupported superblock {what} {} (min {min}, max {current})", version(v))?;
+                   "Unsupported superblock {what} {} (min {min}, max {current}){}", version(v),
+                   if v < min.0 as u16 { "; upgrade it with an older bcachefs-tools' fsck" } else { "" })?;
     }
 
     sb_err_on!(out, v_min > v, BCH_ERR_invalid_sb_version,

@@ -642,7 +642,6 @@ impl Fs {
     fn opt_version_init(&self, out: &mut Printbuf) -> Result<(), BchError> {
         use c::bch_fs_flags as Flag;
         use c::bch_sb_feature as Feature;
-        use c::bcachefs_metadata_version as Version;
         let opts = self.opts();
 
         {
@@ -738,12 +737,6 @@ impl Fs {
             if !self.feature(Feature::BCH_FEATURE_new_extent_overwrite) {
                 prt!(out, "feature new_extent_overwrite not set, filesystem no longer supported\n");
                 return self.throw(bch_errcode::BCH_ERR_EINVAL_missing_new_extent_overwrite);
-            }
-
-            if u32::from(self.sb.version_min.get()) < Version::bcachefs_metadata_version_btree_ptr_sectors_written.0 {
-                prt!(out, "version_min < version_btree_ptr_sectors_written\n");
-                prt!(out, "filesystem needs upgrade from older version; run fsck from older bcachefs-tools to fix\n");
-                return self.throw(bch_errcode::BCH_ERR_EINVAL_version_min_too_old);
             }
         }
 

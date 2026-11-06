@@ -402,8 +402,7 @@ int bch2_validate_bset(struct bch_fs *c, struct bch_dev *ca,
 			     "incorrect level");
 
 		if (!write)
-			compat_btree_node(b->c.level, b->c.btree_id, version,
-					  BSET_BIG_ENDIAN(i), write, bn);
+			compat_btree_node(BSET_BIG_ENDIAN(i), bn);
 
 		if (b->key.k.type == KEY_TYPE_btree_ptr_v2) {
 			struct bch_btree_ptr_v2 *bp =
@@ -434,8 +433,7 @@ int bch2_validate_bset(struct bch_fs *c, struct bch_dev *ca,
 			      bch2_bpos_to_text(&buf1, bn->max_key), buf1.buf));
 
 		if (write)
-			compat_btree_node(b->c.level, b->c.btree_id, version,
-					  BSET_BIG_ENDIAN(i), write, bn);
+			compat_btree_node(BSET_BIG_ENDIAN(i), bn);
 
 		btree_err_on(bch2_bkey_format_invalid(c, &bn->format, write, &buf1),
 			     0,
@@ -445,10 +443,6 @@ int bch2_validate_bset(struct bch_fs *c, struct bch_dev *ca,
 			     (printbuf_reset(&buf2),
 			      bch2_bkey_format_to_text(&buf2, &bn->format), buf2.buf));
 		printbuf_reset(&buf1);
-
-		compat_bformat(b->c.level, b->c.btree_id, version,
-			       BSET_BIG_ENDIAN(i), write,
-			       &bn->format);
 	}
 fsck_err:
 	return ret;
@@ -602,8 +596,7 @@ drop_this_key:
 		next_good_key = k->u64s;
 
 		if (!next_good_key ||
-		    (BSET_BIG_ENDIAN(i) == CPU_BIG_ENDIAN &&
-		     version >= bcachefs_metadata_version_snapshot)) {
+		    BSET_BIG_ENDIAN(i) == CPU_BIG_ENDIAN) {
 			/*
 			 * only do scanning if bch2_bkey_compat() has nothing to
 			 * do

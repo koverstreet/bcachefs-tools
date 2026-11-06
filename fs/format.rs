@@ -1312,7 +1312,7 @@ c_enum! {
     #[open]
     #[own_to_text]
     pub enum bcachefs_metadata_version: u32 {
-        bcachefs_metadata_version_min = 9,
+        bcachefs_metadata_version_min = bcachefs_metadata_version_btree_ptr_sectors_written,
         BCH_METADATA_VERSIONS(t, n, ..) => concat(bcachefs_metadata_version_, t) = n,
         bcachefs_metadata_version_max,
     }

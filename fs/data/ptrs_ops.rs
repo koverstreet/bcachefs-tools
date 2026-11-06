@@ -4,7 +4,6 @@
 
 use super::*;
 use crate::{bkey_fsck_err, bkey_fsck_err_on};
-use crate::btree::bkey::{bkey_eq, POS_MIN};
 use crate::data::durability::BkeyVDurability;
 use crate::data::reconcile::trigger::{extent_rebalance_v1_to_text, extent_reconcile_to_text,
                                       extent_reconcile_validate};
@@ -370,26 +369,21 @@ impl BkeyOps for c::BtreePtrV2 {
         bkey_ptrs_to_text(out, fs, k);
     }
 
-    /// The node's min_key, to or from how @version on a @big_endian machine wrote
-    /// it: compat_bpos(), and the extents btree min_key shift - whose POS_MIN test
-    /// is bkey_eq(), where compat_btree_node()'s is bpos_eq(). It runs before
-    /// validate: a value too short for min_key is left to it, where C writes past.
+    /// The node's min_key, to or from how a @big_endian machine wrote it. It runs
+    /// before validate: a value too short for min_key is left to it, where C
+    /// writes past.
     ///
     /// XXX: as ptr_swab() - this should take an Unvalidated key.
-    fn compat(btree: Btree, version: c::bcachefs_metadata_version, big_endian: bool,
-                               write: bool, k: BkeyS<'_>) {
+    fn compat(_btree: Btree, _version: c::bcachefs_metadata_version, big_endian: bool,
+                               _write: bool, k: BkeyS<'_>) {
         let Some(mut bp) = k.arm::<c::BtreePtrV2>() else { return };
         let Some(v) = <c::BtreePtrV2 as ArmRef>::arm_mut(bp.val_bytes_mut()) else { return };
 
-        let mut min_key = v.min_key;
-        min_key.compat(btree, version, big_endian);
-
-        if version < c::bcachefs_metadata_version::inode_btree_change &&
-           btree.is_extents() &&
-           !bkey_eq(min_key, POS_MIN) {
-            min_key = if write { min_key.nosnap_predecessor() } else { min_key.nosnap_successor() };
+        if big_endian != cfg!(target_endian = "big") {
+            let mut min_key = v.min_key;
+            min_key.swab();
+            v.min_key = min_key;
         }
-        v.min_key = min_key;
     }
 
     ptrs_ops!();
