@@ -642,11 +642,17 @@ pub unsafe fn bch2_journal_keys_peek_prev_min(c: &Opaque<Fs>, btree: Btree, leve
 
 /// # Safety
 /// As bch2_journal_keys_peek_max()'s.
+pub(crate) unsafe fn peek_slot(fs: &Fs, btree: Btree, level: u32, pos: Bpos) -> *const c::bkey_i {
+    peek_max(unsafe { fs.journal_keys_held() }, btree, level, pos, pos, &mut 0)
+}
+
+/// # Safety
+/// As bch2_journal_keys_peek_max()'s.
 #[c_export]
 pub unsafe fn bch2_journal_keys_peek_slot(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos)
     -> *const c::bkey_i
 {
-    peek_max(unsafe { Fs::from_c(c).journal_keys_held() }, btree, level, pos, pos, &mut 0)
+    unsafe { peek_slot(Fs::from_c(c), btree, level, pos) }
 }
 
 /// Whether the journal deletes @pos, before replay's done.

@@ -6,6 +6,8 @@ use crate::btree::iter::{BtreeTrans, TransAttempt, TransBkey, UpdateTriggerFlags
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::format::{Bpos, Btree};
+use crate::prt;
+use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
 use core::mem::MaybeUninit;
 use cstruct_macros::c_export;
@@ -152,6 +154,51 @@ unsafe fn key_trigger(t: &TransAttempt<'_, '_>, op: &mut c::btree_trigger_op) ->
 pub unsafe fn bch2_key_trigger(trans: &BtreeTrans<'_>, mut op: c::btree_trigger_op) -> c_int {
     let t = unsafe { trans.attempt_in_progress() };
     ret_to_c(unsafe { key_trigger(&t, &mut op) })
+}
+
+/// verify_update_old_key(): @i's old key is the one at its position - the
+/// btree's, or before replay's done, the journal's. Debug builds only.
+///
+/// # Safety
+/// @i is an update of @trans's.
+#[c_export]
+pub unsafe fn bch2_verify_update_old_key(trans: &BtreeTrans<'_>, i: &c::btree_insert_entry) {
+    if !cfg!(CONFIG_BCACHEFS_DEBUG) || i.bits.key_cache_flushing() {
+        return;
+    }
+
+    let raw = trans.raw();
+    let path = unsafe { (*raw).paths.add(i.path as usize) };
+    let mut u = c::bkey::new();
+    let mut k = unsafe { crate::btree::iter::bch2_btree_path_peek_slot(path, &mut u) };
+
+    // bch2_btree_path_peek_slot() for a cached iterator might return a key in a
+    // different snapshot:
+    let pos = unsafe { (*path).pos };
+    if k.k.is_null() || unsafe { (*k.k).p } != pos {
+        u = c::bkey { p: pos, ..c::bkey::new() };
+        k = c::bkey_s_c { k: &u, v: core::ptr::null() };
+    }
+
+    if unsafe { (*raw).bits.journal_replay_not_finished() } {
+        let j = unsafe { crate::btree::journal_overlay::peek_slot(
+            trans.fs(), i.bits.btree_id(), i.bits.level().into(), (*i.k).k.p) };
+        if let Some(j) = unsafe { j.as_ref() } {
+            k = c::bkey_s_c { k: &j.k, v: &j.v };
+        }
+    }
+
+    // when updating btree ptrs, mem_ptr may change underneath us, unlocked
+    let k_k = unsafe { &*k.k };
+    if !k_k.fields_eq(&i.old_k) || k.v != i.old_v {
+        let mut out = Printbuf::new();
+        prt!(&mut out, "updated cached old key doesn't match\ncached: ");
+        crate::btree::bkey::bkey_to_text(&mut out, &i.old_k);
+        prt!(&mut out, " {:p}\nreal:   ", i.old_v);
+        crate::btree::bkey::bkey_to_text(&mut out, k_k);
+        prt!(&mut out, " {:p}", k.v);
+        panic!("{out}");
+    }
 }
 
 /// A deletion at @p, for the side of an update that has no key.

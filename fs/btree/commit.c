@@ -53,41 +53,6 @@ __cold void bch2_trans_commit_flags_to_text(struct printbuf *out, enum bch_trans
 	}
 }
 
-static void verify_update_old_key(struct btree_trans *trans, struct btree_insert_entry *i)
-{
-#ifdef CONFIG_BCACHEFS_DEBUG
-	if (i->key_cache_flushing)
-		return;
-
-	struct bch_fs *c = trans->c;
-	struct bkey u;
-	struct bkey_s_c k = bch2_btree_path_peek_slot_exact(trans->paths + i->path, &u);
-
-	if (unlikely(trans->journal_replay_not_finished)) {
-		const struct bkey_i *j_k =
-			bch2_journal_keys_peek_slot(c, i->btree_id, i->level, i->k->k.p);
-
-		if (j_k)
-			k = bkey_i_to_s_c(j_k);
-	}
-
-	/* when updating btree ptrs, mem_ptr may change underneath us, unlocked */
-	if (!bkey_fields_eq(k.k, &i->old_k) || k.v != i->old_v) {
-		CLASS(printbuf, buf)();
-		prt_str(&buf, "updated cached old key doesn't match\n");
-		prt_str(&buf, "cached: ");
-		bch2_bkey_to_text(&buf, &i->old_k);
-		prt_printf(&buf, " %px\n", i->old_v);
-
-		prt_str(&buf, "real:   ");
-		bch2_bkey_to_text(&buf, k.k);
-		prt_printf(&buf, " %px\n", k.v);
-
-		panic("%s\n", buf.buf);
-	}
-#endif
-}
-
 static inline struct btree_path_level *insert_l(struct btree_trans *trans, struct btree_insert_entry *i)
 {
 	return (trans->paths + i->path)->l + i->level;
@@ -516,13 +481,13 @@ static int run_one_mem_trigger(struct btree_trans *trans,
 			       struct btree_insert_entry *i,
 			       unsigned flags)
 {
-	verify_update_old_key(trans, i);
+	bch2_verify_update_old_key(trans, i);
 	return bch2_run_one_mem_trigger(trans, i, flags);
 }
 
 static int run_one_trans_trigger(struct btree_trans *trans, struct btree_insert_entry *i)
 {
-	verify_update_old_key(trans, i);
+	bch2_verify_update_old_key(trans, i);
 	return bch2_run_one_trans_trigger(trans, i);
 }
 
@@ -1213,7 +1178,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 			if (i->flags & BTREE_UPDATE_nojournal)
 				continue;
 
-			verify_update_old_key(trans, i);
+			bch2_verify_update_old_key(trans, i);
 
 			if (trans->journal_transaction_names) {
 				struct jset_entry *e =

@@ -146,6 +146,12 @@ impl c::bkey {
         c::bch_bkey_type(self.type_ as u32)
     }
 
+    /// The same header, format aside: bkey_fields_eq().
+    pub fn fields_eq(&self, r: &Self) -> bool {
+        self.u64s == r.u64s && self.type_ == r.type_ && self.p == r.p &&
+            { self.bversion } == { r.bversion } && self.size == r.size
+    }
+
     pub fn start_pos(&self) -> Bpos {
         Bpos { offset: self.start_offset(), ..self.p }
     }
