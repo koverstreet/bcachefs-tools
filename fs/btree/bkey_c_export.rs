@@ -133,8 +133,7 @@ pub fn bch2_bpos_swab(p: &mut Bpos) {
     p.swab();
 }
 
-#[c_export]
-pub unsafe fn bch2_bkey_swab_key(f: Option<&c::bkey_format>, k: *mut c::bkey_packed) {
+pub(crate) unsafe fn bkey_swab_key(f: Option<&c::bkey_format>, k: *mut c::bkey_packed) {
     let f = if unsafe { (*BkeyP::from_raw(k)).is_packed() } {
         f.expect("a packed key to swab, with no format")
     } else {

@@ -88,7 +88,7 @@ use core::hash::{Hash, Hasher};
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering::{Acquire, Relaxed}};
-use cstruct_macros::{c_export, CStruct, Init, Late, TypeInfo};
+use cstruct_macros::{CStruct, Init, Late, TypeInfo};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 use crate::util::futex::EventCount;
 use crate::util::projections::Volatile;
@@ -864,6 +864,15 @@ impl Fs {
         cg.run_count.get()
     }
 
+    /// Until copygc isn't running, or this kthread's told to stop: for a moving
+    /// context that waits on copygc, Moving::ratelimit()'s. Freezable - copygc
+    /// freezes in place, mid run - and interruptible, as wait_event_freezable().
+    pub fn copygc_wait_not_running(&self) {
+        let cg = &self.copygc;
+        let _ = cg.run_done.wait_until(Sleep::INTERRUPTIBLE.freezable(),
+                                       || (!cg.running.get() || Kthread::should_stop()).then_some(()));
+    }
+
     #[cold]
     pub fn copygc_wait_to_text(&self, out: &mut Printbuf) {
         let cg = &self.copygc;
@@ -895,16 +904,4 @@ impl Fs {
             let _ = prt_task_backtrace(out, task.as_ptr(), 0);
         }
     }
-}
-
-// ── For C ────────────────────────────────────────────────────────────────
-
-/// Until copygc isn't running, or this kthread's told to stop: for a moving
-/// context that waits on copygc, Moving::ratelimit()'s. Freezable - copygc
-/// freezes in place, mid run - and interruptible, as wait_event_freezable().
-#[c_export]
-pub fn bch2_copygc_wait_not_running(c: &Fs) {
-    let cg = &c.copygc;
-    let _ = cg.run_done.wait_until(Sleep::INTERRUPTIBLE.freezable(),
-                                   || (!cg.running.get() || Kthread::should_stop()).then_some(()));
 }

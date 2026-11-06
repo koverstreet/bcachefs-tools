@@ -971,7 +971,7 @@ fn trans_mark_metadata_sectors(trans: &BtreeTrans<'_>, ca: &Dev, range: core::op
 }
 
 /// @ca's superblocks' buckets - the first's, from sector 0 - and its journal
-/// buckets: __bch2_trans_mark_dev_sb().
+/// buckets.
 fn trans_mark_dev_sb_in(trans: &BtreeTrans<'_>, ca: &Dev, flags: UpdateTriggerFlags)
     -> Result<(), BchError>
 {
@@ -1004,7 +1004,7 @@ fn trans_mark_dev_sb_in(trans: &BtreeTrans<'_>, ca: &Dev, flags: UpdateTriggerFl
 
 impl Fs {
     /// Device @ca's superblock and journal buckets marked as theirs, in the
-    /// alloc btree - or gc's copy, with gc: bch2_trans_mark_dev_sb().
+    /// alloc btree - or gc's copy, with gc.
     pub fn trans_mark_dev_sb(&self, ca: &Dev, flags: UpdateTriggerFlags) -> Result<(), BchError> {
         let trans = btree_trans!(self);
         bch_err_fn!(self, trans_mark_dev_sb_in(&trans, ca, flags))
@@ -1029,13 +1029,6 @@ pub fn bch2_trans_mark_metadata_bucket<'t>(trans: &'t BtreeTrans<'t>, ca: &Dev, 
                                            flags: c::btree_iter_update_trigger_flags) -> c_int {
     ret_to_c(trans_mark_metadata_bucket(trans, ca, b, data_type, sectors,
                                         UpdateTriggerFlags::from_bits_retain(flags.bits())))
-}
-
-#[c_export]
-pub fn bch2_trans_mark_dev_sb(c: &Opaque<Fs>, ca: &Dev, flags: c::btree_iter_update_trigger_flags)
-    -> c_int
-{
-    ret_to_c(Fs::from_c(c).trans_mark_dev_sb(ca, UpdateTriggerFlags::from_bits_retain(flags.bits())))
 }
 
 #[c_export]
@@ -1068,7 +1061,7 @@ impl Fs {
 impl Dev {
     /// Its buckets' generations at @nbuckets - as many of the old copied as
     /// both have - and its bucket bitmaps with them; nothing changed on
-    /// failure. A resize is under state_lock: bch2_dev_buckets_resize().
+    /// failure. A resize is under state_lock.
     pub fn buckets_resize(&self, nbuckets: u64) -> Result<(), BchError> {
         let fs = self.fs();
         // SAFETY: we're the writer - at init, or under state_lock
@@ -1116,11 +1109,6 @@ impl Dev {
         }
         self.usage.free();
     }
-}
-
-#[c_export]
-pub fn bch2_dev_buckets_resize(_c: &Opaque<Fs>, ca: &Dev, nbuckets: u64) -> c_int {
-    ret_to_c(ca.buckets_resize(nbuckets))
 }
 
 /// @ca is being set up: nothing else has it yet.

@@ -20,7 +20,6 @@ use crate::locking::{memalloc_flags_restore, memalloc_flags_save, rust_six_lockd
                      RawTimedLock, PF_MEMALLOC_NOIO};
 use crate::prt;
 use crate::debug::trace::{events, TraceEvent};
-use crate::sb::counters::bch2_sb_recent_counters_to_text;
 use crate::util::backtrace::{prt_current_backtrace, prt_symbol};
 use crate::util::ffi::Opaque;
 use crate::util::futex::EventCount;
@@ -971,7 +970,7 @@ impl BtreeTrans<'_> {
 
             prt!(&mut msg, "btree trans held srcu lock (delaying memory reclaim) for {} seconds\n",
                  jiffies().wrapping_sub(lock_time) / HZ);
-            bch2_sb_recent_counters_to_text(&mut msg, &fs.counters);
+            fs.counters.recent_to_text(&mut msg);
 
             let _ = prt_current_backtrace(&mut msg, 1);
         }

@@ -113,13 +113,13 @@ pub unsafe fn __bch2_bkey_compat(fs: Option<&Fs>, level: c_uint, btree: Btree, v
     for i in 0..NR_COMPAT {
         match if write { NR_COMPAT - 1 - i } else { i } {
             0 => {
-                use crate::btree::bkey::c_export::bch2_bkey_swab_key;
+                use crate::btree::bkey::c_export::bkey_swab_key;
 
                 if big_endian != cfg!(target_endian = "big") {
-                    unsafe { bch2_bkey_swab_key(f, k) };
+                    unsafe { bkey_swab_key(f, k) };
                 } else if cfg!(CONFIG_BCACHEFS_DEBUG) {
-                    unsafe { bch2_bkey_swab_key(f, k) };
-                    unsafe { bch2_bkey_swab_key(f, k) };
+                    unsafe { bkey_swab_key(f, k) };
+                    unsafe { bkey_swab_key(f, k) };
                 }
             }
             1 => {

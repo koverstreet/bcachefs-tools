@@ -15,7 +15,7 @@ use super::*;
 use crate::debug::params as debug_params;
 use crate::errcode::bch_errcode;
 use crate::util::Printbuf;
-use crate::sb::errors::bch2_blk_sts_sb_err;
+use crate::sb::errors::blk_sts_sb_err;
 use crate::util::kernel::{cold_path, random_u64_below, unlikely, READ};
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::c_int;
@@ -148,7 +148,7 @@ impl<const N: usize> IoFailures<N> {
     pub fn count_blk_errors(&self, fs: &Fs) {
         let count = |code: i16| {
             if code != 0 && BchError::from_raw(-i32::from(code)).matches(bch_errcode::BCH_ERR_blockdev_io_error) {
-                fs.sb_error_count(bch2_blk_sts_sb_err(code.into()));
+                fs.sb_error_count(blk_sts_sb_err(code.into()));
             }
         };
         for f in self.devs() {

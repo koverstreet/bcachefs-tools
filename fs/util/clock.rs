@@ -3,7 +3,7 @@
 //! The io clocks - c->io_clock[READ] and [WRITE] - and waiting on them. A
 //! clock's time is sectors of IO done: increment() adds to a per-CPU batch,
 //! and every IO_CLOCK_PCPU_SECTORS a CPU's batch goes to the clock, by
-//! __bch2_increment_clock(); an IO that big goes to it at once. So it's
+//! advance(); an IO that big goes to it at once. So it's
 //! approximate: up to that many sectors a CPU behind. Clocks are only moved
 //! from task context, IO submission, so the batch's add is a load and a store
 //! with preemption off.
@@ -175,7 +175,7 @@ impl io_clock {
     pub fn increment(&self, sectors: u64) {
         let batch = u64::from(IO_CLOCK_PCPU_SECTORS);
         if sectors >= batch {
-            return __bch2_increment_clock(self, sectors);
+            return self.advance(sectors);
         }
 
         let v = {
@@ -186,7 +186,20 @@ impl io_clock {
             v
         };
         if v >= batch {
-            __bch2_increment_clock(self, v);
+            self.advance(v);
+        }
+    }
+
+    /// The clock moving on @sectors - a CPU's batch, or one IO bigger than a
+    /// batch, from increment(): wakes the waiters it's passed.
+    fn advance(&self, sectors: u64) {
+        let now = (self.now.fetch_add(sectors as i64, Relaxed) as u64).wrapping_add(sectors);
+
+        let mut timers = self.timers.lock();
+        while timers.last().is_some_and(|t| reached(now, t.expire)) {
+            let Some(t) = timers.pop() else { break };
+            // SAFETY: under the lock: its waiter's still there - see Timer
+            unsafe { c::wake_up_process(t.task) };
         }
     }
 }
@@ -194,20 +207,6 @@ impl io_clock {
 #[c_export]
 pub fn bch2_increment_clock(c: &Opaque<Fs>, sectors: u64, rw: c_int) {
     Fs::from_c(c).io_clock[rw as usize].increment(sectors)
-}
-
-/// The clock moving on @sectors - a CPU's batch, or one IO bigger than a
-/// batch, from increment(): wakes the waiters it's passed.
-#[c_export]
-pub fn __bch2_increment_clock(clock: &c::io_clock, sectors: u64) {
-    let now = (clock.now.fetch_add(sectors as i64, Relaxed) as u64).wrapping_add(sectors);
-
-    let mut timers = clock.timers.lock();
-    while timers.last().is_some_and(|t| reached(now, t.expire)) {
-        let Some(t) = timers.pop() else { break };
-        // SAFETY: under the lock: its waiter's still there - see Timer
-        unsafe { c::wake_up_process(t.task) };
-    }
 }
 
 impl ToText for io_clock {

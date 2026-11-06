@@ -646,7 +646,7 @@ pub(crate) fn devs_mask_to_text(out: &mut Printbuf, fs: &Fs, sb: &c::bch_sb, dev
 
 impl c::bch_member {
     /// As ca->mi has it - all but the failure domain, which takes the other
-    /// members to number: bch2_mi_to_cpu().
+    /// members to number.
     pub fn to_cpu(&self) -> c::bch_member_cpu {
         let nbuckets = self.nbuckets.get();
         let first_bucket = self.first_bucket.get();
@@ -670,11 +670,6 @@ impl c::bch_member {
             btree_allocated_bitmap: self.btree_allocated_bitmap.get(),
         }
     }
-}
-
-#[c_export]
-pub fn bch2_mi_to_cpu(mi: &c::bch_member) -> c::bch_member_cpu {
-    mi.to_cpu()
 }
 
 /// Member @dev's failure domain, as an id: one more than the first member

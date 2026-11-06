@@ -257,7 +257,7 @@ unsafe impl AsyncObj for Update {
         if u.rbio.bits().promote() != 0 {
             crate::data::promote::promote_to_text(u, out, fs)
         } else {
-            crate::data::update::bch2_data_update_inflight_to_text(out, u)
+            crate::data::update::data_update_inflight_to_text(out, u)
         }
     }
 }

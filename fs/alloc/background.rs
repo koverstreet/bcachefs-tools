@@ -490,7 +490,6 @@ use crate::errcode::{err_ptr, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::opts::data_type_str;
-use crate::util::ffi::Opaque;
 use crate::util::kernel::{unlikely, READ, WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::log::LogMsg;
@@ -1733,11 +1732,6 @@ pub(crate) fn dev_remove_alloc(fs: &Fs, ca: &Dev) -> Result<(), BchError> {
                               UpdateTriggerFlags::NORUN)?;
     }
     fs.dev_usage_remove(ca)
-}
-
-#[c_export]
-pub fn bch2_dev_remove_alloc(c: &Opaque<Fs>, ca: &Dev) -> c_int {
-    ret_to_c(crate::bch_err_msg_dev!(ca, dev_remove_alloc(Fs::from_c(c), ca), "removing dev alloc info"))
 }
 
 // ── Bucket IO clocks ─────────────────────────────────────────────────────

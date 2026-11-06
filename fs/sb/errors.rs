@@ -353,8 +353,7 @@ impl SbFieldOps for c::bch_sb_field_errors_v2 {
 
 /// @err a BCH_ERR_BLK_STS_* errcode, as blk_status_to_bch_err() throws: its
 /// status's error, blk_sts_unknown for one BCH_BLK_STS_SB_ERRS() leaves out.
-#[c_export]
-pub fn bch2_blk_sts_sb_err(err: c_int) -> c::bch_sb_error_id {
+pub fn blk_sts_sb_err(err: c_int) -> c::bch_sb_error_id {
     macro_rules! map {
         ($(($sts:ident, $name:ident)),* $(,)?) => { ::paste::paste! {
             match bch_errcode(err.unsigned_abs()) {

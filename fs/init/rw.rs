@@ -18,7 +18,7 @@
 use core::sync::atomic::Ordering::Relaxed;
 
 use crate::format::MemberState;
-use crate::accounting::bch2_verify_accounting_clean;
+use crate::accounting::verify_accounting_clean;
 use crate::alloc::capacity::recalc_capacity;
 use crate::btree::cache::bch2_fs_btree_init_rw;
 use crate::btree::interior::{bch2_btree_interior_updates_flush, bch2_do_pending_node_rewrites};
@@ -236,7 +236,7 @@ impl StateLockWrite<'_> {
                 assert_eq!(wb.flushing.keys.nr, 0);
             }
             fs.verify_replicas_refs_clean();
-            bch2_verify_accounting_clean(fs);
+            verify_accounting_clean(fs);
         } else {
             /* Make sure error counts/counters are persisted */
             fs.write_super(&mut fs.sb_lock());

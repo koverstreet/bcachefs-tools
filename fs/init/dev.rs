@@ -228,7 +228,7 @@ use crate::format::{DataType, MemberInitialized, MemberState};
 use crate::locking::MemallocFlags;
 use crate::opts::c_export::__bch2_data_types;
 use crate::sb::io::{read_super, SbReadScratch};
-use crate::sb::members::{bch2_mi_to_cpu, member_exists, member_state_str, mi_field_upgrades, sb_member,
+use crate::sb::members::{member_exists, member_state_str, mi_field_upgrades, sb_member,
                          sb_member_alloc, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
 use crate::types::CStatic;
 use crate::util::alloc::{alloc_pinned, free_pinned, kbox_pin_init};
@@ -626,7 +626,7 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<NewDev> {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     unsafe { c::init_completion(&mut ca.ref_completion) };
 
-    ca.mi.set(bch2_mi_to_cpu(member));
+    ca.mi.set(member.to_cpu());
     ca.btree_allocated_bitmap_gc = member.btree_allocated_bitmap.get();
 
     for (e, m) in ca.errors.iter().zip(member.errors.iter()) {
@@ -1575,7 +1575,7 @@ impl Fs {
          * So mark with freespace not initialized, as device add does: the alloc
          * trigger doesn't expect the new range in freespace yet, and the
          * allocator steers clear of superblock buckets (is_superblock_bucket()).
-         * bch2_dev_freespace_init() sets it again; after a crash, mount
+         * dev_freespace_init() sets it again; after a crash, mount
          * initializes freespace for the whole device.
          */
         let freespace_initialized = ca.mi.get().freespace_initialized;
@@ -1696,7 +1696,7 @@ impl Dev {
     /// the device's average and quantiles, and - a read's - its congestion.
     pub fn latency_acct(&self, submit_time: u64, rw: usize) {
         use crate::util::kernel::{local_clock, time_after64};
-        use crate::util::time_stats::__bch2_time_stats_quantiles_update;
+        use crate::util::time_stats::TimeStats;
         use core::sync::atomic::Ordering::SeqCst;
 
         let latency = &self.cur_latency[rw];
@@ -1729,7 +1729,7 @@ impl Dev {
             self.congested_acct(io_latency, now, rw);
         }
 
-        __bch2_time_stats_quantiles_update(&self.io_latency[rw], submit_time, now);
+        self.io_latency[rw].update_at(submit_time, now);
     }
 }
 

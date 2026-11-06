@@ -157,7 +157,7 @@ pub trait BkeyVReconcile: BkeyV {
     }
 
     /// Its reconcile backpointer's position: its work id, and its
-    /// reconcile_bp entry's index. bch2_bkey_get_reconcile_bp_pos().
+    /// reconcile_bp entry's index.
     fn reconcile_bp_pos(&self, fs: &Fs) -> Bpos
     where Self: BkeyVPtrs
     {
@@ -473,7 +473,7 @@ pub(crate) fn reconcile_bp_get_key<'t>(t: &TransAttempt<'t, '_>, iter: &mut Btre
             return Ok(None);
         }
         let k = BkeySC::from(b.contents().key_i());
-        if bch2_bkey_get_reconcile_bp_pos(fs, k) == bp.k.p {
+        if k.arm::<Ptrs>().map_or(pos(0, 0), |k| k.reconcile_bp_pos(fs)) == bp.k.p {
             return Ok(Some(BkeyBuf::from_key(k)));
         }
     }
@@ -499,11 +499,5 @@ fn delete_bp(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Backpointer>) -> Result
 #[c_export]
 pub fn bch2_bkey_reconcile_work_id(c: &Fs, k: BkeySC<'_>) -> c::reconcile_work_id {
     k.reconcile_work_id(c)
-}
-
-/// POS_MIN for a key without pointers.
-#[c_export]
-pub fn bch2_bkey_get_reconcile_bp_pos(c: &Fs, k: BkeySC<'_>) -> Bpos {
-    k.arm::<Ptrs>().map_or(pos(0, 0), |k| k.reconcile_bp_pos(c))
 }
 

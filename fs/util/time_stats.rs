@@ -603,8 +603,3 @@ pub fn bch2_time_stats_to_text(out: &mut Printbuf, stats: &c::bch2_time_stats) {
 pub fn __bch2_time_stats_update(stats: &c::bch2_time_stats, start: u64, end: u64) {
     stats.update_at(start, end)
 }
-
-#[c_export]
-pub fn __bch2_time_stats_quantiles_update(statq: &c::bch2_time_stats_quantiles, start: u64, end: u64) {
-    statq.update_at(start, end)
-}

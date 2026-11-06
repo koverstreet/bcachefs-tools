@@ -2148,8 +2148,7 @@ impl DevSbMut<'_> {
         self.io.buf.sb()
     }
 
-    /// The filesystem's superblock copied in, all but each device's own:
-    /// bch2_sb_from_fs().
+    /// The filesystem's superblock copied in, all but each device's own.
     pub fn sync(&mut self) -> Result<(), BchError> {
         let src = self.fs_sb;
         copy_super(&mut self.resize(), src)
@@ -3075,16 +3074,6 @@ pub fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &bch_sb) -> Result<(), B
     c::bch_sb_field_extent_type_u64s::to_cpu(fs, sb)?;
     sb_update(fs, sb);
     Ok(())
-}
-
-/// @ca's superblock from the filesystem's: bch2_sb_from_fs().
-#[c_export]
-pub fn bch2_sb_from_fs(c: &Opaque<Fs>, ca: &Dev) -> c_int {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    let mut sb = unsafe { fs.sb_lock_held() };
-    let mut dst = fs.dev_sb_mut(&mut sb, ca).expect("bch2_sb_from_fs(): a device with no superblock");
-    ret_to_c(dst.sync())
 }
 
 // ── Superblocks in byte buffers ──────────────────────────────────────────

@@ -26,7 +26,6 @@ use crate::btree::iter::{BtreeIter, BtreeTrans};
 use crate::btree::trans::{__bch2_trans_get, TransFnName, TransGuard};
 use crate::c;
 use crate::c::bch_errcode;
-use crate::data::copygc::bch2_copygc_wait_not_running;
 use crate::errcode::BchError;
 use crate::format::DataType;
 use crate::fs::Fs;
@@ -374,7 +373,7 @@ impl<'a> Moving<'a> {
         let fs = self.trans().fs();
         if self.0.wait_on_copygc && fs.copygc.running.get() {
             self.flush_all();
-            bch2_copygc_wait_not_running(fs);
+            fs.copygc_wait_not_running();
         }
 
         if Kthread::should_stop() {

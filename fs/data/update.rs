@@ -302,8 +302,7 @@ impl ToText for c::data_update {
 }
 
 #[cold]
-#[c_export]
-pub fn bch2_data_update_inflight_to_text(out: &mut Printbuf, m: &c::data_update) {
+pub fn data_update_inflight_to_text(out: &mut Printbuf, m: &c::data_update) {
     let fs = m.op.fs();
     prt!(out, "{}", BkeySC::from(m.k.key()).to_text(fs));
     out.newline();

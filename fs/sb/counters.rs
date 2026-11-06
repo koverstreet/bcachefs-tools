@@ -181,11 +181,6 @@ impl c::bch_fs_counters {
     }
 }
 
-#[c_export]
-pub fn bch2_sb_recent_counters_to_text(out: &mut Printbuf, ctrs: &c::bch_fs_counters) {
-    ctrs.recent_to_text(out)
-}
-
 impl Fs {
     pub fn counter_read(&self, idx: usize) -> u64 {
         assert!(idx < NR);

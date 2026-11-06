@@ -400,7 +400,7 @@ pub(crate) fn dev_data_drop_by_backpointers(fs: &Fs, ca: &Dev, mut d: DevDrop<'_
 }
 
 /// Every stripe with a block on the device, by its buckets' bucket_to_stripe
-/// entries: DevDrop::stripe() - bch2_dev_remove_stripes(). Open stripes are
+/// entries: DevDrop::stripe(). Open stripes are
 /// skipped, so after a scan that met one, in-flight creates are flushed and
 /// it goes again: ten times, then remove_stripes_did_not_terminate.
 pub(crate) fn dev_remove_stripes(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchError> {
@@ -437,23 +437,8 @@ pub(crate) fn dev_remove_stripes(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchE
 }
 
 #[c_export]
-pub extern "C" fn bch2_dev_remove_stripes(c: &Opaque<Fs>, dev_idx: c_uint, flags: c_uint, err: &mut Printbuf)
-    -> c_int
-{
-    let fs = Fs::from_c(c);
-    ret_to_c(crate::bch_err_fn!(fs, dev_remove_stripes(fs, DevDrop { dev: dev_idx, flags, err })))
-}
-
-#[c_export]
 pub extern "C" fn bch2_dev_data_drop(c: &Opaque<Fs>, dev_idx: c_uint, flags: c_uint, err: &mut Printbuf)
     -> c_int
 {
     ret_to_c(dev_data_drop(Fs::from_c(c), DevDrop { dev: dev_idx, flags, err }))
-}
-
-#[c_export]
-pub extern "C" fn bch2_dev_data_drop_by_backpointers(c: &Opaque<Fs>, ca: &Dev, flags: c_uint,
-                                                     err: &mut Printbuf) -> c_int {
-    let d = DevDrop { dev: ca.dev_idx.into(), flags, err };
-    ret_to_c(dev_data_drop_by_backpointers(Fs::from_c(c), ca, d))
 }
