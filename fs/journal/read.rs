@@ -114,11 +114,20 @@ impl c::journal_replay {
     }
 }
 
-/// The devices replay @i's copies are on, each once.
+/// The devices replay @i's copies are on, each once - or, said, none, for more
+/// than BCH_REPLICAS_MAX: no one write puts an entry on more, so they aren't
+/// its replicas, and a crafted image can claim any number.
 #[c_export]
-pub fn bch2_journal_replay_devs(i: &c::journal_replay) -> c::bch_devs_list {
+pub fn bch2_journal_replay_devs(fs: &Fs, i: &c::journal_replay) -> c::bch_devs_list {
     let mut devs = c::bch_devs_list::default();
     for p in i.ptrs() {
+        if !devs.has(p.dev) && u32::from(devs.nr) >= c::BCH_REPLICAS_MAX {
+            let mut buf = Printbuf::new();
+            journal_ptrs_to_text(&mut buf, fs, i);
+            bch_err!(fs, "journal seq {} found on more than {} devices, not tracking its replicas:\n{}",
+                     i.j.seq.get(), c::BCH_REPLICAS_MAX, buf);
+            return c::bch_devs_list::default();
+        }
         devs.add(p.dev);
     }
     devs

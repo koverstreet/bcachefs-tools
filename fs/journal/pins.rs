@@ -105,8 +105,13 @@ pub struct PinDevs {
 unsafe impl TearSafe for PinDevs {}
 
 impl PinDevs {
-    /* @d is bounded by metadata_replicas <= BCH_REPLICAS_MAX (journal write) */
+    /*
+     * @d is bounded by metadata_replicas <= BCH_REPLICAS_MAX (journal write),
+     * and by bch2_journal_replay_devs() (journal start)
+     */
     fn new(d: &c::bch_devs_list) -> Self {
+        debug_assert!(u32::from(d.nr) <= c::BCH_REPLICAS_MAX,
+                      "journal entry on {} devices, past BCH_REPLICAS_MAX", d.nr);
         let mut r = Self::default();
         for (dst, &dev) in r.devs.iter_mut().zip(&d.data[..d.nr as usize]) {
             *dst = dev;

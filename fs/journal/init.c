@@ -355,9 +355,11 @@ int bch2_fs_journal_start(struct journal *j, struct journal_start_info info)
 		if (journal_entry_empty(&i->j))
 			j->last_empty_seq = le64_to_cpu(i->j.seq);
 
-		if (!info.clean) {
-			struct bch_devs_list seq_devs = bch2_journal_replay_devs(i);
+		struct bch_devs_list seq_devs = !info.clean
+			? bch2_journal_replay_devs(c, i)
+			: (struct bch_devs_list) {};
 
+		if (seq_devs.nr) {
 			CLASS(printbuf, buf)();
 			union bch_replicas_padded r;
 			bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, seq_devs);
