@@ -21,7 +21,6 @@ use cstruct_macros::{bitfield, c_export, c_name, c_typedef, CStruct};
 use crate::locking::{Locked, LockedBy};
 use crate::locking::six::SixHold;
 use crate::c::six_lock_type;
-use crate::util::ffi::Opaque;
 use core::ffi::{c_int, c_ulong};
 use core::marker::PhantomData;
 use core::mem::{offset_of, ManuallyDrop};
@@ -200,8 +199,8 @@ impl Paths<'_> {
     /// to see - waited for with @wait, the transaction's own read holds on the
     /// node set aside meanwhile. On failure, six's error, and the level's back
     /// to intent.
-    pub(crate) fn lock_write_marked(&mut self, idx: PathIdx, level: usize, wait: &Opaque<c::six_lock_waiter>,
-                                    should_sleep_fn: c::six_lock_should_sleep_fn, ip: c_ulong) -> Result<(), c_int> {
+    pub(crate) fn lock_write_marked(&mut self, idx: PathIdx, level: usize, wait: &c::six_lock_waiter,
+                                    should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> Result<(), c_int> {
         ebug_assert!(self[idx].write_locked(level), "taking write at a level not marked for it");
         let node = self[idx].held_node(level);
         let readers = self.trans.node_lock_counts(self, None, node, level).n[c::SIX_LOCK_read as usize] as c_int;

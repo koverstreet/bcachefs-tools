@@ -754,7 +754,7 @@ pub struct BtreeTrans<'f> {
      * rotated while we were about to sleep on it. 0 for cached entries.
      */
     #[c("struct six_lock_waiter locking_wait")]
-    pub locking_wait: Opaque<cs::six_lock_waiter>,
+    pub locking_wait: cs::six_lock_waiter,
 
     /*
      * btree node writes issued in this trans's context are queued here

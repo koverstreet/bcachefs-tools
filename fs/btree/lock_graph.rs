@@ -28,7 +28,7 @@ use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
 use core::mem::offset_of;
 use core::ptr::{self, null_mut};
 use core::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering::{Acquire, Relaxed, Release, SeqCst}};
-use cstruct_macros::{c_export, c_extern};
+use cstruct_macros::c_extern;
 
 c_extern! {
     pub fn bch2_trans_restart_foreign_task(trans: *mut BtreeTrans<'_>, err: c_int, ip: c_ulong) -> c_int;
@@ -47,15 +47,15 @@ impl Trans {
     }
 
     fn lock_want(self) -> c::six_lock_type {
-        unsafe { (&raw const (*(*self.0).locking_wait.as_ptr()).lock_want).read_volatile() }
+        unsafe { (*self.0).locking_wait.lock_want.get() }
     }
 
     fn task(self) -> *mut c::task_struct {
-        unsafe { (&raw const (*(*self.0).locking_wait.as_ptr()).task).read_volatile() }
+        unsafe { (*self.0).locking_wait.task.load(Relaxed) }
     }
 
     fn start_time(self) -> u64 {
-        unsafe { (&raw const (*(*self.0).locking_wait.as_ptr()).trans_start_time).read_volatile() }
+        unsafe { (*self.0).locking_wait.trans_start_time.get() }
     }
 
     fn may_not_fail(self) -> bool {
@@ -588,11 +588,6 @@ pub(crate) fn check_for_deadlock(trans: *mut BtreeTrans<'_>, mut cycle: Option<&
     Ok(())
 }
 
-fn locking_node(lock: *mut c::six_lock) -> Option<&'static BtreeNode> {
-    let b = unsafe { lock.byte_sub(offset_of!(c::btree_bkey_cached_common, lock)) }.cast::<c::btree_bkey_cached_common>();
-    BtreeNode::from_common(unsafe { &*b })
-}
-
 fn node_reuse_race(trans: &BtreeTrans<'_>, b: &BtreeNode) -> bool {
     let (hash_val, root_id) = (trans.locking_hash_val.get(), trans.locking_root_id.get());
     if hash_val != 0 {
@@ -604,13 +599,12 @@ fn node_reuse_race(trans: &BtreeTrans<'_>, b: &BtreeNode) -> bool {
     }
 }
 
-/// The six lock's should_sleep_fn, for btree node locks: before the waiting
-/// transaction sleeps on @lock.
-#[c_export]
-pub unsafe extern "C" fn bch2_six_check_for_deadlock(lock: *mut c::six_lock, w: *mut c::six_lock_waiter) -> c_int {
+/// The six lock's should_sleep_fn, for btree node locks: before @trans sleeps
+/// on @b's lock.
+pub(crate) fn bch2_six_check_for_deadlock(trans: &BtreeTrans<'_>, b: &c::btree_bkey_cached_common) -> c_int {
     /*
      * Store->load fence: orders publishing ourselves as a waiter (done by
-     * six_lock_wait_fifo_insert before should_sleep_fn ran) before the two
+     * six's WaitListLocked::insert() before should_sleep_fn ran) before the two
      * reads of shared state that follow. Both are the store-buffer litmus
      * test - {publish self; read shared state} racing the mirror op on
      * another CPU - and only a full barrier forbids the both-miss outcome.
@@ -660,10 +654,8 @@ pub unsafe extern "C" fn bch2_six_check_for_deadlock(lock: *mut c::six_lock, w: 
      * (bch2_btree_node_transition_state_locked) is the smp_mb() above,
      * point 2.
      */
-    let trans = Trans::of_waiter(w);
-    let t = unsafe { &*trans.0 };
-    if let Some(b) = locking_node(lock) {
-        if node_reuse_race(t, b) {
+    if let Some(b) = BtreeNode::from_common(b) {
+        if node_reuse_race(trans, b) {
             return -trans.fs().err(bch_errcode::BCH_ERR_no_btree_node_reused).raw();
         }
     }
@@ -676,12 +668,12 @@ pub unsafe extern "C" fn bch2_six_check_for_deadlock(lock: *mut c::six_lock, w: 
      * because select_task_rq_fair() consults wake_cpu only at wakeup,
      * so the hint has to survive from the schedule() that follows.
      */
-    let shard_cpu = t.shard_cpu.get();
+    let shard_cpu = trans.shard_cpu.get();
     if shard_cpu >= 0 && shard_cpu as c_uint != unsafe { bch2_raw_smp_processor_id() } {
         unsafe { bch2_set_current_wake_cpu(shard_cpu.into()) };
     }
 
-    match check_for_deadlock(trans.0, None) {
+    match check_for_deadlock(ptr::from_ref(trans).cast_mut(), None) {
         Ok(())                 => 0,
         Err(Cycle::Restart(e)) => -e.raw(),
         Err(Cycle::Found)      => -1,

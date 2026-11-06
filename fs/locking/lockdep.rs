@@ -16,7 +16,7 @@
 
 use super::{RawLock, RawLockBase, RawTimedLock, RawTryLock};
 use crate::util::ffi::c_char;
-use core::ffi::{c_ulong, c_void, CStr};
+use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
 use cstruct_macros::c_verbatim;
 
 #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
@@ -168,4 +168,14 @@ unsafe impl<R: RawTimedLock> RawTimedLock for Lockdep<R> {
         }
         g
     }
+}
+
+/// The contention tracepoints, for a lock whose state is ours: of @lock's
+/// address, which they print and never follow.
+pub fn trace_contention_begin<L>(lock: &L, flags: c_uint) {
+    unsafe { super::raw::rust_trace_contention_begin(core::ptr::from_ref(lock).cast(), flags) }
+}
+
+pub fn trace_contention_end<L>(lock: &L, ret: c_int) {
+    unsafe { super::raw::rust_trace_contention_end(core::ptr::from_ref(lock).cast(), ret) }
 }

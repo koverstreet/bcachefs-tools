@@ -3149,7 +3149,7 @@ impl ListedTrans {
     }
 
     pub fn backtrace_to_text(&self, out: &mut Printbuf) {
-        let task = unsafe { (&raw const (*(*self.trans).locking_wait.as_ptr()).task).read_volatile() };
+        let task = unsafe { (*self.trans).locking_wait.task.load(Ordering::Relaxed) };
         let _ = prt_task_backtrace(out, task, 0);
     }
 

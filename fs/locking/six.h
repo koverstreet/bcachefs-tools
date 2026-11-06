@@ -87,7 +87,7 @@
  *
  * should_sleep_fn:
  *
- *   There is a six_lock() variant that takes a function pointer that is called
+ *   There is a six_lock() variant that takes a function that is called
  *   immediately prior to schedule() when blocking, and may return an error to
  *   abort.
  *
@@ -103,7 +103,7 @@
  *
  * Wait list entry interface:
  *
- *   There is a six_lock() variant, six_lock_waiter(), that takes a pointer to a
+ *   There is a six_lock() variant, six_lock_ip_waiter(), that takes a pointer to a
  *   wait list entry. By embedding six_lock_waiter into another object, and by
  *   traversing lock waitlists, it is then possible for an upper layer to
  *   implement full cycle detection for deadlock avoidance.
@@ -113,7 +113,7 @@
  *   held locks for each thread, and each thread's held locks must be reachable
  *   from its six_lock_waiter object.
  *
- *   six_lock_waiter() will add the wait object to the waitlist re-trying taking
+ *   six_lock_ip_waiter() will add the wait object to the waitlist re-trying taking
  *   the lock, and before calling should_sleep_fn, and the wait object will not
  *   be removed from the waitlist until either the lock has been successfully
  *   acquired, or we aborted because should_sleep_fn returned an error.
@@ -172,67 +172,6 @@ static inline bool six_trylock_type(struct six_lock *lock, enum six_lock_type ty
 {
 	return six_trylock_ip(lock, type, _THIS_IP_);
 }
-
-/**
- * six_lock_waiter - take a lock, with full waitlist interface
- * @lock:	lock to take
- * @type:	SIX_LOCK_read, SIX_LOCK_intent, or SIX_LOCK_write
- * @wait:	pointer to wait object, which will be added to lock's waitlist
- * @should_sleep_fn: callback run after adding to waitlist, immediately prior
- *		to scheduling
- * @p:		passed through to @should_sleep_fn
- *
- * This is a convenience wrapper around six_lock_ip_waiter(), see that function
- * for full documentation.
- *
- * Return: 0 on success, or the return code from @should_sleep_fn on failure.
- */
-static inline int six_lock_waiter(struct six_lock *lock, enum six_lock_type type,
-				  struct six_lock_waiter *wait,
-				  six_lock_should_sleep_fn should_sleep_fn)
-{
-	return six_lock_ip_waiter(lock, type, wait, should_sleep_fn, _THIS_IP_);
-}
-
-#if 0
-/**
- * six_lock_ip - take a six lock lock
- * @lock:	lock to take
- * @type:	SIX_LOCK_read, SIX_LOCK_intent, or SIX_LOCK_write
- * @should_sleep_fn: callback run after adding to waitlist, immediately prior
- *		to scheduling
- * @p:		passed through to @should_sleep_fn
- * @ip:		ip parameter for lockdep/lockstat, i.e. _THIS_IP_
- *
- * Return: 0 on success, or the return code from @should_sleep_fn on failure.
- */
-static inline int six_lock_ip(struct six_lock *lock, enum six_lock_type type,
-			      six_lock_should_sleep_fn should_sleep_fn, void *p,
-			      unsigned long ip)
-{
-	struct six_lock_waiter wait = {};
-
-	return six_lock_ip_waiter(lock, type, &wait, should_sleep_fn, ip);
-}
-
-/**
- * six_lock_type - take a six lock lock
- * @lock:	lock to take
- * @type:	SIX_LOCK_read, SIX_LOCK_intent, or SIX_LOCK_write
- * @should_sleep_fn: callback run after adding to waitlist, immediately prior
- *		to scheduling
- * @p:		passed through to @should_sleep_fn
- *
- * Return: 0 on success, or the return code from @should_sleep_fn on failure.
- */
-static inline int six_lock_type(struct six_lock *lock, enum six_lock_type type,
-				six_lock_should_sleep_fn should_sleep_fn, void *p)
-{
-	struct six_lock_waiter wait;
-
-	return six_lock_ip_waiter(lock, type, &wait, should_sleep_fn, _THIS_IP_);
-}
-#endif
 
 /**
  * six_relock_type - attempt to re-take a lock that was held previously
@@ -302,27 +241,6 @@ static inline void six_unlock_##type(struct six_lock *lock)			\
 	six_unlock_ip(lock, SIX_LOCK_##type, _THIS_IP_);			\
 }
 
-#define __SIX_LOCK(type)						\
-static inline int six_lock_ip_waiter_##type(struct six_lock *lock,	\
-			   struct six_lock_waiter *wait,		\
-			   six_lock_should_sleep_fn should_sleep_fn,	\
-			   unsigned long ip)				\
-{									\
-	return six_lock_ip_waiter(lock, SIX_LOCK_##type, wait, should_sleep_fn, ip);\
-}									\
-									\
-static inline int six_lock_ip_##type(struct six_lock *lock,		\
-		    six_lock_should_sleep_fn should_sleep_fn,		\
-		    unsigned long ip)					\
-{									\
-	return six_lock_ip(lock, SIX_LOCK_##type, should_sleep_fn, ip);\
-}									\
-									\
-static inline int six_lock_##type(struct six_lock *lock)		\
-{									\
-	return six_lock_ip_##type(lock, NULL, NULL, _THIS_IP_);		\
-}									\
-
 __SIX_TRYLOCK(read)
 __SIX_TRYLOCK(intent)
 __SIX_TRYLOCK(write)
@@ -334,7 +252,6 @@ __SIX_RELOCK(write)
 __SIX_UNLOCK(read)
 __SIX_UNLOCK(intent)
 __SIX_UNLOCK(write)
-#undef __SIX_LOCK
 
 static inline void six_lock_increment(struct six_lock *lock, enum six_lock_type type)
 {

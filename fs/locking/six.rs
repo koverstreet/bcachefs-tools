@@ -4,27 +4,30 @@
 
 #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
 use super::raw::rust_debug_check_no_locks_freed;
-use super::raw::{rust_trace_contention_begin, rust_trace_contention_end};
+use super::lockdep::{trace_contention_begin, trace_contention_end};
 use super::{ExclusiveGuard, Locked, LockdepMap, RawLockBase, RawReadLock, RawSixLock, Shared, SharedGuard, SixIntent,
             SixWriteIntent};
 use crate::cstructs::c;
+use crate::data_structures::dst_vec::DstVec;
+use crate::data_structures::inline_vec::InlineVec;
 #[cfg(CONFIG_SMP)]
 use crate::debug::params::six_optimistic_spin_disabled;
 use crate::types::c_default;
-use crate::util::alloc::kvzalloc;
-use crate::util::ffi::{c_char, Opaque};
+use crate::util::alloc::init_at;
+use crate::util::ffi::c_char;
 use crate::util::kernel::time_after64;
 use crate::util::percpu::{CpuGuard, PerCpu};
-use crate::util::projections::Volatile;
-#[cfg(CONFIG_SMP)]
-use crate::util::rcu;
+use crate::util::projections::{AtomicWord, Volatile};
+use crate::util::rcu::{self, FreeAnytime};
 use crate::util::sched;
+use crate::util::sleep::{sleep_until, Sleep};
 use core::convert::Infallible;
 use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
-use core::ptr::{null_mut, NonNull};
+use core::mem::ManuallyDrop;
+use core::ptr::{self, null_mut, NonNull};
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
-use core::sync::atomic::{fence, AtomicBool, AtomicI32, AtomicPtr};
-use cstruct_macros::{c_const, c_enum, c_export, c_typedef, CStruct};
+use core::sync::atomic::{fence, AtomicBool, AtomicI32, AtomicPtr, AtomicU32};
+use cstruct_macros::{c_const, c_enum, c_export, CStruct};
 
 c_enum! {
     #[closed]
@@ -35,17 +38,32 @@ c_enum! {
     }
 }
 
+/* C's enum, a u32: zeroes are SIX_LOCK_read, and it's only ever set() to one */
+unsafe impl AtomicWord for six_lock_type {
+    type Atomic = AtomicU32;
+
+    fn load(a: &AtomicU32) -> Self {
+        six_lock_type::from_bits(a.load(Relaxed))
+    }
+
+    fn store(a: &AtomicU32, ty: Self) {
+        a.store(ty as u32, Relaxed)
+    }
+}
+
+/* its own thread's, read by the waker and by other threads' cycle detectors */
 #[repr(C)]
 #[derive(CStruct)]
 pub struct six_lock_waiter {
-    pub trans_start_time: u64,
-    pub task: *mut c::task_struct,
-    pub lock_want: c::six_lock_type,
+    pub trans_start_time: Volatile<u64>,
+    #[c("struct task_struct *task")]
+    pub task: AtomicPtr<c::task_struct>,
+    pub lock_want: Volatile<c::six_lock_type>,
     /* the waker's handoff: set, the waiter may return and reuse this */
     #[c("bool lock_acquired")]
     pub lock_acquired: AtomicBool,
-    /* Index in wait_fifo->data[], set on insert, used for O(1) self-remove. */
-    pub slot_idx: u16,
+    /* Index in the wait list, set on insert, used for O(1) self-remove. */
+    pub slot_idx: Volatile<u16>,
 }
 c_default!(six_lock_waiter);
 
@@ -59,31 +77,34 @@ pub struct six_lock_wait_slot {
 }
 c_default!(six_lock_wait_slot);
 
-/*
- * RCU-swappable wait list. Not a FIFO — entries sit at fixed indices from
- * insertion to removal, so RCU readers (the cycle detector) never observe an
- * entry moving. Removal writes NULL atomically; insertion finds a free slot
- * (starting from @next_free_hint) and fills it. @nr is the high-water-mark
- * index in use and shrinks when trailing slots go tombstone.
- *
- * Grown by allocating a new struct, copying fields + entries, then
- * rcu_assign_pointer'ing the lock's wait_fifo to the new object. Old
- * heap allocations are kvfree_rcu'd so future lockless readers can
- * outrun the free.
- */
-#[repr(C)]
-#[derive(CStruct)]
-pub struct six_lock_wait_fifo {
-    pub size: u16,
-    pub nr: Volatile<u16>,
-    pub next_free_hint: Volatile<u16>,
-    pub data: [c::six_lock_wait_slot; 0],
-}
-c_default!(six_lock_wait_fifo);
+/* the cycle detector reads them under RCU */
+impl !FreeAnytime for six_lock_wait_slot {}
 
 c_const! {
     #[c_int]
     pub const SIX_LOCK_INLINE_WAITERS: u32 = 8;
+}
+
+type WaitList = InlineVec<c::six_lock_wait_slot, { SIX_LOCK_INLINE_WAITERS as usize }, usize>;
+
+/*
+ * RCU-swappable wait list. Not a FIFO — entries sit at fixed indices from
+ * insertion to removal, so RCU readers (the cycle detector) never observe an
+ * entry moving. Removal writes NULL atomically; insertion finds a free slot
+ * (starting from @next_free_hint) and fills it. Its length is the
+ * high-water-mark index in use and shrinks when trailing slots go tombstone.
+ *
+ * Grown into a list allocated with wait_lock dropped; what it's grown out of
+ * is kvfree_rcu'd, its slots not FreeAnytime, so lockless readers can outrun
+ * the free.
+ */
+#[repr(C)]
+#[derive(CStruct)]
+pub struct six_lock_waiters {
+    pub next_free_hint: u16,
+    /* C has no use for it; six_lock_exit() frees it */
+    #[c("u64 list[1 + 2 * SIX_LOCK_INLINE_WAITERS]")]
+    pub list: ManuallyDrop<WaitList>,
 }
 
 #[repr(C)]
@@ -102,22 +123,12 @@ pub struct six_lock {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     #[c("bch_stacktrace owner_stack")]
     pub owner_stack: crate::util::ffi::Opaque<c::bch_stacktrace>,
-    pub wait_lock: c::raw_spinlock_t,
-
-    #[c("struct six_lock_wait_fifo __rcu *wait_fifo")]
-    pub wait_fifo: AtomicPtr<c::six_lock_wait_fifo>,
-
-    pub inline_fifo: c::six_lock_wait_fifo,
-    pub inline_fifo_data: [c::six_lock_wait_slot; c::SIX_LOCK_INLINE_WAITERS as usize],
+    #[c_lock("raw_spinlock_t wait_lock")]
+    pub wait_lock: Locked<c::raw_spinlock_t, six_lock_waiters>,
     #[c("struct lockdep_map dep_map")]
     pub dep_map: LockdepMap,
 }
 c_default!(six_lock);
-
-c_typedef! {
-    pub type six_lock_should_sleep_fn = Option<unsafe extern "C" fn(lock: *mut c::six_lock,
-                                                                    *mut c::six_lock_waiter) -> c_int>;
-}
 
 c_enum! {
     #[flags]
@@ -379,171 +390,157 @@ fn __do_six_trylock(lock: &six_lock, ty: six_lock_type, task: *mut c::task_struc
     ret
 }
 
-/// The slots of the wait list at @wf: they follow it, in the lock -
-/// inline_fifo_data - or in its allocation.
-///
-/// # Safety
-/// @wf is the lock's wait list, live for 'a.
-#[inline(always)]
-unsafe fn wf_slots<'a>(wf: *mut six_lock_wait_fifo) -> &'a [six_lock_wait_slot] {
-    unsafe { core::slice::from_raw_parts((&raw mut (*wf).data).cast(), (*wf).size as usize) }
+type WaitLockGuard<'a> = ExclusiveGuard<'a, c::raw_spinlock_t, six_lock_waiters>;
+
+/// The wait list, as wait_lock's holder has it, and its lock: what fills and
+/// empties its slots.
+struct WaitListLocked<'a> {
+    lock: &'a six_lock,
+    w:    &'a mut six_lock_waiters,
 }
 
 impl six_lock {
+    /// The wait list, for @g, wait_lock's holder.
+    fn wait_list<'a>(&'a self, g: &'a mut WaitLockGuard<'_>) -> WaitListLocked<'a> {
+        ebug_assert!(ptr::eq(g.lock(), &self.wait_lock));
+        WaitListLocked { lock: self, w: g }
+    }
+
+    /// The wait list's slots, read without wait_lock.
+    fn wait_list_rcu<'a>(&'a self, rcu: &'a rcu::ReadGuard) -> &'a [six_lock_wait_slot] {
+        // wait_lock's holder has it by &mut, and readers by read_rcu() alone
+        unsafe { WaitList::read_rcu((&raw const (*self.wait_lock.data_ptr()).list).cast(), rcu) }
+    }
+
     /// Its waiters and the lock type each wants, read without wait_lock: for
     /// the cycle detector. A slot's waiter is read with acquire, before its
-    /// start_time - the publish in six_lock_wait_fifo_insert() is a release.
-    pub fn waiters<'a>(&'a self, _rcu: &'a crate::util::rcu::ReadGuard)
+    /// start_time - the publish in WaitListLocked::insert() is a release.
+    pub fn waiters<'a>(&'a self, rcu: &'a rcu::ReadGuard)
         -> impl Iterator<Item = (NonNull<six_lock_waiter>, six_lock_type)> + 'a
     {
-        let wf = self.wait_fifo.load(Acquire);
-        let (nr, slots) = unsafe { (&(*wf).nr, wf_slots(wf)) };
-
-        (0..)
-            .take_while(move |&i| i < nr.get() as usize && i < slots.len())
-            .filter_map(move |i| {
-                let w = NonNull::new(slots[i].w.load(Acquire))?;
-                Some((w, six_lock_type::from_bits((slots[i].start_time.get() & SIX_LOCK_WANT_MASK as u64) as u32)))
-            })
+        self.wait_list_rcu(rcu).iter().filter_map(|slot| {
+            let w = NonNull::new(slot.w.load(Acquire))?;
+            Some((w, six_lock_type::from_bits((slot.start_time.get() & SIX_LOCK_WANT_MASK as u64) as u32)))
+        })
     }
 }
 
-/*
- * Trim @nr while the tail is all tombstones. Clamp hint inside [0, nr].
- * Caller must hold wait_lock.
- */
-#[inline(always)]
-unsafe fn six_lock_wait_fifo_shrink(wfp: *mut six_lock_wait_fifo) {
-    let (wf, slots) = unsafe { (&*wfp, wf_slots(wfp)) };
+impl WaitListLocked<'_> {
+    /*
+     * Trim @nr while the tail is all tombstones. Clamp hint inside [0, nr].
+     */
+    #[inline(always)]
+    fn shrink(&mut self) {
+        let list = &mut *self.w.list;
+        let mut nr = list.len();
 
-    while wf.nr.get() > 0 && slots[wf.nr.get() as usize - 1].w.load(Relaxed).is_null() {
-        wf.nr.set(wf.nr.get() - 1);
+        while nr > 0 && list[nr - 1].w.load(Relaxed).is_null() {
+            nr -= 1;
+        }
+        list.truncate(nr);
+        self.w.next_free_hint = self.w.next_free_hint.min(nr as u16);
     }
-    if wf.next_free_hint.get() > wf.nr.get() {
-        wf.next_free_hint.set(wf.nr.get());
-    }
-}
-
-/*
- * Null out the entry at @idx and update the free-slot hint. Caller must hold
- * wait_lock. Does not shrink @nr — that's done lazily by the caller when
- * convenient (e.g. at the end of a wakeup scan).
- */
-#[inline(always)]
-unsafe fn six_lock_wait_fifo_remove(wfp: *mut six_lock_wait_fifo, idx: u16) {
-    let (wf, slots) = unsafe { (&*wfp, wf_slots(wfp)) };
 
     /*
-     * WRITE_ONCE: the lockless cycle detector reads this slot via
-     * smp_load_acquire(&.w); clearing to NULL just makes it skip the slot
-     * (no dependent data, so no release needed), but it's a concurrently
-     * read shared location, so the store must be marked.
+     * Null out the entry at @idx and update the free-slot hint. Does not
+     * shrink @nr — that's done lazily by the caller when convenient (e.g. at
+     * the end of a wakeup scan).
      */
-    slots[idx as usize].w.store(null_mut(), Relaxed);
-    wf.next_free_hint.set(wf.next_free_hint.get().min(idx));
-}
-
-/*
- * Find a free slot (starting from @next_free_hint) and write the entry.
- * Returns true on success, false if the list is full.
- * Caller must hold wait_lock.
- */
-#[inline(always)]
-unsafe fn six_lock_wait_fifo_insert(lock: &six_lock, wait: *mut six_lock_waiter) -> bool {
-    let wfp = lock.wait_fifo.load(Relaxed);
-    let (wf, slots) = unsafe { (&*wfp, wf_slots(wfp)) };
-    let free = |i: u16| slots[i as usize].w.load(Relaxed).is_null();
-
-    let hint = wf.next_free_hint.get();
-    let i = if free(hint) {
-        hint
-    } else if let Some(i) = (0..wf.nr.get()).find(|&i| free(i)) {
-        i
-    } else if wf.nr.get() < wf.size {
-        wf.nr.get()
-    } else {
-        return false;
-    };
+    #[inline(always)]
+    fn remove(&mut self, idx: usize) {
+        /*
+         * WRITE_ONCE: the lockless cycle detector reads this slot via
+         * smp_load_acquire(&.w); clearing to NULL just makes it skip the slot
+         * (no dependent data, so no release needed), but it's a concurrently
+         * read shared location, so the store must be marked.
+         */
+        self.w.list[idx].w.store(null_mut(), Relaxed);
+        self.w.next_free_hint = self.w.next_free_hint.min(idx as u16);
+    }
 
     /*
-     * Publish this waiter for the lockless cycle detector
-     * (bch2_check_for_deadlock), which walks this fifo without taking
-     * wait_lock, gates each slot on a non-NULL .w, then reads the sibling
-     * .start_time and follows container_of(.w) -> trans to read the
-     * waiter's held-lock state.
-     *
-     * .w is the publish gate: stored last, with a release that orders the
-     * sibling slot fields and all of the trans's held-lock state (->paths,
-     * ->nodes_locked, l[].b) before the slot becomes visible. Pairs with
-     * the smp_load_acquire(&i->w) in the walk.
-     *
-     * This release is *not* the store->load fence that lets two waiters
-     * closing a cycle see each other - that is the smp_mb() in
-     * bch2_check_for_deadlock.
+     * Find a free slot (starting from @next_free_hint) and write the entry.
+     * Returns true on success, false if the list is full.
      */
-    let slot = &slots[i as usize];
-    unsafe {
-        slot.start_time.set(((*wait).trans_start_time << SIX_LOCK_WANT_BITS) |
-                            ((*wait).lock_want as u64 & SIX_LOCK_WANT_MASK as u64));
-        (*wait).slot_idx = i;
-    }
-    wf.next_free_hint.set((i + 1) & (wf.size - 1));
-    wf.nr.set(wf.nr.get().max(i + 1));
-    slot.w.store(wait, Release);
-    true
-}
+    /// # Safety
+    /// @wait lives until it's removed.
+    #[inline(always)]
+    unsafe fn insert(&mut self, wait: &six_lock_waiter) -> bool {
+        let list = &mut *self.w.list;
+        let (nr, size) = (list.len(), list.capacity());
+        let free = |i: usize| i >= nr || list[i].w.load(Relaxed).is_null();
 
-enum Realloc<'a> {
-    /// Into the list allocated last time, and @wait inserted.
-    Grown(ExclusiveGuard<'a, c::raw_spinlock_t>),
-    /// wait_lock dropped for a list to grow into, in *@new_wf: try again.
-    Allocated,
-    NoMem,
-}
-
-#[inline(never)]
-unsafe fn six_lock_wait_fifo_realloc<'a>(lock: &'a six_lock, wait: *mut six_lock_waiter,
-                                         new_wf_ret: &mut *mut six_lock_wait_fifo,
-                                         g: ExclusiveGuard<'a, c::raw_spinlock_t>) -> Realloc<'a> {
-    let old_wf = lock.wait_fifo.load(Relaxed);
-    let new_wf = *new_wf_ret;
-
-    unsafe {
-        if !new_wf.is_null() && (*new_wf).size as u32 == (*old_wf).size as u32 * 2 {
-            core::ptr::copy_nonoverlapping((&raw const (*old_wf).data).cast::<six_lock_wait_slot>(),
-                                           (&raw mut (*new_wf).data).cast::<six_lock_wait_slot>(),
-                                           (*old_wf).nr.get() as usize);
-            (*new_wf).nr.set((*old_wf).nr.get());
-            lock.wait_fifo.store(new_wf, Release);
-
-            *new_wf_ret = if !core::ptr::eq(old_wf, &lock.inline_fifo) { old_wf } else { null_mut() };
-            let inserted = six_lock_wait_fifo_insert(lock, wait);
-            ebug_assert!(inserted);
-            return Realloc::Grown(g);
-        }
-
-        let old_size = (*old_wf).size;
-
-        drop(g);
-
-        c::rust_kvfree(new_wf.cast());
-        *new_wf_ret = null_mut();
-
-        if old_size as u32 >= 1 << 15 {
-            return Realloc::NoMem;
-        }
-
-        let new_size = old_size * 2;
-        let Ok(new_wf) = kvzalloc(size_of::<six_lock_wait_fifo>() +
-                                  new_size as usize * size_of::<six_lock_wait_slot>()) else {
-            return Realloc::NoMem;
+        let hint = self.w.next_free_hint as usize;
+        let i = if free(hint) {
+            hint
+        } else if let Some(i) = (0..nr).find(|&i| free(i)) {
+            i
+        } else if nr < size {
+            nr
+        } else {
+            return false;
         };
-        let new_wf = new_wf.as_ptr().cast::<six_lock_wait_fifo>();
+        if i == nr && list.push(six_lock_wait_slot::default()).is_err() {
+            return false;
+        }
 
-        (*new_wf).size = new_size;
-        *new_wf_ret = new_wf;
+        /*
+         * Publish this waiter for the lockless cycle detector
+         * (bch2_check_for_deadlock), which walks this fifo without taking
+         * wait_lock, gates each slot on a non-NULL .w, then reads the sibling
+         * .start_time and follows container_of(.w) -> trans to read the
+         * waiter's held-lock state.
+         *
+         * .w is the publish gate: stored last, with a release that orders the
+         * sibling slot fields and all of the trans's held-lock state (->paths,
+         * ->nodes_locked, l[].b) before the slot becomes visible. Pairs with
+         * the smp_load_acquire(&i->w) in the walk.
+         *
+         * This release is *not* the store->load fence that lets two waiters
+         * closing a cycle see each other - that is the smp_mb() in
+         * bch2_check_for_deadlock.
+         */
+        let slot = &list[i];
+        slot.start_time.set((wait.trans_start_time.get() << SIX_LOCK_WANT_BITS) |
+                            (wait.lock_want.get() as u64 & SIX_LOCK_WANT_MASK as u64));
+        wait.slot_idx.set(i as u16);
+        slot.w.store(ptr::from_ref(wait).cast_mut(), Release);
+        self.w.next_free_hint = ((i + 1) & (size - 1)) as u16;
+        true
     }
-    Realloc::Allocated
+
+    /// The task of the waiter in slot @i.
+    fn task(&self, i: usize) -> *mut c::task_struct {
+        // inserted, so it lives until it's handed the lock or removes itself
+        unsafe { (*self.w.list[i].w.load(Relaxed)).task.load(Relaxed) }
+    }
+
+    /// Hand the waiter in slot @i the lock: removed, then lock_acquired, after
+    /// which it may return - so its task is had before, and woken after.
+    fn wake(&mut self, i: usize) {
+        let w = self.w.list[i].w.load(Relaxed);
+        let task = self.task(i);
+
+        /*
+         * Similar to percpu_rwsem_wake_function(), we need to
+         * guard against the wakee noticing w->lock_acquired,
+         * returning, and then exiting before we do the wakeup:
+         */
+        unsafe {
+            c::get_task_struct(task);
+            self.remove(i);
+            /*
+             * Release barrier orders the slot clear before
+             * setting w->lock_acquired; @w is on the stack of the
+             * waiting thread and will be reused after it sees
+             * w->lock_acquired with no other locking: pairs with
+             * smp_load_acquire() in six_lock_slowpath()
+             */
+            (*w).lock_acquired.store(true, Release);
+            c::wake_up_process(task);
+            c::put_task_struct(task);
+        }
+    }
 }
 
 /*
@@ -554,51 +551,26 @@ unsafe fn six_lock_wait_fifo_realloc<'a>(lock: &'a six_lock, wait: *mut six_lock
  * For reads: wake all matching waiters, same start-time ordering isn't
  * relevant since readers don't conflict with each other.
  */
-unsafe fn __six_lock_wakeup(lock: &six_lock, mut lock_type: six_lock_type) {
-    let wfp = lock.wait_fifo.load(Relaxed);
-    let (wf, slots) = unsafe { (&*wfp, wf_slots(wfp)) };
+fn __six_lock_wakeup(mut wl: WaitListLocked<'_>, mut lock_type: six_lock_type) {
+    let lock = wl.lock;
     let matches = |slot: &six_lock_wait_slot, ty: six_lock_type|
         !slot.w.load(Relaxed).is_null() && slot.start_time.get() & SIX_LOCK_WANT_MASK as u64 == ty as u64;
-
-    /*
-     * Similar to percpu_rwsem_wake_function(), we need to
-     * guard against the wakee noticing w->lock_acquired,
-     * returning, and then exiting before we do the wakeup:
-     */
-    let wake = |i: u16| unsafe {
-        let w = slots[i as usize].w.load(Relaxed);
-        let task = (*w).task;
-
-        c::get_task_struct(task);
-        six_lock_wait_fifo_remove(wfp, i);
-        /*
-         * Release barrier orders the slot clear before
-         * setting w->lock_acquired; @w is on the stack of the
-         * waiting thread and will be reused after it sees
-         * w->lock_acquired with no other locking: pairs with
-         * smp_load_acquire() in six_lock_slowpath()
-         */
-        (*w).lock_acquired.store(true, Release);
-        c::wake_up_process(task);
-        c::put_task_struct(task);
-    };
 
     loop {
         let ret = 'out: {
             if lock_type == six_lock_type::SIX_LOCK_read {
                 /* Readers don't conflict: wake all matching waiters. */
-                for i in 0..wf.nr.get() {
-                    let slot = &slots[i as usize];
-                    if !matches(slot, lock_type) {
+                for i in 0..wl.w.list.len() {
+                    if !matches(&wl.w.list[i], lock_type) {
                         continue;
                     }
 
-                    let ret = __do_six_trylock(lock, lock_type, unsafe { (*slot.w.load(Relaxed)).task }, false);
+                    let ret = __do_six_trylock(lock, lock_type, wl.task(i), false);
                     if ret != Trylock::Acquired {
                         break 'out ret;
                     }
 
-                    wake(i);
+                    wl.wake(i);
                 }
             } else {
                 /*
@@ -606,11 +578,10 @@ unsafe fn __six_lock_wakeup(lock: &six_lock, mut lock_type: six_lock_type) {
                  * whose transaction started earliest. start_time is cached in
                  * the slot so the scan doesn't deref each waiter.
                  */
-                let mut oldest: Option<(u16, u64)> = None;
+                let mut oldest: Option<(usize, u64)> = None;
                 let mut n_matches = 0;
 
-                for i in 0..wf.nr.get() {
-                    let slot = &slots[i as usize];
+                for (i, slot) in wl.w.list.iter().enumerate() {
                     if !matches(slot, lock_type) {
                         continue;
                     }
@@ -622,13 +593,12 @@ unsafe fn __six_lock_wakeup(lock: &six_lock, mut lock_type: six_lock_type) {
                 }
 
                 if let Some((i, _)) = oldest {
-                    let w = slots[i as usize].w.load(Relaxed);
-                    let ret = __do_six_trylock(lock, lock_type, unsafe { (*w).task }, false);
+                    let ret = __do_six_trylock(lock, lock_type, wl.task(i), false);
                     if ret != Trylock::Acquired {
                         break 'out ret;
                     }
 
-                    wake(i);
+                    wl.wake(i);
 
                     /*
                      * More non-read waiters still queued: leave the
@@ -651,7 +621,7 @@ unsafe fn __six_lock_wakeup(lock: &six_lock, mut lock_type: six_lock_type) {
         }
     }
 
-    unsafe { six_lock_wait_fifo_shrink(wfp) };
+    wl.shrink();
 }
 
 #[inline(always)]
@@ -664,8 +634,8 @@ fn six_lock_wakeup(lock: &six_lock, state: u32, lock_type: six_lock_type) {
         return;
     }
 
-    let _g = Locked::from_c(&lock.wait_lock).lock();
-    unsafe { __six_lock_wakeup(lock, lock_type) };
+    let mut g = lock.wait_lock.lock();
+    __six_lock_wakeup(lock.wait_list(&mut g), lock_type);
 }
 
 #[inline(always)]
@@ -673,8 +643,8 @@ fn do_six_trylock(lock: &six_lock, ty: six_lock_type, try_: bool) -> bool {
     let ret = __do_six_trylock(lock, ty, sched::current(), try_);
 
     if let Trylock::Wakeup(wakeup) = ret {
-        let _g = Locked::from_c(&lock.wait_lock).lock();
-        unsafe { __six_lock_wakeup(lock, wakeup) };
+        let mut g = lock.wait_lock.lock();
+        __six_lock_wakeup(lock.wait_list(&mut g), wakeup);
     }
 
     ret == Trylock::Acquired
@@ -740,19 +710,19 @@ fn six_owner_running(lock: &six_lock) -> bool {
 }
 
 #[cfg(CONFIG_SMP)]
-unsafe fn six_optimistic_spin(lock: &six_lock, wait: *mut six_lock_waiter, ty: six_lock_type) -> bool {
+fn six_optimistic_spin(lock: &six_lock, wait: &six_lock_waiter, ty: six_lock_type) -> bool {
     if ty == six_lock_type::SIX_LOCK_write || six_optimistic_spin_disabled() {
         return false;
     }
 
     {
-        let _g = rcu::read_lock();
-        let wfp = lock.wait_fifo.load(Acquire);
+        let rcu = rcu::read_lock();
+        let wl = lock.wait_list_rcu(&rcu);
         /*
          * Only spin if we're the sole entry in the wait list. Anything
          * more and someone older might get woken ahead of us.
          */
-        if unsafe { (*wfp).nr.get() != 1 || wf_slots(wfp)[0].w.load(Relaxed) != wait } {
+        if wl.len() != 1 || !ptr::eq(wl[0].w.load(Relaxed), wait) {
             return false;
         }
     }
@@ -771,7 +741,7 @@ unsafe fn six_optimistic_spin(lock: &six_lock, wait: *mut six_lock_waiter, ty: s
          * wait->lock_acquired: pairs with the smp_store_release in
          * __six_lock_wakeup
          */
-        if unsafe { (*wait).lock_acquired.load(Acquire) } {
+        if wait.lock_acquired.load(Acquire) {
             return true;
         }
 
@@ -794,15 +764,15 @@ unsafe fn six_optimistic_spin(lock: &six_lock, wait: *mut six_lock_waiter, ty: s
 }
 
 #[cfg(not(CONFIG_SMP))]
-unsafe fn six_optimistic_spin(_lock: &six_lock, _wait: *mut six_lock_waiter, _ty: six_lock_type) -> bool {
+fn six_optimistic_spin(_lock: &six_lock, _wait: &six_lock_waiter, _ty: six_lock_type) -> bool {
     false
 }
 
 #[inline(always)]
-unsafe fn __six_lock_slowpath(lock: &six_lock, ty: six_lock_type, wait: *mut six_lock_waiter,
-                              should_sleep_fn: c::six_lock_should_sleep_fn, ip: c_ulong) -> c_int {
+fn __six_lock_slowpath(lock: &six_lock, ty: six_lock_type, wait: &six_lock_waiter,
+                       mut should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> c_int {
     use six_lock_type::*;
-    let mut new_wf: *mut six_lock_wait_fifo = null_mut();
+    let mut spare = None;
     let mut ret: c_int = 0;
 
     if ty == SIX_LOCK_write {
@@ -812,18 +782,16 @@ unsafe fn __six_lock_slowpath(lock: &six_lock, ty: six_lock_type, wait: *mut six
         fence(SeqCst);
     }
 
-    unsafe { rust_trace_contention_begin(core::ptr::from_ref(lock).cast(), 0) };
+    trace_contention_begin(lock, 0);
     lock.dep_map.contended(ip);
 
-    unsafe {
-        (*wait).task = sched::current();
-        (*wait).lock_want = ty;
-        (*wait).lock_acquired.store(false, Relaxed);
-    }
+    wait.task.store(sched::current(), Relaxed);
+    wait.lock_want.set(ty);
+    wait.lock_acquired.store(false, Relaxed);
 
     'out: {
         let acquired = loop {
-            let g = Locked::from_c(&lock.wait_lock).lock();
+            let mut g = lock.wait_lock.lock();
 
             /*
              * Retry taking the lock after taking waitlist lock, in case we raced
@@ -833,26 +801,36 @@ unsafe fn __six_lock_slowpath(lock: &six_lock, ty: six_lock_type, wait: *mut six
             match __do_six_trylock(lock, ty, sched::current(), false) {
                 Trylock::Acquired       => break true,
                 Trylock::Failed         => {}
-                Trylock::Wakeup(wakeup) => unsafe { __six_lock_wakeup(lock, wakeup) },
+                Trylock::Wakeup(wakeup) => __six_lock_wakeup(lock.wait_list(&mut g), wakeup),
             }
 
-            if unsafe { six_lock_wait_fifo_insert(lock, wait) } {
+            // nothing below returns with @wait still on the list: it's
+            // handed the lock, or removes itself
+            let mut wl = lock.wait_list(&mut g);
+            if unsafe { wl.insert(wait) } {
                 break false;
             }
-            match unsafe { six_lock_wait_fifo_realloc(lock, wait, &mut new_wf, g) } {
-                Realloc::Grown(g)  => {
-                    drop(g);
+            if let Some(s) = spare.take() {
+                // a spare no bigger - grown meanwhile - is handed back, and freed
+                if wl.w.list.grow_into(s).is_ok() {
+                    let inserted = unsafe { wl.insert(wait) };
+                    ebug_assert!(inserted);
                     break false;
                 }
-                Realloc::Allocated => continue,
-                Realloc::NoMem     => {
-                    if ty == SIX_LOCK_write {
-                        six_clear_bitmask(lock, SIX_LOCK_HELD_write);
-                        six_lock_wakeup(lock, atomic_read(lock), SIX_LOCK_read);
-                    }
-                    ret = -(c::ENOMEM as c_int);
-                    break 'out;
+            }
+
+            /* full: one twice the size, allocated with wait_lock dropped */
+            let size = wl.w.list.capacity();
+            drop(g);
+
+            spare = if size < 1 << 15 { DstVec::with_capacity(size * 2).ok() } else { None };
+            if spare.is_none() {
+                if ty == SIX_LOCK_write {
+                    six_clear_bitmask(lock, SIX_LOCK_HELD_write);
+                    six_lock_wakeup(lock, atomic_read(lock), SIX_LOCK_read);
                 }
+                ret = -(c::ENOMEM as c_int);
+                break 'out;
             }
         };
 
@@ -860,78 +838,68 @@ unsafe fn __six_lock_slowpath(lock: &six_lock, ty: six_lock_type, wait: *mut six
             break 'out;
         }
 
-        if unsafe { six_optimistic_spin(lock, wait, ty) || (*wait).lock_acquired.load(Acquire) } {
+        if six_optimistic_spin(lock, wait, ty) || wait.lock_acquired.load(Acquire) {
             break 'out;
         }
 
         /* Yield before running the cycle detector: */
         sched::schedule();
 
-        loop {
-            unsafe { c::bch2_set_current_state(c::TASK_UNINTERRUPTIBLE) };
-
+        let Ok(r) = sleep_until(Sleep::UNINTERRUPTIBLE, || {
             /*
              * Ensures that writes to the waitlist entry happen after we see
              * wait->lock_acquired: pairs with the smp_store_release in
              * __six_lock_wakeup
              */
-            if unsafe { (*wait).lock_acquired.load(Acquire) } {
-                break;
+            if wait.lock_acquired.load(Acquire) {
+                return Some(0);
             }
 
-            ret = match should_sleep_fn {
-                Some(f) => unsafe { f(core::ptr::from_ref(lock).cast_mut(), wait) },
-                None    => 0,
-            };
-            if ret != 0 {
-                /*
-                 * If should_sleep_fn() returns an error, we are
-                 * required to return that error even if we already
-                 * acquired the lock - should_sleep_fn() might have
-                 * modified external state (e.g. when the deadlock cycle
-                 * detector in bcachefs issued a transaction restart)
-                 */
-                let acquired = {
-                    let _g = Locked::from_c(&lock.wait_lock).lock();
-                    let acquired = unsafe { (*wait).lock_acquired.load(Relaxed) };
-                    if !acquired {
-                        let wf = lock.wait_fifo.load(Relaxed);
+            match should_sleep_fn() {
+                0 => None,
+                e => Some(e),
+            }
+        });
+        ret = r;
 
-                        unsafe {
-                            six_lock_wait_fifo_remove(wf, (*wait).slot_idx);
-                            six_lock_wait_fifo_shrink(wf);
-                        }
-                    }
-                    acquired
-                };
+        if ret != 0 {
+            /*
+             * If should_sleep_fn() returns an error, we are
+             * required to return that error even if we already
+             * acquired the lock - should_sleep_fn() might have
+             * modified external state (e.g. when the deadlock cycle
+             * detector in bcachefs issued a transaction restart)
+             */
+            let acquired = {
+                let mut g = lock.wait_lock.lock();
+                let acquired = wait.lock_acquired.load(Relaxed);
+                if !acquired {
+                    let mut wl = lock.wait_list(&mut g);
 
-                if acquired {
-                    do_six_unlock_type(lock, ty);
-                } else if ty == SIX_LOCK_write {
-                    six_clear_bitmask(lock, SIX_LOCK_HELD_write);
-                    six_lock_wakeup(lock, atomic_read(lock), SIX_LOCK_read);
+                    wl.remove(wait.slot_idx.get().into());
+                    wl.shrink();
                 }
-                break;
+                acquired
+            };
+
+            if acquired {
+                do_six_unlock_type(lock, ty);
+            } else if ty == SIX_LOCK_write {
+                six_clear_bitmask(lock, SIX_LOCK_HELD_write);
+                six_lock_wakeup(lock, atomic_read(lock), SIX_LOCK_read);
             }
-
-            sched::schedule();
         }
-
-        unsafe { c::bch2_set_current_state_running() };
     }
 
-    if !new_wf.is_null() {
-        unsafe { c::rust_kfree_rcu_mightsleep(new_wf.cast()) };
-    }
-    unsafe { rust_trace_contention_end(core::ptr::from_ref(lock).cast(), 0) };
+    trace_contention_end(lock, 0);
 
     ret
 }
 
 #[inline(never)]
-unsafe fn six_lock_slowpath(lock: &six_lock, ty: six_lock_type, wait: *mut six_lock_waiter,
-                            should_sleep_fn: c::six_lock_should_sleep_fn, ip: c_ulong) -> c_int {
-    unsafe { __six_lock_slowpath(lock, ty, wait, should_sleep_fn, ip) }
+fn six_lock_slowpath(lock: &six_lock, ty: six_lock_type, wait: &six_lock_waiter,
+                     should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> c_int {
+    __six_lock_slowpath(lock, ty, wait, should_sleep_fn, ip)
 }
 
 /*
@@ -964,11 +932,8 @@ unsafe fn six_lock_slowpath(lock: &six_lock, ty: six_lock_type, wait: *mut six_l
  *
  * Return: 0 on success, or the return code from @should_sleep_fn on failure.
  */
-/// # Safety
-/// @wait lives, untouched but by six, until this returns.
-#[c_export]
-pub unsafe fn six_lock_ip_waiter(lock: &c::six_lock, ty: c::six_lock_type, wait: *mut c::six_lock_waiter,
-                                 should_sleep_fn: c::six_lock_should_sleep_fn, ip: c_ulong) -> c_int {
+pub fn six_lock_ip_waiter(lock: &c::six_lock, ty: c::six_lock_type, wait: &c::six_lock_waiter,
+                          should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> c_int {
     if ty != six_lock_type::SIX_LOCK_write {
         lock.dep_map.acquire(false, ty == six_lock_type::SIX_LOCK_read, ip);
     }
@@ -976,7 +941,7 @@ pub unsafe fn six_lock_ip_waiter(lock: &c::six_lock, ty: c::six_lock_type, wait:
     let ret = if do_six_trylock(lock, ty, true) {
         0
     } else {
-        unsafe { six_lock_slowpath(lock, ty, wait, should_sleep_fn, ip) }
+        six_lock_slowpath(lock, ty, wait, should_sleep_fn, ip)
     };
 
     if ret != 0 && ty != six_lock_type::SIX_LOCK_write {
@@ -1004,16 +969,13 @@ pub unsafe fn six_lock_ip_waiter(lock: &c::six_lock, ty: c::six_lock_type, wait:
  * to recheck would be wasted work. The post-WAITING-bit retry inside
  * six_lock_slowpath() still covers the unlock-raced-with-us window.
  */
-/// # Safety
-/// As six_lock_ip_waiter()'s.
-#[c_export]
-pub unsafe fn six_lock_contended(lock: &c::six_lock, ty: c::six_lock_type, wait: *mut c::six_lock_waiter,
-                                 should_sleep_fn: c::six_lock_should_sleep_fn, ip: c_ulong) -> c_int {
+pub fn six_lock_contended(lock: &c::six_lock, ty: c::six_lock_type, wait: &c::six_lock_waiter,
+                          should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> c_int {
     if ty != six_lock_type::SIX_LOCK_write {
         lock.dep_map.acquire(false, ty == six_lock_type::SIX_LOCK_read, ip);
     }
 
-    let ret = unsafe { __six_lock_slowpath(lock, ty, wait, should_sleep_fn, ip) };
+    let ret = __six_lock_slowpath(lock, ty, wait, should_sleep_fn, ip);
 
     if ret != 0 && ty != six_lock_type::SIX_LOCK_write {
         lock.dep_map.release(ip);
@@ -1153,11 +1115,13 @@ pub unsafe fn six_trylock_convert(lock: &c::six_lock, from: c::six_lock_type, to
         return true;
     }
 
+    let hold = unsafe { SixHold::from_raw(Locked::from_c(lock), from) };
     if to == six_lock_type::SIX_LOCK_read {
-        unsafe { six_lock_downgrade(lock) };
+        hold.downgrade().into_raw();
         true
     } else {
-        unsafe { six_lock_tryupgrade(lock) }
+        let (Ok(hold) | Err(hold)) = hold.try_upgrade();
+        hold.into_raw() == to
     }
 }
 
@@ -1230,13 +1194,11 @@ pub fn six_lock_wakeup_all(lock: &c::six_lock) {
      * six_lock_slowpath() and self-remove via wait->slot_idx if it
      * returns an error. Removing here would corrupt that self-remove.
      */
-    let _g = Locked::from_c(&lock.wait_lock).lock();
-    let wfp = lock.wait_fifo.load(Relaxed);
-    let (wf, slots) = unsafe { (&*wfp, wf_slots(wfp)) };
-    for slot in &slots[..wf.nr.get() as usize] {
-        let w = slot.w.load(Relaxed);
-        if !w.is_null() {
-            unsafe { c::wake_up_process((*w).task) };
+    let mut g = lock.wait_lock.lock();
+    let wl = lock.wait_list(&mut g);
+    for i in 0..wl.w.list.len() {
+        if !wl.w.list[i].w.load(Relaxed).is_null() {
+            unsafe { c::wake_up_process(wl.task(i)) };
         }
     }
 }
@@ -1343,8 +1305,8 @@ impl<G: Sync, P> Locked<c::six_lock, G, P> {
     /// just failed: @wait on the lock's waitlist while it waits, where other
     /// threads' cycle detection reads it; @should_sleep_fn's error if it gives
     /// up.
-    pub fn lock_waiting_as(&self, ty: six_lock_type, wait: &Opaque<c::six_lock_waiter>,
-                           should_sleep_fn: c::six_lock_should_sleep_fn, ip: c_ulong,
+    pub fn lock_waiting_as(&self, ty: six_lock_type, wait: &c::six_lock_waiter,
+                           should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong,
                            contended: bool) -> Result<SixHold<'_, G, P>, c_int> {
         assert!(ty != six_lock_type::SIX_LOCK_write, "a six write lock is taken over intent");
         match six_lock_waiting(self.raw(), ty, wait, should_sleep_fn, ip, contended) {
@@ -1354,14 +1316,12 @@ impl<G: Sync, P> Locked<c::six_lock, G, P> {
     }
 }
 
-fn six_lock_waiting(lock: &c::six_lock, ty: six_lock_type, wait: &Opaque<c::six_lock_waiter>,
-                    should_sleep_fn: c::six_lock_should_sleep_fn, ip: c_ulong, contended: bool) -> c_int {
-    unsafe {
-        if contended {
-            six_lock_contended(lock, ty, wait.as_ptr(), should_sleep_fn, ip)
-        } else {
-            six_lock_ip_waiter(lock, ty, wait.as_ptr(), should_sleep_fn, ip)
-        }
+fn six_lock_waiting(lock: &c::six_lock, ty: six_lock_type, wait: &c::six_lock_waiter,
+                    should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong, contended: bool) -> c_int {
+    if contended {
+        six_lock_contended(lock, ty, wait, should_sleep_fn, ip)
+    } else {
+        six_lock_ip_waiter(lock, ty, wait, should_sleep_fn, ip)
     }
 }
 
@@ -1481,8 +1441,8 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
     ///
     /// # Safety
     /// @readers are read holds the caller has on the lock.
-    pub unsafe fn write_waiting_over(self, readers: c_int, wait: &Opaque<c::six_lock_waiter>,
-                                     should_sleep_fn: c::six_lock_should_sleep_fn,
+    pub unsafe fn write_waiting_over(self, readers: c_int, wait: &c::six_lock_waiter,
+                                     should_sleep_fn: impl FnMut() -> c_int,
                                      ip: c_ulong) -> Result<Self, (Self, c_int)> {
         assert!(self.ty() == six_lock_type::SIX_LOCK_intent, "a six write lock taken over a hold that isn't intent");
         let locked = self.lock();
@@ -1507,8 +1467,8 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
 impl c::six_lock {
     /// six_lock_ip(), without a should_sleep_fn: it can't fail.
     fn lock_type(&self, ty: six_lock_type) {
-        let mut wait = c::six_lock_waiter::default();
-        let ret = unsafe { six_lock_ip_waiter(self, ty, &mut wait, None, 0) };
+        let wait = c::six_lock_waiter::default();
+        let ret = six_lock_ip_waiter(self, ty, &wait, || 0, 0);
         ebug_assert!(ret == 0, "six lock without should_sleep_fn failed: {ret}");
     }
 }
@@ -1558,11 +1518,7 @@ pub unsafe fn six_lock_exit(lock: *mut c::six_lock) {
 
         (*lock).readers.free();
 
-        let wf = (*lock).wait_fifo.load(Relaxed);
-        if !core::ptr::eq(wf, &raw const (*lock).inline_fifo) {
-            c::rust_kvfree(wf.cast());
-        }
-        (*lock).wait_fifo.store(null_mut(), Relaxed);
+        ManuallyDrop::drop(&mut (*(&(*lock).wait_lock).data_ptr().cast_mut()).list);
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         crate::util::alloc::darray_exit(&mut *(*lock).owner_stack.as_ptr());
     }
@@ -1575,14 +1531,11 @@ pub unsafe fn six_lock_exit(lock: *mut c::six_lock) {
 #[c_export]
 pub unsafe fn __six_lock_init(lock: *mut c::six_lock, name: *const c_char, key: *mut c_void,
                               flags: c::six_lock_init_flags, gfp: c::gfp_t) {
+    let wait_lock = crate::new_lock!(six_lock_waiters { next_free_hint: 0, list: ManuallyDrop::new(WaitList::new_zeroed()) },
+                                     "&lock->wait_lock");
     unsafe {
         (*lock).state.store(0, Relaxed);
-        let Ok(()) = c::raw_spinlock_t::init(&raw mut (*lock).wait_lock, c"&lock->wait_lock",
-                                             crate::new_lock!(@key));
-        (*lock).inline_fifo.size = SIX_LOCK_INLINE_WAITERS as u16;
-        (*lock).inline_fifo.nr.set(0);
-        (*lock).inline_fifo.next_free_hint.set(0);
-        (*lock).wait_fifo.store(&raw mut (*lock).inline_fifo, Relaxed);
+        let Ok(()) = init_at(wait_lock, &raw mut (*lock).wait_lock);
         #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
         rust_debug_check_no_locks_freed(lock.cast(), size_of::<six_lock>() as c_ulong);
         LockdepMap::init(&raw mut (*lock).dep_map, name, key);

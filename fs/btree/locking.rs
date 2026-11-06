@@ -350,7 +350,7 @@ impl BtreeTrans<'_> {
     /// @b's lock, by @lock: given the transaction's waiter, which the cycle
     /// detector reads, and the cycle detector to call.
     fn node_lock_nopath<H>(&self, b: &c::btree_bkey_cached_common, lock_may_not_fail: bool,
-                           lock: impl FnOnce(&Opaque<c::six_lock_waiter>, c::six_lock_should_sleep_fn) -> Result<H, c_int>)
+                           lock: impl FnOnce(&c::six_lock_waiter, &mut dyn FnMut() -> c_int) -> Result<H, c_int>)
                            -> Result<H, BchError> {
         self.set_lock_may_not_fail(lock_may_not_fail);
         self.lock_must_abort.store(0, Relaxed);
@@ -362,7 +362,7 @@ impl BtreeTrans<'_> {
          * the case where the node was reclaimed AND re-hashed to a new
          * identity. 0 disables the check (lock_root, cached, relock). */
 
-        let ret = lock(&self.locking_wait, Some(bch2_six_check_for_deadlock)).map_err(|e| {
+        let ret = lock(&self.locking_wait, &mut || bch2_six_check_for_deadlock(self, b)).map_err(|e| {
             assert!(!lock_may_not_fail, "a lock that may not fail failed: {}", BchError::from_raw(e).msg());
             if e == -(c::ENOMEM as c_int) {
                 self.restart(bch_errcode::BCH_ERR_transaction_restart_lock_waitlist_alloc)
@@ -1212,12 +1212,10 @@ pub fn bch2_btree_node_lock_nopath(trans: &BtreeTrans<'_>, b: &c::btree_bkey_cac
                                    lock_may_not_fail: bool, ip: c_ulong, contended: bool) -> c_int {
     ret_to_c(trans.node_lock_nopath(b, lock_may_not_fail, |wait, should_sleep_fn| {
         let lock = b.lock.six();
-        match unsafe {
-            if contended {
-                six_lock_contended(lock, ty, wait.as_ptr(), should_sleep_fn, ip)
-            } else {
-                six_lock_ip_waiter(lock, ty, wait.as_ptr(), should_sleep_fn, ip)
-            }
+        match if contended {
+            six_lock_contended(lock, ty, wait, should_sleep_fn, ip)
+        } else {
+            six_lock_ip_waiter(lock, ty, wait, should_sleep_fn, ip)
         } {
             0 => Ok(()),
             e => Err(e),
