@@ -43,6 +43,23 @@ fn pos(bit: usize) -> (usize, usize) {
     (bit / BITS, 1 << (bit % BITS))
 }
 
+/// The first set bit from @start, below @end, of the words @word gives -
+/// None past the last: find_next_bit()'s loop, each word read as it's
+/// reached.
+fn next_set(start: usize, end: usize, word: impl Fn(usize) -> Option<usize>) -> Option<usize> {
+    let mut bit = start;
+    while bit < end {
+        let i = bit / BITS;
+        let w = word(i)? & (!0 << (bit % BITS));
+
+        if w != 0 {
+            return Some(i * BITS + w.trailing_zeros() as usize).filter(|&b| b < end);
+        }
+        bit = (i + 1) * BITS;
+    }
+    None
+}
+
 /// The set bits of word @i, @w, in order: for_each_set_bit()'s inner loop.
 fn word_bits(i: usize, mut w: usize) -> impl Iterator<Item = usize> {
     core::iter::from_fn(move || {
@@ -117,6 +134,11 @@ impl Bitmap {
     /// The set bits, in order: for_each_set_bit().
     pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         self.0.iter().enumerate().flat_map(|(i, &w)| word_bits(i, w))
+    }
+
+    /// The first set bit from @start, before @end: find_next_bit().
+    pub fn next(&self, start: usize, end: usize) -> Option<usize> {
+        next_set(start, end, |i| self.0.get(i).copied())
     }
 
     /// The first clear bit from @start, before @end: find_next_zero_bit().
@@ -268,21 +290,19 @@ impl AtomicBitmap {
         self.0.iter().enumerate().flat_map(|(i, w)| word_bits(i, w.load(Ordering::Relaxed)))
     }
 
+    /// The first set bit from @start, below @end, each word read as it's
+    /// reached: find_next_bit().
+    pub fn next(&self, start: usize, end: usize) -> Option<usize> {
+        next_set(start, end, |i| self.0.get(i).map(|w| w.load(Ordering::Relaxed)))
+    }
+
     /// The first bit from @start, below @end, set here and clear in @not; @not's
     /// bits past its words count as clear.
     pub fn next_andnot(&self, not: &AtomicBitmap, start: usize, end: usize) -> Option<usize> {
-        let mut bit = start;
-        while bit < end {
-            let i = bit / BITS;
+        next_set(start, end, |i| {
             let not_w = not.0.get(i).map_or(0, |w| w.load(Ordering::Relaxed));
-            let w = self.0.get(i)?.load(Ordering::Relaxed) & !not_w & (!0 << (bit % BITS));
-
-            if w != 0 {
-                return Some(i * BITS + w.trailing_zeros() as usize).filter(|&b| b < end);
-            }
-            bit = (i + 1) * BITS;
-        }
-        None
+            Some(self.0.get(i)?.load(Ordering::Relaxed) & !not_w)
+        })
     }
 }
 

@@ -39,7 +39,8 @@ use core::ops::ControlFlow;
 use crate::btree::cache::btree_ptr_hash_val;
 use crate::data::ptrs::BtreePtrs;
 use crate::util::vstructs::{State, Validated};
-use crate::types::c_default;
+use crate::data_structures::bitmap::Bitmap;
+use crate::types::{bits_to_longs, c_default};
 use cstruct_macros::{CStruct, c_extern};
 use crate::format::{Bpos, Btree};
 
@@ -326,18 +327,9 @@ impl<'f> BtreeTrans<'f> {
     }
 
     fn next_path_idx(&self, idx: PathIdx) -> Option<PathIdx> {
-        const BITS: usize = c_ulong::BITS as usize;
-        let (nr, allocated) = (self.nr_paths.get() as usize, self.paths_allocated.get());
-        let mut idx = idx as usize;
-
-        while idx < nr {
-            let w = unsafe { *allocated.add(idx / BITS) } >> (idx % BITS);
-            if w != 0 {
-                return Some((idx + w.trailing_zeros() as usize) as PathIdx);
-            }
-            idx = (idx | (BITS - 1)) + 1;
-        }
-        None
+        let nr = self.nr_paths.get() as usize;
+        let words = unsafe { core::slice::from_raw_parts(self.paths_allocated.get().cast::<usize>(), bits_to_longs(nr)) };
+        Bitmap::from_words(words).next(idx as usize, nr).map(|i| i as PathIdx)
     }
 
     /// TransAttempt::restart(), for what C calls in the middle of an attempt

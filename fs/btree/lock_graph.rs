@@ -6,16 +6,18 @@
 use crate::btree::iter::BtreeTrans;
 use crate::btree::locking::btree_node_locked_type;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::BtreePath;
+use crate::btree::path::{BtreePath, PathNode};
 use crate::c;
-use crate::errcode::{bch_errcode, errptr_or_null, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
 use crate::util::alloc::AllocError;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::util::closure::ClosureRef;
+use crate::data_structures::bitmap::AtomicBitmap;
 use crate::data_structures::inline_vec::InlineVec;
+use crate::types::bits_to_longs;
 use crate::util::kernel::time_after64;
 use crate::util::percpu::{bch2_raw_smp_processor_id, bch2_set_current_wake_cpu, bch2_task_pid, CpuGuard, PerCpu,
                           PerCpuRef};
@@ -25,7 +27,7 @@ use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
 use core::mem::offset_of;
 use core::ptr::{self, null_mut};
-use core::sync::atomic::{fence, AtomicPtr, Ordering::{Acquire, Relaxed, Release, SeqCst}};
+use core::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering::{Acquire, Relaxed, Release, SeqCst}};
 use cstruct_macros::{c_export, c_extern};
 
 c_extern! {
@@ -110,27 +112,13 @@ fn path_locked_type(path: *const BtreePath, level: usize) -> btree_node_locked_t
 
 /// trans_paths_allocated() and trans_paths_nr(), of a path table another
 /// thread may be using: the bitmap, then nr_paths, sit before the paths.
-fn paths_allocated(paths: *mut BtreePath) -> (*const c_ulong, usize) {
+fn paths_allocated<'a>(paths: *mut BtreePath) -> (&'a AtomicBitmap, usize) {
     unsafe {
         let p = paths.byte_sub(offset_of!(c::btree_trans_paths, paths)).cast::<c::btree_trans_paths>();
         let nr = (*p).nr_paths as usize;
-        (p.cast::<c_ulong>().sub(nr.div_ceil(c_ulong::BITS as usize)), nr)
+        let words = p.cast::<AtomicUsize>().sub(bits_to_longs(nr));
+        (AtomicBitmap::from_words(core::slice::from_raw_parts(words, bits_to_longs(nr))), nr)
     }
-}
-
-/// find_next_bit(), of a bitmap another thread is changing.
-fn next_bit(words: *const c_ulong, nr: usize, from: usize) -> Option<usize> {
-    const BITS: usize = c_ulong::BITS as usize;
-
-    let mut idx = from;
-    while idx < nr {
-        let w = unsafe { words.add(idx / BITS).read_volatile() } >> (idx % BITS);
-        if w != 0 {
-            return Some(idx + w.trailing_zeros() as usize).filter(|&i| i < nr);
-        }
-        idx = (idx | (BITS - 1)) + 1;
-    }
-    None
 }
 
 fn lock_type_conflicts(t1: btree_node_locked_type, t2: c::six_lock_type) -> bool {
@@ -440,7 +428,7 @@ impl LockGraph {
         let (allocated, nr_paths) = paths_allocated(paths);
         let mut from = self.g[top].path_idx;
 
-        while let Some(path_idx) = next_bit(allocated, nr_paths, from) {
+        while let Some(path_idx) = allocated.next(from, nr_paths) {
             from = path_idx + 1;
 
             let path = unsafe { paths.add(path_idx) };
@@ -457,14 +445,14 @@ impl LockGraph {
                 let level = self.g[top].level;
                 let lock_held = path_locked_type(path, level);
 
-                if matches!(lock_held, btree_node_locked_type::BTREE_NODE_UNLOCKED) {
+                if lock_held == btree_node_locked_type::BTREE_NODE_UNLOCKED {
                     self.g[top].level += 1;
                     continue;
                 }
 
-                let b = unsafe { (&raw const (*path).l[level].b).read_volatile() }.as_ptr();
-                self.g[top].node_have = b;
-                if !matches!(errptr_or_null(b), Ok(Some(_))) {
+                let b = unsafe { (&raw const (*path).l[level].b).read_volatile() };
+                self.g[top].node_have = b.as_ptr();
+                if !b.is_node() {
                     /*
                      * If we get here, it means we raced with the
                      * other thread updating its btree_path
@@ -605,11 +593,7 @@ pub(crate) fn check_for_deadlock(trans: *mut BtreeTrans<'_>, mut cycle: Option<&
 
 fn locking_node(lock: *mut c::six_lock) -> Option<&'static BtreeNode> {
     let b = unsafe { lock.byte_sub(offset_of!(c::btree_bkey_cached_common, lock)) }.cast::<c::btree_bkey_cached_common>();
-
-    if unsafe { (*b).cached } {
-        return None;
-    }
-    Some(unsafe { &*b.byte_sub(offset_of!(BtreeNode, c)).cast::<BtreeNode>() })
+    BtreeNode::from_common(unsafe { &*b })
 }
 
 fn node_reuse_race(trans: &BtreeTrans<'_>, b: &BtreeNode) -> bool {
