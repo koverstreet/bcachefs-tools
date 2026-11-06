@@ -172,29 +172,6 @@ pub fn new_key<'a, 't>(t: &TransAttempt<'a, 't>, ty: c::bch_xattr_type, name: &[
     Ok(Some(k))
 }
 
-/// Check @v.k, an xattr: as bch2_xattr_validate().
-pub fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let x = xattr(v.k);
-    let name_len = x.x_name_len as usize;
-    let val_len  = x.x_val_len.get() as usize;
-    let have     = v.k.val_bytes().len() / size_of::<u64>();
-
-    let want = val_u64s(name_len, val_len);
-    bkey_fsck_err_on!(v, have < want, id::xattr_val_size_too_small,
-                      "value too small ({} < {})", have, want)?;
-
-    // XXX why +4 ?
-    let max = val_u64s(name_len, val_len + 4);
-    bkey_fsck_err_on!(v, have > max, id::xattr_val_size_too_big,
-                      "value too big ({} > {})", have, max)?;
-
-    bkey_fsck_err_on!(v, !x.ty().known(), id::xattr_invalid_type,
-                      "invalid type ({})", x.x_type)?;
-
-    bkey_fsck_err_on!(v, x.name().contains(&0), id::xattr_name_invalid_chars,
-                      "xattr name has invalid characters")
-}
-
 /// The bytes of @b up to its first NUL, as printf's %.*s prints them.
 fn to_nul(b: &[u8]) -> &[u8] {
     b.iter().position(|&c| c == 0).map_or(b, |n| &b[..n])
@@ -230,7 +207,25 @@ pub fn to_text(out: &mut Printbuf, k: BkeySC<'_>) {
 
 impl crate::btree::bkey::BkeyOps for c::Xattr {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        validate(v)
+        let x = xattr(v.k);
+        let name_len = x.x_name_len as usize;
+        let val_len  = x.x_val_len.get() as usize;
+        let have     = v.k.val_bytes().len() / size_of::<u64>();
+
+        let want = val_u64s(name_len, val_len);
+        bkey_fsck_err_on!(v, have < want, id::xattr_val_size_too_small,
+                          "value too small ({} < {})", have, want)?;
+
+        // XXX why +4 ?
+        let max = val_u64s(name_len, val_len + 4);
+        bkey_fsck_err_on!(v, have > max, id::xattr_val_size_too_big,
+                          "value too big ({} > {})", have, max)?;
+
+        bkey_fsck_err_on!(v, !x.ty().known(), id::xattr_invalid_type,
+                          "invalid type ({})", x.x_type)?;
+
+        bkey_fsck_err_on!(v, x.name().contains(&0), id::xattr_name_invalid_chars,
+                          "xattr name has invalid characters")
     }
 
     #[cold]

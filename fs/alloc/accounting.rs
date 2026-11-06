@@ -212,58 +212,6 @@ fn replicas_past_end(err: VStructError) -> Option<(usize, usize)> {
     }
 }
 
-fn accounting_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    use DiskAccountingPosRef as A;
-
-    let pos = DiskAccountingPos::from_bpos(v.k.k.p);
-    let arm = match pos.get() {
-        Err(ArmError::Unknown(_)) => return Ok(()),
-        arm => arm,
-    };
-
-    let ver = v.k.k.bversion;
-    bkey_fsck_err_on!(v, v.from.flags().contains(bch_validate_flags::BCH_VALIDATE_commit) &&
-                      ver.hi == 0 && ver.lo == 0,
-                      id::accounting_key_version_0, "accounting key with version=0")?;
-
-    let arm = match arm {
-        Ok(arm) => arm,
-        Err(ArmError::Bad { err, .. }) => {
-            return Err(match replicas_past_end(err) {
-                Some((devs, room)) => bkey_fsck_err!(v, id::accounting_key_replicas_past_end,
-                    "accounting key replicas entry with {devs} devs, room for {room}"),
-                None => bkey_fsck_err!(v, id::accounting_key_replicas_past_end,
-                    "accounting key replicas entry: {err}"),
-            });
-        }
-        Err(ArmError::Unknown(_) | ArmError::Short(_)) => unreachable!("Unknown returned above, and only a size: arm union is Short"),
-    };
-
-    if let A::replicas(r) = arm {
-        bkey_fsck_err_on!(v, r.nr_devs == 0, id::accounting_key_replicas_nr_devs_0,
-                          "accounting key replicas entry with nr_devs=0")?;
-        bkey_fsck_err_on!(v, r.nr_required > r.nr_devs || (r.nr_required > 1 && r.nr_required == r.nr_devs),
-                          id::accounting_key_replicas_nr_required_bad,
-                          "accounting key replicas entry with bad nr_required")?;
-        bkey_fsck_err_on!(v, r.devs.windows(2).any(|d| u32::from(d[0]) != c::BCH_SB_MEMBER_INVALID && d[0] >= d[1]),
-                          id::accounting_key_replicas_devs_unsorted,
-                          "accounting key replicas entry with unsorted devs")?;
-    }
-
-    let end = match arm {
-        A::inum(_) | A::dev_leaving(_) => BPOS_SIZE,
-        arm => DiskAccountingPos::ARMS_AT + arm.len(),
-    };
-
-    bkey_fsck_err_on!(v, pos.as_bytes()[end..].iter().any(|&b| b != 0),
-                      id::accounting_key_junk_at_end, "junk at end of accounting key")?;
-
-    let nr_counters = v.k.arm::<Accounting>().expect("an accounting key").v().d.len();
-    bkey_fsck_err_on!(v, nr_counters == 0 || nr_counters > MAX_COUNTERS,
-                      id::accounting_key_nr_counters_wrong,
-                      "accounting key with {nr_counters} counters, should be {}", pos.nr_counters())
-}
-
 #[cold]
 pub fn key_to_text(out: &mut Printbuf, fs: Option<&Fs>, pos: &DiskAccountingPos<Unvalidated>) {
     use DiskAccountingPosRef as A;
@@ -313,7 +261,55 @@ pub fn key_to_text(out: &mut Printbuf, fs: Option<&Fs>, pos: &DiskAccountingPos<
 
 impl BkeyOps for c::Accounting {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        accounting_validate(v)
+        use DiskAccountingPosRef as A;
+
+        let pos = DiskAccountingPos::from_bpos(v.k.k.p);
+        let arm = match pos.get() {
+            Err(ArmError::Unknown(_)) => return Ok(()),
+            arm => arm,
+        };
+
+        let ver = v.k.k.bversion;
+        bkey_fsck_err_on!(v, v.from.flags().contains(bch_validate_flags::BCH_VALIDATE_commit) &&
+                          ver.hi == 0 && ver.lo == 0,
+                          id::accounting_key_version_0, "accounting key with version=0")?;
+
+        let arm = match arm {
+            Ok(arm) => arm,
+            Err(ArmError::Bad { err, .. }) => {
+                return Err(match replicas_past_end(err) {
+                    Some((devs, room)) => bkey_fsck_err!(v, id::accounting_key_replicas_past_end,
+                        "accounting key replicas entry with {devs} devs, room for {room}"),
+                    None => bkey_fsck_err!(v, id::accounting_key_replicas_past_end,
+                        "accounting key replicas entry: {err}"),
+                });
+            }
+            Err(ArmError::Unknown(_) | ArmError::Short(_)) => unreachable!("Unknown returned above, and only a size: arm union is Short"),
+        };
+
+        if let A::replicas(r) = arm {
+            bkey_fsck_err_on!(v, r.nr_devs == 0, id::accounting_key_replicas_nr_devs_0,
+                              "accounting key replicas entry with nr_devs=0")?;
+            bkey_fsck_err_on!(v, r.nr_required > r.nr_devs || (r.nr_required > 1 && r.nr_required == r.nr_devs),
+                              id::accounting_key_replicas_nr_required_bad,
+                              "accounting key replicas entry with bad nr_required")?;
+            bkey_fsck_err_on!(v, r.devs.windows(2).any(|d| u32::from(d[0]) != c::BCH_SB_MEMBER_INVALID && d[0] >= d[1]),
+                              id::accounting_key_replicas_devs_unsorted,
+                              "accounting key replicas entry with unsorted devs")?;
+        }
+
+        let end = match arm {
+            A::inum(_) | A::dev_leaving(_) => BPOS_SIZE,
+            arm => DiskAccountingPos::ARMS_AT + arm.len(),
+        };
+
+        bkey_fsck_err_on!(v, pos.as_bytes()[end..].iter().any(|&b| b != 0),
+                          id::accounting_key_junk_at_end, "junk at end of accounting key")?;
+
+        let nr_counters = v.k.arm::<Accounting>().expect("an accounting key").v().d.len();
+        bkey_fsck_err_on!(v, nr_counters == 0 || nr_counters > MAX_COUNTERS,
+                          id::accounting_key_nr_counters_wrong,
+                          "accounting key with {nr_counters} counters, should be {}", pos.nr_counters())
     }
 
     #[cold]

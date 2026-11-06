@@ -1142,76 +1142,72 @@ macro_rules! has_field {
     };
 }
 
-fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let k = v.k;
-    let s = val(k).expect("a snapshot");
-    let id = k.k.p.offset;
-
-    bkey_fsck_err_on!(v, bkey_gt(k.k.p, pos(0, u32::MAX as u64)) || bkey_lt(k.k.p, pos(0, 1)),
-                      id::snapshot_pos_bad, "bad pos")?;
-
-    let parent = s.parent.get();
-    bkey_fsck_err_on!(v, parent != 0 && parent as u64 <= id,
-                      id::snapshot_parent_bad, "bad parent node ({parent} <= {id})")?;
-
-    let children = s.children.map(|c| c.get());
-    bkey_fsck_err_on!(v, children[0] < children[1],
-                      id::snapshot_children_not_normalized, "children not normalized")?;
-    bkey_fsck_err_on!(v, children[0] != 0 && children[0] == children[1],
-                      id::snapshot_child_duplicate, "duplicate child nodes")?;
-    for c in children {
-        bkey_fsck_err_on!(v, c as u64 >= id,
-                          id::snapshot_child_bad, "bad child node ({c} >= {id})")?;
-    }
-
-    if has_field!(k, skip) {
-        let skip = s.skip.map(|s| s.get());
-        bkey_fsck_err_on!(v, skip[0] > skip[1] || skip[1] > skip[2],
-                          id::snapshot_skiplist_not_normalized, "skiplist not normalized")?;
-        for i in skip {
-            bkey_fsck_err_on!(v, i != 0 && i < parent,
-                              id::snapshot_skiplist_bad, "bad skiplist node {i}")?;
-        }
-    }
-
-    if has_field!(k, pad) {
-        bkey_fsck_err_on!(v, s.pad.get() != 0, id::snapshot_pad_nonzero, "reserved pad field nonzero")?;
-    }
-
-    // Commit-only checks - defense in depth: catch the buggy writer in the
-    // act, with a backtrace. Never applied to existing keys (the invalid-bkey
-    // machinery's remedy is dropping the key; on-disk violations are fsck's
-    // to handle, gently). Zero state is legal - pre-upgrade keys are
-    // rewritten with only their other fields touched:
-    if v.from.from() == c::bkey_validate_from::BKEY_VALIDATE_commit &&
-       v.fs.opts().no_commit_validate.get() == 0 {
-        let state = if has_field!(k, state) { s.state.get() } else { 0 };
-
-        bkey_fsck_err_on!(v, state != 0 && state_field(state).is_none(),
-                          id::snapshot_state_bad, "invalid state {state:#x}")?;
-
-        // A subvol backref is only legal on a live or will_delete leaf:
-        // subvolumes only reference leaves, and no_keys/deleted nodes were
-        // interior when they were emptied - a dead leaf is deleted outright;
-        // the no_keys parking state exists only because an interior node
-        // can't be removed from the tree at runtime. will_delete retains the
-        // backref: it points at the subvolume's tombstone, which the deletion
-        // path checks (check_should_delete_leaf()).
-        let st = c::bch_snapshot_state(state);
-        bkey_fsck_err_on!(v, s.subvol.get() != 0 &&
-                          (children[0] != 0 ||
-                           (state != 0 &&
-                            st != c::bch_snapshot_state::SNAPSHOT_STATE_live &&
-                            st != c::bch_snapshot_state::SNAPSHOT_STATE_will_delete)),
-                          id::snapshot_should_not_have_subvol,
-                          "snapshot with subvol must be a live or will_delete leaf")?;
-    }
-    Ok(())
-}
-
 impl BkeyOps for c::Snapshot {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        validate(v)
+        let k = v.k;
+        let s = val(k).expect("a snapshot");
+        let id = k.k.p.offset;
+
+        bkey_fsck_err_on!(v, bkey_gt(k.k.p, pos(0, u32::MAX as u64)) || bkey_lt(k.k.p, pos(0, 1)),
+                          id::snapshot_pos_bad, "bad pos")?;
+
+        let parent = s.parent.get();
+        bkey_fsck_err_on!(v, parent != 0 && parent as u64 <= id,
+                          id::snapshot_parent_bad, "bad parent node ({parent} <= {id})")?;
+
+        let children = s.children.map(|c| c.get());
+        bkey_fsck_err_on!(v, children[0] < children[1],
+                          id::snapshot_children_not_normalized, "children not normalized")?;
+        bkey_fsck_err_on!(v, children[0] != 0 && children[0] == children[1],
+                          id::snapshot_child_duplicate, "duplicate child nodes")?;
+        for c in children {
+            bkey_fsck_err_on!(v, c as u64 >= id,
+                              id::snapshot_child_bad, "bad child node ({c} >= {id})")?;
+        }
+
+        if has_field!(k, skip) {
+            let skip = s.skip.map(|s| s.get());
+            bkey_fsck_err_on!(v, skip[0] > skip[1] || skip[1] > skip[2],
+                              id::snapshot_skiplist_not_normalized, "skiplist not normalized")?;
+            for i in skip {
+                bkey_fsck_err_on!(v, i != 0 && i < parent,
+                                  id::snapshot_skiplist_bad, "bad skiplist node {i}")?;
+            }
+        }
+
+        if has_field!(k, pad) {
+            bkey_fsck_err_on!(v, s.pad.get() != 0, id::snapshot_pad_nonzero, "reserved pad field nonzero")?;
+        }
+
+        // Commit-only checks - defense in depth: catch the buggy writer in the
+        // act, with a backtrace. Never applied to existing keys (the invalid-bkey
+        // machinery's remedy is dropping the key; on-disk violations are fsck's
+        // to handle, gently). Zero state is legal - pre-upgrade keys are
+        // rewritten with only their other fields touched:
+        if v.from.from() == c::bkey_validate_from::BKEY_VALIDATE_commit &&
+           v.fs.opts().no_commit_validate.get() == 0 {
+            let state = if has_field!(k, state) { s.state.get() } else { 0 };
+
+            bkey_fsck_err_on!(v, state != 0 && state_field(state).is_none(),
+                              id::snapshot_state_bad, "invalid state {state:#x}")?;
+
+            // A subvol backref is only legal on a live or will_delete leaf:
+            // subvolumes only reference leaves, and no_keys/deleted nodes were
+            // interior when they were emptied - a dead leaf is deleted outright;
+            // the no_keys parking state exists only because an interior node
+            // can't be removed from the tree at runtime. will_delete retains the
+            // backref: it points at the subvolume's tombstone, which the deletion
+            // path checks (check_should_delete_leaf()).
+            let st = c::bch_snapshot_state(state);
+            bkey_fsck_err_on!(v, s.subvol.get() != 0 &&
+                              (children[0] != 0 ||
+                               (state != 0 &&
+                                st != c::bch_snapshot_state::SNAPSHOT_STATE_live &&
+                                st != c::bch_snapshot_state::SNAPSHOT_STATE_will_delete)),
+                              id::snapshot_should_not_have_subvol,
+                              "snapshot with subvol must be a live or will_delete leaf")?;
+        }
+        Ok(())
     }
 
     #[cold]
@@ -1240,16 +1236,12 @@ static SNAPSHOT: Trigger = Trigger(|t, op| trigger(t, op));
 // they exist to provide a stable identifier for the whole lifetime of a
 // snapshot tree.
 
-fn tree_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let p = v.k.k.p;
-    bkey_fsck_err_on!(v, bkey_gt(p, pos(0, u32::MAX as u64)) || bkey_lt(p, pos(0, 1)),
-                      id::snapshot_tree_pos_bad, "bad pos")?;
-    Ok(())
-}
-
 impl BkeyOps for c::SnapshotTree {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        tree_validate(v)
+        let p = v.k.k.p;
+        bkey_fsck_err_on!(v, bkey_gt(p, pos(0, u32::MAX as u64)) || bkey_lt(p, pos(0, 1)),
+                          id::snapshot_tree_pos_bad, "bad pos")?;
+        Ok(())
     }
 
     #[cold]

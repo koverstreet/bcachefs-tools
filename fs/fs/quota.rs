@@ -149,28 +149,20 @@ impl SbFieldOps for c::bch_sb_field_quota<Validated> {
 
 // ── Keys ─────────────────────────────────────────────────────────────────
 
-fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let ty = v.k.k.p.inode;
-    bkey_fsck_err_on!(v, ty >= c::QTYP_NR as u64, id::quota_type_invalid,
-                      "invalid quota type ({ty} >= {})", c::QTYP_NR)
-}
-
 impl crate::btree::bkey::BkeyOps for c::Quota {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        validate(v)
+        let ty = v.k.k.p.inode;
+        bkey_fsck_err_on!(v, ty >= c::QTYP_NR as u64, id::quota_type_invalid,
+                          "invalid quota type ({ty} >= {})", c::QTYP_NR)
     }
 
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-        quota_to_text(out, fs, k)
-    }
-}
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        let q = c::Quota::val_copy_pad(k).expect("a quota");
 
-#[cold]
-fn quota_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
-    let q = c::Quota::val_copy_pad(k).expect("a quota");
-
-    for (c, counter) in q.c.iter().zip(COUNTERS) {
-        write!(out, "{counter} hardlimit {} softlimit {}", c.hardlimit.get(), c.softlimit.get());
+        for (c, counter) in q.c.iter().zip(COUNTERS) {
+            write!(out, "{counter} hardlimit {} softlimit {}", c.hardlimit.get(), c.softlimit.get());
+        }
     }
 }
 

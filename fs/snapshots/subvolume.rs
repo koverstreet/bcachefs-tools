@@ -303,81 +303,73 @@ fn state_nearest(raw: u32) -> (c::bch_subvolume_state, u32) {
 
 // ── Validate, to_text, the trigger ───────────────────────────────────────
 
-fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let k = v.k;
-    let s = val(k).expect("a subvolume");
-
-    bkey_fsck_err_on!(v, k.k.p.inode != 0 || k.k.p.offset < 1 || k.k.p.offset > i32::MAX as u64,
-                      id::subvol_pos_bad, "invalid pos")?;
-    bkey_fsck_err_on!(v, s.snapshot == 0, id::subvol_snapshot_bad, "invalid snapshot")?;
-    bkey_fsck_err_on!(v, s.inode == 0, id::subvol_inode_bad, "invalid inode")?;
-
-    if has_field!(k, pad) {
-        bkey_fsck_err_on!(v, s.pad != 0, id::subvol_pad_nonzero, "reserved pad field nonzero")?;
-    }
-
-    // Only at commit, never on existing keys. Only Ok(false) fails: is_leaf()
-    // errors for ids not in the table yet, and create() commits the subvolume
-    // with its new snapshot nodes, before their trigger adds them.
-    if v.from.from() == c::bkey_validate_from::BKEY_VALIDATE_commit &&
-       v.fs.opts().no_commit_validate.get() == 0 {
-        if has_field!(k, state) {
-            bkey_fsck_err_on!(v, s.state != 0 && s.state_field().is_none(), id::subvol_state_bad,
-                              "invalid state {:#x}", s.state.get())?;
-        }
-
-        let snapshot = s.snapshot.get();
-        bkey_fsck_err_on!(v, matches!(v.fs.snapshots.is_leaf(snapshot), Ok(false)),
-                          id::subvol_snapshot_not_leaf,
-                          "snapshot {snapshot} is an interior node (subvolumes only reference leaves)")?;
-    }
-    Ok(())
-}
-
 impl BkeyOps for c::Subvolume {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        validate(v)
+        let k = v.k;
+        let s = val(k).expect("a subvolume");
+
+        bkey_fsck_err_on!(v, k.k.p.inode != 0 || k.k.p.offset < 1 || k.k.p.offset > i32::MAX as u64,
+                          id::subvol_pos_bad, "invalid pos")?;
+        bkey_fsck_err_on!(v, s.snapshot == 0, id::subvol_snapshot_bad, "invalid snapshot")?;
+        bkey_fsck_err_on!(v, s.inode == 0, id::subvol_inode_bad, "invalid inode")?;
+
+        if has_field!(k, pad) {
+            bkey_fsck_err_on!(v, s.pad != 0, id::subvol_pad_nonzero, "reserved pad field nonzero")?;
+        }
+
+        // Only at commit, never on existing keys. Only Ok(false) fails: is_leaf()
+        // errors for ids not in the table yet, and create() commits the subvolume
+        // with its new snapshot nodes, before their trigger adds them.
+        if v.from.from() == c::bkey_validate_from::BKEY_VALIDATE_commit &&
+           v.fs.opts().no_commit_validate.get() == 0 {
+            if has_field!(k, state) {
+                bkey_fsck_err_on!(v, s.state != 0 && s.state_field().is_none(), id::subvol_state_bad,
+                                  "invalid state {:#x}", s.state.get())?;
+            }
+
+            let snapshot = s.snapshot.get();
+            bkey_fsck_err_on!(v, matches!(v.fs.snapshots.is_leaf(snapshot), Ok(false)),
+                              id::subvol_snapshot_not_leaf,
+                              "snapshot {snapshot} is an interior node (subvolumes only reference leaves)")?;
+        }
+        Ok(())
     }
 
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-        subvolume_to_text(out, fs, k)
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        let s = val(k).expect("a subvolume");
+
+        write!(out, "root {} snapshot id {}", s.inode.get(), s.snapshot.get());
+
+        if has_field!(k, creation_parent) {
+            write!(out, " creation_parent {}", s.creation_parent.get());
+            write!(out, " fs_parent {}", s.fs_path_parent.get());
+        }
+
+        if s.ro() {
+            write!(out, " ro");
+        }
+        if s.snap() {
+            write!(out, " snapshot");
+        }
+
+        let state = s.state().get();
+        if state == 0 {
+            write!(out, " {} (not upgraded, unlinked_obsolete={})",
+                   s.state_from_flags(), s.unlinked_obsolete() as u32);
+        } else if let Some(state) = s.state_field() {
+            write!(out, " {state}");
+
+            // The legacy flag disagreeing with the state
+            if s.unlinked_obsolete() != (state != c::bch_subvolume_state::SUBVOLUME_STATE_live) {
+                write!(out, " unlinked_obsolete={}", s.unlinked_obsolete() as u32);
+            }
+        } else {
+            write!(out, " state {state:#x} invalid (unlinked_obsolete={})", s.unlinked_obsolete() as u32);
+        }
     }
 
     const TRIGGER: Option<&'static Trigger> = Some(&SUBVOLUME);
-}
-
-#[cold]
-fn subvolume_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
-    let s = val(k).expect("a subvolume");
-
-    write!(out, "root {} snapshot id {}", s.inode.get(), s.snapshot.get());
-
-    if has_field!(k, creation_parent) {
-        write!(out, " creation_parent {}", s.creation_parent.get());
-        write!(out, " fs_parent {}", s.fs_path_parent.get());
-    }
-
-    if s.ro() {
-        write!(out, " ro");
-    }
-    if s.snap() {
-        write!(out, " snapshot");
-    }
-
-    let state = s.state().get();
-    if state == 0 {
-        write!(out, " {} (not upgraded, unlinked_obsolete={})",
-               s.state_from_flags(), s.unlinked_obsolete() as u32);
-    } else if let Some(state) = s.state_field() {
-        write!(out, " {state}");
-
-        // The legacy flag disagreeing with the state
-        if s.unlinked_obsolete() != (state != c::bch_subvolume_state::SUBVOLUME_STATE_live) {
-            write!(out, " unlinked_obsolete={}", s.unlinked_obsolete() as u32);
-        }
-    } else {
-        write!(out, " state {state:#x} invalid (unlinked_obsolete={})", s.unlinked_obsolete() as u32);
-    }
 }
 
 /// POS_MIN if it isn't nested.

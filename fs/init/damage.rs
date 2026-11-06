@@ -59,47 +59,39 @@ const ENTRY: usize = size_of::<Entry>();
 /// The most entries a key's value holds: its u64s are a u8.
 const MAX_ENTRIES: usize = c::BKEY_VAL_U64s_MAX * size_of::<u64>() / ENTRY;
 
-fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let val_bytes = v.k.k.val_bytes();
-    bkey_fsck_err_on!(v, val_bytes % ENTRY != 0,
-                      id::damage_entries_bad, "val size {val_bytes} not a multiple of entry size")?;
-
-    let entries = &v.k.arm::<c::Damage>().expect("a damage key").v().entries;
-    bkey_fsck_err_on!(v, entries.is_empty(), id::damage_entries_bad, "no entries")?;
-
-    let mut prev = 0;
-    for (i, e) in entries.iter().enumerate() {
-        let id = e.id().0;
-        // strictly ascending ids: covers unsorted, dup and zero
-        bkey_fsck_err_on!(v, id <= prev, id::damage_entries_bad,
-                          "entry {i}: id {id} nr {} (prev id {prev})", e.nr())?;
-        prev = id;
-
-        bkey_fsck_err_on!(v, e.first() > e.last(), id::damage_entries_bad,
-                          "entry {i}: first occurrence after last")?;
-    }
-    Ok(())
-}
-
 impl crate::btree::bkey::BkeyOps for c::Damage {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        validate(v)
-    }
+        let val_bytes = v.k.k.val_bytes();
+        bkey_fsck_err_on!(v, val_bytes % ENTRY != 0,
+                          id::damage_entries_bad, "val size {val_bytes} not a multiple of entry size")?;
 
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-        damage_to_text(out, fs, k)
-    }
-}
+        let entries = &v.k.arm::<c::Damage>().expect("a damage key").v().entries;
+        bkey_fsck_err_on!(v, entries.is_empty(), id::damage_entries_bad, "no entries")?;
 
-#[cold]
-fn damage_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
-    for (i, e) in k.arm::<c::Damage>().expect("a damage key").v().entries.iter().enumerate() {
-        if i != 0 {
-            out.newline();
+        let mut prev = 0;
+        for (i, e) in entries.iter().enumerate() {
+            let id = e.id().0;
+            // strictly ascending ids: covers unsorted, dup and zero
+            bkey_fsck_err_on!(v, id <= prev, id::damage_entries_bad,
+                              "entry {i}: id {id} nr {} (prev id {prev})", e.nr())?;
+            prev = id;
+
+            bkey_fsck_err_on!(v, e.first() > e.last(), id::damage_entries_bad,
+                              "entry {i}: first occurrence after last")?;
         }
-        prt!(out, "{} nr ", e.id());
-        prt_error_nr(out, e.nr());
-        prt!(out, " first {} last {}", DateTime(e.first() as i64), DateTime(e.last() as i64));
+        Ok(())
+    }
+
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        for (i, e) in k.arm::<c::Damage>().expect("a damage key").v().entries.iter().enumerate() {
+            if i != 0 {
+                out.newline();
+            }
+            prt!(out, "{} nr ", e.id());
+            prt_error_nr(out, e.nr());
+            prt!(out, " first {} last {}", DateTime(e.first() as i64), DateTime(e.last() as i64));
+        }
     }
 }
 

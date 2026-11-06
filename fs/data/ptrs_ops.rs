@@ -300,46 +300,6 @@ pub fn bkey_ptrs_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
 
 // ── btree node pointers ──────────────────────────────────────────────────
 
-pub(super) fn btree_ptr_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let val_u64s = v.k.val_bytes().len() / 8;
-
-    bkey_fsck_err_on!(v, val_u64s > c::BCH_REPLICAS_MAX as usize, id::btree_ptr_val_too_big,
-                      "value too big ({} > {})", val_u64s, c::BCH_REPLICAS_MAX)?;
-
-    bkey_ptrs_validate(v)
-}
-
-pub(super) fn btree_ptr_v2_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let bp = v.k.arm::<c::BtreePtrV2>().expect("a btree_ptr_v2");
-    let val_u64s = v.k.val_bytes().len() / 8;
-
-    bkey_fsck_err_on!(v, val_u64s > c::BKEY_BTREE_PTR_VAL_U64s_MAX, id::btree_ptr_v2_val_too_big,
-                      "value too big ({} > {})", val_u64s, c::BKEY_BTREE_PTR_VAL_U64s_MAX)?;
-
-    bkey_fsck_err_on!(v, bp.v().min_key >= bp.k.p, id::btree_ptr_v2_min_key_bad,
-                      "min_key > key")?;
-
-    if v.from.flags().contains(c::bch_validate_flags::BCH_VALIDATE_write) &&
-       u32::from(v.fs.sb.version_min.get()) >= c::bcachefs_metadata_version::btree_ptr_sectors_written.0 {
-        bkey_fsck_err_on!(v, bp.v().sectors_written.get() == 0, id::btree_ptr_v2_written_0,
-                          "sectors_written == 0")?;
-    }
-
-    bkey_ptrs_validate(v)
-}
-
-/// A btree_ptr_v2: its node's seq, how much of it is written and its
-/// min_key, then its pointers.
-pub fn btree_ptr_v2_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-    let bp = k.arm::<c::BtreePtrV2>().expect("a btree_ptr_v2").v();
-
-    crate::prt!(out, "\nseq {:x} written {} min_key {}{} ",
-                bp.seq.get(), bp.sectors_written.get(),
-                if bp.btree_ptr_range_updated() { "R " } else { "" },
-                { bp.min_key });
-    bkey_ptrs_to_text(out, fs, k);
-}
-
 /// A key type with pointers' swab and check_repair: its extent entries'.
 macro_rules! ptrs_ops {
     () => {
@@ -360,7 +320,12 @@ pub(crate) use ptrs_ops;
 
 impl BkeyOps for c::BtreePtr {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        btree_ptr_validate(v)
+        let val_u64s = v.k.val_bytes().len() / 8;
+
+        bkey_fsck_err_on!(v, val_u64s > c::BCH_REPLICAS_MAX as usize, id::btree_ptr_val_too_big,
+                          "value too big ({} > {})", val_u64s, c::BCH_REPLICAS_MAX)?;
+
+        bkey_ptrs_validate(v)
     }
 
     #[cold]
@@ -375,17 +340,57 @@ impl BkeyOps for c::BtreePtr {
 
 impl BkeyOps for c::BtreePtrV2 {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        btree_ptr_v2_validate(v)
+        let bp = v.k.arm::<c::BtreePtrV2>().expect("a btree_ptr_v2");
+        let val_u64s = v.k.val_bytes().len() / 8;
+
+        bkey_fsck_err_on!(v, val_u64s > c::BKEY_BTREE_PTR_VAL_U64s_MAX, id::btree_ptr_v2_val_too_big,
+                          "value too big ({} > {})", val_u64s, c::BKEY_BTREE_PTR_VAL_U64s_MAX)?;
+
+        bkey_fsck_err_on!(v, bp.v().min_key >= bp.k.p, id::btree_ptr_v2_min_key_bad,
+                          "min_key > key")?;
+
+        if v.from.flags().contains(c::bch_validate_flags::BCH_VALIDATE_write) &&
+           u32::from(v.fs.sb.version_min.get()) >= c::bcachefs_metadata_version::btree_ptr_sectors_written.0 {
+            bkey_fsck_err_on!(v, bp.v().sectors_written.get() == 0, id::btree_ptr_v2_written_0,
+                              "sectors_written == 0")?;
+        }
+
+        bkey_ptrs_validate(v)
     }
 
     #[cold]
+    /// A btree_ptr_v2: its node's seq, how much of it is written and its
+    /// min_key, then its pointers.
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-        btree_ptr_v2_to_text(out, fs, k)
+        let bp = k.arm::<c::BtreePtrV2>().expect("a btree_ptr_v2").v();
+
+        crate::prt!(out, "\nseq {:x} written {} min_key {}{} ",
+                    bp.seq.get(), bp.sectors_written.get(),
+                    if bp.btree_ptr_range_updated() { "R " } else { "" },
+                    { bp.min_key });
+        bkey_ptrs_to_text(out, fs, k);
     }
 
-    fn compat(btree: Btree, version: c::bcachefs_metadata_version, big_endian: bool, write: bool,
-              k: BkeyS<'_>) {
-        btree_ptr_v2_compat(btree, version, big_endian, write, k)
+    /// The node's min_key, to or from how @version on a @big_endian machine wrote
+    /// it: compat_bpos(), and the extents btree min_key shift - whose POS_MIN test
+    /// is bkey_eq(), where compat_btree_node()'s is bpos_eq(). It runs before
+    /// validate: a value too short for min_key is left to it, where C writes past.
+    ///
+    /// XXX: as ptr_swab() - this should take an Unvalidated key.
+    fn compat(btree: Btree, version: c::bcachefs_metadata_version, big_endian: bool,
+                               write: bool, k: BkeyS<'_>) {
+        let Some(mut bp) = k.arm::<c::BtreePtrV2>() else { return };
+        let Some(v) = <c::BtreePtrV2 as ArmRef>::arm_mut(bp.val_bytes_mut()) else { return };
+
+        let mut min_key = v.min_key;
+        min_key.compat(btree, version, big_endian);
+
+        if version < c::bcachefs_metadata_version::inode_btree_change &&
+           btree.is_extents() &&
+           !bkey_eq(min_key, POS_MIN) {
+            min_key = if write { min_key.nosnap_predecessor() } else { min_key.nosnap_successor() };
+        }
+        v.min_key = min_key;
     }
 
     ptrs_ops!();
@@ -410,28 +415,6 @@ impl BkeyOps for c::Extent {
     ptrs_ops!();
 
     const TRIGGER: Option<&'static Trigger> = Some(&crate::alloc::buckets::EXTENT);
-}
-
-/// The node's min_key, to or from how @version on a @big_endian machine wrote
-/// it: compat_bpos(), and the extents btree min_key shift - whose POS_MIN test
-/// is bkey_eq(), where compat_btree_node()'s is bpos_eq(). It runs before
-/// validate: a value too short for min_key is left to it, where C writes past.
-///
-/// XXX: as ptr_swab() - this should take an Unvalidated key.
-pub fn btree_ptr_v2_compat(btree: Btree, version: c::bcachefs_metadata_version, big_endian: bool,
-                           write: bool, k: BkeyS<'_>) {
-    let Some(mut bp) = k.arm::<c::BtreePtrV2>() else { return };
-    let Some(v) = <c::BtreePtrV2 as ArmRef>::arm_mut(bp.val_bytes_mut()) else { return };
-
-    let mut min_key = v.min_key;
-    min_key.compat(btree, version, big_endian);
-
-    if version < c::bcachefs_metadata_version::inode_btree_change &&
-       btree.is_extents() &&
-       !bkey_eq(min_key, POS_MIN) {
-        min_key = if write { min_key.nosnap_predecessor() } else { min_key.nosnap_successor() };
-    }
-    v.min_key = min_key;
 }
 
 // ── byte swapping ────────────────────────────────────────────────────────

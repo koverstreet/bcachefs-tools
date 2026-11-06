@@ -257,87 +257,79 @@ fn stripe_widen_value(target_nr_data: u32, actual_nr_data: u32) -> u8 {
     (target_nr_data as i32).wrapping_sub(actual_nr_data as i32).clamp(0, 7) as u8
 }
 
-fn stripe_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let s = v.k.arm::<c::Stripe>().expect("a stripe").v();
-
-    // checked before val_u64s(), which shifts by it
-    bkey_fsck_err_on!(v, s.csum_granularity_bits >= 31, id::stripe_csum_granularity_bad,
-                      "invalid csum granularity ({} >= 31)", s.csum_granularity_bits)?;
-
-    bkey_fsck_err_on!(v, bkey_eq(v.k.k.p, POS_MIN) || v.k.k.p > pos(0, u32::MAX.into()),
-                      id::stripe_pos_bad, "stripe at bad pos")?;
-
-    let val_u64s = v.k.val_bytes().len() / 8;
-    bkey_fsck_err_on!(v, val_u64s < s.val_u64s() as usize, id::stripe_val_size_bad,
-                      "incorrect value size ({} < {})", val_u64s, s.val_u64s())?;
-
-    bkey_fsck_err_on!(v, s.sectors.get() == 0, id::stripe_sectors_zero, "invalid sectors zero")?;
-
-    bkey_ptrs_validate(v)
-}
-
 impl BkeyOps for c::Stripe {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        stripe_validate(v)
+        let s = v.k.arm::<c::Stripe>().expect("a stripe").v();
+
+        // checked before val_u64s(), which shifts by it
+        bkey_fsck_err_on!(v, s.csum_granularity_bits >= 31, id::stripe_csum_granularity_bad,
+                          "invalid csum granularity ({} >= 31)", s.csum_granularity_bits)?;
+
+        bkey_fsck_err_on!(v, bkey_eq(v.k.k.p, POS_MIN) || v.k.k.p > pos(0, u32::MAX.into()),
+                          id::stripe_pos_bad, "stripe at bad pos")?;
+
+        let val_u64s = v.k.val_bytes().len() / 8;
+        bkey_fsck_err_on!(v, val_u64s < s.val_u64s() as usize, id::stripe_val_size_bad,
+                          "incorrect value size ({} < {})", val_u64s, s.val_u64s())?;
+
+        bkey_fsck_err_on!(v, s.sectors.get() == 0, id::stripe_sectors_zero, "invalid sectors zero")?;
+
+        bkey_ptrs_validate(v)
     }
 
+    #[cold]
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-        stripe_to_text(out, fs, k)
+        // the header's there - bch2_val_to_text() checks min_val_size, all of it,
+        // before calling this - but not what's after it
+        let s = k.arm::<c::Stripe>().expect("a stripe").v();
+        let val = k.val_bytes();
+
+        // nr_redundant past nr_blocks is damage, printed as is
+        write!(out, "algo {} sectors {} blocks {}:{} csum {} gran ",
+               s.algorithm(), s.sectors.get(), s.nr_data(), s.nr_redundant, c::bch_csum_type(s.csum_type.into()));
+        match 1u64.checked_shl(s.csum_granularity_bits.into()) {
+            Some(gran) => write!(out, "{gran}"),
+            None => write!(out, "(invalid shift {})", s.csum_granularity_bits),
+        }
+
+        write!(out, " label=");
+        if s.disk_label != 0 {
+            match fs {
+                Some(fs) => fs.disk_path_to_text(out, u32::from(s.disk_label) - 1),
+                None     => write!(out, "{}", s.disk_label - 1),
+            }
+        } else {
+            write!(out, "(none)");
+        }
+
+        if s.needs_reconcile() != 0 {
+            write!(out, " needs_reconcile");
+        }
+        if s.can_widen() != 0 {
+            write!(out, " can_widen={}", s.can_widen());
+        }
+
+        let mut out = out.indent(2);
+        let rcu = read_lock();
+
+        let tail = &val[STRIPE_PTRS..];
+        let ptrs = &tail[..s.ptrs_bytes().min(tail.len()) / 8 * 8];
+        let ptrs: &[c::bch_extent_ptr] = cast_plain_slice(ptrs).expect("a stripe's pointers, aligned");
+        let counts = if s.csum_granularity_bits < 31 { s.blockcounts_at() } else { None };
+
+        for (i, ptr) in ptrs.iter().enumerate() {
+            out.newline();
+            extent_ptr_to_text(&mut out, fs, ptr, &rcu);
+
+            if let Some(n) = counts.as_ref().and_then(|at| tail.get(at.start + 2 * i..at.start + 2 * i + 2)) {
+                write!(out, "#{}", u16::from_le_bytes([n[0], n[1]]));
+            }
+        }
     }
 
     crate::data::ptrs::ptrs_ops!();
 
     const TRIGGER: Option<&'static Trigger> = Some(&super::trigger::STRIPE);
-}
-
-#[cold]
-fn stripe_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-    // the header's there - bch2_val_to_text() checks min_val_size, all of it,
-    // before calling this - but not what's after it
-    let s = k.arm::<c::Stripe>().expect("a stripe").v();
-    let val = k.val_bytes();
-
-    // nr_redundant past nr_blocks is damage, printed as is
-    write!(out, "algo {} sectors {} blocks {}:{} csum {} gran ",
-           s.algorithm(), s.sectors.get(), s.nr_data(), s.nr_redundant, c::bch_csum_type(s.csum_type.into()));
-    match 1u64.checked_shl(s.csum_granularity_bits.into()) {
-        Some(gran) => write!(out, "{gran}"),
-        None => write!(out, "(invalid shift {})", s.csum_granularity_bits),
-    }
-
-    write!(out, " label=");
-    if s.disk_label != 0 {
-        match fs {
-            Some(fs) => fs.disk_path_to_text(out, u32::from(s.disk_label) - 1),
-            None     => write!(out, "{}", s.disk_label - 1),
-        }
-    } else {
-        write!(out, "(none)");
-    }
-
-    if s.needs_reconcile() != 0 {
-        write!(out, " needs_reconcile");
-    }
-    if s.can_widen() != 0 {
-        write!(out, " can_widen={}", s.can_widen());
-    }
-
-    let mut out = out.indent(2);
-    let rcu = read_lock();
-
-    let tail = &val[STRIPE_PTRS..];
-    let ptrs = &tail[..s.ptrs_bytes().min(tail.len()) / 8 * 8];
-    let ptrs: &[c::bch_extent_ptr] = cast_plain_slice(ptrs).expect("a stripe's pointers, aligned");
-    let counts = if s.csum_granularity_bits < 31 { s.blockcounts_at() } else { None };
-
-    for (i, ptr) in ptrs.iter().enumerate() {
-        out.newline();
-        extent_ptr_to_text(&mut out, fs, ptr, &rcu);
-
-        if let Some(n) = counts.as_ref().and_then(|at| tail.get(at.start + 2 * i..at.start + 2 * i + 2)) {
-            write!(out, "#{}", u16::from_le_bytes([n[0], n[1]]));
-        }
-    }
 }
 
 

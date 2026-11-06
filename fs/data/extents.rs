@@ -605,17 +605,13 @@ pub fn extent_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
 
 // ── reservations ─────────────────────────────────────────────────────────
 
-fn reservation_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let r = v.k.arm::<c::Reservation>().expect("a reservation").v();
-
-    bkey_fsck_err_on!(v, r.nr_replicas == 0 || u32::from(r.nr_replicas) > c::BCH_REPLICAS_MAX,
-                      id::reservation_key_nr_replicas_invalid,
-                      "invalid nr_replicas ({})", r.nr_replicas)
-}
-
 impl BkeyOps for c::Reservation {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        reservation_validate(v)
+        let r = v.k.arm::<c::Reservation>().expect("a reservation").v();
+
+        bkey_fsck_err_on!(v, r.nr_replicas == 0 || u32::from(r.nr_replicas) > c::BCH_REPLICAS_MAX,
+                          id::reservation_key_nr_replicas_invalid,
+                          "invalid nr_replicas ({})", r.nr_replicas)
     }
 
     #[cold]

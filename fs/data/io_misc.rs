@@ -269,18 +269,14 @@ pub unsafe extern "C" fn bch2_fpunch(
 // ── truncate ─────────────────────────────────────────────────────────────
 
 impl BkeyOps for c::LoggedOpTruncate {
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-        logged_op_truncate_to_text(out, fs, k)
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        let op = c::LoggedOpTruncate::val_copy_pad(k).expect("a truncate op");
+
+        write!(out, "subvol={}", op.subvol.get());
+        write!(out, " inum={}", op.inum.get());
+        write!(out, " new_i_size={}", op.new_i_size.get());
     }
-}
-
-#[cold]
-fn logged_op_truncate_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
-    let op = c::LoggedOpTruncate::val_copy_pad(k).expect("a truncate op");
-
-    write!(out, "subvol={}", op.subvol.get());
-    write!(out, " inum={}", op.inum.get());
-    write!(out, " new_i_size={}", op.new_i_size.get());
 }
 
 fn truncate_set_isize(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, new_i_size: u64, warn: bool)
@@ -367,19 +363,15 @@ pub unsafe extern "C" fn bch2_truncate(
 // ── finsert/fcollapse ────────────────────────────────────────────────────
 
 impl BkeyOps for c::LoggedOpFinsert {
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-        logged_op_finsert_to_text(out, fs, k)
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        let op = c::LoggedOpFinsert::val_copy_pad(k).expect("a finsert op");
+
+        write!(out, "subvol={}", op.subvol.get());
+        write!(out, " inum={}", op.inum.get());
+        write!(out, " dst_offset={}", op.dst_offset.get() as i64);
+        write!(out, " src_offset={}", op.src_offset.get());
     }
-}
-
-#[cold]
-fn logged_op_finsert_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
-    let op = c::LoggedOpFinsert::val_copy_pad(k).expect("a finsert op");
-
-    write!(out, "subvol={}", op.subvol.get());
-    write!(out, " inum={}", op.inum.get());
-    write!(out, " dst_offset={}", op.dst_offset.get() as i64);
-    write!(out, " src_offset={}", op.src_offset.get());
 }
 
 fn adjust_i_size(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, offset: u64, len: i64, warn: bool)

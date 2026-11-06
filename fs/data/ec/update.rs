@@ -350,20 +350,16 @@ pub fn resume_logged_op(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), 
 }
 
 impl crate::btree::bkey::BkeyOps for c::LoggedOpStripeUpdate {
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-        logged_op_stripe_update_to_text(out, fs, k)
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        let k = k.arm::<c::LoggedOpStripeUpdate>().expect("a stripe update op");
+        let op = k.v();
+
+        prt!(out, "old_idx={}", op.old_idx.get());
+        prt!(out, " new_idx={}", op.new_idx.get());
+        prt!(out, " old_blocks_nr={}", op.old_blocks_nr);
+
+        let nr = usize::from(op.old_blocks_nr).min(op.old_block_map.len());
+        prt!(out, " old_block_map={}", Join(",", op.old_block_map[..nr].iter()));
     }
-}
-
-#[cold]
-fn logged_op_stripe_update_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
-    let k = k.arm::<c::LoggedOpStripeUpdate>().expect("a stripe update op");
-    let op = k.v();
-
-    prt!(out, "old_idx={}", op.old_idx.get());
-    prt!(out, " new_idx={}", op.new_idx.get());
-    prt!(out, " old_blocks_nr={}", op.old_blocks_nr);
-
-    let nr = usize::from(op.old_blocks_nr).min(op.old_block_map.len());
-    prt!(out, " old_block_map={}", Join(",", op.old_block_map[..nr].iter()));
 }

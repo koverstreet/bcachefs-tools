@@ -129,23 +129,54 @@ impl BackpointerPos {
 
 // ── The key type ─────────────────────────────────────────────────────────
 
-fn backpointer_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let bp = v.k.arm::<c::Backpointer>().expect("a backpointer");
-    let level = bp.v().level;
-
-    bkey_fsck_err_on!(v, u32::from(level) > c::BTREE_MAX_DEPTH, id::backpointer_level_bad,
-                      "backpointer level bad: {level} >= {}", c::BTREE_MAX_DEPTH)?;
-    bkey_fsck_err_on!(v, bp.k.p.inode == u64::from(c::BCH_SB_MEMBER_INVALID), id::backpointer_dev_bad,
-                      "backpointer for BCH_SB_MEMBER_INVALID")
-}
-
 impl BkeyOps for c::Backpointer {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        backpointer_validate(v)
+        let bp = v.k.arm::<c::Backpointer>().expect("a backpointer");
+        let level = bp.v().level;
+
+        bkey_fsck_err_on!(v, u32::from(level) > c::BTREE_MAX_DEPTH, id::backpointer_level_bad,
+                          "backpointer level bad: {level} >= {}", c::BTREE_MAX_DEPTH)?;
+        bkey_fsck_err_on!(v, bp.k.p.inode == u64::from(c::BCH_SB_MEMBER_INVALID), id::backpointer_dev_bad,
+                          "backpointer for BCH_SB_MEMBER_INVALID")
     }
 
+    #[cold]
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-        backpointer_to_text(out, fs, k)
+        let bp = k.arm::<c::Backpointer>().expect("a backpointer");
+        let p = bp.k.p;
+        let v = bp.v();
+
+        let bucket = fs.and_then(|fs| {
+            let rcu = read_lock();
+            let ca = fs.dev_rcu(p.inode as u32, &rcu)?;
+            Some(BackpointerPos::from_bpos(fs, p).bucket_and_offset(ca))
+        });
+
+        match (fs, bucket) {
+            (_, Some((b, offset))) => prt!(out, "bucket={}:{}:{offset} ", { b.inode }, { b.offset }),
+            (Some(fs), None)       => prt!(out, "sector={}:{} ", { p.inode }, { p.offset } >> fs.sb.extent_bp_shift.get()),
+            (None, _)              => prt!(out, "pos={}:{} ", { p.inode }, { p.offset }),
+        }
+
+        prt!(out, "btree={} level={}", Btree(v.btree_id.into()), v.level);
+        prt!(out, " data_type=");
+        DataType(v.data_type.into()).to_text(out);
+        match fs {
+            Some(fs) => prt!(out, " suboffset={} len={} gen={} pos=",
+                             BackpointerPos::from_bpos(fs, p).suboffset, { v.bucket_len }, v.bucket_gen),
+            None     => prt!(out, " len={} gen={} pos=", { v.bucket_len }, v.bucket_gen),
+        }
+        prt!(out, "{}", { v.pos });
+
+        if v.reconcile_phys() != 0 {
+            prt!(out, " reconcile_phys={}", v.reconcile_work_phys());
+        }
+        if v.erasure_coded() {
+            prt!(out, " ec");
+        }
+        if v.stripe_ptr() {
+            prt!(out, " stripe");
+        }
     }
 
     fn swab(_fs: Option<&Fs>, k: BkeyS<'_>) {
@@ -157,45 +188,6 @@ impl BkeyOps for c::Backpointer {
         let mut pos = v.pos;
         pos.swab();
         v.pos = pos;
-    }
-}
-
-#[cold]
-fn backpointer_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-    let bp = k.arm::<c::Backpointer>().expect("a backpointer");
-    let p = bp.k.p;
-    let v = bp.v();
-
-    let bucket = fs.and_then(|fs| {
-        let rcu = read_lock();
-        let ca = fs.dev_rcu(p.inode as u32, &rcu)?;
-        Some(BackpointerPos::from_bpos(fs, p).bucket_and_offset(ca))
-    });
-
-    match (fs, bucket) {
-        (_, Some((b, offset))) => prt!(out, "bucket={}:{}:{offset} ", { b.inode }, { b.offset }),
-        (Some(fs), None)       => prt!(out, "sector={}:{} ", { p.inode }, { p.offset } >> fs.sb.extent_bp_shift.get()),
-        (None, _)              => prt!(out, "pos={}:{} ", { p.inode }, { p.offset }),
-    }
-
-    prt!(out, "btree={} level={}", Btree(v.btree_id.into()), v.level);
-    prt!(out, " data_type=");
-    DataType(v.data_type.into()).to_text(out);
-    match fs {
-        Some(fs) => prt!(out, " suboffset={} len={} gen={} pos=",
-                         BackpointerPos::from_bpos(fs, p).suboffset, { v.bucket_len }, v.bucket_gen),
-        None     => prt!(out, " len={} gen={} pos=", { v.bucket_len }, v.bucket_gen),
-    }
-    prt!(out, "{}", { v.pos });
-
-    if v.reconcile_phys() != 0 {
-        prt!(out, " reconcile_phys={}", v.reconcile_work_phys());
-    }
-    if v.erasure_coded() {
-        prt!(out, " ec");
-    }
-    if v.stripe_ptr() {
-        prt!(out, " stripe");
     }
 }
 

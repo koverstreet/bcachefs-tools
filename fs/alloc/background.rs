@@ -1096,14 +1096,10 @@ impl BucketGensPos {
 
 // ── bucket_gens keys ─────────────────────────────────────────────────────
 
-fn bucket_gens_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let (have, want) = (v.k.k.val_bytes(), size_of::<c::BucketGens>());
-    bkey_fsck_err_on!(v, have != want, id::bucket_gens_val_size_bad, "bad val size ({have} != {want})")
-}
-
 impl BkeyOps for c::BucketGens {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        bucket_gens_validate(v)
+        let (have, want) = (v.k.k.val_bytes(), size_of::<c::BucketGens>());
+        bkey_fsck_err_on!(v, have != want, id::bucket_gens_val_size_bad, "bad val size ({have} != {want})")
     }
 
     #[cold]

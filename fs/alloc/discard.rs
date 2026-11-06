@@ -901,8 +901,8 @@ fn invalidate_one_bucket(t: &TransAttempt<'_, '_>, ca: &Dev, lru_k: BkeySC<'_>,
         return Ok(());
     }
 
-    // lru_idx_read() is nonzero only for a cached bucket, and lru_validate()
-    // refuses an entry at time 0
+    // lru_idx_read() is nonzero only for a cached bucket, and an lru entry's
+    // validate refuses one at time 0
     assert_eq!(a.data_type, DataType::cached.0 as u8, "a read lru entry for a bucket not cached");
     assert_eq!({ a.dirty_sectors }, 0, "a read lru entry for a bucket with dirty data");
 

@@ -405,16 +405,12 @@ impl BkeySC<'_, c::ReflinkP> {
     }
 }
 
-fn reflink_p_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let p = v.k.arm::<c::ReflinkP>().expect("a reflink_p").v();
-
-    bkey_fsck_err_on!(v, p.idx() < p.front_pad.get() as u64, id::reflink_p_front_pad_bad,
-                      "idx < front_pad ({} < {})", p.idx(), p.front_pad.get())
-}
-
 impl BkeyOps for c::ReflinkP {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        reflink_p_validate(v)
+        let p = v.k.arm::<c::ReflinkP>().expect("a reflink_p").v();
+
+        bkey_fsck_err_on!(v, p.idx() < p.front_pad.get() as u64, id::reflink_p_front_pad_bad,
+                          "idx < front_pad ({} < {})", p.idx(), p.front_pad.get())
     }
 
     #[cold]
@@ -476,14 +472,10 @@ fn indirect_pos_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                       "indirect extent above maximum position 0:{}", c::ReflinkP::IDX_MAX)
 }
 
-fn reflink_v_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    indirect_pos_validate(v)?;
-    crate::data::ptrs::bkey_ptrs_validate(v)
-}
-
 impl BkeyOps for c::ReflinkV {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        reflink_v_validate(v)
+        indirect_pos_validate(v)?;
+        crate::data::ptrs::bkey_ptrs_validate(v)
     }
 
     #[cold]

@@ -1202,34 +1202,25 @@ pub fn create<'a>(
     }
 }
 
-fn alloc_cursor_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    bkey_fsck_err_on!(v, v.k.k.p.inode != c::logged_ops_inums::LOGGED_OPS_INUM_inode_cursors.0 as u64,
-                      id::inode_alloc_cursor_inode_bad, "k.p.inode bad")
-}
-
 impl BkeyOps for c::InodeAllocCursor {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        alloc_cursor_validate(v)
+        bkey_fsck_err_on!(v, v.k.k.p.inode != c::logged_ops_inums::LOGGED_OPS_INUM_inode_cursors.0 as u64,
+                          id::inode_alloc_cursor_inode_bad, "k.p.inode bad")
     }
 
     /// The cursor, and the range it hands out.
     #[cold]
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-        inode_alloc_cursor_to_text(out, fs, k)
-    }
-}
+        let v = k.arm::<c::InodeAllocCursor>().expect("an inode alloc cursor").v();
+        let idx = v.idx.get();
 
-#[cold]
-fn inode_alloc_cursor_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-    let v = k.arm::<c::InodeAllocCursor>().expect("an inode alloc cursor").v();
-    let idx = v.idx.get();
-
-    // the range is the filesystem's options'
-    if let Some(fs) = fs {
-        let (min, max) = cursor_range(fs, k.k.p.offset);
-        write!(out, "min {min} max {max} consumed {} ", idx.wrapping_sub(min));
+        // the range is the filesystem's options'
+        if let Some(fs) = fs {
+            let (min, max) = cursor_range(fs, k.k.p.offset);
+            write!(out, "min {min} max {max} consumed {} ", idx.wrapping_sub(min));
+        }
+        write!(out, "idx {idx} generation {}", v.generation.get());
     }
-    write!(out, "idx {idx} generation {}", v.generation.get());
 }
 
 // ── Versions in other snapshots, and the trigger ─────────────────────────

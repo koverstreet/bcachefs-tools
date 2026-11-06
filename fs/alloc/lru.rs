@@ -154,14 +154,10 @@ impl LruPos {
 //
 // An lru entry is a KEY_TYPE_set; KEY_TYPE_lru, with an idx, is obsolete.
 
-fn lru_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    bkey_fsck_err_on!(v, LruPos::from_bpos(v.k.k.p).time == 0, id::lru_entry_at_time_0,
-                      "lru entry at time=0")
-}
-
 impl BkeyOps for c::Lru {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        lru_validate(v)
+        bkey_fsck_err_on!(v, LruPos::from_bpos(v.k.k.p).time == 0, id::lru_entry_at_time_0,
+                          "lru entry at time=0")
     }
 
     #[cold]

@@ -645,17 +645,13 @@ fn propagate_one(
 }
 
 impl crate::btree::bkey::BkeyOps for c::LoggedOpInodeOptPropagate {
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
-        logged_op_inode_opt_propagate_to_text(out, fs, k)
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        let op = c::LoggedOpInodeOptPropagate::val_copy_pad(k).expect("an inode_opt_propagate op");
+
+        write!(out, "inum={} origin={} cursor={}",
+               op.inum.get(), op.origin_snapshot.get(), op.cursor_snapshot.get());
     }
-}
-
-#[cold]
-fn logged_op_inode_opt_propagate_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
-    let op = c::LoggedOpInodeOptPropagate::val_copy_pad(k).expect("an inode_opt_propagate op");
-
-    write!(out, "inum={} origin={} cursor={}",
-           op.inum.get(), op.origin_snapshot.get(), op.cursor_snapshot.get());
 }
 
 /// A reconcile scan of @inum's data, for options it may have that its data
