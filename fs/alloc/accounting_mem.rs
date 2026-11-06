@@ -17,7 +17,6 @@ use crate::init::passes;
 use crate::locking::{percpu_rwsem_noio, ExclusiveGuard, SharedGuard};
 use crate::debug::trace::events;
 use crate::util::alloc::{AllocError, KVVec};
-use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::util::percpu::{Counters as _, CpuGuard, PerCpuRef, PerCpuU64s};
 use crate::util::printbuf::{Join, Msg};
@@ -84,11 +83,24 @@ impl Fs {
 
 impl Table {
     fn find(&self, p: Bpos) -> Option<usize> {
-        Eytzinger0::find_by(&self.entries, |e| e.pos.cmp(&p))
+        self.entries.binary_search_by_key(&p, |e| e.pos).ok()
     }
 
     fn find_ge(&self, p: Bpos) -> Option<usize> {
-        Eytzinger0::find_ge_by(&self.entries, |e| e.pos.cmp(&p))
+        let i = self.entries.partition_point(|e| e.pos < p);
+        (i < self.entries.len()).then_some(i)
+    }
+
+    fn insert(&mut self, e: Entry) -> Result<(), AllocError> {
+        let i = self.entries.partition_point(|old| old.pos < e.pos);
+        self.entries.push(e)?;
+        self.entries[i..].rotate_right(1);
+        Ok(())
+    }
+
+    fn remove(&mut self, i: usize) {
+        self.entries[i..].rotate_left(1);
+        self.entries.pop();
     }
 
     fn insert(&mut self, e: Entry) -> Result<(), AllocError> {
@@ -106,12 +118,6 @@ impl Table {
         for e in self.entries.iter_mut() {
             e.gc = None;
         }
-    }
-
-    fn with_entries<R>(&mut self, f: impl FnOnce(&mut KVVec<Entry>) -> R) -> R {
-        let r = f(&mut self.entries);
-        Eytzinger0::sort_by(&mut self.entries, |l, r| l.pos.cmp(&r.pos));
-        r
     }
 }
 
@@ -278,7 +284,7 @@ pub fn __bch2_accounting_maybe_kill(fs: &Fs, p: Bpos) {
 
 pub(crate) fn mem_gc(fs: &Fs) {
     let mut mark = fs.mark_lock().write();
-    fs.accounting_mem_mut(&mut mark).with_entries(|entries| entries.retain(|e| !e.is_zero()));
+    fs.accounting_mem_mut(&mut mark).entries.retain(|e| !e.is_zero());
 }
 
 #[c_export]
@@ -730,11 +736,12 @@ fn read(fs: &Fs) -> Result<(), BchError> {
 
     /*
      * Entries were inserted unsorted during the btree/journal walk above.
-     * Sort now, before fixups which may need eytzinger lookups.
+     * Sort now, before fixups which may need accounting lookups.
      */
     {
         let mut mark = fs.mark_lock().write();
-        fs.accounting_mem_mut(&mut mark).with_entries(|e| *e = entries);
+        entries.sort_unstable_by_key(|e| e.pos);
+        fs.accounting_mem_mut(&mut mark).entries = entries;
     }
     walked?;
 
@@ -745,8 +752,7 @@ fn read(fs: &Fs) -> Result<(), BchError> {
     {
         let mark = fs.mark_lock().read();
         let e = &fs.accounting_mem(&mark).entries;
-        let ez = Eytzinger0::<usize>::new(e.len());
-        let mut inorder = ez.iter().map(|i| e[i].pos);
+        let mut inorder = e.iter().map(|e| e.pos);
         if let Some(mut prev) = inorder.next() {
             for p in inorder {
                 assert!(prev < p, "duplicate or out of order accounting entries: {prev} then {p}");
@@ -847,4 +853,142 @@ pub unsafe fn bch2_accounting_mem_add(trans: &BtreeTrans<'_>, k: BkeySC<'_>) -> 
     let a = Delta::from(k.arm::<Accounting>().expect("an accounting key"));
     let usage = mem_add(fs, a, false, &mut unsafe { fs.mark_lock().read_held() });
     ret_to_c(usage.map(|u| trans.fs_usage_delta_add(u)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::btree::bkey::spos;
+    use std::collections::BTreeMap;
+
+    fn check(t: &Table, expected: &BTreeMap<Bpos, (Counters, Counters)>) {
+        assert_eq!(t.entries.len(), expected.len());
+        assert!(t.entries.windows(2).all(|w| w[0].pos < w[1].pos));
+        for (&p, &(live, gc)) in expected {
+            let i = t.find(p).expect("present key");
+            assert_eq!(t.entries[i].sum(false), live);
+            assert_eq!(t.entries[i].sum(true), gc);
+        }
+        for inode in 0..5 {
+            for offset in 0..70 {
+                for snapshot in 0..4 {
+                    let p = spos(inode, offset, snapshot);
+                    assert_eq!(t.find(p).map(|i| t.entries[i].pos), expected.get_key_value(&p).map(|(&p, _)| p));
+                    assert_eq!(t.find_ge(p).map(|i| t.entries[i].pos), expected.range(p..).next().map(|(&p, _)| p));
+                }
+            }
+        }
+        assert_eq!(t.find_ge(SPOS_MAX), None);
+    }
+
+    #[test]
+    fn sorted_table_mutations() {
+        let mut t = Table::default();
+        let mut expected = BTreeMap::new();
+        check(&t, &expected);
+
+        for j in 0..128 {
+            let n = (j * 53) % 128;
+            let p = spos(1 + n / 64, (n % 64) * 2, (n % 3) as u32);
+            let mut e = Entry::new(p, 2, true).unwrap();
+            e.live.set(&[n + 1, n + 2]);
+            e.gc.as_mut().unwrap().set(&[n + 3, n + 4]);
+            expected.insert(p, (e.sum(false), e.sum(true)));
+            t.insert(e).unwrap();
+        }
+        check(&t, &expected);
+
+        for i in [0, t.entries.len() / 2, t.entries.len() - 3] {
+            expected.remove(&t.entries[i].pos);
+            t.remove(i);
+            check(&t, &expected);
+        }
+
+        for (i, e) in t.entries.iter_mut().enumerate() {
+            if i % 3 != 0 {
+                e.live.set(&[]);
+            }
+            if i % 3 != 1 {
+                e.gc.as_mut().unwrap().set(&[]);
+            }
+            if i % 3 == 2 {
+                expected.remove(&e.pos);
+            } else {
+                expected.insert(e.pos, (e.sum(false), e.sum(true)));
+            }
+        }
+        t.entries.retain(|e| !e.is_zero());
+        check(&t, &expected);
+
+        while let Some(e) = t.entries.last() {
+            expected.remove(&e.pos);
+            t.remove(t.entries.len() - 1);
+        }
+        check(&t, &expected);
+
+        let e = Entry::new(POS_MIN, 1, false).unwrap();
+        t.insert(e).unwrap();
+        assert_eq!(t.find(POS_MIN), Some(0));
+        assert_eq!(t.find_ge(POS_MIN), Some(0));
+        t.remove(0);
+        assert_eq!(t.find_ge(POS_MIN), None);
+        t.insert(Entry::new(SPOS_MAX, 1, false).unwrap()).unwrap();
+        assert_eq!(t.find(SPOS_MAX), Some(0));
+        assert_eq!(t.find_ge(SPOS_MAX), Some(0));
+    }
+
+    #[test]
+    #[ignore = "manual accounting insertion/lookup benchmark"]
+    fn sorted_table_benchmark() {
+        use crate::data_structures::eytzinger::Eytzinger0;
+        use std::{hint::black_box, time::{Duration, Instant}};
+
+        eprintln!("entries,old_insert_us,new_insert_us,old_lookup_ns,new_lookup_ns");
+        for n in [1024, 16384, 131072] {
+            let mut old = KVVec::new();
+            let mut new = Table::default();
+            old.reserve(n + 8).unwrap();
+            new.entries.reserve(n + 8).unwrap();
+            for i in 0..n {
+                let p = spos(1, i as u64 * 2, 0);
+                old.push(Entry::new(p, 1, false).unwrap()).unwrap();
+                new.entries.push(Entry::new(p, 1, false).unwrap()).unwrap();
+            }
+            Eytzinger0::sort_by(&mut old, |a, b| a.pos.cmp(&b.pos));
+            let mut old_time = Duration::ZERO;
+            let mut new_time = Duration::ZERO;
+            for j in 0..8 {
+                let p = spos(1, ((j * 7919) % n) as u64 * 2 + 1, 0);
+                let e = Entry::new(p, 1, false).unwrap();
+                let start = Instant::now();
+                old.push(e).unwrap();
+                Eytzinger0::sort_by(&mut old, |a, b| a.pos.cmp(&b.pos));
+                old_time += start.elapsed();
+
+                let e = Entry::new(p, 1, false).unwrap();
+                let start = Instant::now();
+                new.insert(e).unwrap();
+                new_time += start.elapsed();
+            }
+            let queries: Vec<_> = (0..100000u64).map(|i| spos(1, i.wrapping_mul(2654435761) % (n as u64 * 2), 0)).collect();
+            let start = Instant::now();
+            for p in &queries {
+                black_box(Eytzinger0::find_by(black_box(&old), |e| e.pos.cmp(p)));
+            }
+            let old_lookup = start.elapsed();
+            let start = Instant::now();
+            for &p in &queries {
+                black_box(black_box(&new).find(p));
+            }
+            let new_lookup = start.elapsed();
+            for p in &queries {
+                assert_eq!(Eytzinger0::find_by(&old, |e| e.pos.cmp(p)).map(|i| old[i].pos),
+                           new.find(*p).map(|i| new.entries[i].pos));
+            }
+            eprintln!("{n},{:.3},{:.3},{:.3},{:.3}",
+                      old_time.as_secs_f64() * 1e6 / 8., new_time.as_secs_f64() * 1e6 / 8.,
+                      old_lookup.as_secs_f64() * 1e9 / queries.len() as f64,
+                      new_lookup.as_secs_f64() * 1e9 / queries.len() as f64);
+        }
+    }
 }
