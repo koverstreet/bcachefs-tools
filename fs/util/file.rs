@@ -460,12 +460,11 @@ unsafe impl Sync for PollQueue {}
 #[cfg(kernel)]
 impl PollQueue {
     pub fn new() -> impl ::pin_init::PinInit<Self> {
-        let key = ::kernel::static_lock_class!().as_ptr().cast();
-        // SAFETY: init can't fail; the head's pinned from here on
+        let head = crate::new_waitqueue!("poll");
+        // SAFETY: the head, which it's transparently
         unsafe {
             ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                c::__init_waitqueue_head((*slot).0.as_ptr(), c"poll".as_ptr().cast(), key);
-                Ok(())
+                crate::util::alloc::init_at(head, slot.cast())
             })
         }
     }

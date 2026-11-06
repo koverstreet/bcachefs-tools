@@ -48,6 +48,9 @@ pub use raw::{mutex, percpu_rw_semaphore, raw_spinlock_t, rw_semaphore, spinlock
 // for util/percpu.rs's LocalLockGuard and IrqGuard
 pub(crate) use raw::{rust_local_irq_restore, rust_local_irq_save, rust_local_lock_init, rust_local_lock_irqsave,
                      rust_local_unlock_irqrestore};
+// for util/sleep.rs's waitqueue_init(): the shim's waitqueue lock
+#[cfg(not(kernel))]
+pub(crate) use raw::rust_spin_lock_init;
 pub use lock::{Exclusive, ExclusiveGuard, Locked, LockedBy, RawLock, RawLockBase, RawNestedLock, RawReadLock, RawRwLock, RawSixLock, RawTimedLock, RawTryLock, Shared, SharedGuard,
               SixIntent, SixWrite, SixWriteIntent, Unlock};
 pub use noio::{mutex_noio, percpu_rwsem_noio, MemallocFlags, MutexNoio, Noio, PercpuRwsemNoio};
