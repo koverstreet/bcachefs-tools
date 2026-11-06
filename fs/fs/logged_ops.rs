@@ -8,6 +8,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::format::BkeyType;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey_buf::BkeyBuf;
@@ -55,7 +56,7 @@ const INUM: u64 = c::logged_ops_inums::LOGGED_OPS_INUM_logged_ops.0 as u64;
 struct LoggedOp {
     /// As written to the sysfs knob
     name:   &'static str,
-    ty:     c::bch_bkey_type,
+    ty:     BkeyType,
     /// Background work that runs during recovery (copygc, reconcile) can
     /// start these, so they're resumed by resume_logged_ops_early. The rest
     /// are only started from userspace, and are resumed after fsck has
@@ -66,20 +67,19 @@ struct LoggedOp {
 }
 
 const LOGGED_OPS: [LoggedOp; 4] = {
-    type T = c::bch_bkey_type;
     [
-        LoggedOp { name: "truncate", ty: T::KEY_TYPE_logged_op_truncate, early: false,
+        LoggedOp { name: "truncate", ty: BkeyType::logged_op_truncate, early: false,
                    resume: crate::data::io_misc::resume_truncate },
-        LoggedOp { name: "finsert", ty: T::KEY_TYPE_logged_op_finsert, early: false,
+        LoggedOp { name: "finsert", ty: BkeyType::logged_op_finsert, early: false,
                    resume: crate::data::io_misc::resume_finsert },
-        LoggedOp { name: "stripe_update", ty: T::KEY_TYPE_logged_op_stripe_update, early: true,
+        LoggedOp { name: "stripe_update", ty: BkeyType::logged_op_stripe_update, early: true,
                    resume: crate::data::ec::update::resume_logged_op },
-        LoggedOp { name: "inode_opt_propagate", ty: T::KEY_TYPE_logged_op_inode_opt_propagate,
+        LoggedOp { name: "inode_opt_propagate", ty: BkeyType::logged_op_inode_opt_propagate,
                    early: false, resume: crate::inode_opts::resume_propagate },
     ]
 };
 
-fn logged_op(ty: c::bch_bkey_type) -> Option<&'static LoggedOp> {
+fn logged_op(ty: BkeyType) -> Option<&'static LoggedOp> {
     LOGGED_OPS.iter().find(|op| op.ty == ty)
 }
 
@@ -101,7 +101,7 @@ impl Fs {
 
     pub fn logged_op_fail_next_to_text(&self, out: &mut Printbuf) {
         let ty = self.logged_ops.fail_next.load(Ordering::Relaxed);
-        let name = logged_op(c::bch_bkey_type(ty)).map_or("(none)", |op| op.name);
+        let name = logged_op(BkeyType(ty)).map_or("(none)", |op| op.name);
 
         let _ = writeln!(out, "{name}");
     }
@@ -197,7 +197,7 @@ pub fn start(t: &TransAttempt<'_, '_>, k: &mut BkeyI) -> Result<(), BchError> {
 ///
 /// compare_exchange: arming is by type, so two ops of that type in flight
 /// would both fire.
-pub fn inject_fail(fs: &Fs, ty: c::bch_bkey_type) -> Result<(), BchError> {
+pub fn inject_fail(fs: &Fs, ty: BkeyType) -> Result<(), BchError> {
     let knob = &fs.logged_ops.fail_next;
 
     if knob.load(Ordering::Relaxed) == ty.0 &&

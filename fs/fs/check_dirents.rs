@@ -19,6 +19,7 @@
 //! dirent commits; if the walker refetches partway through a directory, they're
 //! recounted from the btree (recalculate_sums).
 
+use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
@@ -435,7 +436,7 @@ fn check_dirent_to_inode<'t>(
         // whiteouts already committed to make progress, and a dirent no longer
         // visible mustn't be reported again.
         let visible = delete_iter.peek_slot(t)?.expect("a slot always has a key");
-        if visible.k.key_type() != c::bch_bkey_type::KEY_TYPE_dirent {
+        if visible.k.key_type() != BkeyType::dirent {
             continue;
         }
         let visible_pos = visible.k.p;
@@ -467,7 +468,7 @@ fn check_dirent<'t>(
 
     st.s.update(k.k.p)?;
 
-    if k.k.key_type() == c::bch_bkey_type::KEY_TYPE_whiteout {
+    if k.k.key_type() == BkeyType::whiteout {
         return Ok(());
     }
 

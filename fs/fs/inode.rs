@@ -31,6 +31,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError, Found};
@@ -427,7 +428,7 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
 
     let k = &mut out.inode;
     *k = BkeyI { k: c::bkey::new(), v: Default::default() };
-    k.k.type_ = c::bch_bkey_type::KEY_TYPE_inode_v3.0 as u8;
+    k.k.set_key_type(BkeyType::inode_v3);
     k.k.set_val_bytes(size_of::<c::InodeV3>());
     k.k.p.offset = inode.bi_inum;
     k.v.bi_journal_seq = inode.bi_journal_seq.into();
@@ -498,8 +499,7 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
 
 /// Whether @k is an inode, of any version: as C's bkey_is_inode().
 pub fn bkey_is_inode(k: &c::bkey) -> bool {
-    type T = c::bch_bkey_type;
-    [T::KEY_TYPE_inode, T::KEY_TYPE_inode_v2, T::KEY_TYPE_inode_v3]
+    [BkeyType::inode, BkeyType::inode_v2, BkeyType::inode_v3]
         .iter()
         .any(|t| k.type_ == t.0 as u8)
 }
@@ -1171,7 +1171,7 @@ pub fn create<'a>(
             // Free, and if so the generation a deleted inode left:
             let free = match iter.peek_max(t, spos(0, inum, u32::MAX))? {
                 None => Some(0),
-                Some(k) if k.k.type_ == c::bch_bkey_type::KEY_TYPE_inode_generation.0 as u8 &&
+                Some(k) if k.k.key_type() == BkeyType::inode_generation &&
                            crate::snapshots::snapshot::is_ancestor(t, snapshot, k.k.p.snapshot) =>
                     Some((k.arm::<c::InodeGeneration>().expect("a generation").v().bi_generation).get()),
                 Some(_) => None,
@@ -1806,7 +1806,7 @@ fn kill_i_generation_keys(fs: &Fs) -> Result<(), BchError> {
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, k| {
         progress.update(t, iter)?;
-        if k.k.type_ == c::bch_bkey_type::KEY_TYPE_inode_generation.0 as u8 {
+        if k.k.key_type() == BkeyType::inode_generation {
             t.delete_at(iter, UpdateTriggerFlags::empty())?;
         }
         Ok(())

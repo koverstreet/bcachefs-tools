@@ -26,6 +26,7 @@
 
 use core::ops::Range;
 
+use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeySC};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -56,7 +57,6 @@ impl Mapping {
 
     /// True if @info is full, which ends the walk.
     fn emit(&self, fs: &Fs, info: &mut c::fiemap_extent_info, flags: u32) -> Result<bool, BchError> {
-        use c::bch_bkey_type as t;
 
         let mut fill = |logical: u64, physical: u64, len: u64, flags: u32| {
             ret_to_result(unsafe { c::fiemap_fill_next_extent(info, logical << 9, physical << 9,
@@ -108,9 +108,9 @@ impl Mapping {
         match k.k.key_type() {
             _ if k.k.extent_is_inline_data() =>
                 fill(start, 0, len, flags | c::FIEMAP_EXTENT_DATA_INLINE),
-            t::KEY_TYPE_reservation =>
+            BkeyType::reservation =>
                 fill(start, 0, len, flags | c::FIEMAP_EXTENT_DELALLOC | c::FIEMAP_EXTENT_UNWRITTEN),
-            t::KEY_TYPE_error => Ok(false),
+            BkeyType::error => Ok(false),
             _ => {
                 crate::warn_once!(true, fs, "fiemap: unhandled key type: {}", k.k);
                 Ok(false)

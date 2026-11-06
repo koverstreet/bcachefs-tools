@@ -15,6 +15,7 @@
 //!
 //! lru.h's inlines are the same encoding, for C's callers.
 
+use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::buckets::u64_to_bucket;
@@ -270,7 +271,7 @@ pub(crate) fn lru_check_set(
     let mut iter = BtreeIter::new(t, Btree::lru, pos.to_bpos(), BtreeIterFlags::empty());
     let lru_k = iter.peek_slot(t)?.expect("a slot always has a key");
 
-    if lru_k.k.type_ != c::bch_bkey_type::KEY_TYPE_set.0 as u8 {
+    if lru_k.k.key_type() != BkeyType::set {
         last_flushed.maybe_flush(t, referring_k)?;
 
         if fsck_err!(t, id::alloc_key_to_missing_lru_entry, "missing {} lru entry at pos {}\n{}",

@@ -5,6 +5,7 @@
 //! options call for, padding pointers for replicas it's short, a stripe's
 //! needs_reconcile bit; and whether new work is allowed, or an fsck error.
 
+use crate::format::BkeyType;
 use crate::fsck_err;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeyS, BkeySC, BkeyV, BkeyVMut, BkeyVal};
@@ -36,7 +37,7 @@ pub(crate) fn rb_bit(o: c::bch_reconcile_opts) -> u8 {
 /// it has any option its inode set, as it has no inode to take them from
 /// after. bkey_should_have_rb_opts().
 fn should_have_rb_opts(k: &c::bkey, r: &c::bch_extent_reconcile) -> bool {
-    if k.key_type() == c::bch_bkey_type::KEY_TYPE_reflink_v {
+    if k.key_type() == BkeyType::reflink_v {
         macro_rules! any_from_inode {
             ($(($name:tt)),* $(,)?) => { crate::paste! { false $(|| r.[<$name _from_inode>]() != 0)* } };
         }
@@ -76,7 +77,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
     let poisoned = k.poisoned(fs);
     let compression_type = c::bch_compression_opt::to_type(r.background_compression(), fs);
     let csum_type = if opts.nocow == 0 { fs.data_checksum_type_rb(&r) } else { c::bch_csum_type::BCH_CSUM_none };
-    let stripe = k.k.key_type() == c::bch_bkey_type::KEY_TYPE_stripe;
+    let stripe = k.k.key_type() == BkeyType::stripe;
 
     let (mut incompressible, mut unwritten, mut ec) = (false, false, false);
     let (mut invalid, mut ec_redundancy) = (0u32, 0u32);

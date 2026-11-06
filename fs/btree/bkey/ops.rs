@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use crate::format::BkeyType;
 use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt};
@@ -274,8 +275,8 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         btree.is_none() ||
         kt.is_some_and(|t| t.flags & c::BKEY_TYPE_generic == 0);
     let allowed = match btree {
-        None    => [c::bch_bkey_type::KEY_TYPE_deleted, c::bch_bkey_type::KEY_TYPE_btree_ptr,
-                    c::bch_bkey_type::KEY_TYPE_btree_ptr_v2].iter().fold(0, |m, t| m | 1 << t.0),
+        None    => [BkeyType::deleted, BkeyType::btree_ptr,
+                    BkeyType::btree_ptr_v2].iter().fold(0, |m, t| m | 1 << t.0),
         Some(b) => b.key_types(),
     };
 

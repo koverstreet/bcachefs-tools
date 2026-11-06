@@ -33,6 +33,7 @@
 //! repaired is rewritten without the device, so the scan goes again until
 //! it's met none.
 
+use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::accounting;
 use crate::alloc::backpointers::{backpointer_get_key, backpointer_get_node, BpScanIter};
@@ -128,7 +129,7 @@ impl DevDrop<'_> {
     {
         let Some(mut n) = self.drop_ptrs(t, k)? else { return Ok(()) };
 
-        if n.k().key_type() == c::bch_bkey_type::KEY_TYPE_error {
+        if n.k().key_type() == BkeyType::error {
             damage::record_data_loss(t, iter.btree(), k.k.p, id::data_lost_device_removed)?;
         }
 
@@ -318,7 +319,7 @@ impl DevDrop<'_> {
             };
             let b = BtreeNodeRef::from(b);
             self.btree_node(t, &mut iter, b)
-        } else if k.k.key_type() == c::bch_bkey_type::KEY_TYPE_stripe {
+        } else if k.k.key_type() == BkeyType::stripe {
             self.stripe(t, iter, k.untyped(), had_open_stripe, recorded_stripe)
         } else {
             self.usrdata_key(t, iter, k)

@@ -13,6 +13,7 @@
 //! stripe's ref should have kept it - is reported, not repaired (GH #960):
 //! what to do with such a stripe is still open.
 
+use crate::format::BkeyType;
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::alloc::lru::{lru_check_set, LruId, LruPos};
 use crate::btree::bkey::{pos, BkeySC, BkeyV, POS_MIN};
@@ -26,8 +27,6 @@ use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;
 use crate::{fsck_err, fsck_err_flags, fsck_err_on};
 use crate::format::{Bpos, Btree};
-
-const KEY_TYPE_SET: u8 = c::bch_bkey_type::KEY_TYPE_set.0 as u8;
 
 /// Bucket @bucket's reference to stripe @stripe, added or (!@set) dropped:
 /// its bucket_to_stripe entry, and its alloc key's stripe_refcount.
@@ -62,7 +61,7 @@ fn check_stripe_refs_one(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, last_flushed: 
 
         let mut iter = BtreeIter::new(t, Btree::bucket_to_stripe, pos(bucket_to_u64(bucket), idx),
                                       BtreeIterFlags::empty());
-        let missing = iter.peek_slot(t)?.expect("a slot always has a key").k.type_ != KEY_TYPE_SET;
+        let missing = iter.peek_slot(t)?.expect("a slot always has a key").k.key_type() != BkeyType::set;
         if fsck_err_on!(t, missing, id::stripe_to_missing_bucket_ref,
                         "stripe block {i} missing bucket ref\n{}", k.to_text(fs))? {
             bucket_stripe_ref_mod(t, bucket, idx, true)?;

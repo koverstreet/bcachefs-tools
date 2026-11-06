@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::format::BkeyType;
 use crate::btree::bkey::BkeyI;
 use crate::fs::Fs;
 use crate::btree::node::{sort::{SortIter, SortIterSet}, BtreeNode};
@@ -1182,7 +1183,7 @@ macro_rules! btree_key_types {
     ($(($name:tt, $nr:literal, $($flag:tt)|+, $(BIT_ULL($t:ident))|+ $(, $($rest:tt)*)?)),* $(,)?) => {
         const BTREE_KEY_TYPES: [u64; c::BTREE_ID_NR as usize] = {
             let mut t = [0; c::BTREE_ID_NR as usize];
-            $(t[$nr] = 1 << c::bch_bkey_type::KEY_TYPE_deleted.0 $(| 1 << c::bch_bkey_type::$t.0)+;)*
+            $(t[$nr] = 1 << BkeyType::deleted.0 $(| 1 << BkeyType::$t.0)+;)*
             t
         };
     };
@@ -1234,12 +1235,12 @@ impl FromStr for Btree {
 }
 
 #[cfg(feature = "std")]
-impl FromStr for c::bch_bkey_type {
+impl FromStr for BkeyType {
     type Err = BchError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         crate::btree::bkey::key_type_by_name(s)
-            .map(|t| c::bch_bkey_type(t.nr.into()))
+            .map(|t| BkeyType(t.nr.into()))
             .ok_or_else(|| bch_errcode::BCH_ERR_EINVAL_parse_bkey_type.into())
     }
 }

@@ -11,6 +11,7 @@
 #![allow(non_camel_case_types)]
 
 use cstruct_macros::{c_enum, c_extern};
+use crate::format::BkeyType;
 use crate::btree::iter::BtreeTrans;
 use crate::util::Printbuf;
 use crate::format::{Bpos, Btree};
@@ -764,7 +765,7 @@ pub fn rename(
     // snapshot: there's only ever the one dirent for a subvolume, visible in
     // its parent - versions of it in other snapshots would only confuse fsck.
     let new_src_pos = new_src.k().p;
-    let new_src_deleted = new_src.k().type_ == c::bch_bkey_type::KEY_TYPE_deleted.0 as u8;
+    let new_src_deleted = new_src.k().key_type() == BkeyType::deleted;
     let delete_src = old_src.is_subvol() && new_src_pos.snapshot != old_src.snapshot;
     let delete_dst = old_dst.is_some_and(|o| o.is_subvol() && new_dst_pos.snapshot != o.snapshot);
 

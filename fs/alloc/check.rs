@@ -23,6 +23,7 @@
 //! The injection tests for every error here: ktest's alloc-inject.ktest and
 //! lru-inject.ktest.
 
+use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::alloc::background::{alloc_to_v4, bucket_do_freespace_index, BucketGensPos, FreespacePos, NeedDiscardPos};
 use crate::alloc::buckets::bucket_to_u64;
@@ -49,8 +50,6 @@ use core::ffi::c_int;
 use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree, DataType};
 
-const KEY_TYPE_SET: u8 = c::bch_bkey_type::KEY_TYPE_set.0 as u8;
-
 // ── Walking the alloc btree, holes and all ───────────────────────────────
 
 /// A key in the alloc btree, or a hole: positions @start to @end with no key.
@@ -67,7 +66,7 @@ fn get_key_or_hole<'k, 't>(t: &'k TransAttempt<'_, 't>, iter: &'k mut BtreeIter<
     -> Result<KeyOrHole<'k>, BchError>
 {
     let (iter, k) = iter.peek_slot_shared(t)?;
-    if k.k.type_ != c::bch_bkey_type::KEY_TYPE_deleted.0 as u8 {
+    if k.k.key_type() != BkeyType::deleted {
         return Ok(KeyOrHole::Key(k));
     }
 
@@ -222,7 +221,7 @@ fn check_alloc_key<'t>(
     if DataType(a.v().data_type.into()) == DataType::need_discard {
         iters.discard.set_pos(NeedDiscardPos::new(bucket, a.v()).to_bpos());
         let (discard_iter, k) = iters.discard.peek_slot_shared(t)?;
-        let missing = k.k.type_ != KEY_TYPE_SET;
+        let missing = k.k.key_type() != BkeyType::set;
 
         if missing {
             last_flushed.maybe_flush(t, alloc_k)?;
@@ -294,7 +293,7 @@ fn check_alloc_hole_freespace<'t>(
     *end = bkey_min(k.k.p, *end);
 
     let p = freespace_iter.pos();
-    if fsck_err_on!(t, k.k.type_ != KEY_TYPE_SET, id::freespace_hole_missing,
+    if fsck_err_on!(t, k.k.key_type() != BkeyType::set, id::freespace_hole_missing,
                     "hole in alloc btree missing in freespace btree\ndevice {} buckets {}-{}",
                     { p.inode }, { p.offset }, { end.offset })? {
         let size = (end.offset - p.offset).min(u32::MAX.into());
@@ -568,7 +567,7 @@ fn recheck_freespace_key(fs: &Fs, pos: c::bbpos) -> Result<(), BchError> {
     lockrestart_do(&trans, |t| {
         let mut iter = BtreeIter::new(t, pos.btree, pos.pos, BtreeIterFlags::empty());
         let k = iter.peek_slot(t)?.expect("a slot always has a key");
-        if k.k.key_type() != c::bch_bkey_type::KEY_TYPE_set {
+        if k.k.key_type() != BkeyType::set {
             return Ok(());
         }
         repair_freespace_key(t, &iter, FreespaceCheck::Recheck)

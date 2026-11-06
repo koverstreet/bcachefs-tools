@@ -36,6 +36,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::format::BkeyType;
 use crate::btree::iter::BtreeTrans;
 use crate::accounting;
 use crate::btree::bkey::{BkeyI, BkeySC, SPOS_MAX};
@@ -63,7 +64,6 @@ use core::pin::Pin;
 use core::ptr;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_export, bitfield, CStruct, Init};
-use c::bch_bkey_type as kt;
 use c::bch_errcode as e;
 use c::bch_fs_flags as f;
 use crate::journal::JournalEntries;
@@ -676,7 +676,7 @@ pub unsafe fn bch2_key_deleted_in_journal(trans: *mut BtreeTrans<'_>, btree: Btr
     }
 
     let k = jk.key(k);
-    k.k.p == pos && k.k.key_type() == kt::KEY_TYPE_deleted
+    k.k.p == pos && k.k.key_type() == BkeyType::deleted
 }
 
 /// The key at @pos overwritten, if the journal has one that isn't - or with
@@ -736,7 +736,7 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
 
     if let Some(o) = keys.get_mut(idx).filter(|o| jk.key_cmp(&n, o).is_eq()) {
         let ok = jk.key(o);
-        let accounting = k.k.key_type() == kt::KEY_TYPE_accounting && ok.k.key_type() == kt::KEY_TYPE_accounting;
+        let accounting = k.k.key_type() == BkeyType::accounting && ok.k.key_type() == BkeyType::accounting;
 
         if !(accounting && !o.allocated()) {
             if accounting {
@@ -963,7 +963,7 @@ impl c::btree_and_journal_iter {
             // SAFETY: as ret's
             let k = unsafe { &*ret.k };
             self.pos = k.p;
-            if k.key_type() != kt::KEY_TYPE_deleted {
+            if k.key_type() != BkeyType::deleted {
                 return ret;
             }
             self.advance();
@@ -1071,7 +1071,7 @@ fn sort_dedup(jk: &c::journal_keys, keys: &mut GapBuffer<c::journal_key>) {
 
     let mut dst = 0;
     for src in 0..s.len() {
-        let accounting = jk.key(&s[src]).k.key_type() == kt::KEY_TYPE_accounting;
+        let accounting = jk.key(&s[src]).k.key_type() == BkeyType::accounting;
         if !accounting && src + 1 < s.len() && jk.key_cmp(&s[src], &s[src + 1]).is_eq() {
             continue;
         }
@@ -1174,7 +1174,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
         let k = jk.key_k(i);
         // SAFETY: a key of the entries, which are recovery's
         unsafe {
-            if (*k).k.key_type() == kt::KEY_TYPE_btree_ptr_v2 {
+            if (*k).k.key_type() == BkeyType::btree_ptr_v2 {
                 let v = (&raw mut (*k).v).cast::<c::BtreePtrV2>();
                 (&raw mut (*v).repr.mem_ptr).write_unaligned(0);
             }

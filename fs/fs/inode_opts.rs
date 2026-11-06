@@ -15,6 +15,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{spos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
 use crate::btree::iter::{commit_do, is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
@@ -358,7 +359,7 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_o
         Mode::Metadata
     } else if k.arm::<Indirect>().is_some() {
         Mode::Reflink
-    } else if k.k.is_user_data() || k.k.key_type() == c::bch_bkey_type::KEY_TYPE_reflink_p {
+    } else if k.k.is_user_data() || k.k.key_type() == BkeyType::reflink_p {
         if unlikely(k.k.p.snapshot == 0) {
             crate::bch_err!(fs, "user data key with snapshot == 0\n{}", k.to_text(fs));
             crate::warn_on!(true);

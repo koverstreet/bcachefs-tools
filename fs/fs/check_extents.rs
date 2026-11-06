@@ -29,6 +29,7 @@
 //! reported past an i_size of 0 and punched from block 0. Unverified; one for
 //! the error injection tests.
 
+use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
@@ -173,8 +174,8 @@ fn overwrite_extent<'a, 't>(
     mut old: TransBkey<'a, 't>,
     new:     BkeySC<'_>,
 ) -> Result<(), BchError> {
-    if old.k().key_type() == c::bch_bkey_type::KEY_TYPE_extent_whiteout {
-        old.k_mut().type_ = c::bch_bkey_type::KEY_TYPE_whiteout.0 as u8;
+    if old.k().key_type() == BkeyType::extent_whiteout {
+        old.k_mut().set_key_type(BkeyType::whiteout);
         t.update(iter, &old, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
     } else {
         let d = new.durability_safe(t.fs());
@@ -239,8 +240,8 @@ fn overlapping_extents_found(
         return Err(fs.err(bch_errcode::BCH_ERR_internal_fsck_err));
     };
 
-    let k1_whiteout = k1.k.key_type() == c::bch_bkey_type::KEY_TYPE_extent_whiteout;
-    let k2_whiteout = k2.k.key_type() == c::bch_bkey_type::KEY_TYPE_extent_whiteout;
+    let k1_whiteout = k1.k.key_type() == BkeyType::extent_whiteout;
+    let k2_whiteout = k2.k.key_type() == BkeyType::extent_whiteout;
     let first = if k1_whiteout || k2_whiteout { k1_whiteout } else { pos1.snapshot >= pos2.p.snapshot };
 
     write!(buf, "\noverwriting {} extent", if first { "first" } else { "second" });
@@ -385,7 +386,7 @@ fn check_extent<'t>(
 
     st.w.walk(t, iter, k)?;
 
-    if k.k.key_type() != c::bch_bkey_type::KEY_TYPE_whiteout &&
+    if k.k.key_type() != BkeyType::whiteout &&
        check_overlapping_extents(t, &st.res, &mut st.s, &mut st.extent_ends, k)? {
         st.w.set_recalculate_sums();
     }
@@ -400,7 +401,7 @@ fn check_extent<'t>(
     let p          = k.k.p;
     let size       = k.k.size as u64;
     let allocation = k.k.extent_is_allocation();
-    let whiteout   = k.k.key_type() == c::bch_bkey_type::KEY_TYPE_whiteout;
+    let whiteout   = k.k.key_type() == BkeyType::whiteout;
 
     t.commit(Some(&st.res), CommitFlags::NO_ENOSPC)?;
 

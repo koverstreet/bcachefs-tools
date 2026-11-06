@@ -102,12 +102,13 @@ pub use self::packed::*;
 pub use self::text::*;
 pub use self::types::*;
 
+use crate::format::BkeyType;
 use crate::c;
 use crate::format::Bpos;
 
 pub const BKEY_U64S: usize = core::mem::size_of::<c::bkey>() / core::mem::size_of::<u64>();
 
-pub type bkey_type = c::bch_bkey_type;
+pub type bkey_type = BkeyType;
 
 impl c::bkey {
     /// Of type deleted, at POS_MIN, with no value: as bkey_init() sets.
@@ -142,8 +143,12 @@ impl c::bkey {
         self.size = new_size;
     }
 
-    pub fn key_type(&self) -> c::bch_bkey_type {
-        c::bch_bkey_type(self.type_ as u32)
+    pub fn key_type(&self) -> BkeyType {
+        BkeyType(self.type_ as u32)
+    }
+
+    pub fn set_key_type(&mut self, t: BkeyType) {
+        self.type_ = t.0 as u8;
     }
 
     /// The same header, format aside: bkey_fields_eq().
@@ -165,7 +170,7 @@ impl c::bkey {
     }
 }
 
-impl c::bch_bkey_type {
+impl BkeyType {
     /// Whether it's @K's type: the tag. Not whether its value is long enough
     /// - that's validate's, as in C.
     pub fn is<K: BkeyTag + ?Sized>(self) -> bool {
@@ -173,19 +178,19 @@ impl c::bch_bkey_type {
     }
 
     pub fn is_deleted(self) -> bool {
-        self == Self::KEY_TYPE_deleted
+        self == Self::deleted
     }
 
     pub fn is_whiteout(self) -> bool {
-        matches!(self, Self::KEY_TYPE_deleted | Self::KEY_TYPE_whiteout)
+        matches!(self, Self::deleted | Self::whiteout)
     }
 
     /// A tombstone in an extents btree.
     pub fn is_extent_whiteout(self) -> bool {
-        matches!(self, Self::KEY_TYPE_deleted | Self::KEY_TYPE_whiteout | Self::KEY_TYPE_extent_whiteout)
+        matches!(self, Self::deleted | Self::whiteout | Self::extent_whiteout)
     }
 
     pub fn is_hash_whiteout(self) -> bool {
-        self == Self::KEY_TYPE_hash_whiteout
+        self == Self::hash_whiteout
     }
 }

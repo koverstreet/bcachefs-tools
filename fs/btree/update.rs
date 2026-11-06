@@ -4,6 +4,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::format::BkeyType;
 use crate::btree::bkey::BkeyI;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
@@ -110,19 +111,19 @@ c_extern! {
 /// snapshot of an extents btree, once the filesystem has the feature, which
 /// this asks for; a snapshot the table doesn't have is a leaf, as C took it.
 /// Any other deletion's is KEY_TYPE_whiteout.
-pub fn extent_whiteout_type(fs: &Fs, btree: Btree, k: &c::bkey) -> c::bch_bkey_type {
+pub fn extent_whiteout_type(fs: &Fs, btree: Btree, k: &c::bkey) -> BkeyType {
     if btree.is_extents_snapshots() &&
        k.key_type().is_deleted() &&
        fs.snapshots.is_leaf(k.p.snapshot) != Ok(false) &&
        fs.request_incompat_feature(c::bcachefs_metadata_version::extent_snapshot_whiteouts).is_ok() {
-        c::bch_bkey_type::KEY_TYPE_extent_whiteout
+        BkeyType::extent_whiteout
     } else {
-        c::bch_bkey_type::KEY_TYPE_whiteout
+        BkeyType::whiteout
     }
 }
 
 #[c_export]
-pub fn bch2_extent_whiteout_type(c: &Opaque<Fs>, btree: Btree, k: &c::bkey) -> c::bch_bkey_type {
+pub fn bch2_extent_whiteout_type(c: &Opaque<Fs>, btree: Btree, k: &c::bkey) -> BkeyType {
     extent_whiteout_type(Fs::from_c(c), btree, k)
 }
 

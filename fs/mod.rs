@@ -270,6 +270,7 @@ pub mod format;
 pub mod opts;
 
 pub use paste::paste;
+use crate::format::BkeyType;
 use crate::format::{Btree, CompressionType, DataType};
 
 pub mod c {
@@ -643,8 +644,8 @@ impl From<c::bch_opt_id> for u32 {
     }
 }
 
-impl From<c::bch_bkey_type> for u32 {
-    fn from(t: c::bch_bkey_type) -> u32 {
+impl From<BkeyType> for u32 {
+    fn from(t: BkeyType) -> u32 {
         t.0
     }
 }

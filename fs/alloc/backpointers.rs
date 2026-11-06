@@ -34,6 +34,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeyS, BkeySC, BkeyVal};
@@ -322,7 +323,7 @@ fn bucket_backpointer_mod_nowritebuffer(t: &TransAttempt<'_, '_>, orig_k: BkeySC
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
 
     let wrong = if insert {
-        k.k.type_ != c::bch_bkey_type::KEY_TYPE_deleted.0 as u8
+        k.k.key_type() != BkeyType::deleted
     } else {
         k.arm::<c::Backpointer>().is_none_or(|found| !backpointers_match(found.v(), &bp.v))
     };
@@ -331,7 +332,7 @@ fn bucket_backpointer_mod_nowritebuffer(t: &TransAttempt<'_, '_>, orig_k: BkeySC
     }
 
     if !insert {
-        bp.k.type_ = c::bch_bkey_type::KEY_TYPE_deleted.0 as u8;
+        bp.k.set_key_type(BkeyType::deleted);
         bp.k.set_val_bytes(0);
     }
 
@@ -354,7 +355,7 @@ pub fn bucket_backpointer_mod(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, bp: 
     }
 
     if !insert {
-        bp.k.type_ = c::bch_bkey_type::KEY_TYPE_deleted.0 as u8;
+        bp.k.set_key_type(BkeyType::deleted);
         bp.k.set_val_bytes(0);
     }
 

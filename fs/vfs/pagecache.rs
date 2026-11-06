@@ -15,6 +15,7 @@ use core::ptr::NonNull;
 use cstruct_macros::{c_export, c_extern};
 use kernel::page::PAGE_SHIFT;
 
+use crate::format::BkeyType;
 use crate::btree::bkey::{pos, BkeySC};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags};
 use crate::c;
@@ -296,7 +297,7 @@ pub fn bch2_folio_set(_c: &Opaque<Fs>, inode: &InodeInfo, folios: *mut *mut c::f
 #[c_export]
 pub fn bch2_bio_page_state_set(c: &Opaque<Fs>, bio: *mut c::bio, k: BkeySC<'_>) {
     let fs = Fs::from_c(c);
-    let nr_ptrs = if k.k.key_type() == c::bch_bkey_type::KEY_TYPE_reflink_v {
+    let nr_ptrs = if k.k.key_type() == BkeyType::reflink_v {
         0
     } else {
         u32::from(k.durability_safe(fs).nr_overwritable)

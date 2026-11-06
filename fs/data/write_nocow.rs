@@ -2,6 +2,7 @@
 
 //! The write path's in place writes, over extents that allow them: nocow.
 
+use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_ge, pos, spos, BkeyI, BkeySC, Typed};
 use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
@@ -27,7 +28,7 @@ type Op = c::bch_write_op;
 fn extent_is_writeable(op: &Op, k: BkeySC<'_>) -> bool {
     let fs = op.fs();
 
-    if k.k.key_type() != c::bch_bkey_type::KEY_TYPE_extent {
+    if k.k.key_type() != BkeyType::extent {
         return false;
     }
 

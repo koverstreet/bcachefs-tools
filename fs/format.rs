@@ -373,7 +373,7 @@ c_enum! {
 
 tagged_union! {
     #[key_value]
-    #[tag_enum(bch_bkey_type: u32, prefix = KEY_TYPE_, nr = KEY_TYPE_MAX)]
+    #[tag_enum(BkeyType: u32, prefix = KEY_TYPE_, nr = KEY_TYPE_MAX, c_name = bch_bkey_type)]
     #[arm_columns(flags: bch_bkey_type_flags)]
     #[c_list(BCH_BKEY_TYPES)]
     pub enum bkey_val {
@@ -490,6 +490,9 @@ tagged_union! {
         indirect_inline_data_v2(c::IndirectInlineDataV2) = 41,
     }
 }
+
+/// C's name, as bindgen's declarations of C functions spell it.
+pub type bch_bkey_type = BkeyType;
 
 #[repr(C)]
 #[c_name(bch_deleted)]

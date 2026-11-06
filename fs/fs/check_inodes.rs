@@ -5,6 +5,7 @@
 //! about other btrees (has_child_snapshot, has_inode_opts, the ACL flags) are
 //! right. Repairs edit an unpacked copy, written once at the end.
 
+use crate::format::BkeyType;
 use crate::acl::AclType;
 use crate::btree::bkey::{spos, BkeySC, POS_MIN};
 use crate::btree::bkey::prelude::*;
@@ -86,7 +87,7 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpac
 /// Whether the inode at @pos is on the deleted_inodes list.
 fn on_deleted_list(t: &TransAttempt<'_, '_>, pos: Bpos) -> Result<bool, BchError> {
     let mut iter = BtreeIter::new(t, Btree::deleted_inodes, pos, BtreeIterFlags::empty());
-    Ok(iter.peek_slot(t)?.is_some_and(|k| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_set))
+    Ok(iter.peek_slot(t)?.is_some_and(|k| k.k.key_type() == BkeyType::set))
 }
 
 /// What the has_*_acl flags record.

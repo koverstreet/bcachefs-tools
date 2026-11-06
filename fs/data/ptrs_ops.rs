@@ -3,6 +3,7 @@
 //! seen, or rejected - and btree_ptr(_v2)'s own on top of them.
 
 use super::*;
+use crate::format::BkeyType;
 use crate::{bkey_fsck_err, bkey_fsck_err_on};
 use crate::btree::bkey::{bkey_eq, POS_MIN};
 use crate::data::durability::BkeyVDurability;
@@ -62,11 +63,10 @@ fn btree_ptr_entry_type_allowed(ty: u32) -> bool {
 /// Each entry against the ones before it, then all of them together:
 /// bch2_bkey_ptrs_validate().
 pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    use c::bch_bkey_type as kt;
 
     let (fs, k) = (v.fs, v.k);
     let p = k.arm::<Ptrs>().expect("a key with pointers");
-    let is_btree_ptr = matches!(k.k.key_type(), kt::KEY_TYPE_btree_ptr | kt::KEY_TYPE_btree_ptr_v2);
+    let is_btree_ptr = matches!(k.k.key_type(), BkeyType::btree_ptr | BkeyType::btree_ptr_v2);
     let range = Ptrs::entry_range(p);
     let entries_start = k.val_bytes().as_ptr() as usize + range.start;
     let entries_u64s = range.len() / 8;
@@ -176,7 +176,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                       "too many ptrs: {} > {}", nr_ptrs, c::BCH_BKEY_PTRS_MAX)?;
     bkey_fsck_err_on!(v, have_written && have_unwritten, id::extent_ptrs_written_and_unwritten,
                       "extent with unwritten and written ptrs")?;
-    bkey_fsck_err_on!(v, k.k.key_type() != kt::KEY_TYPE_extent && have_unwritten,
+    bkey_fsck_err_on!(v, k.k.key_type() != BkeyType::extent && have_unwritten,
                       id::extent_ptrs_unwritten, "has unwritten ptrs")?;
     bkey_fsck_err_on!(v, crc_since_last_ptr, id::extent_ptrs_redundant_crc, "redundant crc entry")?;
     bkey_fsck_err_on!(v, have_ec, id::extent_ptrs_redundant_stripe, "redundant stripe entry")?;

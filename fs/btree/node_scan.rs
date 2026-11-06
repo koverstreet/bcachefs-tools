@@ -5,6 +5,7 @@ use core::ffi::{c_int, c_uint};
 use core::mem::{offset_of, replace, size_of};
 use core::ptr::NonNull;
 
+use crate::format::BkeyType;
 use crate::data_structures::array_vec::ArrayVec;
 use cstruct_macros::c_export;
 
@@ -115,7 +116,7 @@ impl FoundBtreeNode {
             ptrs: [c::bch_extent_ptr::default(); c::BCH_REPLICAS_MAX as usize],
         };
 
-        k.k.type_ = c::bch_bkey_type::KEY_TYPE_btree_ptr_v2.0 as u8;
+        k.k.set_key_type(BkeyType::btree_ptr_v2);
         k.k.set_val_bytes(size_of::<BtreePtrV2>() + size_of::<c::bch_extent_ptr>() * self.ptrs.len());
         k.k.p = self.max_key;
         k.v.seq = Le64::new(self.cookie);

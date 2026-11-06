@@ -1,3 +1,4 @@
+use bcachefs_kernel::format::BkeyType;
 use bcachefs_kernel::fs::Dev;
 use bcachefs_kernel::btree::bkey::prelude::*;
 use std::os::fd::{AsFd, BorrowedFd};
@@ -197,9 +198,9 @@ fn derep(fs: &Fs, k: BkeyS) -> bool {
 /// de-replication reaches the btree_root pointers carried in the journal as well
 /// as the interior/leaf pointers in btree nodes. Returns whether it modified.
 fn sanitize_val(fs: &Fs, mut k: BkeyS, opts: SanitizeOpts) -> bool {
-    const BTREE_PTR:            c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_btree_ptr;
-    const BTREE_PTR_V2:         c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_btree_ptr_v2;
-    const DIRENT:               c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_dirent;
+    const BTREE_PTR:            BkeyType = BkeyType::btree_ptr;
+    const BTREE_PTR_V2:         BkeyType = BkeyType::btree_ptr_v2;
+    const DIRENT:               BkeyType = BkeyType::dirent;
 
     match k.k.key_type() {
         BTREE_PTR | BTREE_PTR_V2 if opts.single_replica => derep(fs, k),

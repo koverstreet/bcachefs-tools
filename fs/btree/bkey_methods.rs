@@ -28,6 +28,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::format::BkeyType;
 use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{NoRoom, TransBkey};
@@ -90,11 +91,10 @@ impl From<NoRoom> for SetError<'_> {
 /// The fields that hold enum codewords. The name<->value tables come from the
 /// x-macros (codegen.rs); this goes away when the format has a real schema.
 fn field_enum(type_: u8, field: &str) -> Option<EnumValues> {
-    use c::bch_bkey_type as t;
 
     match (type_ as u32, field) {
-        (ty, "state") if ty == t::KEY_TYPE_snapshot.0  => Some(SNAPSHOT_STATE_VALUES),
-        (ty, "state") if ty == t::KEY_TYPE_subvolume.0 => Some(SUBVOLUME_STATE_VALUES),
+        (ty, "state") if ty == BkeyType::snapshot.0  => Some(SNAPSHOT_STATE_VALUES),
+        (ty, "state") if ty == BkeyType::subvolume.0 => Some(SUBVOLUME_STATE_VALUES),
         _ => None,
     }
 }
@@ -133,7 +133,7 @@ impl TransBkey<'_, '_> {
     pub fn set_error(&mut self, fs: &Fs, err: c::bch_key_type_errors) {
         assert!(self.as_u64s().len() * 8 >= size_of::<c::bkey>() + size_of::<c::Error>(),
                 "no room in the key's buffer for an error key");
-        self.k_mut().type_ = c::bch_bkey_type::KEY_TYPE_error.0 as u8;
+        self.k_mut().set_key_type(BkeyType::error);
 
         if fs.request_incompat_feature(
             c::bcachefs_metadata_version::bcachefs_metadata_version_extented_key_type_error).is_ok() {
@@ -155,7 +155,7 @@ impl TransBkey<'_, '_> {
             self.set_ptr_field(fs, field, val)
         } else if inode::bkey_is_inode(self.k()) {
             self.set_inode(fs, field, val)
-        } else if self.k().type_ as u32 == c::bch_bkey_type::KEY_TYPE_dirent.0 {
+        } else if self.k().type_ as u32 == BkeyType::dirent.0 {
             dirent::set_field(self, fs, field, val)
         } else {
             self.set_fixed(field, val)

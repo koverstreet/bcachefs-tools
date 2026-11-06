@@ -50,6 +50,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::format::BkeyType;
 use crate::accounting::ReconcileType;
 use crate::accounting;
 use crate::alloc::capacity::DiskReservation;
@@ -256,7 +257,7 @@ impl WorkBuf {
 
                 // leftover scan cookies from rebalance, from before the
                 // reconcile upgrade
-                if k.k.key_type() != c::bch_bkey_type::KEY_TYPE_set {
+                if k.k.key_type() != BkeyType::set {
                     return Ok(ControlFlow::Continue(()));
                 }
 
@@ -464,7 +465,7 @@ impl<'a, 'f> Walker<'a, 'f> {
            k: BkeySC<'_>, read_dev: Option<u32>) -> Result<Moved, BchError>
     {
         let ctxt = self.ctxt;
-        if k.k.key_type() == c::bch_bkey_type::KEY_TYPE_stripe {
+        if k.k.key_type() == BkeyType::stripe {
             return reconcile_stripe(ctxt, t, iter, k, Some(&mut self.retry)).map(|()| None);
         }
         if !k.k.extent_is_direct_data() {

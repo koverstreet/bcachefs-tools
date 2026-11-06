@@ -53,6 +53,7 @@
 //! #[derive(SizedVal)].
 
 use super::BkeyP;
+use crate::format::BkeyType;
 use crate::btree::bkey::{ops, Ops};
 use crate::btree::iter::{BtreeIter, TransBkey};
 use crate::c;
@@ -496,7 +497,7 @@ pub trait ValidatedVal: BkeyVal<State: Implies<Validated>> {}
 impl<T: ?Sized + BkeyVal<State: Implies<Validated>>> ValidatedVal for T {}
 
 pub trait BkeyTag {
-    const TYPE: c::bch_bkey_type;
+    const TYPE: BkeyType;
 
     /// Up to its #[grown(from)] field: shorter than the struct is an older
     /// version, shorter than this damage - bkey_val_size_too_small.
@@ -654,7 +655,7 @@ macro_rules! key_types {
     ($(($name:ident, $nr:literal, $ty:ty, $flags:tt)),* $(,)?) => {
         const TABLE: [Option<KeyType>; NR_KEY_TYPES] = {
             let mut t = [None; NR_KEY_TYPES];
-            $(t[$nr] = Some(KeyType { nr: $nr, name: stringify!($name), flags: c::bch_bkey_type($nr).flags().bits(),
+            $(t[$nr] = Some(KeyType { nr: $nr, name: stringify!($name), flags: BkeyType($nr).flags().bits(),
                                       info: <$ty as TypeInfo>::INFO,
                                       min_val_size: <$ty as BkeyTag>::MIN_VAL_SIZE,
                                       ops: ops::<$ty>() });)*
@@ -664,7 +665,7 @@ macro_rules! key_types {
 }
 c::bkey_val_arms!(key_types);
 
-const NR_KEY_TYPES: usize = c::bch_bkey_type::KEY_TYPE_MAX.0 as usize;
+const NR_KEY_TYPES: usize = BkeyType::nr.0 as usize;
 
 /// Every key type, by its number. A static, not TABLE, for a lookup: a const
 /// indexed at runtime may be copied whole to the stack first.
@@ -909,7 +910,7 @@ macro_rules! bkey_types {
         // the shortest valid value: its value in place's head - a family's C
         // struct or a grown type's floor, a sized type all of it
         impl BkeyTag for $ty {
-            const TYPE: c::bch_bkey_type = c::bch_bkey_type($nr);
+            const TYPE: BkeyType = BkeyType($nr);
             const MIN_VAL_SIZE: usize =
                 size_of::<<<Self as BkeyFamily>::Validated as Unsized>::Head>();
         }

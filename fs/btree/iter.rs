@@ -2,6 +2,7 @@
 
 use super::bkey::*;
 pub use super::types::{BtreeIter, BtreeTrans};
+use crate::format::BkeyType;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{btree_path_level, BtreePath, LockedNode, PathIdx};
@@ -1709,7 +1710,7 @@ impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
     /// it's queued. It's no longer a @V, so it's consumed.
     pub fn set_deleted(mut self) {
         let k = self.k_mut();
-        k.type_ = c::bch_bkey_type::KEY_TYPE_deleted.0 as u8;
+        k.set_key_type(BkeyType::deleted);
         k.u64s  = c::BKEY_U64s as u8;
     }
 
@@ -2134,7 +2135,7 @@ impl BtreeIter<'_> {
             pos.snapshot = self.snapshot;
         }
 
-        self.k.type_ = c::bch_bkey_type::KEY_TYPE_deleted.0 as u8;
+        self.k.set_key_type(BkeyType::deleted);
         self.k.p     = pos;
         self.k.size  = 0;
         self.pos     = pos;

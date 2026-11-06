@@ -8,6 +8,7 @@ use core::mem::offset_of;
 use super::format::{fls64, u64_bitmask, BKEY_FORMAT_CURRENT, FIELDS, NR_FIELDS};
 use super::packed::Header;
 use super::{spos, BkeyP, BKEY_U64S};
+use crate::format::BkeyType;
 use crate::btree::node::{BkeyUnpackField, NodeContents};
 use crate::c;
 use crate::cstructs::c::{bkey_fields, bkey_pack_pos_ret};
@@ -61,7 +62,7 @@ fn set_pos_header(w: &mut u64, key_u64s: u8) {
     let h = Header::of_mut(w);
     h.u64s  = key_u64s;
     h.format_bits.set_format(c::KEY_FORMAT_LOCAL_BTREE as u8);
-    h.type_ = c::bch_bkey_type::KEY_TYPE_deleted.0 as u8;
+    h.type_ = BkeyType::deleted.0 as u8;
 }
 
 struct PackState<'a> {

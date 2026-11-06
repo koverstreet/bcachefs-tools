@@ -18,6 +18,7 @@
 //! update's end ends the walk: key start positions, extent_whiteouts included,
 //! only go up (btree/update.rs's extent_whiteout_type()).
 
+use crate::format::BkeyType;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_ge, bkey_gt, pos, spos, BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut, Typed};
@@ -80,16 +81,15 @@ impl<'t> TransAttempt<'_, 't> {
     /// The iterators overwriting @k takes, @offset into it - besides its
     /// own, which the caller's counted: whether the count's full.
     fn count_iters_for_insert(&self, k: BkeySC<'_>, offset: u64, n: &mut Count) -> Result<bool, BchError> {
-        use c::bch_bkey_type as t;
 
         n.stop_at(k.k.p);
 
         match k.k.key_type() {
-            t::KEY_TYPE_extent | t::KEY_TYPE_reflink_v => {
+            BkeyType::extent | BkeyType::reflink_v => {
                 n.nr += nr_alloc_ptrs(self.fs(), k);
                 n.stop_at(k.k.p);
             }
-            t::KEY_TYPE_reflink_p => {
+            BkeyType::reflink_p => {
                 let idx = k.arm::<c::ReflinkP>().expect("a reflink_p").v().idx();
                 let sectors = n.end.min(k.k.p).offset - k.k.start_offset();
                 let mut iter = BtreeIter::new(self, Btree::BTREE_ID_reflink, pos(0, idx + offset),
@@ -141,7 +141,7 @@ impl<'t> TransAttempt<'_, 't> {
                     extent_whiteout_type(fs, iter.btree(), &ins));
 
                 if k.k.p > ins.p {
-                    if k.k.key_type() == c::bch_bkey_type::KEY_TYPE_extent_whiteout {
+                    if k.k.key_type() == BkeyType::extent_whiteout {
                         break;
                     }
                 } else if k.k.key_type() != whiteout_type {
@@ -293,7 +293,7 @@ impl<'t> TransAttempt<'_, 't> {
         /* Slack for varint::decode_fast(), which reads up to 7 bytes past the end: */
         let mut k_mut: TransBkey<'_, 't> = self.bkey_reassemble_room(k, 0)?;
 
-        if unlikely(k_mut.k().key_type() != c::bch_bkey_type::KEY_TYPE_inode_v3) {
+        if unlikely(k_mut.k().key_type() != BkeyType::inode_v3) {
             k_mut = inode::to_v3(self, k_mut.as_ref())?;
         }
 

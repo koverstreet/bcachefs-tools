@@ -18,6 +18,7 @@
 //! edited as its blocks are allocated. What only reads a key takes it
 //! borrowed, as a BkeySC.
 
+use crate::format::BkeyType;
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{bkey_eq, pos, BkeyI, BkeySC, BkeyV, POS_MIN};
 use crate::c;
@@ -527,7 +528,7 @@ impl StripeKey {
     /// stripe.
     pub(crate) fn init(&mut self, v: &c::Stripe) {
         let mut k = c::bkey::new();
-        k.type_ = c::bch_bkey_type::KEY_TYPE_stripe.0 as u8;
+        k.set_key_type(BkeyType::stripe);
         k.set_val_bytes(v.val_u64s() as usize * size_of::<u64>());
 
         let (hdr, room) = (size_of::<c::bkey>(), self.room_mut());

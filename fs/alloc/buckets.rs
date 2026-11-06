@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::accounting::{self, mod_dev_cached_sectors};
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
@@ -555,7 +556,7 @@ fn trigger_pointer(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeySC
     if unlikely(dev == c::BCH_SB_MEMBER_INVALID) {
         if flags.contains(UpdateTriggerFlags::TRANSACTIONAL) && p.has_ec {
             if !insert {
-                bp.k.type_ = c::bch_bkey_type::KEY_TYPE_deleted.0 as u8;
+                bp.k.set_key_type(BkeyType::deleted);
                 bp.k.set_val_bytes(0);
             }
             t.update_buffered(Btree::stripe_backpointers, &t.bkey_copy(bp.as_ref())?)?;

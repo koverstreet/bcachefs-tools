@@ -17,6 +17,7 @@
 //! subvolume_children has a bit at (fs_path_parent, subvolume) for each nested
 //! subvolume, maintained by the trigger.
 
+use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
 use crate::util::vstructs::{Validated, Whole};
@@ -545,7 +546,7 @@ fn check_subvol<'a, 't>(
                                                BtreeIterFlags::empty());
         let ck = children_iter.peek_slot(t)?.expect("a slot always has a key");
 
-        if fsck_err_on!(t, ck.k.type_ != c::bch_bkey_type::KEY_TYPE_set.0 as u8,
+        if fsck_err_on!(t, ck.k.key_type() != BkeyType::set,
                         id::subvol_children_not_set,
                         "subvolume not set in subvolume_children btree at {}:{}\n{}",
                         { p.inode }, { p.offset }, s.to_text(fs))? {

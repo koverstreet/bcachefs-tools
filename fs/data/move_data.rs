@@ -32,6 +32,7 @@
 //! A stripe isn't moved: the phys walk of a scrub checks its blocks against
 //! their checksums instead (ec/repair.rs's scrub_stripe_block()).
 
+use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
 use crate::alloc::capacity::DiskReservation;
@@ -525,7 +526,7 @@ fn scrub(fs: &Fs, stats: &MoveStats, arg: c::bch_ioctl_data_scrub) -> Result<(),
         ..PhysWalk::new(BpWalk::Dev(dev), 0, u64::MAX)
     };
     ctxt.move_data_phys(None, &w, "scrub_pred", &mut |t, _, k, _, data_opts| {
-        if k.k.key_type() != c::bch_bkey_type::KEY_TYPE_btree_ptr_v2 {
+        if k.k.key_type() != BkeyType::btree_ptr_v2 {
             if let Some(kp) = k.arm::<Ptrs>() {
                 if let Some(d) = kp.ptrs_decoded(t.fs()).find(|d| u32::from(d.p.ptr.dev()) == dev) {
                     if d.p.crc.csum_type == 0 {

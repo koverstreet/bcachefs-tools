@@ -9,6 +9,7 @@
 //! device failed, or is offline, is read by reconstructing it from its
 //! stripe.
 
+use crate::format::BkeyType;
 use crate::fs::Dev;
 use super::*;
 use crate::debug::params as debug_params;
@@ -279,7 +280,7 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
         use c::bch_errcode as e;
         let key = self.as_sc();
 
-        if key.k.key_type() == c::bch_bkey_type::KEY_TYPE_error {
+        if key.k.key_type() == BkeyType::error {
             return fs.throw(e::BCH_ERR_key_type_error);
         }
 
@@ -363,8 +364,7 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
             return Ok(Some(p));
         }
 
-        use c::bch_bkey_type as t;
-        if !have_dirty_ptrs && !matches!(key.k.key_type(), t::KEY_TYPE_btree_ptr | t::KEY_TYPE_btree_ptr_v2) {
+        if !have_dirty_ptrs && !matches!(key.k.key_type(), BkeyType::btree_ptr | BkeyType::btree_ptr_v2) {
             return Ok(None);
         }
         if have_missing_devs || !have_dirty_ptrs {

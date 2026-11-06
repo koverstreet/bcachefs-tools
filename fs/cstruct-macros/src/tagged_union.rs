@@ -39,13 +39,13 @@
 //! arm type and what it nests, not for the storage. It's reported where it's
 //! written: the definition keeps its tokens' spans.
 //!
-//! `#[tag_enum([closed,] NAME: REPR, prefix = P[, nr = NR])]` is the tag's
-//! enum, made from the arms: P and an arm's name its variant, labelled the
-//! arm's name, then NR - open, or closed and the tag stored as it,
-//! `#[tag(FIELD)]`. An open one's values are its constants by the arms' names
-//! too, jset_entry's btree_keys, and nr. NAME_arms!(cb [pre]) is cb! { [pre]
-//! (name, value, Type, [column]..), .. }, an entry per arm, for what's made
-//! from each - a list's form, so xmacro_select can select from it.
+//! `#[tag_enum([closed,] NAME: REPR, prefix = P[, nr = NR][, c_name = C])]` is
+//! the tag's enum, made from the arms - C's C, if it isn't NAME: P and an arm's
+//! name its variant, labelled the arm's name, then NR - open, or closed and the
+//! tag stored as it, `#[tag(FIELD)]`. An open one's values are its constants by
+//! the arms' names too, jset_entry's btree_keys, and nr. NAME_arms!(cb [pre])
+//! is cb! { [pre] (name, value, Type, [column]..), .. }, an entry per arm, for
+//! what's made from each - a list's form, so xmacro_select can select from it.
 //!
 //! `#[arm_columns(NAME: FLAGS, ..)]` gives each arm a set of a #[flags]
 //! c_enum!'s flags, by their #[prefix]-less names: `#[NAME(a, b)]` on its
@@ -198,6 +198,7 @@ struct TagEnum {
     repr:   String,
     prefix: String,
     nr:     Option<String>,
+    c_name: Option<String>,
 }
 
 /// The union the declaration says - none for #[key_value], whose views are the
@@ -271,7 +272,7 @@ fn enum_form(input: &TokenStream) -> Result<(Option<(Decl, CTaggedUnion)>, Token
             }
             "tag_enum" => {
                 let mut e = TagEnum { closed: false, name: String::new(), repr: String::new(),
-                                      prefix: String::new(), nr: None };
+                                      prefix: String::new(), nr: None, c_name: None };
                 for part in comma_list(args.clone()) {
                     match part.as_slice() {
                         [TokenTree::Ident(c)] if c == "closed" => e.closed = true,
@@ -282,7 +283,9 @@ fn enum_form(input: &TokenStream) -> Result<(Option<(Decl, CTaggedUnion)>, Token
                             e.prefix = v.to_string(),
                         [TokenTree::Ident(k), eq, TokenTree::Ident(v)] if is_punct(Some(eq), '=') && k == "nr" =>
                             e.nr = Some(v.to_string()),
-                        _ => return Err(err("#[tag_enum([closed,] NAME: REPR, prefix = PREFIX[, nr = NR])]")),
+                        [TokenTree::Ident(k), eq, TokenTree::Ident(v)] if is_punct(Some(eq), '=') && k == "c_name" =>
+                            e.c_name = Some(v.to_string()),
+                        _ => return Err(err("#[tag_enum([closed,] NAME: REPR, prefix = PREFIX[, nr = NR][, c_name = C])]")),
                     }
                 }
                 if e.name.is_empty() || e.prefix.is_empty() {
@@ -397,7 +400,8 @@ fn enum_form(input: &TokenStream) -> Result<(Option<(Decl, CTaggedUnion)>, Token
             .chain(e.nr.iter().map(|nr| format!("{nr},")))
             .collect();
         let kind = if e.closed { "closed" } else { "open" };
-        out.extend(format!("::cstruct_macros::c_enum! {{ #[{kind}] {vis} enum {}: {} {{ {variants} }} }}",
+        let c_name = e.c_name.as_ref().map(|c| format!("#[c_name({c})] ")).unwrap_or_default();
+        out.extend(format!("::cstruct_macros::c_enum! {{ #[{kind}] {c_name}{vis} enum {}: {} {{ {variants} }} }}",
                            e.name, e.repr).parse::<TokenStream>().map_err(|e| e.to_string())?);
 
         if !e.closed {

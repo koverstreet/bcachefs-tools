@@ -4,6 +4,7 @@
 //! stripe's, for the blocks the new one carries - as a logged op, resumed
 //! after a crash.
 
+use crate::format::BkeyType;
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyV, BkeyVMut, POS_MIN};
@@ -259,7 +260,7 @@ fn stripe_update_bucket(trans: &BtreeTrans<'_>, old: Block<'_>, new: Block<'_>, 
 /// log-flush shutdown does.
 fn stripe_update_inject_crash(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
-    let ret = logged_ops::inject_fail(fs, c::bch_bkey_type::KEY_TYPE_logged_op_stripe_update);
+    let ret = logged_ops::inject_fail(fs, BkeyType::logged_op_stripe_update);
 
     if ret.is_err() {
         trans.unlock();

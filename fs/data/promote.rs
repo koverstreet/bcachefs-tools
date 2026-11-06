@@ -15,6 +15,7 @@
 //! The in-flight limit is one count for the filesystem, PROMOTES_PER_CPU per
 //! online CPU.
 
+use crate::format::BkeyType;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::{is_restart, BtreeTrans, TransAttempt};
@@ -252,7 +253,7 @@ pub unsafe fn bch2_promote_alloc(trans: &BtreeTrans<'_>, k: BkeySC<'_>, orig: &m
 
     let full = self_healing || *read_full || fs.opts().promote_whole_extents.get() != 0;
 
-    let btree = if k.k.key_type() == c::bch_bkey_type::KEY_TYPE_reflink_v {
+    let btree = if k.k.key_type() == BkeyType::reflink_v {
         Btree::reflink
     } else {
         Btree::extents

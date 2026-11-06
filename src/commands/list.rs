@@ -1,6 +1,7 @@
 use std::ops::ControlFlow;
 
 use anyhow::{bail, Result};
+use bcachefs_kernel::format::BkeyType;
 use bcachefs_kernel::{btree_id, c};
 use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::btree::iter::BtreeIter;
@@ -204,7 +205,7 @@ pub struct Cli {
 
     /// Bkey type to list
     #[arg(short = 'k', long)]
-    bkey_type: Option<c::bch_bkey_type>,
+    bkey_type: Option<BkeyType>,
 
     /// Btree depth to descend to (0 == leaves)
     #[arg(short, long, default_value_t = 0)]

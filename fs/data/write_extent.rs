@@ -3,6 +3,7 @@
 //! A write's data made into extents at its write point: bch2_write_extent(),
 //! with the bios and encoding that takes.
 
+use crate::format::BkeyType;
 use crate::alloc::sector_alloc::LockedWritePoint;
 use crate::c;
 use crate::data::compress::{bio_bounce, bio_compress, bounce_alloc, buf_uncompress, decompress_err, map_or_bounce};
@@ -49,7 +50,7 @@ fn init_append_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>, version: Bvers
 
     let (pos, cached) = (op.pos, op.has(w::BCH_WRITE_cached));
     op.insert_keys.push_with(c::BKEY_EXTENT_U64s_MAX as usize, |e| {
-        *e.k_mut() = c::bkey { type_: c::bch_bkey_type::KEY_TYPE_extent.0 as u8, p: pos, bversion: version,
+        *e.k_mut() = c::bkey { type_: BkeyType::extent.0 as u8, p: pos, bversion: version,
                                ..c::bkey::new() };
         e.k_mut().size = crc.live_size;
 

@@ -6,6 +6,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::format::BkeyType;
 use crate::btree::bkey::{BkeySC, BkeyVal};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::{BtreeNode, NodeContents};
@@ -134,8 +135,8 @@ impl Drop for Bounce<'_> {
 /// 0 for a v1 with no pointer, which C reads past its value for.
 pub fn btree_ptr_hash_val<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> u64 {
     let offset = match k.k.key_type() {
-        c::bch_bkey_type::KEY_TYPE_btree_ptr    => 0,
-        c::bch_bkey_type::KEY_TYPE_btree_ptr_v2 => offset_of!(c::BtreePtrV2, repr.seq),
+        BkeyType::btree_ptr    => 0,
+        BkeyType::btree_ptr_v2 => offset_of!(c::BtreePtrV2, repr.seq),
         _ => return 0,
     };
     k.val_bytes().get(offset..offset + 8)

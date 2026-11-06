@@ -9,6 +9,7 @@ use core::mem::offset_of;
 use core::mem::size_of;
 use core::ops::ControlFlow;
 use core::ops::Range;
+use crate::format::BkeyType;
 use crate::accounting;
 use crate::alloc::capacity::DiskReservation;
 use crate::bch_warn;
@@ -275,7 +276,7 @@ where
             let (p, inum) = (k.k.p, k.k.p.offset);
 
             if inum != last_handled && snapshot::is_ancestor(t, view, p.snapshot) {
-                if k.k.key_type() != c::bch_bkey_type::KEY_TYPE_damage {
+                if k.k.key_type() != BkeyType::damage {
                     last_handled = inum;
                 } else {
                     let n = c::subvol_inum { subvol: self.dir.subvol, inum };

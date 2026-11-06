@@ -1,4 +1,5 @@
 use super::*;
+use crate::format::BkeyType;
 use crate::c;
 use crate::util::vstructs::ArmRef;
 use crate::types::Le32;
@@ -87,23 +88,22 @@ fn bkey_edit_short_value() {
 fn key_type_table() {
     use crate::data::inline_data::{CSUM, DATA};
     use crate::data::reflink::REFCOUNT;
-    use c::bch_bkey_type as t;
 
-    let nr = t::KEY_TYPE_snapshot.0 as u8;
+    let nr = BkeyType::snapshot.0 as u8;
     assert_eq!(key_type(nr).unwrap().info.name, "bch_snapshot");
     assert_eq!(key_type_by_name("snapshot").unwrap().nr, nr);
     assert!(key_type_by_name("no_such_type").is_none());
 
-    let k = |ty: t| c::bkey { type_: ty.0 as u8, ..Default::default() };
+    let k = |ty: BkeyType| c::bkey { type_: ty.0 as u8, ..Default::default() };
 
-    let r = k(t::KEY_TYPE_reflink_v);
+    let r = k(BkeyType::reflink_v);
     assert_eq!(REFCOUNT.of(&r), Some(core::mem::offset_of!(c::ReflinkV, repr.refcount)));
     assert_eq!((DATA.of(&r), CSUM.of(&r)), (None, None));
 
-    let i = k(t::KEY_TYPE_indirect_inline_data);
+    let i = k(BkeyType::indirect_inline_data);
     assert_eq!((DATA.of(&i), CSUM.of(&i)), (Some(size_of::<c::IndirectInlineData>()), None));
 
-    let v2 = k(t::KEY_TYPE_indirect_inline_data_v2);
+    let v2 = k(BkeyType::indirect_inline_data_v2);
     assert_eq!(REFCOUNT.of(&v2), Some(core::mem::offset_of!(c::IndirectInlineDataV2, repr.refcount)));
     assert_eq!(CSUM.of(&v2),     Some(core::mem::offset_of!(c::IndirectInlineDataV2, repr.csum)));
     assert_eq!(DATA.of(&v2),     Some(size_of::<c::IndirectInlineDataV2>()));

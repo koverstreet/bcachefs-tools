@@ -27,6 +27,7 @@
 //! refcount is read and edited through it (BkeyVIndirect), in whichever form
 //! it's held.
 
+use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_gt, bkey_lt, pos, BkeyFamily, BkeyI, BkeyS, BkeySC,
@@ -104,14 +105,13 @@ pub fn bch2_bkey_is_indirect(k: &c::bkey) -> bool {
 impl c::bkey {
     /// The type a direct extent of its type is, made indirect: deleted for a
     /// type that has none, as bkey_type_to_indirect() returns 0.
-    pub fn indirect_type(&self) -> c::bch_bkey_type {
-        use c::bch_bkey_type as t;
+    pub fn indirect_type(&self) -> BkeyType {
 
         match self.key_type() {
-            t::KEY_TYPE_extent         => t::KEY_TYPE_reflink_v,
-            t::KEY_TYPE_inline_data    => t::KEY_TYPE_indirect_inline_data,
-            t::KEY_TYPE_inline_data_v2 => t::KEY_TYPE_indirect_inline_data_v2,
-            _                          => t::KEY_TYPE_deleted,
+            BkeyType::extent         => BkeyType::reflink_v,
+            BkeyType::inline_data    => BkeyType::indirect_inline_data,
+            BkeyType::inline_data_v2 => BkeyType::indirect_inline_data_v2,
+            _                          => BkeyType::deleted,
         }
     }
 }
@@ -306,7 +306,7 @@ fn gc_write_reflink_key(
         let mut new = t.bkey_make_mut_noupdate(k)?;
 
         if r_refcount == 0 {
-            new.k_mut().type_ = c::bch_bkey_type::KEY_TYPE_deleted.0 as u8;
+            new.k_mut().set_key_type(BkeyType::deleted);
         } else {
             *new.refcount_mut() = (r_refcount as u64).into();
         }
@@ -800,7 +800,7 @@ static REFLINK_P: Trigger = Trigger(trigger_reflink_p);
 fn check_indirect_extent_deleting(op: &mut TriggerOp<'_>) {
     if op.flags.contains(UpdateTriggerFlags::INSERT) &&
        BkeySC::from(&op.new).arm::<Indirect>().expect("an indirect extent").refcount().get() == 0 {
-        op.new.k.type_ = c::bch_bkey_type::KEY_TYPE_deleted.0 as u8;
+        op.new.k.set_key_type(BkeyType::deleted);
         op.new.k.size  = 0;
         op.new.k.set_val_bytes(0);
         op.flags -= UpdateTriggerFlags::INSERT;
@@ -843,7 +843,7 @@ unsafe fn __make_extent_indirect(
     // SAFETY: the caller's
     let orig = unsafe { &mut *BkeyI::from_raw_mut(orig) };
 
-    if orig.k.key_type() == c::bch_bkey_type::KEY_TYPE_inline_data {
+    if orig.k.key_type() == BkeyType::inline_data {
         fs.check_set_feature(c::bch_sb_feature::BCH_FEATURE_reflink_inline_data);
     }
 
@@ -894,7 +894,7 @@ unsafe fn __make_extent_indirect(
     /* orig, rewritten in place as the reflink_p - in the room the caller gave it */
     let r_v_start = r_v.k().start_offset();
 
-    orig.k.type_ = c::bch_bkey_type::KEY_TYPE_reflink_p.0 as u8;
+    orig.k.set_key_type(BkeyType::reflink_p);
     orig.k.set_val_bytes(size_of::<c::ReflinkP>());
     // SAFETY: the room the caller vouched for
     let orig = unsafe { &mut *BkeyI::from_raw_mut(orig.as_ffi_mut()) };
@@ -1002,12 +1002,12 @@ pub fn remap_range(
 
             let mut src = src.expect("source data: the source iterator didn't move past it");
 
-            if src.k().key_type() != c::bch_bkey_type::KEY_TYPE_reflink_p {
+            if src.k().key_type() != BkeyType::reflink_p {
                 src_iter.set_pos_to_extent_start();
 
                 make_extent_indirect(&t, &src_iter, &mut src, reflink_p_may_update_opts_field)?;
 
-                assert!(src.k().key_type() == c::bch_bkey_type::KEY_TYPE_reflink_p);
+                assert!(src.k().key_type() == BkeyType::reflink_p);
             }
 
             let src_p = src.as_ref().arm::<c::ReflinkP>().expect("a reflink_p");

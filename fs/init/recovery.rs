@@ -3,6 +3,7 @@
 //! Recovery: a filesystem brought up from its superblock and journal, or a
 //! new one initialized.
 
+use crate::format::BkeyType;
 use crate::accounting;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
@@ -33,7 +34,6 @@ use crate::util::Printbuf;
 use crate::{inode, logged_ops, namei, quota};
 use crate::{bch_err, bch_err_msg, bch_info, bch_notice, bch_verbose, btree_trans, fs_fatal_error, fsck_err_on,
             message, mustfix_fsck_err, mustfix_fsck_err_on, prt};
-use c::bch_bkey_type as kt;
 use c::bch_fs_flags as Flag;
 use c::bch_progress_units as Units;
 use core::cmp::Ordering;
@@ -248,7 +248,7 @@ fn journal_replay_accounting_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys,
     }
 
     let mut new = t.bkey_make_mut_noupdate(BkeySC::from(bk))?;
-    if old.k.key_type() == kt::KEY_TYPE_accounting {
+    if old.k.key_type() == BkeyType::accounting {
         accounting::accumulate(new.as_mut(), old);
     }
 
@@ -301,7 +301,7 @@ fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, idx: usize
         return Ok(());
     }
 
-    if bk.k.key_type() == kt::KEY_TYPE_accounting {
+    if bk.k.key_type() == BkeyType::accounting {
         t.subbuf_alloc(Subbuf::Accounting, bk.k.u64s.into())?.as_mut_bytes().copy_from_slice(bk.as_bytes());
         return Ok(());
     }
@@ -370,7 +370,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
     let trans = btree_trans!(fs);
 
     let replays_accounting = |k: &c::journal_key| {
-        jk.key(k).k.key_type() == kt::KEY_TYPE_accounting && !k.allocated()
+        jk.key(k).k.key_type() == BkeyType::accounting && !k.allocated()
     };
     let accounting_total = keys.iter().filter(|k| replays_accounting(k)).count();
 

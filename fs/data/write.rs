@@ -709,6 +709,7 @@
  * \texttt{bcachefs data scrub}. Nocow data cannot be scrubbed (no checksums).
  */
 
+use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_ge, BkeyI, BkeyS, BkeySC};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
@@ -1513,9 +1514,9 @@ fn write_data_inline(mut op: Running<Op>, data_len: u32) {
     // with a checksum of its own, if the filesystem may have them
     let ty = if fs.request_incompat_feature(
         c::bcachefs_metadata_version::bcachefs_metadata_version_inline_data_csum).is_ok() {
-        c::bch_bkey_type::KEY_TYPE_inline_data_v2
+        BkeyType::inline_data_v2
     } else {
-        c::bch_bkey_type::KEY_TYPE_inline_data
+        BkeyType::inline_data
     };
 
     let sectors = op.wbio.bio.bi_iter.bi_size >> 9;

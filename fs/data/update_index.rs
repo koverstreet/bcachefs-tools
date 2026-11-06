@@ -28,6 +28,7 @@
 //! (the change cookie, reread after a barrier), one that would lose durability
 //! or have none takes the filesystem emergency read-only: it's a bug.
 
+use crate::format::BkeyType;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_le, BkeyFamily, BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, LoopFlow, TransAttempt,
@@ -347,7 +348,7 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
 /// Whether @insert, the keylist's front, is an extent - all a data update's
 /// write writes - logged and counted as an fsck error if it isn't.
 fn insert_is_extent(fs: &Fs, insert: &BkeyI) -> bool {
-    if insert.k().key_type() == c::bch_bkey_type::KEY_TYPE_extent {
+    if insert.k().key_type() == BkeyType::extent {
         return true;
     }
 

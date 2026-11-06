@@ -25,6 +25,7 @@
 //! for the next write. C's callers have it locked by bch2_alloc_sectors_req()
 //! and use foreground.h's own append_ptrs and done, until they convert.
 
+use crate::format::BkeyType;
 use crate::alloc::disk_groups::Target;
 use crate::alloc::write_point::{WritePointGuard, WritePointSpec};
 use crate::btree::bkey::prelude::*;
@@ -395,7 +396,7 @@ impl LockedWritePoint<'_> {
     pub fn unwritten_extent(mut self, k: &mut KeyRoom<'_>, pos: Bpos, sectors: u32,
                             ptrs: &mut c::open_buckets) -> u32 {
         let sectors = sectors.min(self.sectors_free());
-        *k.k_mut() = c::bkey { type_: c::bch_bkey_type::KEY_TYPE_extent.0 as u8, p: pos, ..c::bkey::new() };
+        *k.k_mut() = c::bkey { type_: BkeyType::extent.0 as u8, p: pos, ..c::bkey::new() };
         k.k_mut().resize(sectors);
 
         self.open_buckets_get(ptrs);

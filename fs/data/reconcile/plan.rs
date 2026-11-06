@@ -50,6 +50,7 @@
 //! combined under its brand, the drop simulation's copies adopted as it
 //! (ptrs_mask.rs), and erased into data_update_opts.
 
+use crate::format::BkeyType;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -382,7 +383,7 @@ pub fn pending_mod(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k
 /// mem_ptr aside: btree_bkey_and_val_eq().
 fn node_key_eq(l: BkeySC<'_>, r: BkeySC<'_>) -> bool {
     let (a, b) = (l.k, r.k);
-    let skip = if a.key_type() == c::bch_bkey_type::KEY_TYPE_btree_ptr_v2 {
+    let skip = if a.key_type() == BkeyType::btree_ptr_v2 {
         core::mem::offset_of!(c::BtreePtrV2, repr.seq)
     } else {
         0

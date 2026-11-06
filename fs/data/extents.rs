@@ -4,6 +4,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::format::BkeyType;
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{bkey_ge, bkey_gt, bkey_le, bkey_lt, types_with, AllTypes, BkeyFamily, ByFlag, FamilyTypes, FamilyVal, InFamily, KeyState, BkeyS, BkeySC, BkeyV, BkeyVal,
                          BkeyVMut};
@@ -269,7 +270,7 @@ pub trait BkeyVExtents: BkeyV {
     fn extent_is_reservation(&self, fs: &Fs) -> bool
     where Self::V: BkeyVal<State = Validated>
     {
-        self.k().key_type() == c::bch_bkey_type::KEY_TYPE_reservation || self.extent_is_unwritten(fs)
+        self.k().key_type() == BkeyType::reservation || self.extent_is_unwritten(fs)
     }
 
     /// Cut to start at @where_: bch2_cut_front_s().
@@ -296,7 +297,6 @@ pub trait BkeyVExtents: BkeyV {
     fn cut_front_in_place(&mut self, fs: &Fs, where_: Bpos)
     where Self: BkeyVMut<V = Extents>
     {
-        use c::bch_bkey_type as t;
 
         let mut k = self.as_s().untyped();
         if bkey_le(where_, k.k.start_pos()) {
@@ -310,12 +310,12 @@ pub trait BkeyVExtents: BkeyV {
 
         let mut new_val_u64s = k.k.val_bytes() / size_of::<u64>();
         if k.k.size == 0 {
-            k.k.type_ = t::KEY_TYPE_deleted.0 as u8;
+            k.k.set_key_type(BkeyType::deleted);
             new_val_u64s = 0;
         }
 
         match k.k.key_type() {
-            t::KEY_TYPE_extent | t::KEY_TYPE_reflink_v => {
+            BkeyType::extent | BkeyType::reflink_v => {
                 let mut p = k.as_s().arm::<Ptrs>().expect("an extent has pointers");
                 // a pointer after a crc points to the crc's data, whose
                 // offset moves instead
@@ -344,7 +344,7 @@ pub trait BkeyVExtents: BkeyV {
                     }
                 }
             }
-            t::KEY_TYPE_reflink_p => {
+            BkeyType::reflink_p => {
                 let mut p = k.as_s().arm::<c::ReflinkP>().expect("a reflink_p");
                 let v = p.v_mut();
                 v.update_idx(|i| i + sub);
@@ -372,7 +372,6 @@ pub trait BkeyVExtents: BkeyV {
     fn cut_back_in_place(&mut self, where_: Bpos)
     where Self: BkeyVMut<V = Extents>
     {
-        use c::bch_bkey_type as t;
 
         let k = self.as_s().untyped();
         if bkey_ge(where_, k.k.p) {
@@ -386,7 +385,7 @@ pub trait BkeyVExtents: BkeyV {
 
         let mut new_val_u64s = k.k.val_bytes() / size_of::<u64>();
         if len == 0 {
-            k.k.type_ = t::KEY_TYPE_deleted.0 as u8;
+            k.k.set_key_type(BkeyType::deleted);
             new_val_u64s = 0;
         }
 
@@ -436,9 +435,9 @@ pub fn bch2_cut_back_s(where_: Bpos, k: BkeyS<'_>) -> c_int {
 /// with pointers - btree_ptr, btree_ptr_v2, extent - and @ptr to a device it
 /// has none on.
 pub fn bkey_append_ptr(k: &mut KeyRoom<'_>, ptr: c::bch_extent_ptr) -> Result<(), NoRoom> {
-    let t = u32::from(k.k().type_);
-    assert!(matches!(t, c::KEY_TYPE_btree_ptr | c::KEY_TYPE_btree_ptr_v2 | c::KEY_TYPE_extent),
-            "a pointer appended to a key of type {t}");
+    let t = k.k().key_type();
+    assert!(matches!(t, BkeyType::btree_ptr | BkeyType::btree_ptr_v2 | BkeyType::extent),
+            "a pointer appended to a key of type {}", t.0);
     k.append_val(&[ptr.into_bits().0])
 }
 

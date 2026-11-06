@@ -5,6 +5,7 @@ use core::cmp::Ordering;
 use core::marker::PhantomData;
 
 use super::{AllTypes, BkeyI, BkeyS, BkeySC, FamilyVal, ValidatedVal, BKEY_U64S};
+use crate::format::BkeyType;
 use crate::btree::node::NodeContents;
 use crate::c;
 use crate::format::Bpos;
@@ -130,8 +131,8 @@ impl<V: ?Sized> BkeyP<V> {
         self.header_mut().format_bits.set_format(format);
     }
 
-    pub fn key_type(&self) -> c::bch_bkey_type {
-        c::bch_bkey_type(self.header().type_ as u32)
+    pub fn key_type(&self) -> BkeyType {
+        BkeyType(self.header().type_ as u32)
     }
 
     pub fn key_u64s(&self, f: &c::bkey_format) -> usize {

@@ -19,6 +19,7 @@
 //! masks of a key's pointers, ptrs_mask.rs's; C's names for all of it,
 //! ptrs_c_export.rs's.
 
+use crate::format::BkeyType;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{bkey_family, types_with, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut, FamilyVal, InFamily, KeyState};
 use crate::btree::bkey_methods::SetError;
@@ -794,14 +795,13 @@ pub struct DecodedPtr<'a> {
 /// What @d, a pointer of @k, points to - a stripe's parity blocks are parity,
 /// its others user data.
 pub fn ptr_data_type(fs: &Fs, k: BkeySC<'_>, d: &DecodedPtr<'_>) -> DataType {
-    use c::bch_bkey_type as t;
     match k.k.key_type() {
-        t::KEY_TYPE_btree_ptr | t::KEY_TYPE_btree_ptr_v2 => DataType::btree,
-        t::KEY_TYPE_extent | t::KEY_TYPE_reflink_v =>
+        BkeyType::btree_ptr | BkeyType::btree_ptr_v2 => DataType::btree,
+        BkeyType::extent | BkeyType::reflink_v =>
             if d.p.has_ec { DataType::stripe }
             else if d.p.ptr.cached() != 0 { DataType::cached }
             else { DataType::user },
-        t::KEY_TYPE_stripe => {
+        BkeyType::stripe => {
             let s = k.arm::<c::Stripe>().expect("a stripe");
             let block = s.ptrs(fs).position(|p| core::ptr::eq(p, d.ptr))
                 .expect("a pointer of the stripe's");

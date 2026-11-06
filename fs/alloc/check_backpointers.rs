@@ -22,6 +22,7 @@
 //! again - see backpointers.rs.
 
 
+use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_del, backpointers_match, backpointers_maybe_flush,
@@ -62,7 +63,7 @@ use crate::format::{Bpos, Btree, DataType};
 
 fn check_backpointer_has_valid_bucket(t: &TransAttempt<'_, '_>, k: BkeySC<'_>,
                                       last_flushed: &mut WbMaybeFlush) -> Result<(), BchError> {
-    if k.k.key_type() != c::bch_bkey_type::KEY_TYPE_backpointer {
+    if k.k.key_type() != BkeyType::backpointer {
         return Ok(());
     }
 
@@ -85,7 +86,7 @@ fn check_backpointer_has_valid_bucket(t: &TransAttempt<'_, '_>, k: BkeySC<'_>,
     let mut alloc_iter = BtreeIter::new(t, Btree::alloc, bucket, BtreeIterFlags::empty());
     let alloc_k = alloc_iter.peek_slot(t)?.expect("a slot always has a key");
 
-    if alloc_k.k.key_type() != c::bch_bkey_type::KEY_TYPE_alloc_v4 {
+    if alloc_k.k.key_type() != BkeyType::alloc_v4 {
         backpointers_maybe_flush(t, k, last_flushed.borrow())?;
 
         let p = alloc_iter.pos();
@@ -269,7 +270,7 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut Bke
     // a regular extent.
     //
     // Only valid for leaf extents; btree pointers can't be reflinked.
-    let is_extent = |k: BkeySC<'_, Ptrs>| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_extent;
+    let is_extent = |k: BkeySC<'_, Ptrs>| k.k.key_type() == BkeyType::extent;
     if is_extent(extent) && is_extent(other_extent) {
         let (bp_sub, other_bp_sub) = {
             let rcu = read_lock();
@@ -741,10 +742,9 @@ fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &Dev, bucket: u64) -> 
 /// Buckets with none don't count - theirs are recreated without looking. A
 /// btree_ptr has no min_key, so might.
 fn backpointer_node_has_missing(fs: &Fs, k: BkeySC<'_>) -> bool {
-    use c::bch_bkey_type as t;
 
     match k.k.key_type() {
-        t::KEY_TYPE_btree_ptr_v2 => {
+        BkeyType::btree_ptr_v2 => {
             let rcu = read_lock();
             let mut p = k.arm::<c::BtreePtrV2>().expect("a btree_ptr_v2").v().min_key;
 
@@ -770,7 +770,7 @@ fn backpointer_node_has_missing(fs: &Fs, k: BkeySC<'_>) -> bool {
             }
             false
         }
-        t::KEY_TYPE_btree_ptr => true,
+        BkeyType::btree_ptr => true,
         _ => false,
     }
 }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, BKEY_U64S, POS_MIN, SPOS_MAX};
@@ -486,7 +487,7 @@ fn test_extent_create_dup(fs: &Fs, inum: u64) -> TestRet {
     let ret = commit_do(&trans, Some(&res), CommitFlags::empty(), |t| {
         let fs = t.fs();
         let k = fs.require(iter.peek_max(t, pos(inum, u64::MAX))?, ENOENT_bkey_type_mismatch)?;
-        fs.ensure(k.k.key_type() == c::bch_bkey_type::KEY_TYPE_extent, ENOENT_bkey_type_mismatch)?;
+        fs.ensure(k.k.key_type() == BkeyType::extent, ENOENT_bkey_type_mismatch)?;
 
         let mut dup = t.bkey_make_mut_noupdate(k)?;
         let src_end = dup.k().p.offset;

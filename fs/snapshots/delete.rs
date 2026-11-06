@@ -51,6 +51,7 @@
 //! an RwSem and holds it for read until it's done; the progress indicator is
 //! outside it, with its own lock.
 
+use crate::format::BkeyType;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, Typed, POS_MIN};
 use crate::btree::bkey::prelude::*;
@@ -827,7 +828,7 @@ pub fn delete_dead_key<'a, 't>(
 
         let mut dst_iter = BtreeIter::new(t, btree, dst,
                                           BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::INTENT);
-        let damage = c::bch_bkey_type::KEY_TYPE_damage;
+        let damage = BkeyType::damage;
 
         match dst_iter.peek_slot(t)? {
             Some(dst_k) if btree == Btree::damage &&

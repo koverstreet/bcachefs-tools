@@ -12,6 +12,7 @@
 //! points, ->swab and ->compat, should take Unvalidated keys. XXX: they don't
 //! yet - Rust has no unvalidated keys to give them.
 
+use crate::format::BkeyType;
 use crate::btree::bkey::{BkeyP, BkeyS};
 use crate::c;
 use crate::fs::Fs;
@@ -44,22 +45,21 @@ impl Bpos {
 
 /// Key types the bkey_renumber version renumbered, by btree node type: the old
 /// number, and the new.
-const RENUMBER: [(c::btree_node_type, u8, c::bch_bkey_type); 12] = {
-    use c::bch_bkey_type as t;
+const RENUMBER: [(c::btree_node_type, u8, BkeyType); 12] = {
     use c::btree_node_type as n;
     [
-        (n::BKEY_TYPE_btree,   128, t::KEY_TYPE_btree_ptr),
-        (n::BKEY_TYPE_extents, 128, t::KEY_TYPE_extent),
-        (n::BKEY_TYPE_extents, 129, t::KEY_TYPE_extent),
-        (n::BKEY_TYPE_extents, 130, t::KEY_TYPE_reservation),
-        (n::BKEY_TYPE_inodes,  128, t::KEY_TYPE_inode),
-        (n::BKEY_TYPE_inodes,  130, t::KEY_TYPE_inode_generation),
-        (n::BKEY_TYPE_dirents, 128, t::KEY_TYPE_dirent),
-        (n::BKEY_TYPE_dirents, 129, t::KEY_TYPE_hash_whiteout),
-        (n::BKEY_TYPE_xattrs,  128, t::KEY_TYPE_xattr),
-        (n::BKEY_TYPE_xattrs,  129, t::KEY_TYPE_hash_whiteout),
-        (n::BKEY_TYPE_alloc,   128, t::KEY_TYPE_alloc),
-        (n::BKEY_TYPE_quotas,  128, t::KEY_TYPE_quota),
+        (n::BKEY_TYPE_btree,   128, BkeyType::btree_ptr),
+        (n::BKEY_TYPE_extents, 128, BkeyType::extent),
+        (n::BKEY_TYPE_extents, 129, BkeyType::extent),
+        (n::BKEY_TYPE_extents, 130, BkeyType::reservation),
+        (n::BKEY_TYPE_inodes,  128, BkeyType::inode),
+        (n::BKEY_TYPE_inodes,  130, BkeyType::inode_generation),
+        (n::BKEY_TYPE_dirents, 128, BkeyType::dirent),
+        (n::BKEY_TYPE_dirents, 129, BkeyType::hash_whiteout),
+        (n::BKEY_TYPE_xattrs,  128, BkeyType::xattr),
+        (n::BKEY_TYPE_xattrs,  129, BkeyType::hash_whiteout),
+        (n::BKEY_TYPE_alloc,   128, BkeyType::alloc),
+        (n::BKEY_TYPE_quotas,  128, BkeyType::quota),
     ]
 };
 

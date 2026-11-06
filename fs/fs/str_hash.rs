@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, AllTypes, BkeyFamily, BkeyI, BkeySC, InFamily, MutBkey, SPOS_MAX};
 use crate::btree::iter::{
@@ -868,7 +869,7 @@ impl Repair<'_> {
             None => {}
         }
 
-        if hash_k.k.key_type() == c::bch_bkey_type::KEY_TYPE_dirent {
+        if hash_k.k.key_type() == BkeyType::dirent {
             self.check_dirent(t, hash_k.into())?;
         }
         Ok(())

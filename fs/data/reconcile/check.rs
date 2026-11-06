@@ -16,6 +16,7 @@
 //! key at the walk's position, where C overwrote its iter->k with a deleted
 //! one.
 
+use crate::format::BkeyType;
 use crate::fs::Dev;
 use crate::alloc::backpointers::{backpointer_get_key, backpointers_match, bp_reconcile_phys, extent_ptr_to_bp};
 use crate::alloc::capacity::DiskReservation;
@@ -70,7 +71,7 @@ fn btrees_to_text(out: &mut Printbuf, want: Option<Btree>, set: u64) {
 fn fix_work_btree(t: &TransAttempt<'_, '_>, want: Option<Btree>, pos: Bpos,
                   (iter, k): WorkKey<'_, '_>) -> Result<(), BchError> {
     let should = Some(iter.btree()) == want;
-    let have = k.is_some_and(|k| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_set);
+    let have = k.is_some_and(|k| k.k.key_type() == BkeyType::set);
 
     if should != have {
         t.bit_mod_buffered(iter.btree(), pos, should)?;
@@ -172,7 +173,7 @@ fn check_reconcile_work_one<'t>(t: &TransAttempt<'_, 't>, data_iter: &mut BtreeI
     }
 
     let [rb_w, rb_h, rb_p] = rb;
-    if rb_w.peek(t)?.is_some_and(|k| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_cookie) {
+    if rb_w.peek(t)?.is_some_and(|k| k.k.key_type() == BkeyType::cookie) {
         t.delete_at(rb_w, UpdateTriggerFlags::empty())?;
         t.commit_lazy(None, NO_ENOSPC)?;
     }
@@ -401,7 +402,7 @@ fn check_reconcile_work_btree_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
     let want = rb_bp(btree, level, k.into());
     let mut rb_iter = BtreeIter::new(t, Btree::reconcile_scan, bp_pos, BtreeIterFlags::INTENT);
     let bp_k = rb_iter.peek_slot(t)?.expect("a slot");
-    let is_bp = bp_k.k.key_type() == c::bch_bkey_type::KEY_TYPE_backpointer;
+    let is_bp = bp_k.k.key_type() == BkeyType::backpointer;
 
     if bp_k.arm::<c::Backpointer>().is_some_and(|bp| plain_bytes(bp.v()) == plain_bytes(&want)) {
         return Ok(());

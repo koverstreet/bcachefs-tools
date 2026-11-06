@@ -29,6 +29,7 @@
 //! are stashed, by range, where the node's lost, and attributed to inodes
 //! later, when the inodes btree can be walked: lost extents below.
 
+use crate::format::BkeyType;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{spos, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
@@ -101,7 +102,7 @@ impl crate::btree::bkey::BkeyOps for c::Damage {
 /// version - the version @snapshot sees.
 pub fn inode_has_damage(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<bool, BchError> {
     let mut iter = BtreeIter::new(t, Btree::damage, spos(0, inum, snapshot), BtreeIterFlags::NOPRESERVE);
-    Ok(iter.peek_slot(t)?.is_some_and(|k| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_damage))
+    Ok(iter.peek_slot(t)?.is_some_and(|k| k.k.key_type() == BkeyType::damage))
 }
 
 /// Inode @inum's damage as @snapshot sees it - its records and its ancestor
@@ -220,11 +221,10 @@ pub fn record_data_loss(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos,
 /// or merged down by snapshot deletion. Most inodes have none, so nothing's
 /// queued for a key that isn't there.
 pub fn delete(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<(), BchError> {
-    use c::bch_bkey_type as T;
 
     let mut iter = BtreeIter::new(t, Btree::damage, spos(0, inum, snapshot), BtreeIterFlags::ALL_SNAPSHOTS);
     let ty = iter.peek_slot(t)?.map(|k| k.k.key_type());
-    if ty != Some(T::KEY_TYPE_damage) && ty != Some(T::KEY_TYPE_whiteout) {
+    if ty != Some(BkeyType::damage) && ty != Some(BkeyType::whiteout) {
         return Ok(());
     }
     t.delete_at(&iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
@@ -238,7 +238,7 @@ pub fn clear(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<(), BchEr
     let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
 
     let mut iter = BtreeIter::new(t, Btree::damage, spos(0, inum.inum, snapshot), BtreeIterFlags::INTENT);
-    if !iter.peek_slot(t)?.is_some_and(|k| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_damage) {
+    if !iter.peek_slot(t)?.is_some_and(|k| k.k.key_type() == BkeyType::damage) {
         return Ok(());
     }
     t.delete_at(&iter, UpdateTriggerFlags::empty())
@@ -390,7 +390,7 @@ fn check_damage(fs: &Fs) -> Result<(), BchError> {
     let flags = BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::PREFETCH;
     let mut iter = BtreeIter::new(&trans, Btree::damage, POS_MIN, flags);
     iter.for_each_max_commit(&trans, SPOS_MAX, flags, None, CommitFlags::NO_ENOSPC, |t, iter, k| {
-        if k.k.key_type() == c::bch_bkey_type::KEY_TYPE_damage &&
+        if k.k.key_type() == BkeyType::damage &&
            fsck_err_on!(t, !inode_exists(t, k.k.p.offset, k.k.p.snapshot)?, id::damage_key_no_inode,
                         "damage key with no inode:\n{}", k.to_text(fs))? {
             t.delete_at(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
