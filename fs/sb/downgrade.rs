@@ -190,6 +190,13 @@ const UPGRADE: &[UpDown] = table! {
          inode_has_default_acl_flag_wrong, snapshot_state_bad, subvol_state_bad];
 };
 
+/// What only a filesystem with stripes needs, on top of the version's row:
+/// past bucket_stripe_sectors, check_allocations, and the bucket sector
+/// counts it fixes silently.
+const UPGRADE_STRIPES: &[UpDown] = table! {
+    bucket_stripe_sectors => [check_allocations], [alloc_key_dirty_sectors_wrong, alloc_key_stripe_sectors_wrong];
+};
+
 /// For an incompatible upgrade: one past what version_incompat_allowed was.
 const UPGRADE_INCOMPAT: &[UpDown] = table! {
     reconcile => [check_reconcile_work], [extent_io_opts_not_set];
@@ -220,6 +227,12 @@ const DOWNGRADE: &[UpDown] = table! {
          need_discard_freespace_key_to_invalid_dev_bucket];
     per_dev_fragmentation_lru   => [check_allocations, check_lrus, check_alloc_to_lru_refs],
         [lru_entry_bad, alloc_key_to_missing_lru_entry, accounting_mismatch];
+};
+
+/// UPGRADE_STRIPES', for a downgrade: added to the version's DOWNGRADE row,
+/// which it needs - an empty one, if that's all.
+const DOWNGRADE_STRIPES: &[UpDown] = table! {
+    bucket_stripe_sectors => [check_allocations], [alloc_key_dirty_sectors_wrong];
 };
 
 // ── Applying them ────────────────────────────────────────────────────────────
@@ -260,27 +273,19 @@ impl Fs {
         self.btree_id_root(Btree::BTREE_ID_stripes.0).is_some_and(|b| !b.is_fake())
     }
 
-    /// What an upgrade past bucket_stripe_sectors needs on a filesystem with
-    /// stripes, which the tables can't say: check_allocations, and the bucket
-    /// sector counts it fixes silently.
+    /// What an upgrade needs on a filesystem with stripes: UPGRADE_STRIPES'.
     pub fn sb_set_upgrade_extra(&self) {
         let mut sb = self.sb_lock();
-        let v = c::bcachefs_metadata_version::bcachefs_metadata_version_bucket_stripe_sectors.0;
         let new = u32::from(self.sb.version.get());
         let old = match self.sb.version_upgrade_complete.get() {
             0 => new,
             v => u32::from(v),
         };
-        if !(old < v && v <= new && self.have_stripes()) {
+        if !UPGRADE_STRIPES.iter().any(|i| old < i.version.0 && i.version.0 <= new) || !self.have_stripes() {
             return;
         }
 
-        let ext = ext(&mut sb);
-        LeBitmap::from_words_mut(&mut ext.recovery_passes_required)
-            .set(c::bch_recovery_pass_stable::BCH_RECOVERY_PASS_STABLE_check_allocations.0 as usize);
-        let silent = LeBitmap::from_words_mut(&mut ext.errors_silent);
-        silent.set(c::bch_sb_error_id::BCH_FSCK_ERR_alloc_key_dirty_sectors_wrong.0 as usize);
-        silent.set(c::bch_sb_error_id::BCH_FSCK_ERR_alloc_key_stripe_sectors_wrong.0 as usize);
+        set_upgrade(&mut sb, UPGRADE_STRIPES, old, new);
         self.write_super(&mut sb);
     }
 }
@@ -322,6 +327,20 @@ pub(crate) fn sb_set_downgrade(sb: &mut SbLockGuard<'_>, new_minor: u32, old_min
     }
 }
 
+// A DOWNGRADE_STRIPES row is written into its version's DOWNGRADE entry: one
+// without a DOWNGRADE row would never be written.
+const _: () = {
+    let mut i = 0;
+    while i < DOWNGRADE_STRIPES.len() {
+        let mut j = 0;
+        while j < DOWNGRADE.len() && DOWNGRADE[j].version.0 != DOWNGRADE_STRIPES[i].version.0 {
+            j += 1;
+        }
+        assert!(j < DOWNGRADE.len(), "a DOWNGRADE_STRIPES row needs a DOWNGRADE row");
+        i += 1;
+    }
+};
+
 /// The downgrade section's entries, from the downgrade table: for each
 /// version of @major from @version_incompat on, what downgrading past it
 /// needs - those that need nothing left out.
@@ -330,23 +349,14 @@ fn downgrade_entries(major: u64, version_incompat: u32, have_stripes: bool) -> R
     for src in DOWNGRADE.iter().filter(|s| {
         c::BCH_VERSION_MAJOR(s.version.0.into()) == major && s.version.0 >= version_incompat
     }) {
-        let mut passes = passes::passes_to_stable(src.passes);
-        let mut nr_errors = src.errors.len();
-        // what the table can't say: on a filesystem with stripes, downgrading
-        // past bucket_stripe_sectors needs check_allocations, and the bucket
-        // sector counts it fixes silently
-        let extra = have_stripes &&
-            src.version == c::bcachefs_metadata_version::bcachefs_metadata_version_bucket_stripe_sectors;
-        if extra {
-            passes |= 1 << c::bch_recovery_pass_stable::BCH_RECOVERY_PASS_STABLE_check_allocations.0;
-            nr_errors += 1;
-        }
+        let stripes = DOWNGRADE_STRIPES.iter().find(|s| have_stripes && s.version == src.version);
+        let passes = passes::passes_to_stable(src.passes | stripes.map_or(0, |s| s.passes));
+        let errors = src.errors.iter().chain(stripes.into_iter().flat_map(|s| s.errors));
+        let nr_errors = errors.clone().count();
         if passes == 0 && nr_errors == 0 {
             continue;
         }
 
-        let errors = src.errors.iter()
-            .chain(extra.then_some(&c::bch_sb_error_id::BCH_FSCK_ERR_alloc_key_dirty_sectors_wrong));
         table.extend_from_slice(&(src.version.0 as u16).to_le_bytes())?;
         table.extend_from_slice(&passes.to_le_bytes())?;
         table.extend_from_slice(&0u64.to_le_bytes())?;
