@@ -5,21 +5,18 @@
 //! buckets per entry. Both are validated as runs - v1's of one bucket.
 
 use crate::fs::Dev;
-use core::ffi::{c_int, c_uint};
 use core::ops::Range;
-
-use cstruct_macros::c_export;
 
 use crate::c;
 use crate::util::vstructs::Unvalidated;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
+use crate::journal::buckets;
 use crate::{prt, sb_err_on};
 use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState};
 use crate::sb::members::sb_member;
 use crate::types::Le64;
 use crate::util::alloc::KVVec;
-use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 
 fn invalid() -> BchError {
@@ -100,18 +97,6 @@ impl SbFieldOps for c::bch_sb_field_journal_v2 {
     }
 }
 
-impl c::journal_device {
-    /// Its journal buckets, in ring order: read as C reads them, without the
-    /// journal's lock - only resizing the journal replaces them.
-    pub fn buckets(&self) -> &[u64] {
-        match self.nr {
-            0 => &[],
-            // SAFETY: @nr of them, allocated with it
-            nr => unsafe { core::slice::from_raw_parts(self.buckets, nr as usize) },
-        }
-    }
-}
-
 /// @ca's journal buckets, in ring order, to its superblock: journal_v2, a
 /// run of contiguous buckets per entry, replacing v1.
 ///
@@ -119,7 +104,7 @@ impl c::journal_device {
 /// v2, if it was added after v1 - so v2 can't be written through a pointer
 /// from before (C did: its entries landed v1's size past v2). And on failure,
 /// the superblock is as it was.
-fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev, buckets: &[u64])
+pub(crate) fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev, buckets: &[u64])
     -> Result<(), BchError>
 {
     let mut dev_sb = fs.dev_sb_mut(sb, ca).expect("journal buckets: a device with no superblock");
@@ -145,22 +130,6 @@ fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev, buckets: &[u64])
     Ok(())
 }
 
-/// # Safety
-/// @buckets is @nr u64s; sb_lock is held.
-#[c_export]
-pub unsafe fn bch2_journal_buckets_to_sb(c: &Opaque<Fs>, ca: &Dev,
-                                         buckets: *const u64, nr: c_uint) -> c_int {
-    let fs = Fs::from_c(c);
-    let buckets = match nr {
-        0  => &[],
-        // SAFETY: the caller's
-        nr => unsafe { core::slice::from_raw_parts(buckets, nr as usize) },
-    };
-    // SAFETY: the caller holds it
-    let mut sb = unsafe { fs.sb_lock_held() };
-    ret_to_c(buckets_to_sb(fs, &mut sb, ca, buckets))
-}
-
 /// At a clean mount, before the journal starts: rewrite journal_v2 sorted,
 /// for devices where it isn't or a v1 field is left.
 pub(crate) fn sb_journal_sort(fs: &Fs) -> Result<(), BchError> {
@@ -176,16 +145,8 @@ pub(crate) fn sb_journal_sort(fs: &Fs) -> Result<(), BchError> {
 
         if !j.d.is_sorted_by_key(|d| d.start.get()) ||
            dev_sb.field::<c::bch_sb_field_journal>().is_some() {
-            let ja = &ca.journal;
-            let buckets: &mut [u64] = match ja.nr {
-                0  => &mut [],
-                // SAFETY: the journal isn't started - nothing else has its buckets
-                nr => unsafe { core::slice::from_raw_parts_mut(ja.buckets, nr as usize) },
-            };
-            buckets.sort_unstable();
-
             // As C: if it fails, the superblock's as it was, and still valid
-            let _ = buckets_to_sb(fs, &mut sb, &ca, buckets);
+            let _ = buckets::sort(fs, &mut sb, &ca);
             dirty = true;
         }
     }

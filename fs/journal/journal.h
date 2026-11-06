@@ -113,6 +113,7 @@
 
 #include "journal/types_gen.h"
 
+#include "journal/buckets_gen.h"
 #include "journal/journal_gen.h"
 
 /* journal_replicas, or metadata_replicas when it isn't set: */

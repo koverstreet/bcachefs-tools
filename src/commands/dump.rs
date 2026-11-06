@@ -471,13 +471,11 @@ fn get_sb_journal(fs: &Fs, ca: &Dev, entire_journal: bool, d: &mut DumpDev) {
 
     // Journal buckets
     let last_seq_ondisk = fs.journal.lock.last_seq_ondisk.get();
-    for i in 0..ca.journal.nr as usize {
-        let seq = unsafe { *ca.journal.bucket_seq.add(i) };
+    ca.with_journal_ring(|r| for (&bucket, &seq) in r.buckets().iter().zip(r.seqs()) {
         if entire_journal || seq >= last_seq_ondisk {
-            let bucket = unsafe { *ca.journal.buckets.add(i) };
             range_add(&mut d.journal, bucket_bytes * bucket, bucket_bytes);
         }
-    }
+    });
 }
 
 fn write_sanitized_ranges(

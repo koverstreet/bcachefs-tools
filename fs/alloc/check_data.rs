@@ -34,7 +34,7 @@ use crate::c::bch_errcode;
 use crate::data::checksum::csum_err_msg;
 use crate::data::ec::stripe::ptr_matches_stripe_m;
 use crate::data::ptrs::{brand, extent_nonce, ptr_data_type, BkeyVPtrs, BkeyVPtrsMut, DecodedPtr, Ptrs, PtrsMut};
-use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{ret_to_c, BchError};
 use crate::init::damage;
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
@@ -300,8 +300,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
                     "bucket {dev}:{b} gen {generation} different types of data in same bucket: {}, {}\n\
                      while marking {marking}", data_type_str(bucket_type), data_type_str(data_type))? {
         if bucket_type == DataType::journal {
-            // SAFETY: a device we have a ref on
-            ret_to_result_void(unsafe { c::bch2_dev_journal_bucket_delete(ca.as_mut_ptr(), b) })?;
+            crate::journal::buckets::remove(fs, &ca, b)?;
 
             // gc already counted the bucket as journal when it marked it:
             // move it over, as marking does

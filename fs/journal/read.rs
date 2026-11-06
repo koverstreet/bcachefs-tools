@@ -3,6 +3,7 @@
 use cstruct_macros::c_export;
 use crate::format::{Btree, MemberState, Nonce};
 
+#[path = "buckets.rs"] pub mod buckets;
 #[path = "entries.rs"] pub mod entries;
 #[path = "sb.rs"] pub mod sb;
 #[path = "seq_blacklist.rs"] pub mod seq_blacklist;
@@ -272,22 +273,13 @@ impl NotRw<'_> {
     }
 }
 
-impl c::journal_device {
-    fn bucket_seq(&self) -> &[u64] {
-        if self.nr == 0 { &[] } else { unsafe { core::slice::from_raw_parts(self.bucket_seq, self.nr as usize) } }
-    }
-
-    fn bucket_seq_mut(&mut self) -> &mut [u64] {
-        if self.nr == 0 { &mut [] } else { unsafe { core::slice::from_raw_parts_mut(self.bucket_seq, self.nr as usize) } }
-    }
-}
-
 pub fn journal_pos_from_member_info_set(fs: &Fs, sb: &mut crate::fs::SbLockGuard<'_>) {
     for ca in fs.members() {
         let ja = &ca.journal;
         let m = sb.fs_member_mut(ca.dev_idx.into());
 
-        m.last_journal_bucket = Le32::new(ja.cur_idx);
+        let cur = ca.with_journal_ring(|r| r.idx(c::journal_bucket_stage::JOURNAL_BUCKET_cur));
+        m.last_journal_bucket = Le32::new(cur);
         m.last_journal_bucket_offset = Le32::new(u32::from(ca.mi.get().bucket_size) - ja.sectors_free);
     }
 }
@@ -301,8 +293,8 @@ pub fn journal_pos_from_member_info_resume(fs: &Fs) {
         let ja = unsafe { not_rw.journal_device(&ca) };
 
         let idx = m.last_journal_bucket.get();
-        if idx < ja.nr {
-            ja.cur_idx = idx;
+        if idx < ja.nr() {
+            ja.ring_mut().set_cur(idx);
         }
         let offset = m.last_journal_bucket_offset.get();
         let bucket_size = u32::from(ca.mi.get().bucket_size);
@@ -783,8 +775,8 @@ impl<'a> DevReader<'a> {
         self.bio.submit_wait()
     }
 
-    fn bucket_to_sector(&self, bucket: usize) -> u64 {
-        self.ca.bucket_to_sector(self.ja.buckets()[bucket])
+    fn bucket_to_sector(&mut self, bucket: usize) -> u64 {
+        self.ca.bucket_to_sector(self.ja.ring_mut().buckets()[bucket])
     }
 
     fn read_bucket(&mut self, read: &ReadLock<'_>, bucket: usize) -> Result<(), BchError> {
@@ -833,7 +825,7 @@ impl<'a> DevReader<'a> {
             let seq = h.seq.get();
             if seq > self.ja.highest_seq_found {
                 self.ja.highest_seq_found = seq;
-                self.ja.cur_idx = bucket as u32;
+                self.ja.ring_mut().set_cur(bucket as u32);
                 self.ja.sectors_free = (end - offset - sectors) as u32;
             }
 
@@ -843,11 +835,11 @@ impl<'a> DevReader<'a> {
              * journal entries. We don't need the rest of the
              * bucket:
              */
-            if seq < self.ja.bucket_seq()[bucket] {
+            if seq < self.ja.ring_mut().seqs()[bucket] {
                 return Ok(());
             }
 
-            self.ja.bucket_seq_mut()[bucket] = seq;
+            self.ja.ring_mut().seqs_mut()[bucket] = seq;
 
             let j = c::jset::<Unvalidated>::from_bytes_mut(j).expect("a jset, cut to fit its bucket");
             let (csum_good, csum) = jset_csum_good(fs, j);
@@ -898,7 +890,7 @@ impl<'a> DevReader<'a> {
             return;
         }
 
-        self.ja.bucket_seq_mut()[bucket] = j.seq.get();
+        self.ja.ring_mut().seqs_mut()[bucket] = j.seq.get();
     }
 
     /*
@@ -910,11 +902,11 @@ impl<'a> DevReader<'a> {
             self.peek_bucket(bucket);
             peeked[bucket] = true;
         }
-        self.ja.bucket_seq()[bucket]
+        self.ja.ring_mut().seqs()[bucket]
     }
 
     fn read_live(&mut self, read: &ReadLock<'_>, mut order: KVVec<(usize, u64)>) -> Result<(), BchError> {
-        let nr = self.ja.nr as usize;
+        let nr = self.ja.nr() as usize;
 
         /*
          * Sort by seq descending, then read in that order. Once
@@ -936,14 +928,14 @@ impl<'a> DevReader<'a> {
              * bucket's max seq (now in bucket_seq from the full
              * read) is below it, we're done:
              */
-            if keep_from != 0 && self.ja.bucket_seq()[bucket] < keep_from {
+            if keep_from != 0 && self.ja.ring_mut().seqs()[bucket] < keep_from {
                 break;
             }
 
             last_seq_idx = bucket;
         }
 
-        let bucket_seq = self.ja.bucket_seq();
+        let bucket_seq = self.ja.ring_mut().seqs();
 
         /* Find write head — bucket with max seq among all buckets */
         let max_bucket = (0..nr).fold(0, |m, i| if bucket_seq[i] > bucket_seq[m] { i } else { m });
@@ -965,7 +957,7 @@ impl<'a> DevReader<'a> {
     }
 
     fn read_device(&mut self, read: &ReadLock<'_>, full_read: bool) -> Result<(), BchError> {
-        let nr = self.ja.nr as usize;
+        let nr = self.ja.nr() as usize;
 
         /*
          * Optimization for large journals on slow devices (e.g. SD cards):
@@ -1001,10 +993,7 @@ impl<'a> DevReader<'a> {
          * reclaimed - journal reclaim will immediately reclaim whatever isn't
          * pinned when it first runs:
          */
-        let ja = &mut *self.ja;
-        ja.discard_idx = (ja.cur_idx + 1) % ja.nr;
-        ja.dirty_idx_ondisk = ja.discard_idx;
-        ja.dirty_idx = ja.discard_idx;
+        self.ja.ring_mut().start();
         Ok(())
     }
 }
@@ -1016,7 +1005,7 @@ fn read_devices(fs: &Fs, not_rw: &NotRw<'_>, read: &ReadLock<'_>, devs: KVVec<De
             let ca: &Dev = ca;
             let ja = unsafe { not_rw.journal_device(ca) };
             s.spawn(format_args!("journal read {}", ca), move || {
-                let ret = if ja.nr == 0 {
+                let ret = if ja.nr() == 0 {
                     Ok(())
                 } else {
                     DevReader::new(fs, ca, ja).and_then(|mut r| r.read_device(read, full_read))
@@ -1199,12 +1188,12 @@ pub fn journal_reread_for_rewind(fs: &Fs) -> Result<(), BchError> {
             scrub_seq: 0,
         }));
 
-        for ca in journal_devs(fs, |ca| ca.journal.nr != 0, false)?.iter() {
+        for ca in journal_devs(fs, |ca| ca.journal.nr() != 0, false)?.iter() {
             let mut r = DevReader::new(fs, ca, unsafe { not_rw.journal_device(ca) })?;
 
-            for i in 0..r.ja.nr as usize {
+            for i in 0..r.ja.nr() as usize {
                 /* Only re-read buckets that might have entries we need */
-                if r.ja.bucket_seq()[i] < need_from {
+                if r.ja.ring_mut().seqs()[i] < need_from {
                     continue;
                 }
 
@@ -1388,7 +1377,7 @@ pub fn journal_read(fs: &Fs) -> Result<c::journal_start_info, BchError> {
          * the initial round already found is a no-op.
          */
         drop(state);
-        read_devices(fs, &not_rw, &read, journal_devs(fs, |ca| ca.journal.nr > 32, false)?, true)?;
+        read_devices(fs, &not_rw, &read, journal_devs(fs, |ca| ca.journal.nr() > 32, false)?, true)?;
         state = read.lock();
     }
 

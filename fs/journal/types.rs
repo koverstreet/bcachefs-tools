@@ -5,11 +5,12 @@
 use crate::fs::Dev;
 use crate::cstructs::c;
 use crate::data::ptrs::IoFailures;
-use crate::types::{CacheAligned, DArray, Fifo, c_default};
+use crate::types::{CacheAligned, DArray, Fifo, RustOnly, c_default, rust_only};
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI32, AtomicI64, AtomicPtr, AtomicU64};
+use crate::journal::buckets::JournalBuckets;
 use crate::locking::Locked;
 use crate::util::late::Late;
 use crate::{new_lock, published};
@@ -529,31 +530,27 @@ nest! {
 const _: () = assert!(core::mem::size_of::<JournalHot>() == core::mem::align_of::<JournalHot>(),
                       "JournalHot is more than a cacheline");
 
-/*
- * Embedded in struct bch_dev. First three fields refer to the array of journal
- * buckets, in bch_sb.
- */
+/* Where each stage of a journal bucket's life starts: journal/buckets.rs */
+c_enum! {
+    #[closed]
+    pub enum journal_bucket_stage: u32 {
+        JOURNAL_BUCKET_discard,
+        JOURNAL_BUCKET_dirty_ondisk,
+        JOURNAL_BUCKET_dirty,
+        JOURNAL_BUCKET_cur,
+    }
+}
+
+/* Embedded in struct bch_dev */
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(CStruct, Init)]
 pub struct journal_device {
-    /*
-     * For each journal bucket, contains the max sequence number of the
-     * journal writes it contains - so we know when a bucket can be reused.
-     */
-    pub bucket_seq: *mut u64,
+    #[pin]
+    #[init(RustOnly::new(crate::journal::buckets::new()))]
+    pub buckets: rust_only!(JournalBuckets),
 
     pub sectors_free: c_uint,
-
-    /*
-     * discard_idx <= dirty_idx_ondisk <= dirty_idx <= cur_idx:
-     */
-    pub discard_idx: c_uint, /* Next bucket to discard */
-    pub dirty_idx_ondisk: c_uint,
-    pub dirty_idx: c_uint,
-    pub cur_idx: c_uint, /* Journal bucket we're currently writing to */
-    pub nr: c_uint,
-
-    pub buckets: *mut u64,
 
     /*
      * Bioset for journal write bios. Journal writes allocate from this at
@@ -567,7 +564,6 @@ pub struct journal_device {
 
     pub highest_seq_found: u64,
 }
-c_default!(journal_device);
 
 unsafe impl Send for journal_device {}
 

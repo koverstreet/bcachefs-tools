@@ -21,52 +21,6 @@
 #include <linux/kthread.h>
 #include <linux/sched/mm.h>
 
-static bool __should_discard_bucket(struct journal *j, struct journal_device *ja)
-{
-	unsigned min_free = max(4, ja->nr / 2);
-
-	return bch2_journal_dev_buckets_available(j, ja, journal_space_discarded) <
-		min_free &&
-		ja->discard_idx != ja->dirty_idx_ondisk;
-}
-
-/* Free space calculations: */
-
-static unsigned journal_space_from(struct journal_device *ja,
-				   enum journal_space_from from)
-{
-	switch (from) {
-	case journal_space_discarded:
-		return ja->discard_idx;
-	case journal_space_clean_ondisk:
-		return ja->dirty_idx_ondisk;
-	case journal_space_clean:
-		return ja->dirty_idx;
-	default:
-		BUG();
-	}
-}
-
-unsigned bch2_journal_dev_buckets_available(struct journal *j,
-					    struct journal_device *ja,
-					    enum journal_space_from from)
-{
-	if (!ja->nr)
-		return 0;
-
-	unsigned available = (journal_space_from(ja, from) -
-			      ja->cur_idx - 1 + ja->nr) % ja->nr;
-
-	/*
-	 * Don't use the last bucket unless writing the new last_seq
-	 * will make another bucket available:
-	 */
-	if (available && ja->dirty_idx_ondisk == ja->dirty_idx)
-		--available;
-
-	return available;
-}
-
 /* Slowpath for bch2_journal_set_alloc_watermark(): the level actually moved. */
 void __bch2_journal_set_alloc_watermark(struct journal *j, u8 *p, unsigned watermark)
 {
@@ -173,7 +127,7 @@ journal_dev_space_available(struct journal *j, struct bch_dev *ca,
 	if (from == journal_space_total)
 		return (struct journal_space) {
 			.next_entry	= bucket_size_aligned,
-			.total		= min(bucket_size_aligned * ja->nr,
+			.total		= min(bucket_size_aligned * bch2_journal_buckets_nr(ja),
 					      mem_limit >> 9),
 		};
 
@@ -232,7 +186,7 @@ static struct journal_space __journal_space_available(struct journal *j, unsigne
 	BUG_ON(nr_devs_want > ARRAY_SIZE(dev_space));
 
 	for_each_member_device_rcu(c, ca, &c->allocator.rw_devs[BCH_DATA_journal]) {
-		if (!ca->journal.nr)
+		if (!bch2_journal_buckets_nr(&ca->journal))
 			continue;
 
 		min_bucket_size = min(min_bucket_size, ca->mi.bucket_size);
@@ -307,23 +261,17 @@ void bch2_journal_space_available(struct journal *j)
 	for_each_member_device_rcu(c, ca, &c->allocator.rw_devs[BCH_DATA_journal]) {
 		struct journal_device *ja = &ca->journal;
 
-		if (!ja->nr)
+		if (!bch2_journal_buckets_nr(ja))
 			continue;
 
-		while (ja->dirty_idx != ja->cur_idx &&
-		       ja->bucket_seq[ja->dirty_idx] < j->last_seq)
-			ja->dirty_idx = (ja->dirty_idx + 1) % ja->nr;
-
-		while (ja->dirty_idx_ondisk != ja->dirty_idx &&
-		       ja->bucket_seq[ja->dirty_idx_ondisk] < j->last_seq_ondisk)
-			ja->dirty_idx_ondisk = (ja->dirty_idx_ondisk + 1) % ja->nr;
+		bch2_journal_buckets_last_seq(j, ja, j->last_seq, j->last_seq_ondisk);
 
 		max_entry_size = min_t(unsigned, max_entry_size, ca->mi.bucket_size);
 		nr_online++;
 
-		can_discard |= __should_discard_bucket(j, ja);
+		can_discard |= bch2_journal_should_discard_bucket(j, ja);
 
-		if (__should_discard_bucket(j, ja) &&
+		if (bch2_journal_should_discard_bucket(j, ja) &&
 		    test_bit(BCH_FS_rw_init_done, &c->flags) &&
 		    test_bit(JOURNAL_running, &j->flags) &&
 		    !bch2_journal_error(j))
@@ -379,10 +327,15 @@ void bch2_journal_space_available(struct journal *j)
 
 /* Discards - last part of journal reclaim: */
 
-static bool should_discard_bucket(struct journal *j, struct journal_device *ja)
+/* And the bucket to discard, read with the lock held: resizing moves them */
+static bool should_discard_bucket(struct journal *j, struct journal_device *ja, u64 *bucket)
 {
 	guard(spinlock)(&j->lock);
-	return __should_discard_bucket(j, ja);
+	if (!bch2_journal_should_discard_bucket(j, ja))
+		return false;
+
+	*bucket = bch2_journal_buckets_bucket(j, ja, JOURNAL_BUCKET_discard);
+	return true;
 }
 
 static void bch2_journal_dev_do_discards(struct journal_device *ja)
@@ -396,17 +349,17 @@ static void bch2_journal_dev_do_discards(struct journal_device *ja)
 
 	guard(mutex)(&ja->discard_lock);
 
-	while (should_discard_bucket(j, ja)) {
+	u64 bucket;
+	while (should_discard_bucket(j, ja, &bucket)) {
 		if (!c->opts.nochanges &&
 		    bch2_discard_opt_enabled(c, ca) &&
 		    bdev_max_discard_sectors(bch2_dev_bdev(ca)))
 			blkdev_issue_discard(bch2_dev_bdev(ca),
-					     bucket_to_sector(ca,
-							      ja->buckets[ja->discard_idx]),
+					     bucket_to_sector(ca, bucket),
 					     ca->mi.bucket_size, GFP_NOIO);
 
 		scoped_guard(spinlock, &j->lock) {
-			ja->discard_idx = (ja->discard_idx + 1) % ja->nr;
+			bch2_journal_buckets_discarded(j, ja, bucket);
 			bch2_journal_space_available(j);
 		}
 	}
@@ -416,7 +369,7 @@ static void bch2_journal_dev_do_discards(struct journal_device *ja)
 }
 
 /*
- * Advance ja->discard_idx as long as it points to buckets that are no longer
+ * Advance the discard cursor as long as it points to buckets that are no longer
  * dirty, issuing discards if necessary:
  */
 void bch2_journal_discard_work(struct work_struct *work)
@@ -987,17 +940,14 @@ static u64 journal_seq_to_flush(struct journal *j)
 
 	for_each_rw_member_rcu(c, ca) {
 		struct journal_device *ja = &ca->journal;
-		unsigned nr_buckets, bucket_to_flush;
+		unsigned nr = bch2_journal_buckets_nr(ja);
 
-		if (!ja->nr)
+		if (!nr)
 			continue;
 
 		/* Try to keep the journal at most half full: */
-		nr_buckets = ja->nr / 2;
-
-		bucket_to_flush = (ja->cur_idx + nr_buckets) % ja->nr;
 		seq_to_flush = max(seq_to_flush,
-				   ja->bucket_seq[bucket_to_flush]);
+				   bch2_journal_buckets_seq_ahead(j, ja, JOURNAL_BUCKET_cur, nr / 2));
 	}
 
 	/* Also flush if the pin fifo is more than half full */
@@ -1367,7 +1317,7 @@ void bch2_journal_flush_dev_ro(struct journal *j, unsigned dev_idx)
 			scoped_guard(rcu)
 				for_each_member_device_rcu(c, ca,
 						&c->allocator.rw_devs[BCH_DATA_journal]) {
-					if (ca->dev_idx == dev_idx || !ca->journal.nr)
+					if (ca->dev_idx == dev_idx || !bch2_journal_buckets_nr(&ca->journal))
 						continue;
 					nr_devs++;
 					if (bch2_journal_dev_buckets_available(j, &ca->journal,

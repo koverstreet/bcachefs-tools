@@ -33,6 +33,8 @@ static void journal_advance_devs_to_next_bucket(struct journal *j,
 	unsigned i;
 
 	guard(rcu)();
+	guard(spinlock)(&j->lock);
+
 	for_each_set_bit(i, devs->d, BCH_SB_MEMBERS_MAX) {
 		struct bch_dev *ca = rcu_dereference(c->devs[i]);
 		if (!ca)
@@ -44,14 +46,9 @@ static void journal_advance_devs_to_next_bucket(struct journal *j,
 		    sectors <= ca->mi.bucket_size &&
 		    bch2_journal_dev_buckets_available(j, ja,
 					journal_space_discarded)) {
-			ja->cur_idx = (ja->cur_idx + 1) % ja->nr;
+			/* the new cur bucket's seq must always be something sensible: */
+			bch2_journal_buckets_next_bucket(j, ja, le64_to_cpu(seq));
 			ja->sectors_free = ca->mi.bucket_size;
-
-			/*
-			 * ja->bucket_seq[ja->cur_idx] must always have
-			 * something sensible:
-			 */
-			ja->bucket_seq[ja->cur_idx] = le64_to_cpu(seq);
 		}
 	}
 }
@@ -111,7 +108,7 @@ static void __journal_write_alloc(struct journal *j,
 			 * Check that we can use this device, and aren't
 			 * already using it:
 			 */
-			if (!ja->nr ||
+			if (!bch2_journal_buckets_nr(ja) ||
 			    bch2_bkey_has_device_c(c, bkey_i_to_s_c(&w->key), cand->dev_idx) ||
 			    sectors > ja->sectors_free ||
 			    (ca && journal_dev_score(j, cand) >= journal_dev_score(j, ca))) {
@@ -133,7 +130,13 @@ static void __journal_write_alloc(struct journal *j,
 
 		bch2_dev_stripe_increment(ca, &j->stripe);
 
-		u64 offset = bucket_to_sector(ca, ja->buckets[ja->cur_idx]) +
+		u64 bucket;
+		scoped_guard(spinlock, &j->lock) {
+			bucket = bch2_journal_buckets_bucket(j, ja, JOURNAL_BUCKET_cur);
+			bch2_journal_buckets_set_cur_seq(j, ja, le64_to_cpu(w->data->seq));
+		}
+
+		u64 offset = bucket_to_sector(ca, bucket) +
 			ca->mi.bucket_size - ja->sectors_free;
 
 		/*
@@ -156,7 +159,6 @@ static void __journal_write_alloc(struct journal *j,
 		w->cas[bkey_val_u64s(&w->key.k) - 1] = ca;
 
 		ja->sectors_free -= sectors;
-		ja->bucket_seq[ja->cur_idx] = le64_to_cpu(w->data->seq);
 
 		*replicas += ca->mi.durability;
 	}
@@ -696,7 +698,8 @@ static CLOSURE_CALLBACK(journal_write_submit)
 
 		closure_bio_submit(bio, cl);
 
-		ja->bucket_seq[ja->cur_idx] = le64_to_cpu(w->data->seq);
+		scoped_guard(spinlock, &j->lock)
+			bch2_journal_buckets_set_cur_seq(j, ja, le64_to_cpu(w->data->seq));
 	}
 
 	blk_finish_plug(&plug);
@@ -1078,13 +1081,9 @@ static bool flush_would_free_space(struct journal *j, u64 new_last_seq)
 	guard(rcu)();
 
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
-	for_each_member_device_rcu(c, ca, &c->allocator.rw_devs[BCH_DATA_journal]) {
-		struct journal_device *ja = &ca->journal;
-
-		if (ja->dirty_idx_ondisk != ja->dirty_idx &&
-		    ja->bucket_seq[ja->dirty_idx_ondisk] < new_last_seq)
+	for_each_member_device_rcu(c, ca, &c->allocator.rw_devs[BCH_DATA_journal])
+		if (bch2_journal_buckets_would_free(j, &ca->journal, new_last_seq))
 			return true;
-	}
 
 	return false;
 }

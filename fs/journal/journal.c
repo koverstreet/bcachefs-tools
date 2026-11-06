@@ -1572,19 +1572,16 @@ __cold void __bch2_journal_debug_to_text(struct printbuf *out, struct journal *j
 
 	for_each_member_device_rcu(c, ca, &c->allocator.rw_devs[BCH_DATA_journal]) {
 		struct journal_device *ja = &ca->journal;
-		if (!ja->nr)
+		if (!bch2_journal_buckets_nr(ja))
 			continue;
 
 		prt_printf(out, "dev %u:\n",			ca->dev_idx);
 		prt_printf(out, "durability %u:\n",		ca->mi.durability);
 		guard(printbuf_indent)(out);
-		prt_printf(out, "nr\t%u\n",			ja->nr);
+		prt_printf(out, "nr\t%u\n",			bch2_journal_buckets_nr(ja));
 		prt_printf(out, "bucket size\t%u\n",		ca->mi.bucket_size);
 		prt_printf(out, "available\t%u:%u\n",		bch2_journal_dev_buckets_available(j, ja, journal_space_discarded), ja->sectors_free);
-		prt_printf(out, "discard_idx\t%u\n",		ja->discard_idx);
-		prt_printf(out, "dirty_ondisk\t%u (seq %llu)\n",ja->dirty_idx_ondisk,	ja->bucket_seq[ja->dirty_idx_ondisk]);
-		prt_printf(out, "dirty_idx\t%u (seq %llu)\n",	ja->dirty_idx,		ja->bucket_seq[ja->dirty_idx]);
-		prt_printf(out, "cur_idx\t%u (seq %llu)\n",	ja->cur_idx,		ja->bucket_seq[ja->cur_idx]);
+		bch2_journal_buckets_to_text(j, ja, out);
 	}
 
 	prt_printf(out, "replicas %u\n", bch2_journal_replicas(c));

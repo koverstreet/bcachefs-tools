@@ -392,7 +392,7 @@ pub struct bch_devs_list {
 
 c_extern! {
     pub fn bch2_dev_journal_init_early(ca: *mut Dev);
-    pub fn bch2_dev_journal_init(ca: *mut Dev, sb: *mut Head<c::bch_sb>) -> c_int;
+    pub fn bch2_dev_journal_init(ca: *mut Dev) -> c_int;
     pub fn bch2_dev_journal_exit(ca: *mut Dev);
     pub fn bch2_dev_journal_stop(j: *mut c::journal, ca: *mut Dev);
     pub fn bch2_dev_journal_alloc(ca: *mut Dev, new_fs: bool) -> c_int;
@@ -837,7 +837,8 @@ fn attach_bdev(ca: &Dev, sb: &mut c::bch_sb_handle, err: &mut Printbuf) -> Resul
     assert!(ca.io_ref[WRITE].is_zero(), "attaching device {ca} with write refs");
 
     let ca_p = ca.as_ptr();
-    ret_to_result_void(unsafe { bch2_dev_journal_init(ca_p, sb.io.buf.sb) })?;
+    crate::journal::buckets::load(&ca, sb.io.buf.sb())?;
+    ret_to_result_void(unsafe { bch2_dev_journal_init(ca_p) })?;
 
     let mut name = Printbuf::new();
     prt_bdevname(&mut name, Some(sb.dev.bdev()));
@@ -1501,7 +1502,7 @@ impl Fs {
                 .inspect_err(|e| prt!(err, "bch2_dev_freespace_init() error: {}\n", e.msg()))?;
         }
 
-        if ca.journal.nr == 0 {
+        if ca.journal.nr() == 0 {
             ret_to_result_void(unsafe { bch2_dev_journal_alloc(ca.as_ptr(), false) })
                 .inspect_err(|e| prt!(err, "bch2_dev_journal_alloc() error: {}\n", e.msg()))?;
         }

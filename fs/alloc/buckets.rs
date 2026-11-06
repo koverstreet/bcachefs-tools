@@ -257,7 +257,7 @@ impl Dev {
         b == 0 ||
             l.sb_offset.iter().take(usize::from(l.nr_superblocks))
                 .any(|o| o.get() < end && start < o.get() + sb_sectors) ||
-            self.journal.buckets().contains(&b)
+            self.with_journal_ring(|r| r.buckets().contains(&b))
     }
 
     /// The bucket sector @s is in, and how far into it:
@@ -997,7 +997,8 @@ fn trans_mark_dev_sb_in(trans: &BtreeTrans<'_>, ca: &Dev, flags: UpdateTriggerFl
         trans_mark_metadata_bucket(trans, ca, bucket.0, DataType::sb, bucket.1, flags)?;
     }
 
-    for &b in ca.journal.buckets() {
+    /* each under the journal lock: marking sleeps */
+    for b in (0..).map_while(|i| ca.with_journal_ring(|r| r.buckets().get(i).copied())) {
         trans_mark_metadata_bucket(trans, ca, b, DataType::journal, ca.mi.get().bucket_size.into(), flags)?;
     }
     Ok(())

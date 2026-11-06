@@ -35,9 +35,6 @@ static inline void journal_reclaim_kick(struct journal *j)
 		wake_up_process(p);
 }
 
-unsigned bch2_journal_dev_buckets_available(struct journal *,
-					    struct journal_device *,
-					    enum journal_space_from);
 void bch2_journal_set_watermark(struct journal *);
 
 void __bch2_journal_set_alloc_watermark(struct journal *, u8 *, unsigned);

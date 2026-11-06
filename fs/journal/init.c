@@ -5,7 +5,6 @@
 #include "journal/journal.h"
 #include "journal/read.h"
 #include "journal/reclaim.h"
-#include "journal/sb.h"
 #include "journal/seq_blacklist.h"
 
 #include "alloc/foreground.h"
@@ -20,17 +19,14 @@ static int bch2_set_nr_journal_buckets_iter(struct bch_dev *ca, unsigned nr,
 					    struct closure *cl)
 {
 	struct bch_fs *c = ca->fs;
-	struct journal_device *ja = &ca->journal;
-	unsigned i, pos, nr_got = 0, nr_want = nr - ja->nr;
+	unsigned i, nr_got = 0, nr_have = bch2_journal_buckets_nr(&ca->journal), nr_want = nr - nr_have;
 	int ret = 0;
 
-	BUG_ON(nr <= ja->nr);
+	BUG_ON(nr <= nr_have);
 
-	long *bu __free(kfree)			= kcalloc(nr_want, sizeof(*bu), GFP_KERNEL);
+	u64 *bu __free(kfree)			= kcalloc(nr_want, sizeof(*bu), GFP_KERNEL);
 	struct open_bucket **ob __free(kfree)	= kcalloc(nr_want, sizeof(*ob), GFP_KERNEL);
-	u64 *new_buckets __free(kfree)		= kcalloc(nr, sizeof(u64), GFP_KERNEL);
-	u64 *new_bucket_seq __free(kfree)	= kcalloc(nr, sizeof(u64), GFP_KERNEL);
-	if (!bu || !ob || !new_buckets || !new_bucket_seq)
+	if (!bu || !ob)
 		return bch_err_throw(c, ENOMEM_set_nr_journal_buckets);
 
 	for (nr_got = 0; nr_got < nr_want; nr_got++) {
@@ -73,53 +69,8 @@ static int bch2_set_nr_journal_buckets_iter(struct bch_dev *ca, unsigned nr,
 	/* Don't return an error if we successfully allocated some buckets: */
 	ret = 0;
 
-	scoped_guard(journal_block, &c->journal) {
-		guard(mutex_noio)(&c->sb_lock);
-
-		memcpy(new_buckets,	ja->buckets,	ja->nr * sizeof(u64));
-		memcpy(new_bucket_seq,	ja->bucket_seq,	ja->nr * sizeof(u64));
-
-		BUG_ON(ja->discard_idx > ja->nr);
-
-		pos = ja->discard_idx ?: ja->nr;
-
-		memmove(new_buckets + pos + nr_got,
-			new_buckets + pos,
-			sizeof(new_buckets[0]) * (ja->nr - pos));
-		memmove(new_bucket_seq + pos + nr_got,
-			new_bucket_seq + pos,
-			sizeof(new_bucket_seq[0]) * (ja->nr - pos));
-
-		for (i = 0; i < nr_got; i++) {
-			new_buckets[pos + i] = bu[i];
-			new_bucket_seq[pos + i] = 0;
-		}
-
-		nr = ja->nr + nr_got;
-
-		ret = bch2_journal_buckets_to_sb(c, ca, new_buckets, nr);
-		if (ret)
-			goto err_unblock;
-
-		bch2_write_super(c);
-
-		/* Commit: */
-		scoped_guard(spinlock, &c->journal.lock) {
-			swap(new_buckets,	ja->buckets);
-			swap(new_bucket_seq,	ja->bucket_seq);
-			ja->nr = nr;
-
-			if (pos <= ja->discard_idx)
-				ja->discard_idx = (ja->discard_idx + nr_got) % ja->nr;
-			if (pos <= ja->dirty_idx_ondisk)
-				ja->dirty_idx_ondisk = (ja->dirty_idx_ondisk + nr_got) % ja->nr;
-			if (pos <= ja->dirty_idx)
-				ja->dirty_idx = (ja->dirty_idx + nr_got) % ja->nr;
-			if (pos <= ja->cur_idx)
-				ja->cur_idx = (ja->cur_idx + nr_got) % ja->nr;
-		}
-	}
-err_unblock:
+	scoped_guard(journal_block, &c->journal)
+		ret = bch2_journal_buckets_add(ca, bu, nr_got);
 
 	if (ret) {
 		CLASS(btree_trans, trans)(c);
@@ -147,10 +98,10 @@ static int bch2_set_nr_journal_buckets_loop(struct bch_fs *c, struct bch_dev *ca
 	CLASS(closure_stack, cl)();
 
 	/* don't handle reducing nr of buckets yet: */
-	if (nr < ja->nr)
+	if (nr < bch2_journal_buckets_nr(ja))
 		return 0;
 
-	while (!ret && ja->nr < nr) {
+	while (!ret && bch2_journal_buckets_nr(ja) < nr) {
 
 		/*
 		 * note: journal buckets aren't really counted as _sectors_ used yet, so
@@ -170,7 +121,7 @@ static int bch2_set_nr_journal_buckets_loop(struct bch_fs *c, struct bch_dev *ca
 		CLASS(disk_reservation, res)(c);
 		if (!new_fs && dev_has_capacity(ca))
 			try(bch2_disk_reservation_add(c, &res.r,
-						bucket_to_sector(ca, nr - ja->nr), 1, 0));
+						bucket_to_sector(ca, nr - bch2_journal_buckets_nr(ja)), 1, 0));
 
 		ret = bch2_set_nr_journal_buckets_iter(ca, nr, new_fs, watermark, &cl);
 	}
@@ -193,66 +144,6 @@ int bch2_set_nr_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
 	int ret = bch2_set_nr_journal_buckets_loop(c, ca, nr, false);
 	bch_err_fn(c, ret);
 	return ret;
-}
-
-int bch2_dev_journal_bucket_delete(struct bch_dev *ca, u64 b)
-{
-	struct bch_fs *c = ca->fs;
-	struct journal *j = &c->journal;
-	struct journal_device *ja = &ca->journal;
-
-	guard(mutex_noio)(&c->sb_lock);
-	unsigned pos;
-	for (pos = 0; pos < ja->nr; pos++)
-		if (ja->buckets[pos] == b)
-			break;
-
-	if (pos == ja->nr) {
-		bch_err_dev(ca, "journal bucket %llu not found when deleting", b);
-		return bch_err_throw(c, EINVAL_journal_bucket_not_found);
-	}
-
-	u64 *new_buckets = kcalloc(ja->nr, sizeof(u64), GFP_KERNEL);
-	if (!new_buckets)
-		return bch_err_throw(c, ENOMEM_set_nr_journal_buckets);
-
-	memcpy(new_buckets, ja->buckets, ja->nr * sizeof(u64));
-	memmove(&new_buckets[pos],
-		&new_buckets[pos + 1],
-		(ja->nr - 1 - pos) * sizeof(new_buckets[0]));
-
-	int ret = bch2_journal_buckets_to_sb(c, ca, new_buckets, ja->nr - 1) ?:
-		bch2_write_super(c);
-	if (ret) {
-		kfree(new_buckets);
-		return ret;
-	}
-
-	scoped_guard(spinlock, &j->lock) {
-		if (pos < ja->discard_idx)
-			--ja->discard_idx;
-		if (pos < ja->dirty_idx_ondisk)
-			--ja->dirty_idx_ondisk;
-		if (pos < ja->dirty_idx)
-			--ja->dirty_idx;
-		if (pos < ja->cur_idx)
-			--ja->cur_idx;
-
-		ja->nr--;
-
-		memmove(&ja->buckets[pos],
-			&ja->buckets[pos + 1],
-			(ja->nr - pos) * sizeof(ja->buckets[0]));
-
-		memmove(&ja->bucket_seq[pos],
-			&ja->bucket_seq[pos + 1],
-			(ja->nr - pos) * sizeof(ja->bucket_seq[0]));
-
-		bch2_journal_space_available(j);
-	}
-
-	kfree(new_buckets);
-	return 0;
 }
 
 int bch2_dev_journal_alloc(struct bch_dev *ca, bool new_fs)
@@ -292,7 +183,7 @@ err:
 int bch2_fs_journal_alloc(struct bch_fs *c)
 {
 	for_each_online_member(c, ca, BCH_DEV_READ_REF_fs_journal_alloc) {
-		if (ca->journal.nr)
+		if (bch2_journal_buckets_nr(&ca->journal))
 			continue;
 
 		int ret = bch2_dev_journal_alloc(ca, true);
@@ -685,11 +576,6 @@ void bch2_dev_journal_exit(struct bch_dev *ca)
 	struct journal_device *ja = &ca->journal;
 
 	bioset_exit(&ja->bio_set);
-
-	kfree(ja->buckets);
-	kfree(ja->bucket_seq);
-	ja->buckets	= NULL;
-	ja->bucket_seq	= NULL;
 }
 
 void bch2_dev_journal_init_early(struct bch_dev *ca)
@@ -698,29 +584,10 @@ void bch2_dev_journal_init_early(struct bch_dev *ca)
 	INIT_WORK(&ca->journal.discard, bch2_journal_discard_work);
 }
 
-int bch2_dev_journal_init(struct bch_dev *ca, struct bch_sb *sb)
+int bch2_dev_journal_init(struct bch_dev *ca)
 {
 	struct bch_fs *c = ca->fs;
 	struct journal_device *ja = &ca->journal;
-	struct bch_sb_field_journal *journal_buckets =
-		bch2_sb_field_get(sb, journal);
-	struct bch_sb_field_journal_v2 *journal_buckets_v2 =
-		bch2_sb_field_get(sb, journal_v2);
-
-	ja->nr = 0;
-
-	if (journal_buckets_v2) {
-		unsigned nr = bch2_sb_field_journal_v2_nr_entries(journal_buckets_v2);
-
-		for (unsigned i = 0; i < nr; i++)
-			ja->nr += le64_to_cpu(journal_buckets_v2->d[i].nr);
-	} else if (journal_buckets) {
-		ja->nr = bch2_nr_journal_buckets(journal_buckets);
-	}
-
-	ja->bucket_seq = kcalloc(ja->nr, sizeof(u64), GFP_KERNEL);
-	if (!ja->bucket_seq)
-		return bch_err_throw(c, ENOMEM_dev_journal_init);
 
 	/*
 	 * Pool size is just the mempool reserve for forward progress under
@@ -732,23 +599,6 @@ int bch2_dev_journal_init(struct bch_dev *ca, struct bch_sb *sb)
 			offsetof(struct journal_bio, bio),
 			BIOSET_NEED_BVECS))
 		return bch_err_throw(c, ENOMEM_dev_journal_init);
-
-	ja->buckets = kcalloc(ja->nr, sizeof(u64), GFP_KERNEL);
-	if (!ja->buckets)
-		return bch_err_throw(c, ENOMEM_dev_journal_init);
-
-	if (journal_buckets_v2) {
-		unsigned nr = bch2_sb_field_journal_v2_nr_entries(journal_buckets_v2);
-		unsigned dst = 0;
-
-		for (unsigned i = 0; i < nr; i++)
-			for (unsigned j = 0; j < le64_to_cpu(journal_buckets_v2->d[i].nr); j++)
-				ja->buckets[dst++] =
-					le64_to_cpu(journal_buckets_v2->d[i].start) + j;
-	} else if (journal_buckets) {
-		for (unsigned i = 0; i < ja->nr; i++)
-			ja->buckets[i] = le64_to_cpu(journal_buckets->buckets[i]);
-	}
 
 	return 0;
 }
