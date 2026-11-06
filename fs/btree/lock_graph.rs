@@ -78,7 +78,7 @@ impl Trans {
     }
 
     fn fn_name(self) -> &'static str {
-        unsafe { CStr::from_ptr((*self.0).fn_.cast()) }.to_str().unwrap_or("?")
+        unsafe { CStr::from_ptr((*self.0).fn_.get().cast()) }.to_str().unwrap_or("?")
     }
 
     /// For the waiting transaction's own thread: the one the walk starts from.

@@ -733,10 +733,10 @@ pub struct BtreeTrans<'f> {
 
     pub nr_sorted: cs::PathIdx,
     pub nr_paths: Cell<cs::PathIdx>,
-    pub nr_paths_max: cs::PathIdx,
+    pub nr_paths_max: Cell<cs::PathIdx>,
     pub nr_updates: Cell<cs::PathIdx>,
     pub shard_cpu: Cell<i16>,
-    pub fn_idx: u8,
+    pub fn_idx: Cell<u8>,
     #[c("u8 lock_must_abort")]
     pub lock_must_abort: AtomicU8,
     #[c_bitfield]
@@ -780,7 +780,7 @@ pub struct BtreeTrans<'f> {
      */
     pub queued_write_bios: Cell<*mut cs::bio>,
 
-    pub fn_: *const c_char,
+    pub fn_: Cell<*const c_char>,
 
     /* update path: */
     pub journal_entries: Cell<cs::btree_trans_subbuf>,

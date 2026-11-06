@@ -152,7 +152,7 @@ c_enum! {
 impl BtreeTrans<'_> {
     #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
     pub(crate) fn stats(&self) -> Option<&c::btree_transaction_stats> {
-        self.fs().btree.trans.stats.get(self.fn_idx as usize)
+        self.fs().btree.trans.stats.get(self.fn_idx.get() as usize)
     }
 
     pub(crate) fn lock_hold_time_update(&self, path: &BtreePath, level: usize) {

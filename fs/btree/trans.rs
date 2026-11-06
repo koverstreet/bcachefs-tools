@@ -127,7 +127,7 @@ impl<'f> BtreeTrans<'f> {
     /// The function that got it, for messages: trans->fn.
     pub fn fn_name(&self) -> &str {
         // SAFETY: a string literal, set when it's got
-        unsafe { core::ffi::CStr::from_ptr(self.fn_.cast()) }.to_str().unwrap_or("?")
+        unsafe { CStr::from_ptr(self.fn_.get().cast()) }.to_str().unwrap_or("?")
     }
 
     /// Journal space for keys a trigger adds in the commit's atomic phase,
@@ -192,6 +192,11 @@ impl<'f> BtreeTrans<'f> {
         TransAttempt::new(self, self.begin_raw())
     }
 
+    /// The key updates queued: trans_for_each_update().
+    pub(crate) fn queued_updates(&self) -> &[c::btree_insert_entry] {
+        unsafe { core::slice::from_raw_parts(self.updates.get(), self.nr_updates.get() as usize) }
+    }
+
     /// Whether anything is queued for the next commit: key updates, journal
     /// entries or accounting.
     pub fn has_updates(&self) -> bool {
@@ -203,8 +208,8 @@ impl<'f> BtreeTrans<'f> {
     /// Drop everything queued for the next commit: as C's
     /// bch2_trans_reset_updates(), which every commit and begin runs.
     pub(crate) fn reset_updates(&self) {
-        for i in 0..self.nr_updates.get() as usize {
-            unsafe { c::bch2_path_put(self.raw(), (*self.updates.get().add(i)).path, true) };
+        for i in self.queued_updates() {
+            unsafe { c::bch2_path_put(self.raw(), i.path, true) };
         }
 
         self.nr_updates.set(0);
@@ -380,51 +385,32 @@ impl Fs {
 
     /// Each transaction above @cursor (an address) that @pred takes, in
     /// address order, given to @f with the list unlocked - @f's to drop before
-    /// anything that might wait. Printing sleeps, so the list's seqmutex is
-    /// dropped for @f and relocked only if no one took it, else the walk
-    /// starts over: sorted by address, it resumes from @cursor.
+    /// anything that might wait. Printing sleeps, so the list is unlocked for
+    /// @f, and the next is looked for afresh, from @cursor.
     pub fn for_each_trans_from<E>(
         &self,
         cursor: &mut usize,
         pred:   impl Fn(&ListedTrans) -> bool,
         mut f:  impl FnMut(ListedTrans) -> Result<ControlFlow<()>, E>,
     ) -> Result<(), E> {
-        let lock = Locked::from_c(&self.btree.trans.lock);
-        let head = (&raw const self.btree.trans.list).cast_mut();
+        let addr = |t: &BtreeTrans<'_>| ptr::from_ref(t) as usize;
 
-        // SAFETY, throughout: the list, under its lock
-        'restart: loop {
-            let mut guard = lock.lock();
-            unsafe { TransList::from_c(head) }
-                .sort(|a, b| core::ptr::from_ref(a).cmp(&core::ptr::from_ref(b)));
+        while let Some(t) = self.with_trans_list(|list| loop {
+            let trans = list.iter().filter(|t| addr(t) > *cursor).min_by_key(|t| addr(t))?;
+            *cursor = addr(trans);
 
-            let mut pos = unsafe { (*head).next };
-            while pos != head {
-                let trans: *mut BtreeTrans<'_> =
-                    unsafe { pos.byte_sub(core::mem::offset_of!(BtreeTrans<'_>, list)) }.cast();
-
-                if trans as usize > *cursor {
-                    *cursor = trans as usize;
-
-                    let t = unsafe { &(*trans).ref_ }.tryget()
-                        .map(|r| ListedTrans { trans, _ref: r })
-                        .filter(|t| pred(t));
-
-                    if let Some(t) = t {
-                        let seq = guard.unlock();
-                        if f(t)?.is_break() {
-                            return Ok(());
-                        }
-                        match lock.relock(seq) {
-                            Some(g) => guard = g,
-                            None    => continue 'restart,
-                        }
-                    }
-                }
-                pos = unsafe { (*pos).next };
+            let t = trans.ref_.tryget()
+                .map(|r| ListedTrans { trans: ptr::from_ref(trans).cast_mut(), _ref: r })
+                .filter(|t| pred(t));
+            if t.is_some() {
+                return t;
             }
-            return Ok(());
+        }) {
+            if f(t)?.is_break() {
+                break;
+            }
         }
+        Ok(())
     }
 }
 
@@ -517,8 +503,12 @@ impl<'f> TransGuard<'f> {
                      c.flags.get(c::bch_fs_flags::BCH_FS_scrub_journal) ||
                      sched::current() == c.recovery_task.load(Ordering::Relaxed));
 
-        let trans = bch2_trans_alloc(c);
-        let p = trans.as_ptr();
+        let trans = TransGuard { trans: bch2_trans_alloc(c) };
+        #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+        let _ = unsafe {
+            ::pin_init::PinInit::__pinned_init(crate::new_lockdep_map!("bcachefs_btree"),
+                                               &raw mut (*trans.trans.as_ptr()).dep_map)
+        };
 
         /*
          * Warm the known btrees' root pointer cache lines: every btree access in
@@ -535,18 +525,13 @@ impl<'f> TransGuard<'f> {
 
         let stats = (fn_idx < c::BCH_TRANSACTIONS_NR).then(|| &c.btree.trans.stats[fn_idx as usize]);
 
-        unsafe {
-            (*p).fn_idx = fn_idx as u8;
-            if let Some(s) = stats {
-                (*p).fn_ = transaction_fn(fn_idx as usize).map_or(ptr::null(), |f| f.as_ptr().cast());
-                (*p).nr_paths_max = s.nr_max_paths as _;
-            }
-            #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-            let _ = ::pin_init::PinInit::__pinned_init(crate::new_lockdep_map!("bcachefs_btree"), &raw mut (*p).dep_map);
+        let t = &*trans;
+
+        t.fn_idx.set(fn_idx as u8);
+        if let Some(s) = stats {
+            t.fn_.set(transaction_fn(fn_idx as usize).map_or(ptr::null(), |f| f.as_ptr().cast()));
+            t.nr_paths_max.set(s.nr_max_paths as _);
         }
-
-        let t = unsafe { trans.as_ref() };
-
         t.shard_cpu.set(if c.opts().shard_inode_numbers_bits.get() != 0 {
             c.inode_shard_cpu[c.inode_shard_idx() as usize] as i16
         } else {
@@ -575,7 +560,7 @@ impl<'f> TransGuard<'f> {
         t.last_begin_time.set(now);
 
         unsafe { c::closure_init_stack_release(t.ref_.as_ptr()) };
-        TransGuard { trans }
+        trans
     }
 }
 
@@ -622,8 +607,7 @@ impl Drop for TransGuard<'_> {
         {
             let mut paths = t.paths();
 
-            let updates = unsafe { core::slice::from_raw_parts(t.updates.get(), t.nr_updates.get() as usize) };
-            for i in updates {
+            for i in t.queued_updates() {
                 paths.put_ll(i.path, true);
             }
             t.nr_updates.set(0);
@@ -804,7 +788,7 @@ impl BtreeTrans<'_> {
 
         self.maybe_inject_restart(ret_ip)?;
 
-        let s = &c.btree.trans.stats[self.fn_idx as usize];
+        let s = &c.btree.trans.stats[self.fn_idx.get() as usize];
         if new_bytes > s.max_mem {
             let _lock = Locked::from_c(&s.lock).lock();
             // these are the stats' lock's
@@ -948,7 +932,7 @@ impl BtreeTrans<'_> {
 
         if !cfg!(CONFIG_BCACHEFS_NO_LATENCY_ACCT) &&
            time_after64(now, self.last_begin_time.get() + 10) {
-            __bch2_time_stats_update(&c.btree.trans.stats[self.fn_idx as usize].duration,
+            __bch2_time_stats_update(&c.btree.trans.stats[self.fn_idx.get() as usize].duration,
                                      self.last_begin_time.get(), now);
         }
 
@@ -998,8 +982,7 @@ impl BtreeTrans<'_> {
              self.nr_updates.get(), self.fn_name(), self.journal_res.get().seq);
         let mut out = out.indent(2);
 
-        let updates = unsafe { core::slice::from_raw_parts(self.updates.get(), self.nr_updates.get() as usize) };
-        for i in updates {
+        for i in self.queued_updates() {
             let old = BkeySC { k: &i.old_k, v: i.old_v, iter: PhantomData, val: PhantomData };
 
             prt!(out, "update: btree={} cached={} ", i.bits.btree_id(), u32::from(i.bits.cached()));
