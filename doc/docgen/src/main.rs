@@ -156,13 +156,17 @@ fn parse_c_xmacro(source: &str, macro_name: &str) -> Option<Vec<Vec<String>>> {
     None
 }
 
-/// The arms of tagged_union! enum @name, as a C list's entries: name, value,
-/// and the arm's doc comment as a C string. An arm is `/// doc #[..]*
-/// name(Type) [= value]`, a value not written the last's plus one.
-fn parse_tagged_union(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
-    let decl = source.find(&format!("pub enum {name} {{"))?;
-    let tu = source[..decl].rfind("tagged_union! {")?;
-    if source[tu..decl].contains("\n}\n") {
+/// The arms of enum @name as tagged_union! or c_enum! declares it, as a C
+/// list's entries: name, value, the arm's doc comment as a C string, and its
+/// #[flags(..)]. An arm is `/// doc #[..]* name[(Type)] [= value]`, a value
+/// not written the last's plus one.
+fn parse_enum_decl(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
+    let decl = [format!("pub enum {name} {{"), format!("pub enum {name}: ")].iter()
+        .find_map(|d| source.find(d.as_str()))?;
+    let start = ["tagged_union! {", "c_enum! {"].iter()
+        .filter_map(|m| source[..decl].rfind(m))
+        .max()?;
+    if source[start..decl].contains("\n}\n") {
         return None;
     }
     let mut rest = &source[decl..];
@@ -170,6 +174,7 @@ fn parse_tagged_union(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
 
     let mut entries = Vec::new();
     let mut doc: Vec<&str> = Vec::new();
+    let mut flags = String::new();
     let mut next = 0u64;
     loop {
         rest = rest.trim_start();
@@ -182,13 +187,20 @@ fn parse_tagged_union(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
         } else if let Some(r) = rest.strip_prefix("/*") {
             rest = r.split_once("*/")?.1;
         } else if let Some(r) = rest.strip_prefix('#') {
-            rest = skip_group(r)?;
+            let after = skip_group(r)?;
+            if let Some(f) = r[..r.len() - after.len()].strip_prefix("[flags(") {
+                flags = f.trim_end_matches(")]").split_whitespace().collect::<Vec<_>>().join(" ");
+            }
+            rest = after;
         } else if rest.starts_with('}') {
             return Some(entries);
         } else {
-            let paren = rest.find('(')?;
-            let arm = rest[..paren].trim().to_string();
-            rest = skip_group(&rest[paren..])?;
+            let name_end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
+            let arm = rest[..name_end].to_string();
+            rest = rest[name_end..].trim_start();
+            if rest.starts_with('(') {
+                rest = skip_group(rest)?;
+            }
             let end = rest.find([',', '}'])?;
             let value = match rest[..end].trim().strip_prefix('=') {
                 Some(v) => {
@@ -203,7 +215,7 @@ fn parse_tagged_union(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
             next = value + 1;
             rest = rest[end..].strip_prefix(',').unwrap_or(&rest[end..]);
             let doc_str = doc.join(" ").replace('\\', "\\\\").replace('"', "\\\"");
-            entries.push(vec![arm, value.to_string(), format!("\"{doc_str}\"")]);
+            entries.push(vec![arm, value.to_string(), format!("\"{doc_str}\""), core::mem::take(&mut flags)]);
             doc.clear();
         }
     }
@@ -746,10 +758,10 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "btree-ids",
-        macro_name: "BCH_BTREE_IDS",
+        macro_name: "Btree",
         default: None,
-        doc_field: Some(4),
-        flags_field: Some(2),
+        doc_field: Some(2),
+        flags_field: Some(3),
         date_field: None,
         version_field: None,
         pass_flags_field: None,
@@ -827,17 +839,19 @@ const ENUM_LISTS: &[EnumList] = &[
 ];
 
 /// Parse btree-style flags field and return human-readable annotations.
+/// A btree's #[flags(..)], as the docs annotate it.
 fn btree_flags_annotations(flags: &str) -> Vec<&'static str> {
+    let has = |f: &str| flags.split(|c: char| c == ',' || c.is_whitespace()).any(|x| x == f);
     let mut annotations = Vec::new();
-    if flags.contains("BTREE_IS_snapshots") {
+    if has("snapshots") {
         annotations.push("snapshot-aware");
-    } else if flags.contains("BTREE_IS_snapshot_field") {
+    } else if has("snapshot_field") {
         annotations.push("snapshot-field");
     }
-    if flags.contains("BTREE_IS_extents") {
+    if has("extents") {
         annotations.push("extent-based");
     }
-    if flags.contains("BTREE_IS_write_buffer") {
+    if has("write_buffer") {
         annotations.push("write-buffered");
     }
     annotations
@@ -1025,7 +1039,7 @@ fn main() {
     for el in ENUM_LISTS {
         let found = sources.iter().find_map(|(rust, s)| {
             if *rust {
-                parse_c_xmacro(s, el.macro_name).or_else(|| parse_tagged_union(s, el.macro_name))
+                parse_c_xmacro(s, el.macro_name).or_else(|| parse_enum_decl(s, el.macro_name))
             } else {
                 parse_xmacro(s, el.macro_name)
             }

@@ -182,9 +182,9 @@ c_enum! {
 }
 
 /*
- * BKEY_TYPE_extent flags the key types an extents btree may hold - checked
- * against BCH_BTREE_IDS(), which is what says: deleted, which every btree
- * may, and what each BTREE_IS_extents btree allows.
+ * BkeyTypeFlags::extent flags the key types an extents btree may hold -
+ * checked against Btree's, which is what says: deleted, which every btree
+ * may, and what each extents btree #[holds].
  */
 const _: () = {
     let (mut extents_btrees_key_types, mut id) = (0, 0);
@@ -195,7 +195,7 @@ const _: () = {
         id += 1;
     }
     assert!(types_with(BkeyTypeFlags::extent) == extents_btrees_key_types,
-            "BKEY_TYPE_extent isn't on exactly the key types BCH_BTREE_IDS()' extents btrees hold");
+            "BkeyTypeFlags::extent isn't on exactly the key types extents btrees hold");
 };
 
 /// Any key an extents btree may hold, its size nonzero - a range of its btree,

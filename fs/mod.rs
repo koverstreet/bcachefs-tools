@@ -270,7 +270,7 @@ pub mod format;
 pub mod opts;
 
 pub use paste::paste;
-use crate::format::{Btree, CompressionType, DataType, BkeyType};
+use crate::format::{Btree, BtreeFlags, CompressionType, DataType, BkeyType};
 
 pub mod c {
     #![allow(clippy::missing_safety_doc)]
@@ -467,80 +467,65 @@ macro_rules! newtype_enum_aliases {
     (@alias $prefix:ident $name:tt) => {};
 }
 c::BCH_METADATA_VERSIONS!(newtype_enum_aliases [bcachefs_metadata_version, bcachefs_metadata_version, max = bcachefs_metadata_version_max]);
-c::BCH_BTREE_IDS!(newtype_enum_aliases [btree_id, BTREE_ID, nr = BTREE_ID_NR]);
 c::BCH_DATA_TYPES!(newtype_enum_aliases [DataType, BCH_DATA, nr = BCH_DATA_NR]);
 c::BCH_MEMBER_STATES!(newtype_enum_aliases [MemberState, BCH_MEMBER_STATE, nr = BCH_MEMBER_STATE_NR]);
 c::BCH_MEMBER_INITIALIZED_STATES!(newtype_enum_aliases [MemberInitialized, BCH_MEMBER_INITIALIZED, nr = BCH_MEMBER_INITIALIZED_NR]);
 c::BCH_COMPRESSION_TYPES!(newtype_enum_aliases [CompressionType, BCH_COMPRESSION_TYPE, nr = BCH_COMPRESSION_TYPE_NR]);
 c::BCH_SB_COMPAT!(newtype_enum_aliases [bch_sb_compat, BCH_COMPAT, nr = BCH_COMPAT_NR]);
 
-// BCH_BTREE_IDS(): every btree id, and those whose keys are snapshotted - as
-// C's btree_has_snapshots_mask.
-macro_rules! btree_has_snapshots {
-    () => { false };
-    (BTREE_IS_snapshots $($rest:tt)*) => { true };
-    ($first:tt $($rest:tt)*) => { btree_has_snapshots!($($rest)*) };
-}
-macro_rules! btree_has_snapshot_field {
-    () => { false };
-    (BTREE_IS_snapshots $($rest:tt)*) => { true };
-    (BTREE_IS_snapshot_field $($rest:tt)*) => { true };
-    ($first:tt $($rest:tt)*) => { btree_has_snapshot_field!($($rest)*) };
-}
-macro_rules! btree_is_extents {
-    () => { false };
-    (BTREE_IS_extents $($rest:tt)*) => { true };
-    ($first:tt $($rest:tt)*) => { btree_is_extents!($($rest)*) };
-}
-macro_rules! btree_is_data {
-    () => { false };
-    (BTREE_IS_data $($rest:tt)*) => { true };
-    ($first:tt $($rest:tt)*) => { btree_is_data!($($rest)*) };
-}
 macro_rules! btree_ids_known {
-    ($(($name:tt, $nr:literal, $($flag:tt)|+ $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        pub const BTREE_IDS_KNOWN: &[Btree] = &[$(Btree::[<BTREE_ID_ $name>],)*];
-
-        /// Btrees whose keys are snapshotted; mirrors the C btree_has_snapshots_mask.
-        pub const BTREE_HAS_SNAPSHOTS_MASK: u64 =
-            0 $(| if btree_has_snapshots!($($flag)*) { 1u64 << $nr } else { 0 })*;
-
-        /// Btrees whose keys' positions have a snapshot field, snapshotted or
-        /// not; C's btree_has_snapshot_field_mask.
-        pub const BTREE_HAS_SNAPSHOT_FIELD_MASK: u64 =
-            0 $(| if btree_has_snapshot_field!($($flag)*) { 1u64 << $nr } else { 0 })*;
-
-        /// Btrees of extents; C's btree_is_extents_mask.
-        pub const BTREE_IS_EXTENTS_MASK: u64 =
-            0 $(| if btree_is_extents!($($flag)*) { 1u64 << $nr } else { 0 })*;
-
-        /// Btrees whose keys point to data; C's btree_has_data_ptrs_mask.
-        pub const BTREE_HAS_DATA_PTRS_MASK: u64 =
-            0 $(| if btree_is_data!($($flag)*) { 1u64 << $nr } else { 0 })*;
-    } };
+    ($(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
+        pub const BTREE_IDS_KNOWN: &[Btree] = &[$(Btree::$name,)*];
+    };
 }
-c::BCH_BTREE_IDS!(btree_ids_known);
+c::Btree_arms!(btree_ids_known);
+
+/// The btrees with any of @flags, a bit each, by id.
+pub const fn btrees_with(flags: BtreeFlags) -> u64 {
+    let (mut mask, mut i) = (0, 0);
+    while i < Btree::nr.0 {
+        if Btree(i).flags().intersects(flags) {
+            mask |= 1 << i;
+        }
+        i += 1;
+    }
+    mask
+}
+
+/// Btrees whose keys are snapshotted; C's btree_has_snapshots_mask.
+pub const BTREE_HAS_SNAPSHOTS_MASK: u64 = btrees_with(BtreeFlags::snapshots);
+
+/// Btrees whose keys' positions have a snapshot field, snapshotted or not;
+/// C's btree_has_snapshot_field_mask.
+pub const BTREE_HAS_SNAPSHOT_FIELD_MASK: u64 =
+    btrees_with(BtreeFlags::snapshots.union(BtreeFlags::snapshot_field));
+
+/// Btrees of extents; C's btree_is_extents_mask.
+pub const BTREE_IS_EXTENTS_MASK: u64 = btrees_with(BtreeFlags::extents);
+
+/// Btrees whose keys point to data; C's btree_has_data_ptrs_mask.
+pub const BTREE_HAS_DATA_PTRS_MASK: u64 = btrees_with(BtreeFlags::data);
 
 impl Btree {
     /// Whether its keys are extents, covering ranges: btree_id_is_extents().
-    pub fn is_extents(self) -> bool {
-        self.0 < 64 && BTREE_IS_EXTENTS_MASK & (1 << self.0) != 0
+    pub const fn is_extents(self) -> bool {
+        self.flags().contains(BtreeFlags::extents)
     }
 
     /// Whether its keys are snapshotted: btree_type_has_snapshots().
-    pub fn has_snapshots(self) -> bool {
-        self.0 < 64 && BTREE_HAS_SNAPSHOTS_MASK & (1 << self.0) != 0
+    pub const fn has_snapshots(self) -> bool {
+        self.flags().contains(BtreeFlags::snapshots)
     }
 
     /// Whether its keys' positions have a snapshot field:
     /// btree_type_has_snapshot_field().
-    pub fn has_snapshot_field(self) -> bool {
-        self.0 < 64 && BTREE_HAS_SNAPSHOT_FIELD_MASK & (1 << self.0) != 0
+    pub const fn has_snapshot_field(self) -> bool {
+        self.flags().intersects(BtreeFlags::snapshots.union(BtreeFlags::snapshot_field))
     }
 
     /// Whether its keys point to data: btree_type_has_data_ptrs().
-    pub fn has_data_ptrs(self) -> bool {
-        self.0 < 64 && BTREE_HAS_DATA_PTRS_MASK & (1 << self.0) != 0
+    pub const fn has_data_ptrs(self) -> bool {
+        self.flags().contains(BtreeFlags::data)
     }
 }
 

@@ -349,7 +349,7 @@ c_enum! {
         BKEY_TYPE_generic             = 1 << 0,
         /* Its value has pointers - extent entries: bch2_bkey_ptrs_c()'s types */
         BKEY_TYPE_ptrs                = 1 << 1,
-        /* An extents btree may hold it - deleted, and what BCH_BTREE_IDS() allows them */
+        /* An extents btree may hold it - deleted, and what each #[holds] */
         BKEY_TYPE_extent              = 1 << 2,
         /* An indirect extent - refcounted, in the reflink btree: what a reflink_p points to */
         BKEY_TYPE_indirect            = 1 << 3,
@@ -663,6 +663,7 @@ vstruct!(unsized bch_sb_field, u64s, start = 0);
 c_enum! {
     #[flags]
     #[c_name(btree_id_flags)]
+    #[prefix(BTREE_IS_)]
     pub enum BtreeFlags: u32 {
         BTREE_IS_extents = 1 << 0,
         BTREE_IS_snapshots = 1 << 1,
@@ -674,175 +675,126 @@ c_enum! {
     }
 }
 
-c_xmacro! {
-    BCH_BTREE_IDS(x) {
-        (extents,               0,
-         BTREE_IS_extents |
-         BTREE_IS_snapshots |
-         BTREE_IS_data |
-         BTREE_IS_trans_triggers,
-         BIT_ULL(KEY_TYPE_whiteout) |
-         BIT_ULL(KEY_TYPE_extent_whiteout) |
-         BIT_ULL(KEY_TYPE_error) |
-         BIT_ULL(KEY_TYPE_cookie) |
-         BIT_ULL(KEY_TYPE_extent) |
-         BIT_ULL(KEY_TYPE_reservation) |
-         BIT_ULL(KEY_TYPE_reflink_p) |
-         BIT_ULL(KEY_TYPE_inline_data) |
-         BIT_ULL(KEY_TYPE_inline_data_v2),
-         "File data extent pointers and reservations"),
-        (inodes,                1,
-         BTREE_IS_snapshots |
-         BTREE_IS_trans_triggers |
-         BTREE_IS_atomic_triggers,
-         BIT_ULL(KEY_TYPE_whiteout) |
-         BIT_ULL(KEY_TYPE_inode) |
-         BIT_ULL(KEY_TYPE_inode_v2) |
-         BIT_ULL(KEY_TYPE_inode_v3) |
-         BIT_ULL(KEY_TYPE_inode_generation),
-         "Inode metadata"),
-        (dirents,               2,
-         BTREE_IS_snapshots,
-         BIT_ULL(KEY_TYPE_whiteout) |
-         BIT_ULL(KEY_TYPE_hash_whiteout) |
-         BIT_ULL(KEY_TYPE_dirent),
-         "Directory entries"),
-        (xattrs,                3,
-         BTREE_IS_snapshots,
-         BIT_ULL(KEY_TYPE_whiteout) |
-         BIT_ULL(KEY_TYPE_cookie) |
-         BIT_ULL(KEY_TYPE_hash_whiteout) |
-         BIT_ULL(KEY_TYPE_xattr),
-         "Extended attributes"),
-        (alloc,                 4,
-         BTREE_IS_trans_triggers |
-         BTREE_IS_atomic_triggers,
-         BIT_ULL(KEY_TYPE_alloc) |
-         BIT_ULL(KEY_TYPE_alloc_v2) |
-         BIT_ULL(KEY_TYPE_alloc_v3) |
-         BIT_ULL(KEY_TYPE_alloc_v4),
-         "Bucket allocation state"),
-        (quotas,                5,  0,
-         BIT_ULL(KEY_TYPE_quota),
-         "User, group, and project quota counters"),
-        (stripes,               6,
-         BTREE_IS_data |
-         BTREE_IS_trans_triggers |
-         BTREE_IS_atomic_triggers,
-         BIT_ULL(KEY_TYPE_stripe),
-         "Erasure coding stripe descriptors"),
-        (reflink,               7,
-         BTREE_IS_extents |
-         BTREE_IS_data |
-         BTREE_IS_trans_triggers,
-         BIT_ULL(KEY_TYPE_reflink_v) |
-         BIT_ULL(KEY_TYPE_indirect_inline_data) |
-         BIT_ULL(KEY_TYPE_indirect_inline_data_v2) |
-         BIT_ULL(KEY_TYPE_error),
-         "Reflink shared extent pointers"),
-        (subvolumes,            8,
-         BTREE_IS_trans_triggers,
-         BIT_ULL(KEY_TYPE_subvolume),
-         "Subvolume metadata"),
-        (snapshots,             9,
-         BTREE_IS_trans_triggers |
-         BTREE_IS_atomic_triggers,
-         BIT_ULL(KEY_TYPE_snapshot),
-         "Snapshot tree structure"),
-        (lru,                   10,
-         BTREE_IS_write_buffer,
-         BIT_ULL(KEY_TYPE_set),
-         "Least-recently-used tracking for cache eviction"),
-        (freespace,             11,
-         BTREE_IS_extents,
-         BIT_ULL(KEY_TYPE_set),
-         "Free space index"),
-        (need_discard,          12,
-         BTREE_IS_write_buffer,
-         BIT_ULL(KEY_TYPE_set),
-         "Buckets waiting for discard/TRIM"),
-        (backpointers,          13,
-         BTREE_IS_snapshot_field |
-         BTREE_IS_write_buffer,
-         BIT_ULL(KEY_TYPE_backpointer),
-         "Reverse pointers from data extents back to btree nodes"),
-        (bucket_gens,           14, 0,
-         BIT_ULL(KEY_TYPE_bucket_gens),
-         "Bucket generation numbers for stale pointer detection"),
-        (snapshot_trees,        15, 0,
-         BIT_ULL(KEY_TYPE_snapshot_tree),
-         "Snapshot tree roots"),
-        (deleted_inodes,        16,
-         BTREE_IS_snapshot_field |
-         BTREE_IS_write_buffer,
-         BIT_ULL(KEY_TYPE_set),
-         "Inodes pending deletion"),
-        (logged_ops,            17, 0,
-         BIT_ULL(KEY_TYPE_logged_op_truncate) |
-         BIT_ULL(KEY_TYPE_logged_op_finsert) |
-         BIT_ULL(KEY_TYPE_logged_op_stripe_update) |
-         BIT_ULL(KEY_TYPE_logged_op_inode_opt_propagate) |
-         BIT_ULL(KEY_TYPE_inode_alloc_cursor),
-         "In-progress logged operations for crash recovery"),
-        (reconcile_work,        18,
-         BTREE_IS_snapshot_field |
-         BTREE_IS_write_buffer,
-         BIT_ULL(KEY_TYPE_set) | BIT_ULL(KEY_TYPE_cookie),
-         "Reconcile work items"),
-        (subvolume_children,    19, 0,
-         BIT_ULL(KEY_TYPE_set),
-         "Subvolume parent-child relationships"),
-        (accounting,            20,
-         BTREE_IS_snapshot_field |
-         BTREE_IS_write_buffer,
-         BIT_ULL(KEY_TYPE_accounting),
-         "Space accounting by replicas and disk groups"),
-        (reconcile_hipri,       21,
-         BTREE_IS_snapshot_field |
-         BTREE_IS_write_buffer,
-         BIT_ULL(KEY_TYPE_set),
-         "High-priority reconcile work items"),
-        (reconcile_pending,     22,
-         BTREE_IS_snapshot_field |
-         BTREE_IS_write_buffer,
-         BIT_ULL(KEY_TYPE_set),
-         "Pending reconcile work items"),
-        (reconcile_scan,        23, 0,
-         BIT_ULL(KEY_TYPE_cookie) |
-         BIT_ULL(KEY_TYPE_backpointer),
-         "Reconcile scan state"),
-        (reconcile_work_phys,   24,
-         BTREE_IS_snapshot_field |
-         BTREE_IS_write_buffer,
-         BIT_ULL(KEY_TYPE_set),
-         "Physical reconcile work items"),
-        (reconcile_hipri_phys,  25,
-         BTREE_IS_snapshot_field |
-         BTREE_IS_write_buffer,
-         BIT_ULL(KEY_TYPE_set),
-         "Physical high-priority reconcile work items"),
-        (bucket_to_stripe,      26, 0,
-         BIT_ULL(KEY_TYPE_set),
-         "Bucket to stripe mapping for erasure coding"),
-        (stripe_backpointers,   27,
-         BTREE_IS_write_buffer,
-         BIT_ULL(KEY_TYPE_backpointer),
-         "Stripe backpointers"),
-        (damage,                28,
-         BTREE_IS_snapshots,
-         BIT_ULL(KEY_TYPE_whiteout) |
-         BIT_ULL(KEY_TYPE_damage),
-         "Inodes damaged by errors and repairs"),
-    }
-}
-
 c_enum! {
     #[open]
     #[own_to_text]
     #[c_name(btree_id)]
+    #[prefix(BTREE_ID_)]
+    #[nr(BTREE_ID_NR)]
+    #[arm_columns(flags: BtreeFlags, holds: set(BkeyType))]
+    #[c_list(BCH_BTREE_IDS)]
     pub enum Btree: u32 {
-        BCH_BTREE_IDS(name, nr, ..) => concat(BTREE_ID_, name) = nr,
-        BTREE_ID_NR,
+        /// File data extent pointers and reservations
+        #[flags(extents, snapshots, data, trans_triggers)]
+        #[holds(whiteout, extent_whiteout, error, cookie, extent, reservation, reflink_p,
+                inline_data, inline_data_v2)]
+        extents = 0,
+        /// Inode metadata
+        #[flags(snapshots, trans_triggers, atomic_triggers)]
+        #[holds(whiteout, inode, inode_v2, inode_v3, inode_generation)]
+        inodes = 1,
+        /// Directory entries
+        #[flags(snapshots)]
+        #[holds(whiteout, hash_whiteout, dirent)]
+        dirents = 2,
+        /// Extended attributes
+        #[flags(snapshots)]
+        #[holds(whiteout, cookie, hash_whiteout, xattr)]
+        xattrs = 3,
+        /// Bucket allocation state
+        #[flags(trans_triggers, atomic_triggers)]
+        #[holds(alloc, alloc_v2, alloc_v3, alloc_v4)]
+        alloc = 4,
+        /// User, group, and project quota counters
+        #[holds(quota)]
+        quotas = 5,
+        /// Erasure coding stripe descriptors
+        #[flags(data, trans_triggers, atomic_triggers)]
+        #[holds(stripe)]
+        stripes = 6,
+        /// Reflink shared extent pointers
+        #[flags(extents, data, trans_triggers)]
+        #[holds(reflink_v, indirect_inline_data, indirect_inline_data_v2, error)]
+        reflink = 7,
+        /// Subvolume metadata
+        #[flags(trans_triggers)]
+        #[holds(subvolume)]
+        subvolumes = 8,
+        /// Snapshot tree structure
+        #[flags(trans_triggers, atomic_triggers)]
+        #[holds(snapshot)]
+        snapshots = 9,
+        /// Least-recently-used tracking for cache eviction
+        #[flags(write_buffer)]
+        #[holds(set)]
+        lru = 10,
+        /// Free space index
+        #[flags(extents)]
+        #[holds(set)]
+        freespace = 11,
+        /// Buckets waiting for discard/TRIM
+        #[flags(write_buffer)]
+        #[holds(set)]
+        need_discard = 12,
+        /// Reverse pointers from data extents back to btree nodes
+        #[flags(snapshot_field, write_buffer)]
+        #[holds(backpointer)]
+        backpointers = 13,
+        /// Bucket generation numbers for stale pointer detection
+        #[holds(bucket_gens)]
+        bucket_gens = 14,
+        /// Snapshot tree roots
+        #[holds(snapshot_tree)]
+        snapshot_trees = 15,
+        /// Inodes pending deletion
+        #[flags(snapshot_field, write_buffer)]
+        #[holds(set)]
+        deleted_inodes = 16,
+        /// In-progress logged operations for crash recovery
+        #[holds(logged_op_truncate, logged_op_finsert, logged_op_stripe_update,
+                logged_op_inode_opt_propagate, inode_alloc_cursor)]
+        logged_ops = 17,
+        /// Reconcile work items
+        #[flags(snapshot_field, write_buffer)]
+        #[holds(set, cookie)]
+        reconcile_work = 18,
+        /// Subvolume parent-child relationships
+        #[holds(set)]
+        subvolume_children = 19,
+        /// Space accounting by replicas and disk groups
+        #[flags(snapshot_field, write_buffer)]
+        #[holds(accounting)]
+        accounting = 20,
+        /// High-priority reconcile work items
+        #[flags(snapshot_field, write_buffer)]
+        #[holds(set)]
+        reconcile_hipri = 21,
+        /// Pending reconcile work items
+        #[flags(snapshot_field, write_buffer)]
+        #[holds(set)]
+        reconcile_pending = 22,
+        /// Reconcile scan state
+        #[holds(cookie, backpointer)]
+        reconcile_scan = 23,
+        /// Physical reconcile work items
+        #[flags(snapshot_field, write_buffer)]
+        #[holds(set)]
+        reconcile_work_phys = 24,
+        /// Physical high-priority reconcile work items
+        #[flags(snapshot_field, write_buffer)]
+        #[holds(set)]
+        reconcile_hipri_phys = 25,
+        /// Bucket to stripe mapping for erasure coding
+        #[holds(set)]
+        bucket_to_stripe = 26,
+        /// Stripe backpointers
+        #[flags(write_buffer)]
+        #[holds(backpointer)]
+        stripe_backpointers = 27,
+        /// Inodes damaged by errors and repairs
+        #[flags(snapshots)]
+        #[holds(whiteout, damage)]
+        damage = 28,
     }
 }
 

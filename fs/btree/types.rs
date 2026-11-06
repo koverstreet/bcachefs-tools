@@ -34,7 +34,7 @@ use pin_init::{pin_data, PinInit};
 use nestify::nest;
 #[cfg(feature = "std")]
 use std::str::FromStr;
-use crate::format::{Bpos, Btree, BkeyType};
+use crate::format::{Bpos, Btree, BtreeFlags, BkeyType};
 
 /* Btree nodes: */
 
@@ -1177,14 +1177,9 @@ c_enum! {
     #[prefix(BKEY_TYPE_)]
     pub enum BtreeNodeType: u32 {
         BKEY_TYPE_btree,
-        BCH_BTREE_IDS(kwd, val, ..) => concat(BKEY_TYPE_, kwd) = (val as u32) + 1,
+        Btree_arms(kwd, val, ..) => concat(BKEY_TYPE_, kwd) = (val as u32) + 1,
         BKEY_TYPE_NR,
     }
-}
-
-/// BCH_BTREE_IDS()' rows, selected, as a mask by id.
-macro_rules! btree_ids_mask {
-    ($(($name:ident, $nr:literal $(, $($rest:tt)*)?)),* $(,)?) => { 0u64 $(| 1 << $nr)* };
 }
 
 /*
@@ -1194,10 +1189,8 @@ macro_rules! btree_ids_mask {
  * nodes do, for their pointers.
  */
 const TRANS_TRIGGERS: u64 = 1 << BtreeNodeType::btree.0 |
-    (c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_trans_triggers => btree_ids_mask]) |
-     c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_snapshots => btree_ids_mask])) << 1;
-const ATOMIC_TRIGGERS: u64 =
-    c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_atomic_triggers => btree_ids_mask]) << 1;
+    crate::btrees_with(BtreeFlags::trans_triggers.union(BtreeFlags::snapshots)) << 1;
+const ATOMIC_TRIGGERS: u64 = crate::btrees_with(BtreeFlags::atomic_triggers) << 1;
 
 /// An update's node type - which may be a btree's this code doesn't know - in
 /// @mask.
@@ -1219,32 +1212,22 @@ impl btree_insert_entry {
     }
 }
 
-/// BCH_BTREE_IDS()' key types, by id: deleted, which every btree may hold,
-/// and each's own - a bit each, by number.
-macro_rules! btree_key_types {
-    ($(($name:tt, $nr:literal, $($flag:tt)|+, $(BIT_ULL($t:ident))|+ $(, $($rest:tt)*)?)),* $(,)?) => {
-        const BTREE_KEY_TYPES: [u64; c::BTREE_ID_NR as usize] = {
-            let mut t = [0; c::BTREE_ID_NR as usize];
-            $(t[$nr] = 1 << BkeyType::deleted.0 $(| 1 << BkeyType::$t.0)+;)*
-            t
-        };
-    };
-}
-c::BCH_BTREE_IDS!(btree_key_types);
-
 impl Btree {
-    /// The key types it may hold, a bit each: bch2_key_types_allowed[].
+    /// The key types it may hold, a bit each - deleted, which every btree
+    /// may, and its own: bch2_key_types_allowed[]. 0 for a btree this code
+    /// doesn't know.
     pub const fn key_types(self) -> u64 {
-        if (self.0 as usize) < BTREE_KEY_TYPES.len() { BTREE_KEY_TYPES[self.0 as usize] } else { 0 }
+        if self.0 < Self::nr.0 {
+            self.holds() | 1 << BkeyType::deleted.0
+        } else {
+            0
+        }
     }
 
     /// Whether it's an extents btree with snapshots:
     /// btree_id_is_extents_snapshots().
     pub const fn is_extents_snapshots(self) -> bool {
-        const MASK: u64 =
-            c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_extents => btree_ids_mask]) &
-            c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_snapshots => btree_ids_mask]);
-        self.0 < 64 && MASK & (1 << self.0) != 0
+        self.flags().contains(BtreeFlags::extents.union(BtreeFlags::snapshots))
     }
 
     /// Convert from raw u32. Returns None for unknown built-in btree IDs.
