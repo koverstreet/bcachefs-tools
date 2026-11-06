@@ -31,7 +31,7 @@ use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_gt, bkey_lt, pos, BkeyFamily, BkeyI, BkeyS, BkeySC,
                          BkeyV, BkeyVMut, ByFlag, FamilyVal, FieldOffsets, POS_MAX, POS_MIN};
-use crate::btree::bkey_methods::TriggerOp;
+use crate::btree::bkey_methods::{BkeyOps, Trigger, TriggerOp};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
@@ -411,6 +411,61 @@ fn reflink_p_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                       "idx < front_pad ({} < {})", p.idx(), p.front_pad.get())
 }
 
+impl BkeyOps for c::ReflinkP {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        reflink_p_validate(v)
+    }
+
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        let p = k.arm::<c::ReflinkP>().expect("a reflink_p").v();
+
+        write!(out, "idx {} front_pad {} back_pad {}", p.idx(), p.front_pad.get(), p.back_pad.get());
+
+        if p.error() {
+            write!(out, " error");
+        }
+
+        if p.may_update_options() {
+            write!(out, " may_update_opts");
+        }
+    }
+
+    #[allow(unreachable_code, unused_variables, unused_mut)]
+    fn merge(_fs: &Fs, mut l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
+        /*
+         * Disabled for now, the triggers code needs to be reworked for merging
+         * of reflink pointers to work:
+         */
+        return false;
+
+        let (l_idx, l_error) = {
+            let l = l.arm::<c::ReflinkP>().expect("a reflink_p");
+            (l.v().idx(), l.v().error())
+        };
+        let r_p = r.arm::<c::ReflinkP>().expect("a reflink_p").v();
+
+        if l_idx + l.k.size as u64 != r_p.idx() {
+            return false;
+        }
+
+        if l_error != r_p.error() {
+            return false;
+        }
+
+        l.k.resize(l.k.size + r.k.size);
+        true
+    }
+
+    fn check_repair(t: &TransAttempt<'_, '_>, _iter: &BtreeIter<'_>, _btree: Btree, _level: u32,
+                    k: BkeySC<'_>) -> Result<(), BchError> {
+        let p = k.arm::<c::ReflinkP>().expect("a reflink_p");
+        gc_idx(t, p, p.refd(), UpdateTriggerFlags::empty(), true)
+    }
+
+    const TRIGGER: Option<&'static Trigger> = Some(&REFLINK_P);
+}
+
 #[c_export]
 pub fn bch2_reflink_p_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
     -> c_int
@@ -420,45 +475,13 @@ pub fn bch2_reflink_p_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_val
 
 #[cold]
 #[c_export]
-pub fn bch2_reflink_p_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
-    let p = k.arm::<c::ReflinkP>().expect("a reflink_p").v();
-
-    write!(out, "idx {} front_pad {} back_pad {}", p.idx(), p.front_pad.get(), p.back_pad.get());
-
-    if p.error() {
-        write!(out, " error");
-    }
-
-    if p.may_update_options() {
-        write!(out, " may_update_opts");
-    }
+pub fn bch2_reflink_p_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
+    <c::ReflinkP as BkeyOps>::to_text(out, Some(Fs::from_c(c)), k)
 }
 
-#[allow(unreachable_code, unused_variables, unused_mut)]
 #[c_export]
-pub fn bch2_reflink_p_merge(_c: &Opaque<Fs>, mut l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
-    /*
-     * Disabled for now, the triggers code needs to be reworked for merging
-     * of reflink pointers to work:
-     */
-    return false;
-
-    let (l_idx, l_error) = {
-        let l = l.arm::<c::ReflinkP>().expect("a reflink_p");
-        (l.v().idx(), l.v().error())
-    };
-    let r_p = r.arm::<c::ReflinkP>().expect("a reflink_p").v();
-
-    if l_idx + l.k.size as u64 != r_p.idx() {
-        return false;
-    }
-
-    if l_error != r_p.error() {
-        return false;
-    }
-
-    l.k.resize(l.k.size + r.k.size);
-    true
+pub fn bch2_reflink_p_merge(c: &Opaque<Fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
+    <c::ReflinkP as BkeyOps>::merge(Fs::from_c(c), l, r)
 }
 
 // ── indirect extents ─────────────────────────────────────────────────────
@@ -482,12 +505,27 @@ pub fn bch2_reflink_v_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_val
     ret_to_c(reflink_v_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
+impl BkeyOps for c::ReflinkV {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        reflink_v_validate(v)
+    }
+
+    #[cold]
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        write!(out, "refcount: {} ", k.arm::<Indirect>().expect("a reflink_v").refcount().get());
+
+        crate::data::ptrs::bkey_ptrs_to_text(out, fs, k);
+    }
+
+    crate::data::ptrs::ptrs_ops!();
+
+    const TRIGGER: Option<&'static Trigger> = Some(&REFLINK_V);
+}
+
 #[cold]
 #[c_export]
 pub fn bch2_reflink_v_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    write!(out, "refcount: {} ", k.arm::<Indirect>().expect("a reflink_v").refcount().get());
-
-    crate::data::ptrs::bkey_ptrs_to_text(out, Some(Fs::from_c(c)), k);
+    <c::ReflinkV as BkeyOps>::to_text(out, Some(Fs::from_c(c)), k)
 }
 
 /*
@@ -510,10 +548,27 @@ pub fn bch2_indirect_inline_data_validate(c: &Opaque<Fs>, k: BkeySC<'_>,
 }
 
 #[cold]
-#[c_export]
-pub fn bch2_indirect_inline_data_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
+fn indirect_inline_data_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
     write!(out, "refcount {} ", k.arm::<Indirect>().expect("indirect inline data").refcount().get());
     InlineDataRef::of(k).expect("inline data").to_text(out);
+}
+
+impl BkeyOps for c::IndirectInlineData {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        indirect_pos_validate(v)
+    }
+
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        indirect_inline_data_to_text(out, fs, k)
+    }
+
+    const TRIGGER: Option<&'static Trigger> = Some(&INDIRECT_INLINE_DATA);
+}
+
+#[cold]
+#[c_export]
+pub fn bch2_indirect_inline_data_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
+    indirect_inline_data_to_text(out, Some(Fs::from_c(c)), k)
 }
 
 // ── lookup ───────────────────────────────────────────────────────────────
@@ -774,20 +829,19 @@ fn trigger_reflink_p(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result
 }
 
 crate::key_trigger!(bch2_trigger_reflink_p => trigger_reflink_p);
+static REFLINK_P: Trigger = Trigger(trigger_reflink_p);
 
 #[c_export]
 pub fn bch2_reflink_p_check_repair<'t>(
-    trans:  &'t BtreeTrans<'t>,
-    _iter:  &mut BtreeIter<'t>,
-    _btree: Btree,
-    _level: c_uint,
-    k:      BkeySC<'_>,
+    trans: &'t BtreeTrans<'t>,
+    iter:  &mut BtreeIter<'t>,
+    btree: Btree,
+    level: c_uint,
+    k:     BkeySC<'_>,
 ) -> c_int {
-    let p = k.arm::<c::ReflinkP>().expect("a reflink_p");
-
     // SAFETY: C calls check_repair in an attempt
     let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(gc_idx(&t, p, p.refd(), UpdateTriggerFlags::empty(), true))
+    ret_to_c(<c::ReflinkP as BkeyOps>::check_repair(&t, iter, btree, level, k))
 }
 
 // ── indirect extent trigger ──────────────────────────────────────────────
@@ -812,6 +866,7 @@ fn trigger_reflink_v(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result
 }
 
 crate::key_trigger!(bch2_trigger_reflink_v => trigger_reflink_v);
+static REFLINK_V: Trigger = Trigger(trigger_reflink_v);
 
 fn trigger_indirect_inline_data(_t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
     check_indirect_extent_deleting(op);
@@ -819,6 +874,7 @@ fn trigger_indirect_inline_data(_t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_
 }
 
 crate::key_trigger!(bch2_trigger_indirect_inline_data => trigger_indirect_inline_data);
+static INDIRECT_INLINE_DATA: Trigger = Trigger(trigger_indirect_inline_data);
 
 // ── create ───────────────────────────────────────────────────────────────
 

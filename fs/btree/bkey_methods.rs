@@ -31,7 +31,8 @@
 
 use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
-use crate::btree::iter::{NoRoom, TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, NoRoom, TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::init::error::BkeyValidate;
 use crate::c;
 use crate::util::Printbuf;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
@@ -383,4 +384,109 @@ macro_rules! key_trigger {
             $crate::errcode::ret_to_c($trigger(&t, &mut op))
         }
     };
+}
+
+/// A key type's methods, on its value's type: each a no-op where the type
+/// has none - what bkey_ops was.
+pub trait BkeyOps {
+    fn validate(_v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        Ok(())
+    }
+
+    /// The value, which may not have validated: printing one that didn't is
+    /// the point - only its minimum size is checked first.
+    fn to_text(_out: &mut Printbuf, _fs: Option<&Fs>, _k: BkeySC<'_>) {}
+
+    /// Its fields byte swapped, read from a filesystem of the other endianness.
+    fn swab(_fs: Option<&Fs>, _k: BkeyS<'_>) {}
+
+    /// @r merged into @l, which it follows - false if it can't be.
+    fn merge(_fs: &Fs, _l: BkeyS<'_>, _r: BkeySC<'_>) -> bool {
+        false
+    }
+
+    /// An older version's value made the current one, on read, or the other
+    /// way on write.
+    fn compat(_btree: Btree, _version: c::bcachefs_metadata_version, _big_endian: bool, _write: bool,
+              _k: BkeyS<'_>) {}
+
+    fn check_repair(_t: &TransAttempt<'_, '_>, _iter: &BtreeIter<'_>, _btree: Btree, _level: u32,
+                    _k: BkeySC<'_>) -> Result<(), BchError> {
+        Ok(())
+    }
+
+    const TRIGGER: Option<&'static Trigger> = None;
+}
+
+/// A key type's trigger - a static: types share a trigger, and an update from
+/// one to another of them runs it once, with both keys, so it's compared by
+/// address, which a static's is unique to it and a fn's isn't.
+pub struct Trigger(pub fn(&TransAttempt<'_, '_>, &mut TriggerOp<'_>) -> Result<(), BchError>);
+
+/// A key type's BkeyOps, as its KeyType row has them.
+#[derive(Clone, Copy)]
+pub struct Ops {
+    pub validate:     fn(&BkeyValidate<'_, '_>) -> Result<(), BchError>,
+    pub to_text:      fn(&mut Printbuf, Option<&Fs>, BkeySC<'_>),
+    pub swab:         fn(Option<&Fs>, BkeyS<'_>),
+    pub merge:        fn(&Fs, BkeyS<'_>, BkeySC<'_>) -> bool,
+    pub compat:       fn(Btree, c::bcachefs_metadata_version, bool, bool, BkeyS<'_>),
+    pub check_repair: fn(&TransAttempt<'_, '_>, &BtreeIter<'_>, Btree, u32, BkeySC<'_>) -> Result<(), BchError>,
+    pub trigger:      Option<&'static Trigger>,
+}
+
+/// A value that's nothing but its key: hash_whiteout's, set's.
+fn empty_val_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+    let n = v.k.k.val_bytes();
+    crate::bkey_fsck_err_on!(v, n != 0, crate::init::error::id::bkey_val_size_nonzero,
+                             "incorrect value size ({n} != 0)")
+}
+
+impl BkeyOps for c::Deleted {}
+impl BkeyOps for c::Whiteout {}
+impl BkeyOps for c::ExtentWhiteout {}
+
+impl BkeyOps for c::Error {
+    /// Why it's an error: none in a value from before there was a reason.
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        let err = k.val_bytes().get(core::mem::offset_of!(c::Error, repr.err)).copied().unwrap_or(0);
+        crate::util::ToText::to_text(&c::bch_key_type_errors(err.into()), out)
+    }
+}
+
+impl BkeyOps for c::Cookie {
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        crate::prt!(out, "{}", k.arm::<c::Cookie>().expect("a cookie").v().cookie.get());
+    }
+}
+
+impl BkeyOps for c::HashWhiteout {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        empty_val_validate(v)
+    }
+}
+
+impl BkeyOps for c::Set {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        empty_val_validate(v)
+    }
+
+    fn merge(_fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
+        l.k.resize(l.k.size + r.k.size);
+        true
+    }
+}
+
+pub const fn ops<T: BkeyOps>() -> Ops {
+    Ops {
+        validate:     T::validate,
+        to_text:      T::to_text,
+        swab:         T::swab,
+        merge:        T::merge,
+        compat:       T::compat,
+        check_repair: T::check_repair,
+        trigger:      T::TRIGGER,
+    }
 }

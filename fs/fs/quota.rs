@@ -162,9 +162,24 @@ pub fn bch2_quota_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validat
     ret_to_c(validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
+impl crate::btree::bkey_methods::BkeyOps for c::Quota {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        validate(v)
+    }
+
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        quota_to_text(out, fs, k)
+    }
+}
+
 #[cold]
 #[c_export]
-pub fn bch2_quota_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
+pub fn bch2_quota_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
+    quota_to_text(out, Some(Fs::from_c(c)), k)
+}
+
+#[cold]
+fn quota_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
     let q = c::Quota::val_copy_pad(k).expect("a quota");
 
     for (c, counter) in q.c.iter().zip(COUNTERS) {

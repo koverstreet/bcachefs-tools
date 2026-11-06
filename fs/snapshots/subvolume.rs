@@ -20,7 +20,7 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
 use crate::util::vstructs::{Validated, Whole};
-use crate::btree::bkey_methods::TriggerOp;
+use crate::btree::bkey_methods::{BkeyOps, Trigger, TriggerOp};
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
     commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, KeyFn,
@@ -342,13 +342,26 @@ pub fn bch2_subvolume_validate(
     ret_to_c(validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
+impl BkeyOps for c::Subvolume {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        validate(v)
+    }
+
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        subvolume_to_text(out, fs, k)
+    }
+
+    const TRIGGER: Option<&'static Trigger> = Some(&SUBVOLUME);
+}
+
 #[cold]
 #[c_export]
-pub fn bch2_subvolume_to_text(
-    out: &mut Printbuf,
-    _c:  &Opaque<Fs>,
-    k:   BkeySC<'_>,
-) {
+pub fn bch2_subvolume_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
+    subvolume_to_text(out, Some(Fs::from_c(c)), k)
+}
+
+#[cold]
+fn subvolume_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
     let s = val(k).expect("a subvolume");
 
     write!(out, "root {} snapshot id {}", s.inode.get(), s.snapshot.get());
@@ -412,6 +425,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError>
 }
 
 crate::key_trigger!(bch2_subvolume_trigger => trigger);
+static SUBVOLUME: Trigger = Trigger(|t, op| trigger(t, op));
 
 // ── fsck ─────────────────────────────────────────────────────────────────
 

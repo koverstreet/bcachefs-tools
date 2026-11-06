@@ -43,7 +43,7 @@ use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC, Typed, POS_
 use crate::init::passes;
 use crate::util::varint;
 use core::mem::{offset_of, align_of};
-use crate::btree::bkey_methods::TriggerOp;
+use crate::btree::bkey_methods::{BkeyOps, Trigger, TriggerOp};
 use crate::init::progress::Progress;
 use crate::{bch_verbose_ratelimited, fs_inconsistent, fsck_err, fsck_err_on};
 use crate::btree::iter::{
@@ -898,41 +898,41 @@ fn validate_c(
     ret_to_c(validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
-/// For C's bkey_ops: bch2_inode_validate().
-#[c_export]
-pub fn bch2_inode_validate(
-    c:    &Opaque<Fs>,
-    k:    BkeySC<'_>,
-    from: &c::bkey_validate_context,
-) -> core::ffi::c_int {
-    validate_c(c, k, from, |v| {
+#[cold]
+fn inode_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    let inode = unpack(fs.expect("a filesystem: an inode is unpacked with its options"), k);
+    fields_to_text(out, &inode)
+}
+
+impl BkeyOps for c::Inode {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         validate_str_hash(v, v.k.arm::<c::Inode>().expect("an inode").v().inodev1_str_hash())?;
         validate_pos(v)
-    })
+    }
+
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        inode_to_text(out, fs, k)
+    }
+
+    const TRIGGER: Option<&'static Trigger> = Some(&INODE);
 }
 
-/// For C's bkey_ops: bch2_inode_v2_validate().
-#[c_export]
-pub fn bch2_inode_v2_validate(
-    c:    &Opaque<Fs>,
-    k:    BkeySC<'_>,
-    from: &c::bkey_validate_context,
-) -> core::ffi::c_int {
-    validate_c(c, k, from, |v| {
+impl BkeyOps for c::InodeV2 {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         validate_str_hash(v, v.k.arm::<c::InodeV2>().expect("an inode_v2").v().inodev2_str_hash())?;
         validate_pos(v)
-    })
+    }
+
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        inode_to_text(out, fs, k)
+    }
+
+    const TRIGGER: Option<&'static Trigger> = Some(&INODE);
 }
 
-/// For C's bkey_ops: bch2_inode_v3_validate(). The fields start past the
-/// fixed ones, within the value.
-#[c_export]
-pub fn bch2_inode_v3_validate(
-    c:    &Opaque<Fs>,
-    k:    BkeySC<'_>,
-    from: &c::bkey_validate_context,
-) -> core::ffi::c_int {
-    validate_c(c, k, from, |v| {
+/// The fields start past the fixed ones, within the value.
+impl BkeyOps for c::InodeV3 {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let i = v.k.arm::<c::InodeV3>().expect("an inode_v3").v();
         let start = i.inodev3_fields_start();
         let min = c::INODEv3_FIELDS_START_INITIAL as u64;
@@ -943,7 +943,56 @@ pub fn bch2_inode_v3_validate(
 
         validate_str_hash(v, i.inodev3_str_hash())?;
         validate_pos(v)
-    })
+    }
+
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        inode_to_text(out, fs, k)
+    }
+
+    const TRIGGER: Option<&'static Trigger> = Some(&INODE);
+}
+
+impl BkeyOps for c::InodeGeneration {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        bkey_fsck_err_on!(v, v.k.k.p.inode != 0, id::inode_pos_inode_nonzero,
+                          "nonzero k.p.inode")
+    }
+
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        let generation = (k.arm::<c::InodeGeneration>().expect("an inode_generation").v().bi_generation).get();
+        write!(out, "generation: {generation}");
+    }
+}
+
+/// For C's bkey_ops: bch2_inode_validate().
+#[c_export]
+pub fn bch2_inode_validate(
+    c:    &Opaque<Fs>,
+    k:    BkeySC<'_>,
+    from: &c::bkey_validate_context,
+) -> core::ffi::c_int {
+    validate_c(c, k, from, <c::Inode as BkeyOps>::validate)
+}
+
+/// For C's bkey_ops: bch2_inode_v2_validate().
+#[c_export]
+pub fn bch2_inode_v2_validate(
+    c:    &Opaque<Fs>,
+    k:    BkeySC<'_>,
+    from: &c::bkey_validate_context,
+) -> core::ffi::c_int {
+    validate_c(c, k, from, <c::InodeV2 as BkeyOps>::validate)
+}
+
+/// For C's bkey_ops: bch2_inode_v3_validate().
+#[c_export]
+pub fn bch2_inode_v3_validate(
+    c:    &Opaque<Fs>,
+    k:    BkeySC<'_>,
+    from: &c::bkey_validate_context,
+) -> core::ffi::c_int {
+    validate_c(c, k, from, <c::InodeV3 as BkeyOps>::validate)
 }
 
 /// For C's bkey_ops: bch2_inode_generation_validate().
@@ -953,10 +1002,7 @@ pub fn bch2_inode_generation_validate(
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
 ) -> core::ffi::c_int {
-    validate_c(c, k, from, |v| {
-        bkey_fsck_err_on!(v, v.k.k.p.inode != 0, id::inode_pos_inode_nonzero,
-                          "nonzero k.p.inode")
-    })
+    validate_c(c, k, from, <c::InodeGeneration as BkeyOps>::validate)
 }
 
 /// Inode flags set in @flags, by name, comma separated - as far as the first
@@ -1035,8 +1081,7 @@ pub fn bch2_inode_to_text(
     c:   &Opaque<Fs>,
     k:   BkeySC<'_>,
 ) {
-    let inode = unpack(Fs::from_c(c), k);
-    fields_to_text(out, &inode)
+    inode_to_text(out, Some(Fs::from_c(c)), k)
 }
 
 /// For C's bkey_ops: bch2_inode_generation_to_text().
@@ -1044,11 +1089,10 @@ pub fn bch2_inode_to_text(
 #[c_export]
 pub fn bch2_inode_generation_to_text(
     out: &mut Printbuf,
-    _c:  &Opaque<Fs>,
+    c:   &Opaque<Fs>,
     k:   BkeySC<'_>,
 ) {
-    let generation = (k.arm::<c::InodeGeneration>().expect("an inode_generation").v().bi_generation).get();
-    write!(out, "generation: {generation}");
+    <c::InodeGeneration as BkeyOps>::to_text(out, Some(Fs::from_c(c)), k)
 }
 
 // ── Inode number allocation ──────────────────────────────────────────────
@@ -1249,7 +1293,23 @@ pub fn bch2_inode_alloc_cursor_to_text(
     c:   &Opaque<Fs>,
     k:   BkeySC<'_>,
 ) {
-    let fs = Fs::from_c(c);
+    <c::InodeAllocCursor as BkeyOps>::to_text(out, Some(Fs::from_c(c)), k)
+}
+
+impl BkeyOps for c::InodeAllocCursor {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        alloc_cursor_validate(v)
+    }
+
+    /// The cursor, and the range it hands out.
+    #[cold]
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        inode_alloc_cursor_to_text(out, fs.expect("a filesystem: the range is its"), k)
+    }
+}
+
+#[cold]
+fn inode_alloc_cursor_to_text(out: &mut Printbuf, fs: &Fs, k: BkeySC<'_>) {
     let v = k.arm::<c::InodeAllocCursor>().expect("an inode alloc cursor").v();
 
     let idx = v.idx.get();
@@ -1447,6 +1507,7 @@ pub fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), B
 }
 
 crate::key_trigger!(bch2_trigger_inode => trigger);
+static INODE: Trigger = Trigger(trigger);
 
 // ── Deleting inodes ──────────────────────────────────────────────────────
 //

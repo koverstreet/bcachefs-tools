@@ -240,6 +240,17 @@ pub fn to_text(out: &mut Printbuf, k: BkeySC<'_>) {
     }
 }
 
+impl crate::btree::bkey_methods::BkeyOps for c::Xattr {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        validate(v)
+    }
+
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        to_text(out, k)
+    }
+}
+
 /// For C's bkey_ops: bch2_xattr_to_text().
 #[cold]
 #[c_export]

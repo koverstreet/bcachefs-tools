@@ -414,7 +414,7 @@ fn no_valid_pointers_fix<'a, 't>(t: &TransAttempt<'_, '_>, btree: Btree, mut new
     Ok(new)
 }
 
-fn check_fix_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, level: u32,
+pub(crate) fn check_fix_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, level: u32,
                   k: BkeySC<'_, Ptrs>) -> Result<(), BchError>
 {
     let fs = t.fs();

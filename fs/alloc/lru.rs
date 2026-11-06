@@ -27,6 +27,7 @@ use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
+use crate::btree::bkey_methods::BkeyOps;
 use crate::init::error::{id, BkeyValidate};
 use crate::init::progress::Progress;
 use crate::util::ffi::Opaque;
@@ -164,10 +165,21 @@ pub fn bch2_lru_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_
     ret_to_c(lru_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
+impl BkeyOps for c::Lru {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        lru_validate(v)
+    }
+
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        write!(out, "idx {}", k.arm::<c::Lru>().expect("an lru key").v().idx.get());
+    }
+}
+
 #[cold]
 #[c_export]
-pub fn bch2_lru_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
-    write!(out, "idx {}", k.arm::<c::Lru>().expect("an lru key").v().idx.get());
+pub fn bch2_lru_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
+    <c::Lru as BkeyOps>::to_text(out, Some(Fs::from_c(c)), k)
 }
 
 // ── Setting entries ──────────────────────────────────────────────────────

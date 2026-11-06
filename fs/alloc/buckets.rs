@@ -8,7 +8,7 @@ use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
 use crate::alloc::replicas::{bkey_replicas_acct, entry_acct, replicas_acct};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeySC};
-use crate::btree::bkey_methods::TriggerOp;
+use crate::btree::bkey_methods::{Trigger, TriggerOp};
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
 use crate::c;
@@ -791,6 +791,7 @@ pub(crate) fn trigger_extent(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -
 }
 
 crate::key_trigger!(bch2_trigger_extent => trigger_extent);
+pub(crate) static EXTENT: Trigger = Trigger(trigger_extent);
 
 /// A reservation's sectors, by replica count - and in a snapshot, its key,
 /// and the sectors it reserves at all its replicas: reservations carry no
@@ -821,6 +822,7 @@ fn trigger_reservation(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(
 }
 
 crate::key_trigger!(bch2_trigger_reservation => trigger_reservation);
+pub(crate) static RESERVATION: Trigger = Trigger(|t, op| trigger_reservation(t, op));
 
 /// Whether @k counts in its snapshot's keys: not a whiteout - iteration skips
 /// those, so snapshot deletion never sees them - nor an extent or a

@@ -24,6 +24,7 @@ use crate::c;
 use crate::data::ptrs::{bkey_ptrs_validate, extent_ptr_to_text};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
+use crate::btree::bkey_methods::{BkeyOps, Trigger};
 use crate::init::error::{id, BkeyValidate};
 use crate::types::Le16;
 use crate::util::alloc::KVVec;
@@ -289,7 +290,25 @@ pub fn bch2_stripe_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_valida
 #[cold]
 #[c_export]
 pub fn bch2_stripe_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    let fs = Fs::from_c(c);
+    stripe_to_text(out, Some(Fs::from_c(c)), k)
+}
+
+impl BkeyOps for c::Stripe {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        stripe_validate(v)
+    }
+
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        stripe_to_text(out, fs, k)
+    }
+
+    crate::data::ptrs::ptrs_ops!();
+
+    const TRIGGER: Option<&'static Trigger> = Some(&super::trigger::STRIPE);
+}
+
+#[cold]
+fn stripe_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
     // the header's there - bch2_val_to_text() checks min_val_size, all of it,
     // before calling this - but not what's after it
     let s = k.arm::<c::Stripe>().expect("a stripe").v();
@@ -305,7 +324,10 @@ pub fn bch2_stripe_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
 
     write!(out, " label=");
     if s.disk_label != 0 {
-        fs.disk_path_to_text(out, u32::from(s.disk_label) - 1);
+        match fs {
+            Some(fs) => fs.disk_path_to_text(out, u32::from(s.disk_label) - 1),
+            None     => write!(out, "{}", s.disk_label - 1),
+        }
     } else {
         write!(out, "(none)");
     }
@@ -327,7 +349,7 @@ pub fn bch2_stripe_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
 
     for (i, ptr) in ptrs.iter().enumerate() {
         out.newline();
-        extent_ptr_to_text(&mut out, Some(fs), ptr, &rcu);
+        extent_ptr_to_text(&mut out, fs, ptr, &rcu);
 
         if let Some(n) = counts.as_ref().and_then(|at| tail.get(at.start + 2 * i..at.start + 2 * i + 2)) {
             write!(out, "#{}", u16::from_le_bytes([n[0], n[1]]));

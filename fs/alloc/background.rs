@@ -482,7 +482,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyWhole, POS_MIN};
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, LoopFlow, TransAttempt,
                          TransBkey, UpdateTriggerFlags};
-use crate::btree::bkey_methods::TriggerOp;
+use crate::btree::bkey_methods::{BkeyOps, Trigger, TriggerOp};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::errcode::{err_ptr, ret_to_c, BchError};
@@ -795,16 +795,73 @@ pub fn bch2_alloc_v1_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_vali
 
 #[c_export]
 pub fn bch2_alloc_v2_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
-    let v = BkeyValidate { fs: Fs::from_c(c), k, from };
-    let a = k.arm::<c::AllocV2>().expect("an alloc_v2");
-    ret_to_c(bkey_fsck_err_on!(&v, AllocUnpacked::v2(a).is_none(), id::alloc_v2_unpack_error, "unpack error"))
+    ret_to_c(<c::AllocV2 as BkeyOps>::validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
 #[c_export]
 pub fn bch2_alloc_v3_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
-    let v = BkeyValidate { fs: Fs::from_c(c), k, from };
-    let a = k.arm::<c::AllocV3>().expect("an alloc_v3");
-    ret_to_c(bkey_fsck_err_on!(&v, AllocUnpacked::v3(a).is_none(), id::alloc_v3_unpack_error, "unpack error"))
+    ret_to_c(<c::AllocV3 as BkeyOps>::validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
+}
+
+#[cold]
+fn alloc_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+    alloc_v4_to_text(out, fs, k, &alloc_to_v4(k));
+}
+
+impl BkeyOps for c::Alloc {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        alloc_v1_validate(v)
+    }
+
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        alloc_to_text(out, fs, k)
+    }
+
+    const TRIGGER: Option<&'static Trigger> = Some(&ALLOC);
+}
+
+impl BkeyOps for c::AllocV2 {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        let a = v.k.arm::<c::AllocV2>().expect("an alloc_v2");
+        bkey_fsck_err_on!(v, AllocUnpacked::v2(a).is_none(), id::alloc_v2_unpack_error, "unpack error")
+    }
+
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        alloc_to_text(out, fs, k)
+    }
+
+    const TRIGGER: Option<&'static Trigger> = Some(&ALLOC);
+}
+
+impl BkeyOps for c::AllocV3 {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        let a = v.k.arm::<c::AllocV3>().expect("an alloc_v3");
+        bkey_fsck_err_on!(v, AllocUnpacked::v3(a).is_none(), id::alloc_v3_unpack_error, "unpack error")
+    }
+
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        alloc_to_text(out, fs, k)
+    }
+
+    const TRIGGER: Option<&'static Trigger> = Some(&ALLOC);
+}
+
+impl BkeyOps for c::AllocV4 {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        alloc_v4_validate(v)
+    }
+
+    #[cold]
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        let a = c::AllocV4::val_copy_pad(k).expect("an alloc_v4");
+        alloc_v4_to_text(out, fs, k, &a);
+    }
+
+    fn swab(fs: Option<&Fs>, k: BkeyS<'_>) {
+        bch2_alloc_v4_swab(fs, k)
+    }
+
+    const TRIGGER: Option<&'static Trigger> = Some(&ALLOC);
 }
 
 #[c_export]
@@ -866,14 +923,13 @@ fn alloc_v4_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>, a: &c::A
 #[cold]
 #[c_export]
 pub fn bch2_alloc_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
-    alloc_v4_to_text(out, c.map(Fs::from_c), k, &alloc_to_v4(k));
+    alloc_to_text(out, c.map(Fs::from_c), k)
 }
 
 #[cold]
 #[c_export]
 pub fn bch2_alloc_v4_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
-    let a = c::AllocV4::val_copy_pad(k).expect("an alloc_v4");
-    alloc_v4_to_text(out, c.map(Fs::from_c), k, &a);
+    <c::AllocV4 as BkeyOps>::to_text(out, c.map(Fs::from_c), k)
 }
 
 impl c::AllocV4 {
@@ -1086,12 +1142,23 @@ pub fn bch2_bucket_gens_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_v
     ret_to_c(bucket_gens_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
+impl BkeyOps for c::BucketGens {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        bucket_gens_validate(v)
+    }
+
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        if let Some(g) = k.arm::<c::BucketGens>() {
+            prt!(out, "{}", Join(" ", g.v().gens.iter()));
+        }
+    }
+}
+
 #[cold]
 #[c_export]
-pub fn bch2_bucket_gens_to_text(out: &mut Printbuf, _c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
-    if let Some(g) = k.arm::<c::BucketGens>() {
-        prt!(out, "{}", Join(" ", g.v().gens.iter()));
-    }
+pub fn bch2_bucket_gens_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
+    <c::BucketGens as BkeyOps>::to_text(out, c.map(Fs::from_c), k)
 }
 
 /// The bucket_gens btree, made from the alloc btree: for the upgrade that
@@ -1687,6 +1754,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
 }
 
 crate::key_trigger!(bch2_trigger_alloc => trigger_alloc);
+static ALLOC: Trigger = Trigger(trigger_alloc);
 
 // ── Removing a device ────────────────────────────────────────────────────
 

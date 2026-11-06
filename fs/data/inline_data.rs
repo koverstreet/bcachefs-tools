@@ -5,6 +5,7 @@
 //! and where in each type's value the data is.
 
 use crate::btree::bkey::{BkeyFamily, BkeyS, BkeySC, BkeyV, ByFlag, FamilyVal, FieldOffsets};
+use crate::btree::bkey_methods::BkeyOps;
 use crate::c;
 use crate::fs::Fs;
 use crate::prt;
@@ -69,6 +70,13 @@ impl<'a> InlineDataMut<'a> {
 #[c_export]
 pub fn bch2_inline_data_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
     InlineDataRef::of(k).expect("inline data").to_text(out)
+}
+
+impl BkeyOps for c::InlineData {
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        InlineDataRef::of(k).expect("inline data").to_text(out)
+    }
 }
 
 /// For a read of @k @skip bytes past its start: its data from there, @len

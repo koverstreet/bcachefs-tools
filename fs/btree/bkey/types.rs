@@ -53,6 +53,7 @@
 //! #[derive(SizedVal)].
 
 use super::BkeyP;
+use crate::btree::bkey_methods::{ops, Ops};
 use crate::btree::iter::{BtreeIter, TransBkey};
 use crate::c;
 use crate::typeinfo::{StructInfo, TypeInfo};
@@ -639,13 +640,14 @@ impl FamilyTypes for AllTypes {
     }
 }
 
-/// A key type: its BCH_BKEY_TYPES() row, and its value's struct.
+/// A key type: its BCH_BKEY_TYPES() row, its value's struct, and its methods.
 #[derive(Clone, Copy)]
 pub struct KeyType {
     pub nr: u8,
     pub name: &'static str,
     pub flags: u32,
     pub info: &'static StructInfo,
+    pub ops: Ops,
 }
 
 macro_rules! key_types {
@@ -653,7 +655,8 @@ macro_rules! key_types {
         const TABLE: [Option<KeyType>; NR_KEY_TYPES] = {
             let mut t = [None; NR_KEY_TYPES];
             $(t[$nr] = Some(KeyType { nr: $nr, name: stringify!($name), flags: 0 $(| c::$flag)+,
-                                      info: <c::[<$name:camel>] as TypeInfo>::INFO });)*
+                                      info: <c::[<$name:camel>] as TypeInfo>::INFO,
+                                      ops: ops::<c::[<$name:camel>]>() });)*
             t
         };
     } };

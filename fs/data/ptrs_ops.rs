@@ -8,6 +8,7 @@ use crate::btree::bkey::{bkey_eq, POS_MIN};
 use crate::data::durability::BkeyVDurability;
 use crate::data::reconcile::trigger::{extent_rebalance_v1_to_text, extent_reconcile_to_text,
                                       extent_reconcile_validate};
+use crate::btree::bkey_methods::{BkeyOps, Trigger};
 use crate::init::error::{id, BkeyValidate};
 use crate::util::rcu::ReadGuard;
 use crate::util::{Printbuf, ToText};
@@ -328,14 +329,86 @@ pub(super) fn btree_ptr_v2_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchE
 
 /// A btree_ptr_v2: its node's seq, how much of it is written and its
 /// min_key, then its pointers.
-pub fn btree_ptr_v2_to_text(out: &mut Printbuf, fs: &Fs, k: BkeySC<'_>) {
+pub fn btree_ptr_v2_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
     let bp = k.arm::<c::BtreePtrV2>().expect("a btree_ptr_v2").v();
 
     crate::prt!(out, "\nseq {:x} written {} min_key {}{} ",
                 bp.seq.get(), bp.sectors_written.get(),
                 if bp.btree_ptr_range_updated() { "R " } else { "" },
                 { bp.min_key });
-    bkey_ptrs_to_text(out, Some(fs), k);
+    bkey_ptrs_to_text(out, fs, k);
+}
+
+/// A key type with pointers' swab and check_repair: its extent entries'.
+macro_rules! ptrs_ops {
+    () => {
+        fn swab(fs: Option<&$crate::fs::Fs>, k: $crate::btree::bkey::BkeyS<'_>) {
+            $crate::data::ptrs::ptr_swab(fs.expect("a filesystem: its extent entries' sizes"), k)
+        }
+
+        fn check_repair(t: &$crate::btree::iter::TransAttempt<'_, '_>, iter: &$crate::btree::iter::BtreeIter<'_>,
+                        btree: $crate::format::Btree, level: u32, k: $crate::btree::bkey::BkeySC<'_>)
+            -> Result<(), $crate::errcode::BchError>
+        {
+            $crate::alloc::check_data::check_fix_ptrs(t, iter, btree, level,
+                k.arm::<$crate::data::ptrs::Ptrs>().expect("a key with pointers"))
+        }
+    };
+}
+pub(crate) use ptrs_ops;
+
+impl BkeyOps for c::BtreePtr {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        btree_ptr_validate(v)
+    }
+
+    #[cold]
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        bkey_ptrs_to_text(out, fs, k)
+    }
+
+    ptrs_ops!();
+
+    const TRIGGER: Option<&'static Trigger> = Some(&crate::alloc::buckets::EXTENT);
+}
+
+impl BkeyOps for c::BtreePtrV2 {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        btree_ptr_v2_validate(v)
+    }
+
+    #[cold]
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        btree_ptr_v2_to_text(out, fs, k)
+    }
+
+    fn compat(btree: Btree, version: c::bcachefs_metadata_version, big_endian: bool, write: bool,
+              k: BkeyS<'_>) {
+        btree_ptr_v2_compat(btree, version, big_endian, write, k)
+    }
+
+    ptrs_ops!();
+
+    const TRIGGER: Option<&'static Trigger> = Some(&crate::alloc::buckets::EXTENT);
+}
+
+impl BkeyOps for c::Extent {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        bkey_ptrs_validate(v)
+    }
+
+    #[cold]
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        bkey_ptrs_to_text(out, fs, k)
+    }
+
+    fn merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
+        crate::data::extents::extent_merge(fs, l, r)
+    }
+
+    ptrs_ops!();
+
+    const TRIGGER: Option<&'static Trigger> = Some(&crate::alloc::buckets::EXTENT);
 }
 
 /// The node's min_key, to or from how @version on a @big_endian machine wrote

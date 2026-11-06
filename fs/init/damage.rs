@@ -88,9 +88,24 @@ pub fn bch2_damage_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_valida
     ret_to_c(validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
+impl crate::btree::bkey_methods::BkeyOps for c::Damage {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        validate(v)
+    }
+
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        damage_to_text(out, fs, k)
+    }
+}
+
 #[cold]
 #[c_export]
-pub fn bch2_damage_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
+pub fn bch2_damage_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
+    damage_to_text(out, Some(Fs::from_c(c)), k)
+}
+
+#[cold]
+fn damage_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
     for (i, e) in k.arm::<c::Damage>().expect("a damage key").v().entries.iter().enumerate() {
         if i != 0 {
             out.newline();

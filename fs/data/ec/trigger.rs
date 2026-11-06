@@ -20,7 +20,7 @@ use crate::alloc::buckets::bucket_to_u64;
 use crate::alloc::lru::{lru_change, LruId};
 use crate::alloc::replicas::{bkey_replicas_acct, bkey_replicas_padded, entry_acct};
 use crate::btree::bkey::{pos, BkeyS, BkeySC, BkeyV, BkeyVMut};
-use crate::btree::bkey_methods::TriggerOp;
+use crate::btree::bkey_methods::{Trigger, TriggerOp};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::data::ec::stripe::{StripeK, STRIPE_LRU_POS_EMPTY};
@@ -499,6 +499,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchEr
 }
 
 crate::key_trigger!(bch2_trigger_stripe => trigger);
+pub(super) static STRIPE: Trigger = Trigger(trigger);
 
 // ── gc's copy, before the commit ─────────────────────────────────────────
 

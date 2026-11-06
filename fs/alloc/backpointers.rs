@@ -49,6 +49,7 @@ use crate::data::reconcile::trigger::BkeyVReconcile;
 use crate::debug::params as debug_params;
 use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
 use crate::fs::Fs;
+use crate::btree::bkey_methods::BkeyOps;
 use crate::init::error::{id, BkeyValidate};
 use crate::init::passes;
 use crate::init::progress::Progress;
@@ -146,10 +147,28 @@ pub fn bch2_backpointer_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_v
     ret_to_c(backpointer_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
+impl BkeyOps for c::Backpointer {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        backpointer_validate(v)
+    }
+
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        backpointer_to_text(out, fs, k)
+    }
+
+    fn swab(fs: Option<&Fs>, k: BkeyS<'_>) {
+        bch2_backpointer_swab(fs, k)
+    }
+}
+
 #[cold]
 #[c_export]
 pub fn bch2_backpointer_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
-    let fs = c.map(Fs::from_c);
+    backpointer_to_text(out, c.map(Fs::from_c), k)
+}
+
+#[cold]
+fn backpointer_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
     let bp = k.arm::<c::Backpointer>().expect("a backpointer");
     let p = bp.k.p;
     let v = bp.v();

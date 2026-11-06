@@ -62,6 +62,7 @@ use crate::c::bch_validate_flags;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{self, Bpos};
 use crate::fs::Fs;
+use crate::btree::bkey_methods::BkeyOps;
 use crate::init::error::{id, BkeyValidate};
 use crate::types::ArmOf;
 use crate::util::ffi::Opaque;
@@ -316,11 +317,26 @@ pub fn key_to_text(out: &mut Printbuf, fs: Option<&Fs>, pos: &DiskAccountingPos<
     }
 }
 
+impl BkeyOps for c::Accounting {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        accounting_validate(v)
+    }
+
+    #[cold]
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
+        key_to_text(out, fs, &DiskAccountingPos::from_bpos(k.k.p));
+        write!(out, " {}", Join(" ", k.arm::<Accounting>().expect("an accounting key").v().d.iter().map(|&d| d as i64)));
+    }
+
+    fn swab(fs: Option<&Fs>, k: BkeyS<'_>) {
+        bch2_accounting_swab(fs, k)
+    }
+}
+
 #[cold]
 #[c_export]
 pub fn bch2_accounting_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
-    key_to_text(out, c.map(Fs::from_c), &DiskAccountingPos::from_bpos(k.k.p));
-    write!(out, " {}", Join(" ", k.arm::<Accounting>().expect("an accounting key").v().d.iter().map(|&d| d as i64)));
+    <c::Accounting as BkeyOps>::to_text(out, c.map(Fs::from_c), k)
 }
 
 #[c_export]

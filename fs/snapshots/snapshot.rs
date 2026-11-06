@@ -294,7 +294,7 @@
  */
 
 use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole, POS_MAX, POS_MIN};
-use crate::btree::bkey_methods::TriggerOp;
+use crate::btree::bkey_methods::{BkeyOps, Trigger, TriggerOp};
 use crate::prt;
 use crate::util::vstructs::{Validated, Whole};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans,
@@ -1220,8 +1220,21 @@ pub fn bch2_snapshot_validate(
 
 #[cold]
 #[c_export]
-pub fn bch2_snapshot_key_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
-    write!(out, "{}", val(k).expect("a snapshot"));
+pub fn bch2_snapshot_key_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
+    <c::Snapshot as BkeyOps>::to_text(out, Some(Fs::from_c(c)), k)
+}
+
+impl BkeyOps for c::Snapshot {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        validate(v)
+    }
+
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        write!(out, "{}", val(k).expect("a snapshot"));
+    }
+
+    const TRIGGER: Option<&'static Trigger> = Some(&SNAPSHOT);
 }
 
 fn trigger(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError> {
@@ -1235,6 +1248,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError>
 }
 
 crate::key_trigger!(bch2_snapshot_trigger => trigger);
+static SNAPSHOT: Trigger = Trigger(|t, op| trigger(t, op));
 
 // ── snapshot_tree keys ───────────────────────────────────────────────────
 //
@@ -1260,9 +1274,20 @@ pub fn bch2_snapshot_tree_validate(
 
 #[cold]
 #[c_export]
-pub fn bch2_snapshot_tree_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
-    let t = c::SnapshotTree::val_copy_pad(k).expect("a snapshot_tree");
-    write!(out, "subvol {} root snapshot {}", t.master_subvol.get(), t.root_snapshot.get());
+pub fn bch2_snapshot_tree_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
+    <c::SnapshotTree as BkeyOps>::to_text(out, Some(Fs::from_c(c)), k)
+}
+
+impl BkeyOps for c::SnapshotTree {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        tree_validate(v)
+    }
+
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        let t = c::SnapshotTree::val_copy_pad(k).expect("a snapshot_tree");
+        write!(out, "subvol {} root snapshot {}", t.master_subvol.get(), t.root_snapshot.get());
+    }
 }
 
 pub fn tree_lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::SnapshotTree, BchError> {

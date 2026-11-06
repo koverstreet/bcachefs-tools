@@ -298,6 +298,17 @@ pub fn d_type_str(d_type: u8) -> &'static str {
     }
 }
 
+impl crate::btree::bkey_methods::BkeyOps for Dirent {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        validate(v).map(|_| ())
+    }
+
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        to_text(out, k)
+    }
+}
+
 /// For C's bkey_ops: bch2_dirent_to_text().
 #[cold]
 #[c_export]

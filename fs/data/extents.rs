@@ -7,6 +7,7 @@
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{bkey_ge, bkey_gt, bkey_le, bkey_lt, types_with, AllTypes, BkeyFamily, ByFlag, FamilyTypes, FamilyVal, InFamily, KeyState, BkeyS, BkeySC, BkeyV, BkeyVal,
                          BkeyVMut};
+use crate::btree::bkey_methods::{BkeyOps, Trigger};
 use crate::btree::iter::NoRoom;
 use crate::c;
 use crate::data::inline_data::{InlineDataMut, InlineDataRef};
@@ -624,24 +625,41 @@ pub fn bch2_reservation_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_v
     ret_to_c(reservation_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
-#[cold]
-#[c_export]
-pub fn bch2_reservation_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, k: BkeySC<'_>) {
-    let r = k.arm::<c::Reservation>().expect("a reservation").v();
-
-    write!(out, "generation {} replicas {}", r.generation.get(), r.nr_replicas);
-}
-
-/// Adjacent reservations of the same generation and replicas are one.
-#[c_export]
-pub fn bch2_reservation_merge(_c: &Opaque<Fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
-    let lv = l.as_sc().arm::<c::Reservation>().expect("a reservation").v();
-    let rv = r.arm::<c::Reservation>().expect("a reservation").v();
-
-    if lv.generation.get() != rv.generation.get() || lv.nr_replicas != rv.nr_replicas {
-        return false;
+impl BkeyOps for c::Reservation {
+    fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+        reservation_validate(v)
     }
 
-    l.k.resize(l.k.size + r.k.size);
-    true
+    #[cold]
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: BkeySC<'_>) {
+        let r = k.arm::<c::Reservation>().expect("a reservation").v();
+
+        write!(out, "generation {} replicas {}", r.generation.get(), r.nr_replicas);
+    }
+
+    /// Adjacent reservations of the same generation and replicas are one.
+    fn merge(_fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
+        let lv = l.as_sc().arm::<c::Reservation>().expect("a reservation").v();
+        let rv = r.arm::<c::Reservation>().expect("a reservation").v();
+
+        if lv.generation.get() != rv.generation.get() || lv.nr_replicas != rv.nr_replicas {
+            return false;
+        }
+
+        l.k.resize(l.k.size + r.k.size);
+        true
+    }
+
+    const TRIGGER: Option<&'static Trigger> = Some(&crate::alloc::buckets::RESERVATION);
+}
+
+#[cold]
+#[c_export]
+pub fn bch2_reservation_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
+    <c::Reservation as BkeyOps>::to_text(out, Some(Fs::from_c(c)), k)
+}
+
+#[c_export]
+pub fn bch2_reservation_merge(c: &Opaque<Fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
+    <c::Reservation as BkeyOps>::merge(Fs::from_c(c), l, r)
 }

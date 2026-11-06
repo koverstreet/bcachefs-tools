@@ -61,7 +61,7 @@ pub fn bch2_btree_ptr_v2_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_
 #[cold]
 #[c_export]
 pub fn bch2_btree_ptr_v2_to_text(out: &mut Printbuf, c: &Opaque<Fs>, k: BkeySC<'_>) {
-    btree_ptr_v2_to_text(out, Fs::from_c(c), k);
+    btree_ptr_v2_to_text(out, Some(Fs::from_c(c)), k);
 }
 
 #[c_export]
