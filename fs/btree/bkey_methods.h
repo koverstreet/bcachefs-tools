@@ -8,13 +8,6 @@
 #include "btree/compat_gen.h"
 #include "btree/trigger_gen.h"
 
-static inline bool bch2_bkey_maybe_mergable(const struct bkey *l, const struct bkey *r)
-{
-	return l->type == r->type &&
-		!bversion_cmp(l->bversion, r->bversion) &&
-		bpos_eq(l->p, bkey_start_pos(r));
-}
-
 static inline int bch2_key_trigger_old(struct btree_trans *trans,
 			enum btree_id btree_id, unsigned level,
 			struct bkey_s_c old,
