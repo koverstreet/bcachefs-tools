@@ -517,104 +517,13 @@ static int run_one_mem_trigger(struct btree_trans *trans,
 			       unsigned flags)
 {
 	verify_update_old_key(trans, i);
-
-	struct bkey_i deleted;
-	bkey_init(&deleted.k);
-	deleted.k.p = i->k->k.p;
-
-	struct bkey old_k = i->old_k;
-	struct btree_trigger_op op = {
-		.btree		= i->btree_id,
-		.level		= i->level,
-		.old		= (struct bkey_s_c) { &old_k, i->old_v },
-		.new		= bkey_i_to_s(i->k),
-		.new_buf_u64s	= i->k_buf_u64s,
-	};
-
-	const struct bkey_ops *old_ops = bch2_bkey_type_ops(old_k.type);
-	const struct bkey_ops *new_ops = bch2_bkey_type_ops(i->k->k.type);
-
-	/*
-	 * Snapshot key accounting is a net old->new delta, so run it once here
-	 * with the real old and new keys, before the per-type dispatch below
-	 * rewrites op for its insert/overwrite split.
-	 */
-	if (btree_type_has_snapshots(op.btree)) {
-		op.flags = flags;
-		try(bch2_trigger_snapshot_nr_keys(trans, op));
-	}
-
-	if (old_ops->trigger &&
-	    old_ops->trigger == new_ops->trigger) {
-		op.flags = flags|BTREE_TRIGGER_insert|BTREE_TRIGGER_overwrite;
-		return old_ops->trigger(trans, op);
-	}
-
-	if (new_ops->trigger) {
-		op.flags = flags|BTREE_TRIGGER_insert;
-		op.old = bkey_i_to_s_c(&deleted);
-		try(new_ops->trigger(trans, op));
-	}
-
-	if (old_ops->trigger) {
-		op.flags	= flags|BTREE_TRIGGER_overwrite;
-		op.old		= (struct bkey_s_c) { &old_k, i->old_v },
-		op.new		= bkey_i_to_s(&deleted);
-		op.new_buf_u64s = 0;
-		try(old_ops->trigger(trans, op));
-	}
-
-	return 0;
+	return bch2_run_one_mem_trigger(trans, i, flags);
 }
 
 static int run_one_trans_trigger(struct btree_trans *trans, struct btree_insert_entry *i)
 {
 	verify_update_old_key(trans, i);
-
-	struct bkey_i deleted;
-	bkey_init(&deleted.k);
-	deleted.k.p = i->k->k.p;
-	/*
-	 * Transactional triggers create new btree_insert_entries, so we can't
-	 * pass them a pointer to a btree_insert_entry, that memory is going to
-	 * move:
-	 */
-	struct bkey old_k = i->old_k;
-	struct btree_trigger_op op = {
-		.btree		= i->btree_id,
-		.level		= i->level,
-		.old		= (struct bkey_s_c) { &old_k, i->old_v },
-		.new		= bkey_i_to_s(i->k),
-		.new_buf_u64s	= i->k_buf_u64s,
-		.flags		= i->flags|BTREE_TRIGGER_transactional,
-	};
-
-	const struct bkey_ops *old_ops = bch2_bkey_type_ops(old_k.type);
-	const struct bkey_ops *new_ops = bch2_bkey_type_ops(i->k->k.type);
-
-	if (!i->insert_trigger_run &&
-	    !i->overwrite_trigger_run &&
-	    old_ops->trigger == new_ops->trigger) {
-		i->overwrite_trigger_run = true;
-		i->insert_trigger_run = true;
-		op.flags |= BTREE_TRIGGER_insert|BTREE_TRIGGER_overwrite;
-	} else if (!i->overwrite_trigger_run) {
-		i->overwrite_trigger_run = true;
-		op.flags |= BTREE_TRIGGER_overwrite;
-		op.new = bkey_i_to_s(&deleted);
-		op.new_buf_u64s = 0;
-	} else if (!i->insert_trigger_run) {
-		i->insert_trigger_run = true;
-		op.flags |= BTREE_TRIGGER_insert;
-		op.old = bkey_i_to_s_c(&deleted);
-		old_ops = new_ops;
-	}
-
-	try(old_ops->trigger ? old_ops->trigger(trans, op) : 0);
-
-	return btree_type_has_snapshots(op.btree)
-		? bch2_trigger_snapshot_nr_keys(trans, op)
-		: 0;
+	return bch2_run_one_trans_trigger(trans, i);
 }
 
 static int bch2_trans_commit_run_triggers(struct btree_trans *trans)

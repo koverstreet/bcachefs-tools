@@ -838,9 +838,8 @@ fn snapshot_key_counted(k: &c::bkey) -> bool {
 /// can check a node is empty before splicing it out: the delta from @op's old
 /// key to its new - the transactional dispatch passes a deleted key for the
 /// side not running, the gc and mem dispatch both real keys at once. Not in
-/// the atomic phase, which only applies deltas already staged:
-/// bch2_trigger_snapshot_nr_keys().
-fn trigger_snapshot_nr_keys(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError> {
+/// the atomic phase, which only applies deltas already staged.
+pub(crate) fn trigger_snapshot_nr_keys(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError> {
     if op.level != 0 || op.flags.contains(UpdateTriggerFlags::ATOMIC) {
         return Ok(());
     }
@@ -859,8 +858,6 @@ fn trigger_snapshot_nr_keys(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Res
                     accounting::SnapshotCounters { keys: nr, key_bytes: bytes, sectors: 0 },
                     op.flags.contains(UpdateTriggerFlags::GC))
 }
-
-crate::key_trigger!(bch2_trigger_snapshot_nr_keys => trigger_snapshot_nr_keys);
 
 // ── Metadata buckets ─────────────────────────────────────────────────────
 

@@ -38,28 +38,6 @@ static inline bool bch2_bkey_maybe_mergable(const struct bkey *l, const struct b
 
 bool bch2_bkey_merge(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 
-/* Defined in alloc/buckets.rs; forward-declared here to avoid an include cycle. */
-int bch2_trigger_snapshot_nr_keys(struct btree_trans *, struct btree_trigger_op);
-
-static inline int bch2_key_trigger(struct btree_trans *trans,
-				   struct btree_trigger_op op)
-{
-	const struct bkey_ops *ops = bch2_bkey_type_ops(op.old.k->type ?: op.new.k->type);
-
-	int ret = ops->trigger
-		? ops->trigger(trans, op)
-		: 0;
-
-	/*
-	 * Gate matches the trans-commit dispatch: only snapshotted btrees get
-	 * per-snapshot key counts. Snapshot-field btrees (reconcile_pending)
-	 * carry a snapshot in their bpos but must not be counted.
-	 */
-	return ret ?: (btree_type_has_snapshots(op.btree)
-		       ? bch2_trigger_snapshot_nr_keys(trans, op)
-		       : 0);
-}
-
 static inline int bch2_key_trigger_old(struct btree_trans *trans,
 			enum btree_id btree_id, unsigned level,
 			struct bkey_s_c old,
@@ -98,15 +76,6 @@ static inline int bch2_key_trigger_new(struct btree_trans *trans,
 		.new_buf_u64s	= new_buf_u64s,
 		.flags		= BTREE_TRIGGER_insert|flags,
 	});
-}
-
-static inline int bch2_bkey_check_repair(struct btree_trans *trans, struct btree_iter *iter,
-					 enum btree_id btree, unsigned level, struct bkey_s_c k)
-{
-	const struct bkey_ops *ops = bch2_bkey_type_ops(k.k->type);
-	return ops->check_repair
-		? ops->check_repair(trans, iter, btree, level, k)
-		: 0;
 }
 
 void bch2_bkey_renumber(enum btree_node_type, struct bkey_packed *, int);
