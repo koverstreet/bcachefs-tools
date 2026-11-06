@@ -277,6 +277,18 @@ impl<T: HasClosure> Running<T> {
         }
     }
 
+    /// Runs @f now - out of @wq, or called directly if None - without waiting
+    /// for the other refs: C's continue_at_nobarrier(). The running ref is
+    /// @f's.
+    pub fn continue_at_nobarrier(self, f: ClosureFn<T>, wq: Option<&Queue>) {
+        let cl = self.cl();
+        core::mem::forget(self);
+        unsafe {
+            c::set_closure_fn(cl, closure_fn(f), wq_ptr(wq));
+            c::closure_queue(cl);
+        }
+    }
+
     /// Done, the running ref never put: T is the caller's, to free.
     pub fn end(self) -> NonNull<T> {
         unsafe { c::closure_debug_destroy(self.cl()) };

@@ -128,7 +128,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "closure_init_stack_release", "bch2_closure_return_sync",
     "closure_sync_timeout",
     "bch2_closure_wait", "closure_wake_up", "closure_nr_remaining",
-    "set_closure_fn", "bch2_closure_sub", "closure_debug_destroy",
+    "set_closure_fn", "closure_queue", "bch2_closure_sub", "closure_debug_destroy",
     "rust_page_folio", "rust_folio_page_idx", "rust_folio_size",
     // vfs/folio.rs: folios, mappings and readahead
     "rust_folio_get_private", "rust_filemap_alloc_folio", "folio_pos", "folio_nr_pages",
