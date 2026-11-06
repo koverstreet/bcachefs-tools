@@ -760,7 +760,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         match t.mem_with(|m| m.alloc(size / size_of::<u64>())) {
             Some(p) => Ok(p.as_ptr().cast()),
-            None    => Ok(t.kmalloc_grow(size, crate::ret_ip!())?.cast()),
+            None    => Ok(t.kmalloc_grow(&mut t.paths(), size, crate::ret_ip!())?.cast()),
         }
     }
 

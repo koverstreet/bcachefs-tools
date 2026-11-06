@@ -903,6 +903,14 @@ impl BtreeTrans<'_> {
         self.relock_traced(&mut self.paths(), true)
     }
 
+    /// relock(), with the path table had already: for what C lends it to.
+    pub(crate) fn relock_from(&self, paths: &mut Paths<'_>) -> Result<(), BchError> {
+        if self.locked() && self.restarted().0 == 0 {
+            return Ok(());
+        }
+        self.relock_traced(paths, true)
+    }
+
     /// relock(), always attempted and without the tracepoint: as
     /// bch2_trans_relock_notrace().
     pub fn relock_notrace(&self) -> Result<(), BchError> {
@@ -915,7 +923,7 @@ impl BtreeTrans<'_> {
         self.unlock_from(&mut self.paths(), crate::ret_ip!());
     }
 
-    fn unlock_from(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) {
+    pub(crate) fn unlock_from(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) {
         self.mark_unlocked(ret_ip);
 
         self.unlock_paths(paths);

@@ -185,7 +185,7 @@ impl<'f> BtreeTrans<'f> {
     /// restart count. Inlined, so that last_begin_ip is the caller's address.
     #[inline(always)]
     pub(crate) fn begin_raw(&self) -> u32 {
-        self.begin_from(crate::ret_ip!())
+        self.begin_from(&mut self.paths(), crate::ret_ip!())
     }
 
     pub fn begin<'a>(&'a self) -> TransAttempt<'a, 'f> {
@@ -758,13 +758,15 @@ pub(crate) fn kmalloc_trace_to_text(out: &mut Printbuf, trace: &c::darray_trans_
 impl BtreeTrans<'_> {
     /// @alloc in a NORECLAIM scope, and if it fails, again with the transaction
     /// unlocked - and left unlocked: allocate_dropping_locks_norelock().
-    fn allocate_dropping_locks_norelock<T>(&self, mut alloc: impl FnMut() -> Option<T>) -> Option<T> {
+    fn allocate_dropping_locks_norelock<T>(&self, paths: &mut Paths<'_>, mut alloc: impl FnMut() -> Option<T>)
+        -> Option<T>
+    {
         let first = {
             let _noreclaim = MemallocFlags::noreclaim();
             alloc()
         };
         first.or_else(|| {
-            self.unlock();
+            self.unlock_from(paths, crate::ret_ip!());
             alloc()
         })
     }
@@ -782,7 +784,9 @@ impl BtreeTrans<'_> {
 
     /// @size bytes of the transaction's memory, when they don't fit in what it
     /// has: grown, or the transaction restarted to grow it.
-    pub(crate) fn kmalloc_grow(&self, size: usize, ret_ip: c_ulong) -> Result<*mut c_void, BchError> {
+    pub(crate) fn kmalloc_grow(&self, paths: &mut Paths<'_>, size: usize, ret_ip: c_ulong)
+        -> Result<*mut c_void, BchError>
+    {
         let c = self.fs();
         let (top, old_bytes) = self.mem_with(|m| (m.top_bytes(), m.bytes()));
         let new_top = (top + size) as c_uint;
@@ -833,7 +837,7 @@ impl BtreeTrans<'_> {
         ebug_assert!(top == 0);
         ebug_assert!(new_bytes <= c::BTREE_TRANS_MEM_MAX);
 
-        let reserved = self.allocate_dropping_locks_norelock(|| {
+        let reserved = self.allocate_dropping_locks_norelock(paths, || {
             let _nowarn = MemallocFlags::nowarn();
             self.mem_with(|m| m.reserve(new_bytes as usize)).ok()
         });
@@ -842,7 +846,7 @@ impl BtreeTrans<'_> {
             self.mem_with(|m| m.adopt_pool_buf(p));
         }
 
-        self.relock()?;
+        self.relock_from(paths)?;
 
         let p = self.mem_with(|m| m.alloc(size / size_of::<u64>())).expect("room, just made");
         Ok(p.as_ptr().cast())
@@ -857,7 +861,7 @@ impl BtreeTrans<'_> {
      * may return BCH_ERR_transaction_restart when the trylock fails. When this
      * occurs bch2_trans_begin() should be called and the transaction retried.
      */
-    fn begin_from(&self, ret_ip: c_ulong) -> u32 {
+    fn begin_from(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) -> u32 {
         let c = self.fs();
 
         c.event_inc_trace(events::transaction_begin, |out| {
@@ -900,7 +904,7 @@ impl BtreeTrans<'_> {
             ebug_assert!(new_bytes <= c::BTREE_TRANS_MEM_MAX);
             ebug_assert!(self.mem_with(|m| m.bytes()) != 0);
 
-            let reserved = self.allocate_dropping_locks_norelock(|| {
+            let reserved = self.allocate_dropping_locks_norelock(paths, || {
                 self.mem_with(|m| m.reserve(new_bytes as usize)).ok()
             });
             if reserved.is_none() {
@@ -911,7 +915,6 @@ impl BtreeTrans<'_> {
 
         for i in self.path_idxs() {
             let free = {
-                let mut paths = self.paths();
                 let path = &mut paths[i];
 
                 path.set_should_be_locked(false);
@@ -949,7 +952,7 @@ impl BtreeTrans<'_> {
                                      self.last_begin_time.get(), now);
         }
 
-        self.srcu_begin(&mut self.paths(), ret_ip);
+        self.srcu_begin(paths, ret_ip);
 
         if self.restarted().0 == 0 {
             self.locking_wait.trans_start_time.set(now);
@@ -975,7 +978,7 @@ impl BtreeTrans<'_> {
         } else if sched::need_resched() ||
                   time_after64(now, self.locking_wait.trans_start_time.get() +
                                     c::BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS as u64) {
-            self.unlock();
+            self.unlock_from(paths, ret_ip);
             cond_resched();
         }
 
@@ -1145,14 +1148,15 @@ pub unsafe fn bch2_trans_put(trans: *mut BtreeTrans<'_>) {
 
 #[c_export]
 #[inline(always)]
-pub fn bch2_trans_begin(trans: &BtreeTrans<'_>) -> u32 {
-    trans.begin_from(crate::ret_ip!())
+pub fn bch2_trans_begin(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) -> u32 {
+    trans.begin_from(paths, crate::ret_ip!())
 }
 
 #[c_export]
 #[inline(always)]
-pub fn __bch2_trans_kmalloc(trans: &BtreeTrans<'_>, size: usize, _ip: c_ulong) -> *mut c_void {
-    trans.kmalloc_grow(size, crate::ret_ip!()).unwrap_or_else(err_ptr)
+pub fn __bch2_trans_kmalloc(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, size: usize,
+                            _ip: c_ulong) -> *mut c_void {
+    trans.kmalloc_grow(paths, size, crate::ret_ip!()).unwrap_or_else(err_ptr)
 }
 
 #[c_export]
