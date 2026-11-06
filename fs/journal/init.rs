@@ -2,9 +2,6 @@
 
 //! The journal's startup and shutdown, and what it allocates going rw.
 
-use core::ffi::c_int;
-use core::mem::offset_of;
-use core::ptr;
 use core::sync::atomic::Ordering::Relaxed;
 
 use crate::alloc::replicas::DevlistEntry;
@@ -14,10 +11,11 @@ use crate::c::journal_flags::*;
 use crate::data::ptrs::Ptrs;
 use crate::errcode::{bch_errcode, BchError};
 use crate::format::DataType;
-use crate::fs::Dev;
+use crate::fs::{Dev, StateLockWrite};
 use crate::init::error::id;
 use crate::types::Fifo;
-use crate::util::alloc::{darray_take, kvfree_sized, kvzalloc};
+use crate::util::alloc::darray_take;
+use crate::util::bio::BioSet;
 use crate::util::closure::closure_wait_event;
 use crate::util::kernel::jiffies;
 use crate::{bch_err, fsck_err_on, warn_on};
@@ -55,7 +53,7 @@ impl c::journal {
             #[cfg(kernel)]
             self.stop_thread.store(unsafe { c::get_current() }, Relaxed);
             #[cfg(not(kernel))]
-            self.stop_thread.store(ptr::null_mut(), Relaxed);
+            self.stop_thread.store(core::ptr::null_mut(), Relaxed);
         }
         self.flush_pins(u64::MAX);
 
@@ -225,12 +223,8 @@ impl c::journal {
         let size = c::JOURNAL_ENTRY_SIZE_MIN;
 
         self.buf_size_want.set(size);
-        let buf = kvzalloc(size as usize).map_err(|_| enomem())?;
-        {
-            let mut g = self.lock.lock();
-            g.free_buf_size = size;
-            g.free_buf = buf.as_ptr().cast();
-        }
+        let buf = c::JsetBuf::new(size).map_err(|_| enomem())?;
+        self.lock.lock().free_buf = buf;
 
         /*
          * in_flight holds one entry per seq in (seq_ondisk, cur_seq]. Size is
@@ -259,23 +253,6 @@ impl c::journal {
         drop(unsafe { darray_take(&mut j.early_journal_entries) });
         drop(unsafe { darray_take(&mut j.rewind_ranges) });
 
-        /*
-         * Any bufs still in the in_flight fifo are leftover on error paths
-         * (normal shutdown drains them).
-         */
-        for buf in j.in_flight.iter() {
-            if let Some(data) = ptr::NonNull::new(buf.data) {
-                unsafe { kvfree_sized(data.cast(), buf.buf_size as usize) };
-            }
-        }
-        drop(core::mem::take(&mut j.in_flight));
-
-        let g = j.lock.get_mut();
-        if let Some(buf) = ptr::NonNull::new(g.free_buf) {
-            unsafe { kvfree_sized(buf.cast(), g.free_buf_size as usize) };
-            g.free_buf = ptr::null_mut();
-        }
-
         unsafe {
             c::cancel_work_sync(&raw mut j.pin_resize_work);
             c::cancel_work_sync(&raw mut j.flush_degraded_work);
@@ -284,26 +261,14 @@ impl c::journal {
 }
 
 impl Dev {
-    pub fn journal_init(&self) -> Result<(), BchError> {
+    pub fn journal_init(&self, state: &StateLockWrite<'_>) -> Result<(), BchError> {
         /*
          * Pool size is just the mempool reserve for forward progress under
          * memory pressure; JOURNAL_STATE_BUF_NR matches the reservation
          * fastpath ring (the effective parallel-write ceiling for hot-path
          * allocations).
          */
-        let ret = unsafe {
-            c::bioset_init((&raw const self.journal.bio_set).cast_mut(), c::JOURNAL_STATE_BUF_NR,
-                           offset_of!(c::journal_bio, bio) as u32, c::BIOSET_NEED_BVECS as c_int)
-        };
-        if ret != 0 {
-            return self.fs().throw(bch_errcode::BCH_ERR_ENOMEM_dev_journal_init);
-        }
-        Ok(())
-    }
-
-    /// # Safety
-    /// The device is going away: nothing else touches its journal.
-    pub unsafe fn journal_exit(ca: *mut Dev) {
-        unsafe { c::bioset_exit(&raw mut (*ca).journal.bio_set) };
+        self.journal.bio_set.init(state, || BioSet::new(c::JOURNAL_STATE_BUF_NR, true))
+            .map_err(|_| self.fs().err(bch_errcode::BCH_ERR_ENOMEM_dev_journal_init))
     }
 }

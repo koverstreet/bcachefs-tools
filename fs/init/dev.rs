@@ -508,10 +508,7 @@ impl PinnedDrop for Dev {
         ca.bucket_backpointer_mismatch.free();
         ca.bucket_backpointer_empty.free();
 
-        unsafe {
-            ca.sb_handle().free();
-            Dev::journal_exit(ca);
-        }
+        unsafe { ca.sb_handle().free() };
 
         ca.io_done.free();
         ca.buckets_free();
@@ -600,7 +597,7 @@ impl StateLockWrite<'_> {
 
         unsafe {
             ca.sb_handle().free();
-            Dev::journal_exit(ca.as_ptr());
+            ca.journal.bio_set.unmake();
         }
     }
 }
@@ -808,7 +805,9 @@ pub unsafe fn bch2_dev_in_fs(fs: *mut Head<c::bch_sb>, fs_bdev: Option<&c::block
     ret_to_c(dev_in_fs(fs, fs_bdev, sb, opts))
 }
 
-fn attach_bdev(ca: &Dev, sb: &mut c::bch_sb_handle, err: &mut Printbuf) -> Result<(), BchError> {
+fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, err: &mut Printbuf)
+    -> Result<(), BchError>
+{
     let fs = ca.fs();
     let mi = ca.mi.get();
 
@@ -830,7 +829,7 @@ fn attach_bdev(ca: &Dev, sb: &mut c::bch_sb_handle, err: &mut Printbuf) -> Resul
 
     let ca_p = ca.as_ptr();
     crate::journal::buckets::load(&ca, sb.io.buf.sb())?;
-    ca.journal_init()?;
+    ca.journal_init(state)?;
 
     let mut name = Printbuf::new();
     prt_bdevname(&mut name, Some(sb.dev.bdev()));
@@ -870,7 +869,7 @@ impl StateLockWrite<'_> {
         let ca = self.devs()[dev_idx as usize].get().expect("attaching a device that's not a member");
         let ca: &Dev = &ca;
 
-        attach_bdev(ca, sb, err)?;
+        attach_bdev(self, ca, sb, err)?;
 
         fs.devs_online.set(ca.dev_idx.into());
 
@@ -1327,7 +1326,9 @@ impl Fs {
         let s = c::reconcile_scan::from_arm(c::reconcile_scan_pending {});
 
         bch_err_fn!(self, (|| -> Result<(), BchError> {
-            attach_bdev(&ca, &mut sb, err)?;
+            let state = self.state_lock_write();
+
+            attach_bdev(&state, &ca, &mut sb, err)?;
 
             let identity = ca.identity();
 
@@ -1339,7 +1340,6 @@ impl Fs {
                 self.request_scan(s, false)?;
             }
 
-            let state = self.state_lock_write();
             let ca = {
                 let _noio = MemallocFlags::noio();
                 let mut w = self.sb_write();

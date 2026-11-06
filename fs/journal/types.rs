@@ -7,7 +7,7 @@ use crate::fs::{Dev, Fs};
 use crate::cstructs::c;
 use crate::data::ptrs::IoFailures;
 use crate::types::{CacheAligned, DArray, Fifo, RustOnly, c_default, rust_only};
-use crate::util::alloc::KVVec;
+use crate::util::alloc::{kvfree_sized, kvzalloc, AllocError, KVVec};
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
@@ -16,6 +16,7 @@ use crate::journal::buckets::{drop_retired, JournalBuckets};
 use crate::data_structures::list::ListLinks;
 use crate::locking::{Locked, LockedBy};
 use core::cell::Cell;
+use crate::util::bio::BioSet;
 use crate::util::late::Late;
 use crate::{new_lock, published};
 use pin_init::pin_data;
@@ -31,6 +32,30 @@ c_const! {
     pub const JOURNAL_STATE_BUF_BITS: u32 = 2;
     pub const JOURNAL_STATE_BUF_NR: u32 = 1 << c::JOURNAL_STATE_BUF_BITS;
     pub const JOURNAL_STATE_BUF_MASK: u32 = c::JOURNAL_STATE_BUF_NR - 1;
+}
+
+/// A journal entry's buffer, freed with it. C moves it whole, data and size
+/// together: between j->free_buf and the bufs in flight.
+#[repr(C)]
+pub struct JsetBuf {
+    data: *mut Head<c::jset>,
+    size: c_uint, /* size in bytes of @data */
+}
+
+unsafe impl ::pin_init::Zeroable for JsetBuf {}
+
+impl JsetBuf {
+    pub fn new(size: c_uint) -> Result<Self, AllocError> {
+        Ok(JsetBuf { data: kvzalloc(size as usize)?.as_ptr().cast(), size })
+    }
+}
+
+impl Drop for JsetBuf {
+    fn drop(&mut self) {
+        if let Some(data) = core::ptr::NonNull::new(self.data) {
+            unsafe { kvfree_sized(data.cast(), self.size as usize) };
+        }
+    }
 }
 
 /*
@@ -50,7 +75,8 @@ nest! {
     pub struct journal_buf {
         pub io: c::closure,
         pub j: *mut c::journal, /* for container_of-equivalent recovery */
-        pub data: *mut Head<c::jset>,
+        #[c_anon("struct { struct jset *data; unsigned buf_size; }")]
+        pub data: JsetBuf,
 
         pub key: c::bkey_i,
         pub key_pad: [u64; c::BCH_REPLICAS_MAX as usize],
@@ -69,7 +95,6 @@ nest! {
 
         pub last_seq: u64, /* copy of data->last_seq */
 
-        pub buf_size: c_uint, /* size in bytes of @data */
         pub sectors: c_uint, /* maximum size for current entry */
         pub disk_sectors: c_uint, /* maximum size entry could have been, if
                                                 buf_size was bigger */
@@ -272,6 +297,7 @@ pub struct journal_bio {
     pub bio: c::bio,
 }
 c_default!(journal_bio);
+crate::has_bio!(journal_bio, bio);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -307,8 +333,8 @@ pub struct JournalLocked {
      */
     pub ring_buf: [*mut c::journal_buf; c::JOURNAL_STATE_BUF_NR as usize],
 
-    pub free_buf: *mut c_void,
-    pub free_buf_size: c_uint,
+    #[c_anon("struct { struct jset *free_buf; unsigned free_buf_size; }")]
+    pub free_buf: JsetBuf,
 
     pub dirty_entry_bytes: usize,
     pub space: [c::journal_space; c::journal_space_nr as usize],
@@ -633,7 +659,8 @@ pub struct journal_device {
      * submit time and free on completion; the pool size bounds the
      * mempool reserve, not in-flight depth.
      */
-    pub bio_set: c::bio_set,
+    #[c("struct bio_set bio_set")]
+    pub bio_set: Late<BioSet<journal_bio>>,
 
     #[pin]
     #[init(new_lock!((), "&ca->journal.discard_lock"))]
