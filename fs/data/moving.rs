@@ -22,7 +22,8 @@
 //! that outlives the borrow, counted in the context, is a MovingIo.
 
 use crate::btree::bkey::BkeySC;
-use crate::btree::iter::{BtreeIter, BtreeTrans, TransFnName};
+use crate::btree::iter::{BtreeIter, BtreeTrans};
+use crate::btree::trans::TransFnName;
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::copygc::bch2_copygc_wait_not_running;
