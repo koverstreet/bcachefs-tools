@@ -22,7 +22,7 @@ use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{c_export, CStruct, c_enum, c_xmacro, TypeInfo};
 use crate::types::c_default;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -185,16 +185,15 @@ c_enum! {
  * against BCH_BTREE_IDS(), which is what says: deleted, which every btree
  * may, and what each BTREE_IS_extents btree allows.
  */
-macro_rules! extents_btrees_key_types {
-    ($(($name:tt, $nr:literal, $($flag:ident)|+, $(BIT_ULL($t:ident))|+ $(, $($rest:tt)*)?)),* $(,)?) => {
-        const EXTENTS_BTREES_KEY_TYPES: u64 =
-            1 << c::bch_bkey_type::KEY_TYPE_deleted.0 $($(| 1 << c::bch_bkey_type::$t.0)+)*;
-    };
-}
-
 const _: () = {
-    c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_extents => extents_btrees_key_types]);
-    assert!(types_with(c::BKEY_TYPE_extent) == EXTENTS_BTREES_KEY_TYPES,
+    let (mut extents_btrees_key_types, mut id) = (0, 0);
+    while id < c::BTREE_ID_NR as u32 {
+        if crate::BTREE_IS_EXTENTS_MASK & (1 << id) != 0 {
+            extents_btrees_key_types |= Btree(id).key_types();
+        }
+        id += 1;
+    }
+    assert!(types_with(c::BKEY_TYPE_extent) == extents_btrees_key_types,
             "BKEY_TYPE_extent isn't on exactly the key types BCH_BTREE_IDS()' extents btrees hold");
 };
 

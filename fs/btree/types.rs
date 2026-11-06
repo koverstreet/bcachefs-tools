@@ -1169,7 +1169,25 @@ macro_rules! btree_ids_mask {
     ($(($name:ident, $nr:literal $(, $($rest:tt)*)?)),* $(,)?) => { 0u64 $(| 1 << $nr)* };
 }
 
+/// BCH_BTREE_IDS()' key types, by id: deleted, which every btree may hold,
+/// and each's own - a bit each, by number.
+macro_rules! btree_key_types {
+    ($(($name:tt, $nr:literal, $($flag:tt)|+, $(BIT_ULL($t:ident))|+ $(, $($rest:tt)*)?)),* $(,)?) => {
+        const BTREE_KEY_TYPES: [u64; c::BTREE_ID_NR as usize] = {
+            let mut t = [0; c::BTREE_ID_NR as usize];
+            $(t[$nr] = 1 << c::bch_bkey_type::KEY_TYPE_deleted.0 $(| 1 << c::bch_bkey_type::$t.0)+;)*
+            t
+        };
+    };
+}
+c::BCH_BTREE_IDS!(btree_key_types);
+
 impl Btree {
+    /// The key types it may hold, a bit each: bch2_key_types_allowed[].
+    pub const fn key_types(self) -> u64 {
+        if (self.0 as usize) < BTREE_KEY_TYPES.len() { BTREE_KEY_TYPES[self.0 as usize] } else { 0 }
+    }
+
     /// Whether it's an extents btree with snapshots:
     /// btree_id_is_extents_snapshots().
     pub const fn is_extents_snapshots(self) -> bool {
