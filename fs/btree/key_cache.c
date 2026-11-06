@@ -763,9 +763,9 @@ void bch2_btree_insert_key_cached(struct btree_trans *trans,
 	u64 seq = trans->journal_res.seq;
 	WARN_ONCE(!seq ||
 		  seq < READ_ONCE(c->journal.last_seq) ||
-		  seq >= READ_ONCE(c->journal.pin.back),
+		  seq >= bch2_journal_pins_back(&c->journal),
 		  "key cache insert pinning journal seq %llu, live range [%llu, %llu)%s",
-		  seq, READ_ONCE(c->journal.last_seq), READ_ONCE(c->journal.pin.back),
+		  seq, READ_ONCE(c->journal.last_seq), bch2_journal_pins_back(&c->journal),
 		  insert_entry->flags & BTREE_UPDATE_nojournal ? " (nojournal)" : "");
 
 	bch2_journal_pin_add(&c->journal, seq, &ck->journal,

@@ -5,27 +5,6 @@
 #include "alloc/replicas.h"
 #include "sb/members.h"
 
-#define JOURNAL_PIN	(32 * 1024)
-
-/*
- * Ceiling on dirty journal entries. The pin fifo grows on demand up to this,
- * and never past it: what it bounds is how far the journal can run ahead of
- * reclaim, and so how many entries the next mount has to replay - small
- * fsync-heavy entries can otherwise pile up by the million, bounded only by
- * journal space.
- *
- * A filesystem from before the ceiling can come up with more than this dirty;
- * the fifo is allocated to fit, reclaim works it back down, and the fifo
- * shrinks to the ceiling once it can (bch2_journal_pin_fifo_resize()).
- */
-#define JOURNAL_PIN_MAX	(1024 * 1024)
-
-/* The most dirty journal entries we let accumulate before reclaim must act */
-static inline u64 journal_pin_limit(struct journal *j)
-{
-	return min_t(u64, j->pin.size, JOURNAL_PIN_MAX);
-}
-
 static inline void journal_reclaim_kick(struct journal *j)
 {
 	struct task_struct *p = READ_ONCE(j->reclaim_thread);
@@ -56,77 +35,27 @@ static inline void bch2_journal_set_alloc_watermark(struct journal *j, u8 *p,
 
 void bch2_journal_space_available(struct journal *);
 
-static inline void journal_pin_list_init(struct journal_entry_pin_list *p, int count)
+static inline bool journal_pin_active(struct journal_entry_pin *pin)
 {
-	for (unsigned i = 0; i < ARRAY_SIZE(p->unflushed); i++)
-		INIT_LIST_HEAD(&p->unflushed[i]);
-	INIT_LIST_HEAD(&p->flushed);
-	atomic_set(&p->count, count);
-	p->unreplayed = false;
-	p->devs.nr = 0;
-	p->bytes = 0;
+	return pin->seq != 0;
 }
 
-static inline bool journal_pin_has_dev(const struct journal_entry_pin_list *p, unsigned dev)
-{
-	for (unsigned i = 0; i < p->devs.nr; i++)
-		if (p->devs.data[i] == dev)
-			return true;
-	return false;
-}
+#include "journal/reclaim_gen.h"
+#include "journal/pins_gen.h"
 
 /*
  * The pin only stores the device list (the key); the refcount lives in the
  * superblock replicas table. Rebuild a replicas entry from the compact list
  * for the get/put/eq/to_text calls.
  */
-static inline void journal_pin_devs_to_replicas(union bch_replicas_padded *r,
-						const struct journal_entry_pin_list *p)
+static inline void journal_seq_devs_to_replicas(union bch_replicas_padded *r,
+						struct journal *j, u64 seq)
 {
-	struct bch_devs_list devs = {};
-	for (unsigned i = 0; i < p->devs.nr; i++)
-		bch2_dev_list_add_dev(&devs, p->devs.data[i]);
-	bch2_devlist_to_replicas(&r->e, BCH_DATA_journal, devs);
+	bch2_devlist_to_replicas(&r->e, BCH_DATA_journal, bch2_journal_seq_devs(j, seq));
 }
-
-/* @devs is bounded by metadata_replicas <= BCH_REPLICAS_MAX (journal write) */
-static inline void journal_pin_set_devs(struct journal_entry_pin_list *p,
-					const struct bch_devs_list *devs)
-{
-	p->devs.nr = 0;
-	for (unsigned i = 0; i < devs->nr; i++)
-		p->devs.data[p->devs.nr++] = devs->data[i];
-}
-
-static inline bool journal_pin_active(struct journal_entry_pin *pin)
-{
-	return pin->seq != 0;
-}
-
-static inline struct journal_entry_pin_list *
-journal_seq_pin(struct journal *j, u64 seq)
-{
-	lockdep_assert_held(&j->pin_resize_lock);
-	EBUG_ON(seq < j->pin.front || seq >= j->pin.back);
-
-	return &fifo_entry(&j->pin, seq);
-}
-
-void bch2_journal_pin_list_check_retired(struct journal *,
-					 struct journal_entry_pin_list *, u64);
-void bch2_journal_update_last_seq(struct journal *);
-
-#include "journal/reclaim_gen.h"
 
 int bch2_journal_update_last_seq_ondisk(struct journal *, u64,
 					darray_replicas_entry_refs *);
-
-static inline bool __bch2_journal_pin_put(struct journal *j, u64 seq)
-{
-	struct journal_entry_pin_list *pin_list = journal_seq_pin(j, seq);
-
-	return atomic_dec_and_test(&pin_list->count);
-}
 
 static inline enum journal_pin_type journal_pin_type_btree(unsigned level)
 {
@@ -171,7 +100,6 @@ static inline bool bch2_journal_flush_outstanding_pins(struct journal *j)
 int bch2_journal_flush_device_pins(struct journal *, int);
 void bch2_journal_flush_dev_ro(struct journal *, unsigned);
 
-bool bch2_journal_seq_pins_to_text(struct printbuf *, struct journal *, u64 *, unsigned *);
 void bch2_journal_pins_to_text(struct printbuf *, struct journal *, unsigned);
 void bch2_journal_reclaim_to_text(struct printbuf *, struct journal *);
 

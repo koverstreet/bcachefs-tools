@@ -263,7 +263,7 @@ void __bch2_journal_buf_put_final(struct journal *j, u64 seq)
 	lockdep_assert_held(&j->pin_resize_lock);
 	lockdep_assert_held(&j->lock);
 
-	if (__bch2_journal_pin_put(j, seq))
+	if (bch2_journal_seq_put(j, seq))
 		bch2_journal_update_last_seq(j);
 	bch2_journal_do_writes_locked(j);
 
@@ -333,7 +333,7 @@ static void __journal_entry_close_one(struct journal *j, unsigned closed_val, bo
 	if (closed_val != JOURNAL_ENTRY_ERROR_VAL) {
 		size_t bytes = roundup_pow_of_two(vstruct_bytes(buf->data));
 
-		journal_seq_pin(j, seq)->bytes = bytes;
+		bch2_journal_seq_set_bytes(j, seq, bytes);
 		j->dirty_entry_bytes += bytes;
 	}
 
@@ -429,7 +429,7 @@ static int __journal_entry_open_one(struct journal *j)
 
 	try(bch2_journal_error(j));
 
-	if (!fifo_free(&j->pin))
+	if (bch2_journal_pins_used(j) >= bch2_journal_pins_size(j))
 		return bch_err_throw(c, journal_pin_full);
 
 	/*
@@ -492,7 +492,7 @@ static int __journal_entry_open_one(struct journal *j)
 	if (u64s <= (ssize_t) j->early_journal_entries.nr)
 		return bch_err_throw(c, journal_full);
 
-	bool was_empty = fifo_empty(&j->pin);
+	bool was_empty = !bch2_journal_pins_used(j);
 
 	/*
 	 * The fifo_push() needs to happen at the same time as j->seq is
@@ -500,9 +500,7 @@ static int __journal_entry_open_one(struct journal *j)
 	 */
 	u64 seq = atomic64_inc_return(&j->seq);
 	atomic64_set(&j->res_seq, seq);
-	journal_pin_list_init(fifo_push_ref(&j->pin), 1);
-
-	BUG_ON(j->pin.back - 1 != seq);
+	bch2_journal_pins_push(j, seq);
 
 	/*
 	 * Grab the next in_flight FIFO slot (inline storage — the pointer
@@ -1507,7 +1505,8 @@ __cold void __bch2_journal_debug_to_text(struct printbuf *out, struct journal *j
 	prt_printf(out, "flags:\t");
 	prt_bitflags(out, bch2_journal_flags_strs, j->flags);
 	prt_newline(out);
-	prt_printf(out, "dirty journal entries:\t%llu/%llu\n",	fifo_used(&j->pin), j->pin.size);
+	prt_printf(out, "dirty journal entries:\t%llu/%llu\n",
+		   bch2_journal_pins_used(j), bch2_journal_pins_size(j));
 	prt_printf(out, "seq:\t%llu\n",				journal_cur_seq(j));
 	prt_printf(out, "seq_ondisk:\t%llu\n",			j->seq_ondisk);
 	prt_printf(out, "last_seq:\t%llu\n",			j->last_seq);

@@ -341,23 +341,22 @@ static CLOSURE_CALLBACK(journal_write_done)
 		 * the compact device list for refcount updates.
 		 */
 		percpu_down_read(&j->pin_resize_lock);
-		struct journal_entry_pin_list *pin = journal_seq_pin(j, seq_wrote);
 		bool write_failed = !bch2_io_failures_empty(&w->failed);
 		bool flush_failed = bch2_journal_buf_flush_failed(w);
 
 		if (unlikely(write_failed || flush_failed)) {
 			union bch_replicas_padded r;
-			journal_pin_devs_to_replicas(&r, pin);
+			journal_seq_devs_to_replicas(&r, j, seq_wrote);
 			bch2_replicas_entry_put(c, &r.e);
-			pin->devs.nr = 0;
+			bch2_journal_seq_set_devs(j, seq_wrote, &(struct bch_devs_list) {});
 		}
 
-		if (!pin->devs.nr && !w->empty) {
+		if (!bch2_journal_seq_devs(j, seq_wrote).nr && !w->empty) {
 			union bch_replicas_padded r;
 			bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, w->devs_written);
 			err = bch2_replicas_entry_get(c, &r.e);
 			if (!err)
-				journal_pin_set_devs(pin, &w->devs_written);
+				bch2_journal_seq_set_devs(j, seq_wrote, &w->devs_written);
 		}
 
 		if (unlikely(write_failed || flush_failed || err)) {
@@ -411,7 +410,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 		closure_debug_destroy(cl);
 
 		spin_lock(&j->lock);
-		BUG_ON(seq_wrote < j->pin.front);
+		BUG_ON(seq_wrote < bch2_journal_pins_front(j));
 		if (err && (!j->err_seq || seq_wrote < j->err_seq))
 			j->err_seq = seq_wrote;
 
@@ -514,10 +513,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 	if (w_wrote)
 		w_wrote->write_done = true;
 
-	u64 new_front = min(j->pin.back, j->last_seq_ondisk);
-	for (u64 seq = j->pin.front; seq < new_front; seq++)
-		bch2_journal_pin_list_check_retired(j, &fifo_entry(&j->pin, seq), seq);
-	j->pin.front = new_front;
+	bch2_journal_pins_advance_front(j, j->last_seq_ondisk);
 
 	if (completed) {
 		/*
@@ -996,17 +992,17 @@ CLOSURE_CALLBACK(bch2_journal_write)
 		 * early ahead of the deferred superblock write.
 		 */
 		guard(percpu_read)(&j->pin_resize_lock);
-		struct journal_entry_pin_list *pin = journal_seq_pin(j, le64_to_cpu(w->data->seq));
+		u64 seq = le64_to_cpu(w->data->seq);
 		union bch_replicas_padded r;
 		bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, w->devs_written);
 
 		ret = bch2_replicas_entry_get(c, &r.e);
 		if (ret) {
-			pin->devs.nr = 0;
+			bch2_journal_seq_set_devs(j, seq, &(struct bch_devs_list) {});
 			goto err;
 		}
 
-		journal_pin_set_devs(pin, &w->devs_written);
+		bch2_journal_seq_set_devs(j, seq, &w->devs_written);
 	}
 
 	if (c->opts.nochanges)

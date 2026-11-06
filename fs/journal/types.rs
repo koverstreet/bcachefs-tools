@@ -9,7 +9,7 @@ use crate::types::{CacheAligned, DArray, Fifo, RustOnly, c_default, rust_only};
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
-use core::sync::atomic::{AtomicI32, AtomicI64, AtomicPtr, AtomicU64};
+use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64};
 use crate::journal::buckets::JournalBuckets;
 use crate::locking::Locked;
 use crate::util::late::Late;
@@ -106,25 +106,6 @@ c_enum! {
         JOURNAL_PIN_TYPE_NR,
     }
 }
-
-nest! {
-    #[derive(CStruct)]*
-    #[repr(C)]*
-    pub struct journal_entry_pin_list {
-        pub lock: c::spinlock_t,
-        pub count: AtomicI32,
-        pub unflushed: [c::list_head; c::JOURNAL_PIN_TYPE_NR as usize],
-        pub flushed: c::list_head,
-        pub unreplayed: bool,
-        #[c_inline]
-        pub devs: pub struct journal_entry_pin_list_devs {
-            pub nr: u8,
-            pub data: [u8; c::BCH_REPLICAS_MAX as usize],
-        },
-        pub bytes: c_uint,
-    }
-}
-c_default!(journal_entry_pin_list);
 
 c_typedef! {
     pub type journal_pin_flush_fn = Option<unsafe extern "C" fn(j: *mut c::journal, *mut c::journal_entry_pin,
@@ -473,9 +454,13 @@ nest! {
          * needed. When all journal entries in the oldest journal bucket are no
          * longer needed, the bucket can be discarded and reused.
          */
-        #[c("FIFO_U64_IDX(struct journal_entry_pin_list) pin")]
-        pub pin: Fifo<c::journal_entry_pin_list, u64>,
-        pub pin_resize_lock: c::percpu_rw_semaphore,
+        #[pin]
+        #[init(new_lock!((), "&j->pin_resize_lock"))]
+        #[c_lock("struct percpu_rw_semaphore pin_resize_lock")]
+        pub pin_resize_lock: Locked<c::percpu_rw_semaphore>,
+        #[pin]
+        #[init(crate::journal::pins::new())]
+        pub pins: crate::journal::pins::Pins,
         pub pin_resize_work: c::work_struct,
 
         /* Flushes under-replicated pins when a device comes back: */
@@ -512,8 +497,9 @@ nest! {
         pub nr_background_reclaim: u64,
 
         pub last_flushed: c_ulong,
-        pub flush_in_progress: *mut c::journal_entry_pin,
-        pub flush_in_progress_dropped: bool,
+        #[c("struct journal_entry_pin *flush_in_progress")]
+        pub flush_in_progress: AtomicPtr<c::journal_entry_pin>,
+        pub flush_in_progress_dropped: Volatile<bool>,
         pub pin_flush_wait: c::wait_queue_head_t,
 
         pub write_start_time: u64,

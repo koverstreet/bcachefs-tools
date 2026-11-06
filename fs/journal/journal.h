@@ -573,9 +573,6 @@ static inline void *class_journal_block_lock_ptr(class_journal_block_t *_T)
 	return _T;
 }
 
-bool bch2_journal_pin_fifo_want_resize(struct journal *);
-int bch2_journal_pin_fifo_resize(struct journal *);
-
 struct journal_buf *bch2_next_write_buffer_flush_journal_buf(struct journal *, u64, bool *);
 
 void __bch2_journal_debug_to_text(struct printbuf *, struct journal *);
