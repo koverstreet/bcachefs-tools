@@ -893,13 +893,15 @@ pub fn c_xmacro(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("c_xmacro!", || xmacro(input.into()))
 }
 
-/// An x-macro list's rows, selected: NAME!(xmacro_select [TOKEN => cb])
-/// expands to cb! { (args), ... } of the rows with the identifier TOKEN among
-/// their own tokens - a flag in a flags column, as BKEY_TYPE_ptrs is in
-/// BCH_BKEY_TYPES(). cb may be a path; [TOKEN => cb { args }] hands it args
-/// before the rows, cb! { args (args), ... }. Selecting in a macro_rules!
-/// muncher instead nests an expansion per token, which runs into the
-/// recursion limit as lists grow.
+/// A list's rows, selected: NAME!(xmacro_select [TOKEN => cb]) expands to
+/// cb! { (args), ... } of the rows with the identifier TOKEN in a set of
+/// theirs, a `[..]` - a flag in a flags column, as ptrs is in bkey_val's
+/// (tagged_union!'s #[arm_columns]) - or, in a row without one, among its own
+/// tokens, as BTREE_IS_extents is in BCH_BTREE_IDS()'. None selected is an
+/// error: an empty mask compiles, and runs no triggers. cb may be a path;
+/// [TOKEN => cb { args }] hands it args before the rows, cb! { args (args), ... }.
+/// Selecting in a macro_rules! muncher instead nests an expansion per token,
+/// which runs into the recursion limit as lists grow.
 #[proc_macro]
 pub fn xmacro_select(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("xmacro_select!", || {
@@ -920,17 +922,25 @@ pub fn xmacro_select(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
         };
         let cb = cb.iter().cloned().collect::<TokenStream>();
 
+        let is_token = |t: &TokenTree| matches!(t, TokenTree::Ident(i) if i.to_string() == token);
         let mut rows = Vec::new();
         for t in input {
             match t {
                 TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis => {
-                    if g.stream().into_iter().any(|t| matches!(&t, TokenTree::Ident(i) if i.to_string() == token)) {
+                    let set = g.stream().into_iter().find_map(|t| match t {
+                        TokenTree::Group(s) if s.delimiter() == Delimiter::Bracket => Some(s.stream()),
+                        _ => None,
+                    });
+                    if set.unwrap_or_else(|| g.stream()).into_iter().any(|t| is_token(&t)) {
                         rows.push(g);
                     }
                 }
                 TokenTree::Punct(p) if p.as_char() == ',' => {}
                 t => return Err(format!("expected a list of (args) rows, found {t}")),
             }
+        }
+        if rows.is_empty() {
+            return Err(format!("no row has {token}"));
         }
         Ok(quote!(#cb! { #args #(#rows),* }))
     })

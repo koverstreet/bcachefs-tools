@@ -796,9 +796,9 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "bkey-types",
-        macro_name: "BCH_BKEY_TYPES",
+        macro_name: "bkey_val",
         default: None,
-        doc_field: Some(3),
+        doc_field: Some(2),
         flags_field: None,
         date_field: None,
         version_field: None,

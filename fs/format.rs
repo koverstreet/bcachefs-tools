@@ -338,6 +338,7 @@ impl FlexArray for bkey_i {
 
 c_enum! {
     #[flags]
+    #[prefix(BKEY_TYPE_)]
     pub enum bch_bkey_type_flags: u32 {
         BKEY_TYPE_strict_btree_checks = 1 << 0,
         /* Its value has pointers - extent entries: bch2_bkey_ptrs_c()'s types */
@@ -365,147 +366,163 @@ c_enum! {
     }
 }
 
-c_xmacro! {
-    /*
-     * - DELETED keys are used internally to mark keys that should be ignored but
-     *   override keys in composition order.  Their version number is ignored.
-     *
-     * - DISCARDED keys indicate that the data is all 0s because it has been
-     *   discarded. DISCARDs may have a version; if the version is nonzero the key
-     *   will be persistent, otherwise the key will be dropped whenever the btree
-     *   node is rewritten (like DELETED keys).
-     *
-     * - ERROR: any read of the data returns a read error, as the data was lost due
-     *   to a failing device. Like DISCARDED keys, they can be removed (overridden)
-     *   by new writes or cluster-wide GC. Node repair can also overwrite them with
-     *   the same or a more recent version number, but not with an older version
-     *   number.
-     *
-     * - WHITEOUT: for hash table btrees
-     *
-     * Each type: its name and KEY_TYPE number, bch_bkey_type_flags, the
-     * first field its value may end before - one added after the type was
-     * created, which an older key hasn't - or _ if a valid value has them
-     * all, and what it's for. The value up to that field, or all of it, is
-     * the shortest a valid one is: its min_val_size. A value that's an array
-     * - accounting's, damage's - checks it has an entry in its own validate.
-     */
-    BCH_BKEY_TYPES(x) {
-        (deleted,               0,  BKEY_TYPE_extent, _,
-         "Transient during btree updates; inserting a deleted key "
-         "removes any existing key at that position. "
-         "Stripped during btree node writes."),
-        (whiteout,              1,  BKEY_TYPE_extent, _,
-         "Blocks visibility of ancestor snapshot versions of a key"),
-        (error,                 2,  BKEY_TYPE_extent | BKEY_TYPE_allocation, err,
-         "Marks an extent as containing unrecoverable errors"),
-        (cookie,                3,  BKEY_TYPE_extent, _,
-         "Used by reconcile to track option changes via "
-         "incrementing version numbers in the reconcile_scan btree"),
-        (hash_whiteout,         4,  BKEY_TYPE_strict_btree_checks, _,
-         "Whiteout for hash table btrees (dirents, xattrs) that "
-         "preserves hash chain integrity"),
-        (btree_ptr,             5,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut | BKEY_TYPE_btree_ptr, _,
-         "Btree node pointer (v1, legacy)"),
-        (extent,                6,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut | BKEY_TYPE_extent |
-                                    BKEY_TYPE_allocation | BKEY_TYPE_data | BKEY_TYPE_user_data, _,
-         "File data extent with device pointers, checksums, and "
-         "optional compression metadata"),
-        (reservation,           7,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent |
-                                    BKEY_TYPE_allocation | BKEY_TYPE_user_data, _,
-         "Disk space reservation for a file region"),
-        (inode,                 8,  BKEY_TYPE_strict_btree_checks, _,
-         "Inode metadata (v1, legacy)"),
-        (inode_generation,      9,  BKEY_TYPE_strict_btree_checks, _,
-         "Tracks generation numbers for deleted inodes"),
-        (dirent,                10, BKEY_TYPE_strict_btree_checks, _,
-         "Directory entry with name hash, inode number, and type"),
-        (xattr,                 11, BKEY_TYPE_strict_btree_checks, _,
-         "Extended attribute with name hash and value"),
-        (alloc,                 12, BKEY_TYPE_strict_btree_checks, _,
-         "Bucket allocation metadata (v1, legacy)"),
-        (quota,                 13, BKEY_TYPE_strict_btree_checks, _,
-         "Quota counters for a user, group, or project"),
-        (stripe,                14, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs, _,
-         "Erasure code stripe metadata with parity pointers"),
-        (reflink_p,             15, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent |
-                                    BKEY_TYPE_allocation | BKEY_TYPE_data, _,
-         "Pointer from the extents btree to an indirect extent "
-         "in the reflink btree"),
-        (reflink_v,             16, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut | BKEY_TYPE_extent | BKEY_TYPE_indirect |
-                                    BKEY_TYPE_allocation | BKEY_TYPE_data, _,
-         "Indirect extent with refcount in the reflink btree"),
-        (inline_data,           17, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent |
-                                    BKEY_TYPE_allocation | BKEY_TYPE_data | BKEY_TYPE_user_data | BKEY_TYPE_inline_data, _,
-         "Small file data stored inline in the btree"),
-        (btree_ptr_v2,          18, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut | BKEY_TYPE_btree_ptr, _,
-         "Btree node pointer (v2) with sequence number and "
-         "min_key for more efficient traversal"),
-        (indirect_inline_data,  19, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent | BKEY_TYPE_indirect |
-                                    BKEY_TYPE_allocation | BKEY_TYPE_data | BKEY_TYPE_inline_data, _,
-         "Reflinked inline data with refcount"),
-        (alloc_v2,              20, BKEY_TYPE_strict_btree_checks, _,
-         "Bucket allocation metadata (v2, legacy)"),
-        (subvolume,             21, BKEY_TYPE_strict_btree_checks, creation_parent,
-         "Subvolume metadata with root inode and snapshot ID"),
-        (snapshot,              22, BKEY_TYPE_strict_btree_checks, depth,
-         "Snapshot tree node with parent, children, and "
-         "subvolume references"),
-        (inode_v2,              23, BKEY_TYPE_strict_btree_checks, _,
-         "Inode metadata (v2) with journal sequence number"),
-        (alloc_v3,              24, BKEY_TYPE_strict_btree_checks, _,
-         "Bucket allocation metadata (v3, legacy)"),
-        (set,                   25, BKEY_TYPE_extent, _,
-         "Empty value; presence of the key is the information"),
-        (lru,                   26, BKEY_TYPE_strict_btree_checks, _,
-         "LRU tracking entry for cache eviction"),
-        (alloc_v4,              27, BKEY_TYPE_strict_btree_checks, journal_seq_empty,
-         "Bucket allocation metadata (v4, current)"),
-        (backpointer,           28, BKEY_TYPE_strict_btree_checks, _,
-         "Reverse pointer from a bucket back to the extent "
-         "referencing it"),
-        (inode_v3,              29, BKEY_TYPE_strict_btree_checks, _,
-         "Inode metadata (v3, current) with compact encoding"),
-        (bucket_gens,           30, BKEY_TYPE_strict_btree_checks, gens,
-         "Packed bucket generation numbers (256 per key)"),
-        (snapshot_tree,         31, BKEY_TYPE_strict_btree_checks, _,
-         "Root entry for a snapshot tree structure"),
-        (logged_op_truncate,    32, BKEY_TYPE_strict_btree_checks, _,
-         "Logged truncate operation for crash recovery"),
-        (logged_op_finsert,     33, BKEY_TYPE_strict_btree_checks, _,
-         "Logged file insert/collapse operation for crash recovery"),
-        (accounting,            34, BKEY_TYPE_strict_btree_checks, _,
-         "Disk accounting delta "
-         "(replicas, compression, device usage)"),
-        (inode_alloc_cursor,    35, BKEY_TYPE_strict_btree_checks, _,
-         "Per-CPU inode number allocation cursor"),
-        (extent_whiteout,       36, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
-         "Whiteout specific to the extents btree, blocking "
-         "visibility of ancestor snapshot extent versions"),
-        (logged_op_stripe_update, 37, BKEY_TYPE_strict_btree_checks, _,
-         "Logged stripe creation/update operation for crash recovery"),
-        (damage,                38, BKEY_TYPE_strict_btree_checks, _,
-         "Errors that damaged an inode, recorded in the same "
-         "transaction as the repair that did the damage: a sorted "
-         "list of bch_sb_error_id"),
-        (logged_op_inode_opt_propagate, 39, BKEY_TYPE_strict_btree_checks, _,
-         "Logged propagation of inode io options to ancestor "
-         "snapshot versions"),
-        (inline_data_v2,        40, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent |
-                                    BKEY_TYPE_allocation | BKEY_TYPE_data | BKEY_TYPE_user_data | BKEY_TYPE_inline_data, _,
-         "Small file data stored inline in the btree, "
-         "with its own checksum"),
-        (indirect_inline_data_v2, 41, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent | BKEY_TYPE_indirect |
-                                    BKEY_TYPE_allocation | BKEY_TYPE_data | BKEY_TYPE_inline_data, _,
-         "Reflinked inline data with refcount and its own checksum"),
-    }
-}
-
-c_enum! {
-    #[open]
-    pub enum bch_bkey_type: u32 {
-        BCH_BKEY_TYPES(name, nr, ..) => concat(KEY_TYPE_, name) = nr,
-        KEY_TYPE_MAX,
+/*
+ * - DELETED keys are used internally to mark keys that should be ignored but
+ *   override keys in composition order.  Their version number is ignored.
+ *
+ * - DISCARDED keys indicate that the data is all 0s because it has been
+ *   discarded. DISCARDs may have a version; if the version is nonzero the key
+ *   will be persistent, otherwise the key will be dropped whenever the btree
+ *   node is rewritten (like DELETED keys).
+ *
+ * - ERROR: any read of the data returns a read error, as the data was lost due
+ *   to a failing device. Like DISCARDED keys, they can be removed (overridden)
+ *   by new writes or cluster-wide GC. Node repair can also overwrite them with
+ *   the same or a more recent version number, but not with an older version
+ *   number.
+ *
+ * - WHITEOUT: for hash table btrees
+ */
+tagged_union! {
+    #[key_value]
+    #[tag_enum(bch_bkey_type: u32, prefix = KEY_TYPE_, nr = KEY_TYPE_MAX)]
+    #[arm_columns(flags: bch_bkey_type_flags)]
+    #[c_list(BCH_BKEY_TYPES)]
+    pub enum bkey_val {
+        /// Transient during btree updates; inserting a deleted key removes any
+        /// existing key at that position. Stripped during btree node writes.
+        #[flags(extent)]
+        deleted(c::Deleted) = 0,
+        /// Blocks visibility of ancestor snapshot versions of a key
+        #[flags(extent)]
+        whiteout(c::Whiteout) = 1,
+        /// Marks an extent as containing unrecoverable errors
+        #[flags(extent, allocation)]
+        error(c::Error) = 2,
+        /// Used by reconcile to track option changes via incrementing version
+        /// numbers in the reconcile_scan btree
+        #[flags(extent)]
+        cookie(c::Cookie) = 3,
+        /// Whiteout for hash table btrees (dirents, xattrs) that preserves hash
+        /// chain integrity
+        #[flags(strict_btree_checks)]
+        hash_whiteout(c::HashWhiteout) = 4,
+        /// Btree node pointer (v1, legacy)
+        #[flags(strict_btree_checks, ptrs, ptrs_mut, btree_ptr)]
+        btree_ptr(c::BtreePtr) = 5,
+        /// File data extent with device pointers, checksums, and optional
+        /// compression metadata
+        #[flags(strict_btree_checks, ptrs, ptrs_mut, extent, allocation, data, user_data)]
+        extent(c::Extent) = 6,
+        /// Disk space reservation for a file region
+        #[flags(strict_btree_checks, extent, allocation, user_data)]
+        reservation(c::Reservation) = 7,
+        /// Inode metadata (v1, legacy)
+        #[flags(strict_btree_checks)]
+        inode(c::Inode) = 8,
+        /// Tracks generation numbers for deleted inodes
+        #[flags(strict_btree_checks)]
+        inode_generation(c::InodeGeneration) = 9,
+        /// Directory entry with name hash, inode number, and type
+        #[flags(strict_btree_checks)]
+        dirent(c::Dirent) = 10,
+        /// Extended attribute with name hash and value
+        #[flags(strict_btree_checks)]
+        xattr(c::Xattr) = 11,
+        /// Bucket allocation metadata (v1, legacy)
+        #[flags(strict_btree_checks)]
+        alloc(c::Alloc) = 12,
+        /// Quota counters for a user, group, or project
+        #[flags(strict_btree_checks)]
+        quota(c::Quota) = 13,
+        /// Erasure code stripe metadata with parity pointers
+        #[flags(strict_btree_checks, ptrs)]
+        stripe(c::Stripe) = 14,
+        /// Pointer from the extents btree to an indirect extent in the reflink
+        /// btree
+        #[flags(strict_btree_checks, extent, allocation, data)]
+        reflink_p(c::ReflinkP) = 15,
+        /// Indirect extent with refcount in the reflink btree
+        #[flags(strict_btree_checks, ptrs, ptrs_mut, extent, indirect, allocation, data)]
+        reflink_v(c::ReflinkV) = 16,
+        /// Small file data stored inline in the btree
+        #[flags(strict_btree_checks, extent, allocation, data, user_data, inline_data)]
+        inline_data(c::InlineData) = 17,
+        /// Btree node pointer (v2) with sequence number and min_key for more
+        /// efficient traversal
+        #[flags(strict_btree_checks, ptrs, ptrs_mut, btree_ptr)]
+        btree_ptr_v2(c::BtreePtrV2) = 18,
+        /// Reflinked inline data with refcount
+        #[flags(strict_btree_checks, extent, indirect, allocation, data, inline_data)]
+        indirect_inline_data(c::IndirectInlineData) = 19,
+        /// Bucket allocation metadata (v2, legacy)
+        #[flags(strict_btree_checks)]
+        alloc_v2(c::AllocV2) = 20,
+        /// Subvolume metadata with root inode and snapshot ID
+        #[flags(strict_btree_checks)]
+        subvolume(c::Subvolume) = 21,
+        /// Snapshot tree node with parent, children, and subvolume references
+        #[flags(strict_btree_checks)]
+        snapshot(c::Snapshot) = 22,
+        /// Inode metadata (v2) with journal sequence number
+        #[flags(strict_btree_checks)]
+        inode_v2(c::InodeV2) = 23,
+        /// Bucket allocation metadata (v3, legacy)
+        #[flags(strict_btree_checks)]
+        alloc_v3(c::AllocV3) = 24,
+        /// Empty value; presence of the key is the information
+        #[flags(extent)]
+        set(c::Set) = 25,
+        /// LRU tracking entry for cache eviction
+        #[flags(strict_btree_checks)]
+        lru(c::Lru) = 26,
+        /// Bucket allocation metadata (v4, current)
+        #[flags(strict_btree_checks)]
+        alloc_v4(c::AllocV4) = 27,
+        /// Reverse pointer from a bucket back to the extent referencing it
+        #[flags(strict_btree_checks)]
+        backpointer(c::Backpointer) = 28,
+        /// Inode metadata (v3, current) with compact encoding
+        #[flags(strict_btree_checks)]
+        inode_v3(c::InodeV3) = 29,
+        /// Packed bucket generation numbers (256 per key)
+        #[flags(strict_btree_checks)]
+        bucket_gens(c::BucketGens) = 30,
+        /// Root entry for a snapshot tree structure
+        #[flags(strict_btree_checks)]
+        snapshot_tree(c::SnapshotTree) = 31,
+        /// Logged truncate operation for crash recovery
+        #[flags(strict_btree_checks)]
+        logged_op_truncate(c::LoggedOpTruncate) = 32,
+        /// Logged file insert/collapse operation for crash recovery
+        #[flags(strict_btree_checks)]
+        logged_op_finsert(c::LoggedOpFinsert) = 33,
+        /// Disk accounting delta (replicas, compression, device usage)
+        #[flags(strict_btree_checks)]
+        accounting(c::Accounting) = 34,
+        /// Per-CPU inode number allocation cursor
+        #[flags(strict_btree_checks)]
+        inode_alloc_cursor(c::InodeAllocCursor) = 35,
+        /// Whiteout specific to the extents btree, blocking visibility of
+        /// ancestor snapshot extent versions
+        #[flags(strict_btree_checks, extent)]
+        extent_whiteout(c::ExtentWhiteout) = 36,
+        /// Logged stripe creation/update operation for crash recovery
+        #[flags(strict_btree_checks)]
+        logged_op_stripe_update(c::LoggedOpStripeUpdate) = 37,
+        /// Errors that damaged an inode, recorded in the same transaction as
+        /// the repair that did the damage: a sorted list of bch_sb_error_id
+        #[flags(strict_btree_checks)]
+        damage(c::Damage) = 38,
+        /// Logged propagation of inode io options to ancestor snapshot versions
+        #[flags(strict_btree_checks)]
+        logged_op_inode_opt_propagate(c::LoggedOpInodeOptPropagate) = 39,
+        /// Small file data stored inline in the btree, with its own checksum
+        #[flags(strict_btree_checks, extent, allocation, data, user_data, inline_data)]
+        inline_data_v2(c::InlineDataV2) = 40,
+        /// Reflinked inline data with refcount and its own checksum
+        #[flags(strict_btree_checks, extent, indirect, allocation, data, inline_data)]
+        indirect_inline_data_v2(c::IndirectInlineDataV2) = 41,
     }
 }
 

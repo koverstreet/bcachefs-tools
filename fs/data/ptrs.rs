@@ -1,5 +1,5 @@
 //! Keys with pointers - btree node pointers, extents, indirect extents,
-//! stripes: the key types BCH_BKEY_TYPES() flags BKEY_TYPE_ptrs. A key
+//! stripes: the key types flagged BKEY_TYPE_ptrs. A key
 //! narrows to one with arm::<Ptrs>() - BkeySC<'_, Ptrs> and the rest, the
 //! same keys with the other arms dropped; each value type says where its
 //! extent entries are (PtrsBkey), and the entries - its pointers, and what
@@ -323,17 +323,17 @@ bkey_family!(
     /// Any of the key types with pointers, BKEY_TYPE_ptrs: a key armed to it -
     /// BkeySC<'_, Ptrs>, BkeyS<'_, Ptrs>, &BkeyI<Ptrs> - has its value read
     /// through typed().
-    Ptrs: BKEY_TYPE_ptrs);
+    Ptrs: ptrs);
 bkey_family!(
     /// The key types with pointers that can be edited in place,
     /// BKEY_TYPE_ptrs_mut: their extent entries run to the value's end, so
     /// entries can be inserted and dropped - every Ptrs type but a stripe.
-    PtrsMut: BKEY_TYPE_ptrs_mut);
+    PtrsMut: ptrs_mut);
 bkey_family!(
     /// A btree node pointer, BKEY_TYPE_btree_ptr - a key above the leaves, or a
     /// btree root's: a key armed to it is a BkeySC<'_, BtreePtrs>,
     /// BkeyS<'_, BtreePtrs>, &BkeyI<BtreePtrs>.
-    BtreePtrs: BKEY_TYPE_btree_ptr);
+    BtreePtrs: btree_ptr);
 
 /// A family of key types with pointers is a PtrsBkey as its member is.
 macro_rules! ptrs_bkey {
@@ -353,9 +353,9 @@ macro_rules! ptrs_bkey {
         }
     };
 }
-c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs => ptrs_bkey { Ptrs, PtrsTyped; }]);
-c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs_mut => ptrs_bkey { PtrsMut, PtrsMutTyped; }]);
-c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_btree_ptr => ptrs_bkey { BtreePtrs, BtreePtrsTyped; }]);
+c::bkey_val_arms!(cstruct_macros::xmacro_select [ptrs => ptrs_bkey { Ptrs, PtrsTyped; }]);
+c::bkey_val_arms!(cstruct_macros::xmacro_select [ptrs_mut => ptrs_bkey { PtrsMut, PtrsMutTyped; }]);
+c::bkey_val_arms!(cstruct_macros::xmacro_select [btree_ptr => ptrs_bkey { BtreePtrs, BtreePtrsTyped; }]);
 
 const _: () = {
     assert!(types_with(c::BKEY_TYPE_ptrs_mut) & !types_with(c::BKEY_TYPE_ptrs) == 0,

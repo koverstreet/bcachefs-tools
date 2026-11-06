@@ -211,7 +211,7 @@ pub fn bch2_bkey_val_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: Bkey
     bkey_val_to_text(out, c.map(Fs::from_c), k)
 }
 
-/// The shortest valid value of type @ty: its struct up to BCH_BKEY_TYPES()'
+/// The shortest valid value of type @ty: its struct up to its #[grown(from)]
 /// field, or all of it. A type this code doesn't know has no minimum.
 pub fn min_val_size(ty: u8) -> usize {
     crate::btree::bkey::key_type(ty).map_or(0, |t| t.min_val_size)

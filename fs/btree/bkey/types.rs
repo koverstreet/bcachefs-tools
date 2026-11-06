@@ -38,7 +38,7 @@
 //!    type's BkeyFamily is the one impl.
 //!
 //! What's known of a key type as data is KEY_TYPES, one KeyType per
-//! BCH_BKEY_TYPES() row: its flags and its value's StructInfo. A family with
+//! bkey_val arm: its flags and its value's StructInfo. A family with
 //! a field to find - an indirect extent's refcount - has FieldOffsets, built
 //! from it in the family's file: the field by name in each of its types, not
 //! a trait per type.
@@ -498,7 +498,7 @@ impl<T: ?Sized + BkeyVal<State: Implies<Validated>>> ValidatedVal for T {}
 pub trait BkeyTag {
     const TYPE: c::bch_bkey_type;
 
-    /// Up to BCH_BKEY_TYPES()' field: shorter than the struct is an older
+    /// Up to its #[grown(from)] field: shorter than the struct is an older
     /// version, shorter than this damage - bkey_val_size_too_small.
     const MIN_VAL_SIZE: usize;
 }
@@ -638,7 +638,7 @@ impl FamilyTypes for AllTypes {
     }
 }
 
-/// A key type: its BCH_BKEY_TYPES() row, its value's struct, and its methods.
+/// A key type: its bkey_val arm, its value's struct, and its methods.
 #[derive(Clone, Copy)]
 pub struct KeyType {
     pub nr: u8,
@@ -651,18 +651,18 @@ pub struct KeyType {
 }
 
 macro_rules! key_types {
-    ($(($name:ident, $nr:literal, $($flag:ident)|+, $($rest:tt)*)),* $(,)?) => { crate::paste! {
+    ($(($name:ident, $nr:literal, $ty:ty, $flags:tt)),* $(,)?) => {
         const TABLE: [Option<KeyType>; NR_KEY_TYPES] = {
             let mut t = [None; NR_KEY_TYPES];
-            $(t[$nr] = Some(KeyType { nr: $nr, name: stringify!($name), flags: 0 $(| c::$flag)+,
-                                      info: <c::[<$name:camel>] as TypeInfo>::INFO,
-                                      min_val_size: <c::[<$name:camel>] as BkeyTag>::MIN_VAL_SIZE,
-                                      ops: ops::<c::[<$name:camel>]>() });)*
+            $(t[$nr] = Some(KeyType { nr: $nr, name: stringify!($name), flags: c::bch_bkey_type($nr).flags().bits(),
+                                      info: <$ty as TypeInfo>::INFO,
+                                      min_val_size: <$ty as BkeyTag>::MIN_VAL_SIZE,
+                                      ops: ops::<$ty>() });)*
             t
         };
-    } };
+    };
 }
-c::BCH_BKEY_TYPES!(key_types);
+c::bkey_val_arms!(key_types);
 
 const NR_KEY_TYPES: usize = c::bch_bkey_type::KEY_TYPE_MAX.0 as usize;
 
@@ -734,7 +734,7 @@ impl FieldOffsets {
 }
 
 /// The key types with flag F, a bch_bkey_type_flags: a family's types -
-/// FamilyVal<ByFlag<F>> - by their BCH_BKEY_TYPES() rows.
+/// FamilyVal<ByFlag<F>> - by their bkey_val arms' flags.
 pub enum ByFlag<const F: u32> {}
 
 impl<const F: u32> FamilyTypes for ByFlag<F> {
@@ -801,11 +801,11 @@ pub(crate) unsafe fn cast_unsized_mut<V: Unsized + ?Sized>(k: *mut c::bkey_i) ->
 /// a type this code doesn't know - else there's none.
 macro_rules! bkey_typed {
     ($(#[$meta:meta])* $enum:ident for $f:ty $(, $unknown:ident)?;
-     $(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => { crate::paste! {
+     $(($name:ident, $nr:literal, $ty:ty, $($rest:tt)*)),* $(,)?) => {
         $(#[$meta])*
         #[allow(non_camel_case_types)]
         pub enum $enum<K: crate::btree::bkey::BkeyV> {
-            $($name(K::As<crate::btree::bkey::Narrowed<crate::c::[<$name:camel>], K::V>>),)*
+            $($name(K::As<crate::btree::bkey::Narrowed<$ty, K::V>>),)*
             $(
             $unknown(K),
             )?
@@ -829,12 +829,12 @@ macro_rules! bkey_typed {
 
             fn typed<K: crate::btree::bkey::BkeyV<V = Self>>(k: K) -> $enum<K> {
                 match k.k().type_ as u32 {
-                    $($nr => $enum::$name(unsafe { k.arm_unchecked::<crate::c::[<$name:camel>]>() }),)*
+                    $($nr => $enum::$name(unsafe { k.arm_unchecked::<$ty>() }),)*
                     t => crate::btree::bkey::bkey_typed!(@other $enum, $f, k, t $(, $unknown)?),
                 }
             }
         }
-    } };
+    };
     (@other $enum:ident, $f:ty, $k:ident, $t:ident, $unknown:ident) => {{ let _ = $t; $enum::$unknown($k) }};
     (@other $enum:ident, $f:ty, $k:ident, $t:ident) => {
         unreachable!(concat!("a ", stringify!($f), " key of type {}"), $t)
@@ -842,18 +842,18 @@ macro_rules! bkey_typed {
 }
 pub(crate) use bkey_typed;
 
-/// `bkey_family!(Ptrs: BKEY_TYPE_ptrs)`: the key family of the BCH_BKEY_TYPES()
-/// rows with that flag - FamilyVal<ByFlag<flag>> - and its typed(), for a
+/// `bkey_family!(Ptrs: ptrs)`: the key family of the bkey_val arms
+/// with that flag - FamilyVal<ByFlag<flag>> - and its typed(), for a
 /// family read per type. Its doc is the caller's: a family is defined where
 /// it's used.
 macro_rules! bkey_family {
     ($(#[$meta:meta])* $family:ident: $flag:ident) => { crate::paste! {
-        pub type [<$family Types>] = crate::btree::bkey::ByFlag<{ crate::c::$flag }>;
+        pub type [<$family Types>] = crate::btree::bkey::ByFlag<{ crate::c::bch_bkey_type_flags::$flag.bits() }>;
 
         $(#[$meta])*
         pub type $family = crate::btree::bkey::FamilyVal<[<$family Types>]>;
 
-        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [$flag =>
+        crate::c::bkey_val_arms!(cstruct_macros::xmacro_select [$flag =>
             crate::btree::bkey::bkey_typed { [<$family Typed>] for [<$family Types>]; }]);
     } };
 }
@@ -901,57 +901,35 @@ macro_rules! bkey_family_conv {
     )*};
 }
 
-/// A key type's impls from its BCH_BKEY_TYPES() row; what's per kind is at
-/// its value's definition - #[whole(bkey)], #[grown(.., bkey)],
-/// #[derive(SizedVal)].
-macro_rules! bkey_val {
-    // Its field column says gens, but every valid one is whole:
-    // bch2_bucket_gens_validate() takes no other length
-    (bucket_gens, $f:tt)          => { bkey_val!(@key bucket_gens, _); };
-
-    ($name:ident, $field:tt)      => { bkey_val!(@key $name, $field); };
-
-    // the shortest valid value: its value in place's head - a family's C
-    // struct or a grown type's floor, a sized type all of it
-    (@key $name:ident, $field:tt) => { crate::paste! {
-        impl BkeyTag for c::[<$name:camel>] {
-            const TYPE: c::bch_bkey_type = c::bch_bkey_type::[<KEY_TYPE_ $name>];
+/// A key type's impls from its bkey_val arm; what's per kind is at its
+/// value's definition - #[whole(bkey)], #[grown(.., bkey)], #[derive(SizedVal)].
+macro_rules! bkey_types {
+    ($(($name:ident, $nr:literal, $ty:ty, [$($flag:ident),*])),* $(,)?) => {
+        $(
+        // the shortest valid value: its value in place's head - a family's C
+        // struct or a grown type's floor, a sized type all of it
+        impl BkeyTag for $ty {
+            const TYPE: c::bch_bkey_type = c::bch_bkey_type($nr);
             const MIN_VAL_SIZE: usize =
                 size_of::<<<Self as BkeyFamily>::Validated as Unsized>::Head>();
         }
-
-        const _: () = assert!(<c::[<$name:camel>] as BkeyTag>::MIN_VAL_SIZE ==
-                              bkey_val!(@min_repr c::[<$name:camel>], $field),
-                              concat!("bch_", stringify!($name), ": its head isn't the \
-                                       minimum BCH_BKEY_TYPES() names"));
-    } };
-
-    // as C's bch2_bkey_min_val_sizes[]
-    (@min_repr $val:ty, _)            => { size_of::<$val>() };
-    (@min_repr $val:ty, $field:ident) => { core::mem::offset_of!($val, repr.$field) };
-}
-
-macro_rules! bkey_types {
-    ($(($name:ident, $nr:literal, $($flag:ident)|+, $field:tt $(, $($rest:tt)*)?)),* $(,)?) => {
-        $(
-        bkey_val!($name, $field);
-        bkey_types!(@in $name, AllTypes $(, ByFlag<{ c::$flag }>)+);
+        bkey_types!(@in $ty, AllTypes $(, ByFlag<{ c::bch_bkey_type_flags::$flag.bits() }>)*);
         )*
 
         bkey_typed! {
             Typed for AllTypes, unknown;
-            $(($name, $nr, $($flag)|+, $field $(, $($rest)*)?)),*
+            $(($name, $nr, $ty, [$($flag),*])),*
         }
     };
 
-    (@in $name:ident $(, $f:ty)+) => { crate::paste! { $(
+    (@in $ty:ty $(, $f:ty)+) => { $(
         // SAFETY: a key whose value is one is of the type, which @f has
-        unsafe impl InFamily<$f> for <c::[<$name:camel>] as BkeyFamily>::Validated {}
-        unsafe impl InFamily<$f> for <c::[<$name:camel>] as BkeyFamily>::Unvalidated {}
-    )+ } };
+        unsafe impl InFamily<$f> for <$ty as BkeyFamily>::Validated {}
+        unsafe impl InFamily<$f> for <$ty as BkeyFamily>::Unvalidated {}
+    )+ };
 }
 
-c::BCH_BKEY_TYPES!(bkey_types);
+c::bkey_val_arms!(bkey_types);
 
 bkey_family_conv!(AllTypes);
 bkey_family_conv!(crate::data::ptrs::PtrsTypes);
