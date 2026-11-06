@@ -16,6 +16,7 @@ use crate::util::bio::{BioSet, Either};
 use crate::util::late::Late;
 use crate::util::Printbuf;
 use crate::util::mempool::Mempool;
+use crate::util::rcu::Srcu;
 use crate::util::workqueue::{Workqueue, WqFlags};
 use crate::types::{CacheAligned, DArray, NeBytes, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::btree::node_scan::NodeScan;
@@ -923,8 +924,10 @@ pub struct bch_fs_btree_trans {
     #[c("struct btree_trans_buf __percpu *bufs")]
     pub bufs: PerCpu<cs::btree_trans_buf>,
 
-    pub barrier: cs::srcu_struct,
-    pub barrier_initialized: bool,
+    #[pin]
+    #[init(crate::new_srcu!("btree_trans_barrier"))]
+    #[c("struct srcu_struct barrier")]
+    pub barrier: Srcu,
 
     #[pin]
     #[init(::pin_init::pin_init_array_from_fn(|_| cs::btree_transaction_stats::init()))]

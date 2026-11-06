@@ -6,8 +6,8 @@
 //! # Reading
 //!
 //! read_lock() is rcu_read_lock() until its ReadGuard drops - the kernel's,
-//! or in userspace liburcu's memb flavor, which C's is too. srcu_read_lock()
-//! is the same for a C srcu_struct. What's read under one is borrowed for
+//! or in userspace liburcu's memb flavor, which C's is too. Srcu::read_lock()
+//! is the same for an SRCU domain. What's read under one is borrowed for
 //! the guard's lifetime, so nothing read outlives the section.
 //!
 //! # Freeing
@@ -40,17 +40,20 @@
 //!   data or atomics, copied bytewise. Its writer is an RcuArrayWriter;
 //!   without one, a writer's methods are unsafe, the caller holding the lock.
 
-use core::ffi::c_int;
+use core::ffi::{c_int, c_void, CStr};
 use core::marker::PhantomData;
 use core::mem::size_of;
-use core::ptr::NonNull;
+use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering};
 use cstruct_macros::c_extern;
+use pin_init::PinInit;
 
 use crate::c;
 use crate::data_structures::dst_array::{DstArray, DstHead};
+use crate::errcode::{ret_to_result_void, BchError};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::AllocError;
+use crate::util::ffi::c_char;
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::projections::Publish;
 use crate::util::refcount::{ARef, AlwaysRefCounted};
@@ -96,26 +99,76 @@ impl Drop for ReadGuard {
 }
 
 c_extern! {
+    pub fn rust_init_srcu_struct(ssp: *mut c::srcu_struct, name: *const c_char, key: *mut c_void) -> c_int;
+    pub fn rust_synchronize_srcu_expedited(ssp: *mut c::srcu_struct);
+    pub fn rust_cleanup_srcu_struct(ssp: *mut c::srcu_struct);
     pub fn rust_srcu_read_lock(ssp: *mut c::srcu_struct) -> c_int;
     pub fn rust_srcu_read_unlock(ssp: *mut c::srcu_struct, idx: c_int);
 }
 
-#[must_use = "the SRCU read section ends as soon as the guard is dropped"]
-pub struct SrcuReadGuard<'a> {
-    srcu: &'a c::srcu_struct,
-    idx:  c_int,
+/// An SRCU domain, C's srcu_struct: cleaned up when it drops.
+#[repr(C)]
+pub struct Srcu(
+    #[cfg(kernel)] crate::util::ffi::Opaque<c::srcu_struct>,
+    // C's empty struct: improper_ctypes won't have a struct with no fields
+    #[cfg(not(kernel))] [u8; 0],
+);
+
+// an srcu_struct is any thread's to read under and wait on
+unsafe impl Send for Srcu {}
+unsafe impl Sync for Srcu {}
+
+/// An Srcu initializer - new_srcu!("name") - with a lockdep class of its own.
+#[macro_export]
+macro_rules! new_srcu {
+    ($name:literal) => {{
+        let key = $crate::new_lock!(@key);
+        let name = const { $crate::util::ffi::c_str(::core::concat!($name, "\0")) };
+        unsafe { $crate::util::rcu::Srcu::new(name, key) }
+    }};
 }
 
-pub fn srcu_read_lock(srcu: &c::srcu_struct) -> SrcuReadGuard<'_> {
-    // XXX: c::srcu_struct isn't an Opaque, as C's locks are - written
-    // through a &
-    let idx = unsafe { rust_srcu_read_lock(core::ptr::from_ref(srcu).cast_mut()) };
-    SrcuReadGuard { srcu, idx }
+impl Srcu {
+    /// # Safety
+    /// @key is a static lockdep class.
+    pub unsafe fn new(name: &'static CStr, key: *mut c_void) -> impl PinInit<Self, BchError> {
+        unsafe {
+            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
+                ret_to_result_void(rust_init_srcu_struct(slot.cast(), name.as_ptr().cast(), key))
+            })
+        }
+    }
+
+    pub fn as_ptr(&self) -> *mut c::srcu_struct {
+        #[cfg(kernel)]
+        return self.0.as_ptr();
+        #[cfg(not(kernel))]
+        return ptr::from_ref(self).cast_mut().cast();
+    }
+
+    pub fn read_lock(&self) -> SrcuReadGuard<'_> {
+        SrcuReadGuard { srcu: self, idx: unsafe { rust_srcu_read_lock(self.as_ptr()) } }
+    }
+}
+
+impl Drop for Srcu {
+    fn drop(&mut self) {
+        unsafe {
+            rust_synchronize_srcu_expedited(self.as_ptr());
+            rust_cleanup_srcu_struct(self.as_ptr());
+        }
+    }
+}
+
+#[must_use = "the SRCU read section ends as soon as the guard is dropped"]
+pub struct SrcuReadGuard<'a> {
+    srcu: &'a Srcu,
+    idx:  c_int,
 }
 
 impl Drop for SrcuReadGuard<'_> {
     fn drop(&mut self) {
-        unsafe { rust_srcu_read_unlock(core::ptr::from_ref(self.srcu).cast_mut(), self.idx) };
+        unsafe { rust_srcu_read_unlock(self.srcu.as_ptr(), self.idx) };
     }
 }
 

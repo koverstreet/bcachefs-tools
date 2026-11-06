@@ -3736,10 +3736,6 @@ void bch2_fs_btree_iter_exit(struct bch_fs *c)
 
 	printbuf_exit(&c->btree.trans.stats_json_buf);
 
-	if (c->btree.trans.barrier_initialized) {
-		synchronize_srcu_expedited(&c->btree.trans.barrier);
-		cleanup_srcu_struct(&c->btree.trans.barrier);
-	}
 	/* Drain pending trans_rcu_free callbacks before the pool is gone. */
 	rcu_barrier();
 }
@@ -3758,8 +3754,6 @@ int bch2_fs_btree_iter_init(struct bch_fs *c)
 	if (!c->btree.trans.bufs)
 		return -ENOMEM;
 
-	try(init_srcu_struct(&c->btree.trans.barrier));
-
 	/*
 	 * static annotation (hackily done) for lock ordering of reclaim vs.
 	 * btree node locks:
@@ -3772,7 +3766,6 @@ int bch2_fs_btree_iter_init(struct bch_fs *c)
 	fs_reclaim_release(GFP_KERNEL);
 #endif
 
-	c->btree.trans.barrier_initialized = true;
 	return 0;
 
 }

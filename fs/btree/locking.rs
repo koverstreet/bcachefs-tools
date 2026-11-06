@@ -975,15 +975,14 @@ impl BtreeTrans<'_> {
             let _ = prt_current_backtrace(&mut msg, 1);
         }
 
-        unsafe { rust_srcu_read_unlock(ptr::from_ref(&fs.btree.trans.barrier).cast_mut(), self.srcu_idx.get()) };
+        unsafe { rust_srcu_read_unlock(fs.btree.trans.barrier.as_ptr(), self.srcu_idx.get()) };
         self.set_srcu_held(false);
     }
 
     /// The SRCU read lock btree nodes are freed under, if it isn't held.
     pub(crate) fn srcu_lock(&self) {
         if !self.srcu_held() {
-            let barrier = ptr::from_ref(&self.fs().btree.trans.barrier).cast_mut();
-            self.srcu_idx.set(unsafe { rust_srcu_read_lock(barrier) });
+            self.srcu_idx.set(unsafe { rust_srcu_read_lock(self.fs().btree.trans.barrier.as_ptr()) });
             self.srcu_lock_time.set(jiffies());
             self.set_srcu_held(true);
         }

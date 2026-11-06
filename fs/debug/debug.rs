@@ -232,7 +232,7 @@ impl DebugFile for BtreeTransactions {
     type Obj = Fs;
 
     fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
-        let _srcu = rcu::srcu_read_lock(&fs.btree.trans.barrier);
+        let _srcu = fs.btree.trans.barrier.read_lock();
 
         fs.for_each_trans_from(&mut self.cursor, |t| t.srcu_held(), |t| {
             prt!(out, "{}", t);
