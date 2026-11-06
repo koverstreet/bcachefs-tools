@@ -420,7 +420,22 @@ fn file_h(header: &str, records: &[&Record], paths: &BTreeMap<String, String>,
         };
         match &mut item {
             CItem::Struct(def) => {
-                layouts.insert(def.name.clone(), layout(def, &r.nums).map_err(at)?);
+                let l = layout(def, &r.nums).map_err(at)?;
+                // An array as long as a Rust constant C hasn't - BucketGens::NR -
+                // as long as rustc made it
+                for (f, &(_, size, _)) in def.fields.iter_mut().zip(&l.fields) {
+                    let Ok(syn::Type::Array(a)) = syn::parse_str::<syn::Type>(&f.ty) else { continue };
+                    if !matches!(&a.len, syn::Expr::Path(_)) || c_dim(&a.len).is_some() {
+                        continue;
+                    }
+                    let elem = rust_text(&a.elem);
+                    let bits = int_bits(&elem)
+                        .ok_or_else(|| at(format!("{}.{}: [{elem}; {}]: C can't name its length, and \
+                                                   only an integer array's is its size",
+                                                  def.name, f.name, rust_text(&a.len))))?;
+                    f.ty = format!("[{elem}; {}]", size / (u64::from(bits) / 8));
+                }
+                layouts.insert(def.name.clone(), l);
             }
             // The values, as rustc evaluated them, for the expressions.
             CItem::Enum(e) => {

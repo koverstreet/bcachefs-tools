@@ -460,7 +460,7 @@
 //! the update a transaction has already queued for the bucket, so triggers
 //! on one bucket each edit the same key.
 //!
-//! bucket_gens keys hold a generation for each of KEY_TYPE_BUCKET_GENS_NR
+//! bucket_gens keys hold a generation for each of BucketGens::NR
 //! buckets; alloc_read loads a device's generations from them - or, before
 //! they existed, from the alloc keys.
 //!
@@ -1065,26 +1065,26 @@ impl FreespacePos {
 }
 
 /// Where a bucket's generation is in the bucket_gens btree: the key - one per
-/// KEY_TYPE_BUCKET_GENS_NR buckets - and its index in the key's gens[]:
+/// BucketGens::NR buckets - and its index in the key's gens[]:
 /// alloc_gens_pos().
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BucketGensPos {
     pub key: Bpos,
-    /// < KEY_TYPE_BUCKET_GENS_NR
+    /// < BucketGens::NR
     pub idx: usize,
 }
 
 impl BucketGensPos {
     pub fn new(bucket: Bpos) -> Self {
         Self {
-            key: pos(bucket.inode, bucket.offset >> c::KEY_TYPE_BUCKET_GENS_BITS),
-            idx: (bucket.offset & u64::from(c::KEY_TYPE_BUCKET_GENS_MASK)) as usize,
+            key: pos(bucket.inode, bucket.offset >> c::BucketGens::BITS),
+            idx: (bucket.offset & c::BucketGens::MASK) as usize,
         }
     }
 
     /// The bucket it's the gen of: bucket_gens_pos_to_alloc().
     pub fn bucket(self) -> Bpos {
-        pos(self.key.inode, self.key.offset << c::KEY_TYPE_BUCKET_GENS_BITS | self.idx as u64)
+        pos(self.key.inode, self.key.offset << c::BucketGens::BITS | self.idx as u64)
     }
 
     /// The bucket's gen in @k, its bucket_gens key - 0 if it hasn't one:
@@ -1174,7 +1174,7 @@ fn alloc_read(fs: &Fs) -> Result<(), BchError> {
             let rcu = read_lock();
             for b in start.max(ca.mi.get().first_bucket.into())..end.min(ca.mi.get().nbuckets) {
                 ca.bucket_gen_ref(b, &rcu).expect("one of the device's buckets")
-                    .store(g.v().gens[(b & u64::from(c::KEY_TYPE_BUCKET_GENS_MASK)) as usize], Ordering::Relaxed);
+                    .store(g.v().gens[(b & c::BucketGens::MASK) as usize], Ordering::Relaxed);
             }
             Ok(LoopFlow::Continue)
         })

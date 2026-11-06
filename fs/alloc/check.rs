@@ -324,7 +324,7 @@ fn check_alloc_hole_bucket_gens<'t>(
     let gens_end = if bkey_eq(start_pos.key, end_pos.key) {
         end_pos.idx
     } else {
-        c::KEY_TYPE_BUCKET_GENS_NR as usize
+        c::BucketGens::NR
     };
 
     if let Some(g) = k.arm::<c::BucketGens>() {
@@ -605,7 +605,7 @@ fn check_bucket_gens_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: Bkey
     let mut need_update = false;
 
     for b in (start..first_bucket).chain(nbuckets..end) {
-        let i = (b & u64::from(c::KEY_TYPE_BUCKET_GENS_MASK)) as usize;
+        let i = (b & c::BucketGens::MASK) as usize;
         if fsck_err_on!(t, gens[i] != 0, id::bucket_gens_nonzero_for_invalid_buckets,
                         "bucket_gens key has nonzero gen for invalid bucket")? {
             gens[i] = 0;

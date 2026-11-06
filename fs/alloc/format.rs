@@ -149,22 +149,22 @@ c_bitmask! {
     }
 }
 
-c_const! {
-    #[c_int]
-    pub const KEY_TYPE_BUCKET_GENS_BITS: u32 = 8;
-    pub const KEY_TYPE_BUCKET_GENS_NR: u32 = 1 << c::KEY_TYPE_BUCKET_GENS_BITS;
-    pub const KEY_TYPE_BUCKET_GENS_MASK: u32 = c::KEY_TYPE_BUCKET_GENS_NR - 1;
-}
-
 #[repr(C, align(8))]
 #[c_name(bch_bucket_gens)]
 #[derive(Clone, Copy, CStruct, Plain, TypeInfo, View, SizedVal)]
 #[c_packed]
 pub struct BucketGens {
     pub v: c::bch_val,
-    pub gens: [u8; c::KEY_TYPE_BUCKET_GENS_NR as usize],
+    pub gens: [u8; BucketGens::NR],
 }
 c_default!(BucketGens);
+
+impl BucketGens {
+    /// A key's buckets: NR of them, the first at its offset << BITS
+    pub const BITS: u32 = 8;
+    pub const NR: usize = 1 << Self::BITS;
+    pub const MASK: u64 = Self::NR as u64 - 1;
+}
 
 c_const! {
     pub const DATA_TYPES_MOVABLE: c_ulong =
