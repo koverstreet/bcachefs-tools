@@ -12,7 +12,7 @@ use std::process;
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::accounting;
-use bcachefs_kernel::btree::bkey::bkey_type;
+use bcachefs_kernel::format::BkeyType;
 use bcachefs_kernel::alloc::{accounting_mem, replicas::replicas_acct};
 use bcachefs_kernel::btree_id;
 use bcachefs_kernel::util::{HumanReadable, ToText};
@@ -166,7 +166,7 @@ fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::
                              |_, btree, k, _, opts| {
             opts.target = target;
 
-            if k.k.type_ != u32::from(bkey_type::btree_ptr_v2) as u8 ||
+            if k.k.key_type() != BkeyType::btree_ptr_v2 ||
                (!move_alloc && btree_id_is_alloc(u32::from(btree))) {
                 return Ok(false);
             }
@@ -191,9 +191,9 @@ fn get_nbuckets_used(fs: &Fs) -> Result<u64, anyhow::Error> {
     );
 
     // Extract type and offset inside the closure to avoid lifetime escape.
-    let result: Result<(u8, u64), _> = lockrestart_do(&trans, |t| {
+    let result: Result<(BkeyType, u64), _> = lockrestart_do(&trans, |t| {
         match iter.peek_prev(t)? {
-            Some(k) => Ok((k.k.type_, k.k.p.offset)),
+            Some(k) => Ok((k.k.key_type(), k.k.p.offset)),
             None => Err(bcachefs_kernel::errcode::BchError::from(libc::ENOENT)),
         }
     });
@@ -201,7 +201,7 @@ fn get_nbuckets_used(fs: &Fs) -> Result<u64, anyhow::Error> {
     let (key_type, offset) = result
         .map_err(|e| anyhow!("error looking up last alloc key: {}", e))?;
 
-    if key_type == u32::from(bkey_type::alloc_v4) as u8 {
+    if key_type == BkeyType::alloc_v4 {
         Ok(offset + 1)
     } else {
         bail!("error looking up last alloc key: no alloc_v4 found")

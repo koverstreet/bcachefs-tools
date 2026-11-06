@@ -108,8 +108,6 @@ use crate::format::Bpos;
 
 pub const BKEY_U64S: usize = core::mem::size_of::<c::bkey>() / core::mem::size_of::<u64>();
 
-pub type bkey_type = BkeyType;
-
 impl c::bkey {
     /// Of type deleted, at POS_MIN, with no value: as bkey_init() sets.
     pub fn new() -> Self {
