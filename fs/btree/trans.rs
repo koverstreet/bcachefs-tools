@@ -42,7 +42,7 @@ use crate::util::sched;
 use crate::util::time_stats::__bch2_time_stats_update;
 use crate::util::vstructs::{Unvalidated, UnvalidatedEntries, VstructRefEntries};
 use crate::util::{Printbuf, ToText};
-use core::ffi::{c_int, c_uint, c_ulong, c_void};
+use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
 use core::marker::PhantomData;
 use core::mem::{offset_of, size_of, size_of_val};
 use core::ops::ControlFlow;
@@ -538,7 +538,7 @@ impl<'f> TransGuard<'f> {
         unsafe {
             (*p).fn_idx = fn_idx as u8;
             if let Some(s) = stats {
-                (*p).fn_ = TRANSACTION_FNS[fn_idx as usize].load(Ordering::Relaxed);
+                (*p).fn_ = transaction_fn(fn_idx as usize).map_or(ptr::null(), |f| f.as_ptr().cast());
                 (*p).nr_paths_max = s.nr_max_paths as _;
             }
             #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
@@ -1108,19 +1108,31 @@ impl BtreeTrans<'_> {
 // ── Transaction names ───────────────────────────────────────────────────────
 
 /// Each btree_trans!() call site's and C caller's name, by fn_idx: the
-/// transaction's, and its stats'. 0 is "(unknown)".
-pub static TRANSACTION_FNS: [AtomicPtr<c_char>; c::BCH_TRANSACTIONS_NR as usize] = {
+/// transaction's, and its stats'. 0 is "(unknown)". A name is a CFnName's,
+/// written as it's registered: published by a release, read by an acquire.
+static TRANSACTION_FNS: [AtomicPtr<c_char>; c::BCH_TRANSACTIONS_NR as usize] = {
     let mut fns = [const { AtomicPtr::new(ptr::null_mut()) }; c::BCH_TRANSACTIONS_NR as usize];
     fns[0] = AtomicPtr::new(c"(unknown)".as_ptr().cast_mut().cast());
     fns
 };
 
+/// The name registered at @idx, if one is.
+pub fn transaction_fn(idx: usize) -> Option<&'static CStr> {
+    let p = TRANSACTION_FNS.get(idx)?.load(Ordering::Acquire);
+    (!p.is_null()).then(|| unsafe { CStr::from_ptr(p.cast()) })
+}
+
+/// The names registered, by index, up to the first slot that isn't.
+pub fn transaction_fns() -> impl Iterator<Item = &'static CStr> {
+    (0..TRANSACTION_FNS.len()).map_while(transaction_fn)
+}
+
 #[c_export]
 pub fn bch2_trans_get_fn_idx(fn_: *const c_char) -> c_uint {
     for (i, slot) in TRANSACTION_FNS.iter().enumerate() {
-        let cur = slot.load(Ordering::Relaxed);
+        let cur = slot.load(Ordering::Acquire);
         if cur.is_null() || ptr::eq(cur, fn_) {
-            slot.store(fn_.cast_mut(), Ordering::Relaxed);
+            slot.store(fn_.cast_mut(), Ordering::Release);
             return i as c_uint;
         }
     }

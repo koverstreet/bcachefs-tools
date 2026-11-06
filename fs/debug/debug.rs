@@ -20,7 +20,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter};
 use crate::btree::BtreeIter;
 use crate::btree::node::BtreeNode;
-use crate::btree::trans::TRANSACTION_FNS;
+use crate::btree::trans::transaction_fn;
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -265,7 +265,7 @@ impl DebugFile for JournalPins {
     }
 }
 
-/// By TRANSACTION_FNS[] index; 0, "(unknown)", is skipped.
+/// By transaction_fn() index; 0, "(unknown)", is skipped.
 struct TransactionStats {
     idx: usize,
 }
@@ -284,13 +284,10 @@ impl DebugFile for TransactionStats {
 
     fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
         out.print_each(|out| {
-            let Some(name) = TRANSACTION_FNS.get(self.idx)
-                .map(|name| name.load(Ordering::Relaxed))
-                .filter(|name| !name.is_null()) else {
+            let Some(name) = transaction_fn(self.idx) else {
                 return Ok(false);
             };
-            // SAFETY: registered names are __func__s, which live forever
-            out.write_bytes(unsafe { CStr::from_ptr(name.cast()) }.to_bytes());
+            out.write_bytes(name.to_bytes());
             prt!(out, ":\n");
 
             let s = &fs.btree.trans.stats[self.idx];

@@ -23,10 +23,9 @@
 //! wakeups, cache shrinks, the logged-op knob, work that takes its own ref -
 //! need none.
 
-use crate::btree::trans::TRANSACTION_FNS;
+use crate::btree::trans::transaction_fns;
 use crate::fs::Dev;
 use core::ffi::CStr;
-use core::sync::atomic::Ordering;
 
 
 use crate::accounting;
@@ -181,14 +180,11 @@ const INTERNAL: &[Attr<Fs>] = &[
 // call, so the JSON is made only at offset 0 - kept in
 // c->btree.trans.stats_json_buf - and the pages read are of one whole.
 
-/// Each btree transaction's name - TRANSACTION_FNS[], up to the
-/// first not yet registered - and its stats.
-fn trans_stats(c: &Fs) -> impl Iterator<Item = (&[u8], &c::btree_transaction_stats)> {
-    TRANSACTION_FNS.iter()
-        .map(|f| f.load(Ordering::Relaxed))
-        .take_while(|f| !f.is_null())
-        // SAFETY: a registered name is a static string
-        .map(|f| unsafe { CStr::from_ptr(f.cast()) }.to_bytes())
+/// Each btree transaction's name, up to the first not yet registered, and its
+/// stats.
+fn trans_stats(c: &Fs) -> impl Iterator<Item = (&'static [u8], &c::btree_transaction_stats)> {
+    transaction_fns()
+        .map(CStr::to_bytes)
         .zip(c.btree.trans.stats.iter())
 }
 
