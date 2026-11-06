@@ -18,6 +18,7 @@ use crate::util::percpu::{CpuGuard, PerCpu};
 use crate::util::projections::Volatile;
 #[cfg(CONFIG_SMP)]
 use crate::util::rcu;
+use crate::util::sched;
 use core::convert::Infallible;
 use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
 use core::ptr::{null_mut, NonNull};
@@ -221,7 +222,7 @@ fn six_set_owner(lock: &six_lock, ty: six_lock_type, old: u32, owner: *mut c::ta
         ebug_assert!(lock.owner.load(Relaxed).is_null());
         lock.owner.store(owner, Relaxed);
     } else {
-        ebug_assert!(lock.owner.load(Relaxed) == unsafe { c::bch2_current() });
+        ebug_assert!(lock.owner.load(Relaxed) == sched::current());
     }
 }
 
@@ -231,7 +232,7 @@ fn six_lock_record_acquire(lock: &six_lock, ty: six_lock_type) {
         // a trylock's caller may hold a C spinlock, which isn't a scope
         let _noreclaim = super::MemallocFlags::noreclaim();
         let _ = unsafe {
-            crate::util::backtrace::save_backtrace(&mut *lock.owner_stack.as_ptr(), c::bch2_current(), 1)
+            crate::util::backtrace::save_backtrace(&mut *lock.owner_stack.as_ptr(), sched::current(), 1)
         };
     }
     #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
@@ -669,7 +670,7 @@ fn six_lock_wakeup(lock: &six_lock, state: u32, lock_type: six_lock_type) {
 
 #[inline(always)]
 fn do_six_trylock(lock: &six_lock, ty: six_lock_type, try_: bool) -> bool {
-    let ret = __do_six_trylock(lock, ty, unsafe { c::bch2_current() }, try_);
+    let ret = __do_six_trylock(lock, ty, sched::current(), try_);
 
     if let Trylock::Wakeup(wakeup) = ret {
         let _g = Locked::from_c(&lock.wait_lock).lock();
@@ -731,10 +732,10 @@ fn six_owner_running(lock: &six_lock) -> bool {
      * acquiring the lock and setting the owner field. If we're an RT task
      * that will live-lock because we won't let the owner complete.
      */
-    let _g = rcu::read_lock();
-    let owner = lock.owner.load(Relaxed);
-    unsafe {
-        if !owner.is_null() { c::bch2_owner_on_cpu(owner) } else { !c::bch2_rt_or_dl_task_current() }
+    let rcu = rcu::read_lock();
+    match NonNull::new(lock.owner.load(Relaxed)) {
+        Some(owner) => sched::owner_on_cpu(owner, &rcu),
+        None        => !sched::rt_or_dl_task_current(),
     }
 }
 
@@ -761,10 +762,10 @@ unsafe fn six_optimistic_spin(lock: &six_lock, wait: *mut six_lock_waiter, ty: s
     }
 
     let _g = CpuGuard::new();
-    let end_time = unsafe { c::bch2_sched_clock() } + 10 * 1000;
+    let end_time = sched::sched_clock() + 10 * 1000;
     let mut loop_: u32 = 0;
 
-    while !unsafe { c::bch2_need_resched() } && six_owner_running(lock) {
+    while !sched::need_resched() && six_owner_running(lock) {
         /*
          * Ensures that writes to the waitlist entry happen after we see
          * wait->lock_acquired: pairs with the smp_store_release in
@@ -775,7 +776,7 @@ unsafe fn six_optimistic_spin(lock: &six_lock, wait: *mut six_lock_waiter, ty: s
         }
 
         loop_ = loop_.wrapping_add(1);
-        if loop_ & 0xf == 0 && time_after64(unsafe { c::bch2_sched_clock() }, end_time) {
+        if loop_ & 0xf == 0 && time_after64(sched::sched_clock(), end_time) {
             six_set_bitmask(lock, SIX_LOCK_NOSPIN);
             break;
         }
@@ -815,7 +816,7 @@ unsafe fn __six_lock_slowpath(lock: &six_lock, ty: six_lock_type, wait: *mut six
     lock.dep_map.contended(ip);
 
     unsafe {
-        (*wait).task = c::bch2_current();
+        (*wait).task = sched::current();
         (*wait).lock_want = ty;
         (*wait).lock_acquired.store(false, Relaxed);
     }
@@ -829,7 +830,7 @@ unsafe fn __six_lock_slowpath(lock: &six_lock, ty: six_lock_type, wait: *mut six
              * with an unlock:
              */
             six_set_bitmask(lock, SIX_LOCK_WAITING_read << ty as u32);
-            match __do_six_trylock(lock, ty, unsafe { c::bch2_current() }, false) {
+            match __do_six_trylock(lock, ty, sched::current(), false) {
                 Trylock::Acquired       => break true,
                 Trylock::Failed         => {}
                 Trylock::Wakeup(wakeup) => unsafe { __six_lock_wakeup(lock, wakeup) },
@@ -864,7 +865,7 @@ unsafe fn __six_lock_slowpath(lock: &six_lock, ty: six_lock_type, wait: *mut six
         }
 
         /* Yield before running the cycle detector: */
-        unsafe { c::schedule() };
+        sched::schedule();
 
         loop {
             unsafe { c::bch2_set_current_state(c::TASK_UNINTERRUPTIBLE) };
@@ -913,7 +914,7 @@ unsafe fn __six_lock_slowpath(lock: &six_lock, ty: six_lock_type, wait: *mut six
                 break;
             }
 
-            unsafe { c::schedule() };
+            sched::schedule();
         }
 
         unsafe { c::bch2_set_current_state_running() };
@@ -1076,7 +1077,7 @@ pub unsafe fn six_unlock_ip(lock: &c::six_lock, ty: c::six_lock_type, ip: c_ulon
 
     ebug_assert!(!(ty == SIX_LOCK_write && atomic_read(lock) & SIX_LOCK_HELD_intent == 0));
     ebug_assert!(!((ty == SIX_LOCK_write || ty == SIX_LOCK_intent) &&
-                   lock.owner.load(Relaxed) != unsafe { c::bch2_current() }));
+                   lock.owner.load(Relaxed) != sched::current()));
 
     if ty != SIX_LOCK_write {
         lock.dep_map.release(ip);
@@ -1468,7 +1469,7 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
             lock.readers.get().add(1u32.wrapping_neg());
         }
 
-        six_set_owner(lock, six_lock_type::SIX_LOCK_intent, old, unsafe { c::bch2_current() });
+        six_set_owner(lock, six_lock_type::SIX_LOCK_intent, old, sched::current());
 
         self.into_raw();
         Ok(unsafe { SixHold::from_raw(locked, six_lock_type::SIX_LOCK_intent) })

@@ -43,6 +43,7 @@ use crate::util::backref::BackRef;
 use crate::util::enumerated_ref::EnumeratedRef;
 use crate::util::ffi::c_char;
 use crate::util::kernel::READ;
+use crate::util::sched;
 use crate::util::kobject::{GroupList, KobjOwner, Kobject};
 use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
 use crate::util::percpu::PerCpu;
@@ -151,7 +152,7 @@ impl Fs {
         if bits == 0 {
             return 0;
         }
-        let pid = unsafe { crate::util::percpu::bch2_task_pid(c::bch2_current()) };
+        let pid = unsafe { crate::util::percpu::bch2_task_pid(sched::current()) };
         crate::util::hash::hash_64(pid as u64, bits.into())
     }
 
@@ -505,7 +506,7 @@ impl Fs {
 
         unsafe {
             (*p).stdio.store(opts.stdio as usize as *mut c::stdio_redirect, Relaxed);
-            (*p).recovery_task.store(c::bch2_current(), Relaxed);
+            (*p).recovery_task.store(sched::current(), Relaxed);
         }
 
         #[cfg(kernel)]

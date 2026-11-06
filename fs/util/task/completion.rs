@@ -51,7 +51,7 @@ pub mod waiter {
 
     impl Sync {
         pub fn current() -> Self {
-            Sync(NonNull::new(unsafe { c::bch2_current() })
+            Sync(NonNull::new(crate::util::sched::current())
                  .expect("a blocking wait needs a task - a kthread, in userspace"))
         }
     }

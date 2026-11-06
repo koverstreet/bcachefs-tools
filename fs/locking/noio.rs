@@ -28,6 +28,7 @@
 use super::{ExclusiveGuard, Locked, RawLock, RawLockBase, RawReadLock, RawRwLock, RawTryLock, SharedGuard};
 use crate::cstructs::c;
 use crate::types::c_default;
+use crate::util::sched;
 use core::ffi::{c_uint, c_void, CStr};
 use cstruct_macros::c_verbatim;
 
@@ -37,10 +38,7 @@ pub(crate) use crate::c::{PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_N
 /// shim didn't start, which has no task: and no scope, which its allocator
 /// doesn't take anyway.
 fn current_flags() -> Option<&'static mut c_uint> {
-    #[cfg(kernel)]
-    let t = kernel::task::Task::current_raw();
-    #[cfg(not(kernel))]
-    let t = unsafe { c::bch2_current() };
+    let t = sched::current();
 
     unsafe { t.as_mut() }.map(|t| &mut t.flags)
 }

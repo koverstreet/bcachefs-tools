@@ -45,6 +45,7 @@ pub mod raid;
 pub mod rcu;
 pub mod rcu_pending;
 pub mod refcount;
+pub mod sched;
 #[cfg(kernel)]
 pub mod seq_file;
 pub mod siphash;

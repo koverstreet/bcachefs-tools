@@ -38,6 +38,7 @@ use crate::list;
 use crate::locking::{spinlock_t, Locked};
 use core::sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use crate::data_structures::list::ListLinks;
+use crate::util::sched;
 use crate::util::sleep::{sleep_until, Sleep, SleepEnd};
 use core::ptr;
 
@@ -131,7 +132,7 @@ pub fn futex_wait_or<W: FutexWord, E: SleepEnd>(w: &W, expected: W::Val, how: Sl
     b.waiters.fetch_add(1, Ordering::Relaxed);
     fence(Ordering::SeqCst);
 
-    let task = unsafe { c::bch2_current() };
+    let task = sched::current();
     assert!(!task.is_null(), "a blocking wait needs a task - a kthread, in userspace");
     let entry = Entry {
         links:  ListLinks::new(),

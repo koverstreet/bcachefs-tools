@@ -24,6 +24,7 @@ use crate::prt;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::{AllocError, DArrayLoan, KVVec};
 use crate::util::demangle::prt_demangled;
+use crate::util::sched;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint, c_ulong};
 use cstruct_macros::{c_export, c_extern};
@@ -84,7 +85,7 @@ fn save_stack(stack: &mut KVVec<c_ulong>, task: *mut c::task_struct, skipnr: u32
         stack.clear();
         stack.reserve(32)?;
 
-        let skipnr = skipnr + (task == unsafe { c::bch2_current() }) as u32;
+        let skipnr = skipnr + (task == sched::current()) as u32;
         loop {
             let size = stack.capacity();
             stack.clear();
@@ -117,7 +118,7 @@ pub unsafe fn save_backtrace(stack: &mut c::bch_stacktrace, task: *mut c::task_s
 /// @task's stack, @skipnr frames in, to @out: what fit, if growing to fit
 /// failed.
 pub fn prt_task_backtrace(out: &mut Printbuf, task: *mut c::task_struct, skipnr: u32) -> Result<(), AllocError> {
-    let skipnr = skipnr + (task == unsafe { c::bch2_current() }) as u32;
+    let skipnr = skipnr + (task == sched::current()) as u32;
 
     let mut stack = KVVec::new();
     let ret = save_stack(&mut stack, task, skipnr);
@@ -126,7 +127,7 @@ pub fn prt_task_backtrace(out: &mut Printbuf, task: *mut c::task_struct, skipnr:
 }
 
 pub fn prt_current_backtrace(out: &mut Printbuf, skipnr: u32) -> Result<(), AllocError> {
-    prt_task_backtrace(out, unsafe { c::bch2_current() }, skipnr)
+    prt_task_backtrace(out, sched::current(), skipnr)
 }
 
 /// # Safety

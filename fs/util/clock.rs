@@ -36,6 +36,7 @@ use crate::util::alloc::{AllocError, KVVec};
 use crate::util::kernel::HZ;
 use crate::util::ffi::Opaque;
 use crate::util::percpu::{CpuGuard, PerCpu};
+use crate::util::sched;
 use crate::util::sleep::{sleep_until, Sleep, SleepEnd, SleepError};
 use crate::util::{Printbuf, ToText};
 use core::ffi::c_int;
@@ -152,7 +153,7 @@ impl io_clock {
         };
 
         // SAFETY: of the current thread
-        let task = unsafe { c::bch2_current() };
+        let task = sched::current();
         loop {
             if self.add(Timer { expire: until, task, caller }).is_ok() {
                 let ret = sleep_until(how, &mut done);
