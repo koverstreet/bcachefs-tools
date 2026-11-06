@@ -8,7 +8,8 @@ use crate::types::c_default;
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::sync::atomic::AtomicIsize;
-use cstruct_macros::{CStruct, TypeInfo, c_extern};
+use core::sync::atomic::Ordering::Relaxed;
+use cstruct_macros::{CStruct, TypeInfo, c_export, c_extern};
 use crate::format::Bpos;
 
 #[repr(C)]
@@ -36,6 +37,21 @@ pub struct bch_fs_btree_key_cache {
     pub skipped_lock_fail: c_ulong,
 }
 c_default!(bch_fs_btree_key_cache);
+
+impl bch_fs_btree_key_cache {
+    pub fn nr_keys_need_flush(&self) -> usize {
+        let nr_dirty = self.nr_dirty.load(Relaxed);
+        let nr_keys = self.nr_keys.load(Relaxed);
+        let max_dirty = 1024 + nr_keys / 2;
+
+        nr_dirty.saturating_sub(max_dirty).max(0) as usize
+    }
+}
+
+#[c_export]
+pub fn bch2_nr_btree_keys_need_flush(c: &Fs) -> usize {
+    c.btree.key_cache.nr_keys_need_flush()
+}
 
 #[repr(C, align(4))]
 #[derive(Clone, Copy, Default, CStruct)]

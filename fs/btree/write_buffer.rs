@@ -18,7 +18,7 @@ use crate::fs::Fs;
 use crate::util::Printbuf;
 use crate::types::{DArray, c_default};
 use core::ffi::c_int;
-use cstruct_macros::{CStruct, c_const, c_enum, c_extern, c_xmacro, TypeInfo};
+use cstruct_macros::{CStruct, c_const, c_enum, c_export, c_extern, c_xmacro, TypeInfo};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -203,6 +203,18 @@ impl Fs {
     pub fn btree_write_buffer_to_text(&self, out: &mut Printbuf) {
         unsafe { bch2_btree_write_buffer_to_text(out.as_raw(), self.as_ptr()) }
     }
+
+    pub fn btree_write_buffer_must_wait(&self) -> bool {
+        let (nr, size) = self.btree.write_buffer.iter().fold((0, 0), |(nr, size), wb| {
+            (nr + wb.inc.keys.nr + wb.flushing.keys.nr, size + wb.inc.keys.size)
+        });
+        nr > size * 3 / 4
+    }
+}
+
+#[c_export]
+pub fn bch2_btree_write_buffer_must_wait(c: &Fs) -> bool {
+    c.btree_write_buffer_must_wait()
 }
 
 /// C's struct wb_maybe_flush: before an fsck pass calls a key missing that

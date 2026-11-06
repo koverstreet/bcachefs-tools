@@ -9,7 +9,7 @@ use crate::types::c_default;
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_uint};
 use core::sync::atomic::Ordering;
-use cstruct_macros::{CStruct, c_enum, c_extern};
+use cstruct_macros::{CStruct, c_enum, c_export, c_extern};
 
 c_enum! {
     #[flags]
@@ -138,4 +138,18 @@ impl Fs {
     pub fn journal_reclaim_to_text(&self, out: &mut Printbuf) {
         unsafe { c::bch2_journal_reclaim_to_text(out.as_raw(), self.journal.as_ptr()) }
     }
+
+    /* journal_replicas, or metadata_replicas when it isn't set: */
+    pub fn journal_replicas(&self) -> u32 {
+        let opts = self.opts();
+        match opts.journal_replicas.get() {
+            0 => opts.metadata_replicas.get().into(),
+            r => r.into(),
+        }
+    }
+}
+
+#[c_export]
+pub fn bch2_journal_replicas(c: &Fs) -> c_uint {
+    c.journal_replicas()
 }

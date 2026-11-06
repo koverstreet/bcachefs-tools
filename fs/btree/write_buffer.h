@@ -27,17 +27,6 @@ static inline enum btree_id bch_wb_btree_to_btree_id(enum bch_wb_btree idx)
 	return tbl[idx];
 }
 
-static inline bool bch2_btree_write_buffer_must_wait(struct bch_fs *c)
-{
-	size_t nr = 0, sz = 0;
-	for (unsigned i = 0; i < BCH_WB_BTREE_NR; i++) {
-		struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[i];
-		nr += wb->inc.keys.nr + wb->flushing.keys.nr;
-		sz += wb->inc.keys.size;
-	}
-	return nr > sz * 3 / 4;
-}
-
 #include "btree/write_buffer_defs_gen.h"
 
 bool bch2_btree_write_buffer_flush_going_ro(struct bch_fs *);
