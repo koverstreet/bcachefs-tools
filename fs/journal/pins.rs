@@ -22,7 +22,7 @@ use crate::c;
 use crate::c::journal_pin_type as PinType;
 use crate::alloc::replicas::SbEntry;
 use crate::data_structures::list::List;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::DataType;
 use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, SharedGuard};
@@ -250,6 +250,41 @@ impl c::journal {
 
     pub(crate) fn pin_range(&self) -> &c::PinRange {
         &self.pin_resize_lock
+    }
+
+    /* The most dirty journal entries we let accumulate before reclaim must act */
+    pub fn pin_limit(&self) -> u64 {
+        self.pin_range().pin_size.get().min(JOURNAL_PIN_MAX)
+    }
+
+    pub fn flush_in_progress_to_text(&self, out: &mut Printbuf) {
+        let f = self.flush_in_progress_fn.load(Relaxed);
+        if !f.is_null() {
+            prt!(out, "flush in progress:\t{}\n", Symbol(f));
+        }
+    }
+
+    /// @seq's pins to @out, @seq first moved up to last_seq: true once it's
+    /// past the last entry.
+    pub fn seq_pins_to_text(&self, out: &mut Printbuf, seq: &mut u64, nr: Option<&mut c_uint>) -> bool {
+        if !self.flags.get(c::journal_flags::JOURNAL_running) {
+            return true;
+        }
+
+        *seq = (*seq).max(self.lock.last_seq.get());
+
+        let pins = self.pins();
+        if *seq >= pins.back() {
+            return true;
+        }
+
+        /* nothing holds it - only reclaim hasn't got to it yet */
+        if pins.slot(*seq).count.load(Relaxed) == 0 {
+            return false;
+        }
+
+        pins.to_text(out, *seq, nr);
+        false
     }
 
     pub fn pin_set(&self, seq: u64, pin: &Pin, ty: PinType, flush: c::journal_pin_flush_fn) {
@@ -880,17 +915,6 @@ pub fn bch2_journal_pin_fifo_want_resize(j: &c::journal) -> bool {
 
 
 #[c_export]
-pub fn bch2_journal_pins_start(j: &c::journal, last_seq: u64, cur_seq: u64) -> c_int {
-    ret_to_c(start(j, last_seq, cur_seq))
-}
-
-/* The most dirty journal entries we let accumulate before reclaim must act */
-#[c_export]
-pub fn bch2_journal_pin_limit(j: &c::journal) -> u64 {
-    j.pin_range().pin_size.get().min(JOURNAL_PIN_MAX)
-}
-
-#[c_export]
 pub fn bch2_journal_pins_used(j: &c::journal) -> u64 {
     j.pin_range().used()
 }
@@ -910,64 +934,10 @@ macro_rules! held_exports {
 held_exports! {
     bch2_journal_pins_push              => push(seq: u64);
     bch2_journal_pins_advance_front     => advance_front(last_seq_ondisk: u64);
-    bch2_journal_pins_last_dev_seq      => last_dev_seq(dev: c_int, replicas: c_uint) -> u64;
     bch2_journal_seq_put                => seq_put(seq: u64) -> bool;
-    bch2_journal_seq_unpinned           => seq_unpinned(seq: u64) -> bool;
-    bch2_journal_seq_replayed           => seq_replayed(seq: u64) -> bool;
     bch2_journal_seq_set_bytes          => seq_set_bytes(seq: u64, bytes: c_uint);
     bch2_journal_seq_take_bytes         => seq_take_bytes(seq: u64) -> c_uint;
     bch2_journal_seq_devs               => seq_devs(seq: u64) -> c::bch_devs_list;
     bch2_journal_seq_set_devs           => seq_set_devs(seq: u64, devs: &c::bch_devs_list);
 }
 
-#[c_export]
-pub fn bch2_journal_next_pin(j: &c::journal, seq_to_flush: u64, below: c_uint, above: c_uint,
-                             seq: &mut u64, flush: &mut c::journal_pin_flush_fn,
-                             ty: &mut c::journal_pin_type) -> *mut c::journal_entry_pin {
-    let Some((pin, s, f, t)) = j.pins().next_to_flush(seq_to_flush, below, above) else {
-        return ptr::null_mut();
-    };
-    (*seq, *flush, *ty) = (s, f, t);
-    pin
-}
-
-#[c_export]
-pub fn bch2_journal_pin_flushed(j: &c::journal, pin: &c::journal_entry_pin, seq: u64, ok: bool) {
-    j.pins().flushed(pin, seq, ok)
-}
-
-#[c_export]
-pub fn bch2_journal_flush_in_progress_to_text(out: &mut Printbuf, j: &c::journal) {
-    let f = j.flush_in_progress_fn.load(Relaxed);
-    if !f.is_null() {
-        prt!(out, "flush in progress:\t{}\n", Symbol(f));
-    }
-}
-
-#[c_export]
-pub fn bch2_journal_pins_still_flushing(j: &c::journal, seq_to_flush: u64, types: c_uint) -> bool {
-    j.pins().still_flushing(seq_to_flush, types)
-}
-
-#[c_export]
-pub fn bch2_journal_seq_pins_to_text(out: &mut Printbuf, j: &c::journal, seq: &mut u64,
-                                     nr: Option<&mut c_uint>) -> bool {
-    if !j.flags.get(c::journal_flags::JOURNAL_running) {
-        return true;
-    }
-
-    *seq = (*seq).max(j.lock.last_seq.get());
-
-    let pins = j.pins();
-    if *seq >= pins.back() {
-        return true;
-    }
-
-    /* nothing holds it - only reclaim hasn't got to it yet */
-    if pins.slot(*seq).count.load(Relaxed) == 0 {
-        return false;
-    }
-
-    pins.to_text(out, *seq, nr);
-    false
-}

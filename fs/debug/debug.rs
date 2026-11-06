@@ -257,8 +257,7 @@ impl DebugFile for JournalPins {
 
     fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
         out.print_each(|out| {
-            let done = crate::journal::pins::bch2_journal_seq_pins_to_text(out, &fs.journal,
-                                                                         &mut self.seq, None);
+            let done = fs.journal.seq_pins_to_text(out, &mut self.seq, None);
             self.seq += 1;
             Ok(!done)
         })

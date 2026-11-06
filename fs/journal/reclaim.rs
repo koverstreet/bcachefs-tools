@@ -15,15 +15,12 @@ use crate::c::journal_flags::*;
 use crate::c::journal_pin_type::{JOURNAL_PIN_TYPE_btree0, JOURNAL_PIN_TYPE_key_cache, JOURNAL_PIN_TYPE_NR};
 use crate::c::journal_space_from::{self as SpaceFrom, *};
 use crate::c::JournalGuard;
+use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::DataType;
 use crate::fs::{Dev, Fs};
-use crate::journal::buckets::{bch2_journal_buckets_bucket, bch2_journal_buckets_discarded, bch2_journal_buckets_last_seq,
-                              bch2_journal_buckets_seq_ahead, bch2_journal_dev_buckets_available,
-                              bch2_journal_should_discard_bucket};
-use crate::journal::pins::{bch2_journal_flush_in_progress_to_text, bch2_journal_pin_limit,
-                           bch2_journal_seq_pins_to_text, PinsRead};
+use crate::journal::pins::PinsRead;
 use crate::locking::{ExclusiveGuard, MemallocFlags};
 use crate::util::backtrace::prt_task_backtrace;
 use crate::util::closure::{closure_wait_event, closure_wake_up};
@@ -75,7 +72,7 @@ impl c::journal {
         let med_on_space = clean * 4 <= total * 3;
 
         let low_on_space = clean * 4 <= total;
-        let low_on_pin = self.pin_range().used() > bch2_journal_pin_limit(self) / 4 * 3;
+        let low_on_pin = self.pin_range().used() > self.pin_limit() / 4 * 3;
         let low_on_wb = fs.btree_write_buffer_must_wait();
 
         let open_buckets = self.lock.watermark_open_buckets.get();
@@ -116,14 +113,14 @@ impl c::journal {
         let old = self.lock.hot.watermark.get();
         g.published().hot.watermark.set(watermark);
         if old > watermark {
-            self.wake();
+            self.wake_async_wait();
         }
         if med_on_space {
             self.reclaim_kick();
         }
     }
 
-    pub fn wake(&self) {
+    pub fn wake_async_wait(&self) {
         closure_wake_up(&self.async_wait);
     }
 
@@ -175,7 +172,7 @@ impl c::journal {
             };
         }
 
-        let mut buckets = bch2_journal_dev_buckets_available(self, ja, from);
+        let mut buckets = ca.journal_ring(g).available(from);
         let mut sectors = round_down(ja.sectors_free.get(), fs.block_sectors());
 
         /*
@@ -221,11 +218,12 @@ impl c::journal {
 
     fn space_available_from(&self, g: &JournalGuard<'_>, nr_devs_want: usize, from: SpaceFrom) -> c::journal_space {
         let fs = self.fs();
-        let mut dev_space = [c::journal_space::default(); c::BCH_REPLICAS_MAX as usize];
+        /* one past: an insert comes before the truncate */
+        let mut largest = ArrayVec::<c::journal_space, { c::BCH_REPLICAS_MAX as usize + 1 }>::new();
         let mut nr_devs = 0;
         let mut min_bucket_size = u32::MAX;
 
-        assert!(nr_devs_want <= dev_space.len(), "journal space for {nr_devs_want} devices");
+        assert!(nr_devs_want <= c::BCH_REPLICAS_MAX as usize, "journal space for {nr_devs_want} devices");
 
         let rcu = read_lock();
         for ca in fs.rw_devs_for_rcu(DataType::journal, &rcu) {
@@ -245,12 +243,10 @@ impl c::journal {
              * sort, largest to smallest, entries past nr_devs_want fall
              * off. nr_devs still counts every qualifying device.
              */
-            let nr_kept = nr_devs.min(nr_devs_want);
-            let pos = dev_space[..nr_kept].iter().position(|s| space.total > s.total).unwrap_or(nr_kept);
-
+            let pos = largest.iter().position(|s| space.total > s.total).unwrap_or(largest.len());
             if pos < nr_devs_want {
-                dev_space.copy_within(pos..nr_kept.min(nr_devs_want - 1), pos + 1);
-                dev_space[pos] = space;
+                largest.insert(pos, space);
+                largest.truncate(nr_devs_want);
             }
             nr_devs += 1;
         }
@@ -269,7 +265,7 @@ impl c::journal {
          * We sorted largest to smallest, and we want the smallest out of the
          * @nr_devs_want largest devices:
          */
-        let mut space = dev_space[nr_devs_want - 1];
+        let mut space = largest[nr_devs_want - 1];
         space.next_entry = space.next_entry.min(min_bucket_size);
         space
     }
@@ -288,11 +284,11 @@ impl c::journal {
                     continue;
                 }
 
-                bch2_journal_buckets_last_seq(self, ja, self.lock.last_seq.get(), self.lock.last_seq_ondisk.get());
+                ca.journal_ring_mut(g).last_seq(self.lock.last_seq.get(), self.lock.last_seq_ondisk.get());
 
                 nr_online += 1;
 
-                let should_discard = bch2_journal_should_discard_bucket(self, ja);
+                let should_discard = self.should_discard_bucket(ca.journal_ring(g));
                 can_discard |= should_discard;
 
                 if should_discard &&
@@ -352,17 +348,17 @@ impl c::journal {
         };
 
         if g.cur_entry_error == 0 {
-            self.wake();
+            self.wake_async_wait();
         }
     }
 
     /* Discards - last part of journal reclaim: */
 
     /* And the bucket to discard, read with the lock held: resizing moves them */
-    fn should_discard_bucket(&self, ja: &c::journal_device) -> Option<u64> {
-        let _j = self.lock.lock();
-        bch2_journal_should_discard_bucket(self, ja)
-            .then(|| bch2_journal_buckets_bucket(self, ja, JOURNAL_BUCKET_discard))
+    fn bucket_to_discard(&self, ca: &Dev) -> Option<u64> {
+        let g = self.lock.lock();
+        let ring = ca.journal_ring(&g);
+        self.should_discard_bucket(ring).then(|| ring.bucket(JOURNAL_BUCKET_discard))
     }
 
     fn dev_do_discards(&self, ca: &Dev) {
@@ -371,11 +367,9 @@ impl c::journal {
         let Some(ca) = fs.dev_get_ioref::<c::bch_dev_write_ref>(ca.dev_idx.into()) else {
             return;
         };
-        let ja = &ca.journal;
+        let _d = ca.journal.discard_lock.lock();
 
-        let _d = ja.discard_lock.lock();
-
-        while let Some(bucket) = self.should_discard_bucket(ja) {
+        while let Some(bucket) = self.bucket_to_discard(&ca) {
             let bdev = ca.disk_sb.bdev();
             if fs.opts().nochanges.get() == 0 &&
                 discard_opt_enabled(fs, &ca) &&
@@ -385,7 +379,7 @@ impl c::journal {
             }
 
             let mut g = self.lock.lock();
-            bch2_journal_buckets_discarded(self, ja, bucket);
+            ca.journal_ring_mut(&mut g).discarded(bucket);
             self.space_available(&mut g);
         }
     }
@@ -523,18 +517,18 @@ impl c::journal {
 
     fn seq_to_flush(&self) -> u64 {
         let fs = self.fs();
-        let _j = self.lock.lock();
+        let g = self.lock.lock();
         let rcu = read_lock();
 
         let seq_to_flush = fs.rw_devs_rcu(&rcu)
             .filter(|ca| ca.journal.nr() != 0)
             /* Try to keep the journal at most half full: */
-            .map(|ca| bch2_journal_buckets_seq_ahead(self, &ca.journal, JOURNAL_BUCKET_cur, ca.journal.nr() / 2))
+            .map(|ca| ca.journal_ring(&g).seq_ahead(JOURNAL_BUCKET_cur, ca.journal.nr() / 2))
             .max()
             .unwrap_or(0);
 
         /* Also flush if the pin fifo is more than half full */
-        (seq_to_flush as i64).max(fs.journal_cur_seq() as i64 - (bch2_journal_pin_limit(self) >> 1) as i64) as u64
+        (seq_to_flush as i64).max(fs.journal_cur_seq() as i64 - (self.pin_limit() >> 1) as i64) as u64
     }
 
     /*
@@ -657,6 +651,11 @@ impl c::journal {
         self.reclaim_thread.kick();
     }
 
+    /* An entry's open: a thread asleep with nothing to reclaim has something */
+    pub fn reclaim_wake(&self) {
+        self.reclaim_thread.wake();
+    }
+
     fn flush_pins_or_still_flushing(&self, reclaim: &mut ReclaimGuard<'_>, seq_to_flush: u64, types: u32) -> bool {
         self.flush_pins_locked(reclaim, seq_to_flush, types, 0, 0, 0) != 0 ||
             self.pins().still_flushing(seq_to_flush, types)
@@ -777,7 +776,7 @@ impl c::journal {
 
         loop {
             let (nr_devs, nr_with_space, flush_needed) = {
-                let _j = self.lock.lock();
+                let g = self.lock.lock();
                 let (mut nr_devs, mut nr_with_space) = (0, 0);
 
                 {
@@ -787,7 +786,7 @@ impl c::journal {
                             continue;
                         }
                         nr_devs += 1;
-                        if bch2_journal_dev_buckets_available(self, &ca.journal, journal_space_discarded) != 0 {
+                        if ca.journal_ring(&g).available(journal_space_discarded) != 0 {
                             nr_with_space += 1;
                         }
                     }
@@ -829,7 +828,7 @@ impl c::journal {
         let mut nr = 0;
 
         /* limit the number of pins printed, not the number of seqs scanned */
-        while nr < limit && !bch2_journal_seq_pins_to_text(out, self, &mut seq, Some(&mut nr)) {
+        while nr < limit && !self.seq_pins_to_text(out, &mut seq, Some(&mut nr)) {
             seq += 1;
         }
     }
@@ -854,7 +853,7 @@ impl c::journal {
         prt!(out, "next reclaim:\t{} ms\n",
              if time_after(next, now) { jiffies_to_msecs(next.wrapping_sub(now)) } else { 0 });
 
-        bch2_journal_flush_in_progress_to_text(out, self);
+        self.flush_in_progress_to_text(out);
 
         out.tabstops_reset();
         out.tabstop_push(24);
@@ -949,37 +948,38 @@ fn reclaim_thread(j: &c::journal, me: &KthreadSelf<'_>) {
         }
         j.next_reclaim.set(next);
 
-        /*
-         * Until it's kicked, or stopped, or next_reclaim - with no timeout
-         * while the journal's empty: whatever opens an entry wakes it
-         */
-        loop {
-            if Kthread::should_stop() || me.kicked_since(kicks) {
-                break;
-            }
+        reclaim_sleep(j, me, kicks);
+    }
+}
 
-            let journal_empty = {
-                let _j = j.lock.lock();
-                j.pin_range().used() == 0
-            };
+/*
+ * Until it's kicked, or stopped, or next_reclaim - with no timeout while the
+ * journal's empty: whatever opens an entry wakes it
+ */
+fn reclaim_sleep(j: &c::journal, me: &KthreadSelf<'_>, kicks: u32) {
+    /* unlocked: front and back read apart, so compared, not subtracted */
+    let empty_now = || {
+        let r = j.pin_range();
+        r.pin_front.get() == r.pin_back.get()
+    };
 
-            let timeout = j.next_reclaim.get().wrapping_sub(jiffies()) as isize;
+    while !Kthread::should_stop() && !me.kicked_since(kicks) {
+        let journal_empty = {
+            let _j = j.lock.lock();
+            j.pin_range().used() == 0
+        };
+        let timeout = j.next_reclaim.get().wrapping_sub(jiffies()) as isize;
 
-            if !journal_empty && timeout <= 0 {
-                break;
-            }
+        let how = Sleep::INTERRUPTIBLE.freezable();
+        let how = match (journal_empty, timeout) {
+            (true, _)           => how,
+            (false, t) if t > 0 => how.timeout(t as _),
+            (false, _)          => return,
+        };
 
-            let how = Sleep::INTERRUPTIBLE.freezable();
-            let how = if journal_empty { how } else { how.timeout(timeout as _) };
-            /* unlocked: front and back read apart, so compared, not subtracted */
-            let empty_now = || {
-                let r = j.pin_range();
-                r.pin_front.get() == r.pin_back.get()
-            };
-            let _ = sleep_until(how, || {
-                (Kthread::should_stop() || me.kicked_since(kicks) || empty_now() != journal_empty).then_some(())
-            });
-        }
+        let _ = sleep_until(how, || {
+            (Kthread::should_stop() || me.kicked_since(kicks) || empty_now() != journal_empty).then_some(())
+        });
     }
 }
 
@@ -1028,10 +1028,9 @@ pub fn bch2_journal_reclaim_kick(j: &c::journal) {
     j.reclaim_kick()
 }
 
-/* An entry's open: a thread asleep with nothing to reclaim has something */
 #[c_export]
 pub fn bch2_journal_reclaim_wake(j: &c::journal) {
-    j.reclaim_thread.wake();
+    j.reclaim_wake()
 }
 
 #[c_export]

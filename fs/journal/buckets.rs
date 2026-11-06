@@ -154,6 +154,24 @@ impl JournalRing {
         }
     }
 
+    /// The buckets a journal entry may use, counting @from's as free.
+    pub fn available(&self, from: c::journal_space_from) -> u32 {
+        use c::journal_space_from::*;
+
+        let available = self.free(match from {
+            journal_space_discarded     => DISCARD,
+            journal_space_clean_ondisk  => DIRTY_ONDISK,
+            journal_space_clean         => DIRTY,
+            _                           => panic!("journal space from {}", from as u32),
+        });
+
+        /*
+         * Don't use the last bucket unless writing the new last_seq
+         * will make another bucket available:
+         */
+        available - (available != 0 && !self.can_advance(DIRTY_ONDISK)) as u32
+    }
+
     /// cur, on to the next bucket - a free one - which @seq is written to.
     pub fn next_bucket(&mut self, seq: u64) {
         self.advance(CUR);
@@ -269,13 +287,32 @@ pub fn new() -> JournalBuckets {
 }
 
 impl Dev {
-    pub fn journal_ring<'g>(&'g self, j: &'g mut JournalGuard<'_>) -> &'g mut JournalRing {
+    pub fn journal_ring<'g>(&'g self, j: &'g JournalGuard<'_>) -> &'g JournalRing {
+        assert!(core::ptr::eq(j.lock(), &self.fs().journal.lock), "journal_ring(): another filesystem's journal lock");
+        unsafe { self.journal.buckets.protected() }
+    }
+
+    pub fn journal_ring_mut<'g>(&'g self, j: &'g mut JournalGuard<'_>) -> &'g mut JournalRing {
         assert!(core::ptr::eq(j.lock(), &self.fs().journal.lock), "journal_ring(): another filesystem's journal lock");
         unsafe { self.journal.buckets.protected_mut() }
     }
 
     pub fn with_journal_ring<R>(&self, f: impl FnOnce(&mut JournalRing) -> R) -> R {
-        f(self.journal_ring(&mut self.fs().journal.lock.lock()))
+        f(self.journal_ring_mut(&mut self.fs().journal.lock.lock()))
+    }
+}
+
+impl c::journal {
+    /// Whether @ring's discard cursor should move: not past a retired bucket,
+    /// whose removal is queued instead.
+    pub(crate) fn should_discard_bucket(&self, ring: &JournalRing) -> bool {
+        if ring.retired_awaiting_discard().is_some() {
+            self.drop_retired_work.queue(self.fs().write_ref_wq());
+            return false;
+        }
+
+        ring.can_advance(DISCARD) &&
+            ring.available(c::journal_space_from::journal_space_discarded) < (ring.nr() / 2).max(4)
     }
 }
 
@@ -604,34 +641,7 @@ pub fn bch2_journal_buckets_nr(ja: &c::journal_device) -> c_uint {
 #[c_export]
 pub fn bch2_journal_dev_buckets_available(j: &c::journal, ja: &c::journal_device,
                                           from: c::journal_space_from) -> c_uint {
-    use c::journal_space_from::*;
-
-    let ring = locked(j, ja);
-    let available = ring.free(match from {
-        journal_space_discarded     => DISCARD,
-        journal_space_clean_ondisk  => DIRTY_ONDISK,
-        journal_space_clean         => DIRTY,
-        _                           => panic!("journal space from {}", from as u32),
-    });
-
-    /*
-     * Don't use the last bucket unless writing the new last_seq
-     * will make another bucket available:
-     */
-    available - (available != 0 && !ring.can_advance(DIRTY_ONDISK)) as u32
-}
-
-#[c_export]
-pub fn bch2_journal_should_discard_bucket(j: &c::journal, ja: &c::journal_device) -> bool {
-    let ring = locked(j, ja);
-    if ring.retired_awaiting_discard().is_some() {
-        j.drop_retired_work.queue(j.fs().write_ref_wq());
-        return false;
-    }
-
-    ring.can_advance(DISCARD) &&
-        bch2_journal_dev_buckets_available(j, ja, c::journal_space_from::journal_space_discarded) <
-        (ja.nr() / 2).max(4)
+    locked(j, ja).available(from)
 }
 
 /* Each a ring method, as bch2_journal_buckets_NAME(j, ja, args) */
@@ -646,12 +656,9 @@ macro_rules! ring_exports {
 
 ring_exports! {
     bucket(s: c::journal_bucket_stage) -> u64;
-    seq_ahead(s: c::journal_bucket_stage, k: c_uint) -> u64;
-    last_seq(last_seq: u64, last_seq_ondisk: u64);
     would_free(seq: u64) -> bool;
     next_bucket(seq: u64);
     set_cur_seq(seq: u64);
-    discarded(bucket: u64);
     to_text(out: &mut Printbuf);
 }
 
