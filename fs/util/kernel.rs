@@ -119,6 +119,16 @@ pub fn bdev_max_discard_sectors(bdev: &c::block_device) -> u32 {
     }
 }
 
+/// Discard @nr_sectors from @sector on @bdev, and wait for it:
+/// blkdev_issue_discard().
+pub fn blkdev_issue_discard(bdev: &c::block_device, sector: u64, nr_sectors: u64, gfp: c::gfp_t)
+    -> Result<(), crate::errcode::BchError>
+{
+    crate::errcode::ret_to_result_void(unsafe {
+        c::blkdev_issue_discard(core::ptr::from_ref(bdev).cast_mut(), sector as _, nr_sectors as _, gfp)
+    })
+}
+
 pub fn random_u64() -> u64 {
     unsafe { c::bch2_get_random_u64() }
 }
