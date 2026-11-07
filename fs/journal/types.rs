@@ -2,12 +2,15 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::bkey::BkeyI;
+use crate::btree::bkey::BKEY_U64S;
 use crate::fs::{Dev, Fs};
 use crate::cstructs::c;
+use crate::data::keylist::PaddedKey;
 use crate::data::ptrs::IoFailures;
+use crate::data::write::DevWriteRef;
 use crate::types::{CacheAligned, DArray, Fifo, RustOnly, c_default, rust_only};
 use crate::util::alloc::{kvfree_sized, kvzalloc_gfp, AllocError, KVVec};
+use crate::util::backref::BackRef;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::{from_ffi, from_ffi_mut, Head, Unvalidated};
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
@@ -115,20 +118,22 @@ nest! {
     #[derive(CStruct)]
     pub struct journal_buf {
         pub io: c::closure,
-        pub j: *mut c::journal, /* for container_of-equivalent recovery */
+        #[c("struct journal *j")]
+        pub j: BackRef<c::journal>, /* for container_of-equivalent recovery */
         #[c_anon("struct { struct jset *data; unsigned buf_size; }")]
         pub data: JsetBuf,
 
-        pub key: c::bkey_i,
-        pub key_pad: [u64; c::BCH_REPLICAS_MAX as usize],
+        #[c_anon("struct { struct bkey_i key; u64 key_pad[BCH_REPLICAS_MAX]; }")]
+        pub key: PaddedKey<{ BKEY_U64S + c::BCH_REPLICAS_MAX as usize }>,
         /*
          * @cas mirrors the dev ptrs in @key in append order: cas[i] is the
-         * bch_dev * for which __journal_write_alloc holds an io_ref.  Stashed
-         * so the alloc → submit (or alloc → no_io) gap doesn't have to
-         * re-derive ca via c->devs[idx], which dev_remove may have cleared
-         * while our io_ref still pins the dev object.
+         * io_ref __journal_write_alloc took on that dev.  Stashed so the
+         * alloc → submit (or alloc → no_io) gap doesn't have to re-derive ca
+         * via c->devs[idx], which dev_remove may have cleared while our
+         * io_ref still pins the dev object.
          */
-        pub cas: [*mut Dev; c::BCH_REPLICAS_MAX as usize],
+        #[c("struct bch_dev *cas[BCH_REPLICAS_MAX]")]
+        pub cas: [Option<DevWriteRef>; c::BCH_REPLICAS_MAX as usize],
         pub devs_written: c::bch_devs_list,
         pub failed: c::bch_io_failures,
         /* preflushes go to every rw member with unflushed writes */
@@ -158,12 +163,12 @@ nest! {
         pub wait: c::closure_waitlist,
     }
 }
-c_default!(journal_buf);
 
 impl journal_buf {
-    /// Its value runs on past key, into key_pad.
-    pub fn key(&self) -> &BkeyI {
-        unsafe { &*BkeyI::from_raw(&raw const self.key) }
+    /// Its journal, as 'static: a buf is retired before its journal goes, and
+    /// what it hands out of it goes no further than the buf's write.
+    pub fn journal(&self) -> &'static c::journal {
+        unsafe { self.j.get() }
     }
 }
 
@@ -667,8 +672,6 @@ nest! {
 
         pub write_start_time: Volatile<u64>,
 
-        pub flush_write_time: *mut c::bch2_time_stats,
-        pub noflush_write_time: *mut c::bch2_time_stats,
         pub flush_seq_time: *mut c::bch2_time_stats,
 
         #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]

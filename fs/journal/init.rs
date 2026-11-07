@@ -28,7 +28,7 @@ impl c::journal {
         let g = self.lock.lock();
 
         g.in_flight.iter().any(|buf| {
-            buf.key().as_sc().arm::<Ptrs>().is_some_and(|k| k.has_device(fs, dev_idx).is_some())
+            buf.key.key().as_sc().arm::<Ptrs>().is_some_and(|k| k.has_device(fs, dev_idx).is_some())
         })
     }
 

@@ -6,9 +6,11 @@ use crate::cstructs::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::types::c_default;
+use crate::util::closure::closure_wake_up;
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_uint};
-use core::ptr;
+use core::mem::ManuallyDrop;
+use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering::{self, Relaxed, SeqCst}};
 use cstruct_macros::{CStruct, c_enum, c_export, c_extern};
 
@@ -116,6 +118,42 @@ pub fn buf_waiters(first: *mut c::llist_node) -> bool {
     first > JOURNAL_BUF_FLUSH
 }
 
+/// Flush waiters swapped off a buf's word: a chain, ended by NULL, that
+/// nothing else reaches until it's woken - when it drops - or added to
+/// another buf's.
+pub struct Waiters {
+    first: NonNull<c::llist_node>,
+    last:  NonNull<c::llist_node>,
+}
+
+impl Waiters {
+    /// # Safety
+    /// @first is a chain swapped off a buf's word: no one else's.
+    unsafe fn taken(first: NonNull<c::llist_node>) -> Self {
+        let mut last = first;
+        while let Some(next) = NonNull::new(unsafe { last.as_ref() }.next) {
+            last = next;
+        }
+        Waiters { first, last }
+    }
+
+    fn set_tail(&mut self, next: *mut c::llist_node) {
+        unsafe { (*self.last.as_ptr()).next = next };
+    }
+
+    fn into_raw(self) -> *mut c::llist_node {
+        ManuallyDrop::new(self).first.as_ptr()
+    }
+
+    pub fn wake(self) {}
+}
+
+impl Drop for Waiters {
+    fn drop(&mut self) {
+        closure_wake_up(&c::closure_waitlist { list: c::llist_head { first: self.first.as_ptr() } });
+    }
+}
+
 impl c::journal_buf {
     pub(crate) fn wait_word(&self) -> &AtomicPtr<c::llist_node> {
         unsafe { AtomicPtr::from_ptr((&raw const self.wait.list.first).cast_mut()) }
@@ -147,6 +185,42 @@ impl c::journal_buf {
                 Err(o) => old = o,
             }
         }
+    }
+
+    /// Its waiters, if it has any, the word left @with.
+    pub fn take_waiters(&self, with: *mut c::llist_node) -> Option<Waiters> {
+        let first = self.wait_word().swap(with, SeqCst);
+        buf_waiters(first).then(|| unsafe { Waiters::taken(NonNull::new_unchecked(first)) })
+    }
+
+    /// @waiters on its word, ahead of any it has - back, if it isn't taking
+    /// flush waiters: decided noflush, not in flight, or FLUSH_NO_WAIT's.
+    pub fn add_waiters(&self, mut waiters: Waiters) -> Result<(), Waiters> {
+        let w = self.wait_word();
+        let mut old = w.load(Relaxed);
+        loop {
+            if !old.is_null() && old <= JOURNAL_BUF_FLUSH_NO_WAIT {
+                waiters.set_tail(ptr::null_mut());
+                return Err(waiters);
+            }
+
+            waiters.set_tail(if buf_waiters(old) { old } else { ptr::null_mut() });
+
+            match w.compare_exchange(old, waiters.first.as_ptr(), SeqCst, Relaxed) {
+                Ok(_) => {
+                    waiters.into_raw();
+                    return Ok(());
+                }
+                Err(o) => old = o,
+            }
+        }
+    }
+
+    /// @waiters back, as its only ones: its word as it was before
+    /// take_waiters() left @with.
+    pub fn put_back_waiters(&self, waiters: Waiters, with: *mut c::llist_node) {
+        let was = self.wait_word().swap(waiters.into_raw(), SeqCst);
+        assert!(was == with, "journal buf's flush word changed while its waiters were away");
     }
 }
 

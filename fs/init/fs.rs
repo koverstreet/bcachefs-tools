@@ -528,8 +528,6 @@ impl Fs {
                                              new_lock!(@key));
 
             let times = &raw mut (*p).times;
-            (*p).journal.flush_write_time = &raw mut (*times)[Time::BCH_TIME_journal_flush_write as usize];
-            (*p).journal.noflush_write_time = &raw mut (*times)[Time::BCH_TIME_journal_noflush_write as usize];
             (*p).journal.flush_seq_time = &raw mut (*times)[Time::BCH_TIME_journal_flush_seq as usize];
         }
 
