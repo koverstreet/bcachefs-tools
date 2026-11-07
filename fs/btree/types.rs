@@ -499,6 +499,22 @@ pub struct bkey_cached {
 }
 c_default!(bkey_cached);
 
+impl bkey_cached {
+    /* C's test_bit()s, racing its set_bit()s */
+    fn flag(&self, bit: u32) -> bool {
+        let flags = unsafe { core::ptr::read_volatile(&raw const self.flags) };
+        flags & (1 << bit) != 0
+    }
+
+    pub fn dirty(&self) -> bool {
+        self.flag(cs::BKEY_CACHED_DIRTY)
+    }
+
+    pub fn immediate_flush(&self) -> bool {
+        self.flag(cs::BKEY_CACHED_IMMEDIATE_FLUSH)
+    }
+}
+
 /* Transaction types: */
 nest! {
     #[repr(C)]
@@ -1139,6 +1155,23 @@ c_enum! {
     pub enum BtreeNodeType: u32 {
         btree,
         Btree_arms(kwd, val, ..) => kwd = (val as u32) + 1,
+    }
+}
+
+impl BtreeNodeType {
+    /* Type of a key in btree @id at level @level: */
+    pub const fn of(level: u32, btree: Btree) -> Self {
+        if level != 0 { Self::btree } else { Self(btree.0 + 1) }
+    }
+}
+
+impl Btree {
+    pub const fn trigger_order(self) -> u8 {
+        match self {
+            Btree::alloc   => u8::MAX,
+            Btree::stripes => u8::MAX - 1,
+            _              => self.0 as u8,
+        }
     }
 }
 
