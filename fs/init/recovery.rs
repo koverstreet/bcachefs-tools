@@ -520,6 +520,14 @@ fn journal_replay_entry_early(fs: &Fs, entry: &c::jset_entry) -> Result<(), BchE
             r.key.set_key(k.key());
             r.alive = 1;
             roots.published().roots_error[id as usize].set(0);
+
+            /* every journal entry carries every root, this version's btrees or not: */
+            let nr_roots = u32::from(Btree::nr) + roots.roots_extra.nr as u32;
+            drop(roots);
+            if id >= u32::from(Btree::nr) {
+                fs.journal_entry_res_resize(&fs.btree.root_journal_res,
+                                            crate::btree::interior::roots_journal_u64s(nr_roots));
+            }
         }
         Ok(c::JsetEntryRef::usage(u)) => {
             if u.entry.btree_id == c::bch_fs_usage_type::BCH_FS_USAGE_key_version.0 as u8 {

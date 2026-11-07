@@ -891,6 +891,12 @@ extern "C" fn write_preflush(w: Running<c::journal_buf>) {
     }
 }
 
+/// The entries write_prep() adds to every journal entry besides its btree
+/// roots - the datetime, and super_entries_add_common()'s: what
+/// super_entries_journal_res reserves.
+pub(crate) const PREP_ENTRIES_U64S: usize =
+    (size_of::<c::jset_entry_datetime>() + crate::sb::clean::COMMON_BYTES) / size_of::<u64>();
+
 fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
     let fs = j.fs();
     let mut wb = c::journal_keys_to_wb::default();
@@ -976,14 +982,14 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
     }
 
     let u64s = w.append_entries(|ew| {
-        let _ = btree_roots_to_journal_entries(fs, ew, btree_roots_have);
+        btree_roots_to_journal_entries(fs, ew, btree_roots_have).expect("root_journal_res's room");
 
         let mut d = c::jset_entry_datetime::default();
         d.entry.type_ = c::bch_jset_entry_type::BCH_JSET_ENTRY_datetime.0 as u8;
         d.seconds.set(ktime_get_real_seconds() as u64);
-        let _ = ew.push_entry(d);
+        ew.push_entry(d).expect("super_entries_journal_res's room");
 
-        let _ = crate::sb::clean::super_entries_add_common(fs, ew);
+        crate::sb::clean::super_entries_add_common(fs, ew).expect("super_entries_journal_res's room");
     });
 
     crate::warn_on!(u64s > j.lock.entry_u64s_reserved.get() as usize);
@@ -1341,9 +1347,7 @@ impl c::journal {
         let w = g.seq_to_buf_mut(seq).expect("an in-flight journal buf");
         match rewind_limit {
             Some(r) => {
-                w.append_entries(|ew| {
-                    let _ = ew.push_entry(r);
-                });
+                w.append_entries(|ew| ew.push_entry(r).expect("rewind_limit_res's room"));
             }
             None => {
                 w.head_mut().set_no_flush(true);

@@ -843,7 +843,7 @@ pub struct Fs {
     #[pin]
     #[init(::pin_init::pin_init_array_from_fn(|_| c::io_clock::init()))]
     pub io_clock: [c::io_clock; 2],
-    pub clock_journal_res: c::journal_entry_res,
+    pub super_entries_journal_res: c::journal_entry_res,
     pub rewind_limit_res: c::journal_entry_res,
 
     /* IO PATH */

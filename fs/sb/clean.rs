@@ -176,6 +176,9 @@ impl Fs {
 
 // ── Writing it, at a clean shutdown ──────────────────────────────────────────
 
+/// The bytes super_entries_add_common() writes.
+pub(crate) const COMMON_BYTES: usize = size_of::<c::jset_entry_usage>() + 2 * size_of::<c::jset_entry_clock>();
+
 /// The entries every journal write carries, and the clean section: the key
 /// version, and both io clocks' times.
 pub(crate) fn super_entries_add_common(fs: &Fs, w: &mut EntryWriter<'_>) -> Result<(), NoRoom> {

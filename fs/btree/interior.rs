@@ -173,3 +173,9 @@ fn push_roots(fs: &Fs, root_lock: &RootsGuard<'_>, skip: u64, w: &mut EntryWrite
 pub fn btree_roots_to_journal_entries(fs: &Fs, w: &mut EntryWriter<'_>, skip: u64) -> Result<(), NoRoom> {
     push_roots(fs, &fs.btree.cache.roots.lock(), skip, w)
 }
+
+/// What every journal entry reserves for @nr btrees' roots, each at its
+/// largest: root_journal_res.
+pub(crate) fn roots_journal_u64s(nr: u32) -> c_uint {
+    nr * (c::JSET_KEYS_U64s + c::BKEY_BTREE_PTR_U64s_MAX) as c_uint
+}

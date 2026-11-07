@@ -282,6 +282,11 @@ impl Fs {
         unsafe { bch2_journal_noflush_seq(self.journal.as_ptr(), start, end) }
     }
 
+    /// What every journal entry reserves for @res, made @u64s.
+    pub fn journal_entry_res_resize(&self, res: &c::journal_entry_res, u64s: c_uint) {
+        unsafe { bch2_journal_entry_res_resize(self.journal.as_ptr(), ptr::from_ref(res).cast_mut(), u64s) }
+    }
+
     /// Advance the rewind limit to @seq: buckets emptied before it may be
     /// discarded, once a journal flush has the limit on disk.
     pub fn journal_advance_rewind_seq(&self, seq: u64) {

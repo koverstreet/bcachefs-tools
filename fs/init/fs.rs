@@ -605,9 +605,9 @@ impl Fs {
         unsafe {
             let j = &raw mut (*p).journal;
             c::bch2_journal_entry_res_resize(j, &raw mut (*p).btree.root_journal_res,
-                (c::BTREE_ID_NR as usize * (c::JSET_KEYS_U64s + c::BKEY_BTREE_PTR_U64s_MAX)) as c_uint);
-            c::bch2_journal_entry_res_resize(j, &raw mut (*p).clock_journal_res,
-                (size_of::<c::jset_entry_clock>() / size_of::<u64>() * 2) as c_uint);
+                crate::btree::interior::roots_journal_u64s(c::BTREE_ID_NR));
+            c::bch2_journal_entry_res_resize(j, &raw mut (*p).super_entries_journal_res,
+                crate::journal::write::PREP_ENTRIES_U64S as c_uint);
             c::bch2_journal_entry_res_resize(j, &raw mut (*p).rewind_limit_res,
                 (size_of::<c::jset_entry_rewind_limit>() / size_of::<u64>()) as c_uint);
         }

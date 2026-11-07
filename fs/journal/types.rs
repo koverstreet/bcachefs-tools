@@ -737,9 +737,10 @@ unsafe impl Send for journal_device {}
  * journal_entry_res - reserve space in every journal entry:
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(CStruct)]
 pub struct journal_entry_res {
-    pub u64s: c_uint,
+    /* written by bch2_journal_entry_res_resize(), under j->lock */
+    pub u64s: Volatile<c_uint>,
 }
 
 /*
