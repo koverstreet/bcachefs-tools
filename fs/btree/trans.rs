@@ -254,7 +254,7 @@ impl<'f> BtreeTrans<'f> {
         })
     }
 
-    fn paths_allocated(&self) -> (&Bitmap, usize) {
+    pub(crate) fn paths_allocated(&self) -> (&Bitmap, usize) {
         let nr = self.nr_paths.get() as usize;
         let words = unsafe { core::slice::from_raw_parts(self.paths_allocated.get().cast::<usize>(), bits_to_longs(nr)) };
         (Bitmap::from_words(words), nr)
