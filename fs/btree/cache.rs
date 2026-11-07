@@ -217,11 +217,6 @@ pub fn bch2_btree_node_wait_on_flag_timeout(b: &BtreeNode, bit: c::btree_flags, 
 }
 
 #[c_export]
-pub fn bch2_btree_node_wake_flags(b: &BtreeNode) {
-    b.flags.wake()
-}
-
-#[c_export]
 pub fn bch2_btree_cache_update_throttle(c: &Opaque<Fs>) {
     Fs::from_c(c).btree.cache.update_throttle()
 }
@@ -239,8 +234,7 @@ impl Fs {
 }
 
 /// A node's buffer swapped, @old for @new: the cache counts the vmalloc'd.
-#[c_export]
-pub fn btree_node_buf_swap_account(fs: &Fs, old: *const c_void, new: *const c_void) {
+fn btree_node_buf_swap_account(fs: &Fs, old: *const c_void, new: *const c_void) {
     let delta = is_vmalloc_addr(new) as isize - is_vmalloc_addr(old) as isize;
 
     if delta != 0 {

@@ -72,22 +72,6 @@ pub fn bch2_io_failures_reset_devs(failed: &mut c::bch_io_failures) {
     failed.reset_devs()
 }
 
-#[c_export]
-pub fn bch2_io_failures_has_dev(failed: &c::bch_io_failures, dev: c_uint) -> bool {
-    failed.dev(dev).is_some()
-}
-
-/// @dev's io error, 0 for none.
-#[c_export]
-pub fn bch2_io_failures_dev_errcode(failed: &c::bch_io_failures, dev: c_uint) -> c_int {
-    failed.dev(dev).map_or(0, |f| f.errcode.into())
-}
-
-#[c_export]
-pub fn bch2_io_failures_set_errcode(failed: &mut c::bch_io_failures, dev: c_uint, err: c_int) {
-    failed.set_errcode(dev, err);
-}
-
 /// The erasure coded reconstruct's message, for the read path to write.
 #[c_export]
 pub fn bch2_io_failures_ec_msg(failed: &mut c::bch_io_failures) -> *mut Printbuf {

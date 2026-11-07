@@ -51,19 +51,6 @@ static inline void bch2_csum_to_text(struct printbuf *out,
 		prt_hex_byte(out, p[i]);
 }
 
-static inline void bch2_csum_err_msg(struct printbuf *out,
-				     enum bch_csum_type type,
-				     struct bch_csum expected,
-				     struct bch_csum got)
-{
-	prt_str(out, "checksum error, type ");
-	bch2_prt_csum_type(out, type);
-	prt_str(out, ": got ");
-	bch2_csum_to_text(out, type, got);
-	prt_str(out, " should be ");
-	bch2_csum_to_text(out, type, expected);
-}
-
 static inline int bch2_encrypt_bio(struct bch_fs *c, unsigned type,
 				   struct nonce nonce, struct bio *bio)
 {

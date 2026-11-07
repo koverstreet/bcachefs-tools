@@ -672,8 +672,7 @@ impl BsetWrite {
     }
 }
 
-#[c_export]
-pub fn bch2_trans_submit_write_bios(trans: &BtreeTrans<'_>) {
+pub fn trans_submit_write_bios(trans: &BtreeTrans<'_>) {
     let mut bio = trans.queued_write_bios.replace(ptr::null_mut());
 
     while !bio.is_null() {

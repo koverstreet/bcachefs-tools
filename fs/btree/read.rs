@@ -11,14 +11,14 @@ use crate::btree::bkey_buf::BtreeKeyBuf;
 use crate::btree::cache::{__bch2_btree_pos_to_text, bch2_btree_id_level_to_text, Bounce};
 use crate::btree::interior::bch2_async_btree_op;
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags};
-use crate::btree::node::{bset::bch2_btree_node_count_keys, sort::{bch2_btree_build_aux_trees, SortRuns}};
+use crate::btree::node::sort::{bch2_btree_build_aux_trees, SortRuns};
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::btree::path::Paths;
 use crate::btree::trans::BtreeTrans;
 use crate::btree::traverse::bch2_btree_cache_cannibalize_lock;
 use crate::btree::validate::{btree_err_on, btree_node_bkey_val_validate, node_btree, validate_bset,
                              validate_bset_keys, ErrAt, NodeIo, NodeValidate};
-use crate::btree::write::bch2_trans_submit_write_bios;
+use crate::btree::write::trans_submit_write_bios;
 use crate::c;
 use crate::data::checksum::{csum_err_msg, csum_vstruct, BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
 use crate::data::inline_data::InlineDataRef;
@@ -270,7 +270,7 @@ pub fn drop_keys_outside_node(b: &BtreeNode) {
      */
     keys.sets.set_no_aux_tree(0);
     bch2_btree_build_aux_trees(b);
-    contents.nr = bch2_btree_node_count_keys(b);
+    contents.nr = b.keys(contents).btree_node_count_keys();
 
     let _ = b.for_each_key(contents, |k| {
         assert!(k.k.p >= min_key, "key {} before its node's min {min_key}", k.k.p);
@@ -666,7 +666,7 @@ crate::module_param! {
 #[c_export]
 pub fn bch2_btree_node_wait_on_read(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, b: &BtreeNode) {
     if unlikely(!trans.queued_write_bios.get().is_null()) {
-        bch2_trans_submit_write_bios(trans);
+        trans_submit_write_bios(trans);
     }
 
     trans.wait_on_node_flag(paths, b, c::btree_flags::BTREE_NODE_read_in_flight);
@@ -681,7 +681,7 @@ pub fn bch2_btree_node_wait_on_write(trans: &BtreeTrans<'_>, #[lent(trans)] path
      * before sleeping, or we'd wait on ourselves forever:
      */
     if unlikely(!trans.queued_write_bios.get().is_null()) {
-        bch2_trans_submit_write_bios(trans);
+        trans_submit_write_bios(trans);
     }
 
     trans.wait_on_node_flag(paths, b, c::btree_flags::BTREE_NODE_write_in_flight);

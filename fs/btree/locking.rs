@@ -918,7 +918,7 @@ impl BtreeTrans<'_> {
          * trans's context.
          */
         if !self.queued_write_bios.get().is_null() {
-            crate::btree::write::bch2_trans_submit_write_bios(self);
+            crate::btree::write::trans_submit_write_bios(self);
         }
     }
 

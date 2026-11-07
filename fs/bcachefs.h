@@ -156,8 +156,6 @@ BCH_DEBUG_PARAMS_ALL()
 
 #define bch2_fs_init_fault(name)					\
 	dynamic_fault("bcachefs:bch_fs_init:" name)
-#define bch2_meta_read_fault(name)					\
-	 dynamic_fault("bcachefs:meta:read:" name)
 #define bch2_meta_write_fault(name)					\
 	 dynamic_fault("bcachefs:meta:write:" name)
 

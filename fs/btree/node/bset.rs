@@ -807,13 +807,6 @@ pub fn bch2_bset_init_next(b: &BtreeNode, bne: *mut Head<c::btree_node_entry>) {
     keys.bset_init_next(offset);
 }
 
-#[c_export]
-pub fn bch2_bset_build_aux_tree(b: &BtreeNode, t: *mut BsetTree, writeable: bool) {
-    let contents = unsafe { b.contents_mut() };
-    let set = contents.set_index(t);
-    b.keys_mut(contents).bset_build_aux_tree(set, writeable);
-}
-
 /// # Safety
 /// @insert a whole key.
 #[c_export]
@@ -849,11 +842,6 @@ pub fn bch2_bkey_prev_filter(b: &BtreeNode, t: *mut BsetTree, k: *mut c::bkey_pa
     let t = &contents.set[contents.set_index(t)];
     keys.bkey_prev_filter(t, keys.offset_of(k), min_key_type)
         .map_or(core::ptr::null_mut(), |p| keys.ptr_at(p))
-}
-
-#[c_export]
-pub fn bch2_btree_node_count_keys(b: &BtreeNode) -> BtreeNrKeys {
-    b.keys(unsafe { b.contents() }).btree_node_count_keys()
 }
 
 #[c_export]
