@@ -1092,7 +1092,9 @@ fn __write_index(op: &mut Op) {
     let _noio = MemallocFlags::noio();
 
     let ret = (|| -> Result<(), BchError> {
-        if unlikely(op.io_error != 0) {
+        // io_error stays set for the op's later passes: one that wrote nothing
+        // has no keys to drop pointers from, and its error was reported
+        if unlikely(op.io_error != 0) && !op.insert_keys.is_empty() {
             let ret = write_drop_io_error_ptrs(op);
 
             let mut msg = LogMsg::new(fs);
