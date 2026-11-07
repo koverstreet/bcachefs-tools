@@ -757,7 +757,7 @@ struct EnumList {
 const ENUM_LISTS: &[EnumList] = &[
     EnumList {
         key: "error-actions",
-        macro_name: "BCH_ERROR_ACTIONS",
+        macro_name: "bch_error_actions",
         default: Some("fix_safe"),
         doc_field: Some(2),
         flags_field: None,
@@ -767,7 +767,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "csum-opts",
-        macro_name: "BCH_CSUM_OPTS",
+        macro_name: "bch_csum_opt",
         default: Some("crc32c"),
         doc_field: None,
         flags_field: None,
@@ -787,7 +787,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "str-hash-opts",
-        macro_name: "BCH_STR_HASH_OPTS",
+        macro_name: "bch_str_hash_opts",
         default: Some("siphash"),
         doc_field: None,
         flags_field: None,

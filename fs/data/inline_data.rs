@@ -138,7 +138,7 @@ impl c::InlineDataCsum {
     /// type, whatever the filesystem is.
     pub fn new(fs: &Fs, opts: &c::bch_inode_opts, data: &[u8]) -> Self {
         let ty = if opts.nocow != 0 {
-            c::bch_csum_type::BCH_CSUM_none
+            c::bch_csum_type::none
         } else {
             c::bch_csum_opt(opts.data_checksum.into()).to_type(fs, true)
         };
@@ -153,7 +153,7 @@ impl c::InlineDataCsum {
 pub(crate) fn csum_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let h = InlineDataRef::of(v.k).and_then(|d| d.csum).expect("an inline data key with a checksum");
     let ty = c::bch_csum_type(h.csum_type.into());
-    bkey_fsck_err_on!(v, ty.0 >= c::bch_csum_type::BCH_CSUM_NR.0 || ty.is_encryption(),
+    bkey_fsck_err_on!(v, ty.0 >= c::bch_csum_type::NR || ty.is_encryption(),
                       id::inline_data_csum_type_bad, "inline data with checksum type {}", h.csum_type)
 }
 

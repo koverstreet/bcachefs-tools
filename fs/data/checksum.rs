@@ -91,17 +91,17 @@ impl Csum {
     fn new(fs: Option<&Fs>, ty: c::bch_csum_type, mut nonce: Nonce) -> Self {
         use c::bch_csum_type as t;
         match ty {
-            t::BCH_CSUM_crc32c          => Csum::Crc32c { seed: 0, xor: 0 },
-            t::BCH_CSUM_crc32c_nonzero  => Csum::Crc32c { seed: u32::MAX.into(), xor: u32::MAX.into() },
-            t::BCH_CSUM_crc64           => Csum::Crc64 { seed: 0, xor: 0 },
-            t::BCH_CSUM_crc64_nonzero   => Csum::Crc64 { seed: u64::MAX, xor: u64::MAX },
-            t::BCH_CSUM_xxhash => {
+            t::crc32c          => Csum::Crc32c { seed: 0, xor: 0 },
+            t::crc32c_nonzero  => Csum::Crc32c { seed: u32::MAX.into(), xor: u32::MAX.into() },
+            t::crc64           => Csum::Crc64 { seed: 0, xor: 0 },
+            t::crc64_nonzero   => Csum::Crc64 { seed: u64::MAX, xor: u64::MAX },
+            t::xxhash => {
                 let mut s = c::xxh64_state::default();
                 // SAFETY: a state, to set up
                 unsafe { c::xxh64_reset(&mut s, 0) };
                 Csum::Xxhash(s)
             }
-            t::BCH_CSUM_chacha20_poly1305_80 | t::BCH_CSUM_chacha20_poly1305_128 => {
+            t::chacha20_poly1305_80 | t::chacha20_poly1305_128 => {
                 let fs = fs.expect("an encryption type's checksum, with no filesystem for its key");
                 let mut key = [0u8; POLY1305_KEY_SIZE];
                 nonce.d[3] = Le32::new(nonce.d[3].get() ^ BCH_NONCE_POLY);
@@ -183,22 +183,22 @@ fn checksum(fs: Option<&Fs>, ty: c::bch_csum_type, nonce: Nonce, data: &[u8]) ->
 impl c::bch_csum_type {
     /// Whether it's an encryption type: bch2_csum_type_is_encryption().
     pub fn is_encryption(self) -> bool {
-        matches!(self, c::bch_csum_type::BCH_CSUM_chacha20_poly1305_80 |
-                       c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128)
+        matches!(self, c::bch_csum_type::chacha20_poly1305_80 |
+                       c::bch_csum_type::chacha20_poly1305_128)
     }
 
     /// Its checksum's size in bytes - None for a type this version doesn't
     /// know: bch_crc_bytes[].
     pub fn bytes(self) -> Option<u32> {
         Some(match self {
-            c::bch_csum_type::BCH_CSUM_none                     => 0,
-            c::bch_csum_type::BCH_CSUM_crc32c_nonzero |
-            c::bch_csum_type::BCH_CSUM_crc32c                   => 4,
-            c::bch_csum_type::BCH_CSUM_crc64_nonzero |
-            c::bch_csum_type::BCH_CSUM_crc64 |
-            c::bch_csum_type::BCH_CSUM_xxhash                   => 8,
-            c::bch_csum_type::BCH_CSUM_chacha20_poly1305_80     => 10,
-            c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128    => 16,
+            c::bch_csum_type::none                  => 0,
+            c::bch_csum_type::crc32c_nonzero |
+            c::bch_csum_type::crc32c                => 4,
+            c::bch_csum_type::crc64_nonzero |
+            c::bch_csum_type::crc64 |
+            c::bch_csum_type::xxhash                => 8,
+            c::bch_csum_type::chacha20_poly1305_80  => 10,
+            c::bch_csum_type::chacha20_poly1305_128 => 16,
             _ => return None,
         })
     }
@@ -207,15 +207,15 @@ impl c::bch_csum_type {
     /// bch2_checksum_merge() - so an extent with it can merge:
     /// bch2_checksum_mergeable().
     pub fn mergeable(self) -> bool {
-        matches!(self, c::bch_csum_type::BCH_CSUM_none |
-                       c::bch_csum_type::BCH_CSUM_crc32c |
-                       c::bch_csum_type::BCH_CSUM_crc64)
+        matches!(self, c::bch_csum_type::none |
+                       c::bch_csum_type::crc32c |
+                       c::bch_csum_type::crc64)
     }
 
     /// Whether @fs can use it - a type this version knows, and an encryption
     /// type only with the key loaded: bch2_checksum_type_valid().
     pub fn valid(self, fs: &Fs) -> bool {
-        self.0 < c::bch_csum_type::BCH_CSUM_NR.0 && (!self.is_encryption() || fs.encryption_key().is_some())
+        self.0 < c::bch_csum_type::NR && (!self.is_encryption() || fs.encryption_key().is_some())
     }
 
     /// @data's checksum, of a type that takes no key - nor so a nonce, or a
@@ -271,13 +271,13 @@ impl c::bch_csum_opt {
         use c::bch_csum_opt as o;
         use c::bch_csum_type as t;
         match self {
-            o::BCH_CSUM_OPT_none   => t::BCH_CSUM_none,
-            o::BCH_CSUM_OPT_crc32c => if data { t::BCH_CSUM_crc32c } else { t::BCH_CSUM_crc32c_nonzero },
-            o::BCH_CSUM_OPT_crc64  => if data { t::BCH_CSUM_crc64 } else { t::BCH_CSUM_crc64_nonzero },
-            o::BCH_CSUM_OPT_xxhash => t::BCH_CSUM_xxhash,
+            o::none   => t::none,
+            o::crc32c => if data { t::crc32c } else { t::crc32c_nonzero },
+            o::crc64  => if data { t::crc64 } else { t::crc64_nonzero },
+            o::xxhash => t::xxhash,
             _ => {
                 crate::warn_once!(true, fs, "unknown checksum opt {}", self.0);
-                if data { t::BCH_CSUM_crc32c } else { t::BCH_CSUM_crc32c_nonzero }
+                if data { t::crc32c } else { t::crc32c_nonzero }
             }
         }
     }
@@ -289,13 +289,13 @@ impl Fs {
     /// encrypted filesystem.
     pub fn data_checksum_type(&self, opts: &c::bch_inode_opts) -> c::bch_csum_type {
         if opts.nocow != 0 {
-            return c::bch_csum_type::BCH_CSUM_none;
+            return c::bch_csum_type::none;
         }
         if self.sb.encryption_type.get() != 0 {
             return if self.opts().wide_macs.get() != 0 {
-                c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128
+                c::bch_csum_type::chacha20_poly1305_128
             } else {
-                c::bch_csum_type::BCH_CSUM_chacha20_poly1305_80
+                c::bch_csum_type::chacha20_poly1305_80
             };
         }
         c::bch_csum_opt(opts.data_checksum.into()).to_type(self, true)
@@ -303,7 +303,7 @@ impl Fs {
 
     pub fn meta_checksum_type(&self) -> c::bch_csum_type {
         if self.sb.encryption_type.get() != 0 {
-            return c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128;
+            return c::bch_csum_type::chacha20_poly1305_128;
         }
         c::bch_csum_opt(self.opts().metadata_checksum.get().into()).to_type(self, false)
     }
@@ -313,9 +313,9 @@ impl Fs {
     pub fn data_checksum_type_rb(&self, r: &c::bch_extent_reconcile) -> c::bch_csum_type {
         if self.sb.encryption_type.get() != 0 {
             return if self.opts().wide_macs.get() != 0 {
-                c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128
+                c::bch_csum_type::chacha20_poly1305_128
             } else {
-                c::bch_csum_type::BCH_CSUM_chacha20_poly1305_80
+                c::bch_csum_type::chacha20_poly1305_80
             };
         }
         c::bch_csum_opt(r.data_checksum().into()).to_type(self, true)
@@ -815,7 +815,7 @@ pub fn bch2_fs_has_encryption_key(c: &Opaque<Fs>) -> bool {
 
 /// Whether checksum type @t is one this version has, and one @fs can use.
 pub(crate) fn checksum_type_valid(fs: &Fs, t: u64) -> bool {
-    t < c::bch_csum_type::BCH_CSUM_NR.0.into() &&
+    t < c::bch_csum_type::NR.into() &&
         !(c::bch_csum_type(t as u32).is_encryption() && fs.encryption_key().is_none())
 }
 

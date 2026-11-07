@@ -562,7 +562,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
 
         let ret = 'print: {
             let ret = if flags.contains(FsckFlags::AUTOFIX) &&
-                         (errors == a::BCH_ON_ERROR_continue || errors == a::BCH_ON_ERROR_fix_safe) {
+                         (errors == a::BCH_ON_ERROR_continue || errors == a::fix_safe) {
                 break 'print if flags.contains(FsckFlags::CAN_FIX) {
                     write!(out, ", ");
                     prt_actioning(&mut out, action);
@@ -988,11 +988,11 @@ impl Fs {
         self.flags.set(c::bch_fs_flags::BCH_FS_error, true);
         match self.opts.errors() {
             a::BCH_ON_ERROR_continue => false,
-            a::BCH_ON_ERROR_fix_safe | a::BCH_ON_ERROR_ro => {
+            a::fix_safe | a::ro => {
                 self.emergency_read_only(out);
                 true
             }
-            a::BCH_ON_ERROR_panic => {
+            a::panic => {
                 print_str(self, LogLevel::ERR, out);
                 panic_after_error(self)
             }

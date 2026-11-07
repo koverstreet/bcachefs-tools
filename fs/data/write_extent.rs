@@ -444,7 +444,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
             assert!(!(op.bits.compression_opt() != 0 && !bounce), "compressing without bouncing");
 
             crc.compression_type = if op.bits.incompressible() != 0 {
-                c::bch_compression_type::BCH_COMPRESSION_TYPE_incompressible.0 as u8
+                c::bch_compression_type::incompressible.0 as u8
             } else if op.bits.compression_opt() != 0 {
                 let (mut d, mut s) = (0usize, 0usize);
                 let t = unsafe {

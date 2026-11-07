@@ -117,7 +117,7 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
     // versioning was wrong - and getting it wrong would otherwise panic
     // converting it. The io options have had the same fallback: safe to take.
     let mut rb = r;
-    if u32::from(rb.data_checksum()) >= c::bch_csum_opt::BCH_CSUM_OPT_NR.0 {
+    if u32::from(rb.data_checksum()) >= c::bch_csum_opt::NR {
         rb.set_data_checksum(opts.data_checksum);
     }
     if !c::bch_compression_opt::valid(rb.background_compression()) {

@@ -282,7 +282,7 @@ pub fn get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_opts {
      * btree read time: that would reject valid inodes from newer
      * versions.)
      */
-    if unlikely(ret.data_checksum as u32 >= c::bch_csum_opt::BCH_CSUM_OPT_NR.0) {
+    if unlikely(ret.data_checksum as u32 >= c::bch_csum_opt::NR) {
         ret.data_checksum = fs.opts.data_checksum.get() as _;
         ret.set_data_checksum_from_inode(false);
     }
@@ -452,7 +452,7 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_o
         // A checksum or compression type we don't know is an incompat
         // feature, so shouldn't have mounted - this is for a versioning
         // mistake: the filesystem's options, as get_inode() falls back to.
-        if unlikely(opts.data_checksum as u32 >= c::bch_csum_opt::BCH_CSUM_OPT_NR.0) {
+        if unlikely(opts.data_checksum as u32 >= c::bch_csum_opt::NR) {
             opts.data_checksum = fs.opts.data_checksum.get() as _;
             opts.set_data_checksum_from_inode(false);
         }
@@ -624,7 +624,7 @@ fn propagate_one(
          * finding work is the upgrade, not a bug.
          */
         let mut flags = FsckFlags::CAN_FIX | FsckFlags::CAN_IGNORE;
-        if t.fs().sb.compat.get() & (1 << c::bch_sb_compat::BCH_COMPAT_inode_opts_propagated.0) == 0 {
+        if t.fs().sb.compat.get() & (1 << c::bch_sb_compat::inode_opts_propagated.0) == 0 {
             flags |= FsckFlags::ERR_SILENT;
         }
 

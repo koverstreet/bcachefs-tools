@@ -1036,7 +1036,7 @@ pub fn extent_nonce(version: Bversion, crc: &c::bch_extent_crc_unpacked) -> Nonc
 /// Whether @crc's data is checksummed or compressed - read back whole, so
 /// bounded by encoded_extent_max.
 pub fn crc_is_encoded(crc: &c::bch_extent_crc_unpacked) -> bool {
-    crc.csum_type as u32 != c::bch_csum_type::BCH_CSUM_none.0 || crc_is_compressed(crc)
+    crc.csum_type as u32 != c::bch_csum_type::none.0 || crc_is_compressed(crc)
 }
 
 /// Drop @k's stale cached pointers, if it has any, as an update through @iter:
@@ -1218,9 +1218,9 @@ mod tests {
     fn ptr_swab_reads_the_other_endianness() {
         use c::bch_csum_type as t;
 
-        let c32 = c::bch_extent_crc32::pack(&crc(t::BCH_CSUM_crc32c, 8, 0, 0)).unwrap();
-        let c64 = c::bch_extent_crc64::pack(&crc(t::BCH_CSUM_chacha20_poly1305_80, 8, 0, 3)).unwrap();
-        let c128 = c::bch_extent_crc128::pack(&crc(t::BCH_CSUM_chacha20_poly1305_128, 8, 0, 3)).unwrap();
+        let c32 = c::bch_extent_crc32::pack(&crc(t::crc32c, 8, 0, 0)).unwrap();
+        let c64 = c::bch_extent_crc64::pack(&crc(t::chacha20_poly1305_80, 8, 0, 3)).unwrap();
+        let c128 = c::bch_extent_crc128::pack(&crc(t::chacha20_poly1305_128, 8, 0, 3)).unwrap();
         let ptr = word(0, 0x123456789);
 
         let native: std::vec::Vec<u64> = [words_of(&c32), vec![ptr], words_of(&c64), vec![ptr],
@@ -1256,7 +1256,7 @@ mod tests {
 
         // not compressed: no size or compression type; crc.nonce 3 is three
         // 512 byte sectors, 24 ChaCha20 blocks
-        let mut crc = crc(c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128, 128, 0, 3);
+        let mut crc = crc(c::bch_csum_type::chacha20_poly1305_128, 128, 0, 3);
         assert_eq!(words(extent_nonce(version, &crc)),
                    [24, 0x5566_7788, 0x1122_3344, 0x1000_009a]);
 

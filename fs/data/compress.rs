@@ -98,12 +98,12 @@ impl bch_compression_opt {
     /// __bch2_compression_opt_to_type[].
     pub fn type_of(t: u8) -> Option<CompressionType> {
         macro_rules! map {
-            ($(($t:ident, $n:literal)),* $(,)?) => { ::paste::paste! {
+            ($(($t:ident, $n:literal)),* $(,)?) => {
                 match t {
-                    $($n => Some(CompressionType::[<BCH_COMPRESSION_TYPE_ $t>]),)*
+                    $($n => Some(CompressionType::$t),)*
                     _ => None,
                 }
-            } };
+            };
         }
         c::BCH_COMPRESSION_OPTS!(map)
     }

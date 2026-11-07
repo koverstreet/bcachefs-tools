@@ -816,7 +816,7 @@ pub(crate) fn check_version_downgrade(fs: &Fs, sb: &mut SbLockGuard<'_>) -> bool
     if u32::from(fs.sb.version_min.get()) > current {
         s.version_min = Le16::new(current as u16);
     }
-    s.compat[0] = Le64::new(s.compat[0].get() & ((1 << c::bch_sb_compat::BCH_COMPAT_NR.0) - 1));
+    s.compat[0] = Le64::new(s.compat[0].get() & ((1 << c::bch_sb_compat::NR) - 1));
 
     current < fs.sb.version.get().into()
 }
@@ -1318,7 +1318,7 @@ fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Re
         }
 
         let ty = c::bch_csum_type(h.csum_type() as u32);
-        sb_err_on!(err, ty.0 >= c::bch_csum_type::BCH_CSUM_NR.0 || ty.is_encryption(),
+        sb_err_on!(err, ty.0 >= c::bch_csum_type::NR || ty.is_encryption(),
                    BCH_ERR_invalid_sb_csum_type, "unknown checksum type {}", h.csum_type())?;
 
         // XXX: verify MACs
@@ -2542,7 +2542,7 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
             if read < expected {
                 prt!(msg, ": Superblock write was silently dropped! (seq {read} expected {expected})");
                 if matches!(fs.opts().errors(), c::bch_error_actions::BCH_ON_ERROR_continue |
-                                                c::bch_error_actions::BCH_ON_ERROR_fix_safe) {
+                                                c::bch_error_actions::fix_safe) {
                     continue;
                 }
             } else {

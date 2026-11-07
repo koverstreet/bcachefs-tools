@@ -75,7 +75,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
 
     let poisoned = k.poisoned(fs);
     let compression_type = c::bch_compression_opt::to_type(r.background_compression(), fs);
-    let csum_type = if opts.nocow == 0 { fs.data_checksum_type_rb(&r) } else { c::bch_csum_type::BCH_CSUM_none };
+    let csum_type = if opts.nocow == 0 { fs.data_checksum_type_rb(&r) } else { c::bch_csum_type::none };
     let stripe = k.k.key_type() == BkeyType::stripe;
 
     let (mut incompressible, mut unwritten, mut ec) = (false, false, false);

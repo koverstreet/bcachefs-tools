@@ -410,7 +410,7 @@ impl TransAttempt<'_, '_> {
         }
 
         if b_gen != ptr_gen && ptr.cached() != 0 {
-            let no_stale_ptrs = 1 << c::bch_sb_compat::BCH_COMPAT_no_stale_ptrs.0;
+            let no_stale_ptrs = 1 << c::bch_sb_compat::no_stale_ptrs.0;
             if fsck_err_on!(self, fs.sb.compat.get() & no_stale_ptrs != 0,
                             id::stale_ptr_with_no_stale_ptrs_feature,
                             "stale cached ptr, but have no_stale_ptrs feature\n{}", k.to_text(fs))? {

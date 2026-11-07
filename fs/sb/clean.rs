@@ -185,7 +185,7 @@ pub(crate) const COMMON_BYTES: usize = size_of::<c::jset_entry_usage>() + 2 * si
 pub(crate) fn super_entries_add_common(fs: &Fs, w: &mut EntryWriter<'_>) -> Result<(), NoRoom> {
     let mut u = c::jset_entry_usage::default();
     u.entry.type_ = c::bch_jset_entry_type::usage.0 as u8;
-    u.entry.btree_id = c::bch_fs_usage_type::BCH_FS_USAGE_key_version.0 as u8;
+    u.entry.btree_id = c::bch_fs_usage_type::key_version.0 as u8;
     u.v = Le64::new(fs.key_version.load(Relaxed) as u64);
     w.push_entry(u)?;
 
@@ -218,8 +218,8 @@ pub(crate) fn fs_mark_clean(fs: &Fs, guard: &mut SbLockGuard<'_>) {
     }
 
     let (version, big_endian) = (sb.sb().version.get(), sb.sb().big_endian());
-    sb.sb_mut().compat[0] |= 1 << c::bch_sb_compat::BCH_COMPAT_alloc_info.0 |
-                             1 << c::bch_sb_compat::BCH_COMPAT_alloc_metadata.0;
+    sb.sb_mut().compat[0] |= 1 << c::bch_sb_compat::alloc_info.0 |
+                             1 << c::bch_sb_compat::alloc_metadata.0;
 
     let u64s = SECTION_HEAD / size_of::<u64>() + fs.journal.lock.entry_u64s_reserved.get() as usize;
     let Some(f) = sb.field_resize::<Section>(u64s as u32) else {

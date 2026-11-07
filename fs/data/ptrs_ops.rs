@@ -127,7 +127,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                 bkey_fsck_err_on!(v, !csum_type.valid(fs), id::ptr_crc_csum_type_unknown,
                                   "invalid checksum type")?;
                 bkey_fsck_err_on!(v, u32::from(crc.compression_type) >=
-                                     CompressionType::nr.0,
+                                     CompressionType::NR,
                                   id::ptr_crc_compression_type_unknown, "invalid compression type")?;
 
                 bkey_fsck_err_on!(v, u32::from(crc.offset).wrapping_add(crc.live_size) > crc.uncompressed_size,

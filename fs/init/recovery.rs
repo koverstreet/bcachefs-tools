@@ -196,7 +196,7 @@ fn reconstruct_alloc(fs: &Fs) {
         }
 
         let compat = &w.published().compat;
-        compat.set(compat.get() & !(1 << c::bch_sb_compat::BCH_COMPAT_alloc_info.0));
+        compat.set(compat.get() & !(1 << c::bch_sb_compat::alloc_info.0));
 
         let opts = fs.opts_writer(&mut w);
         opts.recovery_passes.set(opts.recovery_passes.get() | passes::passes_from_stable(v));
@@ -531,7 +531,7 @@ fn journal_replay_entry_early(fs: &Fs, entry: &c::jset_entry) -> Result<(), BchE
             }
         }
         Ok(c::JsetEntryRef::usage(u)) => {
-            if u.entry.btree_id == c::bch_fs_usage_type::BCH_FS_USAGE_key_version.0 as u8 {
+            if u.entry.btree_id == c::bch_fs_usage_type::key_version.0 as u8 {
                 fs.key_version.store(u.v.get() as i64, Relaxed);
             }
         }
@@ -657,7 +657,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     let read_journal = fs.sb.clean.get() == 0 ||
         fs.opts.retain_recovery_info.get() != 0 ||
         fs.opts.journal_rewind.get() != 0 ||
-        u32::from(fs.opts.scrub_recent_journal_entries.get()) == c::bch_scrub_journal_opts::BCH_SCRUB_JOURNAL_always.0;
+        u32::from(fs.opts.scrub_recent_journal_entries.get()) == c::bch_scrub_journal_opts::always.0;
     let mut use_clean = !read_journal;
 
     if read_journal {
@@ -689,7 +689,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
                                 id::clean_but_journal_not_empty,
                                 "filesystem marked clean but journal not empty")? {
             let mut sb = fs.sb_lock();
-            let compat = fs.sb.compat.get() & !(1 << c::bch_sb_compat::BCH_COMPAT_alloc_info.0);
+            let compat = fs.sb.compat.get() & !(1 << c::bch_sb_compat::alloc_info.0);
             sb.published().compat.set(compat);
             sb.sb_mut().set_clean(false);
             sb.published().clean.set(0);
@@ -781,7 +781,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
         if fix == c::fsck_err_opts::FSCK_FIX_yes as u8 || fix == c::fsck_err_opts::FSCK_FIX_ask as u8 {
             w.fix_errors.set(c::fsck_err_opts::FSCK_FIX_no as u8);
         }
-        if u32::from(w.errors.get()) == c::bch_error_actions::BCH_ON_ERROR_fix_safe.0 {
+        if u32::from(w.errors.get()) == c::bch_error_actions::fix_safe.0 {
             w.errors.set(c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8);
         }
     }
@@ -962,7 +962,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
         }
 
         if !error {
-            w.set_compat(c::bch_sb_compat::BCH_COMPAT_alloc_info);
+            w.set_compat(c::bch_sb_compat::alloc_info);
         }
 
         if fs.opts.fsck.get() != 0 &&
@@ -1001,7 +1001,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
 
         if complete(Pass::check_extents) &&
            complete(Pass::check_indirect_extents) {
-            w.set_compat(c::bch_sb_compat::BCH_COMPAT_no_stale_ptrs);
+            w.set_compat(c::bch_sb_compat::no_stale_ptrs);
         }
 
         /*
@@ -1009,7 +1009,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
          * the stripe fragmentation counters true.
          */
         if complete(Pass::check_allocations) {
-            w.set_compat(c::bch_sb_compat::BCH_COMPAT_stripe_frag_accounting);
+            w.set_compat(c::bch_sb_compat::stripe_frag_accounting);
         }
 
         /*
@@ -1018,7 +1018,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
          * snapshots - and a later violation is a bug, not legacy state.
          */
         if complete(Pass::check_inodes) {
-            w.set_compat(c::bch_sb_compat::BCH_COMPAT_inode_opts_propagated);
+            w.set_compat(c::bch_sb_compat::inode_opts_propagated);
         }
     }
 
@@ -1050,15 +1050,15 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
 
     {
         let mut sb = fs.sb_lock();
-        sb.sb_mut().compat[0] |= 1 << c::bch_sb_compat::BCH_COMPAT_extents_above_btree_updates_done.0 |
-                                 1 << c::bch_sb_compat::BCH_COMPAT_bformat_overflow_done.0 |
-                                 1 << c::bch_sb_compat::BCH_COMPAT_no_stale_ptrs.0 |
-                                 1 << c::bch_sb_compat::BCH_COMPAT_stripe_frag_accounting.0 |
-                                 1 << c::bch_sb_compat::BCH_COMPAT_inode_opts_propagated.0;
+        sb.sb_mut().compat[0] |= 1 << c::bch_sb_compat::extents_above_btree_updates_done.0 |
+                                 1 << c::bch_sb_compat::bformat_overflow_done.0 |
+                                 1 << c::bch_sb_compat::no_stale_ptrs.0 |
+                                 1 << c::bch_sb_compat::stripe_frag_accounting.0 |
+                                 1 << c::bch_sb_compat::inode_opts_propagated.0;
 
         check_version_downgrade(fs, &mut sb);
 
-        if u32::from(fs.opts.version_upgrade.get()) != c::bch_version_upgrade_opts::BCH_VERSION_UPGRADE_none.0 {
+        if u32::from(fs.opts.version_upgrade.get()) != c::bch_version_upgrade_opts::none.0 {
             let current = c::bcachefs_metadata_version_current;
             sb_upgrade(fs, &mut sb, current, false);
             sb.sb_mut().set_version_upgrade_complete(current.into());

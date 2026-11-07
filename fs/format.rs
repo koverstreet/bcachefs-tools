@@ -1563,40 +1563,30 @@ c_enum! {
     }
 }
 
-c_xmacro! {
-    BCH_SB_COMPAT(x) {
-        (alloc_info, 0),
-        (alloc_metadata, 1),
-        (extents_above_btree_updates_done, 2),
-        (bformat_overflow_done, 3),
-        (no_stale_ptrs, 4),
-        (stripe_frag_accounting, 5),
-        (inode_opts_propagated, 6),
-    }
-}
-
 c_enum! {
     #[open]
+    #[prefix(BCH_COMPAT_)]
+    #[nr(BCH_COMPAT_NR)]
     pub enum bch_sb_compat: u32 {
-        BCH_SB_COMPAT(f, ..) => concat(BCH_COMPAT_, f),
-        BCH_COMPAT_NR,
+        alloc_info = 0,
+        alloc_metadata = 1,
+        extents_above_btree_updates_done = 2,
+        bformat_overflow_done = 3,
+        no_stale_ptrs = 4,
+        stripe_frag_accounting = 5,
+        inode_opts_propagated = 6,
     }
 }
 
 /* options: */
 
-c_xmacro! {
-    BCH_VERSION_UPGRADE_OPTS(x) {
-        (compatible, 0),
-        (incompatible, 1),
-        (none, 2),
-    }
-}
-
 c_enum! {
     #[open]
+    #[prefix(BCH_VERSION_UPGRADE_)]
     pub enum bch_version_upgrade_opts: u32 {
-        BCH_VERSION_UPGRADE_OPTS(t, n) => concat(BCH_VERSION_UPGRADE_, t) = n,
+        compatible = 0,
+        incompatible = 1,
+        none = 2,
     }
 }
 
@@ -1606,29 +1596,24 @@ c_const! {
     pub const BCH_BKEY_PTRS_MAX: u32 = 16;
 }
 
-c_xmacro! {
-    BCH_ERROR_ACTIONS(x) {
-        (continue,              0,
-         "Log the error but continue normal operation "
-         "without attempting repair"),
-        (fix_safe,              1,
-         "Automatically repair errors that are safe to fix "
-         "without user confirmation. Unsafe errors cause "
-         "emergency read-only with a message to run fsck."),
-        (panic,                 2,
-         "Immediately halt the entire machine, printing a "
-         "backtrace on the system console"),
-        (ro,                    3,
-         "Emergency read-only, immediately halting any "
-         "changes to the filesystem on disk"),
-    }
-}
-
 c_enum! {
     #[open]
+    #[prefix(BCH_ON_ERROR_)]
+    #[nr(BCH_ON_ERROR_NR)]
     pub enum bch_error_actions: u32 {
-        BCH_ERROR_ACTIONS(t, n, ..) => concat(BCH_ON_ERROR_, t) = n,
-        BCH_ON_ERROR_NR,
+        /// Log the error but continue normal operation without attempting
+        /// repair
+        BCH_ON_ERROR_continue = 0,
+        /// Automatically repair errors that are safe to fix without user
+        /// confirmation. Unsafe errors cause emergency read-only with a
+        /// message to run fsck.
+        fix_safe = 1,
+        /// Immediately halt the entire machine, printing a backtrace on the
+        /// system console
+        panic = 2,
+        /// Emergency read-only, immediately halting any changes to the
+        /// filesystem on disk
+        ro = 3,
     }
 }
 
@@ -1641,121 +1626,91 @@ pub enum DegradedAction {
     no = 3,
 }
 
-c_xmacro! {
-    /*
-     * What to do when a write can't be placed at the replica count it asked for:
-     * refuse it (-ENOSPC), or reserve at the count we can place at.
-     *
-     * @degraded is the default because the two reasons we can't place differ in
-     * kind. A device that is gone will come back, or be replaced, and refusing
-     * writes until then is worse than writing fewer copies; a filesystem whose
-     * devices are all present and simply can't hold another copy is the shape the
-     * user built, and the honest answer there is -ENOSPC rather than quietly
-     * dropping below the replica count they asked for.
-     */
-    BCH_WRITE_DEGRADED_ACTIONS(x) {
-        (degraded, 0),
-        (yes, 1),
-        (no, 2),
-    }
-}
-
+/*
+ * What to do when a write can't be placed at the replica count it asked for:
+ * refuse it (-ENOSPC), or reserve at the count we can place at.
+ *
+ * @degraded is the default because the two reasons we can't place differ in
+ * kind. A device that is gone will come back, or be replaced, and refusing
+ * writes until then is worse than writing fewer copies; a filesystem whose
+ * devices are all present and simply can't hold another copy is the shape the
+ * user built, and the honest answer there is -ENOSPC rather than quietly
+ * dropping below the replica count they asked for.
+ */
 c_enum! {
     #[open]
+    #[prefix(BCH_WRITE_DEGRADED_)]
+    #[nr(BCH_WRITE_DEGRADED_ACTIONS_NR)]
     pub enum bch_write_degraded_actions: u32 {
-        BCH_WRITE_DEGRADED_ACTIONS(t, n) => concat(BCH_WRITE_DEGRADED_, t) = n,
-        BCH_WRITE_DEGRADED_ACTIONS_NR,
-    }
-}
-
-c_xmacro! {
-    BCH_STR_HASH_TYPES(x) {
-        (crc32c, 0),
-        (crc64, 1),
-        (siphash_old, 2),
-        (siphash, 3),
+        degraded = 0,
+        yes = 1,
+        no = 2,
     }
 }
 
 c_enum! {
     #[open]
+    #[prefix(BCH_STR_HASH_)]
+    #[nr(BCH_STR_HASH_NR)]
     pub enum bch_str_hash_type: u32 {
-        BCH_STR_HASH_TYPES(t, n) => concat(BCH_STR_HASH_, t) = n,
-        BCH_STR_HASH_NR,
-    }
-}
-
-c_xmacro! {
-    BCH_STR_HASH_OPTS(x) {
-        (crc32c, 0),
-        (crc64, 1),
-        (siphash, 2),
+        crc32c = 0,
+        crc64 = 1,
+        siphash_old = 2,
+        siphash = 3,
     }
 }
 
 c_enum! {
     #[open]
+    #[prefix(BCH_STR_HASH_OPT_)]
+    #[nr(BCH_STR_HASH_OPT_NR)]
     pub enum bch_str_hash_opts: u32 {
-        BCH_STR_HASH_OPTS(t, n) => concat(BCH_STR_HASH_OPT_, t) = n,
-        BCH_STR_HASH_OPT_NR,
-    }
-}
-
-c_xmacro! {
-    BCH_CSUM_TYPES(x) {
-        (none, 0),
-        (crc32c_nonzero, 1),
-        (crc64_nonzero, 2),
-        (chacha20_poly1305_80, 3),
-        (chacha20_poly1305_128, 4),
-        (crc32c, 5),
-        (crc64, 6),
-        (xxhash, 7),
+        crc32c = 0,
+        crc64 = 1,
+        siphash = 2,
     }
 }
 
 c_enum! {
     #[open]
+    #[prefix(BCH_CSUM_)]
+    #[nr(BCH_CSUM_NR)]
     pub enum bch_csum_type: u32 {
-        BCH_CSUM_TYPES(t, n) => concat(BCH_CSUM_, t) = n,
-        BCH_CSUM_NR,
-    }
-}
-
-c_xmacro! {
-    BCH_CSUM_OPTS(x) {
-        (none, 0),
-        (crc32c, 1),
-        (crc64, 2),
-        (xxhash, 3),
+        none = 0,
+        crc32c_nonzero = 1,
+        crc64_nonzero = 2,
+        chacha20_poly1305_80 = 3,
+        chacha20_poly1305_128 = 4,
+        crc32c = 5,
+        crc64 = 6,
+        xxhash = 7,
     }
 }
 
 c_enum! {
     #[open]
+    #[prefix(BCH_CSUM_OPT_)]
+    #[nr(BCH_CSUM_OPT_NR)]
     pub enum bch_csum_opt: u32 {
-        BCH_CSUM_OPTS(t, n) => concat(BCH_CSUM_OPT_, t) = n,
-        BCH_CSUM_OPT_NR,
-    }
-}
-
-c_xmacro! {
-    BCH_COMPRESSION_TYPES(x) {
-        (none, 0),
-        (lz4_old, 1),
-        (gzip, 2),
-        (lz4, 3),
-        (zstd, 4),
-        (incompressible, 5),
+        none = 0,
+        crc32c = 1,
+        crc64 = 2,
+        xxhash = 3,
     }
 }
 
 c_enum! {
     #[open]
     #[c_name(bch_compression_type)]
+    #[prefix(BCH_COMPRESSION_TYPE_)]
+    #[nr(BCH_COMPRESSION_TYPE_NR)]
     pub enum CompressionType: u32 {
-        BCH_COMPRESSION_TYPES(t, n) => concat(BCH_COMPRESSION_TYPE_, t) = n,
-        BCH_COMPRESSION_TYPE_NR,
+        none = 0,
+        lz4_old = 1,
+        gzip = 2,
+        lz4 = 3,
+        zstd = 4,
+        incompressible = 5,
     }
 }
 
@@ -1779,19 +1734,14 @@ c_enum! {
     }
 }
 
-c_xmacro! {
-    BCH_SCRUB_JOURNAL_OPTS(x) {
-        (unclean, 0),
-        (no, 1),
-        (always, 2),
-    }
-}
-
 c_enum! {
     #[open]
+    #[prefix(BCH_SCRUB_JOURNAL_)]
+    #[nr(BCH_SCRUB_JOURNAL_OPT_NR)]
     pub enum bch_scrub_journal_opts: u32 {
-        BCH_SCRUB_JOURNAL_OPTS(t, n) => concat(BCH_SCRUB_JOURNAL_, t) = n,
-        BCH_SCRUB_JOURNAL_OPT_NR,
+        unclean = 0,
+        no = 1,
+        always = 2,
     }
 }
 
@@ -1906,19 +1856,14 @@ pub struct jset_entry_blacklist_v2 {
 }
 vstruct!(jset_entry_blacklist_v2, repr.entry.u64s);
 
-c_xmacro! {
-    BCH_FS_USAGE_TYPES(x) {
-        (reserved, 0),
-        (inodes, 1),
-        (key_version, 2),
-    }
-}
-
 c_enum! {
     #[open]
+    #[prefix(BCH_FS_USAGE_)]
+    #[nr(BCH_FS_USAGE_NR)]
     pub enum bch_fs_usage_type: u32 {
-        BCH_FS_USAGE_TYPES(f, nr) => concat(BCH_FS_USAGE_, f) = nr,
-        BCH_FS_USAGE_NR,
+        reserved = 0,
+        inodes = 1,
+        key_version = 2,
     }
 }
 

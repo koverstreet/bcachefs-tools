@@ -1224,7 +1224,7 @@ impl Fs {
     pub fn dev_remove(&self, ca: DevOuterRef, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
         let ca_p = ca.as_mut_ptr();
         let dev_idx = ca.dev_idx;
-        let fast_device_removal = self.sb.compat.get() & (1 << c::bch_sb_compat::BCH_COMPAT_no_stale_ptrs.0) != 0 &&
+        let fast_device_removal = self.sb.compat.get() & (1 << c::bch_sb_compat::no_stale_ptrs.0) != 0 &&
             self.request_incompat_feature(MetadataVersion::fast_device_removal).is_ok();
 
         let slot = {

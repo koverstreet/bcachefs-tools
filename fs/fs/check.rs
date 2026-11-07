@@ -931,8 +931,8 @@ pub mod ioctl {
             });
 
         if let Ok(fs) = &fs {
-            if fs.opts.errors() == c::bch_error_actions::BCH_ON_ERROR_panic {
-                fs.opts_writer(&mut fs.sb_lock()).set_errors(c::bch_error_actions::BCH_ON_ERROR_ro);
+            if fs.opts.errors() == c::bch_error_actions::panic {
+                fs.opts_writer(&mut fs.sb_lock()).set_errors(c::bch_error_actions::ro);
             }
         }
 

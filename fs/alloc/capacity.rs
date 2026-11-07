@@ -619,8 +619,8 @@ impl Fs {
     /// what it is.
     fn write_degraded_ok(&self) -> bool {
         match self.opts.write_degraded() {
-            c::bch_write_degraded_actions::BCH_WRITE_DEGRADED_yes => true,
-            c::bch_write_degraded_actions::BCH_WRITE_DEGRADED_no  => false,
+            c::bch_write_degraded_actions::yes => true,
+            c::bch_write_degraded_actions::no  => false,
             _ => !self.flags.get(c::bch_fs_flags::BCH_FS_all_devs_rw),
         }
     }

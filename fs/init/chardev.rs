@@ -240,7 +240,7 @@ fn query_accounting(fs: &Fs, arg: &mut c::bch_ioctl_query_accounting_v2,
      * at all - an absent entry is a reading userspace can act on, a zero
      * would be a lie.
      */
-    if fs.sb.compat.get() & 1 << c::bch_sb_compat::BCH_COMPAT_stripe_frag_accounting.0 == 0 {
+    if fs.sb.compat.get() & 1 << c::bch_sb_compat::stripe_frag_accounting.0 == 0 {
         arg.accounting_types_mask &= !(1 << T::stripe_frag.0 |
                                        1 << T::dev_stripe_frag.0);
     }

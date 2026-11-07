@@ -467,8 +467,6 @@ macro_rules! newtype_enum_aliases {
 c::BCH_DATA_TYPES!(newtype_enum_aliases [DataType, BCH_DATA, nr = BCH_DATA_NR]);
 c::BCH_MEMBER_STATES!(newtype_enum_aliases [MemberState, BCH_MEMBER_STATE, nr = BCH_MEMBER_STATE_NR]);
 c::BCH_MEMBER_INITIALIZED_STATES!(newtype_enum_aliases [MemberInitialized, BCH_MEMBER_INITIALIZED, nr = BCH_MEMBER_INITIALIZED_NR]);
-c::BCH_COMPRESSION_TYPES!(newtype_enum_aliases [CompressionType, BCH_COMPRESSION_TYPE, nr = BCH_COMPRESSION_TYPE_NR]);
-c::BCH_SB_COMPAT!(newtype_enum_aliases [bch_sb_compat, BCH_COMPAT, nr = BCH_COMPAT_NR]);
 
 macro_rules! btree_ids_known {
     ($(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {

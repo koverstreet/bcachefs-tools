@@ -276,7 +276,7 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
 
     // Compression stats
     let mut compression_header = false;
-    let comp_nr = u32::from(CompressionType::nr);
+    let comp_nr = CompressionType::NR;
     for i in 1..comp_nr {
         let v = accounting::read(fs, accounting::Compression { type_: i as u8 });
 

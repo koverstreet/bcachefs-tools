@@ -34,7 +34,7 @@ fn check_version_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, out: &mut Printbuf) 
         v => v,
     });
     let upgrade = Upgrade(fs.opts().version_upgrade.get().into());
-    let incompat = upgrade == Upgrade::BCH_VERSION_UPGRADE_incompatible;
+    let incompat = upgrade == Upgrade::incompatible;
     let mut ret = false;
 
     let new_version = if old_version < REQUIRED_UPGRADE_BELOW {
@@ -45,10 +45,10 @@ fn check_version_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, out: &mut Printbuf) 
         }
     } else {
         match upgrade {
-            Upgrade::BCH_VERSION_UPGRADE_compatible   => latest_compatible,
-            Upgrade::BCH_VERSION_UPGRADE_incompatible => latest_version,
-            Upgrade::BCH_VERSION_UPGRADE_none         => old_version.min(latest_version),
-            _                                         => 0,
+            Upgrade::compatible   => latest_compatible,
+            Upgrade::incompatible => latest_version,
+            Upgrade::none         => old_version.min(latest_version),
+            _                     => 0,
         }
     };
 
@@ -156,7 +156,7 @@ pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
 
     if u32::from(fs.sb.version_upgrade_complete.get()) <
        MetadataVersion::autofix_errors.0 {
-        sb.sb_mut().set_error_action(c::bch_error_actions::BCH_ON_ERROR_fix_safe.0.into());
+        sb.sb_mut().set_error_action(c::bch_error_actions::fix_safe.0.into());
     }
 
     let extent_bp_shift_needed = (fs.opts().encoded_extent_max.get() >> 9).ilog2() + 1;

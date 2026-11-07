@@ -880,7 +880,7 @@ fn validate_pos(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
 /// A str_hash type that isn't one.
 fn validate_str_hash(v: &BkeyValidate<'_, '_>, str_hash: u64) -> Result<(), BchError> {
-    let nr = c::bch_str_hash_type::BCH_STR_HASH_NR.0 as u64;
+    let nr = c::bch_str_hash_type::NR as u64;
     bkey_fsck_err_on!(v, str_hash >= nr, id::inode_str_hash_invalid,
                       "invalid str hash type ({str_hash} >= {nr})")
 }

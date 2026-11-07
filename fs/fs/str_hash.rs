@@ -91,10 +91,10 @@ impl StrHash {
         let k0 = info.siphash_key.k0.get().to_le_bytes();
 
         match info.type_ as u32 {
-            t if t == T::BCH_STR_HASH_crc32c.0 => Self::Crc32c(crc32c(!0, &k0)),
-            t if t == T::BCH_STR_HASH_crc64.0 => Self::Crc64(crc64_be(!0, &k0)),
-            t if t == T::BCH_STR_HASH_siphash_old.0 ||
-                 t == T::BCH_STR_HASH_siphash.0 => {
+            t if t == T::crc32c.0 => Self::Crc32c(crc32c(!0, &k0)),
+            t if t == T::crc64.0 => Self::Crc64(crc64_be(!0, &k0)),
+            t if t == T::siphash_old.0 ||
+                 t == T::siphash.0 => {
                 let k = &info.siphash_key;
                 Self::SipHash(SipHash24::new(k.k0.get(), k.k1.get()))
             }
@@ -380,13 +380,13 @@ pub fn delete<T: HashTable>(
 /// option. A value that isn't an option is a bug.
 pub fn new_inode_type(fs: &Fs) -> c::bch_str_hash_type {
     match fs.opts().str_hash() {
-        c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc32c  => c::bch_str_hash_type::BCH_STR_HASH_crc32c,
-        c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc64   => c::bch_str_hash_type::BCH_STR_HASH_crc64,
-        c::bch_str_hash_opts::BCH_STR_HASH_OPT_siphash => {
+        c::bch_str_hash_opts::crc32c  => c::bch_str_hash_type::crc32c,
+        c::bch_str_hash_opts::crc64   => c::bch_str_hash_type::crc64,
+        c::bch_str_hash_opts::siphash => {
             if fs.feature(SbFeature::new_siphash) {
-                c::bch_str_hash_type::BCH_STR_HASH_siphash
+                c::bch_str_hash_type::siphash
             } else {
-                c::bch_str_hash_type::BCH_STR_HASH_siphash_old
+                c::bch_str_hash_type::siphash_old
             }
         }
         o => panic!("str_hash option {} isn't one", o.0),
@@ -405,7 +405,7 @@ pub fn hash_info_init_unchecked(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bc
     };
 
     // siphash_old's key is the first 16 bytes of the seed's sha256
-    if info.type_ == c::bch_str_hash_type::BCH_STR_HASH_siphash_old.0 as u8 {
+    if info.type_ == c::bch_str_hash_type::siphash_old.0 as u8 {
         let seed = plain_bytes(&inode.bi_hash_seed);
         let mut digest = [0u8; 32];
         // SAFETY: @seed's bytes in, a sha256 digest's out
@@ -440,10 +440,10 @@ pub struct StrHashType(pub u64);
 impl ToText for StrHashType {
     fn to_text(&self, out: &mut Printbuf) {
         let t = match self.0 {
-            0 => c::bch_str_hash_type::BCH_STR_HASH_crc32c,
-            1 => c::bch_str_hash_type::BCH_STR_HASH_crc64,
-            2 => c::bch_str_hash_type::BCH_STR_HASH_siphash_old,
-            3 => c::bch_str_hash_type::BCH_STR_HASH_siphash,
+            0 => c::bch_str_hash_type::crc32c,
+            1 => c::bch_str_hash_type::crc64,
+            2 => c::bch_str_hash_type::siphash_old,
+            3 => c::bch_str_hash_type::siphash,
             n => return write!(out, "(invalid str_hash type {n})"),
         };
         t.to_text(out)
