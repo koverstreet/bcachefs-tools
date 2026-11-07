@@ -49,7 +49,7 @@ use crate::cstructs::c::BCH_INODE_OPTS;
 use crate::c::{bch_member, bch_sb_field_ext, BCH_COMPRESSION_OPT_none, BCH_CSUM_OPT_crc32c, BCH_DATA_btree, BCH_DATA_journal, BCH_DATA_user, BCH_MEMBER_STATE_rw, BCH_ON_ERROR_fix_safe, BCH_REPLICAS_MAX, BCH_SB_SECTOR, BCH_STR_HASH_OPT_siphash, BCH_VERSION_UPGRADE_compatible, BCH_WRITE_DEGRADED_degraded};
 use crate::format::DataType;
 use crate::types::bits_to_longs;
-use cstruct_macros::{CStruct, c_const, c_enum, c_xmacro, Options, TypeInfo};
+use cstruct_macros::{CStruct, c_const, c_enum, Options, TypeInfo};
 
 /*
  * Mount options; we also store defaults in the superblock.
@@ -96,19 +96,14 @@ c_const! {
     pub const OPT_SHOW_MOUNT_STYLE: u32 = 1 << 1;
 }
 
-c_xmacro! {
-    BCH_FIX_ERRORS_OPTS(x) {
-        (exit, 0),
-        (yes, 1),
-        (no, 2),
-        (ask, 3),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(FSCK_FIX_)]
     pub enum fsck_err_opts: u32 {
-        BCH_FIX_ERRORS_OPTS(t, ..) => concat(FSCK_FIX_, t),
+        exit = 0,
+        yes = 1,
+        no = 2,
+        ask = 3,
     }
 }
 

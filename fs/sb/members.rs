@@ -1597,7 +1597,7 @@ impl Dev {
         use c::bch_member_error_type as T;
 
         #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-        if ty != T::BCH_MEMBER_ERROR_checksum {
+        if ty != T::checksum {
             // @ty is read or write: the rw it takes
             self.latency_acct(submit_time, ty.0 as usize);
         }
@@ -1605,7 +1605,7 @@ impl Dev {
         let _ = submit_time;
 
         if success {
-            if ty == T::BCH_MEMBER_ERROR_write && self.write_errors_start.load(Ordering::Relaxed) != 0 {
+            if ty == T::write && self.write_errors_start.load(Ordering::Relaxed) != 0 {
                 self.write_errors_start.store(0, Ordering::Relaxed);
             }
         } else {
@@ -1622,7 +1622,7 @@ impl Dev {
     /// A write completed that the device may still have in its volatile
     /// cache, for the journal's next preflush.
     pub fn write_unflushed(&self) {
-        let f = c::bch_dev_flags::BCH_DEV_unflushed_writes;
+        let f = c::bch_dev_flags::unflushed_writes;
         if !self.flags.get(f) {
             self.flags.set(f, true);
         }

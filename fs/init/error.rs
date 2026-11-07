@@ -598,13 +598,13 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     write!(out, ", continuing");
                     fs.err(e::BCH_ERR_fsck_ignore)
                 }
-            } else if fix_errors == c::fsck_err_opts::FSCK_FIX_exit {
+            } else if fix_errors == c::fsck_err_opts::exit {
                 write!(out, ", exiting");
                 fs.err(e::BCH_ERR_fsck_errors_not_fixed)
             } else if flags.contains(FsckFlags::CAN_FIX) {
                 let fix = s.as_ref().and_then(|s| s.fix).unwrap_or(fix_errors);
 
-                if fix == c::fsck_err_opts::FSCK_FIX_ask {
+                if fix == c::fsck_err_opts::ask {
                     cnt.print = false;
 
                     let answer = match ask(fs, trans.map(|t| t.trans()), &mut out, action) {
@@ -614,8 +614,8 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     };
                     if let Some(s) = s.as_deref_mut() {
                         match answer {
-                            Answer::AllNo  => s.fix = Some(c::fsck_err_opts::FSCK_FIX_no),
-                            Answer::AllYes => s.fix = Some(c::fsck_err_opts::FSCK_FIX_yes),
+                            Answer::AllNo  => s.fix = Some(c::fsck_err_opts::no),
+                            Answer::AllYes => s.fix = Some(c::fsck_err_opts::yes),
                             _ => {}
                         }
                     }
@@ -624,7 +624,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     } else {
                         e::BCH_ERR_fsck_ignore
                     })
-                } else if fix == c::fsck_err_opts::FSCK_FIX_yes ||
+                } else if fix == c::fsck_err_opts::yes ||
                           (fs.opts.nochanges.get() != 0 && !flags.contains(FsckFlags::CAN_IGNORE)) {
                     write!(out, ", ");
                     prt_actioning(&mut out, action);
@@ -643,7 +643,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
             };
 
             let ret = if ret.matches(e::BCH_ERR_fsck_ignore) &&
-                         (fix_errors == c::fsck_err_opts::FSCK_FIX_exit || !flags.contains(FsckFlags::CAN_IGNORE)) {
+                         (fix_errors == c::fsck_err_opts::exit || !flags.contains(FsckFlags::CAN_IGNORE)) {
                 fs.err(e::BCH_ERR_fsck_errors_not_fixed)
             } else {
                 ret
@@ -1103,7 +1103,7 @@ impl Dev {
     pub fn io_error(&self, ty: c::bch_member_error_type) {
         self.errors[ty.0 as usize].fetch_add(1, Relaxed);
 
-        if ty == c::bch_member_error_type::BCH_MEMBER_ERROR_write && self.write_errors_start.load(Relaxed) == 0 {
+        if ty == c::bch_member_error_type::write && self.write_errors_start.load(Relaxed) == 0 {
             self.write_errors_start.store(jiffies() as usize, Relaxed);
         }
 

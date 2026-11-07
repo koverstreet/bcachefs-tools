@@ -423,7 +423,7 @@ impl StripeNew {
             in_flight   <- Gather::new(),
             seq:        AtomicU64::new(0),
             err:        FirstErr::new(),
-            state:      AtomicU32::new(State::EC_STRIPE_NEW_open as u32),
+            state:      AtomicU32::new(State::open as u32),
             internal    <- new_lock!(<- Internal::new(devs, watermark), ::pin_init::zeroed(), "stripe_new.internal"),
         }? BchError);
 
@@ -485,7 +485,7 @@ impl StripeNew {
     /// touch of it. @_v, new_stripes, locked, and it's in them: so its task,
     /// which takes it out to free it, can't before we're done.
     pub(crate) fn fill(&self, _v: &NewStripes) {
-        self.state.store(State::EC_STRIPE_NEW_filling as u32, Ordering::Relaxed);
+        self.state.store(State::filling as u32, Ordering::Relaxed);
         let maker = {
             let mut i = self.lock();
             self.launch(&mut i);
@@ -520,7 +520,7 @@ unsafe impl Refcount for StripeNew {
         // in_flight transition, after which the stripe completes without
         // needing anything from a writer; seq is the commit-ready marker
         // fs_ec_flush_outstanding() waits on.
-        self.state.store(State::EC_STRIPE_NEW_in_flight as u32, Ordering::Relaxed);
+        self.state.store(State::in_flight as u32, Ordering::Relaxed);
         self.seq.store(fs.ec.stripe_new_seq.fetch_add(1, Ordering::Relaxed) as u64 + 1, Ordering::Release);
         fs.ec.new_stripes_changed.wake();
         self.in_flight_ref.take().expect("the io refs' ref on its in flight, put once").put(());
@@ -801,7 +801,7 @@ impl Fs {
         crate::data::ec::head::stripe_heads_to_text(out, self);
 
         prt!(out, "in flight:\n");
-        for s in self.ec.new_stripes.lock().iter().filter(|s| s.state() != State::EC_STRIPE_NEW_open) {
+        for s in self.ec.new_stripes.lock().iter().filter(|s| s.state() != State::open) {
             new_stripe_to_text(out, self, s);
         }
     }

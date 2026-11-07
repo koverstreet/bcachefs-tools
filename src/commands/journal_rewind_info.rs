@@ -65,7 +65,7 @@ fn cmd_journal_rewind_info(cli: Cli) -> Result<()> {
     opts.set_read_only(true);
     opts.set_degraded(c::DegradedAction::very);
     opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue);
-    opts.set_fix_errors(c::fsck_err_opts::FSCK_FIX_yes as u8);
+    opts.set_fix_errors(c::fsck_err_opts::yes as u8);
     opts.set_retain_recovery_info(true);
     opts.set_read_journal_only(true);
     opts.set_read_entire_journal(true);

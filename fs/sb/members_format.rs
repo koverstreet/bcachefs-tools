@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
 use crate::util::vstructs::{vstruct, Head};
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, open_enum, unsized_vstruct, CStruct, Plain, TypeInfo};
+use cstruct_macros::{c_bitmask, c_const, c_enum, open_enum, unsized_vstruct, CStruct, Plain, TypeInfo};
 
 c_const! {
     /*
@@ -36,19 +36,14 @@ pub enum IopsMeasurement {
     randwrite = 3,
 }
 
-c_xmacro! {
-    BCH_MEMBER_ERROR_TYPES(x) {
-        (read, 0),
-        (write, 1),
-        (checksum, 2),
-    }
-}
-
 c_enum! {
     #[open]
+    #[prefix(BCH_MEMBER_ERROR_)]
+    #[nr(BCH_MEMBER_ERROR_NR)]
     pub enum bch_member_error_type: u32 {
-        BCH_MEMBER_ERROR_TYPES(t, n) => concat(BCH_MEMBER_ERROR_, t) = n,
-        BCH_MEMBER_ERROR_NR,
+        read = 0,
+        write = 1,
+        checksum = 2,
     }
 }
 
@@ -140,40 +135,30 @@ c_bitmask! {
     }
 }
 
-c_xmacro! {
-    BCH_MEMBER_STATES(x) {
-        (rw, 0),
-        (ro, 1),
-        (evacuating, 2),
-        (spare, 3),
-    }
-}
-
 c_enum! {
     #[open]
     #[c_name(bch_member_state)]
+    #[prefix(BCH_MEMBER_STATE_)]
+    #[nr(BCH_MEMBER_STATE_NR)]
     pub enum MemberState: u8 {
-        BCH_MEMBER_STATES(t, n) => concat(BCH_MEMBER_STATE_, t) = n,
-        BCH_MEMBER_STATE_NR,
-    }
-}
-
-c_xmacro! {
-    BCH_MEMBER_INITIALIZED_STATES(x) {
-        (initialized, 0),
-        (pre_dev_usage, 1),
-        (pre_mark_sb, 2),
-        (pre_freespace_init, 3),
-        (pre_journal_alloc, 4),
+        rw = 0,
+        ro = 1,
+        evacuating = 2,
+        spare = 3,
     }
 }
 
 c_enum! {
     #[open]
     #[c_name(bch_member_initialized)]
+    #[prefix(BCH_MEMBER_INITIALIZED_)]
+    #[nr(BCH_MEMBER_INITIALIZED_NR)]
     pub enum MemberInitialized: u8 {
-        BCH_MEMBER_INITIALIZED_STATES(t, n) => concat(BCH_MEMBER_INITIALIZED_, t) = n,
-        BCH_MEMBER_INITIALIZED_NR,
+        initialized = 0,
+        pre_dev_usage = 1,
+        pre_mark_sb = 2,
+        pre_freespace_init = 3,
+        pre_journal_alloc = 4,
     }
 }
 

@@ -2350,7 +2350,7 @@ fn sb_io_result(fs: &Fs, ca: &Dev, rw: c::bch_member_error_type, ret: Result<(),
 {
     match ret {
         Ok(()) => {
-            if rw == c::bch_member_error_type::BCH_MEMBER_ERROR_write {
+            if rw == c::bch_member_error_type::write {
                 ca.write_errors_start.store(0, core::sync::atomic::Ordering::Relaxed);
             }
             Ok(())
@@ -2514,7 +2514,7 @@ fn write_prepare(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(
 /// goes read-only.
 fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), BchError> {
     use crate::util::log::LogMsg;
-    const READ: c::bch_member_error_type = c::bch_member_error_type::BCH_MEMBER_ERROR_read;
+    const READ: c::bch_member_error_type = c::bch_member_error_type::read;
 
     pin_init::stack_pin_init!(let ios = SbIos::new());
     for dev_sb in fs.dev_sbs_mut(sb, cas).flatten() {
@@ -2558,7 +2558,7 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
 /// Each layout slot's copy to every device that has one, a slot at a time,
 /// each round waited on before the next.
 fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Copies, BchError> {
-    const WRITE: c::bch_member_error_type = c::bch_member_error_type::BCH_MEMBER_ERROR_write;
+    const WRITE: c::bch_member_error_type = c::bch_member_error_type::write;
 
     let mut copies = Copies { written: Default::default(), failed: KVVec::new(), any_failed: false };
 

@@ -376,7 +376,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
      * Replay accounting keys first: we can't allow the write buffer to
      * flush accounting keys until we're done
      */
-    fs.recovery.progress.init_count(Some(c"journal replay: accounting"), Units::BCH_PROGRESS_UNITS_keys,
+    fs.recovery.progress.init_count(Some(c"journal replay: accounting"), Units::keys,
                                     accounting_total as u64);
 
     for (idx, k) in keys.iter().enumerate() {
@@ -405,7 +405,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
      * efficient - better locality of btree access -  but some might fail if
      * that would cause a journal deadlock.
      */
-    fs.recovery.progress.init_count(Some(c"journal replay: sorted pass"), Units::BCH_PROGRESS_UNITS_keys,
+    fs.recovery.progress.init_count(Some(c"journal replay: sorted pass"), Units::keys,
                                     keys.len() as u64);
 
     let mut keys_sorted = KVVec::new();
@@ -450,7 +450,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
      */
     sort_nonatomic(&mut keys_sorted, |&l, &r| journal_sort_seq_cmp(&keys[l], &keys[r]));
 
-    fs.recovery.progress.init_count(Some(c"journal replay: journal-order pass"), Units::BCH_PROGRESS_UNITS_keys,
+    fs.recovery.progress.init_count(Some(c"journal replay: journal-order pass"), Units::keys,
                                     keys_sorted.len() as u64);
 
     for &idx in keys_sorted.iter() {
@@ -778,8 +778,8 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
         let mut sb = fs.sb_lock();
         let w = fs.opts_writer(&mut sb);
         let fix = w.fix_errors.get();
-        if fix == c::fsck_err_opts::FSCK_FIX_yes as u8 || fix == c::fsck_err_opts::FSCK_FIX_ask as u8 {
-            w.fix_errors.set(c::fsck_err_opts::FSCK_FIX_no as u8);
+        if fix == c::fsck_err_opts::yes as u8 || fix == c::fsck_err_opts::ask as u8 {
+            w.fix_errors.set(c::fsck_err_opts::no as u8);
         }
         if u32::from(w.errors.get()) == c::bch_error_actions::fix_safe.0 {
             w.errors.set(c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8);

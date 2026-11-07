@@ -209,7 +209,7 @@ impl<'f> DevScan<'f> {
         let submit_time = local_clock();
         // remapped each read: read_done swaps the node's buffer
         let ret = unsafe { bio.remap_read(buf.bytes(bytes)) }.submit_wait();
-        ca.account_io_completion(c::bch_member_error_type::BCH_MEMBER_ERROR_read, submit_time, ret.is_ok());
+        ca.account_io_completion(c::bch_member_error_type::read, submit_time, ret.is_ok());
         ret
     }
 

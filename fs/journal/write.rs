@@ -733,7 +733,7 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     let fs = j.fs();
     let status = jbio.bio.bi_status;
 
-    ca.account_io_completion(c::bch_member_error_type::BCH_MEMBER_ERROR_write, jbio.submit_time, status == 0);
+    ca.account_io_completion(c::bch_member_error_type::write, jbio.submit_time, status == 0);
     ca.write_unflushed();
 
     if status != 0 {
@@ -755,7 +755,7 @@ unsafe extern "C" fn write_preflush_endio(bio: *mut c::bio) {
     let fs = j.fs();
     let status = jbio.bio.bi_status;
 
-    ca.account_io_completion(c::bch_member_error_type::BCH_MEMBER_ERROR_write, jbio.submit_time, status == 0);
+    ca.account_io_completion(c::bch_member_error_type::write, jbio.submit_time, status == 0);
 
     if status != 0 {
         let _g = j.err_lock.lock();
@@ -853,7 +853,7 @@ extern "C" fn write_preflush(w: Running<c::journal_buf>) {
              * A member with no completed writes since its last
              * flush has nothing for this flush to make durable:
              */
-            if !ca.flags.swap(c::bch_dev_flags::BCH_DEV_unflushed_writes, false) &&
+            if !ca.flags.swap(c::bch_dev_flags::unflushed_writes, false) &&
                 !w.devs_written.has(ca.dev_idx) {
                 continue;
             }

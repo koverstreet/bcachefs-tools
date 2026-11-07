@@ -617,7 +617,7 @@ fn disk_set_state(fs: &Fs, a: c::bch_ioctl_disk_set_state, msg: ErrMsg, bad_args
 {
     admin(fs)?;
     let new_state = MemberState(a.new_state);
-    if a.flags & !FORCE_FLAGS != 0 || a.pad != [0; 3] || new_state >= MemberState::nr {
+    if a.flags & !FORCE_FLAGS != 0 || a.pad != [0; 3] || a.new_state >= MemberState::NR {
         return fs.throw(bad_args);
     }
     let ca = dev_lookup_outer(fs, a.dev, a.flags)?;

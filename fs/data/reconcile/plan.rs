@@ -346,7 +346,7 @@ pub fn pending_mod(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k
 {
     let fs = t.fs();
     let Some(r) = k.arm::<Ptrs>().and_then(|kp| kp.reconcile_opts(fs).copied()) else { return Ok(()) };
-    if r.need_rb() == 0 || (rb_work_id(Some(&r)) == c::reconcile_work_id::RECONCILE_WORK_pending) == set {
+    if r.need_rb() == 0 || (rb_work_id(Some(&r)) == c::reconcile_work_id::pending) == set {
         return Ok(());
     }
 

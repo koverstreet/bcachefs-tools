@@ -362,7 +362,7 @@ fn validate_checksums(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut St
                 // any more
                 let dev = s.v().block_ptrs()[i as usize].dev();
                 if let Some(ca) = fs.dev_get(dev.into()) {
-                    ca.io_error(c::bch_member_error_type::BCH_MEMBER_ERROR_checksum);
+                    ca.io_error(c::bch_member_error_type::checksum);
                 }
                 break;
             }

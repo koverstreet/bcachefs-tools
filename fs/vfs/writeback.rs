@@ -281,7 +281,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState) -> c_int 
         for x in st.sectors().iter_mut().filter(|x| x.has_data()) {
             x.bits.set_nr_replicas(if w.opts.compression != 0 { 0 } else { nr_replicas_this_write as u8 });
             x.bits.set_replicas_reserved(0);
-            x.set_state(SectorState::SECTOR_allocated);
+            x.set_state(SectorState::allocated);
         }
 
         st.reserved_degraded = false;
@@ -308,7 +308,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState) -> c_int 
 
         while offset + sectors < f_sectors && tmp[offset + sectors].has_data() {
             reserved_sectors += u64::from(tmp[offset + sectors].bits.replicas_reserved());
-            dirty_sectors += u32::from(tmp[offset + sectors].state() == SectorState::SECTOR_dirty);
+            dirty_sectors += u32::from(tmp[offset + sectors].state() == SectorState::dirty);
             sectors += 1;
         }
         assert!(sectors != 0, "a run of no dirty sectors");

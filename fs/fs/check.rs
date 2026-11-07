@@ -1019,7 +1019,7 @@ pub mod ioctl {
                 w.fix_errors.set(if opts.defined(c::bch_opt_id::Opt_fix_errors) {
                     opts.fix_errors
                 } else {
-                    c::fsck_err_opts::FSCK_FIX_ask as u8
+                    c::fsck_err_opts::ask as u8
                 });
                 w.fsck.set(1);
             }

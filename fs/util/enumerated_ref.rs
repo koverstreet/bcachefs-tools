@@ -67,8 +67,8 @@ impl enumerated_ref {
 }
 
 const _: () = assert!(c::bch_write_ref::BCH_WRITE_REF_rust as u32 == 0);
-const _: () = assert!(c::bch_dev_read_ref::BCH_DEV_READ_REF_rust as u32 == 0);
-const _: () = assert!(c::bch_dev_write_ref::BCH_DEV_WRITE_REF_rust as u32 == 0);
+const _: () = assert!(c::bch_dev_read_ref::rust as u32 == 0);
+const _: () = assert!(c::bch_dev_write_ref::rust as u32 == 0);
 
 /// Zeroed with what it's in, for C's enumerated_ref_init().
 #[repr(transparent)]

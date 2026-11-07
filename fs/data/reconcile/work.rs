@@ -163,7 +163,7 @@ pub struct Phase {
 impl Phase {
     /// Work waiting on a configuration change: walked only after a pending scan.
     fn is_pending(&self) -> bool {
-        self.priority == w::RECONCILE_WORK_pending
+        self.priority == w::pending
     }
 }
 
@@ -179,21 +179,21 @@ const fn walk_phase(kind: PhaseKind, priority: c::reconcile_work_id, btree: Btre
 
 static PHASES: [Phase; 9] = [
     // scan cookies, at inode 0
-    Phase { kind: PhaseKind::Scan, priority: w::RECONCILE_WORK_hipri, btree: Btree::reconcile_scan,
+    Phase { kind: PhaseKind::Scan, priority: w::hipri, btree: Btree::reconcile_scan,
             start: POS_MIN, end: pos(0, u64::MAX) },
 
-    btree_phase(w::RECONCILE_WORK_hipri),
+    btree_phase(w::hipri),
     // work in the phys btrees is in the logical ones too: phys first, then
     // what's left, data on SSDs
-    walk_phase(PhaseKind::Phys,   w::RECONCILE_WORK_hipri,  Btree::reconcile_hipri_phys),
-    walk_phase(PhaseKind::Normal, w::RECONCILE_WORK_hipri,  Btree::reconcile_hipri),
+    walk_phase(PhaseKind::Phys,   w::hipri,  Btree::reconcile_hipri_phys),
+    walk_phase(PhaseKind::Normal, w::hipri,  Btree::reconcile_hipri),
 
-    btree_phase(w::RECONCILE_WORK_normal),
-    walk_phase(PhaseKind::Phys,   w::RECONCILE_WORK_normal, Btree::reconcile_work_phys),
-    walk_phase(PhaseKind::Normal, w::RECONCILE_WORK_normal, Btree::reconcile_work),
+    btree_phase(w::normal),
+    walk_phase(PhaseKind::Phys,   w::normal, Btree::reconcile_work_phys),
+    walk_phase(PhaseKind::Normal, w::normal, Btree::reconcile_work),
 
-    btree_phase(w::RECONCILE_WORK_pending),
-    walk_phase(PhaseKind::Normal, w::RECONCILE_WORK_pending, Btree::reconcile_pending),
+    btree_phase(w::pending),
+    walk_phase(PhaseKind::Normal, w::pending, Btree::reconcile_pending),
 ];
 
 // ── Status ───────────────────────────────────────────────────────────────

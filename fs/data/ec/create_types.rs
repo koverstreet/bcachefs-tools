@@ -8,7 +8,7 @@ use crate::locking::{ByteLock, Locked, Lockdep};
 use crate::types::{bits_to_longs, c_opaque};
 use crate::data_structures::bitmap::BitArray;
 use core::ffi::{c_uint, c_ulong};
-use cstruct_macros::{c_enum, c_xmacro, CStruct};
+use cstruct_macros::{c_enum, CStruct};
 use pin_init::pin_data;
 
 /// A disk label's striping of new stripes' buckets across its devices - in
@@ -35,34 +35,29 @@ pub struct DevStripes {
     pub parity_stripe: c::dev_stripe_state,
 }
 
-c_xmacro! {
-    /*
-     * open:	the sector allocator can still hand blocks out of this stripe;
-     *		it's the stripe head's h->s.
-     * filling:	every block has been handed to a writer, but the writers haven't
-     *		finished - buckets are still checked out, and the stripe can
-     *		only be completed by the writers that already hold them.
-     * in_flight:	every bucket has come back, the data is all in, and its task
-     *		is creating it. This is the only state guaranteed to make
-     *		progress on its own.
-     *
-     * The filling/in_flight split is what makes it possible to wait on stripe
-     * buffer memory safely: a stripe that is filling may never complete (its
-     * writers can go away), so blocking on one can deadlock, while an in_flight
-     * stripe always drains.
-     */
-    EC_STRIPE_NEW_STATES(x) {
-        (open),
-        (filling),
-        (in_flight),
-    }
-}
-
+/*
+ * open:	the sector allocator can still hand blocks out of this stripe;
+ *		it's the stripe head's h->s.
+ * filling:	every block has been handed to a writer, but the writers haven't
+ *		finished - buckets are still checked out, and the stripe can
+ *		only be completed by the writers that already hold them.
+ * in_flight:	every bucket has come back, the data is all in, and its task
+ *		is creating it. This is the only state guaranteed to make
+ *		progress on its own.
+ *
+ * The filling/in_flight split is what makes it possible to wait on stripe
+ * buffer memory safely: a stripe that is filling may never complete (its
+ * writers can go away), so blocking on one can deadlock, while an in_flight
+ * stripe always drains.
+ */
 c_enum! {
     #[closed]
+    #[prefix(EC_STRIPE_NEW_)]
+    #[nr(EC_STRIPE_NEW_STATE_NR)]
     pub enum ec_stripe_new_state: u32 {
-        EC_STRIPE_NEW_STATES(n) => concat(EC_STRIPE_NEW_, n),
-        EC_STRIPE_NEW_STATE_NR,
+        open,
+        filling,
+        in_flight,
     }
 }
 

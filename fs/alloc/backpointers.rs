@@ -228,7 +228,7 @@ pub fn backpointers_match(l: &c::Backpointer, r: &c::Backpointer) -> bool {
 /// Pending work isn't tracked by bucket.
 pub fn bp_reconcile_phys(fs: &Fs, level: u32, dev: u32, k: BkeySC<'_>) -> c::reconcile_work_id {
     if level != 0 || !fs.dev_rotational(dev) {
-        return c::reconcile_work_id::RECONCILE_WORK_none;
+        return c::reconcile_work_id::none;
     }
     k.reconcile_work_id(fs).phys()
 }
@@ -343,7 +343,7 @@ fn bucket_backpointer_mod_nowritebuffer(t: &TransAttempt<'_, '_>, orig_k: BkeySC
 pub fn bucket_backpointer_mod(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, bp: &mut BkeyI<c::Backpointer>,
                               insert: bool) -> Result<(), BchError> {
     let phys = bp.v.reconcile_work_phys();
-    if phys != c::reconcile_work_id::RECONCILE_WORK_none {
+    if phys != c::reconcile_work_id::none {
         let btree = phys.phys_btree().expect("phys bits that are never pending: bp_reconcile_phys()'s");
         t.bit_mod_buffered(btree, bp.k.p, insert)?;
     }

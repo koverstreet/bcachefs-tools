@@ -274,21 +274,16 @@ pub struct dev_stripe_state {
 }
 c_default!(dev_stripe_state);
 
-c_xmacro! {
-    WRITE_POINT_STATES(x) {
-        (stopped),
-        (waiting_io),
-        (waiting_work),
-        (runnable),
-        (running),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(WRITE_POINT_)]
+    #[nr(WRITE_POINT_STATE_NR)]
     pub enum write_point_state: u32 {
-        WRITE_POINT_STATES(n) => concat(WRITE_POINT_, n),
-        WRITE_POINT_STATE_NR,
+        stopped,
+        waiting_io,
+        waiting_work,
+        runnable,
+        running,
     }
 }
 

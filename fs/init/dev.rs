@@ -640,8 +640,8 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<NewDev> {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     ca.ref_.store(1, Relaxed);
 
-    let ok = unsafe { ca.io_ref[READ].init(c::bch_dev_read_ref::BCH_DEV_READ_REF_NR as u32, None) }.is_ok() &&
-        unsafe { ca.io_ref[WRITE].init(c::bch_dev_write_ref::BCH_DEV_WRITE_REF_NR as u32, None) }.is_ok() &&
+    let ok = unsafe { ca.io_ref[READ].init(c::bch_dev_read_ref::NR, None) }.is_ok() &&
+        unsafe { ca.io_ref[WRITE].init(c::bch_dev_write_ref::NR, None) }.is_ok() &&
         kbox_pin_init(SbReadScratch::new())
             .map(|s| *ca.sb_read_scratch = Some(Pin::into_inner(s))).is_ok() &&
         ca.buckets_alloc().is_ok() &&

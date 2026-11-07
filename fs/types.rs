@@ -222,54 +222,44 @@ pub struct io_count {
     pub sectors: [[u64; c::BCH_DATA_NR as usize]; 2],
 }
 
-c_xmacro! {
-    BCH_DEV_READ_REFS(x) {
-        /* kind 0, so it stays first: every Rust ref's - util/enumerated_ref.rs */
-        (rust),
-        (bch2_online_devs),
-        (read_fua_test),
-        (journal_read),
-        (fs_journal_alloc),
-        (fs_resize_on_mount),
-        (btree_node_read),
-        (btree_node_read_all_replicas),
-        (btree_node_scrub),
-        (btree_node_write),
-        (btree_node_scan),
-        (btree_verify_replicas),
-        (btree_node_ondisk_to_text),
-        (io_read),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(BCH_DEV_READ_REF_)]
+    #[nr(BCH_DEV_READ_REF_NR)]
     pub enum bch_dev_read_ref: u32 {
-        BCH_DEV_READ_REFS(n) => concat(BCH_DEV_READ_REF_, n),
-        BCH_DEV_READ_REF_NR,
-    }
-}
-
-c_xmacro! {
-    BCH_DEV_WRITE_REFS(x) {
         /* kind 0, so it stays first: every Rust ref's - util/enumerated_ref.rs */
-        (rust),
-        (journal_write),
-        (journal_discard),
-        (discard_bucket),
-        (discard_one_bucket_fast),
-        (do_invalidates),
-        (nocow_flush),
-        (io_write),
-        (ec_bucket_zero),
+        rust,
+        bch2_online_devs,
+        read_fua_test,
+        journal_read,
+        fs_journal_alloc,
+        fs_resize_on_mount,
+        btree_node_read,
+        btree_node_read_all_replicas,
+        btree_node_scrub,
+        btree_node_write,
+        btree_node_scan,
+        btree_verify_replicas,
+        btree_node_ondisk_to_text,
+        io_read,
     }
 }
 
 c_enum! {
     #[closed]
+    #[prefix(BCH_DEV_WRITE_REF_)]
+    #[nr(BCH_DEV_WRITE_REF_NR)]
     pub enum bch_dev_write_ref: u32 {
-        BCH_DEV_WRITE_REFS(n) => concat(BCH_DEV_WRITE_REF_, n),
-        BCH_DEV_WRITE_REF_NR,
+        /* kind 0, so it stays first: every Rust ref's - util/enumerated_ref.rs */
+        rust,
+        journal_write,
+        journal_discard,
+        discard_bucket,
+        discard_one_bucket_fast,
+        do_invalidates,
+        nocow_flush,
+        io_write,
+        ec_bucket_zero,
     }
 }
 
@@ -304,20 +294,14 @@ pub struct bucket_bitmap {
     pub bits: Locked<c::mutex, (), BucketBits>,
 }
 
-c_xmacro! {
-    /*
-     * unflushed_writes: a write completed that the device may still hold in its
-     * volatile cache; journal_write_preflush() clears it when it flushes the device.
-     */
-    BCH_DEV_FLAGS(x) {
-        (unflushed_writes),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(BCH_DEV_)]
     pub enum bch_dev_flags: u32 {
-        BCH_DEV_FLAGS(n) => concat(BCH_DEV_, n),
+        /// a write completed that the device may still hold in its volatile
+        /// cache; journal_write_preflush() clears it when it flushes the
+        /// device.
+        unflushed_writes,
     }
 }
 

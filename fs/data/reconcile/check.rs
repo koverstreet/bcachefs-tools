@@ -192,7 +192,7 @@ fn check_reconcile_work_one<'t>(t: &TransAttempt<'_, 't>, data_iter: &mut BtreeI
         return Ok(());
     }
 
-    let work_id = data_k.map_or(c::reconcile_work_id::RECONCILE_WORK_none, |k| k.reconcile_work_id(fs));
+    let work_id = data_k.map_or(c::reconcile_work_id::none, |k| k.reconcile_work_id(fs));
     let want = work_id.btree();
     let set = btrees_set(&work);
 
@@ -210,7 +210,7 @@ fn check_reconcile_work_one<'t>(t: &TransAttempt<'_, 't>, data_iter: &mut BtreeI
 
     let Some(data_k) = data_k else { return Ok(()) };
 
-    if work_id.phys() != c::reconcile_work_id::RECONCILE_WORK_none {
+    if work_id.phys() != c::reconcile_work_id::none {
         check_extent_reconcile_phys(t, btree, data_k, last_flushed)?;
     }
 
@@ -290,13 +290,13 @@ fn check_reconcile_work_phys_one<'t>(t: &TransAttempt<'_, 't>, bp_iter: &mut Btr
     deleted.k.p = pos;
 
     let mut bp = bp_k.and_then(|k| k.arm::<c::Backpointer>());
-    let mut w = bp.map_or(c::reconcile_work_id::RECONCILE_WORK_none, |bp| bp.v().reconcile_work_phys());
+    let mut w = bp.map_or(c::reconcile_work_id::none, |bp| bp.v().reconcile_work_phys());
 
     // The "set, shouldn't be" direction: what the bits should be is what the
     // backpointer's extent says, computed as extent_ptr_to_bp() does - so
     // this and the data btrees' direction can't disagree. Only backpointers
     // with bits set pay for the lookup.
-    if let Some(bp_v) = bp.filter(|_| w != c::reconcile_work_id::RECONCILE_WORK_none) {
+    if let Some(bp_v) = bp.filter(|_| w != c::reconcile_work_id::none) {
         let mut iter = BtreeIter::uninit();
         match backpointer_get_key(t, bp_v, &mut iter, BtreeIterFlags::empty(), last_flushed.borrow())? {
             None => {
@@ -304,7 +304,7 @@ fn check_reconcile_work_phys_one<'t>(t: &TransAttempt<'_, 't>, bp_iter: &mut Btr
                 // and may have deleted it, committing - don't touch it again.
                 // Its phys btree entry goes below.
                 bp = None;
-                w = c::reconcile_work_id::RECONCILE_WORK_none;
+                w = c::reconcile_work_id::none;
             }
             Some((_, k)) => {
                 let want = bp_reconcile_phys(fs, bp_v.v().level.into(), bp_v.k.p.inode as u32, k);
@@ -459,9 +459,9 @@ fn check_reconcile_btree_bps(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
     fs.recovery.progress.init(fs, c"check_reconcile_btree_bps", &[Btree::reconcile_scan], &[]);
 
-    let mut iter = BtreeIter::new(trans, Btree::reconcile_scan, pos(w::RECONCILE_WORK_hipri.0.into(), 0),
+    let mut iter = BtreeIter::new(trans, Btree::reconcile_scan, pos(w::hipri.0.into(), 0),
                                   BtreeIterFlags::PREFETCH);
-    iter.for_each_max(trans, pos(w::RECONCILE_WORK_pending.0.into(), u64::MAX), |t, iter, k| {
+    iter.for_each_max(trans, pos(w::pending.0.into(), u64::MAX), |t, iter, k| {
         fs.recovery.progress.update(t, iter)?;
 
         let Some(bp) = k.arm::<c::Backpointer>() else { return Ok(()) };

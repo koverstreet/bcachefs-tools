@@ -132,7 +132,7 @@ fn block_done<R: IoRefIdx>(ca: DevIoRef<R>, ptr: &c::bch_extent_ptr, submit_time
                            status: Result<(), BchError>) -> Option<BchError> {
     use c::bch_member_error_type as T;
     let write = R::RW == WRITE;
-    ca.account_io_completion(if write { T::BCH_MEMBER_ERROR_write } else { T::BCH_MEMBER_ERROR_read },
+    ca.account_io_completion(if write { T::write } else { T::read },
                              submit_time, status.is_ok());
     if write {
         ca.write_unflushed();
@@ -327,7 +327,7 @@ pub fn scrub_block(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: usize) -
 
     if ret.bad_sectors != 0 {
         if let Some(ca) = fs.dev_get(s.v().block_ptrs()[block].dev().into()) {
-            ca.io_error(c::bch_member_error_type::BCH_MEMBER_ERROR_checksum);
+            ca.io_error(c::bch_member_error_type::checksum);
         }
     }
     Ok(ret)

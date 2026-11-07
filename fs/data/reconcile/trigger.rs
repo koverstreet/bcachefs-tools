@@ -64,10 +64,10 @@ pub fn rb_work_id(r: Option<&c::bch_extent_reconcile>) -> c::reconcile_work_id {
     use c::reconcile_work_id as w;
     match r {
         Some(r) if r.need_rb() != 0 =>
-            if r.pending() != 0 { w::RECONCILE_WORK_pending }
-            else if r.hipri() != 0 { w::RECONCILE_WORK_hipri }
-            else { w::RECONCILE_WORK_normal },
-        _ => w::RECONCILE_WORK_none,
+            if r.pending() != 0 { w::pending }
+            else if r.hipri() != 0 { w::hipri }
+            else { w::normal },
+        _ => w::none,
     }
 }
 
@@ -76,9 +76,9 @@ impl c::reconcile_work_id {
     pub fn btree(self) -> Option<Btree> {
         use c::reconcile_work_id as w;
         Some(match self {
-            w::RECONCILE_WORK_hipri   => Btree::reconcile_hipri,
-            w::RECONCILE_WORK_normal  => Btree::reconcile_work,
-            w::RECONCILE_WORK_pending => Btree::reconcile_pending,
+            w::hipri   => Btree::reconcile_hipri,
+            w::normal  => Btree::reconcile_work,
+            w::pending => Btree::reconcile_pending,
             _ => return None,
         })
     }
@@ -86,7 +86,7 @@ impl c::reconcile_work_id {
     /// The work its backpointers' phys bits track: pending work has none,
     /// as there's nothing to move yet - rb_work_id_phys().
     pub fn phys(self) -> Self {
-        if self == Self::RECONCILE_WORK_pending { Self::RECONCILE_WORK_none } else { self }
+        if self == Self::pending { Self::none } else { self }
     }
 
     /// The phys btree work with this id is tracked in, by bucket position:
@@ -94,8 +94,8 @@ impl c::reconcile_work_id {
     pub fn phys_btree(self) -> Option<Btree> {
         use c::reconcile_work_id as w;
         Some(match self {
-            w::RECONCILE_WORK_hipri  => Btree::reconcile_hipri_phys,
-            w::RECONCILE_WORK_normal => Btree::reconcile_work_phys,
+            w::hipri  => Btree::reconcile_hipri_phys,
+            w::normal => Btree::reconcile_work_phys,
             _ => return None,
         })
     }
@@ -171,12 +171,12 @@ pub trait BkeyVReconcile: BkeyV {
         let key = self.as_sc();
         if let Some(s) = key.arm::<c::Stripe>() {
             return if s.v().needs_reconcile() != 0 {
-                c::reconcile_work_id::RECONCILE_WORK_hipri
+                c::reconcile_work_id::hipri
             } else {
-                c::reconcile_work_id::RECONCILE_WORK_none
+                c::reconcile_work_id::none
             };
         }
-        key.arm::<Ptrs>().map_or(c::reconcile_work_id::RECONCILE_WORK_none, |k| rb_work_id(k.reconcile_opts(fs)))
+        key.arm::<Ptrs>().map_or(c::reconcile_work_id::none, |k| rb_work_id(k.reconcile_opts(fs)))
     }
 }
 

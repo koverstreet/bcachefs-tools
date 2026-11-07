@@ -179,19 +179,14 @@ pub enum ReconcileType {
     stripes = 7,
 }
 
-c_xmacro! {
-    RECONCILE_WORK_IDS(x) {
-        (none),
-        (hipri),
-        (normal),
-        (pending),
-    }
-}
-
 c_enum! {
     #[open]
+    #[prefix(RECONCILE_WORK_)]
     pub enum reconcile_work_id: u32 {
-        RECONCILE_WORK_IDS(t) => concat(RECONCILE_WORK_, t),
+        none,
+        hipri,
+        normal,
+        pending,
     }
 }
 

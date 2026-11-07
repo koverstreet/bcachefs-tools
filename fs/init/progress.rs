@@ -76,8 +76,6 @@ fn maybe_delay() {
 /// How often an indicator prints, in local_clock()'s nanoseconds.
 const PRINT_INTERVAL: u64 = 10 * 1_000_000_000;
 
-/// BCH_PROGRESS_UNITS()'s names, by value.
-
 /// What an indicator says - copied out of the SeqLock whole.
 #[derive(Clone, Copy, ::pin_init::Zeroable)]
 pub(crate) struct ProgressState {
@@ -226,7 +224,7 @@ impl c::progress_indicator {
     /// init_mask(), quietly with no @msg.
     pub(crate) fn init_masks(&self, fs: &Fs, msg: Option<&'static CStr>, leaf_mask: u64, inner_mask: u64) {
         let total = total_nodes(fs, leaf_mask, inner_mask);
-        let new = ProgressState::new(msg, c::bch_progress_units::BCH_PROGRESS_UNITS_nodes, total);
+        let new = ProgressState::new(msg, c::bch_progress_units::nodes, total);
         self.state.write(|s| *s = new);
     }
 

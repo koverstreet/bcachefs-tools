@@ -7,7 +7,7 @@
 use crate::cstructs::c;
 use crate::locking::Locked;
 use crate::types::{rust_only, DArray, c_default};
-use cstruct_macros::{bitfield, c_enum, c_typedef, c_xmacro, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, c_enum, c_typedef, CStruct, TypeInfo};
 use nestify::nest;
 use core::sync::atomic::AtomicI32;
 
@@ -16,48 +16,40 @@ c_typedef! {
     pub type folios = DArray<*mut c::folio>;
 }
 
-c_xmacro! {
-    BCH_FOLIO_SECTOR_STATE(x) {
-        (unallocated),
-        (reserved),
-        (dirty),
-        (dirty_reserved),
-        (allocated),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(SECTOR_)]
     pub enum bch_folio_sector_state: u32 {
-        BCH_FOLIO_SECTOR_STATE(n) => concat(SECTOR_, n),
+        unallocated,
+        reserved,
+        dirty,
+        dirty_reserved,
+        allocated,
     }
 }
 
 impl bch_folio_sector_state {
     pub fn dirty(self) -> Self {
-        use bch_folio_sector_state::*;
         match self {
-            SECTOR_unallocated => SECTOR_dirty,
-            SECTOR_reserved    => SECTOR_dirty_reserved,
-            s                  => s,
+            Self::unallocated => Self::dirty,
+            Self::reserved    => Self::dirty_reserved,
+            s                 => s,
         }
     }
 
     pub fn undirty(self) -> Self {
-        use bch_folio_sector_state::*;
         match self {
-            SECTOR_dirty          => SECTOR_unallocated,
-            SECTOR_dirty_reserved => SECTOR_reserved,
-            s                     => s,
+            Self::dirty          => Self::unallocated,
+            Self::dirty_reserved => Self::reserved,
+            s                    => s,
         }
     }
 
     pub fn reserve(self) -> Self {
-        use bch_folio_sector_state::*;
         match self {
-            SECTOR_unallocated => SECTOR_reserved,
-            SECTOR_dirty       => SECTOR_dirty_reserved,
-            s                  => s,
+            Self::unallocated => Self::reserved,
+            Self::dirty       => Self::dirty_reserved,
+            s                 => s,
         }
     }
 }

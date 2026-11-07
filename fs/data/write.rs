@@ -957,7 +957,7 @@ pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &'sta
         let ca = if ty == DataType::btree {
             /* btree/write.c's endio puts it, as its kind */
             fs.dev_get_ioref_kind(ptr.dev().into(), READ,
-                                  c::bch_dev_read_ref::BCH_DEV_READ_REF_btree_node_write as u32)
+                                  c::bch_dev_read_ref::btree_node_write as u32)
         } else {
             let r = match &mut cas {
                 Some(cas) => Some(cas[i].take().expect("a nocow write without its io refs")),
@@ -1179,10 +1179,10 @@ fn __wp_update_state(w: &mut WritePointWrites, s: &WritePointStateWriter, state:
         let now = crate::util::kernel::ktime_get_ns();
         let runtime = current_runtime(now);
 
-        if state == c::write_point_state::WRITE_POINT_runnable as u32 {
+        if state == c::write_point_state::runnable as u32 {
             w.last_runtime = runtime;
-        } else if old == c::write_point_state::WRITE_POINT_runnable as u32 {
-            let t = &s.time[c::write_point_state::WRITE_POINT_running as usize];
+        } else if old == c::write_point_state::runnable as u32 {
+            let t = &s.time[c::write_point_state::running as usize];
             t.set(t.get().wrapping_add(runtime.wrapping_sub(w.last_runtime)));
         }
 
@@ -1198,11 +1198,11 @@ fn __wp_update_state(w: &mut WritePointWrites, s: &WritePointStateWriter, state:
 fn wp_update_state(w: &mut WritePointWrites, s: &WritePointStateWriter, running: bool) {
     let empty = w.writes.is_empty();
     let state = if running {
-        c::write_point_state::WRITE_POINT_runnable
+        c::write_point_state::runnable
     } else if !empty {
-        c::write_point_state::WRITE_POINT_waiting_io
+        c::write_point_state::waiting_io
     } else {
-        c::write_point_state::WRITE_POINT_stopped
+        c::write_point_state::stopped
     };
 
     __wp_update_state(w, s, state);
@@ -1222,8 +1222,8 @@ extern "C" fn write_index(mut op: Running<Op>) {
     {
         let mut g = wp.io.writes_lock.lock();
         let (w, s) = g.parts();
-        if s.state.get() == c::write_point_state::WRITE_POINT_waiting_io as u32 {
-            __wp_update_state(w, s, c::write_point_state::WRITE_POINT_waiting_work);
+        if s.state.get() == c::write_point_state::waiting_io as u32 {
+            __wp_update_state(w, s, c::write_point_state::waiting_work);
         }
         unsafe { w.writes.push_back(op.as_ref()) };
     }
@@ -1234,10 +1234,10 @@ extern "C" fn write_index(mut op: Running<Op>) {
 fn write_queue(op: &mut Op, wp: &'static c::write_point) {
     op.wp = Some(wp);
 
-    if wp.io.writes_lock.state.get() == c::write_point_state::WRITE_POINT_stopped as u32 {
+    if wp.io.writes_lock.state.get() == c::write_point_state::stopped as u32 {
         let mut g = wp.io.writes_lock.lock();
         let (w, s) = g.parts();
-        __wp_update_state(w, s, c::write_point_state::WRITE_POINT_waiting_io);
+        __wp_update_state(w, s, c::write_point_state::waiting_io);
     }
 }
 
@@ -1284,7 +1284,7 @@ pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     let fua = wbio.bio.bi_opf & c::REQ_FUA != 0;
 
     if let Some(ca) = ca {
-        ca.account_io_completion(c::bch_member_error_type::BCH_MEMBER_ERROR_write, wbio.wbio.submit_time,
+        ca.account_io_completion(c::bch_member_error_type::write, wbio.wbio.submit_time,
                                  status == 0);
         if !fua {
             ca.write_unflushed();

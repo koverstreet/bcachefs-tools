@@ -91,7 +91,7 @@ impl c::bch_folio_sector {
 
     /// Whether it has data: dirty, or written.
     pub(crate) fn has_data(&self) -> bool {
-        self.state >= SectorState::SECTOR_dirty as u8
+        self.state >= SectorState::dirty as u8
     }
 
     pub(super) fn replicas(&self) -> u32 {
@@ -174,11 +174,11 @@ pub fn bch2_folio_create(folio: *mut c::folio, gfp: c::gfp_t) -> *mut c::bch_fol
 impl SectorState {
     fn of_key(fs: &Fs, k: BkeySC<'_>) -> Self {
         if k.extent_is_reservation(fs) {
-            SectorState::SECTOR_reserved
+            SectorState::reserved
         } else if k.k.extent_is_allocation() {
-            SectorState::SECTOR_allocated
+            SectorState::allocated
         } else {
-            SectorState::SECTOR_unallocated
+            SectorState::unallocated
         }
     }
 }
@@ -345,7 +345,7 @@ impl Mapping {
 
             if let Some(mut s) = folio.lock_state_if_any() {
                 for x in &mut s.sectors()[folio.sector_range(*start, end)] {
-                    i_sectors_delta -= i64::from(x.state() == SectorState::SECTOR_dirty);
+                    i_sectors_delta -= i64::from(x.state() == SectorState::dirty);
                     x.set_state(x.state().reserve());
                 }
             }

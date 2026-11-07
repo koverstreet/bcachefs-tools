@@ -48,7 +48,7 @@ impl FolioStateGuard<'_> {
     }
 
     fn sectors_unallocated(&mut self, sectors: Range<usize>) -> u64 {
-        self.sectors()[sectors].iter().filter(|s| s.state() == SectorState::SECTOR_unallocated).count() as u64
+        self.sectors()[sectors].iter().filter(|s| s.state() == SectorState::unallocated).count() as u64
     }
 }
 
@@ -256,7 +256,7 @@ impl<'i> FolioReservation<'i> {
                 x.bits.set_replicas_reserved(x.bits.replicas_reserved() + replicas as u8);
                 self.disk.sectors.set(self.disk.sectors.get() - replicas);
 
-                dirty_sectors += i64::from(x.state() == SectorState::SECTOR_unallocated);
+                dirty_sectors += i64::from(x.state() == SectorState::unallocated);
 
                 x.set_state(x.state().dirty());
             }
@@ -311,7 +311,7 @@ impl InodeInfo {
                 disk_res.sectors.set(disk_res.sectors.get() + u64::from(x.bits.replicas_reserved()));
                 x.bits.set_replicas_reserved(0);
 
-                dirty_sectors -= i64::from(x.state() == SectorState::SECTOR_dirty);
+                dirty_sectors -= i64::from(x.state() == SectorState::dirty);
                 x.set_state(x.state().undirty());
             }
         }

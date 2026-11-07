@@ -193,7 +193,7 @@ impl InodeInfo {
     /// Whether writeback writes the folio back, and with it i_size: if not,
     /// the caller updates i_size.
     fn truncate_folio(&self, index: u64, start: u64, end: u64) -> Result<bool, BchError> {
-        use c::bch_folio_sector_state::{SECTOR_dirty, SECTOR_unallocated};
+        use c::bch_folio_sector_state as SectorState;
 
         let fs = self.fs();
         let mapping = self.vfs().mapping();
@@ -243,8 +243,8 @@ impl InodeInfo {
         for s in folio.lock_state().sectors().get_mut(blocks).into_iter().flatten() {
             s.bits.set_nr_replicas(0);
 
-            i_sectors_delta -= i64::from(s.state() == SECTOR_dirty);
-            s.set_state(SECTOR_unallocated);
+            i_sectors_delta -= i64::from(s.state() == SectorState::dirty);
+            s.set_state(SectorState::unallocated);
         }
 
         self.i_sectors_acct(None, i_sectors_delta);

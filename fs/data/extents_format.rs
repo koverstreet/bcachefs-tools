@@ -258,16 +258,11 @@ pub struct bch_extent_stripe_ptr {
     idx:        u47,
 }
 
-c_xmacro! {
-    BCH_EXTENT_FLAGS(x) {
-        (poisoned, 0),
-    }
-}
-
 c_enum! {
     #[open]
+    #[prefix(BCH_EXTENT_FLAG_)]
     pub enum bch_extent_flags_e: u32 {
-        BCH_EXTENT_FLAGS(n, v) => concat(BCH_EXTENT_FLAG_, n) = v,
+        poisoned = 0,
     }
 }
 

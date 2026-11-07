@@ -7,7 +7,7 @@ use crate::types::c_default;
 use crate::util::ffi::c_char;
 use crate::btree::bkey::BkeyI;
 use crate::util::vstructs::Head;
-use cstruct_macros::{c_const, c_enum, c_ioctl, c_xmacro, counted, CStruct, Plain, TypeInfo};
+use cstruct_macros::{c_const, c_enum, c_ioctl, counted, CStruct, Plain, TypeInfo};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -337,21 +337,16 @@ pub struct bch_ioctl_disk_set_state_v2 {
     pub err: c::bch_ioctl_err_msg,
 }
 
-c_xmacro! {
-    BCH_DATA_OPS(x) {
-        (scrub, 0),
-        (rereplicate, 1),
-        (migrate, 2),
-        (rewrite_old_nodes, 3),
-        (drop_extra_replicas, 4),
-    }
-}
-
 c_enum! {
     #[open]
+    #[prefix(BCH_DATA_OP_)]
+    #[nr(BCH_DATA_OP_NR)]
     pub enum bch_data_ops: u32 {
-        BCH_DATA_OPS(t, n) => concat(BCH_DATA_OP_, t) = n,
-        BCH_DATA_OP_NR,
+        scrub = 0,
+        rereplicate = 1,
+        migrate = 2,
+        rewrite_old_nodes = 3,
+        drop_extra_replicas = 4,
     }
 }
 
@@ -954,21 +949,16 @@ pub struct bch_ioctl_snapshot_tree_query_v2 {
     pub nodes: [c::bch_ioctl_snapshot_node_v2; 0],
 }
 
-c_xmacro! {
-    /*
-     * What a progress indicator is counting: this is uapi because
-     * BCH_IOCTL_RECOVERY_STATUS reports it, and a string wouldn't survive the trip.
-     */
-    BCH_PROGRESS_UNITS(x) {
-        (nodes, 0),
-        (keys, 1),
-    }
-}
-
+/*
+ * What a progress indicator is counting: this is uapi because
+ * BCH_IOCTL_RECOVERY_STATUS reports it, and a string wouldn't survive the trip.
+ */
 c_enum! {
     #[open]
+    #[prefix(BCH_PROGRESS_UNITS_)]
     pub enum bch_progress_units: u32 {
-        BCH_PROGRESS_UNITS(n, v) => concat(BCH_PROGRESS_UNITS_, n) = v,
+        nodes = 0,
+        keys = 1,
     }
 }
 

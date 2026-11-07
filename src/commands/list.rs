@@ -246,7 +246,7 @@ fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
     fs_opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue);
 
     if opt.fsck {
-        fs_opts.set_fix_errors(c::fsck_err_opts::FSCK_FIX_yes as u8);
+        fs_opts.set_fix_errors(c::fsck_err_opts::yes as u8);
         fs_opts.set_norecovery(false);
     }
 

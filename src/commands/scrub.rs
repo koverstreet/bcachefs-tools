@@ -47,7 +47,7 @@ fn read_data_event(fd: &mut std::fs::File) -> io::Result<(u8, u8, bch_ioctl_data
 
 fn start_scrub(ioctl_fd: std::os::fd::BorrowedFd, dev_idx: u32, data_types: u32) -> Result<std::fs::File> {
     let cmd = bch_ioctl_data {
-        op: bch_bindgen::c::bch_data_ops::BCH_DATA_OP_scrub.0 as u16,
+        op: bch_bindgen::c::bch_data_ops::scrub.0 as u16,
         args: bch_ioctl_data_args {
             scrub: bch_ioctl_data_scrub { dev: dev_idx, data_types },
         },

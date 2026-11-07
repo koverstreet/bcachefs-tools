@@ -799,7 +799,7 @@ impl<'a> DevReader<'a> {
         let submit_time = local_clock();
         let ret = self.read(offset, ca.bucket_bytes() as usize);
 
-        ca.account_io_completion(c::bch_member_error_type::BCH_MEMBER_ERROR_read, submit_time, ret.is_ok());
+        ca.account_io_completion(c::bch_member_error_type::read, submit_time, ret.is_ok());
 
         if ret.is_err() {
             crate::bch_err_dev_ratelimited!(ca, "journal read error: sector {}", offset);
@@ -854,7 +854,7 @@ impl<'a> DevReader<'a> {
             let j = c::jset::<Unvalidated>::from_bytes_mut(j).expect("a jset, cut to fit its bucket");
             let (csum_good, csum) = jset_csum_good(fs, j);
 
-            ca.account_io_completion(c::bch_member_error_type::BCH_MEMBER_ERROR_checksum, 0, csum_good);
+            ca.account_io_completion(c::bch_member_error_type::checksum, 0, csum_good);
 
             if !csum_good {
                 /*
