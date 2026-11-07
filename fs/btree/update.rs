@@ -18,39 +18,34 @@ use core::mem::size_of;
 use core::ops::Range;
 use core::ptr::NonNull;
 use core::slice;
-use cstruct_macros::{c_export, c_enum, c_extern, c_xmacro};
+use cstruct_macros::{c_export, c_enum, c_extern};
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 use zerocopy::IntoBytes;
 
-c_xmacro! {
-    BCH_TRANS_COMMIT_FLAGS(x) {
-        (no_enospc, "don't check for enospc"),
-        (no_check_rw, "don't attempt to take a ref on c->writes"),
-        (no_journal_res,
-         "don't take a journal reservation, instead "
-         "pin journal entry referred to by trans->journal_res.seq"),
-        (no_skip_noops, "don't drop noop updates"),
-        (journal_reclaim,
-         "operation required for journal reclaim; may return error "
-         "instead of deadlocking if BCH_WATERMARK_reclaim not specified"),
-        (journal_replay, "in journal replay"),
-        (skip_accounting_apply, "we're in journal replay - accounting updates have already been applied"),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(__BCH_TRANS_COMMIT_)]
+    #[mask(bch_trans_commit_flags: u32, prefix = BCH_TRANS_COMMIT_)]
+    #[c_list(BCH_TRANS_COMMIT_FLAGS)]
     pub enum __bch_trans_commit_flags: u32 {
         /* First bits for bch_watermark: */
-        __BCH_TRANS_COMMIT_FLAGS_START = c::BCH_WATERMARK_BITS,
-        BCH_TRANS_COMMIT_FLAGS(n, ..) => concat(__BCH_TRANS_COMMIT_, n),
-    }
-}
-
-c_enum! {
-    #[flags]
-    pub enum bch_trans_commit_flags: u32 {
-        BCH_TRANS_COMMIT_FLAGS(n, ..) => concat(BCH_TRANS_COMMIT_, n) = 1 << (c::concat(__BCH_TRANS_COMMIT_, n) as u32),
+        /// don't check for enospc
+        no_enospc = c::BCH_WATERMARK_BITS + 1,
+        /// don't attempt to take a ref on c->writes
+        no_check_rw,
+        /// don't take a journal reservation, instead pin journal entry
+        /// referred to by trans->journal_res.seq
+        no_journal_res,
+        /// don't drop noop updates
+        no_skip_noops,
+        /// operation required for journal reclaim; may return error instead
+        /// of deadlocking if BCH_WATERMARK_reclaim not specified
+        journal_reclaim,
+        /// in journal replay
+        journal_replay,
+        /// we're in journal replay - accounting updates have already been
+        /// applied
+        skip_accounting_apply,
     }
 }
 

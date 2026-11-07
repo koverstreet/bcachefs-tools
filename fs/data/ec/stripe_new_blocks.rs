@@ -153,7 +153,7 @@ fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, s: 
     let mut sum = frac.iter().flatten().fold(0u64, |sum, &f| sum.wrapping_add(f));
 
     let flags = req.flags;
-    req.flags |= c::bch_write_flags::BCH_WRITE_alloc_nowait;
+    req.flags |= c::bch_write_flags::alloc_nowait;
     let mut ret = Ok(());
 
     for i in 0..MAX {
@@ -291,7 +291,7 @@ pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::al
 
     req.devs_may_alloc = s.devs;
     if req.watermark == c::bch_watermark::copygc {
-        req.flags |= c::bch_write_flags::BCH_WRITE_alloc_nowait;
+        req.flags |= c::bch_write_flags::alloc_nowait;
     }
 
     let mut ret = dev_stripe.lock.lock_trans(t).and_then(|mut g| alloc_buckets(t, req, g.protected(), s));
@@ -441,7 +441,7 @@ fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, 
 
     let saved = (req.watermark, req.flags);
     req.watermark = c::bch_watermark::stripe;
-    req.flags |= c::bch_write_flags::BCH_WRITE_alloc_nowait;
+    req.flags |= c::bch_write_flags::alloc_nowait;
     let ret = new_stripe_alloc_buckets(t, req, dev_stripe, s, false);
     (req.watermark, req.flags) = saved;
 

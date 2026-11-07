@@ -376,7 +376,7 @@ fn pread_raw(file: &File, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_ra
     }
 
     let flags = if a.flags & c::BCH_PREAD_RAW_no_poison_check != 0 {
-        c::bch_read_flags::BCH_READ_no_poison_check
+        c::bch_read_flags::no_poison_check
     } else {
         c::bch_read_flags::empty()
     };

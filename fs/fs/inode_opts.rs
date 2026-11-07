@@ -789,7 +789,7 @@ impl c::inode_opt_change {
 /// No logged op - fsck reruns from the start anyway, and a begin in its climb
 /// would invalidate check_inodes()'s iterator.
 pub fn check_propagated(t: &TransAttempt<'_, '_>, inode: &c::bch_inode_unpacked) -> Result<(), BchError> {
-    if !inode.flag(c::bch_inode_flags::BCH_INODE_has_inode_opts) {
+    if !inode.flag(c::bch_inode_flags::has_inode_opts) {
         return Ok(());
     }
 

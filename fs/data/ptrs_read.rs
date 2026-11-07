@@ -248,7 +248,7 @@ fn ptr_better(fs: &Fs, p1: &c::extent_ptr_decoded, mut l1: u64, p2: &c::extent_p
         return c1;
     }
 
-    if unlikely(flags.contains(c::bch_read_flags::BCH_READ_soft_require_read_device)) {
+    if unlikely(flags.contains(c::bch_read_flags::soft_require_read_device)) {
         if u32::from(p1.ptr.dev()) == preferred_dev {
             if fs.dev_rotational(p2.ptr.dev().into()) {
                 return true;
@@ -301,7 +301,7 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
                 }
 
                 let dev = u32::from(p.ptr.dev());
-                if flags.contains(c::bch_read_flags::BCH_READ_hard_require_read_device) && dev != preferred_dev {
+                if flags.contains(c::bch_read_flags::hard_require_read_device) && dev != preferred_dev {
                     continue;
                 }
 

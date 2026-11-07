@@ -125,7 +125,7 @@ impl DevDataType {
     /// in the table, but not in a device's usage, which has no slot for them.
     pub fn known_data_type(&self) -> Option<DataType> {
         let t = DataType(self.data_type.into());
-        (t.0 < DataType::nr.0).then_some(t)
+        (t.0 < DataType::NR).then_some(t)
     }
 }
 

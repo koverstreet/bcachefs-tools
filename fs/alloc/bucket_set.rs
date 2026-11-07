@@ -53,7 +53,7 @@ impl c::alloc_request {
         self.ptrs.push(ob);
 
         self.nr_effective >= u32::from(self.nr_replicas) ||
-            self.flags.contains(c::bch_write_flags::BCH_WRITE_cached) || ec || durability == 0
+            self.flags.contains(c::bch_write_flags::cached) || ec || durability == 0
     }
 
     /// Whether the open bucket @ob - a write point's, or the partial list's

@@ -171,7 +171,7 @@ fn promote_new(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
     }
 
     use c::bch_write_flags as w;
-    let mut update_opts = c::data_update_opts { write_flags: w::BCH_WRITE_alloc_nowait, ..Default::default() };
+    let mut update_opts = c::data_update_opts { write_flags: w::alloc_nowait, ..Default::default() };
 
     match failed.as_deref() {
         Some(f) if !f.is_empty() => {
@@ -195,7 +195,7 @@ fn promote_new(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
             update_opts.type_ = c::bch_data_update_types::BCH_DATA_UPDATE_promote;
             update_opts.target = opts.promote_target;
             update_opts.extra_replicas = 1;
-            update_opts.write_flags |= w::BCH_WRITE_cached | w::BCH_WRITE_only_specified_devs;
+            update_opts.write_flags |= w::cached | w::only_specified_devs;
         }
     }
 

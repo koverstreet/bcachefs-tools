@@ -42,11 +42,11 @@ use c::bch_inode_flags as F;
 
 /// Each flag's bit in FS_IOC_GETFLAGS's flags, and in FS_IOC_FSGETXATTR's.
 const FLAGS: [(F, u32, u32); 5] = [
-    (F::BCH_INODE_sync,      c::FS_SYNC_FL,      c::FS_XFLAG_SYNC),
-    (F::BCH_INODE_immutable, c::FS_IMMUTABLE_FL, c::FS_XFLAG_IMMUTABLE),
-    (F::BCH_INODE_append,    c::FS_APPEND_FL,    c::FS_XFLAG_APPEND),
-    (F::BCH_INODE_nodump,    c::FS_NODUMP_FL,    c::FS_XFLAG_NODUMP),
-    (F::BCH_INODE_noatime,   c::FS_NOATIME_FL,   c::FS_XFLAG_NOATIME),
+    (F::sync,      c::FS_SYNC_FL,      c::FS_XFLAG_SYNC),
+    (F::immutable, c::FS_IMMUTABLE_FL, c::FS_XFLAG_IMMUTABLE),
+    (F::append,    c::FS_APPEND_FL,    c::FS_XFLAG_APPEND),
+    (F::nodump,    c::FS_NODUMP_FL,    c::FS_XFLAG_NODUMP),
+    (F::noatime,   c::FS_NOATIME_FL,   c::FS_XFLAG_NOATIME),
 ];
 
 /// The inode flags of @fl, each flag's bit there given by @bit - and those
@@ -78,7 +78,7 @@ impl FileattrSet {
     {
         let fs = t.fs();
         let file_type = bi.bi_mode as u32 & c::S_IFMT;
-        let others_may = (F::BCH_INODE_nodump | F::BCH_INODE_noatime).bits();
+        let others_may = (F::nodump | F::noatime).bits();
         if file_type != c::S_IFREG && file_type != c::S_IFDIR && self.flags & !others_may != 0 {
             return fs.throw(bch_errcode::BCH_ERR_EINVAL_setattr_bad_file_type);
         }
@@ -137,9 +137,9 @@ impl InodeInfo {
         }
 
         let flags = self.ei_inode.bi_flags.get();
-        for (flag, attr) in [(F::BCH_INODE_immutable, c::STATX_ATTR_IMMUTABLE),
-                             (F::BCH_INODE_append,    c::STATX_ATTR_APPEND),
-                             (F::BCH_INODE_nodump,    c::STATX_ATTR_NODUMP)] {
+        for (flag, attr) in [(F::immutable, c::STATX_ATTR_IMMUTABLE),
+                             (F::append,    c::STATX_ATTR_APPEND),
+                             (F::nodump,    c::STATX_ATTR_NODUMP)] {
             if flags & flag.bits() != 0 {
                 stat.attributes |= attr as u64;
             }

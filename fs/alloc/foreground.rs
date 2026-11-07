@@ -959,7 +959,7 @@ impl Fs {
     /// Whether @req could allocate from @ca: a device in its target, if it may
     /// only use those, read-write, online, and taking its data type.
     fn dev_may_alloc(&self, ca: &Dev, req: &c::alloc_request) -> bool {
-        if req.flags.contains(c::bch_write_flags::BCH_WRITE_only_specified_devs) && req.target != 0 &&
+        if req.flags.contains(c::bch_write_flags::only_specified_devs) && req.target != 0 &&
            !self.dev_in_target(ca.dev_idx.into(), Target::decode(req.target), &read_lock()) {
             return false;
         }

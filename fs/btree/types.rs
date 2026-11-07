@@ -321,90 +321,70 @@ pub struct bch_fs_btree_cache {
 
 /* Iterator, update, and trigger flags: */
 
-c_xmacro! {
-    BTREE_ITER_FLAGS(x) {
-        (slots),
-        (prev),
-        (intent),
-        (prefetch),
-        (is_extents),
-        (not_extents),
-        (cached),
-        (with_key_cache),
-        (with_journal),
-        (snapshot_field),
-        (all_snapshots),
-        (filter_snapshots),
-        (nofilter_whiteouts),
-        (nopreserve),
-        (nofill),
-        (cached_nofill),
-        (key_cache_fill),
-        (committed),
-        (trim),
-    }
-}
-
-c_xmacro! {
-    BTREE_UPDATE_FLAGS(x) {
-        (internal_snapshot_node),
-        (nojournal),
-        (key_cache_reclaim),
-        (overwrite_triggered),
-    }
-}
-
-c_xmacro! {
-    /*
-     * BTREE_TRIGGER_norun - don't run triggers at all
-     *
-     * BTREE_TRIGGER_transactional - we're running transactional triggers as part of
-     * a transaction commit: triggers may generate new updates
-     *
-     * BTREE_TRIGGER_atomic - we're running atomic triggers during a transaction
-     * commit: we have our journal reservation, we're holding btree node write
-     * locks, and we know the transaction is going to commit (returning an error
-     * here is a fatal error, causing us to go emergency read-only)
-     *
-     * BTREE_TRIGGER_gc - we're in gc/fsck: running triggers to recalculate e.g. disk usage
-     *
-     * transactional, atomic and gc are the phase a trigger runs in, and every
-     * caller passes exactly one - commit's three passes, gc's check, interior
-     * updates. Triggers rely on it: the reflink_p trigger's transactional and
-     * gc passes share one walk position, right only because one of them runs.
-     * XXX: a bitmask can't say "exactly one"; the phase wants to be in the
-     * trigger's type, dependent typing over the flags.
-     *
-     * BTREE_TRIGGER_insert - @new is entering the btree
-     * BTREE_TRIGGER_overwrite - @old is leaving the btree
-     */
-    BTREE_TRIGGER_FLAGS(x) {
-        (norun),
-        (transactional),
-        (atomic),
-        (gc),
-        (insert),
-        (overwrite),
-        (is_discard),
-        (set_needs_reconcile_done),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(BTREE_ITER_FLAG_BIT_)]
+    #[mask(btree_iter_update_trigger_flags: u32, prefix = BTREE_ITER_)]
     pub enum _: u32 {
-        BTREE_ITER_FLAGS(n) => concat(BTREE_ITER_FLAG_BIT_, n),
-        BTREE_UPDATE_FLAGS(n) => concat(BTREE_ITER_FLAG_BIT_, n),
-        BTREE_TRIGGER_FLAGS(n) => concat(BTREE_ITER_FLAG_BIT_, n),
-    }
-}
+        slots,
+        prev,
+        intent,
+        prefetch,
+        is_extents,
+        not_extents,
+        cached,
+        with_key_cache,
+        with_journal,
+        snapshot_field,
+        all_snapshots,
+        filter_snapshots,
+        nofilter_whiteouts,
+        nopreserve,
+        nofill,
+        cached_nofill,
+        key_cache_fill,
+        committed,
+        trim,
 
-c_enum! {
-    #[flags]
-    pub enum btree_iter_update_trigger_flags: u32 {
-        BTREE_ITER_FLAGS(n) => concat(BTREE_ITER_, n) = 1 << (cs::concat(BTREE_ITER_FLAG_BIT_, n) as u32),
-        BTREE_UPDATE_FLAGS(n) => concat(BTREE_UPDATE_, n) = 1 << (cs::concat(BTREE_ITER_FLAG_BIT_, n) as u32),
-        BTREE_TRIGGER_FLAGS(n) => concat(BTREE_TRIGGER_, n) = 1 << (cs::concat(BTREE_ITER_FLAG_BIT_, n) as u32),
+        #[mask_prefix(BTREE_UPDATE_)]
+        internal_snapshot_node,
+        nojournal,
+        key_cache_reclaim,
+        overwrite_triggered,
+
+        /*
+         * BTREE_TRIGGER_norun - don't run triggers at all
+         *
+         * BTREE_TRIGGER_transactional - we're running transactional triggers as part of
+         * a transaction commit: triggers may generate new updates
+         *
+         * BTREE_TRIGGER_atomic - we're running atomic triggers during a transaction
+         * commit: we have our journal reservation, we're holding btree node write
+         * locks, and we know the transaction is going to commit (returning an error
+         * here is a fatal error, causing us to go emergency read-only)
+         *
+         * BTREE_TRIGGER_gc - we're in gc/fsck: running triggers to recalculate e.g. disk usage
+         *
+         * transactional, atomic and gc are the phase a trigger runs in, and every
+         * caller passes exactly one - commit's three passes, gc's check, interior
+         * updates. Triggers rely on it: the reflink_p trigger's transactional and
+         * gc passes share one walk position, right only because one of them runs.
+         * XXX: a bitmask can't say "exactly one"; the phase wants to be in the
+         * trigger's type, dependent typing over the flags.
+         *
+         * BTREE_TRIGGER_insert - @new is entering the btree
+         * BTREE_TRIGGER_overwrite - @old is leaving the btree
+         */
+        #[mask_prefix(BTREE_TRIGGER_)]
+        norun,
+        transactional,
+        atomic,
+        gc,
+        /* written with its prefix: bitflags' insert() is the mask's */
+        BTREE_ITER_FLAG_BIT_insert,
+        overwrite,
+        is_discard,
+        set_needs_reconcile_done,
     }
 }
 

@@ -177,7 +177,7 @@ impl Fs {
         write!(out, "will_retry_target_devices\t{}\n", u8::from(req.bits.will_retry_target_devices()));
         write!(out, "will_retry_all_devices\t{}\n", u8::from(req.bits.will_retry_all_devices()));
         write!(out, "will_retry_set_devices\t{}\n", u8::from(req.bits.will_retry_set_devices()));
-        write!(out, "blocking\t{}\n", u8::from(!req.flags.contains(c::bch_write_flags::BCH_WRITE_alloc_nowait)));
+        write!(out, "blocking\t{}\n", u8::from(!req.flags.contains(c::bch_write_flags::alloc_nowait)));
         write!(out, "free\t{}\n", req.usage.buckets[DataType::free.0 as usize]);
         write!(out, "need_discard\t{}\n", req.usage.buckets[DataType::need_discard.0 as usize]);
         write!(out, "copygc_wait\t{}\n",
@@ -502,7 +502,7 @@ impl TransAttempt<'_, '_> {
                 fs.times[c::bch_time_stats::BCH_TIME_blocked_allocate as usize].track_event_change(true);
 
                 let may_block = !req.cl.is_null() &&
-                    !req.flags.contains(c::bch_write_flags::BCH_WRITE_alloc_nowait) &&
+                    !req.flags.contains(c::bch_write_flags::alloc_nowait) &&
                     !req.will_retry();
                 let err = if !may_block {
                     bch_errcode::BCH_ERR_freelist_empty

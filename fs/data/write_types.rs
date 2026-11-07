@@ -7,55 +7,32 @@ use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::types::{NeBytes, c_default};
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, Init, bitfield, c_enum, c_xmacro, TypeInfo};
+use cstruct_macros::{CStruct, Init, bitfield, c_enum, TypeInfo};
 use nestify::nest;
 use pin_init::pin_data;
 use crate::format::{Bpos, Bversion};
 
-c_xmacro! {
-    BCH_WRITE_FLAGS(x) {
-        (alloc_nowait),
-        (cached),
-        (data_encoded),
-        (pages_stable),
-        (pages_owned),
-        (only_specified_devs),
-        (must_ec),
-        (wrote_data_inline),
-        (check_enospc),
-        (sync),
-        (flush),
-        (move),
-        (replicas_best_effort),
-        (in_worker),
-        (submitted),
-        (convert_unwritten),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(__BCH_WRITE_)]
+    #[mask(bch_write_flags: u32, prefix = BCH_WRITE_)]
     pub enum __bch_write_flags: u32 {
-        BCH_WRITE_FLAGS(f) => concat(__BCH_WRITE_, f),
-    }
-}
-
-c_enum! {
-    #[flags]
-    pub enum bch_write_flags: u32 {
-        BCH_WRITE_FLAGS(f) => concat(BCH_WRITE_, f) = 1 << (c::concat(__BCH_WRITE_, f) as u32),
-    }
-}
-
-macro_rules! write_flag_strs {
-    ($(($n:ident)),* $(,)?) => { [$(stringify!($n)),*] };
-}
-const WRITE_FLAG_STRS: &[&str] = &c::BCH_WRITE_FLAGS!(write_flag_strs);
-
-impl c::bch_write_flags {
-    /// As comma separated names.
-    pub fn to_text(self, out: &mut crate::util::Printbuf) {
-        out.bitflags(WRITE_FLAG_STRS, self.bits().into())
+        alloc_nowait,
+        cached,
+        data_encoded,
+        pages_stable,
+        pages_owned,
+        only_specified_devs,
+        must_ec,
+        wrote_data_inline,
+        check_enospc,
+        sync,
+        flush,
+        __BCH_WRITE_move,
+        replicas_best_effort,
+        in_worker,
+        submitted,
+        convert_unwritten,
     }
 }
 
@@ -248,7 +225,7 @@ crate::has_closure!(c::bch_write_op, cl);
 /// A write point's writes, waiting for their index updates.
 pub type WriteOpList = crate::list!(c::bch_write_op, wp_list);
 
-const _: () = assert!((c::__bch_write_flags::__BCH_WRITE_convert_unwritten as u32) < u16::BITS,
+const _: () = assert!((c::__bch_write_flags::convert_unwritten as u32) < u16::BITS,
                       "the write flags don't fit in bch_write_op's flags");
 
 impl c::bch_write_op {

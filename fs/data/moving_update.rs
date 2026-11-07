@@ -83,7 +83,7 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
             // SAFETY: we're in the attempt, and init() set the read bio up
             let ret = t.result(unsafe {
                 __bch2_read_extent(t.raw(), &mut d.rbio, d.rbio.bio.bi_iter, key.k.start_pos(), btree, key.into(), 0,
-                                   core::ptr::null_mut(), opts.read_flags | c::bch_read_flags::BCH_READ_last_fragment,
+                                   core::ptr::null_mut(), opts.read_flags | c::bch_read_flags::last_fragment,
                                    opts.read_dev as c_int)
             });
             // the read's error messages begin transactions of their own

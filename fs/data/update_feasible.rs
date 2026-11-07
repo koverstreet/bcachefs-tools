@@ -65,7 +65,7 @@ impl Fs {
         let mut trace = trace.map(|out| out.indent(2));
 
         let watermark = watermark(data_opts);
-        let cached = data_opts.write_flags.contains(w::BCH_WRITE_cached);
+        let cached = data_opts.write_flags.contains(w::cached);
 
         // copygc::can_make_progress() reads accounting for dev_leaving
         let mark = self.mark_lock().read();
@@ -168,7 +168,7 @@ impl Fs {
         }
 
         let data_type = if btree.is_some() { DataType::btree } else { DataType::user };
-        let target = if data_opts.write_flags.contains(w::BCH_WRITE_only_specified_devs) {
+        let target = if data_opts.write_flags.contains(w::only_specified_devs) {
             data_opts.target.into()
         } else {
             0
@@ -179,7 +179,7 @@ impl Fs {
             self.devs_list_to_text(out, devs_have);
             out.newline();
 
-            if data_opts.write_flags.contains(w::BCH_WRITE_alloc_nowait) {
+            if data_opts.write_flags.contains(w::alloc_nowait) {
                 write!(out, "nonblocking\n");
             }
         }
@@ -233,7 +233,7 @@ impl TransAttempt<'_, '_> {
 
         // Erasure coding that's sure to fail - too few devices, say -
         // shouldn't cost a read first
-        if data_opts.write_flags.contains(w::BCH_WRITE_must_ec) {
+        if data_opts.write_flags.contains(w::must_ec) {
             // The ec_alloc_failed subtypes park the extent; a restart must
             // stay one, or an extent that only needed a retry is parked
             let mut req = self.alloc_request(data_opts.target.into(), false, core::ptr::null_mut(), 0, replicas,

@@ -21,7 +21,7 @@ use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{c_export, CStruct, c_enum, c_xmacro, TypeInfo};
+use cstruct_macros::{c_export, CStruct, c_enum, TypeInfo};
 use crate::types::c_default;
 use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags};
 
@@ -152,32 +152,22 @@ pub struct bch_io_failures {
     pub(crate) failures: IoFailures<{ c::BCH_BKEY_PTRS_MAX as usize }>,
 }
 
-c_xmacro! {
-    BCH_READ_FLAGS(x) {
-        (retry_if_stale),
-        (may_promote),
-        (user_mapped),
-        (soft_require_read_device),
-        (hard_require_read_device),
-        (last_fragment),
-        (must_bounce),
-        (must_clone),
-        (in_retry),
-        (no_poison_check),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(__BCH_READ_)]
+    #[mask(bch_read_flags: u32, prefix = BCH_READ_)]
+    #[c_list(BCH_READ_FLAGS)]
     pub enum __bch_read_flags: u32 {
-        BCH_READ_FLAGS(n) => concat(__BCH_READ_, n),
-    }
-}
-
-c_enum! {
-    #[flags]
-    pub enum bch_read_flags: u32 {
-        BCH_READ_FLAGS(n) => concat(BCH_READ_, n) = 1 << (c::concat(__BCH_READ_, n) as u32),
+        retry_if_stale,
+        may_promote,
+        user_mapped,
+        soft_require_read_device,
+        hard_require_read_device,
+        last_fragment,
+        must_bounce,
+        must_clone,
+        in_retry,
+        no_poison_check,
     }
 }
 

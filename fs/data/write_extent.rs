@@ -47,7 +47,7 @@ fn init_append_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>, version: Bvers
      */
     op.pos.offset += u64::from(crc.live_size);
 
-    let (pos, cached) = (op.pos, op.has(w::BCH_WRITE_cached));
+    let (pos, cached) = (op.pos, op.has(w::cached));
     op.insert_keys.push_with(c::BKEY_EXTENT_U64s_MAX as usize, |e| {
         *e.k_mut() = c::bkey { type_: BkeyType::extent.0 as u8, p: pos, bversion: version,
                                ..c::bkey::new() };
@@ -395,7 +395,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
 
     let ec_buf = wp.ec_buf();
 
-    if unlikely(op.has(w::BCH_WRITE_data_encoded)) {
+    if unlikely(op.has(w::data_encoded)) {
         match write_prep_encoded_data(op, wp) {
             Err(e) if e.matches(bch_errcode::BCH_ERR_write_encoded_as_is) => {
                 if !ec_buf.is_null() {
@@ -415,8 +415,8 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
 
     if !ec_buf.is_null() ||
        op.bits.compression_opt() != 0 ||
-       (op.bits.csum_type() != 0 && !op.has(w::BCH_WRITE_pages_stable)) ||
-       (is_encryption(op.bits.csum_type()) && !op.has(w::BCH_WRITE_pages_owned)) {
+       (op.bits.csum_type() != 0 && !op.has(w::pages_stable)) ||
+       (is_encryption(op.bits.csum_type()) && !op.has(w::pages_owned)) {
         dst = write_bio_alloc(fs, wp, src, ec_buf);
         bounce = true;
     }
@@ -439,7 +439,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
             assert!(u64::from(size(src)) & (fs.block_bytes() - 1) == 0,
                     "a write of {} bytes, not whole blocks", size(src));
 
-            assert!(!(op.bits.compression_opt() != 0 && op.has(w::BCH_WRITE_data_encoded) &&
+            assert!(!(op.bits.compression_opt() != 0 && op.has(w::data_encoded) &&
                       is_encryption(op.crc.csum_type)), "compressing data still encrypted");
             assert!(!(op.bits.compression_opt() != 0 && !bounce), "compressing without bouncing");
 
@@ -449,7 +449,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
                 let (mut d, mut s) = (0usize, 0usize);
                 let t = unsafe {
                     bio_compress(fs, dst, &mut d, src, &mut s, op.bits.compression_opt().into(), op.pos,
-                                 !op.has(w::BCH_WRITE_pages_stable))
+                                 !op.has(w::pages_stable))
                 };
                 (dst_len, src_len) = (d as u32, s as u32);
                 t as u8
@@ -486,7 +486,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
                 }
             }
 
-            if op.has(w::BCH_WRITE_data_encoded) &&
+            if op.has(w::data_encoded) &&
                !crc_is_compressed(&crc) &&
                is_encryption(op.crc.csum_type) == is_encryption(op.bits.csum_type()) {
                 let compression_type = crc.compression_type;
@@ -517,7 +517,7 @@ pub(crate) fn write_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>) -> Result
                 crc.compression_type = compression_type;
                 crc.nonce = nonce;
             } else {
-                if op.has(w::BCH_WRITE_data_encoded) {
+                if op.has(w::data_encoded) {
                     let old = op.crc;
                     fs.rechecksum_bio(unsafe { Bio::from_raw(src) }, version, old,
                                       None, Some(&mut op.crc),

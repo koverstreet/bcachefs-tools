@@ -1562,29 +1562,29 @@ impl<V: ?Sized + InFamily<AllTypes> + BkeyVal<State: Implies<Validated>>> AsMut<
 bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct BtreeIterFlags: u32 {
-        const SLOTS = c::btree_iter_update_trigger_flags::BTREE_ITER_slots.bits();
-        const PREV = c::btree_iter_update_trigger_flags::BTREE_ITER_prev.bits();
-        const INTENT = c::btree_iter_update_trigger_flags::BTREE_ITER_intent.bits();
-        const PREFETCH = c::btree_iter_update_trigger_flags::BTREE_ITER_prefetch.bits();
-        const IS_EXTENTS = c::btree_iter_update_trigger_flags::BTREE_ITER_is_extents.bits();
-        const NOT_EXTENTS = c::btree_iter_update_trigger_flags::BTREE_ITER_not_extents.bits();
-        const CACHED = c::btree_iter_update_trigger_flags::BTREE_ITER_cached.bits();
-        const KEY_CACHED = c::btree_iter_update_trigger_flags::BTREE_ITER_with_key_cache.bits();
-        const WITH_JOURNAL = c::btree_iter_update_trigger_flags::BTREE_ITER_with_journal.bits();
-        const SNAPSHOT_FIELD = c::btree_iter_update_trigger_flags::BTREE_ITER_snapshot_field.bits();
-        const ALL_SNAPSHOTS = c::btree_iter_update_trigger_flags::BTREE_ITER_all_snapshots.bits();
-        const FILTER_SNAPSHOTS = c::btree_iter_update_trigger_flags::BTREE_ITER_filter_snapshots.bits();
-        const NOFILTER_WHITEOUTS = c::btree_iter_update_trigger_flags::BTREE_ITER_nofilter_whiteouts.bits();
-        const NOPRESERVE = c::btree_iter_update_trigger_flags::BTREE_ITER_nopreserve.bits();
-        const NOFILL = c::btree_iter_update_trigger_flags::BTREE_ITER_nofill.bits();
-        const CACHED_NOFILL = c::btree_iter_update_trigger_flags::BTREE_ITER_cached_nofill.bits();
-        const KEY_CACHE_FILL = c::btree_iter_update_trigger_flags::BTREE_ITER_key_cache_fill.bits();
-        const COMMITTED = c::btree_iter_update_trigger_flags::BTREE_ITER_committed.bits();
+        const SLOTS = c::btree_iter_update_trigger_flags::slots.bits();
+        const PREV = c::btree_iter_update_trigger_flags::prev.bits();
+        const INTENT = c::btree_iter_update_trigger_flags::intent.bits();
+        const PREFETCH = c::btree_iter_update_trigger_flags::prefetch.bits();
+        const IS_EXTENTS = c::btree_iter_update_trigger_flags::is_extents.bits();
+        const NOT_EXTENTS = c::btree_iter_update_trigger_flags::not_extents.bits();
+        const CACHED = c::btree_iter_update_trigger_flags::cached.bits();
+        const KEY_CACHED = c::btree_iter_update_trigger_flags::with_key_cache.bits();
+        const WITH_JOURNAL = c::btree_iter_update_trigger_flags::with_journal.bits();
+        const SNAPSHOT_FIELD = c::btree_iter_update_trigger_flags::snapshot_field.bits();
+        const ALL_SNAPSHOTS = c::btree_iter_update_trigger_flags::all_snapshots.bits();
+        const FILTER_SNAPSHOTS = c::btree_iter_update_trigger_flags::filter_snapshots.bits();
+        const NOFILTER_WHITEOUTS = c::btree_iter_update_trigger_flags::nofilter_whiteouts.bits();
+        const NOPRESERVE = c::btree_iter_update_trigger_flags::nopreserve.bits();
+        const NOFILL = c::btree_iter_update_trigger_flags::nofill.bits();
+        const CACHED_NOFILL = c::btree_iter_update_trigger_flags::cached_nofill.bits();
+        const KEY_CACHE_FILL = c::btree_iter_update_trigger_flags::key_cache_fill.bits();
+        const COMMITTED = c::btree_iter_update_trigger_flags::committed.bits();
         /// Extents: a peek returns its key cut to the window - [position, end),
         /// or backwards [min, position) - the iterator's key with it, so a walk
         /// steps to the window's edge at most, where it ends. An update of
         /// what's returned replaces only the window.
-        const TRIM = c::btree_iter_update_trigger_flags::BTREE_ITER_trim.bits();
+        const TRIM = c::btree_iter_update_trigger_flags::trim.bits();
     }
 }
 
@@ -1594,18 +1594,18 @@ bitflags! {
     /// triggers it runs.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct UpdateTriggerFlags: u32 {
-        const INTERNAL_SNAPSHOT_NODE   = c::btree_iter_update_trigger_flags::BTREE_UPDATE_internal_snapshot_node.bits();
-        const NOJOURNAL                = c::btree_iter_update_trigger_flags::BTREE_UPDATE_nojournal.bits();
-        const KEY_CACHE_RECLAIM        = c::btree_iter_update_trigger_flags::BTREE_UPDATE_key_cache_reclaim.bits();
-        const OVERWRITE_TRIGGERED      = c::btree_iter_update_trigger_flags::BTREE_UPDATE_overwrite_triggered.bits();
-        const NORUN                   = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_norun.bits();
-        const TRANSACTIONAL            = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_transactional.bits();
-        const ATOMIC                   = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_atomic.bits();
-        const GC                       = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_gc.bits();
+        const INTERNAL_SNAPSHOT_NODE   = c::btree_iter_update_trigger_flags::internal_snapshot_node.bits();
+        const NOJOURNAL                = c::btree_iter_update_trigger_flags::nojournal.bits();
+        const KEY_CACHE_RECLAIM        = c::btree_iter_update_trigger_flags::key_cache_reclaim.bits();
+        const OVERWRITE_TRIGGERED      = c::btree_iter_update_trigger_flags::overwrite_triggered.bits();
+        const NORUN                   = c::btree_iter_update_trigger_flags::norun.bits();
+        const TRANSACTIONAL            = c::btree_iter_update_trigger_flags::transactional.bits();
+        const ATOMIC                   = c::btree_iter_update_trigger_flags::atomic.bits();
+        const GC                       = c::btree_iter_update_trigger_flags::gc.bits();
         const INSERT                   = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_insert.bits();
-        const OVERWRITE                = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_overwrite.bits();
-        const IS_DISCARD               = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_is_discard.bits();
-        const SET_NEEDS_RECONCILE_DONE = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_set_needs_reconcile_done.bits();
+        const OVERWRITE                = c::btree_iter_update_trigger_flags::overwrite.bits();
+        const IS_DISCARD               = c::btree_iter_update_trigger_flags::is_discard.bits();
+        const SET_NEEDS_RECONCILE_DONE = c::btree_iter_update_trigger_flags::set_needs_reconcile_done.bits();
     }
 }
 
@@ -1613,13 +1613,13 @@ bitflags! {
     /// The bits of bch_trans_commit_flags above the watermark.
     #[derive(Clone, Copy)]
     pub struct CommitFlags: u32 {
-        const NO_ENOSPC             = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_enospc.bits();
-        const NO_CHECK_RW           = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_check_rw.bits();
-        const NO_JOURNAL_RES        = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_journal_res.bits();
-        const NO_SKIP_NOOPS         = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_skip_noops.bits();
-        const JOURNAL_RECLAIM       = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_journal_reclaim.bits();
-        const JOURNAL_REPLAY        = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_journal_replay.bits();
-        const SKIP_ACCOUNTING_APPLY = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_skip_accounting_apply.bits();
+        const NO_ENOSPC             = c::bch_trans_commit_flags::no_enospc.bits();
+        const NO_CHECK_RW           = c::bch_trans_commit_flags::no_check_rw.bits();
+        const NO_JOURNAL_RES        = c::bch_trans_commit_flags::no_journal_res.bits();
+        const NO_SKIP_NOOPS         = c::bch_trans_commit_flags::no_skip_noops.bits();
+        const JOURNAL_RECLAIM       = c::bch_trans_commit_flags::journal_reclaim.bits();
+        const JOURNAL_REPLAY        = c::bch_trans_commit_flags::journal_replay.bits();
+        const SKIP_ACCOUNTING_APPLY = c::bch_trans_commit_flags::skip_accounting_apply.bits();
     }
 }
 

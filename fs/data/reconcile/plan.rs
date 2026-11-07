@@ -103,13 +103,13 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
         // and the stale write is then discarded at index update time
         // (data_update_useless_write_fail). Better to fail with
         // freelist_empty and retry from a fresh read.
-        write_flags: w::BCH_WRITE_alloc_nowait,
+        write_flags: w::alloc_nowait,
         ..Default::default()
     };
     // Replicas can't be added to or dropped from btree nodes incrementally:
     // they always need to be able to spill over to the whole filesystem
     if r.hipri() == 0 && !k.k.is_btree_ptr() {
-        d.write_flags |= w::BCH_WRITE_only_specified_devs;
+        d.write_flags |= w::only_specified_devs;
     }
 
     // An unknown checksum or compression type in the entry is an incompat
@@ -170,7 +170,7 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
             d.extra_replicas = 1;
             d.bits.set_no_devs_have(true);
             if only(o::BCH_RECONCILE_erasure_code) {
-                d.write_flags |= w::BCH_WRITE_must_ec;
+                d.write_flags |= w::must_ec;
             }
         }
     }

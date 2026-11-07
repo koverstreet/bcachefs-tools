@@ -492,7 +492,7 @@ impl BcachefsHandle {
 
     /// Query device usage (v2 with flex array, v1 fallback).
     pub(crate) fn dev_usage(&self, dev_idx: u32) -> Result<DevUsage, Errno> {
-        let nr_data_types = DataType::nr.0 as usize;
+        let nr_data_types = DataType::NR as usize;
 
         let mut buf = IoctlBuf::<Head<bch_ioctl_dev_usage_v2>>::new(nr_data_types);
         let hdr = buf.hdr_mut();
@@ -557,7 +557,7 @@ impl DevUsage {
     /// Caps at BCH_DATA_NR to avoid UB if the kernel returns more types than we know.
     pub fn iter_typed(&self) -> impl Iterator<Item = (DataType, &DevUsageType)> {
 
-        let max = DataType::nr.0 as usize;
+        let max = DataType::NR as usize;
         self.data_types.iter().enumerate()
             .take(max)
             .map(|(i, dt)| (DataType(u32::from(i as u8)), dt))

@@ -209,12 +209,12 @@ fn bkey_to_replicas(fs: &Fs, e: &mut EntryBuf<'_>, k: BkeySC<'_>) {
     e.0[1] = 0;
 
     if let Some(s) = k.arm::<c::Stripe>() {
-        e.start(D::BCH_DATA_parity, s.v().nr_data() as u8);
+        e.start(D::parity, s.v().nr_data() as u8);
         for ptr in s.v().block_ptrs() {
             e.add_dev(ptr.dev());
         }
     } else if let Some(kp) = k.arm::<Ptrs>() {
-        e.start(if k.k.is_btree_ptr() { D::BCH_DATA_btree } else { D::BCH_DATA_user }, 1);
+        e.start(if k.k.is_btree_ptr() { D::btree } else { D::user }, 1);
         for p in kp.ptrs_decoded(fs) {
             if p.ptr.cached() != 0 {
                 continue;
@@ -369,7 +369,7 @@ pub(crate) fn can_read_with_devs(e: &Entry, devs: &c::bch_devs_mask, flags: u32,
 {
     type D = DataType;
 
-    if u32::from(e.data_type) == D::BCH_DATA_cached.0 {
+    if u32::from(e.data_type) == D::cached.0 {
         return true;
     }
 
@@ -382,7 +382,7 @@ pub(crate) fn can_read_with_devs(e: &Entry, devs: &c::bch_devs_mask, flags: u32,
         return true;
     }
 
-    let metadata = u32::from(e.data_type) < D::BCH_DATA_user.0;
+    let metadata = u32::from(e.data_type) < D::user.0;
     let mut dflags = 0;
     if online < usize::from(e.nr_required) {
         dflags |= if metadata { c::BCH_FORCE_IF_METADATA_LOST } else { c::BCH_FORCE_IF_DATA_LOST };
@@ -432,7 +432,7 @@ pub(crate) fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::bc
     }
     drop(rcu);
 
-    let (j, b, u) = (D::BCH_DATA_journal.0 as usize, D::BCH_DATA_btree.0 as usize, D::BCH_DATA_user.0 as usize);
+    let (j, b, u) = (D::journal.0 as usize, D::btree.0 as usize, D::user.0 as usize);
 
     for (t, name) in [(j, "journal"), (b, "btree"), (u, "user data")] {
         if online[t] == 0 {

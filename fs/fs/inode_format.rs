@@ -167,7 +167,11 @@ c_enum! {
     }
 }
 
-c_xmacro! {
+/* bits 20+ reserved for packed fields below: */
+c_enum! {
+    #[open]
+    #[prefix(__BCH_INODE_)]
+    #[mask(bch_inode_flags: u32, prefix = BCH_INODE_)]
     /*
      * BCH_INODE_unlinked means we definitively know that there isn't, and
      * shouldn't be, a dirent pointing to this inode: it is (or is about to
@@ -206,37 +210,22 @@ c_xmacro! {
      * from then on. Version upgrades always run, so consumers can trust
      * the bits unconditionally.
      */
-    BCH_INODE_FLAGS(x) {
-        (sync, 0),
-        (immutable, 1),
-        (append, 2),
-        (nodump, 3),
-        (noatime, 4),
-        (i_size_dirty, 5),
-        (i_sectors_dirty, 6),
-        (unlinked, 7),
-        (backptr_untrusted, 8),
-        (has_child_snapshot, 9),
-        (has_case_insensitive, 10),
-        (31bit_dirent_offset, 11),
-        (has_inode_opts, 12),
-        (has_access_acl, 13),
-        (has_default_acl, 14),
-    }
-}
-
-/* bits 20+ reserved for packed fields below: */
-c_enum! {
-    #[flags]
-    pub enum bch_inode_flags: u32 {
-        BCH_INODE_FLAGS(t, n) => concat(BCH_INODE_, t) = 1 << (n as u32),
-    }
-}
-
-c_enum! {
-    #[open]
     pub enum __bch_inode_flags: u32 {
-        BCH_INODE_FLAGS(t, n) => concat(__BCH_INODE_, t) = n,
+        sync = 0,
+        immutable = 1,
+        append = 2,
+        nodump = 3,
+        noatime = 4,
+        i_size_dirty = 5,
+        i_sectors_dirty = 6,
+        unlinked = 7,
+        backptr_untrusted = 8,
+        has_child_snapshot = 9,
+        has_case_insensitive = 10,
+        __BCH_INODE_31bit_dirent_offset = 11,
+        has_inode_opts = 12,
+        has_access_acl = 13,
+        has_default_acl = 14,
     }
 }
 

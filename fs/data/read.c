@@ -1560,7 +1560,7 @@ err:
 }
 
 static const char * const bch2_read_bio_flags[] = {
-#define x(n)	#n,
+#define x(n, ...)	#n,
 	BCH_READ_FLAGS()
 #undef x
 	NULL

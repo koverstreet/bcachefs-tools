@@ -166,7 +166,7 @@ fn unlink_and_rm(
         },
     )?;
 
-    if child.bi_flags & c::bch_inode_flags::BCH_INODE_unlinked.bits() == 0 {
+    if child.bi_flags & c::bch_inode_flags::unlinked.bits() == 0 {
         return Ok(());
     }
 
@@ -346,9 +346,9 @@ fn copy_xattrs(
             acl = v;
             acl_flags.push(
                 if xattr_type == XattrType::POSIX_ACL_ACCESS {
-                    c::bch_inode_flags::BCH_INODE_has_access_acl
+                    c::bch_inode_flags::has_access_acl
                 } else {
-                    c::bch_inode_flags::BCH_INODE_has_default_acl
+                    c::bch_inode_flags::has_default_acl
                 });
             &acl[..]
         } else {

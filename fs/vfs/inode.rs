@@ -229,10 +229,10 @@ impl InodeInfo {
         }
 
         use c::bch_inode_flags as F;
-        for (on, flag) in [(bi.flag(F::BCH_INODE_sync),      c::S_SYNC),
-                           (bi.flag(F::BCH_INODE_immutable), c::S_IMMUTABLE),
-                           (bi.flag(F::BCH_INODE_append),    c::S_APPEND),
-                           (bi.flag(F::BCH_INODE_noatime),   c::S_NOATIME),
+        for (on, flag) in [(bi.flag(F::sync),      c::S_SYNC),
+                           (bi.flag(F::immutable), c::S_IMMUTABLE),
+                           (bi.flag(F::append),    c::S_APPEND),
+                           (bi.flag(F::noatime),   c::S_NOATIME),
                            (bi.casefold(fs),                 c::S_CASEFOLD)] {
             v.set_flag(flag, on);
         }

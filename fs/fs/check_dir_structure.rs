@@ -356,7 +356,7 @@ fn check_directory_structure(fs: &Fs) -> Result<(), BchError> {
             // directory but the root of an unlinked subvolume, and a subvolume
             // root ends every walk - so skipping these can't hide a directory
             // loop:
-            if inode::flags(k) & c::bch_inode_flags::BCH_INODE_unlinked.bits() != 0 {
+            if inode::flags(k) & c::bch_inode_flags::unlinked.bits() != 0 {
                 return Ok(());
             }
 

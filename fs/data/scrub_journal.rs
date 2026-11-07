@@ -212,7 +212,7 @@ fn scrub_extent(m: &Moving<'_>, found: &Gather<Bad, waiter::Sync>, io_opts: &c::
                 level: u32, k: BkeySC<'_>, dev: u32) -> Result<(), BchError> {
     let data_opts = c::data_update_opts {
         type_:      c::bch_data_update_types::BCH_DATA_UPDATE_scrub_no_repair,
-        read_flags: c::bch_read_flags::BCH_READ_hard_require_read_device,
+        read_flags: c::bch_read_flags::hard_require_read_device,
         read_dev:   dev,
         ..Default::default()
     };

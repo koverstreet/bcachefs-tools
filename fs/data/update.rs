@@ -573,7 +573,7 @@ impl c::data_update {
         self.op.target = data_opts.target;
         self.op.write_point = wp;
         use c::bch_write_flags as w;
-        self.op.set(w::BCH_WRITE_pages_stable | w::BCH_WRITE_pages_owned | w::BCH_WRITE_data_encoded |
+        self.op.set(w::pages_stable | w::pages_owned | w::data_encoded |
                     w::BCH_WRITE_move | data_opts.write_flags);
         self.op.bits.set_compression_opt(io_opts.background_compression);
         let watermark = (data_opts.commit_flags.bits() & c::BCH_WATERMARK_MASK)
@@ -672,7 +672,7 @@ impl c::data_update {
             // lost durability needs every copy it asks for
             let d = k.durability(t)?;
             if d.online >= io_opts.data_replicas {
-                self.op.set(c::bch_write_flags::BCH_WRITE_replicas_best_effort);
+                self.op.set(c::bch_write_flags::replicas_best_effort);
             }
 
             // Short of data_replicas, don't rereplicate up to it unless
@@ -682,7 +682,7 @@ impl c::data_update {
                 self.op.res.nr_replicas.get();
             if keeping == 0 {
                 nr = nr.max(1);
-                self.op.clear(c::bch_write_flags::BCH_WRITE_cached);
+                self.op.clear(c::bch_write_flags::cached);
             }
             self.op.bits.set_nr_replicas(nr as u8);
 

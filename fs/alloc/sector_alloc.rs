@@ -64,7 +64,7 @@ impl c::alloc_request {
     /// Whether, with no target, it could go anywhere: unless it's to stay on
     /// its target's devices.
     fn may_widen(&self) -> bool {
-        self.target != 0 && !self.flags.contains(w::BCH_WRITE_only_specified_devs)
+        self.target != 0 && !self.flags.contains(w::only_specified_devs)
     }
 }
 
@@ -104,7 +104,7 @@ impl<'f> TransAttempt<'_, 'f> {
             req.devs_may_alloc = fs.target_rw_devs(req.data_type, Target::decode(req.target));
             // writes of cached data put their one copy on cache devices and
             // durable ones alike
-            if req.flags.contains(w::BCH_WRITE_cached) {
+            if req.flags.contains(w::cached) {
                 let cached = fs.target_rw_devs(DataType::cached, Target::decode(req.target));
                 req.devs_may_alloc.d.or(&cached.d);
             }
@@ -122,7 +122,7 @@ impl<'f> TransAttempt<'_, 'f> {
             // first drops the target: a targeted write would spill outside it
             // instead of replicating within it
             if matches(err, bch_errcode::BCH_ERR_ec_alloc_failed) {
-                if req.flags.contains(w::BCH_WRITE_must_ec) {
+                if req.flags.contains(w::must_ec) {
                     return Err(err.expect("an error"));
                 }
                 req.bits.set_ec(false);
@@ -152,7 +152,7 @@ impl<'f> TransAttempt<'_, 'f> {
             }
 
             if req.nr_effective < u32::from(req.nr_replicas) && req.bits.ec() {
-                if req.flags.contains(w::BCH_WRITE_must_ec) {
+                if req.flags.contains(w::must_ec) {
                     return fs.throw(bch_errcode::BCH_ERR_ec_alloc_failed_no_usable_block);
                 }
                 req.bits.set_ec(false);
@@ -168,7 +168,7 @@ impl<'f> TransAttempt<'_, 'f> {
                 // should have refused; no_progress is space copygc hasn't
                 // compacted yet
                 if req.nr_effective < u32::from(req.nr_replicas) &&
-                   !req.flags.contains(w::BCH_WRITE_replicas_best_effort) {
+                   !req.flags.contains(w::replicas_best_effort) {
                     fs.sb_error_count(match matches(err, bch_errcode::BCH_ERR_insufficient_devices) {
                         true  => SbErrorId::write_degraded_insufficient_devices,
                         false => SbErrorId::write_degraded_no_progress,
@@ -182,19 +182,19 @@ impl<'f> TransAttempt<'_, 'f> {
             // wait
             if matches(err, bch_errcode::BCH_ERR_freelist_empty) &&
                !matches(err, bch_errcode::BCH_ERR_bucket_alloc_no_progress) &&
-               !req.cl.is_null() && !req.flags.contains(w::BCH_WRITE_alloc_nowait) {
+               !req.cl.is_null() && !req.flags.contains(w::alloc_nowait) {
                 continue;
             }
 
             if let Some(e) = err {
                 return Err(e);
             }
-            assert!(req.nr_effective != 0 || req.flags.contains(w::BCH_WRITE_cached),
+            assert!(req.nr_effective != 0 || req.flags.contains(w::cached),
                     "a write allocated nothing");
             break;
         }
 
-        if req.bits.ec() && req.flags.contains(w::BCH_WRITE_must_ec) &&
+        if req.bits.ec() && req.flags.contains(w::must_ec) &&
            !req.ptrs.iter(fs).any(|ob| !ob.ec.load(Relaxed).is_null()) {
             return fs.throw(bch_errcode::BCH_ERR_ec_alloc_failed_no_ec_bucket);
         }
@@ -202,7 +202,7 @@ impl<'f> TransAttempt<'_, 'f> {
         // a target with durability 0 devices: a cached copy on one too - not
         // for moves, which move only the data there is, nor for writes of
         // cached data, which are on the cache devices already
-        if !req.flags.intersects(w::BCH_WRITE_move | w::BCH_WRITE_cached) &&
+        if !req.flags.intersects(w::BCH_WRITE_move | w::cached) &&
            req.data_type == DataType::user {
             // from the target asked for: devs_may_alloc's been narrowed by
             // each copy, and may have been widened
@@ -261,7 +261,7 @@ impl<'f> TransAttempt<'_, 'f> {
             req.ca = core::ptr::null_mut();
             req.wake_all_counter_snapshot = a.wake_all_counter.load(Relaxed) as u32;
             req.bits.set_will_retry_all_devices(req.may_widen());
-            req.bits.set_will_retry_target_devices(!req.flags.contains(w::BCH_WRITE_alloc_nowait));
+            req.bits.set_will_retry_target_devices(!req.flags.contains(w::alloc_nowait));
             req.bits.set_copygc_can_make_progress(false);
             req.bits.set_trace_alloc_failed(false);
             req.ptrs.nr = 0;

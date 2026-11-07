@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::util::vstructs::Head;
-use cstruct_macros::{c_name, c_const, c_enum, c_typedef, c_xmacro, counters, tagged_union, whole, CStruct, Plain,
+use cstruct_macros::{c_name, c_const, c_enum, c_typedef, counters, tagged_union, whole, CStruct, Plain,
                      TypeInfo};
 use crate::format::Bpos;
 
@@ -63,42 +63,30 @@ c_const! {
     pub const BCH_ACCOUNTING_MAX_COUNTERS: u32 = 3;
 }
 
-c_xmacro! {
-    BCH_DATA_TYPES(x) {
-        (free, 0),
-        (sb, 1),
-        (journal, 2),
-        (btree, 3),
-        (user, 4),
-        (cached, 5),
-        (parity, 6),
-        (stripe, 7),
-        (need_gc_gens, 8),
-        (need_discard, 9),
-        (unstriped, 10),
-        (multiple, 11),
-    }
-}
-
 c_enum! {
     #[open]
     #[c_name(bch_data_type)]
+    #[prefix(BCH_DATA_)]
+    #[nr(BCH_DATA_NR)]
+    #[mask(DataTypes: u16, prefix = BCH_DATA_MASK_, c_name = bch_data_types)]
     pub enum DataType: u32 {
-        BCH_DATA_TYPES(t, ..) => concat(BCH_DATA_, t),
-        BCH_DATA_NR,
+        free = 0,
+        sb = 1,
+        journal = 2,
+        btree = 3,
+        user = 4,
+        cached = 5,
+        parity = 6,
+        stripe = 7,
+        need_gc_gens = 8,
+        need_discard = 9,
+        unstriped = 10,
+        multiple = 11,
     }
 }
 
 /// C's name, as bindgen's declarations of C functions spell it.
 pub type bch_data_type = DataType;
-
-c_enum! {
-    #[flags]
-    #[c_name(bch_data_types)]
-    pub enum DataTypes: u16 {
-        BCH_DATA_TYPES(t, n) => concat(BCH_DATA_MASK_, t) = 1 << n,
-    }
-}
 
 impl From<DataType> for DataTypes {
     fn from(t: DataType) -> Self {

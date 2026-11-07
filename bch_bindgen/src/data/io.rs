@@ -114,7 +114,7 @@ impl WriteOp {
         op.subvol      = subvol;
         op.pos         = spos(inum, offset >> 9, u32::MAX);
         op.new_i_size  = new_i_size;
-        op.set(c::bch_write_flags::BCH_WRITE_sync);
+        op.set(c::bch_write_flags::sync);
 
         let submit_err = op.res.add((data.len() >> 9) as u64, replicas, c::bch_reservation_flags::empty()).err();
         if submit_err.is_none() {

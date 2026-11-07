@@ -447,25 +447,6 @@ pub type opt_id = c::bch_opt_id;
 #[allow(non_camel_case_types)]
 pub type btree_id = Btree;
 
-// The x-macro enums' values by their list names - btree_id::extents for
-// BTREE_ID_extents - and their count: an x-macro list, with [the enum, the
-// prefix its values have, nr|max = its count].
-macro_rules! newtype_enum_aliases {
-    ([$ty:ident, $prefix:ident, $nr_alias:ident = $nr:ident] $(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => {
-        #[allow(non_upper_case_globals)]
-        impl c::$ty {
-            $(newtype_enum_aliases!(@alias $prefix $name);)*
-            pub const $nr_alias: Self = Self::$nr;
-        }
-    };
-    // a name that isn't an identifier - 31bit_dirent_offset - has none
-    (@alias $prefix:ident $name:ident) => { ::paste::paste! {
-        pub const $name: Self = Self::[<$prefix _ $name>];
-    } };
-    (@alias $prefix:ident $name:tt) => {};
-}
-c::BCH_DATA_TYPES!(newtype_enum_aliases [DataType, BCH_DATA, nr = BCH_DATA_NR]);
-
 macro_rules! btree_ids_known {
     ($(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
         pub const BTREE_IDS_KNOWN: &[Btree] = &[$(Btree::$name,)*];

@@ -100,7 +100,7 @@ fn nocow_write_convert_unwritten(op: &mut Op) {
             let mut iter = BtreeIter::new(&trans, Btree::extents, orig.k().start_pos(),
                                           BtreeIterFlags::INTENT | BtreeIterFlags::TRIM);
             iter.for_each_max(&trans, orig.k().p, |t, iter, k| {
-                let flush = op.has(w::BCH_WRITE_flush) && is_last && bkey_ge(k.k.p, orig.k().p);
+                let flush = op.has(w::flush) && is_last && bkey_ge(k.k.p, orig.k().p);
 
                 nocow_write_convert_one_unwritten(t, iter, op, orig, k)?;
                 t.commit_flush(Some(&op.res), flush.then_some(&op.cl), CommitFlags::NO_ENOSPC)?;
@@ -121,7 +121,7 @@ fn nocow_write_convert_unwritten(op: &mut Op) {
 fn __nocow_write_done(op: &mut Op) {
     if unlikely(op.io_error != 0) {
         op.set_error(op.fs().err(bch_errcode::BCH_ERR_data_write_io));
-    } else if unlikely(op.has(w::BCH_WRITE_convert_unwritten)) {
+    } else if unlikely(op.has(w::convert_unwritten)) {
         nocow_write_convert_unwritten(op);
     }
 }
@@ -169,7 +169,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
     let i_size = inode_get_i_size(t, spos(0, op.pos.inode, snapshot))?;
 
     if op.new_i_size > i_size {
-        op.set(w::BCH_WRITE_convert_unwritten);
+        op.set(w::convert_unwritten);
     }
 
     let mut iter = BtreeIter::new(t, Btree::extents, spos(op.pos.inode, op.pos.offset, snapshot),
@@ -252,7 +252,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
                 }
 
                 if ptr.unwritten() != 0 {
-                    op.set(w::BCH_WRITE_convert_unwritten);
+                    op.set(w::convert_unwritten);
                 }
             }
         }
@@ -266,7 +266,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
                 bio
             }
         } else {
-            op.set(w::BCH_WRITE_submitted);
+            op.set(w::submitted);
             &raw mut op.wbio.bio
         };
 
@@ -278,7 +278,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
         bio.bi_end_io  = Some(write_endio);
         bio.bi_private = op.closure().into_ref().as_ptr().cast();
         bio.bi_opf    |= c::req_op_REQ_OP_WRITE;
-        if op.has(w::BCH_WRITE_flush) {
+        if op.has(w::flush) {
             bio.bi_opf |= c::REQ_FUA;
         }
 
@@ -286,10 +286,10 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
 
         unsafe { submit_wbio_replicas(to_wbio(bio), op.fs(), DataType::user, copy.key(), Some(cas)) };
 
-        if op.has(w::BCH_WRITE_convert_unwritten) {
+        if op.has(w::convert_unwritten) {
             op.insert_keys.push_key(copy.key());
         }
-        if op.has(w::BCH_WRITE_submitted) {
+        if op.has(w::submitted) {
             return Ok(());
         }
     }
@@ -304,7 +304,7 @@ pub(crate) fn nocow_write(mut op: Running<Op>) -> Result<(), Running<Op>> {
         return Err(op);
     }
 
-    op.clear(w::BCH_WRITE_convert_unwritten);
+    op.clear(w::convert_unwritten);
 
     let ret = {
         let trans = btree_trans!(fs);
@@ -320,16 +320,16 @@ pub(crate) fn nocow_write(mut op: Running<Op>) -> Result<(), Running<Op>> {
     if let Err(e) = ret {
         write_op_error(&op, op.pos.offset, format_args!("bch2_nocow_write(): btree lookup error: {e}"));
         op.set_error(e);
-        op.set(w::BCH_WRITE_submitted);
+        op.set(w::submitted);
     }
 
-    if !op.has(w::BCH_WRITE_submitted) {
+    if !op.has(w::submitted) {
         /* fallback to cow write path */
         op.sync();
         __nocow_write_done(&mut op);
         op.insert_keys.clear();
         Err(op)
-    } else if op.has(w::BCH_WRITE_sync) {
+    } else if op.has(w::sync) {
         op.sync();
         nocow_write_done(op);
         Ok(())

@@ -276,11 +276,11 @@ pub fn inode_should_reattach(inode: &c::bch_inode_unpacked) -> bool {
     // renamed after a snapshot, its old version is disconnected, as expected.
     // Taking a snapshot always rewrites the root inode, so a version with
     // has_child_snapshot is never the visible one.
-    if inode.bi_subvol != 0 && inode.flag(c::bch_inode_flags::BCH_INODE_has_child_snapshot) {
+    if inode.bi_subvol != 0 && inode.flag(c::bch_inode_flags::has_child_snapshot) {
         return false;
     }
 
-    !inode.has_backpointer() && !inode.flag(c::bch_inode_flags::BCH_INODE_unlinked)
+    !inode.has_backpointer() && !inode.flag(c::bch_inode_flags::unlinked)
 }
 
 /// Hide the dirent at @d_pos from @snapshot, a descendant of its snapshot,

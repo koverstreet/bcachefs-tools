@@ -734,7 +734,7 @@ use crate::util::log::{LogMsg, Ratelimit};
 use crate::util::refcount::TryRefcount;
 use crate::util::time_stats::TimeStats;
 use crate::util::workqueue::Queue;
-use crate::util::{Nsecs, Printbuf};
+use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{btree_trans, log_msg_ratelimited, prt};
 use c::bch_write_flags as w;
 use c::{WritePointStateWriter, WritePointWrites};
@@ -815,8 +815,8 @@ fn write_index_default(op: &mut Op) -> Result<(), BchError> {
     assert!(subvol != 0, "a write with no subvolume");
 
     let trans = btree_trans!(fs);
-    let check_enospc = op.has(w::BCH_WRITE_check_enospc);
-    let flush = op.has(w::BCH_WRITE_flush);
+    let check_enospc = op.has(w::check_enospc);
+    let flush = op.has(w::flush);
 
     loop {
         let next = lockrestart_do(&trans, |t| {
@@ -1052,7 +1052,7 @@ extern "C" fn __write_done(mut op: Running<Op>) {
 }
 
 pub(crate) fn write_done(op: Running<Op>) {
-    if op.has(w::BCH_WRITE_sync) {
+    if op.has(w::sync) {
         op.sync();
     }
 
@@ -1163,7 +1163,7 @@ fn __write_index(op: &mut Op) {
     if let Err(e) = ret {
         op.insert_keys.clear();
         op.set_error(e);
-        op.set(w::BCH_WRITE_submitted);
+        op.set(w::submitted);
     }
 
     /* If some a bucket wasn't written, we can't erasure code it: */
@@ -1212,7 +1212,7 @@ extern "C" fn write_index(mut op: Running<Op>) {
     let wp = op.wp.expect("an index update queued on no write point");
     let wq = index_update_wq(&op);
 
-    if op.has(w::BCH_WRITE_submitted) && op.has(w::BCH_WRITE_move) {
+    if op.has(w::submitted) && op.has(w::BCH_WRITE_move) {
         let fs = op.fs();
         unsafe { crate::util::bio::pages::free_pages_pool(&fs.bio_bounce, &mut op.wbio.bio) };
     }
@@ -1261,11 +1261,11 @@ pub unsafe extern "C" fn write_point_do_index_updates(work: *mut c::work_struct)
         let Some(op) = op else { break };
         let mut op = unsafe { Running::<Op>::from_raw(op) };
 
-        op.set(w::BCH_WRITE_in_worker);
+        op.set(w::in_worker);
 
         __write_index(&mut op);
 
-        if !op.has(w::BCH_WRITE_submitted) {
+        if !op.has(w::submitted) {
             __write(op);
         } else {
             write_done(op);
@@ -1336,8 +1336,8 @@ pub(crate) fn __write(mut op: Running<Op>) {
      * synchronously here if we weren't able to submit all of the IO at
      * once, as that signals backpressure to the caller.
      */
-    let wait_on_allocator_sync = op.has(w::BCH_WRITE_sync) ||
-        (!op.has(w::BCH_WRITE_submitted) && !op.has(w::BCH_WRITE_in_worker));
+    let wait_on_allocator_sync = op.has(w::sync) ||
+        (!op.has(w::submitted) && !op.has(w::in_worker));
 
     let _noio = MemallocFlags::noio();
 
@@ -1368,7 +1368,7 @@ pub(crate) fn __write(mut op: Running<Op>) {
             let ret = lockrestart_do(&trans, |t| {
                 let cl = (!io_in_flight).then(|| op.closure().into_ref().as_ptr()).unwrap_or(core::ptr::null_mut());
                 let mut req = t.alloc_request(op.target.into(),
-                                              op.opts.erasure_code != 0 && !op.has(w::BCH_WRITE_cached),
+                                              op.opts.erasure_code != 0 && !op.has(w::cached),
                                               &mut op.devs_have,
                                               op.bits.nr_replicas().into(),
                                               op.opts.data_replicas.into(),
@@ -1431,7 +1431,7 @@ pub(crate) fn __write(mut op: Running<Op>) {
                 Ok(Some(r)) => r,
                 Ok(None) => continue 'again,
                 Err(e) => {
-                    op.set(w::BCH_WRITE_submitted);
+                    op.set(w::submitted);
                     op.set_error(e);
 
                     /* Extra info on errors from the allocator: */
@@ -1443,7 +1443,7 @@ pub(crate) fn __write(mut op: Running<Op>) {
             };
 
             if !more {
-                op.set(w::BCH_WRITE_submitted);
+                op.set(w::submitted);
             }
 
             let bio = unsafe { &mut *bio };
@@ -1476,12 +1476,12 @@ pub(crate) fn __write(mut op: Running<Op>) {
             }
         }
 
-        if op.has(w::BCH_WRITE_sync) {
+        if op.has(w::sync) {
             op.sync();
 
             __write_index(&mut op);
 
-            if !op.has(w::BCH_WRITE_submitted) {
+            if !op.has(w::submitted) {
                 continue 'again;
             }
 
@@ -1501,8 +1501,8 @@ fn write_data_inline(mut op: Running<Op>, data_len: u32) {
 
     op.failed.reset_devs();
 
-    op.set(w::BCH_WRITE_wrote_data_inline);
-    op.set(w::BCH_WRITE_submitted);
+    op.set(w::wrote_data_inline);
+    op.set(w::submitted);
 
     fs.check_set_feature(SbFeature::inline_data);
 
@@ -1582,8 +1582,8 @@ pub extern "C" fn bch2_write(mut op: Running<Op>) {
     op.list_idx = fs.async_objs[c::bch_async_obj_lists::BCH_ASYNC_OBJ_LIST_write_op as usize].list
         .add(NonNull::new(obj).expect("an op")).unwrap_or(0);
 
-    if op.has(w::BCH_WRITE_only_specified_devs) {
-        op.set(w::BCH_WRITE_alloc_nowait);
+    if op.has(w::only_specified_devs) {
+        op.set(w::alloc_nowait);
     }
 
     op.start_time = local_clock();

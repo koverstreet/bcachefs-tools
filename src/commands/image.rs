@@ -170,7 +170,7 @@ fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::
                 return Ok(false);
             }
 
-            opts.write_flags |= c::bch_write_flags::BCH_WRITE_only_specified_devs;
+            opts.write_flags |= c::bch_write_flags::only_specified_devs;
             Ok(true)
         })
         .map_err(|e| anyhow!("moving btree {}: {}", btree_id, e))?;

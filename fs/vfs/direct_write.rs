@@ -264,12 +264,12 @@ unsafe fn dio_write_loop(dio: *mut Dio) -> isize {
         op.devs_need_flush = &inode.ei_devs_need_flush;
 
         if sync {
-            op.set(w::BCH_WRITE_sync);
+            op.set(w::sync);
         }
         if d.bits.flush() != 0 {
-            d.op.set(w::BCH_WRITE_flush);
+            d.op.set(w::flush);
         }
-        d.op.set(w::BCH_WRITE_check_enospc);
+        d.op.set(w::check_enospc);
 
         let sectors = d.bio_sectors();
         if let Err(e) = inode.quota_reservation_add(&mut d.quota_res, sectors, true) {

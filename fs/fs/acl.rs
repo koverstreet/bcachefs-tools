@@ -151,8 +151,8 @@ impl AclType {
 
     pub fn inode_flag(self) -> c::bch_inode_flags {
         match self {
-            Self::Access  => c::bch_inode_flags::BCH_INODE_has_access_acl,
-            Self::Default => c::bch_inode_flags::BCH_INODE_has_default_acl,
+            Self::Access  => c::bch_inode_flags::has_access_acl,
+            Self::Default => c::bch_inode_flags::has_default_acl,
         }
     }
 

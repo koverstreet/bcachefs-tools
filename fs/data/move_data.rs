@@ -537,7 +537,7 @@ fn scrub(fs: &Fs, stats: &MoveStats, arg: c::bch_ioctl_data_scrub) -> Result<(),
 
         data_opts.type_ = c::bch_data_update_types::BCH_DATA_UPDATE_scrub;
         data_opts.read_dev = dev;
-        data_opts.read_flags = c::bch_read_flags::BCH_READ_hard_require_read_device;
+        data_opts.read_flags = c::bch_read_flags::hard_require_read_device;
         Ok(true)
     })
 }

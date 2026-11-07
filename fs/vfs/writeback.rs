@@ -121,7 +121,7 @@ unsafe fn writepage_io_done(op: *mut c::bch_write_op) {
         });
     }
 
-    if io.op.has(w::BCH_WRITE_wrote_data_inline) {
+    if io.op.has(w::wrote_data_inline) {
         folios_clear_replicas(io, |_| {});
     }
 

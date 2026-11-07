@@ -412,7 +412,7 @@ fn read_extent(trans: &BtreeTrans<'_>, rbio: &mut c::bch_read_bio, msg: &mut Pri
     // the extent has changed. Retry, as a direct read of a stale pointer is.
     let ret = validate(fs, s, &mut buf, false, EC_BLOCKS_ALL);
     if ret.is_err_and(|e| e == BchError::from(bch_errcode::BCH_ERR_stripe_reconstruct_stale_race)) {
-        return fs.throw(if rbio.flags & c::bch_read_flags::BCH_READ_retry_if_stale.bits() as u16 != 0 {
+        return fs.throw(if rbio.flags & c::bch_read_flags::retry_if_stale.bits() as u16 != 0 {
             bch_errcode::BCH_ERR_data_read_ptr_stale_retry
         } else {
             bch_errcode::BCH_ERR_data_read_ptr_stale_race

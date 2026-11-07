@@ -499,7 +499,7 @@ impl<'a, 'f> Walker<'a, 'f> {
         };
         if let Some(dev) = read_dev {
             d.read_dev = dev;
-            d.read_flags = c::bch_read_flags::BCH_READ_soft_require_read_device;
+            d.read_flags = c::bch_read_flags::soft_require_read_device;
         }
 
         if work.btree == Btree::reconcile_pending {

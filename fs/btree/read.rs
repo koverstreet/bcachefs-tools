@@ -228,7 +228,7 @@ impl<'f> ReplicaRead<'f> {
     /// The replica on @dev of the node @k points to - None if there's none
     /// there to read.
     pub fn new(fs: &'f Fs, k: BkeySC<'_>, dev: u32) -> Result<Option<Self>, BchError> {
-        let pick = k.pick_read_device(fs, None, dev, c::bch_read_flags::BCH_READ_hard_require_read_device)?;
+        let pick = k.pick_read_device(fs, None, dev, c::bch_read_flags::hard_require_read_device)?;
         let Some(pick) = pick else { return Ok(None) };
         let ptr_bit = dev_ptr_bit(fs, k, pick.ptr.dev().into());
 

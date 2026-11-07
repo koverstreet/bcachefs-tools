@@ -139,7 +139,7 @@ fn check_i_sectors_notnested(t: &TransAttempt<'_, '_>, w: &mut InodeWalker)
         }
         i.count = count2;
 
-        if fsck_err_on!(t, !i.inode.flag(c::bch_inode_flags::BCH_INODE_i_sectors_dirty) &&
+        if fsck_err_on!(t, !i.inode.flag(c::bch_inode_flags::i_sectors_dirty) &&
                         i.inode.bi_sectors != i.count,
                         id::inode_i_sectors_wrong,
                         "incorrect i_sectors: got {}, should be {}\n{}",

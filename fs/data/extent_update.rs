@@ -310,7 +310,7 @@ impl<'t> TransAttempt<'_, 't> {
              * existing inodes by the upgrade's scheduled passes; version upgrades
              * always run, so by the time we're doing io the flags are trustworthy:
              */
-            *opts = if likely(inode.v().bi_flags.get() & u64::from(c::bch_inode_flags::BCH_INODE_has_inode_opts.bits()) == 0) {
+            *opts = if likely(inode.v().bi_flags.get() & u64::from(c::bch_inode_flags::has_inode_opts.bits()) == 0) {
                 inode_opts::get_fs(fs, false)
             } else {
                 inode_opts::get_inode(fs, &inode::unpack(fs, k))
