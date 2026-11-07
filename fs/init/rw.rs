@@ -92,6 +92,8 @@ impl Fs {
                 c::bch2_btree_cancel_all_writes(p);
                 bch2_btree_interior_updates_flush(p);
             }
+        } else {
+            crate::journal::buckets::drop_retired_going_ro(self);
         }
 
         bch_verbose!(self, "flushing journal and stopping allocators complete, journal seq {}",

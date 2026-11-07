@@ -113,6 +113,11 @@ impl JournalRing {
         (self.can_advance(DISCARD) && self.retired(self.bucket(DISCARD))).then(|| self.idx(DISCARD) as usize)
     }
 
+    /* Any retired bucket the journal's done with */
+    fn retired_unneeded(&self) -> Option<usize> {
+        (0..self.nr()).find(|&i| self.retired(self.buckets()[i as usize]) && !self.needed(i)).map(|i| i as usize)
+    }
+
     /* Not onto the next stage's start - nor cur, a bucket, onto discard */
     fn can_advance(&self, s: Stage) -> bool {
         let to = self.idx(STAGES[(s as usize + 1) % STAGES.len()]);
@@ -382,17 +387,20 @@ pub(crate) fn sort(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev) -> Result<(), Bc
 fn splice(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev, removed: usize, inserted: &[u64],
           pos: impl FnOnce(&mut JournalRing) -> Result<Option<usize>, BchError>) -> Result<bool, BchError> {
     /* sb_lock held, the list doesn't change between our looks at it */
-    let nr = ca.journal.nr() as usize - removed + inserted.len();
-    let alloc = || KVVec::from_elem(0, nr).map_err(enomem(fs));
-    let (mut list, mut buckets, seq) = (alloc()?, alloc()?, alloc()?);
+    let alloc = || KVVec::from_elem(0, ca.journal.nr() as usize + inserted.len()).map_err(enomem(fs));
+    let (mut list, mut buckets, mut seq) = (alloc()?, alloc()?, alloc()?);
 
-    let commit = |ring: &mut JournalRing, s, buckets, seq| {
-        ca.journal.buckets.set(nr as u32);
+    let commit = |ring: &mut JournalRing, s, buckets: KVVec<u64>, seq| {
+        ca.journal.buckets.set(buckets.len() as u32);
         ring.splice(s, buckets, seq)
     };
 
     let Some((old, pending)) = ca.with_journal_ring(|ring| {
         let Some(pos) = pos(ring)? else { return Ok(None) };
+        let nr = ring.nr() as usize - removed + inserted.len();
+        for v in [&mut list, &mut buckets, &mut seq] {
+            v.truncate(nr);
+        }
         let s = Splice { pos, removed, inserted: inserted.len() };
         s.apply(&mut list, ring.buckets());
         list[s.pos..s.pos + s.inserted].copy_from_slice(inserted);
@@ -624,6 +632,20 @@ pub(crate) fn drop_retired(j: &c::journal) {
 
     space_available(fs);
     j.do_discards();
+}
+
+/*
+ * Going read-only, the journal flushed: the retired buckets reclaim hasn't
+ * dropped - discard may never have reached them. Retired is only in memory:
+ * left in the superblock, a bucket is the journal's again at the next mount,
+ * over the data fsck found in it.
+ */
+pub(crate) fn drop_retired_going_ro(fs: &Fs) {
+    for ca in fs.members() {
+        while splice(fs, &mut fs.sb_lock(), &ca, 1, &[], |ring| Ok(ring.retired_unneeded()))
+            .inspect_err(|e| bch_err_dev!(&ca, "error dropping retired journal bucket: {}", e))
+            .unwrap_or(false) {}
+    }
 }
 
 /* C's: with the journal lock held */
