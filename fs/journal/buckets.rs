@@ -13,7 +13,7 @@
 //! The journal lock's; the list changes with sb_lock held too, as the
 //! superblock does.
 
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_int;
 
 use cstruct_macros::c_export;
 
@@ -646,40 +646,4 @@ pub(crate) fn drop_retired_going_ro(fs: &Fs) {
             .inspect_err(|e| bch_err_dev!(&ca, "error dropping retired journal bucket: {}", e))
             .unwrap_or(false) {}
     }
-}
-
-/* C's: with the journal lock held */
-
-fn locked<'a>(j: &c::journal, ja: &'a c::journal_device) -> &'a mut JournalRing {
-    j.lock.assert_held();
-    unsafe { ja.buckets.protected_mut() }
-}
-
-#[c_export]
-pub fn bch2_journal_buckets_nr(ja: &c::journal_device) -> c_uint {
-    ja.nr()
-}
-
-#[c_export]
-pub fn bch2_journal_dev_buckets_available(j: &c::journal, ja: &c::journal_device,
-                                          from: c::journal_space_from) -> c_uint {
-    locked(j, ja).available(from)
-}
-
-/* Each a ring method, as bch2_journal_buckets_NAME(j, ja, args) */
-macro_rules! ring_exports {
-    ($($name:ident($($arg:ident: $ty:ty),*) $(-> $ret:ty)?;)*) => { ::paste::paste! { $(
-        #[c_export]
-        pub fn [<bch2_journal_buckets_ $name>](j: &c::journal, ja: &c::journal_device, $($arg: $ty),*) $(-> $ret)? {
-            locked(j, ja).$name($($arg),*)
-        }
-    )* } };
-}
-
-ring_exports! {
-    bucket(s: c::journal_bucket_stage) -> u64;
-    would_free(seq: u64) -> bool;
-    next_bucket(seq: u64);
-    set_cur_seq(seq: u64);
-    to_text(out: &mut Printbuf);
 }

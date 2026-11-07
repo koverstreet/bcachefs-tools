@@ -13,8 +13,6 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::format::DataType;
 use crate::fs::{Dev, StateLockWrite};
 use crate::init::error::id;
-use crate::types::Fifo;
-use crate::util::alloc::darray_take;
 use crate::util::bio::BioSet;
 use crate::util::closure::closure_wait_event;
 use crate::util::kernel::jiffies;
@@ -34,7 +32,6 @@ impl c::journal {
 
     pub fn dev_stop(&self, ca: &Dev) {
         closure_wait_event(&self.async_wait, || !self.writing_to_device(ca.dev_idx.into()));
-        unsafe { c::cancel_work_sync((&raw const ca.journal.discard).cast_mut()) };
     }
 
     pub fn stop(&self) {
@@ -52,9 +49,9 @@ impl c::journal {
          * Always write a new journal entry, to make sure the clock hands are up
          * to date (and match the superblock)
          */
-        unsafe { c::__bch2_journal_meta(self.as_ptr()) };
+        let _ = self.__meta();
 
-        unsafe { c::bch2_journal_shutdown_quiesce(self.as_ptr()) };
+        self.shutdown_quiesce();
         self.write_work.cancel_sync();
 
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -114,11 +111,10 @@ impl c::journal {
 
             /*
              * Align the in_flight FIFO with seq numbering: front == seq_ondisk + 1
-             * == cur_seq initially (empty fifo), so fifo_entry(in_flight, seq)
+             * == cur_seq initially (empty fifo), so in_flight.get(seq)
              * indexes by seq once entries start pushing.
              */
-            g.in_flight.front = cur_seq;
-            g.in_flight.back = cur_seq;
+            g.in_flight.start_at(cur_seq);
 
             let rewind_unset = self.lock.rewind_seq.get() == 0;
             let p = g.published();
@@ -209,29 +205,11 @@ impl c::journal {
 
         let buf = c::JsetBuf::new(size, c::GFP_KERNEL).map_err(|_| enomem())?;
 
-        /*
-         * in_flight holds one entry per seq in (seq_ondisk, cur_seq]. Size is
-         * an upper bound on in-flight journal writes; starts at 256, which is
-         * well above the 16-slot cap of the prior static-array layout. If
-         * workloads saturate this, journal_entry_open() returns ENOMEM and
-         * the existing retry path throttles via completion backpressure.
-         *
-         * Allocated outside the lock, and given start()'s front/back, the
-         * correct seq-aligned value. Every slot is a buf not in flight - the
-         * one at back too, which the flushers' walk stops at.
-         */
-        let mut in_flight: Fifo<c::journal_buf, u64> = Fifo::new();
-        in_flight.reserve(256).map_err(|_| enomem())?;
-        in_flight.init_spare(|buf| unsafe {
-            (&raw mut (*buf.as_mut_ptr()).wait.list.first).write(c::JOURNAL_BUF_NOT_IN_FLIGHT)
-        });
-
-        /* the old ones freed outside the lock: kvfree can sleep */
+        /* the old one freed outside the lock: kvfree can sleep */
         let old = {
             let mut g = self.lock.lock();
             g.published().buf_size_want.set(size);
-            (in_flight.front, in_flight.back) = (g.in_flight.front, g.in_flight.back);
-            (core::mem::replace(&mut g.free_buf, buf), core::mem::replace(&mut g.in_flight, in_flight))
+            core::mem::replace(&mut g.free_buf, buf)
         };
         drop(old);
         Ok(())
@@ -242,13 +220,8 @@ impl c::journal {
     pub unsafe fn exit(j: *mut c::journal) {
         let j = unsafe { &mut *j };
 
-        drop(unsafe { darray_take(&mut j.lock.get_mut().early_journal_entries) });
-        drop(unsafe { darray_take(&mut j.rewind_ranges) });
-
-        unsafe {
-            c::cancel_work_sync(&raw mut j.pin_resize_work);
-            c::cancel_work_sync(&raw mut j.flush_degraded_work);
-        }
+        drop(core::mem::take(&mut *j.lock.get_mut().early_journal_entries));
+        drop(core::mem::take(&mut *j.rewind_ranges));
     }
 }
 

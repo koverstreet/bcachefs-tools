@@ -3,16 +3,15 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::types::c_default;
-use crate::util::closure::{closure_set_waiting, closure_unset_waiting, closure_wake_up};
+use crate::util::closure::{closure_set_waiting, closure_unset_waiting, closure_wake_up, waitlist_first};
 use crate::util::{Printbuf, ToText};
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use core::mem::ManuallyDrop;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering::{Relaxed, SeqCst}};
-use cstruct_macros::{CStruct, c_enum, c_export, c_extern};
+use cstruct_macros::{c_const, c_enum};
 
 c_enum! {
     #[flags]
@@ -32,41 +31,9 @@ c_enum! {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, CStruct)]
-pub struct journal_block {
-    pub j: *mut c::journal,
-}
-c_default!(journal_block);
-
-c_extern! {
-    pub fn bch2_journal_flush(j: *mut c::journal) -> c_int;
-    pub fn bch2_journal_flush_seq(j: *mut c::journal, seq: u64, task_state: c_uint) -> c_int;
-    pub fn bch2_journal_entry_res_resize(j: *mut c::journal, res: *mut c::journal_entry_res, new_u64s: c_uint);
-    pub fn bch2_journal_flush_async(j: *mut c::journal, parent: *mut c::closure);
-    pub fn bch2_journal_advance_rewind_seq(j: *mut c::journal, seq: u64);
-    pub fn bch2_journal_noflush_seq(j: *mut c::journal, start: u64, end: u64) -> bool;
-    pub fn bch2_journal_meta(j: *mut c::journal) -> c_int;
-    pub fn bch2_journal_debug_to_text(out: *mut Printbuf, j: *mut c::journal);
-    pub fn bch2_journal_halt(j: *mut c::journal);
-    pub fn bch2_journal_halt_locked(j: *mut c::journal);
-    pub fn bch2_journal_add_rewind_range(c: *mut Fs, start: u64, end: u64) -> c_int;
-    pub fn bch2_journal_write_work(work: *mut c::work_struct);
-    pub fn __bch2_journal_meta(j: *mut c::journal) -> c_int;
-    pub fn bch2_journal_shutdown_quiesce(j: *mut c::journal);
-    pub fn bch2_journal_cycle(j: *mut c::journal, flags: c::journal_cycle_flags);
-    pub fn bch2_journal_block(j: *mut c::journal);
-    pub fn bch2_journal_unblock(j: *mut c::journal);
-}
-
-/// The journal blocked, as long as it lives: no reservations, the open entry
-/// closed and its writes quiesced. Blocks nest.
-pub struct JournalBlocked<'a>(&'a c::journal);
-
-impl Drop for JournalBlocked<'_> {
-    fn drop(&mut self) {
-        unsafe { bch2_journal_unblock(self.0.as_ptr()) }
-    }
+c_const! {
+    pub const JOURNAL_RES_GET_NONBLOCK: u32 = 1 << c::journal_res_flags::__JOURNAL_RES_GET_NONBLOCK as u32;
+    pub const JOURNAL_RES_GET_CHECK: u32 = 1 << c::journal_res_flags::__JOURNAL_RES_GET_CHECK as u32;
 }
 
 impl c::journal {
@@ -79,11 +46,6 @@ impl c::journal {
         self.reservations().cur_entry_offset() == c::JOURNAL_ENTRY_ERROR_VAL
     }
 
-    pub fn block(&self) -> JournalBlocked<'_> {
-        unsafe { bch2_journal_block(self.as_ptr()) };
-        JournalBlocked(self)
-    }
-
     /// journal_shutdown if it's halted: bch2_journal_error().
     pub fn error(&self) -> Result<(), BchError> {
         if self.halted() {
@@ -92,24 +54,32 @@ impl c::journal {
             Ok(())
         }
     }
-
-    /// Everything committed before the call is on disk when it returns
-    pub fn flush(&self) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { bch2_journal_flush(self.as_ptr()) })
-    }
-
-    pub fn flush_seq(&self, seq: u64, task_state: c_uint) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { bch2_journal_flush_seq(self.as_ptr(), seq, task_state) })
-    }
 }
 
 /*
  * buf->wait.list.first is the write's flush decision, and its flush waiters:
- * journal.h's JOURNAL_BUF_* sentinels, which C names too while journal.c is C
+ * NULL is undecided; NOFLUSH decided noflush; FLUSH, FLUSH_NO_WAIT or a list
+ * of waiters decided flush. It's decided by cmpxchg on this word, so the writer
+ * and noflush_seq() don't both win - but for the first write after the
+ * filesystem was clean, see do_writes_locked(). JSET_NO_FLUSH records the
+ * outcome in the jset.
  */
 pub const JOURNAL_BUF_NOT_IN_FLIGHT: *mut c::llist_node = 1 as _;
 pub const JOURNAL_BUF_NOFLUSH: *mut c::llist_node = 2 as _;
+/*
+ * Stamped on the first entry opened after the journal was clean (the
+ * clean->dirty transition): this entry must be a flush write - its write
+ * completion marks the fs dirty (the superblock write in journal_write_done())
+ * - but flushers must not wait on it, since that mark happens after the early
+ * flush-completion signal. Flushers skip it (like NOFLUSH) and attach to a
+ * later entry, which by construction completes only after this one's sb write.
+ */
 pub const JOURNAL_BUF_FLUSH_NO_WAIT: *mut c::llist_node = 3 as _;
+/*
+ * A flush with no waiters, which flushers may attach to: the writer's pick, or
+ * what the early flush-completion signal leaves once it has woken the waiters.
+ * A waiter attached to it ends the list at NULL, not at the sentinel.
+ */
 pub const JOURNAL_BUF_FLUSH: *mut c::llist_node = 4 as _;
 
 /* Real waiters, not one of the sentinels: */
@@ -166,7 +136,7 @@ pub enum BufWait {
 
 impl c::journal_buf {
     pub(crate) fn wait_word(&self) -> &AtomicPtr<c::llist_node> {
-        unsafe { AtomicPtr::from_ptr((&raw const self.wait.list.first).cast_mut()) }
+        waitlist_first(&self.wait)
     }
 
     pub fn must_flush(&self) -> bool {
@@ -234,11 +204,9 @@ impl c::journal_buf {
      * head becoming a real pointer).
      */
     /// # Safety
-    /// @buf is an in_flight slot, live or free - only its wait word is read,
-    /// the one thing a free slot holds; @cl is a live closure, waiting on
-    /// nothing.
-    pub unsafe fn wait(buf: *const Self, cl: NonNull<c::closure>) -> BufWait {
-        let w = unsafe { AtomicPtr::from_ptr((&raw const (*buf).wait.list.first).cast_mut()) };
+    /// @cl is a live closure, waiting on nothing.
+    pub unsafe fn wait(&self, cl: NonNull<c::closure>) -> BufWait {
+        let w = waitlist_first(&self.wait);
         let refused = |first: *mut c::llist_node| (!first.is_null() && first <= JOURNAL_BUF_FLUSH_NO_WAIT)
             .then(|| if first == JOURNAL_BUF_NOT_IN_FLIGHT { BufWait::NotInFlight } else { BufWait::NotWaitable });
 
@@ -285,9 +253,9 @@ impl c::journal_buf {
 impl c::JournalLocked {
     /*
      * Look up the buffer for @seq via the in_flight FIFO: under j->lock, since
-     * the FIFO front moves with seq_ondisk and buffers are freed on pop.
+     * the FIFO front moves with seq_ondisk and buffers are retired on pop.
      *
-     * A reservation holder doesn't need its buf: journal_res_data() and
+     * A reservation holder doesn't need its buf: ring_data and
      * ring_has_overwrites are its ring slot's, pinned by the reservation.
      */
     pub fn seq_to_buf(&self, seq: u64) -> Option<&c::journal_buf> {
@@ -335,12 +303,17 @@ impl c::journal_res_state {
         (self.v() >> STATE_IDX_SHIFT) as u32 & c::JOURNAL_STATE_BUF_MASK
     }
 
+    /// @idx, wrapped to a ring slot, as C's 2 bit field wraps.
+    pub fn set_idx(&mut self, idx: u32) {
+        let mask = u64::from(c::JOURNAL_STATE_BUF_MASK) << STATE_IDX_SHIFT;
+        *self = Self::from_v(self.v() & !mask | u64::from(idx) << STATE_IDX_SHIFT & mask);
+    }
+
     pub fn is_open(self) -> bool {
         self.cur_entry_offset() < c::JOURNAL_ENTRY_CLOSED_VAL
     }
 
-    /// A ref on idx()'s buf - false, and none, if its count is full:
-    /// journal_state_inc().
+    /// A ref on idx()'s buf - false, and none, if its count is full.
     pub fn inc(&mut self) -> bool {
         let idx = self.idx();
         if self.count(idx) == c::JOURNAL_STATE_BUF_COUNT_MAX {
@@ -360,7 +333,24 @@ impl c::journal {
         c::journal_res_state::from_v(self.lock.hot.reservations.load(Relaxed))
     }
 
-    /// A ref put on ring slot @idx's buf: the state after - journal_state_buf_put().
+    /// @f of the state swapped in, retried until it sticks: Ok(the state before
+    /// it), or Err(the state @f gave None for).
+    pub fn reservations_update(&self, mut f: impl FnMut(c::journal_res_state) -> Option<c::journal_res_state>)
+        -> Result<c::journal_res_state, c::journal_res_state>
+    {
+        let mut old = self.reservations();
+        loop {
+            let Some(new) = f(old) else {
+                return Err(old);
+            };
+            match self.lock.hot.reservations.compare_exchange(old.v(), new.v(), SeqCst, Relaxed) {
+                Ok(_) => return Ok(old),
+                Err(v) => old = c::journal_res_state::from_v(v),
+            }
+        }
+    }
+
+    /// A ref put on ring slot @idx's buf: the state after.
     pub fn state_buf_put(&self, idx: u32) -> c::journal_res_state {
         let d = 1u64 << c::journal_res_state::count_shift(idx);
         c::journal_res_state::from_v(self.lock.hot.reservations.fetch_sub(d, SeqCst) - d)
@@ -378,36 +368,32 @@ impl c::journal {
 
 impl ToText for c::journal {
     fn to_text(&self, out: &mut Printbuf) {
-        unsafe { bch2_journal_debug_to_text(out.as_raw(), self.as_ptr()) }
+        self.debug_to_text(out)
     }
 }
 
 impl Fs {
-    pub fn journal_add_rewind_range(&self, start: u64, end: u64) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { bch2_journal_add_rewind_range(self.as_ptr(), start, end) })
-    }
-
     /// Write a journal entry with nothing in it but metadata, and wait for
     /// it to be flushed.
     pub fn journal_meta(&self) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { bch2_journal_meta(self.journal.as_ptr()) })
+        self.journal.meta()
     }
 
     /// Ask the journal not to flush seqs [@start, @end), whose entries hold
     /// nothing that needs it - false if it can't: one's been flushed.
     pub fn journal_noflush_seq(&self, start: u64, end: u64) -> bool {
-        unsafe { bch2_journal_noflush_seq(self.journal.as_ptr(), start, end) }
+        self.journal.noflush_seq(start, end)
     }
 
     /// What every journal entry reserves for @res, made @u64s.
     pub fn journal_entry_res_resize(&self, res: &c::journal_entry_res, u64s: c_uint) {
-        unsafe { bch2_journal_entry_res_resize(self.journal.as_ptr(), ptr::from_ref(res).cast_mut(), u64s) }
+        self.journal.entry_res_resize(res, u64s)
     }
 
     /// Advance the rewind limit to @seq: buckets emptied before it may be
     /// discarded, once a journal flush has the limit on disk.
     pub fn journal_advance_rewind_seq(&self, seq: u64) {
-        unsafe { bch2_journal_advance_rewind_seq(self.journal.as_ptr(), seq) }
+        self.journal.advance_rewind_seq(seq)
     }
 
     /// Start writes of whatever's ready to be written.
@@ -429,41 +415,3 @@ impl Fs {
     }
 }
 
-#[c_export]
-pub fn bch2_journal_replicas(c: &Fs) -> c_uint {
-    c.journal_replicas()
-}
-
-#[c_export]
-pub fn journal_wake(j: &c::journal) {
-    j.wake_async_wait()
-}
-
-/// # Safety
-/// The caller holds j->lock.
-#[c_export]
-pub unsafe fn journal_seq_to_buf(j: &c::journal, seq: u64) -> *mut c::journal_buf {
-    ebug_assert!(seq <= j.fs().journal_cur_seq(), "journal buf for seq {seq}, past the current");
-    let mut g = unsafe { j.lock.held() };
-    g.seq_to_buf_mut(seq).map_or(ptr::null_mut(), ptr::from_mut)
-}
-
-#[c_export]
-pub fn journal_state_seq_count(j: &c::journal, s: c::journal_res_state, seq: u64) -> c_int {
-    j.state_seq_count(s, seq) as c_int
-}
-
-#[c_export]
-pub fn journal_buf_waiters(first: *mut c::llist_node) -> bool {
-    buf_waiters(first)
-}
-
-#[c_export]
-pub fn journal_buf_must_flush(buf: &c::journal_buf) -> bool {
-    buf.must_flush()
-}
-
-#[c_export]
-pub fn journal_buf_try_noflush(buf: &c::journal_buf) -> bool {
-    buf.try_noflush()
-}

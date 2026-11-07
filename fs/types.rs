@@ -465,7 +465,6 @@ pub struct Dev {
     pub rebalance_work: AtomicI64,
 
     #[pin]
-    #[init(c::journal_device::init())]
     pub journal: c::journal_device,
     pub prev_journal_sector: Volatile<u64>,
 

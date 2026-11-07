@@ -1482,7 +1482,7 @@ impl Fs {
              * ends with is degraded too; queued because the flush is
              * unbounded and we hold state_lock.
              */
-            unsafe { self.journal.wq.queue_work((&raw const self.journal.flush_degraded_work).cast_mut()) };
+            self.journal.flush_degraded_work.queue(&self.journal.wq);
         }
 
         if !mi.freespace_initialized {

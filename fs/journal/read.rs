@@ -6,6 +6,7 @@ use crate::format::{Btree, MemberState, Nonce};
 #[path = "buckets.rs"] pub mod buckets;
 #[path = "entries.rs"] pub mod entries;
 #[path = "init.rs"] pub mod init;
+#[path = "journal.rs"] pub mod journal;
 #[path = "pins.rs"] pub mod pins;
 #[path = "reclaim.rs"] pub mod reclaim;
 #[path = "sb.rs"] pub mod sb;
@@ -23,8 +24,7 @@ use crate::init::recovery::NotRw;
 use crate::locking::Locked;
 use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
-use crate::util::alloc::{init_at, kvzalloc, ABox, AVec, AllocError, ConstAlign, DArrayLoan,
-                         KVVec};
+use crate::util::alloc::{init_at, kvzalloc, ABox, AVec, AllocError, ConstAlign, KVVec};
 use crate::util::bio::{Bio, BioBox, BioBuffersMapped, BioOwner};
 use crate::util::kernel::{local_clock, PAGE_SIZE};
 use crate::util::log::LogMsg;
@@ -278,8 +278,8 @@ impl NotRw<'_> {
 
     /// # Safety
     /// As journal_device()'s.
-    unsafe fn journal_rewind_ranges(&self) -> DArrayLoan<'_, c::journal_rewind_range> {
-        unsafe { DArrayLoan::new(&mut *(&raw const self.fs.journal.rewind_ranges).cast_mut()) }
+    pub(crate) unsafe fn journal_rewind_ranges(&self) -> &mut KVVec<c::journal_rewind_range> {
+        unsafe { &mut *self.fs.journal.rewind_ranges.as_ptr() }
     }
 }
 
@@ -1171,7 +1171,7 @@ pub fn journal_reread_for_rewind(fs: &Fs) -> Result<(), BchError> {
     let entries = unsafe { not_rw.journal_entries() };
     let mut need_from = u64::MAX;
 
-    for range in fs.journal.rewind_ranges.as_slice() {
+    for range in fs.journal.rewind_ranges.iter() {
         let Some(p) = entries.get(fs, range.to) else {
             bch_err!(fs, "journal rewind: flush entry at seq {} not found", range.to);
             return fs.throw(bch_errcode::BCH_ERR_EINVAL_journal_rewind_before_discard);

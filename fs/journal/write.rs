@@ -9,7 +9,7 @@ use core::mem::{self, offset_of};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
 
-use cstruct_macros::{c_export, c_extern};
+use cstruct_macros::c_extern;
 
 use crate::alloc::disk_groups::Target;
 use crate::alloc::replicas::DevlistEntry;
@@ -56,7 +56,6 @@ c_extern! {
     pub fn bch2_journal_keys_to_write_buffer_start(c: *mut Fs, dst: *mut c::journal_keys_to_wb, seq: u64);
     pub fn bch2_journal_keys_to_write_buffer_end(c: *mut Fs, dst: *mut c::journal_keys_to_wb) -> c_int;
     pub fn bch2_journal_entry_to_btree_root(c: *mut Fs, entry: *mut Head<c::jset_entry>);
-    pub fn bch2_journal_cycle_locked(j: *mut c::journal, flags: c::journal_cycle_flags) -> c_int;
 }
 
 impl c::journal_buf {
@@ -583,7 +582,7 @@ extern "C" fn write_done(mut w: Running<c::journal_buf>) {
      */
     core::sync::atomic::fence(SeqCst);
 
-    unsafe { bch2_journal_cycle_locked(j.as_ptr(), c::journal_cycle_flags::empty()) };
+    let _ = j.cycle_locked(&pins, &mut g, c::journal_cycle_flags::empty());
 
     /*
      * We don't typically trigger journal writes from here - the next journal
@@ -685,12 +684,12 @@ fn complete_writes<'a>(j: &'a c::journal, mut g: JournalGuard<'a>, pins: &PinsRe
         /*
          * Advance the in_flight FIFO front. Maintains the invariant
          * fifo.front == seq_ondisk + 1 so seq_to_buf()'s indexing stays
-         * consistent with seq. The buf storage is inline in the FIFO's
-         * backing array; buf->data was already recycled/freed above.
+         * consistent with seq. The buf is the FIFO's slot, retired in place;
+         * buf->data was already recycled/freed above.
          */
         assert!(g.in_flight.front_idx() == seq, "journal completing seq {seq}, in_flight front {}",
                 g.in_flight.front_idx());
-        g.in_flight.advance_front(1);
+        g.in_flight.pop_front().expect("an in-flight journal buf").retire();
     }
 
     (g, done)
@@ -1074,7 +1073,7 @@ extern "C" fn journal_write(mut w: Running<c::journal_buf>) {
         let mut replicas_allocated = 0;
         let ret = loop {
             let ret = write_alloc(j, &mut w, &mut replicas_allocated);
-            if ret.is_ok() || !j.lock.lock().can_discard {
+            if ret.is_ok() || !j.lock.can_discard.get() {
                 break ret;
             }
 
@@ -1361,11 +1360,4 @@ impl c::journal {
     pub fn do_writes(&self) {
         self.do_writes_locked(&mut self.lock.lock());
     }
-}
-
-/// # Safety
-/// The caller holds j->lock.
-#[c_export]
-pub unsafe fn bch2_journal_do_writes_locked(j: &c::journal) {
-    j.do_writes_locked(&mut unsafe { j.lock.held() })
 }

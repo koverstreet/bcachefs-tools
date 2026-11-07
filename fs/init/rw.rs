@@ -28,6 +28,7 @@ use crate::btree::write_buffer::{bch2_btree_write_buffer_flush_going_ro, bch2_bt
 use crate::c;
 use crate::c::bch_fs_flags as Flag;
 use crate::c::journal_flags as Journal;
+use crate::c::JournalGuard;
 use crate::data::ec::head::stripe_heads_stop;
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::format::{MemberState, SbFeature};
@@ -115,24 +116,15 @@ impl Fs {
         for ca in self.members() {
             ca.io_ref_stop(WRITE);
             self.dev_allocator_remove(&ca);
-
-            /*
-             * Queued from the journal's space_available(); not cancelled
-             * anywhere else on the going-RO path, so cancel it here, after
-             * the journal is stopped, or it can run against a freed device.
-             */
-            unsafe { c::cancel_work_sync((&raw const ca.journal.discard).cast_mut()) };
         }
     }
 
-    fn emergency_read_only_to(&self, out: &mut Printbuf, journal_locked: bool) -> bool {
+    fn emergency_read_only_to(&self, out: &mut Printbuf, journal: Option<&mut JournalGuard<'_>>) -> bool {
         let ret = !self.flags.swap(Flag::emergency_ro, true);
-        let j = unsafe { &raw mut (*self.as_ptr()).journal };
 
-        if journal_locked {
-            unsafe { c::bch2_journal_halt_locked(j) };
-        } else {
-            unsafe { c::bch2_journal_halt(j) };
+        match journal {
+            Some(g) => self.journal.halt_locked(g),
+            None => self.journal.halt(),
         }
         self.read_only_work.queue(Queue::system_long());
         READ_ONLY_EVENTS.wake();
@@ -154,7 +146,11 @@ impl Fs {
     /// True if this call is the one that went read-only - then @out is
     /// printed, not suppressed
     pub fn emergency_read_only(&self, out: &mut Printbuf) -> bool {
-        self.emergency_read_only_to(out, false)
+        self.emergency_read_only_to(out, None)
+    }
+
+    pub fn emergency_read_only_locked(&self, out: &mut Printbuf, g: &mut JournalGuard<'_>) -> bool {
+        self.emergency_read_only_to(out, Some(g))
     }
 
 }
@@ -410,10 +406,5 @@ pub(crate) unsafe extern "C" fn writes_disabled(writes: *mut c::enumerated_ref) 
 
 #[c_export]
 pub fn bch2_fs_emergency_read_only(c: &Opaque<Fs>, out: &mut Printbuf) -> bool {
-    Fs::from_c(c).emergency_read_only_to(out, false)
-}
-
-#[c_export]
-pub fn bch2_fs_emergency_read_only_locked(c: &Opaque<Fs>, out: &mut Printbuf) -> bool {
-    Fs::from_c(c).emergency_read_only_to(out, true)
+    Fs::from_c(c).emergency_read_only(out)
 }

@@ -3,8 +3,7 @@
 //! Journal reclaim: space accounting, discards, and flushing pins - by the
 //! reclaim thread, or directly.
 
-use core::ffi::{c_int, c_uint};
-use core::mem::offset_of;
+use core::ffi::c_int;
 use core::sync::atomic::Ordering::{Acquire, Relaxed};
 
 use crate::alloc::discard::discard_opt_enabled;
@@ -17,7 +16,7 @@ use crate::c::journal_space_from::{self as SpaceFrom, *};
 use crate::c::JournalGuard;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::{DataType, SbFeature};
 use crate::fs::{Dev, Fs};
 use crate::journal::pins::PinsRead;
@@ -27,6 +26,7 @@ use crate::util::closure::{closure_wait_event, closure_wake_up};
 use crate::util::kernel::{bdev_max_discard_sectors, blkdev_issue_discard, cond_resched, jiffies, jiffies_to_msecs,
                           local_clock, msecs_to_jiffies, time_after, time_in_range, totalram_bytes};
 use crate::util::kthread::{Kthread, KthreadSelf};
+use crate::util::place::Contained;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::{sleep_until, wake_up, Sleep};
 use crate::util::time_stats::TimeStats;
@@ -295,12 +295,12 @@ impl c::journal {
                     fs.flags.get(c::bch_fs_flags::rw_init_done) &&
                     self.flags.get(Journal::running) &&
                     self.error().is_ok() {
-                    unsafe { self.discard_wq.queue_work((&raw const ja.discard).cast_mut()) };
+                    ja.discard.queue(&self.discard_wq);
                 }
             }
         }
 
-        g.can_discard = can_discard;
+        g.published().can_discard.set(can_discard);
 
         if nr_online == 0 {
             if !fs.feature(SbFeature::small_image) {
@@ -317,7 +317,7 @@ impl c::journal {
             }
 
             g.cur_entry_sectors = 0;
-            g.cur_entry_error = -fs.err(bch_errcode::BCH_ERR_insufficient_journal_devices).raw();
+            g.published().cur_entry_error.set(-fs.err(bch_errcode::BCH_ERR_insufficient_journal_devices).raw());
             return;
         }
 
@@ -341,13 +341,14 @@ impl c::journal {
         self.set_watermark(g);
 
         g.cur_entry_sectors = g.space[journal_space_discarded as usize].next_entry;
-        g.cur_entry_error = if g.cur_entry_sectors != 0 {
+        let cur_entry_error = if g.cur_entry_sectors != 0 {
             0
         } else {
             -fs.err(bch_errcode::BCH_ERR_journal_full).raw()
         };
+        g.published().cur_entry_error.set(cur_entry_error);
 
-        if g.cur_entry_error == 0 {
+        if cur_entry_error == 0 {
             self.wake_async_wait();
         }
     }
@@ -678,7 +679,7 @@ impl c::journal {
         }
 
         if seq_to_flush >= self.fs().journal_cur_seq() {
-            unsafe { c::bch2_journal_cycle(self.as_ptr(), c::journal_cycle_flags::JOURNAL_CYCLE_must_close) };
+            self.cycle(c::journal_cycle_flags::JOURNAL_CYCLE_must_close);
         }
 
         /*
@@ -883,10 +884,8 @@ fn time_stats_summary_to_text(out: &mut Printbuf, name: &str, stats: &c::bch2_ti
  * Advance the discard cursor as long as it points to buckets that are no longer
  * dirty, issuing discards if necessary:
  */
-pub(crate) unsafe extern "C" fn discard_work(work: *mut c::work_struct) {
-    let ca = unsafe {
-        &*work.byte_sub(offset_of!(Dev, journal) + offset_of!(c::journal_device, discard)).cast::<Dev>()
-    };
+pub(crate) fn discard_work(ja: &c::journal_device) {
+    let ca = ja.container();
     ca.fs().journal.dev_do_discards(ca);
 }
 
@@ -963,48 +962,12 @@ pub unsafe fn bch2_journal_set_watermark(j: &c::journal) {
     j.set_watermark(&mut unsafe { j.lock.held() })
 }
 
-/// # Safety
-/// The caller holds j->lock.
-#[c_export]
-pub unsafe fn bch2_journal_space_available(j: &c::journal) {
-    j.space_available(&mut unsafe { j.lock.held() })
-}
-
-#[c_export]
-pub fn bch2_journal_do_discards(j: &c::journal) {
-    j.do_discards()
-}
-
-/// # Safety
-/// The caller holds pin_resize_lock for read, and j->lock.
-#[c_export]
-pub unsafe fn bch2_journal_update_last_seq(j: &c::journal) {
-    j.update_last_seq(&unsafe { j.pins_held() }, &mut unsafe { j.lock.held() })
-}
-
 #[c_export]
 pub fn bch2_journal_pin_flush(j: &c::journal, pin: &c::journal_entry_pin) {
     j.pin_flush(pin)
 }
 
-/// # Safety
-/// The caller holds reclaim_lock.
-#[c_export]
-pub unsafe fn bch2_journal_reclaim(j: &c::journal) -> c_int {
-    ret_to_c(j.reclaim(&mut unsafe { j.reclaim_lock.held() }))
-}
-
 #[c_export]
 pub fn bch2_journal_reclaim_kick(j: &c::journal) {
     j.reclaim_kick()
-}
-
-#[c_export]
-pub fn bch2_journal_reclaim_wake(j: &c::journal) {
-    j.reclaim_wake()
-}
-
-#[c_export]
-pub fn bch2_journal_pins_to_text(out: &mut Printbuf, j: &c::journal, limit: c_uint) {
-    j.pins_to_text(out, limit)
 }

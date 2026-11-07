@@ -501,7 +501,6 @@ const BCH_FS_DEFAULT_UTF8_ENCODING: c_uint = (12 << 16) | (1 << 8);
 impl Fs {
     fn init_from(&self, sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts, user_key: Option<&c::bch_key>,
                  out: &mut Printbuf) -> Result<(), BchError> {
-        use c::bch_time_stats as Time;
         let p = self.as_ptr();
 
         unsafe {
@@ -527,9 +526,6 @@ impl Fs {
 
             let Ok(()) = c::spinlock_t::init(&raw mut (*p).write_error_lock, c"&c->write_error_lock",
                                              new_lock!(@key));
-
-            let times = &raw mut (*p).times;
-            (*p).journal.flush_seq_time = &raw mut (*times)[Time::journal_flush_seq as usize];
         }
 
         /* must be initialized before we throw any errors */
@@ -603,15 +599,12 @@ impl Fs {
             self.dev_alloc(i)?;
         }
 
-        unsafe {
-            let j = &raw mut (*p).journal;
-            c::bch2_journal_entry_res_resize(j, &raw mut (*p).btree.root_journal_res,
-                crate::btree::interior::roots_journal_u64s(c::BTREE_ID_NR));
-            c::bch2_journal_entry_res_resize(j, &raw mut (*p).super_entries_journal_res,
-                crate::journal::write::PREP_ENTRIES_U64S as c_uint);
-            c::bch2_journal_entry_res_resize(j, &raw mut (*p).rewind_limit_res,
-                (size_of::<c::jset_entry_rewind_limit>() / size_of::<u64>()) as c_uint);
-        }
+        self.journal_entry_res_resize(&self.btree.root_journal_res,
+            crate::btree::interior::roots_journal_u64s(c::BTREE_ID_NR));
+        self.journal_entry_res_resize(&self.super_entries_journal_res,
+            crate::journal::write::PREP_ENTRIES_U64S as c_uint);
+        self.journal_entry_res_resize(&self.rewind_limit_res,
+            (size_of::<c::jset_entry_rewind_limit>() / size_of::<u64>()) as c_uint);
 
         {
             let state = self.state_lock_write();

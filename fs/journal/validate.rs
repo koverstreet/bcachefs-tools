@@ -18,14 +18,7 @@ use crate::util::vstructs::{bytes_of, cast_plain, cast_plain_mut, ArmRef, Head, 
                             Unvalidated, VStruct};
 use crate::util::{DateTime, Printbuf, ToText};
 use crate::{message, prt};
-use cstruct_macros::{c_const, c_export};
-
-c_const! {
-    #[c_int]
-    pub const JOURNAL_ENTRY_NONE: u32 = 6;
-    #[c_int]
-    pub const JOURNAL_ENTRY_BAD: u32 = 7;
-}
+use cstruct_macros::c_export;
 
 const HEAD: usize = size_of::<Head<c::jset_entry>>();
 const JSET_HEAD: usize = size_of::<Head<c::jset>>();
@@ -34,15 +27,6 @@ pub(crate) enum Jset {
     Ok,
     None,
     Bad,
-}
-
-fn jset_ret(r: Result<Jset, BchError>) -> c_int {
-    match r {
-        Ok(Jset::Ok)   => 0,
-        Ok(Jset::None) => JOURNAL_ENTRY_NONE as c_int,
-        Ok(Jset::Bad)  => JOURNAL_ENTRY_BAD as c_int,
-        Err(e)         => ret_to_c(Err::<(), _>(e)),
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -692,22 +676,4 @@ pub unsafe fn bch2_journal_entry_validate(c: &Opaque<Fs>, entry: *mut Head<c::js
 {
     let bytes = unsafe { core::slice::from_raw_parts_mut(entry.cast::<u8>(), (*entry).bytes()) };
     ret_to_c(journal_entry_validate(Fs::from_c(c), bytes, version, big_endian != 0, from))
-}
-
-/// # Safety
-/// @entry is an entry, as long as its u64s says.
-#[cold]
-#[c_export]
-pub unsafe fn bch2_journal_entry_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, entry: *mut Head<c::jset_entry>) {
-    let e = unsafe { crate::util::vstructs::from_ffi::<c::jset_entry<Unvalidated>>(entry) };
-    journal_entry_to_text(out, c.map(Fs::from_c), e)
-}
-
-/// # Safety
-/// @jset is a jset, as long as its u64s says.
-#[c_export]
-pub unsafe fn bch2_jset_validate(c: &Opaque<Fs>, ca: *mut Dev, jset: *mut Head<c::jset>, sector: u64,
-                                 flags: ValidateFlags) -> c_int {
-    let bytes = unsafe { core::slice::from_raw_parts_mut(jset.cast::<u8>(), (*jset).bytes()) };
-    jset_ret(jset_validate(Fs::from_c(c), unsafe { ca.as_ref() }, bytes, sector, flags))
 }

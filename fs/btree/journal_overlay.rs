@@ -1081,7 +1081,7 @@ fn sort_dedup(jk: &c::journal_keys, keys: &mut GapBuffer<c::journal_key>) {
 }
 
 fn journal_seq_is_rewound(fs: &Fs, seq: u64) -> bool {
-    fs.journal.rewind_ranges.as_slice().iter().any(|r| seq > r.to && seq <= r.from)
+    fs.journal.rewind_ranges.iter().any(|r| seq > r.to && seq <= r.from)
 }
 
 /// The keys, from the journal entries read - again, if they were already,

@@ -113,7 +113,7 @@ impl SuperOps for Fs {
         let ret = if disabled {
             Ok(())
         } else if wait == 0 {
-            unsafe { c::bch2_journal_flush_async(&raw mut (*self.as_ptr()).journal, core::ptr::null_mut()) };
+            self.journal.flush_async(None);
             Ok(())
         } else {
             self.journal_flush()

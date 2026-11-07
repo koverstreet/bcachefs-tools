@@ -768,7 +768,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     }
 
     if fs.opts.journal_rewind.get() != 0 {
-        fs.journal_add_rewind_range(journal_start.replay_end, fs.opts.journal_rewind.get())?;
+        unsafe { fs.not_rw() }.journal_add_rewind_range(journal_start.replay_end, fs.opts.journal_rewind.get())?;
         ignore_journal_rewind_errors(fs);
         journal_reread_for_rewind(fs)?;
     }
@@ -859,7 +859,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
                 w.fsck.set(1);
             }
 
-            fs.journal_add_rewind_range(journal_start.replay_end, rewind_seq)?;
+            unsafe { fs.not_rw() }.journal_add_rewind_range(journal_start.replay_end, rewind_seq)?;
             ignore_journal_rewind_errors(fs);
 
             /*

@@ -941,17 +941,10 @@ __bch2_fs_log_msg(struct bch_fs *c, unsigned commit_flags, const char *fmt,
 	CLASS(printbuf, buf)();
 	prt_vprintf(&buf, fmt, args);
 
-	unsigned u64s = DIV_ROUND_UP(buf.pos, sizeof(u64));
-
 	try(buf.allocation_failure ? -BCH_ERR_ENOMEM_trans_log_msg : 0);
 
 	if (!test_bit(JOURNAL_running, &c->journal.flags)) {
-		try(darray_make_room(&c->journal.early_journal_entries, jset_u64s(u64s)));
-
-		struct jset_entry_log *l = (void *) &darray_top(c->journal.early_journal_entries);
-		journal_entry_init(&l->entry, BCH_JSET_ENTRY_log, 0, 1, u64s);
-		memcpy_and_pad(l->d, u64s * sizeof(u64), buf.buf, buf.pos, 0);
-		c->journal.early_journal_entries.nr += jset_u64s(u64s);
+		try(bch2_journal_early_entry_add(&c->journal, BCH_JSET_ENTRY_log, 0, 1, buf.buf, buf.pos));
 	} else {
 		CLASS(btree_trans, trans)(c);
 		try(commit_do(trans, NULL, NULL, commit_flags, bch2_trans_log_msg(trans, &buf)));

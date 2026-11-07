@@ -242,14 +242,12 @@ impl c::journal {
         PinsRead { j: self, g: self.pin_resize_lock.read() }
     }
 
-    /// # Safety
-    /// The caller holds pin_resize_lock for read, for as long as these live.
-    pub(crate) unsafe fn pins_held(&self) -> PinsRead<'_> {
-        PinsRead { j: self, g: unsafe { self.pin_resize_lock.read_held() } }
-    }
-
     pub(crate) fn pin_range(&self) -> &c::PinRange {
         &self.pin_resize_lock
+    }
+
+    pub(crate) fn pin_fifo_want_resize(&self) -> bool {
+        want_size(self.pin_range()) != self.pin_range().pin_size.get()
     }
 
     /* The most dirty journal entries we let accumulate before reclaim must act */
@@ -804,7 +802,7 @@ fn want_size(r: &c::PinRange) -> u64 {
  * point at their old heads.
  *
  * Must NOT be called with j->lock held - alloc + percpu_down_write may sleep.
- * Called only from pin_resize_work, so resizes don't race each other.
+ * Called only from pin_resize(), the work, so resizes don't race each other.
  */
 fn resize(j: &c::journal) -> Result<(), BchError> {
     let fs = j.fs();
@@ -857,12 +855,11 @@ fn resize(j: &c::journal) -> Result<(), BchError> {
 
 /*
  * Worker for the pin fifo resize trigger — journal_entry_open queues this when
- * bch2_journal_pin_fifo_want_resize(). Off the open path because the open is
+ * pin_fifo_want_resize(). Off the open path because the open is
  * sometimes called from NONBLOCK contexts holding btree locks, where we can't
  * sleep on percpu_down_write / kvmalloc.
  */
-pub(crate) unsafe extern "C" fn pin_resize_work(work: *mut c::work_struct) {
-    let j = unsafe { &*work.byte_sub(offset_of!(c::journal, pin_resize_work)).cast::<c::journal>() };
+pub(crate) fn pin_resize(j: &c::journal) {
     let _ = resize(j);
 }
 
@@ -873,8 +870,7 @@ pub(crate) unsafe extern "C" fn pin_resize_work(work: *mut c::work_struct) {
  *
  * Errors are journal errors, reported at the source - nothing to do here.
  */
-pub(crate) unsafe extern "C" fn flush_degraded_work(work: *mut c::work_struct) {
-    let j = unsafe { &*work.byte_sub(offset_of!(c::journal, flush_degraded_work)).cast::<c::journal>() };
+pub(crate) fn flush_degraded(j: &c::journal) {
     let _ = j.flush_device_pins(-1);
 }
 
@@ -940,38 +936,5 @@ pub fn bch2_journal_pin_copy(j: &c::journal, dst: &c::journal_entry_pin, src: &c
 #[c_export]
 pub fn bch2_journal_pin_drop(j: &c::journal, pin: &c::journal_entry_pin) {
     j.pin_drop(pin)
-}
-
-#[c_export]
-pub fn bch2_journal_pin_fifo_want_resize(j: &c::journal) -> bool {
-    want_size(j.pin_range()) != j.pin_range().pin_size.get()
-}
-
-
-#[c_export]
-pub fn bch2_journal_pins_used(j: &c::journal) -> u64 {
-    j.pin_range().used()
-}
-
-macro_rules! held_exports {
-    ($($cname:ident => $method:ident($($arg:ident: $ty:ty),*) $(-> $ret:ty)?;)*) => { $(
-        /// # Safety
-        /// The caller holds pin_resize_lock for read - and j->lock, where an
-        /// entry's bytes, or the fifo's front or back, change.
-        #[c_export]
-        pub unsafe fn $cname(j: &c::journal, $($arg: $ty),*) $(-> $ret)? {
-            unsafe { j.pins_held() }.$method($($arg),*)
-        }
-    )* };
-}
-
-held_exports! {
-    bch2_journal_pins_push              => push(seq: u64);
-    bch2_journal_pins_advance_front     => advance_front(last_seq_ondisk: u64);
-    bch2_journal_seq_put                => seq_put(seq: u64) -> bool;
-    bch2_journal_seq_set_bytes          => seq_set_bytes(seq: u64, bytes: c_uint);
-    bch2_journal_seq_take_bytes         => seq_take_bytes(seq: u64) -> c_uint;
-    bch2_journal_seq_devs               => seq_devs(seq: u64) -> c::bch_devs_list;
-    bch2_journal_seq_set_devs           => seq_set_devs(seq: u64, devs: &c::bch_devs_list);
 }
 
