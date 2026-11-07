@@ -1140,12 +1140,6 @@ pub fn __bch2_trans_kmalloc(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut P
 }
 
 #[c_export]
-pub fn bch2_trans_restart_foreign_task(trans: &BtreeTrans<'_>, err: c_int, ip: c_ulong) -> c_int {
-    assert!(err > 0);
-    -trans.restart_foreign_task(bch_errcode::from_bits(err as _), ip).raw()
-}
-
-#[c_export]
 pub fn bch2_trans_restart_ip(trans: &BtreeTrans<'_>, err: c_int, ip: c_ulong) -> c_int {
     assert!(err > 0);
     -trans.restart_ip(bch_errcode::from_bits(err as _), ip).raw()

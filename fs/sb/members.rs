@@ -681,11 +681,6 @@ impl Fs {
     }
 }
 
-#[c_export]
-pub fn bch2_dev_latency_max(c: &Opaque<Fs>, devs: &c::bch_devs_mask, rw: c_int) -> c_ulong {
-    Fs::from_c(c).dev_latency_max(devs, rw)
-}
-
 // ── Device identity, recorded in the member ──────────────────────────────
 
 /// @dst, one of the member's fixed-size strings, made @src - NUL padded, cut
@@ -722,11 +717,6 @@ pub(crate) fn mi_field_upgrades(sb: &mut SbLockGuard<'_>, dev: u32, id: &c::bch_
         dirty = true;
     }
     dirty
-}
-
-#[c_export]
-pub fn bch2_dev_mi_field_upgrades(ca: &Dev) {
-    ca.mi_field_upgrades();
 }
 
 /// Every online device's identity, recorded.

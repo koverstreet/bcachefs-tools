@@ -58,11 +58,6 @@ pub fn bch2_io_failures_to_text(out: &mut Printbuf, c: &Opaque<Fs>, failed: &c::
 }
 
 #[c_export]
-pub fn bch2_io_failures_all_dev_removed(failed: &c::bch_io_failures) -> bool {
-    failed.all_dev_removed()
-}
-
-#[c_export]
 pub fn bch2_io_failures_empty(failed: &c::bch_io_failures) -> bool {
     failed.is_empty()
 }

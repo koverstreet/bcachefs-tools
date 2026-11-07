@@ -635,20 +635,3 @@ impl Drop for QuotaReservation<'_> {
     }
 }
 
-/// For C's inode writes, until they're Rust: @set, if not NULL, with @p -
-/// its error, or 0 to write the inode, or positive for nothing to write.
-#[must_use]
-#[c_export]
-pub fn bch2_write_inode(_c: &Opaque<Fs>, inode: &c::bch_inode_info, set: c::inode_set_fn,
-                        p: *mut c_void, fields: c_uint) -> c_int {
-    // SAFETY: every C caller holds @inode's ei_update_lock
-    let l = unsafe { UpdateLock::held(inode) };
-    ret_to_c(l.write_inode_if(fields, |t, bi| match set {
-        // SAFETY: C's callback, given the transaction it runs in, the
-        // inode, the inode being written, and its @p
-        Some(set) => ret_to_result(unsafe { set(t.raw(), inode.raw(), bi, p) })
-            .map(|r| r == 0),
-        None      => Ok(true),
-    }).map(|_| ()))
-}
-

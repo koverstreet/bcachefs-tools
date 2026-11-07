@@ -31,12 +31,10 @@ use crate::data::ec::head::stripe_heads_stop;
 use crate::fs::Fs;
 use crate::locking::{ByteLock, ExclusiveGuard, Lockdep};
 use crate::prt;
-use crate::util::ffi::Opaque;
 use crate::util::hash::hash_64;
 use crate::util::kernel::local_clock;
 use crate::util::{HumanReadable, Nsecs, Printbuf, ToText};
 use core::ffi::{c_uint, c_ulong};
-use cstruct_macros::c_export;
 
 /// write_points_hash_lock, held.
 type HashGuard<'a> = ExclusiveGuard<'a, Lockdep<ByteLock>, (), c::WritePointsHash>;
@@ -326,9 +324,3 @@ impl Fs {
     }
 }
 
-// ── For C ────────────────────────────────────────────────────────────────
-
-#[c_export]
-pub fn bch2_reset_alloc_cursors(c: &Opaque<Fs>) {
-    Fs::from_c(c).reset_alloc_cursors()
-}

@@ -4,7 +4,6 @@
 
 use crate::fs::Fs;
 use super::*;
-use crate::util::ToText;
 use cstruct_macros::c_export;
 use crate::format::{Btree, DataType, MemberState, SbFeature};
 
@@ -27,11 +26,6 @@ c_names! {
     "const char * const __bch2_csum_types[]"   __bch2_csum_types: c::bch_csum_type;
     "const char * const __bch2_data_types[]"   __bch2_data_types: DataType;
     "const char * const bch2_member_states[]"  bch2_member_states: MemberState;
-}
-
-#[c_export]
-pub fn bch2_prt_csum_type(out: &mut Printbuf, t: c::bch_csum_type) {
-    t.to_text(out)
 }
 
 #[c_export]

@@ -114,11 +114,6 @@ pub unsafe fn __bch2_bkey_cmp_left_packed(b: &BtreeNode, l: *const c::bkey_packe
     b.unpack_pos_at(unsafe { padded(l) }, 1).cmp(r) as c_int
 }
 
-#[c_export]
-pub fn bch2_bpos_swab(p: &mut Bpos) {
-    p.swab();
-}
-
 pub(crate) unsafe fn bkey_swab_key(f: Option<&c::bkey_format>, k: *mut c::bkey_packed) {
     let f = if unsafe { (*BkeyP::from_raw(k)).is_packed() } {
         f.expect("a packed key to swab, with no format")

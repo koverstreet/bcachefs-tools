@@ -791,7 +791,7 @@ impl BtreeTrans<'_> {
          *
          * The code below used to be needed to ensure ancestor nodes get locked
          * before interior nodes - now that's handled by
-         * bch2_btree_path_traverse_all().
+         * path_traverse_all().
          */
         let path = &mut paths[idx];
         let (cached, btree) = (path.cached(), path.btree_id());
@@ -1341,12 +1341,6 @@ pub fn __bch2_btree_node_relock(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &m
 }
 
 #[c_export]
-pub fn bch2_btree_path_relock_norestart(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                        path: *mut BtreePath) -> bool {
-    trans.path_relock_norestart(paths, trans.path_idx_of(path))
-}
-
-#[c_export]
 pub fn __bch2_btree_path_relock(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
                                 path: *mut BtreePath) -> c_int {
     ret_to_c(trans.path_relock(paths, trans.path_idx_of(path)))
@@ -1390,17 +1384,6 @@ pub fn bch2_trans_unlock(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Path
 #[c_export]
 pub fn bch2_trans_unlock_long(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) {
     trans.unlock_long_from(paths, crate::ret_ip!())
-}
-
-#[c_export]
-pub fn bch2_trans_srcu_lock(trans: &BtreeTrans<'_>) {
-    trans.srcu_lock()
-}
-
-#[c_export]
-#[inline(always)]
-pub fn bch2_trans_srcu_begin(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) {
-    trans.srcu_begin(paths, crate::ret_ip!())
 }
 
 #[c_export]

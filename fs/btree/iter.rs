@@ -1205,14 +1205,6 @@ impl<'t> BtreeIter<'t> {
         k
     }
 
-    pub(super) fn next_in(&mut self, paths: &mut Paths<'_>) -> Peeked {
-        if !self.advance_in(paths) {
-            return Ok(None);
-        }
-
-        self.peek_max_in(paths, SPOS_MAX)
-    }
-
     fn __peek_prev(&mut self, paths: &mut Paths<'_>, mut search_key: Bpos) -> Peeked {
         let trans = self.trans_c();
         let flags = self.iter_flags();
@@ -1675,14 +1667,6 @@ impl<'t> BtreeIter<'t> {
         self.maybe_trim(paths, k, self.pos, end)
     }
 
-    pub(super) fn next_slot_in(&mut self, paths: &mut Paths<'_>) -> Peeked {
-        if !self.advance_in(paths) {
-            return Ok(None);
-        }
-
-        self.peek_slot_in(paths)
-    }
-
     pub(super) fn prev_slot_in(&mut self, paths: &mut Paths<'_>) -> Peeked {
         /* reverse slots aren't defined for extents: peek_slot() is the slot from @pos on */
         assert!(!self.is_extents(), "reverse slots on an extents iterator");
@@ -1898,14 +1882,6 @@ pub unsafe fn bch2_set_btree_iter_dontneed(iter: *mut c::btree_iter) {
 /// As bch2_set_btree_iter_dontneed()'s.
 #[c_export]
 #[must_use]
-pub unsafe fn __bch2_btree_iter_traverse(iter: *mut c::btree_iter) -> c_int {
-    unsafe { with_paths(iter, |iter, paths| ret_to_c(iter.traverse_at_pos_in(paths))) }
-}
-
-/// # Safety
-/// As bch2_set_btree_iter_dontneed()'s.
-#[c_export]
-#[must_use]
 pub unsafe fn bch2_btree_iter_traverse(iter: *mut c::btree_iter) -> c_int {
     unsafe { with_paths(iter, |iter, paths| ret_to_c(iter.traverse_in(paths))) }
 }
@@ -1952,20 +1928,6 @@ pub unsafe fn bch2_btree_iter_peek_max(iter: *mut c::btree_iter, end: *const Bpo
 }
 
 /**
- * bch2_btree_iter_next() - returns first key greater than iterator's current
- * position
- * @iter:	iterator to peek from
- *
- * Returns:	key if found, or an error extractable with bkey_err().
- */
-/// # Safety
-/// As bch2_set_btree_iter_dontneed()'s.
-#[c_export]
-pub unsafe fn bch2_btree_iter_next(iter: *mut c::btree_iter) -> c::bkey_s_c {
-    unsafe { peek_c(iter, |iter, paths| iter.next_in(paths)) }
-}
-
-/**
  * bch2_btree_iter_peek_prev_min() - returns first key less than or equal to
  * iterator's current position
  * @iter:	iterator to peek from
@@ -1991,20 +1953,6 @@ pub unsafe fn bch2_btree_iter_next(iter: *mut c::btree_iter) -> c::bkey_s_c {
 #[c_export]
 pub unsafe fn bch2_btree_iter_peek_prev_min(iter: *mut c::btree_iter, end: Bpos) -> c::bkey_s_c {
     unsafe { peek_c(iter, |iter, paths| iter.peek_prev_min_in(paths, end)) }
-}
-
-/**
- * bch2_btree_iter_prev() - returns first key less than iterator's current
- * position
- * @iter:	iterator to peek from
- *
- * Returns:	key if found, or an error extractable with bkey_err().
- */
-/// # Safety
-/// As bch2_set_btree_iter_dontneed()'s.
-#[c_export]
-pub unsafe fn bch2_btree_iter_prev(iter: *mut c::btree_iter) -> c::bkey_s_c {
-    unsafe { peek_c(iter, |iter, paths| iter.prev_in(paths)) }
 }
 
 /**
@@ -2035,20 +1983,6 @@ pub unsafe fn bch2_btree_iter_peek_slot(iter: *mut c::btree_iter) -> c::bkey_s_c
 #[c_export]
 pub unsafe fn bch2_btree_iter_peek_slot_max(iter: *mut c::btree_iter, end: Bpos) -> c::bkey_s_c {
     unsafe { peek_c(iter, |iter, paths| iter.peek_slot_max_in(paths, end)) }
-}
-
-/// # Safety
-/// As bch2_set_btree_iter_dontneed()'s.
-#[c_export]
-pub unsafe fn bch2_btree_iter_next_slot(iter: *mut c::btree_iter) -> c::bkey_s_c {
-    unsafe { peek_c(iter, |iter, paths| iter.next_slot_in(paths)) }
-}
-
-/// # Safety
-/// As bch2_set_btree_iter_dontneed()'s.
-#[c_export]
-pub unsafe fn bch2_btree_iter_prev_slot(iter: *mut c::btree_iter) -> c::bkey_s_c {
-    unsafe { peek_c(iter, |iter, paths| iter.prev_slot_in(paths)) }
 }
 
 /// # Safety
@@ -2093,7 +2027,6 @@ pub unsafe fn bch2_trans_iter_init_outlined(trans: &BtreeTrans<'_>, #[lent(trans
  * callers know these rules; user-controlled (btree, level, range, flags)
  * combinations must be validated first:
  */
-#[c_export]
 pub fn bch2_btree_iter_params_valid(btree: Btree, level: c_uint, start: Bpos, end: Bpos,
                                     flags: c::btree_iter_update_trigger_flags) -> bool {
     btree_iter_params_valid(btree, level, start, end, BtreeIterFlags::from_bits_retain(flags.bits()))
@@ -2482,7 +2415,7 @@ impl<'t> BtreeIter<'t> {
     }
 
     /// traverse(), its path at the iterator's position, not its search key -
-    /// one past it, for extents: __bch2_btree_iter_traverse().
+    /// one past it, for extents.
     pub fn traverse_at_pos(&mut self, t: &TransAttempt<'_, 't>) -> Result<(), BchError> {
         self.traverse_at_pos_in(&mut t.trans().paths())
     }

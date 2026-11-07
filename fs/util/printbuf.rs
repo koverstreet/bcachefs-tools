@@ -914,19 +914,6 @@ pub fn bch2_printbuf_make_room(out: &mut Printbuf, extra: c_uint) -> c_int {
     out.grow(extra as usize).map_or_else(|e| -(e as c_int), |()| 0)
 }
 
-/*
- * Returns printbuf's buf as a C string, guaranteed to be null terminated.
- */
-#[c_export]
-pub fn bch2_printbuf_str(buf: &Printbuf) -> *const c_char {
-    /*
-     * If we've written to a printbuf then it's guaranteed to be a null
-     * terminated string - but if we haven't, then we might not have
-     * allocated a buffer at all:
-     */
-    if buf.pos != 0 { buf.buf } else { c"".as_ptr().cast() }
-}
-
 #[c_export]
 pub fn bch2_printbuf_tabstop_push(buf: &mut Printbuf, spaces: c_uint) -> c_int {
     if buf.tabstop_push(spaces) { 0 } else { -(c::EINVAL as c_int) }
