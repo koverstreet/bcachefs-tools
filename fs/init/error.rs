@@ -1040,19 +1040,24 @@ fn fs_trans_inconsistent(fs: &Fs, t: Option<&TransAttempt<'_, '_>>, msg: &dyn To
     ret
 }
 
-/// An inconsistency, with nothing to say about it.
+impl Fs {
+    /// An inconsistency, with nothing to say about it.
+    pub fn inconsistent(&self) -> bool {
+        let _noreclaim = MemallocFlags::noreclaim();
+        let mut out = Printbuf::new();
+        out.indent_add_nextline(2);
+
+        let ret = self.inconsistent_error(&mut out);
+        if ret {
+            crate::bch_err!(self, "{}", out.as_str());
+        }
+        ret
+    }
+}
+
 #[c_export]
 pub fn bch2_inconsistent_error(c: &Opaque<Fs>) -> bool {
-    let fs = Fs::from_c(c);
-    let _noreclaim = MemallocFlags::noreclaim();
-    let mut out = Printbuf::new();
-    out.indent_add_nextline(2);
-
-    let ret = fs.inconsistent_error(&mut out);
-    if ret {
-        crate::bch_err!(fs, "{}", out.as_str());
-    }
-    ret
+    Fs::from_c(c).inconsistent()
 }
 
 /// # Safety
