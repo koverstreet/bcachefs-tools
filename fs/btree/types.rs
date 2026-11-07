@@ -908,8 +908,8 @@ c_enum! {
     #[closed]
     #[prefix(BTREE_WRITE_)]
     #[nr(BTREE_WRITE_TYPE_NR)]
-    #[c_list(BCH_BTREE_WRITE_TYPES)]
-    pub enum btree_write_type: u32 {
+    #[c_name(btree_write_type)]
+    pub enum BtreeWriteType: u32 {
         initial = 0,
         init_next_bset = 1,
         cache_reclaim = 2,
@@ -962,7 +962,7 @@ c_enum! {
 atomic_bitfield! {
     /// struct btree's flags: the pending write's type, then BTREE_FLAGS().
     pub struct BtreeNodeFlags: u32 in usize {
-        #[bits(3)] write_type: btree_write_type,
+        #[bits(3)] write_type: BtreeWriteType,
         BTREE_FLAGS(flag) => flag: bool,
     }
 }
@@ -1041,7 +1041,7 @@ pub struct bch_fs_btree {
     #[pin]
     #[init(BioSet::new(1, true), ENOMEM_fs_other_alloc)]
     #[c("struct bio_set bio")]
-    pub bio: BioSet<Either<cs::btree_read_bio, cs::btree_write_bio>>,
+    pub bio: BioSet<Either<cs::btree_read_bio, crate::btree::write::BtreeWriteBio>>,
     #[pin]
     #[init(fill_iter_pool(opts), ENOMEM_fs_other_alloc)]
     #[c("mempool_t fill_iter")]

@@ -6,7 +6,7 @@
 //!
 //!   atomic_bitfield! {
 //!       pub struct BtreeNodeFlags: u32 in usize {
-//!           #[bits(3)] write_type: btree_write_type,
+//!           #[bits(3)] write_type: BtreeWriteType,
 //!           BTREE_FLAGS(flag) => flag: bool,
 //!       }
 //!   }

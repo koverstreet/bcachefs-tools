@@ -60,14 +60,13 @@ impl SortIterStack {
 
     /// The node's keys at offsets @keys, to merge.
     pub fn add(&mut self, keys: core::ops::Range<usize>) {
-        let set = SortIterSet { k: keys.start as u32, end: keys.end as u32 };
-        unsafe { push(self.as_iter(), set) }
-    }
+        let used = self.iter.used as usize;
+        assert!(used < self.sets.len(), "adding to a sort iterator of {} runs, full", self.sets.len());
 
-    /// For the sorts, which take the iterator: its runs are the stack's, past
-    /// its header, so the pointer's the whole stack's.
-    pub fn as_iter(&mut self) -> *mut SortIter {
-        core::ptr::from_mut(self).cast()
+        if !keys.is_empty() {
+            self.sets[used] = SortIterSet { k: keys.start as u32, end: keys.end as u32 };
+            self.iter.used += 1;
+        }
     }
 }
 
@@ -648,26 +647,23 @@ pub unsafe fn bch2_key_sort_fix_overlapping(_fs: &Fs, dst: *mut Head<c::bset>, i
     nr
 }
 
-/// Clears each key's needs_whiteout: it isn't written.
-///
-/// # Safety
-/// @iter's runs are of its node, and @dst has room for their keys.
-#[c_export]
-pub unsafe fn bch2_sort_keys_keep_unwritten_whiteouts(dst: *mut c::bkey_packed, iter: *mut SortIter) -> c_uint {
-    let (b, runs) = unsafe { sort_iter(iter) };
-    let room = unsafe { core::slice::from_raw_parts_mut(dst.cast(), runs_u64s(runs)) };
-    let keys = b.keys(unsafe { b.contents() });
-    let unwritten_whiteouts = b.unwritten_whiteouts().start;
+impl SortIterStack {
+    /// Its runs of @keys merged into @dst, for the node write: the u64s
+    /// written. Clears each key's needs_whiteout: it isn't written.
+    pub fn sort_keys_keep_unwritten_whiteouts(&mut self, keys: &Keys<'_>, dst: &mut [u64]) -> usize {
+        let runs = &mut self.sets[..self.iter.used as usize];
+        let unwritten_whiteouts = keys.node().unwritten_whiteouts().start;
 
-    /*
-     * For sorting in the btree node write path: whiteouts not in the unwritten
-     * whiteouts area are dropped, whiteouts in the unwritten whiteouts area are
-     * dropped if overwritten by real keys:
-     */
-    Merge::new(&keys, runs, |l, lk, r, rk| rk.key_type().is_deleted().cmp(&lk.key_type().is_deleted())
-                                               .then(l.cmp(&r)))
-        .unique(|at, k| !(k.key_type().is_deleted() && at < unwritten_whiteouts))
-        .fold(0, |out, (_, k)| copy_key(room, out, k, |k| set_needs_whiteout(k, false))) as c_uint
+        /*
+         * For sorting in the btree node write path: whiteouts not in the unwritten
+         * whiteouts area are dropped, whiteouts in the unwritten whiteouts area are
+         * dropped if overwritten by real keys:
+         */
+        Merge::new(keys, runs, |l, lk, r, rk| rk.key_type().is_deleted().cmp(&lk.key_type().is_deleted())
+                                                  .then(l.cmp(&r)))
+            .unique(|at, k| !(k.key_type().is_deleted() && at < unwritten_whiteouts))
+            .fold(0, |out, (_, k)| copy_key(dst, out, k, |k| set_needs_whiteout(k, false)))
+    }
 }
 
 #[c_export]

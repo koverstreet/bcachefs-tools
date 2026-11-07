@@ -48,6 +48,7 @@ pub mod traverse;
 pub mod trigger;
 pub mod types;
 pub mod update;
+pub mod write;
 pub mod write_buffer;
 
 pub use bkey::BkeySC;

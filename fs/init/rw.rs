@@ -22,6 +22,7 @@ use crate::accounting::verify_accounting_clean;
 use crate::alloc::capacity::recalc_capacity;
 use crate::btree::cache::bch2_fs_btree_init_rw;
 use crate::btree::interior::{bch2_btree_interior_updates_flush, bch2_do_pending_node_rewrites};
+use crate::btree::write::bch2_btree_flush_all_writes;
 use crate::btree::write_buffer::{bch2_btree_write_buffer_flush_going_ro, bch2_btree_write_buffer_start,
                                  bch2_btree_write_buffer_stop};
 use crate::c;
@@ -70,7 +71,7 @@ impl Fs {
                 c::bch2_btree_key_cache_flush_going_ro(p) != 0 ||
                 bch2_btree_interior_updates_flush(p) ||
                 self.journal_flush_all_pins() ||
-                c::bch2_btree_flush_all_writes(p)
+                bch2_btree_flush_all_writes(p)
             };
             if progress || seq != self.journal_cur_seq() {
                 seq = self.journal_cur_seq();
@@ -89,10 +90,8 @@ impl Fs {
          * may have kicked off before the journal died.
          */
         if self.journal.halted() {
-            unsafe {
-                c::bch2_btree_cancel_all_writes(p);
-                bch2_btree_interior_updates_flush(p);
-            }
+            self.btree_cancel_all_writes();
+            unsafe { bch2_btree_interior_updates_flush(p) };
         } else {
             crate::journal::buckets::drop_retired_going_ro(self);
         }

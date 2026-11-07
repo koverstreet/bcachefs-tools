@@ -224,7 +224,6 @@ impl BtreeTrans<'_> {
 }
 
 c_extern! {
-    pub fn bch2_trans_submit_write_bios(trans: *mut BtreeTrans<'_>);
     pub fn bch2_btree_cache_cannibalize_unlock(trans: *mut BtreeTrans<'_>);
 }
 
@@ -879,7 +878,7 @@ impl BtreeTrans<'_> {
          * trans's context.
          */
         if !self.queued_write_bios.get().is_null() {
-            unsafe { bch2_trans_submit_write_bios(self.raw()) };
+            crate::btree::write::bch2_trans_submit_write_bios(self);
         }
     }
 

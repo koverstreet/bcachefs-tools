@@ -19,7 +19,6 @@
 #[path = "btree/write_buffer_defs.rs"] pub mod btree_write_buffer_defs;
 #[path = "btree/check_types.rs"] pub mod btree_check_types;
 #[path = "btree/key_cache_types.rs"] pub mod btree_key_cache_types;
-#[path = "btree/write_types.rs"] pub mod btree_write_types;
 #[path = "data/ec/create_types.rs"] pub mod data_ec_create_types;
 #[path = "data/ec/format.rs"] pub mod data_ec_format;
 #[path = "data/ec/types.rs"] pub mod data_ec_types;
@@ -134,7 +133,6 @@ pub mod c {
     pub use crate::btree::update::{BCH_TRANS_COMMIT_journal_reclaim, BCH_TRANS_COMMIT_journal_replay, BCH_TRANS_COMMIT_no_check_rw, BCH_TRANS_COMMIT_no_enospc, BCH_TRANS_COMMIT_no_journal_res, BCH_TRANS_COMMIT_no_skip_noops, BCH_TRANS_COMMIT_skip_accounting_apply, __BCH_TRANS_COMMIT_journal_reclaim, __BCH_TRANS_COMMIT_journal_replay, __BCH_TRANS_COMMIT_no_check_rw, __BCH_TRANS_COMMIT_no_enospc, __BCH_TRANS_COMMIT_no_journal_res, __BCH_TRANS_COMMIT_no_skip_noops, __BCH_TRANS_COMMIT_skip_accounting_apply, __bch2_insert_snapshot_whiteouts, __bch2_trans_commit, __bch2_trans_subbuf_alloc, __bch_trans_commit_flags, bch2_bkey_get_empty_slot, bch2_btree_bit_mod, bch2_btree_bit_mod_buffered, bch2_btree_bit_mod_iter, bch2_btree_delete, bch2_btree_delete_at, bch2_btree_delete_range, bch2_btree_delete_range_trans, bch2_btree_insert, bch2_btree_insert_nonextent, bch2_btree_insert_trans, bch2_fs_log_msg, bch2_trans_commit_hook, bch2_trans_update_extent_overwrite, bch2_trans_update_ip, bch2_trigger_get_mutable_new, bch_trans_commit_flags, rust_bch2_trans_update_buffered};
     pub use super::btree_write_buffer_defs::*;
     pub use crate::btree::write_buffer::{BCH_WB_BTREE_NR, BCH_WB_BTREE_accounting, BCH_WB_BTREE_backpointers, BCH_WB_BTREE_deleted_inodes, BCH_WB_BTREE_lru, BCH_WB_BTREE_need_discard, BCH_WB_BTREE_reconcile_hipri, BCH_WB_BTREE_reconcile_hipri_phys, BCH_WB_BTREE_reconcile_pending, BCH_WB_BTREE_reconcile_work, BCH_WB_BTREE_reconcile_work_phys, BCH_WB_BTREE_stripe_backpointers, BTREE_WRITE_BUFERED_VAL_U64s_MAX, WB_FLUSH_NR, WB_FLUSH_journal_pin, WB_FLUSH_maybe, WB_FLUSH_sync, WB_FLUSH_thread, WB_FLUSH_tryflush, bch2_btree_write_buffer_flush_sync, bch2_btree_write_buffer_maybe_flush, bch2_btree_write_buffer_to_text, bch2_btree_write_buffer_tryflush, bch_fs_btree_write_buffer, bch_wb_btree, btree_write_buffer_keys, btree_write_buffered_key, wb_flush_caller, wb_key_ref, wb_key_ref_key, wb_key_ref_pos_idx, wb_key_ref_words};
-    pub use super::btree_write_types::*;
     pub use crate::data::compress::{BB_kmalloc, BB_mempool, BB_none, BB_vmap, bbuf, bbuf_type, bch_compression_opt, bch_compression_opt_bits, bch_compression_opt_fields};
     pub(crate) use crate::data::compress::{__bch_compression_opt_bits_forward};
     pub use crate::data::copygc::{bch_fs_copygc};

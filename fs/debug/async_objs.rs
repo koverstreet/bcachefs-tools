@@ -185,7 +185,7 @@ unsafe fn btree_read_bio_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_
 
 #[cold]
 unsafe fn btree_write_bio_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
-    let wbio = obj.cast::<c::btree_write_bio>().as_ptr();
+    let wbio = obj.cast::<crate::btree::write::BtreeWriteBio>().as_ptr();
     unsafe { Bio::from_raw(&raw const (*wbio).wbio.bio) }.to_text(out)
 }
 
