@@ -14,6 +14,7 @@ use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::ffi::Opaque;
 use crate::util::late::LateInit;
 use core::ffi::{c_int, c_void};
+use core::mem::MaybeUninit;
 use core::ptr::NonNull;
 use pin_init::PinInit;
 
@@ -59,7 +60,19 @@ impl Mempool {
 
     /// An element, freed to the pool on drop.
     pub fn alloc(&self) -> PoolBuf<'_> {
-        PoolBuf { pool: self, p: self.alloc_raw(c::GFP_KERNEL) }
+        self.alloc_gfp(c::GFP_KERNEL)
+    }
+
+    /// alloc(), with @gfp: GFP_NOIO for an allocation IO completion waits on.
+    pub fn alloc_gfp(&self, gfp: c::gfp_t) -> PoolBuf<'_> {
+        PoolBuf { pool: self, p: self.alloc_raw(gfp) }
+    }
+
+    /// alloc_gfp(), zeroed: its bytes initialized, to be cast to what they hold.
+    pub fn alloc_zeroed(&self, gfp: c::gfp_t) -> PoolBufZeroed<'_> {
+        let mut buf = self.alloc_gfp(gfp);
+        buf.as_uninit_mut().fill(MaybeUninit::new(0));
+        PoolBufZeroed(buf)
     }
 
     /// An element, for C to hold: free_raw() takes it back. @gfp may sleep.
@@ -103,6 +116,15 @@ impl PoolBuf<'_> {
             let size = (*self.pool.0.as_ptr()).pool_data as usize;
             core::slice::from_raw_parts_mut(self.p.as_ptr().cast(), size)
         }
+    }
+}
+
+pub struct PoolBufZeroed<'p>(PoolBuf<'p>);
+
+impl PoolBufZeroed<'_> {
+    pub fn as_bytes_mut(&mut self) -> &mut [u8] {
+        let bytes = self.0.as_uninit_mut();
+        unsafe { &mut *(core::ptr::from_mut(bytes) as *mut [u8]) }
     }
 }
 
