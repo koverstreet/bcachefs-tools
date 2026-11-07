@@ -99,6 +99,11 @@ impl<const N: usize> IoFailures<N> {
         self.devs.last_mut().expect("just pushed")
     }
 
+    /// @dev's io error, if it has one.
+    pub fn dev_err(&self, dev: u32) -> Option<BchError> {
+        self.dev(dev).filter(|f| f.errcode != 0).map(|f| BchError::from_raw(-i32::from(f.errcode)))
+    }
+
     pub fn set_errcode(&mut self, dev: u32, err: c_int) {
         self.dev_mut(dev).errcode = err as i16;
     }
