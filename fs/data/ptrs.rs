@@ -353,9 +353,9 @@ macro_rules! ptrs_bkey {
         }
     };
 }
-c::bkey_val_arms!(cstruct_macros::xmacro_select [ptrs => ptrs_bkey { Ptrs, PtrsTyped; }]);
-c::bkey_val_arms!(cstruct_macros::xmacro_select [ptrs_mut => ptrs_bkey { PtrsMut, PtrsMutTyped; }]);
-c::bkey_val_arms!(cstruct_macros::xmacro_select [btree_ptr => ptrs_bkey { BtreePtrs, BtreePtrsTyped; }]);
+c::BkeyType_arms!(cstruct_macros::xmacro_select [ptrs => ptrs_bkey { Ptrs, PtrsTyped; }]);
+c::BkeyType_arms!(cstruct_macros::xmacro_select [ptrs_mut => ptrs_bkey { PtrsMut, PtrsMutTyped; }]);
+c::BkeyType_arms!(cstruct_macros::xmacro_select [btree_ptr => ptrs_bkey { BtreePtrs, BtreePtrsTyped; }]);
 
 const _: () = {
     assert!(types_with(BkeyTypeFlags::ptrs_mut) & !types_with(BkeyTypeFlags::ptrs) == 0,

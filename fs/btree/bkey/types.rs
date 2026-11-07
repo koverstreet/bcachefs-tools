@@ -675,7 +675,7 @@ macro_rules! key_types {
         }
     };
 }
-c::bkey_val_arms!(key_types);
+c::BkeyType_arms!(key_types);
 
 enum Unknown {}
 impl BkeyOps for Unknown {}
@@ -851,7 +851,7 @@ macro_rules! bkey_family {
         $(#[$meta])*
         pub type $family = crate::btree::bkey::FamilyVal<[<$family Types>]>;
 
-        crate::c::bkey_val_arms!(cstruct_macros::xmacro_select [$flag =>
+        crate::c::BkeyType_arms!(cstruct_macros::xmacro_select [$flag =>
             crate::btree::bkey::bkey_typed { [<$family Typed>] for [<$family Types>]; }]);
     } };
 }
@@ -927,7 +927,7 @@ macro_rules! bkey_types {
     )+ };
 }
 
-c::bkey_val_arms!(bkey_types);
+c::BkeyType_arms!(bkey_types);
 
 bkey_family_conv!(AllTypes);
 bkey_family_conv!(crate::data::ptrs::PtrsTypes);

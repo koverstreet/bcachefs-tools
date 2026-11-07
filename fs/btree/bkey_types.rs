@@ -10,7 +10,7 @@
 
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC};
 use crate::cstructs::c as cs;
-use crate::cstructs::c::bkey_val_arms;
+use crate::cstructs::c::BkeyType_arms;
 use crate::types::c_default;
 use core::ffi::c_uint;
 use cstruct_macros::{CStruct, bitfield, c_enum, c_same, c_verbatim, c_xmacro};
@@ -195,7 +195,7 @@ macro_rules! __bkey_typed {
         c_same! { struct [<bkey_s_ $name>]   == BkeyS<'static, $($ty)::+> { k, v } }
     )* } };
 }
-bkey_val_arms!(__bkey_typed);
+BkeyType_arms!(__bkey_typed);
 
 c_enum! {
     #[flags]

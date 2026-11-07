@@ -88,6 +88,7 @@ mod init;
 mod late;
 mod place;
 mod prt;
+mod enum_decl;
 mod tagged_union;
 mod to_text;
 mod typeinfo;
@@ -1067,12 +1068,14 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
 /// anything else is memory corruption, and panics.
 ///
 /// `#[prefix(P)]`: its variants by their names past P too, constants of the
-/// type - BkeyTypeFlags::ptrs for BKEY_TYPE_ptrs.
+/// type - BkeyTypeFlags::ptrs for BKEY_TYPE_ptrs; an open or closed one is
+/// named, as it prints and parses, by those. `#[nr(NR)]`: C's NR after the
+/// last, and NR, a number, not one of its values. A variant with no value is
+/// the one before it plus one, as in C. `_` for the name: an anonymous enum,
+/// the constants alone.
 ///
-/// The enum form, with `#[arm_columns(..)]` or `#[c_list(LIST)]`: a list's
-/// enum, declared as one - its variants by their names past `#[prefix(P)]`,
-/// C's P and theirs, each with its doc and columns, `#[nr(NR)]` its count -
-/// as tagged_union!'s #[key_value] has them:
+/// A variant is written with its doc, and its columns - `#[arm_columns(..)]`,
+/// enum_decl.rs - each made a const fn of the enum:
 ///
 ///   c_enum! {
 ///       #[open] #[c_name(btree_id)] #[prefix(BTREE_ID_)] #[nr(BTREE_ID_NR)]
@@ -1087,18 +1090,18 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
 ///       }
 ///   }
 ///
-/// `_` for the name: an anonymous enum, the constants alone. A variant with
-/// no value is the one before it plus one, as in C.
+/// Or from lists, `LIST(params) => template`, a variant for each entry.
 #[proc_macro]
 pub fn c_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("c_enum!", || {
-        if let Some(form) = c_enum_form(input.clone().into())? {
-            return tagged_union::tagged_union(form);
+        let input = TokenStream::from(input);
+        if !from_lists(&input) {
+            return enum_decl::c_enum(input);
         }
         let text = format!("c_enum! {{ {input} }}");
         let e = one_item!(&text, Enum, C_ENUM_SYNTAX);
         Ok(match e.from.first() {
-            Some((_, f)) => through_list(&f.list, "cstruct_macros::__c_enum", input.into()),
+            Some((_, f)) => through_list(&f.list, "cstruct_macros::__c_enum", input),
             None => c_enum_gen(&e, EnumOf::C(&text)),
         })
     })
@@ -1106,69 +1109,11 @@ pub fn c_enum(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
 const C_ENUM_SYNTAX: &str = "#[open|closed|flags] pub enum NAME: REPR { ... }";
 
-/// c_enum!'s enum form - #[arm_columns], #[c_list]: its variants by their
-/// names past #[prefix], with docs and columns, as tagged_union!'s
-/// #[key_value] declaration of the same enum: what it makes, with no union.
-fn c_enum_form(input: TokenStream) -> Result<Option<TokenStream>, String> {
-    let trees: Vec<TokenTree> = input.into_iter().collect();
-    let attr = |t: &[TokenTree]| match t {
-        [TokenTree::Punct(p), TokenTree::Group(g), ..] if p.as_char() == '#' => {
-            let mut inner = g.stream().into_iter();
-            let head = match inner.next() { Some(TokenTree::Ident(i)) => i.to_string(), _ => String::new() };
-            let args = match inner.next() { Some(TokenTree::Group(a)) => a.stream(), _ => TokenStream::new() };
-            Some((head, args, g.clone()))
-        }
-        _ => None,
-    };
-    let mut k = 0;
-    let mut heads = Vec::new();
-    while let Some(a) = attr(&trees[k..]) {
-        heads.push(a);
-        k += 2;
-    }
-    if !heads.iter().any(|(h, ..)| h == "arm_columns" || h == "c_list") {
-        return Ok(None);
-    }
-
-    let err = |m: &str| format!("c_enum!'s enum form: {m}");
-    let (mut kind, mut prefix, mut nr, mut c_name) = (None, None, None, None);
-    let mut rest = TokenStream::new();
-    for (head, args, g) in heads {
-        match head.as_str() {
-            "open" | "closed" => kind = Some(head),
-            "prefix" => prefix = Some(args.to_string()),
-            "nr"     => nr = Some(args.to_string()),
-            "c_name" => c_name = Some(args.to_string()),
-            "flags"  => return Err(err("a #[flags] enum's variants are bits, not a list's")),
-            _ => rest.extend([TokenTree::Punct(proc_macro2::Punct::new('#', Spacing::Alone)), TokenTree::Group(g)]),
-        }
-    }
-    let kind = kind.ok_or_else(|| err("#[open] or #[closed]"))?;
-    let prefix = prefix.ok_or_else(|| err("#[prefix(P)]: the variants' C names are P and theirs"))?;
-
-    // pub enum NAME: REPR { .. }
-    let (vis, after) = trees[k..].split_at(trees[k..].iter().position(|t| matches!(t, TokenTree::Ident(i) if i == "enum"))
-        .ok_or_else(|| err("expected pub enum NAME: REPR { .. }"))?);
-    let [_, TokenTree::Ident(name), TokenTree::Punct(colon), TokenTree::Ident(repr), TokenTree::Group(body)] = after else {
-        return Err(err("expected pub enum NAME: REPR { .. }"));
-    };
-    if colon.as_char() != ':' {
-        return Err(err("expected pub enum NAME: REPR { .. }"));
-    }
-    let vis: TokenStream = vis.iter().cloned().collect();
-
-    let mut tag_enum = format!("{name}: {repr}, prefix = {prefix}");
-    if kind == "closed" {
-        tag_enum = format!("closed, {tag_enum}");
-    }
-    if let Some(nr) = nr {
-        tag_enum.push_str(&format!(", nr = {nr}"));
-    }
-    if let Some(c) = c_name {
-        tag_enum.push_str(&format!(", c_name = {c}"));
-    }
-    let tag_enum: TokenStream = tag_enum.parse().map_err(|e: proc_macro2::LexError| e.to_string())?;
-    Ok(Some(quote!(#[key_value] #[tag_enum(#tag_enum)] #rest #vis enum #name #body)))
+/// Whether c_enum! @input has variants from a list: `LIST(params) => ..`.
+fn from_lists(input: &TokenStream) -> bool {
+    let Some(TokenTree::Group(body)) = input.clone().into_iter().last() else { return false };
+    comma_list(body.stream()).iter().any(|v| v.windows(2).any(|w| matches!(w,
+        [TokenTree::Punct(eq), TokenTree::Punct(gt)] if eq.as_char() == '=' && eq.spacing() == Spacing::Joint && gt.as_char() == '>')))
 }
 
 /// `atomic_bitfield! { pub struct NAME: uN [in uM] { fields } }`: a
@@ -1225,7 +1170,7 @@ pub fn open_enum(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -
                 None => name.clone(),
             };
             let value = v.discriminant.as_ref().map(|(_, x)| x.to_token_stream().to_string());
-            variants.push(CEnumVariant { name, value, label: Some(label) });
+            variants.push(CEnumVariant { name, value, label: Some(label), docs: Vec::new() });
         }
         let e = CEnumDef { cfg: None, kind: CEnumKind::Open, name: Some(item.ident.to_string()), repr: repr.to_string(),
                            variants, from: Vec::new(), own_to_text, c_name: None, prefix: None, nr: None };
@@ -1315,10 +1260,11 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
             EnumOf::Rust(vis, attrs) => (quote!(#vis), quote!(#(#attrs)*)),
         };
         let name = format_ident!("{name}");
+        let docs: Vec<_> = e.variants.iter().map(|v| { let d = &v.docs; quote!(#(#[doc = #d])*) }).collect();
         out.extend(match e.kind {
             CEnumKind::Closed => {
                 // what it prints as: its list's name for it, as C's string table has it
-                let labels = e.variants.iter().map(|v| v.label.as_ref().map(|l| quote!(#[label(#l)])));
+                let labels = e.variants.iter().map(|v| e.label(v).map(|l| quote!(#[label(#l)])));
                 let msg = format!("{name}::from_bits(): not a {name}");
                 // as bit numbers: a set of them takes a bit past the largest -
                 // a negative value, unlocked's -1, isn't one
@@ -1331,7 +1277,7 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
                     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, crate::util::ToText)]
                     #[repr(#repr)]
                     #attrs
-                    #vis enum #name { #(#labels #names = #values,)* }
+                    #vis enum #name { #(#docs #labels #names = #values,)* }
                     impl #name {
                         pub const fn from_bits(v: #repr) -> Self {
                             match v {
@@ -1360,7 +1306,7 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
                 #vis struct #name(pub #repr);
                 #[allow(non_upper_case_globals)]
                 impl #name {
-                    #(pub const #names: Self = Self(#values);)*
+                    #(#docs pub const #names: Self = Self(#values);)*
                     pub const fn from_bits(v: #repr) -> Self { Self(v) }
                     pub const fn into_bits(self) -> #repr { self.0 }
                 }
@@ -1374,7 +1320,7 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
                     #[repr(transparent)]
                     #attrs
                     #vis struct #name: #repr {
-                        #(#[allow(non_upper_case_globals)] const #names = #values;)*
+                        #(#docs #[allow(non_upper_case_globals)] const #names = #values;)*
                     }
                 }
                 impl #name {
@@ -1438,7 +1384,7 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
 /// ToText.
 fn names_gen(e: &CEnumDef, name: &str) -> TokenStream {
     let labelled: Vec<(&str, Ident)> = e.variants.iter()
-        .filter_map(|v| v.label.as_deref().map(|l| (l, format_ident!("{}", v.name))))
+        .filter_map(|v| e.label(v).map(|l| (l, format_ident!("{}", v.name))))
         .collect();
     if labelled.is_empty() {
         return TokenStream::new();

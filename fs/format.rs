@@ -372,12 +372,14 @@ c_enum! {
     }
 }
 
-tagged_union! {
-    #[key_value]
-    #[tag_enum(BkeyType: u32, prefix = KEY_TYPE_, nr = KEY_TYPE_MAX, c_name = bch_bkey_type)]
+c_enum! {
+    #[open]
+    #[c_name(bch_bkey_type)]
+    #[prefix(KEY_TYPE_)]
+    #[nr(KEY_TYPE_MAX)]
     #[arm_columns(flags: BkeyTypeFlags)]
     #[c_list(BCH_BKEY_TYPES)]
-    pub enum bkey_val {
+    pub enum BkeyType: u32 {
         /// Transient during btree updates; inserting a deleted key removes any
         /// existing key at that position. Stripped during btree node writes.
         #[flags(extent, generic)]

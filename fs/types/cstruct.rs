@@ -478,7 +478,7 @@ pub struct CFromList {
 
 /// c_enum!: an enum, and what its values can be. @name is None for an
 /// anonymous one: constants.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CEnumDef {
     pub cfg:      Option<Cfg>,
     pub kind:     CEnumKind,
@@ -508,6 +508,16 @@ impl CEnumDef {
     pub fn c_ident(&self) -> Option<&str> {
         self.c_name.as_deref().or(self.name.as_deref())
     }
+
+    /// What @v prints as: its #[label], or with a #[prefix] its name past it -
+    /// not a flag's, whose names would be its bits'.
+    #[allow(dead_code)]
+    pub fn label<'a>(&self, v: &'a CEnumVariant) -> Option<&'a str> {
+        v.label.as_deref().or_else(|| {
+            let p = self.prefix.as_deref().filter(|_| self.kind != CEnumKind::Flags)?;
+            Some(v.name.strip_prefix(p).unwrap_or(&v.name))
+        })
+    }
 }
 
 /// A c_enum! variant. Its value is Rust source, or none for the one after the
@@ -515,11 +525,13 @@ impl CEnumDef {
 /// what it prints as, `#[label("..")]`: a list's variant's is the argument its
 /// template pastes into the name - `stripe`, of `concat(BCH_WATERMARK_, name)` - as
 /// C's string tables have it; none, its name.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CEnumVariant {
     pub name:  String,
     pub value: Option<String>,
     pub label: Option<String>,
+    #[allow(dead_code)]
+    pub docs:  Vec<String>,
 }
 
 /// c_typedef!: a type alias, C's typedef. @c_decl is its C declarator - the
@@ -1229,7 +1241,7 @@ fn parse_xmacro(m: &syn::Macro) -> Result<CXMacro, String> {
 
 /// c_bitmask!'s body: LE64_BITMASK(struct foo, field), strip PREFIX_ { NAME(start, end), ... }
 /// @ts split at its commas - its groups' are their own.
-fn split_commas(ts: proc_macro2::TokenStream) -> Vec<proc_macro2::TokenStream> {
+pub fn split_commas(ts: proc_macro2::TokenStream) -> Vec<proc_macro2::TokenStream> {
     let mut out = vec![proc_macro2::TokenStream::new()];
     for t in ts {
         match &t {
@@ -1356,74 +1368,85 @@ fn parse_ioctl(m: &syn::Macro) -> Result<CIoctl, String> {
     Ok(CIoctl { cfg: None, entries })
 }
 
-/// c_enum!'s body: #[open|closed|flags] pub enum NAME: REPR { A = expr, B, ... }
-/// - NAME `_` for an anonymous enum.
-fn parse_enum(m: &syn::Macro) -> Result<CEnumDef, String> {
-    use syn::parse::{ParseStream, Parser as _};
-    m.parse_body_with(|input: ParseStream<'_>| {
-        let mut kind = None;
-        let mut own_to_text = false;
-        let mut c_name = None;
-        let (mut prefix, mut nr) = (None, None);
-        for a in input.call(syn::Attribute::parse_outer)? {
-            for (n, k) in [("open", CEnumKind::Open), ("closed", CEnumKind::Closed), ("flags", CEnumKind::Flags)] {
-                if a.path().is_ident(n) {
-                    kind = Some(k);
-                }
-            }
-            own_to_text |= a.path().is_ident("own_to_text");
-            if a.path().is_ident("c_name") {
-                c_name = a.parse_args::<syn::Ident>().ok().map(|n| ident(&n));
-            }
-            if a.path().is_ident("prefix") {
-                prefix = Some(ident(&a.parse_args::<syn::Ident>()?));
-            }
-            if a.path().is_ident("nr") {
-                nr = Some(ident(&a.parse_args::<syn::Ident>()?));
-            }
+/// A c_enum!'s head, `#[open|closed|flags] pub enum NAME: REPR` - NAME `_`
+/// for an anonymous enum - with no variants yet; the attributes that aren't
+/// its, and its body.
+#[allow(dead_code)]
+pub fn parse_enum_head(input: syn::parse::ParseStream<'_>)
+        -> syn::Result<(CEnumDef, Vec<syn::Attribute>, proc_macro2::TokenStream)> {
+    let mut kind = None;
+    let (mut own_to_text, mut c_name, mut prefix, mut nr) = (false, None, None, None);
+    let mut others = Vec::new();
+    for a in input.call(syn::Attribute::parse_outer)? {
+        let id = |a: &syn::Attribute| a.parse_args::<syn::Ident>().map(|n| ident(&n));
+        match a.path().get_ident().map(|i| i.to_string()).as_deref() {
+            Some("open")        => kind = Some(CEnumKind::Open),
+            Some("closed")      => kind = Some(CEnumKind::Closed),
+            Some("flags")       => kind = Some(CEnumKind::Flags),
+            Some("own_to_text") => own_to_text = true,
+            Some("c_name")      => c_name = Some(id(&a)?),
+            Some("prefix")      => prefix = Some(id(&a)?),
+            Some("nr")          => nr = Some(id(&a)?),
+            _ => others.push(a),
         }
-        input.parse::<syn::Visibility>()?;
-        input.parse::<syn::Token![enum]>()?;
-        let name = match input.parse::<Option<syn::Token![_]>>()? {
-            Some(_) => None,
-            None => Some(ident(&input.parse()?)),
-        };
-        let what = name.clone().unwrap_or_else(|| "(anonymous)".into());
-        let kind = kind.ok_or_else(|| input.error(format!("{what}: #[open], #[closed] or #[flags]")))?;
-        input.parse::<syn::Token![:]>()?;
-        let repr = ident(&input.parse()?);
-        if int_bits(&repr).is_none() {
-            return Err(input.error(format!("{what}: REPR is an integer type")));
-        }
-        let list;
-        syn::braced!(list in input);
+    }
+    input.parse::<syn::Visibility>()?;
+    input.parse::<syn::Token![enum]>()?;
+    let name = match input.parse::<Option<syn::Token![_]>>()? {
+        Some(_) => None,
+        None => Some(ident(&input.parse()?)),
+    };
+    let what = name.clone().unwrap_or_else(|| "(anonymous)".into());
+    let kind = kind.ok_or_else(|| input.error(format!("{what}: #[open], #[closed] or #[flags]")))?;
+    input.parse::<syn::Token![:]>()?;
+    let repr = ident(&input.parse()?);
+    if int_bits(&repr).is_none() {
+        return Err(input.error(format!("{what}: REPR is an integer type")));
+    }
+    let body;
+    syn::braced!(body in input);
+    let def = CEnumDef { cfg: None, kind, name, repr, variants: Vec::new(), from: Vec::new(), own_to_text,
+                         c_name, prefix, nr };
+    Ok((def, others, body.parse()?))
+}
 
-        let mut variants = Vec::new();
-        let mut from = Vec::new();
-        for v in split_commas(list.parse()?) {
-            if let Some(f) = parse_from_list(&v) {
-                from.push((variants.len(), f));
-                continue;
-            }
-            variants.push((|input: ParseStream<'_>| {
-                let mut label = None;
-                for a in input.call(syn::Attribute::parse_outer)? {
-                    if a.path().is_ident("label") {
-                        label = Some(a.parse_args::<syn::LitStr>()?.value());
-                    }
-                }
-                let vname: syn::Ident = input.parse()?;
-                let value = match input.parse::<Option<syn::Token![=]>>()? {
-                    Some(_) => Some(rust_text(&input.parse::<proc_macro2::TokenStream>()?)),
-                    None => None,
-                };
-                if !input.is_empty() || value.as_deref() == Some("") {
-                    return Err(input.error(format!("{what}::{vname}: expected `= value`, or nothing")));
-                }
-                Ok(CEnumVariant { name: ident(&vname), value, label })
-            }).parse2(v)?);
+/// A c_enum! variant, `[#[..]] NAME[(Type)] [= value]`: its doc and #[label]
+/// read into its CEnumVariant; its other attributes, and its type.
+#[allow(dead_code)]
+pub fn parse_variant(v: proc_macro2::TokenStream)
+        -> syn::Result<(CEnumVariant, Vec<syn::Attribute>, Option<syn::Type>)> {
+    let v: syn::Variant = syn::parse2(v)?;
+    let (mut label, mut docs, mut others) = (None, Vec::new(), Vec::new());
+    for a in v.attrs {
+        match &a.meta {
+            syn::Meta::NameValue(syn::MetaNameValue {
+                path, value: syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }), ..
+            }) if path.is_ident("doc") => docs.push(s.value()),
+            _ if a.path().is_ident("label") => label = Some(a.parse_args::<syn::LitStr>()?.value()),
+            _ => others.push(a),
         }
-        Ok(CEnumDef { cfg: None, kind, name, repr, variants, from, own_to_text, c_name, prefix, nr })
+    }
+    let ty = match v.fields {
+        syn::Fields::Unit => None,
+        syn::Fields::Unnamed(f) if f.unnamed.len() == 1 => f.unnamed.into_iter().next().map(|f| f.ty),
+        f => return Err(syn::Error::new_spanned(f, format!("{}: a variant's payload is a type, (Type)", v.ident))),
+    };
+    let value = v.discriminant.map(|(_, x)| rust_text(&x));
+    Ok((CEnumVariant { name: ident(&v.ident), value, label, docs }, others, ty))
+}
+
+/// c_enum!'s body, as its record has it: its head, then { A = expr, B, ... },
+/// or `LIST(params) => template` for each of a list's entries.
+fn parse_enum(m: &syn::Macro) -> Result<CEnumDef, String> {
+    m.parse_body_with(|input: syn::parse::ParseStream<'_>| {
+        let (mut e, _, body) = parse_enum_head(input)?;
+        for v in split_commas(body) {
+            match parse_from_list(&v) {
+                Some(f) => e.from.push((e.variants.len(), f)),
+                None => e.variants.push(parse_variant(v)?.0),
+            }
+        }
+        Ok(e)
     }).map_err(syn_err("c_enum!: expected #[open|closed|flags] pub enum NAME: REPR { ... }"))
 }
 
@@ -2181,7 +2204,7 @@ pub fn expand_enum_list(e: &mut CEnumDef, entries: &[String]) -> Result<(), Stri
                 [TokenTree::Ident(l)] => Some(ident(l)),
                 _ => None,
             });
-        variants.push(CEnumVariant { name, value, label });
+        variants.push(CEnumVariant { name, value, label, docs: Vec::new() });
     }
     let n = variants.len();
     e.variants.splice(at..at, variants);
