@@ -49,18 +49,7 @@ static const struct rhashtable_params bch2_btree_key_cache_params = {
 	.automatic_shrinking	= true,
 };
 
-__always_inline __flatten
-static struct bkey_cached *
-bch2_btree_key_cache_find(struct bch_fs *c, enum btree_id btree_id, struct bpos pos)
-{
-	struct bkey_cached_key key = {
-		.btree_id	= btree_id,
-		.pos		= pos,
-	};
-
-	return rhashtable_lookup_fast(&c->btree.key_cache.table, &key,
-				      bch2_btree_key_cache_params);
-}
+struct bkey_cached *bch2_btree_key_cache_find(struct bch_fs *, enum btree_id, struct bpos);
 
 int bch2_btree_path_traverse_cached(struct btree_trans *, btree_path_idx_t, unsigned);
 

@@ -34,6 +34,18 @@ static inline bool btree_uses_pcpu_readers(enum btree_id id)
 
 static struct kmem_cache *bch2_key_cache;
 
+struct bkey_cached *
+bch2_btree_key_cache_find(struct bch_fs *c, enum btree_id btree_id, struct bpos pos)
+{
+	struct bkey_cached_key key = {
+		.btree_id	= btree_id,
+		.pos		= pos,
+	};
+
+	return rhashtable_lookup_fast(&c->btree.key_cache.table, &key,
+				      bch2_btree_key_cache_params);
+}
+
 static inline void btree_path_cached_set(struct btree_trans *trans, struct btree_path *path,
 					 struct bkey_cached *ck,
 					 enum btree_node_locked_type lock_held)
