@@ -445,7 +445,7 @@ pub(crate) fn format_opts_default() -> FormatOpts<'static> {
 
     let kernel_version = crate::wrappers::sysfs::bcachefs_kernel_version() as u32;
     let current =
-        u32::from(MetadataVersion::max) - 1;
+        MetadataVersion::NR - 1;
 
     let version = if kernel_version > 0 {
         current.min(kernel_version)

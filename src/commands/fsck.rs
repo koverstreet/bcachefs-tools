@@ -97,7 +97,7 @@ fn should_use_kernel_fsck(devs: &[String]) -> bool {
         return false;
     }
 
-    let current = u32::from(MetadataVersion::max) as u64 - 1;
+    let current = MetadataVersion::NR as u64 - 1;
     if kernel_version == current {
         return false;
     }

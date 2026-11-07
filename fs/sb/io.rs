@@ -682,21 +682,13 @@ pub fn validate_bytes<'a>(buf: &'a mut [u8], opts: &c::bch_opts, read_offset: u6
 
 // ── Versions ─────────────────────────────────────────────────────────────
 
-macro_rules! metadata_versions {
-    ($(($name:tt, $v:expr, $($rest:tt)*)),* $(,)?) => {
-        /// The versions this one knows, oldest first, and their names.
-        const VERSIONS: &[(u32, &str)] = {
-            use crate::c::BCH_VERSION;
-            &[$(($v as u32, stringify!($name))),*]
-        };
-    };
-}
-c::BCH_METADATA_VERSIONS!(metadata_versions);
+/// The versions this one knows, oldest first, and their names.
+const VERSIONS: &[(&str, u64)] = <MetadataVersion as crate::util::names::Names>::ENTRIES;
 
 impl MetadataVersion {
     /// Its name, if it's a version this one knows.
     pub fn name(self) -> Option<&'static str> {
-        VERSIONS.iter().find(|&&(v, _)| v == self.0).map(|&(_, name)| name)
+        crate::util::names::name_of(VERSIONS, self.0.into())
     }
 
     /// The newest version this one knows of the same major - itself at
@@ -706,7 +698,7 @@ impl MetadataVersion {
         if major(self.0) == 0 {
             return self;
         }
-        Self(VERSIONS.iter().map(|&(v, _)| v).filter(|&v| major(v) == major(self.0)).fold(self.0, u32::max))
+        Self(VERSIONS.iter().map(|&(_, v)| v as u32).filter(|&v| major(v) == major(self.0)).fold(self.0, u32::max))
     }
 }
 

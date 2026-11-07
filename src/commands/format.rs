@@ -42,7 +42,7 @@ use crate::wrappers::sysfs;
 const BCH_REPLICAS_MAX: u32 = 4;
 
 pub(crate) fn metadata_version_current() -> u32 {
-    u32::from(MetadataVersion::max) - 1
+    MetadataVersion::NR - 1
 }
 
 /// Parse a version string "major.minor" or just "minor" (major defaults to 0).

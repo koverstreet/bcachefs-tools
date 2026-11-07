@@ -1095,177 +1095,156 @@ pub const fn BCH_VERSION_MINOR(v: u64) -> u64 { v & !(!0 << 10) }
 #[allow(non_snake_case)]
 pub const fn BCH_VERSION(major: u64, minor: u64) -> u64 { (major << 10) | minor }
 
-c_xmacro! {
-    /*
-     * field 1:		version name
-     * field 2:		BCH_VERSION(major, minor)
-     */
-    BCH_METADATA_VERSIONS(x) {
-        (bkey_renumber,                 BCH_VERSION(0, 10),
-         "Renumbered bkey type values",                 "2018-11"),
-        (inode_btree_change,            BCH_VERSION(0, 11),
-         "Swapped inode/offset fields in bpos "
-         "for better locality",                         "2020-03"),
-        (snapshot,                      BCH_VERSION(0, 12),
-         "Snapshot support: snapshot field in bpos, "
-         "KEY_TYPE_snapshot, KEY_TYPE_subvolume",       "2021-03"),
-        (inode_backpointers,            BCH_VERSION(0, 13),
-         "Backpointers from extents to inodes",         "2021-04"),
-        (btree_ptr_sectors_written,     BCH_VERSION(0, 14),
-         "sectors_written field in btree_ptr_v2 for "
-         "partial write tracking",                      "2021-07"),
-        (snapshot_2,                    BCH_VERSION(0, 15),
-         "Snapshot fixes: subvolume root inode tracking", "2021-09"),
-        (reflink_p_fix,                 BCH_VERSION(0, 16),
-         "Fixed reflink pointer refcount handling",     "2021-10"),
-        (subvol_dirent,                 BCH_VERSION(0, 17),
-         "Linked subvolumes to directory entries",      "2021-10"),
-        (inode_v2,                      BCH_VERSION(0, 18),
-         "KEY_TYPE_inode_v2 with improved field layout", "2021-11"),
-        (freespace,                     BCH_VERSION(0, 19),
-         "Freespace btree for faster allocation",       "2022-03"),
-        (alloc_v4,                      BCH_VERSION(0, 20),
-         "KEY_TYPE_alloc_v4 with comprehensive "
-         "allocation metadata",                         "2022-03"),
-        (new_data_types,                BCH_VERSION(0, 21),
-         "Refined data type classifications "
-         "in the allocator",                            "2022-04"),
-        (backpointers,                  BCH_VERSION(0, 22),
-         "Backpointers btree mapping physical locations "
-         "back to logical extents",                     "2022-06"),
-        (inode_v3,                      BCH_VERSION(0, 23),
-         "KEY_TYPE_inode_v3 with compact encoding",     "2022-10"),
-        (unwritten_extents,             BCH_VERSION(0, 24),
-         "Preallocated extents that read as zeros",     "2022-11"),
-        (bucket_gens,                   BCH_VERSION(0, 25),
-         "bucket_gens btree for stale pointer detection", "2022-12"),
-        (lru_v2,                        BCH_VERSION(0, 26),
-         "Improved LRU tracking for cache eviction",    "2022-12"),
-        (fragmentation_lru,             BCH_VERSION(0, 27),
-         "LRU tracking for fragmented extents",         "2023-02"),
-        (no_bps_in_alloc_keys,          BCH_VERSION(0, 28),
-         "Backpointers moved fully to backpointers btree", "2023-03"),
-        (snapshot_trees,                BCH_VERSION(0, 29),
-         "snapshot_trees btree for hierarchical management", "2023-05"),
-        (major_minor,                   BCH_VERSION(1,  0),
-         "Major version bump: format stabilization, "
-         "major.minor versioning scheme",               "2023-07"),
-        (snapshot_skiplists,            BCH_VERSION(1,  1),
-         "Skiplist structure for O(log n) ancestor queries", "2023-07"),
-        (deleted_inodes,                BCH_VERSION(1,  2),
-         "deleted_inodes btree for crash-safe unlink",  "2023-08"),
-        (rebalance_work,                BCH_VERSION(1,  3),
-         "Background rebalance work tracking",          "2023-10"),
-        (member_seq,                    BCH_VERSION(1,  4),
-         "Sequence numbers on member devices for "
-         "stale superblock detection",                  "2023-12"),
-        (subvolume_fs_parent,           BCH_VERSION(1,  5),
-         "fs_parent field on subvolumes "
-         "for path resolution",                         "2024-02"),
-        (btree_subvolume_children,      BCH_VERSION(1,  6),
-         "subvolume_children btree for "
-         "parent-child lookups",                        "2024-02"),
-        (mi_btree_bitmap,               BCH_VERSION(1,  7),
-         "Per-device bitmap tracking which "
-         "btrees have data",                            "2024-04"),
-        (bucket_stripe_sectors,         BCH_VERSION(1,  8),
-         "Stripe sector tracking in alloc keys "
-         "for erasure coding",                          "2024-06"),
-        (disk_accounting_v2,            BCH_VERSION(1,  9),
-         "On-disk accounting btree for persistent "
-         "space accounting",                            "2024-01"),
-        (disk_accounting_v3,            BCH_VERSION(1, 10),
-         "Accounting key validation and "
-         "endianness fixes",                            "2024-08"),
-        (disk_accounting_inum,          BCH_VERSION(1, 11),
-         "Per-inode space accounting",                  "2024-08"),
-        (rebalance_work_acct_fix,       BCH_VERSION(1, 12),
-         "Fixed rebalance work accounting bugs",        "2024-08"),
-        (inode_has_child_snapshots,     BCH_VERSION(1, 13),
-         "Flag on inodes indicating child "
-         "snapshot data exists",                        "2024-10"),
-        (backpointer_bucket_gen,        BCH_VERSION(1, 14),
-         "Bucket generation in backpointers for "
-         "stale detection without alloc key reads",     "2024-11"),
-        (disk_accounting_big_endian,    BCH_VERSION(1, 15),
-         "Big-endian disk accounting fix",              "2024-11"),
-        (reflink_p_may_update_opts,     BCH_VERSION(1, 16),
-         "reflink_p keys carry independently "
-         "updatable extent options",                    "2024-12"),
-        (inode_depth,                   BCH_VERSION(1, 17),
-         "Directory depth tracking in inodes",          "2024-12"),
-        (persistent_inode_cursors,      BCH_VERSION(1, 18),
-         "Persistent inode number allocation cursors",  "2024-12"),
-        (autofix_errors,                BCH_VERSION(1, 19),
-         "Default error action changed to fix_safe",    "2024-12"),
-        (directory_size,                BCH_VERSION(1, 20),
-         "Directory size tracking in inode metadata",   "2025-01"),
-        (cached_backpointers,           BCH_VERSION(1, 21),
-         "In-memory backpointer caching "
-         "for faster lookups",                          "2025-02"),
-        (stripe_backpointers,           BCH_VERSION(1, 22),
-         "Backpointers for erasure-coded stripes",      "2025-02"),
-        (stripe_lru,                    BCH_VERSION(1, 23),
-         "LRU tracking for stripe cache eviction",      "2025-02"),
-        (casefolding,                   BCH_VERSION(1, 24),
-         "Case-insensitive filename support "
-         "with per-directory flags",                    "2025-02"),
-        (extent_flags,                  BCH_VERSION(1, 25),
-         "Flags field on extent keys for "
-         "extent-level metadata",                       "2025-03"),
-        (snapshot_deletion_v2,          BCH_VERSION(1, 26),
-         "Improved snapshot deletion with better "
-         "interior node handling",                      "2025-05"),
-        (fast_device_removal,           BCH_VERSION(1, 27),
-         "Fast device removal when no stale pointers exist", "2025-05"),
-        (inode_has_case_insensitive,    BCH_VERSION(1, 28),
-         "Casefold flag on inodes for directory handling", "2025-05"),
-        (extent_snapshot_whiteouts,     BCH_VERSION(1, 29),
-         "KEY_TYPE_extent_whiteout for efficient "
-         "snapshot extent deletion",                    "2025-08"),
-        (31bit_dirent_offset,           BCH_VERSION(1, 30),
-         "Extended directory entry offset to 31 bits",  "2025-08"),
-        (btree_node_accounting,         BCH_VERSION(1, 31),
-         "Per-btree-node space accounting",             "2025-09"),
-        (sb_field_extent_type_u64s,     BCH_VERSION(1, 32),
-         "Superblock field for extent type size limits", "2025-11"),
-        (reconcile,                     BCH_VERSION(1, 33),
-         "Reconcile system for IO options inheritance "
-         "and background data movement",                "2025-11"),
-        (extented_key_type_error,       BCH_VERSION(1, 34),
-         "KEY_TYPE_error changed to zero-byte value",   "2025-12"),
-        (bucket_stripe_index,           BCH_VERSION(1, 35),
-         "Stripe index in alloc keys for efficient "
-         "stripe-bucket lookups",                       "2026-01"),
-        (no_sb_user_data_replicas,      BCH_VERSION(1, 36),
-         "Removed redundant user_data replicas "
-         "from superblock",                             "2026-01"),
-        (erasure_coding,                BCH_VERSION(1, 37),
-         "First release with fully supported erasure coding: all key "
-         "functionality done, resilver integrated with reconcile", "2026-03"),
-        (need_discard_by_journal_seq,   BCH_VERSION(1, 38),
-         "need_discard btree reindexed by journal seq for O(1) "
-         "discard eligibility checks",                  "2026-03"),
-        (per_dev_fragmentation_lru,     BCH_VERSION(1, 39),
-         "Per-device bucket fragmentation LRUs, so copygc can reason "
-         "about fragmentation per device",              "2026-07"),
-        (inline_data_csum,              BCH_VERSION(1, 40),
-         "Inline data extents carry their own checksums; stripe "
-         "backpointers carry the stripe index, so stripes sharing a "
-         "block during reuse don't share a backpointer",  "2026-11"),
-    }
-}
-
 c_enum! {
     #[open]
     #[own_to_text]
     #[c_name(bcachefs_metadata_version)]
     #[prefix(bcachefs_metadata_version_)]
+    #[nr(bcachefs_metadata_version_max)]
     pub enum MetadataVersion: u32 {
-        bcachefs_metadata_version_min = bcachefs_metadata_version_btree_ptr_sectors_written,
-        BCH_METADATA_VERSIONS(t, n, ..) => concat(bcachefs_metadata_version_, t) = n,
-        bcachefs_metadata_version_max,
+        /// 2018-11: Renumbered bkey type values
+        bkey_renumber = BCH_VERSION(0, 10),
+        /// 2020-03: Swapped inode/offset fields in bpos for better locality
+        inode_btree_change = BCH_VERSION(0, 11),
+        /// 2021-03: Snapshot support: snapshot field in bpos,
+        /// KEY_TYPE_snapshot, KEY_TYPE_subvolume
+        snapshot = BCH_VERSION(0, 12),
+        /// 2021-04: Backpointers from extents to inodes
+        inode_backpointers = BCH_VERSION(0, 13),
+        /// 2021-07: sectors_written field in btree_ptr_v2 for partial write
+        /// tracking
+        btree_ptr_sectors_written = BCH_VERSION(0, 14),
+        /// 2021-09: Snapshot fixes: subvolume root inode tracking
+        snapshot_2 = BCH_VERSION(0, 15),
+        /// 2021-10: Fixed reflink pointer refcount handling
+        reflink_p_fix = BCH_VERSION(0, 16),
+        /// 2021-10: Linked subvolumes to directory entries
+        subvol_dirent = BCH_VERSION(0, 17),
+        /// 2021-11: KEY_TYPE_inode_v2 with improved field layout
+        inode_v2 = BCH_VERSION(0, 18),
+        /// 2022-03: Freespace btree for faster allocation
+        freespace = BCH_VERSION(0, 19),
+        /// 2022-03: KEY_TYPE_alloc_v4 with comprehensive allocation metadata
+        alloc_v4 = BCH_VERSION(0, 20),
+        /// 2022-04: Refined data type classifications in the allocator
+        new_data_types = BCH_VERSION(0, 21),
+        /// 2022-06: Backpointers btree mapping physical locations back to
+        /// logical extents
+        backpointers = BCH_VERSION(0, 22),
+        /// 2022-10: KEY_TYPE_inode_v3 with compact encoding
+        inode_v3 = BCH_VERSION(0, 23),
+        /// 2022-11: Preallocated extents that read as zeros
+        unwritten_extents = BCH_VERSION(0, 24),
+        /// 2022-12: bucket_gens btree for stale pointer detection
+        bucket_gens = BCH_VERSION(0, 25),
+        /// 2022-12: Improved LRU tracking for cache eviction
+        lru_v2 = BCH_VERSION(0, 26),
+        /// 2023-02: LRU tracking for fragmented extents
+        fragmentation_lru = BCH_VERSION(0, 27),
+        /// 2023-03: Backpointers moved fully to backpointers btree
+        no_bps_in_alloc_keys = BCH_VERSION(0, 28),
+        /// 2023-05: snapshot_trees btree for hierarchical management
+        snapshot_trees = BCH_VERSION(0, 29),
+        /// 2023-07: Major version bump: format stabilization, major.minor
+        /// versioning scheme
+        major_minor = BCH_VERSION(1,  0),
+        /// 2023-07: Skiplist structure for O(log n) ancestor queries
+        snapshot_skiplists = BCH_VERSION(1,  1),
+        /// 2023-08: deleted_inodes btree for crash-safe unlink
+        deleted_inodes = BCH_VERSION(1,  2),
+        /// 2023-10: Background rebalance work tracking
+        rebalance_work = BCH_VERSION(1,  3),
+        /// 2023-12: Sequence numbers on member devices for stale superblock
+        /// detection
+        member_seq = BCH_VERSION(1,  4),
+        /// 2024-02: fs_parent field on subvolumes for path resolution
+        subvolume_fs_parent = BCH_VERSION(1,  5),
+        /// 2024-02: subvolume_children btree for parent-child lookups
+        btree_subvolume_children = BCH_VERSION(1,  6),
+        /// 2024-04: Per-device bitmap tracking which btrees have data
+        mi_btree_bitmap = BCH_VERSION(1,  7),
+        /// 2024-06: Stripe sector tracking in alloc keys for erasure coding
+        bucket_stripe_sectors = BCH_VERSION(1,  8),
+        /// 2024-01: On-disk accounting btree for persistent space accounting
+        disk_accounting_v2 = BCH_VERSION(1,  9),
+        /// 2024-08: Accounting key validation and endianness fixes
+        disk_accounting_v3 = BCH_VERSION(1, 10),
+        /// 2024-08: Per-inode space accounting
+        disk_accounting_inum = BCH_VERSION(1, 11),
+        /// 2024-08: Fixed rebalance work accounting bugs
+        rebalance_work_acct_fix = BCH_VERSION(1, 12),
+        /// 2024-10: Flag on inodes indicating child snapshot data exists
+        inode_has_child_snapshots = BCH_VERSION(1, 13),
+        /// 2024-11: Bucket generation in backpointers for stale detection
+        /// without alloc key reads
+        backpointer_bucket_gen = BCH_VERSION(1, 14),
+        /// 2024-11: Big-endian disk accounting fix
+        disk_accounting_big_endian = BCH_VERSION(1, 15),
+        /// 2024-12: reflink_p keys carry independently updatable extent options
+        reflink_p_may_update_opts = BCH_VERSION(1, 16),
+        /// 2024-12: Directory depth tracking in inodes
+        inode_depth = BCH_VERSION(1, 17),
+        /// 2024-12: Persistent inode number allocation cursors
+        persistent_inode_cursors = BCH_VERSION(1, 18),
+        /// 2024-12: Default error action changed to fix_safe
+        autofix_errors = BCH_VERSION(1, 19),
+        /// 2025-01: Directory size tracking in inode metadata
+        directory_size = BCH_VERSION(1, 20),
+        /// 2025-02: In-memory backpointer caching for faster lookups
+        cached_backpointers = BCH_VERSION(1, 21),
+        /// 2025-02: Backpointers for erasure-coded stripes
+        stripe_backpointers = BCH_VERSION(1, 22),
+        /// 2025-02: LRU tracking for stripe cache eviction
+        stripe_lru = BCH_VERSION(1, 23),
+        /// 2025-02: Case-insensitive filename support with per-directory flags
+        casefolding = BCH_VERSION(1, 24),
+        /// 2025-03: Flags field on extent keys for extent-level metadata
+        extent_flags = BCH_VERSION(1, 25),
+        /// 2025-05: Improved snapshot deletion with better interior node
+        /// handling
+        snapshot_deletion_v2 = BCH_VERSION(1, 26),
+        /// 2025-05: Fast device removal when no stale pointers exist
+        fast_device_removal = BCH_VERSION(1, 27),
+        /// 2025-05: Casefold flag on inodes for directory handling
+        inode_has_case_insensitive = BCH_VERSION(1, 28),
+        /// 2025-08: KEY_TYPE_extent_whiteout for efficient snapshot extent
+        /// deletion
+        extent_snapshot_whiteouts = BCH_VERSION(1, 29),
+        /// 2025-08: Extended directory entry offset to 31 bits
+        bcachefs_metadata_version_31bit_dirent_offset = BCH_VERSION(1, 30),
+        /// 2025-09: Per-btree-node space accounting
+        btree_node_accounting = BCH_VERSION(1, 31),
+        /// 2025-11: Superblock field for extent type size limits
+        sb_field_extent_type_u64s = BCH_VERSION(1, 32),
+        /// 2025-11: Reconcile system for IO options inheritance and background
+        /// data movement
+        reconcile = BCH_VERSION(1, 33),
+        /// 2025-12: KEY_TYPE_error changed to zero-byte value
+        extented_key_type_error = BCH_VERSION(1, 34),
+        /// 2026-01: Stripe index in alloc keys for efficient stripe-bucket
+        /// lookups
+        bucket_stripe_index = BCH_VERSION(1, 35),
+        /// 2026-01: Removed redundant user_data replicas from superblock
+        no_sb_user_data_replicas = BCH_VERSION(1, 36),
+        /// 2026-03: First release with fully supported erasure coding: all key
+        /// functionality done, resilver integrated with reconcile
+        erasure_coding = BCH_VERSION(1, 37),
+        /// 2026-03: need_discard btree reindexed by journal seq for O(1)
+        /// discard eligibility checks
+        need_discard_by_journal_seq = BCH_VERSION(1, 38),
+        /// 2026-07: Per-device bucket fragmentation LRUs, so copygc can reason
+        /// about fragmentation per device
+        per_dev_fragmentation_lru = BCH_VERSION(1, 39),
+        /// 2026-11: Inline data extents carry their own checksums; stripe
+        /// backpointers carry the stripe index, so stripes sharing a block
+        /// during reuse don't share a backpointer
+        inline_data_csum = BCH_VERSION(1, 40),
     }
+}
+
+c_const! {
+    /* The oldest version this one reads */
+    pub const bcachefs_metadata_version_min: u32 = c::bcachefs_metadata_version_btree_ptr_sectors_written;
 }
 
 c_const! {
