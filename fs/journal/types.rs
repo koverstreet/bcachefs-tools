@@ -410,6 +410,14 @@ pub struct JournalLocked {
      */
     #[c("FIFO_U64_IDX(struct journal_buf) in_flight")]
     pub in_flight: Fifo<c::journal_buf, u64>,
+
+    /*
+     * We may queue up some things to be journalled (log messages) before
+     * the journal has actually started - stash them here:
+     *
+     * appended to without j->lock, before JOURNAL_running
+     */
+    pub early_journal_entries: c::darray_u64,
 }
 
 published! {
@@ -542,12 +550,6 @@ nest! {
         #[init(AtomicPtr::new((-(c::EROFS as isize)) as *mut c::task_struct))]
         #[c("struct task_struct *stop_thread")]
         pub stop_thread: AtomicPtr<c::task_struct>,
-
-        /*
-         * We may queue up some things to be journalled (log messages) before
-         * the journal has actually started - stash them here:
-         */
-        pub early_journal_entries: c::darray_u64,
 
         /*
          * Protects journal_buf->data, when accessing without a jorunal

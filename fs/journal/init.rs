@@ -242,7 +242,7 @@ impl c::journal {
     pub unsafe fn exit(j: *mut c::journal) {
         let j = unsafe { &mut *j };
 
-        drop(unsafe { darray_take(&mut j.early_journal_entries) });
+        drop(unsafe { darray_take(&mut j.lock.get_mut().early_journal_entries) });
         drop(unsafe { darray_take(&mut j.rewind_ranges) });
 
         unsafe {
