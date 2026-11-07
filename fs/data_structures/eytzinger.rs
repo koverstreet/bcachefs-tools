@@ -246,8 +246,8 @@ eytzinger_impl!(u32);
 eytzinger_impl!(usize);
 
 /// The @n nodes stored in @v from @base - index pos - base is Eytzinger1 node
-/// pos - sorted into eytzinger order, as eytzinger1_sort_r(): compared and
-/// swapped by index, @v whatever holds them.
+/// pos - sorted into eytzinger order: compared and swapped by index, @v
+/// whatever holds them.
 fn sort_impl<S: ?Sized>(
     v:        &mut S,
     n:        usize,

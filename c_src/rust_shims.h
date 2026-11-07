@@ -118,14 +118,6 @@ int rust_link_data(struct bch_fs *c,
 		   __u64 logical, __u64 physical, __u64 length);
 
 /*
- * Unit test for the eytzinger sort/search primitive and the darray 1-based
- * wrapper (snapshot_id_dying's lookup path). Runs under `cargo test` via a
- * Rust #[test] wrapper. Returns the number of failed assertions (0 == pass);
- * failure details are printed to stderr.
- */
-int rust_eytzinger_test(void);
-
-/*
  * Unit test for the userspace percpu shim's slot lifetime (linux/percpu.c):
  * exited threads return their slot, live threads never share one. Runs under
  * `cargo test` via a Rust #[test] wrapper. Returns the number of failed

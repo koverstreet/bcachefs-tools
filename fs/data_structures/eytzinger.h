@@ -324,12 +324,4 @@ static inline int eytzinger0_find(void *base, unsigned nr, unsigned size,
 	return eytzinger1_find(base - size, nr, size, cmp_fn, search) - 1;
 }
 
-void eytzinger1_sort_r(void *, size_t, size_t,
-		       cmp_r_func_t, swap_r_func_t, const void *);
-void eytzinger1_sort(void *, size_t, size_t, cmp_func_t, swap_func_t);
-
-void eytzinger0_sort_r(void *, size_t, size_t,
-		       cmp_r_func_t, swap_r_func_t, const void *);
-void eytzinger0_sort(void *, size_t, size_t, cmp_func_t, swap_func_t);
-
 #endif /* _EYTZINGER_H */
