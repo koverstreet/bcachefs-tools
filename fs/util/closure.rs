@@ -24,6 +24,8 @@ use core::marker::{PhantomData, PhantomPinned};
 use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
 use core::ptr::NonNull;
+use core::sync::atomic::AtomicI32;
+use core::sync::atomic::Ordering::{Relaxed, SeqCst};
 use pin_init::{pin_data, pinned_drop, PinInit};
 
 /// A ref on a closure. Its tryget() is closure_get_not_zero(): it fails once
@@ -126,6 +128,47 @@ pub unsafe fn closure_wait(list: &c::closure_waitlist, cl: NonNull<c::closure>) 
     // SAFETY: a waitlist is a lockless list, added to through a shared
     // pointer; @cl the caller's
     unsafe { c::bch2_closure_wait(core::ptr::from_ref(list).cast_mut(), cl.as_ptr()) }
+}
+
+/// closure_wait()'s half that's @cl's - waiting, with the ref the wake puts -
+/// for a list whose head isn't a plain llist's, that the caller joins itself:
+/// the node to link it by. closure_unset_waiting() undoes it, if @cl doesn't
+/// join.
+///
+/// # Safety
+/// @cl is a live closure, waiting on nothing else.
+pub unsafe fn closure_set_waiting(cl: NonNull<c::closure>, ip: core::ffi::c_ulong) -> NonNull<c::llist_node> {
+    const D: u32 = c::closure_state_CLOSURE_WAITING + 1;
+
+    unsafe {
+        c::closure_set_waiting(cl.as_ptr(), ip);
+        let r = remaining(cl).fetch_add(D as i32, SeqCst) as u32 + D;
+        c::closure_val_checks(cl.as_ptr(), r, D as core::ffi::c_int);
+        /* by offset, as closure_fn_addr() reaches fn */
+        NonNull::new_unchecked(cl.as_ptr().byte_add(core::mem::offset_of!(c::closure, __bindgen_anon_1) +
+                                                    core::mem::offset_of!(c::closure__bindgen_ty_1__bindgen_ty_1, list))
+                                   .cast())
+    }
+}
+
+/// Whether @cl is on a waitlist.
+///
+/// # Safety
+/// @cl is a live closure.
+pub unsafe fn closure_waiting(cl: NonNull<c::closure>) -> bool {
+    unsafe { remaining(cl) }.load(Relaxed) as u32 & c::closure_state_CLOSURE_WAITING != 0
+}
+
+/// # Safety
+/// closure_set_waiting()'s @cl, on no list.
+pub unsafe fn closure_unset_waiting(cl: NonNull<c::closure>) {
+    unsafe { remaining(cl) }.fetch_sub((c::closure_state_CLOSURE_WAITING + 1) as i32, Relaxed);
+}
+
+/// # Safety
+/// @cl is a live closure.
+unsafe fn remaining<'a>(cl: NonNull<c::closure>) -> &'a AtomicI32 {
+    unsafe { AtomicI32::from_ptr((&raw mut (*cl.as_ptr()).remaining.counter).cast()) }
 }
 
 /// The fn @cl runs next, or last ran, for a message: racing its continue_at()s.
