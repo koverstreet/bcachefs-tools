@@ -875,12 +875,12 @@ pub(crate) unsafe fn wbio_init<'a>(bio: *mut c::bio) -> &'a mut c::bch_write_bio
 
 impl c::bch_write_bio {
     /// Set when it's submitted.
-    fn fs(&self) -> &'static Fs {
+    pub(crate) fn fs(&self) -> &'static Fs {
         self.wbio.c.expect("a write bio's filesystem, before it's submitted")
     }
 
     /// The device it went to, if it holds an io ref on it.
-    fn ca(&self) -> Option<&'static Dev> {
+    pub(crate) fn ca(&self) -> Option<&'static Dev> {
         self.wbio.ca
     }
 
