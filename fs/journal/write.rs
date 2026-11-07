@@ -830,12 +830,9 @@ extern "C" fn write_submit(mut w: Running<c::journal_buf>) {
             jbio.bio.bi_private = ptr::from_ref::<Dev>(&ca).cast_mut().cast();
             jbio.bio.bi_ioprio = IOPRIO_RT;
 
-            /* the bio's own ref, which write_endio() puts: */
-            ca.clone().leak();
+            /* the bio's ref, which write_endio() puts: */
+            ca.leak();
             unsafe { closure_bio_submit(bio, &w) };
-
-            let mut g = j.lock.lock();
-            ca.journal_ring_mut(&mut g).set_cur_seq(w.seq());
         }
     });
 
