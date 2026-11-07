@@ -350,6 +350,17 @@ pub trait TimeStats {
         self.update_at(start, local_clock())
     }
 
+    /// An event from now to when the Timer's dropped.
+    fn timer(&self) -> Timer<'_, Self> where Self: Sized {
+        Timer { stats: self, start: local_clock() }
+    }
+
+    /// @f, timed as an event.
+    fn time<R>(&self, f: impl FnOnce() -> R) -> R where Self: Sized {
+        let _timer = self.timer();
+        f()
+    }
+
     /// An event from @start to @end.
     fn update_at(&self, start: u64, end: u64) {
         let (s, q) = (self.stats(), self.quantiles());
@@ -499,6 +510,19 @@ pub trait TimeStats {
 
         out.tabstops_reset();
         self.quantiles().to_text(out);
+    }
+}
+
+/// An event in progress, counted when it's dropped: one timed to the end of a
+/// scope, however the scope's left.
+pub struct Timer<'a, T: TimeStats> {
+    stats: &'a T,
+    start: u64,
+}
+
+impl<T: TimeStats> Drop for Timer<'_, T> {
+    fn drop(&mut self) {
+        self.stats.update(self.start)
     }
 }
 
