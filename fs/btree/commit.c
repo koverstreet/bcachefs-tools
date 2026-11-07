@@ -246,7 +246,7 @@ static int trans_commit_accounting_revert(struct btree_trans *trans,
 	for (struct bkey_i *i = btree_trans_subbuf_base(trans, &trans->accounting);
 	     i != end;
 	     i = bkey_next(i))
-		bch2_accounting_trans_commit_revert(trans, bkey_i_to_accounting(i), flags);
+		bch2_accounting_trans_commit_revert(trans, i, flags);
 	return ret;
 }
 
@@ -537,7 +537,7 @@ revert_fs_usage:
 	for (struct bkey_i *i = btree_trans_subbuf_base(trans, &trans->accounting);
 	     i != accounting;
 	     i = bkey_next(i))
-		bch2_accounting_trans_commit_revert(trans, bkey_i_to_accounting(i), flags);
+		bch2_accounting_trans_commit_revert(trans, i, flags);
 	percpu_up_read(&c->capacity.mark_lock.lock);
 
 	if (bch2_err_matches(ret, BCH_ERR_btree_insert_need_mark_replicas)) {
@@ -781,8 +781,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 		for (struct bkey_i *accounting = btree_trans_subbuf_base(trans, &trans->accounting);
 		     accounting != btree_trans_subbuf_top(trans, &trans->accounting);
 		     accounting = bkey_next(accounting)) {
-			ret = bch2_accounting_trans_commit_hook(trans,
-						bkey_i_to_accounting(accounting), flags);
+			ret = bch2_accounting_trans_commit_hook(trans, accounting, flags);
 			if (unlikely(ret))
 				return trans_commit_accounting_revert(trans, flags, ret, accounting);
 		}

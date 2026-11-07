@@ -7,12 +7,13 @@ use crate::alloc::buckets::bch_fs_usage_base;
 use crate::alloc::replicas::{can_read_with_devs, try_replicas_acct};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeyI, BkeySC, POS_MIN, SPOS_MAX};
-use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, LoopFlow,
-                         TransAttempt};
+use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
+                         LoopFlow, TransAttempt};
 use crate::btree::trans::TransGuard;
+use crate::btree::update::Subbuf;
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
-use crate::format::{self, MetadataVersion, Bpos, DataType};
+use crate::format::{self, MetadataVersion, Bpos, Bversion, DataType};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id, FsckErrCtx};
 use crate::init::passes;
@@ -27,7 +28,7 @@ use crate::util::rcu;
 use crate::util::vstructs::{bytes_of, plain_bytes, ArmError, Unvalidated, Validated};
 use crate::util::Printbuf;
 use crate::{btree_trans, fsck_err, fsck_err_on, percpu_field};
-use core::ffi::c_int;
+use core::ffi::{c_int, c_uint};
 use cstruct_macros::c_export;
 use zerocopy::IntoBytes;
 
@@ -836,4 +837,71 @@ pub unsafe fn bch2_accounting_mem_add(trans: &BtreeTrans<'_>, k: BkeySC<'_>) -> 
     let a = Delta::from(k.arm::<Accounting>().expect("an accounting key"));
     let usage = mem_add(fs, a, false, &mut unsafe { fs.mark_lock().read_held() });
     ret_to_c(usage.map(|u| trans.fs_usage_delta_add(u)))
+}
+
+fn journal_pos_to_bversion(res: &c::journal_res, offset: usize) -> Bversion {
+    ebug_assert!(res.ref_);
+
+    Bversion {
+        hi: (res.seq >> 32) as u32,
+        lo: (res.seq << 32) | (u64::from(res.offset) + offset as u64),
+    }
+}
+
+fn applies(flags: CommitOpts) -> bool {
+    flags.to_c().bits() & CommitFlags::SKIP_ACCOUNTING_APPLY.bits() == 0
+}
+
+/// A committing transaction's accounting key - @k and its counters @d, @offset
+/// u64s into the transaction's accounting keys.
+pub(crate) fn trans_commit_hook(trans: &BtreeTrans<'_>, mark: &mut MarkRead<'_>, k: &mut c::bkey, d: &[u64],
+                                offset: usize, flags: CommitOpts) -> Result<(), BchError> {
+    k.bversion = journal_pos_to_bversion(&trans.journal_res.get(), offset);
+
+    ebug_assert!(k.bversion != Bversion::default());
+
+    if applies(flags) {
+        trans.fs_usage_delta_add(mem_add(trans.fs(), Delta { p: k.p, d }, false, mark)?);
+    }
+    Ok(())
+}
+
+pub(crate) fn trans_commit_revert(trans: &BtreeTrans<'_>, mark: &mut MarkRead<'_>, p: Bpos, d: &[u64],
+                                  flags: CommitOpts) {
+    if applies(flags) {
+        let mut neg = [0u64; MAX_COUNTERS];
+        for (n, &d) in neg.iter_mut().zip(d) {
+            *n = d.wrapping_neg();
+        }
+
+        if let Ok(u) = mem_add(trans.fs(), Delta { p, d: &neg[..d.len()] }, false, mark) {
+            trans.fs_usage_delta_add(u);
+        }
+    }
+}
+
+/// # Safety
+/// @trans is in an attempt, under mark_lock; @a is one of its accounting keys.
+#[c_export]
+pub unsafe fn bch2_accounting_trans_commit_hook(trans: &BtreeTrans<'_>, a: *mut c::bkey_i, commit_flags: c_uint)
+    -> c_int
+{
+    let t = unsafe { trans.attempt_in_progress() };
+    let base = t.subbuf_with(Subbuf::Accounting, |keys| keys.as_ptr());
+    let offset = unsafe { a.cast::<u64>().cast_const().offset_from(base) } as usize;
+    let a = unsafe { &mut *<BkeyI>::from_raw_mut(a) }.arm::<Accounting>().expect("an accounting key");
+    let flags = CommitOpts::from(c::bch_trans_commit_flags::from_bits_retain(commit_flags));
+
+    ret_to_c(trans_commit_hook(trans, &mut unsafe { trans.fs().mark_lock().read_held() },
+                               &mut a.k, &a.v.d, offset, flags))
+}
+
+/// # Safety
+/// As bch2_accounting_trans_commit_hook().
+#[c_export]
+pub unsafe fn bch2_accounting_trans_commit_revert(trans: &BtreeTrans<'_>, a: *mut c::bkey_i, commit_flags: c_uint) {
+    let a = unsafe { &*<BkeyI>::from_raw_mut(a) }.arm::<Accounting>().expect("an accounting key");
+    let flags = CommitOpts::from(c::bch_trans_commit_flags::from_bits_retain(commit_flags));
+
+    trans_commit_revert(trans, &mut unsafe { trans.fs().mark_lock().read_held() }, a.k.p, &a.v.d, flags)
 }
