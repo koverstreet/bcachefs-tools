@@ -24,7 +24,7 @@ use core::hash::{BuildHasher, Hash};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, AtomicU64, AtomicUsize};
-use core::sync::atomic::Ordering::{self, Relaxed};
+use core::sync::atomic::Ordering;
 
 use crate::locking::{ByteLock, ExclusiveGuard, Locked};
 use crate::types::CacheAligned;
@@ -33,8 +33,6 @@ use crate::util::backref::BackRef;
 use crate::util::rcu::{read_lock, Detach, DetachMember, RcuArray, RcuMember, ReadGuard};
 use crate::util::siphash::SipHash13Key;
 use table::{Mirror, Seeds, Slot};
-
-// ── What a table holds ───────────────────────────────────────────────────
 
 /// What a table's slots hold, a word each.
 ///
@@ -171,6 +169,11 @@ impl Mode for Private {
     const SHARED: bool = false;
 }
 
+/// A BuildHasher a buffer's seeds key.
+pub trait CuckooHasher: BuildHasher + From<[u64; 2]> {}
+
+impl<S: BuildHasher + From<[u64; 2]>> CuckooHasher for S {}
+
 /// See the top of the file: of @I - u64s, or Entry<E> - hashed by @S, in @W
 /// ways, two or three, read as @M says. Zeroed, it's empty, with no buffer:
 /// the first insert allocates one.
@@ -198,15 +201,15 @@ type Held<'a> = ExclusiveGuard<'a, ByteLock>;
 
 // SAFETY: atomics, an RcuArray, no bytes, an unlocked ByteLock, Faults'
 // integers and atomics, and PhantomDatas: all valid zeroed
-unsafe impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize, M: Mode> ::pin_init::Zeroable for Cuckoo<I, S, W, M> {}
+unsafe impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> ::pin_init::Zeroable for Cuckoo<I, S, W, M> {}
 
-impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize, M: Mode> Default for Cuckoo<I, S, W, M> {
+impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Default for Cuckoo<I, S, W, M> {
     fn default() -> Self {
         ::pin_init::Zeroable::zeroed()
     }
 }
 
-impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize, M: Mode> Cuckoo<I, S, W, M> {
+impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M> {
     /// @key's item, in a read-side section of its own.
     pub fn get<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> Option<I>
     where I::Target: Borrow<Q>
@@ -221,7 +224,7 @@ impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize, M: Mode> Cu
     }
 
     pub fn len(&self) -> usize {
-        self.nr.load(Relaxed)
+        self.nr.load(Ordering::Relaxed)
     }
 
     /// @key's item, under @g's section.
@@ -244,11 +247,11 @@ impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize, M: Mode> Cu
 
     #[cfg(CONFIG_BCACHEFS_TESTS)]
     pub fn moved(&self) -> u64 {
-        self.moves.load(Relaxed)
+        self.moves.load(Ordering::Relaxed)
     }
 }
 
-impl<E: Hash + Eq + Sync, S: BuildHasher + From<[u64; 2]>, const W: usize, M: Mode> Cuckoo<Entry<E>, S, W, M> {
+impl<E: Hash + Eq + Sync, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<Entry<E>, S, W, M> {
     /// @key's entry, for as long as @g's read-side section.
     pub fn get_entry<'g, Q: ?Sized + Hash + Eq>(&self, key: &Q, g: &'g ReadGuard) -> Option<&'g E>
     where E: Borrow<Q>
@@ -259,9 +262,7 @@ impl<E: Hash + Eq + Sync, S: BuildHasher + From<[u64; 2]>, const W: usize, M: Mo
     }
 }
 
-// ── Writers ──────────────────────────────────────────────────────────────
-
-impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize, M: Mode> Cuckoo<I, S, W, M> {
+impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M> {
     /// @item, in place of what had its key, if anything: that. Fails, with
     /// the table unchanged, only if it can't allocate.
     pub fn insert(&self, item: I) -> Result<Option<I>, AllocError> {
@@ -278,46 +279,21 @@ impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize, M: Mode> Cu
     pub fn remove<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> Option<I>
     where I::Target: Borrow<Q>
     {
-        let g = self.lock.lock();
-        let s = self.locked(&g)?.find_locked(key)?;
-        let old = s.load_locked();
-        s.clear();
-        self.nr.fetch_sub(1, Relaxed);
-        old
+        self.take_if(&self.lock.lock(), key, |_| true)
     }
 
     /// Empty it, freeing its buffer after a grace period.
     pub fn clear(&self) {
-        let _g = self.lock.lock();
-        // SAFETY: we hold the writers' lock
-        unsafe { self.table.clear() }
-        self.nr.store(0, Relaxed);
+        self.empty(&self.lock.lock())
     }
 
     /// The table's invariant, checked - every item in one of its slots, and in
     /// only one, and as many as it counts: how many, or what's broken. For
     /// tests, and debugging: it walks every slot.
     pub fn check(&self) -> Result<usize, &'static str> {
-        let g = self.lock.lock();
-        let Some(t) = self.locked(&g) else { return Ok(0) };
-        let mut nr = 0;
-
-        for s in t.slots {
-            let Some(i) = s.load_locked() else { continue };
-            match t.find_locked(t.key(&i)) {
-                None => return Err("cuckoo: an item in a slot it doesn't hash to"),
-                Some(f) if !core::ptr::eq(f, s) => return Err("cuckoo: an item in two slots"),
-                Some(_) => nr += 1,
-            }
-        }
-        if nr != self.nr.load(Relaxed) {
-            return Err("cuckoo: an item count that isn't the items");
-        }
-        Ok(nr)
+        self.check_invariant(&self.lock.lock())
     }
 }
-
-// ── An entry's own registration ──────────────────────────────────────────
 
 /// An entry's place in a map, and its key, held by the entry: dropping it
 /// takes the entry out. A reference each way, owning neither - the table
@@ -332,7 +308,7 @@ impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize, M: Mode> Cu
 /// detached first - and, for a Shared table's readers, a grace period on: its
 /// RcuMember.
 pub struct Registration<K, E, S = SipHash13Key, const W: usize = 2, M: Mode = Shared>
-where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
+where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
 {
     table:   BackRef<Cuckoo<Entry<E>, S, W, M>>,
     entry:   NonNull<E>,
@@ -346,10 +322,10 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
 // what a Private table keeps to its thread is its readers. @entry is
 // compared, never followed
 unsafe impl<K, E, S, const W: usize, M: Mode> Send for Registration<K, E, S, W, M>
-where K: Hash + Eq + Send, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
+where K: Hash + Eq + Send, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
 {}
 unsafe impl<K, E, S, const W: usize, M: Mode> Sync for Registration<K, E, S, W, M>
-where K: Hash + Eq + Sync, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
+where K: Hash + Eq + Sync, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
 {}
 
 /// Why a Registration wasn't made: its key's in the table already - another
@@ -367,7 +343,7 @@ impl From<AllocError> for RegisterError {
 }
 
 impl<K, E, S, const W: usize, M: Mode> Registration<K, E, S, W, M>
-where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
+where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
 {
     /// A Shared table's readers may hold an &E past its drop: only its memory
     /// waits for them.
@@ -392,11 +368,7 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
             // this, the caller's
             unsafe { slot.write(Self { table: BackRef::new(table), entry: e, key, _detach: DetachMember, _rcu: Default::default() }) };
             // SAFETY: the caller's
-            let err = match table.insert_new(unsafe { Entry::new(e) }) {
-                Ok(Ok(())) => return Ok(()),
-                Ok(Err(_)) => RegisterError::Exists,
-                Err(_)     => RegisterError::Alloc,
-            };
+            let Err(err) = Self::insert(table, unsafe { Entry::new(e) }) else { return Ok(()) };
             // SAFETY: just written; its drop finds nothing of ours to take
             // out - an entry that's in already isn't @e
             unsafe { core::ptr::drop_in_place(slot) };
@@ -417,12 +389,13 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
     pub unsafe fn register(table: &Cuckoo<Entry<E>, S, W, M>, key: K, e: NonNull<E>) -> Result<Self, RegisterError> {
         let () = Self::NOTHING_TO_DROP;
         // SAFETY: the caller's
-        match table.insert_new(unsafe { Entry::new(e) }) {
-            // SAFETY: the caller's
-            Ok(Ok(())) => Ok(Self { table: unsafe { BackRef::new(table) }, entry: e, key, _detach: DetachMember, _rcu: Default::default() }),
-            Ok(Err(_)) => Err(RegisterError::Exists),
-            Err(_)     => Err(RegisterError::Alloc),
-        }
+        Self::insert(table, unsafe { Entry::new(e) })?;
+        // SAFETY: the caller's
+        Ok(Self { table: unsafe { BackRef::new(table) }, entry: e, key, _detach: DetachMember, _rcu: Default::default() })
+    }
+
+    fn insert(table: &Cuckoo<Entry<E>, S, W, M>, e: Entry<E>) -> Result<(), RegisterError> {
+        table.insert_new(e)?.map_err(|_| RegisterError::Exists)
     }
 
     pub fn key(&self) -> &K {
@@ -431,23 +404,18 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
 }
 
 impl<K, E, S, const W: usize, M: Mode> Detach for Registration<K, E, S, W, M>
-where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
+where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
 {
     /// Out, if the slot is still this entry's: an insert() of its key may
     /// have put another in its place - or the entry's out already.
     fn detach(&self) {
         let table = &*self.table;
-        let g = table.lock.lock();
-        let Some(s) = table.locked(&g).and_then(|t| t.find_locked(&self.key)) else { return };
-        if s.load_locked().is_some_and(|i| i.0 == self.entry) {
-            s.clear();
-            table.nr.fetch_sub(1, Relaxed);
-        }
+        table.take_if(&table.lock.lock(), &self.key, |i| i.0 == self.entry);
     }
 }
 
 impl<K, E, S, const W: usize, M: Mode> Drop for Registration<K, E, S, W, M>
-where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
+where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
 {
     fn drop(&mut self) {
         // not self.detach(): that's &mut Self's, which has nothing to detach

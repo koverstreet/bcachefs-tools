@@ -53,10 +53,9 @@ use crate::locking::Locked;
 use crate::new_lock;
 use crate::prt;
 use crate::util::alloc::KVVec;
-use crate::data_structures::cuckoo::{Cuckoo, CuckooItem, Entry, Faults, Registration};
+use crate::data_structures::cuckoo::{Cuckoo, CuckooHasher, CuckooItem, Entry, Faults, Registration};
 use crate::util::hash::GoldenRatio;
 use crate::util::siphash::SipHash13Key;
-use core::hash::BuildHasher;
 use crate::util::kernel::{cond_resched, local_clock, random_u64, random_u64_below};
 use crate::util::par::{self, Backend};
 use crate::util::printbuf::{HumanReadable, Printbuf};
@@ -168,7 +167,7 @@ type Map = Entry<TestEntry>;
 
 // ── The model test ───────────────────────────────────────────────────────
 
-fn model<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(name: &str) -> TestRet {
+fn model<I: TestItem, S: CuckooHasher, const W: usize>(name: &str) -> TestRet {
     const NR: usize = 512;
     let key = |i: usize| (i as u64).wrapping_mul(0x9E3779B97F4A7C15);
     let mut keys = KVVec::new();
@@ -318,7 +317,7 @@ fn rounds() -> [(&'static str, Faults); 6] {
 
 /// Writer @w's @nr'th op, on one of its keys, bracketed by the key's @seq.
 #[allow(clippy::too_many_arguments)]
-fn writer_op<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(
+fn writer_op<I: TestItem, S: CuckooHasher, const W: usize>(
     t: &Cuckoo<I, S, W>, w: usize, items: &AtomicU64, keys: &[KeyState], pool: &I::Pool,
     fails: &Failures, injecting: bool, rng: &mut u64, nr: u64,
 ) {
@@ -405,7 +404,7 @@ impl Rendezvous {
 
 /// With every writer stopped: the table checked, its count against theirs,
 /// and now and then cleared, bracketing every key. Whether to stop.
-fn writers_met<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(
+fn writers_met<I: TestItem, S: CuckooHasher, const W: usize>(
     t: &Cuckoo<I, S, W>, items: &[AtomicU64; WRITERS], keys: &[KeyState], fails: &Failures, end: u64,
 ) -> bool {
     let nr: u64 = items.iter().map(|n| n.load(Relaxed)).sum();
@@ -430,7 +429,7 @@ fn writers_met<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(
 
 /// One round: a fresh table with @faults, WRITERS writers and the rest of the
 /// CPUs reading, for @secs.
-fn round<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(table: &str, name: &str, faults: Faults, secs: u64)
+fn round<I: TestItem, S: CuckooHasher, const W: usize>(table: &str, name: &str, faults: Faults, secs: u64)
     -> TestRet
 {
     let readers = nr_cpus().saturating_sub(WRITERS as u32).clamp(2, 30);
@@ -554,7 +553,7 @@ fn round<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(table: &s
     Ok(())
 }
 
-fn torture<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(table: &str) -> TestRet {
+fn torture<I: TestItem, S: CuckooHasher, const W: usize>(table: &str) -> TestRet {
     for (name, faults) in rounds() {
         round::<I, S, W>(table, name, faults, 5)?;
     }
@@ -576,7 +575,7 @@ fn pick(keys: &[u64], rng: &mut u64) -> u64 {
 
 /// @nr lookups of @keys at random, timed, and how many were found - so they
 /// aren't optimized out.
-fn bench_lookups<S: BuildHasher + From<[u64; 2]>, const W: usize>(t: &Cuckoo<u64, S, W>, keys: &[u64], nr: u64, rng: &mut u64)
+fn bench_lookups<S: CuckooHasher, const W: usize>(t: &Cuckoo<u64, S, W>, keys: &[u64], nr: u64, rng: &mut u64)
     -> (u64, u64)
 {
     let start = local_clock();
@@ -589,7 +588,7 @@ fn bench_lookups<S: BuildHasher + From<[u64; 2]>, const W: usize>(t: &Cuckoo<u64
 /// to another @ms later: the readers' lookups a second, in millions, and the
 /// writer's ops a second. Counted in the window every thread is in, not
 /// timed by the slowest, so one descheduled reader doesn't skew the rest.
-fn bench_threads<S: BuildHasher + From<[u64; 2]>, const W: usize>(
+fn bench_threads<S: CuckooHasher, const W: usize>(
     t: &Cuckoo<u64, S, W>, keys: &[u64], ms: u64, threads: u32, churn: Option<&[u64]>,
 ) -> Result<(u64, u64), BchError> {
     let (lookups, writes) = (AtomicU64::new(0), AtomicU64::new(0));
@@ -640,7 +639,7 @@ fn bench_threads<S: BuildHasher + From<[u64; 2]>, const W: usize>(
     Ok((lookups.into_inner() / (ms * 1000), writes.into_inner() * 1000 / ms))
 }
 
-fn bench<S: BuildHasher + From<[u64; 2]>, const W: usize>(table: &str) -> TestRet {
+fn bench<S: CuckooHasher, const W: usize>(table: &str) -> TestRet {
     let cpus = nr_cpus();
 
     for shift in [10u32, 14, 18, 22] {
