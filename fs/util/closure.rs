@@ -24,7 +24,7 @@ use core::marker::{PhantomData, PhantomPinned};
 use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
 use core::ptr::NonNull;
-use core::sync::atomic::AtomicI32;
+use core::sync::atomic::{AtomicI32, AtomicPtr};
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
 use pin_init::{pin_data, pinned_drop, PinInit};
 
@@ -183,11 +183,14 @@ pub fn closure_fn_addr(cl: &c::closure) -> *const core::ffi::c_void {
     }
 }
 
+/// @list's head: a lockless list's, which its adds and wakes swap.
+pub fn waitlist_first(list: &c::closure_waitlist) -> &AtomicPtr<c::llist_node> {
+    unsafe { AtomicPtr::from_ptr((&raw const list.list.first).cast_mut()) }
+}
+
 /// Whether anything's waiting on @list - a hint, racing its adds and wakes.
 pub fn closure_has_waiters(list: &c::closure_waitlist) -> bool {
-    // SAFETY: a lockless list's head, which its adds and wakes swap: read
-    // once, as READ_ONCE()
-    !unsafe { core::ptr::read_volatile(&raw const list.list.first) }.is_null()
+    !waitlist_first(list).load(Relaxed).is_null()
 }
 
 /// Each waiter's ref put.
