@@ -30,7 +30,7 @@ pub(crate) fn stripe_delete(t: &TransAttempt<'_, '_>, idx: u64, is_open: bool) -
     let k = iter.peek_slot(t)?.expect("a slot");
 
     // checked with the stripe intent locked: an existing stripe is opened
-    // only under that lock - bch2_stripe_tryget_existing() - so a
+    // only under that lock - OpenStripe::tryget_existing() - so a
     // create can't open it, and load the key we're deleting, before we commit
     if !is_open && fs.stripe_is_open(idx) {
         return Ok(());

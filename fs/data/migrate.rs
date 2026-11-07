@@ -156,7 +156,7 @@ impl DevDrop<'_> {
         // With @k intent locked, as the stripe deleter's check: a create
         // opens an existing stripe only under that lock, so it can't open it
         // and load the key we're replacing before we commit. If our commit
-        // drops its locks, see bch2_stripe_tryget_existing().
+        // drops its locks, see OpenStripe::tryget_existing().
         if fs.stripe_is_open(idx) {
             *had_open = true;
             return Ok(());

@@ -229,7 +229,6 @@ pub mod c {
     pub use super::vfs_types::*;
     pub use crate::alloc::background::{BUCKET_GC_GEN_MAX};
     pub use crate::btree::cache::{bch2_btree_cache_pin, bch2_btree_cache_pin_budget, bch2_btree_cache_to_text, bch2_btree_cache_unpin, bch2_btree_id_level_to_text, bch2_btree_id_str, bch2_btree_node_flags, bch2_btree_node_prefetch, bch2_btree_node_to_text, bch2_node_pin};
-    pub use crate::data::ec::trigger::{bch2_stripe_tryget_existing};
     pub use crate::namei::{BCH_CREATE_SNAPSHOT, BCH_CREATE_SNAPSHOT_RO, BCH_CREATE_SUBVOL, BCH_CREATE_TMPFILE};
     pub use crate::fs::bch2_write_refs;
 }

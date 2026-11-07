@@ -356,12 +356,6 @@ impl BtreeIter<'_> {
         }
     }
 
-    /// For C that takes the iterator without moving it - an update, which
-    /// may set key_cache_path, its Cell.
-    pub(crate) fn raw(&self) -> *mut c::btree_iter {
-        core::ptr::from_ref(self).cast_mut().cast()
-    }
-
     pub(crate) fn raw_mut(&mut self) -> *mut c::btree_iter {
         core::ptr::from_mut(self).cast()
     }
@@ -2431,6 +2425,35 @@ impl<'t> BtreeIter<'t> {
     pub fn rewind(&mut self) -> bool {
         let trans = self.trans_c();
         self.rewind_in(&mut trans.paths())
+    }
+
+    /// @f, under the write lock of the key cache entry at the iterator's
+    /// position, if there is one: cycling it advances the entry's lock
+    /// sequence, so the relock of anything that decided on the key fails.
+    /// The iterator holds its leaf intent locked, so an entry isn't created
+    /// meanwhile - the fill write locks the leaf.
+    pub fn with_key_cache_write_lock<R>(&self, t: &TransAttempt<'_, '_>, f: impl FnOnce() -> R)
+        -> Result<R, BchError>
+    {
+        let trans = t.trans();
+        ebug_assert!(ptr::eq(self.trans_c(), trans), "an iterator of another transaction");
+        assert!(trans.paths()[self.path].intent_locked(0),
+                "cycling the key cache lock at {} without its leaf intent locked", self.pos);
+
+        let mut ck_iter = BtreeIter::new(t, self.btree(), self.pos,
+                                         BtreeIterFlags::INTENT | BtreeIterFlags::CACHED |
+                                         BtreeIterFlags::CACHED_NOFILL);
+        ck_iter.traverse(t)?;
+
+        let mut paths = trans.paths();
+        if paths[ck_iter.path].unlocked_node(0).is_none() {
+            return Ok(f());
+        }
+
+        trans.node_lock_write(&mut paths, ck_iter.path, 0)?;
+        let ret = f();
+        trans.node_unlock_write(&mut paths, ck_iter.path, 0);
+        Ok(ret)
     }
 }
 

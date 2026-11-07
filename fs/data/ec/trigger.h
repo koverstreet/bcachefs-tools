@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _BCACHEFS_DATA_EC_TRIGGER_H
 #define _BCACHEFS_DATA_EC_TRIGGER_H
-#include "data/ec/open_gen.h"
 #include "data/ec/stripe_gen.h"
 #include "data/ec/trigger_gen.h"
 

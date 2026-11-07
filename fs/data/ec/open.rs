@@ -8,20 +8,15 @@
 //! that reconcile doesn't move their data meanwhile. Both are sets, as all
 //! anything asks of either is whether something's in: who holds a stripe open
 //! is an OpenStripe's type, not the table's. Opening an existing stripe has to
-//! fence the stripe trigger's decision about it, too - by cycling a btree node
-//! write lock, in trigger.c's bch2_stripe_tryget_existing() until Rust has
-//! btree node locks.
+//! fence the stripe trigger's decision about it, too - by cycling the key
+//! cache entry's write lock.
 
 use crate::alloc::buckets::bucket_to_u64;
 use crate::btree::iter::{BtreeIter, TransAttempt};
-use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::util::alloc::AllocError;
-use crate::util::ffi::Opaque;
-use core::ffi::c_int;
-use cstruct_macros::c_export;
-use crate::format::Bpos;
+use crate::format::{Bpos, Btree};
 
 // ── Open stripes, and the buckets of stripes being made ──────────────────
 
@@ -37,30 +32,6 @@ impl Fs {
     pub fn stripe_is_open(&self, idx: u64) -> bool {
         self.ec.stripes_open.contains(&idx)
     }
-
-    /// Open stripe @idx: false if it's open already.
-    fn stripe_open(&self, idx: u64) -> Result<bool, BchError> {
-        match self.ec.stripes_open.insert_new(idx) {
-            Ok(opened) => Ok(opened.is_ok()),
-            Err(AllocError) => self.throw(bch_errcode::BCH_ERR_ENOMEM_stripe_open),
-        }
-    }
-}
-
-#[c_export]
-pub fn bch2_stripe_is_open(c: &Opaque<Fs>, idx: u64) -> bool {
-    Fs::from_c(c).stripe_is_open(idx)
-}
-
-/// For bch2_stripe_tryget_existing(), in trigger.c until Rust has btree node
-/// locks: open stripe @idx - 1, or 0 if it's open already - for the
-/// OpenStripe::tryget_existing() that called it to hold.
-#[c_export]
-pub fn bch2_stripe_tryget(c: &Opaque<Fs>, idx: u64) -> c_int {
-    match Fs::from_c(c).stripe_open(idx) {
-        Ok(opened) => opened.into(),
-        Err(e) => ret_to_c(Err(e)),
-    }
 }
 
 /// A stripe we have open: its index in ec.stripes_open - keeping the stripe
@@ -75,18 +46,34 @@ pub struct OpenStripe<'f> {
 impl<'f> OpenStripe<'f> {
     /// Open the stripe at @iter, which must be intent locked - an existing
     /// stripe is only opened under that lock: None if it's open already.
-    /// bch2_stripe_tryget_existing().
     pub fn tryget_existing(t: &TransAttempt<'_, 'f>, iter: &BtreeIter<'_>) -> Result<Option<Self>, BchError> {
-        // SAFETY: @iter in the attempt, and not moved - the key cache entry
-        // it locks is another iterator's
-        let ret = ret_to_result(unsafe { c::bch2_stripe_tryget_existing(iter.raw()) })?;
-        Ok((ret != 0).then(|| OpenStripe { fs: t.fs(), idx: iter.pos().offset }))
+        let (fs, idx) = (t.fs(), iter.pos().offset);
+        ebug_assert!(iter.btree() == Btree::stripes, "opening an existing stripe in btree {}", iter.btree());
+
+        if fs.stripe_is_open(idx) {
+            return Ok(None);
+        }
+
+        /*
+         * The stripe trigger and device invalidation act on stripes that
+         * aren't open, and their decision can outlive a lock drop: commit
+         * relocks and retries without re-running triggers. Cycling a write
+         * lock advances the lock sequence, so that relock fails.
+         *
+         * The lock to cycle is the key cache entry: anything updating this key
+         * holds it, and an entry is only freed under its write lock - so if
+         * there's no entry, they're already invalidated.
+         */
+        iter.with_key_cache_write_lock(t, || Self::tryget(fs, idx))?
     }
 
     /// Open stripe @idx, one that doesn't exist yet - a slot being allocated
     /// for a new stripe: None if it's open already.
     pub fn tryget(fs: &'f Fs, idx: u64) -> Result<Option<Self>, BchError> {
-        Ok(fs.stripe_open(idx)?.then(|| OpenStripe { fs, idx }))
+        match fs.ec.stripes_open.insert_new(idx) {
+            Ok(opened) => Ok(opened.is_ok().then(|| OpenStripe { fs, idx })),
+            Err(AllocError) => fs.throw(bch_errcode::BCH_ERR_ENOMEM_stripe_open),
+        }
     }
 
     /// For what holds the filesystem otherwise - a stripe being made - to
