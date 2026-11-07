@@ -832,14 +832,14 @@ int bch2_btree_node_read_done(struct bch_fs *c, struct bch_dev *ca,
 		btree_err_on(blacklisted && first,
 			     FSCK_CAN_FIX,
 			     c, ca, b, i, NULL,
-			     bset_blacklisted_journal_seq,
-			     "first btree node btree/bset.has blacklisted journal seq (%llu)",
+			     first_bset_blacklisted_journal_seq,
+			     "first btree node bset has blacklisted journal seq (%llu)",
 			     le64_to_cpu(i->journal_seq));
 
 		btree_err_on(blacklisted && ptr_written,
 			     FSCK_CAN_FIX,
 			     c, ca, b, i, NULL,
-			     first_bset_blacklisted_journal_seq,
+			     bset_blacklisted_journal_seq,
 			     "found blacklisted bset (journal seq %llu) in btree node at offset %u-%u/%u",
 			     le64_to_cpu(i->journal_seq),
 			     b->written, b->written + sectors, ptr_written);
