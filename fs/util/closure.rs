@@ -15,9 +15,11 @@
 use crate::c;
 use crate::util::alloc::KBox;
 use crate::util::ffi::Opaque;
+use crate::util::kernel::jiffies;
 use crate::util::refcount::{RefBorrow, RefGuard, Refcount, TryRefcount};
 use crate::util::workqueue::Queue;
 use core::cell::UnsafeCell;
+use core::ffi::{c_long, c_ulong};
 use core::marker::{PhantomData, PhantomPinned};
 use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
@@ -173,6 +175,43 @@ pub fn closure_wait_event(list: &c::closure_waitlist, mut cond: impl FnMut() -> 
     }
     // off the waitlist, before it goes
     closure_wake_up(list);
+}
+
+/// closure_wait_event(), for up to @timeout jiffies - c_long::MAX for no
+/// limit - each sleep @sleep's, given the closure and the jiffies left: what's
+/// left of @timeout, at least 1, once @cond is true; 0 if it timed out first.
+pub fn closure_wait_event_timeout_by(list: &c::closure_waitlist, mut cond: impl FnMut() -> bool, timeout: c_long,
+                                     mut sleep: impl FnMut(&Opaque<c::closure>, c_long)) -> c_long {
+    let until = jiffies().wrapping_add(timeout as c_ulong);
+    let left = || until.wrapping_sub(jiffies()) as c_long;
+
+    if cond() {
+        return left().max(1);
+    }
+
+    pin_init::stack_pin_init!(let cl = StackClosure::new());
+    let clp = NonNull::new(cl.as_ptr()).expect("a closure on the stack");
+    let ret = loop {
+        unsafe { closure_wait(list, clp) };
+        if cond() {
+            break left().max(1);
+        }
+        let t = left().max(0);
+        if t == 0 {
+            break 0;
+        }
+        sleep(cl.as_opaque(), t);
+    };
+    // off the waitlist, before it goes
+    closure_wake_up(list);
+    ret
+}
+
+/// closure_wait_event_timeout_by(), each sleep a closure_sync_timeout().
+pub fn closure_wait_event_timeout(list: &c::closure_waitlist, cond: impl FnMut() -> bool, timeout: c_long) -> c_long {
+    closure_wait_event_timeout_by(list, cond, timeout, |cl, t| {
+        unsafe { c::closure_sync_timeout(cl.as_ptr(), t as c_ulong) };
+    })
 }
 
 /// T's closure, CLOSURE bytes into it: has_closure!().
