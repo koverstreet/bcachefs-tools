@@ -80,14 +80,9 @@ c_enum! {
     }
 }
 
-const SECTOR_U64S: usize = 512 / size_of::<u64>();
 const NODE_U64S: usize = size_of::<Head<c::btree_node>>() / size_of::<u64>();
 const ENTRY_U64S: usize = size_of::<Head<c::btree_node_entry>>() / size_of::<u64>();
 const ENTRY_KEYS: usize = offset_of!(Head<c::btree_node_entry>, keys) / size_of::<u64>();
-
-fn bset_written(b: &BtreeNode, t: &BsetTree) -> bool {
-    (t.data_offset as usize) < b.written.get() as usize * SECTOR_U64S
-}
 
 /// Runs of keys, merged: by position, then by @tie_break - of each key's
 /// offset and key.
@@ -343,7 +338,7 @@ fn should_compact_bset(b: &BtreeNode, contents: &NodeContents, set: usize, compa
 
     match mode {
         CompactMode::COMPACT_LAZY => should_compact_bset_lazy(&contents.nr, set, t) ||
-            (compacting && !bset_written(b, t)),
+            (compacting && !b.bset_written(t)),
         CompactMode::COMPACT_ALL  => true,
     }
 }
@@ -354,12 +349,12 @@ pub fn bch2_drop_whiteouts(b: &BtreeNode, mode: CompactMode) -> bool {
 }
 
 fn drop_whiteouts(b: &BtreeNode, contents: &mut NodeContents, mode: CompactMode) -> bool {
-    let write_block = b.written.get() as usize * SECTOR_U64S;
+    let write_block = b.written_end();
     let mut ret = false;
 
     for set in 0..contents.nsets as usize {
         let t = contents.set[set];
-        let moved = (set != 0 && !bset_written(b, &t))
+        let moved = (set != 0 && !b.bset_written(&t))
             .then(|| (t.data_offset as usize - ENTRY_KEYS, write_block.max(contents.set[set - 1].end_offset as usize)))
             .filter(|(src, dst)| src != dst);
 
@@ -545,7 +540,7 @@ pub fn bch2_btree_sort_into(fs: &Fs, dst: &BtreeNode, src: &BtreeNode) {
 pub fn bch2_btree_node_compact(fs: &Fs, b: &BtreeNode) -> bool {
     let contents = unsafe { b.contents_mut() };
     let nsets = contents.nsets as usize;
-    let unwritten_idx = contents.sets().iter().position(|t| !bset_written(b, t)).unwrap_or(nsets);
+    let unwritten_idx = contents.sets().iter().position(|t| !b.bset_written(t)).unwrap_or(nsets);
     let mut ret = false;
 
     for (start, end) in [(unwritten_idx, nsets), (0, unwritten_idx)] {
@@ -564,7 +559,7 @@ pub fn bch2_btree_build_aux_trees(b: &BtreeNode) {
 
 fn build_aux_trees(b: &BtreeNode, contents: &mut NodeContents) {
     let nsets = contents.nsets as usize;
-    let written: [bool; MAX_BSETS as usize] = core::array::from_fn(|i| i < nsets && bset_written(b, &contents.set[i]));
+    let written: [bool; MAX_BSETS as usize] = core::array::from_fn(|i| i < nsets && b.bset_written(&contents.set[i]));
     let mut keys = b.keys_mut(contents);
 
     for set in 0..nsets {
