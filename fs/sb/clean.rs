@@ -154,7 +154,7 @@ impl Fs {
             return Ok(false);
         }
 
-        for id in 0..Btree::nr.0 {
+        for id in 0..Btree::NR {
             let sb = btree_root(clean.entries(), id);
             let journal = btree_root(j.entries(), id);
             if sb.is_none() && journal.is_none() {

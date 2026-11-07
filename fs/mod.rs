@@ -480,7 +480,7 @@ c::Btree_arms!(btree_ids_known);
 /// The btrees with any of @flags, a bit each, by id.
 pub const fn btrees_with(flags: BtreeFlags) -> u64 {
     let (mut mask, mut i) = (0, 0);
-    while i < Btree::nr.0 {
+    while i < Btree::NR {
         if Btree(i).flags().intersects(flags) {
             mask |= 1 << i;
         }

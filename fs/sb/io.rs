@@ -406,7 +406,7 @@ fn validate_at(sb: &mut bch_sb<Unvalidated>, off: usize, flags: ValidateFlags, e
 
 // ── The sections, by type ────────────────────────────────────────────────
 
-const FIELD_NR: usize = c::bch_sb_field_type::BCH_SB_FIELD_NR.0 as usize;
+const FIELD_NR: usize = c::bch_sb_field_type::NR as usize;
 const _: () = assert!(FIELD_NR <= 64, "bch_sb_buf.dirty: a bit per section type");
 
 impl c::bch_sb_field<Unvalidated> {
@@ -3190,8 +3190,8 @@ mod tests {
         assert_eq!(f.as_bytes().len(), 24);
         assert!(matches!(f.typed(), Ok(c::BchSbFieldRef::journal(j)) if j.field.u64s() == 3 && j.buckets.len() == 2));
 
-        let f = field(&mut buf, T::BCH_SB_FIELD_NR, 3);
-        assert!(matches!(f.typed(), Err(t) if t == T::BCH_SB_FIELD_NR));
+        let f = field(&mut buf, T::from_bits(T::NR), 3);
+        assert!(matches!(f.typed(), Err(t) if t == T::from_bits(T::NR)));
     }
 
     /// A section too short to be its type fails validation, saying how short

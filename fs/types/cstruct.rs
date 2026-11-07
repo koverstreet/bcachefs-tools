@@ -498,6 +498,9 @@ pub struct CEnumDef {
     /// #[prefix(P)]: what its variants' names start with, which Rust names
     /// them without too.
     pub prefix:   Option<String>,
+    /// #[nr(NR)]: how many it has - C's NR, after the last; Rust's NR, a
+    /// number, not one of its values.
+    pub nr:       Option<String>,
 }
 
 impl CEnumDef {
@@ -1361,7 +1364,7 @@ fn parse_enum(m: &syn::Macro) -> Result<CEnumDef, String> {
         let mut kind = None;
         let mut own_to_text = false;
         let mut c_name = None;
-        let mut prefix = None;
+        let (mut prefix, mut nr) = (None, None);
         for a in input.call(syn::Attribute::parse_outer)? {
             for (n, k) in [("open", CEnumKind::Open), ("closed", CEnumKind::Closed), ("flags", CEnumKind::Flags)] {
                 if a.path().is_ident(n) {
@@ -1374,6 +1377,9 @@ fn parse_enum(m: &syn::Macro) -> Result<CEnumDef, String> {
             }
             if a.path().is_ident("prefix") {
                 prefix = Some(ident(&a.parse_args::<syn::Ident>()?));
+            }
+            if a.path().is_ident("nr") {
+                nr = Some(ident(&a.parse_args::<syn::Ident>()?));
             }
         }
         input.parse::<syn::Visibility>()?;
@@ -1417,7 +1423,7 @@ fn parse_enum(m: &syn::Macro) -> Result<CEnumDef, String> {
                 Ok(CEnumVariant { name: ident(&vname), value, label })
             }).parse2(v)?);
         }
-        Ok(CEnumDef { cfg: None, kind, name, repr, variants, from, own_to_text, c_name, prefix })
+        Ok(CEnumDef { cfg: None, kind, name, repr, variants, from, own_to_text, c_name, prefix, nr })
     }).map_err(syn_err("c_enum!: expected #[open|closed|flags] pub enum NAME: REPR { ... }"))
 }
 
@@ -2189,9 +2195,10 @@ pub fn expand_enum_list(e: &mut CEnumDef, entries: &[String]) -> Result<(), Stri
 /// place - with all expanded, the record's form.
 #[allow(dead_code)]
 pub fn enum_text(e: &CEnumDef) -> String {
-    let mut t = format!("#[{}] {}{}pub enum {}: {} {{ ", e.kind.attr(),
+    let mut t = format!("#[{}] {}{}{}pub enum {}: {} {{ ", e.kind.attr(),
                         if e.own_to_text { "#[own_to_text] " } else { "" },
                         e.c_name.as_deref().map(|c| format!("#[c_name({c})] ")).unwrap_or_default(),
+                        e.nr.as_deref().map(|n| format!("#[nr({n})] ")).unwrap_or_default(),
                         e.name.as_deref().unwrap_or("_"), e.repr);
     let lists = |t: &mut String, i: usize| for (at, f) in &e.from {
         if *at == i {
@@ -3104,6 +3111,9 @@ pub fn emit_items(items: &[CItem],
                         Some(x) => t.push_str(&format!("\t{} = {x},\n", v.name)),
                         None => t.push_str(&format!("\t{},\n", v.name)),
                     }
+                }
+                if let Some(nr) = &e.nr {
+                    t.push_str(&format!("\t{nr},\n"));
                 }
                 // a byte or two wide, where a field holds it: GCC's packed enum
                 // is the smallest type its values fit - a 16 bit one whose

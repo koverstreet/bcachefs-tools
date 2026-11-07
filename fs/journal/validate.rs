@@ -549,7 +549,7 @@ pub(crate) fn journal_entry_validate(fs: &Fs, e: &mut [u8], version: u32, big_en
 pub fn journal_entry_to_text(out: &mut Printbuf, fs: Option<&Fs>, e: &c::jset_entry<Unvalidated>) {
     c::bch_jset_entry_type(e.type_.into()).to_text(out);
 
-    if u32::from(e.type_) < c::bch_jset_entry_type::BCH_JSET_ENTRY_NR.0 {
+    if u32::from(e.type_) < c::bch_jset_entry_type::NR {
         prt!(out, ": ");
         if let Ok(r) = e.typed() {
             c::jset_entry_match!(r, a => a.to_text(out, fs))

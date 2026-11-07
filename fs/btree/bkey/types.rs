@@ -680,7 +680,7 @@ c::bkey_val_arms!(key_types);
 enum Unknown {}
 impl BkeyOps for Unknown {}
 
-const NR_KEY_TYPES: usize = BkeyType::nr.0 as usize;
+const NR_KEY_TYPES: usize = BkeyType::NR as usize;
 
 /// The key types with @flag, a bit each, by number.
 pub const fn types_with(flag: BkeyTypeFlags) -> u64 {

@@ -412,13 +412,13 @@ fn enum_form(input: &TokenStream) -> Result<(Option<(Decl, CTaggedUnion)>, Token
     if let Some(e) = &tag_enum {
         let variants: String = arms.iter()
             .map(|a| format!("#[label({:?})] {}{} = {},", a.name, e.prefix, a.name, a.value))
-            .chain(e.nr.iter().map(|nr| format!("{nr},")))
             .collect();
         let kind = if e.closed { "closed" } else { "open" };
         let c_name = e.c_name.as_ref().map(|c| format!("#[c_name({c})] ")).unwrap_or_default();
+        let nr = e.nr.as_ref().map(|nr| format!("#[nr({nr})] ")).unwrap_or_default();
         // #[key_value]'s other attributes are the tag enum's: it has no storage
         let enum_attrs = if key_value { attrs.as_str() } else { "" };
-        out.extend(format!("::cstruct_macros::c_enum! {{ #[{kind}] {c_name}{enum_attrs}{vis} enum {}: {} {{ {variants} }} }}",
+        out.extend(format!("::cstruct_macros::c_enum! {{ #[{kind}] {c_name}{nr}{enum_attrs}{vis} enum {}: {} {{ {variants} }} }}",
                            e.name, e.repr).parse::<TokenStream>().map_err(|e| e.to_string())?);
 
         if !e.closed {
@@ -427,9 +427,6 @@ fn enum_form(input: &TokenStream) -> Result<(Option<(Decl, CTaggedUnion)>, Token
                 aliases.extend(a.docs.clone());
                 aliases.extend(format!("pub const {}: Self = Self::{}{};", a.name, e.prefix, a.name)
                     .parse::<TokenStream>().map_err(|e| e.to_string())?);
-            }
-            if let Some(nr) = &e.nr {
-                aliases.extend(format!("pub const nr: Self = Self::{nr};").parse::<TokenStream>().map_err(|e| e.to_string())?);
             }
             out.extend(tokens(&format!("#[allow(non_upper_case_globals)] impl {}", e.name)));
             out.extend([TokenTree::Group(Group::new(Delimiter::Brace, aliases))]);
@@ -440,7 +437,7 @@ fn enum_form(input: &TokenStream) -> Result<(Option<(Decl, CTaggedUnion)>, Token
                 let arms: String = arms.iter()
                     .map(|a| format!("Self::{}{} => {},\n", e.prefix, a.name, col.value(&a.cols[i])))
                     .collect();
-                let other = match e.closed && e.nr.is_none() {
+                let other = match e.closed {
                     true  => String::new(),
                     false => format!("_ => {},\n", col.value(&[])),
                 };

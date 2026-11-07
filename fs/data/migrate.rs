@@ -259,7 +259,7 @@ impl DevDrop<'_> {
         let res = DiskReservation::new(fs);
 
         // FIXME: this does not handle unknown btrees with data pointers
-        for btree in (0..Btree::nr.0).map(Btree) {
+        for btree in (0..Btree::NR).map(Btree) {
             if !btree.has_data_ptrs() || btree == Btree::stripes {
                 continue;
             }

@@ -290,7 +290,7 @@ impl Fs {
     }
 
     pub fn btree_id_nr_alive(&self) -> u32 {
-        u32::from(Btree::nr) + self.btree.cache.roots.roots_nr_extra.get()
+        Btree::NR + self.btree.cache.roots.roots_nr_extra.get()
     }
 
     pub fn nr_devices(&self) -> u32 {

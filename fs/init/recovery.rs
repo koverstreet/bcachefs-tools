@@ -522,9 +522,9 @@ fn journal_replay_entry_early(fs: &Fs, entry: &c::jset_entry) -> Result<(), BchE
             roots.published().roots_error[id as usize].set(0);
 
             /* every journal entry carries every root, this version's btrees or not: */
-            let nr_roots = u32::from(Btree::nr) + roots.roots_extra.nr as u32;
+            let nr_roots = Btree::NR + roots.roots_extra.nr as u32;
             drop(roots);
-            if id >= u32::from(Btree::nr) {
+            if id >= Btree::NR {
                 fs.journal_entry_res_resize(&fs.btree.root_journal_res,
                                             crate::btree::interior::roots_journal_u64s(nr_roots));
             }
@@ -594,7 +594,7 @@ fn read_btree_roots(fs: &Fs) -> Result<(), BchError> {
         }
     }
 
-    for i in 0..u32::from(Btree::nr) {
+    for i in 0..Btree::NR {
         if fs.btree_id_root(i).is_none() && fs.btree.cache.roots.error(i) == 0 {
             {
                 let mut roots = fs.btree.cache.roots.lock();
@@ -1073,7 +1073,7 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
         fs.write_super(&mut sb);
     }
 
-    for i in 0..u32::from(Btree::nr) {
+    for i in 0..Btree::NR {
         fs.btree_root_alloc_fake(Btree(i), 0);
     }
 

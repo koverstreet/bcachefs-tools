@@ -1228,7 +1228,7 @@ pub fn open_enum(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -
             variants.push(CEnumVariant { name, value, label: Some(label) });
         }
         let e = CEnumDef { cfg: None, kind: CEnumKind::Open, name: Some(item.ident.to_string()), repr: repr.to_string(),
-                           variants, from: Vec::new(), own_to_text, c_name: None, prefix: None };
+                           variants, from: Vec::new(), own_to_text, c_name: None, prefix: None, nr: None };
         Ok(c_enum_gen(&e, EnumOf::Rust(&item.vis, &attrs)))
     })
 }
@@ -1294,6 +1294,16 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
         }
         n += 1;
     }
+    // C's after the last, as C counts it
+    let nr = e.nr.as_ref().map(|nr| {
+        let nr = format_ident!("{nr}");
+        let after = match names.last() {
+            Some(last) => quote!(#last + 1),
+            None => quote!(0),
+        };
+        out.extend(quote!(#[allow(non_upper_case_globals, dead_code)] pub const #nr: #repr = #after;));
+        nr
+    });
 
     let ty = match &e.name {
         Some(n) => format_ident!("{n}"),
@@ -1373,6 +1383,9 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
                 unsafe impl crate::util::vstructs::Plain for #name {}
             },
         });
+        if let Some(nr) = &nr {
+            out.extend(quote!(impl #name { pub const NR: #repr = #nr; }));
+        }
 
         if let Some(prefix) = &e.prefix {
             // a name that isn't an identifier past it - 31bit_dirent_offset - has none

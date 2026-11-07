@@ -141,7 +141,7 @@ pub fn is_mem<S>(pos: &DiskAccountingPos<S>) -> bool {
     (t.0 as usize) < TYPE_NR && t != disk_accounting_type::BCH_DISK_ACCOUNTING_inum
 }
 
-const TYPE_NR: usize = disk_accounting_type::BCH_DISK_ACCOUNTING_TYPE_NR.0 as usize;
+const TYPE_NR: usize = disk_accounting_type::NR as usize;
 
 macro_rules! type_nr_counters {
     ($(($t:ident, $id:expr, $ty:ty)),* $(,)?) => { ::paste::paste! {{

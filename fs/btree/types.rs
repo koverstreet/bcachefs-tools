@@ -142,7 +142,7 @@ impl BtreeRoots {
     /// Btree @id's: a known btree's, or past them, roots_extra's -
     /// bch2_btree_id_root(). None for one past those.
     pub fn get(&self, id: u32) -> Option<&cs::btree_root> {
-        let nr_known = u32::from(Btree::nr);
+        let nr_known = Btree::NR;
         if id < nr_known {
             return Some(&self.roots_known[id as usize]);
         }
@@ -152,7 +152,7 @@ impl BtreeRoots {
     }
 
     pub fn get_mut(&mut self, id: u32) -> Option<&mut cs::btree_root> {
-        let nr_known = u32::from(Btree::nr);
+        let nr_known = Btree::NR;
         if id < nr_known {
             return Some(&mut self.roots_known[id as usize]);
         }
@@ -171,7 +171,7 @@ impl BtreeRootsGuard<'_> {
     pub fn grow_to(&mut self, id: u32) -> Result<(), BchError> {
         {
             let mut extra = unsafe { DArrayLoan::new(&mut self.roots_extra) };
-            while id >= extra.len() as u32 + u32::from(Btree::nr) {
+            while id >= extra.len() as u32 + Btree::NR {
                 extra.push(cs::btree_root::default())?;
             }
         }
@@ -1163,10 +1163,10 @@ c_enum! {
     #[open]
     #[c_name(btree_node_type)]
     #[prefix(BKEY_TYPE_)]
+    #[nr(BKEY_TYPE_NR)]
     pub enum BtreeNodeType: u32 {
         BKEY_TYPE_btree,
         Btree_arms(kwd, val, ..) => concat(BKEY_TYPE_, kwd) = (val as u32) + 1,
-        BKEY_TYPE_NR,
     }
 }
 
@@ -1205,7 +1205,7 @@ impl Btree {
     /// may, and its own: bch2_key_types_allowed[]. 0 for a btree this code
     /// doesn't know.
     pub const fn key_types(self) -> u64 {
-        if self.0 < Self::nr.0 {
+        if self.0 < Self::NR {
             self.holds() | 1 << BkeyType::deleted.0
         } else {
             0

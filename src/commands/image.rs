@@ -152,7 +152,7 @@ fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::
     let stats = MoveStats::default();
     let ctxt = MovingCtxt::new(fs, &stats, writepoint_hashed(1), false)
         .map_err(|_| anyhow!("allocating a moving context"))?;
-    let btree_id_nr = u32::from(btree_id::nr);
+    let btree_id_nr = btree_id::NR;
 
     for btree in 0..btree_id_nr {
         if !move_alloc && btree_id_is_alloc(btree) {
@@ -246,7 +246,7 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
     {
         let mut indented = buf.indent(2);
 
-        let btree_id_nr = u32::from(btree_id::nr);
+        let btree_id_nr = btree_id::NR;
         for i in 0..btree_id_nr {
             if btree_id_is_alloc(i) && !keep_alloc {
                 continue;
