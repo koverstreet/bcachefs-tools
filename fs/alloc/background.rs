@@ -740,7 +740,7 @@ pub fn bch2_alloc_to_v4_mut<'t>(trans: &'t BtreeTrans<'t>, k: BkeySC<'_>) -> *mu
 
 fn alloc_v1_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let a = v.k.arm::<c::Alloc>().expect("an alloc key");
-    let (have, want) = (v.k.k.val_bytes() / size_of::<u64>(), alloc_v1_val_u64s(a.v()));
+    let (have, want) = (v.k.k.val_u64s(), alloc_v1_val_u64s(a.v()));
 
     // allow for unknown fields
     bkey_fsck_err_on!(v, have < want, id::alloc_v1_val_size_bad, "incorrect value size ({have} < {want})")
@@ -749,7 +749,7 @@ fn alloc_v1_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 fn alloc_v4_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
     let a = c::AllocV4::val_copy_pad(v.k).expect("an alloc_v4");
-    let (want, have) = (a.u64s_noerror(), v.k.k.val_bytes() / size_of::<u64>());
+    let (want, have) = (a.u64s_noerror(), v.k.k.val_u64s());
 
     bkey_fsck_err_on!(v, want > have, id::alloc_v4_val_size_bad, "bad val size ({want} > {have})")?;
 

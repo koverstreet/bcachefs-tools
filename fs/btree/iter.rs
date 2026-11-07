@@ -858,7 +858,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             core::ptr::copy_nonoverlapping(
                 k.v as *const c::bch_val as *const u64,
                 dst.as_mut_u64s().as_mut_ptr().add(BKEY_U64S),
-                k.k.u64s as usize - BKEY_U64S,
+                k.k.val_u64s(),
             );
         }
 
@@ -875,7 +875,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let mut dst = self.bkey_alloc((BKEY_U64S + val_u64s) as u32)?;
         dst.as_mut_u64s().fill(0);
 
-        let copy_val = (k.k.u64s as usize - BKEY_U64S).min(val_u64s);
+        let copy_val = k.k.val_u64s().min(val_u64s);
         unsafe {
             core::ptr::copy_nonoverlapping(k.k, &mut dst.as_mut().k, 1);
             core::ptr::copy_nonoverlapping(
@@ -933,7 +933,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             core::ptr::copy_nonoverlapping(
                 k.v as *const c::bch_val as *const u64,
                 dst.as_mut_u64s().as_mut_ptr().add(BKEY_U64S),
-                k_u64s - BKEY_U64S,
+                k.k.val_u64s(),
             );
         }
         // SAFETY: @k's, as long as it was: a @V, as bkey_reassemble()'s copy is

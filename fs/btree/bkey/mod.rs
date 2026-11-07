@@ -123,9 +123,13 @@ impl c::bkey {
         self.u64s as usize * size_of::<u64>()
     }
 
-    /// As its u64s say.
+    /// As its u64s say: bkey_val_u64s().
+    pub fn val_u64s(&self) -> usize {
+        (self.u64s as usize).saturating_sub(BKEY_U64S)
+    }
+
     pub fn val_bytes(&self) -> usize {
-        (self.u64s as usize).saturating_sub(BKEY_U64S) * size_of::<u64>()
+        self.val_u64s() * size_of::<u64>()
     }
 
     pub fn set_val_bytes(&mut self, bytes: usize) {

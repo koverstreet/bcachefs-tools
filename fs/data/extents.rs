@@ -307,7 +307,7 @@ pub trait BkeyVExtents: BkeyV {
         let sub = where_.offset.wrapping_sub(k.k.start_offset());
         k.k.size = k.k.size.wrapping_sub(sub as u32);
 
-        let mut new_val_u64s = k.k.val_bytes() / size_of::<u64>();
+        let mut new_val_u64s = k.k.val_u64s();
         if k.k.size == 0 {
             k.k.set_key_type(BkeyType::deleted);
             new_val_u64s = 0;
@@ -382,7 +382,7 @@ pub trait BkeyVExtents: BkeyV {
         k.k.p.offset = where_.offset;
         k.k.size = len as u32;
 
-        let mut new_val_u64s = k.k.val_bytes() / size_of::<u64>();
+        let mut new_val_u64s = k.k.val_u64s();
         if len == 0 {
             k.k.set_key_type(BkeyType::deleted);
             new_val_u64s = 0;

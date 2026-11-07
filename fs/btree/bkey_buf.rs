@@ -95,12 +95,10 @@ impl BkeyBuf {
 /// # Safety
 /// @dst has room for @k's u64s.
 unsafe fn copy_key(dst: *mut u64, k: BkeySC<'_>) {
-    let u64s = k.k.u64s as usize;
     // SAFETY: the caller's; a key's header and value are whole u64s
     unsafe {
         core::ptr::copy_nonoverlapping(core::ptr::from_ref(k.k).cast::<u64>(), dst, BKEY_U64S);
-        core::ptr::copy_nonoverlapping(k.v.cast::<u64>(), dst.add(BKEY_U64S),
-                                       u64s - BKEY_U64S);
+        core::ptr::copy_nonoverlapping(k.v.cast::<u64>(), dst.add(BKEY_U64S), k.k.val_u64s());
     }
 }
 

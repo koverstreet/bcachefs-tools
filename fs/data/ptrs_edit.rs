@@ -14,7 +14,7 @@ use crate::data::keylist::KeyRoom;
 pub trait BkeyVPtrsMut: BkeyVMut<V = PtrsMut> {
     /// Where an entry inserted last goes: the value's end.
     fn entries_end(&self) -> EntryPos {
-        EntryPos(self.k().val_bytes() / size_of::<u64>())
+        EntryPos(self.k().val_u64s())
     }
 
     /// Drop the entry at @at, whatever it is, the entries after it moving
@@ -228,7 +228,7 @@ impl TransBkey<'_, '_, PtrsMut> {
 /// to its value's end.
 pub(crate) fn extent_crc_append(k: &mut KeyRoom<'_>, crc: &c::bch_extent_crc_unpacked) -> Result<(), NoRoom> {
     let e = crc_entry(crc, c::bch_extent_entry_type::BCH_EXTENT_ENTRY_crc32);
-    let val_u64s = usize::from(k.k().u64s) - BKEY_U64S;
+    let val_u64s = k.k().val_u64s();
     assert!(val_u64s + e.len() <= c::BKEY_EXTENT_VAL_U64s_MAX as usize,
             "appending a crc past an extent's largest value");
     k.append_val(&e)

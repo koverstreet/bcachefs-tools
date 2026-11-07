@@ -247,8 +247,8 @@ impl bkey_format {
         let h = Header::of(&packed[0]);
 
         assert!(h.u64s >= self.key_u64s, "packed to {} u64s, under its format's {}", h.u64s, self.key_u64s);
-        assert!(h.u64s - self.key_u64s == unpacked.u64s - BKEY_U64S as u8,
-                "packed to {} u64s of value, from {}", h.u64s - self.key_u64s, unpacked.u64s - BKEY_U64S as u8);
+        assert!(usize::from(h.u64s - self.key_u64s) == unpacked.val_u64s(),
+                "packed to {} u64s of value, from {}", h.u64s - self.key_u64s, unpacked.val_u64s());
 
         let tmp = self.unpack_key_words(packed);
 
