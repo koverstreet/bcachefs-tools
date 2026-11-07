@@ -1834,7 +1834,7 @@ impl<'t> BtreeIter<'t> {
             iter.snapshot = pos.snapshot;
             iter.pos = pos;
             iter.k = c::bkey { p: pos, ..c::bkey::new() };
-            #[cfg(CONFIG_BCACHEFS_DEBUG)]
+            #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
             {
                 iter.ip_allocated = ip;
             }
