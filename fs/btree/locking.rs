@@ -21,6 +21,7 @@ use crate::locking::{memalloc_flags_restore, memalloc_flags_save, rust_six_lockd
 use crate::prt;
 use crate::debug::trace::{events, TraceEvent};
 use crate::util::backtrace::{prt_current_backtrace, prt_symbol};
+use crate::util::closure::closure_wait_event_timeout_by;
 use crate::util::ffi::Opaque;
 use crate::util::futex::EventCount;
 use crate::util::kernel::{jiffies, msecs_to_jiffies, race_fault, time_after, HZ, READ};
@@ -1092,6 +1093,23 @@ impl BtreeTrans<'_> {
             remaining -= jiffies().wrapping_sub(start) as c_long;
         }
         false
+    }
+
+    /// Sleep until @cond, woken by @list's closure_wake_up()s, for up to
+    /// @timeout jiffies - c_long::MAX for no limit: trans_wait_event_timeout().
+    /// What's left of @timeout, at least 1, once @cond is true; 0 if it timed
+    /// out first. @cond is checked on the list, so a wake between the check
+    /// and the sleep isn't lost.
+    pub fn wait_event_timeout(&self, list: &c::closure_waitlist, cond: impl FnMut() -> bool,
+                              timeout: c_long) -> c_long {
+        closure_wait_event_timeout_by(list, cond, timeout, |cl, t| {
+            self.closure_sync_timeout(cl, t);
+        })
+    }
+
+    /// wait_event_timeout(), with no limit: trans_wait_event().
+    pub fn wait_event(&self, list: &c::closure_waitlist, cond: impl FnMut() -> bool) {
+        self.wait_event_timeout(list, cond, c_long::MAX);
     }
 
     /// @l locked, waited for under SRCU as wait_until() waits. The caller
