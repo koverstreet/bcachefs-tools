@@ -2,7 +2,7 @@
 //!
 //! Two extraction mechanisms:
 //!
-//!   1. X-macro tables — structured data (e.g. BCH_BTREE_IDS()) becomes LaTeX lists
+//!   1. Enum declarations — structured data (e.g. Btree) becomes LaTeX lists
 //!   2. DOC(key) comment blocks — prose in source becomes LaTeX fragments
 //!
 //! The options table and the CLI reference are `bcachefs _doc_gen`'s, from
@@ -18,143 +18,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
-// X-macro parsing: a C #define, or a c_xmacro! block in the Rust source
+// Enum declarations: a c_enum! or tagged_union! in the Rust source
 // ---------------------------------------------------------------------------
-
-/// The entries of x-macro @macro_name, if @source #defines it (adapted from
-/// fs/bch_bindgen/build.rs).
-fn parse_xmacro(source: &str, macro_name: &str) -> Option<Vec<Vec<String>>> {
-    let define_prefix = format!("#define {}(", macro_name);
-    if !source.contains(&define_prefix) {
-        return None;
-    }
-    let mut in_macro = false;
-    let mut macro_text = String::new();
-
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if !in_macro {
-            if trimmed.starts_with(&define_prefix) {
-                in_macro = true;
-                if let Some(pos) = trimmed.find(&define_prefix) {
-                    let after = &trimmed[pos + define_prefix.len()..];
-                    let after = if let Some(i) = after.find(')') {
-                        &after[i + 1..]
-                    } else {
-                        after
-                    };
-                    macro_text.push_str(after.trim_end_matches('\\').trim());
-                    macro_text.push(' ');
-                }
-                if !trimmed.ends_with('\\') {
-                    break;
-                }
-            }
-        } else {
-            macro_text.push_str(trimmed.trim_end_matches('\\').trim());
-            macro_text.push(' ');
-            if !trimmed.ends_with('\\') {
-                break;
-            }
-        }
-    }
-
-    let mut entries = Vec::new();
-    let bytes = macro_text.as_bytes();
-    let mut pos = 0;
-    while pos < bytes.len() {
-        let Some(start) = macro_text[pos..].find("x(") else {
-            break;
-        };
-        let open = pos + start + 2;
-        let mut depth = 1usize;
-        let mut i = open;
-        while i < bytes.len() && depth > 0 {
-            match bytes[i] {
-                b'(' => depth += 1,
-                b')' => depth -= 1,
-                _ => {}
-            }
-            if depth > 0 {
-                i += 1;
-            }
-        }
-        if depth == 0 {
-            entries.push(split_xmacro_args(&macro_text[open..i]));
-            pos = i + 1;
-        } else {
-            break;
-        }
-    }
-    Some(entries)
-}
-
-/// The entries of x-macro @macro_name, as written in its c_xmacro! block:
-/// `NAME(x) { (args), (args), ... }`. Each entry's text is what its x(...)
-/// holds in the generated C, comments dropped and whitespace outside strings
-/// collapsed - so a doc string split across lines reads `"a " "b"` as there.
-fn parse_c_xmacro(source: &str, macro_name: &str) -> Option<Vec<Vec<String>>> {
-    let start = source.find(&format!("{macro_name}(x) {{"))?;
-    let body = &source[start..];
-    let body = &body[body.find('{')? + 1..];
-
-    let mut entries = Vec::new();
-    let mut entry = String::new();
-    let mut depth = 0;
-    let mut chars = body.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '/' if chars.peek() == Some(&'/') => {
-                while chars.next().is_some_and(|c| c != '\n') {}
-            }
-            '/' if chars.peek() == Some(&'*') => {
-                chars.next();
-                let mut prev = ' ';
-                while let Some(c) = chars.next() {
-                    if prev == '*' && c == '/' {
-                        break;
-                    }
-                    prev = c;
-                }
-            }
-            '"' => {
-                entry.push(ch);
-                while let Some(c) = chars.next() {
-                    entry.push(c);
-                    match c {
-                        '\\' => entry.extend(chars.next()),
-                        '"' => break,
-                        _ => {}
-                    }
-                }
-            }
-            '(' => {
-                if depth > 0 {
-                    entry.push(ch);
-                }
-                depth += 1;
-            }
-            ')' => {
-                depth -= 1;
-                if depth > 0 {
-                    entry.push(ch);
-                } else {
-                    entries.push(split_xmacro_args(entry.trim()));
-                    entry.clear();
-                }
-            }
-            '}' if depth == 0 => return Some(entries),
-            c if c.is_whitespace() => {
-                if depth > 0 && !entry.ends_with(' ') {
-                    entry.push(' ');
-                }
-            }
-            c if depth > 0 => entry.push(c),
-            _ => {}
-        }
-    }
-    None
-}
 
 /// The attributes of an enum declaration's arms that are columns, after name,
 /// value and doc: entries 3, 4.
@@ -284,48 +149,6 @@ fn skip_group(s: &str) -> Option<&str> {
         }
     }
     None
-}
-
-/// Split comma-separated arguments, respecting nested parens and C strings.
-fn split_xmacro_args(s: &str) -> Vec<String> {
-    let mut args = Vec::new();
-    let mut depth = 0;
-    let mut in_string = false;
-    let mut current = String::new();
-    let mut chars = s.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' => {
-                in_string = !in_string;
-                current.push(ch);
-            }
-            '\\' if in_string => {
-                current.push(ch);
-                if let Some(next) = chars.next() {
-                    current.push(next);
-                }
-            }
-            '(' if !in_string => {
-                depth += 1;
-                current.push(ch);
-            }
-            ')' if !in_string => {
-                depth -= 1;
-                current.push(ch);
-            }
-            ',' if depth == 0 && !in_string => {
-                args.push(current.trim().to_string());
-                current.clear();
-            }
-            _ => current.push(ch),
-        }
-    }
-    let tail = current.trim().to_string();
-    if !tail.is_empty() {
-        args.push(tail);
-    }
-    args
 }
 
 /// Extract the content of adjacent C string literals and unescape.
@@ -735,29 +558,29 @@ fn markup_to_latex(content: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Simple enum lists from x-macros: x(name, value) → \item[{\tt name}]
+// Simple enum lists from enum declarations: name, value → \item[{\tt name}]
 // ---------------------------------------------------------------------------
 
 struct EnumList {
     key: &'static str,
-    macro_name: &'static str,
+    enum_name: &'static str,
     default: Option<&'static str>,
-    /// Which x-macro argument index contains the doc string (None = no descriptions)
+    /// Which entry field holds the doc string (None = no descriptions)
     doc_field: Option<usize>,
-    /// Which x-macro argument index contains btree-style flags (appends annotations)
+    /// Which entry field holds btree-style flags (appends annotations)
     flags_field: Option<usize>,
-    /// Which x-macro argument index contains a date string (e.g. "2023-07")
+    /// Which entry field holds a date string (e.g. "2023-07")
     date_field: Option<usize>,
-    /// Which x-macro argument index contains BCH_VERSION(major, minor)
+    /// Which entry field holds BCH_VERSION(major, minor)
     version_field: Option<usize>,
-    /// Which x-macro argument index contains PASS_* flags (annotates + hides SILENT)
+    /// Which entry field holds PASS_* flags (annotates + hides SILENT)
     pass_flags_field: Option<usize>,
 }
 
 const ENUM_LISTS: &[EnumList] = &[
     EnumList {
         key: "error-actions",
-        macro_name: "bch_error_actions",
+        enum_name: "bch_error_actions",
         default: Some("fix_safe"),
         doc_field: Some(2),
         flags_field: None,
@@ -767,7 +590,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "csum-opts",
-        macro_name: "bch_csum_opt",
+        enum_name: "bch_csum_opt",
         default: Some("crc32c"),
         doc_field: None,
         flags_field: None,
@@ -777,7 +600,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "compression-opts",
-        macro_name: "bch_compression_opts",
+        enum_name: "bch_compression_opts",
         default: Some("none"),
         doc_field: None,
         flags_field: None,
@@ -787,7 +610,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "str-hash-opts",
-        macro_name: "bch_str_hash_opts",
+        enum_name: "bch_str_hash_opts",
         default: Some("siphash"),
         doc_field: None,
         flags_field: None,
@@ -797,7 +620,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "btree-ids",
-        macro_name: "Btree",
+        enum_name: "Btree",
         default: None,
         doc_field: Some(2),
         flags_field: Some(3),
@@ -807,7 +630,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "time-stats",
-        macro_name: "bch_time_stats",
+        enum_name: "bch_time_stats",
         default: None,
         doc_field: Some(2),
         flags_field: None,
@@ -817,7 +640,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "sb-fields",
-        macro_name: "bch_sb_field",
+        enum_name: "bch_sb_field",
         default: None,
         doc_field: Some(2),
         flags_field: None,
@@ -827,7 +650,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "jset-entry-types",
-        macro_name: "jset_entry",
+        enum_name: "jset_entry",
         default: None,
         doc_field: Some(2),
         flags_field: None,
@@ -837,7 +660,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "counters",
-        macro_name: "bch_persistent_counters",
+        enum_name: "bch_persistent_counters",
         default: None,
         doc_field: Some(2),
         flags_field: None,
@@ -847,7 +670,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "bkey-types",
-        macro_name: "BkeyType",
+        enum_name: "BkeyType",
         default: None,
         doc_field: Some(2),
         flags_field: None,
@@ -857,7 +680,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "metadata-versions",
-        macro_name: "MetadataVersion",
+        enum_name: "MetadataVersion",
         default: None,
         doc_field: Some(2),
         flags_field: None,
@@ -867,7 +690,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "recovery-passes",
-        macro_name: "RecoveryPass",
+        enum_name: "RecoveryPass",
         default: None,
         doc_field: Some(2),
         flags_field: None,
@@ -1065,32 +888,24 @@ fn main() {
     }
 
     // --- Simple enum lists ---
-    // From each x-macro wherever in fs/ it lives - a C #define, a Rust
-    // c_xmacro! block or a tagged_union! enum - found by name, so a list
-    // moving between files, or from C to Rust, doesn't break the docs.
+    // From each enum's declaration wherever in fs/ it lives - a c_enum! or a
+    // tagged_union! - found by name, so an enum moving between files doesn't
+    // break the docs.
     let mut sources = Vec::new();
     walk_c_files(&root.join("fs"), &mut |path| {
-        if let Ok(source) = fs::read_to_string(path) {
-            let rust = path.extension().is_some_and(|e| e == "rs");
-            sources.push((rust, source));
+        if path.extension().is_some_and(|e| e == "rs") {
+            sources.extend(fs::read_to_string(path).ok());
         }
     });
     for el in ENUM_LISTS {
-        let found = sources.iter().find_map(|(rust, s)| {
-            if *rust {
-                parse_c_xmacro(s, el.macro_name).or_else(|| parse_enum_decl(s, el.macro_name))
-            } else {
-                parse_xmacro(s, el.macro_name)
-            }
-        });
-        let Some(entries) = found else {
-            eprintln!("error: no x-macro {} in fs/ - not a #define, a c_xmacro! or a tagged_union!",
-                      el.macro_name);
+        let Some(entries) = sources.iter().find_map(|s| parse_enum_decl(s, el.enum_name)) else {
+            eprintln!("error: no enum {} in fs/ - not a c_enum! or a tagged_union! declaration",
+                      el.enum_name);
             errors += 1;
             continue;
         };
         if entries.is_empty() {
-            eprintln!("warning: {} produced no entries", el.macro_name);
+            eprintln!("warning: {} produced no entries", el.enum_name);
             continue;
         }
         let latex = generate_enum_list(el, &entries);
