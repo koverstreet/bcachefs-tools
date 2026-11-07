@@ -89,7 +89,7 @@ impl FileattrSet {
 
         if let Some(project) = self.project {
             bi.bi_project = project;
-            InodeOpt::of(c::inode_opt_id::Inode_opt_project).set_own(bi, true);
+            InodeOpt::of(c::inode_opt_id::project).set_own(bi, true);
         }
 
         bi.bi_flags = bi.bi_flags & !self.mask | self.flags;
@@ -152,7 +152,7 @@ impl InodeInfo {
         let xflags = FLAGS.iter().filter(|f| bi.flag(f.0)).fold(0, |x, f| x | f.2);
 
         unsafe { c::fileattr_fill_xflags(fa, xflags) };
-        if InodeOpt::of(c::inode_opt_id::Inode_opt_project).is_own(&bi) {
+        if InodeOpt::of(c::inode_opt_id::project).is_own(&bi) {
             fa.fsx_xflags |= c::FS_XFLAG_PROJINHERIT;
         }
         if bi.casefold(self.fs()) {

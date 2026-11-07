@@ -378,7 +378,7 @@ impl<'i> UpdateLock<'i> {
     /// Move the inode to @dir's project, if moving it into @dir would: it has
     /// no project of its own, and @dir's is different.
     pub fn inherit_project(&self, dir: &InodeInfo) -> Result<(), BchError> {
-        let project = InodeOpt::of(c::inode_opt_id::Inode_opt_project);
+        let project = InodeOpt::of(c::inode_opt_id::project);
         let (bi, dir_bi) = (self.inode.inode(), dir.inode());
         if project.is_own(&bi) || project.get(&dir_bi) == project.get(&bi) {
             return Ok(());

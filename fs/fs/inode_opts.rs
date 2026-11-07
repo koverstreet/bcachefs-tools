@@ -51,7 +51,7 @@ pub struct inode_opt_change {
     pub propagate: c::bkey_i_logged_op_inode_opt_propagate,
 }
 
-const NR: usize = c::inode_opt_id::Inode_opt_nr.0 as usize;
+const NR: usize = c::inode_opt_id::NR as usize;
 
 struct Desc {
     name: &'static CStr,
@@ -70,8 +70,8 @@ macro_rules! descs {
     }),*] } };
 }
 
-/// In BCH_INODE_OPTS() order, which is inode_opt_id's.
-const DESCS: [Desc; NR] = c::BCH_INODE_OPTS!(descs);
+/// In inode_opt_id's order.
+const DESCS: [Desc; NR] = c::inode_opt_id_arms!(descs);
 
 /// An inode option: an inode_opt_id below Inode_opt_nr.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -79,12 +79,12 @@ pub struct InodeOpt(c::inode_opt_id);
 
 impl InodeOpt {
     pub const fn of(id: c::inode_opt_id) -> Self {
-        assert!(id.0 < c::inode_opt_id::Inode_opt_nr.0, "not an inode option");
+        assert!(id.0 < c::inode_opt_id::NR, "not an inode option");
         InodeOpt(id)
     }
 
     pub fn all() -> impl Iterator<Item = InodeOpt> {
-        (0..c::inode_opt_id::Inode_opt_nr.0).map(|i| InodeOpt(c::inode_opt_id(i)))
+        (0..c::inode_opt_id::NR).map(|i| InodeOpt(c::inode_opt_id(i)))
     }
 
     /// The inode option filesystem option @id is, if it's one: as
@@ -145,7 +145,7 @@ pub fn reinherit_attrs(dst: &mut c::bch_inode_unpacked, src: &c::bch_inode_unpac
     let mut ret = false;
 
     for opt in InodeOpt::all() {
-        if !dst.is_dir() && opt.id() == c::inode_opt_id::Inode_opt_casefold {
+        if !dst.is_dir() && opt.id() == c::inode_opt_id::casefold {
             continue;
         }
 
@@ -221,9 +221,9 @@ pub fn get_fs(fs: &Fs, metadata: bool) -> c::bch_inode_opts {
     let o = &fs.opts;
     let mut ret = c::bch_inode_opts::default();
     macro_rules! get {
-        ($(($name:ident, $bits:tt)),* $(,)?) => { $(ret.$name = o.$name.get() as _;)* };
+        ($(($name:ident, $($rest:tt)*)),* $(,)?) => { $(ret.$name = o.$name.get() as _;)* };
     }
-    c::BCH_INODE_OPTS!(get);
+    c::inode_opt_id_arms!(get);
     ret.change_cookie = fs.opt_change_cookie.get();
 
     if metadata {
@@ -243,11 +243,11 @@ pub fn get_fs(fs: &Fs, metadata: bool) -> c::bch_inode_opts {
 #[cold]
 pub fn opts_to_text(out: &mut Printbuf, fs: &Fs, opts: &c::bch_inode_opts) {
     macro_rules! values {
-        ($(($name:ident, $bits:tt)),* $(,)?) => { crate::paste! {
+        ($(($name:ident, $($rest:tt)*)),* $(,)?) => { crate::paste! {
             [$((c::bch_opt_id::[<Opt_ $name>], opts.$name as u64)),*]
         } };
     }
-    for (i, (id, v)) in c::BCH_INODE_OPTS!(values).into_iter().enumerate() {
+    for (i, (id, v)) in c::inode_opt_id_arms!(values).into_iter().enumerate() {
         if i != 0 {
             write!(out, ",");
         }
@@ -272,7 +272,7 @@ pub fn get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_opts {
             }
         )* } };
     }
-    c::BCH_INODE_OPTS!(get);
+    c::inode_opt_id_arms!(get);
 
     /*
      * Forward compatibility: inodes written by newer versions may carry
@@ -557,7 +557,7 @@ fn merge_into_ancestor(
             continue;
         }
 
-        if opt.id() == c::inode_opt_id::Inode_opt_data_replicas {
+        if opt.id() == c::inode_opt_id::data_replicas {
             v = v.max(claimed);
         } else if claimed != 0 && !src_is_master {
             continue;

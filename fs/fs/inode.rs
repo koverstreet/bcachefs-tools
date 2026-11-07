@@ -167,8 +167,6 @@ macro_rules! name_eq_arg {
 macro_rules! inode_fields_v2 { ($m:ident) => { c::BCH_INODE_FIELDS_v2!(name_eq_arg [$m]) }; }
 #[allow(unused_macros)]
 macro_rules! inode_fields_v3 { ($m:ident) => { c::BCH_INODE_FIELDS_v3!(name_eq_arg [$m]) }; }
-#[allow(unused_macros)]
-macro_rules! inode_opts { ($m:ident) => { c::BCH_INODE_OPTS!(name_eq_arg [$m]) }; }
 
 // ── Packing ──────────────────────────────────────────────────────────────
 
@@ -1841,11 +1839,11 @@ pub fn init_late(
         }
 
         macro_rules! inherit {
-            ($($name:ident = $bits:literal,)*) => { crate::paste! {
+            ($(($name:ident, $($rest:tt)*)),* $(,)?) => { crate::paste! {
                 $(inode.[<bi_ $name>] = parent.[<bi_ $name>];)*
             } };
         }
-        inode_opts!(inherit);
+        c::inode_opt_id_arms!(inherit);
     }
 
     if !inode.is_dir() {
@@ -1912,7 +1910,7 @@ pub fn set_casefold(
     fs.check_set_feature(SbFeature::casefolding);
 
     inode.bi_casefold = v.wrapping_add(1) as _; // stored +1, 0 for unset
-    inode.bi_fields_set |= 1 << c::inode_opt_id::Inode_opt_casefold.0;
+    inode.bi_fields_set |= 1 << c::inode_opt_id::casefold.0;
 
     namei::maybe_propagate_has_case_insensitive(t, inum, inode)
 }
@@ -2036,11 +2034,11 @@ impl c::bch_inode_unpacked {
     /// records.
     pub fn has_opts(&self) -> bool {
         macro_rules! any_set {
-            ($($name:ident = $bits:literal,)*) => { crate::paste! {
+            ($(($name:ident, $($rest:tt)*)),* $(,)?) => { crate::paste! {
                 false $(|| self.[<bi_ $name>] != 0)*
             } };
         }
-        inode_opts!(any_set)
+        c::inode_opt_id_arms!(any_set)
     }
 }
 

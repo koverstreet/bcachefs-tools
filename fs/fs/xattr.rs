@@ -668,11 +668,11 @@ mod vfs {
     ) -> Result<(), BchError> {
         let fs = t.fs();
 
-        if opt.id() == c::inode_opt_id::Inode_opt_casefold {
+        if opt.id() == c::inode_opt_id::casefold {
             inode::set_casefold(t, inum, bi, v as u32)?;
         }
 
-        if opt.id() == c::inode_opt_id::Inode_opt_inodes_32bit &&
+        if opt.id() == c::inode_opt_id::inodes_32bit &&
            fs.request_incompat_feature(
                MetadataVersion::bcachefs_metadata_version_31bit_dirent_offset).is_ok() {
             // Make sure the dir is empty, as otherwise we'd need to
@@ -743,7 +743,7 @@ mod vfs {
 
             // inode fields accessible via the xattr interface are stored
             // with a +1 bias, so that 0 means unset:
-            if inode_opt.id() == c::inode_opt_id::Inode_opt_project {
+            if inode_opt.id() == c::inode_opt_id::project {
                 let projid = if inode_v != 0 { inode_v - 1 } else { 0 };
                 lock.set_projid(projid as u32)?;
             }
@@ -752,7 +752,7 @@ mod vfs {
             lock.write_inode(0, |t, bi| inode_opt_set(t, inum, bi, inode_opt, inode_v, defined))?;
         }
 
-        if inode_opt.id() == c::inode_opt_id::Inode_opt_casefold {
+        if inode_opt.id() == c::inode_opt_id::casefold {
             dentry.casefold_changed();
         }
 

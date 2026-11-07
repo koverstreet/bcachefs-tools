@@ -141,29 +141,26 @@ c_xmacro! {
     }
 }
 
-c_xmacro! {
-    /* subset of BCH_INODE_FIELDS */
-    BCH_INODE_OPTS(x) {
-        (data_checksum, 8),
-        (compression, 8),
-        (project, 32),
-        (background_compression, 8),
-        (data_replicas, 8),
-        (promote_target, 16),
-        (foreground_target, 16),
-        (background_target, 16),
-        (erasure_code, 16),
-        (nocow, 8),
-        (inodes_32bit, 8),
-        (casefold, 8),
-    }
-}
-
 c_enum! {
     #[open]
+    #[prefix(Inode_opt_)]
+    #[nr(Inode_opt_nr)]
+    #[arm_columns(bits: value(u32))]
+    #[c_list(BCH_INODE_OPTS)]
+    /* subset of BCH_INODE_FIELDS */
     pub enum inode_opt_id: u32 {
-        BCH_INODE_OPTS(name, ..) => concat(Inode_opt_, name),
-        Inode_opt_nr,
+        #[bits(8)]  data_checksum,
+        #[bits(8)]  compression,
+        #[bits(32)] project,
+        #[bits(8)]  background_compression,
+        #[bits(8)]  data_replicas,
+        #[bits(16)] promote_target,
+        #[bits(16)] foreground_target,
+        #[bits(16)] background_target,
+        #[bits(16)] erasure_code,
+        #[bits(8)]  nocow,
+        #[bits(8)]  inodes_32bit,
+        #[bits(8)]  casefold,
     }
 }
 

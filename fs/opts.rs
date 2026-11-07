@@ -45,7 +45,7 @@ use crate::util::{HumanReadable, Printbuf};
 use crate::util::printbuf::parse_human_u64;
 use crate::util::sysfs::parse_int;
 use core::ffi::{CStr, c_ulong};
-use crate::cstructs::c::BCH_INODE_OPTS;
+use crate::cstructs::c::inode_opt_id_arms;
 use crate::c::{bch_member, bch_sb_field_ext, BCH_COMPRESSION_OPT_none, BCH_CSUM_OPT_crc32c, BCH_DATA_btree, BCH_DATA_journal, BCH_DATA_user, BCH_MEMBER_STATE_rw, BCH_ON_ERROR_fix_safe, BCH_REPLICAS_MAX, BCH_SB_SECTOR, BCH_STR_HASH_OPT_siphash, BCH_VERSION_UPGRADE_compatible, BCH_WRITE_DEGRADED_degraded};
 use crate::format::DataType;
 use crate::types::bits_to_longs;
@@ -660,8 +660,8 @@ pub struct bch_opts {
 
 /* inode opts: */
 macro_rules! __bch_inode_opts_0 {
-    ([$($acc:tt)*] $(($_name:tt, $_bits:tt)),* $(,)?) => { ::paste::paste! {
-        BCH_INODE_OPTS!(__bch_inode_opts_1 [
+    ([$($acc:tt)*] $(($_name:tt, $_nr:expr, [$_bits:tt])),* $(,)?) => { ::paste::paste! {
+        inode_opt_id_arms!(__bch_inode_opts_1 [
             $($acc)*
             $(pub $_name: [<u $_bits>],)*
         ]);
@@ -690,7 +690,7 @@ macro_rules! __bch_inode_opts_1 {
         #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
         pub struct bch_inode_opts {
             $($acc)*
-            #[c_anon("#define x(_name, _bits)	u64 _name##_from_inode:1;
+            #[c_anon("#define x(_name, ...)	u64 _name##_from_inode:1;
 BCH_INODE_OPTS()
 #undef x")]
             pub __bch_inode_opts_bits: [u8; ([$(stringify!($_name)),*].len() * 1).div_ceil(8)],
@@ -699,7 +699,7 @@ BCH_INODE_OPTS()
         }
     } };
 }
-BCH_INODE_OPTS!(__bch_inode_opts_0 [#[c_anon("")] pub __bch_inode_opts_align: [u64; 0],]);
+inode_opt_id_arms!(__bch_inode_opts_0 [#[c_anon("")] pub __bch_inode_opts_align: [u64; 0],]);
 
 pub const NR: usize = opt_id::bch2_opts_nr.0 as usize;
 
