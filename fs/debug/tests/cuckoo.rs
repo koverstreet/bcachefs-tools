@@ -8,9 +8,9 @@
 //! test_cuckoo: one thread, against a model, through evictions, rehashes and
 //! clear() - every kind of table.
 //!
-//! test_cuckoo_torture: WRITERS writers at once, with no lock but the
-//! table's, churn KEYS keys, key 0 and u64::MAX - 1 among them, through every
-//! path: eviction chains, rehashes as the table fills and empties. Each has
+//! test_cuckoo_torture: WRITERS writers at once, with no lock, churn KEYS
+//! keys, 0 and (1 << 63) - 3 among them, through every path: eviction
+//! chains, rehashes as the table fills and empties. Each has
 //! its own share of the keys, so a key's ops are one writer's, in order, and
 //! its state below stays exact. HOT of them are only ever inserted, so a
 //! map's entries for them are replaced under readers all the time. Every
@@ -22,7 +22,10 @@
 //! across 64 lookups, so a buffer replaced meanwhile must stay readable and
 //! right. Round by round, faults make the rare paths routine (rounds()), each
 //! round printing how often it reached them - for a SipHash 2-way and a
-//! golden ratio 3-way table, of each kind.
+//! golden ratio 3-way table, of each kind. Then the same faults again, for
+//! shared rounds: every writer insert_new()s the same SHARED keys at once,
+//! so inserts of a key race each other, in one table and across rehashes,
+//! and at each meet exactly one of them must be in.
 //!
 //! The check is exact, not statistical: each key has a sequence count, odd
 //! while an op on it is in flight, and the value the op left - an entry's,
@@ -169,7 +172,7 @@ type Map = Entry<TestEntry>;
 
 fn model<I: TestItem, S: CuckooHasher, const W: usize>(name: &str) -> TestRet {
     const NR: usize = 512;
-    let key = |i: usize| (i as u64).wrapping_mul(0x9E3779B97F4A7C15);
+    let key = |i: usize| (i as u64).wrapping_mul(0x9E3779B97F4A7C15) >> 2;
     let mut keys = KVVec::new();
     for i in 0..NR {
         keys.push(key(i))?;
@@ -263,12 +266,13 @@ struct KeyState {
     expect: AtomicU64,
 }
 
-/// Key 0 and the largest a key can be are among them; the rest are scattered.
+/// The smallest and largest a key can be are among them; the rest are
+/// scattered.
 fn key(i: usize) -> u64 {
     match i {
         0 => 0,
-        1 => u64::MAX - 1,
-        _ => (i as u64).wrapping_mul(0x9E3779B97F4A7C15),
+        1 => (1 << 63) - 3,
+        _ => (i as u64).wrapping_mul(0x9E3779B97F4A7C15) >> 2,
     }
 }
 
@@ -305,7 +309,8 @@ fn rounds() -> [(&'static str, Faults); 6] {
         ("plain",      Faults::default()),
         // Grown only when full: most inserts evict, chains run long, and rehash
         ("dense",      dense()),
-        // A writer stopped, and off CPU, in every move: what the move count is for
+        // A writer slowed in every move, and between a mark and its settling:
+        // what the move count, and the waits on what's unstable, are for
         ("moves",      Faults { move_window: 2000, ..dense() }),
         // Lookups slowed between their slots: moves land between the reads
         ("reads",      Faults { read_window: 500, ..dense() }),
@@ -546,9 +551,164 @@ fn round<I: TestItem, S: CuckooHasher, const W: usize>(table: &str, name: &str, 
     let n = |c: &AtomicU64| HumanReadable(c.load(Relaxed));
     let mut msg = Printbuf::new();
     prt!(&mut msg, "cuckoo torture {table}, {name:<10} {ms}ms, {readers} readers: {} lookups checked, \
-                    {} raced an op; {} writer ops, {} moves; retries {} mirror fallbacks {} rehashes {} grown {}\n",
+                    {} raced an op; {} writer ops, {} moves; retries {} unstable waits {} own-seed probes {} rehashes {} grown {} \
+                    busy {} withdrawn {} stale {}\n",
          HumanReadable(checked), HumanReadable(raced.into_inner()), HumanReadable(ops.into_inner()),
-         HumanReadable(t.moved()), n(&seen.retry), n(&seen.raced), n(&seen.rehash), n(&seen.grown));
+         HumanReadable(t.moved()), n(&seen.retry), n(&seen.unstable), n(&seen.raced), n(&seen.rehash), n(&seen.grown),
+         n(&seen.busy), n(&seen.withdrawn), n(&seen.stale));
+    kernel::pr_info!("{}", msg.as_str());
+    Ok(())
+}
+
+/// Keys every writer inserts, in a shared round.
+const SHARED: usize = 1024;
+
+/// With every writer stopped, after a pass: each key in if and only if one
+/// insert_new() of it got in, and none in twice - then every key out again,
+/// by clear() or one by one. Whether to stop.
+fn shared_met<I: TestItem, S: CuckooHasher, const W: usize>(
+    t: &Cuckoo<I, S, W>, keys: &[u64], wins: &[AtomicU32], fails: &Failures, pass: u64, end: u64,
+) -> bool {
+    let mut present = 0;
+    for (i, &k) in keys.iter().enumerate() {
+        let won = wins[i].swap(0, Relaxed);
+        let found = t.get(&k).is_some();
+        if won > 1 {
+            fail(fails, "insert_new() of a key in twice", k, pass, 1, won.into());
+        } else if found != (won == 1) {
+            fail(fails, "a key's insert_new() and its lookup", k, pass, won.into(), found.into());
+        }
+        present += found as usize;
+    }
+    match t.check() {
+        Err(e) => fail(fails, e, 0, pass, 0, 0),
+        Ok(n) if n != present => fail(fails, "item count", 0, pass, present as u64, n as u64),
+        Ok(_) => {}
+    }
+
+    if pass % 2 == 0 {
+        t.clear();
+    } else {
+        keys.iter().for_each(|k| { t.remove(k); });
+    }
+    fails.get() != 0 || local_clock() >= end
+}
+
+/// A shared round: every writer insert_new()s every one of SHARED keys, all
+/// in the same order each pass, so of each key's WRITERS inserts - racing in
+/// one table, or across a rehash - exactly one gets in. Each writer's items
+/// are its own pool entries, so a losing insert's entry is never one in.
+fn shared<I: TestItem, S: CuckooHasher, const W: usize>(table: &str, name: &str, faults: Faults, secs: u64)
+    -> TestRet
+{
+    let injecting = faults.alloc_fail != 0;
+
+    let (mut keys, mut wins) = (KVVec::new(), KVVec::new());
+    for i in 0..SHARED {
+        keys.push(key(i))?;
+        wins.push(AtomicU32::new(0))?;
+    }
+    let (keys, wins) = (&keys[..], &wins[..]);
+    let pool = I::pool(keys)?;
+    let pool = &pool;
+
+    let t = Cuckoo::<I, S, W>::with_faults(faults);
+    let t = &t;
+    pin_init::stack_pin_init!(let fails: Failures = new_lock!(None, pin_init::Zeroable::zeroed()));
+    let fails: &Failures = &fails;
+    let meet = &Rendezvous::default();
+    let readers = nr_cpus().saturating_sub(WRITERS as u32).clamp(2, 30);
+    let writers_left = AtomicU32::new(WRITERS as u32);
+    let (passes, checked) = (AtomicU64::new(0), AtomicU64::new(0));
+    let start = local_clock();
+    let end = start + secs * c::NSEC_PER_SEC as u64;
+
+    let ret = par::scope(Backend::Kthreads, |s| {
+        // Within a pass - between two meets - a key found is found as the same
+        // insert every time: a tentative one returned, then withdrawn, isn't
+        for r in 0..readers {
+            let (writers_left, checked) = (&writers_left, &checked);
+            s.spawn(format_args!("cuckoo shared reader[{r}]"), move || {
+                let mut found = KVVec::new();
+                for _ in 0..SHARED {
+                    found.push(0u64)?;
+                }
+                let (mut rng, mut pass, mut n) = (random_u64() | 1, u64::MAX, 0u64);
+
+                while writers_left.load(Acquire) != 0 && fails.get() == 0 {
+                    let m = meet.met.load(Acquire);
+                    if m != pass {
+                        found.iter_mut().for_each(|v| *v = 0);
+                        pass = m;
+                    }
+                    for _ in 0..64 {
+                        let i = (xorshift(&mut rng) % SHARED as u64) as usize;
+                        let got = t.get(&keys[i]).map_or(0, I::value);
+                        if meet.met.load(Acquire) != m {
+                            break;
+                        }
+                        if got == 0 {
+                            continue;
+                        }
+                        n += 1;
+                        if found[i] == 0 {
+                            found[i] = got;
+                        } else if found[i] != got {
+                            fail(fails, "a key found as two of its inserts in a pass", keys[i], m, found[i], got);
+                        }
+                    }
+                    cond_resched();
+                }
+                checked.fetch_add(n, Relaxed);
+                Ok(())
+            })?;
+        }
+
+        for w in 0..WRITERS {
+            let (passes, writers_left) = (&passes, &writers_left);
+            s.spawn(format_args!("cuckoo shared writer[{w}]"), move || {
+                let mut pass = 0u64;
+                loop {
+                    for n in 0..SHARED {
+                        let i = (n + pass as usize * 7) % SHARED;
+                        let k = keys[i];
+                        match t.insert_new(I::make(pool, i, k, 2 * w as u64, val(k, w as u64))) {
+                            Ok(Ok(())) => { wins[i].fetch_add(1, Relaxed); }
+                            Ok(Err(_)) => {}
+                            Err(_) if injecting => {}
+                            Err(_) => fail(fails, "allocation failure, uninjected", k, pass, 0, 0),
+                        }
+                    }
+                    pass += 1;
+                    cond_resched();
+                    if meet.meet(|| shared_met(t, keys, wins, fails, pass, end)) {
+                        break;
+                    }
+                }
+                passes.fetch_max(pass, Relaxed);
+                writers_left.fetch_sub(1, Release);
+                Ok(())
+            })?;
+        }
+        Ok(())
+    });
+    let ms = (local_clock() - start) / 1_000_000;
+
+    if let Some(f) = fails.lock().take() {
+        panic!("cuckoo torture, {table}, shared round {name}: {} failures, the first a {} of {:#x} in pass {}: \
+                wanted {:#x}, got {:#x}",
+               fails.get(), f.what, f.key, f.seq, f.want, f.got);
+    }
+    ret?;
+
+    let seen = &t.faults().seen;
+    let n = |c: &AtomicU64| HumanReadable(c.load(Relaxed));
+    let mut msg = Printbuf::new();
+    prt!(&mut msg, "cuckoo torture {table}, shared {name:<10} {ms}ms: {} passes of {SHARED} keys by {WRITERS} writers, \
+                    {readers} readers: {} lookups checked; {} moves; retries {} unstable waits {} rehashes {} grown {} \
+                    busy {} withdrawn {} stale {}\n",
+         passes.into_inner(), HumanReadable(checked.into_inner()), HumanReadable(t.moved()), n(&seen.retry),
+         n(&seen.unstable), n(&seen.rehash), n(&seen.grown), n(&seen.busy), n(&seen.withdrawn), n(&seen.stale));
     kernel::pr_info!("{}", msg.as_str());
     Ok(())
 }
@@ -556,6 +716,9 @@ fn round<I: TestItem, S: CuckooHasher, const W: usize>(table: &str, name: &str, 
 fn torture<I: TestItem, S: CuckooHasher, const W: usize>(table: &str) -> TestRet {
     for (name, faults) in rounds() {
         round::<I, S, W>(table, name, faults, 5)?;
+    }
+    for (name, faults) in rounds() {
+        shared::<I, S, W>(table, name, faults, 2)?;
     }
     Ok(())
 }
@@ -649,7 +812,7 @@ fn bench<S: CuckooHasher, const W: usize>(table: &str) -> TestRet {
         let mut rng = random_u64() | 1;
         let (mut keys, mut misses) = (KVVec::new(), KVVec::new());
         for _ in 0..n {
-            keys.push((xorshift(&mut rng) | 1) & !(1 << 63))?;
+            keys.push((xorshift(&mut rng) | 1) & !(3 << 62))?;
             misses.push(xorshift(&mut rng) & !1)?;
         }
 

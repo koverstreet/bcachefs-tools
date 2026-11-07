@@ -13,8 +13,9 @@ use core::sync::atomic::AtomicU64;
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 #[derive(Default)]
 pub struct Faults {
-    /// Spins inside each move, between its copy, its count and its emptying
-    /// - and a yield, the writer off CPU mid-chain, holding the writers' lock.
+    /// Spins inside each move, between its copy, its count and its source's
+    /// overwrite, and between an insert's or a drain's marked store and its
+    /// settling: all with preemption off.
     pub move_window: u32,
     /// Spins in a lookup before each slot it reads.
     pub read_window: u32,
@@ -31,12 +32,21 @@ pub struct Faults {
 #[derive(Default)]
 pub struct Seen {
     /// Lookups that missed and retried: a move was counted during them.
-    pub retry:  AtomicU64,
-    /// Lookups that missed and looked again with the buffer's own seeds.
-    pub raced:  AtomicU64,
-    pub rehash: AtomicU64,
-    /// Rehashes whose seeds didn't fit at a size, trying a bigger table.
-    pub grown:  AtomicU64,
+    pub retry:     AtomicU64,
+    /// Probes that met a claim or a mark, and waited it out.
+    pub unstable:  AtomicU64,
+    /// Lookups that missed and probed a table by its own seeds, not the
+    /// mirror's.
+    pub raced:     AtomicU64,
+    pub rehash:    AtomicU64,
+    /// Placements with no chain, linking a bigger table.
+    pub grown:     AtomicU64,
+    /// Claimed chains let go: something on one changed, or was another's.
+    pub busy:      AtomicU64,
+    /// Inserts withdrawn at their settle: their key in another slot.
+    pub withdrawn: AtomicU64,
+    /// Inserts withdrawn at their settle: a newer table linked.
+    pub stale:     AtomicU64,
 }
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
@@ -46,12 +56,7 @@ fn spins(n: u32) {
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 impl Faults {
-    pub(super) fn move_window(&self) {
-        if self.move_window != 0 {
-            spins(self.move_window);
-            crate::util::kernel::cond_resched();
-        }
-    }
+    pub(super) fn move_window(&self) { spins(self.move_window) }
 
     pub(super) fn read_window(&self) { spins(self.read_window) }
 

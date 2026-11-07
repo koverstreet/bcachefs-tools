@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A cuckoo hash table looked up without a lock, under RCU: a set of u64s, or
-//! a map to entries that hold their own keys - in two ways or three, and
-//! hashed by a BuildHasher, as std's HashMap is: SipHash-1-3, by default, or
-//! hash_64()'s golden ratio (util/hash.rs) where a lookup's cost matters more
-//! than keys with structure colliding.
+//! A cuckoo hash table looked up and written without a lock, under RCU: a set
+//! of u64s, or a map to entries that hold their own keys - in two ways or
+//! three, and hashed by a BuildHasher, as std's HashMap is: SipHash-1-3, by
+//! default, or hash_64()'s golden ratio (util/hash.rs) where a lookup's cost
+//! matters more than keys with structure colliding.
 //!
 //! Keys are std's: an item - the u64, or the entry it points to - is Hash +
 //! Eq, and a lookup takes anything it Borrows, as HashSet::get() does; an
@@ -32,15 +32,36 @@ use crate::util::alloc::AllocError;
 use crate::util::backref::BackRef;
 use crate::util::rcu::{read_lock, Detach, DetachMember, RcuArray, RcuMember, ReadGuard};
 use crate::util::siphash::SipHash13Key;
-use table::{Mirror, Seeds, Slot};
+use table::{Head, Mirror, Slot};
+
+/// A slot's word, read.
+#[derive(Clone, Copy)]
+pub enum Contents<I> {
+    Empty,
+    /// Empty, held by a writer about to store into it.
+    Claimed,
+    /// Drained: nothing goes in it again.
+    Retired,
+    Item(I),
+    /// An item a writer holds: on a chain being moved, or being inserted.
+    Unstable(I),
+}
+
+impl<I> Contents<I> {
+    fn item(self) -> Option<I> {
+        match self {
+            Contents::Item(i) => Some(i),
+            _ => None,
+        }
+    }
+}
 
 /// What a table's slots hold, a word each.
 ///
 /// XXX: not cuckoo's. Atomic, load() and store() are util/projections'
-/// AtomicWord again - with orderings, and None for empty: an empty niche
-/// (Option<NonNull<E>>, NonZeroU64) would retire the complemented u64, and
-/// storable() with it. And target() is Borrow, but for an entry's deref
-/// being unsafe - which is the RCU types' to say: see Entry.
+/// AtomicWord again, with orderings, and Contents for the words that aren't
+/// items. And target() is Borrow, but for an entry's deref being unsafe -
+/// which is the RCU types' to say: see Entry.
 ///
 /// # Safety
 /// Atomic owns nothing, so a bytewise copy is another; all zeroes is empty;
@@ -52,8 +73,8 @@ pub unsafe trait CuckooItem: Copy {
     type Target: ?Sized + Hash + Eq;
 
     /// # Safety
-    /// The item's in a table: read from a slot in a read-side section, or
-    /// by the writer - an entry's valid until a grace period after it's out.
+    /// The item's being put in, or was read from a slot in a read-side
+    /// section: an entry's valid until a grace period after it's out.
     unsafe fn target(&self) -> &Self::Target;
 
     /// Whether it can go in a table at all.
@@ -61,11 +82,34 @@ pub unsafe trait CuckooItem: Copy {
         true
     }
 
-    fn load(a: &Self::Atomic, o: Ordering) -> Option<Self>;
-    fn store(a: &Self::Atomic, v: Option<Self>, o: Ordering);
+    fn load(a: &Self::Atomic, o: Ordering) -> Contents<Self>;
+    fn store(a: &Self::Atomic, v: Contents<Self>, o: Ordering);
+    fn compare_exchange(a: &Self::Atomic, current: Contents<Self>, new: Contents<Self>, success: Ordering, failure: Ordering)
+        -> Result<Contents<Self>, Contents<Self>>;
 }
 
-// SAFETY: an AtomicU64, holding the key complemented: zero is empty
+fn u64_word(v: Contents<u64>) -> u64 {
+    match v {
+        Contents::Empty => 0,
+        Contents::Claimed => 1,
+        Contents::Retired => 2,
+        Contents::Item(k) => (k + 2) << 1,
+        Contents::Unstable(k) => (k + 2) << 1 | 1,
+    }
+}
+
+fn u64_contents(w: u64) -> Contents<u64> {
+    match w {
+        0 => Contents::Empty,
+        1 => Contents::Claimed,
+        2 => Contents::Retired,
+        w if w & 1 == 0 => Contents::Item((w >> 1) - 2),
+        w => Contents::Unstable((w >> 1) - 2),
+    }
+}
+
+// SAFETY: an AtomicU64, holding the key shifted past the mark bit, past the
+// words for empty - zero - claimed and retired
 unsafe impl CuckooItem for u64 {
     type Atomic = AtomicU64;
     type Target = u64;
@@ -75,15 +119,22 @@ unsafe impl CuckooItem for u64 {
     }
 
     fn storable(self) -> bool {
-        self != u64::MAX
+        self < (1 << 63) - 2
     }
 
-    fn load(a: &AtomicU64, o: Ordering) -> Option<u64> {
-        Some(a.load(o)).filter(|&k| k != 0).map(|k| !k)
+    fn load(a: &AtomicU64, o: Ordering) -> Contents<u64> {
+        u64_contents(a.load(o))
     }
 
-    fn store(a: &AtomicU64, v: Option<u64>, o: Ordering) {
-        a.store(v.map_or(0, |k| !k), o)
+    fn store(a: &AtomicU64, v: Contents<u64>, o: Ordering) {
+        a.store(u64_word(v), o)
+    }
+
+    fn compare_exchange(a: &AtomicU64, current: Contents<u64>, new: Contents<u64>, success: Ordering, failure: Ordering)
+        -> Result<Contents<u64>, Contents<u64>>
+    {
+        a.compare_exchange(u64_word(current), u64_word(new), success, failure)
+            .map(u64_contents).map_err(u64_contents)
     }
 }
 
@@ -109,19 +160,44 @@ unsafe impl<E: Sync> Sync for Entry<E> {}
 impl<E> Entry<E> {
     /// # Safety
     /// @e stays valid, its key - what its Hash and Eq see - unchanged, for as
-    /// long as it's in a table and a grace period after: removed, it's freed
-    /// only after synchronize_rcu(), or by kfree_rcu() - or at once, from a
-    /// table no other thread reads.
+    /// long as it's in a table and a grace period after - in it, too, while
+    /// an insert of it that fails is in flight, as other writers read what
+    /// they meet: removed, or not put in, it's freed only after
+    /// synchronize_rcu(), or by kfree_rcu() - or at once, from a Private
+    /// table, which no other thread reads or writes.
     pub unsafe fn new(e: NonNull<E>) -> Self {
+        const { assert!(align_of::<E>() >= 4, "cuckoo: an entry's low bits are the mark, claimed and retired") };
         Self(e)
     }
 
     pub fn as_ptr(self) -> NonNull<E> {
         self.0
     }
+
+    fn word(v: Contents<Self>) -> *mut E {
+        match v {
+            Contents::Empty => core::ptr::null_mut(),
+            Contents::Claimed => core::ptr::without_provenance_mut(1),
+            Contents::Retired => core::ptr::without_provenance_mut(2),
+            Contents::Item(e) => e.0.as_ptr(),
+            Contents::Unstable(e) => e.0.as_ptr().map_addr(|a| a | 1),
+        }
+    }
+
+    fn contents(p: *mut E) -> Contents<Self> {
+        let item = |p: *mut E| Self(NonNull::new(p.map_addr(|a| a & !1)).expect("cuckoo: a mark on null"));
+        match p.addr() {
+            0 => Contents::Empty,
+            1 => Contents::Claimed,
+            2 => Contents::Retired,
+            a if a & 1 != 0 => Contents::Unstable(item(p)),
+            _ => Contents::Item(item(p)),
+        }
+    }
 }
 
-// SAFETY: an AtomicPtr, null for empty
+// SAFETY: an AtomicPtr: null is empty, 1 claimed and 2 retired - no entry's
+// at either, as entries are 4-aligned - and the low bit the mark
 unsafe impl<E: Hash + Eq + Sync> CuckooItem for Entry<E> {
     type Atomic = AtomicPtr<E>;
     type Target = E;
@@ -131,20 +207,28 @@ unsafe impl<E: Hash + Eq + Sync> CuckooItem for Entry<E> {
         unsafe { self.0.as_ref() }
     }
 
-    fn load(a: &AtomicPtr<E>, o: Ordering) -> Option<Self> {
-        NonNull::new(a.load(o)).map(Self)
+    fn load(a: &AtomicPtr<E>, o: Ordering) -> Contents<Self> {
+        Self::contents(a.load(o))
     }
 
-    fn store(a: &AtomicPtr<E>, v: Option<Self>, o: Ordering) {
-        a.store(v.map_or(core::ptr::null_mut(), |e| e.0.as_ptr()), o)
+    fn store(a: &AtomicPtr<E>, v: Contents<Self>, o: Ordering) {
+        a.store(Self::word(v), o)
+    }
+
+    fn compare_exchange(a: &AtomicPtr<E>, current: Contents<Self>, new: Contents<Self>, success: Ordering, failure: Ordering)
+        -> Result<Contents<Self>, Contents<Self>>
+    {
+        a.compare_exchange(Self::word(current), Self::word(new), success, failure)
+            .map(Self::contents).map_err(Self::contents)
     }
 }
 
-/// Who looks a table up: any thread, under RCU - Shared - or only its
-/// owner's - Private, and !Sync, so no other can. An entry a Shared table's
-/// readers may have found stays valid a grace period after it's out, so its
-/// Registration carries an RcuMember: what it's in is freed a grace period
-/// on. A Private table's entries may go at once.
+/// Who uses a table: any thread, under RCU - Shared - or only its owner's -
+/// Private, the table !Sync and its Registrations !Send, so no other can.
+/// An entry a Shared table's readers or writers may have met stays valid a
+/// grace period after it's out, so its Registration carries an RcuMember:
+/// what it's in is freed a grace period on. A Private table's entries may go
+/// at once.
 pub trait Mode {
     /// What a Registration in such a table carries
     type Member: Default;
@@ -183,12 +267,12 @@ impl<S: BuildHasher + From<[u64; 2]>> CuckooHasher for S {}
 #[repr(C)]
 pub struct Cuckoo<I: CuckooItem = u64, S = SipHash13Key, const W: usize = 2, M: Mode = Shared> {
     mirror:  Mirror,
-    table:   RcuArray<Slot<I>, Seeds>,
+    tables:  RcuArray<Slot<I>, Head>,
     faults:  Faults,
     _writer: CacheAligned,
-    /// The writers'
+    /// Rehashes', and clear()'s
     lock:    Locked<ByteLock>,
-    /// Items moved by inserts, ever: read only by a lookup that misses.
+    /// Items moved along claimed chains, ever: read only by a lookup that misses.
     moves:   AtomicU64,
     /// Items, for when to grow.
     nr:      AtomicUsize,
@@ -196,7 +280,7 @@ pub struct Cuckoo<I: CuckooItem = u64, S = SipHash13Key, const W: usize = 2, M: 
     _mode:   PhantomData<M::Marker>,
 }
 
-/// The writers' lock, held.
+/// The rehash lock, held.
 type Held<'a> = ExclusiveGuard<'a, ByteLock>;
 
 // SAFETY: atomics, an RcuArray, no bytes, an unlocked ByteLock, Faults'
@@ -237,7 +321,9 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
     /// An empty table, with @faults injected.
     #[cfg(CONFIG_BCACHEFS_TESTS)]
     pub fn with_faults(faults: Faults) -> Self {
-        Self { faults, ..Self::default() }
+        let mut t = Self::default();
+        t.faults = faults;
+        t
     }
 
     #[cfg(CONFIG_BCACHEFS_TESTS)]
@@ -266,20 +352,20 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
     /// @item, in place of what had its key, if anything: that. Fails, with
     /// the table unchanged, only if it can't allocate.
     pub fn insert(&self, item: I) -> Result<Option<I>, AllocError> {
-        self.put(&self.lock.lock(), item, true)
+        self.put(item, true)
     }
 
     /// @item, if nothing has its key: else what does, as the error, and @item
     /// isn't in. Fails, with the table unchanged, only if it can't allocate.
     pub fn insert_new(&self, item: I) -> Result<Result<(), I>, AllocError> {
-        Ok(self.put(&self.lock.lock(), item, false)?.map_or(Ok(()), Err))
+        Ok(self.put(item, false)?.map_or(Ok(()), Err))
     }
 
     /// Take @key out: its item, if it was in.
     pub fn remove<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> Option<I>
     where I::Target: Borrow<Q>
     {
-        self.take_if(&self.lock.lock(), key, |_| true)
+        self.take_if(key, |_| true)
     }
 
     /// Empty it, freeing its buffer after a grace period.
@@ -317,11 +403,12 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
     _rcu:    M::Member,
 }
 
-// SAFETY: shared or sent, it gives out only the key, and its drop takes the
-// table's lock - a writer's, which any thread may be, a Private table's too:
-// what a Private table keeps to its thread is its readers. @entry is
-// compared, never followed
-unsafe impl<K, E, S, const W: usize, M: Mode> Send for Registration<K, E, S, W, M>
+// SAFETY: sent, it gives out only the key, and its drop takes the entry out,
+// a write, which any thread may do to a Shared table. A Private table's
+// entries are freed at once, so its writers, as its readers, are its own
+// thread: no Send for one of its. Shared, it gives out only the key. @entry
+// is compared, never followed
+unsafe impl<K, E, S, const W: usize> Send for Registration<K, E, S, W, Shared>
 where K: Hash + Eq + Send, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
 {}
 unsafe impl<K, E, S, const W: usize, M: Mode> Sync for Registration<K, E, S, W, M>
@@ -410,7 +497,7 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
     /// have put another in its place - or the entry's out already.
     fn detach(&self) {
         let table = &*self.table;
-        table.take_if(&table.lock.lock(), &self.key, |i| i.0 == self.entry);
+        table.take_if(&self.key, |i| i.0 == self.entry);
     }
 }
 
