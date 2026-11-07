@@ -339,33 +339,33 @@ fn normalized_bpos(pos: &DiskAccountingPos) -> Bpos {
 pub(crate) fn mod_normal(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &[u64]) -> Result<(), BchError> {
     let p = normalized_bpos(pos);
 
-    let keys = unsafe { t.subbuf(Subbuf::Accounting) };
-    let queued = VstructRefEntriesMut::<format::bkey_i>::new(keys.as_mut_bytes()).with_offsets().find_map(|(at, k)| {
-        let mut k = k.expect("the transaction's accounting keys");
-        let k = k.key_mut();
-        if k.k.p != p {
-            return None;
-        }
-
-        let at = at / size_of::<u64>();
-        let range = at..at + usize::from(k.k.u64s);
-        let counters = &mut k.arm::<Accounting>().expect("an accounting key").v_mut().d;
-        (counters.len() == d.len()).then(|| {
-            for (c, &d) in counters.iter_mut().zip(d) {
-                *c = c.wrapping_add(d);
+    let queued = t.subbuf_with(Subbuf::Accounting, |keys| {
+        VstructRefEntriesMut::<format::bkey_i>::new(keys.as_mut_bytes()).with_offsets().find_map(|(at, k)| {
+            let mut k = k.expect("the transaction's accounting keys");
+            let k = k.key_mut();
+            if k.k.p != p {
+                return None;
             }
-            (range, counters.iter().all(|&c| c == 0))
+
+            let at = at / size_of::<u64>();
+            let range = at..at + usize::from(k.k.u64s);
+            let counters = &mut k.arm::<Accounting>().expect("an accounting key").v_mut().d;
+            (counters.len() == d.len()).then(|| {
+                for (c, &d) in counters.iter_mut().zip(d) {
+                    *c = c.wrapping_add(d);
+                }
+                (range, counters.iter().all(|&c| c == 0))
+            })
         })
     });
 
     match queued {
         Some((range, true)) => t.subbuf_remove(Subbuf::Accounting, range),
         Some(_) => {}
-        None => {
-            let k = t.subbuf_alloc(Subbuf::Accounting, BKEY_U64S + d.len())?;
+        None => t.subbuf_append(Subbuf::Accounting, BKEY_U64S + d.len(), |k| {
             k[..BKEY_U64S].as_mut_bytes().copy_from_slice(plain_bytes(&accounting_bkey(p, d.len())));
             k[BKEY_U64S..].copy_from_slice(d);
-        }
+        })?,
     }
     Ok(())
 }
@@ -429,9 +429,10 @@ pub unsafe fn bch2_disk_accounting_mod<'t>(trans: &'t BtreeTrans<'t>, k: &DiskAc
 #[c_export]
 pub unsafe fn bch2_accounting_update_sb<'t>(trans: &'t BtreeTrans<'t>) -> c_int {
     let t = unsafe { trans.attempt_in_progress() };
-    let keys = unsafe { t.subbuf(Subbuf::Accounting) };
-    ret_to_c(VstructRefEntries::<format::bkey_i>::new(keys.as_bytes()).try_for_each(|k| {
-        update_sb_one(t.fs(), k.expect("the transaction's accounting keys").key().k.p)
+    ret_to_c(t.subbuf_with(Subbuf::Accounting, |keys| {
+        VstructRefEntries::<format::bkey_i>::new(keys.as_bytes()).try_for_each(|k| {
+            update_sb_one(t.fs(), k.expect("the transaction's accounting keys").key().k.p)
+        })
     }))
 }
 

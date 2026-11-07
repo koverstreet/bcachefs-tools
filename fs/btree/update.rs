@@ -31,6 +31,7 @@ use core::ffi::{c_int, c_uint, c_ulong};
 use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ops::Range;
+use core::ptr::NonNull;
 use cstruct_macros::{c_export, c_enum, c_extern};
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 use zerocopy::IntoBytes;
@@ -257,12 +258,23 @@ impl TransAttempt<'_, '_> {
         }
     }
 
-    pub unsafe fn subbuf(&self, which: Subbuf) -> &mut [u64] {
+    /// The sub-buffer, all of it, for @f: growing it moves it, so it's only
+    /// lent for the call.
+    pub fn subbuf_with<R>(&self, which: Subbuf, f: impl FnOnce(&mut [u64]) -> R) -> R {
         let buf = self.subbuf_cell(which).get();
-        unsafe { self.trans().mem_with(|m| m.range(usize::from(buf.base), usize::from(buf.u64s))).as_mut() }
+        let mut p = self.trans().mem_with(|m| m.range(usize::from(buf.base), usize::from(buf.u64s)));
+        f(unsafe { p.as_mut() })
     }
 
-    pub fn subbuf_alloc(&self, which: Subbuf, u64s: usize) -> Result<&mut [u64], BchError> {
+    /// @u64s more at the sub-buffer's end, for @f to fill.
+    pub fn subbuf_append<R>(&self, which: Subbuf, u64s: usize, f: impl FnOnce(&mut [u64]) -> R)
+        -> Result<R, BchError>
+    {
+        let mut p = self.subbuf_alloc(which, u64s)?;
+        Ok(f(unsafe { p.as_mut() }))
+    }
+
+    fn subbuf_alloc(&self, which: Subbuf, u64s: usize) -> Result<NonNull<[u64]>, BchError> {
         let cell = self.subbuf_cell(which);
         let buf = cell.get();
         if usize::from(buf.u64s) + u64s > usize::from(buf.size) {
@@ -271,8 +283,7 @@ impl TransAttempt<'_, '_> {
             cell.set(c::btree_trans_subbuf { u64s: buf.u64s + u64s as u16, ..buf });
         }
         let buf = cell.get();
-        let p = self.trans().mem_with(|m| m.range(usize::from(buf.base + buf.u64s) - u64s, u64s));
-        Ok(unsafe { &mut *p.as_ptr() })
+        Ok(self.trans().mem_with(|m| m.range(usize::from(buf.base + buf.u64s) - u64s, u64s)))
     }
 
     pub fn subbuf_reserve(&self, which: Subbuf, u64s: usize) -> Result<(), BchError> {
@@ -306,7 +317,7 @@ impl TransAttempt<'_, '_> {
 
     pub fn subbuf_remove(&self, which: Subbuf, range: Range<usize>) {
         let len = range.len();
-        unsafe { self.subbuf(which) }.copy_within(range.end.., range.start);
+        self.subbuf_with(which, |buf| buf.copy_within(range.end.., range.start));
         let cell = self.subbuf_cell(which);
         cell.set(c::btree_trans_subbuf { u64s: cell.get().u64s - len as u16, ..cell.get() });
     }
@@ -317,10 +328,11 @@ impl TransAttempt<'_, '_> {
         -> Result<(), BchError>
     {
         let u64s = c::JSET_KEYS_U64s + data.len().div_ceil(size_of::<u64>());
-        EntryWriter::new(self.subbuf_alloc(Subbuf::JournalEntries, u64s)?.as_mut_bytes())
-            .push(ty, btree, level, &[data])
-            .expect("an entry the size allocated for it");
-        Ok(())
+        self.subbuf_append(Subbuf::JournalEntries, u64s, |buf| {
+            EntryWriter::new(buf.as_mut_bytes())
+                .push(ty, btree, level, &[data])
+                .expect("an entry the size allocated for it");
+        })
     }
 
     /// @s into the journal, with this transaction's commit.
@@ -365,7 +377,7 @@ pub unsafe fn __bch2_trans_subbuf_alloc(trans: &BtreeTrans<'_>, buf: *mut c::btr
                                         u64s: c_uint, _ip: c_ulong) -> *mut core::ffi::c_void {
     let t = unsafe { trans.attempt_in_progress() };
     match t.subbuf_alloc(subbuf_of(&t, buf), u64s as usize) {
-        Ok(s)  => s.as_mut_ptr().cast(),
+        Ok(s)  => s.as_ptr().cast(),
         Err(e) => err_ptr(e),
     }
 }
