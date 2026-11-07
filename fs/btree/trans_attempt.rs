@@ -2,7 +2,7 @@
 
 use super::bkey::*;
 use super::types::{BtreeIter, BtreeTrans};
-use super::iter::{bch2_btree_increase_depth, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags};
+use super::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags};
 use crate::alloc::capacity::DiskReservation;
 use crate::c;
 use crate::errcode::{
@@ -701,8 +701,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     pub fn btree_increase_depth(&self, iter: &BtreeIter<'a>) -> Result<(), BchError> {
-        let ret = unsafe { bch2_btree_increase_depth(self.raw(), iter.path, 0) };
-        self.result(ret)
+        let trans = self.trans();
+        super::interior::increase_depth(trans, &mut trans.paths(), iter.path, CommitOpts::new())
     }
 
     /// The pointer to the node at @level of @btree, at @key's position, made
@@ -759,7 +759,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.btree_node_update_key(node_iter.iter(), b, key, CommitFlags::NO_ENOSPC, true)
     }
 
-    /// @node, which @iter is at, rewritten: bch2_btree_node_rewrite().
+    /// @node, which @iter is at, rewritten.
     pub(crate) fn btree_node_rewrite(
         &self,
         iter:        &mut BtreeIter<'a>,
@@ -768,11 +768,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
         flags:       impl Into<CommitOpts>,
         write_flags: c::bch_write_flags,
     ) -> Result<(), BchError> {
-        // SAFETY: our transaction; @node, held by @iter's path
-        self.result(unsafe {
-            c::bch2_btree_node_rewrite(self.raw(), iter.raw_mut(), node.as_ptr(), target,
-                                       flags.into().to_c(), write_flags)
-        })
+        let trans = self.trans();
+        super::interior::node_rewrite(trans, &mut trans.paths(), iter, unsafe { &*node.as_ptr() }, target,
+                                      flags.into(), write_flags)
     }
 
     /// The node @pos's pointer at @level of @btree points to, rewritten:
@@ -1071,6 +1069,10 @@ impl CommitOpts {
         self.0
     }
 
+    pub(crate) fn get_watermark(self) -> c::bch_watermark {
+        c::bch_watermark::from_bits(self.0 & Self::WATERMARK_MASK)
+    }
+
     pub(crate) const fn to_c(self) -> c::bch_trans_commit_flags {
         c::bch_trans_commit_flags::from_bits_retain(self.0)
     }
@@ -1096,7 +1098,7 @@ impl From<CommitFlags> for CommitOpts {
 
 impl ToText for CommitOpts {
     fn to_text(&self, out: &mut Printbuf) {
-        let watermark = c::bch_watermark::from_bits(self.0 & Self::WATERMARK_MASK);
+        let watermark = self.get_watermark();
         let flags = c::bch_trans_commit_flags::from_bits_retain(self.0 & !Self::WATERMARK_MASK);
 
         crate::prt!(out, "watermark={watermark}");

@@ -129,8 +129,3 @@ impl BtreeNode {
 pub fn bch2_btree_node_shard_pivot(c: &Fs, b: &BtreeNode) -> Bpos {
     b.shard_pivot(unsafe { b.contents() }, c)
 }
-
-#[c_export]
-pub fn bch2_key_is_shard_boundary(c: &Fs, btree: Btree, key: Bpos) -> bool {
-    key_is_shard_boundary(c, btree, key)
-}

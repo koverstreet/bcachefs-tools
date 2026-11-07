@@ -187,7 +187,6 @@ pub struct trans_may_drop_updates {
 c_default!(trans_may_drop_updates);
 
 c_extern! {
-    pub fn bch2_btree_increase_depth(trans: *mut BtreeTrans<'_>, path: PathIdx, flags: c_uint) -> c_int;
     fn bch2_btree_key_cache_find(c: *mut Fs, btree_id: Btree, pos: Bpos) -> *mut c::bkey_cached;
 }
 

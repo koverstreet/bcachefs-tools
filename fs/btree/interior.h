@@ -9,6 +9,7 @@
 
 #include "btree/interior_defs_gen.h"
 #include "btree/interior_c_gen.h"
+#include "btree/interior/split_merge_gen.h"
 #include "btree/shard_gen.h"
 
 static inline enum bch_trans_commit_flags
@@ -29,9 +30,6 @@ struct btree *__bch2_btree_node_alloc_replacement(struct btree_update *,
 						  struct btree_trans *,
 						  struct btree *,
 						  struct bkey_format);
-
-int bch2_btree_split_leaf(struct btree_trans *, btree_path_idx_t,
-			  unsigned, enum bch_trans_commit_flags);
 
 static inline bool btree_node_needs_merge(struct bch_fs *c, struct btree *b, int d)
 {
@@ -186,32 +184,6 @@ static inline bool bch2_btree_node_insert_fits(struct btree *b, unsigned u64s)
 		return false;
 
 	return u64s <= bch2_btree_keys_u64s_remaining(b);
-}
-
-/*
- * Will a new_key_u64s key fit after we compact @b down to a single sorted
- * bset? Models __bch2_btree_node_write's space accounting exactly: each bset
- * write rounds up to block_bytes(c), so a node whose live data rounds up to
- * fill the entire sector budget is born exhausted post-compact - no room for
- * a follow-on bset to land the new key, and the insert path will immediately
- * trigger another btree_split. Caller must split in that case.
- *
- * +8 in each term matches the varint::decode_fast() slack the write path
- * adds before round_up.
- */
-static inline bool bch2_btree_node_compact_fits(struct bch_fs *c,
-						struct btree *b,
-						unsigned new_key_u64s)
-{
-	size_t initial_bytes  = sizeof(struct btree_node) +
-				(size_t)b->nr.live_u64s * sizeof(u64) + 8;
-	size_t followon_bytes = sizeof(struct btree_node_entry) +
-				(size_t)new_key_u64s    * sizeof(u64) + 8;
-
-	size_t initial_sectors  = round_up(initial_bytes,  block_bytes(c)) >> 9;
-	size_t followon_sectors = round_up(followon_bytes, block_bytes(c)) >> 9;
-
-	return initial_sectors + followon_sectors <= btree_sectors(c);
 }
 
 static inline bool btree_bkey_and_val_eq(struct bkey_s_c l, struct bkey_s_c r)

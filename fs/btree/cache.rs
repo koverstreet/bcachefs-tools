@@ -88,11 +88,6 @@ pub fn bch2_btree_evicted_size_record(c: &Fs, hash: u64, live_u64s: u16) {
     c.btree.evicted_size.record(hash, live_u64s)
 }
 
-#[c_export]
-pub fn bch2_btree_evicted_size_lookup(c: &Fs, hash: u64, out: &mut u16) -> bool {
-    c.btree.evicted_size.lookup(hash).map(|v| *out = v).is_some()
-}
-
 /// Up to a node's size, to sort a node's keys into: kvmalloc()'d, or the
 /// bounce pool's, so it never fails. Freed when dropped - whichever buffer it
 /// holds then: swap() trades it for a node's, which it's allocated as.

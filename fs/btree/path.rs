@@ -240,6 +240,22 @@ impl Paths<'_> {
     }
 }
 
+impl Paths<'_> {
+    /// @f, a call into C that may enter the btree code again - an export that
+    /// takes the path table itself - with this borrow idle across it.
+    pub(crate) fn lend<R>(&mut self, f: impl FnOnce() -> R) -> R {
+        if !self.took {
+            return f();
+        }
+        self.trans.set_paths_borrowed(false);
+        let ret = f();
+        assert!(!self.trans.paths_borrowed(), "{}: the path table still borrowed after a call into C",
+                self.trans.fn_name());
+        self.trans.set_paths_borrowed(true);
+        ret
+    }
+}
+
 impl<'t> Paths<'t> {
     /// Path @idx's node at @level, if it's a btree node the path holds locked:
     /// for the attempt, as PathLeaf::node()'s is - good until its next unlock

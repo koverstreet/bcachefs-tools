@@ -364,11 +364,6 @@ pub fn btree_node_reset_sib_u64s(b: &BtreeNode) {
 }
 
 #[c_export]
-pub fn __bch2_btree_calc_format(s: &mut c::bkey_format_state, b: &BtreeNode) {
-    b.format_add_keys(unsafe { b.contents() }, s)
-}
-
-#[c_export]
 pub fn bch2_btree_calc_format(b: &BtreeNode) -> c::bkey_format {
     b.calc_format(unsafe { b.contents() })
 }

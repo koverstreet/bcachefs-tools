@@ -20,8 +20,10 @@ use crate::btree::bkey::{BkeyI, BkeyV, BKEY_U64S};
 use crate::btree::interior_c::*;
 use crate::btree::path::{LockedNode, PathIdx, Paths};
 use crate::c;
-use crate::data::keylist::PaddedKey;
-use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
+#[cfg(CONFIG_BCACHEFS_DEBUG)]
+use crate::data::keylist::bch2_verify_keylist_sorted;
+use crate::data::keylist::{keys, PaddedKey};
+use crate::errcode::{errptr_to_result, BchError};
 use crate::format::Bpos;
 use crate::fs::Fs;
 use crate::journal::entries::{EntryWriter, NoRoom};
@@ -33,6 +35,10 @@ use crate::util::{late::Late, mempool::Mempool, workqueue::{Workqueue, WqFlags}}
 use core::sync::atomic::AtomicI32;
 use pin_init::pin_data;
 use crate::format::Btree;
+
+mod split_merge;
+pub use split_merge::bch2_btree_node_rewrite;
+pub(crate) use split_merge::{increase_depth, node_rewrite};
 
 #[repr(C)]
 #[derive(Default, CStruct)]
@@ -121,9 +127,6 @@ c_extern! {
                                       commit_flags: c_uint, skip_triggers: bool) -> c_int;
     pub fn bch2_btree_node_update_key_at_pos(trans: *mut BtreeTrans<'_>, btree: Btree, level: c_uint,
                                              new_key: *mut c::bkey_i) -> c_int;
-    pub fn bch2_btree_node_rewrite(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter, b: *mut BtreeNode,
-                                   target: c_uint, flags: c::bch_trans_commit_flags,
-                                   write_flags: c::bch_write_flags) -> c_int;
     pub fn bch2_btree_reserve_cache_to_text(out: *mut Printbuf, c: *mut Fs);
     pub fn bch2_async_btree_op(c: *mut Fs, b: *mut BtreeNode, op: c::async_btree_op);
     pub fn bch2_btree_root_alloc_fake(c: *mut Fs, btree: Btree, level: c_uint);
@@ -190,12 +193,13 @@ impl NewNode<'_> {
 impl<'t> InteriorUpdate<'t> {
     /// An update for @path's node at @level, its reserve the worst case: every
     /// level above splitting, up to a new root.
-    pub(crate) fn start(trans: &'t BtreeTrans<'t>, _paths: &mut Paths<'_>, path: PathIdx, level: usize,
+    pub(crate) fn start(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
                         opts: StartOpts) -> Result<Self, BchError> {
-        let p = unsafe {
+        // the reserve's allocated from Rust's allocator, which takes the path table
+        let p = paths.lend(|| unsafe {
             bch2_btree_update_start(trans.raw(), path, level as u32, opts.split, opts.target,
                                     opts.commit.to_c(), opts.write)
-        };
+        });
         let mut raw = errptr_to_result(NonNull::new(p).expect("bch2_btree_update_start(): an update or an error"))?;
 
         let as_ = unsafe { raw.as_mut() };
@@ -205,6 +209,52 @@ impl<'t> InteriorUpdate<'t> {
             as_.node_end = end;
         }
         Ok(Self { trans, raw })
+    }
+
+    /// # Safety
+    /// Nothing changes the update while the reference lives.
+    unsafe fn parent_keys(&self) -> &c::keylist {
+        unsafe { &(*self.raw.as_ptr()).parent_keys }
+    }
+
+    /// # Safety
+    /// Nothing else refers to the update while the reference lives.
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn parent_keys_mut(&self) -> &mut c::keylist {
+        unsafe { &mut (*self.raw.as_ptr()).parent_keys }
+    }
+
+    fn parent_keys_u64s(&self) -> usize {
+        unsafe { self.parent_keys() }.as_u64s().len()
+    }
+
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    fn verify_parent_keys_sorted(&self) {
+        bch2_verify_keylist_sorted(unsafe { self.parent_keys() })
+    }
+
+    fn new_key_u64s(&self) -> usize {
+        unsafe { (*self.raw.as_ptr()).new_key_u64s as usize }
+    }
+
+    /// The first level the reserve doesn't cover.
+    fn level_end(&self) -> usize {
+        unsafe { (*self.raw.as_ptr()).update_level_end as usize }
+    }
+
+    /// Whether it's been made visible by an insert into an existing node.
+    fn has_updated_node(&self) -> bool {
+        !unsafe { (*self.raw.as_ptr()).b }.is_null()
+    }
+
+    /// @b, the existing node its new nodes' pointers went into, blocked from
+    /// writing until they're written.
+    fn updated_node(&self, b: &BtreeNode) {
+        unsafe { btree_update_updated_node(self.raw.as_ptr(), ptr::from_ref(b).cast_mut()) }
+    }
+
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_btree_update_to_text(out, self.raw.as_ptr()) }
     }
 
     fn new_node(&self, b: *mut BtreeNode) -> NewNode<'_> {
@@ -221,8 +271,20 @@ impl<'t> InteriorUpdate<'t> {
         self.new_node(unsafe { bch2_btree_node_alloc_replacement(self.raw.as_ptr(), self.trans.raw(), b) })
     }
 
-    pub(crate) fn alloc_root(&self, _paths: &mut Paths<'_>, level: u32) -> NewNode<'_> {
-        self.new_node(unsafe { __btree_root_alloc(self.raw.as_ptr(), self.trans.raw(), level) })
+    /// A new root at @level, @path holding it above what it held, with no
+    /// siblings to merge with.
+    pub(crate) fn alloc_root(&self, paths: &mut Paths<'_>, path: PathIdx, level: usize) -> NewNode<'_> {
+        let n = self.new_node(unsafe { __btree_root_alloc(self.raw.as_ptr(), self.trans.raw(), level as u32) });
+
+        let locks_want = paths[path].locks_want();
+        paths[path].bits.set_locks_want(locks_want + 1);
+        assert!(!paths[path].locked(level), "a new root's level already locked");
+        self.take_node(paths, path, &n);
+
+        for sib in &n.contents().sib_u64s {
+            sib.set(u16::MAX);
+        }
+        n
     }
 
     /// A path to @n, holding it.
@@ -230,11 +292,16 @@ impl<'t> InteriorUpdate<'t> {
         let pos = n.contents().key_i().k().p;
         let idx = self.trans.path_get_unlocked_mut(paths, Btree(n.c.btree_id.into()), n.c.level.into(),
                                                    pos, false, crate::ret_ip!());
-        unsafe { btree_path_take_new_node(self.trans.raw(), &raw mut paths[idx], n.b.as_ptr()) };
+        self.take_node(paths, idx, n);
         idx
     }
 
-    fn push_parent_key(&self, k: &c::bkey_i) {
+    /// @path holding @n, at its level.
+    fn take_node(&self, paths: &mut Paths<'_>, path: PathIdx, n: &NewNode<'_>) {
+        unsafe { btree_path_take_new_node(self.trans.raw(), &raw mut paths[path], n.b.as_ptr()) };
+    }
+
+    fn push_parent_key(&self, k: &BkeyI) {
         let as_ = unsafe { &mut *self.raw.as_ptr() };
         let u64s = usize::from(k.k().u64s);
         let end = as_.inline_keys.as_mut_ptr_range().end;
@@ -264,16 +331,30 @@ impl<'t> InteriorUpdate<'t> {
         unsafe { bch2_btree_update_add_key(&raw mut (*self.raw.as_ptr()).new_nodes, level as u32, &raw mut delete) };
     }
 
+    /// The parent keys that go in @n inserted into it, @path's at its level.
+    fn insert_parent_keys(&self, paths: &mut Paths<'_>, path: PathIdx, n: &NewNode<'_>) -> Result<(), BchError> {
+        split_merge::split_insert_keys(self.trans, paths, path, n.locked(), unsafe { self.parent_keys_mut() })
+    }
+
+    /// The parent keys that go in @b inserted into it from @path's iterator
+    /// there: @b is the node @path holds at its level.
+    fn insert_parent_keys_at(&self, paths: &mut Paths<'_>, path: PathIdx,
+                             b: LockedNode<'_, BtreeNode>) -> Result<(), BchError> {
+        let node_iter = paths[path].l[usize::from(b.c.level)].iter;
+        split_merge::insert_keys_interior(self.trans, paths, path, b, node_iter, unsafe { self.parent_keys_mut() })
+    }
+
+    /// Whether the parent keys delete the key at @pos.
+    fn parent_key_deleted(&self, pos: Bpos) -> bool {
+        keys(unsafe { self.parent_keys() }.as_u64s()).any(|k| k.k().key_type().is_deleted() && k.k().p == pos)
+    }
+
     /// What link() added, inserted into @path's node above @level - splitting
     /// it, and up, if it doesn't fit.
     pub(crate) fn insert_into_parent(&self, paths: &mut Paths<'_>, path: PathIdx,
                                      level: usize) -> Result<(), BchError> {
-        let parent = paths[path].locked_btree_node(level + 1).expect("an interior update's node with no parent");
-        let parent = ptr::from_ref(parent.node()).cast_mut();
-        ret_to_result_void(unsafe {
-            bch2_btree_insert_node(self.raw.as_ptr(), self.trans.raw(), path, parent,
-                                   &raw mut (*self.raw.as_ptr()).parent_keys)
-        })
+        let parent = paths.held_btree_node(path, level + 1).expect("an interior update's node with no parent");
+        split_merge::insert_node(self, paths, path, parent)
     }
 
     /// @n made @path's btree's root, its sectors_written stamped.
