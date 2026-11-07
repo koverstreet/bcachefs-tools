@@ -8,15 +8,12 @@
 use crate::init::passes::RecoveryPass;
 use crate::btree::node::BtreeNode;
 use crate::c;
-use crate::btree::bkey::BkeyI;
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::accounting_mem::accounting_exit;
-use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::allocator_foreground_init;
 use crate::alloc::replicas::can_write_with_devs;
 use crate::btree::cache::{bch2_fs_btree_exit, bch2_fs_btree_init, bch2_fs_btree_init_early};
 use crate::btree::interior::bch2_free_pending_node_rewrites;
-use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
 use crate::btree::journal_overlay::journal_keys_put_initial;
 use crate::btree::read::bch2_btree_flush_all_reads;
 use crate::btree::write_buffer::bch2_btree_write_buffer_stop;
@@ -61,7 +58,7 @@ use core::sync::atomic::Ordering::Relaxed;
 pub use crate::sb::members::DevRef;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::c_extern;
-use crate::format::{Bpos, Btree, MemberState, MetadataVersion, SbFeature};
+use crate::format::{Btree, MemberState, MetadataVersion, SbFeature};
 
 c_extern! {
     pub static bch2_write_refs: [*const crate::util::ffi::c_char; 0];
@@ -360,54 +357,6 @@ impl Fs {
 
     pub fn journal_flush_outstanding_pins(&self) -> bool {
         self.journal.flush_pins(self.journal_cur_seq())
-    }
-
-    pub fn btree_delete_range(
-        &self,
-        btree_id:     Btree,
-        start:        Bpos,
-        end:          Bpos,
-        iter_flags:   BtreeIterFlags,
-        update_flags: UpdateTriggerFlags,
-    ) -> Result<(), BchError> {
-        let flags = c::btree_iter_update_trigger_flags::from_bits_retain(iter_flags.bits() | update_flags.bits());
-        ret_to_result(unsafe { c::bch2_btree_delete_range(self.as_ptr(), btree_id, start, end, flags) })
-    }
-
-    pub fn btree_insert<'k>(
-        &self,
-        btree_id:     Btree,
-        key:          impl Into<&'k mut BkeyI>,
-        disk_res:     Option<&DiskReservation<'_>>,
-        commit_flags: impl Into<CommitOpts>,
-        iter_flags:   BtreeIterFlags,
-    ) -> Result<(), BchError> {
-        self.btree_insert_k_i(btree_id, key.into(), disk_res, commit_flags.into(), iter_flags)
-    }
-
-    /// Not monomorphized per key type
-    fn btree_insert_k_i(
-        &self,
-        btree_id:     Btree,
-        key:          &mut BkeyI,
-        disk_res:     Option<&DiskReservation<'_>>,
-        commit_flags: CommitOpts,
-        iter_flags:   BtreeIterFlags,
-    ) -> Result<(), BchError> {
-        let disk_res = disk_res
-            .map(|r| r.as_mut_ptr())
-            .unwrap_or(core::ptr::null_mut());
-
-        ret_to_result(unsafe {
-            c::bch2_btree_insert(
-                self.as_ptr(),
-                btree_id,
-                key.as_ffi_mut(),
-                disk_res,
-                commit_flags.to_c(),
-                c::btree_iter_update_trigger_flags::from_bits_retain(iter_flags.bits()),
-            )
-        })
     }
 
     /// # Safety

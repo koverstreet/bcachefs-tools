@@ -24,14 +24,6 @@ void bch2_btree_insert_key_leaf(struct btree_trans *, struct btree_path *,
 
 void bch2_trans_commit_flags_to_text(struct printbuf *, enum bch_trans_commit_flags);
 
-int bch2_btree_bit_mod_iter(struct btree_trans *, struct btree_iter *, bool);
-
-static inline int bch2_btree_delete_at_buffered(struct btree_trans *trans,
-						enum btree_id btree, struct bpos pos)
-{
-	return bch2_btree_bit_mod_buffered(trans, btree, pos, false);
-}
-
 static inline int __must_check
 bch2_trans_update_buf(struct btree_trans *trans, struct btree_iter *iter,
 		      struct bkey_i *k, unsigned k_buf_u64s,
@@ -59,14 +51,6 @@ static inline void *btree_trans_subbuf_top(struct btree_trans *trans,
 	return trans->mem.data + buf->base + buf->u64s;
 }
 
-void *__bch2_trans_subbuf_alloc(struct btree_trans *,
-				struct btree_trans_subbuf *,
-				unsigned, ulong);
-
-int bch2_trans_subbuf_reserve(struct btree_trans *,
-			      struct btree_trans_subbuf *,
-			      unsigned);
-
 static inline void *
 bch2_trans_subbuf_alloc_ip(struct btree_trans *trans,
 			   struct btree_trans_subbuf *buf,
@@ -78,14 +62,6 @@ bch2_trans_subbuf_alloc_ip(struct btree_trans *trans,
 	void *p = btree_trans_subbuf_top(trans, buf);
 	buf->u64s += u64s;
 	return p;
-}
-
-static inline void *
-bch2_trans_subbuf_alloc(struct btree_trans *trans,
-			struct btree_trans_subbuf *buf,
-			unsigned u64s)
-{
-	return bch2_trans_subbuf_alloc_ip(trans, buf, u64s, _THIS_IP_);
 }
 
 static inline struct jset_entry *btree_trans_journal_entries_start(struct btree_trans *trans)
@@ -110,59 +86,12 @@ bch2_trans_jset_entry_alloc(struct btree_trans *trans, unsigned u64s)
 	return bch2_trans_jset_entry_alloc_ip(trans, u64s, _THIS_IP_);
 }
 
-int bch2_btree_insert_clone_trans(struct btree_trans *, enum btree_id, struct bkey_i *);
-
 int bch2_btree_write_buffer_insert_err(struct bch_fs *, enum btree_id, struct bkey_i *);
-
-static inline int __must_check bch2_trans_update_buffered(struct btree_trans *trans,
-					    enum btree_id btree,
-					    struct bkey_i *k)
-{
-	kmsan_check_memory(k, bkey_bytes(&k->k));
-
-	try(bch2_btree_write_buffer_insert_checks(trans->c, btree, k));
-
-	/*
-	 * Most updates skip the btree write buffer until journal replay is
-	 * finished because synchronization with journal replay relies on having
-	 * a btree node locked - if we're overwriting a key in the journal that
-	 * journal replay hasn't yet replayed, we have to mark it as
-	 * overwritten.
-	 *
-	 * But accounting updates don't overwrite, they're deltas, and they have
-	 * to be flushed to the btree strictly in order for journal replay to be
-	 * able to tell which updates need to be applied:
-	 */
-	if (k->k.type != KEY_TYPE_accounting &&
-	    btree != BTREE_ID_need_discard &&
-	    unlikely(trans->journal_replay_not_finished))
-		return bch2_btree_insert_clone_trans(trans, btree, k);
-
-	struct jset_entry *e = errptr_try(bch2_trans_jset_entry_alloc(trans, jset_u64s(k->k.u64s)));
-
-	journal_entry_init(e, BCH_JSET_ENTRY_write_buffer_keys, btree, 0, k->k.u64s);
-	bkey_copy(e->start, k);
-	return 0;
-}
-
-__printf(2, 3) int bch2_fs_log_msg(struct bch_fs *, const char *, ...);
 
 #define trans_for_each_update(_trans, _i)				\
 	for (struct btree_insert_entry *_i = (_trans)->updates;		\
 	     (_i) < (_trans)->updates + (_trans)->nr_updates;		\
 	     (_i)++)
-
-/*
- * The sectors and the count they're charged at have to move together, or the
- * reservation can't say what slot it's in - so always go through here.
- */
-static inline void bch2_trans_extra_disk_res_add(struct btree_trans *trans,
-						 u64 sectors, unsigned nr_replicas)
-{
-	trans->extra_disk_res		+= sectors;
-	trans->extra_disk_res_replicas	= max_t(u8, trans->extra_disk_res_replicas,
-						nr_replicas);
-}
 
 /**
  * bch2_trans_commit - insert keys at given iterator positions
@@ -185,19 +114,6 @@ static inline int bch2_trans_commit(struct btree_trans *trans,
 	return __bch2_trans_commit(trans, flags, false);
 }
 
-static inline int bch2_trans_commit_flush(struct btree_trans *trans,
-					  struct disk_reservation *disk_res,
-					  u64 *journal_seq,
-					  struct closure *flush,
-					  enum bch_trans_commit_flags flags)
-{
-	trans->disk_res		= disk_res;
-	trans->journal_seq	= journal_seq;
-	trans->flush		= flush;
-
-	return __bch2_trans_commit(trans, flags, false);
-}
-
 static inline int bch2_trans_commit_lazy(struct btree_trans *trans,
 					 struct disk_reservation *disk_res,
 					 u64 *journal_seq,
@@ -211,31 +127,6 @@ static inline int bch2_trans_commit_lazy(struct btree_trans *trans,
 	trans->flush		= NULL;
 
 	return __bch2_trans_commit(trans, flags, true);
-}
-
-/*
- * For repair loops that batch unbounded work - an update per snapshot
- * version, typically - into one transaction: once substantial work has
- * accumulated, commit and signal a restart (transaction_restart_commit)
- * so the caller's restart loop re-drives, instead of the bump allocator
- * running into BTREE_TRANS_MEM_MAX.
- *
- * The re-drive runs with the partial batch committed: callers must
- * re-check on-disk state and skip already-committed repairs, so the
- * re-drive shrinks - otherwise it trips this at the same point again
- * and the restart loop can't make forward progress.
- */
-static inline int bch2_trans_commit_lazy_if_full(struct btree_trans *trans,
-						 struct disk_reservation *disk_res,
-						 u64 *journal_seq,
-						 unsigned flags)
-{
-	/* disk_accounting_mod allocations grow by powers of 2; max / 2 is too
-	 * small of a limit to avoid hiting ENOMEMS
-	 */
-	return likely(trans->mem.nr * sizeof(u64) < BTREE_TRANS_MEM_MAX / 4)
-		? 0
-		: bch2_trans_commit_lazy(trans, disk_res, journal_seq, flags);
 }
 
 /*
@@ -263,149 +154,5 @@ static inline int bch2_trans_commit_lazy_if_full(struct btree_trans *trans,
 #define nested_commit_do(_trans, _disk_res, _journal_seq, _flags, _do)	\
 	nested_lockrestart_do(_trans,					\
 		__commit_do(_trans, _disk_res, _journal_seq, _flags, _do))
-
-/* deprecated, prefer CLASS(btree_trans) */
-#define bch2_trans_commit_do(_c, _disk_res, _journal_seq, _flags, _do)		\
-	bch2_trans_run(_c, commit_do(trans, _disk_res, _journal_seq, _flags, _do))
-
-static __always_inline struct bkey_i *__bch2_bkey_make_mut_noupdate(struct btree_trans *trans, struct bkey_s_c k,
-						  unsigned type, unsigned min_bytes)
-{
-	unsigned bytes = max_t(unsigned, min_bytes, bkey_bytes(k.k));
-	struct bkey_i *mut;
-
-	if (type && k.k->type != type)
-		return ERR_PTR(-ENOENT);
-
-	/* Slack for varint::decode_fast(): */
-	mut = bch2_trans_kmalloc_nomemzero(trans, bytes + 8);
-	if (!IS_ERR(mut)) {
-		bkey_reassemble(mut, k);
-
-		/*
-		 * Writes extend: the typed helpers pass min_bytes =
-		 * sizeof(struct bkey_i_<type>), and widening u64s is what lets
-		 * the caller assign any field of the current struct and have it
-		 * committed. Without it an assignment past the on-disk val
-		 * would land in memory we allocated, and be dropped on the
-		 * floor at commit. The bytes we add are zero, which is what
-		 * those fields already read as - see __bkey_val_copy_pad().
-		 */
-		if (unlikely(bytes > bkey_bytes(k.k))) {
-			memset((void *) mut + bkey_bytes(k.k), 0,
-			       bytes - bkey_bytes(k.k));
-			mut->k.u64s = DIV_ROUND_UP(bytes, sizeof(u64));
-		}
-	}
-	return mut;
-}
-
-static __always_inline struct bkey_i *bch2_bkey_make_mut_noupdate(struct btree_trans *trans, struct bkey_s_c k)
-{
-	return __bch2_bkey_make_mut_noupdate(trans, k, 0, 0);
-}
-
-#define bch2_bkey_make_mut_noupdate_typed(_trans, _k, _type)		\
-	bkey_i_to_##_type(__bch2_bkey_make_mut_noupdate(_trans, _k,	\
-				KEY_TYPE_##_type, sizeof(struct bkey_i_##_type)))
-
-static inline struct bkey_i *__bch2_bkey_make_mut(struct btree_trans *trans, struct btree_iter *iter,
-					struct bkey_s_c *k,
-					enum btree_iter_update_trigger_flags flags,
-					unsigned type, unsigned min_bytes)
-{
-	struct bkey_i *mut = __bch2_bkey_make_mut_noupdate(trans, *k, type, min_bytes);
-	if (IS_ERR(mut))
-		return mut;
-
-	int ret = bch2_trans_update(trans, iter, mut, flags);
-	if (ret)
-		return ERR_PTR(ret);
-
-	*k = bkey_i_to_s_c(mut);
-	return mut;
-}
-
-static inline struct bkey_i *bch2_bkey_make_mut(struct btree_trans *trans,
-						struct btree_iter *iter, struct bkey_s_c *k,
-						enum btree_iter_update_trigger_flags flags)
-{
-	return __bch2_bkey_make_mut(trans, iter, k, flags, 0, 0);
-}
-
-#define bch2_bkey_make_mut_typed(_trans, _iter, _k, _flags, _type)	\
-	bkey_i_to_##_type(__bch2_bkey_make_mut(_trans, _iter, _k, _flags,\
-				KEY_TYPE_##_type, sizeof(struct bkey_i_##_type)))
-
-static inline struct bkey_i *__bch2_bkey_get_mut_noupdate(struct btree_iter *iter,
-					 unsigned type, unsigned min_bytes)
-{
-	struct bkey_s_c k = __bch2_bkey_get_typed(iter, type);
-	return IS_ERR(k.k)
-		? ERR_CAST(k.k)
-		: __bch2_bkey_make_mut_noupdate(iter->trans, k, 0, min_bytes);
-}
-
-static inline struct bkey_i *bch2_bkey_get_mut_noupdate(struct btree_iter *iter)
-{
-	return __bch2_bkey_get_mut_noupdate(iter, 0, 0);
-}
-
-static inline struct bkey_i *__bch2_bkey_get_mut(struct btree_trans *trans,
-					 enum btree_id btree, struct bpos pos,
-					 enum btree_iter_update_trigger_flags flags,
-					 unsigned type, unsigned min_bytes)
-{
-	CLASS(btree_iter, iter)(trans, btree, pos, flags|BTREE_ITER_intent);
-	struct bkey_i *mut = __bch2_bkey_get_mut_noupdate(&iter, type, min_bytes);
-	if (IS_ERR(mut))
-		return mut;
-	int ret = bch2_trans_update(trans, &iter, mut, flags);
-	if (ret)
-		return ERR_PTR(ret);
-	return mut;
-}
-
-static inline struct bkey_i *bch2_bkey_get_mut_minsize(struct btree_trans *trans,
-						       unsigned btree_id, struct bpos pos,
-						       enum btree_iter_update_trigger_flags flags,
-						       unsigned min_bytes)
-{
-	return __bch2_bkey_get_mut(trans, btree_id, pos, flags, 0, min_bytes);
-}
-
-static inline struct bkey_i *bch2_bkey_get_mut(struct btree_trans *trans,
-					       unsigned btree_id, struct bpos pos,
-					       enum btree_iter_update_trigger_flags flags)
-{
-	return __bch2_bkey_get_mut(trans, btree_id, pos, flags, 0, 0);
-}
-
-#define bch2_bkey_get_mut_typed(_trans, _btree_id, _pos, _flags, _type)			\
-	bkey_i_to_##_type(__bch2_bkey_get_mut(_trans, _btree_id, _pos, _flags,		\
-			KEY_TYPE_##_type, sizeof(struct bkey_i_##_type)))
-
-static inline struct bkey_i *__bch2_bkey_alloc(struct btree_trans *trans, struct btree_iter *iter,
-					       enum btree_iter_update_trigger_flags flags,
-					       unsigned type, unsigned val_size)
-{
-	struct bkey_i *k = bch2_trans_kmalloc(trans, sizeof(*k) + val_size);
-	if (IS_ERR(k))
-		return k;
-
-	bkey_init(&k->k);
-	k->k.p = iter->pos;
-	k->k.type = type;
-	set_bkey_val_bytes(&k->k, val_size);
-
-	int ret = bch2_trans_update(trans, iter, k, flags);
-	if (unlikely(ret))
-		return ERR_PTR(ret);
-	return k;
-}
-
-#define bch2_bkey_alloc(_trans, _iter, _flags, _type)			\
-	bkey_i_to_##_type(__bch2_bkey_alloc(_trans, _iter, _flags,	\
-				KEY_TYPE_##_type, sizeof(struct bch_##_type)))
 
 #endif /* _BCACHEFS_BTREE_UPDATE_H */

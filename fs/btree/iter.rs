@@ -402,7 +402,7 @@ enum FilterSnapshots {
     End,
 }
 
-fn btree_id_cached(btree: Btree) -> bool {
+pub(crate) fn btree_id_cached(btree: Btree) -> bool {
     matches!(btree, Btree::alloc | Btree::inodes | Btree::logged_ops | Btree::stripes | Btree::subvolumes)
 }
 

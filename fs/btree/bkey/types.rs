@@ -156,10 +156,6 @@ impl<'a> BkeySC<'a> {
 }
 
 impl<'a, V: ?Sized + BkeyVal> BkeyS<'a, V> {
-    pub(crate) fn as_raw(&mut self) -> c::bkey_s {
-        c::bkey_s { split: c::bkey_s_split { kv: c::bkey_s_kv { k: &mut *self.k, v: self.v } } }
-    }
-
     pub fn into_val_bytes_mut(self) -> &'a mut [u8] {
         // SAFETY: as val_bytes()'s, for 'a, whose borrow this consumes
         unsafe { core::slice::from_raw_parts_mut(self.v.cast::<u8>(), self.k.val_bytes()) }

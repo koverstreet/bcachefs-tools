@@ -150,9 +150,8 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) {
             write!(buf, " inum {inum}");
         }
         // Into the journal - or, while it's stopped (read-only), into the
-        // entries it starts with: bch2_fs_log_msg()'s
-        // SAFETY: a C string, for "%s"
-        let _ = unsafe { c::bch2_fs_log_msg(fs.as_ptr(), c"%s".as_ptr().cast(), buf.as_c_str().as_ptr()) };
+        // entries it starts with
+        let _ = fs.fs_log_msg(&buf);
     }
 
     let _ = opt_hook_io(fs, ca, inum, id, v, true);

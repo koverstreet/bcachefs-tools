@@ -11,7 +11,6 @@ use crate::prt;
 use crate::util::Printbuf;
 use core::ffi::c_int;
 use core::marker::PhantomData;
-use core::mem::MaybeUninit;
 use cstruct_macros::c_export;
 
 /// What a key type's trigger is called with. @new is mutable: an atomic
@@ -50,19 +49,6 @@ impl<'a> TriggerOp<'a> {
         }
     }
 
-    /// As C's btree_trigger_op, for a C trigger this one runs: @new lent to it
-    /// for as long as this is borrowed.
-    pub(crate) fn to_raw(&mut self) -> c::btree_trigger_op {
-        c::btree_trigger_op {
-            btree:        self.btree,
-            level:        self.level,
-            old:          self.old.into(),
-            new:          self.new.as_raw(),
-            new_buf_u64s: self.new_buf_u64s,
-            flags:        c::btree_iter_update_trigger_flags::from_bits_retain(self.flags.bits()),
-        }
-    }
-
     /// @new with room for @needed_u64s, to edit: the queued update moved to a
     /// bigger buffer if it hasn't the room - bch2_trigger_get_mutable_new() -
     /// and @new repointed there. An insert's, outside the atomic phase.
@@ -71,14 +57,15 @@ impl<'a> TriggerOp<'a> {
     pub fn new_with_room<'s, 't>(&'s mut self, t: &TransAttempt<'s, 't>, needed_u64s: u32)
         -> Result<TransBkey<'s, 't>, BchError>
     {
-        let mut out = MaybeUninit::<c::bkey_s>::uninit();
-        // SAFETY: the op the trigger was called with, in its commit
-        t.result(unsafe { c::bch2_trigger_get_mutable_new(t.raw(), self.to_raw(), needed_u64s, out.as_mut_ptr()) })?;
-        // SAFETY: written on success - the update's key, in transaction
-        // memory, which outlives the op
-        let out = unsafe { out.assume_init().split.kv };
-        self.new = BkeyS { k: unsafe { &mut *out.k }, v: out.v, val: PhantomData };
-        self.new_buf_u64s = self.new_buf_u64s.max(needed_u64s);
+        assert!(self.flags.contains(UpdateTriggerFlags::INSERT), "growing the key of a trigger that isn't an insert's");
+
+        if needed_u64s > self.new_buf_u64s {
+            assert!(!self.flags.contains(UpdateTriggerFlags::ATOMIC), "growing a trigger's key in the atomic phase");
+
+            let k = unsafe { &mut *t.update_grow(self.btree, self.level, self.new.k.p, needed_u64s)? };
+            self.new = BkeyS { k: &mut k.k, v: (&raw mut k.v).cast(), val: PhantomData };
+            self.new_buf_u64s = needed_u64s;
+        }
 
         // SAFETY: @new, @new_buf_u64s long, the trigger's to edit while the
         // attempt runs
