@@ -2,7 +2,7 @@
 
 use super::bkey::*;
 use super::types::{BtreeIter, BtreeTrans};
-use super::iter::{bch2_btree_increase_depth, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags, UpdateTriggerFlags};
+use super::iter::{bch2_btree_increase_depth, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags};
 use crate::alloc::capacity::DiskReservation;
 use crate::c;
 use crate::errcode::{
@@ -133,7 +133,7 @@ pub fn is_restart(e: &BchError) -> bool {
 /// won't fit is NoRoom.
 pub struct TransBkey<'a, 't, V: ?Sized = FamilyVal<AllTypes>> {
     ptr:      NonNull<c::bkey_i>,
-    buf_u64s: u32,
+    pub(crate) buf_u64s: u32,
     t:        PhantomData<&'a mut TransAttempt<'a, 't>>,
     v:        PhantomData<*const V>,
 }
@@ -527,51 +527,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         }
     }
 
-    /// Run @f in this attempt's commit, under its btree write locks. It runs
-    /// before the commit is certain - what follows can still fail it - and a
-    /// restart drops it, with the rest of the attempt's memory.
-    ///
-    /// That memory is freed without running destructors, so @f is Copy; and
-    /// it outlives this call, so 'static.
-    pub fn commit_hook<F>(&self, f: F) -> Result<(), BchError>
-    where
-        F: Fn(&TransAttempt<'_, '_>) -> Result<(), BchError> + Copy + 'static,
-    {
-        #[repr(C)]
-        struct Hook<F> {
-            h: c::btree_trans_commit_hook,
-            f: F,
-        }
-
-        unsafe extern "C" fn run<F>(
-            trans: *mut BtreeTrans<'_>,
-            h:     *mut c::btree_trans_commit_hook,
-        ) -> core::ffi::c_int
-        where
-            F: Fn(&TransAttempt<'_, '_>) -> Result<(), BchError>,
-        {
-            // SAFETY: @h is the first field of the Hook<F> commit_hook() queued.
-            let hook = unsafe { &*(h as *const Hook<F>) };
-            let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-            // SAFETY: C runs hooks in the commit, in the attempt being committed
-            let t = unsafe { trans.attempt_in_progress() };
-            crate::errcode::ret_to_c((hook.f)(&t))
-        }
-
-        // bch2_trans_kmalloc() gives 8 byte alignment:
-        const { assert!(core::mem::align_of::<Hook<F>>() <= 8) };
-
-        let hook = self.kmalloc(size_of::<Hook<F>>())?.as_mut_ptr() as *mut Hook<F>;
-        unsafe {
-            hook.write(Hook {
-                h: c::btree_trans_commit_hook { fn_: Some(run::<F>), next: core::ptr::null_mut() },
-                f,
-            });
-            c::bch2_trans_commit_hook(self.raw(), &raw mut (*hook).h);
-        }
-        Ok(())
-    }
-
     pub fn bkey_alloc(&self, u64s: u32) -> Result<TransBkey<'a, 't>, BchError> {
         let bytes = u64s as usize * size_of::<u64>();
         let ptr = self.kmalloc_raw(bytes)? as *mut c::bkey_i;
@@ -706,7 +661,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// @k as a mutable copy, for an update, with at least @min_bytes: past
     /// @k's own value, zeroes, which is what those fields read as, and the key
     /// covers them, so writes there go in with the commit.
-    fn make_mut_noupdate<V: ?Sized + BkeyVal>(&self, k: BkeySC<'_, V>, min_bytes: usize)
+    pub(crate) fn make_mut_noupdate<V: ?Sized + BkeyVal>(&self, k: BkeySC<'_, V>, min_bytes: usize)
         -> Result<TransBkey<'a, 't, V>, BchError>
     {
         let mut dst = self.reassemble_room(k, min_bytes)?;
@@ -744,247 +699,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(BkeyI::from_key(k).expect("peek_slot_typed() checked the type"))
     }
 
-    /// The @K at @pos in @btree, as a mutable copy already queued as its
-    /// update, grown to all of its value - ENOENT_bkey_type_mismatch if it
-    /// isn't a @K. @iter_flags for the lookup - BtreeIterFlags::CACHED, for a
-    /// btree read through the key cache - and @flags for the update: C passes
-    /// both in one enum.
-    pub fn bkey_get_mut<K: BkeyWhole>(
-        &self,
-        btree:      Btree,
-        pos:        Bpos,
-        iter_flags: BtreeIterFlags,
-        flags:      UpdateTriggerFlags,
-    ) -> Result<TransBkey<'a, 't, K>, BchError> {
-        let mut iter = BtreeIter::new(self, btree, pos, iter_flags | BtreeIterFlags::INTENT);
-        let k = iter.peek_slot_typed::<K>(self)?.untyped();
-        let k = self.make_mut_noupdate(k, size_of::<BkeyI<K>>())?;
-        self.update(&iter, &k, flags)?;
-        // SAFETY: a @K's, grown to all of it
-        Ok(unsafe { k.whole_unchecked() })
-    }
-
-    /// @k, the key at @iter, as bkey_make_mut_noupdate() makes it, already
-    /// queued as its update: edits to it go in with the commit.
-    pub fn bkey_make_mut<V: MutBkey + ?Sized>(
-        &self,
-        iter:  &BtreeIter<'a>,
-        k:     BkeySC<'_, V>,
-        flags: UpdateTriggerFlags,
-    ) -> Result<TransBkey<'a, 't, V::Mut>, BchError> {
-        let k = self.bkey_make_mut_noupdate(k)?;
-        self.update(iter, &k, flags)?;
-        Ok(k)
-    }
-
-    /// Overwrite @old, the extent at @iter, with @new where they overlap.
-    pub fn update_extent_overwrite(
-        &self,
-        iter:  &BtreeIter<'a>,
-        flags: UpdateTriggerFlags,
-        old:   BkeySC<'_>,
-        new:   BkeySC<'_>,
-    ) -> Result<(), BchError> {
-        let ret = unsafe {
-            c::bch2_trans_update_extent_overwrite(self.raw(), iter.raw(),
-                                                  c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
-                                                  old.into(), new.into())
-        };
-        self.result(ret)
-    }
-
-    /// Have the commit reserve @sectors more, at @nr_replicas, for data an
-    /// update rewrites.
-    pub fn extra_disk_res_add(&self, sectors: u64, nr_replicas: u32) {
-        let t = self.trans;
-        t.extra_disk_res.set(t.extra_disk_res.get() + sectors);
-        t.extra_disk_res_replicas.set(t.extra_disk_res_replicas.get().max(nr_replicas as u8));
-    }
-
-    /// Queue @key as an update at @iter's position. Takes the iterator
-    /// shared: it doesn't move it - what it sets up there, the key cache
-    /// path, is the iterator's own business. @key is borrowed too: it's in
-    /// transaction memory, where the update points, and the caller can go on
-    /// reading it - where it went, say.
-    pub fn update<V: ?Sized>(
-        &self,
-        iter:  &BtreeIter<'a>,
-        key:   &TransBkey<'_, 't, V>,
-        flags: UpdateTriggerFlags,
-    ) -> Result<(), BchError> {
-        // No caller ip: C's is the call site's, _THIS_IP_, which Rust has
-        // no way to name.
-        let ret = unsafe {
-            c::bch2_trans_update_ip(
-                self.raw(),
-                iter.raw(),
-                key.as_ptr(),
-                key.buf_u64s,
-                c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
-                0,
-            )
-        };
-        self.result(ret)
-    }
-
-    /// update(), with a key that isn't in transaction memory - a C caller's,
-    /// as bch2_trans_update() takes. Mutably: the update may rewrite it, a
-    /// deletion that needs a whiteout becoming one.
-    ///
-    /// # Safety
-    /// @key stays where it is, unchanged, until the commit - or until the
-    /// attempt is over, if it doesn't commit. The update points at it.
-    pub unsafe fn update_key(
-        &self,
-        iter:  &BtreeIter<'a>,
-        key:   &mut BkeyI,
-        flags: UpdateTriggerFlags,
-    ) -> Result<(), BchError> {
-        let ret = unsafe {
-            c::bch2_trans_update_ip(
-                self.raw(),
-                iter.raw(),
-                key.as_ffi_mut(),
-                key.k.u64s as u32,
-                c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
-                0,
-            )
-        };
-        self.result(ret)
-    }
-
     pub fn btree_increase_depth(&self, iter: &BtreeIter<'a>) -> Result<(), BchError> {
         let ret = unsafe { bch2_btree_increase_depth(self.raw(), iter.path, 0) };
-        self.result(ret)
-    }
-
-    /// A key moved from @old_pos to @new_pos, in the same snapshot: in every
-    /// descendant snapshot where it was overwritten at @old_pos, whiteout
-    /// @new_pos too, so it stays hidden there.
-    pub fn insert_snapshot_whiteouts(&self, btree: Btree, old_pos: Bpos, new_pos: Bpos)
-        -> Result<(), BchError>
-    {
-        assert_eq!(old_pos.snapshot, new_pos.snapshot);
-
-        if crate::BTREE_HAS_SNAPSHOTS_MASK & (1 << btree.0) == 0 || bkey_eq(old_pos, new_pos) {
-            return Ok(());
-        }
-
-        let mut ids = crate::snapshots::snapshot::overwrites(self, btree, old_pos)?;
-        if ids.is_empty() {
-            return Ok(());
-        }
-
-        // Lent to C, which only reads it:
-        let mut list = c::snapshot_id_list {
-            nr:           ids.len(),
-            size:         ids.len(),
-            data:         ids.as_mut_ptr(),
-            preallocated: [],
-        };
-        let ret = unsafe { c::__bch2_insert_snapshot_whiteouts(self.raw(), btree, new_pos, &mut list) };
-        self.result(ret)
-    }
-
-    /// @btree is a bitset btree.
-    pub fn bit_mod(&self, btree: Btree, pos: Bpos, set: bool) -> Result<(), BchError> {
-        let ret = unsafe { c::bch2_btree_bit_mod(self.raw(), btree, pos, set) };
-        self.result(ret)
-    }
-
-    /// Point @iter, intent locked, at the first empty slot in @btree between
-    /// @start and @end, after the last key: ENOSPC_btree_slot if there's none.
-    pub fn bkey_get_empty_slot(
-        &self,
-        iter:  &mut BtreeIter<'a>,
-        btree: Btree,
-        start: Bpos,
-        end:   Bpos,
-    ) -> Result<(), BchError> {
-        let ret = unsafe { c::bch2_bkey_get_empty_slot(self.raw(), iter.raw(), btree, start, end) };
-        self.result(ret)
-    }
-
-    /// bit_mod(), through the write buffer.
-    pub fn bit_mod_buffered(&self, btree: Btree, pos: Bpos, set: bool) -> Result<(), BchError> {
-        let ret = unsafe { c::bch2_btree_bit_mod_buffered(self.raw(), btree, pos, set) };
-        self.result(ret)
-    }
-
-    /// bit_mod(), at @iter's position: bch2_btree_bit_mod_iter().
-    pub fn bit_mod_iter(&self, iter: &BtreeIter<'a>, set: bool) -> Result<(), BchError> {
-        let ret = unsafe { c::bch2_btree_bit_mod_iter(self.raw(), iter.raw(), set) };
-        self.result(ret)
-    }
-
-    /// @key, for write buffered @btree, through the write buffer: as
-    /// bch2_trans_update_buffered(). Copied - into the transaction's journal
-    /// entries, or before journal replay's done, an update of its own.
-    pub fn update_buffered<V: ?Sized>(&self, btree: Btree, key: &TransBkey<'_, 't, V>)
-        -> Result<(), BchError>
-    {
-        // SAFETY: a key, which is only read
-        self.result(unsafe { c::rust_bch2_trans_update_buffered(self.raw(), btree, key.as_ptr()) })
-    }
-
-    pub fn insert<V: ?Sized>(
-        &self,
-        btree: impl Into<u32>,
-        key:   TransBkey<'_, 't, V>,
-        flags: UpdateTriggerFlags,
-    ) -> Result<(), BchError> {
-        self.insert_with(btree, key, BtreeIterFlags::empty(), flags)
-    }
-
-    /// As insert(), with flags for the iterator the insert goes through, too.
-    pub fn insert_with<V: ?Sized>(
-        &self,
-        btree:      impl Into<u32>,
-        key:        TransBkey<'_, 't, V>,
-        iter_flags: BtreeIterFlags,
-        flags:      UpdateTriggerFlags,
-    ) -> Result<(), BchError> {
-        let ret = unsafe {
-            c::bch2_btree_insert_trans(
-                self.raw(),
-                Btree::from_raw(btree.into()).expect("invalid btree id"),
-                key.as_ptr(),
-                c::btree_iter_update_trigger_flags::from_bits_retain(iter_flags.bits() | flags.bits()),
-            )
-        };
-        self.result(ret)
-    }
-
-    pub fn insert_nonextent<V: ?Sized>(
-        &self,
-        btree: impl Into<u32>,
-        key:   TransBkey<'_, 't, V>,
-        flags: UpdateTriggerFlags,
-    ) -> Result<(), BchError> {
-        let ret = unsafe {
-            c::bch2_btree_insert_nonextent(
-                self.raw(),
-                Btree::from_raw(btree.into()).expect("invalid btree id"),
-                key.as_ptr(),
-                key.k().u64s as u32,
-                c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
-            )
-        };
-        self.result(ret)
-    }
-
-    pub fn delete_at(
-        &self,
-        iter:  &BtreeIter<'a>,
-        flags: UpdateTriggerFlags,
-    ) -> Result<(), BchError> {
-        let ret = unsafe {
-            c::bch2_btree_delete_at(
-                self.raw(),
-                iter.raw(),
-                c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
-            )
-        };
         self.result(ret)
     }
 
@@ -1085,23 +801,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 self.btree_node_rewrite(node_iter.iter(), b, 0, flags, c::bch_write_flags::empty()),
             _ => Err(BchError::from(c::ENOENT)),
         }
-    }
-
-    pub fn delete(
-        &self,
-        btree: impl Into<u32>,
-        pos:   Bpos,
-        flags: UpdateTriggerFlags,
-    ) -> Result<(), BchError> {
-        let ret = unsafe {
-            c::bch2_btree_delete(
-                self.raw(),
-                Btree::from_raw(btree.into()).expect("invalid btree id"),
-                pos,
-                c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
-            )
-        };
-        self.result(ret)
     }
 }
 

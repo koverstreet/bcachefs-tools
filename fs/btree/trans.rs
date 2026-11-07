@@ -5,7 +5,7 @@
 //! them, and their names.
 
 pub use super::types::BtreeTrans;
-use super::iter::{CommitOpts, TransAttempt, UpdateTriggerFlags};
+use super::iter::{CommitOpts, TransAttempt};
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC};
 use crate::btree::path::{bch2_trans_paths_exit, bch2_trans_paths_init, BtreePath, PathIdx, Paths};
@@ -132,23 +132,6 @@ impl<'f> BtreeTrans<'f> {
     /// through the write buffer, reserved with the transaction's own.
     pub fn reserve_extra_journal_u64s(&self, u64s: u32) {
         self.extra_journal_u64s.set(self.extra_journal_u64s.get() + u64s)
-    }
-
-    /// Delete [@start, @end) in @btree, committing as it goes. It drives its
-    /// own begin and commit loop, so it's on the transaction, not an attempt:
-    /// transaction_restart_nested if it restarted along the way, for a caller
-    /// in an attempt to begin again.
-    pub fn delete_range(
-        &self,
-        btree: Btree,
-        start: Bpos,
-        end:   Bpos,
-        flags: UpdateTriggerFlags,
-    ) -> Result<(), BchError> {
-        crate::errcode::ret_to_result(unsafe {
-            c::bch2_btree_delete_range_trans(self.raw(), btree, start, end,
-                                             c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()))
-        }).map(|_| ())
     }
 
     /// Flush the btree write buffer, through to the journal sequence number
