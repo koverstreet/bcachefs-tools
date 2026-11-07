@@ -31,7 +31,7 @@ use bcachefs_kernel::btree::bkey::{pos, spos, AnyKeySC, POS_MAX};
 use bcachefs_kernel::c;
 use bcachefs_kernel::format::Btree;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::inode;
+use bcachefs_kernel::{inode, inode_opts};
 use bcachefs_kernel::util::vstructs::Unvalidated;
 use rustix::fs::AtFlags;
 
@@ -120,10 +120,18 @@ impl<'a> Resolver<'a> {
         Ok(best.and_then(|(_, v)| v))
     }
 
-    pub(super) fn inode(&mut self, inum: u64, snapshot: u32) -> Result<Option<c::bch_inode_unpacked>> {
+    fn inode(&mut self, inum: u64, snapshot: u32) -> Result<Option<c::bch_inode_unpacked>> {
         let fs = self.fs;
         self.visible(Btree::inodes, 0, inum, snapshot,
                      |k| k.arm::<inode::Inodes>().map(|i| inode::unpack(fs, i)))
+    }
+
+    /// The background target @inum's data is written with: its own, or the
+    /// filesystem's.
+    pub(super) fn background_target(&mut self, inum: u64, snapshot: u32) -> Result<Option<u16>> {
+        let fs = self.fs;
+        Ok(self.inode(inum, snapshot)?
+            .map(|inode| inode_opts::get_inode(fs, &inode).background_target as u16))
     }
 
     /// The name @inode has in its directory, read in @snapshot.
