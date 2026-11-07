@@ -8,19 +8,7 @@
 #include "snapshots/snapshot.h"
 
 #include "btree/update_gen.h"
-
-void bch2_btree_node_prep_for_write(struct btree_trans *,
-				    struct btree_path *, struct btree *);
-bool bch2_btree_bset_insert_key(struct btree_trans *, struct btree_path *,
-				struct btree *, struct btree_node_iter *,
-				struct bkey_i *);
-
-int bch2_btree_node_flush0(struct journal *, struct journal_entry_pin *, u64);
-int bch2_btree_node_flush1(struct journal *, struct journal_entry_pin *, u64);
-void bch2_btree_add_journal_pin(struct bch_fs *, struct btree *, u64);
-
-void bch2_btree_insert_key_leaf(struct btree_trans *, struct btree_path *,
-				struct bkey_i *, u64);
+#include "btree/node/insert_gen.h"
 
 static inline int __must_check
 bch2_trans_update_buf(struct btree_trans *trans, struct btree_iter *iter,

@@ -2265,7 +2265,7 @@ static int bch2_btree_insert_node(struct btree_update *as, struct btree_trans *t
 
 	try(bch2_btree_node_lock_write(trans, path, &b->c));
 
-	bch2_btree_node_prep_for_write(trans, path, b);
+	bch2_btree_node_prep_for_write(trans, b);
 
 	if (!bch2_btree_node_insert_fits(b, bch2_keylist_u64s(keys)))
 		goto split;

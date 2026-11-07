@@ -38,7 +38,7 @@ c_extern! {
                            lock_type: c::six_lock_type, flags: c::btree_iter_update_trigger_flags) -> *mut BtreeNode;
     pub(crate) fn bch2_btree_cache_cannibalize_lock(trans: *mut BtreeTrans<'_>, cl: *mut c::closure) -> c_int;
     fn bch2_btree_path_traverse_cached(trans: *mut BtreeTrans<'_>, path: PathIdx, flags: c_uint) -> c_int;
-    fn bch2_btree_node_check_topology_msg(trans: *mut BtreeTrans<'_>, b: *mut BtreeNode, out: *mut Printbuf) -> c_int;
+    pub(crate) fn bch2_btree_node_check_topology_msg(trans: *mut BtreeTrans<'_>, b: *mut BtreeNode, out: *mut Printbuf) -> c_int;
     pub fn bch2_btree_pos_to_text(out: *mut Printbuf, c: *mut Fs, b: *const BtreeNode);
 }
 

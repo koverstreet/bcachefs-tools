@@ -179,6 +179,10 @@ impl<V: ?Sized> BkeyP<V> {
         BkeyType(self.header().type_ as u32)
     }
 
+    pub fn set_key_type(&mut self, t: BkeyType) {
+        self.header_mut().type_ = t.0 as u8;
+    }
+
     pub fn key_u64s(&self, f: &c::bkey_format) -> usize {
         self.header().key_u64s(f)
     }

@@ -8,8 +8,6 @@ use crate::btree::bkey::{BkeySC, BKEY_U64S, POS_MIN};
 use crate::btree::interior::bch2_async_btree_op;
 use crate::btree::iter::{commit_do, is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags, Watermark};
-use crate::btree::node::BtreeNode;
-use crate::btree::path::BtreePath;
 use crate::c;
 use crate::c::bch_fs_flags as Flag;
 use crate::c::journal_flags as Journal;
@@ -27,13 +25,6 @@ use crate::{btree_trans, fs_fatal_error, prt};
 use core::mem::size_of;
 use core::ptr;
 use core::sync::atomic::fence;
-use cstruct_macros::c_extern;
-
-c_extern! {
-    pub fn bch2_btree_node_prep_for_write(trans: *mut BtreeTrans<'_>, path: *mut BtreePath, b: *mut BtreeNode);
-    pub fn bch2_btree_insert_key_leaf(trans: *mut BtreeTrans<'_>, path: *mut BtreePath, insert: *mut c::bkey_i,
-                                      journal_seq: u64);
-}
 
 /*
  * The refs sort as one 192 bit integer, hi:mi:lo - pos, then idx: a sub/sbb
@@ -198,13 +189,12 @@ fn flush_one<'a>(
     }
 
     let b = unsafe { &*ptr::from_ref(path.locked_btree_node(0).expect("a traversed path has its leaf").node()) };
-    let path = unsafe { trans.paths.get().add(iter.path as usize) };
     drop(paths);
 
     if !*write_locked {
         trans.node_lock_write(&mut trans.paths(), iter.path, 0)?;
 
-        unsafe { bch2_btree_node_prep_for_write(trans.raw(), path, ptr::from_ref(b).cast_mut()) };
+        trans.node_prep_for_write(&mut trans.paths(), b);
         *write_locked = true;
     }
 
@@ -215,7 +205,8 @@ fn flush_one<'a>(
 
     ebug_assert!(wb.k().k.p == trans.paths()[iter.path].pos);
 
-    unsafe { bch2_btree_insert_key_leaf(trans.raw(), path, wb.k_mut().as_ffi_mut(), wb.seq()) };
+    let seq = wb.seq();
+    unsafe { trans.insert_key_leaf(&mut trans.paths(), iter.path, wb.k_mut(), seq) };
     cnt.fast += 1;
 
     if b.needs_merge(unsafe { b.contents() }, fs, 0) {

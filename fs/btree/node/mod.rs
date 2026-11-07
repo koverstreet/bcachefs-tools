@@ -9,6 +9,7 @@ fn check_lookups() -> bool {
 
 pub mod aux_tree;
 pub mod bset;
+pub mod insert;
 pub mod iter;
 pub mod keys;
 pub mod sort;
