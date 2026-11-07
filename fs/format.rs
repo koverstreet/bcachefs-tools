@@ -73,7 +73,10 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
-use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, floored_by_self, vstruct, vstruct_container, Head, FlexArray, Unvalidated};
+use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, floored_by_self, from_bytes_mut, vstruct,
+                            vstruct_container, Head, FlexArray, Unvalidated, VStructError, VstructMut, VstructRef};
+use crate::btree::bkey::BkeyPHeader;
+use core::mem::offset_of;
 use cstruct_macros::{c_name, bitfield, c_bitmask, c_const, c_enum, c_verbatim, grown, open_enum,
                      tagged_union, unsized_vstruct, whole, CStruct, Plain, TypeInfo, SizedVal};
 #[cfg(__KERNEL__)]
@@ -2073,11 +2076,57 @@ pub struct bset {
     pub _data: [u64; 0],
 }
 vstruct!(unsized bset, u64s);
+vstruct_container!(bset, thin BkeyPHeader);
 
 impl bset__head {
     /// By what holds it, which has room for its keys.
     pub fn set_u64s(&mut self, u64s: usize) {
         self.u64s.set(u64s as u16);
+    }
+}
+
+/// Validated in place: its keys walked by offset, and it shortened - its
+/// count, and the reference made over, so it still reaches all of it and
+/// nothing past. The bytes past stay what holds it's.
+impl bset<Unvalidated> {
+    /// The key at byte @at of its keys, its u64s checked against what's left:
+    /// None at their end.
+    pub fn key_at(&self, at: usize) -> Option<Result<VstructRef<'_, BkeyPHeader>, VStructError>> {
+        let keys = self.start_bytes();
+        (at < keys.len()).then(|| VstructRef::new(&keys[at..]))
+    }
+
+    pub fn key_at_mut(&mut self, at: usize) -> Option<Result<VstructMut<'_, BkeyPHeader>, VStructError>> {
+        let keys = self.start_bytes_mut();
+        (at < keys.len()).then(|| VstructMut::new(&mut keys[at..]))
+    }
+
+    /// The first word of the key at byte @at, whatever its u64s say.
+    pub fn key_header(&self, at: usize) -> Option<&BkeyPHeader> {
+        cast_plain(self.start_bytes().get(at..)?)
+    }
+
+    /// Its keys from byte @at on gone.
+    pub fn truncate(&mut self, at: usize) -> &mut Self {
+        self.shrink(at)
+    }
+
+    /// The @bytes of keys at byte @at gone, the keys after moved down.
+    pub fn remove(&mut self, at: usize, bytes: usize) -> &mut Self {
+        let keys = self.start_bytes_mut();
+        let len = keys.len();
+        keys.copy_within(at + bytes.., at);
+        self.shrink(len - bytes)
+    }
+
+    fn shrink(&mut self, keys_bytes: usize) -> &mut Self {
+        let have = self.u64s() * 8;
+        assert!(keys_bytes % 8 == 0 && keys_bytes <= have,
+                "shrinking a bset of {have} bytes of keys to {keys_bytes}");
+
+        let bytes = self.as_bytes_mut();
+        cast_plain_mut::<Head<bset>>(bytes).expect("a bset's header").set_u64s(keys_bytes / 8);
+        from_bytes_mut(&mut bytes[..offset_of!(Head<bset>, start) + keys_bytes]).expect("a bset, shorter")
     }
 }
 
