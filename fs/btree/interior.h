@@ -10,10 +10,6 @@
 #include "btree/interior_defs_gen.h"
 #include "btree/interior_c_gen.h"
 
-int bch2_btree_node_check_topology_msg(struct btree_trans *, struct btree *,
-				       struct printbuf *);
-int bch2_btree_node_check_topology(struct btree_trans *, struct btree *);
-
 static inline enum bch_trans_commit_flags
 btree_update_set_watermark_hipri(enum bch_trans_commit_flags flags)
 {

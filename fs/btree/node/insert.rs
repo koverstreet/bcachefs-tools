@@ -14,9 +14,9 @@ use super::sort::bch2_maybe_compact_whiteouts;
 use super::BtreeNode;
 use crate::btree::bkey::BkeyI;
 use crate::btree::for_each::lockrestart_do;
+use crate::btree::interior_c::bch2_btree_node_check_topology_msg;
 use crate::btree::iter::BtreeTrans;
 use crate::btree::path::{BtreePath, LockedNode, PathIdx, Paths};
-use crate::btree::traverse::bch2_btree_node_check_topology_msg;
 use crate::btree::types::BtreeWriteType;
 use crate::btree::write::{bch2_btree_init_next, bch2_btree_post_write_cleanup, __bch2_btree_node_write,
                           BtreeWriteFlags};

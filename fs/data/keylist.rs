@@ -25,6 +25,7 @@ use crate::locking::MemallocFlags;
 use crate::util::alloc::AllocError;
 use crate::util::vstructs::{assume_validated, plain_bytes, plain_bytes_mut, VstructRefEntries, VstructRefEntriesMut};
 use core::mem::size_of;
+use core::ptr;
 use cstruct_macros::CStruct;
 use crate::types::c_default;
 
@@ -40,15 +41,33 @@ pub struct keylist {
 }
 c_default!(keylist);
 
-#[cfg(CONFIG_BCACHEFS_DEBUG)]
 impl c::keylist {
-    fn as_u64s(&self) -> &[u64] {
+    /// The first @u64s taken off the front - whole keys - and the rest moved
+    /// down.
+    pub(crate) fn drop_front(&mut self, u64s: usize) {
+        let len = self.as_u64s().len();
+        assert!(u64s <= len, "dropping {u64s} u64s from a keylist of {len}");
+        unsafe {
+            ptr::copy(self.keys_p.add(u64s), self.keys_p, len - u64s);
+            self.top_p = self.top_p.sub(u64s);
+        }
+    }
+
+    pub(crate) fn as_u64s(&self) -> &[u64] {
         if self.top_p == self.keys_p {
             return &[];
         }
         let u64s = (self.top_p.addr() - self.keys_p.addr()) / size_of::<u64>();
         // SAFETY: the keylist's invariant
         unsafe { core::slice::from_raw_parts(self.keys_p, u64s) }
+    }
+
+    pub(crate) fn as_u64s_mut(&mut self) -> &mut [u64] {
+        if self.top_p == self.keys_p {
+            return &mut [];
+        }
+        let u64s = (self.top_p.addr() - self.keys_p.addr()) / size_of::<u64>();
+        unsafe { core::slice::from_raw_parts_mut(self.keys_p, u64s) }
     }
 }
 
@@ -298,6 +317,14 @@ pub(crate) fn keys(u64s: &[u64]) -> impl Iterator<Item = &BkeyI> + '_ {
         let k = k.unwrap_or_else(|e| panic!("a key overruns its buffer, of {len} u64s: {e}"));
         // SAFETY: a keylist's keys are made in memory, by what adds them
         unsafe { assume_validated(k) }.key()
+    })
+}
+
+pub(crate) fn keys_mut(u64s: &mut [u64]) -> impl Iterator<Item = &mut BkeyI> + '_ {
+    let len = u64s.len();
+    VstructRefEntriesMut::<c::bkey_i>::new(plain_bytes_mut(u64s)).map(move |k| {
+        let k = k.unwrap_or_else(|e| panic!("a key overruns its buffer, of {len} u64s: {e}"));
+        unsafe { assume_validated(k) }.into_key_mut()
     })
 }
 

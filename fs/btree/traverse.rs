@@ -12,6 +12,7 @@ use cstruct_macros::{c_export, c_extern};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::cache::{bch2_btree_id_level_to_text, bch2_btree_node_prefetch};
+use crate::btree::interior_c::bch2_btree_node_check_topology_msg;
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
 use crate::btree::locking::bch2_btree_cache_cannibalize_unlock;
 use crate::btree::node::iter::KeyIter;
@@ -38,7 +39,6 @@ c_extern! {
                            lock_type: c::six_lock_type, flags: c::btree_iter_update_trigger_flags) -> *mut BtreeNode;
     pub(crate) fn bch2_btree_cache_cannibalize_lock(trans: *mut BtreeTrans<'_>, cl: *mut c::closure) -> c_int;
     fn bch2_btree_path_traverse_cached(trans: *mut BtreeTrans<'_>, path: PathIdx, flags: c_uint) -> c_int;
-    pub(crate) fn bch2_btree_node_check_topology_msg(trans: *mut BtreeTrans<'_>, b: *mut BtreeNode, out: *mut Printbuf) -> c_int;
     pub fn bch2_btree_pos_to_text(out: *mut Printbuf, c: *mut Fs, b: *const BtreeNode);
 }
 

@@ -380,7 +380,7 @@ pub fn validate_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, n: &mut H
     Ok(())
 }
 
-fn validate_from(b: &BtreeNode, flags: ValidateFlags) -> c::bkey_validate_context {
+pub(crate) fn validate_from(b: &BtreeNode, flags: ValidateFlags) -> c::bkey_validate_context {
     let mut from = c::bkey_validate_context {
         level: b.c.level,
         btree: Btree(b.c.btree_id.into()),

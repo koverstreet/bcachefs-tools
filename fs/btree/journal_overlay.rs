@@ -666,16 +666,9 @@ pub unsafe fn bch2_key_deleted_in_journal(trans: *mut BtreeTrans<'_>, btree: Btr
 }
 
 /// The key at @pos overwritten, if the journal has one that isn't - or with
-/// @check, -1 if it has one that is. The caller holds overwrite_lock.
-///
-/// # Safety
-/// As bch2_journal_keys_peek_max()'s.
-#[c_export]
-pub unsafe fn bch2_journal_key_check_or_overwrite(c: &Opaque<Fs>, btree: Btree, level: c_uint,
-                                                  pos: Bpos, check: bool) -> c_int {
-    let jk = unsafe { Fs::from_c(c).journal_keys_held() };
-    // SAFETY: the caller holds it, through this call
-    let mut g = unsafe { jk.overwrites.held() };
+/// @check, -1 if it has one that is.
+fn check_or_overwrite(jk: &c::journal_keys, g: &mut OverwriteGuard<'_>, btree: Btree, level: u32,
+                      pos: Bpos, check: bool) -> c_int {
     let idx = jk.search(btree, level, pos);
 
     let Some(k) = jk.keys().get(idx) else { return 0 };
@@ -688,9 +681,30 @@ pub unsafe fn bch2_journal_key_check_or_overwrite(c: &Opaque<Fs>, btree: Btree, 
     }
 
     if !check {
-        jk.overwrite(&mut g, idx);
+        jk.overwrite(g, idx);
     }
     0
+}
+
+/// The journal's key at @pos overwritten, if it has one that isn't: the btree
+/// has its update now, before replay's done.
+///
+/// # Safety
+/// As bch2_journal_keys_peek_max()'s.
+pub(crate) unsafe fn journal_key_overwrite(fs: &Fs, btree: Btree, level: u32, pos: Bpos) {
+    let jk = unsafe { fs.journal_keys_held() };
+    check_or_overwrite(jk, &mut jk.overwrites.lock(), btree, level, pos, false);
+}
+
+/// check_or_overwrite(), for C, which holds overwrite_lock.
+///
+/// # Safety
+/// As bch2_journal_keys_peek_max()'s.
+#[c_export]
+pub unsafe fn bch2_journal_key_check_or_overwrite(c: &Opaque<Fs>, btree: Btree, level: c_uint,
+                                                  pos: Bpos, check: bool) -> c_int {
+    let jk = unsafe { Fs::from_c(c).journal_keys_held() };
+    check_or_overwrite(jk, &mut unsafe { jk.overwrites.held() }, btree, level, pos, check)
 }
 
 // ── Inserts, by recovery before the btree's read-write ───────────────────
