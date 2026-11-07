@@ -27,7 +27,6 @@ use crate::locking::six::SixHold;
 use crate::prt;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::util::closure::StackClosure;
-use crate::util::ffi::Opaque;
 use crate::util::kernel::race_fault;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
@@ -95,6 +94,13 @@ impl BtreePath {
         }
     }
 
+    pub(crate) fn level_peek_all(&self, u: &mut c::bkey) -> c::bkey_s_c {
+        let level = self.level() as usize;
+        let b = self.locked_btree_node(level).expect("a path peeked is locked");
+        let keys = b.keys(b.contents());
+        level_unpack(&keys, self.l[level].iter.peek_all(), u)
+    }
+
     #[inline(always)]
     fn check_pos_in_node(&self, l: usize, check_pos: Ordering) -> bool {
         let b = || self.locked_btree_node(l).expect("a level checked is locked");
@@ -118,6 +124,42 @@ impl BtreeTrans<'_> {
         /* deadlock detector reads unlocked */
         unsafe { ptr::write_volatile(&raw mut path.l[level].b, NodePtr::node(NonNull::from(&b.c))) };
         path.level_init_iter(self.fs(), level, b);
+    }
+
+    pub(crate) fn path_level_prev(&self, paths: &mut Paths<'_>, idx: PathIdx, u: &mut c::bkey) -> c::bkey_s_c {
+        let path = &mut paths[idx];
+        let level = path.level() as usize;
+
+        ebug_assert!(path.ref_ == 1);
+
+        let (k, pos) = {
+            let (b, iter) = path.locked_level_mut(level).expect("a path stepped back is locked");
+            let keys = b.keys(b.contents());
+            match iter.prev(&keys) {
+                Some(k) => {
+                    let k = keys.disassemble(k, u);
+                    let pos = k.k.p;
+                    (k.into(), pos)
+                }
+                None => (level_unpack(&keys, None, u), b.contents().data().min_key),
+            }
+        };
+
+        path.pos = pos;
+        self.set_paths_sorted(false);
+        k
+    }
+
+    pub(crate) fn path_traverse(&self, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags)
+        -> Result<(), BchError>
+    {
+        self.verify_not_unlocked_or_in_restart();
+
+        if paths[idx].nodes_locked == 0 {
+            self.path_traverse_one(paths, idx, flags)
+        } else {
+            Ok(())
+        }
     }
 
     fn path_set_level_up(&self, paths: &mut Paths<'_>, idx: PathIdx, l: usize) {
@@ -794,37 +836,3 @@ pub unsafe fn bch2_btree_path_level_init(trans: &BtreeTrans<'_>, #[lent(trans)] 
     trans.path_level_init(paths, trans.path_idx_of(path), level as usize, unsafe { LockedNode::new(b) })
 }
 
-#[c_export]
-pub fn bch2_btree_path_level_peek_all(_c: &Opaque<Fs>, path: &BtreePath, u: &mut c::bkey) -> c::bkey_s_c {
-    let level = path.level() as usize;
-    let b = path.locked_btree_node(level).expect("a path peeked is locked");
-    let keys = b.keys(b.contents());
-    level_unpack(&keys, path.l[level].iter.peek_all(), u)
-}
-
-#[c_export]
-pub fn bch2_btree_path_level_prev(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                  path: *mut BtreePath, u: &mut c::bkey) -> c::bkey_s_c {
-    let idx = trans.path_idx_of(path);
-    let path = &mut paths[idx];
-    let level = path.level() as usize;
-
-    ebug_assert!(path.ref_ == 1);
-
-    let (k, pos) = {
-        let (b, iter) = path.locked_level_mut(level).expect("a path stepped back is locked");
-        let keys = b.keys(b.contents());
-        match iter.prev(&keys) {
-            Some(k) => {
-                let k = keys.disassemble(k, u);
-                let pos = k.k.p;
-                (k.into(), pos)
-            }
-            None => (level_unpack(&keys, None, u), b.contents().data().min_key),
-        }
-    };
-
-    path.pos = pos;
-    trans.set_paths_sorted(false);
-    k
-}

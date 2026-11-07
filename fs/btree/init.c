@@ -281,6 +281,75 @@
 #include "btree/write.h"
 #include "btree/write_buffer.h"
 
+static void bch2_fs_btree_iter_exit(struct bch_fs *c)
+{
+	struct btree_transaction_stats *s;
+	struct btree_trans *trans;
+	int cpu;
+
+	if (c->btree.trans.bufs)
+		for_each_possible_cpu(cpu) {
+			struct btree_trans *trans =
+				per_cpu_ptr(c->btree.trans.bufs, cpu)->trans;
+
+			if (trans) {
+				seqmutex_lock(&c->btree.trans.lock);
+				list_del(&trans->list);
+				seqmutex_unlock(&c->btree.trans.lock);
+			}
+			kfree(trans);
+		}
+	free_percpu(c->btree.trans.bufs);
+
+	trans = list_first_entry_or_null(&c->btree.trans.list, struct btree_trans, list);
+	if (trans)
+		panic("%s leaked btree_trans\n", trans->fn);
+
+	for (s = c->btree.trans.stats;
+	     s < c->btree.trans.stats + ARRAY_SIZE(c->btree.trans.stats);
+	     s++) {
+#ifdef CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE
+		darray_exit(&s->trans_kmalloc_trace);
+#endif
+		kfree(s->max_paths_text);
+	}
+
+	printbuf_exit(&c->btree.trans.stats_json_buf);
+
+	/* Drain pending trans_rcu_free callbacks before the pool is gone. */
+	rcu_barrier();
+}
+
+static void bch2_fs_btree_iter_init_early(struct bch_fs *c)
+{
+	INIT_LIST_HEAD(&c->btree.trans.list);
+	seqmutex_init(&c->btree.trans.lock);
+	mutex_init(&c->btree.trans.stats_json_lock);
+	c->btree.trans.stats_json_buf = PRINTBUF;
+}
+
+static int bch2_fs_btree_iter_init(struct bch_fs *c)
+{
+	c->btree.trans.bufs = alloc_percpu(struct btree_trans_buf);
+	if (!c->btree.trans.bufs)
+		return -ENOMEM;
+
+	/*
+	 * static annotation (hackily done) for lock ordering of reclaim vs.
+	 * btree node locks:
+	 */
+#ifdef CONFIG_LOCKDEP
+	fs_reclaim_acquire(GFP_KERNEL);
+	struct btree_trans *trans = bch2_trans_get(c);
+	bch2_trans_set_locked(trans, false);
+	bch2_trans_put(trans);
+	fs_reclaim_release(GFP_KERNEL);
+#endif
+
+	return 0;
+
+}
+
 void bch2_fs_btree_exit(struct bch_fs *c)
 {
 	bch2_fs_btree_write_buffer_exit(c);

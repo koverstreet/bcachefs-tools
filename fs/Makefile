@@ -70,7 +70,6 @@ bcachefs-y		:=			\
 	btree/commit.o				\
 	btree/init.o				\
 	btree/interior.o			\
-	btree/iter.o				\
 	btree/key_cache.o			\
 	btree/read.o				\
 	btree/update.o				\

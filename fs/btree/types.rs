@@ -455,9 +455,13 @@ nest! {
 }
 
 impl BtreeIter<'_> {
-    /// Set only by C, when it initializes the iterator.
+    /// Set when it's initialized.
     pub fn btree(&self) -> Btree {
         self.bits.btree_id()
+    }
+
+    pub(in crate::btree) fn set_btree(&mut self, btree: Btree) {
+        self.bits.set_btree_id(btree);
     }
 }
 

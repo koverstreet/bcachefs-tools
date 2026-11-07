@@ -440,10 +440,6 @@ static inline void bch2_btree_path_downgrade(struct btree_trans *trans,
 		__bch2_btree_path_downgrade(trans, path, new_locks_want);
 }
 
-int __must_check __bch2_btree_iter_traverse(struct btree_iter *iter);
-
-struct bkey_s_c bch2_btree_iter_next(struct btree_iter *);
-
 static inline struct bkey_s_c bch2_btree_iter_peek(struct btree_iter *iter)
 {
 	return bch2_btree_iter_peek_max(iter, &SPOS_MAX);
@@ -460,11 +456,6 @@ static inline struct bkey_s_c bch2_btree_iter_peek_prev(struct btree_iter *iter)
 {
 	return bch2_btree_iter_peek_prev_min(iter, POS_MIN);
 }
-
-struct bkey_s_c bch2_btree_iter_prev(struct btree_iter *);
-
-struct bkey_s_c bch2_btree_iter_next_slot(struct btree_iter *);
-struct bkey_s_c bch2_btree_iter_prev_slot(struct btree_iter *);
 
 static inline void __bch2_btree_iter_set_pos(struct btree_iter *iter, struct bpos new_pos)
 {
@@ -515,80 +506,12 @@ static inline bool btree_id_cached(enum btree_id btree)
 		 BIT_ULL(BTREE_ID_subvolumes));
 }
 
-static inline enum btree_iter_update_trigger_flags
-bch2_btree_iter_flags(struct btree_trans *trans,
-		      unsigned btree_id, unsigned level,
-		      enum btree_iter_update_trigger_flags flags)
-{
-	if (level || !btree_id_cached(btree_id)) {
-		flags &= ~BTREE_ITER_cached;
-		flags &= ~BTREE_ITER_with_key_cache;
-	} else if (!(flags & BTREE_ITER_cached))
-		flags |= BTREE_ITER_with_key_cache;
-
-	if (!(flags & (BTREE_ITER_all_snapshots|BTREE_ITER_not_extents)) &&
-	    btree_id_is_extents(btree_id))
-		flags |= BTREE_ITER_is_extents;
-
-	if (!(flags & BTREE_ITER_snapshot_field) &&
-	    !btree_type_has_snapshot_field(btree_id))
-		flags &= ~BTREE_ITER_all_snapshots;
-
-	/*
-	 * Without snapshot semantics a snapshot field is just part of the key:
-	 * advancing past a key at (inode, offset, snapshot) must not skip the
-	 * others at (inode, offset).
-	 */
-	if (btree_type_has_snapshot_field(btree_id) &&
-	    !btree_type_has_snapshots(btree_id))
-		flags |= BTREE_ITER_all_snapshots;
-
-	if (!(flags & BTREE_ITER_all_snapshots) &&
-	    btree_type_has_snapshots(btree_id))
-		flags |= BTREE_ITER_filter_snapshots;
-
-	if (trans->journal_replay_not_finished)
-		flags |= BTREE_ITER_with_journal;
-
-	return flags;
-}
-
-static inline void bch2_trans_iter_init_common(struct btree_trans *trans,
-					  struct btree_iter *iter,
-					  enum btree_id btree, struct bpos pos,
-					  unsigned locks_want,
-					  unsigned depth,
-					  enum btree_iter_update_trigger_flags flags,
-					  unsigned long ip)
-{
-	iter->trans		= trans;
-	iter->update_path	= 0;
-	iter->key_cache_path	= 0;
-	iter->btree_id		= btree;
-	iter->min_depth		= 0;
-	iter->flags		= flags;
-	iter->snapshot		= pos.snapshot;
-	iter->pos		= pos;
-	iter->k			= POS_KEY(pos);
-	iter->journal_idx	= 0;
-#ifdef CONFIG_BCACHEFS_DEBUG
-	iter->ip_allocated = ip;
-#endif
-	iter->path = bch2_path_get(trans, btree, &iter->pos, locks_want, depth, flags, ip);
-}
-
 static inline void __bch2_trans_iter_init(struct btree_trans *trans,
 			  struct btree_iter *iter,
 			  enum btree_id btree, struct bpos pos,
 			  enum btree_iter_update_trigger_flags flags)
 {
-	if (__builtin_constant_p(btree) &&
-	    __builtin_constant_p(flags))
-		bch2_trans_iter_init_common(trans, iter, btree, pos, 0, 0,
-				bch2_btree_iter_flags(trans, btree, 0, flags),
-				_THIS_IP_);
-	else
-		bch2_trans_iter_init_outlined(trans, iter, btree, pos, flags, _THIS_IP_);
+	bch2_trans_iter_init_outlined(trans, iter, btree, pos, flags, _THIS_IP_);
 }
 
 static inline void bch2_trans_iter_init(struct btree_trans *trans,
@@ -644,23 +567,6 @@ DEFINE_CLASS(btree_iter_copy, struct btree_iter,
 	     bch2_trans_iter_copy_class_init(src),
 	     struct btree_iter *src)
 
-bool bch2_btree_iter_params_valid(enum btree_id, unsigned,
-				  struct bpos, struct bpos,
-				  enum btree_iter_update_trigger_flags);
-
-/*
- * Low-level iterator init: takes level and flags exactly as given - no
- * defaulting of not_extents/snapshot_field/all_snapshots (the node iterator
- * conventions). For callers that need per-level iteration with caller-chosen
- * snapshot semantics, e.g. the query_btree_keys ioctl; validate untrusted
- * parameters with bch2_btree_iter_params_valid() first:
- */
-void __bch2_trans_iter_init_ll(struct btree_trans *, struct btree_iter *,
-			       enum btree_id, struct bpos,
-			       unsigned, unsigned,
-			       enum btree_iter_update_trigger_flags,
-			       unsigned long);
-
 #define bch2_trans_iter_ll_class_init(_trans, _btree, _pos, _locks_want, _depth, _flags)\
 ({										\
 	struct btree_iter iter;							\
@@ -704,7 +610,6 @@ DEFINE_CLASS(btree_node_iter, struct btree_iter,
 	     unsigned locks_want, unsigned depth,
 	     enum btree_iter_update_trigger_flags flags);
 
-void bch2_set_btree_iter_dontneed(struct btree_iter *);
 
 #ifdef CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE
 void bch2_trans_kmalloc_trace_to_text(struct printbuf *,
@@ -1119,8 +1024,6 @@ DEFINE_CLASS(trans_may_drop_updates, struct trans_may_drop_updates,
 			    (_do) ?: bch2_trans_commit(_trans, (_disk_res),\
 					(_journal_seq), (_commit_flags)))
 
-struct bkey_s_c bch2_btree_iter_peek_and_restart_outlined(struct btree_iter *);
-
 #define for_btree_root_key_at_level(_trans, _iter, _btree_id, _level, _k, _do)		\
 	lockrestart_do(trans, ({							\
 		CLASS(btree_iter_uninit, iter)(trans);					\
@@ -1252,9 +1155,5 @@ static inline void class_btree_trans_destructor(struct btree_trans **p)
 	CLASS(btree_trans, trans)(_c);					\
 	lockrestart_do(trans, _do);					\
 })
-
-void bch2_fs_btree_iter_exit(struct bch_fs *);
-void bch2_fs_btree_iter_init_early(struct bch_fs *);
-int bch2_fs_btree_iter_init(struct bch_fs *);
 
 #endif /* _BCACHEFS_BTREE_ITER_H */
