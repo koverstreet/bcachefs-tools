@@ -8,6 +8,7 @@ pub mod dst_vec;
 pub mod eytzinger;
 pub mod fast_list;
 pub mod fifo;
+pub mod fixed_fifo;
 pub mod gap_buffer;
 pub mod genradix;
 pub mod heap;
