@@ -6,7 +6,7 @@ use core::cmp::Ordering;
 use core::mem::offset_of;
 
 use super::format::{fls64, u64_bitmask, BKEY_FORMAT_CURRENT, FIELDS, NR_FIELDS};
-use super::packed::Header;
+use super::packed::BkeyPHeader;
 use super::{spos, BkeyP, BKEY_U64S};
 use crate::btree::node::{BkeyUnpackField, NodeContents};
 use crate::c;
@@ -58,7 +58,7 @@ fn packed(k: &[u64]) -> &BkeyP {
 }
 
 fn set_pos_header(w: &mut u64, key_u64s: u8) {
-    let h = Header::of_mut(w);
+    let h = BkeyPHeader::of_mut(w);
     h.u64s  = key_u64s;
     h.format_bits.set_format(c::KEY_FORMAT_LOCAL_BTREE as u8);
     h.type_ = BkeyType::deleted.0 as u8;
@@ -171,7 +171,7 @@ impl bkey_format {
     }
 
     fn unpack_key_words(&self, k: &[u64]) -> c::bkey {
-        let h = Header::of(&k[0]);
+        let h = BkeyPHeader::of(&k[0]);
         let mut s = UnpackState::new(self, k);
 
         ebug_assert!(self.nr_fields as usize == NR_FIELDS);
@@ -229,7 +229,7 @@ impl bkey_format {
         bkey_fields!(pack_fields);
         s.finish();
 
-        let h = Header::of_mut(&mut out[0]);
+        let h = BkeyPHeader::of_mut(&mut out[0]);
         h.u64s  = (self.key_u64s as u32 + k.u64s as u32 - BKEY_U64S as u32) as u8;
         h.format_bits.set_format(c::KEY_FORMAT_LOCAL_BTREE as u8);
         h.format_bits.set_needs_whiteout(k.format_bits.needs_whiteout());
@@ -244,7 +244,7 @@ impl bkey_format {
     #[cold]
     #[inline(never)]
     fn pack_verify(&self, packed: &[u64], unpacked: &c::bkey) {
-        let h = Header::of(&packed[0]);
+        let h = BkeyPHeader::of(&packed[0]);
 
         assert!(h.u64s >= self.key_u64s, "packed to {} u64s, under its format's {}", h.u64s, self.key_u64s);
         assert!(usize::from(h.u64s - self.key_u64s) == unpacked.val_u64s(),
@@ -511,7 +511,7 @@ fn transform_key(out_f: &bkey_format, out: &mut [u64], in_f: &bkey_format, k: &B
 
     out_s.finish();
 
-    let o = Header::of_mut(&mut out[0]);
+    let o = BkeyPHeader::of_mut(&mut out[0]);
     o.u64s  = (out_f.key_u64s as usize + k.u64s() - in_f.key_u64s as usize) as u8;
     o.format_bits.set_needs_whiteout(k.needs_whiteout() as u8);
     o.type_ = k.key_type().0 as u8;

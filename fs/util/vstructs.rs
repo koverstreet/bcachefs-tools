@@ -557,6 +557,13 @@ impl<T, S: State> VstructMut<'_, T, S> {
     }
 }
 
+impl<'a, T, S: State> VstructMut<'a, T, S> {
+    /// Its bytes, header and tail.
+    pub fn into_bytes(self) -> &'a mut [u8] {
+        self.bytes
+    }
+}
+
 impl<'a, T, S: State> InState for VstructMut<'a, T, S> {
     type In<U: State> = VstructMut<'a, T, U>;
     type State = S;
