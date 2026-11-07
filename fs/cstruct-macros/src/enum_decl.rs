@@ -9,10 +9,12 @@
 //!                          type's flags
 //!     NAME: set(ENUM)      a set of ENUM's values, a u64 a bit each - a
 //!                          btree's key types
-//!     NAME: enum(K: REPR, prefix = P[, c_name = C])
+//!     NAME: enum([closed,] K: REPR, prefix = P[, nr = NR][, c_name = C])
 //!                          an enum K of the same variants, valued by the
 //!                          column: its fn is K's variant - a recovery pass's
 //!                          stable id
+//!     NAME: value(T)       a T, any const expression - an inode option's
+//!                          width
 //!   #[c_list(LIST)]      C's x-macro of the variants, for C that still
 //!                        expands one: x(name, value, each column's, "doc")
 //!   #[mask(NAME: REPR, prefix = P[, c_name = C])]
@@ -20,11 +22,13 @@
 //!                        a variant's #[mask_prefix(P)] is its prefix from
 //!                        that variant on
 //!   NAME_arms!(cb [pre]) cb! { [pre] (name, value, [Type], [column]..), .. }:
-//!                        the variants as a list, for xmacro_select
+//!                        the variants as a list's rows, for what expands
+//!                        them - a table, xmacro_select
 //!
-//! An open enum's enum columns are Options, for the values no variant has,
-//! and its sets empty. A value is an integer literal or any const expression -
-//! BCH_VERSION(1, 40) - and one not written the last's plus one.
+//! An open enum's enum and value columns are Options, for the values no
+//! variant has, and its sets empty. A value is an integer literal or any
+//! const expression - BCH_VERSION(1, 40) - and one not written the last's
+//! plus one.
 //! tagged_union!'s tag enum is one, its arms the union's.
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
@@ -48,12 +52,13 @@ pub(crate) struct Arm {
 }
 
 /// An #[arm_columns] column: a set of a #[flags] c_enum!'s flags, or of
-/// another enum's values, a bit each; or another enum's variant, of the arm's
-/// name.
+/// another enum's values, a bit each; another enum's variant, of the arm's
+/// name; or a value of a type.
 pub(crate) enum Column {
     Flags(String),
     Set(String),
     Enum(CEnumDef),
+    Value(String),
 }
 
 pub(crate) type Columns = Vec<(String, Column)>;
@@ -62,7 +67,7 @@ fn is_punct(t: Option<&TokenTree>, c: char) -> bool {
     matches!(t, Some(TokenTree::Punct(p)) if p.as_char() == c)
 }
 
-/// #[arm_columns(NAME: FLAGS | NAME: set(ENUM) | NAME: enum(..), ..)]
+/// #[arm_columns(NAME: FLAGS | NAME: set(ENUM) | NAME: enum(..) | NAME: value(T), ..)]
 pub(crate) fn columns(args: TokenStream) -> Result<Columns, String> {
     comma_list(args).into_iter().map(|c| Ok(match c.as_slice() {
         [TokenTree::Ident(n), colon, TokenTree::Ident(kind), TokenTree::Group(g)]
@@ -71,9 +76,12 @@ pub(crate) fn columns(args: TokenStream) -> Result<Columns, String> {
         [TokenTree::Ident(n), colon, TokenTree::Ident(kind), TokenTree::Group(g)]
             if is_punct(Some(colon), ':') && g.delimiter() == Delimiter::Parenthesis && kind == "enum" =>
             (n.to_string(), Column::Enum(tag_enum(g.stream())?)),
+        [TokenTree::Ident(n), colon, TokenTree::Ident(kind), TokenTree::Group(g)]
+            if is_punct(Some(colon), ':') && g.delimiter() == Delimiter::Parenthesis && kind == "value" =>
+            (n.to_string(), Column::Value(rust_text(&g.stream()))),
         [TokenTree::Ident(n), colon, ty @ ..] if is_punct(Some(colon), ':') && !ty.is_empty() =>
             (n.to_string(), Column::Flags(rust_text(&ty.iter().cloned().collect::<TokenStream>()))),
-        _ => return Err("#[arm_columns(NAME: FLAGS | NAME: set(ENUM) | NAME: enum(..), ..)]".to_string()),
+        _ => return Err("#[arm_columns(NAME: FLAGS | NAME: set(ENUM) | NAME: enum(..) | NAME: value(T), ..)]".to_string()),
     })).collect()
 }
 
@@ -101,7 +109,7 @@ pub(crate) fn arms(body: TokenStream, columns: &Columns, typed: bool) -> Result<
                 .ok_or_else(|| format!("{name}: #[{}]: not one of its #[arm_columns]", rust_text(a.path())))?;
             let err = |e: syn::Error| format!("{name}: #[{}(..)]: {e}", columns[i].0);
             cols[i] = match columns[i].1 {
-                Column::Enum(_) => vec![rust_text(&a.parse_args::<TokenStream>().map_err(err)?)],
+                Column::Enum(_) | Column::Value(_) => vec![rust_text(&a.parse_args::<TokenStream>().map_err(err)?)],
                 _ => a.parse_args_with(Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated).map_err(err)?
                     .iter().map(|f| f.to_string()).collect(),
             };
@@ -121,7 +129,7 @@ pub(crate) fn arms(body: TokenStream, columns: &Columns, typed: bool) -> Result<
         };
         base.1 += 1;
         if let Some(((c, _), _)) = columns.iter().zip(&cols)
-            .find(|((_, c), v)| matches!(c, Column::Enum(_)) && v.is_empty()) {
+            .find(|((_, c), v)| matches!(c, Column::Enum(_) | Column::Value(_)) && v.is_empty()) {
             return Err(format!("{name}: no #[{c}(..)]"));
         }
         arms.push(Arm { docs: v.docs, name, label: v.label, ty: ty.map(|t| rust_text(&t)), value, cols, mask_prefix });
@@ -299,7 +307,7 @@ fn c_list_of(list: &str, arms: &[Arm], columns: &Columns) -> TokenStream {
         .map(|a| {
             let cells: String = columns.iter().zip(&a.cols)
                 .map(|((_, col), c)| {
-                    nums.push(tokens(&col.bits(c)));
+                    nums.push(tokens(&col.bits(&a.name, c)));
                     format!("__bch_num_{}, ", nums.len() - 1)
                 })
                 .collect();
@@ -311,41 +319,50 @@ fn c_list_of(list: &str, arms: &[Arm], columns: &Columns) -> TokenStream {
 }
 
 impl Column {
-    /// The const fn's type: an enum column's an Option, if @other - a tag no
-    /// arm has.
+    /// The const fn's type: an enum or value column's an Option, if @other -
+    /// a tag no arm has.
     fn ty(&self, other: bool) -> String {
-        match self {
-            Column::Flags(ty) => ty.clone(),
+        let ty = match self {
+            Column::Flags(ty) | Column::Value(ty) => ty.clone(),
             Column::Set(_)    => "u64".into(),
-            Column::Enum(e) if other => format!("Option<{}>", e.name.as_deref().unwrap_or_default()),
             Column::Enum(e)   => e.name.clone().unwrap_or_default(),
+        };
+        match self {
+            Column::Enum(_) | Column::Value(_) if other => format!("Option<{ty}>"),
+            _ => ty,
         }
     }
 
-    /// Arm @arm's: its set of @cell's names, or its variant of the column's
-    /// enum - Some, if @other makes it an Option.
+    /// Arm @arm's: its set of @cell's names, its variant of the column's
+    /// enum, or its value - Some, if @other makes it an Option.
     fn value(&self, arm: &str, cell: &[String], other: bool) -> String {
-        match self {
+        let v = match self {
             Column::Flags(ty) => cell.iter().fold(format!("{ty}::empty()"), |v, f| format!("{v}.union({ty}::{f})")),
             Column::Set(ty)   => cell.iter().fold("0u64".into(), |v, f| format!("{v} | 1u64 << {ty}::{f}.into_bits()")),
-            Column::Enum(e) if other => format!("Some({}::{arm})", e.name.as_deref().unwrap_or_default()),
             Column::Enum(e)   => format!("{}::{arm}", e.name.as_deref().unwrap_or_default()),
+            Column::Value(ty) => format!("(({}) as {ty})", cell[0]),
+        };
+        match self {
+            Column::Enum(_) | Column::Value(_) if other => format!("Some({v})"),
+            _ => v,
         }
     }
 
-    /// A tag no arm has: an empty set, no variant.
+    /// A tag no arm has: an empty set, no variant or value.
     fn none(&self) -> String {
         match self {
-            Column::Enum(_) => "None".into(),
+            Column::Enum(_) | Column::Value(_) => "None".into(),
             _ => self.value("", &[], false),
         }
     }
 
-    /// The u64 the C list has.
-    fn bits(&self, cell: &[String]) -> String {
+    /// Arm @arm's, as the u64 the C list has.
+    fn bits(&self, arm: &str, cell: &[String]) -> String {
+        let v = self.value(arm, cell, false);
         match self {
-            Column::Flags(_) => format!("({}).bits() as u64", self.value("", cell, false)),
-            _                => format!("({}) as u64", self.value("", cell, false)),
+            Column::Flags(_) => format!("({v}).bits() as u64"),
+            Column::Enum(_)  => format!("({v}).into_bits() as u64"),
+            _                => format!("({v}) as u64"),
         }
     }
 }
