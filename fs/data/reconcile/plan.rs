@@ -96,7 +96,7 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
     let only = |opt| r.need_rb() == rb_bit(opt);
 
     let mut d = c::data_update_opts {
-        type_: c::bch_data_update_types::BCH_DATA_UPDATE_reconcile,
+        type_: c::bch_data_update_types::reconcile,
         target: r.background_target(),
         // Never wait on the allocator mid-write: a blocked data update holds
         // a read-time snapshot of the extent while other movers rewrite it,

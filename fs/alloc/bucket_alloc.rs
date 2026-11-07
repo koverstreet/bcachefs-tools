@@ -499,7 +499,7 @@ impl TransAttempt<'_, '_> {
                     fs.copygc_wakeup();
                 }
 
-                fs.times[c::bch_time_stats::BCH_TIME_blocked_allocate as usize].track_event_change(true);
+                fs.times[c::bch_time_stats::blocked_allocate as usize].track_event_change(true);
 
                 let may_block = !req.cl.is_null() &&
                     !req.flags.contains(c::bch_write_flags::alloc_nowait) &&

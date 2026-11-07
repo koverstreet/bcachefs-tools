@@ -24,24 +24,19 @@ use crate::c;
 use crate::fs::Fs;
 use crate::util::Printbuf;
 use core::ffi::c_uint;
-use cstruct_macros::{c_enum, c_xmacro, placed, CStruct, Init};
+use cstruct_macros::{c_enum, placed, CStruct, Init};
 use pin_init::pin_data;
-
-c_xmacro! {
-    BCH_ASYNC_OBJ_LISTS(x) {
-        (data_update),
-        (rbio),
-        (write_op),
-        (btree_read_bio),
-        (btree_write_bio),
-    }
-}
 
 c_enum! {
     #[closed]
+    #[prefix(BCH_ASYNC_OBJ_LIST_)]
+    #[nr(BCH_ASYNC_OBJ_NR)]
     pub enum bch_async_obj_lists: u32 {
-        BCH_ASYNC_OBJ_LISTS(n) => concat(BCH_ASYNC_OBJ_LIST_, n),
-        BCH_ASYNC_OBJ_NR,
+        data_update,
+        rbio,
+        write_op,
+        btree_read_bio,
+        btree_write_bio,
     }
 }
 
@@ -195,7 +190,7 @@ unsafe fn btree_write_bio_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c
 }
 
 macro_rules! list_table {
-    ($(($name:ident)),* $(,)?) => { crate::paste! {
+    ($(($name:ident, $nr:expr)),* $(,)?) => { crate::paste! {
         /// Each list's name, and how its objects are shown: indexed as
         /// async_objs[].
         const LISTS: [(&CStr, ObjToText); c::BCH_ASYNC_OBJ_NR as usize] = [$((
@@ -207,7 +202,7 @@ macro_rules! list_table {
         )),*];
     }};
 }
-c::BCH_ASYNC_OBJ_LISTS!(list_table);
+bch_async_obj_lists_arms!(list_table);
 
 impl c::async_obj_list {
     /// The filesystem it's one of the async_objs[] of.

@@ -158,19 +158,6 @@ pub mod snapshots {
     #[path = "snapshot.rs"] pub mod snapshot;
     #[path = "subvolume.rs"] pub mod subvolume;
 }
-/// Name<->value tables for the snapshot/subvolume state codewords, from the
-/// BCH_*_STATES() x-macros:
-pub mod snapshot_states {
-    macro_rules! value_table {
-        ($table:ident, $(($name:tt, $value:expr $(, $($rest:tt)*)?)),* $(,)?) => {
-            pub const $table: &[(&str, u64)] = &[$((stringify!($name), $value),)*];
-        };
-    }
-    macro_rules! snapshot_states { ($($e:tt)*) => { value_table!(SNAPSHOT_STATE_VALUES, $($e)*); }; }
-    macro_rules! subvolume_states { ($($e:tt)*) => { value_table!(SUBVOLUME_STATE_VALUES, $($e)*); }; }
-    crate::c::BCH_SNAPSHOT_STATES!(snapshot_states);
-    crate::c::BCH_SUBVOLUME_STATES!(subvolume_states);
-}
 #[path = "fs/str_hash.rs"]     pub mod str_hash;
 /// The records types defined in Rust that C shares are written from.
 #[path = "types/lib.rs"]       pub mod types;

@@ -22,37 +22,33 @@ use crate::fs::Fs;
 use crate::util::Printbuf;
 use crate::types::{DArray, c_default};
 use core::ffi::c_int;
-use cstruct_macros::{CStruct, c_const, c_enum, c_export, c_extern, c_xmacro, TypeInfo};
+use cstruct_macros::{CStruct, c_const, c_enum, c_export, c_extern, TypeInfo};
 use nestify::nest;
 use crate::format::{BkeyType, Bpos, Btree};
 
-c_xmacro! {
-    /*
-     * Subset of BCH_BTREE_IDS() that are marked BTREE_IS_write_buffer, enumerated
-     * densely so we can size per-btree write buffer state as a compact array. Must
-     * be kept in sync with BCH_BTREE_IDS() — adding BTREE_IS_write_buffer to a new
-     * btree requires a matching entry here.
-     */
-    BCH_WRITE_BUFFER_BTREES(x) {
-        (accounting),
-        (lru),
-        (need_discard),
-        (backpointers),
-        (deleted_inodes),
-        (reconcile_work),
-        (reconcile_hipri),
-        (reconcile_pending),
-        (reconcile_work_phys),
-        (reconcile_hipri_phys),
-        (stripe_backpointers),
-    }
-}
-
+/*
+ * Subset of BCH_BTREE_IDS() that are marked BTREE_IS_write_buffer, enumerated
+ * densely so we can size per-btree write buffer state as a compact array. Must
+ * be kept in sync with BCH_BTREE_IDS() — adding BTREE_IS_write_buffer to a new
+ * btree requires a matching entry here.
+ */
 c_enum! {
     #[closed]
+    #[prefix(BCH_WB_BTREE_)]
+    #[nr(BCH_WB_BTREE_NR)]
+    #[c_list(BCH_WRITE_BUFFER_BTREES)]
     pub enum bch_wb_btree: u32 {
-        BCH_WRITE_BUFFER_BTREES(name) => concat(BCH_WB_BTREE_, name),
-        BCH_WB_BTREE_NR,
+        accounting,
+        lru,
+        need_discard,
+        backpointers,
+        deleted_inodes,
+        reconcile_work,
+        reconcile_hipri,
+        reconcile_pending,
+        reconcile_work_phys,
+        reconcile_hipri_phys,
+        stripe_backpointers,
     }
 }
 
@@ -229,13 +225,13 @@ c_extern! {
 /// @btree's slot among the write buffered btrees.
 pub fn wb_btree_idx(btree: Btree) -> c::bch_wb_btree {
     macro_rules! idx {
-        ($(($name:ident)),* $(,)?) => { ::paste::paste! {
+        ($(($name:ident, $nr:expr)),* $(,)?) => {
             $(if btree == Btree::$name {
-                return c::bch_wb_btree::[<BCH_WB_BTREE_ $name>];
+                return c::bch_wb_btree::$name;
             })*
-        } };
+        };
     }
-    c::BCH_WRITE_BUFFER_BTREES!(idx);
+    bch_wb_btree_arms!(idx);
     panic!("btree {btree} has no write buffer")
 }
 

@@ -161,7 +161,7 @@ macro_rules! extent_entries {
         }
     } };
 }
-c::BCH_EXTENT_ENTRY_TYPES!(extent_entries);
+c::bch_extent_entry_type_arms!(extent_entries);
 
 /// The lowest set bit of @b's first word; u32::MAX if it has none.
 fn entry_type(b: &[u8]) -> Option<u32> {

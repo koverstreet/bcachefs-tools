@@ -276,8 +276,8 @@ static TRANS_STATS_JSON: BinFile = BinFile({
 
 // ── time_stats/, time_stats_json/ ───────────────────────────────────────────
 //
-// A file per BCH_TIME_STATS() entry, the same attributes in both; writing
-// one resets the stat.
+// A file per time stat, the same attributes in both; writing one resets the
+// stat.
 
 /// An x-macro entry's name, as a file's.
 macro_rules! file_name {
@@ -294,7 +294,7 @@ macro_rules! time_stat_names {
         const TIME_STAT_NAMES: [&CStr; c::BCH_TIME_STAT_NR as usize] = [$(file_name!($name),)*];
     };
 }
-c::BCH_TIME_STATS!(time_stat_names);
+c::bch_time_stats_arms!(time_stat_names);
 
 // Each its own table: a group's files are its kobject's, so which directory
 // a file's in is which table its attribute is from

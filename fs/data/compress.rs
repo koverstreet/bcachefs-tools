@@ -105,7 +105,7 @@ impl bch_compression_opt {
                 }
             };
         }
-        c::BCH_COMPRESSION_OPTS!(map)
+        c::bch_compression_opts_arms!(map)
     }
 
     /// A type there is, and a level only with one.
@@ -155,16 +155,16 @@ crate::module_param! {
     perm = 0o644, desc = "Decompress data immediately after compressing, and verify the result";
 }
 
-const OPT_NR: usize = opts::BCH_COMPRESSION_OPT_NR.0 as usize;
+const OPT_NR: usize = opts::NR as usize;
 
 
 /// The opt whose pools decompress type @t.
 fn type_to_opt(t: CompressionType) -> usize {
     match t {
-        CompressionType::none | CompressionType::incompressible => opts::BCH_COMPRESSION_OPT_none,
-        CompressionType::lz4_old | CompressionType::lz4 => opts::BCH_COMPRESSION_OPT_lz4,
-        CompressionType::gzip => opts::BCH_COMPRESSION_OPT_gzip,
-        CompressionType::zstd => opts::BCH_COMPRESSION_OPT_zstd,
+        CompressionType::none | CompressionType::incompressible => opts::none,
+        CompressionType::lz4_old | CompressionType::lz4 => opts::lz4,
+        CompressionType::gzip => opts::gzip,
+        CompressionType::zstd => opts::zstd,
         _ => panic!("compression type {}", t.0),
     }.0 as usize
 }
@@ -181,7 +181,7 @@ fn opt_feature(t: usize) -> u64 {
             }
         };
     }
-    c::BCH_COMPRESSION_OPTS!(map)
+    c::bch_compression_opts_arms!(map)
 }
 
 fn zstd_errcode(code: u32) -> e {
@@ -546,11 +546,11 @@ fn compress_workspace_size(fs: &Fs, t: usize, level: u32) -> usize {
     // SAFETY: pure functions
     unsafe {
         match opts(t as u32) {
-            opts::BCH_COMPRESSION_OPT_lz4 if level < c::LZ4HC_MIN_CLEVEL => c::LZ4_MEM_COMPRESS as usize,
-            opts::BCH_COMPRESSION_OPT_lz4 => c::LZ4HC_MEM_COMPRESS as usize,
-            opts::BCH_COMPRESSION_OPT_gzip =>
+            opts::lz4 if level < c::LZ4HC_MIN_CLEVEL => c::LZ4_MEM_COMPRESS as usize,
+            opts::lz4 => c::LZ4HC_MEM_COMPRESS as usize,
+            opts::gzip =>
                 c::zlib_deflate_workspacesize(c::MAX_WBITS as c_int, c::DEF_MEM_LEVEL as c_int) as usize,
-            opts::BCH_COMPRESSION_OPT_zstd => c::zstd_cctx_workspace_bound(&zstd_params(fs, level).cParams),
+            opts::zstd => c::zstd_cctx_workspace_bound(&zstd_params(fs, level).cParams),
             _ => panic!("compression opt type {t}"),
         }
     }
@@ -576,12 +576,12 @@ fn attempt_compress(fs: &Fs, ws: &mut [MaybeUninit<u8>], dst: VolatileSlice<'_>,
     // SAFETY: each its length, apart
     unsafe {
         match opts(t as u32) {
-            opts::BCH_COMPRESSION_OPT_lz4 if level < c::LZ4HC_MIN_CLEVEL => {
+            opts::lz4 if level < c::LZ4HC_MIN_CLEVEL => {
                 let mut len = int(src_len);
                 let ret = c::LZ4_compress_destSize(src.cast(), dst.cast(), &mut len, int(dst_len), ws);
                 if (len as usize) < src_len { -(len as isize) } else { ret as isize }
             }
-            opts::BCH_COMPRESSION_OPT_lz4 => {
+            opts::lz4 => {
                 if dst_len <= LZ4HC_OUTPUT_SLOP {
                     return -1;
                 }
@@ -591,7 +591,7 @@ fn attempt_compress(fs: &Fs, ws: &mut [MaybeUninit<u8>], dst: VolatileSlice<'_>,
                     n => n as isize,
                 }
             }
-            opts::BCH_COMPRESSION_OPT_gzip => {
+            opts::gzip => {
                 let level = match level {
                     0 => c::Z_DEFAULT_COMPRESSION as c_int,
                     l => (l as c_int).clamp(c::Z_BEST_SPEED as c_int, c::Z_BEST_COMPRESSION as c_int),
@@ -607,7 +607,7 @@ fn attempt_compress(fs: &Fs, ws: &mut [MaybeUninit<u8>], dst: VolatileSlice<'_>,
                 }
                 strm.total_out as isize
             }
-            opts::BCH_COMPRESSION_OPT_zstd => {
+            opts::zstd => {
                 /*
                  * ZSTD requires that when we decompress we pass in the exact
                  * compressed size - rounding it up to the nearest sector
@@ -828,9 +828,9 @@ fn init_features(fs: &Fs, sb: &SbLockGuard<'_>, features: u64) -> Result<(), Bch
     };
     let lz4 = (c::LZ4_MEM_COMPRESS as usize).max(c::LZ4HC_MEM_COMPRESS as usize);
     let types = [
-        (opts::BCH_COMPRESSION_OPT_lz4, lz4, 0),
-        (opts::BCH_COMPRESSION_OPT_gzip, deflate, inflate),
-        (opts::BCH_COMPRESSION_OPT_zstd, zstd, zstd_d),
+        (opts::lz4, lz4, 0),
+        (opts::gzip, deflate, inflate),
+        (opts::zstd, zstd, zstd_d),
     ].map(|(t, w, d)| (t.0 as usize, w, d));
     let has = |t| features & opt_feature(t) != 0;
 

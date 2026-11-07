@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_name, c_bitmask, c_const, c_enum, c_xmacro, grown, CStruct, Plain, TypeInfo, View, SizedVal};
+use cstruct_macros::{c_name, c_bitmask, c_const, c_enum, grown, CStruct, Plain, TypeInfo, View, SizedVal};
 
 c_const! {
     #[c_int]
@@ -36,7 +36,9 @@ pub struct Subvolume {
     pub pad: Le32,
 }
 
-c_xmacro! {
+c_enum! {
+    #[open]
+    #[prefix(SUBVOLUME_STATE_)]
     /*
      * Subvolume lifecycle state: same codeword scheme as Snapshot.state
      * (below), additionally >= 14 bit flips from every snapshot state so a value
@@ -45,17 +47,10 @@ c_xmacro! {
      * unlinked: unlinked from filesystem tree but still has open files
      * deleted:  no longer referenced, delete_dead_snapshots may delete
      */
-    BCH_SUBVOLUME_STATES(x) {
-        (live, 0x4ad5447e),
-        (unlinked, 0x2d358e8f),
-        (deleted, 0x3c6b2d4c),
-    }
-}
-
-c_enum! {
-    #[open]
     pub enum bch_subvolume_state: u32 {
-        BCH_SUBVOLUME_STATES(n, v) => concat(SUBVOLUME_STATE_, n) = v,
+        live = 0x4ad5447e,
+        unlinked = 0x2d358e8f,
+        deleted = 0x3c6b2d4c,
     }
 }
 
@@ -92,7 +87,9 @@ pub struct Snapshot {
     pub pad: Le32,
 }
 
-c_xmacro! {
+c_enum! {
+    #[open]
+    #[prefix(SNAPSHOT_STATE_)]
     /*
      * WILL_DELETE: leaf node that's no longer referenced by a subvolume, still has
      * keys, will be deleted by delete_dead_snapshots
@@ -127,30 +124,23 @@ c_xmacro! {
      * not misread), and any two states are >= 14 bit flips apart (enforced
      * below), so sparse bit corruption can't turn one legal state into another.
      */
-    BCH_SNAPSHOT_STATES(x) {
-        (live, 0x757c47a2),
-        (will_delete, 0x3316a8d2),
-        (no_keys, 0x372b5a01),
-        (deleted, 0x7cd4a225),
-    }
-}
-
-c_enum! {
-    #[open]
     pub enum bch_snapshot_state: u32 {
-        BCH_SNAPSHOT_STATES(n, v) => concat(SNAPSHOT_STATE_, n) = v,
+        live = 0x757c47a2,
+        will_delete = 0x3316a8d2,
+        no_keys = 0x372b5a01,
+        deleted = 0x7cd4a225,
     }
 }
 
-// The state codewords' distances, as the comment on BCH_SNAPSHOT_STATES
+// The state codewords' distances, as the comment on bch_snapshot_state
 // says: every snapshot and subvolume state at least 14 bit flips from every
 // other, of either kind, and 14 to 18 from a zeroed field and from an
-// all-ones one. Every pair, from the lists - a state added is checked.
+// all-ones one. Every pair, from the enums - a state added is checked.
 macro_rules! codewords {
     ([] $(($n:tt, $v:expr)),* $(,)?) => { &[$($v),*] };
 }
 const _: () = {
-    let lists: [&[u32]; 2] = [BCH_SNAPSHOT_STATES!(codewords []), BCH_SUBVOLUME_STATES!(codewords [])];
+    let lists: [&[u32]; 2] = [bch_snapshot_state_arms!(codewords []), bch_subvolume_state_arms!(codewords [])];
     let mut a = 0;
     while a < lists.len() {
         let mut i = 0;

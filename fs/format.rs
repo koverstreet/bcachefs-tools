@@ -74,7 +74,7 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, floored_by_self, vstruct, vstruct_container, Head, FlexArray, Unvalidated};
-use cstruct_macros::{c_name, bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, grown, open_enum,
+use cstruct_macros::{c_name, bitfield, c_bitmask, c_const, c_enum, c_verbatim, grown, open_enum,
                      tagged_union, unsized_vstruct, whole, CStruct, Plain, TypeInfo, SizedVal};
 #[cfg(__KERNEL__)]
 use cstruct_macros::c_typedef;
@@ -1717,20 +1717,16 @@ c_enum! {
 /// C's name, as bindgen's declarations of C functions spell it.
 pub type bch_compression_type = CompressionType;
 
-c_xmacro! {
-    BCH_COMPRESSION_OPTS(x) {
-        (none, 0),
-        (lz4, 1),
-        (gzip, 2),
-        (zstd, 3),
-    }
-}
-
 c_enum! {
     #[open]
+    #[prefix(BCH_COMPRESSION_OPT_)]
+    #[nr(BCH_COMPRESSION_OPT_NR)]
+    #[c_list(BCH_COMPRESSION_OPTS)]
     pub enum bch_compression_opts: u32 {
-        BCH_COMPRESSION_OPTS(t, n) => concat(BCH_COMPRESSION_OPT_, t) = n,
-        BCH_COMPRESSION_OPT_NR,
+        none = 0,
+        lz4 = 1,
+        gzip = 2,
+        zstd = 3,
     }
 }
 

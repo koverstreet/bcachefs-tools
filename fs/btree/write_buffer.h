@@ -9,7 +9,7 @@
 static inline enum btree_id bch_wb_btree_to_btree_id(enum bch_wb_btree idx)
 {
 	static const u8 tbl[BCH_WB_BTREE_NR] = {
-#define x(name) [BCH_WB_BTREE_##name] = BTREE_ID_##name,
+#define x(name, ...) [BCH_WB_BTREE_##name] = BTREE_ID_##name,
 		BCH_WRITE_BUFFER_BTREES()
 #undef x
 	};

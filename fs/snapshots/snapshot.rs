@@ -539,8 +539,8 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
     };
 
     let state = v.state_compat();
-    let id_state = if state != c::bch_snapshot_state::SNAPSHOT_STATE_no_keys &&
-                      state != c::bch_snapshot_state::SNAPSHOT_STATE_deleted {
+    let id_state = if state != c::bch_snapshot_state::no_keys &&
+                      state != c::bch_snapshot_state::deleted {
         c::snapshot_id_state::SNAPSHOT_ID_live
     } else {
         c::snapshot_id_state::SNAPSHOT_ID_deleted
@@ -587,7 +587,7 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
     }
     e.is_ancestor.store(&is_ancestor);
 
-    if state == c::bch_snapshot_state::SNAPSHOT_STATE_will_delete {
+    if state == c::bch_snapshot_state::will_delete {
         // Schedule the deleter. This may run as a BTREE_TRIGGER_atomic
         // trigger - btree write locks held, committed to the commit - so the
         // schedule must be ephemeral (no sb_lock) and best-effort: an error
@@ -976,7 +976,7 @@ pub fn val(k: BkeySC<'_>) -> Option<c::Snapshot> {
 /// tie. Codewords are >= 14 bits apart, so within 6 bits the nearest is the
 /// original.
 pub fn state_nearest(v: u32) -> (c::bch_snapshot_state, u32) {
-    let mut best = (c::bch_snapshot_state::SNAPSHOT_STATE_live, 33);
+    let mut best = (c::bch_snapshot_state::live, 33);
     for s in SNAPSHOT_STATES {
         let dist = (v ^ s.0).count_ones();
         if dist < best.1 {
@@ -987,10 +987,10 @@ pub fn state_nearest(v: u32) -> (c::bch_snapshot_state, u32) {
 }
 
 const SNAPSHOT_STATES: [c::bch_snapshot_state; 4] = [
-    c::bch_snapshot_state::SNAPSHOT_STATE_live,
-    c::bch_snapshot_state::SNAPSHOT_STATE_will_delete,
-    c::bch_snapshot_state::SNAPSHOT_STATE_no_keys,
-    c::bch_snapshot_state::SNAPSHOT_STATE_deleted,
+    c::bch_snapshot_state::live,
+    c::bch_snapshot_state::will_delete,
+    c::bch_snapshot_state::no_keys,
+    c::bch_snapshot_state::deleted,
 ];
 
 /// Any snapshot node, in place or whole - the struct reaches these too.
@@ -1018,13 +1018,13 @@ impl c::Snapshot<Validated> {
     /// The state the legacy flags imply.
     pub fn state_from_flags(&self) -> c::bch_snapshot_state {
         if self.deleted_obsolete() {
-            c::bch_snapshot_state::SNAPSHOT_STATE_deleted
+            c::bch_snapshot_state::deleted
         } else if self.no_keys_obsolete() {
-            c::bch_snapshot_state::SNAPSHOT_STATE_no_keys
+            c::bch_snapshot_state::no_keys
         } else if self.will_delete_obsolete() {
-            c::bch_snapshot_state::SNAPSHOT_STATE_will_delete
+            c::bch_snapshot_state::will_delete
         } else {
-            c::bch_snapshot_state::SNAPSHOT_STATE_live
+            c::bch_snapshot_state::live
         }
     }
 
@@ -1047,10 +1047,10 @@ impl c::Snapshot<Whole> {
         use c::bch_snapshot_state as S;
 
         let flags = match state {
-            S::SNAPSHOT_STATE_live        => Some((false, self.subvol.get() != 0, false, false)),
-            S::SNAPSHOT_STATE_will_delete => Some((true,  false, false, false)),
-            S::SNAPSHOT_STATE_no_keys     => Some((false, false, false, true)),
-            S::SNAPSHOT_STATE_deleted     => Some((false, false, true,  false)),
+            S::live        => Some((false, self.subvol.get() != 0, false, false)),
+            S::will_delete => Some((true,  false, false, false)),
+            S::no_keys     => Some((false, false, false, true)),
+            S::deleted     => Some((false, false, true,  false)),
             _                             => None,
         };
         if let Some((will_delete, subvol, deleted, no_keys)) = flags {
@@ -1184,7 +1184,7 @@ impl BkeyOps for c::Snapshot {
         // machinery's remedy is dropping the key; on-disk violations are fsck's
         // to handle, gently). Zero state is legal - pre-upgrade keys are
         // rewritten with only their other fields touched:
-        if v.from.from() == c::bkey_validate_from::BKEY_VALIDATE_commit &&
+        if v.from.from() == c::bkey_validate_from::commit &&
            v.fs.opts().no_commit_validate.get() == 0 {
             let state = if has_field!(k, state) { s.state.get() } else { 0 };
 
@@ -1202,8 +1202,8 @@ impl BkeyOps for c::Snapshot {
             bkey_fsck_err_on!(v, s.subvol.get() != 0 &&
                               (children[0] != 0 ||
                                (state != 0 &&
-                                st != c::bch_snapshot_state::SNAPSHOT_STATE_live &&
-                                st != c::bch_snapshot_state::SNAPSHOT_STATE_will_delete)),
+                                st != c::bch_snapshot_state::live &&
+                                st != c::bch_snapshot_state::will_delete)),
                               id::snapshot_should_not_have_subvol,
                               "snapshot with subvol must be a live or will_delete leaf")?;
         }
@@ -1320,7 +1320,7 @@ fn create_snapids(
         skip.sort_unstable();
         v.skip = skip.map(Into::into);
 
-        v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
+        v.set_state(c::bch_snapshot_state::live);
 
         t.update(&iter, &n, UpdateTriggerFlags::empty())?;
         mark_snapshot(fs, BkeySC::from(n.as_ref()))?;
@@ -1359,7 +1359,7 @@ fn node_create_children(
     let v = n_parent.v_mut();
     v.children = [new_snapids[0].into(), new_snapids[1].into()];
     v.subvol   = 0u32.into();
-    v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
+    v.set_state(c::bch_snapshot_state::live);
     Ok(())
 }
 

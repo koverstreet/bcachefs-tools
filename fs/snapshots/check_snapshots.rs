@@ -271,7 +271,7 @@ fn check_state<'a, 't>(
             // Too far to decode, but if anything references it, it must be live
             fsck_err!(t, id::snapshot_state_bad,
                       "snapshot state {raw:#x} is garbage, but the node is referenced - marking live:\n{}",
-                      n.to_text(fs))?.then_some(c::bch_snapshot_state::SNAPSHOT_STATE_live)
+                      n.to_text(fs))?.then_some(c::bch_snapshot_state::live)
         } else {
             // An unreferenced garbage node we can't place: fail-stop.
             fsck_err_report!(fs, id::snapshot_state_bad,
@@ -294,14 +294,14 @@ fn check_state<'a, 't>(
     // field report; snapshot-inject/stale_state_tombstone).
     let v = n.v();
     if fsck_err_on!(t,
-                    v.state().get() != c::bch_snapshot_state::SNAPSHOT_STATE_deleted.0 &&
+                    v.state().get() != c::bch_snapshot_state::deleted.0 &&
                     v.deleted_obsolete() &&
                     v.tree == 0,
                     id::snapshot_state_stale_tombstone,
                     "snapshot spliced out by a legacy kernel (tombstone shape, legacy deleted flag)\n\
                      but the state field is stale at {} - correcting to deleted:\n{}",
                     StateName(v.state_field()), n.to_text(fs))? {
-        n.v_mut(t)?.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_deleted);
+        n.v_mut(t)?.set_state(c::bch_snapshot_state::deleted);
     }
 
     Ok(())
@@ -321,10 +321,10 @@ fn check_has_data<'a, 't>(
     let fs = t.fs();
     let state = n.v().state_field();
 
-    if state != Some(c::bch_snapshot_state::SNAPSHOT_STATE_deleted) && state != Some(c::bch_snapshot_state::SNAPSHOT_STATE_no_keys) {
+    if state != Some(c::bch_snapshot_state::deleted) && state != Some(c::bch_snapshot_state::no_keys) {
         return Ok(());
     }
-    let no_keys = state == Some(c::bch_snapshot_state::SNAPSHOT_STATE_no_keys);
+    let no_keys = state == Some(c::bch_snapshot_state::no_keys);
 
     let acct = fs.snapshots.accounting(n.id());
 
@@ -337,7 +337,7 @@ fn check_has_data<'a, 't>(
     }
 
     if no_keys {
-        n.v_mut(t)?.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
+        n.v_mut(t)?.set_state(c::bch_snapshot_state::live);
         Ok(())
     } else {
         undelete_owns_data(t, n.u(t)?)
@@ -353,7 +353,7 @@ fn check_deleted<'a, 't>(
     let fs = t.fs();
     let id = n.id();
 
-    if n.v().state().get() == c::bch_snapshot_state::SNAPSHOT_STATE_live.0 {
+    if n.v().state().get() == c::bch_snapshot_state::live.0 {
         return Ok(false);
     }
 
@@ -366,7 +366,7 @@ fn check_deleted<'a, 't>(
     let mut nr_live_children = 0;
     for child in n.v().children() {
         if child != 0 &&
-           lookup_node(t, child)?.is_some_and(|ch| ch.v.state_decoded() == Some(c::bch_snapshot_state::SNAPSHOT_STATE_live) &&
+           lookup_node(t, child)?.is_some_and(|ch| ch.v.state_decoded() == Some(c::bch_snapshot_state::live) &&
                                                       points_at(&ch.v, Role::Child, id)) {
             nr_live_children += 1;
         }
@@ -375,7 +375,7 @@ fn check_deleted<'a, 't>(
     if fsck_err_on!(t, nr_live_children == 2, id::snapshot_deleted_has_live_children,
                     "snapshot marked {} but has two live children - reviving:\n{}",
                     StateName(n.v().state_field()), n.to_text(fs))? {
-        n.v_mut(t)?.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
+        n.v_mut(t)?.set_state(c::bch_snapshot_state::live);
     }
 
     // Deletion tombstones the subvolume in the transaction that marks its
@@ -385,17 +385,17 @@ fn check_deleted<'a, 't>(
     let v = n.v();
     if v.children()[0] == 0 && v.subvol() != 0 {
         let subvol_live = subvolume::get(t, v.subvol(), false).found()?.is_some_and(|sv|
-            sv.state_decoded() == Some(c::bch_subvolume_state::SUBVOLUME_STATE_live) && sv.snapshot() == id);
+            sv.state_decoded() == Some(c::bch_subvolume_state::live) && sv.snapshot() == id);
 
         if subvol_live &&
            fsck_err!(t, id::snapshot_deleted_but_subvol_live,
                      "snapshot marked {} but its subvolume is live - reviving:\n{}",
                      StateName(v.state_field()), n.to_text(fs))? {
-            n.v_mut(t)?.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
+            n.v_mut(t)?.set_state(c::bch_snapshot_state::live);
         }
     }
 
-    Ok(n.v().state().get() == c::bch_snapshot_state::SNAPSHOT_STATE_deleted.0)
+    Ok(n.v().state().get() == c::bch_snapshot_state::deleted.0)
 }
 
 /* Parent <-> child edge checks and repair:
@@ -526,7 +526,7 @@ fn undelete_owns_data<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c:
 {
     let s = u.v_mut();
     if s.children()[1] != 0 {
-        s.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
+        s.set_state(c::bch_snapshot_state::live);
         return Ok(());
     }
 
@@ -542,7 +542,7 @@ fn topmost_dead_ancestor(t: &TransAttempt<'_, '_>, mut id: u32) -> Result<Option
     while id != 0 {
         // a missing parent is undelete's to report, against the node naming it
         let Some(s) = lookup_node(t, id)? else { break };
-        if s.v.state_decoded() != Some(c::bch_snapshot_state::SNAPSHOT_STATE_deleted) {
+        if s.v.state_decoded() != Some(c::bch_snapshot_state::deleted) {
             break;
         }
 
@@ -597,7 +597,7 @@ fn resurrect_child(t: &TransAttempt<'_, '_>, parent_id: u32, id: u32) -> Result<
     }
     v.skip.sort_unstable_by_key(|s| (*s).get());
     v.subvol    = subvol_claiming(t, id)?.unwrap_or(0).into();
-    v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
+    v.set_state(c::bch_snapshot_state::live);
 
     fs.snapshots.table_make_room(id)?;
     t.insert(Btree::snapshots, n, UpdateTriggerFlags::empty())
@@ -653,7 +653,7 @@ fn past_deleted(t: &TransAttempt<'_, '_>, s: &c::Snapshot, role: Role)
         }
         match lookup_node(t, id)? {
             None => return Ok(Some(0)),
-            Some(s) if s.v.state_decoded() != Some(c::bch_snapshot_state::SNAPSHOT_STATE_deleted) => return Ok(Some(id)),
+            Some(s) if s.v.state_decoded() != Some(c::bch_snapshot_state::deleted) => return Ok(Some(id)),
             Some(s) => id = next(&s.v),
         }
     }
@@ -695,7 +695,7 @@ fn edge_repair(
     // Only a tombstone without data. check_deleted() can't have ruled on it yet:
     // we walk down from POS_MAX and ids descend from the root, so a parent
     // reaches a deleted child's edge before the child is visited.
-    if let Some(o) = other.as_ref().filter(|o| o.v.state_decoded() == Some(c::bch_snapshot_state::SNAPSHOT_STATE_deleted)) {
+    if let Some(o) = other.as_ref().filter(|o| o.v.state_decoded() == Some(c::bch_snapshot_state::deleted)) {
         // A deleted node with data has a lying state, and routing around it would
         // strand the keys: undelete it, and leave our edge to its own visit.
         let acct = fs.snapshots.accounting(other_id);
@@ -932,9 +932,9 @@ fn check_to_subvol<'a, 't>(
     let id = n.id();
 
     let state = n.v().state_field();
-    let snap_deleting = state == Some(c::bch_snapshot_state::SNAPSHOT_STATE_will_delete);
+    let snap_deleting = state == Some(c::bch_snapshot_state::will_delete);
     let should_have_subvol = n.v().children()[0] == 0 &&
-        (state == Some(c::bch_snapshot_state::SNAPSHOT_STATE_live) || snap_deleting);
+        (state == Some(c::bch_snapshot_state::live) || snap_deleting);
 
     if n.v().subvol() != 0 {
         let subvol_id = n.v().subvol();
@@ -980,19 +980,19 @@ fn check_to_subvol<'a, 't>(
         // Deletion couples one bit on each side: will_delete iff the subvolume is
         // tombstoned. The subvolume decides - the reverse would have to guess live or
         // unlinked.
-        let subvol_deleted = subvol.state_decoded() == Some(c::bch_subvolume_state::SUBVOLUME_STATE_deleted);
+        let subvol_deleted = subvol.state_decoded() == Some(c::bch_subvolume_state::deleted);
         if fsck_err_on!(t, snap_deleting != subvol_deleted, id::snapshot_subvol_state_mismatch,
                         "snapshot {} but its subvolume is {}:\n{}\n{}",
                         if snap_deleting { "will_delete" } else { "live" },
                         if subvol_deleted { "deleted" } else { "not deleted" },
                         n.to_text(fs), subvol_k.to_text(fs))? {
             n.v_mut(t)?.set_state(if subvol_deleted {
-                c::bch_snapshot_state::SNAPSHOT_STATE_will_delete
+                c::bch_snapshot_state::will_delete
             } else {
-                c::bch_snapshot_state::SNAPSHOT_STATE_live
+                c::bch_snapshot_state::live
             });
         }
-    } else if should_have_subvol && state == Some(c::bch_snapshot_state::SNAPSHOT_STATE_live) {
+    } else if should_have_subvol && state == Some(c::bch_snapshot_state::live) {
         // No backref: if a subvolume points here it was wiped - restore it (a second
         // claimant still hits check_subvols' fail-stop). No claimant is an orphan
         // leaf, unrepaired.
@@ -1021,7 +1021,7 @@ fn check_to_subvol<'a, 't>(
     // state, backref or not, so old kernels don't read a dying snapshot as a live
     // subvolume leaf.
     let v = n.v();
-    if v.state().get() == c::bch_snapshot_state::SNAPSHOT_STATE_live.0 && v.subvol_obsolete() != (v.subvol() != 0) {
+    if v.state().get() == c::bch_snapshot_state::live.0 && v.subvol_obsolete() != (v.subvol() != 0) {
         let mut msg = Printbuf::new();
         prt!(&mut msg, "snapshot node {id} has wrong subvol flag:\n{}", n.to_text(fs));
 
@@ -1187,7 +1187,7 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     v.tree     = tree_id.into();
     v.btime.lo = fs.current_time().into();
     v.subvol   = subvol_claiming(t, id)?.unwrap_or(0).into();
-    v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
+    v.set_state(c::bch_snapshot_state::live);
 
     fs.snapshots.table_make_room(id)?;
     t.insert(Btree::snapshots, n, UpdateTriggerFlags::empty())

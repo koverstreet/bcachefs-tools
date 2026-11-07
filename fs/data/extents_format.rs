@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{c_name, bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, whole, CStruct, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{c_name, bitfield, c_bitmask, c_const, c_enum, c_verbatim, whole, CStruct, Plain, TypeInfo, SizedVal};
 use nestify::nest;
 use crate::format::Bpos;
 
@@ -130,29 +130,20 @@ use crate::format::Bpos;
  * is neither checksummed nor compressed.
  */
 
-c_xmacro! {
-    BCH_EXTENT_ENTRY_TYPES(x) {
-        (ptr, 0),
-        (crc32, 1),
-        (crc64, 2),
-        (crc128, 3),
-        (stripe_ptr, 4),
-        (rebalance_v1, 5),
-        (flags, 6),
-        (reconcile, 7),
-        (reconcile_bp, 8),
-    }
-}
-
-c_const! {
-    #[c_int]
-    pub const BCH_EXTENT_ENTRY_MAX: u32 = 9;
-}
-
 c_enum! {
     #[open]
+    #[prefix(BCH_EXTENT_ENTRY_)]
+    #[nr(BCH_EXTENT_ENTRY_MAX)]
     pub enum bch_extent_entry_type: u32 {
-        BCH_EXTENT_ENTRY_TYPES(f, n) => concat(BCH_EXTENT_ENTRY_, f) = n,
+        ptr = 0,
+        crc32 = 1,
+        crc64 = 2,
+        crc128 = 3,
+        stripe_ptr = 4,
+        rebalance_v1 = 5,
+        flags = 6,
+        reconcile = 7,
+        reconcile_bp = 8,
     }
 }
 
@@ -161,7 +152,7 @@ c_enum! {
 #[derive(CStruct)]
 #[c_packed]
 pub struct bch_extent_crc32 {
-    #[bits(default = 1 << bch_extent_entry_type::BCH_EXTENT_ENTRY_crc32.0)]
+    #[bits(default = 1 << bch_extent_entry_type::crc32.0)]
     pub(self) type_:       u2,
     compressed_size_raw:   u7,
     uncompressed_size_raw: u7,
@@ -186,7 +177,7 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u64)]
         pub bits: pub struct bch_extent_crc64_bits {
-            #[bits(default = 1 << bch_extent_entry_type::BCH_EXTENT_ENTRY_crc64.0)]
+            #[bits(default = 1 << bch_extent_entry_type::crc64.0)]
             pub(self) type_:       u3,
             compressed_size_raw:   u9,
             uncompressed_size_raw: u9,
@@ -213,7 +204,7 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u64)]
         pub bits: pub struct bch_extent_crc128_bits {
-            #[bits(default = 1 << bch_extent_entry_type::BCH_EXTENT_ENTRY_crc128.0)]
+            #[bits(default = 1 << bch_extent_entry_type::crc128.0)]
             pub(self) type_:       u4,
             compressed_size_raw:   u13,
             uncompressed_size_raw: u13,
@@ -238,7 +229,7 @@ c_const! {
 #[derive(CStruct)]
 #[c_packed]
 pub struct bch_extent_ptr {
-    #[bits(default = 1 << bch_extent_entry_type::BCH_EXTENT_ENTRY_ptr.0)]
+    #[bits(default = 1 << bch_extent_entry_type::ptr.0)]
     pub(self) type_:      u1,
     cached:     u1,
     unused:     u1,
@@ -251,7 +242,7 @@ pub struct bch_extent_ptr {
 #[bitfield(u64)]
 #[derive(CStruct)]
 pub struct bch_extent_stripe_ptr {
-    #[bits(default = 1 << bch_extent_entry_type::BCH_EXTENT_ENTRY_stripe_ptr.0)]
+    #[bits(default = 1 << bch_extent_entry_type::stripe_ptr.0)]
     pub(self) type_:      u5,
     block:      u8,
     redundancy: u4,
@@ -269,7 +260,7 @@ c_enum! {
 #[bitfield(u64)]
 #[derive(CStruct)]
 pub struct bch_extent_flags {
-    #[bits(default = 1 << bch_extent_entry_type::BCH_EXTENT_ENTRY_flags.0)]
+    #[bits(default = 1 << bch_extent_entry_type::flags.0)]
     pub(self) type_: u7,
     flags: u57,
 }

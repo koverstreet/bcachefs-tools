@@ -96,7 +96,7 @@ impl<'a> Ctx<'a> {
     fn jset(fs: &'a Fs, h: &Head<c::jset>, flags: ValidateFlags) -> Self {
         let mut from = c::bkey_validate_context::default();
         from.bits.set_flags(flags);
-        from.bits.set_from(c::bkey_validate_from::BKEY_VALIDATE_journal);
+        from.bits.set_from(c::bkey_validate_from::journal);
         from.journal_seq = h.seq.get();
 
         Ctx {
@@ -159,7 +159,7 @@ fn head_mut(e: &mut [u8]) -> &mut Head<c::jset_entry> {
  */
 fn journal_key_lost(fs: &Fs, from: &c::bkey_validate_context) {
     if from.bits.flags().contains(ValidateFlags::write) ||
-       from.bits.from() != c::bkey_validate_from::BKEY_VALIDATE_journal {
+       from.bits.from() != c::bkey_validate_from::journal {
         return;
     }
 

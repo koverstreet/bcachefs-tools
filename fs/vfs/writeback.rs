@@ -222,7 +222,7 @@ fn throttle_writes(fs: &Fs, cl: &StackClosure) {
     assert!(cl.nr_remaining() <= 1, "writeback throttle's closure still waiting");
 
     if start != 0 {
-        fs.times[c::bch_time_stats::BCH_TIME_blocked_writeback_throttle as usize].update(start);
+        fs.times[c::bch_time_stats::blocked_writeback_throttle as usize].update(start);
     }
 }
 

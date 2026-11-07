@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le32, Le64};
 use core::ffi::c_ulong;
-use cstruct_macros::{c_name, c_bitmask, c_const, c_enum, c_xmacro, grown, whole, CStruct, Plain, TypeInfo, View, SizedVal};
+use cstruct_macros::{c_name, c_bitmask, c_const, c_xmacro, grown, whole, CStruct, Plain, TypeInfo, View, SizedVal};
 
 #[whole(tail = data: [u8], bkey)]
 #[repr(C, align(8))]
@@ -29,13 +29,6 @@ c_xmacro! {
         (oldest_gen, 8),
         (stripe, 32),
         (stripe_redundancy, 8),
-    }
-}
-
-c_enum! {
-    #[closed]
-    pub enum _: u32 {
-        BCH_ALLOC_FIELDS_V1(name, ..) => concat(BCH_ALLOC_FIELD_V1_, name),
     }
 }
 

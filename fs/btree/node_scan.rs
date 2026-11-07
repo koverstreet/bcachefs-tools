@@ -513,7 +513,7 @@ fn get_scanned_nodes(fs: &Fs, btree: Btree, level: u32, node_min: Bpos, node_max
         let k = n.to_key();
 
         let mut from = c::bkey_validate_context { level: (level + 1) as u8, btree, ..Default::default() };
-        from.bits.set_from(c::bkey_validate_from::BKEY_VALIDATE_btree_node);
+        from.bits.set_from(c::bkey_validate_from::btree_node);
         assert!(crate::btree::bkey::bkey_validate(
             &BkeyValidate { fs, k: k.as_bkey_i().as_sc().into(), from: &from }).is_ok());
 

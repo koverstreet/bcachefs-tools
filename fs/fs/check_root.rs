@@ -62,7 +62,7 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
             v.flags    = 0.into();
             v.snapshot = snapshot.into();
             v.inode    = inum.into();
-            v.set_state(c::bch_subvolume_state::SUBVOLUME_STATE_live);
+            v.set_state(c::bch_subvolume_state::live);
 
             t.insert(Btree::subvolumes, k, UpdateTriggerFlags::empty())?;
             (snapshot, inum)

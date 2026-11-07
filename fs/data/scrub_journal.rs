@@ -211,7 +211,7 @@ fn scrub_node(fs: &Fs, found: &Gather<Bad, waiter::Sync>, btree: Btree, level: u
 fn scrub_extent(m: &Moving<'_>, found: &Gather<Bad, waiter::Sync>, io_opts: &c::bch_inode_opts, btree: Btree,
                 level: u32, k: BkeySC<'_>, dev: u32) -> Result<(), BchError> {
     let data_opts = c::data_update_opts {
-        type_:      c::bch_data_update_types::BCH_DATA_UPDATE_scrub_no_repair,
+        type_:      c::bch_data_update_types::scrub_no_repair,
         read_flags: c::bch_read_flags::hard_require_read_device,
         read_dev:   dev,
         ..Default::default()
@@ -509,7 +509,7 @@ fn repair_one(m: &Moving<'_>, t: &TransAttempt<'_, '_>, r: &Repair) -> Result<Ou
     let io_opts = get_io_opts(t, None, k)?;
 
     let data_opts = c::data_update_opts {
-        type_:         c::bch_data_update_types::BCH_DATA_UPDATE_self_heal,
+        type_:         c::bch_data_update_types::self_heal,
         target:        io_opts.background_target.into(),
         ptrs_io_error: bad_devs as u16,
         ptrs_kill:     bad_devs as u16,

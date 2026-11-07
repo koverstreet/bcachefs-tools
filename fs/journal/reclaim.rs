@@ -64,7 +64,7 @@ impl c::journal {
     }
 
     pub fn set_watermark(&self, g: &mut JournalGuard<'_>) {
-        use c::bch_time_stats::*;
+        use c::bch_time_stats as Time;
         let fs = self.fs();
         let clean = u64::from(g.space[journal_space_clean as usize].total);
         let total = u64::from(g.space[journal_space_total as usize].total);
@@ -86,10 +86,10 @@ impl c::journal {
 
         let times = |t: c::bch_time_stats| &fs.times[t as usize];
         let mut changed = false;
-        changed |= times(BCH_TIME_blocked_journal_low_on_space).track_event_change(low_on_space);
-        changed |= times(BCH_TIME_blocked_journal_low_on_pin).track_event_change(low_on_pin);
-        changed |= times(BCH_TIME_blocked_journal_low_on_open_buckets).track_event_change(open_buckets > 0);
-        changed |= times(BCH_TIME_blocked_write_buffer_full).track_event_change(low_on_wb);
+        changed |= times(Time::blocked_journal_low_on_space).track_event_change(low_on_space);
+        changed |= times(Time::blocked_journal_low_on_pin).track_event_change(low_on_pin);
+        changed |= times(Time::blocked_journal_low_on_open_buckets).track_event_change(open_buckets > 0);
+        changed |= times(Time::blocked_write_buffer_full).track_event_change(low_on_wb);
 
         if changed {
             fs.event_inc_trace(events::journal_full, |out| {
@@ -453,7 +453,7 @@ impl c::journal {
     /* returns true if we did work */
     fn flush_pins_locked(&self, reclaim: &mut ReclaimGuard<'_>, seq_to_flush: u64, allowed_below_seq: u32,
                          mut min_any: usize, mut min_key_cache: usize) -> usize {
-        use c::bch_time_stats::*;
+        use c::bch_time_stats as Time;
         let fs = self.fs();
         let mut nr_flushed = 0;
 
@@ -482,11 +482,11 @@ impl c::journal {
             let ok = flushing.run();
 
             let flush_time = if (ty as u32) <= JOURNAL_PIN_TYPE_btree0 as u32 {
-                BCH_TIME_journal_pin_flush_btree
+                Time::journal_pin_flush_btree
             } else if ty == JOURNAL_PIN_TYPE_key_cache {
-                BCH_TIME_journal_pin_flush_key_cache
+                Time::journal_pin_flush_key_cache
             } else {
-                BCH_TIME_journal_pin_flush_other
+                Time::journal_pin_flush_other
             };
             fs.times[flush_time as usize].update(start_time);
 
@@ -810,7 +810,7 @@ impl c::journal {
 
     #[cold]
     pub fn reclaim_to_text(&self, out: &mut Printbuf) {
-        use c::bch_time_stats::*;
+        use c::bch_time_stats as Time;
         let fs = self.fs();
         let now = jiffies();
 
@@ -837,20 +837,20 @@ impl c::journal {
 
         out.newline();
         prt!(out, "Pin flush time stats:\tcount\tavg\tmax\n");
-        for (name, t) in [("  btree",     BCH_TIME_journal_pin_flush_btree),
-                          ("  key_cache", BCH_TIME_journal_pin_flush_key_cache),
-                          ("  other",     BCH_TIME_journal_pin_flush_other)] {
+        for (name, t) in [("  btree",     Time::journal_pin_flush_btree),
+                          ("  key_cache", Time::journal_pin_flush_key_cache),
+                          ("  other",     Time::journal_pin_flush_other)] {
             time_stats_summary_to_text(out, name, &fs.times[t as usize]);
         }
 
         out.newline();
         prt!(out, "Blocked time stats:\tcount\tavg\tmax\n");
-        for (name, t) in [("  low_on_space",        BCH_TIME_blocked_journal_low_on_space),
-                          ("  low_on_pin",          BCH_TIME_blocked_journal_low_on_pin),
-                          ("  low_on_open_buckets", BCH_TIME_blocked_journal_low_on_open_buckets),
-                          ("  max_in_flight",       BCH_TIME_blocked_journal_max_in_flight),
-                          ("  max_open",            BCH_TIME_blocked_journal_max_open),
-                          ("  write_buffer_full",   BCH_TIME_blocked_write_buffer_full)] {
+        for (name, t) in [("  low_on_space",        Time::blocked_journal_low_on_space),
+                          ("  low_on_pin",          Time::blocked_journal_low_on_pin),
+                          ("  low_on_open_buckets", Time::blocked_journal_low_on_open_buckets),
+                          ("  max_in_flight",       Time::blocked_journal_max_in_flight),
+                          ("  max_open",            Time::blocked_journal_max_open),
+                          ("  write_buffer_full",   Time::blocked_write_buffer_full)] {
             time_stats_summary_to_text(out, name, &fs.times[t as usize]);
         }
 

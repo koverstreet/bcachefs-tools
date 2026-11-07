@@ -170,7 +170,7 @@ impl TransBkey<'_, '_, PtrsMut> {
         {
             at
         } else {
-            entries.extend(crc_entry(&p.crc, c::bch_extent_entry_type::BCH_EXTENT_ENTRY_crc32));
+            entries.extend(crc_entry(&p.crc, c::bch_extent_entry_type::crc32));
             self.entries_end()
         };
 
@@ -227,7 +227,7 @@ impl TransBkey<'_, '_, PtrsMut> {
 /// bch2_extent_crc_append(). @k is a key with pointers, its entries running
 /// to its value's end.
 pub(crate) fn extent_crc_append(k: &mut KeyRoom<'_>, crc: &c::bch_extent_crc_unpacked) -> Result<(), NoRoom> {
-    let e = crc_entry(crc, c::bch_extent_entry_type::BCH_EXTENT_ENTRY_crc32);
+    let e = crc_entry(crc, c::bch_extent_entry_type::crc32);
     let val_u64s = k.k().val_u64s();
     assert!(val_u64s + e.len() <= c::BKEY_EXTENT_VAL_U64s_MAX as usize,
             "appending a crc past an extent's largest value");
@@ -240,9 +240,9 @@ pub(crate) fn crc_entry(crc: &c::bch_extent_crc_unpacked, min: c::bch_extent_ent
     use c::bch_extent_entry_type as t;
     let words = |b: &[u8]| b.chunks(8).map(|w| u64::from_ne_bytes(w.try_into().unwrap())).collect();
 
-    if let Some(e) = (min.0 <= t::BCH_EXTENT_ENTRY_crc32.0).then(|| c::bch_extent_crc32::pack(crc)).flatten() {
+    if let Some(e) = (min.0 <= t::crc32.0).then(|| c::bch_extent_crc32::pack(crc)).flatten() {
         [e.into_bits().0].into_iter().collect()
-    } else if let Some(e) = (min.0 <= t::BCH_EXTENT_ENTRY_crc64.0).then(|| c::bch_extent_crc64::pack(crc)).flatten() {
+    } else if let Some(e) = (min.0 <= t::crc64.0).then(|| c::bch_extent_crc64::pack(crc)).flatten() {
         words(plain_bytes(&e))
     } else {
         let e = c::bch_extent_crc128::pack(crc)

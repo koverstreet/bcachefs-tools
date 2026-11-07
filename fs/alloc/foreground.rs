@@ -577,7 +577,7 @@ impl Fs {
         let mut g = a.freelist_lock.lock();
 
         if unlikely(u32::from(a.freelist_lock.open_buckets_nr_free.get()) <= open_buckets_reserved(req.watermark)) {
-            times(c::bch_time_stats::BCH_TIME_blocked_allocate_open_bucket).track_event_change(true);
+            times(c::bch_time_stats::blocked_allocate_open_bucket).track_event_change(true);
             return Err(self.err(match req.closure_wait(&a.open_buckets_wait) {
                 true  => bch_errcode::BCH_ERR_open_bucket_alloc_blocked,
                 false => bch_errcode::BCH_ERR_open_buckets_empty,
@@ -611,8 +611,8 @@ impl Fs {
         ca.nr_open_buckets.set(ca.nr_open_buckets.get().wrapping_add(1));
         a.hash_add(&g, ob);
 
-        times(c::bch_time_stats::BCH_TIME_blocked_allocate_open_bucket).track_event_change(false);
-        times(c::bch_time_stats::BCH_TIME_blocked_allocate).track_event_change(false);
+        times(c::bch_time_stats::blocked_allocate_open_bucket).track_event_change(false);
+        times(c::bch_time_stats::blocked_allocate).track_event_change(false);
         // SAFETY: the pin just taken, ours
         Ok(Some(unsafe { OpenBucket::from_idx(self, ob.idx()) }))
     }

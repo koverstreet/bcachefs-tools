@@ -122,7 +122,7 @@ async fn run(mut u: Body, in_flight: InFlight, start_time: u64) {
     }
 
     u.write().await;
-    fs.times[c::bch_time_stats::BCH_TIME_data_promote as usize].update(start_time);
+    fs.times[c::bch_time_stats::data_promote as usize].update(start_time);
     u.rbio.async_list_del(fs);
     u.exit(0);
     drop(in_flight);
@@ -175,7 +175,7 @@ fn promote_new(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
 
     match failed.as_deref() {
         Some(f) if !f.is_empty() => {
-            update_opts.type_ = c::bch_data_update_types::BCH_DATA_UPDATE_self_heal;
+            update_opts.type_ = c::bch_data_update_types::self_heal;
             update_opts.target = opts.background_target;
 
             if let Some(kp) = k.arm::<Ptrs>() {
@@ -192,7 +192,7 @@ fn promote_new(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
             }
         }
         _ => {
-            update_opts.type_ = c::bch_data_update_types::BCH_DATA_UPDATE_promote;
+            update_opts.type_ = c::bch_data_update_types::promote;
             update_opts.target = opts.promote_target;
             update_opts.extra_replicas = 1;
             update_opts.write_flags |= w::cached | w::only_specified_devs;

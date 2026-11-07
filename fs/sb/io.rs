@@ -2715,7 +2715,7 @@ fn write_super_devs(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_devs
     const TO_CPU_DIRTY: bool = false;
     let ret = if TO_CPU_DIRTY { ret.and(sections_to_cpu(fs, sb, dirty)) } else { ret };
 
-    fs.times[c::bch_time_stats::BCH_TIME_sb_write as usize].update(start);
+    fs.times[c::bch_time_stats::sb_write as usize].update(start);
     ret
 }
 

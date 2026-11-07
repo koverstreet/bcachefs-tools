@@ -36,7 +36,7 @@ use crate::c;
 use crate::c::bch_errcode;
 use crate::data::durability::{drop_extra_durability, drop_extra_ec_durability, BkeyVDurability};
 use crate::data::extents::{BkeyVExtents, Extents};
-use crate::data::update::{ptr_bits_to_text, TYPE_NAMES};
+use crate::data::update::ptr_bits_to_text;
 use crate::data::ptrs::{brand, extents_match, BkeyVPtrs, Branded, PtrMask, Ptrs, PtrsMut};
 use crate::data::reconcile::plan::pending_mod;
 use crate::errcode::BchError;
@@ -291,7 +291,7 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
                          else { c::bch_reservation_flags::BCH_DISK_RESERVATION_NOFAIL })?;
     }
 
-    t.log_str(TYPE_NAMES[u.opts.type_ as usize].to_bytes())?;
+    t.log_str(u.opts.type_.name().as_bytes())?;
     t.log_bkey(u.btree_id, 0, u.k.key())?;
 
     /* needs k.k->p, the whole key's end - see index_update(): */

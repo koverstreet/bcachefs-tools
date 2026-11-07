@@ -777,7 +777,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "compression-opts",
-        macro_name: "BCH_COMPRESSION_OPTS",
+        macro_name: "bch_compression_opts",
         default: Some("none"),
         doc_field: None,
         flags_field: None,
@@ -807,9 +807,9 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "time-stats",
-        macro_name: "BCH_TIME_STATS",
+        macro_name: "bch_time_stats",
         default: None,
-        doc_field: Some(1),
+        doc_field: Some(2),
         flags_field: None,
         date_field: None,
         version_field: None,

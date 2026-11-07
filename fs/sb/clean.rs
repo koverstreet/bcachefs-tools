@@ -66,7 +66,7 @@ fn validate_late(fs: &Fs, version: u16, big_endian: bool, f: &mut Section, write
     -> Result<(), BchError>
 {
     let mut from = c::bkey_validate_context::default();
-    from.set_from(c::bkey_validate_from::BKEY_VALIDATE_superblock);
+    from.set_from(c::bkey_validate_from::superblock);
     from.set_flags(if write { ValidateFlags::write } else { ValidateFlags::empty() });
 
     for e in UnvalidatedEntriesMut::<c::jset_entry<Unvalidated>>::new(&mut bytes_of_mut(f)[SECTION_HEAD..]) {

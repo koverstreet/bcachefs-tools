@@ -529,7 +529,7 @@ impl Fs {
                                              new_lock!(@key));
 
             let times = &raw mut (*p).times;
-            (*p).journal.flush_seq_time = &raw mut (*times)[Time::BCH_TIME_journal_flush_seq as usize];
+            (*p).journal.flush_seq_time = &raw mut (*times)[Time::journal_flush_seq as usize];
         }
 
         /* must be initialized before we throw any errors */

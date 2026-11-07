@@ -681,7 +681,7 @@ fn do_discards(fs: &Fs) {
             trans.unlock_long();
             let start = local_clock();
             let ret = fs.journal_flush();
-            fs.times[c::bch_time_stats::BCH_TIME_blocked_discard_journal_flush as usize].update(start);
+            fs.times[c::bch_time_stats::blocked_discard_journal_flush as usize].update(start);
             if let Err(e) = ret {
                 break Err(e);
             }

@@ -122,7 +122,7 @@ impl<'a> Moving<'a> {
             moving_update::move_extent(self, t, bucket, iter, k, opts, data_opts, found)
         } else if !is_scrub(data_opts.type_) {
             self.move_btree_node(t, opts, data_opts, iter, level, k)
-        } else if data_opts.type_ == c::bch_data_update_types::BCH_DATA_UPDATE_scrub {
+        } else if data_opts.type_ == c::bch_data_update_types::scrub {
             btree_node_scrub(self, iter.btree(), level, k, data_opts.read_dev)
         } else {
             // scrub_no_repair: node scrub repairs, and the journal scrub
@@ -148,7 +148,7 @@ impl<'a> Moving<'a> {
         use c::bch_watermark as wm;
         let fs = t.fs();
 
-        if data_opts.type_ != c::bch_data_update_types::BCH_DATA_UPDATE_copygc {
+        if data_opts.type_ != c::bch_data_update_types::copygc {
             if let Err(e) = t.can_do_data_update(opts, data_opts, k, None) {
                 if !is_restart(&e) {
                     move_btree_node_trace(fs, opts, data_opts, k, Err(e));
@@ -535,7 +535,7 @@ fn scrub(fs: &Fs, stats: &MoveStats, arg: c::bch_ioctl_data_scrub) -> Result<(),
             }
         }
 
-        data_opts.type_ = c::bch_data_update_types::BCH_DATA_UPDATE_scrub;
+        data_opts.type_ = c::bch_data_update_types::scrub;
         data_opts.read_dev = dev;
         data_opts.read_flags = c::bch_read_flags::hard_require_read_device;
         Ok(true)

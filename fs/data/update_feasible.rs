@@ -163,7 +163,7 @@ impl Fs {
                                       devs_have: &c::bch_devs_list, k: BkeySC<'_>,
                                       mut trace: Option<&mut Printbuf>) -> Result<(), BchError> {
         let btree = k.arm::<BtreePtrs>();
-        if let Some(b) = btree.filter(|_| data_opts.type_ == c::bch_data_update_types::BCH_DATA_UPDATE_reconcile) {
+        if let Some(b) = btree.filter(|_| data_opts.type_ == c::bch_data_update_types::reconcile) {
             return self.write_btree_feasible(opts, data_opts, b, trace);
         }
 

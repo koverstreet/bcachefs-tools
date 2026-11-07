@@ -231,7 +231,7 @@ impl NocowLocks {
         order.sort_unstable_by_key(|&(_, l)| core::ptr::from_ref(l) as usize);
         warn_on_once!(order.len() > NR_SLOTS);
 
-        let contended_stat = &fs.times[c::bch_time_stats::BCH_TIME_nocow_lock_contended as usize];
+        let contended_stat = &fs.times[c::bch_time_stats::nocow_lock_contended as usize];
         'retake_all: loop {
             for (n, &(b, l)) in order.iter().enumerate() {
                 let mut ret = l.trylock(fs, b, kind);

@@ -55,7 +55,7 @@ fn extent_ptr_validate(v: &BkeyValidate<'_, '_>, p: BkeySC<'_, Ptrs>, ptr: &c::b
 /// The entry types a btree node pointer may have.
 fn btree_ptr_entry_type_allowed(ty: u32) -> bool {
     use c::bch_extent_entry_type as t;
-    [t::BCH_EXTENT_ENTRY_ptr, t::BCH_EXTENT_ENTRY_reconcile, t::BCH_EXTENT_ENTRY_reconcile_bp]
+    [t::ptr, t::reconcile, t::reconcile_bp]
         .iter().any(|a| a.0 == ty)
 }
 
@@ -185,7 +185,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     if !is_btree_ptr {
         bkey_fsck_err_on!(v, !have_non_inval_dev_ptrs, id::extent_ptrs_all_invalid,
                           "extent without valid pointers")?;
-        bkey_fsck_err_on!(v, v.from.from() == c::bkey_validate_from::BKEY_VALIDATE_commit &&
+        bkey_fsck_err_on!(v, v.from.from() == c::bkey_validate_from::commit &&
                              !have_non_inval_dev_ptrs_dirty,
                           id::extent_ptrs_all_invalid, "extent without valid dirty pointers")?;
     }

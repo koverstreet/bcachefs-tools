@@ -422,7 +422,7 @@ fn btree_node_sort(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, start_id
         .fold(0, |out, (_, k)| copy_key(room, out, k, |_| {}));
 
     if sorting_entire_node {
-        fs.times[c::bch_time_stats::BCH_TIME_btree_node_sort as usize].update(start_time);
+        fs.times[c::bch_time_stats::btree_node_sort as usize].update(start_time);
     }
 
     /* Make sure we preserve bset journal_seq: */
@@ -511,7 +511,7 @@ pub fn bch2_btree_sort_into(fs: &Fs, dst: &BtreeNode, src: &BtreeNode) {
 
     dst.bset_head_mut(t.data_offset).set_u64s(out - t.first_offset() as usize);
 
-    fs.times[c::bch_time_stats::BCH_TIME_btree_node_sort as usize].update(start_time);
+    fs.times[c::bch_time_stats::btree_node_sort as usize].update(start_time);
 
     dst.set_bset_end(0);
     dst.verify_btree_nr_keys();

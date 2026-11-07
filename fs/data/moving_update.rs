@@ -53,7 +53,7 @@ fn read_error_stats(u: &c::data_update, moving: &Moving<'_>, size: u32) {
     let stats = moving.stats();
     let fs = u.op.fs();
     let k = BkeySC::from(u.k.key());
-    let poisoned = u.opts.type_ == c::bch_data_update_types::BCH_DATA_UPDATE_scrub &&
+    let poisoned = u.opts.type_ == c::bch_data_update_types::scrub &&
         k.arm::<Ptrs>().is_some_and(|k| k.poisoned(fs));
 
     // Not rbio.bvec_iter: only set when the read went straight into this rbio

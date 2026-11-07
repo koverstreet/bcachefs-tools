@@ -720,15 +720,6 @@ fn finish(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, flags: FsckFlags, err: 
     ret
 }
 
-/// Its name, as BKEY_VALIDATE_CONTEXTS() has it.
-fn validate_from_name(from: c::bkey_validate_from) -> &'static str {
-    macro_rules! names {
-        ($(($name:ident)),* $(,)?) => { [$(stringify!($name)),*] };
-    }
-    const NAMES: &[&str] = &c::BKEY_VALIDATE_CONTEXTS!(names);
-    NAMES.get(from as usize).copied().unwrap_or("?")
-}
-
 /// The verdict on an invalid key - fsck_delete_bkey, at once, for a check
 /// that's silent, or an error silenced; else fsck_err_verdict()'s, offering
 /// to delete it - fixed without asking, but where it's a write's or a commit's.
@@ -749,8 +740,8 @@ pub fn bkey_fsck_err_verdict(fs: &Fs, k: BkeySC<'_>, from: &c::bkey_validate_con
 
     let from_ty = from.bits.from();
     let msg = Msg(|out: &mut Printbuf| {
-        write!(out, "invalid bkey in {}", validate_from_name(from_ty));
-        if from_ty == c::bkey_validate_from::BKEY_VALIDATE_journal {
+        write!(out, "invalid bkey in {}", from_ty.name());
+        if from_ty == c::bkey_validate_from::journal {
             write!(out, " journal seq={} offset={}", from.journal_seq, from.journal_offset);
         }
         let btree = from.btree;

@@ -55,7 +55,7 @@ use cstruct_macros::{bitfield, c_const, c_enum, c_xmacro, open_enum, CStruct};
 #[bitfield(u64)]
 #[derive(CStruct)]
 pub struct bch_extent_rebalance_v1 {
-    #[bits(default = 1 << c::bch_extent_entry_type::BCH_EXTENT_ENTRY_rebalance_v1.0)]
+    #[bits(default = 1 << c::bch_extent_entry_type::rebalance_v1.0)]
     pub(self) type_:                   u6,
     unused:                            u3,
 
@@ -77,7 +77,7 @@ pub struct bch_extent_rebalance_v1 {
 #[bitfield(u64)]
 #[derive(CStruct)]
 pub struct bch_extent_reconcile {
-    #[bits(default = 1 << c::bch_extent_entry_type::BCH_EXTENT_ENTRY_reconcile.0)]
+    #[bits(default = 1 << c::bch_extent_entry_type::reconcile.0)]
     pub(self) type_:                   u8,
     unused:                            u2,
     ptrs_moving:                       u5,
@@ -103,7 +103,7 @@ pub struct bch_extent_reconcile {
 #[bitfield(u64)]
 #[derive(CStruct)]
 pub struct bch_extent_reconcile_bp {
-    #[bits(default = 1 << c::bch_extent_entry_type::BCH_EXTENT_ENTRY_reconcile_bp.0)]
+    #[bits(default = 1 << c::bch_extent_entry_type::reconcile_bp.0)]
     pub(self) type_: u9,
     idx:   u55,
 }

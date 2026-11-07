@@ -703,7 +703,7 @@ pub fn reconstruct_subvol(
     let v = k.v_mut();
     v.snapshot = snapshot.into();
     v.inode    = root.into();
-    v.set_state(c::bch_subvolume_state::SUBVOLUME_STATE_live);
+    v.set_state(c::bch_subvolume_state::live);
     t.insert(Btree::subvolumes, k, UpdateTriggerFlags::empty())?;
 
     let mut s = bch_err_msg!(fs,
@@ -713,7 +713,7 @@ pub fn reconstruct_subvol(
     let s = s.v_mut();
     let tree = s.tree();
     s.subvol = subvol.into();
-    s.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
+    s.set_state(c::bch_snapshot_state::live);
 
     let mut st = bch_err_msg!(fs,
         t.bkey_get_mut::<c::SnapshotTree>(Btree::snapshot_trees, pos(0, tree as u64),

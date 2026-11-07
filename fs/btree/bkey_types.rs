@@ -13,7 +13,7 @@ use crate::cstructs::c as cs;
 use crate::cstructs::c::BkeyType_arms;
 use crate::types::c_default;
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, bitfield, c_enum, c_same, c_verbatim, c_xmacro};
+use cstruct_macros::{CStruct, bitfield, c_enum, c_same, c_verbatim};
 use nestify::nest;
 use crate::format::Btree;
 
@@ -208,21 +208,16 @@ c_enum! {
     }
 }
 
-c_xmacro! {
-    BKEY_VALIDATE_CONTEXTS(x) {
-        (unknown),
-        (superblock),
-        (journal),
-        (btree_root),
-        (btree_node),
-        (commit),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(BKEY_VALIDATE_)]
     pub enum bkey_validate_from: u32 {
-        BKEY_VALIDATE_CONTEXTS(n) => concat(BKEY_VALIDATE_, n),
+        unknown,
+        superblock,
+        journal,
+        btree_root,
+        btree_node,
+        commit,
     }
 }
 

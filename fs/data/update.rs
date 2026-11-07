@@ -40,40 +40,34 @@ use crate::util::bio::pages;
 use crate::util::closure::StackClosure;
 use crate::sb::members::DevRef;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
-use crate::util::ffi::c_str;
 use crate::util::kernel::unlikely;
 use crate::util::rcu::read_lock;
 use crate::util::{Printbuf, ToText};
 use crate::util::log::should_print_err;
 use crate::{bch_err_ratelimited, function_name, prt};
 use crate::debug::trace::events;
-use core::ffi::{c_int, c_uint, CStr};
+use core::ffi::{c_int, c_uint};
 use pin_init::stack_pin_init;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{c_extern, CStruct, bitfield, c_enum, c_xmacro};
+use cstruct_macros::{c_extern, CStruct, bitfield, c_enum};
 use c::bch_data_update_types as Type;
 use crate::types::c_default;
 use core::sync::atomic::AtomicBool;
 use nestify::nest;
 use crate::format::{Bpos, Btree, CompressionType};
 
-c_xmacro! {
-    BCH_DATA_UPDATE_TYPES(x) {
-        (other),
-        (copygc),
-        (reconcile),
-        (promote),
-        (self_heal),
-        (scrub),
-        (scrub_no_repair),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(BCH_DATA_UPDATE_)]
     pub enum bch_data_update_types: u32 {
-        BCH_DATA_UPDATE_TYPES(n) => concat(BCH_DATA_UPDATE_, n),
+        other,
+        copygc,
+        reconcile,
+        promote,
+        self_heal,
+        scrub,
+        scrub_no_repair,
     }
 }
 
@@ -149,14 +143,6 @@ pub struct data_update {
     pub bvecs: *mut c::bio_vec,
 }
 
-macro_rules! type_names {
-    ($(($name:tt)),* $(,)?) => {
-        /// Indexed by update type; C strings, for the journal's log entry.
-        pub(crate) const TYPE_NAMES: &[&CStr] = &[$(c_str(concat!(stringify!($name), "\0")),)*];
-    };
-}
-c::BCH_DATA_UPDATE_TYPES!(type_names);
-
 c_extern! {
     pub fn bch2_read_bio_to_text(out: *mut Printbuf, c: *mut Fs, rbio: *mut c::bch_read_bio);
 }
@@ -174,7 +160,7 @@ pub fn read_err_benign(e: BchError) -> bool {
 /// ec_alloc_failed waits there too, but its transient subtypes and
 /// ec_alloc_failed_pending_race don't, and are traced.
 pub fn fail_should_trace(type_: Type, e: BchError) -> bool {
-    let parks = matches!(type_, Type::BCH_DATA_UPDATE_reconcile | Type::BCH_DATA_UPDATE_promote) &&
+    let parks = matches!(type_, Type::reconcile | Type::promote) &&
         e.matches(bch_errcode::BCH_ERR_data_update_fail_no_rw_devs);
 
     !(e.matches(bch_errcode::BCH_ERR_data_update_fail_in_flight) ||
@@ -195,7 +181,7 @@ pub(crate) type InFlightReg = Registration<c::data_update_key, c::data_update_ke
 
 impl c::data_update_key {
     fn new(pos: c::bbpos, type_: Type) -> Self {
-        c::data_update_key { btree: pos.btree, pos: pos.pos, copygc: type_ == Type::BCH_DATA_UPDATE_copygc }
+        c::data_update_key { btree: pos.btree, pos: pos.pos, copygc: type_ == Type::copygc }
     }
 }
 
@@ -257,7 +243,7 @@ impl Fs {
             out.tabstop_push(20);
         }
 
-        prt!(out, "{}", TYPE_NAMES[data_opts.type_ as usize].to_str().unwrap());
+        prt!(out, "{}", data_opts.type_.name());
         out.newline();
 
         ptr_bits_to_text(out, data_opts.ptrs_io_error, "io error");
@@ -331,7 +317,7 @@ pub(crate) const IOPRIO_IDLE: u16 = 3 << 13;
 
 /// Both scrub types read to check, and must never rewrite what they're checking.
 pub(crate) fn is_scrub(t: Type) -> bool {
-    matches!(t, Type::BCH_DATA_UPDATE_scrub | Type::BCH_DATA_UPDATE_scrub_no_repair)
+    matches!(t, Type::scrub | Type::scrub_no_repair)
 }
 
 impl c::data_update_opts {
@@ -602,7 +588,7 @@ impl c::data_update {
         let k = BkeySC::from(self.k.key());
 
         let snapshot = k.k.p.snapshot;
-        if type_ != Type::BCH_DATA_UPDATE_scrub_no_repair && snapshot != 0 && unlikely(!fs.snapshots.exists(snapshot)) {
+        if type_ != Type::scrub_no_repair && snapshot != 0 && unlikely(!fs.snapshots.exists(snapshot)) {
             let r = match crate::snapshots::check_snapshots::check_key_has_snapshot(t, iter, k) {
                 Ok(false) => Ok(()),
                 // the key was deleted
@@ -691,7 +677,7 @@ impl c::data_update {
             // checksum, has nothing to write either; but those pointers still
             // have to go. It runs, and read_done() drops them, through
             // index_update_nowrite()
-            let drop_only = nr == 0 && iter.is_none() && type_ == Type::BCH_DATA_UPDATE_self_heal;
+            let drop_only = nr == 0 && iter.is_none() && type_ == Type::self_heal;
 
             // No new replicas needed: the settings changed since it was
             // written
@@ -707,7 +693,7 @@ impl c::data_update {
             // bch2_write() after a useless read: alloc_nowait (promotes), a
             // full or offline target, too little durability on it. Not for a
             // drop: it doesn't write.
-            if type_ != Type::BCH_DATA_UPDATE_copygc && !drop_only {
+            if type_ != Type::copygc && !drop_only {
                 fs.data_update_write_feasible(io_opts, &self.opts, &self.op.devs_have, k, None)?;
             }
 
@@ -757,7 +743,7 @@ impl c::data_update {
 
         self.bios_init(io_opts, buf_bytes)?;
 
-        self.rbio.bits_mut().set_data_update_verify_decompress(u8::from(type_ == Type::BCH_DATA_UPDATE_scrub));
+        self.rbio.bits_mut().set_data_update_verify_decompress(u8::from(type_ == Type::scrub));
         Ok(held)
     }
 
@@ -772,7 +758,7 @@ impl c::data_update {
             return;
         }
         let fs = self.fs();
-        if self.opts.type_ == Type::BCH_DATA_UPDATE_scrub_no_repair {
+        if self.opts.type_ == Type::scrub_no_repair {
             let bit = dev_ptr_bit(fs, self.key(), self.rbio.pick.ptr.dev().into());
             self.found(scrub_journal::queue(fs, self.btree_id, 0, self.key(), bit, self.rbio.ret.into()));
         } else {
@@ -851,14 +837,14 @@ impl c::data_update {
             return false;
         }
 
-        if type_ == Type::BCH_DATA_UPDATE_scrub_no_repair {
+        if type_ == Type::scrub_no_repair {
             if self.opts.ptrs_io_error != 0 {
                 self.found(scrub_journal::queue(fs, self.btree_id, 0, self.key(), self.opts.ptrs_io_error.into(), 0));
             }
             return false;
         }
 
-        if type_ == Type::BCH_DATA_UPDATE_scrub && self.opts.ptrs_io_error == 0 {
+        if type_ == Type::scrub && self.opts.ptrs_io_error == 0 {
             return false;
         }
 

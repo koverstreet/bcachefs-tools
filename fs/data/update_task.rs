@@ -248,7 +248,7 @@ impl PinnedDrop for Update {
 // completing just after: the XXX at the top of async_objs.rs. A mover's
 // doesn't read its context, which isn't freed a grace period after it's done
 unsafe impl AsyncObj for Update {
-    const LIST: c::bch_async_obj_lists = c::bch_async_obj_lists::BCH_ASYNC_OBJ_LIST_data_update;
+    const LIST: c::bch_async_obj_lists = c::bch_async_obj_lists::data_update;
 
     #[cold]
     fn to_text(&self, out: &mut Printbuf, fs: &Fs) {

@@ -645,7 +645,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
     {
         let fs = self.fs;
         let data_opts = c::data_update_opts {
-            type_:        c::bch_data_update_types::BCH_DATA_UPDATE_copygc,
+            type_:        c::bch_data_update_types::copygc,
             commit_flags: c::bch_trans_commit_flags::from_bits_retain(c::bch_watermark::copygc as u32),
             ..Default::default()
         };

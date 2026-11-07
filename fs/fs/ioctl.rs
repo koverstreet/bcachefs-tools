@@ -313,7 +313,7 @@ where
             let subvol = k.k.p.offset;
 
             if let Some(s) = subvolume::val(k) {
-                if s.state_decoded() == Some(c::bch_subvolume_state::SUBVOLUME_STATE_live) {
+                if s.state_decoded() == Some(c::bch_subvolume_state::live) {
                     let n = c::subvol_inum { subvol, inum: s.inode.get() };
                     if let Emitted::Full = self.emit(t, n, c::DT_SUBVOL as u8)? {
                         return Ok(ControlFlow::Break(()));
@@ -515,7 +515,7 @@ fn snapshot_tree(fs: &Fs, subvol: u32, tree_id: u32, size: u32, node_size: usize
                                       BtreeIterFlags::PREFETCH);
         iter.for_each(&trans, |t, _, k| {
             let Some(s) = snapshot::val(k) else { return Ok(()) };
-            if s.tree() != tree_id || s.state_compat() == c::bch_snapshot_state::SNAPSHOT_STATE_deleted {
+            if s.tree() != tree_id || s.state_compat() == c::bch_snapshot_state::deleted {
                 return Ok(());
             }
 

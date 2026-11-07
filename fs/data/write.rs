@@ -797,7 +797,7 @@ fn write_op_end(op: Running<Op>) {
     let fs = op.fs();
     let mut op = op.end();
     unsafe {
-        async_objs::list_del(fs, c::bch_async_obj_lists::BCH_ASYNC_OBJ_LIST_write_op, &mut op.as_mut().list_idx);
+        async_objs::list_del(fs, c::bch_async_obj_lists::write_op, &mut op.as_mut().list_idx);
         if let Some(end_io) = op.as_ref().end_io {
             end_io(op.as_ptr());
         }
@@ -1041,7 +1041,7 @@ extern "C" fn __write_done(mut op: Running<Op>) {
         op.error = ret_to_c(fs.journal.error()) as i16;
     }
 
-    fs.times[c::bch_time_stats::BCH_TIME_data_write as usize].update(op.start_time);
+    fs.times[c::bch_time_stats::data_write as usize].update(op.start_time);
     op.res.put();
 
     drop(op.write_ref.take());
@@ -1579,7 +1579,7 @@ pub extern "C" fn bch2_write(mut op: Running<Op>) {
     assert!(op.pos != crate::POS_MAX, "a write at POS_MAX");
 
     let obj = core::ptr::from_mut::<Op>(&mut op).cast();
-    op.list_idx = fs.async_objs[c::bch_async_obj_lists::BCH_ASYNC_OBJ_LIST_write_op as usize].list
+    op.list_idx = fs.async_objs[c::bch_async_obj_lists::write_op as usize].list
         .add(NonNull::new(obj).expect("an op")).unwrap_or(0);
 
     if op.has(w::only_specified_devs) {

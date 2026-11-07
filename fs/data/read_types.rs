@@ -161,7 +161,7 @@ impl c::bch_read_bio {
     pub fn async_list_del(&mut self, fs: &crate::fs::Fs) {
         // SAFETY: its slot, from the read path's async_object_list_add()
         unsafe {
-            crate::debug::async_objs::list_del(fs, c::bch_async_obj_lists::BCH_ASYNC_OBJ_LIST_rbio, &mut self.list_idx)
+            crate::debug::async_objs::list_del(fs, c::bch_async_obj_lists::rbio, &mut self.list_idx)
         };
     }
 }

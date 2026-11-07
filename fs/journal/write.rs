@@ -418,9 +418,9 @@ extern "C" fn write_done(mut w: Running<c::journal_buf>) {
 
     let no_flush = w.head().no_flush();
     let time = if no_flush {
-        c::bch_time_stats::BCH_TIME_journal_noflush_write
+        c::bch_time_stats::journal_noflush_write
     } else {
-        c::bch_time_stats::BCH_TIME_journal_flush_write
+        c::bch_time_stats::journal_flush_write
     };
     fs.times[time as usize].update(j.write_start_time.get());
 
@@ -567,7 +567,7 @@ extern "C" fn write_done(mut w: Running<c::journal_buf>) {
         j.update_last_seq(&pins, &mut g);
         j.space_available(&mut g);
 
-        fs.times[c::bch_time_stats::BCH_TIME_blocked_journal_max_in_flight as usize].track_event_change(false);
+        fs.times[c::bch_time_stats::blocked_journal_max_in_flight as usize].track_event_change(false);
 
         j.wake_async_wait();
     }

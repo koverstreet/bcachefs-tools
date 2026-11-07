@@ -64,7 +64,7 @@ static const char * const wb_flush_caller_names[] = {
 };
 
 static const char * const bch_wb_btree_names[] = {
-#define x(name)	#name,
+#define x(name, ...)	#name,
 	BCH_WRITE_BUFFER_BTREES()
 #undef x
 };

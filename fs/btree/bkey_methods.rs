@@ -36,8 +36,8 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::format::{BkeyType, ErrorKeyReason, MetadataVersion};
 use crate::fs::Fs;
 use crate::{dirent, inode};
-use crate::snapshot_states::{SNAPSHOT_STATE_VALUES, SUBVOLUME_STATE_VALUES};
 use crate::typeinfo::{self, AccessError, FieldTarget, ResolveError, TypeInfo};
+use crate::util::names::Names;
 use core::fmt;
 use core::mem::size_of;
 
@@ -88,13 +88,12 @@ impl From<NoRoom> for SetError<'_> {
     }
 }
 
-/// The fields that hold enum codewords. The name<->value tables come from the
-/// x-macros (codegen.rs); this goes away when the format has a real schema.
+/// The fields that hold enum codewords, and the enums' names; this goes away
+/// when the format has a real schema.
 fn field_enum(type_: u8, field: &str) -> Option<EnumValues> {
-
     match (type_ as u32, field) {
-        (ty, "state") if ty == BkeyType::snapshot.0  => Some(SNAPSHOT_STATE_VALUES),
-        (ty, "state") if ty == BkeyType::subvolume.0 => Some(SUBVOLUME_STATE_VALUES),
+        (ty, "state") if ty == BkeyType::snapshot.0  => Some(<c::bch_snapshot_state as Names>::ENTRIES),
+        (ty, "state") if ty == BkeyType::subvolume.0 => Some(<c::bch_subvolume_state as Names>::ENTRIES),
         _ => None,
     }
 }

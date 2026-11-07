@@ -571,7 +571,7 @@ impl<'a, 'f> Walker<'a, 'f> {
         // none: a write buffer race
         let Some(bp) = bp_iter.peek_slot(t)?.and_then(BkeyI::<c::Backpointer>::from_key) else { return Ok(()) };
 
-        if fs.data_update_in_flight(bp.v.target(), c::bch_data_update_types::BCH_DATA_UPDATE_reconcile) {
+        if fs.data_update_in_flight(bp.v.target(), c::bch_data_update_types::reconcile) {
             return Ok(());
         }
 
