@@ -74,6 +74,14 @@ pub struct Cli {
     #[arg(short = 'd', long, default_value_t = 0, requires = "sample")]
     max_depth: usize,
 
+    /// Also break the estimate down by device, beside the kernel's accounting
+    #[arg(long, requires = "sample")]
+    devices: bool,
+
+    /// Also break file data down by the background target its files write to
+    #[arg(long, requires = "sample")]
+    targets: bool,
+
     /// Files and directories on a mounted bcachefs
     #[arg(default_value = ".")]
     paths: Vec<PathBuf>,

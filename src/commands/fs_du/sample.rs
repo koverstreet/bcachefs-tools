@@ -37,6 +37,13 @@
 //! in, where exact mode counts it in each path that sees it. Cached copies
 //! go to no path, as in exact mode.
 //!
+//! The data type table, whole and with --devices per device, puts the kernel's
+//! accounting from BCH_IOCTL_DEV_USAGE beside each estimate. They count a
+//! region partly overwritten differently: accounting its live sectors, the
+//! sample the whole region, which stays allocated until it's rewritten. Its
+//! unused is what accounting leaves of the capacity. --targets groups file
+//! data by the background target of the file that owns it.
+//!
 //! Backpointers go through the btree write buffer, and the ioctl doesn't see
 //! what's still in it: data written since the last write buffer flush shows
 //! as unused. A backpointer whose key doesn't point back is counted as stale,
@@ -49,10 +56,11 @@ use std::ops::Range;
 use std::path::{Component, Path};
 use std::time::Instant;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use bcachefs_kernel::alloc::backpointers::{backpointers_match, extent_ptr_to_bp};
 use bcachefs_kernel::alloc::background::alloc_to_v4;
 use bcachefs_kernel::alloc::buckets::gen_after;
+use bcachefs_kernel::alloc::disk_groups::Target;
 use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::btree::bkey::{pos, BkeySC, POS_MAX, POS_MIN};
 use bcachefs_kernel::c;
@@ -65,7 +73,7 @@ use bcachefs_kernel::util::{Sectors, ToText};
 
 use super::resolve::{fs_path, Resolver};
 use super::{Cli, Mounted};
-use crate::wrappers::handle::BcachefsHandle;
+use crate::wrappers::handle::{BcachefsHandle, DevUsage};
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
 
 /// One member device's part of the sampled space.
@@ -474,9 +482,27 @@ pub(super) fn run(m: &Mounted, cli: &Cli) -> Result<()> {
     }
     let total = tree.union(roots.iter().map(|(_, p)| p.as_path()));
 
-    let mut by_kind: BTreeMap<Kind, u64> = BTreeMap::new();
-    for (&(_, kind), &n) in &tally.kinds {
-        *by_kind.entry(kind).or_default() += n;
+    let usage = space.devs.iter()
+        .map(|d| m.handle.dev_usage(d.idx).map_err(|e| anyhow!("{}: reading its usage: {e}", d.name)))
+        .collect::<Result<Vec<_>>>()?;
+    let all_devs: Vec<usize> = (0..space.devs.len()).collect();
+
+    let mut targets: BTreeMap<String, u64> = BTreeMap::new();
+    if cli.targets {
+        for (owner, &n) in &tally.owners {
+            let label = match *owner {
+                Owner::Inode { inum, snapshot } => match resolver.background_target(inum, snapshot)? {
+                    Some(t) => {
+                        let mut label = Printbuf::new();
+                        m.fs.target_to_text(&mut label, Target::decode(t.into()));
+                        label.to_string()
+                    }
+                    None => "(unresolved)".to_string(),
+                },
+                Owner::Indirect(_) => "(reflinked)".to_string(),
+            };
+            *targets.entry(label).or_default() += n;
+        }
     }
 
     let mut out = Printbuf::new();
@@ -500,21 +526,67 @@ pub(super) fn run(m: &Mounted, cli: &Cli) -> Result<()> {
             writeln!(sub, "total");
         }
 
-        write!(sub, "\nestimate\r±95%\r  type\n");
-        for (&kind, &n) in &by_kind {
-            est(sub, n as f64);
-            kind_to_text(sub, kind);
-            writeln!(sub);
-        }
+        let kinds = |sub: &mut Printbuf, devs: &[usize]| {
+            write!(sub, "estimate\r±95%\raccounted\r  type\n");
+            for (kind, (n, accounted)) in kind_rows(&tally, devs, &usage) {
+                let (est, margin) = estimate(&tally, space.total, n as f64);
+                write!(sub, "{}\r{}\r", Sectors(est), Sectors(margin));
+                match accounted {
+                    Some(sectors) => write!(sub, "{}\r  ", Sectors(sectors)),
+                    None          => write!(sub, "-\r  "),
+                }
+                kind_to_text(sub, kind);
+                writeln!(sub);
+            }
+        };
+
+        writeln!(sub);
+        kinds(sub, &all_devs);
         for (n, what) in [(unresolved, "user, unresolved"), (reflinked, "user, reflinked")] {
             if n != 0 {
                 est(sub, n as f64);
                 writeln!(sub, "{what}");
             }
         }
+
+        if cli.devices {
+            for (i, d) in space.devs.iter().enumerate() {
+                writeln!(sub, "\n{} (device {}):", d.name, d.idx);
+                kinds(sub, &[i]);
+            }
+        }
+
+        if cli.targets {
+            write!(sub, "\nestimate\r±95%\r  background target\n");
+            for (label, &n) in &targets {
+                est(sub, n as f64);
+                writeln!(sub, "{label}");
+            }
+        }
     });
     print!("{out}");
     Ok(())
+}
+
+/// Samples on @devs by kind, and what the kernel accounts for each: the
+/// sectors of its data type, and for unused what's left of the capacity.
+fn kind_rows(tally: &Tally, devs: &[usize], usage: &[DevUsage]) -> BTreeMap<Kind, (u64, Option<u64>)> {
+    let mut rows: BTreeMap<Kind, (u64, Option<u64>)> = BTreeMap::new();
+
+    for (&(dev, kind), &n) in &tally.kinds {
+        if devs.contains(&dev) {
+            rows.entry(kind).or_default().0 += n;
+        }
+    }
+    for u in devs.iter().map(|&dev| &usage[dev]) {
+        // stripe buckets' data outside the stripe, also counted in stripe
+        for (t, d) in u.iter_typed().filter(|(t, d)| d.sectors != 0 && *t != DataType::unstriped) {
+            *rows.entry(Kind::data(t)).or_default().1.get_or_insert(0) += d.sectors;
+        }
+        *rows.entry(Kind::Unused).or_default().1.get_or_insert(0) +=
+            u.capacity_sectors().saturating_sub(u.used_sectors());
+    }
+    rows
 }
 
 /// Samples by path, from the filesystem's root.
