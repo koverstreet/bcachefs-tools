@@ -10,6 +10,7 @@ use clap::Parser;
 
 use bcachefs_kernel::btree;
 use bcachefs_kernel::btree::bkey::{BkeyI, BkeyP, BkeyS};
+use bcachefs_kernel::btree::read::BsetHolder;
 use bcachefs_kernel::data::inline_data::InlineDataMut;
 use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::c;
@@ -27,20 +28,21 @@ use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
 /// Decrypted, or encrypted again: ChaCha20 is its own inverse.
 fn bset_encrypt(fs: &Fs, buf: &mut [u8], first: bool, offset: u32) -> Result<(), BchError> {
     if first {
-        c::btree_node::<Unvalidated>::from_bytes_mut(buf).expect("a btree node, checked whole").encrypt(fs)
+        c::btree_node::<Unvalidated>::of_mut(buf).encrypt(fs, offset)
     } else {
-        c::btree_node_entry::<Unvalidated>::from_bytes_mut(buf).expect("a node entry, checked whole")
-            .encrypt(fs, offset)
+        c::btree_node_entry::<Unvalidated>::of_mut(buf).encrypt(fs, offset)
     }
 }
 
 fn bset_csum_set(fs: &Fs, buf: &mut [u8], first: bool, offset: u32) {
+    fn set<H: BsetHolder + ?Sized>(fs: &Fs, n: &mut H, offset: u32) {
+        n.set_csum(n.checksum(fs, offset));
+    }
+
     if first {
-        let n = c::btree_node::<Unvalidated>::from_bytes_mut(buf).expect("a btree node, checked whole");
-        n.csum = n.checksum(fs);
+        set(fs, c::btree_node::<Unvalidated>::of_mut(buf), offset)
     } else {
-        let n = c::btree_node_entry::<Unvalidated>::from_bytes_mut(buf).expect("a node entry, checked whole");
-        n.csum = n.checksum(fs, offset);
+        set(fs, c::btree_node_entry::<Unvalidated>::of_mut(buf), offset)
     }
 }
 

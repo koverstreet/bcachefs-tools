@@ -538,6 +538,36 @@ impl KeysMut<'_> {
             .unwrap_or_else(|| panic!("no room for a bset at offset {offset} of a {len} u64 node"))
     }
 
+    /// Every set's keys before @min and after @max gone.
+    pub fn drop_keys_outside(&mut self, min: Bpos, max: Bpos) {
+        for set in 0..self.sets.len() {
+            let t = self.sets[set];
+            let keys = self.as_keys();
+            let k = keys.keys_between(t.first_offset(), t.end_offset)
+                .find(|&(at, _)| keys.unpack_pos(at) >= min)
+                .map_or(t.end_offset, |(at, _)| at);
+
+            if k != t.first_offset() {
+                let shift = k - t.first_offset();
+
+                self.buf.copy_within(k as usize..t.end_offset as usize, t.first_offset() as usize);
+                self.bset_head_mut(t.data_offset).set_u64s(t.u64s() - shift as usize);
+                self.set_bset_end(set);
+            }
+
+            let t = self.sets[set];
+            let keys = self.as_keys();
+            let past = keys.keys_between(t.first_offset(), t.end_offset)
+                .find(|&(at, _)| keys.unpack_pos(at) > max)
+                .map(|(at, _)| at);
+
+            if let Some(k) = past {
+                self.bset_head_mut(t.data_offset).set_u64s((k - t.first_offset()) as usize);
+                self.set_bset_end(set);
+            }
+        }
+    }
+
     /// The bset at @offset, with its first set's seq, as a new set.
     fn bset_init(&mut self, offset: u16, seq: Le64) {
         let i = self.bset_head_mut(offset);

@@ -13,6 +13,8 @@ use crate::btree::node::{BtreeNode, NodeContents};
 use crate::btree::path::Paths;
 use crate::btree::path_node::bch2_trans_node_reinit_iter;
 use crate::btree::trans::BtreeTrans;
+use crate::btree::read::BsetHolder;
+use crate::btree::validate::{validate_bset, validate_bset_keys, NodeIo, NodeValidate};
 use crate::btree_trans;
 use crate::c;
 use crate::cstructs::c as cs;
@@ -22,8 +24,8 @@ use crate::data::ptrs::{Ptrs, PtrsMut};
 use crate::data::write::{submit_wbio_replicas, to_wbio, wbio_init};
 use crate::debug::async_objs;
 use crate::debug::trace::events;
-use crate::errcode::{ret_to_result_void, BchError};
-use crate::fs::{Dev, Fs};
+use crate::errcode::BchError;
+use crate::fs::Fs;
 use crate::format::{Btree, DataType};
 use crate::init::error::BkeyValidate;
 use crate::inode_opts::get_io_opts;
@@ -31,7 +33,7 @@ use crate::locking::six::{six_lock_counts, six_lock_downgrade, six_lock_tryupgra
 use crate::locking::Locked;
 use crate::types::{Le16, Le64};
 use crate::util::bio::{bch2_bio_map, buf_nr_bvecs, of_bio, MapBuf};
-use crate::util::kernel::{dump_stack, local_clock, unlikely, READ, WRITE};
+use crate::util::kernel::{dump_stack, local_clock, unlikely, READ};
 use crate::util::log::LogMsg;
 use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::{cast_plain_mut, cast_plain_slice_mut, plain_bytes, Head, Unvalidated};
@@ -72,12 +74,6 @@ c_enum! {
 
 c_extern! {
     pub fn bch2_btree_flush_all_writes(c: *mut Fs) -> bool;
-    pub fn bch2_validate_bset(c: *mut Fs, ca: *mut Dev, b: *mut BtreeNode, i: *mut Head<c::bset>,
-                              offset: c_uint, write: c_int, failed: *mut c::bch_io_failures,
-                              err_msg: *mut Printbuf) -> c_int;
-    pub fn bch2_validate_bset_keys(c: *mut Fs, ca: *mut Dev, b: *mut BtreeNode, i: *mut Head<c::bset>,
-                                   write: c_int, failed: *mut c::bch_io_failures,
-                                   err_msg: *mut Printbuf) -> c_int;
     pub fn bch2_btree_node_get_iter(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter,
                                     b: *mut BtreeNode) -> c_int;
 }
@@ -313,7 +309,14 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     };
 }
 
-fn validate_bset_for_write(fs: &Fs, b: &BtreeNode, i: *mut Head<c::bset>) -> Result<(), BchError> {
+/// Encrypted, then checksummed, at byte @offset of the node.
+fn seal_bset<H: BsetHolder + ?Sized>(fs: &Fs, n: &mut H, offset: u32) -> Result<(), BchError> {
+    n.encrypt(fs, offset)?;
+    n.set_csum(n.checksum(fs, offset));
+    Ok(())
+}
+
+fn validate_bset_for_write<H: BsetHolder + ?Sized>(fs: &Fs, b: &BtreeNode, n: &mut H) -> Result<(), BchError> {
     let mut from = c::bkey_validate_context {
         level: b.c.level + 1,
         btree: Btree(b.c.btree_id.into()),
@@ -328,11 +331,9 @@ fn validate_bset_for_write(fs: &Fs, b: &BtreeNode, i: *mut Head<c::bset>) -> Res
         return Err(e);
     }
 
-    let (c, bp, null) = (fs.as_ptr(), ptr::from_ref(b).cast_mut(), ptr::null_mut());
-    let ret = ret_to_result_void(unsafe { bch2_validate_bset_keys(c, null, bp, i, WRITE as c_int, null.cast(), null.cast()) })
-        .and_then(|()| ret_to_result_void(unsafe {
-            bch2_validate_bset(c, null, bp, i, b.written.get().into(), WRITE as c_int, null.cast(), null.cast())
-        }));
+    let mut v = NodeValidate { fs, b, io: NodeIo::Write };
+    let ret = validate_bset_keys(&mut v, n)
+        .and_then(|()| validate_bset(&mut v, n, b.written.get().into()));
     if ret.is_err() {
         fs.inconsistent();
         dump_stack();
@@ -570,7 +571,11 @@ impl BsetWrite {
     }
 
     fn validate(&mut self, b: &BtreeNode) -> Result<(), BchError> {
-        validate_bset_for_write(self.fs, b, self.bounce[self.keys_at..].as_mut_ptr().cast())
+        if self.first {
+            validate_bset_for_write(self.fs, b, c::btree_node::<Unvalidated>::of_mut(&mut self.bounce))
+        } else {
+            validate_bset_for_write(self.fs, b, c::btree_node_entry::<Unvalidated>::of_mut(&mut self.bounce))
+        }
     }
 
     fn seal(&mut self, b: &BtreeNode) -> Result<(), BchError> {
@@ -588,13 +593,9 @@ impl BsetWrite {
 
         let offset = (b.written.get() as u32) << 9;
         let ret = if self.first {
-            let bn = c::btree_node::<Unvalidated>::from_bytes_mut(&mut self.bounce)
-                .expect("the node's first bset, in its buffer");
-            bn.encrypt(fs).map(|()| bn.csum = bn.checksum(fs))
+            seal_bset(fs, c::btree_node::<Unvalidated>::of_mut(&mut self.bounce), offset)
         } else {
-            let bne = c::btree_node_entry::<Unvalidated>::from_bytes_mut(&mut self.bounce)
-                .expect("a node entry, in its buffer");
-            bne.encrypt(fs, offset).map(|()| bne.csum = bne.checksum(fs, offset))
+            seal_bset(fs, c::btree_node_entry::<Unvalidated>::of_mut(&mut self.bounce), offset)
         };
         if let Err(e) = ret {
             fs_fatal_error!(fs, "encrypting btree node: {}", e.msg());

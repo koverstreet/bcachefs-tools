@@ -14,7 +14,7 @@ use crate::init::error::BkeyValidate;
 use crate::btree::cache::{__bch2_btree_node_mem_alloc, bch2_btree_node_data_free, bch2_btree_node_mem_free};
 use crate::btree::journal_overlay;
 use crate::btree::node::BtreeNode;
-use crate::btree::read::bch2_btree_node_read_done;
+use crate::btree::read::read_done;
 use crate::c::{self, bch_errcode, BtreePtrV2};
 use crate::data::ptrs::extent_ptr_to_text;
 use crate::errcode::{ret_to_c, BchError};
@@ -271,10 +271,7 @@ impl<'f> DevScan<'f> {
         b.contents.get_mut().set_key(n.to_key().as_bkey_i());
 
         let mut err = Printbuf::new();
-        let ret = unsafe {
-            bch2_btree_node_read_done(fs.as_ptr(), ca.as_ptr(), b, core::ptr::null_mut(), err.as_raw())
-        };
-        if ret != 0 {
+        if read_done(fs, ca, b, None, &mut err).is_err() {
             return Ok(());
         }
 
