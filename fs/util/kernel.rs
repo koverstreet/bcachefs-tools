@@ -236,6 +236,10 @@ pub fn msleep(ms: u32) {
     unsafe { c::bch2_msleep(ms) }
 }
 
+pub fn dump_stack() {
+    unsafe { c::dump_stack() }
+}
+
 /// The system's memory, in bytes: totalram_pages() of them.
 pub fn totalram_bytes() -> usize {
     unsafe { c::totalram_pages() as usize * PAGE_SIZE }
