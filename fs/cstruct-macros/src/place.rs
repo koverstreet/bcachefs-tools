@@ -3,7 +3,7 @@
 //! it lives at.
 //!
 //! `#[placed(Base.field)]`, or `#[placed(Base.field[], index = NAME: TYPE)]`
-//! for an element of that array, ahead of `#[pin_data]` and the derives, is
+//! for an element of that array - or of the Array there - ahead of `#[pin_data]` and the derives, is
 //! all a placed type says, and all its parent needs - `[..]` for an element
 //! of the Container there is below. It gives the struct:
 //!
@@ -190,8 +190,8 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
             }
             let init = match &kind {
                 Kind::Field => quote!(crate::util::place::at(#name::init)),
-                _ => quote!(::pin_init::pin_init_array_from_fn(|i| unsafe {
-                    crate::util::place::at_index(i, #name::init) })),
+                _ => quote!(<<Self as crate::util::place::Field<#n>>::Type as crate::util::place::Array>::init_each(
+                    |i| unsafe { crate::util::place::at_index(i, #name::init) })),
             };
             // #[pin_data]'s own check refuses a Drop; without it, this is the
             // one a Drop of its own would conflict with
