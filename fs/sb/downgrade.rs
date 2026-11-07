@@ -17,7 +17,7 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::init::passes;
 use crate::{prt, sb_err_on};
-use crate::sb::errors::prt_error_ids;
+use crate::sb::errors::{prt_error_ids, SbErrorId};
 use crate::sb::io::{entries_as_read, entries_end, SbFieldOps};
 use crate::types::Le64;
 use crate::util::alloc::{AllocError, KVVec};
@@ -71,7 +71,7 @@ impl SbFieldOps for Section {
             out.newline();
 
             write!(out, "errors:\t");
-            prt_error_ids(out, e.errors.iter().map(|id| c::bch_sb_error_id(id.get().into())));
+            prt_error_ids(out, e.errors.iter().map(|id| SbErrorId(id.get().into())));
             out.newline();
         }
     }
@@ -126,7 +126,7 @@ struct UpDown {
     all_fsck: bool,
     /// BCH_RECOVERY_PASS_* bits.
     passes:   u64,
-    errors:   &'static [c::bch_sb_error_id],
+    errors:   &'static [SbErrorId],
 }
 
 /// `version => [passes] (+ all_fsck), [errors];`
@@ -136,7 +136,7 @@ macro_rules! table {
             version:  MetadataVersion::[<bcachefs_metadata_version_ $ver>],
             all_fsck: false $(|| table!(@$all))?,
             passes:   0 $(| 1 << c::bch_recovery_pass::[<BCH_RECOVERY_PASS_ $pass>] as u64)*,
-            errors:   &[$(c::bch_sb_error_id::[<BCH_FSCK_ERR_ $err>]),*],
+            errors:   &[$(SbErrorId::[<BCH_FSCK_ERR_ $err>]),*],
         }),*]
     } };
     (@all_fsck) => { true };

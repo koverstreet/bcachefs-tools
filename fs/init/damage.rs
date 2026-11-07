@@ -37,7 +37,7 @@ use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::inode::{self, bkey_is_inode};
-use crate::sb::errors::{merge, prt_error_nr, ErrorEntry};
+use crate::sb::errors::{merge, prt_error_nr, ErrorEntry, SbErrorId};
 use crate::snapshots::subvolume;
 use crate::util::{DateTime, Printbuf};
 use crate::util::alloc::{kvvec_insert, KVVec};
@@ -140,7 +140,7 @@ pub fn accumulate(t: &TransAttempt<'_, '_>, inum: u64, mut snapshot: u32)
 /// summary, debugfs's fsck_damaged_paths - the reporting surface until
 /// reports read the damage btree. In -n mode the update never commits while
 /// the report still has it: as it should.
-pub fn record(t: &TransAttempt<'_, '_>, pos: Bpos, err: c::bch_sb_error_id) -> Result<(), BchError> {
+pub fn record(t: &TransAttempt<'_, '_>, pos: Bpos, err: SbErrorId) -> Result<(), BchError> {
     let at = spos(0, if pos.inode != 0 { pos.inode } else { pos.offset }, pos.snapshot);
 
     crate::init::error::fsck_damaged(t.fs(), pos, err);
@@ -183,7 +183,7 @@ pub fn record(t: &TransAttempt<'_, '_>, pos: Bpos, err: c::bch_sb_error_id) -> R
 /// record(), for a key at @pos in @btree: damage is keyed by inode, and only
 /// an extents position names one - getting to an indirect extent's inodes
 /// would mean walking reflink pointers backwards.
-pub fn record_key(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos, err: c::bch_sb_error_id)
+pub fn record_key(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos, err: SbErrorId)
     -> Result<(), BchError>
 {
     if btree == Btree::extents { record(t, pos, err) } else { Ok(()) }
@@ -198,7 +198,7 @@ fn inode_exists(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<bo
 /// too - a journal rewind can take its creation with it: a damage key for an
 /// inode that doesn't exist would only be check_damage's to delete.
 pub fn record_key_if_inode(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos,
-                           err: c::bch_sb_error_id) -> Result<(), BchError> {
+                           err: SbErrorId) -> Result<(), BchError> {
     if btree != Btree::extents || !inode_exists(t, pos.inode, pos.snapshot)? {
         return Ok(());
     }
@@ -209,7 +209,7 @@ pub fn record_key_if_inode(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos,
 /// removal dropping the last replica, a read error: @err counted in the
 /// superblock, and record_key().
 pub fn record_data_loss(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos,
-                        err: c::bch_sb_error_id) -> Result<(), BchError> {
+                        err: SbErrorId) -> Result<(), BchError> {
     t.fs().sb_error_count(err);
     record_key(t, btree, pos, err)
 }
@@ -288,13 +288,13 @@ pub fn keys_merge<'a, 't>(
 /* For C's: in the attempt C has in progress */
 
 #[c_export]
-pub extern "C" fn bch2_damage_record(trans: &BtreeTrans<'_>, pos: Bpos, err: c::bch_sb_error_id) -> c_int {
+pub extern "C" fn bch2_damage_record(trans: &BtreeTrans<'_>, pos: Bpos, err: SbErrorId) -> c_int {
     ret_to_c(record(&unsafe { trans.attempt_in_progress() }, pos, err))
 }
 
 #[c_export]
 pub extern "C" fn bch2_damage_record_key(trans: &BtreeTrans<'_>, btree: Btree, pos: Bpos,
-                                     err: c::bch_sb_error_id) -> c_int {
+                                     err: SbErrorId) -> c_int {
     ret_to_c(record_key(&unsafe { trans.attempt_in_progress() }, btree, pos, err))
 }
 

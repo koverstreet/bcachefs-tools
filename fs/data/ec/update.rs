@@ -20,6 +20,7 @@ use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
 use crate::debug::trace::events;
+use crate::sb::errors::FsckFlags;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::Validated;
 use crate::util::{Join, Printbuf};
@@ -160,7 +161,7 @@ fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, b
         // Only carrying an extent of the old stripe's has a stripe pointer to
         // drop: the new stripe's own blocks - old_idx == new_idx - have none
         if p.ec.idx() != old_idx {
-            fsck_err_flags!(t, POS_MIN, c::bch_fsck_flags::FSCK_CAN_IGNORE, id::stripe_update_stale_stripe_ptr,
+            fsck_err_flags!(t, POS_MIN, FsckFlags::CAN_IGNORE, id::stripe_update_stale_stripe_ptr,
                             "dropping stale stripe pointer (idx {}) while updating extent\n{}",
                             p.ec.idx(), k.to_text(fs))?;
         }

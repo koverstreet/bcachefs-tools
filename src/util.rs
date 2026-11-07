@@ -6,7 +6,7 @@ use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
-use bch_bindgen::c;
+use bcachefs_kernel::sb::errors::SbErrorId;
 use crossterm::{cursor, execute, terminal};
 use rustix::ioctl::{self, Getter};
 
@@ -122,7 +122,7 @@ pub fn subvol_root(path: &Path) -> Result<std::path::PathBuf> {
 /// The name of a bch_sb_error_id - the same table fsck and the
 /// superblock error counters use.
 pub fn sb_error_name(id: u32) -> String {
-    c::bch_sb_error_id(id).to_string()
+    SbErrorId(id).to_string()
 }
 
 /// Parse a human-readable size string (e.g. "1G", "512M").

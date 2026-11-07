@@ -42,6 +42,7 @@ use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
 use crate::data::inline_data::InlineDataRef;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
+use crate::sb::errors::FsckFlags;
 use crate::snapshots::subvolume;
 use crate::types::{GenRadix, Le32, Le64};
 use crate::util::ffi::Opaque;
@@ -702,7 +703,7 @@ fn trans_trigger_reflink_p_segment(
     let refcount = k.refcount();
 
     if refcount.get() == 0 && overwrite {
-        fsck_err_flags!(t, POS_MIN, c::bch_fsck_flags::FSCK_CAN_IGNORE, id::reflink_refcount_underflow,
+        fsck_err_flags!(t, POS_MIN, FsckFlags::CAN_IGNORE, id::reflink_refcount_underflow,
                         "indirect extent refcount underflow while marking\n{}\n{}",
                         p.to_text(fs), k.to_text(fs))?;
         return Ok(());

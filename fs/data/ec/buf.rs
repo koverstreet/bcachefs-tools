@@ -21,6 +21,7 @@ use crate::c;
 use crate::data::ec::stripe::{shape, Shape, StripeKey, MAX_BLOCKS};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
+use crate::sb::errors::SbErrorId;
 use crate::util::{raid, Printbuf};
 use crate::util::alloc::{kbox_pin_init, ABox, AVec, AllocError, ConstAlign, KBox};
 use crate::util::backref::BackRef;
@@ -529,7 +530,7 @@ pub fn validate(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBu
         // A device offline or an IO error is the environment, and a stale
         // read of a stripe that isn't open an expected race: neither counts.
         if is_open && e == stale {
-            fs.sb_error_count(c::bch_sb_error_id::BCH_FSCK_ERR_stripe_read_ptr_stale);
+            fs.sb_error_count(SbErrorId::stripe_read_ptr_stale);
         }
     }
 
@@ -563,14 +564,14 @@ pub fn validate_msg(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut Stri
     let csum_err = Some(bch_errcode::BCH_ERR_stripe_read_csum_err.into());
     let nr = usize::from(s.v().nr_blocks);
     for _ in buf.err[PRE][..nr].iter().filter(|&&e| e == csum_err) {
-        fs.sb_error_count(c::bch_sb_error_id::BCH_FSCK_ERR_stripe_read_csum_err);
+        fs.sb_error_count(SbErrorId::stripe_read_csum_err);
     }
 
     // do_recov()'s verdict fails two ways: too many blocks gone to run at
     // all, or running and producing blocks that still don't check out. Both
     // cost the caller its data.
     if ret.is_err() {
-        fs.sb_error_count(c::bch_sb_error_id::BCH_FSCK_ERR_stripe_reconstruct_failed);
+        fs.sb_error_count(SbErrorId::stripe_reconstruct_failed);
     }
 
     // Damage only to blocks the caller isn't using isn't an error - a stripe

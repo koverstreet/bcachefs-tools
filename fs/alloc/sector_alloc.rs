@@ -39,6 +39,7 @@ use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::opts::data_type_str;
 use crate::debug::trace::events;
+use crate::sb::errors::SbErrorId;
 use crate::util::kernel::unlikely;
 use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
@@ -169,8 +170,8 @@ impl<'f> TransAttempt<'_, 'f> {
                 if req.nr_effective < u32::from(req.nr_replicas) &&
                    !req.flags.contains(w::BCH_WRITE_replicas_best_effort) {
                     fs.sb_error_count(match matches(err, bch_errcode::BCH_ERR_insufficient_devices) {
-                        true  => c::bch_sb_error_id::BCH_FSCK_ERR_write_degraded_insufficient_devices,
-                        false => c::bch_sb_error_id::BCH_FSCK_ERR_write_degraded_no_progress,
+                        true  => SbErrorId::write_degraded_insufficient_devices,
+                        false => SbErrorId::write_degraded_no_progress,
                     });
                 }
                 err = None;

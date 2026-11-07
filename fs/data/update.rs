@@ -35,6 +35,7 @@ use crate::data::nocow_locking::{self, NocowKind};
 use crate::data::ptrs::{brand, BkeyVPtrs, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
+use crate::sb::errors::SbErrorId;
 use crate::util::bio::pages;
 use crate::util::closure::StackClosure;
 use crate::sb::members::DevRef;
@@ -322,7 +323,7 @@ pub fn data_update_inflight_to_text(out: &mut Printbuf, m: &c::data_update) {
 // ── init, read_done, exit ────────────────────────────────────────────────
 
 c_extern! {
-    fn bch2_data_read_sb_err(err: c_int) -> c::bch_sb_error_id;
+    fn bch2_data_read_sb_err(err: c_int) -> SbErrorId;
 }
 
 /// IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0): background IO yields to everyone else's.

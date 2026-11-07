@@ -39,12 +39,12 @@ use crate::fs::Fs;
 use crate::init::error::id;
 use crate::init::passes;
 use crate::init::progress::Progress;
+use crate::sb::errors::FsckFlags;
 use crate::sb::members::DevRef;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{local_clock, READ};
 use crate::{bch_err, bch_info, bch_verbose, fsck_err, fsck_err_flags, fsck_err_on};
 use crate::c::bch_errcode;
-use crate::c::bch_fsck_flags as F;
 use core::ffi::c_int;
 use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree, DataType, BkeyType, SbFeature};
@@ -178,7 +178,7 @@ pub(crate) fn need_discard_or_freespace_err(
     discard: bool,
     repair:  bool,
 ) -> Result<bool, BchError> {
-    let flags = F::FSCK_CAN_IGNORE | if repair { F::FSCK_CAN_FIX } else { F::empty() };
+    let flags = FsckFlags::CAN_IGNORE | if repair { FsckFlags::CAN_FIX } else { FsckFlags::empty() };
     let (err, btree) = if discard {
         (id::need_discard_key_wrong, Btree::need_discard)
     } else {
@@ -475,11 +475,11 @@ pub(crate) enum FreespaceCheck {
 }
 
 impl FreespaceCheck {
-    fn fsck_flags(self) -> F {
-        F::FSCK_CAN_FIX | F::FSCK_CAN_IGNORE | match self {
-            Self::Fsck      => F::empty(),
-            Self::Allocator => F::FSCK_ERR_NO_LOG,
-            Self::Recheck   => F::FSCK_ERR_SILENT,
+    fn fsck_flags(self) -> FsckFlags {
+        FsckFlags::CAN_FIX | FsckFlags::CAN_IGNORE | match self {
+            Self::Fsck      => FsckFlags::empty(),
+            Self::Allocator => FsckFlags::ERR_NO_LOG,
+            Self::Recheck   => FsckFlags::ERR_SILENT,
         }
     }
 }

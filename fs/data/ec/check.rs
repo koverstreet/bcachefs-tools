@@ -22,6 +22,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::id;
+use crate::sb::errors::FsckFlags;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;
 use crate::{fsck_err, fsck_err_flags, fsck_err_on};
@@ -68,7 +69,7 @@ fn check_stripe_refs_one(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, last_flushed: 
 
         let stale = ca.ptr_stale(ptr, &read_lock()).is_some_and(|n| n > 0);
         if stale {
-            fsck_err_flags!(t, POS_MIN, c::bch_fsck_flags::FSCK_CAN_IGNORE, id::stripe_read_ptr_stale,
+            fsck_err_flags!(t, POS_MIN, FsckFlags::CAN_IGNORE, id::stripe_read_ptr_stale,
                             "stripe block {i} points to a bucket that has been reused\n{}", k.to_text(fs))?;
         }
     }

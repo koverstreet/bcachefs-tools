@@ -26,6 +26,7 @@ use crate::data::reflink::Indirect;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
+use crate::sb::errors::FsckFlags;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::alloc::{darray_exit, DArrayLoan};
 use crate::util::ffi::{c_str, Opaque};
@@ -622,9 +623,9 @@ fn propagate_one(
          * run: before that the filesystem predates propagation, so
          * finding work is the upgrade, not a bug.
          */
-        let mut flags = c::bch_fsck_flags::FSCK_CAN_FIX | c::bch_fsck_flags::FSCK_CAN_IGNORE;
+        let mut flags = FsckFlags::CAN_FIX | FsckFlags::CAN_IGNORE;
         if t.fs().sb.compat.get() & (1 << c::bch_sb_compat::BCH_COMPAT_inode_opts_propagated.0) == 0 {
-            flags |= c::bch_fsck_flags::FSCK_ERR_SILENT;
+            flags |= FsckFlags::ERR_SILENT;
         }
 
         let mut buf = Printbuf::new();

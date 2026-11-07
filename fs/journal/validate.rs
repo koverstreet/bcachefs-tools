@@ -11,6 +11,7 @@ use crate::fs::{Dev, Fs};
 use crate::btree::bkey::{BkeySC, ValidateFlags};
 use crate::init::error::{fs_inconsistent, id, mustfix_fsck_err, sb_error_count, BkeyValidate};
 use crate::init::recovery::btree_lost_data;
+use crate::sb::errors::SbErrorId;
 use crate::util::ffi::Opaque;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::{bytes_of, cast_plain, cast_plain_mut, ArmRef, Head, SelfSized,
@@ -112,7 +113,7 @@ impl<'a> Ctx<'a> {
         self.from.bits.flags().contains(ValidateFlags::write)
     }
 
-    fn err(&self, err: c::bch_sb_error_id, msg: &dyn ToText) -> Result<(), BchError> {
+    fn err(&self, err: SbErrorId, msg: &dyn ToText) -> Result<(), BchError> {
         let mut buf = Printbuf::new();
         err_msg(&mut buf, self.version, self.jset, self.entry);
         msg.to_text(&mut buf);
@@ -303,8 +304,8 @@ fn journal_entry_btree_keys_to_text(out: &mut Printbuf, fs: Option<&Fs>, e: &[u8
 /// An entry's size against its type's, MIN_LEN, and the error a bad one counts.
 enum Size {
     Any,
-    Exactly(c::bch_sb_error_id),
-    AtLeast(c::bch_sb_error_id),
+    Exactly(SbErrorId),
+    AtLeast(SbErrorId),
 }
 
 /// A journal entry type's checks, made on its bytes as read and repaired

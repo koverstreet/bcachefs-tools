@@ -23,6 +23,7 @@ use crate::init::error::{count_fsck_err, fs_inconsistent, id};
 use crate::init::passes;
 use crate::opts::data_type_str;
 use crate::locking::{Locked, ByteLock};
+use crate::sb::errors::SbErrorId;
 use crate::types::{bits_to_longs, Le64};
 use crate::util::ffi::Opaque;
 use crate::util::kernel::unlikely;
@@ -449,7 +450,7 @@ impl TransAttempt<'_, '_> {
     /// @err, and check_allocations scheduled to fix it. Inserting it - @fatal
     /// - is an inconsistency; overwriting it isn't an error at all, so
     /// deletion works.
-    fn bucket_ref_update_err(&self, k: BkeySC<'_>, fatal: bool, err: c::bch_sb_error_id, msg: &dyn ToText)
+    fn bucket_ref_update_err(&self, k: BkeySC<'_>, fatal: bool, err: SbErrorId, msg: &dyn ToText)
         -> Result<(), BchError>
     {
         let fs = self.fs();

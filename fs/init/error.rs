@@ -32,10 +32,10 @@
 use crate::fs::Dev;
 use crate::btree::bkey::{pos, BkeySC, POS_MIN, ValidateFlags};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};use crate::c;
-use crate::c::{bch_fsck_flags, bch_sb_error_id};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::prt;
+use crate::sb::errors::{FsckFlags, SbErrorId};
 use crate::util::alloc::KVVec;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::{jiffies, time_after, HZ};
@@ -66,7 +66,7 @@ use crate::format::{Bpos, Btree, MemberState};
 pub struct fsck_damaged_path {
     pub inum: u64,
     pub snapshot: u32,
-    /* bch_sb_error_id, deduped; 0 terminated (error 0 is fs-level) */
+    /* SbErrorId, deduped; 0 terminated (error 0 is fs-level) */
     pub nr_errors: u16,
     pub errors: [u16; 7],
 }
@@ -75,7 +75,7 @@ pub struct fsck_damaged_path {
 /// last message - a restart reports it again, and replays the verdict - and
 /// a Y or N for all of its kind: init/error.rs.
 pub(crate) struct FsckErrState {
-    pub(crate) id:          c::bch_sb_error_id,
+    pub(crate) id:          SbErrorId,
     pub(crate) nr:          u64,
     /// Past FSCK_ERR_RATELIMIT_NR, the rest unprinted
     pub(crate) ratelimited: bool,
@@ -87,7 +87,7 @@ pub(crate) struct FsckErrState {
 }
 
 impl FsckErrState {
-    pub(crate) fn new(id: c::bch_sb_error_id) -> Self {
+    pub(crate) fn new(id: SbErrorId) -> Self {
         FsckErrState { id, nr: 0, ratelimited: false, ret: None, fix: None, last_msg: None }
     }
 }
@@ -127,18 +127,8 @@ pub struct bch_fs_errors {
     pub(crate) counts: rust_only!(Locked<c::mutex, KVVec<c::bch_sb_error_entry_cpu>>),
 }
 
-/// The fsck error ids by their BCH_SB_ERRS() names: id::inode_wrong_nlink.
-pub mod id {
-    use crate::c::{self, bch_sb_error_id};
-
-    macro_rules! fsck_err_ids {
-        ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! { $(
-            #[allow(non_upper_case_globals)]
-            pub const $name: bch_sb_error_id = bch_sb_error_id::[<BCH_FSCK_ERR_ $name>];
-        )* } };
-    }
-    c::BCH_SB_ERRS!(fsck_err_ids);
-}
+/// The fsck error ids by their names: id::inode_wrong_nlink.
+pub type id = SbErrorId;
 
 /// What an fsck error is reported against. A transaction is passed down so
 /// __bch2_fsck_err() can drop its locks while it waits on a question; an error
@@ -163,8 +153,8 @@ impl FsckErrCtx for TransAttempt<'_, '_> {
 fn __fsck_err(
     ctx:   &impl FsckErrCtx,
     pos:   Bpos,
-    flags: bch_fsck_flags,
-    err:   bch_sb_error_id,
+    flags: FsckFlags,
+    err:   SbErrorId,
     msg:   &dyn ToText,
 ) -> Result<bool, BchError> {
     let (fs, trans) = ctx.fsck_err_ctx();
@@ -182,17 +172,17 @@ fn __fsck_err(
 /// Fixable or ignorable: Ok(true) to fix, Ok(false) to leave it, Err to stop.
 pub fn fsck_err(
     ctx: &impl FsckErrCtx,
-    err: bch_sb_error_id,
+    err: SbErrorId,
     msg: &dyn ToText,
 ) -> Result<bool, BchError> {
     __fsck_err(ctx, POS_MIN,
-               bch_fsck_flags::FSCK_CAN_FIX | bch_fsck_flags::FSCK_CAN_IGNORE, err, msg)
+               FsckFlags::CAN_FIX | FsckFlags::CAN_IGNORE, err, msg)
 }
 
 pub fn fsck_err_on(
     ctx:  &impl FsckErrCtx,
     cond: bool,
-    err:  bch_sb_error_id,
+    err:  SbErrorId,
     msg:  &dyn ToText,
 ) -> Result<bool, BchError> {
     if cond { fsck_err(ctx, err, msg) } else { Ok(false) }
@@ -201,16 +191,16 @@ pub fn fsck_err_on(
 /// Fixable, not ignorable.
 pub fn mustfix_fsck_err(
     ctx: &impl FsckErrCtx,
-    err: bch_sb_error_id,
+    err: SbErrorId,
     msg: &dyn ToText,
 ) -> Result<bool, BchError> {
-    __fsck_err(ctx, POS_MIN, bch_fsck_flags::FSCK_CAN_FIX, err, msg)
+    __fsck_err(ctx, POS_MIN, FsckFlags::CAN_FIX, err, msg)
 }
 
 pub fn mustfix_fsck_err_on(
     ctx:  &impl FsckErrCtx,
     cond: bool,
-    err:  bch_sb_error_id,
+    err:  SbErrorId,
     msg:  &dyn ToText,
 ) -> Result<bool, BchError> {
     if cond { mustfix_fsck_err(ctx, err, msg) } else { Ok(false) }
@@ -221,11 +211,11 @@ pub fn mustfix_fsck_err_on(
 pub fn inode_fsck_err(
     t:   &TransAttempt<'_, '_>,
     pos: Bpos,
-    err: bch_sb_error_id,
+    err: SbErrorId,
     msg: &dyn ToText,
 ) -> Result<bool, BchError> {
     __fsck_err(t, pos,
-               bch_fsck_flags::FSCK_CAN_FIX | bch_fsck_flags::FSCK_CAN_IGNORE, err, msg)
+               FsckFlags::CAN_FIX | FsckFlags::CAN_IGNORE, err, msg)
 }
 
 /// For a caller that decides whether the error can be fixed. @pos is POS_MIN
@@ -233,8 +223,8 @@ pub fn inode_fsck_err(
 pub fn fsck_err_flags(
     ctx:   &impl FsckErrCtx,
     pos:   Bpos,
-    flags: bch_fsck_flags,
-    err:   bch_sb_error_id,
+    flags: FsckFlags,
+    err:   SbErrorId,
     msg:   &dyn ToText,
 ) -> Result<bool, BchError> {
     __fsck_err(ctx, pos, flags, err, msg)
@@ -243,13 +233,13 @@ pub fn fsck_err_flags(
 /// Logged and counted, ignorable, with no repair offered - the caller
 /// repairs, or carries on, whatever's decided: C's log_fsck_err(). Its
 /// error, if fsck stops there.
-pub fn log_fsck_err(ctx: &impl FsckErrCtx, err: bch_sb_error_id, msg: &dyn ToText) -> Result<(), BchError> {
-    __fsck_err(ctx, POS_MIN, bch_fsck_flags::FSCK_CAN_IGNORE, err, msg).map(|_| ())
+pub fn log_fsck_err(ctx: &impl FsckErrCtx, err: SbErrorId, msg: &dyn ToText) -> Result<(), BchError> {
+    __fsck_err(ctx, POS_MIN, FsckFlags::CAN_IGNORE, err, msg).map(|_| ())
 }
 
 /// Without offering a repair, for damage another pass owns: counted in the
 /// superblock, and logged unless it's a repeat or being ratelimited.
-pub fn fsck_err_report(fs: &Fs, err: bch_sb_error_id, msg: &dyn ToText) {
+pub fn fsck_err_report(fs: &Fs, err: SbErrorId, msg: &dyn ToText) {
     let mut buf = LogMsg::new(fs);
     msg.to_text(&mut buf);
 
@@ -259,7 +249,7 @@ pub fn fsck_err_report(fs: &Fs, err: bch_sb_error_id, msg: &dyn ToText) {
 
 /// Whether to log @msg: not if it's a repeat or being ratelimited. If this is
 /// where ratelimiting starts, @msg says so.
-pub fn count_fsck_err(fs: &Fs, err: bch_sb_error_id, msg: &mut Printbuf) -> bool {
+pub fn count_fsck_err(fs: &Fs, err: SbErrorId, msg: &mut Printbuf) -> bool {
     let c = count_locked(fs, &mut fs.errors.state.lock(), err, msg.as_bytes()).1;
     if c.suppress {
         write!(msg, "Ratelimiting new instances of previous error\n");
@@ -267,7 +257,7 @@ pub fn count_fsck_err(fs: &Fs, err: bch_sb_error_id, msg: &mut Printbuf) -> bool
     c.print && !c.repeat
 }
 
-pub fn sb_error_count(fs: &Fs, err: bch_sb_error_id) {
+pub fn sb_error_count(fs: &Fs, err: SbErrorId) {
     fs.sb_error_count(err)
 }
 
@@ -309,7 +299,7 @@ pub struct BkeyValidate<'a, 'k> {
 /// fsck said fix or ignore, or the error is silenced - else what stops us.
 pub fn bkey_fsck_err(
     v:   &BkeyValidate<'_, '_>,
-    err: bch_sb_error_id,
+    err: SbErrorId,
     msg: &dyn ToText,
 ) -> BchError {
     let e = bkey_fsck_err_verdict(v.fs, v.k, v.from, err, msg);
@@ -324,7 +314,7 @@ pub fn bkey_fsck_err(
 pub fn bkey_fsck_err_on(
     v:    &BkeyValidate<'_, '_>,
     cond: bool,
-    err:  bch_sb_error_id,
+    err:  SbErrorId,
     msg:  &dyn ToText,
 ) -> Result<(), BchError> {
     if cond { Err(bkey_fsck_err(v, err, msg)) } else { Ok(()) }
@@ -344,29 +334,15 @@ pub fn bkey_fsck_err_on(
 
 const FSCK_ERR_RATELIMIT_NR: u64 = 10;
 
-/// What BCH_SB_ERRS() adds to an error's flags: FSCK_AUTOFIX, for the ones
-/// safe to repair without asking.
-fn flags_extra(err: bch_sb_error_id) -> bch_fsck_flags {
-    macro_rules! flag {
-        (0)        => { bch_fsck_flags::empty() };
-        ($f:ident) => { bch_fsck_flags::$f };
-    }
-    macro_rules! flags_extra {
-        ($(($name:ident, $nr:literal, $flags:tt)),* $(,)?) => {
-            match err.0 {
-                $($nr => flag!($flags),)*
-                _ => {
-                    crate::warn_on!(true);
-                    bch_fsck_flags::empty()
-                }
-            }
-        };
-    }
-    c::BCH_SB_ERRS!(flags_extra)
+/// What an error's declaration adds to its flags: AUTOFIX, for the ones safe to
+/// repair without asking.
+fn flags_extra(err: SbErrorId) -> FsckFlags {
+    crate::warn_on!(err.name().is_none());
+    err.flags()
 }
 
 /// Whether the superblock says to keep quiet about @err.
-fn error_silent(fs: &Fs, err: bch_sb_error_id) -> bool {
+fn error_silent(fs: &Fs, err: SbErrorId) -> bool {
     let (bits, id) = (c_ulong::BITS as usize, err.0 as usize);
     fs.sb.errors_silent.get(id / bits).is_some_and(|w| w.get() & (1 << (id % bits)) != 0)
 }
@@ -382,7 +358,7 @@ struct Counted {
 
 /// @id's state - None if there's no memory to keep it - counted, with how to
 /// report it.
-fn count_locked<'a>(fs: &Fs, st: &'a mut ErrorsLocked, id: bch_sb_error_id, msg: &[u8])
+fn count_locked<'a>(fs: &Fs, st: &'a mut ErrorsLocked, id: SbErrorId, msg: &[u8])
     -> (Option<&'a mut FsckErrState>, Counted)
 {
     fs.sb_error_count(id);
@@ -523,10 +499,9 @@ fn error_action_name(a: c::bch_error_actions) -> &'static str {
 /// takes @trans; with @trans, a fix is logged in the journal with the repair,
 /// and asking drops its locks.
 #[cold]
-pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos, mut flags: bch_fsck_flags,
-                        err: bch_sb_error_id, msg: &dyn ToText) -> BchError {
+pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos, mut flags: FsckFlags,
+                        err: SbErrorId, msg: &dyn ToText) -> BchError {
     use bch_errcode as e;
-    use bch_fsck_flags as f;
     use c::bch_error_actions as a;
     use c::bch_fs_flags as fl;
 
@@ -541,12 +516,12 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
 
     // Asking needs the transaction, to unlock it: bkey errors, which have
     // none, are all AUTOFIX, so there's no asking without one
-    crate::warn_on!(flags.contains(f::FSCK_CAN_FIX) && !flags.contains(f::FSCK_AUTOFIX) && trans.is_none() &&
+    crate::warn_on!(flags.contains(FsckFlags::CAN_FIX) && !flags.contains(FsckFlags::AUTOFIX) && trans.is_none() &&
                     fs.current_has_btree_trans());
 
-    if flags.contains(f::FSCK_ERR_SILENT) || error_silent(fs, err) {
+    if flags.contains(FsckFlags::ERR_SILENT) || error_silent(fs, err) {
         fs.flags.set(fl::BCH_FS_errors_fixed_silent, true);
-        return fs.err(if flags.contains(f::FSCK_CAN_FIX) { e::BCH_ERR_fsck_fix } else { e::BCH_ERR_fsck_ignore });
+        return fs.err(if flags.contains(FsckFlags::CAN_FIX) { e::BCH_ERR_fsck_fix } else { e::BCH_ERR_fsck_ignore });
     }
 
     let mut buf = Printbuf::new();
@@ -585,9 +560,9 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
         }
 
         let ret = 'print: {
-            let ret = if flags.contains(f::FSCK_AUTOFIX) &&
+            let ret = if flags.contains(FsckFlags::AUTOFIX) &&
                          (errors == a::BCH_ON_ERROR_continue || errors == a::BCH_ON_ERROR_fix_safe) {
-                break 'print if flags.contains(f::FSCK_CAN_FIX) {
+                break 'print if flags.contains(FsckFlags::CAN_FIX) {
                     write!(out, ", ");
                     prt_actioning(&mut out, action);
                     fs.err(e::BCH_ERR_fsck_fix)
@@ -596,13 +571,13 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     fs.err(e::BCH_ERR_fsck_ignore)
                 };
             } else if !fs.flags.get(fl::BCH_FS_in_fsck) {
-                if errors != a::BCH_ON_ERROR_continue || !flags.intersects(f::FSCK_CAN_FIX | f::FSCK_CAN_IGNORE) {
-                    if flags.contains(f::FSCK_AUTOFIX) {
+                if errors != a::BCH_ON_ERROR_continue || !flags.intersects(FsckFlags::CAN_FIX | FsckFlags::CAN_IGNORE) {
+                    if flags.contains(FsckFlags::AUTOFIX) {
                         write!(out, ", shutting down\n\
                                      error is autofix, but errors={} prevents self-healing\n\
                                      run fsck or set errors=fix_safe to allow self-healing",
                                error_action_name(errors));
-                    } else if flags.intersects(f::FSCK_CAN_FIX | f::FSCK_CAN_IGNORE) {
+                    } else if flags.intersects(FsckFlags::CAN_FIX | FsckFlags::CAN_IGNORE) {
                         write!(out, ", shutting down\n\
                                      error is fixable, but not marked safe for self-healing\n\
                                      run fsck");
@@ -614,7 +589,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     inconsistent = true;
                     cnt.print = true;
                     fs.err(e::BCH_ERR_fsck_errors_not_fixed)
-                } else if flags.contains(f::FSCK_CAN_FIX) {
+                } else if flags.contains(FsckFlags::CAN_FIX) {
                     write!(out, ", ");
                     prt_actioning(&mut out, action);
                     fs.err(e::BCH_ERR_fsck_fix)
@@ -625,7 +600,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
             } else if fix_errors == c::fsck_err_opts::FSCK_FIX_exit {
                 write!(out, ", exiting");
                 fs.err(e::BCH_ERR_fsck_errors_not_fixed)
-            } else if flags.contains(f::FSCK_CAN_FIX) {
+            } else if flags.contains(FsckFlags::CAN_FIX) {
                 let fix = s.as_ref().and_then(|s| s.fix).unwrap_or(fix_errors);
 
                 if fix == c::fsck_err_opts::FSCK_FIX_ask {
@@ -649,7 +624,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                         e::BCH_ERR_fsck_ignore
                     })
                 } else if fix == c::fsck_err_opts::FSCK_FIX_yes ||
-                          (fs.opts.nochanges.get() != 0 && !flags.contains(f::FSCK_CAN_IGNORE)) {
+                          (fs.opts.nochanges.get() != 0 && !flags.contains(FsckFlags::CAN_IGNORE)) {
                     write!(out, ", ");
                     prt_actioning(&mut out, action);
                     fs.err(e::BCH_ERR_fsck_fix)
@@ -658,7 +633,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     prt_actioning(&mut out, action);
                     fs.err(e::BCH_ERR_fsck_ignore)
                 }
-            } else if flags.contains(f::FSCK_CAN_IGNORE) {
+            } else if flags.contains(FsckFlags::CAN_IGNORE) {
                 write!(out, ", continuing");
                 fs.err(e::BCH_ERR_fsck_ignore)
             } else {
@@ -667,7 +642,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
             };
 
             let ret = if ret.matches(e::BCH_ERR_fsck_ignore) &&
-                         (fix_errors == c::fsck_err_opts::FSCK_FIX_exit || !flags.contains(f::FSCK_CAN_IGNORE)) {
+                         (fix_errors == c::fsck_err_opts::FSCK_FIX_exit || !flags.contains(FsckFlags::CAN_IGNORE)) {
                 fs.err(e::BCH_ERR_fsck_errors_not_fixed)
             } else {
                 ret
@@ -715,7 +690,7 @@ fn report(fs: &Fs, out: &mut Printbuf, s: Option<&mut FsckErrState>, cnt: Counte
 
 /// After the lock: a fix logged in the journal with its repair, and the
 /// filesystem's error flags.
-fn finish(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, flags: bch_fsck_flags, err: bch_sb_error_id,
+fn finish(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, flags: FsckFlags, err: SbErrorId,
           st: impl Sized, mut ret: BchError) -> BchError {
     use bch_errcode as e;
     use c::bch_fs_flags as fl;
@@ -723,7 +698,7 @@ fn finish(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, flags: bch_fsck_flags, 
     drop(st);
 
     if let Some(t) = trans {
-        if !flags.contains(bch_fsck_flags::FSCK_ERR_NO_LOG) && ret == BchError::from(e::BCH_ERR_fsck_fix) {
+        if !flags.contains(FsckFlags::ERR_NO_LOG) && ret == BchError::from(e::BCH_ERR_fsck_fix) {
             let mut name = Printbuf::new();
             err.to_text(&mut name);
             if let Err(r) = t.log_str(name.as_bytes()) {
@@ -756,19 +731,19 @@ fn validate_from_name(from: c::bkey_validate_from) -> &'static str {
 /// The verdict on an invalid key - fsck_delete_bkey, at once, for a check
 /// that's silent, or an error silenced; else fsck_err_verdict()'s, offering
 /// to delete it - fixed without asking, but where it's a write's or a commit's.
-pub fn bkey_fsck_err_verdict(fs: &Fs, k: BkeySC<'_>, from: &c::bkey_validate_context, err: bch_sb_error_id,
+pub fn bkey_fsck_err_verdict(fs: &Fs, k: BkeySC<'_>, from: &c::bkey_validate_context, err: SbErrorId,
                              msg: &dyn ToText) -> BchError {
     let vflags = from.bits.flags();
     if vflags.contains(ValidateFlags::silent) {
         return fs.err(bch_errcode::BCH_ERR_fsck_delete_bkey);
     }
 
-    let mut flags = bch_fsck_flags::empty();
+    let mut flags = FsckFlags::empty();
     if !vflags.intersects(ValidateFlags::write | ValidateFlags::commit) {
         if error_silent(fs, err) {
             return fs.err(bch_errcode::BCH_ERR_fsck_delete_bkey);
         }
-        flags |= bch_fsck_flags::FSCK_AUTOFIX | bch_fsck_flags::FSCK_CAN_FIX;
+        flags |= FsckFlags::AUTOFIX | FsckFlags::CAN_FIX;
     }
 
     let from_ty = from.bits.from();
@@ -794,7 +769,7 @@ pub fn bkey_fsck_err_verdict(fs: &Fs, k: BkeySC<'_>, from: &c::bkey_validate_con
 /// @trans's filesystem.
 #[c_export]
 pub unsafe fn bch2_fsck_err_str(c: Option<&Opaque<Fs>>, trans: Option<&BtreeTrans<'_>>, pos: Bpos,
-                                flags: c::bch_fsck_flags, err: c::bch_sb_error_id, msg: &Printbuf) -> c_int {
+                                flags: FsckFlags, err: SbErrorId, msg: &Printbuf) -> c_int {
     let fs = c.map_or_else(|| trans.expect("a filesystem or a transaction").fs(), Fs::from_c);
     let t = trans.map(|t| unsafe { t.attempt_in_progress() });
     ret_to_c(Err::<(), _>(fsck_err_verdict(fs, t.as_ref(), pos, flags, err, msg)))
@@ -804,14 +779,14 @@ pub unsafe fn bch2_fsck_err_str(c: Option<&Opaque<Fs>>, trans: Option<&BtreeTran
 /// @k a key, @from its context. For error.c's __bch2_bkey_fsck_err().
 #[c_export]
 pub unsafe fn bch2_bkey_fsck_err_str(c: &Opaque<Fs>, k: c::bkey_s_c, from: &c::bkey_validate_context,
-                                     err: c::bch_sb_error_id, msg: &Printbuf) -> c_int {
+                                     err: SbErrorId, msg: &Printbuf) -> c_int {
     // SAFETY: the caller's
     let k = unsafe { BkeySC::from_c(&k) };
     ret_to_c(Err::<(), _>(bkey_fsck_err_verdict(Fs::from_c(c), k, from, err, msg)))
 }
 
 #[c_export]
-pub fn __bch2_count_fsck_err(c: &Opaque<Fs>, id: c::bch_sb_error_id, msg: &mut Printbuf) -> bool {
+pub fn __bch2_count_fsck_err(c: &Opaque<Fs>, id: SbErrorId, msg: &mut Printbuf) -> bool {
     count_fsck_err(Fs::from_c(c), id, msg)
 }
 
@@ -855,7 +830,7 @@ const DAMAGED_PATHS_MAX: usize = 4096;
 const DAMAGED_PATHS_PRINT: usize = 200;
 
 impl c::fsck_damaged_path {
-    fn add_err(&mut self, err: bch_sb_error_id) {
+    fn add_err(&mut self, err: SbErrorId) {
         let nr = usize::from(self.nr_errors);
         if !self.errors[..nr].contains(&(err.0 as u16)) && nr < self.errors.len() {
             self.errors[nr] = err.0 as u16;
@@ -866,7 +841,7 @@ impl c::fsck_damaged_path {
 
 /// @err against the path at @pos - an extent's, inum in its inode field, or
 /// an inode key's, at (0, inum, snapshot).
-pub fn fsck_damaged(fs: &Fs, pos: Bpos, err: bch_sb_error_id) {
+pub fn fsck_damaged(fs: &Fs, pos: Bpos, err: SbErrorId) {
     let inum = if pos.inode != 0 { pos.inode } else { pos.offset };
     let mut st = fs.errors.state.lock();
     let paths = &mut st.damaged_paths;
@@ -928,7 +903,7 @@ pub fn damaged_path_to_text(out: &mut Printbuf, trans: &BtreeTrans<'_>, p: &c::f
         if j != 0 {
             write!(out, ", ");
         }
-        bch_sb_error_id(e.into()).to_text(out);
+        SbErrorId(e.into()).to_text(out);
     }
     out.newline();
 }

@@ -20,6 +20,7 @@ use crate::data::ec::update::{create_watermark, stripe_update_extents};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::debug::trace::events;
+use crate::sb::errors::SbErrorId;
 use crate::sb::members::DevIoRef;
 use crate::util::alloc::KBox;
 use crate::util::rcu::read_lock;
@@ -340,7 +341,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
         let trans = btree_trans!(fs);
         let r = reuse.as_ref().expect("a fold's old stripe");
         record_lost_blocks(&trans, r.stripe.stripe(), lost.blocks,
-                           c::bch_sb_error_id::BCH_FSCK_ERR_stripe_reconstruct_failed, false,
+                           SbErrorId::stripe_reconstruct_failed, false,
                            r.buf.as_deref().filter(|_| as_read));
         return Err(lost.err);
     }

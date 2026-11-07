@@ -15,6 +15,7 @@ use core::mem::size_of;
 
 use crate::c::{self, AclEntry, BCH_ACL_VERSION};
 use crate::init::error::id;
+use crate::sb::errors::SbErrorId;
 use crate::util::vstructs::{cast_plain, plain_bytes, ArmSized, ArmWalkError};
 use crate::util::Printbuf;
 use crate::xattr::XattrType;
@@ -156,7 +157,7 @@ impl AclType {
     }
 
     /// The fsck error for the inode's flag and its xattrs disagreeing.
-    pub fn flag_wrong(self) -> c::bch_sb_error_id {
+    pub fn flag_wrong(self) -> SbErrorId {
         match self {
             Self::Access  => id::inode_has_access_acl_flag_wrong,
             Self::Default => id::inode_has_default_acl_flag_wrong,

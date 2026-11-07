@@ -142,6 +142,7 @@ use crate::c;
 use crate::c::{bch_sb, bch_sb_buf, bch_sb_field_crypt, bch_sb_handle, block_device};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
+use crate::sb::errors::SbErrorId;
 use crate::sb::members;
 use crate::data_structures::bitmap::LeBitmap;
 use crate::util::projections::{AtomicWord, Volatile, VolatileWriter, PublishedOnce};
@@ -1709,7 +1710,7 @@ impl<'a> SbWrite<'a> {
 
     /// fsck error @err silenced - expected, not damage - in the ext section,
     /// recorded: whether it wasn't already. sb_set_err_silent().
-    pub fn set_err_silent(&mut self, err: c::bch_sb_error_id) -> bool {
+    pub fn set_err_silent(&mut self, err: SbErrorId) -> bool {
         let ext = self.field_mut::<c::bch_sb_field_ext<Validated>>()
             .expect("an ext section: a mounted filesystem's superblock has one");
         let (word, bit) = (err.0 as usize / 64, 1u64 << (err.0 % 64));

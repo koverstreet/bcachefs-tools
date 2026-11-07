@@ -33,6 +33,7 @@ use crate::fs::Fs;
 use crate::init::damage;
 use crate::inode_opts::get_io_opts;
 use crate::debug::trace::events;
+use crate::sb::errors::SbErrorId;
 use crate::util::alloc::KBox;
 use crate::util::closure::StackClosure;
 use crate::util::rcu::read_lock;
@@ -91,7 +92,7 @@ fn extent_good_in_buf(fs: &Fs, k: BkeySC<'_>, s: BkeySC<'_, c::Stripe<Validated>
 /// again per extent. @buf: the stripe as read, if the blocks were read, not
 /// lost to a device - an extent that checks out against it isn't lost.
 pub fn record_lost_blocks(trans: &BtreeTrans<'_>, s: BkeySC<'_, c::Stripe<Validated>>, blocks: u32,
-                          err: c::bch_sb_error_id, count: bool, buf: Option<&StripeBuf>) {
+                          err: SbErrorId, count: bool, buf: Option<&StripeBuf>) {
     let fs = trans.fs();
 
     for block in (0..32).filter(|i| blocks & 1 << i != 0) {
@@ -168,7 +169,7 @@ fn drop_block_extent(t: &TransAttempt<'_, '_>, idx: u64, block: u32, bp: BkeySC<
 
     // reflink extents name no inode to record against
     if !readable_now(fs, n.as_sc()) && bp.v().target().btree == Btree::extents {
-        damage::record_key(t, Btree::extents, k.k.p, c::bch_sb_error_id::BCH_FSCK_ERR_stripe_reconstruct_failed)?;
+        damage::record_key(t, Btree::extents, k.k.p, SbErrorId::stripe_reconstruct_failed)?;
     }
 
     t.update(iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)

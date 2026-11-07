@@ -13,6 +13,7 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::init::passes::{passes_from_stable, passes_to_stable, prt_stable};
 use crate::prt;
 use crate::sb::downgrade::{ext, sb_set_downgrade, sb_set_upgrade};
+use crate::sb::errors::SbErrorId;
 use crate::sb::io::{check_version_downgrade, sb_upgrade, version};
 use crate::types::Le64;
 use crate::data_structures::bitmap::LeBitmap;
@@ -167,8 +168,8 @@ pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
         ext.recovery_passes_required[0] |= pass(Pass::BCH_RECOVERY_PASS_check_extents_to_backpointers);
         ext.recovery_passes_required[0] |= pass(Pass::BCH_RECOVERY_PASS_check_backpointers_to_extents);
         let silent = LeBitmap::from_words_mut(&mut ext.errors_silent);
-        silent.set(c::bch_sb_error_id::BCH_FSCK_ERR_backpointer_to_missing_ptr.0 as usize);
-        silent.set(c::bch_sb_error_id::BCH_FSCK_ERR_ptr_to_missing_backpointer.0 as usize);
+        silent.set(SbErrorId::backpointer_to_missing_ptr.0 as usize);
+        silent.set(SbErrorId::ptr_to_missing_backpointer.0 as usize);
     }
 
     fs.flags.set(Flag::BCH_FS_sb_dirty, true);

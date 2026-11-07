@@ -23,6 +23,7 @@ use crate::init::error::id;
 use crate::init::recovery::btree_lost_data;
 use crate::inode_opts::{get_fs, get_io_opts};
 use crate::debug::trace::events;
+use crate::sb::errors::SbErrorId;
 use crate::util::alloc::KVVec;
 use crate::util::log::LogMsg;
 use crate::locking::Locked;
@@ -36,7 +37,7 @@ use pin_init::{stack_pin_init, PinInit};
 use crate::format::Btree;
 
 c_extern! {
-    fn bch2_data_read_sb_err(err: c_int) -> c::bch_sb_error_id;
+    fn bch2_data_read_sb_err(err: c_int) -> SbErrorId;
 }
 
 /// What the journal scrub found wrong with an extent, for do_repairs() once

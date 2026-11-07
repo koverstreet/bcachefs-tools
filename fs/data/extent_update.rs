@@ -30,6 +30,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::count_fsck_err;
 use crate::debug::trace::events;
+use crate::sb::errors::SbErrorId;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{likely, unlikely};
 use crate::util::log::LogMsg;
@@ -269,7 +270,7 @@ impl<'t> TransAttempt<'_, 't> {
         prt!(&mut *msg, "inode {inum} snapshot {snapshot} i_sectors underflow: {} + {} < 0",
              bi_sectors, *i_sectors_delta);
 
-        let counted = count_fsck_err(fs, c::bch_sb_error_id::BCH_FSCK_ERR_inode_i_sectors_underflow, &mut msg);
+        let counted = count_fsck_err(fs, SbErrorId::inode_i_sectors_underflow, &mut msg);
         msg.set_suppressed(!counted);
 
         *i_sectors_delta = if *i_sectors_delta < 0 { -bi_sectors } else { 0 };

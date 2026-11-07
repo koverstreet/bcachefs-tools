@@ -9,7 +9,7 @@ use core::mem::{offset_of, size_of};
 use crate::c;
 use crate::fs::Fs;
 use crate::init::passes;
-use crate::sb::errors::prt_error_ids;
+use crate::sb::errors::{prt_error_ids, SbErrorId};
 use crate::sb::io::SbFieldOps;
 use crate::types::Le64;
 use crate::data_structures::bitmap::LeBitmap;
@@ -43,7 +43,7 @@ impl SbFieldOps for Section {
         write!(out, "Errors to silently fix:\t");
         let silent = LeBitmap::from_words(&e.errors_silent).iter();
         prt_error_ids(out, silent.take_while(|&id| id < c::BCH_FSCK_ERR_MAX as usize)
-                                 .map(|id| c::bch_sb_error_id(id as u32)));
+                                 .map(|id| SbErrorId(id as u32)));
         out.newline();
 
         prt_btrees(out, "Btrees with missing data", e.btrees_lost_data());
@@ -93,7 +93,7 @@ mod tests {
         buf[13] = 1;                            // btrees_lost_data_ever: btree 0
         buf[14] = 1;                            // btrees_clean: btree 0
 
-        let names: Vec<_> = [0, 2].map(|id| c::bch_sb_error_id(id).name().unwrap()).into();
+        let names: Vec<_> = [0, 2].map(|id| SbErrorId(id).name().unwrap()).into();
         let lines = |u64s| to_text(&mut buf.clone(), u64s).lines().map(str::to_owned).collect::<Vec<_>>();
 
         let l = lines(11);

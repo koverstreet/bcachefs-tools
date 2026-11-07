@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! The superblock's error counts: how often each kind of error -
-//! BCH_SB_ERRS(), errors_format.rs - has happened to this filesystem, and when
+//! SbErrorId, errors_format.rs - has happened to this filesystem, and when
 //! it first and last did. The first thing a field report wants to know.
 //!
 //! On disk they're one of two sections, sorted strictly ascending by id:
@@ -21,6 +21,7 @@ use core::ffi::c_int;
 use cstruct_macros::{c_export, CStruct, bitfield, c_typedef, c_xmacro, TypeInfo};
 use crate::btree::bkey::ValidateFlags;
 use crate::c;
+pub use crate::cstructs::sb_errors_format::{FsckFlags, SbErrorId};
 use crate::util::vstructs::Unvalidated;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
@@ -134,11 +135,11 @@ c_xmacro! {
 /// The ids' names, as C's table has them.
 #[c_export]
 #[c("const char * const bch2_sb_error_strs[]")]
-pub static bch2_sb_error_strs: [*const c_char; names::c_table_len::<c::bch_sb_error_id>()] =
-    crate::c_names_table!(c::bch_sb_error_id);
+pub static bch2_sb_error_strs: [*const c_char; names::c_table_len::<SbErrorId>()] =
+    crate::c_names_table!(SbErrorId);
 
 /// @ids by name, comma separated.
-pub fn prt_error_ids(out: &mut Printbuf, ids: impl IntoIterator<Item = c::bch_sb_error_id>) {
+pub fn prt_error_ids(out: &mut Printbuf, ids: impl IntoIterator<Item = SbErrorId>) {
     for (i, id) in ids.into_iter().enumerate() {
         if i != 0 {
             write!(out, ",");
@@ -162,7 +163,7 @@ pub(crate) trait ErrorEntry: Copy {
     /// v2's: a first time, and a count that saturates.
     const V2: bool;
 
-    fn id(&self) -> c::bch_sb_error_id;
+    fn id(&self) -> SbErrorId;
     fn nr(&self) -> u64;
     fn first(&self) -> u64;
     fn last(&self) -> u64;
@@ -171,8 +172,8 @@ pub(crate) trait ErrorEntry: Copy {
 impl ErrorEntry for c::bch_sb_field_error_entry {
     const V2: bool = false;
 
-    fn id(&self) -> c::bch_sb_error_id {
-        c::bch_sb_error_id(self.bch_sb_error_entry_id() as u32)
+    fn id(&self) -> SbErrorId {
+        SbErrorId(self.bch_sb_error_entry_id() as u32)
     }
 
     fn nr(&self) -> u64 {
@@ -191,8 +192,8 @@ impl ErrorEntry for c::bch_sb_field_error_entry {
 impl ErrorEntry for c::bch_sb_field_error_entry_v2 {
     const V2: bool = true;
 
-    fn id(&self) -> c::bch_sb_error_id {
-        c::bch_sb_error_id(self.v.id().into())
+    fn id(&self) -> SbErrorId {
+        SbErrorId(self.v.id().into())
     }
 
     fn nr(&self) -> u64 {
@@ -211,7 +212,7 @@ impl ErrorEntry for c::bch_sb_field_error_entry_v2 {
 impl c::bch_sb_field_error_entry_v2 {
     /// A count past its field's width is pinned at the most it holds, and so
     /// is a time, as C's setters pin them: a wrapped one would be worse.
-    pub(crate) fn new(id: c::bch_sb_error_id, nr: u64, first: u64, last: u64) -> Self {
+    pub(crate) fn new(id: SbErrorId, nr: u64, first: u64, last: u64) -> Self {
         let mut e = Self::default();
         e.v.set_id(id.0 as u16);
         e.v.set_nr(nr.min(c::BCH_SB_ERROR_ENTRY_V2_NR_MAX) as u32);
@@ -224,7 +225,7 @@ impl c::bch_sb_field_error_entry_v2 {
 /// Memory's count as v2 has it.
 impl From<&c::bch_sb_error_entry_cpu> for c::bch_sb_field_error_entry_v2 {
     fn from(s: &c::bch_sb_error_entry_cpu) -> Self {
-        Self::new(c::bch_sb_error_id(s.id().into()), s.nr(), s.first_error_time, s.last_error_time)
+        Self::new(SbErrorId(s.id().into()), s.nr(), s.first_error_time, s.last_error_time)
     }
 }
 
@@ -348,12 +349,12 @@ impl SbFieldOps for c::bch_sb_field_errors_v2 {
 
 /// @err a BCH_ERR_BLK_STS_* errcode, as blk_status_to_bch_err() throws: its
 /// status's error, blk_sts_unknown for one BCH_BLK_STS_SB_ERRS() leaves out.
-pub fn blk_sts_sb_err(err: c_int) -> c::bch_sb_error_id {
+pub fn blk_sts_sb_err(err: c_int) -> SbErrorId {
     macro_rules! map {
         ($(($sts:ident, $name:ident)),* $(,)?) => { ::paste::paste! {
             match bch_errcode(err.unsigned_abs()) {
-                $(bch_errcode::[<BCH_ERR_BLK_STS_ $sts>] => c::bch_sb_error_id::[<BCH_FSCK_ERR_blk_sts_ $name>],)*
-                _ => c::bch_sb_error_id::BCH_FSCK_ERR_blk_sts_unknown,
+                $(bch_errcode::[<BCH_ERR_BLK_STS_ $sts>] => SbErrorId::[<BCH_FSCK_ERR_blk_sts_ $name>],)*
+                _ => SbErrorId::blk_sts_unknown,
             }
         } };
     }
@@ -376,8 +377,8 @@ macro_rules! decompress_map {
 /// @err a BCH_ERR_decompress errcode, as buf_uncompress() throws: what it's
 /// counted as.
 #[c_export]
-pub fn bch2_decompress_sb_err(err: c_int) -> c::bch_sb_error_id {
-    c::BCH_DECOMPRESS_SB_ERRS!(decompress_map [err, bch_sb_error_id, BCH_FSCK_ERR_data_decompress_err_])
+pub fn bch2_decompress_sb_err(err: c_int) -> SbErrorId {
+    c::BCH_DECOMPRESS_SB_ERRS!(decompress_map [err, SbErrorId, data_decompress_err_])
 }
 
 // ── The counts, in memory ────────────────────────────────────────────────────
@@ -390,7 +391,7 @@ pub fn bch2_decompress_sb_err(err: c_int) -> c::bch_sb_error_id {
 /// The largest in-memory count: nr is 48 bits.
 const CPU_NR_MAX: u64 = (1 << 48) - 1;
 
-fn cpu_entry(id: c::bch_sb_error_id, nr: u64, first: u64, last: u64) -> c::bch_sb_error_entry_cpu {
+fn cpu_entry(id: SbErrorId, nr: u64, first: u64, last: u64) -> c::bch_sb_error_entry_cpu {
     let mut e = c::bch_sb_error_entry_cpu {
         first_error_time: first,
         last_error_time:  last,
@@ -410,7 +411,7 @@ impl<E: ErrorEntry> From<&E> for c::bch_sb_error_entry_cpu {
 /// One error's counts from both sections: summed, over the union of their
 /// time ranges.
 pub(crate) fn merge(a: c::bch_sb_error_entry_cpu, b: c::bch_sb_error_entry_cpu) -> c::bch_sb_error_entry_cpu {
-    cpu_entry(c::bch_sb_error_id(a.id().into()), a.nr().saturating_add(b.nr()),
+    cpu_entry(SbErrorId(a.id().into()), a.nr().saturating_add(b.nr()),
               a.first_error_time.min(b.first_error_time),
               a.last_error_time.max(b.last_error_time))
 }
@@ -418,7 +419,7 @@ pub(crate) fn merge(a: c::bch_sb_error_entry_cpu, b: c::bch_sb_error_entry_cpu) 
 impl Fs {
     /// Count @err, as having happened now. With no memory for a new entry,
     /// it isn't counted.
-    pub fn sb_error_count(&self, err: c::bch_sb_error_id) {
+    pub fn sb_error_count(&self, err: SbErrorId) {
         let now = ktime_get_real_seconds() as u64;
         let mut counts = self.errors.counts.lock();
 
@@ -443,14 +444,14 @@ impl Fs {
         }
 
         for e in self.errors.counts.lock().iter() {
-            prt!(out, "{}\t{}\t{}\t{}\n", c::bch_sb_error_id(e.id().into()), e.nr(),
+            prt!(out, "{}\t{}\t{}\t{}\n", SbErrorId(e.id().into()), e.nr(),
                  DateTime(e.first_error_time as i64), DateTime(e.last_error_time as i64));
         }
     }
 }
 
 #[c_export]
-pub fn bch2_sb_error_count(c: &Opaque<Fs>, err: c::bch_sb_error_id) {
+pub fn bch2_sb_error_count(c: &Opaque<Fs>, err: SbErrorId) {
     Fs::from_c(c).sb_error_count(err)
 }
 
