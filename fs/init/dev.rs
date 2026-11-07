@@ -1422,6 +1422,16 @@ impl Fs {
 
         let state = self.state_lock_write();
 
+        /*
+         * An online that was waiting on state_lock when shutdown started
+         * would find its device offline - stop() has put the io refs - and
+         * restart them:
+         */
+        if self.flags.get(c::bch_fs_flags::stopping) {
+            prt!(err, "filesystem is shutting down\n");
+            return self.throw(bch_errcode::BCH_ERR_ioctl_fs_stopping);
+        }
+
         let mut sb = read_super(path, &mut opts, Some(self.holder()))
             .inspect_err(|e| prt!(err, "error reading superblock: {}\n", e.msg()))?;
 
