@@ -1,12 +1,14 @@
 //! bcachefs fs du: the space paths on a mounted filesystem take, read from its
 //! btrees through BCH_IOCTL_QUERY_BTREE_KEYS, which is admin only.
 //!
-//! exact.rs walks the paths and reads every file's extents. What it shares
-//! with any other reader of a mounted filesystem's btrees lives here: the
-//! mounted filesystem, opened once for every path given, and the subvolume to
-//! snapshot lookup every snapshot-filtered query starts from.
+//! exact.rs walks the paths and reads every file's extents; sample.rs, with
+//! --sample, estimates from random device sectors traced back to their owners.
+//! What both need lives here: the mounted filesystem, opened once for every
+//! path given, and the subvolume to snapshot lookup every snapshot-filtered
+//! query starts from.
 
 mod exact;
+mod sample;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -45,8 +47,26 @@ pub struct Cli {
     human_readable: bool,
 
     /// Break the total down by compression type
-    #[arg(short = 'c', long)]
+    #[arg(short = 'c', long, conflicts_with = "sample")]
     compression: bool,
+
+    /// Estimate from random device sectors instead of reading every file's
+    /// extents: the cost is the number of samples, not the size of the
+    /// filesystem
+    #[arg(long)]
+    sample: bool,
+
+    /// Sectors to sample
+    #[arg(long, default_value_t = 100_000, requires = "sample")]
+    samples: u64,
+
+    /// Seed for the sampled sectors, to repeat a run with the same --threads
+    #[arg(long, requires = "sample")]
+    seed: Option<u64>,
+
+    /// Threads sampling [default: available parallelism, at most 8]
+    #[arg(long, requires = "sample")]
+    threads: Option<u64>,
 
     /// Files and directories on a mounted bcachefs
     #[arg(default_value = ".")]
@@ -128,7 +148,11 @@ impl Subvols {
 
 fn fs_du(cli: Cli) -> Result<()> {
     let mounted = Mounted::open(&cli.paths)?;
-    exact::run(&mounted, &cli)
+    if cli.sample {
+        sample::run(&mounted, &cli)
+    } else {
+        exact::run(&mounted, &cli)
+    }
 }
 
 pub const CMD: super::CmdDef = typed_cmd!("du", "Show space used by files and directories", Cli, fs_du);

@@ -31,6 +31,7 @@ udev = "0.9.3"
 uuid = { version = "1.2.2", features = ["v4"] }
 errno = "0.3"
 either = "1.5"
+fastrand = "2"
 bcachefs-kernel = { path = "fs" }
 bch_bindgen = { path = "bch_bindgen" }
 strum = { version = "0.26", features = ["derive"] }
