@@ -1121,13 +1121,7 @@ fn __write_index(op: &mut Op) {
             match &ret {
                 Ok(()) => {
                     prt!(&mut *msg, "wrote degraded to ");
-                    let mut d = c::bch_devs_list::default();
-                    if let Some(k) = BkeySC::from(k).arm::<Ptrs>() {
-                        for ptr in k.ptrs(fs).filter(|p| u32::from(p.dev()) != c::BCH_SB_MEMBER_INVALID) {
-                            d.data[usize::from(d.nr)] = ptr.dev();
-                            d.nr += 1;
-                        }
-                    }
+                    let d = BkeySC::from(k).arm::<Ptrs>().map(|k| k.devs(fs)).unwrap_or_default();
                     fs.devs_list_to_text(&mut msg, &d);
                     msg.newline();
                 }

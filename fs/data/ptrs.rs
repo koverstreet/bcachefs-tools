@@ -499,6 +499,17 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
         self.ptrs(fs).all(|p| fs.dev_rcu(p.dev().into(), &rcu).is_some_and(|ca| ca.is_rw()))
     }
 
+    /// The devices it points to, BCH_SB_MEMBER_INVALID placeholders skipped:
+    /// bch2_bkey_devs().
+    fn devs(&self, fs: &Fs) -> c::bch_devs_list {
+        let mut d = c::bch_devs_list::default();
+        for p in self.ptrs(fs).filter(|p| u32::from(p.dev()) != c::BCH_SB_MEMBER_INVALID) {
+            d.data[usize::from(d.nr)] = p.dev();
+            d.nr += 1;
+        }
+        d
+    }
+
     /// Whether it has its data in target @target - a pointer there that isn't
     /// cached, or is and isn't stale: bch2_bkey_has_target().
     fn has_target(&self, fs: &Fs, target: Target) -> bool {
