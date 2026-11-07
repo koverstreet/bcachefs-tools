@@ -16,7 +16,8 @@ use crate::c::journal_space_from::{self as SpaceFrom, *};
 use crate::c::JournalGuard;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, BchError};
+use crate::btree::iter::BtreeTrans;
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{DataType, SbFeature};
 use crate::fs::{Dev, Fs};
 use crate::journal::pins::PinsRead;
@@ -24,11 +25,11 @@ use crate::locking::{ExclusiveGuard, MemallocFlags};
 use crate::util::backtrace::prt_task_backtrace;
 use crate::util::closure::{closure_wait_event, closure_wake_up};
 use crate::util::kernel::{bdev_max_discard_sectors, blkdev_issue_discard, cond_resched, jiffies, jiffies_to_msecs,
-                          msecs_to_jiffies, time_after, time_in_range, totalram_bytes};
+                          msecs_to_jiffies, time_after, time_in_range, totalram_bytes, HZ};
 use crate::util::kthread::{Kthread, KthreadSelf};
 use crate::util::place::Contained;
 use crate::util::rcu::read_lock;
-use crate::util::sleep::{sleep_until, wake_up, Sleep};
+use crate::util::sleep::{sleep_until, Sleep, SleepError};
 use crate::util::time_stats::TimeStats;
 use crate::util::{Nsecs, Printbuf};
 use crate::{bch_err, bch_err_msg, prt};
@@ -587,7 +588,7 @@ impl c::journal {
             fs.event_inc_trace(events::journal_reclaim_finish, |out| prt!(out, "flushed {nr_flushed}"));
 
             if nr_flushed != 0 {
-                wake_up(&self.reclaim_wait);
+                self.reclaim_wait.wake();
             }
 
             if !((min_nr != 0 || min_key_cache != 0) && nr_flushed != 0 && !direct) {
@@ -622,6 +623,31 @@ impl c::journal {
 
     pub fn reclaim_kick(&self) {
         self.reclaim_thread.kick();
+    }
+
+    /// For a commit the key cache has too many dirty keys for: until reclaim
+    /// has flushed enough, or the journal's halted. @unlock_long runs if that
+    /// takes more than a second.
+    pub fn key_cache_reclaim_wait(&self, unlock_long: impl FnOnce()) -> Result<(), BchError> {
+        let mut done = || {
+            if let Err(e) = self.error() {
+                return Some(Err(e));
+            }
+            if self.fs().btree.key_cache.wait_done() {
+                return Some(Ok(()));
+            }
+            self.reclaim_kick();
+            None
+        };
+
+        match self.reclaim_wait.wait_until(Sleep::INTERRUPTIBLE.freezable().timeout(HZ), &mut done) {
+            Ok(r) => r,
+            Err(SleepError::Timeout) => {
+                unlock_long();
+                self.reclaim_wait.wait_until(Sleep::INTERRUPTIBLE.freezable(), &mut done).unwrap_or(Ok(()))
+            }
+            Err(SleepError::Signal) => Ok(()),
+        }
     }
 
     /* An entry's open: a thread asleep with nothing to reclaim has something */
@@ -955,4 +981,9 @@ fn reclaim_sleep(j: &c::journal, me: &KthreadSelf<'_>, kicks: u32) {
 #[c_export]
 pub fn bch2_journal_reclaim_kick(j: &c::journal) {
     j.reclaim_kick()
+}
+
+#[c_export]
+pub fn bch2_trans_key_cache_reclaim_wait(trans: &BtreeTrans<'_>) -> c_int {
+    ret_to_c(trans.fs().journal.key_cache_reclaim_wait(|| trans.unlock_long()))
 }

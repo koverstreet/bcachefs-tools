@@ -663,9 +663,7 @@ nest! {
          * Used for waiting until journal reclaim has freed up space in the
          * journal:
          */
-        #[pin]
-        #[init(crate::new_waitqueue!("&j->reclaim_wait"))]
-        pub reclaim_wait: c::wait_queue_head_t,
+        pub reclaim_wait: EventCount,
         /* from reclaim_start() to reclaim_stop(): journal/reclaim.rs */
         #[pin]
         #[init(RustOnly::new(Daemon::new()))]

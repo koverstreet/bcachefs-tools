@@ -96,11 +96,6 @@ pub fn bch2_btree_key_cache_must_wait(c: &Fs) -> bool {
     c.btree.key_cache.must_wait()
 }
 
-#[c_export]
-pub fn bch2_btree_key_cache_wait_done(c: &Fs) -> bool {
-    c.btree.key_cache.wait_done()
-}
-
 #[repr(C, align(4))]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, CStruct)]
 #[c_packed]

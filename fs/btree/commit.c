@@ -340,15 +340,6 @@ static void trans_commit_to_journal_replay_post(struct btree_trans *trans, int r
 	mutex_unlock(&trans->c->journal_keys.v.overwrite_lock);
 }
 
-static int journal_reclaim_wait_done(struct bch_fs *c)
-{
-	try(bch2_journal_error(&c->journal));
-	try(bch2_btree_key_cache_wait_done(c));
-
-	bch2_journal_reclaim_kick(&c->journal);
-	return 0;
-}
-
 static bool trans_commit_has_extents(struct btree_trans *trans)
 {
 	trans_for_each_update(trans, i)
@@ -411,15 +402,7 @@ static int __bch2_trans_commit_error(struct btree_trans *trans, unsigned flags,
 				   __bch2_btree_key_cache_must_wait(c));
 		}));
 		track_event_change(&c->times[BCH_TIME_blocked_key_cache_flush], true);
-
-		if (!wait_event_freezable_timeout(c->journal.reclaim_wait,
-						  (ret = journal_reclaim_wait_done(c)),
-						  HZ)) {
-			bch2_trans_unlock_long(trans);
-			wait_event_freezable(c->journal.reclaim_wait,
-					     (ret = journal_reclaim_wait_done(c)));
-		}
-
+		ret = bch2_trans_key_cache_reclaim_wait(trans);
 		track_event_change(&c->times[BCH_TIME_blocked_key_cache_flush], false);
 
 		return ret < 0 ? ret : bch2_trans_relock(trans);
