@@ -11,7 +11,7 @@ use crate::btree::node::iter::KeyIter;
 use crate::btree::node::keys::Keys;
 use crate::btree::locking::btree_node_locked_type::{self, *};
 use crate::btree::node::{BtreeNode, NodeContents};
-use crate::btree::traverse::{advance_to_pos, bch2_btree_pos_to_text};
+use crate::btree::traverse::advance_to_pos;
 use crate::c;
 use crate::cstructs::c as cs;
 use crate::data::keylist::PaddedKey;
@@ -1322,8 +1322,7 @@ impl BtreeTrans<'_> {
 
         if !path.pos_in_node(b) {
             let mut buf = Printbuf::new();
-            prt!(&mut buf, "level {} path->pos {}\n", level, path.pos);
-            unsafe { bch2_btree_pos_to_text(&mut buf, self.fs().as_ptr(), b.node()) };
+            prt!(&mut buf, "level {} path->pos {}\n{}", level, path.pos, b.node().pos_to_text(self.fs()));
             panic!("{}", buf.as_str());
         }
 

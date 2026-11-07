@@ -14,7 +14,6 @@ use crate::btree::locking::btree_node_locked_type::*;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{BtreePath, LockedNode, NodePtr, PathIdx, Paths};
-use crate::btree::traverse::bch2_btree_pos_to_text;
 use crate::c;
 use crate::errcode::bch_errcode;
 use crate::format::Btree;
@@ -172,9 +171,8 @@ impl BtreeTrans<'_> {
             let path = &paths[idx];
             if path.l[level].b.is(&b.c) && path.locked(level) {
                 let mut buf = Printbuf::new();
-                prt!(&mut buf, "path still references btree node being freed, level {}:\n", level);
-                unsafe { bch2_btree_pos_to_text(&mut buf, self.fs().as_ptr(), b) };
-                prt!(&mut buf, "\n");
+                prt!(&mut buf, "path still references btree node being freed, level {}:\n{}\n",
+                     level, b.pos_to_text(self.fs()));
                 path.to_text(&mut buf, idx);
                 crate::warn_once!(true, self.fs(), "{}", buf.as_str());
             }

@@ -184,9 +184,7 @@ impl BtreeTrans<'_> {
         let fs = self.fs();
         let mut msg = LogMsg::new(fs);
 
-        prt!(&mut *msg, "btree root doesn't cover expected range:\n");
-        unsafe { bch2_btree_pos_to_text(&mut *msg, fs.as_ptr(), b) };
-        prt!(&mut *msg, "\n");
+        prt!(&mut *msg, "btree root doesn't cover expected range:\n{}\n", b.pos_to_text(fs));
 
         fs.topology_error(&mut msg)
     }

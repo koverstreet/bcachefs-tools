@@ -211,6 +211,10 @@ impl<'b, 'f> BtreeNode {
     pub fn ondisk_to_text(&'b self, fs: &'f Fs) -> BtreeNodeOndiskToText<'b, 'f> {
         BtreeNodeOndiskToText { b: self, fs }
     }
+
+    pub fn pos_to_text(&'b self, fs: &'f Fs) -> BtreeNodePosToText<'b, 'f> {
+        BtreeNodePosToText { b: self, fs }
+    }
 }
 
 impl BtreeNode {
@@ -413,3 +417,15 @@ impl ToText for BtreeNodeOndiskToText<'_, '_> {
     }
 }
 crate::display_via_to_text!(BtreeNodeOndiskToText<'_, '_>);
+
+pub struct BtreeNodePosToText<'b, 'f> {
+    b:  &'b BtreeNode,
+    fs: &'f Fs,
+}
+
+impl ToText for BtreeNodePosToText<'_, '_> {
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { crate::btree::traverse::bch2_btree_pos_to_text(out.as_raw(), self.fs.as_ptr(), self.b) }
+    }
+}
+crate::display_via_to_text!(BtreeNodePosToText<'_, '_>);
