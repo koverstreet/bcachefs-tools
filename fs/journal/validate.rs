@@ -343,14 +343,12 @@ fn entry_validate<A: EntryOps + ?Sized>(ctx: &Ctx<'_>, e: &mut [u8]) -> Result<(
 
 fn journal_entry_btree_root_validate(ctx: &Ctx<'_>, e: &mut [u8]) -> Result<(), BchError> {
     let h = head(e);
-    let mut ctx = *ctx;
-    ctx.from.root_bits.set_root(true);
-    ctx.from.level = h.level + 1;
-    ctx.from.btree = Btree(h.btree_id.into());
-
     let u64s = h.u64s();
     if journal_entry_err_on!(ctx, u64s == 0 || u64s != e[HEAD] as usize, journal_entry_btree_root_bad_size,
-                             "invalid btree root journal entry: wrong number of keys") {
+                             "invalid btree root journal entry: wrong number of keys") ||
+       journal_entry_err_on!(ctx, u32::from(h.level) >= c::BTREE_MAX_DEPTH, journal_entry_btree_root_bad_level,
+                             "invalid btree root journal entry: level {} >= max depth {}",
+                             h.level, c::BTREE_MAX_DEPTH) {
         /*
          * we don't want to null out this jset_entry,
          * just the contents, so that later we can tell
@@ -360,6 +358,11 @@ fn journal_entry_btree_root_validate(ctx: &Ctx<'_>, e: &mut [u8]) -> Result<(), 
         e[HEAD..].fill(0);
         return Ok(());
     }
+
+    let mut ctx = *ctx;
+    ctx.from.root_bits.set_root(true);
+    ctx.from.level = h.level + 1;
+    ctx.from.btree = Btree(h.btree_id.into());
 
     journal_validate_key(&ctx, e, HEAD)?;
     Ok(())

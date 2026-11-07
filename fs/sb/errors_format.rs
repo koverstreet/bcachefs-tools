@@ -471,6 +471,7 @@ c_enum! {
         #[flags(AUTOFIX)] alloc_v4_inline_backpointers = 439,
         journal_entry_datetime_bad_size = 440,
         inline_data_csum_type_bad = 441,
+        journal_entry_btree_root_bad_level = 442,
     }
 }
 
