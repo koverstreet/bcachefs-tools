@@ -24,25 +24,27 @@ use cstruct_macros::{c_enum, c_export, Plain};
 /// run to its end, past a 512k node's last u16.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Plain)]
-pub struct SortIterSet {
+pub struct SortRun {
     pub k:   u32,
     pub end: u32,
 }
 
-impl SortIterSet {
+impl SortRun {
     /// None for an empty run: nothing to merge.
     fn of(keys: Range<usize>) -> Option<Self> {
         (!keys.is_empty()).then(|| Self { k: keys.start as u32, end: keys.end as u32 })
     }
 }
 
+/// The runs a node write merges: its bsets not yet written, and its
+/// unwritten whiteouts.
 #[derive(Default)]
-pub struct SortIterStack(ArrayVec<SortIterSet, { MAX_BSETS as usize + 1 }>);
+pub struct WriteSortRuns(ArrayVec<SortRun, { MAX_BSETS as usize + 1 }>);
 
-impl SortIterStack {
+impl WriteSortRuns {
     /// The node's keys at offsets @keys, to merge.
     pub fn add(&mut self, keys: Range<usize>) {
-        self.0.extend(SortIterSet::of(keys));
+        self.0.extend(SortRun::of(keys));
     }
 }
 
@@ -58,7 +60,7 @@ impl<'p> SortRuns<'p> {
         Self { buf: fs.btree.fill_iter.alloc_zeroed(c::GFP_NOIO), used: 0 }
     }
 
-    fn runs(&mut self) -> &mut [SortIterSet] {
+    fn runs(&mut self) -> &mut [SortRun] {
         cast_plain_slice_mut(self.buf.as_bytes_mut()).expect("a fill_iter element, sized in runs")
     }
 
@@ -68,7 +70,7 @@ impl<'p> SortRuns<'p> {
         let runs = self.runs();
         assert!(used < runs.len(), "adding to a node read's sort of {} runs, full", runs.len());
 
-        if let Some(run) = SortIterSet::of(keys) {
+        if let Some(run) = SortRun::of(keys) {
             runs[used] = run;
             self.used += 1;
         }
@@ -113,13 +115,13 @@ const ENTRY_KEYS: usize = offset_of!(Head<c::btree_node_entry>, keys) / size_of:
 struct Merge<'a, T> {
     keys:      &'a Keys<'a>,
     /// The runs not yet at their ends.
-    sets:      &'a mut [SortIterSet],
+    sets:      &'a mut [SortRun],
     tie_break: T,
 }
 
 impl<'a, T: Fn(usize, &BkeyP, usize, &BkeyP) -> Ordering> Merge<'a, T> {
     #[inline]
-    fn new(keys: &'a Keys<'a>, sets: &'a mut [SortIterSet], tie_break: T) -> Self {
+    fn new(keys: &'a Keys<'a>, sets: &'a mut [SortRun], tie_break: T) -> Self {
         let mut iter = Merge { keys, sets, tie_break };
 
         iter.sort();
@@ -435,9 +437,9 @@ fn btree_node_sort(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, start_id
 
     let keys = b.keys(contents);
     let sets = &keys.sets[start_idx..end_idx];
-    let mut runs: ArrayVec<SortIterSet, { MAX_BSETS as usize }> = sets.iter()
+    let mut runs: ArrayVec<SortRun, { MAX_BSETS as usize }> = sets.iter()
         .filter(|t| t.u64s() != 0)
-        .map(|t| SortIterSet { k: t.first_offset().into(), end: t.end_offset.into() })
+        .map(|t| SortRun { k: t.first_offset().into(), end: t.end_offset.into() })
         .collect();
 
     let bytes = if sorting_entire_node {
@@ -591,7 +593,7 @@ fn build_aux_trees(b: &BtreeNode, contents: &mut NodeContents) {
     }
 }
 
-impl SortIterStack {
+impl WriteSortRuns {
     /// Its runs of @keys merged into @dst, for the node write: the u64s
     /// written. Clears each key's needs_whiteout: it isn't written.
     pub fn sort_keys_keep_unwritten_whiteouts(&mut self, keys: &Keys<'_>, dst: &mut [u64]) -> usize {
