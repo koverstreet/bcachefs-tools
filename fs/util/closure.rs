@@ -13,6 +13,7 @@
 //!   write path's.
 
 use crate::c;
+use crate::util::alloc::KBox;
 use crate::util::ffi::Opaque;
 use crate::util::refcount::{RefBorrow, RefGuard, Refcount, TryRefcount};
 use crate::util::workqueue::Queue;
@@ -324,4 +325,29 @@ impl<T: HasClosure> Drop for Running<T> {
 pub unsafe fn call<T: HasClosure>(this: NonNull<T>, f: ClosureFn<T>, wq: Option<&Queue>) {
     let cl = this.as_ptr().wrapping_byte_add(T::CLOSURE).cast::<c::closure>();
     unsafe { c::closure_call(cl, closure_fn(f), wq_ptr(wq), core::ptr::null_mut()) }
+}
+
+/// A closure on the heap for a wait nobody waits on - a flush started and let
+/// finish: freed once what it's put on is done.
+#[derive(::pin_init::Zeroable)]
+struct Detached {
+    cl: Opaque<c::closure>,
+}
+
+crate::has_closure!(Detached, cl);
+
+/// @f, given a closure of its own to put on waitlists - and let go of: it's
+/// freed once they're all done with it.
+pub fn detached(f: impl FnOnce(NonNull<c::closure>)) {
+    let this = KBox::into_raw(crate::util::alloc::kbox_zeroed_nofail::<Detached>());
+    unsafe {
+        let cl = (*this).cl.as_ptr();
+        c::closure_init(cl, core::ptr::null_mut());
+        f(NonNull::new_unchecked(cl));
+        Running::from_raw(NonNull::new_unchecked(this)).continue_at(detached_free, None);
+    }
+}
+
+extern "C" fn detached_free(w: Running<Detached>) {
+    drop(unsafe { KBox::from_raw(w.end().as_ptr()) });
 }
