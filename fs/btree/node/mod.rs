@@ -13,7 +13,7 @@ pub mod iter;
 pub mod keys;
 pub mod sort;
 
-use crate::btree::bkey::{BkeyI, BkeyP, BkeySC, BKEY_U64S};
+use crate::btree::bkey::{BkeyI, BkeyP, BkeySC, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::c;
 use crate::cstructs::c as cs;
 use crate::data::keylist::PaddedKey;
@@ -30,7 +30,7 @@ use core::ops::{ControlFlow, Range};
 use core::sync::atomic::AtomicUsize;
 use bset::{BsetTree, BSET_CACHELINE};
 use iter::KeyIter;
-use cstruct_macros::{c_name, CStruct};
+use cstruct_macros::{c_export, c_name, CStruct};
 
 /* Btree nodes: */
 
@@ -309,6 +309,17 @@ impl NodeContents {
         let mid_u64s_bits = (fs.btree_max_u64s().ilog2() + WRITE_SET_U64S_BITS) / 2;
         self.set[1].u64s() > 1 << mid_u64s_bits
     }
+
+    pub fn reset_sib_u64s(&mut self) {
+        let live = self.nr.live_u64s;
+        self.sib_u64s[0] = if self.data().min_key != POS_MIN { live } else { u16::MAX };
+        self.sib_u64s[1] = if self.key.k.p != SPOS_MAX { live } else { u16::MAX };
+    }
+}
+
+#[c_export]
+pub fn btree_node_reset_sib_u64s(b: &BtreeNode) {
+    unsafe { b.contents_mut() }.reset_sib_u64s()
 }
 
 impl BtreeNode {
