@@ -126,6 +126,18 @@ pub unsafe fn closure_wait(list: &c::closure_waitlist, cl: NonNull<c::closure>) 
     unsafe { c::bch2_closure_wait(core::ptr::from_ref(list).cast_mut(), cl.as_ptr()) }
 }
 
+/// The fn @cl runs next, or last ran, for a message: racing its continue_at()s.
+pub fn closure_fn_addr(cl: &c::closure) -> *const core::ffi::c_void {
+    /* in an anonymous struct in an anonymous union, which the kernel's
+     * bindgen and the shim's lay out with different Rust types */
+    unsafe {
+        core::ptr::read_volatile(core::ptr::from_ref(cl)
+            .byte_add(core::mem::offset_of!(c::closure, __bindgen_anon_1) +
+                      core::mem::offset_of!(c::closure__bindgen_ty_1__bindgen_ty_1, fn_))
+            .cast())
+    }
+}
+
 /// Whether anything's waiting on @list - a hint, racing its adds and wakes.
 pub fn closure_has_waiters(list: &c::closure_waitlist) -> bool {
     // SAFETY: a lockless list's head, which its adds and wakes swap: read
