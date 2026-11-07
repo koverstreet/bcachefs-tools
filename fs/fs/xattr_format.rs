@@ -12,11 +12,11 @@ c_enum! {
     #[c_name(bch_xattr_type)]
     #[prefix(KEY_TYPE_XATTR_INDEX_)]
     pub enum XattrType: u32 {
-        KEY_TYPE_XATTR_INDEX_USER              = 0,
-        KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS  = 1,
-        KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT = 2,
-        KEY_TYPE_XATTR_INDEX_TRUSTED           = 3,
-        KEY_TYPE_XATTR_INDEX_SECURITY          = 4,
+        USER              = 0,
+        POSIX_ACL_ACCESS  = 1,
+        POSIX_ACL_DEFAULT = 2,
+        TRUSTED           = 3,
+        SECURITY          = 4,
     }
 }
 

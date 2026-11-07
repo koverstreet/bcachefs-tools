@@ -642,8 +642,8 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
     }
 
     // members must be validated first
-    let Some(mi) = field_offset(sb, c::bch_sb_field_type::BCH_SB_FIELD_members_v2)
-        .or_else(|| field_offset(sb, c::bch_sb_field_type::BCH_SB_FIELD_members_v1)) else {
+    let Some(mi) = field_offset(sb, c::bch_sb_field_type::members_v2)
+        .or_else(|| field_offset(sb, c::bch_sb_field_type::members_v1)) else {
         write!(out, "Invalid superblock: member info area missing");
         return Err(bch_errcode::BCH_ERR_invalid_sb_members_missing.into());
     };
@@ -653,7 +653,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
     // sections after moved down, so its length is read after
     let mut off = size_of::<Head<bch_sb>>();
     while off < sb.as_bytes().len() {
-        if field_head(sb, off).type_.get() != c::bch_sb_field_type::BCH_SB_FIELD_members_v1.0 {
+        if field_head(sb, off).type_.get() != c::bch_sb_field_type::members_v1.0 {
             field_validate(sb, off, flags, out)?;
         }
         off += field_head(sb, off).bytes();
@@ -3179,7 +3179,7 @@ mod tests {
         type T = c::bch_sb_field_type;
         let mut buf = [0u64; 4];
 
-        let f = field(&mut buf, T::BCH_SB_FIELD_journal, 3);
+        let f = field(&mut buf, T::journal, 3);
         assert_eq!(f.as_bytes().len(), 24);
         assert!(matches!(f.typed(), Ok(c::BchSbFieldRef::journal(j)) if j.field.u64s() == 3 && j.buckets.len() == 2));
 
@@ -3211,15 +3211,15 @@ mod tests {
 
         type T = c::bch_sb_field_type;
         // too short for its entries to start, and for its type
-        assert_eq!(short::<c::bch_sb_field_clean>(T::BCH_SB_FIELD_clean, 2),
+        assert_eq!(short::<c::bch_sb_field_clean>(T::clean, 2),
                    "too short (16 < 24 bytes)");
         // a grown type's floor
-        assert_eq!(short::<c::bch_sb_field_ext<Validated>>(T::BCH_SB_FIELD_ext, 10),
+        assert_eq!(short::<c::bch_sb_field_ext<Validated>>(T::ext, 10),
                    "too short (80 < 88 bytes)");
         // a sized type's size
-        assert_eq!(short::<c::bch_sb_field_crypt>(T::BCH_SB_FIELD_crypt, 7),
+        assert_eq!(short::<c::bch_sb_field_crypt>(T::crypt, 7),
                    "too short (56 < 64 bytes)");
-        assert_eq!(short::<c::bch_sb_field_quota>(T::BCH_SB_FIELD_quota, 2),
+        assert_eq!(short::<c::bch_sb_field_quota>(T::quota, 2),
                    format!("too short (16 < {} bytes)", size_of::<c::bch_sb_field_quota>()));
     }
 
@@ -3231,7 +3231,7 @@ mod tests {
         let mut buf = [u64::MAX; 16];
         buf[..11].fill(0);
         buf[3] = 0x5a;                          // errors_silent[0]
-        let f = field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_ext, 11);
+        let f = field(&mut buf, c::bch_sb_field_type::ext, 11);
 
         let Ok(c::BchSbFieldRef::ext(e)) = f.typed() else { panic!("an ext section") };
         assert_eq!(e.errors_silent[0].get(), 0x5a);
@@ -3253,7 +3253,7 @@ mod tests {
         let mut buf = [0u64; 6];
         buf[2] = 42;                            // journal_seq
         buf[3] = 1 | 7 << 32;                   // an entry: u64s 1, type 7
-        let f = field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_clean, 6);
+        let f = field(&mut buf, c::bch_sb_field_type::clean, 6);
 
         let Ok(c::BchSbFieldRef::clean(clean)) = f.typed() else { panic!("a clean section") };
         assert_eq!((clean.journal_seq.get(), clean.as_bytes().len()), (42, 48));
@@ -3270,7 +3270,7 @@ mod tests {
         buf[2] = 42;                            // journal_seq
         buf[3] = 1;                             // an entry of 1 u64
         buf[5] = 5;                             // one of 5, past the section's end
-        let f = field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_clean, 6);
+        let f = field(&mut buf, c::bch_sb_field_type::clean, 6);
         let Ok(c::BchSbFieldRef::clean(clean)) = f.typed() else { panic!("a clean section") };
         assert_eq!(clean.entries().count(), 1);
 
@@ -3292,13 +3292,13 @@ mod tests {
     fn sb_field_ext_whole_and_too_short() {
         let mut buf = [0u64; 16];
         buf[12] = 7;                            // flags0
-        let f = field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_ext, 15);
+        let f = field(&mut buf, c::bch_sb_field_type::ext, 15);
         let e = f.arm::<c::bch_sb_field_ext<Validated>>().expect("an ext section");
         let w = e.whole().expect("all of it");
         assert_eq!((w.flags0.get(), e.flags0().get(), size_of_val(e)), (7, 7, 120));
 
         let mut buf = [0u64; 16];
-        let f = field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_ext, 10);
+        let f = field(&mut buf, c::bch_sb_field_type::ext, 10);
         assert!(f.arm::<c::bch_sb_field_ext<Validated>>().is_none());
         assert!(f.typed().is_err());
     }

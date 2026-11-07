@@ -181,21 +181,12 @@ pub(crate) fn tag_enum(args: TokenStream) -> Result<CEnumDef, String> {
     Ok(e)
 }
 
-/// Arm @a's variant of @e, by C's name: #[prefix]'s and its - but a name
-/// written with the prefix is C's, one that isn't an identifier past it.
-fn c_name(e: &CEnumDef, a: &Arm) -> String {
-    match &e.prefix {
-        Some(p) if !a.name.starts_with(p.as_str()) => format!("{p}{}", a.name),
-        _ => a.name.clone(),
-    }
-}
-
 /// Enum @e of @arms, each valued by its &str: the c_enum! it is, as its Rust
 /// and its record.
 fn enum_of<'a>(e: &CEnumDef, arms: impl Iterator<Item = (&'a Arm, &'a str)>) -> TokenStream {
     let def = CEnumDef {
         variants: arms.map(|(a, v)| CEnumVariant {
-            name:  c_name(e, a),
+            name:  a.name.clone(),
             // an expression's type may not be the enum's, BCH_VERSION()'s
             // u64: as a list's value is, it's cast
             value: Some(match parse_int(v) {
@@ -220,7 +211,7 @@ pub(crate) fn generate(e: &CEnumDef, arms: &[Arm], columns: &Columns) -> TokenSt
     let fns: String = columns.iter().enumerate()
         .map(|(i, (col_name, col))| {
             let fn_arms: String = arms.iter()
-                .map(|a| format!("Self::{} => {},\n", c_name(e, a), col.value(&a.name, &a.cols[i], other)))
+                .map(|a| format!("Self::{} => {},\n", a.name, col.value(&a.name, &a.cols[i], other)))
                 .chain(other.then(|| format!("_ => {},\n", col.none())))
                 .collect();
             format!("pub const fn {col_name}(self) -> {} {{\n match self {{\n{fn_arms}}}\n}}\n", col.ty(other))

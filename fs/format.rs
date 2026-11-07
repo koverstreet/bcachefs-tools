@@ -346,29 +346,29 @@ c_enum! {
          * error, cookie, set: in one that doesn't, it's invalid at commit, not
          * on read
          */
-        BKEY_TYPE_generic             = 1 << 0,
+        generic     = 1 << 0,
         /* Its value has pointers - extent entries: bch2_bkey_ptrs_c()'s types */
-        BKEY_TYPE_ptrs                = 1 << 1,
+        ptrs        = 1 << 1,
         /* An extents btree may hold it - deleted, and what each #[holds] */
-        BKEY_TYPE_extent              = 1 << 2,
+        extent      = 1 << 2,
         /* An indirect extent - refcounted, in the reflink btree: what a reflink_p points to */
-        BKEY_TYPE_indirect            = 1 << 3,
+        indirect    = 1 << 3,
         /*
          * Its pointers can be edited in place - its extent entries run to the
          * value's end, so entries can be inserted and dropped: not a stripe's,
          * whose checksums and block counts follow them
          */
-        BKEY_TYPE_ptrs_mut            = 1 << 4,
+        ptrs_mut    = 1 << 4,
         /* A btree node pointer: a key above the leaves, or a btree root's */
-        BKEY_TYPE_btree_ptr           = 1 << 5,
+        btree_ptr   = 1 << 5,
         /* Counted in its inode's i_sectors */
-        BKEY_TYPE_allocation          = 1 << 6,
+        allocation  = 1 << 6,
         /* Data a file reads: pointers to it, the data inline, or a reflink_p to it */
-        BKEY_TYPE_data                = 1 << 7,
+        data        = 1 << 7,
         /* A file's data in the extents btree, not through a reflink_p */
-        BKEY_TYPE_user_data           = 1 << 8,
+        user_data   = 1 << 8,
         /* The data itself, inline in the value, direct or indirect */
-        BKEY_TYPE_inline_data         = 1 << 9,
+        inline_data = 1 << 9,
     }
 }
 
@@ -661,13 +661,13 @@ c_enum! {
     #[c_name(btree_id_flags)]
     #[prefix(BTREE_IS_)]
     pub enum BtreeFlags: u32 {
-        BTREE_IS_extents = 1 << 0,
-        BTREE_IS_snapshots = 1 << 1,
-        BTREE_IS_snapshot_field = 1 << 2,
-        BTREE_IS_data = 1 << 3,
-        BTREE_IS_write_buffer = 1 << 4,
-        BTREE_IS_trans_triggers = 1 << 5,
-        BTREE_IS_atomic_triggers = 1 << 6,
+        extents = 1 << 0,
+        snapshots = 1 << 1,
+        snapshot_field = 1 << 2,
+        data = 1 << 3,
+        write_buffer = 1 << 4,
+        trans_triggers = 1 << 5,
+        atomic_triggers = 1 << 6,
     }
 }
 

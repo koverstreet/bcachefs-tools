@@ -89,7 +89,7 @@ impl c::jset<Unvalidated> {
     pub(crate) fn empty(&self) -> bool {
         self.seq == self.last_seq &&
             !self.entries().flatten().any(|e| {
-                entry_type(e) == c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_keys && e.u64s() != 0
+                entry_type(e) == c::bch_jset_entry_type::btree_keys && e.u64s() != 0
             })
     }
 }
@@ -406,8 +406,8 @@ fn journal_replay_maybe_drop_overwrites<'j>(fs: &Fs, j: &'j mut c::jset<Unvalida
         while src < j.len() {
             let e = c::jset_entry::<Unvalidated>::from_bytes(&j[src..]).expect("an entry that fits");
             let (len, ty) = (size_of_val(e), entry_type(e));
-            if ty != c::bch_jset_entry_type::BCH_JSET_ENTRY_log &&
-               ty != c::bch_jset_entry_type::BCH_JSET_ENTRY_overwrite {
+            if ty != c::bch_jset_entry_type::log &&
+               ty != c::bch_jset_entry_type::overwrite {
                 j.copy_within(src..src + len, dst);
                 dst += len;
             }

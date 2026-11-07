@@ -1048,11 +1048,13 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
 
 /// An enum, and what its values can be (fs/enum_kind.h):
 ///
-///   c_enum! { #[open] pub enum btree_id: u32 { BTREE_ID_extents = 0, ... } }
+///   c_enum! { #[open] #[prefix(BTREE_ID_)] pub enum Btree: u32 { extents = 0, ... } }
 ///
-/// Each value is also a constant of the module, of the integer type - C's
-/// enum constants are all one namespace, and C refers to them by bare name:
-/// in other enums' values, array lengths. The type is built on those:
+/// Each value is also a constant of the module, of the integer type, by C's
+/// name for it - `#[prefix(P)]`'s P and its name; a name written with P is
+/// C's - as C's enum constants are all one namespace, which C refers to by
+/// bare name: in other enums' values, array lengths. The type is built on
+/// those:
 ///
 ///   #[closed]  a Rust enum
 ///   #[open]    a newtype over the integer, the values its constants: a value
@@ -1067,12 +1069,11 @@ fn xmacro(input: TokenStream) -> Result<TokenStream, String> {
 /// only ever holds one of its values, as its type says; from_bits() of
 /// anything else is memory corruption, and panics.
 ///
-/// `#[prefix(P)]`: its variants by their names past P too, constants of the
-/// type - BkeyTypeFlags::ptrs for BKEY_TYPE_ptrs; an open or closed one is
-/// named, as it prints and parses, by those. `#[nr(NR)]`: C's NR after the
-/// last, and NR, a number, not one of its values. A variant with no value is
-/// the one before it plus one, as in C. `_` for the name: an anonymous enum,
-/// the constants alone.
+/// An open or closed one with a #[prefix] is named, as it prints and parses,
+/// by its variants' names past it. `#[nr(NR)]`: C's NR after the last, and
+/// NR, a number, not one of its values. A variant with no value is the one
+/// before it plus one, as in C. `_` for the name: an anonymous enum, the
+/// constants alone.
 ///
 /// A variant is written with its doc, and its columns - `#[arm_columns(..)]`,
 /// enum_decl.rs - each made a const fn of the enum:
@@ -1210,6 +1211,8 @@ enum EnumOf<'a> {
 fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
     let repr = format_ident!("{}", e.repr);
     let names: Vec<Ident> = e.variants.iter().map(|v| format_ident!("{}", v.name)).collect();
+    // the module's constants are C's, by its names
+    let c_names: Vec<Ident> = e.variants.iter().map(|v| format_ident!("{}", e.c_variant(v))).collect();
 
     // A variant with no value counts from the last that has one - not from
     // the one before it, which would make a const chain as long as the enum:
@@ -1218,22 +1221,22 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
     let mut values = Vec::new();
     let mut base = None;
     let mut n = 0;
-    for (v, CEnumVariant { value, .. }) in names.iter().zip(&e.variants) {
+    for ((v, c), CEnumVariant { value, .. }) in names.iter().zip(&c_names).zip(&e.variants) {
         let k = Literal::usize_unsuffixed(n);
         let value = match (value, base) {
             (Some(x), _) => {
-                base = Some(v);
+                base = Some((v, c));
                 n = 0;
                 tokens(x)
             }
-            (None, Some(b)) if matches!(of, EnumOf::C(_)) => quote!(#b + #k),
-            (None, Some(b)) => quote!(Self::#b.0 + #k),
+            (None, Some((_, b))) if matches!(of, EnumOf::C(_)) => quote!(#b + #k),
+            (None, Some((b, _))) => quote!(Self::#b.0 + #k),
             (None, None) => quote!(#k),
         };
         match of {
             EnumOf::C(_) => {
-                out.extend(quote!(#[allow(non_upper_case_globals, dead_code)] pub const #v: #repr = #value;));
-                values.push(quote!(#v));
+                out.extend(quote!(#[allow(non_upper_case_globals, dead_code)] pub const #c: #repr = #value;));
+                values.push(quote!(#c));
             }
             EnumOf::Rust(..) => values.push(value),
         }
@@ -1242,7 +1245,7 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
     // C's after the last, as C counts it
     let nr = e.nr.as_ref().map(|nr| {
         let nr = format_ident!("{nr}");
-        let after = match names.last() {
+        let after = match c_names.last() {
             Some(last) => quote!(#last + 1),
             None => quote!(0),
         };
@@ -1332,21 +1335,6 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
         if let Some(nr) = &nr {
             out.extend(quote!(impl #name { pub const NR: #repr = #nr; }));
         }
-
-        if let Some(prefix) = &e.prefix {
-            // a name that isn't an identifier past it - 31bit_dirent_offset - has none
-            let (short, long): (Vec<_>, Vec<_>) = e.variants.iter()
-                .filter_map(|v| v.name.strip_prefix(prefix.as_str())
-                    .filter(|s| s.starts_with(|c: char| c.is_alphabetic() || c == '_'))
-                    .map(|s| (format_ident!("{s}"), format_ident!("{}", v.name))))
-                .unzip();
-            out.extend(quote! {
-                #[allow(non_upper_case_globals)]
-                impl #name {
-                    #(pub const #short: Self = Self::#long;)*
-                }
-            });
-        }
     }
 
     if let Some(name) = &e.name {
@@ -1371,7 +1359,7 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
 
     if let EnumOf::C(text) = of {
         let mut nums = size_align(&ty);
-        nums.extend(names.iter().map(|v| quote!(#v as u64)));
+        nums.extend(c_names.iter().map(|v| quote!(#v as u64)));
         out.extend(record(text, &nums));
     }
     out

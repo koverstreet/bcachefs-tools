@@ -338,7 +338,7 @@ impl SbFieldOps for c::bch_sb_field_errors_v2 {
             *d = s.into();
         }
 
-        sb.field_delete(c::bch_sb_field_type::BCH_SB_FIELD_errors);
+        sb.field_delete(c::bch_sb_field_type::errors);
         Ok(())
     }
 }
@@ -353,7 +353,7 @@ pub fn blk_sts_sb_err(err: c_int) -> SbErrorId {
     macro_rules! map {
         ($(($sts:ident, $name:ident)),* $(,)?) => { ::paste::paste! {
             match bch_errcode(err.unsigned_abs()) {
-                $(bch_errcode::[<BCH_ERR_BLK_STS_ $sts>] => SbErrorId::[<BCH_FSCK_ERR_blk_sts_ $name>],)*
+                $(bch_errcode::[<BCH_ERR_BLK_STS_ $sts>] => SbErrorId::[<blk_sts_ $name>],)*
                 _ => SbErrorId::blk_sts_unknown,
             }
         } };

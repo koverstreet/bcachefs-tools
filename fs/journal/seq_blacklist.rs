@@ -258,7 +258,7 @@ pub(crate) fn blacklist_entries_gc(fs: &Fs, guard: &mut SbLockGuard<'_>) -> bool
     bch_verbose!(fs, "nr blacklist entries was {nr}, now {new_nr}");
 
     if new_nr == 0 {
-        sb.field_delete(c::bch_sb_field_type::BCH_SB_FIELD_journal_seq_blacklist);
+        sb.field_delete(c::bch_sb_field_type::journal_seq_blacklist);
     } else {
         let shrunk = sb.field_resize::<Section>(sb_field_u64s::<Section>(new_nr)).is_some();
         assert!(shrunk, "shrinking the blacklist section failed");

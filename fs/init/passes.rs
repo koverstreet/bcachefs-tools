@@ -977,8 +977,7 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
         }
 
         // the point it waits for - see bch2_reconcile_thread()
-        let resume_logged_ops_early = Pass::resume_logged_ops_early;
-        if prev <= resume_logged_ops_early && pass > resume_logged_ops_early {
+        if prev <= Pass::resume_logged_ops_early && pass > Pass::resume_logged_ops_early {
             fs.reconcile_wakeup();
         }
 
@@ -1196,7 +1195,7 @@ mod tests {
         let all = u64::MAX >> (64 - NR);
         assert_eq!(passes_from_stable(passes_to_stable(all)), all);
 
-        let check_topology = Pass::check_topology;
-        assert_eq!((check_topology.stable().0, check_topology.name()), (4, "check_topology"));
+        let pass = Pass::check_topology;
+        assert_eq!((pass.stable().0, pass.name()), (4, "check_topology"));
     }
 }

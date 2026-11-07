@@ -101,7 +101,7 @@ mod tests {
         let b = plain_bytes_mut(buf);
         let f = cast_plain_mut::<Head<c::bch_sb_field>>(b).unwrap();
         f.set_val_u64s(u64s);
-        f.type_ = Le32::new(c::bch_sb_field_type::BCH_SB_FIELD_extent_type_u64s.0);
+        f.type_ = Le32::new(c::bch_sb_field_type::extent_type_u64s.0);
         b[size_of::<Head<c::bch_sb_field>>()..][..sizes.len()].copy_from_slice(sizes);
         c::bch_sb_field::<Unvalidated>::from_bytes(b).unwrap().arm().unwrap()
     }

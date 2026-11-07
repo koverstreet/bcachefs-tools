@@ -227,7 +227,7 @@ fn disk_path_to_text_in<G: DiskGroup>(out: &mut Printbuf, groups: &[G], mut v: u
 }
 
 fn sb_groups<S: SbState>(sb: &c::bch_sb<S>) -> &[c::bch_disk_group] {
-    S::field(sb, c::bch_sb_field_type::BCH_SB_FIELD_disk_groups)
+    S::field(sb, c::bch_sb_field_type::disk_groups)
         .and_then(|f| f.arm::<c::bch_sb_field_disk_groups<Unvalidated>>())
         .map_or(&[], |g| &g.entries)
 }

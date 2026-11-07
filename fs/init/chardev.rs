@@ -227,7 +227,7 @@ fn query_accounting(fs: &Fs, arg: &mut c::bch_ioctl_query_accounting_v2,
      * reachable by any user via the file ioctl path, not just the root-owned
      * control device.
      */
-    let privileged = 1 << T::BCH_DISK_ACCOUNTING_inum.0 | 1 << T::BCH_DISK_ACCOUNTING_snapshot.0;
+    let privileged = 1 << T::inum.0 | 1 << T::snapshot.0;
     if arg.accounting_types_mask & privileged != 0 && !capable(Capability::SysAdmin) {
         return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin);
     }
@@ -241,8 +241,8 @@ fn query_accounting(fs: &Fs, arg: &mut c::bch_ioctl_query_accounting_v2,
      * would be a lie.
      */
     if fs.sb.compat.get() & 1 << c::bch_sb_compat::BCH_COMPAT_stripe_frag_accounting.0 == 0 {
-        arg.accounting_types_mask &= !(1 << T::BCH_DISK_ACCOUNTING_stripe_frag.0 |
-                                       1 << T::BCH_DISK_ACCOUNTING_dev_stripe_frag.0);
+        arg.accounting_types_mask &= !(1 << T::stripe_frag.0 |
+                                       1 << T::dev_stripe_frag.0);
     }
 
     let keys = accounting_mem::to_keys(fs, arg.accounting_types_mask)?;

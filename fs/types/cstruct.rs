@@ -495,8 +495,8 @@ pub struct CEnumDef {
     pub own_to_text: bool,
     /// #[c_name(NAME)]: C's name for it, where Rust's differs.
     pub c_name:   Option<String>,
-    /// #[prefix(P)]: what its variants' names start with, which Rust names
-    /// them without too.
+    /// #[prefix(P)]: what C's names for its variants start with, Rust's
+    /// without it.
     pub prefix:   Option<String>,
     /// #[nr(NR)]: how many it has - C's NR, after the last; Rust's NR, a
     /// number, not one of its values.
@@ -507,6 +507,16 @@ impl CEnumDef {
     /// Its name as C has it: C's, or for #[c_name], that.
     pub fn c_ident(&self) -> Option<&str> {
         self.c_name.as_deref().or(self.name.as_deref())
+    }
+
+    /// @v's name as C has it: #[prefix]'s and its - but a name written with
+    /// the prefix is C's, one that isn't an identifier past it,
+    /// bcachefs_metadata_version_31bit_dirent_offset.
+    pub fn c_variant(&self, v: &CEnumVariant) -> String {
+        match &self.prefix {
+            Some(p) if !v.name.starts_with(p.as_str()) => format!("{p}{}", v.name),
+            _ => v.name.clone(),
+        }
     }
 
     /// What @v prints as: its #[label], or with a #[prefix] its name past it -
@@ -2221,7 +2231,8 @@ pub fn enum_text(e: &CEnumDef) -> String {
     let mut t = format!("#[{}] {}{}{}pub enum {}: {} {{ ", e.kind.attr(),
                         if e.own_to_text { "#[own_to_text] " } else { "" },
                         e.c_name.as_deref().map(|c| format!("#[c_name({c})] ")).unwrap_or_default(),
-                        e.nr.as_deref().map(|n| format!("#[nr({n})] ")).unwrap_or_default(),
+                        e.prefix.as_deref().map(|p| format!("#[prefix({p})] ")).unwrap_or_default()
+                            + &e.nr.as_deref().map(|n| format!("#[nr({n})] ")).unwrap_or_default(),
                         e.name.as_deref().unwrap_or("_"), e.repr);
     let lists = |t: &mut String, i: usize| for (at, f) in &e.from {
         if *at == i {
@@ -3131,8 +3142,8 @@ pub fn emit_items(items: &[CItem],
                                     e.c_ident().map(|n| format!(" {n}")).unwrap_or_default());
                 for v in &e.variants {
                     match &v.value {
-                        Some(x) => t.push_str(&format!("\t{} = {x},\n", v.name)),
-                        None => t.push_str(&format!("\t{},\n", v.name)),
+                        Some(x) => t.push_str(&format!("\t{} = {x},\n", e.c_variant(v))),
+                        None => t.push_str(&format!("\t{},\n", e.c_variant(v))),
                     }
                 }
                 if let Some(nr) = &e.nr {

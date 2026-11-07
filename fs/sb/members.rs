@@ -243,7 +243,7 @@ pub fn dev_ptr(ca: Option<&Dev>) -> *mut Dev {
 
 /// Construct a MembersV2 reader from a superblock.
 pub fn members_v2<S: SbState>(sb: &c::bch_sb<S>) -> Option<MembersV2<'_>> {
-    let f = S::field(sb, c::bch_sb_field_type::BCH_SB_FIELD_members_v2)?.as_bytes();
+    let f = S::field(sb, c::bch_sb_field_type::members_v2)?.as_bytes();
     let stride = cast_plain::<Head<c::bch_sb_field_members_v2>>(f)?.member_bytes.get().into();
     Some(MembersV2 {
         members: members_in(f, MEMBERS_V2_HEAD, stride)?,
@@ -253,7 +253,7 @@ pub fn members_v2<S: SbState>(sb: &c::bch_sb<S>) -> Option<MembersV2<'_>> {
 
 /// Construct a MembersV1 reader from a superblock.
 pub fn members_v1<S: SbState>(sb: &c::bch_sb<S>) -> Option<MembersV1<'_>> {
-    let f = S::field(sb, c::bch_sb_field_type::BCH_SB_FIELD_members_v1)?.as_bytes();
+    let f = S::field(sb, c::bch_sb_field_type::members_v1)?.as_bytes();
     Some(MembersV1 {
         members: members_in(f, MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES)?,
         nr_devices: S::head(sb).nr_devices.into(),

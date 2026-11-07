@@ -173,13 +173,13 @@ fn type_to_opt(t: CompressionType) -> usize {
 /// still gets lz4's pools at mount.
 fn opt_feature(t: usize) -> u64 {
     macro_rules! map {
-        ((none, $n0:literal), $(($t:ident, $n:literal)),* $(,)?) => { ::paste::paste! {
+        ((none, $n0:literal), $(($t:ident, $n:literal)),* $(,)?) => {
             match t {
                 $n0 => 1,
-                $($n => 1 << SbFeature::[<BCH_FEATURE_ $t>].0,)*
+                $($n => 1 << SbFeature::$t.0,)*
                 _ => panic!("compression opt type {t}"),
             }
-        } };
+        };
     }
     c::BCH_COMPRESSION_OPTS!(map)
 }

@@ -68,7 +68,7 @@ impl Fs {
 }
 
 macro_rules! passes {
-    ($($p:ident),* $(,)?) => { ::paste::paste! { &[$(Pass::[<BCH_RECOVERY_PASS_ $p>]),*] } };
+    ($($p:ident),* $(,)?) => { &[$(Pass::$p),*] };
 }
 
 /// What repairs btree @btree having lost data, besides check_topology and

@@ -14,11 +14,11 @@ c_enum! {
     #[c_name(bch_fsck_flags)]
     #[prefix(FSCK_)]
     pub enum FsckFlags: u32 {
-        FSCK_CAN_FIX = 1 << 0,
-        FSCK_CAN_IGNORE = 1 << 1,
-        FSCK_AUTOFIX = 1 << 2,
-        FSCK_ERR_NO_LOG = 1 << 3,
-        FSCK_ERR_SILENT = 1 << 4,
+        CAN_FIX = 1 << 0,
+        CAN_IGNORE = 1 << 1,
+        AUTOFIX = 1 << 2,
+        ERR_NO_LOG = 1 << 3,
+        ERR_SILENT = 1 << 4,
     }
 }
 

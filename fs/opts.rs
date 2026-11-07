@@ -825,7 +825,7 @@ impl OptHost for c::bch_sb_field_ext {
     const MEMBER: bool = false;
 
     fn with<R>(sb: &c::bch_sb<Unvalidated>, _: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
-        let src = Unvalidated::field(sb, c::bch_sb_field_type::BCH_SB_FIELD_ext)?.as_bytes();
+        let src = Unvalidated::field(sb, c::bch_sb_field_type::ext)?.as_bytes();
         let mut ext = Self::default();
         let dst = plain_bytes_mut(&mut ext);
         let n = src.len().min(dst.len());

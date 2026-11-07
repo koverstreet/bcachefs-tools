@@ -35,7 +35,7 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::c;
-use crate::init::passes::RecoveryPass::*;
+use crate::init::passes::RecoveryPass;
 use crate::c::snapshot_id_state as IdState;
 use crate::check;
 use crate::errcode::{bch_errcode, BchError, Found};
@@ -1308,8 +1308,8 @@ pub(crate) fn check_key_has_snapshot<'a>(
     // trips over them. Only a rewind returns an error, deferring this key.
     // skip_if_complete: if they ran and the key's still here they can't fix it,
     // and rescheduling would force fsck on every mount.
-    for pass in [BCH_RECOVERY_PASS_check_inodes, BCH_RECOVERY_PASS_check_extents,
-                 BCH_RECOVERY_PASS_check_dirents, BCH_RECOVERY_PASS_check_xattrs] {
+    for pass in [RecoveryPass::check_inodes, RecoveryPass::check_extents,
+                 RecoveryPass::check_dirents, RecoveryPass::check_xattrs] {
         keep(passes::run_explicit(fs, &mut buf, pass,
                                   c::bch_run_recovery_pass_flags::RUN_RECOVERY_PASS_skip_if_complete));
     }
@@ -1320,7 +1320,7 @@ pub(crate) fn check_key_has_snapshot<'a>(
     // migrating it, both irreversible. require() rewinds if we're past it; if it
     // ran and left the node deleted, it returns Ok and the repair proceeds.
     if state == IdState::SNAPSHOT_ID_deleted {
-        keep(passes::require(fs, &mut buf, BCH_RECOVERY_PASS_check_snapshots));
+        keep(passes::require(fs, &mut buf, RecoveryPass::check_snapshots));
     }
 
     // Both repairs act on the in-memory table: trust it only if the snapshots and
@@ -1328,8 +1328,8 @@ pub(crate) fn check_key_has_snapshot<'a>(
     // checked this mount. Otherwise schedule the passes and defer.
     if !passes::btree_is_clean(fs, Btree::snapshots) ||
        !passes::btree_is_clean(fs, Btree::subvolumes) {
-        keep(passes::require(fs, &mut buf, BCH_RECOVERY_PASS_check_snapshots));
-        keep(passes::require(fs, &mut buf, BCH_RECOVERY_PASS_check_subvols));
+        keep(passes::require(fs, &mut buf, RecoveryPass::check_snapshots));
+        keep(passes::require(fs, &mut buf, RecoveryPass::check_subvols));
     }
 
     ret?;

@@ -1300,7 +1300,7 @@ mod tests {
     fn data_usage_entry() {
         let mut buf = [0u64; 3];
         let mut e = entry(2);
-        e.type_ = c::bch_jset_entry_type::BCH_JSET_ENTRY_data_usage.0 as u8;
+        e.type_ = c::bch_jset_entry_type::data_usage.0 as u8;
         put(&mut buf, 0, &e);
         buf[1] = 77;                            // v
         buf[2] = 1 | 2 << 8 | 1 << 16 | 3 << 24 | 5 << 32; // r: data_type, nr_devs 2, nr_required, devs 3, 5
@@ -1311,7 +1311,7 @@ mod tests {
         assert_eq!(&u._tail[..u.r.nr_devs as usize], [3, 5]);
 
         let mut e = entry(1);
-        e.type_ = c::bch_jset_entry_type::BCH_JSET_ENTRY_data_usage.0 as u8;
+        e.type_ = c::bch_jset_entry_type::data_usage.0 as u8;
         put(&mut buf, 0, &e);
         // SAFETY: as above
         let e = unsafe { c::jset_entry::<Validated>::from_ffi(buf.as_ptr().cast()) };

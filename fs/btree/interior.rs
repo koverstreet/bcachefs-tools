@@ -164,7 +164,7 @@ fn push_roots(fs: &Fs, root_lock: &RootsGuard<'_>, skip: u64, w: &mut EntryWrite
     -> Result<(), NoRoom>
 {
     for (id, r) in roots(fs, root_lock, skip) {
-        w.push(c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_root, id as u8, r.level, &[r.key.key().as_bytes()])?;
+        w.push(c::bch_jset_entry_type::btree_root, id as u8, r.level, &[r.key.key().as_bytes()])?;
     }
     Ok(())
 }

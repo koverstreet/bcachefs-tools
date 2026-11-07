@@ -934,8 +934,8 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
         let ty = c::bch_jset_entry_type(i.type_.into());
 
         /* write buffer keys are retyped to btree keys below: */
-        if ty == c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_keys ||
-            ty == c::bch_jset_entry_type::BCH_JSET_ENTRY_write_buffer_keys {
+        if ty == c::bch_jset_entry_type::btree_keys ||
+            ty == c::bch_jset_entry_type::write_buffer_keys {
             empty = false;
         }
 
@@ -949,10 +949,10 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
          * to c->btree_roots we have to get any missing btree roots and
          * add them to this journal entry:
          */
-        if ty == c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_root {
+        if ty == c::bch_jset_entry_type::btree_root {
             unsafe { bch2_journal_entry_to_btree_root(fs.as_ptr(), ptr::from_mut(i).cast()) };
             btree_roots_have |= 1 << i.btree_id;
-        } else if ty == c::bch_jset_entry_type::BCH_JSET_ENTRY_write_buffer_keys {
+        } else if ty == c::bch_jset_entry_type::write_buffer_keys {
             let btree = crate::format::Btree(i.btree_id.into());
             for k in i.entries_mut() {
                 let Ok(mut k) = k else { break };
@@ -962,7 +962,7 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
                     return Err(e);
                 }
             }
-            i.type_ = c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_keys.0 as u8;
+            i.type_ = c::bch_jset_entry_type::btree_keys.0 as u8;
         }
     }
 
@@ -982,7 +982,7 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
         btree_roots_to_journal_entries(fs, ew, btree_roots_have).expect("root_journal_res's room");
 
         let mut d = c::jset_entry_datetime::default();
-        d.entry.type_ = c::bch_jset_entry_type::BCH_JSET_ENTRY_datetime.0 as u8;
+        d.entry.type_ = c::bch_jset_entry_type::datetime.0 as u8;
         d.seconds.set(ktime_get_real_seconds() as u64);
         ew.push_entry(d).expect("super_entries_journal_res's room");
 
@@ -1331,7 +1331,7 @@ impl c::journal {
             }
 
             let mut r = c::jset_entry_rewind_limit::default();
-            r.entry.type_ = c::bch_jset_entry_type::BCH_JSET_ENTRY_rewind_limit.0 as u8;
+            r.entry.type_ = c::bch_jset_entry_type::rewind_limit.0 as u8;
             r.seq.set(self.lock.rewind_seq.get().min(seq + 1));
             Some(r)
         } else {

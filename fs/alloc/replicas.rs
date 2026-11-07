@@ -338,8 +338,8 @@ fn v0_entries(b: &[u8]) -> impl Iterator<Item = SbEntry<'_>> {
 /// replicas_v0's.
 pub fn sb_entries<S: SbState>(sb: &c::bch_sb<S>) -> impl Iterator<Item = SbEntry<'_>> {
     type T = c::bch_sb_field_type;
-    let v1 = S::field(sb, T::BCH_SB_FIELD_replicas).map(|f| v1_entries(f.as_bytes()));
-    let v0 = v1.is_none().then(|| S::field(sb, T::BCH_SB_FIELD_replicas_v0)).flatten()
+    let v1 = S::field(sb, T::replicas).map(|f| v1_entries(f.as_bytes()));
+    let v0 = v1.is_none().then(|| S::field(sb, T::replicas_v0)).flatten()
         .map(|f| v0_entries(f.as_bytes()));
 
     v1.into_iter().flatten().chain(v0.into_iter().flatten())
@@ -634,9 +634,9 @@ impl ReplicasCpu {
         let bytes = SECTION_HEAD + self.entries().flat_map(|e| parts(e, v1)).map(<[u8]>::len).sum::<usize>();
         let u64s = bytes.div_ceil(size_of::<u64>()) as u32;
         let out = if v1 {
-            section::<c::bch_sb_field_replicas>(sb, u64s, c::bch_sb_field_type::BCH_SB_FIELD_replicas_v0)
+            section::<c::bch_sb_field_replicas>(sb, u64s, c::bch_sb_field_type::replicas_v0)
         } else {
-            section::<c::bch_sb_field_replicas_v0>(sb, u64s, c::bch_sb_field_type::BCH_SB_FIELD_replicas)
+            section::<c::bch_sb_field_replicas_v0>(sb, u64s, c::bch_sb_field_type::replicas)
         };
         let Some(out) = out else { return false };
 

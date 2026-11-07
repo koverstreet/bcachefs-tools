@@ -59,7 +59,7 @@ use crate::btree::iter::{
     TransBkey, UpdateTriggerFlags,
 };
 use crate::c;
-use crate::init::passes::RecoveryPass::*;
+use crate::init::passes::RecoveryPass;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::damage;
@@ -256,10 +256,10 @@ pub fn node_set_deleted(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchErro
 fn schedule_content_passes(fs: &Fs, msg: &mut Printbuf, btrees: u64) -> Result<(), BchError> {
     let mut ret = Ok(());
 
-    for (btree, pass) in [(Btree::extents, BCH_RECOVERY_PASS_check_extents),
-                          (Btree::inodes,  BCH_RECOVERY_PASS_check_inodes),
-                          (Btree::dirents, BCH_RECOVERY_PASS_check_dirents),
-                          (Btree::xattrs,  BCH_RECOVERY_PASS_check_xattrs)] {
+    for (btree, pass) in [(Btree::extents, RecoveryPass::check_extents),
+                          (Btree::inodes,  RecoveryPass::check_inodes),
+                          (Btree::dirents, RecoveryPass::check_dirents),
+                          (Btree::xattrs,  RecoveryPass::check_xattrs)] {
         if btrees & (1u64 << btree.0) != 0 {
             let r = passes::run_explicit(fs, msg, pass, c::bch_run_recovery_pass_flags::empty());
             if r.is_err() {
@@ -337,7 +337,7 @@ fn check_no_data(t: &TransAttempt<'_, '_>, id: u32, op: &str, run: Option<&Run<'
     // are what can remove stranded keys - check_inodes alone can't repair a
     // stranded dirent. And check_allocations, since the count itself may be
     // what's wrong:
-    let mut ret = passes::run_explicit(fs, &mut msg, BCH_RECOVERY_PASS_check_allocations,
+    let mut ret = passes::run_explicit(fs, &mut msg, RecoveryPass::check_allocations,
                                        c::bch_run_recovery_pass_flags::empty());
 
     let r = schedule_content_passes(fs, &mut msg, acct.btrees());
@@ -994,7 +994,7 @@ fn delete_dead_snapshot_keys_v2(trans: &BtreeTrans<'_>, run: &Run<'_>) -> Result
         // content passes: their key_has_snapshot repairs exist to uphold the
         // invariant v1 doesn't need. Refuse anyway - the inode keys below are
         // the only way left to find anything that is in fact stranded.
-        let ret = passes::run_explicit(fs, &mut msg, BCH_RECOVERY_PASS_check_allocations,
+        let ret = passes::run_explicit(fs, &mut msg, RecoveryPass::check_allocations,
                                        c::bch_run_recovery_pass_flags::empty());
 
         bch_err!(fs, "{}", msg.as_str());
@@ -1044,7 +1044,7 @@ fn check_should_delete_leaf(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, v: &c::Snap
             // subvolumes btree here, or trusting the filesystem version,
             // which can't distinguish a legacy will_delete leaf from real
             // corruption.
-            passes::require(fs, &mut buf, BCH_RECOVERY_PASS_check_subvols)?;
+            passes::require(fs, &mut buf, RecoveryPass::check_subvols)?;
             Ok(true)
         }
         c::bch_snapshot_state::SNAPSHOT_STATE_will_delete => {
@@ -1158,7 +1158,7 @@ fn check_should_delete_snapshot(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, coll: &
         let _ = writeln!(msg, "snapshot deletion found damaged topology (resolved live child {live_child}):");
         prt!(&mut msg, "{}", k.to_text(fs));
 
-        passes::run_explicit(fs, &mut msg, BCH_RECOVERY_PASS_check_snapshots,
+        passes::run_explicit(fs, &mut msg, RecoveryPass::check_snapshots,
                              c::bch_run_recovery_pass_flags::empty())?;
         return fs.throw(bch_errcode::BCH_ERR_EINVAL_snapshot_delete_bad_topology);
     }
@@ -1386,7 +1386,7 @@ pub fn delete_dead_snapshots_forced(fs: &Fs) -> Result<(), BchError> {
 
     *d.nodes.write() = None;
 
-    passes::set_no_ratelimit(fs, BCH_RECOVERY_PASS_check_snapshots);
+    passes::set_no_ratelimit(fs, RecoveryPass::check_snapshots);
 
     ret
 }
@@ -1431,7 +1431,7 @@ fn delete_dead_interior_snapshots(fs: &Fs) -> Result<(), BchError> {
             let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
 
             let _ = writeln!(msg, "Deleting interior snapshot nodes forces check_snapshots:");
-            passes::run_explicit(fs, &mut msg, BCH_RECOVERY_PASS_check_snapshots,
+            passes::run_explicit(fs, &mut msg, RecoveryPass::check_snapshots,
                                  c::bch_run_recovery_pass_flags::empty())?;
         }
 
@@ -1516,7 +1516,7 @@ pub(crate) fn check_snapshot_needs_deletion(t: &TransAttempt<'_, '_>, k: BkeySC<
         // which mark_snapshot (will_delete only) doesn't. Ephemeral +
         // best-effort: ignore the return.
         let mut buf = Printbuf::new();
-        let _ = passes::run_explicit(t.fs(), &mut buf, BCH_RECOVERY_PASS_delete_dead_snapshots,
+        let _ = passes::run_explicit(t.fs(), &mut buf, RecoveryPass::delete_dead_snapshots,
                                      c::bch_run_recovery_pass_flags::RUN_RECOVERY_PASS_ephemeral);
     }
 }

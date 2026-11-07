@@ -138,7 +138,7 @@ pub(crate) fn replicas_entry(pos: &DiskAccountingPos<Unvalidated>) -> Option<&c:
 
 pub fn is_mem<S>(pos: &DiskAccountingPos<S>) -> bool {
     let t = pos.type_();
-    (t.0 as usize) < TYPE_NR && t != disk_accounting_type::BCH_DISK_ACCOUNTING_inum
+    (t.0 as usize) < TYPE_NR && t != disk_accounting_type::inum
 }
 
 const TYPE_NR: usize = disk_accounting_type::NR as usize;

@@ -132,14 +132,14 @@ struct UpDown {
 
 /// `version => [passes] (+ all_fsck), [errors];`
 macro_rules! table {
-    ($( $ver:ident => [$($pass:ident),*] $(+ $all:ident)?, [$($err:ident),*]; )*) => { ::paste::paste! {
+    ($( $ver:ident => [$($pass:ident),*] $(+ $all:ident)?, [$($err:ident),*]; )*) => {
         &[$(UpDown {
-            version:  MetadataVersion::[<bcachefs_metadata_version_ $ver>],
+            version:  MetadataVersion::$ver,
             all_fsck: false $(|| table!(@$all))?,
-            passes:   0 $(| 1 << RecoveryPass::[<BCH_RECOVERY_PASS_ $pass>] as u64)*,
-            errors:   &[$(SbErrorId::[<BCH_FSCK_ERR_ $err>]),*],
+            passes:   0 $(| 1 << RecoveryPass::$pass as u64)*,
+            errors:   &[$(SbErrorId::$err),*],
         }),*]
-    } };
+    };
     (@all_fsck) => { true };
 }
 

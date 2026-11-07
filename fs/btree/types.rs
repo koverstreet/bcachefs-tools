@@ -1165,8 +1165,8 @@ c_enum! {
     #[prefix(BKEY_TYPE_)]
     #[nr(BKEY_TYPE_NR)]
     pub enum BtreeNodeType: u32 {
-        BKEY_TYPE_btree,
-        Btree_arms(kwd, val, ..) => concat(BKEY_TYPE_, kwd) = (val as u32) + 1,
+        btree,
+        Btree_arms(kwd, val, ..) => kwd = (val as u32) + 1,
     }
 }
 

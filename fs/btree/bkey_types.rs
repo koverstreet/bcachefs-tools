@@ -202,9 +202,9 @@ c_enum! {
     #[c_name(bch_validate_flags)]
     #[prefix(BCH_VALIDATE_)]
     pub enum ValidateFlags: u32 {
-        BCH_VALIDATE_write = 1 << 0,
-        BCH_VALIDATE_commit = 1 << 1,
-        BCH_VALIDATE_silent = 1 << 2,
+        write = 1 << 0,
+        commit = 1 << 1,
+        silent = 1 << 2,
     }
 }
 

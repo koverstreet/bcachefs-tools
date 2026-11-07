@@ -12,13 +12,13 @@ c_enum! {
     #[c_name(bch_recovery_pass_flags)]
     #[prefix(PASS_)]
     pub enum PassFlags: u32 {
-        PASS_SILENT = 1 << 0,
-        PASS_FSCK = 1 << 1,
-        PASS_UNCLEAN = 1 << 2,
-        PASS_ALWAYS = 1 << 3,
-        PASS_ONLINE = 1 << 4,
-        PASS_ALLOC = 1 << 5,
-        PASS_NODEFER = 1 << 6,
+        SILENT = 1 << 0,
+        FSCK = 1 << 1,
+        UNCLEAN = 1 << 2,
+        ALWAYS = 1 << 3,
+        ONLINE = 1 << 4,
+        ALLOC = 1 << 5,
+        NODEFER = 1 << 6,
     }
 }
 

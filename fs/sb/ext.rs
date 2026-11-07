@@ -76,7 +76,7 @@ mod tests {
         let b = plain_bytes_mut(buf);
         let f = cast_plain_mut::<Head<c::bch_sb_field>>(b).unwrap();
         f.set_val_u64s(u64s);
-        f.type_ = Le32::new(c::bch_sb_field_type::BCH_SB_FIELD_ext.0);
+        f.type_ = Le32::new(c::bch_sb_field_type::ext.0);
         let f = c::bch_sb_field::<Unvalidated>::from_bytes(b).unwrap();
 
         let mut out = Printbuf::new();

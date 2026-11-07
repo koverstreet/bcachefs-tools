@@ -28,7 +28,7 @@ use crate::btree::iter::{
 };
 use crate::alloc::capacity::DiskReservation;
 use crate::c;
-use crate::init::passes::RecoveryPass::*;
+use crate::init::passes::RecoveryPass;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id, BkeyValidate};
@@ -63,7 +63,7 @@ fn missing(fs: &Fs, subvol: u32) -> Result<(), BchError> {
     let log = count_fsck_err(fs, id::subvol_missing, &mut msg);
     msg.set_suppressed(!log);
 
-    passes::run_explicit(fs, &mut msg, BCH_RECOVERY_PASS_check_inodes,
+    passes::run_explicit(fs, &mut msg, RecoveryPass::check_inodes,
                          c::bch_run_recovery_pass_flags::from_bits_retain(0))
 }
 
@@ -463,7 +463,7 @@ fn check_subvol<'a, 't>(
         Err(e) if e.matches(c::ENOENT) => {
             let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
             prt!(&mut msg, "subvolume points to missing snapshot\n{}\n", s.to_text(fs));
-            passes::run_explicit(fs, &mut msg, BCH_RECOVERY_PASS_reconstruct_snapshots,
+            passes::run_explicit(fs, &mut msg, RecoveryPass::reconstruct_snapshots,
                                  c::bch_run_recovery_pass_flags::from_bits_retain(0))?;
             return Err(e);
         }
@@ -811,7 +811,7 @@ pub fn unlink(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
 
     // There's no unlinked-subvolumes btree, as there is for inodes: if we
     // crash while it's still open, check_subvols finds and deletes it
-    passes::set_no_ratelimit(t.fs(), BCH_RECOVERY_PASS_check_subvols);
+    passes::set_no_ratelimit(t.fs(), RecoveryPass::check_subvols);
     Ok(())
 }
 

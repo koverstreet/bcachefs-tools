@@ -43,9 +43,9 @@ c_enum! {
     #[c_name(quota_acct_mode)]
     #[prefix(KEY_TYPE_QUOTA_)]
     pub enum QuotaAcctMode: u32 {
-        KEY_TYPE_QUOTA_PREALLOC,
-        KEY_TYPE_QUOTA_WARN,
-        KEY_TYPE_QUOTA_NOCHECK,
+        PREALLOC,
+        WARN,
+        NOCHECK,
     }
 }
 

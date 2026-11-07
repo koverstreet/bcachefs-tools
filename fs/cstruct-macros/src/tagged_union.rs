@@ -280,7 +280,7 @@ fn enum_form(input: &TokenStream) -> Result<(Decl, CTaggedUnion, TokenStream), S
     };
 
     let arm_value = |a: &enum_decl::Arm| match &tag_enum {
-        Some(e) if closed(e) => format!("c::{}::{}{}", tag_enum_name(e), e.prefix.as_deref().unwrap_or_default(), a.name),
+        Some(e) if closed(e) => format!("c::{}::{}", tag_enum_name(e), a.name),
         _ => a.value.clone(),
     };
     let tu = CTaggedUnion {

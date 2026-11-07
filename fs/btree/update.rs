@@ -201,7 +201,7 @@ impl TransAttempt<'_, '_> {
 
     /// @s into the journal, with this transaction's commit.
     pub fn log_str(&self, s: &[u8]) -> Result<(), BchError> {
-        self.journal_entry_add(c::bch_jset_entry_type::BCH_JSET_ENTRY_log, 0, 1, s)
+        self.journal_entry_add(c::bch_jset_entry_type::log, 0, 1, s)
     }
 
     /// @msg into the journal, with this transaction's commit;
@@ -216,7 +216,7 @@ impl TransAttempt<'_, '_> {
     /// @k, a key of @btree at @level, into the journal with this
     /// transaction's commit.
     pub fn log_bkey(&self, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
-        self.journal_entry_add(c::bch_jset_entry_type::BCH_JSET_ENTRY_log_bkey, btree.0 as u8, level as u8,
+        self.journal_entry_add(c::bch_jset_entry_type::log_bkey, btree.0 as u8, level as u8,
                                k.as_bytes())
     }
 

@@ -43,7 +43,7 @@ impl SbFieldOps for Section {
         write!(out, "journal_seq:    {}\n", f.journal_seq.get());
 
         for e in f.entries().map_while(Result::ok) {
-            if e.type_ == c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_keys.0 as u8 && e.u64s() == 0 {
+            if e.type_ == c::bch_jset_entry_type::btree_keys.0 as u8 && e.u64s() == 0 {
                 continue;
             }
             journal_entry_to_text(out, fs, e);
@@ -124,7 +124,7 @@ type Key<'a> = VstructRef<'a, c::bkey_i, Validated>;
 fn btree_root<'a>(mut entries: impl Iterator<Item = &'a c::jset_entry>, id: u32)
     -> Option<(u8, Option<Key<'a>>)>
 {
-    let e = entries.find(|e| e.type_ == c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_root.0 as u8 &&
+    let e = entries.find(|e| e.type_ == c::bch_jset_entry_type::btree_root.0 as u8 &&
                               u32::from(e.btree_id) == id)?;
     Some((e.level, e.entries().next()))
 }
@@ -184,14 +184,14 @@ pub(crate) const COMMON_BYTES: usize = size_of::<c::jset_entry_usage>() + 2 * si
 /// version, and both io clocks' times.
 pub(crate) fn super_entries_add_common(fs: &Fs, w: &mut EntryWriter<'_>) -> Result<(), NoRoom> {
     let mut u = c::jset_entry_usage::default();
-    u.entry.type_ = c::bch_jset_entry_type::BCH_JSET_ENTRY_usage.0 as u8;
+    u.entry.type_ = c::bch_jset_entry_type::usage.0 as u8;
     u.entry.btree_id = c::bch_fs_usage_type::BCH_FS_USAGE_key_version.0 as u8;
     u.v = Le64::new(fs.key_version.load(Relaxed) as u64);
     w.push_entry(u)?;
 
     for (rw, clock) in fs.io_clock.iter().enumerate() {
         let mut e = c::jset_entry_clock::default();
-        e.entry.type_ = c::bch_jset_entry_type::BCH_JSET_ENTRY_clock.0 as u8;
+        e.entry.type_ = c::bch_jset_entry_type::clock.0 as u8;
         e.rw = rw as u8;
         e.time = Le64::new(clock.now.load(Relaxed) as u64);
         w.push_entry(e)?;

@@ -1110,9 +1110,9 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
         for entry in j.entries() {
             let rewind = seq_rewound && entry.level == 0 && !btree_id_is_alloc(entry.btree_id.into());
             let want = if rewind {
-                c::bch_jset_entry_type::BCH_JSET_ENTRY_overwrite
+                c::bch_jset_entry_type::overwrite
             } else {
-                c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_keys
+                c::bch_jset_entry_type::btree_keys
             };
             if u32::from(entry.type_) != want.0 {
                 continue;
