@@ -11,7 +11,7 @@ use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_uint};
 use core::mem::ManuallyDrop;
 use core::ptr::{self, NonNull};
-use core::sync::atomic::{AtomicPtr, Ordering::{self, Relaxed, SeqCst}};
+use core::sync::atomic::{AtomicPtr, Ordering::{Relaxed, SeqCst}};
 use cstruct_macros::{CStruct, c_enum, c_export, c_extern};
 
 c_enum! {
@@ -76,8 +76,7 @@ impl c::journal {
     }
 
     pub fn halted(&self) -> bool {
-        self.lock.hot.reservations.load(Ordering::Relaxed) & u64::from(c::JOURNAL_ENTRY_OFFSET_MAX) ==
-            u64::from(c::JOURNAL_ENTRY_ERROR_VAL)
+        self.reservations().cur_entry_offset() == c::JOURNAL_ENTRY_ERROR_VAL
     }
 
     pub fn block(&self) -> JournalBlocked<'_> {
@@ -241,14 +240,73 @@ impl c::JournalLocked {
     }
 }
 
+/* idx follows cur_entry_offset's 22 bits, the buf counts idx's 2 */
+const STATE_IDX_SHIFT: u32 = c::JOURNAL_ENTRY_OFFSET_MAX.count_ones();
+
 impl c::journal_res_state {
+    pub fn from_v(v: u64) -> Self {
+        c::journal_res_state { word: c::journal_res_state_word { v } }
+    }
+
+    pub fn v(self) -> u64 {
+        unsafe { self.word.v }
+    }
+
+    fn count_shift(idx: u32) -> u32 {
+        c::JOURNAL_STATE_BUF0_SHIFT + idx * c::JOURNAL_STATE_BUF_COUNT_BITS
+    }
+
     pub fn count(self, idx: u32) -> u32 {
-        (unsafe { self.word.v } >> (c::JOURNAL_STATE_BUF0_SHIFT + idx * c::JOURNAL_STATE_BUF_COUNT_BITS)) as u32
-            & c::JOURNAL_STATE_BUF_COUNT_MAX
+        (self.v() >> Self::count_shift(idx)) as u32 & c::JOURNAL_STATE_BUF_COUNT_MAX
+    }
+
+    /// Where the open entry's next reservation goes, in u64s - or one of the
+    /// JOURNAL_ENTRY_*_VALs, for no entry open.
+    pub fn cur_entry_offset(self) -> u32 {
+        (self.v() & u64::from(c::JOURNAL_ENTRY_OFFSET_MAX)) as u32
+    }
+
+    pub fn set_cur_entry_offset(&mut self, offset: u32) {
+        let mask = u64::from(c::JOURNAL_ENTRY_OFFSET_MAX);
+        *self = Self::from_v(self.v() & !mask | u64::from(offset) & mask);
+    }
+
+    /// The ring slot of the entry open, or last open.
+    pub fn idx(self) -> u32 {
+        (self.v() >> STATE_IDX_SHIFT) as u32 & c::JOURNAL_STATE_BUF_MASK
+    }
+
+    pub fn is_open(self) -> bool {
+        self.cur_entry_offset() < c::JOURNAL_ENTRY_CLOSED_VAL
+    }
+
+    /// A ref on idx()'s buf - false, and none, if its count is full:
+    /// journal_state_inc().
+    pub fn inc(&mut self) -> bool {
+        let idx = self.idx();
+        if self.count(idx) == c::JOURNAL_STATE_BUF_COUNT_MAX {
+            return false;
+        }
+        *self = Self::from_v(self.v() + (1 << Self::count_shift(idx)));
+        true
     }
 }
 
+const _: () = assert!(STATE_IDX_SHIFT + c::JOURNAL_STATE_BUF_MASK.count_ones() == c::JOURNAL_STATE_BUF0_SHIFT,
+                      "journal_res_state: idx between cur_entry_offset and the counts");
+
 impl c::journal {
+    /// j->reservations, as it is now.
+    pub fn reservations(&self) -> c::journal_res_state {
+        c::journal_res_state::from_v(self.lock.hot.reservations.load(Relaxed))
+    }
+
+    /// A ref put on ring slot @idx's buf: the state after - journal_state_buf_put().
+    pub fn state_buf_put(&self, idx: u32) -> c::journal_res_state {
+        let d = 1u64 << c::journal_res_state::count_shift(idx);
+        c::journal_res_state::from_v(self.lock.hot.reservations.fetch_sub(d, SeqCst) - d)
+    }
+
     /// @seq's buf's reservation count in @s, 0 for a seq too old to have one.
     pub fn state_seq_count(&self, s: c::journal_res_state, seq: u64) -> u32 {
         if self.fs().journal_cur_seq().wrapping_sub(seq) < u64::from(c::JOURNAL_STATE_BUF_NR) {

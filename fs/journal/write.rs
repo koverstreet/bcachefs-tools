@@ -1277,8 +1277,7 @@ impl c::journal {
             let Some(w) = (seq != 0).then(|| g.seq_to_buf(seq)).flatten() else { return };
 
             if w.bits.write_started() ||
-                self.state_seq_count(c::journal_res_state { word: c::journal_res_state_word {
-                    v: self.lock.hot.reservations.load(Relaxed) } }, seq) != 0 {
+                self.state_seq_count(self.reservations(), seq) != 0 {
                 return;
             }
 
