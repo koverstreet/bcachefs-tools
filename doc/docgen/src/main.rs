@@ -837,9 +837,9 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "counters",
-        macro_name: "BCH_PERSISTENT_COUNTERS",
+        macro_name: "bch_persistent_counters",
         default: None,
-        doc_field: Some(3),
+        doc_field: Some(2),
         flags_field: None,
         date_field: None,
         version_field: None,

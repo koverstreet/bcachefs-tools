@@ -6,14 +6,14 @@
 
 __maybe_unused
 static const enum bch_counters_flags bch2_counter_flags[] = {
-#define x(t, n, flags, ...) [BCH_COUNTER_##t] = flags,
+#define x(t, _idx, n, flags, ...) [BCH_COUNTER_##t] = flags,
 	BCH_PERSISTENT_COUNTERS()
 #undef x
 };
 
 static inline void __maybe_unused check_bch_counter_ids_unique(void) {
 	switch(0){
-#define x(t, n, ...) case (n):
+#define x(t, _idx, n, ...) case (n):
         BCH_PERSISTENT_COUNTERS();
 #undef x
 		;

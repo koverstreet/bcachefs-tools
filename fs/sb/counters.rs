@@ -71,17 +71,17 @@ macro_rules! event_kind {
 }
 
 macro_rules! counter_events {
-    ($(($name:ident, $id:tt, $ty:tt $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
+    ($(($name:ident, $nr:expr, [$id:tt], [$ty:tt])),* $(,)?) => {
         $(
             impl Event for events::$name {
                 type Kind = event_kind!($ty);
 
-                const IDX: usize = c::[<BCH_COUNTER_ $name>] as usize;
+                const IDX: usize = c::bch_persistent_counters::$name as usize;
             }
         )*
-    } };
+    };
 }
-c::BCH_PERSISTENT_COUNTERS!(counter_events);
+c::bch_persistent_counters_arms!(counter_events);
 
 pub struct CounterInfo {
     pub name: &'static str,
@@ -89,20 +89,19 @@ pub struct CounterInfo {
     pub is_sectors: bool,
 }
 
-// From BCH_PERSISTENT_COUNTERS(): its entries are (name, stable id, type,
-// description).
+// From bch_persistent_counters_arms!(): (name, index, [stable id], [type]).
 macro_rules! counter_is_sectors {
     (TYPE_SECTORS) => { true };
     ($other:tt) => { false };
 }
 macro_rules! counter_table {
-    ($(($name:tt, $id:tt, $ty:tt $(, $($rest:tt)*)?)),* $(,)?) => {
+    ($(($name:tt, $nr:expr, [$id:tt], [$ty:tt])),* $(,)?) => {
         pub const COUNTERS: &[CounterInfo] = &[$(
             CounterInfo { name: stringify!($name), stable_id: $id, is_sectors: counter_is_sectors!($ty) },
         )*];
     };
 }
-c::BCH_PERSISTENT_COUNTERS!(counter_table);
+c::bch_persistent_counters_arms!(counter_table);
 
 impl Fs {
     /// Count @_e once: event_inc().

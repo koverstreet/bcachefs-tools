@@ -311,7 +311,7 @@ macro_rules! counter_names {
         const COUNTER_NAMES: [&CStr; c::BCH_COUNTER_NR as usize] = [$(file_name!($name),)*];
     };
 }
-c::BCH_PERSISTENT_COUNTERS!(counter_names);
+c::bch_persistent_counters_arms!(counter_names);
 
 static COUNTER_FILES: ListAttrs<{ c::BCH_COUNTER_NR as usize }> = ListAttrs::new(&COUNTER_NAMES, 0o644);
 

@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context, Result};
 use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
 use bch_bindgen::c::DegradedAction;
-use bch_bindgen::c::bch_persistent_counters::BCH_COUNTER_NR;
+use bch_bindgen::c::BCH_COUNTER_NR;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::sb::counters::COUNTERS;
 use clap::Parser;
