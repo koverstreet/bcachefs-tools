@@ -8,6 +8,7 @@ use core::mem::size_of;
 
 use crate::c;
 use crate::util::vstructs::{plain_bytes, Head, Plain, VStruct};
+use zerocopy::IntoBytes;
 
 /// No room left in the buffer for the entry.
 #[derive(Debug)]
@@ -56,6 +57,12 @@ impl<'a> EntryWriter<'a> {
             dst.copy_from_slice(d);
             rest = r;
         }
+        Ok(())
+    }
+
+    /// @entries, whole entries already written, their counts set.
+    pub fn push_entries(&mut self, entries: &[u64]) -> Result<(), NoRoom> {
+        self.reserve(entries.len() * size_of::<u64>())?.copy_from_slice(entries.as_bytes());
         Ok(())
     }
 

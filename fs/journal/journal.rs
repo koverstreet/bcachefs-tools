@@ -330,6 +330,22 @@ impl c::journal {
         unsafe { data.byte_add(size_of::<Head<c::jset>>()).cast::<u64>().add(res.offset as usize).cast() }
     }
 
+    /// Entries written into @res, from where it's at: what @f writes is used up,
+    /// and res_put() fills only what's left.
+    pub fn res_append_entries<R>(&self, res: &mut c::journal_res, f: impl FnOnce(&mut EntryWriter<'_>) -> R) -> R {
+        ebug_assert!(res.ref_, "entries into a journal reservation not held");
+
+        let room = usize::from(res.u64s) * size_of::<u64>();
+        let buf = unsafe { core::slice::from_raw_parts_mut(self.res_entry(res).cast::<u8>(), room) };
+        let mut w = EntryWriter::new(buf);
+        let ret = f(&mut w);
+
+        let u64s = w.len() / size_of::<u64>();
+        res.offset += u64s as u32;
+        res.u64s -= u64s as u16;
+        ret
+    }
+
     /*
      * This function releases the journal write structure so other threads can
      * then proceed to add their keys as well.
