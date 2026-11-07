@@ -8,19 +8,22 @@
 //! query starts from.
 
 mod exact;
+mod reflink;
 mod resolve;
 mod sample;
 mod unvalidated;
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
-use bcachefs_kernel::btree::bkey::pos;
+use bcachefs_kernel::btree::bkey::{pos, AnyKeySC};
 use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::c;
 use bcachefs_kernel::format::Btree;
 use bcachefs_kernel::fs::OpenFs;
+use bcachefs_kernel::util::vstructs::Unvalidated;
 use clap::Parser;
 use rustix::fs::{makedev, AtFlags, FileType};
 
@@ -159,6 +162,12 @@ impl Subvols {
         self.0.insert(subvol, snapshot);
         Ok(snapshot)
     }
+}
+
+/// The range of the reflink btree @k references, if it's a reflink_p.
+fn reflink_p_range(k: AnyKeySC<'_, Unvalidated>) -> Option<Range<u64>> {
+    let idx = k.arm::<c::ReflinkP>()?.v().idx();
+    Some(idx..idx + u64::from(k.k.size))
 }
 
 fn fs_du(cli: Cli) -> Result<()> {

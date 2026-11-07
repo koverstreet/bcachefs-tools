@@ -31,7 +31,6 @@ use std::path::Path;
 use anyhow::{anyhow, bail, Context, Result};
 use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::btree::bkey::{pos, spos, AnyKeySC};
-use bcachefs_kernel::c;
 use bcachefs_kernel::data::ptrs::{BkeyVPtrs, Ptrs};
 use bcachefs_kernel::format::{Btree, CompressionType};
 use bcachefs_kernel::fs::Fs;
@@ -40,7 +39,7 @@ use bcachefs_kernel::util::{Sectors, ToText};
 use bcachefs_kernel::util::vstructs::Unvalidated;
 use rustix::fs::{makedev, AtFlags, FileType};
 
-use super::{Cli, Mounted, Subvols};
+use super::{reflink_p_range, Cli, Mounted, Subvols};
 use crate::util::statx_subvol;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
@@ -213,10 +212,7 @@ impl Walk<'_> {
 
             match k.k.key_type() {
                 t::extent => self.ptrs(k, &live, &mut out),
-                t::reflink_p => {
-                    let idx = k.arm::<c::ReflinkP>().expect("a reflink_p").v().idx();
-                    reflinked.push(idx..idx + k.k.size as u64);
-                }
+                t::reflink_p => reflinked.extend(reflink_p_range(k)),
                 t::inline_data | t::reservation =>
                     out.referenced += k.k.size as u64,
                 _ => self.skip(k),
