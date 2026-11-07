@@ -159,7 +159,7 @@ macro_rules! recovery_pass {
 use crate::btree::iter::lockrestart_do;
 use crate::c;
 use self::bch_recovery_runner as Runner;
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::locking::ExclusiveGuard;
 use crate::sb::io::{SbFieldOps, SbWrite};
@@ -167,7 +167,7 @@ use crate::snapshots::subvolume;
 use crate::types::{Le32, Le64};
 use crate::data_structures::bitmap::LeBitmap;
 use crate::util::names;
-use crate::util::ffi::{c_char, Opaque};
+use crate::util::ffi::c_char;
 use crate::util::kernel::{ktime_get_ns, ktime_get_real_seconds, NSEC_PER_SEC};
 use crate::util::kthread::Kthread;
 use crate::util::log::{log_cont, log_start, LogLevel, LogMsg};
@@ -177,7 +177,6 @@ use crate::util::place::Contained;
 use crate::util::workqueue::Queue;
 use crate::util::{DateTime, Nsecs, Printbuf};
 use crate::{bch_err, bch_info, c_function_name, inode, message, prt};
-use core::ffi::c_int;
 use core::mem::size_of;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cstruct_macros::c_export;
@@ -802,12 +801,6 @@ pub fn require(fs: &Fs, out: &mut Printbuf, pass: Pass) -> Result<(), BchError> 
     fs.throw(bch_errcode::BCH_ERR_recovery_pass_will_run)
 }
 
-#[c_export]
-pub fn bch2_run_explicit_recovery_pass(c: &Opaque<Fs>, out: &mut Printbuf, pass: RecoveryPass,
-                                       flags: c::bch_run_recovery_pass_flags) -> c_int {
-    ret_to_c(run_explicit(Fs::from_c(c), out, pass, flags))
-}
-
 // ── Running ──────────────────────────────────────────────────────────────────
 
 /// Retry backoff for a failing pass, as a multiple of its last runtime (same
@@ -1163,7 +1156,6 @@ pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
 /// A scheduled pass has work, and can't ask for writes later - it fails with
 /// erofs_trans_commit. opts.recovery_passes counts because Fs::start()
 /// asks before recovery schedules them.
-#[c_export]
 pub fn go_rw_in_recovery(fs: &Fs) -> bool {
     fs.flags.get(c::bch_fs_flags::may_upgrade_downgrade) &&
         (fs.journal_keys_get().is_some_and(|jk| !jk.value().keys().is_empty()) ||

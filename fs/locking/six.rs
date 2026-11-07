@@ -1248,7 +1248,6 @@ pub fn six_lock_counts(lock: &c::six_lock) -> c::six_lock_count {
 /// # Safety
 /// @lock is held for intent by the caller, and @nr takes away only read locks
 /// it holds, or gives back those it took.
-#[c_export]
 pub unsafe fn six_lock_readers_add(lock: &c::six_lock, nr: c_int) {
     if lock.readers.allocated() {
         lock.readers.get().add(nr as u32);

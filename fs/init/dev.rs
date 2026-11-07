@@ -222,7 +222,7 @@ use crate::alloc::replicas::can_write_with_devs;
 use crate::btree::iter::UpdateTriggerFlags;
 use crate::data::migrate::{dev_data_drop, dev_data_drop_by_backpointers, dev_remove_stripes, DevDrop};
 use crate::debug::sysfs::{DevDir, DEV_GROUPS};
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, StateLockWrite};
 use crate::format::{DataType, MemberInitialized, MemberState, MetadataVersion, SbFeature};
 use crate::locking::MemallocFlags;
@@ -240,7 +240,7 @@ use crate::util::names;
 use crate::util::percpu::PerCpu;
 use crate::util::printbuf::{prt_bdevname, DateTime, Msg};
 use crate::util::rcu::read_lock;
-use crate::util::vstructs::{Head, Validated};
+use crate::util::vstructs::Head;
 use crate::util::{Nsecs, Printbuf};
 use crate::{bch_err_fn, prt};
 use core::ffi::{c_int, c_uint, CStr};
@@ -790,16 +790,6 @@ pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&c::block_device>, sb: &c::bch_
         return Err(bch_errcode::BCH_ERR_device_splitbrain.into());
     }
     Ok(())
-}
-
-/// # Safety
-/// @fs is a superblock.
-#[c_export]
-pub unsafe fn bch2_dev_in_fs(fs: *mut Head<c::bch_sb>, fs_bdev: Option<&c::block_device>,
-                             sb: &c::bch_sb_handle, opts: &c::bch_opts) -> c_int {
-    // SAFETY: the caller's
-    let fs = unsafe { c::bch_sb::<Validated>::from_ffi(fs) };
-    ret_to_c(dev_in_fs(fs, fs_bdev, sb, opts))
 }
 
 fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, err: &mut Printbuf)
@@ -1634,12 +1624,6 @@ impl Fs {
             }
         }
     }
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_devs_list_to_text(out: &mut Printbuf, c: &Fs, d: &c::bch_devs_list) {
-    c.devs_list_to_text(out, d)
 }
 
 /* Resize on mount */

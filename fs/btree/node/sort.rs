@@ -306,7 +306,6 @@ fn sort_bkey_ptrs(keys: &Keys<'_>, ptrs: &mut [u64]) {
     }
 }
 
-#[c_export]
 pub fn bch2_sort_whiteouts(fs: &Fs, b: &BtreeNode) {
     let u64s = b.whiteout_u64s.get() as usize;
 
@@ -369,7 +368,6 @@ fn should_compact_bset(b: &BtreeNode, contents: &NodeContents, set: usize, compa
     }
 }
 
-#[c_export]
 pub fn bch2_drop_whiteouts(b: &BtreeNode, mode: CompactMode) -> bool {
     drop_whiteouts(b, unsafe { b.contents_mut() }, mode)
 }
@@ -562,7 +560,6 @@ pub fn bch2_btree_sort_into(fs: &Fs, dst: &BtreeNode, src: &BtreeNode) {
  * We're about to add another bset to the btree node, so if there's currently
  * too many bsets - sort some of them together:
  */
-#[c_export]
 pub fn bch2_btree_node_compact(fs: &Fs, b: &BtreeNode) -> bool {
     let contents = unsafe { b.contents_mut() };
     let nsets = contents.nsets as usize;
@@ -612,7 +609,6 @@ impl WriteSortRuns {
     }
 }
 
-#[c_export]
 pub fn bch2_btree_node_set_needs_whiteout(b: &BtreeNode) {
     b.keys_mut(unsafe { b.contents_mut() }).iter_mut().for_each(|k| k.set_needs_whiteout(true));
 }
@@ -625,7 +621,6 @@ pub fn bch2_maybe_compact_whiteouts(_fs: &Fs, b: &BtreeNode) -> bool {
     compact && drop_whiteouts(b, contents, CompactMode::COMPACT_LAZY)
 }
 
-#[c_export]
 pub fn bch2_btree_node_sort(fs: &Fs, b: &BtreeNode, start_idx: c_uint, end_idx: c_uint) {
     btree_node_sort(fs, b, unsafe { b.contents_mut() }, start_idx as usize, end_idx as usize)
 }

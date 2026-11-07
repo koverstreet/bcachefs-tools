@@ -675,13 +675,6 @@ impl BtreeNode {
  */
 
 #[c_export]
-pub fn bch2_btree_node_iter_push(iter: &mut KeyIter, b: &BtreeNode,
-                                 k: *const c::bkey_packed, end: *const c::bkey_packed) {
-    let keys = b.keys(unsafe { b.contents() });
-    iter.push(&keys, keys.offset_of(k), keys.offset_of(end));
-}
-
-#[c_export]
 pub fn bch2_btree_node_iter_init(c: &Opaque<Fs>, b: &BtreeNode, iter: &mut KeyIter, search: &Bpos) {
     iter.init(Fs::from_c(c), &b.keys(unsafe { b.contents() }), search);
 }
@@ -699,17 +692,6 @@ pub fn bch2_btree_node_iter_bset_pos(iter: &KeyIter, b: &BtreeNode, t: *mut Bset
 }
 
 #[c_export]
-pub fn bch2_btree_node_iter_sort(iter: &mut KeyIter, b: &BtreeNode) {
-    iter.sort(&b.keys(unsafe { b.contents() }));
-}
-
-#[c_export]
-pub fn bch2_btree_node_iter_set_drop(iter: &mut KeyIter, set: *mut KeyIterSet) {
-    let i = (set as usize).wrapping_sub(iter.data.as_ptr() as usize) / size_of::<KeyIterSet>();
-    iter.set_drop(i);
-}
-
-#[c_export]
 pub fn bch2_btree_node_iter_advance(iter: &mut KeyIter, b: &BtreeNode) {
     iter.advance(&b.keys(unsafe { b.contents() }));
 }
@@ -718,18 +700,6 @@ pub fn bch2_btree_node_iter_advance(iter: &mut KeyIter, b: &BtreeNode) {
 pub fn bch2_btree_node_iter_prev_all(iter: &mut KeyIter, b: &BtreeNode) -> *mut c::bkey_packed {
     let keys = b.keys(unsafe { b.contents() });
     iter.prev_all(&keys).map_or(core::ptr::null_mut(), |k| keys.ptr_at(k))
-}
-
-#[c_export]
-pub fn bch2_btree_node_iter_prev(iter: &mut KeyIter, b: &BtreeNode) -> *mut c::bkey_packed {
-    let keys = b.keys(unsafe { b.contents() });
-    iter.prev(&keys).map_or(core::ptr::null_mut(), |k| keys.ptr_at(k))
-}
-
-#[c_export]
-pub fn bch2_btree_node_iter_peek_unpack(iter: &mut KeyIter, b: &BtreeNode, u: &mut c::bkey) -> c::bkey_s_c {
-    iter.peek_unpack(&b.keys(unsafe { b.contents() }), u)
-        .map_or(c::bkey_s_c { k: core::ptr::null_mut(), v: core::ptr::null_mut() }, Into::into)
 }
 
 #[c_export]

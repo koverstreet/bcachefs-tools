@@ -304,7 +304,7 @@ use crate::locking::ExclusiveGuard;
 use crate::{bch_err, bkey_fsck_err_on};
 use crate::init::error::{id, BkeyValidate};
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::passes;
 use crate::snapshots::{check_snapshots, delete, subvolume};
@@ -1538,21 +1538,6 @@ pub unsafe extern "C" fn __bch2_key_has_snapshot_overwrites<'t>(
         Ok(has) => has as c_int,
         Err(e)  => -e.raw(),
     }
-}
-
-/// TransAttempt::insert_snapshot_whiteouts(), for C: splitting an extent in
-/// a snapshot with descendants.
-///
-/// # Safety
-/// @trans is in an attempt.
-#[c_export]
-pub unsafe extern "C" fn bch2_insert_snapshot_whiteouts<'t>(
-    trans:   &'t BtreeTrans<'t>,
-    btree:   Btree,
-    old_pos: Bpos,
-    new_pos: Bpos,
-) -> c_int {
-    ret_to_c(unsafe { trans.attempt_in_progress() }.insert_snapshot_whiteouts(btree, old_pos, new_pos))
 }
 
 // ── The tree, for error messages ─────────────────────────────────────────

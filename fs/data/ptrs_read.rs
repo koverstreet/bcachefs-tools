@@ -168,7 +168,7 @@ impl<const N: usize> IoFailures<N> {
     }
 
     /// Whether every failure is a device that's been removed - which said so
-    /// once, when it was: bch2_io_failures_all_dev_removed(). Only for an
+    /// once, when it was. Only for an
     /// operation that succeeded; a record with no error at all isn't one.
     pub fn all_dev_removed(&self) -> bool {
         self.devs().iter().all(|f| {

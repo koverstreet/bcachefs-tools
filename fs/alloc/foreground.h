@@ -14,7 +14,6 @@
 
 #include "alloc/foreground_gen.h"
 #include "alloc/sector_alloc_gen.h"
-#include "alloc/write_point_gen.h"
 
 extern const char * const bch2_watermarks[];
 

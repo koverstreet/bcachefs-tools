@@ -67,7 +67,6 @@ use crate::debug::trace::events;
 use crate::sb::members::DevIoRef;
 use crate::util::alloc::KVVec;
 use crate::util::bio::{Bio, BioOwner, Gathered};
-use crate::util::ffi::Opaque;
 use crate::util::time_stats::TimeStats;
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::gather::{Gather, GatherRef};
@@ -81,7 +80,6 @@ use crate::util::{HumanReadable, Printbuf};
 use crate::{bch_err_fn, bch_err_msg, fsck_err, has_bio, prt};
 use core::pin::Pin;
 use core::sync::atomic::Ordering;
-use cstruct_macros::c_export;
 use pin_init::{pin_data, pin_init, stack_pin_init};
 use crate::format::{Bpos, Btree, DataType, MemberState, ErrorKeyReason};
 
@@ -744,11 +742,6 @@ impl Fs {
             do_discards(self);
         }
     }
-}
-
-#[c_export]
-pub fn bch2_do_discards_async(c: &Opaque<Fs>) {
-    Fs::from_c(c).do_discards_async()
 }
 
 // ── Fast discards ────────────────────────────────────────────────────────

@@ -822,11 +822,6 @@ pub fn bch2_btree_path_traverse_one(trans: &BtreeTrans<'_>, #[lent(trans)] paths
     ret_to_c(trans.path_traverse_one(paths, path, BtreeIterFlags::from_bits_retain(flags.bits())))
 }
 
-#[c_export]
-pub fn bch2_btree_path_traverse_all(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) -> c_int {
-    ret_to_c(trans.path_traverse_all(paths))
-}
-
 /// # Safety
 /// @b is locked - by @path, or for it.
 #[c_export]

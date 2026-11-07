@@ -49,19 +49,16 @@ use crate::c;
 use crate::c::bch_errcode;
 use crate::data::ec::repair::record_lost_blocks;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::damage;
 use crate::init::error::id;
 use crate::init::progress::Progress;
 use crate::inode_opts::{self, get_io_opts};
-use crate::util::ffi::Opaque;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
 use crate::prt;
-use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
-use cstruct_macros::c_export;
 use crate::format::{Btree, DataType, MemberState, ErrorKeyReason, BkeyType};
 
 /// A backpointer to a node being replaced: its replacement isn't reachable
@@ -434,11 +431,4 @@ pub(crate) fn dev_remove_stripes(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchE
 
     prt!(d.err, "bch2_dev_remove_stripes(): stripes still open after {MAX_ITER} iterations\n");
     fs.throw(bch_errcode::BCH_ERR_remove_stripes_did_not_terminate)
-}
-
-#[c_export]
-pub extern "C" fn bch2_dev_data_drop(c: &Opaque<Fs>, dev_idx: c_uint, flags: c_uint, err: &mut Printbuf)
-    -> c_int
-{
-    ret_to_c(dev_data_drop(Fs::from_c(c), DevDrop { dev: dev_idx, flags, err }))
 }

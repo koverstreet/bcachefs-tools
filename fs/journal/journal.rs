@@ -1733,15 +1733,6 @@ pub unsafe fn __bch2_journal_flush_seq_async(j: &c::journal, seq: u64, cl: *mut 
     unsafe { j.__flush_seq_async(seq, NonNull::new_unchecked(cl)) }.cast_mut()
 }
 
-/// # Safety
-/// @data is @bytes long.
-#[c_export]
-pub unsafe fn bch2_journal_early_entry_add(j: &c::journal, ty: c_uint, btree_id: c_uint, level: c_uint,
-                                           data: *const u8, bytes: usize) -> c_int {
-    let data = unsafe { core::slice::from_raw_parts(data, bytes) };
-    ret_to_c(j.early_entry_add(c::bch_jset_entry_type(ty), btree_id as u8, level as u8, &[data]))
-}
-
 #[c_export]
 pub fn bch2_journal_unblock(j: &c::journal) {
     j.unblock()

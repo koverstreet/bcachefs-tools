@@ -571,17 +571,6 @@ pub unsafe fn bch2_journal_keys_peek_max(c: &Opaque<Fs>, btree: Btree, level: c_
         .map_or(ptr::null(), BkeyI::as_ffi)
 }
 
-/// peek_max(), backwards: the last key from @pos down to @end.
-///
-/// # Safety
-/// As bch2_journal_keys_peek_max()'s.
-#[c_export]
-pub unsafe fn bch2_journal_keys_peek_prev_min(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos,
-                                              end: Bpos, idx: &mut usize) -> *const c::bkey_i {
-    peek_prev_min(unsafe { Fs::from_c(c).journal_keys_held() }, btree, level, pos, end, idx)
-        .map_or(ptr::null(), BkeyI::as_ffi)
-}
-
 pub(crate) fn peek_prev_min<'a>(jk: &'a c::journal_keys, btree: Btree, level: u32, pos: Bpos, end: Bpos,
                                 idx: &mut usize) -> Option<&'a BkeyI>
 {
@@ -651,15 +640,6 @@ pub(crate) fn peek_prev_min<'a>(jk: &'a c::journal_keys, btree: Btree, level: u3
 /// As bch2_journal_keys_peek_max()'s.
 pub(crate) unsafe fn peek_slot(fs: &Fs, btree: Btree, level: u32, pos: Bpos) -> Option<&BkeyI> {
     peek_max(unsafe { fs.journal_keys_held() }, btree, level, pos, pos, &mut 0)
-}
-
-/// # Safety
-/// As bch2_journal_keys_peek_max()'s.
-#[c_export]
-pub unsafe fn bch2_journal_keys_peek_slot(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos)
-    -> *const c::bkey_i
-{
-    unsafe { peek_slot(Fs::from_c(c), btree, level, pos) }.map_or(ptr::null(), BkeyI::as_ffi)
 }
 
 /// Whether the journal deletes @pos, before replay's done.
@@ -1014,22 +994,11 @@ pub fn bch2_btree_and_journal_iter_peek(c: &Opaque<Fs>, iter: &mut c::btree_and_
     iter.peek(Fs::from_c(c))
 }
 
-/// # Safety
-/// As btree_and_journal_iter::new()'s; @iter is the caller's to overwrite.
-#[c_export]
-pub unsafe fn __bch2_btree_and_journal_iter_init_node_iter(trans: *mut BtreeTrans<'_>,
-                                                          iter: *mut c::btree_and_journal_iter,
-                                                          b: *mut BtreeNode, node_iter: KeyIter,
-                                                          pos: Bpos) {
-    // SAFETY: the caller's
-    unsafe { iter.write(c::btree_and_journal_iter::new(trans, b, node_iter, pos)) }
-}
-
 /// From the node's first key: what btree_gc and check_topology walk with,
 /// before the filesystem is read-write.
 ///
 /// # Safety
-/// As __bch2_btree_and_journal_iter_init_node_iter()'s.
+/// As btree_and_journal_iter::new()'s.
 #[c_export]
 pub unsafe fn bch2_btree_and_journal_iter_init_node_iter(trans: *mut BtreeTrans<'_>,
                                                         iter: *mut c::btree_and_journal_iter,
@@ -1206,20 +1175,6 @@ impl PinnedDrop for c::journal_keys {
             darray_exit(&mut *self.pre_sort.get());
         }
     }
-}
-
-/// A ref for a C transaction, held until bch2_journal_keys_put(): false once
-/// recovery's done with the keys.
-#[c_export]
-pub fn bch2_journal_keys_tryget(c: &Opaque<Fs>) -> bool {
-    Fs::from_c(c).journal_keys_get().map(RefGuard::leak).is_some()
-}
-
-/// # Safety
-/// The caller holds a ref, from bch2_journal_keys_tryget().
-#[c_export]
-pub unsafe fn bch2_journal_keys_put(c: &Opaque<Fs>) {
-    drop(unsafe { RefGuard::adopt(&Fs::from_c(c).journal_keys) })
 }
 
 /// Recovery done with the keys: its ref put, and no more to be had.

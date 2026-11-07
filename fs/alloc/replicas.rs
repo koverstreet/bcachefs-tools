@@ -21,7 +21,7 @@ use crate::alloc::accounting_mem::{self, MarkWrite};
 use crate::btree::bkey::{BkeySC, BkeyV, ValidateFlags};
 use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::{DataType, MetadataVersion};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{entries_as_read, entries_end, SbField, SbFieldOps, SbState};
@@ -35,7 +35,7 @@ use crate::data_structures::strided::StridedBuf;
 use crate::util::vstructs::{bytes_of, bytes_of_mut, from_ffi, Head, Unsized, Unvalidated,
                             Validated};
 use crate::util::{Printbuf, ToText};
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use core::fmt;
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicI32, Ordering};
@@ -302,7 +302,6 @@ pub(crate) fn bkey_replicas_acct(fs: &Fs, k: BkeySC<'_>, data_type: DataType) ->
 ///
 /// # Safety
 /// @e has room for BCH_BKEY_PTRS_MAX devices.
-#[c_export]
 pub unsafe fn bch2_devlist_to_replicas(e: *mut Head<c::bch_replicas_entry_v1>, data_type: DataType,
                                        devs: c::bch_devs_list) {
     assert!(data_type.0 != 0 &&
@@ -930,14 +929,6 @@ impl Fs {
             .filter(|e| !self.replicas_obsolete(e.data_type))
             .all(|e| can_read_with_devs(e, devs, flags, err.as_deref_mut()))
     }
-}
-
-/// # Safety
-/// @e is an entry, as long as its nr_devs says.
-#[c_export]
-pub unsafe fn bch2_replicas_entry_get(c: &Opaque<Fs>, e: *const Head<c::bch_replicas_entry_v1>) -> c_int {
-    // SAFETY: the caller's
-    ret_to_c(Fs::from_c(c).replicas_entry_get(unsafe { from_ffi(e) }))
 }
 
 /// # Safety
