@@ -33,8 +33,6 @@
 
 use core::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
-use cstruct_macros::c_export;
-
 use crate::btree::bkey::ValidateFlags;
 use crate::format::SbFeature;
 use crate::sb_err_on;
@@ -46,7 +44,6 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::types::Le64;
 use crate::data_structures::eytzinger::Eytzinger0;
-use crate::util::ffi::Opaque;
 use crate::util::rcu::{RcuArray, RcuElement};
 use crate::util::Printbuf;
 use crate::sb::io::SbResize;
@@ -212,11 +209,6 @@ impl Fs {
         self.write_super_ret(&mut sb)?;
         Section::to_cpu(self, &mut sb)
     }
-}
-
-#[c_export]
-pub fn bch2_journal_seq_is_blacklisted(c: &Opaque<Fs>, seq: u64, dirty: bool) -> bool {
-    Fs::from_c(c).journal_seq_is_blacklisted(seq, dirty)
 }
 
 /// At mount.

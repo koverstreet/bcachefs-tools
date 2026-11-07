@@ -305,12 +305,6 @@ static inline unsigned bkeyp_key_u64s(const struct bkey_format *format,
 	return bkey_packed(k) ? format->key_u64s : BKEY_U64s;
 }
 
-static inline bool bkeyp_u64s_valid(const struct bkey_format *f,
-				    const struct bkey_packed *k)
-{
-	return ((unsigned) k->u64s - bkeyp_key_u64s(f, k) <= U8_MAX - BKEY_U64s);
-}
-
 static inline unsigned bkeyp_key_bytes(const struct bkey_format *format,
 				       const struct bkey_packed *k)
 {
@@ -428,16 +422,6 @@ static inline struct bkey_s_c bkey_disassemble(const struct btree *b,
 	return (struct bkey_s_c) { u, bkeyp_val(&b->format, k), };
 }
 
-/* non const version: */
-static inline struct bkey_s __bkey_disassemble(const struct btree *b,
-					       struct bkey_packed *k,
-					       struct bkey *u)
-{
-	__bkey_unpack_key(b, u, k);
-
-	return (struct bkey_s) { .k = u, .v = bkeyp_val(&b->format, k), };
-}
-
 static inline void bkey_reassemble(struct bkey_i *dst,
 				   struct bkey_s_c src)
 {
@@ -450,35 +434,5 @@ static inline void bkey_reassemble(struct bkey_i *dst,
 	memset(dst->k.pad, 0, sizeof(dst->k.pad));
 	memcpy_u64s(&dst->v, src.v, bkey_val_u64s(src.k));
 }
-
-/* byte order helpers */
-
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-
-static inline unsigned high_word_offset(const struct bkey_format *f)
-{
-	return f->key_u64s - 1;
-}
-
-#define high_bit_offset		0
-#define nth_word(p, n)		((p) - (n))
-
-#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-
-static inline unsigned high_word_offset(const struct bkey_format *f)
-{
-	return 0;
-}
-
-#define high_bit_offset		KEY_PACKED_BITS_START
-#define nth_word(p, n)		((p) + (n))
-
-#else
-#error edit for your odd byteorder.
-#endif
-
-#define high_word(f, k)		((u64 *) (k)->_data + high_word_offset(f))
-#define next_word(p)		nth_word(p, 1)
-#define prev_word(p)		nth_word(p, -1)
 
 #endif /* _BCACHEFS_BKEY_H */

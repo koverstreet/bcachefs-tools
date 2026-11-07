@@ -77,18 +77,6 @@ static inline bool bset_has_rw_aux_tree(struct bset_tree *t)
 	return bset_aux_tree_type(t) == BSET_RW_AUX_TREE;
 }
 
-static inline void bch2_bset_set_no_aux_tree(struct btree *b,
-					    struct bset_tree *t)
-{
-	BUG_ON(t < b->set);
-
-	for (; t < b->set + ARRAY_SIZE(b->set); t++) {
-		t->size = 0;
-		t->extra = BSET_NO_AUX_TREE_VAL;
-		t->aux_data_offset = U16_MAX;
-	}
-}
-
 static inline struct bset *bset_next_set(struct btree *b,
 					 unsigned block_bytes)
 {
@@ -231,11 +219,6 @@ bch2_btree_node_iter_next_all(struct btree_node_iter *iter, struct btree *b)
 	     (k = bch2_btree_node_iter_peek((iter), (b)));		\
 	     bch2_btree_node_iter_advance(iter, b))
 
-#define for_each_btree_node_key_unpack(b, k, iter, unpacked)		\
-	for (bch2_btree_node_iter_init_from_start((iter), (b));		\
-	     (k = bch2_btree_node_iter_peek_unpack((iter), (b), (unpacked))).k;\
-	     bch2_btree_node_iter_advance(iter, b))
-
 /* Accounting: */
 
 static inline void btree_keys_account_key(struct btree_nr_keys *n,
@@ -264,8 +247,6 @@ static inline void btree_keys_account_val_delta(struct btree *b,
 
 #define btree_keys_account_key_add(_nr, _bset_idx, _k)		\
 	btree_keys_account_key(_nr, _bset_idx, _k, 1)
-#define btree_keys_account_key_drop(_nr, _bset_idx, _k)	\
-	btree_keys_account_key(_nr, _bset_idx, _k, -1)
 
 #define btree_account_key_add(_b, _k)				\
 	btree_keys_account_key(&(_b)->nr,			\

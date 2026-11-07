@@ -48,18 +48,4 @@ static inline int bch2_key_trigger_new(struct btree_trans *trans,
 	});
 }
 
-static inline void bch2_bkey_compat(const struct bch_fs *c, unsigned level, enum btree_id btree_id,
-			       unsigned version, unsigned big_endian,
-			       int write,
-			       struct bkey_format *f,
-			       struct bkey_packed *k)
-{
-	if (unlikely(version < bcachefs_metadata_version_current) ||
-	    big_endian != CPU_BIG_ENDIAN ||
-	    IS_ENABLED(CONFIG_BCACHEFS_DEBUG))
-		__bch2_bkey_compat(c, level, btree_id, version,
-				   big_endian, write, f, k);
-
-}
-
 #endif /* _BCACHEFS_BKEY_METHODS_H */

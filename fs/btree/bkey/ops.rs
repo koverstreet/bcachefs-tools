@@ -136,7 +136,6 @@ pub fn bch2_bpos_to_text(out: &mut Printbuf, pos: Bpos) {
     bpos_to_text(out, pos)
 }
 
-/// bch2_bkey_to_text(): the header.
 #[cold]
 pub fn bkey_to_text(out: &mut Printbuf, k: &c::bkey) {
     prt!(out, "u64s {} type ", k.u64s);
@@ -146,14 +145,6 @@ pub fn bkey_to_text(out: &mut Printbuf, k: &c::bkey) {
     }
     bpos_to_text(out, k.p);
     prt!(out, " len {} ver {}", k.size, { k.bversion.lo });
-}
-
-#[c_export]
-pub fn bch2_bkey_to_text(out: &mut Printbuf, k: Option<&c::bkey>) {
-    match k {
-        Some(k) => bkey_to_text(out, k),
-        None    => prt!(out, "(null)"),
-    }
 }
 
 /// bch2_val_to_text(): the value, by its type's to_text - which may not have
@@ -211,8 +202,8 @@ pub fn bch2_bkey_val_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: Bkey
     bkey_val_to_text(out, c.map(Fs::from_c), k)
 }
 
-/// bch2_bkey_val_validate(): the value, by its type's validate - checked
-/// first that it's as long as the type's shortest.
+/// The value, by its type's validate - checked first that it's as long as
+/// the type's shortest.
 pub fn bkey_val_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     if v.fs.flags.get(c::bch_fs_flags::no_invalid_checks) {
         return Ok(());
@@ -223,11 +214,6 @@ pub fn bkey_val_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                              "bad val size ({have} < {min})")?;
 
     (v.k.k.key_type().ops().validate)(v)
-}
-
-#[c_export]
-pub fn bch2_bkey_val_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
-    ret_to_c(bkey_val_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
 /// bch2_btree_node_type_str(): an interior node's, or a leaf's btree's.
@@ -242,8 +228,8 @@ impl fmt::Display for NodeType {
     }
 }
 
-/// __bch2_bkey_validate(): the key's header - its type allowed in its btree,
-/// its size and position what its btree's keys' are.
+/// The key's header: its type allowed in its btree, its size and position
+/// what its btree's keys' are.
 pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     use crate::init::error::id;
     use crate::bkey_fsck_err_on;
@@ -301,11 +287,6 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         bkey_fsck_err_on!(v, k.p == crate::btree::bkey::POS_MAX, id::bkey_at_pos_max, "key at POS_MAX")?;
     }
     Ok(())
-}
-
-#[c_export]
-pub fn __bch2_bkey_validate(c: &Opaque<Fs>, k: BkeySC<'_>, from: &c::bkey_validate_context) -> c_int {
-    ret_to_c(bkey_header_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
 /// bch2_bkey_validate(): the header, then the value.

@@ -4,7 +4,7 @@
 //! here, then handed to __bch2_print() whole, so it goes where C's messages go -
 //! the filesystem's loglevel, a stdio redirect, the "previous loglevel" a
 //! continuation line inherits. A message printed as it stands - print_str(),
-//! a LogMsg - is printed here: bch2_print_str(), which C calls too.
+//! a LogMsg - is printed here.
 //!
 //! In-kernel each message is prefixed with the filesystem's name, as
 //! bch2_log_msg() does under BCACHEFS_LOG_PREFIX; userspace prints it bare.
@@ -177,8 +177,7 @@ pub fn log_dev(ca: &Dev, level: LogLevel, msg: &dyn ToText) {
     print(ca.fs(), level.0, false, &msg, true)
 }
 
-/// Print @msg at @level as it stands, one line at a time with no prefix -
-/// C's bch2_print_str().
+/// Print @msg at @level as it stands, one line at a time with no prefix.
 pub fn print_str(fs: &Fs, level: LogLevel, msg: &mut Printbuf) {
     print_bytes(fs, Some(level.num()), msg.as_bytes())
 }
@@ -315,31 +314,12 @@ unsafe fn c_bytes<'a>(s: *const c_char) -> Option<&'a [u8]> {
     unsafe { crate::util::ffi::opt_cstr(s) }.map(CStr::to_bytes)
 }
 
-/// KERN_SOH and a level, as a C KERN_* prefix has them: None for any other
-/// prefix, a continuation.
-fn prefix_level(prefix: &[u8]) -> Option<u8> {
-    match prefix {
-        [0x01, d @ b'0'..=b'9', ..] => Some(d - b'0'),
-        _ => None,
-    }
-}
-
 /// # Safety
 /// @str is NULL or a string.
 #[c_export]
 pub unsafe fn bch2_print_str_loglevel(c: &Opaque<Fs>, loglevel: c_int, str: *const c_char) {
     if let Some(s) = unsafe { c_bytes(str) } {
         print_bytes(Fs::from_c(c), u8::try_from(loglevel).ok(), s)
-    }
-}
-
-/// # Safety
-/// @prefix a string; @str NULL or one.
-#[c_export]
-pub unsafe fn bch2_print_str(c: &Opaque<Fs>, prefix: *const c_char, str: *const c_char) {
-    if let Some(s) = unsafe { c_bytes(str) } {
-        let level = prefix_level(unsafe { c_bytes(prefix) }.unwrap_or_default());
-        print_bytes(Fs::from_c(c), level, s)
     }
 }
 

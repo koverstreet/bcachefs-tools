@@ -35,8 +35,6 @@ int bch2_btree_cache_cannibalize_lock(struct btree_trans *, struct closure *);
 
 void bch2_btree_node_data_free(struct btree *);
 
-#define bch2_btree_bounce_alloc(...)						\
-	alloc_hooks(bch2_btree_bounce_alloc_noprof(__VA_ARGS__))
 struct btree *__bch2_btree_node_mem_alloc(struct bch_fs *);
 struct btree *bch2_btree_node_mem_alloc(struct btree_trans *, bool);
 

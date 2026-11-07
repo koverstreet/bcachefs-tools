@@ -41,7 +41,6 @@ use crate::sb::errors::{merge, prt_error_nr, ErrorEntry, SbErrorId};
 use crate::snapshots::subvolume;
 use crate::util::{DateTime, Printbuf};
 use crate::util::alloc::{kvvec_insert, KVVec};
-use crate::util::ffi::Opaque;
 use crate::util::kernel::ktime_get_real_seconds;
 use crate::util::vstructs::Validated;
 use crate::{bch_err, bch_err_ratelimited, bkey_fsck_err_on, btree_trans, fsck_err_on, prt};
@@ -368,11 +367,6 @@ pub fn record_lost_extents(fs: &Fs) {
     if failed != 0 {
         bch_err!(fs, "couldn't attribute {failed} of {} lost extents ranges", ranges.len());
     }
-}
-
-#[c_export]
-pub fn bch2_damage_note_lost_extents(c: &Opaque<Fs>, btree: Btree, k: BkeySC<'_>) {
-    note_lost_extents(Fs::from_c(c), btree, k)
 }
 
 // ── check_damage ─────────────────────────────────────────────────────────

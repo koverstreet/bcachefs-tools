@@ -128,13 +128,6 @@ static inline void set_btree_bset_end(struct btree *b, struct bset_tree *t)
 		__btree_node_ptr_to_offset(b, vstruct_last(bset(b, t)));
 }
 
-static inline void set_btree_bset(struct btree *b, struct bset_tree *t,
-				  const struct bset *i)
-{
-	t->data_offset = __btree_node_ptr_to_offset(b, i);
-	set_btree_bset_end(b, t);
-}
-
 static inline struct bset *btree_bset_first(struct btree *b)
 {
 	return bset(b, b->set);
@@ -233,11 +226,6 @@ BCH_BTREE_IDS()
 static inline bool btree_id_is_extents(enum btree_id btree)
 {
 	return BIT_ULL(btree) & btree_is_extents_mask;
-}
-
-static inline bool btree_node_type_is_extents(enum btree_node_type type)
-{
-	return type != BKEY_TYPE_btree && btree_id_is_extents(type - 1);
 }
 
 static inline bool btree_type_has_snapshots(enum btree_id btree)

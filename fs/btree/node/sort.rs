@@ -53,7 +53,6 @@ pub struct SortIterStack {
 }
 
 impl SortIterStack {
-    /// sort_iter_stack_init(): for @b's keys.
     pub fn new(b: &BtreeNode) -> Self {
         let mut s = Self::default();
         s.iter = SortIter { b: core::ptr::from_ref(b).cast_mut(), used: 0, size: s.sets.len() as c_uint, data: [] };
@@ -108,10 +107,23 @@ impl<'p> SortRuns<'p> {
     }
 
     /// Its runs of @keys merged into @dst, overlapping keys fixed: the u64s
-    /// written, and the keys' accounting.
+    /// written, and the keys' accounting. Sets each key's needs_whiteout:
+    /// they're all on disk.
     pub fn key_sort_fix_overlapping(&mut self, keys: &Keys<'_>, dst: &mut [u64]) -> (usize, BtreeNrKeys) {
         let used = self.used;
-        key_sort_fix_overlapping(keys, &mut self.runs()[..used], dst)
+        let mut nr = BtreeNrKeys::default();
+
+        /*
+         * If keys compare equal, compare by pointer order:
+         */
+        let u64s = Merge::new(keys, &mut self.runs()[..used], |l, _, r, _| l.cmp(&r))
+            .unique(|_, k| !k.key_type().is_deleted())
+            .fold(0, |out, (_, k)| {
+                nr.account_key_add(0, k);
+                copy_key(dst, out, k, |k| set_needs_whiteout(k, true))
+            });
+
+        (u64s, nr)
     }
 }
 
@@ -609,93 +621,6 @@ fn build_aux_trees(b: &BtreeNode, contents: &mut NodeContents) {
     for set in 0..nsets {
         keys.bset_build_aux_tree(set, !written[set] && set + 1 == nsets);
     }
-}
-
-/*
- * For C: pointers into the node in, offsets inside. A node C passes is
- * locked, so its contents can be read - and written, by those that change
- * the node, which C calls with it held for write.
- */
-
-/// # Safety
-/// @iter is sort_iter_init()'s, its runs sort_iter_add()'s.
-unsafe fn sort_iter<'a>(iter: *mut SortIter) -> (&'a BtreeNode, &'a mut [SortIterSet]) {
-    unsafe {
-        let used = (*iter).used as usize;
-        (&*(*iter).b, core::slice::from_raw_parts_mut((&raw mut (*iter).data).cast(), used))
-    }
-}
-
-fn runs_u64s(runs: &[SortIterSet]) -> usize {
-    runs.iter().map(|s| (s.end - s.k) as usize).sum()
-}
-
-/// Of a pointer C has into @keys' buffer, or to its end.
-fn buf_offset(keys: &Keys<'_>, p: *const c::bkey_packed) -> u32 {
-    let offset = (p as usize).wrapping_sub(keys.buf.as_ptr() as usize) / size_of::<u64>();
-
-    assert!(offset <= keys.buf.len(), "{p:p}, not in the node buffer at {:p} of {} u64s",
-            keys.buf.as_ptr(), keys.buf.len());
-    offset as u32
-}
-
-/// Keys [@k, @end) of @iter's node, in order, to merge.
-///
-/// # Safety
-/// @iter is sort_iter_init()'s.
-#[c_export]
-pub unsafe fn sort_iter_add(iter: *mut SortIter, k: *const c::bkey_packed, end: *const c::bkey_packed) {
-    unsafe {
-        let b = &*(*iter).b;
-        let keys = b.keys(b.contents());
-        push(iter, SortIterSet { k: buf_offset(&keys, k), end: buf_offset(&keys, end) });
-    }
-}
-
-/// A run onto @iter - an empty one isn't.
-///
-/// # Safety
-/// @iter is sort_iter_init()'s, with room for its size's runs after it.
-unsafe fn push(iter: *mut SortIter, set: SortIterSet) {
-    unsafe {
-        let (used, size) = ((*iter).used, (*iter).size);
-        assert!(used < size, "adding to a sort iterator of {size} runs, full");
-
-        if set.k != set.end {
-            (&raw mut (*iter).data).cast::<SortIterSet>().add(used as usize).write(set);
-            (*iter).used += 1;
-        }
-    }
-}
-
-/// Sets each key's needs_whiteout: they're all on disk.
-///
-/// # Safety
-/// @iter's runs are of its node's bsets, and @dst has room for their keys.
-#[c_export]
-pub unsafe fn bch2_key_sort_fix_overlapping(_fs: &Fs, dst: *mut Head<c::bset>, iter: *mut SortIter) -> BtreeNrKeys {
-    let (b, runs) = unsafe { sort_iter(iter) };
-    let room = unsafe { core::slice::from_raw_parts_mut((&raw mut (*dst)._data).cast(), runs_u64s(runs)) };
-    let (u64s, nr) = key_sort_fix_overlapping(&b.keys(unsafe { b.contents() }), runs, room);
-
-    unsafe { (*dst).set_u64s(u64s) };
-    nr
-}
-
-fn key_sort_fix_overlapping(keys: &Keys<'_>, runs: &mut [SortIterSet], dst: &mut [u64]) -> (usize, BtreeNrKeys) {
-    let mut nr = BtreeNrKeys::default();
-
-    /*
-     * If keys compare equal, compare by pointer order:
-     */
-    let u64s = Merge::new(keys, runs, |l, _, r, _| l.cmp(&r))
-        .unique(|_, k| !k.key_type().is_deleted())
-        .fold(0, |out, (_, k)| {
-            nr.account_key_add(0, k);
-            copy_key(dst, out, k, |k| set_needs_whiteout(k, true))
-        });
-
-    (u64s, nr)
 }
 
 impl SortIterStack {
