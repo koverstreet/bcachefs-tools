@@ -317,6 +317,7 @@ impl KeyIter {
         (!self.end()).then_some(self.data[0].k)
     }
 
+    #[inline(always)]
     pub fn peek(&mut self, keys: &Keys<'_>) -> Option<u16> {
         while let Some(k) = self.peek_all() {
             if !keys.key_at(k).key_type().is_deleted() {
@@ -366,7 +367,6 @@ impl KeyIter {
         self.sort_two(keys, 1);
     }
 
-    #[inline(always)]
     pub fn advance(&mut self, keys: &Keys<'_>) {
         if check_lookups() {
             self.__verify(keys);

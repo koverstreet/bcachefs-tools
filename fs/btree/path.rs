@@ -4,7 +4,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_le};
+use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_le, BkeyI, BKEY_U64S};
 use crate::btree::cache::bch2_btree_id_level_to_text;
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
 use crate::btree::node::iter::KeyIter;
@@ -14,6 +14,7 @@ use crate::btree::node::{BtreeNode, NodeContents};
 use crate::btree::traverse::{advance_to_pos, bch2_btree_pos_to_text};
 use crate::c;
 use crate::cstructs::c as cs;
+use crate::data::keylist::PaddedKey;
 use crate::data_structures::bitmap::Bitmap;
 use crate::debug::params::debug_check_iterators;
 use crate::debug::trace::{events, TraceEvent};
@@ -175,6 +176,8 @@ impl PathSnapshot {
     }
 }
 
+pub(crate) type DownKey = PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX }>;
+
 /// A transaction's path table, borrowed: one borrow at a time, by a bit in
 /// the transaction's flags - a RefCell's - so a Rust entry into the btree code
 /// made while it's in there panics rather than aliasing the table. Growing it
@@ -259,14 +262,20 @@ impl DerefMut for Paths<'_> {
 impl Index<PathIdx> for Paths<'_> {
     type Output = BtreePath;
 
+    #[inline(always)]
     fn index(&self, idx: PathIdx) -> &BtreePath {
-        &(**self)[idx as usize]
+        let paths = &**self;
+        invariant!((idx as usize) < paths.len());
+        &paths[idx as usize]
     }
 }
 
 impl IndexMut<PathIdx> for Paths<'_> {
+    #[inline(always)]
     fn index_mut(&mut self, idx: PathIdx) -> &mut BtreePath {
-        &mut (**self)[idx as usize]
+        let paths = &mut **self;
+        invariant!((idx as usize) < paths.len());
+        &mut paths[idx as usize]
     }
 }
 
@@ -283,6 +292,26 @@ impl Paths<'_> {
             let (l, r) = self.split_at_mut(a);
             (&r[0], &mut l[b])
         }
+    }
+
+    /// The key of the node a path goes down to next: the transaction's, the
+    /// path table's holder's to write.
+    pub(crate) fn down_key(&self) -> &BkeyI {
+        unsafe { self.trans.btree_path_down.protected() }.key()
+    }
+
+    pub(crate) fn down_key_mut(&mut self) -> &mut DownKey {
+        unsafe { self.trans.btree_path_down.protected_mut() }
+    }
+
+    /// Path @idx's level @level, as locked_level_mut(), and the down key: the
+    /// node a path goes down from, and the key it goes down by.
+    pub(crate) fn level_and_down_key_mut(&mut self, idx: PathIdx, level: usize)
+        -> Option<(LockedNode<'_, BtreeNode>, &mut KeyIter, &mut DownKey)>
+    {
+        let trans = self.trans;
+        let (b, iter) = self[idx].locked_level_mut(level)?;
+        Some((b, iter, unsafe { trans.btree_path_down.protected_mut() }))
     }
 
     fn check_live(&self, idx: PathIdx) {
@@ -887,9 +916,7 @@ impl BtreeTrans<'_> {
             if !paths[idx].node(level).is_null() {
                 ebug_assert!(paths[idx].locked(level));
 
-                let path = &mut paths[idx];
-                let pos = path.pos;
-                let (b, iter) = path.locked_level_mut(level).expect("a good node is locked");
+                let (b, iter) = paths[idx].locked_level_mut(level).expect("a good node is locked");
                 let keys = b.keys(b.contents());
 
                 /*
@@ -898,8 +925,8 @@ impl BtreeTrans<'_> {
                  * many keys just reinit it (or if we're rewinding, since that
                  * is expensive).
                  */
-                if cmp.is_lt() || !advance_to_pos(iter, &keys, &pos, 8) {
-                    iter.init(self.fs(), &keys, &pos);
+                if cmp.is_lt() || !advance_to_pos(iter, &keys, &new_pos, 8) {
+                    iter.init(self.fs(), &keys, &new_pos);
                 }
 
                 /*
@@ -1042,12 +1069,14 @@ impl BtreePath {
     }
 
     /// The level's node, if it's a btree node the path holds locked.
+    #[inline(always)]
     pub(crate) fn locked_btree_node(&self, level: usize) -> Option<LockedNode<'_, BtreeNode>> {
         self.downcast::<BtreeNode>()?.locked_node(level)
     }
 
     /// The level's locked node, and its iterator to move: the node isn't the
     /// path's memory, and with only the iterator borrowed it stays locked.
+    #[inline(always)]
     pub(crate) fn locked_level_mut(&mut self, level: usize) -> Option<(LockedNode<'_, BtreeNode>, &mut KeyIter)> {
         let b = ptr::from_ref(self.locked_btree_node(level)?.node());
         Some((unsafe { LockedNode::new(&*b) }, &mut self.l[level].iter))
@@ -1100,14 +1129,17 @@ impl BtreePath {
         }
     }
 
+    #[inline(always)]
     pub(crate) fn pos_in_node(&self, b: LockedNode<'_, BtreeNode>) -> bool {
         u32::from(b.c.btree_id) == self.btree_id().0 && !self.pos_before_node(b) && !self.pos_after_node(b)
     }
 
+    #[inline(always)]
     pub(crate) fn pos_before_node(&self, b: LockedNode<'_, BtreeNode>) -> bool {
         self.pos < b.contents().data().min_key
     }
 
+    #[inline(always)]
     pub(crate) fn pos_after_node(&self, b: LockedNode<'_, BtreeNode>) -> bool {
         self.pos > b.contents().key_i().k.p
     }

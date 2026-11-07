@@ -279,6 +279,12 @@ impl<const U64S: usize> PaddedKey<U64S> {
         room[..bytes.len()].copy_from_slice(bytes);
     }
 
+    /// All of its room, header first: for a key made in place, as by
+    /// unpacking one. What reads it checks the header against the room.
+    pub fn u64s_mut(&mut self) -> &mut [u64; U64S] {
+        &mut self.0
+    }
+
     /// The key, to grow in its room.
     pub fn room(&mut self) -> KeyRoom<'_> {
         KeyRoom::existing(&mut self.0)

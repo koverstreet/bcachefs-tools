@@ -9,7 +9,7 @@ use core::ptr::{self, NonNull};
 
 use cstruct_macros::{c_export, c_extern};
 
-use crate::btree::bkey::{bkey_val_to_text, BkeySC, BkeyV, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::cache::{bch2_btree_id_level_to_text, bch2_btree_node_prefetch};
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
@@ -17,7 +17,7 @@ use crate::btree::locking::bch2_btree_cache_cannibalize_unlock;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::keys::Keys;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{BtreePath, LockedNode, NodePtr, PathIdx, Paths};
+use crate::btree::path::{BtreePath, DownKey, LockedNode, NodePtr, PathIdx, Paths};
 use crate::c;
 use crate::debug::trace::events;
 use crate::errcode::{bch_errcode, errptr_to_result, ret_to_c, ret_to_result_void, BchError};
@@ -30,6 +30,7 @@ use crate::util::closure::StackClosure;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::race_fault;
 use crate::util::log::LogMsg;
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use crate::util::Printbuf;
 use pin_init::stack_pin_init;
 
@@ -78,12 +79,12 @@ fn level_unpack(keys: &Keys<'_>, k: Option<u16>, u: &mut c::bkey) -> c::bkey_s_c
 }
 
 impl BtreePath {
+    #[inline]
     pub(crate) fn level_init_iter(&mut self, fs: &Fs, level: usize, b: LockedNode<'_, BtreeNode>) {
         let keys = b.keys(b.contents());
-        let pos = self.pos;
         let iter = &mut self.l[level].iter;
 
-        iter.init(fs, &keys, &pos);
+        iter.init(fs, &keys, &self.pos);
 
         /*
          * Iterators to interior nodes should always be pointed at the first non
@@ -94,6 +95,7 @@ impl BtreePath {
         }
     }
 
+    #[inline(always)]
     fn check_pos_in_node(&self, l: usize, check_pos: Ordering) -> bool {
         let b = || self.locked_btree_node(l).expect("a level checked is locked");
         match check_pos {
@@ -105,6 +107,7 @@ impl BtreePath {
 }
 
 impl BtreeTrans<'_> {
+    #[inline]
     pub(crate) fn path_level_init(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize,
                                   b: LockedNode<'_, BtreeNode>) {
         let path = &mut paths[idx];
@@ -127,54 +130,54 @@ impl BtreeTrans<'_> {
 
 fn root_unpack(packed: c_ulong) -> (Option<NonNull<BtreeNode>>, usize) {
     let mask = (1 << c::BTREE_ROOT_LEVEL_BITS) - 1;
-    (NonNull::new((packed & !mask) as *mut BtreeNode), (packed & mask) as usize)
+    let level = (packed & mask) as usize;
+    // journal_entry_btree_root_validate() rejects a root any deeper
+    invariant!(level < c::BTREE_MAX_DEPTH as usize);
+    (NonNull::new((packed & !mask) as *mut BtreeNode), level)
 }
 
 fn root_packed(fs: &Fs, btree: crate::format::Btree) -> c_ulong {
     fs.btree.cache.roots.roots_b.get(btree.0 as usize).map_or(0, |r| r.get())
 }
 
-fn bpos_in_btree_node_key(pos: Bpos, k: &c::bkey_i) -> bool {
+fn bpos_in_btree_node_key(pos: Bpos, k: &BkeyI) -> bool {
     if pos > k.k.p {
         return false;
     }
 
-    if BkeySC::from_bkey_i(k).arm::<c::BtreePtrV2>().is_some_and(|p| pos < p.v().min_key) {
+    if BkeySC::from(k).arm::<c::BtreePtrV2>().is_some_and(|p| pos < p.v().min_key) {
         return false;
     }
 
     true
 }
 
-fn prt_bkey_i(out: &mut Printbuf, fs: &Fs, k: &c::bkey_i) {
-    bkey_val_to_text(out, Some(fs), BkeySC::from_bkey_i(k));
+/// @v: the value @dst was copied from.
+fn down_key_mem_ptr_reload(dst: &mut DownKey, v: *const u64) {
+    if dst.k.key_type() == BkeyType::btree_ptr_v2 {
+        // mem_ptr: the value's first field
+        dst.u64s_mut()[BKEY_U64S] = unsafe { ptr::read_volatile(v) };
+    }
+}
+
+fn set_down_key(dst: &mut DownKey, k: BkeySC<'_>) {
+    let val = k.val_bytes();
+    let room = plain_bytes_mut(dst.u64s_mut());
+
+    room[..size_of::<c::bkey>()].copy_from_slice(plain_bytes(k.k));
+    room[size_of::<c::bkey>()..][..val.len()].copy_from_slice(val);
+    down_key_mem_ptr_reload(dst, val.as_ptr().cast());
+}
+
+fn set_down_key_packed(dst: &mut DownKey, keys: &Keys<'_>, k: u16) {
+    let f = &keys.contents().format;
+    let key = keys.key_at(k);
+
+    key.unpacked_into(f, keys.unpack(k), dst.u64s_mut());
+    down_key_mem_ptr_reload(dst, key.val(f).as_ptr());
 }
 
 impl BtreeTrans<'_> {
-    /// The key of the node a path goes down to next, in the transaction: a
-    /// btree node pointer, with the padding after it for its value.
-    fn down_key(&self) -> &c::bkey_i {
-        unsafe { &*(&raw const (*self.raw()).btree_path_down).cast() }
-    }
-
-    /// @k, as it is in its node - its btree_ptr_v2's mem_ptr read as the
-    /// node has it now.
-    fn set_down_key(&self, k: BkeySC<'_>) {
-        let k: c::bkey_s_c = k.into();
-        unsafe {
-            let dst = (&raw mut (*self.raw()).btree_path_down).cast::<c::bkey_i>();
-            let u64s = (*k.k).u64s as usize - c::BKEY_U64s as usize;
-            (*dst).k = *k.k;
-            ptr::copy_nonoverlapping(k.v.cast::<u64>(), (&raw mut (*dst).v).cast::<u64>(), u64s);
-
-            if (*dst).k.key_type() == BkeyType::btree_ptr_v2 {
-                // mem_ptr: the value's first field
-                let mem_ptr = (&raw mut (*dst).v).cast::<u64>();
-                mem_ptr.write(ptr::read_volatile(k.v.cast::<u64>()));
-            }
-        }
-    }
-
     #[cold]
     #[inline(never)]
     fn node_root_err(&self, b: &BtreeNode) -> BchError {
@@ -227,8 +230,8 @@ impl BtreeTrans<'_> {
                  */
                 let path = &mut paths[idx];
                 path.bits.set_level(depth_want as u8);
-                for l in &mut path.l[depth_want..] {
-                    l.b = NodePtr::null();
+                for l in depth_want..c::BTREE_MAX_DEPTH as usize {
+                    path.l[l].b = NodePtr::null();
                 }
                 return Err(bch_errcode::BCH_ERR_no_btree_node_shallow.into());
             }
@@ -247,11 +250,11 @@ impl BtreeTrans<'_> {
                     }
 
                     let path = &mut paths[idx];
-                    for l in &mut path.l[..level] {
+                    for l in path.l.iter_mut().take(level) {
                         l.b = NodePtr::err(bch_errcode::BCH_ERR_no_btree_node_lock_root.into());
                     }
-                    for l in &mut path.l[level + 1..] {
-                        l.b = NodePtr::null();
+                    for l in level + 1..c::BTREE_MAX_DEPTH as usize {
+                        path.l[l].b = NodePtr::null();
                     }
                     path.put_level(level, &b.c, hold);
                     path.lock_taken(level);
@@ -361,7 +364,7 @@ impl BtreeTrans<'_> {
 
     #[cold]
     #[inline(never)]
-    fn node_gap_err(&self, paths: &Paths<'_>, idx: PathIdx, k: &c::bkey_i) -> BchError {
+    fn node_gap_err(&self, paths: &Paths<'_>, idx: PathIdx, k: &BkeyI) -> BchError {
         let fs = self.fs();
         let path = &paths[idx];
         let mut msg = LogMsg::new(fs);
@@ -370,7 +373,7 @@ impl BtreeTrans<'_> {
         let b = path.locked_btree_node(level).expect("a path goes down from a locked node");
         let contents = b.contents();
         let keys = b.keys(contents);
-        let v2 = BkeySC::from_bkey_i(k).arm::<c::BtreePtrV2>();
+        let v2 = BkeySC::from(k).arm::<c::BtreePtrV2>();
         let have_min = v2.is_some();
         let child_min = v2.map_or(POS_MIN, |p| p.v().min_key);
         let child_max = k.k.p;
@@ -398,7 +401,7 @@ impl BtreeTrans<'_> {
             prt!(&mut *msg, "parent key:  ");
             bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(contents.key_i()));
             prt!(&mut *msg, "\nselected:   ");
-            prt_bkey_i(&mut msg, fs, k);
+            bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(k));
             prt!(&mut *msg, "\n");
 
             prt!(&mut *msg, "parent iter:\n");
@@ -462,7 +465,7 @@ impl BtreeTrans<'_> {
             return Err(self.node_missing_err(paths, idx));
         }
 
-        self.set_down_key(unsafe { BkeySC::from_c(&k) });
+        set_down_key(paths.down_key_mut(), unsafe { BkeySC::from_c(&k) });
 
         if flags.contains(BtreeIterFlags::PREFETCH) && fs.opts.btree_node_prefetch.get() != 0 {
             return self.path_prefetch_j(paths, idx, &mut jiter);
@@ -482,10 +485,10 @@ impl BtreeTrans<'_> {
             self.node_iter_and_journal_peek(paths, idx, flags)?;
         } else {
             let found = {
-                let (b, iter) = paths[idx].locked_level_mut(level).expect("a path goes down from a locked node");
+                let (b, iter, down) = paths.level_and_down_key_mut(idx, level)
+                    .expect("a path goes down from a locked node");
                 let keys = b.keys(b.contents());
-                let mut u = c::bkey::new();
-                iter.peek(&keys).map(|k| self.set_down_key(keys.disassemble(k, &mut u))).is_some()
+                iter.peek(&keys).map(|k| set_down_key_packed(down, &keys, k)).is_some()
             };
             if !found {
                 return Err(self.node_missing_err(paths, idx));
@@ -496,14 +499,15 @@ impl BtreeTrans<'_> {
             }
         }
 
-        if !bpos_in_btree_node_key(paths[idx].pos, self.down_key()) {
-            return Err(self.node_gap_err(paths, idx, self.down_key()));
+        if !bpos_in_btree_node_key(paths[idx].pos, paths.down_key()) {
+            return Err(self.node_gap_err(paths, idx, paths.down_key()));
         }
 
         let level = level - 1;
         let lock_type = paths[idx].lock_want_six(level);
+        let k = paths.down_key().as_ffi();
         let b = errptr_to_result(NonNull::new(unsafe {
-            bch2_btree_node_get(self.raw(), &mut paths[idx], self.down_key(), level as c_uint, lock_type,
+            bch2_btree_node_get(self.raw(), &mut paths[idx], k, level as c_uint, lock_type,
                                 c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()))
         }).expect("bch2_btree_node_get() returns a node or an error"))?;
         // bch2_btree_node_get() returns it locked as @lock_type, ours to give the path
@@ -639,11 +643,14 @@ impl BtreeTrans<'_> {
     pub(crate) fn path_up_until_good_node(&self, paths: &mut Paths<'_>, idx: PathIdx, check_pos: Ordering) -> usize {
         let path = &paths[idx];
         let level = path.level() as usize;
-        if path.locked(level) && path.check_pos_in_node(level, check_pos) {
+        let l = if path.locked(level) && path.check_pos_in_node(level, check_pos) {
             level
         } else {
             self.path_up_until_good_node_slowpath(paths, idx, check_pos)
-        }
+        };
+        // node() is NULL at BTREE_MAX_DEPTH: the walk up stops there at most
+        invariant!(l <= c::BTREE_MAX_DEPTH as usize);
+        l
     }
 
     /// This is the main state machine for walking down the btree - walks down
