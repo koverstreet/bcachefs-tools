@@ -6,7 +6,7 @@ use crate::btree::cache::Bounce;
 use crate::btree::iter::{lockrestart_do, BtreeIter, CommitFlags, CommitOpts, TransAttempt, Watermark};
 use crate::btree::node::sort::{
     bch2_btree_build_aux_trees, bch2_btree_node_compact, bch2_btree_node_set_needs_whiteout,
-    bch2_btree_node_sort, bch2_drop_whiteouts, bch2_sort_whiteouts, CompactMode, SortIterStack,
+    bch2_btree_node_sort, bch2_drop_whiteouts, bch2_sort_whiteouts, CompactMode, WriteSortRuns,
 };
 use crate::btree::node::bset::MAX_BSETS;
 use crate::btree::node::{BtreeNode, NodeContents};
@@ -483,7 +483,7 @@ impl BsetWrite {
     /// None if there's nothing to write.
     fn build(fs: &'static Fs, b: &BtreeNode, contents: &NodeContents) -> Option<Self> {
         let keys = b.keys(contents);
-        let mut sort_iter = SortIterStack::default();
+        let mut runs = WriteSortRuns::default();
 
         let first = b.written.get() == 0;
         let (mut bytes, keys_at) = if first {
@@ -502,7 +502,7 @@ impl BsetWrite {
 
             let i = keys.bset(t);
             bytes += i.u64s() * size_of::<u64>();
-            sort_iter.add(t.first_offset() as usize..t.end_offset as usize);
+            runs.add(t.first_offset() as usize..t.end_offset as usize);
             seq = seq.max(i.journal_seq.get());
         }
 
@@ -527,12 +527,12 @@ impl BsetWrite {
         i.journal_seq = Le64::new(seq);
         i.set_u64s(0);
 
-        sort_iter.add(b.unwritten_whiteouts());
+        runs.add(b.unwritten_whiteouts());
         i.set_separate_whiteouts(false);
 
         let dst = cast_plain_slice_mut(&mut buf[keys_at + size_of::<Head<c::bset>>()..])
             .expect("a bset's keys, in its write's buffer");
-        let u64s = sort_iter.sort_keys_keep_unwritten_whiteouts(&keys, dst);
+        let u64s = runs.sort_keys_keep_unwritten_whiteouts(&keys, dst);
         let i = bset_at(buf, keys_at);
         i.set_u64s(i.u64s() + u64s);
 

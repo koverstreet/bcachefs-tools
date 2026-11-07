@@ -6,7 +6,7 @@ use crate::btree::bkey::{BkeyI, BKEY_U64S};
 use crate::btree::trans_attempt::TransBkey;
 use crate::data::keylist::PaddedKey;
 use crate::fs::Fs;
-use crate::btree::node::{sort::SortIterSet, BtreeNode};
+use crate::btree::node::{sort::SortRun, BtreeNode};
 use crate::c;
 use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
@@ -1146,7 +1146,7 @@ pub struct bch_fs_btree {
 
 fn fill_iter_pool(opts: &c::bch_opts) -> impl PinInit<Mempool, BchError> {
     let btree_blocks = (opts.btree_node_size as usize >> 9) >> (opts.block_size as usize >> 9).ilog2();
-    Mempool::kmalloc(1, (btree_blocks + 1) * 2 * size_of::<SortIterSet>())
+    Mempool::kmalloc(1, (btree_blocks + 1) * 2 * size_of::<SortRun>())
 }
 
 /* Btree ID properties: */
