@@ -822,10 +822,10 @@ pub fn bch2_fs_btree_write_buffer_init(c: &Fs) -> c_int {
             wb.flushing.set_cmp_fn(wb_keys_lock_cmp_fn);
         }
 
-        let mut inc = wb.inc.lock();
-        let (inc, inc_live) = inc.parts();
         let mut flushing = wb.flushing.lock();
         let (f, f_live) = flushing.parts();
+        let mut inc = wb.inc.lock();
+        let (inc, inc_live) = inc.parts();
 
         let ret = inc.keys.resize(inc_live, initial_size, c::GFP_KERNEL)
             .and_then(|()| f.keys.resize(&f_live.keys, initial_size, c::GFP_KERNEL))
