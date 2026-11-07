@@ -15,6 +15,10 @@
 //!                          stable id
 //!   #[c_list(LIST)]      C's x-macro of the variants, for C that still
 //!                        expands one: x(name, value, each column's, "doc")
+//!   #[mask(NAME: REPR, prefix = P[, c_name = C])]
+//!                        the #[flags] NAME of bit numbers, 1 << each value;
+//!                        a variant's #[mask_prefix(P)] is its prefix from
+//!                        that variant on
 //!   NAME_arms!(cb [pre]) cb! { [pre] (name, value, [Type], [column]..), .. }:
 //!                        the variants as a list, for xmacro_select
 //!
@@ -39,6 +43,8 @@ pub(crate) struct Arm {
     pub ty:    Option<String>,
     pub value: String,
     pub cols:  Vec<Vec<String>>,
+    /// The #[mask]'s prefix from this arm on, `#[mask_prefix(P)]`
+    pub mask_prefix: Option<String>,
 }
 
 /// An #[arm_columns] column: a set of a #[flags] c_enum!'s flags, or of
@@ -84,7 +90,13 @@ pub(crate) fn arms(body: TokenStream, columns: &Columns, typed: bool) -> Result<
             return Err(format!("{name}: an arm is `name(Type) [= value]`"));
         }
         let mut cols: Vec<Vec<String>> = vec![Vec::new(); columns.len()];
+        let mut mask_prefix = None;
         for a in attrs {
+            if a.path().is_ident("mask_prefix") {
+                let p: syn::Ident = a.parse_args().map_err(|e| format!("{name}: #[mask_prefix(P)]: {e}"))?;
+                mask_prefix = Some(p.to_string());
+                continue;
+            }
             let i = columns.iter().position(|(c, _)| a.path().is_ident(c))
                 .ok_or_else(|| format!("{name}: #[{}]: not one of its #[arm_columns]", rust_text(a.path())))?;
             let err = |e: syn::Error| format!("{name}: #[{}(..)]: {e}", columns[i].0);
@@ -112,7 +124,7 @@ pub(crate) fn arms(body: TokenStream, columns: &Columns, typed: bool) -> Result<
             .find(|((_, c), v)| matches!(c, Column::Enum(_)) && v.is_empty()) {
             return Err(format!("{name}: no #[{c}(..)]"));
         }
-        arms.push(Arm { docs: v.docs, name, label: v.label, ty: ty.map(|t| rust_text(&t)), value, cols });
+        arms.push(Arm { docs: v.docs, name, label: v.label, ty: ty.map(|t| rust_text(&t)), value, cols, mask_prefix });
     }
     // the entries are one shape: every arm's (name, value, Type, ..), or every one's (name, value, ..)
     if arms.iter().any(|a| a.ty.is_some()) && arms.iter().any(|a| a.ty.is_none()) {
@@ -125,12 +137,13 @@ pub(crate) fn arms(body: TokenStream, columns: &Columns, typed: bool) -> Result<
 pub(crate) fn c_enum(input: TokenStream) -> Result<TokenStream, String> {
     let (e, attrs, body) = syn::parse::Parser::parse2(parse_enum_head, input).map_err(|e| e.to_string())?;
     let err = |m: String| format!("{}: {m}", e.name.as_deref().unwrap_or("_"));
-    let (mut columns, mut c_list) = (Vec::new(), None);
+    let (mut columns, mut c_list, mut mask) = (Vec::new(), None, None);
     for a in attrs {
         let args = || a.parse_args::<TokenStream>().map_err(|e| err(e.to_string()));
         match a.path().get_ident().map(|i| i.to_string()).as_deref() {
             Some("arm_columns") => columns = self::columns(args()?).map_err(err)?,
             Some("c_list")      => c_list = Some(rust_text(&args()?)),
+            Some("mask")        => mask = Some(CEnumDef { kind: CEnumKind::Flags, ..tag_enum(args()?).map_err(err)? }),
             Some("doc")         => {}
             _ => return Err(err(format!("#[{}]: not one of c_enum!'s", rust_text(a.path())))),
         }
@@ -138,7 +151,13 @@ pub(crate) fn c_enum(input: TokenStream) -> Result<TokenStream, String> {
     if (e.kind == CEnumKind::Flags || e.name.is_none()) && !columns.is_empty() {
         return Err(err("#[arm_columns] are a named enum's, not flags' - bits".into()));
     }
+    if e.kind == CEnumKind::Flags && mask.is_some() {
+        return Err(err("#[mask] is of bit numbers, not flags".into()));
+    }
     let arms = arms(body, &columns, false).map_err(err)?;
+    if mask.is_none() && arms.iter().any(|a| a.mask_prefix.is_some()) {
+        return Err(err("#[mask_prefix] without a #[mask]".into()));
+    }
 
     let mut out = generate(&e, &arms, &columns);
     if let Some(name) = &e.name {
@@ -148,6 +167,9 @@ pub(crate) fn c_enum(input: TokenStream) -> Result<TokenStream, String> {
         if let Column::Enum(k) = col {
             out.extend(enum_of(k, arms.iter().map(|a| (a, a.cols[i][0].as_str()))));
         }
+    }
+    if let Some(m) = &mask {
+        out.extend(mask_of(m, &e, &arms));
     }
     if let Some(list) = &c_list {
         out.extend(c_list_of(list, &arms, &columns));
@@ -186,17 +208,45 @@ pub(crate) fn tag_enum(args: TokenStream) -> Result<CEnumDef, String> {
 fn enum_of<'a>(e: &CEnumDef, arms: impl Iterator<Item = (&'a Arm, &'a str)>) -> TokenStream {
     let def = CEnumDef {
         variants: arms.map(|(a, v)| CEnumVariant {
-            name:  a.name.clone(),
+            name:   a.name.clone(),
+            c_name: None,
             // an expression's type may not be the enum's, BCH_VERSION()'s
             // u64: as a list's value is, it's cast
-            value: Some(match parse_int(v) {
+            value:  Some(match parse_int(v) {
                 Some(_) => v.to_string(),
                 None => format!("(({v}) as {})", e.repr),
             }),
-            label: a.label.clone(),
-            docs:  a.docs.clone(),
+            label:  a.label.clone(),
+            docs:   a.docs.clone(),
         }).collect(),
         ..e.clone()
+    };
+    c_enum_gen(&def, EnumOf::C(&format!("c_enum! {{ {} }}", enum_text(&def))))
+}
+
+/// #[mask(NAME: REPR, prefix = P[, c_name = C])]: flags @m of bit numbers
+/// @bits, a flag per arm, 1 << its value - named P and the arm's name, or the
+/// #[mask_prefix] last written on an arm up to it and the name. A flag prints
+/// as its arm's name, as a list's does.
+fn mask_of(m: &CEnumDef, bits: &CEnumDef, arms: &[Arm]) -> TokenStream {
+    let mut prefix = m.prefix.clone();
+    let def = CEnumDef {
+        variants: arms.iter().map(|a| {
+            prefix = a.mask_prefix.clone().or(prefix.take());
+            let p = prefix.as_deref().unwrap_or_default();
+            // an arm written with its prefix, one not an identifier past it,
+            // is a flag written with the mask's
+            let past = bits.prefix.as_deref().and_then(|b| a.name.strip_prefix(b));
+            let name = past.unwrap_or(&a.name);
+            CEnumVariant {
+                name:   past.map_or_else(|| a.name.clone(), |n| format!("{p}{n}")),
+                c_name: (prefix != m.prefix).then(|| format!("{p}{name}")),
+                value:  Some(format!("1{} << {}", m.repr, bits.c_name_of(&a.name))),
+                label:  Some(a.label.clone().unwrap_or_else(|| name.to_string())),
+                docs:   a.docs.clone(),
+            }
+        }).collect(),
+        ..m.clone()
     };
     c_enum_gen(&def, EnumOf::C(&format!("c_enum! {{ {} }}", enum_text(&def))))
 }

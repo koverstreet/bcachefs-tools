@@ -1171,7 +1171,7 @@ pub fn open_enum(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -
                 None => name.clone(),
             };
             let value = v.discriminant.as_ref().map(|(_, x)| x.to_token_stream().to_string());
-            variants.push(CEnumVariant { name, value, label: Some(label), docs: Vec::new() });
+            variants.push(CEnumVariant { name, c_name: None, value, label: Some(label), docs: Vec::new() });
         }
         let e = CEnumDef { cfg: None, kind: CEnumKind::Open, name: Some(item.ident.to_string()), repr: repr.to_string(),
                            variants, from: Vec::new(), own_to_text, c_name: None, prefix: None, nr: None };

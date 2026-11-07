@@ -509,13 +509,18 @@ impl CEnumDef {
         self.c_name.as_deref().or(self.name.as_deref())
     }
 
-    /// @v's name as C has it: #[prefix]'s and its - but a name written with
-    /// the prefix is C's, one that isn't an identifier past it,
-    /// bcachefs_metadata_version_31bit_dirent_offset.
+    /// @v's name as C has it: its #[c_name], or c_name_of() its name.
     pub fn c_variant(&self, v: &CEnumVariant) -> String {
+        v.c_name.clone().unwrap_or_else(|| self.c_name_of(&v.name))
+    }
+
+    /// Variant @name's as C has it: #[prefix]'s and its - but a name written
+    /// with the prefix is C's, one that isn't an identifier past it,
+    /// bcachefs_metadata_version_31bit_dirent_offset.
+    pub fn c_name_of(&self, name: &str) -> String {
         match &self.prefix {
-            Some(p) if !v.name.starts_with(p.as_str()) => format!("{p}{}", v.name),
-            _ => v.name.clone(),
+            Some(p) if !name.starts_with(p.as_str()) => format!("{p}{name}"),
+            _ => name.to_string(),
         }
     }
 
@@ -537,11 +542,13 @@ impl CEnumDef {
 /// C's string tables have it; none, its name.
 #[derive(Debug, Clone)]
 pub struct CEnumVariant {
-    pub name:  String,
-    pub value: Option<String>,
-    pub label: Option<String>,
+    pub name:   String,
+    /// C's name for it, `#[c_name(..)]`, where #[prefix] doesn't make it
+    pub c_name: Option<String>,
+    pub value:  Option<String>,
+    pub label:  Option<String>,
     #[allow(dead_code)]
-    pub docs:  Vec<String>,
+    pub docs:   Vec<String>,
 }
 
 /// c_typedef!: a type alias, C's typedef. @c_decl is its C declarator - the
@@ -1426,12 +1433,13 @@ pub fn parse_enum_head(input: syn::parse::ParseStream<'_>)
 pub fn parse_variant(v: proc_macro2::TokenStream)
         -> syn::Result<(CEnumVariant, Vec<syn::Attribute>, Option<syn::Type>)> {
     let v: syn::Variant = syn::parse2(v)?;
-    let (mut label, mut docs, mut others) = (None, Vec::new(), Vec::new());
+    let (mut c_name, mut label, mut docs, mut others) = (None, None, Vec::new(), Vec::new());
     for a in v.attrs {
         match &a.meta {
             syn::Meta::NameValue(syn::MetaNameValue {
                 path, value: syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }), ..
             }) if path.is_ident("doc") => docs.push(s.value()),
+            _ if a.path().is_ident("c_name") => c_name = Some(a.parse_args::<syn::Ident>()?.to_string()),
             _ if a.path().is_ident("label") => label = Some(a.parse_args::<syn::LitStr>()?.value()),
             _ => others.push(a),
         }
@@ -1442,7 +1450,7 @@ pub fn parse_variant(v: proc_macro2::TokenStream)
         f => return Err(syn::Error::new_spanned(f, format!("{}: a variant's payload is a type, (Type)", v.ident))),
     };
     let value = v.discriminant.map(|(_, x)| rust_text(&x));
-    Ok((CEnumVariant { name: ident(&v.ident), value, label, docs }, others, ty))
+    Ok((CEnumVariant { name: ident(&v.ident), c_name, value, label, docs }, others, ty))
 }
 
 /// c_enum!'s body, as its record has it: its head, then { A = expr, B, ... },
@@ -2214,7 +2222,7 @@ pub fn expand_enum_list(e: &mut CEnumDef, entries: &[String]) -> Result<(), Stri
                 [TokenTree::Ident(l)] => Some(ident(l)),
                 _ => None,
             });
-        variants.push(CEnumVariant { name, value, label, docs: Vec::new() });
+        variants.push(CEnumVariant { name, c_name: None, value, label, docs: Vec::new() });
     }
     let n = variants.len();
     e.variants.splice(at..at, variants);
@@ -2241,6 +2249,9 @@ pub fn enum_text(e: &CEnumDef) -> String {
     };
     for (i, v) in e.variants.iter().enumerate() {
         lists(&mut t, i);
+        if let Some(c) = &v.c_name {
+            t.push_str(&format!("#[c_name({c})] "));
+        }
         if let Some(l) = &v.label {
             t.push_str(&format!("#[label({l:?})] "));
         }
