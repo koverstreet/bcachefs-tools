@@ -108,7 +108,7 @@ c_xmacro! {
  * frame we hand it; those count as data_decompress_err_zstd_unknown, and
  * anything not a decompress errcode at all as data_decompress_err_unknown.
  * To promote one, add it here and add a numbered entry in
- * errors_format.rs, and a KEY_TYPE_ERRORS() reason - the build breaks if
+ * errors_format.rs, and an ErrorKeyReason - the build breaks if
  * you forget.
  */
 c_xmacro! {

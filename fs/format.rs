@@ -528,48 +528,42 @@ pub struct Error {
     pub pad: [u8; 7],
 }
 
-c_xmacro! {
-    /*
-     * Why an extent became a KEY_TYPE_error key, recorded in the tombstone so a
-     * later reader can tell what killed the data without the damage btree, which
-     * fsck can prune.
-     *
-     * The decompress_ reasons are the data_decompress_err_ list in
-     * sb/errors_format.rs, name for name: the superblock counts how often a
-     * decompression failed each way, and the key says which of those killed this
-     * extent. bch2_decompress_key_type_error() maps between them off the same
-     * table that produces the sb error ids, so the two can't drift - adding a
-     * decompress error id without a reason here breaks the build.
-     */
-    KEY_TYPE_ERRORS(x) {
-        (unknown, 0),
-        (device_removed, 1),
-        (double_allocation, 2),
-        (no_valid_pointers_repair, 3),
-        (decompress_exceeded_max_encoded_extent, 4),
-        (decompress_lz4_old, 5),
-        (decompress_lz4, 6),
-        (decompress_gzip, 7),
-        (decompress_gzip_size_mismatch, 8),
-        (decompress_zstd_src_len_bad, 9),
-        (decompress_zstd_size_mismatch, 10),
-        (decompress_zstd_corruption_detected, 11),
-        (decompress_zstd_checksum_wrong, 12),
-        (decompress_zstd_prefix_unknown, 13),
-        (decompress_zstd_src_size_wrong, 14),
-        (decompress_zstd_dst_size_too_small, 15),
-        (decompress_zstd_memory_allocation, 16),
-        (decompress_zstd_unknown, 17),
-        (decompress_unknown, 18),
-    }
-}
-
+/*
+ * Why an extent became a KEY_TYPE_error key, recorded in the tombstone so a
+ * later reader can tell what killed the data without the damage btree, which
+ * fsck can prune.
+ *
+ * The decompress_ reasons are the data_decompress_err_ list in
+ * sb/errors_format.rs, name for name: the superblock counts how often a
+ * decompression failed each way, and the key says which of those killed this
+ * extent. bch2_decompress_key_type_error() maps between them off the same
+ * table that produces the sb error ids, so the two can't drift - adding a
+ * decompress error id without a reason here breaks the build.
+ */
 c_enum! {
     #[open]
     #[c_name(bch_key_type_errors)]
     #[prefix(KEY_TYPE_ERROR_)]
     pub enum ErrorKeyReason: u32 {
-        KEY_TYPE_ERRORS(n, t) => concat(KEY_TYPE_ERROR_, n) = t,
+        unknown = 0,
+        device_removed = 1,
+        double_allocation = 2,
+        no_valid_pointers_repair = 3,
+        decompress_exceeded_max_encoded_extent = 4,
+        decompress_lz4_old = 5,
+        decompress_lz4 = 6,
+        decompress_gzip = 7,
+        decompress_gzip_size_mismatch = 8,
+        decompress_zstd_src_len_bad = 9,
+        decompress_zstd_size_mismatch = 10,
+        decompress_zstd_corruption_detected = 11,
+        decompress_zstd_checksum_wrong = 12,
+        decompress_zstd_prefix_unknown = 13,
+        decompress_zstd_src_size_wrong = 14,
+        decompress_zstd_dst_size_too_small = 15,
+        decompress_zstd_memory_allocation = 16,
+        decompress_zstd_unknown = 17,
+        decompress_unknown = 18,
     }
 }
 
@@ -1534,43 +1528,6 @@ c_const! {
     pub const BCH_SB_EXTENT_BP_SHIFT_DEFAULT: u32 = 10;
 }
 
-c_xmacro! {
-    /*
-     * Features:
-     *
-     * journal_seq_blacklist_v3:	gates BCH_SB_FIELD_journal_seq_blacklist
-     * reflink:			gates KEY_TYPE_reflink
-     * inline_data:			gates KEY_TYPE_inline_data
-     * new_siphash:			gates BCH_STR_HASH_siphash
-     * new_extent_overwrite:	gates BTREE_NODE_NEW_EXTENT_OVERWRITE
-     */
-    BCH_SB_FEATURES(x) {
-        (lz4, 0),
-        (gzip, 1),
-        (zstd, 2),
-        (atomic_nlink, 3),
-        (ec, 4),
-        (journal_seq_blacklist_v3, 5),
-        (reflink, 6),
-        (new_siphash, 7),
-        (inline_data, 8),
-        (new_extent_overwrite, 9),
-        (incompressible, 10),
-        (btree_ptr_v2, 11),
-        (extents_above_btree_updates, 12),
-        (btree_updates_journalled, 13),
-        (reflink_inline_data, 14),
-        (new_varint, 15),
-        (journal_no_flush, 16),
-        (alloc_v2, 17),
-        (extents_across_btree_nodes, 18),
-        (incompat_version_field, 19),
-        (casefolding, 20),
-        (no_alloc_info, 21),
-        (small_image, 22),
-        (no_default_sb, 23),
-    }
-}
 
 c_const! {
     pub const BCH_SB_FEATURES_ALWAYS: u64 =
@@ -1593,9 +1550,37 @@ c_enum! {
     #[open]
     #[c_name(bch_sb_feature)]
     #[prefix(BCH_FEATURE_)]
+    #[nr(BCH_FEATURE_NR)]
     pub enum SbFeature: u32 {
-        BCH_SB_FEATURES(f, ..) => concat(BCH_FEATURE_, f),
-        BCH_FEATURE_NR,
+        lz4 = 0,
+        gzip = 1,
+        zstd = 2,
+        atomic_nlink = 3,
+        ec = 4,
+        /// Gates BCH_SB_FIELD_journal_seq_blacklist
+        journal_seq_blacklist_v3 = 5,
+        /// Gates KEY_TYPE_reflink
+        reflink = 6,
+        /// Gates BCH_STR_HASH_siphash
+        new_siphash = 7,
+        /// Gates KEY_TYPE_inline_data
+        inline_data = 8,
+        /// Gates BTREE_NODE_NEW_EXTENT_OVERWRITE
+        new_extent_overwrite = 9,
+        incompressible = 10,
+        btree_ptr_v2 = 11,
+        extents_above_btree_updates = 12,
+        btree_updates_journalled = 13,
+        reflink_inline_data = 14,
+        new_varint = 15,
+        journal_no_flush = 16,
+        alloc_v2 = 17,
+        extents_across_btree_nodes = 18,
+        incompat_version_field = 19,
+        casefolding = 20,
+        no_alloc_info = 21,
+        small_image = 22,
+        no_default_sb = 23,
     }
 }
 
