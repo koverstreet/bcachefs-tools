@@ -134,24 +134,6 @@ impl<'f> BtreeTrans<'f> {
         self.extra_journal_u64s.set(self.extra_journal_u64s.get() + u64s)
     }
 
-    /// Flush the btree write buffer, through to the journal sequence number
-    /// being written. It leaves the transaction unlocked - the next btree
-    /// access has to begin it again.
-    pub fn write_buffer_flush_sync(&self) -> Result<(), BchError> {
-        crate::errcode::ret_to_result(unsafe {
-            c::bch2_btree_write_buffer_flush_sync(self.raw())
-        }).map(|_| ())
-    }
-
-    /// Flush what the btree write buffer holds, if anything - not waiting on
-    /// a flush already running, and erofs_no_writes if the filesystem's
-    /// going read-only. It may leave the transaction unlocked.
-    pub fn write_buffer_tryflush(&self) -> Result<(), BchError> {
-        crate::errcode::ret_to_result(unsafe {
-            c::bch2_btree_write_buffer_tryflush(self.raw())
-        }).map(|_| ())
-    }
-
     /// The attempt C began, for Rust that C calls partway through one.
     ///
     /// # Safety

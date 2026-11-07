@@ -279,7 +279,6 @@
 #include "btree/read.h"
 #include "btree/sort.h"
 #include "btree/write.h"
-#include "btree/write_buffer.h"
 
 static void bch2_fs_btree_iter_exit(struct bch_fs *c)
 {

@@ -7,6 +7,7 @@
 
 use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
+use core::ptr;
 use cstruct_macros::{CStruct, Init, Late, c_const, c_extern, TypeInfo};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
@@ -15,7 +16,7 @@ use crate::c;
 use crate::data::keylist::PaddedKey;
 use crate::fs::Fs;
 use crate::journal::entries::{EntryWriter, NoRoom};
-use crate::locking::{ExclusiveGuard, Locked};
+use crate::locking::{ExclusiveGuard, Locked, RawLock};
 use crate::new_lock;
 use crate::types::c_default;
 use crate::util::Printbuf;
@@ -131,6 +132,16 @@ impl Fs {
 
     pub fn async_btree_node_rewrites_flush(&self) {
         unsafe { bch2_async_btree_node_rewrites_flush(self.as_ptr()) }
+    }
+
+    pub fn btree_interior_updates_pending(&self) -> bool {
+        let u = &self.btree.interior_updates;
+        unsafe {
+            u.lock.lock();
+            let pending = !ptr::eq(u.list.next, &u.list);
+            u.lock.unlock(());
+            pending
+        }
     }
 
     /// Waits for the interior updates in flight to finish - with no btree

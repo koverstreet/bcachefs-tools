@@ -23,8 +23,6 @@ use crate::alloc::capacity::recalc_capacity;
 use crate::btree::cache::bch2_fs_btree_init_rw;
 use crate::btree::interior::{bch2_btree_interior_updates_flush, bch2_do_pending_node_rewrites};
 use crate::btree::write::bch2_btree_flush_all_writes;
-use crate::btree::write_buffer::{bch2_btree_write_buffer_flush_going_ro, bch2_btree_write_buffer_start,
-                                 bch2_btree_write_buffer_stop};
 use crate::c;
 use crate::c::bch_fs_flags as Flag;
 use crate::c::journal_flags as Journal;
@@ -56,7 +54,7 @@ impl Fs {
         stripe_heads_stop(self, None);
         self.open_buckets_stop(None, true);
         self.copygc_stop();
-        unsafe { bch2_btree_write_buffer_stop(p) };
+        self.btree_write_buffer_stop();
         self.ec_flush();
 
         bch_verbose!(self, "flushing journal and stopping allocators, journal seq {}",
@@ -68,7 +66,7 @@ impl Fs {
             self.do_discards_going_ro();
 
             let progress = unsafe {
-                bch2_btree_write_buffer_flush_going_ro(p) ||
+                self.btree_write_buffer_flush_going_ro() ||
                 c::bch2_btree_key_cache_flush_going_ro(p) != 0 ||
                 bch2_btree_interior_updates_flush(p) ||
                 self.journal_flush_all_pins() ||
@@ -230,8 +228,8 @@ impl StateLockWrite<'_> {
             assert!(fs.btree.cache.lock.nr_dirty() == 0);
             assert_eq!(fs.btree.key_cache.nr_dirty.load(Relaxed), 0);
             for wb in &fs.btree.write_buffer {
-                assert_eq!(wb.inc.keys.nr, 0);
-                assert_eq!(wb.flushing.keys.nr, 0);
+                assert!(wb.inc.keys.is_empty());
+                assert!(wb.flushing.keys.is_empty());
             }
             fs.verify_replicas_refs_clean();
             verify_accounting_clean(fs);
@@ -256,8 +254,8 @@ impl StateLockWrite<'_> {
             ret_to_result(bch2_fs_btree_init_rw(p))?;
             (*p).journal.init_rw()?;
             (*p).journal.reclaim_start()?;
-            ret_to_result(bch2_btree_write_buffer_start(p))?;
         }
+        fs.btree_write_buffer_start()?;
         fs.copygc_start()?;
         fs.reconcile_start()?;
 
@@ -350,7 +348,7 @@ impl StateLockWrite<'_> {
 
         let ret = (|| {
             fs.journal.reclaim_start()?;
-            ret_to_result(unsafe { bch2_btree_write_buffer_start(p) })?;
+            fs.btree_write_buffer_start()?;
             fs.copygc_start()?;
             if fs.opts().read_only.get() == 0 {
                 fs.reconcile_start()?;

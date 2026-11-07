@@ -14,7 +14,6 @@
 #include "btree/key_cache.h"
 #include "btree/sort.h"
 #include "btree/write.h"
-#include "btree/write_buffer.h"
 
 #include "journal/journal.h"
 #include "journal/read.h"

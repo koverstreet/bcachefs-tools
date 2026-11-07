@@ -86,8 +86,6 @@ bch2_trans_jset_entry_alloc(struct btree_trans *trans, unsigned u64s)
 	return bch2_trans_jset_entry_alloc_ip(trans, u64s, _THIS_IP_);
 }
 
-int bch2_btree_write_buffer_insert_err(struct bch_fs *, enum btree_id, struct bkey_i *);
-
 #define trans_for_each_update(_trans, _i)				\
 	for (struct btree_insert_entry *_i = (_trans)->updates;		\
 	     (_i) < (_trans)->updates + (_trans)->nr_updates;		\

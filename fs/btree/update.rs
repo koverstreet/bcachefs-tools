@@ -1184,7 +1184,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     fn update_buffered_key(&self, btree: Btree, k: &BkeyI) -> Result<(), BchError> {
-        insert_checks(self.fs(), btree, k.as_ffi().cast_mut())?;
+        insert_checks(self.fs(), btree, k)?;
 
         /*
          * Most updates skip the btree write buffer until journal replay is

@@ -4,7 +4,7 @@
 //! checksummed and submitted - a preflush first, if its flush goes
 //! separately - and, once written, completed in seq order.
 
-use core::ffi::{c_int, c_void};
+use core::ffi::c_void;
 use core::mem::{self, offset_of};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
@@ -14,8 +14,9 @@ use cstruct_macros::c_extern;
 use crate::alloc::disk_groups::Target;
 use crate::alloc::replicas::DevlistEntry;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{BkeySC, ValidateFlags};
+use crate::btree::bkey::{BkeyI, BkeySC, ValidateFlags};
 use crate::btree::interior::btree_roots_to_journal_entries;
+use crate::btree::write_buffer;
 use crate::c;
 use crate::c::journal_bucket_stage::JOURNAL_BUCKET_cur;
 use crate::c::journal_flags as Journal;
@@ -26,7 +27,7 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::write::DevWriteRef;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::DataType;
 use crate::fs::{Dev, Fs};
 use crate::journal::entries::EntryWriter;
@@ -52,9 +53,6 @@ crate::has_closure!(c::journal_buf, io);
 c_extern! {
     pub fn bch2_bio_map_and_chain(bdev: *mut c::block_device, base: *mut c_void, size: usize, sector: u64,
                                   opf: c::blk_opf_t, gfp: c::gfp_t, bs: *mut c::bio_set) -> *mut c::bio;
-    pub fn bch2_btree_write_buffer_resize(c: *mut Fs, new_size: usize) -> c_int;
-    pub fn bch2_journal_keys_to_write_buffer_start(c: *mut Fs, dst: *mut c::journal_keys_to_wb, seq: u64);
-    pub fn bch2_journal_keys_to_write_buffer_end(c: *mut Fs, dst: *mut c::journal_keys_to_wb) -> c_int;
     pub fn bch2_journal_entry_to_btree_root(c: *mut Fs, entry: *mut Head<c::jset_entry>);
 }
 
@@ -307,7 +305,7 @@ fn buf_realloc(j: &c::journal, buf: &mut c::journal_buf) {
 
     let btree_write_buffer_size = new_size as usize / 64;
 
-    if unsafe { bch2_btree_write_buffer_resize(fs.as_ptr(), btree_write_buffer_size) } != 0 {
+    if fs.btree_write_buffer_resize(btree_write_buffer_size).is_err() {
         return;
     }
 
@@ -902,7 +900,7 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
     let mut empty = w.head().seq.get() == w.head().last_seq.get();
 
     if w.bits.need_flush_to_write_buffer() {
-        unsafe { bch2_journal_keys_to_write_buffer_start(fs.as_ptr(), &mut wb, seq) };
+        write_buffer::keys_to_write_buffer_start(fs, &mut wb, seq);
 
         /*
          * need_flush_to_write_buffer must be cleared under the write buffer's
@@ -955,9 +953,9 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
             let btree = crate::format::Btree(i.btree_id.into());
             for k in i.entries_mut() {
                 let Ok(mut k) = k else { break };
-                if let Err(e) = unsafe { wb.key_to_wb(fs, btree, k.as_mut_ptr()) } {
+                if let Err(e) = unsafe { wb.key_to_wb(fs, btree, &*BkeyI::from_raw(k.as_mut_ptr())) } {
                     crate::fs_fatal_error!(fs, "flushing journal keys to btree write buffer: {}", e.msg());
-                    let _ = unsafe { bch2_journal_keys_to_write_buffer_end(fs.as_ptr(), &mut wb) };
+                    let _ = write_buffer::keys_to_write_buffer_end(fs, &mut wb);
                     return Err(e);
                 }
             }
@@ -966,7 +964,7 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
     }
 
     if wb.seq != 0 {
-        if let Err(e) = ret_to_result_void(unsafe { bch2_journal_keys_to_write_buffer_end(fs.as_ptr(), &mut wb) }) {
+        if let Err(e) = write_buffer::keys_to_write_buffer_end(fs, &mut wb) {
             crate::fs_fatal_error!(fs, "error flushing journal keys to btree write buffer: {}", e.msg());
             return Err(e);
         }

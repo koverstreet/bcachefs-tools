@@ -73,7 +73,6 @@ bcachefs-y		:=			\
 	btree/key_cache.o			\
 	btree/read.o				\
 	btree/write.o				\
-	btree/write_buffer.o			\
 	data/ec/trigger.o			\
 	data/read.o				\
 	data_structures/darray.o		\

@@ -139,7 +139,6 @@ use crate::init::recovery::NotRw;
 use crate::journal::entries::EntryWriter;
 use crate::util::alloc::KVVec;
 use crate::util::backtrace::prt_current_backtrace;
-use crate::btree::write_buffer::bch2_btree_write_buffer_to_text;
 use crate::format::DataType;
 use crate::util::closure::{closure_fn_addr, closure_has_waiters, closure_wait, closure_wait_event,
                            closure_wait_event_timeout, closure_waiting, closure_wake_up, detached, waitlist_first,
@@ -1669,8 +1668,7 @@ impl c::journal {
         self.pins_to_text(out, 2);
 
         if self.flags.get(Journal::low_on_wb) {
-            let fs = self.fs();
-            unsafe { bch2_btree_write_buffer_to_text(out.as_raw(), fs.as_ptr()) };
+            self.fs().btree_write_buffer_to_text(out);
         }
     }
 }

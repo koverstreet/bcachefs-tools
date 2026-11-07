@@ -24,7 +24,6 @@
 #include "btree/locking.h"
 #include "btree/read.h"
 #include "btree/write.h"
-#include "btree/write_buffer.h"
 
 #include "data/checksum.h"
 #include "data/compress.h"
