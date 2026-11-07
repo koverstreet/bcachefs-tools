@@ -630,7 +630,7 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
 /// deletes a stripe it finds empty and not open - but that decision is made in
 /// a trigger, and a commit that drops its locks (waiting on a journal
 /// reservation, say) relocks and retries without re-running triggers. So
-/// bch2_stripe_tryget_existing() has to invalidate the relock of any
+/// OpenStripe::tryget_existing() has to invalidate the relock of any
 /// transaction that has queued an update to the stripe key.
 ///
 /// The updater queues a no-op update through a plain iterator, so the test also

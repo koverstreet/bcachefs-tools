@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The stripe key's trigger - ec/trigger.c's - and gc's copy of the stripes.
+//! The stripe key's trigger, and gc's copy of the stripes.
 //!
 //! A stripe update's trigger owns: each block's bucket - a parity block's
 //! sectors, every block's stripe_refcount and bucket_to_stripe entry - and
@@ -39,13 +39,8 @@ use crate::util::vstructs::plain_bytes;
 use crate::{accounting, bch_err, fs_inconsistent, fsck_err_on, prt};
 use crate::data_structures::array_vec::ArrayVec;
 use core::ops::ControlFlow;
-use cstruct_macros::{c_export, c_extern};
-use core::ffi::c_int;
+use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree, DataType};
-
-c_extern! {
-    pub fn bch2_stripe_tryget_existing(iter: *mut c::btree_iter) -> c_int;
-}
 
 // ── A bucket's stripes ───────────────────────────────────────────────────
 
