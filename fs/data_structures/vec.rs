@@ -5,7 +5,7 @@
 //! allocates. KVec and KVVec are it: the same in both builds.
 
 use crate::data_structures::array_vec::LenUint;
-use crate::util::alloc::{flags, Alloc, AllocError, Flags};
+use crate::util::alloc::{flags, kvmalloc_realloc_gfp, Alloc, AllocError, Flags, KVmalloc};
 use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::mem::{size_of, ManuallyDrop, MaybeUninit};
@@ -82,6 +82,16 @@ impl<T, A: Alloc, L: LenUint> Vec<T, A, L> {
     }
 
     fn reserve_gfp(&mut self, additional: usize, gfp: Flags) -> Result<(), AllocError> {
+        // SAFETY: @p is A's, of @old
+        self.grow(additional, |p, layout, old| unsafe { A::realloc(p, layout, old, gfp) })
+    }
+
+    /// Room for @additional more, reallocated by @realloc - A's, as
+    /// Alloc::realloc() is - if there isn't.
+    fn grow(&mut self, additional: usize,
+            realloc: impl FnOnce(Option<NonNull<u8>>, Layout, Layout) -> Result<NonNull<u8>, AllocError>)
+        -> Result<(), AllocError>
+    {
         let (len, cap) = (self.len(), self.capacity());
         let want = len.checked_add(additional).ok_or(AllocError)?;
         if want <= cap {
@@ -92,7 +102,7 @@ impl<T, A: Alloc, L: LenUint> Vec<T, A, L> {
         }
 
         let new_cap = want.max(cap.saturating_mul(2)).min(L::MAX);
-        let p = unsafe { A::realloc(self.data.map(NonNull::cast), Self::layout(new_cap)?, Self::layout(cap)?, gfp)? };
+        let p = realloc(self.data.map(NonNull::cast), Self::layout(new_cap)?, Self::layout(cap)?)?;
         self.data = Some(p.cast());
         self.size = L::from_usize(new_cap);
         Ok(())
@@ -190,6 +200,21 @@ impl<T, A: Alloc, L: LenUint> Vec<T, A, L> {
         self.truncate(0)
     }
 
+    /// Each run of elements @same_bucket calls the same collapsed to its
+    /// first: as std's - it's called on (later, kept), the later dropped if
+    /// it says so.
+    pub fn dedup_by(&mut self, mut same_bucket: impl FnMut(&mut T, &mut T) -> bool) {
+        let mut kept = 0;
+        for i in 1..self.len() {
+            let (l, r) = self.split_at_mut(i);
+            if !same_bucket(&mut r[0], &mut l[kept]) {
+                kept += 1;
+                self.swap(kept, i);
+            }
+        }
+        self.truncate(kept + 1);
+    }
+
     /// Only what @f keeps, in order.
     pub fn retain(&mut self, mut f: impl FnMut(&mut T) -> bool) {
         let len = self.len();
@@ -241,6 +266,15 @@ impl<T, A: Alloc, L: LenUint> Vec<T, A, L> {
     pub fn into_raw_parts(self) -> (*mut T, usize, usize) {
         let mut v = ManuallyDrop::new(self);
         (v.as_mut_ptr(), v.len(), v.capacity())
+    }
+}
+
+impl<T, L: LenUint> Vec<T, KVmalloc, L> {
+    /// reserve(), with a C gfp_t: for what needs a flag Flags doesn't name -
+    /// __GFP_NORETRY.
+    pub fn reserve_raw_gfp(&mut self, additional: usize, gfp: crate::c::gfp_t) -> Result<(), AllocError> {
+        // SAFETY: @p is KVmalloc's, of @old
+        self.grow(additional, |p, layout, old| unsafe { kvmalloc_realloc_gfp(p, layout, old, gfp) })
     }
 }
 

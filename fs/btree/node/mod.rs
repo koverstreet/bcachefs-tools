@@ -358,6 +358,30 @@ impl BtreeNode {
         total as isize - (end + self.whiteout_u64s.get() as usize + 1) as isize
     }
 
+    /// Room after the last bset, none once it's written:
+    /// bch2_btree_keys_u64s_remaining().
+    pub fn keys_u64s_remaining(&self, contents: &NodeContents) -> usize {
+        let t = contents.last_set();
+        let remaining = self.u64s_remaining(t.end_offset as usize);
+        assert!(remaining >= 0, "a node's keys past its buffer, by {} u64s", -remaining);
+
+        if self.bset_written(t) { 0 } else { remaining as usize }
+    }
+
+    /// Whether a key of @u64s goes in without a split, or a rewrite first:
+    /// bch2_btree_node_insert_fits().
+    pub fn insert_fits(&self, contents: &NodeContents, u64s: usize) -> bool {
+        !self.flags.need_rewrite() && u64s <= self.keys_u64s_remaining(contents)
+    }
+
+    /// Whether, @d u64s from now, it's small enough to merge with a sibling:
+    /// btree_node_needs_merge().
+    pub fn needs_merge(&self, contents: &NodeContents, fs: &Fs, d: i32) -> bool {
+        let sib_u64s = contents.sib_u64s;
+        !crate::debug::params::btree_node_merging_disabled() &&
+            i32::from(sib_u64s[0].min(sib_u64s[1])) + d <= i32::from(fs.btree.foreground_merge_threshold)
+    }
+
     pub fn want_new_bset(&self, contents: &NodeContents, fs: &Fs) -> Option<u16> {
         let t = contents.last_set();
         let bne = self.written_end().max(t.end_offset as usize);

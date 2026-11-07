@@ -1904,7 +1904,7 @@ impl<T: PathNode> BtreePath<T> {
         self.locked_type(level) != BTREE_NODE_UNLOCKED
     }
 
-    fn mark_locked_noreset(&mut self, level: usize, ty: btree_node_locked_type) {
+    pub(crate) fn mark_locked_noreset(&mut self, level: usize, ty: btree_node_locked_type) {
         /* relying on this to avoid a branch */
         const { assert!(c::SIX_LOCK_read as i32 == 0 && c::SIX_LOCK_intent as i32 == 1) };
 

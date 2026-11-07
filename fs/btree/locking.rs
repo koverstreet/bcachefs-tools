@@ -15,7 +15,7 @@ use crate::debug::params::debug_check_btree_locking;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
-use crate::locking::six::{__six_lock_init, six_lock_contended, six_lock_counts, six_lock_ip_waiter, SixHold};
+use crate::locking::six::{__six_lock_init, six_lock_contended, six_lock_counts, six_lock_ip_waiter, six_trylock_ip, SixHold};
 use crate::locking::{memalloc_flags_restore, memalloc_flags_save, rust_six_lockdep_set_notrack_class, ExclusiveGuard, Locked,
                      RawTimedLock, PF_MEMALLOC_NOIO};
 use crate::prt;
@@ -427,6 +427,30 @@ impl BtreeTrans<'_> {
             s.lock_wait_times.update_at(contended_start, local_clock());
         }
         ret
+    }
+
+    /// @b, which path @idx holds for intent, for write too:
+    /// bch2_btree_node_lock_write().
+    pub(crate) fn node_lock_write(&self, paths: &mut Paths<'_>, idx: PathIdx, b: &c::btree_bkey_cached_common)
+        -> Result<(), BchError>
+    {
+        let level = b.level as usize;
+        ebug_assert!(paths[idx].l[level].b.is(b));
+        ebug_assert!(paths[idx].l[level].lock_seq == b.lock.six().seq.get());
+        ebug_assert!(paths[idx].intent_locked(level));
+
+        /*
+         * six locks are unfair, and read locks block while a thread wants a
+         * write lock: thus, we need to tell the cycle detector we have a write
+         * lock _before_ taking the lock:
+         */
+        paths[idx].mark_locked_noreset(level, btree_node_locked_type::BTREE_NODE_WRITE_LOCKED);
+
+        if six_trylock_ip(b.lock.six(), c::six_lock_type::SIX_LOCK_write, crate::ret_ip!()) {
+            Ok(())
+        } else {
+            self.node_lock_write_contended(paths, idx, b, false, crate::ret_ip!())
+        }
     }
 
     /// @ip is lockdep's: C's _RET_IP_.

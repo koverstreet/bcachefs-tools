@@ -196,6 +196,33 @@ pub unsafe fn flush_work(work: *mut c::work_struct) {
     unsafe { c::flush_work(work) };
 }
 
+/// Not queued any more, and not running - waiting out a run that is:
+/// cancel_work_sync(). Whether it was pending.
+///
+/// # Safety
+/// @work is initialized.
+pub unsafe fn cancel_work_sync(work: *mut c::work_struct) -> bool {
+    #[cfg(kernel)]
+    return unsafe { kernel::bindings::cancel_work_sync(work.cast()) };
+    #[cfg(not(kernel))]
+    unsafe { c::cancel_work_sync(work) }
+}
+
+/// Whether @work is queued or running, as of the look: work_busy(). The shim's
+/// workqueues don't say.
+///
+/// # Safety
+/// @work is initialized.
+pub unsafe fn work_busy(work: *mut c::work_struct) -> bool {
+    #[cfg(kernel)]
+    return unsafe { kernel::bindings::work_busy(work.cast()) } != 0;
+    #[cfg(not(kernel))]
+    {
+        let _ = work;
+        false
+    }
+}
+
 pub type WorkFn = unsafe extern "C" fn(*mut c::work_struct);
 
 /// A work_struct at a fixed place in Self, running Self::run(): new_work!()

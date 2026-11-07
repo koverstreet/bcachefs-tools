@@ -104,6 +104,25 @@ c_extern! {
 
 // ── struct mutex ─────────────────────────────────────────────────────────
 
+/// How two locks of one class, by their maps, are ordered: negative for @a
+/// first. Lockdep's lock_cmp_fn, as kCFI hashes it.
+#[cfg(all(kernel, CONFIG_PROVE_LOCKING))]
+pub type LockCmpFn = unsafe extern "C" fn(a: *const kernel::bindings::lockdep_map,
+                                          b: *const kernel::bindings::lockdep_map) -> c_int;
+
+/// Lockdep's order among mutexes of one class held at once, @cmp's:
+/// lock_set_cmp_fn().
+///
+/// # Safety
+/// @l is initialized, and not yet taken.
+#[cfg(all(kernel, CONFIG_PROVE_LOCKING))]
+pub unsafe fn mutex_set_cmp_fn(l: *mut c::mutex, cmp: LockCmpFn) {
+    unsafe {
+        kernel::bindings::lockdep_set_lock_cmp_fn(&raw mut (*l.cast::<kernel::bindings::mutex>()).dep_map,
+                                                  Some(cmp), None)
+    }
+}
+
 unsafe impl RawLockBase for c::mutex {
     type GuardState = ();
     type InitError = Infallible;

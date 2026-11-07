@@ -404,6 +404,31 @@ pub fn kvzalloc_gfp(size: usize, gfp: crate::c::gfp_t) -> Result<core::ptr::NonN
     }
 }
 
+/// KVmalloc's realloc(), with @gfp: for what needs a flag Flags doesn't name -
+/// __GFP_NORETRY.
+///
+/// # Safety
+/// As Alloc::realloc()'s.
+pub unsafe fn kvmalloc_realloc_gfp(p: Option<NonNull<u8>>, layout: Layout, old: Layout, gfp: crate::c::gfp_t)
+    -> Result<NonNull<u8>, AllocError>
+{
+    #[cfg(kernel)]
+    {
+        use kernel::bindings::{kvrealloc_node_align, NUMA_NO_NODE};
+
+        let _ = old;
+        let p = p.map_or(core::ptr::null(), |p| p.as_ptr().cast_const().cast());
+        NonNull::new(unsafe {
+            kvrealloc_node_align(p, layout.size(), layout.align() as _, current_gfp_context_raw(gfp), NUMA_NO_NODE)
+        }.cast()).ok_or(AllocError)
+    }
+    #[cfg(not(kernel))]
+    {
+        let _ = gfp;
+        unsafe { <KVmalloc as Alloc>::realloc(p, layout, old, flags::GFP_KERNEL) }
+    }
+}
+
 /// @p, @old bytes of kvmalloc()'d memory - or none, null - as @new bytes,
 /// what was there kept and the rest zeroed: kvrealloc(), __GFP_ZERO.
 /// Aligned as kmalloc() aligns @new. kvfree_sized() takes it back.
