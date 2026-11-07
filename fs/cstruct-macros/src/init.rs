@@ -39,6 +39,12 @@
 //! value's place - place.rs. A Placed<C, A> field is made with at(), around
 //! its #[init]: the A it names must be its own place, or it won't compile.
 //!
+//! A field with `#[init_locked(P, "name")]` is a Locked whose data is placed
+//! in it, `#[placed(Base.field.*)]`: made here, new_lock!(<- the data's
+//! init(), P, "name"), the data given its AtInner. Each struct's Enclosing is
+//! here too: itself, or - placed in a Wrapper - its parent, so what's placed
+//! in a Locked's data has the struct holding the lock for its parent.
+//!
 //! A field `w: ReffedWork<f, R>` - a work item, running fn f, holding a ref
 //! on R's count - is made here too, with all it needs, as the field is the
 //! one place it's declared: f as a type, a braced struct beside the fn f in
@@ -95,6 +101,19 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             inits.push(quote!(#name: at,));
             continue;
         }
+        if let Some(a) = f.attrs.iter().find(|a| a.path().is_ident("init_locked")) {
+            let args: TokenStream = a.parse_args()?;
+            let n = name.to_string();
+            inits.push(quote!(#name <- {
+                let lock = |at| crate::new_lock!(
+                    <- <<<Self as crate::util::place::Field<{ crate::util::place::name(#n) }>>::Type
+                        as crate::util::place::Wrapper>::Inner>::init(at), #args);
+                unsafe {
+                    crate::util::place::at_inner::<Self, { crate::util::place::name(#n) }, _, crate::errcode::BchError>(lock)
+                }
+            },));
+            continue;
+        }
         if is_placed(ty) {
             let value = init.unwrap_or_else(|| quote!(::pin_init::zeroed()));
             let n = name.to_string();
@@ -126,6 +145,29 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         });
     }
 
+    // What's placed in it has it for its parent - or, it placed in a Wrapper,
+    // the struct holding that
+    let enclosing = match at {
+        Some(ty) if is_at_inner(ty) => quote! {
+            #[automatically_derived]
+            unsafe impl #impl_g crate::util::place::Enclosing for #inst_ty #where_c {
+                type Visible = <Self as crate::util::place::Contained>::Parent;
+                unsafe fn visible(p: *mut Self) -> *mut Self::Visible {
+                    unsafe { crate::util::place::container_of_raw(p) }
+                }
+            }
+        },
+        _ => quote! {
+            #[automatically_derived]
+            unsafe impl #impl_g crate::util::place::Enclosing for #inst_ty #where_c {
+                type Visible = Self;
+                unsafe fn visible(p: *mut Self) -> *mut Self {
+                    p
+                }
+            }
+        },
+    };
+
     // An At is crate-private, as place.rs is - so is an init() taking one
     let (vis, at_param) = match at {
         Some(ty) => (quote!(pub(crate)), Some(quote!(at: #ty))),
@@ -146,6 +188,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             }
         }
         #(#field_impls)*
+        #enclosing
     })
 }
 
@@ -179,6 +222,11 @@ pub(crate) fn initializer(a: &Attribute, name: &Ident) -> syn::Result<TokenStrea
 /// Whether field type @ty is a Placed<C, A>.
 fn is_placed(ty: &Type) -> bool {
     matches!(ty, Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "Placed"))
+}
+
+/// Whether At type @ty is an AtInner: its struct placed in a Wrapper.
+fn is_at_inner(ty: &Type) -> bool {
+    matches!(ty, Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "AtInner"))
 }
 
 // ── ReffedWork fields ───────────────────────────────────────────────────────

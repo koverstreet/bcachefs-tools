@@ -248,6 +248,56 @@ where
     }
 }
 
+/// A type holding one value, at INNER_OFFSET - a Locked's protected data -
+/// for a type placed in it: #[placed(Base.field.*)].
+///
+/// # Safety
+/// Self holds an Inner at INNER_OFFSET, for as long as Self is.
+pub(crate) unsafe trait Wrapper {
+    type Inner;
+    const INNER_OFFSET: usize;
+}
+
+/// Proof that what holds it was made as the Inner of B's field N, a Wrapper -
+/// by at_inner(), which alone makes one. Zero bytes, as At.
+#[repr(C)]
+pub(crate) struct AtInner<B, const N: u64> {
+    _c:   UnsafeCell<[u8; 0]>,
+    _b:   PhantomData<fn() -> B>,
+    _pin: PhantomData<PhantomPinned>,
+}
+
+unsafe impl<B, const N: u64> Sync for AtInner<B, N> {}
+
+impl<B, const N: u64> sealed::Sealed for AtInner<B, N> {}
+
+impl<B: Field<N>, const N: u64> Place for AtInner<B, N>
+where
+    B::Type: Wrapper,
+{
+    type Base = B;
+    type Type = <B::Type as Wrapper>::Inner;
+    fn offset(&self) -> usize {
+        B::OFFSET + <B::Type as Wrapper>::INNER_OFFSET
+    }
+}
+
+/// What a value placed in Self has for its parent: Self - or, Self placed in
+/// a Wrapper, the struct holding that, as a Locked's data is had only with
+/// its lock held, and what's placed in it is had without. #[derive(Init)]
+/// implements it, on every struct, as its At says.
+///
+/// # Safety
+/// visible() of a live Self is the live Visible it's in, or Self.
+pub(crate) unsafe trait Enclosing {
+    type Visible;
+
+    /// # Safety
+    /// @p points to a live Self.
+    #[doc(hidden)]
+    unsafe fn visible(p: *mut Self) -> *mut Self::Visible;
+}
+
 /// The At for B's field N, given to @init - the field's type's initializer -
 /// for the initializer it returns. Only #[placed]'s InitAt calls it.
 ///
@@ -278,6 +328,23 @@ where
     I: PinInit<<B::Type as Array>::Elem, E>,
 {
     init(AtIndex { index: X::from_usize(i), _c: UnsafeCell::new([]), _b: PhantomData, _pin: PhantomData })
+}
+
+/// The AtInner for the Inner of B's field N, given to @init - the field's
+/// initializer, which gives it to the Inner's - for the initializer it
+/// returns. Only B's #[derive(Init)] calls it, for a field with
+/// #[init_locked], and writes @init.
+///
+/// # Safety
+/// What it returns is run into B's field N, of a B being initialized, and
+/// gives the AtInner to the Inner's initializer, run into the Inner.
+#[doc(hidden)]
+pub(crate) unsafe fn at_inner<B: Field<N>, const N: u64, I, E>(init: impl FnOnce(AtInner<B, N>) -> I) -> I
+where
+    B::Type: Wrapper,
+    I: PinInit<B::Type, E>,
+{
+    init(AtInner { _c: UnsafeCell::new([]), _b: PhantomData, _pin: PhantomData })
 }
 
 /// B's field N's initializer, where a placed type lives there: #[placed]
@@ -347,11 +414,12 @@ where
 /// Self has a field of type Self::At, so a Self is had only from an
 /// initializer at() was given.
 pub(crate) unsafe trait Contained: Sized {
-    /// What it's the field of.
+    /// What it's the field of - or, that placed in a Wrapper, the struct
+    /// holding it: its Base's Enclosing.
     type Parent;
     /// Its proof - which ties Parent to where at() made it.
     #[doc(hidden)]
-    type At: Place<Type = Self, Base = Self::Parent>;
+    type At: Place<Type = Self, Base: Enclosing<Visible = Self::Parent>>;
 
     /// Its At field, of the Self at @p.
     ///
@@ -383,9 +451,12 @@ pub(crate) unsafe fn container_of<'a, T: Contained>(p: *const T) -> &'a T::Paren
 /// # Safety
 /// @p points to a live Self, initialized.
 pub(crate) unsafe fn container_of_raw<T: Contained>(p: *mut T) -> *mut T::Parent {
-    // SAFETY: Contained's - p is in a parent, its At's offset() in it, the At
-    // fixed once made
-    unsafe { p.byte_sub((*T::placed_at_raw(p)).offset()).cast() }
+    // SAFETY: Contained's - p is in its At's Base, at its offset(), the At
+    // fixed once made - and Enclosing's
+    unsafe {
+        let base = p.byte_sub((*T::placed_at_raw(p)).offset()).cast::<<T::At as Place>::Base>();
+        <<T::At as Place>::Base as Enclosing>::visible(base)
+    }
 }
 
 /// C, at the field A names - at!(Fs.ro_ref) - so container() is the struct
@@ -400,8 +471,8 @@ pub struct Placed<C, A> {
     _placed_at: A,
 }
 
-unsafe impl<C, A: Place<Type = Self>> Contained for Placed<C, A> {
-    type Parent = A::Base;
+unsafe impl<C, A: Place<Type = Self, Base: Enclosing>> Contained for Placed<C, A> {
+    type Parent = <A::Base as Enclosing>::Visible;
     type At = A;
 
     unsafe fn placed_at_raw(p: *const Self) -> *const A {

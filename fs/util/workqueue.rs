@@ -24,7 +24,7 @@
 use crate::c;
 use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
-use crate::util::place::{OnePath, Path, Place, Contained, Within};
+use crate::util::place::{Contained, Enclosing, OnePath, Path, Place, Within};
 use crate::util::refcount::{RefGuard, TryRefcount};
 use bitflags::bitflags;
 use core::cell::UnsafeCell;
@@ -288,7 +288,7 @@ macro_rules! new_delayed_work {
 /// At is that field's, and only its initializer makes a ReffedWork<Self, _>.
 pub(crate) unsafe trait WorkFunc: Sized + 'static {
     #[doc(hidden)]
-    type At: Place;
+    type At: Place<Base: Enclosing<Visible = <Self::At as Place>::Base>>;
 
     fn run(p: &<Self::At as Place>::Base);
 }

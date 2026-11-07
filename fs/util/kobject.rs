@@ -17,7 +17,7 @@ use core::ptr::NonNull;
 
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
-use crate::util::place::{container_of_raw, Place, Placed};
+use crate::util::place::{container_of_raw, Enclosing, Place, Placed};
 use crate::util::sysfs::{self, Dir, Files};
 
 /// A sysfs file read and written in pages at an offset: a bin_attribute,
@@ -141,7 +141,7 @@ pub(crate) unsafe trait KobjPlace {
     unsafe fn owner(kobj: *mut c::kobject) -> *mut Self::Owner;
 }
 
-unsafe impl<A: Place<Type = Self>> KobjPlace for Placed<Kobject, A> {
+unsafe impl<A: Place<Type = Self, Base: Enclosing<Visible = A::Base>>> KobjPlace for Placed<Kobject, A> {
     type Owner = A::Base;
 
     unsafe fn owner(kobj: *mut c::kobject) -> *mut A::Base {

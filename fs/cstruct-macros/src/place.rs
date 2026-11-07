@@ -2,10 +2,12 @@
 //! The macro side of util/place.rs - a value's place, the field of a parent
 //! it lives at.
 //!
-//! `#[placed(Base.field)]`, or `#[placed(Base.field[], index = NAME: TYPE)]`
-//! for an element of that array - or of the Array there - ahead of `#[pin_data]` and the derives, is
-//! all a placed type says, and all its parent needs - `[..]` for an element
-//! of the Container there is below. It gives the struct:
+//! `#[placed(Base.field)]`, `#[placed(Base.field.*)]` for the Inner of the
+//! Wrapper there - a Locked's data - or `#[placed(Base.field[], index =
+//! NAME: TYPE)]` for an element of the array there, or of the Array there,
+//! ahead of `#[pin_data]` and the derives, is all a placed type says, and
+//! all its parent needs - `[..]` for an element of the Container there is
+//! below. It gives the struct:
 //!
 //! - its At field, `#[placed_at]` - `_placed_at`, zero bytes, char[0] to C;
 //!   or an element's index, NAME, its AtIndex C's TYPE - for the derives
@@ -15,7 +17,8 @@
 //! - InitAt for Base's field - its init(), the At from at(), or for an
 //!   array each element's from at_index() - which Base's `#[derive(Init)]`
 //!   picks for the field: so an At is made only for the field it names, and
-//!   nothing is written on the parent;
+//!   nothing is written on the parent. An Inner has none: Base's
+//!   #[init_locked] field makes it, its AtInner from at_inner();
 //! - its #[cfg]s, on all of these;
 //! - no drop of its own: its container() would see a parent partly dropped.
 //!   A #[pin_data] struct can't impl Drop, and #[pin_data(PinnedDrop)] is
@@ -48,6 +51,7 @@ use crate::cstruct::CFieldDef;
 /// element of the Container there.
 enum Kind {
     Field,
+    Inner,
     Array(Ident, Type),
     Container,
 }
@@ -58,8 +62,9 @@ pub(crate) struct PlaceAttr {
     kind:  Kind,
 }
 
-const USAGE: &str = "takes Base.field; Base.field[], index = NAME: TYPE, for an element of the array there, its \
-                     index the field NAME of integer TYPE; or Base.field[..], for an element of the Container there";
+const USAGE: &str = "takes Base.field; Base.field.*, for the Inner of the Wrapper there; Base.field[], index = \
+                     NAME: TYPE, for an element of the array there, its index the field NAME of integer TYPE; or \
+                     Base.field[..], for an element of the Container there";
 
 impl Parse for PlaceAttr {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -67,6 +72,14 @@ impl Parse for PlaceAttr {
         let base = Path::parse_mod_style(input).map_err(usage)?;
         input.parse::<Token![.]>().map_err(usage)?;
         let field: Ident = input.parse().map_err(usage)?;
+        if input.peek(Token![.]) {
+            input.parse::<Token![.]>()?;
+            input.parse::<Token![*]>().map_err(usage)?;
+            if !input.is_empty() {
+                return Err(usage(input.error("unexpected tokens")));
+            }
+            return Ok(PlaceAttr { base, field, kind: Kind::Inner });
+        }
         // Some(container): [..] or []
         let elem = match input.peek(token::Bracket) {
             true => {
@@ -142,6 +155,11 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
     let empty_at = || (format_ident!("{AT_FIELD}"), format!("char {AT_FIELD}[0]"));
     let (at, (at_field, at_decl)) = match &kind {
         Kind::Field => (quote!(crate::util::place::At<#base, #n>), empty_at()),
+        /* named for its field: C has a Locked's data as the parent's members */
+        Kind::Inner => {
+            let f = format!("{INNER_AT_FIELD}{field}");
+            (quote!(crate::util::place::AtInner<#base, #n>), (format_ident!("{f}"), format!("char {f}[0]")))
+        }
         Kind::Array(idx, ty) => {
             let c_ty = match crate::cstruct::field_type(&ty.to_token_stream().to_string()) {
                 Ok(crate::cstruct::FieldType::Named { c: Some(c), .. }) => c,
@@ -178,20 +196,22 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
         }
     };
 
-    // A field's or an array element's: Contained, its InitAt, and no drop of
-    // its own. A container's element: PlacedIn, its container's InitAt -
-    // and its drop is its own, the container whole while it runs
+    // A field's, a Wrapper's Inner or an array element's: Contained, its
+    // InitAt - but an Inner's, which its Base's #[init_locked] makes - and no
+    // drop of its own. A container's element: PlacedIn, its container's
+    // InitAt - and its drop is its own, the container whole while it runs
     let impls = match &kind {
-        Kind::Field | Kind::Array(..) => {
+        Kind::Field | Kind::Inner | Kind::Array(..) => {
             if pin_data == Some(true) {
                 return Err(Error::new_spanned(&name, format!(
                     "{name}: a placed type has no drop of its own - its container() would see a parent partly \
                      dropped - so not #[pin_data(PinnedDrop)]")));
             }
             let init = match &kind {
-                Kind::Field => quote!(crate::util::place::at(#name::init)),
-                _ => quote!(<<Self as crate::util::place::Field<#n>>::Type as crate::util::place::Array>::init_each(
-                    |i| unsafe { crate::util::place::at_index(i, #name::init) })),
+                Kind::Field => Some(quote!(crate::util::place::at(#name::init))),
+                Kind::Inner => None,
+                _ => Some(quote!(<<Self as crate::util::place::Field<#n>>::Type as crate::util::place::Array>::init_each(
+                    |i| unsafe { crate::util::place::at_index(i, #name::init) }))),
             };
             // #[pin_data]'s own check refuses a Drop; without it, this is the
             // one a Drop of its own would conflict with
@@ -202,14 +222,14 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
                     fn drop(&mut self) {}
                 }
             });
-            let init_at = init_at(init);
+            let init_at = init.map(init_at);
             quote! {
                 #(#cfgs)*
                 #[automatically_derived]
                 // SAFETY: its At field, which its init() takes - given by InitAt's,
                 // from at() or at_index(), for the place the At names
                 unsafe impl crate::util::place::Contained for #name {
-                    type Parent = #base;
+                    type Parent = <#base as crate::util::place::Enclosing>::Visible;
                     type At = #at;
                     unsafe fn placed_at_raw(p: *const Self) -> *const Self::At {
                         // SAFETY: the caller's
@@ -240,10 +260,13 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
 /// The At field #[placed] adds, where there's no index for it to be.
 const AT_FIELD: &str = "_placed_at";
 
+/// An Inner's, then its field's name.
+const INNER_AT_FIELD: &str = "_placed_in_";
+
 /// Whether @f is an At of no bytes - not an element's index - which
 /// TypeInfo doesn't describe.
 pub(crate) fn is_empty_at_field(f: &CFieldDef) -> bool {
-    f.placed_at && f.name == AT_FIELD
+    f.placed_at && (f.name == AT_FIELD || f.name.starts_with(INNER_AT_FIELD))
 }
 
 /// Field<N> for field @name, of type @ty, of @inst_ty - @impl_g and @where_c
