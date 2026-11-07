@@ -9,7 +9,9 @@ use crate::btree::node::NodeContents;
 use crate::c;
 use crate::format::{Bpos, BkeyType};
 use crate::util::kernel::likely;
-use crate::util::vstructs::{cast_plain_slice, plain_bytes, plain_bytes_mut, Unsized, Unvalidated};
+use crate::util::vstructs::{cast_plain_slice, cast_plain_slice_mut, plain_bytes, plain_bytes_mut, vstruct,
+                            Unsized, Unvalidated, VstructMut, VstructRef};
+use cstruct_macros::Plain;
 
 /// V, as a BkeyI's, is the key's type and state - only a marker: where the
 /// value starts is the node's format's.
@@ -19,22 +21,54 @@ pub struct BkeyP<V: ?Sized = FamilyVal<AllTypes>> {
     data: [u64],
 }
 
-/// bkey_packed's first three bytes: bkey_packed itself is padded to a bkey's
-/// size, so a reference to one reaches past a short key.
-#[repr(C)]
-pub(super) struct Header {
+/// A packed key's first u64, its u64s, format and type the first three bytes:
+/// bkey_packed itself is padded to a bkey's size, so a reference to one
+/// reaches past a short key. What every key has, so the entry a bset's keys
+/// are walked by.
+#[repr(C, align(8))]
+#[derive(Plain)]
+pub struct BkeyPHeader {
     pub(super) u64s:        u8,
     pub(super) format_bits: c::bkey_format_bits,
     pub(super) type_:       u8,
+    _key:                   [u8; 5],
 }
+vstruct!(BkeyPHeader, u64s, start = 0);
 
-impl Header {
+impl BkeyPHeader {
     pub(super) fn of(w: &u64) -> &Self {
         unsafe { &*(w as *const u64).cast() }
     }
 
     pub(super) fn of_mut(w: &mut u64) -> &mut Self {
         unsafe { &mut *(w as *mut u64).cast() }
+    }
+
+    pub fn u64s(&self) -> usize {
+        self.u64s as usize
+    }
+
+    pub fn format(&self) -> u8 {
+        self.format_bits.format()
+    }
+
+    pub fn is_packed(&self) -> bool {
+        let format = self.format() as u32;
+        if cfg!(CONFIG_BCACHEFS_DEBUG) {
+            assert!(format <= c::KEY_FORMAT_CURRENT, "key of format {format}");
+        }
+        format != c::KEY_FORMAT_CURRENT
+    }
+
+    pub fn key_u64s(&self, f: &c::bkey_format) -> usize {
+        if self.is_packed() { f.key_u64s as usize } else { BKEY_U64S }
+    }
+
+    /// Its value fits a bkey_i's, once unpacked.
+    pub fn u64s_valid(&self, f: &c::bkey_format) -> bool {
+        self.u64s()
+            .checked_sub(self.key_u64s(f))
+            .is_some_and(|v| v <= u8::MAX as usize - BKEY_U64S)
     }
 }
 
@@ -69,6 +103,21 @@ impl BkeyP {
     }
 }
 
+const WALKED: &str = "a walked key: whole u64s, all of it there";
+
+/// A key walked out of a bset, its u64s checked against what was left.
+impl<'a> VstructRef<'a, BkeyPHeader> {
+    pub fn key(&self) -> &'a BkeyP<FamilyVal<AllTypes, Unvalidated>> {
+        BkeyP::from_slice(cast_plain_slice(self.as_bytes()).expect(WALKED)).expect(WALKED)
+    }
+}
+
+impl<'a> VstructMut<'a, BkeyPHeader> {
+    pub fn into_key_mut(self) -> &'a mut BkeyP<FamilyVal<AllTypes, Unvalidated>> {
+        BkeyP::from_slice_mut(cast_plain_slice_mut(self.into_bytes()).expect(WALKED)).expect(WALKED)
+    }
+}
+
 impl<V: ?Sized> BkeyP<V> {
     pub fn as_ffi(&self) -> *const c::bkey_packed {
         (self as *const Self).cast()
@@ -90,16 +139,16 @@ impl<V: ?Sized> BkeyP<V> {
         unsafe { &mut *(self as *mut Self as *mut BkeyP<W>) }
     }
 
-    fn header(&self) -> &Header {
-        unsafe { &*self.as_ffi().cast::<Header>() }
+    fn header(&self) -> &BkeyPHeader {
+        unsafe { &*self.as_ffi().cast::<BkeyPHeader>() }
     }
 
-    fn header_mut(&mut self) -> &mut Header {
-        unsafe { &mut *self.as_ffi_mut().cast::<Header>() }
+    fn header_mut(&mut self) -> &mut BkeyPHeader {
+        unsafe { &mut *self.as_ffi_mut().cast::<BkeyPHeader>() }
     }
 
     pub fn u64s(&self) -> usize {
-        self.header().u64s as usize
+        self.header().u64s()
     }
 
     pub fn bytes(&self) -> usize {
@@ -107,15 +156,11 @@ impl<V: ?Sized> BkeyP<V> {
     }
 
     pub fn format(&self) -> u8 {
-        self.header().format_bits.format()
+        self.header().format()
     }
 
     pub fn is_packed(&self) -> bool {
-        let format = self.format() as u32;
-        if cfg!(CONFIG_BCACHEFS_DEBUG) {
-            assert!(format <= c::KEY_FORMAT_CURRENT, "key of format {format}");
-        }
-        format != c::KEY_FORMAT_CURRENT
+        self.header().is_packed()
     }
 
     pub fn needs_whiteout(&self) -> bool {
@@ -135,18 +180,15 @@ impl<V: ?Sized> BkeyP<V> {
     }
 
     pub fn key_u64s(&self, f: &c::bkey_format) -> usize {
-        if self.is_packed() { f.key_u64s as usize } else { BKEY_U64S }
+        self.header().key_u64s(f)
     }
 
     pub fn key_bytes(&self, f: &c::bkey_format) -> usize {
         self.key_u64s(f) * size_of::<u64>()
     }
 
-    /// Its value fits a bkey_i's, once unpacked.
     pub fn u64s_valid(&self, f: &c::bkey_format) -> bool {
-        self.u64s()
-            .checked_sub(self.key_u64s(f))
-            .is_some_and(|v| v <= u8::MAX as usize - BKEY_U64S)
+        self.header().u64s_valid(f)
     }
 
     fn is_bkey_i(&self) -> bool {
