@@ -163,6 +163,13 @@ impl<'b> KeyRoom<'b> {
         KeyRoom { buf }
     }
 
+    /// The key at the front of @buf, as it is, with the rest of @buf to grow
+    /// into.
+    pub fn existing(buf: &'b mut [u64]) -> Self {
+        assert!(buf.len() >= BKEY_U64S, "room of {} u64s, short of a key's header", buf.len());
+        KeyRoom { buf }
+    }
+
     pub fn key(&self) -> &BkeyI {
         keys(self.buf).next().expect("a key in its room")
     }

@@ -538,6 +538,23 @@ impl DelayedWork {
         unsafe { c::bch2_queue_delayed_work(wq.as_ptr(), self.as_ptr(), delay) }
     }
 
+    /// Run on @wq after @delay jiffies, from now - re-armed if it was already
+    /// queued: mod_delayed_work().
+    pub fn modify(&self, wq: &Queue, delay: c_ulong) -> bool {
+        #[cfg(kernel)]
+        return unsafe {
+            kernel::bindings::mod_delayed_work_on(kernel::bindings::wq_misc_consts_WORK_CPU_UNBOUND as c_int,
+                                                  wq.as_ptr().cast(), self.as_ptr().cast(), delay as usize)
+        };
+        #[cfg(not(kernel))]
+        unsafe { c::mod_delayed_work(wq.as_ptr(), self.as_ptr(), delay) }
+    }
+
+    /// Not queued any more - a run under way still runs: cancel_delayed_work().
+    pub fn cancel(&self) -> bool {
+        unsafe { c::cancel_delayed_work(self.as_ptr()) }
+    }
+
     /// Not queued any more, and not running - waiting out a run that is:
     /// cancel_delayed_work_sync(). Whether it was pending.
     pub fn cancel_sync(&self) -> bool {

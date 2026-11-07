@@ -95,9 +95,10 @@ const blk_status_t RUST_CONST_HELPER_BLK_STS_OFFLINE		= BLK_STS_OFFLINE;
 const blk_status_t RUST_CONST_HELPER_BLK_STS_DURATION_LIMIT	= BLK_STS_DURATION_LIMIT;
 const blk_status_t RUST_CONST_HELPER_BLK_STS_INVAL		= BLK_STS_INVAL;
 
-/* data/read.rs's allocations: the kernel crate binds neither */
+/* data/read.rs's and journal/write.rs's allocations: the kernel crate binds none */
 const gfp_t RUST_CONST_HELPER_GFP_NOIO			= GFP_NOIO;
 const gfp_t RUST_CONST_HELPER___GFP_SKIP_ZERO		= __GFP_SKIP_ZERO;
+const gfp_t RUST_CONST_HELPER___GFP_NORETRY		= __GFP_NORETRY;
 
 /* a notifier's answer, as reconcile's power supply notifier gives it */
 const int RUST_CONST_HELPER_NOTIFY_OK			= NOTIFY_OK;

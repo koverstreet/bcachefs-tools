@@ -317,15 +317,18 @@ impl Fs {
         write!(out, "Btree write point\n");
         self.write_point_to_text(out, &a.btree_write_point);
     }
+
+    pub fn reset_alloc_cursors(&self) {
+        let rcu = crate::util::rcu::read_lock();
+        for ca in self.devs_rcu(&rcu) {
+            ca.alloc_cursor.iter().for_each(|cursor| cursor.set(0));
+        }
+    }
 }
 
 // ── For C ────────────────────────────────────────────────────────────────
 
 #[c_export]
 pub fn bch2_reset_alloc_cursors(c: &Opaque<Fs>) {
-    let fs = Fs::from_c(c);
-    let rcu = crate::util::rcu::read_lock();
-    for ca in fs.devs_rcu(&rcu) {
-        ca.alloc_cursor.iter().for_each(|cursor| cursor.set(0));
-    }
+    Fs::from_c(c).reset_alloc_cursors()
 }

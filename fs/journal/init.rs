@@ -210,7 +210,7 @@ impl c::journal {
         let enomem = || fs.err(bch_errcode::BCH_ERR_ENOMEM_journal_buf);
         let size = c::JOURNAL_ENTRY_SIZE_MIN;
 
-        let buf = c::JsetBuf::new(size).map_err(|_| enomem())?;
+        let buf = c::JsetBuf::new(size, c::GFP_KERNEL).map_err(|_| enomem())?;
 
         /*
          * in_flight holds one entry per seq in (seq_ondisk, cur_seq]. Size is

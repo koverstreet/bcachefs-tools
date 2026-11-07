@@ -115,6 +115,12 @@ pub fn plugged<R>(f: impl FnOnce() -> R) -> R {
     ret
 }
 
+/* Userspace's block layer has no plug: */
+#[cfg(not(kernel))]
+pub fn plugged<R>(f: impl FnOnce() -> R) -> R {
+    f()
+}
+
 #[cfg(kernel)]
 pub use iter::{FolioVec, Folios};
 pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Segment, Segments, Walk};

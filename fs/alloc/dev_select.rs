@@ -187,28 +187,30 @@ impl Fs {
             }
         });
     }
+
+    /// The journal's: its domain keys in @domain_keys, not an alloc_request.
+    pub fn dev_alloc_list_devs(&self, stripe: &mut c::dev_stripe_state, devs: &c::bch_devs_mask,
+                               devs_chosen: &c::bch_devs_mask, domain_keys: &mut [u64; NR_DEVS],
+                               ret: &mut c::dev_alloc_list) {
+        {
+            let rcu = read_lock();
+            for i in devs.d.iter() {
+                domain_keys[i] = self.dev_domain_key(devs_chosen, i as u32, &rcu);
+            }
+        }
+        stripe.alloc_list(devs, domain_keys, None, ret);
+    }
 }
 
 // ── For C ────────────────────────────────────────────────────────────────
 
-/// The journal's: its domain keys in @domain_keys, not an alloc_request.
-///
 /// # Safety
 /// @domain_keys is BCH_SB_MEMBERS_MAX u64s.
 #[c_export]
 pub unsafe fn bch2_dev_alloc_list_devs(c: &Opaque<Fs>, stripe: &mut c::dev_stripe_state,
                                        devs: &c::bch_devs_mask, devs_chosen: &c::bch_devs_mask,
                                        domain_keys: *mut u64, ret: &mut c::dev_alloc_list) {
-    let fs = Fs::from_c(c);
-    // SAFETY: the caller's
-    let domain_keys = unsafe { &mut *domain_keys.cast::<[u64; NR_DEVS]>() };
-    {
-        let rcu = read_lock();
-        for i in devs.d.iter() {
-            domain_keys[i] = fs.dev_domain_key(devs_chosen, i as u32, &rcu);
-        }
-    }
-    stripe.alloc_list(devs, domain_keys, None, ret);
+    Fs::from_c(c).dev_alloc_list_devs(stripe, devs, devs_chosen, unsafe { &mut *domain_keys.cast() }, ret)
 }
 
 #[c_export]

@@ -384,6 +384,26 @@ pub fn kvzalloc(size: usize) -> Result<core::ptr::NonNull<u8>, AllocError> {
     kvrealloc_zeroed(core::ptr::null_mut(), 0, size)
 }
 
+/// kvzalloc(), with @gfp: for the rare allocation that needs a flag Flags
+/// doesn't name - __GFP_NORETRY. kvfree_sized() takes it back.
+pub fn kvzalloc_gfp(size: usize, gfp: crate::c::gfp_t) -> Result<core::ptr::NonNull<u8>, AllocError> {
+    let layout = kv_layout(size)?;
+    #[cfg(kernel)]
+    {
+        use kernel::bindings::{kvrealloc_node_align, NUMA_NO_NODE};
+
+        let gfp = current_gfp_context_raw(gfp | crate::c::__GFP_ZERO);
+        core::ptr::NonNull::new(unsafe {
+            kvrealloc_node_align(core::ptr::null(), size, layout.align() as _, gfp, NUMA_NO_NODE)
+        }.cast()).ok_or(AllocError)
+    }
+    #[cfg(not(kernel))]
+    {
+        let _ = gfp;
+        core::ptr::NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }).ok_or(AllocError)
+    }
+}
+
 /// @p, @old bytes of kvmalloc()'d memory - or none, null - as @new bytes,
 /// what was there kept and the rest zeroed: kvrealloc(), __GFP_ZERO.
 /// Aligned as kmalloc() aligns @new. kvfree_sized() takes it back.

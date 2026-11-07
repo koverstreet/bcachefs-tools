@@ -2093,6 +2093,13 @@ pub struct jset {
 vstruct!(unsized jset, u64s);
 vstruct_container!(jset, jset_entry);
 
+impl jset__head {
+    /// By what holds it, which has room for its entries.
+    pub fn set_u64s(&mut self, u64s: usize) {
+        self.u64s.set(u64s as u32);
+    }
+}
+
 /* A journal entry's keys, Views as its walk yields them: each one's header is whole. */
 floored_by_self!(bkey_i);
 

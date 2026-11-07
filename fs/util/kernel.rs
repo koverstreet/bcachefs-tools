@@ -249,6 +249,11 @@ pub fn time_after(a: core::ffi::c_ulong, b: core::ffi::c_ulong) -> bool {
     (b.wrapping_sub(a) as core::ffi::c_long) < 0
 }
 
+/// Whether jiffies @a is @b or after it, across a wrap: time_after_eq().
+pub fn time_after_eq(a: core::ffi::c_ulong, b: core::ffi::c_ulong) -> bool {
+    (a.wrapping_sub(b) as core::ffi::c_long) >= 0
+}
+
 /// Whether jiffies @a is in [@b, @c], across a wrap: time_in_range().
 pub fn time_in_range(a: core::ffi::c_ulong, b: core::ffi::c_ulong, c: core::ffi::c_ulong) -> bool {
     !time_after(b, a) && !time_after(a, c)

@@ -272,6 +272,16 @@ impl DevlistEntry {
     }
 }
 
+impl PartialEq for DevlistEntry {
+    /* Zeroed, then filled in: bytewise is bch2_replicas_entry_eq() */
+    fn eq(&self, other: &Self) -> bool {
+        let bytes = |r: &c::bch_replicas_padded| unsafe {
+            core::slice::from_raw_parts(core::ptr::from_ref(r).cast::<u8>(), size_of::<c::bch_replicas_padded>())
+        };
+        bytes(&self.0) == bytes(&other.0)
+    }
+}
+
 impl core::ops::Deref for DevlistEntry {
     type Target = Entry;
 

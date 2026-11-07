@@ -183,7 +183,7 @@ const COMMON_BYTES: usize = size_of::<c::jset_entry_usage>() + 2 * size_of::<c::
 
 /// The entries every journal write carries, and the clean section: the key
 /// version, and both io clocks' times.
-fn super_entries_add_common(fs: &Fs, w: &mut EntryWriter<'_>) -> Result<(), NoRoom> {
+pub(crate) fn super_entries_add_common(fs: &Fs, w: &mut EntryWriter<'_>) -> Result<(), NoRoom> {
     let mut u = c::jset_entry_usage::default();
     u.entry.type_ = c::bch_jset_entry_type::BCH_JSET_ENTRY_usage.0 as u8;
     u.entry.btree_id = c::bch_fs_usage_type::BCH_FS_USAGE_key_version.0 as u8;

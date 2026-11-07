@@ -7,9 +7,9 @@ use crate::fs::{Dev, Fs};
 use crate::cstructs::c;
 use crate::data::ptrs::IoFailures;
 use crate::types::{CacheAligned, DArray, Fifo, RustOnly, c_default, rust_only};
-use crate::util::alloc::{kvfree_sized, kvzalloc, AllocError, KVVec};
+use crate::util::alloc::{kvfree_sized, kvzalloc_gfp, AllocError, KVVec};
 use crate::util::projections::Volatile;
-use crate::util::vstructs::Head;
+use crate::util::vstructs::{from_ffi, from_ffi_mut, Head, Unvalidated};
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64};
 use crate::journal::buckets::{drop_retired, JournalBuckets};
@@ -47,8 +47,47 @@ pub struct JsetBuf {
 unsafe impl ::pin_init::Zeroable for JsetBuf {}
 
 impl JsetBuf {
-    pub fn new(size: c_uint) -> Result<Self, AllocError> {
-        Ok(JsetBuf { data: kvzalloc(size as usize)?.as_ptr().cast(), size })
+    pub fn new(size: c_uint, gfp: c::gfp_t) -> Result<Self, AllocError> {
+        Ok(JsetBuf { data: kvzalloc_gfp(size as usize, gfp)?.as_ptr().cast(), size })
+    }
+
+    pub fn size(&self) -> c_uint {
+        self.size
+    }
+
+    pub fn as_ptr(&self) -> *mut Head<c::jset> {
+        self.data
+    }
+
+    pub fn head(&self) -> &Head<c::jset> {
+        unsafe { &*self.data }
+    }
+
+    pub fn head_mut(&mut self) -> &mut Head<c::jset> {
+        unsafe { &mut *self.data }
+    }
+
+    pub fn jset(&self) -> &c::jset<Unvalidated> {
+        unsafe { from_ffi(self.data) }
+    }
+
+    pub fn jset_mut(&mut self) -> &mut c::jset<Unvalidated> {
+        unsafe { from_ffi_mut(self.data) }
+    }
+
+    /// The whole buffer, its jset and the room past it.
+    pub fn bytes_mut(&mut self) -> &mut [u8] {
+        unsafe { core::slice::from_raw_parts_mut(self.data.cast(), self.size as usize) }
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.data.cast(), self.size as usize) }
+    }
+}
+
+impl Default for JsetBuf {
+    fn default() -> Self {
+        JsetBuf { data: core::ptr::null_mut(), size: 0 }
     }
 }
 
