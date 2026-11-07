@@ -139,13 +139,17 @@ impl Keys {
         }
     }
 
-    /// Past the key peeked: false at the btree's end - or for a walk forwards,
-    /// when the key ended at SPOS_MAX and the position can't move on, as the
-    /// rightmost key of any interior node level does. Looping again would
-    /// peek the same key forever.
+    /// Past the key peeked, in the direction peek() went - backwards for
+    /// Reverse, and for Max with prev: bch2_btree_iter_advance_type(). False
+    /// at the btree's end - or for a walk forwards, when the key ended at
+    /// SPOS_MAX and the position can't move on, as the rightmost key of any
+    /// interior node level does. Looping again would peek the same key
+    /// forever.
     fn advance(self, paths: &mut Paths<'_>, iter: &mut BtreeIter<'_>) -> bool {
         match self {
             Keys::Reverse(_) => iter.rewind_in(paths),
+            Keys::Max(_, flags) | Keys::InSubvolume(_, flags, _)
+                if flags.contains(BtreeIterFlags::PREV) => iter.rewind_in(paths),
             _                => iter.advance_in(paths),
         }
     }
@@ -300,10 +304,10 @@ impl<'t> BtreeIter<'t> {
         }
     }
 
-    /// The keys up to @end, peeking as the iterator's own flags say - for a
-    /// SLOTS iterator, a slot at a time, holes included: the for_each
-    /// family's, as C's loops' are, so no loop can ignore its iterator's
-    /// flags.
+    /// The keys up to @end, walking as the iterator's own flags say - for a
+    /// SLOTS iterator, a slot at a time, holes included; for a PREV one,
+    /// backwards down to @end: the for_each family's, as C's loops' are, so
+    /// no loop can ignore its iterator's flags.
     fn keys_to(&self, end: Bpos) -> Keys {
         Keys::Max(end, self.iter_flags())
     }
@@ -349,15 +353,16 @@ impl<'t> BtreeIter<'t> {
         F: for<'k> FnMut(&'k BtreeIter<'t>, BkeySC<'k>) -> Result<bool, BchError>,
     {
         let mut paths = t.trans().paths();
+        let keys = self.keys_to(end);
         loop {
-            let Some((iter, k)) = self.keys_to(end).peek(t, &mut paths, self)? else {
+            let Some((iter, k)) = keys.peek(t, &mut paths, self)? else {
                 return Ok(None);
             };
 
             if paths.lend(|| f(iter, k))? {
                 return Ok(Some(unsafe { polonius_key(k) }));
             }
-            if !self.advance_in(&mut paths) {
+            if !keys.advance(&mut paths, self) {
                 return Ok(None);
             }
         }
