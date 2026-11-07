@@ -10,19 +10,21 @@ use crate::c;
 use crate::fs::Fs;
 use crate::types::{c_default, Le64};
 use crate::util::kernel::{copy_u64s_small, local_clock, mem_alloc_profiling_enabled};
+use crate::util::mempool::PoolBufZeroed;
 use crate::util::time_stats::TimeStats;
-use crate::util::vstructs::{plain_bytes, Head};
+use crate::util::vstructs::{cast_plain_slice_mut, plain_bytes, Head};
 use crate::data_structures::array_vec::ArrayVec;
 use core::cmp::Ordering;
 use core::ffi::c_uint;
 use core::mem::offset_of;
-use cstruct_macros::{c_enum, c_export, c_name, CStruct};
+use core::ops::Range;
+use cstruct_macros::{c_enum, c_export, c_name, CStruct, Plain};
 
 /// [k, end), offsets into the node's buffer: u32s, as the unwritten whiteouts
 /// run to its end, past a 512k node's last u16.
 #[repr(C)]
 #[c_name(sort_iter_set)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, CStruct, Plain)]
 pub struct SortIterSet {
     pub k:   u32,
     pub end: u32,
@@ -67,6 +69,49 @@ impl SortIterStack {
             self.sets[used] = SortIterSet { k: keys.start as u32, end: keys.end as u32 };
             self.iter.used += 1;
         }
+    }
+}
+
+impl SortIterSet {
+    /// None for an empty run: nothing to merge.
+    fn of(keys: Range<usize>) -> Option<Self> {
+        (!keys.is_empty()).then(|| Self { k: keys.start as u32, end: keys.end as u32 })
+    }
+}
+
+/// The runs a node read merges, in a fill_iter element: room for a run per
+/// block of the node, twice over.
+pub struct SortRuns<'p> {
+    buf:  PoolBufZeroed<'p>,
+    used: usize,
+}
+
+impl<'p> SortRuns<'p> {
+    pub fn new(fs: &'p Fs) -> Self {
+        Self { buf: fs.btree.fill_iter.alloc_zeroed(c::GFP_NOIO), used: 0 }
+    }
+
+    fn runs(&mut self) -> &mut [SortIterSet] {
+        cast_plain_slice_mut(self.buf.as_bytes_mut()).expect("a fill_iter element, sized in runs")
+    }
+
+    /// The node's keys at offsets @keys, to merge.
+    pub fn add(&mut self, keys: Range<usize>) {
+        let used = self.used;
+        let runs = self.runs();
+        assert!(used < runs.len(), "adding to a node read's sort of {} runs, full", runs.len());
+
+        if let Some(run) = SortIterSet::of(keys) {
+            runs[used] = run;
+            self.used += 1;
+        }
+    }
+
+    /// Its runs of @keys merged into @dst, overlapping keys fixed: the u64s
+    /// written, and the keys' accounting.
+    pub fn key_sort_fix_overlapping(&mut self, keys: &Keys<'_>, dst: &mut [u64]) -> (usize, BtreeNrKeys) {
+        let used = self.used;
+        key_sort_fix_overlapping(keys, &mut self.runs()[..used], dst)
     }
 }
 
@@ -631,20 +676,26 @@ unsafe fn push(iter: *mut SortIter, set: SortIterSet) {
 pub unsafe fn bch2_key_sort_fix_overlapping(_fs: &Fs, dst: *mut Head<c::bset>, iter: *mut SortIter) -> BtreeNrKeys {
     let (b, runs) = unsafe { sort_iter(iter) };
     let room = unsafe { core::slice::from_raw_parts_mut((&raw mut (*dst)._data).cast(), runs_u64s(runs)) };
+    let (u64s, nr) = key_sort_fix_overlapping(&b.keys(unsafe { b.contents() }), runs, room);
+
+    unsafe { (*dst).set_u64s(u64s) };
+    nr
+}
+
+fn key_sort_fix_overlapping(keys: &Keys<'_>, runs: &mut [SortIterSet], dst: &mut [u64]) -> (usize, BtreeNrKeys) {
     let mut nr = BtreeNrKeys::default();
 
     /*
      * If keys compare equal, compare by pointer order:
      */
-    let u64s = Merge::new(&b.keys(unsafe { b.contents() }), runs, |l, _, r, _| l.cmp(&r))
+    let u64s = Merge::new(keys, runs, |l, _, r, _| l.cmp(&r))
         .unique(|_, k| !k.key_type().is_deleted())
         .fold(0, |out, (_, k)| {
             nr.account_key_add(0, k);
-            copy_key(room, out, k, |k| set_needs_whiteout(k, true))
+            copy_key(dst, out, k, |k| set_needs_whiteout(k, true))
         });
 
-    unsafe { (*dst).set_u64s(u64s) };
-    nr
+    (u64s, nr)
 }
 
 impl SortIterStack {
