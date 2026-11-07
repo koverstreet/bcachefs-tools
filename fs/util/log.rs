@@ -419,6 +419,14 @@ impl Drop for LogMsg<'_> {
     }
 }
 
+impl Fs {
+    /// Whether to drop a message from @func, by a ratelimit state C keeps -
+    /// and resets: __bch2_ratelimit().
+    pub fn ratelimit_suppress(&self, rs: &c::ratelimit_state, func: &CStr) -> bool {
+        unsafe { bch2_ratelimit_suppress(self.as_ptr(), core::ptr::from_ref(rs).cast_mut(), func.as_ptr().cast()) }
+    }
+}
+
 /// One call site's ratelimit state, for the _ratelimited log macros: as the
 /// static DEFINE_RATELIMIT_STATE() in C's bch2_ratelimit(). The state holds a
 /// spinlock that has to be initialized at runtime, so it's set up on first use.
