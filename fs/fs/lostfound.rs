@@ -124,7 +124,7 @@ fn create_lostfound(
     inode::create(t, &mut iter, &mut lostfound, snapshot, is_32bit)?;
 
     iter.set_snapshot(snapshot);
-    t.iter_traverse(&mut iter)?;
+    iter.traverse(t)?;
 
     let inum = lostfound.bi_inum;
     create_lostfound_dirent(t, &mut msg, root_inum, root_inode, snapshot, inum,

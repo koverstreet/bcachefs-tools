@@ -364,7 +364,7 @@ fn move_dirent_to_inode_snapshots(
     // Delete with the hash info we already have - dirent::fsck_remove()
     // rederives it from the first inode version it finds:
     let mut del_iter = BtreeIter::new(t, Btree::dirents, k.k.p, BtreeIterFlags::INTENT);
-    t.iter_traverse(&mut del_iter)?;
+    del_iter.traverse(t)?;
     str_hash::delete_at::<Dirents>(t, &st.hash_info, &mut del_iter,
                                    UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }

@@ -59,6 +59,11 @@ macro_rules! copy {
     };
 }
 
+/// What a peek found: a key's value - NULL for a hole - its header where the
+/// peek unpacked or copied it - for an iterator's peek, its own, iter->k.
+#[derive(Clone, Copy)]
+pub(crate) struct KeyVal(pub(crate) *const c::bch_val);
+
 /// A path level's node, as C has it: NULL above the root, an error pointer
 /// saying why there's no node, or the node - only had by decoding it. An
 /// enum can't be one pointer, as Rust's only pointer niche is NULL.
@@ -1089,12 +1094,11 @@ impl BtreePath {
         unsafe { &*self.l[level].b.as_ptr().cast::<BtreeNode>() }
     }
 
-    pub(crate) fn peek_slot(&self, u: &mut c::bkey) -> c::bkey_s_c {
+    pub(crate) fn peek_slot(&self, u: &mut c::bkey) -> Option<KeyVal> {
         let level = self.level() as usize;
-        let null = c::bkey_s_c { k: ptr::null_mut(), v: ptr::null_mut() };
 
         if self.l[level].b.is_null() {
-            return null;
+            return None;
         }
 
         ebug_assert!(self.locked(level));
@@ -1106,26 +1110,25 @@ impl BtreePath {
             if let Some(k) = self.l[level].iter.peek_all() {
                 let k = keys.disassemble(k, u);
                 let (ty, p) = (k.k.key_type(), k.k.p);
-                let k: c::bkey_s_c = k.into();
 
                 ebug_assert!(!(ty == BkeyType::deleted && p == self.pos));
 
                 if p == self.pos {
-                    return k;
+                    return Some(KeyVal(k.v));
                 }
             }
 
             *u = c::bkey::new();
             u.p = self.pos;
-            c::bkey_s_c { k: u, v: ptr::null_mut() }
+            Some(KeyVal(ptr::null()))
         } else {
-            let Some(ck) = self.l[0].b.get().ok().flatten() else { return null };
+            let ck = self.l[0].b.get().ok().flatten()?;
             let ck = unsafe { &*ck.as_ptr().cast::<c::bkey_cached>() };
 
             ebug_assert!(Btree(ck.key.btree_id.into()) == self.btree_id() && ck.key.pos == self.pos);
 
             *u = unsafe { (*ck.k).k };
-            c::bkey_s_c { k: u, v: unsafe { &raw mut (*ck.k).v } }
+            Some(KeyVal(unsafe { &raw const (*ck.k).v }))
         }
     }
 
@@ -1489,7 +1492,10 @@ pub fn __bch2_btree_path_set_pos(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &
 
 #[c_export]
 pub fn bch2_btree_path_peek_slot(path: &BtreePath, u: &mut c::bkey) -> c::bkey_s_c {
-    path.peek_slot(u)
+    match path.peek_slot(u) {
+        Some(KeyVal(v)) => c::bkey_s_c { k: u, v },
+        None            => c::bkey_s_c::default(),
+    }
 }
 
 #[c_export]

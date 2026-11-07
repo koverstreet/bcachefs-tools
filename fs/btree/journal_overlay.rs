@@ -511,8 +511,8 @@ impl c::journal_keys {
 
 /// The first key from @pos to @end, not overwritten: searched for, or from
 /// *@idx if it's close, and *@idx left at it for the next.
-pub(crate) fn peek_max(jk: &c::journal_keys, btree: Btree, level: u32, pos: Bpos, end: Bpos, idx: &mut usize)
-    -> *const c::bkey_i
+pub(crate) fn peek_max<'a>(jk: &'a c::journal_keys, btree: Btree, level: u32, pos: Bpos, end: Bpos,
+                           idx: &mut usize) -> Option<&'a BkeyI>
 {
     let keys = jk.keys();
     let mut iters = 0;
@@ -547,7 +547,7 @@ pub(crate) fn peek_max(jk: &c::journal_keys, btree: Btree, level: u32, pos: Bpos
             }
 
             if jk.key_cmp_pos(btree, level, pos, k).is_le() {
-                return jk.key_k(k);
+                return Some(jk.key(k));
             }
 
             *idx += 1;
@@ -557,7 +557,7 @@ pub(crate) fn peek_max(jk: &c::journal_keys, btree: Btree, level: u32, pos: Bpos
                 continue 'search;
             }
         }
-        return ptr::null();
+        return None;
     }
 }
 
@@ -568,6 +568,7 @@ pub(crate) fn peek_max(jk: &c::journal_keys, btree: Btree, level: u32, pos: Bpos
 pub unsafe fn bch2_journal_keys_peek_max(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos,
                                          end: Bpos, idx: &mut usize) -> *const c::bkey_i {
     peek_max(unsafe { Fs::from_c(c).journal_keys_held() }, btree, level, pos, end, idx)
+        .map_or(ptr::null(), BkeyI::as_ffi)
 }
 
 /// peek_max(), backwards: the last key from @pos down to @end.
@@ -578,17 +579,18 @@ pub unsafe fn bch2_journal_keys_peek_max(c: &Opaque<Fs>, btree: Btree, level: c_
 pub unsafe fn bch2_journal_keys_peek_prev_min(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos,
                                               end: Bpos, idx: &mut usize) -> *const c::bkey_i {
     peek_prev_min(unsafe { Fs::from_c(c).journal_keys_held() }, btree, level, pos, end, idx)
+        .map_or(ptr::null(), BkeyI::as_ffi)
 }
 
-pub(crate) fn peek_prev_min(jk: &c::journal_keys, btree: Btree, level: u32, pos: Bpos, end: Bpos, idx: &mut usize)
-    -> *const c::bkey_i
+pub(crate) fn peek_prev_min<'a>(jk: &'a c::journal_keys, btree: Btree, level: u32, pos: Bpos, end: Bpos,
+                                idx: &mut usize) -> Option<&'a BkeyI>
 {
     let keys = jk.keys();
     let mut iters = 0;
 
     assert!(*idx <= keys.len(), "journal key {} of {}", *idx, keys.len());
     if keys.is_empty() {
-        return ptr::null();
+        return None;
     }
     'search: loop {
         if *idx == 0 {
@@ -628,7 +630,7 @@ pub(crate) fn peek_prev_min(jk: &c::journal_keys, btree: Btree, level: u32, pos:
             }
 
             if jk.key_cmp_pos(btree, level, pos, k).is_ge() {
-                return jk.key_k(k);
+                return Some(jk.key(k));
             }
 
             if *idx == 0 {
@@ -641,13 +643,13 @@ pub(crate) fn peek_prev_min(jk: &c::journal_keys, btree: Btree, level: u32, pos:
                 continue 'search;
             }
         }
-        return ptr::null();
+        return None;
     }
 }
 
 /// # Safety
 /// As bch2_journal_keys_peek_max()'s.
-pub(crate) unsafe fn peek_slot(fs: &Fs, btree: Btree, level: u32, pos: Bpos) -> *const c::bkey_i {
+pub(crate) unsafe fn peek_slot(fs: &Fs, btree: Btree, level: u32, pos: Bpos) -> Option<&BkeyI> {
     peek_max(unsafe { fs.journal_keys_held() }, btree, level, pos, pos, &mut 0)
 }
 
@@ -657,7 +659,7 @@ pub(crate) unsafe fn peek_slot(fs: &Fs, btree: Btree, level: u32, pos: Bpos) -> 
 pub unsafe fn bch2_journal_keys_peek_slot(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos)
     -> *const c::bkey_i
 {
-    unsafe { peek_slot(Fs::from_c(c), btree, level, pos) }
+    unsafe { peek_slot(Fs::from_c(c), btree, level, pos) }.map_or(ptr::null(), BkeyI::as_ffi)
 }
 
 /// Whether the journal deletes @pos, before replay's done.

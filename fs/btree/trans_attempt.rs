@@ -1103,11 +1103,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         };
         self.result(ret)
     }
-
-    pub fn iter_traverse(&self, iter: &mut BtreeIter<'a>) -> Result<(), BchError> {
-        let ret = unsafe { c::bch2_btree_iter_traverse(iter.raw_mut()) };
-        self.result(ret)
-    }
 }
 
 impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {

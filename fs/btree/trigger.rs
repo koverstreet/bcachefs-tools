@@ -3,6 +3,7 @@
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{BtreeTrans, TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::btree::path::KeyVal;
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::format::{Bpos, Btree, BkeyType};
@@ -161,21 +162,23 @@ pub unsafe fn bch2_verify_update_old_key(trans: &BtreeTrans<'_>, i: &c::btree_in
 
     let path = unsafe { trans.paths.get().add(i.path as usize) };
     let mut u = c::bkey::new();
-    let mut k = unsafe { (*path).peek_slot(&mut u) };
+    let v = unsafe { (*path).peek_slot(&mut u) };
 
     // bch2_btree_path_peek_slot() for a cached iterator might return a key in a
     // different snapshot:
     let pos = unsafe { (*path).pos };
-    if k.k.is_null() || unsafe { (*k.k).p } != pos {
-        u = c::bkey { p: pos, ..c::bkey::new() };
-        k = c::bkey_s_c { k: &u, v: core::ptr::null() };
-    }
+    let mut k = match v {
+        Some(KeyVal(v)) if u.p == pos => c::bkey_s_c { k: &u, v },
+        _ => {
+            u = c::bkey { p: pos, ..c::bkey::new() };
+            c::bkey_s_c { k: &u, v: core::ptr::null() }
+        }
+    };
 
     if trans.journal_replay_not_finished() {
-        let j = unsafe { crate::btree::journal_overlay::peek_slot(
-            trans.fs(), i.bits.btree_id(), i.bits.level().into(), (*i.k).k.p) };
-        if let Some(j) = unsafe { j.as_ref() } {
-            k = c::bkey_s_c { k: &j.k, v: &j.v };
+        if let Some(j) = unsafe { crate::btree::journal_overlay::peek_slot(
+            trans.fs(), i.bits.btree_id(), i.bits.level().into(), (*i.k).k.p) } {
+            k = c::bkey_s_c { k: &j.k, v: (&raw const j.v).cast() };
         }
     }
 

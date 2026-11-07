@@ -7,8 +7,7 @@ use super::trans_attempt::{is_restart, CommitOpts, TransAttempt};
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::LockedNode;
-use crate::c;
-use crate::errcode::{BchError, bch_errcode, errptr_or_null};
+use crate::errcode::{BchError, bch_errcode};
 use crate::fs::Fs;
 use crate::SPOS_MAX;
 use core::ops::ControlFlow;
@@ -131,9 +130,9 @@ impl Keys {
     {
         match self {
             Keys::Max(end, flags) | Keys::InSubvolume(end, flags, _) =>
-                iter.peek_with(t, &mut |raw| unsafe { (*raw).peek_max_type_raw(end, flags) }),
+                iter.peek_with(t, |iter, paths| iter.peek_max_type_in(paths, end, flags)),
             Keys::Reverse(min) =>
-                iter.peek_with(t, &mut |raw| unsafe { c::bch2_btree_iter_peek_prev_min(raw, min) }),
+                iter.peek_with(t, |iter, paths| iter.peek_prev_min_in(paths, min)),
         }
     }
 
@@ -517,15 +516,13 @@ impl<'t> BtreeNodeIter<'t> {
         F: for<'a> FnMut(LockedNode<'a, BtreeNode>) -> Result<R, BchError>,
         R: LoopControl,
     {
-        let raw = self.raw.raw_mut();
         loop {
             let t = trans.begin();
-            let b = unsafe { c::bch2_btree_iter_peek_node(raw) };
-            let b = match errptr_or_null(b) {
+            let b = match self.peek() {
                 Err(e) if is_restart(&e) => continue,
                 Err(e) => return Err(e),
                 Ok(None) => return Ok(Default::default()),
-                Ok(Some(b)) => unsafe { LockedNode::new(b.as_ref()) },
+                Ok(Some(b)) => b,
             };
 
             t.verify_not_restarted();
@@ -541,12 +538,12 @@ impl<'t> BtreeNodeIter<'t> {
                 Err(e) if is_restart(&e) => continue,
                 Err(e) => return Err(e),
                 Ok(Step::Break(v)) => return Ok(v),
-                Ok(Step::From(pos)) => unsafe { (*raw).set_pos(pos) },
+                Ok(Step::From(pos)) => self.raw.set_pos(pos),
                 Ok(Step::Next) => {
                     if end == SPOS_MAX {
                         return Ok(Default::default());
                     }
-                    unsafe { (*raw).set_pos(end.successor()) };
+                    self.raw.set_pos(end.successor());
                 }
             }
         }

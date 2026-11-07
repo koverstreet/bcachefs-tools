@@ -7,7 +7,7 @@
 pub use super::types::BtreeTrans;
 use super::iter::{CommitOpts, TransAttempt, UpdateTriggerFlags};
 use crate::alloc::capacity::DiskReservation;
-use crate::btree::bkey::{bkey_val_to_text, BkeySC};
+use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC};
 use crate::btree::path::{bch2_trans_paths_exit, bch2_trans_paths_init, BtreePath, PathIdx, Paths};
 use crate::c;
 use crate::data_structures::bitmap::Bitmap;
@@ -193,6 +193,12 @@ impl<'f> BtreeTrans<'f> {
     /// The key updates queued: trans_for_each_update().
     pub(crate) fn queued_updates(&self) -> &[c::btree_insert_entry] {
         unsafe { core::slice::from_raw_parts(self.updates.get(), self.nr_updates.get() as usize) }
+    }
+
+    /// queued_updates(), each with its key: in the transaction's memory while
+    /// it's queued.
+    pub(crate) fn queued_update_keys(&self) -> impl Iterator<Item = (&c::btree_insert_entry, &BkeyI)> {
+        self.queued_updates().iter().map(|i| (i, unsafe { &*BkeyI::from_raw(i.k) }))
     }
 
     /// Whether anything is queued for the next commit: key updates, journal
@@ -996,7 +1002,7 @@ impl BtreeTrans<'_> {
              self.nr_updates.get(), self.fn_name(), self.journal_res.get().seq);
         let mut out = out.indent(2);
 
-        for i in self.queued_updates() {
+        for (i, k) in self.queued_update_keys() {
             let old = BkeySC { k: &i.old_k, v: i.old_v, iter: PhantomData, val: PhantomData };
 
             prt!(out, "update: btree={} cached={} ", i.bits.btree_id(), u32::from(i.bits.cached()));
@@ -1010,7 +1016,7 @@ impl BtreeTrans<'_> {
             prt!(out, "\n");
 
             prt!(out, "new ");
-            bkey_val_to_text(&mut out, Some(c), BkeySC::from_bkey_i(unsafe { &*i.k }));
+            bkey_val_to_text(&mut out, Some(c), BkeySC::from(k));
             prt!(out, "\n");
         }
 

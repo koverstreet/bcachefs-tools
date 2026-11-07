@@ -17,7 +17,7 @@ use crate::btree::locking::bch2_btree_cache_cannibalize_unlock;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::keys::Keys;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{BtreePath, DownKey, LockedNode, NodePtr, PathIdx, Paths};
+use crate::btree::path::{BtreePath, DownKey, KeyVal, LockedNode, NodePtr, PathIdx, Paths};
 use crate::c;
 use crate::debug::trace::events;
 use crate::errcode::{bch_errcode, errptr_to_result, ret_to_c, ret_to_result_void, BchError};
@@ -63,16 +63,16 @@ pub(crate) fn advance_to_pos(iter: &mut KeyIter, keys: &Keys<'_>, pos: &Bpos, ma
     true
 }
 
-fn level_unpack(keys: &Keys<'_>, k: Option<u16>, u: &mut c::bkey) -> c::bkey_s_c {
+fn level_unpack(keys: &Keys<'_>, k: Option<u16>, u: &mut c::bkey) -> Option<KeyVal> {
     match k {
-        Some(k) => keys.disassemble(k, u).into(),
+        Some(k) => Some(KeyVal(keys.disassemble(k, u).v)),
         None => {
             /*
              * signal to bch2_btree_iter_peek_slot() that we're currently at
              * a hole
              */
             u.set_key_type(BkeyType::deleted);
-            c::bkey_s_c { k: ptr::null_mut(), v: ptr::null_mut() }
+            None
         }
     }
 }
@@ -94,7 +94,7 @@ impl BtreePath {
         }
     }
 
-    pub(crate) fn level_peek_all(&self, u: &mut c::bkey) -> c::bkey_s_c {
+    pub(crate) fn level_peek_all(&self, u: &mut c::bkey) -> Option<KeyVal> {
         let level = self.level() as usize;
         let b = self.locked_btree_node(level).expect("a path peeked is locked");
         let keys = b.keys(b.contents());
@@ -126,7 +126,7 @@ impl BtreeTrans<'_> {
         path.level_init_iter(self.fs(), level, b);
     }
 
-    pub(crate) fn path_level_prev(&self, paths: &mut Paths<'_>, idx: PathIdx, u: &mut c::bkey) -> c::bkey_s_c {
+    pub(crate) fn path_level_prev(&self, paths: &mut Paths<'_>, idx: PathIdx, u: &mut c::bkey) -> Option<KeyVal> {
         let path = &mut paths[idx];
         let level = path.level() as usize;
 
@@ -138,8 +138,7 @@ impl BtreeTrans<'_> {
             match iter.prev(&keys) {
                 Some(k) => {
                     let k = keys.disassemble(k, u);
-                    let pos = k.k.p;
-                    (k.into(), pos)
+                    (Some(KeyVal(k.v)), k.k.p)
                 }
                 None => (level_unpack(&keys, None, u), b.contents().data().min_key),
             }

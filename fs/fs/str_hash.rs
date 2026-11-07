@@ -744,7 +744,7 @@ impl Repair<'_> {
         let mut iter = BtreeIter::new(t, T::BTREE,
                                       spos(loser.inode, loser.offset, k.k.p.snapshot),
                                       BtreeIterFlags::SLOTS);
-        t.iter_traverse(&mut iter)?;
+        iter.traverse(t)?;
         delete_at::<T>(t, self.hash_info, &mut iter, UpdateTriggerFlags::empty())?;
         t.commit_lazy(None, CommitFlags::NO_ENOSPC)
     }
@@ -780,7 +780,7 @@ impl Repair<'_> {
         t.insert_snapshot_whiteouts(btree, k.k.p, new.k().p)?;
 
         let mut k_iter = BtreeIter::new(t, btree, k.k.p, BtreeIterFlags::SLOTS);
-        t.iter_traverse(&mut k_iter)?;
+        k_iter.traverse(t)?;
         delete_at::<T>(t, self.hash_info, &mut k_iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
         self.update_backpointers::<T>(t, k.k.p, new.as_ref())?;

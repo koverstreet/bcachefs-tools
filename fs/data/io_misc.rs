@@ -391,7 +391,7 @@ fn finsert_take_ancestor_extent<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>)
                                       BtreeIterFlags::INTENT |
                                       BtreeIterFlags::ALL_SNAPSHOTS |
                                       BtreeIterFlags::NOT_EXTENTS);
-    t.iter_traverse(&mut src_iter)?;
+    src_iter.traverse(t)?;
 
     /* Made a reflink_p in place: a one pointer extent's value is smaller */
     let mut orig = t.bkey_reassemble_room(k, k.k.u64s as usize * size_of::<u64>() + size_of::<c::ReflinkP>())?;

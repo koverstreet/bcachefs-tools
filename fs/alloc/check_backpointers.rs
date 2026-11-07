@@ -186,7 +186,7 @@ fn extents_to_reflink<'a>(t: &TransAttempt<'a, '_>, e1: &DupExtent<'_>, e2: &Dup
 
     let p1 = e1.k.k.p;
     let mut iter1 = BtreeIter::new_level(t, e1.btree, p1, e1.level.into(), BtreeIterFlags::INTENT);
-    t.iter_traverse(&mut iter1)?;
+    iter1.traverse(t)?;
 
     // With room for the reflink_p make_extent_indirect() makes it, in place
     let mut k1_mut = t.bkey_reassemble_room(e1.k, size_of::<BkeyI<c::ReflinkP>>())?;
@@ -202,7 +202,7 @@ fn extents_to_reflink<'a>(t: &TransAttempt<'a, '_>, e1: &DupExtent<'_>, e2: &Dup
 
     let p2 = e2.k.k.p;
     let mut iter2 = BtreeIter::new_level(t, e2.btree, p2, e2.level.into(), BtreeIterFlags::INTENT);
-    t.iter_traverse(&mut iter2)?;
+    iter2.traverse(t)?;
 
     let mut rp = t.bkey_alloc_typed::<c::ReflinkP>()?;
     let k = rp.k_mut();

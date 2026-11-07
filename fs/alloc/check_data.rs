@@ -76,7 +76,7 @@ fn btree_ptr_unreadable<'a>(t: &TransAttempt<'a, '_>, btree: Btree, level: u32, 
     }
 
     let mut del_iter = BtreeNodeIter::new(t, btree, n.k.p, 0, level, BtreeIterFlags::INTENT);
-    t.iter_traverse(del_iter.iter())?;
+    del_iter.iter().traverse(t)?;
     t.delete_at(del_iter.iter(), UpdateTriggerFlags::empty())?;
 
     let mut msg = LogMsg::new(fs);
@@ -119,7 +119,7 @@ pub fn bkey_drop_device_and_update(t: &TransAttempt<'_, '_>, btree: Btree, level
     }
 
     let mut iter = BtreeNodeIter::new(t, btree, n.k().p, 0, level, BtreeIterFlags::INTENT);
-    t.iter_traverse(iter.iter())?;
+    iter.iter().traverse(t)?;
     t.update(iter.iter(), &n, UpdateTriggerFlags::empty())
 }
 
@@ -361,7 +361,7 @@ fn no_valid_pointers_repair<'a, 't>(t: &TransAttempt<'a, 't>, btree: Btree, k: B
 
     let mut iter = BtreeNodeIter::new(t, btree, new.k().p, 0, 0,
                                       BtreeIterFlags::INTENT | BtreeIterFlags::ALL_SNAPSHOTS);
-    t.iter_traverse(iter.iter())?;
+    iter.iter().traverse(t)?;
     t.update(iter.iter(), &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::NORUN)?;
     Ok(new)
 }

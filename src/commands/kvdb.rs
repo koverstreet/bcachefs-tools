@@ -500,7 +500,7 @@ fn cmd_read(fs: &Fs, op: ReadOp, btree: Btree, pos: Bpos, level: u32, filtered: 
             };
             iter = BtreeIter::new(t, btree, pos, iter_flags(base, filtered));
             match op {
-                ReadOp::Get => iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS),
+                ReadOp::Get => iter.peek_slot(t),
                 ReadOp::Peek => iter.peek(t),
                 ReadOp::PeekPrev => iter.peek_prev(t),
             }
@@ -693,7 +693,7 @@ fn cmd_update(
                 iter.peek_slot(t)?
             } else {
                 iter = BtreeIter::new(t, btree, pos, RAW_EXACT | BtreeIterFlags::INTENT);
-                iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS)?
+                iter.peek_slot(t)?
             };
             let Some(k) = k.filter(|k| !k.k.key_type().is_deleted()) else {
                 let (inode, offset, snapshot) = (pos.inode, pos.offset, pos.snapshot);
@@ -751,7 +751,7 @@ fn cmd_copy(fs: &Fs, btree: Btree, pos: Bpos, new_pos: Bpos, raw: bool)
         CommitFlags::NO_ENOSPC,
         |t| {
             let mut iter = BtreeIter::new(t, btree, pos, RAW_EXACT);
-            let k = iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS)?;
+            let k = iter.peek_slot(t)?;
             let Some(k) = k.filter(|k| !k.k.key_type().is_deleted()) else {
                 let (inode, offset, snapshot) = (pos.inode, pos.offset, pos.snapshot);
                 user_err = Some(anyhow!("no key at {inode}:{offset}:{snapshot}"));
@@ -760,7 +760,7 @@ fn cmd_copy(fs: &Fs, btree: Btree, pos: Bpos, new_pos: Bpos, raw: bool)
 
             let mut new_iter = BtreeIter::new(t, btree, new_pos,
                                               RAW_EXACT | BtreeIterFlags::INTENT);
-            let old = new_iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS)?;
+            let old = new_iter.peek_slot(t)?;
             if old.is_some_and(|old| !old.k.key_type().is_deleted()) {
                 let (inode, offset, snapshot) = (new_pos.inode, new_pos.offset, new_pos.snapshot);
                 user_err = Some(anyhow!("{inode}:{offset}:{snapshot} is occupied"));
@@ -821,7 +821,7 @@ fn cmd_set(
                 pos,
                 iter_flags,
             );
-            iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS)?;
+            iter.peek_slot(t)?;
 
             // A zeroed value of the struct's fixed size, in a buffer set()
             // can grow it into - vartail elements (damage errors[n]) lie

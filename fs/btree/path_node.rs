@@ -13,7 +13,7 @@ use crate::btree::journal_overlay::peek_slot;
 use crate::btree::locking::btree_node_locked_type::*;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{BtreePath, LockedNode, NodePtr, PathIdx, Paths};
+use crate::btree::path::{BtreePath, KeyVal, LockedNode, NodePtr, PathIdx, Paths};
 use crate::c;
 use crate::errcode::bch_errcode;
 use crate::format::Btree;
@@ -87,14 +87,12 @@ impl BtreeTrans<'_> {
 
             let path = e.path;
             let mut old_k = e.old_k;
-            let mut old_v = paths[path].peek_slot(&mut old_k).v;
+            let mut old_v = paths[path].peek_slot(&mut old_k).map_or(ptr::null(), |KeyVal(v)| v);
 
             if self.journal_replay_not_finished() {
-                let j_k = unsafe { peek_slot(fs, btree, b.c.level.into(), pos) };
-
-                if let Some(j_k) = unsafe { j_k.as_ref() } {
+                if let Some(j_k) = unsafe { peek_slot(fs, btree, b.c.level.into(), pos) } {
                     old_k = j_k.k;
-                    old_v = &j_k.v;
+                    old_v = (&raw const j_k.v).cast();
                 }
             }
 
