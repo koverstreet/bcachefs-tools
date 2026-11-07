@@ -30,8 +30,9 @@
 //! backpointer alone.
 //!
 //! A sample of dirty data belongs to the inode and snapshot of its key, or to
-//! the range of the reflink btree its indirect extent covers; each distinct
-//! owner is resolved to a path once, after sampling, by resolve.rs. A path's
+//! the range of the reflink btree its indirect extent covers, shared equally
+//! by the files referencing it, as reflink.rs finds them. Each distinct file
+//! is resolved to a path once, after sampling, by resolve.rs. A path's
 //! estimate is then the samples of the files below it, and every sector is
 //! one path's: data shared between snapshots goes to the snapshot its key is
 //! in, where exact mode counts it in each path that sees it. Cached copies
@@ -71,6 +72,7 @@ use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::util::rcu::read_lock;
 use bcachefs_kernel::util::{Sectors, ToText};
 
+use super::reflink::ReflinkRefs;
 use super::resolve::{fs_path, Resolver};
 use super::{Cli, Mounted};
 use crate::wrappers::handle::{BcachefsHandle, DevUsage};
@@ -463,15 +465,13 @@ pub(super) fn run(m: &Mounted, cli: &Cli) -> Result<()> {
 
     let mut resolver = Resolver::new(&m.handle, &m.fs)?;
     let mut tree = Tree::default();
-    let (mut unresolved, mut reflinked) = (0, 0);
-    for (owner, &n) in &tally.owners {
-        match *owner {
-            Owner::Inode { inum, snapshot } => match resolver.path(inum, snapshot)
-                .with_context(|| format!("resolving inode {inum} in snapshot {snapshot}"))? {
-                Some(path) => tree.add(&path, n as f64),
-                None => unresolved += n,
-            },
-            Owner::Indirect(_) => reflinked += n,
+    let (files, unreferenced) = attribute(&m.handle, &tally)?;
+    let mut unresolved = 0.0;
+    for (&(inum, snapshot), &n) in &files {
+        match resolver.path(inum, snapshot)
+            .with_context(|| format!("resolving inode {inum} in snapshot {snapshot}"))? {
+            Some(path) => tree.add(&path, n),
+            None => unresolved += n,
         }
     }
 
@@ -487,21 +487,21 @@ pub(super) fn run(m: &Mounted, cli: &Cli) -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
     let all_devs: Vec<usize> = (0..space.devs.len()).collect();
 
-    let mut targets: BTreeMap<String, u64> = BTreeMap::new();
+    let mut targets: BTreeMap<String, f64> = BTreeMap::new();
     if cli.targets {
-        for (owner, &n) in &tally.owners {
-            let label = match *owner {
-                Owner::Inode { inum, snapshot } => match resolver.background_target(inum, snapshot)? {
-                    Some(t) => {
-                        let mut label = Printbuf::new();
-                        m.fs.target_to_text(&mut label, Target::decode(t.into()));
-                        label.to_string()
-                    }
-                    None => "(unresolved)".to_string(),
-                },
-                Owner::Indirect(_) => "(reflinked)".to_string(),
+        for (&(inum, snapshot), &n) in &files {
+            let label = match resolver.background_target(inum, snapshot)? {
+                Some(t) => {
+                    let mut label = Printbuf::new();
+                    m.fs.target_to_text(&mut label, Target::decode(t.into()));
+                    label.to_string()
+                }
+                None => "(unresolved)".to_string(),
             };
             *targets.entry(label).or_default() += n;
+        }
+        if unreferenced != 0.0 {
+            targets.insert("(unreferenced)".to_string(), unreferenced);
         }
     }
 
@@ -542,9 +542,9 @@ pub(super) fn run(m: &Mounted, cli: &Cli) -> Result<()> {
 
         writeln!(sub);
         kinds(sub, &all_devs);
-        for (n, what) in [(unresolved, "user, unresolved"), (reflinked, "user, reflinked")] {
-            if n != 0 {
-                est(sub, n as f64);
+        for (n, what) in [(unresolved, "user, unresolved"), (unreferenced, "user, reflinked, unreferenced")] {
+            if n != 0.0 {
+                est(sub, n);
                 writeln!(sub, "{what}");
             }
         }
@@ -559,13 +559,45 @@ pub(super) fn run(m: &Mounted, cli: &Cli) -> Result<()> {
         if cli.targets {
             write!(sub, "\nestimate\r±95%\r  background target\n");
             for (label, &n) in &targets {
-                est(sub, n as f64);
+                est(sub, n);
                 writeln!(sub, "{label}");
             }
         }
     });
     print!("{out}");
     Ok(())
+}
+
+/// Samples by (inode, snapshot).
+type Files = HashMap<(u64, u32), f64>;
+
+/// Samples of file data by (inode, snapshot), a reflinked sample shared
+/// equally by the files referencing it; and those of reflinked data nothing
+/// references.
+fn attribute(handle: &BcachefsHandle, tally: &Tally) -> Result<(Files, f64)> {
+    let refs = if tally.owners.keys().any(|o| matches!(o, Owner::Indirect(_))) {
+        Some(ReflinkRefs::load(handle).context("reading reflink pointers")?)
+    } else {
+        None
+    };
+    let mut files = Files::new();
+    let mut unreferenced = 0.0;
+
+    for (owner, &n) in &tally.owners {
+        match owner {
+            &Owner::Inode { inum, snapshot } => *files.entry((inum, snapshot)).or_default() += n as f64,
+            Owner::Indirect(range) => {
+                let by = refs.as_ref().map(|r| r.referencers(range)).unwrap_or_default();
+                if by.is_empty() {
+                    unreferenced += n as f64;
+                }
+                for file in &by {
+                    *files.entry(*file).or_default() += n as f64 / by.len() as f64;
+                }
+            }
+        }
+    }
+    Ok((files, unreferenced))
 }
 
 /// Samples on @devs by kind, and what the kernel accounts for each: the
