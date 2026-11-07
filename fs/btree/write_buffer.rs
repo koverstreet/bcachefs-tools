@@ -12,9 +12,13 @@
 #![allow(non_camel_case_types)]
 
 mod flush;
+mod intake;
+mod keys;
 
-use crate::accounting::{self, DiskAccountingPos};
-use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BkeyVMut, BKEY_U64S};
+pub use intake::Intake;
+use keys::{KeysLive, WbKeys};
+
+use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BKEY_U64S};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
@@ -22,38 +26,28 @@ use crate::c::bch_fs_flags as Flag;
 use crate::c::journal_pin_type::JOURNAL_PIN_TYPE_other;
 use crate::c::wb_flush_caller as Caller;
 use crate::data::keylist::PaddedKey;
-use crate::data_structures::eytzinger::Eytzinger0;
 use crate::debug::trace::events;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
-use crate::format::{BkeyType, Bpos, Btree, BtreeFlags};
+use crate::format::{Bpos, Btree, BtreeFlags};
 use crate::fs::Fs;
-use crate::locking::{MemallocFlags, RawLock, RawLockBase, RawTryLock};
+use crate::journal::pins::Pin;
+use crate::locking::{ExclusiveGuard, Locked, MemallocFlags};
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError, KVVec};
 use crate::util::closure::closure_wake_up;
+use crate::util::place::{container_of, Contained};
 use crate::util::projections::Volatile;
-use crate::util::workqueue::cancel_work_sync;
+use crate::util::workqueue::{cancel_work_sync, run_raw, RawWork};
 use crate::util::{Printbuf, ToText};
-use crate::types::{c_default, rust_only};
-use crate::{btree_trans, prt};
+use crate::types::{c_default, rust_only, RustOnly};
+use crate::{btree_trans, new_lock, prt};
 use core::ffi::c_int;
 use core::marker::PhantomData;
 use core::mem::{offset_of, size_of};
-use core::ptr::{self, NonNull};
+use core::ptr::NonNull;
 use core::sync::atomic::fence;
-use cstruct_macros::{CStruct, c_const, c_enum, c_export, TypeInfo};
+use cstruct_macros::{placed, CStruct, Init, TypeInfo, c_const, c_enum, c_export};
 use nestify::nest;
-
-#[cfg(CONFIG_BCACHEFS_TESTS)]
-use core::sync::atomic::{AtomicI32, Ordering::Relaxed};
-
-#[cfg(CONFIG_BCACHEFS_TESTS)]
-crate::module_param! {
-    /* One observation per module load, shared by all mounted filesystems. */
-    static wb_pin_publication: bool = false;
-    perm = 0o644, desc = "Force and observe flushing allocation failure once per module load";
-}
-#[cfg(CONFIG_BCACHEFS_TESTS)]
-static TEST_WB_PIN_STATE: AtomicI32 = AtomicI32::new(0);
+use pin_init::pin_data;
 
 /*
  * Subset of BCH_BTREE_IDS() that are marked BTREE_IS_write_buffer, enumerated
@@ -161,21 +155,6 @@ pub struct btree_write_buffered_key {
     pub k: PaddedKey<{ BKEY_U64S + c::BTREE_WRITE_BUFERED_VAL_U64s_MAX as usize }>,
 }
 
-#[repr(C)]
-#[derive(CStruct)]
-pub struct btree_write_buffer_keys {
-    pub keys: rust_only!(KVVec<u64>),
-    pub pin: c::journal_entry_pin,
-    pub lock: c::mutex,
-    /*
-     * Back-references set at init so the journal-pin callback can recover
-     * which btree (and which of inc/flushing) a firing pin belongs to.
-     */
-    pub wb_btree: c::bch_wb_btree,
-    pub is_flushing: bool,
-}
-c_default!(btree_write_buffer_keys);
-
 c_enum! {
     #[closed]
     #[prefix(WB_FLUSH_)]
@@ -190,17 +169,79 @@ c_enum! {
     }
 }
 
+/// What inc.lock protects: the keys the journal's intake stages, and the
+/// accounting accumulators.
+#[derive(Default)]
+pub struct Inc {
+    keys:       WbKeys,
+    accounting: KVVec<c::btree_write_buffered_key>,
+}
+
+/// What flushing.lock protects: the keys a flush has, and their refs, sorted.
+#[derive(Default)]
+pub struct Flushing {
+    keys:   WbKeys,
+    sorted: KVVec<c::wb_key_ref>,
+}
+
+crate::published! {
+    /// What flushing.lock's holder publishes: its keys' and its sorted refs'
+    /// length and capacity, and the flush stats - read by to_text().
+    #[derive(::pin_init::Zeroable)]
+    pub struct FlushingLive {
+        pub keys:              KeysLive,
+        pub sorted:            KeysLive,
+        pub nr_flushes:        Volatile<u64>,
+        pub nr_flushes_caller: [Volatile<u64>; c::WB_FLUSH_NR as usize],
+        pub nr_keys_flushed:   Volatile<u64>,
+        pub nr_keys_fast:      Volatile<u64>,
+        pub nr_keys_slowpath:  Volatile<u64>,
+        pub nr_shards_total:   Volatile<u64>,
+    }
+}
+
+type IncGuard<'a> = ExclusiveGuard<'a, c::mutex, Inc, KeysLive>;
+type FlushingGuard<'a> = ExclusiveGuard<'a, c::mutex, Flushing, FlushingLive>;
+
+/// inc's journal pin: placed, for its flush fn to have its write buffer.
+#[placed(c::bch_fs_btree_write_buffer.inc_pin)]
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, Init)]
+pub struct wb_inc_pin {
+    pub pin: c::journal_entry_pin,
+}
+
+/// flushing's journal pin, as inc's.
+#[placed(c::bch_fs_btree_write_buffer.flushing_pin)]
+#[pin_data]
+#[repr(C)]
+#[derive(CStruct, Init)]
+pub struct wb_flushing_pin {
+    pub pin: c::journal_entry_pin,
+}
+
+const _: () = assert!(offset_of!(wb_inc_pin, pin) == 0 && offset_of!(wb_flushing_pin, pin) == 0);
+
+#[placed(c::bch_fs_btree.write_buffer[], index = idx: u32)]
+#[pin_data]
+#[repr(C)]
+#[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_btree_write_buffer {
-    /* Back-refs set at init so the flush thread can find c and its idx. */
-    pub c: *mut Fs,
-    pub idx: c::bch_wb_btree,
+    #[pin]
+    #[init(RustOnly::new(new_lock!(Inc::default(), ::pin_init::zeroed(), "&wb->inc.lock")))]
+    pub inc: rust_only!(Locked<c::mutex, Inc, KeysLive>),
+    #[pin]
+    pub inc_pin: c::wb_inc_pin,
 
-    pub sorted: rust_only!(KVVec<c::wb_key_ref>),
-    pub inc: c::btree_write_buffer_keys,
-    pub flushing: c::btree_write_buffer_keys,
+    #[pin]
+    #[init(RustOnly::new(new_lock!(Flushing::default(), ::pin_init::zeroed(), "&wb->flushing.lock")))]
+    pub flushing: rust_only!(Locked<c::mutex, Flushing, FlushingLive>),
+    #[pin]
+    pub flushing_pin: c::wb_flushing_pin,
 
+    #[pin]
+    #[init(crate::new_work!(run_raw::<c::bch_fs_btree_write_buffer>, "&wb->flush_work"))]
     pub flush_work: c::work_struct,
     /*
      * Set by the dispatcher (or auto-flush wakeup) before queue_work(),
@@ -209,17 +250,7 @@ pub struct bch_fs_btree_write_buffer {
      * nr_flushes_caller[] histogram.
      */
     pub flush_work_caller: Volatile<u32>,
-
-    pub nr_flushes: Volatile<u64>,
-    pub nr_flushes_caller: [Volatile<u64>; c::WB_FLUSH_NR as usize],
-    pub nr_keys_flushed: Volatile<u64>,
-    pub nr_keys_fast: Volatile<u64>,
-    pub nr_keys_slowpath: Volatile<u64>,
-    pub nr_shards_total: Volatile<u64>,
-
-    pub accounting: rust_only!(KVVec<c::btree_write_buffered_key>),
 }
-c_default!(bch_fs_btree_write_buffer);
 
 /*
  * Growth heuristics only - every caller discards the result, and the buffer
@@ -239,52 +270,46 @@ fn resize_gfp<T>(v: &mut KVVec<T>, new_size: usize, gfp: c::gfp_t) -> Result<(),
     v.reserve_raw_gfp(new_size.next_power_of_two() - v.len(), gfp)
 }
 
-impl c::btree_write_buffer_keys {
-    /// # Safety
-    /// Its lock is held.
-    #[allow(clippy::mut_from_ref)]
-    unsafe fn keys_mut(&self) -> &mut KVVec<u64> {
-        unsafe { &mut *self.keys.as_ptr() }
-    }
-
-    /// # Safety
-    /// Its lock is held.
-    unsafe fn wb_keys_resize_locked(&self, new_size: usize) -> Result<(), AllocError> {
-        resize_gfp(unsafe { self.keys_mut() }, new_size, WB_RESIZE_GFP)
-    }
-
-    fn wb_keys_resize(&self, new_size: usize) -> Result<(), BchError> {
-        if self.keys.capacity() >= new_size {
-            return Ok(());
-        }
-
-        if unsafe { self.lock.try_lock() }.is_none() {
-            return Err(BchError::from(c::EINTR));
-        }
-
-        let ret = resize_gfp(unsafe { self.keys_mut() }, new_size, WB_RESIZE_GFP);
-        unsafe { self.lock.unlock(()) };
-        Ok(ret?)
-    }
+/// A write buffer's two key buffers, as its journal pins are named.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Buf {
+    Inc,
+    Flushing,
 }
 
 impl c::bch_fs_btree_write_buffer {
     fn fs(&self) -> &Fs {
-        unsafe { &*self.c }
+        self.container().container()
     }
 
-    /// # Safety
-    /// flushing.lock is held.
-    #[allow(clippy::mut_from_ref)]
-    unsafe fn sorted_mut(&self) -> &mut KVVec<c::wb_key_ref> {
-        unsafe { &mut *self.sorted.as_ptr() }
+    fn wb_btree(&self) -> c::bch_wb_btree {
+        c::bch_wb_btree::from_bits(self.idx.get())
     }
 
-    /// # Safety
-    /// inc.lock is held.
-    #[allow(clippy::mut_from_ref)]
-    unsafe fn accounting_mut(&self) -> &mut KVVec<c::btree_write_buffered_key> {
-        unsafe { &mut *self.accounting.as_ptr() }
+    fn pin(&self, b: Buf) -> &Pin {
+        match b {
+            Buf::Inc      => &self.inc_pin.pin,
+            Buf::Flushing => &self.flushing_pin.pin,
+        }
+    }
+
+    fn pin_flush_fn(b: Buf) -> c::journal_pin_flush_fn {
+        match b {
+            Buf::Inc      => Some(journal_flush::<c::wb_inc_pin>),
+            Buf::Flushing => Some(journal_flush::<c::wb_flushing_pin>),
+        }
+    }
+
+    fn pin_add(&self, b: Buf, seq: u64) {
+        self.fs().journal.pin_add(seq, self.pin(b), JOURNAL_PIN_TYPE_other, Self::pin_flush_fn(b))
+    }
+
+    fn pin_update(&self, b: Buf, seq: u64) {
+        self.fs().journal.pin_update(seq, self.pin(b), JOURNAL_PIN_TYPE_other, Self::pin_flush_fn(b))
+    }
+
+    fn pin_drop(&self, b: Buf) {
+        self.fs().journal.pin_drop(self.pin(b))
     }
 
     fn queue_flush(&self, caller: c::wb_flush_caller) {
@@ -292,81 +317,40 @@ impl c::bch_fs_btree_write_buffer {
         unsafe { self.fs().btree.write_buffer_wq.queue_work((&raw const self.flush_work).cast_mut()) };
     }
 
-    fn should_flush(&self) -> bool {
-        self.inc.keys.len() + self.flushing.keys.len() > self.inc.keys.capacity() / 4
+    fn is_empty(&self) -> bool {
+        self.inc.nr.get() == 0 && self.flushing.keys.nr.get() == 0
     }
 
-    fn should_resize(&self) -> bool {
-        self.inc.keys.len() + self.flushing.keys.len() > self.inc.keys.capacity() / 2
+    fn wb_keys_resize(&self, b: Buf, new_size: usize) -> Result<(), BchError> {
+        let ret = match b {
+            Buf::Inc => {
+                if self.inc.size.get() >= new_size {
+                    return Ok(());
+                }
+                let Some(mut g) = self.inc.try_lock() else { return Err(BchError::from(c::EINTR)) };
+                let (inc, live) = g.parts();
+                inc.keys.resize(live, new_size, WB_RESIZE_GFP)
+            }
+            Buf::Flushing => {
+                if self.flushing.keys.size.get() >= new_size {
+                    return Ok(());
+                }
+                let Some(mut g) = self.flushing.try_lock() else { return Err(BchError::from(c::EINTR)) };
+                let (f, live) = g.parts();
+                f.keys.resize(&live.keys, new_size, WB_RESIZE_GFP)
+            }
+        };
+        Ok(ret?)
     }
-
-    fn accounting_sort(&self) {
-        let accounting = unsafe { self.accounting_mut() };
-        Eytzinger0::sort_by(accounting, |l, r| l.k.k.p.cmp(&r.k.k.p));
-    }
-}
-
-/// A key in a write buffer's keys: its journal seq, then the key, as long as
-/// the key's u64s - not a whole btree_write_buffered_key, whose padding may
-/// run past the end.
-struct WbKey<'a>(NonNull<c::btree_write_buffered_key>, PhantomData<&'a mut [u64]>);
-
-impl<'a> WbKey<'a> {
-    /// # Safety
-    /// A key starts at @idx in @keys, which nothing else uses while it's held.
-    unsafe fn at(keys: *mut u64, idx: usize) -> Self {
-        WbKey(unsafe { NonNull::new_unchecked(keys.add(idx).cast()) }, PhantomData)
-    }
-
-    fn seq(&self) -> u64 {
-        unsafe { (*self.0.as_ptr()).journal_seq }
-    }
-
-    fn set_seq(&mut self, seq: u64) {
-        unsafe { (*self.0.as_ptr()).journal_seq = seq }
-    }
-
-    fn k(&self) -> &BkeyI {
-        unsafe { &*BkeyI::from_raw((&raw const (*self.0.as_ptr()).k).cast()) }
-    }
-
-    fn k_mut(&mut self) -> &mut BkeyI {
-        unsafe { &mut *BkeyI::from_raw_mut((&raw mut (*self.0.as_ptr()).k).cast()) }
-    }
-
-    fn u64s(&self) -> usize {
-        wb_key_u64s(&self.k().k)
-    }
-}
-
-const _: () = assert!(offset_of!(c::btree_write_buffered_key, journal_seq) == 0);
-
-fn key_seq(keys: &[u64], idx: usize) -> u64 {
-    keys[idx]
-}
-
-fn next_key(keys: &[u64], idx: usize) -> usize {
-    idx + unsafe { WbKey::at(keys.as_ptr().cast_mut(), idx) }.u64s()
-}
-
-fn key_idxs(keys: &[u64]) -> impl Iterator<Item = usize> + '_ {
-    core::iter::successors((!keys.is_empty()).then_some(0), move |&i| {
-        Some(next_key(keys, i)).filter(|&n| n < keys.len())
-    })
 }
 
 impl Fs {
     pub fn btree_write_buffer_must_wait(&self) -> bool {
         let (nr, size) = self.btree.write_buffer.iter().fold((0, 0), |(nr, size), wb| {
-            (nr + wb.inc.keys.len() + wb.flushing.keys.len(), size + wb.inc.keys.capacity())
+            (nr + wb.inc.nr.get() + wb.flushing.keys.nr.get(), size + wb.inc.size.get())
         });
         nr > size * 3 / 4
     }
-}
-
-#[c_export]
-pub fn bch2_btree_write_buffer_must_wait(c: &Fs) -> bool {
-    c.btree_write_buffer_must_wait()
 }
 
 /// @btree's slot among the write buffered btrees.
@@ -408,449 +392,6 @@ pub fn insert_checks(fs: &Fs, btree: Btree, k: &BkeyI) -> Result<(), BchError> {
     Ok(())
 }
 
-/// Its size in the write buffer: the key, and its journal seq.
-fn wb_key_u64s(k: &c::bkey) -> usize {
-    usize::from(k.u64s) + offset_of!(c::btree_write_buffered_key, k) / size_of::<u64>()
-}
-
-fn is_accounting_mem(k: &c::bkey) -> bool {
-    k.key_type() == BkeyType::accounting && accounting::is_mem(&DiskAccountingPos::from_bpos(k.p))
-}
-
-// ── Journal keys into the write buffer ───────────────────────────────────
-
-/// # Safety
-/// @k is an accounting key, and the write buffer's intake is in progress.
-unsafe fn accounting_key_to_wb(fs: &Fs, btree: Btree, k: &BkeyI) -> Result<(), BchError> {
-    let wb = &fs.btree.write_buffer[wb_btree_idx(btree) as usize];
-    let p = k.k.p;
-
-    let Some(idx) = Eytzinger0::find_by(&wb.accounting, |e| e.k.k.p.cmp(&p)) else {
-        return unsafe { accounting_key_to_wb_slowpath(fs, btree, k) };
-    };
-
-    let dst = unsafe { &mut wb.accounting_mut()[idx] };
-    accounting::accumulate(dst.k.key_mut(), BkeySC::from(k));
-    Ok(())
-}
-
-/// # Safety
-/// As accounting_key_to_wb()'s.
-unsafe fn accounting_key_to_wb_slowpath(fs: &Fs, btree: Btree, k: &BkeyI) -> Result<(), BchError> {
-    let wb = &fs.btree.write_buffer[wb_btree_idx(btree) as usize];
-
-    fs.event_inc_trace(events::accounting_key_to_wb_slowpath, |out| {
-        prt!(out, "have: {}\n", wb.accounting.len());
-        prt!(out, "{}", BkeySC::from(k).to_text(fs));
-    });
-
-    let mut new = c::btree_write_buffered_key::default();
-    new.k.set_key(k);
-
-    unsafe { wb.accounting_mut() }.push(new)?;
-
-    wb.accounting_sort();
-    Ok(())
-}
-
-impl c::journal_keys_to_wb_btree {
-    fn wb(&self) -> &c::btree_write_buffer_keys {
-        unsafe { &*self.wb }
-    }
-
-    /// # Safety
-    /// @k fits in this btree's buffer, acquired.
-    unsafe fn key_reserved(&mut self, seq: u64, k: &BkeyI) {
-        let u64s = wb_key_u64s(&k.k);
-        let keys = unsafe { (*self.wb).keys_mut() };
-        unsafe {
-            let wb_k = keys.as_mut_ptr().add(keys.len()).cast::<c::btree_write_buffered_key>();
-            (&raw mut (*wb_k).journal_seq).write(seq);
-            ptr::copy_nonoverlapping(k.as_ffi().cast::<u64>(), (&raw mut (*wb_k).k).cast::<u64>(),
-                                     usize::from(k.k.u64s));
-            keys.inc_len(u64s);
-        }
-        self.room -= u64s;
-    }
-}
-
-impl c::journal_keys_to_wb {
-    /// # Safety
-    /// As key_to_wb()'s.
-    unsafe fn key_to_wb_idx(&mut self, fs: &Fs, idx: c::bch_wb_btree, k: &BkeyI) -> Result<(), BchError> {
-        let seq = self.seq;
-        let pb = &mut self.per_btree[idx as usize];
-
-        if pb.room < wb_key_u64s(&k.k) {
-            return unsafe { self.key_to_wb_slowpath(fs, idx, k) };
-        }
-
-        unsafe { pb.key_reserved(seq, k) };
-        Ok(())
-    }
-
-    /// @k, from journal entry @seq, into @btree's write buffer.
-    ///
-    /// # Safety
-    /// This is between keys_to_write_buffer_start() and _end().
-    pub unsafe fn key_to_wb(&mut self, fs: &Fs, btree: Btree, k: &BkeyI) -> Result<(), BchError> {
-        insert_checks(fs, btree, k)?;
-
-        ebug_assert!(self.seq != 0, "journal key to the write buffer outside a journal write");
-
-        if is_accounting_mem(&k.k) {
-            unsafe { accounting_key_to_wb(fs, btree, k) }
-        } else {
-            unsafe { self.key_to_wb_idx(fs, wb_btree_idx(btree), k) }
-        }
-    }
-
-    /// # Safety
-    /// As key_to_wb()'s.
-    unsafe fn key_to_wb_slowpath(&mut self, fs: &Fs, idx: c::bch_wb_btree, k: &BkeyI) -> Result<(), BchError> {
-        let wb = &fs.btree.write_buffer[idx as usize];
-        let u64s = wb_key_u64s(&k.k);
-        let seq = self.seq;
-        #[cfg(CONFIG_BCACHEFS_TESTS)]
-        let mut force_alloc_failure;
-
-        loop {
-            let pb = &mut self.per_btree[idx as usize];
-            let on_flushing = ptr::eq(pb.wb, &wb.flushing);
-            /*
-             * Growing flushing has somewhere to go if it fails - drop
-             * flushing.lock and retry against inc, below - so don't wait on
-             * reclaim for it. Taking the failure immediately is what releases
-             * that lock, and both the journal write path and the flush path nest
-             * the write buffer locks under j->buf_lock. Growing inc has no
-             * fallback; that one has to be allowed to wait.
-             */
-            let gfp = if on_flushing { WB_RESIZE_GFP } else { c::GFP_KERNEL };
-
-            let keys = unsafe { (*pb.wb).keys_mut() };
-
-            #[cfg(CONFIG_BCACHEFS_TESTS)]
-            {
-                force_alloc_failure =
-                    wb_pin_publication.get() &&
-                    self.test_wb_pin_armed &&
-                    idx == c::bch_wb_btree::backpointers &&
-                    on_flushing &&
-                    !keys.is_empty() &&
-                    pb.wb().pin.seq() == 0 &&
-                    TEST_WB_PIN_STATE.compare_exchange(1, 2, Relaxed, Relaxed).is_ok();
-            }
-
-            #[cfg(CONFIG_BCACHEFS_TESTS)]
-            let mut ret = if force_alloc_failure {
-                Err(AllocError)
-            } else {
-                resize_gfp(keys, keys.len() + u64s, gfp)
-            };
-            #[cfg(not(CONFIG_BCACHEFS_TESTS))]
-            let mut ret = resize_gfp(keys, keys.len() + u64s, gfp);
-
-            if ret.is_ok() && on_flushing {
-                ret = resize_gfp(unsafe { wb.sorted_mut() }, wb.flushing.keys.capacity(), gfp);
-            }
-
-            if let Err(e) = ret {
-                if on_flushing {
-                    if !pb.wb().keys.is_empty() {
-                        fs.journal.pin_add(seq, &pb.wb().pin, JOURNAL_PIN_TYPE_other, Some(journal_flush));
-                    }
-                    unsafe { pb.wb().lock.unlock(()) };
-                    #[cfg(CONFIG_BCACHEFS_TESTS)]
-                    if force_alloc_failure {
-                        /*
-                         * Reacquiring the lock proves what another lock holder can
-                         * observe in the fallback window. Do not wait: a flush
-                         * holder may need inc.lock or journal buf_lock from us.
-                         * A holder may also drain flushing before we reacquire it;
-                         * that is not an observation of the staged keys, so rearm.
-                         */
-                        if unsafe { wb.flushing.lock.try_lock() }.is_some() {
-                            if !wb.flushing.keys.is_empty() {
-                                kernel::pr_info!("WB_PIN_REPRO observer flushing={} fpin={}\n",
-                                                 wb.flushing.keys.len(), wb.flushing.pin.seq());
-                            } else {
-                                kernel::pr_info!("WB_PIN_REPRO observer drained; retrying\n");
-                                TEST_WB_PIN_STATE.store(0, Relaxed);
-                            }
-                            unsafe { wb.flushing.lock.unlock(()) };
-                        } else {
-                            kernel::pr_err!("WB_PIN_REPRO observer lock unavailable\n");
-                            TEST_WB_PIN_STATE.store(0, Relaxed);
-                        }
-                        self.test_wb_pin_armed = false;
-                    }
-                    let pb = &mut self.per_btree[idx as usize];
-                    pb.wb = (&raw const wb.inc).cast_mut();
-                    fs.journal.pin_add(seq, &wb.inc.pin, JOURNAL_PIN_TYPE_other, Some(journal_flush));
-                    continue;
-                }
-
-                return Err(e.into());
-            }
-            break;
-        }
-
-        let pb = &mut self.per_btree[idx as usize];
-        let on_flushing = ptr::eq(pb.wb, &wb.flushing);
-        pb.room = pb.wb().keys.capacity() - pb.wb().keys.len();
-        if on_flushing {
-            pb.room = pb.room.min(wb.sorted.capacity() - wb.flushing.keys.len());
-        }
-        assert!(pb.room >= u64s);
-        assert!(seq != 0);
-
-        unsafe { pb.key_reserved(seq, k) };
-        #[cfg(CONFIG_BCACHEFS_TESTS)]
-        if wb_pin_publication.get() &&
-            idx == c::bch_wb_btree::backpointers &&
-            on_flushing &&
-            pb.wb().keys.len() == u64s &&
-            pb.wb().pin.seq() == 0 &&
-            TEST_WB_PIN_STATE.compare_exchange(0, 1, Relaxed, Relaxed).is_ok() {
-            self.test_wb_pin_armed = true;
-            let pb = &mut self.per_btree[idx as usize];
-            pb.room = 0;
-            kernel::pr_info!("WB_PIN_REPRO staged flushing={} fpin={}\n", pb.wb().keys.len(), pb.wb().pin.seq());
-        }
-        Ok(())
-    }
-}
-
-/*
- * Acquire locks + intake state for one per-btree instance during one journal
- * intake pass. Called from _start() for every btree up front — eager, not
- * lazy, so the lock ordering is trivially "always ascending idx" and the
- * caller doesn't need to care about which btrees a journal buf actually
- * touches. Released in _end().
- *
- * Takes inc.lock (always), and flushing.lock (opportunistically, to let us
- * skip staging via inc if flushing has room).
- */
-fn keys_to_write_buffer_lock(fs: &Fs, dst: &mut c::journal_keys_to_wb) {
-    /*
-     * Intake allocates under the write buffer locks (key array resizes,
-     * accounting pushes), which sit on the reclaim path when swap is on
-     * bcachefs: callers must have established a NOIO scope. Both current
-     * callers hold j->buf_lock, a mutex_noio, across the whole bracket:
-     */
-    #[cfg(kernel)]
-    ebug_assert!(crate::locking::memalloc_flags() & crate::locking::PF_MEMALLOC_NOIO != 0,
-                 "write buffer intake outside a NOIO scope");
-
-    *dst = c::journal_keys_to_wb::default();
-
-    for (wb, pb) in fs.btree.write_buffer.iter().zip(dst.per_btree.iter_mut()) {
-        unsafe {
-            if wb.flushing.lock.try_lock().is_some() {
-                wb.inc.lock.lock();
-                flush::move_keys_from_inc_to_flushing(wb);
-
-                if wb.inc.keys.is_empty() {
-                    pb.wb = (&raw const wb.flushing).cast_mut();
-                } else {
-                    wb.flushing.lock.unlock(());
-                    pb.wb = (&raw const wb.inc).cast_mut();
-                }
-            } else {
-                wb.inc.lock.lock();
-                pb.wb = (&raw const wb.inc).cast_mut();
-            }
-        }
-
-        pb.room = pb.wb().keys.capacity() - pb.wb().keys.len();
-        if ptr::eq(pb.wb, &wb.flushing) {
-            pb.room = pb.room.min(wb.sorted.capacity() - wb.flushing.keys.len());
-        }
-        #[cfg(CONFIG_BCACHEFS_TESTS)]
-        if wb_pin_publication.get() &&
-            wb.idx == c::bch_wb_btree::backpointers &&
-            ptr::eq(pb.wb, &wb.flushing) &&
-            TEST_WB_PIN_STATE.load(Relaxed) == 0 {
-            pb.room = 0;
-        }
-    }
-}
-
-fn keys_to_write_buffer_unlock(fs: &Fs, dst: &mut c::journal_keys_to_wb) {
-    /*
-     * For each btree: inject live (non-zero) accounting accumulators into
-     * that btree's intake buffer, compact the darray if mostly-zero, then
-     * drop the empty-keys pin and release the locks taken in _start().
-     */
-    for (wb, pb) in fs.btree.write_buffer.iter().zip(dst.per_btree.iter()) {
-        let on_flushing = ptr::eq(pb.wb, &wb.flushing);
-
-        if wb.should_flush() {
-            wb.queue_flush(Caller::thread);
-        }
-
-        unsafe {
-            if wb.should_resize() {
-                let new_size = (1 << 24).min(wb.inc.keys.capacity() * 2);
-                if on_flushing {
-                    let _ = wb.flushing.wb_keys_resize_locked(new_size);
-                }
-                let _ = wb.inc.wb_keys_resize_locked(new_size);
-            }
-
-            if on_flushing {
-                wb.flushing.lock.unlock(());
-            }
-            wb.inc.lock.unlock(());
-        }
-    }
-
-    /*
-     * Pins may have advanced (per-btree pin_drops above, plus any seqs
-     * advanced by move_keys_from_inc_to_flushing inside bch_wb_acquire) —
-     * wake any sync flushers blocked on a target seq.
-     */
-    closure_wake_up(&fs.btree.write_buffer_flush_wait);
-}
-
-fn accounting_reset(fs: &Fs) {
-    let wb = &fs.btree.write_buffer[c::bch_wb_btree::accounting as usize];
-    for i in unsafe { wb.accounting_mut() }.iter_mut() {
-        (&mut i.k.key_mut()).val_bytes_mut().fill(0);
-    }
-}
-
-/// # Safety
-/// @dst is locked, by keys_to_write_buffer_lock().
-unsafe fn journal_keys_to_write_buffer(fs: &Fs, dst: &mut c::journal_keys_to_wb, buf: &mut c::journal_buf)
-    -> Result<(), BchError>
-{
-    for i in buf.data.jset_mut().entries_mut() {
-        let Ok(i) = i else { break };
-
-        if c::bch_jset_entry_type(i.type_.into()) != c::bch_jset_entry_type::write_buffer_keys {
-            continue;
-        }
-
-        let btree = Btree(i.btree_id.into());
-        for k in i.entries_mut() {
-            let Ok(mut k) = k else { break };
-            unsafe { dst.key_to_wb(fs, btree, &*BkeyI::from_raw(k.as_mut_ptr()))? };
-        }
-
-        i.type_ = c::bch_jset_entry_type::btree_keys.0 as u8;
-    }
-
-    Ok(())
-}
-
-fn fetch_wb_keys_from_journal(fs: &Fs, max_seq: u64) -> Result<(), BchError> {
-    let j = &fs.journal;
-    let mut dst = c::journal_keys_to_wb::default();
-    let mut blocked = false;
-    let mut ret = Ok(());
-
-    let _buf_lock = j.buf_lock.lock();
-    keys_to_write_buffer_lock(fs, &mut dst);
-
-    while ret.is_ok() {
-        let buf = j.next_write_buffer_flush_journal_buf(max_seq, &mut blocked);
-        let Some(buf) = (unsafe { buf.as_mut() }) else { break };
-
-        dst.seq = buf.data.head().seq.get();
-
-        accounting_reset(fs);
-
-        ret = unsafe { journal_keys_to_write_buffer(fs, &mut dst, buf) };
-        ret = keys_to_write_buffer_end_locked(fs, &mut dst).and(ret);
-
-        if !blocked && ret.is_ok() {
-            let _g = j.lock.lock();
-            buf.bits.set_need_flush_to_write_buffer(false);
-        }
-
-        if blocked {
-            j.unblock();
-            break;
-        }
-    }
-
-    keys_to_write_buffer_unlock(fs, &mut dst);
-    ret
-}
-
-/// The write buffer locked for a journal entry's keys, @seq's: key_to_wb()
-/// takes them until keys_to_write_buffer_end().
-pub fn keys_to_write_buffer_start(fs: &Fs, dst: &mut c::journal_keys_to_wb, seq: u64) {
-    assert!(seq <= fs.journal_cur_seq());
-
-    keys_to_write_buffer_lock(fs, dst);
-
-    dst.seq = seq;
-
-    /*
-     * Zero accounting accumulators so per-buf deltas start fresh.
-     * wb->accounting is invariantly protected by wb->inc.lock (all
-     * intake paths that touch it — this reset, accumulate via
-     * bch2_accounting_key_to_wb(), slowpath, and _end() inject /
-     * compact / sort — run with inc.lock held).
-     */
-    accounting_reset(fs);
-}
-
-fn keys_to_write_buffer_end_locked(fs: &Fs, dst: &mut c::journal_keys_to_wb) -> Result<(), BchError> {
-    let mut ret = Ok(());
-
-    #[cfg(CONFIG_BCACHEFS_TESTS)]
-    /* The forced failure must consume the arm in this intake. */
-    if dst.test_wb_pin_armed {
-        let _ = TEST_WB_PIN_STATE.compare_exchange(1, 0, Relaxed, Relaxed);
-        dst.test_wb_pin_armed = false;
-    }
-
-    /*
-     * For each btree: inject live (non-zero) accounting accumulators into
-     * that btree's intake buffer, compact the darray if mostly-zero, then
-     * drop the empty-keys pin and release the locks taken in _start().
-     */
-    for (i, wb) in fs.btree.write_buffer.iter().enumerate() {
-        let accounting = unsafe { wb.accounting_mut() };
-        let mut live_accounting_keys = 0;
-
-        if ret.is_ok() {
-            for a in accounting.iter_mut() {
-                if !accounting::is_zero(BkeySC::from(a.k.key())) {
-                    a.journal_seq = dst.seq;
-                    live_accounting_keys += 1;
-                    ret = unsafe { dst.key_to_wb_idx(fs, wb.idx, a.k.key()) };
-                    if ret.is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-
-        if live_accounting_keys * 2 < accounting.len() {
-            accounting.retain(|a| !accounting::is_zero(BkeySC::from(a.k.key())));
-            wb.accounting_sort();
-        }
-
-        let pb = &dst.per_btree[i];
-        if !pb.wb().keys.is_empty() {
-            fs.journal.pin_add(dst.seq, &pb.wb().pin, JOURNAL_PIN_TYPE_other, Some(journal_flush));
-        }
-    }
-
-    ret
-}
-
-/// Done with keys_to_write_buffer_start()'s entry: the write buffer unlocked.
-pub fn keys_to_write_buffer_end(fs: &Fs, dst: &mut c::journal_keys_to_wb) -> Result<(), BchError> {
-    let ret = keys_to_write_buffer_end_locked(fs, dst);
-    keys_to_write_buffer_unlock(fs, dst);
-    ret
-}
-
 fn wb_pin_le(wb: &c::bch_fs_btree_write_buffer, max_seq: u64) -> bool {
     /*
      * move_keys_from_inc_to_flushing writes flushing.pin.seq (set), then
@@ -858,22 +399,20 @@ fn wb_pin_le(wb: &c::bch_fs_btree_write_buffer, max_seq: u64) -> bool {
      * after the drop means the following flushing read must observe the set
      * that preceded it.
      */
-    let inc = wb.inc.pin.seq();
+    let inc = wb.pin(Buf::Inc).seq();
     fence(core::sync::atomic::Ordering::Acquire);
-    let flushing = wb.flushing.pin.seq();
+    let flushing = wb.pin(Buf::Flushing).seq();
     (inc      != 0 && inc      <= max_seq) ||
     (flushing != 0 && flushing <= max_seq)
 }
 
 fn any_wb_pin_le(fs: &Fs, max_seq: u64, did_work: &mut bool, caller: c::wb_flush_caller) -> bool {
-    for wb in &fs.btree.write_buffer {
-        if wb_pin_le(wb, max_seq) {
-            wb.queue_flush(caller);
-            *did_work = true;
-            return true;
-        }
+    let wb = fs.btree.write_buffer.iter().find(|wb| wb_pin_le(wb, max_seq));
+    if let Some(wb) = wb {
+        wb.queue_flush(caller);
+        *did_work = true;
     }
-    false
+    wb.is_some()
 }
 
 /*
@@ -898,7 +437,7 @@ fn flush_seq(trans: &BtreeTrans<'_>, max_seq: u64, did_work: &mut bool, caller: 
     trans.unlock();
 
     loop {
-        let fetch_from_journal_err = fetch_wb_keys_from_journal(fs, max_seq);
+        let fetch_from_journal_err = intake::fetch_wb_keys_from_journal(fs, max_seq);
 
         trans.wait_event(&fs.btree.write_buffer_flush_wait, || {
             !any_wb_pin_le(fs, max_seq, did_work, caller) || {
@@ -923,12 +462,12 @@ fn flush_seq(trans: &BtreeTrans<'_>, max_seq: u64, did_work: &mut bool, caller: 
  * stops re-picking it; the worker's pin_drop removes it from the list when
  * the keys are actually written. No wait, no journal fetch needed.
  */
-unsafe extern "C" fn journal_flush(j: *mut c::journal, pin: *mut c::journal_entry_pin, _seq: u64) -> c_int {
-    let (fs, keys) = unsafe {
-        ((*j).fs(), &*pin.byte_sub(offset_of!(c::btree_write_buffer_keys, pin)).cast::<c::btree_write_buffer_keys>())
-    };
+unsafe extern "C" fn journal_flush<P: Contained<Parent = c::bch_fs_btree_write_buffer>>(
+    _j: *mut c::journal, pin: *mut c::journal_entry_pin, _seq: u64) -> c_int
+{
+    let wb = unsafe { container_of(pin.cast::<P>()) };
 
-    fs.btree.write_buffer[keys.wb_btree as usize].queue_flush(Caller::journal_pin);
+    wb.queue_flush(Caller::journal_pin);
     0
 }
 
@@ -954,11 +493,9 @@ impl BtreeTrans<'_> {
 
     fn write_buffer_flush_nocheck_rw(&self) -> Result<(), BchError> {
         for wb in &self.fs().btree.write_buffer {
-            if unsafe { wb.flushing.lock.try_lock() }.is_some() {
+            if let Some(mut g) = wb.flushing.try_lock() {
                 self.unlock_long();
-                let ret = unsafe { flush::flush_locked(self, wb, Caller::tryflush) };
-                unsafe { wb.flushing.lock.unlock(()) };
-                ret?;
+                flush::flush_locked(self, wb, &mut g, Caller::tryflush)?;
             }
         }
 
@@ -972,7 +509,7 @@ impl BtreeTrans<'_> {
         let fs = self.fs();
         let write_ref = c::bch_write_ref::btree_write_buffer as u32;
 
-        if !fs.btree.write_buffer.iter().any(|wb| !wb.inc.keys.is_empty() || !wb.flushing.keys.is_empty()) {
+        if fs.btree.write_buffer.iter().all(|wb| wb.is_empty()) {
             return Ok(());
         }
 
@@ -1014,16 +551,13 @@ impl Fs {
  * After draining, wake the dispatcher's waitlist (sync flushers block here
  * waiting for pins ≤ their target seq to drain).
  */
-unsafe extern "C" fn flush_work_fn(work: *mut c::work_struct) {
-    let wb = unsafe {
-        &*work.byte_sub(offset_of!(c::bch_fs_btree_write_buffer, flush_work)).cast::<c::bch_fs_btree_write_buffer>()
-    };
+fn flush_work_fn(wb: &c::bch_fs_btree_write_buffer) {
     let fs = wb.fs();
     let caller = c::wb_flush_caller::from_bits(wb.flush_work_caller.get());
 
     {
         let _noio = MemallocFlags::noio();
-        unsafe { wb.flushing.lock.lock() };
+        let mut g = wb.flushing.lock();
         let trans = btree_trans!(fs);
         loop {
             trans.unlock_long();
@@ -1032,17 +566,23 @@ unsafe extern "C" fn flush_work_fn(work: *mut c::work_struct) {
              * Accounting keys can't be flushed until
              * BCH_FS_accounting_replay_done - don't spin:
              */
-            if unsafe { flush::flush_locked(&trans, wb, caller) }.is_err() ||
-                (wb.inc.keys.is_empty() && wb.flushing.keys.is_empty()) ||
+            if flush::flush_locked(&trans, wb, &mut g, caller).is_err() ||
+                wb.is_empty() ||
                 !fs.flags.get(Flag::accounting_replay_done) {
                 break;
             }
         }
-        drop(trans);
-        unsafe { wb.flushing.lock.unlock(()) };
     }
 
     closure_wake_up(&fs.btree.write_buffer_flush_wait);
+}
+
+impl RawWork for c::bch_fs_btree_write_buffer {
+    const WORK: usize = offset_of!(c::bch_fs_btree_write_buffer, flush_work);
+
+    unsafe fn run(this: NonNull<Self>) {
+        flush_work_fn(unsafe { this.as_ref() })
+    }
 }
 
 /// C's struct wb_maybe_flush: before an fsck pass calls a key missing that
@@ -1190,8 +730,8 @@ impl Fs {
         let _noio = MemallocFlags::noio();
 
         for wb in &self.btree.write_buffer {
-            wb.flushing.wb_keys_resize(new_size)?;
-            wb.inc.wb_keys_resize(new_size)?;
+            wb.wb_keys_resize(Buf::Flushing, new_size)?;
+            wb.wb_keys_resize(Buf::Inc, new_size)?;
         }
         Ok(())
     }
@@ -1203,35 +743,34 @@ impl Fs {
         }
 
         for wb in &self.btree.write_buffer {
-            if wb.nr_flushes.get() == 0 {
+            let f = &**wb.flushing;
+            if f.nr_flushes.get() == 0 {
                 continue;
             }
 
-            prt!(out, "{}\n", wb.idx.name());
+            prt!(out, "{}\n", wb.wb_btree().name());
             let mut indent = out.indent(2);
             let out = &mut *indent;
 
-            prt!(out, "inc keys:\t{}/{}\n",            wb.inc.keys.len(), wb.inc.keys.capacity());
-            prt!(out, "inc seq pinned:\t{}\n",         wb.inc.pin.seq());
+            prt!(out, "inc keys:\t{}/{}\n",            wb.inc.nr.get(), wb.inc.size.get());
+            prt!(out, "inc seq pinned:\t{}\n",         wb.pin(Buf::Inc).seq());
 
-            prt!(out, "flushing keys:\t{}/{}\n",       wb.flushing.keys.len(), wb.flushing.keys.capacity());
-            prt!(out, "flushing seq pinned:\t{}\n",    wb.flushing.pin.seq());
+            prt!(out, "flushing keys:\t{}/{}\n",       f.keys.nr.get(), f.keys.size.get());
+            prt!(out, "flushing seq pinned:\t{}\n",    wb.pin(Buf::Flushing).seq());
 
-            prt!(out, "sorted:\t{}/{}\n",              wb.sorted.len(), wb.sorted.capacity());
+            prt!(out, "sorted:\t{}/{}\n",              f.sorted.nr.get(), f.sorted.size.get());
 
-            prt!(out, "nr flushes:\t{}\n",             wb.nr_flushes.get());
-            for (j, n) in wb.nr_flushes_caller.iter().enumerate() {
+            prt!(out, "nr flushes:\t{}\n",             f.nr_flushes.get());
+            for (j, n) in f.nr_flushes_caller.iter().enumerate() {
                 prt!(out, "  {}:\t{}\n", c::wb_flush_caller::from_bits(j as u32).name(), n.get());
             }
-            prt!(out, "keys flushed:\t{}\n",           wb.nr_keys_flushed.get());
-            prt!(out, "keys fast:\t{}\n",              wb.nr_keys_fast.get());
-            prt!(out, "keys slowpath:\t{}\n",          wb.nr_keys_slowpath.get());
-            prt!(out, "shards total:\t{}\n",           wb.nr_shards_total.get());
-            if wb.nr_flushes.get() != 0 {
-                prt!(out, "avg shards/flush:\t{}\n",   wb.nr_shards_total.get() / wb.nr_flushes.get());
-            }
-            if wb.nr_shards_total.get() != 0 {
-                prt!(out, "avg shard size:\t{}\n",     wb.nr_keys_flushed.get() / wb.nr_shards_total.get());
+            prt!(out, "keys flushed:\t{}\n",           f.nr_keys_flushed.get());
+            prt!(out, "keys fast:\t{}\n",              f.nr_keys_fast.get());
+            prt!(out, "keys slowpath:\t{}\n",          f.nr_keys_slowpath.get());
+            prt!(out, "shards total:\t{}\n",           f.nr_shards_total.get());
+            prt!(out, "avg shards/flush:\t{}\n",       f.nr_shards_total.get() / f.nr_flushes.get());
+            if f.nr_shards_total.get() != 0 {
+                prt!(out, "avg shard size:\t{}\n",     f.nr_keys_flushed.get() / f.nr_shards_total.get());
             }
 
             let busy = unsafe { crate::util::workqueue::work_busy((&raw const wb.flush_work).cast_mut()) };
@@ -1250,70 +789,20 @@ impl Fs {
             unsafe { cancel_work_sync((&raw const wb.flush_work).cast_mut()) };
         }
     }
-
-    pub fn btree_write_buffer_start(&self) -> Result<(), BchError> {
-        /*
-         * Work items are initialized once in init_early; nothing to start —
-         * flushes are driven on demand by queue_work() from the wakeup path.
-         */
-        Ok(())
-    }
 }
 
 #[c_export]
 pub fn bch2_fs_btree_write_buffer_exit(c: &Fs) {
     for wb in &c.btree.write_buffer {
-        assert!((wb.inc.keys.is_empty() && wb.flushing.keys.is_empty()) ||
-                c.journal.error().is_err());
-
-        unsafe {
-            *wb.accounting_mut() = KVVec::new();
-            *wb.sorted_mut() = KVVec::new();
-            *wb.flushing.keys_mut() = KVVec::new();
-            *wb.inc.keys_mut() = KVVec::new();
-        }
+        assert!(wb.is_empty() || c.journal.error().is_err());
     }
 }
 
+/* The write buffers are an array, in wb_btree order: so are their locks, of each class */
 #[cfg(all(kernel, CONFIG_PROVE_LOCKING))]
 unsafe extern "C" fn wb_keys_lock_cmp_fn(a: *const kernel::bindings::lockdep_map,
                                          b: *const kernel::bindings::lockdep_map) -> c_int {
-    let keys = |m: *const kernel::bindings::lockdep_map| unsafe {
-        &*m.byte_sub(offset_of!(kernel::bindings::mutex, dep_map) + offset_of!(c::btree_write_buffer_keys, lock))
-            .cast::<c::btree_write_buffer_keys>()
-    };
-
-    keys(a).wb_btree.cmp(&keys(b).wb_btree) as c_int
-}
-
-/// # Safety
-/// Before anything uses the write buffer: as C calls it, from bch2_fs_alloc().
-#[c_export]
-pub unsafe fn bch2_fs_btree_write_buffer_init_early(c: *mut Fs) {
-    for i in 0..c::BCH_WB_BTREE_NR {
-        unsafe {
-            let wb = &raw mut (*c).btree.write_buffer[i as usize];
-            let idx = c::bch_wb_btree::from_bits(i);
-
-            (*wb).c                     = c;
-            (*wb).idx                   = idx;
-            (*wb).inc.wb_btree          = idx;
-            (*wb).inc.is_flushing       = false;
-            (*wb).flushing.wb_btree     = idx;
-            (*wb).flushing.is_flushing  = true;
-            let _ = <c::mutex as RawLockBase>::init(&raw mut (*wb).inc.lock, c"&wb->inc.lock",
-                                                    crate::new_lock!(@key));
-            let _ = <c::mutex as RawLockBase>::init(&raw mut (*wb).flushing.lock, c"&wb->flushing.lock",
-                                                    crate::new_lock!(@key));
-            #[cfg(all(kernel, CONFIG_PROVE_LOCKING))]
-            {
-                crate::locking::mutex_set_cmp_fn(&raw mut (*wb).inc.lock, wb_keys_lock_cmp_fn);
-                crate::locking::mutex_set_cmp_fn(&raw mut (*wb).flushing.lock, wb_keys_lock_cmp_fn);
-            }
-            let _ = crate::util::alloc::init_at(crate::new_work!(flush_work_fn, "&wb->flush_work"),
-                                                &raw mut (*wb).flush_work);
-        }
-    }
+    (a as usize).cmp(&(b as usize)) as c_int
 }
 
 #[c_export]
@@ -1327,26 +816,24 @@ pub fn bch2_fs_btree_write_buffer_init(c: &Fs) -> c_int {
     let initial_size = 1 << 10;
 
     for wb in &c.btree.write_buffer {
-        let ret = unsafe {
-            resize_gfp(wb.inc.keys_mut(), initial_size, c::GFP_KERNEL)
-                .and_then(|()| resize_gfp(wb.flushing.keys_mut(), initial_size, c::GFP_KERNEL))
-                .and_then(|()| resize_gfp(wb.sorted_mut(), initial_size, c::GFP_KERNEL))
-        };
+        #[cfg(all(kernel, CONFIG_PROVE_LOCKING))]
+        {
+            wb.inc.set_cmp_fn(wb_keys_lock_cmp_fn);
+            wb.flushing.set_cmp_fn(wb_keys_lock_cmp_fn);
+        }
+
+        let mut flushing = wb.flushing.lock();
+        let (f, f_live) = flushing.parts();
+        let mut inc = wb.inc.lock();
+        let (inc, inc_live) = inc.parts();
+
+        let ret = inc.keys.resize(inc_live, initial_size, c::GFP_KERNEL)
+            .and_then(|()| f.keys.resize(&f_live.keys, initial_size, c::GFP_KERNEL))
+            .and_then(|()| resize_gfp(&mut f.sorted, initial_size, c::GFP_KERNEL));
+        f_live.sorted.set(f.sorted.len(), f.sorted.capacity());
         if let Err(e) = ret {
             return ret_to_c(Err(BchError::from(e)));
         }
     }
     0
-}
-
-#[c_export]
-pub fn bch_wb_btree_idx(btree: Btree) -> c::bch_wb_btree {
-    wb_btree_idx(btree)
-}
-
-/// # Safety
-/// @k is a whole key.
-#[c_export]
-pub unsafe fn bch2_btree_write_buffer_insert_checks(c: &Fs, btree: Btree, k: *mut c::bkey_i) -> c_int {
-    ret_to_c(insert_checks(c, btree, unsafe { &*BkeyI::from_raw(k) }))
 }

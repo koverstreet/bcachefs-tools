@@ -292,7 +292,7 @@ impl<const U64S: usize> PaddedKey<U64S> {
 }
 
 /// The keys in @u64s, from where a key starts.
-fn keys(u64s: &[u64]) -> impl Iterator<Item = &BkeyI> + '_ {
+pub(crate) fn keys(u64s: &[u64]) -> impl Iterator<Item = &BkeyI> + '_ {
     let len = u64s.len();
     VstructRefEntries::<c::bkey_i>::new(plain_bytes(u64s)).map(move |k| {
         let k = k.unwrap_or_else(|e| panic!("a key overruns its buffer, of {len} u64s: {e}"));
@@ -302,7 +302,7 @@ fn keys(u64s: &[u64]) -> impl Iterator<Item = &BkeyI> + '_ {
 }
 
 /// The key at the front of @u64s.
-fn key_mut(u64s: &mut [u64]) -> &mut BkeyI {
+pub(crate) fn key_mut(u64s: &mut [u64]) -> &mut BkeyI {
     let len = u64s.len();
     let k = VstructRefEntriesMut::<c::bkey_i>::new(plain_bytes_mut(u64s)).next()
         .expect("a key in an empty buffer")

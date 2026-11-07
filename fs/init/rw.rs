@@ -228,8 +228,8 @@ impl StateLockWrite<'_> {
             assert!(fs.btree.cache.lock.nr_dirty() == 0);
             assert_eq!(fs.btree.key_cache.nr_dirty.load(Relaxed), 0);
             for wb in &fs.btree.write_buffer {
-                assert!(wb.inc.keys.is_empty());
-                assert!(wb.flushing.keys.is_empty());
+                assert_eq!(wb.inc.nr.get(), 0);
+                assert_eq!(wb.flushing.keys.nr.get(), 0);
             }
             fs.verify_replicas_refs_clean();
             verify_accounting_clean(fs);
@@ -255,7 +255,6 @@ impl StateLockWrite<'_> {
             (*p).journal.init_rw()?;
             (*p).journal.reclaim_start()?;
         }
-        fs.btree_write_buffer_start()?;
         fs.copygc_start()?;
         fs.reconcile_start()?;
 
@@ -348,7 +347,6 @@ impl StateLockWrite<'_> {
 
         let ret = (|| {
             fs.journal.reclaim_start()?;
-            fs.btree_write_buffer_start()?;
             fs.copygc_start()?;
             if fs.opts().read_only.get() == 0 {
                 fs.reconcile_start()?;
