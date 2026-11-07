@@ -4,29 +4,6 @@
 
 #include "btree/bkey.h"
 
-static inline ssize_t __bch2_btree_key_cache_must_wait(struct bch_fs *c)
-{
-	size_t nr_dirty = atomic_long_read(&c->btree.key_cache.nr_dirty);
-	size_t nr_keys = atomic_long_read(&c->btree.key_cache.nr_keys);
-	size_t max_dirty = 4096 + (nr_keys * 3) / 4;
-
-	return nr_dirty - max_dirty;
-}
-
-static inline bool bch2_btree_key_cache_must_wait(struct bch_fs *c)
-{
-	return __bch2_btree_key_cache_must_wait(c) > 0;
-}
-
-static inline bool bch2_btree_key_cache_wait_done(struct bch_fs *c)
-{
-	size_t nr_dirty = atomic_long_read(&c->btree.key_cache.nr_dirty);
-	size_t nr_keys = atomic_long_read(&c->btree.key_cache.nr_keys);
-	size_t max_dirty = 2048 + (nr_keys * 5) / 8;
-
-	return nr_dirty <= max_dirty;
-}
-
 int bch2_btree_key_cache_journal_flush(struct journal *,
 				struct journal_entry_pin *, u64);
 int bch2_btree_key_cache_flush_going_ro(struct bch_fs *);

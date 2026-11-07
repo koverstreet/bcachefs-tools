@@ -46,11 +46,46 @@ impl bch_fs_btree_key_cache {
 
         nr_dirty.saturating_sub(max_dirty).max(0) as usize
     }
+
+    pub fn dirty_over_max(&self) -> isize {
+        let nr_dirty = self.nr_dirty.load(Relaxed);
+        let nr_keys = self.nr_keys.load(Relaxed);
+        let max_dirty = 4096 + (nr_keys * 3) / 4;
+
+        nr_dirty - max_dirty
+    }
+
+    pub fn must_wait(&self) -> bool {
+        self.dirty_over_max() > 0
+    }
+
+    pub fn wait_done(&self) -> bool {
+        let nr_dirty = self.nr_dirty.load(Relaxed);
+        let nr_keys = self.nr_keys.load(Relaxed);
+        let max_dirty = 2048 + (nr_keys * 5) / 8;
+
+        nr_dirty <= max_dirty
+    }
 }
 
 #[c_export]
 pub fn bch2_nr_btree_keys_need_flush(c: &Fs) -> usize {
     c.btree.key_cache.nr_keys_need_flush()
+}
+
+#[c_export]
+pub fn __bch2_btree_key_cache_must_wait(c: &Fs) -> isize {
+    c.btree.key_cache.dirty_over_max()
+}
+
+#[c_export]
+pub fn bch2_btree_key_cache_must_wait(c: &Fs) -> bool {
+    c.btree.key_cache.must_wait()
+}
+
+#[c_export]
+pub fn bch2_btree_key_cache_wait_done(c: &Fs) -> bool {
+    c.btree.key_cache.wait_done()
 }
 
 #[repr(C, align(4))]
