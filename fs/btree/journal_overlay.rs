@@ -227,7 +227,7 @@ impl Fs {
     ///
     /// # Safety
     /// A ref is held for 'a.
-    unsafe fn journal_keys_held(&self) -> &c::journal_keys {
+    pub(crate) unsafe fn journal_keys_held(&self) -> &c::journal_keys {
         unsafe { self.journal_keys.value_held() }
     }
 }
@@ -511,7 +511,7 @@ impl c::journal_keys {
 
 /// The first key from @pos to @end, not overwritten: searched for, or from
 /// *@idx if it's close, and *@idx left at it for the next.
-fn peek_max(jk: &c::journal_keys, btree: Btree, level: u32, pos: Bpos, end: Bpos, idx: &mut usize)
+pub(crate) fn peek_max(jk: &c::journal_keys, btree: Btree, level: u32, pos: Bpos, end: Bpos, idx: &mut usize)
     -> *const c::bkey_i
 {
     let keys = jk.keys();
@@ -577,7 +577,12 @@ pub unsafe fn bch2_journal_keys_peek_max(c: &Opaque<Fs>, btree: Btree, level: c_
 #[c_export]
 pub unsafe fn bch2_journal_keys_peek_prev_min(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos,
                                               end: Bpos, idx: &mut usize) -> *const c::bkey_i {
-    let jk = unsafe { Fs::from_c(c).journal_keys_held() };
+    peek_prev_min(unsafe { Fs::from_c(c).journal_keys_held() }, btree, level, pos, end, idx)
+}
+
+pub(crate) fn peek_prev_min(jk: &c::journal_keys, btree: Btree, level: u32, pos: Bpos, end: Bpos, idx: &mut usize)
+    -> *const c::bkey_i
+{
     let keys = jk.keys();
     let mut iters = 0;
 

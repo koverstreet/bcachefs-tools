@@ -707,6 +707,20 @@ impl BtreeTrans<'_> {
         ret
     }
 
+    pub(crate) fn path_set_should_be_locked(&self, paths: &mut Paths<'_>, idx: PathIdx) {
+        let path = &mut paths[idx];
+        ebug_assert!(path.locked(path.level() as usize));
+
+        if !path.should_be_locked() {
+            path.bits.set_should_be_locked(true);
+            #[cfg(CONFIG_BCACHEFS_DEBUG)]
+            self.fs().event_trace(events::btree_path_should_be_locked, |out| {
+                prt!(out, "{}\n", self.fn_name());
+                self.path_to_text_short(out, paths, idx);
+            });
+        }
+    }
+
     pub(crate) fn path_upgrade_norestart(&self, paths: &mut Paths<'_>, idx: PathIdx, new_locks_want: usize) -> bool {
         paths[idx].bits.set_locks_want(new_locks_want as u8);
 

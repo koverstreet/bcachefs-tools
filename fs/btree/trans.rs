@@ -755,7 +755,7 @@ impl BtreeTrans<'_> {
         })
     }
 
-    fn maybe_inject_restart(&self, ip: c_ulong) -> Result<(), BchError> {
+    pub(crate) fn maybe_inject_restart(&self, ip: c_ulong) -> Result<(), BchError> {
         #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
         if crate::util::kernel::ktime_get_ns() & !(!0u64 << (10 + self.restart_count_this_trans.get()).min(63)) == 0 {
             self.fs().event_inc_trace(events::trans_restart_injected, |out| prt!(out, "{}", self.fn_name()));
@@ -768,6 +768,15 @@ impl BtreeTrans<'_> {
 
     /// @size bytes of the transaction's memory, when they don't fit in what it
     /// has: grown, or the transaction restarted to grow it.
+    pub(crate) fn kmalloc_in(&self, paths: &mut Paths<'_>, bytes: usize) -> Result<*mut u8, BchError> {
+        let size = bytes.next_multiple_of(size_of::<u64>());
+
+        match self.mem_with(|m| m.alloc(size / size_of::<u64>())) {
+            Some(p) => Ok(p.as_ptr().cast()),
+            None    => Ok(self.kmalloc_grow(paths, size, crate::ret_ip!())?.cast()),
+        }
+    }
+
     pub(crate) fn kmalloc_grow(&self, paths: &mut Paths<'_>, size: usize, ret_ip: c_ulong)
         -> Result<*mut c_void, BchError>
     {
