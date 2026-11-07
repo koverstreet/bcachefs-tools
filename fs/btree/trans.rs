@@ -173,15 +173,14 @@ impl<'f> BtreeTrans<'f> {
         TransAttempt::new(self, self.begin_raw())
     }
 
-    /// The key updates queued: trans_for_each_update().
-    pub(crate) fn queued_updates(&self) -> &[c::btree_insert_entry] {
+    /// The key updates queued, without the path table borrowed: Paths::updates()
+    /// is the way to them.
+    ///
+    /// # Safety
+    /// Not held across anything that grows the path table or begins the
+    /// transaction.
+    pub(crate) unsafe fn updates_unguarded(&self) -> &[c::btree_insert_entry] {
         unsafe { core::slice::from_raw_parts(self.updates.get(), self.nr_updates.get() as usize) }
-    }
-
-    /// queued_updates(), each with its key: in the transaction's memory while
-    /// it's queued.
-    pub(crate) fn queued_update_keys(&self) -> impl Iterator<Item = (&c::btree_insert_entry, &BkeyI)> {
-        self.queued_updates().iter().map(|i| (i, unsafe { &*BkeyI::from_raw(i.k) }))
     }
 
     /// Whether anything is queued for the next commit: key updates, journal
@@ -195,8 +194,8 @@ impl<'f> BtreeTrans<'f> {
     /// Drop everything queued for the next commit: as C's
     /// bch2_trans_reset_updates(), which every commit and begin runs.
     pub(crate) fn reset_updates(&self, paths: &mut Paths<'_>) {
-        for i in 0..self.queued_updates().len() {
-            let path = self.queued_updates()[i].path;
+        for i in 0..paths.updates().len() {
+            let path = paths.updates()[i].path;
             self.path_put(paths, path, true);
         }
 
@@ -601,8 +600,9 @@ impl Drop for TransGuard<'_> {
         {
             let mut paths = t.paths();
 
-            for i in t.queued_updates() {
-                paths.put_ll(i.path, true);
+            for i in 0..paths.updates().len() {
+                let path = paths.updates()[i].path;
+                paths.put_ll(path, true);
             }
             t.nr_updates.set(0);
 
@@ -985,7 +985,9 @@ impl BtreeTrans<'_> {
              self.nr_updates.get(), self.fn_name(), self.journal_res.get().seq);
         let mut out = out.indent(2);
 
-        for (i, k) in self.queued_update_keys() {
+        /* from wherever an error's found - path table borrowed or not; this reads it and is done */
+        for i in unsafe { self.updates_unguarded() } {
+            let k = unsafe { &*BkeyI::from_raw(i.k) };
             let old = BkeySC { k: &i.old_k, v: i.old_v, iter: PhantomData, val: PhantomData };
 
             prt!(out, "update: btree={} cached={} ", i.bits.btree_id(), u32::from(i.bits.cached()));

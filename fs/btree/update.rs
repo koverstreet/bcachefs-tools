@@ -818,7 +818,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
          * work:
          */
         let (cached, old_btree_u64s) = {
-            let u = &t.queued_updates()[i];
+            let paths = t.paths();
+            let u = &paths.updates()[i];
             (u.bits.cached(), u.old_btree_u64s)
         };
         if cached && (old_btree_u64s == 0 ||
@@ -862,7 +863,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         n.bits.set_cached(path.cached());
 
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
-            for w in t.queued_updates().windows(2) {
+            for w in paths.updates().windows(2) {
                 assert!(insert_entry_cmp(&w[0], &w[1]) == Ordering::Less, "the transaction's updates out of order");
             }
         }
@@ -871,7 +872,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
          * Pending updates are kept sorted: first, find position of new update,
          * then delete/trim any updates the new update overwrites:
          */
-        let updates = t.queued_updates();
+        let updates = paths.updates();
         let i = updates.iter().position(|u| insert_entry_cmp(&n, u) != Ordering::Greater).unwrap_or(updates.len());
         let overwrite = i < updates.len() && insert_entry_cmp(&n, &updates[i]) == Ordering::Equal;
 
@@ -929,7 +930,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
     fn flush_new_cached_update(&self, i: usize, flags: UpdateTriggerFlags, ip: c_ulong) -> Result<(), BchError> {
         let t = self.trans();
         let (btree, pos) = {
-            let u = &t.queued_updates()[i];
+            let paths = t.paths();
+            let u = &paths.updates()[i];
             (u.bits.btree_id(), u.old_k.p)
         };
 
@@ -1044,9 +1046,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
         -> Result<*mut c::bkey_i, BchError>
     {
         let t = self.trans();
-        let i = t.queued_updates().iter()
-            .position(|e| e.bits.btree_id() == btree && u32::from(e.bits.level()) == level &&
-                          unsafe { (*e.k).k.p } == pos)
+        let i = t.paths().update_keys()
+            .position(|(e, k)| e.bits.btree_id() == btree && u32::from(e.bits.level()) == level && k.k.p == pos)
             .unwrap_or_else(|| panic!("growing an update not queued: {btree} level {level} at {pos}"));
 
         let new_buf = self.bkey_alloc(needed_u64s)?.as_ptr();

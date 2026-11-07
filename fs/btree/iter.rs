@@ -702,7 +702,7 @@ impl<'t> BtreeIter<'t> {
         let end = b.contents().data().min_key;
         let btree = self.btree();
 
-        for (i, u) in self.trans_c().queued_update_keys() {
+        for (i, u) in paths.update_keys() {
 
             if !i.bits.key_cache_already_flushed() && i.bits.btree_id() == btree &&
                u.k.p <= search_key && u.k.p >= if k.is_some() { self.k.p } else { end } {
@@ -719,7 +719,7 @@ impl<'t> BtreeIter<'t> {
         let btree = self.btree();
         let level = u32::from(self.min_depth);
 
-        for (i, u) in self.trans_c().queued_update_keys() {
+        for (i, u) in paths.update_keys() {
 
             if !i.bits.key_cache_already_flushed() && i.bits.btree_id() == btree &&
                u32::from(i.bits.level()) == level &&
@@ -730,11 +730,11 @@ impl<'t> BtreeIter<'t> {
     }
 
     #[inline(never)]
-    fn trans_peek_slot_updates(&mut self, k: &mut Option<KeyVal>) {
+    fn trans_peek_slot_updates(&mut self, paths: &Paths<'_>, k: &mut Option<KeyVal>) {
         let btree = self.btree();
         let level = u32::from(self.min_depth);
 
-        for (i, u) in self.trans_c().queued_update_keys() {
+        for (i, u) in paths.update_keys() {
 
             if !i.bits.key_cache_already_flushed() && i.bits.btree_id() == btree &&
                u32::from(i.bits.level()) == level &&
@@ -1569,7 +1569,7 @@ impl<'t> BtreeIter<'t> {
                     }
 
                     if trans.nr_updates.get() != 0 && !flags.contains(BtreeIterFlags::COMMITTED) {
-                        self.trans_peek_slot_updates(&mut v);
+                        self.trans_peek_slot_updates(paths, &mut v);
                     }
 
                     if v.is_some() &&

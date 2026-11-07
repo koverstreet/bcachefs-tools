@@ -511,7 +511,19 @@ impl Paths<'_> {
         unsafe { core::slice::from_raw_parts_mut(t.sorted.get(), t.nr_paths.get() as usize + 4) }
     }
 
-    /// The queued updates are in the table's allocation, after the paths.
+    /// The key updates queued: trans_for_each_update(). They're in the
+    /// table's allocation, after the paths - growing moves them, and the
+    /// transaction beginning drops them, both with the table borrowed mutably.
+    pub(crate) fn updates(&self) -> &[c::btree_insert_entry] {
+        unsafe { self.trans.updates_unguarded() }
+    }
+
+    /// updates(), each with its key: in the transaction's memory while it's
+    /// queued.
+    pub(crate) fn update_keys(&self) -> impl Iterator<Item = (&c::btree_insert_entry, &BkeyI)> {
+        self.updates().iter().map(|i| (i, unsafe { &*BkeyI::from_raw(i.k) }))
+    }
+
     pub(crate) fn update_mut(&mut self, i: usize) -> &mut c::btree_insert_entry {
         let t = self.trans;
         assert!(i < t.nr_updates.get() as usize);
