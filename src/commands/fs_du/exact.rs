@@ -1,6 +1,5 @@
-//! bcachefs fs du: the space a set of paths references, and how much of the
-//! devices it occupies, read from the mounted filesystem's extents and reflink
-//! btrees through BCH_IOCTL_QUERY_BTREE_KEYS, which is admin only.
+//! The space a set of paths references, and how much of the devices it
+//! occupies, read file by file from the extents and reflink btrees.
 //!
 //! Disk is counted by physical region, never by key, because keys share
 //! regions: snapshots see the same keys at ancestor snapshot IDs, reflink_p
@@ -25,9 +24,9 @@
 //! Only what's in the btree is counted: dirty pagecache isn't, and inline data
 //! and reservations are referenced but take no device space.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
 use bcachefs_kernel::btree::bkey::prelude::*;
@@ -38,41 +37,11 @@ use bcachefs_kernel::format::{Btree, CompressionType};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::util::{Sectors, ToText};
-use bch_bindgen::c::DegradedAction;
-use clap::Parser;
 
-use crate::device_scan::open_mounted_for_decoding;
+use super::{Cli, Mounted, Subvols};
 use crate::util::statx_subvol;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
-
-#[derive(Parser, Debug)]
-#[command(name = "du", about = "Show space used by files and directories",
-    long_about = "Shows, for each path, the space its files reference and the \
-device space it occupies, counting each physical extent once: data shared \
-between snapshots, reflinked copies and hardlinks is counted once, within a \
-path and across all paths in the total. Every replica counts toward disk; \
-cached copies and erasure coding parity don't. Directories are walked across \
-subvolumes and snapshots, never into another filesystem. Requires \
-CAP_SYS_ADMIN.",
-    disable_help_flag = true)]
-pub struct Cli {
-    /// Print help
-    #[arg(long = "help", action = clap::ArgAction::Help)]
-    _help: (),
-
-    /// Human-readable units
-    #[arg(short = 'h', long = "human-readable")]
-    human_readable: bool,
-
-    /// Break the total down by compression type
-    #[arg(short = 'c', long)]
-    compression: bool,
-
-    /// Files and directories on a mounted bcachefs
-    #[arg(default_value = ".")]
-    paths: Vec<PathBuf>,
-}
 
 /// A dirty pointer's region of a device, in sectors.
 #[derive(Clone, Copy)]
@@ -184,7 +153,7 @@ struct Walk<'a> {
     fs:        &'a Fs,
     /// st_dev of the filesystem being walked
     dev:       u64,
-    snapshots: HashMap<u64, u32>,
+    subvols:   Subvols,
     /// Keys neither counted nor understood, by type: reported, not dropped.
     skipped:   BTreeMap<String, u64>,
     errors:    u64,
@@ -192,22 +161,8 @@ struct Walk<'a> {
 
 impl Walk<'_> {
     fn snapshot(&mut self, subvol: u64) -> Result<u32> {
-        if let Some(&snapshot) = self.snapshots.get(&subvol) {
-            return Ok(snapshot);
-        }
-
-        let p = pos(0, subvol);
-        let mut iter = OnlineBtreeIter::with_buf_size(self.handle, Btree::subvolumes, 0, p, p,
-                                                      OnlineIterFlags::default(), 4096);
-        let snapshot = match iter.next()? {
-            Some(k) if k.k.p == p => k.arm::<c::Subvolume>()
-                .ok_or_else(|| anyhow!("subvolume {subvol}: key at {} is a {:?}", k.k.p, k.k.key_type()))?
-                .v().snapshot.get(),
-            _ => bail!("subvolume {subvol} not found"),
-        };
-
-        self.snapshots.insert(subvol, snapshot);
-        Ok(snapshot)
+        self.subvols.snapshot(self.handle, subvol)?
+            .ok_or_else(|| anyhow!("subvolume {subvol} not found"))
     }
 
     fn skip(&mut self, k: BkeySC<'_>) {
@@ -342,45 +297,14 @@ impl Walk<'_> {
     }
 }
 
-/// The mounted filesystem @path is on, and its st_dev.
-fn open_fs_of(path: &Path) -> Result<(BcachefsHandle, u64)> {
-    let stx = statx_subvol(path, 0)
-        .with_context(|| format!("{}", path.display()))?
-        .ok_or_else(|| anyhow!("{}: not on a bcachefs filesystem", path.display()))?;
-
-    // a handle comes from a directory: a regular file is never resolved
-    let dir = if u32::from(stx.stx_mode) & libc::S_IFMT == libc::S_IFDIR {
-        path
-    } else {
-        path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."))
-    };
-    let handle = BcachefsHandle::open_if_mounted(dir)
-        .map_err(|e| anyhow!("{}: {e}", dir.display()))?
-        .ok_or_else(|| anyhow!("{}: not on a mounted bcachefs", path.display()))?;
-
-    Ok((handle, libc::makedev(stx.stx_dev_major, stx.stx_dev_minor)))
-}
-
-fn fs_du(cli: Cli) -> Result<()> {
-    let (handle, dev) = open_fs_of(&cli.paths[0])?;
-    for path in &cli.paths[1..] {
-        if open_fs_of(path)?.0.uuid() != handle.uuid() {
-            bail!("{}: on a different filesystem than {}", path.display(), cli.paths[0].display());
-        }
-    }
-
-    let mut opts = c::bch_opts::default();
-    opts.set_degraded(DegradedAction::very);
-    opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue);
-    let fs = open_mounted_for_decoding(&handle, opts)?;
-
+pub(super) fn run(m: &Mounted, cli: &Cli) -> Result<()> {
     let mut walk = Walk {
-        handle: &handle,
-        fs:     &fs,
-        dev,
-        snapshots: HashMap::new(),
-        skipped:   BTreeMap::new(),
-        errors:    0,
+        handle:  &m.handle,
+        fs:      &m.fs,
+        dev:     m.dev,
+        subvols: Subvols::default(),
+        skipped: BTreeMap::new(),
+        errors:  0,
     };
     let mut total = Usage::default();
     let mut seen_total = HashSet::new();
@@ -426,8 +350,6 @@ fn fs_du(cli: Cli) -> Result<()> {
     }
     Ok(())
 }
-
-pub const CMD: super::CmdDef = typed_cmd!("du", "Show space used by files and directories", Cli, fs_du);
 
 #[cfg(test)]
 mod tests {
