@@ -228,6 +228,63 @@ impl<'b> KeyRoom<'b> {
     }
 }
 
+/// A key kept in a struct, with room for its value: C's "struct bkey_i key;
+/// u64 key_pad[N];" - a field of one declares that with #[c_anon(..)]. U64S
+/// is the room, the key's header included. Zeroed, as C's structs start,
+/// it's a header and no value.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PaddedKey<const U64S: usize>([u64; U64S]);
+
+unsafe impl<const U64S: usize> ::pin_init::Zeroable for PaddedKey<U64S> {}
+
+impl<const U64S: usize> Default for PaddedKey<U64S> {
+    fn default() -> Self {
+        PaddedKey([0; U64S])
+    }
+}
+
+/// Its header.
+impl<const U64S: usize> core::ops::Deref for PaddedKey<U64S> {
+    type Target = c::bkey_i;
+
+    fn deref(&self) -> &c::bkey_i {
+        let () = Self::ROOM;
+        crate::util::vstructs::cast_plain(plain_bytes(&self.0)).expect("a padded key's header")
+    }
+}
+
+impl<const U64S: usize> PaddedKey<U64S> {
+    const ROOM: () = assert!(U64S >= BKEY_U64S, "a padded key's room, short of a key's header");
+
+    fn check(&self) {
+        let u64s = usize::from(self.k.u64s);
+        assert!(u64s <= U64S, "a key of {u64s} u64s in a room of {U64S}");
+    }
+
+    pub fn key(&self) -> &BkeyI {
+        self.check();
+        unsafe { &*BkeyI::from_raw(self.0.as_ptr().cast()) }
+    }
+
+    pub fn key_mut(&mut self) -> &mut BkeyI {
+        self.check();
+        unsafe { &mut *BkeyI::from_raw_mut(self.0.as_mut_ptr().cast()) }
+    }
+
+    pub fn set_key(&mut self, k: &BkeyI) {
+        let bytes = k.as_bytes();
+        let room = plain_bytes_mut(&mut self.0);
+        assert!(bytes.len() <= room.len(), "a key of {} bytes in a room of {}", bytes.len(), room.len());
+        room[..bytes.len()].copy_from_slice(bytes);
+    }
+
+    /// The key, to grow in its room.
+    pub fn room(&mut self) -> KeyRoom<'_> {
+        KeyRoom::existing(&mut self.0)
+    }
+}
+
 /// The keys in @u64s, from where a key starts.
 fn keys(u64s: &[u64]) -> impl Iterator<Item = &BkeyI> + '_ {
     let len = u64s.len();
