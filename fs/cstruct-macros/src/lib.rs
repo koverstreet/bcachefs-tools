@@ -1242,14 +1242,14 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
         }
         n += 1;
     }
-    // C's after the last, as C counts it
+    // Past the largest, not the last: the values needn't be in order - the
+    // counters' stable ids aren't
     let nr = e.nr.as_ref().map(|nr| {
         let nr = format_ident!("{nr}");
-        let after = match c_names.last() {
-            Some(last) => quote!(#last + 1),
-            None => quote!(0),
-        };
-        out.extend(quote!(#[allow(non_upper_case_globals, dead_code)] pub const #nr: #repr = #after;));
+        out.extend(quote! {
+            #[allow(non_upper_case_globals, dead_code)]
+            pub const #nr: #repr = { let mut n = 0; #(if #c_names + 1 > n { n = #c_names + 1; })* n };
+        });
         nr
     });
 

@@ -3157,8 +3157,11 @@ pub fn emit_items(items: &[CItem],
                         None => t.push_str(&format!("\t{},\n", e.c_variant(v))),
                     }
                 }
+                // past the largest value, as Rust has it - not C's after the last
                 if let Some(nr) = &e.nr {
-                    t.push_str(&format!("\t{nr},\n"));
+                    let past = e.variants.iter().filter_map(|v| v.value.as_deref()?.parse::<i64>().ok())
+                        .max().map_or(0, |m| m + 1);
+                    t.push_str(&format!("\t{nr} = {past},\n"));
                 }
                 // a byte or two wide, where a field holds it: GCC's packed enum
                 // is the smallest type its values fit - a 16 bit one whose
