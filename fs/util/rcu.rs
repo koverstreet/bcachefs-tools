@@ -830,7 +830,7 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
     pub unsafe fn rebuild_head<E>(&self, nr: usize, h: H, fill: impl FnOnce(&mut [T]) -> Result<(), E>)
         -> Result<Result<(), E>, AllocError>
     {
-        let new = RcuArrayBuf::<T, H>::alloc(RcuArrayHead::new(nr, h))?;
+        let new = Self::alloc(nr, h)?;
 
         // no reader sees it until replace() publishes it
         unsafe {
@@ -838,9 +838,35 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
                 RcuArrayBuf::<T, H>::free(new);
                 return Ok(Err(e));
             }
-            self.0.replace(new);
+            self.replace(new);
         }
         Ok(Ok(()))
+    }
+
+    /// A zeroed buffer of exactly @nr elements and header @h, not published:
+    /// the caller's to replace() with, to link from another buffer's header,
+    /// or to free.
+    pub fn alloc(nr: usize, h: H) -> Result<NonNull<RcuArrayHead<H>>, AllocError> {
+        RcuArrayBuf::<T, H>::alloc(RcuArrayHead::new(nr, h))
+    }
+
+    /// # Safety
+    /// @p is alloc()'s, and isn't freed for 'a.
+    pub unsafe fn parts<'a>(p: NonNull<RcuArrayHead<H>>) -> (&'a H, &'a [T]) {
+        let b = unsafe { &*RcuArrayBuf::<T, H>::from_thin(p.as_ptr()) };
+        (&b.head.h, &b.elems)
+    }
+
+    /// # Safety
+    /// As RcuBuf::replace(); @new is alloc()'s.
+    pub unsafe fn replace(&self, new: NonNull<RcuArrayHead<H>>) {
+        unsafe { self.0.replace(new) }
+    }
+
+    /// # Safety
+    /// @p is alloc()'s, and nothing - no reader either - reaches it any more.
+    pub unsafe fn free_now(p: NonNull<RcuArrayHead<H>>) {
+        unsafe { c::rust_kvfree(p.as_ptr().cast()) }
     }
 
     /// # Safety
