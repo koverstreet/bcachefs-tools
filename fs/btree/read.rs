@@ -37,7 +37,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use crate::data_structures::array_vec::ArrayVec;
 use core::mem::offset_of;
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, bitfield, c_export, c_extern};
+use cstruct_macros::{CStruct, bitfield, c_extern};
 use nestify::nest;
 use crate::format::{Btree, Nonce, BkeyTypeFlags};
 
@@ -391,14 +391,4 @@ impl BtreeNode {
         self.flags.set_write_in_flight_inner(false);
         self.flags.unlock_write_in_flight();
     }
-}
-
-#[c_export]
-pub fn bch2_btree_node_io_lock(b: &BtreeNode) {
-    b.io_lock()
-}
-
-#[c_export]
-pub fn bch2_btree_node_io_unlock(b: &BtreeNode) {
-    b.io_unlock()
 }
