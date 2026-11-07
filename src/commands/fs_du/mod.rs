@@ -8,6 +8,7 @@
 //! query starts from.
 
 mod exact;
+mod resolve;
 mod sample;
 
 use std::collections::HashMap;
@@ -67,6 +68,11 @@ pub struct Cli {
     /// Threads sampling [default: available parallelism, at most 8]
     #[arg(long, requires = "sample")]
     threads: Option<u64>,
+
+    /// Also show what's below each path, this many levels down, largest
+    /// first
+    #[arg(short = 'd', long, default_value_t = 0, requires = "sample")]
+    max_depth: usize,
 
     /// Files and directories on a mounted bcachefs
     #[arg(default_value = ".")]

@@ -29,6 +29,14 @@
 //! overwritten parts of written ones. Btree nodes are counted by their
 //! backpointer alone.
 //!
+//! A sample of dirty data belongs to the inode and snapshot of its key, or to
+//! the range of the reflink btree its indirect extent covers; each distinct
+//! owner is resolved to a path once, after sampling, by resolve.rs. A path's
+//! estimate is then the samples of the files below it, and every sector is
+//! one path's: data shared between snapshots goes to the snapshot its key is
+//! in, where exact mode counts it in each path that sees it. Cached copies
+//! go to no path, as in exact mode.
+//!
 //! Backpointers go through the btree write buffer, and the ioctl doesn't see
 //! what's still in it: data written since the last write buffer flush shows
 //! as unused. A backpointer whose key doesn't point back is counted as stale,
@@ -36,7 +44,9 @@
 //! ioctl being stateless; --seed makes a run repeatable for a given --threads.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::ops::Range;
+use std::path::{Component, Path};
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
@@ -53,6 +63,7 @@ use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::util::rcu::read_lock;
 use bcachefs_kernel::util::{Sectors, ToText};
 
+use super::resolve::{fs_path, Resolver};
 use super::{Cli, Mounted};
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
@@ -339,6 +350,7 @@ struct Tally {
     n:      u64,
     /// (device, kind) -> samples
     kinds:  BTreeMap<(usize, Kind), u64>,
+    /// Of dirty data: cached copies aren't disk, as exact mode counts it
     owners: HashMap<Owner, u64>,
 }
 
@@ -346,7 +358,7 @@ impl Tally {
     fn add(&mut self, s: Sample) {
         self.n += 1;
         *self.kinds.entry((s.dev, s.kind)).or_default() += 1;
-        if let Some(owner) = s.owner {
+        if let Some(owner) = s.owner.filter(|_| s.kind != Kind::data(DataType::cached)) {
             *self.owners.entry(owner).or_default() += 1;
         }
     }
@@ -441,6 +453,27 @@ pub(super) fn run(m: &Mounted, cli: &Cli) -> Result<()> {
     let tally = sample(&sampler, cli.samples, seed, threads)?;
     let elapsed = started.elapsed();
 
+    let mut resolver = Resolver::new(&m.handle, &m.fs)?;
+    let mut tree = Tree::default();
+    let (mut unresolved, mut reflinked) = (0, 0);
+    for (owner, &n) in &tally.owners {
+        match *owner {
+            Owner::Inode { inum, snapshot } => match resolver.path(inum, snapshot)
+                .with_context(|| format!("resolving inode {inum} in snapshot {snapshot}"))? {
+                Some(path) => tree.add(&path, n as f64),
+                None => unresolved += n,
+            },
+            Owner::Indirect(_) => reflinked += n,
+        }
+    }
+
+    let mut roots = Vec::new();
+    for path in &cli.paths {
+        let fs_path = fs_path(&mut resolver, path).with_context(|| format!("{}", path.display()))?;
+        roots.push((path, fs_path));
+    }
+    let total = tree.union(roots.iter().map(|(_, p)| p.as_path()));
+
     let mut by_kind: BTreeMap<Kind, u64> = BTreeMap::new();
     for (&(_, kind), &n) in &tally.kinds {
         *by_kind.entry(kind).or_default() += n;
@@ -451,16 +484,91 @@ pub(super) fn run(m: &Mounted, cli: &Cli) -> Result<()> {
     writeln!(out, "{} samples of {} on {} devices in {:.1}s, seed {seed}, threads {threads}",
            tally.n, Sectors(space.total), space.devs.len(), elapsed.as_secs_f64());
     out.aligned(|sub| {
-        write!(sub, "estimate\r±95%\r  type\n");
-        for (&kind, &n) in &by_kind {
-            let (est, margin) = estimate(&tally, space.total, n as f64);
+        let est = |sub: &mut Printbuf, n: f64| {
+            let (est, margin) = estimate(&tally, space.total, n);
             write!(sub, "{}\r{}\r  ", Sectors(est), Sectors(margin));
+        };
+
+        write!(sub, "disk\r±95%\r  path\n");
+        for (path, fs_path) in &roots {
+            let empty = Tree::default();
+            let t = tree.get(fs_path).unwrap_or(&empty);
+            t.to_text(sub, path, cli.max_depth, &est);
+        }
+        if roots.len() > 1 {
+            est(sub, total);
+            writeln!(sub, "total");
+        }
+
+        write!(sub, "\nestimate\r±95%\r  type\n");
+        for (&kind, &n) in &by_kind {
+            est(sub, n as f64);
             kind_to_text(sub, kind);
             writeln!(sub);
+        }
+        for (n, what) in [(unresolved, "user, unresolved"), (reflinked, "user, reflinked")] {
+            if n != 0 {
+                est(sub, n as f64);
+                writeln!(sub, "{what}");
+            }
         }
     });
     print!("{out}");
     Ok(())
+}
+
+/// Samples by path, from the filesystem's root.
+#[derive(Default)]
+struct Tree {
+    samples:  f64,
+    children: BTreeMap<OsString, Tree>,
+}
+
+impl Tree {
+    fn add(&mut self, path: &Path, samples: f64) {
+        let mut t = self;
+        t.samples += samples;
+        for name in normal(path) {
+            t = t.children.entry(name.to_os_string()).or_default();
+            t.samples += samples;
+        }
+    }
+
+    fn get(&self, path: &Path) -> Option<&Tree> {
+        normal(path).try_fold(self, |t, name| t.children.get(name))
+    }
+
+    /// The samples below any of @paths, each counted once.
+    fn union<'p>(&self, paths: impl Iterator<Item = &'p Path> + Clone) -> f64 {
+        paths.clone().enumerate()
+            .filter(|&(i, p)| !paths.clone().enumerate()
+                .any(|(j, q)| p.starts_with(q) && (p != q || j < i)))
+            .filter_map(|(_, p)| self.get(p))
+            .map(|t| t.samples)
+            .sum()
+    }
+
+    /// A line for @path, then for its children down to @depth, largest first.
+    fn to_text(&self, out: &mut Printbuf, path: &Path, depth: usize,
+               est: &impl Fn(&mut Printbuf, f64)) {
+        est(out, self.samples);
+        writeln!(out, "{}", path.display());
+
+        if depth > 0 {
+            let mut children: Vec<_> = self.children.iter().collect();
+            children.sort_by(|a, b| b.1.samples.total_cmp(&a.1.samples));
+            for (name, t) in children {
+                t.to_text(out, &path.join(name), depth - 1, est);
+            }
+        }
+    }
+}
+
+fn normal(path: &Path) -> impl Iterator<Item = &OsStr> {
+    path.components().filter_map(|c| match c {
+        Component::Normal(name) => Some(name),
+        _ => None,
+    })
 }
 
 #[cfg(test)]
@@ -492,6 +600,27 @@ mod tests {
         assert_eq!(s.locate(23), (1, 7));
         assert_eq!(s.locate(24), (2, 0));
         assert_eq!(s.locate(55), (2, 31));
+    }
+
+    /// A path holds what's below it; paths given twice, or one inside
+    /// another, count once in the total.
+    #[test]
+    fn tree_sums_below_and_unions_nested_paths() {
+        let mut t = Tree::default();
+        t.add(Path::new("/a/b/f"), 3.0);
+        t.add(Path::new("/a/g"), 2.0);
+        t.add(Path::new("/h"), 1.0);
+
+        assert_eq!(t.samples, 6.0);
+        assert_eq!(t.get(Path::new("/a")).map(|t| t.samples), Some(5.0));
+        assert_eq!(t.get(Path::new("/a/b")).map(|t| t.samples), Some(3.0));
+        assert!(t.get(Path::new("/a/x")).is_none());
+
+        let paths = |p: &'static [&'static str]| p.iter().map(Path::new);
+        assert_eq!(t.union(paths(&["/a/b", "/a"])), 5.0);
+        assert_eq!(t.union(paths(&["/a", "/a"])), 5.0);
+        assert_eq!(t.union(paths(&["/a/b", "/h", "/x"])), 4.0);
+        assert_eq!(t.union(paths(&["/", "/a"])), 6.0);
     }
 
     /// None or all of the samples is certain; the margin is widest at half,
