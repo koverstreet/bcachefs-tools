@@ -6,7 +6,7 @@
 
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bch2_bkey_maybe_mergable, bkey_eq, bkey_gt, bkey_le, bkey_lt, bkey_merge, BkeyI,
-                         BkeyS, BkeySC, BkeyV, BkeyWhole, MutBkey, BKEY_U64S};
+                         BkeyS, BkeySC, BkeyWhole, MutBkey, BKEY_U64S};
 use crate::btree::iter::{btree_id_cached, commit_do, is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
 use crate::btree::journal_overlay;
@@ -481,13 +481,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
         pos:        Bpos,
         iter_flags: BtreeIterFlags,
         flags:      UpdateTriggerFlags,
-    ) -> Result<TransBkey<'a, 't, K>, BchError> {
+    ) -> Result<TransBkey<'a, 't, K>, BchError>
+    where
+        K::Validated: MutBkey<Mut = K>,
+    {
         let mut iter = BtreeIter::new(self, btree, pos, iter_flags | BtreeIterFlags::INTENT);
-        let k = iter.peek_slot_typed::<K>(self)?.untyped();
-        let k = self.make_mut_noupdate(k, size_of::<BkeyI<K>>())?;
+        let k = self.bkey_make_mut_noupdate(iter.peek_slot_typed::<K>(self)?)?;
         self.update(&iter, &k, flags)?;
-        // SAFETY: a @K's, grown to all of it
-        Ok(unsafe { k.whole_unchecked() })
+        Ok(k)
     }
 
     /// @k, the key at @iter, as bkey_make_mut_noupdate() makes it, already
@@ -1167,11 +1168,15 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     /// bit_mod(), through the write buffer.
     pub fn bit_mod_buffered(&self, btree: Btree, pos: Bpos, set: bool) -> Result<(), BchError> {
-        let mut k = c::bkey_i { k: c::bkey::new(), ..Default::default() };
-        k.k.set_key_type(if set { BkeyType::set } else { BkeyType::deleted });
-        k.k.p = pos;
-
-        self.update_buffered_key(btree, unsafe { &*BkeyI::from_raw(&k) })
+        if set {
+            let mut k = BkeyI::<c::Set>::new();
+            k.k.p = pos;
+            self.update_buffered_key(btree, k.as_ref())
+        } else {
+            let mut k = BkeyI::<c::Deleted>::new();
+            k.k.p = pos;
+            self.update_buffered_key(btree, k.as_ref())
+        }
     }
 
     /// bit_mod(), at @iter's position: bch2_btree_bit_mod_iter().
@@ -1191,10 +1196,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// @key, for write buffered @btree, through the write buffer: as
     /// bch2_trans_update_buffered(). Copied - into the transaction's journal
     /// entries, or before journal replay's done, an update of its own.
-    pub fn update_buffered<V: ?Sized>(&self, btree: Btree, key: &TransBkey<'_, 't, V>)
-        -> Result<(), BchError>
-    {
-        self.update_buffered_key(btree, unsafe { &*BkeyI::from_raw(key.as_ptr()) })
+    pub fn update_buffered(&self, btree: Btree, key: impl AsRef<BkeyI>) -> Result<(), BchError> {
+        self.update_buffered_key(btree, key.as_ref())
     }
 
     fn update_buffered_key(&self, btree: Btree, k: &BkeyI) -> Result<(), BchError> {
@@ -1365,13 +1368,13 @@ fn delete_range_one<'a>(t: &TransAttempt<'a, '_>, iter: &mut BtreeIter<'a>, end:
      * (bch2_btree_iter_peek() does guarantee that iter.pos >=
      * bkey_start_pos(k.k)).
      */
-    let mut delete = c::bkey_i { k: c::bkey::new(), ..Default::default() };
+    let mut delete = BkeyI::<c::Deleted>::new();
     delete.k.p = it.pos();
 
     if it.is_extents() {
         delete.k.resize((end.min(k.k.p).offset - it.pos().offset) as u32);
     }
 
-    unsafe { t.update_key(it, &*BkeyI::from_raw(&delete), flags)? };
+    unsafe { t.update_key(it, delete.as_ref(), flags)? };
     t.commit(Some(&res), CommitFlags::NO_ENOSPC)
 }
