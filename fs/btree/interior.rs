@@ -10,7 +10,9 @@ use core::mem::size_of;
 use cstruct_macros::{c_export, CStruct, Init, Late, c_const, c_extern, TypeInfo};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
+use crate::btree::bkey::BKEY_U64S;
 use crate::c;
+use crate::data::keylist::PaddedKey;
 use crate::fs::Fs;
 use crate::journal::entries::{EntryWriter, NoRoom};
 use crate::locking::{ExclusiveGuard, Locked};
@@ -28,8 +30,8 @@ use crate::format::Btree;
 #[derive(Default, CStruct)]
 pub struct btree_alloc {
     pub ob: c::open_buckets,
-    pub k: c::bkey_i,
-    pub k_pad: [u64; c::BKEY_BTREE_PTR_VAL_U64s_MAX],
+    #[c_anon("struct { struct bkey_i k; u64 k_pad[BKEY_BTREE_PTR_VAL_U64s_MAX]; }")]
+    pub k: PaddedKey<{ BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
 }
 
 c_const! {
@@ -169,7 +171,7 @@ fn push_roots(fs: &Fs, root_lock: &RootsGuard<'_>, skip: u64, w: &mut EntryWrite
     -> Result<(), NoRoom>
 {
     for (id, r) in roots(fs, root_lock, skip) {
-        w.push(c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_root, id as u8, r.level, &[r.key().as_bytes()])?;
+        w.push(c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_root, id as u8, r.level, &[r.key.key().as_bytes()])?;
     }
     Ok(())
 }

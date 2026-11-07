@@ -2,7 +2,9 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::bkey::BKEY_U64S;
 use crate::cstructs::c;
+use crate::data::keylist::PaddedKey;
 use crate::fs::Fs;
 use crate::util::Printbuf;
 use crate::types::c_default;
@@ -13,8 +15,8 @@ use cstruct_macros::{c_enum, c_extern, CStruct};
 #[derive(CStruct)]
 pub struct btree_write_bio {
     pub work: c::work_struct,
-    pub key: c::bkey_i,
-    pub key_pad: [u64; c::BKEY_BTREE_PTR_VAL_U64s_MAX],
+    #[c_anon("struct { struct bkey_i key; u64 key_pad[BKEY_BTREE_PTR_VAL_U64s_MAX]; }")]
+    pub key: PaddedKey<{ BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
     pub data: *mut c_void,
     pub data_bytes: c_uint,
     pub sector_offset: c_uint,

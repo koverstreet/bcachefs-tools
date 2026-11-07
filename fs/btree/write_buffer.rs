@@ -8,7 +8,8 @@
 
 use crate::accounting::{self, DiskAccountingPos};
 use crate::btree::iter::BtreeTrans;
-use crate::btree::bkey::{BkeyI, BkeySC};
+use crate::btree::bkey::{BkeyI, BkeySC, BKEY_U64S};
+use crate::data::keylist::PaddedKey;
 use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::data_structures::eytzinger::Eytzinger0;
@@ -123,8 +124,8 @@ pub struct btree_write_buffered_key {
     pub journal_seq: u64,
 
     /* BTREE_WRITE_BUFERED_VAL_U64s_MAX only applies to accounting keys */
-    pub k: c::bkey_i,
-    pub k_pad: [u64; c::BTREE_WRITE_BUFERED_VAL_U64s_MAX as usize],
+    #[c_anon("struct { struct bkey_i k; u64 k_pad[BTREE_WRITE_BUFERED_VAL_U64s_MAX]; }")]
+    pub k: PaddedKey<{ BKEY_U64S + c::BTREE_WRITE_BUFERED_VAL_U64s_MAX as usize }>,
 }
 
 #[repr(C)]
@@ -270,7 +271,7 @@ unsafe fn accounting_key_to_wb(fs: &Fs, btree: Btree, k: *mut c::bkey_i) -> Resu
         return ret_to_result_void(unsafe { bch2_accounting_key_to_wb_slowpath(fs.as_ptr(), btree, k) });
     };
 
-    let dst = (&raw const wb.accounting.as_slice()[idx].k).cast_mut();
+    let dst = (&raw const wb.accounting.as_slice()[idx].k).cast_mut().cast::<c::bkey_i>();
     accounting::accumulate(unsafe { &mut *BkeyI::from_raw_mut(dst) }, BkeySC::from(unsafe { &*BkeyI::from_raw(k) }));
     Ok(())
 }

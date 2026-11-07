@@ -2,7 +2,8 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::bkey::BkeyI;
+use crate::btree::bkey::BKEY_U64S;
+use crate::data::keylist::PaddedKey;
 use crate::fs::Fs;
 use crate::btree::node::{sort::{SortIter, SortIterSet}, BtreeNode};
 use crate::c;
@@ -120,25 +121,12 @@ c_default!(btree_cache_list);
 #[repr(C)]
 #[derive(CStruct)]
 pub struct btree_root {
-    pub key: cs::bkey_i,
-    pub key_pad: [u64; cs::BKEY_BTREE_PTR_VAL_U64s_MAX],
+    #[c_anon("struct { struct bkey_i key; u64 key_pad[BKEY_BTREE_PTR_VAL_U64s_MAX]; }")]
+    pub key: PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
     pub level: u8,
     pub alive: u8,
 }
 c_default!(btree_root);
-
-impl btree_root {
-    /// Its value runs on past key, into key_pad.
-    pub fn key(&self) -> &BkeyI {
-        unsafe { &*BkeyI::from_raw(core::ptr::from_ref(self).cast()) }
-    }
-
-    pub fn set_key(&mut self, k: &BkeyI) {
-        let bytes = k.as_bytes();
-        assert!(bytes.len() <= core::mem::offset_of!(btree_root, level), "a btree root's key: {} bytes", bytes.len());
-        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), core::ptr::from_mut(self).cast::<u8>(), bytes.len()) }
-    }
-}
 
 /// root_lock's: each btree's root as the journal and the clean section
 /// record it - key, level, alive. The known btrees', and the rest's, which
@@ -814,8 +802,8 @@ pub struct BtreeTrans<'f> {
     pub extra_disk_res: Cell<u64>,
     pub extra_disk_res_replicas: Cell<u8>,
 
-    pub btree_path_down: cs::bkey_i,
-    pub btree_path_down_pad: [u64; cs::BKEY_BTREE_PTR_VAL_U64s_MAX],
+    #[c_anon("struct { struct bkey_i btree_path_down; u64 btree_path_down_pad[BKEY_BTREE_PTR_VAL_U64s_MAX]; }")]
+    pub btree_path_down: PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
 
     #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
     #[c("struct lockdep_map dep_map")]

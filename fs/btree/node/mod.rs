@@ -13,9 +13,10 @@ pub mod iter;
 pub mod keys;
 pub mod sort;
 
-use crate::btree::bkey::{BkeyI, BkeyP, BkeySC};
+use crate::btree::bkey::{BkeyI, BkeyP, BkeySC, BKEY_U64S};
 use crate::c;
 use crate::cstructs::c as cs;
+use crate::data::keylist::PaddedKey;
 use crate::format::Btree;
 use crate::fs::Fs;
 use crate::locking::LockedBy;
@@ -197,8 +198,8 @@ pub struct NodeContents {
     pub unpack_fn_len: u8,
 
     /* Key/pointer for this btree node */
-    pub key: cs::bkey_i,
-    pub key_pad: [u64; cs::BKEY_BTREE_PTR_VAL_U64s_MAX],
+    #[c_anon("struct { struct bkey_i key; u64 key_pad[BKEY_BTREE_PTR_VAL_U64s_MAX]; }")]
+    pub key: PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
 }
 c_default!(NodeContents);
 
@@ -264,16 +265,12 @@ impl NodeContents {
         unsafe { &*self.data }
     }
 
-    /// The node's key, all of it - its value runs past bkey_i, into key_pad.
     pub fn key_i(&self) -> &BkeyI {
-        unsafe { &*BkeyI::from_raw(&raw const self.key) }
+        self.key.key()
     }
 
     pub fn set_key(&mut self, k: &BkeyI) {
-        let bytes = k.as_bytes();
-        let room = size_of_val(&self.key) + size_of_val(&self.key_pad);
-        assert!(bytes.len() <= room, "a btree node's key: {} bytes", bytes.len());
-        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), (&raw mut self.key).cast::<u8>(), bytes.len()) }
+        self.key.set_key(k)
     }
 
     pub fn sets(&self) -> &[BsetTree] {

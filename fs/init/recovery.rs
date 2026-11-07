@@ -517,7 +517,7 @@ fn journal_replay_entry_early(fs: &Fs, entry: &c::jset_entry) -> Result<(), BchE
 
             let r = roots.get_mut(id).expect("grown to it");
             r.level = e.entry.level;
-            r.set_key(k.key());
+            r.key.set_key(k.key());
             r.alive = 1;
             roots.published().roots_error[id as usize].set(0);
         }
@@ -565,7 +565,7 @@ fn read_btree_roots(fs: &Fs) -> Result<(), BchError> {
     for i in 0..fs.btree_id_nr_alive() {
         let Some((key, level)) = fs.btree.cache.roots.lock().get(i)
             .filter(|r| r.alive != 0)
-            .map(|r| (BkeyBuf::from_key(r.key().into()), r.level))
+            .map(|r| (BkeyBuf::from_key(r.key.key().into()), r.level))
         else {
             continue;
         };

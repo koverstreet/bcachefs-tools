@@ -4,7 +4,9 @@
 
 use crate::fs::Fs;
 use crate::btree::node::BtreeNode;
+use crate::btree::bkey::BKEY_U64S;
 use crate::cstructs::c;
+use crate::data::keylist::PaddedKey;
 use crate::types::{DArray, c_default, Le64};
 use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct};
@@ -39,8 +41,8 @@ pub struct btree_update_node {
     pub root: bool,
     pub update_node_key: bool,
     pub seq: Le64,
-    pub key: c::bkey_i,
-    pub key_pad: [u64; c::BKEY_BTREE_PTR_VAL_U64s_MAX],
+    #[c_anon("struct { struct bkey_i key; u64 key_pad[BKEY_BTREE_PTR_VAL_U64s_MAX]; }")]
+    pub key: PaddedKey<{ BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
 }
 c_default!(btree_update_node);
 
