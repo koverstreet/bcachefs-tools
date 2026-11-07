@@ -310,6 +310,13 @@ where
         }
     }
 
+    /// Its @T, for what writes it through a shared reference - as the lock,
+    /// or the owner's rules, the caller holds allow.
+    pub fn as_ptr(&self) -> *mut T {
+        let () = Self::FITS;
+        self.storage.get().cast()
+    }
+
     /// A RustOnly holding @t, for a struct made by value.
     pub fn from_value(t: T) -> Self {
         let () = Self::FITS;
