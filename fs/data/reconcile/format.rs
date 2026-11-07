@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use cstruct_macros::{bitfield, c_const, c_enum, c_xmacro, open_enum, CStruct};
+use cstruct_macros::{bitfield, c_const, c_enum, open_enum, CStruct};
 
 /*
  * rebalance on disk data structures:
@@ -108,22 +108,17 @@ pub struct bch_extent_reconcile_bp {
     idx:   u55,
 }
 
-c_xmacro! {
-    /* subset of BCH_INODE_OPTS */
-    BCH_RECONCILE_OPTS(x) {
-        (data_replicas),
-        (data_checksum),
-        (erasure_code),
-        (background_compression),
-        (background_target),
-        (promote_target),
-    }
-}
-
 c_enum! {
     #[open]
+    #[prefix(BCH_RECONCILE_)]
+    /* subset of BCH_INODE_OPTS */
     pub enum bch_reconcile_opts: u32 {
-        BCH_RECONCILE_OPTS(n) => concat(BCH_RECONCILE_, n),
+        data_replicas,
+        data_checksum,
+        erasure_code,
+        background_compression,
+        background_target,
+        promote_target,
     }
 }
 
@@ -134,13 +129,13 @@ impl bch_extent_reconcile {
     pub fn from_io_opts(opts: &c::bch_inode_opts) -> Self {
         let mut r = Self::new();
         macro_rules! opts {
-            ($(($name:tt)),* $(,)?) => { crate::paste! { $(
+            ($(($name:tt, $nr:expr)),* $(,)?) => { crate::paste! { $(
                 let mask = (1u64 << Self::[<$name:upper _BITS>]) - 1;
                 r.[<set_ $name>]((u64::from(opts.$name) & mask) as _);
                 r.[<set_ $name _from_inode>](opts.[<$name _from_inode>]().into());
             )* } };
         }
-        c::BCH_RECONCILE_OPTS!(opts);
+        c::bch_reconcile_opts_arms!(opts);
         r
     }
 
@@ -148,11 +143,11 @@ impl bch_extent_reconcile {
     /// from_io_opts() truncates - as (name, value).
     pub fn too_big(opts: &c::bch_inode_opts) -> impl Iterator<Item = (&'static str, u64)> {
         macro_rules! opts {
-            ($(($name:tt)),* $(,)?) => { crate::paste! { [$(
+            ($(($name:tt, $nr:expr)),* $(,)?) => { crate::paste! { [$(
                 (stringify!($name), u64::from(opts.$name), Self::[<$name:upper _BITS>]),
             )*] } };
         }
-        c::BCH_RECONCILE_OPTS!(opts).into_iter()
+        c::bch_reconcile_opts_arms!(opts).into_iter()
             .filter(|&(_, v, bits)| v >> bits != 0)
             .map(|(name, v, _)| (name, v))
     }

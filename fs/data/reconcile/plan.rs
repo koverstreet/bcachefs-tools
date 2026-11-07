@@ -128,28 +128,28 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
 
     // Before the parking below, which doesn't need them: they're only read
     let (kill, kill_ec) = brand(kp, |kb| -> Result<_, BchError> {
-        let (mut kill, mut kill_ec) = if need(o::BCH_RECONCILE_data_replicas) {
+        let (mut kill, mut kill_ec) = if need(o::data_replicas) {
             ptrs_to_drop(t, &kb, &r)?
         } else {
             (kb.none(), kb.none())
         };
 
-        if need(o::BCH_RECONCILE_erasure_code) && r.erasure_code() == 0 {
+        if need(o::erasure_code) && r.erasure_code() == 0 {
             kill_ec |= kb.where_(fs, |p| p.p.has_ec);
         }
 
         let rcu = read_lock();
         let target = crate::alloc::disk_groups::Target::decode(r.background_target().into());
         kill |= kb.where_(fs, |p| {
-            (need(o::BCH_RECONCILE_data_checksum) && p.p.crc.csum_type != csum_type) ||
-            (need(o::BCH_RECONCILE_background_compression) && p.p.crc.compression_type != compression_type) ||
-            (need(o::BCH_RECONCILE_background_target) && p.p.ptr.cached() == 0 &&
+            (need(o::data_checksum) && p.p.crc.csum_type != csum_type) ||
+            (need(o::background_compression) && p.p.crc.compression_type != compression_type) ||
+            (need(o::background_target) && p.p.ptr.cached() == 0 &&
              !fs.dev_in_target(p.p.ptr.dev().into(), target, &rcu))
         });
         Ok((kill.bits(), kill_ec.bits()))
     })?;
 
-    if need(o::BCH_RECONCILE_erasure_code) && r.erasure_code() != 0 {
+    if need(o::erasure_code) && r.erasure_code() != 0 {
         let target = r.background_target().into();
         let redundancy = u32::from(r.data_replicas()).wrapping_sub(1);
 
@@ -158,7 +158,7 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
         // forever. With EC all there is to do, park: a device change
         // will look again. Otherwise do the rest.
         if !fs.can_form_ec_stripe(target, redundancy, None) {
-            if only(o::BCH_RECONCILE_erasure_code) {
+            if only(o::erasure_code) {
                 return Ok(Plan::Park(ParkReason::NoStripe { target, redundancy }));
             }
         } else {
@@ -169,7 +169,7 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
 
             d.extra_replicas = 1;
             d.bits.set_no_devs_have(true);
-            if only(o::BCH_RECONCILE_erasure_code) {
+            if only(o::erasure_code) {
                 d.write_flags |= w::must_ec;
             }
         }
@@ -184,7 +184,7 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
     // Devices all durability 2 and replicas 1 or 3 - we can't exactly
     // match the replicas setting - or replicas to drop that we can't
     // without reducing online durability
-    if only(o::BCH_RECONCILE_data_replicas) {
+    if only(o::data_replicas) {
         return Ok(Plan::Park(ParkReason::Replicas(r.data_replicas().into())));
     }
 

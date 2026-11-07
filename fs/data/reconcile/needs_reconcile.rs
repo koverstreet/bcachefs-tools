@@ -38,9 +38,9 @@ pub(crate) fn rb_bit(o: c::bch_reconcile_opts) -> u8 {
 fn should_have_rb_opts(k: &c::bkey, r: &c::bch_extent_reconcile) -> bool {
     if k.key_type() == BkeyType::reflink_v {
         macro_rules! any_from_inode {
-            ($(($name:tt)),* $(,)?) => { crate::paste! { false $(|| r.[<$name _from_inode>]() != 0)* } };
+            ($(($name:tt, $nr:expr)),* $(,)?) => { crate::paste! { false $(|| r.[<$name _from_inode>]() != 0)* } };
         }
-        if c::BCH_RECONCILE_OPTS!(any_from_inode) {
+        if c::bch_reconcile_opts_arms!(any_from_inode) {
             return true;
         }
     }
@@ -101,24 +101,24 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
 
             if !poisoned && !btree && p.ptr.cached() == 0 {
                 if p.crc.csum_type != csum_type.0 as u8 {
-                    need(&mut r, o::BCH_RECONCILE_data_checksum);
+                    need(&mut r, o::data_checksum);
                 }
                 if p.crc.compression_type != compression_type.0 as u8 {
-                    need(&mut r, o::BCH_RECONCILE_background_compression);
+                    need(&mut r, o::background_compression);
                 }
             }
 
             if !poisoned && !evacuating && p.ptr.cached() == 0 &&
                 r.background_target() != 0 &&
                 !fs.dev_in_target(dev, Target::decode(r.background_target().into()), &rcu) {
-                need(&mut r, o::BCH_RECONCILE_background_target);
+                need(&mut r, o::background_target);
                 if dev != c::BCH_SB_MEMBER_INVALID {
                     r.set_ptr_moving(i);
                 }
             }
 
             if evacuating {
-                need(&mut r, o::BCH_RECONCILE_data_replicas);
+                need(&mut r, o::data_replicas);
                 r.set_hipri(1);
                 if dev != c::BCH_SB_MEMBER_INVALID {
                     r.set_ptr_moving(i);
@@ -136,7 +136,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
     if let Some(s) = k.arm::<c::Stripe>() {
         // both ways: a device that stops evacuating leaves the bit set on
         // stripes that no longer need anything (#929)
-        let needs = r.need_rb() & rb_bit(o::BCH_RECONCILE_data_replicas) != 0;
+        let needs = r.need_rb() & rb_bit(o::data_replicas) != 0;
         return Ok(if needs != (s.v().needs_reconcile() != 0) {
             Some(NeedsReconcile { r, invalid_devs: 0 })
         } else {
@@ -145,10 +145,10 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
     }
 
     if unwritten || incompressible {
-        r.update_need_rb(|n| n & !rb_bit(o::BCH_RECONCILE_background_compression));
+        r.update_need_rb(|n| n & !rb_bit(o::background_compression));
     }
     if unwritten {
-        r.update_need_rb(|n| n & !rb_bit(o::BCH_RECONCILE_data_checksum));
+        r.update_need_rb(|n| n & !rb_bit(o::data_checksum));
     }
 
     // whole-key durability: a device shared between the extent's stripes
@@ -158,14 +158,14 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
     let replicas = u32::from(r.data_replicas());
 
     if durability.max(ec_redundancy + 1) < replicas {
-        need(&mut r, o::BCH_RECONCILE_data_replicas);
+        need(&mut r, o::data_replicas);
         r.set_hipri(1);
     }
     if durability >= replicas + min {
-        need(&mut r, o::BCH_RECONCILE_data_replicas);
+        need(&mut r, o::data_replicas);
     }
     if !unwritten && (r.erasure_code() != 0) != ec {
-        need(&mut r, o::BCH_RECONCILE_erasure_code);
+        need(&mut r, o::erasure_code);
     }
 
     // The EC contribution floored at what the stripe can repair: a removed
@@ -260,17 +260,17 @@ fn new_needs_rb_allowed(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot
 
     // foreground writes aren't erasure coded at first, and we may crash
     // before a stripe is made
-    if new_need_rb & rb_bit(o::BCH_RECONCILE_erasure_code) != 0 &&
+    if new_need_rb & rb_bit(o::erasure_code) != 0 &&
         !k.extent_entries(fs).any(|e| matches!(e, ExtentEntry::stripe_ptr(_))) {
-        new_need_rb &= !rb_bit(o::BCH_RECONCILE_erasure_code);
+        new_need_rb &= !rb_bit(o::erasure_code);
     }
 
     if ctx == x::SET_NEEDS_RECONCILE_foreground {
         // XXX: a foreground write can end up degraded when a device is
         // yanked - retries in the write path would fix that, carefully
-        new_need_rb &= !(rb_bit(o::BCH_RECONCILE_background_compression) |
-                         rb_bit(o::BCH_RECONCILE_background_target) |
-                         rb_bit(o::BCH_RECONCILE_data_replicas));
+        new_need_rb &= !(rb_bit(o::background_compression) |
+                         rb_bit(o::background_target) |
+                         rb_bit(o::data_replicas));
         // the caller took @opt_change_cookie with its options: if they've
         // changed since, the write may rightly not match - and a scan for
         // the new ones is triggered on its own
@@ -295,20 +295,20 @@ fn new_needs_rb_allowed(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot
         return Ok(());
     }
 
-    if new_need_rb == rb_bit(o::BCH_RECONCILE_data_replicas) && dev_scan_cookie_set(t, k, dev_cookie)? {
+    if new_need_rb == rb_bit(o::data_replicas) && dev_scan_cookie_set(t, k, dev_cookie)? {
         return Ok(());
     }
 
     let old = old.copied().unwrap_or(c::bch_extent_reconcile::from_bits(0));
     let diff = Msg(|out: &mut Printbuf| {
         macro_rules! diff {
-            ($(($name:tt)),* $(,)?) => { crate::paste! { $(
-                if new_need_rb & rb_bit(o::[<BCH_RECONCILE_ $name>]) != 0 {
+            ($(($name:tt, $nr:expr)),* $(,)?) => { $(
+                if new_need_rb & rb_bit(o::$name) != 0 {
                     write!(out, "\n{} {} != {}", stringify!($name), old.$name(), new.$name());
                 }
-            )* } };
+            )* };
         }
-        c::BCH_RECONCILE_OPTS!(diff);
+        c::bch_reconcile_opts_arms!(diff);
     });
     fsck_err!(t, id::extent_io_opts_not_set, "extent with incorrect/missing reconcile opts:\n{}\nnew reconcile : {}{}",
               k.as_sc().untyped().to_text(fs), Msg(|out: &mut Printbuf| extent_reconcile_to_text(out, Some(fs), new)), diff)?;
@@ -335,7 +335,7 @@ impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
         let Some(mut k) = self.reborrow().arm::<PtrsMut>() else {
             let stripe = self.reborrow().arm::<c::Stripe>().expect("with pointers, and not PtrsMut: a stripe");
             return set_needs_reconcile_stripe(t, s, stripe,
-                new.need_rb() & rb_bit(c::bch_reconcile_opts::BCH_RECONCILE_data_replicas) != 0);
+                new.need_rb() & rb_bit(c::bch_reconcile_opts::data_replicas) != 0);
         };
         let old = k.reconcile_opts(fs).copied();
         let new_need_rb = new.need_rb() & !old.map_or(0, |old| old.need_rb());

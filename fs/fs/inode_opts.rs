@@ -436,14 +436,14 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_o
     };
     if let Some(old) = old {
         macro_rules! from_inode {
-            ($(($name:tt)),* $(,)?) => { crate::paste! { $(
+            ($(($name:tt, $nr:expr)),* $(,)?) => { crate::paste! { $(
                 if old.[<$name _from_inode>]() != 0 {
                     opts.$name = old.$name() as _;
                 }
                 opts.[<set_ $name _from_inode>](old.[<$name _from_inode>]() != 0);
             )* } };
         }
-        c::BCH_RECONCILE_OPTS!(from_inode);
+        c::bch_reconcile_opts_arms!(from_inode);
 
         // The entry was written under the fixups of its day: today's may
         // have grown, and downstream needs a combination valid under them.

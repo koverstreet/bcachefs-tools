@@ -247,7 +247,7 @@ pub(crate) fn add_reconcile_bp(t: &TransAttempt<'_, '_>, btree: Btree, level: u3
 // ── the trigger ──────────────────────────────────────────────────────────
 
 /// What a reconcile entry counts toward reconcile_work accounting: its need_rb
-/// bits - their accounting types are BCH_RECONCILE_OPTS()'s order - pending in
+/// bits - their accounting types are bch_reconcile_opts' order - pending in
 /// place of target and replicas, or high_priority added: rb_accounting_counters().
 fn rb_accounting_counters(r: Option<&c::bch_extent_reconcile>) -> u32 {
     let Some(r) = r else { return 0 };
@@ -375,7 +375,7 @@ pub fn extent_reconcile_validate(v: &BkeyValidate<'_, '_>, r: &c::bch_extent_rec
     bkey_fsck_err_on!(v, r.pending() != 0 && r.need_rb() == 0, id::extent_reconcile_bad_pending,
                       "pending incorrectly set")?;
     bkey_fsck_err_on!(v, r.hipri() != 0 &&
-                         r.need_rb() & (1 << c::bch_reconcile_opts::BCH_RECONCILE_data_replicas.0) == 0,
+                         r.need_rb() & (1 << c::bch_reconcile_opts::data_replicas.0) == 0,
                       id::extent_reconcile_bad_hipri, "hipri incorrectly set")?;
     bkey_fsck_err_on!(v, r.data_replicas() == 0, id::extent_reconcile_bad_replicas, "bad replicas")
 }
