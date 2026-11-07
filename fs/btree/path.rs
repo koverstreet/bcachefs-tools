@@ -518,6 +518,22 @@ impl Paths<'_> {
         unsafe { &mut *t.updates.get().add(i) }
     }
 
+    /// @n queued at @i, the updates from @i on moved up one: there's room for
+    /// one per path.
+    pub(crate) fn insert_update(&mut self, i: usize, n: c::btree_insert_entry) -> &mut c::btree_insert_entry {
+        let t = self.trans;
+        let nr = t.nr_updates.get() as usize;
+        assert!(i <= nr, "queueing update {i} of {nr}");
+        assert!(nr < t.nr_paths.get() as usize, "{nr} updates queued, and {} paths", t.nr_paths.get());
+        unsafe {
+            let p = t.updates.get().add(i);
+            ptr::copy(p, p.add(1), nr - i);
+            p.write(n);
+        }
+        t.nr_updates.set(t.nr_updates.get() + 1);
+        self.update_mut(i)
+    }
+
     fn allocated_mut(&mut self) -> &mut Bitmap {
         let t = self.trans;
         Bitmap::from_words_mut(unsafe {
@@ -1094,6 +1110,14 @@ impl BtreePath {
         unsafe { &*self.l[level].b.as_ptr().cast::<BtreeNode>() }
     }
 
+    /// A cached path's key cache entry, which it holds locked: None if it's
+    /// not been traversed to one.
+    pub(crate) fn key_cached(&self) -> Option<&c::bkey_cached> {
+        ebug_assert!(self.cached());
+        let ck = self.l[0].b.get().ok().flatten()?;
+        Some(unsafe { &*ck.as_ptr().cast::<c::bkey_cached>() })
+    }
+
     pub(crate) fn peek_slot(&self, u: &mut c::bkey) -> Option<KeyVal> {
         let level = self.level() as usize;
 
@@ -1122,8 +1146,7 @@ impl BtreePath {
             u.p = self.pos;
             Some(KeyVal(ptr::null()))
         } else {
-            let ck = self.l[0].b.get().ok().flatten()?;
-            let ck = unsafe { &*ck.as_ptr().cast::<c::bkey_cached>() };
+            let ck = self.key_cached()?;
 
             ebug_assert!(Btree(ck.key.btree_id.into()) == self.btree_id() && ck.key.pos == self.pos);
 
@@ -1294,7 +1317,7 @@ impl BtreeTrans<'_> {
         }
 
         let path = &paths[idx];
-        let ck = unsafe { &*path.l[0].b.as_ptr().cast::<c::bkey_cached>() };
+        let ck = path.key_cached().expect("a relocked key cache path's entry");
         assert!(Btree(ck.key.btree_id.into()) == path.btree_id() && ck.key.pos == path.pos);
 
         if !locked {
