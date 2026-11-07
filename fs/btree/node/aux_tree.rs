@@ -132,10 +132,20 @@ impl BsetTree {
 }
 
 impl RoAuxTree<'_> {
+    /// Node @j's cacheline: its inorder position, 1-based, below f.len() - the
+    /// eytzinger is the table's size - 1 nodes.
+    #[inline]
+    fn to_inorder(&self, j: usize) -> usize {
+        invariant!(j != 0, j <= self.eytz.size());
+        let inorder = self.eytz.to_inorder(j);
+        invariant!(inorder != 0, inorder < self.f.len());
+        inorder
+    }
+
     #[inline]
     pub(super) fn tree_to_bkey(&self, t: &BsetTree, j: usize) -> u16 {
-        invariant!(j != 0, j <= self.eytz.size(), j < self.f.len());
-        t.cacheline_to_bkey(self.eytz.to_inorder(j), self.f[j].key_offset)
+        invariant!(j < self.f.len());
+        t.cacheline_to_bkey(self.to_inorder(j), self.f[j].key_offset)
     }
 }
 
@@ -610,6 +620,8 @@ pub(super) fn bset_search_write_set(rw: &[RwAuxEntry], search: &Bpos) -> u16 {
 
     while l + 1 != r {
         let m = (l + r) >> 1;
+        /* a rw tree has its first entry, so l < m < r <= rw.len() */
+        invariant!(m < rw.len());
 
         if rw[m].k < *search {
             l = m;
@@ -618,6 +630,7 @@ pub(super) fn bset_search_write_set(rw: &[RwAuxEntry], search: &Bpos) -> u16 {
         }
     }
 
+    invariant!(l < rw.len());
     rw[l].offset
 }
 
@@ -671,7 +684,9 @@ pub(super) fn bset_search_tree(keys: &Keys<'_>, t: &BsetTree, ro: RoAuxTree<'_>,
         };
     }
 
-    let mut inorder = ro.eytz.to_inorder(n >> 1);
+    /* the last node the loop visited */
+    let j = n >> 1;
+    let mut inorder = ro.to_inorder(j);
 
     /*
      * n would have been the node we recursed to - the low bit tells us if
@@ -683,7 +698,9 @@ pub(super) fn bset_search_tree(keys: &Keys<'_>, t: &BsetTree, ro: RoAuxTree<'_>,
             return t.first_offset();
         }
 
-        f = &base[ro.eytz.prev(n >> 1)];
+        let prev = ro.eytz.prev(j);
+        invariant!(prev < base.len());
+        f = &base[prev];
     }
 
     t.cacheline_to_bkey(inorder, f.key_offset)
