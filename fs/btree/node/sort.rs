@@ -50,6 +50,27 @@ pub struct SortIterStack {
     pub sets: [SortIterSet; MAX_BSETS as usize + 1],
 }
 
+impl SortIterStack {
+    /// sort_iter_stack_init(): for @b's keys.
+    pub fn new(b: &BtreeNode) -> Self {
+        let mut s = Self::default();
+        s.iter = SortIter { b: core::ptr::from_ref(b).cast_mut(), used: 0, size: s.sets.len() as c_uint, data: [] };
+        s
+    }
+
+    /// The node's keys at offsets @keys, to merge.
+    pub fn add(&mut self, keys: core::ops::Range<usize>) {
+        let set = SortIterSet { k: keys.start as u32, end: keys.end as u32 };
+        unsafe { push(self.as_iter(), set) }
+    }
+
+    /// For the sorts, which take the iterator: its runs are the stack's, past
+    /// its header, so the pointer's the whole stack's.
+    pub fn as_iter(&mut self) -> *mut SortIter {
+        core::ptr::from_mut(self).cast()
+    }
+}
+
 c_enum! {
     #[closed]
     #[c_name(compact_mode)]
@@ -276,7 +297,6 @@ pub fn bch2_sort_whiteouts(fs: &Fs, b: &BtreeNode) {
     let buf = &mut bounce.u64s()[..u64s];
     let contents = unsafe { b.contents_mut() };
     let keys = b.keys(contents);
-    let start = keys.buf.len() - u64s;
 
     {
         /*
@@ -287,7 +307,7 @@ pub fn bch2_sort_whiteouts(fs: &Fs, b: &BtreeNode) {
         let new = &mut *buf;
         let mut ptrs = u64s;
 
-        for (k, _) in keys_in(keys.buf, start, keys.buf.len()) {
+        for (k, _) in keys.unwritten_whiteouts() {
             ptrs -= 1;
             new[ptrs] = k as u64;
         }
@@ -303,7 +323,7 @@ pub fn bch2_sort_whiteouts(fs: &Fs, b: &BtreeNode) {
 
     verify_no_dups(keys.contents(), buf, 0, u64s);
 
-    b.keys_mut(contents).buf[start..].copy_from_slice(buf);
+    b.keys_mut(contents).buf[b.unwritten_whiteouts()].copy_from_slice(buf);
 }
 
 fn should_compact_bset_lazy(nr: &BtreeNrKeys, set: usize, t: &BsetTree) -> bool {
@@ -587,15 +607,23 @@ fn buf_offset(keys: &Keys<'_>, p: *const c::bkey_packed) -> u32 {
 #[c_export]
 pub unsafe fn sort_iter_add(iter: *mut SortIter, k: *const c::bkey_packed, end: *const c::bkey_packed) {
     unsafe {
+        let b = &*(*iter).b;
+        let keys = b.keys(b.contents());
+        push(iter, SortIterSet { k: buf_offset(&keys, k), end: buf_offset(&keys, end) });
+    }
+}
+
+/// A run onto @iter - an empty one isn't.
+///
+/// # Safety
+/// @iter is sort_iter_init()'s, with room for its size's runs after it.
+unsafe fn push(iter: *mut SortIter, set: SortIterSet) {
+    unsafe {
         let (used, size) = ((*iter).used, (*iter).size);
         assert!(used < size, "adding to a sort iterator of {size} runs, full");
 
-        let b = &*(*iter).b;
-        let keys = b.keys(b.contents());
-        let (k, end) = (buf_offset(&keys, k), buf_offset(&keys, end));
-
-        if k != end {
-            (&raw mut (*iter).data).cast::<SortIterSet>().add(used as usize).write(SortIterSet { k, end });
+        if set.k != set.end {
+            (&raw mut (*iter).data).cast::<SortIterSet>().add(used as usize).write(set);
             (*iter).used += 1;
         }
     }
@@ -634,7 +662,7 @@ pub unsafe fn bch2_sort_keys_keep_unwritten_whiteouts(dst: *mut c::bkey_packed, 
     let (b, runs) = unsafe { sort_iter(iter) };
     let room = unsafe { core::slice::from_raw_parts_mut(dst.cast(), runs_u64s(runs)) };
     let keys = b.keys(unsafe { b.contents() });
-    let unwritten_whiteouts = keys.buf.len() - b.whiteout_u64s.get() as usize;
+    let unwritten_whiteouts = b.unwritten_whiteouts().start;
 
     /*
      * For sorting in the btree node write path: whiteouts not in the unwritten

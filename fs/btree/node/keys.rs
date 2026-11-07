@@ -238,6 +238,13 @@ impl<'a> Keys<'a> {
         set_keys(self.buf, t)
     }
 
+    /// The unwritten whiteouts, at the buffer's end, with their offsets: past
+    /// a 512k node's last u16, so not a u16's.
+    pub fn unwritten_whiteouts(&self) -> impl Iterator<Item = (usize, &'a BkeyP)> + use<'a> {
+        let r = self.node().unwritten_whiteouts();
+        keys_in(self.buf, r.start, r.end)
+    }
+
     pub fn bset(&self, t: &BsetTree) -> &'a c::bset {
         from_bytes(plain_bytes(&self.buf[t.data_offset as usize..]))
             .unwrap_or_else(|e| panic!("no bset at offset {} of a {} u64 node: {e}", t.data_offset, self.buf.len()))
