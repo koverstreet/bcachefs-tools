@@ -861,7 +861,7 @@ impl c::btree_and_journal_iter {
         unsafe { (*self.trans).journal_replay_not_finished() }
     }
 
-    fn advance(&mut self) {
+    pub(crate) fn advance(&mut self) {
         if self.pos == SPOS_MAX {
             self.at_end = true;
         } else {
@@ -898,7 +898,7 @@ impl c::btree_and_journal_iter {
 
     /// The next key at or after pos, the btree node's or the journal's,
     /// whichever's first - the journal's if both - skipping whiteouts.
-    fn peek(&mut self, fs: &Fs) -> c::bkey_s_c {
+    pub(crate) fn peek(&mut self, fs: &Fs) -> c::bkey_s_c {
         let null = c::bkey_s_c { k: ptr::null_mut(), v: ptr::null_mut() };
         let mut iters = 0;
 
@@ -973,7 +973,7 @@ impl c::btree_and_journal_iter {
     ///
     /// # Safety
     /// @trans and @b are live, @b locked, for as long as the iterator.
-    unsafe fn new(trans: *mut BtreeTrans<'_>, b: *mut BtreeNode, node_iter: KeyIter, pos: Bpos)
+    pub(crate) unsafe fn new(trans: *mut BtreeTrans<'_>, b: *mut BtreeNode, node_iter: KeyIter, pos: Bpos)
         -> Self
     {
         let mut iter = Self {

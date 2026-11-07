@@ -398,7 +398,7 @@ impl Paths<'_> {
             ptr::copy_nonoverlapping(t.paths_allocated.get(), allocated, bits_to_longs(old_nr));
             (*table_header(paths)).nr_paths = nr as c_ulong;
             ptr::copy_nonoverlapping(t.paths.get(), paths, old_nr);
-            ptr::copy_nonoverlapping(t.sorted.get(), sorted, t.nr_sorted as usize);
+            ptr::copy_nonoverlapping(t.sorted.get(), sorted, t.nr_sorted.get() as usize);
             ptr::copy_nonoverlapping(t.updates.get(), updates, old_nr);
         }
 

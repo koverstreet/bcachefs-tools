@@ -658,7 +658,7 @@ impl Keys<'_> {
     }
 
     /* These assume r (the search key) is not a deleted key: */
-    pub(super) fn bkey_iter_pos_cmp(&self, l: u16, r: &Bpos) -> Ordering {
+    pub(crate) fn bkey_iter_pos_cmp(&self, l: u16, r: &Bpos) -> Ordering {
         self.unpack_pos(l).cmp(r)
             .then_with(|| if self.key_at(l).key_type().is_deleted() { Ordering::Less } else { Ordering::Equal })
     }

@@ -11,7 +11,7 @@ use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
 use crate::errcode::bch_errcode;
 use crate::errcode::BchError;
-use crate::locking::{ExclusiveGuard, Locked};
+use crate::locking::{ExclusiveGuard, Locked, LockedBy};
 use crate::util::alloc::{DArrayLoan, KVVec, Kmalloc};
 use crate::util::bio::{BioSet, Either};
 use crate::util::late::Late;
@@ -720,7 +720,7 @@ pub struct BtreeTrans<'f> {
     #[c("darray_trans_kmalloc_trace trans_kmalloc_trace")]
     pub trans_kmalloc_trace: Cell<cs::darray_trans_kmalloc_trace>,
 
-    pub nr_sorted: cs::PathIdx,
+    pub nr_sorted: Cell<cs::PathIdx>,
     pub nr_paths: Cell<cs::PathIdx>,
     pub nr_paths_max: Cell<cs::PathIdx>,
     pub nr_updates: Cell<cs::PathIdx>,
@@ -803,7 +803,7 @@ pub struct BtreeTrans<'f> {
     pub extra_disk_res_replicas: Cell<u8>,
 
     #[c_anon("struct { struct bkey_i btree_path_down; u64 btree_path_down_pad[BKEY_BTREE_PTR_VAL_U64s_MAX]; }")]
-    pub btree_path_down: PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
+    pub btree_path_down: LockedBy<PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX }>>,
 
     #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
     #[c("struct lockdep_map dep_map")]
