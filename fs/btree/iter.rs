@@ -1639,6 +1639,8 @@ impl<'t> BtreeIter<'t> {
                     if key_of(k).key_type().is_extent_whiteout() &&
                        flags.contains(BtreeIterFlags::FILTER_SNAPSHOTS) &&
                        !flags.contains(BtreeIterFlags::NOFILTER_WHITEOUTS) {
+                        /* a journal or update key's header is theirs: ours is the copy */
+                        k.k = &raw const self.k;
                         self.k.set_key_type(BkeyType::deleted);
                     }
                 } else {
