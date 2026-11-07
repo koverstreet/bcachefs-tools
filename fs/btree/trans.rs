@@ -503,8 +503,8 @@ impl<'f> TransGuard<'f> {
          * No multithreaded btree access until we've gone RW and are no longer
          * modifying the journal keys gap buffer
          */
-        ebug_assert!(c.flags.get(c::bch_fs_flags::BCH_FS_may_go_rw) ||
-                     c.flags.get(c::bch_fs_flags::BCH_FS_scrub_journal) ||
+        ebug_assert!(c.flags.get(c::bch_fs_flags::may_go_rw) ||
+                     c.flags.get(c::bch_fs_flags::scrub_journal) ||
                      sched::current() == c.recovery_task.load(Ordering::Relaxed));
 
         let trans = TransGuard { trans: bch2_trans_alloc(c) };
@@ -543,7 +543,7 @@ impl<'f> TransGuard<'f> {
         });
         t.locking_wait.task.store(sched::current(), Ordering::Relaxed);
         t.set_journal_replay_not_finished(
-            !c.journal.flags.get(c::journal_flags::JOURNAL_replay_done) &&
+            !c.journal.flags.get(c::journal_flags::replay_done) &&
             c.journal_keys_get().map(RefGuard::leak).is_some());
         bch2_trans_paths_init(t);
 
@@ -879,7 +879,7 @@ impl BtreeTrans<'_> {
          * trans_begin calls see the flag already clear and skip cheaply.
          */
         if self.journal_replay_not_finished() &&
-           c.journal.flags.get(c::journal_flags::JOURNAL_replay_done) {
+           c.journal.flags.get(c::journal_flags::replay_done) {
             drop(unsafe { RefGuard::adopt(&c.journal_keys) });
             self.set_journal_replay_not_finished(false);
         }

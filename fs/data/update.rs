@@ -577,7 +577,7 @@ impl c::data_update {
                     w::BCH_WRITE_move | data_opts.write_flags);
         self.op.bits.set_compression_opt(io_opts.background_compression);
         let watermark = (data_opts.commit_flags.bits() & c::BCH_WATERMARK_MASK)
-            .max(c::bch_watermark::BCH_WATERMARK_normal as u32);
+            .max(c::bch_watermark::normal as u32);
         self.op.bits.set_watermark(watermark as u8);
 
         let ret = self.init_body(t, iter, io_opts, pos);

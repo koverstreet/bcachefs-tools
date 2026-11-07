@@ -267,7 +267,7 @@ impl c::journal {
     /// @seq's pins to @out, @seq first moved up to last_seq: true once it's
     /// past the last entry.
     pub fn seq_pins_to_text(&self, out: &mut Printbuf, seq: &mut u64, nr: Option<&mut c_uint>) -> bool {
-        if !self.flags.get(c::journal_flags::JOURNAL_running) {
+        if !self.flags.get(c::journal_flags::running) {
             return true;
         }
 

@@ -720,7 +720,7 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
     let jk = jk.value();
     let n = c::journal_key::new_allocated(btree, level, k);
 
-    if !fs.flags.get(f::BCH_FS_btree_running) {
+    if !fs.flags.get(f::btree_running) {
         // SAFETY: before the btree runs, the keys are recovery's alone
         return unsafe { jk.pre_sort() }.push(n)
             .map_err(|_| fs.err(e::BCH_ERR_ENOMEM_journal_key_insert));
@@ -873,7 +873,7 @@ impl c::btree_and_journal_iter {
     fn prefetch(&self, fs: &Fs) {
         let mut iter = *self;
         let level = iter.journal.level;
-        let nr = if fs.flags.get(f::BCH_FS_started) { if level > 1 { 0 } else { 2 } } else if level > 1 { 1 } else { 16 };
+        let nr = if fs.flags.get(f::started) { if level > 1 { 0 } else { 2 } } else if level > 1 { 1 } else { 16 };
 
         iter.prefetch = false;
         iter.fail_if_too_many_whiteouts = true;

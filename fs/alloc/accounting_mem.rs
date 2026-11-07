@@ -336,7 +336,7 @@ fn gc_done(fs: &Fs) -> Result<(), BchError> {
             accounting::mod_normal(t, &acc_k, d)
         }))?;
 
-        if !fs.flags.get(c::bch_fs_flags::BCH_FS_may_go_rw) {
+        if !fs.flags.get(c::bch_fs_flags::may_go_rw) {
             let a = Delta { p: acc_k.to_bpos(), d };
             let usage = mem_add(fs, a, false, &mut mark)
                 .expect("an existing entry: entries are only removed by gc_free and exit");

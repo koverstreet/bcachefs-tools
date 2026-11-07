@@ -1094,7 +1094,7 @@ fn check_snapshots(fs: &Fs) -> Result<(), BchError> {
     check_snapshots_trans(&trans)?;
 
     // A clean pass lets check_key_has_snapshot trust the in-memory table
-    if !fs.flags.get(c::bch_fs_flags::BCH_FS_error) {
+    if !fs.flags.get(c::bch_fs_flags::error) {
         passes::set_btree_clean(fs, Btree::snapshots);
     }
     Ok(())

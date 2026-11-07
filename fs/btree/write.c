@@ -854,7 +854,7 @@ void bch2_btree_cancel_all_writes(struct bch_fs *c)
 }
 
 static const char * const bch2_btree_write_types[] = {
-#define x(t, n) [n] = #t,
+#define x(t, n, ...) [n] = #t,
 	BCH_BTREE_WRITE_TYPES()
 	NULL
 };

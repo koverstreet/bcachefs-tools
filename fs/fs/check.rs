@@ -846,13 +846,13 @@ impl Fs {
     /// fsck(8)'s exit status for what the filesystem's errors came to - 1
     /// fixed, 4 left, 8 a fatal error, ORed - each said in @out.
     pub fn fsck_errcode(&self, out: &mut Printbuf) -> core::ffi::c_int {
-        use c::bch_fs_flags::*;
+        use c::bch_fs_flags as Flag;
 
         let mut ret = 0;
         for (flag, bit, what) in [
-            (BCH_FS_errors_fixed, 1, "errors fixed"),
-            (BCH_FS_error,        4, "still has errors"),
-            (BCH_FS_emergency_ro, 8, "fatal error (went emergency read-only)"),
+            (Flag::errors_fixed, 1, "errors fixed"),
+            (Flag::error,        4, "still has errors"),
+            (Flag::emergency_ro, 8, "fatal error (went emergency read-only)"),
         ] {
             if self.flags.get(flag) {
                 out.write_bytes(self.name().to_bytes());
@@ -1023,12 +1023,12 @@ pub mod ioctl {
                 });
                 w.fsck.set(1);
             }
-            fs.flags.set(c::bch_fs_flags::BCH_FS_in_fsck, true);
+            fs.flags.set(c::bch_fs_flags::in_fsck, true);
 
             ret = run_passes(&fs, passes, true)
                 .map(|()| fs.fsck_errcode(&mut buf));
 
-            fs.flags.set(c::bch_fs_flags::BCH_FS_in_fsck, false);
+            fs.flags.set(c::bch_fs_flags::in_fsck, false);
 
             fs.stdio.store(core::ptr::null_mut(), Release);
             fs.stdio_filter.store(core::ptr::null_mut(), Relaxed);

@@ -1115,14 +1115,13 @@ impl Dev {
         let (some, btree) = (self.mi.get().nbuckets >> 6, u64::from(self.nr_btree_reserve));
 
         match watermark {
-            w::BCH_WATERMARK_stripe => 2 * some + 2 * btree,
-            w::BCH_WATERMARK_normal => some + 2 * btree,
-            w::BCH_WATERMARK_copygc => 2 * btree,
-            w::BCH_WATERMARK_btree  => btree,
-            w::BCH_WATERMARK_btree_copygc |
-            w::BCH_WATERMARK_reclaim |
-            w::BCH_WATERMARK_interior_updates => 0,
-            w::BCH_WATERMARK_NR => panic!("buckets_reserved() of BCH_WATERMARK_NR"),
+            w::stripe => 2 * some + 2 * btree,
+            w::normal => some + 2 * btree,
+            w::copygc => 2 * btree,
+            w::btree  => btree,
+            w::btree_copygc |
+            w::reclaim |
+            w::interior_updates => 0,
         }
     }
 

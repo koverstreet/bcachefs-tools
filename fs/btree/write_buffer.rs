@@ -143,21 +143,17 @@ pub struct btree_write_buffer_keys {
 }
 c_default!(btree_write_buffer_keys);
 
-c_xmacro! {
-    WB_FLUSH_CALLERS(x) {
-        (thread),
-        (journal_pin),
-        (sync),
-        (maybe),
-        (tryflush),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(WB_FLUSH_)]
+    #[nr(WB_FLUSH_NR)]
+    #[c_list(WB_FLUSH_CALLERS)]
     pub enum wb_flush_caller: u32 {
-        WB_FLUSH_CALLERS(n) => concat(WB_FLUSH_, n),
-        WB_FLUSH_NR,
+        thread,
+        journal_pin,
+        sync,
+        maybe,
+        tryflush,
     }
 }
 

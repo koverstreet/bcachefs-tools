@@ -1426,7 +1426,7 @@ pub(crate) fn snapshots_read(fs: &Fs) -> Result<(), BchError> {
     // going RW, so we mark that pass as required in the superblock -
     // otherwise, we could end up deleting keys with missing snapshot nodes
     // instead
-    assert!(fs.flags.get(c::bch_fs_flags::BCH_FS_new_fs) || !fs.flags.get(c::bch_fs_flags::BCH_FS_may_go_rw),
+    assert!(fs.flags.get(c::bch_fs_flags::new_fs) || !fs.flags.get(c::bch_fs_flags::may_go_rw),
             "snapshots_read after going rw");
 
     // Initializing the is_ancestor bitmaps requires ancestors to already be

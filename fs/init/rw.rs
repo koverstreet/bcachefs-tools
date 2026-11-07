@@ -100,14 +100,14 @@ impl Fs {
         bch_verbose!(self, "flushing journal and stopping allocators complete, journal seq {}",
                      self.journal_cur_seq());
 
-        if self.journal.flags.get(Journal::JOURNAL_replay_done) && !self.flags.get(Flag::BCH_FS_emergency_ro) {
-            self.flags.set(Flag::BCH_FS_clean_shutdown, true);
+        if self.journal.flags.get(Journal::replay_done) && !self.flags.get(Flag::emergency_ro) {
+            self.flags.set(Flag::clean_shutdown, true);
         }
 
         self.journal.stop();
 
         bch_info!(self, "{}clean shutdown complete, journal seq {}",
-                  if self.flags.get(Flag::BCH_FS_clean_shutdown) { "" } else { "un" },
+                  if self.flags.get(Flag::clean_shutdown) { "" } else { "un" },
                   self.journal.lock.seq_ondisk.get());
 
         /*
@@ -127,7 +127,7 @@ impl Fs {
     }
 
     fn emergency_read_only_to(&self, out: &mut Printbuf, journal_locked: bool) -> bool {
-        let ret = !self.flags.swap(Flag::BCH_FS_emergency_ro, true);
+        let ret = !self.flags.swap(Flag::emergency_ro, true);
         let j = unsafe { &raw mut (*self.as_ptr()).journal };
 
         if journal_locked {
@@ -164,12 +164,12 @@ impl StateLockWrite<'_> {
     pub fn read_only(&self) {
         let fs = self.fs();
 
-        if !fs.flags.get(Flag::BCH_FS_rw) {
+        if !fs.flags.get(Flag::rw) {
             fs.journal.reclaim_stop();
             return;
         }
 
-        assert!(!fs.flags.get(Flag::BCH_FS_write_disable_complete));
+        assert!(!fs.flags.get(Flag::write_disable_complete));
 
         bch_verbose!(fs, "going read-only");
 
@@ -179,7 +179,7 @@ impl StateLockWrite<'_> {
          * reconcile kthread's child workers (which check this flag to break
          * out) see it while bch2_reconcile_stop() is blocked waiting on them.
          */
-        fs.flags.set(Flag::BCH_FS_going_ro, true);
+        fs.flags.set(Flag::going_ro, true);
 
         /*
          * Stop background kthreads that issue writes (reconcile, etc.)
@@ -202,9 +202,9 @@ impl StateLockWrite<'_> {
          * we do need to wait on them before returning and signalling
          * that going RO is complete:
          */
-        let writes_stopped = || fs.flags.get(Flag::BCH_FS_write_disable_complete);
+        let writes_stopped = || fs.flags.get(Flag::write_disable_complete);
         let Ok(()) = READ_ONLY_EVENTS.wait_until(Sleep::UNINTERRUPTIBLE, || {
-            (writes_stopped() || fs.flags.get(Flag::BCH_FS_emergency_ro)).then_some(())
+            (writes_stopped() || fs.flags.get(Flag::emergency_ro)).then_some(())
         });
 
         let writes_disabled = writes_stopped();
@@ -220,15 +220,15 @@ impl StateLockWrite<'_> {
             bch_verbose!(fs, "finished waiting for writes to stop");
         }
 
-        fs.flags.set(Flag::BCH_FS_write_disable_complete, false);
-        fs.flags.set(Flag::BCH_FS_going_ro, false);
-        fs.flags.set(Flag::BCH_FS_rw, false);
+        fs.flags.set(Flag::write_disable_complete, false);
+        fs.flags.set(Flag::going_ro, false);
+        fs.flags.set(Flag::rw, false);
 
         if !fs.journal.halted() &&
-           !fs.flags.get(Flag::BCH_FS_error) &&
-           !fs.flags.get(Flag::BCH_FS_emergency_ro) &&
-           fs.flags.get(Flag::BCH_FS_started) &&
-           fs.flags.get(Flag::BCH_FS_clean_shutdown) &&
+           !fs.flags.get(Flag::error) &&
+           !fs.flags.get(Flag::emergency_ro) &&
+           fs.flags.get(Flag::started) &&
+           fs.flags.get(Flag::clean_shutdown) &&
            fs.recovery.runner.pass_done.get() >= RecoveryPass::journal_replay {
             assert_eq!(fs.journal.lock.lock().last_empty_seq, fs.journal_cur_seq());
             assert!(fs.sb.clean.get() != 0);
@@ -252,7 +252,7 @@ impl StateLockWrite<'_> {
         let fs = self.fs();
         let p = fs.as_ptr();
 
-        if fs.flags.get(Flag::BCH_FS_rw_init_done) {
+        if fs.flags.get(Flag::rw_init_done) {
             return Ok(());
         }
 
@@ -266,7 +266,7 @@ impl StateLockWrite<'_> {
         fs.copygc_start()?;
         fs.reconcile_start()?;
 
-        fs.flags.set(Flag::BCH_FS_rw_init_done, true);
+        fs.flags.set(Flag::rw_init_done, true);
         Ok(())
     }
 
@@ -274,15 +274,15 @@ impl StateLockWrite<'_> {
         let fs = self.fs();
         let p = fs.as_ptr();
 
-        assert!(fs.flags.get(Flag::BCH_FS_may_go_rw));
+        assert!(fs.flags.get(Flag::may_go_rw));
 
         if warn_on!(fs.feature(SbFeature::no_alloc_info)) {
             return fs.throw(bch_errcode::BCH_ERR_erofs_no_alloc_info);
         }
 
-        assert!(fs.flags.get(Flag::BCH_FS_may_upgrade_downgrade));
+        assert!(fs.flags.get(Flag::may_upgrade_downgrade));
 
-        if fs.flags.get(Flag::BCH_FS_initial_gc_unfixed) {
+        if fs.flags.get(Flag::initial_gc_unfixed) {
             bch_err!(fs, "cannot go rw, unfixed btree errors");
             return fs.throw(bch_errcode::BCH_ERR_erofs_unfixed_errors);
         }
@@ -297,7 +297,7 @@ impl StateLockWrite<'_> {
             return fs.throw(bch_errcode::BCH_ERR_erofs_sb_not_migrated);
         }
 
-        if fs.flags.get(Flag::BCH_FS_rw) {
+        if fs.flags.get(Flag::rw) {
             return Ok(());
         }
 
@@ -310,7 +310,7 @@ impl StateLockWrite<'_> {
                 .ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ENOSPC_sb_members_v2))?;
         }
 
-        fs.flags.set(Flag::BCH_FS_clean_shutdown, false);
+        fs.flags.set(Flag::clean_shutdown, false);
 
         {
             let rcu = read_lock();
@@ -332,8 +332,8 @@ impl StateLockWrite<'_> {
          */
         {
             let mut g = fs.journal.lock.lock();
-            fs.journal.flags.set(Journal::JOURNAL_need_flush_write, true);
-            fs.journal.flags.set(Journal::JOURNAL_running, true);
+            fs.journal.flags.set(Journal::need_flush_write, true);
+            fs.journal.flags.set(Journal::running, true);
             #[cfg(CONFIG_BCACHEFS_DEBUG)]
             fs.journal.stop_thread.store(core::ptr::null_mut(), Relaxed);
             fs.journal.space_available(&mut g);
@@ -344,10 +344,10 @@ impl StateLockWrite<'_> {
          * successfully marked the filesystem dirty
          */
 
-        fs.flags.set(Flag::BCH_FS_rw, true);
-        fs.flags.set(Flag::BCH_FS_was_rw, true);
+        fs.flags.set(Flag::rw, true);
+        fs.flags.set(Flag::was_rw, true);
 
-        if fs.flags.swap(Flag::BCH_FS_sb_dirty, false) {
+        if fs.flags.swap(Flag::sb_dirty, false) {
             fs.write_super(&mut fs.sb_lock());
         }
 
@@ -405,7 +405,7 @@ pub(crate) fn read_only_work(fs: &Fs) {
 
 pub(crate) unsafe extern "C" fn writes_disabled(writes: *mut c::enumerated_ref) {
     let fs = unsafe { &*writes.byte_sub(core::mem::offset_of!(Fs, writes)).cast::<Fs>() };
-    fs.flags.set(Flag::BCH_FS_write_disable_complete, true);
+    fs.flags.set(Flag::write_disable_complete, true);
     READ_ONLY_EVENTS.wake();
 }
 

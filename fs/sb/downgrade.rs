@@ -85,7 +85,7 @@ impl SbFieldOps for Section {
     /// the section as it was: the write goes on.
     fn from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         // have_stripes() reads the btree roots
-        if !fs.flags.get(c::bch_fs_flags::BCH_FS_btree_running) {
+        if !fs.flags.get(c::bch_fs_flags::btree_running) {
             return Ok(());
         }
 

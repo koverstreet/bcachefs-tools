@@ -84,7 +84,7 @@
 #include <linux/random.h>
 #include <linux/sysfs.h>
 
-#define x(n)		#n,
+#define x(n, ...)	#n,
 const char * const bch2_fs_flag_strs[] = {
 	BCH_FS_FLAGS()
 	NULL

@@ -2074,7 +2074,7 @@ static void prt_btree_cache_line(struct printbuf *out, const struct bch_fs *c,
 }
 
 static const char * const bch2_btree_cache_not_freed_reasons_strs[] = {
-#define x(n) #n,
+#define x(n, ...) #n,
 	BCH_BTREE_CACHE_NOT_FREED_REASONS()
 #undef x
 	NULL

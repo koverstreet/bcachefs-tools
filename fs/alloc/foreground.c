@@ -51,7 +51,7 @@
 #include <linux/sched/signal.h>
 
 const char * const bch2_watermarks[] = {
-#define x(t) #t,
+#define x(t, ...) #t,
 	BCH_WATERMARKS()
 #undef x
 	NULL

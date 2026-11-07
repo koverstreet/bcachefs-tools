@@ -83,27 +83,23 @@ c_enum! {
 
 /* Btree cache: */
 
-c_xmacro! {
-    BCH_BTREE_CACHE_NOT_FREED_REASONS(x) {
-        (cache_reserve),
-        (lock_intent),
-        (lock_write),
-        (dirty),
-        (read_in_flight),
-        (write_in_flight),
-        (permanent),
-        (noevict),
-        (write_blocked),
-        (will_make_reachable),
-        (access_bit),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(BCH_BTREE_CACHE_NOT_FREED_)]
+    #[nr(BCH_BTREE_CACHE_NOT_FREED_REASONS_NR)]
+    #[c_list(BCH_BTREE_CACHE_NOT_FREED_REASONS)]
     pub enum bch_btree_cache_not_freed_reasons: u32 {
-        BCH_BTREE_CACHE_NOT_FREED_REASONS(n) => concat(BCH_BTREE_CACHE_NOT_FREED_, n),
-        BCH_BTREE_CACHE_NOT_FREED_REASONS_NR,
+        cache_reserve,
+        lock_intent,
+        lock_write,
+        dirty,
+        read_in_flight,
+        write_in_flight,
+        permanent,
+        noevict,
+        write_blocked,
+        will_make_reachable,
+        access_bit,
     }
 }
 
@@ -928,21 +924,17 @@ c_default!(bch_fs_btree_trans);
 
 /* Btree node write types and flags: */
 
-c_xmacro! {
-    BCH_BTREE_WRITE_TYPES(x) {
-        (initial, 0),
-        (init_next_bset, 1),
-        (cache_reclaim, 2),
-        (journal_reclaim, 3),
-        (interior, 4),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(BTREE_WRITE_)]
+    #[nr(BTREE_WRITE_TYPE_NR)]
+    #[c_list(BCH_BTREE_WRITE_TYPES)]
     pub enum btree_write_type: u32 {
-        BCH_BTREE_WRITE_TYPES(t, ..) => concat(BTREE_WRITE_, t),
-        BTREE_WRITE_TYPE_NR,
+        initial = 0,
+        init_next_bset = 1,
+        cache_reclaim = 2,
+        journal_reclaim = 3,
+        interior = 4,
     }
 }
 
@@ -1006,19 +998,15 @@ crate::cstructs::c::BTREE_FLAGS!(btree_node_flags_at_c_bits []);
 const _: () = assert!(BtreeNodeFlags::WRITE_TYPE_OFFSET == 0 &&
                       BtreeNodeFlags::WRITE_TYPE_BITS == cs::BTREE_WRITE_TYPE_BITS as usize);
 
-c_xmacro! {
-    BTREE_NODE_REWRITE_REASON(x) {
-        (none),
-        (unknown),
-        (error),
-        (ptr_written_zero),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(BTREE_NODE_REWRITE_)]
+    #[c_list(BTREE_NODE_REWRITE_REASON)]
     pub enum btree_node_rewrite_reason: u32 {
-        BTREE_NODE_REWRITE_REASON(n) => concat(BTREE_NODE_REWRITE_, n),
+        none,
+        unknown,
+        error,
+        ptr_written_zero,
     }
 }
 

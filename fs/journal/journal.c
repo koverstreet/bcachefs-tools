@@ -1481,7 +1481,7 @@ struct journal_buf *bch2_next_write_buffer_flush_journal_buf(struct journal *j,
 /* debug: */
 
 static const char * const bch2_journal_flags_strs[] = {
-#define x(n)	#n,
+#define x(n, ...)	#n,
 	JOURNAL_FLAGS()
 #undef x
 	NULL

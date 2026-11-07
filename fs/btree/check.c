@@ -50,7 +50,7 @@
 #include <linux/sched/task.h>
 
 static const char * const bch2_gc_phase_strs[] = {
-#define x(n)	#n,
+#define x(n, ...)	#n,
 	GC_PHASES()
 #undef x
 	NULL

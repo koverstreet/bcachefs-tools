@@ -562,7 +562,7 @@ impl Fs {
         }
         dst[len] = 0;
 
-        if unsafe { self.writes.init(c::bch_write_ref::BCH_WRITE_REF_NR as u32, Some(writes_disabled)) }.is_err() {
+        if unsafe { self.writes.init(c::bch_write_ref::NR, Some(writes_disabled)) }.is_err() {
             return self.throw(bch_errcode::BCH_ERR_ENOMEM_fs_other_alloc);
         }
 
@@ -670,7 +670,7 @@ impl Fs {
 
         if !(self.feature(SbFeature::small_image) || self.feature(SbFeature::no_default_sb)) ||
            self.will_resize_on_mount() {
-            self.flags.set(Flag::BCH_FS_may_upgrade_downgrade, true);
+            self.flags.set(Flag::may_upgrade_downgrade, true);
         }
 
         prt!(out, "starting version {}\n", version(self.sb.version.get()));
@@ -714,12 +714,12 @@ impl Fs {
         }
 
         if self.sb.clean.get() != 0 {
-            self.flags.set(Flag::BCH_FS_clean_recovery, true);
+            self.flags.set(Flag::clean_recovery, true);
         }
         if opts.fsck.get() != 0 {
-            self.flags.set(Flag::BCH_FS_in_fsck, true);
+            self.flags.set(Flag::in_fsck, true);
         }
-        self.flags.set(Flag::BCH_FS_in_recovery, true);
+        self.flags.set(Flag::in_recovery, true);
 
         /* this really should be part of our one multi line mount message, but -
          * xfstests... */
@@ -901,11 +901,11 @@ impl Fs {
         use c::bch_fs_flags as Flag;
         let p = self.as_ptr();
 
-        if !self.flags.swap(Flag::BCH_FS_stopping, true) {
+        if !self.flags.swap(Flag::stopping, true) {
             self.ro_ref.stop();
             self.ro_ref_events.wake();
 
-            if self.flags.get(Flag::BCH_FS_started) {
+            if self.flags.get(Flag::started) {
                 bch_verbose!(self, "shutting down");
             }
 
@@ -939,13 +939,13 @@ impl Fs {
             }
         }
 
-        if self.flags.get(Flag::BCH_FS_emergency_ro) {
+        if self.flags.get(Flag::emergency_ro) {
             return self.throw(bch_errcode::BCH_ERR_shutdown_with_emergency_ro);
         }
-        if self.flags.get(Flag::BCH_FS_error) {
+        if self.flags.get(Flag::error) {
             return self.throw(bch_errcode::BCH_ERR_shutdown_with_errors_unfixed);
         }
-        if self.flags.get(Flag::BCH_FS_errors_fixed) {
+        if self.flags.get(Flag::errors_fixed) {
             return self.throw(bch_errcode::BCH_ERR_shutdown_with_errors_fixed);
         }
         Ok(())
@@ -1105,14 +1105,14 @@ impl Fs {
 
     fn bring_up(&self, err: &mut Printbuf) -> Result<(), BchError> {
         use c::bch_fs_flags as Flag;
-        assert!(!self.flags.get(Flag::BCH_FS_started));
+        assert!(!self.flags.get(Flag::started));
 
         // the open skipped what a start needs: opt_version_init()
         if self.opts().will_not_start.get() != 0 {
             return self.throw(bch_errcode::BCH_ERR_EINVAL_will_not_start);
         }
         // superblock writes from here on are part of bringing it up
-        self.flags.set(Flag::BCH_FS_start_begun, true);
+        self.flags.set(Flag::start_begun, true);
 
         {
             let state = self.state_lock_write();
@@ -1150,13 +1150,13 @@ impl Fs {
 
         crate::opts::opts_hooks_pre_set(self)?;
 
-        self.flags.set(Flag::BCH_FS_started, true);
+        self.flags.set(Flag::started, true);
         self.ro_ref_events.wake();
 
         let state = self.state_lock_write();
         if self.opts().read_only.get() != 0 {
             state.read_only();
-        } else if !self.flags.get(Flag::BCH_FS_rw) {
+        } else if !self.flags.get(Flag::rw) {
             state.read_write()?;
         }
         Ok(())

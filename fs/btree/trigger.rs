@@ -406,7 +406,7 @@ unsafe fn run_mem_triggers(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>) -> 
         }
     }
 
-    if trans.fs().gc.phase() != c::gc_phase::GC_PHASE_not_running {
+    if trans.fs().gc.phase() != c::gc_phase::not_running {
         unsafe { run_gc_triggers(trans, t) }?;
     }
     Ok(())

@@ -17,27 +17,23 @@ use crate::util::projections::Volatile;
 use crate::published;
 use core::ffi::{c_uint, c_ulong};
 use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU64, AtomicU8};
-use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, placed, CStruct, Fieldwise, Init, TypeInfo};
+use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, placed, CStruct, Fieldwise, Init, TypeInfo};
 use pin_init::pin_data;
 use nestify::nest;
 
-c_xmacro! {
-    BCH_WATERMARKS(x) {
-        (stripe),
-        (normal),
-        (copygc),
-        (btree),
-        (btree_copygc),
-        (reclaim),
-        (interior_updates),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(BCH_WATERMARK_)]
+    #[nr(BCH_WATERMARK_NR)]
+    #[c_list(BCH_WATERMARKS)]
     pub enum bch_watermark: u32 {
-        BCH_WATERMARKS(name) => concat(BCH_WATERMARK_, name),
-        BCH_WATERMARK_NR,
+        stripe,
+        normal,
+        copygc,
+        btree,
+        btree_copygc,
+        reclaim,
+        interior_updates,
     }
 }
 

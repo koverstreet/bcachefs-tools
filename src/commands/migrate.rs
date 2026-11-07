@@ -577,7 +577,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
 
         // This is normall set in fs_init if BCH_FEATURE_no_default_sb is
         // cleared - but fs_init already happened:
-        fs.flags.set(c::bch_fs_flags::BCH_FS_may_upgrade_downgrade, true);
+        fs.flags.set(c::bch_fs_flags::may_upgrade_downgrade, true);
     }
 
     fs.start()

@@ -609,7 +609,7 @@ fn check_subvols(fs: &Fs) -> Result<(), BchError> {
                          |t, iter, k| check_subvol(t, iter, k))?;
 
     // A clean pass lets check_key_has_snapshot trust the in-memory table
-    if !fs.flags.get(c::bch_fs_flags::BCH_FS_error) {
+    if !fs.flags.get(c::bch_fs_flags::error) {
         passes::set_btree_clean(fs, Btree::subvolumes);
     }
     Ok(())

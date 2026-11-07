@@ -127,7 +127,7 @@ fn resume_logged_op(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, early: bool) -> Res
      * Fixing logs the error to the journal via the transaction: close()
      * commits that before the resume, which runs transactions of its own.
      */
-    fsck_err_on!(t, fs.flags.get(c::bch_fs_flags::BCH_FS_clean_recovery), id::logged_op_but_clean,
+    fsck_err_on!(t, fs.flags.get(c::bch_fs_flags::clean_recovery), id::logged_op_but_clean,
                  "filesystem marked as clean but have logged op\n{}", k.to_text(fs))?;
 
     Err(t.close(CommitFlags::NO_ENOSPC, |trans| {

@@ -521,7 +521,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     fs.current_has_btree_trans());
 
     if flags.contains(FsckFlags::ERR_SILENT) || error_silent(fs, err) {
-        fs.flags.set(fl::BCH_FS_errors_fixed_silent, true);
+        fs.flags.set(fl::errors_fixed_silent, true);
         return fs.err(if flags.contains(FsckFlags::CAN_FIX) { e::BCH_ERR_fsck_fix } else { e::BCH_ERR_fsck_ignore });
     }
 
@@ -571,7 +571,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     write!(out, ", continuing");
                     fs.err(e::BCH_ERR_fsck_ignore)
                 };
-            } else if !fs.flags.get(fl::BCH_FS_in_fsck) {
+            } else if !fs.flags.get(fl::in_fsck) {
                 if errors != a::BCH_ON_ERROR_continue || !flags.intersects(FsckFlags::CAN_FIX | FsckFlags::CAN_IGNORE) {
                     if flags.contains(FsckFlags::AUTOFIX) {
                         write!(out, ", shutting down\n\
@@ -649,7 +649,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                 ret
             };
 
-            if fs.flags.get(fl::BCH_FS_in_fsck) &&
+            if fs.flags.get(fl::in_fsck) &&
                !ret.matches(e::BCH_ERR_fsck_fix) && !ret.matches(e::BCH_ERR_fsck_ignore) {
                 exiting = true;
                 cnt.print = true;
@@ -712,10 +712,10 @@ fn finish(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, flags: FsckFlags, err: 
     // log_fsck_err()s: that'd take knowing which pass corrects each
     if ret.matches(e::BCH_ERR_transaction_restart) {
     } else if ret.matches(e::BCH_ERR_fsck_fix) {
-        fs.flags.set(fl::BCH_FS_errors_fixed, true);
+        fs.flags.set(fl::errors_fixed, true);
     } else {
-        fs.flags.set(fl::BCH_FS_errors_not_fixed, true);
-        fs.flags.set(fl::BCH_FS_error, true);
+        fs.flags.set(fl::errors_not_fixed, true);
+        fs.flags.set(fl::error, true);
     }
     ret
 }
@@ -985,7 +985,7 @@ impl Fs {
     pub fn inconsistent_error(&self, out: &mut Printbuf) -> bool {
         use c::bch_error_actions as a;
 
-        self.flags.set(c::bch_fs_flags::BCH_FS_error, true);
+        self.flags.set(c::bch_fs_flags::error, true);
         match self.opts.errors() {
             a::BCH_ON_ERROR_continue => false,
             a::fix_safe | a::ro => {
@@ -1006,8 +1006,8 @@ impl Fs {
     pub fn topology_error(&self, out: &mut Printbuf) -> BchError {
         write!(out, "btree topology error: ");
 
-        self.flags.set(c::bch_fs_flags::BCH_FS_topology_error, true);
-        if !self.flags.get(c::bch_fs_flags::BCH_FS_in_recovery) {
+        self.flags.set(c::bch_fs_flags::topology_error, true);
+        if !self.flags.get(c::bch_fs_flags::in_recovery) {
             self.inconsistent_error(out);
         } else if let Err(e) = crate::init::passes::run_explicit(self, out,
                 RecoveryPass::check_topology,
@@ -1123,7 +1123,7 @@ pub(crate) fn io_error_work(ca: &Dev) {
 
     let state = fs.state_lock_write();
     if ca.removing() ||
-       fs.flags.get(c::bch_fs_flags::BCH_FS_stopping) ||
+       fs.flags.get(c::bch_fs_flags::stopping) ||
        ca.mi.get().state >= MemberState::ro {
         return;
     }

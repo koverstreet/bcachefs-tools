@@ -503,9 +503,9 @@ fn set_nr_iter(fs: &Fs, ca: &Dev, nr: u32, watermark: c::bch_watermark, cl: &Sta
 
 fn set_nr_loop(fs: &Fs, ca: &Dev, nr: u32, new_fs: bool) -> Result<(), BchError> {
     let watermark = if new_fs {
-        c::bch_watermark::BCH_WATERMARK_btree
+        c::bch_watermark::btree
     } else {
-        c::bch_watermark::BCH_WATERMARK_normal
+        c::bch_watermark::normal
     };
 
     stack_pin_init!(let cl = StackClosure::new());
@@ -591,7 +591,7 @@ pub fn bch2_fs_journal_alloc(fs: &Fs) -> c_int {
 /// Before we're rw: with nothing writing or discarding, its stage doesn't
 /// move under us, and sectors_free - the write path's - is ours to set.
 pub fn retire(fs: &Fs, ca: &Dev, bucket: u64) -> Result<(), BchError> {
-    if fs.flags.get(c::bch_fs_flags::BCH_FS_may_go_rw) {
+    if fs.flags.get(c::bch_fs_flags::may_go_rw) {
         return Err(fs.err(bch_errcode::BCH_ERR_EBUSY_journal_bucket_retire_rw));
     }
 

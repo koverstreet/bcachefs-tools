@@ -503,50 +503,46 @@ pub struct Dev {
     pub io_done: PerCpu<c::io_count>,
 }
 
-c_xmacro! {
-    /*
-     * initial_gc_unfixed
-     * error
-     * topology error
-     */
-    BCH_FS_FLAGS(x) {
-        (new_fs),
-        (start_begun),
-        (started),
-        (clean_recovery),
-        (btree_running),
-        (accounting_replay_done),
-        (may_go_rw),
-        (scrub_journal),
-        (may_upgrade_downgrade),
-        (rw),
-        (rw_init_done),
-        (was_rw),
-        (stopping),
-        (emergency_ro),
-        (going_ro),
-        (write_disable_complete),
-        (clean_shutdown),
-        (in_recovery),
-        (running_recovery_passes),
-        (in_fsck),
-        (initial_gc_unfixed),
-        (error),
-        (topology_error),
-        (errors_fixed),
-        (errors_fixed_silent),
-        (errors_not_fixed),
-        (no_invalid_checks),
-        (discard_mount_opt_set),
-        (sb_dirty),
-        (all_devs_rw),
-    }
-}
-
+/*
+ * initial_gc_unfixed
+ * error
+ * topology error
+ */
 c_enum! {
     #[closed]
+    #[prefix(BCH_FS_)]
+    #[c_list(BCH_FS_FLAGS)]
     pub enum bch_fs_flags: u32 {
-        BCH_FS_FLAGS(n) => concat(BCH_FS_, n),
+        new_fs,
+        start_begun,
+        started,
+        clean_recovery,
+        btree_running,
+        accounting_replay_done,
+        may_go_rw,
+        scrub_journal,
+        may_upgrade_downgrade,
+        rw,
+        rw_init_done,
+        was_rw,
+        stopping,
+        emergency_ro,
+        going_ro,
+        write_disable_complete,
+        clean_shutdown,
+        in_recovery,
+        running_recovery_passes,
+        in_fsck,
+        initial_gc_unfixed,
+        error,
+        topology_error,
+        errors_fixed,
+        errors_fixed_silent,
+        errors_not_fixed,
+        no_invalid_checks,
+        discard_mount_opt_set,
+        sb_dirty,
+        all_devs_rw,
     }
 }
 
@@ -561,34 +557,30 @@ c_const! {
     pub const BCH_LINK_MAX: u32 = c::U32_MAX;
 }
 
-c_xmacro! {
-    BCH_WRITE_REFS(x) {
-        /* kind 0, so it stays first: every Rust ref's - util/enumerated_ref.rs */
-        (rust),
-        (journal),
-        (trans),
-        (write),
-        (promote),
-        (node_rewrite),
-        (fallocate),
-        (fsync),
-        (dio_write),
-        (discard),
-        (discard_fast),
-        (check_discard_freespace_key),
-        (invalidate),
-        (gc_gens),
-        (presplit_shard_boundaries),
-        (btree_write_buffer),
-        (btree_node_scrub),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(BCH_WRITE_REF_)]
+    #[nr(BCH_WRITE_REF_NR)]
+    #[c_list(BCH_WRITE_REFS)]
     pub enum bch_write_ref: u32 {
-        BCH_WRITE_REFS(n) => concat(BCH_WRITE_REF_, n),
-        BCH_WRITE_REF_NR,
+        /* kind 0, so it stays first: every Rust ref's - util/enumerated_ref.rs */
+        rust,
+        journal,
+        trans,
+        write,
+        promote,
+        node_rewrite,
+        fallocate,
+        fsync,
+        dio_write,
+        discard,
+        discard_fast,
+        check_discard_freespace_key,
+        invalidate,
+        gc_gens,
+        presplit_shard_boundaries,
+        btree_write_buffer,
+        btree_node_scrub,
     }
 }
 

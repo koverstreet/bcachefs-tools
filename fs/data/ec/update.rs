@@ -306,7 +306,7 @@ pub(crate) fn stripe_update_extents<'k>(trans: &BtreeTrans<'_>, old: BkeySC<'k, 
 /// throttle (dev_starved_watermark()), or a full filesystem deadlocks.
 pub(crate) fn create_watermark(w: c::bch_watermark) -> c::bch_watermark {
     use c::bch_watermark as W;
-    if w as u32 > W::BCH_WATERMARK_copygc as u32 { w } else { W::BCH_WATERMARK_copygc }
+    if w as u32 > W::copygc as u32 { w } else { W::copygc }
 }
 
 // ── The logged op ────────────────────────────────────────────────────────
@@ -347,7 +347,7 @@ pub fn resume_logged_op(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), 
         BkeySC::from(b).arm::<c::Stripe>().expect("a stripe, as read")
     }
     let map = &op.v.old_block_map[..old_blocks_nr.min(op.v.old_block_map.len())];
-    stripe_update_extents(trans, stripe(&old), stripe(&new), map, create_watermark(c::bch_watermark::BCH_WATERMARK_normal).into())
+    stripe_update_extents(trans, stripe(&old), stripe(&new), map, create_watermark(c::bch_watermark::normal).into())
 }
 
 impl crate::btree::bkey::BkeyOps for c::LoggedOpStripeUpdate {

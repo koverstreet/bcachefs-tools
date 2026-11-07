@@ -893,7 +893,7 @@ impl c::bch_write_bio {
 
 pub(crate) fn index_update_wq(op: &Op) -> &'static Queue {
     let fs = op.fs();
-    if op.bits.watermark() == c::bch_watermark::BCH_WATERMARK_copygc as u8 {
+    if op.bits.watermark() == c::bch_watermark::copygc as u8 {
         &fs.copygc.wq
     } else {
         &fs.btree_update_wq

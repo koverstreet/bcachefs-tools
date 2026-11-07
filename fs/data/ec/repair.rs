@@ -278,7 +278,7 @@ fn stripe_repair_usable_devs(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, b: St
     let all = *devs;
     for i in all.d.iter().filter(|&i| !carried.d.test(i)) {
         let usable = fs.dev_rcu(i as u32, &rcu).is_some_and(|ca| {
-            ca.free_buckets_at(&ca.usage_read_fast(), c::bch_watermark::BCH_WATERMARK_normal) != 0 ||
+            ca.free_buckets_at(&ca.usage_read_fast(), c::bch_watermark::normal) != 0 ||
                 copygc::can_make_progress(ca, &mark)
         });
         if !usable {
@@ -615,7 +615,7 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: Ope
     // on: its room in new_stripes kept, so handing it on can't fail.
     fs.ec.new_stripes.lock().reserve()
         .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc))?;
-    let b = match StripeNew::alloc(fs, devs, c::bch_watermark::BCH_WATERMARK_normal, v.disk_label.into(),
+    let b = match StripeNew::alloc(fs, devs, c::bch_watermark::normal, v.disk_label.into(),
                                    v.bits.algorithm().into(), nr_new_data, v.nr_redundant.into(), v.sectors.get().into()) {
         Ok(b) => b,
         Err(_) => {
@@ -668,7 +668,7 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: Ope
     let ret = lockrestart_do(trans, |t| {
         let dev_stripe = dev_stripe_state_get(t, v.disk_label.into())?;
         let mut req = t.alloc_request(target, false, core::ptr::null_mut(), 0, 0,
-                                      c::bch_watermark::BCH_WATERMARK_normal, c::bch_write_flags::empty(), cl.as_ptr())?;
+                                      c::bch_watermark::normal, c::bch_write_flags::empty(), cl.as_ptr())?;
         let ret = new_stripe_alloc_buckets(t, &mut req, dev_stripe, &mut ns.lock(), true);
         match ret {
             Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {

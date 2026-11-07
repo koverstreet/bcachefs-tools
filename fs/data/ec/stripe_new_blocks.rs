@@ -224,7 +224,7 @@ fn copygc_can_run_on_devs(fs: &Fs, devs: &c::bch_devs_mask) -> bool {
 fn will_not_allocate(fs: &Fs, req: &mut c::alloc_request, s: &Internal) -> bool {
     req.devs_may_alloc.d.not_and(&s.devs.d);
 
-    req.watermark == c::bch_watermark::BCH_WATERMARK_copygc || !copygc_can_run_on_devs(fs, &req.devs_may_alloc)
+    req.watermark == c::bch_watermark::copygc || !copygc_can_run_on_devs(fs, &req.devs_may_alloc)
 }
 
 /// @s cut down to the blocks it got, of @nr_blocks with @nr_parity: its data
@@ -290,7 +290,7 @@ pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::al
     saved.save(req);
 
     req.devs_may_alloc = s.devs;
-    if req.watermark == c::bch_watermark::BCH_WATERMARK_copygc {
+    if req.watermark == c::bch_watermark::copygc {
         req.flags |= c::bch_write_flags::BCH_WRITE_alloc_nowait;
     }
 
@@ -440,7 +440,7 @@ fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, 
     }
 
     let saved = (req.watermark, req.flags);
-    req.watermark = c::bch_watermark::BCH_WATERMARK_stripe;
+    req.watermark = c::bch_watermark::stripe;
     req.flags |= c::bch_write_flags::BCH_WRITE_alloc_nowait;
     let ret = new_stripe_alloc_buckets(t, req, dev_stripe, s, false);
     (req.watermark, req.flags) = saved;

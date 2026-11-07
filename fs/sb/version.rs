@@ -131,7 +131,7 @@ pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
         out.newline();
     }
 
-    if fs.flags.get(Flag::BCH_FS_may_upgrade_downgrade) {
+    if fs.flags.get(Flag::may_upgrade_downgrade) {
         if check_version_downgrade(fs, &mut sb) {
             prt!(out, "Version downgrade required");
 
@@ -172,5 +172,5 @@ pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
         silent.set(SbErrorId::ptr_to_missing_backpointer.0 as usize);
     }
 
-    fs.flags.set(Flag::BCH_FS_sb_dirty, true);
+    fs.flags.set(Flag::sb_dirty, true);
 }

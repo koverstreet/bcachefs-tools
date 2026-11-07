@@ -57,7 +57,7 @@ static_assert((int)__bch_wb_btree_nr_check == (int)BCH_WB_BTREE_NR,
 	"BCH_WRITE_BUFFER_BTREES() is out of sync with BCH_BTREE_IDS() write_buffer flags");
 
 static const char * const wb_flush_caller_names[] = {
-#define x(n)	#n,
+#define x(n, ...)	#n,
 	WB_FLUSH_CALLERS()
 #undef x
 	NULL,

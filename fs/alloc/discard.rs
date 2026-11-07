@@ -248,7 +248,7 @@ fn dev_bucket_nouse(fs: &Fs, bucket: Bpos) -> bool {
 /// Discards on, for @ca: the mount option, if it was given, or the device's
 /// own.
 pub(crate) fn discard_opt_enabled(fs: &Fs, ca: &Dev) -> bool {
-    if fs.flags.get(c::bch_fs_flags::BCH_FS_discard_mount_opt_set) {
+    if fs.flags.get(c::bch_fs_flags::discard_mount_opt_set) {
         fs.opts.discard.get() != 0
     } else {
         ca.mi.get().discard
@@ -556,7 +556,7 @@ fn calculate_discard_sectors_to_release(trans: &BtreeTrans<'_>, s: &DiscardState
 
             let pending  = sectors * buckets(DataType::need_discard);
             let free     = sectors * buckets(DataType::free);
-            let reserve  = sectors * ca.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe);
+            let reserve  = sectors * ca.buckets_reserved(c::bch_watermark::stripe);
             let capacity = sectors * ca.mi.get().nbuckets;
             let buffer   = capacity * u64::from(fs.opts.journal_rewind_discard_buffer_percent.get()) / 100;
             let buffer_clamped = (buffer as i64).min((free as i64 - reserve as i64 * 4).max(0));
@@ -737,7 +737,7 @@ impl Fs {
         let must = self.rw_devs_rcu(&read_lock()).any(|ca| {
             let u = ca.usage_read_fast();
             u.buckets[DataType::free.0 as usize] <
-                ca.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe) * 4 &&
+                ca.buckets_reserved(c::bch_watermark::stripe) * 4 &&
             u.buckets[DataType::need_discard.0 as usize] != 0
         });
         if must {
@@ -821,7 +821,7 @@ fn dev_is_rw(ca: &Dev) -> bool {
 impl Dev {
     pub fn should_invalidate_buckets(&self, u: &c::bch_dev_usage) -> u64 {
         let reserved = self.reserved_sectors.get().div_ceil(self.mi.get().bucket_size.into())
-            .max(self.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe));
+            .max(self.buckets_reserved(c::bch_watermark::stripe));
         let want_free = reserved + (self.mi.get().nbuckets >> 5);
         let free = u.buckets[DataType::free.0 as usize];
         let cached = u.buckets[DataType::cached.0 as usize] as i64;

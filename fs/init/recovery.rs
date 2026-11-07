@@ -57,10 +57,10 @@ impl Fs {
     /// No other NotRw lives meanwhile. The asserts are that nothing else runs:
     /// called before the filesystem can go rw, on the recovery task.
     pub(crate) unsafe fn not_rw(&self) -> NotRw<'_> {
-        assert!(!self.flags.get(Flag::BCH_FS_may_go_rw));
-        assert!(!self.flags.get(Flag::BCH_FS_rw));
+        assert!(!self.flags.get(Flag::may_go_rw));
+        assert!(!self.flags.get(Flag::rw));
         /* the journal keys are frozen for the scrub, whose reads run on workqueues */
-        assert!(!self.flags.get(Flag::BCH_FS_scrub_journal));
+        assert!(!self.flags.get(Flag::scrub_journal));
         assert!(self.recovery_task.load(Relaxed) == crate::util::sched::current());
 
         NotRw { fs: self, _task: core::marker::PhantomData }
@@ -398,7 +398,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
         fs.recovery.progress.update_count(fs);
     }
 
-    fs.flags.set(Flag::BCH_FS_accounting_replay_done, true);
+    fs.flags.set(Flag::accounting_replay_done, true);
 
     /*
      * First, attempt to replay keys in sorted order. This is more
@@ -432,7 +432,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
          * journal-space watermark ever trips.
          */
         let self_reclaim = fs.btree.cache.nr_self_reclaim.load(Relaxed);
-        let replayed = fs.journal.watermark() == c::bch_watermark::BCH_WATERMARK_stripe &&
+        let replayed = fs.journal.watermark() == c::bch_watermark::stripe &&
             self_reclaim == 0 &&
             commit_do(&trans, None,
                       replay_flags | CommitFlags::JOURNAL_RECLAIM |
@@ -619,7 +619,7 @@ fn set_may_go_rw(fs: &Fs) -> Result<(), BchError> {
         unsafe { jk.value().keys_mut() }.make_contiguous();
     }
 
-    fs.flags.set(Flag::BCH_FS_may_go_rw, true);
+    fs.flags.set(Flag::may_go_rw, true);
 
     /* Before going rw, and anything that could start a logged op: */
     logged_ops::note_unfinished(fs)?;
@@ -820,7 +820,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
 
     read_btree_roots(fs)?;
 
-    fs.flags.set(Flag::BCH_FS_btree_running, true);
+    fs.flags.set(Flag::btree_running, true);
 
     /* some mount options can only be checked after the btree is running */
     opts_hooks_pre_set(fs)?;
@@ -828,9 +828,9 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     fs.sb_set_upgrade_extra();
 
     if fs.journal_scrub_will_run() {
-        fs.flags.set(Flag::BCH_FS_scrub_journal, true);
+        fs.flags.set(Flag::scrub_journal, true);
         let rewind_seq = crate::data::scrub_journal::scrub(fs)?;
-        fs.flags.set(Flag::BCH_FS_scrub_journal, false);
+        fs.flags.set(Flag::scrub_journal, false);
 
         /*
          * Done with the keys from before the replay start: re-sort
@@ -894,17 +894,17 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
      * being applied to the journal replay keys. _Must_ be cleared before
      * multithreaded use:
      */
-    fs.flags.set(Flag::BCH_FS_may_go_rw, true);
-    fs.flags.set(Flag::BCH_FS_in_fsck, false);
+    fs.flags.set(Flag::may_go_rw, true);
+    fs.flags.set(Flag::in_fsck, false);
 
     /* in case we don't run journal replay, i.e. norecovery mode */
-    fs.flags.set(Flag::BCH_FS_accounting_replay_done, true);
+    fs.flags.set(Flag::accounting_replay_done, true);
 
     fs.async_btree_node_rewrites_flush();
 
     /* fsync if we fixed errors */
-    let errors_fixed = fs.flags.get(Flag::BCH_FS_errors_fixed) ||
-        fs.flags.get(Flag::BCH_FS_errors_fixed_silent);
+    let errors_fixed = fs.flags.get(Flag::errors_fixed) ||
+        fs.flags.get(Flag::errors_fixed_silent);
 
     if errors_fixed {
         fs.journal_flush_outstanding_pins();
@@ -921,26 +921,26 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     /* If we fixed errors, verify that fs is actually clean now: */
     if cfg!(CONFIG_BCACHEFS_DEBUG) &&
        errors_fixed &&
-       !fs.flags.get(Flag::BCH_FS_errors_not_fixed) &&
-       !fs.flags.get(Flag::BCH_FS_error) {
+       !fs.flags.get(Flag::errors_not_fixed) &&
+       !fs.flags.get(Flag::error) {
         error::flush_fsck_errs(fs, true);
 
         bch_info!(fs, "Fixed errors, running fsck a second time to verify fs is clean");
 
-        let saved_fixed        = fs.flags.swap(Flag::BCH_FS_errors_fixed, false);
-        let saved_fixed_silent = fs.flags.swap(Flag::BCH_FS_errors_fixed_silent, false);
+        let saved_fixed        = fs.flags.swap(Flag::errors_fixed, false);
+        let saved_fixed_silent = fs.flags.swap(Flag::errors_fixed_silent, false);
 
         passes::run_passes_startup(fs, Pass::check_alloc_info)?;
 
-        if fs.flags.get(Flag::BCH_FS_errors_fixed) ||
-           fs.flags.get(Flag::BCH_FS_errors_fixed_silent) ||
-           fs.flags.get(Flag::BCH_FS_errors_not_fixed) {
+        if fs.flags.get(Flag::errors_fixed) ||
+           fs.flags.get(Flag::errors_fixed_silent) ||
+           fs.flags.get(Flag::errors_not_fixed) {
             bch_err!(fs, "Second fsck run was not clean");
-            fs.flags.set(Flag::BCH_FS_errors_not_fixed, true);
+            fs.flags.set(Flag::errors_not_fixed, true);
         }
 
-        fs.flags.set(Flag::BCH_FS_errors_fixed, saved_fixed);
-        fs.flags.set(Flag::BCH_FS_errors_fixed_silent, saved_fixed_silent);
+        fs.flags.set(Flag::errors_fixed, saved_fixed);
+        fs.flags.set(Flag::errors_fixed_silent, saved_fixed_silent);
     }
 
     if quota::enabled_qtypes(fs) != 0 {
@@ -951,7 +951,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
 
     {
         let mut w = fs.sb_write();
-        let error = fs.flags.get(Flag::BCH_FS_error);
+        let error = fs.flags.get(Flag::error);
         let passes_complete = fs.recovery.runner.passes_complete.get();
         let complete = |p: Pass| passes_complete & passes::bit(p) != 0;
 
@@ -975,7 +975,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
 
         if fs.opts.fsck.get() != 0 &&
            !error &&
-           !fs.flags.get(Flag::BCH_FS_errors_not_fixed) {
+           !fs.flags.get(Flag::errors_not_fixed) {
             w.sb_mut().set_has_errors(false);
             w.dirty();
         }
@@ -990,7 +990,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
          */
         if complete(Pass::check_topology) &&
            !error &&
-           !fs.flags.get(Flag::BCH_FS_errors_not_fixed) {
+           !fs.flags.get(Flag::errors_not_fixed) {
             w.sb_mut().set_has_topology_errors(false);
             w.dirty();
         }
@@ -1046,7 +1046,7 @@ pub fn fs_recovery(fs: &Fs) -> Result<(), BchError> {
 
 pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
     bch_notice!(fs, "initializing new filesystem");
-    fs.flags.set(Flag::BCH_FS_new_fs, true);
+    fs.flags.set(Flag::new_fs, true);
 
     {
         let mut sb = fs.sb_lock();
@@ -1078,7 +1078,7 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
         fs.btree_root_alloc_fake(Btree(i), 0);
     }
 
-    fs.flags.set(Flag::BCH_FS_btree_running, true);
+    fs.flags.set(Flag::btree_running, true);
 
     /*
      * Write out the superblock and journal buckets, now that we can do

@@ -1528,7 +1528,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
         // re-establishes bucket state from the stripes and backpointers, and
         // makes these transitions itself - need_discard to parity, re-marking
         // a stripe's parity bucket - so not while it runs
-        let in_fsck = fs.flags.get(c::bch_fs_flags::BCH_FS_in_fsck);
+        let in_fsck = fs.flags.get(c::bch_fs_flags::in_fsck);
 
         if !in_fsck && unlikely(old_a.stripe_refcount != 0 && new_a.stripe_refcount == 0) {
             let new = new_key(new_a);

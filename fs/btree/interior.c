@@ -176,7 +176,7 @@ static inline bool bch2_key_is_shard_boundary(struct bch_fs *c,
 }
 
 static const char * const bch2_btree_update_modes[] = {
-#define x(t) #t,
+#define x(t, ...) #t,
 	BTREE_UPDATE_MODES()
 #undef x
 	NULL
@@ -1420,7 +1420,7 @@ static void bch2_btree_update_done(struct btree_update *as, struct btree_trans *
 }
 
 static const char * const btree_node_reawrite_reason_strs[] = {
-#define x(n)	#n,
+#define x(n, ...)	#n,
 	BTREE_NODE_REWRITE_REASON()
 #undef x
 	NULL,

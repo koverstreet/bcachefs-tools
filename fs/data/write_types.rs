@@ -134,7 +134,7 @@ nest! {
         #[init(bch_write_op_bits::new()
                .with_csum_type(fs.data_checksum_type(&opts).0 as u8)
                .with_compression_opt(opts.compression)
-               .with_watermark(c::bch_watermark::BCH_WATERMARK_normal as u8))]
+               .with_watermark(c::bch_watermark::normal as u8))]
         #>[bitfield(u32, repr = NeBytes<3>, from = NeBytes::<3>::from_u32, into = NeBytes::<3>::to_u32)]
         pub bits: pub struct bch_write_op_bits {
             /*

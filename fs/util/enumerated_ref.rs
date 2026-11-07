@@ -66,7 +66,7 @@ impl enumerated_ref {
     }
 }
 
-const _: () = assert!(c::bch_write_ref::BCH_WRITE_REF_rust as u32 == 0);
+const _: () = assert!(c::bch_write_ref::rust as u32 == 0);
 const _: () = assert!(c::bch_dev_read_ref::rust as u32 == 0);
 const _: () = assert!(c::bch_dev_write_ref::rust as u32 == 0);
 

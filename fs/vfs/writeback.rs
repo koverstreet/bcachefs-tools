@@ -194,7 +194,7 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeI
 
 fn can_write_now(fs: &Fs, cl: &StackClosure) -> bool {
     let reserved = c::OPEN_BUCKETS_COUNT -
-        (c::OPEN_BUCKETS_COUNT - crate::alloc::foreground::open_buckets_reserved(c::bch_watermark::BCH_WATERMARK_normal)) / 2;
+        (c::OPEN_BUCKETS_COUNT - crate::alloc::foreground::open_buckets_reserved(c::bch_watermark::normal)) / 2;
     let cl = NonNull::new(cl.as_ptr()).expect("a closure on the stack");
 
     if unlikely(u32::from(fs.allocator.freelist_lock.open_buckets_nr_free.get()) <= reserved) {
@@ -202,7 +202,7 @@ fn can_write_now(fs: &Fs, cl: &StackClosure) -> bool {
         return false;
     }
 
-    if (c::bch_watermark::BCH_WATERMARK_normal as u32) < fs.journal.watermark() as u32 && fs.journal.error().is_ok() {
+    if (c::bch_watermark::normal as u32) < fs.journal.watermark() as u32 && fs.journal.error().is_ok() {
         unsafe { closure_wait(&fs.journal.async_wait, cl) };
         return false;
     }

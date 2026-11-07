@@ -7,7 +7,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use crate::alloc::replicas::DevlistEntry;
 use crate::btree::bkey::prelude::*;
 use crate::c;
-use crate::c::journal_flags::*;
+use crate::c::journal_flags as Journal;
 use crate::data::ptrs::Ptrs;
 use crate::errcode::{bch_errcode, BchError};
 use crate::format::DataType;
@@ -38,7 +38,7 @@ impl c::journal {
     }
 
     pub fn stop(&self) {
-        if !self.flags.get(JOURNAL_running) {
+        if !self.flags.get(Journal::running) {
             return;
         }
 
@@ -61,7 +61,7 @@ impl c::journal {
         self.stop_thread.store((-(c::EROFS as isize)) as *mut c::task_struct, Relaxed);
 
         let fs = self.fs();
-        let replay_done = self.error().is_ok() && self.flags.get(JOURNAL_replay_done);
+        let replay_done = self.error().is_ok() && self.flags.get(Journal::replay_done);
         let (last_empty_seq, dirty_entry_bytes) = {
             let g = self.lock.lock();
             (g.last_empty_seq, g.dirty_entry_bytes)
@@ -87,7 +87,7 @@ impl c::journal {
         }
 
         if self.error().is_ok() {
-            self.flags.set(JOURNAL_running, false);
+            self.flags.set(Journal::running, false);
         }
     }
 
@@ -158,7 +158,7 @@ impl c::journal {
             if seq_devs.nr != 0 {
                 let r = DevlistEntry::new(DataType::journal, seq_devs);
 
-                fsck_err_on!(fs, !self.flags.get(JOURNAL_degraded) && !fs.replicas_marked(&r),
+                fsck_err_on!(fs, !self.flags.get(Journal::degraded) && !fs.replicas_marked(&r),
                              id::journal_entry_replicas_not_marked,
                              "superblock not marked as containing replicas for journal entry {}\n{}",
                              seq, *r)?;
@@ -195,9 +195,9 @@ impl c::journal {
         let mut g = self.lock.lock();
         self.space_available(&mut g);
 
-        self.flags.set(JOURNAL_need_flush_write, true);
-        self.flags.set(JOURNAL_running, true);
-        self.flags.set(JOURNAL_replay_done, true);
+        self.flags.set(Journal::need_flush_write, true);
+        self.flags.set(Journal::running, true);
+        self.flags.set(Journal::replay_done, true);
     }
 
     /* init/exit: */

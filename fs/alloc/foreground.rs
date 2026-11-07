@@ -532,13 +532,13 @@ impl Fs {
 /// The open buckets kept back from allocations at @watermark: more, the lower
 /// it is, so what frees open buckets can still get them.
 pub(crate) fn open_buckets_reserved(watermark: c::bch_watermark) -> u32 {
-    use c::bch_watermark::*;
+    use c::bch_watermark as w;
     match watermark {
-        BCH_WATERMARK_interior_updates                   => 0,
-        BCH_WATERMARK_reclaim                            => c::OPEN_BUCKETS_COUNT / 6,
-        BCH_WATERMARK_btree | BCH_WATERMARK_btree_copygc => c::OPEN_BUCKETS_COUNT / 4,
-        BCH_WATERMARK_copygc                             => c::OPEN_BUCKETS_COUNT / 3,
-        _                                                => c::OPEN_BUCKETS_COUNT / 2,
+        w::interior_updates        => 0,
+        w::reclaim                 => c::OPEN_BUCKETS_COUNT / 6,
+        w::btree | w::btree_copygc => c::OPEN_BUCKETS_COUNT / 4,
+        w::copygc                  => c::OPEN_BUCKETS_COUNT / 3,
+        _                          => c::OPEN_BUCKETS_COUNT / 2,
     }
 }
 
@@ -789,7 +789,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             self.trans().sleep_on_allocator(req, err, cl);
         }
         let fs = self.fs();
-        if fs.flags.get(c::bch_fs_flags::BCH_FS_emergency_ro) {
+        if fs.flags.get(c::bch_fs_flags::emergency_ro) {
             return fs.throw(crate::c::bch_errcode::BCH_ERR_emergency_ro);
         }
         Ok(())
@@ -1060,7 +1060,7 @@ impl Fs {
                     let sectors = u64::from(ca.mi.get().bucket_size);
                     need_discard += sectors * u.buckets[DataType::need_discard.0 as usize];
                     free         += sectors * u.buckets[DataType::free.0 as usize];
-                    reserve      += sectors * ca.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe);
+                    reserve      += sectors * ca.buckets_reserved(c::bch_watermark::stripe);
                 }
             }
 
@@ -1078,7 +1078,7 @@ impl Fs {
             self.fs_open_buckets_to_text(out);
         }
 
-        if self.journal.watermark() != c::bch_watermark::BCH_WATERMARK_stripe {
+        if self.journal.watermark() != c::bch_watermark::stripe {
             write!(out, "Journal debug:\n");
             self.journal.to_text(&mut out.indent(2));
         }
@@ -1129,7 +1129,7 @@ impl BtreeTrans<'_> {
 
             // going emergency read-only, a draining device may never have
             // buckets free: waiting again could block read_only_work forever
-            if fs.flags.get(c::bch_fs_flags::BCH_FS_emergency_ro) || !blocked || fs.alloc_wait_advanced(req) {
+            if fs.flags.get(c::bch_fs_flags::emergency_ro) || !blocked || fs.alloc_wait_advanced(req) {
                 return;
             }
 
@@ -1235,7 +1235,7 @@ impl Dev {
         writeln!(out);
 
         write!(out, "reserves:\n");
-        for w in (0..c::bch_watermark::BCH_WATERMARK_NR as u32).map(c::bch_watermark::from_bits) {
+        for w in (0..c::bch_watermark::NR).map(c::bch_watermark::from_bits) {
             write!(out, "{w}\t{}\r\n", self.buckets_reserved(w));
         }
         writeln!(out);

@@ -26,7 +26,7 @@ use crate::util::late::Late;
 use crate::{new_lock, published};
 use pin_init::pin_data;
 use crate::util::workqueue::{DelayedWork, ReffedWork, Workqueue, WqFlags};
-use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, placed, CStruct, Init, Late};
+use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, placed, CStruct, Init, Late};
 use nestify::nest;
 
 c_const! {
@@ -323,25 +323,21 @@ c_enum! {
     }
 }
 
-c_xmacro! {
-    JOURNAL_FLAGS(x) {
-        (degraded),
-        (replay_done),
-        (running),
-        (may_skip_flush),
-        (need_flush_write),
-        (med_on_space),
-        (low_on_space),
-        (low_on_pin),
-        (low_on_wb),
-        (stuck_reported),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(JOURNAL_)]
+    #[c_list(JOURNAL_FLAGS)]
     pub enum journal_flags: u32 {
-        JOURNAL_FLAGS(n) => concat(JOURNAL_, n),
+        degraded,
+        replay_done,
+        running,
+        may_skip_flush,
+        need_flush_write,
+        med_on_space,
+        low_on_space,
+        low_on_pin,
+        low_on_wb,
+        stuck_reported,
     }
 }
 

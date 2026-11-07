@@ -135,7 +135,7 @@ pub(crate) fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev, buckets
 /// for devices where it isn't or a v1 field is left.
 pub(crate) fn sb_journal_sort(fs: &Fs) -> Result<(), BchError> {
     assert!(fs.sb.clean.get() != 0);
-    assert!(!fs.flags.get(c::bch_fs_flags::BCH_FS_rw));
+    assert!(!fs.flags.get(c::bch_fs_flags::rw));
 
     let mut sb = fs.sb_lock();
     let mut dirty = false;

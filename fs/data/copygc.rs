@@ -299,7 +299,7 @@ pub(crate) fn dev_wait_amount(ca: &Dev, mark: &impl MarkHeld) -> (i64, bool) {
         return (wait, low_on_space);
     }
 
-    let watermark = c::bch_watermark::BCH_WATERMARK_stripe;
+    let watermark = c::bch_watermark::stripe;
     let fragmented_allowed = (ca.free_buckets_at(&usage, watermark).wrapping_add(ca.buckets_reserved(watermark))
         .wrapping_mul(bucket_size).wrapping_add(leaving as u64) >> 1) as i64;
     let fragmented = usage_full.d.iter().enumerate()
@@ -646,7 +646,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let fs = self.fs;
         let data_opts = c::data_update_opts {
             type_:        c::bch_data_update_types::BCH_DATA_UPDATE_copygc,
-            commit_flags: c::bch_trans_commit_flags::from_bits_retain(c::bch_watermark::BCH_WATERMARK_copygc as u32),
+            commit_flags: c::bch_trans_commit_flags::from_bits_retain(c::bch_watermark::copygc as u32),
             ..Default::default()
         };
 
@@ -760,7 +760,7 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
      * start (logged_ops::note_unfinished()).
      */
     let _ = sleep_until(Sleep::INTERRUPTIBLE.freezable(),
-        || (fs.flags.get(c::bch_fs_flags::BCH_FS_rw) || Kthread::should_stop()).then_some(()));
+        || (fs.flags.get(c::bch_fs_flags::rw) || Kthread::should_stop()).then_some(()));
     if Kthread::should_stop() {
         return Ok(());
     }

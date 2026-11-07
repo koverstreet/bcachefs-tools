@@ -222,7 +222,7 @@ impl FileData for InodeFile {
 /// read-only: @flags the mapping's VM_*.
 fn mmap_check(fs: &Fs, flags: c_ulong) -> Result<(), BchError> {
     let shared_writable = c::VM_SHARED | c::VM_WRITE;
-    if flags & shared_writable == shared_writable && fs.flags.get(c::bch_fs_flags::BCH_FS_emergency_ro) {
+    if flags & shared_writable == shared_writable && fs.flags.get(c::bch_fs_flags::emergency_ro) {
         return fs.throw(bch_errcode::BCH_ERR_mmap_emergency_ro);
     }
     Ok(())

@@ -32,7 +32,7 @@ fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64, post: b
 {
     use c::reconcile_scan as scan;
 
-    if !fs.flags.get(c::bch_fs_flags::BCH_FS_started) {
+    if !fs.flags.get(c::bch_fs_flags::started) {
         return Ok(());
     }
 
@@ -108,7 +108,7 @@ fn opt_hook_pre_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64, ch
         opt_id::Opt_rotational => {
             // Offline: there's no post hook, and nothing to race with
             if let Some(ca) = ca {
-                if change && v != u64::from(ca.mi.get().rotational) && !fs.flags.get(c::bch_fs_flags::BCH_FS_started) {
+                if change && v != u64::from(ca.mi.get().rotational) && !fs.flags.get(c::bch_fs_flags::started) {
                     crate::data::reconcile::check::rotational_changed(fs, ca);
                 }
             }
@@ -139,7 +139,7 @@ pub(crate) fn opts_hooks_pre_set(fs: &Fs) -> Result<(), BchError> {
 /// After setting option @id to @v, as opt_hook_pre_set(): logged, and what
 /// the change starts.
 fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) {
-    if fs.flags.get(c::bch_fs_flags::BCH_FS_started) {
+    if fs.flags.get(c::bch_fs_flags::started) {
         let mut buf = Printbuf::new();
         write!(buf, "opt change: {}=", id.opt().name);
         opt_to_text(&mut buf, Some(fs), None, id.opt(), v, 0);
@@ -172,7 +172,7 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) {
         opt_id::Opt_durability => {
             let state = fs.state_lock_read();
             if let Some(ca) = ca {
-                if fs.flags.get(c::bch_fs_flags::BCH_FS_rw) && ca.is_online() &&
+                if fs.flags.get(c::bch_fs_flags::rw) && ca.is_online() &&
                    ca.mi.get().state == MemberState::rw {
                     fs.dev_allocator_set_rw(ca.dev_idx.into(), true);
                     state.recalc_capacity();
@@ -189,7 +189,7 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) {
         // Online: the new value has to be live before the pass runs
         opt_id::Opt_rotational => {
             if let Some(ca) = ca {
-                if fs.flags.get(c::bch_fs_flags::BCH_FS_started) {
+                if fs.flags.get(c::bch_fs_flags::started) {
                     crate::data::reconcile::check::rotational_changed(fs, ca);
                 }
             }

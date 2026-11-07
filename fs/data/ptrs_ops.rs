@@ -209,7 +209,7 @@ pub(crate) fn extent_ptr_to_text(out: &mut Printbuf, fs: Option<&Fs>, ptr: &c::b
                 write!(out, " d={}", ca.mi.get().durability);
             }
 
-            let gens_valid = fs.flags.get(c::bch_fs_flags::BCH_FS_new_fs) ||
+            let gens_valid = fs.flags.get(c::bch_fs_flags::new_fs) ||
                 fs.recovery.runner.passes_complete.get() & (1 << RecoveryPass::alloc_read as u32) != 0;
             // dev_ptr_stale_rcu()'s -1 for a bucket the device doesn't have
             let stale = if gens_valid { ca.ptr_stale(ptr, rcu).map_or(-1, i32::from) } else { 0 };

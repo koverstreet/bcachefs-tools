@@ -1630,13 +1630,13 @@ bitflags! {
 pub struct Watermark(c::bch_watermark);
 
 impl Watermark {
-    pub const STRIPE:           Self = Watermark(c::bch_watermark::BCH_WATERMARK_stripe);
-    pub const NORMAL:           Self = Watermark(c::bch_watermark::BCH_WATERMARK_normal);
-    pub const COPYGC:           Self = Watermark(c::bch_watermark::BCH_WATERMARK_copygc);
-    pub const BTREE:            Self = Watermark(c::bch_watermark::BCH_WATERMARK_btree);
-    pub const BTREE_COPYGC:     Self = Watermark(c::bch_watermark::BCH_WATERMARK_btree_copygc);
-    pub const RECLAIM:          Self = Watermark(c::bch_watermark::BCH_WATERMARK_reclaim);
-    pub const INTERIOR_UPDATES: Self = Watermark(c::bch_watermark::BCH_WATERMARK_interior_updates);
+    pub const STRIPE:           Self = Watermark(c::bch_watermark::stripe);
+    pub const NORMAL:           Self = Watermark(c::bch_watermark::normal);
+    pub const COPYGC:           Self = Watermark(c::bch_watermark::copygc);
+    pub const BTREE:            Self = Watermark(c::bch_watermark::btree);
+    pub const BTREE_COPYGC:     Self = Watermark(c::bch_watermark::btree_copygc);
+    pub const RECLAIM:          Self = Watermark(c::bch_watermark::reclaim);
+    pub const INTERIOR_UPDATES: Self = Watermark(c::bch_watermark::interior_updates);
 }
 
 /// A C caller's: a struct's, say.
@@ -1683,8 +1683,8 @@ impl CommitOpts {
     pub fn watermark_hipri(self) -> Self {
         use c::bch_watermark as wm;
         let w = match wm::from_bits(self.0 & Self::WATERMARK_MASK) {
-            wm::BCH_WATERMARK_copygc                         => wm::BCH_WATERMARK_btree_copygc,
-            w if (w as u32) < wm::BCH_WATERMARK_btree as u32 => wm::BCH_WATERMARK_btree,
+            wm::copygc                         => wm::btree_copygc,
+            w if (w as u32) < wm::btree as u32 => wm::btree,
             w                                                => w,
         };
         self.watermark(Watermark(w))

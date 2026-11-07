@@ -160,7 +160,7 @@ impl<'a> Moving<'a> {
         let node_key = BkeyBuf::from_key(k);
 
         let mut flags = CommitOpts::from(data_opts.commit_flags);
-        if data_opts.commit_flags.bits() & c::BCH_WATERMARK_MASK == wm::BCH_WATERMARK_copygc as u32 {
+        if data_opts.commit_flags.bits() & c::BCH_WATERMARK_MASK == wm::copygc as u32 {
             flags = flags.watermark_hipri();
         }
 

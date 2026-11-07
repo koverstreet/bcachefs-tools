@@ -156,7 +156,7 @@ impl Fs {
         have_replicas &&
             (!self.allocator.rw_devs[req.data_type.0 as usize].test(ca.dev_idx.into()) ||
              !req.bits.copygc_can_make_progress() ||
-             (req.watermark == c::bch_watermark::BCH_WATERMARK_copygc && req.data_type != DataType::btree) ||
+             (req.watermark == c::bch_watermark::copygc && req.data_type != DataType::btree) ||
              self.dev_sizes_mismatched(req))
     }
 
@@ -490,7 +490,7 @@ impl TransAttempt<'_, '_> {
 
             // before check_allocations the counts may be wrong: above the
             // normal watermark, look anyway
-            if avail == 0 && !(req.watermark as u32 > c::bch_watermark::BCH_WATERMARK_normal as u32 &&
+            if avail == 0 && !(req.watermark as u32 > c::bch_watermark::normal as u32 &&
                                fs.recovery.runner.pass_done.get() <
                                RecoveryPass::check_allocations) {
                 copygc_can_make_progress = can_make_progress(ca, &fs.mark_lock().read());

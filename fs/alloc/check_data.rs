@@ -418,7 +418,7 @@ pub(crate) fn check_fix_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btr
     let fs = t.fs();
 
     // We don't yet do btree key updates correctly for when we're RW
-    assert!(!fs.flags.get(c::bch_fs_flags::BCH_FS_rw), "checking a key's pointers with the filesystem rw");
+    assert!(!fs.flags.get(c::bch_fs_flags::rw), "checking a key's pointers with the filesystem rw");
 
     if !k.k.is_btree_ptr() && !k.can_read(fs) {
         let repaired = no_valid_pointers_repair(t, btree, k)?;

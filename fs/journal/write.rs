@@ -18,7 +18,7 @@ use crate::btree::bkey::{BkeySC, ValidateFlags};
 use crate::btree::interior::btree_roots_to_journal_entries;
 use crate::c;
 use crate::c::journal_bucket_stage::JOURNAL_BUCKET_cur;
-use crate::c::journal_flags::*;
+use crate::c::journal_flags as Journal;
 use crate::c::journal_space_from::journal_space_discarded;
 use crate::c::{buf_waiters, JournalGuard, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT, JOURNAL_BUF_NOFLUSH,
                JOURNAL_BUF_NOT_IN_FLIGHT};
@@ -560,7 +560,7 @@ extern "C" fn write_done(mut w: Running<c::journal_buf>) {
          * Must come before signaling write completion, for
          * journal.stop():
          */
-        if j.watermark() != c::bch_watermark::BCH_WATERMARK_stripe {
+        if j.watermark() != c::bch_watermark::stripe {
             j.reclaim_kick();
         }
 
@@ -1067,7 +1067,7 @@ extern "C" fn journal_write(mut w: Running<c::journal_buf>) {
         }
 
         let ret = j.error();
-        if ret.is_err() && j.flags.get(JOURNAL_need_flush_write) {
+        if ret.is_err() && j.flags.get(Journal::need_flush_write) {
             ret?;
         }
 
@@ -1205,7 +1205,7 @@ impl c::journal {
         }
 
         /* first write after filesystem was clean? */
-        if self.flags.get(JOURNAL_need_flush_write) {
+        if self.flags.get(Journal::need_flush_write) {
             return true;
         }
 
@@ -1215,7 +1215,7 @@ impl c::journal {
         }
 
         /* does journal reclaim need a flush? */
-        if !self.flags.get(JOURNAL_may_skip_flush) &&
+        if !self.flags.get(Journal::may_skip_flush) &&
             w.last_seq != self.lock.last_seq_ondisk.get() &&
             flush_would_free_space(self, g, w.last_seq) {
             return true;
@@ -1302,7 +1302,7 @@ impl c::journal {
                  * first write since the filesystem was clean, which must be a
                  * flush whatever was promised - as __should_flush() asks first:
                  */
-                w.try_flush() || self.flags.get(JOURNAL_need_flush_write)
+                w.try_flush() || self.flags.get(Journal::need_flush_write)
             } else {
                 false
             }
@@ -1312,7 +1312,7 @@ impl c::journal {
             g.last_flush_write = jiffies();
             g.nr_flush_writes += 1;
 
-            self.flags.set(JOURNAL_need_flush_write, false);
+            self.flags.set(Journal::need_flush_write, false);
             g.flushes_outstanding += 1;
 
             /*

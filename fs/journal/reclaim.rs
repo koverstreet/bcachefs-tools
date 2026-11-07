@@ -11,7 +11,7 @@ use crate::alloc::discard::discard_opt_enabled;
 use crate::btree::cache::BTREE_WRITE_IO_LIMIT;
 use crate::c;
 use crate::c::journal_bucket_stage::{JOURNAL_BUCKET_cur, JOURNAL_BUCKET_discard};
-use crate::c::journal_flags::*;
+use crate::c::journal_flags as Journal;
 use crate::c::journal_pin_type::{JOURNAL_PIN_TYPE_btree0, JOURNAL_PIN_TYPE_key_cache, JOURNAL_PIN_TYPE_NR};
 use crate::c::journal_space_from::{self as SpaceFrom, *};
 use crate::c::JournalGuard;
@@ -77,9 +77,9 @@ impl c::journal {
 
         let open_buckets = self.lock.watermark_open_buckets.get();
         let watermark = if low_on_space || low_on_pin || low_on_wb {
-            c::bch_watermark::BCH_WATERMARK_reclaim
+            c::bch_watermark::reclaim
         } else {
-            c::bch_watermark::BCH_WATERMARK_stripe
+            c::bch_watermark::stripe
         } as u32;
 
         let watermark = watermark.max(open_buckets.into());
@@ -104,11 +104,11 @@ impl c::journal {
             });
         }
 
-        self.flags.set(JOURNAL_med_on_space, med_on_space);
+        self.flags.set(Journal::med_on_space, med_on_space);
 
-        self.flags.set(JOURNAL_low_on_space, low_on_space);
-        self.flags.set(JOURNAL_low_on_pin, low_on_pin);
-        self.flags.set(JOURNAL_low_on_wb, low_on_wb);
+        self.flags.set(Journal::low_on_space, low_on_space);
+        self.flags.set(Journal::low_on_pin, low_on_pin);
+        self.flags.set(Journal::low_on_wb, low_on_wb);
 
         let old = self.lock.hot.watermark.get();
         g.published().hot.watermark.set(watermark);
@@ -292,8 +292,8 @@ impl c::journal {
                 can_discard |= should_discard;
 
                 if should_discard &&
-                    fs.flags.get(c::bch_fs_flags::BCH_FS_rw_init_done) &&
-                    self.flags.get(JOURNAL_running) &&
+                    fs.flags.get(c::bch_fs_flags::rw_init_done) &&
+                    self.flags.get(Journal::running) &&
                     self.error().is_ok() {
                     unsafe { self.discard_wq.queue_work((&raw const ja.discard).cast_mut()) };
                 }
@@ -336,7 +336,7 @@ impl c::journal {
         let may_skip_flush = space(journal_space_clean_ondisk).next_entry < clean_ondisk &&
             clean.wrapping_sub(clean_ondisk) <= total / 8 &&
             u64::from(clean_ondisk) * 2 > u64::from(clean);
-        self.flags.set(JOURNAL_may_skip_flush, may_skip_flush);
+        self.flags.set(Journal::may_skip_flush, may_skip_flush);
 
         self.set_watermark(g);
 
@@ -568,7 +568,7 @@ impl c::journal {
              * make sure to flush at least one journal pin:
              */
             let min_nr = (time_after(jiffies(), self.reclaim_lock.last_flushed.get().wrapping_add(delay)) ||
-                          self.flags.get(JOURNAL_med_on_space) ||
+                          self.flags.get(Journal::med_on_space) ||
                           btree_cache_dirty * 2 > btree_cache_live) as usize;
 
             let min_key_cache = kc.nr_keys_need_flush().min(128);
@@ -687,7 +687,7 @@ impl c::journal {
          */
         let _j = self.lock.lock();
         let last_seq = self.lock.last_seq.get();
-        !self.flags.get(JOURNAL_replay_done) ||
+        !self.flags.get(Journal::replay_done) ||
             last_seq > seq_to_flush ||
             last_seq == self.pin_range().pin_back.get()
     }
@@ -697,7 +697,7 @@ impl c::journal {
         /* time_stats this */
         let mut did_work = false;
 
-        if !self.flags.get(JOURNAL_running) {
+        if !self.flags.get(Journal::running) {
             return false;
         }
 
@@ -896,7 +896,7 @@ fn reclaim_thread(j: &c::journal, me: &KthreadSelf<'_>) {
     Kthread::set_freezable();
 
     let _ = sleep_until(Sleep::INTERRUPTIBLE.freezable(),
-        || (fs.flags.get(c::bch_fs_flags::BCH_FS_rw) || Kthread::should_stop()).then_some(()));
+        || (fs.flags.get(c::bch_fs_flags::rw) || Kthread::should_stop()).then_some(()));
 
     j.reclaim_lock.lock().published().last_flushed.set(jiffies());
 

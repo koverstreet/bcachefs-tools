@@ -311,7 +311,7 @@ fn check_inode<'t>(
     if u.flag(c::bch_inode_flags::BCH_INODE_unlinked) &&
        !u.is_subvolume_root() &&
        !u.flag(c::bch_inode_flags::BCH_INODE_has_child_snapshot) {
-        if !fs.flags.get(c::bch_fs_flags::BCH_FS_started) {
+        if !fs.flags.get(c::bch_fs_flags::started) {
             // Offline, only make sure it's on the deleted list: a logged
             // operation may still refer to it - a crash mid-truncate of an open
             // unlinked file - so delete_dead_inodes runs after logged ops

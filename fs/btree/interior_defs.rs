@@ -9,7 +9,7 @@ use crate::cstructs::c;
 use crate::data::keylist::PaddedKey;
 use crate::types::{DArray, c_default, Le64};
 use core::ffi::{c_uint, c_ulong};
-use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct};
+use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, CStruct};
 use nestify::nest;
 use crate::format::{Bpos, Btree};
 
@@ -17,19 +17,15 @@ c_const! {
     pub const BTREE_UPDATE_NODES_MAX: u32 = (c::BTREE_MAX_DEPTH as u32 - 2) * 2 + c::GC_MERGE_NODES;
 }
 
-c_xmacro! {
-    BTREE_UPDATE_MODES(x) {
-        (none),
-        (node),
-        (root),
-        (update),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(BTREE_UPDATE_)]
+    #[c_list(BTREE_UPDATE_MODES)]
     pub enum btree_update_mode: u32 {
-        BTREE_UPDATE_MODES(n) => concat(BTREE_UPDATE_, n),
+        none,
+        node,
+        root,
+        update,
     }
 }
 

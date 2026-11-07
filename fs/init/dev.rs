@@ -1176,7 +1176,7 @@ impl StateLockWrite<'_> {
             /* The device is staying; allow new references to it again: */
             ca.removing.set(false);
 
-            if fs.flags.get(c::bch_fs_flags::BCH_FS_rw) &&
+            if fs.flags.get(c::bch_fs_flags::rw) &&
                ca.mi.get().state == MemberState::rw &&
                !ca.io_ref[READ].is_zero() {
                 self.dev_read_write(ca);
@@ -1318,7 +1318,7 @@ impl Fs {
         may_add(self, sb.sb())?;
 
         let ca = dev_alloc(self, &dev_mi).ok_or(BchError::from(c::ENOMEM))?;
-        let started = self.flags.get(c::bch_fs_flags::BCH_FS_started);
+        let started = self.flags.get(c::bch_fs_flags::started);
         let s = c::reconcile_scan::from_arm(c::reconcile_scan_pending {});
 
         bch_err_fn!(self, (|| -> Result<(), BchError> {
@@ -1792,9 +1792,9 @@ unsafe fn bdev_get_fs(bdev: *mut c::block_device) -> Option<RoRef> {
 
     let r = r?;
     let fs = r.container();
-    let started = |fs: &Fs| fs.flags.get(c::bch_fs_flags::BCH_FS_started);
+    let started = |fs: &Fs| fs.flags.get(c::bch_fs_flags::started);
     let Ok(()) = fs.ro_ref_events.wait_until(Sleep::UNINTERRUPTIBLE, || {
-        (started(fs) || fs.flags.get(c::bch_fs_flags::BCH_FS_stopping)).then_some(())
+        (started(fs) || fs.flags.get(c::bch_fs_flags::stopping)).then_some(())
     });
     // stopped without starting: our ref is what bch2_fs_stop() waits for
     started(fs).then_some(r)

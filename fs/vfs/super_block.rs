@@ -200,7 +200,7 @@ impl SuperOps for Fs {
     }
 
     fn unfreeze_fs(&self, _sb: &SuperBlock) -> Result<(), BchError> {
-        if self.flags.get(c::bch_fs_flags::BCH_FS_emergency_ro) {
+        if self.flags.get(c::bch_fs_flags::emergency_ro) {
             return Ok(());
         }
         self.state_lock_write().read_write()

@@ -135,7 +135,7 @@ pub mod c {
     pub(crate) use crate::btree::update::{BCH_TRANS_COMMIT_FLAGS};
     pub use super::btree_write_buffer_defs::*;
     pub use crate::btree::write_buffer::{BCH_WB_BTREE_NR, BCH_WB_BTREE_accounting, BCH_WB_BTREE_backpointers, BCH_WB_BTREE_deleted_inodes, BCH_WB_BTREE_lru, BCH_WB_BTREE_need_discard, BCH_WB_BTREE_reconcile_hipri, BCH_WB_BTREE_reconcile_hipri_phys, BCH_WB_BTREE_reconcile_pending, BCH_WB_BTREE_reconcile_work, BCH_WB_BTREE_reconcile_work_phys, BCH_WB_BTREE_stripe_backpointers, BTREE_WRITE_BUFERED_VAL_U64s_MAX, WB_FLUSH_NR, WB_FLUSH_journal_pin, WB_FLUSH_maybe, WB_FLUSH_sync, WB_FLUSH_thread, WB_FLUSH_tryflush, bch2_btree_write_buffer_flush_sync, bch2_btree_write_buffer_maybe_flush, bch2_btree_write_buffer_to_text, bch2_btree_write_buffer_tryflush, bch_fs_btree_write_buffer, bch_wb_btree, btree_write_buffer_keys, btree_write_buffered_key, wb_flush_caller, wb_key_ref, wb_key_ref_key, wb_key_ref_pos_idx, wb_key_ref_words};
-    pub(crate) use crate::btree::write_buffer::{BCH_WRITE_BUFFER_BTREES, WB_FLUSH_CALLERS};
+    pub(crate) use crate::btree::write_buffer::{BCH_WRITE_BUFFER_BTREES};
     pub use super::btree_write_types::*;
     pub use crate::data::compress::{BB_kmalloc, BB_mempool, BB_none, BB_vmap, bbuf, bbuf_type, bch_compression_opt, bch_compression_opt_bits, bch_compression_opt_fields};
     pub(crate) use crate::data::compress::{__bch_compression_opt_bits_forward};

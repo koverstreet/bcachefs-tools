@@ -1048,7 +1048,7 @@ fn journal_devs(fs: &Fs, want: impl Fn(&Dev) -> bool, degraded: bool)
             .flatten();
         match ioref {
             Some(ca) => devs.push(ca)?,
-            None if degraded => fs.journal.flags.set(c::journal_flags::JOURNAL_degraded, true),
+            None if degraded => fs.journal.flags.set(c::journal_flags::degraded, true),
             None => {}
         }
     }

@@ -618,7 +618,7 @@ fn phys_dev(fs: &Fs, phase: &Phase, dev: u32) -> Result<(), BchError> {
     let mut walker = Walker::new(&ctxt)?;
     let mut work_pos = c::bbpos { btree: phase.btree, pos: pos(dev.into(), 0) };
 
-    while ctxt.ratelimit().is_ok() && fs.reconcile_enabled() && !fs.flags.get(c::bch_fs_flags::BCH_FS_going_ro) {
+    while ctxt.ratelimit().is_ok() && fs.reconcile_enabled() && !fs.flags.get(c::bch_fs_flags::going_ro) {
         let trans = ctxt.trans();
         trans.begin_raw();
 
@@ -700,7 +700,7 @@ impl<'f> Reconciler<'f, '_> {
     /// What stops a phase, if anything, given the kicks seen when the phases
     /// started.
     fn interrupted(&self, kick: u32) -> Option<Interrupt> {
-        if self.ctxt.ratelimit().is_err() || self.fs.flags.get(c::bch_fs_flags::BCH_FS_going_ro) {
+        if self.ctxt.ratelimit().is_err() || self.fs.flags.get(c::bch_fs_flags::going_ro) {
             Some(Interrupt::Stopped)
         } else if !self.fs.reconcile_enabled() {
             Some(Interrupt::Disabled)
@@ -1103,7 +1103,7 @@ impl Fs {
     pub fn reconcile_scan_pending_to_text(&self, out: &mut Printbuf) {
         // No multithreaded btree access until BCH_FS_may_go_rw, and we're no
         // longer modifying the journal keys gap buffer
-        if !self.flags.get(c::bch_fs_flags::BCH_FS_may_go_rw) {
+        if !self.flags.get(c::bch_fs_flags::may_go_rw) {
             return;
         }
 

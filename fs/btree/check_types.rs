@@ -10,23 +10,19 @@ use crate::locking::SeqLock;
 use crate::util::ffi::Opaque;
 use core::cmp::Ordering;
 use core::ffi::c_int;
-use cstruct_macros::{bitfield, c_enum, c_export, c_extern, c_xmacro, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, c_enum, c_export, c_extern, CStruct, TypeInfo};
 use nestify::nest;
 use crate::format::{Bpos, Btree};
 
-c_xmacro! {
-    GC_PHASES(x) {
-        (not_running),
-        (start),
-        (sb),
-        (btree),
-    }
-}
-
 c_enum! {
     #[closed]
+    #[prefix(GC_PHASE_)]
+    #[c_list(GC_PHASES)]
     pub enum gc_phase: u32 {
-        GC_PHASES(n) => concat(GC_PHASE_, n),
+        not_running,
+        start,
+        sb,
+        btree,
     }
 }
 
@@ -64,7 +60,7 @@ impl gc_pos {
     /// gc_pos_btree(): @pos at @level of @btree, in gc's walk of the btrees.
     pub fn in_btree(btree: Btree, level: u16, pos: Bpos) -> Self {
         Self {
-            bits: c::gc_pos_bits::new().with_phase(c::gc_phase::GC_PHASE_btree).with_btree(btree),
+            bits: c::gc_pos_bits::new().with_phase(c::gc_phase::btree).with_btree(btree),
             level,
             pos,
         }

@@ -566,7 +566,7 @@ pub(crate) static DEV_GROUPS: Groups<2> = Groups::new([&DEV_GROUP]);
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 fn started(c: &Fs) -> Result<(), BchError> {
-    if c.flags.get(c::bch_fs_flags::BCH_FS_started) {
+    if c.flags.get(c::bch_fs_flags::started) {
         Ok(())
     } else {
         Err(c::EPERM.into())

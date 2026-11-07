@@ -68,7 +68,7 @@ impl c::dev_stripe_state {
     /// An allocation from @ca, its usage @usage: its hand advanced by the
     /// inverse of its free space.
     pub fn increment(&mut self, ca: &Dev, usage: &c::bch_dev_usage) {
-        let free = ca.free_buckets_at(usage, c::bch_watermark::BCH_WATERMARK_normal);
+        let free = ca.free_buckets_at(usage, c::bch_watermark::normal);
         let v = &mut self.next_alloc[usize::from(ca.dev_idx)];
 
         *v = v.saturating_add(if free != 0 { HAND_INV / free } else { HAND_INV });

@@ -201,7 +201,7 @@ impl BtreeTrans<'_> {
             let packed = root_packed(fs, btree);
             let (b, level) = root_unpack(packed);
             let Some(b) = b else {
-                if btree.0 >= fs.btree_id_nr_alive() || !fs.flags.get(c::bch_fs_flags::BCH_FS_btree_running) {
+                if btree.0 >= fs.btree_id_nr_alive() || !fs.flags.get(c::bch_fs_flags::btree_running) {
                     return Err(fs.err(bch_errcode::BCH_ERR_btree_not_started));
                 }
 
@@ -270,7 +270,7 @@ impl BtreeTrans<'_> {
     }
 
     fn prefetch_nr(&self, level: usize) -> u32 {
-        if self.fs().flags.get(c::bch_fs_flags::BCH_FS_started) {
+        if self.fs().flags.get(c::bch_fs_flags::started) {
             if level > 1 { 0 } else { 2 }
         } else if level > 1 {
             1

@@ -730,7 +730,7 @@ impl SbFieldOps for c::bch_sb_field_replicas {
     /// The table, from this section or replicas_v0: at open - after, it
     /// would lose the refs.
     fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        assert!(!fs.flags.get(c::bch_fs_flags::BCH_FS_started), "replicas table rebuilt with refs held");
+        assert!(!fs.flags.get(c::bch_fs_flags::started), "replicas table rebuilt with refs held");
 
         let mut new = ReplicasCpu::from_entries(|| sb_entries(sb.sb()), |t| !fs.replicas_obsolete(t))
             .map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_cpu_replicas))?;
