@@ -1063,7 +1063,7 @@ pub struct bch_fs_btree {
     #[pin]
     #[init(BioSet::new(1, true), ENOMEM_fs_other_alloc)]
     #[c("struct bio_set bio")]
-    pub bio: BioSet<Either<cs::btree_read_bio, crate::btree::write::BtreeWriteBio>>,
+    pub bio: BioSet<Either<crate::btree::read::BtreeReadBio, crate::btree::write::BtreeWriteBio>>,
     #[pin]
     #[init(fill_iter_pool(opts), ENOMEM_fs_other_alloc)]
     #[c("mempool_t fill_iter")]

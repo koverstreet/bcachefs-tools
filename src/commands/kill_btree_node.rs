@@ -138,7 +138,7 @@ fn parse_kill_node(s: &str) -> Result<KillNode> {
 /// bset gives the read path nothing to decide - no key is at risk, so the
 /// accept-vs-reject behaviour we're trying to exercise never runs.
 ///
-/// Layout is what bch2_btree_node_read_done() walks: the first bset is the
+/// Layout is what node read's read_done() walks: the first bset is the
 /// btree_node itself, each later one a btree_node_entry at the running sector
 /// offset, each occupying vstruct_sectors i.e. round_up(header + u64s * 8,
 /// block_size).

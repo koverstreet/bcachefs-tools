@@ -19,9 +19,6 @@ static inline unsigned btree_ptr_sectors_written(struct bkey_s_c k)
 		: 0;
 }
 
-void bch2_btree_node_wait_on_read(struct btree_trans *, struct btree *);
-void bch2_btree_node_wait_on_write(struct btree_trans *, struct btree *);
-
 static inline struct nonce btree_nonce(struct bset *i, unsigned offset)
 {
 	return (struct nonce) {{
@@ -53,35 +50,6 @@ static inline int bset_encrypt(struct bch_fs *c, struct bset *i, unsigned offset
 			    vstruct_end(i) - (void *) i->_data);
 }
 
-void bch2_btree_node_drop_keys_outside_node(struct btree *);
-
-int bch2_validate_bset_keys(struct bch_fs *, struct bch_dev *,
-			    struct btree *, struct bset *, int,
-			    struct bch_io_failures *,
-			    struct printbuf *);
-int bch2_validate_bset(struct bch_fs *, struct bch_dev *,
-		       struct btree *, struct bset *,
-		       unsigned, int,
-		       struct bch_io_failures *,
-		       struct printbuf *);
-
-int bch2_btree_node_read_done(struct bch_fs *, struct bch_dev *,
-			      struct btree *,
-			      struct bch_io_failures *,
-			      struct printbuf *);
-void bch2_btree_node_read(struct btree_trans *, struct btree *, bool);
-
-void bch2_btree_read_bio_to_text(struct printbuf *, struct btree_read_bio *);
-
 bool bch2_btree_flush_all_reads(struct bch_fs *);
-
-/* A node header as a machine of @big_endian wrote it, made this one's, or back */
-static inline void compat_btree_node(unsigned big_endian, struct btree_node *bn)
-{
-	if (big_endian != CPU_BIG_ENDIAN) {
-		bch2_bpos_swab(&bn->min_key);
-		bch2_bpos_swab(&bn->max_key);
-	}
-}
 
 #endif /* _BCACHEFS_BTREE_READ_H */

@@ -154,10 +154,6 @@ pub fn async_obj_exit(fs: &Fs) {
     }
 }
 
-cstruct_macros::c_extern! {
-    fn bch2_btree_read_bio_to_text(out: *mut Printbuf, rbio: *mut c::btree_read_bio);
-}
-
 /// How a list's objects are shown: of the list's kind, read under RCU.
 type ObjToText = unsafe fn(&mut Printbuf, &Fs, NonNull<c_void>);
 
@@ -180,7 +176,7 @@ unsafe fn write_op_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>)
 
 #[cold]
 unsafe fn btree_read_bio_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
-    unsafe { bch2_btree_read_bio_to_text(out.as_raw(), obj.as_ptr().cast()) }
+    crate::btree::read::read_bio_to_text(out, unsafe { obj.cast().as_ref() })
 }
 
 #[cold]

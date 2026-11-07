@@ -160,6 +160,10 @@ pub struct Bversion {
     pub lo: u64,
 }
 
+impl Bversion {
+    pub const MAX: Self = Self { hi: !0, lo: !0 };
+}
+
 /// hi, then lo: not derived, as little endian lays lo out first.
 impl Ord for Bversion {
     fn cmp(&self, r: &Self) -> core::cmp::Ordering {
