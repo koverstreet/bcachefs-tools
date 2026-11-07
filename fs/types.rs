@@ -498,7 +498,7 @@ pub struct Dev {
     #[pin]
     #[init(c::journal_device::init())]
     pub journal: c::journal_device,
-    pub prev_journal_sector: u64,
+    pub prev_journal_sector: Volatile<u64>,
 
     #[c("struct work_struct io_error_work")]
     #[pin]

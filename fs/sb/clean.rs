@@ -10,7 +10,6 @@
 use core::mem::size_of;
 use core::sync::atomic::Ordering::Relaxed;
 
-use cstruct_macros::c_export;
 use zerocopy::IntoBytes;
 
 use crate::btree::bkey::{BkeySCToText, ValidateFlags};
@@ -23,7 +22,6 @@ use crate::journal::validate::{journal_entry_to_text, journal_entry_validate};
 use crate::sb::io::{entries_end, SbFieldOps};
 use crate::types::{Le32, Le64};
 use crate::util::alloc::KVVec;
-use crate::util::ffi::Opaque;
 use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, UnvalidatedEntriesMut, Validated, VstructRef};
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, fsck_err, mustfix_fsck_err_on, prt};
@@ -178,9 +176,6 @@ impl Fs {
 
 // ── Writing it, at a clean shutdown ──────────────────────────────────────────
 
-/// The bytes super_entries_add_common() writes.
-const COMMON_BYTES: usize = size_of::<c::jset_entry_usage>() + 2 * size_of::<c::jset_entry_clock>();
-
 /// The entries every journal write carries, and the clean section: the key
 /// version, and both io clocks' times.
 pub(crate) fn super_entries_add_common(fs: &Fs, w: &mut EntryWriter<'_>) -> Result<(), NoRoom> {
@@ -198,21 +193,6 @@ pub(crate) fn super_entries_add_common(fs: &Fs, w: &mut EntryWriter<'_>) -> Resu
         w.push_entry(e)?;
     }
     Ok(())
-}
-
-/// super_entries_add_common(), for C's journal write: at *@end, which it
-/// moves past them.
-///
-/// # Safety
-/// There's room for them at *@end.
-#[c_export]
-pub unsafe fn bch2_journal_super_entries_add_common(c: &Opaque<Fs>, end: *mut *mut Head<c::jset_entry>,
-                                                    _seq: u64) {
-    // SAFETY: the caller's - room for these
-    let buf = unsafe { core::slice::from_raw_parts_mut((*end).cast(), COMMON_BYTES) };
-    super_entries_add_common(Fs::from_c(c), &mut EntryWriter::new(buf)).expect("sized for them");
-    // SAFETY: as long as what was written
-    unsafe { *end = (*end).byte_add(COMMON_BYTES) };
 }
 
 /// Marked dirty, for a write with the journal in use.

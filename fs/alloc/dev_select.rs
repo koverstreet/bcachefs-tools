@@ -21,11 +21,9 @@ use crate::fs::Dev;
 use crate::c;
 use crate::fs::Fs;
 use crate::debug::trace::events;
-use crate::util::ffi::Opaque;
 use crate::util::kernel::likely;
 use crate::util::projections::Volatile;
 use crate::util::rcu::read_lock;
-use cstruct_macros::c_export;
 
 const NR_DEVS: usize = c::BCH_SB_MEMBERS_MAX as usize;
 
@@ -200,20 +198,4 @@ impl Fs {
         }
         stripe.alloc_list(devs, domain_keys, None, ret);
     }
-}
-
-// ── For C ────────────────────────────────────────────────────────────────
-
-/// # Safety
-/// @domain_keys is BCH_SB_MEMBERS_MAX u64s.
-#[c_export]
-pub unsafe fn bch2_dev_alloc_list_devs(c: &Opaque<Fs>, stripe: &mut c::dev_stripe_state,
-                                       devs: &c::bch_devs_mask, devs_chosen: &c::bch_devs_mask,
-                                       domain_keys: *mut u64, ret: &mut c::dev_alloc_list) {
-    Fs::from_c(c).dev_alloc_list_devs(stripe, devs, devs_chosen, unsafe { &mut *domain_keys.cast() }, ret)
-}
-
-#[c_export]
-pub fn bch2_dev_stripe_increment(ca: &Dev, stripe: &mut c::dev_stripe_state) {
-    stripe.increment(ca, &ca.usage_read_fast())
 }

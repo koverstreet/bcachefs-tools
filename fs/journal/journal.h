@@ -155,30 +155,6 @@ static inline u64 journal_cur_seq(struct journal *j)
  */
 #define JOURNAL_BUF_FLUSH		((struct llist_node *) 4)
 
-static inline bool journal_buf_must_not_flush(struct journal_buf *buf)
-{
-	return buf->wait.list.first == JOURNAL_BUF_NOFLUSH;
-}
-
-/* Decided a flush - false if journal_buf_try_noflush() got there first: */
-static inline bool journal_buf_try_flush(struct journal_buf *buf)
-{
-	struct llist_node *old = NULL;
-
-	return try_cmpxchg(&buf->wait.list.first, &old, JOURNAL_BUF_FLUSH) ||
-		old != JOURNAL_BUF_NOFLUSH;
-}
-
-static inline u64 journal_last_unallocated_seq(struct journal *j)
-{
-	struct journal_buf *buf;
-	u64 seq;
-	fifo_for_each_entry_ptr(buf, &j->in_flight, seq)
-		if (!buf->write_allocated)
-			return seq;
-	return 0;
-}
-
 static inline struct journal_buf *journal_cur_buf(struct journal *j)
 {
 	return j->ring_buf[j->reservations.idx];

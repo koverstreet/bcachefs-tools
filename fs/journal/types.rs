@@ -201,6 +201,18 @@ unsafe impl ::pin_init::Zeroable for PinLocked {}
 
 pub type PinLockedBy = rust_only!(LockedBy<PinLocked>);
 
+#[derive(::pin_init::Zeroable)]
+pub struct WriteAlloc {
+    /* The round robin over devices journal writes take: */
+    pub stripe: c::dev_stripe_state,
+    /* Failure domain keys scratch for journal_write_alloc(): */
+    pub wp_domain_keys: [u64; c::BCH_SB_MEMBERS_MAX as usize],
+    /* The devices the last journal write went to, which the next one prefers: */
+    pub wp_prev_devs: c::bch_devs_mask,
+}
+
+pub type WriteAllocLockedBy = rust_only!(LockedBy<WriteAlloc>);
+
 #[repr(C)]
 #[derive(CStruct)]
 pub struct journal_entry_pin {
@@ -618,20 +630,10 @@ nest! {
 
         pub replay_journal_seq: Volatile<u64>,
 
-        /*
-         * The round robin over devices journal writes take - protected by
-         * journal writes being allocated in order:
-         */
-        pub stripe: c::dev_stripe_state,
-        /*
-         * Failure domain keys scratch for journal_write_alloc() - as stripe:
-         */
-        pub wp_domain_keys: [u64; c::BCH_SB_MEMBERS_MAX as usize],
-        /*
-         * The devices the last journal write went to, which the next one
-         * prefers - same protection as wp_domain_keys:
-         */
-        pub wp_prev_devs: c::bch_devs_mask,
+        /* protected by journal writes being allocated in order: */
+        #[pin]
+        #[init(RustOnly::new(::pin_init::zeroed::<LockedBy<WriteAlloc>>()))]
+        pub write_alloc: WriteAllocLockedBy,
         #[pin]
         #[init(new_lock!((), "&j->err_lock"))]
         #[c_lock("spinlock_t err_lock")]
@@ -663,7 +665,7 @@ nest! {
         /* Woken as a pin's flush ends: journal/reclaim.rs */
         pub pin_flush_wait: EventCount,
 
-        pub write_start_time: u64,
+        pub write_start_time: Volatile<u64>,
 
         pub flush_write_time: *mut c::bch2_time_stats,
         pub noflush_write_time: *mut c::bch2_time_stats,

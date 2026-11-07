@@ -56,7 +56,6 @@
 #include "journal/reclaim.h"
 #include "journal/seq_blacklist.h"
 
-#include "sb/clean.h"
 #include "sb/counters.h"
 #include "sb/errors.h"
 #include "sb/io.h"

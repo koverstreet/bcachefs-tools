@@ -45,7 +45,6 @@ c_extern! {
     pub fn bch2_journal_advance_rewind_seq(j: *mut c::journal, seq: u64);
     pub fn bch2_journal_noflush_seq(j: *mut c::journal, start: u64, end: u64) -> bool;
     pub fn bch2_journal_meta(j: *mut c::journal) -> c_int;
-    pub fn bch2_journal_do_writes(j: *mut c::journal);
     pub fn bch2_journal_debug_to_text(out: *mut Printbuf, j: *mut c::journal);
     pub fn bch2_journal_halt(j: *mut c::journal);
     pub fn bch2_journal_halt_locked(j: *mut c::journal);
@@ -118,7 +117,7 @@ pub fn buf_waiters(first: *mut c::llist_node) -> bool {
 }
 
 impl c::journal_buf {
-    fn wait_word(&self) -> &AtomicPtr<c::llist_node> {
+    pub(crate) fn wait_word(&self) -> &AtomicPtr<c::llist_node> {
         unsafe { AtomicPtr::from_ptr((&raw const self.wait.list.first).cast_mut()) }
     }
 
@@ -217,7 +216,7 @@ impl Fs {
 
     /// Start writes of whatever's ready to be written.
     pub fn journal_do_writes(&self) {
-        unsafe { bch2_journal_do_writes(self.journal.as_ptr()) }
+        self.journal.do_writes()
     }
 
     pub fn journal_reclaim_to_text(&self, out: &mut Printbuf) {

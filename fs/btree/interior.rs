@@ -5,9 +5,9 @@
 
 #![allow(non_camel_case_types)]
 
-use core::ffi::{c_ulong, c_int, c_uint};
+use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
-use cstruct_macros::{c_export, CStruct, Init, Late, c_const, c_extern, TypeInfo};
+use cstruct_macros::{CStruct, Init, Late, c_const, c_extern, TypeInfo};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
 use crate::btree::bkey::BKEY_U64S;
@@ -16,8 +16,6 @@ use crate::data::keylist::PaddedKey;
 use crate::fs::Fs;
 use crate::journal::entries::{EntryWriter, NoRoom};
 use crate::locking::{ExclusiveGuard, Locked};
-use crate::util::ffi::Opaque;
-use crate::util::vstructs::Head;
 use crate::new_lock;
 use crate::types::c_default;
 use crate::util::Printbuf;
@@ -162,11 +160,6 @@ fn roots<'a>(fs: &'a Fs, root_lock: &'a RootsGuard<'_>, skip: u64)
         .filter_map(move |id| root_lock.get(id).filter(|r| r.alive != 0).map(|r| (id, r)))
 }
 
-/// An entry's bytes, for @r's key.
-fn entry_bytes(r: &c::btree_root) -> usize {
-    size_of::<Head<c::jset_entry>>() + usize::from(r.key.k.u64s) * size_of::<u64>()
-}
-
 fn push_roots(fs: &Fs, root_lock: &RootsGuard<'_>, skip: u64, w: &mut EntryWriter<'_>)
     -> Result<(), NoRoom>
 {
@@ -179,23 +172,4 @@ fn push_roots(fs: &Fs, root_lock: &RootsGuard<'_>, skip: u64, w: &mut EntryWrite
 /// Each live btree root as a btree_root journal entry, but those in @skip.
 pub fn btree_roots_to_journal_entries(fs: &Fs, w: &mut EntryWriter<'_>, skip: u64) -> Result<(), NoRoom> {
     push_roots(fs, &fs.btree.cache.roots.lock(), skip, w)
-}
-
-/// btree_roots_to_journal_entries(), for C's journal write: at @end, the end
-/// of what's written, which it returns.
-///
-/// # Safety
-/// There's room at @end for an entry for every live root.
-#[c_export]
-pub unsafe fn bch2_btree_roots_to_journal_entries(c: &Opaque<Fs>, end: *mut Head<c::jset_entry>,
-                                                  skip: c_ulong) -> *mut Head<c::jset_entry> {
-    let fs = Fs::from_c(c);
-    let root_lock = fs.btree.cache.roots.lock();
-    let bytes = roots(fs, &root_lock, skip.into()).map(|(_, r)| entry_bytes(r)).sum();
-
-    // SAFETY: the caller's - room for these
-    let mut w = EntryWriter::new(unsafe { core::slice::from_raw_parts_mut(end.cast(), bytes) });
-    push_roots(fs, &root_lock, skip.into(), &mut w).expect("sized for them, under the same lock");
-    // SAFETY: as long as what was written
-    unsafe { end.byte_add(bytes) }
 }
