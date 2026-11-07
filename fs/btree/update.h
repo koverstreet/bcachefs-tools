@@ -22,8 +22,6 @@ void bch2_btree_add_journal_pin(struct bch_fs *, struct btree *, u64);
 void bch2_btree_insert_key_leaf(struct btree_trans *, struct btree_path *,
 				struct bkey_i *, u64);
 
-void bch2_trans_commit_flags_to_text(struct printbuf *, enum bch_trans_commit_flags);
-
 static inline int __must_check
 bch2_trans_update_buf(struct btree_trans *trans, struct btree_iter *iter,
 		      struct bkey_i *k, unsigned k_buf_u64s,

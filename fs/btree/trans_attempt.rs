@@ -15,6 +15,7 @@ use crate::btree::trans::TransGuard;
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::util::ffi::Opaque;
+use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
 use core::fmt;
 use core::marker::PhantomData;
@@ -1090,6 +1091,18 @@ impl CommitOpts {
 impl From<CommitFlags> for CommitOpts {
     fn from(flags: CommitFlags) -> Self {
         CommitOpts::new().flags(flags)
+    }
+}
+
+impl ToText for CommitOpts {
+    fn to_text(&self, out: &mut Printbuf) {
+        let watermark = c::bch_watermark::from_bits(self.0 & Self::WATERMARK_MASK);
+        let flags = c::bch_trans_commit_flags::from_bits_retain(self.0 & !Self::WATERMARK_MASK);
+
+        crate::prt!(out, "watermark={watermark}");
+        if !flags.is_empty() {
+            crate::prt!(out, " {flags}");
+        }
     }
 }
 

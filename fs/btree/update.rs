@@ -40,7 +40,6 @@ c_enum! {
     #[closed]
     #[prefix(__BCH_TRANS_COMMIT_)]
     #[mask(bch_trans_commit_flags: u32, prefix = BCH_TRANS_COMMIT_)]
-    #[c_list(BCH_TRANS_COMMIT_FLAGS)]
     pub enum __bch_trans_commit_flags: u32 {
         /* First bits for bch_watermark: */
         /// don't check for enospc
@@ -61,6 +60,11 @@ c_enum! {
         /// applied
         skip_accounting_apply,
     }
+}
+
+#[c_export]
+pub fn bch2_trans_commit_flags_to_text(out: &mut Printbuf, flags: c::bch_trans_commit_flags) {
+    CommitOpts::from(flags).to_text(out)
 }
 
 c_extern! {

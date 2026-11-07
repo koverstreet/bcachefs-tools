@@ -32,26 +32,6 @@
 #include <linux/prefetch.h>
 #include <linux/string_helpers.h>
 
-static const char * const trans_commit_flags_strs[] = {
-#define x(n, ...) #n,
-	BCH_TRANS_COMMIT_FLAGS()
-#undef x
-	NULL
-};
-
-__cold void bch2_trans_commit_flags_to_text(struct printbuf *out, enum bch_trans_commit_flags flags)
-{
-	enum bch_watermark watermark = flags & BCH_WATERMARK_MASK;
-
-	prt_printf(out, "watermark=%s", bch2_watermarks[watermark]);
-
-	flags >>= BCH_WATERMARK_BITS;
-	if (flags) {
-		prt_char(out, ' ');
-		bch2_prt_bitflags(out, trans_commit_flags_strs, flags);
-	}
-}
-
 static inline struct btree_path_level *insert_l(struct btree_trans *trans, struct btree_insert_entry *i)
 {
 	return (trans->paths + i->path)->l + i->level;
