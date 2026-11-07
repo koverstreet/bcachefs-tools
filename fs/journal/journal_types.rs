@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::types::c_default;
-use crate::util::closure::closure_wake_up;
+use crate::util::closure::{closure_set_waiting, closure_unset_waiting, closure_wake_up};
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_uint};
 use core::mem::ManuallyDrop;
@@ -153,6 +153,17 @@ impl Drop for Waiters {
     }
 }
 
+/// Where journal_buf::wait() left its closure.
+pub enum BufWait {
+    /// Not in flight: there's nothing from here on to wait for.
+    NotInFlight,
+    /// Decided noflush, or the clean->dirty FLUSH_NO_WAIT entry: not a flush
+    /// to wait on.
+    NotWaitable,
+    /// Waiting on its flush - the first, or behind others.
+    Waiting { first: bool },
+}
+
 impl c::journal_buf {
     pub(crate) fn wait_word(&self) -> &AtomicPtr<c::llist_node> {
         unsafe { AtomicPtr::from_ptr((&raw const self.wait.list.first).cast_mut()) }
@@ -211,6 +222,54 @@ impl c::journal_buf {
                     return Ok(());
                 }
                 Err(o) => old = o,
+            }
+        }
+    }
+
+    /*
+     * Variant of closure_wait() that respects the journal_buf sentinel states:
+     * if the journal_buf is not waitable, no waiters can attach. Otherwise the
+     * closure is attached to buf->wait; the act of attaching transitions buf
+     * out of the "may be noflush" state into "must flush" (via the wait-list
+     * head becoming a real pointer).
+     */
+    /// # Safety
+    /// @buf is an in_flight slot, live or free - only its wait word is read,
+    /// the one thing a free slot holds; @cl is a live closure, waiting on
+    /// nothing.
+    pub unsafe fn wait(buf: *const Self, cl: NonNull<c::closure>) -> BufWait {
+        let w = unsafe { AtomicPtr::from_ptr((&raw const (*buf).wait.list.first).cast_mut()) };
+        let refused = |first: *mut c::llist_node| (!first.is_null() && first <= JOURNAL_BUF_FLUSH_NO_WAIT)
+            .then(|| if first == JOURNAL_BUF_NOT_IN_FLIGHT { BufWait::NotInFlight } else { BufWait::NotWaitable });
+
+        /* Optimistic check: bail without touching closure state if not waitable */
+        let mut first = w.load(Relaxed);
+        if let Some(r) = refused(first) {
+            return r;
+        }
+
+        /* Commit to waiting */
+        let node = unsafe { closure_set_waiting(cl, crate::ret_ip!()) };
+
+        /*
+         * cmpxchg-loop attach, bailing on race-to-poison. Standard llist_add
+         * would happily chain through the NOFLUSH sentinel, which would
+         * corrupt the list — so we open-code the attach to check first each
+         * iteration.
+         */
+        loop {
+            if let Some(r) = refused(first) {
+                /* Became non-waitable after we committed waiting state — roll
+                 * back. Safe because cl isn't on any list yet, so no concurrent
+                 * writer can touch cl->remaining. */
+                unsafe { closure_unset_waiting(cl) };
+                return r;
+            }
+            unsafe { (*node.as_ptr()).next = if buf_waiters(first) { first } else { ptr::null_mut() } };
+
+            match w.compare_exchange(first, node.as_ptr(), SeqCst, Relaxed) {
+                Ok(_) => return BufWait::Waiting { first: !buf_waiters(first) },
+                Err(o) => first = o,
             }
         }
     }
