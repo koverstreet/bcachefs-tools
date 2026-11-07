@@ -430,13 +430,13 @@ impl BtreeTrans<'_> {
         ret
     }
 
-    /// @b, which path @idx holds for intent, for write too:
+    /// Path @idx's node at @level, which it holds for intent, for write too:
     /// bch2_btree_node_lock_write().
-    pub(crate) fn node_lock_write(&self, paths: &mut Paths<'_>, idx: PathIdx, b: &c::btree_bkey_cached_common)
+    pub(crate) fn node_lock_write(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize)
         -> Result<(), BchError>
     {
-        let level = b.level as usize;
-        ebug_assert!(paths[idx].l[level].b.is(b));
+        let b = paths[idx].locked_node(level).expect("write locking a node the path doesn't hold");
+        let b = unsafe { &*ptr::from_ref(b.node()) };
         ebug_assert!(paths[idx].l[level].lock_seq == b.lock.six().seq.get());
         ebug_assert!(paths[idx].intent_locked(level));
 
