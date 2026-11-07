@@ -11,6 +11,7 @@ use crate::btree::lock_graph::bch2_six_check_for_deadlock;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{btree_path_poison, BtreePath, NodePtr, PathIdx, PathNode, PathSnapshot, Paths};
 use crate::c;
+use crate::cstructs::c::BtreeNodeFlags;
 use crate::debug::params::debug_check_btree_locking;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{Bpos, Btree};
@@ -31,7 +32,7 @@ use crate::util::sleep::Sleep;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::util::{kernel::local_clock, time_stats::TimeStats};
 use crate::util::Printbuf;
-use core::sync::atomic::Ordering::Relaxed;
+use core::sync::atomic::{fence, Ordering::{Acquire, Relaxed}};
 use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::{self, NonNull};
 use cstruct_macros::{c_enum, c_export, c_extern};
@@ -1109,6 +1110,21 @@ impl BtreeTrans<'_> {
                 None       => { let Ok(()) = ev.wait(seen, Sleep::UNINTERRUPTIBLE); }
             }
         }
+    }
+
+    /// Waits for @b's flag @bit to clear, under SRCU as wait_until() waits:
+    /// trans_wait_on_node_flag().
+    pub(crate) fn wait_on_node_flag(&self, paths: &mut Paths<'_>, b: &BtreeNode, bit: c::btree_flags) {
+        let m = 1 << bit as u32;
+        let clear = |f: BtreeNodeFlags| f.into_bits() & m == 0;
+
+        while !clear(b.flags.load()) {
+            match self.srcu_wait_budget(paths) {
+                Some(left) => { b.flags.wait_until_timeout(Sleep::UNINTERRUPTIBLE.io(), left, clear); }
+                None       => { let Ok(()) = b.flags.wait_until(Sleep::UNINTERRUPTIBLE.io(), clear); }
+            }
+        }
+        fence(Acquire);
     }
 
     /// Wait for @cl's refs - the waitlists it's on - to be put, for up to
