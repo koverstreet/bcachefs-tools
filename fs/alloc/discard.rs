@@ -71,7 +71,7 @@ use crate::util::time_stats::TimeStats;
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::task::waiter;
-use crate::util::kernel::{bdev_max_discard_sectors, local_clock, unlikely, READ};
+use crate::util::kernel::{bdev_max_discard_sectors, unlikely, READ};
 use crate::util::place::Contained;
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
@@ -677,9 +677,7 @@ fn do_discards(fs: &Fs) {
         let mut again = false;
         if r.flush_journal {
             trans.unlock_long();
-            let start = local_clock();
-            let ret = fs.journal_flush();
-            fs.times[c::bch_time_stats::blocked_discard_journal_flush as usize].update(start);
+            let ret = fs.times[c::bch_time_stats::blocked_discard_journal_flush as usize].time(|| fs.journal_flush());
             if let Err(e) = ret {
                 break Err(e);
             }

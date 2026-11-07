@@ -2698,7 +2698,7 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&c::bch_devs_mask>, 
 #[track_caller]
 fn write_super_devs(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_devs_mask>,
                     flags: c::bch_sb_write_flags) -> Result<(), BchError> {
-    let start = crate::util::kernel::local_clock();
+    let _timer = fs.times[c::bch_time_stats::sb_write as usize].timer();
 
     let dirty = core::mem::take(&mut sb.dirty);
     let ret = write_super_locked(fs, sb, devs, flags);
@@ -2713,10 +2713,7 @@ fn write_super_devs(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_devs
     // the tools' strip_fs_alloc(), edit as from_cpu() does: marking nothing,
     // replicas' to_cpu() being only for before the table has refs.
     const TO_CPU_DIRTY: bool = false;
-    let ret = if TO_CPU_DIRTY { ret.and(sections_to_cpu(fs, sb, dirty)) } else { ret };
-
-    fs.times[c::bch_time_stats::sb_write as usize].update(start);
-    ret
+    if TO_CPU_DIRTY { ret.and(sections_to_cpu(fs, sb, dirty)) } else { ret }
 }
 
 /// to_cpu() for each section the superblock has that @dirty names, by bit:

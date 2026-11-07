@@ -296,11 +296,8 @@ fn node_header_to_text(out: &mut Printbuf, bn: &Head<c::btree_node>) {
 
 pub fn read_done(fs: &Fs, ca: &Dev, b: &BtreeNode, failed: Option<&mut c::bch_io_failures>,
                  err_msg: &mut Printbuf) -> Result<(), BchError> {
-    let start_time = local_clock();
-    let ret = node_read_done(&mut NodeValidate { fs, b, io: NodeIo::Read { ca, failed, err_msg } });
-
-    fs.times[c::bch_time_stats::btree_node_read_done as usize].update(start_time);
-    ret
+    fs.times[c::bch_time_stats::btree_node_read_done as usize]
+        .time(|| node_read_done(&mut NodeValidate { fs, b, io: NodeIo::Read { ca, failed, err_msg } }))
 }
 
 struct NodePtr {

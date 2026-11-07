@@ -24,7 +24,7 @@ use crate::locking::{ExclusiveGuard, MemallocFlags};
 use crate::util::backtrace::prt_task_backtrace;
 use crate::util::closure::{closure_wait_event, closure_wake_up};
 use crate::util::kernel::{bdev_max_discard_sectors, blkdev_issue_discard, cond_resched, jiffies, jiffies_to_msecs,
-                          local_clock, msecs_to_jiffies, time_after, time_in_range, totalram_bytes};
+                          msecs_to_jiffies, time_after, time_in_range, totalram_bytes};
 use crate::util::kthread::{Kthread, KthreadSelf};
 use crate::util::place::Contained;
 use crate::util::rcu::read_lock;
@@ -479,9 +479,6 @@ impl c::journal {
 
             min_any = min_any.saturating_sub(1);
 
-            let start_time = local_clock();
-            let ok = flushing.run();
-
             let flush_time = if (ty as u32) <= JOURNAL_PIN_TYPE_btree0 as u32 {
                 Time::journal_pin_flush_btree
             } else if ty == JOURNAL_PIN_TYPE_key_cache {
@@ -489,7 +486,7 @@ impl c::journal {
             } else {
                 Time::journal_pin_flush_other
             };
-            fs.times[flush_time as usize].update(start_time);
+            let ok = fs.times[flush_time as usize].time(|| flushing.run());
 
             drop(flushing);
 

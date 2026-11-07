@@ -37,7 +37,6 @@ use crate::new_lock;
 use crate::types::CacheAligned;
 use crate::util::futex::EventCount;
 use crate::util::hash::hash_64;
-use crate::util::kernel::local_clock;
 use crate::util::time_stats::TimeStats;
 use crate::util::sleep::Sleep;
 use crate::util::{Printbuf, ToText};
@@ -231,7 +230,6 @@ impl NocowLocks {
         order.sort_unstable_by_key(|&(_, l)| core::ptr::from_ref(l) as usize);
         warn_on_once!(order.len() > NR_SLOTS);
 
-        let contended_stat = &fs.times[c::bch_time_stats::nocow_lock_contended as usize];
         'retake_all: loop {
             for (n, &(b, l)) in order.iter().enumerate() {
                 let mut ret = l.trylock(fs, b, kind);
@@ -239,7 +237,7 @@ impl NocowLocks {
                     continue;
                 }
 
-                let start = local_clock();
+                let _contended = fs.times[c::bch_time_stats::nocow_lock_contended as usize].timer();
                 if ret.as_ref().is_err_and(is_contended) {
                     ret = l.wait_until(trans, || {
                         let r = l.trylock(fs, b, kind);
@@ -247,7 +245,6 @@ impl NocowLocks {
                     });
                 }
                 if ret.is_ok() {
-                    contended_stat.update(start);
                     continue;
                 }
 
@@ -258,7 +255,6 @@ impl NocowLocks {
                     l2.unlock(b2, kind);
                 }
                 l.wait_until(trans, || l.empty().then_some(()));
-                contended_stat.update(start);
                 continue 'retake_all;
             }
             break;

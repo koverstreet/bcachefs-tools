@@ -370,14 +370,11 @@ fn flush_sorted_sharded(
                     let trans = btree_trans!(fs);
                     let wb = &fs.btree.write_buffer[wb_idx];
 
-                    let work_start = local_clock();
                     fs.times[c::bch_time_stats::btree_write_buffer_flush_shard_sched_delay as usize]
                         .update(queued_time);
 
-                    let ret = flush_sorted_range(&trans, wb, shard, accounting_replay_done, cnt);
-
-                    fs.times[c::bch_time_stats::btree_write_buffer_flush_shard_work as usize].update(work_start);
-                    ret
+                    fs.times[c::bch_time_stats::btree_write_buffer_flush_shard_work as usize]
+                        .time(|| flush_sorted_range(&trans, wb, shard, accounting_replay_done, cnt))
                 }).inspect_err(|_| spawn_failed = true)?;
             }
             Ok(())
