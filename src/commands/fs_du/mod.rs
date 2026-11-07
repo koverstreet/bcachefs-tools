@@ -2,7 +2,8 @@
 //! btrees through BCH_IOCTL_QUERY_BTREE_KEYS, which is admin only.
 //!
 //! exact.rs walks the paths and reads every file's extents; sample.rs, with
-//! --sample, estimates from random device sectors traced back to their owners.
+//! --sample, estimates from random device sectors traced back to their owners,
+//! and sample/tui.rs, with --interactive, refines the estimate live.
 //! What both need lives here: the mounted filesystem, opened once for every
 //! path given, and the subvolume to snapshot lookup every snapshot-filtered
 //! query starts from.
@@ -83,6 +84,11 @@ pub struct Cli {
     /// Also break file data down by the background target its files write to
     #[arg(long, requires = "sample")]
     targets: bool,
+
+    /// Sample until quit, browsing the estimate as it refines, from the
+    /// first path
+    #[arg(short = 'i', long, requires = "sample")]
+    interactive: bool,
 
     /// Files and directories on a mounted bcachefs
     #[arg(default_value = ".")]

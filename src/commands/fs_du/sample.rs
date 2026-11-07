@@ -51,6 +51,8 @@
 //! not dropped. Samples are drawn by --threads threads on the one handle, the
 //! ioctl being stateless; --seed makes a run repeatable for a given --threads.
 
+mod tui;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::ops::Range;
@@ -384,15 +386,18 @@ impl Tally {
     }
 }
 
+fn sample_one(sampler: &Sampler<'_>, rng: &mut fastrand::Rng) -> Result<Sample> {
+    let (dev, sector) = sampler.space.locate(rng.u64(..sampler.space.total));
+    sampler.sample(dev, sector)
+        .with_context(|| format!("sampling {} sector {sector}", sampler.space.devs[dev].name))
+}
+
 fn sample_n(sampler: &Sampler<'_>, n: u64, seed: u64) -> Result<Tally> {
     let mut rng = fastrand::Rng::with_seed(seed);
     let mut tally = Tally::default();
 
     for _ in 0..n {
-        let (dev, sector) = sampler.space.locate(rng.u64(..sampler.space.total));
-        let s = sampler.sample(dev, sector)
-            .with_context(|| format!("sampling {} sector {sector}", sampler.space.devs[dev].name))?;
-        tally.add(s);
+        tally.add(sample_one(sampler, &mut rng)?);
     }
     Ok(tally)
 }
@@ -459,8 +464,17 @@ pub(super) fn run(m: &Mounted, cli: &Cli) -> Result<()> {
         std::thread::available_parallelism().map_or(1, |n| n.get() as u64).min(8)
     });
 
+    if cli.interactive {
+        tui::run(m, cli, &sampler, seed, threads)
+    } else {
+        batch(m, cli, &sampler, seed, threads)
+    }
+}
+
+fn batch(m: &Mounted, cli: &Cli, sampler: &Sampler<'_>, seed: u64, threads: u64) -> Result<()> {
+    let space = sampler.space;
     let started = Instant::now();
-    let tally = sample(&sampler, cli.samples, seed, threads)?;
+    let tally = sample(sampler, cli.samples, seed, threads)?;
     let elapsed = started.elapsed();
 
     let mut resolver = Resolver::new(&m.handle, &m.fs)?;
@@ -482,23 +496,13 @@ pub(super) fn run(m: &Mounted, cli: &Cli) -> Result<()> {
     }
     let total = tree.union(roots.iter().map(|(_, p)| p.as_path()));
 
-    let usage = space.devs.iter()
-        .map(|d| m.handle.dev_usage(d.idx).map_err(|e| anyhow!("{}: reading its usage: {e}", d.name)))
-        .collect::<Result<Vec<_>>>()?;
+    let usage = dev_usage(&m.handle, space)?;
     let all_devs: Vec<usize> = (0..space.devs.len()).collect();
 
     let mut targets: BTreeMap<String, f64> = BTreeMap::new();
     if cli.targets {
         for (&(inum, snapshot), &n) in &files {
-            let label = match resolver.background_target(inum, snapshot)? {
-                Some(t) => {
-                    let mut label = Printbuf::new();
-                    m.fs.target_to_text(&mut label, Target::decode(t.into()));
-                    label.to_string()
-                }
-                None => "(unresolved)".to_string(),
-            };
-            *targets.entry(label).or_default() += n;
+            *targets.entry(target_label(&m.fs, &mut resolver, inum, snapshot)?).or_default() += n;
         }
         if unreferenced != 0.0 {
             targets.insert("(unreferenced)".to_string(), unreferenced);
@@ -526,19 +530,7 @@ pub(super) fn run(m: &Mounted, cli: &Cli) -> Result<()> {
             writeln!(sub, "total");
         }
 
-        let kinds = |sub: &mut Printbuf, devs: &[usize]| {
-            write!(sub, "estimate\r±95%\raccounted\r  type\n");
-            for (kind, (n, accounted)) in kind_rows(&tally, devs, &usage) {
-                let (est, margin) = estimate(&tally, space.total, n as f64);
-                write!(sub, "{}\r{}\r", Sectors(est), Sectors(margin));
-                match accounted {
-                    Some(sectors) => write!(sub, "{}\r  ", Sectors(sectors)),
-                    None          => write!(sub, "-\r  "),
-                }
-                kind_to_text(sub, kind);
-                writeln!(sub);
-            }
-        };
+        let kinds = |sub: &mut Printbuf, devs: &[usize]| kinds_to_text(sub, &tally, space.total, devs, &usage);
 
         writeln!(sub);
         kinds(sub, &all_devs);
@@ -584,20 +576,57 @@ fn attribute(handle: &BcachefsHandle, tally: &Tally) -> Result<(Files, f64)> {
     let mut unreferenced = 0.0;
 
     for (owner, &n) in &tally.owners {
-        match owner {
-            &Owner::Inode { inum, snapshot } => *files.entry((inum, snapshot)).or_default() += n as f64,
-            Owner::Indirect(range) => {
-                let by = refs.as_ref().map(|r| r.referencers(range)).unwrap_or_default();
-                if by.is_empty() {
-                    unreferenced += n as f64;
-                }
-                for file in &by {
-                    *files.entry(*file).or_default() += n as f64 / by.len() as f64;
-                }
-            }
+        let by = owner_files(owner, refs.as_ref());
+        if by.is_empty() {
+            unreferenced += n as f64;
+        }
+        for file in &by {
+            *files.entry(*file).or_default() += n as f64 / by.len() as f64;
         }
     }
     Ok((files, unreferenced))
+}
+
+/// The files @owner's samples are shared by: none for reflinked data nothing
+/// references, or that @refs, not read yet, can't say.
+fn owner_files(owner: &Owner, refs: Option<&ReflinkRefs>) -> Vec<(u64, u32)> {
+    match owner {
+        &Owner::Inode { inum, snapshot } => vec![(inum, snapshot)],
+        Owner::Indirect(range) => refs.map(|r| r.referencers(range)).unwrap_or_default(),
+    }
+}
+
+/// The background target label of a file's data.
+fn target_label(fs: &Fs, resolver: &mut Resolver<'_>, inum: u64, snapshot: u32) -> Result<String> {
+    Ok(match resolver.background_target(inum, snapshot)? {
+        Some(t) => {
+            let mut label = Printbuf::new();
+            fs.target_to_text(&mut label, Target::decode(t.into()));
+            label.to_string()
+        }
+        None => "(unresolved)".to_string(),
+    })
+}
+
+fn dev_usage(handle: &BcachefsHandle, space: &Space) -> Result<Vec<DevUsage>> {
+    space.devs.iter()
+        .map(|d| handle.dev_usage(d.idx).map_err(|e| anyhow!("{}: reading its usage: {e}", d.name)))
+        .collect()
+}
+
+/// The data type table for @devs: estimate, margin, accounting.
+fn kinds_to_text(out: &mut Printbuf, tally: &Tally, total: u64, devs: &[usize], usage: &[DevUsage]) {
+    write!(out, "estimate\r±95%\raccounted\r  type\n");
+    for (kind, (n, accounted)) in kind_rows(tally, devs, usage) {
+        let (est, margin) = estimate(tally, total, n as f64);
+        write!(out, "{}\r{}\r", Sectors(est), Sectors(margin));
+        match accounted {
+            Some(sectors) => write!(out, "{}\r  ", Sectors(sectors)),
+            None          => write!(out, "-\r  "),
+        }
+        kind_to_text(out, kind);
+        writeln!(out);
+    }
 }
 
 /// Samples on @devs by kind, and what the kernel accounts for each: the
