@@ -156,10 +156,15 @@ fn parse_c_xmacro(source: &str, macro_name: &str) -> Option<Vec<Vec<String>>> {
     None
 }
 
+/// The attributes of an enum declaration's arms that are columns, after name,
+/// value and doc: entries 3, 4.
+const ENUM_DECL_ATTRS: [&str; 2] = ["flags", "when"];
+
 /// The arms of enum @name as tagged_union! or c_enum! declares it, as a C
-/// list's entries: name, value, the arm's doc comment as a C string, and its
-/// #[flags(..)]. An arm is `/// doc #[..]* name[(Type)] [= value]`, a value
-/// not written the last's plus one.
+/// list's entries: name, value as written, the arm's doc comment as a C
+/// string, its ENUM_DECL_ATTRS, and the date its doc starts with, `/// 2018-11:
+/// ..` - a version's. An arm is `/// doc #[..]* name[(Type)] [= value]`, a
+/// value not written the last's plus one.
 fn parse_enum_decl(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
     let decl = [format!("pub enum {name} {{"), format!("pub enum {name}: ")].iter()
         .find_map(|d| source.find(d.as_str()))?;
@@ -169,13 +174,16 @@ fn parse_enum_decl(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
     if source[start..decl].contains("\n}\n") {
         return None;
     }
+    // an arm written with its #[prefix] - its C name - is named past it
+    let prefix = source[start..decl].split_once("#[prefix(")
+        .and_then(|(_, r)| r.split_once(")]")).map(|(p, _)| p.trim().to_string());
     let mut rest = &source[decl..];
     rest = &rest[rest.find('{')? + 1..];
 
     let mut entries = Vec::new();
     let mut doc: Vec<&str> = Vec::new();
-    let mut flags = String::new();
-    let mut next = 0u64;
+    let mut attrs = [const { String::new() }; ENUM_DECL_ATTRS.len()];
+    let mut next = Some(0u64);
     loop {
         rest = rest.trim_start();
         if let Some(r) = rest.strip_prefix("///") {
@@ -188,8 +196,11 @@ fn parse_enum_decl(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
             rest = r.split_once("*/")?.1;
         } else if let Some(r) = rest.strip_prefix('#') {
             let after = skip_group(r)?;
-            if let Some(f) = r[..r.len() - after.len()].strip_prefix("[flags(") {
-                flags = f.trim_end_matches(")]").split_whitespace().collect::<Vec<_>>().join(" ");
+            let attr = &r[..r.len() - after.len()];
+            for (i, name) in ENUM_DECL_ATTRS.iter().enumerate() {
+                if let Some(a) = attr.strip_prefix(&format!("[{name}(")) {
+                    attrs[i] = a.trim_end_matches(")]").split_whitespace().collect::<Vec<_>>().join(" ");
+                }
             }
             rest = after;
         } else if rest.starts_with('}') {
@@ -197,25 +208,53 @@ fn parse_enum_decl(source: &str, name: &str) -> Option<Vec<Vec<String>>> {
         } else {
             let name_end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
             let arm = rest[..name_end].to_string();
+            let arm = match prefix.as_deref().and_then(|p| arm.strip_prefix(p)) {
+                Some(past) => past.to_string(),
+                None => arm,
+            };
             rest = rest[name_end..].trim_start();
             if rest.starts_with('(') {
                 rest = skip_group(rest)?;
             }
-            let end = rest.find([',', '}'])?;
+            // the value runs to a , or } outside its own parens: BCH_VERSION(1, 40)
+            let mut depth = 0;
+            let end = rest.char_indices().find(|&(_, c)| {
+                match c {
+                    '(' | '[' => depth += 1,
+                    ')' | ']' => depth -= 1,
+                    _ => {}
+                }
+                depth == 0 && (c == ',' || c == '}')
+            })?.0;
             let value = match rest[..end].trim().strip_prefix('=') {
                 Some(v) => {
                     let v = v.trim();
-                    match v.strip_prefix("0x") {
-                        Some(hex) => u64::from_str_radix(hex, 16).ok()?,
-                        None => v.parse().ok()?,
-                    }
+                    next = match v.strip_prefix("0x") {
+                        Some(hex) => u64::from_str_radix(hex, 16).ok(),
+                        None => v.parse().ok(),
+                    }.map(|n| n + 1);
+                    v.to_string()
                 }
-                None => next,
+                None => {
+                    let n = next?;
+                    next = Some(n + 1);
+                    n.to_string()
+                }
             };
-            next = value + 1;
             rest = rest[end..].strip_prefix(',').unwrap_or(&rest[end..]);
+            let date = match doc.first().and_then(|l| l.split_once(": ")) {
+                Some((d, first)) if d.len() == 7 &&
+                    d.char_indices().all(|(i, c)| if i == 4 { c == '-' } else { c.is_ascii_digit() }) => {
+                    doc[0] = first;
+                    format!("\"{d}\"")
+                }
+                _ => String::new(),
+            };
             let doc_str = doc.join(" ").replace('\\', "\\\\").replace('"', "\\\"");
-            entries.push(vec![arm, value.to_string(), format!("\"{doc_str}\""), core::mem::take(&mut flags)]);
+            let mut entry = vec![arm, value, format!("\"{doc_str}\"")];
+            entry.extend(attrs.iter_mut().map(core::mem::take));
+            entry.push(date);
+            entries.push(entry);
             doc.clear();
         }
     }
@@ -818,23 +857,23 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "metadata-versions",
-        macro_name: "BCH_METADATA_VERSIONS",
+        macro_name: "MetadataVersion",
         default: None,
         doc_field: Some(2),
         flags_field: None,
-        date_field: Some(3),
+        date_field: Some(5),
         version_field: Some(1),
         pass_flags_field: None,
     },
     EnumList {
         key: "recovery-passes",
-        macro_name: "BCH_RECOVERY_PASSES",
+        macro_name: "RecoveryPass",
         default: None,
-        doc_field: Some(4),
+        doc_field: Some(2),
         flags_field: None,
         date_field: None,
         version_field: None,
-        pass_flags_field: Some(2),
+        pass_flags_field: Some(4),
     },
 ];
 
@@ -857,27 +896,27 @@ fn btree_flags_annotations(flags: &str) -> Vec<&'static str> {
     annotations
 }
 
-/// Parse PASS_* flags and return (annotations, is_silent).
-/// Handles compound macros like PASS_FSCK_ALLOC = PASS_FSCK|PASS_ALLOC.
+/// A pass's #[when(..)], as the docs annotate it - and whether it's SILENT,
+/// which they leave out.
 fn pass_flags_annotations(flags: &str) -> (Vec<&'static str>, bool) {
+    let has = |f: &str| flags.split(|c: char| c == ',' || c.is_whitespace()).any(|x| x == f);
     let mut annotations = Vec::new();
-    let is_silent = flags.contains("PASS_SILENT");
-    if flags.contains("PASS_ALWAYS") {
+    if has("ALWAYS") {
         annotations.push("always");
     }
-    if flags.contains("PASS_FSCK_ALLOC") || flags.contains("PASS_FSCK") {
+    if has("FSCK_ALLOC") || has("FSCK") {
         annotations.push("fsck");
     }
-    if flags.contains("PASS_ONLINE") {
+    if has("ONLINE") {
         annotations.push("online");
     }
-    if flags.contains("PASS_FSCK_ALLOC") || flags.contains("PASS_ALLOC") {
+    if has("FSCK_ALLOC") || has("ALLOC") {
         annotations.push("alloc");
     }
-    if flags.contains("PASS_NODEFER") {
+    if has("NODEFER") {
         annotations.push("nodefer");
     }
-    (annotations, is_silent)
+    (annotations, has("SILENT"))
 }
 
 /// Extract "major.minor" from "BCH_VERSION(major, minor)".
