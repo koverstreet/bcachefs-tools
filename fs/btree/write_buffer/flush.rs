@@ -202,7 +202,7 @@ fn flush_one<'a>(
     drop(paths);
 
     if !*write_locked {
-        trans.node_lock_write(&mut trans.paths(), iter.path, &b.c)?;
+        trans.node_lock_write(&mut trans.paths(), iter.path, 0)?;
 
         unsafe { bch2_btree_node_prep_for_write(trans.raw(), path, ptr::from_ref(b).cast_mut()) };
         *write_locked = true;
