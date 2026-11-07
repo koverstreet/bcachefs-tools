@@ -818,16 +818,14 @@ static INDIRECT_INLINE_DATA: Trigger = Trigger(trigger_indirect_inline_data);
 
 // ── create ───────────────────────────────────────────────────────────────
 
-/// Make @orig, at @extent_iter, indirect: its data moves to a new indirect
-/// extent in the reflink btree, and @orig becomes a reflink_p to it, in
-/// place.
+/// Make @orig indirect: its data moves to a new indirect extent in the
+/// reflink btree, and @orig becomes a reflink_p to it, in place, for the
+/// caller to update.
 ///
 /// # Safety
-/// @orig is in transaction memory - its update points at it - with room for
-/// a reflink_p.
+/// @orig is a key ours to edit, with room for a reflink_p.
 unsafe fn __make_extent_indirect(
     t:                               &TransAttempt<'_, '_>,
-    extent_iter:                     &BtreeIter<'_>,
     orig:                            *mut c::bkey_i,
     reflink_p_may_update_opts_field: bool,
 ) -> Result<(), BchError> {
@@ -898,23 +896,22 @@ unsafe fn __make_extent_indirect(
     if reflink_p_may_update_opts_field {
         r_p.v.set_may_update_options(true);
     }
-
-    // SAFETY: the caller's - @orig is in transaction memory
-    unsafe { t.update_key(extent_iter, orig, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE) }
+    Ok(())
 }
 
 /// As __make_extent_indirect(), on a key with the room.
-pub fn make_extent_indirect<'a>(
-    t:                               &TransAttempt<'a, '_>,
+pub fn make_extent_indirect<'a, 't>(
+    t:                               &TransAttempt<'a, 't>,
     extent_iter:                     &BtreeIter<'a>,
-    orig:                            &mut TransBkey<'a, '_>,
+    orig:                            &mut TransBkey<'a, 't>,
     reflink_p_may_update_opts_field: bool,
 ) -> Result<(), BchError> {
     assert!(orig.as_u64s().len() * size_of::<u64>() >= size_of::<BkeyI<c::ReflinkP>>(),
             "no room in {} for a reflink_p", orig.k());
 
     // SAFETY: in transaction memory, as a TransBkey is, with the room
-    unsafe { __make_extent_indirect(t, extent_iter, orig.as_ptr(), reflink_p_may_update_opts_field) }
+    unsafe { __make_extent_indirect(t, orig.as_ptr(), reflink_p_may_update_opts_field) }?;
+    t.update(extent_iter, orig, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
 // ── remap ────────────────────────────────────────────────────────────────

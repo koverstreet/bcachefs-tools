@@ -164,7 +164,7 @@ pub unsafe fn bch2_verify_update_old_key(trans: &BtreeTrans<'_>, i: &c::btree_in
 
     if trans.journal_replay_not_finished() {
         if let Some(j) = unsafe { crate::btree::journal_overlay::peek_slot(
-            trans.fs(), i.bits.btree_id(), i.bits.level().into(), (*i.k).k.p) } {
+            trans.fs(), i.bits.btree_id(), i.bits.level().into(), i.key().k.p) } {
             k = c::bkey_s_c { k: &j.k, v: (&raw const j.v).cast() };
         }
     }
@@ -201,9 +201,9 @@ unsafe fn update_op<'a>(i: &c::btree_insert_entry, old_k: &'a c::bkey, flags: Up
         btree:        i.bits.btree_id(),
         level:        i.bits.level().into(),
         old:          BkeySC { k: old_k, v: i.old_v, iter: PhantomData, val: PhantomData },
-        new:          BkeyS::from(unsafe { &mut *BkeyI::from_raw_mut(i.k) }),
+        new:          BkeyS::from(unsafe { &mut *BkeyI::from_raw_mut(i.key_ptr()) }),
         flags,
-        new_buf_u64s: i.k_buf_u64s.into(),
+        new_buf_u64s: i.key_buf_u64s(),
     }
 }
 
@@ -219,7 +219,7 @@ unsafe fn run_one_mem_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>, 
 {
     unsafe { bch2_verify_update_old_key(trans, i) };
 
-    let p = unsafe { (*i.k).k.p };
+    let p = i.key().k.p;
     let (no_old, mut no_new) = (deleted_at(p), deleted_at(p));
     let old_k = i.old_k;
     let mut op = unsafe { update_op(i, &old_k, flags) };
@@ -264,7 +264,7 @@ unsafe fn run_one_trans_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>
 {
     unsafe { bch2_verify_update_old_key(trans, i) };
 
-    let mut deleted = deleted_at(unsafe { (*i.k).k.p });
+    let mut deleted = deleted_at(i.key().k.p);
     let old_k = i.old_k;
     let mut flags = UpdateTriggerFlags::from_bits_retain(i.flags) | UpdateTriggerFlags::TRANSACTIONAL;
     let mut op = unsafe { update_op(i, &old_k, flags) };
@@ -411,7 +411,7 @@ unsafe fn run_gc_triggers(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>) -> R
         let flags = UpdateTriggerFlags::from_bits_retain(i.flags);
 
         if i.has_triggers() && !flags.contains(UpdateTriggerFlags::NORUN) &&
-           gc.visited(c::gc_pos::in_btree(i.bits.btree_id(), i.bits.level().into(), unsafe { (*i.k).k.p })) {
+           gc.visited(c::gc_pos::in_btree(i.bits.btree_id(), i.bits.level().into(), i.key().k.p)) {
             unsafe { run_one_mem_trigger(trans, t, i, flags | UpdateTriggerFlags::GC) }?;
         }
     }

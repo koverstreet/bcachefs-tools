@@ -2,7 +2,8 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::bkey::BKEY_U64S;
+use crate::btree::bkey::{BkeyI, BKEY_U64S};
+use crate::btree::trans_attempt::TransBkey;
 use crate::data::keylist::PaddedKey;
 use crate::fs::Fs;
 use crate::btree::node::{sort::{SortIter, SortIterSet}, BtreeNode};
@@ -28,6 +29,7 @@ use crate::util::ffi::{c_char, Opaque};
 use crate::util::percpu::PerCpu;
 use core::cell::Cell;
 use core::ffi::{c_int, c_long, c_uint, c_ulong};
+use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8};
 use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, Late,
                      TypeInfo};
@@ -540,16 +542,15 @@ nest! {
          * overwritten in the btree:
          */
         pub old_btree_u64s: u8,
-        pub k_buf_u64s: u8,
+        k_buf_u64s: u8,
         pub path: cs::PathIdx,
-        pub k: *mut cs::bkey_i,
+        k: *mut cs::bkey_i,
         /* key being overwritten: */
         pub old_k: cs::bkey,
         pub old_v: *const cs::bch_val,
         pub ip_allocated: c_ulong,
     }
 }
-c_default!(btree_insert_entry);
 
 c_const! {
     /* Number of btree paths we preallocate, usually enough */
@@ -1191,7 +1192,70 @@ const fn node_type_in(bkey_type: u8, mask: u64) -> bool {
     bkey_type < 64 && mask & (1 << bkey_type) != 0
 }
 
+/// Where an update's key is, and its room: a TransBkey's - so the key is as
+/// good as one is, until the attempt's over - or an update's already queued.
+#[derive(Clone, Copy)]
+pub(crate) struct QueuedKey {
+    k:        NonNull<cs::bkey_i>,
+    buf_u64s: u8,
+}
+
+impl<V: ?Sized> From<&TransBkey<'_, '_, V>> for QueuedKey {
+    fn from(k: &TransBkey<'_, '_, V>) -> Self {
+        QueuedKey {
+            k:        NonNull::new(k.as_ptr()).expect("a TransBkey at NULL"),
+            buf_u64s: k.buf_u64s.min(u8::MAX.into()) as u8,
+        }
+    }
+}
+
 impl btree_insert_entry {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(key: QueuedKey, path: cs::PathIdx, btree: Btree, level: u32, cached: bool,
+                      flags: c_uint, ip: c_ulong) -> Self {
+        let mut bits = btree_insert_entry_bits::default();
+        bits.set_btree_id(btree);
+        bits.set_level(level as u8);
+        bits.set_cached(cached);
+
+        btree_insert_entry {
+            flags,
+            sort_order:     btree.trigger_order(),
+            bkey_type:      BtreeNodeType::of(level, btree).0 as u8,
+            bits,
+            old_btree_u64s: 0,
+            k_buf_u64s:     key.buf_u64s,
+            path,
+            k:              key.k.as_ptr(),
+            old_k:          cs::bkey::new(),
+            old_v:          core::ptr::null(),
+            ip_allocated:   ip,
+        }
+    }
+
+    pub(crate) fn key(&self) -> &BkeyI {
+        unsafe { &*BkeyI::from_raw(self.k) }
+    }
+
+    /// The key, for a trigger to change in place: it may be one the update's
+    /// caller lent.
+    pub(crate) fn key_ptr(&self) -> *mut cs::bkey_i {
+        self.k
+    }
+
+    pub(crate) fn key_buf_u64s(&self) -> u32 {
+        self.k_buf_u64s.into()
+    }
+
+    pub(crate) fn queued_key(&self) -> QueuedKey {
+        QueuedKey { k: NonNull::new(self.k).expect("an update of no key"), buf_u64s: self.k_buf_u64s }
+    }
+
+    pub(crate) fn set_key(&mut self, key: QueuedKey) {
+        self.k          = key.k.as_ptr();
+        self.k_buf_u64s = key.buf_u64s;
+    }
+
     pub const fn has_trans_triggers(&self) -> bool {
         node_type_in(self.bkey_type, TRANS_TRIGGERS)
     }

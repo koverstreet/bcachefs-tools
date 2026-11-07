@@ -11,7 +11,7 @@ use crate::btree::iter::{btree_id_cached, commit_do, is_restart, BtreeIter, Btre
                          CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
 use crate::btree::journal_overlay;
 use crate::btree::path::{BtreePath, KeyVal, PathIdx};
-use crate::btree::types::BtreeNodeType;
+use crate::btree::types::QueuedKey;
 use crate::btree::write_buffer::insert_checks;
 use crate::c;
 use crate::data::durability::BkeyVDurability;
@@ -129,7 +129,7 @@ fn insert_entry_cmp(l: &c::btree_insert_entry, r: &c::btree_insert_entry) -> Ord
     l.sort_order.cmp(&r.sort_order)
         .then(l.bits.cached().cmp(&r.bits.cached()))
         .then(r.bits.level().cmp(&l.bits.level()))
-        .then_with(|| unsafe { (*l.k).k.p.cmp(&(*r.k).k.p) })
+        .then_with(|| l.key().k.p.cmp(&r.key().k.p))
 }
 
 /*
@@ -217,9 +217,8 @@ impl Fs {
         iter_flags:   u32,
     ) -> Result<(), BchError> {
         let trans = crate::btree_trans!(self);
-        let (k, u64s) = (key.as_ffi().cast_mut(), key.k.u64s.into());
         commit_do(&trans, disk_res, commit_flags,
-                  |t| t.insert_raw(btree_id, unsafe { UpdateKey::from_raw(t, k, u64s) }, iter_flags))
+                  |t| t.insert_raw(btree_id, UpdateKey::owned(t.bkey_copy(key)?), iter_flags))
     }
 
     pub fn fs_log_msg(&self, msg: &dyn ToText) -> Result<(), BchError> {
@@ -622,7 +621,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
             bch2_cut_front_s(fs, new.k.p, BkeyS::from(&mut update));
 
-            self.update_by_path(iter.path, &UpdateKey::owned(update),
+            self.update_by_path(iter.path, QueuedKey::from(&update),
                                 UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | flags, crate::ret_ip!());
         }
 
@@ -808,7 +807,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             path_idx = iter.key_cache_path.get();
         }
 
-        let i = self.update_by_path(path_idx, &key, flags, ip);
+        let i = self.update_by_path(path_idx, QueuedKey::from(&key.k), flags, ip);
 
         /*
          * If a key is present in the key cache, it must also exist in the
@@ -832,35 +831,24 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     /// The update queued: its index in the transaction's updates.
-    fn update_by_path(&self, path_idx: PathIdx, key: &UpdateKey<'_, 'a, 't>,
-                      flags: UpdateTriggerFlags, ip: c_ulong) -> usize {
+    fn update_by_path(&self, path_idx: PathIdx, key: QueuedKey, flags: UpdateTriggerFlags, ip: c_ulong)
+        -> usize
+    {
         let fs = self.fs();
         let t = self.trans();
         let mut paths = t.paths();
-        let k_p = key.k().p;
 
         let path = &paths[path_idx];
+        let (btree, level) = (path.btree_id(), u32::from(path.level()));
+        let n = c::btree_insert_entry::new(key, path_idx, btree, level, path.cached(), flags.bits(), ip);
+        let k_p = n.key().k.p;
+
         ebug_assert!(path.should_be_locked(), "update by path {path_idx}, which isn't locked");
         ebug_assert!((t.nr_updates.get() as usize) < t.nr_paths.get() as usize,
                      "{} updates queued, and {} paths", t.nr_updates.get(), t.nr_paths.get());
         ebug_assert!(k_p == path.pos, "update at {k_p}, path at {}", path.pos);
 
         t.set_has_interior_updates(t.has_interior_updates() || path.level() != 0);
-
-        let (btree, level) = (path.btree_id(), u32::from(path.level()));
-        let mut n = c::btree_insert_entry {
-            flags:        flags.bits(),
-            sort_order:   btree.trigger_order(),
-            bkey_type:    BtreeNodeType::of(level, btree).0 as u8,
-            k_buf_u64s:   key.k.buf_u64s as u8,
-            path:         path_idx,
-            k:            key.k.as_ptr(),
-            ip_allocated: ip,
-            ..Default::default()
-        };
-        n.bits.set_btree_id(btree);
-        n.bits.set_level(level as u8);
-        n.bits.set_cached(path.cached());
 
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
             for w in paths.updates().windows(2) {
@@ -894,8 +882,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             let u = paths.update_mut(i);
             u.flags        = n.flags;
             u.bits.set_cached(n.bits.cached());
-            u.k_buf_u64s   = n.k_buf_u64s;
-            u.k            = n.k;
+            u.set_key(n.queued_key());
             u.path         = n.path;
             u.ip_allocated = n.ip_allocated;
         } else {
@@ -921,7 +908,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         fs.event_trace(events::update_by_path, |out| {
             prt!(out, "{} overwrite {}\n", t.fn_name(), overwrite as u32);
             t.path_to_text_short(out, &paths, path_idx);
-            crate::btree::bkey::bkey_val_to_text(out, Some(fs), key.as_sc());
+            crate::btree::bkey::bkey_val_to_text(out, Some(fs), BkeySC::from(n.key()));
         });
 
         i
@@ -944,18 +931,17 @@ impl<'a, 't> TransAttempt<'a, 't> {
          * grows the paths table trans->updates moves with it - they're a single
          * allocation, see btree_paths_realloc():
          */
-        let (k, k_buf_u64s, old_k, old_v) = {
+        let (key, old_k, old_v) = {
             let mut paths = t.paths();
             t.path_set_should_be_locked(&mut paths, iter.path);
 
             let u = paths.update_mut(i);
             u.bits.set_key_cache_already_flushed(true);
             u.flags |= UpdateTriggerFlags::NORUN.bits();
-            (u.k, u.k_buf_u64s, u.old_k, u.old_v)
+            (u.queued_key(), u.old_k, u.old_v)
         };
 
-        let key = unsafe { UpdateKey::from_raw(self, k, k_buf_u64s.into()) };
-        let i = self.update_by_path(iter.path, &key, flags, ip);
+        let i = self.update_by_path(iter.path, key, flags, ip);
 
         let mut paths = t.paths();
         let u = paths.update_mut(i);
@@ -1050,14 +1036,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
             .position(|(e, k)| e.bits.btree_id() == btree && u32::from(e.bits.level()) == level && k.k.p == pos)
             .unwrap_or_else(|| panic!("growing an update not queued: {btree} level {level} at {pos}"));
 
-        let new_buf = self.bkey_alloc(needed_u64s)?.as_ptr();
+        let mut new = self.bkey_alloc(needed_u64s)?;
 
         let mut paths = t.paths();
         let u = paths.update_mut(i);
-        unsafe { core::ptr::copy_nonoverlapping(u.k.cast::<u64>(), new_buf.cast::<u64>(), (*u.k).k.u64s.into()) };
-        u.k          = new_buf;
-        u.k_buf_u64s = needed_u64s as u8;
-        Ok(new_buf)
+        let old = u.key().as_bytes();
+        new.as_mut_u64s().as_mut_bytes()[..old.len()].copy_from_slice(old);
+        u.set_key(QueuedKey::from(&new));
+        Ok(new.as_ptr())
     }
 
     fn key_has_snapshot_overwrites(&self, btree: Btree, pos: Bpos) -> Result<bool, BchError> {
@@ -1066,22 +1052,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         }
 
         has_overwrites(self, btree, pos)
-    }
-
-    /// update(), with a key that isn't in transaction memory - a C caller's,
-    /// as bch2_trans_update() takes.
-    ///
-    /// # Safety
-    /// @key stays where it is, unchanged, until the commit - or until the
-    /// attempt is over, if it doesn't commit. The update points at it.
-    pub unsafe fn update_key(
-        &self,
-        iter:  &BtreeIter<'a>,
-        key:   &BkeyI,
-        flags: UpdateTriggerFlags,
-    ) -> Result<(), BchError> {
-        let k = unsafe { UpdateKey::from_raw(self, key.as_ffi().cast_mut(), key.k.u64s.into()) };
-        self.update_ip(iter, k, flags, crate::ret_ip!())
     }
 
     /// A key moved from @old_pos to @new_pos, in the same snapshot: in every
@@ -1369,13 +1339,13 @@ fn delete_range_one<'a>(t: &TransAttempt<'a, '_>, iter: &mut BtreeIter<'a>, end:
      * (bch2_btree_iter_peek() does guarantee that iter.pos >=
      * bkey_start_pos(k.k)).
      */
-    let mut delete = BkeyI::<c::Deleted>::new();
-    delete.k.p = it.pos();
+    let mut delete = t.bkey_alloc_typed::<c::Deleted>()?;
+    delete.k_mut().p = it.pos();
 
     if it.is_extents() {
-        delete.k.resize((end.min(k.k.p).offset - it.pos().offset) as u32);
+        delete.k_mut().resize((end.min(k.k.p).offset - it.pos().offset) as u32);
     }
 
-    unsafe { t.update_key(it, delete.as_ref(), flags)? };
+    t.update(it, &delete, flags)?;
     t.commit(Some(&res), CommitFlags::NO_ENOSPC)
 }

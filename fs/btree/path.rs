@@ -521,7 +521,7 @@ impl Paths<'_> {
     /// updates(), each with its key: in the transaction's memory while it's
     /// queued.
     pub(crate) fn update_keys(&self) -> impl Iterator<Item = (&c::btree_insert_entry, &BkeyI)> {
-        self.updates().iter().map(|i| (i, unsafe { &*BkeyI::from_raw(i.k) }))
+        self.updates().iter().map(|i| (i, i.key()))
     }
 
     pub(crate) fn update_mut(&mut self, i: usize) -> &mut c::btree_insert_entry {

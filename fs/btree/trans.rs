@@ -7,7 +7,7 @@
 pub use super::types::BtreeTrans;
 use super::iter::{CommitOpts, TransAttempt};
 use crate::alloc::capacity::DiskReservation;
-use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC};
+use crate::btree::bkey::{bkey_val_to_text, BkeySC};
 use crate::btree::path::{bch2_trans_paths_exit, bch2_trans_paths_init, BtreePath, PathIdx, Paths};
 use crate::c;
 use crate::data_structures::bitmap::Bitmap;
@@ -987,7 +987,7 @@ impl BtreeTrans<'_> {
 
         /* from wherever an error's found - path table borrowed or not; this reads it and is done */
         for i in unsafe { self.updates_unguarded() } {
-            let k = unsafe { &*BkeyI::from_raw(i.k) };
+            let k = i.key();
             let old = BkeySC { k: &i.old_k, v: i.old_v, iter: PhantomData, val: PhantomData };
 
             prt!(out, "update: btree={} cached={} ", i.bits.btree_id(), u32::from(i.bits.cached()));

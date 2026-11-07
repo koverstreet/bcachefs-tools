@@ -78,7 +78,7 @@ impl BtreeTrans<'_> {
 
         for i in 0..self.nr_updates.get() as usize {
             let e = paths.update_mut(i);
-            let pos = unsafe { (*e.k).k.p };
+            let pos = e.key().k.p;
 
             if e.cached() || e.key_cache_flushing() || e.level() != b.c.level || e.btree_id() != btree ||
                pos < data.min_key || pos > data.max_key {
