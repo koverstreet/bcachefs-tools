@@ -483,7 +483,7 @@ impl BsetWrite {
     /// None if there's nothing to write.
     fn build(fs: &'static Fs, b: &BtreeNode, contents: &NodeContents) -> Option<Self> {
         let keys = b.keys(contents);
-        let mut sort_iter = SortIterStack::new(b);
+        let mut sort_iter = SortIterStack::default();
 
         let first = b.written.get() == 0;
         let (mut bytes, keys_at) = if first {

@@ -8,7 +8,7 @@ use crate::btree::bkey::{self, BkeyP, BKEY_FORMAT_CURRENT, BKEY_U64S};
 use crate::btree::cache::Bounce;
 use crate::c;
 use crate::fs::Fs;
-use crate::types::{c_default, Le64};
+use crate::types::Le64;
 use crate::util::kernel::{copy_u64s_small, local_clock, mem_alloc_profiling_enabled};
 use crate::util::mempool::PoolBufZeroed;
 use crate::util::time_stats::TimeStats;
@@ -18,63 +18,31 @@ use core::cmp::Ordering;
 use core::ffi::c_uint;
 use core::mem::offset_of;
 use core::ops::Range;
-use cstruct_macros::{c_enum, c_export, c_name, CStruct, Plain};
+use cstruct_macros::{c_enum, c_export, Plain};
 
 /// [k, end), offsets into the node's buffer: u32s, as the unwritten whiteouts
 /// run to its end, past a 512k node's last u16.
 #[repr(C)]
-#[c_name(sort_iter_set)]
-#[derive(Clone, Copy, CStruct, Plain)]
+#[derive(Clone, Copy, Default, Plain)]
 pub struct SortIterSet {
     pub k:   u32,
     pub end: u32,
-}
-c_default!(SortIterSet);
-
-#[repr(C)]
-#[c_name(sort_iter)]
-#[derive(Clone, Copy, CStruct)]
-pub struct SortIter {
-    pub b:    *mut BtreeNode,
-    pub used: c_uint,
-    pub size: c_uint,
-
-    pub data: [SortIterSet; 0],
-}
-c_default!(SortIter);
-
-#[repr(C)]
-#[c_name(sort_iter_stack)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct SortIterStack {
-    pub iter: SortIter,
-    #[c("struct sort_iter_set sets[MAX_BSETS + 1]")]
-    pub sets: [SortIterSet; MAX_BSETS as usize + 1],
-}
-
-impl SortIterStack {
-    pub fn new(b: &BtreeNode) -> Self {
-        let mut s = Self::default();
-        s.iter = SortIter { b: core::ptr::from_ref(b).cast_mut(), used: 0, size: s.sets.len() as c_uint, data: [] };
-        s
-    }
-
-    /// The node's keys at offsets @keys, to merge.
-    pub fn add(&mut self, keys: core::ops::Range<usize>) {
-        let used = self.iter.used as usize;
-        assert!(used < self.sets.len(), "adding to a sort iterator of {} runs, full", self.sets.len());
-
-        if !keys.is_empty() {
-            self.sets[used] = SortIterSet { k: keys.start as u32, end: keys.end as u32 };
-            self.iter.used += 1;
-        }
-    }
 }
 
 impl SortIterSet {
     /// None for an empty run: nothing to merge.
     fn of(keys: Range<usize>) -> Option<Self> {
         (!keys.is_empty()).then(|| Self { k: keys.start as u32, end: keys.end as u32 })
+    }
+}
+
+#[derive(Default)]
+pub struct SortIterStack(ArrayVec<SortIterSet, { MAX_BSETS as usize + 1 }>);
+
+impl SortIterStack {
+    /// The node's keys at offsets @keys, to merge.
+    pub fn add(&mut self, keys: Range<usize>) {
+        self.0.extend(SortIterSet::of(keys));
     }
 }
 
@@ -627,7 +595,7 @@ impl SortIterStack {
     /// Its runs of @keys merged into @dst, for the node write: the u64s
     /// written. Clears each key's needs_whiteout: it isn't written.
     pub fn sort_keys_keep_unwritten_whiteouts(&mut self, keys: &Keys<'_>, dst: &mut [u64]) -> usize {
-        let runs = &mut self.sets[..self.iter.used as usize];
+        let runs = &mut self.0;
         let unwritten_whiteouts = keys.node().unwritten_whiteouts().start;
 
         /*
