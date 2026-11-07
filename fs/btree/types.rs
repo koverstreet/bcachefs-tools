@@ -31,8 +31,8 @@ use core::cell::Cell;
 use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8};
-use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, Late,
-                     TypeInfo};
+use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, placed, CStruct, Init,
+                     Late, TypeInfo};
 use pin_init::{pin_data, PinInit};
 use nestify::nest;
 #[cfg(feature = "std")]
@@ -1045,6 +1045,7 @@ pub struct btree_write_stats {
 }
 c_default!(btree_write_stats);
 
+#[placed(Fs.btree)]
 #[pin_data]
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init, Late)]
@@ -1094,6 +1095,7 @@ pub struct bch_fs_btree {
      * bch_wb_btree_idx()). Each instance has its own intake/flushing
      * buffers and locks.
      */
+    #[pin]
     pub write_buffer: [cs::bch_fs_btree_write_buffer; cs::BCH_WB_BTREE_NR as usize],
     /*
      * Per-btree flush_work runs on write_buffer_wq; once the sorted key

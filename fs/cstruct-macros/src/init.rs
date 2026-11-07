@@ -36,7 +36,8 @@
 //!
 //! And each field is a Field<N>, one without #[init] is zeroed only if no
 //! placed type lives there, and a placed struct's init() takes its At: a
-//! value's place - place.rs. A Placed<C, A> field is made with at(), around
+//! value's place - place.rs. A placed type with #[init_args] is given them
+//! by its field's `#[placed_args(EXPRS)]`. A Placed<C, A> field is made with at(), around
 //! its #[init]: the A it names must be its own place, or it won't compile.
 //!
 //! A field with `#[init_locked(P, "name")]` is a Locked whose data is placed
@@ -99,6 +100,15 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         if has("placed_at") {
             at = Some(ty);
             inits.push(quote!(#name: at,));
+            continue;
+        }
+        if let Some(a) = f.attrs.iter().find(|a| a.path().is_ident("placed_args")) {
+            let args = a.parse_args_with(Punctuated::<syn::Expr, Token![,]>::parse_terminated)?;
+            let args = args.iter();
+            let n = name.to_string();
+            inits.push(quote!(#name <- unsafe {
+                <Self as crate::util::place::InitAt<{ crate::util::place::name(#n) }, _>>::init((#(#args,)*))
+            },));
             continue;
         }
         if let Some(a) = f.attrs.iter().find(|a| a.path().is_ident("init_locked")) {

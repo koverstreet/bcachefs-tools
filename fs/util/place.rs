@@ -349,16 +349,17 @@ where
 
 /// B's field N's initializer, where a placed type lives there: #[placed]
 /// on the type implements it, its At from at(), for B's #[derive(Init)] to
-/// pick for the field.
+/// pick for the field. @A is the placed type's #[init_args], a tuple, which
+/// the field's #[placed_args] gives - or none, and #[derive(Init)] picks it.
 ///
 /// # Safety
 /// init() gives its field an At: what it returns is run into B's field N.
 #[doc(hidden)]
-pub(crate) unsafe trait InitAt<const N: u64>: Field<N> {
+pub(crate) unsafe trait InitAt<const N: u64, A = ()>: Field<N> {
     /// # Safety
     /// What it returns is run into Self's field N, of a Self being
     /// initialized.
-    unsafe fn init() -> impl PinInit<Self::Type, BchError>;
+    unsafe fn init(args: A) -> impl PinInit<Self::Type, BchError>;
 }
 
 /// #[derive(Init)]'s initializer for B's field N, without #[init]: its
@@ -387,7 +388,7 @@ pub(crate) trait PickPlaced<T> {
 impl<B: InitAt<N>, const N: u64> PickPlaced<B::Type> for Pick<B, N> {
     unsafe fn pick(&self) -> impl PinInit<B::Type, BchError> {
         // SAFETY: the caller's
-        unsafe { B::init() }
+        unsafe { B::init(()) }
     }
 }
 

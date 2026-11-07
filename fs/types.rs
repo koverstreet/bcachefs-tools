@@ -757,7 +757,7 @@ pub struct Fs {
     pub logged_ops: c::bch_fs_logged_ops,
 
     #[pin]
-    #[init(c::bch_fs_btree::init(options))]
+    #[placed_args(options)]
     #[late]
     pub btree: c::bch_fs_btree,
 

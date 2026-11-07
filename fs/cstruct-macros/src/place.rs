@@ -42,7 +42,8 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote, ToTokens as _};
 use syn::parse::{Parse, ParseStream, Parser as _};
 use syn::punctuated::Punctuated;
-use syn::{bracketed, token, Error, Field, Fields, Ident, ItemStruct, LitStr, Path, Token, Type};
+use syn::{bracketed, token, Error, Field, Fields, FnArg, Ident, ItemStruct, Lifetime, LitStr, Pat, PatType, Path,
+          Token, Type};
 
 use crate::cstruct::CFieldDef;
 
@@ -148,6 +149,35 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
         return Err(Error::new_spanned(&item.generics, format!("{name}: a placed type has no generics")));
     }
 
+    // Its #[init_args], which its init() takes after the At: its InitAt takes
+    // them, a tuple, from its Base's #[placed_args] - a reference's lifetime
+    // the impl's 'a
+    let mut arg_pats = Vec::new();
+    let mut arg_tys = Vec::new();
+    let mut arg_lifetime = false;
+    if let Some(a) = item.attrs.iter().find(|a| a.path().is_ident("init_args")) {
+        for arg in a.parse_args_with(Punctuated::<FnArg, Token![,]>::parse_terminated)? {
+            let FnArg::Typed(PatType { pat, ty, .. }) = &arg else {
+                return Err(Error::new_spanned(&arg, format!("{name}: an init arg is a name and a type")));
+            };
+            let Pat::Ident(p) = &**pat else {
+                return Err(Error::new_spanned(pat, format!("{name}: an init arg is a name and a type")));
+            };
+            let mut ty = (**ty).clone();
+            if let Type::Reference(r) = &mut ty {
+                if r.lifetime.is_none() {
+                    r.lifetime = Some(Lifetime::new("'a", r.and_token.span));
+                    arg_lifetime = true;
+                }
+            }
+            arg_pats.push(p.ident.clone());
+            arg_tys.push(ty);
+        }
+    }
+    if !arg_pats.is_empty() && !matches!(kind, Kind::Field) {
+        return Err(Error::new_spanned(&name, format!("{name}: only a placed field's type takes init args")));
+    }
+
     // Its At, and the field it's in: an element's index, as C names it, or
     // a field of no bytes
     let field_name = LitStr::new(&field.to_string(), field.span());
@@ -180,13 +210,14 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
     let c_attr = cstruct.then(|| quote!(#[c(#at_decl)]));
     fields.named.push(Field::parse_named.parse2(quote!(#init_attr #c_attr pub(crate) #at_field: #at))?);
 
+    let lifetime = arg_lifetime.then(|| quote!(<'a>));
     let init_at = |init: TokenStream| quote! {
         #(#cfgs)*
         #[automatically_derived]
         // SAFETY: init() is Base's for the field, which Base's #[derive(Init)]
         // runs it into, the field it's for
-        unsafe impl crate::util::place::InitAt<#n> for #base {
-            unsafe fn init() -> impl ::pin_init::PinInit<
+        unsafe impl #lifetime crate::util::place::InitAt<#n, (#(#arg_tys,)*)> for #base {
+            unsafe fn init((#(#arg_pats,)*): (#(#arg_tys,)*)) -> impl ::pin_init::PinInit<
                 <Self as crate::util::place::Field<#n>>::Type,
                 crate::errcode::BchError>
             {
@@ -208,7 +239,7 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
                      dropped - so not #[pin_data(PinnedDrop)]")));
             }
             let init = match &kind {
-                Kind::Field => Some(quote!(crate::util::place::at(#name::init))),
+                Kind::Field => Some(quote!(crate::util::place::at(|at| #name::init(at, #(#arg_pats),*)))),
                 Kind::Inner => None,
                 _ => Some(quote!(<<Self as crate::util::place::Field<#n>>::Type as crate::util::place::Array>::init_each(
                     |i| unsafe { crate::util::place::at_index(i, #name::init) }))),
