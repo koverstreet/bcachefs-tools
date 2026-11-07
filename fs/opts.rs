@@ -457,15 +457,15 @@ pub struct bch_opts {
     pub scrub_journal_max_rewind_secs: u32,
 
     /// Recovery passes to run explicitly
-    #[opt(bitfield(bch_recovery_pass), flags = fs | mount)]
+    #[opt(bitfield(RecoveryPass), flags = fs | mount)]
     pub recovery_passes: u64,
 
     /// Recovery passes to exclude
-    #[opt(bitfield(bch_recovery_pass), flags = fs | mount)]
+    #[opt(bitfield(RecoveryPass), flags = fs | mount)]
     pub recovery_passes_exclude: u64,
 
     /// Exit recovery after specified pass
-    #[opt(str_nolimit(bch_recovery_pass), flags = fs | mount)]
+    #[opt(str_nolimit(RecoveryPass), flags = fs | mount)]
     pub recovery_pass_last: u8,
 
     /// Don't run repair passes, whether the superblock had them scheduled or something schedules them mid-mount; they stay scheduled for the next mount

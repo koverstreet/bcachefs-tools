@@ -29,6 +29,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::init::passes::RecoveryPass;
 use crate::fs::Dev;
 use crate::btree::bkey::{pos, BkeySC, POS_MIN, ValidateFlags};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};use crate::c;
@@ -1009,7 +1010,7 @@ impl Fs {
         if !self.flags.get(c::bch_fs_flags::BCH_FS_in_recovery) {
             self.inconsistent_error(out);
         } else if let Err(e) = crate::init::passes::run_explicit(self, out,
-                c::bch_recovery_pass::BCH_RECOVERY_PASS_check_topology,
+                RecoveryPass::check_topology,
                 c::bch_run_recovery_pass_flags::from_bits_retain(0)) {
             return e;
         }

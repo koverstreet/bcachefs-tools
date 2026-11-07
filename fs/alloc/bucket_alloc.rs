@@ -30,6 +30,7 @@
 //! counter snapshot saying whether a wake was for it - or bails, committing
 //! the copies it has, when waiting won't help: alloc_should_bail().
 
+use crate::init::passes::RecoveryPass;
 use crate::fs::Dev;
 use crate::alloc::background::{FREESPACE_GENBITS_NR, FREESPACE_GENBITS_SHIFT, alloc_to_v4};
 use crate::alloc::check::{check_freespace_key, FreespaceCheck};
@@ -77,7 +78,7 @@ impl Fs {
     /// marks those the new range brings in.
     fn superblock_bucket_unmarked(&self, ca: &Dev, b: u64) -> bool {
         let marked = self.recovery.runner.passes_complete.get() &
-            1 << c::bch_recovery_pass::BCH_RECOVERY_PASS_trans_mark_dev_sbs as u32 != 0;
+            1 << RecoveryPass::trans_mark_dev_sbs as u32 != 0;
         !(marked && ca.mi.get().freespace_initialized) && ca.is_superblock_bucket(b)
     }
 
@@ -448,7 +449,7 @@ impl TransAttempt<'_, '_> {
             if req.btree_bitmap != BTREE_BITMAP_ANY {
                 req.btree_bitmap = BTREE_BITMAP_ANY;
             } else if freespace &&
-                      self.fs().recovery.runner.pass_done.get() < c::bch_recovery_pass::BCH_RECOVERY_PASS_check_alloc_info {
+                      self.fs().recovery.runner.pass_done.get() < RecoveryPass::check_alloc_info {
                 freespace = false;
             } else {
                 return Ok(None);
@@ -491,7 +492,7 @@ impl TransAttempt<'_, '_> {
             // normal watermark, look anyway
             if avail == 0 && !(req.watermark as u32 > c::bch_watermark::BCH_WATERMARK_normal as u32 &&
                                fs.recovery.runner.pass_done.get() <
-                               c::bch_recovery_pass::BCH_RECOVERY_PASS_check_allocations) {
+                               RecoveryPass::check_allocations) {
                 copygc_can_make_progress = can_make_progress(ca, &fs.mark_lock().read());
                 if copygc_can_make_progress {
                     req.bits.set_copygc_can_make_progress(true);

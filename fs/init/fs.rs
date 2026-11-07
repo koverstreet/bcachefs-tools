@@ -5,6 +5,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::init::passes::RecoveryPass;
 use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::btree::bkey::BkeyI;
@@ -646,7 +647,7 @@ impl Fs {
             let w = self.opts_writer(&mut sb);
 
             if opts.norecovery.get() != 0 {
-                let snapshots_read = c::bch_recovery_pass::BCH_RECOVERY_PASS_snapshots_read as _;
+                let snapshots_read = RecoveryPass::snapshots_read as _;
                 w.recovery_pass_last.set(match opts.recovery_pass_last.get() {
                     0    => snapshots_read,
                     last => last.min(snapshots_read),

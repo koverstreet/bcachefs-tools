@@ -3,6 +3,7 @@
 //! seen, or rejected - and btree_ptr(_v2)'s own on top of them.
 
 use super::*;
+use crate::init::passes::RecoveryPass;
 use crate::{bkey_fsck_err, bkey_fsck_err_on};
 use crate::data::durability::BkeyVDurability;
 use crate::data::reconcile::trigger::{extent_rebalance_v1_to_text, extent_reconcile_to_text,
@@ -209,7 +210,7 @@ pub(crate) fn extent_ptr_to_text(out: &mut Printbuf, fs: Option<&Fs>, ptr: &c::b
             }
 
             let gens_valid = fs.flags.get(c::bch_fs_flags::BCH_FS_new_fs) ||
-                fs.recovery.runner.passes_complete.get() & (1 << c::bch_recovery_pass::BCH_RECOVERY_PASS_alloc_read as u32) != 0;
+                fs.recovery.runner.passes_complete.get() & (1 << RecoveryPass::alloc_read as u32) != 0;
             // dev_ptr_stale_rcu()'s -1 for a bucket the device doesn't have
             let stale = if gens_valid { ca.ptr_stale(ptr, rcu).map_or(-1, i32::from) } else { 0 };
             if stale != 0 {

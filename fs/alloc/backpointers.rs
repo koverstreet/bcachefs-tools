@@ -34,6 +34,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::init::passes::RecoveryPass;
 use crate::fs::Dev;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeyS, BkeySC, BkeyOps};
@@ -288,7 +289,7 @@ pub fn extent_ptr_to_bp(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, d: &De
 fn backpointer_mod_err(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, new_bp: &BkeyI<c::Backpointer>,
                        found_bp: BkeySC<'_>, insert: bool) -> Result<(), BchError> {
     let fs = t.fs();
-    let pass = c::bch_recovery_pass::BCH_RECOVERY_PASS_check_extents_to_backpointers;
+    let pass = RecoveryPass::check_extents_to_backpointers;
 
     if passes::will_run(fs, pass) {
         return Ok(());

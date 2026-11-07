@@ -14,6 +14,7 @@
 
 use core::ffi::{c_int, c_uint, CStr};
 
+use crate::init::passes::RecoveryPass;
 use crate::btree::bkey::BkeyV;
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts,
                          TransAttempt};
@@ -378,7 +379,7 @@ fn dirent_to_missing_inode(t: &TransAttempt<'_, '_>, d: Dirent<'_>, dir: c::subv
 
     // Scheduling the pass takes sb_lock, and may write the superblock
     t.unlock();
-    passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_dirents,
+    passes::run_explicit(fs, &mut msg, RecoveryPass::check_dirents,
                          c::bch_run_recovery_pass_flags::empty())
 }
 

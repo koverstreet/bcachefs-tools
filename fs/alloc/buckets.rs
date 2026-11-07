@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::init::passes::RecoveryPass;
 use crate::fs::Dev;
 use crate::accounting::{self, mod_dev_cached_sectors};
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
@@ -460,7 +461,7 @@ impl TransAttempt<'_, '_> {
         prt!(&mut buf, "\nwhile marking {}\n", k.to_text(fs));
 
         let print = count_fsck_err(fs, err, &mut buf);
-        let ret = passes::run_explicit(fs, &mut buf, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_allocations,
+        let ret = passes::run_explicit(fs, &mut buf, RecoveryPass::check_allocations,
                                        c::bch_run_recovery_pass_flags::from_bits_retain(0));
 
         let ret = if fatal {
@@ -604,7 +605,7 @@ fn mark_stripe_ptr_no_match(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, idx: u64) -
     prt!(&mut msg, "extent doesn't match stripe {idx}, not updating stripe block accounting\n  while marking {}\n",
          k.to_text(fs));
     count_fsck_err(fs, id::stripe_update_stale_stripe_ptr, &mut msg);
-    passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_allocations,
+    passes::run_explicit(fs, &mut msg, RecoveryPass::check_allocations,
                          c::bch_run_recovery_pass_flags::from_bits_retain(0))
 }
 
@@ -877,7 +878,7 @@ fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64,
              ca.dev_idx, a.v().generation, data_type_str(DataType(cur.into())),
              data_type_str(data_type), data_type_str(data_type));
         count_fsck_err(fs, id::bucket_metadata_type_mismatch, &mut msg);
-        passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_allocations,
+        passes::run_explicit(fs, &mut msg, RecoveryPass::check_allocations,
                              c::bch_run_recovery_pass_flags::from_bits_retain(0))?;
         return fs.throw(bch_errcode::BCH_ERR_metadata_bucket_inconsistency);
     }

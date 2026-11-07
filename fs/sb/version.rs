@@ -4,9 +4,9 @@
 //! recovery passes it asks for, and the version upgrade or downgrade the
 //! options and the version say - with the passes each needs run.
 
+use crate::init::passes::RecoveryPass;
 use crate::c;
 use crate::c::bch_fs_flags as Flag;
-use crate::c::bch_recovery_pass as Pass;
 use crate::c::bch_version_upgrade_opts as Upgrade;
 use crate::format::{Btree, MetadataVersion};
 use crate::fs::{Fs, SbLockGuard};
@@ -102,7 +102,7 @@ fn check_version_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, out: &mut Printbuf) 
  * that. See __bch2_write_super().
  */
 pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
-    let pass = |p: Pass| passes_to_stable(1 << p as u32);
+    let pass = |p: RecoveryPass| passes_to_stable(1 << p as u32);
     let mut sb = fs.sb_lock();
 
     let now = Le64::new(ktime_get_real_seconds() as u64);
@@ -114,13 +114,13 @@ pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
     }
 
     if sb.sb().has_topology_errors() {
-        ext(&mut sb).recovery_passes_required[0] |= pass(Pass::BCH_RECOVERY_PASS_check_topology);
+        ext(&mut sb).recovery_passes_required[0] |= pass(RecoveryPass::check_topology);
     }
 
     let sb_passes = passes_from_stable(ext(&mut sb).recovery_passes_required[0].get());
     if sb_passes != 0 {
         prt!(out, "superblock requires following recovery passes to be run: ");
-        names::prt_set::<Pass>(out, sb_passes);
+        names::prt_set::<RecoveryPass>(out, sb_passes);
         out.newline();
     }
 
@@ -165,8 +165,8 @@ pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
         sb.sb_mut().set_extent_bp_shift(extent_bp_shift_needed.into());
 
         let ext = ext(&mut sb);
-        ext.recovery_passes_required[0] |= pass(Pass::BCH_RECOVERY_PASS_check_extents_to_backpointers);
-        ext.recovery_passes_required[0] |= pass(Pass::BCH_RECOVERY_PASS_check_backpointers_to_extents);
+        ext.recovery_passes_required[0] |= pass(RecoveryPass::check_extents_to_backpointers);
+        ext.recovery_passes_required[0] |= pass(RecoveryPass::check_backpointers_to_extents);
         let silent = LeBitmap::from_words_mut(&mut ext.errors_silent);
         silent.set(SbErrorId::backpointer_to_missing_ptr.0 as usize);
         silent.set(SbErrorId::ptr_to_missing_backpointer.0 as usize);

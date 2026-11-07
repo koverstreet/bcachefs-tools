@@ -22,6 +22,7 @@
 //! again - see backpointers.rs.
 
 
+use crate::init::passes::RecoveryPass;
 use crate::fs::Dev;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_del, backpointers_match, backpointers_maybe_flush,
@@ -575,7 +576,7 @@ pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: 
     };
     // as C's: the message says whether it's scheduled
     let _ = passes::run_explicit(fs, &mut buf,
-                                 c::bch_recovery_pass::BCH_RECOVERY_PASS_check_extents_to_backpointers, flags);
+                                 RecoveryPass::check_extents_to_backpointers, flags);
 
     static RATELIMIT: Ratelimit = Ratelimit::new();
     if !RATELIMIT.suppress(fs, c"bch2_check_bucket_backpointer_mismatch") {

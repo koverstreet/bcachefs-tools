@@ -3,6 +3,7 @@
 //! Stripe block IO - ec/io.c's - and what reads stripes: the read path's
 //! reconstruct, and scrub.
 
+use crate::init::passes::RecoveryPass;
 use crate::btree::bkey::{pos, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans};
@@ -392,7 +393,7 @@ fn read_extent(trans: &BtreeTrans<'_>, rbio: &mut c::bch_read_bio, msg: &mut Pri
         let mut m = log_msg_ratelimited!(fs);
         prt!(&mut m, "Stripe with stale pointer(s):\n{}", s.to_text(fs));
         count_fsck_err(fs, id::stale_dirty_ptr, &mut m);
-        let _ = passes::run_explicit(fs, &mut m, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_allocations,
+        let _ = passes::run_explicit(fs, &mut m, RecoveryPass::check_allocations,
                                      c::bch_run_recovery_pass_flags::from_bits_retain(0));
     }
 

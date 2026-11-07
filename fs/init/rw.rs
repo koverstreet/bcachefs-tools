@@ -17,6 +17,7 @@
 
 use core::sync::atomic::Ordering::Relaxed;
 
+use crate::init::passes::RecoveryPass;
 use crate::accounting::verify_accounting_clean;
 use crate::alloc::capacity::recalc_capacity;
 use crate::btree::cache::bch2_fs_btree_init_rw;
@@ -228,7 +229,7 @@ impl StateLockWrite<'_> {
            !fs.flags.get(Flag::BCH_FS_emergency_ro) &&
            fs.flags.get(Flag::BCH_FS_started) &&
            fs.flags.get(Flag::BCH_FS_clean_shutdown) &&
-           fs.recovery.runner.pass_done.get() >= c::bch_recovery_pass::BCH_RECOVERY_PASS_journal_replay {
+           fs.recovery.runner.pass_done.get() >= RecoveryPass::journal_replay {
             assert_eq!(fs.journal.lock.lock().last_empty_seq, fs.journal_cur_seq());
             assert!(fs.sb.clean.get() != 0);
             assert!(fs.btree.cache.lock.nr_dirty() == 0);
@@ -382,7 +383,7 @@ impl StateLockWrite<'_> {
         let opts = fs.opts();
         let pass_last = u32::from(opts.recovery_pass_last.get());
 
-        if pass_last != 0 && pass_last < c::bch_recovery_pass::BCH_RECOVERY_PASS_journal_replay as u32 {
+        if pass_last != 0 && pass_last < RecoveryPass::journal_replay as u32 {
             return fs.throw(bch_errcode::BCH_ERR_erofs_norecovery);
         }
 

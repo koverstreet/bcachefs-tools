@@ -875,7 +875,7 @@ pub mod ioctl {
     use core::sync::atomic::Ordering::{Relaxed, Release};
     use crate::fs::{OpenFs, RoRef};
     use crate::init::registry::{self, Claim, FsHandle, Opener};
-    use crate::init::passes::{bch2_recovery_passes, passes_match, run_passes};
+    use crate::init::passes::{bch2_recovery_passes, passes_match, run_passes, PassFlags};
     use crate::opts::parse_mount_opts_cstr;
     use crate::util::kernel::{capable, Capability};
     use crate::util::place::Contained;
@@ -990,8 +990,8 @@ pub mod ioctl {
         let fs = fs_ref.container();
         let mut buf = Printbuf::new();
 
-        let online = passes_match(c::PASS_ONLINE);
-        let mut passes = passes_match(c::PASS_FSCK) & online;
+        let online = passes_match(PassFlags::ONLINE);
+        let mut passes = passes_match(PassFlags::FSCK) & online;
 
         if opts.defined(c::bch_opt_id::Opt_recovery_passes) {
             passes = opts.recovery_passes;

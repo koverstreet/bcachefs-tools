@@ -35,7 +35,7 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::c;
-use crate::c::bch_recovery_pass::*;
+use crate::init::passes::RecoveryPass::*;
 use crate::c::snapshot_id_state as IdState;
 use crate::check;
 use crate::errcode::{bch_errcode, BchError, Found};

@@ -40,6 +40,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{anyhow, bail, Result};
+use bcachefs_kernel::init::passes::RecoveryPass;
 use bcachefs_kernel::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
 use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::btree::bkey_methods;
@@ -1380,7 +1381,7 @@ fn kvdb(cli: Cli) -> Result<()> {
         // snapshot deletion that consumed the very node a test had staged is
         // what prompted this.) Whatever the superblock still requires stays
         // recorded and runs at the next real mount.
-        fs_opts.set_recovery_pass_last(c::bch_recovery_pass::BCH_RECOVERY_PASS_journal_replay);
+        fs_opts.set_recovery_pass_last(RecoveryPass::journal_replay);
     }
     if cli.journal {
         fs_opts.set_retain_recovery_info(true);

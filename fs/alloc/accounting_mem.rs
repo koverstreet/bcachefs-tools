@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use crate::init::passes::RecoveryPass;
 use crate::accounting::{self, accounting_bkey, is_mem, key_to_text,
                         replicas_entry, Accounting, CounterSet, Counters, DiskAccountingPos, MAX_COUNTERS};
 use crate::alloc::buckets::bch_fs_usage_base;
@@ -695,7 +696,7 @@ fn read_mem_fixups(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     if !underflow_err.is_suppressed() {
         let log = count_fsck_err(fs, id::accounting_key_underflow, &mut underflow_err);
         underflow_err.set_suppressed(!log);
-        passes::run_explicit(fs, &mut underflow_err, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_allocations,
+        passes::run_explicit(fs, &mut underflow_err, RecoveryPass::check_allocations,
                              c::bch_run_recovery_pass_flags::empty())?;
     }
     Ok(())

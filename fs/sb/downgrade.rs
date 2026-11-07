@@ -11,6 +11,7 @@ use core::ffi::c_ulong;
 use core::mem::size_of;
 
 
+use crate::init::passes::RecoveryPass;
 use crate::btree::bkey::ValidateFlags;
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
@@ -135,7 +136,7 @@ macro_rules! table {
         &[$(UpDown {
             version:  MetadataVersion::[<bcachefs_metadata_version_ $ver>],
             all_fsck: false $(|| table!(@$all))?,
-            passes:   0 $(| 1 << c::bch_recovery_pass::[<BCH_RECOVERY_PASS_ $pass>] as u64)*,
+            passes:   0 $(| 1 << RecoveryPass::[<BCH_RECOVERY_PASS_ $pass>] as u64)*,
             errors:   &[$(SbErrorId::[<BCH_FSCK_ERR_ $err>]),*],
         }),*]
     } };

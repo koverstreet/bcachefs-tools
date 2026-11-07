@@ -293,6 +293,7 @@
  * mount by re-scanning for snapshots still marked for deletion.
  */
 
+use crate::init::passes::RecoveryPass;
 use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole, POS_MAX, POS_MIN, BkeyOps};
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::prt;
@@ -596,7 +597,7 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
         // passes so it runs (in listing order) before the content checks;
         // otherwise it schedules the async runner.
         let mut buf = Printbuf::new();
-        let _ = passes::run_explicit(fs, &mut buf, c::bch_recovery_pass::BCH_RECOVERY_PASS_delete_dead_snapshots,
+        let _ = passes::run_explicit(fs, &mut buf, RecoveryPass::delete_dead_snapshots,
                                      c::bch_run_recovery_pass_flags::RUN_RECOVERY_PASS_ephemeral);
     }
     Ok(())
@@ -880,7 +881,7 @@ fn is_ancestor_table(t: &TransAttempt<'_, '_>, orig_id: u32, ancestor: u32) -> b
     let fs = t.fs();
     let bitmap = c::IS_ANCESTOR_BITMAP;
 
-    if unlikely(passes::will_run(fs, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_snapshots)) {
+    if unlikely(passes::will_run(fs, RecoveryPass::check_snapshots)) {
         return fs.snapshots.is_ancestor_early(orig_id, ancestor);
     }
 
@@ -1443,7 +1444,7 @@ pub(crate) fn snapshots_read(fs: &Fs) -> Result<(), BchError> {
         let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
 
         let _ = writeln!(msg, "Found {nr_empty_interior} empty interior snapshot nodes");
-        passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_delete_dead_interior_snapshots,
+        passes::run_explicit(fs, &mut msg, RecoveryPass::delete_dead_interior_snapshots,
                              c::bch_run_recovery_pass_flags::empty())?;
     }
     Ok(())

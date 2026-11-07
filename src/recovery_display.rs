@@ -24,6 +24,7 @@ use anyhow::Context;
 use rustix::fs::{flock, FlockOperation};
 
 use bch_bindgen::c;
+use bcachefs_kernel::init::passes::RecoveryPass;
 use bcachefs_kernel::format::DataType;
 use bcachefs_kernel::init::passes;
 use bcachefs_kernel::util::vstructs::{Unvalidated, UnvalidatedEntries};
@@ -131,7 +132,7 @@ impl<'a> RecoveryDisplay<'a> {
         let online = self.devs.iter().filter(|d| d.online).count();
         let head = format!("mounting with {}/{} devices", online, self.devs.len());
 
-        if !pass_complete(s, c::bch_recovery_pass::BCH_RECOVERY_PASS_accounting_read) {
+        if !pass_complete(s, RecoveryPass::accounting_read) {
             return format!("{head}, redundancy unknown (reading accounting)");
         }
 
@@ -374,7 +375,7 @@ fn render_line(f: &Fields, cols: usize) -> String {
     l
 }
 
-fn pass_complete(s: &c::bch_ioctl_recovery_status, pass: c::bch_recovery_pass) -> bool {
+fn pass_complete(s: &c::bch_ioctl_recovery_status, pass: RecoveryPass) -> bool {
     let n = pass as u32;
 
     s.passes_complete.v[(n / 64) as usize] & (1u64 << (n % 64)) != 0

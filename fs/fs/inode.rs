@@ -40,7 +40,7 @@ use crate::namei;
 use crate::util::kernel::random_u64;
 use crate::{bch_err_ratelimited, bch_warn, trans_inconsistent};
 use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC, Typed, POS_MIN, SPOS_MAX, BkeyOps};
-use crate::init::passes;
+use crate::init::passes::{self, RecoveryPass};
 use crate::util::varint;
 use core::mem::{offset_of, align_of};
 use crate::btree::trigger::{Trigger, TriggerOp};
@@ -335,8 +335,6 @@ fn try_unpack(k: BkeySC<'_>)
 /// Not the value's to_text: an inode's unpacks it, and would fail here again.
 #[cold]
 fn unpack_error(fs: &Fs, k: BkeySC<'_>, u: &c::bch_inode_unpacked, fieldnr: usize) {
-    use c::bch_recovery_pass::*;
-
     macro_rules! names {
         ($($name:ident = $bits:literal,)*) => { &[$(stringify!($name),)*] };
     }
@@ -347,11 +345,11 @@ fn unpack_error(fs: &Fs, k: BkeySC<'_>, u: &c::bch_inode_unpacked, fieldnr: usiz
     };
 
     let passes = [
-        ("bi_nlink",         BCH_RECOVERY_PASS_check_nlinks),
-        ("bi_subvol",        BCH_RECOVERY_PASS_check_subvols),
-        ("bi_parent_subvol", BCH_RECOVERY_PASS_check_subvolume_structure),
+        ("bi_nlink",         RecoveryPass::check_nlinks),
+        ("bi_subvol",        RecoveryPass::check_subvols),
+        ("bi_parent_subvol", RecoveryPass::check_subvolume_structure),
         // Dirent hashes depend on it - v2 doesn't have it:
-        ("bi_casefold",      BCH_RECOVERY_PASS_check_dirents),
+        ("bi_casefold",      RecoveryPass::check_dirents),
     ];
 
     let mut msg = LogMsg::new(fs);
@@ -2120,9 +2118,9 @@ fn nlink_out_of_range(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
     inode.bi_nlink = if delta < 0 { 0 } else { u32::MAX };
 
     let (err, pass) = if inode.is_dir() {
-        (id::inode_dir_wrong_nlink, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_dirents)
+        (id::inode_dir_wrong_nlink, RecoveryPass::check_dirents)
     } else {
-        (id::inode_wrong_nlink, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_nlinks)
+        (id::inode_wrong_nlink, RecoveryPass::check_nlinks)
     };
 
     let mut msg = LogMsg::new(fs);

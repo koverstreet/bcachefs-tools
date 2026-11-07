@@ -28,7 +28,7 @@ use crate::btree::iter::{
 };
 use crate::alloc::capacity::DiskReservation;
 use crate::c;
-use crate::c::bch_recovery_pass::*;
+use crate::init::passes::RecoveryPass::*;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id, BkeyValidate};

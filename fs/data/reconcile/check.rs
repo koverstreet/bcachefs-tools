@@ -16,6 +16,7 @@
 //! key at the walk's position, where C overwrote its iter->k with a deleted
 //! one.
 
+use crate::init::passes::RecoveryPass;
 use crate::fs::Dev;
 use crate::alloc::backpointers::{backpointer_get_key, backpointers_match, bp_reconcile_phys, extent_ptr_to_bp};
 use crate::alloc::capacity::DiskReservation;
@@ -543,7 +544,7 @@ pub fn rotational_changed(fs: &Fs, ca: &Dev) {
         w.set_err_silent(id::reconcile_work_phys_incorrectly_set);
     }
 
-    if let Err(e) = crate::init::passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_reconcile_work,
+    if let Err(e) = crate::init::passes::run_explicit(fs, &mut msg, RecoveryPass::check_reconcile_work,
                                                       c::bch_run_recovery_pass_flags::from_bits_retain(0)) {
         write!(msg, "error scheduling check_reconcile_work: {e}\n");
         msg.set_level(LogLevel::ERR);

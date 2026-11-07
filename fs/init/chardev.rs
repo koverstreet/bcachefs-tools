@@ -33,6 +33,7 @@
 //! index or by path (BCH_BY_INDEX); a handler that takes state_lock holds
 //! only an outer ref on it, as device removal drains ca->ref under that lock.
 
+use crate::init::passes::RecoveryPass;
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, WriteRef};
@@ -174,7 +175,7 @@ pub fn bch2_fs_ioctl(c: &Opaque<Fs>, cmd: c_uint, arg: *mut c_void) -> c_long {
 fn accounting_read_done(fs: &Fs) -> bool {
     fs.flags.get(c::bch_fs_flags::BCH_FS_new_fs) ||
         fs.recovery.runner.passes_complete.get() &
-            (1 << c::bch_recovery_pass::BCH_RECOVERY_PASS_accounting_read as u32) != 0
+            (1 << RecoveryPass::accounting_read as u32) != 0
 }
 
 fn query_uuid(fs: &Fs) -> Result<c::bch_ioctl_query_uuid, BchError> {

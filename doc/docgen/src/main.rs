@@ -904,13 +904,13 @@ fn pass_flags_annotations(flags: &str) -> (Vec<&'static str>, bool) {
     if has("ALWAYS") {
         annotations.push("always");
     }
-    if has("FSCK_ALLOC") || has("FSCK") {
+    if has("FSCK") {
         annotations.push("fsck");
     }
     if has("ONLINE") {
         annotations.push("online");
     }
-    if has("FSCK_ALLOC") || has("ALLOC") {
+    if has("ALLOC") {
         annotations.push("alloc");
     }
     if has("NODEFER") {

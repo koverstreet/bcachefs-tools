@@ -3,6 +3,7 @@
 //! Recovery: a filesystem brought up from its superblock and journal, or a
 //! new one initialized.
 
+use crate::init::passes::RecoveryPass;
 use crate::accounting;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
@@ -42,7 +43,7 @@ use cstruct_macros::c_export;
 use crate::format::{Btree, MemberInitialized, BkeyType, SbFeature};
 use zerocopy::IntoBytes;
 
-type Pass = c::bch_recovery_pass;
+type Pass = RecoveryPass;
 
 /// The filesystem before it can go rw: the recovery task alone runs, so what
 /// this hands out is had exclusively. Not Send: the recovery task's.
@@ -128,15 +129,15 @@ pub fn btree_lost_data(fs: &Fs, msg: &mut Printbuf, btree: Btree) -> Result<(), 
     };
 
     /* Once we have runtime self healing for topology errors we won't need this: */
-    run(&mut w, Pass::BCH_RECOVERY_PASS_check_topology);
+    run(&mut w, Pass::check_topology);
 
     /* Btree node accounting will be off: */
     w.set_err_silent(id::accounting_mismatch);
-    run(&mut w, Pass::BCH_RECOVERY_PASS_check_allocations);
+    run(&mut w, Pass::check_allocations);
 
     /* Minor, and not urgent, but debug wants the next fsck clean: */
     if cfg!(CONFIG_BCACHEFS_DEBUG) {
-        run(&mut w, Pass::BCH_RECOVERY_PASS_check_lrus);
+        run(&mut w, Pass::check_lrus);
     }
 
     for e in [id::lru_entry_bad, id::alloc_key_to_missing_lru_entry, id::backpointer_to_missing_ptr,
@@ -178,7 +179,7 @@ fn reconstruct_alloc(fs: &Fs) {
         let mut v = required.get();
         for &pass in passes![check_allocations, check_alloc_info, check_lrus, check_extents_to_backpointers,
                             check_alloc_to_lru_refs] {
-            v |= 1 << pass.to_stable().0;
+            v |= 1 << pass.stable().0;
         }
         required.set(v);
 
@@ -319,8 +320,8 @@ fn journal_replay_key_no_node(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, id
     let mut buf = Printbuf::new();
     prt!(&mut buf, "btree={} level={} {}", k.btree_id(), k.level(), BkeySC::from(bk).to_text(fs));
 
-    let scanned = passes::bit(Pass::BCH_RECOVERY_PASS_scan_for_btree_nodes) |
-                  passes::bit(Pass::BCH_RECOVERY_PASS_check_topology);
+    let scanned = passes::bit(Pass::scan_for_btree_nodes) |
+                  passes::bit(Pass::check_topology);
     if fs.recovery.runner.passes_complete.get() & scanned == 0 {
         bch_err!(fs, "have key in journal replay for btree depth that does not exist, confused\n{}", buf);
         return fs.throw(bch_errcode::BCH_ERR_EINVAL_journal_replay_key_bad_btree_depth);
@@ -475,7 +476,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
     trans.unlock_long();
 
     if fs.opts.retain_recovery_info.get() == 0 &&
-       fs.recovery.runner.pass_done.get() >= Pass::BCH_RECOVERY_PASS_journal_replay {
+       fs.recovery.runner.pass_done.get() >= Pass::journal_replay {
         journal_keys_put_initial(fs);
     }
 
@@ -929,7 +930,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
         let saved_fixed        = fs.flags.swap(Flag::BCH_FS_errors_fixed, false);
         let saved_fixed_silent = fs.flags.swap(Flag::BCH_FS_errors_fixed_silent, false);
 
-        passes::run_passes_startup(fs, Pass::BCH_RECOVERY_PASS_check_alloc_info)?;
+        passes::run_passes_startup(fs, Pass::check_alloc_info)?;
 
         if fs.flags.get(Flag::BCH_FS_errors_fixed) ||
            fs.flags.get(Flag::BCH_FS_errors_fixed_silent) ||
@@ -987,7 +988,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
          * the full (potentially very slow) pass every time and never clears
          * the flag.
          */
-        if complete(Pass::BCH_RECOVERY_PASS_check_topology) &&
+        if complete(Pass::check_topology) &&
            !error &&
            !fs.flags.get(Flag::BCH_FS_errors_not_fixed) {
             w.sb_mut().set_has_topology_errors(false);
@@ -998,8 +999,8 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
             w.dirty();
         }
 
-        if complete(Pass::BCH_RECOVERY_PASS_check_extents) &&
-           complete(Pass::BCH_RECOVERY_PASS_check_indirect_extents) {
+        if complete(Pass::check_extents) &&
+           complete(Pass::check_indirect_extents) {
             w.set_compat(c::bch_sb_compat::BCH_COMPAT_no_stale_ptrs);
         }
 
@@ -1007,7 +1008,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
          * check_allocations recomputes accounting, so it is what makes
          * the stripe fragmentation counters true.
          */
-        if complete(Pass::BCH_RECOVERY_PASS_check_allocations) {
+        if complete(Pass::check_allocations) {
             w.set_compat(c::bch_sb_compat::BCH_COMPAT_stripe_frag_accounting);
         }
 
@@ -1016,7 +1017,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
          * after it every inode's options have reached its ancestor
          * snapshots - and a later violation is a bug, not legacy state.
          */
-        if complete(Pass::BCH_RECOVERY_PASS_check_inodes) {
+        if complete(Pass::check_inodes) {
             w.set_compat(c::bch_sb_compat::BCH_COMPAT_inode_opts_propagated);
         }
     }

@@ -1,5 +1,6 @@
 #![allow(non_camel_case_types)]
 
+use crate::init::passes::RecoveryPass;
 use crate::fs::Dev;
 use crate::btree::bkey::{BkeySC, BkeyV, POS_MIN, ValidateFlags};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter};
@@ -961,7 +962,7 @@ crate::fs_delayed_work! {
     pub(crate) work BtreeBitmapGcSchedule: field maybe_schedule_btree_bitmap_gc;
 
     fn run(fs: &Fs) {
-        if passes::want_ratelimit(fs, c::bch_recovery_pass::BCH_RECOVERY_PASS_btree_bitmap_gc, 1000) {
+        if passes::want_ratelimit(fs, RecoveryPass::btree_bitmap_gc, 1000) {
             return;
         }
 
@@ -983,7 +984,7 @@ crate::fs_delayed_work! {
 
         if want_schedule {
             // Ignored, as C ignored it
-            let _ = passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_btree_bitmap_gc,
+            let _ = passes::run_explicit(fs, &mut msg, RecoveryPass::btree_bitmap_gc,
                                          c::bch_run_recovery_pass_flags::RUN_RECOVERY_PASS_ratelimit);
         }
 
@@ -1260,7 +1261,7 @@ impl Fs {
                     if removed { "removed" } else { "nonexistent" }, k.to_text(self));
 
         count_fsck_err(self, if removed { id::ptr_to_removed_device } else { id::ptr_to_invalid_device }, out);
-        passes::run_explicit(self, out, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_allocations,
+        passes::run_explicit(self, out, RecoveryPass::check_allocations,
                              c::bch_run_recovery_pass_flags::empty())
     }
 

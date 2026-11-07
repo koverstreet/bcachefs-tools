@@ -62,8 +62,8 @@ pub struct bch_recovery_runner {
      * current_pass change; whoever cats the sysfs file once can't.
      */
     pub pass_start_time: u64,
-    pub rewound_from: c::bch_recovery_pass,
-    pub rewound_to: c::bch_recovery_pass,
+    pub rewound_from: RecoveryPass,
+    pub rewound_to: RecoveryPass,
     /*
      * Every pass this run dispatched, successful or not - the rewind
      * gate: we never rewind to (or re-queue behind us) a pass that
@@ -97,9 +97,9 @@ published! {
         /* counterpart to c->sb.recovery_passes_required */
         pub scheduled_passes_ephemeral: Volatile<u64>,
         pub current_passes: Volatile<u64>,
-        pub current_pass: Volatile<c::bch_recovery_pass>,
+        pub current_pass: Volatile<RecoveryPass>,
         /* never rewinds version of curr_pass */
-        pub pass_done: Volatile<c::bch_recovery_pass>,
+        pub pass_done: Volatile<RecoveryPass>,
         /* bitmask of recovery passes that we actually ran */
         pub passes_complete: Volatile<u64>,
     }
@@ -177,17 +177,19 @@ use crate::util::place::Contained;
 use crate::util::workqueue::Queue;
 use crate::util::{DateTime, Nsecs, Printbuf};
 use crate::{bch_err, bch_info, c_function_name, inode, message, prt};
-use core::ffi::{c_int, c_ulong};
+use core::ffi::c_int;
 use core::mem::size_of;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cstruct_macros::c_export;
 
-type Pass = c::bch_recovery_pass;
+pub use crate::cstructs::init_passes_format::{PassFlags, RecoveryPass, RecoveryPassStable};
+
+type Pass = RecoveryPass;
 type Flags = c::bch_run_recovery_pass_flags;
 
 // ── The passes ───────────────────────────────────────────────────────────────
 
-const NR: usize = Pass::BCH_RECOVERY_PASS_NR as usize;
+const NR: usize = Pass::NR as usize;
 
 /// The last pass: once it's done, they all are.
 pub const LAST: Pass = Pass::from_bits(NR as u32 - 1);
@@ -206,24 +208,20 @@ mod pass_fns {
                 [$([<bch2_ $name>]),*];
         } };
     }
-    crate::c::BCH_RECOVERY_PASSES!(pass_fns);
+    crate::c::RecoveryPass_arms!(pass_fns);
 }
 use pass_fns::RUN;
 use crate::sb::io::SbResize;
 
-macro_rules! pass_table {
-    ($(($name:ident, $stable:literal, $when:expr, [$($dep:ident),* $(,)?], $($desc:literal)*)),* $(,)?) => {
-        /// Each pass's stable id, by pass.
-        const TO_STABLE: [u8; NR] = [$($stable),*];
-        /// When each pass runs - PASS_* - by pass.
-        const WHEN: [c_ulong; NR] = [$($when),*];
-        /// The passes each depends on, by pass: run first, if both are to be.
-        const DEPENDS: [u64; NR] = [$(0 $(| 1 << ::paste::paste!(Pass::[<BCH_RECOVERY_PASS_ $dep>]) as u64)*),*];
-    };
-}
-// What BCH_RECOVERY_PASSES()' when column names, which resolves here
-use c::{PASS_ALLOC, PASS_ALWAYS, PASS_FSCK, PASS_FSCK_ALLOC, PASS_NODEFER, PASS_ONLINE, PASS_SILENT};
-c::BCH_RECOVERY_PASSES!(pass_table);
+/// Each pass's stable id, by pass.
+const TO_STABLE: [u8; NR] = {
+    let (mut t, mut i) = ([0; NR], 0);
+    while i < NR {
+        t[i] = Pass::from_bits(i as u32).stable().0 as u8;
+        i += 1;
+    }
+    t
+};
 
 /// The names, as C's option parsing and printing has them.
 #[c_export]
@@ -235,16 +233,10 @@ const _: () = assert!(NR <= 64);
 
 /// Pass 0, recovery_pass_empty: what current_pass, rewound_to and
 /// rewound_from hold for none.
-const NONE: Pass = Pass::BCH_RECOVERY_PASS_recovery_pass_empty;
+const NONE: Pass = Pass::recovery_pass_empty;
 
 pub(crate) fn bit(pass: Pass) -> u64 {
     1 << pass as u32
-}
-
-impl c::bch_recovery_pass {
-    fn when(self) -> c_ulong {
-        WHEN[self as usize]
-    }
 }
 
 /// Pass number @pass's name, if it's one this version has.
@@ -252,14 +244,14 @@ pub fn name(pass: u32) -> Option<&'static str> {
     names::name_of(<Pass as names::Names>::ENTRIES, pass.into())
 }
 
-/// The passes that run at any of @flags, PASS_*.
-pub fn passes_match(flags: c_ulong) -> u64 {
-    (0..NR).filter(|&p| WHEN[p] & flags != 0).fold(0, |m, p| m | 1 << p)
+/// The passes that run at any of @flags.
+pub fn passes_match(flags: PassFlags) -> u64 {
+    (0..NR).filter(|&p| Pass::from_bits(p as u32).when().intersects(flags)).fold(0, |m, p| m | 1 << p)
 }
 
 /// The passes an fsck runs.
 pub fn fsck_passes() -> u64 {
-    passes_match(c::PASS_FSCK)
+    passes_match(PassFlags::FSCK)
 }
 
 /// A placeholder, so scan_for_btree_nodes isn't pass 0.
@@ -312,12 +304,6 @@ const FROM_STABLE: [u8; STABLE_NR] = {
 
 // a mask of stable ids is a u64
 const _: () = assert!(STABLE_NR <= 64);
-
-impl c::bch_recovery_pass {
-    pub fn to_stable(self) -> c::bch_recovery_pass_stable {
-        c::bch_recovery_pass_stable(TO_STABLE[self as usize].into())
-    }
-}
 
 /// Stable id @stable's pass, as an index.
 fn from_stable(stable: usize) -> usize {
@@ -378,13 +364,13 @@ const SELF_HEAL_RATELIMIT: u32 = 100;
 
 /// @pass's entry, if the section has one.
 fn entry(sb: &c::bch_sb, pass: Pass) -> Option<c::recovery_pass_entry> {
-    sb.field::<Section>()?.start.get(pass.to_stable().0 as usize).copied()
+    sb.field::<Section>()?.start.get(pass.stable().0 as usize).copied()
 }
 
 /// @pass's entry, the section made or grown to hold it: None if there's no
 /// room in the superblock.
 fn entry_mut<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, pass: Pass) -> Option<&'a mut c::recovery_pass_entry> {
-    let stable = pass.to_stable().0 as usize;
+    let stable = pass.stable().0 as usize;
     let bytes = size_of::<Head<Section>>() + (stable + 1) * size_of::<c::recovery_pass_entry>();
     if fs.sb_resize(sb).field_get_minsize::<Section>((bytes / size_of::<u64>()) as u32).is_none() {
         bch_err!(fs, "error creating recovery_passes sb section");
@@ -430,7 +416,7 @@ pub fn set_no_ratelimit(fs: &Fs, pass: Pass) {
 fn pass_complete(fs: &Fs, pass: Pass, start_time: i64) {
     let mut sb = fs.sb_lock();
     let ext = sb.field_mut::<c::bch_sb_field_ext<Validated>>().expect("an ext section");
-    LeBitmap::from_words_mut(&mut ext.recovery_passes_required).clear(pass.to_stable().0 as usize);
+    LeBitmap::from_words_mut(&mut ext.recovery_passes_required).clear(pass.stable().0 as usize);
     // the runner takes each pass off current_passes before running it: none
     // left, this was the last
     if fs.recovery.runner.current_passes.get() == 0 {
@@ -553,7 +539,7 @@ pub(crate) fn set_pass_done(fs: &Fs, pass: Pass) {
 fn pass_dependents(pass: usize) -> u64 {
     let mut passes = 1u64 << pass;
     loop {
-        let more = (0..NR).filter(|&i| passes & 1 << i == 0 && passes & DEPENDS[i] != 0)
+        let more = (0..NR).filter(|&i| passes & 1 << i == 0 && passes & Pass::from_bits(i as u32).depends() != 0)
                           .fold(0, |m, i| m | 1 << i);
         if more == 0 {
             return passes;
@@ -566,7 +552,7 @@ fn pass_dependents(pass: usize) -> u64 {
 /// in the background, after mount.
 fn should_defer(pass: usize, passes: u64) -> bool {
     let passes = (passes & pass_dependents(pass)) | 1 << pass;
-    passes == passes & passes_match(c::PASS_ONLINE)
+    passes == passes & passes_match(PassFlags::ONLINE)
 }
 
 /// Whether this run may execute @pass, as opposed to only scheduling it: the
@@ -576,7 +562,7 @@ fn should_defer(pass: usize, passes: u64) -> bool {
 /// into current_passes - which is how an offline pass reaches a live
 /// filesystem.
 fn may_run_now(fs: &Fs, pass: Pass) -> bool {
-    !fs.flags.get(c::bch_fs_flags::BCH_FS_started) || pass.when() & c::PASS_ONLINE != 0
+    !fs.flags.get(c::bch_fs_flags::BCH_FS_started) || pass.when().intersects(PassFlags::ONLINE)
 }
 
 /// Whether running @pass means going back for it: the pass loop is running,
@@ -590,7 +576,7 @@ fn needs_rewind(fs: &Fs, r: &Recovery<'_>, pass: Pass) -> bool {
 /// Never record scan_for_btree_nodes in the superblock: check_topology runs it
 /// if required, so the requirement is always re-derivable.
 fn is_persistent(pass: Pass) -> bool {
-    pass != Pass::BCH_RECOVERY_PASS_scan_for_btree_nodes
+    pass != Pass::scan_for_btree_nodes
 }
 
 /// Whether scheduling @pass would do anything. With RUN_RECOVERY_PASS_ratelimit
@@ -675,7 +661,7 @@ pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags
         let w = w.expect("not ephemeral: an sb_write");
         let ext = w.field_mut::<c::bch_sb_field_ext<Validated>>().expect("an ext section");
         let required = LeBitmap::from_words_mut(&mut ext.recovery_passes_required);
-        let new = !required.test_and_set(pass.to_stable().0 as usize);
+        let new = !required.test_and_set(pass.stable().0 as usize);
         w.record(new);
     }
 
@@ -690,7 +676,7 @@ pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags
         return Ok(());
     }
 
-    if pass < Pass::BCH_RECOVERY_PASS_set_may_go_rw &&
+    if pass < Pass::set_may_go_rw &&
        fs.flags.get(c::bch_fs_flags::BCH_FS_may_go_rw) {
         write!(out, "need recovery pass {} ({}), but already rw\n", pass.name(), pass as u32);
         return fs.throw(bch_errcode::BCH_ERR_cannot_rewind_recovery);
@@ -763,7 +749,7 @@ pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags
         write!(out, "scheduling recovery pass {} ({}){}\n", pass.name(), pass as u32,
                if ratelimit { " - ratelimiting" } else { "" });
 
-        if !ratelimit && pass.when() & c::PASS_ONLINE != 0 {
+        if !ratelimit && pass.when().intersects(PassFlags::ONLINE) {
             run_async(fs);
         }
     }
@@ -817,7 +803,7 @@ pub fn require(fs: &Fs, out: &mut Printbuf, pass: Pass) -> Result<(), BchError> 
 }
 
 #[c_export]
-pub fn bch2_run_explicit_recovery_pass(c: &Opaque<Fs>, out: &mut Printbuf, pass: c::bch_recovery_pass,
+pub fn bch2_run_explicit_recovery_pass(c: &Opaque<Fs>, out: &mut Printbuf, pass: RecoveryPass,
                                        flags: c::bch_run_recovery_pass_flags) -> c_int {
     ret_to_c(run_explicit(Fs::from_c(c), out, pass, flags))
 }
@@ -843,7 +829,7 @@ fn failing_pass_backoff(r: &Runner, pass: usize) -> u32 {
 }
 
 fn run_pass(fs: &Fs, pass: Pass) -> Result<(), BchError> {
-    let silent = pass.when() & c::PASS_SILENT != 0;
+    let silent = pass.when().intersects(PassFlags::SILENT);
     if !silent {
         log_start(fs, LogLevel::INFO, message!("{}...", pass.name()));
     }
@@ -914,7 +900,7 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
     let mut r = lock(fs);
 
     if fs.sb.features.get() & 1 << SbFeature::no_alloc_info.0 != 0 {
-        passes &= !passes_match(c::PASS_ALLOC);
+        passes &= !passes_match(PassFlags::ALLOC);
     }
 
     /*
@@ -991,7 +977,7 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
         }
 
         // the point it waits for - see bch2_reconcile_thread()
-        let resume_logged_ops_early = Pass::BCH_RECOVERY_PASS_resume_logged_ops_early;
+        let resume_logged_ops_early = Pass::resume_logged_ops_early;
         if prev <= resume_logged_ops_early && pass > resume_logged_ops_early {
             fs.reconcile_wakeup();
         }
@@ -1025,7 +1011,7 @@ pub(crate) fn async_runner(recovery: &c::bch_fs_recovery) {
     };
 
     let ratelimiting = lock(fs).passes_ratelimiting;
-    let passes = (required | recovery.runner.scheduled_passes_ephemeral.get()) & !ratelimiting & passes_match(c::PASS_ONLINE);
+    let passes = (required | recovery.runner.scheduled_passes_ephemeral.get()) & !ratelimiting & passes_match(PassFlags::ONLINE);
     let _ = run_passes(fs, passes, false);
 }
 
@@ -1052,7 +1038,7 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
      * We can't allow set_may_go_rw to be excluded; that would cause us to
      * use the journal replay keys for updates where it's not expected.
      */
-    *fs.opts_writer(&mut fs.sb_lock()).recovery_passes_exclude.place() &= !bit(Pass::BCH_RECOVERY_PASS_set_may_go_rw);
+    *fs.opts_writer(&mut fs.sb_lock()).recovery_passes_exclude.place() &= !bit(Pass::set_may_go_rw);
     let opts = fs.opts();
 
     lock(fs).published().scheduled_passes_ephemeral.set(opts.recovery_passes.get());
@@ -1065,8 +1051,8 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
      * at it rather than fix it, where check_allocations rebuilding the world
      * before the first command is the opposite of what was asked for.
      */
-    let mut passes = passes_match(c::PASS_ALWAYS)
-        | if fs.sb.clean.get() == 0 { passes_match(c::PASS_UNCLEAN) } else { 0 }
+    let mut passes = passes_match(PassFlags::ALWAYS)
+        | if fs.sb.clean.get() == 0 { passes_match(PassFlags::UNCLEAN) } else { 0 }
         | if opts.fsck.get() != 0 { fsck_passes() } else { 0 }
         | opts.recovery_passes.get()
         | if opts.recovery_passes_skip_scheduled.get() == 0 { fs.sb.recovery_passes_required.get() } else { 0 };
@@ -1091,7 +1077,7 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
         for i in 0..NR {
             if passes & 1 << i != 0 &&
                opts.recovery_passes.get() & 1 << i == 0 &&
-               WHEN[i] & c::PASS_NODEFER == 0 &&
+               !Pass::from_bits(i as u32).when().intersects(PassFlags::NODEFER) &&
                should_defer(i, passes) {
                 defer |= 1 << i;
                 passes &= !(1 << i);
@@ -1210,7 +1196,7 @@ mod tests {
         let all = u64::MAX >> (64 - NR);
         assert_eq!(passes_from_stable(passes_to_stable(all)), all);
 
-        let check_topology = Pass::BCH_RECOVERY_PASS_check_topology;
-        assert_eq!((check_topology.to_stable().0, check_topology.name()), (4, "check_topology"));
+        let check_topology = Pass::check_topology;
+        assert_eq!((check_topology.stable().0, check_topology.name()), (4, "check_topology"));
     }
 }

@@ -13,6 +13,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::init::passes::RecoveryPass;
 use crate::fs::Dev;
 use crate::accounting::ReconcileType;
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
@@ -209,7 +210,7 @@ fn stripe_refcount_saturated(fs: &Fs, bucket: Bpos, stripe: u64, overflow: bool)
          if overflow { "overflow" } else { "underflow" }, { bucket.inode }, { bucket.offset },
          if overflow { "adding ref to" } else { "dropping ref to" });
 
-    let _ = passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_alloc_info,
+    let _ = passes::run_explicit(fs, &mut msg, RecoveryPass::check_alloc_info,
                                  c::bch_run_recovery_pass_flags::from_bits_retain(0));
 }
 
@@ -272,8 +273,8 @@ fn mark_stripe_bucket_alloc(t: &TransAttempt<'_, '_>, ca: &Dev, s: StripeK<'_>, 
             prt!(&mut msg, "stripe_refcount {} but dirty_sectors {}\n", a.stripe_refcount, a.dirty_sectors);
 
             let flags = c::bch_run_recovery_pass_flags::from_bits_retain(0);
-            let _ = passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_allocations, flags);
-            let _ = passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_alloc_info, flags);
+            let _ = passes::run_explicit(fs, &mut msg, RecoveryPass::check_allocations, flags);
+            let _ = passes::run_explicit(fs, &mut msg, RecoveryPass::check_alloc_info, flags);
 
             // so the bucket isn't reused until it's repaired
             a.stripe_refcount = a.stripe_refcount.max(1);

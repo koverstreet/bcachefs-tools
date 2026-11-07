@@ -50,6 +50,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::init::passes::RecoveryPass;
 use crate::accounting::ReconcileType;
 use crate::accounting;
 use crate::alloc::capacity::DiskReservation;
@@ -962,7 +963,7 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
     // snapshot_is_ancestor() is available - and until the logged ops we could
     // start ourselves (stripe creation) have been resumed, or recovery would
     // resume ours while we're running them.
-    let ready = || fs.recovery.runner.pass_done.get() > c::bch_recovery_pass::BCH_RECOVERY_PASS_resume_logged_ops_early;
+    let ready = || fs.recovery.runner.pass_done.get() > RecoveryPass::resume_logged_ops_early;
     let _ = sleep_until(Sleep::INTERRUPTIBLE.freezable(), || (ready() || Kthread::should_stop()).then_some(()));
     if Kthread::should_stop() {
         return Ok(());

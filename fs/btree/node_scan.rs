@@ -5,6 +5,7 @@ use core::ffi::{c_int, c_uint};
 use core::mem::{offset_of, replace, size_of};
 use core::ptr::NonNull;
 
+use crate::init::passes::RecoveryPass;
 use crate::data_structures::array_vec::ArrayVec;
 use cstruct_macros::c_export;
 
@@ -475,7 +476,7 @@ pub fn bch2_btree_node_is_stale(c: &Opaque<Fs>, b: &BtreeNode) -> bool {
 }
 
 fn run_scan(fs: &Fs, out: &mut Printbuf) -> Result<(), BchError> {
-    passes::run_explicit(fs, out, c::bch_recovery_pass::BCH_RECOVERY_PASS_scan_for_btree_nodes,
+    passes::run_explicit(fs, out, RecoveryPass::scan_for_btree_nodes,
                          c::bch_run_recovery_pass_flags::empty())
 }
 
