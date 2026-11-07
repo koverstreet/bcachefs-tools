@@ -103,6 +103,11 @@ impl<const N: usize> IoFailures<N> {
         self.dev_mut(dev).errcode = err as i16;
     }
 
+    /// @dev's bio's error: its bi_status, as our errcode, thrown.
+    pub fn set_blk_status(&mut self, fs: &Fs, dev: u32, status: u8) {
+        self.set_errcode(dev, -fs.err(crate::errcode::blk_status_to_bch_err(status)).raw());
+    }
+
     /// Record @err, reading @p: a failed reconstruct, a checksum error - those
     /// counted, retried until checksum_err_retry_nr - or an io error.
     /// bch2_mark_io_failure().

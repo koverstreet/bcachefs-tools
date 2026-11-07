@@ -1293,7 +1293,7 @@ pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
 
     if unlikely(status != 0) {
         let _g = Locked::from_c(&fs.write_error_lock).lock();
-        op.failed.set_errcode(wbio.wbio.dev.into(), -fs.err(crate::errcode::blk_status_to_bch_err(status)).raw());
+        op.failed.set_blk_status(fs, wbio.wbio.dev.into(), status);
         op.io_error = 1;
     }
 

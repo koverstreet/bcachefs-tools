@@ -26,7 +26,7 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::write::DevWriteRef;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, blk_status_to_bch_err, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
 use crate::format::DataType;
 use crate::fs::{Dev, Fs};
 use crate::journal::entries::EntryWriter;
@@ -738,7 +738,7 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
 
     if status != 0 {
         let _g = j.err_lock.lock();
-        w.failed.set_errcode(ca.dev_idx.into(), -fs.err(blk_status_to_bch_err(status)).raw());
+        w.failed.set_blk_status(fs, ca.dev_idx.into(), status);
         w.devs_written.drop(ca.dev_idx);
     }
 
@@ -759,7 +759,7 @@ unsafe extern "C" fn write_preflush_endio(bio: *mut c::bio) {
 
     if status != 0 {
         let _g = j.err_lock.lock();
-        w.flush_failed.set_errcode(ca.dev_idx.into(), -fs.err(blk_status_to_bch_err(status)).raw());
+        w.flush_failed.set_blk_status(fs, ca.dev_idx.into(), status);
         w.devs_written.drop(ca.dev_idx);
     }
 
