@@ -608,13 +608,13 @@ drop_this_key:
 				     next_good_key++)
 					if (bkey_packed_valid(c, b, i, (void *) ((u64 *) k + next_good_key)))
 						goto got_good_key;
-			}
 
-			/*
-			 * didn't find a good key, have to truncate the rest of
-			 * the bset
-			 */
-			next_good_key = (u64 *) vstruct_last(i) - (u64 *) k;
+				/*
+				 * didn't find a good key, have to truncate the rest of
+				 * the bset
+				 */
+				next_good_key = (u64 *) vstruct_last(i) - (u64 *) k;
+			}
 		}
 got_good_key:
 		le16_add_cpu(&i->u64s, -next_good_key);
