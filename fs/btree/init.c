@@ -367,7 +367,6 @@ void bch2_fs_btree_init_early(struct bch_fs *c)
 	bch2_fs_btree_cache_init_early(&c->btree.cache);
 	bch2_fs_btree_interior_update_init_early(c);
 	bch2_fs_btree_iter_init_early(c);
-	bch2_fs_btree_write_buffer_init_early(c);
 }
 
 int bch2_fs_btree_init(struct bch_fs *c)

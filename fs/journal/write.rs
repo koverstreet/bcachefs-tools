@@ -14,7 +14,7 @@ use cstruct_macros::c_extern;
 use crate::alloc::disk_groups::Target;
 use crate::alloc::replicas::DevlistEntry;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{BkeyI, BkeySC, ValidateFlags};
+use crate::btree::bkey::{BkeySC, ValidateFlags};
 use crate::btree::interior::btree_roots_to_journal_entries;
 use crate::btree::write_buffer;
 use crate::c;
@@ -893,14 +893,14 @@ pub(crate) const PREP_ENTRIES_U64S: usize =
 
 fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
     let fs = j.fs();
-    let mut wb = c::journal_keys_to_wb::default();
+    let mut wb = None;
     let mut btree_roots_have = 0u64;
     let seq = w.seq();
 
     let mut empty = w.head().seq.get() == w.head().last_seq.get();
 
     if w.bits.need_flush_to_write_buffer() {
-        write_buffer::keys_to_write_buffer_start(fs, &mut wb, seq);
+        wb = Some(write_buffer::Intake::start(fs, seq));
 
         /*
          * need_flush_to_write_buffer must be cleared under the write buffer's
@@ -950,21 +950,17 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
             unsafe { bch2_journal_entry_to_btree_root(fs.as_ptr(), ptr::from_mut(i).cast()) };
             btree_roots_have |= 1 << i.btree_id;
         } else if ty == c::bch_jset_entry_type::write_buffer_keys {
-            let btree = crate::format::Btree(i.btree_id.into());
-            for k in i.entries_mut() {
-                let Ok(mut k) = k else { break };
-                if let Err(e) = unsafe { wb.key_to_wb(fs, btree, &*BkeyI::from_raw(k.as_mut_ptr())) } {
-                    crate::fs_fatal_error!(fs, "flushing journal keys to btree write buffer: {}", e.msg());
-                    let _ = write_buffer::keys_to_write_buffer_end(fs, &mut wb);
-                    return Err(e);
-                }
+            let intake = wb.as_mut().expect("write buffer keys in a journal entry not flushing to the write buffer");
+            if let Err(e) = intake.entry(i) {
+                crate::fs_fatal_error!(fs, "flushing journal keys to btree write buffer: {}", e.msg());
+                let _ = wb.take().map(write_buffer::Intake::end);
+                return Err(e);
             }
-            i.type_ = c::bch_jset_entry_type::btree_keys.0 as u8;
         }
     }
 
-    if wb.seq != 0 {
-        if let Err(e) = write_buffer::keys_to_write_buffer_end(fs, &mut wb) {
+    if let Some(wb) = wb {
+        if let Err(e) = wb.end() {
             crate::fs_fatal_error!(fs, "error flushing journal keys to btree write buffer: {}", e.msg());
             return Err(e);
         }

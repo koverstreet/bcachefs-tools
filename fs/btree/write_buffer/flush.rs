@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::{insert_checks, journal_flush, key_idxs, key_seq, next_key, resize_gfp, wb_btree_to_btree, WbKey,
-            WB_RESIZE_GFP};
+use super::keys::{Shard, WbKeyMut};
+use super::{insert_checks, resize_gfp, wb_btree_to_btree, Buf, Flushing, FlushingGuard, IncGuard, WB_RESIZE_GFP};
 use crate::accounting;
 use crate::alloc::accounting_mem;
 use crate::btree::bkey::{BkeySC, BKEY_U64S, POS_MIN};
@@ -13,16 +13,15 @@ use crate::btree::path::BtreePath;
 use crate::c;
 use crate::c::bch_fs_flags as Flag;
 use crate::c::journal_flags as Journal;
-use crate::c::journal_pin_type::JOURNAL_PIN_TYPE_other;
 use crate::debug::trace::events;
 use crate::errcode::{bch_errcode, BchError};
 use crate::format::{BkeyType, Bpos, Btree};
-use crate::locking::{MemallocFlags, RawLock, RawTryLock};
+use crate::locking::MemallocFlags;
 use crate::data_structures::sort::heapsort_by_lt;
 use crate::util::alloc::KVVec;
-use crate::util::kernel::{local_clock, num_online_cpus, prefetch, race_fault};
+use crate::util::kernel::{local_clock, num_online_cpus, race_fault};
 use crate::util::par::{self, Backend};
-use crate::util::projections::Volatile;
+use crate::util::projections::VolatileWriter;
 use crate::util::time_stats::TimeStats;
 use crate::{btree_trans, fs_fatal_error, prt};
 use core::mem::size_of;
@@ -34,17 +33,6 @@ c_extern! {
     pub fn bch2_btree_node_prep_for_write(trans: *mut BtreeTrans<'_>, path: *mut BtreePath, b: *mut BtreeNode);
     pub fn bch2_btree_insert_key_leaf(trans: *mut BtreeTrans<'_>, path: *mut BtreePath, insert: *mut c::bkey_i,
                                       journal_seq: u64);
-}
-
-impl c::wb_key_ref {
-    fn idx(&self) -> usize {
-        unsafe { self.key.pos_idx.idx as usize }
-    }
-
-    fn words(&self) -> (u64, u64, u64) {
-        let w = unsafe { self.key.words };
-        (w.hi, w.mi, w.lo)
-    }
 }
 
 /*
@@ -77,22 +65,24 @@ struct FlushCounters {
     slowpath: usize,
 }
 
-/// # Safety
-/// @wb's inc.lock and flushing.lock are held.
-pub(super) unsafe fn move_keys_from_inc_to_flushing(wb: &c::bch_fs_btree_write_buffer) {
+pub(super) fn move_keys_from_inc_to_flushing(wb: &c::bch_fs_btree_write_buffer, inc: &mut IncGuard<'_>,
+                                             flushing: &mut FlushingGuard<'_>) {
     let fs = wb.fs();
     let j = &fs.journal;
-    let (inc, flushing, sorted) = unsafe { (wb.inc.keys_mut(), wb.flushing.keys_mut(), wb.sorted_mut()) };
+    let (inc, inc_live) = inc.parts();
+    let (Flushing { keys: flushing, sorted }, live) = flushing.parts();
 
-    if inc.is_empty() {
+    if inc.keys.is_empty() {
         return;
     }
+    let inc = &mut inc.keys;
 
-    j.pin_add(key_seq(inc, 0), &wb.flushing.pin, JOURNAL_PIN_TYPE_other, Some(journal_flush));
+    wb.pin_add(Buf::Flushing, inc.seq(0));
 
     /* Best-effort resizes; may fail under memory pressure - see WB_RESIZE_GFP */
-    let _ = resize_gfp(flushing, (1 << 20).min(flushing.len() + inc.len()), WB_RESIZE_GFP);
+    let _ = flushing.resize(&live.keys, (1 << 20).min(flushing.len() + inc.len()), WB_RESIZE_GFP);
     let _ = resize_gfp(sorted, flushing.capacity(), WB_RESIZE_GFP);
+    live.sorted.set(sorted.len(), sorted.capacity());
 
     /*
      * Each sorted entry references one key, and each key is at least
@@ -104,25 +94,13 @@ pub(super) unsafe fn move_keys_from_inc_to_flushing(wb: &c::bch_fs_btree_write_b
 
     if flushing.is_empty() && sorted_can_address >= inc.len() {
         /* Fast path: flushing is empty, just swap the buffers */
-        core::mem::swap(flushing, inc);
+        flushing.swap(&live.keys, inc, inc_live);
     } else if flushing.len() + inc.len() <= room {
         /* All of inc fits: bulk copy */
-        flushing.extend_from_slice(inc).expect("room checked");
-        inc.clear();
+        flushing.append(&live.keys, inc, inc_live);
     } else {
         /* Partial copy: move as many keys as will fit */
-        let mut i = 0;
-        while i < inc.len() {
-            let next = next_key(inc, i);
-            if flushing.len() + (next - i) <= room {
-                flushing.extend_from_slice(&inc[i..next]).expect("room checked");
-                i = next;
-            } else {
-                inc.copy_within(i.., 0);
-                inc.truncate(inc.len() - i);
-                break;
-            }
-        }
+        flushing.move_from(&live.keys, inc, inc_live, room);
     }
 
     /*
@@ -132,20 +110,22 @@ pub(super) unsafe fn move_keys_from_inc_to_flushing(wb: &c::bch_fs_btree_write_b
     fence(core::sync::atomic::Ordering::Release);
 
     if inc.is_empty() {
-        j.pin_drop(&wb.inc.pin);
+        wb.pin_drop(Buf::Inc);
     } else {
-        j.pin_update(key_seq(inc, 0), &wb.inc.pin, JOURNAL_PIN_TYPE_other, Some(journal_flush));
+        wb.pin_update(Buf::Inc, inc.seq(0));
     }
 
     if j.flags.get(Journal::low_on_wb) && !fs.btree_write_buffer_must_wait() {
         j.set_watermark(&mut j.lock.lock());
     }
 
-    assert!(wb.sorted.capacity() * BKEY_U64S >= wb.flushing.keys.len());
+    assert!(sorted.capacity() * BKEY_U64S >= flushing.len());
 }
 
 #[inline(never)]
-fn flush_one_slowpath<'a>(t: &TransAttempt<'a, 'a>, iter: &BtreeIter<'a>, wb: &mut WbKey<'_>) -> Result<(), BchError> {
+fn flush_one_slowpath<'a>(t: &TransAttempt<'a, 'a>, iter: &BtreeIter<'a>, wb: &mut WbKeyMut<'_>)
+    -> Result<(), BchError>
+{
     let trans = t.trans();
 
     trans.node_unlock_write(&mut trans.paths(), iter.path, 0);
@@ -167,7 +147,7 @@ fn flush_one<'a>(
     t:                      &TransAttempt<'a, 'a>,
     wbb:                    &c::bch_fs_btree_write_buffer,
     iter:                   &mut BtreeIter<'a>,
-    wb:                     &mut WbKey<'_>,
+    wb:                     &mut WbKeyMut<'_>,
     write_locked:           &mut bool,
     accounting_accumulated: &mut bool,
     cnt:                    &mut FlushCounters,
@@ -176,8 +156,8 @@ fn flush_one<'a>(
     let fs = trans.fs();
 
     ebug_assert!(wb.seq() != 0);
-    ebug_assert!(wbb.flushing.pin.seq() != 0);
-    ebug_assert!(wbb.flushing.pin.seq() <= wb.seq());
+    ebug_assert!(wbb.pin(Buf::Flushing).seq() != 0);
+    ebug_assert!(wbb.pin(Buf::Flushing).seq() <= wb.seq());
 
     iter.traverse(t)?;
 
@@ -255,7 +235,9 @@ fn flush_one<'a>(
  * before the current transaction. If we were to journal this key again and
  * crash, recovery would process updates in the wrong order.
  */
-fn btree_write_buffered_insert(t: &TransAttempt<'_, '_>, btree: Btree, wb: &mut WbKey<'_>) -> Result<(), BchError> {
+fn btree_write_buffered_insert(t: &TransAttempt<'_, '_>, btree: Btree, wb: &mut WbKeyMut<'_>)
+    -> Result<(), BchError>
+{
     let mut iter = BtreeIter::new(t, btree, wb.k().k.start_pos(), BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
 
     t.set_journal_seq_to_pin(wb.seq());
@@ -263,17 +245,6 @@ fn btree_write_buffered_insert(t: &TransAttempt<'_, '_>, btree: Btree, wb: &mut 
     iter.traverse(t)?;
     t.update(&iter, &t.bkey_copy(wb.k())?, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
-
-/// The flushing keys and their sorted refs, as a flush has them: shared by
-/// its shards, each writing only the keys its own refs refer to.
-#[derive(Clone, Copy)]
-struct Sorted<'a> {
-    refs:    &'a [c::wb_key_ref],
-    keys:    *mut u64,
-    nr_keys: usize,
-}
-
-unsafe impl Send for Sorted<'_> {}
 
 /*
  * Flush a contiguous slice of wb->sorted ([start, end)) via the fastpath.
@@ -290,14 +261,12 @@ unsafe impl Send for Sorted<'_> {}
 fn flush_sorted_range(
     trans:                  &BtreeTrans<'_>,
     wb:                     &c::bch_fs_btree_write_buffer,
-    sorted:                 Sorted<'_>,
-    start:                  usize,
-    end:                    usize,
+    mut shard:              Shard<'_>,
     accounting_replay_done: bool,
     cnt:                    &mut FlushCounters,
 ) -> Result<(), BchError> {
     let fs = trans.fs();
-    let btree = wb_btree_to_btree(wb.idx);
+    let btree = wb_btree_to_btree(wb.wb_btree());
     let mut write_locked = false;
     let mut ret = Ok(());
 
@@ -305,21 +274,17 @@ fn flush_sorted_range(
 
     let mut iter = BtreeIter::new(trans, btree, POS_MIN, BtreeIterFlags::INTENT | BtreeIterFlags::ALL_SNAPSHOTS);
 
-    for i in start..end {
-        let idx = sorted.refs[i].idx();
-        if idx + BKEY_U64S > sorted.nr_keys {
-            panic!("at {}/{} of wb->sorted got idx {}/{}", i, sorted.refs.len(), idx, sorted.nr_keys);
+    let range = shard.range();
+    for i in range.clone() {
+        for n in i + 1..(i + 4).min(range.end) {
+            shard.prefetch(n);
         }
 
-        let mut k = unsafe { WbKey::at(sorted.keys, idx) };
+        let mut k = shard.key(i);
 
         ret = insert_checks(fs, btree, k.k());
         if ret.is_err() {
             break;
-        }
-
-        for n in &sorted.refs[i + 1..(i + 4).min(end)] {
-            prefetch(sorted.keys.wrapping_add(n.idx()));
         }
 
         assert!(k.seq() != 0);
@@ -391,68 +356,61 @@ fn flush_n_shards(n_keys: usize) -> usize {
 fn flush_sorted_sharded(
     trans:                  &BtreeTrans<'_>,
     wb:                     &c::bch_fs_btree_write_buffer,
-    sorted:                 Sorted<'_>,
+    mut sorted:             Shard<'_>,
+    shards_total:           &VolatileWriter<u64>,
     accounting_replay_done: bool,
     cnt:                    &mut FlushCounters,
 ) -> Result<(), BchError> {
     let fs = trans.fs();
-    let n_keys = sorted.refs.len();
-    let n_shards = flush_n_shards(n_keys);
+    let n_shards = flush_n_shards(sorted.range().len());
 
-    wb.nr_shards_total.set(wb.nr_shards_total.get() + n_shards as u64);
+    *shards_total.place() += n_shards as u64;
 
-    if n_shards <= 1 {
-        return flush_sorted_range(trans, wb, sorted, 0, n_keys, accounting_replay_done, cnt);
-    }
+    let cnts = if n_shards > 1 { KVVec::from_elem(FlushCounters::default(), n_shards).ok() } else { None };
 
-    let Ok(mut shards) = KVVec::from_elem(FlushCounters::default(), n_shards) else {
-        /* OOM: fall back to single-shard inline path. */
-        return flush_sorted_range(trans, wb, sorted, 0, n_keys, accounting_replay_done, cnt);
-    };
+    if let Some(mut cnts) = cnts {
+        let wb_idx = wb.idx.get() as usize;
+        let mut spawn_failed = false;
+        let ret = par::scope(Backend::Workqueue(&fs.btree.write_buffer_shard_wq), |sc| {
+            for (shard, cnt) in sorted.split(n_shards).zip(cnts.iter_mut()) {
+                let queued_time = local_clock();
 
-    let wb_idx = wb.idx as usize;
-    let mut spawn_failed = false;
-    let ret = par::scope(Backend::Workqueue(&fs.btree.write_buffer_shard_wq), |sc| {
-        for (i, shard) in shards.iter_mut().enumerate() {
-            let (start, end) = ((n_keys * i) / n_shards, (n_keys * (i + 1)) / n_shards);
-            let queued_time = local_clock();
+                sc.spawn(format_args!("btree_write_buffer_flush_shard"), move || {
+                    let trans = btree_trans!(fs);
+                    let wb = &fs.btree.write_buffer[wb_idx];
 
-            sc.spawn(format_args!("btree_write_buffer_flush_shard"), move || {
-                let trans = btree_trans!(fs);
-                let wb = &fs.btree.write_buffer[wb_idx];
+                    let work_start = local_clock();
+                    fs.times[c::bch_time_stats::btree_write_buffer_flush_shard_sched_delay as usize]
+                        .update(queued_time);
 
-                let work_start = local_clock();
-                fs.times[c::bch_time_stats::btree_write_buffer_flush_shard_sched_delay as usize].update(queued_time);
+                    let ret = flush_sorted_range(&trans, wb, shard, accounting_replay_done, cnt);
 
-                let ret = flush_sorted_range(&trans, wb, sorted, start, end, accounting_replay_done, shard);
+                    fs.times[c::bch_time_stats::btree_write_buffer_flush_shard_work as usize].update(work_start);
+                    ret
+                }).inspect_err(|_| spawn_failed = true)?;
+            }
+            Ok(())
+        });
 
-                fs.times[c::bch_time_stats::btree_write_buffer_flush_shard_work as usize].update(work_start);
-                ret
-            }).inspect_err(|_| spawn_failed = true)?;
+        if !spawn_failed {
+            for s in cnts.iter() {
+                cnt.fast     += s.fast;
+                cnt.noop     += s.noop;
+                cnt.slowpath += s.slowpath;
+            }
+            return ret;
         }
-        Ok(())
-    });
-
-    if spawn_failed {
-        return flush_sorted_range(trans, wb, sorted, 0, n_keys, accounting_replay_done, cnt);
     }
 
-    for s in shards.iter() {
-        cnt.fast     += s.fast;
-        cnt.noop     += s.noop;
-        cnt.slowpath += s.slowpath;
-    }
-
-    ret
+    /* One shard, or OOM: the single-shard inline path. */
+    flush_sorted_range(trans, wb, sorted, accounting_replay_done, cnt)
 }
 
-/// # Safety
-/// @wb's flushing.lock is held.
-pub(super) unsafe fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_buffer,
-                                  caller: c::wb_flush_caller) -> Result<(), BchError> {
+pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_buffer, g: &mut FlushingGuard<'_>,
+                           caller: c::wb_flush_caller) -> Result<(), BchError> {
     let fs = trans.fs();
     let j = &fs.journal;
-    let btree = wb_btree_to_btree(wb.idx);
+    let btree = wb_btree_to_btree(wb.wb_btree());
     let mut cnt = FlushCounters::default();
     let mut could_not_insert = 0;
     let accounting_replay_done = fs.flags.get(Flag::accounting_replay_done);
@@ -467,38 +425,29 @@ pub(super) unsafe fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_w
 
     j.error()?;
 
-    unsafe {
-        if wb.flushing.keys.is_empty() {
-            wb.inc.lock.lock();
-            move_keys_from_inc_to_flushing(wb);
-            wb.inc.lock.unlock(());
-        } else if wb.inc.lock.try_lock().is_some() {
-            move_keys_from_inc_to_flushing(wb);
-            wb.inc.lock.unlock(());
-        }
+    if g.keys.is_empty() {
+        move_keys_from_inc_to_flushing(wb, &mut wb.inc.lock(), g);
+    } else if let Some(mut inc) = wb.inc.try_lock() {
+        move_keys_from_inc_to_flushing(wb, &mut inc, g);
     }
 
-    if wb.flushing.keys.is_empty() {
+    if g.keys.is_empty() {
         return Ok(());
     }
 
     let start_time = local_clock();
-    let nr_flushing = wb.flushing.keys.len();
+    let nr_flushing = g.keys.len();
 
-    let (keys, sorted) = unsafe { (wb.flushing.keys_mut(), wb.sorted_mut()) };
-    let base = keys.as_mut_ptr();
-    let key = |idx| unsafe { WbKey::at(base, idx) };
+    let (Flushing { keys, sorted }, live) = g.parts();
 
-    for i in key_idxs(keys) {
-        assert!(key_seq(keys, i) <= fs.journal_cur_seq());
-    }
+    assert!(keys.idxs().all(|i| keys.seq(i) <= fs.journal_cur_seq()));
 
     sorted.clear();
-    for i in key_idxs(keys) {
+    for i in keys.idxs() {
         let mut r = c::wb_key_ref::default();
         unsafe {
             r.key.pos_idx.idx = i as u32;
-            r.key.pos_idx.pos = core::mem::transmute::<Bpos, [u8; size_of::<Bpos>()]>(key(i).k().k.p);
+            r.key.pos_idx.pos = core::mem::transmute::<Bpos, [u8; size_of::<Bpos>()]>(keys.key(i).k.p);
         }
 
         if sorted.push_within_capacity(r).is_err() {
@@ -547,40 +496,33 @@ pub(super) unsafe fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_w
      * entirely; shards see a slice with at most one entry per pos and
      * don't need to depend on sort-order semantics.
      */
-    {
-        let mut dst = 0;
-
-        for src in 0..sorted.len() {
-            if src + 1 < sorted.len() && wb_key_eq(&sorted[src], &sorted[src + 1]) {
-                let mut k = key(sorted[src].idx());
-                let mut n = key(sorted[src + 1].idx());
-
-                /* Accounting: accumulate older delta into newer entry. */
-                if k.k().k.key_type() == BkeyType::accounting &&
-                    n.k().k.key_type() == BkeyType::accounting {
-                    accounting::accumulate(n.k_mut(), BkeySC::from(k.k()));
-                    n.set_seq(n.seq().min(k.seq()));
-                }
-                /* Drop older entry; newer (src + 1) wins. */
-                k.set_seq(0);
-                continue;
-            }
-            sorted[dst] = sorted[src];
-            dst += 1;
+    sorted.dedup_by(|newer, older| {
+        if !wb_key_eq(newer, older) {
+            return false;
         }
-        sorted.truncate(dst);
-    }
+        let (mut k, mut n) = keys.pair_mut(older.idx(), newer.idx());
+
+        /* Accounting: accumulate older delta into newer entry. */
+        if k.k().k.key_type() == BkeyType::accounting &&
+            n.k().k.key_type() == BkeyType::accounting {
+            accounting::accumulate(n.k_mut(), BkeySC::from(k.k()));
+            n.set_seq(n.seq().min(k.seq()));
+        }
+        /* Drop older entry; newer wins. */
+        k.set_seq(0);
+        *older = *newer;
+        true
+    });
+    live.sorted.set(sorted.len(), sorted.capacity());
 
     let ret = 'err: {
-        let s = Sorted { refs: sorted, keys: base, nr_keys: keys.len() };
-        if let Err(e) = flush_sorted_sharded(trans, wb, s, accounting_replay_done, &mut cnt) {
+        let s = unsafe { Shard::new(keys, sorted) };
+        if let Err(e) = flush_sorted_sharded(trans, wb, s, &live.nr_shards_total, accounting_replay_done, &mut cnt) {
             break 'err Err(e);
         }
 
         if cnt.slowpath != 0 {
-            for i in key_idxs(keys) {
-                assert!(key_seq(keys, i) <= fs.journal_cur_seq());
-            }
+            assert!(keys.idxs().all(|i| keys.seq(i) <= fs.journal_cur_seq()));
 
             /*
              * Flush in the order they were present in the journal, so that
@@ -592,10 +534,10 @@ pub(super) unsafe fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_w
                 prt!(out, "{}/{}", cnt.slowpath, keys.len())
             });
 
-            heapsort_by_lt(sorted, |l, r| key_seq(keys, l.idx()) < key_seq(keys, r.idx()));
+            heapsort_by_lt(sorted, |l, r| keys.seq(l.idx()) < keys.seq(r.idx()));
 
             for r in sorted.iter() {
-                let mut k = key(r.idx());
+                let mut k = keys.get_mut(r.idx());
                 if k.seq() == 0 {
                     continue;
                 }
@@ -609,7 +551,7 @@ pub(super) unsafe fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_w
                 }
 
                 if could_not_insert == 0 {
-                    j.pin_update(k.seq(), &wb.flushing.pin, JOURNAL_PIN_TYPE_other, Some(journal_flush));
+                    wb.pin_update(Buf::Flushing, k.seq());
                 }
 
                 let ret = commit_do(trans, None,
@@ -646,25 +588,15 @@ pub(super) unsafe fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_w
              * distinct counters touched somehow was very large.
              */
             if could_not_insert != 0 {
-                let (mut i, mut dst) = (0, 0);
-
-                while i < keys.len() {
-                    let next = next_key(keys, i);
-                    if key_seq(keys, i) != 0 {
-                        keys.copy_within(i..next, dst);
-                        dst += next - i;
-                    }
-                    i = next;
-                }
-                keys.truncate(dst);
+                keys.retain_unflushed(&live.keys);
             }
         }
         Ok(())
     };
 
     if ret.is_err() || could_not_insert == 0 {
-        j.pin_drop(&wb.flushing.pin);
-        keys.clear();
+        wb.pin_drop(Buf::Flushing);
+        keys.clear(&live.keys);
     }
 
     if let Err(e) = ret {
@@ -673,12 +605,11 @@ pub(super) unsafe fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_w
 
     fs.times[c::bch_time_stats::btree_write_buffer_flush as usize].update(start_time);
 
-    let add = |v: &Volatile<u64>, n: usize| v.set(v.get() + n as u64);
-    add(&wb.nr_flushes, 1);
-    add(&wb.nr_flushes_caller[caller as usize], 1);
-    add(&wb.nr_keys_flushed, nr_flushing);
-    add(&wb.nr_keys_fast, cnt.fast);
-    add(&wb.nr_keys_slowpath, cnt.slowpath);
+    *live.nr_flushes.place()                     += 1;
+    *live.nr_flushes_caller[caller as usize].place() += 1;
+    *live.nr_keys_flushed.place()                += nr_flushing as u64;
+    *live.nr_keys_fast.place()                   += cnt.fast as u64;
+    *live.nr_keys_slowpath.place()               += cnt.slowpath as u64;
 
     fs.event_inc_trace(events::write_buffer_flush, |out| {
         prt!(out, "flushed {} fast {} noop {}", nr_flushing, cnt.fast, cnt.noop)

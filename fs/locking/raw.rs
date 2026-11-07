@@ -110,16 +110,13 @@ c_extern! {
 pub type LockCmpFn = unsafe extern "C" fn(a: *const kernel::bindings::lockdep_map,
                                           b: *const kernel::bindings::lockdep_map) -> c_int;
 
-/// Lockdep's order among mutexes of one class held at once, @cmp's:
-/// lock_set_cmp_fn().
-///
-/// # Safety
-/// @l is initialized, and not yet taken.
 #[cfg(all(kernel, CONFIG_PROVE_LOCKING))]
-pub unsafe fn mutex_set_cmp_fn(l: *mut c::mutex, cmp: LockCmpFn) {
-    unsafe {
-        kernel::bindings::lockdep_set_lock_cmp_fn(&raw mut (*l.cast::<kernel::bindings::mutex>()).dep_map,
-                                                  Some(cmp), None)
+impl<G, P> super::Locked<c::mutex, G, P> {
+    /// Lockdep's order among the mutexes of its class held at once, @cmp's:
+    /// lock_set_cmp_fn().
+    pub fn set_cmp_fn(&self, cmp: LockCmpFn) {
+        let l = core::ptr::from_ref(self.raw()).cast_mut().cast::<kernel::bindings::mutex>();
+        unsafe { kernel::bindings::lockdep_set_lock_cmp_fn(&raw mut (*l).dep_map, Some(cmp), None) }
     }
 }
 
