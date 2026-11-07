@@ -76,7 +76,6 @@ bcachefs-y		:=			\
 	data/ec/trigger.o			\
 	data/read.o				\
 	data_structures/darray.o		\
-	data_structures/eytzinger.o		\
 	debug/debug.o				\
 	debug/trace.o				\
 	errcode.o				\
