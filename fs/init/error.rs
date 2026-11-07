@@ -1055,11 +1055,6 @@ impl Fs {
     }
 }
 
-#[c_export]
-pub fn bch2_inconsistent_error(c: &Opaque<Fs>) -> bool {
-    Fs::from_c(c).inconsistent()
-}
-
 /// # Safety
 /// @trans is NULL, or in an attempt. For error.c's
 /// bch2_fs_inconsistent() and bch2_trans_inconsistent().

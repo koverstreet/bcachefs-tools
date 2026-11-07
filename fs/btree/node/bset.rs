@@ -800,13 +800,6 @@ pub fn bch2_bset_init_first(b: &BtreeNode, i: *mut Head<c::bset>) {
     keys.bset_init_first(offset);
 }
 
-#[c_export]
-pub fn bch2_bset_init_next(b: &BtreeNode, bne: *mut Head<c::btree_node_entry>) {
-    let mut keys = b.keys_mut(unsafe { b.contents_mut() });
-    let offset = keys.as_keys().offset_of(bne);
-    keys.bset_init_next(offset);
-}
-
 /// # Safety
 /// @insert a whole key.
 #[c_export]

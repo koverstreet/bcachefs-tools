@@ -21,7 +21,7 @@ use core::ffi::{c_int, c_uint};
 impl Bpos {
     /// Byte-swapped, as written by a machine of the other endianness: every
     /// byte reversed - a bpos's fields are in reverse order on big endian, so
-    /// that's each field swapped and the order flipped. bch2_bpos_swab().
+    /// that's each field swapped and the order flipped.
     pub fn swab(&mut self) {
         crate::util::vstructs::plain_bytes_mut(self).reverse();
     }

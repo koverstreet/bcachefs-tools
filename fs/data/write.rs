@@ -741,7 +741,6 @@ use c::{WritePointStateWriter, WritePointWrites};
 use core::fmt;
 use core::pin::Pin;
 use core::ptr::NonNull;
-use cstruct_macros::c_export;
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 crate::module_param! {
@@ -1017,19 +1016,6 @@ pub(crate) unsafe fn submit_wbio_replicas(wbio: &mut c::bch_write_bio, fs: &'sta
             unsafe { c::bio_endio(&raw mut n.bio) };
         }
     }
-}
-
-/// For btree/write.c: submit_wbio_replicas().
-///
-/// # Safety
-/// submit_wbio_replicas()'s.
-#[c_export]
-pub unsafe fn bch2_submit_wbio_replicas(wbio: &mut c::bch_write_bio, c: &Opaque<Fs>, ty: c::bch_data_type,
-                                        k: *const c::bkey_i) {
-    let k = unsafe { &*BkeyI::from_raw(k) };
-    // its bios are done before the filesystem goes, as a write op's are
-    let fs: &'static Fs = unsafe { &*core::ptr::from_ref(Fs::from_c(c)) };
-    unsafe { submit_wbio_replicas(wbio, fs, DataType(ty.0), k, None) }
 }
 
 extern "C" fn __write_done(mut op: Running<Op>) {
@@ -1562,7 +1548,6 @@ fn data_write_trace(out: &mut Printbuf, op: &Op) {
  * after the data is written it calls bch_journal, and after the keys have been
  * added to the next journal write they're inserted into the btree.
  */
-#[c_export]
 pub extern "C" fn bch2_write(mut op: Running<Op>) {
     let fs = op.fs();
     let sectors = u64::from(op.wbio.bio.bi_iter.bi_size >> 9);

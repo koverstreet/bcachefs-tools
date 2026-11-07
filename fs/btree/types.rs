@@ -439,8 +439,8 @@ nest! {
 
         pub(in crate::btree) pos: Bpos,
         /*
-         * Current unpacked key - so that bch2_btree_iter_next()/
-         * bch2_btree_iter_next_slot() can correctly advance pos.
+         * Current unpacked key - so that advancing the iterator can
+         * correctly advance pos.
          */
         pub(in crate::btree) k: cs::bkey,
 

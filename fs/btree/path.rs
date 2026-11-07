@@ -1444,7 +1444,6 @@ fn path_verify_level_err(path: &BtreePath, level: usize, keys: &Keys<'_>, p: Opt
 }
 
 /// A transaction's path table, as it starts: its own, embedded.
-#[c_export]
 pub fn bch2_trans_paths_init(trans: &BtreeTrans<'_>) {
     trans.nr_paths.set(cs::BTREE_ITER_INITIAL as PathIdx);
     trans.paths_allocated.set(trans._paths_allocated.as_ptr().cast());
@@ -1477,12 +1476,6 @@ pub fn bch2_trans_paths_init(trans: &BtreeTrans<'_>) {
     }
 }
 
-#[c_export]
-pub fn bch2_trans_paths_grow(_trans: &BtreeTrans<'_>, #[lent(_trans)] paths: &mut Paths<'_>) {
-    paths.grow()
-}
-
-#[c_export]
 pub fn bch2_trans_paths_exit(trans: &BtreeTrans<'_>) {
     let allocated = trans.paths_allocated.replace(ptr::null_mut());
     trans.paths.set(ptr::null_mut());
@@ -1550,16 +1543,6 @@ pub fn bch2_btree_path_to_text(out: &mut Printbuf, _trans: &BtreeTrans<'_>, path
 }
 
 #[c_export]
-pub fn bch2_trans_paths_to_text(out: &mut Printbuf, trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) {
-    trans.paths_to_text(out, paths)
-}
-
-#[c_export]
-pub fn bch2_dump_trans_paths_updates(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) {
-    trans.dump_paths_updates(paths)
-}
-
-#[c_export]
 pub fn __bch2_btree_trans_too_many_iters(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) -> c_int {
     trans.fs().event_inc_trace(events::trans_restart_too_many_iters, |out| {
         prt!(out, "{}\n", trans.fn_name());
@@ -1567,11 +1550,6 @@ pub fn __bch2_btree_trans_too_many_iters(trans: &BtreeTrans<'_>, #[lent(trans)] 
     });
 
     ret_to_c(Err::<(), _>(trans.restart(bch_errcode::BCH_ERR_transaction_restart_too_many_iters)))
-}
-
-#[c_export]
-pub fn __bch2_btree_path_verify(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: *mut BtreePath) {
-    trans.path_verify_now(paths, trans.path_idx_of(path))
 }
 
 #[c_export]

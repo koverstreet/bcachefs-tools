@@ -26,17 +26,14 @@ use crate::c;
 use crate::data::extents::Extents;
 use crate::data::keylist::KeyRoom;
 use crate::data::reflink;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
-use crate::util::ffi::Opaque;
 use crate::util::closure::StackClosure;
 use crate::util::kernel::WRITE;
 use crate::util::log::should_print_err;
 use crate::util::{max_of, Printbuf};
 use crate::{bch_err_fn, bch_err_ratelimited, inode, logged_ops};
-use core::ffi::c_int;
-use cstruct_macros::c_export;
 use pin_init::stack_pin_init;
 use crate::format::{Bpos, Btree, MetadataVersion, SbFeature};
 
@@ -226,19 +223,6 @@ pub fn fpunch(fs: &Fs, inum: c::subvol_inum, start: u64, end: u64, i_sectors_del
         Err(e) if is_restart(&e) => Ok(()),
         ret                      => ret,
     }
-}
-
-/// # Safety
-/// @i_sectors_delta is valid for the call.
-#[c_export]
-pub unsafe extern "C" fn bch2_fpunch(
-    c:               &Opaque<Fs>,
-    inum:            c::subvol_inum,
-    start:           u64,
-    end:             u64,
-    i_sectors_delta: *mut i64,
-) -> c_int {
-    ret_to_c(fpunch(Fs::from_c(c), inum, start, end, unsafe { &mut *i_sectors_delta }))
 }
 
 // ── truncate ─────────────────────────────────────────────────────────────

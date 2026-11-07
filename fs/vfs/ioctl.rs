@@ -198,8 +198,8 @@ fn reinherit_attrs(file: &File, dir: &InodeInfo, name: &OsStr) -> Result<c_long,
 
     lock.inherit_project(dir)?;
     lock.write_inode_if(0, |_, bi| Ok(reinherit(bi, &dir.inode())))?;
-    // C's "did work": always, as bch2_write_inode() returned 0 whether or
-    // not it wrote
+    // C's "did work": always, as C's inode write returned 0 whether or not
+    // it wrote
     Ok(1)
 }
 

@@ -358,24 +358,13 @@ fn unpack_error(fs: &Fs, k: BkeySC<'_>, u: &c::bch_inode_unpacked, fieldnr: usiz
     }
 }
 
-/// Unpack @k, an inode of any version (see bkey_is_inode()): as
-/// bch2_inode_unpack(). A field that doesn't decode is reported, and left
-/// zero with the fields after it.
+/// Unpack @k, an inode of any version (see bkey_is_inode()). A field that
+/// doesn't decode is reported, and left zero with the fields after it.
 pub fn unpack(fs: &Fs, k: BkeySC<'_>) -> c::bch_inode_unpacked {
     try_unpack(k).unwrap_or_else(|(u, fieldnr)| {
         unpack_error(fs, k, &u, fieldnr);
         u
     })
-}
-
-/// For C: bch2_inode_unpack().
-#[c_export]
-pub extern "C" fn bch2_inode_unpack(
-    c:        &Opaque<Fs>,
-    k:        BkeySC<'_>,
-    unpacked: &mut MaybeUninit<c::bch_inode_unpacked>,
-) {
-    unpacked.write(unpack(Fs::from_c(c), k));
 }
 
 impl<'a> From<&'a c::bkey_inode_buf> for BkeySC<'a> {

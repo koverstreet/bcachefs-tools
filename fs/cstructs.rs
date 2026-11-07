@@ -171,7 +171,7 @@ pub mod c {
     pub use crate::str_hash::{bch_hash_info};
     pub use super::fs_xattr_format::*;
     pub use super::init_damage_format::*;
-    pub use crate::init::dev::{AtomicDevsMask, DevsMask, bch2_dev_in_fs, bch_devs_list, bch_devs_mask, bch_fs_sb, bch_sb_bdev, bch_sb_buf, bch_sb_handle, bch_sb_handle_bits, bch_sb_handles, bch_sb_io};
+    pub use crate::init::dev::{AtomicDevsMask, DevsMask, bch_devs_list, bch_devs_mask, bch_fs_sb, bch_sb_bdev, bch_sb_buf, bch_sb_handle, bch_sb_handle_bits, bch_sb_handles, bch_sb_io};
     pub(crate) use crate::init::dev::{__bch_sb_handle_bits_forward};
     pub use crate::init::error::{bch_fs_errors, fsck_damaged_path};
     pub(crate) use crate::init::error::{ErrorsLocked, FsckErrState};

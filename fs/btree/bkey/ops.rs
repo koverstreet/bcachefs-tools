@@ -307,23 +307,17 @@ pub fn bkey_swab_val(fs: Option<&Fs>, k: BkeyS<'_>) {
 
 /// @r might be merged into @l - the same type and version, @r starting where
 /// @l ends.
-#[c_export]
 pub fn bch2_bkey_maybe_mergable(l: &c::bkey, r: &c::bkey) -> bool {
     l.type_ == r.type_ && { l.bversion } == { r.bversion } && l.p == r.start_pos()
 }
 
-/// bch2_bkey_merge(): @r merged into @l, by its type's merge - if they're
-/// mergable, and the result isn't too big for a key.
+/// @r merged into @l, by its type's merge - if they're mergable, and the
+/// result isn't too big for a key.
 pub fn bkey_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
     bch2_bkey_maybe_mergable(l.k, r.k) &&
         u64::from(l.k.size) + u64::from(r.k.size) <= u64::from(u32::MAX) &&
         !crate::debug::params::key_merging_disabled() &&
         (l.k.key_type().ops().merge)(fs, l, r)
-}
-
-#[c_export]
-pub fn bch2_bkey_merge(c: &Opaque<Fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
-    bkey_merge(Fs::from_c(c), l, r)
 }
 
 #[c_export]
