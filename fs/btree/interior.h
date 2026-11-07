@@ -8,6 +8,7 @@
 #include "data/write_gen.h"
 
 #include "btree/interior_defs_gen.h"
+#include "btree/interior_c_gen.h"
 
 int bch2_btree_node_check_topology_msg(struct btree_trans *, struct btree *,
 				       struct printbuf *);
