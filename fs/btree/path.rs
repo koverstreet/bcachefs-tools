@@ -4,28 +4,36 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::iter::BtreeTrans;
+use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_le};
+use crate::btree::cache::bch2_btree_id_level_to_text;
+use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
 use crate::btree::node::iter::KeyIter;
+use crate::btree::node::keys::Keys;
 use crate::btree::locking::btree_node_locked_type::{self, *};
 use crate::btree::node::{BtreeNode, NodeContents};
+use crate::btree::traverse::{advance_to_pos, bch2_btree_pos_to_text};
 use crate::c;
 use crate::cstructs::c as cs;
-#[cfg(CONFIG_BCACHEFS_DEBUG)]
-use crate::debug::trace::events;
-#[cfg(CONFIG_BCACHEFS_DEBUG)]
+use crate::data_structures::bitmap::Bitmap;
+use crate::debug::params::debug_check_iterators;
+use crate::debug::trace::{events, TraceEvent};
 use crate::prt;
-use crate::errcode::{bch_errcode, err_ptr, errptr_or_null, BchError};
-use crate::format::{Bpos, Btree};
+use crate::errcode::{bch_errcode, err_ptr, errptr_or_null, ret_to_c, BchError};
+use crate::format::{BkeyType, Bpos, Btree};
 use crate::types::{bits_to_longs, c_default, Lent};
 use crate::util::alloc::kvzalloc_nofail;
+use crate::util::backtrace::prt_symbol;
+use crate::util::log::LogMsg;
 use crate::util::rcu::rcu_assign_pointer;
+use crate::util::Printbuf;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::util::kernel::local_clock;
 use cstruct_macros::{bitfield, c_export, c_name, c_typedef, CStruct};
 use crate::locking::{Locked, LockedBy};
-use crate::locking::six::SixHold;
+use crate::locking::six::{six_lock_increment_ip, SixHold};
 use crate::c::six_lock_type;
-use core::ffi::{c_int, c_ulong};
+use core::cmp::Ordering;
+use core::ffi::{c_int, c_uint, c_ulong};
 use core::marker::PhantomData;
 use core::mem::{offset_of, ManuallyDrop};
 use core::ops::{Deref, DerefMut, Index, IndexMut};
@@ -162,9 +170,8 @@ impl PathSnapshot {
         PathSnapshot(unsafe { ptr::read(path) })
     }
 
-    /// For C's bch2_btree_path_to_text().
-    pub(crate) fn as_ptr(&self) -> *mut BtreePath {
-        ptr::from_ref(&self.0).cast_mut()
+    pub(crate) fn to_text(&self, out: &mut Printbuf, idx: PathIdx) {
+        self.0.to_text(out, idx)
     }
 }
 
@@ -440,6 +447,922 @@ impl Paths<'_> {
     }
 }
 
+// ── Lock order, and the sorted list ─────────────────────────────────────────
+
+impl<T: PathNode> BtreePath<T> {
+    pub(crate) fn cmp_to(&self, btree: Btree, cached: bool, pos: Bpos, level: u8) -> Ordering {
+        /*
+         * Must match lock ordering as defined by __bch2_btree_node_lock:
+         */
+        self.btree_id().0.cmp(&btree.0)
+            .then(self.cached().cmp(&cached))
+            .then(self.pos.cmp(&pos))
+            .then(level.cmp(&self.level()))
+    }
+
+    pub(crate) fn lock_order(&self, r: &BtreePath<T>) -> Ordering {
+        self.cmp_to(r.btree_id(), r.cached(), r.pos, r.level())
+    }
+}
+
+impl Paths<'_> {
+    pub(crate) fn sorted(&self) -> &[PathIdx] {
+        let t = self.trans;
+        unsafe { core::slice::from_raw_parts(t.sorted.get(), t.nr_sorted.get() as usize) }
+    }
+
+    /// All of the array: longer than the list, for list_add() to insert into.
+    fn sorted_buf(&mut self) -> &mut [PathIdx] {
+        let t = self.trans;
+        unsafe { core::slice::from_raw_parts_mut(t.sorted.get(), t.nr_paths.get() as usize + 4) }
+    }
+
+    /// The queued updates are in the table's allocation, after the paths.
+    pub(crate) fn update_mut(&mut self, i: usize) -> &mut c::btree_insert_entry {
+        let t = self.trans;
+        assert!(i < t.nr_updates.get() as usize);
+        unsafe { &mut *t.updates.get().add(i) }
+    }
+
+    fn set_allocated(&mut self, idx: PathIdx, allocated: bool) {
+        let t = self.trans;
+        let words = unsafe {
+            core::slice::from_raw_parts_mut(t.paths_allocated.get().cast::<usize>(), bits_to_longs(t.nr_paths.get().into()))
+        };
+        let bitmap = Bitmap::from_words_mut(words);
+        if allocated {
+            bitmap.set(idx as usize);
+        } else {
+            bitmap.clear(idx as usize);
+        }
+    }
+
+    fn sorted_renumber(&mut self, from: usize) {
+        for i in from..self.sorted().len() {
+            let idx = self.sorted()[i];
+            self[idx].sorted_idx = i as PathIdx;
+        }
+    }
+
+    fn list_remove(&mut self, idx: PathIdx) {
+        let (i, nr) = (self[idx].sorted_idx as usize, self.sorted().len());
+        ebug_assert!(i < nr);
+
+        self.sorted_buf().copy_within(i + 1..nr, i);
+        self.trans.nr_sorted.set(nr as PathIdx - 1);
+        self.sorted_renumber(i);
+    }
+
+    fn list_add(&mut self, pos: PathIdx, idx: PathIdx) {
+        let nr = self.sorted().len();
+        let i = if pos != 0 { self[pos].sorted_idx as usize + 1 } else { nr };
+
+        let sorted = self.sorted_buf();
+        sorted.copy_within(i..nr, i + 1);
+        sorted[i] = idx;
+        self.trans.nr_sorted.set(nr as PathIdx + 1);
+        self.sorted_renumber(i);
+
+        self.verify_sorted_refs();
+    }
+
+    fn prev_sorted(&self, idx: PathIdx) -> Option<PathIdx> {
+        let i = self[idx].sorted_idx as usize;
+        (i != 0).then(|| self.sorted()[i - 1])
+    }
+
+    fn next_sorted(&self, idx: PathIdx) -> Option<PathIdx> {
+        let i = self[idx].sorted_idx as usize + 1;
+        ebug_assert!(i <= self.sorted().len());
+        self.sorted().get(i).copied()
+    }
+
+    pub(crate) fn sort(&mut self) {
+        if cfg!(CONFIG_BCACHEFS_DEBUG) || !self.trans.paths_sorted() {
+            self.sort_now();
+        }
+    }
+
+    fn sort_now(&mut self) {
+        self.verify_sorted_refs();
+
+        if !self.trans.paths_sorted() {
+            /*
+             * Cocktail shaker sort: this is efficient because iterators will be
+             * mostly sorted.
+             */
+            let (mut l, mut r, mut inc) = (0isize, self.sorted().len() as isize, 1isize);
+            loop {
+                let mut swapped = false;
+                let mut i = if inc > 0 { l } else { r - 2 };
+                while i + 1 < r && i >= l {
+                    let (a, b) = (self.sorted()[i as usize], self.sorted()[i as usize + 1]);
+                    if self[a].lock_order(&self[b]).is_gt() {
+                        self.sorted_buf().swap(i as usize, i as usize + 1);
+                        self[b].sorted_idx = i as PathIdx;
+                        self[a].sorted_idx = i as PathIdx + 1;
+                        swapped = true;
+                    }
+                    i += inc;
+                }
+
+                if inc > 0 {
+                    r -= 1;
+                } else {
+                    l += 1;
+                }
+                inc = -inc;
+                if !swapped {
+                    break;
+                }
+            }
+
+            self.trans.set_paths_sorted(true);
+        }
+
+        self.verify_sorted();
+    }
+
+    fn verify_sorted_refs(&self) {
+        if !cfg!(CONFIG_BCACHEFS_DEBUG) {
+            return;
+        }
+
+        let t = self.trans;
+        assert!(self.sorted().len() == t.nr_paths_allocated() - 1);
+
+        for i in t.path_idxs() {
+            assert!((self[i].sorted_idx as usize) < self.sorted().len());
+            assert!(self.sorted()[self[i].sorted_idx as usize] == i);
+        }
+
+        for (i, &idx) in self.sorted().iter().enumerate() {
+            assert!(t.path_allocated(idx));
+            assert!(self[idx].sorted_idx as usize == i);
+        }
+    }
+
+    fn verify_sorted(&self) {
+        if !(cfg!(CONFIG_BCACHEFS_DEBUG) && debug_check_iterators()) {
+            return;
+        }
+
+        if self.sorted().windows(2).any(|w| self[w[0]].lock_order(&self[w[1]]).is_gt()) {
+            self.trans.dump_paths_updates_as_is(self);
+            panic!("trans paths out of order!");
+        }
+    }
+
+    pub(crate) fn get_ll(&mut self, idx: PathIdx, intent: bool) {
+        self.check_live(idx);
+
+        let t = self.trans;
+        ebug_assert!(idx < t.nr_paths.get());
+        ebug_assert!(t.path_allocated(idx));
+        if self[idx].ref_ == u8::MAX {
+            t.dump_paths_updates(self);
+            panic!("path {idx} refcount overflow");
+        }
+
+        let path = &mut self[idx];
+        path.ref_ += 1;
+        path.intent_ref += u8::from(intent);
+        #[cfg(CONFIG_BCACHEFS_DEBUG)]
+        t.fs().event_trace(events::btree_path_get_ll, |out| {
+            prt!(out, "{}: path {:3} ref {} btree {} pos {}",
+                 t.fn_name(), idx, self[idx].ref_, self[idx].btree_id(), self[idx].pos);
+        });
+    }
+
+    fn copy(&mut self, dst: PathIdx, src: PathIdx) {
+        let (src, dst) = self.pair(src, dst);
+        dst.pos          = src.pos;
+        dst.bits         = src.bits;
+        dst.nodes_locked = src.nodes_locked;
+
+        /* do not use memcpy for path->l; we cannot have torn writes to path->l[0].b,
+         * and we're guaranteed them since the memcpy starts misaligned */
+
+        for (d, s) in dst.l.iter_mut().zip(&src.l) {
+            unsafe { ptr::write_volatile(&raw mut d.b, s.b) };
+            d.iter     = s.iter;
+            d.lock_seq = s.lock_seq;
+            #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
+            {
+                d.lock_taken_time = s.lock_taken_time;
+            }
+        }
+
+        for i in 0..c::BTREE_MAX_DEPTH as usize {
+            let t = dst.locked_type(i);
+            if t != BTREE_NODE_UNLOCKED {
+                unsafe { six_lock_increment_ip(dst.held_lock(i).six(), t.six(), 0) };
+            }
+        }
+    }
+}
+
+// ── Getting and putting ─────────────────────────────────────────────────────
+
+impl BtreeTrans<'_> {
+    pub(crate) fn path_free(&self, paths: &mut Paths<'_>, idx: PathIdx) {
+        self.path_unlock(paths, idx);
+        paths.list_remove(idx);
+        paths.set_allocated(idx, false);
+    }
+
+    pub(crate) fn path_put(&self, paths: &mut Paths<'_>, idx: PathIdx, intent: bool) {
+        if !paths.put_ll(idx, intent) {
+            return;
+        }
+
+        let (preserve, should_be_locked) = (paths[idx].preserve(), paths[idx].should_be_locked());
+        let mut dup = None;
+
+        if preserve || should_be_locked {
+            let level = paths[idx].level() as usize;
+            let is_dup = |paths: &Paths<'_>, d: PathIdx| {
+                let (path, d) = (&paths[idx], &paths[d]);
+                if preserve {
+                    d.lock_order(path).is_eq()
+                } else {
+                    d.level() == path.level() && d.l[level].b == path.l[level].b
+                }
+            };
+
+            dup = paths.prev_sorted(idx).filter(|&d| is_dup(paths, d))
+                .or_else(|| paths.next_sorted(idx).filter(|&d| is_dup(paths, d)));
+            let Some(d) = dup else { return };
+
+            /*
+             * If we need this path locked, the duplicate also has te be locked
+             * before we free this one:
+             */
+            if should_be_locked && !paths[d].should_be_locked() && self.restarted().0 == 0 {
+                let relocked = if self.locked() {
+                    self.path_relock_norestart(paths, d)
+                } else {
+                    paths[d].can_relock()
+                };
+                if !relocked {
+                    return;
+                }
+
+                paths[d].bits.set_should_be_locked(true);
+            }
+
+            ebug_assert!(!(should_be_locked && self.restarted().0 == 0 && self.locked() &&
+                           !paths[d].locked(paths[d].level() as usize)));
+
+            paths[idx].bits.set_should_be_locked(false);
+            let preserve = paths[d].preserve() | preserve;
+            paths[d].bits.set_preserve(preserve);
+        }
+
+        self.fs().event_trace(events::btree_path_free, |out| {
+            prt!(out, "{}: dup {}\n", self.fn_name(), dup.unwrap_or(0));
+            self.path_to_text_short(out, paths, idx);
+        });
+        self.path_free(paths, idx);
+    }
+
+    fn path_alloc(&self, paths: &mut Paths<'_>, pos: PathIdx) -> PathIdx {
+        /* trans->nr_paths is always a multiple of BITS_PER_LONG, we can improve
+         * over find_first_zero_bit */
+        let words = self.nr_paths.get() as usize / c_ulong::BITS as usize;
+        for w in 0..words {
+            let word = unsafe { *self.paths_allocated.get().add(w) };
+            if !word != 0 {
+                let idx = (w * c_ulong::BITS as usize + (!word).trailing_zeros() as usize) as PathIdx;
+
+                /*
+                 * Do this before marking the new path as allocated, since it won't be
+                 * initialized yet:
+                 */
+                if idx > self.nr_paths_max.get() {
+                    self.update_max_paths(paths);
+                }
+
+                paths.set_allocated(idx, true);
+                self.path_init(paths, pos, idx);
+                return idx;
+            }
+        }
+
+        self.paths_realloc(paths, pos)
+    }
+
+    #[inline(never)]
+    fn paths_realloc(&self, paths: &mut Paths<'_>, pos: PathIdx) -> PathIdx {
+        if self.nr_paths.get() as u32 == c::BTREE_ITER_MAX {
+            self.path_overflow(paths);
+            return 0;
+        }
+
+        let idx = self.nr_paths.get();
+        paths.grow();
+
+        /*
+         * Do this before marking the new path as allocated, since it won't be
+         * initialized yet:
+         */
+        if idx > self.nr_paths_max.get() {
+            self.update_max_paths(paths);
+        }
+
+        paths.set_allocated(idx, true);
+        self.path_init(paths, pos, idx);
+        idx
+    }
+
+    fn path_init(&self, paths: &mut Paths<'_>, pos: PathIdx, idx: PathIdx) {
+        let path = &mut paths[idx];
+        path.ref_         = 0;
+        path.intent_ref   = 0;
+        path.nodes_locked = 0;
+
+        paths.list_add(pos, idx);
+        self.set_paths_sorted(false);
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn path_overflow(&self, paths: &mut Paths<'_>) {
+        self.dump_paths_updates(paths);
+        crate::bch_err!(self.fs(), "trans path overflow");
+    }
+
+    fn path_clone(&self, paths: &mut Paths<'_>, src: PathIdx, intent: bool, ip: c_ulong) -> PathIdx {
+        let new = self.path_alloc(paths, src);
+        paths.copy(new, src);
+        paths.get_ll(new, intent);
+        #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
+        {
+            paths[new].ip_allocated = ip;
+        }
+        #[cfg(not(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG)))]
+        let _ = ip;
+        new
+    }
+
+    pub(crate) fn path_make_mut(&self, paths: &mut Paths<'_>, idx: PathIdx, intent: bool, ip: c_ulong) -> PathIdx {
+        let idx = if paths[idx].ref_ > 1 || paths[idx].preserve() {
+            self.path_make_mut_clone(paths, idx, intent, ip)
+        } else {
+            idx
+        };
+        paths[idx].bits.set_should_be_locked(false);
+        idx
+    }
+
+    pub(crate) fn path_make_mut_clone(&self, paths: &mut Paths<'_>, old: PathIdx, intent: bool, ip: c_ulong)
+        -> PathIdx
+    {
+        paths.put_ll(old, intent);
+        let new = self.path_clone(paths, old, intent, ip);
+
+        self.fs().event_trace(events::btree_path_clone, |out| {
+            prt!(out, "{}: old {}\n", self.fn_name(), old);
+            self.path_to_text_short(out, paths, new);
+        });
+
+        paths[new].bits.set_preserve(false);
+        new
+    }
+
+    pub(crate) fn path_set_pos(&self, paths: &mut Paths<'_>, idx: PathIdx, new_pos: Bpos, intent: bool,
+                               ip: c_ulong) -> PathIdx {
+        if new_pos == paths[idx].pos {
+            return idx;
+        }
+
+        if !<events::btree_path_set_pos as TraceEvent>::trace_enabled() {
+            return self.path_set_pos_notrace(paths, idx, new_pos, intent, ip);
+        }
+
+        let mut out = Printbuf::new();
+        out.indent_add_nextline(2);
+        prt!(&mut out, "{} caller: ", self.fn_name());
+        prt_symbol(&mut out, ip);
+        prt!(&mut out, "\n\n");
+        self.path_to_text(&mut out, paths, idx);
+
+        let idx = self.path_set_pos_notrace(paths, idx, new_pos, intent, ip);
+
+        prt!(&mut out, "\n");
+        self.path_to_text(&mut out, paths, idx);
+        prt!(&mut out, "\n");
+
+        <events::btree_path_set_pos as TraceEvent>::trace(self.fs(), &out);
+        idx
+    }
+
+    fn path_set_pos_notrace(&self, paths: &mut Paths<'_>, idx: PathIdx, new_pos: Bpos, intent: bool,
+                            ip: c_ulong) -> PathIdx {
+        let cmp = new_pos.cmp(&paths[idx].pos);
+
+        self.verify_not_unlocked_or_in_restart();
+        ebug_assert!(paths[idx].ref_ != 0);
+
+        let idx = self.path_make_mut(paths, idx, intent, ip);
+
+        paths[idx].pos = new_pos;
+        self.set_paths_sorted(false);
+
+        if paths[idx].cached() {
+            self.node_unlock(paths, idx, 0);
+            paths[idx].l[0].b = NodePtr::err(bch_errcode::BCH_ERR_no_btree_node_up.into());
+        } else {
+            let level = self.path_up_until_good_node(paths, idx, cmp);
+
+            if !paths[idx].node(level).is_null() {
+                ebug_assert!(paths[idx].locked(level));
+
+                let path = &mut paths[idx];
+                let b = unsafe { path.held_btree_node(level) };
+                let keys = b.keys(unsafe { b.contents() });
+                let pos = path.pos;
+                let iter = &mut path.l[level].iter;
+
+                /*
+                 * We might have to skip over many keys, or just a few: try
+                 * advancing the node iterator, and if we have to skip over too
+                 * many keys just reinit it (or if we're rewinding, since that
+                 * is expensive).
+                 */
+                if cmp.is_lt() || !advance_to_pos(iter, &keys, &pos, 8) {
+                    iter.init(self.fs(), &keys, &pos);
+                }
+
+                /*
+                 * Iterators to interior nodes should always be pointed at the first non
+                 * whiteout:
+                 */
+                if level != 0 {
+                    iter.peek(&keys);
+                }
+            }
+
+            if level != paths[idx].level() as usize {
+                self.path_unlock(paths, idx);
+            }
+        }
+
+        self.path_verify(paths, idx);
+        idx
+    }
+
+    pub(crate) fn path_get(&self, paths: &mut Paths<'_>, btree: Btree, pos: Bpos, mut locks_want: u32, level: u32,
+                           flags: BtreeIterFlags, ip: c_ulong) -> PathIdx {
+        let cached = flags.contains(BtreeIterFlags::CACHED);
+        let intent = flags.contains(BtreeIterFlags::INTENT);
+
+        self.verify_not_unlocked_or_in_restart();
+        self.verify_locks(paths);
+
+        paths.sort();
+
+        if intent {
+            locks_want = locks_want.max(level + 1);
+        }
+        locks_want = locks_want.min(c::BTREE_MAX_DEPTH);
+
+        let mut path_pos = 0;
+        for i in 0..paths.sorted().len() {
+            let idx = paths.sorted()[i];
+            if paths[idx].cmp_to(btree, cached, pos, level as u8).is_gt() {
+                break;
+            }
+            path_pos = idx;
+        }
+
+        let reuse = path_pos != 0 && {
+            let path = &paths[path_pos];
+            path.cached() == cached && path.btree_id() == btree && path.level() as u32 == level
+        } && (locks_want <= paths[path_pos].locks_want() as u32 ||
+              self.path_upgrade_norestart(paths, path_pos, locks_want as usize));
+
+        let idx = if reuse {
+            self.fs().event_trace(events::btree_path_get, |out| {
+                prt!(out, "{}\n", self.fn_name());
+                self.path_to_text_short(out, paths, path_pos);
+                prt!(out, "new pos: {}", pos);
+            });
+
+            paths.get_ll(path_pos, intent);
+            self.path_set_pos(paths, path_pos, pos, intent, ip)
+        } else {
+            let idx = self.path_alloc(paths, path_pos);
+            paths.get_ll(idx, intent);
+
+            let path = &mut paths[idx];
+            path.pos = pos;
+            path.bits.set_btree_id(btree);
+            path.bits.set_cached(cached);
+            path.bits.set_should_be_locked(false);
+            path.bits.set_level(level as u8);
+            path.bits.set_locks_want(locks_want as u8);
+            path.nodes_locked = 0;
+            for l in &mut path.l {
+                l.b = NodePtr::err(bch_errcode::BCH_ERR_no_btree_node_init.into());
+            }
+            #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
+            {
+                path.ip_allocated = ip;
+            }
+            self.set_paths_sorted(false);
+
+            self.fs().event_trace(events::btree_path_alloc, |out| {
+                prt!(out, "{}\n", self.fn_name());
+                self.path_to_text_short(out, paths, idx);
+            });
+            idx
+        };
+
+        if !flags.contains(BtreeIterFlags::NOPRESERVE) {
+            paths[idx].bits.set_preserve(true);
+        }
+
+        /*
+         * If the path has locks_want greater than requested, we don't downgrade
+         * it here - on transaction restart because btree node split needs to
+         * upgrade locks, we might be putting/getting the iterator again.
+         * Downgrading iterators only happens via bch2_trans_downgrade(), after
+         * a successful transaction commit.
+         */
+
+        idx
+    }
+
+    pub(crate) fn path_get_unlocked_mut(&self, paths: &mut Paths<'_>, btree: Btree, level: u32, pos: Bpos,
+                                        cached: bool, ip: c_ulong) -> PathIdx {
+        let flags = BtreeIterFlags::NOPRESERVE | BtreeIterFlags::INTENT |
+            if cached { BtreeIterFlags::CACHED } else { BtreeIterFlags::empty() };
+        let idx = self.path_get(paths, btree, pos, level + 1, level, flags, ip);
+        let idx = self.path_make_mut(paths, idx, true, ip);
+
+        self.path_downgrade(paths, idx);
+        self.path_unlock(paths, idx);
+        idx
+    }
+}
+
+impl BtreePath {
+    fn can_relock(&self) -> bool {
+        let mut l = self.level() as usize;
+
+        loop {
+            if self.node(l).is_null() {
+                break;
+            }
+
+            if !self.is_btree_node(l) {
+                return false;
+            }
+
+            if !self.lock_seq_matches(l) {
+                return false;
+            }
+
+            l += 1;
+            if l >= self.locks_want() as usize {
+                break;
+            }
+        }
+
+        true
+    }
+
+    /// # Safety
+    /// The path holds the level locked, for 'n.
+    pub(crate) unsafe fn held_btree_node<'n>(&self, level: usize) -> &'n BtreeNode {
+        ebug_assert!(!self.cached());
+        unsafe { &*self.held_node(level).as_ptr().cast::<BtreeNode>() }
+    }
+
+    pub(crate) fn peek_slot(&self, u: &mut c::bkey) -> c::bkey_s_c {
+        let level = self.level() as usize;
+        let null = c::bkey_s_c { k: ptr::null_mut(), v: ptr::null_mut() };
+
+        if self.l[level].b.is_null() {
+            return null;
+        }
+
+        ebug_assert!(self.locked(level));
+
+        if !self.cached() {
+            let b = unsafe { self.held_btree_node(level) };
+            let keys = b.keys(unsafe { b.contents() });
+
+            if let Some(k) = self.l[level].iter.peek_all() {
+                let k: c::bkey_s_c = keys.disassemble(k, u).into();
+                let (ty, p) = unsafe { ((*k.k).key_type(), (*k.k).p) };
+
+                ebug_assert!(!(ty == BkeyType::deleted && p == self.pos));
+
+                if p == self.pos {
+                    return k;
+                }
+            }
+
+            *u = c::bkey::new();
+            u.p = self.pos;
+            c::bkey_s_c { k: u, v: ptr::null_mut() }
+        } else {
+            let Some(ck) = self.l[0].b.get().ok().flatten() else { return null };
+            let ck = unsafe { &*ck.as_ptr().cast::<c::bkey_cached>() };
+
+            ebug_assert!(Btree(ck.key.btree_id.into()) == self.btree_id() && ck.key.pos == self.pos);
+
+            *u = unsafe { (*ck.k).k };
+            c::bkey_s_c { k: u, v: unsafe { &raw mut (*ck.k).v } }
+        }
+    }
+
+    /// # Safety
+    /// @b is locked, any way.
+    pub(crate) unsafe fn pos_in_node(&self, b: &BtreeNode) -> bool {
+        u32::from(b.c.btree_id) == self.btree_id().0 &&
+            !unsafe { self.pos_before_node(b) } && !unsafe { self.pos_after_node(b) }
+    }
+
+    /// # Safety
+    /// As pos_in_node()'s.
+    pub(crate) unsafe fn pos_before_node(&self, b: &BtreeNode) -> bool {
+        self.pos < unsafe { b.contents() }.data().min_key
+    }
+
+    /// # Safety
+    /// As pos_in_node()'s.
+    pub(crate) unsafe fn pos_after_node(&self, b: &BtreeNode) -> bool {
+        self.pos > unsafe { b.contents() }.key_i().k.p
+    }
+}
+
+// ── To text ─────────────────────────────────────────────────────────────────
+
+fn btree_node_locked_str(t: btree_node_locked_type) -> &'static str {
+    match t {
+        BTREE_NODE_UNLOCKED      => "unlocked",
+        BTREE_NODE_READ_LOCKED   => "read",
+        BTREE_NODE_INTENT_LOCKED => "intent",
+        BTREE_NODE_WRITE_LOCKED  => "write",
+    }
+}
+
+impl BtreePath {
+    pub(crate) fn to_text_short(&self, out: &mut Printbuf, idx: PathIdx) {
+        prt!(out, "path: idx {:3} ref {}:{} {} {} {} ", idx, self.ref_, self.intent_ref,
+             if self.preserve() { 'P' } else { ' ' },
+             if self.should_be_locked() { 'S' } else { ' ' },
+             if self.cached() { 'C' } else { 'B' });
+        unsafe { bch2_btree_id_level_to_text(out, self.btree_id(), self.level().into()) };
+        prt!(out, " pos {}", self.pos);
+
+        let level = self.level() as usize;
+        if !self.cached() && self.locked(level) {
+            let contents = unsafe { self.held_btree_node(level).contents() };
+            prt!(out, " {}-{}", contents.data().min_key, contents.key_i().k.p);
+        }
+
+        #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
+        {
+            prt!(out, " ");
+            prt_symbol(out, self.ip_allocated);
+        }
+    }
+
+    pub(crate) fn to_text(&self, out: &mut Printbuf, idx: PathIdx) {
+        self.to_text_short(out, idx);
+        prt!(out, "\n\nlocks_want {}\n", self.locks_want());
+
+        let out = &mut *out.indent(2);
+        for l in 0..c::BTREE_MAX_DEPTH as usize {
+            prt!(out, "l={} locks {} seq {} node ", l, btree_node_locked_str(self.locked_type(l)), self.l[l].lock_seq);
+            match self.l[l].b.get() {
+                Err(e)  => prt!(out, "{}", e.msg()),
+                Ok(b)   => prt!(out, "{:p}", b.map_or(ptr::null_mut(), NonNull::as_ptr)),
+            }
+            prt!(out, "\n");
+        }
+    }
+}
+
+impl BtreeTrans<'_> {
+    pub(crate) fn path_to_text_short(&self, out: &mut Printbuf, paths: &Paths<'_>, idx: PathIdx) {
+        paths[idx].to_text_short(out, idx)
+    }
+
+    pub(crate) fn path_to_text(&self, out: &mut Printbuf, paths: &Paths<'_>, idx: PathIdx) {
+        paths[idx].to_text(out, idx)
+    }
+
+    fn paths_to_text_as_is(&self, out: &mut Printbuf, paths: &Paths<'_>) {
+        for &idx in paths.sorted() {
+            paths[idx].to_text_short(out, idx);
+            prt!(out, "\n");
+        }
+    }
+
+    pub(crate) fn paths_to_text(&self, out: &mut Printbuf, paths: &mut Paths<'_>) {
+        paths.sort();
+        self.paths_to_text_as_is(out, paths);
+    }
+
+    fn dump_paths_updates_as_is(&self, paths: &Paths<'_>) {
+        let mut msg = LogMsg::new(self.fs());
+        self.paths_to_text_as_is(&mut msg, paths);
+        self.updates_to_text(&mut msg);
+    }
+
+    pub(crate) fn dump_paths_updates(&self, paths: &mut Paths<'_>) {
+        paths.sort();
+        self.dump_paths_updates_as_is(paths);
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn update_max_paths(&self, paths: &mut Paths<'_>) {
+        let s = &self.fs().btree.trans.stats[self.fn_idx.get() as usize];
+        let nr = self.nr_paths_allocated();
+        let mut buf = Printbuf::new();
+
+        self.paths_to_text(&mut buf, paths);
+
+        if !buf.bits.allocation_failure() {
+            let mut locked = s.lock.lock();
+            if nr as u32 > s.lock.nr_max_paths.get() {
+                locked.published().nr_max_paths.set(nr as u32);
+                core::mem::swap(&mut locked.max_paths_text, &mut buf.buf);
+            }
+        }
+
+        self.nr_paths_max.set(nr as PathIdx);
+    }
+}
+
+// ── Debug ───────────────────────────────────────────────────────────────────
+
+impl BtreeTrans<'_> {
+    pub(crate) fn verify_iterators(&self) -> bool {
+        cfg!(CONFIG_BCACHEFS_DEBUG) && debug_check_iterators()
+    }
+
+    pub(crate) fn path_verify(&self, paths: &mut Paths<'_>, idx: PathIdx) {
+        if self.verify_iterators() {
+            self.path_verify_now(paths, idx);
+        }
+    }
+
+    pub(crate) fn path_verify_level(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize) {
+        if self.verify_iterators() {
+            self.path_verify_level_now(paths, idx, level);
+        }
+    }
+
+    pub(crate) fn path_verify_now(&self, paths: &mut Paths<'_>, idx: PathIdx) {
+        let levels = if !paths[idx].cached() { c::BTREE_MAX_DEPTH as usize } else { 1 };
+
+        for i in 0..levels {
+            let path = &paths[idx];
+            assert!(!(i < path.level() as usize && path.l[i].b.get().is_ok()));
+
+            if path.l[i].b.is_null() {
+                assert!(!(!path.cached() &&
+                          self.fs().btree_id_root(path.btree_id().0).is_some_and(|r| r.c.level as usize > i)));
+                break;
+            }
+
+            self.path_verify_level_now(paths, idx, i);
+        }
+
+        self.verify_path_locks(paths, idx);
+    }
+
+    fn path_verify_cached(&self, paths: &mut Paths<'_>, idx: PathIdx) {
+        let locked = paths[idx].locked(0);
+
+        if !self.node_relock(paths, idx, 0) {
+            return;
+        }
+
+        let path = &paths[idx];
+        let ck = unsafe { &*path.l[0].b.as_ptr().cast::<c::bkey_cached>() };
+        assert!(Btree(ck.key.btree_id.into()) == path.btree_id() && ck.key.pos == path.pos);
+
+        if !locked {
+            self.node_unlock(paths, idx, 0);
+        }
+    }
+
+    fn path_verify_level_now(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize) {
+        let locked = paths[idx].locked(level);
+
+        if paths[idx].cached() {
+            if level == 0 {
+                self.path_verify_cached(paths, idx);
+            }
+            return;
+        }
+
+        if paths[idx].node(level).is_null() {
+            return;
+        }
+
+        if !self.node_relock_notrace(paths, idx, level) {
+            return;
+        }
+
+        let path = &paths[idx];
+        let b = unsafe { path.held_btree_node(level) };
+
+        if !unsafe { path.pos_in_node(b) } {
+            let mut buf = Printbuf::new();
+            prt!(&mut buf, "level {} path->pos {}\n", level, path.pos);
+            unsafe { bch2_btree_pos_to_text(&mut buf, self.fs().as_ptr(), b) };
+            panic!("{}", buf.as_str());
+        }
+
+        let keys = b.keys(unsafe { b.contents() });
+        let iter = &path.l[level].iter;
+        iter.verify(&keys);
+
+        /* For interior nodes, the iterator may have skipped past deleted keys: */
+        let mut tmp = *iter;
+        let p = if level != 0 { tmp.prev(&keys) } else { tmp.prev_all(&keys) };
+        let mut tmp = *iter;
+        let k = if level != 0 { tmp.peek(&keys) } else { tmp.peek_all() };
+
+        if !(level > path.level() as usize && self.journal_replay_not_finished()) {
+            /*
+             * We can't run these checks for interior nodes when we're still
+             * using the journal overlay because there might be a key in
+             * the interior node that points midway through the current leaf
+             * node - which is deleted in the journal overlay, but set_pos()
+             * will skip past it and cause the interior node iterators to be
+             * inconsistent in a way that doesn't matter and it can't check
+             * for.
+             */
+
+            if p.is_some_and(|p| keys.bkey_iter_pos_cmp(p, &path.pos).is_ge()) {
+                path_verify_level_err(path, level, &keys, p, k, "before");
+            }
+
+            if k.is_some_and(|k| keys.bkey_iter_pos_cmp(k, &path.pos).is_lt()) {
+                path_verify_level_err(path, level, &keys, p, k, "after");
+            }
+        }
+
+        if !locked {
+            self.node_unlock(paths, idx, level);
+        }
+    }
+
+    pub(crate) fn assert_pos_locked_now(&self, paths: &mut Paths<'_>, btree: Btree, pos: Bpos) {
+        self.verify_not_unlocked_or_in_restart();
+
+        paths.sort();
+
+        for &idx in paths.sorted() {
+            let path = &paths[idx];
+            if path.btree_id() != btree || !path.locked(0) || !path.should_be_locked() {
+                continue;
+            }
+
+            if !path.cached() {
+                let contents = unsafe { path.held_btree_node(0).contents() };
+                if bkey_ge(pos, contents.data().min_key) && bkey_le(pos, contents.key_i().k.p) {
+                    return;
+                }
+            } else if bkey_eq(pos, path.pos) {
+                return;
+            }
+        }
+
+        self.dump_paths_updates(paths);
+        panic!("not locked: {} {}", btree, pos);
+    }
+}
+
+#[cold]
+fn path_verify_level_err(path: &BtreePath, level: usize, keys: &Keys<'_>, p: Option<u16>, k: Option<u16>,
+                         msg: &str) -> ! {
+    let mut buf = Printbuf::new();
+    prt!(&mut buf, "path should be {} key at level {}", msg, level);
+    prt!(&mut buf, "\npath pos {}", path.pos);
+
+    let key = |buf: &mut Printbuf, k: Option<u16>| match k {
+        Some(k) => prt!(buf, "{}", keys.key_at(k).unpack(keys.contents())),
+        None    => prt!(buf, "(none)"),
+    };
+    prt!(&mut buf, "\nprev key ");
+    key(&mut buf, p);
+    prt!(&mut buf, "\ncur  key ");
+    key(&mut buf, k);
+
+    panic!("{}", buf.as_str());
+}
+
 /// A transaction's path table, as it starts: its own, embedded.
 #[c_export]
 pub fn bch2_trans_paths_init(trans: &BtreeTrans<'_>) {
@@ -484,6 +1407,101 @@ pub fn bch2_trans_paths_exit(trans: &BtreeTrans<'_>) {
     let allocated = trans.paths_allocated.replace(ptr::null_mut());
     trans.paths.set(ptr::null_mut());
     trans.table_retire(allocated);
+}
+
+#[c_export]
+pub fn bch2_path_get(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, btree: Btree, pos: &Bpos,
+                     locks_want: c_uint, level: c_uint, flags: c::btree_iter_update_trigger_flags,
+                     ip: c_ulong) -> PathIdx {
+    trans.path_get(paths, btree, *pos, locks_want, level, BtreeIterFlags::from_bits_retain(flags.bits()), ip)
+}
+
+#[c_export]
+pub fn bch2_path_get_unlocked_mut(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, btree: Btree,
+                                  level: c_uint, pos: Bpos, cached: bool) -> PathIdx {
+    trans.path_get_unlocked_mut(paths, btree, level, pos, cached, crate::ret_ip!())
+}
+
+#[c_export]
+pub fn bch2_path_put(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: PathIdx, intent: bool) {
+    trans.path_put(paths, path, intent)
+}
+
+#[c_export]
+pub fn __btree_path_get(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: *mut BtreePath,
+                        intent: bool) {
+    paths.get_ll(trans.path_idx_of(path), intent)
+}
+
+#[c_export]
+pub fn __bch2_btree_path_make_mut(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: PathIdx,
+                                  intent: bool, ip: c_ulong) -> PathIdx {
+    trans.path_make_mut_clone(paths, path, intent, ip)
+}
+
+#[c_export]
+pub fn __bch2_btree_path_set_pos(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: PathIdx,
+                                 new_pos: &Bpos, intent: bool, ip: c_ulong) -> PathIdx {
+    trans.path_set_pos(paths, path, *new_pos, intent, ip)
+}
+
+#[c_export]
+pub fn bch2_btree_path_peek_slot(path: &BtreePath, u: &mut c::bkey) -> c::bkey_s_c {
+    path.peek_slot(u)
+}
+
+#[c_export]
+pub fn __bch2_btree_trans_sort_paths(_trans: &BtreeTrans<'_>, #[lent(_trans)] paths: &mut Paths<'_>) {
+    paths.sort_now()
+}
+
+#[c_export]
+pub fn bch2_btree_path_to_text_short(out: &mut Printbuf, _trans: &BtreeTrans<'_>, path_idx: PathIdx,
+                                     path: &BtreePath) {
+    path.to_text_short(out, path_idx)
+}
+
+#[c_export]
+pub fn bch2_btree_path_to_text(out: &mut Printbuf, _trans: &BtreeTrans<'_>, path_idx: PathIdx, path: &BtreePath) {
+    path.to_text(out, path_idx)
+}
+
+#[c_export]
+pub fn bch2_trans_paths_to_text(out: &mut Printbuf, trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) {
+    trans.paths_to_text(out, paths)
+}
+
+#[c_export]
+pub fn bch2_dump_trans_paths_updates(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) {
+    trans.dump_paths_updates(paths)
+}
+
+#[c_export]
+pub fn __bch2_btree_trans_too_many_iters(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) -> c_int {
+    trans.fs().event_inc_trace(events::trans_restart_too_many_iters, |out| {
+        prt!(out, "{}\n", trans.fn_name());
+        trans.paths_to_text(out, paths);
+    });
+
+    ret_to_c(Err::<(), _>(trans.restart(bch_errcode::BCH_ERR_transaction_restart_too_many_iters)))
+}
+
+#[c_export]
+pub fn __bch2_btree_path_verify(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: *mut BtreePath) {
+    trans.path_verify_now(paths, trans.path_idx_of(path))
+}
+
+#[c_export]
+pub fn __bch2_trans_verify_paths(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) {
+    for idx in trans.path_idxs() {
+        trans.path_verify_now(paths, idx);
+    }
+}
+
+#[c_export]
+pub fn __bch2_assert_pos_locked(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, btree: Btree,
+                                pos: Bpos) {
+    trans.assert_pos_locked_now(paths, btree, pos)
 }
 
 /// What a path's levels point at: a btree node, or - a cached path's - a key

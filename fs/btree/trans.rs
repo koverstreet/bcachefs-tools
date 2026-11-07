@@ -46,7 +46,7 @@ use core::mem::{offset_of, size_of, size_of_val};
 use core::ops::ControlFlow;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
-use cstruct_macros::{c_export, c_extern};
+use cstruct_macros::c_export;
 
 /// btree_trans!(fs): a transaction named for the function it's created in.
 /// Transaction stats and lock contention are reported per function, under that
@@ -205,9 +205,10 @@ impl<'f> BtreeTrans<'f> {
 
     /// Drop everything queued for the next commit: as C's
     /// bch2_trans_reset_updates(), which every commit and begin runs.
-    pub(crate) fn reset_updates(&self) {
-        for i in self.queued_updates() {
-            unsafe { c::bch2_path_put(self.raw(), i.path, true) };
+    pub(crate) fn reset_updates(&self, paths: &mut Paths<'_>) {
+        for i in 0..self.queued_updates().len() {
+            let path = self.queued_updates()[i].path;
+            self.path_put(paths, path, true);
         }
 
         self.nr_updates.set(0);
@@ -268,6 +269,11 @@ impl<'f> BtreeTrans<'f> {
         self.paths_allocated().0.test(idx as usize)
     }
 
+    /// How many paths are allocated - path 0, the sentinel, with them.
+    pub(crate) fn nr_paths_allocated(&self) -> usize {
+        self.paths_allocated().0.weight() as usize
+    }
+
     /// TransAttempt::restart(), for what C calls in the middle of an attempt
     /// without one: the lock paths.
     pub(crate) fn restart(&self, error: bch_errcode) -> BchError {
@@ -297,7 +303,7 @@ impl<'f> BtreeTrans<'f> {
     /// unlocked. A panic if not, with debug_check_iterators on.
     pub fn assert_pos_locked(&self, btree: Btree, pos: Bpos) {
         if cfg!(CONFIG_BCACHEFS_DEBUG) && crate::debug::params::debug_check_iterators() {
-            unsafe { c::__bch2_assert_pos_locked(self.raw(), btree, pos) }
+            self.assert_pos_locked_now(&mut self.paths(), btree, pos)
         }
     }
 
@@ -665,11 +671,6 @@ impl Drop for TransGuard<'_> {
 
 // ── Memory, and beginning again ─────────────────────────────────────────────
 
-c_extern! {
-    pub fn __bch2_path_free(trans: *mut BtreeTrans<'_>, path: PathIdx);
-    pub fn bch2_btree_path_traverse_all(trans: *mut BtreeTrans<'_>) -> c_int;
-}
-
 impl TransMem {
     /// @u64s zeroed, off the top - None if they don't fit: it's never
     /// reallocated here, what it's handed out being in use.
@@ -865,7 +866,7 @@ impl BtreeTrans<'_> {
                              self.restarted().0 == 0 && !self.in_traverse_all() &&
                              !self.begin_may_drop_updates());
 
-        self.reset_updates();
+        self.reset_updates(paths);
 
         self.restart_count.set(self.restart_count.get() + 1);
         self.mem_with(|m| m.buf.clear());
@@ -924,7 +925,7 @@ impl BtreeTrans<'_> {
                 free
             };
             if free {
-                unsafe { __bch2_path_free(self.raw(), i) };
+                self.path_free(paths, i);
             }
         }
 
@@ -961,7 +962,7 @@ impl BtreeTrans<'_> {
 
         if self.restarted().0 != 0 {
             /* restart is hot — skip the resched check */
-            unsafe { bch2_btree_path_traverse_all(self.raw()) };
+            let _ = self.path_traverse_all(paths);
             self.clear_notrace_relock_fail();
         } else if sched::need_resched() ||
                   time_after64(now, self.locking_wait.trans_start_time.get() +
@@ -1184,8 +1185,8 @@ pub fn bch2_trans_has_updates(trans: &BtreeTrans<'_>) -> bool {
 }
 
 #[c_export]
-pub fn bch2_trans_reset_updates(trans: &BtreeTrans<'_>) {
-    trans.reset_updates()
+pub fn bch2_trans_reset_updates(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) {
+    trans.reset_updates(paths)
 }
 
 #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]

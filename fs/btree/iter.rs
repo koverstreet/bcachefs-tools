@@ -56,12 +56,9 @@ pub struct trans_may_drop_updates {
 c_default!(trans_may_drop_updates);
 
 c_extern! {
-    pub fn bch2_path_put(trans: *mut BtreeTrans<'_>, path_idx: PathIdx, intent: bool);
-    pub fn bch2_btree_path_peek_slot(path: *mut BtreePath, u: *mut c::bkey) -> c::bkey_s_c;
     pub fn bch2_btree_increase_depth(trans: *mut BtreeTrans<'_>, path: PathIdx, flags: c_uint) -> c_int;
     pub fn bch2_btree_iter_peek_root(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter, btree: Btree,
                                      level: c_uint) -> c::bkey_s_c;
-    pub fn __bch2_assert_pos_locked(trans: *mut BtreeTrans<'_>, id: Btree, pos: Bpos);
     #[must_use]
     pub fn bch2_btree_iter_traverse(iter: *mut c::btree_iter) -> c_int;
     #[must_use]
@@ -1745,7 +1742,8 @@ where
         // __commit_do().
         if let Err(e) = f(t) {
             if !is_restart(&e) {
-                t.trans().reset_updates();
+                let trans = t.trans();
+                trans.reset_updates(&mut trans.paths());
             }
             return Err(e);
         }
@@ -1799,7 +1797,8 @@ impl BtreeIter<'_> {
     pub fn set_pos(&mut self, mut pos: Bpos) {
         if self.update_path != 0 {
             let intent = self.iter_flags().contains(BtreeIterFlags::INTENT);
-            unsafe { c::bch2_path_put(self.trans, self.update_path, intent) };
+            let trans = unsafe { &*self.trans };
+            trans.path_put(&mut trans.paths(), self.update_path, intent);
         }
         self.update_path = 0;
 
@@ -1985,9 +1984,9 @@ impl<'t> BtreeIter<'t> {
     /// The btree's key at the iterator's path's position - not the journal
     /// keys over it, which a peek sees - unpacked into @u if it's packed.
     pub(crate) fn path_peek_slot<'k>(&'k self, t: &TransAttempt<'_, 't>, u: &'k mut c::bkey) -> BkeySC<'k> {
-        let mut paths = t.trans().paths();
+        let paths = t.trans().paths();
         unsafe {
-            bkey_s_c_to_result::<'k>(bch2_btree_path_peek_slot(&mut paths[self.path], u))
+            bkey_s_c_to_result::<'k>(paths[self.path].peek_slot(u))
                 .ok()
                 .flatten()
                 .expect("a slot always has a key")

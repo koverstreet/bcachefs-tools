@@ -428,6 +428,128 @@ impl KeyIter {
         Some(keys.disassemble(k, u))
     }
 
+    fn set_set_pos(&mut self, keys: &Keys<'_>, end_offset: u16, k: u16) {
+        for i in 0..NR {
+            if self.__set_end(i) {
+                break;
+            }
+
+            if self.data[i].end == end_offset {
+                self.data[i].k = k;
+                self.sort(keys);
+                return;
+            }
+        }
+
+        self.push(keys, k, end_offset);
+    }
+
+    pub fn fix_key_modified(&mut self, keys: &Keys<'_>, where_: u16, pos: &Bpos) {
+        if self.peek_all() == Some(where_) && keys.bkey_iter_pos_cmp(where_, pos).is_lt() {
+            self.advance(keys);
+            return;
+        }
+
+        /*
+         * The caller just flipped @where's deleted-ness in place (mark
+         * deleted for an overwrite, or same-position whiteout). That's
+         * the tiebreaker in bkey_iter_cmp(), so any iter set entry whose
+         * bset_pos shares a key value with @where may now be out of order
+         * — and the breakage isn't limited to data[0]. Re-sort to restore
+         * the iter's sort invariant.
+         */
+        self.sort(keys);
+    }
+
+    pub fn fix(&mut self, keys: &Keys<'_>, level: u8, t: usize, where_: u16, clobber_u64s: u16, new_u64s: u16,
+               pos: &Bpos) {
+        let end = keys.sets[t].end_offset;
+        let offset = where_;
+        let shift = i32::from(new_u64s) - i32::from(clobber_u64s);
+        let old_end = (i32::from(end) - shift) as u16;
+
+        match self.set_find(old_end) {
+            None => {
+                /*
+                 * Bset isn't tracked by the iter. If the iter is positioned
+                 * at-or-before the new key, push the bset in. Either way, fall
+                 * through to the cross-bset rewind walk below: an insert into
+                 * an untracked bset can still violate the cross-bset rewind
+                 * invariant against a tracked bset (e.g. same bpos as a
+                 * whiteout in another bset that the iter is currently parked
+                 * on), and the rewind is what catches that.
+                 */
+                if new_u64s != 0 && keys.bkey_iter_pos_cmp(where_, pos).is_ge() {
+                    self.push(keys, where_, end);
+                }
+            }
+            Some(i) => {
+                self.data[i].end = end;
+
+                /*
+                 * If the iter has reached or passed the change in this bset,
+                 * adjust set->k. If it hasn't (set->k < offset), leave set->k
+                 * alone — but still fall through to the rewind walk below in
+                 * case the change introduced a cross-bset inconsistency
+                 * against another bset this iter tracks.
+                 */
+                if self.data[i].k >= offset {
+                    if new_u64s != 0 && keys.bkey_iter_pos_cmp(where_, pos).is_ge() {
+                        self.data[i].k = offset;
+                    } else if self.data[i].k < offset + clobber_u64s {
+                        self.data[i].k = offset + new_u64s;
+                        if self.data[i].k == self.data[i].end {
+                            self.set_drop(i);
+                        }
+                    } else {
+                        /* Iterator is after key that changed */
+                        self.data[i].k = (i32::from(self.data[i].k) + shift) as u16;
+                    }
+
+                    self.sort(keys);
+                }
+            }
+        }
+
+        /*
+         * Inserts/removes in interior nodes can leave a btree_node_iter
+         * inconsistent: the modified key may now sit between the iter's
+         * current key and a passed key in another bset. Multiple paths
+         * can share an interior node, so the path doing the modification
+         * isn't the only iter that needs adjusting. Always rewind to catch
+         * passed keys (in any bset) that should now come after the iter's
+         * current key — otherwise bch2_btree_node_iter_prev_all() breaks.
+         */
+        if !self.end() && level != 0 {
+            let b = keys.contents();
+            let k = keys.key_at(self.__peek_all());
+
+            for t in keys.sets {
+                if self.data[0].end == t.end_offset {
+                    continue;
+                }
+
+                let mut k2 = self.bset_pos(t);
+                let mut set_pos = false;
+
+                loop {
+                    let Some(p) = keys.bkey_prev_all(t, k2) else { break };
+                    if b.bkey_iter_cmp(k, keys.key_at(p)).is_ge() {
+                        break;
+                    }
+                    k2 = p;
+                    set_pos = true;
+                }
+
+                if set_pos {
+                    self.set_set_pos(keys, t.end_offset, k2);
+                }
+            }
+        }
+
+        self.verify(keys);
+    }
+
     fn __next_check(&self, keys: &Keys<'_>) {
         let b = keys.contents();
         let mut iter = *self;

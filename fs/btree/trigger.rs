@@ -161,7 +161,7 @@ pub unsafe fn bch2_verify_update_old_key(trans: &BtreeTrans<'_>, i: &c::btree_in
 
     let path = unsafe { trans.paths.get().add(i.path as usize) };
     let mut u = c::bkey::new();
-    let mut k = unsafe { crate::btree::iter::bch2_btree_path_peek_slot(path, &mut u) };
+    let mut k = unsafe { (*path).peek_slot(&mut u) };
 
     // bch2_btree_path_peek_slot() for a cached iterator might return a key in a
     // different snapshot:
