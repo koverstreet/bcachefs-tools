@@ -105,13 +105,20 @@ c_enum! {
     }
 }
 
+/// The node cache's lists: intrusive, one of list.rs's exceptions - a node
+/// moves between them on every state change, in place, and is never freed
+/// while the fs runs.
+pub type BtreeNodeList = crate::list!(BtreeNode, list);
+
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct btree_cache_list {
     pub idx: c_uint,
     pub shrink: *mut cs::shrinker,
-    pub clean: cs::list_head,
-    pub dirty: cs::list_head,
+    #[c("struct list_head clean")]
+    pub clean: BtreeNodeList,
+    #[c("struct list_head dirty")]
+    pub dirty: BtreeNodeList,
 }
 c_default!(btree_cache_list);
 
@@ -219,9 +226,12 @@ impl BtreeRootsLive {
 #[derive(CStruct)]
 pub struct BtreeCacheLists {
     pub live: [cs::btree_cache_list; 2],
-    pub freeable: cs::list_head,
-    pub freed_pcpu: cs::list_head,
-    pub freed_nonpcpu: cs::list_head,
+    #[c("struct list_head freeable")]
+    pub freeable: BtreeNodeList,
+    #[c("struct list_head freed_pcpu")]
+    pub freed_pcpu: BtreeNodeList,
+    #[c("struct list_head freed_nonpcpu")]
+    pub freed_nonpcpu: BtreeNodeList,
 
     pub nr_vmalloc: usize,
     pub nr_freeable: usize,

@@ -858,7 +858,7 @@ impl Fs {
         {
             let mut lists = bc.lock.lock();
             for i in 0..lists.live.len() {
-                let dirty = unsafe { <crate::list!(BtreeNode, list)>::from_c(&raw mut lists.live[i].dirty) };
+                let dirty = unsafe { &mut *(&raw mut lists.live[i].dirty) };
                 let mut cur = dirty.cursor_mut();
                 while let Some(b) = cur.current() {
                     cur.move_next();

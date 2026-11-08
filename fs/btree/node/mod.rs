@@ -24,7 +24,9 @@ use crate::types::c_default;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use crate::util::{Printbuf, ToText};
+use crate::data_structures::list::ListLinks;
 use core::ffi::c_void;
+use core::marker::{PhantomData, PhantomPinned};
 use core::mem::offset_of;
 use core::ops::{ControlFlow, Range};
 use bset::{BsetTree, BSET_CACHELINE};
@@ -148,9 +150,15 @@ pub struct BtreeNode {
     pub will_make_reachable: crate::btree::interior::WillMakeReachable,
 
     /* lru list */
-    pub list: cs::list_head,
+    #[c("struct list_head list")]
+    pub list: ListLinks,
 
     pub cache_state: cs::btree_node_cache_state,
+
+    // never moved, nor freed while the fs runs: what linking it promises -
+    // in a PhantomData, as a bare PhantomPinned isn't FFI-safe
+    #[c_anon("")]
+    _pin: PhantomData<PhantomPinned>,
 }
 c_default!(BtreeNode);
 

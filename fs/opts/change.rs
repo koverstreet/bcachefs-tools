@@ -194,7 +194,7 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64) {
             }
         }
         opt_id::Opt_btree_cache_shrinker_seeks => {
-            let shrinks = fs.btree.cache.lock.lock().live.map(|l| l.shrink);
+            let shrinks = fs.btree.cache.lock.lock().live.each_ref().map(|l| l.shrink);
             for (shrink, seeks) in shrinks.into_iter().zip([v, v * 4]) {
                 if !shrink.is_null() {
                     // SAFETY: the shrinker is the cache's, live as it is
