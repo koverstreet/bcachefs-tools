@@ -52,7 +52,7 @@ pub(crate) use raw::{rust_local_irq_restore, rust_local_irq_save, rust_local_loc
 // for util/sleep.rs's waitqueue_init(): the shim's waitqueue lock
 #[cfg(not(kernel))]
 pub(crate) use raw::rust_spin_lock_init;
-pub use lock::{Exclusive, ExclusiveGuard, Locked, LockedBy, RawLock, RawLockBase, RawNestedLock, RawReadLock, RawRwLock, RawSixLock, RawTimedLock, RawTryLock, Shared, SharedGuard,
+pub use lock::{Exclusive, ExclusiveGuard, Locked, LockedBy, RawLock, RawLockBase, RawNestedLock, RawReadLock, RawRwLock, RawSixLock, RawTimedLock, RawTryLock, RawTryReadLock, Shared, SharedGuard,
               SixIntent, SixWrite, SixWriteIntent, Unlock};
 pub use noio::{mutex_noio, percpu_rwsem_noio, MemallocFlags, MutexNoio, Noio, PercpuRwsemNoio};
 pub(crate) use noio::{memalloc_flags_restore, memalloc_flags_save, PF_MEMALLOC_NOIO};

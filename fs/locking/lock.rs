@@ -88,6 +88,15 @@ pub unsafe trait RawReadLock: RawLockBase {
     unsafe fn unlock_read(&self, g: Self::GuardState);
 }
 
+/// A RawReadLock that can be tried: taken only if no writer holds it.
+///
+/// # Safety
+/// try_lock_read() is lock_read(), when it returns Some; when None, nothing's
+/// taken, and nothing's left to release.
+pub unsafe trait RawTryReadLock: RawReadLock {
+    unsafe fn try_lock_read(&self) -> Option<Self::GuardState>;
+}
+
 /// A RawLock that readers can share: RawLock's lock() and unlock() are the
 /// writer's, alone.
 ///
@@ -281,6 +290,15 @@ impl<R: RawReadLock, G: Sync, P> Locked<R, G, P> {
     pub fn read(&self) -> SharedGuard<'_, R, G, P> {
         let state = unsafe { self.raw.lock_read() };
         SharedGuard { lock: self, state: Some(state), _not_send: PhantomData }
+    }
+
+    /// read(), if no writer holds it.
+    pub fn try_read(&self) -> Option<SharedGuard<'_, R, G, P>>
+    where
+        R: RawTryReadLock,
+    {
+        let state = unsafe { self.raw.try_lock_read() }?;
+        Some(SharedGuard { lock: self, state: Some(state), _not_send: PhantomData })
     }
 }
 

@@ -16,7 +16,7 @@
 #![allow(non_camel_case_types)]
 
 use super::{RawLock, RawLockBase};
-use super::{RawReadLock, RawRwLock};
+use super::{RawReadLock, RawRwLock, RawTryReadLock};
 use super::{MemallocFlags, RawNestedLock, RawTryLock};
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
@@ -263,6 +263,12 @@ unsafe impl RawReadLock for c::rw_semaphore {
 
     unsafe fn unlock_read(&self, _: ()) {
         unsafe { c::up_read(self.as_ptr().cast()) }
+    }
+}
+
+unsafe impl RawTryReadLock for c::rw_semaphore {
+    unsafe fn try_lock_read(&self) -> Option<()> {
+        (unsafe { c::down_read_trylock(self.as_ptr().cast()) } != 0).then_some(())
     }
 }
 
