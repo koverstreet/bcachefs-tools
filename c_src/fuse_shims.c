@@ -29,37 +29,6 @@
 
 #include "fuse_shims.h"
 
-/* ---- thread initialization ---- */
-
-/*
- * fuser worker threads don't run sched_init() (it's a constructor for
- * the main thread only). Any libbcachefs code that touches 'current'
- * will NULL-deref without this.
- */
-void rust_fuse_ensure_current(void)
-{
-	if (current)
-		return;
-
-	struct task_struct *p = calloc(1, sizeof(*p));
-	p->state = TASK_RUNNING;
-	atomic_set(&p->usage, 1);
-	init_completion(&p->exited);
-	current = p;
-}
-
-void rust_fuse_rcu_register(void)
-{
-	rcu_register_thread();
-	bch_percpu_thread_init();
-}
-
-void rust_fuse_rcu_unregister(void)
-{
-	rcu_unregister_thread();
-}
-
-
 /* ---- readdir ---- */
 
 struct rust_readdir_ctx {

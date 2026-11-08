@@ -10,6 +10,7 @@
 #define CONFIG_RCU_HAVE_FUTEX 1
 #include <urcu/futex.h>
 
+#include <linux/percpu.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/timer.h>
@@ -139,6 +140,30 @@ static void sched_init(void)
 
 	//rcu_init();
 	//rcu_register_thread();
+}
+
+/*
+ * A thread that's neither the main thread nor a kthread - fuser's workers, a
+ * test harness's - doesn't run sched_init(), and any libbcachefs code that
+ * touches 'current' NULL-derefs without this.
+ */
+void linux_thread_init(void)
+{
+	if (!current) {
+		struct task_struct *p = calloc(1, sizeof(*p));
+		p->state = TASK_RUNNING;
+		atomic_set(&p->usage, 1);
+		init_completion(&p->exited);
+		current = p;
+	}
+
+	rcu_register_thread();
+	bch_percpu_thread_init();
+}
+
+void linux_thread_exit(void)
+{
+	rcu_unregister_thread();
 }
 
 #ifndef SYS_getrandom

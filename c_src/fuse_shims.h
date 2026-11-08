@@ -14,11 +14,6 @@
  * expressed through bindgen.
  */
 
-/* Thread initialization — must be called on fuser worker threads */
-void rust_fuse_ensure_current(void);
-void rust_fuse_rcu_register(void);
-void rust_fuse_rcu_unregister(void);
-
 /* Directory reading */
 typedef int (*rust_fuse_filldir_fn)(void *ctx,
 				    const char *name, unsigned name_len,

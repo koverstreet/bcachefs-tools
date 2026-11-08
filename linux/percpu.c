@@ -24,7 +24,7 @@
  * __addr_to_pcpu_ptr() in mm/percpu.c.
  *
  * Per-thread setup runs through bch_percpu_thread_init() (called from
- * kthread_start_fn(), linux_shrinkers_init(), rust_fuse_rcu_register(),
+ * kthread_start_fn(), linux_shrinkers_init(), linux_thread_init(),
  * and a constructor here that bootstraps slot 0 before any module_init
  * runs). Subsystems that need per-instance setup register an init_one
  * callback via bch_percpu_register(); the registry runs it for every live

@@ -110,6 +110,9 @@ struct task_struct {
 
 extern __thread struct task_struct *current;
 
+void linux_thread_init(void);
+void linux_thread_exit(void);
+
 #define __set_task_state(tsk, state_value)		\
 	do { (tsk)->state = (state_value); } while (0)
 #define set_task_state(tsk, state_value)		\

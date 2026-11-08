@@ -78,7 +78,7 @@ struct RcuGuard;
 impl Drop for RcuGuard {
     fn drop(&mut self) {
         eprintln!("fuse worker thread exiting, unregistering RCU");
-        unsafe { c::rust_fuse_rcu_unregister() };
+        unsafe { c::linux_thread_exit() };
     }
 }
 
@@ -95,8 +95,7 @@ thread_local! {
 fn ensure_thread_init() {
     THREAD_INITIALIZED.with(|init| {
         if !init.get() {
-            unsafe { c::rust_fuse_ensure_current() };
-            unsafe { c::rust_fuse_rcu_register() };
+            unsafe { c::linux_thread_init() };
             RCU_GUARD.with(|g| g.set(Some(RcuGuard)));
             init.set(true);
             eprintln!("fuse worker thread initialized (current + RCU)");
