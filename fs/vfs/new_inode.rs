@@ -47,7 +47,7 @@ impl NewInode {
         let _gfp = MemallocFlags::for_gfp(gfp);
         // SAFETY: the superblock's own inode LRU
         let p = INODE_CACHE.alloc_lru(unsafe { &raw mut (*sb.as_ptr()).s_inode_lru }, gfp)?;
-        let Ok(idx) = fs.vfs.inodes.get_idx() else {
+        let Ok(slot) = fs.vfs.inodes.get_slot() else {
             // SAFETY: just allocated, nothing in it
             unsafe { INODE_CACHE.free(p) };
             return None;
@@ -70,7 +70,6 @@ impl NewInode {
             ei_quota <- new_lock!(InodeQuota { ei_qid: Default::default(), ei_quota_reserved: 0 },
                                   "&inode->ei_quota_lock"),
             ei_writeback_timer <- crate::new_delayed_work!(writeback_fn, "&inode->ei_writeback_timer"),
-            ei_inodes_idx: idx,
             ..Zeroable::init_zeroed()
         });
         // SAFETY: @p is ours, uninitialized; nothing in it can fail
@@ -79,11 +78,11 @@ impl NewInode {
         let mut inode = NewInode(p);
         if inode.v.init_always(sb, gfp).is_err() {
             // not yet a VFS inode: no reference to put
-            fs.vfs.inodes.put_idx(idx);
             // SAFETY: ours, and nothing of the VFS's in it
             unsafe { INODE_CACHE.free(ManuallyDrop::new(inode).0) };
             return None;
         }
+        inode.ei_inodes_idx = slot.into_idx();
         Some(inode)
     }
 

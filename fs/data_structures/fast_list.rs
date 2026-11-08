@@ -5,10 +5,10 @@
 //! per-CPU cache of free ones, so only refilling or spilling a cache takes
 //! the IDA's lock.
 //!
-//! A slot can be had before its item - get_idx() - to take the allocation
-//! failure early, and filled where failing isn't an option: set(). Slot 0
-//! is never handed out: an index of 0 is no slot, which put_idx() and
-//! remove() ignore.
+//! A slot can be had before its item - get_slot() - to take the allocation
+//! failure early, and filled where failing isn't an option: Slot::set().
+//! Slot 0 is never handed out: an index of 0 is no slot, which remove()
+//! ignores.
 //!
 //! A cache is changed with interrupts off - an IrqGuard - as items come off
 //! in bio completions. It holds 31: a refill gets up to 16, and a full one
@@ -31,6 +31,7 @@ use crate::util::rcu::ReadGuard;
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::{c_int, c_uint, c_void};
 use core::iter;
+use core::mem::ManuallyDrop;
 use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
@@ -131,8 +132,12 @@ impl c::fast_list {
     }
 
     /// A slot for an item to be set later, its allocation failing now if it's
-    /// to fail.
-    pub fn get_idx(&self) -> Result<u32, AllocError> {
+    /// to fail - as the caller's memalloc scope allows.
+    pub fn get_slot(&self) -> Result<Slot<'_>, AllocError> {
+        Ok(Slot { list: self, idx: self.get_idx()? })
+    }
+
+    fn get_idx(&self) -> Result<u32, AllocError> {
         if let Some(idx) = self.with_cache(|lp| lp.pop()) {
             return Ok(idx);
         }
@@ -149,7 +154,7 @@ impl c::fast_list {
     }
 
     /// Gives back a slot get_idx() handed out, never set.
-    pub fn put_idx(&self, idx: u32) {
+    fn put_idx(&self, idx: u32) {
         if idx == 0 {
             return;
         }
@@ -165,12 +170,10 @@ impl c::fast_list {
 
     /// @item in a new slot: the slot, for remove().
     pub fn add(&self, item: NonNull<c_void>) -> Result<u32, AllocError> {
-        let idx = self.get_idx()?;
-        self.set(idx, item);
-        Ok(idx)
+        Ok(self.get_slot()?.set(item))
     }
 
-    /// @item in slot @idx, which get_idx() handed out.
+    /// @item in slot @idx, a Slot's into_idx().
     pub fn set(&self, idx: u32, item: NonNull<c_void>) {
         self.slot(idx).store(item.as_ptr(), Release);
     }
@@ -213,6 +216,35 @@ impl c::fast_list {
             c::ida_destroy(self.ida());
             self.items.free();
         }
+    }
+}
+
+/// A slot had before its item, empty: given back if it's dropped so.
+#[must_use = "a slot dropped is given back"]
+pub struct Slot<'l> {
+    list: &'l c::fast_list,
+    idx:  u32,
+}
+
+impl Slot<'_> {
+    /// @item in it: its index, for remove().
+    pub fn set(self, item: NonNull<c_void>) -> u32 {
+        let list = self.list;
+        let idx = self.into_idx();
+        list.set(idx, item);
+        idx
+    }
+
+    /// Its index, the slot kept: for an owner that set()s or remove()s it
+    /// by index, later.
+    pub fn into_idx(self) -> u32 {
+        ManuallyDrop::new(self).idx
+    }
+}
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        self.list.put_idx(self.idx)
     }
 }
 
