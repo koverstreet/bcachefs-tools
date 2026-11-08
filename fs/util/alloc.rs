@@ -483,6 +483,34 @@ pub fn kvrealloc(p: *mut u8, old: usize, new: usize) -> Result<core::ptr::NonNul
     }
 }
 
+/// What a kvmalloc() reallocation that mustn't fail falls back to, a plain
+/// one having failed: @new bytes, __GFP_NOFAIL - through C, as the kernel's
+/// Rust has no __GFP_NOFAIL - @p's @old copied in, and @p freed. Aligned as
+/// kmalloc() aligns @new. Userspace's allocator aborts rather than fail.
+///
+/// # Safety
+/// @p is kvmalloc()'d, of @old bytes, and nothing uses it after.
+pub unsafe fn kvrealloc_nofail_fallback(p: Option<core::ptr::NonNull<u8>>, old: usize, new: usize)
+    -> core::ptr::NonNull<u8>
+{
+    #[cfg(kernel)]
+    {
+        let q = kvzalloc_nofail(new);
+        if let Some(p) = p {
+            unsafe {
+                q.as_ptr().copy_from_nonoverlapping(p.as_ptr(), old.min(new));
+                <KVmalloc as kernel::alloc::Allocator>::free(p, kv_layout(old).expect("its allocation's"));
+            }
+        }
+        q
+    }
+    #[cfg(not(kernel))]
+    {
+        let _ = (p, old);
+        std::alloc::handle_alloc_error(kv_layout(new).expect("an allocation's"))
+    }
+}
+
 /// # Safety
 /// @p is kvrealloc_zeroed()'s or kvrealloc()'s, of @size bytes, and nothing
 /// uses it after.

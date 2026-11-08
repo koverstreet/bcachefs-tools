@@ -19,7 +19,7 @@
 //! has none again (free_fifo() NULLs it), so dropping it frees nothing.
 
 use crate::types::Fifo;
-use crate::util::alloc::{kvfree_sized, kvrealloc, AllocError};
+use crate::util::alloc::{assert_may_reclaim, kvfree_sized, kvrealloc, kvrealloc_nofail_fallback, AllocError};
 use core::mem::{needs_drop, size_of, MaybeUninit};
 use core::ptr::NonNull;
 use num_traits::{AsPrimitive, ConstZero, PrimInt, Unsigned, WrappingAdd, WrappingSub};
@@ -194,6 +194,19 @@ impl<T, I: FifoIdx> Fifo<T, I> {
         }
     }
 
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> + '_ {
+        let (a, b) = if self.data.is_null() {
+            (&mut [][..], &mut [][..])
+        } else {
+            let (start, first, rest) = self.stretches(self.front, self.len());
+            unsafe {
+                (core::slice::from_raw_parts_mut(self.data.wrapping_add(start), first),
+                 core::slice::from_raw_parts_mut(self.data, rest))
+            }
+        };
+        a.iter_mut().chain(b)
+    }
+
     /// The free slots after back, as as_slices() has the entries.
     fn spare_mut(&mut self) -> (&mut [MaybeUninit<T>], &mut [MaybeUninit<T>]) {
         if self.data.is_null() {
@@ -219,6 +232,21 @@ impl<T, I: FifoIdx> Fifo<T, I> {
     /// Room for @more entries past those there, the buffer grown if it must
     /// be - to a power of two, every index kept.
     pub fn reserve(&mut self, more: usize) -> Result<(), AllocError> {
+        self.grow(more, kvrealloc)
+    }
+
+    /// reserve(), for what mustn't fail to allocate: __GFP_NOFAIL, if a plain
+    /// allocation fails.
+    pub fn reserve_nofail(&mut self, more: usize) {
+        assert_may_reclaim();
+        self.grow(more, |p, old, new| Ok(kvrealloc(p, old, new)
+            .unwrap_or_else(|_| unsafe { kvrealloc_nofail_fallback(NonNull::new(p), old, new) })))
+            .expect("a fifo grown past its index type");
+    }
+
+    fn grow(&mut self, more: usize, kvrealloc: impl FnOnce(*mut u8, usize, usize) -> Result<NonNull<u8>, AllocError>)
+        -> Result<(), AllocError>
+    {
         const { assert!(size_of::<T>() != 0, "a fifo of zero sized entries") };
 
         let want = self.len().checked_add(more).ok_or(AllocError)?;

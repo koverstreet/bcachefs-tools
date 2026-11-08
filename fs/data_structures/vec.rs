@@ -5,7 +5,8 @@
 //! allocates. KVec and KVVec are it: the same in both builds.
 
 use crate::data_structures::array_vec::LenUint;
-use crate::util::alloc::{flags, kvmalloc_realloc_gfp, Alloc, AllocError, Flags, KVmalloc};
+use crate::util::alloc::{assert_may_reclaim, flags, kvmalloc_realloc_gfp, kvrealloc_nofail_fallback, Alloc,
+                         AllocError, Flags, KVmalloc};
 use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::mem::{size_of, ManuallyDrop, MaybeUninit};
@@ -275,6 +276,17 @@ impl<T, L: LenUint> Vec<T, KVmalloc, L> {
     pub fn reserve_raw_gfp(&mut self, additional: usize, gfp: crate::c::gfp_t) -> Result<(), AllocError> {
         // SAFETY: @p is KVmalloc's, of @old
         self.grow(additional, |p, layout, old| unsafe { kvmalloc_realloc_gfp(p, layout, old, gfp) })
+    }
+
+    /// push(), for what mustn't fail to allocate: __GFP_NOFAIL, if a plain
+    /// allocation fails.
+    pub fn push_nofail(&mut self, v: T) {
+        assert_may_reclaim();
+        self.grow(1, |p, layout, old| Ok(unsafe {
+            <KVmalloc as Alloc>::realloc(p, layout, old, flags::GFP_KERNEL)
+                .unwrap_or_else(|_| kvrealloc_nofail_fallback(p, old.size(), layout.size()))
+        })).expect("a vector grown past its length type");
+        unsafe { self.push_unchecked(v) };
     }
 }
 
