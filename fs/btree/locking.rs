@@ -263,19 +263,27 @@ impl BtreeTrans<'_> {
      * Updates the saved lock sequence number, so that bch2_btree_node_relock() will
      * succeed:
      */
+    #[inline(never)]
     pub(crate) fn node_unlock_write(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize) {
+        self.node_unlock_write_inlined(paths, idx, level)
+    }
+
+    /// node_unlock_write(), for the commit's hot path.
+    #[inline(always)]
+    pub(crate) fn node_unlock_write_inlined(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize) {
         let b = {
             let path = &paths[idx];
-            let b = path.locked_node(level).filter(|_| path.write_locked(level))
-                .expect("unlocking a node for write that the path hasn't write locked");
+            ebug_assert!(path.locked_node(level).is_some() && path.write_locked(level),
+                         "unlocking a node for write that the path hasn't write locked");
             ebug_assert!(path.lock_seq_matches(level), "unlocking a node for write: path's lock seq stale");
-            ptr::from_ref(b.node())
+            path.node(level).as_ptr()
         };
 
         self.node_write_unlock_seqs(paths, unsafe { &*b });
         paths[idx].unlock_write_level(level);
     }
 
+    #[inline]
     fn node_write_unlock_seqs(&self, paths: &mut Paths<'_>, b: &c::btree_bkey_cached_common) {
         let (level, seq) = (b.level as usize, b.lock.six().seq.get());
 
@@ -428,6 +436,7 @@ impl BtreeTrans<'_> {
 
     /// Path @idx's node at @level, which it holds for intent, for write too:
     /// bch2_btree_node_lock_write().
+    #[inline]
     pub(crate) fn node_lock_write(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize)
         -> Result<(), BchError>
     {
@@ -463,6 +472,7 @@ impl BtreeTrans<'_> {
     }
 
     /// @ip is lockdep's: C's _RET_IP_.
+    #[inline(never)]
     fn node_lock_write_contended(&self, paths: &mut Paths<'_>, idx: PathIdx, b: &c::btree_bkey_cached_common,
                                  lock_may_not_fail: bool, ip: c_ulong) -> Result<(), BchError> {
         self.locking_hash_val.set(0);
