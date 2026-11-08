@@ -138,7 +138,7 @@ impl InodeOps for SymlinkOps {
 #[vtable]
 impl InodeOps for SpecialOps {}
 
-// i_op, as bch2_vfs_inode_init() sets it:
+// i_op, as NewInode::init() sets it:
 #[c_export]
 pub static bch2_dir_inode_ops: c::inode_operations = InodeVTable::<DirOps>::OPS;
 #[c_export]

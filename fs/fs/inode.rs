@@ -617,26 +617,17 @@ pub fn find_by_inum_snapshot(
     peek_slot(t, &mut iter)
 }
 
-/// For C's VFS: bch2_inode_find_by_inum_snapshot2() - inode @inum, in its
-/// subvolume, as seen in @snapshot. @flags isn't used, as it wasn't in C.
-///
-/// # Safety
-/// @warn NULL or a string, valid for the call.
-#[c_export]
-pub unsafe extern "C" fn bch2_inode_find_by_inum_snapshot2(
-    trans:    &BtreeTrans<'_>,
+/// Inode @inum, in its subvolume, as seen in @snapshot: an error logged,
+/// naming @warn, if it isn't there - bch2_inode_find_by_inum_snapshot2(). In
+/// the caller's transaction attempt.
+pub fn find_by_inum_in_snapshot(
+    t:        &TransAttempt<'_, '_>,
     inum:     c::subvol_inum,
     snapshot: u32,
-    inode:    &mut MaybeUninit<c::bch_inode_unpacked>,
-    _flags:   core::ffi::c_uint,
-    warn:     *const crate::util::ffi::c_char,
-) -> core::ffi::c_int {
-    let warn = unsafe { opt_cstr(warn) };
+    warn:     Option<&CStr>,
+) -> Result<c::bch_inode_unpacked, BchError> {
     let mut iter = BtreeIter::uninit();
-
-    ret_to_c(__peek_snapshot(&unsafe { trans.attempt_in_progress() }, &mut iter,
-                             inum, snapshot, BtreeIterFlags::empty(), warn)
-             .map(|i| { inode.write(i); }))
+    __peek_snapshot(t, &mut iter, inum, snapshot, BtreeIterFlags::empty(), warn)
 }
 
 /// The inode @inum, in a transaction: as bch2_inode_find_by_inum_trans(). An
@@ -975,13 +966,6 @@ impl ToText for c::bch_inode_unpacked {
         let mut out = out.indent(2);
         fields_to_text(&mut out, self);
     }
-}
-
-/// For C's subvolume, VFS and inode option code: bch2_inode_unpacked_to_text().
-#[c_export]
-#[cold]
-pub extern "C" fn bch2_inode_unpacked_to_text(out: &mut Printbuf, inode: &c::bch_inode_unpacked) {
-    inode.to_text(out)
 }
 
 // ── Inode number allocation ──────────────────────────────────────────────
@@ -1584,12 +1568,6 @@ pub fn rm(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
     delete_ancestor_snapshot_inodes(&trans, spos(0, inum.inum, snapshot))
 }
 
-/// For C's VFS: bch2_inode_rm().
-#[c_export]
-pub extern "C" fn bch2_inode_rm(c: &Opaque<Fs>, inum: c::subvol_inum) -> core::ffi::c_int {
-    ret_to_c(rm(Fs::from_c(c), inum))
-}
-
 /// Delete inode @inum in @snapshot and its contents there - each content
 /// btree's in its own loop - then the inode, and its damage record: as
 /// __bch2_inode_rm_snapshot(). If content couldn't all be deleted, the inode
@@ -1635,11 +1613,10 @@ fn __rm_snapshot(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<(),
 }
 
 /// Whether the inode at @pos, or a version of it in a descendant snapshot,
-/// is open in the VFS: as bch2_inode_or_descendents_is_open(). Never, in
-/// userspace.
+/// is open in the VFS: the inode cache's answer. Never, in userspace.
 #[cfg(kernel)]
 pub fn or_descendents_is_open(t: &TransAttempt<'_, '_>, pos: Bpos) -> Result<bool, BchError> {
-    Ok(crate::errcode::ret_to_result(unsafe { c::bch2_inode_or_descendents_is_open(t.raw(), pos) })? != 0)
+    crate::vfs::inode_cache::or_descendents_is_open(t, pos)
 }
 
 #[cfg(not(kernel))]
@@ -1783,15 +1760,6 @@ pub fn init_early(fs: &Fs, inode: &mut c::bch_inode_unpacked) {
     *inode = c::bch_inode_unpacked::default();
     inode.set_inode_str_hash(crate::str_hash::new_inode_type(fs).0 as u64);
     inode.bi_hash_seed = random_u64().into();
-}
-
-/// For C's VFS, subvolume creation and recovery: bch2_inode_init_early().
-#[c_export]
-pub extern "C" fn bch2_inode_init_early(
-    c:     &Opaque<Fs>,
-    inode: &mut MaybeUninit<c::bch_inode_unpacked>,
-) {
-    init_early(Fs::from_c(c), inode.write(Default::default()))
 }
 
 /// Finish a new inode, made at @now, in directory @parent: it inherits

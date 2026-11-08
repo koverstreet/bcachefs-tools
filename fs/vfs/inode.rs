@@ -34,7 +34,7 @@
 //! transaction.
 
 use crate::data_structures::array_vec::ArrayVec;
-use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
+use core::ffi::{c_long, c_ulong, CStr};
 use core::mem::offset_of;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
@@ -42,7 +42,7 @@ use core::ptr::NonNull;
 use crate::btree::bkey::pos;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt};
 use crate::c;
-use crate::errcode::{errptr_to_result, ret_to_c, ret_to_result, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::inode;
@@ -50,31 +50,20 @@ use crate::inode_opts::InodeOpt;
 use crate::locking::ExclusiveGuard;
 use crate::quota::QuotaAcctMode;
 use crate::quota;
+use crate::snapshots::subvolume;
 use crate::prt;
 use crate::util::ffi::Opaque;
 use crate::util::file::File;
 use crate::util::kernel::HZ;
 use crate::util::log::LogMsg;
-use cstruct_macros::{c_export, c_extern};
+use crate::util::rcu::{read_lock, ReadGuard};
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
 
-use super::vfs_inode::VfsInode;
+use super::new_inode::NewInode;
+use super::vfs_inode::{ILocked, VfsInode};
 
 pub use c::InodeInfo;
 use crate::format::Btree;
-
-c_extern! {
-    pub fn bch2_vfs_inode_get_trans(trans: *mut BtreeTrans<'_>, inum: c::subvol_inum,
-                                    func: *const crate::util::ffi::c_char) -> *mut c::bch_inode_info;
-    fn bch2_vfs_inode_get(c: *mut Fs, inum: c::subvol_inum,
-                          warn: *const crate::util::ffi::c_char) -> *mut c::inode;
-    // fs.c's inode cache, for lookup:
-    fn bch2_inode_hash_find(c: *mut Fs, trans: *mut BtreeTrans<'_>,
-                            inum: c::subvol_inum) -> *mut c::bch_inode_info;
-    fn bch2_inode_hash_init_insert(trans: *mut BtreeTrans<'_>, inum: c::subvol_inum,
-                                   bi: *mut c::bch_inode_unpacked,
-                                   subvol: *mut c::Subvolume) -> *mut c::bch_inode_info;
-}
 
 pub type InodeRef = ARef<InodeInfo>;
 
@@ -105,8 +94,9 @@ const _: () = assert!(offset_of!(InodeInfo, v) == 0);
 // SAFETY: the kernel's inode, shared by every thread with it open or in a VFS
 // call. What Rust reaches through &InodeInfo is atomic, behind a lock, or the
 // VFS inode's, read and written as VfsInode has it. The plain fields -
-// ei_inodes_idx, the inode cache's hash entries - are C's, under its locks:
-// Rust doesn't touch them. ei_last_dirtied is a hint, written racily by both.
+// ei_inum, the inode cache's key, and ei_inodes_idx - are set before the
+// inode's shared, and never after. ei_last_dirtied is a hint, written racily
+// by both.
 unsafe impl Send for InodeInfo {}
 unsafe impl Sync for InodeInfo {}
 
@@ -128,55 +118,106 @@ impl InodeInfo {
         unsafe { Self::from_inode((*file.as_ptr()).f_inode) }
     }
 
-    /// An inode C returns referenced, or an ERR_PTR(): the reference ours
-    /// now.
-    ///
-    /// # Safety
-    /// @ei is one of ours with a reference the caller hands over, or an
-    /// ERR_PTR().
-    pub(crate) unsafe fn from_c(ei: *mut c::bch_inode_info) -> Result<InodeRef, BchError> {
-        let ei = errptr_to_result(NonNull::new(ei).expect("an inode, or an error"))?;
-        Ok(unsafe { ARef::from_raw(ei) })
-    }
-
     /// @inum's, looked up in @t, the inode cache first.
     pub fn get_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<InodeRef, BchError> {
-        unsafe { Self::from_c(bch2_vfs_inode_get_trans(t.raw(), inum, crate::c_function_name!().as_ptr().cast())) }
+        Self::get_in(t, inum, Some(crate::c_function_name!()))
+    }
+
+    /// get_trans(), logging as @warn if it isn't there.
+    fn get_in(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, warn: Option<&CStr>) -> Result<InodeRef, BchError> {
+        if let Some(inode) = t.fs().vfs.inode_cache.find(Some(t), inum)? {
+            return Ok(inode);
+        }
+        let subvol = subvolume::get(t, inum.subvol as u32, warn.is_some())?;
+        let bi = inode::find_by_inum_in_snapshot(t, inum, subvol.snapshot.get(), warn)?;
+        Self::cache_insert(t, inum, &bi, &subvol)
     }
 
     /// @inum's, the inode cache first, in a transaction of its own - and no
     /// warning if it isn't there, as a file handle's may not be.
     pub(crate) fn get(fs: &Fs, inum: c::subvol_inum) -> Result<InodeRef, BchError> {
-        // @v is an InodeInfo's, first
-        unsafe { Self::from_c(bch2_vfs_inode_get(fs.as_ptr(), inum, core::ptr::null()).cast()) }
+        Self::get_outside(fs, inum, None)
     }
 
     /// As get(), warning as @func if it isn't there: one that has to be, the
     /// root at mount.
     pub(crate) fn get_warn(fs: &Fs, inum: c::subvol_inum, func: &CStr) -> Result<InodeRef, BchError> {
-        unsafe { Self::from_c(bch2_vfs_inode_get(fs.as_ptr(), inum, func.as_ptr().cast()).cast()) }
+        Self::get_outside(fs, inum, Some(func))
     }
 
-    /// @inum's, if the inode cache has it. It waits out one being evicted,
-    /// unlocking @t: a restart then.
-    pub(crate) fn cache_find(t: &TransAttempt<'_, '_>, inum: c::subvol_inum)
-        -> Result<Option<InodeRef>, BchError>
-    {
-        let ei = unsafe { bch2_inode_hash_find(t.fs().as_ptr(), t.raw(), inum) };
-        if ei.is_null() {
-            return Ok(None);
+    /// The cache, then a transaction.
+    fn get_outside(fs: &Fs, inum: c::subvol_inum, warn: Option<&CStr>) -> Result<InodeRef, BchError> {
+        if let Some(inode) = fs.vfs.inode_cache.find(None, inum)? {
+            return Ok(inode);
         }
-        unsafe { Self::from_c(ei) }.map(Some)
+        // before the locks its insert will be under
+        fs.vfs.inode_cache.make_room();
+        let trans = crate::btree_trans!(fs);
+        lockrestart_do(&trans, |t| Self::get_in(t, inum, warn))
     }
 
     /// A new VFS inode for @inum, made from @bi and put in the inode cache -
     /// or the one already there, if another lookup got there first. No
-    /// restart is taken from here on: commit what the caller has first.
+    /// restart is taken from here on but in allocating the inode, and nothing
+    /// after: commit what the caller has first.
     pub(crate) fn cache_insert(t: &TransAttempt<'_, '_>, inum: c::subvol_inum,
-                               bi: &mut c::bch_inode_unpacked, subvol: &mut c::Subvolume)
+                               bi: &c::bch_inode_unpacked, subvol: &c::Subvolume)
         -> Result<InodeRef, BchError>
     {
-        unsafe { Self::from_c(bch2_inode_hash_init_insert(t.raw(), inum, bi, subvol)) }
+        let mut inode = NewInode::new_trans(t)?;
+        inode.init(t.trans(), inum, bi, subvol);
+        t.fs().vfs.inode_cache.insert(t, inode)
+    }
+
+    /// The VFS done with it: deleted, if it has no links left.
+    pub(super) fn evict(&self) {
+        let fs = self.fs();
+        let v = self.vfs();
+        // An unlinked subvolume's root inode reads i_nlink == 0, but its
+        // deletion belongs to the subvolume deletion path, not us (see
+        // is_subvolume_root()): this eviction completing is what the
+        // subvolume delete work (SubvolDelete, subvolume.rs) is waiting on to
+        // tombstone the subvolume and hand the keys to the snapshot sweep.
+        let delete = v.nlink() == 0 && !v.is_bad() && !self.ei_inode.get().is_subvolume_root();
+
+        // evict() has waited for outstanding writeback, we'll do no more IO
+        // through this inode: it's safe to remove from VFS inode hashtable here
+        //
+        // Do that now so that other threads aren't blocked from pulling it back
+        // in, there's no reason for them to be:
+        if !delete {
+            fs.vfs.inode_cache.remove(self);
+        }
+
+        if cfg!(CONFIG_BCACHEFS_DEBUG) && delete {
+            let _ = v.write_now(true);
+        }
+        v.truncate_pages_final();
+
+        self.ei_writeback_timer.cancel_sync();
+
+        v.clear();
+
+        let (qid, reserved) = {
+            let q = self.ei_quota.lock();
+            (q.ei_qid, q.ei_quota_reserved)
+        };
+        assert!(v.is_bad() || reserved == 0, "evicting inode {}:{} with {reserved} sectors of quota reserved",
+                self.ei_inum.subvol, self.ei_inum.inum);
+
+        if delete {
+            if !self.ei_flags.get(c::bch_inode_info_flags::EI_INODE_SNAPSHOT) {
+                let _ = quota::acct(fs, qid, quota::Q_SPC, -(v.blocks() as i64), QuotaAcctMode::WARN);
+                let _ = quota::acct(fs, qid, quota::Q_INO, -1, QuotaAcctMode::WARN);
+            }
+            let _ = inode::rm(fs, self.inum());
+
+            // If we are deleting, we need it present in the vfs hash table
+            // so that fsck can check if unlinked inodes are still open:
+            fs.vfs.inode_cache.remove(self);
+        }
+
+        fs.vfs.inodes.remove(self.ei_inodes_idx);
     }
 
     pub fn raw(&self) -> *mut c::bch_inode_info {
@@ -191,8 +232,15 @@ impl InodeInfo {
         &self.v
     }
 
+    /// A reference, taken under its i_lock - none, if the VFS is freeing it:
+    /// VfsInode::iget().
+    pub fn iget(&self, i_lock: &ILocked<'_>) -> Option<InodeRef> {
+        // SAFETY: @v is first: the reference is ours
+        self.v.iget(i_lock).map(|r| unsafe { ARef::from_raw(ARef::into_raw(r).cast()) })
+    }
+
     pub fn inum(&self) -> c::subvol_inum {
-        self.ei_inum_hash.inum
+        self.ei_inum
     }
 
     /// A copy of ei_inode.
@@ -295,6 +343,63 @@ impl InodeInfo {
     }
 }
 
+/// Have @subvols' inodes evicted as soon as they're unused, and wait for them
+/// all to be freed.
+pub fn evict_subvolume_inodes(fs: &Fs, subvols: &[u32]) {
+    // Initially, we scan for inodes without I_DONTCACHE, then mark them to be
+    // pruned with d_mark_dontcache().
+    //
+    // Once we've had a clean pass where we didn't find any inodes without
+    // I_DONTCACHE, we wait for them to be freed.
+    //
+    // The scan tracks position by slot, so we can drop rcu around the dcache
+    // work (held safe by our igrab ref) and resume from the next slot.
+    let ours = |inode: &InodeInfo| subvols.contains(&(inode.inum().subvol as u32));
+
+    let mut pos = 0;
+    loop {
+        let next = {
+            let g = read_lock();
+            vfs_inodes_from(fs, pos, &g).find_map(|(i, inode)| {
+                let v = inode.vfs();
+                (ours(inode) && v.state_once() & c::I_DONTCACHE == 0).then(|| v.igrab()).flatten()
+                    .map(|r| (i, r))
+            })
+        };
+        let Some((i, inode)) = next else { break };
+        inode.mark_dontcache();
+        inode.prune_aliases();
+        pos = i + 1;
+    }
+
+    loop {
+        let mut found = false;
+        let mut pos = 0;
+        loop {
+            let next = {
+                let g = read_lock();
+                vfs_inodes_from(fs, pos, &g).find(|(_, inode)| ours(inode))
+                    .map(|(i, inode)| (i, NonNull::from(inode.vfs())))
+            };
+            let Some((i, inode)) = next else { break };
+            found = true;
+            VfsInode::wait_new_bit(inode, || true, c_long::MAX); // MAX_SCHEDULE_TIMEOUT
+            pos = i + 1;
+        }
+        if !found {
+            break;
+        }
+    }
+}
+
+/// The filesystem's inodes, from slot @pos on.
+fn vfs_inodes_from<'g>(fs: &'g Fs, pos: usize, g: &'g ReadGuard)
+    -> impl Iterator<Item = (usize, &'g InodeInfo)> + 'g
+{
+    // freed a grace period after evict takes them off, as the VFS frees inodes
+    fs.vfs.inodes.items_from(pos, g).map(|(i, p)| (i, unsafe { p.cast::<InodeInfo>().as_ref() }))
+}
+
 /// @inodes in address order, each once, with its lockdep subclass - as C's
 /// bch2_lock_inodes() takes them, so two lockers of the same inodes can't
 /// deadlock.
@@ -316,12 +421,6 @@ impl<'i, const N: usize> UpdateLocks<'i, N> {
     }
 }
 
-/// For C's VFS ops, until they're Rust.
-#[c_export]
-pub fn bch2_inode_update_after_write(trans: &BtreeTrans<'_>, inode: &c::bch_inode_info,
-                                     bi: &c::bch_inode_unpacked, fields: c_uint) {
-    inode.update_after_write(trans, bi, fields)
-}
 
 /// ei_update_lock, held.
 pub struct UpdateLock<'i> {

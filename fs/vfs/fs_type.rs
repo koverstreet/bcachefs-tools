@@ -276,6 +276,9 @@ impl Bcachefs {
     }
 }
 
+// MODULE_ALIAS_FS(): what get_fs_type() asks request_module() for
+crate::module_info!("alias" = "fs-bcachefs");
+
 impl FsType for Bcachefs {
     const NAME: &'static CStr = c"bcachefs";
     const FLAGS: c_int = (c::FS_REQUIRES_DEV | c::FS_ALLOW_IDMAP | c::FS_LBS) as c_int;

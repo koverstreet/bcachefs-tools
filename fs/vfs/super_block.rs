@@ -10,7 +10,6 @@
 //! free_inode(), which can run after the filesystem's freed.
 //!
 //! SUPER_OPS is ours, the table mount (vfs/fs_type.rs) sets s_op to.
-//! evict_inode() and free_inode() are still fs.c's, with the inode cache.
 
 use core::ffi::{c_int, CStr};
 use core::ptr::NonNull;
@@ -28,16 +27,10 @@ use crate::util::kernel::ktime_get_ns;
 use crate::util::{Nsecs, Printbuf};
 use crate::util::rcu::read_lock;
 use crate::util::seq_file::SeqFile;
-use cstruct_macros::{c_extern, vtable};
+use cstruct_macros::vtable;
 
 use super::dentry::Dentry;
 use super::inode::{InodeInfo, ATTR_ATIME, ATTR_CTIME, ATTR_MTIME};
-
-c_extern! {
-    // fs.c's, with the inode cache:
-    fn bch2_evict_inode(vinode: *mut c::inode);
-    fn bch2_free_inode(vinode: *mut c::inode);
-}
 
 /// One of ours: s_fs_info is its Fs. The type is util/super_block.rs's.
 pub type SuperBlock = crate::util::super_block::SuperBlock<Fs>;
@@ -89,13 +82,13 @@ crate::vfs_ops! {
 
 #[vtable]
 impl SuperOps for Fs {
-    /// Never the VFS's to call: our inodes are made by bch2_new_inode().
+    /// Never the VFS's to call: our inodes are made by NewInode::new().
     fn alloc_inode(&self, _sb: &SuperBlock) -> Result<NonNull<c::inode>, BchError> {
-        unreachable!("bcachefs inodes are allocated by bch2_new_inode()")
+        unreachable!("bcachefs inodes are allocated by NewInode::new()")
     }
 
     fn free_inode(inode: NonNull<InodeInfo>) {
-        unsafe { bch2_free_inode(inode.as_ptr().cast()) }
+        super::new_inode::free(inode)
     }
 
     fn write_inode(&self, inode: &InodeInfo, _wbc: *mut c::writeback_control) -> Result<(), BchError> {
@@ -103,7 +96,7 @@ impl SuperOps for Fs {
     }
 
     fn evict_inode(&self, inode: &InodeInfo) {
-        unsafe { bch2_evict_inode(inode.vfs().as_ptr()) }
+        inode.evict()
     }
 
     fn sync_fs(&self, _sb: &SuperBlock, wait: c_int) -> Result<(), BchError> {

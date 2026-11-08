@@ -5,15 +5,14 @@
 //! brings the VFS inodes up to date with what it wrote - and gives the dentry
 //! a link or create made its inode. They're a directory's inode ops, DirOps's
 //! InodeOps (inode_ops.rs), and InodeInfo's where something else calls them.
-//! Making the new inode is still fs.c's __bch2_create(), with the inode
-//! cache.
 //!
 //! Lookup writes nothing, unless a dirent and its inode disagree, which it
-//! repairs. The inodes it returns come from the inode cache, which is still
-//! fs.c's.
+//! repairs. The inodes it returns come from the inode cache.
 
-use core::ffi::{c_int, c_uint, CStr};
+use core::ffi::{c_int, c_uint, c_void, CStr};
+use core::ptr::{self, null};
 
+use crate::acl::{AclType, PosixAcl};
 use crate::init::passes::RecoveryPass;
 use crate::btree::bkey::BkeyV;
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts,
@@ -31,21 +30,17 @@ use crate::str_hash;
 use crate::util::kernel::{current_fsgid, current_fsuid};
 use crate::util::log::LogMsg;
 use crate::util::file::File;
-use crate::util::os_str::OsStr;
-use cstruct_macros::{c_export, c_extern, vtable};
+use crate::util::ffi::bytes;
+use crate::util::os_str::{cstr_name, OsStr};
+use crate::xattr::{self, XattrType};
+use cstruct_macros::{c_export, vtable};
 use kernel::sync::aref::ARef;
 
 use super::dentry::Dentry;
 use super::idmap::MntIdmap;
 use super::inode::{InodeInfo, InodeRef, ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use super::inode_ops::InodeOps;
-
-c_extern! {
-    // fs.c's, until the inode cache is Rust:
-    fn __bch2_create(idmap: *mut c::mnt_idmap, dir: *mut c::bch_inode_info, dentry: *mut c::dentry,
-                     mode: c::umode_t, rdev: c::dev_t, snapshot_src: c::subvol_inum,
-                     flags: c_uint) -> *mut c::bch_inode_info;
-}
+use super::new_inode::NewInode;
 
 const DIR_ENTRIES_CHANGED: u32 = ATTR_MTIME | ATTR_CTIME | ATTR_SIZE;
 
@@ -54,16 +49,104 @@ impl InodeInfo {
     /// cache - linked, unless @flags has BCH_CREATE_TMPFILE; a subvolume's
     /// root, a snapshot of @snapshot_src's subvolume, with BCH_CREATE_SUBVOL
     /// and BCH_CREATE_SNAPSHOT. The reference is ours, not yet the dentry's.
-    pub(crate) fn create(&self, idmap: MntIdmap<'_>, dentry: Dentry<'_>, mode: c::umode_t,
+    pub(crate) fn create(&self, idmap: MntIdmap<'_>, dentry: Dentry<'_>, mut mode: c::umode_t,
                          rdev: c::dev_t, snapshot_src: c::subvol_inum, flags: u32)
         -> Result<InodeRef, BchError>
     {
-        // fs.c's takes it mut: before 7.4, mapped_fsuid() does
-        let idmap = idmap.as_ptr() as *mut c::mnt_idmap;
-        unsafe {
-            InodeInfo::from_c(__bch2_create(idmap, self.raw(), dentry.as_ptr(), mode, rdev,
-                                            snapshot_src, flags))
+        let fs = self.fs();
+        let dir = self.vfs();
+        let tmpfile = flags & c::BCH_CREATE_TMPFILE != 0;
+        let name = (!tmpfile).then_some(dentry);
+        let uid = dir.uid_of(idmap.fsuid(dir));
+        let gid = dir.gid_of(idmap.fsgid(dir));
+        let is_posixacl = dir.sb().flags() as u64 & c::SB_POSIXACL != 0;
+
+        // preallocate acls + vfs inode before btree transaction, so that
+        // nothing can fail after the transaction succeeds:
+        let (default_acl, acl) = if is_posixacl {
+            PosixAcl::create(dir, &mut mode)?
+        } else {
+            (None, None)
+        };
+
+        let mut inode = NewInode::new(fs, c::GFP_NOIO).ok_or(BchError::from(c::ENOMEM))?;
+        // so that inserting it, which can't fail, rarely has to allocate
+        fs.vfs.inode_cache.make_room();
+
+        let mut inode_u = c::bch_inode_unpacked::default();
+        inode::init_early(fs, &mut inode_u);
+
+        let dir_lock = (!tmpfile).then(|| self.update_lock());
+        // posix_acl_create() calls get_acl -> btree transaction, don't start
+        // ours until after, ei->update_lock must also be taken first:
+        let trans = crate::btree_trans!(fs);
+        let mut held = None;
+        let mut dir_u = c::bch_inode_unpacked::default();
+        let mut subvol = c::Subvolume::default();
+
+        // Quotas count only master subvolume inodes; a new subvolume's root is
+        // in a new snapshot tree, and is its master unless it's a snapshot:
+        let quota = if flags & c::BCH_CREATE_SUBVOL != 0 {
+            flags & c::BCH_CREATE_SNAPSHOT == 0
+        } else {
+            !self.ei_flags.get(c::bch_inode_info_flags::EI_INODE_SNAPSHOT)
+        };
+
+        let inum = lockrestart_do(&trans, |t| {
+            namei::create_trans(t, self.inum(), &mut dir_u, &mut inode_u, &mut subvol,
+                                name.map(|d| d.name()), uid, gid, mode, rdev,
+                                default_acl.as_ref(), acl.as_ref(), snapshot_src, flags)?;
+            let qid = quota::qid(&inode_u);
+            if quota {
+                quota::acct(fs, qid, quota::Q_INO, 1, QuotaAcctMode::PREALLOC)?;
+            }
+
+            let inum = c::subvol_inum {
+                subvol: if inode_u.bi_subvol != 0 { inode_u.bi_subvol.into() } else { self.inum().subvol },
+                inum:   inode_u.bi_inum,
+            };
+
+            let ret = (|| {
+                // Before the commit publishes the key. Only a tmpfile needs it:
+                // every other create commits with a dirent and nlink 1, which
+                // check_inode() doesn't touch.
+                if tmpfile {
+                    drop(held.take());
+                    held = Some(fs.vfs.inode_cache.hold(fs, inum)?);
+                }
+                init_security(t, self, &mut inode, name.map(|d| d.qstr()), inum, &inode_u, flags)?;
+                t.commit(None, CommitFlags::empty())
+            })();
+            if ret.is_err() && quota {
+                let _ = quota::acct(fs, qid, quota::Q_INO, -1, QuotaAcctMode::WARN);
+            }
+            ret.map(|()| inum)
+        })?;
+
+        if !tmpfile {
+            self.update_after_write(&trans, &dir_u, DIR_ENTRIES_CHANGED);
         }
+        drop(dir_lock);
+
+        inode.init(&trans, inum, &inode_u, &subvol);
+
+        if is_posixacl {
+            inode.v.set_cached_acl(AclType::Access, acl.as_ref());
+            inode.v.set_cached_acl(AclType::Default, default_acl.as_ref());
+        }
+
+        // we must insert the new inode into the inode cache before dropping
+        // the transaction and its locks, else we could race with another
+        // thread pulling the inode in and modifying it:
+        //
+        // also, inserting without passing in the transaction is sketchy - if
+        // we could ever end up waiting on an inode being freed, we'd risk
+        // deadlock.
+        //
+        // But that shouldn't be possible, since we still have the inode locked
+        // that we just created, and we _really_ can't take a transaction
+        // restart here.
+        Ok(fs.vfs.inode_cache.insert_nofail(inode))
     }
 
     /// The inode @name in this directory names, through the inode cache - @hash
@@ -71,6 +154,8 @@ impl InodeInfo {
     /// this directory doesn't list.
     pub fn lookup(&self, hash: &c::bch_hash_info, name: &OsStr) -> Result<InodeRef, BchError> {
         let dir = self.inum();
+        // before the locks an insert of what we find would be under
+        self.fs().vfs.inode_cache.make_room();
         let trans = crate::btree_trans!(self.fs());
 
         lockrestart_do(&trans, |t| {
@@ -78,7 +163,7 @@ impl InodeInfo {
             let k = dirent::lookup_key(t, &mut iter, dir, hash, name, BtreeIterFlags::empty())?;
             let inum = dirent::lookup_target(t, dir, k)?;
 
-            if let Some(inode) = InodeInfo::cache_find(t, inum)? {
+            if let Some(inode) = t.fs().vfs.inode_cache.find(Some(t), inum)? {
                 return Ok(inode);
             }
 
@@ -158,6 +243,59 @@ impl InodeInfo {
         }
         Ok(())
     }
+}
+
+/// The LSMs' xattrs for a new @inode in @dir.
+fn init_security(t: &TransAttempt<'_, '_>, dir: &InodeInfo, inode: &mut NewInode, name: Option<&c::qstr>,
+                 inum: c::subvol_inum, inode_u: &c::bch_inode_unpacked, flags: u32) -> Result<(), BchError> {
+    // A snapshot create doesn't create an inode: create_trans() looks up the
+    // source subvolume's root and reuses it at the new snapshot ID, so the
+    // source's security xattr is already visible there through snapshot
+    // ancestry. Handing that inode to the LSM would have it compute a fresh
+    // label and write it with XATTR_CREATE, which finds the inherited key and
+    // fails the whole snapshot with EEXIST_str_hash_set.
+    //
+    // A snapshot inherits the source's label, which is also the semantics we
+    // want - the new root is the same inode, not a new object to be labelled
+    // from the calling task. create_trans() skips the ACLs for a snapshot for
+    // the same reason; ACLs are xattrs too.
+    //
+    // The in-core label still gets set: the new subvolume root is
+    // instantiated after commit, and the LSM's d_instantiate hook reads it
+    // back off the inherited xattr.
+    if flags & c::BCH_CREATE_SNAPSHOT != 0 {
+        return Ok(());
+    }
+
+    // The LSM computes the new label from the task, the dir, and the new
+    // inode's mode; the vfs inode isn't initialized until after commit
+    // (NewInode::init()), so give it just enough identity here:
+    inode.v.set_mode(inode_u.bi_mode);
+    inode.v.set_uid(inode_u.bi_uid);
+    inode.v.set_gid(inode_u.bi_gid);
+
+    let mut ctx = InitXattrs { t, inum, hash: str_hash::hash_info_init(t.fs(), inode_u)? };
+    ret_to_result_void(unsafe {
+        c::security_inode_init_security(inode.v.as_ptr(), dir.v.as_ptr(), name.map_or(null(), ptr::from_ref),
+                                        Some(initxattrs), (&raw mut ctx).cast())
+    })
+}
+
+struct InitXattrs<'a, 'b, 'f> {
+    t:    &'a TransAttempt<'b, 'f>,
+    inum: c::subvol_inum,
+    hash: c::bch_hash_info,
+}
+
+/// security_inode_init_security()'s: the xattrs the LSMs made, set.
+unsafe extern "C" fn initxattrs(_inode: *mut c::inode, xattrs: *const c::xattr, ctx: *mut c_void) -> c_int {
+    let ctx = unsafe { &*ctx.cast::<InitXattrs<'_, '_, '_>>() };
+    // ended by one with no name
+    let mut xattrs = (0..).map(|i| unsafe { &*xattrs.add(i) }).take_while(|x| !x.name.is_null());
+    ret_to_c(xattrs.try_for_each(|x| {
+        let (name, value) = unsafe { (cstr_name(x.name), bytes(x.value, x.value_len)) };
+        xattr::set_key(ctx.t, ctx.inum, &ctx.hash, name, value, XattrType::SECURITY, xattr::XATTR_CREATE)
+    }))
 }
 
 pub(crate) struct DirOps;

@@ -300,7 +300,7 @@ unsafe extern "C" fn open(vinode: *mut c::inode, file: *mut c::file) -> c_int {
     })())
 }
 
-/// i_fop, as bch2_vfs_inode_init() sets it for a regular file.
+/// i_fop, as NewInode::init() sets it for a regular file.
 #[c_export]
 pub static bch2_file_ops: c::file_operations = {
     let mut ops = FileVTable::<InodeFile>::OPS;

@@ -14,10 +14,9 @@ use core::ffi::{c_uint, c_ulong};
 #[cfg(not(NO_BCACHEFS_FS))]
 use core::ffi::{c_int, c_void};
 use cstruct_macros::{c_name, c_enum, CStruct, TypeInfo};
+use pin_init::pin_data;
 #[cfg(not(NO_BCACHEFS_FS))]
-use cstruct_macros::{c_extern, c_typedef};
-#[cfg(not(NO_BCACHEFS_FS))]
-use crate::format::Bpos;
+use cstruct_macros::c_typedef;
 #[cfg(not(NO_BCACHEFS_FS))]
 use crate::btree::iter::BtreeTrans;
 
@@ -28,20 +27,18 @@ use crate::btree::iter::BtreeTrans;
  * VolatileInodeUnpacked; ei_update_lock and ei_quota_lock Locked, the second
  * over what it protects.
  */
+#[pin_data]
 #[repr(C)]
 #[c_name(bch_inode_info)]
 #[derive(CStruct, TypeInfo)]
 pub struct InodeInfo {
+    #[pin]
     #[c("struct inode v")]
     pub v: VfsInode,
-    pub hash: c::rhash_head,
-    /*
-     * Read it with inode_inum(); the layout is private so that
-     * bch2_inode_or_descendents_is_open() can walk entries without knowing
-     * about bch_inode_info at all.
-     */
-    pub ei_inum_hash: c::bch_inum_hash_entry,
+    /* the inode cache's key: set before it's in, unchanged while it is */
+    pub ei_inum: c::subvol_inum,
 
+    #[pin]
     #[c_lock("spinlock_t ei_reserved_lock")]
     pub ei_reserved: Locked<c::spinlock_t, InodeReserved, InodeReservedRange>,
 
@@ -49,9 +46,11 @@ pub struct InodeInfo {
     #[c("unsigned long ei_flags")]
     pub ei_flags: AtomicBitflags<c::bch_inode_info_flags>,
 
+    #[pin]
     #[c_lock("struct mutex ei_update_lock")]
     pub ei_update_lock: Locked<c::mutex>,
     pub ei_last_dirtied: Volatile<c_ulong>,
+    #[pin]
     pub ei_pagecache_lock: c::two_state_lock_t,
 
     /*
@@ -60,6 +59,7 @@ pub struct InodeInfo {
      * too. ei_qid changes with ei_update_lock held as well, so C reads it
      * under either.
      */
+    #[pin]
     #[c_lock("struct mutex ei_quota_lock")]
     pub ei_quota: Locked<c::mutex, InodeQuota>,
 
@@ -83,10 +83,15 @@ pub struct InodeInfo {
     #[c("struct bch_inode_unpacked ei_inode")]
     pub ei_inode: c::VolatileInodeUnpacked,
 
+    #[pin]
     #[c("struct delayed_work ei_writeback_timer")]
     pub ei_writeback_timer: DelayedWork,
 }
 c_default!(InodeInfo);
+
+// SAFETY: as c_default!()'s: all zeroes is valid - an inode's locks and timer
+// are only zeroes until their init
+unsafe impl ::pin_init::Zeroable for InodeInfo {}
 
 /// C's name, as FFI declarations spell it.
 pub type bch_inode_info = InodeInfo;
@@ -102,16 +107,10 @@ c_enum! {
         /* in a snapshot subvolume, which quotas don't count */
         EI_INODE_SNAPSHOT = 1,
         /*
-         * in the inode cache: tested by a lookup and cleared by removal under
-         * i_lock; set before the insert, and cleared if it loses the race,
-         * while the inode is ours alone
-         */
-        EI_INODE_HASHED = 2,
-        /*
          * set by a truncate of a nonempty file to 0: start writeback on
          * close - see DOC(replace-in-place) in vfs/file.rs
          */
-        EI_INODE_FLUSH_ON_CLOSE = 3,
+        EI_INODE_FLUSH_ON_CLOSE = 2,
     }
 }
 
@@ -182,12 +181,4 @@ impl c::TwoState for PagecacheAdd {
 
 impl c::TwoState for PagecacheBlock {
     const S: bool = true;
-}
-
-#[cfg(not(NO_BCACHEFS_FS))]
-c_extern! {
-    pub fn bch2_inode_or_descendents_is_open(trans: *mut BtreeTrans<'_>, pos: Bpos) -> c_int;
-    pub fn bch2_evict_subvolume_inodes(c: *mut crate::fs::Fs, s: *mut c::snapshot_id_list);
-    pub fn bch2_fs_vfs_exit(c: *mut crate::fs::Fs);
-    pub fn bch2_fs_vfs_init(c: *mut crate::fs::Fs) -> c_int;
 }

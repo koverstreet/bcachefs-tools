@@ -7,13 +7,25 @@
 use crate::c;
 use crate::util::closure::{closure_wait_event, closure_wake_up};
 use crate::util::hash::hash_64;
-use crate::util::kernel::current_id;
+use crate::util::kernel::{current_id, random_u64};
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering::{Acquire, Release}};
 
 use super::folio::Mapping;
 
 impl c::fdm_hash {
+    /// Empty, its hash seeds random.
+    pub fn init() -> impl pin_init::Init<Self> {
+        // zeroed is empty: every field's a C type, valid all zeroes
+        unsafe {
+            pin_init::init_from_closure(|p: *mut Self| {
+                p.write_bytes(0, 1);
+                (*p).hash_seeds = core::array::from_fn(|_| random_u64());
+                Ok(())
+            })
+        }
+    }
+
     /// The current task's slots, one per hash.
     fn slots_of_current(&self) -> impl Iterator<Item = &c::fdm_slot> {
         let current = current_id();

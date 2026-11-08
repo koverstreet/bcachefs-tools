@@ -1012,4 +1012,20 @@ out:
 	return bch2_err_class(ret);
 }
 
+/* An inode's, set by vfs/new_inode.rs: */
+const struct address_space_operations bch_address_space_operations = {
+	.read_folio	= bch2_read_folio,
+	.writepages	= bch2_writepages,
+	.readahead	= bch2_readahead,
+	.dirty_folio	= bch2_vfs_dirty_folio,
+	.write_begin	= bch2_write_begin,
+	.write_end	= bch2_write_end,
+	.invalidate_folio = bch2_invalidate_folio,
+	.release_folio	= bch2_release_folio,
+#ifdef CONFIG_MIGRATION
+	.migrate_folio	= filemap_migrate_folio,
+#endif
+	.error_remove_folio = generic_error_remove_folio,
+};
+
 #endif /* NO_BCACHEFS_FS */

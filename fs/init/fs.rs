@@ -516,7 +516,7 @@ impl Fs {
         counters_init(self);
         encryption_init(self, user_key)?;
         #[cfg(not(NO_BCACHEFS_FS))]
-        ret_to_result(unsafe { c::bch2_fs_vfs_init(p) })?;
+        unsafe { self.vfs.inodes.init() }?;
 
         #[cfg(CONFIG_UNICODE)]
         if self.casefold_enabled().is_ok() {
@@ -951,7 +951,7 @@ unsafe fn release(p: *mut Fs) {
     // work uses
     unsafe { fs.exit_late() };
     #[cfg(not(NO_BCACHEFS_FS))]
-    unsafe { c::bch2_fs_vfs_exit(p) };
+    unsafe { fs.vfs.inodes.exit() };
     reconcile_exit(fs);
     unsafe { c::journal::exit(&raw mut (*p).journal) };
     ec_exit(fs);

@@ -216,16 +216,15 @@ mod vfs {
     use crate::btree::bkey::{pos, BkeyI, POS_MIN};
     use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitOpts, LoopFlow,
                              TransAttempt, UpdateTriggerFlags};
-    use crate::errcode::{bch_errcode, ret_to_c, ret_to_class};
+    use crate::errcode::{bch_errcode, ret_to_class};
     use crate::locking::ExclusiveGuard;
     use crate::sb::io::SbResize;
-    use crate::util::ffi::{c_char, Opaque};
+    use crate::util::ffi::c_char;
     use crate::util::kernel::ktime_get_real_seconds;
     use crate::{bch_err_fn, bch_info, fs_inconsistent, inode};
     use crate::snapshots::snapshot;
     use core::ffi::{c_int, c_uint};
     use core::fmt;
-    use cstruct_macros::c_export;
     use core::sync::atomic::Ordering;
 
     /// SB_RDONLY is BIT(0), a macro bindgen doesn't evaluate. A bit number,
@@ -506,17 +505,6 @@ mod vfs {
         })
     }
 
-    #[c_export]
-    pub fn bch2_quota_acct(
-        c:       &Opaque<Fs>,
-        qid:     c::bch_qid,
-        counter: c::quota_counters,
-        v:       i64,
-        mode:    QuotaAcctMode,
-    ) -> c_int {
-        ret_to_c(acct(Fs::from_c(c), qid, counter.0 as usize, v, mode))
-    }
-
     /// Move an inode's charges - @space and the inode itself - from @src's
     /// ids to @dst's, in the quota types @qtypes that are accounted: as
     /// bch2_quota_transfer().
@@ -558,18 +546,6 @@ mod vfs {
             }
             Ok(())
         })
-    }
-
-    #[c_export]
-    pub fn bch2_quota_transfer(
-        c:      &Opaque<Fs>,
-        qtypes: c_uint,
-        dst:    c::bch_qid,
-        src:    c::bch_qid,
-        space:  u64,
-        mode:   QuotaAcctMode,
-    ) -> c_int {
-        ret_to_c(transfer(Fs::from_c(c), qtypes, dst, src, space, mode))
     }
 
     /// The limits in quota key @k, into memory; and from quotactl, @qdq's

@@ -6,9 +6,9 @@
 //! the IDA's lock.
 //!
 //! A slot can be had before its item - get_idx() - to take the allocation
-//! failure early, and filled where failing isn't an option: C's
-//! fast_list_set(). Slot 0 is never handed out: an index of 0 is no slot,
-//! which put_idx() and remove() ignore.
+//! failure early, and filled where failing isn't an option: set(). Slot 0
+//! is never handed out: an index of 0 is no slot, which put_idx() and
+//! remove() ignore.
 //!
 //! A cache is changed with interrupts off - an IrqGuard - as items come off
 //! in bio completions. It holds 31: a refill gets up to 16, and a full one
@@ -16,17 +16,15 @@
 //! have been refilled meanwhile: what doesn't fit goes back to the IDA, and
 //! the cache, full, has a slot to give.
 //!
-//! The walk is the C header's fast_list_for_each() and items_from(): under
-//! RCU, the slots read as they change. add() publishes the item with a
+//! The walk is items_from(): under RCU, the slots read as they change. add() publishes the item with a
 //! release, which items_from()'s acquire pairs with; remove() is a plain
 //! store of NULL.
 //!
-//! C's users are the VFS inode list (vfs/fs.c) and async_objs.h's macros.
+//! C's user is async_objs.h's macros.
 
 #![allow(non_camel_case_types)]
 
 use crate::c;
-use crate::locking::MemallocFlags;
 use crate::util::alloc::AllocError;
 use crate::util::percpu::{IrqGuard, PerCpu, PerCpuRef};
 use crate::util::rcu::ReadGuard;
@@ -102,7 +100,7 @@ impl c::fast_list {
         unsafe { AtomicPtr::from_ptr(p.as_ptr()) }
     }
 
-    /// fast_list_for_each_from(), with each item's slot. Other CPUs change the
+    /// The items from slot @idx on, with their slots. Other CPUs change the
     /// slots as it's read: each is read once, atomically.
     ///
     /// XXX: an item is only safe to use if it's freed a grace period after
@@ -172,7 +170,7 @@ impl c::fast_list {
         Ok(idx)
     }
 
-    /// @item in slot @idx, which get_idx() handed out: fast_list_set().
+    /// @item in slot @idx, which get_idx() handed out.
     pub fn set(&self, idx: u32, item: NonNull<c_void>) {
         self.slot(idx).store(item.as_ptr(), Release);
     }
@@ -220,18 +218,6 @@ impl c::fast_list {
 
 // ── For C ────────────────────────────────────────────────────────────────
 
-/// A slot, or -ENOMEM.
-#[c_export]
-pub fn fast_list_get_idx(l: &c::fast_list, gfp: c::gfp_t) -> c_int {
-    let _scope = MemallocFlags::for_gfp(gfp);
-    l.get_idx().map_or(-(c::ENOMEM as c_int), |idx| idx as c_int)
-}
-
-#[c_export]
-pub fn fast_list_put_idx(l: &c::fast_list, idx: c_uint) {
-    l.put_idx(idx)
-}
-
 /// @item's slot, or -ENOMEM.
 #[c_export]
 pub fn fast_list_add(l: &c::fast_list, item: *mut c_void) -> c_int {
@@ -242,18 +228,4 @@ pub fn fast_list_add(l: &c::fast_list, item: *mut c_void) -> c_int {
 #[c_export]
 pub fn fast_list_remove(l: &c::fast_list, idx: c_uint) {
     l.remove(idx)
-}
-
-/// # Safety
-/// As init()'s.
-#[c_export]
-pub unsafe fn fast_list_init(l: &c::fast_list) -> c_int {
-    unsafe { l.init() }.map_or(-(c::ENOMEM as c_int), |()| 0)
-}
-
-/// # Safety
-/// As exit()'s.
-#[c_export]
-pub unsafe fn fast_list_exit(l: &c::fast_list) {
-    unsafe { l.exit() }
 }

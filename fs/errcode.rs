@@ -665,6 +665,7 @@ c_xmacro! {
         (BCH_ERR_btree_node_validate_err, btree_node_validate_err_csum, 630),
         (EBUSY, EBUSY_journal_bucket_retire_rw, 631),
         (EBUSY, EBUSY_journal_bucket_retire_no_space, 632),
+        (ENOMEM, ENOMEM_inode_cache_insert, 633),
     }
 }
 

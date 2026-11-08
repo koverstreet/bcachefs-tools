@@ -872,6 +872,7 @@ pub struct Fs {
     #[late]
     pub vfs: c::bch_fs_vfs,
     #[cfg(not(NO_BCACHEFS_FS))]
+    #[init(c::fdm_hash::init())]
     pub fdm_table: c::fdm_hash,
 
     /// The in-memory quotas: quota.rs's alone.

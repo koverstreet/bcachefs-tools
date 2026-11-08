@@ -13,23 +13,6 @@
 #include <linux/stat.h>
 #include <linux/version.h>
 
-#if !defined(__KERNEL__) || LINUX_VERSION_CODE < KERNEL_VERSION(6,19,0)
-static inline unsigned inode_state_read(struct inode *inode)
-{
-	return inode->i_state;
-}
-
-static inline unsigned inode_state_read_once(struct inode *inode)
-{
-	return READ_ONCE(inode->i_state);
-}
-
-static inline void inode_state_set_raw(struct inode *inode, unsigned flags)
-{
-	WRITE_ONCE(inode->i_state, inode->i_state|flags);
-}
-#endif
-
 /* fileattr's struct, before 6.17: the Rust names it file_kattr too */
 #if defined(__KERNEL__) && LINUX_VERSION_CODE < KERNEL_VERSION(6,17,0)
 #define file_kattr fileattr
@@ -54,7 +37,7 @@ DEFINE_GUARD(bch2_pagecache_block, struct bch_inode_info *,
 
 static inline subvol_inum inode_inum(const struct bch_inode_info *inode)
 {
-	return inode->ei_inum_hash.inum;
+	return inode->ei_inum;
 }
 
 #define to_bch_ei(_inode)					\
@@ -104,35 +87,10 @@ static inline struct bch_inode_info *file_bch_inode(struct file *file)
 
 #ifndef NO_BCACHEFS_FS
 
-struct bch_inode_info *
-__bch2_create(struct mnt_idmap *, struct bch_inode_info *,
-	      struct dentry *, umode_t, dev_t, subvol_inum, unsigned);
-
 #include "vfs/dir_gen.h"
 #include "vfs/file_gen.h"
-#include "vfs/inode_gen.h"
 #include "vfs/inode_ops_gen.h"
 #include "vfs/namei_gen.h"
-#include "vfs/super_block_gen.h"
-
-struct bch_inode_info *bch2_vfs_inode_get_trans(struct btree_trans *, subvol_inum, const char *);
-
-/* For Rust's lookup, until the inode cache is Rust: */
-struct bch_inode_info *bch2_inode_hash_find(struct bch_fs *, struct btree_trans *, subvol_inum);
-struct bch_inode_info *bch2_inode_hash_init_insert(struct btree_trans *, subvol_inum,
-						   struct bch_inode_unpacked *,
-						   struct bch_subvolume *);
-struct inode *bch2_vfs_inode_get(struct bch_fs *, subvol_inum, const char *);
-
-/* For Rust's super ops, until the inode cache is Rust: */
-void bch2_evict_inode(struct inode *);
-void bch2_free_inode(struct inode *);
-
-void bch2_fs_vfs_exit(struct bch_fs *);
-int bch2_fs_vfs_init(struct bch_fs *);
-
-void bch2_vfs_exit(void);
-int bch2_vfs_init(void);
 
 static inline void bch2_dirty_inode(struct bch_fs *c, struct bch_inode_info *inode)
 {
@@ -140,18 +98,6 @@ static inline void bch2_dirty_inode(struct bch_fs *c, struct bch_inode_info *ino
 		queue_delayed_work(c->vfs.writeback_wq, &inode->ei_writeback_timer,
 				   c->opts.writeback_timeout * HZ);
 }
-
-#else
-
-#define bch2_inode_update_after_write(_trans, _inode, _inode_u, _fields)	({ do {} while (0); })
-
-static inline int bch2_inode_or_descendents_is_open(struct btree_trans *trans, struct bpos p) { return 0; }
-
-static inline void bch2_evict_subvolume_inodes(struct bch_fs *c,
-					       snapshot_id_list *s) {}
-
-static inline void bch2_fs_vfs_exit(struct bch_fs *c) {}
-static inline int bch2_fs_vfs_init(struct bch_fs *c) { return 0; }
 
 #endif /* NO_BCACHEFS_FS */
 

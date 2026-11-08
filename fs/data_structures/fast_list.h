@@ -7,27 +7,4 @@
 
 #include "data_structures/fast_list_gen.h"
 
-static inline void *fast_list_iter_peek(struct genradix_iter *iter,
-					struct fast_list *list)
-{
-	void **p;
-	while ((p = genradix_iter_peek(iter, &list->items)) && !*p)
-		genradix_iter_advance(iter, &list->items);
-
-	return p ? *p : NULL;
-}
-
-#define fast_list_for_each_from(_list, _iter, _i, _start)		\
-	for (_iter = genradix_iter_init(&(_list)->items, _start);	\
-	     (_i = fast_list_iter_peek(&(_iter), _list)) != NULL;	\
-	     genradix_iter_advance(&(_iter), &(_list)->items))
-
-#define fast_list_for_each(_list, _iter, _i)				\
-	fast_list_for_each_from(_list, _iter, _i, 0)
-
-static inline void fast_list_set(struct fast_list *l, unsigned idx, void *item)
-{
-	*genradix_ptr_inlined(&l->items, idx) = item;
-}
-
 #endif /* _LINUX_FAST_LIST_H */

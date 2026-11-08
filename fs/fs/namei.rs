@@ -29,12 +29,12 @@ use crate::acl::PosixAcl;
 use crate::btree::bkey::{pos, spos, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{
-    is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
+    is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
     UpdateTriggerFlags,
 };
 use crate::c;
 use crate::dirent::{self, d_type_str, Dirent, DirentTarget, Dirents};
-use crate::errcode::{bch_errcode, ret_to_c, BchError, Found};
+use crate::errcode::{bch_errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::inode;
@@ -43,16 +43,15 @@ use crate::snapshots::subvolume;
 use crate::str_hash;
 use crate::util::alloc::KVVec;
 use crate::util::kernel::{capable, Capability};
-use crate::util::os_str::{qstr_name, OsStr, OsStrExt};
+use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;
 use crate::{fs_inconsistent, fsck_err, fsck_err_on, prt};
-use core::ffi::{c_int, c_uint};
 use core::ops::ControlFlow;
-use cstruct_macros::{c_export, c_const};
+use cstruct_macros::c_const;
 use crate::format::{Btree, MetadataVersion};
 
-// bch2_create_trans()'s flags:
+// create_trans()'s flags:
 c_const! { pub const BCH_CREATE_TMPFILE: u32 = 1 << 0; }
 c_const! { pub const BCH_CREATE_SUBVOL: u32 = 1 << 1; }
 c_const! { pub const BCH_CREATE_SNAPSHOT: u32 = 1 << 2; }
@@ -262,45 +261,6 @@ pub fn create_trans(
 
     inode_iter.traverse(t)?;
     inode::write(t, &mut inode_iter, new_inode)
-}
-
-/// For C's VFS and recovery: bch2_create_trans().
-///
-/// # Safety
-/// @name and the ACLs valid for the call; in userspace the ACLs are NULL.
-/// @name is NULL for BCH_CREATE_TMPFILE.
-#[c_export]
-#[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn bch2_create_trans(
-    trans:        &BtreeTrans<'_>,
-    dir:          c::subvol_inum,
-    dir_u:        &mut c::bch_inode_unpacked,
-    new_inode:    &mut c::bch_inode_unpacked,
-    new_subvol:   &mut c::Subvolume,
-    name:         Option<&c::qstr>,
-    uid:          c::uid_t,
-    gid:          c::gid_t,
-    mode:         c::umode_t,
-    rdev:         c::dev_t,
-    default_acl:  *mut c::posix_acl,
-    acl:          *mut c::posix_acl,
-    snapshot_src: c::subvol_inum,
-    flags:        c_uint,
-) -> c_int {
-
-    #[cfg(kernel)]
-    let acls = unsafe { (PosixAcl::borrow_raw(default_acl), PosixAcl::borrow_raw(acl)) };
-    #[cfg(kernel)]
-    let (default_acl, acl) = (acls.0.as_deref(), acls.1.as_deref());
-    #[cfg(not(kernel))]
-    let (default_acl, acl): (Option<&PosixAcl>, Option<&PosixAcl>) = {
-        assert!(default_acl.is_null() && acl.is_null(), "a posix_acl in userspace");
-        (None, None)
-    };
-
-    ret_to_c(create_trans(&unsafe { trans.attempt_in_progress() }, dir, dir_u, new_inode, new_subvol,
-                          name.map(|name| unsafe { qstr_name(name) }),
-                          uid, gid, mode, rdev, default_acl, acl, snapshot_src, flags))
 }
 
 /// Link inode @inum into directory @dir as @name - not across subvolumes,
@@ -857,17 +817,6 @@ pub fn inum_to_path(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, out: &mut Pr
     -> Result<(), BchError>
 {
     __inum_to_path(t, inum.subvol as u32, inum.inum, 0, 0, false, out)
-}
-
-/// For C's error reporting, ioctls and VFS: bch2_inum_to_path().
-///
-#[c_export]
-pub extern "C" fn bch2_inum_to_path(
-    trans: &BtreeTrans<'_>,
-    inum:  c::subvol_inum,
-    out:   &mut Printbuf,
-) -> c_int {
-    ret_to_c(inum_to_path(&unsafe { trans.attempt_in_progress() }, inum, out))
 }
 
 /// @inum's path from subvolume @stop_subvol's root: an error if the walk

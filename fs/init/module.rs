@@ -24,12 +24,6 @@ c_extern! {
     fn bch2_btree_key_cache_exit();
 }
 
-#[cfg(not(NO_BCACHEFS_FS))]
-c_extern! {
-    fn bch2_vfs_init() -> c_int;
-    fn bch2_vfs_exit();
-}
-
 #[cfg(kernel)]
 crate::module_info!("license" = "GPL");
 #[cfg(kernel)]
@@ -79,7 +73,7 @@ fn bcachefs_exit() {
     #[cfg(CONFIG_DEBUG_FS)]
     crate::debug::debug::bch2_debug_exit();
     #[cfg(not(NO_BCACHEFS_FS))]
-    unsafe { bch2_vfs_exit() };
+    crate::vfs::new_inode::vfs_exit();
     #[cfg(kernel)]
     crate::util::bio::dirty_pages_exit();
     #[cfg(kernel)]
@@ -126,7 +120,7 @@ fn init_interfaces() -> Result<(), BchError> {
     #[cfg(kernel)]
     ret_to_result_void(crate::init::chardev::bch2_chardev_init())?;
     #[cfg(not(NO_BCACHEFS_FS))]
-    ret_to_result_void(unsafe { bch2_vfs_init() })?;
+    crate::vfs::new_inode::vfs_init()?;
     #[cfg(CONFIG_DEBUG_FS)]
     ret_to_result_void(crate::debug::debug::bch2_debug_init())?;
     Ok(())

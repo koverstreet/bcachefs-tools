@@ -755,14 +755,7 @@ fn set_deleted(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError> {
 /// Waits for inodes still in use.
 #[cfg(kernel)]
 fn evict_inodes(fs: &Fs, subvols: &[u32]) {
-    // Borrowed: C only reads it
-    let mut list = c::snapshot_id_list {
-        data: subvols.as_ptr() as *mut u32,
-        nr:   subvols.len(),
-        size: subvols.len(),
-        ..Default::default()
-    };
-    unsafe { c::bch2_evict_subvolume_inodes(fs.as_ptr(), &mut list) }
+    crate::vfs::inode::evict_subvolume_inodes(fs, subvols)
 }
 
 #[cfg(not(kernel))]

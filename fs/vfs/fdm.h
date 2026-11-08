@@ -24,17 +24,9 @@
  */
 
 #include <linux/hash.h>
-#include <linux/random.h>
 
 #include "vendor/closure.h"
 
 #include "vfs/fdm_gen.h"
-
-static inline void fdm_init(struct fdm_hash *ht)
-{
-	memset(ht, 0, sizeof(*ht));
-	for (unsigned i = 0; i < FDM_NR_HASH; i++)
-		ht->hash_seeds[i] = get_random_u64();
-}
 
 #endif /* _BCACHEFS_FS_FDM_H */

@@ -26,7 +26,7 @@ use crate::init::error::{id, BkeyValidate};
 use crate::inode;
 use crate::snapshots::subvolume;
 use crate::str_hash::{self, HashTable};
-use crate::util::ffi::{bytes, c_char, opt_bytes, opt_bytes_mut};
+use crate::util::ffi::{c_char, opt_bytes, opt_bytes_mut};
 use crate::util::os_str::{cstr_name, OsStr, OsStrExt};
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
@@ -327,27 +327,6 @@ pub fn set_key(
 
     str_hash::set::<Xattrs>(t, hash_info, inum, &mut k, set_flags,
                             UpdateTriggerFlags::empty())
-}
-
-/// For C's VFS create, which sets security xattrs: __bch2_xattr_set().
-///
-/// # Safety
-/// @name NUL terminated, @value valid for @size.
-#[c_export]
-#[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn __bch2_xattr_set(
-    trans:     &BtreeTrans<'_>,
-    inum:      c::subvol_inum,
-    hash_info: &c::bch_hash_info,
-    name:      *const c_char,
-    value:     *const c_void,
-    size:      usize,
-    ty:        XattrType,
-    flags:     c_int,
-) -> c_int {
-    ret_to_c(set_key(&unsafe { trans.attempt_in_progress() }, inum, hash_info,
-                     unsafe { cstr_name(name) },
-                     unsafe { bytes(value, size) }, ty, flags))
 }
 
 /// Set xattr @name of @ty on inode @inum to @value, or with None remove it,

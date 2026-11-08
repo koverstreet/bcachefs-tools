@@ -12,6 +12,7 @@
 
 int bch2_read_single_folio(struct folio *, struct address_space *, bool);
 int bch2_read_folio(struct file *, struct folio *);
+extern const struct address_space_operations bch_address_space_operations;
 
 void bch2_readahead(struct readahead_control *);
 

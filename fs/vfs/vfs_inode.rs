@@ -255,18 +255,6 @@ impl VfsInode {
         s
     }
 
-    /// @flags set in the state, without i_lock and the checks of how the VFS
-    /// moves it: inode_state_set_raw(), for an inode only its creator has.
-    fn set_state_raw(&self, flags: u32) {
-        #[cfg(linux_ge = "6.19")]
-        unsafe { c::inode_state_set_raw(self.as_ptr(), flags as _) };
-        #[cfg(not(linux_ge = "6.19"))]
-        unsafe {
-            let s = &raw mut (*self.as_ptr()).i_state;
-            write_volatile(s, read_volatile(s) | flags as _);
-        }
-    }
-
     /// state(), without i_lock: inode_state_read_once() - as of a moment.
     pub fn state_once(&self) -> u32 {
         #[cfg(linux_ge = "6.19")]
@@ -303,17 +291,6 @@ impl VfsInode {
     /// On its superblock's list of inodes: inode_sb_list_add().
     pub fn sb_list_add(&self) {
         unsafe { c::inode_sb_list_add(self.as_ptr()) }
-    }
-
-    /// A new inode given up - @inode's reference dropped, and with it the
-    /// inode: discard_new_inode(), which expects I_NEW, so it's set.
-    ///
-    /// # Safety
-    /// @inode was never hashed, ours or the VFS's: its creator's alone, as
-    /// set_state_raw() and the I_NEW protocol want.
-    pub unsafe fn discard_new(inode: ARef<VfsInode>) {
-        inode.set_state_raw(c::I_NEW);
-        unsafe { c::discard_new_inode(ARef::into_raw(inode).as_ptr().cast()) }
     }
 
     /// Sleep - up to @timeout jiffies - for @inode's wake_new_bit(), if
