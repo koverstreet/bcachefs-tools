@@ -50,6 +50,7 @@ pub mod refcount;
 pub mod sched;
 #[cfg(kernel)]
 pub mod seq_file;
+pub mod shrinker;
 pub mod siphash;
 pub mod sleep;
 #[cfg(kernel)]
