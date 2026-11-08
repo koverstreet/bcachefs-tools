@@ -195,10 +195,17 @@ impl BtreeTrans<'_> {
     /// The path table, for a Rust entry into the btree code.
     #[inline]
     pub(crate) fn paths(&self) -> Paths<'_> {
-        assert!(!self.paths_borrowed(), "{}: the path table borrowed twice - the btree code reentered",
-                self.fn_name());
+        if self.paths_borrowed() {
+            self.paths_borrowed_twice();
+        }
         self.set_paths_borrowed(true);
         Paths { trans: self, took: true }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn paths_borrowed_twice(&self) -> ! {
+        panic!("{}: the path table borrowed twice - the btree code reentered", self.fn_name())
     }
 }
 
