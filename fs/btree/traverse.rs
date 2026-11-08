@@ -693,22 +693,57 @@ impl BtreeTrans<'_> {
     ///
     /// On error, caller (peek_node()/peek_key()) must return NULL; the error is
     /// stashed in the iterator and returned from bch2_trans_exit().
+    ///
+    /// Cached and btree paths each get a function of their own: a key cache
+    /// fill traverses a btree path from inside the cached traverse, and that
+    /// shouldn't be under the btree walk's frame.
+    #[inline]
     pub(crate) fn path_traverse_one(&self, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags)
         -> Result<(), BchError>
     {
-        let depth_want = paths[idx].level() as usize;
-        let ret = self.path_traverse_one_inner(paths, idx, flags, depth_want);
+        if paths[idx].cached() {
+            self.path_traverse_cached(paths, idx, flags)
+        } else {
+            self.path_traverse_btree(paths, idx, flags)
+        }
+    }
 
-        ebug_assert!(ret.as_ref().is_err_and(|e| e.matches(bch_errcode::BCH_ERR_transaction_restart)) ==
-                     (self.restarted().0 != 0));
-        self.path_verify(paths, idx);
+    #[inline(never)]
+    fn path_traverse_cached(&self, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags)
+        -> Result<(), BchError>
+    {
+        let ret = self.path_traverse_start(paths, idx).unwrap_or_else(|| {
+            crate::errcode::ret_to_result_void(unsafe {
+                bch2_btree_path_traverse_cached(self.raw(), idx, flags.bits())
+            })
+        });
+        self.path_traverse_done(paths, idx, &ret);
         ret
     }
 
-    fn path_traverse_one_inner(&self, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags,
-                               depth_want: usize) -> Result<(), BchError> {
+    #[inline(never)]
+    fn path_traverse_btree(&self, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags)
+        -> Result<(), BchError>
+    {
+        let depth_want = paths[idx].level() as usize;
+        let ret = self.path_traverse_start(paths, idx)
+            .unwrap_or_else(|| self.path_walk_down(paths, idx, flags, depth_want));
+        self.path_traverse_done(paths, idx, &ret);
+        ret
+    }
+
+    fn path_traverse_done(&self, paths: &mut Paths<'_>, idx: PathIdx, ret: &Result<(), BchError>) {
+        ebug_assert!(ret.as_ref().is_err_and(|e| e.matches(bch_errcode::BCH_ERR_transaction_restart)) ==
+                     (self.restarted().0 != 0));
+        self.path_verify(paths, idx);
+    }
+
+    /// What every traverse checks first: the traverse's result, if that's
+    /// the end of it.
+    #[inline(always)]
+    fn path_traverse_start(&self, paths: &mut Paths<'_>, idx: PathIdx) -> Option<Result<(), BchError>> {
         if self.restarted().0 != 0 {
-            return Err(BchError::from(self.restarted()));
+            return Some(Err(BchError::from(self.restarted())));
         }
 
         if !self.srcu_held() {
@@ -721,7 +756,7 @@ impl BtreeTrans<'_> {
         });
 
         if self.path_relock_norestart(paths, idx) {
-            return Ok(());
+            return Some(Ok(()));
         }
 
         /*
@@ -729,15 +764,14 @@ impl BtreeTrans<'_> {
          * and re-traverse the path without a transaction restart:
          */
         if paths[idx].should_be_locked() {
-            return Err(self.restart(bch_errcode::BCH_ERR_transaction_restart_relock_path));
+            return Some(Err(self.restart(bch_errcode::BCH_ERR_transaction_restart_relock_path)));
         }
 
-        if paths[idx].cached() {
-            return crate::errcode::ret_to_result_void(unsafe {
-                bch2_btree_path_traverse_cached(self.raw(), idx, flags.bits())
-            });
-        }
+        None
+    }
 
+    fn path_walk_down(&self, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags,
+                      depth_want: usize) -> Result<(), BchError> {
         if paths[idx].level() as u32 >= c::BTREE_MAX_DEPTH {
             self.path_traverse_end_trace(paths, idx);
             return Ok(());
