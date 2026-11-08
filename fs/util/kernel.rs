@@ -45,18 +45,16 @@ pub fn likely(b: bool) -> bool {
 #[inline(never)]
 pub fn cold_path() {}
 
-/// C's prefetch(): a hint, which can't fault, whatever @p is. As each side's C
-/// does it: the kernel's x86-64 prefetch() is prefetchnta, the shim's
-/// __builtin_prefetch() prefetcht0; elsewhere, only arm64's is kept. asm!,
+/// C's prefetch(): a hint, which can't fault, whatever @p is. Into every
+/// cache level - prefetcht0, arm64's pldl1keep: what we prefetch is used
+/// soon, and maybe again, not streamed past - where the kernel's x86-64
+/// prefetch() is prefetchnta, which skips L2, so a line pushed out of L1
+/// before its use comes back from L3. Elsewhere, only arm64's is kept. asm!,
 /// not _mm_prefetch(): that's an SSE target_feature fn, which the kernel's
 /// soft-float target can't inline - it'd be a call.
 #[inline(always)]
 pub fn prefetch<T>(p: *const T) {
-    #[cfg(all(target_arch = "x86_64", kernel))]
-    unsafe {
-        core::arch::asm!("prefetchnta [{}]", in(reg) p, options(nostack, readonly, preserves_flags))
-    }
-    #[cfg(all(target_arch = "x86_64", not(kernel)))]
+    #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!("prefetcht0 [{}]", in(reg) p, options(nostack, readonly, preserves_flags))
     }
