@@ -526,8 +526,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     /// @bytes of zeroed transaction memory, rounded up to u64s: off the top of
-    /// the transaction's buffer, or __bch2_trans_kmalloc() grows it - which
-    /// restarts the transaction if it had a buffer already. As
+    /// the transaction's buffer, or the transaction restarted to grow it. As
     /// bch2_trans_kmalloc(), less CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE's
     /// record of the allocation.
     fn kmalloc_raw(&self, bytes: usize) -> Result<*mut u8, BchError> {
@@ -543,7 +542,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         match t.mem_with(|m| m.alloc(size / size_of::<u64>())) {
             Some(p) => Ok(p.as_ptr().cast()),
-            None    => Ok(t.kmalloc_grow(&mut t.paths(), size, crate::ret_ip!())?.cast()),
+            None    => Err(t.kmalloc_grow(size, crate::ret_ip!())),
         }
     }
 

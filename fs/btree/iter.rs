@@ -1058,7 +1058,7 @@ impl<'t> BtreeIter<'t> {
      * returned replaces only the window.
      */
     #[inline(never)]
-    fn trim(&mut self, paths: &mut Paths<'_>, v: KeyVal, start: Bpos, end: Bpos) -> Result<KeyVal, BchError> {
+    fn trim(&mut self, v: KeyVal, start: Bpos, end: Bpos) -> Result<KeyVal, BchError> {
         let u = &mut self.k;
 
         if bkey_le(start, u.start_pos()) && bkey_le(u.p, end) {
@@ -1076,7 +1076,7 @@ impl<'t> BtreeIter<'t> {
         }
 
         let trans = self.trans_c();
-        let t = trans.kmalloc_in(paths, self.k.bytes())?.cast::<c::bkey_i>();
+        let t = trans.kmalloc_in(self.k.bytes())?.cast::<c::bkey_i>();
 
         let t = unsafe {
             (*t).k = self.k;
@@ -1088,13 +1088,13 @@ impl<'t> BtreeIter<'t> {
         Ok(self.found_i(t))
     }
 
-    fn maybe_trim(&mut self, paths: &mut Paths<'_>, k: Peeked, start: Bpos, end: Bpos) -> Peeked {
+    fn maybe_trim(&mut self, k: Peeked, start: Bpos, end: Bpos) -> Peeked {
         let v = match k {
             Ok(Some(v)) if self.trims() => v,
             k => return k,
         };
 
-        let v = self.trim(paths, v, start, end)?;
+        let v = self.trim(v, start, end)?;
         /* what trimming promises: all of it in the window, and something */
         ebug_assert!(self.k.size != 0 && !bkey_lt(self.k.start_pos(), start) && !bkey_gt(self.k.p, end),
                      "trimmed to {}, outside the window {}-{}", self.k, start, end);
@@ -1194,7 +1194,7 @@ impl<'t> BtreeIter<'t> {
 
         self.verify_entry_exit();
 
-        let k = self.maybe_trim(paths, k, self.pos, end);
+        let k = self.maybe_trim(k, self.pos, end);
 
         let fs = trans.fs();
         fs.event_trace(events::btree_iter_peek_max, |out| peek_trace(out, fs, k.map(|k| self.key_of(k))));
@@ -1424,7 +1424,7 @@ impl<'t> BtreeIter<'t> {
             self.pos.snapshot = self.snapshot;
         }
 
-        self.maybe_trim(paths, Ok(Some(v)), end, self.pos)
+        self.maybe_trim(Ok(Some(v)), end, self.pos)
     }
 
     pub(super) fn peek_prev_min_in(&mut self, paths: &mut Paths<'_>, end: Bpos) -> Peeked {
@@ -1452,7 +1452,7 @@ impl<'t> BtreeIter<'t> {
 
             if k.is_some() && !self.k.key_type().is_deleted() &&
                (!flags.contains(BtreeIterFlags::IS_EXTENTS) || bkey_lt(self.k.start_pos(), self.pos)) {
-                return self.maybe_trim(paths, Ok(k), end, self.pos);
+                return self.maybe_trim(Ok(k), end, self.pos);
             }
         }
 
@@ -1652,7 +1652,7 @@ impl<'t> BtreeIter<'t> {
     pub(super) fn peek_slot_in(&mut self, paths: &mut Paths<'_>) -> Peeked {
         let k = self.__peek_slot(paths, SPOS_MAX, crate::ret_ip!());
 
-        self.maybe_trim(paths, k, self.pos, SPOS_MAX)
+        self.maybe_trim(k, self.pos, SPOS_MAX)
     }
 
     pub(super) fn peek_slot_max_in(&mut self, paths: &mut Paths<'_>, end: Bpos) -> Peeked {
@@ -1661,7 +1661,7 @@ impl<'t> BtreeIter<'t> {
 
         let k = self.__peek_slot(paths, end, crate::ret_ip!());
 
-        self.maybe_trim(paths, k, self.pos, end)
+        self.maybe_trim(k, self.pos, end)
     }
 
     pub(super) fn prev_slot_in(&mut self, paths: &mut Paths<'_>) -> Peeked {

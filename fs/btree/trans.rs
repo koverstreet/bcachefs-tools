@@ -751,20 +751,21 @@ impl BtreeTrans<'_> {
         Ok(())
     }
 
-    /// @size bytes of the transaction's memory, when they don't fit in what it
-    /// has: grown, or the transaction restarted to grow it.
-    pub(crate) fn kmalloc_in(&self, paths: &mut Paths<'_>, bytes: usize) -> Result<*mut u8, BchError> {
+    /// @bytes of the transaction's memory, or the transaction restarted to
+    /// grow it.
+    pub(crate) fn kmalloc_in(&self, bytes: usize) -> Result<*mut u8, BchError> {
         let size = bytes.next_multiple_of(size_of::<u64>());
 
         match self.mem_with(|m| m.alloc(size / size_of::<u64>())) {
             Some(p) => Ok(p.as_ptr().cast()),
-            None    => Ok(self.kmalloc_grow(paths, size, crate::ret_ip!())?.cast()),
+            None    => Err(self.kmalloc_grow(size, crate::ret_ip!())),
         }
     }
 
-    pub(crate) fn kmalloc_grow(&self, paths: &mut Paths<'_>, size: usize, ret_ip: c_ulong)
-        -> Result<*mut c_void, BchError>
-    {
+    /// @size bytes that don't fit: the memory grown by the next begin, the
+    /// transaction restarted for it - so the memory never moves within an
+    /// attempt.
+    pub(crate) fn kmalloc_grow(&self, size: usize, ret_ip: c_ulong) -> BchError {
         let c = self.fs();
         let (top, old_bytes) = self.mem_with(|m| (m.top_bytes(), m.bytes()));
         let new_top = (top + size) as c_uint;
@@ -782,7 +783,9 @@ impl BtreeTrans<'_> {
             }
         }
 
-        self.maybe_inject_restart(ret_ip)?;
+        if let Err(err) = self.maybe_inject_restart(ret_ip) {
+            return err;
+        }
 
         let s = &c.btree.trans.stats[self.fn_idx.get() as usize];
         if new_bytes > s.lock.max_mem.get() {
@@ -802,33 +805,14 @@ impl BtreeTrans<'_> {
 
         if self.mem_with(|m| m.used_mempool) || new_bytes > c::BTREE_TRANS_MEM_MAX {
             ebug_assert!(old_bytes < new_bytes as usize);
-            return Err(bch_errcode::BCH_ERR_ENOMEM_trans_kmalloc.into());
+            return bch_errcode::BCH_ERR_ENOMEM_trans_kmalloc.into();
         }
 
-        if old_bytes != 0 {
-            self.mem_with(|m| m.realloc_bytes_required = new_bytes);
-            c.event_inc_trace(events::trans_restart_mem_realloced, |out| {
-                prt!(out, "{}\nbytes {}\n", self.fn_name(), new_bytes);
-            });
-            return Err(self.restart_ip(bch_errcode::BCH_ERR_transaction_restart_mem_realloced, ret_ip));
-        }
-
-        ebug_assert!(top == 0);
-        ebug_assert!(new_bytes <= c::BTREE_TRANS_MEM_MAX);
-
-        let reserved = self.allocate_dropping_locks_norelock(paths, || {
-            let _nowarn = MemallocFlags::nowarn();
-            self.mem_with(|m| m.reserve(new_bytes as usize)).ok()
+        self.mem_with(|m| m.realloc_bytes_required = new_bytes);
+        c.event_inc_trace(events::trans_restart_mem_realloced, |out| {
+            prt!(out, "{}\nbytes {}\n", self.fn_name(), new_bytes);
         });
-        if reserved.is_none() {
-            let p = c.btree.trans.malloc_pool.alloc_raw(c::GFP_KERNEL);
-            self.mem_with(|m| m.adopt_pool_buf(p));
-        }
-
-        self.relock_from(paths)?;
-
-        let p = self.mem_with(|m| m.alloc(size / size_of::<u64>())).expect("room, just made");
-        Ok(p.as_ptr().cast())
+        self.restart_ip(bch_errcode::BCH_ERR_transaction_restart_mem_realloced, ret_ip)
     }
 
     /**
@@ -881,7 +865,6 @@ impl BtreeTrans<'_> {
         if self.restarted() == bch_errcode::BCH_ERR_transaction_restart_mem_realloced {
             let new_bytes = self.mem_with(|m| m.realloc_bytes_required);
             ebug_assert!(new_bytes <= c::BTREE_TRANS_MEM_MAX);
-            ebug_assert!(self.mem_with(|m| m.bytes()) != 0);
 
             let reserved = self.allocate_dropping_locks_norelock(paths, || {
                 self.mem_with(|m| m.reserve(new_bytes as usize)).ok()
@@ -1148,9 +1131,8 @@ pub fn bch2_trans_begin(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths
 
 #[c_export]
 #[inline(always)]
-pub fn __bch2_trans_kmalloc(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, size: usize,
-                            _ip: c_ulong) -> *mut c_void {
-    trans.kmalloc_grow(paths, size, crate::ret_ip!()).unwrap_or_else(err_ptr)
+pub fn __bch2_trans_kmalloc(trans: &BtreeTrans<'_>, size: usize, _ip: c_ulong) -> *mut c_void {
+    err_ptr(trans.kmalloc_grow(size, crate::ret_ip!()))
 }
 
 #[c_export]
