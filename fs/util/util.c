@@ -39,6 +39,7 @@ bool bch2_is_zero(const void *_p, size_t n)
 	return true;
 }
 
+#ifndef __KERNEL__
 static struct bio *__bio_chain_endio(struct bio *bio)
 {
 	struct bio *parent = bio->bi_private;
@@ -62,6 +63,7 @@ void bio_chain(struct bio *bio, struct bio *parent)
 	bio->bi_end_io	= bio_chain_endio;
 	bio_inc_remaining(parent);
 }
+#endif
 
 /* misc: */
 
