@@ -160,13 +160,6 @@ struct CachedBtreeNodes {
     bucket: usize,
 }
 
-/// list_empty_careful(): whether @head is empty, read without its lock.
-fn list_empty_careful(head: &c::list_head) -> bool {
-    let head_ptr = core::ptr::from_ref(head).cast_mut();
-    // SAFETY: a list's links, READ_ONCE()d as others change them
-    let next = unsafe { core::ptr::read_volatile(&raw const head.next) };
-    next == head_ptr && next == unsafe { core::ptr::read_volatile(&raw const head.prev) }
-}
 
 fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
     if out.nr_tabstops == 0 {
@@ -187,7 +180,8 @@ fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
 
     prt!(out, "pcpu read locks:\t{}\n",     b.c.lock.six().readers.allocated() as u32);
     prt!(out, "written:\t{}\n",             b.written.get());
-    prt!(out, "writes blocked:\t{}\n",      !list_empty_careful(&b.write_blocked) as u32);
+    prt!(out, "writes blocked:\t{}\n",
+         u32::from(!unsafe { (*b.write_blocked.data_ptr()).is_empty() }));
     prt!(out, "will make reachable:\t{:x}\n", b.will_make_reachable.load(Ordering::Relaxed));
 
     for w in &b.writes {
@@ -409,7 +403,7 @@ enum BtreeUpdates {}
 
 impl PrintOnce for BtreeUpdates {
     fn print(fs: &Fs, out: &mut Printbuf) {
-        unsafe { c::bch2_btree_updates_to_text(out.as_raw(), fs.as_ptr()) }
+        fs.btree_updates_to_text(out)
     }
 }
 

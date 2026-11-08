@@ -773,7 +773,7 @@ pub struct BtreeTrans<'f> {
     pub accounting: Cell<cs::btree_trans_subbuf>,
 
     pub hooks: Cell<*mut cs::btree_trans_commit_hook>,
-    pub journal_pin: *mut cs::journal_entry_pin,
+    pub journal_pin: Cell<*mut cs::journal_entry_pin>,
 
     pub journal_res: Cell<cs::journal_res>,
     /*
@@ -1135,6 +1135,7 @@ pub struct bch_fs_btree {
     #[pin]
     #[init(cs::bch_fs_btree_reserve_cache::init())]
     pub reserve_cache: cs::bch_fs_btree_reserve_cache,
+    #[pin]
     #[late]
     pub interior_updates: cs::bch_fs_btree_interior_updates,
     #[pin]

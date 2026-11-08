@@ -99,9 +99,7 @@ fn write_done(trans: &BtreeTrans<'_>, b: &BtreeNode) {
     /* If this was the first write to a btree node, signal to the interior
      * update that the write is complete:
      */
-    if let Ok(old) = b.will_make_reachable.fetch_update(SeqCst, Relaxed, |v| (v & 1 != 0).then_some(v & !1)) {
-        unsafe { c::closure_put(&raw mut (*((old & !1) as *mut cs::btree_update)).cl) };
-    }
+    b.first_write_done();
 
     fs.journal.pin_drop(&w.journal);
 

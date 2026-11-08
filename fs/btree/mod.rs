@@ -36,7 +36,6 @@ pub mod compat;
 pub mod cow_key;
 pub mod for_each;
 pub mod interior;
-pub mod interior_c;
 pub mod iter;
 pub mod journal_overlay;
 pub mod lock_graph;

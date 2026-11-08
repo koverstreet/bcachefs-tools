@@ -14,7 +14,6 @@
 #[path = "bcachefs_types.rs"] pub mod bcachefs_types;
 #[path = "btree/bkey_defs.rs"] pub mod btree_bkey_defs;
 #[path = "btree/bkey_types.rs"] pub mod btree_bkey_types;
-#[path = "btree/interior_defs.rs"] pub mod btree_interior_defs;
 #[path = "btree/journal_overlay_defs.rs"] pub mod btree_journal_overlay_defs;
 #[path = "btree/write_buffer_defs.rs"] pub mod btree_write_buffer_defs;
 #[path = "btree/check_types.rs"] pub mod btree_check_types;
@@ -120,8 +119,7 @@ pub mod c {
     pub use super::btree_bkey_types::*;
     pub use crate::btree::node::bset::{BSET_TREE_NR_TYPES, MAX_BSETS};
     pub use super::btree_check_types::*;
-    pub use super::btree_interior_defs::*;
-    pub use crate::btree::interior::{BTREE_NODE_RESERVE, BTREE_RESERVE_MAX, BtreeReserveCache, bch2_btree_interior_updates_flush, bch2_btree_node_rewrite, bch2_btree_reserve_cache_to_text, bch2_btree_updates_to_text, bch_fs_btree_interior_updates, bch_fs_btree_reserve_cache, btree_alloc};
+    pub use crate::btree::interior::{BTREE_NODE_RESERVE, BTREE_RESERVE_MAX, BtreeReserveCache, bch2_btree_node_rewrite, bch_fs_btree_interior_updates, bch_fs_btree_reserve_cache, btree_alloc};
     pub use crate::btree::iter::{bch2_btree_iter_params_valid, trans_for_each_path_inorder_iter, trans_may_drop_updates};
     pub use super::btree_journal_overlay_defs::*;
     pub use crate::btree::journal_overlay::{OverwriteRange, OverwriteRanges, OverwriteRangesLive, OverwriteRangesLiveWriter, journal_key, journal_key_flags, journal_key_id, journal_key_journal_pos, journal_key_src, journal_keys, journal_ptr, journal_replay};

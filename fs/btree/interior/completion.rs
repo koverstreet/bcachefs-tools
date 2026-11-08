@@ -1,0 +1,610 @@
+// SPDX-License-Identifier: GPL-2.0
+
+//! An interior update made visible and then completed: its new nodes written,
+//! the nodes it frees and the node it updated tracked meanwhile - and once
+//! the writes are in, its pointers committed, in the order the updates were
+//! made visible, and the node it updated unblocked.
+
+use core::ffi::c_int;
+use core::ptr::{self, NonNull};
+use core::sync::atomic::Ordering::Relaxed;
+use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut};
+use crate::btree::cache::{bch2_btree_node_set_dirty, bch2_btree_node_wait_on_flag, btree_ptr_hash_val};
+use crate::btree::for_each::lockrestart_do;
+use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt,
+                         UpdateTriggerFlags, Watermark};
+use crate::btree::node::BtreeNode;
+use crate::btree::path::Paths;
+use crate::btree::trigger::{key_trigger, TriggerOp};
+use crate::btree::write::{bch2_btree_node_write_trans, node_write_if_need};
+use crate::c;
+use crate::c::six_lock_type::{SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
+use crate::data::keylist::PaddedKey;
+use crate::data::ptrs::{BkeyVPtrs, ExtentEntry, Ptrs};
+use crate::data::reconcile::needs_reconcile::strip_reconcile;
+use crate::data_structures::array_vec::ArrayVec;
+use crate::errcode::{bch_errcode, BchError};
+use crate::fs::Fs;
+use crate::fs_fatal_error;
+use crate::locking::ExclusiveGuard;
+use crate::types::Le64;
+use crate::util::closure::closure_wake_up;
+use super::{BtreeUpdate, InteriorUpdate, Mode, NewNode, UpdateNode, UPDATE_NODES_MAX};
+
+type NodeKey = PaddedKey<{ crate::btree::bkey::BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX }>;
+
+impl InteriorUpdate<'_> {
+    /*
+     * We're updating @b with pointers to nodes that haven't finished writing yet:
+     * block @b from being written until @as completes
+     */
+    pub(super) fn updated_node(&self, b: &BtreeNode) {
+        let fs = self.fs();
+
+        assert!(!self.owned.borrow().visible, "an interior update made visible twice");
+        assert!(self.level_end() >= usize::from(b.c.level), "an interior update's node past its reserve");
+        assert!(b.flags.dirty(), "an interior update's node not dirty");
+        assert!(b.c.level != 0, "an interior update's node a leaf");
+
+        let mut g = fs.btree.interior_updates.lock.lock();
+        if g.unwritten.push_back(self.raw).is_err() {
+            panic!("unwritten full: start() reserves room for every live update");
+        }
+
+        *unsafe { self.mode.protected_mut() } = Some(Mode::Node(NonNull::from(b)));
+        self.owned.borrow_mut().visible = true;
+        self.level_end.store(b.c.level, Relaxed);
+
+        b.flags.set_write_blocked(true);
+        unsafe { b.write_blocked.protected_mut().push_front(self) };
+    }
+
+    pub(super) fn updated_root(&self) {
+        let fs = self.fs();
+
+        assert!(!self.owned.borrow().visible, "an interior update made visible twice");
+        self.owned.borrow_mut().visible = true;
+
+        let mut g = fs.btree.interior_updates.lock.lock();
+        if g.unwritten.push_back(self.raw).is_err() {
+            panic!("unwritten full: start() reserves room for every live update");
+        }
+        *unsafe { self.mode.protected_mut() } = Some(Mode::Root);
+    }
+
+    /*
+     * Stamp sectors_written on @b's btree_ptr_v2 key. Must be called before the
+     * key is consumed (via bch2_keylist_add into parent_keys, or bch2_btree_set_root)
+     * so that the key the parent commits and the entry in @as->new_nodes carry the
+     * correct sectors_written.
+     */
+    pub(super) fn emit_new_node_key(&self, n: &NewNode<'_>) {
+        let fs = self.fs();
+        let contents = unsafe { BtreeNode::contents_mut(n) };
+        let bytes = core::mem::size_of::<crate::util::vstructs::Head<c::btree_node>>() +
+            contents.data().keys.u64s() * core::mem::size_of::<u64>();
+        let sectors = (bytes.next_multiple_of(fs.block_bytes() as usize) >> 9) as u16;
+
+        if let Some(mut p) = contents.key.key_mut().as_s().arm::<c::BtreePtrV2>() {
+            p.v_mut().sectors_written = crate::types::Le16::new(sectors);
+        }
+    }
+
+    /*
+     * bch2_btree_update_write_new_node:
+     *
+     * Adds @b to @as's new_nodes list (so we capture root-status after
+     * bch2_btree_set_root has run, and so btree_update_nodes_written can
+     * iterate it for sb-mark, journal record, and will_make_reachable
+     * cleanup), then hands @b off for writing: sets dirty + need_write
+     * deferred from bch2_btree_node_alloc (so journal reclaim can't pick @b
+     * up for flushing during construction), sets will_make_reachable to
+     * gate any subsequent writes besides the first, then submits the first
+     * write.
+     *
+     * Must be called after the parent commit has propagated @b's key (or
+     * bch2_btree_set_root has installed @b as the root).  Anything that
+     * needs @b->key in its committed-to-disk form (parent_keys / set_root)
+     * must instead pair with bch2_btree_update_emit_new_node_key earlier.
+     */
+    pub(super) fn write_new_node(&self, paths: &mut Paths<'_>, n: &NewNode<'_>) {
+        let fs = self.fs();
+
+        unsafe { self.new_nodes() }.push(UpdateNode::node(fs, n));
+
+        self.pending.fetch_add(1, Relaxed);
+
+        {
+            let _g = fs.btree.interior_updates.lock.lock();
+            assert!(n.will_make_reachable.load(Relaxed) == 0, "a new node another update will make reachable");
+            n.will_make_reachable.store(1 | self.raw.as_ptr() as usize, Relaxed);
+            n.flags.set_will_make_reachable(true);
+        }
+
+        unsafe { bch2_btree_node_set_dirty(fs.as_ptr(), ptr::from_ref(&**n).cast_mut()) };
+        n.flags.set_need_write(true);
+
+        let mut o = self.owned.borrow_mut();
+        let ob = unsafe { &mut (*ptr::from_ref(&**n).cast_mut()).ob };
+        for ob in ob.drain(fs) {
+            o.open_buckets.push(ob);
+        }
+        drop(o);
+
+        bch2_btree_node_write_trans(self.trans, paths, n, SIX_LOCK_write, 0);
+    }
+
+    /*
+     * @b is being split/rewritten: it may have pointers to not-yet-written btree
+     * nodes and thus outstanding btree_updates - redirect @b's
+     * btree_updates to point to this btree_update:
+     */
+    pub(super) fn will_free_node(&self, b: &BtreeNode) {
+        let fs = self.fs();
+
+        b.flags.set_dying(true);
+
+        if b.flags.fake() {
+            return;
+        }
+
+        /*
+         * Does this node have any btree_update operations preventing
+         * it from being written?
+         *
+         * If so, redirect them to point to this btree_update: we can
+         * write out our new nodes, but we won't make them visible until those
+         * operations complete
+         */
+        {
+            let _g = fs.btree.interior_updates.lock.lock();
+            let mut blocked = unsafe { b.write_blocked.protected_mut() }.cursor_mut();
+
+            while let Some(p) = blocked.remove_current() {
+                self.reparent(p);
+
+                /*
+                 * for flush_held_btree_writes() waiting on updates to flush or
+                 * nodes to be writeable:
+                 */
+                closure_wake_up(&fs.btree.interior_updates.wait);
+            }
+        }
+
+        b.flags.set_dirty(false);
+        b.flags.set_need_write(false);
+        b.flags.set_write_blocked(false);
+
+        /*
+         * Does this node have unwritten data that has a pin on the journal?
+         *
+         * If so, transfer that pin to the btree_update operation -
+         * note that if we're freeing multiple nodes, we only need to keep the
+         * oldest pin of any of the nodes we're freeing. We'll release the pin
+         * when the new nodes are persistent and reachable on disk:
+         */
+        for w in [b.current_write(), b.prev_write()] {
+            fs.journal.pin_copy(&self.journal, &w.journal, c::journal_pin_type::JOURNAL_PIN_TYPE_other,
+                                Some(will_free_node_journal_pin_flush));
+            fs.journal.pin_drop(&w.journal);
+        }
+
+        self.owned.borrow_mut().old_nodes.push(UpdateNode::node(fs, b));
+    }
+}
+
+unsafe extern "C" fn update_reparent_journal_pin_flush(_j: *mut c::journal, _pin: *mut c::journal_entry_pin,
+                                                       _seq: u64) -> c_int {
+    0
+}
+
+unsafe extern "C" fn will_free_node_journal_pin_flush(_j: *mut c::journal, _pin: *mut c::journal_entry_pin,
+                                                      _seq: u64) -> c_int {
+    0
+}
+
+impl BtreeUpdate {
+    /// @child, blocking a node this update frees, now completed by it: under
+    /// interior_updates.lock.
+    fn reparent(&self, child: &BtreeUpdate) {
+        *unsafe { child.mode.protected_mut() } = Some(Mode::Update);
+
+        self.fs().journal.pin_copy(&self.journal, &child.journal, c::journal_pin_type::JOURNAL_PIN_TYPE_other,
+                                   Some(update_reparent_journal_pin_flush));
+    }
+}
+
+fn has_reconcile(fs: &Fs, k: BkeySC<'_>) -> bool {
+    k.arm::<Ptrs>().is_some_and(|k| k.extent_entries(fs).any(|e| match e {
+        ExtentEntry::reconcile(_) => true,
+        ExtentEntry::ptr(p)       => u32::from(p.dev()) == c::BCH_SB_MEMBER_INVALID,
+        _                         => false,
+    }))
+}
+
+/*
+ * The transactional part of an interior btree node update, where we journal the
+ * update we did to the interior node and update alloc info:
+ */
+fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, _commit_lock: &ExclusiveGuard<'_, c::mutex>)
+    -> Result<(), BchError>
+{
+    let fs = t.fs();
+    let btree = u.btree;
+    let opts = crate::inode_opts::get_fs(fs, true);
+
+    /*
+     * Our caller uses BCH_TRANS_COMMIT_no_check_rw, so after emergency
+     * read-only nothing else gates this path. Bail explicitly: running the
+     * alloc info triggers below for an interior update whose journal half
+     * won't land underflows bucket sector counts.
+     */
+    fs.journal.error()?;
+
+    t.trans().journal_pin.set(ptr::from_ref(&u.journal).cast_mut());
+
+    for i in u.owned.borrow().old_nodes.iter() {
+        let level = u32::from(i.level) + 1;
+        let old = BkeySC::from(i.key.key());
+        let mut deleted = c::bkey_i { k: c::bkey { p: old.k.p, ..c::bkey::new() }, ..Default::default() };
+        let deleted_u64s = deleted.k.u64s.into();
+        let deleted = unsafe { &mut *BkeyI::from_raw_mut(&raw mut deleted) };
+        let mut op = TriggerOp::new(btree, level, old, BkeyS::from(deleted),
+                                    UpdateTriggerFlags::OVERWRITE | UpdateTriggerFlags::TRANSACTIONAL,
+                                    deleted_u64s);
+        key_trigger(t, &mut op)?;
+
+        t.journal_entry_add(c::bch_jset_entry_type::overwrite, btree.0 as u8, level as u8, i.key.key().as_bytes())?;
+    }
+
+    for i in unsafe { u.new_nodes() }.iter_mut() {
+        let level = u32::from(i.level);
+        i.update_node_key = false;
+        strip_reconcile(fs, i.key.key_mut().as_s());
+
+        let mut k = t.bkey_reassemble_room(BkeySC::from(i.key.key()),
+                                           c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?;
+        k.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_foreground, 0)?;
+
+        /*
+         * This is not strictly the best way of doing this, what we
+         * really want is a flag for 'did
+         * bch2_bkey_set_needs_reconcile() change anything, and do we
+         * need to update the node key'; there's no reason we couldn't
+         * be calling bch2_bkey_set_needs_reconcile() at node allocation
+         * time to better handle the case where we have to pad with
+         * invalid pointers because we don't currently have devices
+         * available to meet the desired replication level.
+         */
+
+        if has_reconcile(fs, k.as_sc()) {
+            let b = i.b.expect("a new node, not a deleted pointer");
+            match unsafe { BtreeNodeIter::at_node(t, b.as_ref()) } {
+                Ok(_)                                                                => i.update_node_key = true,
+                Err(e) if e == BchError::from(bch_errcode::BCH_ERR_btree_node_dying) => strip_reconcile(fs, k.as_s()),
+                Err(e)                                                               => return Err(e),
+            }
+        }
+
+        let buf_u64s = k.buf_u64s;
+        let deleted = c::bkey_i { k: c::bkey { p: k.k().p, ..c::bkey::new() }, ..Default::default() };
+        let deleted = unsafe { &*BkeyI::from_raw(&raw const deleted) };
+        let mut op = TriggerOp::new(btree, level + 1, BkeySC::from(deleted), k.as_s(),
+                                    UpdateTriggerFlags::INSERT | UpdateTriggerFlags::TRANSACTIONAL, buf_u64s);
+        key_trigger(t, &mut op)?;
+        i.key.set_key(k.as_sc());
+
+        if !i.update_node_key || i.root {
+            let (ty, level) = if i.root {
+                (c::bch_jset_entry_type::btree_root, level)
+            } else {
+                (c::bch_jset_entry_type::btree_keys, level + 1)
+            };
+            t.journal_entry_add(ty, btree.0 as u8, level as u8, k.as_ref().as_bytes())?;
+        } else {
+            let mut parent = BtreeNodeIter::new(t, btree, k.k().p, 0, level + 1, BtreeIterFlags::INTENT);
+            parent.iter().traverse(t)?;
+            /*
+             * XXX: we shouldn't be logging overwrites here, need a
+             * flag for that
+             */
+            t.update(parent.iter(), &k, UpdateTriggerFlags::NORUN)?;
+        }
+    }
+
+    Ok(())
+}
+
+/* If the node has been reused, we might be reading uninitialized memory - that's fine: */
+#[inline(never)]
+fn btree_node_seq_matches(b: &BtreeNode, seq: Le64) -> bool {
+    /* b->data is not stable while read in flight */
+    if b.flags.read_in_flight() {
+        return false;
+    }
+
+    let data = unsafe { ptr::read_volatile(&raw const (*b.contents.data_ptr()).data) };
+    let b_seq = if data.is_null() { Le64::default() } else { unsafe { ptr::read_volatile(&raw const (*data).keys.seq) } };
+    b_seq == seq
+}
+
+fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
+    let u = unsafe { update.as_ref() };
+    let trans = crate::btree_trans!(fs);
+    let mut journal_seq = 0;
+
+    {
+        /* btree_node_update_key() changes a new node's key under commit_lock */
+        let keys: ArrayVec<NodeKey, UPDATE_NODES_MAX> = {
+            let _commit_lock = fs.btree.interior_updates.commit_lock.lock();
+            unsafe { u.new_nodes() }.iter().map(|i| i.key.clone()).collect()
+        };
+
+        if !keys.iter().all(|k| fs.btree_bitmap_marked(BkeySC::from(k.key()), true)) {
+            trans.unlock_long();
+
+            let mut sb = fs.sb_lock();
+            let dirty = keys.iter().fold(false, |d, k| d | fs.btree_bitmap_mark_locked(&mut sb, BkeySC::from(k.key())));
+            if dirty {
+                fs.write_super(&mut sb);
+            }
+        }
+    }
+
+    /*
+     * Wait for any in flight writes to finish before we free the old nodes
+     * on disk. But we haven't pinned those old nodes in the btree cache,
+     * they might have already been evicted.
+     *
+     * The update we're completing deleted references to those nodes from the
+     * btree, so we know if they've been evicted they can't be pulled back in.
+     * We just have to check if the nodes we have pointers to are still those
+     * old nodes, and haven't been reused.
+     *
+     * This can't be done locklessly because the data buffer might have been
+     * vmalloc allocated, and they're not RCU freed. We also need the
+     * __no_kmsan_checks annotation because even with the btree node read
+     * lock, nothing tells us that the data buffer has been initialized (if
+     * the btree node has been reused for a different node, and the data
+     * buffer swapped for a new data buffer).
+     */
+    let old: ArrayVec<(NonNull<BtreeNode>, Le64, u64), UPDATE_NODES_MAX> = u.owned.borrow().old_nodes.iter()
+        .map(|i| (i.b.expect("an old node"), i.seq, btree_ptr_hash_val(BkeySC::from(i.key.key()))))
+        .collect();
+    for (b, seq, hash) in old {
+        let b = unsafe { b.as_ref() };
+        let mut seq_matches = false;
+
+        /*
+         * i->b is a stale pointer: this update deleted the node, so
+         * btree_node_reclaim may have reused its memory — e.g. as
+         * another update's prealloc node, whose owner holds it
+         * intent+write while possibly blocked on the allocator. The
+         * open buckets the allocator is waiting on are released by
+         * this workqueue (bch2_open_bucket_put below), so sleeping on
+         * the node here closes the loop and deadlocks. Arm the
+         * identity check with the old key's hash: if we'd sleep on a
+         * node that's no longer ours, the lock attempt aborts.
+         *
+         * An abort means no wait is owed. Sustained write locks on an
+         * unhashed node come only from reclaim (which requires
+         * write_in_flight clear before grabbing) or the write
+         * completion path (which runs after the bio finished) — either
+         * way the IO this wait guards against is already done.
+         */
+        let _ = lockrestart_do(&trans, |_| {
+            let mut paths = trans.paths();
+            let idx = trans.node_lock_with_path(&mut paths, &b.c, SIX_LOCK_read, hash)?;
+            seq_matches = btree_node_seq_matches(b, seq);
+            trans.node_unlock_with_path(&mut paths, idx, b.c.level.into());
+            Ok(())
+        });
+        trans.unlock_long();
+
+        if seq_matches {
+            bch2_btree_node_wait_on_flag(b, c::btree_flags::BTREE_NODE_write_in_flight_inner);
+        }
+    }
+
+    /*
+     * We did an update to a parent node where the pointers we added pointed
+     * to child nodes that weren't written yet: now, the child nodes have
+     * been written so we can write out the update to the interior node.
+     */
+
+    /*
+     * We can't call into journal reclaim here: we'd block on the journal
+     * reclaim lock, but we may need to release the open buckets we have
+     * pinned in order for other btree updates to make forward progress, and
+     * journal reclaim does btree updates when flushing bkey_cached entries,
+     * which may require allocations as well.
+     */
+
+    trans.unlock();
+    let mut new_nodes: ArrayVec<NonNull<BtreeNode>, UPDATE_NODES_MAX> = ArrayVec::new();
+    let ret = {
+        let commit_lock = fs.btree.interior_updates.commit_lock.lock();
+
+        let ret = lockrestart_do(&trans, |t| {
+            nodes_written_trans(t, u, &commit_lock)?;
+            t.commit(Some(&u.disk_res), CommitOpts::new()
+                     .watermark(Watermark::INTERIOR_UPDATES)
+                     .flags(CommitFlags::NO_ENOSPC | CommitFlags::NO_CHECK_RW | CommitFlags::JOURNAL_RECLAIM))?;
+            journal_seq = t.journal_res_seq();
+            Ok(())
+        });
+        if let Err(e) = ret {
+            if fs.journal.error().is_ok() {
+                fs_fatal_error!(fs, "{}", e.msg());
+            }
+        }
+
+        /*
+         * Clear will_make_reachable while we still hold intent locks on
+         * all our new nodes, to avoid racing with
+         * btree_node_update_key():
+         */
+        for i in unsafe { u.new_nodes() }.iter() {
+            if i.update_node_key {
+                let b = i.b.expect("a new node, not a deleted pointer");
+                unsafe { b.as_ref().contents_mut() }.key.set_key(i.key.key());
+            }
+
+            if let Some(b) = i.b {
+                let b = unsafe { b.as_ref() };
+                assert!(b.will_make_reachable.load(Relaxed) == update.as_ptr() as usize,
+                        "a new node another update will make reachable");
+                b.will_make_reachable.store(0, Relaxed);
+                b.flags.set_will_make_reachable(false);
+                new_nodes.push(NonNull::from(b));
+            }
+        }
+        ret
+    };
+
+    /*
+     * Ensure transaction is unlocked before using btree_node_lock_nopath()
+     * (the use of which is always suspect, we need to work on removing this
+     * in the future)
+     *
+     * It should be, but bch2_path_get_unlocked_mut() -> bch2_path_get()
+     * calls bch2_path_upgrade(), before we call path_make_mut(), so we may
+     * rarely end up with a locked path besides the one we have here:
+     */
+    trans.unlock();
+
+    /*
+     * We have to be careful because another thread might be getting ready
+     * to free as->b and calling btree_update_reparent() on us - we'll
+     * recheck under btree_update_lock below:
+     */
+    let front_mode = || {
+        let g = fs.btree.interior_updates.lock.lock();
+        let front = *g.unwritten.peek_front().expect("an update completing, on unwritten");
+        assert!(front == update, "an update completing out of order");
+        unsafe { *u.mode.protected() }
+    };
+    if let Some(Mode::Node(b)) = front_mode() {
+        let b = unsafe { b.as_ref() };
+        let level = usize::from(b.c.level);
+
+        /*
+         * @b is the node we did the final insert into:
+         *
+         * On failure to get a journal reservation, we still have to
+         * unblock the write and allow most of the write path to happen
+         * so that shutdown works, but the i->journal_seq mechanism
+         * won't work to prevent the btree write from being visible (we
+         * didn't get a journal sequence number) - instead
+         * __bch2_btree_node_write() doesn't do the actual write if
+         * we're in journal error state:
+         */
+        let _ = lockrestart_do(&trans, |_| {
+            let mut paths = trans.paths();
+            /*
+             * Unarmed take: this block owns clearing b's
+             * write_blocked (the list_del below), which is what
+             * makes b unreclaimable - so the reuse race can't
+             * reach it, and skipping on a spurious abort would
+             * leak write_blocked and leave b unwritable forever.
+             * The reparent race is handled by the as->b recheck
+             * under interior_updates.lock.
+             */
+            let idx = trans.node_lock_with_path(&mut paths, &b.c, SIX_LOCK_intent, 0)?;
+
+            if let Err(e) = trans.node_lock_write(&mut paths, idx, level) {
+                trans.node_unlock_with_path(&mut paths, idx, level);
+                return Err(e);
+            }
+
+            let do_pin = {
+                let _g = fs.btree.interior_updates.lock.lock();
+                let blocked = unsafe { b.write_blocked.protected_mut() };
+
+                unsafe { blocked.remove(u) };
+                if blocked.is_empty() {
+                    b.flags.set_write_blocked(false);
+                }
+
+                /*
+                 * Node might have been freed, recheck under
+                 * btree_interior_updates.lock; b's write lock
+                 * keeps it valid past the mutex drop, so the
+                 * journal pin work can happen outside the
+                 * mutex.
+                 */
+                unsafe { *u.mode.protected() == Some(Mode::Node(NonNull::from(b))) }
+            };
+
+            if do_pin {
+                assert!(b.c.level != 0, "an interior update's node a leaf");
+                assert!(b.flags.dirty(), "an interior update's node not dirty");
+
+                if ret.is_ok() {
+                    let contents = unsafe { b.contents_mut() };
+                    let t = *contents.last_set();
+                    let mut keys = b.keys_mut(contents);
+                    let last = keys.bset_head_mut(t.data_offset);
+
+                    last.journal_seq = Le64::new(journal_seq.max(last.journal_seq.get()));
+
+                    b.add_journal_pin(fs, journal_seq);
+                } else {
+                    /*
+                     * If we didn't get a journal sequence
+                     * number we can't write this btree node,
+                     * because recovery won't know to ignore
+                     * this write:
+                     */
+                    b.flags.set_never_write(true);
+                }
+            }
+
+            trans.node_unlock_write(&mut paths, idx, level);
+
+            node_write_if_need(&trans, &mut paths, b, SIX_LOCK_intent);
+            trans.node_unlock_with_path(&mut paths, idx, level);
+            Ok(())
+        });
+    }
+
+    fs.journal.pin_drop(&u.journal);
+
+    for b in new_nodes {
+        let b = unsafe { b.as_ref() };
+        let _ = lockrestart_do(&trans, |_| {
+            let mut paths = trans.paths();
+            /*
+             * Unarmed take: new nodes are dirty until
+             * written, hence unreclaimable - the reuse
+             * race can't reach them, and a spurious skip
+             * here would leave a node that never gets its
+             * write kicked.
+             */
+            let idx = trans.node_lock_with_path(&mut paths, &b.c, SIX_LOCK_read, 0)?;
+            node_write_if_need(&trans, &mut paths, b, SIX_LOCK_read);
+            trans.node_unlock_with_path(&mut paths, idx, b.c.level.into());
+            Ok(())
+        });
+    }
+
+    u.owned.borrow_mut().open_buckets.clear();
+
+    unsafe { super::update_free(update, &trans, &mut trans.paths(), false) };
+}
+
+/// The interior update worker: the updates on unwritten completed in order,
+/// each once its new nodes are written - the first not yet stops it.
+pub(super) fn worker(fs: &Fs) {
+    loop {
+        let update = {
+            let g = fs.btree.interior_updates.lock.lock();
+            match g.unwritten.peek_front() {
+                Some(&u) if unsafe { u.as_ref() }.nodes_written() => u,
+                _ => break,
+            }
+        };
+
+        nodes_written(fs, update);
+    }
+}

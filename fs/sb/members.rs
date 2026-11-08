@@ -821,7 +821,7 @@ impl Dev {
 impl Fs {
     /// Whether every device @k points to has its node marked - a device
     /// that isn't there doesn't count against it.
-    fn btree_bitmap_marked(&self, k: BkeySC<'_>, with_gc: bool) -> bool {
+    pub(crate) fn btree_bitmap_marked(&self, k: BkeySC<'_>, with_gc: bool) -> bool {
         let Some(k) = k.arm::<Ptrs>() else { return true };
         let rcu = read_lock();
         let marked = k.ptrs(self).all(|p| self.dev_rcu(p.dev().into(), &rcu)
@@ -831,7 +831,7 @@ impl Fs {
 
     /// @k's node marked on each device it points to. Whether a member
     /// changed.
-    fn btree_bitmap_mark_locked(&self, sb: &mut SbLockGuard<'_>, k: BkeySC<'_>) -> bool {
+    pub(crate) fn btree_bitmap_mark_locked(&self, sb: &mut SbLockGuard<'_>, k: BkeySC<'_>) -> bool {
         let Some(k) = k.arm::<Ptrs>() else { return false };
         let rcu = read_lock();
         let mut dirty = false;

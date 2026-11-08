@@ -4,7 +4,6 @@
 //! in place, the node not rewritten.
 
 use core::ptr;
-use core::sync::atomic::Ordering::Relaxed;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{BkeySC, BkeyV, BkeyVMut, BkeyVal};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts,
@@ -161,16 +160,12 @@ impl<'a, 't> TransAttempt<'a, 't> {
     {
         let trans = self.trans();
         let fs = self.fs();
-        let commit_lock = &fs.btree.interior_updates.commit_lock;
 
-        trans.mutex_lock(&mut trans.paths(), commit_lock)?;
+        let _commit_lock = trans.mutex_lock(&mut trans.paths(), &fs.btree.interior_updates.commit_lock)?;
 
-        if !b.will_make_reachable() {
-            unsafe { c::mutex_unlock(ptr::from_ref(commit_lock).cast_mut().cast()) };
+        let Some(update) = b.reachable_by() else {
             return Err(trans.restart(bch_errcode::BCH_ERR_transaction_restart_nested));
-        }
-
-        let update = (b.will_make_reachable.load(Relaxed) & !1) as *mut c::btree_update;
+        };
 
         /*
          * Reconcile state on a new node's key is computed, with
@@ -184,12 +179,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         self.node_key_set(iter, b, &key);
 
-        let n = unsafe { (*update).new_nodes.as_mut_slice() }.iter_mut()
-            .find(|n| ptr::eq(n.b, b.node()))
-            .expect("a node its update will make reachable, in the update's new nodes");
-        n.key.set_key(key.as_sc());
-
-        unsafe { c::mutex_unlock(ptr::from_ref(commit_lock).cast_mut().cast()) };
+        unsafe { update.as_ref().new_node_key_set(b.node(), key.as_sc()) };
         Ok(())
     }
 

@@ -53,7 +53,6 @@ crate::has_closure!(c::journal_buf, io);
 c_extern! {
     pub fn bch2_bio_map_and_chain(bdev: *mut c::block_device, base: *mut c_void, size: usize, sector: u64,
                                   opf: c::blk_opf_t, gfp: c::gfp_t, bs: *mut c::bio_set) -> *mut c::bio;
-    pub fn bch2_journal_entry_to_btree_root(c: *mut Fs, entry: *mut Head<c::jset_entry>);
 }
 
 impl c::journal_buf {
@@ -947,7 +946,7 @@ fn write_prep(j: &c::journal, w: &mut c::journal_buf) -> Result<(), BchError> {
          * add them to this journal entry:
          */
         if ty == c::bch_jset_entry_type::btree_root {
-            unsafe { bch2_journal_entry_to_btree_root(fs.as_ptr(), ptr::from_mut(i).cast()) };
+            fs.journal_entry_to_btree_root(i);
             btree_roots_have |= 1 << i.btree_id;
         } else if ty == c::bch_jset_entry_type::write_buffer_keys {
             let intake = wb.as_mut().expect("write buffer keys in a journal entry not flushing to the write buffer");

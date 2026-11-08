@@ -535,6 +535,12 @@ impl BtreeTrans<'_> {
         Ok(path_idx)
     }
 
+    /// node_lock_with_path()'s lock dropped, and its path put.
+    pub(crate) fn node_unlock_with_path(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize) {
+        self.node_unlock(paths, idx, level);
+        self.path_put(paths, idx, true);
+    }
+
     /// @f on @b, locked by node_lock_with_path(), and unlocked after, its path
     /// put: retried on a transaction restart, @f's included.
     pub(crate) fn node_locked_do<T>(&self, b: &c::btree_bkey_cached_common, ty: c::six_lock_type, hash_val: u64,
@@ -1216,13 +1222,17 @@ impl BtreeTrans<'_> {
         }
     }
 
-    /// @lock, not slept on with the btree locks held: bch2_trans_mutex_lock().
-    pub(crate) fn mutex_lock(&self, paths: &mut Paths<'_>, lock: &c::mutex) -> Result<(), BchError> {
-        let lock = ptr::from_ref(lock).cast_mut();
-        if unsafe { c::mutex_trylock(lock.cast()) } as i32 != 0 {
-            return Ok(());
+    /// @l locked, not slept on with the btree locks held: bch2_trans_mutex_lock().
+    pub(crate) fn mutex_lock<'l, G, P>(&self, paths: &mut Paths<'_>, l: &'l Locked<c::mutex, G, P>)
+        -> Result<ExclusiveGuard<'l, c::mutex, G, P>, BchError>
+    {
+        if let Some(g) = l.try_lock() {
+            return Ok(g);
         }
-        self.mutex_lock_slowpath(paths, lock)
+        self.unlock_from(paths, crate::ret_ip!());
+        let g = l.lock();
+        self.relock_traced(paths, true)?;
+        Ok(g)
     }
 
     /// @lock, waited for with the btree locks dropped, and those retaken after.

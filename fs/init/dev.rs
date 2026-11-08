@@ -1078,7 +1078,7 @@ impl StateLockWrite<'_> {
                 crate::bch_err_fn!(fs, dev_remove_stripes(fs, DevDrop { dev, flags, err: &mut *err }))?;
             }
 
-            unsafe { c::bch2_btree_interior_updates_flush(fs.as_ptr()) };
+            fs.btree_interior_updates_flush();
 
             /* Check if device still has data before blowing away alloc info */
             let usage = ca.usage_read_fast();

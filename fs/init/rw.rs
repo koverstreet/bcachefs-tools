@@ -21,7 +21,6 @@ use crate::init::passes::RecoveryPass;
 use crate::accounting::verify_accounting_clean;
 use crate::alloc::capacity::recalc_capacity;
 use crate::btree::cache::bch2_fs_btree_init_rw;
-use crate::btree::interior::bch2_btree_interior_updates_flush;
 use crate::btree::write::bch2_btree_flush_all_writes;
 use crate::c;
 use crate::c::bch_fs_flags as Flag;
@@ -68,7 +67,7 @@ impl Fs {
             let progress = unsafe {
                 self.btree_write_buffer_flush_going_ro() ||
                 c::bch2_btree_key_cache_flush_going_ro(p) != 0 ||
-                bch2_btree_interior_updates_flush(p) ||
+                self.btree_interior_updates_flush() ||
                 self.journal_flush_all_pins() ||
                 bch2_btree_flush_all_writes(p)
             };
@@ -90,7 +89,7 @@ impl Fs {
          */
         if self.journal.halted() {
             self.btree_cancel_all_writes();
-            unsafe { bch2_btree_interior_updates_flush(p) };
+            self.btree_interior_updates_flush();
         } else {
             crate::journal::buckets::drop_retired_going_ro(self);
         }

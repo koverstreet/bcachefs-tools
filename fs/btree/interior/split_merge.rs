@@ -256,7 +256,7 @@ pub unsafe fn bch2_btree_node_check_topology(trans: &BtreeTrans<'_>, b: &BtreeNo
     ret_to_c(check_topology(trans, unsafe { LockedNode::new(b) }))
 }
 
-fn split_threshold(fs: &Fs) -> usize {
+pub(super) fn split_threshold(fs: &Fs) -> usize {
     fs.btree_max_u64s() * 3 / 4
 }
 

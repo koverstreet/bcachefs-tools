@@ -136,7 +136,8 @@ pub struct BtreeNode {
      * btree_updates that are blocking this node from being
      * written:
      */
-    pub write_blocked: cs::list_head,
+    #[c("struct list_head write_blocked")]
+    pub(crate) write_blocked: LockedBy<crate::btree::interior::WriteBlocked>,
 
     /*
      * Also for asynchronous splits/interior node updates:

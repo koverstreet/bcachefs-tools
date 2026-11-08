@@ -7,8 +7,7 @@
 #include "btree/update.h"
 #include "data/write_gen.h"
 
-#include "btree/interior_defs_gen.h"
-#include "btree/interior_c_gen.h"
+#include "btree/interior/root_gen.h"
 #include "btree/interior/split_merge_gen.h"
 #include "btree/shard_gen.h"
 
@@ -25,11 +24,6 @@ btree_update_set_watermark_hipri(enum bch_trans_commit_flags flags)
 	flags |= watermark;
 	return flags;
 }
-
-struct btree *__bch2_btree_node_alloc_replacement(struct btree_update *,
-						  struct btree_trans *,
-						  struct btree *,
-						  struct bkey_format);
 
 static inline bool btree_node_needs_merge(struct bch_fs *c, struct btree *b, int d)
 {
@@ -58,10 +52,6 @@ static inline int bch2_foreground_maybe_merge(struct btree_trans *trans,
 
 	return __bch2_foreground_maybe_merge(trans, path_idx, level, flags, merge_count);
 }
-
-void bch2_btree_set_root_for_read(struct bch_fs *, struct btree *);
-
-int bch2_btree_root_alloc_fake_trans(struct btree_trans *, enum btree_id, unsigned);
 
 static inline unsigned btree_update_reserve_required(struct bch_fs *c,
 						     struct btree *b)
@@ -194,21 +184,5 @@ static inline bool btree_bkey_and_val_eq(struct bkey_s_c l, struct bkey_s_c r)
 
 	return !memcmp((void *) l.v + offset, (void *) r.v + offset, bkey_val_bytes(l.k) - offset);
 }
-
-void bch2_btree_updates_to_text(struct printbuf *, struct bch_fs *);
-
-static inline bool bch2_btree_interior_updates_pending(struct bch_fs *c)
-{
-	guard(mutex)(&c->btree.interior_updates.lock);
-	return !list_empty(&c->btree.interior_updates.list);
-}
-
-bool bch2_btree_interior_updates_flush(struct bch_fs *);
-
-void bch2_journal_entry_to_btree_root(struct bch_fs *, struct jset_entry *);
-
-void bch2_btree_reserve_cache_to_text(struct printbuf *, struct bch_fs *);
-
-void bch2_fs_btree_interior_update_init_early(struct bch_fs *);
 
 #endif /* _BCACHEFS_BTREE_INTERIOR_H */

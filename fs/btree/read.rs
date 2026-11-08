@@ -938,10 +938,9 @@ pub fn node_read(trans: &BtreeTrans<'_>, b: &BtreeNode, sync: bool) {
 
 c_extern! {
     fn bch2_btree_cache_cannibalize_unlock(trans: *mut BtreeTrans<'_>);
-    fn bch2_btree_node_mem_alloc(trans: *mut BtreeTrans<'_>, pcpu_read_locks: bool) -> *mut BtreeNode;
-    fn bch2_btree_node_transition_state(bc: *mut c::bch_fs_btree_cache, b: *mut BtreeNode,
-                                        target: c::btree_node_cache_state) -> c_int;
-    fn bch2_btree_set_root_for_read(c: *mut Fs, b: *mut BtreeNode);
+    pub(crate) fn bch2_btree_node_mem_alloc(trans: *mut BtreeTrans<'_>, pcpu_read_locks: bool) -> *mut BtreeNode;
+    pub(crate) fn bch2_btree_node_transition_state(bc: *mut c::bch_fs_btree_cache, b: *mut BtreeNode,
+                                                   target: c::btree_node_cache_state) -> c_int;
 }
 
 impl Fs {
@@ -983,7 +982,7 @@ impl Fs {
                                                       c::btree_node_cache_state::BTREE_NODE_CACHE_FREEABLE) };
             Err(self.err(c::bch_errcode::BCH_ERR_btree_node_read_error))
         } else {
-            unsafe { bch2_btree_set_root_for_read(self.as_ptr(), ptr::from_ref(b).cast_mut()) };
+            self.btree_set_root_for_read(b);
             Ok(())
         };
 
