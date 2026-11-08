@@ -168,8 +168,13 @@ impl c::fast_list {
     /// @item in a new slot: the slot, for remove().
     pub fn add(&self, item: NonNull<c_void>) -> Result<u32, AllocError> {
         let idx = self.get_idx()?;
-        self.slot(idx).store(item.as_ptr(), Release);
+        self.set(idx, item);
         Ok(idx)
+    }
+
+    /// @item in slot @idx, which get_idx() handed out: fast_list_set().
+    pub fn set(&self, idx: u32, item: NonNull<c_void>) {
+        self.slot(idx).store(item.as_ptr(), Release);
     }
 
     /// Empties slot @idx, and gives it back.
