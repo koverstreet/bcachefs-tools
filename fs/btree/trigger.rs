@@ -34,6 +34,13 @@ pub struct TriggerOp<'a> {
 }
 
 impl<'a> TriggerOp<'a> {
+    /// @old overwritten by @new, at @level of @btree, @new with @new_buf_u64s
+    /// of room to grow into.
+    pub(crate) fn new(btree: Btree, level: u32, old: BkeySC<'a>, new: BkeyS<'a>, flags: UpdateTriggerFlags,
+                      new_buf_u64s: u32) -> Self {
+        TriggerOp { btree, level, old, new, flags, new_buf_u64s }
+    }
+
     /// # Safety
     /// @op is the one the trigger was called with: both keys valid, and @new
     /// the trigger's to edit, for 'a.
@@ -110,7 +117,7 @@ fn run_trigger(t: &TransAttempt<'_, '_>, trigger: Option<&'static Trigger>, op: 
 
 /// bch2_key_trigger(): @op's key's trigger - the old key's type's, the new
 /// key's if it's a deletion - then its snapshot's count of keys.
-fn key_trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
+pub(crate) fn key_trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
     let ty = match op.old.k.key_type() {
         BkeyType::deleted => op.new.k.key_type(),
         ty => ty,

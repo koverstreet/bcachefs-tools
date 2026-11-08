@@ -435,6 +435,18 @@ impl BtreeTrans<'_> {
     pub(crate) fn node_lock_write(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize)
         -> Result<(), BchError>
     {
+        self.node_lock_write_may_fail(paths, idx, level, false)
+    }
+
+    /// node_lock_write(), for a caller that can't take a restart: the cycle
+    /// detector waits rather than fail it - bch2_btree_node_lock_write_nofail().
+    pub(crate) fn node_lock_write_nofail(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize) {
+        self.node_lock_write_may_fail(paths, idx, level, true).expect("a write lock that may not fail, failed");
+    }
+
+    fn node_lock_write_may_fail(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize, lock_may_not_fail: bool)
+        -> Result<(), BchError>
+    {
         let b = paths[idx].locked_node(level).expect("write locking a node the path doesn't hold");
         let b = unsafe { &*ptr::from_ref(b.node()) };
         ebug_assert!(paths[idx].l[level].lock_seq == b.lock.six().seq.get());
@@ -450,7 +462,7 @@ impl BtreeTrans<'_> {
         if six_trylock_ip(b.lock.six(), c::six_lock_type::SIX_LOCK_write, crate::ret_ip!()) {
             Ok(())
         } else {
-            self.node_lock_write_contended(paths, idx, b, false, crate::ret_ip!())
+            self.node_lock_write_contended(paths, idx, b, lock_may_not_fail, crate::ret_ip!())
         }
     }
 
@@ -1185,6 +1197,15 @@ impl BtreeTrans<'_> {
                 }
             }
         }
+    }
+
+    /// @lock, not slept on with the btree locks held: bch2_trans_mutex_lock().
+    pub(crate) fn mutex_lock(&self, paths: &mut Paths<'_>, lock: &c::mutex) -> Result<(), BchError> {
+        let lock = ptr::from_ref(lock).cast_mut();
+        if unsafe { c::mutex_trylock(lock.cast()) } as i32 != 0 {
+            return Ok(());
+        }
+        self.mutex_lock_slowpath(paths, lock)
     }
 
     /// @lock, waited for with the btree locks dropped, and those retaken after.

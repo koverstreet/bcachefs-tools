@@ -236,6 +236,10 @@ impl<T, const N: usize> DArray<T, N> {
     pub fn as_slice(&self) -> &[T] {
         if self.nr == 0 { &[] } else { unsafe { core::slice::from_raw_parts(self.data, self.nr) } }
     }
+
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        if self.nr == 0 { &mut [] } else { unsafe { core::slice::from_raw_parts_mut(self.data, self.nr) } }
+    }
 }
 
 // ---- Rust's own, in C's structs ---------------------------------------------

@@ -328,7 +328,7 @@ impl TransAttempt<'_, '_> {
 
     /// An entry of @ty for @btree at @level, holding @data, with this
     /// transaction's commit.
-    fn journal_entry_add(&self, ty: c::bch_jset_entry_type, btree: u8, level: u8, data: &[u8])
+    pub(crate) fn journal_entry_add(&self, ty: c::bch_jset_entry_type, btree: u8, level: u8, data: &[u8])
         -> Result<(), BchError>
     {
         let u64s = c::JSET_KEYS_U64s + data.len().div_ceil(size_of::<u64>());
