@@ -38,6 +38,7 @@ use core::ffi::{c_long, c_ulong, CStr};
 use core::mem::offset_of;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
+use core::sync::atomic::{fence, Ordering::SeqCst};
 
 use crate::btree::bkey::pos;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt};
@@ -218,6 +219,10 @@ impl InodeInfo {
         }
 
         fs.vfs.inodes.remove(self.ei_inodes_idx);
+        // evict_subvolume_inodes() checks the slot once it's on the waitqueue:
+        // the slot is clear before the VFS's wake, after we return, looks for
+        // waiters - with no barrier of its own
+        fence(SeqCst);
     }
 
     pub fn raw(&self) -> *mut c::bch_inode_info {
@@ -383,7 +388,10 @@ pub fn evict_subvolume_inodes(fs: &Fs, subvols: &[u32]) {
             };
             let Some((i, inode)) = next else { break };
             found = true;
-            VfsInode::wait_new_bit(inode, || true, c_long::MAX); // MAX_SCHEDULE_TIMEOUT
+            VfsInode::wait_new_bit(inode, || {
+                let g = read_lock();
+                vfs_inodes_from(fs, i, &g).next().is_some_and(|(j, still)| j == i && NonNull::from(still.vfs()) == inode)
+            }, c_long::MAX); // MAX_SCHEDULE_TIMEOUT
             pos = i + 1;
         }
         if !found {
