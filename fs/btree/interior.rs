@@ -31,7 +31,7 @@ use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::journal::entries::{EntryWriter, NoRoom};
 use crate::journal::pins::Pin;
-use crate::locking::{ExclusiveGuard, Locked, LockedBy};
+use crate::locking::{ExclusiveGuard, Locked, LockedBy, SharedGuard};
 use crate::new_lock;
 use crate::types::{rust_only, Fifo, Le64, Lent, RustOnly};
 use crate::util::Printbuf;
@@ -259,27 +259,18 @@ struct StartNode {
     remaining:      u16,
 }
 
+type GcReadLock = SharedGuard<'static, c::rw_semaphore>;
+
 /// gc.lock, held for read from start() until the update's done, or freed.
-struct GcReadLock(NonNull<c::rw_semaphore>);
-
-impl GcReadLock {
-    fn new(trans: &BtreeTrans<'_>, fs: &Fs) -> Result<Self, BchError> {
-        let lock = NonNull::from(&fs.gc.lock);
-        if unsafe { c::down_read_trylock(lock.as_ptr().cast()) } == 0 {
-            trans.unlock();
-            unsafe { c::down_read(lock.as_ptr().cast()) };
-            let g = GcReadLock(lock);
-            trans.relock()?;
-            return Ok(g);
-        }
-        Ok(GcReadLock(lock))
+fn gc_read_lock(trans: &BtreeTrans<'_>, fs: &'static Fs) -> Result<GcReadLock, BchError> {
+    if let Some(g) = fs.gc.lock.try_read() {
+        return Ok(g);
     }
-}
 
-impl Drop for GcReadLock {
-    fn drop(&mut self) {
-        unsafe { c::up_read(self.0.as_ptr().cast()) }
-    }
+    trans.unlock();
+    let g = fs.gc.lock.read();
+    trans.relock()?;
+    Ok(g)
 }
 
 /// A node in an update's reserve, intent and write locked, and the open
@@ -662,7 +653,11 @@ impl<'t> InteriorUpdate<'t> {
             split = usize::from(b.contents().nr.live_u64s) > split_merge::split_threshold(fs);
         }
 
-        let gc_lock = GcReadLock::new(trans, fs)?;
+        // the update lives while the filesystem does: being on the live list is
+        // its ref on it
+        let fs_ref = unsafe { BackRef::new(fs).get() };
+
+        let gc_lock = gc_read_lock(trans, fs_ref)?;
 
         let node = {
             let paths = trans.paths();
@@ -680,9 +675,6 @@ impl<'t> InteriorUpdate<'t> {
             }
         };
 
-        // the update lives while the filesystem does: being on the live list is
-        // its ref on it
-        let fs_ref = unsafe { BackRef::new(fs).get() };
         let btree = trans.paths()[path].btree_id();
         // made in place: the arrays are kilobytes
         let Ok(owner) = fs_ref.btree.interior_updates.pool.alloc_box(c::GFP_NOIO, init!(BtreeUpdate {

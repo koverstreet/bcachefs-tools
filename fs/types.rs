@@ -758,6 +758,8 @@ pub struct Fs {
     #[late]
     pub btree: c::bch_fs_btree,
 
+    #[pin]
+    #[init(c::bch_fs_gc::init())]
     pub gc: c::bch_fs_gc,
     pub gc_gens: c::bch_fs_gc_gens,
 

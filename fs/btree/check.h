@@ -53,6 +53,5 @@ static inline struct gc_pos gc_pos_btree(enum btree_id btree, unsigned level,
 
 void bch2_gc_pos_to_text(struct printbuf *, struct gc_pos *);
 
-void bch2_fs_btree_gc_init_early(struct bch_fs *);
 
 #endif /* _BCACHEFS_BTREE_GC_H */

@@ -6,11 +6,13 @@ use crate::cstructs::c;
 use crate::types::{c_default, rust_only};
 use crate::util::projections::Volatile;
 use crate::fs::Fs;
-use crate::locking::SeqLock;
+use crate::locking::{Locked, SeqLock};
+use crate::new_lock;
 use crate::util::ffi::Opaque;
 use core::cmp::Ordering;
 use core::ffi::c_int;
-use cstruct_macros::{bitfield, c_enum, c_export, c_extern, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, c_enum, c_export, CStruct, Init, TypeInfo};
+use pin_init::pin_data;
 use nestify::nest;
 use crate::format::{Bpos, Btree};
 
@@ -90,8 +92,9 @@ impl PartialEq for gc_pos {
 
 impl Eq for gc_pos {}
 
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_gc {
     /// How far gc's walk has got: not_running, when there's none.
     pub pos: rust_only!(SeqLock<c::gc_pos>),
@@ -100,9 +103,11 @@ pub struct bch_fs_gc {
      * The allocation code needs gc_mark in struct bucket to be correct, but
      * it's not while a gc is in progress.
      */
-    pub lock: c::rw_semaphore,
+    #[pin]
+    #[init(new_lock!((), "&c->gc.lock"))]
+    #[c_lock("struct rw_semaphore lock")]
+    pub lock: Locked<c::rw_semaphore>,
 }
-c_default!(bch_fs_gc);
 
 impl bch_fs_gc {
     pub fn phase(&self) -> c::gc_phase {
@@ -147,7 +152,3 @@ pub struct bch_fs_gc_gens {
     pub pos: Volatile<c::bbpos>,
 }
 c_default!(bch_fs_gc_gens);
-
-c_extern! {
-    pub fn bch2_fs_btree_gc_init_early(c: *mut Fs);
-}

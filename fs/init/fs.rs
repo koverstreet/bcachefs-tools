@@ -468,7 +468,6 @@ impl Fs {
 
         allocator_foreground_init(self);
         unsafe {
-            c::bch2_fs_btree_gc_init_early(p);
             bch2_fs_btree_init_early(p);
 
             let Ok(()) = c::spinlock_t::init(&raw mut (*p).write_error_lock, c"&c->write_error_lock",

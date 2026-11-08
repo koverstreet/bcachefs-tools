@@ -1214,8 +1214,3 @@ out:
 
 	return ret;
 }
-
-void bch2_fs_btree_gc_init_early(struct bch_fs *c)
-{
-	init_rwsem(&c->gc.lock);
-}
