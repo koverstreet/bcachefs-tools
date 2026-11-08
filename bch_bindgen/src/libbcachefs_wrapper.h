@@ -8,5 +8,4 @@
 
 #include "tools-util.h"
 
-#include "c_src/fuse_shims.h"
 #include "c_src/rust_shims.h"

@@ -50,7 +50,7 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 #[cfg(CONFIG_UNICODE)]
 use crate::errcode::ret_to_result_void as ret_to_result;
 use crate::format::{Bpos, Btree, BkeyType};
@@ -58,7 +58,6 @@ use crate::fs::Fs;
 use crate::inode;
 use crate::snapshots::subvolume;
 use crate::str_hash::{self, HashTable};
-use crate::util::ffi::Opaque;
 use crate::util::kernel::likely;
 use crate::util::os_str::{qstr, OsStr, OsStrExt};
 use core::ffi::c_int;
@@ -595,20 +594,6 @@ pub fn readdir(
             ControlFlow::Break(())
         })
     })
-}
-
-/// For C's VFS and FUSE: bch2_readdir().
-///
-/// # Safety
-/// @ctx the VFS's (or FUSE's), its actor valid for the call.
-#[c_export]
-pub unsafe extern "C" fn bch2_readdir(
-    c:         &Opaque<Fs>,
-    dir:       c::subvol_inum,
-    hash_info: &mut c::bch_hash_info,
-    ctx:       *mut c::dir_context,
-) -> c_int {
-    ret_to_c(readdir(Fs::from_c(c), dir, hash_info, unsafe { DirContext::from_raw(ctx) }))
 }
 
 // ── Rename ───────────────────────────────────────────────────────────────

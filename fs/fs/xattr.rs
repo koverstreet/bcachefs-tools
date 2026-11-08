@@ -10,24 +10,20 @@
 
 use crate::btree::bkey::prelude::*;
 pub use crate::cstructs::fs_xattr_format::XattrType;
-use core::ffi::{c_int, c_void};
 use core::mem::{offset_of, size_of};
-use cstruct_macros::c_export;
 
 use crate::acl;
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{BKEY_U64S, BkeySC, POS_MIN};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey,
-                         UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::inode;
 use crate::snapshots::subvolume;
 use crate::str_hash::{self, HashTable};
-use crate::util::ffi::{c_char, opt_bytes, opt_bytes_mut};
-use crate::util::os_str::{cstr_name, OsStr, OsStrExt};
+use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use crate::format::Btree;
@@ -277,34 +273,6 @@ fn copy_out(buffer: Option<&mut [u8]>, v: &[u8]) -> Result<usize, BchError> {
     Ok(v.len())
 }
 
-/// For C - FUSE's getxattr: get_trans(). The value's length, or an error.
-///
-/// # Safety
-/// @name NUL terminated, @buffer NULL or valid for @size.
-#[c_export]
-pub unsafe extern "C" fn bch2_xattr_get_trans(
-    trans:  &BtreeTrans<'_>,
-    inode:  &c::bch_inode_unpacked,
-    inum:   c::subvol_inum,
-    ty:     XattrType,
-    name:   *const c_char,
-    buffer: *mut c_void,
-    size:   usize,
-) -> c_int {
-    let buffer = unsafe { opt_bytes_mut(buffer, size) };
-
-    len_to_c(get_trans(&unsafe { trans.attempt_in_progress() }, inode, inum,
-                       ty, unsafe { cstr_name(name) }, buffer))
-}
-
-/// A getxattr result as C's int: the length, or -errcode.
-fn len_to_c(r: Result<usize, BchError>) -> c_int {
-    match r {
-        Ok(len) => len as c_int,
-        Err(e)  => -e.raw(),
-    }
-}
-
 /// Set xattr @name of @ty to @value, on inode @inum - with XATTR_CREATE in
 /// @flags only if it doesn't exist, with XATTR_REPLACE only if it does: as
 /// __bch2_xattr_set(). ERANGE if it doesn't fit in a key.
@@ -334,7 +302,7 @@ pub fn set_key(
 /// bch2_xattr_set(). Removing one that isn't there is ENODATA with
 /// XATTR_REPLACE, and nothing otherwise.
 #[allow(clippy::too_many_arguments)]
-fn set_trans(
+pub fn set_trans(
     t:     &TransAttempt<'_, '_>,
     inum:  c::subvol_inum,
     inode: &mut c::bch_inode_unpacked,
@@ -385,28 +353,6 @@ pub fn set(
     set_trans(t, inum, inode, name, Some(val), ty, flags)
 }
 
-/// For C - FUSE: bch2_xattr_set(). A NULL @value removes it.
-///
-/// # Safety
-/// @name NUL terminated, @value NULL or valid for @size.
-#[c_export]
-#[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn bch2_xattr_set(
-    trans: &BtreeTrans<'_>,
-    inum:  c::subvol_inum,
-    inode: &mut c::bch_inode_unpacked,
-    name:  *const c_char,
-    value: *const c_void,
-    size:  usize,
-    ty:    XattrType,
-    flags: c_int,
-) -> c_int {
-    let value = unsafe { opt_bytes(value, size) };
-
-    ret_to_c(set_trans(&unsafe { trans.attempt_in_progress() }, inum, inode,
-                       unsafe { cstr_name(name) }, value, ty, flags))
-}
-
 #[cfg(kernel)]
 pub use vfs::*;
 
@@ -417,7 +363,8 @@ mod vfs {
     use super::*;
     use crate::format::MetadataVersion;
     use crate::format::BkeyType;
-    use core::ffi::CStr;
+    use core::ffi::{c_int, c_void, CStr};
+    use cstruct_macros::c_export;
     use crate::btree::bkey::pos;
     use crate::btree::iter::{lockrestart_do, CommitFlags};
     use crate::errcode::{bch_errcode, ret_to_class};
@@ -425,9 +372,19 @@ mod vfs {
     use crate::locking::MemallocFlags;
     use crate::opts::{self, OptChange};
     use crate::types::CStatic;
+    use crate::util::ffi::{c_char, opt_bytes, opt_bytes_mut};
+    use crate::util::os_str::cstr_name;
     use crate::vfs::dentry::Dentry;
     use crate::vfs::idmap::RawIdmap;
     use crate::vfs::inode::{InodeInfo, ATTR_CTIME};
+
+    /// A getxattr result as C's int: the length, or -errcode.
+    fn len_to_c(r: Result<usize, BchError>) -> c_int {
+        match r {
+            Ok(len) => len as c_int,
+            Err(e)  => -e.raw(),
+        }
+    }
 
     /// What listxattr writes into: as C's struct xattr_buf. Without a buffer,
     /// only how much would be written is counted.

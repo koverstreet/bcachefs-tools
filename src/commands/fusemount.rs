@@ -19,7 +19,7 @@
 // - Inode lifetime: there is no VFS inode cache here, so we keep the part of
 //   it that matters - how many references the kernel holds (FUSE's lookup
 //   count: one per entry we hand it, dropped by forget). When that reaches
-//   zero we do what bch2_evict_inode() does: an inode with no links left is
+//   zero we do what the kernel's evict does: an inode with no links left is
 //   deleted. Unlink only queues an inode for deletion; without this nothing
 //   ever deleted it, its space was never freed, and unmount left the
 //   filesystem marked clean with deleted inodes outstanding. FUSE doesn't
@@ -51,7 +51,7 @@
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
-use std::ffi::{CString, OsStr};
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -66,7 +66,10 @@ use bch_bindgen::data::io::block_on;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::{accounting, btree, dirent, namei, str_hash};
-use bcachefs_kernel::btree::iter::CommitFlags;
+use bcachefs_kernel::btree::bkey::{pos, BkeyV};
+use bcachefs_kernel::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags};
+use bcachefs_kernel::format::Btree;
+use bcachefs_kernel::xattr::{self, XattrType};
 use bcachefs_kernel::{inode, inode_opts};
 use bcachefs_kernel::snapshots::subvolume;
 
@@ -161,6 +164,27 @@ fn mode_to_filetype(mode: u32) -> FileType {
     }
 }
 
+/// A readdir's dir_context, which dirent::readdir() emits to: @reply.
+#[repr(C)]
+struct FuseDirContext<'r> {
+    ctx:   c::dir_context,
+    reply: &'r mut ReplyDirectory,
+}
+
+unsafe extern "C" fn fuse_filldir(ctx: *mut c::dir_context, name: *const std::ffi::c_char,
+                                  name_len: std::ffi::c_int, pos: bcachefs_kernel::c::loff_t, ino: u64,
+                                  dtype: std::ffi::c_uint) -> std::ffi::c_int {
+    let ctx = unsafe { &mut *ctx.cast::<FuseDirContext<'_>>() };
+    let name = OsStr::from_bytes(unsafe { std::slice::from_raw_parts(name.cast(), name_len as usize) });
+    // A fuse dirent's offset field is the cookie to resume the listing
+    // *after* that entry; pos is the entry's own dirent offset
+    // (bch2_dir_emit() sets ctx->pos before emitting). If we reject on a
+    // full reply buffer, ctx->pos never advances past this entry and the
+    // next readdir re-reads it.
+    let full = ctx.reply.add(INodeNo(ino), pos as u64 + 1, dtype_to_filetype(dtype), name);
+    if full { -1 } else { 0 }
+}
+
 fn dtype_to_filetype(dtype: u32) -> FileType {
     match dtype {
         DT_DIR  => FileType::Directory,
@@ -210,27 +234,64 @@ fn signal_parent_err(fd: OwnedFd, byte: u8, reason: &str) {
     let _ = File::from(fd).write_all(&buf);
 }
 
-/// Convert a raw C return value (negative bcachefs error code) to a fuser Errno.
-/// Walks the bcachefs error hierarchy to the root standard errno.
-fn err(ret: i32) -> Errno {
-    let e = BchError::from_raw(ret);
-    Errno::from_i32(e.errno())
-}
-
-/// Convert a BchError to a fuser Errno.
-/// Reply to a getxattr or listxattr with what a rust_fuse_xattr_*() shim returned:
-/// a length, or a negative error. An empty @buf means the caller asked only for
-/// the length.
-fn reply_xattr(reply: ReplyXattr, ret: i32, buf: &[u8]) {
-    if ret < 0 {
-        reply.error(bch_err(&BchError::from_raw(-ret)));
-    } else if buf.is_empty() {
-        reply.size(ret as u32);
-    } else {
-        reply.data(&buf[..ret as usize]);
+/// Reply to a getxattr or listxattr: with @size 0, the length alone - else
+/// all of @data, ERANGE if that's past @size.
+fn reply_xattr(reply: ReplyXattr, size: u32, data: Result<Vec<u8>, BchError>) {
+    match data {
+        Err(e) => reply.error(bch_err(&e)),
+        Ok(d) if size == 0 => reply.size(d.len() as u32),
+        Ok(d) if d.len() > size as usize => reply.error(Errno::ERANGE),
+        Ok(d) => reply.data(&d),
     }
 }
 
+/// The xattrs served, by their names' prefixes: user., trusted. and
+/// security. system.posix_acl_* is stored in bcachefs's own ACL format and
+/// bcachefs.* names inode options rather than xattrs - both need conversions
+/// this doesn't do. @name's type, and its name past the prefix.
+fn xattr_type(name: &OsStr) -> Result<(XattrType, &OsStr), Errno> {
+    XattrType::from_name(name.as_bytes())
+        .filter(|(ty, _)| [XattrType::USER, XattrType::TRUSTED, XattrType::SECURITY].contains(ty))
+        .map(|(ty, n)| (ty, OsStr::from_bytes(n)))
+        .ok_or(Errno::EOPNOTSUPP)
+}
+
+/// @inum's xattrs' names, NUL separated, as listxattr(2) has them - those
+/// xattr_type() serves. trusted.* only with @show_trusted: the kernel lists
+/// those only to CAP_SYS_ADMIN, and decides that from the caller, which we
+/// can't see.
+fn xattr_names(fs: &Fs, inum: c::subvol_inum, show_trusted: bool) -> Result<Vec<u8>, BchError> {
+    let trans = bcachefs_kernel::btree_trans!(fs);
+    let mut iter = BtreeIter::new(&trans, Btree::xattrs, pos(inum.inum, 0), BtreeIterFlags::empty());
+    let mut names = Vec::new();
+    subvolume::for_each_in_subvolume_max(&trans, &mut iter, pos(inum.inum, u64::MAX), inum.subvol as u32,
+                                         BtreeIterFlags::empty(), |_, _, k| {
+        let Some(x) = k.arm::<c::Xattr>() else { return Ok(()) };
+        let ty = x.v().ty();
+        if [XattrType::USER, XattrType::SECURITY].contains(&ty) || (ty == XattrType::TRUSTED && show_trusted) {
+            names.extend_from_slice(ty.prefix().expect("a served type's prefix").as_bytes());
+            names.extend_from_slice(x.v().name());
+            names.push(0);
+        }
+        Ok(())
+    })?;
+    Ok(names)
+}
+
+/// Set xattr @name on @inum, or with @value None remove it - and its ctime.
+/// @flags: XATTR_CREATE, XATTR_REPLACE.
+fn xattr_set(fs: &Fs, inum: c::subvol_inum, name: &OsStr, value: Option<&[u8]>, flags: i32)
+    -> Result<(), Errno>
+{
+    let (ty, name) = xattr_type(name)?;
+    let mut inode_u = c::bch_inode_unpacked::default();
+    btree::iter::trans_commit_do(fs, None, CommitFlags::empty(), |t| {
+        xattr::set_trans(t, inum, &mut inode_u, name, value, ty, flags)
+    }).map_err(|e| bch_err(&e))
+}
+
+/// Convert a BchError to a fuser Errno: the standard errno at the root of the
+/// bcachefs error hierarchy.
 fn bch_err(e: &BchError) -> Errno {
     Errno::from_i32(e.errno())
 }
@@ -807,8 +868,8 @@ impl BcachefsFs {
         }
     }
 
-    /// bch2_evict_inode(): nothing references the inode any more, so if it
-    /// has no links left, delete it. A subvolume root with no links is the
+    /// The kernel's evict, InodeInfo::evict(): nothing references the inode
+    /// any more, so if it has no links left, delete it. A subvolume root with no links is the
     /// subvolume deletion path's to delete, not ours.
     fn inode_evict(&self, inum: c::subvol_inum) {
         let fs = self.fs();
@@ -1555,19 +1616,16 @@ impl Filesystem for BcachefsFs {
         let dir = resolve!(self, ino, reply);
         eprintln!("fuse_readdir(dir={}, offset={})", dir.inum, offset);
 
-        let parent_inum = {
-            let fs = self.fs();
-            match inode::find_by_inum(fs, dir) {
-                Ok(bi) => {
-                    fuse_touch_atime(fs, self.atime, dir, &bi);
-                    if dir.inum == BCACHEFS_ROOT_INO && dir.subvol == BCACHEFS_ROOT_SUBVOL {
-                        dir.inum
-                    } else {
-                        bi.bi_dir
-                    }
-                }
-                Err(e) => { reply.error(bch_err(&e)); return; }
-            }
+        let fs = self.fs();
+        let bi = match inode::find_by_inum(fs, dir) {
+            Ok(bi) => bi,
+            Err(e) => { reply.error(bch_err(&e)); return; }
+        };
+        fuse_touch_atime(fs, self.atime, dir, &bi);
+        let parent_inum = if dir.inum == BCACHEFS_ROOT_INO && dir.subvol == BCACHEFS_ROOT_SUBVOL {
+            dir.inum
+        } else {
+            bi.bi_dir
         };
 
         let mut pos = offset;
@@ -1588,59 +1646,48 @@ impl Filesystem for BcachefsFs {
             pos = 2;
         }
 
-        // Read remaining entries via C shim with callback
-        unsafe extern "C" fn filldir(
-            ctx: *mut std::ffi::c_void,
-            name: *const std::ffi::c_char,
-            name_len: std::ffi::c_uint,
-            ino: u64,
-            dtype: std::ffi::c_uint,
-            pos: u64,
-        ) -> std::ffi::c_int {
-            let reply = unsafe { &mut *(ctx as *mut ReplyDirectory) };
-            let name_bytes = unsafe {
-                std::slice::from_raw_parts(name as *const u8, name_len as usize)
-            };
-            let name_str = OsStr::from_bytes(name_bytes);
-            let file_type = dtype_to_filetype(dtype);
-            let full = reply.add(INodeNo(ino), pos, file_type, name_str);
-            if full { -1 } else { 0 }
-        }
-
-        let ret = unsafe {
-            c::rust_fuse_readdir(
-                self.fs().as_ptr(), dir, pos,
-                &mut reply as *mut ReplyDirectory as *mut _,
-                Some(filldir),
-            )
+        let mut hash = match str_hash::hash_info_init(fs, &bi) {
+            Ok(hash) => hash,
+            Err(e) => { reply.error(bch_err(&e)); return; }
         };
 
-        if ret != 0 {
-            reply.error(err(ret));
-        } else {
-            reply.ok();
+        let ret = {
+            let mut ctx = FuseDirContext {
+                ctx:   c::dir_context { actor: Some(fuse_filldir), pos },
+                reply: &mut reply,
+            };
+            // fuse_filldir() takes it to the FuseDirContext it heads
+            dirent::readdir(fs, dir, &mut hash, unsafe { dirent::DirContext::from_raw(&raw mut ctx.ctx) })
+        };
+        match ret {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(bch_err(&e)),
         }
     }
 
-    // xattrs: user., trusted. and security. - see rust_fuse_xattr_*() in
-    // c_src/fuse_shims.c for what's served and why. Permissions are the
-    // kernel's: with default_permissions it checks them before asking us.
+    // xattrs: those xattr_type() serves. Permissions are the kernel's: with
+    // default_permissions it checks them before asking us.
 
     fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
         ensure_thread_init();
         let inum = resolve!(self, ino, reply);
-        let Ok(name) = CString::new(name.as_bytes()) else {
-            reply.error(Errno::EINVAL);
-            return;
+        let (ty, name) = match xattr_type(name) {
+            Ok(x) => x,
+            Err(e) => { reply.error(e); return; }
         };
 
-        let mut buf = vec![0u8; size as usize];
-        let ret = unsafe {
-            c::rust_fuse_xattr_get(self.fs().as_ptr(), inum, name.as_ptr(),
-                              if size == 0 { std::ptr::null_mut() } else { buf.as_mut_ptr().cast() },
-                              buf.len())
-        };
-        reply_xattr(reply, ret, &buf);
+        let trans = bcachefs_kernel::btree_trans!(self.fs());
+        let value = lockrestart_do(&trans, |t| {
+            let inode_u = inode::find_by_inum_trans(t, inum, bcachefs_kernel::c_function_name!())?;
+            let mut iter = BtreeIter::uninit();
+            let k = xattr::lookup(t, &mut iter, &inode_u, inum, ty, name, BtreeIterFlags::empty())?;
+            Ok(xattr::value(k).to_vec())
+        });
+        match value {
+            // as the VFS's getxattr: a missing xattr is ENODATA
+            Err(e) if e.matches(c::ENOENT) => reply.error(Errno::ENODATA),
+            value => reply_xattr(reply, size, value),
+        }
     }
 
     fn listxattr(&self, req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
@@ -1651,50 +1698,26 @@ impl Filesystem for BcachefsFs {
         // the list for FUSE; we only see the caller's uid.
         let show_trusted = req.uid() == 0;
 
-        let mut buf = vec![0u8; size as usize];
-        let ret = unsafe {
-            c::rust_fuse_xattr_list(self.fs().as_ptr(), inum,
-                               if size == 0 { std::ptr::null_mut() } else { buf.as_mut_ptr().cast() },
-                               buf.len(), show_trusted)
-        };
-        reply_xattr(reply, ret, &buf);
+        reply_xattr(reply, size, xattr_names(self.fs(), inum, show_trusted));
     }
 
     fn setxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, value: &[u8],
                 flags: i32, _position: u32, reply: ReplyEmpty) {
         ensure_thread_init();
         let inum = resolve!(self, ino, reply);
-        let Ok(name) = CString::new(name.as_bytes()) else {
-            reply.error(Errno::EINVAL);
-            return;
-        };
-
-        let ret = unsafe {
-            c::rust_fuse_xattr_set(self.fs().as_ptr(), inum, name.as_ptr(),
-                              value.as_ptr().cast(), value.len(), flags)
-        };
-        match ret {
-            0 => reply.ok(),
-            e => reply.error(bch_err(&BchError::from_raw(-e))),
+        match xattr_set(self.fs(), inum, name, Some(value), flags) {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(e),
         }
     }
 
     fn removexattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, reply: ReplyEmpty) {
         ensure_thread_init();
         let inum = resolve!(self, ino, reply);
-        let Ok(name) = CString::new(name.as_bytes()) else {
-            reply.error(Errno::EINVAL);
-            return;
-        };
-
         // As the VFS does: XATTR_REPLACE, so that a missing xattr is ENODATA
-        let ret = unsafe {
-            c::rust_fuse_xattr_set(self.fs().as_ptr(), inum, name.as_ptr(), std::ptr::null(), 0,
-                              libc::XATTR_REPLACE)
-        };
-        match ret {
-            0 => reply.ok(),
-            e => reply.error(bch_err(&BchError::from_raw(-e))),
+        match xattr_set(self.fs(), inum, name, None, libc::XATTR_REPLACE) {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(e),
         }
     }
 

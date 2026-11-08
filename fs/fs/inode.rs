@@ -52,7 +52,7 @@ use crate::btree::iter::{
 };
 use crate::init::error::{id, BkeyValidate};
 use crate::snapshots::subvolume;
-use crate::util::ffi::{opt_cstr, Opaque};
+use crate::util::ffi::opt_cstr;
 use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;
 use core::mem::MaybeUninit;
@@ -651,40 +651,10 @@ pub fn find_by_inum_nowarn_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum)
     __peek(t, &mut iter, inum, BtreeIterFlags::empty(), None)
 }
 
-/// For C's VFS, recovery and FUSE, through bch2_inode_find_by_inum_trans():
-/// __bch2_inode_find_by_inum_trans().
-///
-/// # Safety
-/// @warn NULL or a string, valid for the call.
-#[c_export]
-pub unsafe extern "C" fn __bch2_inode_find_by_inum_trans(
-    trans: &BtreeTrans<'_>,
-    inum:  c::subvol_inum,
-    inode: &mut MaybeUninit<c::bch_inode_unpacked>,
-    warn:  *const crate::util::ffi::c_char,
-) -> core::ffi::c_int {
-    let warn = unsafe { opt_cstr(warn) };
-    let mut iter = BtreeIter::uninit();
-
-    ret_to_c(__peek(&unsafe { trans.attempt_in_progress() }, &mut iter, inum,
-                    BtreeIterFlags::empty(), warn)
-             .map(|i| { inode.write(i); }))
-}
-
 /// The inode @inum, in its own transaction: as bch2_inode_find_by_inum().
 pub fn find_by_inum(fs: &Fs, inum: c::subvol_inum) -> Result<c::bch_inode_unpacked, BchError> {
     let trans = crate::btree_trans!(fs);
     lockrestart_do(&trans, |t| find_by_inum_trans(t, inum, c"bch2_inode_find_by_inum"))
-}
-
-/// For C's VFS and FUSE: bch2_inode_find_by_inum().
-#[c_export]
-pub extern "C" fn bch2_inode_find_by_inum(
-    c:     &Opaque<Fs>,
-    inum:  c::subvol_inum,
-    inode: &mut MaybeUninit<c::bch_inode_unpacked>,
-) -> core::ffi::c_int {
-    ret_to_c(find_by_inum(Fs::from_c(c), inum).map(|i| { inode.write(i); }))
 }
 
 /// The oldest version of @inum that a key in @snapshot sees - the version

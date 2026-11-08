@@ -11,12 +11,11 @@ use crate::btree::iter::{
 use crate::c;
 use crate::check::{self, SnapshotsSeen};
 use crate::dirent::{self, Dirent, DirentTarget, Dirents};
-use crate::errcode::{bch_errcode, ret_to_c, BchError, Found};
+use crate::errcode::{bch_errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode;
 use crate::snapshots::{snapshot, subvolume};
-use crate::util::ffi::Opaque;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use crate::util::os_str::OsStrExt;
 use crate::util::siphash::SipHash24;
@@ -24,8 +23,8 @@ use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;
 use crate::{fsck_err, fsck_err_on, inode_fsck_err, prt};
 use bitflags::bitflags;
-use core::ffi::{c_int, c_void};
-use cstruct_macros::{c_export, CStruct, TypeInfo};
+use core::ffi::c_void;
+use cstruct_macros::{CStruct, TypeInfo};
 use crate::types::c_default;
 use crate::format::{Bpos, Btree, BkeyType, SbFeature};
 
@@ -462,13 +461,6 @@ pub fn hash_info_init(
         return fs.throw(bch_errcode::BCH_ERR_casefold_dir_but_disabled);
     }
     Ok(hash_info_init_unchecked(fs, inode))
-}
-
-/// hash_info_init(), for C: @ret is set only on success.
-#[c_export]
-pub fn bch2_hash_info_init(c: &Opaque<Fs>, bi: &c::bch_inode_unpacked,
-                           ret: &mut c::bch_hash_info) -> c_int {
-    ret_to_c(hash_info_init(Fs::from_c(c), bi).map(|info| *ret = info))
 }
 
 /// Check that @k is where its hash says it should be, repairing it if not. @s,

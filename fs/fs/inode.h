@@ -30,16 +30,6 @@ static inline bool bkey_is_inode(const struct bkey *k)
 #define bch2_inode_peek(_trans, _iter, _inode, _inum, _flags)			\
 	__bch2_inode_peek(_trans, _iter, _inode, _inum, _flags, __func__)
 
-#define bch2_inode_find_by_inum_trans(_trans, _inum, _inode)			\
-	__bch2_inode_find_by_inum_trans(_trans, _inum, _inode, __func__)
-
-static inline int bch2_inode_find_by_inum_nowarn_trans(struct btree_trans *trans,
-				  subvol_inum inum,
-				  struct bch_inode_unpacked *inode)
-{
-	return __bch2_inode_find_by_inum_trans(trans, inum, inode, NULL);
-}
-
 static inline int bch2_inode_write(struct btree_trans *trans,
 		     struct btree_iter *iter,
 		     struct bch_inode_unpacked *inode)
