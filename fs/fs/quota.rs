@@ -991,8 +991,7 @@ mod vfs {
             return Err(c::EROFS.into());
         }
 
-        let mut new_quota = BkeyI::<c::Quota>::new();
-        new_quota.k.p = pos(kqid.type_ as u64, kqid_from(kqid) as u64);
+        let mut new_quota = BkeyI::<c::Quota>::at(pos(kqid.type_ as u64, kqid_from(kqid) as u64));
 
         let trans = crate::btree_trans!(fs);
         commit_do(&trans, None, CommitOpts::new(), |t| set_quota_trans(t, &mut new_quota, qdq))?;

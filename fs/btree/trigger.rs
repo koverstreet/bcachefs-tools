@@ -6,7 +6,7 @@ use crate::btree::iter::{BtreeTrans, TransAttempt, TransBkey, UpdateTriggerFlags
 use crate::btree::path::KeyVal;
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
-use crate::format::{Bpos, Btree, BkeyType};
+use crate::format::{Btree, BkeyType};
 use crate::prt;
 use crate::util::Printbuf;
 use core::ffi::c_int;
@@ -189,15 +189,6 @@ pub unsafe fn bch2_verify_update_old_key(trans: &BtreeTrans<'_>, i: &c::btree_in
     }
 }
 
-/// A deletion at @p, for the side of an update that has no key.
-pub(crate) fn deleted_at(p: Bpos) -> c::bkey_i {
-    c::bkey_i { k: c::bkey { p, ..c::bkey::new() }, ..Default::default() }
-}
-
-pub(crate) fn as_s(k: &mut c::bkey_i) -> BkeyS<'_> {
-    BkeyS { k: &mut k.k, v: &mut k.v, val: PhantomData }
-}
-
 /// @i's update, as its triggers take it: @old_k is the entry's old key, copied
 /// out - a trigger can queue updates, and move the entry.
 ///
@@ -227,7 +218,7 @@ unsafe fn run_one_mem_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>, 
     unsafe { bch2_verify_update_old_key(trans, i) };
 
     let p = i.key().k.p;
-    let (no_old, mut no_new) = (deleted_at(p), deleted_at(p));
+    let (no_old, mut no_new) = (BkeyI::<c::Deleted>::at(p), BkeyI::<c::Deleted>::at(p));
     let old_k = i.old_k;
     let mut op = unsafe { update_op(i, &old_k, flags) };
     let old = op.old;
@@ -245,14 +236,14 @@ unsafe fn run_one_mem_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>, 
 
     if new_ops.trigger.is_some() {
         op.flags = flags | UpdateTriggerFlags::INSERT;
-        op.old   = BkeySC::from_bkey_i(&no_old);
+        op.old   = BkeySC::from(no_old.as_ref());
         run_trigger(t, new_ops.trigger, &mut op)?;
     }
 
     if old_ops.trigger.is_some() {
         op.flags        = flags | UpdateTriggerFlags::OVERWRITE;
         op.old          = old;
-        op.new          = as_s(&mut no_new);
+        op.new          = BkeyS::from(no_new.as_mut());
         op.new_buf_u64s = 0;
         run_trigger(t, old_ops.trigger, &mut op)?;
     }
@@ -271,7 +262,7 @@ unsafe fn run_one_trans_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>
 {
     unsafe { bch2_verify_update_old_key(trans, i) };
 
-    let mut deleted = deleted_at(i.key().k.p);
+    let mut deleted = BkeyI::<c::Deleted>::at(i.key().k.p);
     let old_k = i.old_k;
     let mut flags = UpdateTriggerFlags::from_bits_retain(i.flags) | UpdateTriggerFlags::TRANSACTIONAL;
     let mut op = unsafe { update_op(i, &old_k, flags) };
@@ -286,12 +277,12 @@ unsafe fn run_one_trans_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>
     } else if !i.bits.overwrite_trigger_run() {
         i.bits.set_overwrite_trigger_run(true);
         flags |= UpdateTriggerFlags::OVERWRITE;
-        op.new = as_s(&mut deleted);
+        op.new = BkeyS::from(deleted.as_mut());
         op.new_buf_u64s = 0;
     } else if !i.bits.insert_trigger_run() {
         i.bits.set_insert_trigger_run(true);
         flags |= UpdateTriggerFlags::INSERT;
-        op.old = BkeySC::from_bkey_i(&deleted);
+        op.old = BkeySC::from(deleted.as_ref());
         trigger = new_ops.trigger;
     }
     op.flags = flags;

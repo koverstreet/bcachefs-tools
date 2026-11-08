@@ -265,8 +265,7 @@ pub fn extent_ptr_to_bp(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, d: &De
     let dev = u32::from(d.p.ptr.dev());
     let sectors = if level != 0 { fs.btree_sectors().into() } else { k.k.size.into() };
 
-    let mut bp = BkeyI::<c::Backpointer>::new();
-    bp.k.p = extent_ptr_to_bp_pos(fs, k, &d.p);
+    let mut bp = BkeyI::<c::Backpointer>::at(extent_ptr_to_bp_pos(fs, k, &d.p));
     bp.v = c::Backpointer {
         btree_id:   btree.0 as u8,
         level:      level as u8,
@@ -374,12 +373,6 @@ fn extent_matches_bp(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>,
     matches
 }
 
-fn hole_at(pos: Bpos) -> BkeyI<c::Deleted> {
-    let mut k = BkeyI::<c::Deleted>::new();
-    k.k.p = pos;
-    k
-}
-
 /// Commits.
 pub(super) fn backpointer_del(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos) -> Result<(), BchError> {
     if !debug_params::backpointers_no_use_write_buffer() {
@@ -461,7 +454,7 @@ fn get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
     *iter = BtreeIter::new_level(t, btree, v.pos, u32::from(v.level) - 1, BtreeIterFlags::empty());
     let Some(b) = iter.peek_node(t)? else {
         // Backpointer for nonexistent tree depth:
-        let hole = hole_at(v.pos);
+        let hole = BkeyI::<c::Deleted>::at(v.pos);
         backpointer_target_not_found(t, bp, BkeySC::<c::Deleted>::from(&hole).untyped(), last_flushed, commit)?;
         return Ok(None);
     };
@@ -499,7 +492,7 @@ pub(super) fn get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Bac
 
     // peek_slot() doesn't normally return None - except when we ask for a
     // key at a btree level that doesn't exist:
-    let hole = hole_at(v.pos);
+    let hole = BkeyI::<c::Deleted>::at(v.pos);
     let k = iter.peek_slot(t)?.unwrap_or_else(|| BkeySC::<c::Deleted>::from(&hole).untyped());
 
     if extent_matches_bp(fs, btree, v.level.into(), k, bp) {

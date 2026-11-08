@@ -1156,13 +1156,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// bit_mod(), through the write buffer.
     pub fn bit_mod_buffered(&self, btree: Btree, pos: Bpos, set: bool) -> Result<(), BchError> {
         if set {
-            let mut k = BkeyI::<c::Set>::new();
-            k.k.p = pos;
-            self.update_buffered_key(btree, k.as_ref())
+            self.update_buffered_key(btree, BkeyI::<c::Set>::at(pos).as_ref())
         } else {
-            let mut k = BkeyI::<c::Deleted>::new();
-            k.k.p = pos;
-            self.update_buffered_key(btree, k.as_ref())
+            self.update_buffered_key(btree, BkeyI::<c::Deleted>::at(pos).as_ref())
         }
     }
 

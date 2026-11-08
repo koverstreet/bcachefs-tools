@@ -118,8 +118,7 @@ impl TransAttempt<'_, '_> {
         let mut iter = BtreeIter::new(self, Btree::reconcile_scan, p, BtreeIterFlags::INTENT);
         let k = iter.peek_slot(self)?.expect("a slot");
 
-        let mut n = BkeyI::<c::Cookie>::new();
-        n.k.p = p;
+        let mut n = BkeyI::<c::Cookie>::at(p);
         n.v.cookie = (cookie_generation(k) + 1).into();
         let n = self.bkey_copy(n.as_ref())?;
         self.update(&iter, &n, UpdateTriggerFlags::empty())

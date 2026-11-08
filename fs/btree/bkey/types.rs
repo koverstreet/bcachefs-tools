@@ -55,7 +55,7 @@ use super::BkeyP;
 use crate::btree::bkey::{ops, BkeyOps, Ops};
 use crate::btree::iter::{BtreeIter, TransBkey};
 use crate::c;
-use crate::format::{BkeyType, BkeyTypeFlags};
+use crate::format::{BkeyType, BkeyTypeFlags, Bpos};
 use crate::typeinfo::{StructInfo, TypeInfo};
 use crate::util::projections::Floored;
 use crate::util::vstructs::{ArmRef, InState, State, Unsized, Unvalidated, UnvalidatedSized, Validated, Whole};
@@ -236,6 +236,13 @@ impl<V: BkeyWhole> BkeyI<V> {
         k.type_ = V::TYPE.0 as u8;
         k.set_val_bytes(size_of::<V>());
         BkeyI { k, v: V::default() }
+    }
+
+    /// One at @p.
+    pub fn at(p: Bpos) -> Self {
+        let mut k = Self::new();
+        k.k.p = p;
+        k
     }
 
     /// u64s clamped to V, as __bch2_bkey_get_i_typed() does: a newer version's

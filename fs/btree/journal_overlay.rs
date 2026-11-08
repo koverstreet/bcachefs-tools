@@ -791,10 +791,7 @@ pub unsafe fn bch2_journal_key_insert(c: &Opaque<Fs>, btree: Btree, level: c_uin
 
 #[c_export]
 pub fn bch2_journal_key_delete(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos) -> c_int {
-    let mut whiteout = c::bkey_i { k: c::bkey::new(), ..Default::default() };
-    whiteout.k.p = pos;
-    // SAFETY: a key with no value, all of it there
-    ret_to_c(insert(Fs::from_c(c), btree, level, unsafe { &*BkeyI::from_raw(&whiteout) }))
+    ret_to_c(insert(Fs::from_c(c), btree, level, BkeyI::<c::Deleted>::at(pos).as_ref()))
 }
 
 // ── Iterating: a btree node's keys, with the journal's overlaid ──────────

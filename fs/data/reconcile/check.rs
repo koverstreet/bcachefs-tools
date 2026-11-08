@@ -180,8 +180,7 @@ fn check_reconcile_work_one<'t>(t: &TransAttempt<'_, 't>, data_iter: &mut BtreeI
 
     // what the data btree has at the walk's position, if it's ahead: for the
     // write buffer flush to remember as flushed for
-    let mut deleted = BkeyI::<c::Deleted>::new();
-    deleted.k.p = data_pos;
+    let deleted = BkeyI::<c::Deleted>::at(data_pos);
 
     let (pos, [(data_iter, data_k), work @ ..]) = peek_parallel(t, [data_iter, rb_w, rb_h, rb_p], |i, iter| {
         if i == 0 { data_to_rb_work_pos(btree, iter.pos()) } else { iter.pos() }
@@ -286,8 +285,7 @@ fn check_reconcile_work_phys_one<'t>(t: &TransAttempt<'_, 't>, bp_iter: &mut Btr
     let (pos, [(_, bp_k), work @ ..]) = peek_parallel(t, [bp_iter, r_w, r_h], |_, iter| iter.pos())?;
     *cur_pos = pos;
     // what the backpointers have at the walk's position, if ahead
-    let mut deleted = BkeyI::<c::Deleted>::new();
-    deleted.k.p = pos;
+    let deleted = BkeyI::<c::Deleted>::at(pos);
 
     let mut bp = bp_k.and_then(|k| k.arm::<c::Backpointer>());
     let mut w = bp.map_or(c::reconcile_work_id::none, |bp| bp.v().reconcile_work_phys());

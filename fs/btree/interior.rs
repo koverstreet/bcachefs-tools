@@ -798,8 +798,8 @@ impl<'t> InteriorUpdate<'t> {
     /// The pointer at @pos to a node at @level deleted from the parent, and
     /// the deletion journalled with the update.
     pub(crate) fn unlink(&self, pos: Bpos, level: usize) {
-        let delete = crate::btree::trigger::deleted_at(pos);
-        let delete = unsafe { &*BkeyI::from_raw(&delete) };
+        let delete = BkeyI::<c::Deleted>::at(pos);
+        let delete = delete.as_ref();
 
         self.push_parent_key(delete);
 
