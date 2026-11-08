@@ -11,7 +11,6 @@ use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{commit_do, trans_commit_do, BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags, Watermark};
 use crate::btree::journal_overlay::{journal_keys_put_initial, keys_sort, shoot_down_journal_keys};
-use crate::btree::update::Subbuf;
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{btree_id_can_reconstruct, btree_id_is_alloc, Fs};
@@ -292,7 +291,7 @@ fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, idx: usize
     }
 
     if bk.k.key_type() == BkeyType::accounting {
-        return t.subbuf_append(Subbuf::Accounting, bk.k.u64s.into(),
+        return t.subbuf_append(&t.trans().accounting, bk.k.u64s.into(),
                                |buf| buf.as_mut_bytes().copy_from_slice(bk.as_bytes()));
     }
 

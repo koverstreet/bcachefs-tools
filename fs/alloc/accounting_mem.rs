@@ -10,7 +10,6 @@ use crate::btree::bkey::{BkeyI, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          LoopFlow, TransAttempt};
 use crate::btree::trans::TransGuard;
-use crate::btree::update::Subbuf;
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{self, MetadataVersion, Bpos, Bversion, DataType};
@@ -887,7 +886,7 @@ pub unsafe fn bch2_accounting_trans_commit_hook(trans: &BtreeTrans<'_>, a: *mut 
     -> c_int
 {
     let t = unsafe { trans.attempt_in_progress() };
-    let base = t.subbuf_with(Subbuf::Accounting, |keys| keys.as_ptr());
+    let base = t.subbuf_with(&trans.accounting, |keys| keys.as_ptr());
     let offset = unsafe { a.cast::<u64>().cast_const().offset_from(base) } as usize;
     let a = unsafe { &mut *<BkeyI>::from_raw_mut(a) }.arm::<Accounting>().expect("an accounting key");
     let flags = CommitOpts::from(c::bch_trans_commit_flags::from_bits_retain(commit_flags));

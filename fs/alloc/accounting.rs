@@ -56,7 +56,6 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyTag, BKEY_U64S, POS_MIN, ValidateFlags, BkeyOps};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, LoopFlow,
                          TransAttempt};
-use crate::btree::update::Subbuf;
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{self, Bpos};
@@ -64,8 +63,7 @@ use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::types::ArmOf;
 use crate::util::rcu;
-use crate::util::vstructs::{plain_bytes, plain_bytes_mut, ArmError, EntryWalk, Head, Unvalidated,
-                            VStructError, VstructRefEntries, VstructRefEntriesMut};
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut, ArmError, EntryWalk, Head, Unvalidated, VStructError};
 use crate::util::log::{log_no_fs, LogLevel};
 use crate::util::percpu::Counters as _;
 use crate::util::printbuf::Join;
@@ -338,30 +336,28 @@ fn normalized_bpos(pos: &DiskAccountingPos) -> Bpos {
 pub(crate) fn mod_normal(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &[u64]) -> Result<(), BchError> {
     let p = normalized_bpos(pos);
 
-    let queued = t.subbuf_with(Subbuf::Accounting, |keys| {
-        VstructRefEntriesMut::<format::bkey_i>::new(keys.as_mut_bytes()).with_offsets().find_map(|(at, k)| {
-            let mut k = k.expect("the transaction's accounting keys");
-            let k = k.key_mut();
-            if k.k.p != p {
-                return None;
-            }
+    let accounting = &t.trans().accounting;
+    let queued = accounting.get().iter_mut(t).with_offsets().find_map(|(at, mut k)| {
+        let k = k.key_mut();
+        if k.k.p != p {
+            return None;
+        }
 
-            let at = at / size_of::<u64>();
-            let range = at..at + usize::from(k.k.u64s);
-            let counters = &mut k.arm::<Accounting>().expect("an accounting key").v_mut().d;
-            (counters.len() == d.len()).then(|| {
-                for (c, &d) in counters.iter_mut().zip(d) {
-                    *c = c.wrapping_add(d);
-                }
-                (range, counters.iter().all(|&c| c == 0))
-            })
+        let at = at / size_of::<u64>();
+        let range = at..at + usize::from(k.k.u64s);
+        let counters = &mut k.arm::<Accounting>().expect("an accounting key").v_mut().d;
+        (counters.len() == d.len()).then(|| {
+            for (c, &d) in counters.iter_mut().zip(d) {
+                *c = c.wrapping_add(d);
+            }
+            (range, counters.iter().all(|&c| c == 0))
         })
     });
 
     match queued {
-        Some((range, true)) => t.subbuf_remove(Subbuf::Accounting, range),
+        Some((range, true)) => t.subbuf_remove(accounting, range),
         Some(_) => {}
-        None => t.subbuf_append(Subbuf::Accounting, BKEY_U64S + d.len(), |k| {
+        None => t.subbuf_append(accounting, BKEY_U64S + d.len(), |k| {
             k[..BKEY_U64S].as_mut_bytes().copy_from_slice(plain_bytes(&accounting_bkey(p, d.len())));
             k[BKEY_U64S..].copy_from_slice(d);
         })?,
@@ -421,11 +417,7 @@ pub fn add_at(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &[i64], gc: 
 #[c_export]
 pub unsafe fn bch2_accounting_update_sb<'t>(trans: &'t BtreeTrans<'t>) -> c_int {
     let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(t.subbuf_with(Subbuf::Accounting, |keys| {
-        VstructRefEntries::<format::bkey_i>::new(keys.as_bytes()).try_for_each(|k| {
-            update_sb_one(t.fs(), k.expect("the transaction's accounting keys").key().k.p)
-        })
-    }))
+    ret_to_c(trans.accounting.get().iter(&t).try_for_each(|k| update_sb_one(t.fs(), k.key().k.p)))
 }
 
 pub fn mod_dev_cached_sectors(t: &TransAttempt<'_, '_>, dev: u32, sectors: i64, gc: bool)

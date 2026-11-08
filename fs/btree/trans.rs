@@ -968,19 +968,21 @@ impl BtreeTrans<'_> {
             prt!(out, "\n");
         }
 
-        let subbuf = |buf: c::btree_trans_subbuf| {
-            let p = self.mem_with(|m| m.range(usize::from(buf.base), usize::from(buf.u64s)));
+        let subbuf = |base: u16, u64s: u16| {
+            let p = self.mem_with(|m| m.range(usize::from(base), usize::from(u64s)));
             unsafe { core::slice::from_raw_parts(p.cast::<u8>().as_ptr(), p.len() * size_of::<u64>()) }
         };
 
-        for e in UnvalidatedEntries::<c::jset_entry<Unvalidated>>::new(subbuf(self.journal_entries.get()))
+        let journal_entries = self.journal_entries.get();
+        for e in UnvalidatedEntries::<c::jset_entry<Unvalidated>>::new(subbuf(journal_entries.base, journal_entries.u64s))
             .map_while(Result::ok)
         {
             journal_entry_to_text(&mut out, Some(c), e);
             prt!(out, "\n");
         }
 
-        for k in VstructRefEntries::<c::bkey_i>::new(subbuf(self.accounting.get())).map_while(Result::ok) {
+        let accounting = self.accounting.get();
+        for k in VstructRefEntries::<c::bkey_i>::new(subbuf(accounting.base, accounting.u64s)).map_while(Result::ok) {
             bkey_val_to_text(&mut out, Some(c), BkeySC::from_bkey_i(&k));
             prt!(out, "\n");
         }

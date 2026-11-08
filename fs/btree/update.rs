@@ -24,6 +24,7 @@ use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::journal::entries::EntryWriter;
 use crate::util::kernel::unlikely;
+use crate::util::vstructs::{Validated, ValidatedEntries, ViewEntries, ViewEntriesMut};
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
 use core::ffi::{c_int, c_uint, c_ulong};
@@ -235,10 +236,32 @@ impl Fs {
 
 // ── A transaction's updates, and log entries with its commit ────────────
 
-#[derive(Clone, Copy)]
-pub enum Subbuf {
-    JournalEntries,
-    Accounting,
+impl<T: ?Sized> c::btree_trans_subbuf<T> {
+    fn u64s_in<'s>(self, t: &'s TransAttempt<'_, '_>) -> &'s mut [u64] {
+        let mut p = t.trans().mem_with(|m| m.range(usize::from(self.base), usize::from(self.u64s)));
+        unsafe { p.as_mut() }
+    }
+}
+
+/*
+ * Only subbuf_append() writes a sub-buffer's entries, and C's
+ * __bch2_trans_subbuf_alloc(), each a whole entry: so they're walked as
+ * validated, as C walks them.
+ */
+impl c::btree_trans_subbuf<c::bkey_i> {
+    pub fn iter<'s>(self, t: &'s TransAttempt<'_, '_>) -> ViewEntries<'s, c::bkey_i> {
+        unsafe { ViewEntries::new(self.u64s_in(t).as_bytes()) }
+    }
+
+    pub fn iter_mut<'s>(self, t: &'s TransAttempt<'_, '_>) -> ViewEntriesMut<'s, c::bkey_i> {
+        unsafe { ViewEntriesMut::new(self.u64s_in(t).as_mut_bytes()) }
+    }
+}
+
+impl c::btree_trans_subbuf<c::jset_entry<Validated>> {
+    pub fn iter<'s>(self, t: &'s TransAttempt<'_, '_>) -> ValidatedEntries<'s, c::jset_entry<Validated>> {
+        ValidatedEntries::new(self.u64s_in(t).as_bytes())
+    }
 }
 
 impl TransAttempt<'_, '_> {
@@ -249,31 +272,25 @@ impl TransAttempt<'_, '_> {
         self.trans().updates_to_text(out)
     }
 
-    fn subbuf_cell(&self, which: Subbuf) -> &Cell<c::btree_trans_subbuf> {
-        match which {
-            Subbuf::JournalEntries => &self.trans().journal_entries,
-            Subbuf::Accounting     => &self.trans().accounting,
-        }
-    }
-
     /// The sub-buffer, all of it, for @f: growing it moves it, so it's only
     /// lent for the call.
-    pub fn subbuf_with<R>(&self, which: Subbuf, f: impl FnOnce(&mut [u64]) -> R) -> R {
-        let buf = self.subbuf_cell(which).get();
-        let mut p = self.trans().mem_with(|m| m.range(usize::from(buf.base), usize::from(buf.u64s)));
-        f(unsafe { p.as_mut() })
+    pub fn subbuf_with<T: ?Sized, R>(&self, buf: &Cell<c::btree_trans_subbuf<T>>,
+                                     f: impl FnOnce(&mut [u64]) -> R) -> R {
+        f(buf.get().u64s_in(self))
     }
 
     /// @u64s more at the sub-buffer's end, for @f to fill.
-    pub fn subbuf_append<R>(&self, which: Subbuf, u64s: usize, f: impl FnOnce(&mut [u64]) -> R)
+    pub fn subbuf_append<T: ?Sized, R>(&self, buf: &Cell<c::btree_trans_subbuf<T>>, u64s: usize,
+                                       f: impl FnOnce(&mut [u64]) -> R)
         -> Result<R, BchError>
     {
-        let mut p = self.subbuf_alloc(which, u64s)?;
+        let mut p = self.subbuf_alloc(buf, u64s)?;
         Ok(f(unsafe { p.as_mut() }))
     }
 
-    fn subbuf_alloc(&self, which: Subbuf, u64s: usize) -> Result<NonNull<[u64]>, BchError> {
-        let cell = self.subbuf_cell(which);
+    fn subbuf_alloc<T: ?Sized>(&self, cell: &Cell<c::btree_trans_subbuf<T>>, u64s: usize)
+        -> Result<NonNull<[u64]>, BchError>
+    {
         let buf = cell.get();
         if usize::from(buf.u64s) + u64s > usize::from(buf.size) {
             self.subbuf_grow(cell, u64s)?;
@@ -284,8 +301,9 @@ impl TransAttempt<'_, '_> {
         Ok(self.trans().mem_with(|m| m.range(usize::from(buf.base + buf.u64s) - u64s, u64s)))
     }
 
-    pub fn subbuf_reserve(&self, which: Subbuf, u64s: usize) -> Result<(), BchError> {
-        let cell = self.subbuf_cell(which);
+    pub fn subbuf_reserve<T: ?Sized>(&self, cell: &Cell<c::btree_trans_subbuf<T>>, u64s: usize)
+        -> Result<(), BchError>
+    {
         let buf = cell.get();
         if usize::from(buf.u64s) + u64s > usize::from(buf.size) {
             self.subbuf_grow(cell, u64s)?;
@@ -294,7 +312,7 @@ impl TransAttempt<'_, '_> {
         Ok(())
     }
 
-    fn subbuf_grow(&self, buf: &Cell<c::btree_trans_subbuf>, u64s: usize) -> Result<(), BchError> {
+    fn subbuf_grow<T: ?Sized>(&self, buf: &Cell<c::btree_trans_subbuf<T>>, u64s: usize) -> Result<(), BchError> {
         let b = buf.get();
         let new_top = usize::from(b.u64s) + u64s;
         assert!(new_top.next_power_of_two() <= u16::MAX as usize,
@@ -309,14 +327,13 @@ impl TransAttempt<'_, '_> {
         });
         assert!(base <= u16::MAX as usize, "transaction sub-buffer at u64 {base}: past a u16 of them");
 
-        buf.set(c::btree_trans_subbuf { base: base as u16, u64s: new_top as u16, size: new_size as u16 });
+        buf.set(c::btree_trans_subbuf { base: base as u16, u64s: new_top as u16, size: new_size as u16, ..b });
         Ok(())
     }
 
-    pub fn subbuf_remove(&self, which: Subbuf, range: Range<usize>) {
+    pub fn subbuf_remove<T: ?Sized>(&self, cell: &Cell<c::btree_trans_subbuf<T>>, range: Range<usize>) {
         let len = range.len();
-        self.subbuf_with(which, |buf| buf.copy_within(range.end.., range.start));
-        let cell = self.subbuf_cell(which);
+        self.subbuf_with(cell, |buf| buf.copy_within(range.end.., range.start));
         cell.set(c::btree_trans_subbuf { u64s: cell.get().u64s - len as u16, ..cell.get() });
     }
 
@@ -326,7 +343,7 @@ impl TransAttempt<'_, '_> {
         -> Result<(), BchError>
     {
         let u64s = c::JSET_KEYS_U64s + data.len().div_ceil(size_of::<u64>());
-        self.subbuf_append(Subbuf::JournalEntries, u64s, |buf| {
+        self.subbuf_append(&self.trans().journal_entries, u64s, |buf| {
             EntryWriter::new(buf.as_mut_bytes())
                 .push(ty, btree, level, &[data])
                 .expect("an entry the size allocated for it");
@@ -359,35 +376,26 @@ impl TransAttempt<'_, '_> {
     }
 }
 
-fn subbuf_of(t: &TransAttempt<'_, '_>, buf: *mut c::btree_trans_subbuf) -> Subbuf {
-    if buf == t.trans().journal_entries.as_ptr() {
-        Subbuf::JournalEntries
-    } else {
-        assert!(buf == t.trans().accounting.as_ptr(), "a sub-buffer that isn't the transaction's");
-        Subbuf::Accounting
-    }
-}
-
 /// # Safety
-/// @trans is in an attempt.
+/// @trans is in an attempt; @buf is one of its sub-buffers.
 #[c_export]
 pub unsafe fn __bch2_trans_subbuf_alloc(trans: &BtreeTrans<'_>, buf: *mut c::btree_trans_subbuf,
                                         u64s: c_uint, _ip: c_ulong) -> *mut core::ffi::c_void {
     let t = unsafe { trans.attempt_in_progress() };
-    match t.subbuf_alloc(subbuf_of(&t, buf), u64s as usize) {
+    match t.subbuf_alloc(unsafe { &*buf.cast::<Cell<c::btree_trans_subbuf>>() }, u64s as usize) {
         Ok(s)  => s.as_ptr().cast(),
         Err(e) => err_ptr(e),
     }
 }
 
 /// # Safety
-/// @trans is in an attempt.
+/// @trans is in an attempt; @buf is one of its sub-buffers.
 #[c_export]
 pub unsafe fn bch2_trans_subbuf_reserve(trans: &BtreeTrans<'_>, buf: *mut c::btree_trans_subbuf, u64s: c_uint)
     -> c_int
 {
     let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(t.subbuf_reserve(subbuf_of(&t, buf), u64s as usize))
+    ret_to_c(t.subbuf_reserve(unsafe { &*buf.cast::<Cell<c::btree_trans_subbuf>>() }, u64s as usize))
 }
 
 /// # Safety

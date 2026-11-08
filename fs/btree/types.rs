@@ -26,6 +26,7 @@ use crate::btree::node_scan::NodeScan;
 use crate::btree::path::BtreePath;
 use crate::new_lock;
 use crate::util::projections::Volatile;
+use crate::util::vstructs::Validated;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::percpu::PerCpu;
 use crate::util::shrinker::Shrinker;
@@ -675,11 +676,27 @@ c_typedef! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct btree_trans_subbuf {
+#[derive(CStruct)]
+pub struct btree_trans_subbuf<T: ?Sized = [u64]> {
     pub base: u16,
     pub u64s: u16,
     pub size: u16,
+    #[c_anon("")]
+    pub _entries: core::marker::PhantomData<T>,
+}
+
+impl<T: ?Sized> Clone for btree_trans_subbuf<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: ?Sized> Copy for btree_trans_subbuf<T> {}
+
+impl<T: ?Sized> Default for btree_trans_subbuf<T> {
+    fn default() -> Self {
+        Self { base: 0, u64s: 0, size: 0, _entries: core::marker::PhantomData }
+    }
 }
 
 /// The transaction's memory: a vector of u64s, bump-allocated from - what it
@@ -837,8 +854,8 @@ pub struct BtreeTrans<'f> {
     pub fn_: Cell<*const c_char>,
 
     /* update path: */
-    pub journal_entries: Cell<cs::btree_trans_subbuf>,
-    pub accounting: Cell<cs::btree_trans_subbuf>,
+    pub journal_entries: Cell<cs::btree_trans_subbuf<c::jset_entry<Validated>>>,
+    pub accounting: Cell<cs::btree_trans_subbuf<c::bkey_i>>,
 
     pub hooks: Cell<*mut cs::btree_trans_commit_hook>,
     pub journal_pin: Cell<*mut cs::journal_entry_pin>,
