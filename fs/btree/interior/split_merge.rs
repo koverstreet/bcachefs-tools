@@ -9,7 +9,7 @@ use cstruct_macros::c_export;
 use crate::btree::bkey::{self, bkey_validate, BkeyI, BkeyP, BkeySC, BkeyV, BkeyVMut, ValidateFlags,
                          BKEY_FORMAT_CURRENT, POS_MIN, SPOS_MAX};
 use crate::btree::cache::{bch2_btree_node_set_dirty, btree_ptr_hash_val};
-use crate::btree::interior_c::{bch2_btree_node_check_topology, bch2_btree_node_check_topology_msg};
+use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, Watermark};
 use crate::btree::journal_overlay::{journal_key_overwrite, key_deleted_in_journal};
 use crate::btree::node::BtreeNode;
@@ -23,12 +23,13 @@ use crate::c;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::data::keylist::{keys, keys_mut};
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
-use crate::init::error::BkeyValidate;
+use crate::init::error::{count_fsck_err, BkeyValidate};
 use crate::locking::MemallocFlags;
 use crate::prt;
+use crate::sb::errors::SbErrorId;
 use crate::util::Printbuf;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::util::kernel::{dump_stack, local_clock};
@@ -105,8 +106,7 @@ pub(crate) fn insert_keys_interior(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>
     let mut msg = LogMsg::new(fs);
     msg.set_suppressed(true);
 
-    let ret = unsafe { bch2_btree_node_check_topology_msg(trans.raw(), ptr::from_ref(b.node()).cast_mut(), &mut *msg) };
-    if ret != 0 {
+    if let Err(e) = check_topology_msg(trans, b, &mut msg) {
         prt!(msg, "inserted keys\n");
         msg.indent_add(2);
         for k in keys(&list.as_u64s()[..inserted]) {
@@ -116,7 +116,7 @@ pub(crate) fn insert_keys_interior(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>
 
         let _ = prt_task_backtrace(&mut msg, sched::current(), 0);
         fs.emergency_read_only(&mut msg);
-        return ret_to_result_void(ret);
+        return Err(e);
     }
 
     list.drop_front(inserted);
@@ -148,8 +148,112 @@ pub(crate) fn split_insert_keys(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, p
     insert_keys_interior(trans, paths, path, b, node_iter, list)
 }
 
-fn check_topology(trans: &BtreeTrans<'_>, b: &BtreeNode) -> Result<(), BchError> {
-    ret_to_result_void(unsafe { bch2_btree_node_check_topology(trans.raw(), ptr::from_ref(b).cast_mut()) })
+fn topology_err(fs: &Fs, b: Node<'_>, out: &mut Printbuf) -> BchError {
+    prt!(out, "in parent node:\n{}\n", b.pos_to_text(fs));
+    let e = fs.topology_error(out);
+    let _ = prt_task_backtrace(out, sched::current(), 1);
+    e
+}
+
+/// The previous child's end: None before the first, while @prev holds
+/// BkeyBuf::new()'s deleted key.
+fn prev_end(prev: &BkeyBuf) -> Option<Bpos> {
+    let k: &BkeyI = prev.as_ref();
+    (!k.k().key_type().is_deleted()).then_some(k.k().p)
+}
+
+/*
+ * Verify that child nodes correctly span parent node's range:
+ */
+pub(crate) fn check_topology_msg(trans: &BtreeTrans<'_>, b: Node<'_>, out: &mut Printbuf) -> Result<(), BchError> {
+    let fs = trans.fs();
+    let contents = b.contents();
+    let data = contents.data();
+
+    if let Some(p) = BkeySC::from(contents.key_i()).arm::<c::BtreePtrV2>() {
+        assert!(p.v().min_key == data.min_key, "a node whose btree_ptr_v2 min_key {} isn't its own, {}",
+                p.v().min_key, data.min_key);
+    }
+
+    /*
+     * Don't use btree_node_is_root(): we're called by btree split, after
+     * creating a new root but before setting it
+     */
+    if fs.btree_id_root(b.c.btree_id.into()).is_some_and(|r| ptr::eq(r, b.node())) {
+        if data.min_key != POS_MIN {
+            prt!(out, "btree root with incorrect min_key: {}\n", data.min_key);
+            count_fsck_err(fs, SbErrorId::btree_root_bad_min_key, out);
+            return Err(topology_err(fs, b, out));
+        }
+
+        if data.max_key != SPOS_MAX {
+            prt!(out, "btree root with incorrect max_key: {}\n", data.max_key);
+            count_fsck_err(fs, SbErrorId::btree_root_bad_max_key, out);
+            return Err(topology_err(fs, b, out));
+        }
+    }
+
+    if b.c.level == 0 {
+        return Ok(());
+    }
+
+    let mut node_iter = KeyIter::default();
+    node_iter.init_from_start(&b.keys(contents));
+    let mut iter = unsafe {
+        c::btree_and_journal_iter::new(trans.raw(), ptr::from_ref(b.node()).cast_mut(), node_iter, data.min_key)
+    };
+    let mut prev = BkeyBuf::new();
+
+    loop {
+        let k = iter.peek(fs);
+        if k.k.is_null() {
+            break;
+        }
+        let k = unsafe { BkeySC::from_c(&k) };
+        let Some(bp) = k.arm::<c::BtreePtrV2>() else { return Ok(()) };
+
+        let expected_min = match prev_end(&prev) {
+            None      => data.min_key,
+            Some(end) => end.successor(),
+        };
+        if expected_min != bp.v().min_key {
+            prt!(out, "end of prev node doesn't match start of next node\nprev {}\nnext {}\n",
+                 BkeySC::from(prev.as_ref()).to_text(fs), k.to_text(fs));
+            count_fsck_err(fs, SbErrorId::btree_node_topology_bad_min_key, out);
+            return Err(topology_err(fs, b, out));
+        }
+
+        prev.reassemble(k);
+        iter.advance();
+    }
+
+    let Some(end) = prev_end(&prev) else {
+        prt!(out, "empty interior node\n");
+        count_fsck_err(fs, SbErrorId::btree_node_topology_empty_interior_node, out);
+        return Err(topology_err(fs, b, out));
+    };
+
+    if end != contents.key.k.p {
+        prt!(out, "last child node doesn't end at end of parent node\nchild: {}\n",
+             BkeySC::from(prev.as_ref()).to_text(fs));
+        count_fsck_err(fs, SbErrorId::btree_node_topology_bad_max_key, out);
+        return Err(topology_err(fs, b, out));
+    }
+
+    Ok(())
+}
+
+fn check_topology(trans: &BtreeTrans<'_>, b: Node<'_>) -> Result<(), BchError> {
+    let mut msg = LogMsg::new(trans.fs());
+    msg.set_suppressed(true);
+    check_topology_msg(trans, b, &mut msg)
+}
+
+/// # Safety
+/// @b is locked.
+#[c_export]
+pub unsafe fn bch2_btree_node_check_topology(trans: &BtreeTrans<'_>, b: &BtreeNode) -> c_int {
+    ret_to_c(check_topology(trans, unsafe { LockedNode::new(b) }))
 }
 
 fn split_threshold(fs: &Fs) -> usize {
@@ -416,7 +520,7 @@ fn pack_into_dsts(trans: &BtreeTrans<'_>, srcs: &[Node<'_>], dsts: &mut [NewNode
         n.contents().reset_sib_u64s();
         n.keys_mut().verify_btree_nr_keys();
 
-        assert!(check_topology(trans, n).is_ok(), "a packed node's topology bad:\n{}", n.to_text(trans.fs()));
+        assert!(check_topology(trans, n.locked()).is_ok(), "a packed node's topology bad:\n{}", n.to_text(trans.fs()));
     }
 }
 
@@ -479,7 +583,7 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
     assert!(!has_parent || paths[path].intent_locked(level + 1),
             "splitting a node whose parent isn't intent locked:\n{}", b.to_text(fs));
 
-    check_topology(trans, &b)?;
+    check_topology(trans, b)?;
 
     /* If we're splitting because an insert hit btree_node_full, compact
      * is only useful if the failed key would actually fit afterwards.
@@ -638,7 +742,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
         return ret;
     }
 
-    let ret = check_topology(trans, &b).and_then(|()| update.insert_parent_keys_at(paths, path, b));
+    let ret = check_topology(trans, b).and_then(|()| update.insert_parent_keys_at(paths, path, b));
     if let Err(e) = ret {
         trans.verify_locks(paths);
         return Err(e);
@@ -1220,7 +1324,7 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
             bch2_btree_sort_into(fs, n, s);
         }
 
-        assert!(check_topology(trans, n).is_ok(), "a merged node's topology bad:\n{}", n.to_text(fs));
+        assert!(check_topology(trans, n.locked()).is_ok(), "a merged node's topology bad:\n{}", n.to_text(fs));
         n.contents().reset_sib_u64s();
     } else {
         let dsts: &mut [NewNode<'_>; 2] = dsts.as_mut_slice().try_into().expect("a merge into two nodes");

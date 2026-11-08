@@ -2,7 +2,7 @@
 
 //! interior.h's interior update machinery, which InteriorUpdate wraps.
 
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use cstruct_macros::c_extern;
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
@@ -11,10 +11,6 @@ use crate::c;
 use crate::util::Printbuf;
 
 c_extern! {
-    pub fn bch2_btree_node_check_topology_msg(trans: *mut BtreeTrans<'_>, b: *mut BtreeNode,
-                                              out: *mut Printbuf) -> c_int;
-    pub fn bch2_btree_node_check_topology(trans: *mut BtreeTrans<'_>, b: *mut BtreeNode) -> c_int;
-
     pub fn bch2_btree_update_start(trans: *mut BtreeTrans<'_>, path: PathIdx, level_start: c_uint, split: bool,
                                    target: c_uint, commit_flags: c::bch_trans_commit_flags,
                                    write_flags: c::bch_write_flags) -> *mut c::btree_update;

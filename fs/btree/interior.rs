@@ -37,7 +37,7 @@ use crate::format::Btree;
 
 mod split_merge;
 pub use split_merge::bch2_btree_node_rewrite;
-pub(crate) use split_merge::{foreground_maybe_merge, increase_depth, node_rewrite};
+pub(crate) use split_merge::{check_topology_msg, foreground_maybe_merge, increase_depth, node_rewrite};
 
 #[repr(C)]
 #[derive(Default, CStruct)]

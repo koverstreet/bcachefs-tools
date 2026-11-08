@@ -12,7 +12,7 @@ use cstruct_macros::{c_export, c_extern};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::cache::{bch2_btree_id_level_to_text, bch2_btree_node_prefetch};
-use crate::btree::interior_c::bch2_btree_node_check_topology_msg;
+use crate::btree::interior::check_topology_msg;
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
 use crate::btree::locking::bch2_btree_cache_cannibalize_unlock;
 use crate::btree::node::iter::KeyIter;
@@ -477,13 +477,9 @@ impl BtreeTrans<'_> {
         let _ = prt_task_backtrace(&mut msg, crate::util::sched::current(), 1);
 
         let mut msg = msg.indent(2);
-        let ret = unsafe {
-            bch2_btree_node_check_topology_msg(self.raw(), ptr::from_ref(b.node()).cast_mut(), &mut *msg)
-        };
-        if ret != 0 {
-            BchError::from_raw(ret)
-        } else {
-            fs.topology_error(&mut msg)
+        match check_topology_msg(self, b, &mut msg) {
+            Err(e) => e,
+            Ok(()) => fs.topology_error(&mut msg),
         }
     }
 

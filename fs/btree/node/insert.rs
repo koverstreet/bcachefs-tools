@@ -15,7 +15,7 @@ use super::BtreeNode;
 use crate::btree::bkey::BkeyI;
 use crate::btree::cache::bch2_btree_node_set_dirty;
 use crate::btree::for_each::lockrestart_do;
-use crate::btree::interior_c::bch2_btree_node_check_topology_msg;
+use crate::btree::interior::check_topology_msg;
 use crate::btree::iter::BtreeTrans;
 use crate::btree::path::{BtreePath, LockedNode, PathIdx, Paths};
 use crate::btree::types::BtreeWriteType;
@@ -225,15 +225,13 @@ impl BtreeTrans<'_> {
         let mut msg = LogMsg::new(fs);
         msg.set_suppressed(true);
 
-        let ret = unsafe {
-            bch2_btree_node_check_topology_msg(self.raw(), core::ptr::from_ref(b).cast_mut(), &mut *msg)
-        };
-        if ret != 0 {
+        let bad = check_topology_msg(self, unsafe { LockedNode::new(b) }, &mut msg).is_err();
+        if bad {
             crate::prt!(&mut msg, "Btree update created topology error:\n");
             self.updates_to_text(&mut msg);
             fs.emergency_read_only(&mut msg);
         }
-        ret != 0
+        bad
     }
 
     /// Insert one key into a leaf node: path @idx is at @insert's pos, and
