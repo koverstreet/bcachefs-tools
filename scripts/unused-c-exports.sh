@@ -127,6 +127,24 @@ awk '$1 == "paste" { print $2, $3 }' "$tmp/rust_decls" | sort -u |
                             my $body = $1;
                             print "'"$prefix"'$1\n" while $body =~ /\bx\(\s*(\w+)/g;
                         }' 2>/dev/null
+
+                # A c_enum!'s Foo_arms!, over the variants of the Rust enum
+                # Foo it declares: attributes and comments stripped
+                case "$xmacro" in
+                *_arms)
+                    git ls-files -z '*.rs' | grep -zv '^fs/vendor/' |
+                        xargs -0 perl -0777 -ne '
+                            while (/\benum\s+'"${xmacro%_arms}"'\b[^{;]*\{/g) {
+                                my ($start, $depth) = (pos($_), 1);
+                                my $i = $start;
+                                $depth += { "{" => 1, "}" => -1 }->{substr($_, $i++, 1)} // 0 while $depth;
+                                my $body = substr($_, $start, $i - $start - 1);
+                                $body =~ s{//[^\n]*|/\*.*?\*/}{}gs;
+                                $body =~ s/#(\[(?:[^\[\]]++|(?1))*\])//g;
+                                print "'"$prefix"'$1\n" while $body =~ /(?:^|,)\s*(\w+)/g;
+                            }'
+                    ;;
+                esac
             done
     done >> "$tmp/rust_refs"
 
