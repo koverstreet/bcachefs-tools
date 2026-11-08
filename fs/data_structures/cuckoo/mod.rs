@@ -13,7 +13,10 @@
 //! entry takes it out.
 
 mod faults;
+mod multimap;
 mod table;
+
+pub use multimap::CuckooMultimap;
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 pub use faults::Seen;

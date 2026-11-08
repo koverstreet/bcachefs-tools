@@ -57,7 +57,7 @@ use crate::locking::Locked;
 use crate::new_lock;
 use crate::prt;
 use crate::util::alloc::KVVec;
-use crate::data_structures::cuckoo::{Cuckoo, CuckooHasher, CuckooItem, Entry, Faults, Registration};
+use crate::data_structures::cuckoo::{Cuckoo, CuckooHasher, CuckooItem, CuckooMultimap, Entry, Faults, Registration};
 use crate::util::hash::GoldenRatio;
 use crate::util::siphash::SipHash13Key;
 use crate::util::kernel::{cond_resched, local_clock, num_online_cpus, random_u64, random_u64_below};
@@ -702,11 +702,85 @@ fn torture<I: TestItem, S: CuckooHasher, const W: usize>(table: &str) -> TestRet
     Ok(())
 }
 
+/// WRITERS writers add and remove values under MULTIMAP_KEYS keys they
+/// share, each only its own value - up to MULTIMAP_EACH of it under a key, so
+/// a key's group spills, and is made and emptied by one writer while another
+/// adds to it. After each op the writer counts its value under the key, which
+/// no other changes: exactly what it's left there, or an add or a remove was
+/// lost to a group's coming or going. At the end each takes its values out,
+/// and the multimap's empty.
+fn multimap(secs: u64) -> TestRet {
+    const MULTIMAP_KEYS: u64 = 8;
+    const MULTIMAP_EACH: u32 = 3;
+
+    let m = CuckooMultimap::<u64, u32, 2>::default();
+    let m = &m;
+    pin_init::stack_pin_init!(let fails: Failures = new_lock!(None, pin_init::Zeroable::zeroed()));
+    let fails: &Failures = &fails;
+    let ops = &AtomicU64::new(0);
+    let end = local_clock() + secs * c::NSEC_PER_SEC as u64;
+
+    let ret = par::scope(Backend::Kthreads, |s| {
+        for w in 0..WRITERS as u32 {
+            s.spawn(format_args!("cuckoo multimap writer[{w}]"), move || {
+                let mut have = [0u32; MULTIMAP_KEYS as usize];
+                let mut rng = random_u64() | 1;
+                let mut nr = 0u64;
+
+                while local_clock() < end && fails.get() == 0 {
+                    let r = xorshift(&mut rng);
+                    let k = r % MULTIMAP_KEYS;
+                    let n = &mut have[k as usize];
+                    if *n < MULTIMAP_EACH && (*n == 0 || (r >> 8) & 1 != 0) {
+                        m.add(k, w)?;
+                        *n += 1;
+                    } else if !m.remove(&k, &w) {
+                        fail(fails, "multimap remove, of one in", k, nr, *n as u64, 0);
+                    } else {
+                        *n -= 1;
+                    }
+
+                    let got = m.with(&k, |vs| vs.iter().filter(|&&v| v == w).count());
+                    if got != *n as usize {
+                        fail(fails, "multimap count", k, nr, *n as u64, got as u64);
+                    }
+                    nr += 1;
+                    if nr % 1024 == 0 {
+                        cond_resched();
+                    }
+                }
+
+                for (k, &n) in have.iter().enumerate() {
+                    for _ in 0..n {
+                        if !m.remove(&(k as u64), &w) {
+                            fail(fails, "multimap remove at the end", k as u64, nr, n as u64, 0);
+                        }
+                    }
+                }
+                ops.fetch_add(nr, Relaxed);
+                Ok(())
+            })?;
+        }
+        Ok(())
+    });
+
+    if let Some(f) = fails.lock().take() {
+        panic!("cuckoo multimap: {} failures, the first a {} of {:#x} at op {}: wanted {}, got {}",
+               fails.get(), f.what, f.key, f.seq, f.want, f.got);
+    }
+    ret?;
+    assert!(m.is_empty(), "cuckoo multimap: groups left with every value out");
+    kernel::pr_info!("cuckoo multimap: {} ops by {WRITERS} writers on {MULTIMAP_KEYS} keys\n",
+                     ops.load(Relaxed));
+    Ok(())
+}
+
 fn tortures() -> TestRet {
     torture::<Map, SipHash13Key, 2>("map, siphash, 2-way")?;
     torture::<Map, GoldenRatio, 3>("map, golden, 3-way")?;
     torture::<u64, SipHash13Key, 2>("set, siphash, 2-way")?;
-    torture::<u64, GoldenRatio, 3>("set, golden, 3-way")
+    torture::<u64, GoldenRatio, 3>("set, golden, 3-way")?;
+    multimap(5)
 }
 
 pub(super) fn test_cuckoo_torture(_fs: &Fs, _nr: u64) -> TestRet {
