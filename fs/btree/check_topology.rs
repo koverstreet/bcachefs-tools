@@ -36,6 +36,15 @@ use crate::{bch_err, bch_err_fn, bch_err_msg, bch_info, btree_trans, fsck_err_fl
 
 type Node<'n> = LockedNode<'n, BtreeNode>;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Repair {
+    None,
+    /// Nodes found by scanning filled a gap: the children are walked again.
+    FilledFromScan,
+    DropThis,
+    DropPrev,
+}
+
 /// @contents' key as a btree_ptr_v2 - a v1's converted - with its header and
 /// value's head as @f leaves them.
 fn btree_ptr_to_v2(contents: &NodeContents, f: impl FnOnce(&mut c::bkey, &mut c::BtreePtrV2)) -> DownKey {
@@ -175,26 +184,31 @@ fn commit_topology_repair_log(t: &TransAttempt<'_, '_>) -> Result<(), BchError> 
     Ok(())
 }
 
-/// A node, held by @iter's path: the iterator's at its key.
-fn held<'n>(paths: &Paths<'n>, iter: &BtreeNodeIter<'_>, level: usize) -> (PathIdx, Node<'n>) {
-    let idx = iter.raw.path;
-    (idx, paths.held_btree_node(idx, level).expect("a node, peeked"))
+struct Held<'n> {
+    idx: PathIdx,
+    b:   Node<'n>,
 }
 
-fn btree_check_node_boundaries(t: &TransAttempt<'_, '_>, b: Node<'_>,
-                               prev: Option<(PathIdx, Node<'_>)>, cur: (PathIdx, Node<'_>))
-    -> Result<(), BchError>
-{
+fn held<'n>(paths: &Paths<'n>, iter: &BtreeNodeIter<'_>) -> Held<'n> {
+    let idx = iter.raw.path;
+    let b = paths.held_btree_node(idx, paths[idx].level() as usize).expect("a node, peeked");
+    Held { idx, b }
+}
+
+/// No path table held across an fsck error: its message is allocated in the
+/// transaction, which may borrow the table to drop locks. Each repair borrows
+/// it after.
+fn check_node_boundaries(t: &TransAttempt<'_, '_>, b: Node<'_>,
+                         prev: Option<Held<'_>>, cur: Held<'_>) -> Result<Repair, BchError> {
     let fs = t.fs();
     let trans = t.trans();
     let btree = Btree(b.c.btree_id.into());
     let level = usize::from(b.c.level) - 1;
-    let (cur_idx, cur) = cur;
     let b_data = b.contents().data();
-    let cur_min = cur.contents().data().min_key;
+    let cur_min = cur.b.contents().data().min_key;
     let expected_start = match &prev {
-        None          => b_data.min_key,
-        Some((_, p)) => p.contents().key_i().k.p.successor(),
+        None    => b_data.min_key,
+        Some(p) => p.b.contents().key_i().k.p.successor(),
     };
     let mut buf = Printbuf::new();
 
@@ -203,16 +217,16 @@ fn btree_check_node_boundaries(t: &TransAttempt<'_, '_>, b: Node<'_>,
             "a btree_ptr_v2's min_key not its node's");
 
     if expected_start == cur_min {
-        return Ok(());
+        return Ok(Repair::None);
     }
 
     prt!(&mut buf, " at btree={btree} level={}:\nparent: {}", b.c.level, BkeySC::from(b.contents().key_i()).to_text(fs));
 
-    if let Some((_, p)) = &prev {
-        prt!(&mut buf, "\nprev: {}", BkeySC::from(p.contents().key_i()).to_text(fs));
+    if let Some(p) = &prev {
+        prt!(&mut buf, "\nprev: {}", BkeySC::from(p.b.contents().key_i()).to_text(fs));
     }
 
-    prt!(&mut buf, "\nnext: {}\n", BkeySC::from(cur.contents().key_i()).to_text(fs));
+    prt!(&mut buf, "\nnext: {}\n", BkeySC::from(cur.b.contents().key_i()).to_text(fs));
 
     if expected_start < cur_min {								/* gap */
         let mut nodes_found = 0;
@@ -227,97 +241,36 @@ fn btree_check_node_boundaries(t: &TransAttempt<'_, '_>, b: Node<'_>,
         if mustfix_fsck_err!(t, id::btree_node_topology_gap_between_nodes,
                              "gap between btree nodes{}", buf.as_str())? {
             commit_topology_repair_log(t)?;
-            return if nodes_found != 0 {
-                Err(fs.err(bch_errcode::BCH_ERR_topology_repair_did_fill_from_scan))
-            } else {
-                set_node_min(trans, &mut trans.paths(), cur_idx, level, expected_start)
-            };
+            if nodes_found != 0 {
+                return Ok(Repair::FilledFromScan);
+            }
+            set_node_min(trans, &mut trans.paths(), cur.idx, level, expected_start)?;
         }
-    } else if let Some((prev_idx, p)) = prev.filter(|(_, p)| cur.contents().data().seq() >
-                                                              p.contents().data().seq()) {	/* cur overwrites prev */
-        if p.contents().data().min_key >= cur_min {						/* fully? */
+    } else if let Some(p) = prev.filter(|p| cur.b.contents().data().seq() >
+                                             p.b.contents().data().seq()) {		/* cur overwrites prev */
+        if p.b.contents().data().min_key >= cur_min {						/* fully? */
             if mustfix_fsck_err!(t, id::btree_node_topology_overwritten_by_next_node,
                                  "btree node overwritten by next node{}", buf.as_str())? {
                 commit_topology_repair_log(t)?;
-                return Err(fs.err(bch_errcode::BCH_ERR_topology_repair_drop_prev_node));
+                return Ok(Repair::DropPrev);
             }
         } else if mustfix_fsck_err!(t, id::btree_node_topology_bad_max_key,
                                     "btree node with incorrect max_key{}", buf.as_str())? {
             commit_topology_repair_log(t)?;
-            return set_node_max(trans, &mut trans.paths(), prev_idx, level, cur_min.predecessor());
+            set_node_max(trans, &mut trans.paths(), p.idx, level, cur_min.predecessor())?;
         }
-    } else if expected_start >= cur.contents().data().max_key {				/* fully? */
+    } else if expected_start >= cur.b.contents().data().max_key {				/* fully? */
         if mustfix_fsck_err!(t, id::btree_node_topology_overwritten_by_prev_node,
                              "btree node overwritten by prev node{}", buf.as_str())? {
             commit_topology_repair_log(t)?;
-            return Err(fs.err(bch_errcode::BCH_ERR_topology_repair_drop_this_node));
+            return Ok(Repair::DropThis);
         }
     } else if mustfix_fsck_err!(t, id::btree_node_topology_bad_min_key,
                                 "btree node with incorrect min_key{}", buf.as_str())? {
         commit_topology_repair_log(t)?;
-        return set_node_min(trans, &mut trans.paths(), cur_idx, level, expected_start);
+        set_node_min(trans, &mut trans.paths(), cur.idx, level, expected_start)?;
     }
-    Ok(())
-}
-
-fn btree_check_root_boundaries(t: &TransAttempt<'_, '_>, idx: PathIdx,
-                               b: Node<'_>) -> Result<(), BchError> {
-    let fs = t.fs();
-    let trans = t.trans();
-    let level = usize::from(b.c.level);
-    let data = b.contents().data();
-
-    assert!(BkeySC::from(b.contents().key_i()).arm::<c::BtreePtrV2>()
-            .is_none_or(|p| p.v().min_key == data.min_key),
-            "a btree_ptr_v2's min_key not its node's");
-
-    let mut buf = Printbuf::new();
-    prt!(&mut buf, "  at {}", b.pos_to_text(fs));
-
-    if mustfix_fsck_err_on!(t, data.min_key != POS_MIN, id::btree_node_topology_bad_root_min_key,
-                            "btree root with incorrect min_key{}", buf.as_str())? {
-        set_node_min(trans, &mut trans.paths(), idx, level, POS_MIN)?;
-    }
-
-    if mustfix_fsck_err_on!(t, b.contents().data().max_key != SPOS_MAX, id::btree_node_topology_bad_root_max_key,
-                            "btree root with incorrect min_key{}", buf.as_str())? {
-        set_node_max(trans, &mut trans.paths(), idx, level, SPOS_MAX)?;
-    }
-    Ok(())
-}
-
-fn btree_repair_node_end(t: &TransAttempt<'_, '_>, b: Node<'_>,
-                         child: (PathIdx, Node<'_>)) -> Result<(), BchError> {
-    let fs = t.fs();
-    let btree = Btree(b.c.btree_id.into());
-    let (child_idx, child) = child;
-    let end = b.contents().key_i().k.p;
-    let child_end = child.contents().key_i().k.p;
-
-    if child_end == end {
-        return Ok(());
-    }
-
-    let mut buf = Printbuf::new();
-    prt!(&mut buf, "\nat: btree={btree} level={}\nparent: {}\nchild: {}",
-         b.c.level, BkeySC::from(b.contents().key_i()).to_text(fs), BkeySC::from(child.contents().key_i()).to_text(fs));
-
-    let mut nodes_found = 0;
-    if b.c.level == 1 {
-        get_scanned_nodes(fs, btree, 0, child_end.successor(), end, &mut buf, &mut nodes_found)?;
-    }
-
-    if mustfix_fsck_err!(t, id::btree_node_topology_bad_max_key,
-                         "btree node with incorrect max_key{}", buf.as_str())? {
-        commit_topology_repair_log(t)?;
-
-        return if nodes_found != 0 {
-            Err(fs.err(bch_errcode::BCH_ERR_topology_repair_did_fill_from_scan))
-        } else {
-            set_node_max(t.trans(), &mut t.trans().paths(), child_idx, usize::from(child.c.level), end)
-        };
-    }
-    Ok(())
+    Ok(Repair::None)
 }
 
 /// A node at @level, by its key @k: had by a node iterator at the key's
@@ -357,65 +310,76 @@ fn child_key(t: &TransAttempt<'_, '_>, b: Node<'_>, pos: Bpos) -> Option<BkeyBuf
     Some(buf)
 }
 
-/// What one step of the first pass over a node's children found.
-enum Child {
-    /// No more children.
-    End,
-    /// The child at this key, checked against the one before it.
-    Checked(BkeyBuf, bool),
-    /// The child at this key goes: it's evicted, its key deleted.
-    Drop(BkeyBuf),
-    /// The child before goes, and the pass starts again.
-    DropPrev,
-}
-
+/// The child of @node at or after @pos, checked against the one before it:
+/// None if there's none.
 fn check_child(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, node: &BkeyI, pos: Bpos,
-               prev: Option<&BkeyI>) -> Result<Child, BchError> {
+               prev: Option<&BkeyI>) -> Result<Option<(BkeyBuf, Repair)>, BchError> {
     let fs = t.fs();
     let parent = node_at(t, btree, level, node, BtreeIterFlags::empty())?;
 
-    let b = held(&t.trans().paths(), &parent, level).1;
-    let Some(cur_k) = child_key(t, b, pos) else { return Ok(Child::End) };
+    let b = held(&t.trans().paths(), &parent).b;
+    let Some(cur_k) = child_key(t, b, pos) else { return Ok(None) };
 
-    let cur = bch_err_msg!(fs, node_at(t, btree, level - 1, cur_k.as_ref(),
+    let cur = bch_err_msg!(fs, node_at(t, btree, level - 1, &cur_k,
                                        BtreeIterFlags::INTENT | BtreeIterFlags::READ_ERRORS),
                            "getting btree node")?;
     let prev = prev.map(|k| node_at(t, btree, level - 1, k, BtreeIterFlags::INTENT)).transpose()?;
 
     let (cur, prev) = {
         let paths = t.trans().paths();
-        (held(&paths, &cur, level - 1), prev.as_ref().map(|p| held(&paths, p, level - 1)))
+        (held(&paths, &cur), prev.as_ref().map(|p| held(&paths, p)))
     };
 
-    if cur.1.flags.read_error() {
-        return Ok(Child::Drop(cur_k));
+    if cur.b.flags.read_error() {
+        return Ok(Some((cur_k, Repair::DropThis)));
     }
 
-    if btree_node_is_stale(fs, cur.1.node()) {
+    if btree_node_is_stale(fs, cur.b.node()) {
         bch_info!(fs, "btree node older than nodes found by scanning\n  btree={btree} level={} {}",
-                  level - 1, BkeySC::from(cur_k.as_ref()).to_text(fs));
-        return Ok(Child::Drop(cur_k));
+                  level - 1, BkeySC::from(&*cur_k).to_text(fs));
+        return Ok(Some((cur_k, Repair::DropThis)));
     }
 
-    match btree_check_node_boundaries(t, b, prev, cur) {
-        Ok(()) => Ok(Child::Checked(cur_k, false)),
-        Err(e) if e.matches(bch_errcode::BCH_ERR_topology_repair_did_fill_from_scan) => Ok(Child::Checked(cur_k, true)),
-        Err(e) if e.matches(bch_errcode::BCH_ERR_topology_repair_drop_this_node) => Ok(Child::Drop(cur_k)),
-        Err(e) if e.matches(bch_errcode::BCH_ERR_topology_repair_drop_prev_node) => Ok(Child::DropPrev),
-        Err(e) => Err(e),
-    }
+    let repair = check_node_boundaries(t, b, prev, cur)?;
+    Ok(Some((cur_k, repair)))
 }
 
 fn repair_node_end(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, node: &BkeyI,
-                   last: &BkeyI) -> Result<(), BchError> {
+                   last: &BkeyI) -> Result<Repair, BchError> {
+    let fs = t.fs();
     let parent = node_at(t, btree, level, node, BtreeIterFlags::empty())?;
     let child = node_at(t, btree, level - 1, last, BtreeIterFlags::INTENT)?;
 
     let (b, child) = {
         let paths = t.trans().paths();
-        (held(&paths, &parent, level).1, held(&paths, &child, level - 1))
+        (held(&paths, &parent).b, held(&paths, &child))
     };
-    btree_repair_node_end(t, b, child)
+    let end = b.contents().key_i().k.p;
+    let child_end = child.b.contents().key_i().k.p;
+
+    if child_end == end {
+        return Ok(Repair::None);
+    }
+
+    let mut buf = Printbuf::new();
+    prt!(&mut buf, "\nat: btree={btree} level={level}\nparent: {}\nchild: {}",
+         BkeySC::from(b.contents().key_i()).to_text(fs), BkeySC::from(child.b.contents().key_i()).to_text(fs));
+
+    let mut nodes_found = 0;
+    if level == 1 {
+        get_scanned_nodes(fs, btree, 0, child_end.successor(), end, &mut buf, &mut nodes_found)?;
+    }
+
+    if mustfix_fsck_err!(t, id::btree_node_topology_bad_max_key,
+                         "btree node with incorrect max_key{}", buf.as_str())? {
+        commit_topology_repair_log(t)?;
+
+        if nodes_found != 0 {
+            return Ok(Repair::FilledFromScan);
+        }
+        set_node_max(t.trans(), &mut t.trans().paths(), child.idx, level - 1, end)?;
+    }
+    Ok(Repair::None)
 }
 
 /// The node at @k, a child of a node at @level, out of the cache and its key
@@ -429,49 +393,42 @@ fn drop_node(trans: &BtreeTrans<'_>, btree: Btree, level: usize, k: &BkeyI) -> R
     journal_overlay::delete(trans.fs(), btree, level as u32, k.k.p)
 }
 
-/// The first pass over a node's children: each against the one before it.
-/// True to run it again; new_pass set for the walk to go again after the
-/// second.
-fn check_children(trans: &BtreeTrans<'_>, btree: Btree, level: usize, node: &BkeyI,
-                  new_pass: &mut bool) -> Result<bool, BchError> {
+/// Each of @node's children against the one before it, and the last against
+/// @node's end: true if the children changed, to be walked again.
+fn check_children(trans: &BtreeTrans<'_>, btree: Btree, level: usize, node: &BkeyI) -> Result<bool, BchError> {
     let fs = trans.fs();
     let mut pos = POS_MIN;
     let mut prev: Option<BkeyBuf> = None;
+    let mut again = false;
 
-    loop {
-        match lockrestart_do(trans, |t| check_child(t, btree, level, node, pos, prev.as_ref().map(AsRef::as_ref)))? {
-            Child::End => break,
-            Child::Checked(k, filled) => {
-                *new_pass |= filled;
-                let end = k.as_ref().k.p;
+    while let Some((k, repair)) =
+        lockrestart_do(trans, |t| check_child(t, btree, level, node, pos, prev.as_deref()))?
+    {
+        let end = k.k.p;
+
+        match repair {
+            Repair::None | Repair::FilledFromScan => {
+                again |= repair == Repair::FilledFromScan;
                 prev = Some(k);
-                if end == node.k.p {
-                    break;
-                }
-                pos = end.successor();
             }
-            Child::Drop(k) => {
-                drop_node(trans, btree, level, k.as_ref())?;
-                if k.as_ref().k.p == node.k.p {
-                    break;
-                }
-                pos = k.as_ref().k.p.successor();
-            }
-            Child::DropPrev => {
+            Repair::DropThis => drop_node(trans, btree, level, &k)?,
+            Repair::DropPrev => {
                 bch_info!(fs, "dropped prev node");
-                drop_node(trans, btree, level, prev.as_ref().expect("a prev node, to drop").as_ref())?;
+                drop_node(trans, btree, level, prev.as_deref().expect("a prev node, to drop"))?;
                 return Ok(true);
             }
         }
+
+        if end == node.k.p {
+            break;
+        }
+        pos = end.successor();
     }
 
     if let Some(prev) = &prev {
-        match lockrestart_do(trans, |t| repair_node_end(t, btree, level, node, prev.as_ref())) {
-            Err(e) if e.matches(bch_errcode::BCH_ERR_topology_repair_did_fill_from_scan) => *new_pass = true,
-            ret => ret?,
-        }
+        again |= lockrestart_do(trans, |t| repair_node_end(t, btree, level, node, prev))? == Repair::FilledFromScan;
     }
-    Ok(false)
+    Ok(again)
 }
 
 /// The child key of the node at @node at or after @pos, and the child read.
@@ -479,63 +436,38 @@ fn next_child(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, node: &BkeyI
               pos: Bpos) -> Result<Option<BkeyBuf>, BchError> {
     let parent = node_at(t, btree, level, node, BtreeIterFlags::empty())?;
 
-    let b = held(&t.trans().paths(), &parent, level).1;
+    let b = held(&t.trans().paths(), &parent).b;
     let Some(k) = child_key(t, b, pos) else { return Ok(None) };
 
-    bch_err_msg!(t.fs(), node_at(t, btree, level - 1, k.as_ref(), BtreeIterFlags::empty()), "getting btree node")?;
+    bch_err_msg!(t.fs(), node_at(t, btree, level - 1, &k, BtreeIterFlags::empty()), "getting btree node")?;
     Ok(Some(k))
 }
 
-fn btree_repair_topology_recurse(trans: &BtreeTrans<'_>, btree: Btree, level: usize,
-                                 node: &BkeyI) -> Result<(), BchError> {
+/// @node's children checked, then each repaired below, over again until a
+/// pass changes nothing: DropThis if it's left with none.
+fn repair_children(trans: &BtreeTrans<'_>, btree: Btree, level: usize, node: &BkeyI) -> Result<Repair, BchError> {
     let fs = trans.fs();
 
-    if level == 0 {
-        return Ok(());
-    }
-
-    let ret = 'again: loop {
-        let mut new_pass = false;
-
-        match check_children(trans, btree, level, node, &mut new_pass) {
-            Ok(true)  => continue,
-            Ok(false) => {}
-            Err(e)    => break Err(e),
-        }
-
-        if new_pass {
+    loop {
+        if check_children(trans, btree, level, node)? {
             continue;
         }
 
         let mut pos = POS_MIN;
         let mut have_child = false;
+        let mut again = false;
 
-        loop {
-            let k = match lockrestart_do(trans, |t| next_child(t, btree, level, node, pos)) {
-                Ok(Some(k)) => k,
-                Ok(None)    => break,
-                Err(e)      => break 'again Err(e),
-            };
-            let k = k.as_ref();
-            let end = k.k.p;
-
-            match btree_repair_topology_recurse(trans, btree, level - 1, k) {
-                Err(e) if e.matches(bch_errcode::BCH_ERR_topology_repair_drop_this_node) => {
-                    if let Err(e) = drop_node(trans, btree, level, k) {
-                        break 'again Err(e);
-                    }
-                    new_pass = true;
-                }
-                Err(e) => break 'again Err(e),
-                Ok(())  => {}
+        while let Some(k) = lockrestart_do(trans, |t| next_child(t, btree, level, node, pos))? {
+            if repair_topology_recurse(trans, btree, level - 1, &k)? == Repair::DropThis {
+                drop_node(trans, btree, level, &k)?;
+                again = true;
             }
-
             have_child = true;
 
-            if end == node.k.p {
+            if k.k.p == node.k.p {
                 break;
             }
-            pos = end.successor();
+            pos = k.k.p.successor();
         }
 
         /*
@@ -544,33 +476,36 @@ fn btree_repair_topology_recurse(trans: &BtreeTrans<'_>, btree: Btree, level: us
          * when we start doing online topology repair
          */
         trans.unlock_long();
-        let ret = match mustfix_fsck_err_on!(fs, !have_child, id::btree_node_topology_interior_node_empty,
-                                             "empty interior btree node at btree={btree} level={level}\n{}",
-                                             BkeySC::from(node).to_text(fs)) {
-            Ok(true)  => Err(fs.err(bch_errcode::BCH_ERR_topology_repair_drop_this_node)),
-            Ok(false) => Ok(()),
-            Err(e)    => Err(e),
-        };
-
-        if ret.is_ok() && new_pass {
-            continue;
+        if mustfix_fsck_err_on!(fs, !have_child, id::btree_node_topology_interior_node_empty,
+                                "empty interior btree node at btree={btree} level={level}\n{}",
+                                BkeySC::from(node).to_text(fs))? {
+            return Ok(Repair::DropThis);
         }
-        break ret;
-    };
 
-    if ret.is_ok() {
+        if !again {
+            return Ok(Repair::None);
+        }
+    }
+}
+
+fn repair_topology_recurse(trans: &BtreeTrans<'_>, btree: Btree, level: usize,
+                           node: &BkeyI) -> Result<Repair, BchError> {
+    if level == 0 {
+        return Ok(Repair::None);
+    }
+
+    let ret = repair_children(trans, btree, level, node);
+
+    if ret == Ok(Repair::None) {
         lockrestart_do(trans, |t| {
             let iter = node_at(t, btree, level, node, BtreeIterFlags::empty())?;
-            let b = held(&t.trans().paths(), &iter, level).1;
+            let b = held(&t.trans().paths(), &iter).b;
             assert!(node_check_topology(t.trans(), b).is_ok(), "a node's topology bad after its repair");
             Ok(())
         })?;
     }
 
-    if ret.is_err_and(|e| !e.matches(bch_errcode::BCH_ERR_topology_repair)) {
-        let _ = bch_err_fn!(fs, ret);
-    }
-    ret
+    bch_err_fn!(trans.fs(), ret)
 }
 
 fn topology_check_root(t: &TransAttempt<'_, '_>, btree: Btree,
@@ -587,16 +522,15 @@ fn topology_check_root(t: &TransAttempt<'_, '_>, btree: Btree,
     let mut msg = LogMsg::new(fs);
     prt!(&mut *msg, "btree root {btree} unreadable: {}\n", BchError::from_raw(err).msg());
 
-    let set_alive_false = || {
+    let mut fake_root = |level| {
         roots.lock().get_mut(btree.0).expect("a btree below btree_id_nr_alive()").alive = 0;
         fs.btree_id_root_set_error(btree.0, 0);
+        let _ = root_alloc_fake_trans(trans, btree, level);
+        *reconstructed_root = true;
     };
 
     if !btree_id_recovers_from_scan(btree) {
-        set_alive_false();
-        let _ = root_alloc_fake_trans(trans, btree, 0);
-        *reconstructed_root = true;
-
+        fake_root(0);
         btree_lost_data(fs, &mut msg, btree)?;
     } else if !btree_has_scanned_nodes(fs, btree, &mut msg)? {
         msg.set_suppressed(true);
@@ -606,14 +540,9 @@ fn topology_check_root(t: &TransAttempt<'_, '_>, btree: Btree,
                         id::btree_root_unreadable_and_scan_found_nothing,
                         "{}btree node scan found no nodes, continue?", msg.as_str())?;
 
-        set_alive_false();
-        let _ = root_alloc_fake_trans(trans, btree, 0);
-        *reconstructed_root = true;
+        fake_root(0);
     } else {
-        set_alive_false();
-        let _ = root_alloc_fake_trans(trans, btree, 1);
-        *reconstructed_root = true;
-
+        fake_root(1);
         shoot_down_journal_keys(fs, btree, 1, c::BTREE_MAX_DEPTH, POS_MIN, SPOS_MAX);
 
         let mut nodes_found = 0;
@@ -629,25 +558,37 @@ fn topology_check_root(t: &TransAttempt<'_, '_>, btree: Btree,
     t.commit(None, CommitFlags::NO_ENOSPC)
 }
 
-/// The root's key, its own boundaries checked and repaired.
 fn check_root_boundaries(t: &TransAttempt<'_, '_>, btree: Btree) -> Result<(usize, BkeyBuf), BchError> {
     let fs = t.fs();
     let (level, root_k) = {
         let b = fs.btree_id_root(btree.0).expect("a root, after topology_check_root()");
-        let mut k = BkeyBuf::new();
         /* unlocked: recovery runs alone, and the root stays put */
-        k.reassemble(BkeySC::from(unsafe { b.contents() }.key_i()));
-        (usize::from(b.c.level), k)
+        (usize::from(b.c.level), BkeyBuf::from_key(BkeySC::from(unsafe { b.contents() }.key_i())))
     };
 
-    let iter = node_at(t, btree, level, root_k.as_ref(), BtreeIterFlags::INTENT)?;
+    let iter = node_at(t, btree, level, &root_k, BtreeIterFlags::INTENT)?;
 
-    let (idx, b) = held(&t.trans().paths(), &iter, level);
-    btree_check_root_boundaries(t, idx, b)?;
+    let Held { idx, b } = held(&t.trans().paths(), &iter);
+    let data = b.contents().data();
 
-    let mut k = BkeyBuf::new();
-    k.reassemble(BkeySC::from(b.contents().key_i()));
-    Ok((level, k))
+    assert!(BkeySC::from(b.contents().key_i()).arm::<c::BtreePtrV2>()
+            .is_none_or(|p| p.v().min_key == data.min_key),
+            "a btree_ptr_v2's min_key not its node's");
+
+    let mut buf = Printbuf::new();
+    prt!(&mut buf, "  at {}", b.pos_to_text(fs));
+
+    if mustfix_fsck_err_on!(t, data.min_key != POS_MIN, id::btree_node_topology_bad_root_min_key,
+                            "btree root with incorrect min_key{}", buf.as_str())? {
+        set_node_min(t.trans(), &mut t.trans().paths(), idx, level, POS_MIN)?;
+    }
+
+    if mustfix_fsck_err_on!(t, b.contents().data().max_key != SPOS_MAX, id::btree_node_topology_bad_root_max_key,
+                            "btree root with incorrect max_key{}", buf.as_str())? {
+        set_node_max(t.trans(), &mut t.trans().paths(), idx, level, SPOS_MAX)?;
+    }
+
+    Ok((level, BkeyBuf::from_key(BkeySC::from(b.contents().key_i()))))
 }
 
 /// The root at @k, at @level, emptied by repair: out of the cache, and out of
@@ -660,7 +601,7 @@ fn drop_root(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, k: &BkeyI) ->
     let iter = node_at(t, btree, level, k, BtreeIterFlags::INTENT)?;
 
     let mut paths = trans.paths();
-    let (idx, b) = held(&paths, &iter, level);
+    let Held { idx, b } = held(&paths, &iter);
 
     /*
      * Unhashing asserts SIX_LOCK_write even here, where
@@ -702,10 +643,9 @@ fn check_topology(fs: &Fs) -> Result<(), BchError> {
             lockrestart_do(&trans, |t| topology_check_root(t, btree, &mut reconstructed_root))?;
 
             let (level, root_k) = lockrestart_do(&trans, |t| check_root_boundaries(t, btree))?;
-            let ret = btree_repair_topology_recurse(&trans, btree, level, root_k.as_ref());
 
-            if ret.is_err_and(|e| e.matches(bch_errcode::BCH_ERR_topology_repair_drop_this_node)) {
-                lockrestart_do(&trans, |t| drop_root(t, btree, level, root_k.as_ref()))?;
+            if repair_topology_recurse(&trans, btree, level, &root_k)? == Repair::DropThis {
+                lockrestart_do(&trans, |t| drop_root(t, btree, level, &root_k))?;
 
                 if !reconstructed_root {
                     fs.btree_id_root_set_error(i, -(c::EIO as i32));
@@ -715,10 +655,7 @@ fn check_topology(fs: &Fs) -> Result<(), BchError> {
                 bch_err!(fs, "empty btree root {btree}");
                 let _ = root_alloc_fake_trans(&trans, btree, 0);
                 fs.btree.cache.roots.lock().get_mut(i).expect("a btree below btree_id_nr_alive()").alive = 0;
-                break;
             }
-
-            ret?;
             break;
         }
     }
