@@ -56,7 +56,8 @@ pub mod print {
     use std::ffi::CString;
     use std::fmt;
 
-    pub fn pr_info(args: fmt::Arguments<'_>) {
+    // Userspace's printk drops the loglevel: every one goes to stderr
+    pub fn printk(args: fmt::Arguments<'_>) {
         let Ok(msg) = CString::new(args.to_string()) else {
             return;
         };
@@ -70,6 +71,13 @@ pub mod print {
 #[macro_export]
 macro_rules! pr_info {
     ($($arg:tt)*) => {
-        $crate::print::pr_info(::std::format_args!($($arg)*))
+        $crate::print::printk(::std::format_args!($($arg)*))
+    };
+}
+
+#[macro_export]
+macro_rules! pr_err {
+    ($($arg:tt)*) => {
+        $crate::print::printk(::std::format_args!($($arg)*))
     };
 }

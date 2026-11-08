@@ -19,6 +19,8 @@ use crate::util::vstructs::Unvalidated;
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 use core::sync::atomic::{AtomicI32, Ordering::Relaxed};
+#[cfg(all(CONFIG_BCACHEFS_TESTS, not(kernel)))]
+use bcachefs_shim as kernel;
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 crate::module_param! {
