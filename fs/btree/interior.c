@@ -40,26 +40,6 @@
 
 #include <linux/random.h>
 
-void bch2_push_whiteout(struct btree *b, struct bpos pos)
-{
-	struct bkey_packed_padded k;
-
-	BUG_ON(bch2_btree_keys_u64s_remaining(b) < BKEY_U64s);
-	EBUG_ON(btree_node_just_written(b));
-
-	if (!bch2_bkey_pack_pos(&k.k, pos, b)) {
-		struct bkey *u = (void *) &k.k;
-
-		bkey_init(u);
-		u->p = pos;
-	}
-
-	k.k.needs_whiteout = true;
-
-	b->whiteout_u64s += k.k.u64s;
-	bkey_p_copy(unwritten_whiteouts_start(b), &k.k);
-}
-
 static const char * const bch2_btree_update_modes[] = {
 #define x(t, ...) #t,
 	BTREE_UPDATE_MODES()
@@ -1390,24 +1370,6 @@ void bch2_btree_set_root(struct btree_update *as,
 	bch2_btree_set_root_inmem(c, b);
 
 	btree_update_updated_root(as, b);
-}
-
-int bch2_btree_node_get_iter(struct btree_trans *trans, struct btree_iter *iter, struct btree *b)
-{
-	bch2_trans_node_iter_init(trans, iter, b->c.btree_id, b->key.k.p,
-				  BTREE_MAX_DEPTH, b->c.level,
-				  BTREE_ITER_intent);
-	try(bch2_btree_iter_traverse(iter));
-
-	/* has node been freed? */
-	if (btree_iter_path(trans, iter)->l[b->c.level].b != b) {
-		/* node has been freed: */
-		BUG_ON(!btree_node_dying(b));
-		return bch_err_throw(trans->c, btree_node_dying);
-	}
-
-	BUG_ON(!btree_node_hashed(b));
-	return 0;
 }
 
 /* Init code: */

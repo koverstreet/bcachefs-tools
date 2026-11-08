@@ -59,8 +59,6 @@ static inline int bch2_foreground_maybe_merge(struct btree_trans *trans,
 	return __bch2_foreground_maybe_merge(trans, path_idx, level, flags, merge_count);
 }
 
-int bch2_btree_node_get_iter(struct btree_trans *, struct btree_iter *, struct btree *);
-
 void bch2_btree_set_root_for_read(struct bch_fs *, struct btree *);
 
 int bch2_btree_root_alloc_fake_trans(struct btree_trans *, enum btree_id, unsigned);
@@ -171,8 +169,6 @@ static inline struct btree_node_entry *want_new_bset(struct bch_fs *c, struct bt
 
 	return NULL;
 }
-
-void bch2_push_whiteout(struct btree *b, struct bpos pos);
 
 /*
  * write lock must be held on @b (else the dirty bset that we were going to

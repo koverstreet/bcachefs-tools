@@ -3,7 +3,7 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_validate, BkeyS, BkeySC, ValidateFlags, BKEY_U64S};
 use crate::btree::cache::Bounce;
-use crate::btree::iter::{lockrestart_do, BtreeIter, CommitFlags, CommitOpts, TransAttempt, Watermark};
+use crate::btree::iter::{lockrestart_do, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt, Watermark};
 use crate::btree::node::sort::{
     bch2_btree_build_aux_trees, bch2_btree_node_compact, bch2_btree_node_set_needs_whiteout,
     bch2_btree_node_sort, bch2_drop_whiteouts, bch2_sort_whiteouts, CompactMode, WriteSortRuns,
@@ -41,7 +41,7 @@ use crate::util::workqueue::{run_raw, RawWork};
 use crate::util::names::Names;
 use crate::util::{HumanReadable, Printbuf};
 use crate::{fs_fatal_error, fs_inconsistent, log_msg_ratelimited, prt};
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use core::mem::offset_of;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{fence, Ordering::{Acquire, Relaxed, SeqCst}};
@@ -74,8 +74,6 @@ c_enum! {
 
 c_extern! {
     pub fn bch2_btree_flush_all_writes(c: *mut Fs) -> bool;
-    pub fn bch2_btree_node_get_iter(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter,
-                                    b: *mut BtreeNode) -> c_int;
 }
 
 const HEADER: &str = "a btree node or node entry header, in its write's buffer";
@@ -129,12 +127,11 @@ fn write_done(trans: &BtreeTrans<'_>, b: &BtreeNode) {
 fn write_update_key(t: &TransAttempt<'_, '_>, wbio: &BtreeWriteBio, b: &BtreeNode) -> Result<(), BchError> {
     let fs = t.fs();
 
-    let mut iter = BtreeIter::uninit();
-    match t.result(unsafe { bch2_btree_node_get_iter(t.raw(), iter.raw_mut(), ptr::from_ref(b).cast_mut()) }) {
+    let mut iter = match unsafe { BtreeNodeIter::at_node(t, b) } {
         Err(e) if e == BchError::from(c::bch_errcode::BCH_ERR_btree_node_dying) => return Ok(()),
         r => r?,
-    }
-    let node = iter.node_at_iter_level(t).expect("the node the iterator was got for, at its level");
+    };
+    let node = iter.iter().node_at_iter_level(t).expect("the node the iterator was got for, at its level");
 
     let mut n = t.bkey_reassemble_room(BkeySC::from(node.key()), c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?;
 
@@ -154,7 +151,7 @@ fn write_update_key(t: &TransAttempt<'_, '_>, wbio: &BtreeWriteBio, b: &BtreeNod
         n.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
     }
 
-    t.btree_node_update_key(&mut iter, node, n,
+    t.btree_node_update_key(iter.iter(), node, n,
                             CommitOpts::new()
                                 .watermark(Watermark::INTERIOR_UPDATES)
                                 .flags(CommitFlags::JOURNAL_RECLAIM | CommitFlags::NO_ENOSPC | CommitFlags::NO_CHECK_RW),

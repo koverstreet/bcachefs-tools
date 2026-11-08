@@ -354,10 +354,6 @@ impl BtreeIter<'_> {
             self.peek_prev_min_in(paths, POS_MIN)
         }
     }
-
-    pub(crate) fn raw_mut(&mut self) -> *mut c::btree_iter {
-        core::ptr::from_mut(self).cast()
-    }
 }
 
 /// A key, none past the end, or an error.
@@ -2048,6 +2044,15 @@ pub unsafe fn __bch2_trans_iter_init_ll(trans: &BtreeTrans<'_>, #[lent(trans)] p
 }
 
 /// # Safety
+/// @iter is uninitialized, for the iterator; C has an attempt in progress on
+/// @trans; @b as BtreeNodeIter::at_node()'s.
+#[c_export]
+pub unsafe fn bch2_btree_node_get_iter(trans: &BtreeTrans<'_>, iter: *mut c::btree_iter, b: &BtreeNode) -> c_int {
+    let t = unsafe { trans.attempt_in_progress() };
+    ret_to_c(unsafe { BtreeNodeIter::at_node(&t, b) }.map(|i| unsafe { iter.cast::<BtreeIter<'_>>().write(i.raw) }))
+}
+
+/// # Safety
 /// As bch2_trans_iter_init_outlined()'s.
 #[c_export]
 pub unsafe fn __bch2_trans_node_iter_init(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
@@ -2494,6 +2499,29 @@ impl<'t> BtreeNodeIter<'t> {
     /// takes it, with iter().
     pub(crate) fn peek_ref(&mut self) -> Result<Option<BtreeNodeRef>, BchError> {
         Ok(self.peek()?.map(BtreeNodeRef::from))
+    }
+
+    /// At node @b, intent locked; btree_node_dying if @b's been freed.
+    ///
+    /// # Safety
+    /// @b's key is stable: the caller holds @b, or is writing it.
+    pub(crate) unsafe fn at_node(t: &TransAttempt<'t, 't>, b: &BtreeNode) -> Result<Self, BchError> {
+        let level = usize::from(b.c.level);
+        let pos = unsafe { b.contents() }.key.k.p;
+        let mut iter = BtreeNodeIter::new(t, b.c.btree_id, pos, c::BTREE_MAX_DEPTH, b.c.level.into(),
+                                          BtreeIterFlags::INTENT);
+        iter.raw.traverse(t)?;
+
+        /* has node been freed? */
+        let at = t.trans().paths()[iter.raw.path].l[level].b.as_ptr();
+        if !ptr::eq(at.cast_const().cast(), b) {
+            /* node has been freed: */
+            assert!(b.flags.dying(), "a node no longer where its key is, and not dying");
+            return Err(t.fs().err(bch_errcode::BCH_ERR_btree_node_dying));
+        }
+
+        assert!(b.hash_val != 0, "a node in the btree, not hashed");
+        Ok(iter)
     }
 
     pub(crate) fn iter(&mut self) -> &mut BtreeIter<'t> {
