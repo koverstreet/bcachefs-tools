@@ -318,6 +318,86 @@ impl VfsInode {
         unsafe { c::inode_wake_up_bit(self.as_ptr(), c::__I_NEW) }
     }
 
+    /// A reference, if the VFS isn't freeing it: igrab().
+    pub fn igrab(&self) -> Option<ARef<VfsInode>> {
+        // SAFETY: igrab()'s reference, if any, is ours
+        NonNull::new(unsafe { c::igrab(self.as_ptr()) }).map(|p| unsafe { ARef::from_raw(p.cast()) })
+    }
+
+    /// Written back now - and waited for, if @sync: write_inode_now().
+    pub fn write_now(&self, sync: bool) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::write_inode_now(self.as_ptr(), sync as c_int) })
+    }
+
+    // ── A new inode, its creator's alone: &mut ───────────────────────────
+
+    /// What inode_init_once() makes of an allocation: its lists and locks.
+    pub fn init_once() -> impl ::pin_init::PinInit<Self> {
+        // SAFETY: inode_init_once() writes all of it
+        unsafe {
+            ::pin_init::pin_init_from_closure(|slot: *mut Self| {
+                c::inode_init_once(slot.cast());
+                Ok(())
+            })
+        }
+    }
+
+    /// The rest of it, for @sb: inode_init_always_gfp() - and its one
+    /// reference, the caller's.
+    pub fn init_always(&mut self, sb: &SuperBlock, gfp: c::gfp_t) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::inode_init_always_gfp(sb.as_ptr(), self.as_ptr(), gfp) })
+    }
+
+    /// Given up: make_bad_inode() - which evict doesn't delete.
+    pub fn make_bad(&mut self) {
+        unsafe { c::make_bad_inode(self.as_ptr()) }
+    }
+
+    pub fn set_ino(&mut self, ino: u64) {
+        unsafe { (*self.as_ptr()).i_ino = ino as _ }
+    }
+
+    pub fn set_rdev(&mut self, rdev: c::dev_t) {
+        unsafe { (*self.as_ptr()).i_rdev = rdev }
+    }
+
+    pub fn set_generation(&mut self, generation: u32) {
+        unsafe { (*self.as_ptr()).i_generation = generation }
+    }
+
+    // codegen's operations structs, the inode's fields the kernel crate's: the
+    // same structs
+    pub fn set_ops(&mut self, iop: &'static c::inode_operations, fop: Option<&'static c::file_operations>) {
+        unsafe {
+            (*self.as_ptr()).i_op = core::ptr::from_ref(iop).cast();
+            if let Some(fop) = fop {
+                // in a union with free_inode
+                (*self.as_ptr()).__bindgen_anon_3.i_fop = core::ptr::from_ref(fop).cast();
+            }
+        }
+    }
+
+    pub fn set_aops(&mut self, aops: &'static c::address_space_operations) {
+        unsafe { (*(*self.as_ptr()).i_mapping).a_ops = core::ptr::from_ref(aops).cast() }
+    }
+
+    /// A device, fifo or socket's ops, from its mode and rdev:
+    /// init_special_inode().
+    pub fn init_special(&mut self) {
+        unsafe { c::init_special_inode(self.as_ptr(), self.mode(), self.rdev()) }
+    }
+
+    /// Its page cache in lowmem: inode_nohighmem(), as a symlink's is.
+    pub fn nohighmem(&mut self) {
+        unsafe { c::inode_nohighmem(self.as_ptr()) }
+    }
+
+    /// Its page cache's folios at least @bytes: mapping_set_folio_min_order().
+    pub fn set_folio_min_size(&mut self, bytes: usize) {
+        let order = bytes.div_ceil(crate::util::kernel::PAGE_SIZE).next_power_of_two().trailing_zeros();
+        unsafe { c::mapping_set_folio_min_order((*self.as_ptr()).i_mapping, order) }
+    }
+
     /// The i_rwsems of @a and @b, in the VFS's order, held for write until the
     /// guard's dropped: lock_two_nondirectories().
     pub fn lock_two_nondirectories<'a>(a: &'a VfsInode, b: &'a VfsInode) -> TwoNondirsLocked<'a> {

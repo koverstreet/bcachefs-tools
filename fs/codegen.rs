@@ -203,6 +203,9 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     // vfs/vfs_inode.rs, for the inode cache: static inlines, inode_state_*() from 6.19
     "inode_state_read", "inode_state_set_raw", "__iget", "inode_fake_hash", "inode_wake_up_bit",
     "inode_sb_list_add", "discard_new_inode", "inode_bit_waitqueue",
+    // vfs/vfs_inode.rs, a new inode's: a static inline, and the exports
+    "mapping_set_folio_min_order", "inode_init_once", "inode_init_always_gfp", "make_bad_inode",
+    "init_special_inode", "inode_nohighmem", "igrab", "write_inode_now",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "closure_state",
                                   "__genradix", "genradix_iter",
