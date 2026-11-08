@@ -535,6 +535,23 @@ impl BtreeTrans<'_> {
         Ok(path_idx)
     }
 
+    /// @f on @b, locked by node_lock_with_path(), and unlocked after, its path
+    /// put: retried on a transaction restart, @f's included.
+    pub(crate) fn node_locked_do<T>(&self, b: &c::btree_bkey_cached_common, ty: c::six_lock_type, hash_val: u64,
+                                    mut f: impl FnMut(&mut Paths<'_>, PathIdx) -> Result<T, BchError>)
+        -> Result<T, BchError>
+    {
+        crate::btree::for_each::lockrestart_do(self, |_| {
+            let mut paths = self.paths();
+            let idx = self.node_lock_with_path(&mut paths, b, ty, hash_val)?;
+            let ret = f(&mut paths, idx);
+
+            self.node_unlock(&mut paths, idx, b.level.into());
+            self.path_put(&mut paths, idx, true);
+            ret
+        })
+    }
+
     /* relock */
 
     fn get_locks_fail_to_text(&self, paths: &Paths<'_>, out: &mut Printbuf, old_path: &PathSnapshot, idx: PathIdx,
