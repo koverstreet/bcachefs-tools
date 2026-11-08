@@ -193,6 +193,7 @@ pub struct Paths<'t> {
 
 impl BtreeTrans<'_> {
     /// The path table, for a Rust entry into the btree code.
+    #[inline]
     pub(crate) fn paths(&self) -> Paths<'_> {
         assert!(!self.paths_borrowed(), "{}: the path table borrowed twice - the btree code reentered",
                 self.fn_name());
@@ -265,6 +266,7 @@ impl<'t> Paths<'t> {
 }
 
 impl Drop for Paths<'_> {
+    #[inline]
     fn drop(&mut self) {
         if self.took {
             self.trans.set_paths_borrowed(false);
