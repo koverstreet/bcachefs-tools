@@ -147,13 +147,9 @@ fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level: u32) -> Re
     let b = trans.btree_node_mem_alloc(&mut trans.paths(), false);
     trans.btree_cache_cannibalize_unlock();
 
-    let (b, held) = b?;
-    unsafe {
-        let p = b.as_ptr();
-        (*p).c.level    = level as u8;
-        (*p).c.btree_id = btree.0 as u8;
-    }
-    let n = unsafe { b.as_ref() };
+    let mut b = b?;
+    b.set_id(btree, level as usize);
+    let n: &BtreeNode = &b;
 
     n.flags.set_fake(true);
     n.flags.set_need_rewrite(true);
@@ -173,8 +169,8 @@ fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level: u32) -> Re
     contents.data_mut().format = format;
     contents.set_format(format);
 
-    fs.btree_node_transition_state(n, n.live_state())
-        .unwrap_or_else(|e| panic!("a fake root's transition to live: {e}"));
+    let state = n.live_state();
+    let (n, held) = b.hash(state).unwrap_or_else(|e| panic!("a fake root's transition to live: {e}"));
 
     set_root_inmem(fs, n);
 

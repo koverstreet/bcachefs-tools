@@ -22,7 +22,9 @@ use crate::util::log::LogMsg;
 use crate::util::sched::current;
 use crate::util::time_stats::TimeStats;
 use c::btree_node_cache_state as State;
-use c::six_lock_type::{self, SIX_LOCK_read};
+use c::six_lock_type::{self, SIX_LOCK_read, SIX_LOCK_write};
+use core::mem::ManuallyDrop;
+use core::ops::Deref;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 
@@ -62,6 +64,72 @@ impl Fs {
     }
 }
 
+/// A node the allocator handed out: in neither the table nor a list, NONE, and
+/// write locked - no one else can find it. Into the cache by hash(); dropped,
+/// it goes back FREEABLE.
+pub(crate) struct UnhashedNode<'a> {
+    fs:   &'a Fs,
+    b:    &'a BtreeNode,
+    held: ManuallyDrop<SixHold<'a>>,
+}
+
+impl Deref for UnhashedNode<'_> {
+    type Target = BtreeNode;
+
+    fn deref(&self) -> &BtreeNode {
+        self.b
+    }
+}
+
+impl<'a> UnhashedNode<'a> {
+    /// What into_raw() gave up, taken back.
+    ///
+    /// # Safety
+    /// @b is a node into_raw() gave up, still NONE, its hold the caller's to give.
+    pub(crate) unsafe fn from_raw(fs: &'a Fs, b: NonNull<BtreeNode>) -> Self {
+        let b = unsafe { cached_node(fs, b.as_ptr()) };
+        let held = unsafe { SixHold::from_raw(&b.c.lock, SIX_LOCK_write) };
+        UnhashedNode { fs, b, held: ManuallyDrop::new(held) }
+    }
+
+    pub(crate) fn set_id(&mut self, btree: Btree, level: usize) {
+        let p = core::ptr::from_ref(self.b).cast_mut();
+        unsafe {
+            (*p).c.level    = level as u8;
+            (*p).c.btree_id = btree.0 as u8;
+        }
+    }
+
+    fn into_parts(self) -> (&'a BtreeNode, SixHold<'a>) {
+        let mut n = ManuallyDrop::new(self);
+        (n.b, unsafe { ManuallyDrop::take(&mut n.held) })
+    }
+
+    /// Into the cache as @state, CLEAN or DIRTY, and found by lookups from
+    /// then. Failing, it's FREEABLE, and unlocked.
+    pub(crate) fn hash(self, state: State) -> Result<(&'a BtreeNode, SixHold<'a>), BchError> {
+        let fs = self.fs;
+        let (b, held) = self.into_parts();
+        fs.btree_node_transition_state(b, state)?;
+        Ok((b, held))
+    }
+
+    /// Given up, its hold too, to what keeps it unhashed: an interior update's
+    /// reserve.
+    pub(crate) fn into_raw(self) -> NonNull<BtreeNode> {
+        let (b, held) = self.into_parts();
+        held.into_raw();
+        NonNull::from(b)
+    }
+}
+
+impl Drop for UnhashedNode<'_> {
+    fn drop(&mut self) {
+        let _ = self.fs.btree_node_transition_state(self.b, State::FREEABLE);
+        unsafe { ManuallyDrop::drop(&mut self.held) };
+    }
+}
+
 impl BtreeTrans<'_> {
     fn btree_node_cannibalize(&self, paths: &mut Paths<'_>, pcpu_read_locks: bool) -> (&BtreeNode, SixHold<'_>) {
         let fs = self.fs();
@@ -96,7 +164,7 @@ impl BtreeTrans<'_> {
     }
 
     pub(crate) fn btree_node_mem_alloc(&self, paths: &mut Paths<'_>, pcpu_read_locks: bool)
-        -> Result<(NonNull<BtreeNode>, SixHold<'_>), BchError>
+        -> Result<UnhashedNode<'_>, BchError>
     {
         let fs = self.fs();
         let bc = &fs.btree.cache;
@@ -192,12 +260,9 @@ impl BtreeTrans<'_> {
 
         fs.times[c::bch_time_stats::btree_node_mem_alloc as usize].update(start_time);
 
-        if let Err(e) = self.relock_from(paths) {
-            let _ = fs.btree_node_transition_state(b, State::FREEABLE);
-            return Err(e);
-        }
-
-        Ok((NonNull::from(b), held))
+        let n = UnhashedNode { fs, b, held: ManuallyDrop::new(held) };
+        self.relock_from(paths)?;
+        Ok(n)
     }
 
     /* Slowpath, don't want it inlined into btree_iter_traverse() */
@@ -238,7 +303,7 @@ impl BtreeTrans<'_> {
             self.path_relock(paths, p)?;
         }
 
-        let (b, held) = match self.btree_node_mem_alloc(paths, level != 0) {
+        let mut n = match self.btree_node_mem_alloc(paths, level != 0) {
             Err(e) if e.matches(c::ENOMEM) => {
                 let Some(p) = path else { return Err(e) };
 
@@ -253,43 +318,39 @@ impl BtreeTrans<'_> {
             r => r?,
         };
 
-        unsafe {
-            let p = b.as_ptr();
-            (*p).contents_mut().set_key(k);
-            (*p).c.level    = level as u8;
-            (*p).c.btree_id = btree.0 as u8;
-        }
-        let b = unsafe { cached_node(fs, b.as_ptr()) };
+        unsafe { n.contents_mut() }.set_key(k);
+        n.set_id(btree, level);
 
-        let ret = if fs.btree_node_transition_state(b, State::CLEAN).is_ok() {
-            /*
-             * Must be set with node write locked - b->data is not stable
-             * while node is write locked or read_in_flight is set, read
-             * path will do a buffer swap
-             *
-             * and also cache coherency
-             */
-            b.flags.set_read_in_flight(true);
-            let intent = held.downgrade();
+        let ret = match n.hash(State::CLEAN) {
+            Ok((b, held)) => {
+                /*
+                 * Must be set with node write locked - b->data is not stable
+                 * while node is write locked or read_in_flight is set, read
+                 * path will do a buffer swap
+                 *
+                 * and also cache coherency
+                 */
+                b.flags.set_read_in_flight(true);
+                let intent = held.downgrade();
 
-            if path.is_some() {
-                let seq = b.c.lock.six().seq.get();
+                let held = if path.is_some() {
+                    let seq = b.c.lock.six().seq.get();
 
-                /* Unlock before doing IO: */
-                drop(intent);
-                self.unlock_from(paths, crate::ret_ip!());
+                    /* Unlock before doing IO: */
+                    drop(intent);
+                    self.unlock_from(paths, crate::ret_ip!());
 
-                node_read(self, b, sync);
+                    node_read(self, b, sync);
 
-                if sync { b.c.lock.relock_as(lock_type, seq) } else { None }
-            } else {
-                node_read(self, b, sync);
-                Some(if lock_type == SIX_LOCK_read { intent.downgrade() } else { intent })
+                    if sync { b.c.lock.relock_as(lock_type, seq) } else { None }
+                } else {
+                    node_read(self, b, sync);
+                    Some(if lock_type == SIX_LOCK_read { intent.downgrade() } else { intent })
+                };
+                held.map(|held| (b, held))
             }
-        } else {
             /* raced with another fill: */
-            drop(held);
-            None
+            Err(_) => None,
         };
 
         /*
@@ -301,6 +362,6 @@ impl BtreeTrans<'_> {
             self.relock_from(paths).and_then(|()| self.path_relock(paths, p))?;
         }
 
-        Ok(ret.map(|held| (b, held)))
+        Ok(ret)
     }
 }

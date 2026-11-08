@@ -946,15 +946,10 @@ impl Fs {
         let b = trans.btree_node_mem_alloc(&mut trans.paths(), level != 0);
         trans.btree_cache_cannibalize_unlock();
 
-        let (b, held) = b.unwrap_or_else(|e| panic!("allocating a btree root's node: {e}"));
-        unsafe {
-            let p = b.as_ptr();
-            (*p).contents_mut().set_key(k);
-            (*p).c.level    = level as u8;
-            (*p).c.btree_id = id.0 as u8;
-        }
-        let b = unsafe { b.as_ref() };
-        self.btree_node_transition_state(b, c::btree_node_cache_state::CLEAN)
+        let mut n = b.unwrap_or_else(|e| panic!("allocating a btree root's node: {e}"));
+        unsafe { n.contents_mut() }.set_key(k);
+        n.set_id(id, level as usize);
+        let (b, held) = n.hash(c::btree_node_cache_state::CLEAN)
             .unwrap_or_else(|e| panic!("hashing a btree root's node: {e}"));
 
         b.flags.set_read_in_flight(true);

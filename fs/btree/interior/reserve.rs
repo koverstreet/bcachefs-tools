@@ -10,6 +10,7 @@ use core::ptr::{self, NonNull};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeySC, BkeyV, BkeyVMut};
+use crate::btree::cache::UnhashedNode;
 use crate::btree::iter::CommitOpts;
 use crate::btree::node::BtreeNode;
 use crate::btree::node::bset::bch2_bset_init_first;
@@ -211,11 +212,11 @@ impl InteriorUpdate<'_> {
         let trans = self.trans;
         let fs = self.fs();
 
-        let (b, held) = trans.btree_node_mem_alloc(&mut trans.paths(), interior)?;
-        let n = unsafe { b.as_ref() };
+        let b = trans.btree_node_mem_alloc(&mut trans.paths(), interior)?;
+        let n: &BtreeNode = &b;
         let mut ob = c::open_buckets::default();
 
-        let ret = (|| {
+        let ret: Result<(), BchError> = (|| {
             let t = unsafe { trans.attempt_in_progress() };
             let mut wp = loop {
                 let wp = t.alloc_sectors(req, writepoint_ptr(&fs.allocator.btree_write_point))?;
@@ -266,14 +267,9 @@ impl InteriorUpdate<'_> {
          * in, or freshly hash-removed — so holding write blocks nothing).
          * Consumers can use them without any lock-take at pop time.
          */
-        if let Err(e) = ret {
-            let _ = fs.btree_node_transition_state(n, c::btree_node_cache_state::FREEABLE);
-            drop(held);
-            return Err(e);
-        }
+        ret?;
         // the reserve's to hold, until its node is taken or freed
-        held.into_raw();
-        Ok(Reserved { b, ob })
+        Ok(Reserved { b: b.into_raw(), ob })
     }
 
     pub(crate) fn alloc_node(&self, _paths: &mut Paths<'_>, level: usize) -> NewNode<'_> {
@@ -281,7 +277,7 @@ impl InteriorUpdate<'_> {
 
         assert!(level < c::BTREE_MAX_DEPTH as usize, "allocating a node at level {level}");
 
-        let mut b = {
+        let b = {
             let mut o = self.owned.borrow_mut();
             let r = o.reserve[usize::from(level != 0)].pop().expect("an interior update's reserve, used up");
             let b = r.b;
@@ -296,13 +292,10 @@ impl InteriorUpdate<'_> {
          * machinery at the WRITE_LOCKED mark site.
          */
 
-        {
-            let n = unsafe { b.as_mut() };
-            n.c.level    = level as u8;
-            n.c.btree_id = self.btree.0 as u8;
-        }
+        let mut node = unsafe { UnhashedNode::from_raw(fs, b) };
+        node.set_id(self.btree, level);
 
-        let n = unsafe { b.as_ref() };
+        let n: &BtreeNode = &node;
         n.flags.set_accessed(true);
 
         let contents = unsafe { n.contents_mut() };
@@ -330,8 +323,9 @@ impl InteriorUpdate<'_> {
 
         bch2_btree_build_aux_trees(n);
 
-        fs.btree_node_transition_state(n, n.live_state())
-            .unwrap_or_else(|e| panic!("a new node's transition to live: {e}"));
+        let state = n.live_state();
+        let (n, held) = node.hash(state).unwrap_or_else(|e| panic!("a new node's transition to live: {e}"));
+        held.into_raw();
 
         fs.event_inc_trace(events::btree_node_alloc, |out| prt!(out, "{}", n.pos_to_text(fs)));
         fs.io_clock[WRITE].increment(fs.btree_sectors().into());
