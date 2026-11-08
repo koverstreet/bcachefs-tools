@@ -109,17 +109,31 @@ impl<'a> From<&'a BkeyBuf> for BkeySC<'a> {
 }
 
 /// The key, all of it, as long as its u64s say.
-impl AsRef<BkeyI> for BkeyBuf {
-    fn as_ref(&self) -> &BkeyI {
+impl core::ops::Deref for BkeyBuf {
+    type Target = BkeyI;
+
+    fn deref(&self) -> &BkeyI {
         // SAFETY: a key at the start of the buffer, as reassemble() sizes it
         unsafe { &*BkeyI::from_raw(self.buf().as_ptr().cast()) }
     }
 }
 
+impl core::ops::DerefMut for BkeyBuf {
+    fn deref_mut(&mut self) -> &mut BkeyI {
+        // SAFETY: as deref()'s
+        unsafe { &mut *BkeyI::from_raw_mut(self.buf_mut().as_mut_ptr().cast()) }
+    }
+}
+
+impl AsRef<BkeyI> for BkeyBuf {
+    fn as_ref(&self) -> &BkeyI {
+        self
+    }
+}
+
 impl AsMut<BkeyI> for BkeyBuf {
     fn as_mut(&mut self) -> &mut BkeyI {
-        // SAFETY: as as_ref()'s
-        unsafe { &mut *BkeyI::from_raw_mut(self.buf_mut().as_mut_ptr().cast()) }
+        self
     }
 }
 
