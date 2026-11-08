@@ -381,6 +381,14 @@ impl<E: Hash + Eq + Sync, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<Entry
         // (Entry::new())
         self.get_rcu(key, g).map(|e| unsafe { e.0.as_ref() })
     }
+
+    /// @e out, if it's what @key has - not another entry put in its place:
+    /// whether it was.
+    pub fn remove_entry<Q: ?Sized + Hash + Eq>(&self, key: &Q, e: NonNull<E>) -> bool
+    where E: Borrow<Q>
+    {
+        self.take_if(key, |i| i.0 == e).is_some()
+    }
 }
 
 impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M> {
@@ -532,7 +540,7 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: CuckooHasher
     /// have put another in its place - or the entry's out already.
     fn detach(&self) {
         let table = &*self.table;
-        table.take_if(&self.key, |i| i.0 == self.entry);
+        table.remove_entry(&self.key, self.entry);
     }
 }
 
