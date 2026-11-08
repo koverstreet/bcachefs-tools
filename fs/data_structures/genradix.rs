@@ -221,6 +221,12 @@ impl<T: Zeroable> SharedGenRadix<T> {
         if p.is_null() { Err(AllocError) } else { Ok(()) }
     }
 
+    /// Every entry below @nr allocated, zeroed, if it hasn't been - as
+    /// genradix_prealloc(): prealloc() of one entry in each node.
+    pub fn prealloc_n(&self, nr: usize) -> Result<(), AllocError> {
+        (0..nr).step_by(NODE_SIZE / size_of::<T>()).try_for_each(|idx| self.prealloc(idx))
+    }
+
     /// The entry at @idx - None if its node was never allocated: as
     /// genradix_ptr(). A T, by Zeroable, if nothing has written it.
     #[inline]
