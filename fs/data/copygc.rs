@@ -83,8 +83,6 @@ use crate::data_structures::sort::heapsort_by;
 use crate::util::workqueue::{Workqueue, WqFlags};
 use crate::util::{HumanReadable, Printbuf};
 use crate::{bch_err_msg, fs_fatal_error};
-use core::borrow::Borrow;
-use core::hash::{Hash, Hasher};
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering::{Acquire, Relaxed}};
@@ -214,25 +212,7 @@ impl<'f> InFlight<'f> {
     }
 }
 
-impl Hash for InFlight<'_> {
-    fn hash<H: Hasher>(&self, h: &mut H) {
-        self.key().hash(h)
-    }
-}
-
-impl PartialEq for InFlight<'_> {
-    fn eq(&self, o: &Self) -> bool {
-        self.key() == o.key()
-    }
-}
-
-impl Eq for InFlight<'_> {}
-
-impl Borrow<c::move_bucket_key> for InFlight<'_> {
-    fn borrow(&self) -> &c::move_bucket_key {
-        self.key()
-    }
-}
+crate::keyed_by!(InFlight<'_>, |f| f.key() => c::move_bucket_key);
 
 type Batch<'f> = KVVec<Pin<KBox<InFlight<'f>>>>;
 

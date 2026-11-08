@@ -82,26 +82,7 @@ struct TestEntry {
     val: AtomicU64,
 }
 
-// A map's entry is hashed and compared by its key, and looked up by it
-impl core::hash::Hash for TestEntry {
-    fn hash<S: core::hash::Hasher>(&self, h: &mut S) {
-        self.key.hash(h)
-    }
-}
-
-impl PartialEq for TestEntry {
-    fn eq(&self, o: &Self) -> bool {
-        self.key == o.key
-    }
-}
-
-impl Eq for TestEntry {}
-
-impl core::borrow::Borrow<u64> for TestEntry {
-    fn borrow(&self) -> &u64 {
-        &self.key
-    }
-}
+crate::keyed_by!(TestEntry, |e| &e.key => u64);
 
 /// What the tests put in a table: an item for a key's op, and what an item
 /// found says - 0 for absent, else its value.

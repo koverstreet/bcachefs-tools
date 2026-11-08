@@ -138,6 +138,41 @@ unsafe impl CuckooItem for u64 {
     }
 }
 
+/// @ty hashed, compared and borrowed as the key @key gives - `|e| &e.key`, or
+/// a method's - for a map's entry, which is its key: the derives would
+/// compare all of it. `impl[...]` first for generics.
+#[macro_export]
+macro_rules! keyed_by {
+    (impl[$($gen:tt)*] $ty:ty, |$s:ident| $key:expr => $k:ty) => {
+        impl<$($gen)*> ::core::hash::Hash for $ty {
+            fn hash<H: ::core::hash::Hasher>(&self, h: &mut H) {
+                let $s = self;
+                ::core::hash::Hash::hash($key, h)
+            }
+        }
+
+        impl<$($gen)*> ::core::cmp::PartialEq for $ty {
+            fn eq(&self, o: &Self) -> bool {
+                let a: &$k = { let $s = self; $key };
+                let $s = o;
+                a == $key
+            }
+        }
+
+        impl<$($gen)*> ::core::cmp::Eq for $ty {}
+
+        impl<$($gen)*> ::core::borrow::Borrow<$k> for $ty {
+            fn borrow(&self) -> &$k {
+                let $s = self;
+                $key
+            }
+        }
+    };
+    ($ty:ty, |$s:ident| $key:expr => $k:ty) => {
+        $crate::keyed_by!(impl[] $ty, |$s| $key => $k);
+    };
+}
+
 /// A pointer to an entry, as a map holds it.
 ///
 /// XXX: not cuckoo's. A pointer to what's freed only after a grace period
