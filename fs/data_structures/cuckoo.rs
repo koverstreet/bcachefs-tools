@@ -494,6 +494,10 @@ impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize, M: Mode> Cu
         self.get(key).is_some()
     }
 
+    pub fn len(&self) -> usize {
+        self.nr.load(Relaxed)
+    }
+
     /// @key's item, under @g's section.
     pub fn get_rcu<Q: ?Sized + Hash + Eq>(&self, key: &Q, g: &ReadGuard) -> Option<I>
     where I::Target: Borrow<Q>
