@@ -329,12 +329,14 @@ const _: () = assert!(STATE_IDX_SHIFT + c::JOURNAL_STATE_BUF_MASK.count_ones() =
 
 impl c::journal {
     /// j->reservations, as it is now.
+    #[inline]
     pub fn reservations(&self) -> c::journal_res_state {
         c::journal_res_state::from_v(self.lock.hot.reservations.load(Relaxed))
     }
 
     /// @f of the state swapped in, retried until it sticks: Ok(the state before
     /// it), or Err(the state @f gave None for).
+    #[inline]
     pub fn reservations_update(&self, mut f: impl FnMut(c::journal_res_state) -> Option<c::journal_res_state>)
         -> Result<c::journal_res_state, c::journal_res_state>
     {
@@ -351,6 +353,7 @@ impl c::journal {
     }
 
     /// A ref put on ring slot @idx's buf: the state after.
+    #[inline]
     pub fn state_buf_put(&self, idx: u32) -> c::journal_res_state {
         let d = 1u64 << c::journal_res_state::count_shift(idx);
         c::journal_res_state::from_v(self.lock.hot.reservations.fetch_sub(d, SeqCst) - d)

@@ -308,15 +308,21 @@ impl c::journal {
         }
     }
 
+    #[inline]
     fn buf_put(&self, seq: u64) {
         let idx = state_idx(seq);
         let s = self.state_buf_put(idx);
         if s.count(idx) == 0 {
-            let pins = self.pins();
-            self.buf_put_final(&pins, &mut self.lock.lock(), seq);
+            self.buf_put_last(seq);
         } else if unlikely(s.cur_entry_offset() == c::JOURNAL_ENTRY_BLOCKED_VAL) {
             self.wake_async_wait();
         }
+    }
+
+    #[inline(never)]
+    fn buf_put_last(&self, seq: u64) {
+        let pins = self.pins();
+        self.buf_put_final(&pins, &mut self.lock.lock(), seq);
     }
 
     /*
@@ -350,6 +356,7 @@ impl c::journal {
      * This function releases the journal write structure so other threads can
      * then proceed to add their keys as well.
      */
+    #[inline]
     pub fn res_put(&self, res: &mut c::journal_res) {
         if !res.ref_ {
             return;
@@ -374,6 +381,7 @@ impl c::journal {
         res.ref_ = false;
     }
 
+    #[inline(always)]
     fn res_get_fast(&self, res: &mut c::journal_res, flags: u32) -> bool {
         let u64s = u32::from(res.u64s);
         let mut check_ok = false;
@@ -424,6 +432,7 @@ impl c::journal {
         true
     }
 
+    #[inline]
     pub fn res_get(&self, res: &mut c::journal_res, u64s: u32, flags: u32, trans: Option<&BtreeTrans<'_>>)
         -> Result<(), BchError>
     {
@@ -1095,6 +1104,7 @@ impl c::journal {
      * To ensure forward progress, the current task must not be holding any
      * btree node write locks.
      */
+    #[inline(never)]
     fn res_get_slowpath(&self, res: &mut c::journal_res, flags: u32, trans: Option<&BtreeTrans<'_>>)
         -> Result<(), BchError>
     {
