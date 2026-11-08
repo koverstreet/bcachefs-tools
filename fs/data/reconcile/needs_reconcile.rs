@@ -16,6 +16,7 @@ use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Pt
 use crate::data::reconcile::trigger::{extent_reconcile_to_text, BkeyVReconcile};
 use crate::errcode::{ret_to_c, BchError};
 use crate::format::{CompressionType, BkeyType, MetadataVersion};
+use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
 use crate::util::kernel::unlikely;
@@ -438,7 +439,33 @@ pub fn update_reconcile_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_sna
     Err(t.restart(c::bch_errcode::BCH_ERR_transaction_restart_commit))
 }
 
+/// @k's reconcile state taken off - its reconcile entries, and the padding
+/// pointers to BCH_SB_MEMBER_INVALID: for a node pointer whose triggers never
+/// saw it.
+pub(crate) fn strip_reconcile(fs: &Fs, k: BkeyS<'_>) {
+    if k.k.key_type().is_deleted() {
+        return;
+    }
+    let Some(mut kp) = k.arm::<PtrsMut>() else { return };
+
+    loop {
+        let Some(at) = kp.extent_entries_at(fs).find_map(|(at, e)| {
+            matches!(e, ExtentEntry::reconcile(_) | ExtentEntry::reconcile_bp(_)).then_some(at)
+        }) else { break };
+        kp.drop_entry(fs, at);
+    }
+
+    kp.drop_ptrs_noerror(fs, |p| p.p.ptr.dev() as u32 == c::BCH_SB_MEMBER_INVALID);
+
+    assert!(kp.durability_safe(fs).nr_ptrs != 0, "a key with no pointers left once its reconcile state's off");
+}
+
 // ── C's ──────────────────────────────────────────────────────────────────
+
+#[c_export]
+pub fn bch2_bkey_strip_reconcile(c: &Fs, k: BkeyS<'_>) {
+    strip_reconcile(c, k)
+}
 
 /// # Safety
 /// C has an attempt in progress on @trans, and @k is a key it can edit while

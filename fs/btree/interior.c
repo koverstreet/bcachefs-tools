@@ -508,31 +508,6 @@ static void btree_update_new_nodes_mark_sb(struct btree_update *as)
 		bch2_dev_btree_bitmap_mark_locked(c, bkey_i_to_s_c(&i->key), &w);
 }
 
-static void bkey_strip_reconcile(struct bch_fs *c, struct bkey_s k)
-{
-	if (bkey_deleted(k.k))
-		return;
-
-	bool dropped;
-	do {
-		dropped = false;
-
-		struct bkey_ptrs ptrs = bch2_bkey_ptrs(k);
-		union bch_extent_entry *entry;
-		bkey_extent_entry_for_each(ptrs, entry)
-			if (extent_entry_type(entry) == BCH_EXTENT_ENTRY_reconcile ||
-			    extent_entry_type(entry) == BCH_EXTENT_ENTRY_reconcile_bp) {
-				extent_entry_drop(c, k, entry);
-				dropped = true;
-				break;
-			}
-	} while (dropped);
-
-	bch2_bkey_drop_ptrs_noerror(k, p, entry, p.ptr.dev == BCH_SB_MEMBER_INVALID);
-
-	BUG_ON(!bch2_bkey_durability_safe(c, k.s_c).nr_ptrs);
-}
-
 static bool bkey_has_reconcile(const struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
@@ -580,7 +555,7 @@ static int btree_update_nodes_written_trans(struct btree_trans *trans,
 
 	darray_for_each(as->new_nodes, i) {
 		i->update_node_key = false;
-		bkey_strip_reconcile(c, bkey_i_to_s(&i->key));
+		bch2_bkey_strip_reconcile(c, bkey_i_to_s(&i->key));
 
 		try(bch2_bkey_set_needs_reconcile(trans, NULL, &opts, bkey_i_to_s(&i->key),
 						  BKEY_BTREE_PTR_U64s_MAX,
@@ -605,7 +580,7 @@ static int btree_update_nodes_written_trans(struct btree_trans *trans,
 			if (!ret)
 				i->update_node_key = true;
 			else
-				bkey_strip_reconcile(c, bkey_i_to_s(&i->key));
+				bch2_bkey_strip_reconcile(c, bkey_i_to_s(&i->key));
 		}
 
 		try(bch2_key_trigger_new(trans, as->btree_id, i->level + 1, bkey_i_to_s(&i->key),
@@ -1556,7 +1531,7 @@ static int __bch2_btree_node_update_key(struct btree_trans *trans,
 		 * b->key, so b->key mustn't carry reconcile state that
 		 * trigger_new never saw:
 		 */
-		bkey_strip_reconcile(c, bkey_i_to_s(new_key));
+		bch2_bkey_strip_reconcile(c, bkey_i_to_s(new_key));
 
 		bch2_btree_node_lock_write_nofail(trans, btree_iter_path(trans, iter), &b->c);
 		bkey_copy(&b->key, new_key);
