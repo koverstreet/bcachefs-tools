@@ -10,7 +10,7 @@ use crate::debug::params::btree_shrinker_disabled;
 use crate::debug::trace::events;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
-use crate::locking::six::{six_trylock_ip, six_unlock_ip, SixHold};
+use crate::locking::six::SixHold;
 use crate::prt;
 use crate::util::kernel::local_clock;
 use crate::util::time_stats::TimeStats;
@@ -218,7 +218,7 @@ impl Fs {
      * node looked at goes to the tail, so a pass doesn't keep finding the nodes
      * already written - they stay on the dirty list until their write completes.
      */
-    fn btree_cache_replay_write_pick(&self) -> Option<&BtreeNode> {
+    fn btree_cache_replay_write_pick(&self) -> Option<(&BtreeNode, SixHold<'_>)> {
         let bc = &self.btree.cache;
         let mut lists = bc.lock.lock();
 
@@ -234,11 +234,10 @@ impl Fs {
                 }
 
                 let f = b.flags.load();
-                if f.dirty() &&
-                    !f.will_make_reachable() &&
-                    !f.write_blocked() &&
-                    six_trylock_ip(b.c.lock.six(), SIX_LOCK_read, crate::ret_ip!()) {
-                    return Some(b);
+                if f.dirty() && !f.will_make_reachable() && !f.write_blocked() {
+                    if let Some(held) = b.c.lock.try_lock_as(SIX_LOCK_read) {
+                        return Some((b, held));
+                    }
                 }
             }
         }
@@ -263,10 +262,10 @@ impl Fs {
         let trans = crate::btree_trans!(self);
 
         for _ in 0..nr {
-            let Some(b) = self.btree_cache_replay_write_pick() else { break };
+            let Some((b, held)) = self.btree_cache_replay_write_pick() else { break };
 
             node_write(&trans, b, BtreeWriteType::cache_reclaim, BtreeWriteFlags::empty());
-            unsafe { six_unlock_ip(b.c.lock.six(), SIX_LOCK_read, crate::ret_ip!()) };
+            drop(held);
         }
         /* putting the trans submits the writes queued on it */
     }

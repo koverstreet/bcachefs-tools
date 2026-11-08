@@ -16,7 +16,7 @@ use crate::debug::params::debug_check_btree_locking;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
-use crate::locking::six::{__six_lock_init, six_lock_contended, six_lock_counts, six_lock_ip_waiter, six_trylock_ip, SixHold};
+use crate::locking::six::{__six_lock_init, six_lock_counts, six_trylock_ip, SixHold};
 use crate::locking::{memalloc_flags_restore, memalloc_flags_save, rust_six_lockdep_set_notrack_class, ExclusiveGuard, Locked,
                      RawTimedLock, PF_MEMALLOC_NOIO};
 use crate::prt;
@@ -1340,28 +1340,40 @@ pub fn bch2_btree_node_lock_slowpath(trans: &BtreeTrans<'_>, #[lent(trans)] path
 }
 
 impl BtreeTrans<'_> {
-    /// @b's lock as @ty, with no path to record it - the caller records it,
-    /// or holds it off any path - waited for, past a trylock if @contended.
-    pub(crate) fn node_lock_nopath_as(&self, b: &c::btree_bkey_cached_common, ty: c::six_lock_type,
-                                      lock_may_not_fail: bool, ip: c_ulong, contended: bool) -> Result<(), BchError> {
+    /// @b's lock as @ty, read or intent, with no path to record it - the
+    /// caller records it, or holds it off any path - waited for, past a
+    /// trylock if @contended.
+    pub(crate) fn node_lock_nopath_as<'b>(&self, b: &'b c::btree_bkey_cached_common, ty: c::six_lock_type,
+                                          lock_may_not_fail: bool, ip: c_ulong, contended: bool)
+        -> Result<SixHold<'b>, BchError>
+    {
         self.node_lock_nopath(b, lock_may_not_fail, |wait, should_sleep_fn| {
-            let lock = b.lock.six();
-            match if contended {
-                six_lock_contended(lock, ty, wait, should_sleep_fn, ip)
-            } else {
-                six_lock_ip_waiter(lock, ty, wait, should_sleep_fn, ip)
-            } {
-                0 => Ok(()),
-                e => Err(e),
-            }
+            b.lock.lock_waiting_as(ty, wait, should_sleep_fn, ip, contended)
         })
+    }
+
+    /// Write over @intent, @b's, as node_lock_nopath_as(): it may not fail.
+    pub(crate) fn node_lock_nopath_write<'b>(&self, b: &'b c::btree_bkey_cached_common, intent: SixHold<'b>,
+                                             ip: c_ulong, contended: bool) -> SixHold<'b> {
+        self.node_lock_nopath(b, true, |wait, should_sleep_fn| {
+            intent.write_waiting(wait, should_sleep_fn, ip, contended).map_err(|(_, e)| e)
+        }).expect("a write lock that may not fail, failed")
     }
 }
 
 #[c_export]
 pub fn bch2_btree_node_lock_nopath(trans: &BtreeTrans<'_>, b: &c::btree_bkey_cached_common, ty: c::six_lock_type,
                                    lock_may_not_fail: bool, ip: c_ulong, contended: bool) -> c_int {
-    ret_to_c(trans.node_lock_nopath_as(b, ty, lock_may_not_fail, ip, contended))
+    if ty == c::six_lock_type::SIX_LOCK_write {
+        assert!(lock_may_not_fail, "a nopath write lock that may fail");
+        // over C's intent
+        let intent = unsafe { SixHold::from_raw(&b.lock, c::six_lock_type::SIX_LOCK_intent) };
+        trans.node_lock_nopath_write(b, intent, ip, contended).into_raw();
+        return 0;
+    }
+    ret_to_c(trans.node_lock_nopath_as(b, ty, lock_may_not_fail, ip, contended).map(|held| {
+        held.into_raw();
+    }))
 }
 
 #[c_export]

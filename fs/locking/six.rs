@@ -1453,6 +1453,21 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
         self.into_raw();
         Ok(unsafe { SixHold::from_raw(locked, six_lock_type::SIX_LOCK_write) })
     }
+
+    /// Write over this intent, as lock_waiting_as() waits, past a trylock if
+    /// @contended. On failure, intent still held.
+    pub fn write_waiting(self, wait: &c::six_lock_waiter, should_sleep_fn: impl FnMut() -> c_int,
+                         ip: c_ulong, contended: bool) -> Result<Self, (Self, c_int)> {
+        let intent = if contended {
+            self
+        } else {
+            match self.try_write() {
+                Ok(write) => return Ok(write),
+                Err(intent) => intent,
+            }
+        };
+        unsafe { intent.write_waiting_over(0, wait, should_sleep_fn, ip) }
+    }
 }
 
 impl c::six_lock {

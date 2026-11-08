@@ -22,7 +22,7 @@ use crate::types::L1_CACHE_BYTES;
 use crate::util::kernel::{likely, prefetch, race_fault, unlikely};
 use crate::util::log::LogMsg;
 use c::btree_node_cache_state as State;
-use c::six_lock_type::{self, SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
+use c::six_lock_type::{self, SIX_LOCK_intent, SIX_LOCK_read};
 
 fn btree_node_mem_ptr<'f>(fs: &'f Fs, k: &BkeyI) -> Option<&'f BtreeNode> {
     let p = BkeySC::from(k).arm::<c::BtreePtrV2>()?;
@@ -332,13 +332,12 @@ impl BtreeTrans<'_> {
 
                 self.locking_hash_val.set(hash_val);
                 self.locking_root_id.set(Btree(u32::MAX));
-                match self.node_lock_nopath_as(&b.c, SIX_LOCK_read, false, crate::ret_ip!(), false) {
+                let held = match self.node_lock_nopath_as(&b.c, SIX_LOCK_read, false, crate::ret_ip!(), false) {
                     Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => break 'out Err(e),
                     Err(e) if e.matches(bch_errcode::BCH_ERR_no_btree_node_reused) => continue,
                     Err(e) => panic!("btree_node_lock_nopath(): {e}"),
-                    Ok(()) => {}
-                }
-                let held = unsafe { SixHold::from_raw(&b.c.lock, SIX_LOCK_read) };
+                    Ok(held) => held,
+                };
 
                 if unlikely(b.hash_val() != hash_val ||
                             u32::from(b.c.btree_id) != btree.0 ||
@@ -407,10 +406,9 @@ impl BtreeTrans<'_> {
 
             self.locking_hash_val.set(0);
             self.locking_root_id.set(Btree(u32::MAX));
-            let _ = self.node_lock_nopath_as(&b.c, SIX_LOCK_intent, true, crate::ret_ip!(), false);
-            let _ = self.node_lock_nopath_as(&b.c, SIX_LOCK_write, true, crate::ret_ip!(), false);
-            // may not fail: both held
-            let held = unsafe { SixHold::from_raw(&b.c.lock, SIX_LOCK_write) };
+            let intent = self.node_lock_nopath_as(&b.c, SIX_LOCK_intent, true, crate::ret_ip!(), false)
+                .expect("a lock that may not fail, failed");
+            let held = self.node_lock_nopath_write(&b.c, intent, crate::ret_ip!(), false);
 
             if unlikely(b.hash_val() != btree_ptr_hash_val(BkeySC::from(k))) {
                 drop(held);
