@@ -2,11 +2,17 @@
 
 //! Inode-number sharding's boundaries, in the btrees it shards.
 
-use cstruct_macros::c_export;
 use crate::btree::bkey::{spos, POS_MIN};
+use crate::btree::interior::split_leaf;
+use crate::btree::iter::{lockrestart_do, BtreeIterFlags, BtreeNodeIter, CommitOpts, TransAttempt};
 use crate::btree::node::{BtreeNode, NodeContents};
+use crate::c;
+use crate::errcode::BchError;
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
+use crate::util::log::{LogLevel, LogMsg};
+use crate::util::refcount::TryRefcount;
+use crate::{bch_err, btree_trans, prt};
 
 /*
  * Inode-number sharding (shard_inode_numbers_bits) splits concurrent
@@ -125,7 +131,76 @@ impl BtreeNode {
     }
 }
 
-#[c_export]
-pub fn bch2_btree_node_shard_pivot(c: &Fs, b: &BtreeNode) -> Bpos {
-    b.shard_pivot(unsafe { b.contents() }, c)
+/*
+ * For each shard boundary in each shard-aware btree, look up the leaf
+ * containing it; if the leaf spans the boundary, rewrite it (which forces
+ * a split at the boundary, since bch2_btree_node_alloc_replacement honors
+ * the "leaves don't cross shard boundaries" constraint).
+ */
+/// Whether @pos's leaf spanned a shard boundary, and was split at it.
+fn split_at_shard_boundary(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos) -> Result<bool, BchError> {
+    let mut iter = BtreeNodeIter::new(t, btree, pos, 0, 0, BtreeIterFlags::empty());
+    iter.iter().traverse(t)?;
+    let path = iter.iter().path;
+
+    let trans = t.trans();
+    {
+        let paths = trans.paths();
+        let b = paths.held_btree_node(path, 0).expect("the leaf its iterator traversed to");
+        let pivot = b.shard_pivot(b.contents(), t.fs());
+        if pivot == POS_MIN || pivot == b.contents().key_i().k.p {
+            return Ok(false);
+        }
+    }
+
+    split_leaf(trans, &mut trans.paths(), path, 0, CommitOpts::new())?;
+    Ok(true)
 }
+
+impl Fs {
+    /// Startup doesn't need it to succeed: an error ends that btree's splits,
+    /// and is logged.
+    pub fn presplit_shard_boundaries(&self) {
+        let shard_bits = u32::from(self.opts.shard_inode_numbers_bits.get());
+        if shard_bits == 0 {
+            return;
+        }
+
+        let Some(_write) = self.writes.tryget_live() else { return };
+
+        let bits = 63 - shard_bits;
+        let n_shards = 1u64 << shard_bits;
+
+        let trans = btree_trans!(self);
+
+        for btree in [Btree::inodes, Btree::extents, Btree::dirents, Btree::xattrs] {
+            let mut split_count = 0;
+
+            let ret = (1..n_shards).try_for_each(|shard| -> Result<(), BchError> {
+                let boundary = shard << bits;
+                let pos = if btree == Btree::inodes { spos(0, boundary, 0) } else { spos(boundary, 0, 0) };
+                while lockrestart_do(&trans, |t| split_at_shard_boundary(t, btree, pos))? {
+                    split_count += 1;
+                }
+                Ok(())
+            });
+
+            if split_count != 0 {
+                let mut msg = LogMsg::with_level(self, LogLevel::INFO);
+                prt!(&mut msg, "presplit_shard_boundaries: {split_count} splits in btree {btree}");
+            }
+
+            if let Err(e) = ret {
+                if !e.matches(c::ENOSPC) {
+                    bch_err!(self, "presplit_shard_boundaries: error splitting btree {btree} at its shard boundaries, \
+                                    after {split_count} splits: {}; the rest left as they are", e.msg());
+                }
+            }
+        }
+    }
+}
+
+crate::recovery_pass!(bch2_presplit_shard_boundaries => |fs: &Fs| -> Result<(), BchError> {
+    fs.presplit_shard_boundaries();
+    Ok(())
+});

@@ -52,7 +52,7 @@ mod root;
 mod split_merge;
 mod update_key;
 pub use split_merge::bch2_btree_node_rewrite;
-pub(crate) use split_merge::{check_topology_msg, foreground_maybe_merge, increase_depth, node_rewrite};
+pub(crate) use split_merge::{check_topology_msg, foreground_maybe_merge, increase_depth, node_rewrite, split_leaf};
 
 #[repr(C)]
 #[derive(Default, CStruct)]

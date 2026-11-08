@@ -562,7 +562,6 @@ c_enum! {
         check_discard_freespace_key,
         invalidate,
         gc_gens,
-        presplit_shard_boundaries,
         btree_write_buffer,
         btree_node_scrub,
     }

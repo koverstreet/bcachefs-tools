@@ -1097,7 +1097,7 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
     journal_replay(fs)?;
     subvolume::initialize(fs)?;
     snapshots_read(fs)?;
-    fs.presplit_shard_boundaries()?;
+    fs.presplit_shard_boundaries();
 
     let mut root_inode = inode::init(fs, 0, 0, (c::S_IFDIR | 0o755) as c::umode_t, 0, None);
     root_inode.bi_inum = c::BCACHEFS_ROOT_INO.into();
