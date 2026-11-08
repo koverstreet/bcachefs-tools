@@ -55,6 +55,11 @@ const blk_opf_t RUST_CONST_HELPER_REQ_PREFLUSH	= REQ_PREFLUSH;
 const fgf_t RUST_CONST_HELPER_FGP_LOCK		= FGP_LOCK;
 const fgf_t RUST_CONST_HELPER_FGP_CREAT		= FGP_CREAT;
 const fgf_t RUST_CONST_HELPER_FGP_NOWAIT		= FGP_NOWAIT;
+/* The inode states: macros before 6.19, an enum's from it - its values moved */
+const unsigned RUST_CONST_HELPER_I_NEW		= I_NEW;
+const unsigned RUST_CONST_HELPER___I_NEW		= __I_NEW;
+const unsigned RUST_CONST_HELPER_I_WILL_FREE	= I_WILL_FREE;
+const unsigned RUST_CONST_HELPER_I_FREEING	= I_FREEING;
 
 /*
  * ioctl numbers' layout, the arch's own: powerpc, mips, sparc, alpha and

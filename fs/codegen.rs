@@ -200,6 +200,9 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "ida_init", "ida_find_first",
     // util/log.rs: a long message printk()ed in pieces, the console held across them
     "console_trylock", "console_unlock",
+    // vfs/vfs_inode.rs, for the inode cache: static inlines, inode_state_*() from 6.19
+    "inode_state_read", "inode_state_set_raw", "__iget", "inode_fake_hash", "inode_wake_up_bit",
+    "inode_sb_list_add", "discard_new_inode", "inode_bit_waitqueue",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "closure_state",
                                   "__genradix", "genradix_iter",

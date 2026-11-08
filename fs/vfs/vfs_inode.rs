@@ -17,21 +17,25 @@ use crate::c;
 use crate::util::ffi::Opaque;
 #[cfg(kernel)]
 use {
-    core::ffi::c_int,
+    core::ffi::{c_int, c_long},
     core::ptr::{read_volatile, write_volatile, NonNull},
     crate::acl::{AclType, PosixAcl},
     crate::errcode::{ret_to_result_void, BchError},
     crate::util::kernel::loff,
-    kernel::sync::aref::AlwaysRefCounted,
+    kernel::sync::aref::{ARef, AlwaysRefCounted},
     super::folio::Mapping,
     super::super_block::SuperBlock,
-    crate::locking::Locked,
+    crate::locking::{ExclusiveGuard, Locked},
 };
 
 /// A struct inode of ours - one InodeInfo's - referenced while this is
 /// borrowed. Both builds lay it out; only the kernel's has a VFS.
 #[repr(transparent)]
 pub struct VfsInode(Opaque<c::inode>);
+
+/// i_lock, held.
+#[cfg(kernel)]
+pub type ILocked<'a> = ExclusiveGuard<'a, c::spinlock_t>;
 
 /// VfsInode's accessors that are a read or write and nothing else, as a
 /// table: name() -> T, or name(T) to set, and how - a field read or written
@@ -219,11 +223,99 @@ impl VfsInode {
     /// i_size raised to @size, if it's below: under i_lock, against the other
     /// extenders.
     pub fn size_extend(&self, size: u64) {
-        let i_lock = unsafe { &*(&raw const (*self.as_ptr()).i_lock).cast::<c::spinlock_t>() };
-        let _guard = Locked::from_c(i_lock).lock();
+        let _guard = self.i_lock().lock();
         if size > self.size() {
             self.set_size(size);
         }
+    }
+
+    /// i_lock: the VFS's for its state and its hash, and the inode cache's
+    /// for whether the inode's in it.
+    pub fn i_lock(&self) -> &Locked<c::spinlock_t> {
+        Locked::from_c(unsafe { &*(&raw const (*self.as_ptr()).i_lock).cast::<c::spinlock_t>() })
+    }
+
+    /// The I_* flags: inode_state_read(), which wants i_lock.
+    pub fn state(&self, _i_lock: &ILocked<'_>) -> u32 {
+        #[cfg(linux_ge = "6.19")]
+        let s = unsafe { c::inode_state_read(self.as_ptr()) } as u32;
+        #[cfg(not(linux_ge = "6.19"))]
+        let s = unsafe { read_volatile(&raw const (*self.as_ptr()).i_state) } as u32;
+        s
+    }
+
+    /// @flags set in the state, without i_lock and the checks of how the VFS
+    /// moves it: inode_state_set_raw(), for an inode only its creator has.
+    fn set_state_raw(&self, flags: u32) {
+        #[cfg(linux_ge = "6.19")]
+        unsafe { c::inode_state_set_raw(self.as_ptr(), flags as _) };
+        #[cfg(not(linux_ge = "6.19"))]
+        unsafe {
+            let s = &raw mut (*self.as_ptr()).i_state;
+            write_volatile(s, read_volatile(s) | flags as _);
+        }
+    }
+
+    /// A reference, taken under i_lock: __iget() - or none, if the VFS is
+    /// freeing it.
+    pub fn iget(&self, i_lock: &ILocked<'_>) -> Option<ARef<VfsInode>> {
+        if self.state(i_lock) & (c::I_FREEING | c::I_WILL_FREE) != 0 {
+            return None;
+        }
+        unsafe {
+            c::__iget(self.as_ptr());
+            Some(ARef::from_raw(NonNull::from(self)))
+        }
+    }
+
+    /// Hashed, for the VFS, which skips evicting from its hash what isn't -
+    /// where it isn't in the VFS's hash but ours: inode_fake_hash().
+    pub fn fake_hash(&self) {
+        unsafe { c::inode_fake_hash(self.as_ptr()) }
+    }
+
+    /// fake_hash() undone, as its unhashing in ours is: whole, as the VFS
+    /// reads it without our lock.
+    pub fn unfake_hash(&self) {
+        unsafe { write_volatile(&raw mut (*self.as_ptr()).i_hash.pprev, core::ptr::null_mut()) }
+    }
+
+    /// On its superblock's list of inodes: inode_sb_list_add().
+    pub fn sb_list_add(&self) {
+        unsafe { c::inode_sb_list_add(self.as_ptr()) }
+    }
+
+    /// A new inode given up - @inode's reference dropped, and with it the
+    /// inode: discard_new_inode(), which expects I_NEW, so it's set.
+    ///
+    /// # Safety
+    /// @inode was never hashed, ours or the VFS's: its creator's alone, as
+    /// set_state_raw() and the I_NEW protocol want.
+    pub unsafe fn discard_new(inode: ARef<VfsInode>) {
+        inode.set_state_raw(c::I_NEW);
+        unsafe { c::discard_new_inode(ARef::into_raw(inode).as_ptr().cast()) }
+    }
+
+    /// Sleep - up to @timeout jiffies - for @inode's wake_new_bit(), if
+    /// @still, asked once we're on the waitqueue, says it's coming: the
+    /// kernel's own wait for an inode being freed, on its __I_NEW bit's. The
+    /// waitqueue is found by @inode's address alone, so it needn't be live -
+    /// nothing of it is read.
+    pub fn wait_new_bit(inode: NonNull<VfsInode>, still: impl FnOnce() -> bool, timeout: c_long) {
+        unsafe {
+            let mut wait: c::wait_bit_queue_entry = core::mem::zeroed();
+            let wq = c::inode_bit_waitqueue(&mut wait, inode.as_ptr().cast(), c::__I_NEW);
+            c::prepare_to_wait(wq, &mut wait.wq_entry, c::TASK_UNINTERRUPTIBLE as c_int);
+            if still() {
+                c::schedule_timeout(timeout as _);
+            }
+            c::finish_wait(wq, &mut wait.wq_entry);
+        }
+    }
+
+    /// Wake wait_new_bit()'s sleepers: inode_wake_up_bit().
+    pub fn wake_new_bit(&self) {
+        unsafe { c::inode_wake_up_bit(self.as_ptr(), c::__I_NEW) }
     }
 
     /// The i_rwsems of @a and @b, in the VFS's order, held for write until the
