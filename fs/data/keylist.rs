@@ -160,10 +160,36 @@ impl<const N: usize> Keylist<N> {
     /// The rest of the keys move down.
     pub fn pop_front(&mut self) {
         let n = usize::from(self.front().expect("popping the front of an empty keylist").k().u64s);
-        let u64s = self.u64s();
+        self.drop_front(n);
+    }
 
-        self.0.copy_within(n.., 0);
-        self.0.truncate(u64s - n);
+    /// The first @u64s taken off the front - whole keys - and the rest moved
+    /// down.
+    pub fn drop_front(&mut self, u64s: usize) {
+        let len = self.u64s();
+        assert!(u64s <= len, "dropping {u64s} u64s from a keylist of {len}");
+
+        self.0.copy_within(u64s.., 0);
+        self.0.truncate(len - u64s);
+    }
+
+    pub fn as_u64s(&self) -> &[u64] {
+        &self.0
+    }
+
+    pub fn as_u64s_mut(&mut self) -> &mut [u64] {
+        &mut self.0
+    }
+
+    /// Its keys in increasing order - debug builds'.
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    pub fn verify_sorted(&self) {
+        let mut keys = self.iter().peekable();
+        while let Some(k) = keys.next() {
+            if let Some(next) = keys.peek() {
+                assert!(k.k().p < next.k().p, "keylist out of order: {} before {}", k.k(), next.k());
+            }
+        }
     }
 }
 
