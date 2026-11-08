@@ -161,22 +161,22 @@ pub(crate) fn sb_member_alloc(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<u32, 
     Ok(dev)
 }
 
-/// Deleted members' slots made free: fsck's, once nothing points to them.
-#[c_export]
-pub fn bch2_sb_members_clean_deleted(c: &Opaque<Fs>) {
-    let fs = Fs::from_c(c);
-    let mut sb = fs.sb_lock();
-    let mut dirty = false;
+impl Fs {
+    /// Deleted members' slots made free: fsck's, once nothing points to them.
+    pub(crate) fn sb_members_clean_deleted(&self) {
+        let mut sb = self.sb_lock();
+        let mut dirty = false;
 
-    for i in 0..fs.nr_devices() {
-        let m = sb.fs_member_mut(i);
-        if m.deleted() {
-            m.uuid.b = [0; 16];
-            dirty = true;
+        for i in 0..self.nr_devices() {
+            let m = sb.fs_member_mut(i);
+            if m.deleted() {
+                m.uuid.b = [0; 16];
+                dirty = true;
+            }
         }
-    }
-    if dirty {
-        fs.write_super(&mut sb);
+        if dirty {
+            self.write_super(&mut sb);
+        }
     }
 }
 
@@ -843,7 +843,7 @@ impl Fs {
         dirty
     }
 
-    fn btree_bitmap_mark(&self, k: BkeySC<'_>) {
+    pub(crate) fn btree_bitmap_mark(&self, k: BkeySC<'_>) {
         let mut sb = self.sb_lock();
         if self.btree_bitmap_mark_locked(&mut sb, k) {
             self.write_super(&mut sb);
@@ -920,11 +920,6 @@ pub fn bch2_dev_btree_bitmap_marked(c: &Opaque<Fs>, k: BkeySC<'_>) -> bool {
     Fs::from_c(c).btree_bitmap_marked(k, true)
 }
 
-#[c_export]
-pub fn bch2_dev_btree_bitmap_marked_nogc(c: &Opaque<Fs>, k: BkeySC<'_>) -> bool {
-    Fs::from_c(c).btree_bitmap_marked(k, false)
-}
-
 /// @w, the caller's superblock write, is dirtied if a member changed.
 #[c_export]
 pub fn bch2_dev_btree_bitmap_mark_locked(c: &Opaque<Fs>, k: BkeySC<'_>, w: &mut c::sb_write) {
@@ -934,11 +929,6 @@ pub fn bch2_dev_btree_bitmap_mark_locked(c: &Opaque<Fs>, k: BkeySC<'_>, w: &mut 
     if fs.btree_bitmap_mark_locked(&mut w, k) {
         w.dirty();
     }
-}
-
-#[c_export]
-pub fn bch2_dev_btree_bitmap_mark(c: &Opaque<Fs>, k: BkeySC<'_>) {
-    Fs::from_c(c).btree_bitmap_mark(k)
 }
 
 #[c_export]

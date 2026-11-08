@@ -1300,11 +1300,6 @@ pub fn allocator_foreground_init(fs: &Fs) {
     fs.write_points_init();
 }
 
-#[c_export]
-pub fn bch2_alloc_wake_all(c: &Opaque<Fs>) {
-    Fs::from_c(c).alloc_wake_all()
-}
-
 /// bch2_open_bucket_put()'s, for the last pin.
 ///
 /// # Safety

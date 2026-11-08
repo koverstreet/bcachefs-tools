@@ -32,14 +32,12 @@ use crate::fs::Fs;
 use crate::init::error::id;
 use crate::init::passes;
 use crate::util::alloc::AllocError;
-use crate::util::ffi::Opaque;
 use crate::util::kernel::{cold_path, unlikely};
 use crate::util::log::LogMsg;
 use crate::util::vstructs::plain_bytes;
 use crate::{accounting, bch_err, fs_inconsistent, fsck_err_on, prt};
 use crate::data_structures::array_vec::ArrayVec;
 use core::ops::ControlFlow;
-use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree, DataType};
 
 // ── A bucket's stripes ───────────────────────────────────────────────────
@@ -74,19 +72,6 @@ impl c::bch_fs_ec {
     }
 }
 
-#[c_export]
-pub fn bch2_gc_stripe_get(c: &Opaque<Fs>, idx: u64) -> *mut c::gc_stripe {
-    Fs::from_c(c).ec.gc_stripe(idx).map_or(core::ptr::null_mut(), |m| core::ptr::from_ref(m).cast_mut())
-}
-
-/// # Safety
-/// gc is done with them: gc.pos is back to not_running. Not fenced from a
-/// commit's gc trigger that saw it running - as reflink's gc table isn't:
-/// see ReflinkGc.
-#[c_export]
-pub unsafe fn bch2_gc_stripes_free(c: &Opaque<Fs>) {
-    unsafe { Fs::from_c(c).ec.gc_stripes.free() }
-}
 
 // ── The trigger ──────────────────────────────────────────────────────────
 

@@ -2,7 +2,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeyS, BkeySC, ValidateFlags};
-use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt};
+use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::btree::trigger::Trigger;
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
@@ -13,7 +13,7 @@ use crate::prt;
 use crate::util::Printbuf;
 use crate::util::ffi::Opaque;
 use core::fmt;
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_int;
 use cstruct_macros::c_export;
 
 /// A key type's methods, on its value's type: each a no-op where the type
@@ -318,13 +318,6 @@ pub fn bkey_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
         u64::from(l.k.size) + u64::from(r.k.size) <= u64::from(u32::MAX) &&
         !crate::debug::params::key_merging_disabled() &&
         (l.k.key_type().ops().merge)(fs, l, r)
-}
-
-#[c_export]
-pub fn bch2_bkey_check_repair<'t>(trans: &'t BtreeTrans<'t>, iter: &mut BtreeIter<'t>, btree: Btree,
-                                  level: c_uint, k: BkeySC<'_>) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c((k.k.key_type().ops().check_repair)(&t, iter, btree, level, k))
 }
 
 pub const fn ops<T: BkeyOps>() -> Ops {

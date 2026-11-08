@@ -13,7 +13,7 @@ use core::mem::{size_of, ManuallyDrop};
 use core::ops::Deref;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering::{Acquire, AcqRel, Relaxed, SeqCst}};
-use cstruct_macros::{placed, CStruct, Init, Late, c_const, c_export, TypeInfo};
+use cstruct_macros::{placed, CStruct, Init, Late, c_const, TypeInfo};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::OpenBucket;
 use crate::btree::iter::{BtreeTrans, CommitOpts, Watermark};
@@ -52,7 +52,8 @@ mod root;
 mod split_merge;
 mod update_key;
 pub use split_merge::bch2_btree_node_rewrite;
-pub(crate) use split_merge::{check_topology_msg, foreground_maybe_merge, increase_depth, node_rewrite, split_leaf};
+pub(crate) use split_merge::{check_topology, check_topology_msg, foreground_maybe_merge, increase_depth, node_rewrite,
+                             split_leaf};
 
 #[repr(C)]
 #[derive(Default, CStruct)]
@@ -956,11 +957,6 @@ impl Fs {
             u.to_text(out, u.mode(&g));
         }
     }
-}
-
-#[c_export]
-pub fn bch2_btree_interior_updates_flush(c: &Fs) -> bool {
-    c.btree_interior_updates_flush()
 }
 
 type RootsGuard<'a> = ExclusiveGuard<'a, c::mutex, c::BtreeRoots, c::BtreeRootsLive>;

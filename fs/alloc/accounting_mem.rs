@@ -25,7 +25,7 @@ use crate::util::printbuf::{Join, Msg};
 use crate::util::rcu;
 use crate::util::vstructs::{bytes_of, plain_bytes, ArmError, Unvalidated, Validated};
 use crate::util::Printbuf;
-use crate::{bch_err_fn, btree_trans, fsck_err, fsck_err_on, percpu_field};
+use crate::{btree_trans, fsck_err, fsck_err_on, percpu_field};
 use core::ffi::c_int;
 use cstruct_macros::c_export;
 use zerocopy::IntoBytes;
@@ -282,8 +282,7 @@ pub(crate) fn mem_gc(fs: &Fs) {
     fs.accounting_mem_mut(&mut mark).with_entries(|entries| entries.retain(|e| !e.is_zero()));
 }
 
-#[c_export]
-pub fn bch2_gc_accounting_start(fs: &Fs) -> c_int {
+pub(crate) fn gc_accounting_start(fs: &Fs) -> Result<(), BchError> {
     let mut mark = fs.mark_lock().write();
     let acc = fs.accounting_mem_mut(&mut mark);
 
@@ -292,10 +291,10 @@ pub fn bch2_gc_accounting_start(fs: &Fs) -> c_int {
         acc.free_gc();
     }
     acc.gc_running = ret.is_ok();
-    ret_to_c(ret.map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_disk_accounting)))
+    ret.map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_disk_accounting))
 }
 
-fn gc_done(fs: &Fs) -> Result<(), BchError> {
+pub(crate) fn gc_accounting_done(fs: &Fs) -> Result<(), BchError> {
     let trans = btree_trans!(fs);
     let mut mark = fs.mark_lock().write();
     let mut pos = POS_MIN;
@@ -347,13 +346,9 @@ fn gc_done(fs: &Fs) -> Result<(), BchError> {
     }
 }
 
-#[c_export]
-pub fn bch2_gc_accounting_done(fs: &Fs) -> c_int {
-    ret_to_c(bch_err_fn!(fs, gc_done(fs)))
-}
-
-#[c_export]
-pub unsafe fn bch2_accounting_gc_free(fs: &Fs) {
+/// # Safety
+/// mark_lock is held for write.
+pub(crate) unsafe fn accounting_gc_free(fs: &Fs) {
     let mut mark = unsafe { fs.mark_lock().held() };
     let acc = fs.accounting_mem_mut(&mut mark);
     acc.free_gc();

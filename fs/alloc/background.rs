@@ -485,7 +485,7 @@ use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, Commi
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::c;
 use crate::c::bch_errcode;
-use crate::errcode::{err_ptr, ret_to_c, BchError};
+use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::opts::data_type_str;
@@ -724,18 +724,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 }
 
-/// An alloc_v4 key for C: in transaction memory, or an ERR_PTR.
-fn alloc_v4_to_c(a: Result<TransBkey<'_, '_, c::AllocV4>, BchError>) -> *mut c::bkey_i_alloc_v4 {
-    a.map_or_else(err_ptr, |a| a.as_ptr().cast())
-}
-
-#[c_export]
-pub fn bch2_alloc_to_v4_mut<'t>(trans: &'t BtreeTrans<'t>, k: BkeySC<'_>) -> *mut c::bkey_i_alloc_v4 {
-    // SAFETY: C calls it in an attempt
-    let t = unsafe { trans.attempt_in_progress() };
-    alloc_v4_to_c(t.alloc_to_v4_mut(k))
-}
-
 // ── Alloc keys: validate, swab, to_text ──────────────────────────────────
 
 fn alloc_v1_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
@@ -895,7 +883,7 @@ fn alloc_v4_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>, a: &c::A
 }
 
 impl c::AllocV4 {
-    fn data_type(&self) -> DataType {
+    pub(crate) fn data_type(&self) -> DataType {
         DataType(self.data_type.into())
     }
 
@@ -1417,15 +1405,6 @@ impl TransAttempt<'_, '_> {
         }
         Ok(())
     }
-}
-
-/// # Safety
-/// @trans is in an attempt.
-#[c_export]
-pub unsafe fn bch2_alloc_key_to_dev_counters(trans: &BtreeTrans<'_>, ca: &Dev, old: &c::AllocV4,
-                                             new: &c::AllocV4, flags: c_uint) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(t.alloc_key_to_dev_counters(ca, old, new, UpdateTriggerFlags::from_bits_retain(flags)))
 }
 
 /// A key for a bucket its device hasn't: inconsistent.

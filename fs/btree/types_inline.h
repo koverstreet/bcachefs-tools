@@ -205,18 +205,6 @@ BCH_BTREE_IDS()
 #undef x
 ;
 
-/*
- * A mask of btree id bits that have triggers for their leaves: every btree with
- * snapshots runs transactional triggers, for bch2_trigger_snapshot_nr_keys()
- */
-__maybe_unused
-static const u64 btree_leaf_has_triggers_mask = 0
-#define x(name, nr, flags, ...)	\
-	|((u64) !!((flags) & (BTREE_IS_trans_triggers|BTREE_IS_atomic_triggers|BTREE_IS_snapshots)) << nr)
-BCH_BTREE_IDS()
-#undef x
-;
-
 static const u64 btree_is_extents_mask = 0
 #define x(name, nr, flags, ...)	|((!!((flags) & BTREE_IS_extents)) << nr)
 BCH_BTREE_IDS()

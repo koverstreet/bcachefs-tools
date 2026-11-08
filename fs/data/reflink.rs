@@ -38,21 +38,20 @@ use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, 
 use crate::c;
 use crate::data::extents::Extents;
 use crate::data::io_misc::fpunch_at;
-use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, err_ptr, BchError};
 use crate::data::inline_data::InlineDataRef;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::sb::errors::FsckFlags;
 use crate::snapshots::subvolume;
 use crate::types::{GenRadix, Le32, Le64};
-use crate::util::ffi::Opaque;
 use crate::util::kernel::{fatal_signal_pending, unlikely};
 use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::{cast_plain, cast_plain_mut};
 use crate::util::Printbuf;
-use crate::{bch_err, bch_err_fn, bkey_fsck_err_on, fsck_err_flags, fsck_err_on, inode, inode_fsck_err, prt};
+use crate::{bch_err, bkey_fsck_err_on, fsck_err_flags, fsck_err_on, inode, inode_fsck_err, prt};
 use core::cell::UnsafeCell;
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use core::mem::size_of;
 use core::ops::Range;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering::Relaxed};
@@ -316,7 +315,7 @@ fn gc_write_reflink_key(
 }
 
 /// gc's end: the reflink btree's refcounts, checked against its counts.
-fn gc_reflink_done(fs: &Fs) -> Result<(), BchError> {
+pub(crate) fn gc_reflink_done(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, Btree::reflink, POS_MIN, BtreeIterFlags::PREFETCH);
     let mut idx = 0;
@@ -327,22 +326,15 @@ fn gc_reflink_done(fs: &Fs) -> Result<(), BchError> {
     ret
 }
 
-#[c_export]
-pub fn bch2_gc_reflink_done(c: &Opaque<Fs>) -> c_int {
-    ret_to_c(gc_reflink_done(Fs::from_c(c)))
-}
-
 /// gc's start: the table empty, for gc_reflink_add() to fill.
-#[c_export]
-pub fn bch2_gc_reflink_start(c: &Opaque<Fs>) -> c_int {
-    Fs::from_c(c).reflink_gc.nr.store(0, Relaxed);
-    0
+pub(crate) fn gc_reflink_start(fs: &Fs) {
+    fs.reflink_gc.nr.store(0, Relaxed);
 }
 
 /// A table entry for @k, its count zero, if it's an indirect extent: gc's walk
 /// of the reflink btree, in order, from each key as check_repair left it. A
 /// restart marks a key again, and its entry is the last.
-fn gc_reflink_add(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
+pub(crate) fn gc_reflink_add(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
     if k.arm::<Indirect>().is_none() {
         return Ok(());
     }
@@ -371,23 +363,13 @@ fn gc_reflink_add(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
     Ok(())
 }
 
-#[c_export]
-pub fn bch2_gc_reflink_add(c: &Opaque<Fs>, k: BkeySC<'_>) -> c_int {
-    let fs = Fs::from_c(c);
-    ret_to_c(bch_err_fn!(fs, gc_reflink_add(fs, k)))
-}
-
-/// For bch2_gc_free(): the table, freed.
+/// For gc_free(): the table, freed.
 ///
 /// # Safety
 /// gc.pos is back to not_running, and nothing is still counting into the
 /// table - which isn't guaranteed: see ReflinkGc.
-#[c_export]
-pub unsafe fn bch2_gc_reflink_free(c: &Opaque<Fs>) {
-    let gc = &Fs::from_c(c).reflink_gc;
-
-    // SAFETY: the caller's
-    unsafe { gc.table_mut() }.free();
+pub(crate) unsafe fn gc_reflink_free(fs: &Fs) {
+    unsafe { fs.reflink_gc.table_mut() }.free();
 }
 
 // ── reflink pointers ─────────────────────────────────────────────────────

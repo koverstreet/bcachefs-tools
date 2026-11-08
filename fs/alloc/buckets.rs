@@ -26,7 +26,6 @@ use crate::opts::data_type_str;
 use crate::locking::{Locked, ByteLock};
 use crate::sb::errors::SbErrorId;
 use crate::types::{bits_to_longs, Le64};
-use crate::util::ffi::Opaque;
 use crate::util::kernel::unlikely;
 use crate::util::log::LogMsg;
 use crate::util::percpu::{Counters, PerCpu};
@@ -1023,11 +1022,6 @@ impl Fs {
         }
         Ok(())
     }
-}
-
-#[c_export]
-pub fn bch2_trans_mark_dev_sbs_flags(c: &Opaque<Fs>, flags: c::btree_iter_update_trigger_flags) -> c_int {
-    ret_to_c(Fs::from_c(c).trans_mark_dev_sbs(UpdateTriggerFlags::from_bits_retain(flags.bits())))
 }
 
 crate::recovery_pass!(bch2_trans_mark_dev_sbs => |fs: &Fs| fs.trans_mark_dev_sbs(UpdateTriggerFlags::TRANSACTIONAL));

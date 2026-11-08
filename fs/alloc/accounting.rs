@@ -522,11 +522,6 @@ pub fn dev_usage_init(ca: &Dev, gc: bool) -> Result<(), BchError> {
     }))
 }
 
-#[c_export]
-pub fn bch2_dev_usage_init(ca: &Dev, gc: bool) -> c_int {
-    ret_to_c(dev_usage_init(ca, gc))
-}
-
 pub fn verify_accounting_clean(fs: &Fs) {
     let mut mismatch = false;
     let mut base = bch_fs_usage_base::default();

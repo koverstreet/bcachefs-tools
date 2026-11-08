@@ -77,15 +77,6 @@ DEFINE_GUARD(bucket_lock, struct bucket *,
 	     bucket_lock(_T),
 	     bucket_unlock(_T));
 
-/* GC bucket access: */
-
-static inline struct bucket *gc_bucket(struct bch_dev *ca, size_t b)
-{
-	return bucket_valid(ca, b)
-		? genradix_ptr(&ca->buckets_gc, b)
-		: NULL;
-}
-
 /* Bucket generation: */
 
 static inline struct bucket_gens *bucket_gens(struct bch_dev *ca)
@@ -144,12 +135,6 @@ static inline struct bpos PTR_BUCKET_POS_OFFSET(const struct bch_dev *ca,
 						u32 *bucket_offset)
 {
 	return POS(ptr->dev, sector_to_bucket_and_offset(ca, ptr->offset, bucket_offset));
-}
-
-static inline struct bucket *PTR_GC_BUCKET(struct bch_dev *ca,
-					   const struct bch_extent_ptr *ptr)
-{
-	return gc_bucket(ca, PTR_BUCKET_NR(ca, ptr));
 }
 
 /* GC bucket ↔ alloc_v4 conversion: */

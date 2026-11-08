@@ -5,13 +5,10 @@
 use crate::cstructs::c;
 use crate::types::{c_default, rust_only};
 use crate::util::projections::Volatile;
-use crate::fs::Fs;
 use crate::locking::{Locked, SeqLock};
 use crate::new_lock;
-use crate::util::ffi::Opaque;
 use core::cmp::Ordering;
-use core::ffi::c_int;
-use cstruct_macros::{bitfield, c_enum, c_export, CStruct, Init, TypeInfo};
+use cstruct_macros::{bitfield, c_enum, CStruct, Init, TypeInfo};
 use pin_init::pin_data;
 use nestify::nest;
 use crate::format::{Bpos, Btree};
@@ -48,17 +45,41 @@ nest! {
  * built walking it, after their repair, and the reflink_ps are counted against
  * it - one a repair left nothing to point to is found missing in the same pass
  */
-#[c_export]
-pub fn bch2_gc_btree_order(btree: Btree) -> c_int {
+pub fn gc_btree_order(btree: Btree) -> i32 {
     match btree {
         Btree::alloc   => -3,
         Btree::stripes => -2,
         Btree::reflink => -1,
-        b                       => b.0 as c_int,
+        b              => b.0 as i32,
     }
 }
 
+/*
+ * For concurrent mark and sweep (with other index updates), we define a total
+ * ordering of _all_ references GC walks:
+ *
+ * Note that some references will have the same GC position as others - e.g.
+ * everything within the same btree node; in those cases we're relying on
+ * whatever locking exists for where those references live, i.e. the write lock
+ * on a btree node.
+ *
+ * That locking is also required to ensure GC doesn't pass the updater in
+ * between the updater adding/removing the reference and updating the GC marks;
+ * without that, we would at best double count sometimes.
+ *
+ * That part is important - whenever calling bch2_mark_pointers(), a lock _must_
+ * be held that prevents GC from passing the position the updater is at.
+ *
+ * (What about the start of gc, when we're clearing all the marks? GC clears the
+ * mark with the gc pos seqlock held, and bch_mark_bucket checks against the gc
+ * position inside its cmpxchg loop, so crap magically works).
+ */
 impl gc_pos {
+    /* Position of (the start of) a gc phase: */
+    pub fn of_phase(phase: c::gc_phase) -> Self {
+        Self { bits: c::gc_pos_bits::new().with_phase(phase), ..Default::default() }
+    }
+
     /// gc_pos_btree(): @pos at @level of @btree, in gc's walk of the btrees.
     pub fn in_btree(btree: Btree, level: u16, pos: Bpos) -> Self {
         Self {
@@ -72,7 +93,7 @@ impl gc_pos {
 impl Ord for gc_pos {
     fn cmp(&self, r: &Self) -> Ordering {
         (self.bits.phase() as u32).cmp(&(r.bits.phase() as u32))
-            .then(bch2_gc_btree_order(self.bits.btree()).cmp(&bch2_gc_btree_order(r.bits.btree())))
+            .then(gc_btree_order(self.bits.btree()).cmp(&gc_btree_order(r.bits.btree())))
             .then(self.level.cmp(&r.level))
             .then(self.pos.cmp(&r.pos))
     }
@@ -132,16 +153,6 @@ impl bch_fs_gc {
     pub fn set_not_running(&self) {
         self.pos.write(|p| *p = c::gc_pos::default());
     }
-}
-
-#[c_export]
-pub fn bch2_gc_pos_set(c: &Opaque<Fs>, pos: c::gc_pos) {
-    Fs::from_c(c).gc.set_pos(pos)
-}
-
-#[c_export]
-pub fn bch2_gc_pos_set_not_running(c: &Opaque<Fs>) {
-    Fs::from_c(c).gc.set_not_running()
 }
 
 #[repr(C)]

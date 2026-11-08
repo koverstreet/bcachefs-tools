@@ -245,7 +245,7 @@ pub(crate) fn check_topology_msg(trans: &BtreeTrans<'_>, b: Node<'_>, out: &mut 
     Ok(())
 }
 
-fn check_topology(trans: &BtreeTrans<'_>, b: Node<'_>) -> Result<(), BchError> {
+pub(crate) fn check_topology(trans: &BtreeTrans<'_>, b: Node<'_>) -> Result<(), BchError> {
     let mut msg = LogMsg::new(trans.fs());
     msg.set_suppressed(true);
     check_topology_msg(trans, b, &mut msg)
