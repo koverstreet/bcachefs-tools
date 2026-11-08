@@ -73,8 +73,9 @@
 //!   has none: #[placed] refuses #[pin_data(PinnedDrop)], pin_data()'s
 //!   check refuses a Drop, and a struct without #[pin_data] gets an empty
 //!   Drop for one to conflict with. A placed type that needs teardown has
-//!   nowhere to put it yet: when one does, its hook must be had without
-//!   container().
+//!   PlacedDrop: unsafe, its caller - the parent's teardown - saying the
+//!   parent's whole. Nothing makes that call: what has to have been torn
+//!   down checks it was, in a Drop of its own - a Shrinker's.
 //!
 //! An element of a container - #[placed(Base.field[..])] - has a place too,
 //! but no address in it: it's in the Container at Base's field, wherever
@@ -434,6 +435,15 @@ pub(crate) unsafe trait Contained: Sized {
         // SAFETY: a Self, borrowed
         unsafe { container_of(self) }
     }
+}
+
+/// A placed type's drop: what it has to undo while its parent's whole - a
+/// registration whose callbacks use container(). Its parent's teardown calls
+/// it, where that teardown has what it uses still there.
+pub(crate) trait PlacedDrop: Contained {
+    /// # Safety
+    /// The parent is whole, and nothing uses this after but its Rust drop.
+    unsafe fn placed_drop(&self);
 }
 
 /// container(), from a pointer: for a placed value had only by one - behind

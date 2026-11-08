@@ -23,7 +23,7 @@
 //! - no drop of its own: its container() would see a parent partly dropped.
 //!   A #[pin_data] struct can't impl Drop, and #[pin_data(PinnedDrop)] is
 //!   refused; a struct without #[pin_data] gets an empty Drop, for one of its
-//!   own to conflict with.
+//!   own to conflict with. Its teardown is util/place.rs's PlacedDrop.
 //!
 //! For an element of a Container, it gives the struct its AtIn field, and
 //! PlacedIn, and Base's InitAt for the field - the Container, by
@@ -236,7 +236,7 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
             if pin_data == Some(true) {
                 return Err(Error::new_spanned(&name, format!(
                     "{name}: a placed type has no drop of its own - its container() would see a parent partly \
-                     dropped - so not #[pin_data(PinnedDrop)]")));
+                     dropped - so not #[pin_data(PinnedDrop)]: its teardown is a PlacedDrop")));
             }
             let init = match &kind {
                 Kind::Field => Some(quote!(crate::util::place::at(|at| #name::init(at, #(#arg_pats),*)))),
