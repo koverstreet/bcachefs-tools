@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::reclaim::{unlock_reclaimed, ReclaimFlags};
-use super::{cache_node_struct_alloc, cached_node, NodeBufs};
+use super::reclaim::ReclaimFlags;
+use super::{cache_node_struct_alloc, cached_node, new_node_lock, NodeBufs};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
@@ -15,14 +15,14 @@ use crate::debug::trace::events;
 use crate::errcode::{bch_errcode, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
-use crate::locking::six::{six_lock_downgrade, six_relock_ip, six_trylock_ip, six_unlock_ip};
+use crate::locking::six::SixHold;
 use crate::prt;
 use crate::util::kernel::{cond_resched, local_clock, unlikely, PAGE_SIZE};
 use crate::util::log::LogMsg;
 use crate::util::sched::current;
 use crate::util::time_stats::TimeStats;
 use c::btree_node_cache_state as State;
-use c::six_lock_type::{self, SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
+use c::six_lock_type::{self, SIX_LOCK_read};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 
@@ -30,15 +30,18 @@ use core::sync::atomic::Ordering::Relaxed;
 
 impl Fs {
     fn btree_node_grab(&self, list: impl for<'l, 'g> Fn(&'l mut BtreeCacheGuard<'g>) -> &'l mut BtreeNodeList,
-                       pcpu_read_locks: bool, flags: ReclaimFlags) -> Option<&BtreeNode> {
+                       pcpu_read_locks: bool, flags: ReclaimFlags) -> Option<(&BtreeNode, SixHold<'_>)> {
         let mut lists = self.btree.cache.lock.lock();
         let mut walk = unsafe { Walk::new(&mut lists, list) };
         while let Some((lists, b)) = walk.next() {
-            if pcpu_read_locks == b.c.lock.six().readers.allocated() &&
-                self.btree_node_reclaim(lists, b, flags).is_ok() {
+            let b = unsafe { cached_node(self, b) };
+            if pcpu_read_locks != b.c.lock.six().readers.allocated() {
+                continue;
+            }
+            if let Ok(held) = self.btree_node_reclaim(lists, b, flags) {
                 self.btree.evicted_size.record(b.hash_val(), unsafe { b.contents() }.nr.live_u64s);
                 let _ = self.btree_node_transition_state_locked(lists, b, State::NONE);
-                return Some(unsafe { cached_node(self, b) });
+                return Some((b, held));
             }
         }
 
@@ -60,26 +63,26 @@ impl Fs {
 }
 
 impl BtreeTrans<'_> {
-    fn btree_node_cannibalize(&self, paths: &mut Paths<'_>, pcpu_read_locks: bool) -> &BtreeNode {
+    fn btree_node_cannibalize(&self, paths: &mut Paths<'_>, pcpu_read_locks: bool) -> (&BtreeNode, SixHold<'_>) {
         let fs = self.fs();
 
         loop {
             for i in 0..2 {
-                if let Some(b) = fs.btree_node_grab(|l| &mut l.live[i].clean, pcpu_read_locks, ReclaimFlags::empty()) {
-                    return b;
+                if let Some(got) = fs.btree_node_grab(|l| &mut l.live[i].clean, pcpu_read_locks, ReclaimFlags::empty()) {
+                    return got;
                 }
             }
 
             for i in 0..2 {
-                if let Some(b) = fs.btree_node_grab(|l| &mut l.live[i].dirty, pcpu_read_locks,
-                                                    ReclaimFlags::ALLOW_DIRTY) {
+                if let Some((b, held)) = fs.btree_node_grab(|l| &mut l.live[i].dirty, pcpu_read_locks,
+                                                            ReclaimFlags::ALLOW_DIRTY) {
                     if b.flags.dirty() {
                         node_write(self, b, BtreeWriteType::cache_reclaim, BtreeWriteFlags::empty());
                     }
 
                     bch2_btree_node_wait_on_read(self, paths, b);
                     bch2_btree_node_wait_on_write(self, paths, b);
-                    return b;
+                    return (b, held);
                 }
             }
 
@@ -93,15 +96,15 @@ impl BtreeTrans<'_> {
     }
 
     pub(crate) fn btree_node_mem_alloc(&self, paths: &mut Paths<'_>, pcpu_read_locks: bool)
-        -> Result<NonNull<BtreeNode>, BchError>
+        -> Result<(NonNull<BtreeNode>, SixHold<'_>), BchError>
     {
         let fs = self.fs();
         let bc = &fs.btree.cache;
         let start_time = local_clock();
 
-        let b = 'got_mem: {
-            if let Some(b) = fs.btree_node_grab(|l| &mut l.freeable, pcpu_read_locks, ReclaimFlags::empty()) {
-                break 'got_mem b;
+        let (b, held) = 'got_mem: {
+            if let Some(got) = fs.btree_node_grab(|l| &mut l.freeable, pcpu_read_locks, ReclaimFlags::empty()) {
+                break 'got_mem got;
             }
 
             /*
@@ -113,8 +116,9 @@ impl BtreeTrans<'_> {
             if unlikely(fs.system_memory_usage_high()) {
                 bc.nr_self_reclaim.fetch_add(1, Relaxed);
                 let live = pcpu_read_locks as usize;
-                if let Some(b) = fs.btree_node_grab(|l| &mut l.live[live].clean, pcpu_read_locks, ReclaimFlags::empty()) {
-                    break 'got_mem b;
+                if let Some(got) = fs.btree_node_grab(|l| &mut l.live[live].clean, pcpu_read_locks,
+                                                      ReclaimFlags::empty()) {
+                    break 'got_mem got;
                 }
             }
 
@@ -130,8 +134,8 @@ impl BtreeTrans<'_> {
 
                 let freed = fs.btree_node_grab(|l| if pcpu_read_locks { &mut l.freed_pcpu } else { &mut l.freed_nonpcpu },
                                                pcpu_read_locks, ReclaimFlags::empty());
-                let b = match freed {
-                    Some(b) => b,
+                let (b, held) = match freed {
+                    Some(got) => got,
                     None => {
                         let b = match cache_node_struct_alloc(fs, pcpu_read_locks, c::GFP_NOWAIT) {
                             Some(b) => b,
@@ -147,10 +151,7 @@ impl BtreeTrans<'_> {
                             }
                         };
                         let b = unsafe { cached_node(fs, b.as_ptr()) };
-
-                        assert!(six_trylock_ip(b.c.lock.six(), SIX_LOCK_intent, crate::ret_ip!()));
-                        assert!(six_trylock_ip(b.c.lock.six(), SIX_LOCK_write, crate::ret_ip!()));
-                        b
+                        (b, new_node_lock(b))
                     }
                 };
 
@@ -158,14 +159,14 @@ impl BtreeTrans<'_> {
                     b.contents_mut().data = bufs.data.cast();
                     (*core::ptr::from_ref(b).cast_mut()).aux_data = bufs.aux_data;
                 }
-                break 'got_mem b;
+                break 'got_mem (b, held);
             }
 
             /* Try to cannibalize another cached btree node: */
             if bc.alloc_lock.load(Relaxed) == current() {
-                let b = self.btree_node_cannibalize(paths, pcpu_read_locks);
+                let got = self.btree_node_cannibalize(paths, pcpu_read_locks);
                 fs.event_inc_trace(events::btree_cache_cannibalize, |out| prt!(out, "{}", self.fn_name()));
-                break 'got_mem b;
+                break 'got_mem got;
             }
 
             return Err(bch_errcode::BCH_ERR_ENOMEM_btree_node_mem_alloc.into());
@@ -193,11 +194,10 @@ impl BtreeTrans<'_> {
 
         if let Err(e) = self.relock_from(paths) {
             let _ = fs.btree_node_transition_state(b, State::FREEABLE);
-            unsafe { unlock_reclaimed(b) };
             return Err(e);
         }
 
-        Ok(NonNull::from(b))
+        Ok((NonNull::from(b), held))
     }
 
     /* Slowpath, don't want it inlined into btree_iter_traverse() */
@@ -238,7 +238,7 @@ impl BtreeTrans<'_> {
             self.path_relock(paths, p)?;
         }
 
-        let b = match self.btree_node_mem_alloc(paths, level != 0) {
+        let (b, held) = match self.btree_node_mem_alloc(paths, level != 0) {
             Err(e) if e.matches(c::ENOMEM) => {
                 let Some(p) = path else { return Err(e) };
 
@@ -260,7 +260,6 @@ impl BtreeTrans<'_> {
             (*p).c.btree_id = btree.0 as u8;
         }
         let b = unsafe { cached_node(fs, b.as_ptr()) };
-        let lock = b.c.lock.six();
 
         let ret = if fs.btree_node_transition_state(b, State::CLEAN).is_ok() {
             /*
@@ -271,28 +270,25 @@ impl BtreeTrans<'_> {
              * and also cache coherency
              */
             b.flags.set_read_in_flight(true);
-            unsafe { six_unlock_ip(lock, SIX_LOCK_write, crate::ret_ip!()) };
+            let intent = held.downgrade();
 
             if path.is_some() {
-                let seq = lock.seq.get();
+                let seq = b.c.lock.six().seq.get();
 
                 /* Unlock before doing IO: */
-                unsafe { six_unlock_ip(lock, SIX_LOCK_intent, crate::ret_ip!()) };
+                drop(intent);
                 self.unlock_from(paths, crate::ret_ip!());
 
                 node_read(self, b, sync);
 
-                (sync && six_relock_ip(lock, lock_type, seq, crate::ret_ip!())).then_some(b)
+                if sync { b.c.lock.relock_as(lock_type, seq) } else { None }
             } else {
                 node_read(self, b, sync);
-                if lock_type == SIX_LOCK_read {
-                    unsafe { six_lock_downgrade(lock) };
-                }
-                Some(b)
+                Some(if lock_type == SIX_LOCK_read { intent.downgrade() } else { intent })
             }
         } else {
             /* raced with another fill: */
-            unsafe { unlock_reclaimed(b) };
+            drop(held);
             None
         };
 
@@ -302,14 +298,12 @@ impl BtreeTrans<'_> {
          * we're relocked before returning:
          */
         if let Some(p) = path {
-            if let Err(e) = self.relock_from(paths).and_then(|()| self.path_relock(paths, p)) {
-                if let Some(b) = ret {
-                    unsafe { six_unlock_ip(b.c.lock.six(), lock_type, crate::ret_ip!()) };
-                }
-                return Err(e);
-            }
+            self.relock_from(paths).and_then(|()| self.path_relock(paths, p))?;
         }
 
-        Ok(ret)
+        Ok(ret.map(|held| {
+            held.into_raw();
+            b
+        }))
     }
 }

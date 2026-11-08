@@ -1375,6 +1375,18 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
         down
     }
 
+    /// Write over this intent, if no one holds the lock read: the one hold,
+    /// write and intent, released together. Intent back if not.
+    pub fn try_write(self) -> Result<Self, Self> {
+        assert!(self.ty() == six_lock_type::SIX_LOCK_intent, "a six write lock tried over a hold that isn't intent");
+        let locked = self.lock();
+        if !six_trylock_ip(locked.raw(), six_lock_type::SIX_LOCK_write, 0) {
+            return Err(self);
+        }
+        self.into_raw();
+        Ok(unsafe { SixHold::from_raw(locked, six_lock_type::SIX_LOCK_write) })
+    }
+
     /// Read to intent, if no one else holds intent: six_lock_tryupgrade().
     pub fn try_upgrade(self) -> Result<Self, Self> {
         if self.ty() != six_lock_type::SIX_LOCK_read {

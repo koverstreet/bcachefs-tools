@@ -10,13 +10,13 @@ use crate::debug::params::btree_shrinker_disabled;
 use crate::debug::trace::events;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
-use crate::locking::six::{six_trylock_ip, six_unlock_ip};
+use crate::locking::six::{six_trylock_ip, six_unlock_ip, SixHold};
 use crate::prt;
 use crate::util::kernel::local_clock;
 use crate::util::time_stats::TimeStats;
 use bitflags::bitflags;
 use c::btree_node_cache_state as State;
-use c::six_lock_type::{SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
+use c::six_lock_type::{SIX_LOCK_intent, SIX_LOCK_read};
 
 /*
  * Dirty nodes are journal reclaim's to write - but during journal replay it
@@ -44,15 +44,6 @@ bitflags! {
     pub(super) struct ReclaimFlags: u32 {
         const SHRINKER    = 1 << 0;
         const ALLOW_DIRTY = 1 << 1;
-    }
-}
-
-/// # Safety
-/// It holds @b intent and write locked, and nothing else holds them for it.
-pub(super) unsafe fn unlock_reclaimed(b: &BtreeNode) {
-    unsafe {
-        six_unlock_ip(b.c.lock.six(), SIX_LOCK_write, crate::ret_ip!());
-        six_unlock_ip(b.c.lock.six(), SIX_LOCK_intent, crate::ret_ip!());
     }
 }
 
@@ -93,30 +84,25 @@ impl Fs {
      * this version is for btree nodes that have already been freed (we're not
      * reaping a real btree node)
      */
-    pub(super) fn btree_node_reclaim(&self, lists: &mut BtreeCacheGuard<'_>, b: &BtreeNode, flags: ReclaimFlags)
-        -> Result<(), BchError>
-    {
+    pub(super) fn btree_node_reclaim<'b>(&self, lists: &mut BtreeCacheGuard<'_>, b: &'b BtreeNode,
+                                         flags: ReclaimFlags) -> Result<SixHold<'b>, BchError> {
         self.reclaim_checks(lists, b, flags)?;
 
-        if !six_trylock_ip(b.c.lock.six(), SIX_LOCK_intent, crate::ret_ip!()) {
+        let Some(intent) = b.c.lock.try_lock_as(SIX_LOCK_intent) else {
             return Err(self.noreclaim(lists, flags, NotFreed::lock_intent));
-        }
+        };
 
-        if !six_trylock_ip(b.c.lock.six(), SIX_LOCK_write, crate::ret_ip!()) {
-            unsafe { six_unlock_ip(b.c.lock.six(), SIX_LOCK_intent, crate::ret_ip!()) };
+        let Ok(held) = intent.try_write() else {
             return Err(self.noreclaim(lists, flags, NotFreed::lock_write));
-        }
+        };
 
         /* recheck under lock */
-        if let Err(e) = self.reclaim_checks(lists, b, flags) {
-            unsafe { unlock_reclaimed(b) };
-            return Err(e);
-        }
+        self.reclaim_checks(lists, b, flags)?;
 
         if b.hash_val() != 0 {
             self.event_inc_trace(events::btree_cache_reap, |out| bch2_btree_pos_to_text(out, self, b));
         }
-        Ok(())
+        Ok(held)
     }
 
     fn btree_cache_scan_locked(&self, idx: usize, nr_to_scan: usize) -> Option<(usize, usize)> {
@@ -170,9 +156,9 @@ impl Fs {
                     break 'out;
                 }
 
-                if self.btree_node_reclaim(lists, b, ReclaimFlags::SHRINKER).is_ok() {
+                if let Ok(held) = self.btree_node_reclaim(lists, b, ReclaimFlags::SHRINKER) {
                     let _ = self.btree_node_transition_state_locked(lists, b, State::FREED);
-                    unsafe { unlock_reclaimed(b) };
+                    drop(held);
                     freed += 1;
                 }
             }
@@ -189,13 +175,13 @@ impl Fs {
                     b.flags.set_accessed(false);
                     lists.not_freed[NotFreed::access_bit as usize] += 1;
                     touched -= 1;
-                } else if self.btree_node_reclaim(lists, b, ReclaimFlags::SHRINKER).is_ok() {
+                } else if let Ok(held) = self.btree_node_reclaim(lists, b, ReclaimFlags::SHRINKER) {
                     self.btree.evicted_size.record(b.hash_val(), unsafe { b.contents() }.nr.live_u64s);
                     let _ = self.btree_node_transition_state_locked(lists, b, State::FREED);
 
                     freed += 1;
 
-                    unsafe { unlock_reclaimed(b) };
+                    drop(held);
                 }
 
                 if touched >= nr {

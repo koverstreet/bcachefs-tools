@@ -211,7 +211,7 @@ impl InteriorUpdate<'_> {
         let trans = self.trans;
         let fs = self.fs();
 
-        let b = trans.btree_node_mem_alloc(&mut trans.paths(), interior)?;
+        let (b, held) = trans.btree_node_mem_alloc(&mut trans.paths(), interior)?;
         let n = unsafe { b.as_ref() };
         let mut ob = c::open_buckets::default();
 
@@ -268,12 +268,11 @@ impl InteriorUpdate<'_> {
          */
         if let Err(e) = ret {
             let _ = fs.btree_node_transition_state(n, c::btree_node_cache_state::FREEABLE);
-            unsafe {
-                six_unlock_ip(n.c.lock.six(), c::six_lock_type::SIX_LOCK_write, crate::ret_ip!());
-                six_unlock_ip(n.c.lock.six(), c::six_lock_type::SIX_LOCK_intent, crate::ret_ip!());
-            }
+            drop(held);
             return Err(e);
         }
+        // the reserve's to hold, until its node is taken or freed
+        held.into_raw();
         Ok(Reserved { b, ob })
     }
 

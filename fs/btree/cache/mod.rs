@@ -93,7 +93,7 @@ mod pins;
 mod reclaim;
 mod state;
 
-use bufs::{cache_node_struct_alloc, cached_node, NodeBufs};
+use bufs::{cache_node_struct_alloc, cached_node, new_node_lock, NodeBufs};
 pub use bufs::{node_data_free, node_mem_alloc, node_mem_free, node_scratch_alloc, node_struct_free, Bounce};
 pub use pins::BtreeCachePins;
 pub(crate) use state::NodeTable;

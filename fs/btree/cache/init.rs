@@ -2,18 +2,17 @@
 
 /* Filesystem init / exit */
 
-use super::reclaim::unlock_reclaimed;
-use super::{cached_node, node_mem_alloc, node_mem_free};
+use super::{cached_node, new_node_lock, node_mem_alloc, node_mem_free};
 use crate::btree::node::BtreeNode;
 use crate::btree::types::BtreeCacheGuard;
 use crate::c;
 use crate::data_structures::list::Walk;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
-use crate::locking::six::{six_lock_counts, six_trylock_ip};
+use crate::locking::six::six_lock_counts;
 use crate::prt;
 use crate::util::alloc::darray_exit;
-use crate::util::kernel::{cond_resched, unlikely};
+use crate::util::kernel::cond_resched;
 use crate::util::log::LogMsg;
 use crate::util::place::PlacedDrop;
 use c::btree_node_cache_state as State;
@@ -76,13 +75,11 @@ impl Fs {
                 return self.throw(bch_errcode::BCH_ERR_ENOMEM_fs_btree_cache_init);
             };
             let b = unsafe { cached_node(self, b.as_ptr()) };
-
-            assert!(six_trylock_ip(b.c.lock.six(), SIX_LOCK_intent, crate::ret_ip!()));
-            assert!(six_trylock_ip(b.c.lock.six(), SIX_LOCK_write, crate::ret_ip!()));
+            let held = new_node_lock(b);
 
             let _ = self.btree_node_transition_state(b, State::FREEABLE);
 
-            unsafe { unlock_reclaimed(b) };
+            drop(held);
         }
 
         bc.shrinkers_register(self)
@@ -90,14 +87,14 @@ impl Fs {
 
     fn btree_cache_exit_drain_node(&self, lists: &mut BtreeCacheGuard<'_>, b: &BtreeNode) {
         assert!(!(b.flags.read_in_flight() || b.flags.write_in_flight()), "IO in flight on a node at cache exit");
-        if unlikely(!six_trylock_ip(b.c.lock.six(), SIX_LOCK_intent, crate::ret_ip!())) {
+        let Some(intent) = b.c.lock.try_lock_as(SIX_LOCK_intent) else {
             btree_cache_exit_locked_dump(self, lists, b, "intent held");
             panic!("intent held on a node at cache exit");
-        }
-        if unlikely(!six_trylock_ip(b.c.lock.six(), SIX_LOCK_write, crate::ret_ip!())) {
+        };
+        let Ok(held) = intent.try_write() else {
             btree_cache_exit_locked_dump(self, lists, b, "write held");
             panic!("write held on a node at cache exit");
-        }
+        };
 
         /*
          * Dirty nodes can survive to exit on a dead journal: the going-RO
@@ -114,7 +111,7 @@ impl Fs {
         }
 
         let _ = self.btree_node_transition_state_locked(lists, b, State::FREED);
-        unsafe { unlock_reclaimed(b) };
+        drop(held);
         cond_resched();
     }
 

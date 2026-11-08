@@ -7,7 +7,7 @@ use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::format::BkeyType;
 use crate::fs::Fs;
-use crate::locking::six::six_lock_exit;
+use crate::locking::six::{six_lock_exit, SixHold};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::kfree;
 use crate::util::kernel::is_vmalloc_addr;
@@ -275,6 +275,13 @@ pub(super) fn cache_node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: c::gf
     let b = node_struct_alloc(fs, pcpu_read_locks, gfp)?;
     unsafe { (*b.as_ptr()).nodes_idx = slot.set(b.cast()) };
     Some(b)
+}
+
+/// A new node's locks, intent and write: no one else has it to hold them.
+pub(super) fn new_node_lock(b: &BtreeNode) -> SixHold<'_> {
+    b.c.lock.try_lock_as(c::six_lock_type::SIX_LOCK_intent)
+        .and_then(|intent| intent.try_write().ok())
+        .expect("a new node locked by someone else")
 }
 
 /// A node with its buffers, GFP_KERNEL - off the cache's lists, not hashed -

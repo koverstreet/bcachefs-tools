@@ -30,7 +30,6 @@ use crate::errcode::{blk_status_to_bch_err, BchError};
 use crate::format::{BkeyType, BkeyTypeFlags, Btree, BtreeFlags, DataType, Nonce};
 use crate::fs::{Dev, Fs, WriteRef};
 use crate::init::{damage::note_lost_extents, error::id, passes::RecoveryPass, recovery::btree_lost_data};
-use crate::locking::six::six_unlock_ip;
 use crate::sb::{errors::FsckFlags, members::DevIoRef};
 use crate::types::{Le32, Le64};
 use crate::util::bio::{bch2_bio_map, buf_nr_bvecs, of_bio, Bio, BioBox, BioBuffersMapped, BioOwner};
@@ -947,13 +946,14 @@ impl Fs {
         let b = trans.btree_node_mem_alloc(&mut trans.paths(), level != 0);
         trans.btree_cache_cannibalize_unlock();
 
-        let b = b.unwrap_or_else(|e| panic!("allocating a btree root's node: {e}"));
-        let b = unsafe { &mut *b.as_ptr() };
-
-        unsafe { b.contents_mut() }.set_key(k);
-        b.c.level    = level as u8;
-        b.c.btree_id = id.0 as u8;
-        let b = &*b;
+        let (b, held) = b.unwrap_or_else(|e| panic!("allocating a btree root's node: {e}"));
+        unsafe {
+            let p = b.as_ptr();
+            (*p).contents_mut().set_key(k);
+            (*p).c.level    = level as u8;
+            (*p).c.btree_id = id.0 as u8;
+        }
+        let b = unsafe { b.as_ref() };
         self.btree_node_transition_state(b, c::btree_node_cache_state::CLEAN)
             .unwrap_or_else(|e| panic!("hashing a btree root's node: {e}"));
 
@@ -971,11 +971,7 @@ impl Fs {
             Ok(())
         };
 
-        unsafe {
-            six_unlock_ip(b.c.lock.six(), c::six_lock_type::SIX_LOCK_write, crate::ret_ip!());
-            six_unlock_ip(b.c.lock.six(), c::six_lock_type::SIX_LOCK_intent, crate::ret_ip!());
-        }
-
+        drop(held);
         ret
     }
 }

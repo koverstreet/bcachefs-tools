@@ -20,7 +20,6 @@ use crate::errcode::{ret_to_c, BchError};
 use crate::format::{BkeyType, Btree};
 use crate::fs::Fs;
 use crate::format::jset_entry;
-use crate::locking::six::six_unlock_ip;
 use crate::prt;
 use crate::util::Printbuf;
 use crate::util::printbuf::ToText;
@@ -148,11 +147,11 @@ fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level: u32) -> Re
     let b = trans.btree_node_mem_alloc(&mut trans.paths(), false);
     trans.btree_cache_cannibalize_unlock();
 
-    let mut b = b?;
-    {
-        let n = unsafe { b.as_mut() };
-        n.c.level    = level as u8;
-        n.c.btree_id = btree.0 as u8;
+    let (b, held) = b?;
+    unsafe {
+        let p = b.as_ptr();
+        (*p).c.level    = level as u8;
+        (*p).c.btree_id = btree.0 as u8;
     }
     let n = unsafe { b.as_ref() };
 
@@ -179,10 +178,7 @@ fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level: u32) -> Re
 
     set_root_inmem(fs, n);
 
-    unsafe {
-        six_unlock_ip(n.c.lock.six(), c::six_lock_type::SIX_LOCK_write, crate::ret_ip!());
-        six_unlock_ip(n.c.lock.six(), c::six_lock_type::SIX_LOCK_intent, crate::ret_ip!());
-    }
+    drop(held);
     Ok(())
 }
 

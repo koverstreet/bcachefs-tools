@@ -16,7 +16,7 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::format::{BkeyType, Btree};
 use crate::fs::Fs;
 use crate::init::passes::RecoveryPass;
-use crate::locking::six::{six_relock_ip, six_unlock_ip};
+use crate::locking::six::{six_relock_ip, six_unlock_ip, SixHold};
 use crate::prt;
 use crate::types::L1_CACHE_BYTES;
 use crate::util::kernel::{likely, prefetch, race_fault, unlikely};
@@ -407,14 +407,17 @@ impl BtreeTrans<'_> {
             self.locking_root_id.set(Btree(u32::MAX));
             let _ = self.node_lock_nopath_as(&b.c, SIX_LOCK_intent, true, crate::ret_ip!(), false);
             let _ = self.node_lock_nopath_as(&b.c, SIX_LOCK_write, true, crate::ret_ip!(), false);
+            // may not fail: both held
+            let held = unsafe { SixHold::from_raw(&b.c.lock, SIX_LOCK_write) };
 
             if unlikely(b.hash_val() != btree_ptr_hash_val(BkeySC::from(k))) {
+                drop(held);
                 break;
             }
 
             if b.flags.dirty() {
                 node_write(self, b, BtreeWriteType::cache_reclaim, BtreeWriteFlags::empty());
-                unsafe { super::reclaim::unlock_reclaimed(b) };
+                drop(held);
                 continue;
             }
 
@@ -422,9 +425,8 @@ impl BtreeTrans<'_> {
 
             fs.btree.evicted_size.record(b.hash_val(), unsafe { b.contents() }.nr.live_u64s);
             let _ = fs.btree_node_transition_state(b, State::FREED);
+            drop(held);
             break;
         }
-
-        unsafe { super::reclaim::unlock_reclaimed(b) };
     }
 }
