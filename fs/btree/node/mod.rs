@@ -14,7 +14,7 @@ pub mod iter;
 pub mod keys;
 pub mod sort;
 
-use crate::btree::bkey::{BkeyI, BkeyP, BkeySC, BKEY_U64S, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{BkeyI, BkeyP, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::c;
 use crate::cstructs::c as cs;
 use crate::data::keylist::PaddedKey;
@@ -314,7 +314,7 @@ impl NodeContents {
         self.key.key()
     }
 
-    pub fn set_key(&mut self, k: &BkeyI) {
+    pub fn set_key(&mut self, k: impl BkeyV) {
         self.key.set_key(k)
     }
 

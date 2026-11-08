@@ -86,19 +86,19 @@ impl BkeyBuf {
     pub fn reassemble(&mut self, k: BkeySC<'_>) {
         self.realloc(k.k.u64s as usize);
         // SAFETY: realloc()'s room
-        unsafe { copy_key(self.buf_mut().as_mut_ptr(), k) }
+        unsafe { copy_key(self.buf_mut().as_mut_ptr(), k.k, k.v) }
     }
 }
 
-/// Copies @k, header and value, to @dst.
+/// Copies a key - header @k, value @v - to @dst.
 ///
 /// # Safety
-/// @dst has room for @k's u64s.
-unsafe fn copy_key(dst: *mut u64, k: BkeySC<'_>) {
+/// @v is @k's value, and @dst has room for @k's u64s.
+pub(crate) unsafe fn copy_key(dst: *mut u64, k: &c::bkey, v: *const c::bch_val) {
     // SAFETY: the caller's; a key's header and value are whole u64s
     unsafe {
-        core::ptr::copy_nonoverlapping(core::ptr::from_ref(k.k).cast::<u64>(), dst, BKEY_U64S);
-        core::ptr::copy_nonoverlapping(k.v.cast::<u64>(), dst.add(BKEY_U64S), k.k.val_u64s());
+        core::ptr::copy_nonoverlapping(core::ptr::from_ref(k).cast::<u64>(), dst, BKEY_U64S);
+        core::ptr::copy_nonoverlapping(v.cast::<u64>(), dst.add(BKEY_U64S), k.val_u64s());
     }
 }
 
@@ -157,7 +157,7 @@ impl c::bkey_buf {
         }
         // SAFETY: init()'s @k, which is @onstack with room for @k, or the
         // heap buffer, with room for any key
-        unsafe { copy_key(self.k.cast(), k) }
+        unsafe { copy_key(self.k.cast(), k.k, k.v) }
     }
 
     pub fn exit(&mut self) {

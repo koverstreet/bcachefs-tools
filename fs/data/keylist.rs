@@ -291,11 +291,11 @@ impl<const U64S: usize> PaddedKey<U64S> {
         unsafe { &mut *BkeyI::from_raw_mut(self.0.as_mut_ptr().cast()) }
     }
 
-    pub fn set_key(&mut self, k: &BkeyI) {
-        let bytes = k.as_bytes();
-        let room = plain_bytes_mut(&mut self.0);
-        assert!(bytes.len() <= room.len(), "a key of {} bytes in a room of {}", bytes.len(), room.len());
-        room[..bytes.len()].copy_from_slice(bytes);
+    /// @k copied in, from any form of key: the generic part reads its header
+    /// and value, so each instance is that and a call.
+    pub fn set_key(&mut self, k: impl BkeyV) {
+        let k = k.as_sc();
+        key_set(&mut self.0, k.k, k.v)
     }
 
     /// All of its room, header first: for a key made in place, as by
@@ -308,6 +308,15 @@ impl<const U64S: usize> PaddedKey<U64S> {
     pub fn room(&mut self) -> KeyRoom<'_> {
         KeyRoom::existing(&mut self.0)
     }
+}
+
+/// A key - header @k, value @v - copied into @room: one copy of the code for
+/// every key type and room size.
+#[inline(never)]
+fn key_set(room: &mut [u64], k: &c::bkey, v: *const c::bch_val) {
+    let u64s = usize::from(k.u64s);
+    assert!(u64s <= room.len(), "a key of {u64s} u64s in a room of {}", room.len());
+    unsafe { crate::btree::bkey_buf::copy_key(room.as_mut_ptr(), k, v) }
 }
 
 /// The keys in @u64s, from where a key starts.
