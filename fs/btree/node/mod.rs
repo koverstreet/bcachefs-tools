@@ -27,7 +27,6 @@ use crate::util::{Printbuf, ToText};
 use core::ffi::c_void;
 use core::mem::offset_of;
 use core::ops::{ControlFlow, Range};
-use core::sync::atomic::AtomicUsize;
 use bset::{BsetTree, BSET_CACHELINE};
 use iter::KeyIter;
 use cstruct_macros::{c_export, c_name, CStruct};
@@ -146,9 +145,7 @@ pub struct BtreeNode {
      * marking it as completed before it's reachable would be incorrect:
      */
     #[c("unsigned long will_make_reachable")]
-    pub will_make_reachable: AtomicUsize,
-
-    pub ob: cs::open_buckets,
+    pub will_make_reachable: crate::btree::interior::WillMakeReachable,
 
     /* lru list */
     pub list: cs::list_head,

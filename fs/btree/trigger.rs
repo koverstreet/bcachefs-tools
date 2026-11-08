@@ -190,11 +190,11 @@ pub unsafe fn bch2_verify_update_old_key(trans: &BtreeTrans<'_>, i: &c::btree_in
 }
 
 /// A deletion at @p, for the side of an update that has no key.
-fn deleted_at(p: Bpos) -> c::bkey_i {
+pub(crate) fn deleted_at(p: Bpos) -> c::bkey_i {
     c::bkey_i { k: c::bkey { p, ..c::bkey::new() }, ..Default::default() }
 }
 
-fn as_s(k: &mut c::bkey_i) -> BkeyS<'_> {
+pub(crate) fn as_s(k: &mut c::bkey_i) -> BkeyS<'_> {
     BkeyS { k: &mut k.k, v: &mut k.v, val: PhantomData }
 }
 

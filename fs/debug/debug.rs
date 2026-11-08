@@ -182,13 +182,11 @@ fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
     prt!(out, "written:\t{}\n",             b.written.get());
     prt!(out, "writes blocked:\t{}\n",
          u32::from(!unsafe { (*b.write_blocked.data_ptr()).is_empty() }));
-    prt!(out, "will make reachable:\t{:x}\n", b.will_make_reachable.load(Ordering::Relaxed));
+    prt!(out, "will make reachable:\t{:x}\n", b.will_make_reachable.raw());
 
     for w in &b.writes {
         prt!(out, "journal pin {:016x}:\t{}\n", core::ptr::from_ref(&w.journal) as usize, w.journal.seq());
     }
-
-    prt!(out, "ob:\t{}\n", b.ob.nr);
 }
 
 impl DebugFile for CachedBtreeNodes {

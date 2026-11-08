@@ -8,18 +8,17 @@
 use core::ffi::c_int;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::Relaxed;
-use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut};
+use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BkeyVMut};
 use crate::btree::cache::{bch2_btree_node_set_dirty, bch2_btree_node_wait_on_flag, btree_ptr_hash_val};
 use crate::btree::for_each::lockrestart_do;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
 use crate::btree::node::BtreeNode;
 use crate::btree::path::Paths;
-use crate::btree::trigger::{key_trigger, TriggerOp};
+use crate::btree::trigger::{as_s, deleted_at, key_trigger, TriggerOp};
 use crate::btree::write::{bch2_btree_node_write_trans, node_write_if_need};
 use crate::c;
 use crate::c::six_lock_type::{SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
-use crate::data::keylist::PaddedKey;
 use crate::data::ptrs::{BkeyVPtrs, ExtentEntry, Ptrs};
 use crate::data::reconcile::needs_reconcile::strip_reconcile;
 use crate::data_structures::array_vec::ArrayVec;
@@ -29,9 +28,9 @@ use crate::fs_fatal_error;
 use crate::locking::ExclusiveGuard;
 use crate::types::Le64;
 use crate::util::closure::closure_wake_up;
-use super::{BtreeUpdate, InteriorUpdate, Mode, NewNode, UpdateNode, UPDATE_NODES_MAX};
-
-type NodeKey = PaddedKey<{ crate::btree::bkey::BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX }>;
+use crate::util::vstructs::SelfSized;
+use super::{write_blocked, BtreeUpdate, InteriorUpdate, Mode, NewNode, NewPointer, NodeKey, OldNode, Pointee,
+            UPDATE_NODES_MAX};
 
 impl InteriorUpdate<'_> {
     /*
@@ -39,37 +38,19 @@ impl InteriorUpdate<'_> {
      * block @b from being written until @as completes
      */
     pub(super) fn updated_node(&self, b: &BtreeNode) {
-        let fs = self.fs();
-
-        assert!(!self.owned.borrow().visible, "an interior update made visible twice");
         assert!(self.level_end() >= usize::from(b.c.level), "an interior update's node past its reserve");
         assert!(b.flags.dirty(), "an interior update's node not dirty");
         assert!(b.c.level != 0, "an interior update's node a leaf");
 
-        let mut g = fs.btree.interior_updates.lock.lock();
-        if g.unwritten.push_back(self.raw).is_err() {
-            panic!("unwritten full: start() reserves room for every live update");
-        }
-
-        *unsafe { self.mode.protected_mut() } = Some(Mode::Node(NonNull::from(b)));
-        self.owned.borrow_mut().visible = true;
+        let mut g = self.make_visible(Mode::Node(NonNull::from(b)));
         self.level_end.store(b.c.level, Relaxed);
 
         b.flags.set_write_blocked(true);
-        unsafe { b.write_blocked.protected_mut().push_front(self) };
+        unsafe { write_blocked(b, &mut g).push_front(self) };
     }
 
     pub(super) fn updated_root(&self) {
-        let fs = self.fs();
-
-        assert!(!self.owned.borrow().visible, "an interior update made visible twice");
-        self.owned.borrow_mut().visible = true;
-
-        let mut g = fs.btree.interior_updates.lock.lock();
-        if g.unwritten.push_back(self.raw).is_err() {
-            panic!("unwritten full: start() reserves room for every live update");
-        }
-        *unsafe { self.mode.protected_mut() } = Some(Mode::Root);
+        let _g = self.make_visible(Mode::Root);
     }
 
     /*
@@ -81,9 +62,7 @@ impl InteriorUpdate<'_> {
     pub(super) fn emit_new_node_key(&self, n: &NewNode<'_>) {
         let fs = self.fs();
         let contents = unsafe { BtreeNode::contents_mut(n) };
-        let bytes = core::mem::size_of::<crate::util::vstructs::Head<c::btree_node>>() +
-            contents.data().keys.u64s() * core::mem::size_of::<u64>();
-        let sectors = (bytes.next_multiple_of(fs.block_bytes() as usize) >> 9) as u16;
+        let sectors = (contents.data().bytes().next_multiple_of(fs.block_bytes() as usize) >> 9) as u16;
 
         if let Some(mut p) = contents.key.key_mut().as_s().arm::<c::BtreePtrV2>() {
             p.v_mut().sectors_written = crate::types::Le16::new(sectors);
@@ -110,26 +89,27 @@ impl InteriorUpdate<'_> {
     pub(super) fn write_new_node(&self, paths: &mut Paths<'_>, n: &NewNode<'_>) {
         let fs = self.fs();
 
-        unsafe { self.new_nodes() }.push(UpdateNode::node(fs, n));
+        unsafe { self.new_nodes() }.push(NewPointer::node(fs, n));
 
         self.pending.fetch_add(1, Relaxed);
 
         {
             let _g = fs.btree.interior_updates.lock.lock();
-            assert!(n.will_make_reachable.load(Relaxed) == 0, "a new node another update will make reachable");
-            n.will_make_reachable.store(1 | self.raw.as_ptr() as usize, Relaxed);
+            n.will_make_reachable.set(self.raw);
             n.flags.set_will_make_reachable(true);
         }
 
         unsafe { bch2_btree_node_set_dirty(fs.as_ptr(), ptr::from_ref(&**n).cast_mut()) };
         n.flags.set_need_write(true);
 
-        let mut o = self.owned.borrow_mut();
-        let ob = unsafe { &mut (*ptr::from_ref(&**n).cast_mut()).ob };
-        for ob in ob.drain(fs) {
-            o.open_buckets.push(ob);
+        {
+            let mut o = self.owned.borrow_mut();
+            let super::Owned { consumed, open_buckets, .. } = &mut *o;
+            let r = consumed.iter_mut().find(|r| r.b == n.b).expect("a new node, consumed from the reserve");
+            for ob in r.ob.drain(fs) {
+                open_buckets.push(ob);
+            }
         }
-        drop(o);
 
         bch2_btree_node_write_trans(self.trans, paths, n, SIX_LOCK_write, 0);
     }
@@ -157,11 +137,13 @@ impl InteriorUpdate<'_> {
          * operations complete
          */
         {
-            let _g = fs.btree.interior_updates.lock.lock();
-            let mut blocked = unsafe { b.write_blocked.protected_mut() }.cursor_mut();
+            let mut g = fs.btree.interior_updates.lock.lock();
+            let mut blocked = write_blocked(b, &mut g).cursor_mut();
 
             while let Some(p) = blocked.remove_current() {
-                self.reparent(p);
+                *unsafe { p.mode.protected_mut() } = Some(Mode::Update);
+                fs.journal.pin_copy(&self.journal, &p.journal, c::journal_pin_type::JOURNAL_PIN_TYPE_other,
+                                    Some(update_reparent_journal_pin_flush));
 
                 /*
                  * for flush_held_btree_writes() waiting on updates to flush or
@@ -189,7 +171,7 @@ impl InteriorUpdate<'_> {
             fs.journal.pin_drop(&w.journal);
         }
 
-        self.owned.borrow_mut().old_nodes.push(UpdateNode::node(fs, b));
+        self.owned.borrow_mut().old_nodes.push(OldNode::of(b));
     }
 }
 
@@ -201,17 +183,6 @@ unsafe extern "C" fn update_reparent_journal_pin_flush(_j: *mut c::journal, _pin
 unsafe extern "C" fn will_free_node_journal_pin_flush(_j: *mut c::journal, _pin: *mut c::journal_entry_pin,
                                                       _seq: u64) -> c_int {
     0
-}
-
-impl BtreeUpdate {
-    /// @child, blocking a node this update frees, now completed by it: under
-    /// interior_updates.lock.
-    fn reparent(&self, child: &BtreeUpdate) {
-        *unsafe { child.mode.protected_mut() } = Some(Mode::Update);
-
-        self.fs().journal.pin_copy(&self.journal, &child.journal, c::journal_pin_type::JOURNAL_PIN_TYPE_other,
-                                   Some(update_reparent_journal_pin_flush));
-    }
 }
 
 fn has_reconcile(fs: &Fs, k: BkeySC<'_>) -> bool {
@@ -226,7 +197,7 @@ fn has_reconcile(fs: &Fs, k: BkeySC<'_>) -> bool {
  * The transactional part of an interior btree node update, where we journal the
  * update we did to the interior node and update alloc info:
  */
-fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, _commit_lock: &ExclusiveGuard<'_, c::mutex>)
+fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &mut ExclusiveGuard<'_, c::mutex>)
     -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -246,10 +217,9 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, _commit_lock: 
     for i in u.owned.borrow().old_nodes.iter() {
         let level = u32::from(i.level) + 1;
         let old = BkeySC::from(i.key.key());
-        let mut deleted = c::bkey_i { k: c::bkey { p: old.k.p, ..c::bkey::new() }, ..Default::default() };
+        let mut deleted = deleted_at(old.k.p);
         let deleted_u64s = deleted.k.u64s.into();
-        let deleted = unsafe { &mut *BkeyI::from_raw_mut(&raw mut deleted) };
-        let mut op = TriggerOp::new(btree, level, old, BkeyS::from(deleted),
+        let mut op = TriggerOp::new(btree, level, old, as_s(&mut deleted),
                                     UpdateTriggerFlags::OVERWRITE | UpdateTriggerFlags::TRANSACTIONAL,
                                     deleted_u64s);
         key_trigger(t, &mut op)?;
@@ -257,9 +227,11 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, _commit_lock: 
         t.journal_entry_add(c::bch_jset_entry_type::overwrite, btree.0 as u8, level as u8, i.key.key().as_bytes())?;
     }
 
-    for i in unsafe { u.new_nodes() }.iter_mut() {
+    for i in u.new_nodes_locked(commit_lock).iter_mut() {
         let level = u32::from(i.level);
-        i.update_node_key = false;
+        if let Pointee::Node { update_node_key, .. } = &mut i.to {
+            *update_node_key = false;
+        }
         strip_reconcile(fs, i.key.key_mut().as_s());
 
         let mut k = t.bkey_reassemble_room(BkeySC::from(i.key.key()),
@@ -278,24 +250,29 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, _commit_lock: 
          */
 
         if has_reconcile(fs, k.as_sc()) {
-            let b = i.b.expect("a new node, not a deleted pointer");
+            let Pointee::Node { b, update_node_key, .. } = &mut i.to else {
+                panic!("a deleted pointer with reconcile state")
+            };
             match unsafe { BtreeNodeIter::at_node(t, b.as_ref()) } {
-                Ok(_)                                                                => i.update_node_key = true,
+                Ok(_)                                                                => *update_node_key = true,
                 Err(e) if e == BchError::from(bch_errcode::BCH_ERR_btree_node_dying) => strip_reconcile(fs, k.as_s()),
                 Err(e)                                                               => return Err(e),
             }
         }
 
         let buf_u64s = k.buf_u64s;
-        let deleted = c::bkey_i { k: c::bkey { p: k.k().p, ..c::bkey::new() }, ..Default::default() };
-        let deleted = unsafe { &*BkeyI::from_raw(&raw const deleted) };
-        let mut op = TriggerOp::new(btree, level + 1, BkeySC::from(deleted), k.as_s(),
+        let deleted = deleted_at(k.k().p);
+        let mut op = TriggerOp::new(btree, level + 1, BkeySC::from(unsafe { &*BkeyI::from_raw(&deleted) }), k.as_s(),
                                     UpdateTriggerFlags::INSERT | UpdateTriggerFlags::TRANSACTIONAL, buf_u64s);
         key_trigger(t, &mut op)?;
         i.key.set_key(k.as_sc());
 
-        if !i.update_node_key || i.root {
-            let (ty, level) = if i.root {
+        let (root, update_node_key) = match i.to {
+            Pointee::Node { root, update_node_key, .. } => (root, update_node_key),
+            Pointee::Deleted                           => (false, false),
+        };
+        if !update_node_key || root {
+            let (ty, level) = if root {
                 (c::bch_jset_entry_type::btree_root, level)
             } else {
                 (c::bch_jset_entry_type::btree_keys, level + 1)
@@ -336,8 +313,8 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
     {
         /* btree_node_update_key() changes a new node's key under commit_lock */
         let keys: ArrayVec<NodeKey, UPDATE_NODES_MAX> = {
-            let _commit_lock = fs.btree.interior_updates.commit_lock.lock();
-            unsafe { u.new_nodes() }.iter().map(|i| i.key.clone()).collect()
+            let mut commit_lock = fs.btree.interior_updates.commit_lock.lock();
+            u.new_nodes_locked(&mut commit_lock).iter().map(|i| i.key.clone()).collect()
         };
 
         if !keys.iter().all(|k| fs.btree_bitmap_marked(BkeySC::from(k.key()), true)) {
@@ -369,11 +346,10 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
      * buffer swapped for a new data buffer).
      */
     let old: ArrayVec<(NonNull<BtreeNode>, Le64, u64), UPDATE_NODES_MAX> = u.owned.borrow().old_nodes.iter()
-        .map(|i| (i.b.expect("an old node"), i.seq, btree_ptr_hash_val(BkeySC::from(i.key.key()))))
+        .map(|i| (i.b, i.seq, btree_ptr_hash_val(BkeySC::from(i.key.key()))))
         .collect();
     for (b, seq, hash) in old {
         let b = unsafe { b.as_ref() };
-        let mut seq_matches = false;
 
         /*
          * i->b is a stale pointer: this update deleted the node, so
@@ -392,13 +368,8 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
          * completion path (which runs after the bio finished) — either
          * way the IO this wait guards against is already done.
          */
-        let _ = lockrestart_do(&trans, |_| {
-            let mut paths = trans.paths();
-            let idx = trans.node_lock_with_path(&mut paths, &b.c, SIX_LOCK_read, hash)?;
-            seq_matches = btree_node_seq_matches(b, seq);
-            trans.node_unlock_with_path(&mut paths, idx, b.c.level.into());
-            Ok(())
-        });
+        let seq_matches = trans.node_locked_do(&b.c, SIX_LOCK_read, hash, |_, _| Ok(btree_node_seq_matches(b, seq)))
+            .unwrap_or(false);
         trans.unlock_long();
 
         if seq_matches {
@@ -423,10 +394,10 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
     trans.unlock();
     let mut new_nodes: ArrayVec<NonNull<BtreeNode>, UPDATE_NODES_MAX> = ArrayVec::new();
     let ret = {
-        let commit_lock = fs.btree.interior_updates.commit_lock.lock();
+        let mut commit_lock = fs.btree.interior_updates.commit_lock.lock();
 
         let ret = lockrestart_do(&trans, |t| {
-            nodes_written_trans(t, u, &commit_lock)?;
+            nodes_written_trans(t, u, &mut commit_lock)?;
             t.commit(Some(&u.disk_res), CommitOpts::new()
                      .watermark(Watermark::INTERIOR_UPDATES)
                      .flags(CommitFlags::NO_ENOSPC | CommitFlags::NO_CHECK_RW | CommitFlags::JOURNAL_RECLAIM))?;
@@ -444,20 +415,17 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
          * all our new nodes, to avoid racing with
          * btree_node_update_key():
          */
-        for i in unsafe { u.new_nodes() }.iter() {
-            if i.update_node_key {
-                let b = i.b.expect("a new node, not a deleted pointer");
-                unsafe { b.as_ref().contents_mut() }.key.set_key(i.key.key());
+        for i in u.new_nodes_locked(&mut commit_lock).iter() {
+            let Pointee::Node { b, update_node_key, .. } = i.to else { continue };
+            let b = unsafe { b.as_ref() };
+
+            if update_node_key {
+                unsafe { b.contents_mut() }.key.set_key(i.key.key());
             }
 
-            if let Some(b) = i.b {
-                let b = unsafe { b.as_ref() };
-                assert!(b.will_make_reachable.load(Relaxed) == update.as_ptr() as usize,
-                        "a new node another update will make reachable");
-                b.will_make_reachable.store(0, Relaxed);
-                b.flags.set_will_make_reachable(false);
-                new_nodes.push(NonNull::from(b));
-            }
+            b.will_make_reachable.clear(update);
+            b.flags.set_will_make_reachable(false);
+            new_nodes.push(NonNull::from(b));
         }
         ret
     };
@@ -480,9 +448,9 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
      */
     let front_mode = || {
         let g = fs.btree.interior_updates.lock.lock();
-        let front = *g.unwritten.peek_front().expect("an update completing, on unwritten");
-        assert!(front == update, "an update completing out of order");
-        unsafe { *u.mode.protected() }
+        let front = g.unwritten.peek_front().expect("an update completing, on unwritten");
+        assert!(front.as_ptr() == update, "an update completing out of order");
+        u.mode(&g)
     };
     if let Some(Mode::Node(b)) = front_mode() {
         let b = unsafe { b.as_ref() };
@@ -499,27 +467,21 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
          * __bch2_btree_node_write() doesn't do the actual write if
          * we're in journal error state:
          */
-        let _ = lockrestart_do(&trans, |_| {
-            let mut paths = trans.paths();
-            /*
-             * Unarmed take: this block owns clearing b's
-             * write_blocked (the list_del below), which is what
-             * makes b unreclaimable - so the reuse race can't
-             * reach it, and skipping on a spurious abort would
-             * leak write_blocked and leave b unwritable forever.
-             * The reparent race is handled by the as->b recheck
-             * under interior_updates.lock.
-             */
-            let idx = trans.node_lock_with_path(&mut paths, &b.c, SIX_LOCK_intent, 0)?;
-
-            if let Err(e) = trans.node_lock_write(&mut paths, idx, level) {
-                trans.node_unlock_with_path(&mut paths, idx, level);
-                return Err(e);
-            }
+        /*
+         * Unarmed take: this block owns clearing b's
+         * write_blocked (the list_del below), which is what
+         * makes b unreclaimable - so the reuse race can't
+         * reach it, and skipping on a spurious abort would
+         * leak write_blocked and leave b unwritable forever.
+         * The reparent race is handled by the as->b recheck
+         * under interior_updates.lock.
+         */
+        let _ = trans.node_locked_do(&b.c, SIX_LOCK_intent, 0, |paths, idx| {
+            trans.node_lock_write(paths, idx, level)?;
 
             let do_pin = {
-                let _g = fs.btree.interior_updates.lock.lock();
-                let blocked = unsafe { b.write_blocked.protected_mut() };
+                let mut g = fs.btree.interior_updates.lock.lock();
+                let blocked = write_blocked(b, &mut g);
 
                 unsafe { blocked.remove(u) };
                 if blocked.is_empty() {
@@ -533,7 +495,7 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
                  * journal pin work can happen outside the
                  * mutex.
                  */
-                unsafe { *u.mode.protected() == Some(Mode::Node(NonNull::from(b))) }
+                u.mode(&g) == Some(Mode::Node(NonNull::from(b)))
             };
 
             if do_pin {
@@ -560,10 +522,9 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
                 }
             }
 
-            trans.node_unlock_write(&mut paths, idx, level);
+            trans.node_unlock_write(paths, idx, level);
 
-            node_write_if_need(&trans, &mut paths, b, SIX_LOCK_intent);
-            trans.node_unlock_with_path(&mut paths, idx, level);
+            node_write_if_need(&trans, paths, b, SIX_LOCK_intent);
             Ok(())
         });
     }
@@ -572,25 +533,22 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
 
     for b in new_nodes {
         let b = unsafe { b.as_ref() };
-        let _ = lockrestart_do(&trans, |_| {
-            let mut paths = trans.paths();
-            /*
-             * Unarmed take: new nodes are dirty until
-             * written, hence unreclaimable - the reuse
-             * race can't reach them, and a spurious skip
-             * here would leave a node that never gets its
-             * write kicked.
-             */
-            let idx = trans.node_lock_with_path(&mut paths, &b.c, SIX_LOCK_read, 0)?;
-            node_write_if_need(&trans, &mut paths, b, SIX_LOCK_read);
-            trans.node_unlock_with_path(&mut paths, idx, b.c.level.into());
+        /*
+         * Unarmed take: new nodes are dirty until
+         * written, hence unreclaimable - the reuse
+         * race can't reach them, and a spurious skip
+         * here would leave a node that never gets its
+         * write kicked.
+         */
+        let _ = trans.node_locked_do(&b.c, SIX_LOCK_read, 0, |paths, _| {
+            node_write_if_need(&trans, paths, b, SIX_LOCK_read);
             Ok(())
         });
     }
 
     u.owned.borrow_mut().open_buckets.clear();
 
-    unsafe { super::update_free(update, &trans, &mut trans.paths(), false) };
+    unsafe { super::update_free(update, &trans, &mut trans.paths(), None) };
 }
 
 /// The interior update worker: the updates on unwritten completed in order,
@@ -600,7 +558,7 @@ pub(super) fn worker(fs: &Fs) {
         let update = {
             let g = fs.btree.interior_updates.lock.lock();
             match g.unwritten.peek_front() {
-                Some(&u) if unsafe { u.as_ref() }.nodes_written() => u,
+                Some(u) if u.nodes_written() => u.as_ptr(),
                 _ => break,
             }
         };

@@ -535,12 +535,6 @@ impl BtreeTrans<'_> {
         Ok(path_idx)
     }
 
-    /// node_lock_with_path()'s lock dropped, and its path put.
-    pub(crate) fn node_unlock_with_path(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize) {
-        self.node_unlock(paths, idx, level);
-        self.path_put(paths, idx, true);
-    }
-
     /// @f on @b, locked by node_lock_with_path(), and unlocked after, its path
     /// put: retried on a transaction restart, @f's included.
     pub(crate) fn node_locked_do<T>(&self, b: &c::btree_bkey_cached_common, ty: c::six_lock_type, hash_val: u64,

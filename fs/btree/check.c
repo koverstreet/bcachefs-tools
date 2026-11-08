@@ -25,7 +25,6 @@
 
 #include "data/ec/trigger.h"
 #include "data/extents.h"
-#include "data/keylist.h"
 #include "data/move.h"
 #include "data/reflink.h"
 

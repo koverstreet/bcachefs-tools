@@ -117,7 +117,6 @@
 #include "data/compress_gen.h"
 #include "data/copygc_gen.h"
 #include "data/ec/types_gen.h"
-#include "data/keylist_gen.h"
 #include "data/nocow_locking_gen.h"
 #include "bcachefs_ioctl.h"
 #include "data/move_gen.h"

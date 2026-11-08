@@ -99,7 +99,7 @@ fn write_done(trans: &BtreeTrans<'_>, b: &BtreeNode) {
     /* If this was the first write to a btree node, signal to the interior
      * update that the write is complete:
      */
-    b.first_write_done();
+    b.will_make_reachable.first_write_done();
 
     fs.journal.pin_drop(&w.journal);
 
@@ -380,7 +380,7 @@ fn node_write(trans: &BtreeTrans<'_>, b: &BtreeNode, mut ty: BtreeWriteType, fla
     assert!((ty == BtreeWriteType::initial) == (b.written.get() == 0));
     assert!(!b.is_fake());
 
-    if unlikely((b.will_make_reachable.load(Relaxed) != 0) != (b.written.get() == 0)) {
+    if unlikely(b.will_make_reachable.update().is_some() != (b.written.get() == 0)) {
         lifecycle_violated(fs, b, ty, flags);
     }
 
@@ -456,7 +456,7 @@ fn lifecycle_violated(fs: &Fs, b: &BtreeNode, ty: BtreeWriteType, flags: BtreeWr
     prt!(&mut buf, "btree node write lifecycle invariant violated at {}", b.pos_to_text(fs));
     buf.newline();
     prt!(&mut buf, "  written: {}\n", b.written.get());
-    prt!(&mut buf, "  will_make_reachable: {:x}\n", b.will_make_reachable.load(Relaxed));
+    prt!(&mut buf, "  will_make_reachable: {:x}\n", b.will_make_reachable.raw());
     prt!(&mut buf, "  flags: {}\n", b.flags);
     prt!(&mut buf, "  write_type: {}\n", ty as u32);
     prt!(&mut buf, "  already_started: {}\n", flags.contains(BtreeWriteFlags::already_started) as u32);

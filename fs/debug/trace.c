@@ -10,7 +10,6 @@
 #include "btree/locking.h"
 #include "btree/interior.h"
 
-#include "data/keylist.h"
 #include "data/move_gen.h"
 
 #include "locking/six.h"

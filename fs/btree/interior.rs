@@ -7,13 +7,12 @@
 
 #![allow(non_camel_case_types)]
 
-use core::cell::RefCell;
 use core::ffi::{c_uint, c_ulong};
 use core::marker::PhantomData;
 use core::mem::{size_of, ManuallyDrop};
 use core::ops::Deref;
 use core::ptr::{self, NonNull};
-use core::sync::atomic::{AtomicU32, AtomicU8, Ordering::{Acquire, AcqRel, Relaxed, SeqCst}};
+use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering::{Acquire, AcqRel, Relaxed, SeqCst}};
 use cstruct_macros::{placed, CStruct, Init, Late, c_const, c_export, TypeInfo};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::OpenBucket;
@@ -23,11 +22,10 @@ use crate::btree::node::keys::KeysMut;
 use crate::btree::bkey::{BkeyI, BkeyV, BKEY_U64S};
 use crate::btree::path::{LockedNode, PathIdx, Paths};
 use crate::c;
-#[cfg(CONFIG_BCACHEFS_DEBUG)]
-use crate::data::keylist::bch2_verify_keylist_sorted;
-use crate::data::keylist::{keys, PaddedKey};
+use crate::data::keylist::{Keylist, PaddedKey};
 use crate::data_structures::array_vec::ArrayVec;
 use crate::data_structures::list::ListLinks;
+use crate::data_structures::ref_cell::RefCell;
 use crate::errcode::{bch_errcode, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
@@ -44,9 +42,9 @@ use crate::util::closure::{closure_wait_event, closure_wake_up};
 use crate::util::kernel::local_clock;
 use crate::util::place::Contained;
 use crate::util::time_stats::TimeStats;
-use crate::util::{late::Late, mempool::Mempool, workqueue::{run_raw, RawWork, Workqueue, WqFlags}};
+use crate::util::{late::Late, mempool::{Mempool, PoolBox}, workqueue::{run_raw, RawWork, Workqueue, WqFlags}};
 use crate::prt;
-use pin_init::pin_data;
+use pin_init::{init, init_zeroed, pin_data};
 
 mod completion;
 mod reserve;
@@ -128,12 +126,20 @@ pub(crate) struct Updates {
      * filesystem
      */
     live:      KVVec<NonNull<BtreeUpdate>>,
-    /* Made visible, in the order they were: completed in that order */
-    unwritten: Fifo<NonNull<BtreeUpdate>>,
+    /*
+     * Made visible, in the order they were: completed in that order. Each its
+     * update's owner, from updated_node() or updated_root() to its free
+     */
+    unwritten: Fifo<PoolBox<'static, BtreeUpdate>>,
 }
 
 // The updates are reached through the lock, from any thread
 unsafe impl Send for Updates {}
+
+/// @b's updates blocking its write.
+fn write_blocked<'a>(b: &'a BtreeNode, _updates: &'a mut Updates) -> &'a mut WriteBlocked {
+    unsafe { b.write_blocked.protected_mut() }
+}
 
 #[placed(c::bch_fs_btree.interior_updates)]
 #[pin_data]
@@ -178,35 +184,70 @@ impl bch_fs_btree_interior_updates {
     }
 }
 
-/// A node an update frees, or makes reachable: its pointer, as the update
-/// journals it.
-struct UpdateNode {
-    /* None: a pointer a merge deletes */
-    b:               Option<NonNull<BtreeNode>>,
-    level:           u8,
-    root:            bool,
-    update_node_key: bool,
-    seq:             Le64,
-    key:             PaddedKey<{ BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX }>,
+type NodeKey = PaddedKey<{ BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX }>;
+
+fn node_key(b: &BtreeNode) -> NodeKey {
+    let mut key = NodeKey::default();
+    key.set_key(unsafe { b.contents() }.key_i());
+    key
 }
 
-type UpdateNodes = ArrayVec<UpdateNode, UPDATE_NODES_MAX>;
+/// A node the update frees: its pointer, which the commit deletes, and its
+/// seq, to tell it from whatever reclaim reuses its memory for.
+struct OldNode {
+    b:     NonNull<BtreeNode>,
+    level: u8,
+    seq:   Le64,
+    key:   NodeKey,
+}
 
-impl UpdateNode {
+impl OldNode {
+    fn of(b: &BtreeNode) -> Self {
+        OldNode { b: NonNull::from(b), level: b.c.level, seq: unsafe { b.contents() }.data().keys.seq, key: node_key(b) }
+    }
+}
+
+/// A pointer the update's commit journals.
+struct NewPointer {
+    level: u8,
+    key:   NodeKey,
+    to:    Pointee,
+}
+
+enum Pointee {
+    /// A new node, which the commit makes reachable
+    Node {
+        b:               NonNull<BtreeNode>,
+        root:            bool,
+        /* the commit's: whether it changed the key, which the node's then given */
+        update_node_key: bool,
+    },
+    /// A merge's: the pointer at the key's position, deleted
+    Deleted,
+}
+
+impl NewPointer {
     fn node(fs: &Fs, b: &BtreeNode) -> Self {
-        let contents = unsafe { b.contents() };
-        let mut key = PaddedKey::default();
-        key.set_key(contents.key_i());
-        UpdateNode {
-            b:               Some(NonNull::from(b)),
-            level:           b.c.level,
-            root:            fs.btree_id_root(b.c.btree_id.into()).is_some_and(|r| ptr::eq(r, b)),
-            update_node_key: false,
-            seq:             contents.data().keys.seq,
-            key,
+        NewPointer {
+            level: b.c.level,
+            key:   node_key(b),
+            to:    Pointee::Node {
+                b:               NonNull::from(b),
+                root:            fs.btree_id_root(b.c.btree_id.into()).is_some_and(|r| ptr::eq(r, b)),
+                update_node_key: false,
+            },
+        }
+    }
+
+    fn node_ptr(&self) -> Option<NonNull<BtreeNode>> {
+        match self.to {
+            Pointee::Node { b, .. } => Some(b),
+            Pointee::Deleted        => None,
         }
     }
 }
+
+type NewPointers = ArrayVec<NewPointer, UPDATE_NODES_MAX>;
 
 /// The node an update starts at, as it was: for to_text().
 struct StartNode {
@@ -218,31 +259,62 @@ struct StartNode {
     remaining:      u16,
 }
 
+/// gc.lock, held for read from start() until the update's done, or freed.
+struct GcReadLock(NonNull<c::rw_semaphore>);
+
+impl GcReadLock {
+    fn new(trans: &BtreeTrans<'_>, fs: &Fs) -> Result<Self, BchError> {
+        let lock = NonNull::from(&fs.gc.lock);
+        if unsafe { c::down_read_trylock(lock.as_ptr().cast()) } == 0 {
+            trans.unlock();
+            unsafe { c::down_read(lock.as_ptr().cast()) };
+            let g = GcReadLock(lock);
+            trans.relock()?;
+            return Ok(g);
+        }
+        Ok(GcReadLock(lock))
+    }
+}
+
+impl Drop for GcReadLock {
+    fn drop(&mut self) {
+        unsafe { c::up_read(self.0.as_ptr().cast()) }
+    }
+}
+
+/// A node in an update's reserve, intent and write locked, and the open
+/// buckets its space is in: the update's once the node's written, or the
+/// reserve cache's if it's not used.
+struct Reserved {
+    b:  NonNull<BtreeNode>,
+    ob: c::open_buckets,
+}
+
 /// The update's own, in its foreground phase and then its completion's: never
 /// both at once.
 struct Owned {
     /*
      * Preallocated nodes we reserve when we start the update, leaf and
-     * interior, intent and write locked: alloc_node() takes them from here,
-     * to @consumed.
+     * interior: alloc_node() takes them from here, to @consumed.
      */
-    reserve:      [ArrayVec<NonNull<BtreeNode>, UPDATE_NODES_MAX>; 2],
-    consumed:     ArrayVec<NonNull<BtreeNode>, UPDATE_NODES_MAX>,
-    old_nodes:    UpdateNodes,
+    reserve:      [ArrayVec<Reserved, UPDATE_NODES_MAX>; 2],
+    consumed:     ArrayVec<Reserved, UPDATE_NODES_MAX>,
+    /* take_path()'s, put before the update lets go of its nodes */
+    paths:        ArrayVec<PathIdx, UPDATE_NODES_MAX>,
+    old_nodes:    ArrayVec<OldNode, UPDATE_NODES_MAX>,
     open_buckets: ArrayVec<OpenBucket, { UPDATE_NODES_MAX * c::BCH_REPLICAS_MAX as usize }>,
-    took_gc_lock: bool,
-    /* updated_node() or updated_root(): on interior_updates.unwritten */
-    visible:      bool,
+    gc_lock:      Option<GcReadLock>,
 
     /* Only here to reduce stack usage on recursive splits: */
-    parent_keys:  c::keylist,
-    /*
-     * Enough room for btree_split's keys without realloc - btree node
-     * pointers never have crc/compression info, so we only need to acount
-     * for the pointers for three keys
-     */
-    inline_keys:  [u64; c::BKEY_BTREE_PTR_U64s_MAX * 3],
+    parent_keys:  ParentKeys,
 }
+
+/*
+ * Enough room for btree_split's keys without realloc - btree node
+ * pointers never have crc/compression info, so we only need to acount
+ * for the pointers for three keys
+ */
+pub(super) type ParentKeys = Keylist<{ c::BKEY_BTREE_PTR_U64s_MAX * 3 }>;
 
 /*
  * Tracks an in progress split/rewrite of a btree node and the update to the
@@ -294,10 +366,11 @@ pub(crate) struct BtreeUpdate {
     disk_res:     DiskReservation<'static>,
     owned:        RefCell<Owned>,
     /*
-     * The update's while it holds the new nodes locked, until done(); then
-     * commit_lock's: btree_node_update_key() edits a new node's key here
+     * The update's alone until done(): btree_node_update_key() reaches it
+     * through a new node, which it can't lock before done() unlocks them.
+     * Then commit_lock's, under which it edits a new node's key here.
      */
-    new_nodes:    LockedBy<UpdateNodes>,
+    new_nodes:    LockedBy<NewPointers>,
 
     /* interior_updates.lock's: None until updated_node() or updated_root() */
     mode:               LockedBy<Option<Mode>>,
@@ -348,21 +421,31 @@ impl BtreeUpdate {
         self.pending.load(Acquire) == 0
     }
 
+    fn mode(&self, _updates: &Updates) -> Option<Mode> {
+        unsafe { *self.mode.protected() }
+    }
+
+    fn set_mode(&self, _updates: &mut Updates, mode: Mode) {
+        unsafe { *self.mode.protected_mut() = Some(mode) }
+    }
+
     /// # Safety
-    /// commit_lock is held, or the update its new nodes locked.
+    /// The update holds its new nodes locked: before done().
     #[allow(clippy::mut_from_ref)]
-    unsafe fn new_nodes(&self) -> &mut UpdateNodes {
+    unsafe fn new_nodes(&self) -> &mut NewPointers {
+        unsafe { self.new_nodes.protected_mut() }
+    }
+
+    fn new_nodes_locked<'a>(&'a self, _commit_lock: &'a mut ExclusiveGuard<'_, c::mutex>) -> &'a mut NewPointers {
         unsafe { self.new_nodes.protected_mut() }
     }
 
     /// @b's entry in the new nodes, its key made @k: btree_node_update_key()'s,
     /// on a node the update will make reachable.
-    ///
-    /// # Safety
-    /// commit_lock is held.
-    pub(crate) unsafe fn new_node_key_set(&self, b: &BtreeNode, k: impl BkeyV) {
-        unsafe { self.new_nodes() }.iter_mut()
-            .find(|n| n.b.is_some_and(|nb| ptr::eq(nb.as_ptr(), b)))
+    pub(crate) fn new_node_key_set(&self, commit_lock: &mut ExclusiveGuard<'_, c::mutex>, b: &BtreeNode,
+                                   k: impl BkeyV) {
+        self.new_nodes_locked(commit_lock).iter_mut()
+            .find(|n| n.node_ptr().is_some_and(|nb| ptr::eq(nb.as_ptr(), b)))
             .expect("a node its update will make reachable, in the update's new nodes")
             .key.set_key(k);
     }
@@ -387,18 +470,40 @@ impl BtreeUpdate {
     }
 }
 
-impl BtreeNode {
-    /// Its first write done: if it's a new node, the update making it
-    /// reachable has its first write's ref put.
+/// A new node's: the update that will make it reachable, from write_new_node()
+/// until the update's commit - tagged, bit 0, while the update holds a ref
+/// on pending for the node's first write.
+#[repr(transparent)]
+#[derive(Default)]
+pub struct WillMakeReachable(AtomicUsize);
+
+impl WillMakeReachable {
+    fn set(&self, update: NonNull<BtreeUpdate>) {
+        assert!(self.0.load(Relaxed) == 0, "a new node another update will make reachable");
+        self.0.store(1 | update.as_ptr() as usize, Relaxed);
+    }
+
+    /// The node's first write done: the update's ref for it put.
     pub(crate) fn first_write_done(&self) {
-        if let Ok(v) = self.will_make_reachable.fetch_update(SeqCst, Relaxed, |v| (v & 1 != 0).then_some(v & !1)) {
+        if let Ok(v) = self.0.fetch_update(SeqCst, Relaxed, |v| (v & 1 != 0).then_some(v & !1)) {
             unsafe { &*((v & !1) as *const BtreeUpdate) }.pending_put();
         }
     }
 
-    /// The update that will make it reachable, if one will.
-    pub(crate) fn reachable_by(&self) -> Option<NonNull<BtreeUpdate>> {
-        NonNull::new((self.will_make_reachable.load(Relaxed) & !1) as *mut BtreeUpdate)
+    /// The update, if one will make the node reachable.
+    pub(crate) fn update(&self) -> Option<NonNull<BtreeUpdate>> {
+        NonNull::new((self.0.load(Relaxed) & !1) as *mut BtreeUpdate)
+    }
+
+    fn clear(&self, update: NonNull<BtreeUpdate>) {
+        assert!(self.0.load(Relaxed) == update.as_ptr() as usize,
+                "a new node another update will make reachable");
+        self.0.store(0, Relaxed);
+    }
+
+    /// As it is, for a node's to_text().
+    pub(crate) fn raw(&self) -> usize {
+        self.0.load(Relaxed)
     }
 }
 
@@ -423,6 +528,11 @@ pub(crate) struct StartOpts {
 pub(crate) struct InteriorUpdate<'t> {
     trans: &'t BtreeTrans<'t>,
     raw:   NonNull<BtreeUpdate>,
+    /*
+     * The update, until updated_node() or updated_root() makes it visible and
+     * hands it to its entry on unwritten: our ref on pending keeps it there
+     */
+    owner: RefCell<Option<PoolBox<'static, BtreeUpdate>>>,
 }
 
 impl Deref for InteriorUpdate<'_> {
@@ -552,15 +662,7 @@ impl<'t> InteriorUpdate<'t> {
             split = usize::from(b.contents().nr.live_u64s) > split_merge::split_threshold(fs);
         }
 
-        let gc_lock = (&raw const fs.gc.lock).cast_mut().cast();
-        if unsafe { c::down_read_trylock(gc_lock) } == 0 {
-            trans.unlock();
-            unsafe { c::down_read(gc_lock) };
-            if let Err(e) = trans.relock() {
-                unsafe { c::up_read(gc_lock) };
-                return Err(e);
-            }
-        }
+        let gc_lock = GcReadLock::new(trans, fs)?;
 
         let node = {
             let paths = trans.paths();
@@ -578,39 +680,38 @@ impl<'t> InteriorUpdate<'t> {
             }
         };
 
-        let raw = fs.btree.interior_updates.pool.alloc_raw(c::GFP_NOIO).cast::<BtreeUpdate>();
-        unsafe {
-            raw.write(BtreeUpdate {
-                fs:           BackRef::new(fs),
-                start_time,
-                ip_started,
-                flags:        commit,
-                btree:        trans.paths()[path].btree_id(),
-                level_start:  level_start as u8,
-                level_end:    AtomicU8::new(level_end as u8),
-                node,
-                new_key_u64s,
-                pending:      AtomicU32::new(1),
-                journal:      core::mem::zeroed(),
-                disk_res:     DiskReservation::new(BackRef::new(fs).get()),
-                owned:        RefCell::new(Owned {
-                    reserve:      Default::default(),
-                    consumed:     ArrayVec::new(),
-                    old_nodes:    ArrayVec::new(),
-                    open_buckets: ArrayVec::new(),
-                    took_gc_lock: true,
-                    visible:      false,
-                    parent_keys:  c::keylist::default(),
-                    inline_keys:  [0; c::BKEY_BTREE_PTR_U64s_MAX * 3],
-                }),
-                new_nodes:    LockedBy::new(ArrayVec::new(), ()),
-                mode:               LockedBy::new(None, ()),
-                write_blocked_list: ListLinks::new(),
-            });
-            let o = &mut *(*raw.as_ptr()).owned.as_ptr();
-            o.parent_keys.keys_p = o.inline_keys.as_mut_ptr();
-            o.parent_keys.top_p = o.inline_keys.as_mut_ptr();
-        }
+        // the update lives while the filesystem does: being on the live list is
+        // its ref on it
+        let fs_ref = unsafe { BackRef::new(fs).get() };
+        let btree = trans.paths()[path].btree_id();
+        // made in place: the arrays are kilobytes
+        let Ok(owner) = fs_ref.btree.interior_updates.pool.alloc_box(c::GFP_NOIO, init!(BtreeUpdate {
+            fs:           unsafe { BackRef::new(fs) },
+            start_time,
+            ip_started,
+            flags:        commit,
+            btree,
+            level_start:  level_start as u8,
+            level_end:    AtomicU8::new(level_end as u8),
+            node,
+            new_key_u64s,
+            pending:      AtomicU32::new(1),
+            journal:      unsafe { core::mem::zeroed() },
+            disk_res:     DiskReservation::new(fs_ref),
+            owned <- RefCell::init(init!(Owned {
+                reserve      <- init_zeroed(),
+                consumed     <- init_zeroed(),
+                paths        <- init_zeroed(),
+                old_nodes    <- init_zeroed(),
+                open_buckets <- init_zeroed(),
+                gc_lock:      Some(gc_lock),
+                parent_keys:  Keylist::new(),
+            })),
+            new_nodes    <- init_zeroed(),
+            mode:               LockedBy::new(None, ()),
+            write_blocked_list: ListLinks::new(),
+        }));
+        let raw = owner.as_ptr();
 
         {
             let mut g = fs.btree.interior_updates.lock.lock();
@@ -619,7 +720,7 @@ impl<'t> InteriorUpdate<'t> {
             let more = g.live.len() - g.unwritten.len();
             g.unwritten.reserve_nofail(more);
         }
-        let update = InteriorUpdate { trans, raw };
+        let update = InteriorUpdate { trans, raw, owner: RefCell::new(Some(owner)) };
 
         /*
          * We don't want to allocate if we're in an error state, that can cause
@@ -647,57 +748,44 @@ impl<'t> InteriorUpdate<'t> {
         Ok(update)
     }
 
-    /// # Safety
-    /// Nothing changes the update while the reference lives.
-    unsafe fn parent_keys(&self) -> &c::keylist {
-        unsafe { &(*self.owned.as_ptr()).parent_keys }
-    }
-
-    /// # Safety
-    /// Nothing else refers to the update while the reference lives.
-    #[allow(clippy::mut_from_ref)]
-    unsafe fn parent_keys_mut(&self) -> &mut c::keylist {
-        unsafe { &mut (*self.owned.as_ptr()).parent_keys }
-    }
-
     fn parent_keys_u64s(&self) -> usize {
-        unsafe { self.parent_keys() }.as_u64s().len()
+        self.owned.borrow().parent_keys.u64s()
     }
 
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     fn verify_parent_keys_sorted(&self) {
-        bch2_verify_keylist_sorted(unsafe { self.parent_keys() })
+        self.owned.borrow().parent_keys.verify_sorted()
     }
 
     fn new_key_u64s(&self) -> usize {
         self.new_key_u64s as usize
     }
 
-    /// Whether it's been made visible by an insert into an existing node.
-    fn has_updated_node(&self) -> bool {
-        self.owned.borrow().visible
+    /// Whether it's been made visible, by an insert into an existing node or
+    /// as the root.
+    fn visible(&self) -> bool {
+        self.owner.borrow().is_none()
+    }
+
+    /// The update, handed to unwritten: interior_updates.lock, still held.
+    fn make_visible(&self, mode: Mode) -> ExclusiveGuard<'_, c::mutex, Updates> {
+        let update = self.owner.borrow_mut().take().expect("an interior update made visible twice");
+
+        let mut g = self.fs().btree.interior_updates.lock.lock();
+        update.set_mode(&mut g, mode);
+        if g.unwritten.push_back(update).is_err() {
+            panic!("unwritten full: start() reserves room for every live update");
+        }
+        g
     }
 
     fn to_text(&self, out: &mut Printbuf) {
-        let _g = self.fs().btree.interior_updates.lock.lock();
-        (**self).to_text(out, unsafe { *self.mode.protected() })
-    }
-
-    fn new_node(&self, b: NonNull<BtreeNode>) -> NewNode<'_> {
-        NewNode { b, _update: PhantomData }
+        let g = self.fs().btree.interior_updates.lock.lock();
+        (**self).to_text(out, self.mode(&g))
     }
 
     fn push_parent_key(&self, k: &BkeyI) {
-        let mut o = self.owned.borrow_mut();
-        let u64s = usize::from(k.k().u64s);
-        let end = o.inline_keys.as_mut_ptr_range().end;
-
-        assert!(o.parent_keys.top_p.wrapping_add(u64s) <= end,
-                "an interior update's parent keys past its inline keys");
-        unsafe {
-            ptr::copy_nonoverlapping(ptr::from_ref(k).cast::<u64>(), o.parent_keys.top_p, u64s);
-            o.parent_keys.top_p = o.parent_keys.top_p.add(u64s);
-        }
+        self.owned.borrow_mut().parent_keys.push_key(k)
     }
 
     /// @n's pointer, its sectors_written stamped, added to what the parent
@@ -710,26 +798,19 @@ impl<'t> InteriorUpdate<'t> {
     /// The pointer at @pos to a node at @level deleted from the parent, and
     /// the deletion journalled with the update.
     pub(crate) fn unlink(&self, pos: Bpos, level: usize) {
-        let delete = c::bkey_i { k: c::bkey { p: pos, ..c::bkey::new() }, ..Default::default() };
-        let delete = unsafe { &*BkeyI::from_raw(&raw const delete) };
+        let delete = crate::btree::trigger::deleted_at(pos);
+        let delete = unsafe { &*BkeyI::from_raw(&delete) };
 
         self.push_parent_key(delete);
 
-        let mut key = PaddedKey::default();
+        let mut key = NodeKey::default();
         key.set_key(delete);
-        unsafe { self.new_nodes() }.push(UpdateNode {
-            b:               None,
-            level:           level as u8,
-            root:            false,
-            update_node_key: false,
-            seq:             Le64::default(),
-            key,
-        });
+        unsafe { self.new_nodes() }.push(NewPointer { level: level as u8, key, to: Pointee::Deleted });
     }
 
     /// The parent keys that go in @n inserted into it, @path's at its level.
     fn insert_parent_keys(&self, paths: &mut Paths<'_>, path: PathIdx, n: &NewNode<'_>) -> Result<(), BchError> {
-        split_merge::split_insert_keys(self.trans, paths, path, n.locked(), unsafe { self.parent_keys_mut() })
+        split_merge::split_insert_keys(self.trans, paths, path, n.locked(), &mut self.owned.borrow_mut().parent_keys)
     }
 
     /// The parent keys that go in @b inserted into it from @path's iterator
@@ -737,12 +818,13 @@ impl<'t> InteriorUpdate<'t> {
     fn insert_parent_keys_at(&self, paths: &mut Paths<'_>, path: PathIdx,
                              b: LockedNode<'_, BtreeNode>) -> Result<(), BchError> {
         let node_iter = paths[path].l[usize::from(b.c.level)].iter;
-        split_merge::insert_keys_interior(self.trans, paths, path, b, node_iter, unsafe { self.parent_keys_mut() })
+        split_merge::insert_keys_interior(self.trans, paths, path, b, node_iter,
+                                          &mut self.owned.borrow_mut().parent_keys)
     }
 
     /// Whether the parent keys delete the key at @pos.
     fn parent_key_deleted(&self, pos: Bpos) -> bool {
-        keys(unsafe { self.parent_keys() }.as_u64s()).any(|k| k.k().key_type().is_deleted() && k.k().p == pos)
+        self.owned.borrow().parent_keys.iter().any(|k| k.k().key_type().is_deleted() && k.k().p == pos)
     }
 
     /// What link() added, inserted into @path's node above @level - splitting
@@ -776,16 +858,26 @@ impl<'t> InteriorUpdate<'t> {
         }
     }
 
+    /// The paths take_path() made, put: the last taken first.
+    fn put_paths(&self, paths: &mut Paths<'_>) {
+        let taken = core::mem::take(&mut self.owned.borrow_mut().paths);
+        for idx in taken.into_iter().rev() {
+            self.trans.path_unlock(paths, idx);
+            self.trans.path_put(paths, idx, true);
+        }
+    }
+
     pub(crate) fn done(self, paths: &mut Paths<'_>) {
+        assert!(self.visible(), "an interior update done without making its nodes visible");
+
         let this = ManuallyDrop::new(self);
         let fs = this.fs();
         let start_time = this.start_time;
 
+        this.put_paths(paths);
         this.trans.unlock_write(paths);
 
-        assert!(this.owned.borrow().visible, "an interior update done without making its nodes visible");
-
-        this.gc_unlock();
+        drop(this.owned.borrow_mut().gc_lock.take());
         this.reserve_put(this.trans, paths, false);
         this.pending_put();
 
@@ -793,59 +885,49 @@ impl<'t> InteriorUpdate<'t> {
     }
 }
 
-impl BtreeUpdate {
-    fn gc_unlock(&self) {
-        let mut o = self.owned.borrow_mut();
-        if o.took_gc_lock {
-            unsafe { c::up_read((&raw const self.fs().gc.lock).cast_mut().cast()) };
-        }
-        o.took_gc_lock = false;
-    }
-}
-
 impl Drop for InteriorUpdate<'_> {
     fn drop(&mut self) {
-        assert!(!self.owned.borrow().visible, "an interior update rolled back after making its nodes visible");
+        let owner = self.owner.get_mut().take()
+            .expect("an interior update rolled back after making its nodes visible");
 
         // the caller's borrow of the path table may be live, and idle: as C's
         let mut paths = unsafe { Paths::lent(self.trans) };
+        self.put_paths(&mut paths);
         self.trans.unlock_write(&mut paths);
-        unsafe { update_free(self.raw, self.trans, &mut paths, true) }
+        unsafe { update_free(self.raw, self.trans, &mut paths, Some(owner)) }
     }
 }
 
-/// @update's resources released, and it freed: on rollback, @bailed, the
-/// nodes it took from its reserve too.
+/// @update's resources released, and it freed - owned by @rollback, which
+/// frees the nodes it took from its reserve too, or else by its entry on
+/// unwritten, completing.
 ///
 /// # Safety
-/// Nothing uses @update after.
+/// @update is live, and nothing uses it after.
 unsafe fn update_free(update: NonNull<BtreeUpdate>, trans: &BtreeTrans<'_>, paths: &mut Paths<'_>,
-                      bailed: bool) {
+                      rollback: Option<PoolBox<'static, BtreeUpdate>>) {
     let u = unsafe { update.as_ref() };
-    let fs = u.fs();
+    let fs = unsafe { u.fs.get() };
 
-    u.gc_unlock();
+    drop(u.owned.borrow_mut().gc_lock.take());
 
     fs.journal.pin_drop(&u.journal);
     fs.journal.pin_flush(&u.journal);
     u.disk_res.put();
-    u.reserve_put(trans, paths, bailed);
+    u.reserve_put(trans, paths, rollback.is_some());
 
     fs.times[c::bch_time_stats::btree_interior_update_total as usize].update(u.start_time);
 
     let updates = &fs.btree.interior_updates;
     let mut g = updates.lock.lock();
 
-    if !bailed {
+    let owner = rollback.unwrap_or_else(|| {
         let front = g.unwritten.pop_front().expect("an update completed, on unwritten");
-        assert!(front == update, "an update completed out of order");
-    }
+        assert!(front.as_ptr() == update, "an update completed out of order");
+        front
+    });
     g.live.retain(|p| *p != update);
-
-    unsafe {
-        ptr::drop_in_place(update.as_ptr());
-        updates.pool.free_raw(update.cast());
-    }
+    drop(owner);
 
     /*
      * Have to do the wakeup with btree_interior_update_lock still held,
@@ -879,7 +961,7 @@ impl Fs {
         let g = self.btree.interior_updates.lock.lock();
         for &p in g.live.iter() {
             let u = unsafe { p.as_ref() };
-            u.to_text(out, unsafe { *u.mode.protected() });
+            u.to_text(out, u.mode(&g));
         }
     }
 }

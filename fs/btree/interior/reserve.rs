@@ -33,9 +33,8 @@ use crate::prt;
 use crate::util::closure::StackClosure;
 use crate::util::kernel::WRITE;
 use crate::util::rcu::read_lock;
-use crate::util::vstructs::Head;
 use pin_init::stack_pin_init;
-use super::{BtreeUpdate, InteriorUpdate, NewNode, BTREE_RESERVE_MAX};
+use super::{BtreeUpdate, InteriorUpdate, NewNode, Reserved, BTREE_RESERVE_MAX};
 
 /**
  * bch2_btree_node_format_fits - check if we could rewrite node with a new format
@@ -51,9 +50,7 @@ use super::{BtreeUpdate, InteriorUpdate, NewNode, BTREE_RESERVE_MAX};
  */
 fn format_fits(b: &BtreeNode, new_f: &c::bkey_format) -> bool {
     let contents = unsafe { b.contents() };
-    let u64s = contents.nr.u64s_with_format(&contents.format, new_f);
-
-    size_of::<Head<c::btree_node>>() + u64s * size_of::<u64>() < b.buf_bytes()
+    b.fits_u64s(contents.nr.u64s_with_format(&contents.format, new_f))
 }
 
 /* Btree node freeing/allocation: */
@@ -64,7 +61,6 @@ fn node_free(fs: &Fs, b: &BtreeNode) {
     assert!(!b.flags.write_blocked(), "freeing a write blocked node");
     assert!(!b.flags.need_write(), "freeing a node that needs writing");
     assert!(!fs.btree_id_root(b.c.btree_id.into()).is_some_and(|r| ptr::eq(r, b)), "freeing a root");
-    assert!(b.ob.nr == 0, "freeing a node holding open buckets");
     assert!(unsafe { (*b.write_blocked.data_ptr()).is_empty() }, "freeing a node interior updates are blocking");
 
     b.flags.set_permanent(false);
@@ -77,16 +73,17 @@ fn transition_state(fs: &Fs, b: &BtreeNode, state: c::btree_node_cache_state) ->
     }
 }
 
-pub(super) fn btree_set_min(contents: &mut crate::btree::node::NodeContents, pos: Bpos) {
-    if let Some(mut p) = contents.key.key_mut().as_s().arm::<c::BtreePtrV2>() {
-        p.v_mut().min_key = pos;
+/// A new node's range: its key's, and its data's.
+pub(super) fn set_range(contents: &mut crate::btree::node::NodeContents, min: Bpos, max: Bpos) {
+    let mut k = contents.key.key_mut();
+    if let Some(mut p) = k.as_s().arm::<c::BtreePtrV2>() {
+        p.v_mut().min_key = min;
     }
-    contents.data_mut().min_key = pos;
-}
+    k.k.p = max;
 
-pub(super) fn btree_set_max(contents: &mut crate::btree::node::NodeContents, pos: Bpos) {
-    contents.key.key_mut().k.p = pos;
-    contents.data_mut().max_key = pos;
+    let data = contents.data_mut();
+    data.min_key = min;
+    data.max_key = max;
 }
 
 fn can_use_btree_node(fs: &Fs, res: &DiskReservation<'_>, target: u32, k: BkeySC<'_>) -> bool {
@@ -134,10 +131,9 @@ impl InteriorUpdate<'_> {
         };
 
         self.disk_res.add((nr_nodes[0] + nr_nodes[1]) as u64 * u64::from(fs.btree_sectors()),
-                          u32::from(fs.opts().metadata_replicas.get()), disk_res_flags)?;
+                          u32::from(fs.opts.metadata_replicas.get()), disk_res_flags)?;
 
-        let opts = fs.opts();
-        let target = [target, opts.metadata_target.get().into(), opts.foreground_target.get().into()]
+        let target = [target, fs.opts.metadata_target.get().into(), fs.opts.foreground_target.get().into()]
             .into_iter().find(|&t| t != 0).unwrap_or(0);
         let mut devs_have = c::bch_devs_list::default();
         let nr_replicas = self.disk_res.nr_replicas.get();
@@ -220,17 +216,14 @@ impl InteriorUpdate<'_> {
         ret
     }
 
-    fn node_alloc_from_allocator(&self, interior: bool, req: &mut c::alloc_request)
-        -> Result<NonNull<BtreeNode>, BchError>
-    {
+    fn node_alloc_from_allocator(&self, interior: bool, req: &mut c::alloc_request) -> Result<Reserved, BchError> {
         let trans = self.trans;
         let fs = self.fs();
 
         let b = errptr_to_result(NonNull::new(unsafe { bch2_btree_node_mem_alloc(trans.raw(), interior) })
             .expect("btree_node_mem_alloc() returns a node or an error"))?;
         let n = unsafe { b.as_ref() };
-
-        assert!(n.ob.nr == 0, "a node from the cache holding open buckets");
+        let mut ob = c::open_buckets::default();
 
         let ret = (|| {
             let t = unsafe { trans.attempt_in_progress() };
@@ -243,7 +236,6 @@ impl InteriorUpdate<'_> {
             };
 
             let contents = unsafe { n.contents_mut() };
-            let ob = unsafe { &mut (*b.as_ptr()).ob };
 
             let mut cache = fs.btree.reserve_cache.lock.lock();
             while cache.nr != 0 {
@@ -260,7 +252,7 @@ impl InteriorUpdate<'_> {
                 };
                 if can_use_btree_node(fs, &self.disk_res, target, BkeySC::from(a.k.key())) {
                     contents.key.set_key(a.k.key());
-                    *ob = core::mem::take(&mut a.ob);
+                    ob = core::mem::take(&mut a.ob);
                     return Ok(());
                 }
 
@@ -274,7 +266,7 @@ impl InteriorUpdate<'_> {
                 .expect("a btree node's key with room for a btree_ptr_v2");
             wp.append_ptrs(&mut k, fs.btree_sectors(), false);
 
-            wp.open_buckets_get(ob);
+            wp.open_buckets_get(&mut ob);
             Ok(())
         })();
 
@@ -292,7 +284,7 @@ impl InteriorUpdate<'_> {
             }
             return Err(e);
         }
-        Ok(b)
+        Ok(Reserved { b, ob })
     }
 
     pub(crate) fn alloc_node(&self, _paths: &mut Paths<'_>, level: usize) -> NewNode<'_> {
@@ -300,10 +292,11 @@ impl InteriorUpdate<'_> {
 
         assert!(level < c::BTREE_MAX_DEPTH as usize, "allocating a node at level {level}");
 
-        let b = {
+        let mut b = {
             let mut o = self.owned.borrow_mut();
-            let b = o.reserve[usize::from(level != 0)].pop().expect("an interior update's reserve, used up");
-            o.consumed.push(b);
+            let r = o.reserve[usize::from(level != 0)].pop().expect("an interior update's reserve, used up");
+            let b = r.b;
+            o.consumed.push(r);
             b
         };
 
@@ -314,15 +307,17 @@ impl InteriorUpdate<'_> {
          * machinery at the WRITE_LOCKED mark site.
          */
 
+        {
+            let n = unsafe { b.as_mut() };
+            n.c.level    = level as u8;
+            n.c.btree_id = self.btree.0 as u8;
+        }
+
         let n = unsafe { b.as_ref() };
         n.flags.set_accessed(true);
 
         let contents = unsafe { n.contents_mut() };
         bch2_bset_init_first(n, (&raw mut contents.data_mut().keys).cast());
-        unsafe {
-            (*b.as_ptr()).c.level    = level as u8;
-            (*b.as_ptr()).c.btree_id = self.btree.0 as u8;
-        }
         contents.version_ondisk = fs.sb.version.get();
 
         contents.nr = Default::default();
@@ -350,7 +345,7 @@ impl InteriorUpdate<'_> {
 
         fs.event_inc_trace(events::btree_node_alloc, |out| prt!(out, "{}", n.pos_to_text(fs)));
         fs.io_clock[WRITE].increment(fs.btree_sectors().into());
-        self.new_node(b)
+        NewNode { b, _update: core::marker::PhantomData }
     }
 
     /// A copy of @b, compacted.
@@ -371,8 +366,7 @@ impl InteriorUpdate<'_> {
         let contents = n.contents_mut();
         contents.data_mut().set_seq(b_contents.data().seq() + 1);
 
-        btree_set_min(contents, b_contents.data().min_key);
-        btree_set_max(contents, b_contents.data().max_key);
+        set_range(contents, b_contents.data().min_key, b_contents.data().max_key);
 
         contents.data_mut().format = format;
         contents.set_format(format);
@@ -389,8 +383,7 @@ impl InteriorUpdate<'_> {
         let mut n = self.alloc_node(paths, level);
 
         let contents = n.contents_mut();
-        btree_set_min(contents, POS_MIN);
-        btree_set_max(contents, SPOS_MAX);
+        set_range(contents, POS_MIN, SPOS_MAX);
         let format = n.calc_format(n.contents());
 
         let contents = n.contents_mut();
@@ -409,12 +402,14 @@ impl InteriorUpdate<'_> {
         n
     }
 
-    /// A path to @n, holding it.
+    /// A path to @n, holding it, for as long as the update has @n: the update
+    /// puts it.
     pub(crate) fn take_path(&self, paths: &mut Paths<'_>, n: &NewNode<'_>) -> PathIdx {
         let pos = n.contents().key_i().k().p;
         let idx = self.trans.path_get_unlocked_mut(paths, crate::format::Btree(n.c.btree_id.into()),
                                                    n.c.level.into(), pos, false, crate::ret_ip!());
         self.take_node(paths, idx, n);
+        self.owned.borrow_mut().paths.push(idx);
         idx
     }
 
@@ -466,31 +461,32 @@ impl BtreeUpdate {
         let fs = self.fs();
         let mut o = self.owned.borrow_mut();
         let o = &mut *o;
-        let unused: ArrayVec<_, { super::UPDATE_NODES_MAX * 2 }> =
+        let mut unused: ArrayVec<_, { super::UPDATE_NODES_MAX * 2 }> =
             o.reserve.iter_mut().flat_map(|r| r.drain(..)).collect();
 
-        for (b, free) in unused.iter().map(|b| (b, true)).chain(o.consumed.iter().map(|b| (b, bailed))) {
-            let b = unsafe { b.as_ref() };
+        for (r, free) in unused.iter_mut().map(|r| (r, true)).chain(o.consumed.iter_mut().map(|r| (r, bailed))) {
+            let b = unsafe { r.b.as_ref() };
 
             if free {
                 assert!(b.written.get() == 0, "a reserved node that's been written");
 
-                let ob = unsafe { &mut (*ptr::from_ref(b).cast_mut()).ob };
                 let mut cache = fs.btree.reserve_cache.lock.lock();
                 if (cache.nr as usize) < cache.data.len() {
                     let nr = cache.nr as usize;
                     cache.nr += 1;
                     let a = &mut cache.data[nr];
-                    a.ob = core::mem::take(ob);
+                    a.ob = core::mem::take(&mut r.ob);
                     a.k.set_key(unsafe { b.contents() }.key_i());
                 } else {
-                    ob.drain(fs).for_each(drop);
+                    r.ob.drain(fs).for_each(drop);
                 }
                 drop(cache);
 
                 b.flags.set_need_write(false);
                 node_free(fs, b);
                 transition_state(fs, b, c::btree_node_cache_state::BTREE_NODE_CACHE_FREEABLE);
+            } else {
+                assert!(r.ob.nr == 0, "a node taken from the reserve, kept but never written");
             }
 
             trans.node_unlock_write_pathless(paths, b);

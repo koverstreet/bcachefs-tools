@@ -161,9 +161,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let trans = self.trans();
         let fs = self.fs();
 
-        let _commit_lock = trans.mutex_lock(&mut trans.paths(), &fs.btree.interior_updates.commit_lock)?;
+        let mut commit_lock = trans.mutex_lock(&mut trans.paths(), &fs.btree.interior_updates.commit_lock)?;
 
-        let Some(update) = b.reachable_by() else {
+        let Some(update) = b.will_make_reachable.update() else {
             return Err(trans.restart(bch_errcode::BCH_ERR_transaction_restart_nested));
         };
 
@@ -179,7 +179,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         self.node_key_set(iter, b, &key);
 
-        unsafe { update.as_ref().new_node_key_set(b.node(), key.as_sc()) };
+        unsafe { update.as_ref() }.new_node_key_set(&mut commit_lock, b.node(), key.as_sc());
         Ok(())
     }
 

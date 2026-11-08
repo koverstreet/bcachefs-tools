@@ -3,10 +3,8 @@
 //! Keylists: whole keys back to back, added at the top and taken off the
 //! front, the rest moving down.
 //!
-//! Keylist is a write op's: an InlineVec of u64s, in the op until its keys
-//! outgrow it. C's struct keylist - keys..top, pointing into a buffer of its
-//! owner's - is a btree split's parent keys, keylist.h's inlines keeping it;
-//! Rust only checks one is sorted.
+//! Keylist is an InlineVec of u64s: a write op's, in the op until its keys
+//! outgrow it, and an interior update's parent keys, which never do.
 //!
 //! What's trusted is that the u64s hold whole keys, each made in memory by
 //! what added it: the keys are walked as vstructs, each one's u64s checked
@@ -14,8 +12,6 @@
 //! validated key would make that by type. A key is built in a KeyRoom - at
 //! the top, in room reserve() made, by push_with() - which checks what's
 //! appended to it against the room.
-
-#![allow(non_camel_case_types)]
 
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BKEY_U64S};
 use crate::btree::iter::NoRoom;
@@ -25,51 +21,7 @@ use crate::locking::MemallocFlags;
 use crate::util::alloc::AllocError;
 use crate::util::vstructs::{assume_validated, plain_bytes, plain_bytes_mut, VstructRefEntries, VstructRefEntriesMut};
 use core::mem::size_of;
-use core::ptr;
-use cstruct_macros::CStruct;
-use crate::types::c_default;
 
-/// keys..top, whole keys back to back: C reads each pointer as a bkey_i * or
-/// a u64 *, Rust as the u64 *.
-#[derive(CStruct)]
-#[repr(C)]
-pub struct keylist {
-    #[c_anon("union { struct bkey_i *keys; u64 *keys_p; }")]
-    pub(crate) keys_p: *mut u64,
-    #[c_anon("union { struct bkey_i *top; u64 *top_p; }")]
-    pub(crate) top_p: *mut u64,
-}
-c_default!(keylist);
-
-impl c::keylist {
-    /// The first @u64s taken off the front - whole keys - and the rest moved
-    /// down.
-    pub(crate) fn drop_front(&mut self, u64s: usize) {
-        let len = self.as_u64s().len();
-        assert!(u64s <= len, "dropping {u64s} u64s from a keylist of {len}");
-        unsafe {
-            ptr::copy(self.keys_p.add(u64s), self.keys_p, len - u64s);
-            self.top_p = self.top_p.sub(u64s);
-        }
-    }
-
-    pub(crate) fn as_u64s(&self) -> &[u64] {
-        if self.top_p == self.keys_p {
-            return &[];
-        }
-        let u64s = (self.top_p.addr() - self.keys_p.addr()) / size_of::<u64>();
-        // SAFETY: the keylist's invariant
-        unsafe { core::slice::from_raw_parts(self.keys_p, u64s) }
-    }
-
-    pub(crate) fn as_u64s_mut(&mut self) -> &mut [u64] {
-        if self.top_p == self.keys_p {
-            return &mut [];
-        }
-        let u64s = (self.top_p.addr() - self.keys_p.addr()) / size_of::<u64>();
-        unsafe { core::slice::from_raw_parts_mut(self.keys_p, u64s) }
-    }
-}
 
 /// Whole keys back to back, the first @N u64s of them inline.
 #[repr(transparent)]
@@ -370,16 +322,4 @@ pub(crate) fn key_mut(u64s: &mut [u64]) -> &mut BkeyI {
         .expect("a key in an empty buffer")
         .unwrap_or_else(|e| panic!("a key overruns its buffer, of {len} u64s: {e}"));
     unsafe { assume_validated(k) }.into_key_mut()
-}
-
-/// Its keys in increasing order - debug builds': keylist.h's no-op otherwise.
-#[cfg(CONFIG_BCACHEFS_DEBUG)]
-#[cstruct_macros::c_export]
-pub fn bch2_verify_keylist_sorted(l: &c::keylist) {
-    let mut keys = keys(l.as_u64s()).peekable();
-    while let Some(k) = keys.next() {
-        if let Some(next) = keys.peek() {
-            assert!(k.k().p < next.k().p, "keylist out of order: {} before {}", k.k(), next.k());
-        }
-    }
 }

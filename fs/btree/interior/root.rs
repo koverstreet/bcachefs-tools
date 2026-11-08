@@ -156,15 +156,16 @@ fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level: u32) -> Re
     let b = unsafe { bch2_btree_node_mem_alloc(trans.raw(), false) };
     unsafe { bch2_btree_cache_cannibalize_unlock(trans.raw()) };
 
-    let b = errptr_to_result(NonNull::new(b).expect("btree_node_mem_alloc() returns a node or an error"))?;
+    let mut b = errptr_to_result(NonNull::new(b).expect("btree_node_mem_alloc() returns a node or an error"))?;
+    {
+        let n = unsafe { b.as_mut() };
+        n.c.level    = level as u8;
+        n.c.btree_id = btree.0 as u8;
+    }
     let n = unsafe { b.as_ref() };
 
     n.flags.set_fake(true);
     n.flags.set_need_rewrite(true);
-    unsafe {
-        (*b.as_ptr()).c.level    = level as u8;
-        (*b.as_ptr()).c.btree_id = btree.0 as u8;
-    }
 
     let contents = unsafe { n.contents_mut() };
     let mut k = KeyRoom::new(contents.key.u64s_mut());
@@ -176,8 +177,7 @@ fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level: u32) -> Re
     bch2_btree_build_aux_trees(n);
 
     contents.data_mut().flags = Default::default();
-    reserve::btree_set_min(contents, POS_MIN);
-    reserve::btree_set_max(contents, SPOS_MAX);
+    reserve::set_range(contents, POS_MIN, SPOS_MAX);
     let format = n.calc_format(contents);
     contents.data_mut().format = format;
     contents.set_format(format);
