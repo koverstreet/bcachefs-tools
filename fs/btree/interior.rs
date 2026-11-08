@@ -7,7 +7,7 @@
 
 #![allow(non_camel_case_types)]
 
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use core::marker::PhantomData;
 use core::mem::{size_of, ManuallyDrop};
 use core::ops::Deref;
@@ -36,6 +36,7 @@ use pin_init::pin_data;
 use crate::format::Btree;
 
 mod split_merge;
+mod update_key;
 pub use split_merge::bch2_btree_node_rewrite;
 pub(crate) use split_merge::{check_topology_msg, foreground_maybe_merge, increase_depth, node_rewrite};
 
@@ -103,11 +104,6 @@ c_default!(bch_fs_btree_interior_updates);
 c_extern! {
     pub fn bch2_btree_interior_updates_flush(c: *mut Fs) -> bool;
     pub fn bch2_btree_updates_to_text(out: *mut Printbuf, c: *mut Fs);
-    pub fn bch2_btree_node_update_key(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter,
-                                      b: *mut BtreeNode, new_key: *mut c::bkey_i,
-                                      commit_flags: c_uint, skip_triggers: bool) -> c_int;
-    pub fn bch2_btree_node_update_key_at_pos(trans: *mut BtreeTrans<'_>, btree: Btree, level: c_uint,
-                                             new_key: *mut c::bkey_i) -> c_int;
     pub fn bch2_btree_reserve_cache_to_text(out: *mut Printbuf, c: *mut Fs);
     pub fn bch2_btree_root_alloc_fake(c: *mut Fs, btree: Btree, level: c_uint);
 }

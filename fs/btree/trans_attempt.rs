@@ -705,35 +705,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         super::interior::increase_depth(trans, &mut trans.paths(), iter.path, CommitOpts::new())
     }
 
-    /// The pointer to the node at @level of @btree, at @key's position, made
-    /// @key, committed: bch2_btree_node_update_key_at_pos().
-    pub fn btree_node_update_key_at_pos<V: ?Sized>(&self, btree: Btree, level: u32,
-                                                   key: TransBkey<'_, 't, V>) -> Result<(), BchError> {
-        // SAFETY: our transaction, @key in memory its attempt may edit
-        self.result(unsafe { c::bch2_btree_node_update_key_at_pos(self.raw(), btree, level, key.as_ptr()) })
-    }
-
-    pub(crate) fn btree_node_update_key<V: ?Sized>(
-        &self,
-        iter:          &mut BtreeIter<'a>,
-        node:          BtreeNodeRef,
-        key:           TransBkey<'_, 't, V>,
-        flags:         impl Into<CommitOpts>,
-        skip_triggers: bool,
-    ) -> Result<(), BchError> {
-        let ret = unsafe {
-            c::bch2_btree_node_update_key(
-                self.raw(),
-                iter.raw_mut(),
-                node.as_ptr(),
-                key.as_ptr(),
-                flags.into().bits(),
-                skip_triggers,
-            )
-        };
-        self.result(ret)
-    }
-
     /// The pointer at @level of @btree, at @pos, edited by @f - handed a copy
     /// of the pointer the node below has, with room for any - and committed:
     /// the node's key updated in place, as btree_node_update_key_at_pos().
@@ -752,8 +723,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// The pointer at @level of @btree, at @key's position, made @key and
     /// committed, its triggers not run - btree_node_update_key_at_pos(), for
     /// a repair or an injection that does the accounting itself, or none.
-    pub fn btree_node_update_key_at_pos_raw<V: ?Sized>(&self, btree: Btree, level: u32,
-                                                       key: TransBkey<'_, 't, V>) -> Result<(), BchError> {
+    pub fn btree_node_update_key_at_pos_raw(&self, btree: Btree, level: u32, key: TransBkey<'_, 't>)
+        -> Result<(), BchError>
+    {
         let mut node_iter = BtreeNodeIter::new(self, btree, key.k().p, 0, level - 1, BtreeIterFlags::INTENT);
         let b = node_iter.peek_ref()?.expect("the node a btree node pointer points to");
         self.btree_node_update_key(node_iter.iter(), b, key, CommitFlags::NO_ENOSPC, true)
@@ -1063,10 +1035,6 @@ impl CommitOpts {
 
     pub const fn watermark(self, w: Watermark) -> Self {
         CommitOpts((self.0 & !Self::WATERMARK_MASK) | (w.0 as u32 & Self::WATERMARK_MASK))
-    }
-
-    pub(crate) const fn bits(self) -> u32 {
-        self.0
     }
 
     pub(crate) fn get_watermark(self) -> c::bch_watermark {
