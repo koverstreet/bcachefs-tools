@@ -29,10 +29,10 @@ impl<'a> EntryWriter<'a> {
         self.pos
     }
 
-    /// The next @bytes of the buffer, zeroed, past what's written.
+    /// The next @bytes of the buffer, past what's written, for the caller to
+    /// write all of.
     fn reserve(&mut self, bytes: usize) -> Result<&mut [u8], NoRoom> {
         let b = self.buf.get_mut(self.pos..).and_then(|b| b.get_mut(..bytes)).ok_or(NoRoom)?;
-        b.fill(0);
         self.pos += bytes;
         Ok(b)
     }
@@ -57,6 +57,7 @@ impl<'a> EntryWriter<'a> {
             dst.copy_from_slice(d);
             rest = r;
         }
+        rest.fill(0);
         Ok(())
     }
 
