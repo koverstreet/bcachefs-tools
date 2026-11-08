@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, rust_only};
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::util::projections::Volatile;
 use crate::fs::Fs;
 use crate::locking::SeqLock;
 use crate::util::ffi::Opaque;
@@ -142,27 +142,12 @@ pub fn bch2_gc_pos_set_not_running(c: &Opaque<Fs>) {
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_gc_gens {
-    pub pos: c::bbpos,
-    pub work: c::work_struct,
-    pub lock: c::mutex,
+    /* gc_gens's: where its walk is, for sysfs */
+    #[c("struct bbpos pos")]
+    pub pos: Volatile<c::bbpos>,
 }
 c_default!(bch_fs_gc_gens);
 
 c_extern! {
-    pub fn bch2_gc_gens(c: *mut Fs) -> c_int;
-    pub fn bch2_gc_gens_async(c: *mut Fs);
     pub fn bch2_fs_btree_gc_init_early(c: *mut Fs);
-}
-
-impl Fs {
-    /// Recalculate each bucket's oldest gen, so gens can wrap.
-    pub fn gc_gens(&self) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { bch2_gc_gens(self.as_ptr()) })
-    }
-
-    /// gc_gens(), from its work, holding a write ref - unless the
-    /// filesystem is going read-only.
-    pub fn gc_gens_async(&self) {
-        unsafe { bch2_gc_gens_async(self.as_ptr()) }
-    }
 }

@@ -163,7 +163,7 @@ const INTERNAL: &[Attr<Fs>] = &[
         Ok(())
     })),
 
-    Attr::ro(c"gc_gens_pos",            |c, out| crate::prt!(out, "{}\n", c.gc_gens.pos)),
+    Attr::ro(c"gc_gens_pos",            |c, out| crate::prt!(out, "{}\n", c.gc_gens.pos.get())),
     Attr::ro(c"copy_gc_wait",           |c, out| c.copygc_wait_to_text(out)),
     Attr::ro(c"recent_counters",        |c, out| c.counters.recent_to_text(out)),
     Attr::ro(c"internal_uuid",          |c, out| prt!(out, "{}\n", c.sb.uuid())),

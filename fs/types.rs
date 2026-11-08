@@ -395,7 +395,6 @@ pub struct Dev {
      */
     pub buckets_gc: GenRadix<c::bucket>,
     pub bucket_gens: c::BucketGensArray,
-    pub oldest_gen: *mut u8,
     /* allocated once, by migrate, and read without a lock */
     pub buckets_nouse: c::BucketBitmapWords,
 
@@ -561,7 +560,6 @@ c_enum! {
         discard_fast,
         check_discard_freespace_key,
         invalidate,
-        gc_gens,
         btree_write_buffer,
         btree_node_scrub,
     }

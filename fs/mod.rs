@@ -100,6 +100,7 @@ pub mod alloc {
     pub mod discard;
     pub mod disk_groups;
     pub mod foreground;
+    pub mod gc_gens;
     pub mod lru;
     pub mod replicas;
     pub mod sector_alloc;

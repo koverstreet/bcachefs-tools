@@ -93,6 +93,12 @@ c_enum! {
         /// Merge adjacent underfull btree nodes to reclaim wasted space
         #[stable(45)] #[when(ONLINE)]
         merge_btree_nodes,
+        /// Bring each bucket's oldest gen up to its gen, dropping the stale
+        /// cached pointers that held it back, so gens can wrap - for
+        /// filesystems from before no_stale_ptrs; run when buckets need it,
+        /// never at mount
+        #[stable(51)] #[when(ONLINE, SILENT)]
+        gc_gens,
         /// Split btree leaves spanning inode-allocator shard boundaries so each
         /// shard's keys live in dedicated nodes (cache locality for sharded
         /// inode/dirent/extent/xattr access)
