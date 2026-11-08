@@ -121,6 +121,7 @@ Commands:
     update [-r] <btree> <pos> <field=val>...       modify fields of a key
     set  [-s][-r] <btree> <pos> <type> [field=val]... insert a whole new key
     copy [-r] <btree> <pos> <new_pos>              duplicate a key elsewhere
+    rewrite -L <level> <btree> <pos>               rewrite the node a pointer points to
     sb get [-d <dev>] <field>                      read a superblock field
     sb set [-d <dev>] <field=val>                  write one
     snapshot  [<id>|none]                          session snapshot context
@@ -130,9 +131,10 @@ Commands:
 Positions are inode:offset[:snapshot], or POS_MIN/POS_MAX/SPOS_MAX. `-k` on
 the read commands prints keys only - type, position, size - without
 rendering values; useful when mapping out what exists. `-L <level>` on get,
-list and update works on the keys at that level of the btree instead of the
-leaves: the pointers to the nodes below, a btree node pointer at its node's
-max key.
+list, update, set and copy works on the keys at that level of the btree
+instead of the leaves: the pointers to the nodes below, a btree node pointer
+at its node's max key. set and copy put one in its node raw, to break the
+btree's topology on purpose.
 
 Fields are value-struct fields addressed by path (parent, children[1],
 btime.hi). Declared flag bits (LE*_BITMASK) resolve by name, qualified as
@@ -739,8 +741,9 @@ fn raw_flags(flags: UpdateTriggerFlags, raw: bool) -> UpdateTriggerFlags {
 /// triggers run, but an extent overwrites nothing, so the copy can overlap
 /// what's there - into a slot that must be empty. For an extent, @new_pos is
 /// the copy's end, its size unchanged. @raw: no triggers - see raw_flags().
-fn cmd_copy(fs: &Fs, btree: Btree, pos: Bpos, new_pos: Bpos, raw: bool)
-    -> Result<String>
+/// A btree node pointer (@level > 0) may be copied over itself.
+fn cmd_copy(fs: &Fs, btree: Btree, pos: Bpos, new_pos: Bpos, level: u32, assigns: &[(&str, &str)],
+            raw: bool) -> Result<String>
 {
     let trans = bcachefs_kernel::btree_trans!(fs);
     let mut user_err: Option<anyhow::Error> = None;
@@ -750,6 +753,33 @@ fn cmd_copy(fs: &Fs, btree: Btree, pos: Bpos, new_pos: Bpos, raw: bool)
         None,
         CommitFlags::NO_ENOSPC,
         |t| {
+            if level > 0 {
+                let no_key = |p: Bpos| {
+                    let (inode, offset, snapshot) = (p.inode, p.offset, p.snapshot);
+                    anyhow!("no key at level {level}, {inode}:{offset}:{snapshot}")
+                };
+
+                let mut new_iter = BtreeIter::new_level(t, btree, new_pos, level, BtreeIterFlags::empty());
+                if new_pos != pos &&
+                   new_iter.peek_slot(t)?.is_some_and(|k| !k.k.key_type().is_deleted() && k.k.p == new_pos) {
+                    let (inode, offset, snapshot) = (new_pos.inode, new_pos.offset, new_pos.snapshot);
+                    user_err = Some(anyhow!("level {level}, {inode}:{offset}:{snapshot} is occupied"));
+                    return Err(no_key_err());
+                }
+
+                let mut iter = BtreeIter::new_level(t, btree, pos, level, BtreeIterFlags::empty());
+                let Some(k) = iter.peek_slot(t)?.filter(|k| !k.k.key_type().is_deleted()) else {
+                    user_err = Some(no_key(pos));
+                    return Err(no_key_err());
+                };
+
+                let mut new = t.bkey_reassemble_resized(k, BKEY_VAL_U64S_MAX)?;
+                new.k_mut().u64s = k.k.u64s;
+                new.k_mut().p = new_pos;
+                set_fields(fs, &mut new, assigns, true, &mut user_err)?;
+                return unsafe { t.btree_node_inject_key(btree, level, new) };
+            }
+
             let mut iter = BtreeIter::new(t, btree, pos, RAW_EXACT);
             let k = iter.peek_slot(t)?;
             let Some(k) = k.filter(|k| !k.k.key_type().is_deleted()) else {
@@ -780,10 +810,23 @@ fn cmd_copy(fs: &Fs, btree: Btree, pos: Bpos, new_pos: Bpos, raw: bool)
     }
 }
 
+/// The node the pointer at @pos, at @level of @btree, points to, rewritten:
+/// an interior update, which commits itself.
+fn cmd_rewrite(fs: &Fs, btree: Btree, pos: Bpos, level: u32) -> Result<String> {
+    let trans = bcachefs_kernel::btree_trans!(fs);
+    lockrestart_do(&trans, |t| {
+        t.btree_node_rewrite_pos(btree, level, pos, 0, CommitFlags::NO_ENOSPC, c::bch_write_flags::empty())
+    })
+    .map_err(|e| anyhow!("rewriting the node the level {level} pointer of {btree} at {pos} points to: {e}"))?;
+    Ok(String::new())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn cmd_set(
     fs: &Fs,
     btree: Btree,
     pos: Bpos,
+    level: u32,
     type_name: &str,
     assigns: &[(&str, &str)],
     in_snapshot: bool,
@@ -800,6 +843,23 @@ fn cmd_set(
         None,
         CommitFlags::NO_ENOSPC,
         |t| {
+            if level > 0 {
+                if ty.is_deleted() {
+                    let mut iter = BtreeIter::new_level(t, btree, pos, level, BtreeIterFlags::empty());
+                    if iter.peek_slot(t)?.is_none_or(|k| k.k.key_type().is_deleted()) {
+                        let (inode, offset, snapshot) = (pos.inode, pos.offset, pos.snapshot);
+                        user_err = Some(anyhow!("no key at level {level}, {inode}:{offset}:{snapshot}"));
+                        return Err(no_key_err());
+                    }
+                }
+
+                let mut new: TransBkey<'_, '_> = t.bkey_alloc_init::<c::Deleted>(BKEY_VAL_U64S_MAX, pos)?.into();
+                new.k_mut().set_key_type(ty);
+                new.k_mut().u64s = (BKEY_U64S + info.size.div_ceil(8)) as u8;
+                set_fields(fs, &mut new, assigns, true, &mut user_err)?;
+                return unsafe { t.btree_node_inject_key(btree, level, new) };
+            }
+
             // Deletion has two meanings. Raw (the default): remove this
             // exact key - a filtered iter would have bch2_trans_update()
             // convert the deletion into a whiteout whenever the key is
@@ -928,10 +988,22 @@ set  [-s][-r] <btree> <pos> <type> [field=val]... insert a whole new key
           subvolume state) also accept the value name, e.g. state=will_delete
           `set <pos> deleted` removes the exact key; with -s it deletes
           within pos's snapshot instead (whiteouts, like a runtime delete)
+          -L <level>, first: a btree node pointer put straight into the
+          node at that level and the node written - no interior update, no
+          topology checked, the nodes below untouched: damage for
+          check_topology to find. `set -L 1 <btree> <pos> deleted` drops a
+          child's pointer
 copy [-r] <btree> <pos> <new_pos>              duplicate a key, as it is, elsewhere
           raw: an extent copy can overlap what's there; new_pos may be in
           another inode or snapshot, and must be empty. An extent's new_pos
           is its end
+          -L <level>, first: a btree node pointer copied, as set -L puts one,
+          to new_pos - its node's new end - and field=val set on the copy
+          (min_key, flags): pointers that overlap. new_pos may be pos: the
+          pointer edited in place, its node not told
+rewrite -L <level> <btree> <pos>               the node the pointer at pos, at
+          level, points to, rewritten - an interior update, as any - into
+          one bset: room for set -L's keys in a node written many times
 sb get [-d <dev>] <field>                      read a superblock field/flag
 sb set [-d <dev>] <field=val>                  write one, then bch2_write_super
           -d: that device's own superblock - only its per-device parts
@@ -1007,6 +1079,36 @@ struct Repl<'a> {
     journal: bool,
     rw: bool,
     snapshot: Option<u32>,
+    /// Where set -L and copy -L put keys, whose nodes aren't written yet
+    injected: Vec<(Btree, u32, Bpos)>,
+}
+
+impl Repl<'_> {
+    /// The nodes keys were injected into written: once each, after all of a
+    /// batch's keys, which share one bset - not one per key, each with a block
+    /// of the node to itself.
+    fn write_injected(&mut self) -> Result<()> {
+        if self.injected.is_empty() {
+            return Ok(());
+        }
+        let fs = self.fs.offline()?;
+        let trans = bcachefs_kernel::btree_trans!(fs);
+        for (btree, level, pos) in self.injected.drain(..) {
+            lockrestart_do(&trans, |t| t.btree_node_write_at(btree, level, pos))
+                .map_err(|e| anyhow!("writing the node at level {level} of {btree} at {pos}, keys injected into: {e}"))?;
+        }
+        Ok(())
+    }
+}
+
+/// An error out of the commands leaves the nodes to write: going read-only
+/// won't
+impl Drop for Repl<'_> {
+    fn drop(&mut self) {
+        if let Err(e) = self.write_injected() {
+            eprintln!("{e}");
+        }
+    }
 }
 
 type CmdHandler = fn(&mut Repl, &Cmd, &[&str]) -> Result<ControlFlow<(), String>>;
@@ -1046,12 +1148,15 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "update", aliases: &[], usage: "update [-L <level>] [-r] <btree> <pos> <field=val>...",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: true, needs_journal: false, handler: h_update },
-    Cmd { name: "set", aliases: &[], usage: "set [-s] [-r] <btree> <pos> <type> [field=val]...",
+    Cmd { name: "set", aliases: &[], usage: "set [-L <level>] [-s] [-r] <btree> <pos> <type> [field=val]...",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: true, needs_journal: false, handler: h_set },
-    Cmd { name: "copy", aliases: &[], usage: "copy [-r] <btree> <pos> <new_pos>",
+    Cmd { name: "copy", aliases: &[], usage: "copy [-L <level>] [-r] <btree> <pos> <new_pos> [field=val]...",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: true, needs_journal: false, handler: h_copy },
+    Cmd { name: "rewrite", aliases: &[], usage: "rewrite -L <level> <btree> <pos>",
+          completes_btree: true, subcommands: &[],
+          nostart_ok: false, needs_rw: true, needs_journal: false, handler: h_rewrite },
     Cmd { name: "sb", aliases: &[], usage: "sb get [-d <dev>] <field> | sb set [-d <dev>] <field=val>",
           completes_btree: false, subcommands: &["get", "set"],
           nostart_ok: true, needs_rw: false, needs_journal: false, handler: h_sb },
@@ -1192,6 +1297,7 @@ fn h_update(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(),
 }
 
 fn h_set(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    let (level, args) = take_level(args)?;
     let (mut in_snapshot, mut raw, mut args) = (false, false, args);
     loop {
         match args {
@@ -1206,6 +1312,9 @@ fn h_set(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), St
     if in_snapshot && *type_name != "deleted" {
         bail!("-s (delete within pos's snapshot) only applies to deletions");
     }
+    if in_snapshot && level > 0 {
+        bail!("-s: a btree node pointer isn't in a snapshot");
+    }
     let fs = repl.fs.offline()?;
     let assigns = assigns
         .iter()
@@ -1213,25 +1322,52 @@ fn h_set(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), St
         .collect::<Result<Vec<_>>>()?;
     let btree = parse_btree(btree)?;
     let ctx = repl.snapshot.filter(|_| btree_uses_snapshots(btree));
-    Ok(ControlFlow::Continue(
-        cmd_set(fs, btree, parse_pos_ctx(pos, ctx)?, type_name, &assigns, in_snapshot, raw)?,
-    ))
+    let pos = parse_pos_ctx(pos, ctx)?;
+    let out = cmd_set(fs, btree, pos, level, type_name, &assigns, in_snapshot, raw)?;
+    if level > 0 {
+        repl.injected.push((btree, level, pos));
+    }
+    Ok(ControlFlow::Continue(out))
 }
 
 fn h_copy(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    let (level, args) = take_level(args)?;
     let (raw, args) = match args {
         ["-r", rest @ ..] => (true, rest),
         _ => (false, args),
     };
-    let [btree, pos, new_pos] = args else {
+    let [btree, pos, new_pos, assigns @ ..] = args else {
         bail!("usage: {}", cmd.usage);
     };
+    if level == 0 && !assigns.is_empty() {
+        bail!("field=val on a copy only with -L: a btree node pointer's");
+    }
     let fs = repl.fs.offline()?;
+    let assigns = assigns
+        .iter()
+        .map(|s| parse_assign(s))
+        .collect::<Result<Vec<_>>>()?;
     let btree = parse_btree(btree)?;
     let ctx = repl.snapshot.filter(|_| btree_uses_snapshots(btree));
-    Ok(ControlFlow::Continue(
-        cmd_copy(fs, btree, parse_pos_ctx(pos, ctx)?, parse_pos_ctx(new_pos, ctx)?, raw)?,
-    ))
+    let new_pos = parse_pos_ctx(new_pos, ctx)?;
+    let out = cmd_copy(fs, btree, parse_pos_ctx(pos, ctx)?, new_pos, level, &assigns, raw)?;
+    if level > 0 {
+        repl.injected.push((btree, level, new_pos));
+    }
+    Ok(ControlFlow::Continue(out))
+}
+
+fn h_rewrite(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    let (level, args) = take_level(args)?;
+    let [btree, pos] = args else {
+        bail!("usage: {}", cmd.usage);
+    };
+    if level == 0 {
+        bail!("rewrite: -L <level>, the level of the pointer to the node, is needed");
+    }
+    let fs = repl.fs.offline()?;
+    let btree = parse_btree(btree)?;
+    Ok(ControlFlow::Continue(cmd_rewrite(fs, btree, parse_pos(pos)?, level)?))
 }
 
 fn h_sb(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
@@ -1417,6 +1553,7 @@ fn kvdb(cli: Cli) -> Result<()> {
         journal: cli.journal,
         rw: cli.rw,
         snapshot: None,
+        injected: Vec::new(),
     };
 
     if !cli.commands.is_empty() {
@@ -1425,7 +1562,7 @@ fn kvdb(cli: Cli) -> Result<()> {
                 break;
             }
         }
-        return Ok(());
+        return repl.write_injected();
     }
 
     // In a piped script an error must abort (a test's later commands likely
@@ -1436,7 +1573,7 @@ fn kvdb(cli: Cli) -> Result<()> {
                 break;
             }
         }
-        return Ok(());
+        return repl.write_injected();
     }
 
     unsafe {
@@ -1474,7 +1611,7 @@ fn kvdb(cli: Cli) -> Result<()> {
                     }
                 }
                 INTERRUPTED.store(false, Ordering::Relaxed);
-                match run_line(&mut repl, &line) {
+                match run_line(&mut repl, &line).and_then(|r| repl.write_injected().map(|()| r)) {
                     Ok(ControlFlow::Break(())) => break,
                     Ok(ControlFlow::Continue(())) => {}
                     Err(e) => eprintln!("{e}"),

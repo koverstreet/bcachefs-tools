@@ -14,6 +14,7 @@ use crate::errcode::{
 use crate::btree::trans::TransGuard;
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
+use crate::types::Le64;
 use crate::util::ffi::Opaque;
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
@@ -23,6 +24,9 @@ use core::mem::size_of;
 use core::ptr::NonNull;
 use core::slice;
 use crate::btree::cache::btree_ptr_hash_val;
+use crate::btree::node::iter::KeyIter;
+use crate::btree::write::{node_write_trans, BtreeWriteFlags};
+use crate::cstructs::c::BtreeWriteType;
 use crate::util::vstructs::{State, Validated};
 use crate::format::{Bpos, Btree, BkeyType};
 
@@ -736,6 +740,80 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let mut node_iter = BtreeNodeIter::new(self, btree, key.k().p, 0, level - 1, BtreeIterFlags::INTENT);
         let b = node_iter.peek_ref()?.expect("the node a btree node pointer points to");
         self.btree_node_update_key(node_iter.iter(), b, key, CommitFlags::NO_ENOSPC, true)
+    }
+
+    /// @key put in the node at @level of @btree that its position is in, as
+    /// it is - a deleted key takes out what's there - and the node left dirty:
+    /// no interior update, nothing journalled, the nodes below left alone.
+    /// Damage for check_topology to find: kvdb's set -L and copy -L. Keys
+    /// injected before the node's written share a bset.
+    ///
+    /// # Safety
+    /// Nothing checks @key against its node's range or its neighbours': the
+    /// btree is left however @key breaks it, for fsck to repair. Only for a
+    /// filesystem being damaged on purpose.
+    ///
+    /// The caller writes the node, with btree_node_write_at(): with no
+    /// journal pin, going read-only doesn't.
+    pub unsafe fn btree_node_inject_key(&self, btree: Btree, level: u32, mut key: TransBkey<'_, 't>)
+        -> Result<(), BchError>
+    {
+        let trans = self.trans();
+        let fs = self.fs();
+        let lvl = level as usize;
+
+        let mut iter = BtreeNodeIter::new(self, btree, key.k().p, level + 1, level, BtreeIterFlags::INTENT);
+        if iter.peek()?.is_none() {
+            return Err(fs.err(bch_errcode::BCH_ERR_no_btree_node_shallow));
+        }
+
+        let idx = iter.raw.path;
+        let mut paths = trans.paths();
+        let b = paths.held_btree_node(idx, lvl).expect("a node, peeked");
+
+        trans.node_lock_write(&mut paths, idx, lvl)?;
+        trans.node_prep_for_write(&mut paths, b.node());
+
+        if usize::from(key.k().u64s) > b.keys_u64s_remaining(b.contents()) {
+            trans.node_unlock_write(&mut paths, idx, lvl);
+            return Err(fs.err(bch_errcode::BCH_ERR_btree_insert_btree_node_full));
+        }
+
+        let mut node_iter = KeyIter::default();
+        node_iter.init(fs, &b.keys(b.contents()), &key.k().p);
+
+        unsafe {
+            trans.bset_insert_key(&mut paths, idx, b.node(), &mut node_iter, key.as_mut());
+
+            let contents = b.node().contents_mut();
+            let set = contents.last_set().data_offset;
+            let mut keys = b.node().keys_mut(contents);
+            let i = keys.bset_head_mut(set);
+            i.journal_seq = Le64::new(fs.journal.lock.seq_ondisk.get().max(i.journal_seq.get()));
+
+            fs.btree_node_set_dirty(b.node());
+        }
+        trans.node_unlock_write(&mut paths, idx, lvl);
+        Ok(())
+    }
+
+    /// The node at @level of @btree that @pos is in written, if it's dirty:
+    /// btree_node_inject_key()'s, once its keys are in.
+    pub fn btree_node_write_at(&self, btree: Btree, level: u32, pos: Bpos) -> Result<(), BchError> {
+        let trans = self.trans();
+
+        let mut iter = BtreeNodeIter::new(self, btree, pos, level + 1, level, BtreeIterFlags::INTENT);
+        if iter.peek()?.is_none() {
+            return Err(self.fs().err(bch_errcode::BCH_ERR_no_btree_node_shallow));
+        }
+
+        let idx = iter.raw.path;
+        let mut paths = trans.paths();
+        let b = paths.held_btree_node(idx, level as usize).expect("a node, peeked");
+
+        node_write_trans(trans, &mut paths, b.node(), c::six_lock_type::SIX_LOCK_intent,
+                         BtreeWriteType::interior, BtreeWriteFlags::empty());
+        Ok(())
     }
 
     /// @node, which @iter is at, rewritten.
