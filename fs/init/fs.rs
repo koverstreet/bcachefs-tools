@@ -13,7 +13,6 @@ use crate::alloc::accounting_mem::accounting_exit;
 use crate::alloc::foreground::allocator_foreground_init;
 use crate::alloc::replicas::can_write_with_devs;
 use crate::btree::cache::{bch2_fs_btree_exit, bch2_fs_btree_init, bch2_fs_btree_init_early};
-use crate::btree::interior::bch2_free_pending_node_rewrites;
 use crate::btree::journal_overlay::journal_keys_put_initial;
 use crate::btree::read::bch2_btree_flush_all_reads;
 use crate::data::checksum::encryption_init;
@@ -946,7 +945,7 @@ unsafe fn release(p: *mut Fs) {
     fs.reconcile_stop();
     fs.copygc_stop();
     fs.btree_write_buffer_stop();
-    unsafe { bch2_free_pending_node_rewrites(p) };
+    fs.btree.async_ops.free_pending();
     free_fsck_errs(fs);
     // each workqueue's destroy is its flush: before the exits free what their
     // work uses

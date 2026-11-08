@@ -21,7 +21,7 @@ use crate::init::passes::RecoveryPass;
 use crate::accounting::verify_accounting_clean;
 use crate::alloc::capacity::recalc_capacity;
 use crate::btree::cache::bch2_fs_btree_init_rw;
-use crate::btree::interior::{bch2_btree_interior_updates_flush, bch2_do_pending_node_rewrites};
+use crate::btree::interior::bch2_btree_interior_updates_flush;
 use crate::btree::write::bch2_btree_flush_all_writes;
 use crate::c;
 use crate::c::bch_fs_flags as Flag;
@@ -264,7 +264,6 @@ impl StateLockWrite<'_> {
 
     pub(crate) fn start_rw(&self) -> Result<(), BchError> {
         let fs = self.fs();
-        let p = fs.as_ptr();
 
         assert!(fs.flags.get(Flag::may_go_rw));
 
@@ -363,7 +362,7 @@ impl StateLockWrite<'_> {
         fs.do_discards_async();
         fs.do_invalidates();
         fs.do_stripe_deletes();
-        unsafe { bch2_do_pending_node_rewrites(p) };
+        fs.run_pending_async_btree_ops();
         crate::data::scrub_journal::do_repairs(fs);
         BtreeBitmapGcSchedule::run(fs);
         Ok(())

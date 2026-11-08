@@ -164,12 +164,3 @@ nest! {
         pub inline_keys: [u64; c::BKEY_BTREE_PTR_U64s_MAX * 3],
     }
 }
-
-c_enum! {
-    #[closed]
-    pub enum async_btree_op: u32 {
-        ASYNC_BTREE_rewrite,
-        ASYNC_BTREE_merge,
-        ASYNC_BTREE_merge_no_read,
-    }
-}

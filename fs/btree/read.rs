@@ -7,9 +7,9 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{types_with, AllTypes, BkeyI, BkeySC, FamilyVal, ValidateFlags, POS_MIN, SPOS_MAX};
+use crate::btree::async_ops::AsyncBtreeOp;
 use crate::btree::bkey_buf::BtreeKeyBuf;
 use crate::btree::cache::{__bch2_btree_pos_to_text, bch2_btree_id_level_to_text, Bounce};
-use crate::btree::interior::bch2_async_btree_op;
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags};
 use crate::btree::node::sort::{bch2_btree_build_aux_trees, SortRuns};
 use crate::btree::node::{BtreeNode, NodeContents};
@@ -797,7 +797,7 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
         if (!failed.is_empty() || b.flags.need_rewrite()) &&
            fs.recovery.runner.current_pass.get() != RecoveryPass::scan_for_btree_nodes {
             prt!(&mut buf, " (rewriting node)");
-            unsafe { bch2_async_btree_op(fs.as_ptr(), ptr::from_ref(b).cast_mut(), c::async_btree_op::ASYNC_BTREE_rewrite) };
+            fs.async_btree_op(b, unsafe { b.contents() }, AsyncBtreeOp::Rewrite);
         }
 
         buf.newline();
@@ -827,7 +827,7 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
          * recursively kick off more merge attempts as it reads sibling
          * nodes:
          */
-        unsafe { bch2_async_btree_op(fs.as_ptr(), ptr::from_ref(b).cast_mut(), c::async_btree_op::ASYNC_BTREE_merge_no_read) };
+        fs.async_btree_op(b, contents, AsyncBtreeOp::MergeNoRead);
     }
 
     unsafe { c::bio_put(&raw mut rb.bio) };

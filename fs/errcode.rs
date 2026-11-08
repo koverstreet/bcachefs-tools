@@ -129,7 +129,6 @@ c_xmacro! {
         (ENOMEM, ENOMEM_journal_entry_add, 59),
         (ENOMEM, ENOMEM_journal_read_buf_realloc, 60),
         (ENOMEM, ENOMEM_btree_interior_update_worker_init, 61),
-        (ENOMEM, ENOMEM_btree_node_rewrites_table_init, 62),
         (ENOMEM, ENOMEM_btree_interior_update_pool_init, 63),
         (ENOMEM, ENOMEM_bio_read_init, 64),
         (ENOMEM, ENOMEM_bio_read_split_init, 65),

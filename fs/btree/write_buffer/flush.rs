@@ -4,8 +4,8 @@ use super::keys::{Shard, WbKeyMut};
 use super::{insert_checks, resize_gfp, wb_btree_to_btree, Buf, Flushing, FlushingGuard, IncGuard, WB_RESIZE_GFP};
 use crate::accounting;
 use crate::alloc::accounting_mem;
+use crate::btree::async_ops::AsyncBtreeOp;
 use crate::btree::bkey::{BkeySC, BKEY_U64S, POS_MIN};
-use crate::btree::interior::bch2_async_btree_op;
 use crate::btree::iter::{commit_do, is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags, Watermark};
 use crate::c;
@@ -209,8 +209,9 @@ fn flush_one<'a>(
     unsafe { trans.insert_key_leaf(&mut trans.paths(), iter.path, wb.k_mut(), seq) };
     cnt.fast += 1;
 
-    if b.needs_merge(unsafe { b.contents() }, fs, 0) {
-        unsafe { bch2_async_btree_op(fs.as_ptr(), ptr::from_ref(b).cast_mut(), c::async_btree_op::ASYNC_BTREE_merge) };
+    let contents = unsafe { b.contents() };
+    if b.needs_merge(contents, fs, 0) {
+        fs.async_btree_op(b, contents, AsyncBtreeOp::Merge);
     }
 
     Ok(())

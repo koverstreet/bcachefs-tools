@@ -140,7 +140,7 @@ impl NodeValidate<'_> {
                  * dropped a node that was sitting right there, leaving a gap
                  * that btree node scan filled with the same node, forever.
                  *
-                 * The write is gated where it belongs: bch2_async_btree_op()
+                 * The write is gated where it belongs: async_btree_op()
                  * only queues a rewrite once the fs can take a write ref.
                  */
                 if !have_retry && flags.contains(FsckFlags::CAN_FIX) {

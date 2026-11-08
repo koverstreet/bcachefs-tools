@@ -1137,8 +1137,10 @@ pub struct bch_fs_btree {
     pub reserve_cache: cs::bch_fs_btree_reserve_cache,
     #[late]
     pub interior_updates: cs::bch_fs_btree_interior_updates,
+    #[pin]
+    #[init(RustOnly::new(crate::btree::async_ops::AsyncOps::init()))]
     #[late]
-    pub node_rewrites: cs::bch_fs_btree_node_rewrites,
+    pub(crate) async_ops: rust_only!(crate::btree::async_ops::AsyncOps),
     #[pin]
     #[init(RustOnly::new(new_lock!(KVVec::new())))]
     pub(crate) node_scan: rust_only!(NodeScan),

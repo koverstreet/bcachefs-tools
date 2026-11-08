@@ -677,8 +677,8 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
     Ok(())
 }
 
-fn foreground_maybe_merge(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
-                          commit: CommitOpts) -> Result<(), BchError> {
+pub(crate) fn foreground_maybe_merge(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
+                                     commit: CommitOpts) -> Result<(), BchError> {
     trans.verify_not_unlocked_or_in_restart();
 
     let b = paths[path].locked_btree_node(level).expect("merging a node the path doesn't hold");

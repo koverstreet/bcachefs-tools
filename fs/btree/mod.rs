@@ -26,6 +26,7 @@ pub(crate) fn invariant_failed(cond: &'static str) -> ! {
     panic!("btree node invariant failed: {cond}")
 }
 
+pub mod async_ops;
 pub mod bbpos;
 pub mod bkey;
 pub mod bkey_buf;

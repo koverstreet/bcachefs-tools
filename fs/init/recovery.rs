@@ -900,7 +900,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     /* in case we don't run journal replay, i.e. norecovery mode */
     fs.flags.set(Flag::accounting_replay_done, true);
 
-    fs.async_btree_node_rewrites_flush();
+    fs.btree.async_ops.flush();
 
     /* fsync if we fixed errors */
     let errors_fixed = fs.flags.get(Flag::errors_fixed) ||

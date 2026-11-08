@@ -32,13 +32,12 @@ use crate::new_lock;
 use crate::types::c_default;
 use crate::util::Printbuf;
 use crate::util::{late::Late, mempool::Mempool, workqueue::{Workqueue, WqFlags}};
-use core::sync::atomic::AtomicI32;
 use pin_init::pin_data;
 use crate::format::Btree;
 
 mod split_merge;
 pub use split_merge::bch2_btree_node_rewrite;
-pub(crate) use split_merge::{increase_depth, node_rewrite};
+pub(crate) use split_merge::{foreground_maybe_merge, increase_depth, node_rewrite};
 
 #[repr(C)]
 #[derive(Default, CStruct)]
@@ -101,26 +100,8 @@ pub struct bch_fs_btree_interior_updates {
 }
 c_default!(bch_fs_btree_interior_updates);
 
-#[repr(C)]
-#[derive(CStruct, TypeInfo, Late)]
-pub struct bch_fs_btree_node_rewrites {
-    pub list: c::list_head,
-    pub pending: c::list_head,
-    pub lock: c::spinlock_t,
-    pub wait: c::closure_waitlist,
-    pub nr: AtomicI32,
-    pub table: c::rhashtable,
-    pub table_init_done: bool,
-    #[late(Workqueue::new(c"btree_node_rewrite", WqFlags::PERCPU, 0), ENOMEM_btree_interior_update_worker_init)]
-    #[c("struct workqueue_struct *worker")]
-    pub worker: Late<Workqueue>,
-}
-c_default!(bch_fs_btree_node_rewrites);
-
 c_extern! {
     pub fn bch2_btree_interior_updates_flush(c: *mut Fs) -> bool;
-    pub fn bch2_do_pending_node_rewrites(c: *mut Fs);
-    pub fn bch2_free_pending_node_rewrites(c: *mut Fs);
     pub fn bch2_btree_updates_to_text(out: *mut Printbuf, c: *mut Fs);
     pub fn bch2_btree_node_update_key(trans: *mut BtreeTrans<'_>, iter: *mut c::btree_iter,
                                       b: *mut BtreeNode, new_key: *mut c::bkey_i,
@@ -128,9 +109,7 @@ c_extern! {
     pub fn bch2_btree_node_update_key_at_pos(trans: *mut BtreeTrans<'_>, btree: Btree, level: c_uint,
                                              new_key: *mut c::bkey_i) -> c_int;
     pub fn bch2_btree_reserve_cache_to_text(out: *mut Printbuf, c: *mut Fs);
-    pub fn bch2_async_btree_op(c: *mut Fs, b: *mut BtreeNode, op: c::async_btree_op);
     pub fn bch2_btree_root_alloc_fake(c: *mut Fs, btree: Btree, level: c_uint);
-    pub fn bch2_async_btree_node_rewrites_flush(c: *mut Fs);
 }
 
 /// What an interior update reserves for, and records: InteriorUpdate::start()'s.
@@ -411,10 +390,6 @@ impl Fs {
 
     pub fn btree_root_alloc_fake(&self, btree: Btree, level: u32) {
         unsafe { bch2_btree_root_alloc_fake(self.as_ptr(), btree, level) }
-    }
-
-    pub fn async_btree_node_rewrites_flush(&self) {
-        unsafe { bch2_async_btree_node_rewrites_flush(self.as_ptr()) }
     }
 
     pub fn btree_interior_updates_pending(&self) -> bool {
