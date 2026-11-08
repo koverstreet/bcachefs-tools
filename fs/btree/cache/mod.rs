@@ -549,7 +549,11 @@ pub unsafe fn bch2_btree_node_get_noiter(trans: &BtreeTrans<'_>, #[lent(trans)] 
                                          nofill: bool) -> *mut BtreeNode {
     let k = unsafe { &*BkeyI::from_raw(k) };
     match trans.btree_node_get_noiter(paths, k, btree, level as usize, nofill) {
-        Ok(b)  => b.map_or(core::ptr::null_mut(), |b| core::ptr::from_ref(b).cast_mut()),
+        // C's to unlock
+        Ok(b)  => b.map_or(core::ptr::null_mut(), |(b, held)| {
+            held.into_raw();
+            core::ptr::from_ref(b).cast_mut()
+        }),
         Err(e) => err_ptr(e),
     }
 }

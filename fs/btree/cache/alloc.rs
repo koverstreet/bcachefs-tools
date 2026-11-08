@@ -204,7 +204,7 @@ impl BtreeTrans<'_> {
     #[inline(never)]
     pub(super) fn btree_node_fill(&self, paths: &mut Paths<'_>, path: Option<PathIdx>, k: &BkeyI, btree: Btree,
                                   level: usize, lock_type: six_lock_type, sync: bool)
-        -> Result<Option<&BtreeNode>, BchError>
+        -> Result<Option<(&BtreeNode, SixHold<'_>)>, BchError>
     {
         let fs = self.fs();
 
@@ -301,9 +301,6 @@ impl BtreeTrans<'_> {
             self.relock_from(paths).and_then(|()| self.path_relock(paths, p))?;
         }
 
-        Ok(ret.map(|held| {
-            held.into_raw();
-            b
-        }))
+        Ok(ret.map(|held| (b, held)))
     }
 }

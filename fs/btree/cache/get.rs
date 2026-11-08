@@ -16,7 +16,7 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::format::{BkeyType, Btree};
 use crate::fs::Fs;
 use crate::init::passes::RecoveryPass;
-use crate::locking::six::{six_relock_ip, six_unlock_ip, SixHold};
+use crate::locking::six::SixHold;
 use crate::prt;
 use crate::types::L1_CACHE_BYTES;
 use crate::util::kernel::{likely, prefetch, race_fault, unlikely};
@@ -119,7 +119,9 @@ impl BtreeTrans<'_> {
 
     #[inline(never)]
     fn btree_node_get_slowpath(&self, paths: &mut Paths<'_>, idx: PathIdx, k: &BkeyI, level: usize,
-                               lock_type: six_lock_type, flags: BtreeIterFlags) -> Result<&BtreeNode, BchError> {
+                               lock_type: six_lock_type, flags: BtreeIterFlags)
+        -> Result<(&BtreeNode, SixHold<'_>), BchError>
+    {
         let fs = self.fs();
         let hash_val = btree_ptr_hash_val(BkeySC::from(k));
 
@@ -129,8 +131,8 @@ impl BtreeTrans<'_> {
 
         ebug_assert!(level < c::BTREE_MAX_DEPTH as usize);
 
-        let b = 'retry: loop {
-            let b = match fs.btree_cache_find(k) {
+        let (b, held) = 'retry: loop {
+            let (b, mut held) = match fs.btree_cache_find(k) {
                 None => {
                     if unlikely(flags.contains(BtreeIterFlags::NOFILL)) {
                         return Err(fs.err(bch_errcode::BCH_ERR_no_btree_node_nofill));
@@ -145,7 +147,7 @@ impl BtreeTrans<'_> {
                     match self.btree_node_fill(paths, Some(idx), k, btree, level, lock_type, true)? {
                         /* We raced and found the btree node in the cache */
                         None => continue 'retry,
-                        Some(b) => b,
+                        Some(got) => got,
                     }
                 }
                 Some(b) => {
@@ -172,20 +174,20 @@ impl BtreeTrans<'_> {
                         return Err(self.btree_node_reused(paths, idx));
                     }
 
-                    let _ = held.expect("btree_node_lock(): a lock, a restart, or the node reused").into_raw();
+                    let held = held.expect("btree_node_lock(): a lock, a restart, or the node reused");
 
                     /* avoid atomic set bit if it's not needed: */
                     if !b.flags.accessed() {
                         b.flags.set_accessed(true);
                     }
-                    b
+                    (b, held)
                 }
             };
 
             if unlikely(b.flags.read_in_flight()) {
                 let seq = b.c.lock.six().seq.get();
 
-                unsafe { six_unlock_ip(b.c.lock.six(), lock_type, crate::ret_ip!()) };
+                drop(held);
                 self.unlock_from(paths, crate::ret_ip!());
 
                 bch2_btree_node_wait_on_read(self, paths, b);
@@ -197,12 +199,11 @@ impl BtreeTrans<'_> {
                  * should_be_locked is not set on this path yet, so we need to
                  * relock it specifically:
                  */
-                if !six_relock_ip(b.c.lock.six(), lock_type, seq, crate::ret_ip!()) {
-                    continue 'retry;
-                }
+                let Some(relocked) = b.c.lock.relock_as(lock_type, seq) else { continue 'retry };
+                held = relocked;
             }
 
-            break b;
+            break (b, held);
         };
 
         if paths[idx].locked_type(level + 1) == btree_node_locked_type::BTREE_NODE_READ_LOCKED {
@@ -210,7 +211,7 @@ impl BtreeTrans<'_> {
         }
 
         if unlikely(b.flags.read_error()) {
-            unsafe { six_unlock_ip(b.c.lock.six(), lock_type, crate::ret_ip!()) };
+            drop(held);
             return Err(bch_errcode::BCH_ERR_btree_node_read_err_cached.into());
         }
 
@@ -226,7 +227,7 @@ impl BtreeTrans<'_> {
             self.btree_node_mem_ptr_set(paths, idx, level + 1, b);
         }
 
-        Ok(b)
+        Ok((b, held))
     }
 
     /**
@@ -247,7 +248,9 @@ impl BtreeTrans<'_> {
      */
     #[inline(always)]
     pub(crate) fn btree_node_get(&self, paths: &mut Paths<'_>, idx: PathIdx, k: &BkeyI, level: usize,
-                                 lock_type: six_lock_type, flags: BtreeIterFlags) -> Result<&BtreeNode, BchError> {
+                                 lock_type: six_lock_type, flags: BtreeIterFlags)
+        -> Result<(&BtreeNode, SixHold<'_>), BchError>
+    {
         ebug_assert!(level < c::BTREE_MAX_DEPTH as usize);
         ebug_assert!(level + 1 == paths[idx].level() as usize);
 
@@ -288,7 +291,6 @@ impl BtreeTrans<'_> {
             drop(held);
             return self.btree_node_get_slowpath(paths, idx, k, level, lock_type, flags);
         }
-        let _ = held.into_raw();
 
         /* avoid atomic set bit if it's not needed: */
         if !f.accessed() {
@@ -301,11 +303,11 @@ impl BtreeTrans<'_> {
         ebug_assert!(unsafe { b.contents() }.data().level() == level as u64);
         btree_check_header(self.fs(), b);
 
-        Ok(b)
+        Ok((b, held))
     }
 
     pub(crate) fn btree_node_get_noiter(&self, paths: &mut Paths<'_>, k: &BkeyI, btree: Btree, level: usize,
-                                        nofill: bool) -> Result<Option<&BtreeNode>, BchError> {
+                                        nofill: bool) -> Result<Option<(&BtreeNode, SixHold<'_>)>, BchError> {
         let fs = self.fs();
         let hash_val = btree_ptr_hash_val(BkeySC::from(k));
 
@@ -313,7 +315,7 @@ impl BtreeTrans<'_> {
 
         let ret = 'out: {
             let mut mem_ptr = btree_node_mem_ptr(fs, k);
-            let b = loop {
+            let (b, held) = loop {
                 let Some(b) = mem_ptr.take().or_else(|| fs.btree_cache_find(k)) else {
                     if nofill {
                         break 'out Ok(None);
@@ -324,7 +326,7 @@ impl BtreeTrans<'_> {
                         Ok(None) => continue,
                         Err(_) if self.btree_cache_cannibalize_lock(None).is_ok() => continue,
                         Err(e) => break 'out Err(e),
-                        Ok(Some(b)) => break b,
+                        Ok(Some(got)) => break got,
                     }
                 };
 
@@ -336,11 +338,12 @@ impl BtreeTrans<'_> {
                     Err(e) => panic!("btree_node_lock_nopath(): {e}"),
                     Ok(()) => {}
                 }
+                let held = unsafe { SixHold::from_raw(&b.c.lock, SIX_LOCK_read) };
 
                 if unlikely(b.hash_val() != hash_val ||
                             u32::from(b.c.btree_id) != btree.0 ||
                             b.c.level as usize != level) {
-                    unsafe { six_unlock_ip(b.c.lock.six(), SIX_LOCK_read, crate::ret_ip!()) };
+                    drop(held);
                     continue;
                 }
 
@@ -348,7 +351,7 @@ impl BtreeTrans<'_> {
                 if !b.flags.accessed() {
                     b.flags.set_accessed(true);
                 }
-                break b;
+                break (b, held);
             };
 
             /* XXX: waiting on IO with btree locks held: */
@@ -357,14 +360,14 @@ impl BtreeTrans<'_> {
             prefetch_aux(b);
 
             if unlikely(b.flags.read_error()) {
-                unsafe { six_unlock_ip(b.c.lock.six(), SIX_LOCK_read, crate::ret_ip!()) };
+                drop(held);
                 break 'out Err(bch_errcode::BCH_ERR_btree_node_read_err_cached.into());
             }
 
             ebug_assert!(u32::from(b.c.btree_id) == btree.0);
             ebug_assert!(unsafe { b.contents() }.data().level() == level as u64);
             btree_check_header(fs, b);
-            Ok(Some(b))
+            Ok(Some((b, held)))
         };
 
         self.btree_cache_cannibalize_unlock();
@@ -382,9 +385,8 @@ impl BtreeTrans<'_> {
             return Ok(());
         }
 
-        if let Some(b) = self.btree_node_fill(paths, path, k, btree, level, SIX_LOCK_read, false)? {
-            unsafe { six_unlock_ip(b.c.lock.six(), SIX_LOCK_read, crate::ret_ip!()) };
-        }
+        // dropped: unlocked
+        let _ = self.btree_node_fill(paths, path, k, btree, level, SIX_LOCK_read, false)?;
         Ok(())
     }
 

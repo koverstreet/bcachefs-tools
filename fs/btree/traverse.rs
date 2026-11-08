@@ -23,7 +23,6 @@ use crate::debug::trace::events;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{BkeyType, Bpos};
 use crate::fs::Fs;
-use crate::locking::six::SixHold;
 use crate::prt;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::util::closure::StackClosure;
@@ -531,11 +530,8 @@ impl BtreeTrans<'_> {
         let lock_type = paths[idx].lock_want_six(level);
         // the transaction's, not the path table's
         let k: *const BkeyI = paths.down_key();
-        let b = self.btree_node_get(paths, idx, unsafe { &*k }, level, lock_type, flags)?;
-        // btree_node_get() returns it locked as @lock_type, ours to give the path
-        let (b, hold) = unsafe {
-            (LockedNode::new(b), SixHold::from_raw(&b.c.lock, lock_type))
-        };
+        let (b, hold) = self.btree_node_get(paths, idx, unsafe { &*k }, level, lock_type, flags)?;
+        let b = unsafe { LockedNode::new(b) };
 
         let path = &mut paths[idx];
         path.put_level(level, &b.c, hold);
