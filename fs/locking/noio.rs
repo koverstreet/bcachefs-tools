@@ -11,7 +11,8 @@
 //! the NOIO context, and you can't take it without.
 //!
 //! Noio<R> is any lock R, taken that way: a RawLock that saves the memalloc
-//! flags, then takes R - and releases R, then restores them. Laid out as R,
+//! flags, then takes R - and releases R, then restores them - Memalloc<R,
+//! FLAGS> with NOIO; another scope is another FLAGS. Laid out as R,
 //! so Noio<c::mutex> is C's struct mutex_noio and Noio<c::percpu_rw_semaphore>
 //! its struct percpu_rwsem_noio, which C's guards take the same way
 //! (locking.h).
@@ -126,12 +127,15 @@ impl Drop for MemallocFlags {
     }
 }
 
-/// Lock @R, held in a PF_MEMALLOC_NOIO scope: the flags are saved before
-/// it's taken, and restored after it's released.
+/// Lock @R, held in a PF_MEMALLOC_* scope of @FLAGS: the flags are saved
+/// before it's taken, and restored after it's released.
 #[repr(transparent)]
-pub struct Noio<R>(R);
+pub struct Memalloc<R, const FLAGS: u32>(R);
 
-unsafe impl<R: RawLockBase> RawLockBase for Noio<R> {
+/// Lock @R, held in a PF_MEMALLOC_NOIO scope.
+pub type Noio<R> = Memalloc<R, PF_MEMALLOC_NOIO>;
+
+unsafe impl<R: RawLockBase, const F: u32> RawLockBase for Memalloc<R, F> {
     type GuardState = (MemallocFlags, R::GuardState);
     type InitError = R::InitError;
 
@@ -144,15 +148,15 @@ unsafe impl<R: RawLockBase> RawLockBase for Noio<R> {
     }
 }
 
-unsafe impl<R: RawLock> RawLock for Noio<R> {
+unsafe impl<R: RawLock, const F: u32> RawLock for Memalloc<R, F> {
     unsafe fn lock(&self) -> Self::GuardState {
-        let noio = MemallocFlags::noio();
-        (noio, unsafe { self.0.lock() })
+        let scope = MemallocFlags::new(F);
+        (scope, unsafe { self.0.lock() })
     }
 
-    unsafe fn unlock(&self, (noio, g): Self::GuardState) {
+    unsafe fn unlock(&self, (scope, g): Self::GuardState) {
         unsafe { self.0.unlock(g) };
-        drop(noio);
+        drop(scope);
     }
 
     unsafe fn assert_held(&self) {
@@ -160,40 +164,40 @@ unsafe impl<R: RawLock> RawLock for Noio<R> {
     }
 }
 
-unsafe impl<R: RawTryLock> RawTryLock for Noio<R> {
+unsafe impl<R: RawTryLock, const F: u32> RawTryLock for Memalloc<R, F> {
     unsafe fn try_lock(&self) -> Option<Self::GuardState> {
         // not taken: dropped, so restored
-        let noio = MemallocFlags::noio();
-        Some((noio, unsafe { self.0.try_lock() }?))
+        let scope = MemallocFlags::new(F);
+        Some((scope, unsafe { self.0.try_lock() }?))
     }
 }
 
-unsafe impl<R: RawReadLock> RawReadLock for Noio<R> {
+unsafe impl<R: RawReadLock, const F: u32> RawReadLock for Memalloc<R, F> {
     unsafe fn lock_read(&self) -> Self::GuardState {
-        let noio = MemallocFlags::noio();
-        (noio, unsafe { self.0.lock_read() })
+        let scope = MemallocFlags::new(F);
+        (scope, unsafe { self.0.lock_read() })
     }
 
-    unsafe fn unlock_read(&self, (noio, g): Self::GuardState) {
+    unsafe fn unlock_read(&self, (scope, g): Self::GuardState) {
         unsafe { self.0.unlock_read(g) };
-        drop(noio);
+        drop(scope);
     }
 }
 
-unsafe impl<R: RawRwLock> RawRwLock for Noio<R> {
+unsafe impl<R: RawRwLock, const F: u32> RawRwLock for Memalloc<R, F> {
     unsafe fn assert_held_any(&self) {
         unsafe { self.0.assert_held_any() }
     }
 }
 
-unsafe impl<R: ::pin_init::Zeroable> ::pin_init::Zeroable for Noio<R> {}
+unsafe impl<R: ::pin_init::Zeroable, const F: u32> ::pin_init::Zeroable for Memalloc<R, F> {}
 
-impl<'a, R: RawRwLock<GuardState = ()>, G: Sync, P> SharedGuard<'a, Noio<R>, G, P> {
-    pub fn with_write<T>(&mut self, f: impl FnOnce(&mut ExclusiveGuard<'_, Noio<R>, G, P>) -> T) -> T {
+impl<'a, R: RawRwLock<GuardState = ()>, const F: u32, G: Sync, P> SharedGuard<'a, Memalloc<R, F>, G, P> {
+    pub fn with_write<T>(&mut self, f: impl FnOnce(&mut ExclusiveGuard<'_, Memalloc<R, F>, G, P>) -> T) -> T {
         /*
-         * Raw of the inner rwsem: our caller holds the lock read via the noio
-         * guard, so PF_MEMALLOC_NOIO stays set across this temporary upgrade
-         * to write - the raw up/down only move the lock, not the memalloc
+         * Raw of the inner rwsem: our caller holds the lock read via the
+         * guard, so its memalloc scope stays set across this temporary
+         * upgrade to write - the raw up/down only move the lock, not the
          * scope.
          */
         let lock = self.lock();
@@ -204,11 +208,11 @@ impl<'a, R: RawRwLock<GuardState = ()>, G: Sync, P> SharedGuard<'a, Noio<R>, G, 
     }
 }
 
-impl<'a, R: RawLock<GuardState = ()>, G, P> ExclusiveGuard<'a, Noio<R>, G, P> {
+impl<'a, R: RawLock<GuardState = ()>, const F: u32, G, P> ExclusiveGuard<'a, Memalloc<R, F>, G, P> {
     pub fn with_unlocked<T>(&mut self, f: impl FnOnce() -> T) -> T {
         /*
-         * Raw drop/retake of just the lock: the guard keeps PF_MEMALLOC_NOIO
-         * set the whole time.
+         * Raw drop/retake of just the lock: the guard keeps its memalloc
+         * scope set the whole time.
          */
         let lock = self.lock();
         unsafe { lock.raw().0.unlock(()) };
