@@ -113,11 +113,6 @@ static inline void prt_str(struct printbuf *out, const char *str)
 	bch2_prt_bytes_indented(out, str, strlen(str));
 }
 
-static inline void prt_hex_bytes(struct printbuf *out, const void *b, unsigned n)
-{
-	bch2_prt_hex_bytes(out, b, n);
-}
-
 static inline void prt_hex_byte(struct printbuf *out, u8 byte)
 {
 	bch2_prt_hex_bytes(out, &byte, 1);

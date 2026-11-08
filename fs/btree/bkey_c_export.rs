@@ -7,7 +7,7 @@ use core::ffi::c_int;
 use core::mem::offset_of;
 use core::slice;
 
-use super::{transform, BkeyP, BKEY_FORMAT_CURRENT, BKEY_U64S};
+use super::{BkeyP, BKEY_FORMAT_CURRENT, BKEY_U64S};
 use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::format::Bpos;
@@ -27,32 +27,8 @@ unsafe fn padded<'a>(k: *const c::bkey_packed) -> &'a [u64] {
     unsafe { slice::from_raw_parts(k.cast::<u64>().sub(1), 1 + (*k).u64s as usize) }
 }
 
-unsafe fn padded_mut<'a>(k: *mut c::bkey_packed, u64s: usize) -> &'a mut [u64] {
-    unsafe { slice::from_raw_parts_mut(k.cast::<u64>().sub(1), 1 + u64s) }
-}
-
 #[c_export]
 pub static bch2_bkey_format_current: c::bkey_format = BKEY_FORMAT_CURRENT;
-
-#[c_export]
-pub fn bch2_bkey_format_init(s: &mut c::bkey_format_state) {
-    *s = c::bkey_format_state::new();
-}
-
-#[c_export]
-pub fn bch2_bkey_format_add_pos(s: &mut c::bkey_format_state, p: Bpos) {
-    s.add_pos(p);
-}
-
-#[c_export]
-pub fn bch2_bkey_format_add_key(s: &mut c::bkey_format_state, k: &c::bkey) {
-    s.add_key(k);
-}
-
-#[c_export]
-pub fn bch2_bkey_format_done(s: &mut c::bkey_format_state) -> c::bkey_format {
-    s.done()
-}
 
 #[cold]
 #[c_export]
@@ -75,21 +51,6 @@ pub unsafe fn __bch2_bkey_unpack_key_b(b: &BtreeNode, out: *mut c::bkey, in_: *c
 pub unsafe fn __bkey_unpack_pos_b(b: &BtreeNode, in_: *const c::bkey_packed) -> Bpos {
     let b = unsafe { b.contents() };
     b.unpack_pos_at(unsafe { padded(in_) }, 1)
-}
-
-#[c_export]
-pub unsafe fn bch2_bkey_pack_pos(out: *mut c::bkey_packed, in_: Bpos, b: &BtreeNode) -> bool {
-    let b = unsafe { b.contents() };
-    b.pack_pos(unsafe { padded_mut(out, b.format.key_u64s as usize) }, 1, in_)
-}
-
-#[c_export]
-pub unsafe fn bch2_bkey_transform(out_f: &c::bkey_format, out: *mut c::bkey_packed,
-                                  in_f: &c::bkey_format, in_: *const c::bkey_packed) -> bool {
-    let in_ = unsafe { &*BkeyP::from_raw(in_) };
-    let val_u64s = in_.u64s() - in_f.key_u64s as usize;
-
-    transform(out_f, unsafe { words_mut(out, out_f.key_u64s as usize + val_u64s) }, in_f, in_)
 }
 
 #[c_export]

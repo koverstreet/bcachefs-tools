@@ -272,11 +272,6 @@ pub fn maybe_kill(fs: &Fs, p: Bpos) {
     fs.write_super(&mut sb);
 }
 
-#[c_export]
-pub fn __bch2_accounting_maybe_kill(fs: &Fs, p: Bpos) {
-    maybe_kill(fs, p)
-}
-
 pub(crate) fn mem_gc(fs: &Fs) {
     let mut mark = fs.mark_lock().write();
     fs.accounting_mem_mut(&mut mark).with_entries(|entries| entries.retain(|e| !e.is_zero()));

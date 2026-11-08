@@ -952,18 +952,6 @@ fn reclaim_sleep(j: &c::journal, me: &KthreadSelf<'_>, kicks: u32) {
 
 /* For C: */
 
-/// # Safety
-/// The caller holds j->lock.
-#[c_export]
-pub unsafe fn bch2_journal_set_watermark(j: &c::journal) {
-    j.set_watermark(&mut unsafe { j.lock.held() })
-}
-
-#[c_export]
-pub fn bch2_journal_pin_flush(j: &c::journal, pin: &c::journal_entry_pin) {
-    j.pin_flush(pin)
-}
-
 #[c_export]
 pub fn bch2_journal_reclaim_kick(j: &c::journal) {
     j.reclaim_kick()

@@ -2052,15 +2052,6 @@ pub unsafe fn __bch2_trans_iter_init_ll(trans: &BtreeTrans<'_>, #[lent(trans)] p
 }
 
 /// # Safety
-/// @iter is uninitialized, for the iterator; C has an attempt in progress on
-/// @trans; @b as BtreeNodeIter::at_node()'s.
-#[c_export]
-pub unsafe fn bch2_btree_node_get_iter(trans: &BtreeTrans<'_>, iter: *mut c::btree_iter, b: &BtreeNode) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(unsafe { BtreeNodeIter::at_node(&t, b) }.map(|i| unsafe { iter.cast::<BtreeIter<'_>>().write(i.raw) }))
-}
-
-/// # Safety
 /// As bch2_trans_iter_init_outlined()'s.
 #[c_export]
 pub unsafe fn __bch2_trans_node_iter_init(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,

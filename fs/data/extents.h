@@ -79,19 +79,6 @@ static inline void __extent_entry_insert(const struct bch_fs *c,
 	memcpy_u64s_small(dst, new, new_u64s);
 }
 
-static inline void extent_entry_drop(const struct bch_fs *c, struct bkey_s k,
-				     union bch_extent_entry *entry)
-{
-	union bch_extent_entry *next = extent_entry_next(c, entry);
-
-	/* stripes have ptrs, but their layout doesn't work with this code */
-	BUG_ON(k.k->type == KEY_TYPE_stripe);
-
-	memmove_u64s_down(entry, next,
-			  (u64 *) bkey_val_end(k) - (u64 *) next);
-	k.k->u64s -= (u64 *) next - (u64 *) entry;
-}
-
 static inline bool extent_entry_is_ptr(const union bch_extent_entry *e)
 {
 	return extent_entry_type(e) == BCH_EXTENT_ENTRY_ptr;
@@ -371,21 +358,6 @@ static inline bool bkey_is_btree_ptr(const struct bkey *k)
 	}
 }
 
-static inline bool bkey_extent_is_unwritten(const struct bch_fs *c, struct bkey_s_c k)
-{
-	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
-
-	bkey_for_each_ptr(ptrs, ptr)
-		if (ptr->unwritten)
-			return true;
-	return false;
-}
-
-static inline bool bkey_extent_is_reservation(const struct bch_fs *c, struct bkey_s_c k)
-{
-	return k.k->type == KEY_TYPE_reservation || bkey_extent_is_unwritten(c, k);
-}
-
 static inline struct bch_devs_list bch2_bkey_devs(const struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bch_devs_list ret = (struct bch_devs_list) { 0 };
@@ -409,47 +381,6 @@ static inline bool bch2_stripe_block_dev_bad(struct bch_fs *c, unsigned dev)
 	return !bch2_dev_durability(c, dev);
 }
 
-
-static inline struct bch_extent_ptr *bch2_bkey_has_device(const struct bch_fs *c,
-							  struct bkey_s k, unsigned dev)
-{
-	return (void *) bch2_bkey_has_device_c(c, k.s_c, dev);
-}
-
-/* Returns the ptr_bit (bit-position-as-mask) of the first ptr matching @dev,
- * or 0 if no such ptr exists. */
-static inline unsigned bch2_bkey_dev_ptr_bit(struct bch_fs *c, struct bkey_s_c k, unsigned dev)
-{
-	unsigned ptr_bit = 1;
-	bkey_for_each_ptr(bch2_bkey_ptrs_c(k), ptr) {
-		if (ptr->dev == dev)
-			return ptr_bit;
-		ptr_bit <<= 1;
-	}
-	return 0;
-}
-
-static inline void bch2_bkey_append_ptr(const struct bch_fs *c, struct bkey_i *k, struct bch_extent_ptr ptr)
-{
-	struct bch_extent_ptr *dest;
-
-	EBUG_ON(bch2_bkey_has_device(c, bkey_i_to_s(k), ptr.dev));
-
-	switch (k->k.type) {
-	case KEY_TYPE_btree_ptr:
-	case KEY_TYPE_btree_ptr_v2:
-	case KEY_TYPE_extent:
-		EBUG_ON(bkey_val_u64s(&k->k) >= BKEY_EXTENT_VAL_U64s_MAX);
-
-		ptr.type = 1 << BCH_EXTENT_ENTRY_ptr;
-		dest = (struct bch_extent_ptr *)((void *) &k->v + bkey_val_bytes(&k->k));
-		*dest = ptr;
-		k->k.u64s++;
-		break;
-	default:
-		BUG();
-	}
-}
 
 #define bch2_bkey_drop_ptrs_noerror(_k, _p, _entry, _cond)			\
 do {										\
@@ -507,18 +438,6 @@ static inline void bch2_cut_front(const struct bch_fs *c, struct bpos where, str
 static inline void bch2_cut_back(struct bpos where, struct bkey_i *k)
 {
 	bch2_cut_back_s(where, bkey_i_to_s(k));
-}
-
-/**
- * bch_key_resize - adjust size of @k
- *
- * bkey_start_offset(k) will be preserved, modifies where the extent ends
- */
-static inline void bch2_key_resize(struct bkey *k, unsigned new_size)
-{
-	k->p.offset -= k->size;
-	k->p.offset += new_size;
-	k->size = new_size;
 }
 
 static inline u64 bch2_bkey_extent_ptrs_flags(struct bkey_ptrs_c ptrs)

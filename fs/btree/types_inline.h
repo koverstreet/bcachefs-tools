@@ -14,11 +14,6 @@ static inline size_t btree_cache_nr_live(const struct bch_fs_btree_cache *bc)
 	return btree_cache_list_nr(bc, 0) + btree_cache_list_nr(bc, 1);
 }
 
-static inline size_t btree_cache_nr_dirty(const struct bch_fs_btree_cache *bc)
-{
-	return bc->live_nr[0].nr_dirty + bc->live_nr[1].nr_dirty;
-}
-
 /* iter flags must fit in struct btree_iter.flags: */
 static_assert(BTREE_ITER_FLAG_BIT_trim < 32);
 
@@ -31,15 +26,6 @@ static inline struct btree_path_level *path_l(struct btree_path *path)
 	return path->l + path->level;
 }
 
-static inline unsigned long btree_path_ip_allocated(struct btree_path *path)
-{
-#ifdef TRACK_PATH_ALLOCATED
-	return path->ip_allocated;
-#else
-	return _THIS_IP_;
-#endif
-}
-
 static inline struct bpos btree_node_pos(struct btree_bkey_cached_common *b)
 {
 	return !b->cached
@@ -50,13 +36,6 @@ static inline struct bpos btree_node_pos(struct btree_bkey_cached_common *b)
 static inline struct btree_path *btree_iter_path(struct btree_trans *trans, struct btree_iter *iter)
 {
 	return trans->paths + iter->path;
-}
-
-static inline struct btree_path *btree_iter_key_cache_path(struct btree_trans *trans, struct btree_iter *iter)
-{
-	return iter->key_cache_path
-		? trans->paths + iter->key_cache_path
-		: NULL;
 }
 
 #define x(flag)								\
@@ -85,16 +64,6 @@ static inline enum btree_node_rewrite_reason btree_node_rewrite_reason(struct bt
 	return BTREE_NODE_REWRITE_none;
 }
 
-static inline struct btree_write *btree_current_write(struct btree *b)
-{
-	return b->writes + btree_node_write_idx(b);
-}
-
-static inline struct btree_write *btree_prev_write(struct btree *b)
-{
-	return b->writes + (btree_node_write_idx(b) ^ 1);
-}
-
 static inline struct bset_tree *bset_tree_last(struct btree *b)
 {
 	EBUG_ON(!b->nsets);
@@ -120,17 +89,6 @@ static inline struct bset *bset(const struct btree *b,
 				const struct bset_tree *t)
 {
 	return __btree_node_offset_to_ptr(b, t->data_offset);
-}
-
-static inline void set_btree_bset_end(struct btree *b, struct bset_tree *t)
-{
-	t->end_offset =
-		__btree_node_ptr_to_offset(b, vstruct_last(bset(b, t)));
-}
-
-static inline struct bset *btree_bset_first(struct btree *b)
-{
-	return bset(b, b->set);
 }
 
 static inline struct bset *btree_bset_last(struct btree *b)
@@ -175,11 +133,6 @@ static inline unsigned bset_u64s(struct bset_tree *t)
 {
 	return t->end_offset - t->data_offset -
 		sizeof(struct bset) / sizeof(u64);
-}
-
-static inline unsigned bset_dead_u64s(struct btree *b, struct bset_tree *t)
-{
-	return bset_u64s(t) - b->nr.bset_u64s[t - b->set];
 }
 
 static inline unsigned bset_byte_offset(struct btree *b, void *i)
@@ -246,18 +199,6 @@ static const u64 btree_has_data_ptrs_mask = 0
 static inline bool btree_type_has_data_ptrs(enum btree_id btree)
 {
 	return BIT_ULL(btree) & btree_has_data_ptrs_mask;
-}
-
-static inline u8 btree_trigger_order(enum btree_id btree)
-{
-	switch (btree) {
-	case BTREE_ID_alloc:
-		return U8_MAX;
-	case BTREE_ID_stripes:
-		return U8_MAX - 1;
-	default:
-		return btree;
-	}
 }
 
 #endif /* _BCACHEFS_BTREE_TYPES_INLINE_H */

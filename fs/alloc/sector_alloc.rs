@@ -29,21 +29,19 @@ use crate::alloc::disk_groups::Target;
 use crate::alloc::write_point::{WritePointGuard, WritePointSpec};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::BkeyS;
-use crate::btree::iter::{BtreeTrans, TransAttempt};
+use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::extents::bkey_append_ptr;
 use crate::data::keylist::KeyRoom;
 use crate::data::ptrs::PtrsMut;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::opts::data_type_str;
 use crate::debug::trace::events;
 use crate::sb::errors::SbErrorId;
 use crate::util::kernel::unlikely;
-use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::c_export;
 
 use c::bch_write_flags as w;
 use crate::format::{Bpos, DataType, BkeyType};
@@ -440,26 +438,4 @@ impl Drop for LockedWritePoint<'_> {
         let g = self.g.take().expect("locked till it's dropped");
         self.fs.alloc_sectors_done(self.wp, g);
     }
-}
-
-// ── For C ────────────────────────────────────────────────────────────────
-
-/// For C: alloc_sectors_req(), its write point in @wp_ret - locked, and left
-/// so for bch2_alloc_sectors_done(). On an error too, unlocked: an allocation
-/// that blocked leaves __bch2_write() queueing its op on the write point.
-///
-/// # Safety
-/// @trans is in an attempt; @write_point is hashed, or a writepoint_ptr() of
-/// one of the filesystem's write points.
-#[c_export]
-pub unsafe fn bch2_alloc_sectors_req(trans: &BtreeTrans<'_>, req: &mut c::alloc_request,
-                                     write_point: c::write_point_specifier,
-                                     wp_ret: &mut *mut c::write_point) -> c_int {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    let spec = unsafe { write_point.spec(t.fs()) };
-    let ret = t.alloc_sectors_req(req, spec).map(|(_, g)| g.leave_locked());
-    // the write point last found, whatever came of allocating from it
-    *wp_ret = req.wp;
-    ret_to_c(ret)
 }

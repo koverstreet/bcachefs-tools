@@ -13,7 +13,6 @@ use crate::fs::Fs;
 use crate::prt;
 use crate::debug::trace::events;
 use crate::util::kernel::unlikely;
-use crate::util::ffi::Opaque;
 use crate::util::log::{print_lines, LogLevel};
 use crate::util::Printbuf;
 use core::cmp::Ordering;
@@ -675,34 +674,11 @@ impl BtreeNode {
  */
 
 #[c_export]
-pub fn bch2_btree_node_iter_init(c: &Opaque<Fs>, b: &BtreeNode, iter: &mut KeyIter, search: &Bpos) {
-    iter.init(Fs::from_c(c), &b.keys(unsafe { b.contents() }), search);
-}
-
-#[c_export]
 pub fn bch2_btree_node_iter_init_from_start(iter: &mut KeyIter, b: &BtreeNode) {
     iter.init_from_start(&b.keys(unsafe { b.contents() }));
 }
 
 #[c_export]
-pub fn bch2_btree_node_iter_bset_pos(iter: &KeyIter, b: &BtreeNode, t: *mut BsetTree) -> *mut c::bkey_packed {
-    let contents = unsafe { b.contents() };
-    let t = &contents.set[contents.set_index(t)];
-    b.keys(contents).ptr_at(iter.bset_pos(t))
-}
-
-#[c_export]
 pub fn bch2_btree_node_iter_advance(iter: &mut KeyIter, b: &BtreeNode) {
     iter.advance(&b.keys(unsafe { b.contents() }));
-}
-
-#[c_export]
-pub fn bch2_btree_node_iter_prev_all(iter: &mut KeyIter, b: &BtreeNode) -> *mut c::bkey_packed {
-    let keys = b.keys(unsafe { b.contents() });
-    iter.prev_all(&keys).map_or(core::ptr::null_mut(), |k| keys.ptr_at(k))
-}
-
-#[c_export]
-pub fn __bch2_btree_node_iter_verify(iter: &KeyIter, b: &BtreeNode) {
-    iter.__verify(&b.keys(unsafe { b.contents() }));
 }

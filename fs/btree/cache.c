@@ -93,7 +93,7 @@
 #include "btree/read.h"
 #include "btree/write.h"
 
-#include "debug/debug.h"
+#include "debug/debug_gen.h"
 
 #include "init/error.h"
 

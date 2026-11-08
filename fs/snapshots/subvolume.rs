@@ -96,17 +96,6 @@ pub fn get(
     Ok(get_key(t, subvol, inconsistent_if_not_found)?.v)
 }
 
-#[c_export]
-pub fn bch2_subvolume_get(
-    trans:                     &BtreeTrans<'_>,
-    subvol:                    core::ffi::c_uint,
-    inconsistent_if_not_found: bool,
-    s:                         &mut c::Subvolume,
-) -> core::ffi::c_int {
-    ret_to_c(get(&unsafe { trans.attempt_in_progress() }, subvol,
-                 inconsistent_if_not_found).map(|v| *s = v))
-}
-
 /// Unlike get(), finds a tombstone's snapshot.
 pub(crate) fn __get_snapshot(t: &TransAttempt<'_, '_>, subvol: u32, warn: bool) -> Result<u32, BchError> {
     let fs = t.fs();

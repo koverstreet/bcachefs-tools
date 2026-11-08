@@ -818,11 +818,3 @@ pub fn bch2_btree_path_traverse_one(trans: &BtreeTrans<'_>, #[lent(trans)] paths
     ret_to_c(trans.path_traverse_one(paths, path, BtreeIterFlags::from_bits_retain(flags.bits())))
 }
 
-/// # Safety
-/// @b is locked - by @path, or for it.
-#[c_export]
-pub unsafe fn bch2_btree_path_level_init(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                         path: *mut BtreePath, level: c_uint, b: &BtreeNode) {
-    trans.path_level_init(paths, trans.path_idx_of(path), level as usize, unsafe { LockedNode::new(b) })
-}
-

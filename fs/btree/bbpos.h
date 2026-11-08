@@ -3,28 +3,14 @@
 #define _BCACHEFS_BBPOS_H
 
 #include "btree/bbpos_gen.h"
-#include "btree/bkey_methods.h"
+#include "btree/bkey.h"
+#include "btree/bkey/ops_gen.h"
+#include "btree/trigger_gen.h"
 #include "btree/cache.h"
 
 static inline int bbpos_cmp(struct bbpos l, struct bbpos r)
 {
 	return cmp_int(l.btree, r.btree) ?: bpos_cmp(l.pos, r.pos);
-}
-
-static inline struct bbpos bbpos_successor(struct bbpos pos)
-{
-	if (bpos_cmp(pos.pos, SPOS_MAX)) {
-		pos.pos = bpos_successor(pos.pos);
-		return pos;
-	}
-
-	if (pos.btree != BTREE_ID_NR) {
-		pos.btree++;
-		pos.pos = POS_MIN;
-		return pos;
-	}
-
-	BUG();
 }
 
 static inline void bch2_bbpos_to_text(struct printbuf *out, struct bbpos pos)

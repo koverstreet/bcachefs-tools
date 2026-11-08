@@ -323,17 +323,6 @@ pub unsafe fn bch2_print_str_loglevel(c: &Opaque<Fs>, loglevel: c_int, str: *con
     }
 }
 
-/// # Safety
-/// @prefix a string; @lines NULL or one.
-#[c_export]
-pub unsafe fn bch2_print_string_as_lines(prefix: *const c_char, lines: *const c_char) {
-    let prefix = unsafe { c_bytes(prefix) }.unwrap_or_default();
-    match unsafe { c_bytes(lines) } {
-        Some(lines) => print_lines(prefix, lines),
-        None        => print_lines(prefix, b" (null)"),
-    }
-}
-
 /// A message built up in pieces and printed when dropped - C's
 /// CLASS(bch_log_msg). Continuation lines are indented under the first and
 /// raw `\t`/`\r` columns aligned; it goes out whole, through

@@ -34,7 +34,6 @@ impl Bpos {
 /// # Safety
 /// @k is a key in @f's node, as long as its u64s says - not yet validated:
 /// too short to be a key, it's left for validate.
-#[cstruct_macros::c_export]
 pub unsafe fn __bch2_bkey_compat(fs: Option<&Fs>, _level: c_uint, btree: Btree, version: c_uint,
                                  big_endian: c_uint, write: c_int, f: Option<&c::bkey_format>,
                                  k: *mut c::bkey_packed) {

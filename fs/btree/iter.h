@@ -47,20 +47,6 @@ static inline bool btree_path_poisoned(const struct btree *b)
 	return b == BTREE_PATH_POISON;
 }
 
-static inline void btree_path_check_live(struct btree_trans *trans,
-					 struct btree_path *path)
-{
-#ifdef CONFIG_BCACHEFS_DEBUG
-	/*
-	 * Safe to read: the retired array is RCU-freed, so it's still mapped -
-	 * that readability is exactly what makes this bug class silent.
-	 */
-	WARN_ONCE(btree_path_poisoned(path->l[0].b),
-		  "%s: btree path %lx outlived trans->paths (%lx)\n",
-		  trans->fn, (unsigned long) path, (unsigned long) trans->paths);
-#endif
-}
-
 static inline struct btree *btree_path_node(struct btree_path *path,
 					    unsigned level)
 {
@@ -96,14 +82,6 @@ static inline struct btree *btree_node_parent(struct btree_path *path,
 }
 
 /* Iterate over paths within a transaction: */
-
-static inline void btree_trans_sort_paths(struct btree_trans *trans)
-{
-	if (!IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
-	    trans->paths_sorted)
-		return;
-	__bch2_btree_trans_sort_paths(trans);
-}
 
 static inline unsigned long *trans_paths_nr(struct btree_path *paths)
 {
@@ -156,26 +134,6 @@ __trans_next_path(struct btree_trans *trans, unsigned *idx)
 
 #define trans_for_each_path(_trans, _path, _idx)			\
 	trans_for_each_path_from(_trans, _path, _idx, 1)
-
-static inline struct btree_path *next_btree_path(struct btree_trans *trans, struct btree_path *path)
-{
-	unsigned idx = path ? path->sorted_idx + 1 : 0;
-
-	EBUG_ON(idx > trans->nr_sorted);
-
-	return idx < trans->nr_sorted
-		? trans->paths + trans->sorted[idx]
-		: NULL;
-}
-
-static inline struct btree_path *prev_btree_path(struct btree_trans *trans, struct btree_path *path)
-{
-	unsigned idx = path ? path->sorted_idx : trans->nr_sorted;
-
-	return idx
-		? trans->paths + trans->sorted[idx - 1]
-		: NULL;
-}
 
 #define trans_for_each_path_idx_inorder(_trans, _iter)			\
 	for (_iter = (struct trans_for_each_path_inorder_iter) { 0 };	\
@@ -248,22 +206,6 @@ bch2_btree_path_set_pos(struct btree_trans *trans,
 
 static inline void bch2_trans_verify_not_unlocked_or_in_restart(struct btree_trans *);
 
-/*
- * bch2_btree_path_peek_slot() for a cached iterator might return a key in a
- * different snapshot:
- */
-static inline struct bkey_s_c bch2_btree_path_peek_slot_exact(struct btree_path *path, struct bkey *u)
-{
-	struct bkey_s_c k = bch2_btree_path_peek_slot(path, u);
-
-	if (k.k && bpos_eq(path->pos, k.k->p))
-		return k;
-
-	bkey_init(u);
-	u->p = path->pos;
-	return (struct bkey_s_c) { u, NULL };
-}
-
 static inline int bch2_trans_mutex_lock(struct btree_trans *trans, struct mutex *lock)
 {
 	return mutex_trylock(lock)
@@ -272,21 +214,6 @@ static inline int bch2_trans_mutex_lock(struct btree_trans *trans, struct mutex 
 }
 
 /* Debug: */
-
-static inline void bch2_trans_verify_paths(struct btree_trans *trans)
-{
-	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
-	    static_branch_unlikely(&bch2_debug_check_iterators))
-		__bch2_trans_verify_paths(trans);
-}
-
-static inline void bch2_assert_pos_locked(struct btree_trans *trans, enum btree_id btree,
-					  struct bpos pos)
-{
-	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
-	    static_branch_unlikely(&bch2_debug_check_iterators))
-		__bch2_assert_pos_locked(trans, btree, pos);
-}
 
 static inline int bch2_trans_relock(struct btree_trans *trans)
 {
@@ -326,11 +253,6 @@ static inline int trans_closure_sync_timeout(struct btree_trans *trans,
 		remaining -= (long)(jiffies - start);
 	}
 	return -ETIME;
-}
-
-static inline void trans_closure_sync(struct btree_trans *trans, struct closure *cl)
-{
-	trans_closure_sync_timeout(trans, cl, MAX_SCHEDULE_TIMEOUT);
 }
 
 /*
@@ -410,17 +332,6 @@ static inline int trans_maybe_inject_restart(struct btree_trans *trans, unsigned
 #endif
 }
 
-static inline void bch2_btree_path_downgrade(struct btree_trans *trans,
-					     struct btree_path *path)
-{
-	btree_path_check_live(trans, path);
-
-	unsigned new_locks_want = path->level + !!path->intent_ref;
-
-	if (path->locks_want > new_locks_want)
-		__bch2_btree_path_downgrade(trans, path, new_locks_want);
-}
-
 static inline struct bkey_s_c bch2_btree_iter_peek(struct btree_iter *iter)
 {
 	return bch2_btree_iter_peek_max(iter, &SPOS_MAX);
@@ -460,12 +371,6 @@ static inline void bch2_btree_iter_set_pos(struct btree_iter *iter, struct bpos 
 		new_pos.snapshot = iter->snapshot;
 
 	__bch2_btree_iter_set_pos(iter, new_pos);
-}
-
-static inline void bch2_btree_iter_set_pos_to_extent_start(struct btree_iter *iter)
-{
-	EBUG_ON(!(iter->flags & BTREE_ITER_is_extents));
-	iter->pos = bkey_start_pos(&iter->k);
 }
 
 static inline void bch2_btree_iter_set_snapshot(struct btree_iter *iter, u32 snapshot)
@@ -562,18 +467,6 @@ DEFINE_CLASS(btree_iter_ll, struct btree_iter,
 	     struct btree_trans *trans, enum btree_id btree, struct bpos pos,
 	     unsigned locks_want, unsigned depth,
 	     enum btree_iter_update_trigger_flags flags)
-
-static inline void bch2_trans_node_iter_init(struct btree_trans *trans,
-			       struct btree_iter *iter,
-			       enum btree_id btree,
-			       struct bpos pos,
-			       unsigned locks_want,
-			       unsigned depth,
-			       enum btree_iter_update_trigger_flags flags)
-{
-	bch2_trans_iter_exit(iter);
-	__bch2_trans_node_iter_init(trans, iter, btree, pos, locks_want, depth, flags);
-}
 
 #define bch2_trans_node_iter_class_init(_trans, _btree, _pos, _locks_want, _depth, _flags)\
 ({										\
@@ -803,14 +696,6 @@ static inline struct bkey_s_c bch2_btree_iter_peek_prev_type(struct btree_iter *
 
 	return  flags & BTREE_ITER_slots      ? bch2_btree_iter_peek_slot(iter) :
 						bch2_btree_iter_peek_prev(iter);
-}
-
-static inline struct bkey_s_c bch2_btree_iter_peek_type(struct btree_iter *iter,
-							enum btree_iter_update_trigger_flags flags)
-{
-	return  flags & BTREE_ITER_prev	      ? bch2_btree_iter_peek_prev_type(iter, flags) :
-		flags & BTREE_ITER_slots      ? bch2_btree_iter_peek_slot(iter) :
-						bch2_btree_iter_peek(iter);
 }
 
 /*

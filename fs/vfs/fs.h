@@ -3,10 +3,18 @@
 #define _BCACHEFS_FS_H
 
 #include "fs/inode.h"
-#include "fs/str_hash.h"
+#include "btree/iter.h"
+#include "btree/update.h"
+#include "data/checksum.h"
+#include "init/error.h"
+#include "data_structures/darray.h"
+#include "snapshots/types_gen.h"
+#include "snapshots/subvolume_gen.h"
+#include "util/siphash_gen.h"
+#include "fs/str_hash_gen.h"
 #include "fs/quota_gen.h"
 
-#include "util/two_state_shared_lock.h"
+#include "util/two_state_shared_lock_gen.h"
 #include "vfs/types_gen.h"
 
 #include <linux/seqlock.h>

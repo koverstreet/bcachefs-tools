@@ -1732,15 +1732,3 @@ pub unsafe fn __bch2_journal_flush_seq_async(j: &c::journal, seq: u64, cl: *mut 
 {
     unsafe { j.__flush_seq_async(seq, NonNull::new_unchecked(cl)) }.cast_mut()
 }
-
-#[c_export]
-pub fn bch2_journal_unblock(j: &c::journal) {
-    j.unblock()
-}
-
-#[c_export]
-pub fn bch2_next_write_buffer_flush_journal_buf(j: &c::journal, max_seq: u64, blocked: &mut bool)
-    -> *mut c::journal_buf
-{
-    j.next_write_buffer_flush_journal_buf(max_seq, blocked)
-}

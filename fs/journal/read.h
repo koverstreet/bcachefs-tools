@@ -6,11 +6,6 @@
 
 #include "data_structures/darray.h"
 
-static inline bool journal_replay_ignore(struct journal_replay *i)
-{
-	return !i || i->ignore_blacklisted || i->ignore_not_dirty;
-}
-
 static inline struct jset_entry *__jset_entry_type_next(struct jset *jset,
 					struct jset_entry *entry, unsigned type)
 {
@@ -46,16 +41,6 @@ static inline time64_t jset_datetime(struct jset *j)
 		return le64_to_cpu(dt->seconds);
 	}
 	return 0;
-}
-
-static inline struct nonce journal_nonce(const struct jset *jset)
-{
-	return (struct nonce) {{
-		[0] = 0,
-		[1] = ((__le32 *) &jset->seq)[0],
-		[2] = ((__le32 *) &jset->seq)[1],
-		[3] = BCH_NONCE_JOURNAL,
-	}};
 }
 
 

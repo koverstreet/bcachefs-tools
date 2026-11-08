@@ -2,7 +2,6 @@
 //! name, and each a C name over a Rust function, with C's types - superblock
 //! pointers, C strings, an errcode returned. Deleted with the last C caller.
 
-use crate::fs::Fs;
 use super::*;
 use cstruct_macros::c_export;
 use crate::format::{Btree, DataType, MemberState, SbFeature};
@@ -26,9 +25,4 @@ c_names! {
     "const char * const __bch2_csum_types[]"   __bch2_csum_types: c::bch_csum_type;
     "const char * const __bch2_data_types[]"   __bch2_data_types: DataType;
     "const char * const bch2_member_states[]"  bch2_member_states: MemberState;
-}
-
-#[c_export]
-pub fn bch2_inode_opts_get(c: &Fs, ret: &mut c::bch_inode_opts, metadata: bool) {
-    *ret = crate::inode_opts::get_fs(c, metadata);
 }

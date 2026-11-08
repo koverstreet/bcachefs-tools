@@ -107,7 +107,6 @@ impl<S: TwoState> Drop for TwoStateGuard<'_, S> {
 
 /// # Safety
 /// @lock is a two_state_lock_t's memory, not yet in use.
-#[c_export]
 pub unsafe fn two_state_lock_init(lock: *mut c::two_state_lock_t) {
     unsafe {
         (&raw mut (*lock).v).write(AtomicIsize::new(0));

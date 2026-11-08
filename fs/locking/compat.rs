@@ -38,13 +38,3 @@ impl<R: RawRwLock, G, P> Locked<R, G, P> {
         unsafe { SharedGuard::from_held(self, None) }
     }
 }
-
-// Locked in Rust and released by C, which carries it between: until the C
-// between converts.
-
-impl<R: RawLock<GuardState = ()>, G, P> ExclusiveGuard<'_, R, G, P> {
-    /// Leave the lock held, for C to release.
-    pub fn leave_locked(self) {
-        core::mem::forget(self)
-    }
-}

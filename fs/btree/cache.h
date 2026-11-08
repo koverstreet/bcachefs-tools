@@ -8,7 +8,9 @@
 #include "btree/path_gen.h"
 #include "btree/types_gen.h"
 #include "btree/node_gen.h"
-#include "btree/bkey_methods.h"
+#include "btree/bkey.h"
+#include "btree/bkey/ops_gen.h"
+#include "btree/trigger_gen.h"
 #include "btree/cache_gen.h"
 
 extern const char * const bch2_btree_node_flags[];
@@ -116,11 +118,6 @@ static inline size_t btree_buf_bytes(const struct btree *b)
 	return 1UL << b->byte_order;
 }
 
-static inline size_t btree_buf_max_u64s(const struct btree *b)
-{
-	return (btree_buf_bytes(b) - sizeof(struct btree_node)) / sizeof(u64);
-}
-
 static inline size_t btree_max_u64s(const struct bch_fs *c)
 {
 	return (c->opts.btree_node_size - sizeof(struct btree_node)) / sizeof(u64);
@@ -180,16 +177,6 @@ static inline struct btree_root *bch2_btree_id_root(struct bch_fs *c, unsigned i
  * node just to learn its level.
  */
 #define BTREE_ROOT_LEVEL_MASK	((1UL << BTREE_ROOT_LEVEL_BITS) - 1)
-
-static inline unsigned long bch2_btree_root_pack(struct btree *b)
-{
-	BUILD_BUG_ON(BTREE_MAX_DEPTH > (1U << BTREE_ROOT_LEVEL_BITS));
-	if (!b)
-		return 0;
-	EBUG_ON((unsigned long)b & BTREE_ROOT_LEVEL_MASK);
-	EBUG_ON(b->c.level & ~BTREE_ROOT_LEVEL_MASK);
-	return (unsigned long)b | b->c.level;
-}
 
 static inline struct btree *bch2_btree_root_unpack_b(unsigned long v)
 {

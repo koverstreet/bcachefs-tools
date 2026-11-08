@@ -275,9 +275,9 @@
 #include "btree/init.h"
 #include "btree/interior.h"
 #include "btree/key_cache.h"
-#include "btree/node_scan.h"
+#include "btree/node_scan_gen.h"
 #include "btree/read.h"
-#include "btree/sort.h"
+#include "btree/node/sort_gen.h"
 #include "btree/write.h"
 
 static void bch2_fs_btree_iter_exit(struct bch_fs *c)

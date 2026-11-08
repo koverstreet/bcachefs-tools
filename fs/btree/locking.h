@@ -34,15 +34,6 @@ static inline int btree_node_locked_type(struct btree_path *path,
 	return BTREE_NODE_UNLOCKED + ((path->nodes_locked >> (level << 1)) & 3);
 }
 
-static inline int btree_node_locked_type_nowrite(struct btree_path *path,
-						 unsigned level)
-{
-	int have = btree_node_locked_type(path, level);
-	return have == BTREE_NODE_WRITE_LOCKED
-		? BTREE_NODE_INTENT_LOCKED
-		: have;
-}
-
 static inline bool btree_node_write_locked(struct btree_path *path, unsigned l)
 {
 	return btree_node_locked_type(path, l) == BTREE_NODE_WRITE_LOCKED;
@@ -129,11 +120,6 @@ static void btree_trans_lock_hold_time_update(struct btree_trans *trans,
 static inline int btree_path_lowest_level_locked(struct btree_path *path)
 {
 	return __ffs(path->nodes_locked) >> 1;
-}
-
-static inline int btree_path_highest_level_locked(struct btree_path *path)
-{
-	return __fls(path->nodes_locked) >> 1;
 }
 
 /* unlock: */
@@ -289,28 +275,7 @@ static inline bool bch2_btree_node_relock(struct btree_trans *trans,
 		 __bch2_btree_node_relock(trans, path, level, true));
 }
 
-static inline bool bch2_btree_node_relock_notrace(struct btree_trans *trans,
-						  struct btree_path *path, unsigned level)
-{
-	EBUG_ON(btree_node_locked(path, level) &&
-		btree_node_locked_type_nowrite(path, level) !=
-		__btree_lock_want(path, level));
-
-	return likely(btree_node_locked(path, level)) ||
-		(!IS_ERR_OR_NULL(path->l[level].b) &&
-		 __bch2_btree_node_relock(trans, path, level, false));
-}
-
 /* upgrade */
-
-static inline bool bch2_btree_path_upgrade_norestart(struct btree_trans *trans,
-			       struct btree_path *path,
-			       unsigned new_locks_want)
-{
-	return new_locks_want > path->locks_want
-		? __bch2_btree_path_upgrade_norestart(trans, path, new_locks_want)
-		: true;
-}
 
 static inline int bch2_btree_path_upgrade(struct btree_trans *trans,
 					  struct btree_path *path,
@@ -324,35 +289,6 @@ static inline int bch2_btree_path_upgrade(struct btree_trans *trans,
 }
 
 /* misc: */
-
-static inline void btree_path_set_should_be_locked(struct btree_trans *trans, struct btree_path *path)
-{
-	EBUG_ON(!btree_node_locked(path, path->level));
-
-	if (!path->should_be_locked) {
-		path->should_be_locked = true;
-#ifdef CONFIG_BCACHEFS_DEBUG
-		event_trace(trans->c, btree_path_should_be_locked, buf, ({
-			prt_printf(&buf, "%s\n", trans->fn);
-			bch2_btree_path_to_text_short(&buf, trans, path - trans->paths, path);
-		}));
-#endif
-	}
-}
-
-static inline void __btree_path_set_level_up(struct btree_trans *trans,
-				      struct btree_path *path,
-				      unsigned l)
-{
-	btree_node_unlock(trans, path, l);
-	path->l[l].b = ERR_PTR(-BCH_ERR_no_btree_node_up);
-}
-
-static inline void btree_path_set_level_up(struct btree_trans *trans,
-				    struct btree_path *path)
-{
-	__btree_path_set_level_up(trans, path, path->level++);
-}
 
 /* debug */
 

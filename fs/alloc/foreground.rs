@@ -42,6 +42,21 @@
 //! it: its trace records each attempt, with the device's wake counter as it
 //! was, and a wake is for it if one it tried has moved since.
 
+/* DOC(foreground-allocator)
+ *
+ * bcachefs automatically reduces fragmentation by segregating different types
+ * of IO into separate buckets. Data from different files, metadata, and
+ * internal bookkeeping each get their own write points (active allocation
+ * contexts). The key insight: data written at the same time by the same file
+ * tends to be deleted at the same time, so grouping it together means entire
+ * buckets become free at once rather than becoming fragmented.
+ *
+ * User data write points are hashed by inode number, so different files
+ * naturally land in different buckets without any user configuration. Separate
+ * write points also exist for btree nodes, copygc, and the reconcile
+ * subsystem, keeping internal IO from mixing with user data.
+ */
+
 #![allow(non_camel_case_types)]
 
 use crate::fs::Dev;
@@ -51,7 +66,7 @@ use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::copygc::can_make_progress;
-use crate::errcode::{err_ptr, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::format::DataType;
 use crate::fs::Fs;
 use crate::locking::ExclusiveGuard;
@@ -735,6 +750,13 @@ impl Fs {
 
 // ── Waking allocations ───────────────────────────────────────────────────
 
+/*
+ * freelist_wait wake helpers. Every wake_up site on
+ * c->allocator.freelist_wait should go through these so the wake counters
+ * are maintained in lockstep with waitlist wakeups — they're the signal
+ * waiters use to filter spurious wakes they don't care about.
+ */
+
 impl Dev {
     /// Wake what's waiting on the allocator for a bucket on it: its counter
     /// bumped tells a waiter that tried it the wake is for it.
@@ -1326,38 +1348,12 @@ impl c::open_buckets {
     }
 }
 
-/// # Safety
-/// @ob is open, and held open for the call.
-#[c_export]
-pub unsafe fn bch2_open_bucket_to_text(out: &mut Printbuf, _c: &Opaque<Fs>, ob: &c::open_bucket) {
-    // SAFETY: the caller's
-    unsafe { OpenBucketRef::from_c(ob) }.to_text(out)
-}
-
 /// bch2_wait_on_allocator()'s, with @cl on a waitlist.
 #[c_export]
 pub fn __bch2_wait_on_allocator(trans: &BtreeTrans<'_>, req: &mut c::alloc_request, err: c_int,
                                 cl: &Opaque<c::closure>) {
     let Err(err) = ret_to_result_void(err) else { panic!("waiting on the allocator without an error") };
     trans.sleep_on_allocator(req, err, cl)
-}
-
-/// For C: a request, in @trans's memory - an ERR_PTR() if there's none -
-/// put by alloc_request_put().
-///
-/// # Safety
-/// @trans is in an attempt.
-#[c_export]
-#[allow(clippy::too_many_arguments)]
-pub unsafe fn alloc_request_get(trans: &BtreeTrans<'_>, target: c_uint, erasure_code: c_uint,
-                                devs_have: *mut c::bch_devs_list, nr_replicas: c_uint, ec_replicas: c_uint,
-                                watermark: c::bch_watermark, flags: c::bch_write_flags,
-                                cl: *mut c::closure) -> *mut c::alloc_request {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    let req = c::alloc_request::new(t.fs(), target, erasure_code != 0, devs_have, nr_replicas, ec_replicas,
-                                    watermark, flags, cl);
-    t.alloc_init(req).map_or_else(err_ptr, core::ptr::from_mut)
 }
 
 #[c_export]

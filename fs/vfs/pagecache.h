@@ -20,11 +20,6 @@ static inline u64 folio_end_pos(struct folio *folio)
 	return folio_pos(folio) + folio_size(folio);
 }
 
-static inline size_t folio_sectors(struct folio *folio)
-{
-	return PAGE_SECTORS << folio_order(folio);
-}
-
 static inline loff_t folio_sector(struct folio *folio)
 {
 	return folio_pos(folio) >> 9;
@@ -33,14 +28,6 @@ static inline loff_t folio_sector(struct folio *folio)
 static inline u64 folio_end_sector(struct folio *folio)
 {
 	return folio_end_pos(folio) >> 9;
-}
-
-/* Helper for when we need to add debug instrumentation: */
-static inline void bch2_folio_sector_set(struct folio *folio,
-			     struct bch_folio *s,
-			     unsigned i, unsigned n)
-{
-	s->s[i].state = n;
 }
 
 /* for newly allocated folios: */

@@ -134,7 +134,9 @@ c_bitmask! {
 }
 
 c_verbatim!(r#"
-#include "fs/inode_opts.h"
+#include "btree/bkey_gen.h"
+#include "fs/inode_format_gen.h"
+#include "fs/inode_opts_gen.h"
 "#);
 
 macro_rules! __BKEY_INODE_BUF_XSUM_0 {

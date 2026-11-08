@@ -684,7 +684,6 @@ pub fn trans_submit_write_bios(trans: &BtreeTrans<'_>) {
 /*
  * Work that must be done with write lock held:
  */
-#[c_export]
 pub fn bch2_btree_post_write_cleanup(fs: &Fs, b: &BtreeNode) -> bool {
     if !b.flags.just_written() {
         return false;
@@ -785,8 +784,7 @@ pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b:
  *
  * Returns true if we sorted (i.e. invalidated iterators
  */
-#[c_export]
-pub fn bch2_btree_init_next(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, b: &BtreeNode) {
+pub fn bch2_btree_init_next(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode) {
     let fs = trans.fs();
     let mut reinit_iter = false;
 

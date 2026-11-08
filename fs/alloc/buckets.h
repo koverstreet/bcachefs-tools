@@ -26,29 +26,9 @@ static inline sector_t bucket_to_sector(const struct bch_dev *ca, size_t b)
 	return ((sector_t) b) * ca->mi.bucket_size;
 }
 
-static inline sector_t bucket_remainder(const struct bch_dev *ca, sector_t s)
-{
-	u32 remainder;
-
-	div_u64_rem(s, ca->mi.bucket_size, &remainder);
-	return remainder;
-}
-
 static inline u64 sector_to_bucket_and_offset(const struct bch_dev *ca, sector_t s, u32 *offset)
 {
 	return div_u64_rem(s, ca->mi.bucket_size, offset);
-}
-
-/*
- * Device position fractions: a device-relative sector offset as a 32.32
- * fixed point fraction of the device's size, for comparing and averaging
- * positions across devices of different sizes (same fraction ~= same zone
- * on rotational media). BCH_DEV_POS_FRAC_BITS is buckets_types.rs's.
- */
-static inline u64 dev_offset_to_frac(const struct bch_dev *ca, u64 offset)
-{
-	return mul_u64_u64_div_u64(offset, 1ULL << BCH_DEV_POS_FRAC_BITS,
-				   bucket_to_sector(ca, ca->mi.nbuckets));
 }
 
 static inline u64 dev_frac_to_offset(const struct bch_dev *ca, u64 frac)
@@ -205,22 +185,6 @@ static inline int dev_ptr_stale(struct bch_dev *ca, const struct bch_extent_ptr 
 
 /* Device usage: */
 
-static inline struct bch_dev_usage bch2_dev_usage_read(struct bch_dev *ca)
-{
-	struct bch_dev_usage ret;
-
-	bch2_dev_usage_read_fast(ca, &ret);
-	return ret;
-}
-
-static inline struct bch_dev_usage_full bch2_dev_usage_full_read(struct bch_dev *ca)
-{
-	struct bch_dev_usage_full ret;
-
-	bch2_dev_usage_full_read_fast(ca, &ret);
-	return ret;
-}
-
 static inline u64 bch2_dev_buckets_reserved(struct bch_dev *ca, enum bch_watermark watermark)
 {
 	s64 reserved = 0;
@@ -277,11 +241,6 @@ static inline bool dev_has_capacity(struct bch_dev *ca)
 	return bch2_dev_rw_durability(ca) != 0;
 }
 
-static inline u64 dev_capacity_sectors(struct bch_dev *ca)
-{
-	return bucket_to_sector(ca, ca->mi.nbuckets - ca->mi.first_bucket);
-}
-
 static inline u64 __dev_buckets_free(struct bch_dev *ca,
 				     struct bch_dev_usage usage,
 				     enum bch_watermark watermark)
@@ -292,48 +251,7 @@ static inline u64 __dev_buckets_free(struct bch_dev *ca,
 		     bch2_dev_buckets_reserved(ca, watermark));
 }
 
-static inline u64 dev_buckets_free(struct bch_dev *ca,
-				   enum bch_watermark watermark)
-{
-	return __dev_buckets_free(ca, bch2_dev_usage_read(ca), watermark);
-}
-
-/* Buckets that are free, or become free without moving anything */
-static inline u64 __dev_buckets_reclaimable(struct bch_dev_usage usage)
-{
-	return usage.buckets[BCH_DATA_free] +
-	       usage.buckets[BCH_DATA_cached] +
-	       usage.buckets[BCH_DATA_need_gc_gens] +
-	       usage.buckets[BCH_DATA_need_discard];
-}
-
-static inline u64 __dev_buckets_available(struct bch_dev *ca,
-					  struct bch_dev_usage usage,
-					  enum bch_watermark watermark)
-{
-	return max_t(s64, 0,
-		       __dev_buckets_reclaimable(usage)
-		     - ca->nr_open_buckets
-		     - bch2_dev_buckets_reserved(ca, watermark));
-}
-
-static inline u64 dev_buckets_available(struct bch_dev *ca,
-					enum bch_watermark watermark)
-{
-	return __dev_buckets_available(ca, bch2_dev_usage_read(ca), watermark);
-}
-
 /* Filesystem usage: */
-
-/* raw sectors: they land somewhere whatever count they were taken at */
-static inline u64 bch2_online_reserved(struct bch_fs *c)
-{
-	u64 ret = 0;
-
-	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
-		ret += percpu_u64_get_nonnegative(&c->capacity.pcpu->online_reserved[i]);
-	return ret;
-}
 
 static inline int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
 					 struct bkey_s_c k,

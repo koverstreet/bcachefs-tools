@@ -64,7 +64,6 @@ clean-files += bch2_getdents_layout.h
 obj-$(CONFIG_BCACHEFS_FS)	+= bcachefs.o
 
 bcachefs-y		:=			\
-	alloc/foreground.o			\
 	btree/cache.o				\
 	btree/check.o				\
 	btree/commit.o				\

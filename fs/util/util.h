@@ -24,7 +24,9 @@
 #include <linux/workqueue.h>
 
 #include "closure.h"
-#include "mean_and_variance.h"
+#include <linux/math64.h>
+#include <linux/types.h>
+#include "util/mean_and_variance_gen.h"
 
 #include "data_structures/darray.h"
 #include "time_stats.h"
@@ -221,44 +223,6 @@ static inline void memcpy_u64s(void *dst, const void *src,
 	__memcpy_u64s(dst, src, u64s);
 }
 
-/*
- * Fortify can't see the real object size for u64s-array copies, same as
- * __memcpy_u64s() - but there's no unsafe_memmove(), so go underneath
- * fortify by hand:
- */
-static inline void __memmove_u64s(void *dst, const void *src,
-				  unsigned u64s)
-{
-#ifdef _LINUX_FORTIFY_STRING_H_
-	__underlying_memmove(dst, src, u64s * 8);
-#else
-	memmove(dst, src, u64s * 8);
-#endif
-}
-
-static inline void memmove_u64s_down(void *dst, const void *src,
-				     unsigned u64s)
-{
-	EBUG_ON(dst > src);
-
-	__memmove_u64s(dst, src, u64s);
-}
-
-static inline void __memmove_u64s_down_small(void *dst, const void *src,
-				       unsigned u64s)
-{
-	/* dst <= src: a forward copy can't clobber unread source */
-	memcpy_u64s_small(dst, src, u64s);
-}
-
-static inline void memmove_u64s_down_small(void *dst, const void *src,
-				     unsigned u64s)
-{
-	EBUG_ON(dst > src);
-
-	__memmove_u64s_down_small(dst, src, u64s);
-}
-
 static inline void __memmove_u64s_up_small(void *_dst, const void *_src,
 					   unsigned u64s)
 {
@@ -357,20 +321,6 @@ do {									\
 		_ret += *per_cpu_ptr(_p, cpu);				\
 	_ret;								\
 })
-
-static inline u64 percpu_u64_get(u64 __percpu *src)
-{
-	return per_cpu_sum(src);
-}
-
-/*
- * For counters of signed deltas, added to on any cpu: a sum taken while they
- * change can be negative, which as a u64 is nearly 2^64.
- */
-static inline u64 percpu_u64_get_nonnegative(u64 __percpu *src)
-{
-	return max_t(s64, percpu_u64_get(src), 0);
-}
 
 #include <linux/uuid.h>
 

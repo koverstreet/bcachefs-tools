@@ -6,7 +6,7 @@
 #include <linux/printk.h>
 #include "btree/bkey_gen.h"
 #include "init/dev_gen.h"
-#include "sb/errors.h"
+#include "sb/errors_gen.h"
 
 /*
  * XXX: separate out errors that indicate on disk data is inconsistent, and flag
@@ -267,12 +267,6 @@ static inline void bch2_account_io_success_fail(struct bch_dev *ca,
 	} else {
 		bch2_io_error(ca, type);
 	}
-}
-
-static inline void bch2_dev_write_unflushed(struct bch_dev *ca)
-{
-	if (ca && !test_bit(BCH_DEV_unflushed_writes, &ca->flags))
-		set_bit(BCH_DEV_unflushed_writes, &ca->flags);
 }
 
 static inline void bch2_account_io_completion(struct bch_dev *ca,

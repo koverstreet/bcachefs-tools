@@ -28,21 +28,9 @@
 
 #include "btree/bkey_defs_gen.h"
 
-static inline void bkey_p_copy(struct bkey_packed *dst, const struct bkey_packed *src)
-{
-	memcpy_u64s_small(dst, src, src->u64s);
-}
-
 static inline void bkey_copy(struct bkey_i *dst, const struct bkey_i *src)
 {
 	memcpy_u64s(dst, src, src->k.u64s);
-}
-
-static inline void bkey_val_copy(struct bkey_i *dst, const struct bkey_i *src)
-{
-	memcpy_u64s(&dst->v, &src->v, bkey_val_u64s(&src->k));
-	dst->k.type	= src->k.type;
-	dst->k.u64s	= src->k.u64s;
 }
 
 extern struct static_key_false bch2_debug_check_bkey_unpack;
@@ -60,12 +48,6 @@ int bkey_cmp_left_packed(const struct btree *b,
  * ref would be nice here:
  */
 __pure __flatten
-static inline int bkey_cmp_left_packed_byval(const struct btree *b,
-					     const struct bkey_packed *l,
-					     struct bpos r)
-{
-	return bkey_cmp_left_packed(b, l, &r);
-}
 
 static __always_inline bool bpos_eq(struct bpos l, struct bpos r)
 {
@@ -156,11 +138,6 @@ static inline struct bpos bkey_min(struct bpos l, struct bpos r)
 	return bkey_lt(l, r) ? l : r;
 }
 
-static inline struct bpos bkey_max(struct bpos l, struct bpos r)
-{
-	return bkey_gt(l, r) ? l : r;
-}
-
 static __always_inline int bversion_cmp(struct bversion l, struct bversion r)
 {
 	return  cmp_int(l.hi, r.hi) ?:
@@ -205,34 +182,9 @@ static __always_inline bool bversion_zero(struct bversion v)
 #define bkey_packed(_k)		((_k)->format != KEY_FORMAT_CURRENT)
 #endif
 
-/*
- * It's safe to treat an unpacked bkey as a packed one, but not the reverse
- */
-static inline struct bkey_packed *bkey_to_packed(struct bkey_i *k)
-{
-	return (struct bkey_packed *) k;
-}
-
-static inline const struct bkey_packed *bkey_to_packed_c(const struct bkey_i *k)
-{
-	return (const struct bkey_packed *) k;
-}
-
-static inline struct bkey_i *packed_to_bkey(struct bkey_packed *k)
-{
-	return bkey_packed(k) ? NULL : (struct bkey_i *) k;
-}
-
 static inline const struct bkey *packed_to_bkey_c(const struct bkey_packed *k)
 {
 	return bkey_packed(k) ? NULL : (const struct bkey *) k;
-}
-
-static inline unsigned bkey_format_key_bits(const struct bkey_format *format)
-{
-	return format->bits_per_field[BKEY_FIELD_INODE] +
-		format->bits_per_field[BKEY_FIELD_OFFSET] +
-		format->bits_per_field[BKEY_FIELD_SNAPSHOT];
 }
 
 static inline struct bpos bpos_successor(struct bpos p)
@@ -291,12 +243,6 @@ static inline struct bpos bkey_start_pos(const struct bkey *k)
 	};
 }
 
-static inline struct bpos bpos_with_snapshot(struct bpos p, u32 snapshot)
-{
-	p.snapshot = snapshot;
-	return p;
-}
-
 /* Packed helpers */
 
 static inline unsigned bkeyp_key_u64s(const struct bkey_format *format,
@@ -305,28 +251,10 @@ static inline unsigned bkeyp_key_u64s(const struct bkey_format *format,
 	return bkey_packed(k) ? format->key_u64s : BKEY_U64s;
 }
 
-static inline unsigned bkeyp_key_bytes(const struct bkey_format *format,
-				       const struct bkey_packed *k)
-{
-	return bkeyp_key_u64s(format, k) * sizeof(u64);
-}
-
 static inline unsigned bkeyp_val_u64s(const struct bkey_format *format,
 				      const struct bkey_packed *k)
 {
 	return k->u64s - bkeyp_key_u64s(format, k);
-}
-
-static inline size_t bkeyp_val_bytes(const struct bkey_format *format,
-				     const struct bkey_packed *k)
-{
-	return bkeyp_val_u64s(format, k) * sizeof(u64);
-}
-
-static inline void set_bkeyp_val_u64s(const struct bkey_format *format,
-				      struct bkey_packed *k, unsigned val_u64s)
-{
-	k->u64s = bkeyp_key_u64s(format, k) + val_u64s;
 }
 
 #define bkeyp_val(_format, _k)						\
@@ -401,14 +329,6 @@ bkey_unpack_pos_format_checked(const struct btree *b,
 #else
 	return __bkey_unpack_pos_b(b, src);
 #endif
-}
-
-static inline struct bpos bkey_unpack_pos(const struct btree *b,
-					  const struct bkey_packed *src)
-{
-	return likely(bkey_packed(src))
-		? bkey_unpack_pos_format_checked(b, src)
-		: packed_to_bkey_c(src)->p;
 }
 
 /* Disassembled bkeys */

@@ -73,12 +73,6 @@ static inline __u64 bset_magic(struct bch_fs *c)
 	return __le64_to_cpu(bch2_sb_magic(c) ^ BSET_MAGIC);
 }
 
-static inline void bch2_check_set_feature(struct bch_fs *c, unsigned feat)
-{
-	if (!(c->sb.features & (1ULL << feat)))
-		__bch2_check_set_feature(c, feat);
-}
-
 static inline struct sb_write sb_write_init(struct bch_fs *c)
 {
 	lockdep_assert_held(&c->sb_lock.lock);

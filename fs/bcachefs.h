@@ -71,19 +71,26 @@
 
 #include "bcachefs_format.h"
 #include "errcode.h"
-#include "opts.h"
+#include <linux/bitops.h>
+#include <linux/log2.h>
+#include <linux/sizes.h>
+#include <linux/string.h>
+#include <linux/sysfs.h>
+#include "data_structures/darray.h"
+#include "opts_gen.h"
 
 #include "closure.h"
 
 #include "vendor/min_heap.h"
 #include "util/clock_gen.h"
 #include "util/enumerated_ref_gen.h"
-#include "data_structures/fast_list.h"
+#include <linux/idr.h>
+#include <linux/percpu.h>
+#include "data_structures/fast_list_gen.h"
 #include "data_structures/fifo.h"
 #include "locking/locking.h"
 #include "locking/seqmutex.h"
 #include "util/time_stats.h"
-#include "data_structures/darray.h"
 #include "util/util.h"
 
 #include "alloc/accounting_gen.h"
@@ -101,7 +108,8 @@
 #include "btree/bkey_gen.h"
 #include "btree/bkey_types_inline.h"
 #include "btree/interior_gen.h"
-#include "util/rcu_pending.h"
+#include <linux/rcupdate.h>
+#include "util/rcu_pending_gen.h"
 #include "btree/key_cache_gen.h"
 #include "btree/node_scan_gen.h"
 #include "data/extents_gen.h"
@@ -120,7 +128,7 @@
 #include "data/nocow_locking_gen.h"
 #include "bcachefs_ioctl.h"
 #include "data/move_gen.h"
-#include "init/progress.h"
+#include "init/progress_gen.h"
 #include "data/reconcile/types_gen.h"
 
 #include "debug/async_objs_gen.h"
@@ -142,7 +150,9 @@
 /* its prototypes take bch_sb_errors_cpu and subvol_inum */
 #include "init/damage_gen.h"
 
-#include "vfs/fdm.h"
+#include <linux/hash.h>
+#include "vendor/closure.h"
+#include "vfs/fdm_gen.h"
 #include "vfs/types_gen.h"
 
 #include "types_gen.h"
@@ -316,49 +326,12 @@ static inline unsigned block_sectors(const struct bch_fs *c)
 
 /* Time conversion: */
 
-static inline struct timespec64 bch2_time_to_timespec(const struct bch_fs *c, s64 time)
-{
-	struct timespec64 t;
-	s64 sec;
-	s32 rem;
-
-	time += c->sb.time_base_lo;
-
-	sec = div_s64_rem(time, c->sb.time_units_per_sec, &rem);
-
-	set_normalized_timespec64(&t, sec, rem * (s64)c->sb.nsec_per_time_unit);
-
-	return t;
-}
-
-static inline s64 timespec_to_bch2_time(const struct bch_fs *c, struct timespec64 ts)
-{
-	return (ts.tv_sec * c->sb.time_units_per_sec +
-		(int) ts.tv_nsec / c->sb.nsec_per_time_unit) - c->sb.time_base_lo;
-}
-
-static inline s64 bch2_current_time(const struct bch_fs *c)
-{
-	struct timespec64 now;
-
-	ktime_get_coarse_real_ts64(&now);
-	return timespec_to_bch2_time(c, now);
-}
-
 static inline u64 bch2_current_io_time(const struct bch_fs *c, int rw)
 {
 	return max(1ULL, (u64) atomic64_read(&c->io_clock[rw].now) & LRU_TIME_MAX);
 }
 
 /* Filesystem and device helpers: */
-
-static inline void bch2_set_ra_pages(struct bch_fs *c, unsigned ra_pages)
-{
-#ifndef NO_BCACHEFS_FS
-	if (c->vfs_sb)
-		c->vfs_sb->s_bdi->ra_pages = ra_pages;
-#endif
-}
 
 static inline struct stdio_redirect *bch2_fs_stdio_redirect_user(struct bch_fs *c)
 {

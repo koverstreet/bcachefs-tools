@@ -130,11 +130,6 @@ pub(crate) fn recalc_capacity(fs: &Fs) {
     fs.alloc_wake_all();
 }
 
-#[c_export]
-pub fn bch2_recalc_capacity(c: &Opaque<Fs>) {
-    recalc_capacity(Fs::from_c(c))
-}
-
 /// Pages to read ahead: each device's dev_readahead, or the VM's default.
 #[cfg(kernel)]
 pub(crate) fn fs_ra_pages(fs: &Fs) -> usize {

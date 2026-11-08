@@ -153,34 +153,12 @@ static inline unsigned eytzinger1_to_inorder(unsigned i, unsigned size)
 	return __eytzinger1_to_inorder(i, size, eytzinger1_extra(size));
 }
 
-static inline unsigned inorder_to_eytzinger1(unsigned i, unsigned size)
-{
-	return __inorder_to_eytzinger1(i, size, eytzinger1_extra(size));
-}
-
 #define eytzinger1_for_each(_i, _size)			\
 	for (unsigned (_i) = eytzinger1_first((_size));	\
 	     (_i) != 0;					\
 	     (_i) = eytzinger1_next((_i), (_size)))
 
 /* Zero based indexing version: */
-
-static inline unsigned eytzinger0_child(unsigned i, unsigned child)
-{
-	EYTZINGER_BUG_ON(child > 1);
-
-	return (i << 1) + 1 + child;
-}
-
-static inline unsigned eytzinger0_left_child(unsigned i)
-{
-	return eytzinger0_child(i, 0);
-}
-
-static inline unsigned eytzinger0_right_child(unsigned i)
-{
-	return eytzinger0_child(i, 1);
-}
 
 static inline unsigned eytzinger0_first(unsigned size)
 {
@@ -207,21 +185,10 @@ static inline unsigned eytzinger0_extra(unsigned size)
 	return eytzinger1_extra(size);
 }
 
-static inline unsigned __eytzinger0_to_inorder(unsigned i, unsigned size,
-					       unsigned extra)
-{
-	return __eytzinger1_to_inorder(i + 1, size, extra) - 1;
-}
-
 static inline unsigned __inorder_to_eytzinger0(unsigned i, unsigned size,
 					       unsigned extra)
 {
 	return __inorder_to_eytzinger1(i + 1, size, extra) - 1;
-}
-
-static inline unsigned eytzinger0_to_inorder(unsigned i, unsigned size)
-{
-	return __eytzinger0_to_inorder(i, size, eytzinger0_extra(size));
 }
 
 static inline unsigned inorder_to_eytzinger0(unsigned i, unsigned size)
@@ -250,78 +217,6 @@ static inline int eytzinger0_find_le(void *base, size_t nr, size_t size,
 		n = eytzinger1_child(n, cmp(base1 + n * size, search) <= 0);
 	n >>= __ffs(n) + 1;
 	return n - 1;
-}
-
-/* return smallest node > @search, or -1 if not found */
-static inline int eytzinger0_find_gt(void *base, size_t nr, size_t size,
-				     cmp_func_t cmp, const void *search)
-{
-	void *base1 = base - size;
-	unsigned n = 1;
-
-	while (n <= nr)
-		n = eytzinger1_child(n, cmp(base1 + n * size, search) <= 0);
-	n >>= __ffs(n + 1) + 1;
-	return n - 1;
-}
-
-/* return smallest node >= @search, or -1 if not found */
-static inline int eytzinger0_find_ge(void *base, size_t nr, size_t size,
-				     cmp_func_t cmp, const void *search)
-{
-	void *base1 = base - size;
-	unsigned n = 1;
-
-	while (n <= nr)
-		n = eytzinger1_child(n, cmp(base1 + n * size, search) < 0);
-	n >>= __ffs(n + 1) + 1;
-	return n - 1;
-}
-
-/* 0 == not found */
-static inline int eytzinger1_find_r(void *base, unsigned nr, unsigned size,
-				    cmp_r_func_t cmp_fn, const void *priv,
-				    const void *search)
-{
-	unsigned i = 1;
-	while (i <= nr) {
-		int cmp = cmp_fn(search, base + i * size, priv);
-		if (!cmp)
-			return i;
-		i = eytzinger1_child(i, cmp > 0);
-	}
-
-	return 0;
-}
-
-/* 0 == not found */
-static inline int eytzinger1_find(void *base, unsigned nr, unsigned size,
-				  cmp_func_t cmp_fn, const void *search)
-{
-	unsigned i = 1;
-	while (i <= nr) {
-		int cmp = cmp_fn(search, base + i * size);
-		if (!cmp)
-			return i;
-		i = eytzinger1_child(i, cmp > 0);
-	}
-
-	return 0;
-}
-
-/* -1 == not found */
-static inline int eytzinger0_find_r(void *base, unsigned nr, unsigned size,
-				    cmp_r_func_t cmp_fn, const void *priv,
-				    const void *search)
-{
-	return eytzinger1_find_r(base - size, nr, size, cmp_fn, priv, search) - 1;
-}
-
-/* -1 == not found */
-static inline int eytzinger0_find(void *base, unsigned nr, unsigned size,
-				  cmp_func_t cmp_fn, const void *search)
-{
-	return eytzinger1_find(base - size, nr, size, cmp_fn, search) - 1;
 }
 
 #endif /* _EYTZINGER_H */

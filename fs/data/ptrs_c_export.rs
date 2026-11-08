@@ -24,16 +24,6 @@ pub fn bch2_bkey_has_device_c(c: &Fs, k: BkeySC<'_>, dev: c_uint) -> *const c::b
 }
 
 #[c_export]
-pub fn bch2_bkey_devs_rw(c: &Opaque<Fs>, k: BkeySC<'_>) -> bool {
-    k.arm::<Ptrs>().is_none_or(|k| k.devs_rw(Fs::from_c(c)))
-}
-
-#[c_export]
-pub fn bch2_bkey_in_target(c: &Opaque<Fs>, k: BkeySC<'_>, target: c_uint) -> bool {
-    k.arm::<Ptrs>().is_none_or(|k| k.in_target(Fs::from_c(c), Target::decode(target)))
-}
-
-#[c_export]
 pub fn bch2_bkey_matches_ptr(c: &Opaque<Fs>, k: BkeySC<'_>, m: c::bch_extent_ptr, offset: u64) -> bool {
     k.arm::<Ptrs>().is_some_and(|k| k.matches_ptr(Fs::from_c(c), &m, offset))
 }
@@ -132,15 +122,6 @@ pub fn bch2_bkey_drop_ptr_noerror(c: &Fs, k: BkeyS<'_>, ptr: *mut c::bch_extent_
 pub fn bch2_bkey_drop_ptr(c: &Fs, k: BkeyS<'_>, ptr: *mut c::bch_extent_ptr) {
     let at = entry_pos_of(k.as_sc(), ptr.cast());
     ptrs(k).drop_ptr(c, at);
-}
-
-/// # Safety
-/// C has an attempt in progress on @trans.
-#[c_export]
-pub unsafe fn bch2_bkey_drop_stale_ptrs(trans: &BtreeTrans<'_>, iter: &BtreeIter<'_>, k: BkeySC<'_>) -> c_int {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(drop_stale_ptrs(&t, iter, k))
 }
 
 /// @k is in @trans's memory, @buf_u64s long: room for a flags entry, if it

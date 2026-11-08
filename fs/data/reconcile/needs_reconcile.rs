@@ -9,12 +9,12 @@ use crate::fsck_err;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeyS, BkeySC, BkeyV, BkeyVMut, BkeyVal};
 use crate::btree::trigger::TriggerOp;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::durability::BkeyVDurability;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
 use crate::data::reconcile::trigger::{extent_reconcile_to_text, BkeyVReconcile};
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::format::{CompressionType, BkeyType, MetadataVersion};
 use crate::fs::Fs;
 use crate::init::error::id;
@@ -24,9 +24,7 @@ use crate::util::printbuf::Msg;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
-use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
-use cstruct_macros::c_export;
 
 /// Option @o's need_rb bit.
 pub(crate) fn rb_bit(o: c::bch_reconcile_opts) -> u8 {
@@ -458,25 +456,4 @@ pub(crate) fn strip_reconcile(fs: &Fs, k: BkeyS<'_>) {
     kp.drop_ptrs_noerror(fs, |p| p.p.ptr.dev() as u32 == c::BCH_SB_MEMBER_INVALID);
 
     assert!(kp.durability_safe(fs).nr_ptrs != 0, "a key with no pointers left once its reconcile state's off");
-}
-
-// ── C's ──────────────────────────────────────────────────────────────────
-
-#[c_export]
-pub fn bch2_bkey_strip_reconcile(c: &Fs, k: BkeyS<'_>) {
-    strip_reconcile(c, k)
-}
-
-/// # Safety
-/// C has an attempt in progress on @trans, and @k is a key it can edit while
-/// that runs, @buf_u64s u64s of it its.
-#[c_export]
-pub unsafe fn bch2_bkey_set_needs_reconcile(trans: &BtreeTrans<'_>, s: Option<&mut c::per_snapshot_io_opts>,
-                                            opts: &c::bch_inode_opts, k: BkeyS<'_>, buf_u64s: c_uint,
-                                            ctx: c::set_needs_reconcile_ctx, opt_change_cookie: u32) -> c_int {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    // SAFETY: the caller's - a struct bkey heads its struct bkey_i
-    let mut k = unsafe { TransBkey::from_raw_room(&t, core::ptr::from_mut(k.k).cast(), buf_u64s) };
-    ret_to_c(k.set_needs_reconcile(&t, s, opts, ctx, opt_change_cookie))
 }

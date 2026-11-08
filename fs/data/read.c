@@ -33,23 +33,25 @@
 
 #include "data/checksum.h"
 #include "data/compress.h"
-#include "data/ec/io.h"
-#include "data/io_misc.h"
+#include "data/ec/io_gen.h"
 #include "data/promote_gen.h"
 #include "data/read.h"
 #include "data/reconcile/trigger.h"
-#include "data/reflink.h"
-#include "data/update.h"
+#include "data/reflink_gen.h"
+#include "btree/bkey_buf.h"
+#include "data/write_gen.h"
+#include "data/update_gen.h"
 #include "data/write.h"
 
 #include "debug/async_objs.h"
 
-#include "init/damage.h"
 #include "init/error.h"
 
 #include "sb/counters.h"
 
-#include "snapshots/subvolume.h"
+#include "data_structures/darray.h"
+#include "snapshots/types_gen.h"
+#include "snapshots/subvolume_gen.h"
 
 #include "util/enumerated_ref.h"
 

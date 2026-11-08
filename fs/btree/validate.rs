@@ -6,18 +6,16 @@ use crate::btree::bkey::{bkey_header_validate, bkey_val_validate, AllTypes, Bkey
 use crate::btree::{compat::__bch2_bkey_compat, node::{BtreeNode, NodeContents}, read::BsetHolder};
 use crate::c::{self, bch_errcode as e};
 use crate::data::ptrs::BkeyVRead;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::format::{BkeyType, Btree};
 use crate::fs::{Dev, Fs};
 use crate::init::{error::{id, BkeyValidate}, passes::RecoveryPass};
 use crate::sb::{errors::{FsckFlags, SbErrorId}, io::version_compatible};
 use crate::types::Le16;
 use crate::util::vstructs::{Head, Unvalidated, VStructError};
-use crate::util::{ffi::Opaque, log::LogMsg, Printbuf, ToText};
+use crate::util::{log::LogMsg, Printbuf, ToText};
 use crate::{bkey_fsck_err_on, prt};
 use core::cmp::Ordering;
-use core::ffi::c_int;
-use cstruct_macros::c_export;
 
 /// Which way a node is going: on read, the device it's read from, what's
 /// failed reading it so far - nothing to record, scanning for btree nodes -
@@ -223,12 +221,6 @@ pub fn bkey_in_btree_node(v: &BkeyValidate<'_, '_>, b: &BtreeNode) -> Result<(),
                       "key before start of btree node")?;
     bkey_fsck_err_on!(v, v.k.k.p > data.max_key, id::bkey_after_end_of_btree_node,
                       "key past end of btree node")
-}
-
-#[c_export]
-pub fn bch2_bkey_in_btree_node(c: &Opaque<Fs>, b: &BtreeNode, k: BkeySC<'_>,
-                               from: &c::bkey_validate_context) -> c_int {
-    ret_to_c(bkey_in_btree_node(&BkeyValidate { fs: Fs::from_c(c), k, from }, b))
 }
 
 /* A node header as a machine of @big_endian wrote it, made this one's, or back */

@@ -2,7 +2,9 @@
 #ifndef _BCACHEFS_BTREE_READ_H
 #define _BCACHEFS_BTREE_READ_H
 
-#include "btree/bkey_methods.h"
+#include "btree/bkey.h"
+#include "btree/bkey/ops_gen.h"
+#include "btree/trigger_gen.h"
 #include "btree/bset.h"
 #include "btree/locking.h"
 #include "data/checksum.h"
@@ -10,7 +12,6 @@
 #include "init/error.h"
 
 #include "btree/read_gen.h"
-#include "btree/validate_gen.h"
 
 static inline unsigned btree_ptr_sectors_written(struct bkey_s_c k)
 {

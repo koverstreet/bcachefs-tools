@@ -20,11 +20,6 @@
 #include "locking/noio_gen.h"
 #include "locking/raw_gen.h"
 
-static inline void mutex_noio_init(struct mutex_noio *m)
-{
-	mutex_init(&m->lock);
-}
-
 DEFINE_LOCK_GUARD_1(mutex_noio, struct mutex_noio,
 		    _T->flags = memalloc_flags_save(PF_MEMALLOC_NOIO); mutex_lock(&_T->lock->lock),
 		    mutex_unlock(&_T->lock->lock); memalloc_flags_restore(_T->flags),

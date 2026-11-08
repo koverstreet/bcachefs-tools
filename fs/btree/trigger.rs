@@ -135,14 +135,6 @@ pub(crate) fn key_trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> R
     Ok(())
 }
 
-/// # Safety
-/// @op is one C runs a trigger for, in its commit's attempt.
-#[c_export]
-pub unsafe fn bch2_key_trigger(trans: &BtreeTrans<'_>, mut op: c::btree_trigger_op) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(key_trigger(&t, &mut unsafe { TriggerOp::from_raw(&mut op) }))
-}
-
 /// verify_update_old_key(): @i's old key is the one at its position - the
 /// btree's, or before replay's done, the journal's. Debug builds only.
 ///

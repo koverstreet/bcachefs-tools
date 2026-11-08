@@ -319,21 +319,6 @@ pub fn bch2_btree_node_prep_for_write(trans: &BtreeTrans<'_>, #[lent(trans)] pat
 }
 
 /// # Safety
-/// As bset_insert_key(); @insert is a key.
-#[c_export]
-pub unsafe fn bch2_btree_bset_insert_key(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                         path: *mut BtreePath, b: &BtreeNode, node_iter: *mut KeyIter,
-                                         insert: *mut c::bkey_i) -> bool {
-    let insert = unsafe { &mut *<BkeyI>::from_raw_mut(insert) };
-    unsafe { trans.bset_insert_key(paths, trans.path_idx_of(path), b, node_iter, insert) }
-}
-
-#[c_export]
-pub fn bch2_btree_add_journal_pin(c: &Fs, b: &BtreeNode, seq: u64) {
-    b.add_journal_pin(c, seq)
-}
-
-/// # Safety
 /// As insert_key_leaf(); @insert is a key.
 #[c_export]
 pub unsafe fn bch2_btree_insert_key_leaf(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,

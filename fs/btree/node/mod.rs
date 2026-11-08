@@ -29,7 +29,7 @@ use core::mem::offset_of;
 use core::ops::{ControlFlow, Range};
 use bset::{BsetTree, BSET_CACHELINE};
 use iter::KeyIter;
-use cstruct_macros::{c_export, c_name, CStruct};
+use cstruct_macros::{c_name, CStruct};
 
 /* Btree nodes: */
 
@@ -354,21 +354,6 @@ impl NodeContents {
         self.sib_u64s[0].set(if self.data().min_key != POS_MIN { live } else { u16::MAX });
         self.sib_u64s[1].set(if self.key.k.p != SPOS_MAX { live } else { u16::MAX });
     }
-}
-
-#[c_export]
-pub fn btree_node_reset_sib_u64s(b: &BtreeNode) {
-    unsafe { b.contents() }.reset_sib_u64s()
-}
-
-#[c_export]
-pub fn bch2_btree_calc_format(b: &BtreeNode) -> c::bkey_format {
-    b.calc_format(unsafe { b.contents() })
-}
-
-#[c_export]
-pub fn btree_node_u64s_with_format(nr: BtreeNrKeys, old_f: &c::bkey_format, new_f: &c::bkey_format) -> usize {
-    nr.u64s_with_format(old_f, new_f)
 }
 
 impl BtreeNode {

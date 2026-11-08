@@ -3,7 +3,6 @@
 //! A transaction's paths and the nodes they're at: when one of those nodes
 //! changes, is replaced or is freed, the paths at it are fixed up to match.
 
-use core::ffi::c_uint;
 use core::ptr;
 
 use cstruct_macros::c_export;
@@ -13,7 +12,7 @@ use crate::btree::journal_overlay::peek_slot;
 use crate::btree::locking::btree_node_locked_type::*;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{BtreePath, KeyVal, LockedNode, NodePtr, PathIdx, Paths};
+use crate::btree::path::{KeyVal, LockedNode, NodePtr, PathIdx, Paths};
 use crate::c;
 use crate::errcode::bch_errcode;
 use crate::format::Btree;
@@ -197,50 +196,10 @@ impl BtreeTrans<'_> {
 // ── For C: btree nodes C holds locked ───────────────────────────────────────
 
 #[c_export]
-pub fn bch2_btree_path_fix_key_modified(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                        b: &BtreeNode, where_: *const c::bkey_packed) {
-    let b = unsafe { LockedNode::new(b) };
-    let where_ = b.keys(b.contents()).offset_of(where_);
-    trans.path_fix_key_modified(paths, b, where_)
-}
-
-/// # Safety
-/// @node_iter is @path's iterator at @b's level, or one of the caller's.
-#[c_export]
-pub unsafe fn bch2_btree_node_iter_fix(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                       path: *mut BtreePath, b: &BtreeNode, node_iter: *mut KeyIter,
-                                       where_: *const c::bkey_packed, clobber_u64s: c_uint, new_u64s: c_uint) {
-    let b = unsafe { LockedNode::new(b) };
-    let where_ = b.keys(b.contents()).offset_of(where_);
-    unsafe {
-        trans.node_iter_fix(paths, trans.path_idx_of(path), b, node_iter, where_, clobber_u64s as u16,
-                            new_u64s as u16)
-    }
-}
-
-#[c_export]
-pub fn bch2_trans_revalidate_updates_in_node(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                             b: &BtreeNode) {
-    trans.revalidate_updates_in_node(paths, unsafe { LockedNode::new(b) })
-}
-
-#[c_export]
-pub fn bch2_trans_node_add(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, b: &BtreeNode) {
-    trans.node_add(paths, unsafe { LockedNode::new(b) })
-}
-
-#[c_export]
 pub fn bch2_trans_node_forget(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, b: &BtreeNode) {
     trans.node_forget(paths, b)
 }
 
-#[c_export]
-pub fn bch2_trans_node_verify_not_in_iters(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &Paths<'_>,
-                                           b: &BtreeNode) {
-    trans.node_verify_not_in_iters(paths, b)
-}
-
-#[c_export]
-pub fn bch2_trans_node_reinit_iter(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, b: &BtreeNode) {
+pub fn bch2_trans_node_reinit_iter(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode) {
     trans.node_reinit_iter(paths, unsafe { LockedNode::new(b) })
 }

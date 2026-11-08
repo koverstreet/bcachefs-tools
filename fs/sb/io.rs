@@ -788,11 +788,6 @@ pub fn bch2_set_version_incompat(c: &Opaque<Fs>, version: MetadataVersion) -> c_
     ret_to_c(Fs::from_c(c).set_version_incompat(version))
 }
 
-#[c_export]
-pub fn __bch2_check_set_feature(c: &Opaque<Fs>, feat: c_uint) {
-    Fs::from_c(c).set_feature(SbFeature(feat))
-}
-
 /// A superblock newer than this version brought down to it - what it's at
 /// and what it allows - and the compat bits this version doesn't know
 /// cleared: whether it was newer.
@@ -2821,13 +2816,6 @@ impl Fs {
             self.write_super_flags(sb, c::bch_sb_write_flags::empty())
         }
     }
-}
-
-#[c_export]
-pub fn bch2_write_super(c: &Opaque<Fs>) -> c_int {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    ret_to_c(fs.write_super_flags(&mut unsafe { fs.sb_lock_held() }, c::bch_sb_write_flags::empty()))
 }
 
 #[c_export]

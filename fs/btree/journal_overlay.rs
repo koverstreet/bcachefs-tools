@@ -658,14 +658,6 @@ pub(crate) fn key_deleted_in_journal(trans: &BtreeTrans<'_>, btree: Btree, level
     k.k.p == pos && k.k.key_type() == BkeyType::deleted
 }
 
-/// # Safety
-/// @trans is live.
-#[c_export]
-pub unsafe fn bch2_key_deleted_in_journal(trans: *mut BtreeTrans<'_>, btree: Btree, level: c_uint,
-                                          pos: Bpos) -> bool {
-    key_deleted_in_journal(unsafe { &*trans }, btree, level, pos)
-}
-
 /// The key at @pos overwritten, if the journal has one that isn't - or with
 /// @check, -1 if it has one that is.
 fn check_or_overwrite(jk: &c::journal_keys, g: &mut OverwriteGuard<'_>, btree: Btree, level: u32,

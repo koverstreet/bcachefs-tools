@@ -26,7 +26,6 @@ use crate::format::{DataType, MetadataVersion};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{entries_as_read, entries_end, SbField, SbFieldOps, SbState};
 use crate::sb::members::member_exists;
-use crate::util::ffi::Opaque;
 use crate::util::kernel::{cold_path, likely};
 use crate::util::rcu::read_lock;
 use crate::util::alloc::{AllocError, KVVec};
@@ -35,11 +34,10 @@ use crate::data_structures::strided::StridedBuf;
 use crate::util::vstructs::{bytes_of, bytes_of_mut, from_ffi, Head, Unsized, Unvalidated,
                             Validated};
 use crate::util::{Printbuf, ToText};
-use core::ffi::c_uint;
 use core::fmt;
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicI32, Ordering};
-use cstruct_macros::{c_export, CStruct, TypeInfo, c_enum};
+use cstruct_macros::{CStruct, TypeInfo, c_enum};
 use crate::sb::io::SbResize;
 use crate::types::c_default;
 
@@ -929,15 +927,6 @@ impl Fs {
             .filter(|e| !self.replicas_obsolete(e.data_type))
             .all(|e| can_read_with_devs(e, devs, flags, err.as_deref_mut()))
     }
-}
-
-/// # Safety
-/// @e is an entry, as long as its nr_devs says.
-#[c_export]
-pub unsafe fn bch2_replicas_entry_put_many(c: &Opaque<Fs>, e: *const Head<c::bch_replicas_entry_v1>,
-                                           nr: c_uint) {
-    // SAFETY: the caller's
-    Fs::from_c(c).replicas_entry_put_many(unsafe { from_ffi(e) }, nr)
 }
 
 impl Fs {

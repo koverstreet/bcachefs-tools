@@ -7,7 +7,8 @@
 
 #include "bcachefs.h"
 #include "btree/bkey.h"
-#include "btree/bkey_methods.h"
+#include "btree/bkey/ops_gen.h"
+#include "btree/trigger_gen.h"
 #include "btree/node/bset_gen.h"
 #include "btree/node/iter_gen.h"
 #include "btree/path_gen.h"
@@ -41,19 +42,9 @@ static inline size_t __btree_aux_data_bytes(unsigned byte_order)
 	return __btree_keys_cachelines(byte_order) * 8;
 }
 
-static inline size_t btree_keys_cachelines(const struct btree *b)
-{
-	return __btree_keys_cachelines(b->byte_order);
-}
-
 static inline size_t btree_aux_data_bytes(const struct btree *b)
 {
 	return __btree_aux_data_bytes(b->byte_order);
-}
-
-static inline size_t btree_aux_data_u64s(const struct btree *b)
-{
-	return btree_aux_data_bytes(b) / sizeof(u64);
 }
 
 #define for_each_bset(_b, _t)						\
@@ -66,26 +57,6 @@ static inline size_t btree_aux_data_u64s(const struct btree *b)
 	for (_k = btree_bkey_first(_b, _t);				\
 	     _k != btree_bkey_last(_b, _t);				\
 	     _k = bkey_p_next(_k))
-
-static inline bool bset_has_ro_aux_tree(const struct bset_tree *t)
-{
-	return bset_aux_tree_type(t) == BSET_RO_AUX_TREE;
-}
-
-static inline bool bset_has_rw_aux_tree(struct bset_tree *t)
-{
-	return bset_aux_tree_type(t) == BSET_RW_AUX_TREE;
-}
-
-static inline struct bset *bset_next_set(struct btree *b,
-					 unsigned block_bytes)
-{
-	struct bset *i = btree_bset_last(b);
-
-	EBUG_ON(!is_power_of_2(block_bytes));
-
-	return ((void *) i) + round_up(vstruct_bytes(i), block_bytes);
-}
 
 /* Bkey utility code */
 
@@ -235,16 +206,6 @@ static inline void btree_keys_account_key(struct btree_nr_keys *n,
 		n->unpacked_keys += sign;
 }
 
-static inline void btree_keys_account_val_delta(struct btree *b,
-						struct bkey_packed *k,
-						int delta)
-{
-	struct bset_tree *t = bch2_bkey_to_bset(b, k);
-
-	b->nr.live_u64s			+= delta;
-	b->nr.bset_u64s[t - b->set]	+= delta;
-}
-
 #define btree_keys_account_key_add(_nr, _bset_idx, _k)		\
 	btree_keys_account_key(_nr, _bset_idx, _k, 1)
 
@@ -256,23 +217,5 @@ static inline void btree_keys_account_val_delta(struct btree *b,
 		bch2_bkey_to_bset(_b, _k) - (_b)->set, _k, -1)
 
 /* Debug stuff */
-
-/*
- * Always runs the cheap structural checks in debug builds; the expensive ones
- * are behind debug_check_bset_lookups.
- */
-static inline void bch2_btree_node_iter_verify(struct btree_node_iter *iter,
-					       struct btree *b)
-{
-	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG))
-		__bch2_btree_node_iter_verify(iter, b);
-}
-
-static inline void bch2_verify_btree_nr_keys(struct btree *b)
-{
-	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
-	    static_branch_unlikely(&bch2_debug_check_btree_accounting))
-		__bch2_verify_btree_nr_keys(b);
-}
 
 #endif /* _BCACHEFS_BSET_H */

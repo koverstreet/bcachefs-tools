@@ -12,13 +12,13 @@
 #include "btree/journal_overlay.h"
 #include "btree/interior.h"
 #include "btree/key_cache.h"
-#include "btree/sort.h"
+#include "btree/node/sort_gen.h"
 #include "btree/write.h"
 
 #include "journal/journal.h"
 #include "journal/read.h"
 #include "journal/reclaim.h"
-#include "journal/validate.h"
+#include "journal/validate_gen.h"
 
 #include "init/error.h"
 #include "init/fs.h"

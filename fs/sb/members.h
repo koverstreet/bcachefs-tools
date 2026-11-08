@@ -23,19 +23,6 @@ static inline struct bch_member bch2_members_v2_get(struct bch_sb_field_members_
 	return ret;
 }
 
-static inline struct bch_member *members_v1_get_mut(struct bch_sb_field_members_v1 *mi, int i)
-{
-	return (void *) mi->_members + (i * BCH_MEMBER_V1_BYTES);
-}
-
-static inline struct bch_member bch2_members_v1_get(struct bch_sb_field_members_v1 *mi, int i)
-{
-	struct bch_member ret, *p = members_v1_get_mut(mi, i);
-	memset(&ret, 0, sizeof(ret));
-	memcpy(&ret, p, min_t(size_t, BCH_MEMBER_V1_BYTES, sizeof(ret)));
-	return ret;
-}
-
 /* Device online state: */
 
 static inline bool bch2_dev_is_online(struct bch_dev *ca)
@@ -51,11 +38,6 @@ static inline bool bch2_dev_idx_is_online(struct bch_fs *c, unsigned dev)
 }
 
 /* Device masks and lists: */
-
-static inline unsigned dev_mask_nr(const struct bch_devs_mask *devs)
-{
-	return bitmap_weight(devs->d, BCH_SB_MEMBERS_MAX);
-}
 
 static inline bool bch2_dev_list_has_dev(struct bch_devs_list devs,
 					 unsigned dev)
@@ -217,15 +199,6 @@ static inline struct bch_dev *bch2_dev_have_ref(const struct bch_fs *c, unsigned
 	return rcu_dereference_check(c->devs[dev], 1);
 }
 
-static inline struct bch_dev *bch2_dev_locked(struct bch_fs *c, unsigned dev)
-{
-	EBUG_ON(!bch2_dev_exists(c, dev));
-
-	return rcu_dereference_protected(c->devs[dev],
-					 lockdep_is_held(&c->sb_lock.lock) ||
-					 lockdep_is_held(&c->state_lock));
-}
-
 static inline struct bch_dev *bch2_dev_rcu_noerror(const struct bch_fs *c, unsigned dev)
 {
 	return c && dev < c->sb.nr_devices
@@ -366,47 +339,6 @@ static inline bool bch2_member_exists(struct bch_sb *sb, unsigned dev)
 }
 
 /* Btree allocation bitmap: */
-
-static inline bool __bch2_dev_btree_bitmap_marked_sectors(struct bch_dev *ca, u64 start,
-							  unsigned sectors, bool with_gc)
-{
-	u64 end = start + sectors;
-
-	if (end > 64ULL << ca->mi.btree_bitmap_shift)
-		return false;
-
-	for (unsigned bit = start >> ca->mi.btree_bitmap_shift;
-	     (u64) bit << ca->mi.btree_bitmap_shift < end;
-	     bit++)
-		if (!(BIT_ULL(bit) &
-		      ca->mi.btree_allocated_bitmap &
-		      (with_gc
-		       ? ca->btree_allocated_bitmap_gc
-		       : ~0ULL)))
-			return false;
-	return true;
-}
-
-static inline bool bch2_dev_btree_bitmap_marked_sectors(struct bch_dev *ca, u64 start,
-							unsigned sectors)
-{
-	return __bch2_dev_btree_bitmap_marked_sectors(ca, start, sectors, false);
-}
-
-static inline bool bch2_dev_btree_bitmap_marked_sectors_any(struct bch_dev *ca, u64 start, unsigned sectors)
-{
-	u64 end = start + sectors;
-
-	if (start >= 64ULL << ca->mi.btree_bitmap_shift)
-		return false;
-
-	for (unsigned bit = start >> ca->mi.btree_bitmap_shift;
-	     (u64) bit << ca->mi.btree_bitmap_shift < end;
-	     bit++)
-		if (ca->mi.btree_allocated_bitmap & BIT_ULL(bit))
-			return true;
-	return false;
-}
 
 
 static inline void bch2_prt_member_name(struct printbuf *out, struct bch_fs *c, unsigned idx)

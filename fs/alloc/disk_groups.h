@@ -5,16 +5,6 @@
 #include "init/dev_gen.h"
 #include "alloc/disk_groups_gen.h"
 
-static inline u16 dev_to_target(unsigned dev)
-{
-	return TARGET_DEV_START + dev;
-}
-
-static inline u16 group_to_target(unsigned group)
-{
-	return TARGET_GROUP_START + group;
-}
-
 static inline struct target target_decode(unsigned target)
 {
 	if (target >= TARGET_GROUP_START)
@@ -44,14 +34,6 @@ static inline struct bch_devs_mask target_rw_devs(struct bch_fs *c,
 	if (t)
 		bitmap_and(devs.d, devs.d, t->d, BCH_SB_MEMBERS_MAX);
 	return devs;
-}
-
-static inline bool bch2_target_accepts_data(struct bch_fs *c,
-					    enum bch_data_type data_type,
-					    u16 target)
-{
-	struct bch_devs_mask rw_devs = target_rw_devs(c, data_type, target);
-	return !bitmap_empty(rw_devs.d, BCH_SB_MEMBERS_MAX);
 }
 
 static inline bool bch2_dev_in_target(struct bch_fs *c, unsigned dev, unsigned target)

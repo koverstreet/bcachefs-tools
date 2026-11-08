@@ -23,7 +23,6 @@ use core::cmp::Ordering;
 use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::journal::entries::EntryWriter;
-use crate::util::ffi::Opaque;
 use crate::util::kernel::unlikely;
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
@@ -60,11 +59,6 @@ c_enum! {
         /// applied
         skip_accounting_apply,
     }
-}
-
-#[c_export]
-pub fn bch2_trans_commit_flags_to_text(out: &mut Printbuf, flags: c::bch_trans_commit_flags) {
-    CommitOpts::from(flags).to_text(out)
 }
 
 c_extern! {
@@ -417,25 +411,6 @@ pub unsafe fn bch2_btree_insert_trans(trans: &BtreeTrans<'_>, btree: Btree, k: *
     let t = unsafe { trans.attempt_in_progress() };
     let k = unsafe { UpdateKey::from_raw(&t, k, (*k).k.u64s.into()) };
     ret_to_c(t.insert_raw(btree, k, flags.bits()))
-}
-
-/// # Safety
-/// @k is a key, @disk_res NULL or a reservation, unchanged until this returns.
-#[c_export]
-pub unsafe fn bch2_btree_insert(c: &Opaque<Fs>, id: Btree, k: *mut c::bkey_i, disk_res: *mut c::disk_reservation,
-                                commit_flags: c::bch_trans_commit_flags,
-                                iter_flags: c::btree_iter_update_trigger_flags) -> c_int {
-    let fs = Fs::from_c(c);
-    let k = unsafe { &*BkeyI::from_raw(k) };
-    ret_to_c(fs.btree_insert_k_i(id, k, unsafe { disk_res.as_ref() }, CommitOpts::from(commit_flags),
-                                 iter_flags.bits()))
-}
-
-/// # Safety
-/// @trans is in an attempt.
-#[c_export]
-pub unsafe fn bch2_btree_bit_mod_buffered(trans: &BtreeTrans<'_>, btree: Btree, pos: Bpos, set: bool) -> c_int {
-    ret_to_c(unsafe { trans.attempt_in_progress() }.bit_mod_buffered(btree, pos, set))
 }
 
 impl<'a, 't> TransAttempt<'a, 't> {

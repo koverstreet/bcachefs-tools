@@ -790,39 +790,14 @@ impl NodeContents {
  */
 
 #[c_export]
-pub fn btree_node_set_format(b: &BtreeNode, f: c::bkey_format) {
-    unsafe { b.contents_mut() }.set_format(f);
-}
-
-#[c_export]
 pub fn bch2_btree_keys_init(b: &BtreeNode) {
     b.keys_mut(unsafe { b.contents_mut() }).btree_keys_init();
 }
 
-#[c_export]
 pub fn bch2_bset_init_first(b: &BtreeNode, i: *mut Head<c::bset>) {
     let mut keys = b.keys_mut(unsafe { b.contents_mut() });
     let offset = keys.as_keys().offset_of(i);
     keys.bset_init_first(offset);
-}
-
-/// # Safety
-/// @insert a whole key.
-#[c_export]
-pub unsafe fn bch2_bset_insert(b: &BtreeNode, where_: *mut c::bkey_packed, insert: *mut c::bkey_i,
-                               clobber_u64s: c_uint) {
-    // SAFETY: the caller's
-    let insert = unsafe { &*BkeyI::from_raw(insert) };
-    let mut keys = b.keys_mut(unsafe { b.contents_mut() });
-    let w = keys.as_keys().offset_of(where_);
-    keys.bset_insert(w, insert, clobber_u64s as u16);
-}
-
-#[c_export]
-pub fn bch2_bset_delete(b: &BtreeNode, where_: *mut c::bkey_packed, clobber_u64s: c_uint) {
-    let mut keys = b.keys_mut(unsafe { b.contents_mut() });
-    let w = keys.as_keys().offset_of(where_);
-    keys.bset_delete(w, clobber_u64s as u16);
 }
 
 #[c_export]
@@ -841,11 +816,6 @@ pub fn bch2_bkey_prev_filter(b: &BtreeNode, t: *mut BsetTree, k: *mut c::bkey_pa
     let t = &contents.set[contents.set_index(t)];
     keys.bkey_prev_filter(t, keys.offset_of(k), min_key_type)
         .map_or(core::ptr::null_mut(), |p| keys.ptr_at(p))
-}
-
-#[c_export]
-pub fn __bch2_verify_btree_nr_keys(b: &BtreeNode) {
-    b.__verify_btree_nr_keys(unsafe { b.contents() });
 }
 
 #[c_export]

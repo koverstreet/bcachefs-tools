@@ -619,11 +619,6 @@ pub fn bch2_pr_time_units(out: &mut Printbuf, ns: u64) {
 }
 
 #[c_export]
-pub fn bch2_time_stats_to_text(out: &mut Printbuf, stats: &c::bch2_time_stats) {
-    stats.to_text(out)
-}
-
-#[c_export]
 pub fn __bch2_time_stats_update(stats: &c::bch2_time_stats, start: u64, end: u64) {
     stats.update_at(start, end)
 }

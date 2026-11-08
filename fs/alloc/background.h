@@ -34,11 +34,6 @@ static inline u8 alloc_gc_gen(struct bch_alloc_v4 a)
 	return a.generation - a.oldest_gen;
 }
 
-static inline bool data_type_movable(enum bch_data_type type)
-{
-	return (1U << type) & DATA_TYPES_MOVABLE;
-}
-
 static inline s64 bch2_bucket_sectors_dirty(struct bch_alloc_v4 a)
 {
 	return a.stripe_sectors + a.dirty_sectors;
@@ -70,11 +65,6 @@ static inline enum bch_data_type alloc_data_type(struct bch_alloc_v4 a,
 	return alloc_gc_gen(a) >= BUCKET_GC_GEN_MAX
 		? BCH_DATA_need_gc_gens
 		: BCH_DATA_free;
-}
-
-static inline void alloc_data_type_set(struct bch_alloc_v4 *a, enum bch_data_type data_type)
-{
-	a->data_type = alloc_data_type(*a, data_type);
 }
 
 #define BCH_FREESPACE_GENBITS_NR	(((unsigned) U8_MAX >> 4) + 1)

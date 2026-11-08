@@ -335,19 +335,6 @@ pub trait SbMembersMut: SbResize {
 
 impl<T: SbResize + ?Sized> SbMembersMut for T {}
 
-/// Member @i of members_v2, whole - as every one is, on an open filesystem.
-///
-/// # Safety
-/// @sb is validated, and nothing else uses it meanwhile: under sb_lock.
-#[c_export]
-pub unsafe fn bch2_members_v2_get_mut(sb: *mut Head<c::bch_sb>, i: c_int) -> *mut c::bch_member {
-    // SAFETY: the caller's
-    unsafe { sb_field_get_raw_mut::<c::bch_sb_field_members_v2>(sb) }
-        .and_then(members_v2_mut)
-        .and_then(|m| m.into_whole_mut(i as usize))
-        .expect("members_v2: a member, whole")
-}
-
 /// Member @i, from members_v2 or members_v1: zero if there's none.
 ///
 /// # Safety
@@ -912,22 +899,6 @@ impl Fs {
         crate::bch_info!(self, "mi_btree_bitmap sectors {} -> {}",
                          HumanReadable(old << 9), HumanReadable(new << 9));
         Ok(())
-    }
-}
-
-#[c_export]
-pub fn bch2_dev_btree_bitmap_marked(c: &Opaque<Fs>, k: BkeySC<'_>) -> bool {
-    Fs::from_c(c).btree_bitmap_marked(k, true)
-}
-
-/// @w, the caller's superblock write, is dirtied if a member changed.
-#[c_export]
-pub fn bch2_dev_btree_bitmap_mark_locked(c: &Opaque<Fs>, k: BkeySC<'_>, w: &mut c::sb_write) {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock, with its CLASS(sb_write)
-    let mut w = unsafe { SbWrite::from_c(fs, w) };
-    if fs.btree_bitmap_mark_locked(&mut w, k) {
-        w.dirty();
     }
 }
 

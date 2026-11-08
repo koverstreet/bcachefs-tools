@@ -29,7 +29,10 @@
 #include <linux/spinlock_types.h>
 #include <linux/string.h>
 
-#include "mean_and_variance.h"
+#include <linux/log2.h>
+#include <linux/math64.h>
+#include <linux/types.h>
+#include "util/mean_and_variance_gen.h"
 
 #include "util/time_stats_gen.h"
 

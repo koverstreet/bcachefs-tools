@@ -1550,11 +1550,3 @@ fn node_rewrite_in<'t>(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, iter: &
     update.done(paths);
     Ok(())
 }
-
-#[c_export]
-pub fn bch2_btree_node_rewrite<'t>(trans: &'t BtreeTrans<'t>, #[lent(trans)] paths: &mut Paths<'_>,
-                                   iter: &mut BtreeIter<'t>, b: &BtreeNode, target: c_uint,
-                                   commit_flags: c::bch_trans_commit_flags,
-                                   write_flags: c::bch_write_flags) -> c_int {
-    ret_to_c(node_rewrite(trans, paths, iter, b, target, commit_flags.into(), write_flags))
-}

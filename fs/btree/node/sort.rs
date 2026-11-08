@@ -18,7 +18,7 @@ use core::cmp::Ordering;
 use core::ffi::c_uint;
 use core::mem::offset_of;
 use core::ops::Range;
-use cstruct_macros::{c_enum, c_export, Plain};
+use cstruct_macros::{c_enum, Plain};
 
 /// [k, end), offsets into the node's buffer: u32s, as the unwritten whiteouts
 /// run to its end, past a 512k node's last u16.
@@ -499,7 +499,6 @@ fn btree_node_sort(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, start_id
     keys.verify_btree_nr_keys();
 }
 
-#[c_export]
 pub fn bch2_btree_sort_into(fs: &Fs, dst: &BtreeNode, src: &BtreeNode) {
     let start_time = local_clock();
 
@@ -575,7 +574,6 @@ pub fn bch2_btree_node_compact(fs: &Fs, b: &BtreeNode) -> bool {
     ret
 }
 
-#[c_export]
 pub fn bch2_btree_build_aux_trees(b: &BtreeNode) {
     build_aux_trees(b, unsafe { b.contents_mut() })
 }
@@ -613,7 +611,6 @@ pub fn bch2_btree_node_set_needs_whiteout(b: &BtreeNode) {
     b.keys_mut(unsafe { b.contents_mut() }).iter_mut().for_each(|k| k.set_needs_whiteout(true));
 }
 
-#[c_export]
 pub fn bch2_maybe_compact_whiteouts(_fs: &Fs, b: &BtreeNode) -> bool {
     let contents = unsafe { b.contents_mut() };
     let compact = contents.sets().iter().enumerate().any(|(set, t)| should_compact_bset_lazy(&contents.nr, set, t));

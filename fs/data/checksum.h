@@ -83,20 +83,6 @@ static inline enum bch_csum_type bch2_csum_opt_to_type(enum bch_csum_opt type,
 	}
 }
 
-static inline enum bch_csum_type bch2_data_checksum_type(struct bch_fs *c,
-							 struct bch_inode_opts opts)
-{
-	if (opts.nocow)
-		return 0;
-
-	if (c->sb.encryption_type)
-		return c->opts.wide_macs
-			? BCH_CSUM_chacha20_poly1305_128
-			: BCH_CSUM_chacha20_poly1305_80;
-
-	return bch2_csum_opt_to_type(opts.data_checksum, true);
-}
-
 static inline enum bch_csum_type bch2_data_checksum_type_rb(struct bch_fs *c,
 							    struct bch_extent_reconcile opts)
 {
@@ -106,14 +92,6 @@ static inline enum bch_csum_type bch2_data_checksum_type_rb(struct bch_fs *c,
 			: BCH_CSUM_chacha20_poly1305_80;
 
 	return bch2_csum_opt_to_type(opts.data_checksum, true);
-}
-
-static inline enum bch_csum_type bch2_meta_checksum_type(struct bch_fs *c)
-{
-	if (c->sb.encryption_type)
-		return BCH_CSUM_chacha20_poly1305_128;
-
-	return bch2_csum_opt_to_type(c->opts.metadata_checksum, false);
 }
 
 static inline bool bch2_checksum_type_valid(struct bch_fs *c,
@@ -147,14 +125,6 @@ static inline struct nonce nonce_add(struct nonce nonce, unsigned offset)
 	return nonce;
 }
 
-static inline struct nonce null_nonce(void)
-{
-	struct nonce ret;
-
-	memset(&ret, 0, sizeof(ret));
-	return ret;
-}
-
 static inline struct nonce extent_nonce(struct bversion version,
 					struct bch_extent_crc_unpacked crc)
 {
@@ -171,35 +141,6 @@ static inline struct nonce extent_nonce(struct bversion version,
 	}};
 
 	return nonce_add(nonce, crc.nonce << 9);
-}
-
-static inline bool bch2_key_is_encrypted(struct bch_encrypted_key *key)
-{
-	return le64_to_cpu(key->magic) != BCH_KEY_MAGIC;
-}
-
-static inline struct nonce __bch2_sb_key_nonce(struct bch_sb *sb)
-{
-	__le64 magic = __bch2_sb_magic(sb);
-
-	return (struct nonce) {{
-		[0] = 0,
-		[1] = 0,
-		[2] = ((__le32 *) &magic)[0],
-		[3] = ((__le32 *) &magic)[1],
-	}};
-}
-
-static inline struct nonce bch2_sb_key_nonce(struct bch_fs *c)
-{
-	__le64 magic = bch2_sb_magic(c);
-
-	return (struct nonce) {{
-		[0] = 0,
-		[1] = 0,
-		[2] = ((__le32 *) &magic)[0],
-		[3] = ((__le32 *) &magic)[1],
-	}};
 }
 
 #endif /* _BCACHEFS_CHECKSUM_H */

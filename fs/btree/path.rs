@@ -34,7 +34,7 @@ use crate::locking::{Locked, LockedBy};
 use crate::locking::six::{six_lock_increment_ip, SixHold};
 use crate::c::six_lock_type;
 use core::cmp::Ordering;
-use core::ffi::{c_int, c_uint, c_ulong};
+use core::ffi::{c_int, c_ulong};
 use core::marker::PhantomData;
 use core::mem::{offset_of, ManuallyDrop};
 use core::ops::{Deref, DerefMut, Index, IndexMut};
@@ -1521,27 +1521,8 @@ pub fn bch2_trans_paths_exit(trans: &BtreeTrans<'_>) {
 }
 
 #[c_export]
-pub fn bch2_path_get(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, btree: Btree, pos: &Bpos,
-                     locks_want: c_uint, level: c_uint, flags: c::btree_iter_update_trigger_flags,
-                     ip: c_ulong) -> PathIdx {
-    trans.path_get(paths, btree, *pos, locks_want, level, BtreeIterFlags::from_bits_retain(flags.bits()), ip)
-}
-
-#[c_export]
-pub fn bch2_path_get_unlocked_mut(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, btree: Btree,
-                                  level: c_uint, pos: Bpos, cached: bool) -> PathIdx {
-    trans.path_get_unlocked_mut(paths, btree, level, pos, cached, crate::ret_ip!())
-}
-
-#[c_export]
 pub fn bch2_path_put(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: PathIdx, intent: bool) {
     trans.path_put(paths, path, intent)
-}
-
-#[c_export]
-pub fn __btree_path_get(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: *mut BtreePath,
-                        intent: bool) {
-    paths.get_ll(trans.path_idx_of(path), intent)
 }
 
 #[c_export]
@@ -1557,25 +1538,6 @@ pub fn __bch2_btree_path_set_pos(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &
 }
 
 #[c_export]
-pub fn bch2_btree_path_peek_slot(path: &BtreePath, u: &mut c::bkey) -> c::bkey_s_c {
-    match path.peek_slot(u) {
-        Some(KeyVal(v)) => c::bkey_s_c { k: u, v },
-        None            => c::bkey_s_c::default(),
-    }
-}
-
-#[c_export]
-pub fn __bch2_btree_trans_sort_paths(_trans: &BtreeTrans<'_>, #[lent(_trans)] paths: &mut Paths<'_>) {
-    paths.sort_now()
-}
-
-#[c_export]
-pub fn bch2_btree_path_to_text_short(out: &mut Printbuf, _trans: &BtreeTrans<'_>, path_idx: PathIdx,
-                                     path: &BtreePath) {
-    path.to_text_short(out, path_idx)
-}
-
-#[c_export]
 pub fn bch2_btree_path_to_text(out: &mut Printbuf, _trans: &BtreeTrans<'_>, path_idx: PathIdx, path: &BtreePath) {
     path.to_text(out, path_idx)
 }
@@ -1588,17 +1550,6 @@ pub fn __bch2_btree_trans_too_many_iters(trans: &BtreeTrans<'_>, #[lent(trans)] 
     });
 
     ret_to_c(Err::<(), _>(trans.restart(bch_errcode::BCH_ERR_transaction_restart_too_many_iters)))
-}
-
-#[c_export]
-pub fn __bch2_trans_verify_paths(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) {
-    trans.verify_paths_now(paths);
-}
-
-#[c_export]
-pub fn __bch2_assert_pos_locked(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, btree: Btree,
-                                pos: Bpos) {
-    trans.assert_pos_locked_now(paths, btree, pos)
 }
 
 /// What a path's levels point at: a btree node, or - a cached path's - a key

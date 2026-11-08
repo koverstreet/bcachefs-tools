@@ -120,13 +120,6 @@ pub fn prt_current_backtrace(out: &mut Printbuf, skipnr: u32) -> Result<(), Allo
 }
 
 #[c_export]
-pub fn bch2_save_backtrace(stack: &mut c::bch_stacktrace, task: *mut c::task_struct, skipnr: c_uint,
-                           gfp: c::gfp_t) -> c_int {
-    let _scope = MemallocFlags::for_gfp(gfp);
-    ret_to_c(save_backtrace(stack, task, skipnr))
-}
-
-#[c_export]
 pub fn bch2_prt_task_backtrace(out: &mut Printbuf, task: *mut c::task_struct, skipnr: c_uint, gfp: c::gfp_t)
     -> c_int
 {

@@ -34,37 +34,6 @@ static inline bool btree_node_needs_merge(struct bch_fs *c, struct btree *b, int
 		(int) c->btree.foreground_merge_threshold;
 }
 
-static inline unsigned btree_update_reserve_required(struct bch_fs *c,
-						     struct btree *b)
-{
-	unsigned depth = btree_node_root(c, b)->c.level + 1;
-
-	/*
-	 * Number of nodes we might have to allocate in a worst case btree
-	 * split operation - we split all the way up to the root, then allocate
-	 * a new root, unless we're already at max depth:
-	 */
-	if (depth < BTREE_MAX_DEPTH)
-		return (depth - b->c.level) * 2 + 1;
-	else
-		return (depth - b->c.level) * 2 - 1;
-}
-
-static inline void *btree_data_end(struct btree *b)
-{
-	return (void *) b->data + btree_buf_bytes(b);
-}
-
-static inline struct bkey_packed *unwritten_whiteouts_start(struct btree *b)
-{
-	return (void *) ((u64 *) btree_data_end(b) - b->whiteout_u64s);
-}
-
-static inline struct bkey_packed *unwritten_whiteouts_end(struct btree *b)
-{
-	return btree_data_end(b);
-}
-
 static inline void *write_block(struct btree *b)
 {
 	return (void *) b->data + (b->written << 9);
@@ -78,11 +47,6 @@ static inline bool __btree_addr_written(struct btree *b, void *p)
 static inline bool bset_written(struct btree *b, struct bset *i)
 {
 	return __btree_addr_written(b, i);
-}
-
-static inline bool bkey_written(struct btree *b, struct bkey_packed *k)
-{
-	return __btree_addr_written(b, k);
 }
 
 static inline ssize_t __bch2_btree_u64s_remaining(struct btree *b, void *end)

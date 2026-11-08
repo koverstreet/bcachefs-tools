@@ -18,16 +18,15 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt};
+use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::c;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::passes;
-use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::local_clock;
 use crate::util::{Printbuf, ToText};
 use core::ffi::CStr;
-use cstruct_macros::{c_export, CStruct};
+use cstruct_macros::CStruct;
 use crate::locking::SeqLock;
 use crate::types::rust_only;
 use crate::format::Btree;
@@ -346,39 +345,4 @@ impl<'f> Progress<'f> {
     pub fn as_raw(&self) -> *mut c::progress_indicator {
         core::ptr::from_ref(self.p).cast_mut()
     }
-}
-
-// For C: its API as it was.
-
-/// C's message: __func__, a literal, or NULL.
-///
-/// # Safety
-/// @msg is NULL or a string that lives for good.
-unsafe fn c_msg(msg: *const c_char) -> Option<&'static CStr> {
-    (!msg.is_null()).then(|| unsafe { CStr::from_ptr(msg.cast()) })
-}
-
-/// bch2_progress_init().
-///
-/// # Safety
-/// @msg is NULL or a string that lives for good: C passes __func__.
-#[c_export]
-pub unsafe extern "C" fn bch2_progress_init(
-    s:     &c::progress_indicator,
-    msg:   *const c_char,
-    c:     &Opaque<Fs>,
-    leaf_btree_id_mask:  u64,
-    inner_btree_id_mask: u64,
-) {
-    s.init_masks(Fs::from_c(c), unsafe { c_msg(msg) }, leaf_btree_id_mask, inner_btree_id_mask)
-}
-
-/// bch2_progress_update_iter().
-#[c_export]
-pub fn bch2_progress_update_iter<'t>(
-    trans: &'t BtreeTrans<'t>,
-    s:     &c::progress_indicator,
-    iter:  &mut BtreeIter<'t>,
-) -> core::ffi::c_int {
-    ret_to_c(s.update(&unsafe { trans.attempt_in_progress() }, iter))
 }

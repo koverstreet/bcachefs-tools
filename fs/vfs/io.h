@@ -6,8 +6,11 @@
 
 #include "alloc/buckets.h"
 #include "data/write_gen.h"
-#include "fs/quota.h"
-#include "vfs/fdm.h"
+#include "fs/inode.h"
+#include "fs/quota_gen.h"
+#include <linux/hash.h>
+#include "vendor/closure.h"
+#include "vfs/fdm_gen.h"
 #include "vfs/fs.h"
 
 #include <linux/uio.h>

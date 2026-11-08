@@ -1087,7 +1087,6 @@ pub unsafe fn six_lock_downgrade(lock: &c::six_lock) {
  */
 /// # Safety
 /// @lock is held for read, by the caller.
-#[c_export]
 pub unsafe fn six_lock_tryupgrade(lock: &c::six_lock) -> bool {
     let read = unsafe { SixHold::from_raw(Locked::from_c(lock), six_lock_type::SIX_LOCK_read) };
     let (Ok(hold) | Err(hold)) = read.try_upgrade();
@@ -1105,25 +1104,6 @@ pub unsafe fn six_lock_tryupgrade(lock: &c::six_lock) -> bool {
  *
  * Return: true on success, false on failure
  */
-/// # Safety
-/// @lock is held as @from, by the caller.
-#[c_export]
-pub unsafe fn six_trylock_convert(lock: &c::six_lock, from: c::six_lock_type, to: c::six_lock_type) -> bool {
-    ebug_assert!(to != six_lock_type::SIX_LOCK_write && from != six_lock_type::SIX_LOCK_write);
-
-    if to == from {
-        return true;
-    }
-
-    let hold = unsafe { SixHold::from_raw(Locked::from_c(lock), from) };
-    if to == six_lock_type::SIX_LOCK_read {
-        hold.downgrade().into_raw();
-        true
-    } else {
-        let (Ok(hold) | Err(hold)) = hold.try_upgrade();
-        hold.into_raw() == to
-    }
-}
 
 /*
  * six_lock_increment - increase held lock count on a lock that is already held

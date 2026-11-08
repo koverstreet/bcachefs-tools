@@ -1389,22 +1389,10 @@ pub fn __bch2_btree_path_relock(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &m
 }
 
 #[c_export]
-pub fn __bch2_btree_path_upgrade_norestart(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                           path: *mut BtreePath, new_locks_want: c_uint) -> bool {
-    trans.path_upgrade_norestart(paths, trans.path_idx_of(path), new_locks_want as usize)
-}
-
-#[c_export]
 #[inline(always)]
 pub fn __bch2_btree_path_upgrade(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: *mut BtreePath,
                                  new_locks_want: c_uint) -> c_int {
     ret_to_c(trans.path_upgrade(paths, trans.path_idx_of(path), new_locks_want as usize, crate::ret_ip!()))
-}
-
-#[c_export]
-pub fn __bch2_btree_path_downgrade(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                   path: *mut BtreePath, new_locks_want: c_uint) {
-    trans.path_downgrade_to(paths, trans.path_idx_of(path), new_locks_want as usize)
 }
 
 #[c_export]
@@ -1432,11 +1420,6 @@ pub fn bch2_trans_unlock_long(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut
 pub fn bch2_trans_srcu_wait_budget(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
                                    timeout: c_long) -> c_long {
     trans.srcu_wait_budget(paths).map_or(timeout, |left| (left as c_long).min(timeout))
-}
-
-#[c_export]
-pub fn bch2_trans_unlock_write(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) {
-    trans.unlock_write(paths)
 }
 
 /// # Safety

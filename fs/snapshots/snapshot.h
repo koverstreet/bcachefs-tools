@@ -54,18 +54,6 @@ static inline const struct snapshot_t *snapshot_t(struct bch_fs *c, u32 id)
 	return __snapshot_t(rcu_dereference(c->snapshots.table), id);
 }
 
-static inline u32 __bch2_snapshot_parent(struct snapshot_table *t, u32 id)
-{
-	const struct snapshot_t *s = __snapshot_t(t, id);
-	return s ? s->parent : 0;
-}
-
-static inline u32 bch2_snapshot_parent(struct bch_fs *c, u32 id)
-{
-	guard(rcu)();
-	return __bch2_snapshot_parent(rcu_dereference(c->snapshots.table), id);
-}
-
 static inline enum snapshot_id_state __bch2_snapshot_id_state(struct snapshot_table *t, u32 id)
 {
 	const struct snapshot_t *s = __snapshot_t(t, id);
@@ -106,11 +94,6 @@ static inline bool bch2_snapshot_is_ancestor(struct btree_trans *trans, u32 id, 
 	return id == ancestor
 		? true
 		: __bch2_snapshot_is_ancestor(trans, id, ancestor);
-}
-
-static inline bool snapshot_list_has_id(snapshot_id_list *s, u32 id)
-{
-	return darray_find(*s, id) != NULL;
 }
 
 static inline int bch2_check_key_has_snapshot(struct btree_trans *trans,

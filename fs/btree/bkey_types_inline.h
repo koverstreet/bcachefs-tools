@@ -149,16 +149,6 @@ static inline size_t bkey_val_bytes(const struct bkey *k)
 	return bkey_val_u64s(k) * sizeof(u64);
 }
 
-static inline struct bkey_s bkey_to_s(struct bkey *k)
-{
-	return (struct bkey_s) { .k = k, .v = NULL };
-}
-
-static inline struct bkey_s_c bkey_to_s_c(const struct bkey *k)
-{
-	return (struct bkey_s_c) { .k = k, .v = NULL };
-}
-
 static inline struct bkey_s bkey_i_to_s(struct bkey_i *k)
 {
 	return (struct bkey_s) { .k = &k->k, .v = &k->v };

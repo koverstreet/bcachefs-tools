@@ -24,48 +24,6 @@ static inline void bch2_accounting_neg(struct bkey_s_accounting a)
 	bch2_u64s_neg(a.v->d, bch2_accounting_counters(a.k));
 }
 
-static inline bool bch2_accounting_key_is_zero(struct bkey_s_c_accounting a)
-{
-	for (unsigned i = 0;  i < bch2_accounting_counters(a.k); i++)
-		if (a.v->d[i])
-			return false;
-	return true;
-}
-
-static inline void bch2_accounting_accumulate(struct bkey_i_accounting *dst,
-					      struct bkey_s_c_accounting src)
-{
-	for (unsigned i = 0;
-	     i < min(bch2_accounting_counters(&dst->k),
-		     bch2_accounting_counters(src.k));
-	     i++)
-		dst->v.d[i] += src.v->d[i];
-
-	if (bversion_cmp(dst->k.bversion, src.k->bversion) < 0)
-		dst->k.bversion = src.k->bversion;
-}
-
-static inline void bch2_accounting_accumulate_maybe_kill(struct bch_fs *c,
-							 struct bkey_i_accounting *dst,
-							 struct bkey_s_c_accounting src)
-{
-	bch2_accounting_accumulate(dst, src);
-
-	if (bch2_accounting_key_is_zero(accounting_i_to_s_c(dst)))
-		__bch2_accounting_maybe_kill(c, dst->k.p);
-}
-
-static inline void bpos_to_disk_accounting_pos(struct disk_accounting_pos *acc, struct bpos p)
-{
-	BUILD_BUG_ON(sizeof(*acc) != sizeof(p));
-
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-	acc->_pad = p;
-#else
-	memcpy_swab(acc, &p, sizeof(p));
-#endif
-}
-
 #define disk_accounting_key_init(_k, _type, ...)			\
 do {									\
 	memset(&(_k), 0, sizeof(_k));					\

@@ -3,7 +3,8 @@
 #define _BCACHEFS_INODE_H
 
 #include "btree/bkey.h"
-#include "btree/bkey_methods.h"
+#include "btree/bkey/ops_gen.h"
+#include "btree/trigger_gen.h"
 #include "snapshots/snapshot.h"
 
 #include <linux/hash.h>
@@ -25,7 +26,9 @@ static inline bool bkey_is_inode(const struct bkey *k)
 
 
 
-#include "fs/inode_opts.h"
+#include "btree/bkey_gen.h"
+#include "fs/inode_format_gen.h"
+#include "fs/inode_opts_gen.h"
 
 #define bch2_inode_peek(_trans, _iter, _inode, _inum, _flags)			\
 	__bch2_inode_peek(_trans, _iter, _inode, _inum, _flags, __func__)

@@ -1166,20 +1166,6 @@ impl Dev {
     }
 }
 
-/// # Safety
-/// @usage is writable.
-#[c_export]
-pub unsafe fn bch2_dev_usage_read_fast(ca: &Dev, usage: *mut c::bch_dev_usage) {
-    unsafe { usage.write(ca.usage_read_fast()) }
-}
-
-/// # Safety
-/// @usage is writable.
-#[c_export]
-pub unsafe fn bch2_dev_usage_full_read_fast(ca: &Dev, usage: *mut c::bch_dev_usage_full) {
-    unsafe { usage.write(ca.usage_full_read_fast()) }
-}
-
 /// The bucket @v encodes - device in the top 16 bits, bucket in the low 48 -
 /// as the lru btree's targets and need_discard's positions do:
 /// u64_to_bucket().

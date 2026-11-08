@@ -189,10 +189,6 @@ impl Printbuf {
         true
     }
 
-    pub fn tabstop_pop(&mut self) {
-        self.nr_tabstops = self.nr_tabstops.saturating_sub(1);
-    }
-
     pub fn tabstops_reset(&mut self) {
         self.nr_tabstops = 0;
     }
@@ -503,15 +499,6 @@ impl Printbuf {
         if self.as_bytes().last().is_some_and(|&b| b != b'\n') {
             self.newline();
         }
-    }
-
-    pub fn strip_trailing_newline(&mut self) {
-        let written = self.as_bytes();
-        if let Some(p) = written.iter().rposition(|&b| b != b' ').filter(|&p| written[p] == b'\n') {
-            self.rewind(p);
-        }
-
-        self.nul_terminate_reserved();
     }
 
     /// As comma-separated names.
@@ -864,17 +851,13 @@ macro_rules! export {
 
 export!(bch2_printbuf_exit() => exit);
 export!(bch2_printbuf_tabstops_reset() => tabstops_reset);
-export!(bch2_printbuf_tabstop_pop() => tabstop_pop);
 export!(bch2_printbuf_indent_add(spaces: c_uint) => indent_add);
 export!(bch2_printbuf_indent_add_nextline(spaces: c_uint) => indent_add_nextline);
 export!(bch2_printbuf_indent_sub(spaces: c_uint) => indent_sub);
 export!(bch2_prt_newline() => newline);
-export!(bch2_printbuf_ensure_trailing_newline() => ensure_trailing_newline);
-export!(bch2_printbuf_strip_trailing_newline() => strip_trailing_newline);
 export!(bch2_prt_tab() => tab);
 export!(bch2_prt_tab_rjust() => tab_rjust);
 export!(bch2_prt_human_readable_u64(v: u64) => human_readable_u64);
-export!(bch2_prt_units_u64(v: u64) => units_u64);
 export!(bch2_printbuf_tabstop_align() => tabstop_align);
 export!(bch2_printbuf_reset() => reset);
 
@@ -949,7 +932,6 @@ pub unsafe fn bch2_prt_bitflags(out: &mut Printbuf, list: *const *const c_char, 
 /// in userspace, the device's path, its last component. NULL is "(null)", as
 /// %pg prints it: C names the filesystem's superblock's device, which has
 /// none.
-#[cstruct_macros::c_export]
 pub fn prt_bdevname(out: &mut Printbuf, bdev: Option<&c::block_device>) {
     let Some(bdev) = bdev else {
         out.write_bytes(b"(null)");

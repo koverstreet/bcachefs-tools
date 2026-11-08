@@ -8,13 +8,15 @@
 
 #include "bcachefs.h"
 
-#include "btree/bkey_methods.h"
+#include "btree/bkey.h"
+#include "btree/bkey/ops_gen.h"
+#include "btree/trigger_gen.h"
 #include "btree/cache.h"
 #include "btree/read.h"
 
 #include "data/extents.h"
 
-#include "debug.h"
+#include "debug/debug_gen.h"
 
 __cold void bch2_btree_node_ondisk_to_text(struct printbuf *out, struct bch_fs *c,
 				    const struct btree *b)

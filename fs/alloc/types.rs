@@ -153,9 +153,8 @@ nest! {
     ///   close takes that without it.
     /// - @idx: fixed from when the table's built.
     /// - @sectors_free: set at the open, then its writer's - written under the
-    ///   lock of the write point that has it: bch2_alloc_sectors_req()'s
-    ///   alignment, bch2_alloc_sectors_append_ptrs_inlined(),
-    ///   bch2_alloc_sectors_retire_short(). Fixed once the writer's pin is put.
+    ///   lock of the write point that has it: alloc_sectors_wp()'s alignment,
+    ///   append_ptrs(), retire_short(). Fixed once the writer's pin is put.
     /// - @data_type: its holder's - set when it's handed out, and by
     ///   bch2_open_bucket_get() under the write point's lock; cleared at the
     ///   close.
