@@ -34,25 +34,6 @@ static inline bool btree_node_needs_merge(struct bch_fs *c, struct btree *b, int
 		(int) c->btree.foreground_merge_threshold;
 }
 
-static inline int bch2_foreground_maybe_merge(struct btree_trans *trans,
-					      btree_path_idx_t path_idx,
-					      unsigned level, enum bch_trans_commit_flags flags,
-					      int u64s_delta,
-					      u64 *merge_count)
-{
-	bch2_trans_verify_not_unlocked_or_in_restart(trans);
-
-	struct btree_path *path = trans->paths + path_idx;
-	struct btree *b = path->l[level].b;
-
-	EBUG_ON(!btree_node_locked(path, level));
-
-	if (likely(!btree_node_needs_merge(trans->c, b, u64s_delta)))
-		return 0;
-
-	return __bch2_foreground_maybe_merge(trans, path_idx, level, flags, merge_count);
-}
-
 static inline unsigned btree_update_reserve_required(struct bch_fs *c,
 						     struct btree *b)
 {

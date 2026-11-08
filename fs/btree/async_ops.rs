@@ -100,7 +100,7 @@ impl Op {
         } else {
             let trans = t.trans();
             super::interior::foreground_maybe_merge(trans, &mut trans.paths(), iter.iter().path, level as usize,
-                                                    CommitOpts::new())
+                                                    CommitOpts::new(), None)
         }
     }
 }

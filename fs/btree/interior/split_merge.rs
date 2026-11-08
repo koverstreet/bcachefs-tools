@@ -10,7 +10,8 @@ use crate::btree::bkey::{self, bkey_validate, BkeyI, BkeyP, BkeySC, BkeyV, Valid
                          BKEY_FORMAT_CURRENT, POS_MIN, SPOS_MAX};
 use crate::btree::cache::{bch2_btree_node_set_dirty, btree_ptr_hash_val};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, Watermark};
+use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeTrans, CommitFlags, CommitOpts,
+                         TransAttempt, Watermark};
 use crate::btree::journal_overlay::{journal_key_overwrite, key_deleted_in_journal};
 use crate::btree::node::BtreeNode;
 use crate::btree::node::iter::KeyIter;
@@ -27,8 +28,9 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, BkeyValidate};
+use crate::init::progress::Progress;
 use crate::locking::MemallocFlags;
-use crate::prt;
+use crate::{bch_info, btree_trans, prt};
 use crate::sb::errors::SbErrorId;
 use crate::util::Printbuf;
 use crate::util::backtrace::prt_task_backtrace;
@@ -766,7 +768,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
 }
 
 pub(crate) fn foreground_maybe_merge(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
-                                     commit: CommitOpts) -> Result<(), BchError> {
+                                     commit: CommitOpts, merge_count: Option<&mut u64>) -> Result<(), BchError> {
     trans.verify_not_unlocked_or_in_restart();
 
     let b = paths[path].locked_btree_node(level).expect("merging a node the path doesn't hold");
@@ -774,8 +776,60 @@ pub(crate) fn foreground_maybe_merge(trans: &BtreeTrans<'_>, paths: &mut Paths<'
         return Ok(());
     }
 
-    merge(trans, paths, path, level, commit, None)
+    merge(trans, paths, path, level, commit, merge_count)
 }
+
+/// The node at @iter merged with its siblings, if it needs it, or @iter moved
+/// on past it: whether the walk is done.
+fn merge_btree_node_one<'t>(t: &TransAttempt<'_, 't>, progress: &Progress<'_>, iter: &mut BtreeNodeIter<'t>,
+                            merge_count: &mut u64) -> Result<bool, BchError> {
+    iter.iter().traverse(t)?;
+
+    let trans = t.trans();
+    let path = iter.iter().path;
+    let level = usize::from(trans.paths()[path].level());
+    let Some(b) = trans.paths().held_btree_node(path, level) else { return Ok(true) };
+
+    progress.update(t, iter.iter())?;
+
+    if !b.needs_merge(b.contents(), t.fs(), 0) {
+        let end = b.contents().key_i().k.p;
+        if end == SPOS_MAX {
+            return Ok(true);
+        }
+
+        iter.iter().set_pos(end.successor());
+        return Ok(false);
+    }
+
+    let mut paths = trans.paths();
+    trans.path_upgrade(&mut paths, path, level + 1, crate::ret_ip!())?;
+    foreground_maybe_merge(trans, &mut paths, path, level, CommitOpts::new(), Some(merge_count))?;
+    Ok(false)
+}
+
+fn merge_btree_nodes(fs: &Fs) -> Result<(), BchError> {
+    let progress = Progress::recovery_masks(fs, c"bch2_merge_btree_nodes", !0, !0);
+
+    let trans = btree_trans!(fs);
+
+    for btree in (0..fs.btree_id_nr_alive()).map(Btree) {
+        let mut merge_count = 0;
+
+        for level in 0..c::BTREE_MAX_DEPTH as u32 {
+            let mut iter = BtreeNodeIter::new(&trans, btree, POS_MIN, 0, level, BtreeIterFlags::PREFETCH);
+            while !lockrestart_do(&trans, |t| merge_btree_node_one(t, &progress, &mut iter, &mut merge_count))? {}
+        }
+
+        if merge_count != 0 {
+            bch_info!(fs, "merge_btree_nodes: {merge_count} merges in {btree} btree");
+        }
+    }
+
+    Ok(())
+}
+
+crate::recovery_pass!(bch2_merge_btree_nodes => merge_btree_nodes);
 
 const PREV_SIB: usize = c::btree_node_sibling::btree_prev_sib as usize;
 const NEXT_SIB: usize = c::btree_node_sibling::btree_next_sib as usize;
@@ -1395,7 +1449,7 @@ pub(crate) fn split_leaf(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: Pa
 
     let mut l = level + 1;
     while paths[path].intent_locked(l) {
-        foreground_maybe_merge(trans, paths, path, l, commit)?;
+        foreground_maybe_merge(trans, paths, path, l, commit, None)?;
         l += 1;
     }
     Ok(())
