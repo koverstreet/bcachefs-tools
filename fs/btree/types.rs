@@ -401,6 +401,7 @@ c_enum! {
         key_cache_fill,
         committed,
         trim,
+        read_errors,
 
         #[mask_prefix(BTREE_UPDATE_)]
         internal_snapshot_node,

@@ -106,13 +106,18 @@ impl BtreeTrans<'_> {
     pub(crate) fn path_level_init(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize,
                                   b: LockedNode<'_, BtreeNode>) {
         let path = &mut paths[idx];
+        let unread = b.flags.read_error();
         ebug_assert!(!path.cached());
-        ebug_assert!(path.pos_in_node(b));
+        ebug_assert!(unread || path.pos_in_node(b));
 
         path.l[level].lock_seq = b.c.lock.six().seq.get();
         /* deadlock detector reads unlocked */
         unsafe { ptr::write_volatile(&raw mut path.l[level].b, NodePtr::node(NonNull::from(&b.c))) };
-        path.level_init_iter(self.fs(), level, b);
+        if unread {
+            path.l[level].iter = KeyIter::default();
+        } else {
+            path.level_init_iter(self.fs(), level, b);
+        }
     }
 
     pub(crate) fn path_level_prev(&self, paths: &mut Paths<'_>, idx: PathIdx, u: &mut c::bkey) -> Option<KeyVal> {
@@ -499,6 +504,12 @@ impl BtreeTrans<'_> {
         let level = paths[idx].level() as usize;
 
         ebug_assert!(paths[idx].locked(level));
+
+        /* an unread node, had under READ_ERRORS, has no keys to go down through */
+        if flags.contains(BtreeIterFlags::READ_ERRORS) &&
+           paths[idx].locked_btree_node(level).is_some_and(|b| b.flags.read_error()) {
+            return Err(fs.err(bch_errcode::BCH_ERR_btree_node_read_err_cached));
+        }
 
         if self.journal_replay_not_finished() {
             self.node_iter_and_journal_peek(paths, idx, flags)?;

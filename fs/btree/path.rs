@@ -1404,6 +1404,14 @@ impl BtreeTrans<'_> {
         let path = &paths[idx];
         let b = path.locked_btree_node(level).expect("a relocked level is locked");
 
+        /* had under READ_ERRORS: nothing read to check against */
+        if b.flags.read_error() {
+            if !locked {
+                self.node_unlock(paths, idx, level);
+            }
+            return;
+        }
+
         if !path.pos_in_node(b) {
             let mut buf = Printbuf::new();
             prt!(&mut buf, "level {} path->pos {}\n{}", level, path.pos, b.node().pos_to_text(self.fs()));

@@ -211,6 +211,10 @@ impl BtreeTrans<'_> {
         }
 
         if unlikely(b.flags.read_error()) {
+            if flags.contains(BtreeIterFlags::READ_ERRORS) {
+                return Ok((b, held));
+            }
+
             drop(held);
             return Err(bch_errcode::BCH_ERR_btree_node_read_err_cached.into());
         }

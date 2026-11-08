@@ -212,6 +212,10 @@ bitflags! {
         /// steps to the window's edge at most, where it ends. An update of
         /// what's returned replaces only the window.
         const TRIM = c::btree_iter_update_trigger_flags::trim.bits();
+        /// A node that failed to read is had, held, as any other - its
+        /// level's iterator empty, its keys never looked at: for topology
+        /// repair, to evict it through the path that holds it.
+        const READ_ERRORS = c::btree_iter_update_trigger_flags::read_errors.bits();
     }
 }
 
@@ -642,7 +646,8 @@ impl<'t> BtreeIter<'t> {
             let max_key = n.contents().key_i().k.p;
             assert!(max_key >= self.pos, "node ending at {}, before the iterator's position {}", max_key, self.pos);
 
-            let min_key = n.contents().data().min_key;
+            /* unread, had under READ_ERRORS: no data to start from */
+            let min_key = if n.flags.read_error() { self.pos } else { n.contents().data().min_key };
             self.k = c::bkey::new();
             self.k.p = min_key;
             self.pos = min_key;
