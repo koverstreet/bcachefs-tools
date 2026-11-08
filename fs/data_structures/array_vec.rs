@@ -225,6 +225,9 @@ pub struct ArrayVec<T, const CAP: usize, L: LenUint = u32> {
     xs: [MaybeUninit<T>; CAP],
 }
 
+// zeroed is empty
+unsafe impl<T, const CAP: usize, L: LenUint + ::pin_init::Zeroable> ::pin_init::Zeroable for ArrayVec<T, CAP, L> {}
+
 impl<T, const CAP: usize, L: LenUint> Drop for ArrayVec<T, CAP, L> {
     fn drop(&mut self) {
         self.clear();

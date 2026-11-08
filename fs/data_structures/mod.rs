@@ -14,6 +14,7 @@ pub mod genradix;
 pub mod heap;
 pub mod inline_vec;
 pub mod list;
+pub mod ref_cell;
 pub mod rhashtable;
 pub mod sort;
 pub mod strided;
