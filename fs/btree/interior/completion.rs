@@ -307,9 +307,9 @@ fn btree_node_seq_matches(b: &BtreeNode, seq: Le64) -> bool {
 
 fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
     let u = unsafe { update.as_ref() };
-    let trans = crate::btree_trans!(fs);
     let mut journal_seq = 0;
 
+    /* before the transaction: commit_lock is taken outside btree locks */
     {
         /* btree_node_update_key() changes a new node's key under commit_lock */
         let keys: ArrayVec<NodeKey, UPDATE_NODES_MAX> = {
@@ -318,8 +318,6 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
         };
 
         if !keys.iter().all(|k| fs.btree_bitmap_marked(BkeySC::from(k.key()), true)) {
-            trans.unlock_long();
-
             let mut sb = fs.sb_lock();
             let dirty = keys.iter().fold(false, |d, k| d | fs.btree_bitmap_mark_locked(&mut sb, BkeySC::from(k.key())));
             if dirty {
@@ -327,6 +325,8 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
             }
         }
     }
+
+    let trans = crate::btree_trans!(fs);
 
     /*
      * Wait for any in flight writes to finish before we free the old nodes
