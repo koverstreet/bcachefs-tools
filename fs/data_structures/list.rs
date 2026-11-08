@@ -351,3 +351,56 @@ impl<'a, T, const OFFSET: usize> CursorMut<'a, T, OFFSET> {
         Some(item)
     }
 }
+
+/// A walk of the list @list() picks out of @owner - its lock's guard -
+/// handing out each item with @owner, for a body that needs the rest of what
+/// it holds: list_for_each_entry_safe(). Its place is the item after the one
+/// handed out.
+pub struct Walk<'a, O, F, T, const OFFSET: usize> {
+    owner: &'a mut O,
+    list:  F,
+    pos:   *const ListHead,
+    _t:    PhantomData<&'a T>,
+}
+
+impl<'a, O, F, T, const OFFSET: usize> Walk<'a, O, F, T, OFFSET>
+where
+    F: Fn(&mut O) -> &mut List<T, OFFSET>,
+{
+    /// From the front.
+    ///
+    /// # Safety
+    /// The body takes no item off the list but the one it's handed.
+    pub unsafe fn new(owner: &'a mut O, list: F) -> Self {
+        let l = list(&mut *owner);
+        let pos = if l.is_empty() { ptr::from_ref(&l.head) } else { l.head.next.get() };
+        Walk { owner, list, pos, _t: PhantomData }
+    }
+
+    fn head(&mut self) -> *const ListHead {
+        &(self.list)(&mut *self.owner).head
+    }
+
+    /// The next item, with @owner until the step after.
+    pub fn next(&mut self) -> Option<(&mut O, &'a T)> {
+        if ptr::eq(self.pos, self.head()) {
+            return None;
+        }
+        let item = unsafe { List::<T, OFFSET>::item(self.pos) };
+        self.pos = unsafe { (*self.pos).next.get() };
+        Some((&mut *self.owner, item))
+    }
+
+    /// The list turned so the walk's next item is first, the order otherwise
+    /// kept - a CLOCK hand: list_move_tail(head, next). At the end, as it was.
+    pub fn rotate(&mut self) {
+        let head = self.head();
+        if ptr::eq(self.pos, head) {
+            return;
+        }
+        unsafe {
+            (*head).del_init();
+            (*self.pos).add_tail(&*head);
+        }
+    }
+}
