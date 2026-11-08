@@ -14,9 +14,9 @@ use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::ffi::Opaque;
 use crate::util::late::LateInit;
 use core::ffi::{c_int, c_void};
-use core::mem::MaybeUninit;
+use core::mem::{align_of, size_of, MaybeUninit};
 use core::ptr::NonNull;
-use pin_init::PinInit;
+use pin_init::{Init, PinInit};
 
 #[repr(transparent)]
 pub struct Mempool(Opaque<c::mempool_t>);
@@ -73,6 +73,22 @@ impl Mempool {
         let mut buf = self.alloc_gfp(gfp);
         buf.as_uninit_mut().fill(MaybeUninit::new(0));
         PoolBufZeroed(buf)
+    }
+
+    /// What @init makes, in an element - dropped and freed back to the pool
+    /// with it: the pool's elements a @T at least, kmalloc()'s or kvmalloc()'s,
+    /// their size the pool_data with() set.
+    pub fn alloc_box<T, E>(&self, gfp: c::gfp_t, init: impl Init<T, E>) -> Result<PoolBox<'_, T>, E> {
+        const { assert!(align_of::<T>() <= 8, "a pool element aligned past kmalloc()'s") };
+        let size = unsafe { (*self.0.as_ptr()).pool_data } as usize;
+        assert!(size_of::<T>() <= size, "a {}-byte value in a pool of {size}-byte elements", size_of::<T>());
+
+        let p = self.alloc_raw(gfp).cast::<T>();
+        if let Err(e) = unsafe { crate::util::alloc::init_at(init, p.as_ptr()) } {
+            unsafe { self.free_raw(p.cast()) };
+            return Err(e);
+        }
+        Ok(PoolBox { pool: self, p })
     }
 
     /// An element, for C to hold: free_raw() takes it back. @gfp may sleep.
@@ -132,5 +148,34 @@ impl Drop for PoolBuf<'_> {
     fn drop(&mut self) {
         // SAFETY: alloc()'s, and ours alone
         unsafe { self.pool.free_raw(self.p) }
+    }
+}
+
+/// alloc_box()'s: a @T in an element of a pool.
+pub struct PoolBox<'p, T> {
+    pool: &'p Mempool,
+    p:    NonNull<T>,
+}
+
+impl<T> PoolBox<'_, T> {
+    pub fn as_ptr(&self) -> NonNull<T> {
+        self.p
+    }
+}
+
+impl<T> core::ops::Deref for PoolBox<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        unsafe { self.p.as_ref() }
+    }
+}
+
+impl<T> Drop for PoolBox<'_, T> {
+    fn drop(&mut self) {
+        unsafe {
+            core::ptr::drop_in_place(self.p.as_ptr());
+            self.pool.free_raw(self.p.cast());
+        }
     }
 }
