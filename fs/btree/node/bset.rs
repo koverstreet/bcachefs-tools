@@ -538,7 +538,7 @@ impl KeysMut<'_> {
         *self.nr = BtreeNrKeys::default();
     }
 
-    pub(super) fn bset_head_mut(&mut self, offset: u16) -> &mut Head<c::bset> {
+    pub(crate) fn bset_head_mut(&mut self, offset: u16) -> &mut Head<c::bset> {
         let len = self.buf.len();
         cast_plain_mut(plain_bytes_mut(&mut self.buf[offset as usize..]))
             .unwrap_or_else(|| panic!("no room for a bset at offset {offset} of a {len} u64 node"))
@@ -666,7 +666,7 @@ impl KeysMut<'_> {
         self.bset_fix_lookup_table(set, where_, clobber_u64s, 0);
     }
 
-    pub(super) fn verify_btree_nr_keys(&self) {
+    pub(crate) fn verify_btree_nr_keys(&self) {
         if cfg!(CONFIG_BCACHEFS_DEBUG) && debug_check_btree_accounting() {
             self.as_keys().__verify_btree_nr_keys(self.nr);
         }

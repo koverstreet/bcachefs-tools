@@ -643,14 +643,7 @@ pub(crate) unsafe fn peek_slot(fs: &Fs, btree: Btree, level: u32, pos: Bpos) -> 
 }
 
 /// Whether the journal deletes @pos, before replay's done.
-///
-/// # Safety
-/// @trans is live.
-#[c_export]
-pub unsafe fn bch2_key_deleted_in_journal(trans: *mut BtreeTrans<'_>, btree: Btree, level: c_uint,
-                                          pos: Bpos) -> bool {
-    // SAFETY: the caller's
-    let trans = unsafe { &*trans };
+pub(crate) fn key_deleted_in_journal(trans: &BtreeTrans<'_>, btree: Btree, level: u32, pos: Bpos) -> bool {
     if !trans.journal_replay_not_finished() {
         return false;
     }
@@ -663,6 +656,14 @@ pub unsafe fn bch2_key_deleted_in_journal(trans: *mut BtreeTrans<'_>, btree: Btr
 
     let k = jk.key(k);
     k.k.p == pos && k.k.key_type() == BkeyType::deleted
+}
+
+/// # Safety
+/// @trans is live.
+#[c_export]
+pub unsafe fn bch2_key_deleted_in_journal(trans: *mut BtreeTrans<'_>, btree: Btree, level: c_uint,
+                                          pos: Bpos) -> bool {
+    key_deleted_in_journal(unsafe { &*trans }, btree, level, pos)
 }
 
 /// The key at @pos overwritten, if the journal has one that isn't - or with

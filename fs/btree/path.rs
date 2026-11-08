@@ -1306,6 +1306,18 @@ impl BtreeTrans<'_> {
         }
     }
 
+    pub(crate) fn verify_paths(&self, paths: &mut Paths<'_>) {
+        if self.verify_iterators() {
+            self.verify_paths_now(paths);
+        }
+    }
+
+    fn verify_paths_now(&self, paths: &mut Paths<'_>) {
+        for idx in self.path_idxs() {
+            self.path_verify_now(paths, idx);
+        }
+    }
+
     pub(crate) fn path_verify_level(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize) {
         if self.verify_iterators() {
             self.path_verify_level_now(paths, idx, level);
@@ -1564,9 +1576,7 @@ pub fn __bch2_btree_trans_too_many_iters(trans: &BtreeTrans<'_>, #[lent(trans)] 
 
 #[c_export]
 pub fn __bch2_trans_verify_paths(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>) {
-    for idx in trans.path_idxs() {
-        trans.path_verify_now(paths, idx);
-    }
+    trans.verify_paths_now(paths);
 }
 
 #[c_export]

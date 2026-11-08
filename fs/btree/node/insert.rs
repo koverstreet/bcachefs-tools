@@ -13,6 +13,7 @@ use super::keys::key_at;
 use super::sort::bch2_maybe_compact_whiteouts;
 use super::BtreeNode;
 use crate::btree::bkey::BkeyI;
+use crate::btree::cache::bch2_btree_node_set_dirty;
 use crate::btree::for_each::lockrestart_do;
 use crate::btree::interior_c::bch2_btree_node_check_topology_msg;
 use crate::btree::iter::BtreeTrans;
@@ -32,7 +33,6 @@ use crate::util::log::LogMsg;
 
 c_extern! {
     fn bch2_push_whiteout(b: *mut BtreeNode, pos: Bpos);
-    fn bch2_btree_node_set_dirty(c: *mut Fs, b: *mut BtreeNode);
 }
 
 impl BtreeNode {

@@ -22,7 +22,7 @@ use crate::prt;
 use crate::util::Printbuf;
 
 impl BtreeTrans<'_> {
-    fn path_at_node(&self, paths: &Paths<'_>, idx: PathIdx, b: &BtreeNode) -> bool {
+    pub(crate) fn path_at_node(&self, paths: &Paths<'_>, idx: PathIdx, b: &BtreeNode) -> bool {
         paths[idx].has_node(b.c.level as usize, &b.c, b.c.lock.six().seq.get())
     }
 

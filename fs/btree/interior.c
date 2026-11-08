@@ -67,8 +67,6 @@ static const char * const bch2_btree_update_modes[] = {
 	NULL
 };
 
-static __cold void bch2_btree_update_to_text(struct printbuf *, struct btree_update *);
-
 static int btree_node_topology_err(struct bch_fs *c, struct btree *b, struct printbuf *out)
 {
 	prt_printf(out, "in parent node:\n");
@@ -1048,7 +1046,7 @@ static CLOSURE_CALLBACK(btree_update_set_nodes_written)
  * We're updating @b with pointers to nodes that haven't finished writing yet:
  * block @b from being written until @as completes
  */
-static void btree_update_updated_node(struct btree_update *as, struct btree *b)
+void btree_update_updated_node(struct btree_update *as, struct btree *b)
 {
 	struct bch_fs *c = as->c;
 
@@ -3669,7 +3667,7 @@ void bch2_btree_root_alloc_fake(struct bch_fs *c, enum btree_id id, unsigned lev
 	lockrestart_do(trans, bch2_btree_root_alloc_fake_trans(trans, id, level));
 }
 
-static __cold void bch2_btree_update_to_text(struct printbuf *out, struct btree_update *as)
+__cold void bch2_btree_update_to_text(struct printbuf *out, struct btree_update *as)
 {
 	prt_printf(out, "%ps: ", (void *) as->ip_started);
 	bch2_trans_commit_flags_to_text(out, as->flags);

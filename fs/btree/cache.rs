@@ -57,6 +57,7 @@ c_extern! {
     pub fn bch2_btree_node_transition_state_locked(bc: *mut c::bch_fs_btree_cache, b: *mut BtreeNode,
                                                    target: c::btree_node_cache_state) -> c_int;
     pub fn bch2_btree_node_write_done_clean(c: *mut Fs, b: *mut BtreeNode);
+    pub fn bch2_btree_node_set_dirty(c: *mut Fs, b: *mut BtreeNode);
 }
 
 impl c::btree_evicted_size {

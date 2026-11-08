@@ -33,10 +33,6 @@ struct btree *__bch2_btree_node_alloc_replacement(struct btree_update *,
 int bch2_btree_split_leaf(struct btree_trans *, btree_path_idx_t,
 			  unsigned, enum bch_trans_commit_flags);
 
-int __bch2_foreground_maybe_merge(struct btree_trans *, btree_path_idx_t,
-				  unsigned, enum bch_trans_commit_flags,
-				  u64 *);
-
 static inline bool btree_node_needs_merge(struct bch_fs *c, struct btree *b, int d)
 {
 	if (static_branch_unlikely(&bch2_btree_node_merging_disabled))

@@ -14,12 +14,15 @@ c_extern! {
     pub fn bch2_btree_node_check_topology_msg(trans: *mut BtreeTrans<'_>, b: *mut BtreeNode,
                                               out: *mut Printbuf) -> c_int;
     pub fn bch2_btree_node_check_topology(trans: *mut BtreeTrans<'_>, b: *mut BtreeNode) -> c_int;
+    pub fn __bch2_foreground_maybe_merge(trans: *mut BtreeTrans<'_>, path: PathIdx, level: c_uint,
+                                         flags: c::bch_trans_commit_flags, merge_count: *mut u64) -> c_int;
 
     pub fn bch2_btree_update_start(trans: *mut BtreeTrans<'_>, path: PathIdx, level_start: c_uint, split: bool,
                                    target: c_uint, commit_flags: c::bch_trans_commit_flags,
                                    write_flags: c::bch_write_flags) -> *mut c::btree_update;
     pub fn bch2_btree_update_free(as_: *mut c::btree_update, trans: *mut BtreeTrans<'_>, bailed: bool);
     pub fn bch2_btree_update_done(as_: *mut c::btree_update, trans: *mut BtreeTrans<'_>);
+    pub fn bch2_btree_update_to_text(out: *mut Printbuf, as_: *mut c::btree_update);
 
     pub fn bch2_btree_node_alloc(as_: *mut c::btree_update, trans: *mut BtreeTrans<'_>,
                                  level: c_uint) -> *mut BtreeNode;
@@ -33,6 +36,7 @@ c_extern! {
     pub fn bch2_btree_update_add_key(nodes: *mut c::btree_update_nodes, level: c_uint, k: *mut c::bkey_i);
     pub fn bch2_btree_set_root(as_: *mut c::btree_update, trans: *mut BtreeTrans<'_>,
                                path: *mut BtreePath, b: *mut BtreeNode);
+    pub fn btree_update_updated_node(as_: *mut c::btree_update, b: *mut BtreeNode);
     pub fn bch2_btree_insert_node(as_: *mut c::btree_update, trans: *mut BtreeTrans<'_>, path: PathIdx,
                                   b: *mut BtreeNode, keys: *mut c::keylist) -> c_int;
 

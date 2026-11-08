@@ -441,6 +441,26 @@ impl BtreeNode {
         !self.flags.need_rewrite() && u64s <= self.keys_u64s_remaining(contents)
     }
 
+    /*
+     * Will a new_key_u64s key fit after we compact @b down to a single sorted
+     * bset? Models __bch2_btree_node_write's space accounting exactly: each bset
+     * write rounds up to block_bytes(c), so a node whose live data rounds up to
+     * fill the entire sector budget is born exhausted post-compact - no room for
+     * a follow-on bset to land the new key, and the insert path will immediately
+     * trigger another btree_split. Caller must split in that case.
+     *
+     * +8 in each term matches the varint::decode_fast() slack the write path
+     * adds before round_up.
+     */
+    pub fn compact_fits(&self, contents: &NodeContents, fs: &Fs, new_key_u64s: usize) -> bool {
+        let sectors = |bytes: usize| (bytes as u64).next_multiple_of(fs.block_bytes()) >> 9;
+
+        let initial  = size_of::<Head<c::btree_node>>() + usize::from(contents.nr.live_u64s) * size_of::<u64>() + 8;
+        let followon = size_of::<Head<c::btree_node_entry>>() + new_key_u64s * size_of::<u64>() + 8;
+
+        sectors(initial) + sectors(followon) <= u64::from(fs.btree_sectors())
+    }
+
     /// Whether, @d u64s from now, it's small enough to merge with a sibling:
     /// btree_node_needs_merge().
     pub fn needs_merge(&self, contents: &NodeContents, fs: &Fs, d: i32) -> bool {
