@@ -8,7 +8,7 @@ use core::sync::atomic::Ordering::{Relaxed, SeqCst};
 use cstruct_macros::c_export;
 use crate::btree::bkey::{self, bkey_validate, BkeyI, BkeyP, BkeySC, BkeyV, ValidateFlags,
                          BKEY_FORMAT_CURRENT, POS_MIN, SPOS_MAX};
-use crate::btree::cache::{bch2_btree_node_set_dirty, btree_ptr_hash_val};
+use crate::btree::cache::btree_ptr_hash_val;
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, Watermark};
@@ -735,7 +735,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
     }
 
     if !b.flags.dirty() {
-        unsafe { bch2_btree_node_set_dirty(fs.as_ptr(), ptr::from_ref(b.node()).cast_mut()) };
+        fs.btree_node_set_dirty(b.node());
     }
 
     for idx in trans.path_idxs() {

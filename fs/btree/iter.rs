@@ -2203,12 +2203,12 @@ impl<'t> BtreeIter<'t> {
 
     /// @k is a key at the iterator's level, above the leaves.
     pub fn prefetch_child(&self, t: &TransAttempt<'_, 't>, k: &BkeyI) -> Result<(), BchError> {
-        let mut paths = t.trans().paths();
-        let path = &mut paths[self.path];
+        let trans = t.trans();
+        let mut paths = trans.paths();
+        let path = &paths[self.path];
         assert!(path.level() != 0, "prefetching below the leaves");
-        let (btree, level) = (path.btree_id(), u32::from(path.level()));
-        let ret = unsafe { c::bch2_btree_node_prefetch(t.raw(), path, k.as_ffi(), btree, level - 1) };
-        t.result(ret)
+        let (btree, level) = (path.btree_id(), path.level() as usize);
+        trans.btree_node_prefetch(&mut paths, Some(self.path), k, btree, level - 1)
     }
 
     /// For an extents iterator: back to the start of the key it's at.

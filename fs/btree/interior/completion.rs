@@ -9,7 +9,7 @@ use core::ffi::c_int;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::Relaxed;
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut};
-use crate::btree::cache::{bch2_btree_node_set_dirty, bch2_btree_node_wait_on_flag, btree_ptr_hash_val};
+use crate::btree::cache::{bch2_btree_node_wait_on_flag, btree_ptr_hash_val};
 use crate::btree::for_each::lockrestart_do;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
@@ -99,7 +99,7 @@ impl InteriorUpdate<'_> {
             n.flags.set_will_make_reachable(true);
         }
 
-        unsafe { bch2_btree_node_set_dirty(fs.as_ptr(), ptr::from_ref(&**n).cast_mut()) };
+        fs.btree_node_set_dirty(n);
         n.flags.set_need_write(true);
 
         {

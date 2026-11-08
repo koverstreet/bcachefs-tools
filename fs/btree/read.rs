@@ -15,7 +15,6 @@ use crate::btree::node::sort::{bch2_btree_build_aux_trees, SortRuns};
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::btree::path::Paths;
 use crate::btree::trans::BtreeTrans;
-use crate::btree::traverse::bch2_btree_cache_cannibalize_lock;
 use crate::btree::validate::{btree_err_on, btree_node_bkey_val_validate, node_btree, validate_bset,
                              validate_bset_keys, ErrAt, NodeIo, NodeValidate};
 use crate::btree::write::trans_submit_write_bios;
@@ -27,7 +26,7 @@ use crate::data::ptrs::BkeyVRead;
 use crate::data::update::dev_ptr_bit;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::{async_objs, trace::events};
-use crate::errcode::{blk_status_to_bch_err, errptr_to_result, BchError};
+use crate::errcode::{blk_status_to_bch_err, BchError};
 use crate::format::{BkeyType, BkeyTypeFlags, Btree, BtreeFlags, DataType, Nonce};
 use crate::fs::{Dev, Fs, WriteRef};
 use crate::init::{damage::note_lost_extents, error::id, passes::RecoveryPass, recovery::btree_lost_data};
@@ -46,12 +45,12 @@ use crate::util::workqueue::{run_raw, RawWork};
 use crate::util::{alloc::init_at, backref::BackRef, closure::StackClosure, printbuf::Msg, refcount::TryRefcount};
 use crate::util::{sleep::Sleep, time_stats::TimeStats, Printbuf, ToText};
 use crate::{fs_fatal_error, log_msg_ratelimited, prt};
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use core::mem::offset_of;
 use core::ops::{ControlFlow, Range};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{fence, Ordering::{Relaxed, SeqCst}};
-use cstruct_macros::{c_export, c_extern};
+use cstruct_macros::c_export;
 use pin_init::stack_pin_init;
 
 #[repr(C)]
@@ -67,10 +66,6 @@ pub struct BtreeReadBio {
     bio:        c::bio,
 }
 crate::has_bio!(BtreeReadBio, bio);
-
-c_extern! {
-    pub fn bch2_btree_flush_all_reads(c: *mut Fs) -> bool;
-}
 
 impl c::bset__head {
     /// The nonce of this bset, at byte @offset of its btree node: the offset,
@@ -288,7 +283,7 @@ const NODE_BYTES: usize = size_of::<Head<c::btree_node>>();
 const FITS: &str = "a bset inside the node, checked against its end";
 
 fn node_header_to_text(out: &mut Printbuf, bn: &Head<c::btree_node>) {
-    unsafe { bch2_btree_id_level_to_text(out.as_raw(), Btree(node_btree(bn)), bn.level() as c_uint) };
+    bch2_btree_id_level_to_text(out, Btree(node_btree(bn)), bn.level() as c_uint);
     prt!(out, " seq {:x} {}\n", bn.keys.seq.get(), bn.seq());
     prt!(out, "min: {}\n", bn.min_key);
     prt!(out, "max: {}", bn.max_key);
@@ -936,40 +931,31 @@ pub fn node_read(trans: &BtreeTrans<'_>, b: &BtreeNode, sync: bool) {
     }
 }
 
-c_extern! {
-    fn bch2_btree_cache_cannibalize_unlock(trans: *mut BtreeTrans<'_>);
-    pub(crate) fn bch2_btree_node_mem_alloc(trans: *mut BtreeTrans<'_>, pcpu_read_locks: bool) -> *mut BtreeNode;
-    pub(crate) fn bch2_btree_node_transition_state(bc: *mut c::bch_fs_btree_cache, b: *mut BtreeNode,
-                                                   target: c::btree_node_cache_state) -> c_int;
-}
-
 impl Fs {
     pub fn btree_root_read(&self, id: Btree, k: &BkeyI, level: u32) -> Result<(), BchError> {
         let trans = crate::btree_trans!(self);
-        let bc = (&raw const self.btree.cache).cast_mut();
 
         stack_pin_init!(let cl = StackClosure::new());
         loop {
-            let ret = unsafe { bch2_btree_cache_cannibalize_lock(trans.raw(), cl.as_ptr()) };
+            let ret = trans.btree_cache_cannibalize_lock(NonNull::new(cl.as_ptr()));
             cl.sync();
-            if ret == 0 {
+            if ret.is_ok() {
                 break;
             }
         }
 
-        let b = unsafe { bch2_btree_node_mem_alloc(trans.raw(), level != 0) };
-        unsafe { bch2_btree_cache_cannibalize_unlock(trans.raw()) };
+        let b = trans.btree_node_mem_alloc(&mut trans.paths(), level != 0);
+        trans.btree_cache_cannibalize_unlock();
 
-        let b = errptr_to_result(NonNull::new(b).expect("btree_node_mem_alloc() returns a node or an error"))
-            .unwrap_or_else(|e| panic!("allocating a btree root's node: {e}"));
+        let b = b.unwrap_or_else(|e| panic!("allocating a btree root's node: {e}"));
         let b = unsafe { &mut *b.as_ptr() };
 
         unsafe { b.contents_mut() }.set_key(k);
         b.c.level    = level as u8;
         b.c.btree_id = id.0 as u8;
         let b = &*b;
-        assert!(unsafe { bch2_btree_node_transition_state(bc, ptr::from_ref(b).cast_mut(),
-                                                          c::btree_node_cache_state::BTREE_NODE_CACHE_CLEAN) } == 0);
+        self.btree_node_transition_state(b, c::btree_node_cache_state::BTREE_NODE_CACHE_CLEAN)
+            .unwrap_or_else(|e| panic!("hashing a btree root's node: {e}"));
 
         b.flags.set_read_in_flight(true);
 
@@ -978,8 +964,7 @@ impl Fs {
         node_read(&trans, b, true);
 
         let ret = if b.flags.read_error() {
-            unsafe { bch2_btree_node_transition_state(bc, ptr::from_ref(b).cast_mut(),
-                                                      c::btree_node_cache_state::BTREE_NODE_CACHE_FREEABLE) };
+            let _ = self.btree_node_transition_state(b, c::btree_node_cache_state::BTREE_NODE_CACHE_FREEABLE);
             Err(self.err(c::bch_errcode::BCH_ERR_btree_node_read_error))
         } else {
             self.btree_set_root_for_read(b);
@@ -1047,7 +1032,7 @@ impl<'f> ReplicaRead<'f> {
             let ca: &Dev = &self.ca;
             let mut msg = Printbuf::new();
             prt!(&mut msg, "btree node scrub: bad replica on {ca}{action}:\n");
-            unsafe { __bch2_btree_pos_to_text(msg.as_raw(), fs.as_ptr(), key.btree, key.level, k.into()) };
+            __bch2_btree_pos_to_text(&mut msg, fs, key.btree, key.level, k);
             prt!(&mut msg, "\n{}", err.as_str());
             crate::bch_err_ratelimited!(fs, "{}", msg.as_str());
         }

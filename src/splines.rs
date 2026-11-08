@@ -189,7 +189,7 @@ static SPLINES: &[&[&str]] = &[
     &["bcachefs - harder than dried bonito!"],
 
     // btree_node_cannibalize() is the real name of a real function
-    // (fs/btree/cache.c:917), and there is a real cannibalize lock
+    // (fs/btree/cache/alloc.rs), and there is a real cannibalize lock
     // serialising it, because two threads eating the cache at once
     // deadlock. A stranger assumes we made the word up for the splash.
     &["Cannibalizing the btree cache",

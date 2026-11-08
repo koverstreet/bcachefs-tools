@@ -11,7 +11,7 @@ use cstruct_macros::c_export;
 
 use crate::btree::bkey::{BkeyI, BkeyV, POS_MIN, SPOS_MAX};
 use crate::init::error::BkeyValidate;
-use crate::btree::cache::{__bch2_btree_node_mem_alloc, bch2_btree_node_data_free, bch2_btree_node_mem_free};
+use crate::btree::cache::{node_data_free, node_scratch_alloc, node_struct_free};
 use crate::btree::journal_overlay;
 use crate::btree::node::BtreeNode;
 use crate::btree::read::read_done;
@@ -146,15 +146,13 @@ fn dump_nodes(fs: &Fs, what: &str, nodes: &[FoundBtreeNode]) -> bool {
     true
 }
 
-struct NodeBuf<'f> {
-    fs: &'f Fs,
-    b:  NonNull<BtreeNode>,
+struct NodeBuf {
+    b: NonNull<BtreeNode>,
 }
 
-impl<'f> NodeBuf<'f> {
-    fn alloc(fs: &'f Fs) -> Option<Self> {
-        let b = NonNull::new(unsafe { __bch2_btree_node_mem_alloc(fs.as_ptr()) })?;
-        Some(NodeBuf { fs, b })
+impl NodeBuf {
+    fn alloc(fs: &Fs) -> Option<Self> {
+        Some(NodeBuf { b: node_scratch_alloc(fs)? })
     }
 
     fn node(&mut self) -> &mut BtreeNode {
@@ -166,11 +164,11 @@ impl<'f> NodeBuf<'f> {
     }
 }
 
-impl Drop for NodeBuf<'_> {
+impl Drop for NodeBuf {
     fn drop(&mut self) {
         unsafe {
-            bch2_btree_node_data_free(self.b.as_ptr());
-            bch2_btree_node_mem_free(self.fs.as_ptr(), self.b.as_ptr());
+            node_data_free(self.b);
+            node_struct_free(self.b);
         }
     }
 }
@@ -178,7 +176,7 @@ impl Drop for NodeBuf<'_> {
 struct DevScan<'f> {
     fs:  &'f Fs,
     ca:  &'f Dev,
-    buf: NodeBuf<'f>,
+    buf: NodeBuf,
     bio: BioBox<Bio>,
 }
 

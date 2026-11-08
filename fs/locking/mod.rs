@@ -55,9 +55,10 @@ pub(crate) use raw::rust_spin_lock_init;
 pub use lock::{Exclusive, ExclusiveGuard, Locked, LockedBy, RawLock, RawLockBase, RawNestedLock, RawReadLock, RawRwLock, RawSixLock, RawTimedLock, RawTryLock, RawTryReadLock, Shared, SharedGuard,
               SixIntent, SixWrite, SixWriteIntent, Unlock};
 pub use noio::{mutex_noio, percpu_rwsem_noio, Memalloc, MemallocFlags, MutexNoio, Noio, PercpuRwsemNoio};
-pub(crate) use noio::{memalloc_flags_restore, memalloc_flags_save, PF_MEMALLOC_NOIO};
+pub(crate) use noio::{memalloc_flags_restore, memalloc_flags_save, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM,
+                      PF_MEMALLOC_NOWARN};
 #[cfg(kernel)]
-pub(crate) use noio::{memalloc_flags, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
+pub(crate) use noio::memalloc_flags;
 pub(crate) use raw::rust_six_lockdep_set_notrack_class;
 pub use seqlock::SeqLock;
 pub use spinlock::SpinLock;

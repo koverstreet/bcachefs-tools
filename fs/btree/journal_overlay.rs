@@ -880,10 +880,9 @@ impl c::btree_and_journal_iter {
             // SAFETY: a key from the iterator, valid until it moves
             tmp.reassemble(unsafe { BkeySC::from_c(&k) });
             // SAFETY: the iterator's transaction
-            unsafe {
-                c::bch2_btree_node_prefetch(iter.trans, ptr::null_mut(), AsRef::<BkeyI>::as_ref(&tmp).as_ffi(),
-                                            iter.journal.btree_id, level - 1);
-            }
+            let trans = unsafe { &*iter.trans };
+            let _ = trans.btree_node_prefetch(&mut trans.paths(), None, tmp.as_ref(), iter.journal.btree_id,
+                                              level as usize - 1);
         }
     }
 

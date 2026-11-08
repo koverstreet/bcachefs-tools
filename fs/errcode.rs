@@ -666,6 +666,8 @@ c_xmacro! {
         (EBUSY, EBUSY_journal_bucket_retire_rw, 631),
         (EBUSY, EBUSY_journal_bucket_retire_no_space, 632),
         (ENOMEM, ENOMEM_inode_cache_insert, 633),
+        (ENOMEM, ENOMEM_btree_node_cache_insert, 634),
+        (EEXIST, EEXIST_btree_node_cache_insert, 635),
     }
 }
 

@@ -12,7 +12,8 @@ use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
 use crate::errcode::bch_errcode;
 use crate::errcode::BchError;
-use crate::locking::{ExclusiveGuard, Locked, LockedBy};
+use crate::locking::{ExclusiveGuard, Locked, LockedBy, Memalloc, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM,
+                     PF_MEMALLOC_NOWARN};
 use crate::util::alloc::{DArrayLoan, KVVec, Kmalloc};
 use crate::util::bio::{BioSet, Either};
 use crate::util::late::Late;
@@ -27,6 +28,7 @@ use crate::new_lock;
 use crate::util::projections::Volatile;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::percpu::PerCpu;
+use crate::util::shrinker::Shrinker;
 use core::cell::Cell;
 use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::NonNull;
@@ -61,7 +63,7 @@ pub struct btree_bkey_cached_common {
  * Membership state of a struct btree in the btree node cache.
  *
  * Stored in b->cache_state and maintained by bch2_btree_node_transition_state().
- * See the DOC block at the top of btree/cache.c for the state machine and
+ * See DOC(btree-node-cache), in btree/cache/mod.rs, for the state machine and
  * the bookkeeping each state implies.
  */
 c_enum! {
@@ -113,14 +115,33 @@ pub type BtreeNodeList = crate::list!(BtreeNode, list);
 #[repr(C)]
 #[derive(CStruct)]
 pub struct btree_cache_list {
-    pub idx: c_uint,
-    pub shrink: *mut cs::shrinker,
     #[c("struct list_head clean")]
     pub clean: BtreeNodeList,
     #[c("struct list_head dirty")]
     pub dirty: BtreeNodeList,
 }
 c_default!(btree_cache_list);
+
+/// live[idx]'s shrinker: not bc->lock's, as the lists are - the shrinker
+/// runs without it.
+#[placed(cs::bch_fs_btree_cache.shrinkers[], index = idx: u32)]
+#[pin_data]
+#[repr(C)]
+#[derive(CStruct, Init)]
+pub struct btree_cache_shrinker {
+    #[c("struct shrinker *shrink")]
+    pub(crate) shrink: Shrinker<Self>,
+}
+
+/// A node's buffers, allocated before the node they're for: its data and
+/// aux_data, for a node of 1 << byte_order bytes.
+#[repr(C)]
+#[derive(CStruct)]
+pub struct btree_node_bufs {
+    pub data:       *mut core::ffi::c_void,
+    pub aux_data:   *mut core::ffi::c_void,
+    pub byte_order: c_uint,
+}
 
 /* On disk root - see async splits: */
 #[repr(C)]
@@ -221,7 +242,7 @@ impl BtreeRootsLive {
 }
 
 /// bc->lock's: the live lists - unpinned and pinned - the freeable and freed
-/// lists, and the counts.
+/// lists, the counts, and the window of nodes pinned.
 #[repr(C)]
 #[derive(CStruct)]
 pub struct BtreeCacheLists {
@@ -237,7 +258,25 @@ pub struct BtreeCacheLists {
     pub nr_freeable: usize,
     pub nr_reserve: usize,
     pub nr_by_btree: [usize; cs::BTREE_ID_NR as usize],
+
+    pub pinned_nodes_start: cs::bbpos,
+    pub pinned_nodes_end: cs::bbpos,
+    /* btree id mask: 0 for leaves, 1 for interior */
+    pub pinned_nodes_mask: [u64; 2],
+
+    /* shrinker stats */
+    pub nr_freed: usize,
+    pub nr_requested: usize,
+    pub not_freed: [u64; cs::BCH_BTREE_CACHE_NOT_FREED_REASONS_NR as usize],
 }
+
+/// bc->lock: its holder never enters reclaim, which would take it again
+/// through the node cache's shrinker. NOIO too, for the kernel's own
+/// allocations, which don't know NORECLAIM.
+pub(crate) type BtreeCacheMutex = Memalloc<cs::mutex, { PF_MEMALLOC_NOIO | PF_MEMALLOC_NORECLAIM | PF_MEMALLOC_NOWARN }>;
+
+/// bc->lock, held.
+pub type BtreeCacheGuard<'a> = ExclusiveGuard<'a, BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive>;
 
 crate::published! {
     /// A live list's nodes, clean and dirty: changed with its list, read
@@ -266,6 +305,7 @@ impl BtreeCacheLive {
     }
 }
 
+#[placed(cs::bch_fs_btree.cache)]
 #[pin_data]
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init)]
@@ -275,8 +315,9 @@ pub struct bch_fs_btree_cache {
     #[c_lock("struct mutex root_lock")]
     pub roots: Locked<cs::mutex, BtreeRoots, BtreeRootsLive>,
 
-    pub table: cs::rhashtable,
-    pub table_init_done: bool,
+    #[pin]
+    #[init(RustOnly::new(::pin_init::init_zeroed()))]
+    pub(crate) table: rust_only!(crate::btree::cache::NodeTable),
     /*
      * We never free a struct btree, except on shutdown - we just put it on
      * the btree_cache_freed list and reuse it later. This simplifies the
@@ -292,8 +333,18 @@ pub struct bch_fs_btree_cache {
      */
     #[pin]
     #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&bc->lock"))]
-    #[c_lock("struct mutex_noio lock")]
-    pub lock: Locked<cs::mutex_noio, BtreeCacheLists, BtreeCacheLive>,
+    #[c_lock("struct mutex lock")]
+    pub lock: Locked<BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive>,
+    #[pin]
+    pub shrinkers: [cs::btree_cache_shrinker; 2],
+
+    /*
+     * Every struct btree the cache has, whatever its state: to walk them all
+     * without bc->lock. A node keeps its slot until it's freed, at exit, so a
+     * walk can drop RCU and pick up from where it was. Node scan's buffers
+     * aren't the cache's, and are freed while we run: they're not on it.
+     */
+    pub nodes: cs::fast_list,
 
     /* Number of nodes with BTREE_NODE_write_in_flight set. */
     pub nr_in_flight: AtomicIsize,
@@ -302,11 +353,6 @@ pub struct bch_fs_btree_cache {
     pub __should_throttle_align: CacheAligned,
     #[c("bool should_throttle")]
     pub should_throttle: AtomicBool,
-
-    /* shrinker stats */
-    pub nr_freed: usize,
-    pub nr_requested: usize,
-    pub not_freed: [u64; cs::BCH_BTREE_CACHE_NOT_FREED_REASONS_NR as usize],
 
     /*
      * Times the allocator hit the memory-pressure self reclaim path:
@@ -322,13 +368,9 @@ pub struct bch_fs_btree_cache {
      * to satisfy the allocation - lock to guarantee only one thread does
      * this at a time:
      */
-    pub alloc_lock: *mut cs::task_struct,
+    #[c("struct task_struct *alloc_lock")]
+    pub alloc_lock: core::sync::atomic::AtomicPtr<cs::task_struct>,
     pub alloc_wait: cs::closure_waitlist,
-
-    pub pinned_nodes_start: cs::bbpos,
-    pub pinned_nodes_end: cs::bbpos,
-    /* btree id mask: 0 for leaves, 1 for interior */
-    pub pinned_nodes_mask: [u64; 2],
 }
 
 /* Iterator, update, and trigger flags: */
@@ -1096,7 +1138,6 @@ pub struct bch_fs_btree {
     pub root_journal_res: cs::journal_entry_res,
 
     #[pin]
-    #[init(cs::bch_fs_btree_cache::init())]
     pub cache: cs::bch_fs_btree_cache,
     pub evicted_size: cs::btree_evicted_size,
     pub key_cache: cs::bch_fs_btree_key_cache,

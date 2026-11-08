@@ -35,7 +35,7 @@ use crate::util::Printbuf;
 use core::sync::atomic::{fence, Ordering::{Acquire, Relaxed}};
 use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::{self, NonNull};
-use cstruct_macros::{c_enum, c_export, c_extern};
+use cstruct_macros::{c_enum, c_export};
 
 /* DOC_LATEX(btree-locking)
  *
@@ -223,10 +223,6 @@ impl BtreeTrans<'_> {
 
         memalloc_flags_restore(PF_MEMALLOC_NOIO, if self.pf_memalloc_noio() { PF_MEMALLOC_NOIO } else { 0 });
     }
-}
-
-c_extern! {
-    pub fn bch2_btree_cache_cannibalize_unlock(trans: *mut BtreeTrans<'_>);
 }
 
 pub(crate) fn btree_node_pos(b: &c::btree_bkey_cached_common) -> Bpos {
@@ -1032,7 +1028,7 @@ impl BtreeTrans<'_> {
          * callers that need it after a wake re-acquire normally.
          */
         if self.btree_cache_cannibalize_locked() {
-            unsafe { bch2_btree_cache_cannibalize_unlock(self.raw()) };
+            self.btree_cache_cannibalize_unlock();
         }
     }
 

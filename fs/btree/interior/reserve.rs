@@ -11,20 +11,17 @@ use crate::alloc::capacity::DiskReservation;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeySC, BkeyV, BkeyVMut};
 use crate::btree::iter::CommitOpts;
-use crate::btree::locking::bch2_btree_cache_cannibalize_unlock;
 use crate::btree::node::BtreeNode;
 use crate::btree::node::bset::bch2_bset_init_first;
 use crate::btree::node::sort::{bch2_btree_build_aux_trees, bch2_btree_sort_into};
 use crate::btree::path::{LockedNode, PathIdx, Paths};
-use crate::btree::read::{bch2_btree_node_mem_alloc, bch2_btree_node_transition_state};
-use crate::btree::traverse::bch2_btree_cache_cannibalize_lock;
 use crate::c;
 use crate::data::durability::BkeyVDurability;
 use crate::data::keylist::KeyRoom;
 use crate::data::ptrs::{BkeyVPtrs, BtreePtrs};
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, errptr_to_result, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::{POS_MIN, SPOS_MAX};
 use crate::format::{BkeyType, Bpos, DataType};
 use crate::fs::{writepoint_ptr, Fs};
@@ -65,12 +62,6 @@ fn node_free(fs: &Fs, b: &BtreeNode) {
 
     b.flags.set_permanent(false);
     b.flags.set_noevict(false);
-}
-
-fn transition_state(fs: &Fs, b: &BtreeNode, state: c::btree_node_cache_state) -> core::ffi::c_int {
-    unsafe {
-        bch2_btree_node_transition_state((&raw const fs.btree.cache).cast_mut(), ptr::from_ref(b).cast_mut(), state)
-    }
 }
 
 /// A new node's range: its key's, and its data's.
@@ -200,7 +191,7 @@ impl InteriorUpdate<'_> {
          * Protects reaping from the btree node cache and using the btree node
          * open bucket reserve:
          */
-        ret_to_result_void(unsafe { bch2_btree_cache_cannibalize_lock(trans.raw(), req.cl) })?;
+        trans.btree_cache_cannibalize_lock(NonNull::new(req.cl))?;
 
         let ret = (|| {
             for (interior, &nr) in nr_nodes.iter().enumerate() {
@@ -212,7 +203,7 @@ impl InteriorUpdate<'_> {
             Ok(())
         })();
 
-        unsafe { bch2_btree_cache_cannibalize_unlock(trans.raw()) };
+        trans.btree_cache_cannibalize_unlock();
         ret
     }
 
@@ -220,8 +211,7 @@ impl InteriorUpdate<'_> {
         let trans = self.trans;
         let fs = self.fs();
 
-        let b = errptr_to_result(NonNull::new(unsafe { bch2_btree_node_mem_alloc(trans.raw(), interior) })
-            .expect("btree_node_mem_alloc() returns a node or an error"))?;
+        let b = trans.btree_node_mem_alloc(&mut trans.paths(), interior)?;
         let n = unsafe { b.as_ref() };
         let mut ob = c::open_buckets::default();
 
@@ -277,7 +267,7 @@ impl InteriorUpdate<'_> {
          * Consumers can use them without any lock-take at pop time.
          */
         if let Err(e) = ret {
-            transition_state(fs, n, c::btree_node_cache_state::BTREE_NODE_CACHE_FREEABLE);
+            let _ = fs.btree_node_transition_state(n, c::btree_node_cache_state::BTREE_NODE_CACHE_FREEABLE);
             unsafe {
                 six_unlock_ip(n.c.lock.six(), c::six_lock_type::SIX_LOCK_write, crate::ret_ip!());
                 six_unlock_ip(n.c.lock.six(), c::six_lock_type::SIX_LOCK_intent, crate::ret_ip!());
@@ -341,7 +331,8 @@ impl InteriorUpdate<'_> {
 
         bch2_btree_build_aux_trees(n);
 
-        assert!(transition_state(fs, n, n.live_state()) == 0, "a new node's transition to live");
+        fs.btree_node_transition_state(n, n.live_state())
+            .unwrap_or_else(|e| panic!("a new node's transition to live: {e}"));
 
         fs.event_inc_trace(events::btree_node_alloc, |out| prt!(out, "{}", n.pos_to_text(fs)));
         fs.io_clock[WRITE].increment(fs.btree_sectors().into());
@@ -447,7 +438,7 @@ impl InteriorUpdate<'_> {
 
         node_free(fs, &b);
 
-        transition_state(fs, &b, c::btree_node_cache_state::BTREE_NODE_CACHE_FREEABLE);
+        let _ = fs.btree_node_transition_state(&b, c::btree_node_cache_state::BTREE_NODE_CACHE_FREEABLE);
         self.trans.node_forget(paths, &b);
     }
 }
@@ -484,7 +475,7 @@ impl BtreeUpdate {
 
                 b.flags.set_need_write(false);
                 node_free(fs, b);
-                transition_state(fs, b, c::btree_node_cache_state::BTREE_NODE_CACHE_FREEABLE);
+                let _ = fs.btree_node_transition_state(b, c::btree_node_cache_state::BTREE_NODE_CACHE_FREEABLE);
             } else {
                 assert!(r.ob.nr == 0, "a node taken from the reserve, kept but never written");
             }

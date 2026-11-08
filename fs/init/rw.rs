@@ -21,7 +21,6 @@ use crate::init::passes::RecoveryPass;
 use crate::accounting::verify_accounting_clean;
 use crate::alloc::capacity::recalc_capacity;
 use crate::btree::cache::bch2_fs_btree_init_rw;
-use crate::btree::write::bch2_btree_flush_all_writes;
 use crate::c;
 use crate::c::bch_fs_flags as Flag;
 use crate::c::journal_flags as Journal;
@@ -69,7 +68,7 @@ impl Fs {
                 c::bch2_btree_key_cache_flush_going_ro(p) != 0 ||
                 self.btree_interior_updates_flush() ||
                 self.journal_flush_all_pins() ||
-                bch2_btree_flush_all_writes(p)
+                self.btree_flush_all_writes()
             };
             if progress || seq != self.journal_cur_seq() {
                 seq = self.journal_cur_seq();

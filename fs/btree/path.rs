@@ -1226,7 +1226,7 @@ impl BtreePath {
              if self.preserve() { 'P' } else { ' ' },
              if self.should_be_locked() { 'S' } else { ' ' },
              if self.cached() { 'C' } else { 'B' });
-        unsafe { bch2_btree_id_level_to_text(out, self.btree_id(), self.level().into()) };
+        bch2_btree_id_level_to_text(out, self.btree_id(), self.level().into());
         prt!(out, " pos {}", self.pos);
 
         if let Some(b) = self.locked_btree_node(self.level() as usize) {

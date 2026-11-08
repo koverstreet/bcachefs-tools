@@ -10,7 +10,6 @@
 
 use core::convert::Infallible;
 use core::ffi::{c_int, CStr};
-use core::mem::offset_of;
 use core::ops::ControlFlow;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, Ordering};
@@ -25,7 +24,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::debugfs::{self, DebugFile, DebugOut};
-use crate::data_structures::{eytzinger::Eytzinger0, rhashtable};
+use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::place::Contained;
 use crate::util::{rcu, Printbuf};
 use crate::{btree_trans, prt, SPOS_MAX};
@@ -157,7 +156,8 @@ impl DebugFile for BfloatFailed {
 
 #[derive(Default)]
 struct CachedBtreeNodes {
-    bucket: usize,
+    /* the slot in bc->nodes to go on from */
+    idx: usize,
 }
 
 
@@ -195,19 +195,14 @@ impl DebugFile for CachedBtreeNodes {
     fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
         out.print_each(|out| {
             let rcu = rcu::read_lock();
-            // SAFETY: a struct btree isn't freed while the cache is up, only
-            // reused, so a chain reaches btrees - if not the ones it did
-            let table = unsafe {
-                rhashtable::read::<BtreeNode>(&fs.btree.cache.table, offset_of!(BtreeNode, hash), &rcu)
-            };
-            if self.bucket >= table.nr_buckets() {
-                return Ok(false);
-            }
+            // a struct btree isn't freed while the cache is up, only reused
+            let next = fs.btree.cache.nodes.items_from(self.idx, &rcu)
+                .map(|(i, b)| (i, unsafe { b.cast::<BtreeNode>().as_ref() }))
+                .find(|(_, b)| unsafe { (&raw const b.hash_val).read_volatile() } != 0);
+            let Some((i, b)) = next else { return Ok(false) };
 
-            for b in table.bucket(self.bucket) {
-                cached_btree_node_to_text(out, fs, b);
-            }
-            self.bucket += 1;
+            cached_btree_node_to_text(out, fs, b);
+            self.idx = i + 1;
             Ok(true)
         })
     }

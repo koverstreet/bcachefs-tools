@@ -27,7 +27,8 @@ const KERNEL_HEADERS: &[&str] = &[
     "crypto/sha2.h",			// sha256(), siphash_old's string hash key
     "linux/anon_inodes.h",		// anon_inode_getfile(), util/file's NewFile
     "linux/hash.h",			// GOLDEN_RATIO_64, util/hash.rs's hash_64()
-    "linux/mm.h",			// totalram_pages(), a backpointer scan's batch limit
+    "linux/mm.h",			// totalram_pages(), a backpointer scan's batch limit;
+					// si_mem_available(), the node cache's memory pressure
     "linux/mount.h",			// mnt_want_write_file(), vfs/ioctl.rs's
     "linux/statfs.h",			// struct kstatfs, uuid_to_fsid(): vfs/super_block.rs's statfs
     "linux/fileattr.h",			// struct file_kattr, fileattr_fill_xflags(): vfs/attr.rs's
@@ -57,6 +58,8 @@ const KERNEL_HEADERS: &[&str] = &[
 					// util/bio/user_pages.rs's - static inlines
     "linux/task_io_accounting_ops.h",	// task_io_account_write(): vfs/direct_write.rs's
     "linux/kthread.h",			// kthread_use_mm(): an async DIO write's continuation
+    "linux/swap.h",			// mm_account_reclaimed_pages(): btree/cache.rs's node buffers
+    "linux/vmalloc.h",			// __vmalloc_noprof(): the same
 ];
 
 /// Headers under fs/ bound, by path - which the clang args have as an -I:
@@ -112,6 +115,8 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/bio.h",
     "linux/task_io_accounting_ops.h",
     "linux/kthread.h",
+    "linux/swap.h",
+    "linux/vmalloc.h",
     "linux/writeback.h",
     "linux/pagemap.h",
     "linux/pagevec.h",			// struct folio_batch, before 7.1
@@ -149,7 +154,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "rust_page_highmem", "rust_page_address", "rust_is_sync",
     "rust_poll_wait", "rust_fault_in_writeable",
     "rust_fault_in_readable", "rust_filemap_write_and_wait_range", "rust_filemap_flush",
-    "totalram_pages", "set_freezable", "freezing", "try_to_freeze",
+    "totalram_pages", "si_mem_available", "set_freezable", "freezing", "try_to_freeze",
     "bio_set_dev", "bio_iov_vecs_to_alloc", "bio_release_pages",
     // data/write.rs
     "bio_split", "bio_inc_remaining",
@@ -208,6 +213,8 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     // vfs/vfs_inode.rs, a new inode's: a static inline, and the exports
     "mapping_set_folio_min_order", "inode_init_once", "inode_init_always_gfp", "make_bad_inode",
     "init_special_inode", "inode_nohighmem", "igrab", "write_inode_now",
+    // btree/cache.rs's node buffers
+    "mm_account_reclaimed_pages", "__vmalloc_noprof",
     // vfs/vfs_inode.rs, an evicted inode's: a static inline from 6.19, and the exports
     "inode_state_read_once", "is_bad_inode", "truncate_inode_pages_final", "d_mark_dontcache",
     "clear_inode",

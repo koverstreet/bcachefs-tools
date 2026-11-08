@@ -2,7 +2,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_validate, BkeyS, BkeySC, ValidateFlags, BKEY_U64S};
-use crate::btree::cache::Bounce;
+use crate::btree::cache::{bch2_btree_node_wait_on_flag, Bounce};
 use crate::btree::iter::{lockrestart_do, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt, Watermark};
 use crate::btree::node::sort::{
     bch2_btree_build_aux_trees, bch2_btree_node_compact, bch2_btree_node_set_needs_whiteout,
@@ -22,6 +22,7 @@ use crate::cstructs::c::{BtreeNodeFlags, BtreeWriteType};
 use crate::data::keylist::PaddedKey;
 use crate::data::ptrs::{Ptrs, PtrsMut};
 use crate::data::write::{submit_wbio_replicas, to_wbio, wbio_init};
+use crate::data_structures::list::Walk;
 use crate::debug::async_objs;
 use crate::debug::trace::events;
 use crate::errcode::BchError;
@@ -39,13 +40,13 @@ use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::{cast_plain_mut, cast_plain_slice_mut, plain_bytes, Head, Unvalidated};
 use crate::util::workqueue::{run_raw, RawWork};
 use crate::util::names::Names;
-use crate::util::{HumanReadable, Printbuf};
+use crate::util::{rcu, HumanReadable, Printbuf};
 use crate::{fs_fatal_error, fs_inconsistent, log_msg_ratelimited, prt};
 use core::ffi::c_uint;
 use core::mem::offset_of;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{fence, Ordering::{Acquire, Relaxed, SeqCst}};
-use cstruct_macros::{c_enum, c_export, c_extern};
+use cstruct_macros::{c_enum, c_export};
 
 #[repr(C)]
 pub struct BtreeWriteBio {
@@ -70,10 +71,6 @@ c_enum! {
         only_if_need = cs::BTREE_WRITE_TYPE_BITS,
         already_started,
     }
-}
-
-c_extern! {
-    pub fn bch2_btree_flush_all_writes(c: *mut Fs) -> bool;
 }
 
 const HEADER: &str = "a btree node or node entry header, in its write's buffer";
@@ -362,7 +359,7 @@ pub fn __bch2_btree_node_write(trans: &BtreeTrans<'_>, b: &BtreeNode, flags: c_u
     node_write(trans, b, ty, flags)
 }
 
-fn node_write(trans: &BtreeTrans<'_>, b: &BtreeNode, mut ty: BtreeWriteType, flags: BtreeWriteFlags) {
+pub(crate) fn node_write(trans: &BtreeTrans<'_>, b: &BtreeNode, mut ty: BtreeWriteType, flags: BtreeWriteFlags) {
     let fs = trans.fs();
     let start_time = local_clock();
 
@@ -849,26 +846,63 @@ impl Fs {
      * and so no new writes are submitted concurrently.
      */
     pub fn btree_cancel_all_writes(&self) {
-        let bc = &self.btree.cache;
-
-        if !bc.table_init_done {
-            return;
-        }
-
         {
-            let mut lists = bc.lock.lock();
+            let mut lists = self.btree.cache.lock.lock();
             for i in 0..lists.live.len() {
-                let dirty = unsafe { &mut *(&raw mut lists.live[i].dirty) };
-                let mut cur = dirty.cursor_mut();
-                while let Some(b) = cur.current() {
-                    cur.move_next();
+                let mut walk = unsafe { Walk::new(&mut lists, |l| &mut l.live[i].dirty) };
+                while let Some((lists, b)) = walk.next() {
                     b.flags.set_dirty(false);
-                    let _ = bc.transition_state_locked(&mut lists, b, b.live_state());
+                    let _ = self.btree_node_transition_state_locked(lists, b, b.live_state());
                 }
             }
         }
 
-        unsafe { bch2_btree_flush_all_writes(self.as_ptr()) };
+        self.btree_flush_all_writes();
+    }
+
+    /// Every node's @flag - a read or a write in flight - waited out: whether
+    /// there were any.
+    fn btree_flush_all(&self, flag: c::btree_flags) -> bool {
+        let nodes = &self.btree.cache.nodes;
+        let m = 1 << flag as u32;
+        let mut ret = false;
+        let mut idx = 0;
+
+        /*
+         * Every node, whatever its state: FREEABLE nodes too, as the cache
+         * state machine permits them to have a write in flight -
+         * bch2_btree_node_write_done_clean only transitions DIRTY → CLEAN when
+         * the node is currently DIRTY, so when reclaim moves a node to
+         * FREEABLE while its write is still in flight the node legitimately
+         * stays on bc->freeable until the write finishes. Going-RO needs
+         * drained writes for the BUG_ONs in bch2_fs_btree_cache_exit's
+         * freeable walk.
+         *
+         * One pass: a flagged node is waited on with RCU dropped - we don't
+         * want to hold it across an arbitrarily-long wait - and the walk goes
+         * on from the next slot.
+         */
+        loop {
+            let waiting = {
+                let rcu = rcu::read_lock();
+                nodes.items_from(idx, &rcu)
+                    .find(|(_, b)| unsafe { b.cast::<BtreeNode>().as_ref() }.flags.load().into_bits() & m != 0)
+            };
+            let Some((i, b)) = waiting else { return ret };
+
+            // a node isn't freed while the fs runs
+            bch2_btree_node_wait_on_flag(unsafe { b.cast::<BtreeNode>().as_ref() }, flag);
+            ret = true;
+            idx = i + 1;
+        }
+    }
+
+    pub fn btree_flush_all_reads(&self) -> bool {
+        self.btree_flush_all(c::btree_flags::BTREE_NODE_read_in_flight)
+    }
+
+    pub fn btree_flush_all_writes(&self) -> bool {
+        self.btree_flush_all(c::btree_flags::BTREE_NODE_write_in_flight)
     }
 
     #[cold]

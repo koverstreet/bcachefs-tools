@@ -14,7 +14,6 @@ use crate::alloc::foreground::allocator_foreground_init;
 use crate::alloc::replicas::can_write_with_devs;
 use crate::btree::cache::{bch2_fs_btree_exit, bch2_fs_btree_init, bch2_fs_btree_init_early};
 use crate::btree::journal_overlay::journal_keys_put_initial;
-use crate::btree::read::bch2_btree_flush_all_reads;
 use crate::data::checksum::encryption_init;
 use crate::data::compress::compress_init;
 use crate::data::ec::head::ec_exit;
@@ -510,6 +509,7 @@ impl Fs {
 
         blacklist_table_initialize(self)?;
         crate::debug::async_objs::lists::async_obj_init(self)?;
+        unsafe { self.btree.cache.nodes.init() }?;
         ret_to_result(unsafe { bch2_fs_btree_init(p) })?;
         compress_init(self)?;
         counters_init(self);
@@ -870,12 +870,10 @@ impl Fs {
 
             self.ro_ref.wait();
 
-            unsafe {
-                /* btree prefetch might have kicked off reads in the background: */
-                bch2_btree_flush_all_reads(p);
+            /* btree prefetch might have kicked off reads in the background: */
+            self.btree_flush_all_reads();
 
-                c::flush_work(&raw mut (*p).btree.interior_updates.work);
-            }
+            unsafe { c::flush_work(&raw mut (*p).btree.interior_updates.work) };
         }
 
         if self.flags.get(Flag::emergency_ro) {
@@ -958,6 +956,7 @@ unsafe fn release(p: *mut Fs) {
     unsafe {
         (*p).counters.now.free();
         bch2_fs_btree_exit(p);
+        fs.btree.cache.nodes.exit();
         accounting_exit(fs);
     }
     crate::debug::async_objs::lists::async_obj_exit(fs);

@@ -482,8 +482,8 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, lev
         if btree_ptr_unreadable(t, btree, level, new.as_sc(), |_, b| {
             // SAFETY: a cached node, held by the iterator for the calls
             unsafe {
-                c::bch2_node_pin(fs.as_ptr(), b.as_ptr());
                 let b = &*b.as_ptr();
+                fs.btree_node_pin(b);
                 fs.async_btree_op(b, b.contents(), crate::btree::async_ops::AsyncBtreeOp::Rewrite);
             }
             Ok(())

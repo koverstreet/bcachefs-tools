@@ -149,8 +149,6 @@ static int set_node_max(struct btree_trans *trans, struct btree *b, struct bpos 
 
 	bch2_btree_node_drop_keys_outside_node(b);
 
-	struct bch_fs_btree_cache *bc = &c->btree.cache;
-
 	/*
 	 * max_key is b->key.k.p, which is the cache's hash key - so unlike
 	 * set_node_min() this has to leave the hash table and come back.
@@ -158,10 +156,8 @@ static int set_node_max(struct btree_trans *trans, struct btree *b, struct bpos 
 	 * upgrade; roots additionally can't be unhashed while flagged.
 	 */
 	bool permanent = btree_node_permanent(b);
-	if (permanent) {
-		scoped_guard(mutex_noio, &bc->lock)
-			clear_btree_node_permanent(b);
-	}
+	if (permanent)
+		bch2_btree_node_set_permanent(c, b, false);
 
 	six_unlock_read(&b->c.lock);
 
@@ -171,9 +167,9 @@ static int set_node_max(struct btree_trans *trans, struct btree *b, struct bpos 
 	btree_node_lock_nopath(trans, &b->c, SIX_LOCK_write, true, _THIS_IP_, false);
 
 	/* unhash, rehash */
-	BUG_ON(bch2_btree_node_transition_state(bc, b, BTREE_NODE_CACHE_FREEABLE));
+	BUG_ON(bch2_btree_node_transition_state(c, b, BTREE_NODE_CACHE_FREEABLE));
 	bkey_copy(&b->key, &new->k_i);
-	BUG_ON(bch2_btree_node_transition_state(bc, b, btree_node_live_state(b)));
+	BUG_ON(bch2_btree_node_transition_state(c, b, btree_node_live_state(b)));
 
 	six_unlock_write(&b->c.lock);
 	six_unlock_intent(&b->c.lock);
@@ -183,10 +179,8 @@ static int set_node_max(struct btree_trans *trans, struct btree *b, struct bpos 
 	 * Still the root - but it was on bc->freeable with roots_b[] pointing at
 	 * it, which only single-threaded recovery makes safe.
 	 */
-	if (permanent) {
-		scoped_guard(mutex_noio, &bc->lock)
-			set_btree_node_permanent(b);
-	}
+	if (permanent)
+		bch2_btree_node_set_permanent(c, b, true);
 	return 0;
 }
 
@@ -691,8 +685,7 @@ recover:
 			scoped_guard(mutex, &c->btree.cache.root_lock)
 				WRITE_ONCE(c->btree.cache.roots_b[i], 0);
 
-			scoped_guard(mutex_noio, &c->btree.cache.lock)
-				clear_btree_node_permanent(b);
+			bch2_btree_node_set_permanent(c, b, false);
 
 			/*
 			 * Unhashing asserts SIX_LOCK_write even here, where
@@ -703,8 +696,7 @@ recover:
 			btree_node_lock_nopath(trans, &b->c, SIX_LOCK_intent, true, _THIS_IP_, false);
 			btree_node_lock_nopath(trans, &b->c, SIX_LOCK_write, true, _THIS_IP_, false);
 
-			bch2_btree_node_transition_state(&c->btree.cache, b,
-								  BTREE_NODE_CACHE_FREEABLE);
+			bch2_btree_node_transition_state(c, b, BTREE_NODE_CACHE_FREEABLE);
 
 			six_unlock_write(&b->c.lock);
 			six_unlock_intent(&b->c.lock);

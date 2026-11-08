@@ -285,6 +285,11 @@ impl<const U64S: usize> PaddedKey<U64S> {
         &mut self.0
     }
 
+    /// All of its room, header first, past the key's end too.
+    pub fn u64s(&self) -> &[u64; U64S] {
+        &self.0
+    }
+
     /// The key, to grow in its room.
     pub fn room(&mut self) -> KeyRoom<'_> {
         KeyRoom::existing(&mut self.0)

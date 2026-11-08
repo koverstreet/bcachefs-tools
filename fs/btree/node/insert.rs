@@ -14,7 +14,6 @@ use super::keys::key_at;
 use super::sort::bch2_maybe_compact_whiteouts;
 use super::BtreeNode;
 use crate::btree::bkey::{BkeyI, BkeyP, BKEY_U64S};
-use crate::btree::cache::bch2_btree_node_set_dirty;
 use crate::btree::for_each::lockrestart_do;
 use crate::btree::interior::check_topology_msg;
 use crate::btree::iter::BtreeTrans;
@@ -289,7 +288,7 @@ impl BtreeTrans<'_> {
         b.add_journal_pin(fs, journal_seq);
 
         if unlikely(!b.flags.dirty()) {
-            unsafe { bch2_btree_node_set_dirty(fs.as_ptr(), core::ptr::from_ref(b).cast_mut()) };
+            fs.btree_node_set_dirty(b);
         }
 
         let live_u64s_added = live_u64s() - old_live_u64s;

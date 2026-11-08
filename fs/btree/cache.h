@@ -13,51 +13,6 @@
 #include "btree/trigger_gen.h"
 #include "btree/cache_gen.h"
 
-extern const char * const bch2_btree_node_flags[];
-
-struct btree_iter;
-
-void bch2_recalc_btree_reserve(struct bch_fs *);
-
-void bch2_btree_node_mem_free(struct bch_fs *, struct btree *);
-
-int bch2_btree_node_transition_state(struct bch_fs_btree_cache *, struct btree *,
-				     enum btree_node_cache_state);
-
-u64 bch2_btree_cache_pin_budget(struct bch_fs *);
-void bch2_node_pin(struct bch_fs *, struct btree *);
-void bch2_btree_cache_unpin(struct bch_fs *);
-int bch2_btree_cache_pin(struct btree_trans *, u64, u64,
-			 struct bbpos, struct bbpos, struct bbpos *);
-
-void bch2_btree_cache_cannibalize_unlock(struct btree_trans *);
-int bch2_btree_cache_cannibalize_lock(struct btree_trans *, struct closure *);
-
-void bch2_btree_node_data_free(struct btree *);
-
-struct btree *__bch2_btree_node_mem_alloc(struct bch_fs *);
-struct btree *bch2_btree_node_mem_alloc(struct btree_trans *, bool);
-
-struct btree *bch2_btree_node_get(struct btree_trans *, struct btree_path *,
-				  const struct bkey_i *, unsigned,
-				  enum six_lock_type,
-				  enum btree_iter_update_trigger_flags);
-
-struct btree *bch2_btree_node_get_noiter(struct btree_trans *, const struct bkey_i *,
-					 enum btree_id, unsigned, bool);
-
-int bch2_btree_node_prefetch(struct btree_trans *, struct btree_path *,
-			     const struct bkey_i *, enum btree_id, unsigned);
-
-void bch2_btree_node_evict(struct btree_trans *, const struct bkey_i *);
-
-void bch2_fs_btree_cache_exit(struct bch_fs *);
-int bch2_fs_btree_cache_init(struct bch_fs *);
-void bch2_fs_btree_cache_init_early(struct bch_fs_btree_cache *);
-
-int bch2_fs_btree_evicted_size_init(struct bch_fs *);
-void bch2_fs_btree_evicted_size_exit(struct bch_fs *);
-
 static inline u64 btree_ptr_hash_val(const struct bkey_i *k)
 {
 	switch (k->k.type) {
@@ -101,17 +56,6 @@ static inline bool btree_node_hashed(struct btree *b)
 	return b->hash_val != 0;
 }
 
-static inline enum btree_node_cache_state btree_node_cache_state(struct btree *b)
-{
-	return b->cache_state;
-}
-
-
-#define for_each_cached_btree(_b, _c, _tbl, _iter, _pos)		\
-	for ((_tbl) = rht_dereference_rcu((_c)->btree.cache.table.tbl,	\
-					  &(_c)->btree.cache.table),	\
-	     _iter = 0;	_iter < (_tbl)->size; _iter++)			\
-		rht_for_each_entry_rcu((_b), (_pos), _tbl, _iter, hash)
 
 static inline size_t btree_buf_bytes(const struct btree *b)
 {
@@ -231,13 +175,5 @@ static inline bool btree_node_is_root(struct bch_fs *c, struct btree *b)
 	BUG_ON(b != root && b->c.level >= root->c.level);
 	return b == root;
 }
-
-void __bch2_btree_pos_to_text(struct printbuf *, struct bch_fs *,
-			      enum btree_id, unsigned, struct bkey_s_c);
-void bch2_btree_pos_to_text(struct printbuf *, struct bch_fs *, const struct btree *);
-void bch2_btree_cache_to_text(struct printbuf *, const struct bch_fs_btree_cache *);
-
-#define trace_btree_node(_c, _b, event)				\
-	event_inc_trace(c, event, buf, bch2_btree_pos_to_text(&buf, c, b))
 
 #endif /* _BCACHEFS_BTREE_CACHE_H */

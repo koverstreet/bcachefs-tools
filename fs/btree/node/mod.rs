@@ -98,7 +98,6 @@ pub struct BkeyUnpackField {
 pub struct BtreeNode {
     pub c: cs::btree_bkey_cached_common,
 
-    pub hash: cs::rhash_head,
     pub hash_val: u64,
 
     #[c("unsigned long flags")]
@@ -153,7 +152,11 @@ pub struct BtreeNode {
     #[c("struct list_head list")]
     pub list: ListLinks,
 
-    pub cache_state: cs::btree_node_cache_state,
+    #[c("enum btree_node_cache_state cache_state")]
+    pub cache_state: LockedBy<cs::btree_node_cache_state>,
+
+    /* its slot in bc->nodes */
+    pub nodes_idx: u32,
 
     // never moved, nor freed while the fs runs: what linking it promises -
     // in a PhantomData, as a bare PhantomPinned isn't FFI-safe
@@ -491,7 +494,7 @@ pub struct BtreeNodeToText<'b, 'f> {
 
 impl ToText for BtreeNodeToText<'_, '_> {
     fn to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_btree_node_to_text(out.as_raw(), self.fs.as_ptr(), self.b) }
+        crate::btree::cache::btree_node_to_text(out, self.fs, self.b)
     }
 }
 crate::display_via_to_text!(BtreeNodeToText<'_, '_>);
@@ -515,7 +518,7 @@ pub struct BtreeNodePosToText<'b, 'f> {
 
 impl ToText for BtreeNodePosToText<'_, '_> {
     fn to_text(&self, out: &mut Printbuf) {
-        unsafe { crate::btree::traverse::bch2_btree_pos_to_text(out.as_raw(), self.fs.as_ptr(), self.b) }
+        crate::btree::cache::bch2_btree_pos_to_text(out, self.fs, self.b)
     }
 }
 crate::display_via_to_text!(BtreeNodePosToText<'_, '_>);

@@ -11,17 +11,16 @@ use cstruct_macros::{c_export, c_extern};
 
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::cache::{bch2_btree_id_level_to_text, bch2_btree_node_prefetch};
+use crate::btree::cache::bch2_btree_id_level_to_text;
 use crate::btree::interior::check_topology_msg;
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
-use crate::btree::locking::bch2_btree_cache_cannibalize_unlock;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::keys::Keys;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{BtreePath, DownKey, KeyVal, LockedNode, NodePtr, PathIdx, Paths};
 use crate::c;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, errptr_to_result, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{BkeyType, Bpos};
 use crate::fs::Fs;
 use crate::locking::six::SixHold;
@@ -31,15 +30,10 @@ use crate::util::closure::StackClosure;
 use crate::util::kernel::race_fault;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
-use crate::util::Printbuf;
 use pin_init::stack_pin_init;
 
 c_extern! {
-    fn bch2_btree_node_get(trans: *mut BtreeTrans<'_>, path: *mut BtreePath, k: *const c::bkey_i, level: c_uint,
-                           lock_type: c::six_lock_type, flags: c::btree_iter_update_trigger_flags) -> *mut BtreeNode;
-    pub(crate) fn bch2_btree_cache_cannibalize_lock(trans: *mut BtreeTrans<'_>, cl: *mut c::closure) -> c_int;
     fn bch2_btree_path_traverse_cached(trans: *mut BtreeTrans<'_>, path: PathIdx, flags: c_uint) -> c_int;
-    pub fn bch2_btree_pos_to_text(out: *mut Printbuf, c: *mut Fs, b: *const BtreeNode);
 }
 
 // ── A level: its node, and its node iterator ────────────────────────────────
@@ -344,10 +338,7 @@ impl BtreeTrans<'_> {
 
     fn node_prefetch(&self, paths: &mut Paths<'_>, idx: PathIdx, k: &BkeyBuf, level: usize) -> Result<(), BchError> {
         let btree = paths[idx].btree_id();
-        ret_to_result_void(unsafe {
-            bch2_btree_node_prefetch(self.raw(), &mut paths[idx], ptr::from_ref(k.as_ref()).cast(), btree,
-                                     level as c_uint - 1)
-        })
+        self.btree_node_prefetch(paths, Some(idx), k.as_ref(), btree, level - 1)
     }
 
     fn path_prefetch_j(&self, paths: &mut Paths<'_>, idx: PathIdx, jiter: &mut c::btree_and_journal_iter)
@@ -426,15 +417,13 @@ impl BtreeTrans<'_> {
         });
 
         prt!(&mut *msg, "lookup found topology error:\n");
-        unsafe { bch2_btree_id_level_to_text(&mut *msg, path.btree_id(), level as c_uint) };
+        bch2_btree_id_level_to_text(&mut msg, path.btree_id(), level as c_uint);
         prt!(&mut *msg, " lookup at {}\n", path.pos);
 
         {
             let mut msg = msg.indent(2);
             prt!(&mut *msg, "parent:     ");
-            unsafe {
-                bch2_btree_id_level_to_text(&mut *msg, crate::format::Btree(b.c.btree_id.into()), b.c.level.into())
-            };
+            bch2_btree_id_level_to_text(&mut msg, crate::format::Btree(b.c.btree_id.into()), b.c.level.into());
             prt!(&mut *msg, " {} - {}\n", contents.data().min_key, contents.data().max_key);
 
             prt!(&mut *msg, "parent key:  ");
@@ -540,14 +529,11 @@ impl BtreeTrans<'_> {
 
         let level = level - 1;
         let lock_type = paths[idx].lock_want_six(level);
-        let k = paths.down_key().as_ffi();
-        let b = errptr_to_result(NonNull::new(unsafe {
-            bch2_btree_node_get(self.raw(), &mut paths[idx], k, level as c_uint, lock_type,
-                                c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()))
-        }).expect("bch2_btree_node_get() returns a node or an error"))?;
-        // bch2_btree_node_get() returns it locked as @lock_type, ours to give the path
+        // the transaction's, not the path table's
+        let k: *const BkeyI = paths.down_key();
+        let b = self.btree_node_get(paths, idx, unsafe { &*k }, level, lock_type, flags)?;
+        // btree_node_get() returns it locked as @lock_type, ours to give the path
         let (b, hold) = unsafe {
-            let b = b.as_ref();
             (LockedNode::new(b), SixHold::from_raw(&b.c.lock, lock_type))
         };
 
@@ -592,9 +578,9 @@ impl BtreeTrans<'_> {
             if self.memory_allocation_failure() {
                 stack_pin_init!(let cl = StackClosure::new());
                 loop {
-                    let ret = unsafe { bch2_btree_cache_cannibalize_lock(self.raw(), cl.as_ptr()) };
+                    let ret = self.btree_cache_cannibalize_lock(NonNull::new(cl.as_ptr()));
                     cl.sync();
-                    if ret == 0 {
+                    if ret.is_ok() {
                         break;
                     }
                 }
@@ -635,7 +621,7 @@ impl BtreeTrans<'_> {
             break Ok(());
         };
 
-        unsafe { bch2_btree_cache_cannibalize_unlock(self.raw()) };
+        self.btree_cache_cannibalize_unlock();
 
         self.set_in_traverse_all(false);
         ret

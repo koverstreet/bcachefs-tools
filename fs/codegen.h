@@ -108,6 +108,10 @@ const blk_status_t RUST_CONST_HELPER_BLK_STS_INVAL		= BLK_STS_INVAL;
 const gfp_t RUST_CONST_HELPER_GFP_NOIO			= GFP_NOIO;
 const gfp_t RUST_CONST_HELPER___GFP_SKIP_ZERO		= __GFP_SKIP_ZERO;
 const gfp_t RUST_CONST_HELPER___GFP_NORETRY		= __GFP_NORETRY;
+/* btree/cache/'s node buffers */
+const gfp_t RUST_CONST_HELPER___GFP_ACCOUNT		= __GFP_ACCOUNT;
+const gfp_t RUST_CONST_HELPER___GFP_RECLAIM		= __GFP_RECLAIM;
+const gfp_t RUST_CONST_HELPER___GFP_RECLAIMABLE	= __GFP_RECLAIMABLE;
 
 /* a notifier's answer, as reconcile's power supply notifier gives it */
 const int RUST_CONST_HELPER_NOTIFY_OK			= NOTIFY_OK;

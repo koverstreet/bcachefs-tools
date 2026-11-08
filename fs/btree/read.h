@@ -51,6 +51,4 @@ static inline int bset_encrypt(struct bch_fs *c, struct bset *i, unsigned offset
 			    vstruct_end(i) - (void *) i->_data);
 }
 
-bool bch2_btree_flush_all_reads(struct bch_fs *);
-
 #endif /* _BCACHEFS_BTREE_READ_H */

@@ -8,18 +8,15 @@ use core::ffi::{c_int, c_uint, c_ulong};
 use core::ptr::{self, NonNull};
 use cstruct_macros::c_export;
 use crate::btree::iter::BtreeTrans;
-use crate::btree::locking::bch2_btree_cache_cannibalize_unlock;
 use crate::btree::node::BtreeNode;
 use crate::btree::node::bset::bch2_bset_init_first;
 use crate::btree::node::sort::bch2_btree_build_aux_trees;
 use crate::btree::path::{PathIdx, Paths};
-use crate::btree::read::{bch2_btree_node_mem_alloc, bch2_btree_node_transition_state};
-use crate::btree::traverse::bch2_btree_cache_cannibalize_lock;
 use crate::btree::bkey::{BkeyI, BkeyV};
 use crate::c;
 use crate::data::keylist::KeyRoom;
 use crate::debug::trace::events;
-use crate::errcode::{errptr_to_result, ret_to_c, BchError};
+use crate::errcode::{ret_to_c, BchError};
 use crate::format::{BkeyType, Btree};
 use crate::fs::Fs;
 use crate::format::jset_entry;
@@ -28,11 +25,6 @@ use crate::prt;
 use crate::util::Printbuf;
 use crate::util::printbuf::ToText;
 use crate::util::vstructs::Unvalidated;
-use cstruct_macros::c_extern;
-
-c_extern! {
-    fn bch2_recalc_btree_reserve(c: *mut Fs);
-}
 use crate::util::closure::StackClosure;
 use crate::{POS_MIN, SPOS_MAX};
 use pin_init::stack_pin_init;
@@ -61,7 +53,7 @@ fn set_root_inmem(fs: &Fs, b: &BtreeNode) {
 
     fs.btree.cache.roots.lock().published().roots_b[usize::from(b.c.btree_id)].set(root_pack(b));
 
-    unsafe { bch2_recalc_btree_reserve(fs.as_ptr()) };
+    fs.recalc_btree_reserve();
 }
 
 impl InteriorUpdate<'_> {
@@ -146,17 +138,17 @@ fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level: u32) -> Re
 
     stack_pin_init!(let cl = StackClosure::new());
     loop {
-        let ret = unsafe { bch2_btree_cache_cannibalize_lock(trans.raw(), cl.as_ptr()) };
+        let ret = trans.btree_cache_cannibalize_lock(NonNull::new(cl.as_ptr()));
         cl.sync();
-        if ret == 0 {
+        if ret.is_ok() {
             break;
         }
     }
 
-    let b = unsafe { bch2_btree_node_mem_alloc(trans.raw(), false) };
-    unsafe { bch2_btree_cache_cannibalize_unlock(trans.raw()) };
+    let b = trans.btree_node_mem_alloc(&mut trans.paths(), false);
+    trans.btree_cache_cannibalize_unlock();
 
-    let mut b = errptr_to_result(NonNull::new(b).expect("btree_node_mem_alloc() returns a node or an error"))?;
+    let mut b = b?;
     {
         let n = unsafe { b.as_mut() };
         n.c.level    = level as u8;
@@ -182,9 +174,8 @@ fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level: u32) -> Re
     contents.data_mut().format = format;
     contents.set_format(format);
 
-    assert!(unsafe { bch2_btree_node_transition_state((&raw const fs.btree.cache).cast_mut(), b.as_ptr(),
-                                                      n.live_state()) } == 0,
-            "a fake root's transition to live");
+    fs.btree_node_transition_state(n, n.live_state())
+        .unwrap_or_else(|e| panic!("a fake root's transition to live: {e}"));
 
     set_root_inmem(fs, n);
 
