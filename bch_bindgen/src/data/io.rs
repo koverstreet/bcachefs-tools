@@ -2,7 +2,7 @@
 //
 // IO operations on a bcachefs filesystem.
 //
-// ReadOp is a genuine async Future: the C shim submits the read and
+// ReadOp is a genuine async Future: new() submits the read and
 // returns immediately; the bio endio callback wakes the Rust waker
 // when IO completes (from the libaio completion thread in userspace).
 //
@@ -18,6 +18,7 @@ use std::ptr::NonNull;
 
 use crate::c;
 use bcachefs_kernel::btree::bkey::spos;
+use bcachefs_kernel::btree::trans::BtreeTrans;
 use bcachefs_kernel::data::write::bch2_write;
 use bcachefs_kernel::errcode::{self, BchError};
 use bcachefs_kernel::fs::{writepoint_hashed, Fs};
@@ -25,24 +26,15 @@ use bcachefs_kernel::inode_opts;
 use bcachefs_kernel::util::bio::Bio;
 use bcachefs_kernel::util::closure;
 
-/// Maximum single IO size (must match RUST_IO_MAX in rust_shims.h).
+/// Maximum single IO size.
 pub const MAX_IO_SIZE: usize = 1 << 20;
 const PAGE_SIZE: usize = 4096;
 const MAX_BVECS: usize = MAX_IO_SIZE / PAGE_SIZE;
 
 unsafe extern "C" {
-    fn rust_read_submit(
-        c: *mut Fs,
-        rbio: *mut c::bch_read_bio,
-        bvecs: *mut c::bio_vec,
-        nr_bvecs: u32,
-        buf: *mut std::ffi::c_void,
-        len: usize,
-        offset: u64,
-        opts: c::bch_inode_opts,
-        inum: c::subvol_inum,
-        endio: c::bio_end_io_t,
-    );
+    fn bch2_read(trans: *mut BtreeTrans<'_>, rbio: *mut c::bch_read_bio, iter: bcachefs_kernel::c::bvec_iter,
+                 inum: c::subvol_inum, failed: *mut c::bch_io_failures, prev_read: *mut c::bkey_buf,
+                 flags: c::bch_read_flags) -> std::ffi::c_int;
 }
 
 /// Result of a write operation.
@@ -218,30 +210,33 @@ impl ReadOp {
     ) -> Self {
         let opts = bcachefs_kernel::inode_opts::get_inode(fs, inode);
 
-        let state = Box::pin(ReadState {
-            rbio:       unsafe { std::mem::zeroed() },
-            bvecs:      unsafe { std::mem::zeroed() },
-            completed:  AtomicBool::new(false),
-            waker:      UnsafeCell::new(None),
-        });
+        // Made in place: the bio first, which the rbio's init() leaves be
+        let mut state = Box::new(std::mem::MaybeUninit::<ReadState>::zeroed());
+        let p = state.as_mut_ptr();
+        let mut state = unsafe {
+            let bio = &raw mut (*p).rbio.bio;
+            bcachefs_kernel::c::bio_init(bio, std::ptr::null_mut(), (&raw mut (*p).bvecs).cast(),
+                                         MAX_BVECS as u16, 0);
+            (*bio).bi_opf = c::req_op_REQ_OP_READ | c::REQ_SYNC;
+            (*bio).bi_iter.bi_sector = offset >> 9;
+            Bio::from_raw_mut(bio).map(buf.as_mut_ptr(), buf.len());
+            (&raw mut (*p).waker).write(UnsafeCell::new(None));
+            state.assume_init()
+        };
+        let rbio = &mut state.rbio;
+        rbio.init(fs, opts, Some(read_endio));
+        rbio.subvol = inum.subvol as u32;
 
+        let iter = rbio.bio.bi_iter;
+        let trans = bcachefs_kernel::btree_trans!(fs);
         unsafe {
-            let state_ptr = &*state as *const ReadState as *mut ReadState;
-            rust_read_submit(
-                fs.as_ptr(),
-                &raw mut (*state_ptr).rbio,
-                (*state_ptr).bvecs.as_mut_ptr(),
-                MAX_BVECS as u32,
-                buf.as_mut_ptr() as *mut _,
-                buf.len(),
-                offset,
-                opts,
-                inum,
-                Some(read_endio),
-            );
+            bch2_read(trans.raw(), rbio, iter, inum, std::ptr::null_mut(), std::ptr::null_mut(),
+                      c::bch_read_flags::retry_if_stale |
+                      c::bch_read_flags::may_promote |
+                      c::bch_read_flags::user_mapped);
         }
 
-        Self { state }
+        Self { state: Box::into_pin(state) }
     }
 }
 

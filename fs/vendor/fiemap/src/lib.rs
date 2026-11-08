@@ -13,8 +13,22 @@ use std::path::Path;
 /// extent map at all. Same bug bcachefs's own opcodes had (GH #904); found by
 /// logan2611, who kept reading after that was called fixed.
 ///
-/// Take it from the C compiler, via c_src/rust_shims.h, like the rest.
-const FS_IOC_FIEMAP: c_ulong = bch_bindgen::c::BCH_FS_IOC_FIEMAP as c_ulong;
+/// Made as _IOWR() makes it, for the target, by bcachefs's own: the size it
+/// encodes is struct fiemap's head - the extents after it are its flexible
+/// array.
+const FS_IOC_FIEMAP: c_ulong = bcachefs_kernel::util::ioctl::_IOWR::<FiemapHead>(b'f' as u32, 11) as c_ulong;
+
+#[repr(C)]
+struct FiemapHead {
+    fm_start: u64,
+    fm_length: u64,
+    fm_flags: u32,
+    fm_mapped_extents: u32,
+    fm_extent_count: u32,
+    fm_reserved: u32,
+}
+
+const _: () = assert!(std::mem::offset_of!(C_fiemap, fm_extents) == std::mem::size_of::<FiemapHead>());
 const PAGESIZE: usize = 8;
 
 unsafe extern "C" {

@@ -42,7 +42,9 @@ fn cmd_strip_alloc(cli: Cli) -> anyhow::Result<()> {
         }
 
         println!("Stripping alloc info from {}", devs[0].display());
-        unsafe { c::rust_strip_alloc_do(fs.as_ptr()) };
+        let mut sb = fs.sb_lock();
+        bcachefs_kernel::sb::clean::strip_alloc(&fs, &mut sb);
+        fs.write_super(&mut sb);
         return Ok(());
     }
 }

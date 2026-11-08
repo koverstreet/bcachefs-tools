@@ -189,8 +189,8 @@ pub fn file_size(f: &File) -> Result<u64> {
     if meta.file_type().is_block_device() {
         // _IOR(0x12, 114, size_t): the size encoded in the number is
         // sizeof(size_t), not of the u64 we read into - they differ on 32
-        // bit, so take the number bindgen computed for the target.
-        const BLKGETSIZE64: ioctl::Opcode = bch_bindgen::c::BCH_BLKGETSIZE64 as ioctl::Opcode;
+        // bit.
+        const BLKGETSIZE64: ioctl::Opcode = bcachefs_kernel::util::ioctl::_IOR::<usize>(0x12, 114) as ioctl::Opcode;
         Ok(unsafe { ioctl::ioctl(f, Getter::<BLKGETSIZE64, u64>::new()) }?)
     } else {
         Ok(meta.len())

@@ -49,21 +49,15 @@ macro_rules! v2_v1_ioctl {
 const SYSFS_BASE: &str = "/sys/fs/bcachefs/";
 
 /// `struct fs_sysfs_path` (linux/fs.h). Defined here because the blocklist
-/// keeps linux/fs.h's types out of the bindings. The ioctl number carrying its
-/// size comes from the C compiler, so the assert is what stops the two drifting.
+/// keeps linux/fs.h's types out of the bindings.
 #[repr(C)]
 struct FsSysfsPath {
     len: u8,
     name: [u8; 128],
 }
 
-const _: () = assert!(
-    mem::size_of::<FsSysfsPath>() == bch_bindgen::c::BCH_SIZEOF_FS_SYSFS_PATH,
-    "FsSysfsPath must match struct fs_sysfs_path - FS_IOC_GETFSSYSFSPATH encodes its size",
-);
-
 const FS_IOC_GETFSSYSFSPATH: libc::Ioctl =
-    bch_bindgen::c::BCH_FS_IOC_GETFSSYSFSPATH as libc::Ioctl;
+    bcachefs_kernel::util::ioctl::_IOR::<FsSysfsPath>(0x15, 1) as libc::Ioctl;
 
 /// A handle to a bcachefs filesystem, with RAII close.
 pub(crate) struct BcachefsHandle {

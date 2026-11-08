@@ -11,12 +11,10 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 
-// The block ioctl numbers encode sizeof() of the argument type and the
-// direction bits differ between architectures, so they can't be written down
-// here: the C compiler evaluates them from linux/fs.h for the target and
-// exports them as constants. See c_src/rust_shims.h.
-const BLKGETSIZE64: libc::Ioctl = bch_bindgen::c::BCH_BLKGETSIZE64 as libc::Ioctl;
-const BLKPBSZGET: libc::Ioctl = bch_bindgen::c::BCH_BLKPBSZGET as libc::Ioctl;
+use bcachefs_kernel::util::ioctl::{_IO, _IOR};
+
+const BLKGETSIZE64: libc::Ioctl = _IOR::<usize>(0x12, 114) as libc::Ioctl;
+const BLKPBSZGET: libc::Ioctl = _IO(0x12, 123) as libc::Ioctl;
 
 /// Returns the size of a file or block device in bytes.
 ///
@@ -132,7 +130,7 @@ pub fn nonrot(fd: RawFd) -> bool {
     // Kernel returns !bdev_nonrot(bdev) via put_ushort — bdev_nonrot internally
     // uses bdev_get_queue(bdev), which resolves to the parent disk's queue for
     // partitions and handles LVM, md, loop devices, etc. uniformly.
-    const BLKROTATIONAL: libc::Ioctl = bch_bindgen::c::BCH_BLKROTATIONAL as libc::Ioctl;
+    const BLKROTATIONAL: libc::Ioctl = _IO(0x12, 126) as libc::Ioctl;
     let mut rotational: u16 = 0;
     let ret = unsafe { libc::ioctl(fd, BLKROTATIONAL, &mut rotational) };
     ret == 0 && rotational == 0

@@ -178,10 +178,6 @@ clean and make it easy to compare old vs new or revert.
 - **Rust**: Command dispatch (`src/bcachefs.rs`), all command
   implementations (`src/commands/`), wrappers over C APIs
   (`src/wrappers/`, `fs/bch_bindgen/`)
-- **C shims** (`c_src/rust_shims.c`): Thin wrappers around kernel macros
-  and iteration patterns that can't be expressed through bindgen
-  (LE64_BITMASK setters, `for_each_member_device`, btree node walking,
-  crypto operations)
 - **Commands**: All subcommands are now implemented in Rust.
 - `bch_bindgen` generates Rust bindings via bindgen, plus hand-written
   safe wrappers for btree iteration, journal parsing, extent iteration,

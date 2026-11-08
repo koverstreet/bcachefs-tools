@@ -529,7 +529,7 @@ dependencies = [
 name = "fiemap"
 version = "0.2.0"
 dependencies = [
- "bch_bindgen",
+ "bcachefs-kernel",
  "bitflags 2.13.0",
 ]
 

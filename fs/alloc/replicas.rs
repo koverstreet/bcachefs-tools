@@ -960,10 +960,11 @@ impl Fs {
     }
 }
 
-/// The table emptied: for an image stripped of its replicas sections.
-#[c_export]
-pub fn bch2_replicas_clear(c: &Opaque<Fs>) {
-    *Fs::from_c(c).replicas.write() = ReplicasCpu::new();
+impl Fs {
+    /// The table emptied: for an image stripped of its replicas sections.
+    pub fn replicas_clear(&self) {
+        *self.replicas.write() = ReplicasCpu::new();
+    }
 }
 
 #[cfg(test)]

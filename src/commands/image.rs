@@ -43,10 +43,6 @@ use bcachefs_kernel::format::{Btree, CompressionType, DataType, BkeyType, SbFeat
 const BCH_REPLICAS_MAX: u32 = 4;
 const BTREE_MAX_DEPTH: u32 = 4;
 
-unsafe extern "C" {
-    fn strip_fs_alloc(c: *mut Fs);
-}
-
 // --- Core logic, converted from C ---
 
 /// Count logical data (non-hole) bytes in a single file - all @size of it if
@@ -365,7 +361,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
         if verbosity > 1 {
             println!("Stripping alloc info");
         }
-        unsafe { strip_fs_alloc(fs.as_ptr()) };
+        bcachefs_kernel::sb::clean::strip_alloc(&fs, &mut sb);
     }
 
     // Allow journal on primary device

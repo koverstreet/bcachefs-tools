@@ -23,7 +23,7 @@
 
 #include <linux/percpu.h>
 
-#include "rust_shims.h"
+int rust_percpu_test(void);
 
 #define TEST_FAIL(...) ({ fprintf(stderr, "rust_percpu_test FAIL: " __VA_ARGS__); fputc('\n', stderr); 1; })
 

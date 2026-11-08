@@ -7,7 +7,7 @@
 //! The section is a list of journal entries, stored exactly as they would be
 //! in the journal, after a header saying which journal seq they're as of.
 
-use core::mem::size_of;
+use core::mem::{size_of, size_of_val};
 use core::sync::atomic::Ordering::Relaxed;
 
 use zerocopy::IntoBytes;
@@ -27,7 +27,8 @@ use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, UnvalidatedEntriesM
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, fsck_err, mustfix_fsck_err_on, prt};
 use crate::sb::io::SbResize;
-use crate::format::Btree;
+use crate::format::{Btree, SbFeature};
+use crate::fs::btree_id_is_alloc;
 
 type Section = c::bch_sb_field_clean;
 
@@ -250,4 +251,41 @@ pub(crate) fn fs_mark_clean(fs: &Fs, guard: &mut SbLockGuard<'_>) {
     sb.sb_mut().set_clean(true);
 
     crate::journal::journal_pos_from_member_info_set(fs, guard);
+}
+
+/// Strip alloc info from a clean filesystem: removes alloc btree roots
+/// from the clean section, replicas, and journal fields.
+pub fn strip_alloc(fs: &Fs, guard: &mut SbLockGuard<'_>) {
+    {
+        let mut sb = fs.sb_resize(guard);
+
+        let f = bytes_of_mut(sb.field_mut::<Section>().expect("a clean filesystem's clean section"));
+        let (mut src, mut dst) = (SECTION_HEAD, SECTION_HEAD);
+        while src < f.len() {
+            let e = c::jset_entry::<Unvalidated>::from_bytes(&f[src..]).expect("an entry that fits");
+            let len = size_of_val(e);
+            if !(e.type_ == c::bch_jset_entry_type::btree_root.0 as u8 && btree_id_is_alloc(e.btree_id.into())) {
+                f.copy_within(src..src + len, dst);
+                dst += len;
+            }
+            src += len;
+        }
+        sb.field_resize::<Section>((dst / size_of::<u64>()) as u32);
+
+        fs.replicas_clear();
+
+        sb.field_resize::<c::bch_sb_field_replicas_v0>(0);
+        sb.field_resize::<c::bch_sb_field_replicas>(0);
+
+        for _ca in fs.online_members() {
+            sb.field_resize::<c::bch_sb_field_journal>(0);
+            sb.field_resize::<c::bch_sb_field_journal_v2>(0);
+        }
+    }
+
+    for ca in fs.members() {
+        guard.fs_member_mut(ca.dev_idx.into()).set_freespace_initialized(false);
+    }
+
+    guard.sb_mut().features[0] |= 1 << SbFeature::no_alloc_info.0;
 }

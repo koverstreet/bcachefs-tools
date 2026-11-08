@@ -16,12 +16,19 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
 use bch_bindgen::data::io::{block_on, MAX_IO_SIZE};
+use bcachefs_kernel::alloc::capacity::DiskReservation;
 use bcachefs_kernel::btree;
-use bcachefs_kernel::btree::iter::CommitFlags;
+use bcachefs_kernel::btree::bkey::{spos, BkeyV, BKEY_U64S};
+use bcachefs_kernel::btree::iter::{CommitFlags, UpdateTriggerFlags};
+use bcachefs_kernel::data::extents::bkey_append_ptr;
+use bcachefs_kernel::data::keylist::PaddedKey;
+use bcachefs_kernel::format::{BkeyType, Btree};
+use bcachefs_kernel::inode_opts::get_io_opts;
+use bcachefs_kernel::util::rcu::read_lock;
 use bcachefs_kernel::data::io_misc;
 use bcachefs_kernel::xattr::XattrType;
 use bcachefs_kernel::{acl, dirent, inode, namei, str_hash, xattr};
-use bcachefs_kernel::errcode::{ret_to_result_void as ret_to_result, BchError, bch_errcode};
+use bcachefs_kernel::errcode::{BchError, bch_errcode};
 use bcachefs_kernel::fs::Fs;
 
 use crate::util::AlignedBuf;
@@ -52,17 +59,6 @@ fn file_type_to_dtype(ft: rustix::fs::FileType) -> u8 {
         FileType::Symlink         => DT_LNK,
         _                         => 0, // DT_UNKNOWN
     }
-}
-
-unsafe extern "C" {
-    fn rust_link_data(
-        c: *mut Fs,
-        dst_inum: u64,
-        sectors_delta: *mut i64,
-        logical: u64,
-        physical: u64,
-        length: u64,
-    ) -> i32;
 }
 
 /// Migrate type matching enum bch_migrate_type in posix_to_bcachefs.h.
@@ -451,12 +447,52 @@ fn link_data(
     physical: u64,
     length: u64,
 ) -> Result<(), BchError> {
-    let mut sectors_delta: i64 = 0;
-    let ret = unsafe {
-        rust_link_data(fs.as_ptr(), dst.bi_inum, &mut sectors_delta, logical, physical, length)
-    };
-    dst.bi_sectors = (dst.bi_sectors as i64 + sectors_delta) as u64;
-    ret_to_result(ret)
+    let ca = fs.dev_get(0).expect("device 0, the one migrate links data on");
+    let block_bytes = fs.block_bytes();
+
+    assert!(logical  & (block_bytes - 1) == 0, "unaligned logical offset {logical}");
+    assert!(physical & (block_bytes - 1) == 0, "unaligned physical offset {physical}");
+    assert!(length   & (block_bytes - 1) == 0, "unaligned length {length}");
+
+    let (mut logical, mut physical, mut length) = (logical >> 9, physical >> 9, length >> 9);
+    let bucket_size = u64::from(ca.mi.get().bucket_size);
+
+    assert!(physical + length <= ca.mi.get().nbuckets * bucket_size,
+            "extent at sector {physical} of {length} sectors past the device's end");
+
+    while length != 0 {
+        let b = ca.sector_to_bucket(physical);
+        let sectors = (bucket_size - (physical & (bucket_size - 1))).min(length);
+
+        let mut key = PaddedKey::<{ BKEY_U64S + c::BKEY_EXTENT_VAL_U64s_MAX }>::default();
+        let mut k = key.room();
+        *k.k_mut() = c::bkey {
+            type_: BkeyType::extent.0 as u8,
+            p:     spos(dst.bi_inum, logical + sectors, u32::MAX),
+            size:  sectors as u32,
+            ..c::bkey::new()
+        };
+        let generation = ca.bucket_gen(b, &read_lock()).expect("a bucket of the device");
+        bkey_append_ptr(&mut k, c::bch_extent_ptr::new().with_offset(physical).with_dev(0).with_generation(generation))
+            .expect("room for a pointer");
+
+        let res = DiskReservation::new(fs);
+        res.add(sectors, 1, c::bch_reservation_flags::BCH_DISK_RESERVATION_NOFAIL)?;
+
+        btree::iter::trans_commit_do(fs, Some(&res), CommitFlags::empty(), |t| {
+            let mut new = t.bkey_reassemble_room(k.key().into(), c::BKEY_EXTENT_U64s_MAX * size_of::<u64>())?;
+            let opts = get_io_opts(t, None, new.as_sc())?;
+            new.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
+            t.insert(Btree::extents, new, UpdateTriggerFlags::empty())
+        })?;
+
+        dst.bi_sectors += sectors;
+        logical  += sectors;
+        physical += sectors;
+        length   -= sectors;
+    }
+
+    Ok(())
 }
 
 fn copy_link(

@@ -12,4 +12,4 @@ edition = "2024"
 # FS_IOC_FIEMAP comes from - see the comment at its definition in src/lib.rs.
 [dependencies]
 bitflags = "2"
-bch_bindgen = { path = "../../../bch_bindgen" }
+bcachefs-kernel = { path = "../.." }

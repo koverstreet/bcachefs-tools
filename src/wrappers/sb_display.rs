@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 //
 // Superblock display with device names — Rust replacement for the C
-// bch2_sb_to_text_with_names() in rust_shims.c.
+// bch2_sb_to_text_with_names().
 //
 // The C version called bch2_scan_device_sbs (Rust FFI) which returned
 // Vec-allocated memory via forget(), then freed it with darray_exit

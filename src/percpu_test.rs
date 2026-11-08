@@ -4,11 +4,15 @@
 //! macros directly. This just invokes the C runner and reports the failure
 //! count, so it runs under `cargo test` with no kernel.
 
+unsafe extern "C" {
+    fn rust_percpu_test() -> std::ffi::c_int;
+}
+
 #[test]
 fn percpu_slot_lifetime() {
     // SAFETY: rust_percpu_test() allocates and frees its own percpu counters
     // and joins every thread it starts before returning.
-    let fails = unsafe { bch_bindgen::c::rust_percpu_test() };
+    let fails = unsafe { rust_percpu_test() };
     assert_eq!(
         fails, 0,
         "rust_percpu_test reported {fails} failed assertion(s); see stderr"

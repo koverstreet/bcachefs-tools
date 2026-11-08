@@ -2710,7 +2710,7 @@ fn write_super_devs(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_devs
     // so sb_update() reads members back after every write. Then the explicit
     // rebuilds go - sb_update()'s members, dev_group_set()'s disk groups,
     // journal_seq_blacklist_add()'s - and the replicas table's writes, and
-    // the tools' strip_fs_alloc(), edit as from_cpu() does: marking nothing,
+    // strip_alloc(), edit as from_cpu() does: marking nothing,
     // replicas' to_cpu() being only for before the table has refs.
     const TO_CPU_DIRTY: bool = false;
     if TO_CPU_DIRTY { ret.and(sections_to_cpu(fs, sb, dirty)) } else { ret }
