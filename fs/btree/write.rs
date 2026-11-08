@@ -742,8 +742,15 @@ pub fn bch2_btree_node_write_trans(trans: &BtreeTrans<'_>, #[lent(trans)] paths:
     node_write_trans(trans, paths, b, lock_type_held, ty, flags)
 }
 
-fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode,
-                    lock_type_held: c::six_lock_type, ty: BtreeWriteType, flags: BtreeWriteFlags) {
+/// btree_node_write_if_need()
+pub(crate) fn node_write_if_need(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode,
+                                 lock_type_held: c::six_lock_type) {
+    let (ty, flags) = unpack(BtreeWriteFlags::only_if_need.bits());
+    node_write_trans(trans, paths, b, lock_type_held, ty, flags)
+}
+
+pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode,
+                               lock_type_held: c::six_lock_type, ty: BtreeWriteType, flags: BtreeWriteFlags) {
     use c::six_lock_type::*;
 
     let fs = trans.fs();
