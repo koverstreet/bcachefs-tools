@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! data_structures/cuckoo.rs's tests, run by perf_test - so built only with
-//! CONFIG_BCACHEFS_TESTS. A lookup that misses is silent: these check every
+//! data_structures/cuckoo.rs's tests, run by perf_test, and by cargo test with
+//! EXTRA_CFLAGS=-DCONFIG_BCACHEFS_TESTS - built only with CONFIG_BCACHEFS_TESTS.
+//! A lookup that misses is silent: these check every
 //! lookup against what it should find. Each runs on sets and on maps of
 //! entries (TestItem), by SipHash and by golden ratio, in two ways and three.
 //!
@@ -59,7 +60,7 @@ use crate::util::alloc::KVVec;
 use crate::data_structures::cuckoo::{Cuckoo, CuckooHasher, CuckooItem, Entry, Faults, Registration};
 use crate::util::hash::GoldenRatio;
 use crate::util::siphash::SipHash13Key;
-use crate::util::kernel::{cond_resched, local_clock, random_u64, random_u64_below};
+use crate::util::kernel::{cond_resched, local_clock, num_online_cpus, random_u64, random_u64_below};
 use crate::util::par::{self, Backend};
 use crate::util::printbuf::{HumanReadable, Printbuf};
 use crate::util::projections::Volatile;
@@ -73,13 +74,6 @@ fn xorshift(s: &mut u64) -> u64 {
     *s ^= *s >> 7;
     *s ^= *s << 17;
     *s
-}
-
-fn nr_cpus() -> u32 {
-    #[cfg(kernel)]
-    return crate::util::kernel::num_online_cpus();
-    #[cfg(not(kernel))]
-    4
 }
 
 /// A map's entry: its key, and the value the op that put it in left.
@@ -238,7 +232,7 @@ fn registration() -> TestRet {
     Ok(())
 }
 
-pub(super) fn test_cuckoo(_fs: &Fs, _nr: u64) -> TestRet {
+fn models() -> TestRet {
     registration()?;
     model::<u64, SipHash13Key, 2>("set, siphash, 2-way")?;
     model::<u64, SipHash13Key, 3>("set, siphash, 3-way")?;
@@ -248,6 +242,10 @@ pub(super) fn test_cuckoo(_fs: &Fs, _nr: u64) -> TestRet {
     model::<Map, SipHash13Key, 3>("map, siphash, 3-way")?;
     model::<Map, GoldenRatio, 2>("map, golden, 2-way")?;
     model::<Map, GoldenRatio, 3>("map, golden, 3-way")
+}
+
+pub(super) fn test_cuckoo(_fs: &Fs, _nr: u64) -> TestRet {
+    models()
 }
 
 // ── The torture test ─────────────────────────────────────────────────────
@@ -437,7 +435,7 @@ fn writers_met<I: TestItem, S: CuckooHasher, const W: usize>(
 fn round<I: TestItem, S: CuckooHasher, const W: usize>(table: &str, name: &str, faults: Faults, secs: u64)
     -> TestRet
 {
-    let readers = nr_cpus().saturating_sub(WRITERS as u32).clamp(2, 30);
+    let readers = num_online_cpus().saturating_sub(WRITERS as u32).clamp(2, 30);
     let injecting = faults.alloc_fail != 0;
 
     let (mut keys, mut key_vals) = (KVVec::new(), KVVec::new());
@@ -617,7 +615,7 @@ fn shared<I: TestItem, S: CuckooHasher, const W: usize>(table: &str, name: &str,
     pin_init::stack_pin_init!(let fails: Failures = new_lock!(None, pin_init::Zeroable::zeroed()));
     let fails: &Failures = &fails;
     let meet = &Rendezvous::default();
-    let readers = nr_cpus().saturating_sub(WRITERS as u32).clamp(2, 30);
+    let readers = num_online_cpus().saturating_sub(WRITERS as u32).clamp(2, 30);
     let writers_left = AtomicU32::new(WRITERS as u32);
     let (passes, checked) = (AtomicU64::new(0), AtomicU64::new(0));
     let start = local_clock();
@@ -723,11 +721,15 @@ fn torture<I: TestItem, S: CuckooHasher, const W: usize>(table: &str) -> TestRet
     Ok(())
 }
 
-pub(super) fn test_cuckoo_torture(_fs: &Fs, _nr: u64) -> TestRet {
+fn tortures() -> TestRet {
     torture::<Map, SipHash13Key, 2>("map, siphash, 2-way")?;
     torture::<Map, GoldenRatio, 3>("map, golden, 3-way")?;
     torture::<u64, SipHash13Key, 2>("set, siphash, 2-way")?;
     torture::<u64, GoldenRatio, 3>("set, golden, 3-way")
+}
+
+pub(super) fn test_cuckoo_torture(_fs: &Fs, _nr: u64) -> TestRet {
+    tortures()
 }
 
 // ── The benchmark ────────────────────────────────────────────────────────
@@ -803,7 +805,7 @@ fn bench_threads<S: CuckooHasher, const W: usize>(
 }
 
 fn bench<S: CuckooHasher, const W: usize>(table: &str) -> TestRet {
-    let cpus = nr_cpus();
+    let cpus = num_online_cpus();
 
     for shift in [10u32, 14, 18, 22] {
         let n = 1usize << shift;
@@ -861,4 +863,28 @@ pub(super) fn test_cuckoo_bench(_fs: &Fs, _nr: u64) -> TestRet {
     bench::<SipHash13Key, 3>("siphash, 3-way")?;
     bench::<GoldenRatio, 2>("golden, 2-way")?;
     bench::<GoldenRatio, 3>("golden, 3-way")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // libtest runs each on a thread of its own, which libbcachefs code needs
+    // made one it can run on
+    fn run(name: &str, f: fn() -> TestRet) {
+        unsafe { c::linux_thread_init() };
+        let ret = f();
+        unsafe { c::linux_thread_exit() };
+        ret.unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    }
+
+    #[test]
+    fn cuckoo() {
+        run("cuckoo", models)
+    }
+
+    #[test]
+    fn cuckoo_torture() {
+        run("cuckoo torture", tortures)
+    }
 }
