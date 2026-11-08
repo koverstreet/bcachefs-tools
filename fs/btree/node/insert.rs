@@ -6,13 +6,14 @@ use core::ffi::c_int;
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::Ordering::Relaxed;
 
-use cstruct_macros::{c_export, c_extern};
+use cstruct_macros::c_export;
 
+use super::aux_tree::pack_pos_or_unpacked;
 use super::iter::KeyIter;
 use super::keys::key_at;
 use super::sort::bch2_maybe_compact_whiteouts;
 use super::BtreeNode;
-use crate::btree::bkey::BkeyI;
+use crate::btree::bkey::{BkeyI, BkeyP, BKEY_U64S};
 use crate::btree::cache::bch2_btree_node_set_dirty;
 use crate::btree::for_each::lockrestart_do;
 use crate::btree::interior::check_topology_msg;
@@ -31,8 +32,25 @@ use crate::types::Le64;
 use crate::util::kernel::unlikely;
 use crate::util::log::LogMsg;
 
-c_extern! {
-    fn bch2_push_whiteout(b: *mut BtreeNode, pos: Bpos);
+/// A whiteout for @pos - packed, if it packs - in @b's unwritten whiteouts:
+/// for a deletion of a key a write still has to see deleted.
+///
+/// # Safety
+/// @b is write locked.
+unsafe fn push_whiteout(b: &BtreeNode, pos: Bpos) {
+    assert!(b.keys_u64s_remaining(unsafe { b.contents() }) >= BKEY_U64S, "no room in a node for a whiteout");
+    ebug_assert!(!b.flags.just_written());
+
+    let mut k = pack_pos_or_unpacked(b, pos);
+    let (buf, at) = k.as_buf_mut();
+    let k = &mut buf[usize::from(at)..];
+    let p = BkeyP::from_slice_mut(k).expect("a key just packed");
+    p.set_needs_whiteout(true);
+    let u64s = p.u64s();
+
+    b.whiteout_u64s.set(b.whiteout_u64s.get() + u64s as u16);
+    let at = b.unwritten_whiteouts().start;
+    b.keys_mut(unsafe { b.contents_mut() }).buf[at..at + u64s].copy_from_slice(&k[..u64s]);
 }
 
 impl BtreeNode {
@@ -181,7 +199,7 @@ impl BtreeTrans<'_> {
 
             if needs_whiteout {
                 if deleting {
-                    unsafe { bch2_push_whiteout(core::ptr::from_ref(b).cast_mut(), insert.k.p) };
+                    unsafe { push_whiteout(b, insert.k.p) };
                 } else {
                     insert.k.format_bits.set_needs_whiteout(1);
                 }
