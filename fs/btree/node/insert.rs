@@ -280,11 +280,11 @@ impl BtreeTrans<'_> {
         let u64s_added = set_u64s() - old_u64s;
 
         if live_u64s_added < 0 {
-            let contents = unsafe { b.contents_mut() };
+            let contents = unsafe { b.contents() };
             let live = contents.nr.live_u64s as isize;
-            for sib in &mut contents.sib_u64s {
-                if *sib != u16::MAX {
-                    *sib = live.max(*sib as isize + live_u64s_added) as u16;
+            for sib in &contents.sib_u64s {
+                if sib.get() != u16::MAX {
+                    sib.set(live.max(sib.get() as isize + live_u64s_added) as u16);
                 }
             }
         }

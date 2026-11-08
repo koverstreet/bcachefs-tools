@@ -195,7 +195,11 @@ pub struct NodeContents {
     pub set: [BsetTree; cs::MAX_BSETS as usize],
 
     pub nr: BtreeNrKeys,
-    pub sib_u64s: [u16; 2],
+    /*
+     * Hints, written holding the node only intent locked - by merge - and read
+     * with it locked any way.
+     */
+    pub sib_u64s: [Volatile<u16>; 2],
     pub unpack_fn_len: u8,
 
     /* Key/pointer for this btree node */
@@ -311,16 +315,16 @@ impl NodeContents {
         self.set[1].u64s() > 1 << mid_u64s_bits
     }
 
-    pub fn reset_sib_u64s(&mut self) {
+    pub fn reset_sib_u64s(&self) {
         let live = self.nr.live_u64s;
-        self.sib_u64s[0] = if self.data().min_key != POS_MIN { live } else { u16::MAX };
-        self.sib_u64s[1] = if self.key.k.p != SPOS_MAX { live } else { u16::MAX };
+        self.sib_u64s[0].set(if self.data().min_key != POS_MIN { live } else { u16::MAX });
+        self.sib_u64s[1].set(if self.key.k.p != SPOS_MAX { live } else { u16::MAX });
     }
 }
 
 #[c_export]
 pub fn btree_node_reset_sib_u64s(b: &BtreeNode) {
-    unsafe { b.contents_mut() }.reset_sib_u64s()
+    unsafe { b.contents() }.reset_sib_u64s()
 }
 
 impl BtreeNode {
@@ -389,9 +393,9 @@ impl BtreeNode {
     /// Whether, @d u64s from now, it's small enough to merge with a sibling:
     /// btree_node_needs_merge().
     pub fn needs_merge(&self, contents: &NodeContents, fs: &Fs, d: i32) -> bool {
-        let sib_u64s = contents.sib_u64s;
+        let sib_u64s = contents.sib_u64s[0].get().min(contents.sib_u64s[1].get());
         !crate::debug::params::btree_node_merging_disabled() &&
-            i32::from(sib_u64s[0].min(sib_u64s[1])) + d <= i32::from(fs.btree.foreground_merge_threshold)
+            i32::from(sib_u64s) + d <= i32::from(fs.btree.foreground_merge_threshold)
     }
 
     pub fn want_new_bset(&self, contents: &NodeContents, fs: &Fs) -> Option<u16> {
