@@ -131,7 +131,7 @@ pub struct bch_fs_snapshots {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, CStruct)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, CStruct)]
 #[c_typedef]
 pub struct subvol_inum {
     /* we can't have padding in this struct: */
