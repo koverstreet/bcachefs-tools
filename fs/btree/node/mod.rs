@@ -379,6 +379,12 @@ impl BtreeNode {
         1 << self.byte_order
     }
 
+    /// Whether a node of @u64s of keys fits its buffer: strictly less than,
+    /// as bch2_btree_node_format_fits() and the write's slop have it.
+    pub fn fits_u64s(&self, u64s: usize) -> bool {
+        size_of::<Head<c::btree_node>>() + u64s * size_of::<u64>() < self.buf_bytes()
+    }
+
     pub fn keys_cachelines(&self) -> usize {
         self.buf_bytes() / BSET_CACHELINE
     }
