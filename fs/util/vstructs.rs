@@ -335,7 +335,7 @@ macro_rules! vstruct_container {
     ($t:ident, thin $entry:ty) => { $crate::paste! {
         impl $t<$crate::util::vstructs::Validated> {
             pub fn entries(&self) -> $crate::util::vstructs::ViewEntries<'_, $entry> {
-                $crate::util::vstructs::ViewEntries::new(self.start_bytes())
+                unsafe { $crate::util::vstructs::ViewEntries::new(self.start_bytes()) }
             }
         }
 
@@ -1078,38 +1078,93 @@ impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for Unvalid
 }
 
 /// An unsized container's thin entries, keys - each a VstructRef of its own
-/// bytes, Validated: a Validated jset_entry's entries(). One that doesn't fit, or says
-/// it's shorter than its header - which would never end the walk - ends it,
-/// rather than being read past.
+/// bytes, Validated: a Validated jset_entry's entries(). Validated, so the walk
+/// is bkey_next()'s: each entry's length, read from its header, and on.
 pub struct ViewEntries<'a, E> {
     rest:   &'a [u8],
+    at:     usize,
     _entry: PhantomData<&'a E>,
+}
+
+/// The length of the entry at the start of @rest, as its header says.
+///
+/// # Safety
+/// @rest starts with a whole, aligned E, which says it's at least its header
+/// and no longer than @rest.
+#[inline(always)]
+unsafe fn validated_len<E: SelfSized + Plain>(rest: &[u8]) -> usize {
+    let len = unsafe { &*rest.as_ptr().cast::<E>() }.bytes();
+    debug_assert!(len >= size_of::<E>() && len <= rest.len(), "a validated entry of {len} bytes, in {}", rest.len());
+    len
 }
 
 impl<'a, E> ViewEntries<'a, E> {
     /// The entries in @rest: a validated unsized container's, from its
     /// start[].
-    pub(crate) fn new(rest: &'a [u8]) -> Self {
-        Self { rest, _entry: PhantomData }
+    ///
+    /// # Safety
+    /// @rest is whole entries, aligned, each as long as its header says.
+    pub(crate) unsafe fn new(rest: &'a [u8]) -> Self {
+        Self { rest, at: 0, _entry: PhantomData }
     }
 }
 
 impl<'a, E: SelfSized + Plain + 'a> Iterator for ViewEntries<'a, E> {
     type Item = VstructRef<'a, E, Validated>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let rest = self.rest;
-        let whole = rest.len() >= size_of::<E>() && rest.as_ptr() as usize % align_of::<E>() == 0;
-        // SAFETY: its header is there, aligned, and any bytes are an E
-        let len = whole.then(|| unsafe { &*rest.as_ptr().cast::<E>() }.bytes())
-            .filter(|&len| len >= size_of::<E>() && len <= rest.len());
-        let Some(len) = len else {
-            self.rest = &[];
+        if self.rest.is_empty() {
             return None;
-        };
-        let (e, rest) = rest.split_at(len);
+        }
+        let len = unsafe { validated_len::<E>(self.rest) };
+        let (e, rest) = self.rest.split_at(len);
         self.rest = rest;
+        self.at += len;
         Some(VstructRef { bytes: e, _t: PhantomData })
+    }
+}
+
+impl<'a, E: SelfSized + Plain + 'a> EntryWalk for ViewEntries<'a, E> {
+    fn offset(&self) -> usize {
+        self.at
+    }
+}
+
+/// ViewEntries, mutably: each a VstructMut.
+pub struct ViewEntriesMut<'a, E> {
+    rest:   &'a mut [u8],
+    at:     usize,
+    _entry: PhantomData<&'a mut E>,
+}
+
+impl<'a, E> ViewEntriesMut<'a, E> {
+    /// # Safety
+    /// As ViewEntries::new()'s.
+    pub(crate) unsafe fn new(rest: &'a mut [u8]) -> Self {
+        Self { rest, at: 0, _entry: PhantomData }
+    }
+}
+
+impl<'a, E: SelfSized + Plain + 'a> Iterator for ViewEntriesMut<'a, E> {
+    type Item = VstructMut<'a, E, Validated>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.rest.is_empty() {
+            return None;
+        }
+        let len = unsafe { validated_len::<E>(self.rest) };
+        let (e, rest) = core::mem::take(&mut self.rest).split_at_mut(len);
+        self.rest = rest;
+        self.at += len;
+        Some(VstructMut { bytes: e, _t: PhantomData })
+    }
+}
+
+impl<'a, E: SelfSized + Plain + 'a> EntryWalk for ViewEntriesMut<'a, E> {
+    fn offset(&self) -> usize {
+        self.at
     }
 }
 
