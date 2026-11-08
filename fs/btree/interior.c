@@ -180,49 +180,6 @@ int bch2_btree_node_check_topology(struct btree_trans *trans, struct btree *b)
 	return bch2_btree_node_check_topology_msg(trans, b, &msg.m);
 }
 
-/* Calculate ideal packed bkey format for new btree nodes: */
-
-static void __bch2_btree_calc_format(struct bkey_format_state *s, struct btree *b)
-{
-	struct bkey_packed *k;
-	struct bkey uk;
-
-	for_each_bset(b, t)
-		bset_tree_for_each_key(b, t, k)
-			if (!bkey_deleted(k)) {
-				__bkey_unpack_key(b, &uk, k);
-				bch2_bkey_format_add_key(s, &uk);
-			}
-}
-
-static struct bkey_format bch2_btree_calc_format(struct btree *b)
-{
-	struct bkey_format_state s;
-
-	bch2_bkey_format_init(&s);
-	bch2_bkey_format_add_pos(&s, b->data->min_key);
-	bch2_bkey_format_add_pos(&s, b->data->max_key);
-	__bch2_btree_calc_format(&s, b);
-
-	return bch2_bkey_format_done(&s);
-}
-
-static size_t btree_node_u64s_with_format(struct btree_nr_keys nr,
-					  struct bkey_format *old_f,
-					  struct bkey_format *new_f)
-{
-	/* stupid integer promotion rules */
-	ssize_t delta =
-	    (((int) new_f->key_u64s - old_f->key_u64s) *
-	     (int) nr.packed_keys) +
-	    (((int) new_f->key_u64s - BKEY_U64s) *
-	     (int) nr.unpacked_keys);
-
-	BUG_ON(delta + nr.live_u64s < 0);
-
-	return nr.live_u64s + delta;
-}
-
 /**
  * bch2_btree_node_format_fits - check if we could rewrite node with a new format
  *

@@ -70,6 +70,17 @@ impl BtreeNrKeys {
     pub fn account_key_drop(&mut self, set: usize, k: &BkeyP) {
         self.account_key(set, k, -1)
     }
+
+    /// The live u64s, the keys repacked from @old_f to @new_f.
+    pub fn u64s_with_format(&self, old_f: &c::bkey_format, new_f: &c::bkey_format) -> usize {
+        let new_key_u64s = i32::from(new_f.key_u64s);
+        let delta = (new_key_u64s - i32::from(old_f.key_u64s)) * i32::from(self.packed_keys) +
+                    (new_key_u64s - BKEY_U64S as i32) * i32::from(self.unpacked_keys);
+        let u64s = i32::from(self.live_u64s) + delta;
+
+        assert!(u64s >= 0, "{} live u64s, repacked {delta} more", self.live_u64s);
+        u64s as usize
+    }
 }
 
 #[repr(C)]
@@ -266,6 +277,28 @@ impl BtreeNode {
         }
         ControlFlow::Continue(())
     }
+
+    /// Every bset's live keys added to @s.
+    pub fn format_add_keys(&self, contents: &NodeContents, s: &mut c::bkey_format_state) {
+        let keys = self.keys(contents);
+        for t in contents.sets() {
+            for (i, k) in keys.set_keys(t) {
+                if !k.key_type().is_deleted() {
+                    s.add_key(&keys.unpack(i));
+                }
+            }
+        }
+    }
+
+    /* Calculate ideal packed bkey format for new btree nodes: */
+    pub fn calc_format(&self, contents: &NodeContents) -> c::bkey_format {
+        let data = contents.data();
+        let mut s = c::bkey_format_state::new();
+        s.add_pos(data.min_key);
+        s.add_pos(data.max_key);
+        self.format_add_keys(contents, &mut s);
+        s.done()
+    }
 }
 
 impl NodeContents {
@@ -328,6 +361,21 @@ impl NodeContents {
 #[c_export]
 pub fn btree_node_reset_sib_u64s(b: &BtreeNode) {
     unsafe { b.contents() }.reset_sib_u64s()
+}
+
+#[c_export]
+pub fn __bch2_btree_calc_format(s: &mut c::bkey_format_state, b: &BtreeNode) {
+    b.format_add_keys(unsafe { b.contents() }, s)
+}
+
+#[c_export]
+pub fn bch2_btree_calc_format(b: &BtreeNode) -> c::bkey_format {
+    b.calc_format(unsafe { b.contents() })
+}
+
+#[c_export]
+pub fn btree_node_u64s_with_format(nr: BtreeNrKeys, old_f: &c::bkey_format, new_f: &c::bkey_format) -> usize {
+    nr.u64s_with_format(old_f, new_f)
 }
 
 impl BtreeNode {
