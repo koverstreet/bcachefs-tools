@@ -32,8 +32,9 @@
 //! - **Settle**: an insert's last step, its item stored marked in the slot its
 //!   claimed chain freed, and a SeqCst fence past: withdrawn if a newer table
 //!   has been linked, or its key's in an older table or another of its slots
-//!   in this one; else unmarked. A marked key in an older table is waited
-//!   out, and in this one by the key's slot 0, which wins.
+//!   in this one - each table's found by a scan no move ran during, as a
+//!   lookup's probe is; else unmarked. A marked key in an older table is
+//!   waited out, and in this one by the key's slot 0, which wins.
 //! - **Drain**: each of the oldest table's slots retired: an empty one by a
 //!   cmpxchg; one with an item by placing it, marked, in the newest by a
 //!   claimed chain, taking it from the old slot by a cmpxchg to retired, and
@@ -539,7 +540,22 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
             let mut wait = false;
             for u in self.tables(g) {
                 let own = core::ptr::eq(u.head, t.head);
-                let lost = match u.rival(key, s) {
+                // a scan that missed a rival moved under it - its new slot
+                // read before the fill, its old after the overwrite - sees the
+                // move count change, as a lookup's probe does
+                let rival = loop {
+                    let moves = self.moves.load(Acquire);
+                    let r = u.rival(key, s);
+                    if r.is_some() {
+                        break r;
+                    }
+                    fence(Acquire);
+                    if self.moves.load(Relaxed) == moves {
+                        break None;
+                    }
+                    saw!(self.faults, retry);
+                };
+                let lost = match rival {
                     Some(Rival::In) => true,
                     Some(Rival::Marked) if own && !first => true,
                     Some(Rival::Marked) => {
