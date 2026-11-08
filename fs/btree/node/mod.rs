@@ -18,7 +18,6 @@ use crate::btree::bkey::{BkeyI, BkeyP, BkeySC, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::c;
 use crate::cstructs::c as cs;
 use crate::data::keylist::PaddedKey;
-use crate::format::Btree;
 use crate::fs::Fs;
 use crate::locking::LockedBy;
 use crate::types::c_default;
@@ -422,19 +421,6 @@ impl BtreeNode {
 
     pub fn prev_write(&self) -> &cs::btree_write {
         &self.writes[self.flags.write_idx() as usize ^ 1]
-    }
-
-    pub fn shard(&self, contents: &NodeContents, fs: &Fs) -> Option<usize> {
-        let bits = fs.opts().shard_inode_numbers_bits.get() as u32;
-        let p = contents.key.k.p;
-        let field = match Btree(self.c.btree_id.into()) {
-            Btree::inodes => p.offset,
-            Btree::extents |
-            Btree::dirents |
-            Btree::xattrs  => p.inode,
-            _ => return None,
-        };
-        (bits != 0).then(|| ((field << 1) >> (64 - bits)) as usize)
     }
 }
 

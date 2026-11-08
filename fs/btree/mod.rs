@@ -45,6 +45,7 @@ pub mod node_scan;
 pub mod path;
 pub mod path_node;
 pub mod read;
+pub mod shard;
 pub mod trans;
 pub mod trans_attempt;
 pub mod traverse;
