@@ -1347,7 +1347,10 @@ pub(crate) fn increase_depth(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path
     let n = update.alloc_root(paths, path, level + 1);
 
     update.push_parent_key(b.contents().key_i());
-    let _ = update.insert_parent_keys(paths, path, &n);
+    if let Err(e) = update.insert_parent_keys(paths, path, &n) {
+        trans.node_unlock(paths, path, level + 1);
+        return Err(e);
+    }
 
     update.set_root(paths, path, &n);
     update.replace(paths, &[], &[n]);
