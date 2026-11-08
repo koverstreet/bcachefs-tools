@@ -156,6 +156,11 @@ impl VfsInode {
         }
     }
 
+    /// make_bad()'s.
+    pub fn is_bad(&self) -> bool {
+        unsafe { c::is_bad_inode(self.as_ptr()) }
+    }
+
     /// i_rwsem held for write: inode_lock(), as the VFS takes it for a
     /// namespace operation or setattr.
     pub fn assert_locked(&self) {
@@ -196,6 +201,12 @@ impl VfsInode {
     /// i_size to @size, and the page cache past it dropped: truncate_setsize().
     pub fn truncate_setsize(&self, size: u64) {
         unsafe { c::truncate_setsize(self.as_ptr(), loff(size)) }
+    }
+
+    /// Its page cache gone, for good - the VFS evicting it:
+    /// truncate_inode_pages_final().
+    pub fn truncate_pages_final(&self) {
+        unsafe { c::truncate_inode_pages_final(&raw mut (*self.as_ptr()).i_data) }
     }
 
     /// Whether it may be @size long - its rlimit and its filesystem's limit:
@@ -254,6 +265,15 @@ impl VfsInode {
             let s = &raw mut (*self.as_ptr()).i_state;
             write_volatile(s, read_volatile(s) | flags as _);
         }
+    }
+
+    /// state(), without i_lock: inode_state_read_once() - as of a moment.
+    pub fn state_once(&self) -> u32 {
+        #[cfg(linux_ge = "6.19")]
+        let s = unsafe { c::inode_state_read_once(self.as_ptr()) } as u32;
+        #[cfg(not(linux_ge = "6.19"))]
+        let s = unsafe { read_volatile(&raw const (*self.as_ptr()).i_state) } as u32;
+        s
     }
 
     /// A reference, taken under i_lock: __iget() - or none, if the VFS is
@@ -327,6 +347,23 @@ impl VfsInode {
     /// Written back now - and waited for, if @sync: write_inode_now().
     pub fn write_now(&self, sync: bool) -> Result<(), BchError> {
         ret_to_result_void(unsafe { c::write_inode_now(self.as_ptr(), sync as c_int) })
+    }
+
+    // ── Eviction ─────────────────────────────────────────────────────────
+
+    /// Evicted once it's unused, its dentries freed with it: d_mark_dontcache().
+    pub fn mark_dontcache(&self) {
+        unsafe { c::d_mark_dontcache(self.as_ptr()) }
+    }
+
+    /// Its unused dentries freed: d_prune_aliases().
+    pub fn prune_aliases(&self) {
+        unsafe { c::d_prune_aliases(self.as_ptr()) }
+    }
+
+    /// The end of evict_inode(): clear_inode().
+    pub fn clear(&self) {
+        unsafe { c::clear_inode(self.as_ptr()) }
     }
 
     // ── A new inode, its creator's alone: &mut ───────────────────────────

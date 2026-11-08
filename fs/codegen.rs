@@ -208,6 +208,9 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     // vfs/vfs_inode.rs, a new inode's: a static inline, and the exports
     "mapping_set_folio_min_order", "inode_init_once", "inode_init_always_gfp", "make_bad_inode",
     "init_special_inode", "inode_nohighmem", "igrab", "write_inode_now",
+    // vfs/vfs_inode.rs, an evicted inode's: a static inline from 6.19, and the exports
+    "inode_state_read_once", "is_bad_inode", "truncate_inode_pages_final", "d_mark_dontcache",
+    "clear_inode",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "closure_state",
                                   "__genradix", "genradix_iter",
