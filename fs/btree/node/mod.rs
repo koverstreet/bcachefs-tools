@@ -274,6 +274,10 @@ impl NodeContents {
         unsafe { &*self.data }
     }
 
+    pub fn data_mut(&mut self) -> &mut Head<cs::btree_node> {
+        unsafe { &mut *self.data }
+    }
+
     pub fn key_i(&self) -> &BkeyI {
         self.key.key()
     }

@@ -240,6 +240,16 @@ impl Paths<'_> {
     }
 }
 
+impl<'t> Paths<'t> {
+    /// Path @idx's node at @level, if it's a btree node the path holds locked:
+    /// for the attempt, as PathLeaf::node()'s is - good until its next unlock
+    /// or error, which nothing checks.
+    pub(crate) fn held_btree_node(&self, idx: PathIdx, level: usize) -> Option<LockedNode<'t, BtreeNode>> {
+        let b = self[idx].locked_btree_node(level)?;
+        Some(unsafe { LockedNode::new(&*ptr::from_ref(b.node())) })
+    }
+}
+
 impl Drop for Paths<'_> {
     fn drop(&mut self) {
         if self.took {

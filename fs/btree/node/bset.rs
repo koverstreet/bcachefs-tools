@@ -354,6 +354,12 @@ impl Keys<'_> {
         assert!(counted == *nr, "btree node's key counts {nr:?}, its keys' {counted:?}");
     }
 
+    pub(crate) fn verify_btree_nr_keys(&self) {
+        if cfg!(CONFIG_BCACHEFS_DEBUG) && debug_check_btree_accounting() {
+            self.__verify_btree_nr_keys(&self.contents().nr);
+        }
+    }
+
     #[cold]
     #[inline(never)]
     fn insert_pos_bad(&self, msg: &str, l_name: &str, l: &BkeyP, r_name: &str, r: &BkeyP) -> ! {
