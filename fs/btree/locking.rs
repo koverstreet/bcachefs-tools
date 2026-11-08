@@ -25,7 +25,7 @@ use crate::util::backtrace::{prt_current_backtrace, prt_symbol};
 use crate::util::closure::closure_wait_event_timeout_by;
 use crate::util::ffi::Opaque;
 use crate::util::futex::EventCount;
-use crate::util::kernel::{jiffies, msecs_to_jiffies, race_fault, time_after, HZ, READ};
+use crate::util::kernel::{jiffies, likely, msecs_to_jiffies, race_fault, time_after, HZ, READ};
 use crate::util::percpu::{bch2_migrate_disable, bch2_migrate_enable, bch2_raw_smp_processor_id};
 use crate::util::rcu::SrcuReadGuard;
 use crate::util::sleep::Sleep;
@@ -796,8 +796,22 @@ impl BtreeTrans<'_> {
     }
 
     /// @ip is C's _RET_IP_, for the trace.
+    #[inline]
     pub(crate) fn path_upgrade(&self, paths: &mut Paths<'_>, idx: PathIdx, new_locks_want: usize,
                                ip: c_ulong) -> Result<(), BchError> {
+        let new_locks_want = new_locks_want.min(c::BTREE_MAX_DEPTH as usize);
+        let path = &paths[idx];
+
+        if likely(path.locks_want() as usize >= new_locks_want && path.nodes_locked != 0) {
+            Ok(())
+        } else {
+            self.__path_upgrade(paths, idx, new_locks_want, ip)
+        }
+    }
+
+    #[inline(never)]
+    pub(crate) fn __path_upgrade(&self, paths: &mut Paths<'_>, idx: PathIdx, new_locks_want: usize,
+                                 ip: c_ulong) -> Result<(), BchError> {
         let path           = &mut paths[idx];
         let old_locks      = path.nodes_locked;
         let old_locks_want = path.locks_want() as usize;
@@ -1410,7 +1424,7 @@ pub fn __bch2_btree_path_relock(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &m
 #[inline(always)]
 pub fn __bch2_btree_path_upgrade(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: *mut BtreePath,
                                  new_locks_want: c_uint) -> c_int {
-    ret_to_c(trans.path_upgrade(paths, trans.path_idx_of(path), new_locks_want as usize, crate::ret_ip!()))
+    ret_to_c(trans.__path_upgrade(paths, trans.path_idx_of(path), new_locks_want as usize, crate::ret_ip!()))
 }
 
 #[c_export]
