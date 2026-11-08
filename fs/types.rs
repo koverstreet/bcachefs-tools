@@ -19,7 +19,8 @@ use crate::util::refcount::AtomicRef;
 use crate::util::workqueue::{ReffedWork, Workqueue, WqFlags};
 use crate::locking::{Locked, LockedBy, MutexNoio, PercpuRwsemNoio};
 use crate::util::percpu::{Counters, PerCpu};
-use crate::types::{GenRadix, RustOnly, bits_to_longs, rust_only};
+use crate::data_structures::genradix::SharedGenRadix;
+use crate::types::{RustOnly, bits_to_longs, rust_only};
 use crate::util::rcu::RcuHead;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ushort};
@@ -393,7 +394,8 @@ pub struct Dev {
      * Per-bucket arrays are protected by either rcu_read_lock or
      * state_lock, for device resize.
      */
-    pub buckets_gc: GenRadix<c::bucket>,
+    #[c("GENRADIX(struct bucket) buckets_gc")]
+    pub buckets_gc: SharedGenRadix<c::bucket>,
     pub bucket_gens: c::BucketGensArray,
     /* allocated once, by migrate, and read without a lock */
     pub buckets_nouse: c::BucketBitmapWords,
