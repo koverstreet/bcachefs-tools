@@ -850,6 +850,11 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
         RcuArrayBuf::<T, H>::alloc(RcuArrayHead::new(nr, h))
     }
 
+    /// alloc(), for what mustn't fail to allocate.
+    pub fn alloc_nofail(nr: usize, h: H) -> NonNull<RcuArrayHead<H>> {
+        RcuArrayBuf::<T, H>::alloc_nofail(RcuArrayHead::new(nr, h))
+    }
+
     /// # Safety
     /// @p is alloc()'s, and isn't freed for 'a.
     pub unsafe fn parts<'a>(p: NonNull<RcuArrayHead<H>>) -> (&'a H, &'a [T]) {

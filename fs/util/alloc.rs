@@ -35,7 +35,6 @@ use crate::util::rcu::FreeAnytime;
 // page allocator doesn't know. In userspace, std's allocator takes no flags.
 
 pub struct Kmalloc;
-pub struct Vmalloc;
 pub struct KVmalloc;
 
 #[cfg(kernel)]
@@ -62,7 +61,15 @@ macro_rules! allocators {
 }
 
 #[cfg(kernel)]
-allocators!(Kmalloc, Vmalloc, KVmalloc);
+allocators!(Kmalloc, KVmalloc);
+
+/// How an allocation may fail: as @Flags let it - or, for what mustn't, not
+/// at all: a plain GFP_KERNEL allocation first, then __GFP_NOFAIL.
+#[derive(Clone, Copy)]
+pub enum AllocMode {
+    Gfp(Flags),
+    Nofail,
+}
 
 /// An allocator, as both builds have it: in-kernel, ours above - the task's
 /// memalloc scope applied - and in userspace, std's, which takes no flags.
@@ -85,11 +92,40 @@ pub unsafe trait Alloc {
     /// # Safety
     /// @p is alloc()'s or realloc()'s, of @layout, and nothing uses it after.
     unsafe fn free(p: NonNull<u8>, layout: Layout);
+
+    /// alloc(), __GFP_NOFAIL: through C, as the kernel's Rust has no
+    /// __GFP_NOFAIL - aligned as kmalloc() aligns, to 8. Userspace's
+    /// allocator aborts rather than fail.
+    fn alloc_nofail(layout: Layout) -> NonNull<u8>;
+
+    fn alloc_mode(layout: Layout, mode: AllocMode) -> Result<NonNull<u8>, AllocError> {
+        match mode {
+            AllocMode::Gfp(gfp) => Self::alloc(layout, gfp),
+            AllocMode::Nofail => {
+                // checked whether the fallback's needed or not: a misaligned
+                // caller would otherwise find out only under memory pressure
+                assert!(layout.align() <= 8, "a __GFP_NOFAIL allocation aligned past kmalloc()'s");
+                Ok(Self::alloc(layout, flags::GFP_KERNEL).unwrap_or_else(|_| Self::alloc_nofail(layout)))
+            }
+        }
+    }
 }
 
 macro_rules! allocs {
-    ($($a:ident),*) => {$(
+    ($($a:ident => $nofail:expr),*) => {$(
         unsafe impl Alloc for $a {
+            fn alloc_nofail(layout: Layout) -> NonNull<u8> {
+                #[cfg(kernel)]
+                {
+                    NonNull::new($nofail(layout.size()).cast()).expect("__GFP_NOFAIL allocation returned NULL")
+                }
+                #[cfg(not(kernel))]
+                {
+                    NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) })
+                        .unwrap_or_else(|| std::alloc::handle_alloc_error(layout))
+                }
+            }
+
             fn alloc(layout: Layout, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
                 #[cfg(kernel)]
                 {
@@ -134,7 +170,7 @@ macro_rules! allocs {
     )*};
 }
 
-allocs!(Kmalloc, KVmalloc, Vmalloc);
+allocs!(Kmalloc => |n| kzalloc_nofail(n), KVmalloc => |n| kvzalloc_nofail(n).as_ptr());
 
 #[cfg(kernel)]
 pub type KBox<T> = kernel::alloc::Box<T, Kmalloc>;
@@ -300,7 +336,7 @@ pub fn kbox_zeroed_nofail<T: ::pin_init::Zeroable + FreeAnytime>() -> KBox<T> {
 pub fn kbox_pin_init<T: FreeAnytime, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>)
     -> Result<core::pin::Pin<KBox<T>>, E>
 {
-    let p = crate::util::maybe_rcu_alloc::alloc_at::<T, Kmalloc, E>(init, flags::GFP_KERNEL)?;
+    let p = crate::util::maybe_rcu_alloc::alloc_at::<T, Kmalloc, E>(init, AllocMode::Gfp(flags::GFP_KERNEL))?;
     Ok(unsafe { core::pin::Pin::new_unchecked(KBox::from_raw(p.as_ptr())) })
 }
 

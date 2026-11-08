@@ -45,6 +45,14 @@ impl<T, L: LenUint> DstVec<T, L> {
         Ok(Self { head, _t: PhantomData })
     }
 
+    /// with_capacity(), for what mustn't fail to allocate: past its length
+    /// type is a bug.
+    pub fn with_capacity_nofail(cap: usize) -> Self {
+        assert!(cap <= L::MAX, "a DstVec of {cap}, past its length type");
+        let head = Buf::<T, L>::alloc_nofail(DstVecHead { len: L::ZERO, cap: L::from_usize(cap) });
+        Self { head, _t: PhantomData }
+    }
+
     fn buf(&self) -> &Buf<T, L> {
         unsafe { &*Buf::<T, L>::from_thin(self.head.as_ptr()) }
     }
