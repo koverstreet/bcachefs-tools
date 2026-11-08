@@ -188,8 +188,9 @@ pub fn qid(u: &c::bch_inode_unpacked) -> c::bch_qid {
 #[cfg(CONFIG_BCACHEFS_QUOTA)]
 pub use vfs::*;
 
-/// The space counter, as acct() takes it.
+/// The space and inode counters, as acct() takes them.
 pub const Q_SPC: usize = c::quota_counters::Q_SPC.0 as usize;
+pub const Q_INO: usize = c::quota_counters::Q_INO.0 as usize;
 
 /// Without quotas, nothing's counted.
 #[cfg(not(CONFIG_BCACHEFS_QUOTA))]
@@ -232,7 +233,6 @@ mod vfs {
     const SB_RDONLY_BIT: u32 = 0;
 
     const QTYP_NR: usize = c::QTYP_NR as usize;
-    const Q_INO: usize = c::quota_counters::Q_INO.0 as usize;
 
     /// @s's fieldmask, in hex, then @fields: one a line, names in a column 20
     /// wide - as C's to_text tabstop.

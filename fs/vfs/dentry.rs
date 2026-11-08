@@ -66,13 +66,18 @@ impl<'a> Dentry<'a> {
     /// Stable while its directory is locked, as the namespace operations
     /// hold it.
     pub fn name(&self) -> &'a OsStr {
+        unsafe { qstr_name(self.qstr()) }
+    }
+
+    /// name(), as the VFS has it.
+    pub fn qstr(&self) -> &'a c::qstr {
         unsafe {
             // 6.18 made d_name a const union member, __d_name its writable alias
             #[cfg(linux_ge = "6.18")]
             let name = &(*self.raw).__bindgen_anon_1.d_name;
             #[cfg(not(linux_ge = "6.18"))]
             let name = &(*self.raw).d_name;
-            qstr_name(name)
+            name
         }
     }
 

@@ -16,6 +16,7 @@ use crate::acl::PosixAcl;
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::util::file::File;
+use crate::util::kernel::{current_fsgid, current_fsuid};
 use crate::vfs::vfs_inode::VfsInode;
 
 /// The VFS's idmap pointer: const from 7.4.
@@ -71,6 +72,16 @@ impl<'f> MntIdmap<'f> {
         let uid = unsafe { c::make_vfsuid(self.0, inode.user_ns(), inode.kuid()) };
         let gid = unsafe { c::make_vfsgid(self.0, inode.user_ns(), inode.kgid()) };
         (c::kuid_t { val: uid.val }, c::kgid_t { val: gid.val })
+    }
+
+    /// The caller's fsuid, through this mount, as an id of @inode's
+    /// filesystem: mapped_fsuid() - what a new inode in it is owned by.
+    pub fn fsuid(self, inode: &VfsInode) -> c::kuid_t {
+        self.kuid(inode, c::vfsuid_t { val: current_fsuid().val })
+    }
+
+    pub fn fsgid(self, inode: &VfsInode) -> c::kgid_t {
+        self.kgid(inode, c::vfsgid_t { val: current_fsgid().val })
     }
 
     pub fn kuid(self, inode: &VfsInode, vfsuid: c::vfsuid_t) -> c::kuid_t {

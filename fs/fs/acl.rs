@@ -199,6 +199,7 @@ mod vfs {
     use crate::util::vstructs::Validated;
     use crate::vfs::idmap::MntIdmap;
     use crate::vfs::inode::{InodeInfo, ATTR_CTIME, ATTR_MODE};
+    use crate::vfs::vfs_inode::VfsInode;
     use crate::xattr::{self, Xattrs};
 
     impl AclType {
@@ -307,6 +308,17 @@ mod vfs {
                 ret?;
                 Ok(acl.expect("__posix_acl_chmod() succeeded without an ACL"))
             })
+        }
+
+        /// A new inode's in @dir, with @mode as they make it: its default
+        /// ACL, inherited, and its access ACL - posix_acl_create(). None for
+        /// either it doesn't get.
+        pub fn create(dir: &VfsInode, mode: &mut c::umode_t)
+            -> Result<(Option<PosixAcl>, Option<PosixAcl>), BchError>
+        {
+            let (mut default_acl, mut acl) = (core::ptr::null_mut(), core::ptr::null_mut());
+            ret_to_result(unsafe { c::posix_acl_create(dir.as_ptr(), mode, &mut default_acl, &mut acl) })?;
+            Ok((NonNull::new(default_acl).map(PosixAcl), NonNull::new(acl).map(PosixAcl)))
         }
     }
 

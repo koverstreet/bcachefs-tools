@@ -36,7 +36,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/fiemap.h",			// fiemap_prep(), fiemap_fill_next_extent(): vfs/fiemap.rs's
     "linux/namei.h",			// the path lookups: vfs/ioctl.rs's subvolume create and destroy
     "linux/fsnotify.h",			// fsnotify_mkdir(), fsnotify_rmdir(): the same
-    "linux/security.h",			// security_path_mkdir(): subvolume create
+    "linux/security.h",			// security_path_mkdir(): subvolume create; security_inode_init_security(): create
     "linux/fs_struct.h",		// current_umask(): subvolume create
     "linux/freezer.h",			// set_freezable(), freezing(), try_to_freeze(): a freezable kthread's
     "linux/power_supply.h",		// power_supply_reg_notifier(), reconcile on battery
@@ -164,7 +164,9 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "i_user_ns", "inode_get_atime", "inode_get_mtime", "inode_get_ctime",
     "inode_set_atime_to_ts", "inode_set_mtime_to_ts", "inode_set_ctime_to_ts",
     "posix_acl_alloc", "posix_acl_dup", "posix_acl_release", "__posix_acl_chmod",
-    "posix_acl_update_mode", "set_cached_acl",
+    "posix_acl_update_mode", "set_cached_acl", "posix_acl_create",
+    // vfs/namei.rs's create
+    "security_inode_init_security",
     // from_kuid() the kernel crate has
     "make_kuid", "make_kgid", "from_kgid",
     // a static inline; and a static inline without CONFIG_QUOTA_NETLINK_INTERFACE
