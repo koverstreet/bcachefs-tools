@@ -4,16 +4,6 @@
 
 /* Included after btree/types_gen.h. */
 
-static inline size_t btree_cache_list_nr(const struct bch_fs_btree_cache *bc, unsigned i)
-{
-	return bc->live_nr[i].nr_clean + bc->live_nr[i].nr_dirty;
-}
-
-static inline size_t btree_cache_nr_live(const struct bch_fs_btree_cache *bc)
-{
-	return btree_cache_list_nr(bc, 0) + btree_cache_list_nr(bc, 1);
-}
-
 /* iter flags must fit in struct btree_iter.flags: */
 static_assert(BTREE_ITER_FLAG_BIT_trim < 32);
 

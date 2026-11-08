@@ -68,12 +68,13 @@ pub struct btree_bkey_cached_common {
  */
 c_enum! {
     #[closed]
+    #[prefix(BTREE_NODE_CACHE_)]
     pub enum btree_node_cache_state: u32 {
-        BTREE_NODE_CACHE_NONE,          /* off all lists; not in cache (kzalloc default) */
-        BTREE_NODE_CACHE_FREED,         /* on bc->freed_{pcpu,nonpcpu}; no data buffer */
-        BTREE_NODE_CACHE_FREEABLE,      /* on bc->freeable; has data; not hashed */
-        BTREE_NODE_CACHE_CLEAN,         /* on bc->live[pinned].clean; hashed; has data */
-        BTREE_NODE_CACHE_DIRTY,         /* on bc->live[pinned].dirty; hashed; has data */
+        NONE,           /* off all lists; not in cache (kzalloc default) */
+        FREED,          /* on bc->freed_{pcpu,nonpcpu}; no data buffer */
+        FREEABLE,       /* on bc->freeable; has data; not hashed */
+        CLEAN,          /* on bc->live[pinned].clean; hashed; has data */
+        DIRTY,          /* on bc->live[pinned].dirty; hashed; has data */
     }
 }
 
@@ -131,16 +132,6 @@ c_default!(btree_cache_list);
 pub struct btree_cache_shrinker {
     #[c("struct shrinker *shrink")]
     pub(crate) shrink: Shrinker<Self>,
-}
-
-/// A node's buffers, allocated before the node they're for: its data and
-/// aux_data, for a node of 1 << byte_order bytes.
-#[repr(C)]
-#[derive(CStruct)]
-pub struct btree_node_bufs {
-    pub data:       *mut core::ffi::c_void,
-    pub aux_data:   *mut core::ffi::c_void,
-    pub byte_order: c_uint,
 }
 
 /* On disk root - see async splits: */
@@ -255,8 +246,6 @@ pub struct BtreeCacheLists {
     pub freed_nonpcpu: BtreeNodeList,
 
     pub nr_vmalloc: usize,
-    pub nr_freeable: usize,
-    pub nr_reserve: usize,
     pub nr_by_btree: [usize; cs::BTREE_ID_NR as usize],
 
     pub pinned_nodes_start: cs::bbpos,
@@ -292,6 +281,9 @@ crate::published! {
     #[derive(CStruct)]
     pub struct BtreeCacheLive {
         pub live_nr: [BtreeCacheLiveNr; 2],
+        /* read by the shrinker's count and the allocator, without bc->lock */
+        pub nr_freeable: Volatile<usize>,
+        pub nr_reserve: Volatile<usize>,
     }
 }
 
@@ -344,10 +336,14 @@ pub struct bch_fs_btree_cache {
      * walk can drop RCU and pick up from where it was. Node scan's buffers
      * aren't the cache's, and are freed while we run: they're not on it.
      */
-    pub nodes: cs::fast_list,
+    #[pin]
+    #[init(RustOnly::new(::pin_init::init_zeroed()))]
+    pub nodes: rust_only!(cs::fast_list),
 
     /* Number of nodes with BTREE_NODE_write_in_flight set. */
-    pub nr_in_flight: AtomicIsize,
+    #[pin]
+    #[init(RustOnly::new(AtomicIsize::new(0)))]
+    pub nr_in_flight: rust_only!(AtomicIsize),
     pub nr_in_flight_inner: AtomicIsize,
     pub nr_in_flight_wait: cs::closure_waitlist,
     pub __should_throttle_align: CacheAligned,
@@ -360,7 +356,9 @@ pub struct bch_fs_btree_cache {
      * sorted-order fastpath, which holds every journal pin until replay
      * finishes - pins must be released for reclaim to clean btree nodes.
      */
-    pub nr_self_reclaim: AtomicIsize,
+    #[pin]
+    #[init(RustOnly::new(AtomicIsize::new(0)))]
+    pub nr_self_reclaim: rust_only!(AtomicIsize),
 
     /*
      * If we need to allocate memory for a new btree node and that
@@ -368,9 +366,12 @@ pub struct bch_fs_btree_cache {
      * to satisfy the allocation - lock to guarantee only one thread does
      * this at a time:
      */
-    #[c("struct task_struct *alloc_lock")]
-    pub alloc_lock: core::sync::atomic::AtomicPtr<cs::task_struct>,
-    pub alloc_wait: cs::closure_waitlist,
+    #[pin]
+    #[init(RustOnly::new(core::sync::atomic::AtomicPtr::new(core::ptr::null_mut())))]
+    pub alloc_lock: rust_only!(core::sync::atomic::AtomicPtr<cs::task_struct>),
+    #[pin]
+    #[init(RustOnly::new(::pin_init::init_zeroed()))]
+    pub alloc_wait: rust_only!(cs::closure_waitlist),
 }
 
 /* Iterator, update, and trigger flags: */

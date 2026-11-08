@@ -327,7 +327,15 @@ unsafe fn init_list_head(l: *mut c::list_head) {
     }
 }
 
-impl c::btree_node_bufs {
+/// A node's buffers, allocated before the node they're for: its data and
+/// aux_data, for a node of 1 << byte_order bytes.
+pub(crate) struct NodeBufs {
+    data:       *mut c_void,
+    aux_data:   *mut c_void,
+    byte_order: u32,
+}
+
+impl NodeBufs {
     pub fn new(fs: &Fs) -> Self {
         Self {
             data:       core::ptr::null_mut(),
@@ -431,6 +439,17 @@ fn node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: c::gfp_t) -> Option<No
     Some(b)
 }
 
+/// A node of the cache's, borrowed for as long as the filesystem: the cache
+/// never frees one while it runs, only reuses it - so whoever finds one
+/// unlocked checks it's still the node it wants once it's locked.
+///
+/// # Safety
+/// @b is the cache's: cache_node_struct_alloc()'s, or found through its
+/// lists, its table or a key's mem_ptr.
+unsafe fn cached_node<'f>(_fs: &'f Fs, b: *const BtreeNode) -> &'f BtreeNode {
+    unsafe { &*b }
+}
+
 /// node_struct_alloc(), on bc->nodes, as every node the cache has is. Freed by
 /// node_mem_free().
 fn cache_node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: c::gfp_t) -> Option<NonNull<BtreeNode>> {
@@ -449,7 +468,7 @@ fn cache_node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: c::gfp_t) -> Opt
 fn node_with_bufs(fs: &Fs, struct_alloc: fn(&Fs, bool, c::gfp_t) -> Option<NonNull<BtreeNode>>)
     -> Option<NonNull<BtreeNode>>
 {
-    let mut bufs = c::btree_node_bufs::new(fs);
+    let mut bufs = NodeBufs::new(fs);
     let b = bufs.alloc(fs, c::GFP_KERNEL, false).ok().and_then(|()| struct_alloc(fs, false, c::GFP_KERNEL));
     let Some(b) = b else {
         bufs.free();
@@ -483,7 +502,7 @@ pub unsafe fn node_data_free(b: NonNull<BtreeNode>) {
     ebug_assert!(!unsafe { (*p).flags.write_in_flight() }, "freeing the buffers of a node with a write in flight");
 
     let mut bufs = unsafe {
-        c::btree_node_bufs {
+        NodeBufs {
             data:       (*p).contents_mut().data.cast(),
             aux_data:   (*p).aux_data,
             byte_order: (*p).byte_order as u32,
@@ -599,9 +618,9 @@ impl BtreeNode {
     pub fn live_state(&self) -> c::btree_node_cache_state {
         let f = self.flags.load();
         if f.dirty() || f.write_in_flight() {
-            c::btree_node_cache_state::BTREE_NODE_CACHE_DIRTY
+            c::btree_node_cache_state::DIRTY
         } else {
-            c::btree_node_cache_state::BTREE_NODE_CACHE_CLEAN
+            c::btree_node_cache_state::CLEAN
         }
     }
 }
@@ -611,9 +630,11 @@ pub fn btree_node_live_state(b: &BtreeNode) -> c::btree_node_cache_state {
     b.live_state()
 }
 
-pub fn bch2_btree_node_wait_on_flag(b: &BtreeNode, bit: c::btree_flags) {
-    let m = 1 << bit as u32;
-    let Ok(()) = b.flags.wait_until(Sleep::UNINTERRUPTIBLE.io(), |f| f.into_bits() & m == 0);
+impl BtreeNode {
+    pub fn wait_on_flag(&self, bit: c::btree_flags) {
+        let m = 1 << bit as u32;
+        let Ok(()) = self.flags.wait_until(Sleep::UNINTERRUPTIBLE.io(), |f| f.into_bits() & m == 0);
+    }
 }
 
 impl Fs {
@@ -728,11 +749,8 @@ impl BtreeCachePins<'_> {
 
         let [unpinned, pinned] = &mut lists.live;
         for (from, to) in [(&mut pinned.clean, &mut unpinned.clean), (&mut pinned.dirty, &mut unpinned.dirty)] {
-            let mut cur = from.cursor_mut();
-            while let Some(b) = cur.remove_current() {
-                b.flags.set_pinned(false);
-                unsafe { to.push_back(b) };
-            }
+            from.iter().for_each(|b| b.flags.set_pinned(false));
+            unsafe { to.append(from) };
         }
 
         let nr = &lists.published().live_nr;
@@ -754,8 +772,8 @@ impl Fs {
         b.flags.set_pinned(true);
 
         let dirty = match b.cache_state(&lists) {
-            c::btree_node_cache_state::BTREE_NODE_CACHE_CLEAN => false,
-            c::btree_node_cache_state::BTREE_NODE_CACHE_DIRTY => true,
+            c::btree_node_cache_state::CLEAN => false,
+            c::btree_node_cache_state::DIRTY => true,
             _ => return,
         };
 
@@ -907,7 +925,7 @@ impl Fs {
             }
         }
 
-        self.btree.cache.lock.lock().nr_reserve = reserve;
+        self.btree.cache.lock.lock().published().nr_reserve.set(reserve);
     }
 }
 
@@ -932,7 +950,7 @@ pub fn bch2_btree_id_level_to_text(out: &mut Printbuf, btree: Btree, level: c_ui
     prt!(out, "btree={btree} level={level}");
 }
 
-pub fn __bch2_btree_pos_to_text(out: &mut Printbuf, fs: &Fs, btree: Btree, level: c_uint, k: BkeySC<'_>) {
+pub fn btree_pos_to_text(out: &mut Printbuf, fs: &Fs, btree: Btree, level: c_uint, k: BkeySC<'_>) {
     prt!(out, "{btree} level {level}/");
     let root = fs.btree.cache.roots.roots_b.get(btree.0 as usize).map_or(0, |r| r.get());
     if root != 0 {
@@ -948,7 +966,7 @@ pub fn __bch2_btree_pos_to_text(out: &mut Printbuf, fs: &Fs, btree: Btree, level
 #[c_export]
 pub fn bch2_btree_pos_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
     let k = BkeySC::from(unsafe { b.contents() }.key_i());
-    __bch2_btree_pos_to_text(out, fs, Btree(b.c.btree_id.into()), b.c.level.into(), k)
+    btree_pos_to_text(out, fs, Btree(b.c.btree_id.into()), b.c.level.into(), k)
 }
 
 #[cold]
@@ -1000,8 +1018,8 @@ impl ToText for c::bch_fs_btree_cache {
         prt_btree_cache_line(out, fs, "live:",      live[0].nr_clean.get() + live[0].nr_dirty.get());
         prt_btree_cache_line(out, fs, "pinned:",    live[1].nr_clean.get() + live[1].nr_dirty.get());
         prt_btree_cache_line(out, fs, "vmalloc:",   l.nr_vmalloc);
-        prt_btree_cache_line(out, fs, "reserve:",   l.nr_reserve);
-        prt_btree_cache_line(out, fs, "freeable:",  l.nr_freeable);
+        prt_btree_cache_line(out, fs, "reserve:",   self.lock.nr_reserve.get());
+        prt_btree_cache_line(out, fs, "freeable:",  self.lock.nr_freeable.get());
         prt_btree_cache_line(out, fs, "dirty:",     live[0].nr_dirty.get() + live[1].nr_dirty.get());
         prt_btree_cache_line(out, fs, "in flight:", self.nr_in_flight.load(Relaxed) as usize);
         prt!(out, "cannibalize lock:\t{}\n", if self.alloc_lock.load(Relaxed).is_null() { "not held" } else { "held" });

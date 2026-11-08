@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::bch2_btree_pos_to_text;
+use super::{bch2_btree_pos_to_text, cached_node};
 use crate::btree::node::BtreeNode;
 use crate::btree::types::{bch_btree_cache_not_freed_reasons as NotFreed, BtreeCacheGuard, BtreeWriteType};
 use crate::btree::write::{node_write, BtreeWriteFlags};
@@ -33,9 +33,9 @@ fn replay_writeback(fs: &Fs) -> bool {
 }
 
 impl c::bch_fs_btree_cache {
-    fn can_free(&self, idx: usize, nr_reserve: usize) -> usize {
+    fn can_free(&self, idx: usize) -> usize {
         let can_free = self.lock.live_nr[idx].nr_clean.get();
-        if idx == 0 { can_free.saturating_sub(nr_reserve) } else { can_free }
+        if idx == 0 { can_free.saturating_sub(self.lock.nr_reserve.get()) } else { can_free }
     }
 }
 
@@ -140,7 +140,7 @@ impl Fs {
          * succeed, so that inserting keys into the btree can always succeed and
          * IO can always make forward progress:
          */
-        let can_free = bc.can_free(idx, lists.nr_reserve);
+        let can_free = bc.can_free(idx);
         if nr > can_free {
             /* during journal replay, dirty nodes get written instead: */
             if replay_writeback(self) {
@@ -171,7 +171,7 @@ impl Fs {
                 }
 
                 if self.btree_node_reclaim(lists, b, ReclaimFlags::SHRINKER).is_ok() {
-                    let _ = self.btree_node_transition_state_locked(lists, b, State::BTREE_NODE_CACHE_FREED);
+                    let _ = self.btree_node_transition_state_locked(lists, b, State::FREED);
                     unsafe { unlock_reclaimed(b) };
                     freed += 1;
                 }
@@ -191,7 +191,7 @@ impl Fs {
                     touched -= 1;
                 } else if self.btree_node_reclaim(lists, b, ReclaimFlags::SHRINKER).is_ok() {
                     self.btree.evicted_size.record(b.hash_val(), unsafe { b.contents() }.nr.live_u64s);
-                    let _ = self.btree_node_transition_state_locked(lists, b, State::BTREE_NODE_CACHE_FREED);
+                    let _ = self.btree_node_transition_state_locked(lists, b, State::FREED);
 
                     freed += 1;
 
@@ -223,8 +223,7 @@ impl Fs {
             return 0;
         }
 
-        let nr_reserve = unsafe { (&raw const (*bc.lock.data_ptr()).nr_reserve).read_volatile() };
-        bc.can_free(idx, nr_reserve) +
+        bc.can_free(idx) +
             if replay_writeback(self) { bc.lock.live_nr[idx].nr_dirty.get() } else { 0 }
     }
 
@@ -241,8 +240,7 @@ impl Fs {
             let dirty = &mut lists.live[i].dirty;
 
             for _ in 0..bc.lock.live_nr[i].nr_dirty.get() {
-                // a node isn't freed while the fs runs
-                let Some(b) = dirty.first().map(|b| unsafe { &*core::ptr::from_ref(b) }) else { break };
+                let Some(b) = dirty.first().map(|b| unsafe { cached_node(self, b) }) else { break };
 
                 unsafe {
                     dirty.remove(b);

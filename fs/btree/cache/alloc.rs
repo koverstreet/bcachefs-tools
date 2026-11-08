@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use super::reclaim::{unlock_reclaimed, ReclaimFlags};
-use super::cache_node_struct_alloc;
+use super::{cache_node_struct_alloc, cached_node, NodeBufs};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
@@ -37,9 +37,8 @@ impl Fs {
             if pcpu_read_locks == b.c.lock.six().readers.allocated() &&
                 self.btree_node_reclaim(lists, b, flags).is_ok() {
                 self.btree.evicted_size.record(b.hash_val(), unsafe { b.contents() }.nr.live_u64s);
-                let _ = self.btree_node_transition_state_locked(lists, b, State::BTREE_NODE_CACHE_NONE);
-                // a node isn't freed while the fs runs
-                return Some(unsafe { &*core::ptr::from_ref(b) });
+                let _ = self.btree_node_transition_state_locked(lists, b, State::NONE);
+                return Some(unsafe { cached_node(self, b) });
             }
         }
 
@@ -54,8 +53,8 @@ impl Fs {
         }
 
         let bc = &self.btree.cache;
-        let nr_freeable = unsafe { (&raw const (*bc.lock.data_ptr()).nr_freeable).read_volatile() };
-        let pinned_pages = (bc.lock.nr_live() + nr_freeable) * self.opts.btree_node_size.get() as usize / PAGE_SIZE;
+        let pinned_pages = (bc.lock.nr_live() + bc.lock.nr_freeable.get()) * self.opts.btree_node_size.get() as usize
+            / PAGE_SIZE;
         pinned_pages > (total - avail) >> 2
     }
 }
@@ -120,7 +119,7 @@ impl BtreeTrans<'_> {
             }
 
             'err: {
-                let mut bufs = c::btree_node_bufs::new(fs);
+                let mut bufs = NodeBufs::new(fs);
                 if bufs.alloc(fs, c::GFP_NOWAIT, true).is_err() {
                     self.unlock_from(paths, crate::ret_ip!());
                     if bufs.alloc(fs, c::GFP_KERNEL | c::__GFP_NOWARN, true).is_err() {
@@ -147,8 +146,7 @@ impl BtreeTrans<'_> {
                                 }
                             }
                         };
-                        // a node isn't freed while the fs runs
-                        let b = unsafe { &*b.as_ptr() };
+                        let b = unsafe { cached_node(fs, b.as_ptr()) };
 
                         assert!(six_trylock_ip(b.c.lock.six(), SIX_LOCK_intent, crate::ret_ip!()));
                         assert!(six_trylock_ip(b.c.lock.six(), SIX_LOCK_write, crate::ret_ip!()));
@@ -194,7 +192,7 @@ impl BtreeTrans<'_> {
         fs.times[c::bch_time_stats::btree_node_mem_alloc as usize].update(start_time);
 
         if let Err(e) = self.relock_from(paths) {
-            let _ = fs.btree_node_transition_state(b, State::BTREE_NODE_CACHE_FREEABLE);
+            let _ = fs.btree_node_transition_state(b, State::FREEABLE);
             unsafe { unlock_reclaimed(b) };
             return Err(e);
         }
@@ -261,11 +259,10 @@ impl BtreeTrans<'_> {
             (*p).c.level    = level as u8;
             (*p).c.btree_id = btree.0 as u8;
         }
-        // a node isn't freed while the fs runs
-        let b = unsafe { &*b.as_ptr() };
+        let b = unsafe { cached_node(fs, b.as_ptr()) };
         let lock = b.c.lock.six();
 
-        let ret = if fs.btree_node_transition_state(b, State::BTREE_NODE_CACHE_CLEAN).is_ok() {
+        let ret = if fs.btree_node_transition_state(b, State::CLEAN).is_ok() {
             /*
              * Must be set with node write locked - b->data is not stable
              * while node is write locked or read_in_flight is set, read

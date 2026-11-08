@@ -1339,22 +1339,29 @@ pub fn bch2_btree_node_lock_slowpath(trans: &BtreeTrans<'_>, #[lent(trans)] path
     }))
 }
 
-/// @b's lock as @ty, with no path to record it - C records it - waited for,
-/// past C's trylock if @contended.
+impl BtreeTrans<'_> {
+    /// @b's lock as @ty, with no path to record it - the caller records it,
+    /// or holds it off any path - waited for, past a trylock if @contended.
+    pub(crate) fn node_lock_nopath_as(&self, b: &c::btree_bkey_cached_common, ty: c::six_lock_type,
+                                      lock_may_not_fail: bool, ip: c_ulong, contended: bool) -> Result<(), BchError> {
+        self.node_lock_nopath(b, lock_may_not_fail, |wait, should_sleep_fn| {
+            let lock = b.lock.six();
+            match if contended {
+                six_lock_contended(lock, ty, wait, should_sleep_fn, ip)
+            } else {
+                six_lock_ip_waiter(lock, ty, wait, should_sleep_fn, ip)
+            } {
+                0 => Ok(()),
+                e => Err(e),
+            }
+        })
+    }
+}
+
 #[c_export]
 pub fn bch2_btree_node_lock_nopath(trans: &BtreeTrans<'_>, b: &c::btree_bkey_cached_common, ty: c::six_lock_type,
                                    lock_may_not_fail: bool, ip: c_ulong, contended: bool) -> c_int {
-    ret_to_c(trans.node_lock_nopath(b, lock_may_not_fail, |wait, should_sleep_fn| {
-        let lock = b.lock.six();
-        match if contended {
-            six_lock_contended(lock, ty, wait, should_sleep_fn, ip)
-        } else {
-            six_lock_ip_waiter(lock, ty, wait, should_sleep_fn, ip)
-        } {
-            0 => Ok(()),
-            e => Err(e),
-        }
-    }))
+    ret_to_c(trans.node_lock_nopath_as(b, ty, lock_may_not_fail, ip, contended))
 }
 
 #[c_export]

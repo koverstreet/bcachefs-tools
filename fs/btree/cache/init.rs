@@ -3,7 +3,7 @@
 /* Filesystem init / exit */
 
 use super::reclaim::unlock_reclaimed;
-use super::{node_mem_alloc, node_mem_free};
+use super::{cached_node, node_mem_alloc, node_mem_free};
 use crate::btree::node::BtreeNode;
 use crate::btree::types::BtreeCacheGuard;
 use crate::c;
@@ -36,7 +36,7 @@ fn btree_cache_exit_locked_dump(fs: &Fs, lists: &BtreeCacheGuard<'_>, b: &BtreeN
 
     let mut msg = LogMsg::new(fs);
     prt!(msg, "{what} on {} node at cache_exit\n",
-         if state == State::BTREE_NODE_CACHE_FREEABLE { "freeable" } else { "live" });
+         if state == State::FREEABLE { "freeable" } else { "live" });
     prt!(msg, "btree={} level={} cache_state={} flags=0x{:x} hash_val=0x{:x}\n",
          b.c.btree_id, b.c.level, state as u32, b.flags.load().into_bits(), b.hash_val());
     prt!(msg, "lock state=0x{:x} read={} intent={} write={} (recurse intent={} write={})\n",
@@ -71,18 +71,16 @@ impl Fs {
 
         self.recalc_btree_reserve();
 
-        let nr_reserve = bc.lock.lock().nr_reserve;
-        for _ in 0..nr_reserve {
+        for _ in 0..bc.lock.nr_reserve.get() {
             let Some(b) = node_mem_alloc(self) else {
                 return self.throw(bch_errcode::BCH_ERR_ENOMEM_fs_btree_cache_init);
             };
-            // a node isn't freed while the fs runs
-            let b = unsafe { &*b.as_ptr() };
+            let b = unsafe { cached_node(self, b.as_ptr()) };
 
             assert!(six_trylock_ip(b.c.lock.six(), SIX_LOCK_intent, crate::ret_ip!()));
             assert!(six_trylock_ip(b.c.lock.six(), SIX_LOCK_write, crate::ret_ip!()));
 
-            let _ = self.btree_node_transition_state(b, State::BTREE_NODE_CACHE_FREEABLE);
+            let _ = self.btree_node_transition_state(b, State::FREEABLE);
 
             unsafe { unlock_reclaimed(b) };
         }
@@ -115,7 +113,7 @@ impl Fs {
             b.flags.set_dirty(false);
         }
 
-        let _ = self.btree_node_transition_state_locked(lists, b, State::BTREE_NODE_CACHE_FREED);
+        let _ = self.btree_node_transition_state_locked(lists, b, State::FREED);
         unsafe { unlock_reclaimed(b) };
         cond_resched();
     }
@@ -181,7 +179,7 @@ impl Fs {
             crate::warn_on!(live[0].nr_dirty.get() != 0);
             crate::warn_on!(live[1].nr_clean.get() != 0);
             crate::warn_on!(live[1].nr_dirty.get() != 0);
-            crate::warn_on!(lists.nr_freeable != 0);
+            crate::warn_on!(bc.lock.nr_freeable.get() != 0);
             crate::warn_on!(bc.nr_in_flight.load(Relaxed) != 0);
             crate::warn_on!(bc.nr_in_flight_inner.load(Relaxed) != 0);
         }

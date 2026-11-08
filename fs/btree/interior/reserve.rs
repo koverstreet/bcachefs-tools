@@ -267,7 +267,7 @@ impl InteriorUpdate<'_> {
          * Consumers can use them without any lock-take at pop time.
          */
         if let Err(e) = ret {
-            let _ = fs.btree_node_transition_state(n, c::btree_node_cache_state::BTREE_NODE_CACHE_FREEABLE);
+            let _ = fs.btree_node_transition_state(n, c::btree_node_cache_state::FREEABLE);
             unsafe {
                 six_unlock_ip(n.c.lock.six(), c::six_lock_type::SIX_LOCK_write, crate::ret_ip!());
                 six_unlock_ip(n.c.lock.six(), c::six_lock_type::SIX_LOCK_intent, crate::ret_ip!());
@@ -438,7 +438,7 @@ impl InteriorUpdate<'_> {
 
         node_free(fs, &b);
 
-        let _ = fs.btree_node_transition_state(&b, c::btree_node_cache_state::BTREE_NODE_CACHE_FREEABLE);
+        let _ = fs.btree_node_transition_state(&b, c::btree_node_cache_state::FREEABLE);
         self.trans.node_forget(paths, &b);
     }
 }
@@ -475,7 +475,7 @@ impl BtreeUpdate {
 
                 b.flags.set_need_write(false);
                 node_free(fs, b);
-                let _ = fs.btree_node_transition_state(b, c::btree_node_cache_state::BTREE_NODE_CACHE_FREEABLE);
+                let _ = fs.btree_node_transition_state(b, c::btree_node_cache_state::FREEABLE);
             } else {
                 assert!(r.ob.nr == 0, "a node taken from the reserve, kept but never written");
             }

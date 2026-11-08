@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::{bch2_btree_id_level_to_text, btree_ptr_hash_val};
+use super::{bch2_btree_id_level_to_text, btree_ptr_hash_val, cached_node};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
-use crate::btree::locking::{bch2_btree_node_lock_nopath, btree_node_locked_type};
+use crate::btree::locking::btree_node_locked_type;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{bch2_btree_path_to_text, PathIdx, Paths};
 use crate::btree::read::{bch2_btree_node_wait_on_read, bch2_btree_node_wait_on_write};
@@ -12,7 +12,7 @@ use crate::btree::validate::node_btree;
 use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::c;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::{BkeyType, Btree};
 use crate::fs::Fs;
 use crate::init::passes::RecoveryPass;
@@ -24,11 +24,10 @@ use crate::util::log::LogMsg;
 use c::btree_node_cache_state as State;
 use c::six_lock_type::{self, SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
 
-fn btree_node_mem_ptr<'f>(k: &BkeyI) -> Option<&'f BtreeNode> {
+fn btree_node_mem_ptr<'f>(fs: &'f Fs, k: &BkeyI) -> Option<&'f BtreeNode> {
     let p = BkeySC::from(k).arm::<c::BtreePtrV2>()?;
-    let mem_ptr = unsafe { (&raw const p.v().mem_ptr).read_volatile() };
-    // a node isn't freed while the fs runs
-    unsafe { (mem_ptr as *const BtreeNode).as_ref() }
+    let mem_ptr = unsafe { (&raw const p.v().mem_ptr).read_volatile() } as *const BtreeNode;
+    (!mem_ptr.is_null()).then(|| unsafe { cached_node(fs, mem_ptr) })
 }
 
 #[cold]
@@ -222,7 +221,7 @@ impl BtreeTrans<'_> {
         btree_check_header(fs, b);
 
         let down = paths.down_key();
-        if unlikely(!btree_node_mem_ptr(down).is_some_and(|p| core::ptr::eq(p, b))) &&
+        if unlikely(!btree_node_mem_ptr(fs, down).is_some_and(|p| core::ptr::eq(p, b))) &&
             likely(!self.journal_replay_not_finished() && down.k.key_type() == BkeyType::btree_ptr_v2) {
             self.btree_node_mem_ptr_set(paths, idx, level + 1, b);
         }
@@ -252,7 +251,7 @@ impl BtreeTrans<'_> {
         ebug_assert!(level < c::BTREE_MAX_DEPTH as usize);
         ebug_assert!(level + 1 == paths[idx].level() as usize);
 
-        let b = btree_node_mem_ptr(k);
+        let b = btree_node_mem_ptr(self.fs(), k);
         if let Some(b) = b {
             prefetch(&b.c.lock);
         }
@@ -313,7 +312,7 @@ impl BtreeTrans<'_> {
         ebug_assert!(level < c::BTREE_MAX_DEPTH as usize);
 
         let ret = 'out: {
-            let mut mem_ptr = btree_node_mem_ptr(k);
+            let mut mem_ptr = btree_node_mem_ptr(fs, k);
             let b = loop {
                 let Some(b) = mem_ptr.take().or_else(|| fs.btree_cache_find(k)) else {
                     if nofill {
@@ -331,8 +330,7 @@ impl BtreeTrans<'_> {
 
                 self.locking_hash_val.set(hash_val);
                 self.locking_root_id.set(Btree(u32::MAX));
-                match ret_to_result_void(bch2_btree_node_lock_nopath(self, &b.c, SIX_LOCK_read, false,
-                                                                     crate::ret_ip!(), false)) {
+                match self.node_lock_nopath_as(&b.c, SIX_LOCK_read, false, crate::ret_ip!(), false) {
                     Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => break 'out Err(e),
                     Err(e) if e.matches(bch_errcode::BCH_ERR_no_btree_node_reused) => continue,
                     Err(e) => panic!("btree_node_lock_nopath(): {e}"),
@@ -407,8 +405,8 @@ impl BtreeTrans<'_> {
 
             self.locking_hash_val.set(0);
             self.locking_root_id.set(Btree(u32::MAX));
-            bch2_btree_node_lock_nopath(self, &b.c, SIX_LOCK_intent, true, crate::ret_ip!(), false);
-            bch2_btree_node_lock_nopath(self, &b.c, SIX_LOCK_write, true, crate::ret_ip!(), false);
+            let _ = self.node_lock_nopath_as(&b.c, SIX_LOCK_intent, true, crate::ret_ip!(), false);
+            let _ = self.node_lock_nopath_as(&b.c, SIX_LOCK_write, true, crate::ret_ip!(), false);
 
             if unlikely(b.hash_val() != btree_ptr_hash_val(BkeySC::from(k))) {
                 break;
@@ -423,7 +421,7 @@ impl BtreeTrans<'_> {
             assert!(!b.flags.dirty(), "evicting a dirty node");
 
             fs.btree.evicted_size.record(b.hash_val(), unsafe { b.contents() }.nr.live_u64s);
-            let _ = fs.btree_node_transition_state(b, State::BTREE_NODE_CACHE_FREED);
+            let _ = fs.btree_node_transition_state(b, State::FREED);
             break;
         }
 

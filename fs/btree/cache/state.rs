@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::{btree_ptr_hash_val, node_data_free, node_key_hash_val};
+use super::{btree_ptr_hash_val, cached_node, node_data_free, node_key_hash_val};
 use crate::btree::bkey::{BkeyI, BkeySC};
 use crate::btree::node::BtreeNode;
 use crate::btree::types::{BtreeCacheGuard, BtreeCacheLists, BtreeNodeList};
@@ -60,11 +60,11 @@ fn node_pinned(lists: &BtreeCacheLists, b: &BtreeNode) -> bool {
 /* Cache state transitions — see DOC(btree-node-cache). */
 
 pub(super) fn state_hashed(state: State) -> bool {
-    matches!(state, State::BTREE_NODE_CACHE_CLEAN | State::BTREE_NODE_CACHE_DIRTY)
+    matches!(state, State::CLEAN | State::DIRTY)
 }
 
 fn state_has_buffer(state: State) -> bool {
-    state_hashed(state) || state == State::BTREE_NODE_CACHE_FREEABLE
+    state_hashed(state) || state == State::FREEABLE
 }
 
 impl Fs {
@@ -124,7 +124,7 @@ impl Fs {
             };
             if ret.is_err() {
                 b.set_hash_val(lists, 0);
-                new = State::BTREE_NODE_CACHE_FREEABLE;
+                new = State::FREEABLE;
             } else {
                 lists.nr_vmalloc += is_vmalloc_addr(data) as usize;
                 if let Some(nr) = lists.nr_by_btree.get_mut(b.c.btree_id as usize) {
@@ -163,40 +163,44 @@ impl Fs {
 
         /* Undo current state's bookkeeping. */
         match old {
-            State::BTREE_NODE_CACHE_CLEAN => {
+            State::CLEAN => {
                 let nr = &lists.published().live_nr[pinned].nr_clean;
                 nr.set(nr.get() - 1);
             }
-            State::BTREE_NODE_CACHE_DIRTY => {
+            State::DIRTY => {
                 let nr = &lists.published().live_nr[pinned].nr_dirty;
                 nr.set(nr.get() - 1);
             }
-            State::BTREE_NODE_CACHE_FREEABLE => lists.nr_freeable -= 1,
-            State::BTREE_NODE_CACHE_FREED | State::BTREE_NODE_CACHE_NONE => {}
+            State::FREEABLE => {
+                let nr = &lists.published().nr_freeable;
+                nr.set(nr.get() - 1);
+            }
+            State::FREED | State::NONE => {}
         }
 
         unsafe { BtreeNodeList::unlink(b) };
 
         /* Attach to target state. */
         match new {
-            State::BTREE_NODE_CACHE_NONE => {}
-            State::BTREE_NODE_CACHE_CLEAN => {
+            State::NONE => {}
+            State::CLEAN => {
                 let nr = &lists.published().live_nr[pinned].nr_clean;
                 nr.set(nr.get() + 1);
                 unsafe { lists.live[pinned].clean.push_back(b) };
             }
-            State::BTREE_NODE_CACHE_DIRTY => {
+            State::DIRTY => {
                 let nr = &lists.published().live_nr[pinned].nr_dirty;
                 nr.set(nr.get() + 1);
                 unsafe { lists.live[pinned].dirty.push_back(b) };
             }
-            State::BTREE_NODE_CACHE_FREEABLE => {
+            State::FREEABLE => {
                 assert!(!b.flags.permanent(), "a permanent node made freeable");
                 assert!(!data.is_null(), "a node with no buffer made freeable");
-                lists.nr_freeable += 1;
+                let nr = &lists.published().nr_freeable;
+                nr.set(nr.get() + 1);
                 unsafe { lists.freeable.push_front(b) };
             }
-            State::BTREE_NODE_CACHE_FREED => {
+            State::FREED => {
                 assert!(!b.flags.permanent(), "a permanent node freed");
                 unsafe { node_data_free(NonNull::from(b)) };
                 let freed = if b.c.lock.six().readers.allocated() {
@@ -231,7 +235,7 @@ impl Fs {
             return;
         }
         if state_hashed(b.cache_state(&lists)) {
-            let _ = self.btree_node_transition_state_locked(&mut lists, b, State::BTREE_NODE_CACHE_DIRTY);
+            let _ = self.btree_node_transition_state_locked(&mut lists, b, State::DIRTY);
         }
     }
 
@@ -262,7 +266,6 @@ impl Fs {
     pub(super) fn btree_cache_find(&self, k: &BkeyI) -> Option<&BtreeNode> {
         let v = btree_ptr_hash_val(BkeySC::from(k));
 
-        // a node isn't freed while the fs runs
-        self.btree.cache.table.get_entry(&v, &read_lock()).map(|b| unsafe { &*core::ptr::from_ref(b) })
+        self.btree.cache.table.get_entry(&v, &read_lock()).map(|b| unsafe { cached_node(self, b) })
     }
 }

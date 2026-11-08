@@ -9,7 +9,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{types_with, AllTypes, BkeyI, BkeySC, FamilyVal, ValidateFlags, POS_MIN, SPOS_MAX};
 use crate::btree::async_ops::AsyncBtreeOp;
 use crate::btree::bkey_buf::BtreeKeyBuf;
-use crate::btree::cache::{__bch2_btree_pos_to_text, bch2_btree_id_level_to_text, Bounce};
+use crate::btree::cache::{bch2_btree_id_level_to_text, btree_pos_to_text, Bounce};
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags};
 use crate::btree::node::sort::{bch2_btree_build_aux_trees, SortRuns};
 use crate::btree::node::{BtreeNode, NodeContents};
@@ -954,7 +954,7 @@ impl Fs {
         b.c.level    = level as u8;
         b.c.btree_id = id.0 as u8;
         let b = &*b;
-        self.btree_node_transition_state(b, c::btree_node_cache_state::BTREE_NODE_CACHE_CLEAN)
+        self.btree_node_transition_state(b, c::btree_node_cache_state::CLEAN)
             .unwrap_or_else(|e| panic!("hashing a btree root's node: {e}"));
 
         b.flags.set_read_in_flight(true);
@@ -964,7 +964,7 @@ impl Fs {
         node_read(&trans, b, true);
 
         let ret = if b.flags.read_error() {
-            let _ = self.btree_node_transition_state(b, c::btree_node_cache_state::BTREE_NODE_CACHE_FREEABLE);
+            let _ = self.btree_node_transition_state(b, c::btree_node_cache_state::FREEABLE);
             Err(self.err(c::bch_errcode::BCH_ERR_btree_node_read_error))
         } else {
             self.btree_set_root_for_read(b);
@@ -1032,7 +1032,7 @@ impl<'f> ReplicaRead<'f> {
             let ca: &Dev = &self.ca;
             let mut msg = Printbuf::new();
             prt!(&mut msg, "btree node scrub: bad replica on {ca}{action}:\n");
-            __bch2_btree_pos_to_text(&mut msg, fs, key.btree, key.level, k);
+            btree_pos_to_text(&mut msg, fs, key.btree, key.level, k);
             prt!(&mut msg, "\n{}", err.as_str());
             crate::bch_err_ratelimited!(fs, "{}", msg.as_str());
         }

@@ -9,7 +9,7 @@ use core::ffi::c_int;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::Relaxed;
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut};
-use crate::btree::cache::{bch2_btree_node_wait_on_flag, btree_ptr_hash_val};
+use crate::btree::cache::btree_ptr_hash_val;
 use crate::btree::for_each::lockrestart_do;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
@@ -373,7 +373,7 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
         trans.unlock_long();
 
         if seq_matches {
-            bch2_btree_node_wait_on_flag(b, c::btree_flags::BTREE_NODE_write_in_flight_inner);
+            b.wait_on_flag(c::btree_flags::BTREE_NODE_write_in_flight_inner);
         }
     }
 

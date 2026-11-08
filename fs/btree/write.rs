@@ -2,7 +2,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_validate, BkeyS, BkeySC, ValidateFlags, BKEY_U64S};
-use crate::btree::cache::{bch2_btree_node_wait_on_flag, Bounce};
+use crate::btree::cache::Bounce;
 use crate::btree::iter::{lockrestart_do, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt, Watermark};
 use crate::btree::node::sort::{
     bch2_btree_build_aux_trees, bch2_btree_node_compact, bch2_btree_node_set_needs_whiteout,
@@ -891,7 +891,7 @@ impl Fs {
             let Some((i, b)) = waiting else { return ret };
 
             // a node isn't freed while the fs runs
-            bch2_btree_node_wait_on_flag(unsafe { b.cast::<BtreeNode>().as_ref() }, flag);
+            unsafe { b.cast::<BtreeNode>().as_ref() }.wait_on_flag(flag);
             ret = true;
             idx = i + 1;
         }

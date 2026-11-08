@@ -264,6 +264,29 @@ impl<T, const OFFSET: usize> List<T, OFFSET> {
         })
     }
 
+    /// @other's items onto the end of this one, in order, @other left empty:
+    /// list_splice_tail_init().
+    ///
+    /// # Safety
+    /// As push_back(), for each of @other's items.
+    pub unsafe fn append(&mut self, other: &mut Self) {
+        if other.is_empty() {
+            return;
+        }
+        self.head.init_if_zeroed();
+
+        let (first, last) = (other.head.next.get(), other.head.prev.get());
+        let tail = self.head.prev.get();
+        // SAFETY: on the lists, both of which we hold
+        unsafe {
+            (*first).prev.set(tail);
+            (*tail).next.set(first);
+            (*last).next.set(&self.head);
+        }
+        self.head.prev.set(last);
+        other.head.init();
+    }
+
     /// Everything on it moved to @new, which is left holding it - this one
     /// empty: for a list whose head moves.
     ///
