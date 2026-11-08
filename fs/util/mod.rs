@@ -22,6 +22,8 @@ pub mod ioctl;
 pub mod iov_iter;
 pub mod jump_label;
 pub mod kernel;
+#[cfg(kernel)]
+pub mod kmem_cache;
 pub mod kobject;
 pub mod kthread;
 pub mod late;

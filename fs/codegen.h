@@ -30,6 +30,7 @@
 #endif
 #include <linux/poll.h>
 #include <linux/rmap.h>
+#include <linux/slab.h>
 #include <linux/version.h>
 #include <linux/vmalloc.h>
 #include <linux/writeback.h>
@@ -60,6 +61,9 @@ const unsigned RUST_CONST_HELPER_I_NEW		= I_NEW;
 const unsigned RUST_CONST_HELPER___I_NEW		= __I_NEW;
 const unsigned RUST_CONST_HELPER_I_WILL_FREE	= I_WILL_FREE;
 const unsigned RUST_CONST_HELPER_I_FREEING	= I_FREEING;
+/* slab flags: casts */
+const slab_flags_t RUST_CONST_HELPER_SLAB_RECLAIM_ACCOUNT	= SLAB_RECLAIM_ACCOUNT;
+const slab_flags_t RUST_CONST_HELPER_SLAB_ACCOUNT	= SLAB_ACCOUNT;
 
 /*
  * ioctl numbers' layout, the arch's own: powerpc, mips, sparc, alpha and
