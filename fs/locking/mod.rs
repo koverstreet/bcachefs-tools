@@ -38,6 +38,7 @@ mod lockdep;
 mod noio;
 mod raw;
 mod seqlock;
+mod spinlock;
 pub mod seqmutex;
 pub mod six;
 
@@ -59,4 +60,5 @@ pub(crate) use noio::{memalloc_flags_restore, memalloc_flags_save, PF_MEMALLOC_N
 pub(crate) use noio::{memalloc_flags, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
 pub(crate) use raw::rust_six_lockdep_set_notrack_class;
 pub use seqlock::SeqLock;
+pub use spinlock::SpinLock;
 pub use seqmutex::SeqMutexSeq;
