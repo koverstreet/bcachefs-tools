@@ -1219,10 +1219,17 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
     // too deep for rustc, at bch_persistent_counters' hundreds.
     let mut out = TokenStream::new();
     let mut values = Vec::new();
+    // as plain integers, each by its name: the flags' bits module
+    let mut raw_values = Vec::new();
     let mut base = None;
     let mut n = 0;
     for ((v, c), CEnumVariant { value, .. }) in names.iter().zip(&c_names).zip(&e.variants) {
         let k = Literal::usize_unsuffixed(n);
+        raw_values.push(match (value, base) {
+            (Some(x), _) => tokens(x),
+            (None, Some((b, _))) => quote!(#b + #k),
+            (None, None) => quote!(#k),
+        });
         let value = match (value, base) {
             (Some(x), _) => {
                 base = Some((v, c));
@@ -1263,6 +1270,7 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
             EnumOf::Rust(vis, attrs) => (quote!(#vis), quote!(#(#attrs)*)),
         };
         let name = format_ident!("{name}");
+        let bits_mod = format_ident!("{name}_bits");
         let docs: Vec<_> = e.variants.iter().map(|v| { let d = &v.docs; quote!(#(#[doc = #d])*) }).collect();
         out.extend(match e.kind {
             CEnumKind::Closed => {
@@ -1330,6 +1338,16 @@ fn c_enum_gen(e: &CEnumDef, of: EnumOf<'_>) -> TokenStream {
                     pub const fn into_bits(self) -> #repr { self.bits() }
                 }
                 unsafe impl crate::util::vstructs::Plain for #name {}
+
+                // The flags as plain integers, for a type-level constant: one
+                // that calls bitflags' const fns can cycle in rustc's
+                // coherence checking (Debian's 1.97.1)
+                #[allow(non_snake_case, non_upper_case_globals, dead_code)]
+                pub mod #bits_mod {
+                    #[allow(unused_imports)]
+                    use {super::*, crate::c::*};
+                    #(pub const #names: #repr = #raw_values;)*
+                }
             },
         });
         if let Some(nr) = &nr {

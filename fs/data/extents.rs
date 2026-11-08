@@ -23,7 +23,7 @@ use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{c_export, CStruct, c_enum, TypeInfo};
 use crate::types::c_default;
-use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags};
+use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits};
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -198,7 +198,7 @@ pub enum ExtentsTypes {}
 
 impl FamilyTypes for ExtentsTypes {
     fn contains(k: &c::bkey) -> bool {
-        ByFlag::<{ BkeyTypeFlags::extent.bits() }>::contains(k) && k.size != 0
+        ByFlag::<{ BkeyTypeFlags_bits::extent }>::contains(k) && k.size != 0
     }
 }
 
@@ -206,15 +206,15 @@ impl FamilyTypes for ExtentsTypes {
 unsafe impl<S: KeyState> InFamily<AllTypes> for FamilyVal<ExtentsTypes, S> {}
 
 /// A key counted in its inode's i_sectors, BkeyTypeFlags::allocation.
-pub type Allocation = FamilyVal<ByFlag<{ BkeyTypeFlags::allocation.bits() }>>;
+pub type Allocation = FamilyVal<ByFlag<{ BkeyTypeFlags_bits::allocation }>>;
 
 /// Data a file reads, BkeyTypeFlags::data: pointers to it, the data inline, or a
 /// reflink_p to it.
-pub type Data = FamilyVal<ByFlag<{ BkeyTypeFlags::data.bits() }>>;
+pub type Data = FamilyVal<ByFlag<{ BkeyTypeFlags_bits::data }>>;
 
 /// A file's data in the extents btree, not through a reflink_p,
 /// BkeyTypeFlags::user_data.
-pub type UserData = FamilyVal<ByFlag<{ BkeyTypeFlags::user_data.bits() }>>;
+pub type UserData = FamilyVal<ByFlag<{ BkeyTypeFlags_bits::user_data }>>;
 
 impl c::bkey {
     pub fn extent_is_allocation(&self) -> bool {

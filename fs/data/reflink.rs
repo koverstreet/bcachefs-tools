@@ -56,9 +56,9 @@ use core::mem::size_of;
 use core::ops::Range;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering::Relaxed};
 use cstruct_macros::c_export;
-use crate::format::{Btree, BkeyType, BkeyTypeFlags, MetadataVersion, SbFeature};
+use crate::format::{Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits, MetadataVersion, SbFeature};
 
-pub type IndirectTypes = ByFlag<{ BkeyTypeFlags::indirect.bits() }>;
+pub type IndirectTypes = ByFlag<{ BkeyTypeFlags_bits::indirect }>;
 
 /// An indirect extent, BKEY_TYPE_indirect - refcounted, in the reflink btree,
 /// what a reflink_p points to: a key armed to it is a BkeySC<'_, Indirect>,

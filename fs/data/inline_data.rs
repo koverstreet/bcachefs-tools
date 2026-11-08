@@ -14,7 +14,7 @@ use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, Upda
 use crate::c;
 use crate::data::checksum::csum_err_msg;
 use crate::errcode::{ret_to_c, BchError};
-use crate::format::{Bpos, Btree, BkeyTypeFlags};
+use crate::format::{Bpos, Btree, BkeyTypeFlags, BkeyTypeFlags_bits};
 use crate::fs::{Fs, WriteRef};
 use crate::init::damage;
 use crate::init::error::{id, BkeyValidate};
@@ -32,7 +32,7 @@ use cstruct_macros::c_export;
 /// The data itself, inline in the value, direct or indirect,
 /// BkeyTypeFlags::inline_data: a key armed to it is a BkeySC<'_, Inline>,
 /// BkeyS<'_, Inline>, &BkeyI<Inline>.
-pub type Inline = FamilyVal<ByFlag<{ BkeyTypeFlags::inline_data.bits() }>>;
+pub type Inline = FamilyVal<ByFlag<{ BkeyTypeFlags_bits::inline_data }>>;
 
 pub static DATA: FieldOffsets = FieldOffsets::new(BkeyTypeFlags::inline_data, "data");
 pub static CSUM: FieldOffsets = FieldOffsets::optional(BkeyTypeFlags::inline_data, "csum");

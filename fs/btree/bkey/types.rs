@@ -849,7 +849,7 @@ pub(crate) use bkey_typed;
 /// it's used.
 macro_rules! bkey_family {
     ($(#[$meta:meta])* $family:ident: $flag:ident) => { crate::paste! {
-        pub type [<$family Types>] = crate::btree::bkey::ByFlag<{ crate::format::BkeyTypeFlags::$flag.bits() }>;
+        pub type [<$family Types>] = crate::btree::bkey::ByFlag<{ crate::format::BkeyTypeFlags_bits::$flag }>;
 
         $(#[$meta])*
         pub type $family = crate::btree::bkey::FamilyVal<[<$family Types>]>;
@@ -914,7 +914,7 @@ macro_rules! bkey_types {
             const MIN_VAL_SIZE: usize =
                 size_of::<<<Self as BkeyFamily>::Validated as Unsized>::Head>();
         }
-        bkey_types!(@in $ty, AllTypes $(, ByFlag<{ BkeyTypeFlags::$flag.bits() }>)*);
+        bkey_types!(@in $ty, AllTypes $(, ByFlag<{ crate::format::BkeyTypeFlags_bits::$flag }>)*);
         )*
 
         bkey_typed! {
