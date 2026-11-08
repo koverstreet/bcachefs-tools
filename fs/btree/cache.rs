@@ -24,6 +24,7 @@ use crate::util::ffi::c_char;
 use crate::util::kernel::is_vmalloc_addr;
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_uint, c_void};
+use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_const, c_export, c_extern};
 use crate::format::{Btree, BkeyType};
@@ -56,6 +57,39 @@ c_extern! {
     pub fn bch2_btree_node_transition_state_locked(bc: *mut c::bch_fs_btree_cache, b: *mut BtreeNode,
                                                    target: c::btree_node_cache_state) -> c_int;
     pub fn bch2_btree_node_write_done_clean(c: *mut Fs, b: *mut BtreeNode);
+}
+
+impl c::btree_evicted_size {
+    fn pack(hash: u64, live_u64s: u16) -> u64 {
+        ((hash & c::BTREE_EVICTED_SIZE_HASH_MASK) << 16) | u64::from(live_u64s)
+    }
+
+    fn slot(&self, hash: u64) -> Option<&AtomicU64> {
+        (!self.entries.is_null()).then(|| unsafe { AtomicU64::from_ptr(self.entries.add((hash & self.mask) as usize)) })
+    }
+
+    /// An evicted node's live u64s, by its pointer's hash.
+    pub fn record(&self, hash: u64, live_u64s: u16) {
+        if let Some(e) = self.slot(hash) {
+            e.store(Self::pack(hash, live_u64s), Relaxed);
+        }
+    }
+
+    /// The live u64s recorded for @hash, if its slot still has them.
+    pub fn lookup(&self, hash: u64) -> Option<u16> {
+        let entry = self.slot(hash)?.load(Relaxed);
+        ((entry >> 16) == (hash & c::BTREE_EVICTED_SIZE_HASH_MASK)).then_some(entry as u16)
+    }
+}
+
+#[c_export]
+pub fn bch2_btree_evicted_size_record(c: &Fs, hash: u64, live_u64s: u16) {
+    c.btree.evicted_size.record(hash, live_u64s)
+}
+
+#[c_export]
+pub fn bch2_btree_evicted_size_lookup(c: &Fs, hash: u64, out: &mut u16) -> bool {
+    c.btree.evicted_size.lookup(hash).map(|v| *out = v).is_some()
 }
 
 /// Up to a node's size, to sort a node's keys into: kvmalloc()'d, or the
