@@ -1228,8 +1228,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         iter_flags: BtreeIterFlags,
         flags:      UpdateTriggerFlags,
     ) -> Result<(), BchError> {
-        let btree = Btree::from_raw(btree.into()).expect("invalid btree id");
-        self.insert_raw(btree, UpdateKey::borrowed(self, &key), iter_flags.bits() | flags.bits())
+        self.insert_raw(Btree(btree.into()), UpdateKey::borrowed(self, &key), iter_flags.bits() | flags.bits())
     }
 
     /// @flags are the iterator's and the update's, one enum, as C has them.
@@ -1246,8 +1245,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         key:   TransBkey<'_, 't, V>,
         flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
-        let btree = Btree::from_raw(btree.into()).expect("invalid btree id");
-        self.insert_nonextent_raw(btree, UpdateKey::borrowed(self, &key), flags)
+        self.insert_nonextent_raw(Btree(btree.into()), UpdateKey::borrowed(self, &key), flags)
     }
 
     fn insert_nonextent_raw(&self, btree: Btree, k: UpdateKey<'_, 'a, 't>, flags: UpdateTriggerFlags)
@@ -1276,7 +1274,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         pos:   Bpos,
         flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
-        let btree = Btree::from_raw(btree.into()).expect("invalid btree id");
         let mut iter = BtreeIter::new(self, btree, pos, BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
         iter.traverse(self)?;
         self.delete_at(&iter, flags)

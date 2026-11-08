@@ -395,6 +395,14 @@ pub(crate) fn btree_id_cached(btree: Btree) -> bool {
     matches!(btree, Btree::alloc | Btree::inodes | Btree::logged_ops | Btree::stripes | Btree::subvolumes)
 }
 
+/// Btree @id of @trans's filesystem: any it has, as C's iterators take - one
+/// a newer version made, that this one doesn't know, included.
+fn alive_btree(trans: &BtreeTrans<'_>, id: u32) -> Btree {
+    let nr = trans.fs().btree_id_nr_alive();
+    assert!(id < nr, "an iterator on btree {id}, of a filesystem with {nr}");
+    Btree(id)
+}
+
 fn btree_iter_flags(trans: &BtreeTrans<'_>, btree: Btree, level: u32, mut flags: BtreeIterFlags) -> BtreeIterFlags {
     if level != 0 || !btree_id_cached(btree) {
         flags.remove(BtreeIterFlags::CACHED | BtreeIterFlags::KEY_CACHED);
@@ -2261,8 +2269,7 @@ impl<'t> BtreeIter<'t> {
     ) -> BtreeIter<'t> {
         let trans = unsafe { &*trans.trans_raw() };
 
-        BtreeIter::init_in(trans, &mut trans.paths(), Btree::from_raw(btree.into()).expect("invalid btree id"),
-                           pos, flags, 0)
+        BtreeIter::init_in(trans, &mut trans.paths(), alive_btree(trans, btree.into()), pos, flags, 0)
     }
 
     pub fn new_level(
@@ -2274,7 +2281,7 @@ impl<'t> BtreeIter<'t> {
     ) -> BtreeIter<'t> {
         let trans = unsafe { &*trans.trans_raw() };
 
-        BtreeIter::node_iter_init_in(trans, &mut trans.paths(), Btree::from_raw(btree.into()).expect("invalid btree id"),
+        BtreeIter::node_iter_init_in(trans, &mut trans.paths(), alive_btree(trans, btree.into()),
                                      pos, 0, level, flags, crate::ret_ip!())
     }
 
@@ -2484,8 +2491,7 @@ impl<'t> BtreeNodeIter<'t> {
         flags: BtreeIterFlags,
     ) -> BtreeNodeIter<'t> {
         let trans = unsafe { &*trans.trans_raw() };
-        let raw = BtreeIter::node_iter_init_in(trans, &mut trans.paths(),
-                                               Btree::from_raw(btree.into()).expect("invalid btree id"),
+        let raw = BtreeIter::node_iter_init_in(trans, &mut trans.paths(), alive_btree(trans, btree.into()),
                                                pos, locks_want, depth, flags, crate::ret_ip!());
         BtreeNodeIter { raw }
     }
