@@ -297,6 +297,10 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
 
 /// The op written in place - Ok, its closure's continued - or, where it
 /// can't be, given back for the cow write path.
+///
+/// Not inlined: in __write() its locals were 1.5K of a 2K frame, on every
+/// cow write too.
+#[inline(never)]
 pub(crate) fn nocow_write(mut op: Running<Op>) -> Result<(), Running<Op>> {
     let fs = op.fs();
 

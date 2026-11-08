@@ -754,6 +754,10 @@ fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: 
 
 /// # Safety
 /// @dst and @src are bios, ours.
+///
+/// Not inlined: in __write() its locals were 700 bytes of the frame, on every
+/// uncompressed write too.
+#[inline(never)]
 pub(crate) unsafe fn bio_compress(fs: &Fs, dst: *mut c::bio, dst_len: &mut usize,
                                   src: *mut c::bio, src_len: &mut usize, compression_opt: c_uint,
                                   write_pos: Bpos, bounce_source: bool) -> c_uint {
