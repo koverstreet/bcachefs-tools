@@ -53,6 +53,7 @@ unsafe fn push_whiteout(b: &BtreeNode, pos: Bpos) {
 }
 
 impl BtreeNode {
+    #[inline]
     pub fn add_journal_pin(&self, fs: &Fs, seq: u64) {
         let flush: unsafe extern "C" fn(_, _, _) -> _ = if self.flags.write_idx() { node_flush1 } else { node_flush0 };
 
@@ -124,6 +125,7 @@ unsafe extern "C" fn node_flush1(j: *mut c::journal, pin: *mut Pin, seq: u64) ->
 }
 
 impl BtreeTrans<'_> {
+    #[inline]
     pub(crate) fn node_prep_for_write(&self, paths: &mut Paths<'_>, b: &BtreeNode) {
         let fs = self.fs();
 
@@ -145,6 +147,7 @@ impl BtreeTrans<'_> {
     /// # Safety
     /// @b is path @idx's node at its level, write locked; @node_iter is the
     /// path's iterator there, or one of the caller's.
+    #[inline(always)]
     pub(crate) unsafe fn bset_insert_key(&self, paths: &mut Paths<'_>, idx: PathIdx, b: &BtreeNode,
                                          node_iter: *mut KeyIter, insert: &mut BkeyI) -> bool {
         let lb = unsafe { LockedNode::new(b) };
@@ -256,6 +259,7 @@ impl BtreeTrans<'_> {
     ///
     /// # Safety
     /// Path @idx's node at its level is write locked.
+    #[inline(always)]
     pub(crate) unsafe fn insert_key_leaf(&self, paths: &mut Paths<'_>, idx: PathIdx, insert: &mut BkeyI,
                                          journal_seq: u64) {
         let fs = self.fs();
