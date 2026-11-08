@@ -63,6 +63,21 @@ where K: Hash + Eq + Copy + Send + Sync, V: Copy + Eq + Send + Sync
     /// allocate: a group grows under its lock without reclaim, and if it
     /// can't, into room made outside it.
     pub fn add(&self, key: K, v: V) -> Result<(), AllocError> {
+        self.add_mode(key, v, false)
+    }
+
+    /// add(), for what mustn't fail to allocate: __GFP_NOFAIL, outside a
+    /// group's lock, where room's made when there's none under it.
+    pub fn add_nofail(&self, key: K, v: V) {
+        self.add_mode(key, v, true).expect("a nofail add failed to allocate")
+    }
+
+    /// The table's room made ahead: Cuckoo::make_room().
+    pub fn make_room(&self) -> Result<(), AllocError> {
+        self.table.make_room()
+    }
+
+    fn add_mode(&self, key: K, v: V, nofail: bool) -> Result<(), AllocError> {
         let mut room = None;
         'add: loop {
             let want = 'group: {
@@ -82,22 +97,25 @@ where K: Hash + Eq + Copy + Send + Sync, V: Copy + Eq + Send + Sync
                 }
             };
             if let Some(cap) = want {
-                room = Some(DstVec::with_capacity(cap)?);
+                room = Some(if nofail { DstVec::with_capacity_nofail(cap) } else { DstVec::with_capacity(cap)? });
                 continue;
             }
 
             const { assert!(N >= 1, "cuckoo multimap: a group holds its first value itself") };
             let mut vals = InlineVec::new();
             vals.push(v)?;
-            let group = GroupBox::new(pin_init!(Group {
+            let init = pin_init!(Group {
                 key,
                 vals <- new_lock!(vals),
                 _rcu: RcuMember::default(),
-            }? BchError)).map_err(|_| AllocError)?;
-            let p = group.into_raw();
+            }? BchError);
+            let group = if nofail { GroupBox::new_nofail(init) } else { GroupBox::new(init) };
+            let p = group.map_err(|_| AllocError)?.into_raw();
 
             // SAFETY: a GroupBox's: valid a grace period after it's dropped
-            match self.table.insert_new(unsafe { Entry::new(p) }) {
+            let e = unsafe { Entry::new(p) };
+            let inserted = if nofail { Ok(self.table.insert_new_nofail(e)) } else { self.table.insert_new(e) };
+            match inserted {
                 Ok(Ok(())) => return Ok(()),
                 // another add's in first; ours may have been read, by writers
                 // that met it, and is freed after them

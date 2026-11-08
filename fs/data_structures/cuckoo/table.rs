@@ -459,7 +459,8 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
         self.tables(g).find_map(|t| self.find(&t, key, t.index(key)))
     }
 
-    pub(super) fn put(&self, item: I, replace: bool) -> Result<Option<I>, AllocError> {
+    /// With @nofail, growing the table can't fail: __GFP_NOFAIL.
+    pub(super) fn put(&self, item: I, replace: bool, nofail: bool) -> Result<Option<I>, AllocError> {
         assert!(item.storable(), "cuckoo: an item that can't be in a table");
 
         loop {
@@ -467,7 +468,7 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
                 Ok(old) => return Ok(old),
                 Err(full) => full,
             };
-            self.grow(full)?;
+            self.grow(full, nofail)?;
         }
     }
 
@@ -608,7 +609,7 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
 
     /// What @full asked for, unless another rehash beat us to it: a newer
     /// table, and the older drained.
-    fn grow(&self, full: Full) -> Result<(), AllocError> {
+    fn grow(&self, full: Full, nofail: bool) -> Result<(), AllocError> {
         let g = self.lock.lock();
         let newest = self.tables_locked(&g).last();
 
@@ -618,7 +619,7 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
             while !fits::<W>(bits, nr, &self.faults) {
                 bits += 1;
             }
-            self.link(&g, bits)?;
+            self.link(&g, bits, nofail)?;
             saw!(self.faults, rehash);
         }
         // an allocation failure leaves the rest to the next
@@ -626,12 +627,45 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
         Ok(())
     }
 
-    fn link(&self, g: &Held<'_>, bits: u32) -> Result<(), AllocError> {
-        if self.faults.alloc_fail() {
-            return Err(AllocError);
+    /// Past three quarters of what fits(), a rehash now.
+    pub(super) fn grow_early(&self) -> Result<(), AllocError> {
+        let roomy = |bits| {
+            let nr = self.nr.load(Relaxed);
+            fits::<W>(bits, nr + nr / 3, &self.faults)
+        };
+        // most often there's room: seen without the lock, which every caller
+        // would otherwise take
+        if self.tables(&read_lock()).last().is_none_or(|t| roomy(t.bits())) {
+            return Ok(());
         }
+
+        let g = self.lock.lock();
+        let Some(newest) = self.tables_locked(&g).last() else { return Ok(()) };
+        if roomy(newest.bits()) {
+            return Ok(());
+        }
+
+        let mut bits = newest.bits() + 1;
+        while !roomy(bits) {
+            bits += 1;
+        }
+        self.link(&g, bits, false)?;
+        saw!(self.faults, rehash);
+        let _ = self.drain(&g);
+        Ok(())
+    }
+
+    fn link(&self, g: &Held<'_>, bits: u32, nofail: bool) -> Result<(), AllocError> {
         let seeds: Seeds = core::array::from_fn(|_| random_u64());
-        let new = RcuArray::<Slot<I>, Head>::alloc(1 << bits, Head { seeds, next: AtomicPtr::default() })?;
+        let head = Head { seeds, next: AtomicPtr::default() };
+        let new = if nofail {
+            RcuArray::<Slot<I>, Head>::alloc_nofail(1 << bits, head)
+        } else {
+            if self.faults.alloc_fail() {
+                return Err(AllocError);
+            }
+            RcuArray::<Slot<I>, Head>::alloc(1 << bits, head)?
+        };
 
         match self.tables_locked(g).last() {
             Some(t) => t.head.next.store(new.as_ptr(), Release),
@@ -684,7 +718,7 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
                 Err(NotIn::NoChain) => {
                     saw!(self.faults, grown);
                     drop(rcu);
-                    self.link(g, t.bits() + 1)?;
+                    self.link(g, t.bits() + 1, false)?;
                     continue;
                 }
                 Err(_) => {

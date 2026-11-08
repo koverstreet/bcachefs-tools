@@ -398,13 +398,27 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
     /// @item, in place of what had its key, if anything: that. Fails, with
     /// the table unchanged, only if it can't allocate.
     pub fn insert(&self, item: I) -> Result<Option<I>, AllocError> {
-        self.put(item, true)
+        self.put(item, true, false)
     }
 
     /// @item, if nothing has its key: else what does, as the error, and @item
     /// isn't in. Fails, with the table unchanged, only if it can't allocate.
     pub fn insert_new(&self, item: I) -> Result<Result<(), I>, AllocError> {
-        Ok(self.put(item, false)?.map_or(Ok(()), Err))
+        Ok(self.put(item, false, false)?.map_or(Ok(()), Err))
+    }
+
+    /// insert_new(), for what mustn't fail to allocate: __GFP_NOFAIL, if the
+    /// table has to grow - which make_room() makes rare.
+    pub fn insert_new_nofail(&self, item: I) -> Result<(), I> {
+        self.put(item, false, true).expect("a nofail insert failed to allocate").map_or(Ok(()), Err)
+    }
+
+    /// Past three quarters full, a rehash now: for a caller that can block,
+    /// ahead of inserts that may not - an insert that finds its table full
+    /// grows it, under whatever locks it holds. Fails, the table unchanged,
+    /// only if it can't allocate.
+    pub fn make_room(&self) -> Result<(), AllocError> {
+        self.grow_early()
     }
 
     /// Take @key out: its item, if it was in.
