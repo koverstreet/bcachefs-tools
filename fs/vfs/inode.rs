@@ -47,7 +47,7 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::inode;
 use crate::inode_opts::InodeOpt;
-use crate::locking::{ExclusiveGuard, Locked};
+use crate::locking::ExclusiveGuard;
 use crate::quota::QuotaAcctMode;
 use crate::quota;
 use crate::prt;
@@ -277,13 +277,13 @@ impl InodeInfo {
     }
 
     pub fn update_lock(&self) -> UpdateLock<'_> {
-        UpdateLock { inode: self, _guard: Locked::from_c(&self.ei_update_lock).lock() }
+        UpdateLock { inode: self, _guard: self.ei_update_lock.lock() }
     }
 
     /// Take the update locks of @inodes, together, in lock_order().
     pub fn update_lock_all<const N: usize>(inodes: [&InodeInfo; N]) -> UpdateLocks<'_, N> {
         UpdateLocks(lock_order(inodes).map(|(subclass, inode)| {
-            UpdateLock { inode, _guard: Locked::from_c(&inode.ei_update_lock).lock_nested(subclass) }
+            UpdateLock { inode, _guard: inode.ei_update_lock.lock_nested(subclass) }
         }).collect())
     }
 
@@ -335,7 +335,7 @@ impl<'i> UpdateLock<'i> {
     /// # Safety
     /// The caller holds @inode's ei_update_lock for 'i.
     pub unsafe fn held(inode: &'i InodeInfo) -> Self {
-        UpdateLock { inode, _guard: unsafe { Locked::from_c(&inode.ei_update_lock).held() } }
+        UpdateLock { inode, _guard: unsafe { inode.ei_update_lock.held() } }
     }
 
     /// Move the inode's quota charges - its usage, i_blocks +

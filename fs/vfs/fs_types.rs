@@ -25,8 +25,8 @@ use crate::btree::iter::BtreeTrans;
  * The VFS's inode, and what we keep beside it. Shared - the kernel and C use it
  * while Rust has a &InodeInfo - so what Rust touches is typed for that: @v,
  * the struct inode the kernel writes, a VfsInode; ei_inode a
- * VolatileInodeUnpacked; ei_update_lock C's mutex, borrowed as a Locked;
- * ei_quota_lock a Locked over what it protects.
+ * VolatileInodeUnpacked; ei_update_lock and ei_quota_lock Locked, the second
+ * over what it protects.
  */
 #[repr(C)]
 #[c_name(bch_inode_info)]
@@ -49,7 +49,8 @@ pub struct InodeInfo {
     #[c("unsigned long ei_flags")]
     pub ei_flags: AtomicBitflags<c::bch_inode_info_flags>,
 
-    pub ei_update_lock: c::mutex,
+    #[c_lock("struct mutex ei_update_lock")]
+    pub ei_update_lock: Locked<c::mutex>,
     pub ei_last_dirtied: Volatile<c_ulong>,
     pub ei_pagecache_lock: c::two_state_lock_t,
 
