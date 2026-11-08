@@ -4,7 +4,7 @@
 //! demangled.
 //!
 //! What resolves an address differs by where we run, and nothing else does.
-//! In the kernel it's kallsyms, through %pB - "name+0xoff/0xsize [module]";
+//! In the kernel it's kallsyms - "name+0xoff/0xsize [module]", as %pB prints it;
 //! in userspace, the shim's bch2_prt_symbol(), libunwind and libdw - "name+0xoff
 //! file:line". Either way the name comes first and has no '+' in it, and it's
 //! mangled where it's Rust's: kallsyms keeps symbols as the compiler emitted
@@ -13,10 +13,11 @@
 //! here, for both, and the rest of the line printed as it came.
 //!
 //! Callers print a lock owner's stack from lock debugging - anywhere, as deep
-//! as the stack goes - so a symbol costs the stack little: the kernel's
-//! scratch for it is on the stack, a symbol's length, and demangling is on
-//! the heap (util/demangle.rs), in a NORECLAIM scope, the name printed raw if
-//! that fails.
+//! as the stack goes - so a symbol costs the stack nothing: kallsyms writes it
+//! straight into the printbuf - not through %pB, whose vsnprintf() takes a
+//! symbol's length of stack for scratch - and demangling is on the heap
+//! (util/demangle.rs), in a NORECLAIM scope, the name printed raw if that
+//! fails.
 
 use crate::c;
 use crate::errcode::ret_to_c;
@@ -45,16 +46,70 @@ fn prt_symbol_demangled(out: &mut Printbuf, sym: &str) {
     prt!(out, "{rest}");
 }
 
+/// kallsyms' text for @addr - 1, @len bytes of @s, made @addr's in place: the
+/// offset one more - or, for an address it didn't find, the address. @s has
+/// room for the digit a carry adds. The new length.
+#[cfg(kernel)]
+fn symbol_offset_inc(s: &mut [u8], len: usize) -> usize {
+    // "name+0xoff/0xsize [mod]", or "0xaddr"
+    let text = &s[..len];
+    let digits = match text.iter().position(|&c| c == b'+') {
+        Some(p) => p + 3..text[p..].iter().position(|&c| c == b'/').map_or(len, |i| p + i),
+        None => 2..len,
+    };
+    if digits.is_empty() || !s[digits.clone()].iter().all(u8::is_ascii_hexdigit) {
+        return len;
+    }
+
+    for i in digits.clone().rev() {
+        match s[i] {
+            b'f' => s[i] = b'0',
+            b'9' => { s[i] = b'a'; return len; }
+            c => { s[i] = c + 1; return len; }
+        }
+    }
+    s.copy_within(digits.start..len, digits.start + 1);
+    s[digits.start] = b'1';
+    len + 1
+}
+
 /// @addr's symbol, demangled, to @out.
 #[cfg(kernel)]
 pub(crate) fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
-    let mut buf = [0u8; c::KSYM_SYMBOL_LEN as usize];
-    // SAFETY: @buf outlives @sym, which writes nothing past it
-    let mut sym = unsafe { Printbuf::new_extern(buf.as_mut_ptr().cast(), buf.len()) };
+    let start = out.as_bytes().len();
 
-    // SAFETY: our printbuf; %pB takes the address as a pointer
-    unsafe { c::bch2_prt_printf(sym.as_raw(), c"%pB".as_ptr().cast(), addr as *const core::ffi::c_void) };
-    prt_symbol_demangled(out, sym.as_str());
+    // %pB's lookup, sprint_backtrace(), isn't exported: sprint_symbol() of
+    // @addr - 1, so a return address past a noreturn call is its caller's.
+    // It writes KSYM_SYMBOL_LEN at most, its nul included, and
+    // symbol_offset_inc() a byte more.
+    let written = unsafe {
+        out.write_in_place(c::KSYM_SYMBOL_LEN as usize, |buf| {
+            let len = c::sprint_symbol(buf.cast(), addr.wrapping_sub(1) as _) as usize;
+            symbol_offset_inc(core::slice::from_raw_parts_mut(buf, len + 1), len)
+        })
+    };
+    if !written {
+        prt!(out, "{addr:#x}");
+        return;
+    }
+
+    // demangling reads the name as it writes: a Rust name is moved out of
+    // @out first, and left as it is if it can't be
+    let mut bounce = KVVec::new();
+    {
+        let sym = &out.as_bytes()[start..];
+        if !sym.starts_with(b"_R") {
+            return;
+        }
+        let _noreclaim = MemallocFlags::noreclaim();
+        if bounce.extend_from_slice(sym).is_err() {
+            return;
+        }
+    }
+    let Ok(sym) = core::str::from_utf8(&bounce) else { return };
+
+    out.truncate(start);
+    prt_symbol_demangled(out, sym);
 }
 
 /// @addr's symbol, demangled, to @out.

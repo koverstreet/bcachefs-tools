@@ -549,6 +549,24 @@ impl Printbuf {
         self.nul_terminate_reserved();
     }
 
+    /// What @f writes in place at the end, given room for @max bytes: it
+    /// returns how many it wrote. False, nothing written, if there's no room.
+    ///
+    /// # Safety
+    /// @f writes at most @max bytes, and returns how many it wrote.
+    pub unsafe fn write_in_place(&mut self, max: usize, f: impl FnOnce(*mut u8) -> usize) -> bool {
+        if !self.make_room(max) {
+            return false;
+        }
+
+        let pos = self.pos();
+        let n = f(unsafe { self.buf.cast::<u8>().add(pos) });
+        self.pos += n as u32;
+
+        self.nul_terminate_reserved();
+        true
+    }
+
     /*
      * Print an array of chars, handling embedded control characters:
      *   \n: prt_newline	newline that obeys current indent level
