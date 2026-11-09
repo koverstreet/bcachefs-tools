@@ -273,11 +273,6 @@ pub fn drop_keys_outside_node(b: &BtreeNode) {
     });
 }
 
-#[c_export]
-pub fn bch2_btree_node_drop_keys_outside_node(b: &BtreeNode) {
-    drop_keys_outside_node(b)
-}
-
 const NODE_BYTES: usize = size_of::<Head<c::btree_node>>();
 const FITS: &str = "a bset inside the node, checked against its end";
 

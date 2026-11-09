@@ -761,12 +761,9 @@ pub(crate) fn insert(fs: &Fs, btree: Btree, level: u32, k: &BkeyI) -> Result<(),
     }
 }
 
-/// # Safety
-/// As insert_take()'s.
-#[c_export]
-pub unsafe fn bch2_journal_key_insert_take(c: &Opaque<Fs>, btree: Btree, level: c_uint,
-                                           k: *mut c::bkey_i) -> c_int {
-    ret_to_c(unsafe { insert_take(Fs::from_c(c), btree, level, k) })
+/// A deleted key at @pos: what's there in the btree, gone.
+pub(crate) fn delete(fs: &Fs, btree: Btree, level: u32, pos: Bpos) -> Result<(), BchError> {
+    insert(fs, btree, level, BkeyI::<c::Deleted>::at(pos).as_ref())
 }
 
 /// Only from the recovery thread while we're still RO - once we're RW, the
@@ -779,11 +776,6 @@ pub unsafe fn bch2_journal_key_insert(c: &Opaque<Fs>, btree: Btree, level: c_uin
                                       k: *const c::bkey_i) -> c_int {
     // SAFETY: the caller's
     ret_to_c(insert(Fs::from_c(c), btree, level, unsafe { &*BkeyI::from_raw(k) }))
-}
-
-#[c_export]
-pub fn bch2_journal_key_delete(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos) -> c_int {
-    ret_to_c(insert(Fs::from_c(c), btree, level, BkeyI::<c::Deleted>::at(pos).as_ref()))
 }
 
 // ── Iterating: a btree node's keys, with the journal's overlaid ──────────
@@ -985,35 +977,6 @@ impl c::btree_and_journal_iter {
     }
 }
 
-#[c_export]
-pub fn bch2_btree_and_journal_iter_advance(iter: &mut c::btree_and_journal_iter) {
-    iter.advance()
-}
-
-#[c_export]
-pub fn bch2_btree_and_journal_iter_peek(c: &Opaque<Fs>, iter: &mut c::btree_and_journal_iter)
-    -> c::bkey_s_c
-{
-    iter.peek(Fs::from_c(c))
-}
-
-/// From the node's first key: what btree_gc and check_topology walk with,
-/// before the filesystem is read-write.
-///
-/// # Safety
-/// As btree_and_journal_iter::new()'s.
-#[c_export]
-pub unsafe fn bch2_btree_and_journal_iter_init_node_iter(trans: *mut BtreeTrans<'_>,
-                                                        iter: *mut c::btree_and_journal_iter,
-                                                        b: *mut BtreeNode) {
-    let mut node_iter = KeyIter::default();
-    // SAFETY: the caller's
-    unsafe {
-        node_iter.init_from_start(&(*b).keys((*b).contents()));
-        iter.write(c::btree_and_journal_iter::new(trans, b, node_iter, (*(*b).contents().data).min_key));
-    }
-}
-
 // ── Sorting, and the keys' lifetime ───────────────────────────────────────
 
 /// Journal keys @l and @r in sort order: of equal keys, the oldest first - of
@@ -1206,10 +1169,4 @@ pub fn shoot_down_journal_keys(fs: &Fs, btree: Btree, level_min: u32, level_max:
         }
     }
     keys.truncate(dst);
-}
-
-#[c_export]
-pub fn bch2_shoot_down_journal_keys(c: &Opaque<Fs>, btree: Btree, level_min: c_uint,
-                                    level_max: c_uint, start: Bpos, end: Bpos) {
-    shoot_down_journal_keys(Fs::from_c(c), btree, level_min, level_max, start, end)
 }

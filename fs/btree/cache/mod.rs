@@ -66,7 +66,7 @@
  *
  * One non-state-machine transition: any live state → same state +
  * BTREE_NODE_permanent (bch2_btree_set_root_inmem just sets the flag; the
- * node stays put). Eviction (bch2_btree_node_evict) BUG_ONs on permanent
+ * node stays put). Eviction (node_evict()) BUG_ONs on permanent
  * nodes — there's no legitimate caller path.
  *
  * Lock discipline:
@@ -99,19 +99,18 @@ pub use bufs::{node_data_free, node_mem_alloc, node_mem_free, node_scratch_alloc
 pub use pins::BtreeCachePins;
 pub(crate) use state::NodeTable;
 
-use crate::btree::bkey::{bkey_val_to_text, val_to_text, BkeyI, BkeySC, BkeyVal, BKEY_U64S};
+use crate::btree::bkey::{bkey_val_to_text, val_to_text, BkeySC, BkeyVal, BKEY_U64S};
 use crate::data::keylist::PaddedKey;
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::bset::{bch2_btree_keys_stats, BsetStats};
 use crate::btree::node::BtreeNode;
-use crate::btree::path::Paths;
 use crate::util::alloc::{kvfree_sized, kvzalloc};
 use crate::util::place::{Contained, PlacedDrop};
 use crate::util::shrinker::{Shrink, Shrinker};
 use crate::util::sleep::Sleep;
 use crate::c;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::prt;
 use crate::util::closure::{closure_wait, closure_wake_up};
 use crate::util::sched::current;
@@ -520,41 +519,5 @@ impl ToText for c::bch_fs_btree_cache {
     }
 }
 
-// ── For check.c and init.c ───────────────────────────────────────────────
-
-#[c_export]
-pub fn bch2_btree_node_transition_state(c: &Fs, b: &BtreeNode, target: c::btree_node_cache_state) -> c_int {
-    ret_to_c(c.btree_node_transition_state(b, target))
-}
-
-#[c_export]
-pub fn bch2_btree_node_set_permanent(c: &Fs, b: &BtreeNode, permanent: bool) {
-    let _lists = c.btree.cache.lock.lock();
-    b.flags.set_permanent(permanent);
-}
-
-/// # Safety
-/// @k is a key, all of its u64s there.
-#[c_export]
-pub unsafe fn bch2_btree_node_get_noiter(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                         k: *const c::bkey_i, btree: Btree, level: c_uint,
-                                         nofill: bool) -> *mut BtreeNode {
-    let k = unsafe { &*BkeyI::from_raw(k) };
-    match trans.btree_node_get_noiter(paths, k, btree, level as usize, nofill) {
-        // C's to unlock
-        Ok(b)  => b.map_or(core::ptr::null_mut(), |(b, held)| {
-            held.into_raw();
-            core::ptr::from_ref(b).cast_mut()
-        }),
-        Err(e) => err_ptr(e),
-    }
-}
-
-/// # Safety
-/// @k is a key, all of its u64s there.
-#[c_export]
-pub unsafe fn bch2_btree_node_evict(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                    k: *const c::bkey_i) {
-    trans.btree_node_evict(paths, unsafe { &*BkeyI::from_raw(k) })
-}
+// ── For init.c ───────────────────────────────────────────────────────────
 

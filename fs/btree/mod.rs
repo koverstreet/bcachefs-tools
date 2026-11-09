@@ -33,6 +33,7 @@ pub mod bkey_buf;
 pub mod bkey_methods;
 pub mod cache;
 pub mod check_allocations;
+pub mod check_topology;
 pub mod compat;
 pub mod cow_key;
 pub mod for_each;

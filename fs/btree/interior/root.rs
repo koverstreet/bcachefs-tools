@@ -4,9 +4,8 @@
 //! when one's missing - and each written as a journal entry propagated back
 //! to the in-memory roots; and the reserve cache, as text.
 
-use core::ffi::{c_int, c_uint, c_ulong};
+use core::ffi::c_ulong;
 use core::ptr::{self, NonNull};
-use cstruct_macros::c_export;
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
 use crate::btree::node::bset::bch2_bset_init_first;
@@ -16,7 +15,7 @@ use crate::btree::bkey::{BkeyI, BkeyV};
 use crate::c;
 use crate::data::keylist::KeyRoom;
 use crate::debug::trace::events;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::format::{BkeyType, Btree};
 use crate::fs::Fs;
 use crate::format::jset_entry;
@@ -132,7 +131,7 @@ impl Fs {
     }
 }
 
-fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level: u32) -> Result<(), BchError> {
+pub(crate) fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level: u32) -> Result<(), BchError> {
     let fs = trans.fs();
 
     stack_pin_init!(let cl = StackClosure::new());
@@ -178,7 +177,3 @@ fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level: u32) -> Re
     Ok(())
 }
 
-#[c_export]
-pub fn bch2_btree_root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level: c_uint) -> c_int {
-    ret_to_c(root_alloc_fake_trans(trans, btree, level))
-}

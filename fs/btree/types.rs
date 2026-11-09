@@ -63,7 +63,7 @@ pub struct btree_bkey_cached_common {
 /*
  * Membership state of a struct btree in the btree node cache.
  *
- * Stored in b->cache_state and maintained by bch2_btree_node_transition_state().
+ * Stored in b->cache_state and maintained by btree_node_transition_state().
  * See DOC(btree-node-cache), in btree/cache/mod.rs, for the state machine and
  * the bookkeeping each state implies.
  */

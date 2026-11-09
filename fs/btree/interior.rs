@@ -51,6 +51,7 @@ mod reserve;
 mod root;
 mod split_merge;
 mod update_key;
+pub(crate) use root::root_alloc_fake_trans;
 pub(crate) use split_merge::{check_topology, check_topology_msg, foreground_maybe_merge, increase_depth, node_rewrite,
                              split_leaf};
 

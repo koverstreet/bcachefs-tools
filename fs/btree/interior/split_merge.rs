@@ -251,13 +251,6 @@ pub(crate) fn check_topology(trans: &BtreeTrans<'_>, b: Node<'_>) -> Result<(), 
     check_topology_msg(trans, b, &mut msg)
 }
 
-/// # Safety
-/// @b is locked.
-#[c_export]
-pub unsafe fn bch2_btree_node_check_topology(trans: &BtreeTrans<'_>, b: &BtreeNode) -> c_int {
-    ret_to_c(check_topology(trans, unsafe { LockedNode::new(b) }))
-}
-
 pub(super) fn split_threshold(fs: &Fs) -> usize {
     fs.btree_max_u64s() * 3 / 4
 }

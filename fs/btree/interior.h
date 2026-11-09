@@ -7,7 +7,6 @@
 #include "btree/update.h"
 #include "data/write_gen.h"
 
-#include "btree/interior/root_gen.h"
 #include "btree/interior/split_merge_gen.h"
 #include "btree/shard_gen.h"
 

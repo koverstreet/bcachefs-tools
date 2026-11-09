@@ -22,7 +22,7 @@ use crate::types::L1_CACHE_BYTES;
 use crate::util::kernel::{likely, prefetch, race_fault, unlikely};
 use crate::util::log::LogMsg;
 use c::btree_node_cache_state as State;
-use c::six_lock_type::{self, SIX_LOCK_intent, SIX_LOCK_read};
+use c::six_lock_type::{self, SIX_LOCK_read};
 
 fn btree_node_mem_ptr<'f>(fs: &'f Fs, k: &BkeyI) -> Option<&'f BtreeNode> {
     let p = BkeySC::from(k).arm::<c::BtreePtrV2>()?;
@@ -310,73 +310,6 @@ impl BtreeTrans<'_> {
         Ok((b, held))
     }
 
-    pub(crate) fn btree_node_get_noiter(&self, paths: &mut Paths<'_>, k: &BkeyI, btree: Btree, level: usize,
-                                        nofill: bool) -> Result<Option<(&BtreeNode, SixHold<'_>)>, BchError> {
-        let fs = self.fs();
-        let hash_val = btree_ptr_hash_val(BkeySC::from(k));
-
-        ebug_assert!(level < c::BTREE_MAX_DEPTH as usize);
-
-        let ret = 'out: {
-            let mut mem_ptr = btree_node_mem_ptr(fs, k);
-            let (b, held) = loop {
-                let Some(b) = mem_ptr.take().or_else(|| fs.btree_cache_find(k)) else {
-                    if nofill {
-                        break 'out Ok(None);
-                    }
-
-                    match self.btree_node_fill(paths, None, k, btree, level, SIX_LOCK_read, true) {
-                        /* We raced and found the btree node in the cache */
-                        Ok(None) => continue,
-                        Err(_) if self.btree_cache_cannibalize_lock(None).is_ok() => continue,
-                        Err(e) => break 'out Err(e),
-                        Ok(Some(got)) => break got,
-                    }
-                };
-
-                self.locking_hash_val.set(hash_val);
-                self.locking_root_id.set(Btree(u32::MAX));
-                let held = match self.node_lock_nopath_as(&b.c, SIX_LOCK_read, false, crate::ret_ip!(), false) {
-                    Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => break 'out Err(e),
-                    Err(e) if e.matches(bch_errcode::BCH_ERR_no_btree_node_reused) => continue,
-                    Err(e) => panic!("btree_node_lock_nopath(): {e}"),
-                    Ok(held) => held,
-                };
-
-                if unlikely(b.hash_val() != hash_val ||
-                            u32::from(b.c.btree_id) != btree.0 ||
-                            b.c.level as usize != level) {
-                    drop(held);
-                    continue;
-                }
-
-                /* avoid atomic set bit if it's not needed: */
-                if !b.flags.accessed() {
-                    b.flags.set_accessed(true);
-                }
-                break (b, held);
-            };
-
-            /* XXX: waiting on IO with btree locks held: */
-            bch2_btree_node_wait_on_read(self, paths, b);
-
-            prefetch_aux(b);
-
-            if unlikely(b.flags.read_error()) {
-                drop(held);
-                break 'out Err(bch_errcode::BCH_ERR_btree_node_read_err_cached.into());
-            }
-
-            ebug_assert!(u32::from(b.c.btree_id) == btree.0);
-            ebug_assert!(unsafe { b.contents() }.data().level() == level as u64);
-            btree_check_header(fs, b);
-            Ok(Some((b, held)))
-        };
-
-        self.btree_cache_cannibalize_unlock();
-        ret
-    }
-
     pub(crate) fn btree_node_prefetch(&self, paths: &mut Paths<'_>, path: Option<PathIdx>, k: &BkeyI, btree: Btree,
                                       level: usize) -> Result<(), BchError> {
         let fs = self.fs();
@@ -391,47 +324,6 @@ impl BtreeTrans<'_> {
         // dropped: unlocked
         let _ = self.btree_node_fill(paths, path, k, btree, level, SIX_LOCK_read, false)?;
         Ok(())
-    }
-
-    pub(crate) fn btree_node_evict(&self, paths: &mut Paths<'_>, k: &BkeyI) {
-        let fs = self.fs();
-
-        let Some(b) = fs.btree_cache_find(k) else { return };
-
-        assert!(!b.flags.permanent(), "evicting a permanent node");
-        loop {
-            /* not allowed to wait on io with btree locks held: */
-
-            /* XXX we're called from btree_gc which will be holding other btree
-             * nodes locked
-             */
-            bch2_btree_node_wait_on_read(self, paths, b);
-            bch2_btree_node_wait_on_write(self, paths, b);
-
-            self.locking_hash_val.set(0);
-            self.locking_root_id.set(Btree(u32::MAX));
-            let intent = self.node_lock_nopath_as(&b.c, SIX_LOCK_intent, true, crate::ret_ip!(), false)
-                .expect("a lock that may not fail, failed");
-            let held = self.node_lock_nopath_write(&b.c, intent, crate::ret_ip!(), false);
-
-            if unlikely(b.hash_val() != btree_ptr_hash_val(BkeySC::from(k))) {
-                drop(held);
-                break;
-            }
-
-            if b.flags.dirty() {
-                node_write(self, b, BtreeWriteType::cache_reclaim, BtreeWriteFlags::empty());
-                drop(held);
-                continue;
-            }
-
-            assert!(!b.flags.dirty(), "evicting a dirty node");
-
-            fs.btree.evicted_size.record(b.hash_val(), unsafe { b.contents() }.nr.live_u64s);
-            let _ = fs.btree_node_transition_state(b, State::FREED);
-            drop(held);
-            break;
-        }
     }
 
     /// The node path @idx has at @level, out of the cache - written first, if

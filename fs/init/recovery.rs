@@ -26,7 +26,6 @@ use crate::snapshots::snapshot::snapshots_read;
 use crate::snapshots::subvolume;
 use crate::types::Le64;
 use crate::util::alloc::KVVec;
-use crate::util::ffi::Opaque;
 use crate::util::kernel::{cond_resched, sort_nonatomic, unlikely};
 use crate::util::log::LogMsg;
 use crate::util::os_str::{OsStr, OsStrExt};
@@ -37,9 +36,7 @@ use crate::{bch_err, bch_err_msg, bch_info, bch_notice, bch_verbose, btree_trans
 use c::bch_fs_flags as Flag;
 use c::bch_progress_units as Units;
 use core::cmp::Ordering;
-use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::c_export;
 use crate::format::{Btree, MemberInitialized, BkeyType, SbFeature};
 use zerocopy::IntoBytes;
 
@@ -161,11 +158,6 @@ pub fn btree_lost_data(fs: &Fs, msg: &mut Printbuf, btree: Btree) -> Result<(), 
         msg.set_suppressed(false);
     }
     ret
-}
-
-#[c_export]
-pub fn bch2_btree_lost_data(c: &Opaque<Fs>, msg: &mut Printbuf, btree: Btree) -> c_int {
-    ret_to_c(btree_lost_data(Fs::from_c(c), msg, btree))
 }
 
 /// The alloc info dropped, to be rebuilt: the passes that rebuild it required,

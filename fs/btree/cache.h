@@ -36,20 +36,6 @@ static inline struct btree *btree_node_mem_ptr(const struct bkey_i *k)
 		: NULL;
 }
 
-/*
- * btree_node_mem_ptr_set() updates mem_ptr in the parent's key with only a read
- * lock held, so it can change while we're copying the key out - and memcpy()
- * doesn't guarantee 8 byte atomic loads (x86 FSRM: rep movsb). Reload it after
- * copying a btree node pointer out of a node: a stale mem_ptr is fine (callers
- * check hash_val), a torn one is a wild pointer.
- */
-static inline void btree_node_mem_ptr_reload(struct bkey_i *k, const struct bch_val *src)
-{
-	if (k->k.type == KEY_TYPE_btree_ptr_v2)
-		bkey_i_to_btree_ptr_v2(k)->v.mem_ptr =
-			READ_ONCE(((const struct bch_btree_ptr_v2 *) src)->mem_ptr);
-}
-
 /* is btree node in hash table? */
 static inline bool btree_node_hashed(struct btree *b)
 {
@@ -146,21 +132,6 @@ static inline unsigned long bch2_btree_id_root_packed(struct bch_fs *c, unsigned
 static inline struct btree *bch2_btree_id_root_b(struct bch_fs *c, unsigned btree_id)
 {
 	return bch2_btree_root_unpack_b(bch2_btree_id_root_packed(c, btree_id));
-}
-
-/* The error reading the root left, published as the root is */
-static inline int bch2_btree_id_root_error(struct bch_fs *c, unsigned btree_id)
-{
-	return likely(btree_id < BTREE_ID_NR_MAX)
-		? READ_ONCE(c->btree.cache.roots_error[btree_id])
-		: 0;
-}
-
-static inline int bch2_btree_id_root_set_error(struct bch_fs *c, unsigned btree_id, int err)
-{
-	guard(mutex)(&c->btree.cache.root_lock);
-	WRITE_ONCE(c->btree.cache.roots_error[btree_id], err);
-	return err;
 }
 
 static inline struct btree *btree_node_root(struct bch_fs *c, struct btree *b)

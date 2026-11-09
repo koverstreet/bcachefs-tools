@@ -1295,3 +1295,12 @@ pub fn btree_id_can_reconstruct(id: u32) -> bool {
                 | Btree::subvolume_children)
         )
 }
+
+/*
+ * We can reconstruct BTREE_ID_alloc, but reconstucting it from scratch is not
+ * so cheap and OOMs on huge filesystems (until we have online
+ * check_allocations)
+ */
+pub fn btree_id_recovers_from_scan(btree: Btree) -> bool {
+    btree == Btree::alloc || !btree_id_can_reconstruct(btree.0)
+}

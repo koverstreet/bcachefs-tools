@@ -18,6 +18,7 @@ use crate::fs::Dev;
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
+use crate::locking::{rust_raw_spin_lock, rust_raw_spin_unlock};
 use crate::types::c_default;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::{Printbuf, ToText};
@@ -403,6 +404,19 @@ pub fn ratelimit_state_init() -> impl ::pin_init::PinInit<c::ratelimit_state> {
             bch2_ratelimit_state_init(slot);
             Ok(())
         })
+    }
+}
+
+/// @rs started over, as if nothing had been printed.
+pub fn ratelimit_reset(rs: &c::ratelimit_state) {
+    let p = core::ptr::from_ref(rs).cast_mut();
+    unsafe {
+        rust_raw_spin_lock((&raw mut (*p).lock).cast());
+        (&raw mut (*p).rs_n_left).write(c::atomic_t { counter: 0 });
+        (&raw mut (*p).missed).write(c::atomic_t { counter: 0 });
+        (&raw mut (*p).flags).write(0);
+        (&raw mut (*p).begin).write(0);
+        rust_raw_spin_unlock((&raw mut (*p).lock).cast());
     }
 }
 

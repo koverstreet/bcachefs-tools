@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use core::cmp::{Ordering, Reverse};
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_int;
 use core::mem::{offset_of, replace, size_of};
 use core::ptr::NonNull;
 
@@ -19,7 +19,7 @@ use crate::c::{self, bch_errcode, BtreePtrV2};
 use crate::data::ptrs::extent_ptr_to_text;
 use crate::errcode::{ret_to_c, BchError};
 use crate::format::{Bpos, Btree, DataType, BkeyType, MetadataVersion};
-use crate::fs::{btree_id_can_reconstruct, Dev, Fs};
+use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Dev, Fs};
 use crate::init::passes;
 use crate::locking::Locked;
 use crate::types::{Le16, Le64};
@@ -460,9 +460,8 @@ fn in_range(nodes: &[FoundBtreeNode], btree: Btree, level: u8, min: Bpos, max: B
     })
 }
 
-#[c_export]
-pub fn bch2_btree_node_is_stale(c: &Opaque<Fs>, b: &BtreeNode) -> bool {
-    let nodes = Fs::from_c(c).btree.node_scan.lock();
+pub(crate) fn btree_node_is_stale(fs: &Fs, b: &BtreeNode) -> bool {
+    let nodes = fs.btree.node_scan.lock();
     let contents = unsafe { b.contents() };
     let bn = contents.data();
 
@@ -475,19 +474,14 @@ fn run_scan(fs: &Fs, out: &mut Printbuf) -> Result<(), BchError> {
                          c::bch_run_recovery_pass_flags::empty())
 }
 
-#[c_export]
-pub fn bch2_btree_has_scanned_nodes(c: &Opaque<Fs>, btree: Btree, out: &mut Printbuf) -> c_int {
-    let fs = Fs::from_c(c);
-
-    match run_scan(fs, out) {
-        Ok(())  => in_range(&fs.btree.node_scan.lock(), btree, 0, POS_MIN, SPOS_MAX).next().is_some().into(),
-        Err(e)  => ret_to_c(Err(e)),
-    }
+pub(crate) fn btree_has_scanned_nodes(fs: &Fs, btree: Btree, out: &mut Printbuf) -> Result<bool, BchError> {
+    run_scan(fs, out)?;
+    Ok(in_range(&fs.btree.node_scan.lock(), btree, 0, POS_MIN, SPOS_MAX).next().is_some())
 }
 
-fn get_scanned_nodes(fs: &Fs, btree: Btree, level: u32, node_min: Bpos, node_max: Bpos,
-                     out: &mut Printbuf, nodes_found: &mut usize) -> Result<(), BchError> {
-    if btree != Btree::alloc && btree_id_can_reconstruct(btree.0) {
+pub(crate) fn get_scanned_nodes(fs: &Fs, btree: Btree, level: u32, node_min: Bpos, node_max: Bpos,
+                                out: &mut Printbuf, nodes_found: &mut usize) -> Result<(), BchError> {
+    if !btree_id_recovers_from_scan(btree) {
         return Ok(());
     }
 
@@ -532,12 +526,6 @@ fn get_scanned_nodes(fs: &Fs, btree: Btree, level: u32, node_min: Bpos, node_max
         out.indent_sub(2);
     }
     Ok(())
-}
-
-#[c_export]
-pub fn bch2_get_scanned_nodes(c: &Opaque<Fs>, btree: Btree, level: c_uint, node_min: Bpos, node_max: Bpos,
-                              out: &mut Printbuf, nodes_found: &mut usize) -> c_int {
-    ret_to_c(get_scanned_nodes(Fs::from_c(c), btree, level, node_min, node_max, out, nodes_found))
 }
 
 #[c_export]
