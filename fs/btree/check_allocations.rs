@@ -6,7 +6,7 @@
 use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::Relaxed;
 use crate::accounting::dev_usage_init;
-use crate::alloc::accounting_mem::{accounting_gc_free, gc_accounting_done, gc_accounting_start};
+use crate::alloc::accounting_mem::{accounting_gc_free, gc_accounting_done, gc_accounting_start, MarkWrite};
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::prelude::*;
@@ -152,11 +152,11 @@ fn mark_superblocks(fs: &Fs) -> Result<(), BchError> {
 }
 
 /// # Safety
-/// mark_lock is held for write, and gc.pos is back to not_running.
-unsafe fn gc_free(fs: &Fs) {
-    unsafe {
-        accounting_gc_free(fs);
+/// gc.pos is back to not_running.
+unsafe fn gc_free(fs: &Fs, mark: &mut MarkWrite<'_>) {
+    accounting_gc_free(fs, mark);
 
+    unsafe {
         gc_reflink_free(fs);
         fs.ec.gc_stripes.free();
 
@@ -415,10 +415,10 @@ fn check_allocations(fs: &Fs) -> Result<(), BchError> {
     let ret = gc(fs);
 
     {
-        let _mark = fs.mark_lock().write();
+        let mut mark = fs.mark_lock().write();
         /* Indicates that gc is no longer in progress: */
         fs.gc.set_not_running();
-        unsafe { gc_free(fs) };
+        unsafe { gc_free(fs, &mut mark) };
     }
 
     /*

@@ -341,11 +341,8 @@ pub(crate) fn gc_accounting_done(fs: &Fs) -> Result<(), BchError> {
     }
 }
 
-/// # Safety
-/// mark_lock is held for write.
-pub(crate) unsafe fn accounting_gc_free(fs: &Fs) {
-    let mut mark = unsafe { fs.mark_lock().held() };
-    let acc = fs.accounting_mem_mut(&mut mark);
+pub(crate) fn accounting_gc_free(fs: &Fs, mark: &mut MarkWrite<'_>) {
+    let acc = fs.accounting_mem_mut(mark);
     acc.free_gc();
     acc.gc_running = false;
 }
