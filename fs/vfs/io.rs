@@ -232,7 +232,7 @@ impl InodeInfo {
         }
 
         if !folio.uptodate() {
-            folio.read_single(mapping)?;
+            folio.read_single(mapping, false)?;
         }
 
         folio.update_state(self)?;

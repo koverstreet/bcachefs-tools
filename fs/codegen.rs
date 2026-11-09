@@ -123,7 +123,9 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/folio_batch.h",
     "linux/page-flags.h",
     "linux/xarray.h",
-    "linux/highmem.h",			// folio_zero_segment()
+    "linux/highmem.h",			// folio_zero_segment(), folio_zero_range(), folio_zero_segments()
+    "linux/cacheflush.h",		// flush_dcache_folio(): a no-op, or the arch's
+    "asm/cacheflush.h",
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
@@ -143,7 +145,9 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "folio_mark_uptodate", "folio_end_read", "filemap_add_folio", "readahead_gfp_mask",
     "mapping_min_folio_order", "mapping_max_folio_order", "__readahead_folio", "xa_load", "xa_is_value",
     "bio_add_folio_nofail", "folio_unlock", "filemap_lock_folio",
-    "folio_zero_segment", "rust_folio_mkclean", "rust_filemap_dirty_folio",
+    "folio_zero_segment", "folio_zero_range", "folio_zero_segments", "flush_dcache_folio",
+    "mapping_writably_mapped", "mapping_gfp_mask",
+    "rust_folio_mkclean", "rust_filemap_dirty_folio",
     "folio_lock", "folio_trylock", "filemap_get_folios",
     "folio_batch_init", "folio_batch_count", "folio_batch_release",
     // util/bio/user_pages.rs

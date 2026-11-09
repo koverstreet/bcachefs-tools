@@ -23,6 +23,7 @@ use super::inode::InodeInfo;
 use crate::c;
 use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
 use crate::locking::ExclusiveGuard;
+use crate::util::iov_iter::IovIter;
 use crate::util::kernel::{cond_resched, loff};
 use core::ffi::c_int;
 use core::marker::PhantomData;
@@ -115,16 +116,39 @@ impl Folio {
         unsafe { c::folio_zero_segment(self.as_ptr(), start, end) }
     }
 
+    /// Bytes [@start1, @end1) and [@start2, @end2) of it zeroed:
+    /// folio_zero_segments().
+    pub fn zero_segments(self, start1: usize, end1: usize, start2: usize, end2: usize) {
+        unsafe { c::folio_zero_segments(self.as_ptr(), start1, end1, start2, end2) }
+    }
+
+    /// @len bytes of it from @start zeroed: folio_zero_range().
+    pub fn zero_range(self, start: usize, len: usize) {
+        unsafe { c::folio_zero_range(self.as_ptr(), start, len) }
+    }
+
+    /// @len bytes of @iter copied in at @offset, without faulting: how many
+    /// were - copy_folio_from_iter_atomic().
+    pub fn copy_from_iter_atomic(self, offset: usize, len: usize, iter: &mut IovIter<'_>) -> usize {
+        unsafe { c::copy_folio_from_iter_atomic(self.as_ptr(), offset, len, iter.as_ptr()) }
+    }
+
+    /// What's written to it through the kernel's mapping made visible through
+    /// userspace's: flush_dcache_folio().
+    pub fn flush_dcache(self) {
+        unsafe { c::flush_dcache_folio(self.as_ptr()) }
+    }
+
     /// Its writeable userspace mappings write-protected, so a write through
     /// one faults - page_mkwrite again: folio_mkclean().
     pub fn mkclean(self) {
         unsafe { c::rust_folio_mkclean(self.as_ptr()) };
     }
 
-    /// Its data read in, @mapping's, before this returns:
-    /// bch2_read_single_folio().
-    pub fn read_single(self, mapping: Mapping) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { bch2_read_single_folio(self.as_ptr(), mapping.as_ptr(), false) })
+    /// Its data read in, @mapping's, before this returns - and with @extend,
+    /// the read extended as readahead's are: bch2_read_single_folio().
+    pub fn read_single(self, mapping: Mapping, extend: bool) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { bch2_read_single_folio(self.as_ptr(), mapping.as_ptr(), extend) })
     }
 
     /// Unlocked: the caller's lock, and with it the Folio, given up.
@@ -313,6 +337,17 @@ impl Drop for FolioGuard<'_> {
 
 pub struct LockedFolio(Folio);
 
+impl LockedFolio {
+    pub unsafe fn from_raw(folio: *mut c::folio) -> Self {
+        LockedFolio(unsafe { Folio::from_raw(folio) })
+    }
+
+    /// Its lock and ref given up, to what holds them as C does.
+    pub fn into_raw(self) -> *mut c::folio {
+        core::mem::ManuallyDrop::new(self).0.as_ptr()
+    }
+}
+
 impl Deref for LockedFolio {
     type Target = Folio;
 
@@ -449,6 +484,22 @@ impl Mapping {
         let gfp = crate::util::alloc::current_gfp_context_raw(gfp);
         let folio = unsafe { c::__filemap_get_folio(self.as_ptr(), index as _, fgp, gfp) };
         errptr_to_result(NonNull::new(folio).expect("a folio, or an error"))
+    }
+
+    /// Whether a userspace mapping of it can write: mapping_writably_mapped().
+    pub fn writably_mapped(self) -> bool {
+        unsafe { c::mapping_writably_mapped(self.as_ptr()) != 0 }
+    }
+
+    /// Throttled, if it's dirtied faster than writeback keeps up:
+    /// balance_dirty_pages_ratelimited().
+    pub fn balance_dirty_pages_ratelimited(self) {
+        unsafe { c::balance_dirty_pages_ratelimited(self.as_ptr()) }
+    }
+
+    /// What its folios are allocated with: mapping_gfp_mask().
+    pub fn gfp_mask(self) -> c::gfp_t {
+        unsafe { c::mapping_gfp_mask(self.as_ptr()) }
     }
 
     /// @folio marked dirty: filemap_dirty_folio().
