@@ -74,7 +74,6 @@
 
 #include "vfs/fs.h"
 #include "vfs/io.h"
-#include "vfs/buffered.h"
 #include "vfs/direct.h"
 
 #include "util/enumerated_ref.h"

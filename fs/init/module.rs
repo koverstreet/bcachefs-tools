@@ -81,7 +81,10 @@ fn bcachefs_exit() {
     crate::util::maybe_rcu_alloc::barrier();
     crate::util::maybe_rcu_alloc::free_exit();
     #[cfg(not(NO_BCACHEFS_FS))]
-    unsafe { crate::vfs::direct::pools_exit() };
+    unsafe {
+        crate::vfs::direct::pools_exit();
+        crate::vfs::buffered::pools_exit();
+    }
     unsafe { crate::data::read::pools_exit() };
 }
 

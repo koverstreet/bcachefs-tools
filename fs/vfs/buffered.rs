@@ -33,15 +33,17 @@ use crate::data::read::{self, ReadHooks, Rbio};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::inode_opts::get_inode;
-use crate::util::alloc::KVVec;
-use crate::util::bio::{bvec_offset, plugged, BioBox, BioOwner, BioRange, HasBio};
+use crate::util::alloc::{KVVec, Kmalloc};
+use crate::util::bio::{bvec_offset, inline_vecs, plugged, Bio, BioBuffersUnmanaged, BioOwner, BioRange, HasBio};
 use crate::util::kernel::PAGE_SIZE;
+use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
-use crate::util::task::{waiter, CompletionReturn, Spawn, TaskSlot};
+use crate::util::task::{exclusive_size, waiter, CompletionReturn, Return, TaskSlot};
 use crate::util::workqueue::Queue;
-use core::ffi::c_int;
+use core::pin::Pin;
 use core::ptr::NonNull;
-use cstruct_macros::c_export;
+use cstruct_macros::in_place;
+use pin_init::{pin_data, pin_init, pinned_drop};
 
 type F = c::bch_read_flags;
 
@@ -214,14 +216,14 @@ impl ReadHooks for PagecacheRead {
 }
 
 /// The folio a read stopped inside, if it did: read, but not uptodate.
-fn partial_folio(b: &BioBox<Rbio>) -> Option<Folio> {
+fn partial_folio(b: &impl BioOwner) -> Option<Folio> {
     let fv = b.range_all().folios().last()?;
     let folio = unsafe { Folio::from_raw(fv.folio.as_ptr()) };
     (folio.partially_uptodate() != 0).then_some(folio)
 }
 
 /// Each of @b's folios but @except unlocked: uptodate if read.
-fn end_reads(b: &BioBox<Rbio>, ret: Result<(), BchError>, except: Option<Folio>) {
+fn end_reads(b: &impl BioOwner, ret: Result<(), BchError>, except: Option<Folio>) {
     /* a stale partially_uptodate would spin do_read_cache_folio() forever: */
     let partial = partial_folio(b);
     for fv in b.range_all().folios() {
@@ -232,33 +234,96 @@ fn end_reads(b: &BioBox<Rbio>, ret: Result<(), BchError>, except: Option<Folio>)
     }
 }
 
-fn alloc_rbio(fs: &Fs, inode: &InodeInfo, opts: c::bch_inode_opts, nr_vecs: usize) -> BioBox<Rbio> {
-    let subvol = inode.inum().subvol as u32;
-    fs.bio_read.alloc(core::ptr::null_mut(), nr_vecs as u16, c::req_op_REQ_OP_READ,
-                      |b| Rbio::new(fs, opts, subvol, None, b))
-        .expect("a bio_read bio of no more than BIO_MAX_VECS: from its mempool")
+/// A read into the page cache - readahead's, or a single folio's: the home of
+/// the task that reads it, its bvecs inline after the box.
+#[pin_data(PinnedDrop)]
+#[repr(C)]
+struct ReadBio {
+    #[pin]
+    rbio: Rbio,
+}
+crate::has_bio!(ReadBio, rbio.bio);
+
+#[pinned_drop]
+impl PinnedDrop for ReadBio {
+    fn drop(self: Pin<&mut Self>) {
+        unsafe { self.bio_mut().uninit() }
+    }
 }
 
-/// @b read by a task of its own, its first poll here, and @done given it back.
-fn spawn_read(b: BioBox<Rbio>, inum: c::subvol_inum, hooks: PagecacheRead,
-              done: impl FnOnce(BioBox<Rbio>, Result<(), BchError>) + Send + 'static) {
-    let flags = F::retry_if_stale | F::may_promote;
-    let slot = match TaskSlot::alloc(()) {
-        Ok(slot) => slot,
-        Err(e) => return done(b, Err(e)),
-    };
-    let task = slot.init(Spawn::Queue(Queue::system_dfl()), async move |_: &()| {
-        let ret = read::read(&b, inum, flags, hooks).await;
-        done(b, ret);
-    }, None).expect("a queue's task: nothing in it fails");
-    unsafe { task.start_inline_unchecked() };
+/// A read's home, as its task has it: the bio's owner.
+struct ReadHome<'h>(Pin<&'h mut ReadBio>);
+
+unsafe impl BioOwner for ReadHome<'_> {
+    type Buffers = BioBuffersUnmanaged;
+
+    fn bio(&self) -> &Bio {
+        self.0.rbio.bio()
+    }
+
+    fn bio_mut(&mut self) -> Pin<&mut Bio> {
+        self.0.as_mut().bio_mut()
+    }
+}
+
+/// A read's box is freed when its task is done, after the read - when the
+/// filesystem may be gone: so from a pool of the module's.
+static READS: Mempool<Kmalloc> = ::pin_init::zeroed();
+
+/// At module init: elements for the most bvecs a bio has.
+pub fn pools_init() -> Result<(), BchError> {
+    let size = exclusive_size::<ReadBio, ReadFut<'static>, &'static Mempool<Kmalloc>>(
+        inline_vecs(c::BIO_MAX_VECS as u16));
+    unsafe { Mempool::init_static(&READS, Mempool::kmalloc(1, size)) }
 }
 
 /// # Safety
-/// The VFS's readahead.
-#[c_export]
-pub unsafe fn bch2_readahead(ractl: *mut c::readahead_control) {
-    let mut ra = unsafe { Readahead::from_raw(ractl) };
+/// At module exit, after the last box's grace period.
+pub unsafe fn pools_exit() {
+    unsafe { READS.exit() }
+}
+
+/// What's done with a read's folios once it's read.
+enum End {
+    /// Readahead's: each ended
+    Readahead,
+    /// A single folio's: those extend() added ended - @folio is the caller's -
+    /// and the caller, waiting for it, given what was read
+    Single { folio: Folio, extend: bool, r: Return<Result<(), BchError>, waiter::Sync> },
+}
+
+// @folio's the caller's, locked, and the caller's waiting on the task
+unsafe impl Send for End {}
+
+#[in_place(ReadFut)]
+async fn read_task<'h>(home: Pin<&'h mut ReadBio>, inum: c::subvol_inum, hooks: PagecacheRead, end: End) {
+    let ret = read::read(&home.rbio, inum, F::retry_if_stale | F::may_promote, hooks).await;
+    let b = ReadHome(home);
+    match end {
+        End::Readahead => end_reads(&b, ret, None),
+        End::Single { folio, extend, r } => {
+            if extend {
+                end_reads(&b, ret, Some(folio));
+            }
+            r.complete(ret);
+        }
+    }
+}
+
+/// A read of @inode into a bio of @nr_vecs bvecs, set up by @set_up: read by a
+/// task of its own, its first poll here, and ended as @end says.
+fn spawn_read(fs: &Fs, inode: &InodeInfo, opts: c::bch_inode_opts, nr_vecs: usize,
+              set_up: impl FnOnce(Pin<&mut Bio>), hooks: PagecacheRead, end: End) {
+    let subvol = inode.inum().subvol as u32;
+    let mut slot = TaskSlot::exclusive_bio_in(&READS, core::ptr::null_mut(), nr_vecs as u16, c::req_op_REQ_OP_READ,
+                                              |b| pin_init!(ReadBio { rbio <- Rbio::new(fs, opts, subvol, None, b) }? BchError))
+        .expect("a read bio's box: its pool waits for an element, and an Rbio's init can't fail");
+    set_up(slot.home().bio_mut());
+    let inum = inode.inum();
+    unsafe { slot.start_inline(Queue::system_dfl(), move |h| read_task(h, inum, hooks, end)) };
+}
+
+pub(crate) fn readahead(mut ra: Readahead<'_>) {
     let mapping = ra.mapping();
     let inode = mapping.inode();
     let fs = inode.fs();
@@ -282,10 +347,12 @@ pub unsafe fn bch2_readahead(ractl: *mut c::readahead_control) {
 
         let orig_end = folios.folios.last().map_or(0, |f| f.end_sector());
         while let Some(folio) = folios.peek() {
-            let mut b = alloc_rbio(fs, inode, opts, folios.remaining().min(c::BIO_MAX_VECS as usize));
+            let nr_vecs = folios.remaining().min(c::BIO_MAX_VECS as usize);
             folios.advance();
-            b.bio_mut().set_sector(folio.sector());
-            unsafe { b.bio_mut().add_folio(folio) };
+            let set_up = |mut b: Pin<&mut Bio>| {
+                b.as_mut().set_sector(folio.sector());
+                unsafe { b.add_folio(folio) };
+            };
 
             let hooks = PagecacheRead {
                 folios:    Some(NonNull::from(&mut folios)),
@@ -293,7 +360,7 @@ pub unsafe fn bch2_readahead(ractl: *mut c::readahead_control) {
                 read_from: folio.sector() + u64::from(folio.partially_uptodate()),
                 orig_end,
             };
-            spawn_read(b, inode.inum(), hooks, |b, ret| end_reads(&b, ret, None));
+            spawn_read(fs, inode, opts, nr_vecs, set_up, hooks, End::Readahead);
         }
     });
 }
@@ -305,16 +372,11 @@ pub unsafe fn bch2_readahead(ractl: *mut c::readahead_control) {
 /// does, rather than being thrown away: without it a sequential rewrite that
 /// doesn't cover whole folios reads the same extent once per folio. The caller
 /// must hold pagecache_add, since new folios are added.
-///
-/// # Safety
-/// @folio and @mapping are the page cache's, @folio locked.
-#[c_export]
-pub unsafe fn bch2_read_single_folio(folio: *mut c::folio, mapping: *mut c::address_space, extend: bool) -> c_int {
-    let (folio, mapping) = unsafe { (Folio::from_raw(folio), Mapping::from_raw(mapping)) };
+pub(crate) fn read_single_folio(folio: Folio, mapping: Mapping, extend: bool) -> Result<(), BchError> {
     assert!(!folio.uptodate() && !folio.dirty(), "reading a folio uptodate or dirty");
 
     if !folio.create_state() {
-        return -(c::ENOMEM as c_int);
+        return Err(BchError::from_raw(c::ENOMEM as i32));
     }
 
     let inode = mapping.inode();
@@ -327,10 +389,11 @@ pub unsafe fn bch2_read_single_folio(folio: *mut c::folio, mapping: *mut c::addr
     };
 
     let mut folios = Folios::new();
-    let mut b = alloc_rbio(fs, inode, opts, nr_vecs);
-    b.bio_mut().set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
-    b.bio_mut().set_sector(folio.sector());
-    unsafe { b.bio_mut().add_folio(folio) };
+    let set_up = |mut b: Pin<&mut Bio>| {
+        b.as_mut().set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
+        b.as_mut().set_sector(folio.sector());
+        unsafe { b.add_folio(folio) };
+    };
 
     let hooks = PagecacheRead {
         folios:    extend.then(|| NonNull::from(&mut folios)),
@@ -340,24 +403,16 @@ pub unsafe fn bch2_read_single_folio(folio: *mut c::folio, mapping: *mut c::addr
     };
     let mut slot = None;
     let (wait, r) = CompletionReturn::new(&mut slot, waiter::Sync::current());
-    plugged(|| spawn_read(b, inode.inum(), hooks, move |b, ret| r.complete((b, ret))));
-    let (b, ret) = wait.wait(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read");
-
     /*
      * The folios extend() added after @folio are locked and ours to finish,
      * as readahead's end does; @folio stays locked, it's the caller's.
      */
-    if extend {
-        end_reads(&b, ret, Some(folio));
-    }
-    drop(b);
+    let end = End::Single { folio, extend, r };
+    plugged(|| spawn_read(fs, inode, opts, nr_vecs, set_up, hooks, end));
+    let ret = wait.wait(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read");
 
-    match ret {
-        Err(e) => e.class() as c_int,
-        Ok(()) => {
-            folio.set_partially_uptodate(0);
-            folio.mark_uptodate();
-            0
-        }
-    }
+    ret?;
+    folio.set_partially_uptodate(0);
+    folio.mark_uptodate();
+    Ok(())
 }

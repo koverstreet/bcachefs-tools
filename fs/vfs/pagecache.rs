@@ -13,7 +13,7 @@ use core::ffi::{c_int, c_uint, c_void};
 use core::ops::{ControlFlow, Range};
 use core::ptr::NonNull;
 
-use cstruct_macros::{c_export, c_extern, vtable};
+use cstruct_macros::{c_export, vtable};
 use kernel::page::PAGE_SHIFT;
 
 use crate::btree::bkey::{pos, BkeySC};
@@ -34,8 +34,10 @@ use crate::util::alloc::{init_at, kzalloc, KBox};
 use crate::util::kernel::PAGE_SECTORS_SHIFT;
 use crate::util::bio::BioRange;
 
+use super::buffered;
 use super::buffered_write::{self, WriteBegun};
-use super::folio::{AddressSpaceOps, AopsVTable, Folio, FolioSpan, FolioStateGuard, LockedFolio, Mapping};
+use super::folio::{AddressSpaceOps, AopsVTable, Folio, FolioGuard, FolioSpan, FolioStateGuard, LockedFolio, Mapping,
+                   Readahead};
 use super::folio_reservation::FolioReservation;
 use super::inode::InodeInfo;
 use super::ops::VfsWriter;
@@ -441,15 +443,17 @@ impl Folio {
     }
 }
 
-c_extern! {
-    // buffered.c's
-    fn bch2_read_folio(file: *mut c::file, folio: *mut c::folio) -> c_int;
-    // buffered.rs's, by the C signature #[c_export] gives it
-    fn bch2_readahead(ractl: *mut c::readahead_control);
-}
-
 #[vtable]
 impl AddressSpaceOps for InodeInfo {
+    fn read_folio(_file: *mut c::file, folio: FolioGuard<'_>) -> Result<(), BchError> {
+        let mapping = folio.mapping().expect("a folio to read, in its mapping");
+        folio.read_single(mapping, false)
+    }
+
+    fn readahead(ra: Readahead<'_>) {
+        buffered::readahead(ra)
+    }
+
     fn writepages(mapping: Mapping, wbc: Wbc) -> c_int {
         writeback::writepages(mapping, wbc)
     }
@@ -519,8 +523,6 @@ impl AddressSpaceOps for InodeInfo {
 pub(crate) static INODE_AOPS: CStatic<c::address_space_operations> = unsafe {
     CStatic::new({
         let mut ops = AopsVTable::<InodeInfo>::OPS;
-        ops.read_folio         = Some(bch2_read_folio);
-        ops.readahead          = Some(bch2_readahead);
         #[cfg(CONFIG_MIGRATION)]
         {
             ops.migrate_folio  = Some(c::filemap_migrate_folio);

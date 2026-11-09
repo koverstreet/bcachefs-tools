@@ -142,9 +142,9 @@ impl Folio {
     }
 
     /// Its data read in, @mapping's, before this returns - and with @extend,
-    /// the read extended as readahead's are: bch2_read_single_folio().
+    /// the read extended as readahead's are.
     pub fn read_single(self, mapping: Mapping, extend: bool) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { super::buffered::bch2_read_single_folio(self.as_ptr(), mapping.as_ptr(), extend) })
+        super::buffered::read_single_folio(self, mapping, extend)
     }
 
     /// Unlocked: the caller's lock, and with it the Folio, given up.
@@ -654,6 +654,9 @@ crate::vfs_ops! {
     /// A mapping's operations, address_space_operations.
     pub(crate) trait AddressSpaceOps for c::address_space_operations, AopsVTable<T: AddressSpaceOps> = T;
 
+    /// @folio's data read in; its lock, the VFS's, given up either way.
+    fn read_folio(_file: *mut c::file, folio: FolioGuard<'_>) -> Result<(), BchError>;
+    fn readahead(ra: Readahead<'_>);
     fn writepages(mapping: Mapping, wbc: Wbc) -> c_int;
     /// @folio marked dirty: whether it wasn't.
     fn dirty_folio(mapping: Mapping, folio: Folio) -> bool;

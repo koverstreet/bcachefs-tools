@@ -17,7 +17,7 @@ use crate::util::seq_file::SeqFile;
 
 use super::dentry::Dentry;
 use super::export::NameBuf;
-use super::folio::{Folio, LockedFolio, Mapping};
+use super::folio::{Folio, FolioGuard, LockedFolio, Mapping, Readahead};
 use super::idmap::{MntIdmap, RawIdmap};
 use super::inode::InodeInfo;
 use super::path::Path;
@@ -87,6 +87,9 @@ from_raw! {
 from_raw! {
     Mapping               = *mut c::address_space => |r| Mapping::from_raw(r);
     Folio                 = *mut c::folio         => |r| Folio::from_raw(r);
+    /// read_folio()'s: locked, its lock ours to give up, not its ref.
+    FolioGuard<'a>        = *mut c::folio         => |r| FolioGuard::adopt(Folio::from_raw(r));
+    Readahead<'a>         = *mut c::readahead_control => |r| Readahead::from_raw(r);
     /// write_end()'s: write_begin()'s, its lock and ref to give up.
     LockedFolio           = *mut c::folio         => |r| LockedFolio::from_raw(r);
     /// write_begin()'s out parameters.
