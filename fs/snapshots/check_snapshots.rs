@@ -49,7 +49,6 @@ use crate::util::alloc::KVVec;
 use crate::util::{Join, Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err, prt};
 use core::fmt;
-use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree, MetadataVersion};
 
 /// Snapshot node @id's key, None if there's none: fsck can't assume a node
@@ -1368,19 +1367,3 @@ pub(crate) fn check_key_has_snapshot<'a>(
     Ok(false)
 }
 
-/// check_key_has_snapshot(), for C's bch2_check_key_has_snapshot(): 1 if @k
-/// was repaired or can't be, for the caller to skip it.
-///
-/// # Safety
-/// @iter NULL - the promote path - or the iterator @k was read from.
-#[c_export]
-pub unsafe extern "C" fn __bch2_check_key_has_snapshot<'t>(
-    trans: &'t BtreeTrans<'t>,
-    iter:  Option<&BtreeIter<'t>>,
-    k:     BkeySC<'_>,
-) -> core::ffi::c_int {
-    match check_key_has_snapshot(&unsafe { trans.attempt_in_progress() }, iter, k) {
-        Ok(handled) => handled as core::ffi::c_int,
-        Err(e)      => -e.raw(),
-    }
-}

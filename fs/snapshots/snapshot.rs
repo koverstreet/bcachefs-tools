@@ -315,11 +315,9 @@ use crate::util::rcu::RcuArray;
 use crate::util::kernel::{cold_path, likely, unlikely};
 use crate::util::place::Contained;
 use crate::util::{HumanReadable, Printbuf};
-use core::ffi::c_int;
 use core::fmt;
 use core::ops::ControlFlow;
 use core::sync::atomic::{AtomicU32, Ordering};
-use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree, MetadataVersion};
 
 // ── The table ────────────────────────────────────────────────────────────
@@ -960,11 +958,6 @@ fn is_ancestor_debug(t: &TransAttempt<'_, '_>, id: u32, ancestor: u32, fastpath:
     panic!("{}", buf.as_str());
 }
 
-#[c_export]
-pub fn __bch2_snapshot_is_ancestor(trans: &BtreeTrans<'_>, id: u32, ancestor: u32) -> bool {
-    is_ancestor_table(&unsafe { trans.attempt_in_progress() }, id, ancestor)
-}
-
 // ── Snapshot node keys ───────────────────────────────────────────────────
 
 /// Zero padded past the fields an older key lacks.
@@ -1522,22 +1515,6 @@ pub fn has_overwrites(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos)
             ControlFlow::Continue(())
         })
     })
-}
-
-/// bch2_key_has_snapshot_overwrites()'s slow path, past its leaf check.
-///
-/// # Safety
-/// @trans is in an attempt.
-#[c_export]
-pub unsafe extern "C" fn __bch2_key_has_snapshot_overwrites<'t>(
-    trans: &'t BtreeTrans<'t>,
-    btree: Btree,
-    pos:   Bpos,
-) -> c_int {
-    match has_overwrites(&unsafe { trans.attempt_in_progress() }, btree, pos) {
-        Ok(has) => has as c_int,
-        Err(e)  => -e.raw(),
-    }
 }
 
 // ── The tree, for error messages ─────────────────────────────────────────

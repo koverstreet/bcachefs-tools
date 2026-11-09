@@ -121,8 +121,10 @@ pub fn get_snapshot_nowarn(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<u32,
     __get_snapshot(t, subvol, false)
 }
 
+/// # Safety
+/// @trans is in an attempt.
 #[c_export]
-pub fn bch2_subvolume_get_snapshot(
+pub unsafe fn bch2_subvolume_get_snapshot(
     trans:  &BtreeTrans<'_>,
     subvol: u32,
     snapid: &mut u32,
