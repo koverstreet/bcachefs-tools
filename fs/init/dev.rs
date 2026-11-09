@@ -627,7 +627,7 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<NewDev> {
     unsafe { c::init_completion(&mut ca.ref_completion) };
 
     ca.mi.set(member.to_cpu());
-    ca.btree_allocated_bitmap_gc = member.btree_allocated_bitmap.get();
+    ca.btree_allocated_bitmap_gc.set(member.btree_allocated_bitmap.get());
 
     for (e, m) in ca.errors.iter().zip(member.errors.iter()) {
         e.store(m.get() as i64, Relaxed);

@@ -356,7 +356,7 @@ pub struct Dev {
      * sb_lock, read without it
      */
     pub mi: crate::util::projections::Volatile<c::bch_member_cpu>,
-    pub btree_allocated_bitmap_gc: u64,
+    pub btree_allocated_bitmap_gc: crate::util::projections::Volatile<u64>,
     pub errors: [AtomicI64; c::BCH_MEMBER_ERROR_NR as usize],
     /// Written racing C's plain reads and stores, as C's are: atomic here,
     /// so Rust's are through a shared bch_dev.

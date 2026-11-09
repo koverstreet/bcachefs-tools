@@ -736,7 +736,7 @@ impl Dev {
             return false;
         }
 
-        let gc = if with_gc { self.btree_allocated_bitmap_gc } else { !0 };
+        let gc = if with_gc { self.btree_allocated_bitmap_gc.get() } else { !0 };
         let want = bitmap_bits(start, end, shift);
         self.mi.get().btree_allocated_bitmap & gc & want == want
     }
@@ -758,8 +758,7 @@ impl Dev {
     /// ca->btree_allocated_bitmap_gc made @v: written under sb_lock, @_sb,
     /// and read without it, as ca->mi.
     fn set_btree_bitmap_gc(&self, _sb: &SbLockGuard<'_>, v: u64) {
-        // SAFETY: as set_mi()
-        unsafe { (&raw const self.btree_allocated_bitmap_gc).cast_mut().write(v) }
+        self.btree_allocated_bitmap_gc.set(v)
     }
 
     /// [@start, @start + @sectors) marked in its member's bitmap, and in gc's
@@ -767,7 +766,7 @@ impl Dev {
     /// member changed.
     fn btree_bitmap_mark_sectors(&self, sb: &mut SbLockGuard<'_>, start: u64, sectors: u32) -> bool {
         let end = start + u64::from(sectors);
-        let mut gc = self.btree_allocated_bitmap_gc;
+        let mut gc = self.btree_allocated_bitmap_gc.get();
         let mut dirty = false;
 
         let m = sb.fs_member_mut(self.dev_idx.into());
@@ -877,9 +876,10 @@ impl Fs {
                 for ca in self.devs_rcu(&rcu) {
                     let shift = ca.mi.get().btree_bitmap_shift;
                     old += u64::from(ca.mi.get().btree_allocated_bitmap.count_ones()) << shift;
-                    new += u64::from(ca.btree_allocated_bitmap_gc.count_ones()) << shift;
+                    let gc = ca.btree_allocated_bitmap_gc.get();
+                    new += u64::from(gc.count_ones()) << shift;
 
-                    sb.fs_member_mut(ca.dev_idx.into()).btree_allocated_bitmap = ca.btree_allocated_bitmap_gc.into();
+                    sb.fs_member_mut(ca.dev_idx.into()).btree_allocated_bitmap = gc.into();
                 }
             }
             self.write_super(&mut sb);
