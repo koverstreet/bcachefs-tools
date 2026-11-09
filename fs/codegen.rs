@@ -268,7 +268,9 @@ const BLOCKLIST_TYPE: &[&str] = &["inode", "file", "dir_context", "user_namespac
                                      "super_block", "super_operations", "percpu_ref", "ida",
                                      "blk_holder_ops", "bio_set", "xarray", "writeback_control",
                                      "folio", "page", "mm_struct", "key", "key_type", "srcu_struct",
-                                     "workqueue_struct", "work_struct", "delayed_work"];
+                                     "workqueue_struct", "work_struct", "delayed_work",
+                                     // declared by numa.h's and mm.h's externs from 7.3
+                                     "attribute_group"];
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
                                  "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*", "FALLOC_FL_.*",
                                  "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*", "key_type_user", "NUMA_NO_NODE",
