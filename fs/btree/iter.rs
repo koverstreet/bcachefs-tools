@@ -163,7 +163,7 @@ use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
 use crate::data::ptrs::BtreePtrs;
 use crate::types::{c_default, Lent};
-use cstruct_macros::{CStruct, c_export, c_extern};
+use cstruct_macros::{CStruct, c_export};
 use crate::format::{Bpos, Btree, BkeyType};
 
 #[repr(C)]
@@ -185,10 +185,6 @@ pub struct trans_may_drop_updates {
     pub old: bool,
 }
 c_default!(trans_may_drop_updates);
-
-c_extern! {
-    fn bch2_btree_key_cache_find(c: *mut Fs, btree_id: Btree, pos: Bpos) -> *mut c::bkey_cached;
-}
 
 bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -827,7 +823,7 @@ impl<'t> BtreeIter<'t> {
             return Ok(());
         }
 
-        if unsafe { bch2_btree_key_cache_find(trans.fs().as_ptr(), self.btree(), kp) }.is_null() {
+        if trans.btree_key_cache_find(self.btree(), kp).is_none() {
             return Ok(());
         }
 

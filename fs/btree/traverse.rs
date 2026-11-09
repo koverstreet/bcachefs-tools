@@ -7,7 +7,7 @@ use core::cmp::Ordering;
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::ptr::{self, NonNull};
 
-use cstruct_macros::{c_export, c_extern};
+use cstruct_macros::c_export;
 
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -30,10 +30,6 @@ use crate::util::kernel::race_fault;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use pin_init::stack_pin_init;
-
-c_extern! {
-    fn bch2_btree_path_traverse_cached(trans: *mut BtreeTrans<'_>, path: PathIdx, flags: c_uint) -> c_int;
-}
 
 // ── A level: its node, and its node iterator ────────────────────────────────
 
@@ -694,11 +690,8 @@ impl BtreeTrans<'_> {
     fn path_traverse_cached(&self, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags)
         -> Result<(), BchError>
     {
-        let ret = self.path_traverse_start(paths, idx).unwrap_or_else(|| {
-            crate::errcode::ret_to_result_void(unsafe {
-                bch2_btree_path_traverse_cached(self.raw(), idx, flags.bits())
-            })
-        });
+        let ret = self.path_traverse_start(paths, idx)
+            .unwrap_or_else(|| self.btree_path_traverse_cached(paths, idx, flags));
         self.path_traverse_done(paths, idx, &ret);
         ret
     }

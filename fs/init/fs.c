@@ -25,7 +25,6 @@
 #include "btree/journal_overlay.h"
 #include "btree/init.h"
 #include "btree/interior.h"
-#include "btree/key_cache.h"
 #include "btree/locking.h"
 #include "btree/read.h"
 #include "btree/write.h"

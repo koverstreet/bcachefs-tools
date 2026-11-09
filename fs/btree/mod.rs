@@ -39,6 +39,7 @@ pub mod for_each;
 pub mod interior;
 pub mod iter;
 pub mod journal_overlay;
+pub mod key_cache;
 pub mod lock_graph;
 pub mod locking;
 pub mod node;

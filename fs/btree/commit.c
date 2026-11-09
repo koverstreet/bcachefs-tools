@@ -11,7 +11,7 @@
 #include "btree/iter.h"
 #include "btree/journal_overlay.h"
 #include "btree/interior.h"
-#include "btree/key_cache.h"
+#include "btree/key_cache/flush_gen.h"
 #include "btree/node/sort_gen.h"
 #include "btree/write.h"
 

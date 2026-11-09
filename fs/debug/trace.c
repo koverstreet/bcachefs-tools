@@ -6,7 +6,6 @@
 
 #include "btree/cache.h"
 #include "btree/iter.h"
-#include "btree/key_cache.h"
 #include "btree/locking.h"
 #include "btree/interior.h"
 

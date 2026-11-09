@@ -20,8 +20,6 @@ use cstruct_macros::c_extern;
 
 c_extern! {
     fn bch2_dirent_init();
-    fn bch2_btree_key_cache_init() -> c_int;
-    fn bch2_btree_key_cache_exit();
 }
 
 #[cfg(kernel)]
@@ -78,7 +76,7 @@ fn bcachefs_exit() {
     crate::util::bio::dirty_pages_exit();
     #[cfg(kernel)]
     crate::init::chardev::bch2_chardev_exit();
-    unsafe { bch2_btree_key_cache_exit() };
+    crate::btree::key_cache::btree_key_cache_module_exit();
     crate::btree::lock_graph::graphs_exit();
     unsafe { Kobject::put(&BCACHEFS_KOBJ.0) };
     // what's freed a grace period on runs our code
@@ -116,7 +114,7 @@ fn init_interfaces() -> Result<(), BchError> {
     crate::util::maybe_rcu_alloc::free_init()?;
     BCACHEFS_KOBJ.0.add(parent, c"bcachefs")?;
     crate::btree::lock_graph::graphs_init()?;
-    ret_to_result_void(unsafe { bch2_btree_key_cache_init() })?;
+    crate::btree::key_cache::btree_key_cache_module_init()?;
     #[cfg(kernel)]
     ret_to_result_void(crate::init::chardev::bch2_chardev_init())?;
     #[cfg(not(NO_BCACHEFS_FS))]

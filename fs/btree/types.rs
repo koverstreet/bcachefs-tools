@@ -32,7 +32,8 @@ use crate::util::shrinker::Shrinker;
 use core::cell::Cell;
 use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8};
+use core::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU8, AtomicUsize};
+use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{atomic_bitfield, c_name, bitfield, c_const, c_enum, c_typedef, c_xmacro, placed, CStruct, Init,
                      Late, TypeInfo};
 use pin_init::{pin_data, PinInit};
@@ -540,11 +541,11 @@ c_const! {
 pub struct bkey_cached {
     pub c: cs::btree_bkey_cached_common,
 
-    pub flags: c_ulong,
+    #[c("unsigned long flags")]
+    pub flags: AtomicUsize,
     pub u64s: u16,
     pub key: cs::bkey_cached_key,
 
-    pub hash: cs::rhash_head,
     pub keys_idx: c_uint,
 
     pub journal: cs::journal_entry_pin,
@@ -556,18 +557,29 @@ pub struct bkey_cached {
 c_default!(bkey_cached);
 
 impl bkey_cached {
-    /* C's test_bit()s, racing its set_bit()s */
+    /* C's test_bit()s and set_bit()s */
     fn flag(&self, bit: u32) -> bool {
-        let flags = unsafe { core::ptr::read_volatile(&raw const self.flags) };
-        flags & (1 << bit) != 0
+        self.flags.load(Relaxed) & (1 << bit) != 0
     }
 
     pub fn dirty(&self) -> bool {
         self.flag(cs::BKEY_CACHED_DIRTY)
     }
 
+    pub fn accessed(&self) -> bool {
+        self.flag(cs::BKEY_CACHED_ACCESSED)
+    }
+
     pub fn immediate_flush(&self) -> bool {
         self.flag(cs::BKEY_CACHED_IMMEDIATE_FLUSH)
+    }
+
+    pub fn set_flag(&self, bit: u32) {
+        self.flags.fetch_or(1 << bit, Relaxed);
+    }
+
+    pub fn clear_flag(&self, bit: u32) {
+        self.flags.fetch_and(!(1 << bit), Relaxed);
     }
 }
 
@@ -1142,6 +1154,7 @@ pub struct bch_fs_btree {
     #[pin]
     pub cache: cs::bch_fs_btree_cache,
     pub evicted_size: cs::btree_evicted_size,
+    #[pin]
     pub key_cache: cs::bch_fs_btree_key_cache,
     /*
      * One per BTREE_IS_write_buffer btree (indexed by BCH_WB_BTREE_*, see

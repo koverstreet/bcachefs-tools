@@ -44,7 +44,6 @@ static READ_ONLY_EVENTS: EventCount = EventCount::new();
 
 impl Fs {
     fn stop_rw(&self) {
-        let p = self.as_ptr();
         let mut clean_passes = 0;
         let mut seq = 0;
 
@@ -63,13 +62,11 @@ impl Fs {
 
             self.do_discards_going_ro();
 
-            let progress = unsafe {
-                self.btree_write_buffer_flush_going_ro() ||
-                c::bch2_btree_key_cache_flush_going_ro(p) != 0 ||
+            let progress = self.btree_write_buffer_flush_going_ro() ||
+                self.btree_key_cache_flush_going_ro().unwrap_or(true) ||
                 self.btree_interior_updates_flush() ||
                 self.journal_flush_all_pins() ||
-                self.btree_flush_all_writes()
-            };
+                self.btree_flush_all_writes();
             if progress || seq != self.journal_cur_seq() {
                 seq = self.journal_cur_seq();
                 clean_passes = 0;

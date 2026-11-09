@@ -23,7 +23,6 @@
 #include "btree/trigger_gen.h"
 #include "btree/bkey_buf.h"
 #include "btree/check.h"
-#include "btree/key_cache.h"
 #include "btree/locking.h"
 #include "btree/node_scan_gen.h"
 #include "btree/interior.h"

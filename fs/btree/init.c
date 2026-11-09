@@ -274,7 +274,6 @@
 #include "btree/cache.h"
 #include "btree/init.h"
 #include "btree/interior.h"
-#include "btree/key_cache.h"
 #include "btree/node_scan_gen.h"
 #include "btree/read.h"
 #include "btree/node/sort_gen.h"
