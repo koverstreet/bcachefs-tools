@@ -46,8 +46,9 @@ unsafe impl<T> pin_init::Zeroable for Shrinker<T> {}
 
 impl<T: Shrink> Shrinker<T> {
     /// @owner's, named @name, registered: @seeks is what an object costs to
-    /// recreate, DEFAULT_SEEKS 2.
-    pub(crate) fn register(owner: &T, name: &CStr, seeks: c_int) -> Result<(), AllocError> {
+    /// recreate, DEFAULT_SEEKS 2; @batch how many a scan() is asked to free,
+    /// 0 for the default.
+    pub(crate) fn register(owner: &T, name: &CStr, seeks: c_int, batch: usize) -> Result<(), AllocError> {
         let s = unsafe { c::shrinker_alloc(0, c"%s".as_ptr().cast(), name.as_ptr()) };
         if s.is_null() {
             return Err(AllocError);
@@ -56,6 +57,7 @@ impl<T: Shrink> Shrinker<T> {
             (*s).count_objects = Some(count::<T>);
             (*s).scan_objects  = Some(scan::<T>);
             (*s).seeks         = seeks;
+            (*s).batch         = batch as _;
             (*s).private_data  = core::ptr::from_ref(owner).cast_mut().cast();
             c::shrinker_register(s);
         }

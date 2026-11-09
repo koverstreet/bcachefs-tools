@@ -384,7 +384,7 @@ impl c::bch_fs_btree_cache {
         for (s, (list, mult)) in self.shrinkers.iter().zip(lists) {
             let mut name = Printbuf::new();
             prt!(&mut name, "{}-{list}", fs.name().to_str().unwrap_or("?"));
-            Shrinker::register(s, name.as_c_str(), seeks * mult)
+            Shrinker::register(s, name.as_c_str(), seeks * mult, 0)
                 .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_fs_btree_cache_init))?;
         }
         Ok(())
