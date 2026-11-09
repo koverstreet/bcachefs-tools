@@ -17,6 +17,8 @@ use crate::format::Bpos;
 pub struct bch_fs_btree_key_cache {
     pub table: c::rhashtable,
     pub table_init_done: bool,
+    /* what's in the table, to walk: an entry's slot is from insert to evict */
+    pub keys: c::fast_list,
 
     pub shrink: *mut c::shrinker,
     pub shrink_iter: c_uint,

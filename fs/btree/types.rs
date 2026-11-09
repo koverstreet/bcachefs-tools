@@ -545,6 +545,7 @@ pub struct bkey_cached {
     pub key: cs::bkey_cached_key,
 
     pub hash: cs::rhash_head,
+    pub keys_idx: c_uint,
 
     pub journal: cs::journal_entry_pin,
     pub seq: u64,

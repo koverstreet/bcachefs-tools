@@ -79,11 +79,31 @@ static bool bkey_cached_evict(struct bch_fs_btree_key_cache *c,
 	bool ret = !rhashtable_remove_fast(&c->table, &ck->hash,
 				      bch2_btree_key_cache_params);
 	if (ret) {
+		fast_list_remove(&c->keys, ck->keys_idx);
+		ck->keys_idx = 0;
 		memset(&ck->key, ~0, sizeof(ck->key));
 		atomic_long_dec(&c->nr_keys);
 	}
 
 	return ret;
+}
+
+/*
+ * On bc->keys from before it's in the table until it's evicted: walkers hold
+ * the btree trans SRCU, and an evicted entry is freed a grace period of it
+ * later - so the walks never see one that's been freed.
+ */
+static int bkey_cached_keys_add(struct bch_fs_btree_key_cache *bc,
+				struct bkey_cached *ck, gfp_t gfp)
+{
+	guard(memalloc_flags)(gfp == GFP_NOWAIT ? PF_MEMALLOC_NORECLAIM|PF_MEMALLOC_NOWARN : 0);
+
+	int idx = fast_list_add(&bc->keys, ck);
+	if (idx < 0)
+		return idx;
+
+	ck->keys_idx = idx;
+	return 0;
 }
 
 static void __bkey_cached_free(struct rcu_pending *pending, struct rcu_head *rcu)
@@ -202,22 +222,22 @@ bkey_cached_alloc(struct btree_trans *trans, struct btree_path *path, unsigned k
 static struct bkey_cached *
 bkey_cached_reuse(struct bch_fs_btree_key_cache *c)
 {
+	struct genradix_iter iter;
+	void **p;
 
 	guard(rcu)();
-	struct bucket_table *tbl = rht_dereference_rcu(c->table.tbl, &c->table);
-	struct rhash_head *pos;
-	struct bkey_cached *ck;
+	genradix_for_each(&c->keys.items, iter, p) {
+		struct bkey_cached *ck = smp_load_acquire(p);
 
-	for (unsigned i = 0; i < tbl->size; i++)
-		rht_for_each_entry_rcu(ck, pos, tbl, i, hash) {
-			if (!test_bit(BKEY_CACHED_DIRTY, &ck->flags) &&
-			    bkey_cached_lock_for_evict(ck)) {
-				if (bkey_cached_evict(c, ck))
-					return ck;
-				six_unlock_write(&ck->c.lock);
-				six_unlock_intent(&ck->c.lock);
-			}
+		if (ck &&
+		    !test_bit(BKEY_CACHED_DIRTY, &ck->flags) &&
+		    bkey_cached_lock_for_evict(ck)) {
+			if (bkey_cached_evict(c, ck))
+				return ck;
+			six_unlock_write(&ck->c.lock);
+			six_unlock_intent(&ck->c.lock);
 		}
+	}
 	return NULL;
 }
 
@@ -284,6 +304,11 @@ static int btree_key_cache_create(struct btree_trans *trans,
 		ck->u64s = key_u64s;
 	}
 
+	mark_btree_node_locked_noreset(ck_path, 0, BTREE_NODE_UNLOCKED);
+	ret = allocate_dropping_locks_errcode(trans, bkey_cached_keys_add(bc, ck, _gfp));
+	if (unlikely(ret))
+		goto err;
+
 	bkey_reassemble(ck->k, k);
 
 	ret = bch2_btree_node_lock_write(trans, path, &path_l(path)->b->c);
@@ -306,6 +331,8 @@ static int btree_key_cache_create(struct btree_trans *trans,
 	btree_path_cached_set(trans, ck_path, ck, (enum btree_node_locked_type) lock_want);
 	return 0;
 err:
+	fast_list_remove(&bc->keys, ck->keys_idx);
+	ck->keys_idx = 0;
 	bkey_cached_free(trans, bc, ck);
 	mark_btree_node_locked_noreset(ck_path, 0, BTREE_NODE_UNLOCKED);
 
@@ -678,32 +705,21 @@ int bch2_btree_key_cache_flush_going_ro(struct bch_fs *c)
 		keys.nr = 0;
 
 		scoped_guard(rcu) {
-			struct bucket_table *tbl =
-				rht_dereference_rcu(bc->table.tbl, &bc->table);
+			struct genradix_iter iter;
+			void **p;
 
-			/*
-			 * If a rehash is in flight some entries live on the new
-			 * table; skip this pass and let the OR-chain re-call us.
-			 */
-			if (unlikely(tbl->nest))
-				return any_done;
+			genradix_for_each(&bc->keys.items, iter, p) {
+				struct bkey_cached *ck = smp_load_acquire(p);
 
-			for (unsigned i = 0; i < tbl->size; i++) {
-				struct rhash_head *pos;
-				struct bkey_cached *ck;
+				if (!ck || !test_bit(BKEY_CACHED_DIRTY, &ck->flags))
+					continue;
 
-				rht_for_each_entry_rcu(ck, pos, tbl, i, hash) {
-					if (!test_bit(BKEY_CACHED_DIRTY, &ck->flags))
-						continue;
-
-					if (darray_push_gfp(&keys, ck->key,
-							    GFP_NOWAIT|__GFP_NOWARN)) {
-						full = true;
-						goto rcu_done;
-					}
+				if (darray_push_gfp(&keys, ck->key,
+						    GFP_NOWAIT|__GFP_NOWARN)) {
+					full = true;
+					break;
 				}
 			}
-rcu_done:;
 		}
 
 		if (!keys.nr)
@@ -835,40 +851,24 @@ static unsigned long bch2_btree_key_cache_scan(struct shrinker *shrink,
 {
 	struct bch_fs *c = shrink->private_data;
 	struct bch_fs_btree_key_cache *bc = &c->btree.key_cache;
-	struct bucket_table *tbl;
-	struct bkey_cached *ck;
 	size_t scanned = 0, freed = 0, nr = sc->nr_to_scan;
-	unsigned iter, start;
+	size_t start = bc->shrink_iter, pos = start;
+	struct genradix_iter iter;
+	void **p;
 
 	u64 start_time = local_clock();
 	guard(srcu)(&c->btree.trans.barrier);
 	guard(rcu)();
 
-	tbl = rht_dereference_rcu(bc->table.tbl, &bc->table);
+	/* From where the last scan stopped, round to it again: */
+	for (bool wrapped = false; scanned < nr; wrapped = true) {
+		genradix_for_each_from(&bc->keys.items, iter, p, wrapped ? 0 : start) {
+			if (wrapped && iter.pos >= start)
+				break;
 
-	/*
-	 * Scanning is expensive while a rehash is in progress - most elements
-	 * will be on the new hashtable, if it's in progress
-	 *
-	 * A rehash could still start while we're scanning - that's ok, we'll
-	 * still see most elements.
-	 */
-	if (unlikely(tbl->nest))
-		return SHRINK_STOP;
-
-	iter = bc->shrink_iter;
-	if (iter >= tbl->size)
-		iter = 0;
-	start = iter;
-
-	do {
-		struct rhash_head *pos, *next;
-
-		pos = rht_ptr_rcu(&tbl->buckets[iter]);
-
-		while (!rht_is_a_nulls(pos)) {
-			next = rht_dereference_bucket_rcu(pos->next, tbl, iter);
-			ck = container_of(pos, struct bkey_cached, hash);
+			struct bkey_cached *ck = smp_load_acquire(p);
+			if (!ck)
+				continue;
 
 			if (test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
 				bc->skipped_dirty++;
@@ -886,19 +886,16 @@ static unsigned long bch2_btree_key_cache_scan(struct shrinker *shrink,
 				six_unlock_intent(&ck->c.lock);
 			}
 
-			scanned++;
-			if (scanned >= nr)
-				goto out;
-
-			pos = next;
+			pos = iter.pos + 1;
+			if (++scanned >= nr)
+				break;
 		}
 
-		iter++;
-		if (iter >= tbl->size)
-			iter = 0;
-	} while (scanned < nr && iter != start);
-out:
-	bc->shrink_iter = iter;
+		if (wrapped)
+			break;
+	}
+
+	bc->shrink_iter = pos;
 
 	bch2_time_stats_update(&c->times[BCH_TIME_btree_key_cache_scan], start_time);
 
@@ -927,39 +924,20 @@ static unsigned long bch2_btree_key_cache_count(struct shrinker *shrink,
 void bch2_fs_btree_key_cache_exit(struct bch_fs_btree_key_cache *bc)
 {
 	struct bch_fs *c = container_of(bc, struct bch_fs, btree.key_cache);
-	struct bucket_table *tbl;
-	struct bkey_cached *ck;
-	struct rhash_head *pos;
-	LIST_HEAD(items);
-	unsigned i;
+	struct genradix_iter iter;
+	void **p;
 
 	shrinker_free(bc->shrink);
 
-	/*
-	 * The loop is needed to guard against racing with rehash:
-	 */
-	while (atomic_long_read(&bc->nr_keys)) {
-		scoped_guard(rcu) {
-			tbl = rht_dereference_rcu(bc->table.tbl, &bc->table);
-			if (tbl) {
-				if (tbl->nest) {
-					/* wait for in progress rehash */
-					goto rehash_wait;
-				}
-				for (i = 0; i < tbl->size; i++)
-					while (pos = rht_ptr_rcu(&tbl->buckets[i]), !rht_is_a_nulls(pos)) {
-						ck = container_of(pos, struct bkey_cached, hash);
-						BUG_ON(!bkey_cached_evict(bc, ck));
-						kfree(ck->k);
-						six_lock_exit(&ck->c.lock);
-						kmem_cache_free(bch2_key_cache, ck);
-					}
-			}
-		}
-		continue;
-rehash_wait:
-		mutex_lock(&bc->table.mutex);
-		mutex_unlock(&bc->table.mutex);
+	genradix_for_each(&bc->keys.items, iter, p) {
+		struct bkey_cached *ck = *p;
+		if (!ck)
+			continue;
+
+		BUG_ON(!bkey_cached_evict(bc, ck));
+		kfree(ck->k);
+		six_lock_exit(&ck->c.lock);
+		kmem_cache_free(bch2_key_cache, ck);
 	}
 
 	if (atomic_long_read(&bc->nr_dirty) &&

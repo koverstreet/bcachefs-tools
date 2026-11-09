@@ -510,6 +510,7 @@ impl Fs {
         blacklist_table_initialize(self)?;
         crate::debug::async_objs::lists::async_obj_init(self)?;
         unsafe { self.btree.cache.nodes.init() }?;
+        unsafe { self.btree.key_cache.keys.init() }?;
         ret_to_result(unsafe { bch2_fs_btree_init(p) })?;
         compress_init(self)?;
         counters_init(self);
@@ -957,6 +958,7 @@ unsafe fn release(p: *mut Fs) {
         (*p).counters.now.free();
         bch2_fs_btree_exit(p);
         fs.btree.cache.nodes.exit();
+        fs.btree.key_cache.keys.exit();
         accounting_exit(fs);
     }
     crate::debug::async_objs::lists::async_obj_exit(fs);
