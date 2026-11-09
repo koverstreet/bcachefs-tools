@@ -31,6 +31,7 @@
 #include <linux/poll.h>
 #include <linux/rmap.h>
 #include <linux/slab.h>
+#include <linux/srcu.h>
 #include <linux/version.h>
 #include <linux/vmalloc.h>
 #include <linux/writeback.h>
@@ -182,34 +183,6 @@ static inline unsigned long rust_folio_page_idx(struct folio *folio, struct page
 	return folio_page_idx(folio, page);
 }
 
-/* a static inline */
-static inline void rust_poll_wait(struct file *file, wait_queue_head_t *q, poll_table *pt)
-{
-	poll_wait(file, q, pt);
-}
-
-/* not in the vendored crate's bindings: pagemap.h isn't */
-static inline size_t rust_fault_in_writeable(char __user *uaddr, size_t size)
-{
-	return fault_in_writeable(uaddr, size);
-}
-
-static inline size_t rust_fault_in_readable(const char __user *uaddr, size_t size)
-{
-	return fault_in_readable(uaddr, size);
-}
-
-static inline int rust_filemap_write_and_wait_range(struct address_space *mapping,
-						    loff_t start, loff_t end)
-{
-	return filemap_write_and_wait_range(mapping, start, end);
-}
-
-static inline int rust_filemap_flush(struct address_space *mapping)
-{
-	return filemap_flush(mapping);
-}
-
 #ifdef CONFIG_COMPAT
 /*
  * compat_ptr()'s compat_uptr_t is the kernel crate's only with CONFIG_COMPAT:
@@ -220,18 +193,6 @@ static inline void __user *rust_compat_ptr(u32 uptr)
 	return compat_ptr(uptr);
 }
 #endif
-
-/* a static inline: here rather than all of mm.h unblocklisted for it */
-static inline size_t rust_folio_size(struct folio *folio)
-{
-	return folio_size(folio);
-}
-
-/* mm_types.h's, as above */
-static inline void *rust_folio_get_private(struct folio *folio)
-{
-	return folio_get_private(folio);
-}
 
 /* alloc_hooks()'s macro; from 6.19 it takes a mempolicy */
 static inline struct folio *rust_filemap_alloc_folio(gfp_t gfp, unsigned int order)
@@ -249,21 +210,10 @@ static inline struct address_space *rust_folio_mapping(struct folio *folio)
 	return folio->mapping;
 }
 
-/* rmap.h's and writeback.h's, which aren't bound */
-static inline int rust_folio_mkclean(struct folio *folio)
-{
-	return folio_mkclean(folio);
-}
-
 /* a macro: */
 static inline void rust_folio_start_writeback(struct folio *folio)
 {
 	folio_start_writeback(folio);
-}
-
-static inline bool rust_filemap_dirty_folio(struct address_space *mapping, struct folio *folio)
-{
-	return filemap_dirty_folio(mapping, folio);
 }
 
 /* fs.h's IS_SYNC(), a macro */
@@ -284,24 +234,12 @@ static inline void *rust_page_address(struct page *page)
 }
 
 /*
- * A bio's pages mapped as one buffer. PAGE_KERNEL isn't a constant - on x86
- * it has the memory encryption mask - and vmalloc.h stays blocklisted: it
- * would bind a second struct vm_struct.
+ * A bio's pages mapped as one buffer: PAGE_KERNEL isn't a constant - on x86
+ * it has the memory encryption mask.
  */
 static inline void *rust_vmap(struct page **pages, unsigned int count)
 {
 	return vmap(pages, count, VM_MAP, PAGE_KERNEL);
-}
-
-static inline void rust_vunmap(const void *addr)
-{
-	vunmap(addr);
-}
-
-/* request_key() is a static inline, of key_type_user, a var user-type.h declares */
-static inline struct key *rust_request_user_key(const char *description)
-{
-	return request_key(&key_type_user, description, NULL);
 }
 
 /* dereference_key_locked() is a macro: a user key's payload, its sem held */

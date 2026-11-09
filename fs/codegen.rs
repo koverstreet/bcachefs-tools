@@ -126,6 +126,13 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/highmem.h",			// folio_zero_segment(), folio_zero_range(), folio_zero_segments()
     "linux/cacheflush.h",		// flush_dcache_folio(): a no-op, or the arch's
     "asm/cacheflush.h",
+    "linux/rmap.h",			// folio_mkclean()
+    "linux/mm_types.h",			// folio_get_private()
+    "linux/key.h",			// request_key()
+    "keys/user-type.h",			// key_type_user
+    "linux/srcu.h",			// srcu_read_lock(), srcu_read_unlock()
+    "linux/srcutree.h",			// synchronize_srcu_expedited(): an export,
+    "linux/srcutiny.h",			// or with TINY_SRCU a static inline
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
@@ -138,16 +145,16 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "bch2_closure_wait", "closure_wake_up", "closure_nr_remaining",
     "set_closure_fn", "closure_queue", "bch2_closure_sub", "closure_debug_destroy",
     "closure_set_waiting", "closure_val_checks",
-    "rust_page_folio", "rust_folio_page_idx", "rust_folio_size",
+    "rust_page_folio", "rust_folio_page_idx", "folio_size",
     // vfs/folio.rs: folios, mappings and readahead
-    "rust_folio_get_private", "rust_filemap_alloc_folio", "folio_pos", "folio_nr_pages",
+    "folio_get_private", "rust_filemap_alloc_folio", "folio_pos", "folio_nr_pages",
     "folio_get", "folio_put", "folio_detach_private", "folio_test_uptodate", "folio_test_dirty",
     "folio_mark_uptodate", "folio_end_read", "filemap_add_folio", "readahead_gfp_mask",
     "mapping_min_folio_order", "mapping_max_folio_order", "__readahead_folio", "xa_load", "xa_is_value",
     "bio_add_folio_nofail", "folio_unlock", "filemap_lock_folio",
     "folio_zero_segment", "folio_zero_range", "folio_zero_segments", "flush_dcache_folio",
     "mapping_writably_mapped", "mapping_gfp_mask",
-    "rust_folio_mkclean", "rust_filemap_dirty_folio",
+    "folio_mkclean", "filemap_dirty_folio",
     "folio_lock", "folio_trylock", "filemap_get_folios",
     "folio_batch_init", "folio_batch_count", "folio_batch_release",
     // util/bio/user_pages.rs
@@ -157,8 +164,8 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "rust_folio_mapping", "folio_test_locked", "invalidate_inode_pages2_range",
     "sb_start_pagefault", "sb_end_pagefault",
     "rust_page_highmem", "rust_page_address", "rust_is_sync",
-    "rust_poll_wait", "rust_fault_in_writeable",
-    "rust_fault_in_readable", "rust_filemap_write_and_wait_range", "rust_filemap_flush",
+    "fault_in_writeable",
+    "fault_in_readable", "filemap_write_and_wait_range", "filemap_flush",
     "totalram_pages", "si_mem_available", "set_freezable", "freezing", "try_to_freeze",
     "bio_set_dev", "bio_iov_vecs_to_alloc", "bio_release_pages",
     // data/write.rs
@@ -199,11 +206,11 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "zstd_max_clevel", "zstd_get_params", "zstd_is_error", "zstd_get_error_code",
     "zstd_cctx_workspace_bound", "zstd_init_cctx", "zstd_compress_cctx",
     "zstd_dctx_workspace_bound", "zstd_init_dctx", "zstd_decompress_dctx",
-    "rust_vmap", "rust_vunmap",
+    "rust_vmap", "vunmap",
     "xxh64_reset", "xxh64_update", "xxh64_digest",
     "chacha_init", "chacha20_crypt",
     "poly1305_init", "poly1305_update", "poly1305_final",
-    "rust_request_user_key", "rust_user_key_data",
+    "request_key", "rust_user_key_data",
     // util/fs_context.rs and util/super_block.rs: static inlines, and the
     // log behind errorfc() and invalf()
     "logfc", "super_set_uuid", "super_set_sysfs_name_uuid",
@@ -213,6 +220,8 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "ida_init", "ida_find_first",
     // util/log.rs: a long message printk()ed in pieces, the console held across them
     "console_trylock", "console_unlock",
+    // util/rcu.rs's Srcu: static inlines, and synchronize_srcu_expedited() is with TINY_SRCU
+    "srcu_read_lock", "srcu_read_unlock", "synchronize_srcu_expedited",
     // vfs/vfs_inode.rs, for the inode cache: static inlines, inode_state_*() from 6.19
     "inode_state_read", "__iget", "inode_fake_hash", "inode_wake_up_bit",
     "inode_sb_list_add", "inode_bit_waitqueue",
@@ -242,10 +251,11 @@ const BLOCKLIST_TYPE: &[&str] = &["inode", "file", "dir_context", "user_namespac
                                      "fiemap_extent_info", "address_space", "vm_fault",
                                      "vm_operations_struct", "vm_area_struct", "vm_area_desc", "kiocb",
                                      "super_block", "super_operations", "percpu_ref", "ida",
-                                     "blk_holder_ops", "bio_set", "xarray", "writeback_control"];
+                                     "blk_holder_ops", "bio_set", "xarray", "writeback_control",
+                                     "folio", "page", "mm_struct", "key", "key_type", "srcu_struct"];
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
                                  "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*", "FALLOC_FL_.*",
-                                 "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*",
+                                 "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*", "key_type_user",
                                  // before 7.1/7.2, as above
                                  "raid6_call", "raid6_2data_recov", "raid6_datap_recov", "MAX_XOR_BLOCKS",
                                  "LZ4HC_MEM_COMPRESS", "LZ4HC_MIN_CLEVEL",

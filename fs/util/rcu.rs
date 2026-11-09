@@ -100,10 +100,6 @@ impl Drop for ReadGuard {
 
 c_extern! {
     fn rust_init_srcu_struct(ssp: *mut c::srcu_struct, name: *const c_char, key: *mut c_void) -> c_int;
-    fn rust_synchronize_srcu_expedited(ssp: *mut c::srcu_struct);
-    fn rust_cleanup_srcu_struct(ssp: *mut c::srcu_struct);
-    fn rust_srcu_read_lock(ssp: *mut c::srcu_struct) -> c_int;
-    fn rust_srcu_read_unlock(ssp: *mut c::srcu_struct, idx: c_int);
 }
 
 /// An SRCU domain, C's srcu_struct: cleaned up when it drops.
@@ -147,7 +143,7 @@ impl Srcu {
     }
 
     pub fn read_lock(&self) -> SrcuReadGuard<'_> {
-        SrcuReadGuard { srcu: self, idx: unsafe { rust_srcu_read_lock(self.as_ptr()) } }
+        SrcuReadGuard { srcu: self, idx: unsafe { c::srcu_read_lock(self.as_ptr()) } }
     }
 
     /// Its grace periods, for what waits on or queues to them.
@@ -161,8 +157,8 @@ impl Drop for Srcu {
         // what's queued through a flavor() outlives its borrow
         self.flavor().barrier();
         unsafe {
-            rust_synchronize_srcu_expedited(self.as_ptr());
-            rust_cleanup_srcu_struct(self.as_ptr());
+            c::synchronize_srcu_expedited(self.as_ptr());
+            c::cleanup_srcu_struct(self.as_ptr());
         }
     }
 }
@@ -193,7 +189,7 @@ impl<'a> SrcuReadGuard<'a> {
 
 impl Drop for SrcuReadGuard<'_> {
     fn drop(&mut self) {
-        unsafe { rust_srcu_read_unlock(self.srcu.as_ptr(), self.idx) };
+        unsafe { c::srcu_read_unlock(self.srcu.as_ptr(), self.idx) };
     }
 }
 

@@ -659,7 +659,7 @@ pub fn key_description(uuid: &uuid::Uuid) -> Printbuf {
 #[cfg(kernel)]
 fn keyring_key(desc: &core::ffi::CStr) -> Result<c::bch_key, BchError> {
     // SAFETY: a string
-    let key = unsafe { c::rust_request_user_key(desc.as_ptr().cast()) };
+    let key = unsafe { c::request_key(&raw mut c::key_type_user, desc.as_ptr().cast(), core::ptr::null()) };
     let key = core::ptr::NonNull::new(key).expect("request_key(): a key, or an ERR_PTR()");
     let key = crate::errcode::errptr_to_result(key)?.as_ptr();
 

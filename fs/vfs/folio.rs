@@ -54,7 +54,7 @@ impl Folio {
     }
 
     pub fn size(self) -> usize {
-        unsafe { c::rust_folio_size(self.as_ptr()) }
+        unsafe { c::folio_size(self.as_ptr()) }
     }
 
     pub fn nr_sectors(self) -> usize {
@@ -137,7 +137,7 @@ impl Folio {
     /// Its writeable userspace mappings write-protected, so a write through
     /// one faults - page_mkwrite again: folio_mkclean().
     pub fn mkclean(self) {
-        unsafe { c::rust_folio_mkclean(self.as_ptr()) };
+        unsafe { c::folio_mkclean(self.as_ptr()) };
     }
 
     /// Its data read in, @mapping's, before this returns - and with @extend,
@@ -170,7 +170,7 @@ impl Folio {
     }
 
     pub(super) fn state_ptr(self) -> Option<NonNull<c::bch_folio>> {
-        NonNull::new(unsafe { c::rust_folio_get_private(self.as_ptr()) }.cast())
+        NonNull::new(unsafe { c::folio_get_private(self.as_ptr()) }.cast())
     }
 
     /// Its bcachefs state freed.
@@ -434,7 +434,7 @@ impl Mapping {
     /// filemap_write_and_wait_range(). A writeback error is the mapping's,
     /// whoever sees it first - a file's own is File::write_and_wait_range().
     pub fn write_and_wait_range(self, start: u64, end: u64) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { c::rust_filemap_write_and_wait_range(self.as_ptr(), loff(start), loff(end)) })
+        ret_to_result_void(unsafe { c::filemap_write_and_wait_range(self.as_ptr(), loff(start), loff(end)) })
     }
 
     /// Its folios from index @start to @end, inclusive, to @f in order until
@@ -540,7 +540,7 @@ impl Mapping {
 
     /// @folio marked dirty: filemap_dirty_folio().
     pub fn dirty_folio(self, folio: Folio) -> bool {
-        unsafe { c::rust_filemap_dirty_folio(self.as_ptr(), folio.as_ptr()) }
+        unsafe { c::filemap_dirty_folio(self.as_ptr(), folio.as_ptr()) }
     }
 
     pub fn readahead_gfp(self) -> c::gfp_t {

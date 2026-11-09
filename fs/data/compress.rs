@@ -256,7 +256,7 @@ unsafe fn bbuf_exit(buf: &mut c::bbuf) {
         match buf.type_ {
             bb::BB_none => {}
             #[cfg(kernel)]
-            bb::BB_vmap => c::rust_vunmap(p.as_ptr().map_addr(|a| a & !(crate::util::kernel::PAGE_SIZE - 1)).cast()),
+            bb::BB_vmap => c::vunmap(p.as_ptr().map_addr(|a| a & !(crate::util::kernel::PAGE_SIZE - 1)).cast()),
             #[cfg(not(kernel))]
             bb::BB_vmap => unreachable!(),
             bb::BB_kmalloc => c::rust_kfree(p.as_ptr().cast()),

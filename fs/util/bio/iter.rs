@@ -446,7 +446,7 @@ pub(super) fn folio<'a>(rest: &mut BioRange<'a>) -> Option<FolioVec<'a>> {
     let (folio, offset, len) = unsafe {
         let folio = c::rust_page_folio(page.as_ptr());
         let offset = c::rust_folio_page_idx(folio, page.as_ptr()) as usize * PAGE_SIZE + offset as usize;
-        (folio, offset, (c::rust_folio_size(folio) - offset).min(len as usize))
+        (folio, offset, (c::folio_size(folio) - offset).min(len as usize))
     };
     rest.advance_in_bvec(len as u32);
 

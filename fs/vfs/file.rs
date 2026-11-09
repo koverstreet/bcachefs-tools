@@ -215,7 +215,7 @@ impl FileData for InodeFile {
         // SAFETY: as ops_of()'s
         let inode = unsafe { Self::ops_of(file) };
         if inode.ei_flags.swap(c::bch_inode_info_flags::EI_INODE_FLUSH_ON_CLOSE, false) {
-            unsafe { c::rust_filemap_flush((*inode.vfs().as_ptr()).i_mapping) };
+            unsafe { c::filemap_flush((*inode.vfs().as_ptr()).i_mapping) };
         }
     }
 }

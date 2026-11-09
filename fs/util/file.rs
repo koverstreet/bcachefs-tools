@@ -439,7 +439,7 @@ impl PollTable<'_> {
     pub fn wait(&self, file: &File, q: &PollQueue) {
         // SAFETY: the file being polled, its table, and a queue that lives
         // as long as the file
-        unsafe { c::rust_poll_wait(file.as_ptr(), q.0.as_ptr(), self.0) };
+        unsafe { kernel::bindings::poll_wait(file.as_ptr(), q.0.as_ptr(), self.0) };
     }
 }
 
@@ -523,11 +523,11 @@ impl UserBuf {
 impl UserBuf {
     /// How much of it is present to write, faulting it in as far as it can.
     pub fn fault_in_writeable(&self) -> usize {
-        self.len - unsafe { c::rust_fault_in_writeable(self.ptr(), self.len) }
+        self.len - unsafe { c::fault_in_writeable(self.ptr(), self.len) }
     }
 
     pub fn fault_in_readable(&self) -> usize {
-        self.len - unsafe { c::rust_fault_in_readable(self.ptr(), self.len) }
+        self.len - unsafe { c::fault_in_readable(self.ptr(), self.len) }
     }
 
     /// All of @src, without faulting - or none of it, if any wasn't present.
