@@ -19,6 +19,7 @@ use crate::btree::bkey_buf::copy_key;
 use crate::btree::locking::bch2_btree_lock_init;
 use crate::btree::trans::BtreeTrans;
 use crate::c;
+use crate::data_structures::array_vec::ArrayVec;
 use crate::data_structures::cuckoo::{Cuckoo, Entry};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{Bpos, Btree};
@@ -418,12 +419,21 @@ impl c::bch_fs_btree_key_cache {
 
         let start_time = local_clock();
         let srcu = fs.btree.trans.barrier.read_lock();
-        let rcu = read_lock();
+        let mut wrapped = false;
 
-        /* From where the last scan stopped, round to it again: */
-        'scan: for wrapped in [false, true] {
-            for (i, ck) in self.keys_from(if wrapped { 0 } else { start }, &rcu, &srcu) {
+        /*
+         * From where the last scan stopped, round to it again. What's evicted
+         * is freed with RCU dropped - freeing can allocate, and block - so a
+         * batch at a time, the walk picking up from the slot after: the
+         * entries are the SRCU's, which we hold, not RCU's.
+         */
+        loop {
+            let mut evicted: ArrayVec<LockedEntry<'_>, 32> = ArrayVec::new();
+            let (mut done, mut at_end) = (false, true);
+
+            for (i, ck) in self.keys_from(pos, &read_lock(), &srcu) {
                 if wrapped && i >= start {
+                    (done, at_end) = (true, false);
                     break;
                 }
 
@@ -434,7 +444,7 @@ impl c::bch_fs_btree_key_cache {
                     inc(&self.stats.skipped_accessed);
                 } else if let Some(mut ck) = bkey_cached_lock_for_evict(ck) {
                     if self.bkey_cached_evict(&mut ck) {
-                        self.bkey_cached_free_noassert(ck);
+                        evicted.push(ck);
                         inc(&self.stats.freed);
                         freed += 1;
                     }
@@ -445,8 +455,24 @@ impl c::bch_fs_btree_key_cache {
                 pos = i + 1;
                 scanned += 1;
                 if scanned >= nr {
-                    break 'scan;
+                    (done, at_end) = (true, false);
+                    break;
                 }
+                if evicted.is_full() {
+                    at_end = false;
+                    break;
+                }
+            }
+
+            for ck in evicted {
+                self.bkey_cached_free_noassert(ck);
+            }
+
+            if done || (at_end && wrapped) {
+                break;
+            }
+            if at_end {
+                (wrapped, pos) = (true, 0);
             }
         }
 
