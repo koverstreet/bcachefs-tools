@@ -401,6 +401,12 @@ macro_rules! one_word {
 pub struct Volatile<T: AtomicWord>(T::Atomic);
 
 impl<T: AtomicWord> Volatile<T> {
+    pub fn new(v: T) -> Self {
+        let r: Self = ::pin_init::zeroed();
+        r.set(v);
+        r
+    }
+
     pub fn get(&self) -> T {
         T::load(&self.0)
     }
@@ -421,6 +427,23 @@ impl<T: AtomicWord> FakePlaceRead for Volatile<T> {
 
 // SAFETY: AtomicWord's - zeroes are a @T
 unsafe impl<T: AtomicWord> ::pin_init::Zeroable for Volatile<T> {}
+
+/// Not Copy - an atomic can't be - so a copy is a load, spelled out.
+impl<T: AtomicWord> Clone for Volatile<T> {
+    fn clone(&self) -> Self {
+        Self::new(self.get())
+    }
+}
+
+impl<T: AtomicWord + Default> Default for Volatile<T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
+// SAFETY: its atomic is laid out as @T is - AtomicWord's - and any bytes are a
+// Plain @T
+unsafe impl<T: AtomicWord + crate::util::vstructs::Plain> crate::util::vstructs::Plain for Volatile<T> {}
 
 // SAFETY: VolatileWriter is a Volatile; its stores are atomic
 unsafe impl<T: AtomicWord> Publish for Volatile<T> {

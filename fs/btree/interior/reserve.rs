@@ -314,7 +314,7 @@ impl InteriorUpdate<'_> {
 
         if let Some(mut p) = contents.key.key_mut().as_s().arm::<c::BtreePtrV2>() {
             let v = p.v_mut();
-            v.mem_ptr         = 0;
+            v.mem_ptr.set(0);
             v.seq             = seq;
             v.sectors_written = Default::default();
         }

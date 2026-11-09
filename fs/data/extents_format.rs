@@ -305,12 +305,13 @@ pub struct BtreePtr {
 #[whole(tail = _data: [u64], bkey)]
 #[repr(C, align(8))]
 #[c_name(bch_btree_ptr_v2)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct BtreePtrV2 {
     pub v: c::bch_val,
 
-    pub mem_ptr: u64,
+    /* the node in memory: written racing readers, in a node's keys */
+    pub mem_ptr: crate::util::projections::Volatile<u64>,
     pub seq: Le64,
     pub sectors_written: Le16,
     pub flags: Le16,

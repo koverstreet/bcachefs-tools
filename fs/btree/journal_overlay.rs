@@ -47,7 +47,7 @@ use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{btree_id_is_alloc, Fs};
 use crate::init::recovery::NotRw;
 use crate::locking::{ExclusiveGuard, Locked};
-use crate::util::projections::VolatilePublish;
+use crate::util::projections::{Volatile, VolatilePublish};
 use crate::util::alloc::{darray_exit, DArrayLoan, KVVec};
 use crate::util::ffi::Opaque;
 use crate::data_structures::gap_buffer::GapBuffer;
@@ -1121,7 +1121,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
         unsafe {
             if (*k).k.key_type() == BkeyType::btree_ptr_v2 {
                 let v = (&raw mut (*k).v).cast::<c::BtreePtrV2>();
-                (&raw mut (*v).repr.mem_ptr).write_unaligned(0);
+                (&raw mut (*v).repr.mem_ptr).write_unaligned(Volatile::new(0));
             }
         }
     }

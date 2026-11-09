@@ -26,7 +26,7 @@ use c::six_lock_type::{self, SIX_LOCK_read};
 
 fn btree_node_mem_ptr<'f>(fs: &'f Fs, k: &BkeyI) -> Option<&'f BtreeNode> {
     let p = BkeySC::from(k).arm::<c::BtreePtrV2>()?;
-    let mem_ptr = unsafe { (&raw const p.v().mem_ptr).read_volatile() } as *const BtreeNode;
+    let mem_ptr = p.v().mem_ptr.get() as *const BtreeNode;
     (!mem_ptr.is_null()).then(|| unsafe { cached_node(fs, mem_ptr) })
 }
 
