@@ -9,6 +9,7 @@ use core::cmp::{max, min};
 use core::ffi::c_int;
 use core::alloc::Layout;
 use core::mem::{align_of, size_of};
+use core::borrow::Borrow;
 use core::ops::{ControlFlow, Range};
 use core::ptr::NonNull;
 
@@ -196,12 +197,13 @@ impl InodeInfo {
      * Initialize bch_folio state (allocated/unallocated, nr_replicas) from the
      * extents btree:
      */
-    pub fn read_folio_state(&self, folios: &[Folio]) -> Result<(), BchError> {
+    pub fn read_folio_state<F: Borrow<Folio>>(&self, folios: &[F]) -> Result<(), BchError> {
         let fs = self.fs();
-        let offset = folios[0].sector();
+        let folio = |f: &F| -> Folio { *f.borrow() };
+        let offset = folio(&folios[0]).sector();
         let mut need_set = false;
 
-        for &f in folios {
+        for f in folios.iter().map(folio) {
             if !f.create_state() {
                 return Err(c::ENOMEM.into());
             }
@@ -236,7 +238,7 @@ impl InodeInfo {
         }
 
         let inum = self.inum();
-        let mut unset = folios.iter().copied().peekable();
+        let mut unset = folios.iter().map(folio).peekable();
         let mut run: Option<Run> = None;
 
         let flags = BtreeIterFlags::SLOTS | BtreeIterFlags::TRIM;
@@ -277,7 +279,7 @@ impl InodeInfo {
         if let Some(run) = run {
             let mut r = self.ei_reserved.lock();
             let (reserved, range) = r.parts();
-            range.ei_reserved_start.set(folios.last().expect("folios to set").end_pos());
+            range.ei_reserved_start.set(folio(folios.last().expect("folios to set")).end_pos());
             range.ei_reserved_end.set(run.end);
             reserved.ei_reserved_replicas = run.replicas as u8;
             reserved.ei_reserved_state = run.state as u8;

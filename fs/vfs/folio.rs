@@ -25,6 +25,7 @@ use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
 use crate::locking::ExclusiveGuard;
 use crate::util::iov_iter::IovIter;
 use crate::util::kernel::{cond_resched, loff};
+use core::borrow::Borrow;
 use core::ffi::c_int;
 use core::marker::PhantomData;
 use core::ops::{ControlFlow, Deref, DerefMut};
@@ -352,6 +353,12 @@ impl Deref for LockedFolio {
     type Target = Folio;
 
     fn deref(&self) -> &Folio {
+        &self.0
+    }
+}
+
+impl Borrow<Folio> for LockedFolio {
+    fn borrow(&self) -> &Folio {
         &self.0
     }
 }
