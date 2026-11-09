@@ -713,7 +713,7 @@ pub(crate) fn kmalloc_trace_to_text(out: &mut Printbuf, trace: &[c::trans_kmallo
 impl BtreeTrans<'_> {
     /// @alloc in a NORECLAIM scope, and if it fails, again with the transaction
     /// unlocked - and left unlocked: allocate_dropping_locks_norelock().
-    fn allocate_dropping_locks_norelock<T>(&self, paths: &mut Paths<'_>, mut alloc: impl FnMut() -> Option<T>)
+    pub(crate) fn allocate_dropping_locks_norelock<T>(&self, paths: &mut Paths<'_>, mut alloc: impl FnMut() -> Option<T>)
         -> Option<T>
     {
         let first = {

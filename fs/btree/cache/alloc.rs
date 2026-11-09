@@ -280,6 +280,14 @@ impl BtreeTrans<'_> {
         fs.times[c::bch_time_stats::btree_node_mem_alloc as usize].update(start_time);
 
         let n = UnhashedNode { fs, b, held: ManuallyDrop::new(held) };
+
+        /*
+         * Room in the table for the node's hash insert, which grows it under
+         * bc->lock, where it can't block: made here, with our locks dropped
+         * if it has to block.
+         */
+        let _ = self.allocate_dropping_locks_norelock(paths, || bc.table.make_room().ok());
+
         self.relock_from(paths)?;
         Ok(n)
     }
