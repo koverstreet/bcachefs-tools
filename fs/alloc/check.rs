@@ -640,23 +640,14 @@ fn check_alloc_info(fs: &Fs) -> Result<(), BchError> {
         loop {
             passes::cancelled(fs)?;
 
-            let t = trans.begin();
-            let k = match iter.peek(&t) {
-                Ok(None)    => break,
-                Ok(Some(k)) => Ok(*k.k),
-                Err(e)      => Err(e),
-            };
-            let ret = k.and_then(|k| repair_freespace_key(&t, &iter, FreespaceCheck::Fsck).map(|()| k));
-
-            match ret {
-                Ok(_) => {}
-                Err(e) if is_restart(&e) => continue,
-                Err(e) => {
-                    if let Ok(k) = k {
-                        bch_err!(fs, "while checking {k}");
-                    }
-                    return Err(e);
-                }
+            let done = lockrestart_do(&trans, |t| {
+                let Some(k) = iter.peek(t)?.map(|k| *k.k) else { return Ok(true) };
+                repair_freespace_key(t, &iter, FreespaceCheck::Fsck)
+                    .inspect_err(|e| if !is_restart(e) { bch_err!(fs, "while checking {k}") })
+                    .map(|()| false)
+            })?;
+            if done {
+                break;
             }
 
             iter.set_pos(iter.pos().nosnap_successor());
