@@ -1731,14 +1731,12 @@ fn bucket_io_time_reset(t: &TransAttempt<'_, '_>, bucket: Bpos, rw: usize) -> Re
     t.commit(None, CommitFlags::empty())
 }
 
-/// From the read path, partway through its attempt - begun again if its
-/// locks can't be had back - and a nested one of its own.
+/// From the read path, partway through its attempt; a restart is the read's.
 ///
 /// # Safety
 /// @trans has an attempt in progress.
 #[c_export]
 pub unsafe fn bch2_bucket_io_time_reset(trans: &BtreeTrans<'_>, dev: c_uint, bucket_nr: usize, rw: c_int) -> c_int {
     let t = unsafe { trans.attempt_in_progress() };
-    let t = if t.relock().is_err() { trans.begin() } else { t };
-    ret_to_c(t.nested(|t| bucket_io_time_reset(t, pos(dev.into(), bucket_nr as u64), rw as usize)))
+    ret_to_c(t.relock().and_then(|()| bucket_io_time_reset(&t, pos(dev.into(), bucket_nr as u64), rw as usize)))
 }

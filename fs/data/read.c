@@ -928,6 +928,17 @@ static inline struct bch_read_bio *read_extent_rbio_alloc(struct btree_trans *tr
 	}
 
 	/*
+	 * If it's being moved internally, we don't want to flag it as a cache
+	 * hit:
+	 */
+	if (ca && pick.ptr.cached && !orig->data_update) {
+		int ret = bch2_bucket_io_time_reset(trans, pick.ptr.dev,
+				PTR_BUCKET_NR(ca, &pick.ptr), READ);
+		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
+			return ERR_PTR(ret);
+	}
+
+	/*
 	 * No promote for a reconstruct: it's punted to bch2_rbio_retry() before
 	 * anything is read, and the promote would be started there with nothing
 	 * in its bounce buffer:
@@ -945,14 +956,6 @@ static inline struct bch_read_bio *read_extent_rbio_alloc(struct btree_trans *tr
 	 */
 	if (IS_ERR(rbio))
 		return rbio;
-
-	/*
-	 * If it's being moved internally, we don't want to flag it as a cache
-	 * hit:
-	 */
-	if (ca && pick.ptr.cached && !orig->data_update)
-		bch2_bucket_io_time_reset(trans, pick.ptr.dev,
-			PTR_BUCKET_NR(ca, &pick.ptr), READ);
 
 	/*
 	 * Done with btree operations:
