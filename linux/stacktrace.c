@@ -187,6 +187,14 @@ static struct {
 
 static pthread_once_t dw_once = PTHREAD_ONCE_INIT;
 
+/*
+ * libdw fills its caches as it looks addresses up - the CUs it's seen, their
+ * line tables - unlocked, unless built --enable-thread-safety (experimental,
+ * off by default). Tried, not waited on: a backtrace printed with it held,
+ * from a signal handler or another thread, goes without lines
+ */
+static pthread_mutex_t dw_lock = PTHREAD_MUTEX_INITIALIZER;
+
 static void dw_init(void)
 {
 	void *h = dlopen("libdw.so.1", RTLD_LAZY);
@@ -283,8 +291,13 @@ void bch2_prt_symbol(struct printbuf *out, unsigned long addr)
 	 * A frame's address is where the call returns to, which can be the next
 	 * line, or no line at all: the call is the byte before, as %pB has it
 	 */
+	if (pthread_mutex_trylock(&dw_lock))
+		return;
+
 	int lineno = 0;
 	const char *src = dw_addr_to_src(addr - 1, &lineno);
 	if (src)
 		prt_printf(out, " %s:%d", src, lineno);
+
+	pthread_mutex_unlock(&dw_lock);
 }
