@@ -785,7 +785,7 @@ static MAJOR: AtomicU32 = AtomicU32::new(0);
 
 static CLASS: CStatic<c::class> = unsafe {
     // SAFETY, of the CStatic: a name, and NULLs
-    CStatic::new(c::class { name: c"bcachefs".as_ptr().cast(), ..core::mem::zeroed() })
+    CStatic::new(c::class { name: c"bcachefs".as_ptr().cast(), ..::pin_init::zeroed() })
 };
 
 fn mkdev(minor: u32) -> c::dev_t {

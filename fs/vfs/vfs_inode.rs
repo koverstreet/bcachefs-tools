@@ -299,8 +299,8 @@ impl VfsInode {
     /// waitqueue is found by @inode's address alone, so it needn't be live -
     /// nothing of it is read.
     pub fn wait_new_bit(inode: NonNull<VfsInode>, still: impl FnOnce() -> bool, timeout: c_long) {
+        let mut wait: c::wait_bit_queue_entry = ::pin_init::zeroed();
         unsafe {
-            let mut wait: c::wait_bit_queue_entry = core::mem::zeroed();
             let wq = c::inode_bit_waitqueue(&mut wait, inode.as_ptr().cast(), c::__I_NEW);
             c::prepare_to_wait(wq, &mut wait.wq_entry, c::TASK_UNINTERRUPTIBLE as c_int);
             if still() {

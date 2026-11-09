@@ -774,7 +774,7 @@ mod vfs {
             prefix: c"bcachefs.".as_ptr().cast(),
             get:    Some(bch2_xattr_bcachefs_get),
             set:    Some(bch2_xattr_bcachefs_set),
-            ..core::mem::zeroed()
+            ..::pin_init::zeroed()
         })
     };
     static BCACHEFS_EFFECTIVE_HANDLER: CStatic<c::xattr_handler> = unsafe {
@@ -782,7 +782,7 @@ mod vfs {
             prefix: c"bcachefs_effective.".as_ptr().cast(),
             get:    Some(bch2_xattr_bcachefs_get_effective),
             set:    Some(bch2_xattr_bcachefs_set_effective),
-            ..core::mem::zeroed()
+            ..::pin_init::zeroed()
         })
     };
 

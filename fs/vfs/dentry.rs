@@ -40,8 +40,8 @@ static CASEFOLD_OPS: crate::types::CStatic<c::dentry_operations> = unsafe {
     crate::types::CStatic::new(c::dentry_operations {
         d_hash:    Some(c::generic_ci_d_hash),
         d_compare: Some(c::generic_ci_d_compare),
-        // SAFETY: zero is NULL, an op not implemented
-        ..core::mem::zeroed()
+        // zero is NULL, an op not implemented
+        ..::pin_init::zeroed()
     })
 };
 

@@ -153,8 +153,8 @@ macro_rules! vfs_ops {
 
         impl<$P: $Bound> $VTable<$P> {
             $vis const OPS: $Ops = {
-                // SAFETY: zero is NULL, "not implemented"
-                let mut ops: $Ops = unsafe { ::core::mem::zeroed() };
+                // zero is NULL, "not implemented"
+                let mut ops: $Ops = ::pin_init::zeroed();
                 $( $(#[cfg($cfg)])* if <$Impl>::[<HAS_ $name:upper>] { ops.$name = Some(Self::$name); } )*
                 $($( $(#[cfg($ucfg)])* if <$Impl>::[<HAS_ $uname:upper>] { ops.$uname = Some(Self::$uname); } )*)?
                 $( let ops = { let mut $o = ops; $init $o }; )?
