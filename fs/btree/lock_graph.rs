@@ -679,7 +679,7 @@ pub(crate) fn check_for_deadlock(trans: *mut BtreeTrans<'_>, mut cycle: Option<&
 fn node_reuse_race(trans: &BtreeTrans<'_>, b: &BtreeNode) -> bool {
     let (hash_val, root_id) = (trans.locking_hash_val.get(), trans.locking_root_id.get());
     if hash_val != 0 {
-        hash_val != unsafe { (&raw const b.hash_val).read_volatile() }
+        hash_val != b.hash_val()
     } else if root_id.0 != u32::MAX {
         !trans.c.btree_id_root(root_id.0).is_some_and(|root| ptr::eq(root, b))
     } else {

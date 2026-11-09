@@ -83,7 +83,7 @@ unsafe fn node_flush(j: *mut c::journal, pin: *mut Pin, idx: usize, seq: u64) ->
      * on the lock (aborting the attempt), means the pinned write is done
      * and there's nothing to flush.
      */
-    let hash_val = unsafe { (&raw const b.hash_val).read_volatile() };
+    let hash_val = b.hash_val();
     if hash_val == 0 {
         return 0;
     }

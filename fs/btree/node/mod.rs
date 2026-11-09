@@ -98,7 +98,8 @@ pub struct BkeyUnpackField {
 pub struct BtreeNode {
     pub c: cs::btree_bkey_cached_common,
 
-    pub hash_val: u64,
+    #[c("u64 hash_val")]
+    pub hash_val: core::cell::UnsafeCell<u64>,
 
     #[c("unsigned long flags")]
     pub flags: cs::AtomicBtreeNodeFlags,

@@ -2502,7 +2502,7 @@ impl<'t> BtreeNodeIter<'t> {
             return Err(t.fs().err(bch_errcode::BCH_ERR_btree_node_dying));
         }
 
-        assert!(b.hash_val != 0, "a node in the btree, not hashed");
+        assert!(b.hash_val() != 0, "a node in the btree, not hashed");
         Ok(iter)
     }
 

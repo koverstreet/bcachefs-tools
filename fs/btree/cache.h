@@ -36,13 +36,6 @@ static inline struct btree *btree_node_mem_ptr(const struct bkey_i *k)
 		: NULL;
 }
 
-/* is btree node in hash table? */
-static inline bool btree_node_hashed(struct btree *b)
-{
-	return b->hash_val != 0;
-}
-
-
 static inline size_t btree_buf_bytes(const struct btree *b)
 {
 	return 1UL << b->byte_order;

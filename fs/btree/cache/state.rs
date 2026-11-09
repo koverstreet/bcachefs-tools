@@ -22,18 +22,19 @@ use core::sync::atomic::{fence, Ordering::SeqCst};
 
 pub(crate) type NodeTable = Cuckoo<Entry<BtreeNode>, GoldenRatio>;
 
-crate::keyed_by!(BtreeNode, |b| &b.hash_val => u64);
+// set_hash_val() writes it only while the node isn't in the table
+crate::keyed_by!(BtreeNode, |b| unsafe { &*b.hash_val.get() } => u64);
 
 // what's shared is the node lock's, bc->lock's, or atomic
 unsafe impl Sync for BtreeNode {}
 
 impl BtreeNode {
     pub fn hash_val(&self) -> u64 {
-        unsafe { (&raw const self.hash_val).read_volatile() }
+        unsafe { self.hash_val.get().read_volatile() }
     }
 
     fn set_hash_val(&self, _lists: &mut BtreeCacheGuard<'_>, v: u64) {
-        unsafe { (&raw const self.hash_val).cast_mut().write_volatile(v) }
+        unsafe { self.hash_val.get().write_volatile(v) }
     }
 
     pub fn cache_state(&self, _lists: &BtreeCacheGuard<'_>) -> State {
