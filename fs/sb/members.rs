@@ -902,10 +902,7 @@ impl Fs {
     }
 }
 
-#[c_export]
-pub fn bch2_btree_bitmap_gc(c: &Opaque<Fs>) -> c_int {
-    ret_to_c(Fs::from_c(c).btree_bitmap_gc())
-}
+crate::recovery_pass!(btree_bitmap_gc => |fs: &Fs| fs.btree_bitmap_gc());
 
 crate::fs_delayed_work! {
     /// Daily, while rw: btree_bitmap_gc scheduled - ratelimited - if a

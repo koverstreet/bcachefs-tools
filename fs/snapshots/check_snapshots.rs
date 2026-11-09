@@ -194,7 +194,7 @@ fn check_snapshot_trees(fs: &Fs) -> Result<(), BchError> {
                          |t, iter, k| check_snapshot_tree(t, iter, k))
 }
 
-crate::recovery_pass!(bch2_check_snapshot_trees => check_snapshot_trees);
+crate::recovery_pass!(check_snapshot_trees => check_snapshot_trees);
 
 /* check_snapshots: */
 
@@ -1100,7 +1100,7 @@ fn check_snapshots(fs: &Fs) -> Result<(), BchError> {
     Ok(())
 }
 
-crate::recovery_pass!(bch2_check_snapshots => check_snapshots);
+crate::recovery_pass!(check_snapshots => check_snapshots);
 
 /* reconstruct_snapshots: */
 
@@ -1252,7 +1252,7 @@ fn reconstruct_snapshots(fs: &Fs) -> Result<(), BchError> {
     Ok(())
 }
 
-crate::recovery_pass!(bch2_reconstruct_snapshots => reconstruct_snapshots);
+crate::recovery_pass!(reconstruct_snapshots => reconstruct_snapshots);
 
 /* check_key_has_snapshot - per-key repair, also called at runtime: */
 

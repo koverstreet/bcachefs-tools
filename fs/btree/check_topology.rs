@@ -663,4 +663,4 @@ fn check_topology(fs: &Fs) -> Result<(), BchError> {
     Ok(())
 }
 
-crate::recovery_pass!(bch2_check_topology => check_topology);
+crate::recovery_pass!(check_topology => check_topology);

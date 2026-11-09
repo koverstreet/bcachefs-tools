@@ -27,7 +27,7 @@ use crate::c;
 use crate::data::ec::stripe::WidenCache;
 use crate::data::moving::{key_sectors, MovingCtxt};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::namei::inum_snapshot_to_path;
 use crate::fs::Fs;
 use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
@@ -36,9 +36,7 @@ use crate::debug::trace::events;
 use crate::util::kthread::Kthread;
 use crate::util::Printbuf;
 use crate::{bch_err, SPOS_MAX};
-use core::ffi::c_int;
 use core::ops::Range;
-use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree};
 
 impl c::reconcile_scan {
@@ -466,13 +464,6 @@ fn update_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>
     update_reconcile_opts(t, s, opts, iter, level, k, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change)
 }
 
-// ── C's ──────────────────────────────────────────────────────────────────
-//
-// dev.c's, until it's Rust.
-
-/// The set_fs_needs_reconcile recovery pass, once, upgrading from
-/// rebalance_work: an fs scan, which gives every extent its reconcile state.
-#[c_export]
-pub fn bch2_set_fs_needs_reconcile(c: &Fs) -> c_int {
-    ret_to_c(c.request_scan(c::reconcile_scan::fs(), true))
-}
+// The set_fs_needs_reconcile recovery pass, once, upgrading from
+// rebalance_work: an fs scan, which gives every extent its reconcile state.
+crate::recovery_pass!(set_fs_needs_reconcile => |fs: &Fs| fs.request_scan(c::reconcile_scan::fs(), true));

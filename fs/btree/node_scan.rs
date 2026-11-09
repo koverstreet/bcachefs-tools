@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use core::cmp::{Ordering, Reverse};
-use core::ffi::c_int;
 use core::mem::{offset_of, replace, size_of};
 use core::ptr::NonNull;
 
 use crate::init::passes::RecoveryPass;
 use crate::data_structures::array_vec::ArrayVec;
-use cstruct_macros::c_export;
 
 use crate::btree::bkey::{BkeyI, BkeyV, POS_MIN, SPOS_MAX};
 use crate::init::error::BkeyValidate;
@@ -17,7 +15,7 @@ use crate::btree::node::BtreeNode;
 use crate::btree::read::read_done;
 use crate::c::{self, bch_errcode, BtreePtrV2};
 use crate::data::ptrs::extent_ptr_to_text;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::format::{Bpos, Btree, DataType, BkeyType, MetadataVersion};
 use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Dev, Fs};
 use crate::init::passes;
@@ -26,7 +24,6 @@ use crate::types::{Le16, Le64};
 use crate::util::alloc::KVVec;
 use crate::util::bio::{buf_nr_bvecs, Bio, BioBox, BioOwner};
 use crate::data_structures::eytzinger::Eytzinger0;
-use crate::util::ffi::Opaque;
 use crate::data_structures::heap::{MinHeap, PeekMut};
 use crate::util::kernel::{cond_resched, jiffies, local_clock, sort_nonatomic, time_after, HZ};
 use crate::util::log::{print_str, LogLevel, LogMsg};
@@ -528,7 +525,4 @@ pub(crate) fn get_scanned_nodes(fs: &Fs, btree: Btree, level: u32, node_min: Bpo
     Ok(())
 }
 
-#[c_export]
-pub fn bch2_scan_for_btree_nodes(c: &Opaque<Fs>) -> c_int {
-    ret_to_c(scan_for_btree_nodes(Fs::from_c(c)))
-}
+crate::recovery_pass!(scan_for_btree_nodes => scan_for_btree_nodes);

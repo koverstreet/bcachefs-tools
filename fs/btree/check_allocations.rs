@@ -434,4 +434,4 @@ fn check_allocations(fs: &Fs) -> Result<(), BchError> {
     ret
 }
 
-crate::recovery_pass!(bch2_check_allocations => check_allocations);
+crate::recovery_pass!(check_allocations => check_allocations);

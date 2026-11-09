@@ -566,4 +566,4 @@ fn check_dirents(fs: &Fs) -> Result<(), BchError> {
     }
 }
 
-crate::recovery_pass!(bch2_check_dirents => check_dirents);
+crate::recovery_pass!(check_dirents => check_dirents);

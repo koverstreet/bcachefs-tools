@@ -380,4 +380,4 @@ fn check_damage(fs: &Fs) -> Result<(), BchError> {
     })
 }
 
-crate::recovery_pass!(bch2_check_damage => check_damage);
+crate::recovery_pass!(check_damage => check_damage);

@@ -410,4 +410,4 @@ fn check_lrus(fs: &Fs) -> Result<(), BchError> {
     }
 }
 
-crate::recovery_pass!(bch2_check_lrus => check_lrus);
+crate::recovery_pass!(check_lrus => check_lrus);

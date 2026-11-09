@@ -1698,7 +1698,7 @@ fn delete_dead_inodes(fs: &Fs) -> Result<(), BchError> {
     }
 }
 
-crate::recovery_pass!(bch2_delete_dead_inodes => delete_dead_inodes);
+crate::recovery_pass!(delete_dead_inodes => delete_dead_inodes);
 
 /// Delete the inode_generation keys in the inodes btree, a recovery pass: as
 /// bch2_kill_i_generation_keys().
@@ -1718,7 +1718,7 @@ fn kill_i_generation_keys(fs: &Fs) -> Result<(), BchError> {
     })
 }
 
-crate::recovery_pass!(bch2_kill_i_generation_keys => kill_i_generation_keys);
+crate::recovery_pass!(kill_i_generation_keys => kill_i_generation_keys);
 
 // ── New inodes ───────────────────────────────────────────────────────────
 //

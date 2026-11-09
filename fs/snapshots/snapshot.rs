@@ -1450,7 +1450,7 @@ pub(crate) fn snapshots_read(fs: &Fs) -> Result<(), BchError> {
     Ok(())
 }
 
-crate::recovery_pass!(bch2_snapshots_read => snapshots_read);
+crate::recovery_pass!(snapshots_read => snapshots_read);
 
 // ── Lookups ──────────────────────────────────────────────────────────────
 

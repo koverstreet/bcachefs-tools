@@ -243,4 +243,4 @@ fn check_nlinks(fs: &Fs) -> Result<(), BchError> {
     }
 }
 
-crate::recovery_pass!(bch2_check_nlinks => check_nlinks);
+crate::recovery_pass!(check_nlinks => check_nlinks);

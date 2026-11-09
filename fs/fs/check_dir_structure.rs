@@ -364,5 +364,5 @@ fn check_directory_structure(fs: &Fs) -> Result<(), BchError> {
         })
 }
 
-crate::recovery_pass!(bch2_check_subvolume_structure => check_subvolume_structure);
-crate::recovery_pass!(bch2_check_directory_structure => check_directory_structure);
+crate::recovery_pass!(check_subvolume_structure => check_subvolume_structure);
+crate::recovery_pass!(check_directory_structure => check_directory_structure);

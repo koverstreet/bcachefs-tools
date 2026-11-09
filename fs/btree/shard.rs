@@ -200,7 +200,7 @@ impl Fs {
     }
 }
 
-crate::recovery_pass!(bch2_presplit_shard_boundaries => |fs: &Fs| -> Result<(), BchError> {
+crate::recovery_pass!(presplit_shard_boundaries => |fs: &Fs| -> Result<(), BchError> {
     fs.presplit_shard_boundaries();
     Ok(())
 });

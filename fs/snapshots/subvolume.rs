@@ -604,7 +604,7 @@ fn check_subvols(fs: &Fs) -> Result<(), BchError> {
     Ok(())
 }
 
-crate::recovery_pass!(bch2_check_subvols => check_subvols);
+crate::recovery_pass!(check_subvols => check_subvols);
 
 fn check_subvol_child(
     t:    &TransAttempt<'_, '_>,
@@ -634,7 +634,7 @@ fn check_subvol_children(fs: &Fs) -> Result<(), BchError> {
                          |t, iter, k| check_subvol_child(t, iter, k))
 }
 
-crate::recovery_pass!(bch2_check_subvol_children => check_subvol_children);
+crate::recovery_pass!(check_subvol_children => check_subvol_children);
 
 // ── Unlinking, deleting ──────────────────────────────────────────────────
 
@@ -899,7 +899,7 @@ pub(crate) fn initialize(fs: &Fs) -> Result<(), BchError> {
                     BtreeIterFlags::empty())
 }
 
-crate::recovery_pass!(bch2_initialize_subvolumes => initialize);
+crate::recovery_pass!(initialize_subvolumes => initialize);
 
 /// Set bi_subvol on the root inode, upgrading to subvolumes.
 fn fs_upgrade_for_subvolumes(fs: &Fs) -> Result<(), BchError> {
@@ -922,4 +922,4 @@ fn fs_upgrade_for_subvolumes(fs: &Fs) -> Result<(), BchError> {
     })
 }
 
-crate::recovery_pass!(bch2_fs_upgrade_for_subvolumes => fs_upgrade_for_subvolumes);
+crate::recovery_pass!(fs_upgrade_for_subvolumes => fs_upgrade_for_subvolumes);

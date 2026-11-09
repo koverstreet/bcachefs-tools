@@ -391,4 +391,4 @@ fn check_inodes(fs: &Fs) -> Result<(), BchError> {
     })
 }
 
-crate::recovery_pass!(bch2_check_inodes => check_inodes);
+crate::recovery_pass!(check_inodes => check_inodes);

@@ -4,8 +4,8 @@
 //! records of them, scheduling one - from the pass that finds it's needed,
 //! repair found anywhere - and running them, at mount and in the background.
 //!
-//! A pass is C's or Rust's: the table calls each by name, bch2_<pass>(), and
-//! a Rust pass exports itself under it with recovery_pass!().
+//! Each pass's function is defined with the pass, and given to the table by
+//! recovery_pass!().
 //!
 //! Passes are numbered in the order they run; the superblock records them by
 //! stable id, which never changes: in ext's recovery_passes_required, the
@@ -135,31 +135,31 @@ pub struct bch_fs_recovery {
     pub(crate) work: ReffedWork<async_runner, crate::field!(super.writes)>,
 }
 
-/// Export @pass, a function or closure of `&Fs` returning `Result<(), E>`
-/// with E converting to BchError, as the recovery pass the pass table calls
-/// @name - its prototype C's from the header of the file this is in, as
-/// #[c_export]'s:
+/// @pass, a function or closure of `&Fs` returning `Result<(), E>` with E
+/// converting to BchError, as recovery pass @name's function:
 ///
-/// `recovery_pass!(bch2_check_dirents => check_dirents);`
-/// `recovery_pass!(bch2_resume_logged_ops_early => |fs| resume_logged_ops(fs, true));`
+/// `recovery_pass!(check_dirents => check_dirents);`
+/// `recovery_pass!(resume_logged_ops_early => |fs| resume_logged_ops(fs, true));`
 #[macro_export]
 macro_rules! recovery_pass {
     ($name:ident => $pass:expr) => {
-        /// # Safety
-        /// @c is a live filesystem: the pass table's caller.
-        #[::cstruct_macros::c_export]
-        pub unsafe extern "C" fn $name(c: *mut $crate::fs::Fs) -> core::ffi::c_int {
-            let fs = unsafe { $crate::fs::Fs::borrow_raw(c) };
-
-            $crate::errcode::ret_to_c(($pass)(fs))
+        impl $crate::init::passes::Run for $crate::init::passes::pass::$name {
+            fn run(fs: &$crate::fs::Fs) -> Result<(), $crate::errcode::BchError> {
+                ($pass)(fs).map_err(Into::into)
+            }
         }
     };
+}
+
+/// A pass's function, implemented for its type in pass:: by recovery_pass!().
+pub trait Run {
+    fn run(fs: &Fs) -> Result<(), BchError>;
 }
 
 use crate::btree::iter::lockrestart_do;
 use crate::c;
 use self::bch_recovery_runner as Runner;
-use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::locking::ExclusiveGuard;
 use crate::sb::io::{SbFieldOps, SbWrite};
@@ -193,23 +193,22 @@ const NR: usize = Pass::NR as usize;
 /// The last pass: once it's done, they all are.
 pub const LAST: Pass = Pass::from_bits(NR as u32 - 1);
 
-/// Each pass's function: C's, or Rust's under its C name. A module of their
-/// own, as this one defines two of them.
-mod pass_fns {
-    macro_rules! pass_fns {
-        ($(($name:ident, $($rest:tt)*)),* $(,)?) => { ::paste::paste! {
-            unsafe extern "C" {
-                $(pub(super) fn [<bch2_ $name>](c: *mut crate::fs::Fs) -> core::ffi::c_int;)*
-            }
+/// A type per pass, for its function to be implemented on. A module of their
+/// own: a unit struct's name is a value too, and two passes' functions here
+/// have theirs.
+pub mod pass {
+    macro_rules! pass_types {
+        ($(($name:ident, $($rest:tt)*)),* $(,)?) => {
+            $(pub struct $name;)*
 
-            /// By pass.
-            pub(super) const RUN: [unsafe extern "C" fn(*mut crate::fs::Fs) -> core::ffi::c_int; super::NR] =
-                [$([<bch2_ $name>]),*];
-        } };
+            /// Each pass's function, by pass.
+            pub(super) const RUN: [fn(&crate::fs::Fs) -> Result<(), crate::errcode::BchError>; super::NR] =
+                [$(<$name as super::Run>::run),*];
+        };
     }
-    crate::c::RecoveryPass_arms!(pass_fns);
+    crate::c::RecoveryPass_arms!(pass_types);
 }
-use pass_fns::RUN;
+use pass::RUN;
 use crate::sb::io::SbResize;
 
 /// Each pass's stable id, by pass.
@@ -257,7 +256,7 @@ pub fn fsck_passes() -> u64 {
 fn recovery_pass_empty(_fs: &Fs) -> Result<(), BchError> {
     Ok(())
 }
-crate::recovery_pass!(bch2_recovery_pass_empty => recovery_pass_empty);
+crate::recovery_pass!(recovery_pass_empty => recovery_pass_empty);
 
 /// That the root inode can be read, while recovery can still rewind to
 /// repair it.
@@ -269,7 +268,7 @@ fn lookup_root_inode(fs: &Fs) -> Result<(), BchError> {
         inode::find_by_inum_trans(t, inum, c_function_name!()).map(drop)
     })
 }
-crate::recovery_pass!(bch2_lookup_root_inode => lookup_root_inode);
+crate::recovery_pass!(lookup_root_inode => lookup_root_inode);
 
 // ── Stable ids ───────────────────────────────────────────────────────────────
 //
@@ -828,8 +827,7 @@ fn run_pass(fs: &Fs, pass: Pass) -> Result<(), BchError> {
     }
 
     let start_time = ktime_get_real_seconds();
-    // SAFETY: a pass, of a live filesystem
-    let ret = ret_to_result_void(unsafe { RUN[pass as usize](fs.as_ptr()) });
+    let ret = RUN[pass as usize](fs);
 
     if let Err(e) = &ret {
         if !e.matches(bch_errcode::BCH_ERR_restart_recovery) {

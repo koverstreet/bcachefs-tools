@@ -28,13 +28,11 @@ use crate::fs::Fs;
 use crate::locking::{ByteLock, ExclusiveGuard, Lockdep};
 use crate::debug::trace::events;
 use crate::util::alloc::kbox_pin_init;
-use crate::util::ffi::Opaque;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::Printbuf;
 use crate::{bch_err, new_lock, prt};
-use core::ffi::{c_int, c_ulong};
+use core::ffi::c_ulong;
 use core::ptr::NonNull;
-use cstruct_macros::c_export;
 use pin_init::pin_init;
 
 // ── A stripe's devices ───────────────────────────────────────────────────
@@ -326,10 +324,10 @@ pub(crate) fn stripe_heads_stop(fs: &Fs, ca: Option<&Dev>) {
 
 /// The recovery pass that read the stripes into memory: there's nothing to
 /// read now, but passes keep their numbers.
-#[c_export]
-pub fn bch2_stripes_read(_c: &Opaque<Fs>) -> c_int {
-    0
+fn stripes_read(_fs: &Fs) -> Result<(), BchError> {
+    Ok(())
 }
+crate::recovery_pass!(stripes_read => stripes_read);
 
 /// At shutdown, free the heads: no stripe's blocks are still allocated - and
 /// with them, the last stripes being made.

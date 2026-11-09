@@ -13,10 +13,6 @@
 //! The journal lock's; the list changes with sb_lock held too, as the
 //! superblock does.
 
-use core::ffi::c_int;
-
-use cstruct_macros::c_export;
-
 use crate::c;
 use crate::c::journal_bucket_stage::{self as Stage, JOURNAL_BUCKET_cur as CUR, JOURNAL_BUCKET_dirty as DIRTY,
                                      JOURNAL_BUCKET_dirty_ondisk as DIRTY_ONDISK,
@@ -25,7 +21,7 @@ use pin_init::stack_pin_init;
 
 use crate::alloc::buckets::{trans_mark_metadata_bucket, DiskReservation};
 use crate::btree::iter::{lockrestart_do, UpdateTriggerFlags};
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::{DataType, SbFeature};
 use crate::fs::{Dev, Fs, SbLockGuard};
 use crate::journal::sb::buckets_to_sb;
@@ -577,12 +573,9 @@ pub fn dev_journal_alloc(ca: &Dev, new_fs: bool) -> Result<(), BchError> {
     bch_err_fn_dev!(ca, set_nr_loop(fs, ca, nr, new_fs))
 }
 
-#[c_export]
-pub fn bch2_fs_journal_alloc(fs: &Fs) -> c_int {
-    ret_to_c(fs.online_members()
-        .filter(|ca| ca.journal.nr() == 0)
-        .try_for_each(|ca| dev_journal_alloc(&ca, true)))
-}
+crate::recovery_pass!(fs_journal_alloc => |fs: &Fs| fs.online_members()
+    .filter(|ca| ca.journal.nr() == 0)
+    .try_for_each(|ca| dev_journal_alloc(&ca, true)));
 
 /// @bucket, which fsck found another user's data in, no longer the journal's:
 /// out of the ring now, if the journal's done with it - or retired, never

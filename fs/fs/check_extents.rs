@@ -469,5 +469,5 @@ fn check_indirect_extents(fs: &Fs) -> Result<(), BchError> {
     })
 }
 
-crate::recovery_pass!(bch2_check_extents => check_extents);
-crate::recovery_pass!(bch2_check_indirect_extents => check_indirect_extents);
+crate::recovery_pass!(check_extents => check_extents);
+crate::recovery_pass!(check_indirect_extents => check_indirect_extents);

@@ -113,7 +113,6 @@
 
 #include "journal/types_gen.h"
 
-#include "journal/buckets_gen.h"
 #include "journal/journal_gen.h"
 
 static inline bool journal_low_on_space(struct journal *j)

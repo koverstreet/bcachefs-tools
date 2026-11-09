@@ -753,7 +753,7 @@ fn read(fs: &Fs) -> Result<(), BchError> {
      */
     read_mem_fixups(&trans)
 }
-crate::recovery_pass!(bch2_accounting_read => read);
+crate::recovery_pass!(accounting_read => read);
 
 /// Whether accounting is kept for @e - or it's an entry no accounting
 /// position here holds, a newer version's, and not ours to drop.

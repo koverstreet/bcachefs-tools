@@ -108,7 +108,7 @@ fn check_btree_backpointers(fs: &Fs) -> Result<(), BchError> {
     })
 }
 
-crate::recovery_pass!(bch2_check_btree_backpointers => check_btree_backpointers);
+crate::recovery_pass!(check_btree_backpointers => check_btree_backpointers);
 
 // ── fsck: an extent's backpointer ────────────────────────────────────────
 
@@ -890,7 +890,7 @@ fn check_extents_to_backpointers(fs: &Fs) -> Result<(), BchError> {
     ret
 }
 
-crate::recovery_pass!(bch2_check_extents_to_backpointers => check_extents_to_backpointers);
+crate::recovery_pass!(check_extents_to_backpointers => check_extents_to_backpointers);
 
 // ── fsck: check_backpointers_to_extents ──────────────────────────────────
 
@@ -972,7 +972,7 @@ fn check_backpointers_to_extents(fs: &Fs) -> Result<(), BchError> {
     }
 }
 
-crate::recovery_pass!(bch2_check_backpointers_to_extents => check_backpointers_to_extents);
+crate::recovery_pass!(check_backpointers_to_extents => check_backpointers_to_extents);
 
 // ── Bucket bitmaps ───────────────────────────────────────────────────────
 

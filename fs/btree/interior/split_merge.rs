@@ -815,7 +815,7 @@ fn merge_btree_nodes(fs: &Fs) -> Result<(), BchError> {
     Ok(())
 }
 
-crate::recovery_pass!(bch2_merge_btree_nodes => merge_btree_nodes);
+crate::recovery_pass!(merge_btree_nodes => merge_btree_nodes);
 
 const PREV_SIB: usize = c::btree_node_sibling::btree_prev_sib as usize;
 const NEXT_SIB: usize = c::btree_node_sibling::btree_next_sib as usize;

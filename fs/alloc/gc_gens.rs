@@ -112,7 +112,7 @@ fn gc_gens(fs: &Fs) -> Result<(), BchError> {
     recalc_oldest_gens(fs, start_time)
 }
 
-crate::recovery_pass!(bch2_gc_gens => |fs: &Fs| match gc_gens(fs) {
+crate::recovery_pass!(gc_gens => |fs: &Fs| match gc_gens(fs) {
     /* going read-only isn't the pass failing */
     Err(e) if e.matches(c::EROFS) => Ok(()),
     ret => ret,

@@ -489,7 +489,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
     Ok(())
 }
 
-crate::recovery_pass!(bch2_journal_replay => journal_replay);
+crate::recovery_pass!(journal_replay => journal_replay);
 
 /* journal replay early: */
 
@@ -627,7 +627,7 @@ fn set_may_go_rw(fs: &Fs) -> Result<(), BchError> {
     Ok(())
 }
 
-crate::recovery_pass!(bch2_set_may_go_rw => set_may_go_rw);
+crate::recovery_pass!(set_may_go_rw => set_may_go_rw);
 
 fn recovery(fs: &Fs) -> Result<(), BchError> {
     let mut journal_start = c::journal_start_info::default();

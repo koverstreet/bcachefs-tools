@@ -114,4 +114,4 @@ fn check_xattrs(fs: &Fs) -> Result<(), BchError> {
         })
 }
 
-crate::recovery_pass!(bch2_check_xattrs => check_xattrs);
+crate::recovery_pass!(check_xattrs => check_xattrs);

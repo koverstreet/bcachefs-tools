@@ -31,19 +31,16 @@ use crate::data::ptrs::{BkeyVPtrs, BtreePtrs, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::data::reconcile::trigger::{add_reconcile_bp, data_to_rb_work_pos, rb_bp, rb_work_to_data_pos, reconcile_bp_get_key,
                                       BkeyVReconcile};
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
-use crate::util::ffi::Opaque;
 use crate::util::log::{LogLevel, LogMsg};
 use crate::util::printbuf::Msg;
 use crate::util::vstructs::plain_bytes;
 use crate::util::Printbuf;
 use crate::{fsck_err, fsck_err_on, prt, SPOS_MAX};
-use core::ffi::c_int;
 use core::mem::size_of;
-use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree, BkeyType};
 
 const NO_ENOSPC: CommitFlags = CommitFlags::NO_ENOSPC;
@@ -520,10 +517,7 @@ fn check_reconcile_work(fs: &Fs) -> Result<(), BchError> {
     check_stripe_can_widen(&trans)
 }
 
-#[c_export]
-pub fn bch2_check_reconcile_work(c: &Opaque<Fs>) -> c_int {
-    ret_to_c(check_reconcile_work(Fs::from_c(c)))
-}
+crate::recovery_pass!(check_reconcile_work => check_reconcile_work);
 
 /// Flipping device @ca's rotational flag leaves the reconcile phys bits of
 /// backpointers made under the old setting stale, and deletes after it miss

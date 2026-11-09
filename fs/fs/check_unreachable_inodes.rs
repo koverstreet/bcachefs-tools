@@ -291,4 +291,4 @@ fn check_unreachable_inodes(fs: &Fs) -> Result<(), BchError> {
     })
 }
 
-crate::recovery_pass!(bch2_check_unreachable_inodes => check_unreachable_inodes);
+crate::recovery_pass!(check_unreachable_inodes => check_unreachable_inodes);

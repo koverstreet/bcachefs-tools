@@ -3,7 +3,6 @@
 #define _BCACHEFS_SNAPSHOT_H
 #include "snapshots/snapshot_gen.h"
 #include "snapshots/check_snapshots_gen.h"
-#include "snapshots/delete_gen.h"
 
 /*
  * The raw state field. A key that predates it reads 0, which matches no state:

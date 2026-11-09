@@ -107,7 +107,6 @@
 #include "btree/interior_gen.h"
 #include <linux/rcupdate.h>
 #include "btree/key_cache_gen.h"
-#include "btree/node_scan_gen.h"
 #include "data/extents_gen.h"
 #include "journal/types_gen.h"
 #include "btree/write_buffer_gen.h"

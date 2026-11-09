@@ -34,19 +34,16 @@ use crate::btree::iter::{is_restart, lockrestart_do, polonius_key, BtreeIter, Bt
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::sb::errors::FsckFlags;
 use crate::sb::members::DevRef;
-use crate::util::ffi::Opaque;
 use crate::util::kernel::{local_clock, READ};
 use crate::{bch_err, bch_info, bch_verbose, fsck_err, fsck_err_flags, fsck_err_on};
 use crate::c::bch_errcode;
-use core::ffi::c_int;
-use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree, DataType, BkeyType, SbFeature};
 
 // ── Walking the alloc btree, holes and all ───────────────────────────────
@@ -673,7 +670,7 @@ fn check_alloc_info(fs: &Fs) -> Result<(), BchError> {
     })
 }
 
-crate::recovery_pass!(bch2_check_alloc_info => check_alloc_info);
+crate::recovery_pass!(check_alloc_info => check_alloc_info);
 
 // ── check_alloc_to_lru_refs ──────────────────────────────────────────────
 
@@ -739,7 +736,7 @@ fn check_alloc_to_lru_refs(fs: &Fs) -> Result<(), BchError> {
     crate::data::ec::check::check_stripe_refs(&trans)
 }
 
-crate::recovery_pass!(bch2_check_alloc_to_lru_refs => check_alloc_to_lru_refs);
+crate::recovery_pass!(check_alloc_to_lru_refs => check_alloc_to_lru_refs);
 
 // ── Freespace initialization ─────────────────────────────────────────────
 
@@ -828,7 +825,4 @@ pub(crate) fn fs_freespace_init(fs: &Fs) -> Result<(), BchError> {
     Ok(())
 }
 
-#[c_export]
-pub fn bch2_fs_freespace_init(c: &Opaque<Fs>) -> c_int {
-    ret_to_c(fs_freespace_init(Fs::from_c(c)))
-}
+crate::recovery_pass!(fs_freespace_init => fs_freespace_init);

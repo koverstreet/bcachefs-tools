@@ -1024,7 +1024,7 @@ impl Fs {
     }
 }
 
-crate::recovery_pass!(bch2_trans_mark_dev_sbs => |fs: &Fs| fs.trans_mark_dev_sbs(UpdateTriggerFlags::TRANSACTIONAL));
+crate::recovery_pass!(trans_mark_dev_sbs => |fs: &Fs| fs.trans_mark_dev_sbs(UpdateTriggerFlags::TRANSACTIONAL));
 
 // ── Startup and shutdown ─────────────────────────────────────────────────
 

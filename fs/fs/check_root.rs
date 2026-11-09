@@ -106,4 +106,4 @@ fn check_root(fs: &Fs) -> Result<(), BchError> {
     commit_do(&trans, None, CommitFlags::NO_ENOSPC, check_root_trans)
 }
 
-crate::recovery_pass!(bch2_check_root => check_root);
+crate::recovery_pass!(check_root => check_root);

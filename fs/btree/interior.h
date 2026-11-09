@@ -8,7 +8,6 @@
 #include "data/write_gen.h"
 
 #include "btree/interior/split_merge_gen.h"
-#include "btree/shard_gen.h"
 
 static inline enum bch_trans_commit_flags
 btree_update_set_watermark_hipri(enum bch_trans_commit_flags flags)

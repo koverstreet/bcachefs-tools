@@ -50,4 +50,4 @@ fn fix_reflink_p(fs: &Fs) -> Result<(), BchError> {
         |t, iter, k| fix_reflink_p_key(t, iter, k))
 }
 
-crate::recovery_pass!(bch2_fix_reflink_p => fix_reflink_p);
+crate::recovery_pass!(fix_reflink_p => fix_reflink_p);

@@ -175,8 +175,8 @@ pub(crate) fn note_unfinished(fs: &Fs) -> Result<(), BchError> {
     })
 }
 
-crate::recovery_pass!(bch2_resume_logged_ops_early => |fs| resume_logged_ops(fs, true));
-crate::recovery_pass!(bch2_resume_logged_ops => |fs| resume_logged_ops(fs, false));
+crate::recovery_pass!(resume_logged_ops_early => |fs| resume_logged_ops(fs, true));
+crate::recovery_pass!(resume_logged_ops => |fs| resume_logged_ops(fs, false));
 
 /// Queue @k as a new op in the transaction, in the first empty slot - where
 /// @k's position is set to. The update is a copy in transaction memory, so

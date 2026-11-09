@@ -1136,7 +1136,7 @@ fn bucket_gens_init(fs: &Fs) -> Result<(), BchError> {
     }
 }
 
-crate::recovery_pass!(bch2_bucket_gens_init => bucket_gens_init);
+crate::recovery_pass!(bucket_gens_init => bucket_gens_init);
 
 /// Each device's bucket generations, in memory: from the bucket_gens btree,
 /// or before it existed, the alloc btree.
@@ -1185,7 +1185,7 @@ fn alloc_read(fs: &Fs) -> Result<(), BchError> {
     }
 }
 
-crate::recovery_pass!(bch2_alloc_read => alloc_read);
+crate::recovery_pass!(alloc_read => alloc_read);
 
 #[cfg(test)]
 mod tests {

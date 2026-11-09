@@ -1399,7 +1399,7 @@ fn delete_dead_snapshots(fs: &Fs) -> Result<(), BchError> {
     delete_dead_snapshots_forced(fs)
 }
 
-crate::recovery_pass!(bch2_delete_dead_snapshots => delete_dead_snapshots);
+crate::recovery_pass!(delete_dead_snapshots => delete_dead_snapshots);
 
 fn get_dead_interior_snapshots(k: BkeySC<'_>, delete: &mut KVVec<InteriorDelete>) -> Result<(), BchError> {
     let Some(v) = snapshot::val(k) else { return Ok(()) };
@@ -1496,7 +1496,7 @@ fn delete_dead_interior_snapshots_pass(fs: &Fs) -> Result<(), BchError> {
     refused(delete_dead_interior_snapshots(fs))
 }
 
-crate::recovery_pass!(bch2_delete_dead_interior_snapshots => delete_dead_interior_snapshots_pass);
+crate::recovery_pass!(delete_dead_interior_snapshots => delete_dead_interior_snapshots_pass);
 
 /// For snapshots_read()'s walk: count the emptied interior nodes, and
 /// schedule deletion for a node that needs it.
