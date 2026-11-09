@@ -379,17 +379,17 @@ pub fn direct_write(k: &mut Kiocb<'_>, it: &mut IovIter<'_>) -> isize {
     let ret = 'out: {
         match k.write_checks(it) {
             Ok(0) => break 'out 0,
-            Err(e) => break 'out -(e.raw() as isize),
+            Err(e) => break 'out e.class() as isize,
             Ok(_) => {}
         }
 
         if let Err(e) = k.file().remove_privs().and_then(|()| k.file().update_time()) {
-            break 'out -(e.raw() as isize);
+            break 'out e.class() as isize;
         }
 
         let (ki_pos, count) = (k.pos(), it.count() as u64);
         if unlikely((ki_pos | count) & (fs.block_bytes() - 1) != 0) {
-            break 'out -(fs.err(bch_errcode::BCH_ERR_EINVAL_unaligned_io).raw() as isize);
+            break 'out fs.err(bch_errcode::BCH_ERR_EINVAL_unaligned_io).class() as isize;
         }
 
         let started = inode.dio_start();
@@ -424,7 +424,7 @@ pub fn direct_write(k: &mut Kiocb<'_>, it: &mut IovIter<'_>) -> isize {
             if let Err(e) = mapping.write_invalidate_range(ki_pos, ki_pos + count - 1) {
                 unsafe { c::bio_put(bio) };
                 drop(started);
-                break 'out -(e.raw() as isize);
+                break 'out e.class() as isize;
             }
         }
 
