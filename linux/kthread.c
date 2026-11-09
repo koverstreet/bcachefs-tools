@@ -84,7 +84,7 @@ struct task_struct *kthread_create(int (*thread_fn)(void *data),
 
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
-	pthread_attr_setstacksize(&attr, 64 << 10);
+	pthread_attr_setstacksize(&attr, 256 << 10);
 
 	for (unsigned i = 0; i < 10; i++) {
 		ret = pthread_create(&p->thread, &attr, kthread_start_fn, p);
