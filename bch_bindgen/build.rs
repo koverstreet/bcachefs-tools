@@ -114,7 +114,6 @@ fn main() {
         .allowlist_function("request_key")
         .allowlist_function("add_key")
         .allowlist_function("keyctl_search")
-        .allowlist_function("match_string")
         // tools-util functions for Rust command conversions
         .allowlist_function("ask_yn")
         .allowlist_function("read_file_str")

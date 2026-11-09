@@ -79,7 +79,6 @@
 
 #include "closure.h"
 
-#include "vendor/min_heap.h"
 #include "util/clock_gen.h"
 #include "util/enumerated_ref_gen.h"
 #include <linux/idr.h>

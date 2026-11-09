@@ -19,7 +19,6 @@ maintain a separate userspace version.
 | `include/linux/generic-radix-tree.h` | `include/linux/generic-radix-tree.h` |
 | `linux/generic-radix-tree.c` | `lib/generic-radix-tree.c` |
 | `include/linux/kmemleak.h` | `include/linux/kmemleak.h` |
-| `linux/int_sqrt.c` | `lib/math/int_sqrt.c` |
 | `Makefile.compiler` | `scripts/Makefile.compiler` |
 
 ## When to refresh

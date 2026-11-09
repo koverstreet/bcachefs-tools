@@ -36,7 +36,6 @@
 #include "util/enumerated_ref.h"
 
 #include <linux/prefetch.h>
-#include <linux/string_helpers.h>
 
 static inline struct btree_path_level *insert_l(struct btree_trans *trans, struct btree_insert_entry *i)
 {

@@ -79,7 +79,6 @@ bcachefs-y		:=			\
 	util/util.o				\
 	vendor/bio_iov_iter.o			\
 	vendor/closure.o			\
-	vendor/min_heap.o			\
 	vfs/buffered.o				\
 	vfs/direct.o
 

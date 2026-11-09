@@ -633,8 +633,6 @@ update-vendored-kernel-sources:
 	git add linux/generic-radix-tree.c
 	cp $(LINUX_DIR)/include/linux/kmemleak.h include/linux/
 	git add include/linux/kmemleak.h
-	cp $(LINUX_DIR)/lib/math/int_sqrt.c linux/
-	git add linux/int_sqrt.c
 	cp $(LINUX_DIR)/scripts/Makefile.compiler ./
 	git add Makefile.compiler
 
