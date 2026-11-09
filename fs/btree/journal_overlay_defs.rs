@@ -2,9 +2,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::iter::BtreeTrans;
-use crate::btree::node::{iter::KeyIter, BtreeNode};
-use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::c_uint;
 use cstruct_macros::CStruct;
@@ -24,22 +21,3 @@ pub struct journal_iter {
     pub pos: Bpos,
 }
 c_default!(journal_iter);
-
-/*
- * Iterate over keys in the btree, with keys from the journal overlaid on top:
- */
-#[repr(C)]
-#[derive(Clone, Copy, CStruct)]
-pub struct btree_and_journal_iter {
-    pub trans: *mut BtreeTrans<'static>,
-    pub b: *mut BtreeNode,
-    pub node_iter: KeyIter,
-    pub unpacked: c::bkey,
-
-    pub journal: c::journal_iter,
-    pub pos: Bpos,
-    pub at_end: bool,
-    pub prefetch: bool,
-    pub fail_if_too_many_whiteouts: bool,
-}
-c_default!(btree_and_journal_iter);

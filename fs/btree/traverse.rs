@@ -14,6 +14,7 @@ use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::cache::bch2_btree_id_level_to_text;
 use crate::btree::interior::check_topology_msg;
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
+use crate::btree::journal_overlay::BtreeAndJournalIter;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::keys::Keys;
 use crate::btree::node::BtreeNode;
@@ -341,7 +342,7 @@ impl BtreeTrans<'_> {
         self.btree_node_prefetch(paths, Some(idx), k.as_ref(), btree, level - 1)
     }
 
-    fn path_prefetch_j(&self, paths: &mut Paths<'_>, idx: PathIdx, jiter: &mut c::btree_and_journal_iter)
+    fn path_prefetch_j(&self, paths: &mut Paths<'_>, idx: PathIdx, jiter: &mut BtreeAndJournalIter<'_, '_>)
         -> Result<(), BchError>
     {
         let level = paths[idx].level() as usize;
@@ -357,12 +358,9 @@ impl BtreeTrans<'_> {
             }
 
             jiter.advance();
-            let k = jiter.peek(self.fs());
-            if k.k.is_null() {
-                break;
-            }
+            let Some(k) = jiter.peek() else { break };
 
-            tmp.reassemble(unsafe { BkeySC::from_c(&k) });
+            tmp.reassemble(k);
             ret = self.node_prefetch(paths, idx, &tmp, level);
             if ret.is_err() {
                 break;
@@ -480,16 +478,14 @@ impl BtreeTrans<'_> {
         let fs = self.fs();
         let path = &paths[idx];
         let level = path.level() as usize;
-        let b = path.l[level].b.as_ptr().cast::<BtreeNode>();
+        let b = paths.held_btree_node(idx, level).expect("a path goes down from a locked node");
 
-        let mut jiter = unsafe { c::btree_and_journal_iter::new(self.raw(), b, path.l[level].iter, path.pos) };
+        let mut jiter = BtreeAndJournalIter::new(self, b, path.l[level].iter, path.pos);
 
-        let k = jiter.peek(fs);
-        if k.k.is_null() {
+        let Some(k) = jiter.peek() else {
             return Err(self.node_missing_err(paths, idx));
-        }
-
-        set_down_key(paths.down_key_mut(), unsafe { BkeySC::from_c(&k) });
+        };
+        set_down_key(paths.down_key_mut(), k);
 
         if flags.contains(BtreeIterFlags::PREFETCH) && fs.opts.btree_node_prefetch.get() != 0 {
             return self.path_prefetch_j(paths, idx, &mut jiter);

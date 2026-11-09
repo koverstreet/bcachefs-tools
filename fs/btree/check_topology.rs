@@ -14,7 +14,7 @@ use crate::btree::bkey::{BkeyI, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::interior::{check_topology as node_check_topology, root_alloc_fake_trans};
 use crate::btree::iter::{lockrestart_do, BtreeIterFlags, BtreeNodeIter, CommitFlags, TransAttempt};
-use crate::btree::journal_overlay::{self, shoot_down_journal_keys};
+use crate::btree::journal_overlay::{self, shoot_down_journal_keys, BtreeAndJournalIter};
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::btree::node_scan::{btree_has_scanned_nodes, btree_node_is_stale, get_scanned_nodes};
@@ -290,17 +290,10 @@ fn child_key(t: &TransAttempt<'_, '_>, b: Node<'_>, pos: Bpos) -> Option<BkeyBuf
     let mut node_iter = KeyIter::default();
     node_iter.init(fs, &b.keys(b.contents()), &pos);
 
-    let mut iter = unsafe {
-        c::btree_and_journal_iter::new(t.trans().raw(), core::ptr::from_ref(b.node()).cast_mut(), node_iter, pos)
-    };
+    let mut iter = BtreeAndJournalIter::new(t.trans(), b, node_iter, pos);
     iter.prefetch = true;
 
-    let k = iter.peek(fs);
-    if k.k.is_null() {
-        return None;
-    }
-
-    let k = unsafe { BkeySC::from_c(&k) };
+    let k = iter.peek()?;
     let data = b.contents().data();
     assert!(k.k.p >= data.min_key && k.k.p <= data.max_key,
             "a child key at {}, outside its parent's {} - {}", k.k.p, data.min_key, data.max_key);

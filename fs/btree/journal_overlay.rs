@@ -2,7 +2,7 @@
 
 //! The journal keys: the keys recovery read from the journal, sorted, which
 //! btree lookups see overlaid on the btree until journal replay has put them
-//! in it - so the btree iterator, and btree_and_journal_iter for walking a
+//! in it - so the btree iterator, and BtreeAndJournalIter for walking a
 //! node before the btree runs, read the two merged.
 //!
 //! Terms:
@@ -31,7 +31,7 @@
 //!    key's range index, which is stored after the range, then reads the range.
 //!  - An insert bumps seq, and an iterator that finds it changed searches
 //!    again for where it was - from where it started, or the
-//!    btree_and_journal_iter's pos if that's later: what's before either it
+//!    BtreeAndJournalIter's pos if that's later: what's before either it
 //!    never returns.
 
 #![allow(non_camel_case_types)]
@@ -41,6 +41,7 @@ use crate::accounting;
 use crate::btree::bkey::{BkeyI, BkeySC, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::node::{iter::KeyIter, BtreeNode};
+use crate::btree::path::LockedNode;
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{btree_id_is_alloc, Fs};
@@ -838,10 +839,46 @@ impl c::journal_iter {
     }
 }
 
-impl c::btree_and_journal_iter {
-    fn replay_not_finished(&self) -> bool {
-        // SAFETY: the iterator's transaction outlives it
-        unsafe { (*self.trans).journal_replay_not_finished() }
+/*
+ * Iterate over keys in the btree, with keys from the journal overlaid on top:
+ */
+#[derive(Clone, Copy)]
+pub(crate) struct BtreeAndJournalIter<'a, 't> {
+    trans: &'a BtreeTrans<'t>,
+    b: LockedNode<'a, BtreeNode>,
+    node_iter: KeyIter,
+    unpacked: c::bkey,
+    peeked: c::bkey_s_c,
+
+    journal: c::journal_iter,
+    pos: Bpos,
+    at_end: bool,
+    pub(crate) prefetch: bool,
+    pub(crate) fail_if_too_many_whiteouts: bool,
+}
+
+impl<'a, 't> BtreeAndJournalIter<'a, 't> {
+    /// Over node @b's keys, from @node_iter, and the journal's from @pos.
+    pub(crate) fn new(trans: &'a BtreeTrans<'t>, b: LockedNode<'a, BtreeNode>, node_iter: KeyIter,
+                      pos: Bpos) -> Self {
+        let mut iter = Self {
+            trans,
+            b,
+            node_iter,
+            unpacked: c::bkey::new(),
+            peeked: c::bkey_s_c { k: ptr::null_mut(), v: ptr::null_mut() },
+            journal: c::journal_iter::default(),
+            pos: b.contents().data().min_key,
+            at_end: false,
+            prefetch: false,
+            fail_if_too_many_whiteouts: false,
+        };
+
+        if trans.journal_replay_not_finished() {
+            iter.journal = c::journal_iter::new(unsafe { trans.fs().journal_keys_held() },
+                                                Btree(b.c.btree_id.into()), b.c.level.into(), pos);
+        }
+        iter
     }
 
     pub(crate) fn advance(&mut self) {
@@ -853,7 +890,8 @@ impl c::btree_and_journal_iter {
     }
 
     /// The next few keys' nodes read ahead, from a copy of the iterator.
-    fn prefetch(&self, fs: &Fs) {
+    fn prefetch(&self) {
+        let fs = self.trans.fs();
         let mut iter = *self;
         let level = iter.journal.level;
         let nr = if fs.flags.get(f::started) { if level > 1 { 0 } else { 2 } } else if level > 1 { 1 } else { 16 };
@@ -864,28 +902,29 @@ impl c::btree_and_journal_iter {
         let mut tmp = BkeyBuf::new();
         for _ in 0..nr {
             iter.advance();
-            let k = iter.peek(fs);
-            if k.k.is_null() {
-                break;
-            }
+            let Some(k) = iter.peek() else { break };
 
-            // SAFETY: a key from the iterator, valid until it moves
-            tmp.reassemble(unsafe { BkeySC::from_c(&k) });
-            // SAFETY: the iterator's transaction
-            let trans = unsafe { &*iter.trans };
-            let _ = trans.btree_node_prefetch(&mut trans.paths(), None, tmp.as_ref(), iter.journal.btree_id,
-                                              level as usize - 1);
+            tmp.reassemble(k);
+            let _ = self.trans.btree_node_prefetch(&mut self.trans.paths(), None, tmp.as_ref(),
+                                                   iter.journal.btree_id, level as usize - 1);
         }
     }
 
     /// The next key at or after pos, the btree node's or the journal's,
-    /// whichever's first - the journal's if both - skipping whiteouts.
-    pub(crate) fn peek(&mut self, fs: &Fs) -> c::bkey_s_c {
+    /// whichever's first - the journal's if both - skipping whiteouts. Good
+    /// until the iterator moves.
+    pub(crate) fn peek(&mut self) -> Option<BkeySC<'_>> {
+        self.peeked = self.peek_raw();
+        (!self.peeked.k.is_null()).then(|| unsafe { BkeySC::from_c(&self.peeked) })
+    }
+
+    fn peek_raw(&mut self) -> c::bkey_s_c {
         let null = c::bkey_s_c { k: ptr::null_mut(), v: ptr::null_mut() };
+        let fs = self.trans.fs();
         let mut iters = 0;
 
         if self.prefetch && self.journal.level != 0 {
-            self.prefetch(fs);
+            self.prefetch();
         }
         loop {
             if self.at_end {
@@ -898,8 +937,7 @@ impl c::btree_and_journal_iter {
             }
 
             let btree_k = loop {
-                // SAFETY: the node's iterator, of node b
-                let keys = unsafe { (*self.b).keys((*self.b).contents()) };
+                let keys = self.b.keys(self.b.contents());
                 let k = self.node_iter.peek_unpack(&keys, &mut self.unpacked).map_or(null, Into::into);
                 // SAFETY: a key of the node's
                 if k.k.is_null() || unsafe { (*k.k).p } >= self.pos {
@@ -909,7 +947,7 @@ impl c::btree_and_journal_iter {
             };
 
             let mut journal_k = ptr::null();
-            if self.replay_not_finished() {
+            if self.trans.journal_replay_not_finished() {
                 let jk = unsafe { fs.journal_keys_held() };
                 journal_k = loop {
                     let k = self.journal.peek(jk, self.pos);
@@ -930,8 +968,8 @@ impl c::btree_and_journal_iter {
                 }
             };
 
-            // SAFETY: the node, and its data, while the iterator's on it
-            if !ret.k.is_null() && unsafe { (*ret.k).p > (*(*self.b).contents().data).max_key } {
+            // SAFETY: as ret's
+            if !ret.k.is_null() && unsafe { (*ret.k).p } > self.b.contents().data().max_key {
                 ret = null;
             }
 
@@ -949,31 +987,6 @@ impl c::btree_and_journal_iter {
             }
             self.advance();
         }
-    }
-
-    /// Over node @b's keys, from @node_iter, and the journal's from @pos.
-    ///
-    /// # Safety
-    /// @trans and @b are live, @b locked, for as long as the iterator.
-    pub(crate) unsafe fn new(trans: *mut BtreeTrans<'_>, b: *mut BtreeNode, node_iter: KeyIter, pos: Bpos)
-        -> Self
-    {
-        let mut iter = Self {
-            trans: trans.cast(),
-            b,
-            node_iter,
-            // SAFETY: the caller's
-            pos: unsafe { (*(*b).contents().data).min_key },
-            ..Default::default()
-        };
-
-        if iter.replay_not_finished() {
-            // SAFETY: the caller's
-            let (fs, btree, level) = unsafe { ((*trans).c, (*b).c.btree_id, (*b).c.level) };
-            iter.journal = c::journal_iter::new(unsafe { fs.journal_keys_held() }, Btree(btree.into()),
-                                                level.into(), pos);
-        }
-        iter
     }
 }
 

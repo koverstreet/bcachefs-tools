@@ -12,7 +12,7 @@ use crate::btree::cache::btree_ptr_hash_val;
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, Watermark};
-use crate::btree::journal_overlay::{journal_key_overwrite, key_deleted_in_journal};
+use crate::btree::journal_overlay::{journal_key_overwrite, key_deleted_in_journal, BtreeAndJournalIter};
 use crate::btree::node::BtreeNode;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::sort::{bch2_btree_build_aux_trees, bch2_btree_sort_into, bch2_maybe_compact_whiteouts};
@@ -201,17 +201,10 @@ pub(crate) fn check_topology_msg(trans: &BtreeTrans<'_>, b: Node<'_>, out: &mut 
 
     let mut node_iter = KeyIter::default();
     node_iter.init_from_start(&b.keys(contents));
-    let mut iter = unsafe {
-        c::btree_and_journal_iter::new(trans.raw(), ptr::from_ref(b.node()).cast_mut(), node_iter, data.min_key)
-    };
+    let mut iter = BtreeAndJournalIter::new(trans, b, node_iter, data.min_key);
     let mut prev = BkeyBuf::new();
 
-    loop {
-        let k = iter.peek(fs);
-        if k.k.is_null() {
-            break;
-        }
-        let k = unsafe { BkeySC::from_c(&k) };
+    while let Some(k) = iter.peek() {
         let Some(bp) = k.arm::<c::BtreePtrV2>() else { return Ok(()) };
 
         let expected_min = match prev_end(&prev) {
