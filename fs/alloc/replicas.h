@@ -7,10 +7,4 @@
 #include "data_structures/eytzinger.h"
 
 
-static inline bool bch2_replicas_entry_eq(struct bch_replicas_entry_v1 *l,
-					  struct bch_replicas_entry_v1 *r)
-{
-	return l->nr_devs == r->nr_devs && !memcmp(l, r, replicas_entry_bytes(l));
-}
-
 #endif /* _BCACHEFS_REPLICAS_H */

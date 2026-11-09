@@ -24,26 +24,6 @@ static inline void bch2_accounting_neg(struct bkey_s_accounting a)
 	bch2_u64s_neg(a.v->d, bch2_accounting_counters(a.k));
 }
 
-#define disk_accounting_key_init(_k, _type, ...)			\
-do {									\
-	memset(&(_k), 0, sizeof(_k));					\
-	(_k).type	= BCH_DISK_ACCOUNTING_##_type;			\
-	(_k)._type	= (bch_acct_##_type) { __VA_ARGS__ };		\
-} while (0)
-
-#define bch2_disk_accounting_mod2(_trans, _gc, _v, ...)			\
-({									\
-	struct disk_accounting_pos pos;					\
-	disk_accounting_key_init(pos, __VA_ARGS__);			\
-	bch2_disk_accounting_mod(trans, &pos, _v, ARRAY_SIZE(_v), _gc);	\
-})
-
-static inline bool bch2_accounting_is_mem(struct disk_accounting_pos *acc)
-{
-	return acc->type < BCH_DISK_ACCOUNTING_TYPE_NR &&
-		acc->type != BCH_DISK_ACCOUNTING_inum;
-}
-
 static inline struct bversion journal_pos_to_bversion(struct journal_res *res, unsigned offset)
 {
 	EBUG_ON(!res->ref);

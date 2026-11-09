@@ -25,16 +25,14 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, 
                          TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::init::progress::Progress;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
 use crate::{bkey_fsck_err_on, fsck_err};
-use core::ffi::c_int;
 use core::ops::RangeInclusive;
-use cstruct_macros::c_export;
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 
 /// What an lru id says: which lru, and for a per-device one, the device.
@@ -186,17 +184,6 @@ pub fn lru_change(t: &TransAttempt<'_, '_>, id: LruId, target: u64, old_time: u6
     let pos = |time| LruPos::new(id.id(), time, target);
     lru_mod(t, pos(old_time), false)?;
     lru_mod(t, pos(new_time), true)
-}
-
-/// bch2_lru_change()'s slow path, with old_time != new_time.
-///
-/// # Safety
-/// @trans is in an attempt.
-#[c_export]
-pub unsafe extern "C" fn __bch2_lru_change<'t>(trans: &'t BtreeTrans<'t>, lru_id: u16,
-                                               dev_bucket: u64, old_time: u64, new_time: u64) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(lru_change(&t, LruId::from(lru_id), dev_bucket, old_time, new_time))
 }
 
 // ── Removing a device ────────────────────────────────────────────────────

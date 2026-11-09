@@ -18,7 +18,7 @@ use crate::data::ec::stripe::{ptr_matches_stripe, ptr_matches_stripe_m};
 use crate::data::ptrs::{BkeyVPtrs, DecodedPtr, Ptrs};
 use crate::data::reconcile::needs_reconcile::extent_trigger_set_needs_reconcile;
 use crate::data::reconcile::trigger::trigger_extent_reconcile;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, fs_inconsistent, id};
 use crate::init::passes;
@@ -33,9 +33,9 @@ use crate::util::rcu::{read_lock, ReadGuard};
 use crate::data_structures::bitmap::AtomicBitmap;
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use core::sync::atomic::{AtomicU8, Ordering};
-use cstruct_macros::{c_export, c_name, CStruct, bitfield, c_const, c_rcu_array, Fieldwise, TypeInfo, c_enum};
+use cstruct_macros::{c_name, CStruct, bitfield, c_const, c_rcu_array, Fieldwise, TypeInfo, c_enum};
 use core::cell::Cell;
 use nestify::nest;
 use crate::format::{Bpos, Btree, DataType, BkeyType};
@@ -477,27 +477,6 @@ impl TransAttempt<'_, '_> {
     }
 }
 
-/// For C's bch2_bucket_ref_update(), past its checks.
-///
-/// # Safety
-/// @trans is in an attempt.
-#[c_export]
-#[allow(clippy::too_many_arguments)]
-pub unsafe fn __bch2_bucket_ref_update<'t>(
-    trans:            &'t BtreeTrans<'t>,
-    ca:               &Dev,
-    k:                BkeySC<'_>,
-    ptr:              &c::bch_extent_ptr,
-    sectors:          i64,
-    ptr_data_type:    DataType,
-    b_gen:            u8,
-    bucket_data_type: &mut u8,
-    bucket_sectors:   &mut u32,
-) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(t.bucket_ref_update_slowpath(ca, k, ptr, sectors, ptr_data_type, b_gen,
-                                          bucket_data_type, bucket_sectors))
-}
 
 // ── Triggers ─────────────────────────────────────────────────────────────
 

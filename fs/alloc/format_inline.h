@@ -21,12 +21,4 @@ static inline enum bch_data_type bucket_data_type(enum bch_data_type data_type)
 	}
 }
 
-static inline bool bucket_data_type_mismatch(enum bch_data_type bucket,
-					     enum bch_data_type ptr)
-{
-	return !data_type_is_empty(bucket) &&
-		bucket != BCH_DATA_multiple &&
-		bucket_data_type(bucket) != bucket_data_type(ptr);
-}
-
 #endif /* _BCACHEFS_ALLOC_FORMAT_INLINE_H */

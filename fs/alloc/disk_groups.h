@@ -5,23 +5,6 @@
 #include "init/dev_gen.h"
 #include "alloc/disk_groups_gen.h"
 
-static inline struct target target_decode(unsigned target)
-{
-	if (target >= TARGET_GROUP_START)
-		return (struct target) {
-			.type	= TARGET_GROUP,
-			.group	= target - TARGET_GROUP_START
-		};
-
-	if (target >= TARGET_DEV_START)
-		return (struct target) {
-			.type	= TARGET_DEV,
-			.group	= target - TARGET_DEV_START
-		};
-
-	return (struct target) { .type = TARGET_NULL };
-}
-
 static inline struct bch_devs_mask target_rw_devs(struct bch_fs *c,
 						  enum bch_data_type data_type,
 						  u16 target)
@@ -34,12 +17,6 @@ static inline struct bch_devs_mask target_rw_devs(struct bch_fs *c,
 	if (t)
 		bitmap_and(devs.d, devs.d, t->d, BCH_SB_MEMBERS_MAX);
 	return devs;
-}
-
-static inline bool bch2_dev_in_target(struct bch_fs *c, unsigned dev, unsigned target)
-{
-	guard(rcu)();
-	return bch2_dev_in_target_rcu(c, dev, target);
 }
 
 #endif /* _BCACHEFS_DISK_GROUPS_H */

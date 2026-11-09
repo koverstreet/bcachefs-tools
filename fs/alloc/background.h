@@ -10,13 +10,6 @@
 
 /* Bucket position helpers */
 
-static inline bool bch2_dev_bucket_exists(struct bch_fs *c, struct bpos pos)
-{
-	guard(rcu)();
-	struct bch_dev *ca = bch2_dev_rcu_noerror(c, pos.inode);
-	return ca && bucket_valid(ca, pos.offset);
-}
-
 static inline u64 bucket_to_u64(struct bpos bucket)
 {
 	return (bucket.inode << 48) | (bucket.offset & ~(~0ULL << 48));
@@ -69,23 +62,6 @@ static inline enum bch_data_type alloc_data_type(struct bch_alloc_v4 a,
 
 #define BCH_FREESPACE_GENBITS_NR	(((unsigned) U8_MAX >> 4) + 1)
 
-static inline u64 alloc_freespace_genbits(struct bch_alloc_v4 a)
-{
-	return ((u64) alloc_gc_gen(a) >> 4) << 56;
-}
-
 /* Alloc key operations */
-
-static inline const struct bch_alloc_v4 *bch2_alloc_to_v4(struct bkey_s_c k, struct bch_alloc_v4 *convert)
-{
-	if (likely(k.k->type == KEY_TYPE_alloc_v4)) {
-		const struct bch_alloc_v4 *ret = bkey_s_c_to_alloc_v4(k).v;
-		if (BCH_ALLOC_V4_BACKPOINTERS_START(ret) == BCH_ALLOC_V4_U64s)
-			return ret;
-	}
-
-	__bch2_alloc_to_v4(k, convert);
-	return convert;
-}
 
 #endif /* _BCACHEFS_ALLOC_BACKGROUND_H */

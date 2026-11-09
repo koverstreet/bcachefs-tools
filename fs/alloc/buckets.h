@@ -31,16 +31,6 @@ static inline u64 sector_to_bucket_and_offset(const struct bch_dev *ca, sector_t
 	return div_u64_rem(s, ca->mi.bucket_size, offset);
 }
 
-static inline u64 dev_frac_to_offset(const struct bch_dev *ca, u64 frac)
-{
-	return mul_u64_u64_div_u64(frac, bucket_to_sector(ca, ca->mi.nbuckets),
-				   1ULL << BCH_DEV_POS_FRAC_BITS);
-}
-
-#define for_each_bucket(_b, _buckets)				\
-	for (_b = (_buckets)->b + (_buckets)->first_bucket;	\
-	     _b < (_buckets)->b + (_buckets)->nbuckets; _b++)
-
 /* Bucket locking: */
 
 static inline void bucket_unlock(struct bucket *b)
@@ -117,33 +107,6 @@ static inline struct bpos PTR_BUCKET_POS_OFFSET(const struct bch_dev *ca,
 	return POS(ptr->dev, sector_to_bucket_and_offset(ca, ptr->offset, bucket_offset));
 }
 
-/* GC bucket ↔ alloc_v4 conversion: */
-
-static inline void alloc_to_bucket(struct bucket *dst, struct bch_alloc_v4 src)
-{
-	dst->generation		= src.generation;
-	dst->data_type		= src.data_type;
-	dst->stripe_sectors	= src.stripe_sectors;
-	dst->dirty_sectors	= src.dirty_sectors;
-	dst->cached_sectors	= src.cached_sectors;
-}
-
-static inline void __bucket_m_to_alloc(struct bch_alloc_v4 *dst, struct bucket src)
-{
-	dst->generation		= src.generation;
-	dst->data_type		= src.data_type;
-	dst->stripe_sectors	= src.stripe_sectors;
-	dst->dirty_sectors	= src.dirty_sectors;
-	dst->cached_sectors	= src.cached_sectors;
-}
-
-static inline struct bch_alloc_v4 bucket_m_to_alloc(struct bucket b)
-{
-	struct bch_alloc_v4 ret = {};
-	__bucket_m_to_alloc(&ret, b);
-	return ret;
-}
-
 /* Extent pointer helpers: */
 
 static inline enum bch_data_type ptr_data_type(const struct bkey *k,
@@ -183,102 +146,6 @@ static inline int dev_ptr_stale(struct bch_dev *ca, const struct bch_extent_ptr 
 	return dev_ptr_stale_rcu(ca, ptr);
 }
 
-/* Device usage: */
-
-static inline u64 bch2_dev_buckets_reserved(struct bch_dev *ca, enum bch_watermark watermark)
-{
-	s64 reserved = 0;
-
-	switch (watermark) {
-	case BCH_WATERMARK_NR:
-		BUG();
-	case BCH_WATERMARK_stripe:
-		reserved += ca->mi.nbuckets >> 6;
-		fallthrough;
-	case BCH_WATERMARK_normal:
-		reserved += ca->mi.nbuckets >> 6;
-		fallthrough;
-	case BCH_WATERMARK_copygc:
-		reserved += ca->nr_btree_reserve;
-		fallthrough;
-	case BCH_WATERMARK_btree:
-		reserved += ca->nr_btree_reserve;
-		fallthrough;
-	case BCH_WATERMARK_btree_copygc:
-	case BCH_WATERMARK_reclaim:
-	case BCH_WATERMARK_interior_updates:
-		break;
-	}
-
-	return reserved;
-}
-
-/*
- * In the allocator's rw set - see for_each_rw_member_rcu(). Not ca->mi.state:
- * device state transitions update the allocator and then recalc, before the new
- * member state has been written.
- */
-static inline bool bch2_dev_is_rw(struct bch_dev *ca)
-{
-	return test_bit(ca->dev_idx, ca->fs->allocator.rw_devs[BCH_DATA_free].d);
-}
-
-/*
- * What a new copy written to @ca would be worth: nothing unless it's rw. For
- * what a copy already there is worth, bch2_dev_durability().
- */
-static inline unsigned bch2_dev_rw_durability(struct bch_dev *ca)
-{
-	return bch2_dev_is_rw(ca) ? ca->mi.durability : 0;
-}
-
-/*
- * Everything that divides c->capacity.capacity up per device has to agree with
- * bch2_recalc_capacity() about which devices are in the sum.
- */
-static inline bool dev_has_capacity(struct bch_dev *ca)
-{
-	return bch2_dev_rw_durability(ca) != 0;
-}
-
-static inline u64 __dev_buckets_free(struct bch_dev *ca,
-				     struct bch_dev_usage usage,
-				     enum bch_watermark watermark)
-{
-	return max_t(s64, 0,
-		     usage.buckets[BCH_DATA_free]-
-		     ca->nr_open_buckets -
-		     bch2_dev_buckets_reserved(ca, watermark));
-}
-
-/* Filesystem usage: */
-
-static inline int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
-					 struct bkey_s_c k,
-					 const struct bch_extent_ptr *ptr,
-					 s64 sectors, enum bch_data_type ptr_data_type,
-					 u8 b_gen, u8 *bucket_data_type,
-					 u32 *bucket_sectors)
-{
-	BUG_ON(!sectors);
-
-	if (unlikely(b_gen != ptr->generation ||
-		     bucket_data_type_mismatch(*bucket_data_type, ptr_data_type) ||
-		     (u64) *bucket_sectors + sectors > U32_MAX))
-		return __bch2_bucket_ref_update(trans, ca, k, ptr, sectors, ptr_data_type,
-						b_gen, bucket_data_type, bucket_sectors);
-
-	*bucket_sectors += sectors;
-	return 0;
-}
-
-static inline const char *bch2_data_type_str(enum bch_data_type type)
-{
-	return type < BCH_DATA_NR
-		? __bch2_data_types[type]
-		: "(invalid data type)";
-}
-
 /* Disk reservations: */
 
 /*
@@ -305,8 +172,6 @@ static inline void bch2_disk_reservation_put(struct bch_fs *c,
 		res->sectors = 0;
 	}
 }
-
-
 
 /*
  * A reservation lives entirely in one slot, so changing its count moves what it
@@ -342,22 +207,6 @@ static inline void bch2_disk_reservation_set_nr_replicas(struct bch_fs *c,
 {
 	if (nr_replicas > res->nr_replicas)
 		disk_res_move_slot(c, res, nr_replicas);
-}
-
-/*
- * May we write fewer copies than were asked for, rather than returning -ENOSPC?
- * See enum bch_write_degraded_actions for why the default is what it is.
- */
-static inline bool bch2_write_degraded_ok(struct bch_fs *c)
-{
-	switch (c->opts.write_degraded) {
-	case BCH_WRITE_DEGRADED_yes:
-		return true;
-	case BCH_WRITE_DEGRADED_no:
-		return false;
-	default:
-		return !test_bit(BCH_FS_all_devs_rw, &c->flags);
-	}
 }
 
 /*
@@ -400,34 +249,6 @@ static inline int __bch2_disk_reservation_add(struct bch_fs *c,
 #else
 	return bch2_disk_reservation_add_slowpath(c, res, sectors, flags);
 #endif
-}
-
-/*
- * On ENOSPC, fall back to fewer replicas if write_degraded allows it:
- * @res->nr_replicas is then the count the caller has to write at.
- */
-static inline int bch2_disk_reservation_add(struct bch_fs *c,
-					    struct disk_reservation *res,
-					    u64 sectors, unsigned nr_replicas,
-					    int flags)
-{
-	unsigned wanted = nr_replicas;
-
-	while (1) {
-		int ret = __bch2_disk_reservation_add(c, res, sectors * nr_replicas,
-						      nr_replicas, flags);
-		if (unlikely(!ret && nr_replicas < wanted))
-			bch2_disk_reservation_degraded(c, wanted, nr_replicas,
-						       sectors, _THIS_IP_);
-
-		if (!bch2_err_matches(ret, ENOSPC) ||
-		    nr_replicas <= 1 ||
-		    !bch2_write_degraded_ok(c))
-			return ret;
-
-		/* the failed attempt set the count; retry one lower */
-		disk_res_move_slot(c, res, --nr_replicas);
-	}
 }
 
 DEFINE_CLASS(disk_reservation, struct disk_reservation_destructable,

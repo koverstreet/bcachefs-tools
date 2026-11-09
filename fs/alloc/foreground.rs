@@ -1322,16 +1322,6 @@ pub fn allocator_foreground_init(fs: &Fs) {
     fs.write_points_init();
 }
 
-/// bch2_open_bucket_put()'s, for the last pin.
-///
-/// # Safety
-/// @ob's last pin was put by the caller.
-#[c_export]
-pub unsafe fn __bch2_open_bucket_put(c: &Opaque<Fs>, ob: &c::open_bucket) {
-    // SAFETY: open until it's closed, which this does
-    Fs::from_c(c).open_bucket_close(unsafe { OpenBucketRef::from_c(ob) })
-}
-
 impl c::open_buckets {
     /// The stripes its buckets on each device of @failed are blocks of,
     /// cancelled with its error: the writes to it failed.

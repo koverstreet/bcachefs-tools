@@ -3,7 +3,6 @@
 #define _BCACHEFS_LRU_H
 
 /* The lru btree is lru.rs's; these inlines are its position encoding, for C */
-#include "alloc/lru_gen.h"
 
 static inline u64 lru_pos_id(struct bpos pos)
 {
@@ -25,30 +24,6 @@ static inline struct bpos lru_pos(u16 lru_id, u64 dev_bucket, u64 time)
 	EBUG_ON(pos.offset != dev_bucket);
 
 	return pos;
-}
-
-static inline struct bpos lru_start(u16 lru_id)
-{
-	return lru_pos(lru_id, 0, 0);
-}
-
-static inline struct bpos lru_end(u16 lru_id)
-{
-	return lru_pos(lru_id, U64_MAX, LRU_TIME_MAX);
-}
-
-static inline u16 bucket_fragmentation_lru(unsigned dev)
-{
-	return BCH_LRU_BUCKET_FRAGMENTATION_START + dev;
-}
-
-static inline int bch2_lru_change(struct btree_trans *trans,
-		      u16 lru_id, u64 dev_bucket,
-		      u64 old_time, u64 new_time)
-{
-	return old_time != new_time
-		? __bch2_lru_change(trans, lru_id, dev_bucket, old_time, new_time)
-		: 0;
 }
 
 #endif /* _BCACHEFS_LRU_H */

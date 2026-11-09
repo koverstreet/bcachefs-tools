@@ -71,9 +71,8 @@ use crate::util::percpu::Counters as _;
 use crate::util::printbuf::Join;
 use crate::util::Printbuf;
 use crate::{bch_err_fn, bkey_fsck_err, bkey_fsck_err_on, btree_trans, message, percpu_field};
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_int;
 use core::mem::size_of;
-use core::slice;
 use cstruct_macros::c_export;
 use zerocopy::{FromBytes, IntoBytes};
 
@@ -413,13 +412,6 @@ pub fn add_at(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &[i64], gc: 
 
     let d = <[u64]>::ref_from_bytes(d.as_bytes()).expect("i64s are u64s");
     if gc { mod_gc(t, pos, d) } else { mod_normal(t, pos, d) }
-}
-
-#[c_export]
-pub unsafe fn bch2_disk_accounting_mod<'t>(trans: &'t BtreeTrans<'t>, k: &DiskAccountingPos,
-                                           d: *const i64, nr: c_uint, gc: bool) -> c_int {
-    let (t, d) = unsafe { (trans.attempt_in_progress(), slice::from_raw_parts(d, nr as usize)) };
-    ret_to_c(add_at(&t, k, d, gc))
 }
 
 /*
