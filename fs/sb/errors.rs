@@ -258,8 +258,9 @@ fn to_text<E: ErrorEntry>(out: &mut Printbuf, entries: &[E]) {
         Err(_) => entries,
     };
 
+    /* the space: a name as long as the column is still separated from its count */
     for e in entries {
-        prt!(out, "{}\t", e.id());
+        prt!(out, "{} \t", e.id());
         if E::V2 {
             prt_error_nr(out, e.nr());
             prt!(out, "\t{}", DateTime(e.first() as i64));
@@ -444,7 +445,7 @@ impl Fs {
         }
 
         for e in self.errors.counts.lock().iter() {
-            prt!(out, "{}\t{}\t{}\t{}\n", SbErrorId(e.id().into()), e.nr(),
+            prt!(out, "{} \t{}\t{}\t{}\n", SbErrorId(e.id().into()), e.nr(),
                  DateTime(e.first_error_time as i64), DateTime(e.last_error_time as i64));
         }
     }
