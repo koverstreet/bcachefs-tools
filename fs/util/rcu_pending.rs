@@ -754,9 +754,9 @@ impl<'f, M: Mode> RcuPending<'f, M> {
     }
 
     /// # Safety
-    /// drain()ed, and nothing enqueues after.
-    unsafe fn free(&mut self) {
-        for p in self.pcpu().cpus() {
+    /// drain()ed, and nothing enqueues after: exit()'s @this.
+    unsafe fn free(this: *mut Self) {
+        for p in unsafe { &*this }.pcpu().cpus() {
             let p = p.as_ptr().cast_mut();
             {
                 let s = unsafe { (*p).lock.lock() };
@@ -768,16 +768,35 @@ impl<'f, M: Mode> RcuPending<'f, M> {
             unsafe { ptr::drop_in_place(p) };
         }
 
-        unsafe { c::free_percpu(self.p.cast()) };
-        self.p = ptr::null_mut();
+        unsafe {
+            c::free_percpu((*this).p.cast());
+            (&raw mut (*this).p).write(ptr::null_mut());
+        }
+    }
+
+    /// Everything queued processed, and freed: for an owner whose processing
+    /// uses what goes before the RcuPending is dropped. A no-op on one never
+    /// init()ed, or exit()ed - as the drop is then.
+    ///
+    /// # Safety
+    /// Nothing enqueues or dequeues meanwhile, or after. @this is written
+    /// through, so its provenance allows that: not a shared reference's, whose
+    /// memory the compiler may take as unchanged - the drop then frees again.
+    pub unsafe fn exit(this: *mut Self) {
+        if unsafe { (*this).p }.is_null() {
+            return;
+        }
+        unsafe { &*this }.drain();
+        unsafe { Self::free(this) }
     }
 }
 
+// Zeroed, it's one never init()ed: its percpu state null
+unsafe impl<M: Mode + Zeroable> Zeroable for RcuPending<'_, M> {}
+
 impl<M: Mode> Drop for RcuPending<'_, M> {
     fn drop(&mut self) {
-        self.drain();
-        // SAFETY: drained, and dropped
-        unsafe { self.free() }
+        unsafe { Self::exit(self) }
     }
 }
 
@@ -842,12 +861,5 @@ pub unsafe fn rcu_pending_dequeue_from_all_where(pending: *mut c::rcu_pending, t
 /// nothing uses it after.
 #[c_export]
 pub unsafe fn rcu_pending_exit(pending: *mut c::rcu_pending) {
-    let pending = pending.cast::<CPending>();
-    if unsafe { (*pending).p }.is_null() {
-        return;
-    }
-    unsafe {
-        (*pending).drain();
-        (*pending).free();
-    }
+    unsafe { (*pending.cast::<CPending>()).exit() }
 }
