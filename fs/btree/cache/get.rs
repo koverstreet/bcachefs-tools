@@ -5,7 +5,7 @@ use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
 use crate::btree::locking::btree_node_locked_type;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{bch2_btree_path_to_text, PathIdx, Paths};
+use crate::btree::path::{bch2_btree_path_to_text, NodePtr, PathIdx, Paths};
 use crate::btree::read::{bch2_btree_node_wait_on_read, bch2_btree_node_wait_on_write};
 use crate::btree::types::BtreeWriteType;
 use crate::btree::validate::node_btree;
@@ -432,5 +432,48 @@ impl BtreeTrans<'_> {
             drop(held);
             break;
         }
+    }
+
+    /// The node path @idx has at @level, out of the cache - written first, if
+    /// it's dirty - and out of the path: topology repair's, for a node it's
+    /// taking out of the btree. Waiting on its IO drops the transaction's
+    /// locks: a restart, if they can't be had back.
+    pub(crate) fn node_evict(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize) -> Result<(), BchError> {
+        let fs = self.fs();
+
+        self.path_upgrade(paths, idx, level + 1, crate::ret_ip!())?;
+
+        let b = loop {
+            let b = paths[idx].locked_btree_node(level).expect("an upgraded path holds its level").node();
+            let b = unsafe { &*core::ptr::from_ref(b) };
+            let f = b.flags.load();
+
+            assert!(!f.permanent(), "evicting a btree root");
+
+            if f.dirty() {
+                self.node_lock_write(paths, idx, level)?;
+                node_write(self, b, BtreeWriteType::cache_reclaim, BtreeWriteFlags::empty());
+                self.node_unlock_write(paths, idx, level);
+            } else if !f.read_in_flight() && !f.write_in_flight() {
+                break b;
+            }
+
+            /* not allowed to wait on io with btree locks held: */
+            self.unlock_from(paths, crate::ret_ip!());
+            bch2_btree_node_wait_on_read(self, paths, b);
+            bch2_btree_node_wait_on_write(self, paths, b);
+            self.relock_from(paths)?;
+        };
+
+        self.node_lock_write(paths, idx, level)?;
+
+        fs.btree.evicted_size.record(b.hash_val(), unsafe { b.contents() }.nr.live_u64s);
+        let _ = fs.btree_node_transition_state(b, State::FREED);
+
+        self.node_unlock_write(paths, idx, level);
+        self.node_unlock(paths, idx, level);
+        paths[idx].l[level].b = NodePtr::err(bch_errcode::BCH_ERR_no_btree_node_drop.into());
+        self.node_forget(paths, b);
+        Ok(())
     }
 }
