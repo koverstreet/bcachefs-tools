@@ -31,23 +31,33 @@ use core::sync::atomic::Ordering::Relaxed;
 /* Btree node alloc / lookup / evict */
 
 impl Fs {
-    fn btree_node_grab(&self, list: impl for<'l, 'g> Fn(&'l mut BtreeCacheGuard<'g>) -> &'l mut BtreeNodeList,
-                       pcpu_read_locks: bool, flags: ReclaimFlags) -> Option<(&BtreeNode, SixHold<'_>)> {
-        let mut lists = self.btree.cache.lock.lock();
-        let mut walk = unsafe { Walk::new(&mut lists, list) };
+    /// The first node on @list with the read locks wanted that reclaim gives
+    /// us, write locked - still in the cache.
+    fn btree_node_reclaim_first(&self, lists: &mut BtreeCacheGuard<'_>,
+                                list: impl for<'l, 'g> Fn(&'l mut BtreeCacheGuard<'g>) -> &'l mut BtreeNodeList,
+                                pcpu_read_locks: bool, flags: ReclaimFlags) -> Option<(&BtreeNode, SixHold<'_>)> {
+        let mut walk = unsafe { Walk::new(lists, list) };
         while let Some((lists, b)) = walk.next() {
             let b = unsafe { cached_node(self, b) };
             if pcpu_read_locks != b.c.lock.six().readers.allocated() {
                 continue;
             }
             if let Ok(held) = self.btree_node_reclaim(lists, b, flags) {
-                self.btree.evicted_size.record(b.hash_val(), unsafe { b.contents() }.nr.live_u64s);
-                let _ = self.btree_node_transition_state_locked(lists, b, State::NONE);
                 return Some((b, held));
             }
         }
 
         None
+    }
+
+    fn btree_node_grab(&self, list: impl for<'l, 'g> Fn(&'l mut BtreeCacheGuard<'g>) -> &'l mut BtreeNodeList,
+                       pcpu_read_locks: bool) -> Option<(&BtreeNode, SixHold<'_>)> {
+        let mut lists = self.btree.cache.lock.lock();
+        let (b, held) = self.btree_node_reclaim_first(&mut lists, list, pcpu_read_locks, ReclaimFlags::empty())?;
+
+        self.btree.evicted_size.record(b.hash_val(), unsafe { b.contents() }.nr.live_u64s);
+        let _ = self.btree_node_transition_state_locked(&mut lists, b, State::NONE);
+        Some((b, held))
     }
 
     fn system_memory_usage_high(&self) -> bool {
@@ -136,22 +146,32 @@ impl BtreeTrans<'_> {
 
         loop {
             for i in 0..2 {
-                if let Some(got) = fs.btree_node_grab(|l| &mut l.live[i].clean, pcpu_read_locks, ReclaimFlags::empty()) {
+                if let Some(got) = fs.btree_node_grab(|l| &mut l.live[i].clean, pcpu_read_locks) {
                     return got;
                 }
             }
 
-            for i in 0..2 {
-                if let Some((b, held)) = fs.btree_node_grab(|l| &mut l.live[i].dirty, pcpu_read_locks,
-                                                            ReclaimFlags::ALLOW_DIRTY) {
-                    if b.flags.dirty() {
-                        node_write(self, b, BtreeWriteType::cache_reclaim, BtreeWriteFlags::empty());
-                    }
-
-                    bch2_btree_node_wait_on_read(self, paths, b);
-                    bch2_btree_node_wait_on_write(self, paths, b);
-                    return (b, held);
+            /*
+             * None clean: write a dirty one, and take it clean on the next
+             * pass. Written while it's still in the cache - taking it out
+             * clears its dirty bit, and the write never happens - and not
+             * under bc->lock, or waited on with it write locked: the write's
+             * completion takes both.
+             */
+            let dirty = (0..2).find_map(|i| {
+                let mut lists = fs.btree.cache.lock.lock();
+                fs.btree_node_reclaim_first(&mut lists, |l| &mut l.live[i].dirty, pcpu_read_locks,
+                                            ReclaimFlags::ALLOW_DIRTY)
+            });
+            if let Some((b, held)) = dirty {
+                if b.flags.dirty() {
+                    node_write(self, b, BtreeWriteType::cache_reclaim, BtreeWriteFlags::empty());
                 }
+                drop(held);
+
+                bch2_btree_node_wait_on_read(self, paths, b);
+                bch2_btree_node_wait_on_write(self, paths, b);
+                continue;
             }
 
             /*
@@ -171,7 +191,7 @@ impl BtreeTrans<'_> {
         let start_time = local_clock();
 
         let (b, held) = 'got_mem: {
-            if let Some(got) = fs.btree_node_grab(|l| &mut l.freeable, pcpu_read_locks, ReclaimFlags::empty()) {
+            if let Some(got) = fs.btree_node_grab(|l| &mut l.freeable, pcpu_read_locks) {
                 break 'got_mem got;
             }
 
@@ -184,8 +204,7 @@ impl BtreeTrans<'_> {
             if unlikely(fs.system_memory_usage_high()) {
                 bc.nr_self_reclaim.fetch_add(1, Relaxed);
                 let live = pcpu_read_locks as usize;
-                if let Some(got) = fs.btree_node_grab(|l| &mut l.live[live].clean, pcpu_read_locks,
-                                                      ReclaimFlags::empty()) {
+                if let Some(got) = fs.btree_node_grab(|l| &mut l.live[live].clean, pcpu_read_locks) {
                     break 'got_mem got;
                 }
             }
@@ -201,7 +220,7 @@ impl BtreeTrans<'_> {
                 }
 
                 let freed = fs.btree_node_grab(|l| if pcpu_read_locks { &mut l.freed_pcpu } else { &mut l.freed_nonpcpu },
-                                               pcpu_read_locks, ReclaimFlags::empty());
+                                               pcpu_read_locks);
                 let (b, held) = match freed {
                     Some(got) => got,
                     None => {
