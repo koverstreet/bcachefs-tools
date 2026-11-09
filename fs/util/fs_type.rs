@@ -89,8 +89,8 @@ unsafe impl<T: FsType> Sync for FsTypeTable<T> {}
 
 impl<T: FsType> FsTypeTable<T> {
     pub const fn new() -> Self {
-        // SAFETY: zeroed is a type with no ops, no flags and no supers yet
-        let mut t: c::file_system_type = unsafe { core::mem::zeroed() };
+        // zeroed is a type with no ops, no flags and no supers yet
+        let mut t: c::file_system_type = ::pin_init::zeroed();
 
         t.name = T::NAME.as_ptr().cast();
         t.fs_flags = T::FLAGS;
@@ -124,8 +124,8 @@ impl<T: FsType> Ops<T> {
         parse_param: Some(parse_param::<T>),
         get_tree:    Some(get_tree::<T>),
         reconfigure: Some(reconfigure::<T>),
-        // SAFETY: zero is NULL, an op not implemented
-        ..unsafe { core::mem::zeroed() }
+        // zero is NULL, an op not implemented
+        ..::pin_init::zeroed()
     };
 }
 

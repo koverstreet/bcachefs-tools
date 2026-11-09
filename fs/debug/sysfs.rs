@@ -263,8 +263,7 @@ unsafe extern "C" fn trans_stats_json_write(_file: *mut c::file, kobj: *mut c::k
 }
 
 static TRANS_STATS_JSON: BinFile = BinFile({
-    // SAFETY: the rest of a bin_attribute is NULL or zero
-    let mut a: c::bin_attribute = unsafe { core::mem::zeroed() };
+    let mut a: c::bin_attribute = ::pin_init::zeroed();
     a.attr.name = c"btree_trans_stats_json".as_ptr().cast();
     a.attr.mode = 0o644;
     a.read = Some(trans_stats_json_read);

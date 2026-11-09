@@ -190,9 +190,9 @@ fn total_nodes(fs: &Fs, leaf_mask: u64, inner_mask: u64) -> u64 {
 
 impl Default for c::progress_indicator {
     fn default() -> Self {
-        // SAFETY: zeroed, an indicator is valid, and nothing in it - a SeqLock
+        // zeroed, an indicator is valid, and nothing in it - a SeqLock
         // of plain data - cares where it lives
-        unsafe { core::mem::zeroed() }
+        ::pin_init::zeroed()
     }
 }
 

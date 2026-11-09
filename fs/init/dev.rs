@@ -1771,7 +1771,7 @@ pub fn bch2_dev_bdev(ca: &Dev) -> *mut c::block_device {
 pub(crate) static HOLDER_OPS: c::blk_holder_ops = c::blk_holder_ops {
     mark_dead: Some(bdev_mark_dead),
     sync: Some(bdev_sync),
-    ..unsafe { core::mem::zeroed() }
+    ..::pin_init::zeroed()
 };
 
 /// # Safety

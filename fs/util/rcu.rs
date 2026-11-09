@@ -382,7 +382,7 @@ macro_rules! heads {
 
         impl Default for $h {
             fn default() -> Self {
-                unsafe { core::mem::zeroed() }
+                ::pin_init::zeroed()
             }
         }
 
@@ -736,7 +736,7 @@ pub struct RcuArrayHead<H = ()> {
 impl<H> RcuArrayHead<H> {
     fn new(nr: usize, h: H) -> Self {
         // an rcu_head is two pointers, and kvfree_rcu() fills it in
-        Self { rcu: unsafe { core::mem::zeroed() }, nr, h }
+        Self { rcu: ::pin_init::zeroed(), nr, h }
     }
 }
 

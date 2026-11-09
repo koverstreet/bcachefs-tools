@@ -72,8 +72,7 @@ pub fn prefetch<T>(p: *const T) {
 /// # Safety
 /// @shrink is a live shrinker.
 pub unsafe fn shrinker_scan(shrink: *mut c::shrinker, nr: core::ffi::c_ulong) {
-    // SAFETY: integers and a pointer, each valid as zero
-    let mut sc: c::shrink_control = unsafe { core::mem::zeroed() };
+    let mut sc: c::shrink_control = ::pin_init::zeroed();
     sc.gfp_mask = c::GFP_KERNEL;
     sc.nr_to_scan = nr as _;
 

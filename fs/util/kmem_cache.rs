@@ -31,8 +31,8 @@ impl<T> KmemCache<T> {
     /// with @flags - SLAB_*.
     #[cfg(kernel)]
     pub fn create(&self, name: &'static CStr, flags: c::slab_flags_t) -> Result<(), AllocError> {
-        // SAFETY: plain data, all zeroes the defaults
-        let mut args: c::kmem_cache_args = unsafe { core::mem::zeroed() };
+        // plain data, all zeroes the defaults
+        let mut args: c::kmem_cache_args = ::pin_init::zeroed();
         args.align = align_of::<T>() as _;
         let p = unsafe { c::__kmem_cache_create_args(name.as_ptr().cast(), size_of::<T>() as _, &mut args, flags) };
         if p.is_null() {

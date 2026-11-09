@@ -105,7 +105,7 @@ struct DirtyWork(UnsafeCell<c::work_struct>);
 
 unsafe impl Sync for DirtyWork {}
 
-static DIRTY_WORK: DirtyWork = DirtyWork(UnsafeCell::new(unsafe { core::mem::zeroed() }));
+static DIRTY_WORK: DirtyWork = DirtyWork(UnsafeCell::new(::pin_init::zeroed()));
 
 unsafe extern "C" fn dirty_fn(_: *mut c::work_struct) {
     let mut next = DIRTY.swap(null_mut(), Acquire);

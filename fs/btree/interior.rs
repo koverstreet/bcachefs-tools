@@ -689,7 +689,7 @@ impl<'t> InteriorUpdate<'t> {
             node,
             new_key_u64s,
             pending:      AtomicU32::new(1),
-            journal:      unsafe { core::mem::zeroed() },
+            journal:      ::pin_init::zeroed(),
             disk_res:     DiskReservation::new(fs_ref),
             owned <- RefCell::init(init!(Owned {
                 reserve      <- init_zeroed(),

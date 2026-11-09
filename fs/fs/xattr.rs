@@ -752,8 +752,8 @@ mod vfs {
             list,
             get:    Some(bch2_xattr_get_handler),
             set:    Some(bch2_xattr_set_handler),
-            // SAFETY: a C struct, all pointers and integers; name unused
-            ..unsafe { core::mem::zeroed() }
+            // name unused
+            ..::pin_init::zeroed()
         }
     }
 

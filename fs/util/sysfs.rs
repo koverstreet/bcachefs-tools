@@ -45,9 +45,9 @@ pub struct Attr<T: 'static> {
 
 impl<T> Attr<T> {
     const fn new(name: &'static CStr, mode: u16, show: Option<Show<T>>, store: Option<Store<T>>) -> Self {
-        // SAFETY: the rest of a struct attribute is lockdep's, zeroed for a
+        // the rest of a struct attribute is lockdep's, zeroed for a
         // static one
-        let mut attr: c::attribute = unsafe { core::mem::zeroed() };
+        let mut attr: c::attribute = ::pin_init::zeroed();
         attr.name = name.as_ptr().cast();
         attr.mode = mode;
         Attr { attr, show, store }
@@ -106,8 +106,8 @@ impl<const N: usize> ListAttrs<N> {
 
     /// Each entry's file, with a mode of its own.
     pub const fn with_modes(names: &[&'static CStr; N], modes: &[u16; N]) -> Self {
-        // SAFETY: as Attr::new()'s
-        let mut attrs: [c::attribute; N] = unsafe { core::mem::zeroed() };
+        // as Attr::new()'s
+        let mut attrs: [c::attribute; N] = ::pin_init::zeroed();
         let mut i = 0;
         while i < N {
             attrs[i].name = names[i].as_ptr().cast();

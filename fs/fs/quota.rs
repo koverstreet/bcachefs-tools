@@ -817,8 +817,7 @@ mod vfs {
         let state = unsafe { &mut *state };
         let qtypes = enabled_qtypes(fs);
 
-        // SAFETY: a C struct, integers
-        *state = unsafe { core::mem::zeroed() };
+        *state = ::pin_init::zeroed();
 
         for (i, s) in state.s_state.iter_mut().enumerate() {
             s.flags |= c::QCI_SYSFILE;
@@ -912,8 +911,7 @@ mod vfs {
             d_ino_softlimit: ino.softlimit,
             d_ino_timer:     ino.timer,
             d_ino_warns:     ino.warns,
-            // SAFETY: a C struct, integers
-            ..unsafe { core::mem::zeroed() }
+            ..::pin_init::zeroed()
         }
     }
 
@@ -927,8 +925,7 @@ mod vfs {
         let qid = kqid_from(kqid);
 
         let l = Locked::new(fs, kqid.type_ as usize);
-        // SAFETY: a C struct, integers
-        *qdq = l.get(qid as usize).map_or_else(|| unsafe { core::mem::zeroed() }, dqblk);
+        *qdq = l.get(qid as usize).map_or_else(|| ::pin_init::zeroed(), dqblk);
         0
     }
 
@@ -1014,7 +1011,6 @@ mod vfs {
         get_dqblk:     Some(get_quota),
         get_nextdqblk: Some(get_next_quota),
         set_dqblk:     Some(set_dqblk),
-        // SAFETY: a C struct of fn pointers; the rest None
-        ..unsafe { core::mem::zeroed() }
+        ..::pin_init::zeroed()
     };
 }

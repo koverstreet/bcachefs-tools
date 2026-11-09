@@ -41,7 +41,7 @@ crate::module_param! {
 #[repr(transparent)]
 pub(crate) struct Root(pub(crate) Kobject);
 
-pub(crate) static BCACHEFS_KOBJ: Root = Root(unsafe { core::mem::zeroed() });
+pub(crate) static BCACHEFS_KOBJ: Root = Root(::pin_init::zeroed());
 
 static NO_GROUPS: Groups<1> = Groups::new([]);
 

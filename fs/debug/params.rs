@@ -20,7 +20,7 @@ unsafe impl Sync for Key {}
 impl Key {
     /// DEFINE_STATIC_KEY_FALSE()'s.
     const fn new() -> Self {
-        Self { key: UnsafeCell::new(unsafe { core::mem::zeroed() }) }
+        Self { key: UnsafeCell::new(::pin_init::zeroed()) }
     }
 }
 

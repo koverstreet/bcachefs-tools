@@ -66,7 +66,7 @@ impl Group {
 
     const fn make(name: Option<&'static CStr>, attrs: *mut *mut c::attribute,
                   bin_attrs: *const *const c::bin_attribute) -> Self {
-        let mut g: c::attribute_group = unsafe { core::mem::zeroed() };
+        let mut g: c::attribute_group = ::pin_init::zeroed();
         if let Some(name) = name {
             g.name = name.as_ptr().cast();
         }
@@ -171,7 +171,7 @@ impl<T: KobjOwner> Ktype<T> {
     const OPS: c::sysfs_ops = sysfs::ops::<T::Dir>();
 
     const KTYPE: c::kobj_type = {
-        let mut k: c::kobj_type = unsafe { core::mem::zeroed() };
+        let mut k: c::kobj_type = ::pin_init::zeroed();
         k.release = Some(Self::release);
         k.sysfs_ops = &Self::OPS;
         k.default_groups = T::GROUPS.0.cast_mut();

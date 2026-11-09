@@ -272,7 +272,7 @@ struct FolioBatch(c::folio_batch);
 
 impl FolioBatch {
     fn new() -> Self {
-        let mut b = FolioBatch(unsafe { core::mem::zeroed() });
+        let mut b = FolioBatch(::pin_init::zeroed());
         unsafe { c::folio_batch_init(&mut b.0) };
         b
     }

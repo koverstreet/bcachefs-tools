@@ -406,8 +406,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
 
             /// Each option's default, all defined.
             pub const DEFAULTS: Self = {
-                // SAFETY: integers, and the defined bits'
-                let mut opts: Self = unsafe { core::mem::zeroed() };
+                let mut opts: Self = ::pin_init::zeroed();
                 #(#defaults)*
                 let mut i = 0;
                 while i < #nr {
