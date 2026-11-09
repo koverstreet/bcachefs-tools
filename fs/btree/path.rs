@@ -1156,6 +1156,14 @@ impl BtreePath {
         Some(unsafe { &*ck.as_ptr().cast::<c::bkey_cached>() })
     }
 
+    /// key_cached(), for a path holding its entry write locked: to write it.
+    pub(crate) fn key_cached_mut(&mut self) -> Option<&mut c::bkey_cached> {
+        ebug_assert!(self.cached());
+        assert!(self.write_locked(0), "a cached path's entry written without its write lock");
+        let ck = self.l[0].b.get().ok().flatten()?;
+        Some(unsafe { &mut *ck.as_ptr().cast::<c::bkey_cached>() })
+    }
+
     pub(crate) fn peek_slot(&self, u: &mut c::bkey) -> Option<KeyVal> {
         let level = self.level() as usize;
 
@@ -1723,13 +1731,9 @@ impl<T: PathNode> BtreePath<T> {
     /// The level's hold, through @f - which has what the level holds after:
     /// None, unlocked, its node and lock_seq kept for a relock.
     fn change_level(&mut self, level: usize, f: impl FnOnce(SixHold<'_>) -> Option<SixHold<'_>>) {
-        let locked = self.locked_type(level);
-        if locked == BTREE_NODE_UNLOCKED {
-            return;
-        }
+        let Some(hold) = self.take_level(level) else { return };
 
-        let locked = f(unsafe { SixHold::from_raw(self.held_lock(level), locked.six()) })
-            .map_or(BTREE_NODE_UNLOCKED, |hold| btree_node_locked_type::from_six(hold.into_raw()));
+        let locked = f(hold).map_or(BTREE_NODE_UNLOCKED, |hold| btree_node_locked_type::from_six(hold.into_raw()));
         self.mark_locked_noreset(level, locked);
     }
 
@@ -1753,6 +1757,18 @@ impl<T: PathNode> BtreePath<T> {
         }
         #[cfg(not(CONFIG_BCACHEFS_LOCK_TIME_STATS))]
         let _ = level;
+    }
+
+    /// The level's hold, the path's no more: its node and lock_seq kept for a
+    /// relock.
+    pub fn take_level(&mut self, level: usize) -> Option<SixHold<'_>> {
+        let locked = self.locked_type(level);
+        if locked == BTREE_NODE_UNLOCKED {
+            return None;
+        }
+
+        self.mark_locked_noreset(level, BTREE_NODE_UNLOCKED);
+        Some(unsafe { SixHold::from_raw(self.held_lock(level), locked.six()) })
     }
 
     /// Whether there was a lock to drop.
