@@ -306,7 +306,7 @@ impl<'f> BtreeTrans<'f> {
 
 // ── The filesystem's transactions: c->btree.trans.list ──────────────────────
 
-type TransList = crate::list!(BtreeTrans<'static>, list);
+pub(crate) type TransList = crate::list!(BtreeTrans<'static>, list);
 
 /// Another thread's transaction's flags: its own thread changes them -
 /// READ_ONCE().
@@ -344,7 +344,7 @@ impl ToText for ListedTrans {
 }
 
 impl Fs {
-    fn with_trans_list<R>(&self, f: impl FnOnce(&mut TransList) -> R) -> R {
+    pub(crate) fn with_trans_list<R>(&self, f: impl FnOnce(&mut TransList) -> R) -> R {
         let _guard = Locked::from_c(&self.btree.trans.lock).lock();
         f(unsafe { TransList::from_c((&raw const self.btree.trans.list).cast_mut()) })
     }

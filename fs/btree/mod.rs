@@ -36,6 +36,7 @@ pub mod check_allocations;
 pub mod compat;
 pub mod cow_key;
 pub mod for_each;
+pub mod init;
 pub mod interior;
 pub mod iter;
 pub mod journal_overlay;

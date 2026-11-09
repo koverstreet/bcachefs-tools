@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-2.0
-#include "bcachefs.h"
 
 /* DOC_LATEX(btrees)
  * bcachefs is, at its core, a transactional key-value store built on b+trees.
@@ -271,118 +270,145 @@
  * The \textbf{write buffer}: \bchdoc{btree-write-buffer}
  */
 
-#include "btree/cache.h"
-#include "btree/init.h"
-#include "btree/interior.h"
-#include "btree/node_scan_gen.h"
-#include "btree/read.h"
-#include "btree/node/sort_gen.h"
-#include "btree/write.h"
+use crate::btree::cache::{bch2_fs_btree_evicted_size_exit, bch2_fs_btree_evicted_size_init};
+use crate::btree::trans::TransList;
+use crate::btree::write_buffer::{bch2_fs_btree_write_buffer_exit, bch2_fs_btree_write_buffer_init};
+use crate::c;
+use crate::errcode::{ret_to_result_void, BchError};
+use crate::fs::Fs;
+use crate::locking::RawLockBase;
+use crate::new_lock;
+use crate::util::log::bch2_ratelimit_state_init;
+use crate::util::percpu::PerCpu;
+use crate::util::rcu::Flavor;
+use crate::util::Printbuf;
+use core::ffi::c_int;
+use core::ptr::{self, NonNull};
 
-static void bch2_fs_btree_iter_exit(struct bch_fs *c)
-{
-	struct btree_transaction_stats *s;
-	struct btree_trans *trans;
-	int cpu;
-
-	if (c->btree.trans.bufs)
-		for_each_possible_cpu(cpu) {
-			struct btree_trans *trans =
-				per_cpu_ptr(c->btree.trans.bufs, cpu)->trans;
-
-			if (trans) {
-				seqmutex_lock(&c->btree.trans.lock);
-				list_del(&trans->list);
-				seqmutex_unlock(&c->btree.trans.lock);
-			}
-			kfree(trans);
-		}
-	free_percpu(c->btree.trans.bufs);
-
-	trans = list_first_entry_or_null(&c->btree.trans.list, struct btree_trans, list);
-	if (trans)
-		panic("%s leaked btree_trans\n", trans->fn);
-
-	for (s = c->btree.trans.stats;
-	     s < c->btree.trans.stats + ARRAY_SIZE(c->btree.trans.stats);
-	     s++) {
-#ifdef CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE
-		darray_exit(&s->trans_kmalloc_trace);
-#endif
-		kfree(s->max_paths_text);
-	}
-
-	printbuf_exit(&c->btree.trans.stats_json_buf);
-
-	/* Drain pending trans_rcu_free callbacks before the pool is gone. */
-	rcu_barrier();
+#[cfg(all(kernel, CONFIG_LOCKDEP))]
+unsafe extern "C" {
+    fn fs_reclaim_acquire(gfp_mask: c::gfp_t);
+    fn fs_reclaim_release(gfp_mask: c::gfp_t);
 }
 
-static void bch2_fs_btree_iter_init_early(struct bch_fs *c)
-{
-	INIT_LIST_HEAD(&c->btree.trans.list);
-	seqmutex_init(&c->btree.trans.lock);
-	mutex_init(&c->btree.trans.stats_json_lock);
-	c->btree.trans.stats_json_buf = PRINTBUF;
+/// # Safety
+/// Nothing uses @c's transactions after.
+unsafe fn btree_iter_exit(c: *mut Fs) {
+    let fs = unsafe { &*c };
+    let t = &fs.btree.trans;
+
+    if t.bufs.allocated() {
+        for buf in t.bufs.get().cpus() {
+            let trans = buf.get().trans;
+
+            if let Some(trans) = NonNull::new(trans) {
+                fs.with_trans_list(|list| unsafe { list.remove(trans.as_ref()) });
+                unsafe { t.pool.free_raw(trans.cast()) };
+            }
+        }
+    }
+    unsafe { (*c).btree.trans.bufs.free() };
+
+    fs.with_trans_list(|list| {
+        if let Some(trans) = list.first() {
+            panic!("{} leaked btree_trans", trans.fn_name());
+        }
+    });
+
+    for s in &t.stats {
+        let mut s = s.lock.lock();
+        unsafe { c::rust_kfree(s.max_paths_text.cast()) };
+        s.max_paths_text = ptr::null_mut();
+    }
+
+    /* Drain pending trans_rcu_free callbacks before the pool is gone. */
+    Flavor::RCU.barrier();
 }
 
-static int bch2_fs_btree_iter_init(struct bch_fs *c)
-{
-	c->btree.trans.bufs = alloc_percpu(struct btree_trans_buf);
-	if (!c->btree.trans.bufs)
-		return -ENOMEM;
+/// # Safety
+/// Nothing else has @c yet.
+unsafe fn btree_iter_init_early(c: *mut Fs) {
+    unsafe {
+        let t = &raw mut (*c).btree.trans;
 
-	/*
-	 * static annotation (hackily done) for lock ordering of reclaim vs.
-	 * btree node locks:
-	 */
-#ifdef CONFIG_LOCKDEP
-	fs_reclaim_acquire(GFP_KERNEL);
-	struct btree_trans *trans = bch2_trans_get(c);
-	bch2_trans_set_locked(trans, false);
-	bch2_trans_put(trans);
-	fs_reclaim_release(GFP_KERNEL);
-#endif
-
-	return 0;
-
+        TransList::from_c(&raw mut (*t).list).init();
+        let Ok(()) = c::seqmutex::init(&raw mut (*t).lock, c"&c->btree.trans.lock", new_lock!(@key));
+        let Ok(()) = c::mutex::init(&raw mut (*t).stats_json_lock, c"&c->btree.trans.stats_json_lock",
+                                    new_lock!(@key));
+        (&raw mut (*t).stats_json_buf).write(Printbuf::new());
+    }
 }
 
-void bch2_fs_btree_exit(struct bch_fs *c)
-{
-	bch2_fs_btree_write_buffer_exit(c);
-	bch2_fs_btree_key_cache_exit(&c->btree.key_cache);
-	bch2_fs_btree_iter_exit(c);
-	bch2_fs_btree_evicted_size_exit(c);
-	bch2_fs_btree_cache_exit(c);
+/// # Safety
+/// Nothing else has @c yet.
+unsafe fn btree_iter_init(c: *mut Fs) -> Result<(), BchError> {
+    match PerCpu::alloc() {
+        Ok(p)  => unsafe { (*c).btree.trans.bufs = p },
+        Err(_) => return Err(BchError::from_raw(-(c::ENOMEM as c_int))),
+    }
 
-	if (c->btree.read_complete_wq)
-		drain_workqueue(c->btree.read_complete_wq);
+    /*
+     * static annotation (hackily done) for lock ordering of reclaim vs.
+     * btree node locks:
+     */
+    #[cfg(all(kernel, CONFIG_LOCKDEP))]
+    {
+        unsafe { fs_reclaim_acquire(c::GFP_KERNEL) };
+        let trans = crate::btree_trans!(unsafe { &*c });
+        trans.mark_locked(false);
+        drop(trans);
+        unsafe { fs_reclaim_release(c::GFP_KERNEL) };
+    }
+
+    Ok(())
 }
 
-void bch2_fs_btree_init_early(struct bch_fs *c)
-{
-	bch2_fs_btree_iter_init_early(c);
+/// # Safety
+/// Nothing uses @c's btrees after.
+pub(crate) unsafe fn btree_exit(c: *mut Fs) {
+    let fs = unsafe { &*c };
+
+    bch2_fs_btree_write_buffer_exit(fs);
+    fs.btree.key_cache.exit();
+    unsafe {
+        btree_iter_exit(c);
+        bch2_fs_btree_evicted_size_exit(c);
+        fs.btree_cache_exit();
+    }
+
+    if fs.btree.read_complete_wq.is_some() {
+        unsafe { c::drain_workqueue(fs.btree.read_complete_wq.as_ptr()) };
+    }
 }
 
-int bch2_fs_btree_init(struct bch_fs *c)
-{
-	c->btree.foreground_merge_threshold = BTREE_FOREGROUND_MERGE_THRESHOLD(c);
-
-	try(bch2_fs_btree_cache_init(c));
-	try(bch2_fs_btree_iter_init(c));
-	try(bch2_fs_btree_key_cache_init(&c->btree.key_cache));
-
-	ratelimit_default_init(&c->btree.read_errors_soft);
-	ratelimit_default_init(&c->btree.read_errors_hard);
-
-	return 0;
+/// # Safety
+/// Nothing else has @c yet.
+pub(crate) unsafe fn btree_init_early(c: *mut Fs) {
+    unsafe { btree_iter_init_early(c) }
 }
 
-int bch2_fs_btree_init_rw(struct bch_fs *c)
-{
-	try(bch2_fs_btree_write_buffer_init(c));
-	try(bch2_fs_btree_evicted_size_init(c));
+/// # Safety
+/// Nothing else has @c yet.
+pub(crate) unsafe fn btree_init(c: *mut Fs) -> Result<(), BchError> {
+    let fs = unsafe { &*c };
 
-	return 0;
+    unsafe { (*c).btree.foreground_merge_threshold = (fs.btree_max_u64s() / 3) as u16 };
+
+    fs.btree_cache_init()?;
+    unsafe { btree_iter_init(c) }?;
+    fs.btree.key_cache.setup()?;
+
+    unsafe {
+        bch2_ratelimit_state_init(&raw mut (*c).btree.read_errors_soft);
+        bch2_ratelimit_state_init(&raw mut (*c).btree.read_errors_hard);
+    }
+
+    Ok(())
+}
+
+/// # Safety
+/// Nothing else uses what it makes yet.
+pub(crate) unsafe fn btree_init_rw(c: *mut Fs) -> Result<(), BchError> {
+    ret_to_result_void(bch2_fs_btree_write_buffer_init(unsafe { &*c }))?;
+    ret_to_result_void(unsafe { bch2_fs_btree_evicted_size_init(c) })
 }

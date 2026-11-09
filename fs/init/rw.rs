@@ -20,13 +20,13 @@ use core::sync::atomic::Ordering::Relaxed;
 use crate::init::passes::RecoveryPass;
 use crate::accounting::verify_accounting_clean;
 use crate::alloc::capacity::recalc_capacity;
-use crate::btree::cache::bch2_fs_btree_init_rw;
+use crate::btree::init::btree_init_rw;
 use crate::c;
 use crate::c::bch_fs_flags as Flag;
 use crate::c::journal_flags as Journal;
 use crate::c::JournalGuard;
 use crate::data::ec::head::stripe_heads_stop;
-use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::{MemberState, SbFeature};
 use crate::fs::{Fs, StateLockWrite};
 use crate::sb::members::{BtreeBitmapGcSchedule, SbMembersMut};
@@ -246,7 +246,7 @@ impl StateLockWrite<'_> {
 
         fs.init_late(self).map_err(|e| fs.err(e))?;
         unsafe {
-            ret_to_result(bch2_fs_btree_init_rw(p))?;
+            btree_init_rw(p)?;
             (*p).journal.init_rw()?;
             (*p).journal.reclaim_start()?;
         }

@@ -21,7 +21,7 @@ use crate::btree::trans::BtreeTrans;
 use crate::c;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::data_structures::cuckoo::{Cuckoo, Entry};
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::locking::six::{six_lock_exit, SixHold};
@@ -37,12 +37,13 @@ use crate::util::shrinker::{Shrink, Shrinker};
 use crate::util::time_stats::TimeStats;
 use crate::util::{Printbuf, ToText};
 use c::six_lock_type::{SIX_LOCK_intent, SIX_LOCK_write};
-use core::ffi::{c_int, c_ulong};
+#[cfg(kernel)]
+use core::ffi::c_int;
+use core::ffi::c_ulong;
 use core::mem::{offset_of, ManuallyDrop};
 use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-use cstruct_macros::c_export;
 
 pub(crate) type KeyTable = Cuckoo<Entry<c::bkey_cached>, GoldenRatio>;
 
@@ -484,7 +485,7 @@ impl c::bch_fs_btree_key_cache {
         let _ = self.scan(nr as usize);
     }
 
-    fn exit(&self) {
+    pub(crate) fn exit(&self) {
         let fs = self.fs();
 
         unsafe { self.shrinker.placed_drop() };
@@ -531,7 +532,7 @@ impl c::bch_fs_btree_key_cache {
         }
     }
 
-    fn setup(&self) -> Result<(), BchError> {
+    pub(crate) fn setup(&self) -> Result<(), BchError> {
         let fs = self.fs();
 
         let srcu = unsafe { &*ptr::from_ref(&fs.btree.trans.barrier) }.flavor();
@@ -567,16 +568,6 @@ impl ToText for c::bch_fs_btree_key_cache {
         out.newline();
         prt!(out, "pending:\t{}\r\n",            self.pending.iter().map(|p| p.nr_pending()).sum::<usize>());
     }
-}
-
-#[c_export]
-pub fn bch2_fs_btree_key_cache_exit(bc: &c::bch_fs_btree_key_cache) {
-    bc.exit()
-}
-
-#[c_export]
-pub fn bch2_fs_btree_key_cache_init(bc: &c::bch_fs_btree_key_cache) -> c_int {
-    ret_to_c(bc.setup())
 }
 
 pub fn btree_key_cache_module_exit() {

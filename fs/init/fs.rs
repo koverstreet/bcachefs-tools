@@ -8,11 +8,11 @@
 use crate::init::passes::RecoveryPass;
 use crate::btree::node::BtreeNode;
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::alloc::accounting_mem::accounting_exit;
 use crate::alloc::foreground::allocator_foreground_init;
 use crate::alloc::replicas::can_write_with_devs;
-use crate::btree::cache::{bch2_fs_btree_exit, bch2_fs_btree_init, bch2_fs_btree_init_early};
+use crate::btree::init::{btree_exit, btree_init, btree_init_early};
 use crate::btree::journal_overlay::journal_keys_put_initial;
 use crate::data::checksum::encryption_init;
 use crate::data::compress::compress_init;
@@ -467,7 +467,7 @@ impl Fs {
 
         allocator_foreground_init(self);
         unsafe {
-            bch2_fs_btree_init_early(p);
+            btree_init_early(p);
 
             let Ok(()) = c::spinlock_t::init(&raw mut (*p).write_error_lock, c"&c->write_error_lock",
                                              new_lock!(@key));
@@ -511,7 +511,7 @@ impl Fs {
         crate::debug::async_objs::lists::async_obj_init(self)?;
         unsafe { self.btree.cache.nodes.init() }?;
         unsafe { self.btree.key_cache.keys.init() }?;
-        ret_to_result(unsafe { bch2_fs_btree_init(p) })?;
+        unsafe { btree_init(p) }?;
         compress_init(self)?;
         counters_init(self);
         encryption_init(self, user_key)?;
@@ -956,7 +956,7 @@ unsafe fn release(p: *mut Fs) {
     fs.counters_recent.cancel_sync();
     unsafe {
         (*p).counters.now.free();
-        bch2_fs_btree_exit(p);
+        btree_exit(p);
         fs.btree.cache.nodes.exit();
         fs.btree.key_cache.keys.exit();
         accounting_exit(fs);

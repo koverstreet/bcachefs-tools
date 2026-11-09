@@ -23,7 +23,6 @@
 
 #include "btree/check.h"
 #include "btree/journal_overlay.h"
-#include "btree/init.h"
 #include "btree/interior.h"
 #include "btree/locking.h"
 #include "btree/read.h"

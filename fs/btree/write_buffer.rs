@@ -45,7 +45,7 @@ use core::marker::PhantomData;
 use core::mem::{offset_of, size_of};
 use core::ptr::NonNull;
 use core::sync::atomic::fence;
-use cstruct_macros::{placed, CStruct, Init, TypeInfo, c_const, c_enum, c_export};
+use cstruct_macros::{placed, CStruct, Init, TypeInfo, c_const, c_enum};
 use nestify::nest;
 use pin_init::pin_data;
 
@@ -791,7 +791,6 @@ impl Fs {
     }
 }
 
-#[c_export]
 pub fn bch2_fs_btree_write_buffer_exit(c: &Fs) {
     for wb in &c.btree.write_buffer {
         assert!(wb.is_empty() || c.journal.error().is_err());
@@ -805,7 +804,6 @@ unsafe extern "C" fn wb_keys_lock_cmp_fn(a: *const kernel::bindings::lockdep_map
     (a as usize).cmp(&(b as usize)) as c_int
 }
 
-#[c_export]
 pub fn bch2_fs_btree_write_buffer_init(c: &Fs) -> c_int {
     /*
      * Matches the journal's default buf size (JOURNAL_ENTRY_SIZE_MIN /

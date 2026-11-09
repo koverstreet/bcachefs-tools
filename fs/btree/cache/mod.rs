@@ -124,15 +124,8 @@ use crate::util::{HumanReadable, Printbuf, ToText};
 use core::ffi::{c_int, c_uint};
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::{Relaxed, Release, SeqCst};
-use cstruct_macros::{c_const, c_export, c_extern};
+use cstruct_macros::{c_const, c_export};
 use crate::format::{Btree, BkeyType};
-
-c_extern! {
-    pub fn bch2_fs_btree_init_rw(c: *mut Fs) -> c_int;
-    pub fn bch2_fs_btree_exit(c: *mut Fs);
-    pub fn bch2_fs_btree_init_early(c: *mut Fs);
-    pub fn bch2_fs_btree_init(c: *mut Fs) -> c_int;
-}
 
 impl c::btree_evicted_size {
     fn pack(hash: u64, live_u64s: u16) -> u64 {
@@ -158,8 +151,7 @@ impl c::btree_evicted_size {
 }
 
 /// # Safety
-/// Nothing else has @c yet: bch2_fs_btree_init() is making it.
-#[c_export]
+/// Nothing else has @c yet: btree_init_rw() is making it.
 pub unsafe fn bch2_fs_btree_evicted_size_init(c: *mut Fs) -> c_int {
     let fs = unsafe { &*c };
 
@@ -189,7 +181,6 @@ pub unsafe fn bch2_fs_btree_evicted_size_init(c: *mut Fs) -> c_int {
 
 /// # Safety
 /// Nothing uses @c's evicted sizes after.
-#[c_export]
 pub unsafe fn bch2_fs_btree_evicted_size_exit(c: *mut Fs) {
     unsafe {
         let e = &raw mut (*c).btree.evicted_size;
@@ -567,14 +558,3 @@ pub unsafe fn bch2_btree_node_evict(trans: &BtreeTrans<'_>, #[lent(trans)] paths
     trans.btree_node_evict(paths, unsafe { &*BkeyI::from_raw(k) })
 }
 
-#[c_export]
-pub fn bch2_fs_btree_cache_init(c: &Fs) -> c_int {
-    ret_to_c(c.btree_cache_init())
-}
-
-/// # Safety
-/// Nothing uses the cache after.
-#[c_export]
-pub unsafe fn bch2_fs_btree_cache_exit(c: &Fs) {
-    unsafe { c.btree_cache_exit() }
-}

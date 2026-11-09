@@ -1456,11 +1456,6 @@ pub fn __bch2_trans_verify_locks(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &
     trans.check_locks(paths)
 }
 
-#[c_export]
-pub fn bch2_trans_set_locked(trans: &BtreeTrans<'_>, trylock: bool) {
-    trans.mark_locked(trylock)
-}
-
 impl<R: RawTimedLock, G, P> Locked<R, G, P> {
     /// lock(), in attempt @t: if it isn't free, the btree locks are dropped
     /// to wait for it - bch2_trans_mutex_lock() - and past a short wait, the
