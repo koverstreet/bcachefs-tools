@@ -1531,7 +1531,7 @@ impl Fs {
     }
 
     pub fn dev_resize(&self, ca: &Dev, nbuckets: u64, err: &mut Printbuf) -> Result<(), BchError> {
-        let _state = self.state_lock_write();
+        let state = self.state_lock_write();
 
         if ca.removing() {
             return self.throw(bch_errcode::BCH_ERR_device_has_been_removed);
@@ -1564,7 +1564,7 @@ impl Fs {
             }
         }
 
-        ca.buckets_resize(nbuckets)
+        ca.buckets_resize(&state, nbuckets)
             .inspect_err(|e| prt!(err, "bch2_dev_buckets_resize() error: {}\n", e.msg()))?;
 
         /*
@@ -1857,7 +1857,7 @@ impl Fs {
         self.online_members().any(|ca| ca.will_resize_on_mount())
     }
 
-    pub fn resize_on_mount(&self) -> Result<(), BchError> {
+    pub fn resize_on_mount(&self, state: &StateLockWrite<'_>) -> Result<(), BchError> {
         for ca in self.online_members() {
             if !ca.will_resize_on_mount() {
                 continue;
@@ -1868,7 +1868,7 @@ impl Fs {
             let new_nbuckets = ca.disk_sectors() / u64::from(mi.bucket_size);
 
             crate::bch_info_dev!(&ca, "resizing to size {}", new_nbuckets * u64::from(mi.bucket_size));
-            crate::bch_err_fn_dev!(&ca, ca.buckets_resize(new_nbuckets))?;
+            crate::bch_err_fn_dev!(&ca, ca.buckets_resize(state, new_nbuckets))?;
 
             {
                 let mut sb = self.sb_lock();

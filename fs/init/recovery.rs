@@ -734,8 +734,8 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     journal_replay_early(fs, clean.as_deref())?;
 
     {
-        let _state = fs.state_lock_write();
-        fs.resize_on_mount()?;
+        let state = fs.state_lock_write();
+        fs.resize_on_mount(&state)?;
     }
 
     if fs.feature(SbFeature::small_image) {

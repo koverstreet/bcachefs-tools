@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::init::passes::RecoveryPass;
-use crate::fs::Dev;
+use crate::fs::{Dev, StateLockWrite};
 use crate::accounting::{self, mod_dev_cached_sectors};
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
 use crate::alloc::replicas::{bkey_replicas_acct, entry_acct, replicas_acct};
@@ -1028,10 +1028,16 @@ impl Fs {
 impl Dev {
     /// Its buckets' generations at @nbuckets - as many of the old copied as
     /// both have - and its bucket bitmaps with them; nothing changed on
-    /// failure. A resize is under state_lock.
-    pub fn buckets_resize(&self, nbuckets: u64) -> Result<(), BchError> {
+    /// failure.
+    pub fn buckets_resize(&self, _state: &StateLockWrite<'_>, nbuckets: u64) -> Result<(), BchError> {
+        unsafe { self.buckets_resize_writer(nbuckets) }
+    }
+
+    /// # Safety
+    /// The caller is bucket_gens' only writer: under state_lock for write, or
+    /// with the only reference to the device.
+    unsafe fn buckets_resize_writer(&self, nbuckets: u64) -> Result<(), BchError> {
         let fs = self.fs();
-        // SAFETY: we're the writer - at init, or under state_lock
         let old = unsafe { self.bucket_gens.get_head_locked() }.map(|(_, gens)| gens);
 
         if old.is_some() {
@@ -1045,7 +1051,6 @@ impl Dev {
             first_bucket:         self.mi.get().first_bucket,
             nbuckets_minus_first: (nbuckets - u64::from(self.mi.get().first_bucket)) as usize,
         };
-        // SAFETY: as above
         unsafe {
             self.bucket_gens.rebuild_head(nbuckets as usize, head, |gens| {
                 for (new, old) in gens.iter_mut().zip(old.unwrap_or_default()) {
@@ -1064,7 +1069,7 @@ impl Dev {
             Ok(u)  => self.usage = u,
             Err(_) => return self.fs().throw(bch_errcode::BCH_ERR_ENOMEM_usage_init),
         }
-        self.buckets_resize(self.mi.get().nbuckets)
+        unsafe { self.buckets_resize_writer(self.mi.get().nbuckets) }
     }
 
     /// What buckets_alloc() and buckets_nouse_alloc() allocated, as it's
