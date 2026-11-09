@@ -67,7 +67,6 @@ bcachefs-y		:=			\
 	btree/commit.o				\
 	data/read.o				\
 	data_structures/darray.o		\
-	debug/debug.o				\
 	debug/trace.o				\
 	errcode.o				\
 	fs/dirent.o				\

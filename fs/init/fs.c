@@ -55,7 +55,6 @@
 #ifdef CONFIG_DEBUG_FS
 #include "debug/async_objs.h"
 #endif
-#include "debug/debug_gen.h"
 
 #include "fs/inode.h"
 #include "snapshots/types_gen.h"

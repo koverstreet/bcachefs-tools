@@ -6,7 +6,8 @@
 //! checked.
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{types_with, AllTypes, BkeyI, BkeySC, FamilyVal, ValidateFlags, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{bkey_val_to_text, types_with, AllTypes, BkeyI, BkeySC, FamilyVal, ValidateFlags, POS_MIN,
+                         SPOS_MAX};
 use crate::btree::async_ops::AsyncBtreeOp;
 use crate::btree::bkey_buf::BtreeKeyBuf;
 use crate::btree::cache::{bch2_btree_id_level_to_text, btree_pos_to_text, Bounce};
@@ -241,6 +242,94 @@ fn replica_bset<H: BsetHolder + ?Sized>(fs: &Fs, buf: &[u8], written: usize, end
             csum_err_msg(err, ty, stored, csum);
             return None;
         }
+    }
+
+    Some(sectors)
+}
+
+/// What's on disk of @b, read back from a replica: each bset, checked and
+/// decrypted, and its keys.
+#[cold]
+pub fn node_ondisk_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
+    let contents = unsafe { b.contents() };
+    let k = BkeySC::from(contents.key_i());
+
+    let dev = match k.pick_read_device(fs, None, 0, c::bch_read_flags::empty()) {
+        Ok(Some(pick)) => pick.ptr.dev().into(),
+        _ => {
+            prt!(out, "error getting device to read from: invalid device\n");
+            return;
+        }
+    };
+    let Ok(Some(mut r)) = ReplicaRead::new(fs, k, dev) else {
+        prt!(out, "error getting device to read from: not online\n");
+        return;
+    };
+
+    if let Err(e) = r.bio.submit_wait() {
+        prt!(out, "IO error reading btree node: {e}\n");
+        return;
+    }
+
+    let buf = r.bio.buf_mut();
+    let node_seq = node_header(buf).keys.seq;
+    let mut offset = 0;
+
+    while offset < fs.btree_sectors() as usize {
+        let bytes = &mut buf[offset << 9..];
+        let sectors = if offset == 0 {
+            bset_ondisk_to_text::<c::btree_node<Unvalidated>>(out, fs, contents, bytes, offset)
+        } else if c::btree_node_entry::<Unvalidated>::head(bytes).seq != node_seq {
+            break;
+        } else {
+            bset_ondisk_to_text::<c::btree_node_entry<Unvalidated>>(out, fs, contents, bytes, offset)
+        };
+        let Some(sectors) = sectors else { return };
+
+        offset += sectors;
+    }
+}
+
+/// The bset at the start of @bytes, sector @offset of its node, checked,
+/// decrypted and its keys printed: its sectors, or None if it's bad.
+fn bset_ondisk_to_text<H: BsetHolder + ?Sized>(out: &mut Printbuf, fs: &Fs, contents: &NodeContents,
+                                               bytes: &mut [u8], offset: usize) -> Option<usize> {
+    let ty = H::head(bytes).checksum_type();
+    if !ty.valid(fs) {
+        prt!(out, "unknown checksum type at offset {}: {}\n", offset, H::head(bytes).csum_type());
+        return None;
+    }
+
+    let sectors = H::sectors(bytes, fs.block_bits());
+    let Some(bytes) = bytes.get_mut(..sectors << 9) else {
+        prt!(out, "bset at offset {} past the end of the node\n", offset);
+        return None;
+    };
+    let n = H::of_mut(bytes);
+
+    if n.csum() != n.checksum(fs, (offset << 9) as u32) {
+        prt!(out, "invalid checksum\n");
+        return None;
+    }
+
+    let _ = n.encrypt(fs, (offset << 9) as u32);
+
+    let i = n.bset_mut();
+    prt!(out, "  offset {} version {}, journal seq {}\n", offset, i.version.get(), i.journal_seq.get());
+
+    let mut out = out.indent(2);
+    let mut at = 0;
+    while let Some(Ok(k)) = i.key_at(at) {
+        let k = k.key();
+        if k.u64s() == 0 {
+            prt!(out, "zero length key at byte {at}\n");
+            break;
+        }
+
+        let mut u = c::bkey::default();
+        bkey_val_to_text(&mut out, Some(fs), k.cast::<FamilyVal<AllTypes>>().disassemble(contents, &mut u));
+        out.newline();
+        at += k.u64s() * size_of::<u64>();
     }
 
     Some(sectors)

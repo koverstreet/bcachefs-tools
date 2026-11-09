@@ -226,7 +226,6 @@ c_enum! {
         btree_node_write,
         btree_node_scan,
         btree_verify_replicas,
-        btree_node_ondisk_to_text,
         io_read,
     }
 }

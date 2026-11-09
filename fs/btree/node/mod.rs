@@ -506,7 +506,7 @@ pub struct BtreeNodeOndiskToText<'b, 'f> {
 
 impl ToText for BtreeNodeOndiskToText<'_, '_> {
     fn to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_btree_node_ondisk_to_text(out.as_raw(), self.fs.as_ptr(), self.b) }
+        crate::btree::read::node_ondisk_to_text(out, self.fs, self.b)
     }
 }
 crate::display_via_to_text!(BtreeNodeOndiskToText<'_, '_>);
