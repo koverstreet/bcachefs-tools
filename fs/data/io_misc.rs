@@ -457,19 +457,17 @@ fn __resume_finsert(
         }
 
         loop {
-            let disk_res = DiskReservation::new(fs);
-            let t = trans.begin();
-
-            let ret = (|| -> Result<bool, BchError> {
-                let snapshot = subvolume::__get_snapshot(&t, inum.subvol as u32, warn_errors)?;
+            let done = lockrestart_do(trans, |t| -> Result<bool, BchError> {
+                let disk_res = DiskReservation::new(fs);
+                let snapshot = subvolume::__get_snapshot(t, inum.subvol as u32, warn_errors)?;
 
                 iter.set_snapshot(snapshot);
                 iter.set_pos(spos(inum.inum, shift_pos, snapshot));
 
                 let k = if insert {
-                    iter.peek_prev_min(&t, pos(inum.inum, 0))?
+                    iter.peek_prev_min(t, pos(inum.inum, 0))?
                 } else {
-                    iter.peek_max(&t, pos(inum.inum, u64::MAX))?
+                    iter.peek_max(t, pos(inum.inum, u64::MAX))?
                 };
 
                 let Some(k) = k.filter(|k| k.k.p.inode == inum.inum && bkey_lt(src_pos, k.k.p)) else {
@@ -483,9 +481,9 @@ fn __resume_finsert(
                 let k_snapshot = k.k.p.snapshot;
 
                 let mut copy = if shared_data {
-                    finsert_take_ancestor_extent(&t, k)?
+                    finsert_take_ancestor_extent(t, k)?
                 } else if ancestor_unwritten {
-                    finsert_ancestor_unwritten(&t, k)?
+                    finsert_ancestor_unwritten(t, k)?
                 } else {
                     t.bkey_make_mut_noupdate(k)?
                 };
@@ -525,17 +523,14 @@ fn __resume_finsert(
 
                 t.insert(Btree::extents, delete, UpdateTriggerFlags::empty())?;
                 t.insert(Btree::extents, copy, UpdateTriggerFlags::empty())?;
-                logged_ops::update(&t, op.as_ref())?;
+                logged_ops::update(t, op.as_ref())?;
                 t.commit(Some(&disk_res), CommitFlags::NO_ENOSPC)?;
                 Ok(false)
-            })();
-
-            match ret {
-                Ok(true)                 => break,
-                Ok(false)                => shift_pos = op.v.pos.get(),
-                Err(e) if is_restart(&e) => {}
-                Err(e)                   => return Err(e),
+            })?;
+            if done {
+                break;
             }
+            shift_pos = op.v.pos.get();
         }
 
         op.v.state = S::LOGGED_OP_FINSERT_finish.0 as u8;
