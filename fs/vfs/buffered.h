@@ -8,6 +8,7 @@
 
 #include "data/write_gen.h"
 #include "vfs/buffered_gen.h"
+#include "vfs/buffered_write_gen.h"
 #include "vfs/writeback_gen.h"
 
 int bch2_read_single_folio(struct folio *, struct address_space *, bool);
@@ -27,8 +28,6 @@ int bch2_write_begin(struct file *, struct address_space *, loff_t pos,
 int bch2_write_end(struct file *, struct address_space *, loff_t,
 		   unsigned len, unsigned copied, struct folio *, void *);
 #endif
-
-ssize_t bch2_write_iter(struct kiocb *, struct iov_iter *);
 #endif
 
 #endif /* _BCACHEFS_FS_IO_BUFFERED_H */

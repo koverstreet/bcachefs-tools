@@ -5,7 +5,6 @@ use core::ops::ControlFlow;
 use core::pin::Pin;
 use kernel::page::PAGE_SHIFT;
 
-use cstruct_macros::c_export;
 use pin_init::{pin_data, pin_init, stack_pin_init};
 
 use crate::btree::bkey::{bkey_ge, pos};
@@ -420,11 +419,6 @@ impl InodeInfo {
         let log = count_fsck_err(fs, id::vfs_inode_i_blocks_not_zero_at_truncate, &mut msg);
         msg.set_suppressed(!log);
     }
-}
-
-#[c_export]
-pub fn bch2_zero_pagecache_posteof(inode: &InodeInfo) {
-    inode.zero_pagecache_posteof()
 }
 
 /* fallocate: */

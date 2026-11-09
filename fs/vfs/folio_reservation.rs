@@ -7,7 +7,6 @@
 //! them.
 
 use core::cmp::min;
-use core::ffi::c_int;
 use core::ops::Range;
 
 use cstruct_macros::c_export;
@@ -16,11 +15,8 @@ use crate::alloc::capacity::DiskReservation;
 use crate::c;
 use crate::c::bch_folio_sector_state as SectorState;
 use crate::c::bch_reservation_flags as ReservationFlags;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
-use crate::types::RustOnly;
-use crate::util::alloc::init_at;
-use crate::util::ffi::Opaque;
 
 use super::folio::{FolioStateGuard, Folio, Mapping};
 use super::inode::{InodeInfo, QuotaReservation};
@@ -118,7 +114,7 @@ enum Reserve {
 
 /// A write's reservation for the folios it dirties: disk space for its
 /// sectors at the inode's replicas, and quota for those it allocates - put
-/// when it's dropped. C has its size, for buffered.c's to hold.
+/// when it's dropped.
 pub struct FolioReservation<'i> {
     disk:     DiskReservation<'i>,
     quota:    QuotaReservation<'i>,
@@ -268,33 +264,6 @@ impl<'i> FolioReservation<'i> {
     }
 }
 
-#[c_export]
-pub fn bch2_folio_reservation_init(_c: &Opaque<Fs>, inode: &InodeInfo, res: *mut c::bch2_folio_reservation) {
-    // the inode outlives the write C holds the reservation for
-    let r = unsafe { core::mem::transmute::<FolioReservation<'_>, FolioReservation<'static>>(FolioReservation::new(inode)) };
-    let Ok(()) = unsafe { init_at(RustOnly::new(r), &raw mut (*res).r) };
-}
-
-#[c_export]
-pub fn bch2_folio_reservation_put(_c: &Opaque<Fs>, _inode: &InodeInfo, res: *mut c::bch2_folio_reservation) {
-    unsafe { core::ptr::drop_in_place(&raw mut (*res).r) }
-}
-
-#[c_export]
-pub fn bch2_folio_reservation_get(_c: &Opaque<Fs>, _inode: &InodeInfo, folio: *mut c::folio,
-                                  res: &mut c::bch2_folio_reservation, offset: usize, len: usize) -> c_int {
-    ret_to_c(res.r.add(unsafe { Folio::from_raw(folio) }, offset, len))
-}
-
-#[c_export]
-pub fn bch2_folio_reservation_get_partial(_c: &Opaque<Fs>, _inode: &InodeInfo, folio: *mut c::folio,
-                                          res: &mut c::bch2_folio_reservation, offset: usize, len: usize) -> isize {
-    match res.r.add_partial(unsafe { Folio::from_raw(folio) }, offset, len) {
-        Ok(reserved) => reserved as isize,
-        Err(e) => ret_to_c(Err::<(), _>(e)) as isize,
-    }
-}
-
 impl InodeInfo {
     pub fn undirty_folio(&self, folio: Folio, offset: usize, len: usize) {
         let fs = self.fs();
@@ -319,12 +288,6 @@ impl InodeInfo {
         self.i_sectors_acct(None, dirty_sectors);
     }
 
-}
-
-#[c_export]
-pub fn bch2_set_folio_dirty(_c: &Opaque<Fs>, _inode: &InodeInfo, folio: *mut c::folio,
-                            res: &mut c::bch2_folio_reservation, offset: usize, len: usize) -> bool {
-    res.r.dirty(unsafe { Folio::from_raw(folio) }, offset, len)
 }
 
 #[c_export]

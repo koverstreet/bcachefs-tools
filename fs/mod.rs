@@ -172,6 +172,7 @@ pub mod util;
 /// holds, which both builds lay out.
 pub mod vfs {
     #[cfg(kernel)] pub mod attr;
+    #[cfg(kernel)] pub mod buffered_write;
     #[cfg(kernel)] pub mod dentry;
     #[cfg(kernel)] pub mod dir;
     #[cfg(kernel)] pub mod direct_write;

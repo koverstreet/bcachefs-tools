@@ -224,6 +224,8 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     // vfs/vfs_inode.rs, an evicted inode's: a static inline from 6.19, and the exports
     "inode_state_read_once", "is_bad_inode", "truncate_inode_pages_final", "d_mark_dontcache",
     "clear_inode",
+    // vfs/buffered_write.rs: a static inline
+    "fgf_set_order",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "closure_state",
                                   "__genradix", "genradix_iter",

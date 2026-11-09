@@ -6,7 +6,7 @@
 
 use crate::cstructs::c;
 use crate::locking::Locked;
-use crate::types::{rust_only, DArray, c_default};
+use crate::types::{DArray, c_default};
 use cstruct_macros::{bitfield, c_enum, c_typedef, CStruct, TypeInfo};
 use nestify::nest;
 use core::sync::atomic::AtomicI32;
@@ -116,9 +116,3 @@ pub struct bch_folio {
     pub state: Locked<c::spinlock_t, FolioState>,
 }
 c_default!(bch_folio);
-
-#[repr(C)]
-#[derive(CStruct)]
-pub struct bch2_folio_reservation {
-    pub r: rust_only!(crate::vfs::folio_reservation::FolioReservation<'static>),
-}

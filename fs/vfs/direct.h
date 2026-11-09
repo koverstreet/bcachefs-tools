@@ -6,7 +6,6 @@
 #include "data/read.h"
 #include "vfs/io.h"
 #include "vfs/direct_gen.h"
-#include "vfs/direct_write_gen.h"
 
 int bch2_direct_IO_read(struct kiocb *, struct iov_iter *, enum bch_read_flags,
 			struct bch_read_err_report *);

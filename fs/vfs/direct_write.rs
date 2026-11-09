@@ -28,7 +28,6 @@ use crate::vfs::kiocb::Kiocb;
 use c::bch_write_flags as w;
 use core::ops::ControlFlow;
 use core::ptr::NonNull;
-use cstruct_macros::c_export;
 
 type Dio = c::dio_write;
 
@@ -355,14 +354,6 @@ unsafe fn dio_write_loop_async(op: *mut c::bch_write_op) {
     } else {
         unsafe { dio_write_continue(dio) };
     }
-}
-
-/// # Safety
-/// The VFS's: @req a kiocb of one of our files, @iter its buffer.
-#[c_export]
-pub unsafe fn bch2_direct_write(req: *mut c::kiocb, iter: *mut c::iov_iter) -> isize {
-    let (mut k, mut it) = unsafe { (Kiocb::from_raw(req), IovIter::from_raw(iter)) };
-    direct_write(&mut k, &mut it)
 }
 
 pub fn direct_write(k: &mut Kiocb<'_>, it: &mut IovIter<'_>) -> isize {

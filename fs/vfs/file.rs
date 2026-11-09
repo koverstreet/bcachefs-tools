@@ -83,13 +83,13 @@ use cstruct_macros::{c_export, c_extern, vtable};
 
 use super::inode::InodeInfo;
 use super::io;
+use super::buffered_write::bch2_write_iter;
 use super::folio_reservation::FolioReservation;
 use super::ioctl::fs_file_ioctl;
 
 c_extern! {
     // The data path's, C's still:
     fn bch2_read_iter(iocb: *mut c::kiocb, iter: *mut c::iov_iter) -> isize;
-    fn bch2_write_iter(iocb: *mut c::kiocb, iter: *mut c::iov_iter) -> isize;
 }
 
 // SAFETY, of the CStatic: immutable, its only parts that aren't Sync pointers

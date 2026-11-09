@@ -6,14 +6,13 @@
 //! and freed by the aops. Reserving and dirtying are folio_reservation.rs's.
 
 use core::cmp::{max, min};
-use core::ffi::c_int;
 use core::alloc::Layout;
 use core::mem::{align_of, size_of};
 use core::borrow::Borrow;
 use core::ops::{ControlFlow, Range};
 use core::ptr::NonNull;
 
-use cstruct_macros::{c_export, c_extern};
+use cstruct_macros::c_export;
 use kernel::page::PAGE_SHIFT;
 
 use crate::btree::bkey::{pos, BkeySC};
@@ -22,63 +21,57 @@ use crate::c;
 use crate::c::bch_folio_sector_state as SectorState;
 use crate::data::durability::BkeyVDurability;
 use crate::data::extents::BkeyVExtents;
-use crate::errcode::{errptr_to_result, ret_to_c, BchError};
+use crate::errcode::{errptr_to_result, BchError};
 use crate::format::{Btree, BkeyType};
 use crate::fs::Fs;
 use crate::new_lock;
 use crate::snapshots::subvolume;
 use crate::locking::MemallocFlags;
-use crate::util::alloc::{current_gfp_context_raw, init_at, kzalloc};
+use crate::util::alloc::{current_gfp_context_raw, init_at, kzalloc, KVVec};
 use crate::util::kernel::PAGE_SECTORS_SHIFT;
 use crate::util::bio::Bio;
 use crate::util::ffi::Opaque;
 
-use super::folio::{Folio, FolioStateGuard, Mapping};
+use super::folio::{Folio, FolioStateGuard, LockedFolio, Mapping};
 use super::inode::InodeInfo;
 
-c_extern! {
-    fn __bch2_darray_resize_noprof(d: *mut c::darray_char, element_size: usize, new_size: usize,
-                                   gfp: c::gfp_t, rcu: bool, have_prealloc: bool) -> c_int;
-}
+impl Mapping {
+    /// The folios over [@start, @end), contiguous from @start, as
+    /// __filemap_get_folio() finds them with @fgp_flags - made, with FGP_CREAT,
+    /// only in the first megabyte: at least one, or why there's none.
+    pub fn get_contig_folios(self, start: u64, end: u64, mut fgp_flags: c::fgf_t, gfp: c::gfp_t)
+        -> Result<KVVec<LockedFolio>, BchError>
+    {
+        let mut fs = KVVec::new();
+        let mut pos = start;
+        let mut ret: Result<(), BchError> = Ok(());
 
-#[c_export]
-pub fn bch2_filemap_get_contig_folios_d(mapping: *mut c::address_space, start: c::loff_t, end: u64,
-                                        mut fgp_flags: c::fgf_t, gfp: c::gfp_t, fs: &mut c::folios) -> c_int {
-    let start = start as u64;
-    let mut pos = start;
-    let mut ret = 0;
+        while pos < end {
+            if pos >= start + (1 << 20) {
+                fgp_flags &= !c::FGP_CREAT;
+            }
 
-    while pos < end {
-        if pos >= start + (1 << 20) {
-            fgp_flags &= !c::FGP_CREAT;
-        }
-
-        if fs.nr + 1 > fs.size {
-            ret = unsafe {
-                __bch2_darray_resize_noprof((&raw mut *fs).cast(), size_of::<*mut c::folio>(), fs.nr + 1,
-                                            current_gfp_context_raw(gfp & c::GFP_KERNEL), false, false)
-            };
-            if ret != 0 {
+            if let Err(e) = fs.reserve_raw_gfp(1, current_gfp_context_raw(gfp & c::GFP_KERNEL)) {
+                ret = Err(e.into());
                 break;
             }
+
+            let Ok(folio) = self.get_folio(pos >> PAGE_SHIFT, fgp_flags, gfp) else { break };
+
+            assert!(fs.is_empty() || folio.pos() == pos);
+
+            pos = folio.end_pos();
+            fs.push(folio).expect("a folio, room reserved for it");
         }
 
-        let mapping = unsafe { Mapping::from_raw(mapping) };
-        let Ok(f) = mapping.get_folio_raw(pos >> PAGE_SHIFT, fgp_flags, gfp) else { break };
-        let folio = unsafe { Folio::from_raw(f.as_ptr()) };
-
-        assert!(fs.nr == 0 || folio.pos() == pos);
-
-        pos = folio.end_pos();
-        unsafe { fs.data.add(fs.nr).write(f.as_ptr()) };
-        fs.nr += 1;
+        if fs.is_empty() {
+            ret?;
+            if fgp_flags & c::FGP_CREAT != 0 {
+                return Err(BchError::from_raw(c::ENOMEM as i32));
+            }
+        }
+        Ok(fs)
     }
-
-    if fs.nr == 0 && ret == 0 && fgp_flags & c::FGP_CREAT != 0 {
-        ret = -(c::ENOMEM as c_int);
-    }
-
-    if fs.nr != 0 { 0 } else { ret }
 }
 
 impl c::bch_folio_sector {
@@ -287,12 +280,6 @@ impl InodeInfo {
 
         Ok(())
     }
-}
-
-#[c_export]
-pub fn bch2_folio_set(_c: &Opaque<Fs>, inode: &InodeInfo, folios: *mut *mut c::folio, nr: u32) -> c_int {
-    let folios = unsafe { core::slice::from_raw_parts(folios.cast::<Folio>(), nr as usize) };
-    ret_to_c(inode.read_folio_state(folios))
 }
 
 #[c_export]
