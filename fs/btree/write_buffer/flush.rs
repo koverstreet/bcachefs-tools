@@ -13,7 +13,8 @@ use crate::c::bch_fs_flags as Flag;
 use crate::c::journal_flags as Journal;
 use crate::debug::trace::events;
 use crate::errcode::{bch_errcode, BchError};
-use crate::format::{BkeyType, Bpos, Btree};
+use crate::format::{BkeyType, Btree};
+use crate::util::vstructs::plain_bytes;
 use crate::locking::MemallocFlags;
 use crate::data_structures::sort::heapsort_by_lt;
 use crate::util::alloc::KVVec;
@@ -22,7 +23,6 @@ use crate::util::par::{self, Backend};
 use crate::util::projections::VolatileWriter;
 use crate::util::time_stats::TimeStats;
 use crate::{btree_trans, fs_fatal_error, prt};
-use core::mem::size_of;
 use core::ptr;
 use core::sync::atomic::fence;
 
@@ -434,10 +434,9 @@ pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_bu
     sorted.clear();
     for i in keys.idxs() {
         let mut r = c::wb_key_ref::default();
-        unsafe {
-            r.key.pos_idx.idx = i as u32;
-            r.key.pos_idx.pos = core::mem::transmute::<Bpos, [u8; size_of::<Bpos>()]>(keys.key(i).k.p);
-        }
+        let p = keys.key(i).k.p;
+        r.key.pos_idx.idx = i as u32;
+        r.key.pos_idx.pos = plain_bytes(&p).try_into().expect("a bpos's bytes");
 
         if sorted.push_within_capacity(r).is_err() {
             panic!("Overflowed wb->sorted at {}, flushing size {}", sorted.len(), keys.len());
