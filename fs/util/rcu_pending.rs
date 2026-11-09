@@ -11,6 +11,7 @@ use core::ffi::{c_int, c_uint};
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::{offset_of, size_of, ManuallyDrop};
 use core::ptr::{self, NonNull};
+use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use cstruct_macros::c_export;
 use pin_init::{pin_init_from_closure, PinInit, Zeroable};
 
@@ -408,6 +409,8 @@ impl PcpuState {
 struct Pcpu<'f, M: Mode> {
     parent: *const RcuPending<'f, M>,
     lock:   Locked<c::spinlock_t, PcpuState>,
+    /* what's queued here: added under the lock, taken off as it's processed */
+    nr:     AtomicUsize,
     cpu:    c_uint,
     cb:     Opaque<c::rcu_head>,
     work:   Opaque<c::work_struct>,
@@ -480,15 +483,17 @@ impl<'f, M: Mode> RcuPending<'f, M> {
         spare.raw.expect("a spare head's item")
     }
 
-    /// What take_expired() took out, processed - with the lock dropped.
-    fn process_expired(&self, e: Expired) {
+    /// What take_expired() took out of @p, processed - with the lock dropped.
+    fn process_expired(&self, p: &Pcpu<'f, M>, e: Expired) {
         for raw in e.objs.iter().flat_map(Seq::iter) {
             self.process_raw(raw);
+            p.nr.fetch_sub(1, Relaxed);
         }
         drop(e.objs);
 
         for h in e.list {
             self.process_raw(Self::list_take(h));
+            p.nr.fetch_sub(1, Relaxed);
         }
     }
 
@@ -499,7 +504,7 @@ impl<'f, M: Mode> RcuPending<'f, M> {
         loop {
             let e = p.lock.lock().take_expired(pending.srcu);
             let Some(e) = e else { break };
-            pending.process_expired(e);
+            pending.process_expired(p, e);
         }
     }
 
@@ -610,7 +615,7 @@ impl<'f, M: Mode> RcuPending<'f, M> {
             if may_sleep {
                 if let Some(e) = s.take_expired(self.srcu) {
                     lock = None;
-                    self.process_expired(e);
+                    self.process_expired(p, e);
                     continue 'retry;
                 }
             }
@@ -646,6 +651,7 @@ impl<'f, M: Mode> RcuPending<'f, M> {
                     }
                 }
             };
+            p.nr.fetch_add(1, Relaxed);
 
             if start_gp {
                 /*
@@ -672,12 +678,15 @@ impl<'f, M: Mode> RcuPending<'f, M> {
         let mut claimed = |raw: Raw| try_claim(&ManuallyDrop::new(unsafe { M::from_raw(raw) }));
         let mut s = p.lock.lock();
 
-        if let Some(raw) = s.objs.iter_mut().find_map(|o| o.remove_where(&mut claimed)) {
-            return Some(unsafe { M::from_raw(raw) });
-        }
-
-        let h = s.lists.iter_mut().find_map(|l| l.remove_where(|h| claimed(Self::list_raw(h))))?;
-        Some(unsafe { M::from_raw(Self::list_take(h)) })
+        let raw = match s.objs.iter_mut().find_map(|o| o.remove_where(&mut claimed)) {
+            Some(raw) => raw,
+            None => {
+                let h = s.lists.iter_mut().find_map(|l| l.remove_where(|h| claimed(Self::list_raw(h))))?;
+                Self::list_take(h)
+            }
+        };
+        p.nr.fetch_sub(1, Relaxed);
+        Some(unsafe { M::from_raw(raw) })
     }
 
     /// The first entry @try_claim returns true for, dequeued: @try_claim
@@ -700,6 +709,11 @@ impl<'f, M: Mode> RcuPending<'f, M> {
         self.pcpu().each_cpu().find_map(|p| self.pcpu_dequeue(p, &mut try_claim))
     }
 
+    /// How many items are queued, not yet processed or dequeued.
+    pub fn nr_pending(&self) -> usize {
+        self.pcpu().each_cpu().map(|p| p.nr.load(Relaxed)).sum()
+    }
+
     fn has_pending_or_armed(&self) -> bool {
         self.pcpu().each_cpu().any(|p| {
             let s = p.lock.lock();
@@ -716,6 +730,7 @@ impl<'f, M: Mode> RcuPending<'f, M> {
         let work = crate::new_work!(Self::work_fn, "rcu_pending_pcpu.work");
         unsafe {
             (&raw mut (*slot).parent).write(this);
+            (&raw mut (*slot).nr).write(AtomicUsize::new(0));
             (&raw mut (*slot).cpu).write(cpu);
             let Ok(()) = init_at(lock, &raw mut (*slot).lock);
             let Ok(()) = init_at(work, (&raw mut (*slot).work).cast());
