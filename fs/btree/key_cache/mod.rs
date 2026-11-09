@@ -30,7 +30,6 @@ use crate::util::alloc::{current_gfp_context_raw, init_at, krealloc};
 use crate::util::hash::GoldenRatio;
 use crate::util::kernel::local_clock;
 use crate::util::kmem_cache::KmemCache;
-use crate::util::percpu::PerCpu;
 use crate::util::place::{Contained, PlacedDrop};
 use crate::util::rcu::{read_lock, ReadGuard, SrcuReadGuard};
 use crate::util::rcu_pending::{Mode, RcuPending};
@@ -84,11 +83,8 @@ fn inc(n: &AtomicUsize) {
 
 /// What an entry freed waits out the btree trans SRCU for: its lock exited,
 /// and it back to the slab.
-pub(crate) struct Free(*const c::bch_fs_btree_key_cache);
-
-unsafe impl Send for Free {}
-unsafe impl Sync for Free {}
-unsafe impl ::pin_init::Zeroable for Free {}
+#[derive(::pin_init::Zeroable)]
+pub(crate) struct Free {}
 
 unsafe impl Mode for Free {
     type Item = NonNull<c::bkey_cached>;
@@ -102,9 +98,6 @@ unsafe impl Mode for Free {
     }
 
     unsafe fn process(&self, _pending: &RcuPending<'_, Self>, ck: Self::Item) {
-        let bc = unsafe { &*self.0 };
-
-        bc.nr_pending.get().add(1u64.wrapping_neg());
         unsafe {
             six_lock_exit((&raw mut (*ck.as_ptr()).c.lock).cast());
             KEY_CACHE.free(ck);
@@ -219,7 +212,6 @@ impl c::bch_fs_btree_key_cache {
 
         let pcpu_readers = ck.c.lock.six().readers.allocated();
         self.pending[pcpu_readers as usize].enqueue(NonNull::from(ck));
-        self.nr_pending.get().add(1);
     }
 
     fn bkey_cached_free(&self, trans: &BtreeTrans<'_>, ck: LockedEntry<'_>) {
@@ -497,21 +489,30 @@ impl c::bch_fs_btree_key_cache {
 
         unsafe { self.shrinker.placed_drop() };
 
+        /* freed as the shrinker frees, a batch at a time outside RCU: */
         let srcu = fs.btree.trans.barrier.read_lock();
-        let rcu = read_lock();
-        for (_, ck) in self.keys_from(0, &rcu, &srcu) {
-            let mut ck = bkey_cached_trylock(ck).expect("a key cache entry locked at shutdown");
+        let mut pos = 0;
+        loop {
+            let mut evicted: ArrayVec<LockedEntry<'_>, 32> = ArrayVec::new();
 
-            assert!(self.bkey_cached_evict(&mut ck), "a key cache entry on bc->keys not in the table");
-            let (ck, held) = ck.into_parts();
-            drop(held);
-            unsafe {
-                c::rust_kfree(ck.k.cast());
-                six_lock_exit((&raw const ck.c.lock).cast_mut().cast());
-                KEY_CACHE.free(NonNull::from(ck));
+            for (i, ck) in self.keys_from(pos, &read_lock(), &srcu) {
+                let mut ck = bkey_cached_trylock(ck).expect("a key cache entry locked at shutdown");
+                assert!(self.bkey_cached_evict(&mut ck), "a key cache entry on bc->keys not in the table");
+                evicted.push(ck);
+
+                pos = i + 1;
+                if evicted.is_full() {
+                    break;
+                }
+            }
+
+            if evicted.is_empty() {
+                break;
+            }
+            for ck in evicted {
+                self.bkey_cached_free_noassert(ck);
             }
         }
-        drop(rcu);
         drop(srcu);
 
         let nr_dirty = self.nr_dirty.load(Relaxed);
@@ -528,22 +529,15 @@ impl c::bch_fs_btree_key_cache {
         for i in 0..2 {
             unsafe { RcuPending::exit(&raw mut (*self.pending.as_ptr())[i]) };
         }
-
-        unsafe { (*self.nr_pending.as_ptr()).free() };
     }
 
     fn setup(&self) -> Result<(), BchError> {
         let fs = self.fs();
 
-        match PerCpu::alloc() {
-            Ok(p)  => unsafe { self.nr_pending.as_ptr().write(p) },
-            Err(_) => return fs.throw(bch_errcode::BCH_ERR_ENOMEM_fs_btree_cache_init),
-        }
-
         let srcu = unsafe { &*ptr::from_ref(&fs.btree.trans.barrier) }.flavor();
         for i in 0..2 {
             let slot = unsafe { (&raw mut (*self.pending.as_ptr())[i]) };
-            if unsafe { init_at(RcuPending::new(srcu, Free(self)), slot) }.is_err() {
+            if unsafe { init_at(RcuPending::new(srcu, Free {}), slot) }.is_err() {
                 return fs.throw(bch_errcode::BCH_ERR_ENOMEM_fs_btree_cache_init);
             }
         }
@@ -571,7 +565,7 @@ impl ToText for c::bch_fs_btree_key_cache {
         prt!(out, "skipped_accessed:\t{}\r\n",   self.stats.skipped_accessed.load(Relaxed));
         prt!(out, "skipped_lock_fail:\t{}\r\n",  self.stats.skipped_lock_fail.load(Relaxed));
         out.newline();
-        prt!(out, "pending:\t{}\r\n",            self.nr_pending.sum());
+        prt!(out, "pending:\t{}\r\n",            self.pending.iter().map(|p| p.nr_pending()).sum::<usize>());
     }
 }
 

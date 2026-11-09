@@ -5,7 +5,6 @@
 use crate::fs::Fs;
 use crate::cstructs::c;
 use crate::types::{rust_only, RustOnly};
-use crate::util::percpu::PerCpu;
 use crate::util::shrinker::Shrinker;
 use core::sync::atomic::{AtomicIsize, AtomicUsize};
 use core::sync::atomic::Ordering::Relaxed;
@@ -47,9 +46,6 @@ pub struct bch_fs_btree_key_cache {
     #[pin]
     #[init(RustOnly::new(::pin_init::init_zeroed()))]
     pub(crate) pending: rust_only!([crate::btree::key_cache::Pending; 2]),
-    #[pin]
-    #[init(RustOnly::new(::pin_init::init_zeroed()))]
-    pub(crate) nr_pending: rust_only!(PerCpu<u64>),
 
     pub nr_keys: AtomicIsize,
     pub nr_dirty: AtomicIsize,
