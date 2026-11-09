@@ -4,7 +4,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_ge, pos, spos, BkeyI, BkeySC, Typed};
-use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
+use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::data::keylist::KeyRoom;
 use crate::data::nocow_locking::{bkey_lock_cas, bkey_unlock_cas, NocowKind};
@@ -312,13 +312,7 @@ pub(crate) fn nocow_write(mut op: Running<Op>) -> Result<(), Running<Op>> {
 
     let ret = {
         let trans = btree_trans!(fs);
-        loop {
-            let t = trans.begin();
-            match nocow_write_submit(&t, &mut op) {
-                Err(e) if is_restart(&e) => continue,
-                r => break r,
-            }
-        }
+        lockrestart_do(&trans, |t| nocow_write_submit(t, &mut op))
     };
 
     if let Err(e) = ret {
