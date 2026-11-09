@@ -128,12 +128,6 @@ impl Folio {
         unsafe { c::folio_zero_range(self.as_ptr(), start, len) }
     }
 
-    /// @len bytes of @iter copied in at @offset, without faulting: how many
-    /// were - copy_folio_from_iter_atomic().
-    pub fn copy_from_iter_atomic(self, offset: usize, len: usize, iter: &mut IovIter<'_>) -> usize {
-        unsafe { c::copy_folio_from_iter_atomic(self.as_ptr(), offset, len, iter.as_ptr()) }
-    }
-
     /// What's written to it through the kernel's mapping made visible through
     /// userspace's: flush_dcache_folio().
     pub fn flush_dcache(self) {
@@ -203,6 +197,41 @@ impl Folio {
     /// has none.
     pub fn lock_state(&self) -> FolioStateGuard<'_> {
         self.lock_state_if_any().expect("a folio's bch_folio")
+    }
+}
+
+/// @len bytes of a folio, from @offset into it.
+#[derive(Clone, Copy)]
+pub struct FolioSpan {
+    pub folio:  Folio,
+    pub offset: usize,
+    pub len:    usize,
+}
+
+impl FolioSpan {
+    /// @folio's part of the file's [@start, @end).
+    pub fn new(folio: Folio, start: u64, end: u64) -> Self {
+        let start = start.max(folio.pos());
+        FolioSpan {
+            folio,
+            offset: (start - folio.pos()) as usize,
+            len:    (end.min(folio.end_pos()) - start) as usize,
+        }
+    }
+
+    pub fn whole(folio: Folio) -> Self {
+        FolioSpan { folio, offset: 0, len: folio.size() }
+    }
+
+    /// Where it starts in the file.
+    pub fn pos(self) -> u64 {
+        self.folio.pos() + self.offset as u64
+    }
+
+    /// @iter copied in, without faulting: how much was -
+    /// copy_folio_from_iter_atomic().
+    pub fn copy_from_iter_atomic(self, iter: &mut IovIter<'_>) -> usize {
+        unsafe { c::copy_folio_from_iter_atomic(self.folio.as_ptr(), self.offset, self.len, iter.as_ptr()) }
     }
 }
 

@@ -4,15 +4,16 @@
 //! writeback to write out.
 
 use super::direct_write::direct_write;
-use super::folio::{LockedFolio, Mapping};
+use super::folio::{FolioSpan, LockedFolio, Mapping};
 use super::folio_reservation::FolioReservation;
 use super::inode::InodeInfo;
 use super::kiocb::Kiocb;
+use super::pagecache::ContigFolios;
 use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::{flags, KBox};
 use crate::util::iov_iter::IovIter;
-use crate::util::kernel::{cond_resched, current_id, fatal_signal_pending, unlikely, PAGE_SIZE};
+use crate::util::kernel::{cond_resched, current_id, fatal_signal_pending, likely, unlikely, PAGE_SIZE};
 use crate::util::ops::IntoRaw;
 use core::ffi::{c_int, c_uint, c_void};
 use cstruct_macros::c_export;
@@ -67,8 +68,8 @@ fn write_begin(inode: &'static InodeInfo, mapping: Mapping, pos: u64, len: usize
 
     let folio = mapping.get_folio(pos >> PAGE_SHIFT, c::FGP_WRITEBEGIN | fgf_set_order(len), mapping.gfp_mask())?;
 
-    let offset = (pos - folio.pos()) as usize;
-    let len = len.min((folio.end_pos() - pos) as usize);
+    let span = FolioSpan::new(*folio, pos, pos + len as u64);
+    let FolioSpan { offset, len, .. } = span;
 
     /* If we're writing entire folio, don't need to read it in first: */
     if !folio.uptodate() && !(offset == 0 && len == folio.size()) {
@@ -85,21 +86,8 @@ fn write_begin(inode: &'static InodeInfo, mapping: Mapping, pos: u64, len: usize
         }
     }
 
-    loop {
-        folio.update_state(inode)?;
-
-        match begun.res.add(*folio, offset, len) {
-            Ok(()) => break,
-            /*
-             * If the folio hasn't been read in, we won't know if we
-             * actually need a reservation - we don't actually need
-             * to read here, we just need to check if the folio is
-             * fully backed by uncompressed data:
-             */
-            Err(_) if !folio.uptodate() => folio.read_single(mapping, true)?,
-            Err(e) => return Err(e),
-        }
-    }
+    folio.update_state(inode)?;
+    begun.res.add(span)?;
 
     Ok((folio, begun))
 }
@@ -137,7 +125,7 @@ pub unsafe fn bch2_buffered_write_end(mapping: *mut c::address_space, pos: c::lo
             folio.mark_uptodate();
         }
 
-        begun.res.dirty(*folio, offset, copied);
+        begun.res.dirty(FolioSpan { folio: *folio, offset, len: copied });
 
         inode.ei_last_dirtied.set(current_id() as _);
     }
@@ -156,211 +144,203 @@ fn buffered_write_folios(inode: &InodeInfo, mapping: Mapping, iter: &mut IovIter
     assert!(len != 0);
 
     let mut res = FolioReservation::new(inode);
-    let mut last_folio_pos = inode.v.size();
+    let folios = mapping.get_contig_folios(pos, pos + len as u64, c::FGP_WRITEBEGIN | fgf_set_order(len),
+                                           mapping.gfp_mask())?;
+    let last_folio_pos = folios.last().pos();
 
-    let ret = copy_into_folios(inode, mapping, iter, pos, len, &mut res, &mut last_folio_pos);
+    // by value: unlocked when it returns, as the truncate below waits on them
+    let ret = write_contig_folios(inode, mapping, iter, folios, &mut res);
 
     /*
      * If the last folio added to the mapping starts beyond current EOF, we
      * performed a short write but left around at least one post-EOF folio.
      * Clean up the mapping before we return.
      */
-    if last_folio_pos >= inode.v.size() {
-        inode.v.truncate_pagecache(inode.v.size());
+    let isize = inode.v.size();
+    if last_folio_pos >= isize {
+        inode.v.truncate_pagecache(isize);
     }
-
     ret
 }
 
-fn copy_into_folios(inode: &InodeInfo, mapping: Mapping, iter: &mut IovIter<'_>, pos: u64, len: usize,
-                    res: &mut FolioReservation<'_>, last_folio_pos: &mut u64) -> Result<usize, BchError> {
-    let mut end = pos + len as u64;
-
-    let mut fs = mapping.get_contig_folios(pos, end, c::FGP_WRITEBEGIN | fgf_set_order(len), mapping.gfp_mask())?;
-    assert!(!fs.is_empty());
-
-    let f = *fs[0];
-    if pos != f.pos() && !f.uptodate() {
-        f.read_single(mapping, true)?;
-    }
-
-    let f = *fs[fs.len() - 1];
-    end = end.min(f.end_pos());
-    *last_folio_pos = f.pos();
-    if end != f.end_pos() && !f.uptodate() {
-        if end >= inode.v.size() {
-            f.zero_range(0, f.size());
-        } else {
-            f.read_single(mapping, true)?;
-        }
-    }
-
-    inode.read_folio_state(&fs)?;
-
-    let mut f_pos = pos;
-    let mut f_offset = (pos - fs[0].pos()) as usize;
-    for i in 0..fs.len() {
-        let f = *fs[i];
-        let f_len = (end.min(f.end_pos()) - f_pos) as usize;
-
-        match res.add_partial(f, f_offset, f_len) {
-            Ok(reserved) if reserved == f_len => {}
-            Err(e) if i == 0 => return Err(e),
-            Err(_) => {
-                fs.truncate(i);
-                end = end.min(fs[fs.len() - 1].end_pos());
-                break;
-            }
-            Ok(reserved) => {
-                if !f.uptodate() {
-                    f.read_single(mapping, true)?;
-                }
-
-                fs.truncate(i + 1);
-                end = f_pos + reserved as u64;
-                break;
-            }
-        }
-
-        f_pos = f.end_pos();
-        f_offset = 0;
-    }
+fn write_contig_folios(inode: &InodeInfo, mapping: Mapping, iter: &mut IovIter<'_>, mut w: ContigFolios,
+                       res: &mut FolioReservation<'_>) -> Result<usize, BchError> {
+    w.read_partial(inode, mapping)?;
+    inode.read_folio_state(w.folios())?;
+    w.reserve(res, mapping)?;
 
     if mapping.writably_mapped() {
-        for f in fs.iter() {
-            f.flush_dcache();
-        }
+        w.flush_dcache();
     }
 
-    let mut copied = 0;
-    f_pos = pos;
-    f_offset = (pos - fs[0].pos()) as usize;
-    for i in 0..fs.len() {
-        let f = *fs[i];
-        let f_len = (end.min(f.end_pos()) - f_pos) as usize;
-        let f_copied = f.copy_from_iter_atomic(f_offset, f_len, iter);
-        if f_copied == 0 {
-            fs.truncate(i);
-            break;
-        }
-
-        if !f.uptodate() && f_copied != f.size() && pos + ((copied + f_copied) as u64) < inode.v.size() {
-            iter.revert(f_copied);
-            f.zero_range(0, f.size());
-            fs.truncate(i);
-            break;
-        }
-
-        f.flush_dcache();
-        copied += f_copied;
-
-        if f_copied != f_len {
-            fs.truncate(i + 1);
-            break;
-        }
-
-        f_pos = f.end_pos();
-        f_offset = 0;
-    }
-
+    let copied = w.copy_from_iter(inode, iter);
     if copied == 0 {
         return Ok(0);
     }
 
-    end = pos + copied as u64;
-    inode.v.size_extend(end);
-
-    f_pos = pos;
-    f_offset = (pos - fs[0].pos()) as usize;
-    for f in fs.iter() {
-        let f_len = (end.min(f.end_pos()) - f_pos) as usize;
-
-        if !f.uptodate() {
-            f.mark_uptodate();
-        }
-
-        res.dirty(**f, f_offset, f_len);
-
-        f_pos = f.end_pos();
-        f_offset = 0;
-    }
-
+    inode.v.size_extend(w.end());
+    w.dirty(res);
     inode.ei_last_dirtied.set(current_id() as _);
 
     Ok(copied)
 }
 
+impl ContigFolios {
+    /// Its partial folios, not uptodate, read in - or the last zeroed, if it's
+    /// past EOF - for a write into part of them.
+    fn read_partial(&self, inode: &InodeInfo, mapping: Mapping) -> Result<(), BchError> {
+        if let Some(f) = self.head().filter(|f| !f.uptodate()) {
+            f.read_single(mapping, true)?;
+        }
+
+        if let Some(f) = self.tail().filter(|f| !f.uptodate()) {
+            if self.end() >= inode.v.size() {
+                f.zero_range(0, f.size());
+            } else {
+                f.read_single(mapping, true)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Reserved for in @res, and cut to where that ran out - an error only if
+    /// none of it could be; a folio reserved for in part is read in.
+    fn reserve(&mut self, res: &mut FolioReservation<'_>, mapping: Mapping) -> Result<(), BchError> {
+        let end = 'reserve: {
+            for s in self.spans() {
+                match res.add_partial(s) {
+                    Ok(reserved) if reserved == s.len => {}
+                    Err(e) if s.folio == self.first() => return Err(e),
+                    Err(_) => break 'reserve s.pos(),
+                    Ok(reserved) => {
+                        if !s.folio.uptodate() {
+                            s.folio.read_single(mapping, true)?;
+                        }
+                        break 'reserve s.pos() + reserved as u64;
+                    }
+                }
+            }
+            self.end()
+        };
+        self.truncate(end);
+        Ok(())
+    }
+
+    /// @iter copied in, without faulting, and cut to what was: how much.
+    fn copy_from_iter(&mut self, inode: &InodeInfo, iter: &mut IovIter<'_>) -> usize {
+        let mut copied = 0;
+        for s in self.spans() {
+            let f = s.folio;
+            let f_copied = s.copy_from_iter_atomic(iter);
+            if f_copied == 0 {
+                break;
+            }
+
+            if !f.uptodate() && f_copied != f.size() {
+                if self.pos() + ((copied + f_copied) as u64) < inode.v.size() {
+                    iter.revert(f_copied);
+                    f.zero_range(0, f.size());
+                    break;
+                }
+
+                /*
+                 * Past EOF it's kept, and marked uptodate when it's dirtied:
+                 * what wasn't copied over is a new folio's uninitialized
+                 * memory, unless it's zeroed
+                 */
+                f.zero_segments(0, s.offset, s.offset + f_copied, f.size());
+            }
+
+            f.flush_dcache();
+            copied += f_copied;
+
+            if f_copied != s.len {
+                break;
+            }
+        }
+
+        self.truncate(self.pos() + copied as u64);
+        copied
+    }
+
+    /// Uptodate, and dirtied with what @res reserved for them.
+    fn dirty(&self, res: &mut FolioReservation<'_>) {
+        for s in self.spans() {
+            if !s.folio.uptodate() {
+                s.folio.mark_uptodate();
+            }
+
+            res.dirty(s);
+        }
+    }
+}
+
+/// @iter copied in at @pos, as much as one go at it could: how much was.
+fn buffered_write_chunk(inode: &InodeInfo, mapping: Mapping, iter: &mut IovIter<'_>, pos: u64)
+    -> Result<usize, BchError>
+{
+    let offset = (pos & (PAGE_SIZE as u64 - 1)) as usize;
+    let mut bytes = iter.count();
+
+    loop {
+        /*
+         * Bring in the user page that we will copy from _first_.
+         * Otherwise there's a nasty deadlock on copying from the
+         * same page as we're writing to, without it being marked
+         * up-to-date.
+         *
+         * Not only is this an optimisation, but it is also required
+         * to check that the address is actually valid, when atomic
+         * usercopies are used, below.
+         */
+        if unlikely(iter.fault_in_readable(bytes) != 0) {
+            bytes = iter.count().min(PAGE_SIZE - offset);
+
+            if unlikely(iter.fault_in_readable(bytes) != 0) {
+                return Err(c::EFAULT.into());
+            }
+        }
+
+        if unlikely(fatal_signal_pending()) {
+            return Err(c::EINTR.into());
+        }
+
+        let copied = buffered_write_folios(inode, mapping, iter, pos, bytes)?;
+
+        cond_resched();
+
+        if likely(copied != 0) {
+            return Ok(copied);
+        }
+
+        /*
+         * If we were unable to copy any data at all, we must
+         * fall back to a single segment length write.
+         *
+         * If we didn't fallback here, we could livelock
+         * because not all segments in the iov can be copied at
+         * once without a pagefault.
+         */
+        bytes = (PAGE_SIZE - offset).min(iter.single_seg_count());
+    }
+}
+
 fn buffered_write(k: &Kiocb<'_>, iter: &mut IovIter<'_>) -> Result<usize, BchError> {
     let mapping = k.file().mapping();
     let inode = k.inode();
-    let mut pos = k.pos();
     let mut written = 0;
-    let mut ret = Ok(());
 
     let _add = inode.ei_pagecache_lock.lock::<c::PagecacheAdd>();
 
-    if pos > inode.v.size() {
+    if k.pos() > inode.v.size() {
         inode.zero_pagecache_posteof();
     }
 
     while iter.count() != 0 {
-        let offset = (pos & (PAGE_SIZE as u64 - 1)) as usize;
-        let mut bytes = iter.count();
-
-        let copied = loop {
-            /*
-             * Bring in the user page that we will copy from _first_.
-             * Otherwise there's a nasty deadlock on copying from the
-             * same page as we're writing to, without it being marked
-             * up-to-date.
-             *
-             * Not only is this an optimisation, but it is also required
-             * to check that the address is actually valid, when atomic
-             * usercopies are used, below.
-             */
-            if unlikely(iter.fault_in_readable(bytes) != 0) {
-                bytes = iter.count().min(PAGE_SIZE - offset);
-
-                if unlikely(iter.fault_in_readable(bytes) != 0) {
-                    break Err(BchError::from_raw(c::EFAULT as i32));
-                }
-            }
-
-            if unlikely(fatal_signal_pending()) {
-                break Err(BchError::from_raw(c::EINTR as i32));
-            }
-
-            let copied = match buffered_write_folios(inode, mapping, iter, pos, bytes) {
-                Ok(copied) => copied,
-                Err(e) => break Err(e),
-            };
-
-            cond_resched();
-
-            if unlikely(copied == 0) {
-                /*
-                 * If we were unable to copy any data at all, we must
-                 * fall back to a single segment length write.
-                 *
-                 * If we didn't fallback here, we could livelock
-                 * because not all segments in the iov can be copied at
-                 * once without a pagefault.
-                 */
-                bytes = (PAGE_SIZE - offset).min(iter.single_seg_count());
-                continue;
-            }
-            break Ok(copied);
-        };
-
-        match copied {
-            Ok(copied) => {
-                pos += copied as u64;
-                written += copied;
-            }
-            Err(e) => {
-                ret = Err(e);
-                break;
-            }
+        match buffered_write_chunk(inode, mapping, iter, k.pos() + written as u64) {
+            Ok(copied) => written += copied,
+            Err(e) if written == 0 => return Err(e),
+            Err(_) => break,
         }
 
         mapping.balance_dirty_pages_ratelimited();
@@ -368,9 +348,8 @@ fn buffered_write(k: &Kiocb<'_>, iter: &mut IovIter<'_>) -> Result<usize, BchErr
 
     if written != 0 {
         inode.queue_writeback();
-        return Ok(written);
     }
-    ret.map(|()| 0)
+    Ok(written)
 }
 
 pub(crate) unsafe extern "C" fn bch2_write_iter(iocb: *mut c::kiocb, from: *mut c::iov_iter) -> isize {
@@ -415,9 +394,5 @@ pub(crate) unsafe extern "C" fn bch2_write_iter(iocb: *mut c::kiocb, from: *mut 
         })()
     };
 
-    match ret {
-        Ok(0)       => 0,
-        Ok(written) => k.write_sync(written).into_raw(),
-        Err(e)      => e.class() as isize,
-    }
+    ret.and_then(|written| if written != 0 { k.write_sync(written) } else { Ok(0) }).into_raw()
 }

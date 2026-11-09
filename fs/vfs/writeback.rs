@@ -15,7 +15,7 @@ use crate::util::bio::{plugged, Bio, BioBuffersUnmanaged, BioOwner};
 use crate::util::closure::{self, closure_wait, StackClosure};
 use crate::util::kernel::{local_clock, unlikely, PAGE_SIZE};
 use crate::util::time_stats::TimeStats;
-use crate::vfs::folio::{Folio, FolioGuard, Mapping};
+use crate::vfs::folio::{Folio, FolioGuard, FolioSpan, Mapping};
 use crate::vfs::inode::InodeInfo;
 use c::bch_folio_sector_state as SectorState;
 use c::bch_write_flags as w;
@@ -242,7 +242,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState) -> c_int 
 
         /* Is the folio fully outside i_size? (truncate in progress) */
         if folio.pos() >= i_size {
-            inode.undirty_folio(*folio, 0, folio.size());
+            inode.undirty_folio(FolioSpan::whole(*folio));
             return 0;
         }
 
@@ -256,7 +256,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState) -> c_int 
         let f_offset = (i_size - folio.pos()) as usize;
         folio.zero_segment(f_offset, folio.size());
 
-        inode.undirty_folio(*folio, f_offset, folio.size() - f_offset);
+        inode.undirty_folio(FolioSpan::new(*folio, i_size, folio.end_pos()));
     }
 
     let f_sectors = folio.nr_sectors();

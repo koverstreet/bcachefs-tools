@@ -27,12 +27,13 @@ use crate::fs::Fs;
 use crate::new_lock;
 use crate::snapshots::subvolume;
 use crate::locking::MemallocFlags;
-use crate::util::alloc::{current_gfp_context_raw, init_at, kzalloc, KVVec};
+use crate::data_structures::inline_vec::InlineVec;
+use crate::util::alloc::{init_at, kzalloc};
 use crate::util::kernel::PAGE_SECTORS_SHIFT;
 use crate::util::bio::Bio;
 use crate::util::ffi::Opaque;
 
-use super::folio::{Folio, FolioStateGuard, LockedFolio, Mapping};
+use super::folio::{Folio, FolioSpan, FolioStateGuard, LockedFolio, Mapping};
 use super::inode::InodeInfo;
 
 impl Mapping {
@@ -40,9 +41,9 @@ impl Mapping {
     /// __filemap_get_folio() finds them with @fgp_flags - made, with FGP_CREAT,
     /// only in the first megabyte: at least one, or why there's none.
     pub fn get_contig_folios(self, start: u64, end: u64, mut fgp_flags: c::fgf_t, gfp: c::gfp_t)
-        -> Result<KVVec<LockedFolio>, BchError>
+        -> Result<ContigFolios, BchError>
     {
-        let mut fs = KVVec::new();
+        let mut fs = InlineVec::new();
         let mut pos = start;
         let mut ret: Result<(), BchError> = Ok(());
 
@@ -51,7 +52,7 @@ impl Mapping {
                 fgp_flags &= !c::FGP_CREAT;
             }
 
-            if let Err(e) = fs.reserve_raw_gfp(1, current_gfp_context_raw(gfp & c::GFP_KERNEL)) {
+            if let Err(e) = fs.reserve(1) {
                 ret = Err(e.into());
                 break;
             }
@@ -70,7 +71,67 @@ impl Mapping {
                 return Err(BchError::from_raw(c::ENOMEM as i32));
             }
         }
-        Ok(fs)
+        Ok(ContigFolios { folios: fs, pos: start, end: end.min(pos) })
+    }
+}
+
+/// Locked folios, each starting where the one before ends, over [pos, end):
+/// only the first starts before pos, only the last ends past end - and none,
+/// once pos == end.
+pub struct ContigFolios {
+    folios: InlineVec<LockedFolio, 8>,
+    pos:    u64,
+    end:    u64,
+}
+
+impl ContigFolios {
+    pub fn pos(&self) -> u64 {
+        self.pos
+    }
+
+    pub fn end(&self) -> u64 {
+        self.end
+    }
+
+    pub fn folios(&self) -> &[LockedFolio] {
+        &self.folios
+    }
+
+    pub fn first(&self) -> Folio {
+        *self.folios[0]
+    }
+
+    pub fn last(&self) -> Folio {
+        *self.folios[self.folios.len() - 1]
+    }
+
+    /// The first folio, if [pos, end) starts partway into it.
+    pub fn head(&self) -> Option<Folio> {
+        self.folios.first().map(|f| **f).filter(|f| f.pos() != self.pos)
+    }
+
+    /// The last folio, if [pos, end) ends partway into it.
+    pub fn tail(&self) -> Option<Folio> {
+        self.folios.last().map(|f| **f).filter(|f| f.end_pos() != self.end)
+    }
+
+    /// Each folio's part of [pos, end).
+    pub fn spans(&self) -> impl Iterator<Item = FolioSpan> + '_ {
+        self.folios.iter().map(|f| FolioSpan::new(**f, self.pos, self.end))
+    }
+
+    pub fn flush_dcache(&self) {
+        for f in self.folios.iter() {
+            f.flush_dcache();
+        }
+    }
+
+    /// Cut to end at @end, the folios past it dropped.
+    pub fn truncate(&mut self, end: u64) {
+        debug_assert!(end >= self.pos);
+        self.end = self.end.min(end);
+        let nr = self.folios.partition_point(|f| f.pos() < self.end);
+        self.folios.truncate(nr);
     }
 }
 
@@ -368,7 +429,7 @@ impl Folio {
     fn release_state(self) {
         let inode = self.mapping().expect("a folio in the page cache").inode();
 
-        inode.undirty_folio(self, 0, self.size());
+        inode.undirty_folio(FolioSpan::whole(self));
 
         debug_assert!(self.locked());
         self.free_state();

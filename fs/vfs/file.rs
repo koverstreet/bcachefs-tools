@@ -84,6 +84,7 @@ use cstruct_macros::{c_export, c_extern, vtable};
 use super::inode::InodeInfo;
 use super::io;
 use super::buffered_write::bch2_write_iter;
+use super::folio::FolioSpan;
 use super::folio_reservation::FolioReservation;
 use super::ioctl::fs_file_ioctl;
 
@@ -172,14 +173,15 @@ impl VmOps for InodeInfo {
         }
 
         len = min(len as u64, isize - file_offset) as usize;
+        let span = FolioSpan { folio: *locked, offset, len };
 
-        if locked.update_state(inode).and_then(|()| res.add(*locked, offset, len)).is_err() {
+        if locked.update_state(inode).and_then(|()| res.add(span)).is_err() {
             return VmFaultRet::SIGBUS;
         }
 
         inode.ei_last_dirtied.set(current_id() as _);
 
-        res.dirty(*locked, offset, len);
+        res.dirty(span);
         drop(res);
 
         locked.keep_locked().wait_stable();

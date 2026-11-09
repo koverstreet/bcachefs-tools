@@ -18,7 +18,7 @@ use crate::c::bch_reservation_flags as ReservationFlags;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 
-use super::folio::{FolioStateGuard, Folio, Mapping};
+use super::folio::{FolioSpan, FolioStateGuard, Folio, Mapping};
 use super::inode::{InodeInfo, QuotaReservation};
 use super::pagecache::{blocks_in, blocks_out};
 
@@ -133,7 +133,8 @@ impl<'i> FolioReservation<'i> {
      * If the reservation fell back, @res drops to the count we got: the folio is
      * charged at @res's count, and the rest of this write shouldn't ask again.
      */
-    fn reserve(&mut self, folio: Folio, offset: usize, len: usize, mode: Reserve) -> Result<usize, BchError> {
+    fn reserve(&mut self, span: FolioSpan, mode: Reserve) -> Result<usize, BchError> {
+        let FolioSpan { folio, offset, len } = span;
         let fs = self.disk.c;
         let mut sectors = blocks_out(fs, offset, len);
         let mut reserved = len;
@@ -187,23 +188,23 @@ impl<'i> FolioReservation<'i> {
         Ok(reserved)
     }
 
-    pub fn add(&mut self, folio: Folio, offset: usize, len: usize) -> Result<(), BchError> {
-        self.reserve(folio, offset, len, Reserve::Whole).map(drop)
+    pub fn add(&mut self, span: FolioSpan) -> Result<(), BchError> {
+        self.reserve(span, Reserve::Whole).map(drop)
     }
 
-    /// As much of [@offset, @offset + @len) as there's space for, in whole
-    /// blocks: how much.
-    pub fn add_partial(&mut self, folio: Folio, offset: usize, len: usize) -> Result<usize, BchError> {
-        self.reserve(folio, offset, len, Reserve::Partial)
+    /// As much of @span as there's space for, in whole blocks: how much.
+    pub fn add_partial(&mut self, span: FolioSpan) -> Result<usize, BchError> {
+        self.reserve(span, Reserve::Partial)
     }
 
-    fn add_nofail(&mut self, folio: Folio, offset: usize, len: usize) -> Result<(), BchError> {
-        self.reserve(folio, offset, len, Reserve::Nofail).map(drop)
+    fn add_nofail(&mut self, span: FolioSpan) -> Result<(), BchError> {
+        self.reserve(span, Reserve::Nofail).map(drop)
     }
 
-    /// The reservation's sectors moved into @folio's, [@offset, @offset + @len)
-    /// of it dirtied: whether the folio wasn't dirty before.
-    pub fn dirty(&mut self, folio: Folio, offset: usize, len: usize) -> bool {
+    /// The reservation's sectors moved into @span's folio, and @span dirtied:
+    /// whether the folio wasn't dirty before.
+    pub fn dirty(&mut self, span: FolioSpan) -> bool {
+        let FolioSpan { folio, offset, len } = span;
         let inode = self.quota.inode();
         let fs = inode.fs();
         let mut dirty_sectors = 0;
@@ -265,7 +266,8 @@ impl<'i> FolioReservation<'i> {
 }
 
 impl InodeInfo {
-    pub fn undirty_folio(&self, folio: Folio, offset: usize, len: usize) {
+    pub fn undirty_folio(&self, span: FolioSpan) {
+        let FolioSpan { folio, offset, len } = span;
         let fs = self.fs();
         let disk_res = DiskReservation::new(fs);
         let mut dirty_sectors = 0;
@@ -314,7 +316,8 @@ pub fn bch2_vfs_dirty_folio(mapping: *mut c::address_space, folio: *mut c::folio
     let dirty_bytes = (min(folio.end_pos(), file_size) - folio.pos()).next_multiple_of(inode.fs().block_bytes()) as usize;
 
     let mut res = FolioReservation::new(inode);
-    res.add_nofail(folio, 0, dirty_bytes).expect("a nofail folio reservation");
-    res.dirty(folio, 0, dirty_bytes)
+    let span = FolioSpan { folio, offset: 0, len: dirty_bytes };
+    res.add_nofail(span).expect("a nofail folio reservation");
+    res.dirty(span)
 }
 
