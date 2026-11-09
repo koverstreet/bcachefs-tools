@@ -157,10 +157,9 @@ fn main() {
         .blocklist_type("printbuf")
         .blocklist_function("sysfs_.*")
         // Empty opaque structs — only ever used behind pointers. As zero-field
-        // structs they make every extern fn that transitively embeds one (via
-        // bch_fs's rhashtable) trip improper_ctypes. opaque_type gives them a
-        // blob field so they're FFI-safe, without us inventing a layout.
-        .opaque_type("rhash_lock_head")
+        // structs they make every extern fn that transitively embeds one trip
+        // improper_ctypes. opaque_type gives them a blob field so they're
+        // FFI-safe, without us inventing a layout.
         .opaque_type("srcu_struct")
         .opaque_type("bch_ioctl_data_event")
         // the shim's own stand-ins for kernel structs, empty in

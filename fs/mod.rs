@@ -425,12 +425,6 @@ pub mod c {
     impl Drop for bch_encrypted_key {
         fn drop(&mut self) { wipe(self); }
     }
-
-    // Opaque kernel types the fs/ bindings reference but never deref. In-kernel
-    // they come from kernel::bindings; userspace's shim doesn't provide them, so
-    // define opaque stand-ins there.
-    #[cfg(not(kernel))]
-    pub enum rhash_lock_head {}
 }
 
 #[allow(non_camel_case_types)]

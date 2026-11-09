@@ -75,9 +75,6 @@ pub struct memalloc_flags {
 }
 
 c_extern! {
-    pub fn bch2_rht_table(ht: *const c::rhashtable) -> *const c::bucket_table;
-    pub fn bch2_rht_nr_buckets(tbl: *const c::bucket_table) -> c_uint;
-    pub fn bch2_rht_bucket(tbl: *const c::bucket_table, hash: c_uint) -> *mut *mut c_void;
     pub fn bch2_debugfs_create_file(name: *const c_char, mode: c::umode_t, parent: *mut c::dentry,
                                     data: *mut c_void, fops: *const c::file_operations) -> *mut c::dentry;
     pub fn rust_kzalloc_nofail(size: usize) -> *mut c_void;

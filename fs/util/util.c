@@ -15,7 +15,6 @@
 #include <linux/preempt.h>
 #include <linux/random.h>
 #include <linux/rcupdate.h>
-#include <linux/rhashtable.h>
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/sched/clock.h>
@@ -485,23 +484,6 @@ void bch2_set_worker_desc(const char *desc)
 bool bch2_capable(int cap)
 {
 	return capable(cap);
-}
-
-/* For data_structures/rhashtable.rs, to which struct bucket_table is opaque */
-const struct bucket_table *bch2_rht_table(const struct rhashtable *ht)
-{
-	/* lockdep_rht_mutex_is_held() only reads it, but isn't const */
-	return rht_dereference_rcu(ht->tbl, (struct rhashtable *) ht);
-}
-
-unsigned bch2_rht_nr_buckets(const struct bucket_table *tbl)
-{
-	return tbl->size;
-}
-
-void **bch2_rht_bucket(const struct bucket_table *tbl, unsigned hash)
-{
-	return (void **) rht_bucket(tbl, hash);
 }
 
 /* For util/debugfs.rs: debugfs_create_file() is, in the kernel, a _Generic() over its fops' type */

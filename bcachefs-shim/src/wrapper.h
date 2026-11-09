@@ -21,7 +21,6 @@
 #include "include/linux/ratelimit.h"
 #include "include/linux/refcount.h"
 #include "include/linux/rcupdate.h"
-#include "include/linux/rhashtable.h"
 #include "include/linux/sched.h"
 #include "include/linux/semaphore.h"
 #include "include/linux/seqlock.h"

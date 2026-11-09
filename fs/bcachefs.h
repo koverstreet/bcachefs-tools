@@ -43,8 +43,6 @@
 #include <linux/percpu-refcount.h>
 #include <linux/percpu-rwsem.h>
 #include <linux/refcount.h>
-#include <linux/rhashtable.h>
-#include <linux/rhashtable-types.h>
 #include <linux/rwsem.h>
 #include <linux/semaphore.h>
 #include <linux/seqlock.h>
