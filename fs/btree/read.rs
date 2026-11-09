@@ -927,11 +927,6 @@ pub fn read_bio_to_text(out: &mut Printbuf, rb: &BtreeReadBio) {
     unsafe { Bio::from_raw(&rb.bio) }.to_text(out)
 }
 
-#[c_export]
-pub fn bch2_btree_node_read(trans: &BtreeTrans<'_>, b: &BtreeNode, sync: bool) {
-    node_read(trans, b, sync)
-}
-
 pub fn node_read(trans: &BtreeTrans<'_>, b: &BtreeNode, sync: bool) {
     let fs = trans.fs();
     let btree = Btree(b.c.btree_id.into());

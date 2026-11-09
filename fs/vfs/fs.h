@@ -98,7 +98,6 @@ static inline struct bch_inode_info *file_bch_inode(struct file *file)
 #include "vfs/dir_gen.h"
 #include "vfs/file_gen.h"
 #include "vfs/inode_ops_gen.h"
-#include "vfs/namei_gen.h"
 
 static inline void bch2_dirty_inode(struct bch_fs *c, struct bch_inode_info *inode)
 {

@@ -17,13 +17,6 @@ use cstruct_macros::c_export;
 // ── queries ──────────────────────────────────────────────────────────────
 
 #[c_export]
-pub fn bch2_bkey_has_device_c(c: &Fs, k: BkeySC<'_>, dev: c_uint) -> *const c::bch_extent_ptr {
-    k.arm::<Ptrs>()
-        .and_then(|k| k.has_device(c, dev).map(|p| p as *const _))
-        .unwrap_or(core::ptr::null())
-}
-
-#[c_export]
 pub fn bch2_bkey_matches_ptr(c: &Opaque<Fs>, k: BkeySC<'_>, m: c::bch_extent_ptr, offset: u64) -> bool {
     k.arm::<Ptrs>().is_some_and(|k| k.matches_ptr(Fs::from_c(c), &m, offset))
 }

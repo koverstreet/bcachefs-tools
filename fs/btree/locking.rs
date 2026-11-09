@@ -1385,13 +1385,6 @@ pub fn bch2_btree_node_lock_write_contended(trans: &BtreeTrans<'_>, #[lent(trans
 }
 
 #[c_export]
-pub fn bch2_btree_node_lock_with_path(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                      b: &c::btree_bkey_cached_common, ty: c::six_lock_type, hash_val: u64,
-                                      path_idx_out: &mut PathIdx) -> c_int {
-    ret_to_c(trans.node_lock_with_path(paths, b, ty, hash_val).map(|idx| *path_idx_out = idx))
-}
-
-#[c_export]
 pub fn __bch2_btree_node_relock(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: *mut BtreePath,
                                 level: c_uint, trace: bool) -> bool {
     trans.node_relock_slowpath(paths, trans.path_idx_of(path), level as usize, trace)

@@ -562,16 +562,6 @@ pub(crate) fn peek_max<'a>(jk: &'a c::journal_keys, btree: Btree, level: u32, po
     }
 }
 
-/// # Safety
-/// The caller's transaction holds a ref on the journal keys:
-/// journal_replay_not_finished.
-#[c_export]
-pub unsafe fn bch2_journal_keys_peek_max(c: &Opaque<Fs>, btree: Btree, level: c_uint, pos: Bpos,
-                                         end: Bpos, idx: &mut usize) -> *const c::bkey_i {
-    peek_max(unsafe { Fs::from_c(c).journal_keys_held() }, btree, level, pos, end, idx)
-        .map_or(ptr::null(), BkeyI::as_ffi)
-}
-
 pub(crate) fn peek_prev_min<'a>(jk: &'a c::journal_keys, btree: Btree, level: u32, pos: Bpos, end: Bpos,
                                 idx: &mut usize) -> Option<&'a BkeyI>
 {
@@ -638,7 +628,8 @@ pub(crate) fn peek_prev_min<'a>(jk: &'a c::journal_keys, btree: Btree, level: u3
 }
 
 /// # Safety
-/// As bch2_journal_keys_peek_max()'s.
+/// The caller's transaction holds a ref on the journal keys:
+/// journal_replay_not_finished.
 pub(crate) unsafe fn peek_slot(fs: &Fs, btree: Btree, level: u32, pos: Bpos) -> Option<&BkeyI> {
     peek_max(unsafe { fs.journal_keys_held() }, btree, level, pos, pos, &mut 0)
 }

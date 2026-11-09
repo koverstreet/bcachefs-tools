@@ -150,7 +150,7 @@ use crate::c;
 use crate::data::extents::{bch2_cut_back_s, bch2_cut_front_s};
 use crate::debug::params::debug_check_iterators;
 use crate::debug::trace::events;
-use crate::errcode::{BchError, bch_errcode, err_ptr, ret_to_c};
+use crate::errcode::{BchError, bch_errcode, err_ptr};
 use crate::fs::Fs;
 use crate::prt;
 use crate::snapshots::snapshot::is_ancestor;
@@ -158,7 +158,7 @@ use crate::util::{max_of, Printbuf};
 use crate::SPOS_MAX;
 use bitflags::bitflags;
 use core::cell::Cell;
-use core::ffi::{c_ulong, c_int, c_uint};
+use core::ffi::{c_ulong, c_uint};
 use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
 use crate::data::ptrs::BtreePtrs;
@@ -274,7 +274,6 @@ impl BtreeIter<'_> {
 
     /// Its path isn't wanted after this: not preserved, and - if only this
     /// iterator holds it - not needing to stay locked.
-    /// bch2_set_btree_iter_dontneed().
     pub fn set_dontneed(&mut self) {
         let trans = self.trans_c();
         self.set_dontneed_in(&mut trans.paths());
@@ -1872,21 +1871,6 @@ unsafe fn peek_c(iter: *mut c::btree_iter, f: impl FnOnce(&mut BtreeIter<'static
 /// # Safety
 /// @iter is an initialized iterator, which C hands over for the call.
 #[c_export]
-pub unsafe fn bch2_set_btree_iter_dontneed(iter: *mut c::btree_iter) {
-    unsafe { with_paths(iter, |iter, paths| iter.set_dontneed_in(paths)) }
-}
-
-/// # Safety
-/// As bch2_set_btree_iter_dontneed()'s.
-#[c_export]
-#[must_use]
-pub unsafe fn bch2_btree_iter_traverse(iter: *mut c::btree_iter) -> c_int {
-    unsafe { with_paths(iter, |iter, paths| ret_to_c(iter.traverse_in(paths))) }
-}
-
-/// # Safety
-/// As bch2_set_btree_iter_dontneed()'s.
-#[c_export]
 pub unsafe fn bch2_btree_iter_peek_node(iter: *mut c::btree_iter) -> *mut BtreeNode {
     unsafe {
         with_paths(iter, |iter, paths| match iter.peek_node_in(paths) {
@@ -1897,14 +1881,14 @@ pub unsafe fn bch2_btree_iter_peek_node(iter: *mut c::btree_iter) -> *mut BtreeN
 }
 
 /// # Safety
-/// As bch2_set_btree_iter_dontneed()'s.
+/// As bch2_btree_iter_peek_node()'s.
 #[c_export]
 pub unsafe fn bch2_btree_iter_advance(iter: *mut c::btree_iter) -> bool {
     unsafe { with_paths(iter, |iter, paths| iter.advance_in(paths)) }
 }
 
 /// # Safety
-/// As bch2_set_btree_iter_dontneed()'s.
+/// As bch2_btree_iter_peek_node()'s.
 #[c_export]
 pub unsafe fn bch2_btree_iter_rewind(iter: *mut c::btree_iter) -> bool {
     unsafe { with_paths(iter, |iter, paths| iter.rewind_in(paths)) }
@@ -1919,7 +1903,7 @@ pub unsafe fn bch2_btree_iter_rewind(iter: *mut c::btree_iter) -> bool {
  * Returns:	key if found, or an error extractable with bkey_err().
  */
 /// # Safety
-/// As bch2_set_btree_iter_dontneed()'s.
+/// As bch2_btree_iter_peek_node()'s.
 #[c_export]
 pub unsafe fn bch2_btree_iter_peek_max(iter: *mut c::btree_iter, end: *const Bpos) -> c::bkey_s_c {
     unsafe { peek_c(iter, |iter, paths| iter.peek_max_in(paths, *end)) }
@@ -1947,7 +1931,7 @@ pub unsafe fn bch2_btree_iter_peek_max(iter: *mut c::btree_iter, end: *const Bpo
  * Returns:	key if found, or an error extractable with bkey_err().
  */
 /// # Safety
-/// As bch2_set_btree_iter_dontneed()'s.
+/// As bch2_btree_iter_peek_node()'s.
 #[c_export]
 pub unsafe fn bch2_btree_iter_peek_prev_min(iter: *mut c::btree_iter, end: Bpos) -> c::bkey_s_c {
     unsafe { peek_c(iter, |iter, paths| iter.peek_prev_min_in(paths, end)) }
@@ -1961,7 +1945,7 @@ pub unsafe fn bch2_btree_iter_peek_prev_min(iter: *mut c::btree_iter, end: Bpos)
  * Returns:	key if found, or an error extractable with bkey_err().
  */
 /// # Safety
-/// As bch2_set_btree_iter_dontneed()'s.
+/// As bch2_btree_iter_peek_node()'s.
 #[c_export]
 pub unsafe fn bch2_btree_iter_peek_slot(iter: *mut c::btree_iter) -> c::bkey_s_c {
     unsafe { peek_c(iter, |iter, paths| iter.peek_slot_in(paths)) }
@@ -1977,7 +1961,7 @@ pub unsafe fn bch2_btree_iter_peek_slot(iter: *mut c::btree_iter) -> c::bkey_s_c
  * Returns:	key if found, or an error extractable with bkey_err().
  */
 /// # Safety
-/// As bch2_set_btree_iter_dontneed()'s.
+/// As bch2_btree_iter_peek_node()'s.
 #[c_export]
 pub unsafe fn bch2_btree_iter_peek_slot_max(iter: *mut c::btree_iter, end: Bpos) -> c::bkey_s_c {
     unsafe { peek_c(iter, |iter, paths| iter.peek_slot_max_in(paths, end)) }

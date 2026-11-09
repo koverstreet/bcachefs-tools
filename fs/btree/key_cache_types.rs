@@ -87,11 +87,6 @@ impl bch_fs_btree_key_cache {
 }
 
 #[c_export]
-pub fn bch2_nr_btree_keys_need_flush(c: &Fs) -> usize {
-    c.btree.key_cache.nr_keys_need_flush()
-}
-
-#[c_export]
 pub fn __bch2_btree_key_cache_must_wait(c: &Fs) -> isize {
     c.btree.key_cache.dirty_over_max()
 }

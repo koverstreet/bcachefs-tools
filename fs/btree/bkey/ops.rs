@@ -147,7 +147,7 @@ pub fn bkey_to_text(out: &mut Printbuf, k: &c::bkey) {
     prt!(out, " len {} ver {}", k.size, { k.bversion.lo });
 }
 
-/// bch2_val_to_text(): the value, by its type's to_text - which may not have
+/// The value, by its type's to_text - which may not have
 /// validated: printing one that didn't is the point.
 #[cold]
 pub fn val_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
@@ -173,11 +173,6 @@ pub fn val_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
     }
 
     (k.k.key_type().ops().to_text)(out, fs, k)
-}
-
-#[c_export]
-pub fn bch2_val_to_text(out: &mut Printbuf, c: Option<&Opaque<Fs>>, k: BkeySC<'_>) {
-    val_to_text(out, c.map(Fs::from_c), k)
 }
 
 /// bch2_bkey_val_to_text(): the header, and the value.

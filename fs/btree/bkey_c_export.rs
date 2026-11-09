@@ -12,7 +12,6 @@ use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::format::Bpos;
 use crate::util::vstructs::plain_bytes_mut;
-use crate::util::{Printbuf, ToText};
 use cstruct_macros::c_export;
 
 unsafe fn words_mut<'a>(k: *mut c::bkey_packed, u64s: usize) -> &'a mut [u64] {
@@ -25,15 +24,6 @@ unsafe fn words_mut<'a>(k: *mut c::bkey_packed, u64s: usize) -> &'a mut [u64] {
  */
 unsafe fn padded<'a>(k: *const c::bkey_packed) -> &'a [u64] {
     unsafe { slice::from_raw_parts(k.cast::<u64>().sub(1), 1 + (*k).u64s as usize) }
-}
-
-#[c_export]
-pub static bch2_bkey_format_current: c::bkey_format = BKEY_FORMAT_CURRENT;
-
-#[cold]
-#[c_export]
-pub fn bch2_bkey_format_to_text(out: &mut Printbuf, f: &c::bkey_format) {
-    f.to_text(out);
 }
 
 #[c_export]

@@ -926,9 +926,3 @@ pub fn bch2_journal_pin_set(j: &c::journal, seq: u64, pin: &c::journal_entry_pin
                             ty: c::journal_pin_type, flush: c::journal_pin_flush_fn) {
     j.pin_set(seq, pin, ty, flush)
 }
-
-#[c_export]
-pub fn bch2_journal_pin_drop(j: &c::journal, pin: &c::journal_entry_pin) {
-    j.pin_drop(pin)
-}
-

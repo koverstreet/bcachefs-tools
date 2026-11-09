@@ -789,11 +789,6 @@ impl NodeContents {
  * the node, which C calls with it held for write.
  */
 
-#[c_export]
-pub fn bch2_btree_keys_init(b: &BtreeNode) {
-    b.keys_mut(unsafe { b.contents_mut() }).btree_keys_init();
-}
-
 pub fn bch2_bset_init_first(b: &BtreeNode, i: *mut Head<c::bset>) {
     let mut keys = b.keys_mut(unsafe { b.contents_mut() });
     let offset = keys.as_keys().offset_of(i);

@@ -33,7 +33,7 @@ use crate::util::file::File;
 use crate::util::ffi::bytes;
 use crate::util::os_str::{cstr_name, OsStr};
 use crate::xattr::{self, XattrType};
-use cstruct_macros::{c_export, vtable};
+use cstruct_macros::vtable;
 use kernel::sync::aref::ARef;
 
 use super::dentry::Dentry;
@@ -519,15 +519,4 @@ fn dirent_to_missing_inode(t: &TransAttempt<'_, '_>, d: Dirent<'_>, dir: c::subv
     t.unlock();
     passes::run_explicit(fs, &mut msg, RecoveryPass::check_dirents,
                          c::bch_run_recovery_pass_flags::empty())
-}
-
-/// For C's unlink and rmdir, and subvolume deletion, until they're Rust.
-///
-/// # Safety
-/// @vdir is one of our directories and @dentry one of our dentries in it,
-/// both referenced, and @vdir locked, for the call.
-#[c_export]
-pub unsafe fn __bch2_unlink(vdir: *mut c::inode, dentry: *mut c::dentry, deleting_subvol: bool) -> c_int {
-    let dir = unsafe { InodeInfo::from_inode(vdir) };
-    ret_to_c(dir.unlink(unsafe { Dentry::borrow_raw(dentry) }, deleting_subvol))
 }

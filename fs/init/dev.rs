@@ -1760,11 +1760,6 @@ impl Dev {
     }
 }
 
-#[c_export]
-pub fn bch2_dev_bdev(ca: &Dev) -> *mut c::block_device {
-    ca.disk_sb.bdev
-}
-
 // ── blk_holder_ops ────────────────────────────────────────────────────────
 
 #[cfg(kernel)]

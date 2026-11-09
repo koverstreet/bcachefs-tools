@@ -6,9 +6,6 @@ use super::*;
 use cstruct_macros::c_export;
 use crate::format::{Btree, DataType, MemberState, SbFeature};
 
-#[c_export]
-pub static bch2_opts_default: c::bch_opts = DEFAULTS;
-
 /// The tables C still reads: each enum's names, as C's string tables have
 /// them.
 macro_rules! c_names {
