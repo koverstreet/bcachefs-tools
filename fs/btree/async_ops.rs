@@ -151,6 +151,9 @@ async fn task(_write: WriteRef, fs: BackRef<Fs>, a: OpBox) {
     drop(trans);
     drop(a);
 
+    /* async_btree_op() registers under btree locks, where it can't grow the table: */
+    let _ = fs.btree.async_ops.table.make_room();
+
     fs.btree.async_ops.op_done();
 }
 
@@ -186,7 +189,11 @@ impl Fs {
         let _noio = MemallocFlags::noio();
         let seq = contents.data().keys.seq.get();
         let Ok(mut a) = OpBox::new(::pin_init::init!(Op { pos, op, seq, reg: None }? AllocError)) else { return };
-        let Ok(reg) = (unsafe { Registration::register(&r.table, pos, NonNull::from(&a.pos)) }) else { return };
+        let reg = {
+            let _noreclaim = MemallocFlags::noreclaim();
+            unsafe { Registration::register(&r.table, pos, NonNull::from(&a.pos)) }
+        };
+        let Ok(reg) = reg else { return };
         a.as_pin_mut().get_mut().reg = Some(reg);
 
         let mut pending = r.pending.lock();
