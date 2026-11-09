@@ -133,6 +133,16 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/srcu.h",			// srcu_read_lock(), srcu_read_unlock()
     "linux/srcutree.h",			// synchronize_srcu_expedited(): an export,
     "linux/srcutiny.h",			// or with TINY_SRCU a static inline
+    // util/kernel.rs, kthread.rs, workqueue.rs and sched.rs: exports and
+    // static inlines, the shim's functions in userspace
+    "linux/alloc_tag.h",		// mem_alloc_profiling_enabled()
+    "linux/sched/clock.h",		// local_clock(), sched_clock()
+    "linux/delay.h",			// msleep()
+    "linux/timekeeping.h",		// ktime_get_ns()
+    "linux/random.h",			// get_random_u64()
+    "linux/workqueue.h",		// queue_work(), queue_delayed_work()
+    "linux/cpumask.h",			// cpumask_local_spread()
+    "linux/numa.h",			// NUMA_NO_NODE
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
@@ -222,6 +232,9 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "console_trylock", "console_unlock",
     // util/rcu.rs's Srcu: static inlines, and synchronize_srcu_expedited() is with TINY_SRCU
     "srcu_read_lock", "srcu_read_unlock", "synchronize_srcu_expedited",
+    // util/kernel.rs, kthread.rs, workqueue.rs and sched.rs
+    "mem_alloc_profiling_enabled", "local_clock", "msleep", "ktime_get_ns", "get_random_u64",
+    "queue_work", "queue_delayed_work", "kthread_stop", "sched_clock", "cpumask_local_spread",
     // vfs/vfs_inode.rs, for the inode cache: static inlines, inode_state_*() from 6.19
     "inode_state_read", "__iget", "inode_fake_hash", "inode_wake_up_bit",
     "inode_sb_list_add", "inode_bit_waitqueue",
@@ -252,10 +265,11 @@ const BLOCKLIST_TYPE: &[&str] = &["inode", "file", "dir_context", "user_namespac
                                      "vm_operations_struct", "vm_area_struct", "vm_area_desc", "kiocb",
                                      "super_block", "super_operations", "percpu_ref", "ida",
                                      "blk_holder_ops", "bio_set", "xarray", "writeback_control",
-                                     "folio", "page", "mm_struct", "key", "key_type", "srcu_struct"];
+                                     "folio", "page", "mm_struct", "key", "key_type", "srcu_struct",
+                                     "workqueue_struct", "work_struct", "delayed_work"];
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
                                  "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*", "FALLOC_FL_.*",
-                                 "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*", "key_type_user",
+                                 "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*", "key_type_user", "NUMA_NO_NODE",
                                  // before 7.1/7.2, as above
                                  "raid6_call", "raid6_2data_recov", "raid6_datap_recov", "MAX_XOR_BLOCKS",
                                  "LZ4HC_MEM_COMPRESS", "LZ4HC_MIN_CLEVEL",

@@ -9,15 +9,12 @@
 #include <linux/bio.h>
 #include <linux/blkdev.h>
 #include <linux/debugfs.h>
-#include <linux/delay.h>
 #include <linux/kthread.h>
 #include <linux/percpu.h>
 #include <linux/preempt.h>
-#include <linux/random.h>
 #include <linux/rcupdate.h>
 #include <linux/string.h>
 #include <linux/types.h>
-#include <linux/sched/clock.h>
 #include <linux/sched/debug.h>
 #include <linux/sched/signal.h>
 #include <linux/static_key.h>
@@ -315,39 +312,18 @@ void rust_kfree_rcu_mightsleep(void *p)
 	kfree_rcu_mightsleep(p);
 }
 
-/* For util/kernel.rs: a static key */
-bool rust_mem_alloc_profiling_enabled(void)
-{
-	return mem_alloc_profiling_enabled();
-}
-
 /*
- * For Rust, what it can't call itself: static inlines and macros, and in
- * places which of the two differs between the kernel and userspace.
+ * For Rust, what it can't call itself: macros, and in places which of a
+ * macro or a function differs between the kernel and userspace.
  */
-u64 bch2_local_clock(void)
-{
-	return local_clock();
-}
-
 void bch2_cond_resched(void)
 {
 	cond_resched();
 }
 
-void bch2_msleep(unsigned ms)
-{
-	msleep(ms);
-}
-
 bool bch2_fatal_signal_pending(void)
 {
 	return fatal_signal_pending(current);
-}
-
-u64 bch2_ktime_get_ns(void)
-{
-	return ktime_get_ns();
 }
 
 #ifdef __KERNEL__
@@ -357,20 +333,10 @@ unsigned bch2_num_online_cpus(void)
 }
 #endif
 
+/* bdev_rot() is util.h's, before 7.0 and in userspace */
 bool bch2_bdev_rot(struct block_device *bdev)
 {
 	return bdev_rot(bdev);
-}
-
-u64 bch2_get_random_u64(void)
-{
-	return get_random_u64();
-}
-
-/* queue_work() is a static inline in the kernel, a function in userspace: */
-bool bch2_queue_work(struct workqueue_struct *wq, struct work_struct *work)
-{
-	return queue_work(wq, work);
 }
 
 /*
@@ -381,12 +347,6 @@ bool bch2_queue_work(struct workqueue_struct *wq, struct work_struct *work)
 void bch2_init_delayed_work(struct delayed_work *dwork, work_func_t func)
 {
 	INIT_DELAYED_WORK(dwork, func);
-}
-
-bool bch2_queue_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork,
-			     unsigned long delay)
-{
-	return queue_delayed_work(wq, dwork, delay);
 }
 
 /* For util/workqueue.rs: alloc_workqueue() is a macro, its name a format */
@@ -407,11 +367,6 @@ static_assert(BCH_WQ_PERCPU		== WQ_PERCPU || !WQ_PERCPU);
 struct task_struct *bch2_kthread_create(int (*fn)(void *), void *data, const char *name)
 {
 	return kthread_create(fn, data, "%s", name);
-}
-
-int bch2_kthread_stop(struct task_struct *p)
-{
-	return kthread_stop(p);
 }
 
 bool bch2_kthread_should_stop(void)
@@ -451,7 +406,10 @@ bool bch2_need_resched(void)
 #ifdef CONFIG_SMP
 #include <linux/sched/rt.h>
 
-/* For locking/six.rs's optimistic spin: inlines over current and its owner */
+/*
+ * For locking/six.rs's optimistic spin: inlines over current and its owner -
+ * sched.h's, which codegen can't unblocklist: its structs don't bind
+ */
 bool bch2_owner_on_cpu(struct task_struct *owner)
 {
 	return owner_on_cpu(owner);
@@ -460,11 +418,6 @@ bool bch2_owner_on_cpu(struct task_struct *owner)
 bool bch2_rt_or_dl_task_current(void)
 {
 	return rt_or_dl_task(current);
-}
-
-u64 bch2_sched_clock(void)
-{
-	return sched_clock();
 }
 #endif
 
@@ -495,14 +448,8 @@ struct dentry *bch2_debugfs_create_file(const char *name, umode_t mode, struct d
 
 #ifdef __KERNEL__
 #include <linux/cpumask.h>
-#include <linux/numa.h>
 
-/* NUMA_NO_NODE is a macro, nr_cpu_ids a variable - or a macro, without SMP */
-unsigned bch2_cpumask_local_spread(unsigned i)
-{
-	return cpumask_local_spread(i, NUMA_NO_NODE);
-}
-
+/* nr_cpu_ids is a variable - or a macro, without SMP */
 unsigned bch2_nr_cpu_ids(void)
 {
 	return nr_cpu_ids;

@@ -85,7 +85,7 @@ pub unsafe fn shrinker_scan(shrink: *mut c::shrinker, nr: core::ffi::c_ulong) {
 /// as cpumask_local_spread(i, NUMA_NO_NODE).
 #[cfg(kernel)]
 pub fn cpumask_local_spread(i: u32) -> u32 {
-    unsafe { c::bch2_cpumask_local_spread(i) }
+    unsafe { c::cpumask_local_spread(i, c::NUMA_NO_NODE) }
 }
 
 /// One more than the highest possible CPU number.
@@ -128,7 +128,7 @@ pub fn blkdev_issue_discard(bdev: &c::block_device, sector: u64, nr_sectors: u64
 }
 
 pub fn random_u64() -> u64 {
-    unsafe { c::bch2_get_random_u64() }
+    unsafe { c::get_random_u64() }
 }
 
 /// __get_random_u32_below()'s algorithm, widened: the high half of
@@ -151,7 +151,7 @@ pub fn random_u64_below(ceil: u64) -> u64 {
 // a symbol for Rust: util.c wraps both, as bch2_*, for the kernel and
 // userspace builds alike.
 pub fn local_clock() -> u64 {
-    unsafe { c::bch2_local_clock() }
+    unsafe { c::local_clock() }
 }
 
 pub fn cond_resched() {
@@ -203,7 +203,7 @@ pub unsafe fn copy_u64s_small(dst: *mut u64, src: *const u64, n: usize) {
 }
 
 pub fn mem_alloc_profiling_enabled() -> bool {
-    unsafe { c::rust_mem_alloc_profiling_enabled() }
+    unsafe { c::mem_alloc_profiling_enabled() }
 }
 
 /// Userspace has no vmalloc: its is_vmalloc_addr() is a macro, 0.
@@ -231,7 +231,7 @@ pub fn sort_nonatomic<T>(v: &mut [T], mut cmp: impl FnMut(&T, &T) -> core::cmp::
 }
 
 pub fn msleep(ms: u32) {
-    unsafe { c::bch2_msleep(ms) }
+    unsafe { c::msleep(ms) }
 }
 
 pub fn dump_stack() {
@@ -430,7 +430,7 @@ pub fn ktime_get_real_seconds() -> i64 {
 
 /// The monotonic clock, in nanoseconds: ktime_get_ns().
 pub fn ktime_get_ns() -> u64 {
-    unsafe { c::bch2_ktime_get_ns() }
+    unsafe { c::ktime_get_ns() }
 }
 
 /// A byte position as the kernel takes it: a loff_t, past whose top - LLONG_MAX

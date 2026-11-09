@@ -116,7 +116,7 @@ impl KthreadRef {
     /// Tell it to stop, and wait for it to: never from the thread itself. It
     /// may have returned already, or never have run.
     pub fn stop(self) {
-        unsafe { c::bch2_kthread_stop(self.0.as_ptr()) };
+        unsafe { c::kthread_stop(self.0.as_ptr()) };
     }
 }
 

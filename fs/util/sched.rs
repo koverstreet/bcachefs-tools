@@ -24,7 +24,7 @@ pub fn schedule() {
 #[cfg(CONFIG_SMP)]
 #[inline(always)]
 pub fn sched_clock() -> u64 {
-    unsafe { c::bch2_sched_clock() }
+    unsafe { c::sched_clock() }
 }
 
 #[inline(always)]

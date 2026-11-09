@@ -87,24 +87,15 @@ c_extern! {
     pub fn rust_bio_pages_alloc(size: usize, gfp: c::gfp_t) -> *mut c_void;
     pub fn rust_bio_pages_free(p: *mut c_void, size: usize);
     pub fn rust_kfree_rcu_mightsleep(p: *mut c_void);
-    pub fn rust_mem_alloc_profiling_enabled() -> bool;
-    pub fn bch2_local_clock() -> u64;
     pub fn bch2_cond_resched();
-    pub fn bch2_msleep(ms: c_uint);
     pub fn bch2_fatal_signal_pending() -> bool;
-    pub fn bch2_ktime_get_ns() -> u64;
     pub fn bch2_num_online_cpus() -> c_uint;
     pub fn bch2_bdev_rot(bdev: *mut c::block_device) -> bool;
-    pub fn bch2_get_random_u64() -> u64;
-    pub fn bch2_queue_work(wq: *mut c::workqueue_struct, work: *mut c::work_struct) -> bool;
     pub fn bch2_init_delayed_work(dwork: *mut c::delayed_work,
                                   func: Option<unsafe extern "C" fn(*mut c::work_struct)>);
-    pub fn bch2_queue_delayed_work(wq: *mut c::workqueue_struct, dwork: *mut c::delayed_work,
-                                   delay: c_ulong) -> bool;
     pub fn bch2_alloc_workqueue(name: *const c_char, flags: c_uint, max_active: c_int) -> *mut c::workqueue_struct;
     pub fn bch2_kthread_create(func: Option<unsafe extern "C" fn(*mut c_void) -> c_int>, data: *mut c_void,
                                name: *const c_char) -> *mut c::task_struct;
-    pub fn bch2_kthread_stop(p: *mut c::task_struct) -> c_int;
     pub fn bch2_kthread_should_stop() -> bool;
     pub fn bch2_current() -> *mut c::task_struct;
     pub fn bch2_set_current_state(state: c_uint);
@@ -115,13 +106,9 @@ c_extern! {
     pub fn bch2_owner_on_cpu(owner: *mut c::task_struct) -> bool;
     #[cfg(CONFIG_SMP)]
     pub fn bch2_rt_or_dl_task_current() -> bool;
-    #[cfg(CONFIG_SMP)]
-    pub fn bch2_sched_clock() -> u64;
     pub fn bch2_init_work(work: *mut c::work_struct, func: Option<unsafe extern "C" fn(*mut c::work_struct)>);
     pub fn bch2_set_worker_desc(desc: *const c_char);
     pub fn bch2_capable(cap: c_int) -> bool;
-    #[cfg(__KERNEL__)]
-    pub fn bch2_cpumask_local_spread(i: c_uint) -> c_uint;
     #[cfg(__KERNEL__)]
     pub fn bch2_nr_cpu_ids() -> c_uint;
 }

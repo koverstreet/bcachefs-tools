@@ -9,8 +9,11 @@
  * but util/pf_memalloc.h, which only picks kernel bits.
  */
 
+#include <linux/alloc_tag.h>
 #include <linux/blkdev.h>
 #include <linux/compat.h>
+#include <linux/cpumask.h>
+#include <linux/delay.h>
 #include <linux/falloc.h>
 #include <linux/fs.h>
 #include <linux/highmem.h>
@@ -21,6 +24,7 @@
 #include <linux/namei.h>
 #include <linux/mm.h>
 #include <linux/notifier.h>
+#include <linux/numa.h>
 #include <linux/pagemap.h>
 /* struct folio_batch: pagevec.h's, before 7.1 */
 #if __has_include(<linux/folio_batch.h>)
@@ -29,11 +33,15 @@
 #include <linux/pagevec.h>
 #endif
 #include <linux/poll.h>
+#include <linux/random.h>
 #include <linux/rmap.h>
+#include <linux/sched/clock.h>
 #include <linux/slab.h>
 #include <linux/srcu.h>
+#include <linux/timekeeping.h>
 #include <linux/version.h>
 #include <linux/vmalloc.h>
+#include <linux/workqueue.h>
 #include <linux/writeback.h>
 #include <asm/ioctl.h>
 #include <keys/user-type.h>

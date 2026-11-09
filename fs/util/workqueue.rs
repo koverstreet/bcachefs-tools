@@ -172,7 +172,7 @@ impl Queue {
     /// @work is initialized, and lives until its function has run.
     pub unsafe fn queue_work(&self, work: *mut c::work_struct) -> bool {
         // SAFETY: the caller's
-        unsafe { c::bch2_queue_work(self.as_ptr(), work) }
+        unsafe { c::queue_work(self.as_ptr(), work) }
     }
 
     /// queue_work(), to run on @cpu: queue_work_on(). Userspace has no CPU
@@ -568,7 +568,7 @@ impl DelayedWork {
     /// Run on @wq after @delay jiffies: queue_delayed_work(). False if it was
     /// already queued - then that run is the one there'll be.
     pub fn queue(&self, wq: &Queue, delay: c_ulong) -> bool {
-        unsafe { c::bch2_queue_delayed_work(wq.as_ptr(), self.as_ptr(), delay) }
+        unsafe { c::queue_delayed_work(wq.as_ptr(), self.as_ptr(), delay) }
     }
 
     /// Run on @wq after @delay jiffies, from now - re-armed if it was already
