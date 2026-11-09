@@ -14,6 +14,7 @@ use crate::inode_opts;
 use crate::util::bio::{plugged, Bio, BioBuffersUnmanaged, BioOwner};
 use crate::util::closure::{self, closure_wait, StackClosure};
 use crate::util::kernel::{local_clock, unlikely, PAGE_SIZE};
+use crate::util::ops::from_raw;
 use crate::util::time_stats::TimeStats;
 use crate::vfs::folio::{Folio, FolioGuard, FolioSpan, Mapping};
 use crate::vfs::inode::InodeInfo;
@@ -23,7 +24,6 @@ use core::ffi::c_int;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{AcqRel, Relaxed};
-use cstruct_macros::c_export;
 
 type Io = c::bch_writepage_io;
 
@@ -33,8 +33,12 @@ struct WritepageState {
     tmp:  *mut c::bch_folio_sector,
 }
 
-/// The VFS's writeback of a mapping, for the bch2_writepages() it's passed to.
-struct Wbc(NonNull<c::writeback_control>);
+/// The VFS's writeback of a mapping, for the writepages() it's passed to.
+pub(crate) struct Wbc(NonNull<c::writeback_control>);
+
+from_raw! {
+    Wbc = *mut c::writeback_control => |r| Wbc(NonNull::new_unchecked(r));
+}
 
 impl Wbc {
     /// The next folio to write back, locked - after @prev, which writing
@@ -354,11 +358,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState) -> c_int 
     0
 }
 
-/// # Safety
-/// The VFS's: @mapping one of our inodes', @wbc its writeback.
-#[c_export]
-pub unsafe fn bch2_writepages(mapping: *mut c::address_space, wbc: *mut c::writeback_control) -> c_int {
-    let (mapping, wbc) = unsafe { (Mapping::from_raw(mapping), Wbc(NonNull::new_unchecked(wbc))) };
+pub(super) fn writepages(mapping: Mapping, wbc: Wbc) -> c_int {
     let inode = mapping.inode();
     let fs = inode.fs();
     let pool = &fs.vfs.writepage_buf_pool;

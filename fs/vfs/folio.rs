@@ -19,14 +19,18 @@
 //! Readahead is the VFS's readahead_control: the locked folios it asks a read
 //! of, each given out with a ref, and given back - unread - by unread().
 
+use super::buffered_write::WriteBegun;
 use super::inode::InodeInfo;
+use super::ops::VfsWriter;
+use super::writeback::Wbc;
 use crate::c;
 use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
 use crate::locking::ExclusiveGuard;
+use crate::util::alloc::KBox;
 use crate::util::iov_iter::IovIter;
 use crate::util::kernel::{cond_resched, loff};
 use core::borrow::Borrow;
-use core::ffi::c_int;
+use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
 use core::ops::{ControlFlow, Deref, DerefMut};
 use core::ptr::NonNull;
@@ -578,6 +582,26 @@ impl Mapping {
         let ret = unsafe { c::filemap_add_folio(self.as_ptr(), folio.as_ptr(), index as _, gfp) };
         if ret < 0 { Err(BchError::from_raw(ret)) } else { Ok(()) }
     }
+}
+
+crate::vfs_ops! {
+    /// A mapping's operations, address_space_operations.
+    pub(crate) trait AddressSpaceOps for c::address_space_operations, AopsVTable<T: AddressSpaceOps> = T;
+
+    fn writepages(mapping: Mapping, wbc: Wbc) -> c_int;
+    /// @folio marked dirty: whether it wasn't.
+    fn dirty_folio(mapping: Mapping, folio: Folio) -> bool;
+    /// The folio @len bytes at @pos are written into, locked, in *@foliop,
+    /// and what write_end() has of the write, in *@fsdata.
+    fn write_begin(_w: VfsWriter, mapping: Mapping, pos: c::loff_t, len: c_uint,
+                   foliop: &mut *mut c::folio, fsdata: &mut *mut c_void) -> Result<(), BchError>;
+    /// @copied of the @len bytes at @pos written into @folio, write_begin()'s:
+    /// how many were.
+    fn write_end(_w: VfsWriter, mapping: Mapping, pos: c::loff_t, len: c_uint, copied: c_uint,
+                 folio: LockedFolio, begun: KBox<WriteBegun>) -> c_int;
+    fn invalidate_folio(folio: Folio, offset: usize, len: usize);
+    /// Whether @folio's bcachefs state was freed, for the folio to be.
+    fn release_folio(folio: Folio, gfp: c::gfp_t) -> bool;
 }
 
 pub struct Readahead<'a>(&'a mut c::readahead_control);

@@ -7,7 +7,6 @@
 #include <linux/pagemap.h>
 
 #include "vfs/pagecache_gen.h"
-#include "vfs/folio_reservation_gen.h"
 
 /*
  * Use u64 for the end pos and sector helpers because if the folio covers the

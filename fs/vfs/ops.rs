@@ -4,7 +4,7 @@
 //! return, as FromRaw and IntoRaw impls, and SelfOf's &self - what the
 //! superblock's s_fs_info points to, found from whatever the op is passed.
 
-use core::ffi::{c_int, CStr};
+use core::ffi::{c_int, c_void, CStr};
 use core::mem::ManuallyDrop;
 use core::ptr::NonNull;
 
@@ -17,6 +17,7 @@ use crate::util::seq_file::SeqFile;
 
 use super::dentry::Dentry;
 use super::export::NameBuf;
+use super::folio::{Folio, LockedFolio, Mapping};
 use super::idmap::{MntIdmap, RawIdmap};
 use super::inode::InodeInfo;
 use super::path::Path;
@@ -81,6 +82,30 @@ from_raw! {
 from_raw! {
     /// mmap's.
     &'a mut c::vm_area_struct = *mut c::vm_area_struct => |r| &mut *r;
+}
+
+from_raw! {
+    Mapping               = *mut c::address_space => |r| Mapping::from_raw(r);
+    Folio                 = *mut c::folio         => |r| Folio::from_raw(r);
+    /// write_end()'s: write_begin()'s, its lock and ref to give up.
+    LockedFolio           = *mut c::folio         => |r| LockedFolio::from_raw(r);
+    /// write_begin()'s out parameters.
+    &'a mut *mut c::folio = *mut *mut c::folio    => |r| &mut *r;
+    &'a mut *mut c_void   = *mut *mut c_void      => |r| &mut *r;
+}
+
+/// write_begin() and write_end()'s first argument, which they don't use: the
+/// kiocb from 6.17, the file before.
+pub(crate) struct VfsWriter;
+
+#[cfg(linux_ge = "6.17")]
+from_raw! {
+    VfsWriter = *const c::kiocb => |_r| VfsWriter;
+}
+
+#[cfg(not(linux_ge = "6.17"))]
+from_raw! {
+    VfsWriter = *mut c::file => |_r| VfsWriter;
 }
 
 // ── Returns ──────────────────────────────────────────────────────────────

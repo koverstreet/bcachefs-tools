@@ -19,17 +19,12 @@ use crate::util::kmem_cache::KmemCache;
 use core::mem::{offset_of, ManuallyDrop};
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
-use cstruct_macros::c_extern;
 use kernel::sync::aref::ARef;
 use pin_init::{pin_init, pin_init_from_closure, Zeroable};
 
 use super::inode::{InodeInfo, InodeRef};
+use super::pagecache::INODE_AOPS;
 use super::vfs_inode::VfsInode;
-
-c_extern! {
-    // buffered.c's, as its read and write paths are
-    static bch_address_space_operations: c::address_space_operations;
-}
 
 pub(crate) static INODE_CACHE: KmemCache<InodeInfo> = KmemCache::new();
 
@@ -116,7 +111,7 @@ impl NewInode {
         }
 
         // SAFETY: C's, initialized at build time
-        self.v.set_aops(unsafe { &bch_address_space_operations });
+        self.v.set_aops(&INODE_AOPS);
         match self.v.mode() as u32 & c::S_IFMT {
             c::S_IFREG => self.v.set_ops(&super::inode_ops::bch2_file_inode_ops, Some(&super::file::bch2_file_ops)),
             c::S_IFDIR => self.v.set_ops(&super::inode_ops::bch2_dir_inode_ops, Some(&super::dir::bch2_dir_file_ops)),

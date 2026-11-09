@@ -9,10 +9,11 @@ use core::cmp::{max, min};
 use core::alloc::Layout;
 use core::mem::{align_of, size_of};
 use core::borrow::Borrow;
+use core::ffi::{c_int, c_uint, c_void};
 use core::ops::{ControlFlow, Range};
 use core::ptr::NonNull;
 
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, c_extern, vtable};
 use kernel::page::PAGE_SHIFT;
 
 use crate::btree::bkey::{pos, BkeySC};
@@ -28,13 +29,18 @@ use crate::new_lock;
 use crate::snapshots::subvolume;
 use crate::locking::MemallocFlags;
 use crate::data_structures::inline_vec::InlineVec;
-use crate::util::alloc::{init_at, kzalloc};
+use crate::types::CStatic;
+use crate::util::alloc::{init_at, kzalloc, KBox};
 use crate::util::kernel::PAGE_SECTORS_SHIFT;
 use crate::util::bio::Bio;
 use crate::util::ffi::Opaque;
 
-use super::folio::{Folio, FolioSpan, FolioStateGuard, LockedFolio, Mapping};
+use super::buffered_write::{self, WriteBegun};
+use super::folio::{AddressSpaceOps, AopsVTable, Folio, FolioSpan, FolioStateGuard, LockedFolio, Mapping};
+use super::folio_reservation::FolioReservation;
 use super::inode::InodeInfo;
+use super::ops::VfsWriter;
+use super::writeback::{self, Wbc};
 
 impl Mapping {
     /// The folios over [@start, @end), contiguous from @start, as
@@ -436,28 +442,90 @@ impl Folio {
     }
 }
 
-#[c_export]
-pub fn bch2_invalidate_folio(folio: *mut c::folio, offset: usize, length: usize) {
-    let folio = unsafe { Folio::from_raw(folio) };
-
-    if offset != 0 || length < folio.size() {
-        return;
-    }
-
-    folio.release_state();
+c_extern! {
+    // buffered.c's read path
+    fn bch2_read_folio(file: *mut c::file, folio: *mut c::folio) -> c_int;
+    fn bch2_readahead(ractl: *mut c::readahead_control);
 }
 
-#[c_export]
-pub fn bch2_release_folio(folio: *mut c::folio, _gfp_mask: c::gfp_t) -> bool {
-    let folio = unsafe { Folio::from_raw(folio) };
-
-    if folio.dirty() || folio.writeback() {
-        return false;
+#[vtable]
+impl AddressSpaceOps for InodeInfo {
+    fn writepages(mapping: Mapping, wbc: Wbc) -> c_int {
+        writeback::writepages(mapping, wbc)
     }
 
-    folio.release_state();
-    true
+    fn dirty_folio(mapping: Mapping, folio: Folio) -> bool {
+        let inode = mapping.inode();
+
+        /*
+         * Folios above i_size are expected here rather than a curiosity:
+         * truncate_setsize() drops i_size before truncate_pagecache() runs, so
+         * there's a window where the mapping still holds folios past the new
+         * end, and a folio pinned by gup stays attached to the address_space
+         * until the pin drops. FolioReservation::dirty() has the longer version.
+         *
+         * A folio entirely past i_size has nothing to reserve or account for, so
+         * drop it; one straddling i_size is clamped by the min() below and only
+         * the part still within the file gets dirtied.
+         */
+        let file_size = inode.vfs().size();
+        if folio.pos() >= file_size {
+            return false;
+        }
+
+        let dirty_bytes = (min(folio.end_pos(), file_size) - folio.pos()).next_multiple_of(inode.fs().block_bytes()) as usize;
+
+        let mut res = FolioReservation::new(inode);
+        let span = FolioSpan { folio, offset: 0, len: dirty_bytes };
+        res.add_nofail(span).expect("a nofail folio reservation");
+        res.dirty(span)
+    }
+
+    fn write_begin(_w: VfsWriter, mapping: Mapping, pos: c::loff_t, len: c_uint,
+                   foliop: &mut *mut c::folio, fsdata: &mut *mut c_void) -> Result<(), BchError> {
+        *fsdata = core::ptr::null_mut();
+        let (folio, begun) = buffered_write::write_begin(mapping.inode(), mapping, pos as u64, len as usize)?;
+        *foliop = folio.into_raw();
+        *fsdata = KBox::into_raw(begun).cast();
+        Ok(())
+    }
+
+    fn write_end(_w: VfsWriter, mapping: Mapping, pos: c::loff_t, len: c_uint, copied: c_uint,
+                 folio: LockedFolio, begun: KBox<WriteBegun>) -> c_int {
+        buffered_write::write_end(mapping.inode(), folio, begun, pos as u64, len as usize, copied as usize)
+            as c_int
+    }
+
+    fn invalidate_folio(folio: Folio, offset: usize, len: usize) {
+        if offset == 0 && len >= folio.size() {
+            folio.release_state();
+        }
+    }
+
+    fn release_folio(folio: Folio, _gfp: c::gfp_t) -> bool {
+        if folio.dirty() || folio.writeback() {
+            return false;
+        }
+
+        folio.release_state();
+        true
+    }
 }
+
+/// An inode's mapping's operations, as NewInode::init() sets them.
+pub(crate) static INODE_AOPS: CStatic<c::address_space_operations> = unsafe {
+    CStatic::new({
+        let mut ops = AopsVTable::<InodeInfo>::OPS;
+        ops.read_folio         = Some(bch2_read_folio);
+        ops.readahead          = Some(bch2_readahead);
+        #[cfg(CONFIG_MIGRATION)]
+        {
+            ops.migrate_folio  = Some(c::filemap_migrate_folio);
+        }
+        ops.error_remove_folio = Some(c::generic_error_remove_folio);
+        ops
+    })
+};
 
 /* fseek: */
 

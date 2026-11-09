@@ -558,48 +558,4 @@ int bch2_read_folio(struct file *file, struct folio *folio)
 	return bch2_err_class(ret);
 }
 
-/* buffered writes: buffered_write.rs's, past the argument 6.17 changed */
-
-int bch2_write_begin(
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,17,0)
-		     const struct kiocb *iocb,
-#else
-		     struct file *file,
-#endif
-		     struct address_space *mapping,
-		     loff_t pos, unsigned len,
-		     struct folio **foliop, void **fsdata)
-{
-	return bch2_buffered_write_begin(mapping, pos, len, foliop, fsdata);
-}
-
-int bch2_write_end(
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,17,0)
-		   const struct kiocb *iocb,
-#else
-		   struct file *file,
-#endif
-		   struct address_space *mapping,
-		   loff_t pos, unsigned len, unsigned copied,
-		   struct folio *folio, void *fsdata)
-{
-	return bch2_buffered_write_end(mapping, pos, len, copied, folio, fsdata);
-}
-
-/* An inode's, set by vfs/new_inode.rs: */
-const struct address_space_operations bch_address_space_operations = {
-	.read_folio	= bch2_read_folio,
-	.writepages	= bch2_writepages,
-	.readahead	= bch2_readahead,
-	.dirty_folio	= bch2_vfs_dirty_folio,
-	.write_begin	= bch2_write_begin,
-	.write_end	= bch2_write_end,
-	.invalidate_folio = bch2_invalidate_folio,
-	.release_folio	= bch2_release_folio,
-#ifdef CONFIG_MIGRATION
-	.migrate_folio	= filemap_migrate_folio,
-#endif
-	.error_remove_folio = generic_error_remove_folio,
-};
-
 #endif /* NO_BCACHEFS_FS */

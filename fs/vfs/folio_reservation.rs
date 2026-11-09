@@ -9,8 +9,6 @@
 use core::cmp::min;
 use core::ops::Range;
 
-use cstruct_macros::c_export;
-
 use crate::alloc::capacity::DiskReservation;
 use crate::c;
 use crate::c::bch_folio_sector_state as SectorState;
@@ -18,7 +16,7 @@ use crate::c::bch_reservation_flags as ReservationFlags;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 
-use super::folio::{FolioSpan, FolioStateGuard, Folio, Mapping};
+use super::folio::{FolioSpan, FolioStateGuard, Folio};
 use super::inode::{InodeInfo, QuotaReservation};
 use super::pagecache::{blocks_in, blocks_out};
 
@@ -197,7 +195,7 @@ impl<'i> FolioReservation<'i> {
         self.reserve(span, Reserve::Partial)
     }
 
-    fn add_nofail(&mut self, span: FolioSpan) -> Result<(), BchError> {
+    pub(super) fn add_nofail(&mut self, span: FolioSpan) -> Result<(), BchError> {
         self.reserve(span, Reserve::Nofail).map(drop)
     }
 
@@ -291,33 +289,3 @@ impl InodeInfo {
     }
 
 }
-
-#[c_export]
-pub fn bch2_vfs_dirty_folio(mapping: *mut c::address_space, folio: *mut c::folio) -> bool {
-    let inode = unsafe { Mapping::from_raw(mapping) }.inode();
-    let folio = unsafe { Folio::from_raw(folio) };
-
-    /*
-     * Folios above i_size are expected here rather than a curiosity:
-     * truncate_setsize() drops i_size before truncate_pagecache() runs, so
-     * there's a window where the mapping still holds folios past the new
-     * end, and a folio pinned by gup stays attached to the address_space
-     * until the pin drops. FolioReservation::dirty() has the longer version.
-     *
-     * A folio entirely past i_size has nothing to reserve or account for, so
-     * drop it; one straddling i_size is clamped by the min() below and only
-     * the part still within the file gets dirtied.
-     */
-    let file_size = inode.vfs().size();
-    if folio.pos() >= file_size {
-        return false;
-    }
-
-    let dirty_bytes = (min(folio.end_pos(), file_size) - folio.pos()).next_multiple_of(inode.fs().block_bytes()) as usize;
-
-    let mut res = FolioReservation::new(inode);
-    let span = FolioSpan { folio, offset: 0, len: dirty_bytes };
-    res.add_nofail(span).expect("a nofail folio reservation");
-    res.dirty(span)
-}
-

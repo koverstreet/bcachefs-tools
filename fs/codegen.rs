@@ -167,6 +167,8 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "folio_mkclean", "filemap_dirty_folio",
     "folio_lock", "folio_trylock", "filemap_get_folios",
     "folio_batch_init", "folio_batch_count", "folio_batch_release",
+    // vfs/aops.rs: the kernel's, in an inode's table
+    "filemap_migrate_folio", "generic_error_remove_folio",
     // util/bio/user_pages.rs
     "folio_mark_dirty",
     // vfs/pagecache.rs

@@ -14,9 +14,8 @@ use crate::errcode::BchError;
 use crate::util::alloc::{flags, KBox};
 use crate::util::iov_iter::IovIter;
 use crate::util::kernel::{cond_resched, current_id, fatal_signal_pending, likely, unlikely, PAGE_SIZE};
-use crate::util::ops::IntoRaw;
-use core::ffi::{c_int, c_uint, c_void};
-use cstruct_macros::c_export;
+use crate::util::ops::{from_raw, IntoRaw};
+use core::ffi::c_void;
 use kernel::page::PAGE_SHIFT;
 
 fn fgf_set_order(size: usize) -> c::fgf_t {
@@ -25,35 +24,21 @@ fn fgf_set_order(size: usize) -> c::fgf_t {
 
 /// What write_begin() leaves write_end(): the inode's page cache held for
 /// adding to, and the folio's reservation.
-struct WriteBegun {
+pub(crate) struct WriteBegun {
     _add: c::TwoStateGuard<'static, c::PagecacheAdd>,
     res:  FolioReservation<'static>,
 }
 
-/* buffered writes: */
-
-/// write_begin(), past the file or kiocb buffered.c's stub takes: the folio
-/// @len bytes at @pos are written into, locked, in *@foliop, and reserved for -
-/// its reservation in *@fsdata, for write_end().
-#[c_export]
-pub unsafe fn bch2_buffered_write_begin(mapping: *mut c::address_space, pos: c::loff_t, len: c_uint,
-                                        foliop: *mut *mut c::folio, fsdata: *mut *mut c_void) -> c_int {
-    let mapping = unsafe { Mapping::from_raw(mapping) };
-
-    unsafe { *fsdata = core::ptr::null_mut() };
-    match write_begin(mapping.inode(), mapping, pos as u64, len as usize) {
-        Ok((folio, begun)) => {
-            unsafe {
-                *foliop = folio.into_raw();
-                *fsdata = KBox::into_raw(begun).cast();
-            }
-            0
-        }
-        Err(e) => e.class(),
-    }
+from_raw! {
+    /// write_end()'s fsdata: write_begin()'s, given back.
+    KBox<WriteBegun> = *mut c_void => |r| KBox::from_raw(r.cast());
 }
 
-fn write_begin(inode: &'static InodeInfo, mapping: Mapping, pos: u64, len: usize)
+/* buffered writes: */
+
+/// The folio @len bytes at @pos are written into, locked, and reserved for -
+/// and its reservation, for write_end().
+pub(super) fn write_begin(inode: &'static InodeInfo, mapping: Mapping, pos: u64, len: usize)
     -> Result<(LockedFolio, KBox<WriteBegun>), BchError>
 {
     let begun = KBox::<WriteBegun>::new_uninit(flags::GFP_KERNEL)?;
@@ -92,16 +77,10 @@ fn write_begin(inode: &'static InodeInfo, mapping: Mapping, pos: u64, len: usize
     Ok((folio, begun))
 }
 
-/// write_end(), past the file or kiocb buffered.c's stub takes: @copied of the
-/// @len bytes at @pos written into @folio, write_begin()'s - dirtied, and the
-/// file grown to them. How many were.
-#[c_export]
-pub unsafe fn bch2_buffered_write_end(mapping: *mut c::address_space, pos: c::loff_t, len: c_uint,
-                                      copied: c_uint, folio: *mut c::folio, fsdata: *mut c_void) -> c_int {
-    let inode = unsafe { Mapping::from_raw(mapping) }.inode();
-    let folio = unsafe { LockedFolio::from_raw(folio) };
-    let mut begun = unsafe { KBox::from_raw(fsdata.cast::<WriteBegun>()) };
-    let (pos, len, mut copied) = (pos as u64, len as usize, copied as usize);
+/// @copied of the @len bytes at @pos written into @folio, write_begin()'s -
+/// dirtied, and the file grown to them. How many were.
+pub(super) fn write_end(inode: &InodeInfo, folio: LockedFolio, mut begun: KBox<WriteBegun>,
+                        pos: u64, len: usize, mut copied: usize) -> usize {
     let offset = (pos - folio.pos()) as usize;
 
     assert!(offset + copied <= folio.size(), "write_end() of {copied} bytes at {offset} of a {} byte folio",
@@ -133,7 +112,7 @@ pub unsafe fn bch2_buffered_write_end(mapping: *mut c::address_space, pos: c::lo
     drop(folio);
     drop(begun);
 
-    copied as c_int
+    copied
 }
 
 /// @len bytes of @iter copied in at @pos, as far as the folios there could be
