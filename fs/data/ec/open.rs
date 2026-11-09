@@ -15,6 +15,7 @@ use crate::alloc::buckets::bucket_to_u64;
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
+use crate::locking::MemallocFlags;
 use crate::util::alloc::AllocError;
 use crate::format::{Bpos, Btree};
 
@@ -70,7 +71,11 @@ impl<'f> OpenStripe<'f> {
     /// Open stripe @idx, one that doesn't exist yet - a slot being allocated
     /// for a new stripe: None if it's open already.
     pub fn tryget(fs: &'f Fs, idx: u64) -> Result<Option<Self>, BchError> {
-        match fs.ec.stripes_open.insert_new(idx) {
+        let opened = {
+            let _noreclaim = MemallocFlags::noreclaim();
+            fs.ec.stripes_open.insert_new(idx)
+        };
+        match opened {
             Ok(opened) => Ok(opened.is_ok().then(|| OpenStripe { fs, idx })),
             Err(AllocError) => fs.throw(bch_errcode::BCH_ERR_ENOMEM_stripe_open),
         }

@@ -147,7 +147,7 @@ use crate::data::ec::stripe_new_tasks::{stripe_done, stripe_task};
 use crate::data::moving::MovingIo;
 use crate::errcode::{bch_errcode, BchError, FirstErr};
 use crate::fs::Fs;
-use crate::locking::{ExclusiveGuard, Locked};
+use crate::locking::{ExclusiveGuard, Locked, MemallocFlags};
 use crate::util::alloc::{AllocError, KBox, KVVec};
 use crate::util::backref::BackRef;
 use crate::util::gather::{Gather, GatherRefSlot};
@@ -593,7 +593,11 @@ impl Internal {
             let id = b.id();
             let bucket = bucket_to_u64(pos(id.dev().into(), id.bucket()));
 
-            match fs.ec.stripes_new_buckets.insert_new(bucket) {
+            let inserted = {
+                let _noreclaim = MemallocFlags::noreclaim();
+                fs.ec.stripes_new_buckets.insert_new(bucket)
+            };
+            match inserted {
                 Ok(Ok(())) => self.buckets.push(bucket),
                 Ok(Err(_)) => panic!("bucket {}:{} in two stripes being made", id.dev(), id.bucket()),
                 Err(AllocError) => {

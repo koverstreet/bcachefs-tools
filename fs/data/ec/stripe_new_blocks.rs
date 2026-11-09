@@ -404,6 +404,11 @@ pub(crate) fn stripe_idx_alloc(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Re
     let min_pos = pos(0, 1);
     let mut start = min_pos.max(pos(0, fs.ec.stripe_hint.load(Ordering::Relaxed)));
 
+    /* OpenStripe::tryget()'s insert, under the walk's locks, can't grow the table: */
+    t.allocate_dropping_locks(|| {
+        fs.ec.stripes_open.make_room().map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_stripe_open))
+    })?;
+
     let mut iter = BtreeIter::new(t, Btree::stripes, start, BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT);
     iter.for_each_norestart(t, |iter, k| {
         fs.ec.stripe_hint.store(iter.pos().offset, Ordering::Relaxed);
@@ -471,6 +476,9 @@ pub(crate) fn stripe_alloc_or_reuse(t: &TransAttempt<'_, '_>, req: &mut c::alloc
         let _ = s.reserve_parity(stripe_fs, c::bch_reservation_flags::BCH_DISK_RESERVATION_NOFAIL);
     }
 
+    t.allocate_dropping_locks(|| {
+        t.fs().ec.stripes_new_buckets.make_room().map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_stripe_new_bucket))
+    })?;
     s.buckets_add(t.fs())?;
     s.allocated = true;
     Ok(())
