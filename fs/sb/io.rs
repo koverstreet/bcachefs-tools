@@ -140,7 +140,7 @@ use crate::btree::bkey::ValidateFlags;
 use crate::fs::Dev;
 use crate::c;
 use crate::c::{bch_sb, bch_sb_buf, bch_sb_field_crypt, bch_sb_handle, block_device};
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::errors::SbErrorId;
 use crate::sb::members;
@@ -149,20 +149,19 @@ use crate::util::projections::{AtomicWord, Volatile, VolatileWriter, PublishedOn
 use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
-use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64, rust_only, c_default};
+use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64, rust_only};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
-use core::ffi::{c_int, c_uint, CStr, c_ulong};
+use core::ffi::{c_uint, CStr, c_ulong};
 use crate::util::alloc::{Arc, KVVec};
 use core::sync::atomic::AtomicPtr;
 use crate::util::bio::{Bio, BioBox, BioOwner};
 use crate::util::gather::Gather;
 use crate::util::task::waiter;
-use crate::util::ffi::Opaque;
 use crate::util::kernel::NSEC_PER_SEC;
 use crate::util::time_stats::TimeStats;
-use cstruct_macros::{c_const, c_export, CStruct, TypeInfo, c_enum};
+use cstruct_macros::{c_const, CStruct, TypeInfo, c_enum};
 use core::mem::{size_of, size_of_val};
 use crate::data_structures::array_vec::ArrayVec;
 use core::pin::Pin;
@@ -180,26 +179,6 @@ c_enum! {
         BCH_SB_WRITE_bringup = 1 << 0,
     }
 }
-
-/*
- * Permission to modify a superblock field, and the thing that writes it back.
- * Hold sb_lock - guard(mutex_noio)(&c->sb_lock) - and declare one of these
- * under it. Declaration order is load-bearing: declared after the lock guard,
- * this destructs first, so the write happens while sb_lock is still held.
- *
- * The setters return whether the fact was NEW, which is the caller's business
- * (an fsck message unsuppresses on novelty). The write-back accumulates
- * separately, so forgetting to use that return can't lose a superblock write.
- */
-#[repr(C)]
-#[derive(Clone, Copy, CStruct)]
-pub struct sb_write {
-    pub c: *mut Fs,
-    pub dirty: bool,
-    pub replicas: bool,
-    pub flags: c::bch_sb_write_flags,
-}
-c_default!(sb_write);
 
 /*
  * Updated by sb_update(): what's read of the superblock without sb_lock,
@@ -781,11 +760,6 @@ impl Fs {
 
         crate::init::passes::run_async(self);
     }
-}
-
-#[c_export]
-pub fn bch2_set_version_incompat(c: &Opaque<Fs>, version: MetadataVersion) -> c_int {
-    ret_to_c(Fs::from_c(c).set_version_incompat(version))
 }
 
 /// A superblock newer than this version brought down to it - what it's at
@@ -1628,61 +1602,40 @@ impl Holder {
 
 // ── Writing it back ──────────────────────────────────────────────────────
 
-/// Permission to change the superblock, and what writes it back: C's
-/// CLASS(sb_write). It holds sb_lock, so changes go through it; dropped, it
-/// writes - if anything was dirtied - before the lock goes, which in C was
-/// the order of two declarations.
-///
-/// Or a C caller's, from_c(): its CLASS(sb_write), under its sb_lock -
-/// dirtied here, and written when C's guard goes.
+/// Permission to change the superblock, and what writes it back. It holds
+/// sb_lock, so changes go through it; dropped, it writes - if anything was
+/// dirtied - before the lock goes.
 pub struct SbWrite<'a> {
-    fs: &'a Fs,
-    sb: SbLockGuard<'a>,
-    w:  SbWriteState<'a>,
-}
-
-enum SbWriteState<'a> {
-    Own(c::sb_write),
-    C(&'a mut c::sb_write),
+    fs:       &'a Fs,
+    sb:       SbLockGuard<'a>,
+    dirty:    bool,
+    replicas: bool,
+    flags:    c::bch_sb_write_flags,
 }
 
 impl Fs {
     pub fn sb_write(&self) -> SbWrite<'_> {
-        let w = c::sb_write { c: self.as_ptr(), ..Default::default() };
-        SbWrite { fs: self, sb: self.sb_lock(), w: SbWriteState::Own(w) }
+        SbWrite { fs: self, sb: self.sb_lock(), dirty: false, replicas: false,
+                  flags: c::bch_sb_write_flags::empty() }
     }
 
     /// sb_write(), for a write whose only reason is a replicas entry coming
     /// or going: it may leave the slow disks behind.
     pub fn sb_write_replicas(&self) -> SbWrite<'_> {
-        let w = c::sb_write { c: self.as_ptr(), replicas: true, ..Default::default() };
-        SbWrite { fs: self, sb: self.sb_lock(), w: SbWriteState::Own(w) }
+        let mut w = self.sb_write();
+        w.replicas = true;
+        w
     }
 }
 
 impl<'a> SbWrite<'a> {
-    /// C's @w, for @fs.
-    ///
-    /// # Safety
-    /// C holds sb_lock for 'a, and @w is its CLASS(sb_write) under it.
-    pub unsafe fn from_c(fs: &'a Fs, w: &'a mut c::sb_write) -> Self {
-        SbWrite { fs, sb: unsafe { fs.sb_lock_held() }, w: SbWriteState::C(w) }
-    }
-
-    fn state(&mut self) -> &mut c::sb_write {
-        match &mut self.w {
-            SbWriteState::Own(w) => w,
-            SbWriteState::C(w) => w,
-        }
-    }
-
     /// The caller changed the superblock: write it.
     pub fn dirty(&mut self) {
-        self.state().dirty = true;
+        self.dirty = true;
     }
 
     pub fn bringup(&mut self) {
-        self.state().flags |= c::bch_sb_write_flags::BCH_SB_WRITE_bringup;
+        self.flags |= c::bch_sb_write_flags::BCH_SB_WRITE_bringup;
     }
 
     /// @was_new from a test-and-set: the superblock changed if it was, and
@@ -1742,21 +1695,19 @@ impl<'a> SbWrite<'a> {
 
     /// Whether anything's dirtied it since it was last written.
     pub fn is_dirty(&mut self) -> bool {
-        self.state().dirty
+        self.dirty
     }
 
     /// Write now, if dirtied, for an error to report; after, nothing is to
     /// write until something is dirtied again.
     pub fn flush(&mut self) -> Result<(), BchError> {
-        let w = self.state();
-        if !core::mem::take(&mut w.dirty) {
+        if !core::mem::take(&mut self.dirty) {
             return Ok(());
         }
-        let (replicas, flags) = (w.replicas, w.flags);
-        if replicas {
+        if self.replicas {
             self.fs.write_super_replicas_ret(&mut self.sb)
         } else {
-            self.fs.write_super_flags(&mut self.sb, flags)
+            self.fs.write_super_flags(&mut self.sb, self.flags)
         }
     }
 }
@@ -1779,9 +1730,7 @@ impl core::ops::DerefMut for SbWrite<'_> {
 /// return it to.
 impl Drop for SbWrite<'_> {
     fn drop(&mut self) {
-        if matches!(self.w, SbWriteState::Own(_)) {
-            let _ = self.flush();
-        }
+        let _ = self.flush();
     }
 }
 
@@ -1859,17 +1808,6 @@ pub unsafe fn sb_field_get_raw_mut<'a, F: SbField + ?Sized>(sb: *mut Head<bch_sb
     unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(field_at(sb, off)) }.arm_mut::<F>()
 }
 
-/// # Safety
-/// @sb's sections' counts are validated.
-#[c_export]
-pub unsafe fn bch2_sb_field_get_id(sb: *mut Head<c::bch_sb>, ty: c::bch_sb_field_type) -> *mut Head<c::bch_sb_field> {
-    // SAFETY: the caller's
-    match field_offset(unsafe { bch_sb::<Validated>::from_ffi(sb) }, ty) {
-        Some(off) => unsafe { field_at(sb, off) },
-        None => core::ptr::null_mut(),
-    }
-}
-
 impl bch_sb_buf {
     /// The buffer grown to @size bytes, the superblock kept and zeroes after.
     fn grow(&mut self, size: usize) -> Result<(), crate::util::alloc::AllocError> {
@@ -1941,12 +1879,6 @@ impl bch_sb_buf {
     fn arm_mut_at<F: SbField + ?Sized>(&mut self, off: usize) -> Option<&mut F> {
         // SAFETY: a section of the handle's superblock, borrowed with it
         unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(field_at(self.sb, off)) }.arm_mut::<F>()
-    }
-
-    /// The section's pointer, for C.
-    fn field_ptr(&mut self, off: Option<usize>) -> *mut Head<c::bch_sb_field> {
-        // SAFETY: a section of the handle's superblock
-        off.map_or(core::ptr::null_mut(), |off| unsafe { field_at(self.sb, off) })
     }
 }
 
@@ -2818,48 +2750,9 @@ impl Fs {
     }
 }
 
-#[c_export]
-pub fn bch2_write_super_flags(c: &Opaque<Fs>, flags: c::bch_sb_write_flags) -> c_int {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    ret_to_c(fs.write_super_flags(&mut unsafe { fs.sb_lock_held() }, flags))
-}
-
-#[c_export]
-pub fn bch2_write_super_replicas(c: &Opaque<Fs>) -> c_int {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    ret_to_c(fs.write_super_replicas_ret(&mut unsafe { fs.sb_lock_held() }))
-}
 
 const _: () = assert!(size_of::<c::bch_sb_handle>() == size_of::<crate::locking::LockedBy<c::bch_sb_io, c::bch_sb_bdev>>(),
                       "ca->disk_sb is a struct bch_sb_handle to C");
-
-/// # Safety
-/// @sb is a live filesystem's c->disk_sb, its sb_lock held.
-#[c_export]
-pub unsafe fn bch2_sb_field_resize_id(sb: *mut c::bch_fs_sb, ty: c::bch_sb_field_type, u64s: c_uint)
-    -> *mut Head<c::bch_sb_field>
-{
-    // SAFETY: the caller's
-    let (fs, mut guard) = unsafe { Fs::from_disk_sb(sb) };
-    let mut sb = fs.sb_resize(&mut guard);
-    let off = sb.field_resize_id(ty, u64s);
-    sb.field_ptr(off)
-}
-
-/// # Safety
-/// @sb is a live filesystem's c->disk_sb, its sb_lock held.
-#[c_export]
-pub unsafe fn bch2_sb_field_get_minsize_id(sb: *mut c::bch_fs_sb, ty: c::bch_sb_field_type, u64s: c_uint)
-    -> *mut Head<c::bch_sb_field>
-{
-    // SAFETY: the caller's
-    let (fs, mut guard) = unsafe { Fs::from_disk_sb(sb) };
-    let mut sb = fs.sb_resize(&mut guard);
-    let off = sb.field_get_minsize_id(ty, u64s);
-    sb.field_ptr(off)
-}
 
 /// The u64s section @F is with @nr of its tail's entries: for
 /// field_resize() and field_get_minsize().

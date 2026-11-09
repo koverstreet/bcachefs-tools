@@ -25,7 +25,7 @@ use crate::init::registry::register;
 use crate::init::rw::writes_disabled;
 use crate::inode::shard_cpu_init;
 use crate::journal::seq_blacklist::blacklist_table_initialize;
-use crate::locking::{ExclusiveGuard, MutexNoio, Noio, PercpuRwsemNoio, RawLockBase, SharedGuard};
+use crate::locking::{ExclusiveGuard, Noio, PercpuRwsemNoio, RawLockBase, SharedGuard};
 use crate::{bch_verbose, new_lock, prt};
 use crate::sb::counters::counters_init;
 use crate::sb::io::{read_super, sb_to_fs, version, Holder};
@@ -165,18 +165,6 @@ impl Fs {
         unsafe { Self::borrow_raw(c.as_ptr()) }
     }
 
-    /// # Safety
-    /// @sb is a live filesystem's disk_sb, and the caller holds its sb_lock
-    /// for 'a.
-    pub unsafe fn from_disk_sb<'a>(sb: *const c::bch_fs_sb) -> (&'a Fs, SbLockGuard<'a>) {
-        let off = core::mem::offset_of!(Fs, sb) + MutexNoio::<c::bch_fs_sb, c::bch_sb_cpu>::PROTECTED_OFFSET;
-        // SAFETY: the caller's
-        unsafe {
-            let fs: &'a Fs = Self::borrow_raw(sb.byte_sub(off).cast_mut().cast());
-            (fs, fs.sb_lock_held())
-        }
-    }
-
     pub fn version(&self) -> MetadataVersion {
         MetadataVersion(self.sb.version.get() as u32)
     }
@@ -213,12 +201,6 @@ impl Fs {
 
     pub fn holder(&self) -> &Arc<Holder> {
         self.holder.as_ref().expect("a filesystem's holder, from alloc()")
-    }
-
-    /// # Safety
-    /// The caller holds sb_lock, for as long as the guard lives.
-    pub unsafe fn sb_lock_held(&self) -> SbLockGuard<'_> {
-        unsafe { self.sb.held() }
     }
 
     pub fn mark_lock(&self) -> &PercpuRwsemNoio {

@@ -183,7 +183,7 @@ pub mod c {
     pub use super::sb_errors_format::*;
     pub use crate::sb::errors::{bch_sb_error_entry_cpu, bch_sb_error_entry_cpu_bits, bch_sb_errors_cpu};
     pub(crate) use crate::sb::errors::{BCH_BLK_STS_SB_ERRS, BCH_DECOMPRESS_SB_ERRS, __bch_sb_error_entry_cpu_bits_forward};
-    pub use crate::sb::io::{BCH_SB_WRITE_bringup, bch_sb_write_flags, sb_write};
+    pub use crate::sb::io::{BCH_SB_WRITE_bringup, bch_sb_write_flags};
     pub use crate::sb::io::{bch_sb_cpu, bch_sb_cpuWriter};
     pub use crate::sb::members::{bch_dev_identity};
     pub use crate::format::members::*;

@@ -6,7 +6,7 @@ use crate::btree::bkey::{BkeySC, BkeyV, POS_MIN, ValidateFlags};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::locking::MemallocFlags;
 use crate::{prt, sb_err_on};
@@ -20,14 +20,14 @@ use crate::init::passes;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::refcount::{RefGuard, Refcount, TryRefcount};
 use crate::alloc::disk_groups;
-use crate::util::ffi::{c_char, Opaque};
+use crate::util::ffi::c_char;
 use crate::data_structures::strided::{Strided, StridedMut};
-use crate::util::vstructs::{bytes_of_mut, cast_plain, plain_bytes, Head, Unsized, Unvalidated, Validated};
-use core::ffi::{c_int, c_uint, c_ulong, CStr};
+use crate::util::vstructs::{bytes_of_mut, cast_plain, plain_bytes, Head, Unsized, Unvalidated};
+use core::ffi::{c_int, c_ulong, CStr};
 use core::marker::PhantomData;
 use core::ops::Deref;
 use core::sync::atomic::Ordering;
-use cstruct_macros::{c_export, CStruct, TypeInfo};
+use cstruct_macros::{CStruct, TypeInfo};
 use super::io::*;
 use crate::types::c_default;
 use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState, MetadataVersion, SbFeature};
@@ -334,17 +334,6 @@ pub trait SbMembersMut: SbResize {
 }
 
 impl<T: SbResize + ?Sized> SbMembersMut for T {}
-
-/// Member @i, from members_v2 or members_v1: zero if there's none.
-///
-/// # Safety
-/// @sb is validated.
-#[c_export]
-pub unsafe fn bch2_sb_member_get(sb: *mut Head<c::bch_sb>, i: c_int) -> c::bch_member {
-    // SAFETY: the caller's
-    let sb = unsafe { c::bch_sb::<Validated>::from_ffi(sb) };
-    sb_member(sb, i as u32).unwrap_or_default()
-}
 
 // ── Validating, and printing ─────────────────────────────────────────────
 
@@ -1238,16 +1227,6 @@ impl Fs {
     }
 }
 
-#[c_export]
-pub fn bch2_dev_missing_bkey(c: &Opaque<Fs>, k: BkeySC<'_>, dev: c_uint) -> c_int {
-    ret_to_c(Fs::from_c(c).dev_missing_bkey(k, dev))
-}
-
-#[c_export]
-pub fn bch2_dev_missing_atomic(c: &Opaque<Fs>, dev: c_uint) {
-    Fs::from_c(c).dev_missing_atomic(dev)
-}
-
 impl Dev {
     /// A pointer to bucket @bucket, which this device hasn't: an
     /// inconsistency.
@@ -1255,11 +1234,6 @@ impl Dev {
         crate::fs_inconsistent!(self.fs(), "pointer to nonexistent bucket {bucket} on device {} (valid range {}-{})",
                                 self, self.mi.get().first_bucket, self.mi.get().nbuckets);
     }
-}
-
-#[c_export]
-pub fn bch2_dev_bucket_missing(ca: &Dev, bucket: u64) {
-    ca.bucket_missing(bucket)
 }
 
 // ── References ───────────────────────────────────────────────────────────
