@@ -70,6 +70,12 @@ impl<'a> Kiocb<'a> {
         if ret < 0 { Err(BchError::from_raw(ret as i32)) } else { Ok(ret as usize) }
     }
 
+    /// The @written bytes just written synced, for O_SYNC and O_DSYNC:
+    /// generic_write_sync() - @written, or the error syncing them.
+    pub fn write_sync(&mut self, written: isize) -> isize {
+        unsafe { c::generic_write_sync(self.0, written) }
+    }
+
     /// An async kiocb's completion, for once the call's returned -EIOCBQUEUED:
     /// None for a sync one, which the call's return completes.
     ///

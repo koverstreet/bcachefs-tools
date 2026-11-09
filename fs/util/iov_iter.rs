@@ -41,6 +41,24 @@ impl<'a> IovIter<'a> {
         ty == c::iter_type_ITER_UBUF as u8 || ty == c::iter_type_ITER_IOVEC as u8
     }
 
+    /// Its next @bytes faulted in, to copy from atomically: how many couldn't
+    /// be - fault_in_iov_iter_readable().
+    #[cfg(kernel)]
+    pub fn fault_in_readable(&mut self, bytes: usize) -> usize {
+        unsafe { c::fault_in_iov_iter_readable(self.0, bytes) }
+    }
+
+    /// What's left of its current segment: iov_iter_single_seg_count().
+    #[cfg(kernel)]
+    pub fn single_seg_count(&self) -> usize {
+        unsafe { c::iov_iter_single_seg_count(&*self.0) }
+    }
+
+    #[cfg(kernel)]
+    pub fn revert(&mut self, bytes: usize) {
+        IovIterFields::revert(self.0, bytes)
+    }
+
     /// Its last @n bytes held back till the guard's dropped: iov_iter_truncate(),
     /// then iov_iter_reexpand() by what was taken.
     pub fn hold_back(&mut self, n: usize) -> HeldBack<'_, 'a> {

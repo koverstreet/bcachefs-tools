@@ -159,7 +159,8 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     // data/write.rs
     "bio_split", "bio_inc_remaining",
     // vfs/direct_write.rs: static inlines, and the VFS's write checks
-    "inode_dio_begin", "inode_dio_end", "iocb_is_dsync", "generic_write_checks", "file_remove_privs",
+    "inode_dio_begin", "inode_dio_end", "iocb_is_dsync", "generic_write_checks", "generic_write_sync",
+    "file_remove_privs",
     "task_io_account_write", "kthread_use_mm", "kthread_unuse_mm",
     // vfs/writeback.rs
     "writeback_iter", "wbc_to_write_flags", "rust_folio_start_writeback", "folio_end_writeback",
