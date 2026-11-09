@@ -110,7 +110,7 @@ use crate::util::shrinker::{Shrink, Shrinker};
 use crate::util::sleep::Sleep;
 use crate::c;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::prt;
 use crate::util::closure::{closure_wait, closure_wake_up};
 use crate::util::sched::current;
