@@ -174,6 +174,10 @@ pub struct SrcuReadGuard<'a> {
 }
 
 impl<'a> SrcuReadGuard<'a> {
+    pub fn srcu(&self) -> &'a Srcu {
+        self.srcu
+    }
+
     /// The section left held, for what holds it where a guard can't be - a
     /// transaction's, across its unlocks: its index, for from_raw().
     pub fn into_raw(self) -> c_int {
