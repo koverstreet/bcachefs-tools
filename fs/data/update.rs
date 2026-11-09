@@ -40,6 +40,7 @@ use crate::util::bio::pages;
 use crate::util::closure::StackClosure;
 use crate::sb::members::DevRef;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
+use crate::locking::MemallocFlags;
 use crate::util::kernel::unlikely;
 use crate::util::rcu::read_lock;
 use crate::util::{Printbuf, ToText};
@@ -205,7 +206,11 @@ impl Fs {
             // SAFETY: an update is freed a grace period after it's done, and
             // in_flight_key is written only here, before it's inserted; the
             // table is the filesystem's, which outlives its updates
-            match unsafe { Registration::register(&self.update_table, m.in_flight_key, NonNull::from(&m.in_flight_key)) } {
+            let reg = {
+                let _noreclaim = MemallocFlags::noreclaim();
+                unsafe { Registration::register(&self.update_table, m.in_flight_key, NonNull::from(&m.in_flight_key)) }
+            };
+            match reg {
                 Ok(r) => return Ok(Some(r)),
                 Err(RegisterError::Exists) => {} // raced: another of its kind just went in
                 Err(RegisterError::Alloc) => return Ok(None),
@@ -697,6 +702,12 @@ impl c::data_update {
                 fs.data_update_write_feasible(io_opts, &self.opts, &self.op.devs_have, k, None)?;
             }
 
+            match t.allocate_dropping_locks(|| {
+                fs.update_table.make_room().map_err(|_| BchError::from_raw(-(c::ENOMEM as c_int)))
+            }) {
+                Err(e) if !e.matches(c::ENOMEM) => return Err(e),
+                _ => {}
+            }
             held.in_flight = fs.data_update_in_flight_add(self, pos)?;
         } else if unwritten {
             return fs.throw(bch_errcode::BCH_ERR_data_update_done_unwritten);
