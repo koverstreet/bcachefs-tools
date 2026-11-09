@@ -16,7 +16,7 @@ use crate::errcode::{BchError, bch_errcode, err_ptr, ret_to_result_void as ret_t
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::journal::validate::journal_entry_to_text;
-use crate::locking::{Locked, MemallocFlags};
+use crate::locking::MemallocFlags;
 use crate::prt;
 use crate::types::bits_to_longs;
 use crate::util::alloc::{AllocError, Vec};
@@ -345,7 +345,7 @@ impl ToText for ListedTrans {
 
 impl Fs {
     pub(crate) fn with_trans_list<R>(&self, f: impl FnOnce(&mut TransList) -> R) -> R {
-        let _guard = Locked::from_c(&self.btree.trans.lock).lock();
+        let _guard = self.btree.trans.lock.lock();
         f(unsafe { TransList::from_c((&raw const self.btree.trans.list).cast_mut()) })
     }
 

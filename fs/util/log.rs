@@ -396,6 +396,16 @@ impl Fs {
     }
 }
 
+/// A ratelimit_state as ratelimit_default_init() makes one.
+pub fn ratelimit_state_init() -> impl ::pin_init::PinInit<c::ratelimit_state> {
+    unsafe {
+        ::pin_init::pin_init_from_closure(|slot: *mut c::ratelimit_state| {
+            bch2_ratelimit_state_init(slot);
+            Ok(())
+        })
+    }
+}
+
 /// One call site's ratelimit state, for the _ratelimited log macros: as the
 /// static DEFINE_RATELIMIT_STATE() in C's bch2_ratelimit(). The state holds a
 /// spinlock that has to be initialized at runtime, so it's set up on first use.

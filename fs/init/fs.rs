@@ -12,7 +12,7 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::alloc::accounting_mem::accounting_exit;
 use crate::alloc::foreground::allocator_foreground_init;
 use crate::alloc::replicas::can_write_with_devs;
-use crate::btree::init::{btree_exit, btree_init, btree_init_early};
+use crate::btree::init::{btree_exit, btree_init};
 use crate::btree::journal_overlay::journal_keys_put_initial;
 use crate::data::checksum::encryption_init;
 use crate::data::compress::compress_init;
@@ -375,7 +375,7 @@ impl Fs {
     }
 
     pub fn btree_max_u64s(&self) -> usize {
-        (self.opts().btree_node_size.get() as usize - size_of::<crate::util::vstructs::Head<c::btree_node>>()) / size_of::<u64>()
+        crate::btree::types::btree_max_u64s(self.opts().btree_node_size.get())
     }
 
     pub fn time_to_timespec(&self, time: i64) -> c::timespec64 {
@@ -467,8 +467,6 @@ impl Fs {
 
         allocator_foreground_init(self);
         unsafe {
-            btree_init_early(p);
-
             let Ok(()) = c::spinlock_t::init(&raw mut (*p).write_error_lock, c"&c->write_error_lock",
                                              new_lock!(@key));
         }
@@ -511,7 +509,7 @@ impl Fs {
         crate::debug::async_objs::lists::async_obj_init(self)?;
         unsafe { self.btree.cache.nodes.init() }?;
         unsafe { self.btree.key_cache.keys.init() }?;
-        unsafe { btree_init(p) }?;
+        btree_init(self)?;
         compress_init(self)?;
         counters_init(self);
         encryption_init(self, user_key)?;

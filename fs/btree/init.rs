@@ -270,20 +270,13 @@
  * The \textbf{write buffer}: \bchdoc{btree-write-buffer}
  */
 
-use crate::btree::cache::{bch2_fs_btree_evicted_size_exit, bch2_fs_btree_evicted_size_init};
-use crate::btree::trans::TransList;
-use crate::btree::write_buffer::{bch2_fs_btree_write_buffer_exit, bch2_fs_btree_write_buffer_init};
+use crate::btree::cache::{btree_evicted_size_exit, btree_evicted_size_init};
+#[cfg(all(kernel, CONFIG_LOCKDEP))]
 use crate::c;
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::locking::RawLockBase;
-use crate::new_lock;
-use crate::util::log::bch2_ratelimit_state_init;
-use crate::util::percpu::PerCpu;
 use crate::util::rcu::Flavor;
-use crate::util::Printbuf;
-use core::ffi::c_int;
-use core::ptr::{self, NonNull};
+use core::ptr::NonNull;
 
 #[cfg(all(kernel, CONFIG_LOCKDEP))]
 unsafe extern "C" {
@@ -315,37 +308,30 @@ unsafe fn btree_iter_exit(c: *mut Fs) {
         }
     });
 
-    for s in &t.stats {
-        let mut s = s.lock.lock();
-        unsafe { c::rust_kfree(s.max_paths_text.cast()) };
-        s.max_paths_text = ptr::null_mut();
-    }
-
     /* Drain pending trans_rcu_free callbacks before the pool is gone. */
     Flavor::RCU.barrier();
 }
 
 /// # Safety
-/// Nothing else has @c yet.
-unsafe fn btree_iter_init_early(c: *mut Fs) {
-    unsafe {
-        let t = &raw mut (*c).btree.trans;
+/// Nothing uses @c's btrees after.
+pub(crate) unsafe fn btree_exit(c: *mut Fs) {
+    let fs = unsafe { &*c };
 
-        TransList::from_c(&raw mut (*t).list).init();
-        let Ok(()) = c::seqmutex::init(&raw mut (*t).lock, c"&c->btree.trans.lock", new_lock!(@key));
-        let Ok(()) = c::mutex::init(&raw mut (*t).stats_json_lock, c"&c->btree.trans.stats_json_lock",
-                                    new_lock!(@key));
-        (&raw mut (*t).stats_json_buf).write(Printbuf::new());
+    fs.btree_write_buffer_exit();
+    fs.btree.key_cache.exit();
+    unsafe {
+        btree_iter_exit(c);
+        btree_evicted_size_exit(c);
+        fs.btree_cache_exit();
+    }
+
+    if fs.btree.read_complete_wq.is_some() {
+        fs.btree.read_complete_wq.drain();
     }
 }
 
-/// # Safety
-/// Nothing else has @c yet.
-unsafe fn btree_iter_init(c: *mut Fs) -> Result<(), BchError> {
-    match PerCpu::alloc() {
-        Ok(p)  => unsafe { (*c).btree.trans.bufs = p },
-        Err(_) => return Err(BchError::from_raw(-(c::ENOMEM as c_int))),
-    }
+pub(crate) fn btree_init(fs: &Fs) -> Result<(), BchError> {
+    fs.btree_cache_init()?;
 
     /*
      * static annotation (hackily done) for lock ordering of reclaim vs.
@@ -354,61 +340,18 @@ unsafe fn btree_iter_init(c: *mut Fs) -> Result<(), BchError> {
     #[cfg(all(kernel, CONFIG_LOCKDEP))]
     {
         unsafe { fs_reclaim_acquire(c::GFP_KERNEL) };
-        let trans = crate::btree_trans!(unsafe { &*c });
+        let trans = crate::btree_trans!(fs);
         trans.mark_locked(false);
         drop(trans);
         unsafe { fs_reclaim_release(c::GFP_KERNEL) };
     }
 
-    Ok(())
-}
-
-/// # Safety
-/// Nothing uses @c's btrees after.
-pub(crate) unsafe fn btree_exit(c: *mut Fs) {
-    let fs = unsafe { &*c };
-
-    bch2_fs_btree_write_buffer_exit(fs);
-    fs.btree.key_cache.exit();
-    unsafe {
-        btree_iter_exit(c);
-        bch2_fs_btree_evicted_size_exit(c);
-        fs.btree_cache_exit();
-    }
-
-    if fs.btree.read_complete_wq.is_some() {
-        unsafe { c::drain_workqueue(fs.btree.read_complete_wq.as_ptr()) };
-    }
-}
-
-/// # Safety
-/// Nothing else has @c yet.
-pub(crate) unsafe fn btree_init_early(c: *mut Fs) {
-    unsafe { btree_iter_init_early(c) }
-}
-
-/// # Safety
-/// Nothing else has @c yet.
-pub(crate) unsafe fn btree_init(c: *mut Fs) -> Result<(), BchError> {
-    let fs = unsafe { &*c };
-
-    unsafe { (*c).btree.foreground_merge_threshold = (fs.btree_max_u64s() / 3) as u16 };
-
-    fs.btree_cache_init()?;
-    unsafe { btree_iter_init(c) }?;
-    fs.btree.key_cache.setup()?;
-
-    unsafe {
-        bch2_ratelimit_state_init(&raw mut (*c).btree.read_errors_soft);
-        bch2_ratelimit_state_init(&raw mut (*c).btree.read_errors_hard);
-    }
-
-    Ok(())
+    fs.btree.key_cache.setup()
 }
 
 /// # Safety
 /// Nothing else uses what it makes yet.
 pub(crate) unsafe fn btree_init_rw(c: *mut Fs) -> Result<(), BchError> {
-    ret_to_result_void(bch2_fs_btree_write_buffer_init(unsafe { &*c }))?;
-    ret_to_result_void(unsafe { bch2_fs_btree_evicted_size_init(c) })
+    unsafe { &*c }.btree_write_buffer_init()?;
+    unsafe { btree_evicted_size_init(c) }
 }

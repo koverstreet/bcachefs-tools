@@ -132,7 +132,7 @@ impl Fs {
          * still-finishing post-write work.
          */
         if self.btree.write_complete_wq.is_made() {
-            unsafe { c::drain_workqueue(self.btree.write_complete_wq.as_ptr()) };
+            self.btree.write_complete_wq.drain();
         }
 
         /* vfree() can allocate memory: */

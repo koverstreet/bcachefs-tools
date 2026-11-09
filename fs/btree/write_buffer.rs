@@ -27,7 +27,7 @@ use crate::c::journal_pin_type::JOURNAL_PIN_TYPE_other;
 use crate::c::wb_flush_caller as Caller;
 use crate::data::keylist::PaddedKey;
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::{Bpos, Btree, BtreeFlags};
 use crate::fs::Fs;
 use crate::journal::pins::Pin;
@@ -791,9 +791,11 @@ impl Fs {
     }
 }
 
-pub fn bch2_fs_btree_write_buffer_exit(c: &Fs) {
-    for wb in &c.btree.write_buffer {
-        assert!(wb.is_empty() || c.journal.error().is_err());
+impl Fs {
+    pub(crate) fn btree_write_buffer_exit(&self) {
+        for wb in &self.btree.write_buffer {
+            assert!(wb.is_empty() || self.journal.error().is_err());
+        }
     }
 }
 
@@ -804,34 +806,34 @@ unsafe extern "C" fn wb_keys_lock_cmp_fn(a: *const kernel::bindings::lockdep_map
     (a as usize).cmp(&(b as usize)) as c_int
 }
 
-pub fn bch2_fs_btree_write_buffer_init(c: &Fs) -> c_int {
-    /*
-     * Matches the journal's default buf size (JOURNAL_ENTRY_SIZE_MIN /
-     * 64 slots); grows via bch2_btree_write_buffer_resize() as the journal
-     * grows. With BCH_WB_BTREE_NR independent instances, keeping this small
-     * matters — at 1<<16 the baseline was ~27 MB per fs.
-     */
-    let initial_size = 1 << 10;
+impl Fs {
+    pub(crate) fn btree_write_buffer_init(&self) -> Result<(), BchError> {
+        /*
+         * Matches the journal's default buf size (JOURNAL_ENTRY_SIZE_MIN /
+         * 64 slots); grows via bch2_btree_write_buffer_resize() as the journal
+         * grows. With BCH_WB_BTREE_NR independent instances, keeping this small
+         * matters — at 1<<16 the baseline was ~27 MB per fs.
+         */
+        let initial_size = 1 << 10;
 
-    for wb in &c.btree.write_buffer {
-        #[cfg(all(kernel, CONFIG_PROVE_LOCKING))]
-        {
-            wb.inc.set_cmp_fn(wb_keys_lock_cmp_fn);
-            wb.flushing.set_cmp_fn(wb_keys_lock_cmp_fn);
+        for wb in &self.btree.write_buffer {
+            #[cfg(all(kernel, CONFIG_PROVE_LOCKING))]
+            {
+                wb.inc.set_cmp_fn(wb_keys_lock_cmp_fn);
+                wb.flushing.set_cmp_fn(wb_keys_lock_cmp_fn);
+            }
+
+            let mut flushing = wb.flushing.lock();
+            let (f, f_live) = flushing.parts();
+            let mut inc = wb.inc.lock();
+            let (inc, inc_live) = inc.parts();
+
+            let ret = inc.keys.resize(inc_live, initial_size, c::GFP_KERNEL)
+                .and_then(|()| f.keys.resize(&f_live.keys, initial_size, c::GFP_KERNEL))
+                .and_then(|()| resize_gfp(&mut f.sorted, initial_size, c::GFP_KERNEL));
+            f_live.sorted.set(f.sorted.len(), f.sorted.capacity());
+            ret.map_err(BchError::from)?;
         }
-
-        let mut flushing = wb.flushing.lock();
-        let (f, f_live) = flushing.parts();
-        let mut inc = wb.inc.lock();
-        let (inc, inc_live) = inc.parts();
-
-        let ret = inc.keys.resize(inc_live, initial_size, c::GFP_KERNEL)
-            .and_then(|()| f.keys.resize(&f_live.keys, initial_size, c::GFP_KERNEL))
-            .and_then(|()| resize_gfp(&mut f.sorted, initial_size, c::GFP_KERNEL));
-        f_live.sorted.set(f.sorted.len(), f.sorted.capacity());
-        if let Err(e) = ret {
-            return ret_to_c(Err(BchError::from(e)));
-        }
+        Ok(())
     }
-    0
 }

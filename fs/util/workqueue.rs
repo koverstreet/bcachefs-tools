@@ -131,6 +131,12 @@ impl Queue {
         unsafe { &*wq.cast() }
     }
 
+    /// Everything queued run, and what that queues, until it's empty:
+    /// drain_workqueue().
+    pub fn drain(&self) {
+        unsafe { c::drain_workqueue(self.as_ptr()) }
+    }
+
     pub fn as_ptr(&self) -> *mut c::workqueue_struct {
         self.0.as_ptr()
     }

@@ -295,10 +295,9 @@ impl DebugFile for TransactionStats {
                 prt!(out.indent(2), "{}", s.lock_wait_times);
             }
 
-            if !locked.max_paths_text.is_null() {
+            if !locked.max_paths_text.as_bytes().is_empty() {
                 prt!(out, "Maximum allocated btree paths ({}):\n", s.lock.nr_max_paths.get());
-                // SAFETY: a C string of its own, replaced under s->lock
-                out.indent(2).write_bytes(unsafe { CStr::from_ptr(locked.max_paths_text.cast()) }.to_bytes());
+                out.indent(2).write_bytes(locked.max_paths_text.as_bytes());
             }
 
             prt!(out, "\n");

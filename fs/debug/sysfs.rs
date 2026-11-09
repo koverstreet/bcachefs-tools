@@ -34,7 +34,7 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::format::{CompressionType, DataType};
 use crate::fs::{Fs, WriteRef};
 use crate::init::passes;
-use crate::locking::{Locked, MemallocFlags};
+use crate::locking::MemallocFlags;
 use crate::opts::{self, OptChange, OptType};
 use crate::sb::counters::COUNTERS;
 use crate::sb::members;
@@ -178,7 +178,7 @@ const INTERNAL: &[Attr<Fs>] = &[
 
 // internal/btree_trans_stats_json, a bin_attribute: kernfs reads one a page a
 // call, so the JSON is made only at offset 0 - kept in
-// c->btree.trans.stats_json_buf - and the pages read are of one whole.
+// c->btree.trans.stats_json - and the pages read are of one whole.
 
 /// Each btree transaction's name, up to the first not yet registered, and its
 /// stats.
@@ -221,9 +221,8 @@ unsafe extern "C" fn trans_stats_json_read(_file: *mut c::file, kobj: *mut c::ko
     // SAFETY: the filesystem's kobject, which has this file
     let c = unsafe { sysfs::obj_of::<FsDir>(kobj) };
 
-    let _lock = Locked::from_c(&c.btree.trans.stats_json_lock).lock();
-    // SAFETY: the buffer is the lock's
-    let out = unsafe { &mut (*c.as_ptr()).btree.trans.stats_json_buf };
+    let mut json = c.btree.trans.stats_json.lock();
+    let out = &mut json.buf;
 
     if off == 0 {
         out.reset();
@@ -258,8 +257,7 @@ unsafe extern "C" fn trans_stats_json_write(_file: *mut c::file, kobj: *mut c::k
 
         locked.published().nr_max_paths.set(0);
         locked.published().max_mem.set(0);
-        unsafe { c::rust_kfree(locked.max_paths_text.cast()) };
-        locked.max_paths_text = core::ptr::null_mut();
+        locked.max_paths_text = Printbuf::new();
     }
     count as isize
 }

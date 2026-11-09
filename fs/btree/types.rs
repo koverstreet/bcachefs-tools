@@ -921,7 +921,7 @@ c_default!(btree_trans_buf);
 pub struct TransStatsLocked {
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
     pub trans_kmalloc_trace: cs::darray_trans_kmalloc_trace,
-    pub max_paths_text: *mut c_char,
+    pub max_paths_text: Printbuf,
 }
 
 crate::published! {
@@ -962,7 +962,11 @@ c_const! {
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_btree_trans {
-    pub lock: cs::seqmutex,
+    #[pin]
+    #[init(new_lock!((), "&c->btree.trans.lock"))]
+    #[c("struct seqmutex lock")]
+    pub lock: Locked<cs::seqmutex>,
+    /* zeroed, it's empty: List's first push sets it up */
     pub list: cs::list_head,
     #[pin]
     #[init(Mempool::kmalloc(1, core::mem::size_of::<BtreeTrans<'_>>()))]
@@ -972,6 +976,8 @@ pub struct bch_fs_btree_trans {
     #[init(Mempool::kmalloc(1, c::BTREE_TRANS_MEM_MAX as usize))]
     #[c("mempool_t malloc_pool")]
     pub malloc_pool: Mempool,
+    #[pin]
+    #[init(PerCpu::alloc(), ENOMEM_fs_other_alloc)]
     #[c("struct btree_trans_buf __percpu *bufs")]
     pub bufs: PerCpu<cs::btree_trans_buf>,
 
@@ -984,8 +990,18 @@ pub struct bch_fs_btree_trans {
     #[init(::pin_init::pin_init_array_from_fn(|_| cs::btree_transaction_stats::init()))]
     pub stats: [cs::btree_transaction_stats; cs::BCH_TRANSACTIONS_NR as usize],
 
-    pub stats_json_lock: cs::mutex,
-    pub stats_json_buf: Printbuf,
+    #[pin]
+    #[init(new_lock!(TransStatsJson { buf: Printbuf::new() }, "&c->btree.trans.stats_json_lock"))]
+    #[c_lock("struct mutex stats_json_lock")]
+    pub stats_json: Locked<cs::mutex, TransStatsJson>,
+}
+
+/// The transaction stats as JSON, for sysfs: made at a read's offset 0, read
+/// a page at a time after.
+#[repr(C)]
+#[derive(CStruct)]
+pub struct TransStatsJson {
+    pub buf: Printbuf,
 }
 c_default!(bch_fs_btree_trans);
 
@@ -1117,6 +1133,7 @@ c_default!(btree_write_stats);
 #[derive(CStruct, TypeInfo, Init, Late)]
 #[init_args(opts: &c::bch_opts)]
 pub struct bch_fs_btree {
+    #[init((btree_max_u64s(opts.btree_node_size) / 3) as u16)]
     pub foreground_merge_threshold: u16,
 
     #[pin]
@@ -1140,7 +1157,11 @@ pub struct bch_fs_btree {
            ENOMEM_fs_other_alloc)]
     #[c("struct workqueue_struct *read_complete_wq")]
     pub read_complete_wq: Workqueue,
+    #[pin]
+    #[init(crate::util::log::ratelimit_state_init())]
     pub read_errors_soft: cs::ratelimit_state,
+    #[pin]
+    #[init(crate::util::log::ratelimit_state_init())]
     pub read_errors_hard: cs::ratelimit_state,
 
     #[late(Workqueue::new(c"bcachefs_btree_write_complete",
@@ -1211,6 +1232,11 @@ pub struct bch_fs_btree {
     #[pin]
     #[init(RustOnly::new(new_lock!(KVVec::new())))]
     pub(crate) node_scan: rust_only!(NodeScan),
+}
+
+/// What a node of @btree_node_size bytes has room for, past its header.
+pub fn btree_max_u64s(btree_node_size: u32) -> usize {
+    (btree_node_size as usize - size_of::<crate::util::vstructs::Head<cs::btree_node>>()) / size_of::<u64>()
 }
 
 fn fill_iter_pool(opts: &c::bch_opts) -> impl PinInit<Mempool, BchError> {

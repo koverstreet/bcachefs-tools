@@ -152,7 +152,7 @@ impl c::btree_evicted_size {
 
 /// # Safety
 /// Nothing else has @c yet: btree_init_rw() is making it.
-pub unsafe fn bch2_fs_btree_evicted_size_init(c: *mut Fs) -> c_int {
+pub unsafe fn btree_evicted_size_init(c: *mut Fs) -> Result<(), BchError> {
     let fs = unsafe { &*c };
 
     /*
@@ -169,19 +169,19 @@ pub unsafe fn bch2_fs_btree_evicted_size_init(c: *mut Fs) -> c_int {
     let nr = 1usize << bits;
 
     let Ok(entries) = kvzalloc(nr * size_of::<u64>()) else {
-        return ret_to_c(fs.throw::<()>(bch_errcode::BCH_ERR_ENOMEM_fs_other_alloc));
+        return fs.throw(bch_errcode::BCH_ERR_ENOMEM_fs_other_alloc);
     };
     unsafe {
         let e = &raw mut (*c).btree.evicted_size;
         (*e).entries = entries.as_ptr().cast();
         (*e).mask    = nr as u64 - 1;
     }
-    0
+    Ok(())
 }
 
 /// # Safety
 /// Nothing uses @c's evicted sizes after.
-pub unsafe fn bch2_fs_btree_evicted_size_exit(c: *mut Fs) {
+pub unsafe fn btree_evicted_size_exit(c: *mut Fs) {
     unsafe {
         let e = &raw mut (*c).btree.evicted_size;
         if let Some(p) = NonNull::new((*e).entries) {

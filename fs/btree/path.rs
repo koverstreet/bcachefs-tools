@@ -1309,7 +1309,7 @@ impl BtreeTrans<'_> {
             let mut locked = s.lock.lock();
             if nr as u32 > s.lock.nr_max_paths.get() {
                 locked.published().nr_max_paths.set(nr as u32);
-                core::mem::swap(&mut locked.max_paths_text, &mut buf.buf);
+                core::mem::swap(&mut locked.max_paths_text, &mut buf);
             }
         }
 
