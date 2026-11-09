@@ -946,7 +946,7 @@ pub mod ioctl {
             Err(e) => return -e.raw(),
         };
 
-        fs.recovery_task.store(unsafe { c::get_current() }, core::sync::atomic::Ordering::Relaxed);
+        fs.recovery_task.store(crate::util::sched::current(), core::sync::atomic::Ordering::Relaxed);
 
         let mut buf = Printbuf::new();
         let ret = match fs.start() {
@@ -1008,7 +1008,7 @@ pub mod ioctl {
 
         let mut ret = Err(BchError::from(c::EAGAIN));
         if let Some(_run) = fs.recovery.run_lock.try_lock() {
-            fs.stdio_filter.store(unsafe { c::get_current() }, Relaxed);
+            fs.stdio_filter.store(crate::util::sched::current(), Relaxed);
             fs.stdio.store(stdio.as_c(), Release);
 
             // XXX: can we figure out a way to do this without mucking with c->opts?

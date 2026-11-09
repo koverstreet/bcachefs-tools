@@ -326,7 +326,7 @@ impl core::fmt::Display for Comm {
 #[cfg(kernel)]
 pub fn current_comm() -> Comm {
     // SAFETY: our own task's comm, which only we set
-    Comm(unsafe { (*c::get_current()).comm })
+    Comm(unsafe { (*super::sched::current()).comm })
 }
 
 /// The ids this task's new files are owned by. Its credentials are read as
@@ -334,12 +334,12 @@ pub fn current_comm() -> Comm {
 /// own, so they live while it looks.
 #[cfg(kernel)]
 pub fn current_fsuid() -> c::kuid_t {
-    unsafe { (*(*c::get_current()).cred).fsuid }
+    unsafe { (*(*super::sched::current()).cred).fsuid }
 }
 
 #[cfg(kernel)]
 pub fn current_fsgid() -> c::kgid_t {
-    unsafe { (*(*c::get_current()).cred).fsgid }
+    unsafe { (*(*super::sched::current()).cred).fsgid }
 }
 
 /// A user task's address space, for a kthread to do the task's IO in.
@@ -352,7 +352,7 @@ pub struct Mm(core::ptr::NonNull<c::mm_struct>);
 impl Mm {
     /// This task's: None for a kthread's.
     pub fn current() -> Option<Self> {
-        core::ptr::NonNull::new(unsafe { (*c::get_current()).mm }).map(Mm)
+        core::ptr::NonNull::new(unsafe { (*super::sched::current()).mm }).map(Mm)
     }
 
     /// kthread_use_mm(): this kthread in it, till the guard's dropped.
@@ -381,7 +381,7 @@ impl Drop for KthreadMm {
 pub fn current_runtime(now: u64) -> u64 {
     #[cfg(all(kernel, not(any(CONFIG_SCHED_ALT, CONFIG_SCHED_MUQSS))))]
     {
-        let se = unsafe { &(*c::get_current()).se };
+        let se = unsafe { &(*super::sched::current()).se };
         se.sum_exec_runtime.wrapping_add(now.wrapping_sub(se.exec_start))
     }
     /*
@@ -406,8 +406,7 @@ pub fn task_io_account_write(bytes: usize) {
 /// - for hashing by task. In userspace, the thread's.
 pub fn current_id() -> usize {
     #[cfg(kernel)]
-    // SAFETY: reads this CPU's current task, which is us
-    let id = unsafe { c::get_current() } as usize;
+    let id = super::sched::current() as usize;
     #[cfg(not(kernel))]
     let id = {
         std::thread_local!(static ME: u8 = const { 0 });

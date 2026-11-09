@@ -204,7 +204,7 @@ pub(crate) fn stdio_redirect(fs: &Fs, user: bool) -> Option<&crate::util::thread
     let filter = fs.stdio_filter.load(Ordering::Relaxed);
     if stdio.is_null() ||
        (!user && fs.stdio_user_only.load(Ordering::Relaxed)) ||
-       (!filter.is_null() && filter != unsafe { c::get_current() }) {
+       (!filter.is_null() && filter != crate::util::sched::current()) {
         return None;
     }
     // SAFETY: the filesystem's redirect, set while it's attached
