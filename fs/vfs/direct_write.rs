@@ -362,6 +362,10 @@ unsafe fn dio_write_loop_async(op: *mut c::bch_write_op) {
 #[c_export]
 pub unsafe fn bch2_direct_write(req: *mut c::kiocb, iter: *mut c::iov_iter) -> isize {
     let (mut k, mut it) = unsafe { (Kiocb::from_raw(req), IovIter::from_raw(iter)) };
+    direct_write(&mut k, &mut it)
+}
+
+pub fn direct_write(k: &mut Kiocb<'_>, it: &mut IovIter<'_>) -> isize {
     let mapping = k.file().mapping();
     let inode = k.inode();
     let fs = inode.fs();
@@ -373,7 +377,7 @@ pub unsafe fn bch2_direct_write(req: *mut c::kiocb, iter: *mut c::iov_iter) -> i
     let mut locked = Some(inode.v.lock());
 
     let ret = 'out: {
-        match k.write_checks(&mut it) {
+        match k.write_checks(it) {
             Ok(0) => break 'out 0,
             Err(e) => break 'out -(e.raw() as isize),
             Ok(_) => {}
