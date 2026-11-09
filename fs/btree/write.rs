@@ -10,8 +10,7 @@ use crate::btree::node::sort::{
 };
 use crate::btree::node::bset::MAX_BSETS;
 use crate::btree::node::{BtreeNode, NodeContents};
-use crate::btree::path::Paths;
-use crate::btree::path_node::bch2_trans_node_reinit_iter;
+use crate::btree::path::{LockedNode, Paths};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::read::BsetHolder;
 use crate::btree::validate::{validate_bset, validate_bset_keys, NodeIo, NodeValidate};
@@ -815,7 +814,7 @@ pub fn bch2_btree_init_next(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &B
     bch2_btree_build_aux_trees(b);
 
     if reinit_iter {
-        bch2_trans_node_reinit_iter(trans, paths, b);
+        trans.node_reinit_iter(paths, unsafe { LockedNode::new(b) });
     }
 }
 

@@ -257,11 +257,6 @@ impl BtreeNode {
     }
 }
 
-#[c_export]
-pub fn btree_node_live_state(b: &BtreeNode) -> c::btree_node_cache_state {
-    b.live_state()
-}
-
 impl BtreeNode {
     pub fn wait_on_flag(&self, bit: c::btree_flags) {
         let m = 1 << bit as u32;

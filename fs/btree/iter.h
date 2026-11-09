@@ -7,7 +7,6 @@
 #include "btree/node/bset_gen.h"
 #include "btree/node/iter_gen.h"
 #include "btree/path_gen.h"
-#include "btree/path_node_gen.h"
 #include "btree/traverse_gen.h"
 #include "btree/types_gen.h"
 #include "btree/node_gen.h"

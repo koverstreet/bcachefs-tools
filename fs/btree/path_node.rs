@@ -5,8 +5,6 @@
 
 use core::ptr;
 
-use cstruct_macros::c_export;
-
 use crate::btree::iter::BtreeTrans;
 use crate::btree::journal_overlay::peek_slot;
 use crate::btree::locking::btree_node_locked_type::*;
@@ -191,15 +189,4 @@ impl BtreeTrans<'_> {
 
         self.revalidate_updates_in_node(paths, b);
     }
-}
-
-// ── For C: btree nodes C holds locked ───────────────────────────────────────
-
-#[c_export]
-pub fn bch2_trans_node_forget(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, b: &BtreeNode) {
-    trans.node_forget(paths, b)
-}
-
-pub fn bch2_trans_node_reinit_iter(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode) {
-    trans.node_reinit_iter(paths, unsafe { LockedNode::new(b) })
 }
