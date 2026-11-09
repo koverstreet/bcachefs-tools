@@ -248,12 +248,7 @@ static inline struct address_space *rust_folio_mapping(struct folio *folio)
 	return folio->mapping;
 }
 
-/* highmem.h's, rmap.h's and writeback.h's, which aren't bound */
-static inline void rust_folio_zero_segment(struct folio *folio, size_t start, size_t xend)
-{
-	folio_zero_segment(folio, start, xend);
-}
-
+/* rmap.h's and writeback.h's, which aren't bound */
 static inline int rust_folio_mkclean(struct folio *folio)
 {
 	return folio_mkclean(folio);

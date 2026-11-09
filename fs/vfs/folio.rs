@@ -112,7 +112,7 @@ impl Folio {
 
     /// Bytes [@start, @end) of it zeroed: folio_zero_segment().
     pub fn zero_segment(self, start: usize, end: usize) {
-        unsafe { c::rust_folio_zero_segment(self.as_ptr(), start, end) }
+        unsafe { c::folio_zero_segment(self.as_ptr(), start, end) }
     }
 
     /// Its writeable userspace mappings write-protected, so a write through
