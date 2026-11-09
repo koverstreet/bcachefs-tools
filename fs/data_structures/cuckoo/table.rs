@@ -400,6 +400,11 @@ struct Full {
 }
 
 impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M> {
+    /// The slots of its newest table: what it has room for as it is.
+    pub fn capacity(&self) -> usize {
+        self.tables(&read_lock()).last().map_or(0, |t| t.slots.len())
+    }
+
     fn tables<'g>(&'g self, g: &'g ReadGuard) -> impl Iterator<Item = Table<'g, I, S, W>> + use<'g, I, S, W, M> {
         let mut oldest = self.tables.read_head(g).map(|(head, slots)| Table::new(head, slots, &self.faults));
         let mut prev: Option<Table<'g, I, S, W>> = None;
