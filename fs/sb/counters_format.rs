@@ -162,6 +162,8 @@ c_enum! {
         #[stable(126)] #[flags(TYPE_SECTORS)] sectors_alloc,
         /// Sectors reserved at fewer replicas than asked for
         #[stable(136)] #[flags(TYPE_SECTORS)] disk_reservation_degraded,
+        /// Disk reservations that failed with ENOSPC
+        #[stable(145)] #[flags(TYPE_COUNTER)] disk_reservation_enospc,
         /// Buckets allocated while free space mismatch restricted placement
         #[stable(137)] #[flags(TYPE_COUNTER)] bucket_alloc_placement_restricted,
         /// Allocations waiting past allocator_stuck_timeout

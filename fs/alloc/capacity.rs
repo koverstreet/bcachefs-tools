@@ -48,7 +48,7 @@ use crate::util::kernel::unlikely;
 use crate::util::log::{log_no_fs, LogLevel};
 use crate::util::percpu::{CpuGuard, PerCpuRef};
 use crate::util::rcu::read_lock;
-use crate::util::Printbuf;
+use crate::util::{HumanReadable, Printbuf};
 use c::{DevsMask, PlacementWriter};
 use core::cell::Cell;
 use core::ffi::{c_int, c_uint, c_ulong};
@@ -504,6 +504,12 @@ impl DevFreeDist {
     /// their slot upwards; usage.reserved has no count, so it comes off the
     /// top.
     fn partition(&self, b: &c::bch_fs_capacity_counters) -> [u64; REPLICAS_MAX] {
+        self.partition_stages(b)[2]
+    }
+
+    /// partition(), stage by stage: placeable, less what's reserved, less the
+    /// reserve factor's margin - for the ENOSPC trace to show where it went.
+    fn partition_stages(&self, b: &c::bch_fs_capacity_counters) -> [[u64; REPLICAS_MAX]; 3] {
         let mut out = [0; REPLICAS_MAX];
         let mut above = 0;
 
@@ -516,6 +522,7 @@ impl DevFreeDist {
             out[n - 1] = placeable - above;
             above      = placeable;
         }
+        let placeable = out;
 
         // Most constrained first: the top slot's reservations can only have
         // come from the top slot. What doesn't fit was overcommitted, and is
@@ -525,7 +532,20 @@ impl DevFreeDist {
         }
         take_from(out.iter_mut().rev(), reserve_factor(b.usage.reserved));
 
-        out.map(avail_factor)
+        [placeable, out, out.map(avail_factor)]
+    }
+}
+
+/// What a recompute computed each slot's free space from: kept, for an ENOSPC
+/// to be explained from what decided it.
+struct FreeSpace {
+    dist:     DevFreeDist,
+    counters: c::bch_fs_capacity_counters,
+}
+
+impl FreeSpace {
+    fn avail(&self) -> [u64; REPLICAS_MAX] {
+        self.dist.partition(&self.counters)
     }
 }
 
@@ -629,13 +649,57 @@ impl Fs {
         });
     }
 
+    /// Why @sectors at @nr_replicas didn't fit, from @free, the recompute that
+    /// decided it: at each count of replicas or more, the free space, what
+    /// placement allows of it, what outstanding reservations leave, and what
+    /// the reserve factor leaves of that - the last, at @nr_replicas, is what
+    /// it had to fit in. Then what's reserved, and the devices as they are.
+    fn disk_reservation_enospc_to_text(&self, out: &mut Printbuf, free: &FreeSpace, sectors: u64,
+                                       nr_replicas: u32, flags: c::bch_reservation_flags) {
+        let slot = disk_res_slot(nr_replicas);
+        let [placeable, unreserved, avail] = free.dist.partition_stages(&free.counters);
+        let at_or_above = |s: &[u64; REPLICAS_MAX], n: usize| -> u64 { s[n..].iter().sum() };
+        let sz = |sectors: u64| HumanReadable(sectors << 9);
+
+        write!(out, "{} at {nr_replicas} replicas: {} available at {nr_replicas} or more",
+               sz(sectors), sz(at_or_above(&avail, slot)));
+        if flags.contains(c::bch_reservation_flags::BCH_DISK_RESERVATION_PARTIAL) {
+            write!(out, ", partial");
+        }
+        write!(out, "\n");
+
+        out.tabstops_reset();
+        for spaces in [10, 12, 12, 12, 12] {
+            out.tabstop_push(spaces);
+        }
+        write!(out, "replicas\tfree\rplaceable\runreserved\ravailable\r\n");
+        for n in 0..REPLICAS_MAX {
+            write!(out, "{}{}\t{}\r{}\r{}\r{}\r\n", n + 1, if n == slot { "*" } else { "" },
+                   sz(free.dist.total[n]), sz(at_or_above(&placeable, n)),
+                   sz(at_or_above(&unreserved, n)), sz(at_or_above(&avail, n)));
+        }
+
+        write!(out, "reserved by writes in flight:");
+        for (n, &r) in (1..).zip(&free.counters.online_reserved) {
+            write!(out, " {n}x {}", sz(r));
+        }
+        write!(out, "\npersistent reservations: {}\n", sz(free.counters.usage.reserved));
+
+        write!(out, "devices:\n");
+        let rcu = read_lock();
+        for ca in self.devs_rcu(&rcu) {
+            write!(out, "  {ca}: {} free, durability {}{}\n", sz(DevPlaceable::new(ca).eventual),
+                   ca.mi.get().durability, if ca.is_rw() { "" } else { ", not rw" });
+        }
+    }
+
     /// Every CPU's cache zeroed, and free space and the placement recomputed,
     /// under sectors_available_lock - @placement is its guard's. Every slot,
     /// not just the one that ran short: consuming at one count shrinks the
     /// others, and not linearly, so they only stay honest recomputed
-    /// together. Each slot's free space, and how much the caches may hand out
-    /// before the placement could change.
-    fn reservation_recompute(&self, placement: &PlacementWriter) -> ([u64; REPLICAS_MAX], u64) {
+    /// together. The free space, and how much the caches may hand out before
+    /// the placement could change.
+    fn reservation_recompute(&self, placement: &PlacementWriter) -> (FreeSpace, u64) {
         // A zero racing a CPU's take from its own cache can be lost: what
         // that cache held is handed out twice, as it was with C's
         for caches in percpu_field!(self.capacity.pcpu.get(), sectors_available).each_cpu() {
@@ -657,7 +721,8 @@ impl Fs {
         }
         placement.placement_constrained.set(constrained);
 
-        (eventual.partition(&percpu_field!(self.capacity.pcpu.get(), counters).sum_nonnegative()), allowance)
+        let counters = percpu_field!(self.capacity.pcpu.get(), counters).sum_nonnegative();
+        (FreeSpace { dist: eventual, counters }, allowance)
     }
 
     /// The global caches set to @avail, and what the fastpath may hand out
@@ -678,8 +743,8 @@ impl Fs {
     /// computed against the old ones.
     pub fn disk_reservation_caches_invalidate(&self) {
         let mut g = self.capacity.sectors_available_lock.lock();
-        let (avail, allowance) = self.reservation_recompute(g.published());
-        self.reservation_caches_store(&avail, allowance);
+        let (free, allowance) = self.reservation_recompute(g.published());
+        self.reservation_caches_store(&free.avail(), allowance);
     }
 
     /// @sectors for @res, when this CPU's cache for its slot is short: the
@@ -741,7 +806,8 @@ impl Fs {
         let slot = disk_res_slot(nr_replicas);
 
         let mut g = self.capacity.sectors_available_lock.lock();
-        let (mut avail, allowance) = self.reservation_recompute(g.published());
+        let (free, allowance) = self.reservation_recompute(g.published());
+        let mut avail = free.avail();
 
         // anything placeable at more replicas than we need will do
         let have: u64 = avail[slot..].iter().sum();
@@ -758,11 +824,17 @@ impl Fs {
         self.reservation_caches_store(&avail, allowance);
 
         if !ok {
+            drop(g);
+
             // after a shutdown nothing is writable: that's not out of space
-            return Err(self.err(match self.flags.get(c::bch_fs_flags::emergency_ro) {
-                true  => bch_errcode::BCH_ERR_emergency_ro,
-                false => bch_errcode::BCH_ERR_ENOSPC_disk_reservation,
-            }));
+            if self.flags.get(c::bch_fs_flags::emergency_ro) {
+                return Err(self.err(bch_errcode::BCH_ERR_emergency_ro));
+            }
+
+            self.event_inc_trace(events::disk_reservation_enospc, |out| {
+                self.disk_reservation_enospc_to_text(out, &free, sectors, nr_replicas, flags)
+            });
+            return Err(self.err(bch_errcode::BCH_ERR_ENOSPC_disk_reservation));
         }
 
         self.online_reserved_at(nr_replicas).add(sectors);
