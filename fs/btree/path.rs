@@ -21,7 +21,7 @@ use crate::debug::trace::{events, TraceEvent};
 use crate::prt;
 use crate::errcode::{bch_errcode, err_ptr, errptr_or_null, ret_to_c, BchError};
 use crate::format::{BkeyType, Bpos, Btree};
-use crate::types::{bits_to_longs, c_default, Lent};
+use crate::types::{bits_to_longs, Lent};
 use crate::util::alloc::kvzalloc_nofail;
 use crate::util::backtrace::prt_symbol;
 use crate::util::log::LogMsg;
@@ -124,7 +124,6 @@ pub struct btree_path_level<T: PathNode = cs::btree_bkey_cached_common> {
     #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
     pub lock_taken_time: u64,
 }
-c_default!(btree_path_level);
 copy!([T: PathNode] btree_path_level<T>);
 
 #[bitfield(u16, ty = u32)]
@@ -165,7 +164,6 @@ pub struct BtreePath<T: PathNode = cs::btree_bkey_cached_common> {
     #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
     pub ip_allocated: core::ffi::c_ulong,
 }
-c_default!(BtreePath);
 
 /// A path as it was, for a trace: a copy that can't be had as a path, so
 /// nothing takes its record of locks for locks held.

@@ -555,7 +555,6 @@ pub struct bkey_cached {
     pub k: *mut cs::bkey_i,
     pub rcu: cs::rcu_head,
 }
-c_default!(bkey_cached);
 
 impl bkey_cached {
     /* C's test_bit()s and set_bit()s */
@@ -1004,7 +1003,6 @@ pub struct bch_fs_btree_trans {
 pub struct TransStatsJson {
     pub buf: Printbuf,
 }
-c_default!(bch_fs_btree_trans);
 
 /* Btree node write types and flags: */
 

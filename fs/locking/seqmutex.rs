@@ -9,7 +9,6 @@
 
 use super::{ExclusiveGuard, Locked, RawLock, RawLockBase, RawTryLock};
 use crate::cstructs::c;
-use crate::types::c_default;
 use core::convert::Infallible;
 use core::ffi::{c_void, CStr};
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -23,7 +22,6 @@ pub struct seqmutex {
     #[c("u32 seq")]
     pub seq:  AtomicU32,
 }
-c_default!(seqmutex);
 
 unsafe impl RawLockBase for seqmutex {
     type GuardState = ();

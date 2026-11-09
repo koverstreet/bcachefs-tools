@@ -163,7 +163,6 @@ pub struct BtreeNode {
     #[c_anon("")]
     _pin: PhantomData<PhantomPinned>,
 }
-c_default!(BtreeNode);
 
 /// A node's keys, their buffer, their format and its key: the node lock's -
 /// written with it held for write, read with it held any way.

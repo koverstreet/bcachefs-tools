@@ -128,7 +128,6 @@ pub struct six_lock {
     #[c("struct lockdep_map dep_map")]
     pub dep_map: LockdepMap,
 }
-c_default!(six_lock);
 
 c_enum! {
     #[flags]
