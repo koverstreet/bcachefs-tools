@@ -234,13 +234,6 @@ impl Flavor<'static> {
 }
 
 impl<'a> Flavor<'a> {
-    /// # Safety
-    /// @srcu outlives 'a, and everything waited for or queued on it through
-    /// this.
-    pub unsafe fn srcu(srcu: *mut c::srcu_struct) -> Self {
-        Flavor(srcu, PhantomData)
-    }
-
     #[cfg(kernel)]
     fn ssp(self) -> Option<*mut kernel::bindings::srcu_struct> {
         (!self.0.is_null()).then(|| self.0.cast())

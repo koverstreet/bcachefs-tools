@@ -109,7 +109,6 @@
 #include "btree/bkey_types_inline.h"
 #include "btree/interior_gen.h"
 #include <linux/rcupdate.h>
-#include "util/rcu_pending_gen.h"
 #include "btree/key_cache_gen.h"
 #include "btree/node_scan_gen.h"
 #include "data/extents_gen.h"

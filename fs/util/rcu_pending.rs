@@ -2,17 +2,14 @@
 
 //! Objects waiting out an RCU or SRCU grace period, then processed - per CPU,
 //! batched by the grace period they wait for - and taken back before then if
-//! wanted. What processing is, and what's queued, is the Mode: a process
-//! callback - C's, or CALL_RCU's, each rcu_head's own func - or kvfree_rcu().
+//! wanted. What processing is, and what's queued, is the Mode: the owner's
+//! process callback, or kvfree_rcu().
 
-#![allow(non_camel_case_types)]
-
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use core::marker::{PhantomData, PhantomPinned};
-use core::mem::{offset_of, size_of, ManuallyDrop};
+use core::mem::{offset_of, ManuallyDrop};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-use cstruct_macros::c_export;
 use pin_init::{pin_init_from_closure, PinInit, Zeroable};
 
 use crate::c;
@@ -67,53 +64,6 @@ pub unsafe trait Mode: Sized {
         drop(item)
     }
 }
-
-/// An rcu_head queued for a CProcess.
-pub struct CHead(NonNull<c::rcu_head>);
-
-impl CHead {
-    /// # Safety
-    /// @h, and what it's in, live until it's processed or dequeued - and for
-    /// CALL_RCU, its func is set.
-    pub unsafe fn new(h: NonNull<c::rcu_head>) -> Self {
-        CHead(h)
-    }
-
-    pub fn as_ptr(&self) -> *mut c::rcu_head {
-        self.0.as_ptr()
-    }
-}
-
-/// A process callback: C's - a rcu_pending_process_fn that rcu_pending_init()
-/// found there - or CALL_RCU.
-#[repr(transparent)]
-#[derive(Clone, Copy)]
-pub struct CProcess(unsafe extern "C" fn(*mut c::rcu_pending, *mut c::rcu_head));
-
-unsafe impl Mode for CProcess {
-    type Item = CHead;
-
-    fn into_raw(item: CHead) -> Raw {
-        item.0.cast()
-    }
-
-    unsafe fn from_raw(p: Raw) -> CHead {
-        CHead(p.cast())
-    }
-
-    unsafe fn process(&self, pending: &RcuPending<'_, Self>, item: CHead) {
-        unsafe { (self.0)(ptr::from_ref(pending).cast_mut().cast(), item.as_ptr()) }
-    }
-}
-
-/// call_rcu(), batched: each rcu_head's own func, run on it.
-pub const CALL_RCU: CProcess = {
-    unsafe extern "C" fn call(_pending: *mut c::rcu_pending, h: *mut c::rcu_head) {
-        let func = unsafe { (*h).func }.expect("a CALL_RCU head with no func");
-        unsafe { func(h) }
-    }
-    CProcess(call)
-};
 
 /// kvfree_rcu(), batched: a MaybeRcuAlloc's memory, its T dropped when it was
 /// retired, freed a grace period after it's queued.
@@ -428,9 +378,7 @@ enum ListBlocked {
     Expired,
 }
 
-/// C's struct rcu_pending, of any mode: RcuPending<'_, CProcess> is the struct C
-/// has. Pinned: each CPU's state points back to it.
-#[repr(C)]
+/// Pinned: each CPU's state points back to it.
 pub struct RcuPending<'f, M: Mode> {
     p:       *mut Pcpu<'f, M>,
     srcu:    Flavor<'f>,
@@ -440,15 +388,6 @@ pub struct RcuPending<'f, M: Mode> {
 
 unsafe impl<M: Mode + Send> Send for RcuPending<'_, M> {}
 unsafe impl<M: Mode + Sync> Sync for RcuPending<'_, M> {}
-
-const _: () = {
-    type C = RcuPending<'static, CProcess>;
-    assert!(size_of::<C>() == size_of::<c::rcu_pending>() &&
-            offset_of!(C, p) == offset_of!(c::rcu_pending, p) &&
-            offset_of!(C, srcu) == offset_of!(c::rcu_pending, srcu) &&
-            offset_of!(C, process) == offset_of!(c::rcu_pending, process),
-            "RcuPending isn't laid out as struct rcu_pending");
-};
 
 impl<'f, M: Mode> RcuPending<'f, M> {
     /// With @srcu's grace periods, @process done with what's queued once its
@@ -813,68 +752,4 @@ impl<M: Mode> Drop for RcuPending<'_, M> {
     fn drop(&mut self) {
         unsafe { Self::exit(self) }
     }
-}
-
-// ── For C ────────────────────────────────────────────────────────────────
-
-type CPending = RcuPending<'static, CProcess>;
-
-unsafe fn c_pending<'a>(pending: *mut c::rcu_pending) -> &'a CPending {
-    unsafe { &*pending.cast() }
-}
-
-fn c_claim(try_claim: c::rcu_pending_claim_fn) -> impl FnMut(&CHead) -> bool {
-    move |h| try_claim.is_none_or(|f| unsafe { f(h.as_ptr()) })
-}
-
-fn c_head(h: Option<CHead>) -> *mut c::rcu_head {
-    h.map_or(ptr::null_mut(), |h| h.as_ptr())
-}
-
-/// # Safety
-/// @pending is C's, and doesn't move until rcu_pending_exit(); @srcu is null,
-/// or outlives it.
-#[c_export]
-pub unsafe fn rcu_pending_init(pending: *mut c::rcu_pending, srcu: *mut c::srcu_struct,
-                               process: c::rcu_pending_process_fn) -> c_int {
-    let process = CProcess(process.expect("rcu_pending_init() with no process function"));
-    match unsafe { CPending::init(pending.cast(), Flavor::srcu(srcu), process) } {
-        Ok(())  => 0,
-        Err(_)  => -(c::ENOMEM as c_int),
-    }
-}
-
-/// # Safety
-/// @pending is rcu_pending_init()'s; @obj, and what it's in, live until
-/// they're processed or dequeued.
-#[c_export]
-pub unsafe fn rcu_pending_enqueue(pending: *mut c::rcu_pending, obj: *mut c::rcu_head) {
-    let obj = NonNull::new(obj).expect("rcu_pending_enqueue() of NULL");
-    unsafe { c_pending(pending).enqueue(CHead::new(obj)) }
-}
-
-/// # Safety
-/// @pending is rcu_pending_init()'s.
-#[c_export]
-pub unsafe fn rcu_pending_dequeue_where(pending: *mut c::rcu_pending, try_claim: c::rcu_pending_claim_fn)
-    -> *mut c::rcu_head
-{
-    c_head(unsafe { c_pending(pending) }.dequeue_where(c_claim(try_claim)))
-}
-
-/// # Safety
-/// @pending is rcu_pending_init()'s.
-#[c_export]
-pub unsafe fn rcu_pending_dequeue_from_all_where(pending: *mut c::rcu_pending, try_claim: c::rcu_pending_claim_fn)
-    -> *mut c::rcu_head
-{
-    c_head(unsafe { c_pending(pending) }.dequeue_from_all_where(c_claim(try_claim)))
-}
-
-/// # Safety
-/// @pending is rcu_pending_init()'s - or zeroed, never initialized - and
-/// nothing uses it after.
-#[c_export]
-pub unsafe fn rcu_pending_exit(pending: *mut c::rcu_pending) {
-    unsafe { (*pending.cast::<CPending>()).exit() }
 }

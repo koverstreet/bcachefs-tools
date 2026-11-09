@@ -47,7 +47,6 @@
 #[path = "snapshots/format.rs"] pub mod snapshots_format;
 #[path = "snapshots/types.rs"] pub mod snapshots_types;
 #[path = "types.rs"] pub mod types;
-#[path = "util/rcu_pending_types.rs"] pub mod util_rcu_pending_types;
 #[path = "util/thread_with_file_types.rs"] pub mod util_thread_with_file_types;
 #[path = "util/two_state_shared_lock_types.rs"] pub mod util_two_state_shared_lock_types;
 #[path = "util/util_types.rs"] pub mod util_util_types;
@@ -202,7 +201,6 @@ pub mod c {
     pub use crate::util::mean_and_variance::{mean_and_variance};
     pub use crate::util::printbuf::{PRINTBUF_INLINE_TABSTOPS, PRINTBUF_UNITS_10, PRINTBUF_UNITS_2, bch2_prt_printf, printbuf_bits, printbuf_restore, printbuf_si};
     pub(crate) use crate::util::printbuf::{__printbuf_bits_forward};
-    pub use super::util_rcu_pending_types::*;
     pub use crate::locking::seqmutex::seqmutex;
     pub use crate::util::siphash::{SIPHASH_KEY};
     pub use crate::locking::six::*;
