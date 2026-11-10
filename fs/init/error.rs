@@ -418,7 +418,7 @@ const CHOICES: &[Choice<Answer>] = &[
 /// The answer from whoever's running fsck, through its stdio redirect - No
 /// without one: with @trans unlocked, and after two seconds, unlocked long.
 #[cfg(kernel)]
-fn ask_answer(fs: &Fs, trans: Option<&BtreeTrans<'_>>, q: &Question<'_, Answer>) -> Answer {
+fn ask_answer(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, q: &Question<'_, Answer>) -> Answer {
     use crate::util::prompt::Slow;
 
     let Some(p) = Prompt::for_fs(fs) else {
@@ -441,7 +441,7 @@ fn ask_answer(fs: &Fs, trans: Option<&BtreeTrans<'_>>, q: &Question<'_, Answer>)
 
 /// The answer on stdin, or through an agent; its end is fatal.
 #[cfg(not(kernel))]
-fn ask_answer(fs: &Fs, _: Option<&BtreeTrans<'_>>, q: &Question<'_, Answer>) -> Answer {
+fn ask_answer(fs: &Fs, _: Option<&TransAttempt<'_, '_>>, q: &Question<'_, Answer>) -> Answer {
     let reply = match Prompt::detect() {
         Some(p) => p.put(q, None).ok(),
         None => {
@@ -460,7 +460,7 @@ fn ask_answer(fs: &Fs, _: Option<&BtreeTrans<'_>>, q: &Question<'_, Answer>) -> 
 
 /// @question asked, ending ", @action": the answer, with @trans relocked - a
 /// restart if it can't be.
-fn ask(fs: &Fs, trans: Option<&BtreeTrans<'_>>, question: &mut Printbuf, action: &[u8])
+fn ask(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, question: &mut Printbuf, action: &[u8])
     -> Result<Answer, BchError>
 {
     write!(question, ", ");
@@ -608,7 +608,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                 if fix == c::fsck_err_opts::ask {
                     cnt.print = false;
 
-                    let answer = match ask(fs, trans.map(|t| t.trans()), &mut out, action) {
+                    let answer = match ask(fs, trans, &mut out, action) {
                         Ok(ans) => ans,
                         // relocking after the question restarted: undecided
                         Err(r) => break 'unlock r,

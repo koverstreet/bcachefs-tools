@@ -242,6 +242,10 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.trans.unlock()
     }
 
+    pub fn unlock_long(&self) {
+        self.trans.unlock_long()
+    }
+
     pub fn relock(&self) -> Result<(), BchError> {
         assert!(!self.spent.get(), "relock of an attempt ignore_restarts() ended");
         self.trans.relock()
