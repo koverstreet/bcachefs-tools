@@ -20,7 +20,7 @@ use crate::alloc::backpointers::{backpointer_get_key, BpScanIter};
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN};
-use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeLevels, BtreeTrans,
+use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeLevels,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
@@ -368,7 +368,7 @@ fn scan_btree(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, s: &mut PerSnapsh
 
 /// The indirect extents a reflink pointer holds references on, @refs, given
 /// @opts - its inode's: do_reconcile_scan_indirect().
-fn scan_indirect(trans: &BtreeTrans<'_>, scan: &c::reconcile_scan, res: &DiskReservation<'_>, refs: Range<u64>,
+fn scan_indirect(trans: &TransGuard<'_>, scan: &c::reconcile_scan, res: &DiskReservation<'_>, refs: Range<u64>,
                  s: &mut PerSnapshotIoOpts, opts: &c::bch_inode_opts) -> Result<(), BchError>
 {
     let mut iter = BtreeIter::new(trans, Btree::reflink, pos(0, refs.start),

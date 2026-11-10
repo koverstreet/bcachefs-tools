@@ -58,7 +58,7 @@ use crate::alloc::backpointers::backpointer_get_key;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyV, POS_MIN};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{is_restart, lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags,
-                         BtreeTrans, CommitFlags, TransAttempt};
+                         CommitFlags, TransAttempt};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
@@ -276,7 +276,7 @@ impl WorkBuf {
 
 /// The first key in @btree from @start to @end that @decode takes - a key at
 /// a time, as what's done to one changes the next - and its position.
-fn next_key<T>(trans: &BtreeTrans<'_>, btree: Btree, start: Bpos, end: Bpos,
+fn next_key<T>(trans: &TransGuard<'_>, btree: Btree, start: Bpos, end: Bpos,
                mut decode: impl FnMut(BkeySC<'_>) -> Option<T>) -> Result<Option<(Bpos, T)>, BchError>
 {
     let mut iter = BtreeIter::new(trans, btree, start, BtreeIterFlags::PREFETCH);
@@ -284,6 +284,20 @@ fn next_key<T>(trans: &BtreeTrans<'_>, btree: Btree, start: Bpos, end: Bpos,
         Some(v) => ControlFlow::Break(Some((k.k.p, v))),
         None    => ControlFlow::Continue(()),
     }))
+}
+
+/// next_key(), in the caller's attempt @t: its keys skipped in that attempt,
+/// and the one found still locked in it.
+fn next_key_in<T>(t: &TransAttempt<'_, '_>, btree: Btree, start: Bpos, end: Bpos,
+                  mut decode: impl FnMut(BkeySC<'_>) -> Option<T>) -> Result<Option<(Bpos, T)>, BchError>
+{
+    let mut iter = BtreeIter::new(t, btree, start, BtreeIterFlags::PREFETCH);
+    let mut found = None;
+    iter.find_max_norestart(t, end, |_, k| {
+        found = decode(k).map(|v| (k.k.p, v));
+        Ok(found.is_some())
+    })?;
+    Ok(found)
 }
 
 // ── Stripes ──────────────────────────────────────────────────────────────
@@ -744,18 +758,19 @@ impl<'f> Reconciler<'f, '_> {
                     set_status(fs, Status::Running { phase: Some(phase), pos: at });
                     self.scan_step(p, cookie)
                 }
-                PhaseKind::Btree => {
-                    // The backpointer is checked against its node's pointer in
-                    // the attempt that read it, its reconcile_scan leaf still
-                    // locked: a node rewrite deletes it there, and can't land
-                    // in between
-                    let t = trans.begin();
-                    let next = next_key(t.trans(), phase.btree, work_pos.pos, phase.end, BkeyI::<c::Backpointer>::from_key)?;
-                    let Some((at, bp)) = next else { return Ok(()) };
+                // The backpointer is checked against its node's pointer in the
+                // attempt that read it, its reconcile_scan leaf still locked: a
+                // node rewrite deletes it there, and can't land in between
+                PhaseKind::Btree => match lockrestart_do(trans, |t| {
+                    let next = next_key_in(t, phase.btree, work_pos.pos, phase.end, BkeyI::<c::Backpointer>::from_key)?;
+                    let Some((at, bp)) = next else { return Ok(None) };
                     work_pos.pos = at;
                     set_status(fs, Status::Running { phase: Some(phase), pos: at });
-                    p.w.btree(&t, work_pos, &bp)
-                }
+                    p.w.btree(t, work_pos, &bp).map(Some)
+                }) {
+                    Ok(None) => return Ok(()),
+                    r => r.map(|_| ()),
+                },
                 PhaseKind::Normal => {
                     let Some(at) = p.w.work.next(trans, &mut work_pos, phase.end)? else { return Ok(()) };
                     work_pos.pos = at;
