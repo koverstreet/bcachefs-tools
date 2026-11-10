@@ -486,9 +486,9 @@ impl Drop for MovingCtxt<'_> {
         self.0.in_flight.wait_sync();
 
         // Putting a transaction mid-restart is an unhandled restart, but a mover
-        // can be told to exit before it's retried: so begin first
+        // can be told to exit before it's retried
         unsafe {
-            self.ctxt.as_ref().trans.begin_raw();
+            BtreeTrans::abandon_restart(&self.ctxt.as_ref().trans);
             free_pinned(self.ctxt.as_ptr());
         }
     }

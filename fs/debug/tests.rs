@@ -662,9 +662,9 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
 
         updater.unlock();
         if updater.relock_notrace().is_err() {
-            // A failed relock leaves the transaction in restart: end it, as a
-            // restart loop would, before it's put.
-            updater.begin_raw();
+            // A failed relock leaves the transaction in restart
+            drop(u_iter);
+            updater.abandon_restart();
             continue;
         }
         updater.unlock();
@@ -694,7 +694,8 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
             return fs.throw(bch_errcode::BCH_ERR_EINVAL_test_stripe_open_relock_not_invalidated);
         }
         // The relock failed, as it should: in restart, as above.
-        updater.begin_raw();
+        drop(u_iter);
+        updater.abandon_restart();
         return Ok(());
     }
 
