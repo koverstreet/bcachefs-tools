@@ -1,5 +1,33 @@
 // SPDX-License-Identifier: GPL-2.0
 
+//! TransAttempt: an attempt at a transaction, which btree work is done in.
+//!
+//! A transaction (BtreeTrans, owned by a TransGuard) runs as attempts, each
+//! from one begin() to the next. The loops in for_each.rs - lockrestart_do(),
+//! commit_do(), the for_each walks - begin an attempt and run a step in it,
+//! and begin again if the step returns a restart. Everything a step does -
+//! peeking keys, queueing updates, allocating transaction memory, committing -
+//! takes the &TransAttempt it runs in, and a restart is an error like any
+//! other, returned to the loop.
+//!
+//! In this file:
+//!  - TransAttempt, and TransRef: what an iterator is made from - the
+//!    transaction, begun first, or an attempt.
+//!  - The attempt's operations: commits; work that runs loops of its own
+//!    inside the attempt (nested(), close(), ignore_restarts(),
+//!    restarts_handled()); dropping the locks to block (drop_locks_do(),
+//!    allocate_dropping_locks()); transaction memory, and keys made in it;
+//!    btree node helpers.
+//!  - TransBkey: a key in transaction memory, or in a buffer C hands over,
+//!    edited in place.
+//!  - Watermark and CommitOpts: the commit's flags word.
+//!
+//! What an attempt hands out - memory, keys, iterator positions - is good
+//! until the transaction next begins. A begin inside an attempt ends it: the
+//! attempt must then finish with a restart, nothing borrowed from it used
+//! again. That's checked only at runtime, by verify_not_restarted() and a
+//! spent attempt's asserts.
+
 use super::bkey::*;
 use super::types::{BtreeIter, BtreeTrans};
 use super::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags};
@@ -30,6 +58,7 @@ use crate::cstructs::c::BtreeWriteType;
 use crate::util::vstructs::{State, Validated};
 use crate::format::{Bpos, Btree, BkeyType};
 
+/// One attempt at @trans: from one begin() to the next.
 pub struct TransAttempt<'a, 't> {
     trans:         &'a BtreeTrans<'t>,
     /// the transaction's when the attempt began - or when restarts_handled()
@@ -46,41 +75,13 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 }
 
-/// What an iterator is made from: the transaction, or an attempt at it. An
-/// iterator belongs to the transaction, and outlives any one attempt: @'t is
-/// the borrow of the transaction - the attempt's, for an attempt - that it's
-/// bound by, so it can't outlive the transaction its C iterator points into.
+/// What an iterator is made from. An iterator can't be made with the
+/// transaction unlocked or in a restart: made from the transaction, it's begun
+/// first; from an attempt, it's the attempt's. @'t bounds the iterator by the
+/// transaction it points into.
 ///
-/// XXX: making an iterator needs the transaction locked and not in a restart,
-/// and nothing here says so. bch2_path_get() reuses the transaction's paths
-/// and set_pos()es them, reading the bsets of the nodes they hold: unlocked,
-/// those nodes can be rewritten or freed. C checks, and panics
-/// (bch2_trans_unlocked_or_in_restart_error()); C's loops get it right by
-/// bch2_trans_begin() before the iterator's init. A &BtreeTrans or
-/// &TransGuard vouches for nothing - an unlock() before, with no relock, and
-/// it's that panic, at runtime. An attempt vouches for it only until its
-/// first unlock() or error.
-///
-/// Next steps, in order:
-/// - Iterators made only from a &TransAttempt: drop the &BtreeTrans and
-///   &TransGuard impls, and the compiler lists the callers to convert.
-///   Not further: an unlock that consumes the attempt, or drop_locks_do() on
-///   &mut, would reject keys used after a successful relock - which C relies
-///   on, and is right (a relock fails if a node's lock changed hands) - and
-///   spread &mut through every function that might unlock.
-/// - That's lifetimes standing in for the state, and approximately. What we
-///   want is the verifier tracking it: locked, unlocked or in restart, a Cell
-///   in BtreeTrans, changed only by begin(), relock(), unlock() and anything
-///   that returns an error - each proven to have its effect, construction
-///   proven to need locked, and runtime asserts where a proof can't reach,
-///   which later proofs can then assume. Verus can express this now (a
-///   PCell and its permission); Aeneas, which we're leaning towards, first
-///   needs UnsafeCell support - shared borrows of !Freeze types as heap
-///   locations, reads and writes through them as effects.
-/// What an iterator's made from, two kinds as C's walks are. A transaction,
-/// outside any attempt, is a for_each_btree_key() walk's - each key its own
-/// attempt - and like the macro it's begun before the iterator's made. An
-/// attempt's is a _norestart walk's, inside it: nothing's begun.
+/// XXX: a &BtreeTrans may be an attempt's t.trans(), and then the begin is a
+/// nested one.
 pub trait TransRef<'t> {
     fn trans_raw(&self) -> *mut BtreeTrans<'_>;
 }
@@ -103,9 +104,8 @@ impl<'a, 't> TransRef<'a> for &TransAttempt<'a, 't> {
     fn trans_raw(&self) -> *mut BtreeTrans<'_> { self.trans.raw() }
 }
 
-/// Exempts bch2_trans_begin() from the dropped-updates warning while it lives
-/// (see begin_may_drop_updates), and restores the previous value when dropped,
-/// so exemptions nest - as C's CLASS(trans_may_drop_updates).
+/// Exempts begin() from the dropped-updates warning while it lives; restores
+/// the previous value when dropped, so exemptions nest.
 struct TransMayDropUpdates<'a, 't> {
     trans: &'a BtreeTrans<'t>,
     old:   bool,
@@ -131,11 +131,9 @@ pub fn is_restart(e: &BchError) -> bool {
     e.matches(bch_errcode::BCH_ERR_transaction_restart)
 }
 
-/// A key to update with, valid and ours to edit while the attempt runs - in
-/// the transaction's memory, or a buffer C hands over (from_raw_room()): of
-/// key type @V, its value whole - as the typed constructors make one - or,
-/// untyped, any key. It's edited in place, in its buffer, never moved: what
-/// won't fit is NoRoom.
+/// A key to update with, ours to edit while the attempt runs: in its buffer,
+/// never moved - what won't fit is NoRoom. Typed, its value is a whole @V;
+/// untyped, any key.
 pub struct TransBkey<'a, 't, V: ?Sized = FamilyVal<AllTypes>> {
     ptr:      NonNull<c::bkey_i>,
     pub(crate) buf_u64s: u32,
@@ -143,8 +141,8 @@ pub struct TransBkey<'a, 't, V: ?Sized = FamilyVal<AllTypes>> {
     v:        PhantomData<*const V>,
 }
 
-/// A key that won't fit where it is: @need_u64s, header and all, where its
-/// buffer has @have_u64s - or a key can, which is at most a u8's worth.
+/// A key that won't fit: @need_u64s, header and all, where its buffer - or a
+/// key's u8 of u64s - has @have_u64s.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NoRoom {
     pub need_u64s: usize,
@@ -175,8 +173,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// The disk reservation the commit in progress charges, if it was given
     /// one.
     pub fn disk_res(&self) -> Option<&DiskReservation<'t>> {
-        // SAFETY: commit()'s caller's, which outlives the commit - and the
-        // attempt
         unsafe { self.trans.disk_res.get().as_ref() }
     }
 
@@ -186,38 +182,19 @@ impl<'a, 't> TransAttempt<'a, 't> {
         }
     }
 
-    /// The restarts since the attempt began were a callee's, run and handled
-    /// inside it - a read's own retries, under a data move: not this
-    /// attempt's, which goes on. C's restoring trans->restart_count after the
-    /// call.
+    /// The restarts since the attempt began were a callee's, handled inside it
+    /// - a read's own retries, under a data move - and this attempt goes on.
     pub fn restarts_handled(&self) {
         self.restart_count.set(self.trans.restart_count());
     }
 
-    /// Run @f - transactions of its own, top-level loops beginning and
-    /// committing as they go - from inside this attempt, and end the attempt
-    /// as though its step had: C's saving and restoring trans->restart_count
-    /// around a nested loop.
+    /// Run @f - loops of its own - from inside this attempt, which @f's first
+    /// begin ends: after @f the attempt is spent, and the loop running it
+    /// begins anew (is_spent()).
     ///
-    /// @f's first begin ends this attempt, so the attempt must be finished
-    /// when @f starts: nothing queued, and nothing it holds used again - its
-    /// keys, its iterators' positions, its locks, which @f's attempts have
-    /// had since. After @f it's spent: verify_not_restarted() passes, and the
-    /// loop running it steps its iterator and begins anew, by is_spent().
-    ///
-    /// Checked: nothing queued, and no relock or commit of a spent attempt.
-    ///
-    /// Not checked - the caller's to see to, until it can be verified:
-    /// nothing borrowed from this attempt is used after @f. The key a step
-    /// was given points into a btree node the attempt had locked; @f's
-    /// attempts drop those locks, and by the time @f returns the node may
-    /// have been rewritten, split, or freed and reused - reading the key then
-    /// reads memory that isn't it any more. The types don't stop it: the
-    /// key's borrow is of the attempt, which is still alive, so the key is
-    /// still in scope after @f. Nor an update queued after @f, at the step's
-    /// iterator: nothing commits a spent attempt, so the next begin drops it
-    /// - with a warning under CONFIG_BCACHEFS_DEBUG, as any update never
-    /// committed.
+    /// Checked: nothing queued before @f, and no relock or commit after.
+    /// Not checked: nothing borrowed from the attempt - a key, which points
+    /// into a node @f's attempts may have rewritten or freed - is used after.
     pub fn ignore_restarts<T>(&self, f: impl FnOnce(&'a BtreeTrans<'t>) -> Result<T, BchError>)
         -> Result<T, BchError>
     {
@@ -231,9 +208,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.spent.get()
     }
 
-    /// For what a step does to the transaction itself - a write buffer flush, a
-    /// nested loop: those end this attempt, leaving a restart for the step to
-    /// return.
+    /// For what a step does to the transaction itself - a write buffer flush,
+    /// a nested loop - which ends this attempt.
     pub fn trans(&self) -> &'a BtreeTrans<'t> {
         self.trans
     }
@@ -270,13 +246,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     // ── The attempt's operations ─────────────────────────────────────────
-    //
-    // All take the attempt shared, and a restart is an error like any other:
-    // the caller returns it, and the loop driving the attempt begins again.
-    // That nothing is done in an attempt after it has restarted, or with a
-    // key peeked before a commit, isn't for the types to say: both are rules
-    // about order within the attempt, left for now to C's runtime checks
-    // (trans->restarted) and to review.
 
     pub fn commit(
         &self,
@@ -312,19 +281,10 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.trans.commit_inner(disk_res, None, flags.into(), true)
     }
 
-    /// Close this attempt, for work at the transaction level - work that runs
-    /// loops of its own, beginning attempts as it goes: commit what's queued,
-    /// so its first begin drops nothing (a repair's fsck log entry, say), and
-    /// run @f on the transaction. Then begin the next attempt, for the restart
-    /// the caller returns: its loop retries against what @f did. As C's
-    /// helpers that commit their caller's updates, run their own loop and
-    /// return transaction_restart_nested - bch2_fpunch_snapshot().
-    ///
-    /// The restart is the caller's only way on: `return Err(t.close(..))`.
-    /// An error from the commit or from @f is returned instead.
-    ///
-    /// Keys peeked in this attempt aren't to be used after - as across a
-    /// commit, which the types don't yet enforce either.
+    /// End this attempt for @f, work that runs loops of its own: commit what's
+    /// queued, so @f's first begin drops nothing, run @f, and return the
+    /// restart for the caller to return - `return Err(t.close(..))` - or the
+    /// commit's or @f's error. Keys peeked in this attempt aren't used after.
     #[must_use]
     pub fn close<F>(&self, flags: impl Into<CommitOpts>, f: F) -> BchError
     where
@@ -365,12 +325,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     /// Drop the btree locks for @f - to block, sleep, do IO - and take them
-    /// back, relock_or_nested(): C's drop_locks_do(). @f's error is returned
-    /// with the locks still dropped.
-    ///
-    /// A key peeked before is good after only if this succeeds - a relock
-    /// fails if a node's lock changed hands - and not inside @f at all.
-    /// Nothing checks either: that's for the verifier (see TransRef).
+    /// back: relock_or_nested(). @f's error is returned with the locks still
+    /// dropped. A key peeked before is good after only if this succeeds, and
+    /// not inside @f at all; nothing checks either.
     pub fn drop_locks_do<T>(&self, f: impl FnOnce() -> Result<T, BchError>) -> Result<T, BchError> {
         self.unlock();
         let v = f()?;
@@ -378,10 +335,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(v)
     }
 
-    /// Retake the locks after what dropped them - drop_locks_do()'s @f, or a
-    /// call that drops them itself: a restart if they changed hands, or
-    /// transaction_restart_nested, not relocked, if it ran attempts of its
-    /// own, which end this one.
+    /// Retake the locks after what dropped them: a restart if they changed
+    /// hands, or transaction_restart_nested, not relocked, if what dropped
+    /// them ran attempts of its own.
     pub fn relock_or_nested(&self) -> Result<(), BchError> {
         if self.trans.restart_count() != self.restart_count.get() {
             return Err(BchError::from(bch_errcode::BCH_ERR_transaction_restart_nested));
@@ -389,11 +345,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.relock()
     }
 
-    /// What @alloc makes: tried in a NORECLAIM scope, the locks held, and on
-    /// ENOMEM again with them dropped - drop_locks_do(). C's
-    /// allocate_dropping_locks() and its variants. @alloc names its ENOMEM
-    /// (an Option's None by .ok_or()), and it's thrown if the second try
-    /// fails too; any other error is returned as is.
+    /// What @alloc makes: tried in a NORECLAIM scope with the locks held, and
+    /// on ENOMEM again with them dropped. @alloc names its ENOMEM, thrown if
+    /// the second try fails too; any other error is returned as is.
     pub fn allocate_dropping_locks<T>(&self, alloc: impl FnMut() -> Result<T, BchError>)
         -> Result<T, BchError>
     {
@@ -444,19 +398,12 @@ impl<'a, 't> TransAttempt<'a, 't> {
         alloc()
     }
 
-    /// Run @f as a nested transaction, as C's nested_lockrestart_do(): @f
-    /// carries on this attempt - no bch2_trans_begin() - and is retried on
-    /// restart.
+    /// Run @f in this attempt, retried on restart. If anything restarted, this
+    /// attempt is over - its locks and queued updates gone - and once @f
+    /// succeeds the caller gets transaction_restart_nested, for its loop to
+    /// begin again. The dropped-updates warning is off while @f runs.
     ///
-    /// If anything restarted, the outer attempt is spent - its locks and
-    /// whatever it had queued are gone - and the caller is told with
-    /// transaction_restart_nested, after @f succeeds: the outer loop retries
-    /// from the top. Nested commits drop the outer attempt's queued updates
-    /// on purpose, so the dropped-updates warning is off while @f runs.
-    ///
-    /// XXX: the attempts @f is retried in begin within this one, so a key
-    /// the caller peeked before is stale after a retry - which nothing here
-    /// stops it using.
+    /// XXX: nothing stops the caller using a key it peeked before a retry.
     pub fn nested<T, F>(&self, mut f: F) -> Result<T, BchError>
     where
         F: for<'b> FnMut(&TransAttempt<'b, 't>) -> Result<T, BchError>,
@@ -507,28 +454,22 @@ impl<'a, 't> TransAttempt<'a, 't> {
         const { assert!(core::mem::align_of::<T>() <= 8 && !core::mem::needs_drop::<T>()) };
 
         let p = self.kmalloc_raw(size_of::<T>())? as *mut T;
-        // SAFETY: zeroed, and all-zeroes is a @T; aligned, and this attempt's
         unsafe { Ok(&mut *p) }
     }
 
-    /// @init's T, in the attempt's memory. Never dropped - the transaction's
-    /// memory is reused without, as C's is - so a T owning anything is
-    /// emptied by whoever's done with it.
+    /// @init's T, in the attempt's memory. Never dropped: a T owning anything
+    /// is emptied by whoever's done with it.
     pub fn alloc_init<T, E: Into<BchError>>(&self, init: impl ::pin_init::Init<T, E>) -> Result<&'a mut T, BchError> {
         // bch2_trans_kmalloc() gives 8 byte alignment:
         const { assert!(core::mem::align_of::<T>() <= 8) };
 
         let p = self.kmalloc_raw(size_of::<T>())?.cast::<T>();
-        // SAFETY: room for a @T, aligned, this attempt's: init writes it
         unsafe { crate::util::alloc::init_at(init, p) }.map_err(Into::into)?;
-        // SAFETY: just made
         Ok(unsafe { &mut *p })
     }
 
     /// @bytes of zeroed transaction memory, rounded up to u64s: off the top of
-    /// the transaction's buffer, or the transaction restarted to grow it. As
-    /// bch2_trans_kmalloc(), less CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE's
-    /// record of the allocation.
+    /// the transaction's buffer, or the transaction restarted to grow it.
     fn kmalloc_raw(&self, bytes: usize) -> Result<*mut u8, BchError> {
         let size = bytes.next_multiple_of(size_of::<u64>());
         let t = self.trans;
@@ -568,13 +509,11 @@ impl<'a, 't> TransAttempt<'a, 't> {
             k.as_ptr().cast::<BkeyI<K>>().write(BkeyI::new());
         }
 
-        // SAFETY: a @K's key, all of it
         Ok(unsafe { k.whole_unchecked() })
     }
 
     pub fn bkey_copy(&self, k: &BkeyI) -> Result<TransBkey<'a, 't>, BchError> {
         let dst = self.bkey_alloc(k.k.u64s as u32)?;
-        // SAFETY: all of @k, into a buffer as long
         unsafe {
             core::ptr::copy_nonoverlapping(k.as_ffi().cast::<u8>(), dst.as_ptr().cast::<u8>(),
                                            size_of_val(k));
@@ -600,7 +539,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         }
 
         debug_assert!(dst.buf_u64s as usize * size_of::<u64>() >= V::MIN_BYTES);
-        // SAFETY: @k's, which as a valid @V's is MIN_BYTES: MutBkey's
         Ok(unsafe { dst.cast() })
     }
 
@@ -639,14 +577,11 @@ impl<'a, 't> TransAttempt<'a, 't> {
         k.k_mut().u64s = (BKEY_U64S + val_u64s) as u8;
         k.k_mut().type_ = K::TYPE.0 as u8;
         k.k_mut().p = pos;
-        // SAFETY: a @K by its type, as long as one
         Ok(unsafe { k.arm_unchecked::<K>() })
     }
 
-    /// A copy of @k in a buffer of at least @min_bytes - as C's
-    /// bkey_reassemble() into one it allocated: the key as long as it was,
-    /// with room for a callee to grow it, of the type it's read as, as
-    /// bkey_reassemble()'s copy is. A u64 more is allocated past the end, for
+    /// A copy of @k, as long as it was, in a buffer of at least @min_bytes -
+    /// room for a callee to grow it - and a u64 more past the end, for
     /// varint::decode_fast().
     pub fn bkey_reassemble_room<V: MutBkey<Mut = V> + ?Sized>(&self, k: BkeySC<'_, V>, min_bytes: usize)
         -> Result<TransBkey<'a, 't, V>, BchError>
@@ -673,7 +608,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 k.k.val_u64s(),
             );
         }
-        // SAFETY: @k's, as long as it was: a @V, as bkey_reassemble()'s copy is
         Ok(unsafe { dst.cast() })
     }
 
@@ -695,7 +629,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         -> Result<TransBkey<'a, 't, V::Mut>, BchError>
     {
         let k = self.make_mut_noupdate(k, V::MIN_BYTES)?;
-        // SAFETY: @k's, grown to MIN_BYTES: MutBkey's
         Ok(unsafe { k.cast() })
     }
 
@@ -724,8 +657,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     /// The pointer at @level of @btree, at @pos, edited by @f - handed a copy
-    /// of the pointer the node below has, with room for any - and committed:
-    /// the node's key updated in place, as btree_node_update_key_at_pos().
+    /// of it, with room for any pointer - and committed: the node's key
+    /// updated in place.
     pub fn btree_node_edit_key(&self, btree: Btree, level: u32, pos: Bpos,
                                f: impl FnOnce(&mut TransBkey<'a, 't>) -> Result<(), BchError>)
         -> Result<(), BchError>
@@ -739,8 +672,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     /// The pointer at @level of @btree, at @key's position, made @key and
-    /// committed, its triggers not run - btree_node_update_key_at_pos(), for
-    /// a repair or an injection that does the accounting itself, or none.
+    /// committed, its triggers not run: for a repair or an injection that does
+    /// the accounting itself, or none.
     pub fn btree_node_update_key_at_pos_raw(&self, btree: Btree, level: u32, key: TransBkey<'_, 't>)
         -> Result<(), BchError>
     {
@@ -837,8 +770,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                                       flags.into(), write_flags)
     }
 
-    /// The node @pos's pointer at @level of @btree points to, rewritten:
-    /// bch2_btree_node_rewrite_pos().
+    /// The node @pos's pointer at @level of @btree points to, rewritten.
     pub fn btree_node_rewrite_pos(
         &self,
         btree:       Btree,
@@ -889,12 +821,10 @@ impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
 
     /// Its header - whatever its u64s say, which may be being set.
     pub fn k(&self) -> &c::bkey {
-        // SAFETY: the header at the start of our buffer
         unsafe { &(*self.ptr.as_ptr()).k }
     }
 
     pub fn k_mut(&mut self) -> &mut c::bkey {
-        // SAFETY: as k()'s, and we have the buffer mutably
         unsafe { &mut (*self.ptr.as_ptr()).k }
     }
 
@@ -908,12 +838,10 @@ impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
 
     /// Its buffer, all buf_u64s of it - the room the key has, not its u64s.
     pub fn as_u64s(&self) -> &[u64] {
-        // SAFETY: our buffer, buf_u64s long
         unsafe { slice::from_raw_parts(self.ptr.as_ptr() as *const u64, self.buf_u64s as usize) }
     }
 
     pub fn as_mut_u64s(&mut self) -> &mut [u64] {
-        // SAFETY: as as_u64s()'s, and we have the buffer mutably
         unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr() as *mut u64, self.buf_u64s as usize) }
     }
 }
@@ -946,15 +874,11 @@ impl<'a, 't, V: BkeyWhole> TransBkey<'a, 't, V> {
     /// The key, as a @V's: all of its value there, as the typed constructors
     /// make it.
     pub fn key(&self) -> &BkeyI<V> {
-        // SAFETY: the buffer holds a whole BkeyI<@V> - whole_unchecked()'s -
-        // whatever the header has been set to since, and any bytes are a @V:
-        // BkeyWhole
         unsafe { &*self.ptr.as_ptr().cast() }
     }
 
     /// key(), to edit.
     pub fn key_mut(&mut self) -> &mut BkeyI<V> {
-        // SAFETY: as key()'s, and we have the buffer mutably
         unsafe { &mut *self.ptr.as_ptr().cast() }
     }
 
@@ -1005,7 +929,6 @@ impl<'a, 't> TransBkey<'a, 't> {
     pub(crate) unsafe fn whole_unchecked<V: BkeyWhole>(self) -> TransBkey<'a, 't, V> {
         debug_assert!(self.k().key_type().is::<V>());
         debug_assert!(self.buf_u64s as usize * size_of::<u64>() >= size_of::<BkeyI<V>>());
-        // SAFETY: the caller's
         unsafe { self.cast() }
     }
 }
@@ -1020,7 +943,6 @@ impl<'a, 't, V: ?Sized + BkeyVal> BkeyV for TransBkey<'a, 't, V> {
     }
 
     unsafe fn arm_unchecked<K: BkeyFamily + ?Sized>(self) -> TransBkey<'a, 't, Narrowed<K, V>> {
-        // SAFETY: the caller's: a @K, as long as its u64s say, in our buffer
         self.cast()
     }
 }
@@ -1035,7 +957,6 @@ impl<V: ?Sized + BkeyVal> BkeyVMut for TransBkey<'_, '_, V> {
 impl<'k, V: ?Sized + BkeyVal> From<&'k TransBkey<'_, '_, V>> for BkeySC<'k, V> {
     fn from(k: &'k TransBkey<'_, '_, V>) -> Self {
         let p = k.ptr.as_ptr();
-        // SAFETY: the key in our buffer, its value after its header
         BkeySC { k: unsafe { &(*p).k }, v: unsafe { &raw const (*p).v }, iter: PhantomData, val: PhantomData }
     }
 }
@@ -1044,7 +965,6 @@ impl<'k, V: ?Sized + BkeyVal> From<&'k TransBkey<'_, '_, V>> for BkeySC<'k, V> {
 impl<'k, V: ?Sized + BkeyVal> From<&'k mut TransBkey<'_, '_, V>> for BkeyS<'k, V> {
     fn from(k: &'k mut TransBkey<'_, '_, V>) -> Self {
         let p = k.ptr.as_ptr();
-        // SAFETY: as BkeySC's, and we have the buffer mutably
         BkeyS { k: unsafe { &mut (*p).k }, v: unsafe { &raw mut (*p).v }, val: PhantomData }
     }
 }
@@ -1054,14 +974,12 @@ impl<'k, V: ?Sized + BkeyVal> From<&'k mut TransBkey<'_, '_, V>> for BkeyS<'k, V
 /// them - grows the key, in its buffer - takes it again after.
 impl AsRef<BkeyI> for TransBkey<'_, '_> {
     fn as_ref(&self) -> &BkeyI {
-        // SAFETY: a key in our buffer, which the pointer reaches all of
         unsafe { &*cast_unsized(self.ptr.as_ptr()) }
     }
 }
 
 impl AsMut<BkeyI> for TransBkey<'_, '_> {
     fn as_mut(&mut self) -> &mut BkeyI {
-        // SAFETY: as as_ref()'s, and we have the buffer mutably
         unsafe { &mut *cast_unsized_mut(self.ptr.as_ptr()) }
     }
 }
@@ -1083,8 +1001,7 @@ impl<V: ?Sized + InFamily<AllTypes> + BkeyVal<State: Implies<Validated>>> AsMut<
 }
 
 /// The low bits of the commit flags: how deep into the reserves the commit may
-/// dip. Unset - stripe, 0 - is normal for the ENOSPC gate, so it usually isn't
-/// set.
+/// dip. Usually unset: 0, stripe, is normal for the ENOSPC gate.
 #[derive(Clone, Copy)]
 pub struct Watermark(c::bch_watermark);
 
@@ -1098,18 +1015,15 @@ impl Watermark {
     pub const INTERIOR_UPDATES: Self = Watermark(c::bch_watermark::interior_updates);
 }
 
-/// A C caller's: a struct's, say.
 impl From<c::bch_watermark> for Watermark {
     fn from(w: c::bch_watermark) -> Self {
         Watermark(w)
     }
 }
 
-/// A Watermark and CommitFlags, C's one word. The commit functions take
-/// `impl Into<CommitOpts>`, so CommitFlags alone do, and a CommitOpts is only
-/// for a watermark:
-///
-/// `t.commit(None, CommitFlags::NO_ENOSPC)`
+/// A Watermark and CommitFlags, in C's one word. The commits take
+/// `impl Into<CommitOpts>`, so CommitFlags alone do: a CommitOpts is only
+/// needed for a watermark.
 #[derive(Clone, Copy, Default)]
 pub struct CommitOpts(u32);
 
@@ -1168,7 +1082,6 @@ impl ToText for CommitOpts {
     }
 }
 
-/// A C caller's: a struct's, say.
 impl From<c::bch_trans_commit_flags> for CommitOpts {
     fn from(flags: c::bch_trans_commit_flags) -> Self {
         CommitOpts(flags.bits())
