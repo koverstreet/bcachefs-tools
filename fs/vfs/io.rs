@@ -7,8 +7,8 @@ use kernel::page::PAGE_SHIFT;
 
 use pin_init::{pin_data, pin_init, stack_pin_init};
 
-use crate::btree::bkey::{bkey_ge, pos};
-use crate::btree::iter::{is_restart, trans_commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
+use crate::btree::bkey::{bkey_lt, pos};
+use crate::btree::iter::{lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
 use crate::data::durability::BkeyVDurability;
 use crate::data::extents::BkeyVExtents;
@@ -505,21 +505,15 @@ impl InodeInfo {
                                       BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT | BtreeIterFlags::TRIM);
         let mut ret = Ok(());
 
-        while ret.is_ok() {
-            let mut i_sectors_delta = 0;
-            let mut quota_res = self.quota_reservation();
+        while ret.is_ok() && bkey_lt(iter.pos(), end_pos) {
+            let step = lockrestart_do(&trans, |t| -> Result<bool, BchError> {
+                let mut i_sectors_delta = 0;
+                let mut quota_res = self.quota_reservation();
 
-            let t = trans.begin();
-
-            if bkey_ge(iter.pos(), end_pos) {
-                break;
-            }
-
-            let step = (|| -> Result<bool, BchError> {
-                let snapshot = subvolume::get_snapshot(&t, inum.subvol as u32)?;
+                let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
                 iter.set_snapshot(snapshot);
 
-                let Some(k) = iter.peek_slot_max(&t, end_pos)? else { return Ok(true) };
+                let Some(k) = iter.peek_slot_max(t, end_pos)? else { return Ok(true) };
 
                 let mut hole_start  = k.k.start_offset();
                 let mut hole_end    = k.k.p.offset;
@@ -559,7 +553,7 @@ impl InodeInfo {
                     quota_res.add(sectors, true)?;
                 }
 
-                io_misc::extent_fallocate(&t, inum, &mut iter, sectors, &opts, &mut i_sectors_delta,
+                io_misc::extent_fallocate(t, inum, &mut iter, sectors, &opts, &mut i_sectors_delta,
                                           writepoint_hashed(current_id()))?;
 
                 self.i_sectors_acct(Some(&mut *quota_res), i_sectors_delta);
@@ -569,12 +563,11 @@ impl InodeInfo {
                     t.drop_locks_do(|| mapping.mark_reserved(&mut hole_start, reserved_end, false))?;
                 }
                 Ok(false)
-            })();
+            });
 
             ret = match step {
-                Ok(true)                 => break,
-                Err(e) if is_restart(&e) => Ok(()),
-                r                        => r.map(|_| ()),
+                Ok(true) => break,
+                r        => r.map(|_| ()),
             };
         }
 
