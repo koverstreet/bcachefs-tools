@@ -746,7 +746,9 @@ pub struct btree_trans_bits {
     has_interior_updates:           bool,
     /* Rust's: the path table is borrowed (btree/path.rs's Paths) */
     paths_borrowed:                 bool,
-    __pad17:                        u15,
+    /* Rust's: the TransAttempts made and not yet ended */
+    #[bits(8)] attempts_live:       u8,
+    __pad25:                        u7,
     #[bits(16)] pub restarted: cs::bch_errcode,
     __pad:                          u16,
 }

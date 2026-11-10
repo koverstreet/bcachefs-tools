@@ -65,13 +65,35 @@ pub struct TransAttempt<'a, 't> {
     restart_count: Cell<u32>,
     /// ended by ignore_restarts()
     spent:         Cell<bool>,
+    /// counted in the transaction's attempts_live: until dropped, or ended
+    /// for work that runs loops of its own
+    live:          Cell<bool>,
     t:             PhantomData<&'a mut ()>,
 }
 
 impl<'a, 't> TransAttempt<'a, 't> {
     /// For @trans's begin(), and C's attempt in progress.
     pub(super) fn new(trans: &'a BtreeTrans<'t>, restart_count: u32) -> Self {
-        TransAttempt { trans, restart_count: Cell::new(restart_count), spent: Cell::new(false), t: PhantomData }
+        trans.set_attempts_live(trans.attempts_live() + 1);
+        TransAttempt {
+            trans,
+            restart_count: Cell::new(restart_count),
+            spent:         Cell::new(false),
+            live:          Cell::new(true),
+            t:             PhantomData,
+        }
+    }
+
+    fn end(&self) {
+        if self.live.replace(false) {
+            self.trans.set_attempts_live(self.trans.attempts_live() - 1);
+        }
+    }
+}
+
+impl Drop for TransAttempt<'_, '_> {
+    fn drop(&mut self) {
+        self.end();
     }
 }
 
@@ -81,12 +103,16 @@ impl<'a, 't> TransAttempt<'a, 't> {
 /// iterator by the transaction it points into.
 ///
 /// XXX: a &BtreeTrans may be an attempt's t.trans(), and then that begin is a
-/// nested one.
+/// nested one - warned of at runtime, with an attempt live, not prevented.
 pub trait TransRef<'t> {
     fn trans_raw(&self) -> *mut BtreeTrans<'_>;
 }
 
 fn begin_if_unusable(trans: &BtreeTrans<'_>) {
+    crate::warn_once!(trans.attempts_live() != 0, trans.fs(),
+                      "{}: an iterator made from the transaction inside an attempt, not from the attempt",
+                      trans.fn_name());
+
     if trans.restarted().0 != 0 || !trans.locked() {
         trans.begin_raw();
     }
@@ -206,6 +232,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     {
         assert!(!self.has_updates(), "ignore_restarts() with updates queued: @f's begin would drop them");
         self.spent.set(true);
+        self.end();
         f(self.trans)
     }
 
@@ -313,6 +340,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 return e;
             }
         }
+        self.end();
         if let Err(e) = f(self.trans) {
             return e;
         }
