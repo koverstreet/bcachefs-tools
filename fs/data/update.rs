@@ -488,13 +488,14 @@ impl c::data_update {
                     break;
                 }
 
-                let t = trans.begin();
-                let op = &mut self.op;
-                let nr = op.bits.nr_replicas().into();
-                let r = t.alloc_request(op.target.into(), false, &mut op.devs_have, nr, nr,
-                                        c::bch_watermark::from_bits(op.bits.watermark().into()),
-                                        op.flags(), cl.as_ptr())
-                    .and_then(|mut req| t.alloc_sectors(&mut req, op.write_point));
+                let r = lockrestart_do(trans, |t| {
+                    let op = &mut self.op;
+                    let nr = op.bits.nr_replicas().into();
+                    t.alloc_request(op.target.into(), false, &mut op.devs_have, nr, nr,
+                                    c::bch_watermark::from_bits(op.bits.watermark().into()),
+                                    op.flags(), cl.as_ptr())
+                        .and_then(|mut req| t.alloc_sectors(&mut req, op.write_point))
+                });
                 let wp = match r {
                     Ok(wp) => wp,
                     Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {
@@ -510,6 +511,7 @@ impl c::data_update {
                         return Err(e);
                     }
                 };
+                let op = &mut self.op;
                 op.insert_keys.reserve(c::BKEY_EXTENT_U64s_MAX as usize)?;
                 let (pos, obs) = (op.pos, &mut op.open_buckets);
                 let sectors = op.insert_keys.push_with(c::BKEY_EXTENT_U64s_MAX as usize, |k| {
