@@ -10,7 +10,7 @@ use crate::alloc::replicas::{bkey_replicas_acct, entry_acct, replicas_acct};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeySC};
 use crate::btree::trigger::{Trigger, TriggerOp};
-use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitOpts, TransAttempt,
+use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
 use crate::c;
 use crate::c::bch_errcode;
@@ -916,7 +916,7 @@ pub fn trans_mark_metadata_bucket(trans: &BtreeTrans<'_>, ca: &Dev, b: u64, data
     }
 
     if flags.contains(UpdateTriggerFlags::GC) {
-        mark_metadata_bucket_gc(&trans.begin(), ca, b, data_type, sectors, flags)
+        lockrestart_do(trans, |t| mark_metadata_bucket_gc(t, ca, b, data_type, sectors, flags))
     } else if flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
         commit_do(trans, None, CommitOpts::new().watermark(Watermark::BTREE),
                   |t| trans_mark_metadata_bucket_key(t, ca, b, data_type, sectors))
