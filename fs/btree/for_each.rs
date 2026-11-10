@@ -517,15 +517,11 @@ impl<'t> BtreeNodeIter<'t> {
         R: LoopControl,
     {
         loop {
-            let t = trans.begin();
-            let b = match self.peek() {
-                Err(e) if is_restart(&e) => continue,
-                Err(e) => return Err(e),
-                Ok(None) => return Ok(Default::default()),
-                Ok(Some(b)) => b,
-            };
-
-            t.verify_not_restarted();
+            let step = lockrestart_do(trans, |_| {
+                let Some(b) = self.peek()? else { return Ok(None) };
+                let end = b.contents().key.k.p;
+                Ok(Some((end, f(b)?.into_step())))
+            })?;
 
             // peek_node() leaves iter->pos at the node's min_key (so a restart
             // re-finds the node across splits/merges), so we can't use
@@ -533,13 +529,11 @@ impl<'t> BtreeNodeIter<'t> {
             // max_key. set_pos + bpos_successor re-traverses from the root, so
             // the journal overlay applies and journal-only nodes aren't skipped
             // the way next_node()'s sibling walk did. Matches for_each_btree_node().
-            let end = b.contents().key.k.p;
-            match f(b).map(LoopControl::into_step) {
-                Err(e) if is_restart(&e) => continue,
-                Err(e) => return Err(e),
-                Ok(Step::Break(v)) => return Ok(v),
-                Ok(Step::From(pos)) => self.raw.set_pos(pos),
-                Ok(Step::Next) => {
+            match step {
+                None => return Ok(Default::default()),
+                Some((_, Step::Break(v))) => return Ok(v),
+                Some((_, Step::From(pos))) => self.raw.set_pos(pos),
+                Some((end, Step::Next)) => {
                     if end == SPOS_MAX {
                         return Ok(Default::default());
                     }
