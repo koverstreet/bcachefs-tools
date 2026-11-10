@@ -48,7 +48,7 @@ use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
 use core::fmt;
 use core::marker::PhantomData;
-use core::mem::size_of;
+use core::mem::{size_of, ManuallyDrop};
 use core::ptr::NonNull;
 use core::slice;
 use crate::btree::cache::btree_ptr_hash_val;
@@ -314,6 +314,27 @@ impl<'a, 't> TransAttempt<'a, 't> {
             }
         }
         if let Err(e) = f(self.trans) {
+            return e;
+        }
+        self.trans.begin().restart(bch_errcode::BCH_ERR_transaction_restart_nested)
+    }
+
+    /// End this attempt for @f, work that runs loops of its own, lending it the
+    /// transaction's owner - which the loops take: the restart for the caller
+    /// to return - `return Err(t.owner_and_restart(..))` - or @f's error.
+    /// Nothing may be queued: @f's first begin would drop it.
+    #[must_use]
+    pub fn owner_and_restart<F>(&self, f: F) -> BchError
+    where
+        F: FnOnce(&TransGuard<'t>) -> Result<(), BchError>,
+    {
+        assert!(!self.has_updates(), "owner_and_restart() with updates queued: @f's begin would drop them");
+        self.spent.set(true);
+        self.end();
+
+        // lent, not owned: the guard it came from puts it
+        let owner = ManuallyDrop::new(unsafe { TransGuard::from_raw(self.trans.raw()) });
+        if let Err(e) = f(&owner) {
             return e;
         }
         self.trans.begin().restart(bch_errcode::BCH_ERR_transaction_restart_nested)
