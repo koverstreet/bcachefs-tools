@@ -479,16 +479,14 @@ impl c::data_update {
         let end = self.key().k.p;
         let ret = (|| {
             while self.op.pos < end {
-                let t = trans.begin();
-                let mut iter = BtreeIter::new(&t, self.btree_id, self.op.pos, BtreeIterFlags::SLOTS);
                 let ours = BkeySC::from(self.k.key());
                 if !lockrestart_do(trans, |t| {
+                    let mut iter = BtreeIter::new(t, self.btree_id, self.op.pos, BtreeIterFlags::SLOTS);
                     let k = iter.peek_slot(t)?.expect("a slot always has a key");
                     Ok(crate::data::ptrs::extents_match(fs, k, ours))
                 })? {
                     break;
                 }
-                drop(iter);
 
                 let t = trans.begin();
                 let op = &mut self.op;
