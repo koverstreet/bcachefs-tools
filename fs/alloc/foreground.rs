@@ -808,7 +808,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         -> Result<(), BchError>
     {
         if unsafe { c::closure_nr_remaining(cl.as_ptr()) } > 1 {
-            self.trans().sleep_on_allocator(req, err, cl);
+            self.sleep_on_allocator(req, err, cl);
         }
         let fs = self.fs();
         if fs.flags.get(c::bch_fs_flags::emergency_ro) {
@@ -1109,7 +1109,7 @@ impl Fs {
     }
 }
 
-impl BtreeTrans<'_> {
+impl TransAttempt<'_, '_> {
     /// Asleep on @cl - on freelist_wait or open_buckets_wait, for @req's
     /// allocation that failed with @err - until there's reason to retry it:
     /// alloc_wait_advanced(), or for any wait but the freelist's, woken at
@@ -1339,11 +1339,14 @@ impl c::open_buckets {
 }
 
 /// bch2_wait_on_allocator()'s, with @cl on a waitlist.
+///
+/// # Safety
+/// @trans is in an attempt.
 #[c_export]
-pub fn __bch2_wait_on_allocator(trans: &BtreeTrans<'_>, req: &mut c::alloc_request, err: c_int,
-                                cl: &Opaque<c::closure>) {
+pub unsafe fn __bch2_wait_on_allocator(trans: &BtreeTrans<'_>, req: &mut c::alloc_request, err: c_int,
+                                       cl: &Opaque<c::closure>) {
     let Err(err) = ret_to_result_void(err) else { panic!("waiting on the allocator without an error") };
-    trans.sleep_on_allocator(req, err, cl)
+    unsafe { trans.attempt_in_progress() }.sleep_on_allocator(req, err, cl)
 }
 
 #[c_export]

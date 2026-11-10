@@ -592,7 +592,7 @@ impl c::bp_scan_iter {
                 // Dropping SRCU too means beginning again, from this key.
                 // NOWARN: past INT_MAX bytes kvmalloc() refuses with a
                 // warning, and a failed vmalloc() warns too
-                t.trans().unlock_long();
+                t.unlock_long();
                 let more = self.batch.len().max(PAGE_SIZE / bp_size);
                 let grew = {
                     let _nowarn = MemallocFlags::nowarn();

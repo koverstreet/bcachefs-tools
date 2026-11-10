@@ -228,6 +228,10 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.trans.unlock_long()
     }
 
+    pub fn closure_sync_timeout(&self, cl: &Opaque<c::closure>, timeout: core::ffi::c_long) -> bool {
+        self.trans.closure_sync_timeout(cl, timeout)
+    }
+
     pub fn wait_until<T>(&self, ev: &crate::util::futex::EventCount, cond: impl FnMut() -> Option<T>) -> T {
         self.trans.wait_until(ev, cond)
     }
@@ -243,6 +247,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     pub fn journal_res_seq(&self) -> u64 {
         self.trans.journal_res_seq()
+    }
+
+    pub fn fn_name(&self) -> &str {
+        self.trans.fn_name()
+    }
+
+    pub fn reserve_extra_journal_u64s(&self, u64s: u32) {
+        self.trans.reserve_extra_journal_u64s(u64s)
     }
 
     /// Whether anything is queued for the next commit: key updates, journal

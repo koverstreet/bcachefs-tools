@@ -519,7 +519,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
     // flush is pointless:
     if !before_bucket_gen {
         if DataType(a.data_type.into()) == DataType::btree {
-            t.trans().unlock_long();
+            t.unlock_long();
             fs.btree_interior_updates_flush();
         }
         backpointers_maybe_flush(t, alloc_k, last_flushed)?;

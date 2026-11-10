@@ -1427,7 +1427,7 @@ fn alloc_check_no_stripe_refs(t: &TransAttempt<'_, '_>, old: BkeySC<'_>, new: Bk
 
     if let Some(k) = iter.peek_max(t, pos(b, u64::MAX))? {
         let buf = transition_text(fs, format_args!("bucket stripe_refcount went to 0 in {}, but stripe {} still references it",
-                                                   t.trans().fn_name(), { k.k.p.offset }),
+                                                   t.fn_name(), { k.k.p.offset }),
                                   old, new);
         crate::log_fsck_err!(t, id::alloc_key_stripe_refcount_wrong, "{buf}")?;
     }
@@ -1466,7 +1466,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
             None => {
                 let mut msg = LogMsg::new(fs);
                 prt!(msg, "alloc trigger in {}: key isn't all of a current alloc_v4 - not from alloc_to_v4_mut()\n{}",
-                     t.trans().fn_name(), BkeySC::from(&op.new).to_text(fs));
+                     t.fn_name(), BkeySC::from(&op.new).to_text(fs));
                 fs.emergency_read_only(&mut msg);
                 return fs.throw(bch_errcode::BCH_ERR_emergency_ro);
             }
@@ -1490,7 +1490,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
                !fs.bucket_is_open_safe(dev, b) && !ca.bucket_nouse(b) {
                 let new = new_key(new_a);
                 let buf = transition_text(fs, format_args!("bucket going nonempty but not open in {}",
-                                                           t.trans().fn_name()),
+                                                           t.fn_name()),
                                           op.old, as_sc(&new));
                 crate::log_fsck_err!(t, id::alloc_key_bucket_nonempty_to_empty_not_open, "{buf}")?;
             }
@@ -1571,7 +1571,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
         // through the write buffer: a key's jset_u64s(), twice
         if changed(is(DataType::need_discard), &old_a, new_a) ||
            (old_a.data_type() == DataType::need_discard && old_a.journal_seq_empty != new_a.journal_seq_empty) {
-            t.trans().reserve_extra_journal_u64s(2 * (c::BKEY_U64s + c::JSET_KEYS_U64s) as u32);
+            t.reserve_extra_journal_u64s(2 * (c::BKEY_U64s + c::JSET_KEYS_U64s) as u32);
         }
 
         if new_a.data_type() == DataType::cached && new_a.io_time[READ] == 0 {
