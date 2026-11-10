@@ -77,25 +77,31 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
 /// What an iterator is made from. An iterator can't be made with the
 /// transaction unlocked or in a restart: made from the transaction, it's begun
-/// first; from an attempt, it's the attempt's. @'t bounds the iterator by the
-/// transaction it points into.
+/// first if it's either; from an attempt, it's the attempt's. @'t bounds the
+/// iterator by the transaction it points into.
 ///
-/// XXX: a &BtreeTrans may be an attempt's t.trans(), and then the begin is a
+/// XXX: a &BtreeTrans may be an attempt's t.trans(), and then that begin is a
 /// nested one.
 pub trait TransRef<'t> {
     fn trans_raw(&self) -> *mut BtreeTrans<'_>;
 }
 
+fn begin_if_unusable(trans: &BtreeTrans<'_>) {
+    if trans.restarted().0 != 0 || !trans.locked() {
+        trans.begin_raw();
+    }
+}
+
 impl<'i, 'f> TransRef<'i> for &'i BtreeTrans<'f> {
     fn trans_raw(&self) -> *mut BtreeTrans<'_> {
-        self.begin_raw();
+        begin_if_unusable(self);
         self.raw()
     }
 }
 
 impl<'i, 'f> TransRef<'i> for &'i TransGuard<'f> {
     fn trans_raw(&self) -> *mut BtreeTrans<'_> {
-        self.begin_raw();
+        begin_if_unusable(self);
         self.raw()
     }
 }
