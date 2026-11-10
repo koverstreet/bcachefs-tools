@@ -8,7 +8,7 @@ use crate::fs::Dev;
 use crate::alloc::backpointers::BackpointerPos;
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::disk_groups::Target;
-use crate::btree::bkey::{BkeySC, BkeyV};
+use crate::btree::bkey::{pos, BkeySC, BkeyV};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{commit_do, is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
@@ -43,7 +43,7 @@ use crate::{bch_err, c_function_name, log_msg_ratelimited, prt};
 use core::mem::size_of;
 use core::sync::atomic::Ordering::Relaxed;
 use pin_init::stack_pin_init;
-use crate::format::{Bpos, Btree, ErrorKeyReason};
+use crate::format::{BkeyType, Bpos, Btree, ErrorKeyReason};
 
 // ── Recording the extents of blocks lost ──
 
@@ -433,42 +433,52 @@ fn stripe_repair_opened(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, 
     repair_rebuild(ctxt, s, h, buf, devs, b.live & !b.bad, b.live & b.bad)
 }
 
-/// stripe_repair(), of the blocks @b says - live, and bad.
-fn stripe_repair_blocks(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, iter: &mut BtreeIter<'_>,
-                        s: BkeySC<'_, c::Stripe<Validated>>, b: StripeBlocks) -> Result<StripeRepair, BchError> {
-    if b.live == 0 {
-        return Ok(StripeRepair::Done);
-    }
+/// Stripe @idx, in an attempt of its own, opened for the repair of the blocks
+/// @blocks says - live, and bad: None if there's nothing to repair, once that's
+/// committed; or if @blocks says None, or someone else has it open.
+fn stripe_open_for_repair<'f>(
+    trans:      &TransGuard<'f>,
+    idx:        u64,
+    mut blocks: impl FnMut(BkeySC<'_, c::Stripe<Validated>>) -> Result<Option<StripeBlocks>, BchError>,
+) -> Result<Option<(OpenStripe<'f>, BkeyBuf, StripeBlocks)>, BchError> {
+    lockrestart_do(trans, |t| {
+        let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, idx),
+                                      BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
+        let Some(k) = iter.peek_slot(t)?.filter(|k| k.k.key_type() == BkeyType::stripe) else {
+            return Ok(None);
+        };
+        // repair drops the locks: it needs a copy
+        let copy = BkeyBuf::from_key(k);
+        let s = BkeySC::from(&copy).arm::<c::Stripe>().expect("a stripe");
+        let Some(b) = blocks(s)? else { return Ok(None) };
 
-    // Open the stripe, so the stripe trigger and reuse stay off it once we
-    // drop our locks to read it - an open stripe is someone else's to act on,
-    // and reconcile will come back to it. Put when we're done, unless the
-    // rebuild took it.
-    let Some(h) = OpenStripe::tryget_existing(t, iter)? else { return Ok(StripeRepair::Done) };
+        if b.bad == 0 {
+            stripe_repair_nothing_to_do(t, &iter, s)?;
+            return Ok(None);
+        }
+        if b.live == 0 {
+            return Ok(None);
+        }
 
-    stripe_repair_opened(ctxt, s, b, h)
+        // Open the stripe, so the stripe trigger and reuse stay off it once we
+        // drop our locks to read it - an open stripe is someone else's to act on,
+        // and reconcile will come back to it. Put when we're done, unless the
+        // rebuild took it.
+        Ok(OpenStripe::tryget_existing(t, &iter)?.map(|h| (h, copy, b)))
+    })
 }
 
-/// Repair stripe @s, at @iter, if it's degraded: rebuilt at its width if
-/// there are devices for it, narrowed if not, rebuilt around what's left of it
-/// if it can't be reconstructed.
-///
-/// @iter must be intent locked, and @s a copy, not a key in the btree: repair
-/// drops the locks to read and write, and runs attempts of its own - and if it
-/// did, Done comes back as transaction_restart_nested (relock_or_nested()).
-/// Retry ends the attempt as an error does, not relocked: the attempts repair
-/// ran are its own, for the caller to say so - restarts_handled().
-pub fn stripe_repair(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, iter: &mut BtreeIter<'_>,
-                     s: BkeySC<'_, c::Stripe<Validated>>) -> Result<StripeRepair, BchError> {
-    let b = StripeBlocks::get(t.fs(), s)?;
-
-    if b.bad == 0 {
-        stripe_repair_nothing_to_do(t, iter, s)?;
-    } else if stripe_repair_blocks(ctxt, t, iter, s, b)? == StripeRepair::Retry {
-        return Ok(StripeRepair::Retry);
-    }
-    t.relock_or_nested()?;
-    Ok(StripeRepair::Done)
+/// Repair stripe @idx if it's degraded: rebuilt at its width if there are
+/// devices for it, narrowed if not, rebuilt around what's left of it if it
+/// can't be reconstructed. In attempts of its own: from inside one, through
+/// TransAttempt::ignore_restarts().
+pub fn stripe_repair(ctxt: &Moving<'_>, trans: &TransGuard<'_>, idx: u64) -> Result<StripeRepair, BchError> {
+    let fs = trans.fs();
+    let Some((h, copy, b)) = stripe_open_for_repair(trans, idx, |s| StripeBlocks::get(fs, s).map(Some))? else {
+        return Ok(StripeRepair::Done);
+    };
+    let s = BkeySC::from(&copy).arm::<c::Stripe>().expect("a stripe");
+    stripe_repair_opened(ctxt, s, b, h)
 }
 
 // ── Scrub ────────────────────────────────────────────────────────────────
@@ -492,27 +502,29 @@ fn stripe_block_at_bp(ca: &Dev, s: BkeySC<'_, c::Stripe<Validated>>, bp: BkeySC<
 /// with the block bad - repair can't find it itself: it may be parity, or
 /// not live, and repair only reads the live data blocks. False if the stripe
 /// is gone, or rewritten without that block, since @read was read.
-fn repair_bad_block(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, read: BkeySC<'_, c::Stripe<Validated>>,
+fn repair_bad_block(ctxt: &Moving<'_>, trans: &TransGuard<'_>, read: BkeySC<'_, c::Stripe<Validated>>,
                     block: usize) -> Result<bool, BchError> {
-    let mut iter = BtreeIter::new(t, Btree::stripes, read.k.p, BtreeIterFlags::INTENT);
-    let Some(k) = iter.peek_slot(t)? else { return Ok(false) };
+    let fs = trans.fs();
     let want = &read.v().block_ptrs()[block];
-    if !k.arm::<c::Stripe>().is_some_and(|s| s.v().block_ptrs().get(block).is_some_and(|p| ptr_eq(p, want))) {
-        return Ok(false);
-    }
+    let mut ours = false;
 
-    // repair drops our locks: it needs a copy
-    let sk = BkeyBuf::from_key(k);
-    let s = BkeySC::from(&sk).arm::<c::Stripe>().expect("a stripe");
-    let mut b = StripeBlocks::get(t.fs(), s)?;
-    b.bad |= 1 << block;
-    // Retry is success, for scrub: narrowing's evacuation, which reconcile
-    // finishes
-    let _ = stripe_repair_blocks(ctxt, t, &mut iter, s, b)?;
-    // the attempts repair ran are its own, and the walk's step is done with
-    // this one: it steps on and begins anew, as C's loop did
-    t.restarts_handled();
-    Ok(true)
+    let opened = stripe_open_for_repair(trans, read.k.p.offset, |s| {
+        ours = s.v().block_ptrs().get(block).is_some_and(|p| ptr_eq(p, want));
+        if !ours {
+            return Ok(None);
+        }
+        let mut b = StripeBlocks::get(fs, s)?;
+        b.bad |= 1 << block;
+        Ok(Some(b))
+    })?;
+
+    if let Some((h, copy, b)) = opened {
+        let s = BkeySC::from(&copy).arm::<c::Stripe>().expect("a stripe");
+        // Retry is success, for scrub: narrowing's evacuation, which reconcile
+        // finishes
+        let _ = stripe_repair_opened(ctxt, s, b, h)?;
+    }
+    Ok(ours)
 }
 
 /// Stripe @k, which a scrub's phys walk came to by backpointer @bp: its block
@@ -543,7 +555,7 @@ pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, ca
         Err(_) => return Ok(()),
     };
 
-    let ret = match repair_bad_block(ctxt, t, s, block) {
+    let ret = match t.ignore_restarts(|trans| repair_bad_block(ctxt, trans, s, block)) {
         Ok(false) => return Ok(()),
         Err(e) if is_restart(&e) => return Err(e),
         r => r.map(|_| ()),

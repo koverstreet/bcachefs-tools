@@ -321,11 +321,12 @@ impl Fs {
     }
 }
 
-/// Repair stripe @k, at @iter - or, for a repair to retry once its IO is
-/// done, queue it on @retry, if this isn't the retry.
+/// Repair stripe @k - or, for a repair to retry once its IO is done, queue it
+/// on @retry, if this isn't the retry. The repair ends @t: it runs attempts of
+/// its own, handed the owner.
 /// A stripe that can't be repaired is parked: one stripe must not end the
 /// thread, and with it all background data movement until the next start.
-fn reconcile_stripe(ctxt: &MovingCtxt<'_>, t: &TransAttempt<'_, '_>, iter: &mut BtreeIter<'_>, k: BkeySC<'_>,
+fn reconcile_stripe(ctxt: &MovingCtxt<'_>, t: &TransAttempt<'_, '_>, k: BkeySC<'_>,
                     retry: Option<&mut StripeRetries>) -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -342,7 +343,7 @@ fn reconcile_stripe(ctxt: &MovingCtxt<'_>, t: &TransAttempt<'_, '_>, iter: &mut 
     let s = BkeySC::from(&copy).arm::<c::Stripe>().expect("a copy of a stripe");
     let idx = s.k.p.offset;
 
-    let ret = stripe_repair(ctxt, t, iter, s);
+    let ret = t.ignore_restarts(|trans| stripe_repair(ctxt, trans, idx));
 
     fs.event_add_trace(events::reconcile_stripe, u64::from(s.v().sectors.get()) * u64::from(s.v().nr_blocks), |out| {
         write!(out, "{}\nret ", s.to_text(fs));
@@ -353,12 +354,11 @@ fn reconcile_stripe(ctxt: &MovingCtxt<'_>, t: &TransAttempt<'_, '_>, iter: &mut 
         }
     });
 
-    // A retry or an error ends the stripe's step - the attempts repair ran
-    // were its own - and parking allocates, so not with our locks held
+    // A retry or an error ends the stripe's step, and parking allocates, so
+    // not with our locks held
     match ret {
         Ok(StripeRepair::Done) => Ok(()),
         Ok(StripeRepair::Retry) => {
-            t.restarts_handled();
             if let Some(retry) = retry {
                 // not queued, for no memory: the next pass finds it again
                 let _ = retry.push(StripeRetry { idx, mark: ctxt.io_mark() });
@@ -376,7 +376,6 @@ fn reconcile_stripe(ctxt: &MovingCtxt<'_>, t: &TransAttempt<'_, '_>, iter: &mut 
             let mut msg = log_msg_ratelimited!(fs);
             write!(msg, "error repairing stripe, leaving it for a later pass: {e}\n{}",
                    s.to_text(fs));
-            t.restarts_handled();
             t.unlock();
             fs.stripe_park(idx);
             Ok(())
@@ -451,7 +450,7 @@ impl<'a, 'f> Walker<'a, 'f> {
                 // @iter, which reconcile_stripe() copies it from before
                 // repair unlocks
                 let k = unsafe { polonius_key(k) };
-                reconcile_stripe(ctxt, t, &mut iter, k, None)
+                reconcile_stripe(ctxt, t, k, None)
             })?;
         }
         self.retry.clear();
@@ -467,7 +466,7 @@ impl<'a, 'f> Walker<'a, 'f> {
     {
         let ctxt = self.ctxt;
         if k.k.key_type() == BkeyType::stripe {
-            return reconcile_stripe(ctxt, t, iter, k, Some(&mut self.retry)).map(|()| None);
+            return reconcile_stripe(ctxt, t, k, Some(&mut self.retry)).map(|()| None);
         }
         if !k.k.extent_is_direct_data() {
             return Ok(None);
