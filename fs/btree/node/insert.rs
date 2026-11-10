@@ -14,7 +14,7 @@ use super::keys::key_at;
 use super::sort::bch2_maybe_compact_whiteouts;
 use super::BtreeNode;
 use crate::btree::bkey::{BkeyI, BkeyP, BKEY_U64S};
-use crate::btree::for_each::lockrestart_do;
+use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::interior::check_topology_msg;
 use crate::btree::iter::BtreeTrans;
 use crate::btree::path::{BtreePath, LockedNode, PathIdx, Paths};

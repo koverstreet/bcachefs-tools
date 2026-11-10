@@ -2,7 +2,7 @@
 
 use super::{cached, LockedEntry};
 use crate::btree::bkey::{BkeyI, BkeySC};
-use crate::btree::for_each::lockrestart_do;
+use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, UpdateTriggerFlags, Watermark};
 use crate::btree::path::{BtreePath, NodePtr, Paths};
 use crate::btree::trans::BtreeTrans;

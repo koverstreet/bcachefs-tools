@@ -10,7 +10,7 @@ use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::Relaxed;
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut};
 use crate::btree::cache::btree_ptr_hash_val;
-use crate::btree::for_each::lockrestart_do;
+use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
 use crate::btree::node::BtreeNode;

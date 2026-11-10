@@ -3,7 +3,7 @@
 use super::bkey::*;
 use super::types::{BtreeIter, BtreeTrans};
 use super::iter::{polonius_key, BtreeIterFlags, BtreeNodeIter};
-use super::trans_attempt::{is_restart, CommitOpts, TransAttempt};
+use super::trans_attempt::{is_restart, lockrestart_do, CommitOpts, TransAttempt};
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::LockedNode;
@@ -144,24 +144,6 @@ impl Keys {
         match self {
             Keys::Reverse(_) => iter.rewind(),
             _                => iter.advance(),
-        }
-    }
-}
-
-pub fn lockrestart_do<'t, T, F>(trans: &BtreeTrans<'t>, mut f: F) -> Result<T, BchError>
-where
-    F: for<'a> FnMut(&TransAttempt<'a, 't>) -> Result<T, BchError>
-{
-    loop {
-        let t = trans.begin();
-
-        match f(&t) {
-            Err(e) if is_restart(&e) => continue,
-            Err(e) => return Err(e),
-            Ok(v) => {
-                t.verify_not_restarted();
-                return Ok(v);
-            }
         }
     }
 }

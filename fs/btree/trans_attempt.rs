@@ -3,9 +3,10 @@
 //! TransAttempt: an attempt at a transaction, which btree work is done in.
 //!
 //! A transaction (BtreeTrans, owned by a TransGuard) runs as attempts, each
-//! from one begin() to the next. The loops in for_each.rs - lockrestart_do(),
-//! commit_do(), the for_each walks - begin an attempt and run a step in it,
-//! and begin again if the step returns a restart. Everything a step does -
+//! from one begin() to the next. The loops - lockrestart_do(), here, and
+//! what's built on it in for_each.rs: commit_do(), the walks - begin an
+//! attempt and run a step in it, and begin again if the step returns a
+//! restart. Everything a step does -
 //! peeking keys, queueing updates, allocating transaction memory, committing -
 //! takes the &TransAttempt it runs in, and a restart is an error like any
 //! other, returned to the loop.
@@ -169,6 +170,24 @@ impl Drop for TransMayDropUpdates<'_, '_> {
 /// it's in begins again.
 pub fn is_restart(e: &BchError) -> bool {
     e.matches(bch_errcode::BCH_ERR_transaction_restart)
+}
+
+pub fn lockrestart_do<'t, T, F>(trans: &BtreeTrans<'t>, mut f: F) -> Result<T, BchError>
+where
+    F: for<'a> FnMut(&TransAttempt<'a, 't>) -> Result<T, BchError>
+{
+    loop {
+        let t = trans.begin();
+
+        match f(&t) {
+            Err(e) if is_restart(&e) => continue,
+            Err(e) => return Err(e),
+            Ok(v) => {
+                t.verify_not_restarted();
+                return Ok(v);
+            }
+        }
+    }
 }
 
 /// A key to update with, ours to edit while the attempt runs: in its buffer,
