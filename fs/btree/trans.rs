@@ -6,6 +6,7 @@
 
 pub use super::types::BtreeTrans;
 use super::iter::{CommitOpts, TransAttempt};
+use super::trans_attempt::AttemptKey;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_val_to_text, BkeySC};
 use crate::btree::path::{bch2_trans_paths_exit, bch2_trans_paths_init, BtreePath, PathIdx, Paths};
@@ -146,13 +147,10 @@ impl<'f> BtreeTrans<'f> {
 
     /// bch2_trans_begin(), for a loop that tracks restarts itself: the new
     /// restart count. Inlined, so that last_begin_ip is the caller's address.
+    /// Beginning is trans_attempt.rs's, which holds the key.
     #[inline(always)]
-    pub(crate) fn begin_raw(&self) -> u32 {
+    pub(in crate::btree) fn begin_raw(&self, _: AttemptKey) -> u32 {
         self.begin_from(&mut self.paths(), crate::ret_ip!())
-    }
-
-    pub fn begin<'a>(&'a self) -> TransAttempt<'a, 'f> {
-        TransAttempt::new(self, self.begin_raw())
     }
 
     /// The key updates queued, without the path table borrowed: Paths::updates()

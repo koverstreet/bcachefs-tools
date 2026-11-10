@@ -16,6 +16,7 @@ mod intake;
 mod keys;
 
 pub use intake::Intake;
+pub(in crate::btree) use flush::FlushKey;
 use keys::{KeysLive, WbKeys};
 
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BKEY_U64S};

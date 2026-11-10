@@ -238,6 +238,10 @@ fn btree_write_buffered_insert(t: &TransAttempt<'_, '_>, btree: Btree, wb: &mut 
     t.update(&iter, &t.bkey_copy(wb.k())?, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
+/// The flush's leave to begin attempts, which is trans_attempt.rs's alone
+/// otherwise: its attempt spans keys while it holds a leaf write locked.
+pub(in crate::btree) struct FlushKey(());
+
 /*
  * Flush a contiguous slice of wb->sorted ([start, end)) via the fastpath.
  *
@@ -262,7 +266,7 @@ fn flush_sorted_range(
     let mut write_locked = false;
     let mut ret = Ok(());
 
-    let mut t = trans.begin();
+    let mut t = trans.begin_flush(FlushKey(()));
 
     let mut iter = BtreeIter::new(&t, btree, POS_MIN, BtreeIterFlags::INTENT | BtreeIterFlags::ALL_SNAPSHOTS);
 
@@ -309,7 +313,7 @@ fn flush_sorted_range(
             let r = flush_one(&t, wb, &mut iter, &mut k, &mut write_locked,
                               &mut accounting_accumulated, cnt);
             if !write_locked {
-                t = trans.begin();
+                t = trans.begin_flush(FlushKey(()));
             }
             match r {
                 Err(e) if is_restart(&e) => continue,

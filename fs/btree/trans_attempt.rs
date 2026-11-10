@@ -120,7 +120,7 @@ fn begin_if_unusable(trans: &BtreeTrans<'_>) {
                       trans.fn_name());
 
     if trans.restarted().0 != 0 || !trans.locked() {
-        trans.begin_raw();
+        trans.begin_raw(AttemptKey(()));
     }
 }
 
@@ -190,13 +190,29 @@ where
     }
 }
 
-impl BtreeTrans<'_> {
+/// Beginning an attempt is this file's: BtreeTrans::begin_raw() takes one of
+/// these, which nothing outside it can make.
+pub(in crate::btree) struct AttemptKey(());
+
+impl<'f> BtreeTrans<'f> {
+    fn begin(&self) -> TransAttempt<'_, 'f> {
+        TransAttempt::new(self, self.begin_raw(AttemptKey(())))
+    }
+
+    /// begin(), for the write buffer flush, which keeps an attempt across keys
+    /// while it holds a leaf write locked, and begins again only once it's let
+    /// go: its key is its own.
+    #[inline(always)]
+    pub(in crate::btree) fn begin_flush(&self, _: super::write_buffer::FlushKey) -> TransAttempt<'_, 'f> {
+        self.begin()
+    }
+
     // use consuming version whenever possible
     /// A pending restart that won't be retried, ended, so the transaction can
     /// be put.
     #[inline(always)]
     pub(crate) fn abandon_restart(&self) {
-        self.begin_raw();
+        self.begin_raw(AttemptKey(()));
     }
 }
 
