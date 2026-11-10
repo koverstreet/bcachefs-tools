@@ -33,7 +33,7 @@ use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_gt, bkey_lt, pos, BkeyFamily, Bk
                          BkeyV, BkeyVMut, ByFlag, FamilyVal, FieldOffsets, POS_MAX, POS_MIN};
 use crate::btree::bkey::BkeyOps;
 use crate::btree::trigger::{Trigger, TriggerOp};
-use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
+use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::extents::Extents;
@@ -932,20 +932,18 @@ pub fn remap_range(
     let mut dst_iter = BtreeIter::new(&trans, Btree::extents, dst_start, BtreeIterFlags::INTENT);
     let mut ret = Ok(());
 
-    while (ret.is_ok() || ret.as_ref().is_err_and(is_restart)) && bkey_lt(dst_iter.pos(), dst_end) {
-        let t = trans.begin();
-
-        ret = (|| -> Result<(), BchError> {
+    while ret.is_ok() && bkey_lt(dst_iter.pos(), dst_end) {
+        ret = lockrestart_do(&trans, |t| -> Result<(), BchError> {
             if fatal_signal_pending() {
                 return Err(c::EINTR.into());
             }
 
-            src_iter.set_snapshot(subvolume::get_snapshot(&t, src_inum.subvol as u32)?);
-            dst_iter.set_snapshot(subvolume::get_snapshot(&t, dst_inum.subvol as u32)?);
+            src_iter.set_snapshot(subvolume::get_snapshot(t, src_inum.subvol as u32)?);
+            dst_iter.set_snapshot(subvolume::get_snapshot(t, dst_inum.subvol as u32)?);
 
             if dst_inum.inum < src_inum.inum {
                 /* Avoid some lock cycle transaction restarts */
-                dst_iter.traverse(&t)?;
+                dst_iter.traverse(t)?;
             }
 
             let dst_done = dst_iter.pos().offset - dst_start.offset;
@@ -957,7 +955,7 @@ pub fn remap_range(
              * made a reflink_p in place, and not borrowing src_iter, which
              * moves before we're done with it.
              */
-            let src = src_iter.find_max_norestart(&t, src_end, |_, k| {
+            let src = src_iter.find_max_norestart(t, src_end, |_, k| {
                 Ok(!k.extent_is_unwritten(fs) && k.k.extent_is_data())
             })?
             .map(|k| t.bkey_reassemble_room(k, size_of::<BkeyI<c::ReflinkP>>()))
@@ -968,7 +966,7 @@ pub fn remap_range(
 
             if bkey_lt(src_want, src_iter.pos()) {
                 let end = dst_end.offset.min(dst_iter.pos().offset + src_iter.pos().offset - src_want.offset);
-                return fpunch_one(&t, &mut dst_iter, dst_inum, end, Some(&mut *i_sectors_delta)).map(|_| ());
+                return fpunch_one(t, &mut dst_iter, dst_inum, end, Some(&mut *i_sectors_delta)).map(|_| ());
             }
 
             let mut src = src.expect("source data: the source iterator didn't move past it");
@@ -976,7 +974,7 @@ pub fn remap_range(
             if src.k().key_type() != BkeyType::reflink_p {
                 src_iter.set_pos_to_extent_start();
 
-                make_extent_indirect(&t, &src_iter, &mut src, reflink_p_may_update_opts_field)?;
+                make_extent_indirect(t, &src_iter, &mut src, reflink_p_may_update_opts_field)?;
 
                 assert!(src.k().key_type() == BkeyType::reflink_p);
             }
@@ -999,7 +997,7 @@ pub fn remap_range(
             let res = DiskReservation::new(fs);
             t.extent_update(dst_inum, &mut dst_iter, &mut dst_p, &res, new_i_size,
                             Some(&mut *i_sectors_delta), true, 0, None)
-        })();
+        });
     }
 
     assert!(ret.is_err() || bkey_eq(dst_iter.pos(), dst_end),
