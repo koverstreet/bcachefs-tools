@@ -1635,13 +1635,12 @@ pub fn rm_snapshot(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<(
 /// but the write buffer will be out of sync; therefore we always need a
 /// write buffer flush.
 ///
-/// The walk is for_each_commit() written out, for its one difference: a
-/// deleted inode isn't committed or retried. rm_snapshot() commits for
-/// itself, and returns a restart having succeeded - and the list entry is
-/// still there until the write buffer is flushed, so the retry would find it
-/// again. C's loop said this with a continue in the body of
-/// for_each_btree_key_commit(), which skips the commit and goes on to the
-/// next key.
+/// Each entry is decided on, and what that queued committed, in an attempt of
+/// its own; a deletion - rm_snapshot(), attempts of its own - runs after it,
+/// and the walk goes on, not back: the list entry is still there until the
+/// write buffer is flushed, so going back would find it again. C's loop said
+/// this with a continue in the body of for_each_btree_key_commit(), which
+/// skips the commit and goes on to the next key.
 fn delete_dead_inodes(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     trans.write_buffer_flush_sync()?;
@@ -1649,43 +1648,27 @@ fn delete_dead_inodes(fs: &Fs) -> Result<(), BchError> {
     let flags = BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS;
     let mut iter = BtreeIter::new(&trans, Btree::deleted_inodes, POS_MIN, flags);
 
-    enum Next { Committed, Deleted }
-
     loop {
-        let t = trans.begin();
-
-        let ret = (|| {
-            let Some(k) = iter.peek_max_type(&t, SPOS_MAX, flags)? else { return Ok(None) };
+        let next = lockrestart_do(&trans, |t| {
+            let Some(k) = iter.peek_max_type(t, SPOS_MAX, flags)? else { return Ok(None) };
             let p = k.k.p;
 
             let mut inode = c::bch_inode_unpacked::default();
-            if may_delete_deleted_inode(&t, p, &mut inode, true)? {
-                bch_verbose_ratelimited!(fs, "deleting unlinked inode {}:{}", { p.offset }, { p.snapshot });
+            let delete = may_delete_deleted_inode(t, p, &mut inode, true)?;
 
-                // may_delete_deleted_inode() can have queued updates - an
-                // fsck error's log entry - and rm_snapshot() runs its own
-                // iterations: each begins by dropping them. An inode with
-                // extents commits them with its first deletion; one with
-                // nothing to delete there lost them.
-                //
-                // A restart here is an ordinary one: nothing's been deleted
-                // yet, so the loop retries this key.
-                t.commit(None, CommitFlags::NO_ENOSPC)?;
-
-                rm_snapshot(&trans, p.offset, p.snapshot)?;
-                return Ok(Some(Next::Deleted));
-            }
-
+            // may_delete_deleted_inode() can have queued updates - an fsck
+            // error's log entry - which rm_snapshot()'s begins would drop
             t.commit(None, CommitFlags::NO_ENOSPC)?;
-            Ok(Some(Next::Committed))
-        })();
+            Ok(Some((p, delete)))
+        })?;
 
-        match ret {
-            Ok(None)                    => return Ok(()),
-            Ok(Some(Next::Committed))   => t.verify_not_restarted(),
-            Ok(Some(Next::Deleted))     => {}
-            Err(e) if is_restart(&e)    => continue,
-            Err(e)                      => return Err(e),
+        let Some((p, delete)) = next else { return Ok(()) };
+        if delete {
+            bch_verbose_ratelimited!(fs, "deleting unlinked inode {}:{}", { p.offset }, { p.snapshot });
+            match rm_snapshot(&trans, p.offset, p.snapshot) {
+                Err(e) if is_restart(&e) => continue,
+                r => r?,
+            }
         }
 
         if !iter.advance() {
