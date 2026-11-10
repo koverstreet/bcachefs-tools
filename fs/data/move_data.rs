@@ -401,8 +401,6 @@ impl Moving<'_> {
             audited:      ca.as_ref().map_or(0, |ca| ca.sector_to_bucket(w.start)),
         };
 
-        // not run where transaction restarts are handled
-        trans.begin_raw();
         let mut bp_iter = BtreeIter::new(trans, bp_btree, pos(bp_dev, w.start << shift), BtreeIterFlags::empty());
 
         match trans.write_buffer_tryflush() {

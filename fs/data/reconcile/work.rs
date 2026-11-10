@@ -621,7 +621,6 @@ fn phys_dev(fs: &Fs, phase: &Phase, dev: u32) -> Result<(), BchError> {
 
     while ctxt.ratelimit().is_ok() && fs.reconcile_enabled() && !fs.flags.get(c::bch_fs_flags::going_ro) {
         let trans = ctxt.trans();
-        trans.begin_raw();
 
         let Ok(Some(p)) = walker.work.next(trans, &mut work_pos, pos(dev.into(), u64::MAX)) else { break };
         if p.inode != u64::from(dev) {
@@ -737,8 +736,6 @@ impl<'f> Reconciler<'f, '_> {
 
         while self.interrupted(p.kick).is_none() {
             let trans = self.ctxt.trans();
-            // the last step's moves, or a wait for them, may have unlocked it
-            trans.begin_raw();
 
             let ret = match phase.kind {
                 PhaseKind::Scan => {

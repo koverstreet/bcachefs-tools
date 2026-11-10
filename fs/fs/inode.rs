@@ -1646,11 +1646,6 @@ fn delete_dead_inodes(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     trans.write_buffer_flush_sync()?;
 
-    // The flush leaves the transaction unlocked, and making an iterator
-    // takes a path, which needs it locked: begin first, as C's
-    // for_each_btree_key_commit() does.
-    trans.begin_raw();
-
     let flags = BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS;
     let mut iter = BtreeIter::new(&trans, Btree::deleted_inodes, POS_MIN, flags);
 
