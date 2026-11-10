@@ -7,7 +7,7 @@
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bch2_bkey_maybe_mergable, bkey_eq, bkey_gt, bkey_le, bkey_lt, bkey_merge, BkeyI,
                          BkeyS, BkeySC, BkeyWhole, MutBkey, BKEY_U64S};
-use crate::btree::iter::{btree_id_cached, commit_do, is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
+use crate::btree::iter::{btree_id_cached, commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
 use crate::btree::journal_overlay;
 use crate::btree::path::{BtreePath, KeyVal, PathIdx};
@@ -1271,23 +1271,13 @@ impl BtreeTrans<'_> {
     fn delete_range_flags(&self, btree: Btree, start: Bpos, end: Bpos, flags: u32) -> Result<(), BchError> {
         let restart_count = self.restart_count();
 
-        let mut t = self.begin();
-        let mut iter = BtreeIter::new(&t, btree, start, BtreeIterFlags::INTENT | BtreeIterFlags::from_bits_retain(flags));
+        let mut iter = BtreeIter::new(self, btree, start, BtreeIterFlags::INTENT | BtreeIterFlags::from_bits_retain(flags));
 
         let ret = loop {
-            let ret = delete_range_one(&t, &mut iter, end, UpdateTriggerFlags::from_bits_retain(flags));
-            /*
-             * the bch2_trans_begin() call is in a weird place because we
-             * need to call it after every transaction commit, to avoid path
-             * overflow, but don't want to call it if the delete operation
-             * is a no-op and we have no work to do:
-             */
-            t = self.begin();
-
-            match ret {
-                Err(e) if is_restart(&e) => continue,
-                Ok(()) => continue,
-                Err(e) => break e,
+            if let Err(e) = lockrestart_do(self, |t| {
+                delete_range_one(t, &mut iter, end, UpdateTriggerFlags::from_bits_retain(flags))
+            }) {
+                break e;
             }
         };
 
@@ -1302,7 +1292,7 @@ impl BtreeTrans<'_> {
     }
 }
 
-fn delete_range_one<'a>(t: &TransAttempt<'a, '_>, iter: &mut BtreeIter<'a>, end: Bpos, flags: UpdateTriggerFlags)
+fn delete_range_one<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>, end: Bpos, flags: UpdateTriggerFlags)
     -> Result<(), BchError>
 {
     let Some((it, k)) = iter.peek_with(t, |i, p| i.peek_max_in(p, end))? else {
