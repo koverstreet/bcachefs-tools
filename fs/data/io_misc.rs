@@ -6,9 +6,8 @@
 //! the space reserved - or on a nocow inode, an unwritten extent, the space
 //! allocated now - as much as one reservation and one allocation give.
 //!
-//! fpunch deletes a range of an inode's extents in a loop of its own: a
-//! transaction restart from fpunch_at() means it had to drop locks along the
-//! way, and is the caller's to take as such.
+//! fpunch deletes a range of an inode's extents in a loop of its own, a commit
+//! each.
 //!
 //! truncate and finsert/fcollapse are logged ops (fs/logged_ops.rs): the op
 //! key goes in first, each step commits with the op advanced to it, and
@@ -20,7 +19,7 @@
 use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole, BkeyOps};
-use crate::btree::iter::{commit_do, is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans,
+use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::extents::Extents;
@@ -160,8 +159,45 @@ pub fn fpunch_snapshot(trans: &BtreeTrans<'_>, start: Bpos, end: Bpos) -> Result
     })
 }
 
-/// Delete @inum's extents from @iter's position to @end, a commit each:
-/// transaction_restart if it had to drop locks along the way.
+/// The next of @inum's extents from @iter's position to @end deleted and
+/// committed, in @t, @iter moved past it - or with none left, @iter moved to
+/// @end, and true.
+pub fn fpunch_one<'t>(
+    t:               &TransAttempt<'_, 't>,
+    iter:            &mut BtreeIter<'t>,
+    inum:            c::subvol_inum,
+    end:             u64,
+    i_sectors_delta: Option<&mut i64>,
+) -> Result<bool, BchError> {
+    let end_pos = pos(inum.inum, end);
+    let res = DiskReservation::new(t.fs());
+
+    let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
+    iter.set_snapshot(snapshot);
+
+    // Trimmed through a copy, @iter's flags being the caller's; @iter is
+    // moved where the peek would have left it - at the extent, or with
+    // none left at @end, which reflink's remap loops on
+    let next = {
+        let mut window = iter.copy();
+        window.set_flags(BtreeIterFlags::TRIM);
+        let k = window.peek_max(t, end_pos)?;
+        k.map(|k| k.k.size).map(|sectors| (window.pos(), sectors))
+    };
+    let Some((start, sectors)) = next else {
+        iter.set_pos(end_pos);
+        return Ok(true);
+    };
+    iter.set_pos(start);
+
+    let mut delete = t.bkey_alloc_init::<c::Deleted>(0, start)?;
+    delete.k_mut().resize(sectors);
+
+    t.extent_update(inum, iter, &mut delete, &res, 0, i_sectors_delta, false, 0, None)?;
+    Ok(false)
+}
+
+/// Delete @inum's extents from @iter's position to @end, a commit each.
 pub fn fpunch_at<'t>(
     trans:               &'t BtreeTrans<'t>,
     iter:                &mut BtreeIter<'t>,
@@ -169,47 +205,8 @@ pub fn fpunch_at<'t>(
     end:                 u64,
     mut i_sectors_delta: Option<&mut i64>,
 ) -> Result<(), BchError> {
-    let fs = trans.fs();
-    let end_pos = pos(inum.inum, end);
-    let mut restarted = Ok(());
-
-    loop {
-        let res = DiskReservation::new(fs);
-        let t = trans.begin();
-
-        let ret = (|| -> Result<bool, BchError> {
-            let snapshot = subvolume::get_snapshot(&t, inum.subvol as u32)?;
-            iter.set_snapshot(snapshot);
-
-            // Trimmed through a copy, @iter's flags being the caller's; @iter is
-            // moved where the peek would have left it - at the extent, or with
-            // none left at @end, which reflink's remap loops on
-            let next = {
-                let mut window = iter.copy();
-                window.set_flags(BtreeIterFlags::TRIM);
-                let k = window.peek_max(&t, end_pos)?;
-                k.map(|k| k.k.size).map(|sectors| (window.pos(), sectors))
-            };
-            let Some((start, sectors)) = next else {
-                iter.set_pos(end_pos);
-                return Ok(true);
-            };
-            iter.set_pos(start);
-
-            let mut delete = t.bkey_alloc_init::<c::Deleted>(0, start)?;
-            delete.k_mut().resize(sectors);
-
-            t.extent_update(inum, iter, &mut delete, &res, 0, i_sectors_delta.as_deref_mut(), false, 0, None)?;
-            Ok(false)
-        })();
-
-        match ret {
-            Ok(true)                 => return restarted,
-            Ok(false)                => {}
-            Err(e) if is_restart(&e) => restarted = Err(e),
-            Err(e)                   => return Err(e),
-        }
-    }
+    while !lockrestart_do(trans, |t| fpunch_one(t, iter, inum, end, i_sectors_delta.as_deref_mut()))? {}
+    Ok(())
 }
 
 /// Delete @inum's extents from @start to @end.
@@ -219,10 +216,7 @@ pub fn fpunch(fs: &Fs, inum: c::subvol_inum, start: u64, end: u64, i_sectors_del
     let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, Btree::extents, pos(inum.inum, start), BtreeIterFlags::INTENT);
 
-    match fpunch_at(&trans, &mut iter, inum, end, Some(i_sectors_delta)) {
-        Err(e) if is_restart(&e) => Ok(()),
-        ret                      => ret,
-    }
+    fpunch_at(&trans, &mut iter, inum, end, Some(i_sectors_delta))
 }
 
 // ── truncate ─────────────────────────────────────────────────────────────
@@ -269,10 +263,7 @@ fn __resume_truncate(
         let mut fpunch_iter = BtreeIter::new(trans, Btree::extents, pos(inum.inum, from),
                                              BtreeIterFlags::INTENT);
 
-        match fpunch_at(trans, &mut fpunch_iter, inum, u64::MAX, i_sectors_delta) {
-            Err(e) if is_restart(&e) => Ok(()),
-            ret                      => ret,
-        }
+        fpunch_at(trans, &mut fpunch_iter, inum, u64::MAX, i_sectors_delta)
     })();
 
     if warn_errors {
@@ -445,11 +436,7 @@ fn __resume_finsert(
             } else {
                 iter.set_pos(pos(inum.inum, src_offset));
 
-                match fpunch_at(trans, &mut iter, inum, src_offset.wrapping_add(len),
-                                i_sectors_delta.as_deref_mut()) {
-                    Err(e) if !is_restart(&e) => return Err(e),
-                    _                         => {}
-                }
+                fpunch_at(trans, &mut iter, inum, src_offset.wrapping_add(len), i_sectors_delta.as_deref_mut())?;
 
                 // Unchecked, as in C: the shift below runs either way
                 let _ = commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| logged_ops::update(t, op.as_ref()));

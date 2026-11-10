@@ -37,7 +37,7 @@ use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, 
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::extents::Extents;
-use crate::data::io_misc::fpunch_at;
+use crate::data::io_misc::fpunch_one;
 use crate::errcode::{bch_errcode, err_ptr, BchError};
 use crate::data::inline_data::InlineDataRef;
 use crate::fs::Fs;
@@ -968,7 +968,7 @@ pub fn remap_range(
 
             if bkey_lt(src_want, src_iter.pos()) {
                 let end = dst_end.offset.min(dst_iter.pos().offset + src_iter.pos().offset - src_want.offset);
-                return fpunch_at(&trans, &mut dst_iter, dst_inum, end, Some(&mut *i_sectors_delta));
+                return fpunch_one(&t, &mut dst_iter, dst_inum, end, Some(&mut *i_sectors_delta)).map(|_| ());
             }
 
             let mut src = src.expect("source data: the source iterator didn't move past it");
