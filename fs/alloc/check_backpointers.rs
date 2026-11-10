@@ -474,8 +474,9 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
     if sectors_over || stripes_over {
         if *checked_bad != alloc_k.k.p {
             *checked_bad = alloc_k.k.p;
-            check_bucket_backpointers_to_extents(t.trans(), &ca, alloc_k.k.p, last_flushed)?;
-            return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested));
+            return Err(t.owner_and_restart(|trans| {
+                check_bucket_backpointers_to_extents(trans, &ca, alloc_k.k.p, last_flushed)
+            }));
         }
 
         backpointers_maybe_flush(t, alloc_k, last_flushed.reborrow())?;
@@ -910,10 +911,8 @@ fn check_one_backpointer(t: &TransAttempt<'_, '_>, range: &RangeInclusive<c::bbp
     }
 }
 
-/// Inside the caller's attempt: a restart is the caller's.
-fn check_bucket_backpointers_to_extents(trans: &BtreeTrans<'_>, ca: &Dev, bucket: Bpos,
+fn check_bucket_backpointers_to_extents(trans: &TransGuard<'_>, ca: &Dev, bucket: Bpos,
                                         last_flushed: WbFlush<'_>) -> Result<(), BchError> {
-    let restart_count = trans.restart_count();
     let range = BackpointerPos::bucket_range(ca, bucket);
 
     BpScanIter::new(Btree::backpointers, *range.start(), None)
@@ -922,11 +921,7 @@ fn check_bucket_backpointers_to_extents(trans: &BtreeTrans<'_>, ca: &Dev, bucket
         })?;
 
     // make sure bad backpointers that were deleted are visible
-    trans.write_buffer_flush_sync()?;
-    if trans.restart_count() != restart_count {
-        return Err(BchError::from(bch_errcode::BCH_ERR_transaction_restart_nested));
-    }
-    Ok(())
+    trans.write_buffer_flush_sync()
 }
 
 fn check_backpointers_to_extents_pass(fs: &Fs, trans: &TransGuard<'_>, range: RangeInclusive<c::bbpos>)
