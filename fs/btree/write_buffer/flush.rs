@@ -264,7 +264,7 @@ fn flush_sorted_range(
 
     let mut t = trans.begin();
 
-    let mut iter = BtreeIter::new(trans, btree, POS_MIN, BtreeIterFlags::INTENT | BtreeIterFlags::ALL_SNAPSHOTS);
+    let mut iter = BtreeIter::new(&t, btree, POS_MIN, BtreeIterFlags::INTENT | BtreeIterFlags::ALL_SNAPSHOTS);
 
     let range = shard.range();
     for i in range.clone() {
