@@ -30,8 +30,9 @@ use crate::alloc::lru::{lru_check_set, lru_mod, per_dev_fragmentation_lru, LruId
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_eq, bkey_lt, bkey_min, pos, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
-use crate::btree::iter::{is_restart, lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans,
+use crate::btree::iter::{is_restart, lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
+use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::errcode::BchError;
@@ -398,7 +399,7 @@ fn check_btree_alloc_iter<'t>(
 
 /// Every alloc key and hole, against need_discard, freespace and bucket_gens:
 /// check_btree_alloc().
-fn check_btree_alloc(fs: &Fs, trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+fn check_btree_alloc(fs: &Fs, trans: &TransGuard<'_>) -> Result<(), BchError> {
     let progress = Progress::recovery(fs, c"check_btree_alloc", &[Btree::alloc], &[]);
 
     let mut iter = BtreeIter::new(trans, Btree::alloc, POS_MIN, BtreeIterFlags::PREFETCH);

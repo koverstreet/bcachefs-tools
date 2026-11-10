@@ -32,6 +32,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_le, BkeyFamily, BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, LoopFlow, TransAttempt,
                          TransBkey, UpdateTriggerFlags};
+use crate::btree::trans::TransGuard;
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::durability::{drop_extra_durability, drop_extra_ec_durability, BkeyVDurability};
@@ -389,7 +390,7 @@ pub(crate) fn index_update(trans: &BtreeTrans<'_>, u: &mut c::data_update) -> Re
 }
 
 /// @f on each slot @u's extent covered, an attempt and a commit each.
-fn for_each_old_slot<'t, F>(trans: &'t BtreeTrans<'t>, u: &c::data_update, res: Option<&DiskReservation<'_>>,
+fn for_each_old_slot<'t, F>(trans: &'t TransGuard<'t>, u: &c::data_update, res: Option<&DiskReservation<'_>>,
                             mut f: F) -> Result<(), BchError>
 where
     F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'t>, BkeySC<'k>) -> Result<(), BchError>,
@@ -408,7 +409,7 @@ where
 
 /// The index update for a data update whose write didn't happen, because the
 /// read failed on every replica: drops its ptrs_kill, and logs it.
-pub(crate) fn index_update_nowrite(trans: &BtreeTrans<'_>, u: &c::data_update) -> Result<(), BchError> {
+pub(crate) fn index_update_nowrite(trans: &TransGuard<'_>, u: &c::data_update) -> Result<(), BchError> {
     let fs = trans.fs();
     let old = BkeySC::from(u.k.key());
     let old_p = old.arm::<Ptrs>().unwrap_or_else(|| panic!("data update of a key without pointers: {}", old.to_text(fs)));

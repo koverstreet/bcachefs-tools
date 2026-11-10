@@ -10,8 +10,9 @@ use crate::alloc::replicas::{bkey_replicas_acct, entry_acct, replicas_acct};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeySC};
 use crate::btree::trigger::{Trigger, TriggerOp};
-use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitOpts, TransAttempt,
+use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
+use crate::btree::trans::TransGuard;
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::ec::stripe::{ptr_matches_stripe, ptr_matches_stripe_m};
@@ -905,7 +906,7 @@ fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64, data_type
 /// to unmark it: in its alloc key, committed, or in gc's copy:
 /// bch2_trans_mark_metadata_bucket(). The gc side runs in an attempt of its
 /// own; it's only reached on a transaction made for it.
-pub fn trans_mark_metadata_bucket(trans: &BtreeTrans<'_>, ca: &Dev, b: u64, data_type: DataType,
+pub fn trans_mark_metadata_bucket(trans: &TransGuard<'_>, ca: &Dev, b: u64, data_type: DataType,
                                   sectors: u32, flags: UpdateTriggerFlags) -> Result<(), BchError> {
     assert!(matches!(data_type, DataType::free | DataType::sb | DataType::journal),
             "marking {} as metadata", data_type_str(data_type));
@@ -928,7 +929,7 @@ pub fn trans_mark_metadata_bucket(trans: &BtreeTrans<'_>, ca: &Dev, b: u64, data
 /// @range's sectors on @ca, metadata of @data_type, into @bucket - a bucket
 /// and its count so far - marking the bucket when the range moves past it:
 /// bch2_trans_mark_metadata_sectors().
-fn trans_mark_metadata_sectors(trans: &BtreeTrans<'_>, ca: &Dev, range: core::ops::Range<u64>,
+fn trans_mark_metadata_sectors(trans: &TransGuard<'_>, ca: &Dev, range: core::ops::Range<u64>,
                                data_type: DataType, bucket: &mut (u64, u32),
                                flags: UpdateTriggerFlags) -> Result<(), BchError> {
     let mut start = range.start;
@@ -952,7 +953,7 @@ fn trans_mark_metadata_sectors(trans: &BtreeTrans<'_>, ca: &Dev, range: core::op
 
 /// @ca's superblocks' buckets - the first's, from sector 0 - and its journal
 /// buckets.
-fn trans_mark_dev_sb_in(trans: &BtreeTrans<'_>, ca: &Dev, flags: UpdateTriggerFlags)
+fn trans_mark_dev_sb_in(trans: &TransGuard<'_>, ca: &Dev, flags: UpdateTriggerFlags)
     -> Result<(), BchError>
 {
     let fs = trans.fs();

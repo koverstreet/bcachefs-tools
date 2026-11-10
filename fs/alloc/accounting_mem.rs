@@ -9,6 +9,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeyI, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, LoopFlow,
                          TransAttempt};
+use crate::btree::trans::TransGuard;
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::format::{self, MetadataVersion, Bpos, DataType};
@@ -461,7 +462,7 @@ fn accumulate_and_read(ctx: &impl FsckErrCtx, fs: &Fs, journal_keys: &c::journal
     Ok(next)
 }
 
-fn read_walk(trans: &BtreeTrans<'_>, journal_keys: &c::journal_keys, entries: &mut KVVec<Entry>)
+fn read_walk(trans: &TransGuard<'_>, journal_keys: &c::journal_keys, entries: &mut KVVec<Entry>)
     -> Result<(), BchError>
 {
     let fs = trans.fs();
@@ -601,7 +602,7 @@ fn check_sanity(out: &mut Printbuf, fs: &Fs, pos: &DiskAccountingPos<Unvalidated
     }
 }
 
-fn read_mem_fixups(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+fn read_mem_fixups(trans: &TransGuard<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
 
     /*

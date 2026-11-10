@@ -50,6 +50,7 @@ use crate::btree::iter::{
     commit_do, is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
     TransAttempt, TransBkey, UpdateTriggerFlags,
 };
+use crate::btree::trans::TransGuard;
 use crate::init::error::{id, BkeyValidate};
 use crate::snapshots::subvolume;
 use crate::util::ffi::opt_cstr;
@@ -1447,7 +1448,7 @@ fn may_delete_deleted_inum(t: &TransAttempt<'_, '_>, inum: c::subvol_inum,
 
 /// Delete inode @inum's keys in @btree, a commit each: as
 /// bch2_inode_delete_keys(). An extent is deleted whole.
-fn delete_keys(trans: &BtreeTrans<'_>, inum: c::subvol_inum, btree: Btree)
+fn delete_keys(trans: &TransGuard<'_>, inum: c::subvol_inum, btree: Btree)
     -> Result<(), BchError>
 {
     let fs = trans.fs();

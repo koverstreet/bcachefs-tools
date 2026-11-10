@@ -21,8 +21,9 @@ use crate::alloc::buckets::u64_to_bucket;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN, SPOS_MAX, BkeyOps};
 use crate::btree::cache::BtreeCachePins;
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
+use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
                          TransAttempt, UpdateTriggerFlags};
+use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
 use crate::errcode::BchError;
@@ -337,7 +338,7 @@ fn check_lru_key(
 /// are its device's slice of the alloc btree, the stripe lru's the stripes
 /// btree. The others' entries - the old fs-wide fragmentation lru, ids nothing
 /// uses - are scattered or bogus, stragglers to be deleted: no pin.
-fn pin_backing(trans: &BtreeTrans<'_>, pins: &BtreeCachePins<'_>, lru: LruId) -> Result<(), BchError> {
+fn pin_backing(trans: &TransGuard<'_>, pins: &BtreeCachePins<'_>, lru: LruId) -> Result<(), BchError> {
     let (btree, start, end) = match lru {
         LruId::Read { dev } | LruId::Fragmentation { dev } =>
             (Btree::alloc, pos(dev.into(), 0), spos(dev.into(), u64::MAX, u32::MAX)),

@@ -298,8 +298,9 @@ use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole, 
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::prt;
 use crate::util::vstructs::{Validated, Whole};
-use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans,
+use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::btree::trans::TransGuard;
 use crate::locking::ExclusiveGuard;
 use crate::{bch_err, bkey_fsck_err_on};
 use crate::init::error::{id, BkeyValidate};
@@ -1391,7 +1392,7 @@ pub fn node_create(t: &TransAttempt<'_, '_>, parent: u32, new_snapids: &mut [u32
 // ── Reading the table ────────────────────────────────────────────────────
 
 /// table_rebuild(), if repairs set need_table_rebuild.
-pub fn table_rebuild_if_needed(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+pub fn table_rebuild_if_needed(trans: &TransGuard<'_>) -> Result<(), BchError> {
     if !trans.fs().snapshots.need_table_rebuild.load(Ordering::Relaxed) {
         return Ok(());
     }
@@ -1403,7 +1404,7 @@ pub fn table_rebuild_if_needed(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
 /// the old topology. Re-mark everything (reverse: ancestors first). Ancestor
 /// queries during check_snapshots itself use the parent-walking _early
 /// variants, so the stale window ends before anything trusts the bitmaps.
-fn table_rebuild(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+fn table_rebuild(trans: &TransGuard<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
     let mut iter = BtreeIter::new(trans, Btree::snapshots, POS_MAX, BtreeIterFlags::empty());
     iter.for_each_reverse(trans, POS_MIN, |_, _, k| mark_snapshot(fs, k))?;
@@ -1566,7 +1567,7 @@ fn node_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, id: u32) -> Result
 /// error message. Each node is its own attempt - so not for a caller in the
 /// middle of one: the dump would restart it.
 #[cold]
-pub fn tree_keys_to_text(out: &mut Printbuf, trans: &BtreeTrans<'_>, start: u32)
+pub fn tree_keys_to_text(out: &mut Printbuf, trans: &TransGuard<'_>, start: u32)
     -> Result<(), BchError>
 {
     let fs = trans.fs();

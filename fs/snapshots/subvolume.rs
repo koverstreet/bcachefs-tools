@@ -26,6 +26,7 @@ use crate::btree::iter::{
     commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, KeyFn,
     Keys, LoopControl, TransAttempt, UpdateTriggerFlags,
 };
+use crate::btree::trans::TransGuard;
 use crate::alloc::capacity::DiskReservation;
 use crate::c;
 use crate::init::passes::RecoveryPass;
@@ -173,7 +174,7 @@ pub fn require_no_children(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), 
 /// the iterator, to update at - until it breaks. Each key in an attempt of
 /// its own, the snapshot read again for each: a restart retries the key.
 pub fn for_each_in_subvolume_max<'t, F, R>(
-    trans:  &BtreeTrans<'t>,
+    trans:  &TransGuard<'t>,
     iter:   &mut BtreeIter<'t>,
     end:    Bpos,
     subvol: u32,
@@ -191,7 +192,7 @@ where
 /// BtreeIter::for_each_max_commit().
 #[allow(clippy::too_many_arguments)]
 pub fn for_each_in_subvolume_max_commit<'t, F>(
-    trans:    &BtreeTrans<'t>,
+    trans:    &TransGuard<'t>,
     iter:     &mut BtreeIter<'t>,
     end:      Bpos,
     subvol:   u32,
@@ -213,7 +214,7 @@ where
 /// @f ends with ignore_restarts() is followed by a new one, as a restart's
 /// is.
 pub fn for_each_in_subvolume_max_in_trans<'t, F, R>(
-    trans:  &BtreeTrans<'t>,
+    trans:  &TransGuard<'t>,
     iter:   &mut BtreeIter<'t>,
     end:    Bpos,
     subvol: u32,

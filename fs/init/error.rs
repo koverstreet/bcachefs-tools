@@ -32,6 +32,7 @@
 use crate::init::passes::RecoveryPass;
 use crate::fs::Dev;
 use crate::btree::bkey::{pos, BkeySC, POS_MIN, ValidateFlags};
+use crate::btree::trans::TransGuard;
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
@@ -883,7 +884,7 @@ fn damaged_path_resolve(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32, path
 }
 
 /// One damaged path, and what happened to it.
-pub fn damaged_path_to_text(out: &mut Printbuf, trans: &BtreeTrans<'_>, p: &c::fsck_damaged_path) {
+pub fn damaged_path_to_text(out: &mut Printbuf, trans: &TransGuard<'_>, p: &c::fsck_damaged_path) {
     // into a buffer of its own, so a restart doesn't print it twice
     let mut path = Printbuf::new();
     match lockrestart_do(trans, |t| damaged_path_resolve(t, p.inum, p.snapshot, &mut path)) {

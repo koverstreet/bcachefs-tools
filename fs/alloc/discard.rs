@@ -54,6 +54,7 @@ use crate::btree::bkey::{pos, BkeySC, POS_MIN};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          LoopFlow, TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
+use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
 use crate::c::bch_errcode;
@@ -526,7 +527,7 @@ impl<'a> Worker<'a> {
     }
 
     /// Wait out the discards in flight, and mark free the rest's buckets.
-    fn finish(self, trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+    fn finish(self, trans: &TransGuard<'_>) -> Result<(), BchError> {
         trans.unlock_long();
         self.mark_free(trans, self.g.wait_sync())
     }
@@ -539,7 +540,7 @@ impl<'a> Worker<'a> {
 /// each device's own shortfall, so one device's pile-up isn't masked by the
 /// rest's room. And whether to flush the journal, or the write buffer, where
 /// need_discard updates may still be. The figures, and how the walk went.
-fn calculate_discard_sectors_to_release(trans: &BtreeTrans<'_>, s: &DiscardState, start: Bpos)
+fn calculate_discard_sectors_to_release(trans: &TransGuard<'_>, s: &DiscardState, start: Bpos)
     -> (DiscardRelease, Result<(), BchError>)
 {
     let fs = trans.fs();

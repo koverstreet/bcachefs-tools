@@ -23,7 +23,8 @@ use crate::alloc::capacity::DiskReservation;
 use crate::alloc::check_backpointers::check_bp_exists;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyV, BkeyVMut, POS_MIN};
 use crate::btree::iter::{commit_do, lockrestart_do, peek_parallel, BtreeIter, BtreeIterFlags, BtreeLevels,
-                         BtreeTrans, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
+                         CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::data::ec::stripe::WidenCache;
@@ -216,7 +217,7 @@ fn check_reconcile_work_one<'t>(t: &TransAttempt<'_, 't>, data_iter: &mut BtreeI
 }
 
 /// Data btree @btree against the work btrees: check_reconcile_work_data_btree().
-fn check_reconcile_work_data_btree<'t>(trans: &'t BtreeTrans<'t>, btree: Btree, rb: &mut [BtreeIter<'t>; 3],
+fn check_reconcile_work_data_btree<'t>(trans: &'t TransGuard<'t>, btree: Btree, rb: &mut [BtreeIter<'t>; 3],
                                    s: &mut PerSnapshotIoOpts, last_flushed: &mut WbMaybeFlush)
     -> Result<(), BchError>
 {
@@ -245,7 +246,7 @@ fn check_reconcile_work_data_btree<'t>(trans: &'t BtreeTrans<'t>, btree: Btree, 
 
 /// The data btrees - stripes, reflink, extents, the work btrees' order -
 /// against the work btrees: check_reconcile_work_data_btrees().
-fn check_reconcile_work_data_btrees(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+fn check_reconcile_work_data_btrees(trans: &TransGuard<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
     let rb_iter = |btree| BtreeIter::new(trans, btree, POS_MIN, BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
     let mut rb = [rb_iter(Btree::reconcile_work),
@@ -332,7 +333,7 @@ fn check_reconcile_work_phys_one<'t>(t: &TransAttempt<'_, 't>, bp_iter: &mut Btr
 }
 
 /// The backpointers against the phys btrees: check_reconcile_work_phys().
-fn check_reconcile_work_phys(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+fn check_reconcile_work_phys(trans: &TransGuard<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
     fs.recovery.progress.init(fs, c"check_reconcile_work_phys", &[Btree::backpointers], &[]);
 
@@ -426,7 +427,7 @@ fn check_reconcile_work_btree_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
 
 /// Every btree node pointer, by level - the root's key, then each level's
 /// keys - against its reconcile backpointer: check_reconcile_work_btrees().
-fn check_reconcile_work_btrees(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+fn check_reconcile_work_btrees(trans: &TransGuard<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
     let res = DiskReservation::new(fs);
     fs.recovery.progress.init_mask(fs, c"check_reconcile_work_btrees", 0, !0);
@@ -449,7 +450,7 @@ fn check_reconcile_work_btrees(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
 /// pending - against the node pointer it's to: check_reconcile_btree_bps(),
 /// through reconcile_bp_get_key(), which reports and deletes one whose
 /// pointer isn't there or isn't its.
-fn check_reconcile_btree_bps(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+fn check_reconcile_btree_bps(trans: &TransGuard<'_>) -> Result<(), BchError> {
     use c::reconcile_work_id as w;
     let fs = trans.fs();
     fs.recovery.progress.init(fs, c"check_reconcile_btree_bps", &[Btree::reconcile_scan], &[]);
@@ -491,7 +492,7 @@ fn check_stripe_can_widen_one(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k:
 }
 
 /// Stripes' can_widen: check_stripe_can_widen().
-fn check_stripe_can_widen(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+fn check_stripe_can_widen(trans: &TransGuard<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
     fs.recovery.progress.init(fs, c"check_stripe_can_widen", &[Btree::stripes], &[]);
 

@@ -19,6 +19,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{spos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
 use crate::btree::iter::{commit_do, is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags};
+use crate::btree::trans::TransGuard;
 use crate::c;
 use crate::data::ptrs::Ptrs;
 use crate::data::reconcile::trigger::BkeyVReconcile;
@@ -721,7 +722,7 @@ fn propagate_start(
 }
 
 /* After that transaction has committed: climb, then drop the op */
-fn propagate_finish(trans: &BtreeTrans<'_>, op: &mut c::bkey_i_logged_op_inode_opt_propagate)
+fn propagate_finish(trans: &TransGuard<'_>, op: &mut c::bkey_i_logged_op_inode_opt_propagate)
     -> Result<(), BchError>
 {
     let ret = resume_propagate(trans, op.as_mut());
@@ -765,7 +766,7 @@ impl c::inode_opt_change {
 
     /// After the transaction has committed: finish the propagate, if one was
     /// started, and wake reconcile, if there's a scan for it.
-    pub fn finish(&mut self, trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+    pub fn finish(&mut self, trans: &TransGuard<'_>) -> Result<(), BchError> {
         let ret = if self.propagate.k.key_type().is::<c::LoggedOpInodeOptPropagate>() {
             propagate_finish(trans, &mut self.propagate)
         } else {

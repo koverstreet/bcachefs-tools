@@ -36,6 +36,7 @@ use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::cache::BtreeCachePins;
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          TransAttempt, UpdateTriggerFlags};
+use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
 use crate::data::extents::Extents;
@@ -654,7 +655,7 @@ fn check_btree_root_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToB
     Ok(level)
 }
 
-fn check_extents_to_backpointers_pass(fs: &Fs, trans: &BtreeTrans<'_>, s: &mut ExtentsToBpState)
+fn check_extents_to_backpointers_pass(fs: &Fs, trans: &TransGuard<'_>, s: &mut ExtentsToBpState)
     -> Result<(), BchError>
 {
     let progress = Progress::recovery_masks(fs, c"extents_to_backpointers", crate::BTREE_HAS_DATA_PTRS_MASK, !0);
@@ -774,7 +775,7 @@ fn btree_node_get_and_pin(t: &TransAttempt<'_, '_>, pins: &BtreeCachePins<'_>, k
 
 /// All prefetched first, so they're read in parallel. Returns where the pinned
 /// range ends.
-fn pin_backpointer_nodes_with_missing(fs: &Fs, trans: &BtreeTrans<'_>, pins: &BtreeCachePins<'_>,
+fn pin_backpointer_nodes_with_missing(fs: &Fs, trans: &TransGuard<'_>, pins: &BtreeCachePins<'_>,
                                       start: Bpos) -> Result<Bpos, BchError> {
     let node_size = i64::from(fs.opts.btree_node_size.get());
     let mut tmp = BkeyBuf::new();
@@ -928,7 +929,7 @@ fn check_bucket_backpointers_to_extents(trans: &BtreeTrans<'_>, ca: &Dev, bucket
     Ok(())
 }
 
-fn check_backpointers_to_extents_pass(fs: &Fs, trans: &BtreeTrans<'_>, range: RangeInclusive<c::bbpos>)
+fn check_backpointers_to_extents_pass(fs: &Fs, trans: &TransGuard<'_>, range: RangeInclusive<c::bbpos>)
     -> Result<(), BchError>
 {
     let mut last_flushed = WbMaybeFlush::new()?;

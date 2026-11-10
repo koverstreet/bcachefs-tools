@@ -31,9 +31,10 @@ use crate::accounting;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
-    commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransBkey,
+    commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey,
     UpdateTriggerFlags,
 };
+use crate::btree::trans::TransGuard;
 use crate::c;
 use crate::init::passes::RecoveryPass;
 use crate::c::snapshot_id_state as IdState;
@@ -1079,7 +1080,7 @@ fn check_snapshot<'a, 't>(
 
 /// check_snapshots, in @trans: also for snapshot deletion, which runs it
 /// before deleting interior nodes.
-pub(crate) fn check_snapshots_trans(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+pub(crate) fn check_snapshots_trans(trans: &TransGuard<'_>) -> Result<(), BchError> {
     // Backwards: fixing a node's depth needs its parent's to be right already.
     let mut iter = BtreeIter::new(trans, Btree::snapshots, POS_MAX, BtreeIterFlags::PREFETCH);
     iter.for_each_reverse_commit(trans, POS_MIN, None, CommitFlags::NO_ENOSPC,

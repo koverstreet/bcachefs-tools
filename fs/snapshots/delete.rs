@@ -55,9 +55,10 @@ use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, Typed, POS_MIN};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{
-    commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
+    commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
     TransBkey, UpdateTriggerFlags,
 };
+use crate::btree::trans::TransGuard;
 use crate::c;
 use crate::init::passes::RecoveryPass;
 use crate::errcode::{bch_errcode, BchError};
@@ -496,7 +497,7 @@ fn check_deletable(t: &TransAttempt<'_, '_>, id: u32, delete_interior: bool, run
 /// check_deletable()'s refusals of node @id that show the tree, printed
 /// after its attempt: the tree dump is attempts of its own.
 #[cold]
-fn refusal_to_text(trans: &BtreeTrans<'_>, ret: &Result<(), BchError>, id: u32, run: Option<&Run<'_>>) {
+fn refusal_to_text(trans: &TransGuard<'_>, ret: &Result<(), BchError>, id: u32, run: Option<&Run<'_>>) {
     let fs = trans.fs();
     let Err(e) = ret else { return };
 
@@ -867,7 +868,7 @@ fn process_key<'a>(t: &TransAttempt<'a, '_>, iter: &BtreeIter<'a>, k: BkeySC<'_>
     delete_dead_key(t, iter, k, dying.live_child)
 }
 
-fn delete_dead_snapshot_keys_v1_btree(trans: &BtreeTrans<'_>, btree: Btree, run: &Run<'_>)
+fn delete_dead_snapshot_keys_v1_btree(trans: &TransGuard<'_>, btree: Btree, run: &Run<'_>)
     -> Result<(), BchError>
 {
     let fs = trans.fs();
@@ -884,7 +885,7 @@ fn delete_dead_snapshot_keys_v1_btree(trans: &BtreeTrans<'_>, btree: Btree, run:
     })
 }
 
-fn delete_dead_snapshot_keys_v1(trans: &BtreeTrans<'_>, run: &Run<'_>) -> Result<(), BchError> {
+fn delete_dead_snapshot_keys_v1(trans: &TransGuard<'_>, run: &Run<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
 
     fs.snapshots.delete.start_sweep(fs, c"delete_dead_snapshot_keys_v1",
@@ -900,7 +901,7 @@ fn delete_dead_snapshot_keys_v1(trans: &BtreeTrans<'_>, run: &Run<'_>) -> Result
 }
 
 fn delete_dead_snapshot_keys_range(
-    trans: &BtreeTrans<'_>,
+    trans: &TransGuard<'_>,
     res:   &DiskReservation<'_>,
     btree: Btree,
     start: Bpos,
@@ -915,7 +916,7 @@ fn delete_dead_snapshot_keys_range(
     })
 }
 
-fn delete_dead_snapshot_keys_v2(trans: &BtreeTrans<'_>, run: &Run<'_>) -> Result<(), BchError> {
+fn delete_dead_snapshot_keys_v2(trans: &TransGuard<'_>, run: &Run<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
     let d = &fs.snapshots.delete;
     let res = DiskReservation::new(fs);
@@ -1414,7 +1415,7 @@ fn get_dead_interior_snapshots(k: BkeySC<'_>, delete: &mut KVVec<InteriorDelete>
     Ok(())
 }
 
-fn collect_dead_interior_snapshots(trans: &BtreeTrans<'_>) -> Result<KVVec<InteriorDelete>, BchError> {
+fn collect_dead_interior_snapshots(trans: &TransGuard<'_>) -> Result<KVVec<InteriorDelete>, BchError> {
     let mut delete = KVVec::new();
     let mut iter = BtreeIter::new(trans, Btree::snapshots, POS_MIN, BtreeIterFlags::empty());
     iter.for_each(trans, |_, _, k| get_dead_interior_snapshots(k, &mut delete))?;

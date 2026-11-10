@@ -16,7 +16,8 @@
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::alloc::lru::{lru_check_set, LruId, LruPos};
 use crate::btree::bkey::{pos, BkeySC, BkeyV, POS_MIN};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
+use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::errcode::BchError;
@@ -109,7 +110,7 @@ fn check_bucket_to_stripe_ref(t: &TransAttempt<'_, '_>, r: Bpos) -> Result<(), B
 
 /// Every stripe's refs, then every bucket_to_stripe entry's stripe:
 /// bch2_check_stripe_refs(), in check_alloc_to_lru_refs.
-pub fn check_stripe_refs(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+pub fn check_stripe_refs(trans: &TransGuard<'_>) -> Result<(), BchError> {
     let mut last_flushed = WbMaybeFlush::new()?;
 
     BtreeIter::new(trans, Btree::stripes, POS_MIN, BtreeIterFlags::PREFETCH)
