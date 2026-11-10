@@ -246,6 +246,10 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.trans.unlock_long()
     }
 
+    pub fn wait_until<T>(&self, ev: &crate::util::futex::EventCount, cond: impl FnMut() -> Option<T>) -> T {
+        self.trans.wait_until(ev, cond)
+    }
+
     pub fn relock(&self) -> Result<(), BchError> {
         assert!(!self.spent.get(), "relock of an attempt ignore_restarts() ended");
         self.trans.relock()

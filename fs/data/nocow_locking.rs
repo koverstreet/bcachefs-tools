@@ -24,7 +24,7 @@
 
 use crate::fs::Dev;
 use crate::btree::bkey::{BkeySC, BkeyV};
-use crate::btree::iter::BtreeTrans;
+use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::c::bch_errcode;
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
@@ -162,7 +162,7 @@ impl NocowLockBucket {
 
     /// @cond is a trylock, so it's called once per wake and its result kept -
     /// unlike EventCount::wait_until(), which calls it again before sleeping.
-    fn wait_until<T>(&self, trans: Option<&BtreeTrans<'_>>, mut cond: impl FnMut() -> Option<T>) -> T {
+    fn wait_until<T>(&self, trans: Option<&TransAttempt<'_, '_>>, mut cond: impl FnMut() -> Option<T>) -> T {
         match trans {
             Some(t) => t.wait_until(&self.wait, cond),
             None    => loop {
@@ -219,7 +219,7 @@ impl NocowLocks {
 
     /// Locks @buckets, waiting if need be - with @trans, as a transaction
     /// waits, its btree locks dropped.
-    pub fn lock(&self, fs: &Fs, trans: Option<&BtreeTrans<'_>>, buckets: &[u64], kind: NocowKind) {
+    pub fn lock(&self, fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, buckets: &[u64], kind: NocowKind) {
         if self.trylock(fs, buckets, kind) {
             return;
         }
@@ -353,7 +353,7 @@ pub(crate) fn bkey_trylock(fs: &'static Fs, k: BkeySC<'_>, devs: &[Option<DevRef
 }
 
 /// bkey_trylock(), waiting as NocowLocks::lock() does.
-pub(crate) fn bkey_lock(fs: &'static Fs, trans: Option<&BtreeTrans<'_>>, k: BkeySC<'_>, devs: &[Option<DevRef>],
+pub(crate) fn bkey_lock(fs: &'static Fs, trans: Option<&TransAttempt<'_, '_>>, k: BkeySC<'_>, devs: &[Option<DevRef>],
                         kind: NocowKind) -> Locked {
     let buckets = devs_buckets(fs, k, devs);
     fs.nocow_locks.lock(fs, trans, &buckets, kind);
@@ -363,7 +363,7 @@ pub(crate) fn bkey_lock(fs: &'static Fs, trans: Option<&BtreeTrans<'_>>, k: Bkey
 /// Locks @k's buckets on the devices of @cas, waiting as NocowLocks::lock()
 /// does: the write path's, which unlocks them bucket by bucket as its bios
 /// complete.
-pub(crate) fn bkey_lock_cas(fs: &Fs, trans: Option<&BtreeTrans<'_>>, k: BkeySC<'_>, cas: &[Option<&Dev>],
+pub(crate) fn bkey_lock_cas(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, k: BkeySC<'_>, cas: &[Option<&Dev>],
                             kind: NocowKind) {
     fs.nocow_locks.lock(fs, trans, &cas_buckets(fs, k, cas), kind)
 }

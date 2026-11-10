@@ -738,8 +738,8 @@ impl c::data_update {
                         None => moving.updates_idle().then_some(None),
                     });
                     locked.unwrap_or_else(|| {
-                        t.trans().unlock();
-                        nocow_locking::bkey_lock(fs, Some(t.trans()), k, devs, NocowKind::Copy)
+                        t.unlock();
+                        nocow_locking::bkey_lock(fs, Some(t), k, devs, NocowKind::Copy)
                     })
                 }
             });
@@ -750,7 +750,7 @@ impl c::data_update {
             return fs.throw(bch_errcode::BCH_ERR_data_update_done_unwritten);
         }
 
-        t.trans().unlock();
+        t.unlock();
 
         self.bios_init(io_opts, buf_bytes)?;
 

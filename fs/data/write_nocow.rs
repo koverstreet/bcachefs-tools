@@ -223,7 +223,7 @@ fn nocow_write_submit(t: &TransAttempt<'_, '_>, op: &mut Running<Op>) -> Result<
 
         t.unlock();
 
-        bkey_lock_cas(fs, Some(t.trans()), k, devs, NocowKind::Update);
+        bkey_lock_cas(fs, Some(t), k, devs, NocowKind::Update);
 
         /*
          * This could be handled better: If we're able to trylock the
