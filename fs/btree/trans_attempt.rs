@@ -190,6 +190,24 @@ where
     }
 }
 
+impl BtreeTrans<'_> {
+    // use consuming version whenever possible
+    /// A pending restart that won't be retried, ended, so the transaction can
+    /// be put.
+    #[inline(always)]
+    pub(crate) fn abandon_restart(&self) {
+        self.begin_raw();
+    }
+}
+
+impl TransGuard<'_> {
+    /// Put, with a pending restart that won't be retried.
+    #[inline(always)]
+    pub(crate) fn abandon_restart(self) {
+        BtreeTrans::abandon_restart(&self);
+    }
+}
+
 /// A key to update with, ours to edit while the attempt runs: in its buffer,
 /// never moved - what won't fit is NoRoom. Typed, its value is a whole @V;
 /// untyped, any key.

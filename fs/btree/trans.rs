@@ -155,14 +155,6 @@ impl<'f> BtreeTrans<'f> {
         TransAttempt::new(self, self.begin_raw())
     }
 
-    // use consuming version whenever possible
-    /// A pending restart that won't be retried, ended, so the transaction can
-    /// be put.
-    #[inline(always)]
-    pub(crate) fn abandon_restart(&self) {
-        self.begin_raw();
-    }
-
     /// The key updates queued, without the path table borrowed: Paths::updates()
     /// is the way to them.
     ///
@@ -463,12 +455,6 @@ impl<'f> core::ops::Deref for TransGuard<'f> {
 }
 
 impl<'f> TransGuard<'f> {
-    /// Put, with a pending restart that won't be retried.
-    #[inline(always)]
-    pub(crate) fn abandon_restart(self) {
-        BtreeTrans::abandon_restart(&self);
-    }
-
     /// For C, which holds it until bch2_trans_put().
     pub fn into_raw(self) -> *mut BtreeTrans<'f> {
         core::mem::ManuallyDrop::new(self).trans.as_ptr()
