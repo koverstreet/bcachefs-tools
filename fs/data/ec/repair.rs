@@ -13,6 +13,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{commit_do, is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          TransAttempt, UpdateTriggerFlags};
+use crate::btree::trans::TransGuard;
 use crate::c;
 use crate::data::copygc;
 use crate::data::ec::buf::{blocks_good, blocks_in, validate_msg, MemWait, StripeBuf, PRE};
@@ -176,7 +177,7 @@ fn drop_block_extent(t: &TransAttempt<'_, '_>, idx: u64, block: u32, bp: BkeySC<
 }
 
 /// Every extent of block @block of stripe @s taken out of it.
-fn drop_block_extents(trans: &BtreeTrans<'_>, s: BkeySC<'_, c::Stripe<Validated>>, block: u32) -> Result<(), BchError> {
+fn drop_block_extents(trans: &TransGuard<'_>, s: BkeySC<'_, c::Stripe<Validated>>, block: u32) -> Result<(), BchError> {
     // set_needs_reconcile() may charge for padding pointers
     let res = DiskReservation::new(trans.fs());
     let idx = s.k.p.offset;
@@ -572,7 +573,7 @@ pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, ca
 /// Read @s - which the caller has open - as the fold would: the blocks in
 /// @required, then the rest if one of those is bad (the bool). Waits for
 /// buffer memory with no btree locks held.
-pub(crate) fn repair_read(trans: &BtreeTrans<'_>, s: BkeySC<'_, c::Stripe<Validated>>, required: u32)
+pub(crate) fn repair_read(trans: &TransGuard<'_>, s: BkeySC<'_, c::Stripe<Validated>>, required: u32)
     -> Result<(KBox<StripeBuf>, bool), BchError>
 {
     let fs = trans.fs();

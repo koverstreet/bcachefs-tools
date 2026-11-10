@@ -22,6 +22,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeLevels, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
+use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
 use crate::data::ec::stripe::WidenCache;
@@ -164,7 +165,7 @@ impl ScanCookie {
 
     /// The scan's done: delete its cookie, unless it's been requested again
     /// since - whether it was.
-    pub fn complete(self, trans: &BtreeTrans<'_>) -> Result<bool, BchError> {
+    pub fn complete(self, trans: &TransGuard<'_>) -> Result<bool, BchError> {
         let fs = trans.fs();
         let mut now = 0;
         commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| {

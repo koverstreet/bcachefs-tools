@@ -278,7 +278,7 @@ impl<'a> Moving<'a> {
         MovingIo { ctxt: NonNull::from(&self.0), write, sectors, _ref: self.0.in_flight.get() }
     }
 
-    pub fn trans(&self) -> &BtreeTrans<'a> {
+    pub fn trans(&self) -> &TransGuard<'a> {
         &self.0.trans
     }
 

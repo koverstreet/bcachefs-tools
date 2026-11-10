@@ -59,6 +59,7 @@ use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyV, POS_MIN};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{is_restart, lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags,
                          BtreeTrans, CommitFlags, TransAttempt};
+use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::data::ec::repair::{stripe_repair, StripeRepair};
@@ -242,7 +243,7 @@ impl WorkBuf {
 
     /// The next entry, from @work_pos up to @end: a batch read once the last's
     /// done, and @work_pos moved past it - next_reconcile_entry().
-    fn next(&mut self, trans: &BtreeTrans<'_>, work_pos: &mut c::bbpos, end: Bpos)
+    fn next(&mut self, trans: &TransGuard<'_>, work_pos: &mut c::bbpos, end: Bpos)
         -> Result<Option<Bpos>, BchError>
     {
         if self.next == self.pos.len() {

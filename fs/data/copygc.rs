@@ -61,7 +61,8 @@ use crate::alloc::background::alloc_to_v4;
 use crate::alloc::buckets::u64_to_bucket;
 use crate::alloc::lru::{LruId, LruPos};
 use crate::btree::bkey::{pos, BkeyV};
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, LoopFlow, TransAttempt};
+use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, LoopFlow, TransAttempt};
+use crate::btree::trans::TransGuard;
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::moving::{MoveStats, MovingCtxt};
@@ -331,7 +332,7 @@ struct Copygc<'f, 'w> {
 }
 
 impl<'f, 'w> Copygc<'f, 'w> {
-    fn trans(&self) -> &BtreeTrans<'w> {
+    fn trans(&self) -> &TransGuard<'w> {
         self.ctxt.trans()
     }
 
