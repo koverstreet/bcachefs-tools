@@ -227,13 +227,19 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// Checked: nothing queued before @f, and no relock or commit after.
     /// Not checked: nothing borrowed from the attempt - a key, which points
     /// into a node @f's attempts may have rewritten or freed - is used after.
-    pub fn ignore_restarts<T>(&self, f: impl FnOnce(&'a BtreeTrans<'t>) -> Result<T, BchError>)
+    pub fn ignore_restarts<T>(&self, f: impl FnOnce(&TransGuard<'t>) -> Result<T, BchError>)
         -> Result<T, BchError>
     {
         assert!(!self.has_updates(), "ignore_restarts() with updates queued: @f's begin would drop them");
         self.spent.set(true);
         self.end();
-        f(self.trans)
+        f(&self.lend_owner())
+    }
+
+    /// The transaction's owner, for work an ended attempt runs loops in: lent,
+    /// not owned - the guard it came from puts it.
+    fn lend_owner(&self) -> ManuallyDrop<TransGuard<'t>> {
+        ManuallyDrop::new(unsafe { TransGuard::from_raw(self.trans.raw()) })
     }
 
     /// Ended by ignore_restarts(): the loop running it must begin anew.
@@ -333,7 +339,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     #[must_use]
     pub fn close<F>(&self, flags: impl Into<CommitOpts>, f: F) -> BchError
     where
-        F: FnOnce(&'a BtreeTrans<'t>) -> Result<(), BchError>,
+        F: FnOnce(&TransGuard<'t>) -> Result<(), BchError>,
     {
         if self.has_updates() {
             if let Err(e) = self.commit(None, flags) {
@@ -341,7 +347,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             }
         }
         self.end();
-        if let Err(e) = f(self.trans) {
+        if let Err(e) = f(&self.lend_owner()) {
             return e;
         }
         self.trans.begin().restart(bch_errcode::BCH_ERR_transaction_restart_nested)
@@ -360,9 +366,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.spent.set(true);
         self.end();
 
-        // lent, not owned: the guard it came from puts it
-        let owner = ManuallyDrop::new(unsafe { TransGuard::from_raw(self.trans.raw()) });
-        if let Err(e) = f(&owner) {
+        if let Err(e) = f(&self.lend_owner()) {
             return e;
         }
         self.trans.begin().restart(bch_errcode::BCH_ERR_transaction_restart_nested)
