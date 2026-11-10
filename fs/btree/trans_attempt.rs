@@ -25,8 +25,8 @@
 //! What an attempt hands out - memory, keys, iterator positions - is good
 //! until the transaction next begins. A begin inside an attempt ends it: the
 //! attempt must then finish with a restart, nothing borrowed from it used
-//! again. That's checked only at runtime, by verify_not_restarted() and a
-//! spent attempt's asserts.
+//! again. That's checked only at runtime, by verify_not_restarted() and an
+//! ended attempt's checks.
 
 use super::bkey::*;
 use super::types::{BtreeIter, BtreeTrans};
@@ -63,10 +63,9 @@ pub struct TransAttempt<'a, 't> {
     trans:         &'a BtreeTrans<'t>,
     /// the transaction's when the attempt began - or when restarts_handled()
     restart_count: Cell<u32>,
-    /// ended by ignore_restarts()
-    spent:         Cell<bool>,
-    /// counted in the transaction's attempts_live: until dropped, or ended
-    /// for work that runs loops of its own
+    /// counted in the transaction's attempts_live, and usable: until dropped,
+    /// or ended for work that runs loops of its own - ignore_restarts(),
+    /// close(), owner_and_restart()
     live:          Cell<bool>,
     t:             PhantomData<&'a mut ()>,
 }
@@ -78,7 +77,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         TransAttempt {
             trans,
             restart_count: Cell::new(restart_count),
-            spent:         Cell::new(false),
             live:          Cell::new(true),
             t:             PhantomData,
         }
@@ -88,6 +86,13 @@ impl<'a, 't> TransAttempt<'a, 't> {
         if self.live.replace(false) {
             self.trans.set_attempts_live(self.trans.attempts_live() - 1);
         }
+    }
+
+    /// An ended attempt hands nothing out: its locks and memory are gone, or
+    /// the work it ended for's.
+    fn check_live(&self) {
+        crate::warn_once!(!self.live.get(), self.trans.fs(), "{}: an attempt used after it ended",
+                          self.trans.fn_name());
     }
 }
 
@@ -133,7 +138,10 @@ impl<'i, 'f> TransRef<'i> for &'i TransGuard<'f> {
 }
 
 impl<'a, 't> TransRef<'a> for &TransAttempt<'a, 't> {
-    fn trans_raw(&self) -> *mut BtreeTrans<'_> { self.trans.raw() }
+    fn trans_raw(&self) -> *mut BtreeTrans<'_> {
+        self.check_live();
+        self.trans.raw()
+    }
 }
 
 /// Exempts begin() from the dropped-updates warning while it lives; restores
@@ -189,6 +197,7 @@ impl fmt::Display for NoRoom {
 
 impl<'a, 't> TransAttempt<'a, 't> {
     pub fn raw(&self) -> *mut BtreeTrans<'_> {
+        self.check_live();
         self.trans.raw()
     }
 
@@ -209,7 +218,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     pub fn verify_not_restarted(&self) {
-        if !self.spent.get() {
+        if self.live.get() {
             self.trans.verify_not_restarted(self.restart_count.get());
         }
     }
@@ -231,7 +240,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         -> Result<T, BchError>
     {
         assert!(!self.has_updates(), "ignore_restarts() with updates queued: @f's begin would drop them");
-        self.spent.set(true);
         self.end();
         f(&self.lend_owner())
     }
@@ -242,14 +250,16 @@ impl<'a, 't> TransAttempt<'a, 't> {
         ManuallyDrop::new(unsafe { TransGuard::from_raw(self.trans.raw()) })
     }
 
-    /// Ended by ignore_restarts(): the loop running it must begin anew.
+    /// Ended - by ignore_restarts(), close() or owner_and_restart(): the loop
+    /// running it must begin anew.
     pub fn is_spent(&self) -> bool {
-        self.spent.get()
+        !self.live.get()
     }
 
     /// For what a step does to the transaction itself - a write buffer flush,
     /// a nested loop - which ends this attempt.
     pub fn trans(&self) -> &'a BtreeTrans<'t> {
+        self.check_live();
         self.trans
     }
 
@@ -270,7 +280,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     pub fn relock(&self) -> Result<(), BchError> {
-        assert!(!self.spent.get(), "relock of an attempt ignore_restarts() ended");
+        assert!(self.live.get(), "relock of an attempt that ended");
         self.trans.relock()
     }
 
@@ -303,7 +313,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         disk_res: Option<&DiskReservation<'_>>,
         flags:    impl Into<CommitOpts>,
     ) -> Result<(), BchError> {
-        assert!(!self.spent.get(), "commit in an attempt ignore_restarts() ended");
+        assert!(self.live.get(), "commit in an attempt that ended");
         self.trans.commit(disk_res, flags)
     }
 
@@ -315,7 +325,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         flush:    Option<&Opaque<c::closure>>,
         flags:    impl Into<CommitOpts>,
     ) -> Result<(), BchError> {
-        assert!(!self.spent.get(), "commit in an attempt ignore_restarts() ended");
+        assert!(self.live.get(), "commit in an attempt that ended");
         self.trans.commit_inner(disk_res, flush, flags.into(), false)
     }
 
@@ -363,7 +373,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         F: FnOnce(&TransGuard<'t>) -> Result<(), BchError>,
     {
         assert!(!self.has_updates(), "owner_and_restart() with updates queued: @f's begin would drop them");
-        self.spent.set(true);
         self.end();
 
         if let Err(e) = f(&self.lend_owner()) {
@@ -542,6 +551,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// @bytes of zeroed transaction memory, rounded up to u64s: off the top of
     /// the transaction's buffer, or the transaction restarted to grow it.
     fn kmalloc_raw(&self, bytes: usize) -> Result<*mut u8, BchError> {
+        self.check_live();
         let size = bytes.next_multiple_of(size_of::<u64>());
         let t = self.trans;
 
