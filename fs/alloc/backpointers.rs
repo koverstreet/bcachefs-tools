@@ -38,8 +38,9 @@ use crate::init::passes::RecoveryPass;
 use crate::fs::Dev;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeyS, BkeySC, BkeyOps};
-use crate::btree::iter::{is_restart, polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans,
+use crate::btree::iter::{lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
+use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbFlush;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::LockedNode;
@@ -76,6 +77,8 @@ pub struct bp_scan_iter {
     pub nr_flushes: u64,
     pub progress: *mut c::progress_indicator,
     pub batch: KVVec<BkeyI<c::Backpointer>>,
+    /* a refill found nothing: the scan's at its end */
+    pub done: bool,
 }
 
 /// A backpointer btree position, ordered as the bpos it's encoded in.
@@ -536,7 +539,7 @@ pub fn backpointer_get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, 
 
 impl c::bp_scan_iter {
     fn new(btree: Btree, pos: Bpos, progress: *mut c::progress_indicator) -> Self {
-        Self { btree, pos, nr_flushes: 0, progress, batch: KVVec::new() }
+        Self { btree, pos, nr_flushes: 0, progress, batch: KVVec::new(), done: false }
     }
 
     /// The next backpointer, or None past @end: in the caller's attempt @t,
@@ -556,11 +559,8 @@ impl c::bp_scan_iter {
             self.nr_flushes = last_flushed.nr_flushes();
         }
 
-        if self.batch.is_empty() {
-            self.refill(t.trans(), end)?;
-            if !self.batch.is_empty() {
-                return Err(t.trans().begin().restart(bch_errcode::BCH_ERR_transaction_restart_nested));
-            }
+        if self.batch.is_empty() && !self.done {
+            return Err(t.owner_and_restart(|trans| self.refill(trans, end)));
         }
         Ok(self.batch.last().map(BkeySC::from))
     }
@@ -574,7 +574,7 @@ impl c::bp_scan_iter {
     /// worth, grown as it's read with nothing locked: a page's worth, then
     /// doubling. When it can't grow, the batch is what's been read - unless
     /// that's nothing.
-    fn refill(&mut self, trans: &BtreeTrans<'_>, end: Bpos) -> Result<(), BchError> {
+    fn refill(&mut self, trans: &TransGuard<'_>, end: Bpos) -> Result<(), BchError> {
         let bp_size = size_of::<BkeyI<c::Backpointer>>();
         let max = totalram_bytes() / 16 / bp_size;
         // SAFETY: init()'s caller's, which outlives the scan
@@ -617,6 +617,7 @@ impl c::bp_scan_iter {
 
         // not sort_unstable(): its recursion overflows the kernel stack
         heapsort_by(&mut self.batch, |a, b| b.v().target().cmp(&a.v().target()));
+        self.done = self.batch.is_empty();
         Ok(())
     }
 }
@@ -648,24 +649,13 @@ impl<'p> BpScanIter<'p> {
         F: for<'a> FnMut(&TransAttempt<'a, '_>, BkeySC<'_, c::Backpointer>, WbFlush<'_>)
             -> Result<(), BchError>,
     {
-        loop {
-            let t = trans.begin();
-
-            let bp = match self.raw.peek(&t, end, &last_flushed) {
-                Ok(None)                 => return Ok(()),
-                Ok(Some(bp))             => bp,
-                Err(e) if is_restart(&e) => continue,
-                Err(e)                   => return Err(e),
-            };
-
-            match f(&t, bp, last_flushed.reborrow()) {
-                Err(e) if is_restart(&e) => continue,
-                Err(e)                   => return Err(e),
-                Ok(())                   => {}
-            }
-
-            t.verify_not_restarted();
+        while lockrestart_do(trans, |t| {
+            let Some(bp) = self.raw.peek(t, end, &last_flushed)? else { return Ok(false) };
+            f(t, bp, last_flushed.reborrow())?;
+            Ok(true)
+        })? {
             self.raw.advance();
         }
+        Ok(())
     }
 }
