@@ -10,7 +10,7 @@ use crate::btree::bkey::{bch2_bkey_maybe_mergable, bkey_eq, bkey_gt, bkey_le, bk
 use crate::btree::iter::{btree_id_cached, commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
 use crate::btree::journal_overlay;
-use crate::btree::path::{BtreePath, KeyVal, PathIdx};
+use crate::btree::path::{BtreePath, KeyVal, PathIdx, Paths};
 use crate::btree::types::QueuedKey;
 use crate::btree::write_buffer::insert_checks;
 use crate::c;
@@ -616,7 +616,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
             bch2_cut_front_s(fs, new.k.p, BkeyS::from(&mut update));
 
-            self.update_by_path(iter.path, QueuedKey::from(&update),
+            self.update_by_path(&mut self.trans().paths(), iter.path, QueuedKey::from(&update),
                                 UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | flags, crate::ret_ip!());
         }
 
@@ -789,20 +789,20 @@ impl<'a, 't> TransAttempt<'a, 't> {
             }
         }
 
+        let mut paths = t.paths();
+
         /*
          * Ensure that updates to cached btrees go to the key cache:
          */
-        let (cached, level, btree) = {
-            let paths = t.paths();
-            (paths[path_idx].cached(), paths[path_idx].level(), paths[path_idx].btree_id())
-        };
-        if !flags.contains(UpdateTriggerFlags::KEY_CACHE_RECLAIM) && !cached && level == 0 && btree_id_cached(btree) {
-            self.update_get_key_cache(iter)?;
+        let path = &paths[path_idx];
+        if !flags.contains(UpdateTriggerFlags::KEY_CACHE_RECLAIM) &&
+           !path.cached() && path.level() == 0 && btree_id_cached(path.btree_id()) {
+            self.update_get_key_cache(&mut paths, iter)?;
 
             path_idx = iter.key_cache_path.get();
         }
 
-        let i = self.update_by_path(path_idx, QueuedKey::from(&key.k), flags, ip);
+        let i = self.update_by_path(&mut paths, path_idx, QueuedKey::from(&key.k), flags, ip);
 
         /*
          * If a key is present in the key cache, it must also exist in the
@@ -811,14 +811,12 @@ impl<'a, 't> TransAttempt<'a, 't> {
          * the key cache - but the key has to exist in the btree for that to
          * work:
          */
-        let (cached, old_btree_u64s) = {
-            let paths = t.paths();
-            let u = &paths.updates()[i];
-            (u.bits.cached(), u.old_btree_u64s)
-        };
-        if cached && (old_btree_u64s == 0 ||
-                      key.k().key_type().is_deleted() ||
-                      t.paths()[path_idx].key_cached().expect("a cached update's key cache entry").immediate_flush()) {
+        let u = &paths.updates()[i];
+        if u.bits.cached() && (u.old_btree_u64s == 0 ||
+                               key.k().key_type().is_deleted() ||
+                               paths[path_idx].key_cached().expect("a cached update's key cache entry")
+                                   .immediate_flush()) {
+            drop(paths);
             self.flush_new_cached_update(i, flags, ip)
         } else {
             Ok(())
@@ -826,12 +824,11 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     /// The update queued: its index in the transaction's updates.
-    fn update_by_path(&self, path_idx: PathIdx, key: QueuedKey, flags: UpdateTriggerFlags, ip: c_ulong)
-        -> usize
+    fn update_by_path(&self, paths: &mut Paths<'_>, path_idx: PathIdx, key: QueuedKey, flags: UpdateTriggerFlags,
+                      ip: c_ulong) -> usize
     {
         let fs = self.fs();
         let t = self.trans();
-        let mut paths = t.paths();
 
         let path = &paths[path_idx];
         let (btree, level) = (path.btree_id(), u32::from(path.level()));
@@ -872,7 +869,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                          "overwriting an update whose triggers ran");
 
             let old_path = u.path;
-            t.path_put(&mut paths, old_path, true);
+            t.path_put(paths, old_path, true);
 
             let u = paths.update_mut(i);
             u.flags        = n.flags;
@@ -902,7 +899,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         fs.event_trace(events::update_by_path, |out| {
             prt!(out, "{} overwrite {}\n", t.fn_name(), overwrite as u32);
-            t.path_to_text_short(out, &paths, path_idx);
+            t.path_to_text_short(out, paths, path_idx);
             crate::btree::bkey::bkey_val_to_text(out, Some(fs), BkeySC::from(n.key()));
         });
 
@@ -926,19 +923,16 @@ impl<'a, 't> TransAttempt<'a, 't> {
          * grows the paths table trans->updates moves with it - they're a single
          * allocation, see btree_paths_realloc():
          */
-        let (key, old_k, old_v) = {
-            let mut paths = t.paths();
-            t.path_set_should_be_locked(&mut paths, iter.path);
-
-            let u = paths.update_mut(i);
-            u.bits.set_key_cache_already_flushed(true);
-            u.flags |= UpdateTriggerFlags::NORUN.bits();
-            (u.queued_key(), u.old_k, u.old_v)
-        };
-
-        let i = self.update_by_path(iter.path, key, flags, ip);
-
         let mut paths = t.paths();
+        t.path_set_should_be_locked(&mut paths, iter.path);
+
+        let u = paths.update_mut(i);
+        u.bits.set_key_cache_already_flushed(true);
+        u.flags |= UpdateTriggerFlags::NORUN.bits();
+        let (key, old_k, old_v) = (u.queued_key(), u.old_k, u.old_v);
+
+        let i = self.update_by_path(&mut paths, iter.path, key, flags, ip);
+
         let u = paths.update_mut(i);
         u.old_k = old_k;
         u.old_v = old_v;
@@ -946,9 +940,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(())
     }
 
-    fn update_get_key_cache(&self, iter: &BtreeIter<'a>) -> Result<(), BchError> {
+    fn update_get_key_cache(&self, paths: &mut Paths<'_>, iter: &BtreeIter<'a>) -> Result<(), BchError> {
         let t = self.trans();
-        let mut paths = t.paths();
         let kcp = iter.key_cache_path.get();
 
         if kcp == 0 || !paths[kcp].should_be_locked() || paths[kcp].pos != iter.pos() {
@@ -960,21 +953,20 @@ impl<'a, 't> TransAttempt<'a, 't> {
             let intent = iter.flags & BtreeIterFlags::INTENT.bits() != 0;
             if iter.key_cache_path.get() == 0 {
                 let flags = if intent { BtreeIterFlags::INTENT } else { BtreeIterFlags::empty() } | BtreeIterFlags::CACHED;
-                iter.key_cache_path.set(t.path_get(&mut paths, iter.btree(), iter.pos(), 1, 0, flags, crate::ret_ip!()));
+                iter.key_cache_path.set(t.path_get(paths, iter.btree(), iter.pos(), 1, 0, flags, crate::ret_ip!()));
             }
 
-            iter.key_cache_path.set(t.path_set_pos(&mut paths, iter.key_cache_path.get(), iter.pos(), intent,
+            iter.key_cache_path.set(t.path_set_pos(paths, iter.key_cache_path.get(), iter.pos(), intent,
                                                    crate::ret_ip!()));
 
-            t.path_traverse(&mut paths, iter.key_cache_path.get(), BtreeIterFlags::CACHED)?;
+            t.path_traverse(paths, iter.key_cache_path.get(), BtreeIterFlags::CACHED)?;
 
             if paths[iter.key_cache_path.get()].key_cached().expect("a traversed key cache path's entry").dirty() {
-                drop(paths);
                 self.fs().event_inc_trace(events::trans_restart_key_cache_raced, |out| prt!(out, "{}", t.fn_name()));
                 return Err(self.restart(bch_errcode::BCH_ERR_transaction_restart_key_cache_raced));
             }
 
-            t.path_set_should_be_locked(&mut paths, iter.key_cache_path.get());
+            t.path_set_should_be_locked(paths, iter.key_cache_path.get());
         }
 
         Ok(())
