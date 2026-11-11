@@ -338,6 +338,18 @@ impl<'a, I: CuckooItem, S: CuckooHasher, const W: usize> Table<'a, I, S, W> {
         }
     }
 
+    /// A slot for @key, freed to store into, and the CPU held for the store:
+    /// find_path(), then claim_room(). Out of line, as a chain is half a
+    /// kilobyte, and an insert may be deep in a stack - under a btree lock
+    /// wait, say.
+    #[inline(never)]
+    fn claim_path(&self, key: &I::Target, moves: &AtomicU64) -> Result<(&'a Slot<I>, CpuGuard), NotIn> {
+        let chain = self.find_path(key)?;
+        self.faults.move_window();
+        let cpu = CpuGuard::new();
+        Ok((self.claim_room(&chain, moves)?, cpu))
+    }
+
     /// @chain's first slot, freed to store into: the empty end claimed, then
     /// each item marked, from the end back, and the items moved along - each
     /// store to a slot @chain claimed, so plain. The caller's preemption is
@@ -494,21 +506,14 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
             if !fits::<W>(t.bits(), self.nr.load(Relaxed) + 1, &self.faults) {
                 return Err(Full { newest: t.head, no_chain: false });
             }
-            let chain = match t.find_path(key) {
-                Ok(chain) => chain,
+            let (s, _cpu) = match t.claim_path(key, &self.moves) {
+                Ok(claimed) => claimed,
                 Err(NotIn::NoChain) => return Err(Full { newest: t.head, no_chain: true }),
                 Err(NotIn::Retired) if t.is_newest() => return Err(Full { newest: t.head, no_chain: false }),
                 Err(_) => {
                     core::hint::spin_loop();
                     continue;
                 }
-            };
-
-            self.faults.move_window();
-            let _cpu = CpuGuard::new();
-            let Ok(s) = t.claim_room(&chain, &self.moves) else {
-                core::hint::spin_loop();
-                continue;
             };
             // counted before it's in, so a remove never takes the count past it
             self.nr.fetch_add(1, Relaxed);
@@ -718,8 +723,8 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
             };
 
             let t = self.tables_locked(g).last().expect("cuckoo: draining with no newer table");
-            let chain = match t.find_path(key_of(&i)) {
-                Ok(chain) => chain,
+            let (d, _cpu) = match t.claim_path(key_of(&i), &self.moves) {
+                Ok(claimed) => claimed,
                 Err(NotIn::NoChain) => {
                     saw!(self.faults, grown);
                     drop(rcu);
@@ -730,13 +735,6 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
                     core::hint::spin_loop();
                     continue;
                 }
-            };
-
-            self.faults.move_window();
-            let _cpu = CpuGuard::new();
-            let Ok(d) = t.claim_room(&chain, &self.moves) else {
-                core::hint::spin_loop();
-                continue;
             };
             d.store(Contents::Unstable(i));
             self.faults.move_window();
