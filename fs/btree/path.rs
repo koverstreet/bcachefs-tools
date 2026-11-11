@@ -532,6 +532,11 @@ impl<T: PathNode> BtreePath<T> {
     }
 }
 
+pub(in crate::btree) struct PathsUpdates<'a> {
+    pub(in crate::btree) paths:   Paths<'a>,
+    pub(in crate::btree) updates: &'a mut [c::btree_insert_entry],
+}
+
 impl Paths<'_> {
     pub(crate) fn sorted(&self) -> &[PathIdx] {
         let t = self.trans;
@@ -577,6 +582,14 @@ impl Paths<'_> {
         }
         t.nr_updates.set(t.nr_updates.get() + 1);
         self.update_mut(i)
+    }
+
+    pub(in crate::btree) fn paths_and_updates(&mut self) -> PathsUpdates<'_> {
+        let t = self.trans;
+        PathsUpdates {
+            paths:   Paths { trans: t, took: false },
+            updates: unsafe { core::slice::from_raw_parts_mut(t.updates.get(), t.nr_updates.get() as usize) },
+        }
     }
 
     fn allocated_mut(&mut self) -> &mut Bitmap {
