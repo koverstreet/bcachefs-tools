@@ -16,20 +16,35 @@ pub struct NoRoom;
 
 pub struct EntryWriter<'a> {
     /* the buffer past what's written */
-    room:    &'a mut [u64],
-    written: usize,
+    room: &'a mut [u64],
+    size: usize,
 }
 
 const HEADER_U64S: usize = size_of::<Head<c::jset_entry>>() / size_of::<u64>();
 
+/// An entry's header, of @ty, for @btree_id at @level, with @u64s of value:
+/// journal_entry_init().
+#[inline(always)]
+fn header(ty: c::bch_jset_entry_type, btree_id: u8, level: u8, u64s: usize) -> u64 {
+    let mut e = Head::<c::jset_entry>::default();
+    e.type_ = ty.0 as u8;
+    e.btree_id = btree_id;
+    e.level = level;
+    e.set_val_u64s(u64s);
+
+    let mut h = 0u64;
+    h.as_mut_bytes().copy_from_slice(plain_bytes(&e));
+    h
+}
+
 impl<'a> EntryWriter<'a> {
     pub fn new(buf: &'a mut [u64]) -> Self {
-        EntryWriter { room: buf, written: 0 }
+        EntryWriter { size: buf.len(), room: buf }
     }
 
     /// The u64s written.
     pub fn len(&self) -> usize {
-        self.written
+        self.size - self.room.len()
     }
 
     /// The u64s left to write.
@@ -45,7 +60,6 @@ impl<'a> EntryWriter<'a> {
         }
         let (b, rest) = core::mem::take(&mut self.room).split_at_mut(u64s);
         self.room = rest;
-        self.written += u64s;
         Ok(b)
     }
 
@@ -56,15 +70,17 @@ impl<'a> EntryWriter<'a> {
     pub fn add_entry(&mut self, ty: c::bch_jset_entry_type, btree_id: u8, level: u8, u64s: usize)
         -> Result<&'a mut [u64], NoRoom>
     {
-        let mut e = Head::<c::jset_entry>::default();
-        e.type_ = ty.0 as u8;
-        e.btree_id = btree_id;
-        e.level = level;
-        e.set_val_u64s(u64s);
-
         let (hdr, v) = self.reserve(HEADER_U64S + u64s)?.split_at_mut(HEADER_U64S);
-        hdr.as_mut_bytes().copy_from_slice(plain_bytes(&e));
+        hdr[0] = header(ty, btree_id, level, u64s);
         Ok(v)
+    }
+
+    /// The room left, filled with empty entries - of a header each - so
+    /// what's written uses all of it: bch2_journal_res_put()'s fill.
+    pub fn pad(&mut self) {
+        if !self.room.is_empty() {
+            core::mem::take(&mut self.room).fill(header(c::bch_jset_entry_type::btree_keys, 0, 0, 0));
+        }
     }
 
     /// An entry of @ty, for @btree_id at @level, holding @data, zero padded to

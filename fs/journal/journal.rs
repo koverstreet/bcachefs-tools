@@ -337,18 +337,18 @@ impl c::journal {
         unsafe { data.byte_add(size_of::<Head<c::jset>>()).cast::<u64>().add(res.offset as usize).cast() }
     }
 
-    /// Entries written into @res, from where it's at: what @f writes is used up,
-    /// and res_put() fills only what's left.
+    /// Entries written into @res, from where it's at, using all of it: what @f
+    /// doesn't write is empty entries.
     pub fn res_append_entries<R>(&self, res: &mut c::journal_res, f: impl FnOnce(&mut EntryWriter<'_>) -> R) -> R {
         ebug_assert!(res.ref_, "entries into a journal reservation not held");
 
         let buf = unsafe { core::slice::from_raw_parts_mut(self.res_entry(res).cast::<u64>(), res.u64s.into()) };
         let mut w = EntryWriter::new(buf);
         let ret = f(&mut w);
+        w.pad();
 
-        let u64s = w.len();
-        res.offset += u64s as u32;
-        res.u64s -= u64s as u16;
+        res.offset += u32::from(res.u64s);
+        res.u64s = 0;
         ret
     }
 
@@ -365,20 +365,20 @@ impl c::journal {
         #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
         self.res_map.release(0);
 
-        while res.u64s != 0 {
-            let mut e = Head::<c::jset_entry>::default();
-            e.type_ = c::bch_jset_entry_type::btree_keys.0 as u8;
-            unsafe { self.res_entry(res).write(e) };
-
-            let u64s = size_of::<Head<c::jset_entry>>() / size_of::<u64>();
-            ebug_assert!(u64s <= usize::from(res.u64s), "journal reservation of {} u64s, short of an entry", res.u64s);
-            res.offset += u64s as u32;
-            res.u64s -= u64s as u16;
+        if unlikely(res.u64s != 0) {
+            self.res_pad(res);
         }
 
         self.buf_put(res.seq);
 
         res.ref_ = false;
+    }
+
+    /// A reservation put with room it didn't write: filled with empty entries.
+    #[cold]
+    #[inline(never)]
+    fn res_pad(&self, res: &mut c::journal_res) {
+        self.res_append_entries(res, |_| ());
     }
 
     #[inline(always)]
