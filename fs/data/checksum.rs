@@ -328,7 +328,9 @@ impl Fs {
         checksum(Some(self), ty, nonce, data)
     }
 
-    /// The checksum of @r's data. As checksum().
+    /// The checksum of @r's data. As checksum(). Not inlined: a Csum is 344
+    /// bytes, and the write path, where it's called from, is deep.
+    #[inline(never)]
     pub fn checksum_range(&self, ty: c::bch_csum_type, nonce: Nonce, r: BioRange<'_>) -> c::bch_csum {
         let mut csum = Csum::new(Some(self), ty, nonce);
         for chunk in r {
