@@ -39,7 +39,7 @@ use crate::util::alloc::KBox;
 use crate::util::closure::StackClosure;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;
-use crate::{bch_err, c_function_name, log_msg_ratelimited, prt};
+use crate::{bch_err, here, log_msg_ratelimited, prt};
 use core::mem::size_of;
 use core::sync::atomic::Ordering::Relaxed;
 use pin_init::stack_pin_init;
@@ -416,7 +416,7 @@ fn stripe_repair_opened(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, 
 
     // Too many blocks bad, or a reconstruct that still doesn't check out:
     // either way, rebuild around the blocks that read clean.
-    if read_all && validate_msg(fs, s, &mut buf, true, b.live, c_function_name!()).is_err() {
+    if read_all && validate_msg(fs, s, &mut buf, true, b.live, here!()).is_err() {
         return stripe_repair_unrebuildable(ctxt, h, s, buf, b);
     }
 

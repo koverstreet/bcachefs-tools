@@ -474,7 +474,7 @@ macro_rules! bch_log_ratelimited {
     ($fs:expr, $level:expr, $($arg:tt)*) => {{
         static RATELIMIT: $crate::util::log::Ratelimit = $crate::util::log::Ratelimit::new();
         let fs: &$crate::fs::Fs = $fs;
-        if !RATELIMIT.suppress(fs, $crate::c_function_name!()) {
+        if !RATELIMIT.suppress(fs, $crate::here!()) {
             $crate::util::log::log(fs, $level, $crate::message!($($arg)*));
         }
     }};
@@ -495,7 +495,7 @@ macro_rules! log_msg_ratelimited {
         static RATELIMIT: [$crate::util::log::Ratelimit; $n] = [const { $crate::util::log::Ratelimit::new() }; $n];
         let fs: &$crate::fs::Fs = $fs;
         let mut msg = $crate::util::log::LogMsg::new(fs);
-        msg.set_suppressed(RATELIMIT[$idx].suppress(fs, $crate::c_function_name!()));
+        msg.set_suppressed(RATELIMIT[$idx].suppress(fs, $crate::here!()));
         msg
     }};
 }
@@ -512,7 +512,7 @@ macro_rules! bch_err_dev_ratelimited {
     ($ca:expr, $($arg:tt)*) => {{
         static RATELIMIT: $crate::util::log::Ratelimit = $crate::util::log::Ratelimit::new();
         let ca: &$crate::fs::Dev = $ca;
-        if !RATELIMIT.suppress(ca.fs(), $crate::c_function_name!()) {
+        if !RATELIMIT.suppress(ca.fs(), $crate::here!()) {
             $crate::util::log::log_dev(ca, $crate::util::log::LogLevel::ERR, $crate::message!($($arg)*));
         }
     }};
@@ -665,17 +665,23 @@ pub fn fn_name(path: &'static str) -> &'static str {
     name.rsplit("::").next().unwrap_or(name)
 }
 
-/// As function_name!(), but as a C string that lives forever, for C that
-/// takes __func__.
+/// This call site, "file:line", as a C string that lives forever: what a
+/// message says it came from, where C passes __func__.
 #[macro_export]
-macro_rules! c_function_name {
-    () => {{
-        static NAME: $crate::util::log::CFnName = $crate::util::log::CFnName::new();
-        NAME.get($crate::function_name!())
-    }};
+macro_rules! here {
+    () => {
+        const {
+            match ::core::ffi::CStr::from_bytes_with_nul(
+                ::core::concat!(::core::file!(), ":", ::core::line!(), "\0").as_bytes()
+            ) {
+                Ok(s) => s,
+                Err(_) => panic!("a NUL in file!()"),
+            }
+        }
+    };
 }
 
-/// One call site's function name, for c_function_name!(): Rust only has it at
+/// One call site's function name, for TransFnName: Rust only has it at
 /// runtime and unterminated, so it's copied into a static buffer on first use.
 #[doc(hidden)]
 pub struct CFnName {

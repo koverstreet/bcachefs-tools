@@ -121,7 +121,7 @@ impl InodeInfo {
 
     /// @inum's, looked up in @t, the inode cache first.
     pub fn get_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<InodeRef, BchError> {
-        Self::get_in(t, inum, Some(crate::c_function_name!()))
+        Self::get_in(t, inum, Some(crate::here!()))
     }
 
     /// get_trans(), logging as @warn if it isn't there.
@@ -522,7 +522,7 @@ impl<'i> UpdateLock<'i> {
 
             let mut iter = BtreeIter::uninit();
             let mut bi = inode::__peek(t, &mut iter, inode.inum(), BtreeIterFlags::INTENT,
-                                       Some(crate::c_function_name!()))?;
+                                       Some(crate::here!()))?;
             let old_r = inode::reconcile_opts_get(fs, &bi);
 
             inode.fold_times(&mut bi);

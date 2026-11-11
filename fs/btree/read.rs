@@ -850,7 +850,7 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
          * clear it if it did any work (scheduling recovery passes,
          * marking superblock
          */
-        buf.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_hard, crate::c_function_name!()));
+        buf.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_hard, crate::here!()));
 
         b.flags.set_read_error(true);
         let _ = btree_lost_data(fs, &mut buf, btree);
@@ -858,7 +858,7 @@ unsafe fn read_work(rb: NonNull<BtreeReadBio>) {
         prt!(&mut buf, "error {}\n", err.msg());
     } else if !failed.is_empty() {
         /* Separate ratelimit states for soft vs. hard errors */
-        buf.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_soft, crate::c_function_name!()));
+        buf.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_soft, crate::here!()));
 
         let dev = rb.pick.ptr.dev().into();
         let used = failed.dev(dev).is_some();

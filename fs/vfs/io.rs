@@ -116,7 +116,7 @@ fn inode_journal_seq(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<u
     let fs = t.fs();
     let mut iter = BtreeIter::uninit();
     let mut u = inode::__peek(t, &mut iter, inum, BtreeIterFlags::empty(),
-                             Some(crate::c_function_name!()))?;
+                             Some(crate::here!()))?;
 
     let cur_seq = fs.journal_cur_seq();
     let seq = cur_seq.min(u.bi_journal_seq);

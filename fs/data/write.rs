@@ -1097,7 +1097,7 @@ fn __write_index(op: &mut Op) {
             } else {
                 /* Separate ratelimit_states for hard and soft errors */
                 static RATELIMIT: [Ratelimit; 2] = [const { Ratelimit::new() }; 2];
-                msg.set_suppressed(RATELIMIT[ret.is_err() as usize].suppress(fs, crate::c_function_name!()));
+                msg.set_suppressed(RATELIMIT[ret.is_err() as usize].suppress(fs, crate::here!()));
             }
 
             let k = op.insert_keys.front().expect("an index update with no keys");

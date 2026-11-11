@@ -30,7 +30,7 @@ use crate::util::kernel::PAGE_SIZE;
 use crate::util::log::{LogLevel, LogMsg, Ratelimit};
 use crate::util::sleep::Sleep;
 use crate::util::vstructs::Validated;
-use crate::{c_function_name, prt};
+use crate::{here, prt};
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::CStr;
 use core::pin::Pin;
@@ -591,7 +591,7 @@ pub fn validate_msg(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut Stri
     };
 
     let mut msg = LogMsg::with_level(fs, level);
-    write!(msg, "{}(): {}:\n", caller.to_str().unwrap_or("?"),
+    write!(msg, "{}: {}:\n", caller.to_str().unwrap_or("?"),
            if ret.is_err() || damage_matters { "error reading stripe" } else { "damaged stripe blocks, none in use" });
     prt!(&mut msg, "{}\n", s.untyped().to_text(fs));
     errs_to_text(&mut msg, fs, s, buf, is_open, required);
@@ -601,6 +601,6 @@ pub fn validate_msg(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut Stri
         Ok(()) if damage_matters => write!(msg, "successful reconstruct\n"),
         Ok(())               => {}
     }
-    msg.set_suppressed(ratelimit.suppress(fs, c_function_name!()));
+    msg.set_suppressed(ratelimit.suppress(fs, here!()));
     ret
 }

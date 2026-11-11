@@ -287,7 +287,7 @@ impl InodeInfo {
         let ret = lockrestart_do(&trans, |t| {
             let mut iter = BtreeIter::uninit();
             let mut bi = inode::__peek(t, &mut iter, self.inum(), BtreeIterFlags::INTENT,
-                                       Some(crate::c_function_name!()))?;
+                                       Some(crate::here!()))?;
 
             self.fold_times(&mut bi);
             self.setattr_copy(idmap, attr, uid, kgid, &mut bi);

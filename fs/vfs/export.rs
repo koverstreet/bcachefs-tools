@@ -150,7 +150,7 @@ impl ExportOps for Fs {
         let trans = crate::btree_trans!(self);
         lockrestart_do(&trans, |t| {
             let snapshot = subvolume::get_snapshot(t, dir_inum.subvol as u32)?;
-            let bi = inode::find_by_inum_trans(t, inum, crate::c_function_name!())?;
+            let bi = inode::find_by_inum_trans(t, inum, crate::here!())?;
 
             if bi.bi_dir == dir_inum.inum {
                 let mut iter = BtreeIter::new(t, Btree::dirents, pos(bi.bi_dir, bi.bi_dir_offset),

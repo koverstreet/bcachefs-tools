@@ -257,13 +257,13 @@ pub fn fs_inconsistent(fs: &Fs, msg: &dyn ToText) -> bool {
     fs_trans_inconsistent(fs, None, msg)
 }
 
-/// Go emergency read-only, logging @msg as a fatal error in @func - if this
+/// Go emergency read-only, logging @msg as a fatal error from @from - if this
 /// is what took us read-only.
-pub fn fs_fatal_error(fs: &Fs, func: &CStr, msg: &dyn ToText) {
+pub fn fs_fatal_error(fs: &Fs, from: &CStr, msg: &dyn ToText) {
     let mut m = LogMsg::new(fs);
     m.set_suppressed(true);
 
-    prt!(&mut m, "{}(): fatal error ", func.to_str().unwrap_or("?"));
+    prt!(&mut m, "{}: fatal error ", from.to_str().unwrap_or("?"));
     msg.to_text(&mut m);
     m.newline();
 
@@ -1203,7 +1203,7 @@ macro_rules! fs_inconsistent {
 #[macro_export]
 macro_rules! fs_fatal_error {
     ($fs:expr, $($msg:tt)*) => {
-        $crate::init::error::fs_fatal_error($fs, $crate::c_function_name!(), $crate::message!($($msg)*))
+        $crate::init::error::fs_fatal_error($fs, $crate::here!(), $crate::message!($($msg)*))
     };
 }
 

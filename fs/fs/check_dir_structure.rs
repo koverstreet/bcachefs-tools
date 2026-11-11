@@ -38,7 +38,7 @@ use crate::{inode, lostfound, namei};
 use crate::util::alloc::KVVec;
 use crate::util::Printbuf;
 use crate::util::log::LogMsg;
-use crate::{bch_err_fn, bch_err_msg, bch_warn, c_function_name, inode_fsck_err, prt};
+use crate::{bch_err_fn, bch_err_msg, bch_warn, here, inode_fsck_err, prt};
 use crate::format::Btree;
 
 /// @k: a dirent, from a dirent lookup.
@@ -83,7 +83,7 @@ fn remove_backpointer(
 fn reattach_subvol(t: &TransAttempt<'_, '_>, root: c::subvol_inum) -> Result<(), BchError> {
     let fs = t.fs();
 
-    let mut inode = inode::find_by_inum_trans(t, root, c_function_name!())?;
+    let mut inode = inode::find_by_inum_trans(t, root, here!())?;
 
     let ret = remove_backpointer(t, &mut inode);
     if !matches!(&ret, Err(e) if e.matches(c::ENOENT)) {
@@ -133,7 +133,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
 
         let root = c::subvol_inum { subvol: s.k.p.offset, inum: sv.inode.get() };
 
-        inode::find_by_inum_trans(t, root, c_function_name!())?;
+        inode::find_by_inum_trans(t, root, here!())?;
 
         let parent = sv.fs_path_parent.get();
         let inode_pos = spos(0, sv.inode.get(), sv.snapshot.get());

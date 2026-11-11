@@ -176,7 +176,7 @@ use crate::util::vstructs::{Head, Validated, Unvalidated};
 use crate::util::place::Contained;
 use crate::util::workqueue::Queue;
 use crate::util::{DateTime, Nsecs, Printbuf};
-use crate::{bch_err, bch_info, c_function_name, inode, message, prt};
+use crate::{bch_err, bch_info, here, inode, message, prt};
 use core::mem::size_of;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cstruct_macros::c_export;
@@ -265,7 +265,7 @@ fn lookup_root_inode(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     lockrestart_do(&trans, |t| {
         subvolume::get(t, c::BCACHEFS_ROOT_SUBVOL, true)?;
-        inode::find_by_inum_trans(t, inum, c_function_name!()).map(drop)
+        inode::find_by_inum_trans(t, inum, here!()).map(drop)
     })
 }
 crate::recovery_pass!(lookup_root_inode => lookup_root_inode);

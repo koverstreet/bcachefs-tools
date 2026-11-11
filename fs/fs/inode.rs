@@ -541,7 +541,7 @@ fn __peek_snapshot<'a>(
     let ret = peek_slot(t, iter);
 
     match warn {
-        Some(warn) => bch_err_msg!(t.fs(), ret, "{}(): looking up inum {}:{}:",
+        Some(warn) => bch_err_msg!(t.fs(), ret, "{}: looking up inum {}:{}:",
                                    warn.to_str().unwrap_or("?"), inum.subvol, inum.inum),
         None       => ret,
     }
@@ -634,7 +634,7 @@ pub fn find_by_inum_in_snapshot(
 }
 
 /// The inode @inum, in a transaction: as bch2_inode_find_by_inum_trans(). An
-/// error is logged, naming @warn - pass c_function_name!(), as C passes
+/// error is logged, naming @warn - pass here!(), as C passes
 /// __func__. In the caller's transaction attempt.
 pub fn find_by_inum_trans(
     t:    &TransAttempt<'_, '_>,

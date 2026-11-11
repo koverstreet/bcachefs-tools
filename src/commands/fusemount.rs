@@ -1678,7 +1678,7 @@ impl Filesystem for BcachefsFs {
 
         let trans = bcachefs_kernel::btree_trans!(self.fs());
         let value = lockrestart_do(&trans, |t| {
-            let inode_u = inode::find_by_inum_trans(t, inum, bcachefs_kernel::c_function_name!())?;
+            let inode_u = inode::find_by_inum_trans(t, inum, bcachefs_kernel::here!())?;
             let mut iter = BtreeIter::uninit();
             let k = xattr::lookup(t, &mut iter, &inode_u, inum, ty, name, BtreeIterFlags::empty())?;
             Ok(xattr::value(k).to_vec())
