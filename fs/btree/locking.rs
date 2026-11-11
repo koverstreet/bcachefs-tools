@@ -1180,6 +1180,10 @@ impl BtreeTrans<'_> {
     /// @timeout jiffies, c_long::MAX for no limit: false if they weren't.
     /// Under SRCU in short waits, then without it: trans_closure_sync_timeout().
     pub fn closure_sync_timeout(&self, cl: &Opaque<c::closure>, timeout: c_long) -> bool {
+        self.closure_sync_timeout_in(&mut self.paths(), cl, timeout)
+    }
+
+    fn closure_sync_timeout_in(&self, paths: &mut Paths<'_>, cl: &Opaque<c::closure>, timeout: c_long) -> bool {
         let mut remaining = timeout;
         while remaining > 0 {
             // SAFETY: a live closure, its count atomic
@@ -1188,7 +1192,7 @@ impl BtreeTrans<'_> {
             }
 
             let start = jiffies();
-            let wait = self.srcu_wait_budget(&mut self.paths()).map_or(remaining, |left| (left as c_long).min(remaining));
+            let wait = self.srcu_wait_budget(paths).map_or(remaining, |left| (left as c_long).min(remaining));
             // SAFETY: as above; the waitlist's wake puts its ref
             if unsafe { c::closure_sync_timeout(cl.as_ptr(), wait as c_ulong) } == 0 {
                 return true;
@@ -1213,6 +1217,15 @@ impl BtreeTrans<'_> {
     /// wait_event_timeout(), with no limit: trans_wait_event().
     pub fn wait_event(&self, list: &c::closure_waitlist, cond: impl FnMut() -> bool) {
         self.wait_event_timeout(list, cond, c_long::MAX);
+    }
+
+    /// wait_event_timeout(), under the caller's borrow of the path table: @cond
+    /// mustn't take one.
+    pub(in crate::btree) fn wait_event_timeout_in(&self, paths: &mut Paths<'_>, list: &c::closure_waitlist,
+                                                  cond: impl FnMut() -> bool, timeout: c_long) -> c_long {
+        closure_wait_event_timeout_by(list, cond, timeout, |cl, t| {
+            self.closure_sync_timeout_in(paths, cl, t);
+        })
     }
 
     /// @l locked, waited for under SRCU as wait_until() waits. The caller

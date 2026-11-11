@@ -177,10 +177,12 @@ impl BtreeTrans<'_> {
     }
 
     #[inline(always)]
-    fn commit_journal_res_get(&self, t: &TransAttempt<'_, '_>, res: &mut c::journal_res, flags: u32)
+    fn commit_journal_res_get(&self, paths: &mut Paths<'_>, res: &mut c::journal_res, flags: u32)
         -> Result<(), BchError>
     {
-        let ret = self.fs().journal.res_get(res, self.journal_u64s.get(), flags, Some(t));
+        let ret = self.fs().journal.res_get_waiting(res, self.journal_u64s.get(), flags, |list, cond, timeout| {
+            self.wait_event_timeout_in(paths, list, cond, timeout)
+        });
         self.journal_res_seq.set(res.seq);
         ret?;
 
@@ -367,14 +369,14 @@ impl BtreeTrans<'_> {
         }
     }
 
-    fn commit_has_extents(&self) -> bool {
-        self.paths().updates().iter().any(|i| {
+    fn commit_has_extents(&self, paths: &Paths<'_>) -> bool {
+        paths.updates().iter().any(|i| {
             matches!(i.btree_id(), Btree::extents | Btree::reflink | Btree::stripes) || i.level() != 0
         })
     }
 
-    fn commit_error_inner(&self, t: &TransAttempt<'_, '_>, res: &mut c::journal_res, flags: CommitOpts,
-                          i: Option<usize>, err: BchError)
+    fn commit_error_inner(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, res: &mut c::journal_res,
+                          flags: CommitOpts, i: Option<usize>, err: BchError)
         -> Result<(), BchError>
     {
         let fs = self.fs();
@@ -388,14 +390,16 @@ impl BtreeTrans<'_> {
                 return fs.throw(bch_errcode::BCH_ERR_journal_reclaim_would_deadlock);
             }
 
-            return t.drop_locks_do(|| self.commit_journal_res_get(t, res, watermark(flags) | c::JOURNAL_RES_GET_CHECK));
+            return t.drop_locks_do_in(paths, |paths| {
+                self.commit_journal_res_get(paths, res, watermark(flags) | c::JOURNAL_RES_GET_CHECK)
+            });
         }
 
         if err == bch_errcode::BCH_ERR_btree_insert_btree_node_full.into() {
-            let i = self.paths().updates()[i.expect("a full node is an update's")];
-            let flags = if self.commit_has_extents() { flags.watermark_hipri() } else { flags };
+            let i = paths.updates()[i.expect("a full node is an update's")];
+            let flags = if self.commit_has_extents(paths) { flags.watermark_hipri() } else { flags };
 
-            let ret = split_leaf(self, &mut self.paths(), i.path, i.key().k.u64s.into(), flags);
+            let ret = split_leaf(self, paths, i.path, i.key().k.u64s.into(), flags);
             if ret.is_ok() && self.has_interior_updates() {
                 return Err(self.restart(bch_errcode::BCH_ERR_transaction_restart_split_with_interior_updates));
             }
@@ -403,18 +407,18 @@ impl BtreeTrans<'_> {
             if ret.as_ref().is_err_and(is_restart) {
                 fs.event_inc_trace(events::trans_restart_btree_node_split, |out| {
                     prt!(out, "{}\n", self.fn_name());
-                    self.path_to_text(out, &self.paths(), i.path);
+                    self.path_to_text(out, paths, i.path);
                 });
             }
             return ret;
         }
 
         if err == bch_errcode::BCH_ERR_btree_insert_need_mark_replicas.into() {
-            return t.drop_locks_do(|| crate::accounting::update_sb(t));
+            return t.drop_locks_do_in(paths, |_| crate::accounting::update_sb(t));
         }
 
         if err == bch_errcode::BCH_ERR_btree_insert_need_journal_reclaim.into() {
-            self.unlock();
+            self.unlock_from(paths, crate::ret_ip!());
 
             fs.event_inc_trace(events::trans_blocked_journal_reclaim, |out| {
                 let kc = &fs.btree.key_cache;
@@ -425,23 +429,23 @@ impl BtreeTrans<'_> {
 
             let times = &fs.times[c::bch_time_stats::blocked_key_cache_flush as usize];
             times.track_event_change(true);
-            let ret = fs.journal.key_cache_reclaim_wait(|| self.unlock_long());
+            let ret = fs.journal.key_cache_reclaim_wait(|| self.unlock_long_from(paths, crate::ret_ip!()));
             times.track_event_change(false);
 
             ret?;
-            return self.relock();
+            return self.relock_from(paths);
         }
 
         Err(err)
     }
 
     #[inline(never)]
-    fn commit_error(&self, t: &TransAttempt<'_, '_>, res: &mut c::journal_res, flags: CommitOpts, i: Option<usize>,
-                    err: BchError)
+    fn commit_error(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, res: &mut c::journal_res,
+                    flags: CommitOpts, i: Option<usize>, err: BchError)
         -> Result<(), BchError>
     {
         let fs = self.fs();
-        let ret = self.commit_error_inner(t, res, flags, i, err);
+        let ret = self.commit_error_inner(t, paths, res, flags, i, err);
 
         assert!(ret.as_ref().is_err_and(is_restart) == (self.restarted().0 != 0));
 
@@ -799,7 +803,7 @@ impl BtreeTrans<'_> {
          * succeed:
          */
         if likely(!no_journal_res) {
-            self.commit_journal_res_get(t, res, watermark(flags) | c::JOURNAL_RES_GET_NONBLOCK)?;
+            self.commit_journal_res_get(paths, res, watermark(flags) | c::JOURNAL_RES_GET_NONBLOCK)?;
         }
 
         /*
@@ -1002,7 +1006,7 @@ impl BtreeTrans<'_> {
          * throttles on - they have to be elevated before we take a journal
          * reservation, not just in the btree node alloc path.
          */
-        if self.commit_has_extents() {
+        if self.commit_has_extents(&self.paths()) {
             flags = flags.watermark_hipri();
         }
 
@@ -1128,7 +1132,7 @@ impl BtreeTrans<'_> {
 
             match ret {
                 Ok(())   => break,
-                Err(err) => paths.lend(|| self.commit_error(t, &mut res, flags, errored_at, err))?,
+                Err(err) => self.commit_error(t, &mut paths, &mut res, flags, errored_at, err)?,
             }
         }
 

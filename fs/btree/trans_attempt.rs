@@ -502,6 +502,18 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(v)
     }
 
+    /// drop_locks_do(), for the btree code's own: under the caller's borrow of
+    /// the path table, passed to @f.
+    pub(in crate::btree) fn drop_locks_do_in<T>(&self, paths: &mut Paths<'_>,
+                                                f: impl FnOnce(&mut Paths<'_>) -> Result<T, BchError>)
+        -> Result<T, BchError>
+    {
+        self.trans.unlock_from(paths, crate::ret_ip!());
+        let v = f(paths)?;
+        self.relock_or_nested_in(paths)?;
+        Ok(v)
+    }
+
     /// Retake the locks after what dropped them: a restart if they changed
     /// hands, or transaction_restart_nested, not relocked, if what dropped
     /// them ran attempts of its own.

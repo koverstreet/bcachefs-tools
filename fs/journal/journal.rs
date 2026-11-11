@@ -436,6 +436,19 @@ impl c::journal {
     pub fn res_get(&self, res: &mut c::journal_res, u64s: u32, flags: u32, trans: Option<&TransAttempt<'_, '_>>)
         -> Result<(), BchError>
     {
+        self.res_get_waiting(res, u64s, flags, |list, cond, timeout| match trans {
+            Some(trans) => trans.wait_event_timeout(list, cond, timeout),
+            None => closure_wait_event_timeout(list, cond, timeout),
+        })
+    }
+
+    /// res_get(), blocking with @wait: wait_event_timeout() as the caller's
+    /// transaction does it.
+    #[inline(always)]
+    pub fn res_get_waiting(&self, res: &mut c::journal_res, u64s: u32, flags: u32,
+                           mut wait: impl FnMut(&c::closure_waitlist, &mut dyn FnMut() -> bool, c_long) -> c_long)
+        -> Result<(), BchError>
+    {
         ebug_assert!(!res.ref_, "journal reservation taken while holding one");
         ebug_assert!(self.flags.get(Journal::running), "journal reservation before the journal is running");
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -448,7 +461,7 @@ impl c::journal {
         res.u64s = u64s as u16;
 
         if !self.res_get_fast(res, flags) {
-            self.res_get_slowpath(res, flags, trans)?;
+            self.res_get_slowpath(res, flags, &mut wait)?;
         }
 
         if flags & c::JOURNAL_RES_GET_CHECK == 0 {
@@ -1105,7 +1118,8 @@ impl c::journal {
      * btree node write locks.
      */
     #[inline(never)]
-    fn res_get_slowpath(&self, res: &mut c::journal_res, flags: u32, trans: Option<&TransAttempt<'_, '_>>)
+    fn res_get_slowpath(&self, res: &mut c::journal_res, flags: u32,
+                        wait_on: &mut dyn FnMut(&c::closure_waitlist, &mut dyn FnMut() -> bool, c_long) -> c_long)
         -> Result<(), BchError>
     {
         if flags & c::JOURNAL_RES_GET_NONBLOCK != 0 {
@@ -1128,10 +1142,7 @@ impl c::journal {
             ret.set(self.__res_get(res, flags));
             !ret.get().is_err_and(|e| e.matches(bch_errcode::BCH_ERR_operation_blocked))
         };
-        let mut wait = |timeout| match trans {
-            Some(trans) => trans.wait_event_timeout(&self.async_wait, &mut got, timeout),
-            None => closure_wait_event_timeout(&self.async_wait, &mut got, timeout),
-        };
+        let mut wait = |timeout| wait_on(&self.async_wait, &mut got, timeout);
 
         if wait(total_wait) != 0 {
             return ret.get();
