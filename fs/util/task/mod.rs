@@ -42,14 +42,14 @@
 //!
 //! An await of a Completion that isn't done names its Done in the poll's
 //! Polled - lent to every poll through Context::ext() - and returns Pending.
-//! An await waits on one thing: two named in one poll is a bug, and panics.
-//! When the poll returns, run() publishes the Done in @waiting - not before,
-//! because only then has every level of the state machine stored where it
-//! resumes. The IO's completer marks the Done and calls wake(), which takes
-//! @waiting from that Done to null if that's what it holds, and dispatches the
-//! task. If the task isn't parked on that Done - it's running, and will see
-//! the Done when it next looks, or it's parked on another - wake() writes
-//! nothing.
+//! An await waits on one thing: two named in one poll is a bug, and panics -
+//! poll_once() starts a future without awaiting it. When the poll returns,
+//! run() publishes the Done in @waiting - not before, because only then has
+//! every level of the state machine stored where it resumes. The IO's
+//! completer marks the Done and calls wake(), which takes @waiting from that
+//! Done to null if that's what it holds, and dispatches the task. If the task
+//! isn't parked on that Done - it's running, and will see the Done when it
+//! next looks, or it's parked on another - wake() writes nothing.
 //!
 //! The two sides are the wait_event()/wake_up() protocol: run() stores
 //! @waiting, then checks the Done; the completer stores the Done, then checks
@@ -508,6 +508,26 @@ impl RawWork for Header {
 
 pub fn current_task() -> impl Future<Output = TaskRef> {
     core::future::poll_fn(|cx| Poll::Ready(task_in(cx).expect("polled outside a task of ours")))
+}
+
+/// Polls @f once, in this task's poll, and goes on: @f is started, not awaited.
+/// What it parks on is forgotten - wake() writes nothing to a task not parked
+/// on that Done, and @f, awaited later, looks at it again - and the task's
+/// target is put back as it was. Where @f resumes is the task's when it's
+/// awaited: an await of something already done doesn't move the task.
+pub fn poll_once<F: Future>(mut f: Pin<&mut F>) -> impl Future<Output = Poll<F::Output>> + '_ {
+    core::future::poll_fn(move |cx| {
+        let task = task_in(cx).expect("polled outside a task of ours");
+        debug_assert!(polled_of(cx).parks_on.is_none());
+        let target = &unsafe { task.0.as_ref() }.target;
+        let was = target.get();
+
+        let ret = f.as_mut().poll(cx);
+
+        polled_of(cx).parks_on = None;
+        target.set(was);
+        Poll::Ready(ret)
+    })
 }
 
 struct Polled {
