@@ -361,7 +361,9 @@ fn stripe_repair_reload(t: &TransAttempt<'_, '_>, key: &mut BkeyBuf, s: Bpos) ->
 
 /// Stripe @s, as read into @buf, can't be reconstructed: rebuild a narrower
 /// stripe of the blocks that read clean, in place with new parity, after
-/// taking every other block's extents out of the stripe.
+/// taking every other block's extents out of the stripe. Not inlined: it's
+/// rare, and stripe_repair_opened()'s frame is under every move of a repair.
+#[inline(never)]
 fn stripe_repair_unrebuildable(ctxt: &Moving<'_>, h: OpenStripe<'_>, s: BkeySC<'_, c::Stripe<Validated>>,
                                buf: KBox<StripeBuf>, b: StripeBlocks) -> Result<StripeRepair, BchError>
 {
@@ -533,6 +535,10 @@ fn repair_bad_block(ctxt: &Moving<'_>, trans: &TransGuard<'_>, read: BkeySC<'_, 
 /// block: its extents outside the bad granule are intact, and may be needed
 /// if the stripe can't be reconstructed. A restart is the walk's, which
 /// retries the block.
+///
+/// Not inlined: the walk's frame is under every move it issues, and a stripe
+/// repair's locals needn't be.
+#[inline(never)]
 pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, ca: &Dev,
                                  bp: BkeySC<'_, c::Backpointer>, k: BkeySC<'_>) -> Result<(), BchError> {
     let fs = t.fs();
