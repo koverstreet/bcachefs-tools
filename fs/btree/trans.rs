@@ -881,16 +881,7 @@ impl BtreeTrans<'_> {
         }
 
         if self.restarted() == bch_errcode::BCH_ERR_transaction_restart_mem_realloced {
-            let new_bytes = self.mem_with(|m| m.realloc_bytes_required);
-            ebug_assert!(new_bytes <= c::BTREE_TRANS_MEM_MAX);
-
-            let reserved = self.allocate_dropping_locks_norelock(paths, || {
-                self.mem_with(|m| m.reserve(new_bytes as usize)).ok()
-            });
-            if reserved.is_none() {
-                let p = c.btree.trans.malloc_pool.alloc_raw(c::GFP_KERNEL);
-                self.mem_with(|m| m.adopt_pool_buf(p));
-            }
+            self.mem_realloc(paths);
         }
 
         for i in self.path_idxs() {
@@ -970,6 +961,23 @@ impl BtreeTrans<'_> {
 
         self.verify_not_unlocked_or_in_restart();
         self.restart_count.get()
+    }
+
+    /// begin_from()'s, after a restart for room: the memory grown to what the
+    /// attempt asked for - or, failing that, a mempool element.
+    #[cold]
+    #[inline(never)]
+    fn mem_realloc(&self, paths: &mut Paths<'_>) {
+        let new_bytes = self.mem_with(|m| m.realloc_bytes_required);
+        ebug_assert!(new_bytes <= c::BTREE_TRANS_MEM_MAX);
+
+        let reserved = self.allocate_dropping_locks_norelock(paths, || {
+            self.mem_with(|m| m.reserve(new_bytes as usize)).ok()
+        });
+        if reserved.is_none() {
+            let p = self.fs().btree.trans.malloc_pool.alloc_raw(c::GFP_KERNEL);
+            self.mem_with(|m| m.adopt_pool_buf(p));
+        }
     }
 
     /// The updates queued, for an error message.
