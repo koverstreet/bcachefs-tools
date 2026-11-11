@@ -92,8 +92,10 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// An ended attempt hands nothing out: its locks and memory are gone, or
     /// the work it ended for's.
     fn check_live(&self) {
-        crate::warn_once!(!self.live.get(), self.trans.fs(), "{}: an attempt used after it ended",
-                          self.trans.fn_name());
+        if cfg!(CONFIG_BCACHEFS_DEBUG) {
+            crate::warn_once!(!self.live.get(), self.trans.fs(), "{}: an attempt used after it ended",
+                              self.trans.fn_name());
+        }
     }
 }
 
