@@ -569,7 +569,8 @@ fn unpack_field_fast(bytes: &[u8], k: u32, uf: &BkeyUnpackField, offset: u64) ->
     let raw = le64_at(bytes, k.wrapping_add_signed(uf.byte_offset as i32));
 
     /* Field ends at top of register; shr brings it to bit 0 cleanly */
-    (raw >> uf.shift_right).wrapping_add(offset)
+    /* < 64 past the sentinel: the mask only spares the shift its overflow check */
+    (raw >> (uf.shift_right & 63)).wrapping_add(offset)
 }
 
 impl c::bkey_packed_padded {
