@@ -437,7 +437,10 @@ fn stripe_repair_opened(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, 
 
 /// Stripe @idx, in an attempt of its own, opened for the repair of the blocks
 /// @blocks says - live, and bad: None if there's nothing to repair, once that's
-/// committed; or if @blocks says None, or someone else has it open.
+/// committed; or if @blocks says None, or someone else has it open. Not
+/// inlined: its iterator and key aren't needed in the frame the repair runs
+/// under.
+#[inline(never)]
 fn stripe_open_for_repair<'f>(
     trans:      &TransGuard<'f>,
     idx:        u64,
