@@ -17,7 +17,7 @@ use crate::btree::bkey::{BkeyI, BkeyP, BKEY_U64S};
 use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::interior::check_topology_msg;
 use crate::btree::iter::BtreeTrans;
-use crate::btree::path::{BtreePath, LockedNode, PathIdx, Paths};
+use crate::btree::path::{BtreePath, LockedNode, PathIdx, Paths, PathsUpdates};
 use crate::btree::types::BtreeWriteType;
 use crate::btree::write::{bch2_btree_init_next, bch2_btree_post_write_cleanup, __bch2_btree_node_write,
                           BtreeWriteFlags};
@@ -126,11 +126,11 @@ unsafe extern "C" fn node_flush1(j: *mut c::journal, pin: *mut Pin, seq: u64) ->
 
 impl BtreeTrans<'_> {
     #[inline]
-    pub(crate) fn node_prep_for_write(&self, paths: &mut Paths<'_>, b: &BtreeNode) {
+    pub(in crate::btree) fn node_prep_for_write(&self, pu: &mut PathsUpdates<'_>, b: &BtreeNode) {
         let fs = self.fs();
 
         if unlikely(b.flags.just_written()) && bch2_btree_post_write_cleanup(fs, b) {
-            self.node_reinit_iter(paths, unsafe { LockedNode::new(b) });
+            self.node_reinit_iter(pu, unsafe { LockedNode::new(b) });
         }
 
         /*
@@ -138,7 +138,7 @@ impl BtreeTrans<'_> {
          * a new bset to insert into:
          */
         if b.want_new_bset(unsafe { b.contents() }, fs).is_some() {
-            bch2_btree_init_next(self, paths, b);
+            bch2_btree_init_next(self, pu, b);
         }
     }
 
@@ -260,9 +260,10 @@ impl BtreeTrans<'_> {
     /// # Safety
     /// Path @idx's node at its level is write locked.
     #[inline(always)]
-    pub(crate) unsafe fn insert_key_leaf(&self, paths: &mut Paths<'_>, idx: PathIdx, insert: &mut BkeyI,
+    pub(in crate::btree) unsafe fn insert_key_leaf(&self, pu: &mut PathsUpdates<'_>, idx: PathIdx, insert: &mut BkeyI,
                                          journal_seq: u64) {
         let fs = self.fs();
+        let paths = &mut pu.paths;
         let level = paths[idx].level() as usize;
         let b = unsafe {
             &*core::ptr::from_ref(paths[idx].locked_btree_node(level).expect("a write locked path has its node").node())
@@ -309,7 +310,7 @@ impl BtreeTrans<'_> {
         }
 
         if u64s_added > live_u64s_added && unlikely(bch2_maybe_compact_whiteouts(fs, b)) {
-            self.node_reinit_iter(paths, unsafe { LockedNode::new(b) });
+            self.node_reinit_iter(pu, unsafe { LockedNode::new(b) });
         }
     }
 }
@@ -318,7 +319,7 @@ impl BtreeTrans<'_> {
 
 #[c_export]
 pub fn bch2_btree_node_prep_for_write(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, b: &BtreeNode) {
-    trans.node_prep_for_write(paths, b)
+    trans.node_prep_for_write(&mut paths.paths_and_updates(), b)
 }
 
 /// # Safety
@@ -327,5 +328,5 @@ pub fn bch2_btree_node_prep_for_write(trans: &BtreeTrans<'_>, #[lent(trans)] pat
 pub unsafe fn bch2_btree_insert_key_leaf(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
                                          path: *mut BtreePath, insert: *mut c::bkey_i, journal_seq: u64) {
     let insert = unsafe { &mut *<BkeyI>::from_raw_mut(insert) };
-    unsafe { trans.insert_key_leaf(paths, trans.path_idx_of(path), insert, journal_seq) }
+    unsafe { trans.insert_key_leaf(&mut paths.paths_and_updates(), trans.path_idx_of(path), insert, journal_seq) }
 }

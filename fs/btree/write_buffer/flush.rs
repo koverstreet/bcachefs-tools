@@ -194,7 +194,7 @@ fn flush_one<'a>(
     if !*write_locked {
         trans.node_lock_write(&mut trans.paths(), iter.path, 0)?;
 
-        trans.node_prep_for_write(&mut trans.paths(), b);
+        trans.node_prep_for_write(&mut trans.paths().paths_and_updates(), b);
         *write_locked = true;
     }
 
@@ -206,7 +206,7 @@ fn flush_one<'a>(
     ebug_assert!(wb.k().k.p == trans.paths()[iter.path].pos);
 
     let seq = wb.seq();
-    unsafe { trans.insert_key_leaf(&mut trans.paths(), iter.path, wb.k_mut(), seq) };
+    unsafe { trans.insert_key_leaf(&mut trans.paths().paths_and_updates(), iter.path, wb.k_mut(), seq) };
     cnt.fast += 1;
 
     let contents = unsafe { b.contents() };

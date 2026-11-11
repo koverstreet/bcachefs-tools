@@ -692,7 +692,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
 
     trans.node_lock_write(paths, path, level)?;
 
-    trans.node_prep_for_write(paths, &b);
+    trans.node_prep_for_write(&mut paths.paths_and_updates(), &b);
 
     let u64s = update.parent_keys_u64s();
     if !b.insert_fits(b.contents(), u64s) {
@@ -743,13 +743,13 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
 
     let added_dead_u64s = u64s + usize::from(old_live_u64s) > old_u64s + usize::from(live_u64s);
     if added_dead_u64s && bch2_maybe_compact_whiteouts(fs, &b) {
-        trans.node_reinit_iter(paths, b);
+        trans.node_reinit_iter(&mut paths.paths_and_updates(), b);
     }
 
     update.updated_node(&b);
     trans.node_unlock_write(paths, path, level);
 
-    trans.revalidate_updates_in_node(paths, b);
+    trans.revalidate_updates_in_node(&mut paths.paths_and_updates(), b);
     Ok(())
 }
 

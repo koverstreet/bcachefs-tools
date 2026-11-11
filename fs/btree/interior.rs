@@ -844,7 +844,7 @@ impl<'t> InteriorUpdate<'t> {
             self.node_free_inmem(paths, idx, b);
         }
         for n in new {
-            self.trans.node_add(paths, n.locked());
+            self.trans.node_add(&mut paths.paths_and_updates(), n.locked());
         }
         for &(_, b) in old {
             self.trans.node_verify_not_in_iters(paths, &b);

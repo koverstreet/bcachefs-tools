@@ -10,7 +10,7 @@ use crate::btree::journal_overlay::peek_slot;
 use crate::btree::locking::btree_node_locked_type::*;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{KeyVal, LockedNode, NodePtr, PathIdx, Paths};
+use crate::btree::path::{KeyVal, LockedNode, NodePtr, PathIdx, Paths, PathsUpdates};
 use crate::c;
 use crate::errcode::bch_errcode;
 use crate::format::Btree;
@@ -68,13 +68,13 @@ impl BtreeTrans<'_> {
         }
     }
 
-    pub(crate) fn revalidate_updates_in_node(&self, paths: &mut Paths<'_>, b: LockedNode<'_, BtreeNode>) {
+    pub(in crate::btree) fn revalidate_updates_in_node(&self, pu: &mut PathsUpdates<'_>, b: LockedNode<'_, BtreeNode>) {
         let fs = self.fs();
         let data = b.contents().data();
         let btree = Btree(b.c.btree_id.into());
+        let PathsUpdates { paths, updates } = pu;
 
-        for i in 0..self.nr_updates.get() as usize {
-            let e = paths.update_mut(i);
+        for e in updates.iter_mut() {
             let pos = e.key().k.p;
 
             if e.cached() || e.key_cache_flushing() || e.level() != b.c.level || e.btree_id() != btree ||
@@ -82,9 +82,8 @@ impl BtreeTrans<'_> {
                 continue;
             }
 
-            let path = e.path;
             let mut old_k = e.old_k;
-            let mut old_v = paths[path].peek_slot(&mut old_k).map_or(ptr::null(), |KeyVal(v)| v);
+            let mut old_v = paths[e.path].peek_slot(&mut old_k).map_or(ptr::null(), |KeyVal(v)| v);
 
             if self.journal_replay_not_finished() {
                 if let Some(j_k) = unsafe { peek_slot(fs, btree, b.c.level.into(), pos) } {
@@ -93,7 +92,6 @@ impl BtreeTrans<'_> {
                 }
             }
 
-            let e = paths.update_mut(i);
             e.old_k = old_k;
             e.old_v = old_v;
         }
@@ -103,8 +101,9 @@ impl BtreeTrans<'_> {
      * A btree node is being replaced - update the iterator to point to the new
      * node:
      */
-    pub(crate) fn node_add(&self, paths: &mut Paths<'_>, b: LockedNode<'_, BtreeNode>) {
+    pub(in crate::btree) fn node_add(&self, pu: &mut PathsUpdates<'_>, b: LockedNode<'_, BtreeNode>) {
         let level = b.c.level as usize;
+        let paths = &mut pu.paths;
 
         for idx in self.path_idxs() {
             let path = &paths[idx];
@@ -130,7 +129,7 @@ impl BtreeTrans<'_> {
             self.path_level_init(paths, idx, level, b);
         }
 
-        self.revalidate_updates_in_node(paths, b);
+        self.revalidate_updates_in_node(pu, b);
     }
 
     /*
@@ -178,8 +177,9 @@ impl BtreeTrans<'_> {
      * A btree node has been modified in such a way as to invalidate iterators - fix
      * them:
      */
-    pub(crate) fn node_reinit_iter(&self, paths: &mut Paths<'_>, b: LockedNode<'_, BtreeNode>) {
+    pub(in crate::btree) fn node_reinit_iter(&self, pu: &mut PathsUpdates<'_>, b: LockedNode<'_, BtreeNode>) {
         let level = b.c.level as usize;
+        let paths = &mut pu.paths;
 
         for idx in self.path_idxs() {
             if self.path_at_node(paths, idx, &b) {
@@ -187,6 +187,6 @@ impl BtreeTrans<'_> {
             }
         }
 
-        self.revalidate_updates_in_node(paths, b);
+        self.revalidate_updates_in_node(pu, b);
     }
 }

@@ -848,7 +848,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let b = paths.held_btree_node(idx, lvl).expect("a node, peeked");
 
         trans.node_lock_write(&mut paths, idx, lvl)?;
-        trans.node_prep_for_write(&mut paths, b.node());
+        trans.node_prep_for_write(&mut paths.paths_and_updates(), b.node());
 
         if usize::from(key.k().u64s) > b.keys_u64s_remaining(b.contents()) {
             trans.node_unlock_write(&mut paths, idx, lvl);

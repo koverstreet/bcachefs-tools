@@ -10,7 +10,7 @@ use crate::btree::node::sort::{
 };
 use crate::btree::node::bset::MAX_BSETS;
 use crate::btree::node::{BtreeNode, NodeContents};
-use crate::btree::path::{LockedNode, Paths};
+use crate::btree::path::{LockedNode, Paths, PathsUpdates};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::read::BsetHolder;
 use crate::btree::validate::{validate_bset, validate_bset_keys, NodeIo, NodeValidate};
@@ -780,7 +780,7 @@ pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b:
  *
  * Returns true if we sorted (i.e. invalidated iterators
  */
-pub fn bch2_btree_init_next(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode) {
+pub(in crate::btree) fn bch2_btree_init_next(trans: &BtreeTrans<'_>, pu: &mut PathsUpdates<'_>, b: &BtreeNode) {
     let fs = trans.fs();
     let mut reinit_iter = false;
 
@@ -793,7 +793,7 @@ pub fn bch2_btree_init_next(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &B
         !b.flags.write_in_flight() &&
         contents.should_compact_all(fs)
     {
-        node_write_trans(trans, paths, b, c::six_lock_type::SIX_LOCK_write,
+        node_write_trans(trans, &mut pu.paths, b, c::six_lock_type::SIX_LOCK_write,
                          BtreeWriteType::init_next_bset, BtreeWriteFlags::empty());
         reinit_iter = true;
     }
@@ -814,7 +814,7 @@ pub fn bch2_btree_init_next(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &B
     bch2_btree_build_aux_trees(b);
 
     if reinit_iter {
-        trans.node_reinit_iter(paths, unsafe { LockedNode::new(b) });
+        trans.node_reinit_iter(pu, unsafe { LockedNode::new(b) });
     }
 }
 
