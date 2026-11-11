@@ -647,13 +647,22 @@ macro_rules! warn_once {
 macro_rules! function_name {
     () => {{
         fn f() {}
-        let mut name = core::any::type_name_of_val(&f);
-        name = name.strip_suffix("::f").unwrap_or(name);
-        while let Some(n) = name.strip_suffix("::{{closure}}") {
-            name = n;
-        }
-        name.rsplit("::").next().unwrap_or(name)
+        $crate::util::log::fn_name(core::any::type_name_of_val(&f))
     }};
+}
+
+/// function_name!()'s: @path, the type name of a fn item declared in the
+/// function, made the function's name. Not inlined: a str split's searcher is
+/// over 100 bytes, and would be in the frame of every function that names
+/// itself - each that starts a transaction.
+#[doc(hidden)]
+#[inline(never)]
+pub fn fn_name(path: &'static str) -> &'static str {
+    let mut name = path.strip_suffix("::f").unwrap_or(path);
+    while let Some(n) = name.strip_suffix("::{{closure}}") {
+        name = n;
+    }
+    name.rsplit("::").next().unwrap_or(name)
 }
 
 /// As function_name!(), but as a C string that lives forever, for C that

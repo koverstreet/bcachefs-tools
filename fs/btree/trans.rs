@@ -58,9 +58,20 @@ use cstruct_macros::c_export;
 /// enough is converted to key the stats on Rust's own names.
 #[macro_export]
 macro_rules! btree_trans {
-    ($fs:expr) => {{
+    ($fs:expr) => {
+        $crate::btree::trans::TransGuard::new_fn($fs, $crate::trans_fn_idx!())
+    };
+}
+
+/// The index of the function this is expanded in, in TRANSACTION_FNS: its
+/// name, registered by this call site's TransFnName on first use.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! trans_fn_idx {
+    () => {{
         static FN: $crate::btree::trans::TransFnName = $crate::btree::trans::TransFnName::new();
-        $crate::btree::trans::TransGuard::new_fn($fs, FN.idx($crate::function_name!()))
+        fn f() {}
+        FN.idx(core::any::type_name_of_val(&f))
     }};
 }
 
@@ -87,16 +98,22 @@ impl TransFnName {
         }
     }
 
-    /// This call site's index in TRANSACTION_FNS, registering
-    /// @name on first use. 0 - "(unknown)" - while another thread is
-    /// registering it, or if the table is full.
-    pub fn idx(&self, name: &str) -> u32 {
+    /// This call site's index in TRANSACTION_FNS, registering the function
+    /// @f_path names on first use: the type name of a fn item declared in it.
+    /// 0 - "(unknown)" - while another thread is registering it, or if the
+    /// table is full.
+    pub fn idx(&self, f_path: &'static str) -> u32 {
         let idx = self.idx.load(Ordering::Acquire);
         if idx != 0 || self.claim.swap(true, Ordering::AcqRel) {
             return idx;
         }
+        self.register(f_path)
+    }
 
-        let idx = bch2_trans_get_fn_idx(self.name.get(name).as_ptr().cast());
+    #[cold]
+    #[inline(never)]
+    fn register(&self, f_path: &'static str) -> u32 {
+        let idx = bch2_trans_get_fn_idx(self.name.get(crate::util::log::fn_name(f_path)).as_ptr().cast());
         self.idx.store(idx, Ordering::Release);
         idx
     }

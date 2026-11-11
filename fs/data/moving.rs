@@ -22,13 +22,12 @@
 
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{BtreeIter, BtreeTrans};
-use crate::btree::trans::{__bch2_trans_get, TransFnName, TransGuard};
+use crate::btree::trans::{__bch2_trans_get, TransGuard};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::errcode::BchError;
 use crate::format::DataType;
 use crate::fs::Fs;
-use crate::function_name;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError};
 use crate::util::refcount::Refcount;
 use crate::util::kthread::Kthread;
@@ -246,9 +245,8 @@ impl<'a> MovingCtxt<'a> {
     pub fn new(fs: &'a Fs, stats: &'a MoveStats, wp: c::write_point_specifier, wait_on_copygc: bool)
         -> Result<MovingCtxt<'a>, BchError>
     {
-        static FN: TransFnName = TransFnName::new();
         let init = pin_init!(MovingContext {
-            trans:          unsafe { TransGuard::from_raw(__bch2_trans_get(fs, FN.idx(function_name!()))) },
+            trans:          unsafe { TransGuard::from_raw(__bch2_trans_get(fs, crate::trans_fn_idx!())) },
             stats:          AtomicPtr::new(ptr::from_ref(stats).cast_mut()),
             wp,
             wait_on_copygc,
