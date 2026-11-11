@@ -665,54 +665,6 @@ macro_rules! here_str {
     };
 }
 
-/// One call site's function name, for TransFnName: Rust only has it at
-/// runtime and unterminated, so it's copied into a static buffer on first use.
-#[doc(hidden)]
-pub struct CFnName {
-    claim: AtomicBool,
-    ready: AtomicBool,
-    buf:   UnsafeCell<[u8; 64]>,
-}
-
-// buf is written once, by whoever claims it, before ready is published, and
-// only read after that.
-unsafe impl Sync for CFnName {}
-
-impl Default for CFnName {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CFnName {
-    pub const fn new() -> Self {
-        CFnName {
-            claim: AtomicBool::new(false),
-            ready: AtomicBool::new(false),
-            buf:   UnsafeCell::new([0; 64]),
-        }
-    }
-
-    /// @name, NUL-terminated and truncated to fit: "(unknown)" while another
-    /// thread is filling it in.
-    pub fn get(&self, name: &str) -> &CStr {
-        if !self.ready.load(Ordering::Acquire) {
-            if self.claim.swap(true, Ordering::AcqRel) {
-                return c"(unknown)";
-            }
-
-            let buf = unsafe { &mut *self.buf.get() };
-            let n = name.len().min(buf.len() - 1);
-            buf[..n].copy_from_slice(&name.as_bytes()[..n]);
-            buf[n] = 0;
-            self.ready.store(true, Ordering::Release);
-        }
-
-        let buf = unsafe { &*self.buf.get() };
-        CStr::from_bytes_until_nul(buf).expect("buf is NUL-terminated")
-    }
-}
-
 /// As C's bch_err_fn(): report an error from @result, saying where - unless
 /// it's a restart, which isn't one. Evaluates to @result, so it can
 /// wrap the call: `bch_err_fn!(fs, f())?`.

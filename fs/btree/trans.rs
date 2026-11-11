@@ -31,7 +31,7 @@ use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::{cond_resched, local_clock, prefetch, time_after64};
 #[cfg(any(CONFIG_BCACHEFS_DEBUG, CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE))]
 use crate::util::log::LogMsg;
-use crate::util::log::{log_no_fs, CFnName, LogLevel};
+use crate::util::log::{log_no_fs, LogLevel};
 #[cfg(kernel)]
 use crate::util::percpu::CpuGuard;
 use crate::util::percpu::{bch2_task_pid, Counters};
@@ -41,6 +41,7 @@ use crate::util::sched;
 use crate::util::time_stats::__bch2_time_stats_update;
 use crate::util::vstructs::{Unvalidated, UnvalidatedEntries, VstructRefEntries};
 use crate::util::{Printbuf, ToText};
+use core::cell::UnsafeCell;
 use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
 use core::marker::PhantomData;
 use core::mem::{offset_of, size_of, size_of_val};
@@ -54,7 +55,7 @@ use cstruct_macros::c_export;
 /// name; without it a transaction is "(unknown)".
 ///
 /// XXX: C registers __func__ - a NUL-terminated string that lives forever - so
-/// each call site carries a CFnName to copy its name into. Clean this up once
+/// each call site carries a buffer to copy its name into. Clean this up once
 /// enough is converted to key the stats on Rust's own names.
 #[macro_export]
 macro_rules! btree_trans {
@@ -80,8 +81,13 @@ macro_rules! trans_fn_idx {
 pub struct TransFnName {
     idx:   AtomicU32,
     claim: AtomicBool,
-    name:  CFnName,
+    /* NUL-terminated, truncated to fit */
+    name:  UnsafeCell<[u8; 64]>,
 }
+
+// name is written once, by the thread that claims the call site, and only read
+// - by C, through TRANSACTION_FNS - once that's published it.
+unsafe impl Sync for TransFnName {}
 
 impl Default for TransFnName {
     fn default() -> Self {
@@ -94,7 +100,7 @@ impl TransFnName {
         TransFnName {
             idx:   AtomicU32::new(0),
             claim: AtomicBool::new(false),
-            name:  CFnName::new(),
+            name:  UnsafeCell::new([0; 64]),
         }
     }
 
@@ -119,7 +125,12 @@ impl TransFnName {
         }
         let name = name.rsplit("::").next().unwrap_or(name);
 
-        let idx = bch2_trans_get_fn_idx(self.name.get(name).as_ptr().cast());
+        let buf = unsafe { &mut *self.name.get() };
+        let n = name.len().min(buf.len() - 1);
+        buf[..n].copy_from_slice(&name.as_bytes()[..n]);
+        buf[n] = 0;
+
+        let idx = bch2_trans_get_fn_idx(buf.as_ptr().cast());
         self.idx.store(idx, Ordering::Release);
         idx
     }
@@ -1082,7 +1093,7 @@ impl BtreeTrans<'_> {
 // ── Transaction names ───────────────────────────────────────────────────────
 
 /// Each btree_trans!() call site's and C caller's name, by fn_idx: the
-/// transaction's, and its stats'. 0 is "(unknown)". A name is a CFnName's,
+/// transaction's, and its stats'. 0 is "(unknown)". A name is a TransFnName's,
 /// written as it's registered: published by a release, read by an acquire.
 static TRANSACTION_FNS: [AtomicPtr<c_char>; c::BCH_TRANSACTIONS_NR as usize] = {
     let mut fns = [const { AtomicPtr::new(ptr::null_mut()) }; c::BCH_TRANSACTIONS_NR as usize];
