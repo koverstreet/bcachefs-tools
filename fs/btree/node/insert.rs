@@ -126,7 +126,7 @@ unsafe extern "C" fn node_flush1(j: *mut c::journal, pin: *mut Pin, seq: u64) ->
 
 impl BtreeTrans<'_> {
     #[inline]
-    pub(in crate::btree) fn node_prep_for_write(&self, pu: &mut PathsUpdates<'_>, b: &BtreeNode) {
+    pub(in crate::btree) fn node_prep_for_write(&self, pu: &mut PathsUpdates<'_, '_>, b: &BtreeNode) {
         let fs = self.fs();
 
         if unlikely(b.flags.just_written()) && bch2_btree_post_write_cleanup(fs, b) {
@@ -260,8 +260,8 @@ impl BtreeTrans<'_> {
     /// # Safety
     /// Path @idx's node at its level is write locked.
     #[inline]
-    pub(in crate::btree) unsafe fn insert_key_leaf(&self, pu: &mut PathsUpdates<'_>, idx: PathIdx, insert: &mut BkeyI,
-                                         journal_seq: u64) {
+    pub(in crate::btree) unsafe fn insert_key_leaf(&self, pu: &mut PathsUpdates<'_, '_>, idx: PathIdx,
+                                                   insert: &mut BkeyI, journal_seq: u64) {
         let fs = self.fs();
         let paths = &mut pu.paths;
         let level = paths[idx].level() as usize;

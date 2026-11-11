@@ -187,8 +187,17 @@ pub(crate) type DownKey = PaddedKey<{ BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MA
 /// will take it &mut, so it can't grow under a path borrowed from it.
 pub struct Paths<'t> {
     trans: &'t BtreeTrans<'t>,
+    /// trans->paths, held for the borrow: growing it, the one thing that moves
+    /// it, takes the borrow &mut, as does lending it to code that may grow it
+    table: *mut [BtreePath],
     /// false for the borrow C lent an export
     took:  bool,
+}
+
+impl Paths<'_> {
+    fn table_of(trans: &BtreeTrans<'_>) -> *mut [BtreePath] {
+        ptr::slice_from_raw_parts_mut(trans.paths.get(), trans.nr_paths.get() as usize)
+    }
 }
 
 impl BtreeTrans<'_> {
@@ -199,7 +208,7 @@ impl BtreeTrans<'_> {
             self.paths_borrowed_twice();
         }
         self.set_paths_borrowed(true);
-        Paths { trans: self, took: true }
+        Paths { trans: self, table: Paths::table_of(self), took: true }
     }
 
     #[cold]
@@ -214,7 +223,7 @@ impl BtreeTrans<'_> {
 /// across the call into C.
 impl<'t> Lent<'t, BtreeTrans<'_>> for Paths<'t> {
     unsafe fn lent(trans: &'t BtreeTrans<'_>) -> Self {
-        Paths { trans, took: false }
+        Paths { trans, table: Paths::table_of(trans), took: false }
     }
 }
 
@@ -250,14 +259,21 @@ impl Paths<'_> {
     /// @f, a call into C that may enter the btree code again - an export that
     /// takes the path table itself - with this borrow idle across it.
     pub(crate) fn lend<R>(&mut self, f: impl FnOnce() -> R) -> R {
-        if !self.took {
-            return f();
+        /*
+         * One call of @f: with two, LLVM outlines a large @f rather than
+         * inline it twice
+         */
+        if self.took {
+            self.trans.set_paths_borrowed(false);
         }
-        self.trans.set_paths_borrowed(false);
         let ret = f();
-        assert!(!self.trans.paths_borrowed(), "{}: the path table still borrowed after a call into C",
-                self.trans.fn_name());
-        self.trans.set_paths_borrowed(true);
+        if self.took {
+            assert!(!self.trans.paths_borrowed(), "{}: the path table still borrowed after a call into C",
+                    self.trans.fn_name());
+            self.trans.set_paths_borrowed(true);
+        }
+        /* @f may have grown it: */
+        self.table = Paths::table_of(self.trans);
         ret
     }
 }
@@ -285,15 +301,13 @@ impl Deref for Paths<'_> {
     type Target = [BtreePath];
 
     fn deref(&self) -> &[BtreePath] {
-        let t = self.trans;
-        unsafe { core::slice::from_raw_parts(t.paths.get(), t.nr_paths.get() as usize) }
+        unsafe { &*self.table }
     }
 }
 
 impl DerefMut for Paths<'_> {
     fn deref_mut(&mut self) -> &mut [BtreePath] {
-        let t = self.trans;
-        unsafe { core::slice::from_raw_parts_mut(t.paths.get(), t.nr_paths.get() as usize) }
+        unsafe { &mut *self.table }
     }
 }
 
@@ -509,6 +523,7 @@ impl Paths<'_> {
         rcu_assign_pointer(&t.updates, updates);
 
         t.nr_paths.set(nr as PathIdx);
+        self.table = Paths::table_of(t);
 
         t.table_retire(old);
     }
@@ -532,12 +547,12 @@ impl<T: PathNode> BtreePath<T> {
     }
 }
 
-pub(in crate::btree) struct PathsUpdates<'a> {
-    pub(in crate::btree) paths:   Paths<'a>,
+pub(in crate::btree) struct PathsUpdates<'a, 't> {
+    pub(in crate::btree) paths:   &'a mut Paths<'t>,
     pub(in crate::btree) updates: &'a mut [c::btree_insert_entry],
 }
 
-impl Paths<'_> {
+impl<'t> Paths<'t> {
     pub(crate) fn sorted(&self) -> &[PathIdx] {
         let t = self.trans;
         unsafe { core::slice::from_raw_parts(t.sorted.get(), t.nr_sorted.get() as usize) }
@@ -584,10 +599,10 @@ impl Paths<'_> {
         self.update_mut(i)
     }
 
-    pub(in crate::btree) fn paths_and_updates(&mut self) -> PathsUpdates<'_> {
+    pub(in crate::btree) fn paths_and_updates(&mut self) -> PathsUpdates<'_, 't> {
         let t = self.trans;
         PathsUpdates {
-            paths:   Paths { trans: t, took: false },
+            paths:   self,
             updates: unsafe { core::slice::from_raw_parts_mut(t.updates.get(), t.nr_updates.get() as usize) },
         }
     }

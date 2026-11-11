@@ -101,7 +101,7 @@ fn for_each_entry_key(e: &c::jset_entry<Validated>,
 
 impl BtreeTrans<'_> {
     #[inline(never)]
-    fn lock_write_fail(&self, pu: &mut PathsUpdates<'_>, end: usize) {
+    fn lock_write_fail(&self, pu: &mut PathsUpdates<'_, '_>, end: usize) {
         let PathsUpdates { paths, updates } = pu;
         for (idx, i) in updates[..end].iter().enumerate().rev() {
             if same_leaf_as_prev(paths, updates, idx) {
