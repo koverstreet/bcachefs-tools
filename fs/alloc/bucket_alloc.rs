@@ -300,8 +300,8 @@ impl TransAttempt<'_, '_> {
     /// @ca's freespace btree forwards or backwards from @start - which
     /// belongs to the forwards scan. Candidates that can't be taken - open,
     /// in the wrong btree bitmap region - move the scan on.
-    fn bucket_alloc_scan(&self, ca: &Dev, req: &mut c::alloc_request, genbits: u64, start: u64,
-                         forwards: bool) -> Result<Option<OpenBucket>, BchError>
+    fn bucket_alloc_freespace_from(&self, ca: &Dev, req: &mut c::alloc_request, genbits: u64,
+                                   start: u64, forwards: bool) -> Result<Option<OpenBucket>, BchError>
     {
         let dev = u64::from(ca.dev_idx);
         let end = pos(dev, genbits | BUCKET_MASK);
@@ -383,7 +383,8 @@ impl TransAttempt<'_, '_> {
         loop {
             for g in start >> FREESPACE_GENBITS_SHIFT..FREESPACE_GENBITS_NR {
                 let genbits = g << FREESPACE_GENBITS_SHIFT;
-                if let Some(ob) = self.bucket_alloc_scan(ca, req, genbits, start.max(genbits | first_bucket), true)? {
+                let from = start.max(genbits | first_bucket);
+                if let Some(ob) = self.bucket_alloc_freespace_from(ca, req, genbits, from, true)? {
                     cursor.set(genbits | ob.id().bucket());
                     return Ok(Some(ob));
                 }
@@ -414,7 +415,7 @@ impl TransAttempt<'_, '_> {
             let genbits = g << FREESPACE_GENBITS_SHIFT;
 
             for forwards in [false, true] {
-                let Some(ob) = self.bucket_alloc_scan(ca, req, genbits, genbits | target, forwards)? else {
+                let Some(ob) = self.bucket_alloc_freespace_from(ca, req, genbits, genbits | target, forwards)? else {
                     continue;
                 };
                 let dist = |ob: &OpenBucket| ob.id().bucket().abs_diff(target);

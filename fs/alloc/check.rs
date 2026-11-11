@@ -465,8 +465,8 @@ pub(crate) enum FreespaceCheck {
     /// check_alloc_info: deleted in place, the attempt restarted.
     Fsck,
     /// The allocator, about to take the bucket: committed state only, as
-    /// bucket_alloc_scan() reads it, and not logged. A commit here would
-    /// recurse into the allocator, so a recheck is spawned to repair it.
+    /// bucket_alloc_freespace_from() reads it, and not logged. A commit here
+    /// would recurse into the allocator, so a recheck is spawned to repair it.
     Allocator,
     /// That recheck: silent.
     Recheck,
