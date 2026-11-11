@@ -127,7 +127,10 @@ fn alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripes: 
 /// Only the new ones: those @had - a reused stripe's, carried over - are
 /// anchors, and those a writer's claimed (Slot::allocated()) can't move. Best
 /// effort, so it never makes things worse: an allocation that fails keeps the
-/// original - but a restart, which ends the attempt.
+/// original - but a restart, which ends the attempt. Not inlined:
+/// new_stripe_alloc_buckets()'s frame is under every bucket allocation, and
+/// these distances needn't be.
+#[inline(never)]
 fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, s: &mut InternalGuard<'_>,
                        had: &Bitmap) -> Result<(), BchError> {
     const MAX: usize = c::BCH_BKEY_PTRS_MAX as usize;
