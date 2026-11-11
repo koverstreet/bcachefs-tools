@@ -860,7 +860,7 @@ pub struct BtreeTrans<'f> {
     pub hooks: Cell<*mut cs::btree_trans_commit_hook>,
     pub journal_pin: Cell<*mut cs::journal_entry_pin>,
 
-    pub journal_res: Cell<cs::journal_res>,
+    pub journal_res_seq: Cell<u64>,
     /*
      * Input for BCH_TRANS_COMMIT_no_journal_res: with no reservation to
      * derive a seq from, the caller names the journal entry the btree node
@@ -873,7 +873,7 @@ pub struct BtreeTrans<'f> {
 
     pub fs_usage_delta: Cell<cs::bch_fs_usage_base>,
 
-    pub journal_u64s: c_uint,
+    pub journal_u64s: Cell<c_uint>,
     pub extra_journal_u64s: Cell<u32>,
 
     /*

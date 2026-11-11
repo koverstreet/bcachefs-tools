@@ -90,7 +90,6 @@
 #include "util/time_stats.h"
 #include "util/util.h"
 
-#include "alloc/accounting_gen.h"
 #include "alloc/buckets_gen.h"
 #include "init/dev_gen.h"
 #include "alloc/disk_groups_gen.h"

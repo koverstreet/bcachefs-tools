@@ -13,7 +13,7 @@ use crate::btree::path::{bch2_trans_paths_exit, bch2_trans_paths_init, BtreePath
 use crate::c;
 use crate::data_structures::bitmap::Bitmap;
 use crate::debug::trace::events;
-use crate::errcode::{BchError, bch_errcode, err_ptr, ret_to_result_void as ret_to_result};
+use crate::errcode::{BchError, bch_errcode, err_ptr};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::journal::validate::journal_entry_to_text;
@@ -154,7 +154,7 @@ impl<'f> BtreeTrans<'f> {
     /// The journal sequence number the commit in progress is going into: for
     /// atomic triggers, which run with the journal reservation held.
     pub fn journal_res_seq(&self) -> u64 {
-        self.journal_res.get().seq
+        self.journal_res_seq.get()
     }
 
     /// The function that got it, for messages: trans->fn.
@@ -331,8 +331,7 @@ impl<'f> BtreeTrans<'f> {
         self.disk_res.set(disk_res.map_or(core::ptr::null_mut(), |r| r.as_mut_ptr()));
         self.journal_seq.set(core::ptr::null_mut());
         self.flush.set(flush.map_or(core::ptr::null_mut(), Opaque::as_ptr));
-        let ret = unsafe { c::__bch2_trans_commit(self.raw(), flags.to_c(), lazy) };
-        ret_to_result(ret)
+        self.commit_trans(flags, lazy)
     }
 }
 
@@ -987,7 +986,7 @@ impl BtreeTrans<'_> {
         let c = self.fs();
 
         prt!(out, "{} transaction updates for {} journal seq {}\n",
-             self.nr_updates.get(), self.fn_name(), self.journal_res.get().seq);
+             self.nr_updates.get(), self.fn_name(), self.journal_res_seq.get());
         let mut out = out.indent(2);
 
         /* from wherever an error's found - path table borrowed or not; this reads it and is done */

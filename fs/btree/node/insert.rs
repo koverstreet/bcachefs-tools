@@ -259,7 +259,7 @@ impl BtreeTrans<'_> {
     ///
     /// # Safety
     /// Path @idx's node at its level is write locked.
-    #[inline(always)]
+    #[inline]
     pub(in crate::btree) unsafe fn insert_key_leaf(&self, pu: &mut PathsUpdates<'_>, idx: PathIdx, insert: &mut BkeyI,
                                          journal_seq: u64) {
         let fs = self.fs();

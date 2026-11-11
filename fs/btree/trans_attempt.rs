@@ -266,6 +266,10 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.trans.fs_usage_delta.get()
     }
 
+    pub fn fs_usage_delta_add(&self, d: c::bch_fs_usage_base) {
+        self.trans.fs_usage_delta_add(d)
+    }
+
     /// The disk reservation the commit in progress charges, if it was given
     /// one.
     pub fn disk_res(&self) -> Option<&DiskReservation<'t>> {
@@ -324,6 +328,11 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     pub fn unlock_long(&self) {
         self.trans.unlock_long()
+    }
+
+    pub fn wait_event_timeout(&self, list: &c::closure_waitlist, cond: impl FnMut() -> bool,
+                              timeout: core::ffi::c_long) -> core::ffi::c_long {
+        self.trans.wait_event_timeout(list, cond, timeout)
     }
 
     pub fn closure_sync_timeout(&self, cl: &Opaque<c::closure>, timeout: core::ffi::c_long) -> bool {

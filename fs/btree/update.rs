@@ -32,7 +32,7 @@ use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ops::Range;
 use core::ptr::NonNull;
-use cstruct_macros::{c_export, c_enum, c_extern};
+use cstruct_macros::{c_export, c_enum};
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 use zerocopy::IntoBytes;
 
@@ -60,11 +60,6 @@ c_enum! {
         /// applied
         skip_accounting_apply,
     }
-}
-
-c_extern! {
-    pub fn __bch2_trans_commit(trans: *mut BtreeTrans<'_>, flags: c::bch_trans_commit_flags,
-                               lazy: bool) -> c_int;
 }
 
 /// The whiteout that deletes @k in @btree. A KEY_TYPE_extent_whiteout says
@@ -237,6 +232,7 @@ impl Fs {
 // ── A transaction's updates, and log entries with its commit ────────────
 
 impl<T: ?Sized> c::btree_trans_subbuf<T> {
+    #[inline]
     fn u64s_in<'s>(self, t: &'s TransAttempt<'_, '_>) -> &'s mut [u64] {
         let mut p = t.trans().mem_with(|m| m.range(usize::from(self.base), usize::from(self.u64s)));
         unsafe { p.as_mut() }

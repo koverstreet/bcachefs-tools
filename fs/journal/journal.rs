@@ -124,7 +124,7 @@ use core::sync::atomic::Ordering::{Acquire, Relaxed, SeqCst};
 
 use cstruct_macros::c_export;
 
-use crate::btree::iter::BtreeTrans;
+use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
 use crate::c::journal_cycle_flags as Cycle;
 use crate::c::journal_flags as Journal;
@@ -432,8 +432,8 @@ impl c::journal {
         true
     }
 
-    #[inline]
-    pub fn res_get(&self, res: &mut c::journal_res, u64s: u32, flags: u32, trans: Option<&BtreeTrans<'_>>)
+    #[inline(always)]
+    pub fn res_get(&self, res: &mut c::journal_res, u64s: u32, flags: u32, trans: Option<&TransAttempt<'_, '_>>)
         -> Result<(), BchError>
     {
         ebug_assert!(!res.ref_, "journal reservation taken while holding one");
@@ -1105,7 +1105,7 @@ impl c::journal {
      * btree node write locks.
      */
     #[inline(never)]
-    fn res_get_slowpath(&self, res: &mut c::journal_res, flags: u32, trans: Option<&BtreeTrans<'_>>)
+    fn res_get_slowpath(&self, res: &mut c::journal_res, flags: u32, trans: Option<&TransAttempt<'_, '_>>)
         -> Result<(), BchError>
     {
         if flags & c::JOURNAL_RES_GET_NONBLOCK != 0 {
@@ -1738,10 +1738,13 @@ fn flush_seq_err_wake(wait: *const c::closure_waitlist) {
     }
 }
 
+/// # Safety
+/// @trans is NULL or in an attempt.
 #[c_export]
-pub fn bch2_journal_res_get(j: &c::journal, res: &mut c::journal_res, u64s: c_uint, flags: c_uint,
-                            trans: Option<&BtreeTrans<'_>>) -> c_int {
-    ret_to_c(j.res_get(res, u64s, flags, trans))
+pub unsafe fn bch2_journal_res_get(j: &c::journal, res: &mut c::journal_res, u64s: c_uint, flags: c_uint,
+                                   trans: Option<&BtreeTrans<'_>>) -> c_int {
+    let t = trans.map(|t| unsafe { t.attempt_in_progress() });
+    ret_to_c(j.res_get(res, u64s, flags, t.as_ref()))
 }
 
 #[c_export]

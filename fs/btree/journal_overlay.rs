@@ -213,7 +213,7 @@ pub struct journal_keys {
     pub overwrites: Locked<c::mutex, OverwriteRanges, OverwriteRangesLive>,
 }
 
-type OverwriteGuard<'a> = ExclusiveGuard<'a, c::mutex, c::OverwriteRanges, c::OverwriteRangesLive>;
+pub(crate) type OverwriteGuard<'a> = ExclusiveGuard<'a, c::mutex, c::OverwriteRanges, c::OverwriteRangesLive>;
 
 pub type JournalKeysRef = RefGuard<Placed<AtomicRef<c::journal_keys>, crate::at!(Fs.journal_keys)>>;
 
@@ -651,24 +651,24 @@ pub(crate) fn key_deleted_in_journal(trans: &BtreeTrans<'_>, btree: Btree, level
 }
 
 /// The key at @pos overwritten, if the journal has one that isn't - or with
-/// @check, -1 if it has one that is.
-fn check_or_overwrite(jk: &c::journal_keys, g: &mut OverwriteGuard<'_>, btree: Btree, level: u32,
-                      pos: Bpos, check: bool) -> c_int {
+/// @check, whether it has one that is.
+pub(crate) fn check_or_overwrite(jk: &c::journal_keys, g: &mut OverwriteGuard<'_>, btree: Btree, level: u32,
+                                 pos: Bpos, check: bool) -> bool {
     let idx = jk.search(btree, level, pos);
 
-    let Some(k) = jk.keys().get(idx) else { return 0 };
+    let Some(k) = jk.keys().get(idx) else { return false };
     if k.btree_id() != btree || u32::from(k.level()) != level || jk.key_pos(k) != pos {
-        return 0;
+        return false;
     }
 
     if k.is_overwritten() {
-        return if check { -1 } else { 0 };
+        return check;
     }
 
     if !check {
         jk.overwrite(g, idx);
     }
-    0
+    false
 }
 
 /// The journal's key at @pos overwritten, if it has one that isn't: the btree
@@ -681,7 +681,7 @@ pub(crate) unsafe fn journal_key_overwrite(fs: &Fs, btree: Btree, level: u32, po
     check_or_overwrite(jk, &mut jk.overwrites.lock(), btree, level, pos, false);
 }
 
-/// check_or_overwrite(), for C, which holds overwrite_lock.
+/// check_or_overwrite(), for C, which holds overwrite_lock: -1 for its true.
 ///
 /// # Safety
 /// As bch2_journal_keys_peek_max()'s.
@@ -689,7 +689,7 @@ pub(crate) unsafe fn journal_key_overwrite(fs: &Fs, btree: Btree, level: u32, po
 pub unsafe fn bch2_journal_key_check_or_overwrite(c: &Opaque<Fs>, btree: Btree, level: c_uint,
                                                   pos: Bpos, check: bool) -> c_int {
     let jk = unsafe { Fs::from_c(c).journal_keys_held() };
-    check_or_overwrite(jk, &mut unsafe { jk.overwrites.held() }, btree, level, pos, check)
+    -(check_or_overwrite(jk, &mut unsafe { jk.overwrites.held() }, btree, level, pos, check) as c_int)
 }
 
 // ── Inserts, by recovery before the btree's read-write ───────────────────

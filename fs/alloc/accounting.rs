@@ -54,10 +54,9 @@ use crate::alloc::buckets::bch_fs_usage_base;
 use crate::alloc::replicas::{replicas_acct, SbEntry};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyTag, BKEY_U64S, POS_MIN, ValidateFlags, BkeyOps};
-use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, LoopFlow,
-                         TransAttempt};
+use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt};
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::{self, Bpos};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
@@ -69,9 +68,7 @@ use crate::util::percpu::Counters as _;
 use crate::util::printbuf::Join;
 use crate::util::Printbuf;
 use crate::{bch_err_fn, bkey_fsck_err, bkey_fsck_err_on, btree_trans, message, percpu_field};
-use core::ffi::c_int;
 use core::mem::size_of;
-use cstruct_macros::c_export;
 use zerocopy::{FromBytes, IntoBytes};
 
 pub use crate::format::accounting::*;
@@ -414,10 +411,8 @@ pub fn add_at(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &[i64], gc: 
  * Ensure accounting keys being updated are present in the superblock, when
  * applicable (i.e. replicas updates)
  */
-#[c_export]
-pub unsafe fn bch2_accounting_update_sb<'t>(trans: &'t BtreeTrans<'t>) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(trans.accounting.get().iter(&t).try_for_each(|k| update_sb_one(t.fs(), k.key().k.p)))
+pub(crate) fn update_sb(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
+    t.trans().accounting.get().iter(t).try_for_each(|k| update_sb_one(t.fs(), k.key().k.p))
 }
 
 pub fn mod_dev_cached_sectors(t: &TransAttempt<'_, '_>, dev: u32, sectors: i64, gc: bool)

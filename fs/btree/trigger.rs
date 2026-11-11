@@ -317,7 +317,7 @@ pub unsafe fn bch2_trans_commit_run_triggers(trans: &BtreeTrans<'_>) -> c_int {
     ret_to_c(unsafe { run_trans_triggers(trans, &t) })
 }
 
-unsafe fn run_trans_triggers(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
+pub(crate) unsafe fn run_trans_triggers(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
     let mut sort_id_start = 0;
 
     while sort_id_start < nr_updates(trans) {
@@ -376,7 +376,7 @@ pub unsafe fn bch2_trans_commit_run_mem_triggers(trans: &BtreeTrans<'_>) -> c_in
     ret_to_c(unsafe { run_mem_triggers(trans, &t) })
 }
 
-unsafe fn run_mem_triggers(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
+pub(crate) unsafe fn run_mem_triggers(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
     for idx in 0..nr_updates(trans) {
         let i = unsafe { update(trans, idx) };
         let flags = UpdateTriggerFlags::from_bits_retain(i.flags);

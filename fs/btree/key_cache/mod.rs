@@ -13,6 +13,7 @@
 
 mod fill;
 mod flush;
+pub(crate) use flush::{bch2_btree_insert_key_cached, bch2_btree_key_cache_drop};
 
 use crate::btree::bkey::{BkeySC, SPOS_MAX};
 use crate::btree::bkey_buf::copy_key;

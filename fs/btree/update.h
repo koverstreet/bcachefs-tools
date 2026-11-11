@@ -8,6 +8,7 @@
 #include "snapshots/snapshot.h"
 
 #include "btree/update_gen.h"
+#include "btree/commit_gen.h"
 #include "btree/node/insert_gen.h"
 
 static inline int __must_check

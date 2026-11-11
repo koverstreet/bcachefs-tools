@@ -264,7 +264,7 @@ impl Fs {
 /// The usage a committing transaction changes, under mark_lock: added to this
 /// CPU's, and an increase charged to its disk reservation - any it doesn't
 /// cover taken off the reservation caches, and warned of once.
-fn account_disk_usage_change(t: &TransAttempt<'_, '_>) {
+pub(crate) fn account_disk_usage_change(t: &TransAttempt<'_, '_>) {
     static WARNED: AtomicBool = AtomicBool::new(false);
 
     let fs = t.fs();
