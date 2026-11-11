@@ -947,12 +947,19 @@ impl BtreeTrans<'_> {
         new
     }
 
+    #[inline]
     pub(crate) fn path_set_pos(&self, paths: &mut Paths<'_>, idx: PathIdx, new_pos: Bpos, intent: bool,
                                ip: c_ulong) -> PathIdx {
         if new_pos == paths[idx].pos {
-            return idx;
+            idx
+        } else {
+            self.__path_set_pos(paths, idx, new_pos, intent, ip)
         }
+    }
 
+    #[inline(never)]
+    fn __path_set_pos(&self, paths: &mut Paths<'_>, idx: PathIdx, new_pos: Bpos, intent: bool,
+                      ip: c_ulong) -> PathIdx {
         if !<events::btree_path_set_pos as TraceEvent>::trace_enabled() {
             return self.path_set_pos_notrace(paths, idx, new_pos, intent, ip);
         }
