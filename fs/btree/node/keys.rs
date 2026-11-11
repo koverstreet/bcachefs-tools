@@ -304,7 +304,7 @@ impl KeysMut<'_> {
 
         invariant!(end <= u16::MAX as usize);
         self.sets[set].end_offset = u16::try_from(end)
-            .unwrap_or_else(|_| crate::btree::invariant_failed("a bset past the last offset"));
+            .unwrap_or_else(|_| crate::invariant_failed("a bset past the last offset"));
     }
 }
 

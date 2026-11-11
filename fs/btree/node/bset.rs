@@ -241,7 +241,7 @@ impl BsetTree {
         let first = self.data_offset as usize + offset_of!(Head<c::bset>, _data) / size_of::<u64>();
 
         invariant!(first <= u16::MAX as usize);
-        u16::try_from(first).unwrap_or_else(|_| crate::btree::invariant_failed("a bset past the last offset"))
+        u16::try_from(first).unwrap_or_else(|_| crate::invariant_failed("a bset past the last offset"))
     }
 
     /// Its keys' u64s.

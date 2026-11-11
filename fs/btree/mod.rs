@@ -1,31 +1,3 @@
-/// An invariant of a node's - of its format, its keys, its sets: checked in
-/// CONFIG_BCACHEFS_DEBUG builds, otherwise assumed, and the checks it implies
-/// optimized out - a node that breaks it is then undefined behaviour, as in
-/// C. Each is node read's to validate, or the aux trees' builders' to keep,
-/// and a precondition for formal verification to prove.
-/// Several are checked together, so the optimizer can merge their compares,
-/// and assumed one by one - it doesn't split an assumed conjunction. A
-/// condition is evaluated before it's assumed: its own arithmetic stays
-/// checked, so it compares values the code computes anyway. The conditions
-/// are the message, with the caller's location: a message's arguments would
-/// cost the fastpaths they're on.
-macro_rules! invariant {
-    ($($cond:expr),+ $(,)?) => {
-        if !cfg!(CONFIG_BCACHEFS_DEBUG) {
-            $(unsafe { core::hint::assert_unchecked($cond) };)+
-        } else if !($($cond)&&+) {
-            $crate::btree::invariant_failed(concat!($(stringify!($cond), "; "),+))
-        }
-    };
-}
-
-#[cold]
-#[inline(never)]
-#[track_caller]
-pub(crate) fn invariant_failed(cond: &'static str) -> ! {
-    panic!("btree node invariant failed: {cond}")
-}
-
 pub mod async_ops;
 pub mod bbpos;
 pub mod bkey;
