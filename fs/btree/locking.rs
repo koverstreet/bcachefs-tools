@@ -1060,7 +1060,7 @@ impl BtreeTrans<'_> {
         self.unlock_long_from(&mut self.paths(), crate::ret_ip!());
     }
 
-    fn unlock_long_from(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) {
+    pub(crate) fn unlock_long_from(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) {
         self.unlock_from(paths, ret_ip);
         self.enable_migrate();
 

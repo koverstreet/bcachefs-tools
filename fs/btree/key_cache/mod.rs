@@ -18,6 +18,7 @@ pub(crate) use flush::{bch2_btree_insert_key_cached, bch2_btree_key_cache_drop};
 use crate::btree::bkey::{BkeySC, SPOS_MAX};
 use crate::btree::bkey_buf::copy_key;
 use crate::btree::locking::bch2_btree_lock_init;
+use crate::btree::path::Paths;
 use crate::btree::trans::BtreeTrans;
 use crate::c;
 use crate::data_structures::array_vec::ArrayVec;
@@ -332,7 +333,9 @@ unsafe fn claimed<'t>(trans: &'t BtreeTrans<'_>, ck: NonNull<c::bkey_cached>) ->
 }
 
 impl BtreeTrans<'_> {
-    fn bkey_cached_alloc(&self, btree: Btree, key_u64s: usize) -> Result<Option<LockedEntry<'_>>, BchError> {
+    fn bkey_cached_alloc(&self, paths: &mut Paths<'_>, btree: Btree, key_u64s: usize)
+        -> Result<Option<LockedEntry<'_>>, BchError>
+    {
         let bc = &self.fs().btree.key_cache;
         let pcpu_readers = btree_uses_pcpu_readers(btree);
 
@@ -341,7 +344,7 @@ impl BtreeTrans<'_> {
         }
 
         let t = unsafe { self.attempt_in_progress() };
-        let ck = match t.allocate_dropping_locks(|| {
+        let ck = match t.allocate_dropping_locks_in(paths, || {
             NewEntry::alloc(key_u64s).ok_or(BchError::from(bch_errcode::BCH_ERR_ENOMEM_btree_key_cache_create))
         }) {
             Ok(ck) => Some(ck),

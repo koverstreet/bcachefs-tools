@@ -512,13 +512,29 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.relock()
     }
 
+    pub(in crate::btree) fn relock_or_nested_in(&self, paths: &mut Paths<'_>) -> Result<(), BchError> {
+        assert!(self.live.get(), "relock of an attempt that ended");
+        if self.trans.restart_count() != self.restart_count.get() {
+            return Err(BchError::from(bch_errcode::BCH_ERR_transaction_restart_nested));
+        }
+        self.trans.relock_from(paths)
+    }
+
     /// What @alloc makes: tried in a NORECLAIM scope with the locks held, and
     /// on ENOMEM again with them dropped. @alloc names its ENOMEM, thrown if
     /// the second try fails too; any other error is returned as is.
     pub fn allocate_dropping_locks<T>(&self, alloc: impl FnMut() -> Result<T, BchError>)
         -> Result<T, BchError>
     {
-        self.allocate_dropping(alloc, || self.unlock())
+        self.allocate_dropping(&mut (), alloc, |()| self.unlock(), |()| self.relock_or_nested())
+    }
+
+    pub(in crate::btree) fn allocate_dropping_locks_in<T>(&self, paths: &mut Paths<'_>,
+                                                          alloc: impl FnMut() -> Result<T, BchError>)
+        -> Result<T, BchError>
+    {
+        self.allocate_dropping(paths, alloc, |paths| self.trans.unlock_from(paths, crate::ret_ip!()),
+                               |paths| self.relock_or_nested_in(paths))
     }
 
     /// allocate_dropping_locks(), for what can take a while to get - megabytes:
@@ -526,10 +542,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn allocate_dropping_locks_big<T>(&self, alloc: impl FnMut() -> Result<T, BchError>)
         -> Result<T, BchError>
     {
-        self.allocate_dropping(alloc, || self.trans.unlock_long())
+        self.allocate_dropping(&mut (), alloc, |()| self.trans.unlock_long(), |()| self.relock_or_nested())
     }
 
-    fn allocate_dropping<T>(&self, mut alloc: impl FnMut() -> Result<T, BchError>, unlock: impl FnOnce())
+    /// @locks is what @unlock and @relock work through: the caller's borrow of
+    /// the path table, or nothing, for ones that borrow it themselves - only
+    /// once the first try fails.
+    fn allocate_dropping<T, L>(&self, locks: &mut L, mut alloc: impl FnMut() -> Result<T, BchError>,
+                               unlock: impl FnOnce(&mut L), relock: impl FnOnce(&mut L) -> Result<(), BchError>)
         -> Result<T, BchError>
     {
         let first = {
@@ -540,11 +560,11 @@ impl<'a, 't> TransAttempt<'a, 't> {
             Err(e) if e.matches(c::ENOMEM) => {}
             r => return r,
         }
-        unlock();
+        unlock(locks);
         let v = alloc().map_err(|e| {
             if e.matches(c::ENOMEM) { self.fs().err(bch_errcode(e.raw() as u32)) } else { e }
         })?;
-        self.relock_or_nested()?;
+        relock(locks)?;
         Ok(v)
     }
 
