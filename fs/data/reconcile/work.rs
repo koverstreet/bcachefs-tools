@@ -82,6 +82,7 @@ use crate::util::kthread::{Kthread, KthreadSelf};
 use crate::util::par::{self, Backend};
 use crate::util::{HumanReadable, Nsecs, ToText};
 use crate::util::sleep::{sleep_until, Sleep};
+use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use crate::{bch_err, log_msg_ratelimited, warn_once, SPOS_MAX};
 use c::bch_errcode as err;
@@ -378,24 +379,41 @@ fn reconcile_stripe(ctxt: &MovingCtxt<'_>, t: &TransAttempt<'_, '_>, k: BkeySC<'
                 let _ = retry.push(StripeRetry { idx, mark: ctxt.io_mark() });
             } else {
                 // what the retry waited for - an evacuation - didn't finish it
-                let mut msg = log_msg_ratelimited!(fs);
-                write!(msg, "error retrying stripe: repair still not finished\n{}", s.to_text(fs));
-                t.unlock();
-                fs.stripe_park(idx);
+                stripe_park(t, s, None);
             }
             Ok(())
         }
         Err(e) if !is_restart(&e) => {
             // out of space, say: left for a later pass, once something's changed
-            let mut msg = log_msg_ratelimited!(fs);
-            write!(msg, "error repairing stripe, leaving it for a later pass: {e}\n{}",
-                   s.to_text(fs));
-            t.unlock();
-            fs.stripe_park(idx);
+            stripe_park(t, s, Some(e));
             Ok(())
         }
         Err(e) => Err(e),
     }
+}
+
+/// Stripe @s parked, with why: a retry that didn't finish it, or @e. Not
+/// inlined: reconcile_stripe()'s frame is under the whole repair, and its
+/// messages needn't be.
+#[cold]
+#[inline(never)]
+fn stripe_park(t: &TransAttempt<'_, '_>, s: BkeySC<'_, c::Stripe<Validated>>, e: Option<BchError>) {
+    let fs = t.fs();
+    // out once the stripe's parked
+    let _msg = match e {
+        None => {
+            let mut msg = log_msg_ratelimited!(fs);
+            write!(msg, "error retrying stripe: repair still not finished\n{}", s.to_text(fs));
+            msg
+        }
+        Some(e) => {
+            let mut msg = log_msg_ratelimited!(fs);
+            write!(msg, "error repairing stripe, leaving it for a later pass: {e}\n{}", s.to_text(fs));
+            msg
+        }
+    };
+    t.unlock();
+    fs.stripe_park(s.k.p.offset);
 }
 
 // ── Walking work entries ─────────────────────────────────────────────────
