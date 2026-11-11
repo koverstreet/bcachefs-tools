@@ -990,7 +990,7 @@ impl BtreeTrans<'_> {
 
         let idx = self.path_make_mut(paths, idx, intent, ip);
 
-        paths[idx].pos = new_pos;
+        paths[idx].pos.assign_fieldwise_fixme_rustc(&new_pos);
         self.set_paths_sorted(false);
 
         if paths[idx].cached() {

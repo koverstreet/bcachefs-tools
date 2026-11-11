@@ -309,9 +309,9 @@ impl BtreeIter<'_> {
         }
 
         self.k.set_key_type(BkeyType::deleted);
-        self.k.p     = pos;
+        self.k.p.assign_fieldwise_fixme_rustc(&pos);
         self.k.size  = 0;
-        self.pos     = pos;
+        self.pos.assign_fieldwise_fixme_rustc(&pos);
     }
 
     fn intent(&self) -> bool {
@@ -1105,7 +1105,8 @@ impl<'t> BtreeIter<'t> {
     fn peek_max_search(&mut self, paths: &mut Paths<'_>, end: Bpos) -> Peeked {
         let trans = self.trans_c();
         let flags = self.iter_flags();
-        let mut search_key = self.search_key();
+        let mut search_key = POS_MIN;
+        search_key.assign_fieldwise_fixme_rustc(&self.search_key());
 
         if self.update_path != 0 {
             trans.path_put(paths, self.update_path, self.intent());
