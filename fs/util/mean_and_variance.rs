@@ -80,6 +80,7 @@ impl c::mean_and_variance {
     /// @x added. @weight 0 is the all-time schedule, a step of MAD/n;
     /// otherwise it's the weighted one's shift, a half-life of 2^weight
     /// samples.
+    #[inline]
     pub fn update(&mut self, x: i64, weight: u8) {
         self.n += 1;
         self.sum = self.sum.wrapping_add(x);
