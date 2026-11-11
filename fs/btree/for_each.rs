@@ -125,14 +125,14 @@ impl Keys {
 
     /// The next key, under attempt @t, and @iter, which it borrows, shared -
     /// so nothing moves the iterator while they're in use.
-    fn peek<'k, 't>(self, t: &'k TransAttempt<'_, 't>, iter: &'k mut BtreeIter<'t>)
+    fn peek<'k, 't>(&self, t: &'k TransAttempt<'_, 't>, iter: &'k mut BtreeIter<'t>)
         -> Result<Option<(&'k BtreeIter<'t>, BkeySC<'k>)>, BchError>
     {
         match self {
             Keys::Max(end, flags) | Keys::InSubvolume(end, flags, _) =>
-                iter.peek_with(t, |iter, paths| iter.peek_max_type_in(paths, end, flags)),
+                iter.peek_with(t, |iter, paths| iter.peek_max_type_in(paths, *end, *flags)),
             Keys::Reverse(min) =>
-                iter.peek_with(t, |iter, paths| iter.peek_prev_min_in(paths, min)),
+                iter.peek_with(t, |iter, paths| iter.peek_prev_min_in(paths, *min)),
         }
     }
 
