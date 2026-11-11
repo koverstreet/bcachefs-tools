@@ -183,8 +183,8 @@ impl<'f> BtreeTrans<'f> {
     /// restart count. Inlined, so that last_begin_ip is the caller's address.
     /// Beginning is trans_attempt.rs's, which holds the key.
     #[inline(always)]
-    pub(in crate::btree) fn begin_raw(&self, _: AttemptKey) -> u32 {
-        self.begin_from(&mut self.paths(), crate::ret_ip!())
+    pub(in crate::btree) fn begin_raw(&self, paths: &mut Paths<'_>, _: AttemptKey) -> u32 {
+        self.begin_from(paths, crate::ret_ip!())
     }
 
     /// The key updates queued, without the path table borrowed: Paths::updates()

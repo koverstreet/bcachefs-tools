@@ -634,7 +634,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
                                       BtreeIterFlags::NOFILTER_WHITEOUTS);
 
         'out: {
-            let Some((it, k)) = iter.peek_with(self, |i, p| i.peek_max_in(p, end))? else { break 'out };
+            let Some((it, k)) = iter.peek_with(self, &mut self.trans().paths(), |i, p| i.peek_max_in(p, end))?
+            else { break 'out };
 
             let mut advance = false;
             if bkey_eq(k.k.p, insert.k().start_pos()) {
@@ -651,7 +652,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 }
                 advance = true;
 
-                let Some((it, k)) = iter.peek_with(self, |i, p| i.peek_max_in(p, end))? else { break 'out };
+                let Some((it, k)) = iter.peek_with(self, &mut self.trans().paths(), |i, p| i.peek_max_in(p, end))?
+                else { break 'out };
 
                 assert!(bkey_gt(k.k.p, insert.k().start_pos()),
                         "extent update at {}: overlapping key at {}", insert.k().start_pos(), k.k.p);
@@ -686,7 +688,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 }
             }
 
-            let Some((it, k)) = iter.peek_with(self, |i, p| i.peek_max_in(p, end))? else { break 'out };
+            let Some((it, k)) = iter.peek_with(self, &mut self.trans().paths(), |i, p| i.peek_max_in(p, end))?
+            else { break 'out };
             if bch2_bkey_maybe_mergable(insert.k(), k.k) {
                 self.extent_back_merge(it, &mut insert, k)?;
             }
@@ -1071,7 +1074,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             let pos = Bpos { snapshot: id, ..new_pos };
 
             let mut iter = BtreeIter::new(self, btree, pos, BtreeIterFlags::NOT_EXTENTS | BtreeIterFlags::INTENT);
-            let Some((it, k)) = iter.peek_with(self, |i, p| i.peek_slot_in(p))? else {
+            let Some((it, k)) = iter.peek_with(self, &mut self.trans().paths(), |i, p| i.peek_slot_in(p))? else {
                 panic!("peek_slot() at {pos} in {btree}: no key, not even a deleted one");
             };
 
@@ -1291,7 +1294,7 @@ impl BtreeTrans<'_> {
 fn delete_range_one<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>, end: Bpos, flags: UpdateTriggerFlags)
     -> Result<(), BchError>
 {
-    let Some((it, k)) = iter.peek_with(t, |i, p| i.peek_max_in(p, end))? else {
+    let Some((it, k)) = iter.peek_with(t, &mut t.trans().paths(), |i, p| i.peek_max_in(p, end))? else {
         return Err(bch_errcode::BCH_ERR_delete_range_done.into());
     };
 

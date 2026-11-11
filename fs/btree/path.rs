@@ -256,8 +256,9 @@ impl Paths<'_> {
 }
 
 impl Paths<'_> {
-    /// @f, a call into C that may enter the btree code again - an export that
-    /// takes the path table itself - with this borrow idle across it.
+    /// @f, a call out that may enter the btree code again - C, through an
+    /// export that takes the path table itself, or the btree's public side, as
+    /// a walk's body - with this borrow idle across it.
     pub(crate) fn lend<R>(&mut self, f: impl FnOnce() -> R) -> R {
         /*
          * One call of @f: with two, LLVM outlines a large @f rather than

@@ -3,10 +3,10 @@
 use super::bkey::*;
 use super::types::{BtreeIter, BtreeTrans};
 use super::iter::{polonius_key, BtreeIterFlags, BtreeNodeIter};
-use super::trans_attempt::{is_restart, lockrestart_do, CommitOpts, TransAttempt};
+use super::trans_attempt::{is_restart, lockrestart_do, lockrestart_do_in, CommitOpts, TransAttempt};
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::LockedNode;
+use crate::btree::path::{LockedNode, Paths};
 use crate::errcode::{BchError, bch_errcode};
 use crate::fs::Fs;
 use crate::SPOS_MAX;
@@ -116,23 +116,26 @@ pub(crate) enum Keys {
 
 impl Keys {
     /// At the start of each attempt.
-    fn begin(self, t: &TransAttempt<'_, '_>, iter: &mut BtreeIter<'_>) -> Result<(), BchError> {
+    fn begin(self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, iter: &mut BtreeIter<'_>)
+        -> Result<(), BchError>
+    {
         if let Keys::InSubvolume(_, _, subvol) = self {
-            iter.set_snapshot(crate::snapshots::subvolume::get_snapshot(t, subvol)?);
+            let snapshot = paths.lend(|| crate::snapshots::subvolume::get_snapshot(t, subvol))?;
+            iter.set_snapshot_in(paths, snapshot);
         }
         Ok(())
     }
 
     /// The next key, under attempt @t, and @iter, which it borrows, shared -
     /// so nothing moves the iterator while they're in use.
-    fn peek<'k, 't>(&self, t: &'k TransAttempt<'_, 't>, iter: &'k mut BtreeIter<'t>)
+    fn peek<'k, 't>(&self, t: &'k TransAttempt<'_, 't>, paths: &mut Paths<'_>, iter: &'k mut BtreeIter<'t>)
         -> Result<Option<(&'k BtreeIter<'t>, BkeySC<'k>)>, BchError>
     {
         match self {
             Keys::Max(end, flags) | Keys::InSubvolume(end, flags, _) =>
-                iter.peek_with(t, |iter, paths| iter.peek_max_type_in(paths, *end, *flags)),
+                iter.peek_with(t, paths, |iter, paths| iter.peek_max_type_in(paths, *end, *flags)),
             Keys::Reverse(min) =>
-                iter.peek_with(t, |iter, paths| iter.peek_prev_min_in(paths, *min)),
+                iter.peek_with(t, paths, |iter, paths| iter.peek_prev_min_in(paths, *min)),
         }
     }
 
@@ -140,10 +143,10 @@ impl Keys {
     /// when the key ended at SPOS_MAX and the position can't move on, as the
     /// rightmost key of any interior node level does. Looping again would
     /// peek the same key forever.
-    fn advance(self, iter: &mut BtreeIter<'_>) -> bool {
+    fn advance(self, paths: &mut Paths<'_>, iter: &mut BtreeIter<'_>) -> bool {
         match self {
-            Keys::Reverse(_) => iter.rewind(),
-            _                => iter.advance(),
+            Keys::Reverse(_) => iter.rewind_in(paths),
+            _                => iter.advance_in(paths),
         }
     }
 }
@@ -194,28 +197,28 @@ where
 impl<'t> BtreeIter<'t> {
     /// The next key of the walk @keys, given to @f in attempt @t: where the
     /// walk goes from it, None at the walk's end.
-    fn key<F, R>(&mut self, t: &TransAttempt<'_, 't>, keys: Keys, f: &mut F)
+    fn key<F, R>(&mut self, t: &TransAttempt<'_, 't>, paths: &mut Paths<'_>, keys: Keys, f: &mut F)
         -> Result<Option<Step<R::Break>>, BchError>
     where
         F: KeyFn<'t, R>,
         R: LoopControl,
     {
-        match keys.peek(t, self)? {
-            Some((iter, k)) => Ok(Some(f(t, iter, k)?.into_step())),
+        match keys.peek(t, paths, self)? {
+            Some((iter, k)) => Ok(Some(paths.lend(|| f(t, iter, k))?.into_step())),
             None => Ok(None),
         }
     }
 
     /// On from a key, as the walk @keys goes: Some, what the walk returns.
-    fn move_on<B: Default>(&mut self, keys: Keys, step: Option<Step<B>>) -> Option<B> {
+    fn move_on<B: Default>(&mut self, paths: &mut Paths<'_>, keys: Keys, step: Option<Step<B>>) -> Option<B> {
         match step {
             None                  => Some(B::default()),
             Some(Step::Break(b))  => Some(b),
             Some(Step::From(pos)) => {
-                self.set_pos(pos);
+                self.set_pos_in(paths, pos);
                 None
             }
-            Some(Step::Next)      => (!keys.advance(self)).then(B::default),
+            Some(Step::Next)      => (!keys.advance(paths, self)).then(B::default),
         }
     }
 
@@ -227,12 +230,13 @@ impl<'t> BtreeIter<'t> {
         F: KeyFn<'t, R>,
         R: LoopControl,
     {
+        let mut paths = trans.paths();
         loop {
-            let step = lockrestart_do(trans, |t| {
-                keys.begin(t, self)?;
-                self.key(t, keys, &mut f)
+            let step = lockrestart_do_in(trans, &mut paths, |t, paths| {
+                keys.begin(t, paths, self)?;
+                self.key(t, paths, keys, &mut f)
             })?;
-            if let Some(b) = self.move_on(keys, step) {
+            if let Some(b) = self.move_on(&mut paths, keys, step) {
                 return Ok(b);
             }
         }
@@ -246,10 +250,11 @@ impl<'t> BtreeIter<'t> {
         F: KeyFn<'t, R>,
         R: LoopControl,
     {
-        keys.begin(t, self)?;
+        let mut paths = t.trans().paths();
+        keys.begin(t, &mut paths, self)?;
         loop {
-            let step = self.key(t, keys, &mut f)?;
-            if let Some(b) = self.move_on(keys, step) {
+            let step = self.key(t, &mut paths, keys, &mut f)?;
+            if let Some(b) = self.move_on(&mut paths, keys, step) {
                 return Ok(b);
             }
         }
@@ -264,8 +269,10 @@ impl<'t> BtreeIter<'t> {
         F: KeyFn<'t, R>,
         R: LoopControl,
     {
+        let mut paths = trans.paths();
         loop {
-            if let Some(b) = lockrestart_do(trans, |t| self.walk_attempt(t, keys, &mut f))? {
+            if let Some(b) = lockrestart_do_in(trans, &mut paths,
+                                               |t, paths| self.walk_attempt(t, paths, keys, &mut f))? {
                 return Ok(b);
             }
         }
@@ -273,18 +280,18 @@ impl<'t> BtreeIter<'t> {
 
     /// walk_in_trans()'s keys in attempt @t: what the walk returns, or None
     /// if a key ended the attempt with ignore_restarts().
-    fn walk_attempt<F, R>(&mut self, t: &TransAttempt<'_, 't>, keys: Keys, f: &mut F)
+    fn walk_attempt<F, R>(&mut self, t: &TransAttempt<'_, 't>, paths: &mut Paths<'_>, keys: Keys, f: &mut F)
         -> Result<Option<R::Break>, BchError>
     where
         F: KeyFn<'t, R>,
         R: LoopControl,
     {
-        keys.begin(t, self)?;
+        keys.begin(t, paths, self)?;
         loop {
-            t.relock()?;
-            let step = self.key(t, keys, f)?;
+            t.trans().relock_from(paths)?;
+            let step = self.key(t, paths, keys, f)?;
             t.verify_not_restarted();
-            if let Some(b) = self.move_on(keys, step) {
+            if let Some(b) = self.move_on(paths, keys, step) {
                 return Ok(Some(b));
             }
             if t.is_spent() {
@@ -341,15 +348,16 @@ impl<'t> BtreeIter<'t> {
     where
         F: for<'k> FnMut(&'k BtreeIter<'t>, BkeySC<'k>) -> Result<bool, BchError>,
     {
+        let mut paths = t.trans().paths();
         loop {
-            let Some((iter, k)) = self.keys_to(end).peek(t, self)? else {
+            let Some((iter, k)) = self.keys_to(end).peek(t, &mut paths, self)? else {
                 return Ok(None);
             };
 
-            if f(iter, k)? {
+            if paths.lend(|| f(iter, k))? {
                 return Ok(Some(unsafe { polonius_key(k) }));
             }
-            if !self.advance() {
+            if !self.advance_in(&mut paths) {
                 return Ok(None);
             }
         }
@@ -402,24 +410,25 @@ impl<'t> BtreeIter<'t> {
     where
         F: KeyFn<'t, ()>,
     {
+        let mut paths = trans.paths();
         loop {
-            let step = lockrestart_do(trans, |t| {
-                keys.begin(t, self)?;
-                match self.key(t, keys, &mut f) {
+            let step = lockrestart_do_in(trans, &mut paths, |t, paths| {
+                keys.begin(t, paths, self)?;
+                match self.key(t, paths, keys, &mut f) {
                     Err(e) if e.matches(bch_errcode::BCH_ERR_fc_continue) => Ok(Some(Step::Next)),
                     Err(e) if e.matches(bch_errcode::BCH_ERR_fc_break)    => Ok(Some(Step::Break(()))),
                     Ok(Some(step)) => {
                         // a spent attempt's step has nothing queued: what
                         // ignore_restarts() ran committed for itself
                         if let Some((disk_res, flags)) = commit.filter(|_| !t.is_spent()) {
-                            t.commit(disk_res, flags)?;
+                            paths.lend(|| t.commit(disk_res, flags))?;
                         }
                         Ok(Some(step))
                     }
                     r => r,
                 }
             })?;
-            if let Some(()) = self.move_on(keys, step) {
+            if let Some(()) = self.move_on(&mut paths, keys, step) {
                 return Ok(());
             }
         }
@@ -498,11 +507,12 @@ impl<'t> BtreeNodeIter<'t> {
         F: for<'a> FnMut(LockedNode<'a, BtreeNode>) -> Result<R, BchError>,
         R: LoopControl,
     {
+        let mut paths = trans.paths();
         loop {
-            let step = lockrestart_do(trans, |_| {
-                let Some(b) = self.peek()? else { return Ok(None) };
+            let step = lockrestart_do_in(trans, &mut paths, |_, paths| {
+                let Some(b) = self.raw.peek_node_in(paths)? else { return Ok(None) };
                 let end = b.contents().key.k.p;
-                Ok(Some((end, f(b)?.into_step())))
+                Ok(Some((end, paths.lend(|| f(b))?.into_step())))
             })?;
 
             // peek_node() leaves iter->pos at the node's min_key (so a restart
@@ -514,12 +524,12 @@ impl<'t> BtreeNodeIter<'t> {
             match step {
                 None => return Ok(Default::default()),
                 Some((_, Step::Break(v))) => return Ok(v),
-                Some((_, Step::From(pos))) => self.raw.set_pos(pos),
+                Some((_, Step::From(pos))) => self.raw.set_pos_in(&mut paths, pos),
                 Some((end, Step::Next)) => {
                     if end == SPOS_MAX {
                         return Ok(Default::default());
                     }
-                    self.raw.set_pos(end.successor());
+                    self.raw.set_pos_in(&mut paths, end.successor());
                 }
             }
         }

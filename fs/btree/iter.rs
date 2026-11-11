@@ -2209,6 +2209,11 @@ impl<'t> BtreeIter<'t> {
         self.set_pos(Bpos { snapshot, ..self.pos });
     }
 
+    pub(super) fn set_snapshot_in(&mut self, paths: &mut Paths<'_>, snapshot: u32) {
+        self.snapshot = snapshot;
+        self.set_pos_in(paths, Bpos { snapshot, ..self.pos });
+    }
+
     pub fn snapshot(&self) -> u32 {
         self.snapshot
     }
@@ -2357,11 +2362,11 @@ impl<'t> BtreeIter<'t> {
     /// Peek with @peek, under attempt @t: the key, and the iterator it
     /// borrows, shared - both from the one &mut borrow, so neither outlives
     /// it and nothing moves the iterator while they're in use.
-    pub(super) fn peek_with<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>,
+    pub(super) fn peek_with<'k>(&'k mut self, _t: &'k TransAttempt<'_, 't>, paths: &mut Paths<'_>,
                                 peek: impl FnOnce(&mut Self, &mut Paths<'_>) -> Peeked)
         -> Result<Option<(&'k BtreeIter<'t>, BkeySC<'k>)>, BchError>
     {
-        let k = peek(self, &mut t.trans().paths())?;
+        let k = peek(self, paths)?;
         let this = &*self;
         Ok(this.key_of(k).map(|k| (this, k)))
     }
@@ -2371,7 +2376,7 @@ impl<'t> BtreeIter<'t> {
     pub fn peek_slot_with<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>)
         -> Result<Option<(&'k BtreeIter<'t>, BkeySC<'k>)>, BchError>
     {
-        self.peek_with(t, |iter, paths| iter.peek_slot_in(paths))
+        self.peek_with(t, &mut t.trans().paths(), |iter, paths| iter.peek_slot_in(paths))
     }
 
     pub fn peek<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>)

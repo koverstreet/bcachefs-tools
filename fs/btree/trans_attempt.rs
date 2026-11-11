@@ -40,6 +40,7 @@ use crate::errcode::{
     errptr_to_result,
     ret_to_result_void as ret_to_result,
 };
+use crate::btree::path::Paths;
 use crate::btree::trans::TransGuard;
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
@@ -122,7 +123,7 @@ fn begin_if_unusable(trans: &BtreeTrans<'_>) {
                       trans.fn_name());
 
     if trans.restarted().0 != 0 || !trans.locked() {
-        trans.begin_raw(AttemptKey(()));
+        trans.begin_raw(&mut trans.paths(), AttemptKey(()));
     }
 }
 
@@ -192,13 +193,35 @@ where
     }
 }
 
+/// lockrestart_do(), for the btree code's own loops: each attempt begun, and @f
+/// run, under the caller's borrow of the path table - @f lends it to whatever
+/// public code it runs.
+pub(in crate::btree) fn lockrestart_do_in<'t, T, F>(trans: &BtreeTrans<'t>, paths: &mut Paths<'_>, mut f: F)
+    -> Result<T, BchError>
+where
+    F: for<'a> FnMut(&TransAttempt<'a, 't>, &mut Paths<'_>) -> Result<T, BchError>
+{
+    loop {
+        let t = TransAttempt::new(trans, trans.begin_raw(paths, AttemptKey(())));
+
+        match f(&t, paths) {
+            Err(e) if is_restart(&e) => continue,
+            Err(e) => return Err(e),
+            Ok(v) => {
+                t.verify_not_restarted();
+                return Ok(v);
+            }
+        }
+    }
+}
+
 /// Beginning an attempt is this file's: BtreeTrans::begin_raw() takes one of
 /// these, which nothing outside it can make.
 pub(in crate::btree) struct AttemptKey(());
 
 impl<'f> BtreeTrans<'f> {
     fn begin(&self) -> TransAttempt<'_, 'f> {
-        TransAttempt::new(self, self.begin_raw(AttemptKey(())))
+        TransAttempt::new(self, self.begin_raw(&mut self.paths(), AttemptKey(())))
     }
 
     /// begin(), for the write buffer flush, which keeps an attempt across keys
@@ -214,7 +237,7 @@ impl<'f> BtreeTrans<'f> {
     /// be put.
     #[inline(always)]
     pub(crate) fn abandon_restart(&self) {
-        self.begin_raw(AttemptKey(()));
+        self.begin_raw(&mut self.paths(), AttemptKey(()));
     }
 }
 
