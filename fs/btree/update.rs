@@ -157,7 +157,7 @@ impl Fs {
         }
 
         if !self.journal.flags.get(c::journal_flags::running) {
-            self.journal.early_entry_add(c::bch_jset_entry_type::log, 0, 1, &[buf.as_bytes()])
+            self.journal.early_entry_add(c::bch_jset_entry_type::log, 0, 1, buf.as_bytes())
         } else {
             let trans = crate::btree_trans!(self);
             commit_do(&trans, None, flags, |t| t.log_msg(&buf))
@@ -344,8 +344,8 @@ impl TransAttempt<'_, '_> {
     {
         let u64s = c::JSET_KEYS_U64s + data.len().div_ceil(size_of::<u64>());
         self.subbuf_append(&self.trans().journal_entries, u64s, |buf| {
-            EntryWriter::new(buf.as_mut_bytes())
-                .push(ty, btree, level, &[data])
+            EntryWriter::new(buf)
+                .push_bytes(ty, btree, level, data)
                 .expect("an entry the size allocated for it");
         })
     }

@@ -41,7 +41,7 @@ use crate::util::kernel::{jiffies, ktime_get_real_seconds, local_clock, msecs_to
                           WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::time_stats::TimeStats;
-use crate::util::vstructs::{Head, SelfSized, Unvalidated};
+use crate::util::vstructs::{cast_plain_slice_mut, Head, SelfSized, Unvalidated};
 use crate::util::printbuf::ToText;
 use crate::{log_msg_ratelimited, prt};
 
@@ -89,9 +89,9 @@ impl c::journal_buf {
     /// Entries appended to its jset, by @f: the u64s they took.
     fn append_entries(&mut self, f: impl FnOnce(&mut EntryWriter<'_>)) -> usize {
         let (_, tail) = self.jset_and_tail();
-        let mut ew = EntryWriter::new(tail);
+        let mut ew = EntryWriter::new(cast_plain_slice_mut(tail).expect("a journal buf, u64s past its jset"));
         f(&mut ew);
-        let u64s = ew.len() / size_of::<u64>();
+        let u64s = ew.len();
 
         let h = self.head_mut();
         h.set_u64s(h.u64s() + u64s);

@@ -45,6 +45,7 @@ use crate::util::time_stats::TimeStats;
 use crate::util::{late::Late, mempool::{Mempool, PoolBox}, workqueue::{run_raw, RawWork, Workqueue, WqFlags}};
 use crate::prt;
 use pin_init::{init, init_zeroed, pin_data};
+use zerocopy::IntoBytes;
 
 mod completion;
 mod reserve;
@@ -976,7 +977,9 @@ fn push_roots(fs: &Fs, root_lock: &RootsGuard<'_>, skip: u64, w: &mut EntryWrite
     -> Result<(), NoRoom>
 {
     for (id, r) in roots(fs, root_lock, skip) {
-        w.push(c::bch_jset_entry_type::btree_root, id as u8, r.level, &[r.key.key().as_bytes()])?;
+        let k = r.key.key();
+        w.add_entry(c::bch_jset_entry_type::btree_root, id as u8, r.level, k.k.u64s.into())?
+            .as_mut_bytes().copy_from_slice(k.as_bytes());
     }
     Ok(())
 }

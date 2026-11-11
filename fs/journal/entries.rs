@@ -15,55 +15,73 @@ use zerocopy::IntoBytes;
 pub struct NoRoom;
 
 pub struct EntryWriter<'a> {
-    buf: &'a mut [u8],
-    pos: usize,
+    /* the buffer past what's written */
+    room:    &'a mut [u64],
+    written: usize,
 }
 
+const HEADER_U64S: usize = size_of::<Head<c::jset_entry>>() / size_of::<u64>();
+
 impl<'a> EntryWriter<'a> {
-    pub fn new(buf: &'a mut [u8]) -> Self {
-        EntryWriter { buf, pos: 0 }
+    pub fn new(buf: &'a mut [u64]) -> Self {
+        EntryWriter { room: buf, written: 0 }
     }
 
-    /// The bytes written.
+    /// The u64s written.
     pub fn len(&self) -> usize {
-        self.pos
+        self.written
     }
 
-    /// The next @bytes of the buffer, past what's written, for the caller to
-    /// write all of.
-    fn reserve(&mut self, bytes: usize) -> Result<&mut [u8], NoRoom> {
-        let b = self.buf.get_mut(self.pos..).and_then(|b| b.get_mut(..bytes)).ok_or(NoRoom)?;
-        self.pos += bytes;
+    /// The u64s left to write.
+    pub fn room(&self) -> usize {
+        self.room.len()
+    }
+
+    /// The next @u64s, past what's written, for the caller to write all of.
+    #[inline(always)]
+    fn reserve(&mut self, u64s: usize) -> Result<&'a mut [u64], NoRoom> {
+        if u64s > self.room.len() {
+            return Err(NoRoom);
+        }
+        let (b, rest) = core::mem::take(&mut self.room).split_at_mut(u64s);
+        self.room = rest;
+        self.written += u64s;
         Ok(b)
     }
 
-    /// An entry of @ty, for @btree_id at @level, holding @data - its parts,
-    /// one after another, zero padded to a u64: journal_entry_set().
-    pub fn push(&mut self, ty: c::bch_jset_entry_type, btree_id: u8, level: u8, data: &[&[u8]])
-        -> Result<(), NoRoom>
+    /// An entry of @ty, for @btree_id at @level, of @u64s: its header written,
+    /// and its value for the caller to write all of -
+    /// __bch2_journal_add_entry().
+    #[inline(always)]
+    pub fn add_entry(&mut self, ty: c::bch_jset_entry_type, btree_id: u8, level: u8, u64s: usize)
+        -> Result<&'a mut [u64], NoRoom>
     {
-        let u64s = data.iter().map(|d| d.len()).sum::<usize>().div_ceil(size_of::<u64>());
         let mut e = Head::<c::jset_entry>::default();
         e.type_ = ty.0 as u8;
         e.btree_id = btree_id;
         e.level = level;
         e.set_val_u64s(u64s);
 
-        let b = self.reserve(size_of::<Head<c::jset_entry>>() + u64s * size_of::<u64>())?;
-        let (hdr, mut rest) = b.split_at_mut(size_of::<Head<c::jset_entry>>());
-        hdr.copy_from_slice(plain_bytes(&e));
-        for d in data {
-            let (dst, r) = rest.split_at_mut(d.len());
-            dst.copy_from_slice(d);
-            rest = r;
-        }
-        rest.fill(0);
+        let (hdr, v) = self.reserve(HEADER_U64S + u64s)?.split_at_mut(HEADER_U64S);
+        hdr.as_mut_bytes().copy_from_slice(plain_bytes(&e));
+        Ok(v)
+    }
+
+    /// An entry of @ty, for @btree_id at @level, holding @data, zero padded to
+    /// a u64: journal_entry_set().
+    pub fn push_bytes(&mut self, ty: c::bch_jset_entry_type, btree_id: u8, level: u8, data: &[u8])
+        -> Result<(), NoRoom>
+    {
+        let v = self.add_entry(ty, btree_id, level, data.len().div_ceil(size_of::<u64>()))?.as_mut_bytes();
+        let (d, pad) = v.split_at_mut(data.len());
+        d.copy_from_slice(data);
+        pad.fill(0);
         Ok(())
     }
 
     /// @entries, whole entries already written, their counts set.
     pub fn push_entries(&mut self, entries: &[u64]) -> Result<(), NoRoom> {
-        self.reserve(entries.len() * size_of::<u64>())?.copy_from_slice(entries.as_bytes());
+        self.reserve(entries.len())?.copy_from_slice(entries);
         Ok(())
     }
 
@@ -71,8 +89,8 @@ impl<'a> EntryWriter<'a> {
     /// jset_entry_init(), filled in.
     pub fn push_entry<E: VStruct + Plain>(&mut self, mut e: E) -> Result<(), NoRoom> {
         const { assert!(size_of::<E>() % size_of::<u64>() == 0) };
-        e.set_val_u64s(size_of::<E>() / size_of::<u64>() - 1);
-        self.reserve(size_of::<E>())?.copy_from_slice(plain_bytes(&e));
+        e.set_val_u64s(size_of::<E>() / size_of::<u64>() - HEADER_U64S);
+        self.reserve(size_of::<E>() / size_of::<u64>())?.as_mut_bytes().copy_from_slice(plain_bytes(&e));
         Ok(())
     }
 }

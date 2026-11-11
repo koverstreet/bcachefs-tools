@@ -23,7 +23,7 @@ use crate::sb::errors::SbErrorId;
 use crate::sb::io::{entries_end, SbFieldOps};
 use crate::types::{Le32, Le64};
 use crate::util::alloc::KVVec;
-use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, UnvalidatedEntriesMut, Validated, VstructRef};
+use crate::util::vstructs::{bytes_of_mut, cast_plain_slice_mut, Head, Unvalidated, UnvalidatedEntriesMut, Validated, VstructRef};
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, fsck_err, mustfix_fsck_err_on, prt};
 use crate::sb::io::SbResize;
@@ -233,7 +233,8 @@ pub(crate) fn fs_mark_clean(fs: &Fs, guard: &mut SbLockGuard<'_>) {
     // Trying to catch outstanding bug:
     assert!(f.journal_seq.get() <= i64::MAX as u64, "journal seq {} past S64_MAX", f.journal_seq.get());
 
-    let entries = &mut bytes_of_mut(f)[SECTION_HEAD..];
+    let entries = cast_plain_slice_mut::<u64>(&mut bytes_of_mut(f)[SECTION_HEAD..])
+        .expect("the clean section, u64s past its header");
     let mut w = EntryWriter::new(entries);
     if super_entries_add_common(fs, &mut w).and_then(|()| btree_roots_to_journal_entries(fs, &mut w, 0)).is_err() {
         bch_err!(fs, "error setting filesystem clean: its entries overran entry_u64s_reserved");

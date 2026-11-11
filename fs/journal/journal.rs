@@ -147,11 +147,12 @@ use crate::util::kernel::{jiffies, jiffies_to_msecs, local_clock, msecs_to_jiffi
 use crate::util::rcu::read_lock;
 use crate::util::log::LogMsg;
 use crate::util::printbuf::HumanReadable;
-use crate::util::vstructs::{plain_bytes, plain_bytes_mut, Head, SelfSized};
+use crate::util::vstructs::{plain_bytes, Head, SelfSized};
 use crate::util::time_stats::TimeStats;
 use crate::util::refcount::TryRefcount;
 use crate::util::{Printbuf, ToText};
 use crate::{prt, warn_once};
+use zerocopy::IntoBytes;
 
 fn state_idx(seq: u64) -> u32 {
     (seq & u64::from(c::JOURNAL_STATE_BUF_MASK)) as u32
@@ -341,12 +342,11 @@ impl c::journal {
     pub fn res_append_entries<R>(&self, res: &mut c::journal_res, f: impl FnOnce(&mut EntryWriter<'_>) -> R) -> R {
         ebug_assert!(res.ref_, "entries into a journal reservation not held");
 
-        let room = usize::from(res.u64s) * size_of::<u64>();
-        let buf = unsafe { core::slice::from_raw_parts_mut(self.res_entry(res).cast::<u8>(), room) };
+        let buf = unsafe { core::slice::from_raw_parts_mut(self.res_entry(res).cast::<u64>(), res.u64s.into()) };
         let mut w = EntryWriter::new(buf);
         let ret = f(&mut w);
 
-        let u64s = w.len() / size_of::<u64>();
+        let u64s = w.len();
         res.offset += u64s as u32;
         res.u64s -= u64s as u16;
         ret
@@ -1446,13 +1446,12 @@ impl c::journal {
     }
 
     /// An entry journalled before the journal runs, into its first entry.
-    pub fn early_entry_add(&self, ty: c::bch_jset_entry_type, btree_id: u8, level: u8, data: &[&[u8]])
+    pub fn early_entry_add(&self, ty: c::bch_jset_entry_type, btree_id: u8, level: u8, data: &[u8])
         -> Result<(), BchError>
     {
-        let u64s = size_of::<Head<c::jset_entry>>() / size_of::<u64>() +
-            data.iter().map(|d| d.len()).sum::<usize>().div_ceil(size_of::<u64>());
+        let u64s = size_of::<Head<c::jset_entry>>() / size_of::<u64>() + data.len().div_ceil(size_of::<u64>());
         let mut e = KVVec::from_elem(0u64, u64s)?;
-        EntryWriter::new(plain_bytes_mut(&mut e[..])).push(ty, btree_id, level, data)
+        EntryWriter::new(&mut e[..]).push_bytes(ty, btree_id, level, data)
             .expect("an entry, in room sized for it");
 
         /* j->lock is a spinlock: the entries grow into a new buffer, swapped in under it */
@@ -1718,7 +1717,7 @@ impl NotRw<'_> {
         unsafe { self.journal_rewind_ranges() }.push(c::journal_rewind_range { from, to })?;
 
         self.fs.journal.early_entry_add(c::bch_jset_entry_type::rewind, 0, 0,
-                                        &[&from.to_le_bytes(), &to.to_le_bytes()])
+                                        [from.to_le(), to.to_le()].as_bytes())
     }
 }
 
