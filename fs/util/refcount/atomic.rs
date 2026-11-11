@@ -54,6 +54,8 @@ impl<T> AtomicRef<T> {
     }
 
     /// By the put that left no refs, once stopped.
+    #[cold]
+    #[inline(never)]
     fn release(&self) {
         fence(Acquire);
         unsafe { ManuallyDrop::drop(&mut *self.value.get()) };
