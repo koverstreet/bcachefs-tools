@@ -641,7 +641,7 @@ mod vfs {
 
         let s_t = snapshot::tree_lookup(t, tree).inspect_err(|e| {
             if e.matches(c::ENOENT) {
-                fs_inconsistent!(fs, "{}: snapshot tree {tree} not found", crate::function_name!());
+                fs_inconsistent!(fs, "{}: snapshot tree {tree} not found", crate::here_str!());
             }
         })?;
 

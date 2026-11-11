@@ -113,7 +113,13 @@ impl TransFnName {
     #[cold]
     #[inline(never)]
     fn register(&self, f_path: &'static str) -> u32 {
-        let idx = bch2_trans_get_fn_idx(self.name.get(crate::util::log::fn_name(f_path)).as_ptr().cast());
+        let mut name = f_path.strip_suffix("::f").unwrap_or(f_path);
+        while let Some(n) = name.strip_suffix("::{{closure}}") {
+            name = n;
+        }
+        let name = name.rsplit("::").next().unwrap_or(name);
+
+        let idx = bch2_trans_get_fn_idx(self.name.get(name).as_ptr().cast());
         self.idx.store(idx, Ordering::Release);
         idx
     }

@@ -145,7 +145,7 @@ async fn task(_write: WriteRef, fs: BackRef<Fs>, a: OpBox) {
     if let Err(e) = lockrestart_do(&trans, |t| a.run(t)) {
         if !e.matches(c::ENOENT) && !e.matches(c::EROFS) &&
            !e.matches(c::bch_errcode::BCH_ERR_no_btree_node_nofill) {
-            crate::bch_err_ratelimited!(fs, "{}(): error {}", crate::function_name!(), e.msg());
+            crate::bch_err_ratelimited!(fs, "{}: error {}", crate::here_str!(), e.msg());
         }
     }
     drop(trans);

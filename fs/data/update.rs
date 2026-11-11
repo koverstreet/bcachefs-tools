@@ -45,7 +45,7 @@ use crate::util::kernel::unlikely;
 use crate::util::rcu::read_lock;
 use crate::util::{Printbuf, ToText};
 use crate::util::log::should_print_err;
-use crate::{bch_err_ratelimited, function_name, prt};
+use crate::{bch_err_ratelimited, here_str, prt};
 use crate::debug::trace::events;
 use core::ffi::{c_int, c_uint};
 use pin_init::stack_pin_init;
@@ -505,8 +505,8 @@ impl c::data_update {
                     }
                     Err(e) => {
                         if should_print_err(&e) {
-                            bch_err_ratelimited!(fs, "{}(): error allocating for an unwritten extent: {e}",
-                                                 function_name!());
+                            bch_err_ratelimited!(fs, "{}: error allocating for an unwritten extent: {e}",
+                                                 here_str!());
                         }
                         return Err(e);
                     }
@@ -780,8 +780,8 @@ impl c::data_update {
                                     |t| crate::init::damage::record_key(t, btree, pos, err));
             if let Err(e) = r {
                 if should_print_err(&e) {
-                    bch_err_ratelimited!(fs, "{}(): error recording a data update's read error: {e}",
-                                         function_name!());
+                    bch_err_ratelimited!(fs, "{}: error recording a data update's read error: {e}",
+                                         here_str!());
                 }
             }
         }

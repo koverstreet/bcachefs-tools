@@ -641,30 +641,6 @@ macro_rules! warn_once {
     };
 }
 
-/// The name of the function this is expanded in, as C's __func__ - the
-/// function, not a closure inside it.
-#[macro_export]
-macro_rules! function_name {
-    () => {{
-        fn f() {}
-        $crate::util::log::fn_name(core::any::type_name_of_val(&f))
-    }};
-}
-
-/// function_name!()'s: @path, the type name of a fn item declared in the
-/// function, made the function's name. Not inlined: a str split's searcher is
-/// over 100 bytes, and would be in the frame of every function that names
-/// itself - each that starts a transaction.
-#[doc(hidden)]
-#[inline(never)]
-pub fn fn_name(path: &'static str) -> &'static str {
-    let mut name = path.strip_suffix("::f").unwrap_or(path);
-    while let Some(n) = name.strip_suffix("::{{closure}}") {
-        name = n;
-    }
-    name.rsplit("::").next().unwrap_or(name)
-}
-
 /// This call site, "file:line", as a C string that lives forever: what a
 /// message says it came from, where C passes __func__.
 #[macro_export]
@@ -678,6 +654,14 @@ macro_rules! here {
                 Err(_) => panic!("a NUL in file!()"),
             }
         }
+    };
+}
+
+/// here!(), as a str: for a message that prints it.
+#[macro_export]
+macro_rules! here_str {
+    () => {
+        ::core::concat!(::core::file!(), ":", ::core::line!())
     };
 }
 
@@ -729,8 +713,8 @@ impl CFnName {
     }
 }
 
-/// As C's bch_err_fn(): report an error from @result, naming the function -
-/// unless it's a restart, which isn't one. Evaluates to @result, so it can
+/// As C's bch_err_fn(): report an error from @result, saying where - unless
+/// it's a restart, which isn't one. Evaluates to @result, so it can
 /// wrap the call: `bch_err_fn!(fs, f())?`.
 #[macro_export]
 macro_rules! bch_err_fn {
@@ -739,7 +723,7 @@ macro_rules! bch_err_fn {
         if let Err(e) = &result {
             let e: $crate::errcode::BchError = (*e).into();
             if $crate::util::log::should_print_err(&e) {
-                $crate::bch_err!($fs, "{}(): error {}", $crate::function_name!(), e.msg());
+                $crate::bch_err!($fs, "{}: error {}", $crate::here_str!(), e.msg());
             }
         }
         result
@@ -755,7 +739,7 @@ macro_rules! bch_err_msg {
         if let Err(e) = &result {
             let e: $crate::errcode::BchError = (*e).into();
             if $crate::util::log::should_print_err(&e) {
-                $crate::bch_err!($fs, "{}(): error {} {}", $crate::function_name!(),
+                $crate::bch_err!($fs, "{}: error {} {}", $crate::here_str!(),
                                  $crate::message!($($arg)*), e.msg());
             }
         }
@@ -785,7 +769,7 @@ macro_rules! bch_err_fn_dev {
         if let Err(e) = &result {
             let e: $crate::errcode::BchError = (*e).into();
             if $crate::util::log::should_print_err(&e) {
-                $crate::bch_err_dev!($ca, "{}(): error {}", $crate::function_name!(), e.msg());
+                $crate::bch_err_dev!($ca, "{}: error {}", $crate::here_str!(), e.msg());
             }
         }
         result
@@ -800,7 +784,7 @@ macro_rules! bch_err_msg_dev {
         if let Err(e) = &result {
             let e: $crate::errcode::BchError = (*e).into();
             if $crate::util::log::should_print_err(&e) {
-                $crate::bch_err_dev!($ca, "{}(): error {} {}", $crate::function_name!(),
+                $crate::bch_err_dev!($ca, "{}: error {} {}", $crate::here_str!(),
                                      $crate::message!($($arg)*), e.msg());
             }
         }
