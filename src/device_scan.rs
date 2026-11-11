@@ -22,7 +22,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use crate::wrappers::sysfs::DevInfo;
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use bch_bindgen::fs::FsExt;
@@ -715,6 +715,26 @@ pub fn open_online_or_offline(devs: &[PathBuf], offline_opts: bch_opts)
         Some(h) => OpenedFs::Online(h),
         None    => OpenedFs::Offline(open_scan(devs, offline_opts)?),
     })
+}
+
+/// A bch_fs for decoding keys read from a mounted filesystem through the
+/// kernel. Everything to_text and pointer decoding need comes from the
+/// superblock, so it is opened noexcl|nostart from the member block devices:
+/// no exclusive claim on the mounted devices, never started, journal never
+/// read. Opened from sysfs's member list because the path that found the
+/// mount may be a mount point or a UUID, which aren't openable as devices.
+pub fn open_mounted_for_decoding(handle: &crate::wrappers::handle::BcachefsHandle,
+                                 mut fs_opts: bch_opts) -> Result<OpenFs> {
+    let devs = handle.member_devices()
+        .context("getting member devices from sysfs")?;
+
+    fs_opts.set_noexcl(true);
+    fs_opts.set_nochanges(true);
+    fs_opts.set_read_only(true);
+    fs_opts.set_norecovery(true);
+    fs_opts.set_nostart(true);
+    open_scan(&devs, fs_opts)
+        .with_context(|| format!("opening {:?} (noexcl/nostart, for decoding keys)", devs))
 }
 
 /// One device names a filesystem, so find its members the way mount does.

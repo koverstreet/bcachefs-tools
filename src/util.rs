@@ -61,6 +61,25 @@ pub fn open_dir(path: &Path) -> Result<OwnedFd> {
 /* Not in the libc crate yet; from linux/stat.h */
 const STATX_SUBVOL: libc::c_uint = 0x8000;
 
+/// statx(2) of @path with @flags (AT_SYMLINK_NOFOLLOW, ...), or None if it
+/// isn't on a filesystem that reports subvolumes.
+pub fn statx_subvol(path: &Path, flags: libc::c_int) -> io::Result<Option<libc::statx>> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let mut stx: libc::statx = unsafe { std::mem::zeroed() };
+
+    if unsafe {
+        libc::statx(libc::AT_FDCWD, c_path.as_ptr(), flags,
+                    libc::STATX_BASIC_STATS | STATX_SUBVOL, &mut stx)
+    } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    Ok((stx.stx_mask & STATX_SUBVOL != 0).then_some(stx))
+}
+
 /// Which filesystem and subvolume @path is in, or None if it isn't on a
 /// filesystem that reports subvolumes.
 ///
@@ -70,20 +89,7 @@ const STATX_SUBVOL: libc::c_uint = 0x8000;
 /// pair changes if and only if we cross into a different filesystem or a
 /// different subvolume.
 fn path_subvol(path: &Path) -> Option<(u64, u64)> {
-    use std::os::unix::ffi::OsStrExt;
-
-    let c_path = CString::new(path.as_os_str().as_bytes()).ok()?;
-    let mut stx: libc::statx = unsafe { std::mem::zeroed() };
-
-    if unsafe {
-        libc::statx(libc::AT_FDCWD, c_path.as_ptr(), 0, STATX_SUBVOL, &mut stx)
-    } != 0 {
-        return None;
-    }
-
-    if stx.stx_mask & STATX_SUBVOL == 0 {
-        return None;
-    }
+    let stx = statx_subvol(path, 0).ok()??;
 
     Some((libc::makedev(stx.stx_dev_major, stx.stx_dev_minor),
           stx.stx_subvol))
