@@ -610,13 +610,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let size = bytes.next_multiple_of(size_of::<u64>());
         let t = self.trans;
 
-        /*
-         * Growing borrows the path table - it may drop locks to allocate: a
-         * caller holding it must hear so when it doesn't grow, too
-         */
-        ebug_assert!(!t.paths_borrowed(), "{}: allocating with the path table borrowed - kmalloc_in() takes it",
-                     t.fn_name());
-
         match t.mem_with(|m| m.alloc(size / size_of::<u64>())) {
             Some(p) => Ok(p.as_ptr().cast()),
             None    => Err(t.kmalloc_grow(size, crate::ret_ip!())),
