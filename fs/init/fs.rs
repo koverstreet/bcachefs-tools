@@ -9,7 +9,6 @@ use crate::init::passes::RecoveryPass;
 use crate::btree::node::BtreeNode;
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
-use crate::alloc::accounting_mem::accounting_exit;
 use crate::alloc::foreground::allocator_foreground_init;
 use crate::alloc::replicas::can_write_with_devs;
 use crate::btree::init::{btree_exit, btree_init};
@@ -943,7 +942,6 @@ unsafe fn release(p: *mut Fs) {
         btree_exit(p);
         fs.btree.cache.nodes.exit();
         fs.btree.key_cache.keys.exit();
-        accounting_exit(fs);
     }
     crate::debug::async_objs::lists::async_obj_exit(fs);
     unsafe {

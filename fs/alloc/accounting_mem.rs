@@ -16,7 +16,7 @@ use crate::format::{self, MetadataVersion, Bpos, Bversion, DataType};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id, FsckErrCtx};
 use crate::init::passes;
-use crate::locking::{percpu_rwsem_noio, AsLockedBy, ExclusiveGuard, Held, SharedGuard};
+use crate::locking::{percpu_rwsem_noio, ExclusiveGuard, Held, SharedGuard};
 use crate::debug::trace::events;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::eytzinger::Eytzinger0;
@@ -344,13 +344,6 @@ pub(crate) fn accounting_gc_free(fs: &Fs, mark: &mut MarkWrite<'_>) {
     let acc = fs.accounting_mem_mut(mark);
     acc.free_gc();
     acc.gc_running = false;
-}
-
-/// # Safety
-/// Nothing uses the accounting any more.
-pub unsafe fn accounting_exit(fs: &Fs) {
-    let acc = unsafe { fs.accounting.locked_by().protected_mut() };
-    acc.entries = KVVec::new();
 }
 
 fn read_key(fs: &Fs, entries: &mut KVVec<Entry>, k: BkeySC<'_>) -> Result<(), BchError> {
