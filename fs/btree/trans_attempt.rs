@@ -846,7 +846,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     pub fn btree_increase_depth(&self, iter: &BtreeIter<'a>) -> Result<(), BchError> {
         let trans = self.trans();
-        super::interior::increase_depth(trans, &mut trans.paths(), iter.path, CommitOpts::new())
+        super::interior::increase_depth(self, &mut trans.paths(), iter.path, CommitOpts::new())
     }
 
     /// The pointer at @level of @btree, at @pos, edited by @f - handed a copy
@@ -959,7 +959,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         write_flags: c::bch_write_flags,
     ) -> Result<(), BchError> {
         let trans = self.trans();
-        super::interior::node_rewrite(trans, &mut trans.paths(), iter, unsafe { &*node.as_ptr() }, target,
+        super::interior::node_rewrite(self, &mut trans.paths(), iter, unsafe { &*node.as_ptr() }, target,
                                       flags.into(), write_flags)
     }
 

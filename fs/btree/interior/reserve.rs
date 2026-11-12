@@ -112,7 +112,8 @@ impl<'t> InteriorUpdate<'t> {
                           write: c::bch_write_flags) -> Result<(), BchError> {
         use c::bch_watermark as wm;
 
-        let trans = self.trans;
+        let t = self.t();
+        let trans = t.trans();
         let fs = self.fs();
         let watermark = commit.get_watermark();
         let flags = commit.to_c();
@@ -131,7 +132,6 @@ impl<'t> InteriorUpdate<'t> {
         let nr_replicas = self.disk_res.nr_replicas.get();
         // before the request, which holds it once it's to block
         stack_pin_init!(let cl = StackClosure::new());
-        let t = unsafe { trans.attempt_in_progress() };
         let mut req = paths.lend(|| t.alloc_request(target, false, Some(&devs_have), nr_replicas, nr_replicas,
                                                     watermark, write, None))?;
 
@@ -186,7 +186,7 @@ impl<'t> InteriorUpdate<'t> {
     fn reserve_get(&self, paths: &mut Paths<'_>, nr_nodes: [usize; 2], req: &mut c::alloc_request<'_, 't>)
         -> Result<(), BchError>
     {
-        let trans = self.trans;
+        let trans = self.trans();
 
         assert!(nr_nodes[0] + nr_nodes[1] <= BTREE_RESERVE_MAX as usize,
                 "an interior update reserving {} nodes", nr_nodes[0] + nr_nodes[1]);
@@ -214,7 +214,8 @@ impl<'t> InteriorUpdate<'t> {
     fn node_alloc_from_allocator(&self, paths: &mut Paths<'_>, interior: bool, req: &mut c::alloc_request<'_, 't>)
         -> Result<Reserved, BchError>
     {
-        let trans = self.trans;
+        let t = self.t();
+        let trans = t.trans();
         let fs = self.fs();
 
         let b = trans.btree_node_mem_alloc(paths, interior)?;
@@ -222,7 +223,6 @@ impl<'t> InteriorUpdate<'t> {
         let mut ob = c::open_buckets::default();
 
         let ret: Result<(), BchError> = (|| {
-            let t = unsafe { trans.attempt_in_progress() };
             let mut wp = loop {
                 let wp = paths.lend(|| t.alloc_sectors(req, c::write_point_specifier::BTREE))?;
                 if wp.sectors_free() >= fs.btree_sectors() {
@@ -395,8 +395,8 @@ impl<'t> InteriorUpdate<'t> {
     /// puts it.
     pub(crate) fn take_path(&self, paths: &mut Paths<'_>, n: &NewNode<'_>) -> PathIdx {
         let pos = n.contents().key_i().k().p;
-        let idx = self.trans.path_get_unlocked_mut(paths, crate::format::Btree(n.c.btree_id.into()),
-                                                   n.c.level.into(), pos, false, crate::ret_ip!());
+        let idx = self.trans().path_get_unlocked_mut(paths, crate::format::Btree(n.c.btree_id.into()),
+                                                     n.c.level.into(), pos, false, crate::ret_ip!());
         self.take_node(paths, idx, n);
         self.owned.borrow_mut().paths.push(idx);
         idx
@@ -425,7 +425,7 @@ impl<'t> InteriorUpdate<'t> {
         };
         paths[path].put_level(level, &n.c, hold);
         paths[path].lock_taken(level);
-        self.trans.path_level_init(paths, path, level, n.locked());
+        self.trans().path_level_init(paths, path, level, n.locked());
     }
 
     /// @b, freed by the update, freed in memory: @path holds it write locked.
@@ -437,7 +437,7 @@ impl<'t> InteriorUpdate<'t> {
         node_free(fs, &b);
 
         let _ = fs.btree_node_transition_state(&b, c::btree_node_cache_state::FREEABLE);
-        self.trans.node_forget(paths, &b);
+        self.trans().node_forget(paths, &b);
     }
 }
 

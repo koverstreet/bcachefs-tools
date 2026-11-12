@@ -99,7 +99,7 @@ impl Op {
             t.btree_node_rewrite(iter.iter(), b, 0, CommitOpts::new(), c::bch_write_flags::empty())
         } else {
             let trans = t.trans();
-            super::interior::foreground_maybe_merge(trans, &mut trans.paths(), iter.iter().path, level as usize,
+            super::interior::foreground_maybe_merge(t, &mut trans.paths(), iter.iter().path, level as usize,
                                                     CommitOpts::new(), None)
         }
     }

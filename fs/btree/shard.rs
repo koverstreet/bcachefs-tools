@@ -153,7 +153,7 @@ fn split_at_shard_boundary(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos) ->
         }
     }
 
-    split_leaf(trans, &mut trans.paths(), path, 0, CommitOpts::new())?;
+    split_leaf(t, &mut trans.paths(), path, 0, CommitOpts::new())?;
     Ok(true)
 }
 

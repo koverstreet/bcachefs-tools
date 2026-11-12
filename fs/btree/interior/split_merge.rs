@@ -538,13 +538,13 @@ fn btree_node_op_log(out: &mut Printbuf, fs: &Fs, srcs: &[Node<'_>], dsts: &[New
 fn btree_split(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathIdx, b: Node<'_>,
                insert_parent_keys: bool) -> Result<(), BchError> {
     let ret = btree_split_in(update, paths, path, b, insert_parent_keys);
-    update.trans.verify_locks(paths);
+    update.trans().verify_locks(paths);
     ret
 }
 
 fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathIdx, b: Node<'_>,
                   insert_parent_keys: bool) -> Result<(), BchError> {
-    let trans = update.trans;
+    let trans = update.trans();
     let fs = trans.fs();
     let level = usize::from(b.c.level);
     let has_parent = paths[path].locked_btree_node(level + 1).is_some();
@@ -666,7 +666,7 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
  */
 pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathIdx,
                           b: Node<'_>) -> Result<(), BchError> {
-    let trans = update.trans;
+    let trans = update.trans();
     let fs = trans.fs();
     let level = usize::from(b.c.level);
 
@@ -753,8 +753,9 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
     Ok(())
 }
 
-pub(crate) fn foreground_maybe_merge(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
+pub(crate) fn foreground_maybe_merge(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
                                      commit: CommitOpts, merge_count: Option<&mut u64>) -> Result<(), BchError> {
+    let trans = t.trans();
     trans.verify_not_unlocked_or_in_restart();
 
     let b = paths[path].locked_btree_node(level).expect("merging a node the path doesn't hold");
@@ -762,7 +763,7 @@ pub(crate) fn foreground_maybe_merge(trans: &BtreeTrans<'_>, paths: &mut Paths<'
         return Ok(());
     }
 
-    merge(trans, paths, path, level, commit, merge_count)
+    merge(t, paths, path, level, commit, merge_count)
 }
 
 /// The node at @iter merged with its siblings, if it needs it, or @iter moved
@@ -790,7 +791,7 @@ fn merge_btree_node_one<'t>(t: &TransAttempt<'_, 't>, progress: &Progress<'_>, i
 
     let mut paths = trans.paths();
     trans.path_upgrade(&mut paths, path, level + 1, crate::ret_ip!())?;
-    foreground_maybe_merge(trans, &mut paths, path, level, CommitOpts::new(), Some(merge_count))?;
+    foreground_maybe_merge(t, &mut paths, path, level, CommitOpts::new(), Some(merge_count))?;
     Ok(false)
 }
 
@@ -1113,13 +1114,14 @@ fn merge_layouts(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: Node<'_>,
 /// The node at @level of @path merged with its siblings, if together they're
 /// small enough: into one node - or three into two. A merge that's done
 /// counts in @merge_count.
-pub(crate) fn merge(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
+pub(crate) fn merge(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
                     commit: CommitOpts, merge_count: Option<&mut u64>) -> Result<(), BchError> {
+    let trans = t.trans();
     let fs = trans.fs();
     let start_time = local_clock();
     let mut srcs = ArrayVec::new();
 
-    let ret = merge_in(trans, paths, path, level, commit, &mut srcs);
+    let ret = merge_in(t, paths, path, level, commit, &mut srcs);
     if matches!(ret, Ok(true)) {
         fs.times[c::bch_time_stats::btree_node_merge as usize].update(start_time);
         if let Some(n) = merge_count {
@@ -1143,8 +1145,9 @@ pub(crate) fn merge(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx
 
 /// merge(), the srcs' paths it takes in @srcs, for merge() to put: whether it
 /// merged.
-fn merge_in<'n>(trans: &BtreeTrans<'_>, paths: &mut Paths<'n>, path: PathIdx, level: usize, commit: CommitOpts,
+fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, level: usize, commit: CommitOpts,
                 srcs: &mut ArrayVec<Src<'n>, 3>) -> Result<bool, BchError> {
+    let trans = t.trans();
     let fs = trans.fs();
 
     trans.verify_not_unlocked_or_in_restart();
@@ -1282,7 +1285,7 @@ fn merge_in<'n>(trans: &BtreeTrans<'_>, paths: &mut Paths<'n>, path: PathIdx, le
 
     let nodes = read_nodes(srcs);
     let range = (nodes[0].contents().data().min_key, nodes[nodes.len() - 1].contents().data().max_key);
-    let update = InteriorUpdate::start(trans, paths, path, level, StartOpts {
+    let update = InteriorUpdate::start(t, paths, path, level, StartOpts {
         split:  layouts.len() == 2,
         commit: commit.flags(CommitFlags::NO_ENOSPC),
         range:  Some(range),
@@ -1320,7 +1323,7 @@ fn merge_in<'n>(trans: &BtreeTrans<'_>, paths: &mut Paths<'n>, path: PathIdx, le
 
 fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
                 srcs: &[Src<'_>], layouts: &[DstLayout]) -> Result<(), BchError> {
-    let trans = update.trans;
+    let trans = update.trans();
     let fs = trans.fs();
 
     for s in srcs {
@@ -1415,18 +1418,20 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
 pub unsafe fn __bch2_foreground_maybe_merge(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
                                             path: PathIdx, level: c_uint, flags: c::bch_trans_commit_flags,
                                             merge_count: *mut u64) -> c_int {
-    ret_to_c(merge(trans, paths, path, level as usize, flags.into(), unsafe { merge_count.as_mut() }))
+    let t = unsafe { trans.attempt_in_progress() };
+    ret_to_c(merge(&t, paths, path, level as usize, flags.into(), unsafe { merge_count.as_mut() }))
 }
 
 /// @path's leaf split - or compacted - so a key of @new_key_u64s fits, and
 /// the nodes above it merged if they've gotten small.
-pub(crate) fn split_leaf(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx, new_key_u64s: u32,
+pub(crate) fn split_leaf(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx, new_key_u64s: u32,
                          commit: CommitOpts) -> Result<(), BchError> {
+    let trans = t.trans();
     let level = usize::from(paths[path].level());
     /* btree_split & merge may both cause paths array to be reallocated */
     let b = paths.held_btree_node(path, level).expect("a leaf its path holds");
 
-    let update = InteriorUpdate::start(trans, paths, path, level,
+    let update = InteriorUpdate::start(t, paths, path, level,
                                        StartOpts { split: true, commit, new_key_u64s, ..Default::default() })?;
 
     trans.node_lock_write(paths, path, level)?;
@@ -1435,23 +1440,24 @@ pub(crate) fn split_leaf(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: Pa
 
     let mut l = level + 1;
     while paths[path].intent_locked(l) {
-        foreground_maybe_merge(trans, paths, path, l, commit, None)?;
+        foreground_maybe_merge(t, paths, path, l, commit, None)?;
         l += 1;
     }
     Ok(())
 }
 
-pub(crate) fn increase_depth(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx,
+pub(crate) fn increase_depth(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx,
                              commit: CommitOpts) -> Result<(), BchError> {
+    let trans = t.trans();
     let fs = trans.fs();
     let b = fs.btree_id_root(paths[path].btree_id().into()).expect("a btree with a root");
 
     if b.is_fake() {
-        return split_leaf(trans, paths, path, 0, commit);
+        return split_leaf(t, paths, path, 0, commit);
     }
 
     let level = usize::from(b.c.level);
-    let update = InteriorUpdate::start(trans, paths, path, level,
+    let update = InteriorUpdate::start(t, paths, path, level,
                                        StartOpts { split: true, commit, ..Default::default() })?;
 
     trans.node_lock_write(paths, path, level)?;
@@ -1490,24 +1496,25 @@ pub(crate) fn increase_depth(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path
 
 /// @b, which @iter's path holds, replaced by a compacted copy - written to
 /// @target, if not 0.
-pub(crate) fn node_rewrite<'t>(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, iter: &mut BtreeIter<'t>,
+pub(crate) fn node_rewrite<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &mut BtreeIter<'t>,
                                b: &BtreeNode, target: u32, commit: CommitOpts,
                                write: c::bch_write_flags) -> Result<(), BchError> {
     assert!(!b.is_fake(), "rewriting a fake btree node");
 
-    let ret = node_rewrite_in(trans, paths, iter, b,
+    let ret = node_rewrite_in(t, paths, iter, b,
                               StartOpts { target, commit: commit.flags(CommitFlags::NO_ENOSPC), write,
                                           ..Default::default() });
-    trans.downgrade(paths);
+    t.trans().downgrade(paths);
     ret
 }
 
-fn node_rewrite_in<'t>(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, iter: &mut BtreeIter<'t>,
+fn node_rewrite_in<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &mut BtreeIter<'t>,
                        node: &BtreeNode, opts: StartOpts) -> Result<(), BchError> {
+    let trans = t.trans();
     let fs = trans.fs();
     let level = usize::from(node.c.level);
 
-    let update = InteriorUpdate::start(trans, paths, iter.path, level, opts)?;
+    let update = InteriorUpdate::start(t, paths, iter.path, level, opts)?;
 
     trans.node_lock_write(paths, iter.path, level)?;
     let b = paths.held_btree_node(iter.path, level).expect("a rewrite's node, held by its path");

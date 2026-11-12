@@ -400,7 +400,7 @@ impl BtreeTrans<'_> {
             let i = paths.updates()[i.expect("a full node is an update's")];
             let flags = if self.commit_has_extents(paths) { flags.watermark_hipri() } else { flags };
 
-            let ret = split_leaf(self, paths, i.path, i.key().k.u64s.into(), flags);
+            let ret = split_leaf(t, paths, i.path, i.key().k.u64s.into(), flags);
             if ret.is_ok() && self.has_interior_updates() {
                 return Err(self.restart(bch_errcode::BCH_ERR_transaction_restart_split_with_interior_updates));
             }
@@ -611,8 +611,8 @@ impl BtreeTrans<'_> {
 
     #[cold]
     #[inline(never)]
-    fn commit_merge(&self, paths: &mut Paths<'_>, flags: CommitOpts, i: &mut usize, dst: &mut usize)
-        -> Result<(), BchError>
+    fn commit_merge(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, flags: CommitOpts, i: &mut usize,
+                    dst: &mut usize) -> Result<(), BchError>
     {
         let Some(_write) = self.fs().writes.tryget_live() else {
             return Ok(());
@@ -624,7 +624,7 @@ impl BtreeTrans<'_> {
         *i = *dst - 1;
 
         let (path, level) = (updates[*i].path, updates[*i].level().into());
-        merge(self, paths, path, level, flags.watermark_hipri(), None)
+        merge(t, paths, path, level, flags.watermark_hipri(), None)
     }
 
     fn update_is_noop(i: &c::btree_insert_entry, flags: CommitOpts) -> bool {
@@ -1077,7 +1077,7 @@ impl BtreeTrans<'_> {
 
                     if unlikely(b.needs_merge(unsafe { b.contents() }, fs, u64s_delta)) {
                         drop(pu);
-                        self.commit_merge(&mut paths, flags, &mut idx, &mut dst)?;
+                        self.commit_merge(t, &mut paths, flags, &mut idx, &mut dst)?;
                         pu = paths.paths_and_updates();
                     }
 

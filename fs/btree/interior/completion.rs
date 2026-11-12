@@ -110,7 +110,7 @@ impl InteriorUpdate<'_> {
             }
         }
 
-        bch2_btree_node_write_trans(self.trans, paths, n, SIX_LOCK_write, 0);
+        bch2_btree_node_write_trans(self.trans(), paths, n, SIX_LOCK_write, 0);
     }
 
     /*

@@ -16,7 +16,7 @@ use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering::{Acquire, A
 use cstruct_macros::{placed, CStruct, Init, Late, c_const, TypeInfo};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::OpenBucket;
-use crate::btree::iter::{BtreeTrans, CommitOpts, Watermark};
+use crate::btree::iter::{BtreeTrans, CommitOpts, TransAttempt, Watermark};
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::btree::node::keys::KeysMut;
 use crate::btree::bkey::{BkeyI, BkeyV, BKEY_U64S};
@@ -527,11 +527,11 @@ pub(crate) struct StartOpts {
     pub range:        Option<(Bpos, Bpos)>,
 }
 
-/// An interior update in its foreground phase: reserved, in @trans. Dropped,
+/// An interior update in its foreground phase: reserved, in attempt @t. Dropped,
 /// it's rolled back; done() hands it to its completion, which commits the new
 /// nodes' pointers once they're written.
 pub(crate) struct InteriorUpdate<'t> {
-    trans: &'t BtreeTrans<'t>,
+    t:     &'t TransAttempt<'t, 't>,
     raw:   NonNull<BtreeUpdate>,
     /*
      * The update, until updated_node() or updated_root() makes it visible and
@@ -585,18 +585,19 @@ impl NewNode<'_> {
 impl<'t> InteriorUpdate<'t> {
     /// An update for @path's node at @level, its reserve the worst case: every
     /// level above splitting, up to a new root.
-    pub(crate) fn start(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
+    pub(crate) fn start(t: &'t TransAttempt<'t, 't>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
                         opts: StartOpts) -> Result<Self, BchError> {
         let ip = crate::ret_ip!();
-        Self::start_in(trans, paths, path, level, opts, ip)
+        Self::start_in(t, paths, path, level, opts, ip)
     }
 
-    fn start_in(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, path: PathIdx, level_start: usize,
+    fn start_in(t: &'t TransAttempt<'t, 't>, paths: &mut Paths<'_>, path: PathIdx, level_start: usize,
                 StartOpts { mut split, target, mut commit, write, new_key_u64s, range }: StartOpts,
                 ip_started: c_ulong) -> Result<Self, BchError>
     {
         use c::bch_watermark as wm;
 
+        let trans = t.trans();
         let fs = trans.fs();
         let start_time = local_clock();
         let restart_count = trans.restart_count();
@@ -723,7 +724,7 @@ impl<'t> InteriorUpdate<'t> {
             let more = g.live.len() - g.unwritten.len();
             g.unwritten.reserve_nofail(more);
         }
-        let update = InteriorUpdate { trans, raw, owner: RefCell::new(Some(owner)) };
+        let update = InteriorUpdate { t, raw, owner: RefCell::new(Some(owner)) };
 
         /*
          * We don't want to allocate if we're in an error state, that can cause
@@ -749,6 +750,14 @@ impl<'t> InteriorUpdate<'t> {
 
         trans.verify_not_restarted(restart_count);
         Ok(update)
+    }
+
+    pub(crate) fn t(&self) -> &'t TransAttempt<'t, 't> {
+        self.t
+    }
+
+    pub(crate) fn trans(&self) -> &'t BtreeTrans<'t> {
+        self.t.trans()
     }
 
     fn parent_keys_u64s(&self) -> usize {
@@ -813,7 +822,7 @@ impl<'t> InteriorUpdate<'t> {
 
     /// The parent keys that go in @n inserted into it, @path's at its level.
     fn insert_parent_keys(&self, paths: &mut Paths<'_>, path: PathIdx, n: &NewNode<'_>) -> Result<(), BchError> {
-        split_merge::split_insert_keys(self.trans, paths, path, n.locked(), &mut self.owned.borrow_mut().parent_keys)
+        split_merge::split_insert_keys(self.trans(), paths, path, n.locked(), &mut self.owned.borrow_mut().parent_keys)
     }
 
     /// The parent keys that go in @b inserted into it from @path's iterator
@@ -821,7 +830,7 @@ impl<'t> InteriorUpdate<'t> {
     fn insert_parent_keys_at(&self, paths: &mut Paths<'_>, path: PathIdx,
                              b: LockedNode<'_, BtreeNode>) -> Result<(), BchError> {
         let node_iter = paths[path].l[usize::from(b.c.level)].iter;
-        split_merge::insert_keys_interior(self.trans, paths, path, b, node_iter,
+        split_merge::insert_keys_interior(self.trans(), paths, path, b, node_iter,
                                           &mut self.owned.borrow_mut().parent_keys)
     }
 
@@ -854,10 +863,10 @@ impl<'t> InteriorUpdate<'t> {
             self.node_free_inmem(paths, idx, b);
         }
         for n in new {
-            self.trans.node_add(&mut paths.paths_and_updates(), n.locked());
+            self.trans().node_add(&mut paths.paths_and_updates(), n.locked());
         }
         for &(_, b) in old {
-            self.trans.node_verify_not_in_iters(paths, &b);
+            self.trans().node_verify_not_in_iters(paths, &b);
         }
     }
 
@@ -865,8 +874,8 @@ impl<'t> InteriorUpdate<'t> {
     fn put_paths(&self, paths: &mut Paths<'_>) {
         let taken = core::mem::take(&mut self.owned.borrow_mut().paths);
         for idx in taken.into_iter().rev() {
-            self.trans.path_unlock(paths, idx);
-            self.trans.path_put(paths, idx, true);
+            self.trans().path_unlock(paths, idx);
+            self.trans().path_put(paths, idx, true);
         }
     }
 
@@ -878,10 +887,10 @@ impl<'t> InteriorUpdate<'t> {
         let start_time = this.start_time;
 
         this.put_paths(paths);
-        this.trans.unlock_write(paths);
+        this.trans().unlock_write(paths);
 
         drop(this.owned.borrow_mut().gc_lock.take());
-        this.reserve_put(this.trans, paths, false);
+        this.reserve_put(this.trans(), paths, false);
         this.pending_put();
 
         fs.times[c::bch_time_stats::btree_interior_update_foreground as usize].update(start_time);
@@ -894,10 +903,10 @@ impl Drop for InteriorUpdate<'_> {
             .expect("an interior update rolled back after making its nodes visible");
 
         // the caller's borrow of the path table may be live, and idle: as C's
-        let mut paths = unsafe { Paths::lent(self.trans) };
+        let mut paths = unsafe { Paths::lent(self.trans()) };
         self.put_paths(&mut paths);
-        self.trans.unlock_write(&mut paths);
-        unsafe { update_free(self.raw, self.trans, &mut paths, Some(owner)) }
+        self.trans().unlock_write(&mut paths);
+        unsafe { update_free(self.raw, self.trans(), &mut paths, Some(owner)) }
     }
 }
 
