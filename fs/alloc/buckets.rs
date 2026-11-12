@@ -24,13 +24,13 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, fs_inconsistent, id};
 use crate::init::passes;
 use crate::opts::data_type_str;
-use crate::locking::{Locked, ByteLock};
+use crate::locking::{AsLockedBy, ByteLock, Locked};
 use crate::sb::errors::SbErrorId;
 use crate::types::{bits_to_longs, Le64};
 use crate::util::kernel::unlikely;
 use crate::util::log::LogMsg;
 use crate::util::percpu::{Counters, PerCpu};
-use crate::util::rcu::{read_lock, ReadGuard};
+use crate::util::rcu::{read_lock, RcuArrayWriter, ReadGuard};
 use crate::data_structures::bitmap::AtomicBitmap;
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
@@ -1012,14 +1012,12 @@ impl Fs {
     /// Every device's buckets_nouse, a zeroed bit per bucket: for migrate, to
     /// mark the space it can't use. bch2_buckets_nouse_alloc().
     pub fn buckets_nouse_alloc(&self) -> Result<(), BchError> {
-        let _state = self.state_lock_write();
+        let state = self.state_lock_write();
         for ca in self.members() {
-            // SAFETY: state_lock is its writers' lock, as a resize's
-            unsafe {
-                assert!(ca.buckets_nouse.get_locked().is_empty(), "buckets_nouse allocated twice");
-                if ca.buckets_nouse.rebuild(bits_to_longs(ca.mi.get().nbuckets as usize), |_| ()).is_err() {
-                    return self.throw(bch_errcode::BCH_ERR_ENOMEM_buckets_nouse);
-                }
+            let nouse = ca.buckets_nouse.published_writer(&state);
+            assert!(nouse.with(|w| w.is_empty()), "buckets_nouse allocated twice");
+            if nouse.rebuild(bits_to_longs(ca.mi.get().nbuckets as usize), |_| ()).is_err() {
+                return self.throw(bch_errcode::BCH_ERR_ENOMEM_buckets_nouse);
             }
         }
         Ok(())
@@ -1030,37 +1028,31 @@ impl Dev {
     /// Its buckets' generations at @nbuckets - as many of the old copied as
     /// both have - and its bucket bitmaps with them; nothing changed on
     /// failure.
-    pub fn buckets_resize(&self, _state: &StateLockWrite<'_>, nbuckets: u64) -> Result<(), BchError> {
-        unsafe { self.buckets_resize_writer(nbuckets) }
+    pub fn buckets_resize(&self, state: &StateLockWrite<'_>, nbuckets: u64) -> Result<(), BchError> {
+        self.buckets_resize_writer(self.bucket_gens.published_writer(state), nbuckets)
     }
 
-    /// # Safety
-    /// The caller is bucket_gens' only writer: under state_lock for write, or
-    /// with the only reference to the device.
-    unsafe fn buckets_resize_writer(&self, nbuckets: u64) -> Result<(), BchError> {
+    /// buckets_resize()'s, by @gens, bucket_gens' writer: under state_lock,
+    /// or through the only reference to the device.
+    fn buckets_resize_writer(&self, gens: &RcuArrayWriter<AtomicU8, c::BucketGensHead>, nbuckets: u64)
+        -> Result<(), BchError>
+    {
         let fs = self.fs();
-        let old = unsafe { self.bucket_gens.get_head_locked() }.map(|(_, gens)| gens);
-
-        if old.is_some() {
-            fs.state_lock.assert_held_any();
-            if self.buckets_nouse.with(|w| !w.is_empty()) {
-                return fs.throw(bch_errcode::BCH_ERR_no_resize_with_buckets_nouse);
-            }
+        if gens.read_head(&read_lock()).is_some() && self.buckets_nouse.with(|w| !w.is_empty()) {
+            return fs.throw(bch_errcode::BCH_ERR_no_resize_with_buckets_nouse);
         }
 
         let head = c::BucketGensHead {
             first_bucket:         self.mi.get().first_bucket,
             nbuckets_minus_first: (nbuckets - u64::from(self.mi.get().first_bucket)) as usize,
         };
-        unsafe {
-            self.bucket_gens.rebuild_head(nbuckets as usize, head, |gens| {
-                for (new, old) in gens.iter_mut().zip(old.unwrap_or_default()) {
-                    *new.get_mut() = old.load(Ordering::Relaxed);
-                }
-                self.bucket_backpointer_mismatch.resize(self, nbuckets)?;
-                self.bucket_backpointer_empty.resize(self, nbuckets)
-            })
-        }.or_else(|_| fs.throw(bch_errcode::BCH_ERR_ENOMEM_bucket_gens))?
+        gens.rebuild_head(nbuckets as usize, head, |old, gens| {
+            for (new, old) in gens.iter_mut().zip(old.map_or(&[][..], |(_, old)| old)) {
+                *new.get_mut() = old.load(Ordering::Relaxed);
+            }
+            self.bucket_backpointer_mismatch.resize(self, nbuckets)?;
+            self.bucket_backpointer_empty.resize(self, nbuckets)
+        }).or_else(|_| fs.throw(bch_errcode::BCH_ERR_ENOMEM_bucket_gens))?
     }
 
     /// Its usage counters and bucket generations, as it's set up:
@@ -1070,7 +1062,8 @@ impl Dev {
             Ok(u)  => self.usage = u,
             Err(_) => return self.fs().throw(bch_errcode::BCH_ERR_ENOMEM_usage_init),
         }
-        unsafe { self.buckets_resize_writer(self.mi.get().nbuckets) }
+        let gens = unsafe { self.bucket_gens.locked_by().published_writer() };
+        self.buckets_resize_writer(gens, self.mi.get().nbuckets)
     }
 
     /// What buckets_alloc() and buckets_nouse_alloc() allocated, as it's

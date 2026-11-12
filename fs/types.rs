@@ -397,9 +397,17 @@ pub struct Dev {
      */
     #[c("GENRADIX(struct bucket) buckets_gc")]
     pub buckets_gc: SharedGenRadix<c::bucket>,
-    pub bucket_gens: c::BucketGensArray,
+    #[c("struct bucket_gens __rcu *bucket_gens")]
+    #[pin]
+    #[init(::pin_init::init_zeroed())]
+    pub bucket_gens: Placed<LockedBy<(), c::BucketGensArray, crate::field!(fs->state_lock)>,
+                            crate::at!(Dev.bucket_gens)>,
     /* allocated once, by migrate, and read without a lock */
-    pub buckets_nouse: c::BucketBitmapWords,
+    #[c("struct bucket_bitmap_words __rcu *buckets_nouse")]
+    #[pin]
+    #[init(::pin_init::init_zeroed())]
+    pub buckets_nouse: Placed<LockedBy<(), c::BucketBitmapWords, crate::field!(fs->state_lock)>,
+                              crate::at!(Dev.buckets_nouse)>,
 
     #[pin]
     #[init(c::bucket_bitmap::init())]
@@ -781,7 +789,10 @@ pub struct Fs {
     #[pin]
     #[init(RustOnly::new(crate::new_lock!(crate::alloc::replicas::ReplicasCpu::new(), "&c->replicas")))]
     pub(crate) replicas: rust_only!(PercpuRwsemNoio<crate::alloc::replicas::ReplicasCpu>),
-    pub disk_groups: c::DiskGroups,
+    #[c("struct bch_disk_groups_cpu __rcu *disk_groups")]
+    #[pin]
+    #[init(::pin_init::init_zeroed())]
+    pub disk_groups: Placed<LockedBy<(), c::DiskGroups, crate::field!(sb)>, crate::at!(Fs.disk_groups)>,
     #[pin]
     #[init(c::bch_fs_capacity::init())]
     pub capacity: c::bch_fs_capacity,

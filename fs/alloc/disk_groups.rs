@@ -706,8 +706,7 @@ impl SbFieldOps for c::bch_sb_field_disk_groups {
         };
         let src = &groups.entries;
 
-        // SAFETY: under sb_lock, the table's writers'
-        unsafe { fs.disk_groups.rebuild(src.len(), |dst| groups_to_cpu(dst, src, sb.sb())) }
+        fs.disk_groups.published_writer(&*sb).rebuild(src.len(), |dst| groups_to_cpu(dst, src, sb.sb()))
             .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_disk_groups_to_cpu))
     }
 }

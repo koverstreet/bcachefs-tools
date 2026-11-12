@@ -25,7 +25,7 @@ use crate::init::registry::register;
 use crate::init::rw::writes_disabled;
 use crate::inode::shard_cpu_init;
 use crate::journal::seq_blacklist::blacklist_table_initialize;
-use crate::locking::{ExclusiveGuard, Noio, PercpuRwsemNoio, RawLockBase, SharedGuard};
+use crate::locking::{ExclusiveGuard, Held, Noio, PercpuRwsemNoio, RawLockBase, SharedGuard};
 use crate::{bch_verbose, new_lock, prt};
 use crate::sb::counters::counters_init;
 use crate::sb::io::{read_super, sb_to_fs, version, Holder};
@@ -79,6 +79,13 @@ pub struct StateLockRead<'a> {
 pub struct StateLockWrite<'a> {
     fs:     &'a Fs,
     _guard: ExclusiveGuard<'a, c::rw_semaphore>,
+}
+
+impl Held for StateLockWrite<'_> {
+    type Raw = c::rw_semaphore;
+    fn held(&self) -> *const c::rw_semaphore {
+        self._guard.held()
+    }
 }
 
 impl<'a> StateLockWrite<'a> {
