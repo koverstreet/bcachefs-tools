@@ -14,19 +14,4 @@
 
 #include "alloc/foreground_gen.h"
 
-static inline struct bch_dev *ob_dev(struct bch_fs *c, struct open_bucket *ob)
-{
-	return bch2_dev_have_ref(c, ob->dev);
-}
-
-static inline struct write_point_specifier writepoint_hashed(unsigned long v)
-{
-	return (struct write_point_specifier) { .v = v | 1 };
-}
-
-static inline struct write_point_specifier writepoint_ptr(struct write_point *wp)
-{
-	return (struct write_point_specifier) { .v = (unsigned long) wp };
-}
-
 #endif /* _BCACHEFS_ALLOC_FOREGROUND_H */
