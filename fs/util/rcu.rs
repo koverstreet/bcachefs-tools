@@ -953,4 +953,15 @@ impl<T: RcuElement, H: RcuElement> RcuArrayWriter<T, H> {
     pub fn clear(&self) {
         unsafe { self.0.clear() }
     }
+
+    /// rebuild_head(), @fill given the old header and elements too: still
+    /// published, and ours to read, as the writer, till the new replaces
+    /// them.
+    pub fn rebuild_head<E>(&self, nr: usize, h: H,
+                           fill: impl FnOnce(Option<(&H, &[T])>, &mut [T]) -> Result<(), E>)
+        -> Result<Result<(), E>, AllocError>
+    {
+        let old = unsafe { self.0.get_head_locked() };
+        unsafe { self.0.rebuild_head(nr, h, |new| fill(old, new)) }
+    }
 }
