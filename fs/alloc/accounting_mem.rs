@@ -16,7 +16,7 @@ use crate::format::{self, MetadataVersion, Bpos, Bversion, DataType};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id, FsckErrCtx};
 use crate::init::passes;
-use crate::locking::{percpu_rwsem_noio, ExclusiveGuard, SharedGuard};
+use crate::locking::{percpu_rwsem_noio, ExclusiveGuard, Held, LockedBy, SharedGuard};
 use crate::debug::trace::events;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::eytzinger::Eytzinger0;
@@ -44,7 +44,7 @@ impl<'a> From<BkeySC<'a, Accounting<Validated>>> for Delta<'a> {
 pub(crate) type MarkRead<'a> = SharedGuard<'a, percpu_rwsem_noio>;
 pub(crate) type MarkWrite<'a> = ExclusiveGuard<'a, percpu_rwsem_noio>;
 
-pub(crate) trait MarkHeld {
+pub(crate) trait MarkHeld: Held<Raw = percpu_rwsem_noio> {
     fn insert(&mut self, fs: &Fs, a: Delta<'_>) -> Result<(), BchError>;
 }
 
@@ -73,12 +73,12 @@ pub(crate) struct Entry {
 }
 
 impl Fs {
-    fn accounting_mem<'g>(&'g self, _mark: &'g impl MarkHeld) -> &'g Table {
-        unsafe { self.accounting.protected() }
+    fn accounting_mem<'g>(&'g self, mark: &'g impl MarkHeld) -> &'g Table {
+        self.accounting.protected(mark)
     }
 
-    fn accounting_mem_mut<'g>(&'g self, _mark: &'g mut MarkWrite<'_>) -> &'g mut Table {
-        unsafe { self.accounting.protected_mut() }
+    fn accounting_mem_mut<'g>(&'g self, mark: &'g mut MarkWrite<'_>) -> &'g mut Table {
+        self.accounting.protected_mut(mark)
     }
 }
 
@@ -349,7 +349,8 @@ pub(crate) fn accounting_gc_free(fs: &Fs, mark: &mut MarkWrite<'_>) {
 /// # Safety
 /// Nothing uses the accounting any more.
 pub unsafe fn accounting_exit(fs: &Fs) {
-    let acc = unsafe { fs.accounting.protected_mut() };
+    let locked: &LockedBy<Table, (), _> = &fs.accounting;
+    let acc = unsafe { locked.protected_mut() };
     acc.entries = KVVec::new();
 }
 

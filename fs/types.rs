@@ -767,7 +767,9 @@ pub struct Fs {
     /// The in-memory accounting table, under mark_lock.
     #[pin]
     #[init(RustOnly::new(LockedBy::new(crate::alloc::accounting_mem::Table::default(), ())))]
-    pub(crate) accounting: rust_only!(LockedBy<crate::alloc::accounting_mem::Table>),
+    pub(crate) accounting: Placed<rust_only!(LockedBy<crate::alloc::accounting_mem::Table, (),
+                                                       crate::field!(capacity.mark_lock)>),
+                                  crate::at!(Fs.accounting)>,
     /// The replicas table, behind its own lock: alloc/replicas.rs's alone.
     #[pin]
     #[init(RustOnly::new(crate::new_lock!(crate::alloc::replicas::ReplicasCpu::new(), "&c->replicas")))]
