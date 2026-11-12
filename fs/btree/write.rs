@@ -30,7 +30,6 @@ use crate::format::{Btree, DataType};
 use crate::init::error::BkeyValidate;
 use crate::inode_opts::get_io_opts;
 use crate::locking::six::{six_lock_counts, six_lock_downgrade, six_lock_tryupgrade, six_trylock_ip};
-use crate::locking::Locked;
 use crate::types::{Le16, Le64};
 use crate::util::bio::{bch2_bio_map, buf_nr_bvecs, of_bio, MapBuf};
 use crate::util::kernel::{dump_stack, local_clock, unlikely, READ};
@@ -258,7 +257,7 @@ unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     let wb = unsafe { &mut *of_bio::<BtreeWriteBio>(parent.map_or(bio, |p| &raw mut (*p).bio)) };
 
     if status != 0 {
-        let _g = Locked::from_c(&fs.write_error_lock).lock();
+        let _g = fs.write_error_lock.lock();
         wb.failed.set_blk_status(fs, dev.into(), status);
     }
 

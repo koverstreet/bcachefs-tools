@@ -457,7 +457,7 @@ pub fn hash_info_init(
     fs:    &Fs,
     inode: &c::bch_inode_unpacked,
 ) -> Result<c::bch_hash_info, BchError> {
-    if inode.casefold(fs) && fs.cf_encoding.is_null() {
+    if inode.casefold(fs) && fs.cf_encoding.load(core::sync::atomic::Ordering::Relaxed).is_null() {
         return fs.throw(bch_errcode::BCH_ERR_casefold_dir_but_disabled);
     }
     Ok(hash_info_init_unchecked(fs, inode))

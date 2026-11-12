@@ -13,7 +13,7 @@ use crate::c;
 use crate::data::compress;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
-use crate::locking::{ExclusiveGuard, Locked};
+use crate::locking::ExclusiveGuard;
 use crate::sb::io::SbFieldOps;
 use crate::util::printbuf::Printbuf;
 
@@ -214,7 +214,7 @@ pub struct OptChange<'f> {
 
 impl<'f> OptChange<'f> {
     pub fn new(fs: &'f Fs) -> Self {
-        let _lock = Locked::from_c(&fs.opt_change_lock).lock();
+        let _lock = fs.opt_change_lock.lock();
         let cookie = fs.opt_change_cookie.get();
         assert!(cookie & 1 == 0);
         // the lock makes us its one writer

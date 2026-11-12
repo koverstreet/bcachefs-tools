@@ -247,7 +247,7 @@ impl Bcachefs {
             if fs.casefold_enabled().is_ok() {
                 // SAFETY: the filesystem's, unloaded at its exit: after
                 // kill_sb's kill_anon_super()
-                unsafe { sb.set_encoding(fs.cf_encoding) };
+                unsafe { sb.set_encoding(fs.cf_encoding.load(core::sync::atomic::Ordering::Relaxed)) };
             }
 
             let root = InodeInfo::get_warn(fs, c::subvol_inum::ROOT, c"bch2_fs_get_tree")

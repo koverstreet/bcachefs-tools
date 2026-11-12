@@ -722,7 +722,7 @@ use crate::debug::async_objs;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Dev, Fs};
 use crate::format::{Bpos, DataType, BkeyType, MetadataVersion, SbFeature};
-use crate::locking::{Locked, MemallocFlags};
+use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
 use crate::sb::members::{DevIo, DevIoRef};
 use crate::snapshots::subvolume;
@@ -1278,7 +1278,7 @@ pub(crate) unsafe extern "C" fn write_endio(bio: *mut c::bio) {
     }
 
     if unlikely(status != 0) {
-        let _g = Locked::from_c(&fs.write_error_lock).lock();
+        let _g = fs.write_error_lock.lock();
         op.failed.set_blk_status(fs, wbio.wbio.dev.into(), status);
         op.io_error = 1;
     }

@@ -24,8 +24,8 @@ use crate::init::registry::register;
 use crate::init::rw::writes_disabled;
 use crate::inode::shard_cpu_init;
 use crate::journal::seq_blacklist::blacklist_table_initialize;
-use crate::locking::{Exclusive, ExclusiveGuard, Guard, Noio, PercpuRwsemNoio, RawLockBase, Shared, SharedGuard};
-use crate::{bch_verbose, new_lock, prt};
+use crate::locking::{Exclusive, ExclusiveGuard, Guard, Noio, PercpuRwsemNoio, Shared, SharedGuard};
+use crate::{bch_verbose, prt};
 use crate::sb::counters::counters_init;
 use crate::sb::io::{read_super, sb_to_fs, version, Holder};
 use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists, SbMembersMut};
@@ -431,19 +431,9 @@ impl Fs {
         #[cfg(kernel)]
         unsafe { c::__module_get(&raw mut kernel::bindings::__this_module) };
 
-        unsafe {
-            c::closure_init(&raw mut (*p).cl, core::ptr::null_mut());
-
-            (*p).minor = -1;
-
-            let Ok(()) = c::mutex::init(&raw mut (*p).opt_change_lock, c"&c->opt_change_lock", new_lock!(@key));
-        }
+        unsafe { c::closure_init(&raw mut (*p).cl, core::ptr::null_mut()) };
 
         allocator_foreground_init(self);
-        unsafe {
-            let Ok(()) = c::spinlock_t::init(&raw mut (*p).write_error_lock, c"&c->write_error_lock",
-                                             new_lock!(@key));
-        }
 
         /* must be initialized before we throw any errors */
         let now = PerCpu::alloc().map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_fs_counters_init))?;
@@ -495,7 +485,7 @@ impl Fs {
             /* Default encoding until we can potentially have more as an option. */
             let enc = unsafe { c::utf8_load(BCH_FS_DEFAULT_UTF8_ENCODING) };
             match NonNull::new(enc).map(crate::errcode::errptr_to_result) {
-                Some(Ok(enc)) => unsafe { (*p).cf_encoding = enc.as_ptr() },
+                Some(Ok(enc)) => self.cf_encoding.store(enc.as_ptr(), Relaxed),
                 _ => {
                     prt!(out, "Cannot load UTF-8 encoding for filesystem. Version: {}.{}.{}\n",
                          BCH_FS_DEFAULT_UTF8_ENCODING >> 16,
@@ -636,7 +626,7 @@ impl Fs {
         /* this really should be part of our one multi line mount message, but -
          * xfstests... */
         #[cfg(CONFIG_UNICODE)]
-        if !self.cf_encoding.is_null() {
+        if !self.cf_encoding.load(Relaxed).is_null() {
             crate::bch_info!(self, "Using encoding defined by superblock: utf8-{}.{}.{}",
                       BCH_FS_DEFAULT_UTF8_ENCODING >> 16,
                       (BCH_FS_DEFAULT_UTF8_ENCODING >> 8) & 0xff,
@@ -910,7 +900,7 @@ unsafe fn release(p: *mut Fs) {
     journal_keys_put_initial(fs);
 
     #[cfg(CONFIG_UNICODE)]
-    unsafe { c::utf8_unload(fs.cf_encoding) };
+    unsafe { c::utf8_unload(fs.cf_encoding.load(Relaxed)) };
 
     fs.reconcile_stop();
     fs.copygc_stop();

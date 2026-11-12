@@ -586,6 +586,7 @@ pub struct Fs {
     #[c("unsigned long flags")]
     pub flags: AtomicBitflags<c::bch_fs_flags>,
 
+    #[init(-1)]
     pub minor: c_int,
     pub chardev: *mut c::device,
     pub vfs_sb: *mut c::super_block,
@@ -676,7 +677,10 @@ pub struct Fs {
     #[init(LockedBy::new((), (*options).into()))]
     #[c("struct bch_opts opts")]
     pub opts: LockedBy<(), c::PublishedOpts, crate::at!(Fs.sb)>,
-    pub opt_change_lock: c::mutex,
+    #[pin]
+    #[init(new_lock!((), "&c->opt_change_lock"))]
+    #[c("struct mutex opt_change_lock")]
+    pub opt_change_lock: Locked<c::mutex>,
     /// Odd while options change, bumped under opt_change_lock by
     /// OptChange, taking it and dropping it; read without it.
     pub opt_change_cookie: crate::util::projections::Volatile<u32>,
@@ -695,7 +699,8 @@ pub struct Fs {
     #[c("unsigned long incompat_versions_requested[BITS_TO_LONGS(BCH_VERSION_MINOR(bcachefs_metadata_version_current))]")]
     pub incompat_versions_requested: crate::data_structures::bitmap::AtomicBitArray<{
         bits_to_longs(c::BCH_VERSION_MINOR(c::bcachefs_metadata_version_current as u64) as usize) }>,
-    pub cf_encoding: *mut c::unicode_map,
+    #[c("struct unicode_map *cf_encoding")]
+    pub cf_encoding: AtomicPtr<c::unicode_map>,
 
     #[init((options.block_size >> 9).ilog2() as c_ushort)]
     pub block_bits: c_ushort, /* ilog2(block_size) */
@@ -786,7 +791,10 @@ pub struct Fs {
     #[pin]
     pub snapshots: c::bch_fs_snapshots,
 
-    pub write_error_lock: c::spinlock_t,
+    #[pin]
+    #[init(new_lock!((), "&c->write_error_lock"))]
+    #[c("spinlock_t write_error_lock")]
+    pub write_error_lock: Locked<c::spinlock_t>,
     /*
      * Use a dedicated wq for write ref holder tasks. Required to avoid
      * dependency problems with other wq tasks that can block on ref
