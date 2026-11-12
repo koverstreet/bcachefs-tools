@@ -202,7 +202,7 @@ pub struct journal_keys {
      * keys'. Written only before the filesystem can go rw.
      */
     #[c_anon("GENRADIX(struct journal_replay *) entries")]
-    entries: LockedBy<JournalEntries, (), NotRw<'static>>,
+    pub(crate) entries: LockedBy<JournalEntries, (), NotRw<'static>>,
 
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&keys->overwrite_lock"))]
@@ -227,16 +227,6 @@ impl Fs {
     /// A ref is held for 'a.
     pub(crate) unsafe fn journal_keys_held(&self) -> &c::journal_keys {
         unsafe { self.journal_keys.value_held() }
-    }
-}
-
-impl<'a> NotRw<'a> {
-    /// The journal entries, recovery's to write: recovery's ref holds them.
-    ///
-    /// # Safety
-    /// No other reference to them lives meanwhile.
-    pub(crate) unsafe fn journal_entries(&self) -> &'a mut JournalEntries {
-        unsafe { self.fs.journal_keys_held().entries.protected_mut() }
     }
 }
 

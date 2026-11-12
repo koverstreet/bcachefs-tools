@@ -714,7 +714,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
                          "no journal entries found")?;
             if clean.is_some() {
                 use_clean = true;
-            } else if let Some(i) = unsafe { fs.not_rw().journal_entries() }.slots_rev_mut().find_map(Option::as_mut) {
+            } else if let Some(i) = fs.not_rw().get_mut_of(&jk.entries).slots_rev_mut().find_map(Option::as_mut) {
                 i.ignore_blacklisted = false;
                 i.ignore_not_dirty = false;
                 /*

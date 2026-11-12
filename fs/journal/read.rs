@@ -20,9 +20,8 @@ use crate::data::checksum::{checksum_type_valid, csum_vstruct, BCH_NONCE_JOURNAL
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Dev, Fs};
 use crate::init::error::id;
-use crate::init::recovery::NotRw;
 use crate::journal::buckets::JournalRing;
-use crate::locking::{Guard as _, Locked};
+use crate::locking::{Guard as _, Locked, Mut, Ref};
 use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
 use crate::util::alloc::{init_at, kvzalloc, ABox, AVec, AllocError, ConstAlign, KVVec};
@@ -33,7 +32,7 @@ use crate::util::par::{self, Backend};
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, SelfSized, Unvalidated, Validated, VStruct};
 use crate::util::workqueue::Queue;
 use crate::util::ToText;
-use crate::{bch_err, bch_err_dev, bch_info, bch_info_dev, fs_fatal_error, fsck_err, fsck_err_on, new_lock, prt};
+use crate::{bch_err, bch_err_dev, bch_info, bch_info_dev, field, fs_fatal_error, fsck_err, fsck_err_on, new_lock, prt};
 use core::mem::offset_of;
 use core::ops::Range;
 use core::ptr::NonNull;
@@ -1158,11 +1157,12 @@ fn journal_print_checksum_error(fs: &Fs, j: &Replay) {
  * and re-read any buckets containing entries we need.
  */
 pub fn journal_reread_for_rewind(fs: &Fs) -> Result<(), BchError> {
-    let not_rw = fs.not_rw();
-    let entries = unsafe { not_rw.journal_entries() };
+    let mut not_rw = fs.not_rw();
+    let (entries, rewind_ranges) = not_rw.split::<(Mut<field!(journal_keys.*.entries)>,
+                                                   Ref<field!(journal.rewind_ranges)>)>();
     let mut need_from = u64::MAX;
 
-    for range in not_rw.get_of(&fs.journal.rewind_ranges).iter() {
+    for range in rewind_ranges.iter() {
         let Some(p) = entries.get(fs, range.to) else {
             bch_err!(fs, "journal rewind: flush entry at seq {} not found", range.to);
             return fs.throw(bch_errcode::BCH_ERR_EINVAL_journal_rewind_before_discard);
@@ -1278,8 +1278,10 @@ pub fn journal_read(fs: &Fs) -> Result<c::journal_start_info, BchError> {
     let bsearch_used = fs.opts.read_entire_journal.get() == 0;
 
     let mut not_rw = fs.not_rw();
+    let (entries, rewind_ranges) = not_rw.split::<(Mut<field!(journal_keys.*.entries)>,
+                                                   Mut<field!(journal.rewind_ranges)>)>();
     stack_pin_init!(let read: ReadLock<'_> = new_lock!(ReadState {
-        entries:   unsafe { not_rw.journal_entries() },
+        entries,
         last_seq:  0,
         scrub:     fs.journal_scrub_will_run(),
         scrub_seq: 0,
@@ -1383,11 +1385,11 @@ pub fn journal_read(fs: &Fs) -> Result<c::journal_start_info, BchError> {
     }
 
     journal_check_for_missing(fs, state.entries, drop_before, info.replay_end)?;
-    validate_kept(fs, &mut not_rw, state.entries, drop_before)?;
+    validate_kept(fs, rewind_ranges, state.entries, drop_before)?;
     Ok(info)
 }
 
-fn validate_kept(fs: &Fs, not_rw: &mut NotRw<'_>, entries: &mut JournalEntries, drop_before: u64)
+fn validate_kept(fs: &Fs, rewind_ranges: &mut KVVec<c::journal_rewind_range>, entries: &mut JournalEntries, drop_before: u64)
     -> Result<(), BchError>
 {
     for i in entries.slots_mut() {
@@ -1428,7 +1430,7 @@ fn validate_kept(fs: &Fs, not_rw: &mut NotRw<'_>, entries: &mut JournalEntries, 
                 }
                 Ok(c::JsetEntryRef::rewind(r)) => {
                     let range = c::journal_rewind_range { from: r.from.get(), to: r.to.get() };
-                    let _ = not_rw.get_mut_of(&fs.journal.rewind_ranges).push(range);
+                    let _ = rewind_ranges.push(range);
                 }
                 _ => {}
             }
