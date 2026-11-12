@@ -220,7 +220,7 @@ pub mod c {
     pub use super::vfs_pagecache_types::*;
     pub use super::vfs_types::*;
     pub use crate::alloc::background::{BUCKET_GC_GEN_MAX};
-    pub use crate::btree::cache::{bch2_btree_id_level_to_text, bch2_btree_id_str};
+    pub use crate::btree::cache::bch2_btree_id_level_to_text;
     pub use crate::namei::{BCH_CREATE_SNAPSHOT, BCH_CREATE_SNAPSHOT_RO, BCH_CREATE_SUBVOL, BCH_CREATE_TMPFILE};
     pub use crate::fs::bch2_write_refs;
 }

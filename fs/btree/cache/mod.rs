@@ -119,7 +119,6 @@ use crate::fs::Fs;
 use crate::util::vstructs::Head;
 use core::mem::offset_of;
 use core::ptr::NonNull;
-use crate::util::ffi::c_char;
 use crate::util::{HumanReadable, Printbuf, ToText};
 use core::ffi::{c_int, c_uint};
 use core::sync::atomic::AtomicU64;
@@ -402,15 +401,6 @@ impl Fs {
 }
 
 // ── Text ─────────────────────────────────────────────────────────────────
-
-#[c_export]
-pub fn bch2_btree_id_str(btree: Btree) -> *const c_char {	/* avoid */
-    if btree.0 < Btree::NR {
-        crate::opts::c_export::__bch2_btree_ids[btree.0 as usize]
-    } else {
-        c"(unknown)".as_ptr().cast()
-    }
-}
 
 #[c_export]
 pub fn bch2_btree_id_to_text(out: &mut Printbuf, btree: Btree) {

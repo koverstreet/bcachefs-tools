@@ -475,8 +475,9 @@ pub fn debug_init(fs: &Fs) {
     unsafe { (*fs.as_ptr()).btree_debug_dir = dentry_ptr(btrees) };
     let Some(btrees) = btrees else { return };
 
+    static NAMES: &[&CStr] = &crate::cstr_names!(Btree);
     for bd in fs.btree_debug.iter() {
-        let name = unsafe { CStr::from_ptr(c::bch2_btree_id_str(Btree(bd.id.get())).cast()) };
+        let name = NAMES.get(bd.id.get() as usize).copied().unwrap_or(c"(unknown)");
         let Some(dir) = debugfs::create_dir(name, Some(btrees)) else { continue };
 
         unsafe {
