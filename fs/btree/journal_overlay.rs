@@ -20,10 +20,10 @@
 //!    two, or starts one with a neighbour.
 //!
 //! Who changes what:
-//!  - The keys themselves change only where nothing else reads them: before
-//!    the filesystem can go rw - sorting, inserts, accounting read's merging
-//!    - which a NotRw shows, their LockedBy's; the last ref's put, and what
-//!    keys_mut() is for. pre_sort, before the btree runs.
+//!  - The keys themselves, and pre_sort, change only where nothing else reads
+//!    them: before the filesystem can go rw - sorting, inserts, accounting
+//!    read's merging - which a NotRw shows, their LockedBy's; the last ref's
+//!    put, and what keys_mut() is for.
 //!  - Overwriting happens later too, from any thread, under overwrite_lock -
 //!    which journal replay's commits take, in C - while the keys are read
 //!    without it. So a key's overwritten flag and range are words the lock
@@ -69,7 +69,6 @@ use c::bch_fs_flags as f;
 use crate::journal::JournalEntries;
 use crate::types::{DArray, c_default, rust_only};
 use crate::util::vstructs::Head;
-use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, AtomicUsize};
 use nestify::nest;
 use pin_init::{pin_data, pinned_drop};
@@ -199,7 +198,7 @@ pub struct journal_keys {
      * array after sorting. Written as the keys are.
      */
     #[c_anon("DARRAY(struct journal_key) pre_sort")]
-    pub pre_sort: UnsafeCell<DArray<c::journal_key>>,
+    pub pre_sort: LockedBy<DArray<c::journal_key>, (), NotRw<'static>>,
 
     /*
      * What the journal read kept, by seq from journal_entries_base_seq: the
@@ -381,12 +380,14 @@ impl c::journal_keys {
         unsafe { self.keys.protected_mut() }
     }
 
-    /// # Safety
-    /// Nothing else reads or writes pre_sort while it's held: before the btree
-    /// runs, sorting and inserts; the last ref.
-    unsafe fn pre_sort(&self) -> DArrayLoan<'_, c::journal_key> {
-        // SAFETY: the caller's; kvmalloc()'d, if allocated
-        unsafe { DArrayLoan::new(&mut *self.pre_sort.get()) }
+    /// The keys and pre_sort, not rw: two fields, had at once.
+    fn keys_and_pre_sort<'a>(&'a self, not_rw: &'a mut NotRw<'_>)
+        -> (&'a mut GapBuffer<c::journal_key>, DArrayLoan<'a, c::journal_key>)
+    {
+        let keys: *mut GapBuffer<c::journal_key> = not_rw.get_mut_of(&self.keys);
+        let pre_sort = not_rw.get_mut_of(&self.pre_sort);
+        // pre_sort is kvmalloc()'d, if allocated
+        unsafe { (&mut *keys, DArrayLoan::new(pre_sort)) }
     }
 
     fn seq(&self) -> u64 {
@@ -715,8 +716,7 @@ unsafe fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: *mut 
     let n = c::journal_key::new_allocated(btree, level, k);
 
     if !fs.flags.get(f::btree_running) {
-        // SAFETY: before the btree runs, the keys are recovery's alone
-        return unsafe { jk.pre_sort() }.push(n)
+        return jk.keys_and_pre_sort(not_rw).1.push(n)
             .map_err(|_| fs.err(e::BCH_ERR_ENOMEM_journal_key_insert));
     }
 
@@ -1031,7 +1031,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
     let jk = fs.journal_keys_get().expect("journal keys sorted after recovery was done with them");
     let jk = jk.value();
     let mut not_rw = fs.not_rw();
-    let keys = not_rw.get_mut_of(&jk.keys);
+    let (keys, mut pre_sort) = jk.keys_and_pre_sort(&mut not_rw);
     let (mut nr_read, mut nr_extra_sorts) = (0usize, 0usize);
     let start_seq = match fs.journal_scrub_seq.get() { 0 => fs.journal_replay_seq_start.get(), s => s };
 
@@ -1100,8 +1100,6 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
      * Keys inserted before sorting, e.g. by dev_usage_init in an offline
      * device add: the main array's now
      */
-    // SAFETY: as keys'
-    let mut pre_sort = unsafe { jk.pre_sort() };
     while !pre_sort.is_empty() {
         keys.reserve().map_err(|_| fs.err(e::BCH_ERR_ENOMEM_journal_keys_sort))?;
         keys.insert(keys.len(), pre_sort.pop().expect("not empty"));
@@ -1137,7 +1135,7 @@ impl PinnedDrop for c::journal_keys {
         // SAFETY: the last ref's
         unsafe {
             self.reset(self.keys_mut());
-            darray_exit(&mut *self.pre_sort.get());
+            darray_exit(self.pre_sort.protected_mut());
         }
     }
 }
