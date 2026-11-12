@@ -1,0 +1,4 @@
+# fs/ as the kernel build compiles it: the kernel crate and its bindings
+# aren't in the cargo workspace, so what's typed through them is unresolved.
+[cargo]
+cfgs = ["kernel", "__KERNEL__"]
