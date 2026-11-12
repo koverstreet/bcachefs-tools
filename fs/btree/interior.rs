@@ -195,9 +195,9 @@ impl bch_fs_btree_interior_updates {
 
 type NodeKey = PaddedKey<{ BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX }>;
 
-fn node_key(b: &BtreeNode) -> NodeKey {
+fn node_key(b: LockedNode<'_, BtreeNode>) -> NodeKey {
     let mut key = NodeKey::default();
-    key.set_key(unsafe { b.contents() }.key_i());
+    key.set_key(b.contents().key_i());
     key
 }
 
@@ -211,8 +211,8 @@ struct OldNode {
 }
 
 impl OldNode {
-    fn of(b: &BtreeNode) -> Self {
-        OldNode { b: NonNull::from(b), level: b.c.level, seq: unsafe { b.contents() }.data().keys.seq, key: node_key(b) }
+    fn of(b: LockedNode<'_, BtreeNode>) -> Self {
+        OldNode { b: NonNull::from(b.node()), level: b.c.level, seq: b.contents().data().keys.seq, key: node_key(b) }
     }
 }
 
@@ -236,13 +236,13 @@ enum Pointee {
 }
 
 impl NewPointer {
-    fn node(fs: &Fs, b: &BtreeNode) -> Self {
+    fn node(fs: &Fs, b: LockedNode<'_, BtreeNode>) -> Self {
         NewPointer {
             level: b.c.level,
             key:   node_key(b),
             to:    Pointee::Node {
-                b:               NonNull::from(b),
-                root:            fs.btree_id_root(b.c.btree_id.into()).is_some_and(|r| ptr::eq(r, b)),
+                b:               NonNull::from(b.node()),
+                root:            fs.btree_id_root(b.c.btree_id.into()).is_some_and(|r| ptr::eq(r, b.node())),
                 update_node_key: false,
             },
         }
@@ -822,7 +822,7 @@ impl<'t> InteriorUpdate<'t> {
     pub(crate) fn replace(&self, paths: &mut Paths<'_>, old: &[(PathIdx, LockedNode<'_, BtreeNode>)],
                           new: &mut [NewNode<'_>]) {
         for &(_, b) in old {
-            self.will_free_node(&b);
+            self.will_free_node(b);
         }
         for n in new.iter_mut() {
             self.write_new_node(n);

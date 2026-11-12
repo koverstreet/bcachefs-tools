@@ -14,6 +14,7 @@ use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
 use crate::btree::node::BtreeNode;
+use crate::btree::path::LockedNode;
 use crate::btree::trigger::{key_trigger, TriggerOp};
 use crate::btree::write::{node_write_if_need, node_write_locked, BtreeWriteFlags};
 use crate::cstructs::c::BtreeWriteType;
@@ -88,7 +89,7 @@ impl InteriorUpdate<'_> {
     pub(super) fn write_new_node(&self, n: &mut NewNode<'_>) {
         let fs = self.fs();
 
-        unsafe { self.new_nodes() }.push(NewPointer::node(fs, n));
+        unsafe { self.new_nodes() }.push(NewPointer::node(fs, n.held()));
 
         self.pending.fetch_add(1, Relaxed);
 
@@ -118,7 +119,7 @@ impl InteriorUpdate<'_> {
      * nodes and thus outstanding btree_updates - redirect @b's
      * btree_updates to point to this btree_update:
      */
-    pub(super) fn will_free_node(&self, b: &BtreeNode) {
+    pub(super) fn will_free_node(&self, b: LockedNode<'_, BtreeNode>) {
         let fs = self.fs();
 
         b.flags.set_dying(true);
@@ -137,7 +138,7 @@ impl InteriorUpdate<'_> {
          */
         {
             let mut g = fs.btree.interior_updates.lock.lock();
-            let mut blocked = write_blocked(b, &mut g).cursor_mut();
+            let mut blocked = write_blocked(b.node(), &mut g).cursor_mut();
 
             while let Some(p) = blocked.remove_current() {
                 *unsafe { p.mode.protected_mut() } = Some(Mode::Update);

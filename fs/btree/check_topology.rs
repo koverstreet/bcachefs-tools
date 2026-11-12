@@ -330,7 +330,7 @@ fn check_child(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, node: &Bkey
         return Ok(Some((cur_k, Repair::DropThis)));
     }
 
-    if btree_node_is_stale(fs, cur.b.node()) {
+    if btree_node_is_stale(fs, cur.b) {
         bch_info!(fs, "btree node older than nodes found by scanning\n  btree={btree} level={} {}",
                   level - 1, BkeySC::from(&*cur_k).to_text(fs));
         return Ok(Some((cur_k, Repair::DropThis)));

@@ -12,6 +12,7 @@ use crate::init::error::BkeyValidate;
 use crate::btree::cache::{node_data_free, node_scratch_alloc, node_struct_free};
 use crate::btree::journal_overlay;
 use crate::btree::node::BtreeNode;
+use crate::btree::path::LockedNode;
 use crate::btree::read::read_done;
 use crate::c::{self, bch_errcode, BtreePtrV2};
 use crate::data::ptrs::extent_ptr_to_text;
@@ -457,9 +458,9 @@ fn in_range(nodes: &[FoundBtreeNode], btree: Btree, level: u8, min: Bpos, max: B
     })
 }
 
-pub(crate) fn btree_node_is_stale(fs: &Fs, b: &BtreeNode) -> bool {
+pub(crate) fn btree_node_is_stale(fs: &Fs, b: LockedNode<'_, BtreeNode>) -> bool {
     let nodes = fs.btree.node_scan.lock();
-    let contents = unsafe { b.contents() };
+    let contents = b.contents();
     let bn = contents.data();
 
     in_range(&nodes, Btree(b.c.btree_id.into()), b.c.level, bn.min_key, contents.key.k.p)
