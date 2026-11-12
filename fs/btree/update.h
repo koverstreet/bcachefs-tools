@@ -9,7 +9,6 @@
 
 #include "btree/update_gen.h"
 #include "btree/commit_gen.h"
-#include "btree/node/insert_gen.h"
 
 static inline int __must_check
 bch2_trans_update_buf(struct btree_trans *trans, struct btree_iter *iter,

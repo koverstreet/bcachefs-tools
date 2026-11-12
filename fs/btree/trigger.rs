@@ -370,12 +370,6 @@ pub(crate) unsafe fn run_trans_triggers(trans: &BtreeTrans<'_>, t: &TransAttempt
 ///
 /// # Safety
 /// In @trans's commit, its atomic phase.
-#[c_export]
-pub unsafe fn bch2_trans_commit_run_mem_triggers(trans: &BtreeTrans<'_>) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(unsafe { run_mem_triggers(trans, &t) })
-}
-
 pub(crate) unsafe fn run_mem_triggers(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
     for idx in 0..nr_updates(trans) {
         let i = unsafe { update(trans, idx) };

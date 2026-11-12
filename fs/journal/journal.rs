@@ -124,14 +124,14 @@ use core::sync::atomic::Ordering::{Acquire, Relaxed, SeqCst};
 
 use cstruct_macros::c_export;
 
-use crate::btree::iter::{BtreeTrans, TransAttempt};
+use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::c::journal_cycle_flags as Cycle;
 use crate::c::journal_flags as Journal;
 use crate::c::{buf_waiters, BufWait, JournalGuard, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT,
                JOURNAL_BUF_NOFLUSH, JOURNAL_BUF_NOT_IN_FLIGHT};
 use crate::debug::trace::events;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::{BkeyType, SbFeature};
 use crate::journal::pins::PinsRead;
 use crate::locking::MemallocFlags;
@@ -1747,15 +1747,6 @@ fn flush_seq_err_wake(wait: *const c::closure_waitlist) {
     if buf_waiters(first) {
         closure_wake_up(&c::closure_waitlist { list: c::llist_head { first } });
     }
-}
-
-/// # Safety
-/// @trans is NULL or in an attempt.
-#[c_export]
-pub unsafe fn bch2_journal_res_get(j: &c::journal, res: &mut c::journal_res, u64s: c_uint, flags: c_uint,
-                                   trans: Option<&BtreeTrans<'_>>) -> c_int {
-    let t = trans.map(|t| unsafe { t.attempt_in_progress() });
-    ret_to_c(j.res_get(res, u64s, flags, t.as_ref()))
 }
 
 #[c_export]

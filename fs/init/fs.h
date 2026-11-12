@@ -10,7 +10,6 @@
 
 #include <linux/math64.h>
 #include "init/fs_gen.h"
-#include "init/rw_gen.h"
 
 #define KTYPE(type)							\
 static const struct attribute_group type ## _group = {			\

@@ -16,8 +16,7 @@ use crate::c::journal_space_from::{self as SpaceFrom, *};
 use crate::c::JournalGuard;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
-use crate::btree::iter::BtreeTrans;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::{DataType, SbFeature};
 use crate::fs::{Dev, Fs};
 use crate::journal::pins::PinsRead;
@@ -33,7 +32,6 @@ use crate::util::sleep::{sleep_until, Sleep, SleepError};
 use crate::util::time_stats::TimeStats;
 use crate::util::{Nsecs, Printbuf};
 use crate::{bch_err, bch_err_msg, prt};
-use cstruct_macros::c_export;
 
 type ReclaimGuard<'a> = ExclusiveGuard<'a, c::mutex, (), c::ReclaimPublished>;
 
@@ -976,14 +974,3 @@ fn reclaim_sleep(j: &c::journal, me: &KthreadSelf<'_>, kicks: u32) {
     }
 }
 
-/* For C: */
-
-#[c_export]
-pub fn bch2_journal_reclaim_kick(j: &c::journal) {
-    j.reclaim_kick()
-}
-
-#[c_export]
-pub fn bch2_trans_key_cache_reclaim_wait(trans: &BtreeTrans<'_>) -> c_int {
-    ret_to_c(trans.fs().journal.key_cache_reclaim_wait(|| trans.unlock_long()))
-}

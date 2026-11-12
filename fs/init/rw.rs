@@ -31,14 +31,12 @@ use crate::format::{MemberState, SbFeature};
 use crate::fs::{Fs, StateLockWrite};
 use crate::sb::members::{BtreeBitmapGcSchedule, SbMembersMut};
 use crate::util::futex::EventCount;
-use crate::util::ffi::Opaque;
 use crate::util::kernel::WRITE;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::{bch_err, bch_info, bch_verbose, prt, warn_on};
-use cstruct_macros::c_export;
 
 static READ_ONLY_EVENTS: EventCount = EventCount::new();
 
@@ -394,7 +392,3 @@ pub(crate) unsafe extern "C" fn writes_disabled(writes: *mut c::enumerated_ref) 
     READ_ONLY_EVENTS.wake();
 }
 
-#[c_export]
-pub fn bch2_fs_emergency_read_only(c: &Opaque<Fs>, out: &mut Printbuf) -> bool {
-    Fs::from_c(c).emergency_read_only(out)
-}

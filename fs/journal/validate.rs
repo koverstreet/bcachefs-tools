@@ -1,24 +1,22 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use core::mem::{offset_of, size_of};
 
 use crate::alloc::replicas::SbEntry;
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::format::{Btree, DataType};
 use crate::fs::{Dev, Fs};
 use crate::btree::bkey::{BkeySC, ValidateFlags};
 use crate::init::error::{fs_inconsistent, id, mustfix_fsck_err, sb_error_count, BkeyValidate};
 use crate::init::recovery::btree_lost_data;
 use crate::sb::errors::SbErrorId;
-use crate::util::ffi::Opaque;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::{bytes_of, cast_plain, cast_plain_mut, ArmRef, Head, SelfSized,
                             Unvalidated, VStruct};
 use crate::util::{DateTime, Printbuf, ToText};
 use crate::{message, prt};
-use cstruct_macros::c_export;
 
 const HEAD: usize = size_of::<Head<c::jset_entry>>();
 const JSET_HEAD: usize = size_of::<Head<c::jset>>();
@@ -668,12 +666,3 @@ pub(crate) fn jset_validate_early(fs: &Fs, ca: Option<&Dev>, h: &mut Head<c::jse
     Ok(Jset::Ok)
 }
 
-/// # Safety
-/// @entry is an entry, as long as its u64s says.
-#[c_export]
-pub unsafe fn bch2_journal_entry_validate(c: &Opaque<Fs>, entry: *mut Head<c::jset_entry>, version: c_uint,
-                                          big_endian: c_int, from: c::bkey_validate_context) -> c_int
-{
-    let bytes = unsafe { core::slice::from_raw_parts_mut(entry.cast::<u8>(), (*entry).bytes()) };
-    ret_to_c(journal_entry_validate(Fs::from_c(c), bytes, version, big_endian != 0, from))
-}

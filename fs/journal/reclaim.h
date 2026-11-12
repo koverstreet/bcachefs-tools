@@ -10,7 +10,6 @@ static inline bool journal_pin_active(struct journal_entry_pin *pin)
 	return pin->seq != 0;
 }
 
-#include "journal/reclaim_gen.h"
 #include "journal/pins_gen.h"
 
 static inline enum journal_pin_type journal_pin_type_btree(unsigned level)

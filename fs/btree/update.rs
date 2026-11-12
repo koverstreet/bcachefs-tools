@@ -385,16 +385,6 @@ pub unsafe fn __bch2_trans_subbuf_alloc(trans: &BtreeTrans<'_>, buf: *mut c::btr
 }
 
 /// # Safety
-/// @trans is in an attempt; @buf is one of its sub-buffers.
-#[c_export]
-pub unsafe fn bch2_trans_subbuf_reserve(trans: &BtreeTrans<'_>, buf: *mut c::btree_trans_subbuf, u64s: c_uint)
-    -> c_int
-{
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(t.subbuf_reserve(unsafe { &*buf.cast::<Cell<c::btree_trans_subbuf>>() }, u64s as usize))
-}
-
-/// # Safety
 /// @trans is in an attempt; @k is a key, @k_buf_u64s of room, that stays
 /// where it is until the attempt's over.
 #[c_export]

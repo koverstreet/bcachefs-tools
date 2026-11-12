@@ -2,13 +2,12 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::Fs;
 use crate::cstructs::c;
 use crate::types::{rust_only, RustOnly};
 use crate::util::shrinker::Shrinker;
 use core::sync::atomic::{AtomicIsize, AtomicUsize};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{placed, CStruct, Init, TypeInfo, c_export};
+use cstruct_macros::{placed, CStruct, Init, TypeInfo};
 use pin_init::pin_data;
 use crate::format::Bpos;
 
@@ -84,16 +83,6 @@ impl bch_fs_btree_key_cache {
 
         nr_dirty <= max_dirty
     }
-}
-
-#[c_export]
-pub fn __bch2_btree_key_cache_must_wait(c: &Fs) -> isize {
-    c.btree.key_cache.dirty_over_max()
-}
-
-#[c_export]
-pub fn bch2_btree_key_cache_must_wait(c: &Fs) -> bool {
-    c.btree.key_cache.must_wait()
 }
 
 #[repr(C, align(4))]

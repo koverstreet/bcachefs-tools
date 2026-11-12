@@ -1441,12 +1441,6 @@ pub(crate) fn split_leaf(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: Pa
     Ok(())
 }
 
-#[c_export]
-pub fn bch2_btree_split_leaf(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: PathIdx,
-                             new_key_u64s: c_uint, flags: c::bch_trans_commit_flags) -> c_int {
-    ret_to_c(split_leaf(trans, paths, path, new_key_u64s, flags.into()))
-}
-
 pub(crate) fn increase_depth(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx,
                              commit: CommitOpts) -> Result<(), BchError> {
     let fs = trans.fs();

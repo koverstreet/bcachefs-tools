@@ -1201,11 +1201,6 @@ pub fn __bch2_trans_maybe_inject_restart(trans: &BtreeTrans<'_>, ip: c_ulong) ->
 }
 
 #[c_export]
-pub fn bch2_trans_updates_to_text(out: &mut Printbuf, trans: &BtreeTrans<'_>) {
-    trans.updates_to_text(out)
-}
-
-#[c_export]
 pub fn bch2_current_has_btree_trans(c: &Fs) -> bool {
     c.current_has_btree_trans()
 }

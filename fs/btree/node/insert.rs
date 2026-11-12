@@ -6,7 +6,6 @@ use core::ffi::c_int;
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::Ordering::Relaxed;
 
-use cstruct_macros::c_export;
 
 use super::aux_tree::pack_pos_or_unpacked;
 use super::iter::KeyIter;
@@ -17,7 +16,7 @@ use crate::btree::bkey::{BkeyI, BkeyP, BKEY_U64S};
 use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::interior::check_topology_msg;
 use crate::btree::iter::BtreeTrans;
-use crate::btree::path::{BtreePath, LockedNode, PathIdx, Paths, PathsUpdates};
+use crate::btree::path::{LockedNode, PathIdx, Paths, PathsUpdates};
 use crate::btree::types::BtreeWriteType;
 use crate::btree::write::{bch2_btree_init_next, bch2_btree_post_write_cleanup, __bch2_btree_node_write,
                           BtreeWriteFlags};
@@ -315,18 +314,3 @@ impl BtreeTrans<'_> {
     }
 }
 
-// ── For C: nodes C holds write locked ───────────────────────────────────────
-
-#[c_export]
-pub fn bch2_btree_node_prep_for_write(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, b: &BtreeNode) {
-    trans.node_prep_for_write(&mut paths.paths_and_updates(), b)
-}
-
-/// # Safety
-/// As insert_key_leaf(); @insert is a key.
-#[c_export]
-pub unsafe fn bch2_btree_insert_key_leaf(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>,
-                                         path: *mut BtreePath, insert: *mut c::bkey_i, journal_seq: u64) {
-    let insert = unsafe { &mut *<BkeyI>::from_raw_mut(insert) };
-    unsafe { trans.insert_key_leaf(&mut paths.paths_and_updates(), trans.path_idx_of(path), insert, journal_seq) }
-}
