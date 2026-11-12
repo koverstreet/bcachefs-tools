@@ -283,27 +283,15 @@ impl<'a, V: ?Sized + BkeyVal> From<&'a mut BkeyI<V>> for BkeyS<'a, V> {
 
 /// The bkey_i it is, of any type - a validated key's, a key in a state that
 /// implies Validated: an unvalidated one converts by From, to one of its own.
-impl AsRef<BkeyI> for BkeyI {
+impl<V: ?Sized + ValidatedVal> AsRef<BkeyI> for BkeyI<V> {
     fn as_ref(&self) -> &BkeyI {
-        self
+        unsafe { &*cast_unsized(self.as_ffi()) }
     }
 }
 
-impl AsMut<BkeyI> for BkeyI {
+impl<V: ?Sized + ValidatedVal> AsMut<BkeyI> for BkeyI<V> {
     fn as_mut(&mut self) -> &mut BkeyI {
-        self
-    }
-}
-
-impl<V: ?Sized + InFamily<AllTypes> + ValidatedVal> AsRef<BkeyI> for BkeyI<V> {
-    fn as_ref(&self) -> &BkeyI {
-        self.into()
-    }
-}
-
-impl<V: ?Sized + InFamily<AllTypes> + ValidatedVal> AsMut<BkeyI> for BkeyI<V> {
-    fn as_mut(&mut self) -> &mut BkeyI {
-        self.into()
+        unsafe { &mut *cast_unsized_mut(self.as_ffi_mut()) }
     }
 }
 

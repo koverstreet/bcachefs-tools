@@ -58,7 +58,7 @@ use crate::btree::cache::btree_ptr_hash_val;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::write::{node_write_trans, BtreeWriteFlags};
 use crate::cstructs::c::BtreeWriteType;
-use crate::util::vstructs::{State, Validated};
+use crate::util::vstructs::State;
 use crate::format::{Bpos, Btree, BkeyType};
 
 /// One attempt at @trans: from one begin() to the next.
@@ -1177,31 +1177,15 @@ impl<'k, V: ?Sized + BkeyVal> From<&'k mut TransBkey<'_, '_, V>> for BkeyS<'k, V
 /// The key, all of it, as long as its u64s say - a validated key's, as
 /// BkeyI's AsRef. Its length is its u64s when it's taken: one that changes
 /// them - grows the key, in its buffer - takes it again after.
-impl AsRef<BkeyI> for TransBkey<'_, '_> {
+impl<V: ?Sized + ValidatedVal> AsRef<BkeyI> for TransBkey<'_, '_, V> {
     fn as_ref(&self) -> &BkeyI {
         unsafe { &*cast_unsized(self.ptr.as_ptr()) }
     }
 }
 
-impl AsMut<BkeyI> for TransBkey<'_, '_> {
+impl<V: ?Sized + ValidatedVal> AsMut<BkeyI> for TransBkey<'_, '_, V> {
     fn as_mut(&mut self) -> &mut BkeyI {
         unsafe { &mut *cast_unsized_mut(self.ptr.as_ptr()) }
-    }
-}
-
-impl<V: ?Sized + InFamily<AllTypes> + BkeyVal<State: Implies<Validated>>> AsRef<BkeyI>
-    for TransBkey<'_, '_, V>
-{
-    fn as_ref(&self) -> &BkeyI {
-        self.into()
-    }
-}
-
-impl<V: ?Sized + InFamily<AllTypes> + BkeyVal<State: Implies<Validated>>> AsMut<BkeyI>
-    for TransBkey<'_, '_, V>
-{
-    fn as_mut(&mut self) -> &mut BkeyI {
-        self.into()
     }
 }
 
