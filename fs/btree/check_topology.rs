@@ -291,7 +291,7 @@ fn child_key(t: &TransAttempt<'_, '_>, b: Node<'_>, pos: Bpos) -> Option<BkeyBuf
     let mut node_iter = KeyIter::default();
     node_iter.init(fs, &b.keys(b.contents()), &pos);
 
-    let mut iter = BtreeAndJournalIter::new(t.trans(), b, node_iter, pos);
+    let mut iter = BtreeAndJournalIter::new(t, b, node_iter, pos);
     iter.prefetch = true;
 
     let k = iter.peek()?;
@@ -494,7 +494,7 @@ fn repair_topology_recurse(trans: &BtreeTrans<'_>, btree: Btree, level: usize,
         lockrestart_do(trans, |t| {
             let iter = node_at(t, btree, level, node, BtreeIterFlags::empty())?;
             let b = held(&t.trans().paths(), &iter).b;
-            assert!(node_check_topology(t.trans(), b).is_ok(), "a node's topology bad after its repair");
+            assert!(node_check_topology(t, b).is_ok(), "a node's topology bad after its repair");
             Ok(())
         })?;
     }

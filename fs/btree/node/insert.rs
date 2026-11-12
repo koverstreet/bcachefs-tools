@@ -15,7 +15,7 @@ use super::BtreeNode;
 use crate::btree::bkey::{BkeyI, BkeyP, BKEY_U64S};
 use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::interior::check_topology_msg;
-use crate::btree::iter::BtreeTrans;
+use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::btree::path::{LockedNode, PathIdx, Paths, PathsUpdates};
 use crate::btree::types::BtreeWriteType;
 use crate::btree::write::{bch2_btree_init_next, bch2_btree_post_write_cleanup, __bch2_btree_node_write,
@@ -125,11 +125,12 @@ unsafe extern "C" fn node_flush1(j: *mut c::journal, pin: *mut Pin, seq: u64) ->
 
 impl BtreeTrans<'_> {
     #[inline]
-    pub(in crate::btree) fn node_prep_for_write(&self, pu: &mut PathsUpdates<'_, '_>, b: &BtreeNode) {
+    pub(in crate::btree) fn node_prep_for_write(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
+                                                b: &BtreeNode) {
         let fs = self.fs();
 
         if unlikely(b.flags.just_written()) && bch2_btree_post_write_cleanup(fs, b) {
-            self.node_reinit_iter(pu, unsafe { LockedNode::new(b) });
+            self.node_reinit_iter(t, pu, unsafe { LockedNode::new(b) });
         }
 
         /*
@@ -137,7 +138,7 @@ impl BtreeTrans<'_> {
          * a new bset to insert into:
          */
         if b.want_new_bset(unsafe { b.contents() }, fs).is_some() {
-            bch2_btree_init_next(self, pu, b);
+            bch2_btree_init_next(t, pu, b);
         }
     }
 
@@ -239,12 +240,12 @@ impl BtreeTrans<'_> {
     }
 
     #[inline(never)]
-    fn insert_topology_check(&self, b: &BtreeNode) -> bool {
+    fn insert_topology_check(&self, t: &TransAttempt<'_, '_>, b: &BtreeNode) -> bool {
         let fs = self.fs();
         let mut msg = LogMsg::new(fs);
         msg.set_suppressed(true);
 
-        let bad = check_topology_msg(self, unsafe { LockedNode::new(b) }, &mut msg).is_err();
+        let bad = check_topology_msg(t, unsafe { LockedNode::new(b) }, &mut msg).is_err();
         if bad {
             crate::prt!(&mut msg, "Btree update created topology error:\n");
             self.updates_to_text(&mut msg);
@@ -259,8 +260,8 @@ impl BtreeTrans<'_> {
     /// # Safety
     /// Path @idx's node at its level is write locked.
     #[inline]
-    pub(in crate::btree) unsafe fn insert_key_leaf(&self, pu: &mut PathsUpdates<'_, '_>, idx: PathIdx,
-                                                   insert: &mut BkeyI, journal_seq: u64) {
+    pub(in crate::btree) unsafe fn insert_key_leaf(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
+                                                   idx: PathIdx, insert: &mut BkeyI, journal_seq: u64) {
         let fs = self.fs();
         let paths = &mut pu.paths;
         let level = paths[idx].level() as usize;
@@ -277,7 +278,7 @@ impl BtreeTrans<'_> {
             return;
         }
 
-        if unlikely(b.c.level != 0 && self.insert_topology_check(b)) {
+        if unlikely(b.c.level != 0 && self.insert_topology_check(t, b)) {
             return;
         }
 
@@ -309,7 +310,7 @@ impl BtreeTrans<'_> {
         }
 
         if u64s_added > live_u64s_added && unlikely(bch2_maybe_compact_whiteouts(fs, b)) {
-            self.node_reinit_iter(pu, unsafe { LockedNode::new(b) });
+            self.node_reinit_iter(t, pu, unsafe { LockedNode::new(b) });
         }
     }
 }

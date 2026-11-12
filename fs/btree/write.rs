@@ -779,7 +779,8 @@ pub(crate) fn node_write_trans(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b:
  *
  * Returns true if we sorted (i.e. invalidated iterators
  */
-pub(in crate::btree) fn bch2_btree_init_next(trans: &BtreeTrans<'_>, pu: &mut PathsUpdates<'_, '_>, b: &BtreeNode) {
+pub(in crate::btree) fn bch2_btree_init_next(t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>, b: &BtreeNode) {
+    let trans = t.trans();
     let fs = trans.fs();
     let mut reinit_iter = false;
 
@@ -813,7 +814,7 @@ pub(in crate::btree) fn bch2_btree_init_next(trans: &BtreeTrans<'_>, pu: &mut Pa
     bch2_btree_build_aux_trees(b);
 
     if reinit_iter {
-        trans.node_reinit_iter(pu, unsafe { LockedNode::new(b) });
+        trans.node_reinit_iter(t, pu, unsafe { LockedNode::new(b) });
     }
 }
 

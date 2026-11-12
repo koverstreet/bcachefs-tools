@@ -98,7 +98,7 @@ fn gc_btree(trans: &BtreeTrans<'_>, progress: &Progress<'_>, btree: Btree, targe
 
             let b = t.trans().paths().held_btree_node(iter.path, level as usize).expect("the node its key is in");
             if prev != Some(NonNull::from(&*b)) {
-                check_topology(t.trans(), b)?;
+                check_topology(t, b)?;
             }
             prev = Some(NonNull::from(&*b));
 

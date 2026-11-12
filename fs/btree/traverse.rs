@@ -392,7 +392,7 @@ impl BtreeTrans<'_> {
 
     #[cold]
     #[inline(never)]
-    fn node_gap_err(&self, paths: &Paths<'_>, idx: PathIdx, k: &BkeyI) -> BchError {
+    fn node_gap_err(&self, t: &TransAttempt<'_, '_>, paths: &Paths<'_>, idx: PathIdx, k: &BkeyI) -> BchError {
         let fs = self.fs();
         let path = &paths[idx];
         let mut msg = LogMsg::new(fs);
@@ -464,7 +464,7 @@ impl BtreeTrans<'_> {
         let _ = prt_task_backtrace(&mut msg, crate::util::sched::current(), 1);
 
         let mut msg = msg.indent(2);
-        match check_topology_msg(self, b, &mut msg) {
+        match check_topology_msg(t, b, &mut msg) {
             Err(e) => e,
             Ok(()) => fs.topology_error(&mut msg),
         }
@@ -472,15 +472,15 @@ impl BtreeTrans<'_> {
 
     #[cold]
     #[inline(never)]
-    fn node_iter_and_journal_peek(&self, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags)
-        -> Result<(), BchError>
+    fn node_iter_and_journal_peek(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, idx: PathIdx,
+                                  flags: BtreeIterFlags) -> Result<(), BchError>
     {
         let fs = self.fs();
         let path = &paths[idx];
         let level = path.level() as usize;
         let b = paths.held_btree_node(idx, level).expect("a path goes down from a locked node");
 
-        let mut jiter = BtreeAndJournalIter::new(self, b, path.l[level].iter, path.pos);
+        let mut jiter = BtreeAndJournalIter::new(t, b, path.l[level].iter, path.pos);
 
         let Some(k) = jiter.peek() else {
             return Err(self.node_missing_err(paths, idx));
@@ -495,7 +495,9 @@ impl BtreeTrans<'_> {
     }
 
     #[inline(always)]
-    fn path_down(&self, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags) -> Result<(), BchError> {
+    fn path_down(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags)
+        -> Result<(), BchError>
+    {
         let fs = self.fs();
         let level = paths[idx].level() as usize;
 
@@ -508,7 +510,7 @@ impl BtreeTrans<'_> {
         }
 
         if self.journal_replay_not_finished() {
-            self.node_iter_and_journal_peek(paths, idx, flags)?;
+            self.node_iter_and_journal_peek(t, paths, idx, flags)?;
         } else {
             let found = {
                 let (b, iter, down) = paths.level_and_down_key_mut(idx, level)
@@ -526,7 +528,7 @@ impl BtreeTrans<'_> {
         }
 
         if !bpos_in_btree_node_key(paths[idx].pos, paths.down_key()) {
-            return Err(self.node_gap_err(paths, idx, paths.down_key()));
+            return Err(self.node_gap_err(t, paths, idx, paths.down_key()));
         }
 
         let level = level - 1;
@@ -694,7 +696,7 @@ impl BtreeTrans<'_> {
         if paths[idx].cached() {
             self.path_traverse_cached(t, paths, idx, flags)
         } else {
-            self.path_traverse_btree(paths, idx, flags)
+            self.path_traverse_btree(t, paths, idx, flags)
         }
     }
 
@@ -709,12 +711,12 @@ impl BtreeTrans<'_> {
     }
 
     #[inline(never)]
-    fn path_traverse_btree(&self, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags)
-        -> Result<(), BchError>
+    fn path_traverse_btree(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, idx: PathIdx,
+                           flags: BtreeIterFlags) -> Result<(), BchError>
     {
         let depth_want = paths[idx].level() as usize;
         let ret = self.path_traverse_start(paths, idx)
-            .unwrap_or_else(|| self.path_walk_down(paths, idx, flags, depth_want));
+            .unwrap_or_else(|| self.path_walk_down(t, paths, idx, flags, depth_want));
         self.path_traverse_done(paths, idx, &ret);
         ret
     }
@@ -757,7 +759,7 @@ impl BtreeTrans<'_> {
         None
     }
 
-    fn path_walk_down(&self, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags,
+    fn path_walk_down(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags,
                       depth_want: usize) -> Result<(), BchError> {
         if paths[idx].level() as u32 >= c::BTREE_MAX_DEPTH {
             self.path_traverse_end_trace(paths, idx);
@@ -779,7 +781,7 @@ impl BtreeTrans<'_> {
         while paths[idx].level() as usize > depth_want {
             let level = paths[idx].level() as usize;
             let ret = if !paths[idx].node(level).is_null() {
-                self.path_down(paths, idx, flags)
+                self.path_down(t, paths, idx, flags)
             } else {
                 self.path_lock_root(paths, idx, depth_want)
             };

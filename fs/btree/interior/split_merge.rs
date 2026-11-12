@@ -45,8 +45,9 @@ use super::{InteriorUpdate, NewNode, ParentKeys, StartOpts};
 /// A btree node held locked: by a path, or new from the update's reserve.
 type Node<'n> = LockedNode<'n, BtreeNode>;
 
-fn insert_fixup_btree_ptr(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx, b: Node<'_>,
+fn insert_fixup_btree_ptr(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx, b: Node<'_>,
                           node_iter: &mut KeyIter, insert: &mut BkeyI) {
+    let trans = t.trans();
     let fs = trans.fs();
     let k = BkeySC::from(&*insert);
 
@@ -82,9 +83,9 @@ fn insert_fixup_btree_ptr(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: P
 
 /// The keys at the front of @list that go in interior node @b - up to its end
 /// - inserted from @node_iter, @path's at @b's level, and taken off the list.
-pub(crate) fn insert_keys_interior(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx, b: Node<'_>,
+pub(crate) fn insert_keys_interior(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx, b: Node<'_>,
                                    mut node_iter: KeyIter, list: &mut ParentKeys) -> Result<(), BchError> {
-    let fs = trans.fs();
+    let fs = t.fs();
     assert!(b.c.level > 0, "inserting pointers into a leaf");
 
     let front = list.front().expect("inserting no keys").k().p;
@@ -102,13 +103,13 @@ pub(crate) fn insert_keys_interior(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>
     let mut inserted = 0;
     for k in keys_mut(list.as_u64s_mut()).take_while(|k| k.k().p <= end) {
         inserted += usize::from(k.k().u64s);
-        insert_fixup_btree_ptr(trans, paths, path, b, &mut node_iter, k);
+        insert_fixup_btree_ptr(t, paths, path, b, &mut node_iter, k);
     }
 
     let mut msg = LogMsg::new(fs);
     msg.set_suppressed(true);
 
-    if let Err(e) = check_topology_msg(trans, b, &mut msg) {
+    if let Err(e) = check_topology_msg(t, b, &mut msg) {
         prt!(msg, "inserted keys\n");
         msg.indent_add(2);
         for k in keys(&list.as_u64s()[..inserted]) {
@@ -136,7 +137,7 @@ pub(crate) fn insert_keys_interior(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>
  * nodes that were coalesced, and thus in the middle of a child node post
  * coalescing:
  */
-pub(crate) fn split_insert_keys(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, path: PathIdx, b: Node<'_>,
+pub(crate) fn split_insert_keys(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx, b: Node<'_>,
                                 list: &mut ParentKeys) -> Result<(), BchError> {
     let Some(front) = list.front().map(|k| k.k().p) else { return Ok(()) };
 
@@ -146,8 +147,8 @@ pub(crate) fn split_insert_keys(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, p
     }
 
     let mut node_iter = KeyIter::default();
-    node_iter.init(trans.fs(), &b.keys(contents), &front);
-    insert_keys_interior(trans, paths, path, b, node_iter, list)
+    node_iter.init(t.fs(), &b.keys(contents), &front);
+    insert_keys_interior(t, paths, path, b, node_iter, list)
 }
 
 fn topology_err(fs: &Fs, b: Node<'_>, out: &mut Printbuf) -> BchError {
@@ -167,8 +168,8 @@ fn prev_end(prev: &BkeyBuf) -> Option<Bpos> {
 /*
  * Verify that child nodes correctly span parent node's range:
  */
-pub(crate) fn check_topology_msg(trans: &BtreeTrans<'_>, b: Node<'_>, out: &mut Printbuf) -> Result<(), BchError> {
-    let fs = trans.fs();
+pub(crate) fn check_topology_msg(t: &TransAttempt<'_, '_>, b: Node<'_>, out: &mut Printbuf) -> Result<(), BchError> {
+    let fs = t.fs();
     let contents = b.contents();
     let data = contents.data();
 
@@ -201,7 +202,7 @@ pub(crate) fn check_topology_msg(trans: &BtreeTrans<'_>, b: Node<'_>, out: &mut 
 
     let mut node_iter = KeyIter::default();
     node_iter.init_from_start(&b.keys(contents));
-    let mut iter = BtreeAndJournalIter::new(trans, b, node_iter, data.min_key);
+    let mut iter = BtreeAndJournalIter::new(t, b, node_iter, data.min_key);
     let mut prev = BkeyBuf::new();
 
     while let Some(k) = iter.peek() {
@@ -238,10 +239,10 @@ pub(crate) fn check_topology_msg(trans: &BtreeTrans<'_>, b: Node<'_>, out: &mut 
     Ok(())
 }
 
-pub(crate) fn check_topology(trans: &BtreeTrans<'_>, b: Node<'_>) -> Result<(), BchError> {
-    let mut msg = LogMsg::new(trans.fs());
+pub(crate) fn check_topology(t: &TransAttempt<'_, '_>, b: Node<'_>) -> Result<(), BchError> {
+    let mut msg = LogMsg::new(t.fs());
     msg.set_suppressed(true);
-    check_topology_msg(trans, b, &mut msg)
+    check_topology_msg(t, b, &mut msg)
 }
 
 pub(super) fn split_threshold(fs: &Fs) -> usize {
@@ -268,7 +269,7 @@ struct SplitLayout {
  *     or deleted-in-@inserting cross-key (parent reference can't point at a
  *     to-be-deleted key). The eventual pivot is the last unshifted side[0] key.
  */
-fn predict_split(trans: &BtreeTrans<'_>, srcs: &[Node<'_>], inserting: Option<&InteriorUpdate<'_>>,
+fn predict_split(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>], inserting: Option<&InteriorUpdate<'_>>,
                  n1_target_u64s: usize, mut pivot: Bpos) -> SplitLayout {
     let mut state = [c::bkey_format_state::new(), c::bkey_format_state::new()];
     let mut nr_keys = [0; 2];
@@ -293,7 +294,7 @@ fn predict_split(trans: &BtreeTrans<'_>, srcs: &[Node<'_>], inserting: Option<&I
                 let shifted = src.c.level != 0 &&
                     u64s < n1_u64s &&
                     u64s + k.u64s() >= n1_u64s &&
-                    (key_deleted_in_journal(trans, Btree(src.c.btree_id.into()), src.c.level.into(), uk.p) ||
+                    (key_deleted_in_journal(t, Btree(src.c.btree_id.into()), src.c.level.into(), uk.p) ||
                      inserting.is_some_and(|u| u.parent_key_deleted(uk.p)));
                 if shifted {
                     n1_u64s += k.u64s();
@@ -336,8 +337,8 @@ fn predict_split(trans: &BtreeTrans<'_>, srcs: &[Node<'_>], inserting: Option<&I
  * caller is committed to splitting. A per-side predicted format that
  * overflows the node buf is replaced by @b's own.
  */
-fn split_layout(trans: &BtreeTrans<'_>, b: Node<'_>, inserting: Option<&InteriorUpdate<'_>>) -> SplitLayout {
-    let fs = trans.fs();
+fn split_layout(t: &TransAttempt<'_, '_>, b: Node<'_>, inserting: Option<&InteriorUpdate<'_>>) -> SplitLayout {
+    let fs = t.fs();
     let contents = b.contents();
     let shard_pivot = b.shard_pivot(contents, fs);
 
@@ -350,9 +351,9 @@ fn split_layout(trans: &BtreeTrans<'_>, b: Node<'_>, inserting: Option<&Interior
          * fine — must_split is recursive, so an overflowing side gets
          * another shot.
          */
-        predict_split(trans, &[b], inserting, 0, shard_pivot)
+        predict_split(t, &[b], inserting, 0, shard_pivot)
     } else {
-        predict_split(trans, &[b], inserting, usize::from(contents.nr.live_u64s) * 3 / 5, POS_MIN)
+        predict_split(t, &[b], inserting, usize::from(contents.nr.live_u64s) * 3 / 5, POS_MIN)
     };
 
     for i in 0..2 {
@@ -369,8 +370,8 @@ fn split_layout(trans: &BtreeTrans<'_>, b: Node<'_>, inserting: Option<&Interior
  * the one minimizing max(size[0], size[1]) with non-empty sides. Bail if
  * best exceeds split_thresh.
  */
-fn merge_layout(trans: &BtreeTrans<'_>, srcs: &[Node<'_>]) -> Option<SplitLayout> {
-    let fs = trans.fs();
+fn merge_layout(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>]) -> Option<SplitLayout> {
+    let fs = t.fs();
     let shard_pivot = srcs[0].shard_pivot(srcs[0].contents(), fs);
 
     let best = if shard_pivot != POS_MIN {
@@ -379,7 +380,7 @@ fn merge_layout(trans: &BtreeTrans<'_>, srcs: &[Node<'_>]) -> Option<SplitLayout
          * poisoned at shard boundaries (merge()), so srcs[0]'s
          * shard_pivot is POS_MIN whenever a merger gets here.
          */
-        Some(predict_split(trans, srcs, None, 0, shard_pivot))
+        Some(predict_split(t, srcs, None, 0, shard_pivot))
     } else {
         let max_key = |b: Node<'_>| b.contents().data().max_key;
 
@@ -408,7 +409,7 @@ fn merge_layout(trans: &BtreeTrans<'_>, srcs: &[Node<'_>]) -> Option<SplitLayout
         }
 
         candidates.iter()
-            .map(|&pivot| predict_split(trans, srcs, None, 0, pivot))
+            .map(|&pivot| predict_split(t, srcs, None, 0, pivot))
             /*
              * Empty-side candidate scores 0 on its empty side and
              * would beat a balanced candidate whose far side
@@ -457,7 +458,7 @@ fn alloc_dst<'u>(update: &'u InteriorUpdate<'_>, paths: &mut Paths<'_>, srcs: &[
  * merge_layouts for merge) and pack every src key into the
  * appropriate dst, partitioning by key.p vs dsts[0]'s max_key.
  */
-fn pack_into_dsts(trans: &BtreeTrans<'_>, srcs: &[Node<'_>], dsts: &mut [NewNode<'_>; 2]) {
+fn pack_into_dsts(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>], dsts: &mut [NewNode<'_>; 2]) {
     let pivot = dsts[0].contents().data().max_key;
     let mut out = dsts.each_mut().map(|n| n.keys_mut());
     let mut at = out.each_ref().map(|keys| keys.sets[0].first_offset() as usize);
@@ -502,7 +503,7 @@ fn pack_into_dsts(trans: &BtreeTrans<'_>, srcs: &[Node<'_>], dsts: &mut [NewNode
         n.contents().reset_sib_u64s();
         n.keys_mut().verify_btree_nr_keys();
 
-        assert!(check_topology(trans, n.locked()).is_ok(), "a packed node's topology bad:\n{}", n.to_text(trans.fs()));
+        assert!(check_topology(t, n.locked()).is_ok(), "a packed node's topology bad:\n{}", n.to_text(t.fs()));
     }
 }
 
@@ -557,7 +558,7 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
     assert!(!has_parent || paths[path].intent_locked(level + 1),
             "splitting a node whose parent isn't intent locked:\n{}", b.to_text(fs));
 
-    check_topology(trans, b)?;
+    check_topology(update.t(), b)?;
 
     /* If we're splitting because an insert hit btree_node_full, compact
      * is only useful if the failed key would actually fit afterwards.
@@ -595,11 +596,11 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
     let _timer = fs.times[stat as usize].timer();
 
     let nodes: ArrayVec<NewNode<'_>, 2> = if split {
-        let layout = split_layout(trans, b, insert_parent_keys.then_some(update));
+        let layout = split_layout(update.t(), b, insert_parent_keys.then_some(update));
         let data = b.contents().data();
         let mut dsts = layout.dsts(data.min_key, data.max_key).map(|l| alloc_dst(update, paths, &[b], l));
 
-        pack_into_dsts(trans, &[b], &mut dsts);
+        pack_into_dsts(update.t(), &[b], &mut dsts);
         dsts.into_iter().collect()
     } else {
         [update.alloc_replacement(paths, &b)].into_iter().collect()
@@ -692,7 +693,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
 
     trans.node_lock_write(paths, path, level)?;
 
-    trans.node_prep_for_write(&mut paths.paths_and_updates(), &b);
+    trans.node_prep_for_write(update.t(), &mut paths.paths_and_updates(), &b);
 
     let u64s = update.parent_keys_u64s();
     if !b.insert_fits(b.contents(), u64s) {
@@ -714,7 +715,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
         return ret;
     }
 
-    let ret = check_topology(trans, b).and_then(|()| update.insert_parent_keys_at(paths, path, b));
+    let ret = check_topology(update.t(), b).and_then(|()| update.insert_parent_keys_at(paths, path, b));
     if let Err(e) = ret {
         trans.verify_locks(paths);
         return Err(e);
@@ -743,13 +744,13 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
 
     let added_dead_u64s = u64s + usize::from(old_live_u64s) > old_u64s + usize::from(live_u64s);
     if added_dead_u64s && bch2_maybe_compact_whiteouts(fs, &b) {
-        trans.node_reinit_iter(&mut paths.paths_and_updates(), b);
+        trans.node_reinit_iter(update.t(), &mut paths.paths_and_updates(), b);
     }
 
     update.updated_node(&b);
     trans.node_unlock_write(paths, path, level);
 
-    trans.revalidate_updates_in_node(&mut paths.paths_and_updates(), b);
+    trans.revalidate_updates_in_node(update.t(), &mut paths.paths_and_updates(), b);
     Ok(())
 }
 
@@ -1083,15 +1084,15 @@ fn merge_fits(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: Node<'_>,
  * None if the merge doesn't fit, or merge_layout found no candidate pivot
  * whose worst dst stays under split_thresh.
  */
-fn merge_layouts(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: Node<'_>,
+fn merge_layouts(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, b: Node<'_>,
                  srcs: &mut ArrayVec<Src<'_>, 3>) -> Option<ArrayVec<DstLayout, 2>> {
-    let (nr_dsts, total_u64s, new_f) = merge_fits(trans, paths, b, srcs)?;
+    let (nr_dsts, total_u64s, new_f) = merge_fits(t.trans(), paths, b, srcs)?;
     let nodes = read_nodes(srcs);
     let min_key = nodes[0].contents().data().min_key;
     let max_key = nodes[nodes.len() - 1].contents().data().max_key;
 
     if nr_dsts == 2 {
-        if let Some(layout) = merge_layout(trans, &nodes) {
+        if let Some(layout) = merge_layout(t, &nodes) {
             return Some(layout.dsts(min_key, max_key).into_iter().collect());
         }
 
@@ -1104,7 +1105,7 @@ fn merge_layouts(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: Node<'_>,
          * rather than abandon the consolidation.
          */
         if !b.fits_u64s(total_u64s) {
-            merge_fail_reset_sib_u64s(trans.fs(), paths, b, srcs);
+            merge_fail_reset_sib_u64s(t.fs(), paths, b, srcs);
             return None;
         }
     }
@@ -1283,7 +1284,7 @@ fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, 
         return Ok(false);
     }
 
-    let Some(layouts) = merge_layouts(trans, paths, b, srcs) else { return Ok(false) };
+    let Some(layouts) = merge_layouts(t, paths, b, srcs) else { return Ok(false) };
 
     let nodes = read_nodes(srcs);
     let range = (nodes[0].contents().data().min_key, nodes[nodes.len() - 1].contents().data().max_key);
@@ -1345,11 +1346,11 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
             bch2_btree_sort_into(fs, n, s);
         }
 
-        assert!(check_topology(trans, n.locked()).is_ok(), "a merged node's topology bad:\n{}", n.to_text(fs));
+        assert!(check_topology(update.t(), n.locked()).is_ok(), "a merged node's topology bad:\n{}", n.to_text(fs));
         n.contents().reset_sib_u64s();
     } else {
         let dsts: &mut [NewNode<'_>; 2] = dsts.as_mut_slice().try_into().expect("a merge into two nodes");
-        pack_into_dsts(trans, &nodes, dsts);
+        pack_into_dsts(update.t(), &nodes, dsts);
     }
 
     /*

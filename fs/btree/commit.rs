@@ -113,7 +113,7 @@ impl BtreeTrans<'_> {
         }
     }
 
-    fn lock_updates_write(&self, paths: &mut Paths<'_>) -> Result<(), BchError> {
+    fn lock_updates_write(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>) -> Result<(), BchError> {
         ebug_assert!(!self.write_locked());
 
         let mut pu = paths.paths_and_updates();
@@ -130,7 +130,7 @@ impl BtreeTrans<'_> {
 
             if !i.cached() {
                 let b = unsafe { leaf(&pu.paths, i) };
-                self.node_prep_for_write(&mut pu, b);
+                self.node_prep_for_write(t, &mut pu, b);
             }
         }
 
@@ -195,7 +195,8 @@ impl BtreeTrans<'_> {
 
     /// This may unlock and relock.
     #[inline(never)]
-    fn key_can_insert_cached_slowpath(&self, paths: &mut Paths<'_>, flags: CommitOpts, path: PathIdx, u64s: usize)
+    fn key_can_insert_cached_slowpath(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, flags: CommitOpts,
+                                      path: PathIdx, u64s: usize)
         -> Result<(), BchError>
     {
         let fs = self.fs();
@@ -220,7 +221,7 @@ impl BtreeTrans<'_> {
                         return fs.throw(bch_errcode::BCH_ERR_ENOMEM_btree_key_cache_insert);
                     };
 
-                    if let Err(err) = self.relock_from(paths).and_then(|()| self.lock_updates_write(paths)) {
+                    if let Err(err) = self.relock_from(paths).and_then(|()| self.lock_updates_write(t, paths)) {
                         unsafe { c::rust_kfree(new_k.as_ptr().cast()) };
                         return Err(err);
                     }
@@ -784,7 +785,7 @@ impl BtreeTrans<'_> {
                 } else {
                     let path = i.path;
                     drop(pu);
-                    let ret = self.key_can_insert_cached_slowpath(paths, flags, path, u64s);
+                    let ret = self.key_can_insert_cached_slowpath(t, paths, flags, path, u64s);
                     pu = paths.paths_and_updates();
                     ret
                 }
@@ -919,7 +920,7 @@ impl BtreeTrans<'_> {
 
             if !i.cached() {
                 let (path, k) = (i.path, i.key_ptr());
-                unsafe { self.insert_key_leaf(&mut pu, path, &mut *<BkeyI>::from_raw_mut(k), seq) };
+                unsafe { self.insert_key_leaf(t, &mut pu, path, &mut *<BkeyI>::from_raw_mut(k), seq) };
             } else if !i.key_cache_already_flushed() {
                 unsafe { bch2_btree_insert_key_cached(self, &mut pu.paths, &raw mut pu.updates[idx]) };
             } else {
@@ -949,7 +950,7 @@ impl BtreeTrans<'_> {
             t.subbuf_reserve(&self.journal_entries, extra as usize)?;
         }
 
-        self.lock_updates_write(paths)?;
+        self.lock_updates_write(t, paths)?;
 
         let jk = unlikely(self.journal_replay_not_finished()).then(|| unsafe { self.fs().journal_keys_held() });
         let overwrites = match jk {

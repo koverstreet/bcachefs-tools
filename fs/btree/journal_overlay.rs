@@ -36,7 +36,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::iter::BtreeTrans;
+use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::accounting;
 use crate::btree::bkey::{BkeyI, BkeySC, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -641,7 +641,8 @@ pub(crate) unsafe fn peek_slot(fs: &Fs, btree: Btree, level: u32, pos: Bpos) -> 
 }
 
 /// Whether the journal deletes @pos, before replay's done.
-pub(crate) fn key_deleted_in_journal(trans: &BtreeTrans<'_>, btree: Btree, level: u32, pos: Bpos) -> bool {
+pub(crate) fn key_deleted_in_journal(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, pos: Bpos) -> bool {
+    let trans = t.trans();
     if !trans.journal_replay_not_finished() {
         return false;
     }
@@ -832,8 +833,9 @@ pub(crate) struct BtreeAndJournalIter<'a, 't> {
 
 impl<'a, 't> BtreeAndJournalIter<'a, 't> {
     /// Over node @b's keys, from @node_iter, and the journal's from @pos.
-    pub(crate) fn new(trans: &'a BtreeTrans<'t>, b: LockedNode<'a, BtreeNode>, node_iter: KeyIter,
+    pub(crate) fn new(t: &TransAttempt<'a, 't>, b: LockedNode<'a, BtreeNode>, node_iter: KeyIter,
                       pos: Bpos) -> Self {
+        let trans = t.trans();
         let mut iter = Self {
             trans,
             b,
