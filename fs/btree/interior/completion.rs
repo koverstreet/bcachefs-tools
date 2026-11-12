@@ -58,9 +58,9 @@ impl InteriorUpdate<'_> {
      * so that the key the parent commits and the entry in @as->new_nodes carry the
      * correct sectors_written.
      */
-    pub(super) fn emit_new_node_key(&self, n: &NewNode<'_>) {
+    pub(super) fn emit_new_node_key(&self, n: &mut NewNode<'_>) {
         let fs = self.fs();
-        let contents = unsafe { BtreeNode::contents_mut(n) };
+        let contents = n.contents_mut();
         let sectors = (contents.data().bytes().next_multiple_of(fs.block_bytes() as usize) >> 9) as u16;
 
         if let Some(mut p) = contents.key.key_mut().as_s().arm::<c::BtreePtrV2>() {

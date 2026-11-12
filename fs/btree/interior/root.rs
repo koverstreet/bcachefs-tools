@@ -56,7 +56,7 @@ fn set_root_inmem(fs: &Fs, b: &BtreeNode) {
 
 impl InteriorUpdate<'_> {
     /// @n made @path's btree's root, its sectors_written stamped.
-    pub(crate) fn set_root(&self, paths: &mut Paths<'_>, path: PathIdx, n: &NewNode<'_>) {
+    pub(crate) fn set_root(&self, paths: &mut Paths<'_>, path: PathIdx, n: &mut NewNode<'_>) {
         let fs = self.fs();
 
         self.emit_new_node_key(n);

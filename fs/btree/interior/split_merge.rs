@@ -628,7 +628,7 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
      * out (which we did with insert_parent_keys() above)
      */
     if split || has_parent {
-        for n in &nodes {
+        for n in &mut nodes {
             update.link(n);
         }
     }
@@ -643,11 +643,11 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
         /* Depth increases, make a new root */
         let mut n3 = update.alloc_root(paths, new_paths[1], level + 1);
         update.insert_parent_keys(paths, path, &mut n3)?;
-        update.set_root(paths, path, &n3);
+        update.set_root(paths, path, &mut n3);
         Some(n3)
     } else {
         /* Root filled up but didn't need to be split */
-        update.set_root(paths, path, &nodes[0]);
+        update.set_root(paths, path, &mut nodes[0]);
         None
     };
 
@@ -1390,7 +1390,7 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
 
         match (src_p, dst_p) {
             (Some(s), Some(d)) if s == d => {
-                update.link(&dsts[di]);
+                update.link(&mut dsts[di]);
                 si += 1;
                 di += 1;
             }
@@ -1399,7 +1399,7 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
                 si += 1;
             }
             _ => {
-                update.link(&dsts[di]);
+                update.link(&mut dsts[di]);
                 di += 1;
             }
         }
@@ -1477,7 +1477,7 @@ pub(crate) fn increase_depth(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, pa
         return Err(e);
     }
 
-    update.set_root(paths, path, &n);
+    update.set_root(paths, path, &mut n);
     update.replace(paths, &[], &mut [n]);
 
     trans.node_unlock_write(paths, path, level);
@@ -1531,10 +1531,10 @@ fn node_rewrite_in<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &m
     update.take_path(paths, &n);
 
     if paths[iter.path].locked_btree_node(level + 1).is_some() {
-        update.link(&n);
+        update.link(&mut n);
         update.insert_into_parent(paths, iter.path, level)?;
     } else {
-        update.set_root(paths, iter.path, &n);
+        update.set_root(paths, iter.path, &mut n);
     }
 
     fs.event_inc_trace(events::btree_node_rewrite, |out| crate::prt!(out, "{}", b.pos_to_text(fs)));

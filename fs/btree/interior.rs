@@ -770,7 +770,7 @@ impl<'t> InteriorUpdate<'t> {
 
     /// @n's pointer, its sectors_written stamped, added to what the parent
     /// gets.
-    pub(crate) fn link(&self, n: &NewNode<'_>) {
+    pub(crate) fn link(&self, n: &mut NewNode<'_>) {
         self.emit_new_node_key(n);
         self.push_parent_key(n.contents().key_i());
     }
