@@ -608,6 +608,11 @@ impl<G, P: crate::util::projections::Publish, L> LockedBy<G, P, L> {
         // SAFETY: Publish's - a &P is a valid &P::Writer
         unsafe { &*core::ptr::from_ref(&self.published).cast::<P::Writer>() }
     }
+
+    /// @P as its writer has it, through the only reference to it.
+    pub fn published_writer_mut(&mut self) -> &P::Writer {
+        unsafe { self.published_writer() }
+    }
 }
 
 impl<G, P, L> Deref for LockedBy<G, P, L> {

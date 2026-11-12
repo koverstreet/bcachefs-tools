@@ -24,7 +24,7 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, fs_inconsistent, id};
 use crate::init::passes;
 use crate::opts::data_type_str;
-use crate::locking::{AsLockedBy, ByteLock, Locked};
+use crate::locking::{ByteLock, Locked};
 use crate::sb::errors::SbErrorId;
 use crate::types::{bits_to_longs, Le64};
 use crate::util::kernel::unlikely;
@@ -34,6 +34,7 @@ use crate::util::rcu::{read_lock, RcuArrayWriter, ReadGuard};
 use crate::data_structures::bitmap::AtomicBitmap;
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
+use core::convert::Infallible;
 use core::ffi::c_uint;
 use core::sync::atomic::{AtomicU8, Ordering};
 use cstruct_macros::{c_name, CStruct, bitfield, c_const, c_rcu_array, Fieldwise, TypeInfo, c_enum};
@@ -1062,8 +1063,18 @@ impl Dev {
             Ok(u)  => self.usage = u,
             Err(_) => return self.fs().throw(bch_errcode::BCH_ERR_ENOMEM_usage_init),
         }
-        let gens = unsafe { self.bucket_gens.locked_by().published_writer() };
-        self.buckets_resize_writer(gens, self.mi.get().nbuckets)
+        // a new device: no old gens to keep, no backpointer bitmaps to resize
+        let mi = self.mi.get();
+        let head = c::BucketGensHead {
+            first_bucket:         mi.first_bucket,
+            nbuckets_minus_first: (mi.nbuckets - u64::from(mi.first_bucket)) as usize,
+        };
+        let gens = self.bucket_gens.value_mut().published_writer_mut();
+        debug_assert!(gens.read_head(&read_lock()).is_none(), "bucket gens allocated twice");
+        if gens.rebuild_head(mi.nbuckets as usize, head, |_, _| Ok::<(), Infallible>(())).is_err() {
+            return self.fs().throw(bch_errcode::BCH_ERR_ENOMEM_bucket_gens);
+        }
+        Ok(())
     }
 
     /// What buckets_alloc() and buckets_nouse_alloc() allocated, as it's
