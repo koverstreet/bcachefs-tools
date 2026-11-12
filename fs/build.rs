@@ -33,6 +33,11 @@ fn main() {
     if rustc_version() >= (1, 97) {
         println!("cargo::rustc-cfg=bch_return_address");
     }
+    // #[define_opaque], which #[in_place] puts on its fn: rustc 1.87+.
+    println!("cargo::rustc-check-cfg=cfg(bch_define_opaque)");
+    if rustc_version() >= (1, 87) {
+        println!("cargo::rustc-cfg=bch_define_opaque");
+    }
     println!("cargo:rerun-if-changed=build_config.rs");
 
     let src = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"); // = fs/

@@ -25,6 +25,8 @@ pub(crate) fn in_place(fut: Ident, mut f: ItemFn) -> syn::Result<TokenStream> {
         #vis type #fut #params = impl ::core::future::Future<Output = #ret> + Send #where_clause;
     };
     f.sig.output = parse_quote!(-> #fut #args);
-    f.attrs.push(parse_quote!(#[define_opaque(#fut)]));
+    // rustc 1.87+ wants the defining use named; before, a fn of the alias's
+    // scope returning it is one, and the attribute doesn't exist
+    f.attrs.push(parse_quote!(#[cfg_attr(bch_define_opaque, define_opaque(#fut))]));
     Ok(quote!(#alias #f))
 }

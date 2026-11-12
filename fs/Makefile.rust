@@ -247,6 +247,11 @@ ifeq ($(call bch-rustc-min,109700),y)
 RUSTFLAGS_mod.o += --cfg bch_return_address
 endif
 
+# #[define_opaque], which #[in_place] puts on its fn: rustc 1.87+.
+ifeq ($(call bch-rustc-min,108700),y)
+RUSTFLAGS_mod.o += --cfg bch_define_opaque
+endif
+
 # proc-macro2, quote, syn: host rlibs, for the proc-macros - bitfield-struct's
 # here, the vendored stack's in Makefile.rust.vendor - with either Rust: the
 # kernel doesn't ship its own built for the host. From the vendored stack's
