@@ -4,7 +4,7 @@
 //! C does: a C struct's lock borrowed as a Locked, a Locked whose caller already
 //! holds it, and a Locked C carries held from one Rust call to another.
 
-use super::{ExclusiveGuard, Locked, RawLock, RawLockBase, RawRwLock, SharedGuard};
+use super::{ExclusiveGuard, Locked, RawLock, RawLockBase};
 use core::mem::{align_of, size_of};
 
 impl<R: RawLockBase> Locked<R> {
@@ -29,12 +29,5 @@ impl<R: RawLock, G, P> Locked<R, G, P> {
     pub unsafe fn held(&self) -> ExclusiveGuard<'_, R, G, P> {
         self.assert_held();
         unsafe { ExclusiveGuard::from_held(self, None) }
-    }
-}
-
-impl<R: RawRwLock, G, P> Locked<R, G, P> {
-    pub unsafe fn read_held(&self) -> SharedGuard<'_, R, G, P> {
-        unsafe { self.raw().assert_held_any() };
-        unsafe { SharedGuard::from_held(self, None) }
     }
 }

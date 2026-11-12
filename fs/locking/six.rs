@@ -1320,8 +1320,8 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
     pub unsafe fn from_raw(lock: &'a Locked<c::six_lock, G, P>, ty: six_lock_type) -> Self {
         unsafe {
             match ty {
-                six_lock_type::SIX_LOCK_read   => SixHold::Read(SharedGuard::from_held(lock, Some(()))),
-                six_lock_type::SIX_LOCK_intent => SixHold::Intent(SharedGuard::from_held(lock, Some(()))),
+                six_lock_type::SIX_LOCK_read   => SixHold::Read(SharedGuard::from_held(lock, ())),
+                six_lock_type::SIX_LOCK_intent => SixHold::Intent(SharedGuard::from_held(lock, ())),
                 six_lock_type::SIX_LOCK_write  => SixHold::Write(ExclusiveGuard::from_held(lock, Some(()))),
             }
         }

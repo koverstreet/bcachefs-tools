@@ -460,16 +460,16 @@ impl<R: RawLockBase, G, P, U: Unlock<R>> Drop for ExclusiveGuard<'_, R, G, P, U>
 #[must_use = "the lock is released as soon as the guard is dropped"]
 pub struct SharedGuard<'a, R: RawLockBase, G = (), P = (), U: Unlock<R> = Shared> {
     lock:      &'a Locked<R, G, P>,
-    /// None for a lock held by its caller - compat.rs's read_held()
+    /// Some till drop takes it
     state:     Option<R::GuardState>,
     _not_send: PhantomData<(*mut (), U)>,
 }
 
 impl<'a, R: RawLockBase, G, P, U: Unlock<R>> SharedGuard<'a, R, G, P, U> {
     /// # Safety
-    /// As ExclusiveGuard's, but held shared.
-    pub(super) unsafe fn from_held(lock: &'a Locked<R, G, P>, state: Option<R::GuardState>) -> Self {
-        SharedGuard { lock, state, _not_send: PhantomData }
+    /// @lock is held shared, as @U releases, taken with @state.
+    pub(super) unsafe fn from_held(lock: &'a Locked<R, G, P>, state: R::GuardState) -> Self {
+        SharedGuard { lock, state: Some(state), _not_send: PhantomData }
     }
 
     pub(super) fn lock(&self) -> &'a Locked<R, G, P> {
