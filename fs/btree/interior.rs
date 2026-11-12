@@ -31,7 +31,7 @@ use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::journal::entries::{EntryWriter, NoRoom};
 use crate::journal::pins::Pin;
-use crate::locking::{ExclusiveGuard, Locked, LockedBy, SharedGuard};
+use crate::locking::{Exclusive, ExclusiveGuard, Guard as _, Locked, LockedBy, SharedGuard};
 use crate::new_lock;
 use crate::types::{rust_only, Fifo, Le64, Lent, RustOnly};
 use crate::util::Printbuf;
@@ -40,7 +40,7 @@ use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_symbol;
 use crate::util::closure::{closure_wait_event, closure_wake_up};
 use crate::util::kernel::local_clock;
-use crate::util::place::Contained;
+use crate::util::place::{Contained, Placed};
 use crate::util::time_stats::TimeStats;
 use crate::util::{late::Late, mempool::Mempool, workqueue::{run_raw, RawWork, Workqueue, WqFlags}};
 use crate::prt;
@@ -138,9 +138,18 @@ pub(crate) struct Updates {
 // The updates are reached through the lock, from any thread
 unsafe impl Send for Updates {}
 
+/// interior_updates.lock, held.
+pub(crate) type UpdatesGuard<'a> = ExclusiveGuard<'a, c::mutex, Updates, (), Exclusive, UpdatesLockAt>;
+/// commit_lock, held.
+pub(crate) type CommitGuard<'a> = ExclusiveGuard<'a, c::mutex, (), (), Exclusive, CommitLockAt>;
+
+/// The two locks' places, for what they cover to name.
+pub(crate) type UpdatesLockAt = crate::at!(bch_fs_btree_interior_updates.lock);
+pub(crate) type CommitLockAt = crate::at!(bch_fs_btree_interior_updates.commit_lock);
+
 /// @b's updates blocking its write.
-fn write_blocked<'a>(b: &'a BtreeNode, _updates: &'a mut Updates) -> &'a mut WriteBlocked {
-    unsafe { b.write_blocked.protected_mut() }
+fn write_blocked<'a>(b: &'a BtreeNode, updates: &'a mut UpdatesGuard<'_>) -> &'a mut WriteBlocked {
+    updates.get_mut_of(&b.write_blocked)
 }
 
 #[placed(c::bch_fs_btree.interior_updates)]
@@ -153,7 +162,7 @@ pub struct bch_fs_btree_interior_updates {
     pub pool: Late<Mempool<Kmalloc>>,
     #[pin]
     #[init(RustOnly::new(new_lock!(Updates::default(), (), "&c->btree.interior_updates.lock")))]
-    lock: rust_only!(Locked<c::mutex, Updates>),
+    lock: Placed<rust_only!(Locked<c::mutex, Updates>), UpdatesLockAt>,
     /*
      * btree_interior_update_commit_lock is needed for synchronization with
      * btree_node_update_key(): having the lock be at the filesystem level
@@ -161,7 +170,7 @@ pub struct bch_fs_btree_interior_updates {
      */
     #[pin]
     #[init(RustOnly::new(new_lock!((), (), "&c->btree.interior_updates.commit_lock")))]
-    pub(crate) commit_lock: rust_only!(Locked<c::mutex>),
+    pub(crate) commit_lock: Placed<rust_only!(Locked<c::mutex>), CommitLockAt>,
     pub wait: c::closure_waitlist,
 
     #[late(Workqueue::new(c"btree_update", WqFlags::UNBOUND | WqFlags::MEM_RECLAIM, 8), ENOMEM_btree_interior_update_worker_init)]
@@ -363,10 +372,10 @@ pub(crate) struct BtreeUpdate {
      * through a new node, which it can't lock before done() unlocks them.
      * Then commit_lock's, under which it edits a new node's key here.
      */
-    new_nodes:    LockedBy<NewPointers>,
+    new_nodes:    LockedBy<NewPointers, (), CommitLockAt>,
 
     /* interior_updates.lock's: None until updated_node() or updated_root() */
-    mode:               LockedBy<Option<Mode>>,
+    mode:               LockedBy<Option<Mode>, (), UpdatesLockAt>,
     write_blocked_list: ListLinks,
 }
 
@@ -417,12 +426,12 @@ impl BtreeUpdate {
         self.pending.load(Acquire) == 0
     }
 
-    fn mode(&self, _updates: &Updates) -> Option<Mode> {
-        unsafe { *self.mode.protected() }
+    fn mode(&self, updates: &UpdatesGuard<'_>) -> Option<Mode> {
+        *updates.get_of(&self.mode)
     }
 
-    fn set_mode(&self, _updates: &mut Updates, mode: Mode) {
-        unsafe { *self.mode.protected_mut() = Some(mode) }
+    fn set_mode(&self, updates: &mut UpdatesGuard<'_>, mode: Mode) {
+        *updates.get_mut_of(&self.mode) = Some(mode)
     }
 
     /// # Safety
@@ -432,13 +441,13 @@ impl BtreeUpdate {
         unsafe { self.new_nodes.protected_mut() }
     }
 
-    fn new_nodes_locked<'a>(&'a self, _commit_lock: &'a mut ExclusiveGuard<'_, c::mutex>) -> &'a mut NewPointers {
-        unsafe { self.new_nodes.protected_mut() }
+    fn new_nodes_locked<'a>(&'a self, commit_lock: &'a mut CommitGuard<'_>) -> &'a mut NewPointers {
+        commit_lock.get_mut_of(&self.new_nodes)
     }
 
     /// @b's entry in the new nodes, its key made @k: btree_node_update_key()'s,
     /// on a node the update will make reachable.
-    pub(crate) fn new_node_key_set(&self, commit_lock: &mut ExclusiveGuard<'_, c::mutex>, b: &BtreeNode,
+    pub(crate) fn new_node_key_set(&self, commit_lock: &mut CommitGuard<'_>, b: &BtreeNode,
                                    k: impl BkeyV) {
         self.new_nodes_locked(commit_lock).iter_mut()
             .find(|n| n.node_ptr().is_some_and(|nb| ptr::eq(nb.as_ptr(), b)))
@@ -762,7 +771,7 @@ impl<'t> InteriorUpdate<'t> {
     }
 
     /// The update, handed to unwritten: interior_updates.lock, still held.
-    fn make_visible(&self, mode: Mode) -> ExclusiveGuard<'_, c::mutex, Updates> {
+    fn make_visible(&self, mode: Mode) -> UpdatesGuard<'_> {
         let update = self.owner.borrow_mut().take().expect("an interior update made visible twice");
 
         let mut g = self.fs().btree.interior_updates.lock.lock();

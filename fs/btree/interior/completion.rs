@@ -25,7 +25,6 @@ use crate::data_structures::array_vec::ArrayVec;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::fs_fatal_error;
-use crate::locking::ExclusiveGuard;
 use crate::types::Le64;
 use crate::util::closure::closure_wake_up;
 use crate::util::vstructs::SelfSized;
@@ -197,7 +196,7 @@ fn has_reconcile(fs: &Fs, k: BkeySC<'_>) -> bool {
  * The transactional part of an interior btree node update, where we journal the
  * update we did to the interior node and update alloc info:
  */
-fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &mut ExclusiveGuard<'_, c::mutex>)
+fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &mut super::CommitGuard<'_>)
     -> Result<(), BchError>
 {
     let fs = t.fs();

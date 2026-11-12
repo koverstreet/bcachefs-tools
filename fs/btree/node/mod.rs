@@ -138,7 +138,7 @@ pub struct BtreeNode {
      * written:
      */
     #[c("struct list_head write_blocked")]
-    pub(crate) write_blocked: LockedBy<crate::btree::interior::WriteBlocked>,
+    pub(crate) write_blocked: LockedBy<crate::btree::interior::WriteBlocked, (), crate::btree::interior::UpdatesLockAt>,
 
     /*
      * Also for asynchronous splits/interior node updates:
