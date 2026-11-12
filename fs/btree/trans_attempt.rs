@@ -61,6 +61,10 @@ use crate::util::vstructs::{State, Validated};
 use crate::format::{Bpos, Btree, BkeyType};
 
 /// One attempt at @trans: from one begin() to the next.
+///
+/// XXX: this should be a proper reference type - Copy, passed by value, not
+/// by &TransAttempt, a pointer to a pointer. Its restart count and liveness
+/// belong in the transaction, which has one current attempt.
 pub struct TransAttempt<'a, 't> {
     trans:         &'a BtreeTrans<'t>,
     /// the transaction's when the attempt began - or when restarts_handled()
