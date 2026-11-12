@@ -1331,6 +1331,48 @@ impl IoRefIdx for c::bch_dev_write_ref {
     const RW: usize = WRITE;
 }
 
+/// What a guard of @N covers on each of its filesystem's devices - each
+/// device's LockedBy at path @F - had by &mut, several devices' at once: a
+/// split of the guard, by device. take() hands one out for as long as the
+/// split lives, get_mut() for as long as it's borrowed; either, of a device
+/// taken, panics.
+pub(crate) struct DevPieces<'g, N, F> {
+    fs:    &'g Fs,
+    taken: c::DevsMask,
+    _p:    PhantomData<(N, F)>,
+}
+
+impl<'g, N: 'static, F> DevPieces<'g, N, F>
+where
+    F: crate::util::place::Path<Dev>,
+    F::To: crate::locking::AsLockedBy<L = N> + 'static,
+{
+    /// # Safety
+    /// A guard of N, held alone, for 'g - which only this hands out F of
+    /// @fs's devices, meanwhile.
+    pub(crate) unsafe fn new(fs: &'g Fs) -> Self {
+        DevPieces { fs, taken: Default::default(), _p: PhantomData }
+    }
+
+    fn check(&self, ca: &Dev) {
+        assert!(core::ptr::eq(ca.fs(), self.fs), "a split of another filesystem's device {}", ca.dev_idx);
+        assert!(!self.taken.test(ca.dev_idx.into()), "device {} taken from a split twice", ca.dev_idx);
+    }
+
+    /// @ca's, for as long as the split lives.
+    pub(crate) fn take(&mut self, ca: &'g Dev) -> &'g mut <F::To as crate::locking::AsLockedBy>::G {
+        self.check(ca);
+        self.taken.set(ca.dev_idx.into());
+        unsafe { crate::locking::AsLockedBy::locked_by(F::get(ca)).protected_mut() }
+    }
+
+    /// @ca's, for as long as this is borrowed.
+    pub(crate) fn get_mut<'d>(&'d mut self, ca: &'d Dev) -> &'d mut <F::To as crate::locking::AsLockedBy>::G {
+        self.check(ca);
+        unsafe { crate::locking::AsLockedBy::locked_by(F::get(ca)).protected_mut() }
+    }
+}
+
 /// A device, counted by its io refs for R: io_ref[R::RW].
 #[repr(transparent)]
 pub struct DevIo<R>(Dev, PhantomData<R>);

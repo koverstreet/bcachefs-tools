@@ -1945,6 +1945,7 @@ impl SbResize for bch_sb_handle {
 pub struct FsSbResize<'a> {
     fs:      &'a Fs,
     disk_sb: &'a mut c::bch_fs_sb,
+    devs:    members::DevPieces<'a, crate::at!(Fs.sb), crate::field!(disk_sb)>,
 }
 
 impl Fs {
@@ -1952,7 +1953,8 @@ impl Fs {
     /// with it, under the same sb_lock.
     pub fn sb_resize<'a>(&'a self, sb: &'a mut SbLockGuard<'_>) -> FsSbResize<'a> {
         assert!(core::ptr::eq(sb.lock(), &*self.sb), "sb_resize(): another filesystem's sb_lock");
-        FsSbResize { fs: self, disk_sb: sb }
+        let (disk_sb, devs) = sb.split_devs();
+        FsSbResize { fs: self, disk_sb, devs }
     }
 }
 
@@ -1982,9 +1984,7 @@ impl SbResize for FsSbResize<'_> {
     fn grow_with(&mut self, d: isize) -> Option<()> {
         // XXX: we're not checking that offline device have enough space
         for ca in self.fs.online_members() {
-            // SAFETY: our devices', under the sb_lock we hold - mutably, and
-            // nothing else of it is borrowed meanwhile
-            let io = unsafe { ca.disk_sb.protected_mut() };
+            let io = self.devs.get_mut(&ca);
             io.realloc(&ca.disk_sb, (io.buf.sb().u64s() as isize + d) as u32).ok()?;
         }
         Some(())
@@ -2015,12 +2015,10 @@ impl Fs {
 
     /// @ca's superblock, to edit: None if it has none, not attached.
     pub fn dev_sb_mut<'a>(&self, sb: &'a mut SbLockGuard<'_>, ca: &'a Dev) -> Option<DevSbMut<'a>> {
-        let sb: &'a SbLockGuard<'_> = sb;
         self.dev_sb_check(sb, ca);
-        // SAFETY: @sb holds sb_lock, which protects it - mutably borrowed, so
-        // nothing else of it is
-        let io = unsafe { ca.disk_sb.protected_mut() };
-        (!io.buf.sb.is_null()).then(|| DevSbMut { fs_sb: sb.sb(), io, ca })
+        let (fs_sb, mut devs) = sb.split_devs::<crate::field!(disk_sb)>();
+        let io = devs.take(ca);
+        (!io.buf.sb.is_null()).then(|| DevSbMut { fs_sb: fs_sb.sb(), io, ca })
     }
 }
 
@@ -2099,18 +2097,14 @@ impl Fs {
     pub fn dev_sbs_mut<'a, R: members::IoRefIdx>(&self, sb: &'a mut SbLockGuard<'_>, devs: &'a [members::DevIoRef<R>])
         -> impl Iterator<Item = Option<DevSbMut<'a>>>
     {
-        let sb: &'a SbLockGuard<'_> = sb;
-        let mut seen = crate::c::DevsMask::default();
         for ca in devs {
             self.dev_sb_check(sb, ca);
-            assert!(!seen.test(ca.dev_idx.into()), "dev_sbs_mut(): device {} twice", ca.dev_idx);
-            seen.set(ca.dev_idx.into());
         }
 
-        let fs_sb = sb.sb();
+        let (fs_sb, mut pieces) = sb.split_devs::<crate::field!(disk_sb)>();
+        let fs_sb = fs_sb.sb();
         devs.iter().map(move |ca| {
-            // SAFETY: as dev_sb_mut()'s - each device's once, by @seen
-            let io = unsafe { ca.disk_sb.protected_mut() };
+            let io = pieces.take(ca);
             (!io.buf.sb.is_null()).then(|| DevSbMut { fs_sb, io, ca })
         })
     }

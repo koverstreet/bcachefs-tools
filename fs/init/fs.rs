@@ -27,7 +27,7 @@ use crate::locking::{Exclusive, ExclusiveGuard, Guard, Noio, PercpuRwsemNoio, Sh
 use crate::{bch_verbose, prt};
 use crate::sb::counters::counters_init;
 use crate::sb::io::{read_super, sb_to_fs, version, Holder};
-use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists, SbMembersMut};
+use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists, DevPieces, SbMembersMut};
 use crate::sb::version::prep_for_start;
 use crate::util::names;
 use crate::util::Printbuf;
@@ -67,6 +67,17 @@ impl SbLockGuard<'_> {
     pub fn fs_member_mut(&mut self, dev_idx: u32) -> &mut c::bch_member {
         self.member_mut(dev_idx)
             .expect("a member, whole: bch2_sb_members_v2_init() grew them at open")
+    }
+
+    /// The superblock, and @F of each of the filesystem's devices, at once.
+    pub(crate) fn split_devs<F>(&mut self) -> (&mut c::bch_fs_sb, DevPieces<'_, crate::at!(Fs.sb), F>)
+    where
+        F: crate::util::place::Path<Dev>,
+        F::To: crate::locking::AsLockedBy<L = crate::at!(Fs.sb)> + 'static,
+    {
+        let fs: *const Fs = self.root();
+        /* the superblock is the lock's, apart from any device's */
+        unsafe { (&mut **self, DevPieces::new(&*fs)) }
     }
 }
 
