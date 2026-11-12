@@ -29,7 +29,7 @@
 use crate::c;
 use crate::util::rcu;
 use crate::util::sleep::{sleep_until, Sleep};
-use crate::util::task::{current_task, Resumable, TaskRef};
+use crate::util::task::{current_task, task_in, Resumable, TaskRef};
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::marker::PhantomData;
@@ -43,7 +43,7 @@ use core::task::{Context, Poll};
 /// Who waits on a Done: the current thread, sleeping, or the task polling us,
 /// awaiting it - got the same way, a task's awaited.
 pub mod waiter {
-    use super::{c, current_task, NonNull, TaskRef};
+    use super::{c, current_task, task_in, Context, NonNull, TaskRef};
 
     /// A thread, by its task_struct, with no ref.
     #[derive(Clone, Copy)]
@@ -64,6 +64,11 @@ pub mod waiter {
         /// The task polling us: Ready at once.
         pub async fn current() -> Self {
             Async(current_task().await)
+        }
+
+        /// The task polling @cx: current(), in a poll.
+        pub fn of(cx: &mut Context<'_>) -> Self {
+            Async(task_in(cx).expect("polled outside a task of ours"))
         }
 
         /// @task, for its owner, making the Done of an IO it submits before

@@ -62,15 +62,15 @@ use crate::locking::Locked;
 use crate::new_lock;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::util::sleep::{sleep_until, Sleep};
-use crate::util::task::{waiter, Completion, Done, Resumable, Resume, TaskEnd, Waiter};
+use crate::util::task::{waiter, Completion, Done, Resumable, Resume, Resumed, TaskEnd, Waiter};
 use core::cell::UnsafeCell;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::ManuallyDrop;
 use core::pin::Pin;
 use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
+use core::task::{ready, Context, Poll};
 use pin_init::{pin_data, pin_init, PinInit};
-use cstruct_macros::args_stored_once;
 
 /// A Gather's result, and how what its refs put is folded into it:
 /// concurrently, from any context - an endio's - so into atomics.
@@ -395,13 +395,34 @@ impl<T: Fold, W: Width> Gather<T, waiter::Sync, W> {
 
 impl<T: Fold, W: Width> Gather<T, waiter::Async, W> {
     /// Wait for every ref to be put, resumed @at, for the result.
-    #[args_stored_once]
-    pub async fn wait(&self, at: Resume<'_>) -> T {
-        let _w = self.begin_wait();
-        if !self.waited() {
-            self.start(waiter::Async::current().await).resume_on(at).await;
+    pub fn wait<'a>(&'a self, at: Resume<'a>) -> Resumed<'a, GatherWait<'a, T, W>> {
+        GatherWait { c: None, w: self.begin_wait() }.resume_on(at)
+    }
+}
+
+/// A Gather's wait, begun as it's made: its Done born with the task that
+/// first polls it, unless it's been waited on before. In every task that
+/// waits on a Gather, so a hand-rolled future - an async fn would hold the
+/// Gather and @at twice.
+pub struct GatherWait<'a, T: Fold, W: Width> {
+    /* first: dropped unfinished, it waits for the Done before the wait ends */
+    c: Option<Completion<'a, waiter::Async>>,
+    w: InWait<'a, T, waiter::Async, W>,
+}
+
+impl<T: Fold, W: Width> Resumable for GatherWait<'_, T, W> {
+    type Output = T;
+
+    fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
+        let this = self.get_mut();
+        let g = this.w.0;
+        if this.c.is_none() && !g.waited() {
+            this.c = Some(g.start(waiter::Async::of(cx)));
         }
-        T::result(&self.acc)
+        if let Some(c) = &mut this.c {
+            ready!(Pin::new(c).poll_resume(cx));
+        }
+        Poll::Ready(T::result(&g.acc))
     }
 }
 
