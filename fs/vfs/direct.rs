@@ -20,6 +20,7 @@ use crate::util::alloc::Kmalloc;
 use crate::util::bio::{inline_vecs, plugged, Bio, HasBio};
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::iov_iter::IovIter;
+use crate::util::kernel::unlikely;
 use crate::util::mempool::Mempool;
 use crate::util::ops::IntoRaw;
 use crate::util::sleep::Sleep;
@@ -90,6 +91,10 @@ struct CallersIter(NonNull<IovIter<'static>>);
 unsafe impl Send for CallersIter {}
 
 impl CallersIter {
+    /// # Safety
+    /// For the dio's task, started inline: @iter is the caller's, gone once
+    /// start_inline() returns - when the task first parks - so it's only got
+    /// from in the task's first poll.
     unsafe fn new(iter: &mut IovIter<'_>) -> Self {
         CallersIter(NonNull::from(iter).cast())
     }
@@ -119,6 +124,35 @@ async fn split_task<'h>(mut split: Pin<&'h mut DioBio>, r: SplitRef, inum: c::su
     split.as_mut().bio_mut().release_user_pages(should_dirty).await;
 }
 
+/// What's left of @iter past the dio's first bio, in splits.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+async fn read_splits(fs: &Fs, opts: c::bch_inode_opts, subvol: u32, err_report: Option<&c::bch_read_err_report>,
+                     iter: &mut CallersIter, mut offset: u64, inum: c::subvol_inum, flags: F,
+                     should_dirty: bool) -> Result<(), BchError> {
+    stack_pin_init!(let splits = Splits::new());
+
+    // @iter is the caller's, and gone once this parks: it's walked before the
+    // wait, with nothing awaited till then - see CallersIter::new().
+    //
+    // A split takes as much of @iter as its pages pin into; one that fails
+    // pinned none, and has nothing to release
+    let started = core::iter::from_fn(|| (iter.get().count() != 0).then(|| {
+            let mut split = TaskSlot::exclusive_bio_in(&SPLITS, ptr::null_mut(), iter.get().bio_vecs(),
+                                                       c::req_op_REQ_OP_READ, |b| {
+                pin_init!(DioBio { rbio <- c::bch_read_bio::new(fs, opts, subvol, err_report, b) }? BchError)
+            }).expect("a split's box: its pool waits for an element, and an Rbio's init can't fail");
+            set_up(split.home().bio_mut(), iter.get(), &mut offset, should_dirty).map(|()| split)
+        }))
+        .try_for_each(|split| {
+            let r = splits.get();
+            unsafe { split?.start_inline(Queue::system_dfl(), move |s| split_task(s, r, inum, flags, should_dirty)) };
+            Ok(())
+        });
+
+    splits.wait(Resume::Inline).await.and(started)
+}
+
 #[in_place(DioFut)]
 async fn dio_task<'h>(mut dio: Pin<&'h mut DioBio>, end: End, mut iter: CallersIter, mut offset: u64,
                       inum: c::subvol_inum, flags: F, count: usize) {
@@ -129,30 +163,16 @@ async fn dio_task<'h>(mut dio: Pin<&'h mut DioBio>, end: End, mut iter: CallersI
         Ok(()) => {
             let (fs, opts, subvol) = (unsafe { Fs::borrow_raw(dio.rbio.c) }, dio.rbio.opts, dio.rbio.subvol);
             let err_report = unsafe { dio.rbio.err_report.as_ref() };
-            stack_pin_init!(let splits = Splits::new());
 
-            let own = pin!(read::read(&mut dio.rbio, inum, flags));
-            let own = crate::eager!(own);
+            let first = pin!(read::read(&mut dio.rbio, inum, flags));
+            let first = crate::eager!(first);
 
-            // A split takes as much of @iter as its pages pin into; one that
-            // fails pinned none, and has nothing to release
-            let started = core::iter::from_fn(|| (iter.get().count() != 0).then(|| {
-                    let mut split = TaskSlot::exclusive_bio_in(&SPLITS, ptr::null_mut(), iter.get().bio_vecs(),
-                                                               c::req_op_REQ_OP_READ, |b| {
-                        pin_init!(DioBio { rbio <- c::bch_read_bio::new(fs, opts, subvol, err_report, b) }? BchError)
-                    }).expect("a split's box: its pool waits for an element, and an Rbio's init can't fail");
-                    set_up(split.home().bio_mut(), iter.get(), &mut offset, should_dirty).map(|()| split)
-                }))
-                .try_for_each(|split| {
-                    let r = splits.get();
-                    unsafe {
-                        split?.start_inline(Queue::system_dfl(), move |s| split_task(s, r, inum, flags, should_dirty))
-                    };
-                    Ok(())
-                });
-
-            let splits = splits.wait(Resume::Inline).await;
-            own.await.and(splits).and(started)
+            let splits = if unlikely(iter.get().count() != 0) {
+                read_splits(fs, opts, subvol, err_report, &mut iter, offset, inum, flags, should_dirty).await
+            } else {
+                Ok(())
+            };
+            first.await.and(splits)
         }
     };
 
