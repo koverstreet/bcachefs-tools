@@ -34,7 +34,6 @@
 
 #include "data/checksum.h"
 #include "data/compress.h"
-#include "data/ec/io_gen.h"
 #include "data_structures/darray.h"
 #include "bcachefs_ioctl.h"
 #include "btree/bbpos.h"
@@ -43,7 +42,6 @@
 #include "data/write_gen.h"
 #include "data/update_gen.h"
 #include "data/move_gen.h"
-#include "data/moving_update_gen.h"
 #include "data/nocow_locking_gen.h"
 #include "data/reconcile/work_gen.h"
 #include "data/write.h"

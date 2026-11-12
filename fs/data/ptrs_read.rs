@@ -13,6 +13,7 @@ use crate::format::BkeyType;
 use crate::fs::Dev;
 use super::*;
 use crate::debug::params as debug_params;
+use crate::data::read::{BCH_READ_ERR_checksum, BCH_READ_ERR_decompression, BCH_READ_ERR_ec_reconstruct, BCH_READ_ERR_io};
 use crate::errcode::bch_errcode;
 use crate::util::Printbuf;
 use crate::sb::errors::blk_sts_sb_err;
@@ -138,16 +139,16 @@ impl<const N: usize> IoFailures<N> {
         let mut errors = 0;
         for f in self.devs() {
             if f.csum_nr != 0 {
-                errors |= c::BCH_READ_ERR_checksum;
+                errors |= BCH_READ_ERR_checksum;
             }
             if f.ec_errcode != 0 {
-                errors |= c::BCH_READ_ERR_ec_reconstruct;
+                errors |= BCH_READ_ERR_ec_reconstruct;
             }
             if f.errcode != 0 {
                 errors |= if BchError::from_raw(-i32::from(f.errcode)).matches(bch_errcode::BCH_ERR_decompress) {
-                    c::BCH_READ_ERR_decompression
+                    BCH_READ_ERR_decompression
                 } else {
-                    c::BCH_READ_ERR_io
+                    BCH_READ_ERR_io
                 };
             }
         }

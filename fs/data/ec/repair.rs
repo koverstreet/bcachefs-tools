@@ -27,7 +27,7 @@ use crate::data::ec::stripe_new_reuse::{init_new_stripe_from_old, OldRead, Reuse
 use crate::data::ec::stripe_new_tasks::old_stripe_carry;
 use crate::data::ec::update::{block_for_each_extent, Extent};
 use crate::data::moving::Moving;
-use crate::data::ptrs::{extent_nonce, BkeyVPtrs, BkeyVPtrsMut, Ptrs, PtrsMut};
+use crate::data::ptrs::{extent_nonce, ptr_eq, BkeyVPtrs, BkeyVPtrsMut, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
@@ -487,12 +487,6 @@ pub fn stripe_repair(ctxt: &Moving<'_>, trans: &TransGuard<'_>, idx: u64) -> Res
 }
 
 // ── Scrub ────────────────────────────────────────────────────────────────
-
-/// The same pointer, as bch2_extent_ptr_eq(): all of it but its entry type.
-fn ptr_eq(a: &c::bch_extent_ptr, b: &c::bch_extent_ptr) -> bool {
-    a.cached() == b.cached() && a.unwritten() == b.unwritten() && a.offset() == b.offset() &&
-        a.dev() == b.dev() && a.generation() == b.generation()
-}
 
 /// The block of @s on @ca, in the bucket backpointer @bp is in.
 fn stripe_block_at_bp(ca: &Dev, s: BkeySC<'_, c::Stripe<Validated>>, bp: BkeySC<'_, c::Backpointer>)

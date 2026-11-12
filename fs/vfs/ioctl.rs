@@ -23,6 +23,7 @@
 
 use crate::btree::iter::{commit_do, lockrestart_do, CommitFlags, TransAttempt};
 use crate::c;
+use crate::data::read::ReadErrReport;
 use crate::dirent;
 use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
 use crate::fs::Fs;
@@ -40,7 +41,7 @@ use crate::util::kernel::{capable, current_fsgid, current_fsuid, Capability};
 use crate::util::log::LogMsg;
 use crate::util::printbuf::Printbuf;
 use crate::init::chardev::{copy_err_msg, fs_ioctl, ErrMsg, V2};
-use crate::locking::{Locked, RawLockBase};
+use crate::locking::Locked;
 use crate::vfs::dentry::Dentry;
 use crate::util::iov_iter::IovIter;
 use crate::vfs::direct::direct_io_read;
@@ -52,6 +53,7 @@ use crate::vfs::path::{Creating, Removing, UserPath};
 use crate::{bch_err, btree_trans, prt};
 use core::ffi::{c_int, c_void};
 use core::mem::{offset_of, MaybeUninit};
+use pin_init::stack_try_pin_init;
 use kernel::ffi::{c_long, c_uint, c_ulong};
 use kernel::uaccess::UserPtr;
 
@@ -377,19 +379,17 @@ fn pread_raw(file: &File, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_ra
         c::bch_read_flags::empty()
     };
 
-    // The reads' completions add to it, under its lock: initialized where it
-    // stays, for the call
-    let mut report = c::bch_read_err_report::default();
-    report.msg = Printbuf::new();
-    unsafe { <c::mutex as RawLockBase>::init(&raw mut report.lock, c"bch_read_err_report", crate::new_lock!(@key)) };
+    // The reads' completions add to it, under its lock
+    stack_try_pin_init!(let report: ReadErrReport =? ReadErrReport::init());
 
     let (mut kiocb, mut iter) = unsafe { (Kiocb::from_raw(kiocb.as_mut_ptr()), IovIter::from_raw(iter.as_mut_ptr())) };
-    let mut ret = direct_io_read(&mut kiocb, &mut iter, flags, Some(&report)).map(|n| n as c_long);
+    let mut ret = direct_io_read(&mut kiocb, &mut iter, flags, Some(&*report)).map(|n| n as c_long);
 
-    if user.write_at(offset_of!(c::bch_ioctl_pread_raw, errors), &report.errors).is_err() {
+    let mut errs = report.errs.lock();
+    if user.write_at(offset_of!(c::bch_ioctl_pread_raw, errors), &errs.errors).is_err() {
         ret = Err(c::EFAULT.into());
     }
-    let msg = &mut report.msg;
+    let msg = &mut errs.msg;
     // The message's copy fails the call only if the read succeeded but read
     // nothing, as C had it
     if let (Err(e), Ok(0)) = (copy_err_msg(&a.err, msg, ret.map(|_| ())), &ret) {

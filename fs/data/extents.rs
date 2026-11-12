@@ -163,10 +163,7 @@ c_enum! {
         user_mapped,
         soft_require_read_device,
         hard_require_read_device,
-        last_fragment,
         must_bounce,
-        must_clone,
-        in_retry,
         no_poison_check,
     }
 }

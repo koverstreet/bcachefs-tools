@@ -480,12 +480,12 @@ use crate::alloc::check::need_discard_or_freespace_err;
 use crate::alloc::lru::{dev_remove_lrus, lru_change, LruId};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyWhole, POS_MIN, BkeyOps};
-use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, LoopFlow, TransAttempt,
-                         TransBkey, UpdateTriggerFlags};
+use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt, TransBkey,
+                         UpdateTriggerFlags};
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::c;
 use crate::c::bch_errcode;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::opts::data_type_str;
@@ -498,10 +498,9 @@ use crate::util::vstructs::{ArmRef, Validated};
 use crate::util::backtrace::prt_current_backtrace;
 use crate::util::{Printbuf, ToText};
 use crate::{bkey_fsck_err_on, btree_trans, prt};
-use core::ffi::{c_int, c_uint};
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::Ordering;
-use cstruct_macros::{c_export, c_const};
+use cstruct_macros::c_const;
 use crate::format::{Bpos, Btree, DataType, MetadataVersion};
 
 c_const! {
@@ -1727,11 +1726,7 @@ fn bucket_io_time_reset(t: &TransAttempt<'_, '_>, bucket: Bpos, rw: usize) -> Re
 }
 
 /// From the read path, partway through its attempt; a restart is the read's.
-///
-/// # Safety
-/// @trans has an attempt in progress.
-#[c_export]
-pub unsafe fn bch2_bucket_io_time_reset(trans: &BtreeTrans<'_>, dev: c_uint, bucket_nr: usize, rw: c_int) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(t.relock().and_then(|()| bucket_io_time_reset(&t, pos(dev.into(), bucket_nr as u64), rw as usize)))
+pub(crate) fn bucket_read_time_reset(t: &TransAttempt<'_, '_>, bucket: Bpos) -> Result<(), BchError> {
+    t.relock()?;
+    bucket_io_time_reset(t, bucket, READ)
 }

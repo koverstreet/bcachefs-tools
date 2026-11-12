@@ -38,12 +38,6 @@ use core::ops::{ControlFlow, Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{AcqRel, Relaxed};
 use kernel::page::PAGE_SHIFT;
-use cstruct_macros::c_extern;
-
-c_extern! {
-    // buffered.c's:
-    fn bch2_read_single_folio(folio: *mut c::folio, mapping: *mut c::address_space, extend: bool) -> c_int;
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
@@ -150,7 +144,7 @@ impl Folio {
     /// Its data read in, @mapping's, before this returns - and with @extend,
     /// the read extended as readahead's are: bch2_read_single_folio().
     pub fn read_single(self, mapping: Mapping, extend: bool) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { bch2_read_single_folio(self.as_ptr(), mapping.as_ptr(), extend) })
+        ret_to_result_void(unsafe { super::buffered::bch2_read_single_folio(self.as_ptr(), mapping.as_ptr(), extend) })
     }
 
     /// Unlocked: the caller's lock, and with it the Folio, given up.

@@ -831,11 +831,15 @@ pub struct Fs {
     #[pin]
     #[init(BioSet::new(1, true), ENOMEM_bio_read_init)]
     #[c("struct bio_set bio_read")]
-    pub bio_read: BioSet<c::bch_read_bio>,
+    pub bio_read: BioSet<crate::data::read::Rbio>,
     #[pin]
     #[init(BioSet::new(1, true), ENOMEM_bio_read_split_init)]
     #[c("struct bio_set bio_read_split")]
-    pub bio_read_split: BioSet<c::bch_read_bio>,
+    pub bio_read_split: BioSet<crate::data::read::Rbio>,
+    #[pin]
+    #[init(crate::data::read::retry_pool(), ENOMEM_fs_other_alloc)]
+    #[c("mempool_t read_retry_pool")]
+    pub read_retry_pool: crate::util::mempool::Mempool<crate::util::alloc::Kmalloc>,
     #[late(BioSet::new(1, true), ENOMEM_bio_write_init)]
     #[c("struct bio_set bio_write")]
     pub bio_write: Late<BioSet<c::bch_write_bio>>,

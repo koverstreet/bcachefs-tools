@@ -7,24 +7,25 @@
 //! cheaply: when the target is congested, or too many are in flight.
 //!
 //! A promote is a data update's task (update_task.rs) on promote_wq.
-//! bch2_promote_alloc(), called partway through a read, decides whether to
+//! promote_alloc(), called partway through a read, decides whether to
 //! promote, and if so makes the update and returns its read bio: a bounce
-//! split of the read, for the read path to read into. The read path signals
-//! the read done when it frees the split, by bch2_promote_read_done().
+//! split of the read, for the read path to read into. The update's task is
+//! made but not started: the read path starts it when it frees the split.
 //!
 //! The in-flight limit is one count for the filesystem, PROMOTES_PER_CPU per
 //! online CPU.
 
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeySC, BkeyV};
-use crate::btree::iter::{is_restart, BtreeTrans, TransAttempt};
+use crate::btree::iter::{is_restart, TransAttempt};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::extents::BkeyVExtents;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::data::update::bch2_read_bio_to_text;
-use crate::data::update_task::{self, Body, Update};
-use crate::errcode::{err_ptr, BchError};
+use crate::data::read::Rbio;
+use crate::data::update_task::{self, AwaitingRead, Body, Update};
+use crate::debug::async_objs::AsyncObjSlot;
+use crate::errcode::BchError;
 use crate::fs::{Fs, WriteRef};
 use crate::prt;
 use crate::debug::trace::events;
@@ -34,11 +35,10 @@ use crate::util::refcount::TryRefcount;
 use crate::util::time_stats::TimeStats;
 use crate::util::task::Spawn;
 use crate::util::workqueue::Queue;
-use crate::util::{Printbuf, ToText};
 use core::ffi::c_int;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{args_stored_once, c_export};
+use cstruct_macros::args_stored_once;
 use crate::format::{Btree, BkeyType};
 
 /// The in-flight limit, per online CPU.
@@ -92,28 +92,17 @@ impl Drop for InFlight {
 
 // ── The promote ──────────────────────────────────────────────────────────
 
-/// A promote, as the data_update list shows it: the parent read too, till its
-/// read's done.
-pub(crate) fn promote_to_text(u: &c::data_update, out: &mut Printbuf, fs: &Fs) {
-    if !u.read_done.load(Relaxed) {
-        // SAFETY: a split's parent, valid until the split is done
-        let parent = unsafe { u.rbio.completion.parent };
-        prt!(out, "parent read: {parent:p}\n");
-        let mut out = out.indent(2);
-        // SAFETY: read only
-        unsafe { bch2_read_bio_to_text(out.as_raw(), fs.as_ptr(), parent) };
-    }
-    u.to_text(out);
-}
-
-/// The body: the read, then the write. @in_flight is held until after exit().
+/// The body, started when the read's done: the write. @in_flight is held until
+/// after exit().
 #[args_stored_once]
 async fn run(mut u: Body, in_flight: InFlight, start_time: u64) {
     let fs = u.op.fs();
+    let listed = unsafe { AsyncObjSlot::new(fs, &u.rbio) };
 
-    u.read().await;
-    if u.rbio.ret != 0 {
-        u.rbio.async_list_del(fs);
+    let read = u.read();
+    u.read_done.store(true, Relaxed);
+    if read.ret.is_err() {
+        drop(listed);
         return u.exit(-(c::EIO as c_int));
     }
     {
@@ -121,21 +110,11 @@ async fn run(mut u: Body, in_flight: InFlight, start_time: u64) {
         fs.event_add_trace(events::data_read_promote, k.k.size.into(), |out| prt!(out, "{}", k.to_text(fs)));
     }
 
-    u.write().await;
+    u.write(read).await;
     fs.times[c::bch_time_stats::data_promote as usize].update(start_time);
-    u.rbio.async_list_del(fs);
+    drop(listed);
     u.exit(0);
     drop(in_flight);
-}
-
-/// Called by rbio_free() when the read path is done with the promote's split.
-///
-/// # Safety
-/// @rbio is a promote's, from bch2_promote_alloc().
-#[c_export]
-pub unsafe fn bch2_promote_read_done(rbio: *mut c::bch_read_bio) {
-    // SAFETY: the caller's
-    unsafe { Update::read_done(rbio.byte_sub(core::mem::offset_of!(c::data_update, rbio)).cast()) }
 }
 
 // ── Making one ───────────────────────────────────────────────────────────
@@ -161,9 +140,9 @@ fn should_promote(fs: &Fs, k: BkeySC<'_>, opts: &c::bch_inode_opts) -> Result<()
     Ok(())
 }
 
-fn promote_new(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
-               orig: &mut c::bch_read_bio, opts: &c::bch_inode_opts,
-                      failed: Option<&mut c::bch_io_failures>) -> Result<NonNull<c::bch_read_bio>, BchError> {
+fn promote_new<'r>(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
+                   orig: &'r Rbio, opts: &c::bch_inode_opts,
+                   failed: Option<&mut c::bch_io_failures>) -> Result<(&'r Rbio, AwaitingRead<'r>), BchError> {
     let fs = t.fs();
 
     if failed.is_none() {
@@ -205,76 +184,57 @@ fn promote_new(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
     // SAFETY: the task borrows nothing, and promote_wq is drained before the
     // filesystem is freed
     let task = unsafe {
-        update_task::spawn(t, Spawn::Queue(fs.promote_wq()), bch_errcode::BCH_ERR_nopromote_enomem)
+        update_task::spawn(t, Spawn::Queue(orig.fs().promote_wq()), bch_errcode::BCH_ERR_nopromote_enomem)
     }?;
     // On error - such as nocow_lock_blocked, ENOSPC_disk_reservation - the
-    // task goes unstarted
+    // box is dropped
     let mut u = task.init(t, None, None, c::write_point_specifier::hashed(current_id()), opts, update_opts, btree, k)?;
-    let failed = failed.map_or(core::ptr::null_mut(), core::ptr::from_mut);
-    u.rbio.init_fragment(orig, failed);
-    u.rbio.bits_mut().set_bounce(1);
-    u.rbio.bits_mut().set_promote(1);
 
-    // C issues the read into it next
-    u.start_read();
     let rbio = NonNull::from(&mut u.rbio);
-    u.start(move |b| async move |_: &Update| run(b, in_flight, start_time).await);
-    Ok(rbio)
+    let task = u.awaiting_read(move |b| async move |_: &Update| run(b, in_flight, start_time).await);
+    Ok((unsafe { rbio.as_ref() }, task))
 }
 
-/// Returns the bounce split for __bch2_read_extent() to read into, or null
-/// for no promote. A transaction restart, the one error it mustn't swallow,
-/// is returned as an ERR_PTR(). With @failed, it's the self-heal. @read_full
-/// is set if the read must cover the whole extent, as a promote's update
-/// always reads it.
-///
-/// # Safety
-/// Called partway through an attempt on @trans. @orig is the read, which
-/// outlives the promote's.
-#[c_export]
-pub unsafe fn bch2_promote_alloc(trans: &BtreeTrans<'_>, k: BkeySC<'_>, orig: &mut c::bch_read_bio,
-                                 opts: &c::bch_inode_opts, bounce: &mut bool, read_full: &mut bool,
-                                 failed: Option<&mut c::bch_io_failures>) -> *mut c::bch_read_bio {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
+/// A promote made: its read bio, the read's to read into as its bounce, and
+/// its task, which the read starts with what it read when it's done with the
+/// bio; and whether the read's to be of the whole extent - a self-heal, or
+/// promote_whole_extents.
+pub(crate) struct Promoted<'r> {
+    pub rbio:  &'r Rbio,
+    pub task:  AwaitingRead<'r>,
+    pub whole: bool,
+}
+
+/// The promote of @k for read @orig, if there's to be one. With @failed, it's
+/// the self-heal. A transaction restart, the one error it mustn't swallow, is
+/// returned; anything else is no promote.
+pub(crate) fn promote_alloc<'r>(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, orig: &'r Rbio,
+                                opts: &c::bch_inode_opts, failed: Option<&mut c::bch_io_failures>)
+    -> Result<Option<Promoted<'r>>, BchError>
+{
     let fs = t.fs();
     let self_healing = failed.is_some();
-
-    // the retry path, before anything is known to need repair: no promote
-    if failed.as_deref().is_some_and(|f| f.is_empty()) {
-        return core::ptr::null_mut();
-    }
-
-    // already a data update: IO errors go back to it
-    if self_healing && orig.bits().data_update() != 0 {
-        return core::ptr::null_mut();
-    }
-
-    let full = self_healing || *read_full || fs.opts().promote_whole_extents.get() != 0;
-
     let btree = if k.k.key_type() == BkeyType::reflink_v {
         Btree::reflink
     } else {
         Btree::extents
     };
 
-    match promote_new(&t, btree, k, orig, opts, failed) {
-        Ok(rbio) => {
-            *bounce = true;
-            *read_full = full;
+    match promote_new(t, btree, k, orig, opts, failed) {
+        Ok((rbio, task)) => {
             if self_healing {
-                orig.bits_mut().set_self_healing(1);
+                orig.self_healing.store(true, Relaxed);
             }
-            rbio.as_ptr()
+            Ok(Some(Promoted { rbio, task, whole: self_healing || fs.opts().promote_whole_extents.get() != 0 }))
         }
         // not swallowed: it'd leave the transaction poisoned, for a panic at
         // bch2_trans_put()
-        Err(e) if is_restart(&e) => err_ptr(e),
+        Err(e) if is_restart(&e) => Err(e),
         Err(e) => {
             fs.event_inc_trace(events::data_read_nopromote, |out| {
                 prt!(out, "{e}\n{}", k.to_text(fs));
             });
-            core::ptr::null_mut()
+            Ok(None)
         }
     }
 }

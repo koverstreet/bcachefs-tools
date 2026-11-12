@@ -23,7 +23,6 @@ use crate::init::error::id;
 use crate::init::recovery::btree_lost_data;
 use crate::inode_opts::{get_fs, get_io_opts};
 use crate::debug::trace::events;
-use crate::sb::errors::SbErrorId;
 use crate::util::alloc::KVVec;
 use crate::util::log::LogMsg;
 use crate::locking::Locked;
@@ -32,13 +31,8 @@ use crate::util::backref::BackRef;
 use crate::util::task::{spawn_static, waiter};
 use crate::{bch_err, bch_err_ratelimited, bch_info, new_lock, prt};
 use core::ffi::c_int;
-use cstruct_macros::c_extern;
 use pin_init::{stack_pin_init, PinInit};
 use crate::format::Btree;
-
-c_extern! {
-    fn bch2_data_read_sb_err(err: c_int) -> SbErrorId;
-}
 
 /// What the journal scrub found wrong with an extent, for do_repairs() once
 /// we're rw: the scrub runs with journal keys frozen, so it can neither repair
@@ -500,7 +494,7 @@ fn repair_one(m: &Moving<'_>, t: &TransAttempt<'_, '_>, r: &Repair) -> Result<Ou
     let all_ptrs = (1u32 << nr_ptrs) - 1;
 
     if r.read_err != 0 && bad_devs == all_ptrs {
-        let err = unsafe { bch2_data_read_sb_err(r.read_err) };
+        let err = crate::data::read::data_read_sb_err(BchError::from_raw(r.read_err));
         damage::record_key(t, btree, stashed.k.p, err)?;
         return t.commit(None, CommitFlags::NO_ENOSPC).map(|()| Outcome::Lost);
     }

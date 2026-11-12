@@ -43,6 +43,15 @@ use crate::util::ffi::Opaque;
 pub struct BioInPlace(*mut c::bio);
 
 impl BioInPlace {
+    /// The bio at @bio, bio_init()'s, in a struct no bio owner made - a data
+    /// update's.
+    ///
+    /// # Safety
+    /// @bio is initialized, and is the bio field init() is given.
+    pub unsafe fn at(bio: *mut c::bio) -> Self {
+        BioInPlace(bio)
+    }
+
     pub fn init<E>(self) -> impl PinInit<Bio, E> {
         let bio = self.0;
         // SAFETY: writes nothing, the bio being there - its slot, checked

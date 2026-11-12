@@ -12,22 +12,23 @@
 //! Each step of its life has a type:
 //! - spawn() makes the box, with the update zeroed and no task yet: Spawned.
 //! - init() sets the update up in the spawner's transaction: Ready - or, on
-//!   error, the box is dropped. The spawner start()s it with its body, made
-//!   then, as what it's given only exists then. A mover's body issues the
-//!   read itself, Body::issue_read(); a promote's waits on the one C issues
-//!   once the promote's made, its Done made first, by start_read(), for the
-//!   task to be.
-//! - The body holds the update as a Body.
+//!   error, the box is dropped. The spawner makes its task with its body,
+//!   made then, as what it's given only exists then. A mover's starts at
+//!   once, and reads itself, awaiting read_update(), which borrows the
+//!   update's rbio and key; a promote's is started by the read it's made for,
+//!   when the read into its rbio is done, and given what it came to.
+//! - The body holds the update as a Body, and writes with what its read came
+//!   to (ReadDone): write()'s input, not fields of the update.
 //!
-//! Body derefs to the data_update, and Ready to its Body. While an IO is in flight C writes
-//! the update, so no Rust reference to it may be live then: read() and
-//! write() take the Body by &mut until the IO is done, and each deref makes a
-//! new reference from the raw pointer.
+//! Body derefs to the data_update, and Ready to its Body. While C's IO is in
+//! flight C writes the update, so no Rust reference to it may be live then:
+//! write() takes the Body by &mut until the IO is done, and each deref makes
+//! a new reference from the raw pointer.
 //!
-//! read() and write() wait on C's IO through Completions, each started on its
-//! Done before the IO's issued, and completed by its endio. When the read and
-//! write paths are tasks, they'll await those tasks instead, and the Dones,
-//! the endio shims and op.end_io go away.
+//! write() waits on C's IO through a Completion, started on its Done before
+//! the IO's issued, and completed by its endio. When the write path is a
+//! task, write() will await it instead, as a mover's read is, and the Done,
+//! the endio shim and op.end_io go away.
 //!
 //! An update in flight is on the data_update async object list, which
 //! debugfs walks under RCU: so the task's memory is freed a grace period after it's done, as every
@@ -37,6 +38,7 @@ use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::c;
 use crate::data::moving::Moving;
+use crate::data::read::{Rbio, ReadDone};
 use crate::data::scrub_journal::{Bad, BadRef};
 use crate::data::update::Held;
 use crate::debug::async_objs::{AsyncObj, AsyncObjSlot};
@@ -45,7 +47,7 @@ use crate::fs::Fs;
 use crate::util::task::{Completion, Done};
 use crate::util::gather::Gather;
 use crate::util::task::{waiter, Resumable, Resume, Spawn};
-use crate::util::task::TaskSlot;
+use crate::util::task::{TaskBox, TaskSlot};
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
 use core::ffi::c_int;
@@ -62,14 +64,15 @@ unsafe impl Send for c::data_update {}
 
 // SAFETY: shared as its box's home - its task's, its endios', the async object
 // list's walk - each by its own protocol: the Dones and Gather atomic, the
-// data_update C's or the Body's in turn
+// data_update C's or the Body's in turn, @read its starter's then its body's
 unsafe impl Sync for Update {}
 
 #[pin_data(PinnedDrop)]
 pub struct Update {
-    /// Born with their waiters, as their IOs are submitted
-    read:      Done,
+    /// Born with its waiter, as the write's submitted
     write:     Done,
+    /// A promote's read, as it came to: written as its task's started
+    read:      UnsafeCell<Option<ReadDone>>,
     /// A mover's turn to write - moving_update.rs; a promote's is never used
     #[pin]
     turn:      Gather<(), waiter::Async>,
@@ -96,8 +99,8 @@ where
     let fs = t.fs();
     t.allocate_dropping_locks(|| {
         let init = pin_init!(Update {
-            read:      Done::completed(),
             write:     Done::completed(),
+            read:      UnsafeCell::new(None),
             turn <- Gather::new(),
             found:     None,
             listed:    AsyncObjSlot::none(),
@@ -140,13 +143,12 @@ where
         let listed = unsafe { AsyncObjSlot::new(t.fs(), &*up) };
         *up.as_mut().project().listed = listed;
 
-        let body = Body { up: NonNull::from(up.as_ref().get_ref()), read: None };
+        let body = Body { up: NonNull::from(up.as_ref().get_ref()) };
         Ok(Ready { slot: self.slot, at: self.at, body })
     }
 }
 
-/// An update that's set up, its box's task not made yet: the spawner start()s
-/// it.
+/// An update that's set up, its box's task not made yet: the spawner makes it.
 pub struct Ready<'q, M> {
     slot: TaskSlot<'q, Update, M>,
     at:   Spawn<'q, 'static>,
@@ -158,20 +160,41 @@ where
     M: for<'h> AsyncFnOnce<(&'h Update,), Output = ()> + 'q,
     for<'h> <M as AsyncFnOnce<(&'h Update,)>>::CallOnceFuture: Send,
 {
-    /// Right before the read's issued.
-    pub fn start_read(&mut self) {
-        // SAFETY: the Body, in the task to be, awaits it or drops it; the
-        // update's, not yet reached by its IO
-        let (slot, waiter) = unsafe { (&mut (*self.body.up.as_ptr()).read, waiter::Async::of_ref(self.slot.task())) };
-        self.body.read = Some(Completion::new(slot, waiter));
+    fn task(self, body: impl FnOnce(Body) -> M) -> TaskBox<'q, Update> {
+        let Ready { slot, at, body: b } = self;
+        slot.init(at, body(b), None).expect("a queue's or run queue's task: nothing in it fails")
     }
 
-    /// Starts the task, its future made by @body from the update's Body.
+    /// The task, its future made by @body from the update's Body, for a read
+    /// another does into its rbio - a promote's - to start.
+    pub fn awaiting_read(self, body: impl FnOnce(Body) -> M) -> AwaitingRead<'q> {
+        AwaitingRead(self.task(body))
+    }
+
+    /// The task, started: its body reads.
     pub fn start(self, body: impl FnOnce(Body) -> M) {
-        let Ready { slot, at, body: b } = self;
-        let task = slot.init(at, body(b), None).expect("a queue's or run queue's task: nothing in it fails");
         // SAFETY: spawn()'s: its queue, and what the body borrows, outlive it
-        unsafe { task.start_unchecked() };
+        unsafe { self.task(body).start_unchecked() };
+    }
+}
+
+/// An update's task, made, waiting for the read into its rbio: started only
+/// with what the read came to, which the body takes with Body::read().
+/// Dropped unstarted, the update is never exit()ed.
+pub struct AwaitingRead<'q>(TaskBox<'q, Update>);
+
+impl AwaitingRead<'_> {
+    pub fn rbio(&self) -> &Rbio {
+        unsafe { &(*self.0.u.get()).assume_init_ref().rbio }
+    }
+
+    /// # Safety
+    /// spawn()'s: its queue, and what the body borrows, outlive it.
+    pub unsafe fn start(self, read: ReadDone) {
+        unsafe {
+            *self.0.read.get() = Some(read);
+            self.0.start_unchecked();
+        }
     }
 }
 
@@ -198,19 +221,6 @@ impl Update {
         // SAFETY: the caller's; @u is in an UnsafeCell, laid out as its value
         unsafe { u.byte_sub(core::mem::offset_of!(Self, u)).cast() }
     }
-
-    /// Called by the read path when @u's read completes.
-    ///
-    /// # Safety
-    /// @u is an Update's, its read issued.
-    pub unsafe fn read_done(u: *mut c::data_update) {
-        // SAFETY: the caller's. The Body is waiting, holding no reference; we
-        // touch only read_done, an atomic, and the slot
-        unsafe {
-            (*u).read_done.store(true, core::sync::atomic::Ordering::Relaxed);
-            (*Self::of(u)).read.complete();
-        }
-    }
 }
 
 impl c::data_update {
@@ -225,7 +235,8 @@ impl c::data_update {
 /// # Safety
 /// @op is an Update's update's write op.
 unsafe fn write_done(op: *mut c::bch_write_op) {
-    // SAFETY: the caller's; as in read_done()
+    // SAFETY: the caller's. The Body is waiting, holding no reference; we
+    // touch only the slot
     unsafe {
         let u = op.byte_sub(core::mem::offset_of!(c::data_update, op)).cast::<c::data_update>();
         (*Update::of(u)).write.complete();
@@ -251,14 +262,10 @@ unsafe impl AsyncObj for Update {
     const LIST: c::bch_async_obj_lists = c::bch_async_obj_lists::data_update;
 
     #[cold]
-    fn to_text(&self, out: &mut Printbuf, fs: &Fs) {
+    fn to_text(&self, out: &mut Printbuf, _: &Fs) {
         // SAFETY: init()ed before it was listed
         let u = unsafe { (*self.u.get()).assume_init_ref() };
-        if u.rbio.bits().promote() != 0 {
-            crate::data::promote::promote_to_text(u, out, fs)
-        } else {
-            crate::data::update::data_update_inflight_to_text(out, u)
-        }
+        crate::data::update::data_update_inflight_to_text(out, u)
     }
 }
 
@@ -266,8 +273,7 @@ unsafe impl AsyncObj for Update {
 
 /// A handle on an init()ed update: the spawner's, in a Ready, then the body's.
 pub struct Body {
-    up:   NonNull<Update>,
-    read: Option<Completion<'static>>,
+    up: NonNull<Update>,
 }
 
 // SAFETY: the update is the task's, and a task may run on any thread
@@ -292,34 +298,15 @@ impl Body {
         unsafe { (*self.up.as_ptr()).found = found };
     }
 
-    /// Issues the read, from the task, and waits for it: @issue submits it, or
-    /// fails before it touches the rbio, so it never went out.
-    pub async fn issue_read(&mut self, issue: impl FnOnce(&mut c::data_update) -> Result<(), BchError>)
-        -> Result<(), BchError>
-    {
-        let waiter = waiter::Async::current().await;
-        // SAFETY: not tied to the Body, which the read is lent
-        let read = Completion::new(unsafe { &mut (*self.up.as_ptr()).read }, waiter);
-        if let Err(e) = issue(self) {
-            // ended at submit: completed, as its endio would, so the drop
-            // doesn't wait
-            unsafe { (*self.up.as_ptr()).read.complete() };
-            drop(read);
-            return Err(e);
-        }
-        read.resume_on(Resume::SPAWNED).await;
-        Ok(())
+    /// What the read another did came to: AwaitingRead's, taken once.
+    pub fn read(&mut self) -> ReadDone {
+        unsafe { (*self.update().read.get()).take() }.expect("a data update's read, given as its task started")
     }
 
-    /// Waits for the read the spawner issued.
-    pub async fn read(&mut self) {
-        let read = self.read.take().expect("read awaited once");
-        read.resume_on(Resume::SPAWNED).await
-    }
-
-    /// Issues the write, if read_done() says there is one, and waits for it.
-    pub async fn write(&mut self) {
-        if self.read_done() {
+    /// Issues the write of what @read read, if read_done() says there is
+    /// one, and waits for it.
+    pub async fn write(&mut self, read: ReadDone) {
+        if self.read_done(read) {
             let waiter = waiter::Async::current().await;
             // SAFETY: not tied to the Body, which the write is lent
             let write = Completion::new(unsafe { &mut (*self.up.as_ptr()).write }, waiter);

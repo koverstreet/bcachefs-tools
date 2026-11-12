@@ -35,8 +35,8 @@ use crate::data::nocow_locking::{self, NocowKind};
 use crate::data::ptrs::{brand, BkeyVPtrs, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
-use crate::sb::errors::SbErrorId;
-use crate::util::bio::pages;
+use crate::util::alloc::init_at;
+use crate::util::bio::{pages, BioInPlace, HasBio};
 use crate::util::closure::StackClosure;
 use crate::sb::members::DevRef;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
@@ -51,8 +51,9 @@ use core::ffi::{c_int, c_uint};
 use pin_init::stack_pin_init;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{c_extern, CStruct, bitfield, c_enum};
+use cstruct_macros::{CStruct, bitfield, c_enum};
 use c::bch_data_update_types as Type;
+use crate::data::read::{bch_read_for, ReadDone, Rbio};
 use crate::types::c_default;
 use core::sync::atomic::AtomicBool;
 use nestify::nest;
@@ -139,13 +140,9 @@ pub struct data_update {
     #[c("struct moving_context *ctxt")]
     pub ctxt: *mut crate::data::moving::MovingContext,
 
-    pub rbio: c::bch_read_bio,
+    pub rbio: Rbio,
     pub op: c::bch_write_op,
     pub bvecs: *mut c::bio_vec,
-}
-
-c_extern! {
-    pub fn bch2_read_bio_to_text(out: *mut Printbuf, c: *mut Fs, rbio: *mut c::bch_read_bio);
 }
 
 /// The read failed only because the extent changed under it - the key was
@@ -300,10 +297,7 @@ pub fn data_update_inflight_to_text(out: &mut Printbuf, m: &c::data_update) {
     if !m.read_done.load(Relaxed) {
         prt!(out, "read:\n");
         let mut out = out.indent(2);
-        // SAFETY: read only
-        unsafe {
-            bch2_read_bio_to_text(out.as_raw(), fs.as_ptr(), core::ptr::from_ref(&m.rbio).cast_mut())
-        };
+        m.rbio.to_text(&mut out);
     } else {
         prt!(out, "write:\n");
         let mut out = out.indent(2);
@@ -312,10 +306,6 @@ pub fn data_update_inflight_to_text(out: &mut Printbuf, m: &c::data_update) {
 }
 
 // ── init, read_done, exit ────────────────────────────────────────────────
-
-c_extern! {
-    fn bch2_data_read_sb_err(err: c_int) -> SbErrorId;
-}
 
 /// IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0): background IO yields to everyone else's.
 pub(crate) const IOPRIO_IDLE: u16 = 3 << 13;
@@ -423,7 +413,8 @@ impl c::data_update {
 
         // SAFETY: its bios, and the bvecs just made for them
         unsafe {
-            c::bio_init(&mut self.rbio.bio, core::ptr::null_mut(), self.bvecs, nr_vecs as u16, c::req_op_REQ_OP_READ as _);
+            c::bio_init(self.rbio.bio.as_ptr(), core::ptr::null_mut(), self.bvecs, nr_vecs as u16,
+                        c::req_op_REQ_OP_READ as _);
             c::bio_init(&mut self.op.wbio.bio, core::ptr::null_mut(), self.bvecs, nr_vecs as u16, 0);
         }
         if pages::alloc_pages(&mut self.op.wbio.bio, block_size, buf_bytes as usize, c::GFP_KERNEL).is_err() {
@@ -431,10 +422,19 @@ impl c::data_update {
             return Err(c::ENOMEM.into());
         }
 
-        self.rbio.init(fs, *io_opts, None);
-        self.rbio.bits_mut().set_data_update(1);
-        self.rbio.bio.bi_iter.bi_size = buf_bytes;
-        self.rbio.bio.bi_iter.bi_sector = self.key().k.start_offset();
+        let read_for = if self.opts.type_ == Type::scrub {
+            bch_read_for::BCH_READ_FOR_scrub
+        } else {
+            bch_read_for::BCH_READ_FOR_update
+        };
+        let rbio = Rbio::update(fs, *io_opts, read_for, unsafe { BioInPlace::at(self.rbio.bio.as_ptr()) });
+        if let Err(e) = unsafe { init_at(rbio, &raw mut self.rbio) } {
+            self.bios_free();
+            return Err(e);
+        }
+
+        let iter = c::bvec_iter { bi_sector: self.key().k.start_offset(), bi_size: buf_bytes, ..Default::default() };
+        unsafe { self.rbio.bio.lend().bio_mut().set_iter(iter) };
         self.op.wbio.bio.bi_ioprio = IOPRIO_IDLE;
         Ok(())
     }
@@ -754,7 +754,6 @@ impl c::data_update {
 
         self.bios_init(io_opts, buf_bytes)?;
 
-        self.rbio.bits_mut().set_data_update_verify_decompress(u8::from(type_ == Type::scrub));
         Ok(held)
     }
 
@@ -764,17 +763,16 @@ impl c::data_update {
     /// which can't commit - see scrub_journal::queue().
     #[cold]
     #[inline(never)]
-    fn read_err_record(&self, e: BchError) {
+    fn read_err_record(&self, e: BchError, pick: Option<&c::extent_ptr_decoded>) {
         if read_err_benign(e) {
             return;
         }
         let fs = self.fs();
         if self.opts.type_ == Type::scrub_no_repair {
-            let bit = dev_ptr_bit(fs, self.key(), self.rbio.pick.ptr.dev().into());
-            self.found(scrub_journal::queue(fs, self.btree_id, 0, self.key(), bit, self.rbio.ret.into()));
+            let bit = pick.map_or(0, |p| dev_ptr_bit(fs, self.key(), p.ptr.dev().into()));
+            self.found(scrub_journal::queue(fs, self.btree_id, 0, self.key(), bit, ret_to_c(Err(e))));
         } else {
-            // SAFETY: maps an error code; no pointers
-            let err = unsafe { bch2_data_read_sb_err(self.rbio.ret.into()) };
+            let err = crate::data::read::data_read_sb_err(e);
             let (btree, pos) = (self.btree_id, self.key().k.p);
             let r = trans_commit_do(fs, None, CommitFlags::NO_ENOSPC,
                                     |t| crate::init::damage::record_key(t, btree, pos, err));
@@ -819,34 +817,43 @@ impl c::data_update {
         true
     }
 
-    /// Whether there's a write for write() to issue. There isn't for a failed
-    /// read, a scrub with nothing to repair, or IO errors that leave nothing to
-    /// write: then op.error is the update's result.
-    pub fn read_done(&mut self) -> bool {
+    /// Takes @read into the update - the pointers that failed, the extent if
+    /// it was poisoned - and says whether there's a write for write() to
+    /// issue, of what it read, by its replica's crc. There isn't for a failed
+    /// read, a scrub with nothing to repair, or IO errors that leave nothing
+    /// to write: then op.error is the update's result.
+    pub fn read_done(&mut self, read: ReadDone) -> bool {
         let fs = self.fs();
-        let mut crc = self.rbio.pick.crc;
+        let ReadDone { mut ret, pick, ptrs_io_error, poisoned } = read;
+        let mut crc = pick.map(|p| p.crc);
         let type_ = self.opts.type_;
 
-        // before the bitrot fixup below, which clears rbio.ret
-        if let Err(e) = ret_to_result_void(self.rbio.ret.into()) {
-            self.read_err_record(e);
+        self.opts.ptrs_io_error |= ptrs_io_error;
+        if let Some(k) = &poisoned {
+            self.k.reassemble(BkeySC::from(k));
+        }
+
+        // before the bitrot fixup below, which clears ret
+        if let Err(e) = ret {
+            self.read_err_record(e, pick.as_ref());
         }
 
         // A bitrotted extent gets a new checksum so it can be moved; its
         // poison bit keeps reads of it returning errors
-        if unlikely(i32::from(self.rbio.ret) == -(bch_errcode::BCH_ERR_data_read_csum_err.0 as i32) &&
+        if unlikely(ret == Err(bch_errcode::BCH_ERR_data_read_csum_err.into()) &&
                     self.key().arm::<Ptrs>().is_some_and(|k| k.poisoned(fs))) {
-            let nonce = crate::data::ptrs::extent_nonce(self.rbio.version, &crc);
-            // SAFETY: the read's bio, done, its data in
-            let bio = unsafe { crate::util::bio::Bio::from_raw(&self.rbio.bio) };
-            crc.csum = fs.checksum_range(c::bch_csum_type(crc.csum_type.into()), nonce, bio.range());
-            self.rbio.ret = 0;
+            if let Some(crc) = &mut crc {
+                let nonce = crate::data::ptrs::extent_nonce(self.key().k.bversion, crc);
+                crc.csum = fs.checksum_range(c::bch_csum_type(crc.csum_type.into()), nonce, self.rbio.bio().range());
+                ret = Ok(());
+            }
         }
 
-        if unlikely(self.rbio.ret != 0) {
-            self.op.error = self.rbio.ret;
+        if let Err(e) = ret {
+            self.op.error = ret_to_c(Err(e)) as i16;
             return false;
         }
+        let crc = crc.expect("a data update's read that succeeded, of no replica");
 
         if type_ == Type::scrub_no_repair {
             if self.opts.ptrs_io_error != 0 {

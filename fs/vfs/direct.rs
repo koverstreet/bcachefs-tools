@@ -12,9 +12,8 @@
 
 use super::kiocb::{self, Kiocb};
 use crate::c;
-use crate::data::read;
+use crate::data::read::{self, ReadErrReport, Rbio};
 use crate::errcode::{bch_errcode, BchError};
-use crate::fs::Fs;
 use crate::inode_opts::get_inode;
 use crate::util::alloc::Kmalloc;
 use crate::util::bio::{inline_vecs, plugged, Bio, HasBio};
@@ -28,7 +27,7 @@ use crate::util::task::{exclusive_size, waiter, CompletionReturn, Resume, Return
 use crate::util::workqueue::Queue;
 use core::pin::{pin, Pin};
 use core::ptr::{self, NonNull};
-use cstruct_macros::in_place;
+use cstruct_macros::{args_stored_once, in_place};
 use pin_init::{pin_data, pin_init, pinned_drop, stack_pin_init};
 
 type F = c::bch_read_flags;
@@ -75,7 +74,7 @@ impl End {
 #[repr(C)]
 struct DioBio {
     #[pin]
-    rbio: c::bch_read_bio,
+    rbio: Rbio,
 }
 crate::has_bio!(DioBio, rbio.bio);
 
@@ -120,15 +119,14 @@ fn set_up(mut b: Pin<&mut Bio>, iter: &mut IovIter<'_>, offset: &mut u64, should
 #[in_place(SplitFut)]
 async fn split_task<'h>(mut split: Pin<&'h mut DioBio>, r: SplitRef, inum: c::subvol_inum, flags: F,
                         should_dirty: bool) {
-    r.put(read::read(&mut split.rbio, inum, flags).await);
+    r.put(read::read(&split.rbio, inum, flags, ()).await);
     split.as_mut().bio_mut().release_user_pages(should_dirty).await;
 }
 
 /// What's left of @iter past the dio's first bio, in splits.
-#[allow(clippy::too_many_arguments)]
 #[inline(never)]
-async fn read_splits(fs: &Fs, opts: c::bch_inode_opts, subvol: u32, err_report: Option<&c::bch_read_err_report>,
-                     iter: &mut CallersIter, mut offset: u64, inum: c::subvol_inum, flags: F,
+#[args_stored_once]
+async fn read_splits(rbio: &Rbio, iter: &mut CallersIter, mut offset: u64, inum: c::subvol_inum, flags: F,
                      should_dirty: bool) -> Result<(), BchError> {
     stack_pin_init!(let splits = Splits::new());
 
@@ -137,10 +135,12 @@ async fn read_splits(fs: &Fs, opts: c::bch_inode_opts, subvol: u32, err_report: 
     //
     // A split takes as much of @iter as its pages pin into; one that fails
     // pinned none, and has nothing to release
-    let started = core::iter::from_fn(|| (iter.get().count() != 0).then(|| {
+    let started = {
+        let (fs, err_report) = (rbio.fs(), rbio.err_report.as_deref());
+        core::iter::from_fn(|| (iter.get().count() != 0).then(|| {
             let mut split = TaskSlot::exclusive_bio_in(&SPLITS, ptr::null_mut(), iter.get().bio_vecs(),
                                                        c::req_op_REQ_OP_READ, |b| {
-                pin_init!(DioBio { rbio <- c::bch_read_bio::new(fs, opts, subvol, err_report, b) }? BchError)
+                pin_init!(DioBio { rbio <- Rbio::new(fs, rbio.opts, rbio.subvol, err_report, b) }? BchError)
             }).expect("a split's box: its pool waits for an element, and an Rbio's init can't fail");
             set_up(split.home().bio_mut(), iter.get(), &mut offset, should_dirty).map(|()| split)
         }))
@@ -148,7 +148,8 @@ async fn read_splits(fs: &Fs, opts: c::bch_inode_opts, subvol: u32, err_report: 
             let r = splits.get();
             unsafe { split?.start_inline(Queue::system_dfl(), move |s| split_task(s, r, inum, flags, should_dirty)) };
             Ok(())
-        });
+        })
+    };
 
     splits.wait(Resume::INLINE).await.and(started)
 }
@@ -161,14 +162,13 @@ async fn dio_task<'h>(mut dio: Pin<&'h mut DioBio>, end: End, mut iter: CallersI
     let ret = match set_up(dio.as_mut().bio_mut(), iter.get(), &mut offset, should_dirty) {
         Err(e) => Err(e),
         Ok(()) => {
-            let (fs, opts, subvol) = (unsafe { Fs::borrow_raw(dio.rbio.c) }, dio.rbio.opts, dio.rbio.subvol);
-            let err_report = unsafe { dio.rbio.err_report.as_ref() };
+            let rbio = &dio.rbio;
 
-            let first = pin!(read::read(&mut dio.rbio, inum, flags));
+            let first = pin!(read::read(rbio, inum, flags, ()));
             let first = crate::eager!(first);
 
             let splits = if unlikely(iter.get().count() != 0) {
-                read_splits(fs, opts, subvol, err_report, &mut iter, offset, inum, flags, should_dirty).await
+                read_splits(rbio, &mut iter, offset, inum, flags, should_dirty).await
             } else {
                 Ok(())
             };
@@ -189,7 +189,7 @@ async fn dio_task<'h>(mut dio: Pin<&'h mut DioBio>, end: End, mut iter: CallersI
     dio.as_mut().bio_mut().release_user_pages(should_dirty).await;
 }
 
-fn read(req: &mut Kiocb<'_>, iter: &mut IovIter<'_>, flags: F, err_report: Option<&c::bch_read_err_report>)
+fn read(req: &mut Kiocb<'_>, iter: &mut IovIter<'_>, flags: F, err_report: Option<&ReadErrReport>)
     -> Result<usize, BchError>
 {
     let inode = req.inode();
@@ -215,7 +215,7 @@ fn read(req: &mut Kiocb<'_>, iter: &mut IovIter<'_>, flags: F, err_report: Optio
     let subvol = inum.subvol as u32;
 
     let dio = TaskSlot::exclusive_bio_in(&DIOS, ptr::null_mut(), iter.bio_vecs(), c::req_op_REQ_OP_READ, |b| {
-        pin_init!(DioBio { rbio <- c::bch_read_bio::new(fs, opts, subvol, err_report, b) }? BchError)
+        pin_init!(DioBio { rbio <- Rbio::new(fs, opts, subvol, err_report, b) }? BchError)
     })?;
     let flags = F::retry_if_stale | F::may_promote | F::user_mapped | flags;
 
@@ -241,7 +241,7 @@ fn read(req: &mut Kiocb<'_>, iter: &mut IovIter<'_>, flags: F, err_report: Optio
 }
 
 pub fn direct_io_read(req: &mut Kiocb<'_>, iter: &mut IovIter<'_>, flags: F,
-                      err_report: Option<&c::bch_read_err_report>) -> Result<usize, BchError> {
+                      err_report: Option<&ReadErrReport>) -> Result<usize, BchError> {
     let file = req.file();
     if file.has_pagecache() {
         let pos = req.pos();

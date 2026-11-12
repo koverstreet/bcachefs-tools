@@ -117,13 +117,6 @@ where
         Ok(Self { home, free: free_slot::<H, FutureOf<M, H>, A>, _p: PhantomData })
     }
 
-    /// The task to be, for a Done its owner arms before it starts: where it
-    /// will be.
-    pub fn task(&self) -> TaskRef {
-        let w = unsafe { WithTask::<'q, H, FutureOf<M, H>, A>::of_home(self.home) }.as_ptr();
-        TaskRef(unsafe { NonNull::new_unchecked(&raw mut (*w).task).cast() })
-    }
-
     /// The task of the future @make makes from the home, to run @at. @done is
     /// the box's owner's cue that the task is done and it may drop the box;
     /// with none, the box frees itself. What @make holds outlives the box,

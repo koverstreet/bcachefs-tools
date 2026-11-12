@@ -49,12 +49,6 @@
 //! endio's, interrupt context perhaps. A Gather dropped unwaited drops the
 //! owner's ref without starting it, and polls the count: the last put's
 //! cmpxchg is then its last touch.
-//!
-//! What's in flight can be tasks, put with what they return. A task in place -
-//! in the memory of what it's the task of - carries its ref in its output,
-//! and its output's end, GatherEnd, puts, or tail calls: the ref
-//! is handed to the start of a task that goes on in its place, wherever that
-//! one's memory is, once the first's is done with.
 
 use crate::c;
 use crate::errcode::{BchError, FirstErr};
@@ -62,7 +56,7 @@ use crate::locking::Locked;
 use crate::new_lock;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::util::sleep::{sleep_until, Sleep};
-use crate::util::task::{waiter, Completion, Done, Resumable, Resume, Resumed, TaskEnd, Waiter};
+use crate::util::task::{waiter, Completion, Done, Resumable, Resume, Resumed, Waiter};
 use core::cell::UnsafeCell;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::ManuallyDrop;
@@ -506,45 +500,6 @@ impl<T: Fold, Wt: Waiter, W: Width> GatherRef<T, Wt, W> {
 impl<T: Fold, Wt: Waiter, W: Width> Drop for GatherRef<T, Wt, W> {
     fn drop(&mut self) {
         self.gather().put(None);
-    }
-}
-
-/// How a gathered task ends: with what it puts, or with the start of the task
-/// that goes on in its place - handed the ref, to be put by that one's end.
-pub enum Tail<T, F> {
-    Done(T),
-    Call(F),
-}
-
-impl<T, R> Tail<T, fn(R)> {
-    /// The end of a task that never tail calls.
-    pub fn done(v: T) -> Self {
-        Tail::Done(v)
-    }
-}
-
-/// What a gathered task returns, its ref @R aside, ended once the task's
-/// memory is done with: what it puts, or its tail call.
-pub trait GatherEnd<R> {
-    type Item;
-
-    fn end(self) -> Tail<Self::Item, impl FnOnce(R)>;
-}
-
-/// A gathered task's output: its ref, and what it returned.
-impl<T, Wt, W, E> TaskEnd for (GatherRef<T, Wt, W>, E)
-where
-    T: Fold,
-    Wt: Waiter,
-    W: Width,
-    E: GatherEnd<GatherRef<T, Wt, W>, Item = T::Item>,
-{
-    fn end(self) {
-        let (r, out) = self;
-        match out.end() {
-            Tail::Done(v) => r.put(v),
-            Tail::Call(start) => start(r),
-        }
     }
 }
 

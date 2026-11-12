@@ -1155,6 +1155,15 @@ impl<V: ?Sized + BkeyVal> BkeyVMut for TransBkey<'_, '_, V> {
     }
 }
 
+/// The key, done with editing, to read for as long as the attempt's memory is
+/// there.
+impl<'a, V: ?Sized + BkeyVal> From<TransBkey<'a, '_, V>> for BkeySC<'a, V> {
+    fn from(k: TransBkey<'a, '_, V>) -> Self {
+        let p = k.ptr.as_ptr();
+        BkeySC { k: unsafe { &(*p).k }, v: unsafe { &raw const (*p).v }, iter: PhantomData, val: PhantomData }
+    }
+}
+
 /// The key, to read, keeping its type.
 impl<'k, V: ?Sized + BkeyVal> From<&'k TransBkey<'_, '_, V>> for BkeySC<'k, V> {
     fn from(k: &'k TransBkey<'_, '_, V>) -> Self {

@@ -50,22 +50,6 @@ pub fn bch2_io_failures_reset_devs(failed: &mut c::bch_io_failures) {
     failed.reset_devs()
 }
 
-/// The erasure coded reconstruct's message, for the read path to write.
-#[c_export]
-pub fn bch2_io_failures_ec_msg(failed: &mut c::bch_io_failures) -> *mut Printbuf {
-    &mut failed.ec_msg
-}
-
-#[c_export]
-pub fn bch2_io_failures_to_err_mask(failed: &c::bch_io_failures) -> u32 {
-    failed.err_mask()
-}
-
-#[c_export]
-pub fn bch2_io_failures_count_blk_errors(c: &Opaque<Fs>, failed: &c::bch_io_failures) {
-    failed.count_blk_errors(Fs::from_c(c))
-}
-
 #[c_export]
 pub fn bch2_mark_io_failure(failed: &mut c::bch_io_failures, p: &c::extent_ptr_decoded, err: c_int) {
     failed.mark(p, BchError::from_raw(-err));
@@ -139,19 +123,4 @@ pub unsafe fn bch2_bkey_extent_flags_set(trans: &BtreeTrans<'_>, k: *mut c::bkey
             .extent_flags_set(fs, flags).expect("room for an extent flags entry: its caller allocates it");
         Ok(())
     })())
-}
-
-/// @k is in @trans's memory, @buf_u64s long: room for a crc128 entry more
-/// than it has. narrow_crc(), for read.c until it's Rust.
-///
-/// # Safety
-/// C has an attempt in progress on @trans, and @k is a key in its memory,
-/// @buf_u64s u64s of it its.
-#[c_export]
-pub unsafe fn bch2_bkey_narrow_crc(trans: &BtreeTrans<'_>, k: *mut c::bkey_i, buf_u64s: c_uint,
-                                   old: c::bch_extent_crc_unpacked, new: c::bch_extent_crc_unpacked) -> bool {
-    let t = unsafe { trans.attempt_in_progress() };
-    let k = unsafe { TransBkey::from_raw_room(&t, k, buf_u64s) };
-    k.arm::<PtrsMut>().expect("narrowing a crc of a key whose entries can't be edited")
-        .narrow_crc(t.fs(), old, new)
 }

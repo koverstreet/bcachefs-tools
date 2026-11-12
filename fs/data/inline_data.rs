@@ -13,21 +13,18 @@ use crate::btree::bkey::BkeyOps;
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, UpdateTriggerFlags};
 use crate::c;
 use crate::data::checksum::csum_err_msg;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::format::{Bpos, Btree, BkeyTypeFlags, BkeyTypeFlags_bits};
 use crate::fs::{Fs, WriteRef};
 use crate::init::damage;
 use crate::init::error::{id, BkeyValidate};
 use crate::util::backref::BackRef;
-use crate::util::ffi::Opaque;
 use crate::util::refcount::TryRefcount;
 use crate::util::task::spawn_static;
 use crate::util::vstructs::{cast_plain, cast_plain_mut};
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::{bch_err_ratelimited, bkey_fsck_err_on, btree_trans, prt};
-use core::ffi::{c_int, c_uint};
-use cstruct_macros::c_export;
 
 /// The data itself, inline in the value, direct or indirect,
 /// BkeyTypeFlags::inline_data: a key armed to it is a BkeySC<'_, Inline>,
@@ -41,12 +38,6 @@ impl c::bkey {
     pub fn extent_is_inline_data(&self) -> bool {
         <Inline as BkeyFamily>::contains(self)
     }
-}
-
-/// bkey_extent_is_inline_data(), for C.
-#[c_export]
-pub fn bch2_bkey_is_inline_data(k: &c::bkey) -> bool {
-    k.extent_is_inline_data()
 }
 
 /// An inline data key's data[], and the checksum over all of it, if it has
@@ -71,6 +62,16 @@ impl<'a> InlineDataRef<'a> {
     /// Where the key's start is in data[], in bytes.
     pub fn start(&self) -> usize {
         self.csum.map_or(0, |c| (c.offset.get() as usize) << 9)
+    }
+
+    /// For a read @skip bytes past the key's start: its data from there -
+    /// none past data[], which reads as zeroes.
+    pub fn read_from(&self, skip: usize) -> &'a [u8] {
+        self.data.get(self.start() + skip..).unwrap_or_default()
+    }
+
+    pub fn poisoned(&self) -> bool {
+        self.csum.is_some_and(|h| h.poisoned())
     }
 
     /// Ok if it has no checksum or its data matches it.
@@ -175,49 +176,24 @@ impl BkeyOps for c::InlineDataV2 {
     }
 }
 
-/// For a read of @k @skip bytes past its start: its data from there, @len
-/// bytes of it - none past data[], which reads as zeroes.
-#[c_export]
-pub fn bch2_inline_data_from(k: BkeySC<'_>, skip: c_uint, len: &mut c_uint) -> *const u8 {
-    let d = InlineDataRef::of(k).expect("inline data");
-    let data = d.data.get(d.start() + skip as usize..).unwrap_or_default();
-    *len = data.len() as c_uint;
-    data.as_ptr()
-}
-
-#[c_export]
-pub fn bch2_inline_data_poisoned(k: BkeySC<'_>) -> bool {
-    InlineDataRef::of(k).expect("inline data").csum.is_some_and(|h| h.poisoned())
-}
-
-/// For a read of @k: 0, or data_read_csum_err with the mismatch in @out.
-#[c_export]
-pub fn bch2_inline_data_verify(c: &Opaque<Fs>, k: BkeySC<'_>, out: &mut Printbuf) -> c_int {
-    let Err(e) = InlineDataRef::of(k).expect("inline data").verify() else { return 0 };
-    e.to_text(out);
-    ret_to_c(Fs::from_c(c).throw::<()>(c::bch_errcode::BCH_ERR_data_read_csum_err))
-}
-
 /// @k, in @btree, failed its checksum, read at @read_pos: poisoned, and with
 /// @record its damage recorded at @read_pos, in the one transaction - so a
 /// key's damage is recorded once, as it's poisoned, however many reads fail
 /// on it before that's committed. In a task: a read may hold page locks a
 /// commit mustn't wait under. Nothing on a read-only filesystem, as a
 /// pointer extent's poisoning.
-#[c_export]
-pub fn bch2_inline_data_poison(c: &Opaque<Fs>, btree: Btree, k: BkeySC<'_>, read_pos: Bpos, record: bool) {
-    let fs = Fs::from_c(c);
+pub(crate) fn poison(fs: &Fs, btree: Btree, k: BkeySC<'_>, read_pos: Bpos, record: bool) {
     let Some(write) = fs.writes.tryget_live() else { return };
     // the task holds it, and its write ref: going read-only waits for that
     let fs_ref = unsafe { BackRef::new(fs) };
     let key = BtreeKeyBuf::new(btree, 0, k);
 
-    if let Err(e) = spawn_static(Queue::system_dfl(), poison(write, fs_ref, key, read_pos, record)) {
+    if let Err(e) = spawn_static(Queue::system_dfl(), poison_task(write, fs_ref, key, read_pos, record)) {
         bch_err_ratelimited!(fs, "poisoning inline data that failed its checksum: {}", e.msg());
     }
 }
 
-async fn poison(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, read_pos: Bpos, record: bool) {
+async fn poison_task(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, read_pos: Bpos, record: bool) {
     let fs = &*fs;
     let trans = btree_trans!(fs);
     // an extents update commits with a reservation: an empty one, the key's

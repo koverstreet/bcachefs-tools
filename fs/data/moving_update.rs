@@ -16,10 +16,8 @@
 //! counted as a write once its write starts; in between, the fifo is what
 //! flush_all() waits on.
 
-use crate::btree::iter::BtreeTrans;
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIter, TransAttempt};
-use crate::btree::iter::lockrestart_do;
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::moving::{Moving, MovingIo};
@@ -30,16 +28,10 @@ use crate::errcode::BchError;
 use crate::data::update_task::{self, Body, Update};
 use crate::util::refcount::RefGuard;
 use crate::util::task::{Resume, Spawn};
-use core::ffi::{c_int, c_uint};
+use crate::data::read::{read_update, ReadDone};
+use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{args_stored_once, c_extern};
-use crate::format::{Bpos, Btree};
-
-c_extern! {
-    fn __bch2_read_extent(trans: *mut BtreeTrans<'_>, rbio: *mut c::bch_read_bio, iter: c::bvec_iter,
-                          read_pos: Bpos, btree: Btree, k: c::bkey_s_c, offset_into_extent: c_uint,
-                          failed: *mut c::bch_io_failures, flags: c::bch_read_flags, dev: c_int) -> c_int;
-}
+use cstruct_macros::args_stored_once;
 
 fn moving_size(u: &c::data_update) -> (&Moving<'_>, u32) {
     (u.moving().expect("a mover's update has its context"), u.k.key().k().size)
@@ -49,64 +41,44 @@ fn moving_size(u: &c::data_update) -> (&Moving<'_>, u32) {
 /// extent is data already lost even if it reads back clean, as moving it gives
 /// the bad data a new checksum. Not for the journal scrub, where uncorrected
 /// means a rewind, which can't bring it back.
-fn read_error_stats(u: &c::data_update, moving: &Moving<'_>, size: u32) {
+fn read_error_stats(u: &c::data_update, read: &ReadDone, moving: &Moving<'_>, size: u32) {
     let stats = moving.stats();
     let fs = u.op.fs();
-    let k = BkeySC::from(u.k.key());
+    let k = read.poisoned.as_ref().map_or(BkeySC::from(u.k.key()), BkeySC::from);
     let poisoned = u.opts.type_ == c::bch_data_update_types::scrub &&
         k.arm::<Ptrs>().is_some_and(|k| k.poisoned(fs));
 
-    // Not rbio.bvec_iter: only set when the read went straight into this rbio
-    let ret = crate::errcode::ret_to_result_void(u.rbio.ret.into());
+    let ret = read.ret;
     if ret.is_err_and(read_err_benign) {
         // nothing was read, and nothing was lost
     } else if ret.is_err() || poisoned {
         stats.sectors_error_uncorrected.fetch_add(size.into(), Relaxed);
-    } else if u.rbio.bits().saw_error() != 0 {
+    } else if u.rbio.saw_error.load(Relaxed) {
         stats.sectors_error_corrected.fetch_add(size.into(), Relaxed);
     }
 }
 
-/// The body: issues the read, in a transaction of its own, and waits for it,
-/// counted in the context as @read_io; then waits for its turn, then writes.
-/// @bucket counts the update against the bucket it's moving data off, until
-/// it's done. What could fail allocating is done before it's spawned, so a
-/// read that fails to issue - __bch2_read_extent() fails synchronously only
-/// before it touches the rbio - ends the update.
+/// The body: reads, counted in the context as @read_io; then waits for its
+/// turn, then writes - nothing, if the read failed. @bucket counts the update
+/// against the bucket it's moving data off, until it's done.
 #[args_stored_once]
 async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_bucket>>) {
-    let issued = u.issue_read(|d| {
-        let trans = crate::btree_trans!(d.op.fs());
-        let key = BkeySC::from(d.k.key());
-        let (btree, opts) = (d.btree_id, d.opts);
-        lockrestart_do(&trans, |t| {
-            // SAFETY: we're in the attempt, and init() set the read bio up
-            let ret = t.result(unsafe {
-                __bch2_read_extent(t.raw(), &mut d.rbio, d.rbio.bio.bi_iter, key.k.start_pos(), btree, key.into(), 0,
-                                   core::ptr::null_mut(), opts.read_flags | c::bch_read_flags::last_fragment,
-                                   opts.read_dev as c_int)
-            });
-            // the read's error messages begin transactions of their own
-            t.restarts_handled();
-            ret
-        })
-    }).await;
+    let read = {
+        let d = &mut *u;
+        read_update(&mut d.rbio, d.k.key(), d.btree_id, d.opts.read_flags, d.opts.read_dev).await
+    };
     drop(read_io);
-    if let Err(e) = issued {
-        u.exit(crate::errcode::ret_to_c(Err::<(), _>(e)));
-        drop(bucket);
-        return;
-    }
+    u.read_done.store(true, Relaxed);
 
     u.turn().wait(Resume::SPAWNED).await;
 
     let write_io = {
         let (moving, size) = moving_size(&u);
         moving.update_write_start(u.io_seq);
-        read_error_stats(&u, moving, size);
+        read_error_stats(&u, &read, moving, size);
         moving.io_start(true, size)
     };
-    u.write().await;
+    u.write(read).await;
     drop(write_io);
 
     // EC allocation failed: the write never happened, but the extent still
@@ -122,16 +94,6 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
     }
     u.exit(err);
     drop(bucket);
-}
-
-/// # Safety
-/// @bio is a mover's update's read bio.
-unsafe extern "C" fn move_read_endio(bio: *mut c::bio) {
-    // SAFETY: the caller's; the bio is in the rbio, which is in the update
-    unsafe {
-        let rbio = bio.byte_sub(core::mem::offset_of!(c::bch_read_bio, bio)).cast::<c::bch_read_bio>();
-        Update::read_done(rbio.byte_sub(core::mem::offset_of!(c::data_update, rbio)).cast());
-    }
 }
 
 /// Starts moving extent @k: its task, which issues the read - or nothing, if
@@ -154,8 +116,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
         Err(e) if e.matches(bch_errcode::BCH_ERR_data_update_done) => return Ok(()),
         Err(e) => return Err(e),
     };
-    u.rbio.bio.bi_end_io = Some(move_read_endio);
-    u.rbio.bio.bi_ioprio = IOPRIO_IDLE;
+    u.rbio.bio.lend().bio_mut().set_ioprio(IOPRIO_IDLE);
     u.set_found(found);
     u.io_seq = moving.update_issue(u.turn().get());
 

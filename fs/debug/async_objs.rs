@@ -127,7 +127,7 @@ use core::ptr::NonNull;
 
 use super::AsyncObj;
 use crate::c;
-use crate::data::update::bch2_read_bio_to_text;
+use crate::data::read::Rbio;
 use crate::data::update_task::Update;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -165,8 +165,8 @@ unsafe fn data_update_obj_to_text(out: &mut Printbuf, fs: &Fs, obj: NonNull<c_vo
 }
 
 #[cold]
-unsafe fn rbio_obj_to_text(out: &mut Printbuf, fs: &Fs, obj: NonNull<c_void>) {
-    unsafe { bch2_read_bio_to_text(out.as_raw(), fs.as_ptr(), obj.as_ptr().cast()) }
+unsafe fn rbio_obj_to_text(out: &mut Printbuf, _: &Fs, obj: NonNull<c_void>) {
+    unsafe { obj.cast::<Rbio>().as_ref() }.to_text(out)
 }
 
 #[cold]

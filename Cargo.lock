@@ -194,6 +194,7 @@ dependencies = [
  "cc",
  "libc",
  "paste 1.0.15 (registry+https://github.com/rust-lang/crates.io-index)",
+ "pin-init",
  "pkg-config",
  "uuid",
 ]

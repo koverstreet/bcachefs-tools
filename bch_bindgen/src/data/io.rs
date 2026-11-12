@@ -2,9 +2,8 @@
 //
 // IO operations on a bcachefs filesystem.
 //
-// ReadOp is a genuine async Future: new() submits the read and
-// returns immediately; the bio endio callback wakes the Rust waker
-// when IO completes (from the libaio completion thread in userspace).
+// ReadOp runs the read path's read() on a task and waits for it: ready on
+// its first poll.
 //
 // WriteOp is still synchronous pending the same treatment.
 
@@ -18,24 +17,21 @@ use std::ptr::NonNull;
 
 use crate::c;
 use bcachefs_kernel::btree::bkey::spos;
-use bcachefs_kernel::btree::trans::BtreeTrans;
+use bcachefs_kernel::data::read::{self, Rbio};
 use bcachefs_kernel::data::write::bch2_write;
-use bcachefs_kernel::errcode::{self, BchError};
+use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::inode_opts;
-use bcachefs_kernel::util::bio::Bio;
+use bcachefs_kernel::util::bio::{Bio, BioOwner};
 use bcachefs_kernel::util::closure;
+use bcachefs_kernel::util::sleep::Sleep;
+use bcachefs_kernel::util::task::{waiter, CompletionReturn, Spawn, TaskSlot};
+use bcachefs_kernel::util::workqueue::Queue;
 
 /// Maximum single IO size.
 pub const MAX_IO_SIZE: usize = 1 << 20;
 const PAGE_SIZE: usize = 4096;
 const MAX_BVECS: usize = MAX_IO_SIZE / PAGE_SIZE;
-
-unsafe extern "C" {
-    fn bch2_read(trans: *mut BtreeTrans<'_>, rbio: *mut c::bch_read_bio, iter: bcachefs_kernel::c::bvec_iter,
-                 inum: c::subvol_inum, failed: *mut c::bch_io_failures, prev_read: *mut c::bkey_buf,
-                 flags: c::bch_read_flags) -> std::ffi::c_int;
-}
 
 /// Result of a write operation.
 pub struct WriteResult {
@@ -156,48 +152,9 @@ impl Future for WriteOp {
     }
 }
 
-// Heap-allocated state for an in-flight read. The bch_read_bio is at
-// offset 0 so the endio callback can cast bio → bch_read_bio → ReadState.
-#[repr(C)]
-struct ReadState {
-    rbio:       c::bch_read_bio,
-    bvecs:      [c::bio_vec; MAX_BVECS],
-    completed:  AtomicBool,
-    waker:      UnsafeCell<Option<Waker>>,
-}
-
-// Safety: the waker is only written from poll (single-threaded) and
-// read from the endio callback. AtomicBool provides the ordering
-// guarantee: the endio stores completed=true with Release, and poll
-// loads with Acquire, so the waker write is visible before we read
-// completed=true.
-unsafe impl Send for ReadState {}
-unsafe impl Sync for ReadState {}
-
-/// Endio callback — called from the IO completion path (libaio thread).
-/// Gets the bio pointer, walks up to ReadState via container_of, signals
-/// completion and wakes the Rust future.
-unsafe extern "C" fn read_endio(bio: *mut c::bio) {
-    // container_of(bio, bch_read_bio, bio) — bio is the last field
-    let rbio = unsafe { (bio as *mut u8).sub(std::mem::offset_of!(c::bch_read_bio, bio)) }
-        as *mut c::bch_read_bio;
-    // ReadState has rbio at offset 0
-    let state = rbio as *mut ReadState;
-
-    // Take and wake before setting completed, so the waker is consumed
-    // before any future poll sees completed=true.
-    let waker = unsafe { (*(*state).waker.get()).take() };
-    unsafe { (*state).completed.store(true, Ordering::Release) };
-    if let Some(w) = waker {
-        w.wake();
-    }
-}
-
-/// Async read operation on a bcachefs filesystem.
-///
-/// IO is submitted in new(); poll checks for completion.
+/// A read on a bcachefs filesystem: read by a task, which new() waits for.
 pub struct ReadOp {
-    state: Pin<Box<ReadState>>,
+    ret: Result<(), BchError>,
 }
 
 impl ReadOp {
@@ -208,59 +165,36 @@ impl ReadOp {
         inode: &c::bch_inode_unpacked,
         buf: &mut [u8],
     ) -> Self {
+        type F = c::bch_read_flags;
         let opts = bcachefs_kernel::inode_opts::get_inode(fs, inode);
 
-        // Made in place: the bio first, which the rbio's init() leaves be
-        let mut state = Box::new(std::mem::MaybeUninit::<ReadState>::zeroed());
-        let p = state.as_mut_ptr();
-        let mut state = unsafe {
-            let bio = &raw mut (*p).rbio.bio;
-            bcachefs_kernel::c::bio_init(bio, std::ptr::null_mut(), (&raw mut (*p).bvecs).cast(),
-                                         MAX_BVECS as u16, 0);
-            (*bio).bi_opf = c::req_op_REQ_OP_READ | c::REQ_SYNC;
-            (*bio).bi_iter.bi_sector = offset >> 9;
-            Bio::from_raw_mut(bio).map(buf.as_mut_ptr(), buf.len());
-            (&raw mut (*p).waker).write(UnsafeCell::new(None));
-            state.assume_init()
+        let mut b = fs.bio_read.alloc(std::ptr::null_mut(), 1, c::req_op_REQ_OP_READ,
+                                      |b| Rbio::new(fs, opts, inum.subvol as u32, None, b))
+            .expect("a bio_read bio of one bvec: from its mempool");
+        b.bio_mut().set_opf(c::req_op_REQ_OP_READ | c::REQ_SYNC);
+        b.bio_mut().set_sector(offset >> 9);
+        unsafe { b.bio_mut().map(buf.as_mut_ptr(), buf.len()) };
+
+        let flags = F::retry_if_stale | F::may_promote | F::user_mapped;
+        let slot = match TaskSlot::alloc(()) {
+            Ok(slot) => slot,
+            Err(e) => return Self { ret: Err(e) },
         };
-        let rbio = &mut state.rbio;
-        rbio.init(fs, opts, Some(read_endio));
-        rbio.subvol = inum.subvol as u32;
-
-        let iter = rbio.bio.bi_iter;
-        let trans = bcachefs_kernel::btree_trans!(fs);
-        unsafe {
-            bch2_read(trans.raw(), rbio, iter, inum, std::ptr::null_mut(), std::ptr::null_mut(),
-                      c::bch_read_flags::retry_if_stale |
-                      c::bch_read_flags::may_promote |
-                      c::bch_read_flags::user_mapped);
-        }
-
-        Self { state: Box::into_pin(state) }
+        let mut done = None;
+        let (wait, r) = CompletionReturn::new(&mut done, waiter::Sync::current());
+        let task = slot.init(Spawn::Queue(Queue::system_dfl()), async move |_: &()| {
+            r.complete(read::read(&b, inum, flags, ()).await);
+        }, None).expect("a queue's task: nothing in it fails");
+        unsafe { task.start_unchecked() };
+        Self { ret: wait.wait(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read") }
     }
 }
 
 impl Future for ReadOp {
     type Output = Result<(), BchError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-
-        if this.state.completed.load(Ordering::Acquire) {
-            let ret = this.state.rbio.ret as i32;
-            Poll::Ready(errcode::ret_to_result(ret).map(|_| ()))
-        } else {
-            unsafe {
-                *this.state.waker.get() = Some(cx.waker().clone());
-            }
-            // Re-check after storing waker to avoid missed wakeup
-            if this.state.completed.load(Ordering::Acquire) {
-                let ret = this.state.rbio.ret as i32;
-                Poll::Ready(errcode::ret_to_result(ret).map(|_| ()))
-            } else {
-                Poll::Pending
-            }
-        }
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(self.ret)
     }
 }
 

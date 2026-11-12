@@ -6,12 +6,14 @@
 use crate::init::passes::RecoveryPass;
 use crate::btree::bkey::{pos, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans};
+use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
 use crate::c;
+use crate::data::ptrs::{BkeyVPtrs, Ptrs};
+use crate::util::alloc::KBox;
 use crate::data::ec::buf::{block_checksum, blocks_in, errs_only_dev_offline, errs_to_text, validate, MemWait, StripeBuf,
                            EC_BLOCKS_ALL, POST, PRE};
 use crate::data::ec::stripe::{ptr_matches_stripe, shape, MAX_BLOCKS};
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
@@ -24,13 +26,12 @@ use crate::util::task::{waiter, Resume, Waiter};
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use crate::{log_msg_ratelimited, prt};
-use core::ffi::c_int;
 use core::marker::PhantomData;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicI32, Ordering};
-use cstruct_macros::c_export;
+use cstruct_macros::args_stored_once;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
-use crate::format::{Btree, DataType};
+use crate::format::{Bpos, Btree, DataType};
 
 // ── Block IO ─────────────────────────────────────────────────────────────
 //
@@ -140,7 +141,7 @@ fn block_done<R: IoRefIdx>(ca: DevIoRef<R>, ptr: &c::bch_extent_ptr, submit_time
 
     match status {
         Err(e) => Some(e),
-        Ok(()) if ca.ptr_stale(ptr, &read_lock()).is_none_or(|n| n != 0) =>
+        Ok(()) if ca.dev_ptr_stale(ptr, &read_lock()) =>
             Some(ca.fs().err(bch_errcode::BCH_ERR_stripe_read_ptr_stale)),
         Ok(()) => None,
     }
@@ -211,7 +212,7 @@ where
             this.buf.err[PRE][idx] = Some(fs.err(bch_errcode::BCH_ERR_stripe_read_device_offline));
             return;
         };
-        if ca.ptr_stale(&ptr, &read_lock()).is_none_or(|n| n != 0) {
+        if ca.dev_ptr_stale(&ptr, &read_lock()) {
             this.buf.err[PRE][idx] = Some(fs.err(bch_errcode::BCH_ERR_stripe_read_ptr_stale));
             return;
         }
@@ -335,61 +336,95 @@ pub fn scrub_block(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: usize) -
 
 // ── The read path's reconstruct ──────────────────────────────────────────
 
-/// @rbio's extent read from its stripe instead - reconstructed from the rest
-/// of the stripe, its block having failed: bch2_ec_read_extent(). What went
-/// wrong into @msg, for the read's error message.
+/// @pick's extent - at @data_pos in @btree - read into @bio from its stripe instead:
+/// reconstructed from the rest of the stripe, its block having failed. What
+/// went wrong into @msg, for the read's error message.
 ///
-/// The stripe's pointers are checked for staleness while the btree locks are
-/// still held, the stripe key just read under them: a live stripe pointing
-/// into a reused bucket is an allocator inconsistency, open or not. After the
-/// IO, validate() checks again, and there the stripe being open is what makes
-/// a stale pointer one - the key may have been deleted while the IO was in
-/// flight.
-fn read_extent(trans: &BtreeTrans<'_>, rbio: &mut c::bch_read_bio, msg: &mut Printbuf) -> Result<(), BchError> {
-    // the extent we're reading for still locked, for the check below
-    trans.relock()?;
-    let fs = trans.fs();
-    assert!(rbio.pick.has_ec, "reconstructing a read of an extent with no stripe");
+/// The stripe's pointers are checked for staleness under the btree locks the
+/// stripe key was read with, the extent seen still pointing into it in the
+/// same transaction: a live stripe pointing into a reused bucket is an
+/// allocator inconsistency, open or not. The extent changed is the race a
+/// stale pointer is. After the IO, validate() checks again, and there the
+/// stripe being open is what makes a stale pointer one - the key may have
+/// been deleted while the IO was in flight.
+#[args_stored_once]
+pub(crate) async fn read_extent(fs: &Fs, btree: Btree, data_pos: Bpos, bio: Pin<&mut Bio>,
+                                pick: &c::extent_ptr_decoded, flags: c::bch_read_flags, msg: &mut Printbuf)
+    -> Result<(), BchError>
+{
+    let (key, mut buf, block) = reconstruct_start(fs, btree, data_pos, bio.raw().bi_iter, pick, flags, msg)?;
+    {
+        stack_pin_init!(let io = BlockIo::<_, waiter::Async>::read(fs, &mut buf));
+        {
+            let s = BkeySC::from(&key).arm::<c::Stripe>().expect("a stripe, as looked up");
+            for i in blocks_in(EC_BLOCKS_ALL & ((1u64 << s.v().nr_blocks) - 1) as u32) {
+                io.as_mut().submit(s, i);
+            }
+        }
+        io.as_mut().wait(Resume::SPAWNED).await;
+    }
+    reconstruct_finish(fs, &key, &mut buf, block, bio, flags, msg)
+}
 
+/// The stripe looked up and checked, and its buffer: everything before the IO.
+fn reconstruct_start(fs: &Fs, btree: Btree, data_pos: Bpos, iter: c::bvec_iter,
+                     pick: &c::extent_ptr_decoded, flags: c::bch_read_flags, msg: &mut Printbuf)
+    -> Result<(BkeyBuf, KBox<StripeBuf>, usize), BchError>
+{
+    assert!(pick.has_ec, "reconstructing a read of an extent with no stripe");
     let mut key = BkeyBuf::new();
-    let idx = rbio.pick.ec.idx();
-    let found = lockrestart_do(trans, |t| {
-        let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, idx), BtreeIterFlags::SLOTS);
-        let k = iter.peek_slot(t)?.expect("a slot always has a key");
-        Ok(k.arm::<c::Stripe>().map(|s| key.reassemble(s.untyped())).is_some())
-    });
-    if !matches!(found, Ok(true)) {
-        prt!(msg, "error looking up stripe\n");
-        return fs.throw(bch_errcode::BCH_ERR_stripe_reconstruct);
+    let mut stale = c::StripeBlockMask::default();
+    let found = {
+        let trans = crate::btree_trans!(fs);
+        lockrestart_do(&trans, |t| {
+            let mut iter = BtreeIter::new(t, btree, data_pos, BtreeIterFlags::empty());
+            // @pick may have been moved to the part of the extent read, with
+            // @data_pos: matched by where its data starts, as narrow_crcs does
+            let data_offset = data_pos.offset - u64::from(pick.crc.offset);
+            let extent = iter.peek_slot(t)?;
+            if !extent.is_some_and(|k| k.arm::<Ptrs>().is_some_and(|kp| kp.matches_ptr(fs, &pick.ptr, data_offset))) {
+                return Ok(None);
+            }
+
+            let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, pick.ec.idx()), BtreeIterFlags::SLOTS);
+            let Some(s) = iter.peek_slot(t)?.expect("a slot always has a key").arm::<c::Stripe>() else {
+                return Ok(Some(false));
+            };
+            key.reassemble(s.untyped());
+            stale = c::StripeBlockMask::default();
+            let rcu = read_lock();
+            for (i, p) in s.v().block_ptrs().iter().enumerate() {
+                if fs.dev_rcu(p.dev().into(), &rcu).is_some_and(|ca| ca.dev_ptr_stale(p, &rcu)) {
+                    stale.set(i);
+                }
+            }
+            Ok(Some(true))
+        })
+    };
+    match found {
+        Ok(Some(true)) => {}
+        Ok(None) => return Err(crate::data::read::stale(fs, flags)),
+        _ => {
+            prt!(msg, "error looking up stripe\n");
+            return fs.throw(bch_errcode::BCH_ERR_stripe_reconstruct);
+        }
     }
 
     let s = BkeySC::from(&key).arm::<c::Stripe>().expect("a stripe, as looked up");
-    if !ptr_matches_stripe(s, &rbio.pick) {
+    if !ptr_matches_stripe(s, pick) {
         prt!(msg, "pointer doesn't match stripe\n{}\n", s.to_text(fs));
         return fs.throw(bch_errcode::BCH_ERR_stripe_reconstruct);
     }
 
-    let block = usize::from(rbio.pick.ec.block());
-    let sectors = rbio.bio.bi_iter.bi_size >> 9;
-    let offset = (rbio.bio.bi_iter.bi_sector - s.v().block_ptrs()[block].offset()) as u32;
+    let block = usize::from(pick.ec.block());
+    let sectors = iter.bi_size >> 9;
+    let offset = (iter.bi_sector - s.v().block_ptrs()[block].offset()) as u32;
     if offset + sectors > u32::from(s.v().sectors.get()) {
         prt!(msg, "read is bigger than stripe\n{}\n", s.to_text(fs));
         return fs.throw(bch_errcode::BCH_ERR_stripe_reconstruct);
     }
 
-    let mut have_stale = false;
-    let mut stale = c::StripeBlockMask::default();
-    {
-        let rcu = read_lock();
-        for (i, p) in s.v().block_ptrs().iter().enumerate() {
-            if fs.dev_rcu(p.dev().into(), &rcu).is_some_and(|ca| ca.ptr_stale(p, &rcu).is_none_or(|n| n != 0)) {
-                stale.set(i);
-                have_stale = true;
-            }
-        }
-    }
-
-    if have_stale {
+    if stale != c::StripeBlockMask::default() {
         let mut m = log_msg_ratelimited!(fs);
         prt!(&mut m, "Stripe with stale pointer(s):\n{}", s.to_text(fs));
         count_fsck_err(fs, id::stale_dirty_ptr, &mut m);
@@ -397,40 +432,39 @@ fn read_extent(trans: &BtreeTrans<'_>, rbio: &mut c::bch_read_bio, msg: &mut Pri
                                      c::bch_run_recovery_pass_flags::from_bits_retain(0));
     }
 
-    // no btree locks held for stripe buffer allocations, or IO
-    trans.unlock();
-
     let Ok(mut buf) = StripeBuf::new(fs, s, EC_BLOCKS_ALL, offset, sectors, MemWait::Never) else {
         prt!(msg, "error allocating stripe data buffers\n{}\n", s.to_text(fs));
         return fs.throw(bch_errcode::BCH_ERR_stripe_reconstruct_enomem);
     };
     buf.stale = stale;
+    Ok((key, buf, block))
+}
 
-    read_sync(fs, s, &mut buf, EC_BLOCKS_ALL);
+/// The IO done: what it read checked, and @block's copied into @bio.
+fn reconstruct_finish(fs: &Fs, key: &BkeyBuf, buf: &mut StripeBuf, block: usize, mut bio: Pin<&mut Bio>,
+                      flags: c::bch_read_flags, msg: &mut Printbuf) -> Result<(), BchError> {
+    let s = BkeySC::from(key).arm::<c::Stripe>().expect("a stripe, as looked up");
+    let iter = bio.raw().bi_iter;
+    let (sectors, offset) = (iter.bi_size >> 9, (iter.bi_sector - s.v().block_ptrs()[block].offset()) as u32);
 
     // A block went stale under us: the stripe was deleted or replaced, so
     // the extent has changed. Retry, as a direct read of a stale pointer is.
-    let ret = validate(fs, s, &mut buf, false, EC_BLOCKS_ALL);
+    let ret = validate(fs, s, buf, false, EC_BLOCKS_ALL);
     if ret.is_err_and(|e| e == BchError::from(bch_errcode::BCH_ERR_stripe_reconstruct_stale_race)) {
-        return fs.throw(if rbio.flags & c::bch_read_flags::retry_if_stale.bits() as u16 != 0 {
-            bch_errcode::BCH_ERR_data_read_ptr_stale_retry
-        } else {
-            bch_errcode::BCH_ERR_data_read_ptr_stale_race
-        });
+        return Err(crate::data::read::stale(fs, flags));
     }
 
     if ret.is_ok() {
         let from = ((offset - buf.offset) as usize) << 9;
         let src = &buf.block(block)[from..from + ((sectors as usize) << 9)];
-        // SAFETY: the read's bio, where its data goes
-        unsafe { Bio::from_raw(&raw mut rbio.bio) }.range().copy_from(src);
+        bio.as_mut().range().copy_from(src);
     }
 
-    if ret.is_ok() && errs_only_dev_offline(&buf) {
+    if ret.is_ok() && errs_only_dev_offline(buf) {
         return Ok(());
     }
 
-    errs_to_text(msg, fs, s, &buf, false, EC_BLOCKS_ALL);
+    errs_to_text(msg, fs, s, buf, false, EC_BLOCKS_ALL);
 
     if buf.nr_failed(PRE) != 0 || buf.nr_failed(POST) != 0 {
         match ret {
@@ -439,12 +473,4 @@ fn read_extent(trans: &BtreeTrans<'_>, rbio: &mut c::bch_read_bio, msg: &mut Pri
         }
     }
     ret
-}
-
-/// # Safety
-/// @trans not in an attempt; @rbio and @msg the caller's.
-#[c_export]
-pub unsafe fn bch2_ec_read_extent(trans: &BtreeTrans<'_>, rbio: &mut c::bch_read_bio, _orig_k: BkeySC<'_>,
-                                  msg: &mut Printbuf) -> c_int {
-    ret_to_c(read_extent(trans, rbio, msg))
 }

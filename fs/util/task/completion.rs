@@ -70,17 +70,6 @@ pub mod waiter {
         pub fn of(cx: &mut Context<'_>) -> Self {
             Async(task_in(cx).expect("polled outside a task of ours"))
         }
-
-        /// @task, for its owner, making the Done of an IO it submits before
-        /// the task runs: a TaskSlot's, for the task to be.
-        ///
-        /// # Safety
-        /// @task waits on the Done, or drops its Completion: waited on
-        /// elsewhere, the IO would still wake @task, which may be gone. And
-        /// the task's made before the Done's completed.
-        pub unsafe fn of_ref(task: TaskRef) -> Self {
-            Async(task)
-        }
     }
 }
 

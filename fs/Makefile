@@ -64,7 +64,6 @@ clean-files += bch2_getdents_layout.h
 obj-$(CONFIG_BCACHEFS_FS)	+= bcachefs.o
 
 bcachefs-y		:=			\
-	data/read.o				\
 	data_structures/darray.o		\
 	debug/trace.o				\
 	errcode.o				\

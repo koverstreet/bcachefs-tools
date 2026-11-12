@@ -32,8 +32,7 @@ use crate::data_structures::inline_vec::InlineVec;
 use crate::types::CStatic;
 use crate::util::alloc::{init_at, kzalloc, KBox};
 use crate::util::kernel::PAGE_SECTORS_SHIFT;
-use crate::util::bio::{Bio, BioRange};
-use crate::util::ffi::Opaque;
+use crate::util::bio::BioRange;
 
 use super::buffered_write::{self, WriteBegun};
 use super::folio::{AddressSpaceOps, AopsVTable, Folio, FolioSpan, FolioStateGuard, LockedFolio, Mapping};
@@ -166,7 +165,7 @@ impl c::bch_folio_sector {
 
 impl Folio {
     /* for newly allocated folios: */
-    fn alloc_state(self) -> Option<NonNull<c::bch_folio>> {
+    pub(super) fn alloc_state(self) -> Option<NonNull<c::bch_folio>> {
         let size = size_of::<c::bch_folio>() + size_of::<c::bch_folio_sector>() * self.nr_sectors();
         let layout = Layout::from_size_align(size, align_of::<c::bch_folio>()).ok()?;
         let s = kzalloc(layout).ok()?.cast::<c::bch_folio>();
@@ -349,11 +348,6 @@ impl InodeInfo {
     }
 }
 
-#[c_export]
-pub fn bch2_bio_page_state_set(c: &Opaque<Fs>, bio: *mut c::bio, k: BkeySC<'_>) {
-    bio_page_state_set(Fs::from_c(c), unsafe { Bio::from_raw(bio) }.range(), k);
-}
-
 /// The sectors of @range's folios, set as @k has them.
 pub fn bio_page_state_set(fs: &Fs, range: BioRange<'_>, k: BkeySC<'_>) {
     let nr_ptrs = if k.k.key_type() == BkeyType::reflink_v {
@@ -448,8 +442,9 @@ impl Folio {
 }
 
 c_extern! {
-    // buffered.c's read path
+    // buffered.c's
     fn bch2_read_folio(file: *mut c::file, folio: *mut c::folio) -> c_int;
+    // buffered.rs's, by the C signature #[c_export] gives it
     fn bch2_readahead(ractl: *mut c::readahead_control);
 }
 

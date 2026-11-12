@@ -6,7 +6,6 @@
 #include "btree/bkey.h"
 #include "data/durability_gen.h"
 #include "data/extents_gen.h"
-#include "data/inline_data_gen.h"
 #include "data/ptrs_gen.h"
 
 

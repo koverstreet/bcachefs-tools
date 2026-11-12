@@ -44,17 +44,17 @@
 
 use crate::c::{self, bbuf_type as bb, bch_compression_opts as opts, bch_errcode as e};
 use crate::{bch_err, btree::iter::lockrestart_do, btree_trans, fs::{Fs, SbLockGuard}, fsck_err};
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
 use crate::util::{alloc::{AllocBox, KVmalloc}, bio::{Bio, BioRange},
-                  ffi::Opaque, kernel::{unlikely, READ, WRITE}, late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
+                  kernel::{unlikely, READ, WRITE}, late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
                   volatile::VolatileSlice, Printbuf, ToText};
 use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
-use cstruct_macros::{c_export, bitfield, c_enum, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, c_enum, CStruct, TypeInfo};
 use crate::types::c_default;
 use nestify::nest;
 use crate::format::{Bpos, CompressionType, SbFeature};
@@ -494,23 +494,18 @@ pub(crate) fn decompress_err(fs: &Fs, ret: Result<(), BchError>) -> Result<(), B
     ret
 }
 
-/// # Safety
-/// @src and @dst are bios, @dst_iter a position of @dst.
-#[c_export]
-pub unsafe fn bch2_bio_uncompress(c: &Opaque<Fs>, src: *mut c::bio, dst: *mut c::bio,
-                                  dst_iter: c::bvec_iter, crc: c::bch_extent_crc_unpacked) -> c_int {
-    let fs = Fs::from_c(c);
-    // SAFETY: the caller's
-    let (src, dst) = unsafe { (Bio::from_raw(src), Bio::from_raw(dst).range_at(dst_iter)) };
+/// @src, the compressed extent, decompressed into @dst.
+pub fn bio_uncompress(fs: &Fs, src: BioRange<'_>, dst: BioRange<'_>, crc: c::bch_extent_crc_unpacked)
+    -> Result<(), BchError>
+{
     let dst_len = (crc.uncompressed_size as usize) << 9;
 
     assert!(dst.len() as usize + ((crc.offset as usize) << 9) <= dst_len,
             "decompressing {} bytes at sector {} of an extent of {dst_len}", dst.len(), crc.offset);
-    assert_eq!(src.raw().bi_iter.bi_size, crc.compressed_size << 9,
-               "decompressing a bio that isn't the compressed extent");
+    assert_eq!(src.len(), crc.compressed_size << 9, "decompressing a bio that isn't the compressed extent");
 
     if (crc.uncompressed_size.max(crc.compressed_size) as usize) << 9 > extent_max(fs) {
-        return ret_to_c(decompress_err(fs, fs.throw(e::BCH_ERR_decompress_exceeded_max_encoded_extent)));
+        return decompress_err(fs, fs.throw(e::BCH_ERR_decompress_exceeded_max_encoded_extent));
     }
 
     let dst_buf = if dst.len() as usize == dst_len {
@@ -518,13 +513,13 @@ pub unsafe fn bch2_bio_uncompress(c: &Opaque<Fs>, src: *mut c::bio, dst: *mut c:
     } else {
         bounce_alloc(fs, dst_len, WRITE)
     };
-    let src_buf = map_or_bounce(fs, src.range(), READ);
+    let src_buf = map_or_bounce(fs, src, READ);
 
     let ret = decompress_err(fs, buf_uncompress(fs, dst_buf.data(), src_buf.data(), &crc));
     if ret.is_ok() && !dst_buf.mapped() {
         dst.copy_from_volatile(dst_buf.data().sub(((crc.offset as usize) << 9)..dst_len));
     }
-    ret_to_c(ret)
+    ret
 }
 
 // ── Compression ──────────────────────────────────────────────────────────
