@@ -135,7 +135,7 @@ where
     {
         let home = ManuallyDrop::new(self).home;
         unsafe {
-            let task = init_task::<H, _, A>(home, at, make(home.as_ref()), done)?;
+            let task = init_task::<H, _, A>(home, at, move || make(home.as_ref()), done)?;
             Ok(TaskBox { home, task, free: free::<H, FutureOf<M, H>, A>, _q: PhantomData })
         }
     }
@@ -189,8 +189,7 @@ where
     unsafe fn make(self, q: &'q Queue, make: M) -> TaskRef {
         let home = ManuallyDrop::new(self).home;
         unsafe {
-            let future = make(Pin::new_unchecked(&mut *home.as_ptr()));
-            init_task::<H, _, A>(home, Spawn::Queue(q), future, None)
+            init_task::<H, _, A>(home, Spawn::Queue(q), move || make(Pin::new_unchecked(&mut *home.as_ptr())), None)
         }.expect("a queue's task: only a thread's fails to start")
     }
 }
@@ -248,18 +247,25 @@ where
     }
 }
 
-/// The task of @future in @home's box, to run @at: the box freed if it can't
-/// be made.
+/// The task of @make's future in @home's box, to run @at: the box freed if it
+/// can't be made.
 ///
 /// # Safety
-/// @home is alloc_mem::<H, F, A>()'s, its task not made, and @future borrows
-/// nothing of it but the home.
+/// @home is alloc_mem::<H, F, A>()'s, its task not made, and @make's future
+/// borrows nothing of it but the home.
 unsafe fn init_task<'q, H, F: Future<Output = ()> + Send, A: Alloc + Copy>(
-    home: NonNull<H>, at: Spawn<'q, '_>, future: F, done: Option<unsafe fn(NonNull<H>)>,
+    home: NonNull<H>, at: Spawn<'q, '_>, make: impl FnOnce() -> F, done: Option<unsafe fn(NonNull<H>)>,
 ) -> Result<TaskRef, BchError> {
     unsafe {
         let w = WithTask::<'q, H, F, A>::of_home(home).as_ptr();
         (&raw mut (*w).done).write(done);
+        // made where it lives: a future is its whole state machine, and a
+        // move of one is a copy of all of it - what's moved here is what
+        // @make holds, its args
+        let future = ::pin_init::pin_init_from_closure(move |slot: *mut F| {
+            slot.write(make());
+            Ok::<_, core::convert::Infallible>(())
+        });
         let task = Task::new(at, future, task_done::<H, F, A>);
         if let Err(e) = init_at(task, (&raw mut (*w).task).cast()) {
             free_slot::<H, F, A>(home);
