@@ -84,7 +84,7 @@ pub struct MemquotaType {
     pub limits:       [QuotaLimit; c::Q_COUNTERS as usize],
     #[pin]
     pub(crate) lock:  Locked<c::mutex>,
-    pub(crate) table: SharedGenRadix<crate::locking::LockedBy<Memquota>>,
+    pub(crate) table: SharedGenRadix<crate::locking::LockedBy<Memquota, (), MemquotaType>>,
 }
 
 impl MemquotaType {
@@ -217,7 +217,7 @@ mod vfs {
     use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitOpts, LoopFlow,
                              TransAttempt, UpdateTriggerFlags};
     use crate::errcode::{bch_errcode, ret_to_class};
-    use crate::locking::ExclusiveGuard;
+    use crate::locking::{ExclusiveGuard, Guard as _};
     use crate::sb::io::SbResize;
     use crate::util::ffi::c_char;
     use crate::util::kernel::ktime_get_real_seconds;
@@ -379,6 +379,18 @@ mod vfs {
         _guard: ExclusiveGuard<'a, c::mutex>,
     }
 
+    // its type's lock, and its type: what its counters name
+    unsafe impl crate::locking::Guard for Locked<'_> {
+        type Name = c::MemquotaType;
+        type Root = c::MemquotaType;
+
+        fn root(&self) -> &c::MemquotaType {
+            self.q
+        }
+    }
+
+    unsafe impl crate::locking::Alone for Locked<'_> {}
+
     impl<'a> Locked<'a> {
         fn new(fs: &'a Fs, qtype: usize) -> Self {
             let q = fs.quotas.get(qtype);
@@ -386,21 +398,17 @@ mod vfs {
         }
 
         fn get(&self, idx: usize) -> Option<&c::Memquota> {
-            // SAFETY: the lock's - this type's counters are only touched
-            // under it
-            self.q.table.get(idx).map(|e| unsafe { e.protected() })
+            self.q.table.get(idx).map(|e| self.get_of(e))
         }
 
         /// @idx's entry, which the caller preallocated.
         fn get_mut(&mut self, idx: usize) -> &mut c::Memquota {
-            let e = self.q.table.get(idx).expect("preallocated");
-            // SAFETY: as get()'s, and &mut self
-            unsafe { e.protected_mut() }
+            let q = self.q;
+            self.get_mut_of(q.table.get(idx).expect("preallocated"))
         }
 
         fn iter_from(&self, idx: usize) -> impl Iterator<Item = (usize, &c::Memquota)> {
-            // SAFETY: as get()'s
-            self.q.table.iter_from(idx).map(|(pos, e)| (pos, unsafe { e.protected() }))
+            self.q.table.iter_from(idx).map(move |(pos, e)| (pos, self.get_of(e)))
         }
 
         /// Whether @idx may have @v more of @counter, and the warnings that
