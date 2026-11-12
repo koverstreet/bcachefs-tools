@@ -868,7 +868,7 @@ pub(crate) unsafe fn to_wbio<'a>(bio: *mut c::bio) -> &'a mut c::bch_write_bio {
 /// As to_wbio()'s.
 pub(crate) unsafe fn wbio_init<'a>(bio: *mut c::bio) -> &'a mut c::bch_write_bio {
     let wbio = unsafe { to_wbio(bio) };
-    unsafe { core::ptr::write_bytes(&raw mut wbio.wbio, 0, 1) };
+    wbio.wbio = ::pin_init::zeroed();
     wbio
 }
 
