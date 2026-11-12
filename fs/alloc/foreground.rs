@@ -30,9 +30,7 @@
 //!
 //! The hash is OPEN_BUCKETS_COUNT slots, each the head of a chain through
 //! the open buckets' ->hash, 0 ending it, a bucket's slot hash_64() of its
-//! (dev, bucket). C finds the slot here too - bch2_open_bucket_hash(), for
-//! open_bucket_hashslot() - so the two can't disagree. It's written under
-//! freelist_lock and read without it - by C's bch2_bucket_is_open() too -
+//! (dev, bucket). It's written under freelist_lock and read without it -
 //! each slot and link once, volatile, and each bucket's identity whole. A
 //! bucket opened or closed while we look may be seen or missed: a caller for
 //! whom that matters looks again under the lock, bucket_is_open_safe().
@@ -93,7 +91,7 @@ use core::convert::Infallible;
 use core::ops::Deref;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
-use cstruct_macros::{c_export, bitfield, c_enum, CStruct};
+use cstruct_macros::{bitfield, c_enum, CStruct};
 use nestify::nest;
 
 #[repr(C)]
@@ -471,7 +469,7 @@ impl c::open_bucket {
 
 impl c::bch_fs_allocator {
     fn hash_slot(&self, dev: u32, bucket: u64) -> &Volatile<Option<c::OpenBucketIdx>> {
-        &self.open_buckets_hash[bch2_open_bucket_hash(dev, bucket) as usize]
+        &self.open_buckets_hash[open_bucket_hash(dev, bucket)]
     }
 
     /// @ob into the hash, at its chain's head.
@@ -1339,7 +1337,6 @@ impl c::open_buckets {
 }
 
 /// @dev's @bucket's slot in the open buckets' hash.
-#[c_export]
-pub fn bch2_open_bucket_hash(dev: c_uint, bucket: u64) -> c_uint {
-    hash_64(Fold::of(&(dev, bucket)), c::OPEN_BUCKETS_COUNT.ilog2()) as c_uint
+fn open_bucket_hash(dev: c_uint, bucket: u64) -> usize {
+    hash_64(Fold::of(&(dev, bucket)), c::OPEN_BUCKETS_COUNT.ilog2()) as usize
 }
