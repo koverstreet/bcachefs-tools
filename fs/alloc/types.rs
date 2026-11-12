@@ -396,7 +396,7 @@ pub struct write_point_io {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, CStruct)]
 pub struct write_point_specifier {
     pub v: c_ulong,
 }

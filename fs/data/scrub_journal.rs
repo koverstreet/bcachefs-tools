@@ -17,7 +17,7 @@ use crate::data::moving::{key_sectors, MoveStats, Moving, MovingCtxt};
 use crate::data::ptrs::{extents_match, BkeyVPtrs, Ptrs};
 use crate::data::update_index::remap_bits;
 use crate::errcode::BchError;
-use crate::fs::{writepoint_ptr, Fs};
+use crate::fs::Fs;
 use crate::init::damage;
 use crate::init::error::id;
 use crate::init::recovery::btree_lost_data;
@@ -533,7 +533,7 @@ pub fn do_repairs(fs: &Fs) {
     let stats = MoveStats::default();
     stats.reset();
 
-    let Ok(ctxt) = MovingCtxt::new(fs, &stats, writepoint_ptr(&fs.allocator.reconcile_write_point), true) else {
+    let Ok(ctxt) = MovingCtxt::new(fs, &stats, c::write_point_specifier::RECONCILE, true) else {
         bch_err!(fs, "journal scrub: no memory for a moving context, not repairing {} extents/btree nodes",
                  repairs.len());
         return;

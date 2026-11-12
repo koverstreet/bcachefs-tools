@@ -9,8 +9,8 @@
 //! bch2_alloc_sectors_req() until bch2_alloc_sectors_done() - see
 //! sector_alloc.rs.
 //!
-//! A write names one by a specifier (WritePointSpec): a pointer to it - the
-//! btree's, copygc's and reconcile's own - or a hashed value, bit 0 set, for
+//! A write names one by a specifier (WritePointSpec): by name - the btree's,
+//! copygc's or reconcile's own - or by a hashed value, bit 0 set, for
 //! which one of write_points[0..nr] is found, or the least recently used
 //! given it. Those are in a hash by the specifier each was last used for,
 //! write_points_hash_lock's to change, walked without it: write points are
@@ -45,18 +45,24 @@ pub(crate) type WritePointGuard<'a> = ExclusiveGuard<'a, Lockdep<ByteLock>, c::W
 /// A write point, as a write names it.
 #[derive(Clone, Copy)]
 pub(crate) enum WritePointSpec<'a> {
-    Ptr(&'a c::write_point),
+    Named(&'a c::write_point),
     Hashed(c_ulong),
 }
 
 impl c::write_point_specifier {
-    /// # Safety
-    /// Unless it's hashed - bit 0 set - it's a writepoint_ptr() of one of
-    /// @fs's write points.
-    pub(crate) unsafe fn spec(self, _fs: &Fs) -> WritePointSpec<'_> {
-        match self.v & 1 {
-            0 => WritePointSpec::Ptr(unsafe { &*(self.v as *const c::write_point) }),
-            _ => WritePointSpec::Hashed(self.v),
+    /// The filesystem's own write points, by name; hashed specifiers - bit 0
+    /// set - are writepoint_hashed()'s.
+    pub const BTREE: Self     = Self { v: 2 };
+    pub const COPYGC: Self    = Self { v: 4 };
+    pub const RECONCILE: Self = Self { v: 6 };
+
+    pub(crate) fn spec(self, fs: &Fs) -> WritePointSpec<'_> {
+        match self {
+            Self::BTREE     => WritePointSpec::Named(&fs.allocator.btree_write_point),
+            Self::COPYGC    => WritePointSpec::Named(&fs.copygc.write_point),
+            Self::RECONCILE => WritePointSpec::Named(&fs.allocator.reconcile_write_point),
+            Self { v } if v & 1 != 0 => WritePointSpec::Hashed(v),
+            Self { v } => panic!("write point specifier {v:#x}: neither hashed nor one of the filesystem's write points"),
         }
     }
 }
@@ -165,7 +171,7 @@ impl Fs {
         true
     }
 
-    /// The write point @spec names, locked: a pointer's, or for a hashed
+    /// The write point @spec names, locked: the one named, or for a hashed
     /// specifier the write point last used for it - or the least recently
     /// used, given it, the write points in use grown first if they may be.
     /// Waiting for its lock may drop the btree locks: the caller relocks.
@@ -174,7 +180,7 @@ impl Fs {
     {
         let a = &self.allocator;
         let write_point = match spec {
-            WritePointSpec::Ptr(wp) => return (wp, wp.alloc.lock.lock_trans_norelock(t)),
+            WritePointSpec::Named(wp) => return (wp, wp.alloc.lock.lock_trans_norelock(t)),
             WritePointSpec::Hashed(v) => v,
         };
 

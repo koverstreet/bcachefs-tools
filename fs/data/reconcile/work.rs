@@ -70,7 +70,7 @@ use crate::data::reconcile::plan::{park, parks_on, pending_mod, plan, Plan};
 use crate::data::reconcile::scan::ScanCookie;
 use crate::data::reconcile::trigger::{rb_work_to_data_pos, reconcile_bp_get_key};
 use crate::errcode::BchError;
-use crate::fs::{writepoint_ptr, Fs};
+use crate::fs::Fs;
 use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
 use crate::debug::trace::events;
 use crate::prt;
@@ -646,7 +646,7 @@ impl<'a, 'f> Walker<'a, 'f> {
 /// done - or anything fails: the next pass tries again. reconcile_phys_dev().
 fn phys_dev(fs: &Fs, phase: &Phase, dev: u32) -> Result<(), BchError> {
     let stats = MoveStats::default();
-    let ctxt = MovingCtxt::new(fs, &stats, writepoint_ptr(&fs.allocator.reconcile_write_point), true)?;
+    let ctxt = MovingCtxt::new(fs, &stats, c::write_point_specifier::RECONCILE, true)?;
     let mut walker = Walker::new(&ctxt)?;
     let mut work_pos = c::bbpos { btree: phase.btree, pos: pos(dev.into(), 0) };
 
@@ -999,7 +999,7 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
         return Ok(());
     }
 
-    let ctxt = MovingCtxt::new(fs, &fs.reconcile.work_stats, writepoint_ptr(&fs.allocator.reconcile_write_point),
+    let ctxt = MovingCtxt::new(fs, &fs.reconcile.work_stats, c::write_point_specifier::RECONCILE,
                                true)?;
     let r = Reconciler { fs, me, ctxt, copygc_runs_unparked: Cell::new(0) };
 

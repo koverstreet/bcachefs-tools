@@ -67,7 +67,7 @@ use crate::c;
 use crate::c::bch_errcode;
 use crate::data::moving::{MoveStats, MovingCtxt};
 use crate::errcode::BchError;
-use crate::fs::{writepoint_ptr, Fs};
+use crate::fs::Fs;
 use crate::debug::trace::events;
 use crate::types::{Fifo, RustOnly, rust_only};
 use crate::prt;
@@ -748,7 +748,7 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
 
     let stats = MoveStats::default();
     stats.reset();
-    let ctxt = bch_err_msg!(fs, MovingCtxt::new(fs, &stats, writepoint_ptr(&fs.copygc.write_point), false),
+    let ctxt = bch_err_msg!(fs, MovingCtxt::new(fs, &stats, c::write_point_specifier::COPYGC, false),
                             "allocating copygc's moving context")?;
     let mut cg = Copygc { fs, me, ctxt, set, in_flight: Fifo::new() };
     let clock = &fs.io_clock[WRITE];

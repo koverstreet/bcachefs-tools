@@ -25,7 +25,7 @@ use crate::debug::trace::events;
 use crate::errcode::{bch_errcode, BchError};
 use crate::{POS_MIN, SPOS_MAX};
 use crate::format::{BkeyType, Bpos, DataType};
-use crate::fs::{writepoint_ptr, Fs};
+use crate::fs::Fs;
 use crate::locking::six::{six_lock_increment_ip, six_unlock_ip, SixHold};
 use crate::prt;
 use crate::util::closure::StackClosure;
@@ -223,7 +223,7 @@ impl InteriorUpdate<'_> {
         let ret: Result<(), BchError> = (|| {
             let t = unsafe { trans.attempt_in_progress() };
             let mut wp = loop {
-                let wp = paths.lend(|| t.alloc_sectors(req, writepoint_ptr(&fs.allocator.btree_write_point)))?;
+                let wp = paths.lend(|| t.alloc_sectors(req, c::write_point_specifier::BTREE))?;
                 if wp.sectors_free() >= fs.btree_sectors() {
                     break wp;
                 }

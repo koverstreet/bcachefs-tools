@@ -339,10 +339,7 @@ impl<'f> TransAttempt<'_, 'f> {
     pub fn alloc_sectors(&self, req: &mut c::alloc_request, write_point: c::write_point_specifier)
         -> Result<LockedWritePoint<'f>, BchError>
     {
-        // SAFETY: a write's specifier is writepoint_hashed()'s, or
-        // writepoint_ptr()'s of one of the filesystem's write points
-        let spec = unsafe { write_point.spec(self.fs()) };
-        let (wp, g) = self.alloc_sectors_req(req, spec)?;
+        let (wp, g) = self.alloc_sectors_req(req, write_point.spec(self.fs()))?;
         Ok(LockedWritePoint { fs: self.fs(), wp, g: Some(g) })
     }
 }
