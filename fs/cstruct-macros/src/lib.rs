@@ -413,11 +413,12 @@ fn maybe_zeroable(def: &cstruct::CStructDef) -> TokenStream {
 }
 
 /// One of core::sync::atomic's integer, bool or pointer atomics, by any path
-/// - or an array of one - or data_structures/bitmap.rs's AtomicULong, AtomicUsize as C's
-/// unsigned long.
+/// - or an array of one, of any depth - or data_structures/bitmap.rs's
+/// AtomicULong, AtomicUsize as C's unsigned long.
 pub(crate) fn is_core_atomic(ty: &str) -> bool {
     let ty = ty.trim();
-    let ty = ty.strip_prefix('[').and_then(|t| t.split(';').next()).unwrap_or(ty);
+    let elem = ty.trim_start_matches(|c: char| c == '[' || c.is_whitespace());
+    let ty = if elem.len() < ty.len() { elem.split(';').next().unwrap_or(elem) } else { ty };
     let name = ty.trim().split('<').next().unwrap_or("").rsplit("::").next().unwrap_or("").trim();
     matches!(name, "AtomicBool" | "AtomicPtr" | "AtomicU8" | "AtomicI8" | "AtomicU16" | "AtomicI16" |
                    "AtomicU32" | "AtomicI32" | "AtomicU64" | "AtomicI64" | "AtomicUsize" | "AtomicIsize" |
