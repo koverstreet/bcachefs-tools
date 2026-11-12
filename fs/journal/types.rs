@@ -740,8 +740,6 @@ pub struct journal_device {
     #[c("struct work_struct discard")]
     #[pin]
     pub(crate) discard: ReffedWork<discard_work, crate::field!(super.io_ref[WRITE])>,
-
-    pub highest_seq_found: u64,
 }
 
 unsafe impl Send for journal_device {}

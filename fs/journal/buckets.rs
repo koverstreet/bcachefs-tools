@@ -45,6 +45,8 @@ pub struct JournalRing {
      * again, and dropped once reclaim has them awaiting discard
      */
     retired: KVVec<u64>,
+    /* the journal read's: the newest seq it's found, in cur */
+    highest_seq_found: u64,
 }
 
 impl JournalRing {
@@ -203,6 +205,16 @@ impl JournalRing {
         self.cursors[CUR as usize] = i;
     }
 
+    /// Bucket @i cur, if @seq, read from it, is the newest found yet.
+    pub fn set_cur_if_newest(&mut self, i: u32, seq: u64) -> bool {
+        let newest = seq > self.highest_seq_found;
+        if newest {
+            self.highest_seq_found = seq;
+            self.set_cur(i);
+        }
+        newest
+    }
+
     /// Every bucket but cur dirty: reclaim works out which aren't.
     pub fn start(&mut self) {
         let first = self.next(self.idx(CUR));
@@ -283,6 +295,7 @@ pub fn new() -> JournalBuckets {
         seq:     KVVec::new(),
         cursors: [0; STAGES.len()],
         retired: KVVec::new(),
+        highest_seq_found: 0,
     };
     LockedBy::new(ring, pin_init::Zeroable::zeroed())
 }
@@ -318,11 +331,6 @@ impl c::journal {
 impl c::journal_device {
     pub fn nr(&self) -> u32 {
         self.buckets.get()
-    }
-
-    /// Before the journal starts: through the only reference to it.
-    pub fn ring_mut(&mut self) -> &mut JournalRing {
-        self.buckets.get_mut()
     }
 }
 
