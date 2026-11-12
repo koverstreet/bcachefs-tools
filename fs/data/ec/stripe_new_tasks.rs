@@ -45,7 +45,7 @@ struct OldStripeLost {
 
 #[args_stored_once]
 pub(crate) async fn stripe_task(fs: &Fs, s: &StripeNew) {
-    let at = Resume::Queue(&fs.ec.stripe_create_wq);
+    let at = Resume::queue(&fs.ec.stripe_create_wq);
     stack_pin_init!(let w = Working::new());
     let w = w.get_mut();
 

@@ -108,11 +108,40 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 use core::task::{Context, ContextBuilder, Poll, Waker};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 
+/// Where an await resumes its task: one word, in every await - a queue, or
+/// a value no queue is at.
 #[derive(Clone, Copy)]
-pub enum Resume<'a> {
+pub struct Resume<'a>(NonNull<Queue>, PhantomData<&'a Queue>);
+
+unsafe impl Send for Resume<'_> {}
+unsafe impl Sync for Resume<'_> {}
+
+/// A Resume, to match on.
+pub enum ResumeAt<'a> {
     Inline,
     Queue(&'a Queue),
     Spawned,
+}
+
+impl<'a> Resume<'a> {
+    pub const INLINE: Self = Self::at(1);
+    pub const SPAWNED: Self = Self::at(2);
+
+    const fn at(v: usize) -> Self {
+        Resume(unsafe { NonNull::new_unchecked(core::ptr::without_provenance_mut(v)) }, PhantomData)
+    }
+
+    pub const fn queue(q: &'a Queue) -> Self {
+        Resume(unsafe { NonNull::new_unchecked(core::ptr::from_ref(q).cast_mut()) }, PhantomData)
+    }
+
+    pub fn get(self) -> ResumeAt<'a> {
+        match self.0.as_ptr().addr() {
+            1 => ResumeAt::Inline,
+            2 => ResumeAt::Spawned,
+            _ => ResumeAt::Queue(unsafe { self.0.as_ref() }),
+        }
+    }
 }
 
 pub trait Resumable {
@@ -165,10 +194,10 @@ impl<A: Resumable> Future for Resumed<'_, A> {
         };
 
         let header = unsafe { task.0.as_ref() };
-        let ours = match *this.target {
-            Resume::Inline => Target::Inline,
-            Resume::Queue(q) => Target::Queue(NonNull::from(q)),
-            Resume::Spawned => return this.inner.poll_resume(cx),
+        let ours = match this.target.get() {
+            ResumeAt::Inline => Target::Inline,
+            ResumeAt::Queue(q) => Target::Queue(NonNull::from(q)),
+            ResumeAt::Spawned => return this.inner.poll_resume(cx),
         };
         match *this.recorded {
             None => *this.recorded = Some(Recorded { task, ours, prev: header.target.get() }),
@@ -200,7 +229,7 @@ impl<A> PinnedDrop for Resumed<'_, A> {
 }
 
 pub fn requeue(q: &Queue) -> Resumed<'_, Requeue> {
-    Requeue { done: Done::completed(), parked: false }.resume_on(Resume::Queue(q))
+    Requeue { done: Done::completed(), parked: false }.resume_on(Resume::queue(q))
 }
 
 /// Pending once, on a Done that's done: run() moves the task to its target.

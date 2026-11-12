@@ -22,7 +22,7 @@
 //! - a wake in a poll dispatching the task rather than marking it NOTIFIED
 //!   -> passes: the shim's non-reentrancy covers for it. An inline wake,
 //!   which bypasses the workqueue, made it fail; that test goes until
-//!   Resume::Inline is implemented again.
+//!   Resume::INLINE is implemented again.
 //!
 //! Both share `Queue::system_dfl()`, so a task wedged by one can starve the
 //! other: a single fault can show up as two failures.

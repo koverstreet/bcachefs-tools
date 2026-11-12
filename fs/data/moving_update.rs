@@ -98,7 +98,7 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
         return;
     }
 
-    u.turn().wait(Resume::Spawned).await;
+    u.turn().wait(Resume::SPAWNED).await;
 
     let write_io = {
         let (moving, size) = moving_size(&u);

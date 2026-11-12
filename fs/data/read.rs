@@ -57,7 +57,7 @@ pub async fn read(rbio: &mut c::bch_read_bio, inum: c::subvol_inum, flags: F) ->
         let trans = crate::btree_trans!(fs);
         unsafe { bch2_read(trans.raw(), rbio, (*bio).bi_iter, inum, null_mut(), null_mut(), flags) };
     }
-    done.resume_on(Resume::Spawned).await;
+    done.resume_on(Resume::SPAWNED).await;
     ret_to_result_void(rbio.ret.into())
 }
 

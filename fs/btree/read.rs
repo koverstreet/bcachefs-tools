@@ -1120,7 +1120,7 @@ pub async fn read_replicas(reads: &mut [ReplicaRead<'_>]) -> Replicas<Result<(),
 
     let mut ret = Replicas::new();
     for s in submitted {
-        ret.push(s.resume_on(Resume::Spawned).await);
+        ret.push(s.resume_on(Resume::SPAWNED).await);
     }
     ret
 }

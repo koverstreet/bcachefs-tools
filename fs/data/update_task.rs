@@ -307,14 +307,14 @@ impl Body {
             drop(read);
             return Err(e);
         }
-        read.resume_on(Resume::Spawned).await;
+        read.resume_on(Resume::SPAWNED).await;
         Ok(())
     }
 
     /// Waits for the read the spawner issued.
     pub async fn read(&mut self) {
         let read = self.read.take().expect("read awaited once");
-        read.resume_on(Resume::Spawned).await
+        read.resume_on(Resume::SPAWNED).await
     }
 
     /// Issues the write, if read_done() says there is one, and waits for it.
@@ -324,7 +324,7 @@ impl Body {
             // SAFETY: not tied to the Body, which the write is lent
             let write = Completion::new(unsafe { &mut (*self.up.as_ptr()).write }, waiter);
             c::data_update::write(self);
-            write.resume_on(Resume::Spawned).await
+            write.resume_on(Resume::SPAWNED).await
         }
     }
 

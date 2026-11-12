@@ -150,7 +150,7 @@ async fn read_splits(fs: &Fs, opts: c::bch_inode_opts, subvol: u32, err_report: 
             Ok(())
         });
 
-    splits.wait(Resume::Inline).await.and(started)
+    splits.wait(Resume::INLINE).await.and(started)
 }
 
 #[in_place(DioFut)]
