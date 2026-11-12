@@ -433,7 +433,8 @@ impl FolioStateGuard<'_> {
 
 impl Folio {
     fn release_state(self) {
-        let inode = self.mapping().expect("a folio in the page cache").inode();
+        let mapping = self.mapping().expect("a folio in the page cache");
+        let inode = mapping.inode();
 
         inode.undirty_folio(FolioSpan::whole(self));
 
@@ -484,7 +485,10 @@ impl AddressSpaceOps for InodeInfo {
     fn write_begin(_w: VfsWriter, mapping: Mapping, pos: c::loff_t, len: c_uint,
                    foliop: &mut *mut c::folio, fsdata: &mut *mut c_void) -> Result<(), BchError> {
         *fsdata = core::ptr::null_mut();
-        let (folio, begun) = buffered_write::write_begin(mapping.inode(), mapping, pos as u64, len as usize)?;
+        // 'static for WriteBegun's guards: the VFS holds the inode from here
+        // to write_end(), which they're given back to
+        let inode = unsafe { &*core::ptr::from_ref(mapping.inode()) };
+        let (folio, begun) = buffered_write::write_begin(inode, mapping, pos as u64, len as usize)?;
         *foliop = folio.into_raw();
         *fsdata = KBox::into_raw(begun).cast();
         Ok(())

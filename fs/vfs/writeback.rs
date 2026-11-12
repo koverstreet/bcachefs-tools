@@ -233,7 +233,8 @@ fn throttle_writes(fs: &Fs, cl: &StackClosure) {
 }
 
 fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState) -> c_int {
-    let inode = folio.mapping().expect("a folio in writeback with no mapping").inode();
+    let mapping = folio.mapping().expect("a folio in writeback with no mapping");
+    let inode = mapping.inode();
     let fs = inode.fs();
     let mut nr_replicas_this_write = u32::MAX;
     let i_size = inode.v.size();

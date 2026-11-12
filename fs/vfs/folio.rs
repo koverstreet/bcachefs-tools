@@ -420,7 +420,7 @@ impl Mapping {
         self.0.as_ptr()
     }
 
-    pub fn inode<'a>(self) -> &'a InodeInfo {
+    pub fn inode(&self) -> &InodeInfo {
         unsafe { InodeInfo::from_inode((*self.as_ptr()).host) }
     }
 
