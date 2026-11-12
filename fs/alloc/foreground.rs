@@ -19,8 +19,7 @@
 //!
 //! A block of a stripe being made that a writer has claimed is open past its
 //! last put, for the stripe: an EcOpenBucket, the other owning handle, which
-//! closes it. Both deref to an OpenBucketRef, the bucket borrowed - which is
-//! also what one C holds a pin on is, borrowed from C: from_c(), from_idx().
+//! closes it. Both deref to an OpenBucketRef, the bucket borrowed.
 //!
 //! What an open bucket is for: buckets partly written, for sub-bucket
 //! allocations - the sector allocator's write points and partial list - and

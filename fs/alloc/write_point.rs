@@ -5,9 +5,7 @@
 //!
 //! A write point holds open buckets, one per copy, that writes append to:
 //! with what a write allocating from it uses, WritePointLocked, under its
-//! lock, held for a write: by a LockedWritePoint, or for a C caller, by
-//! bch2_alloc_sectors_req() until bch2_alloc_sectors_done() - see
-//! sector_alloc.rs.
+//! lock, held for a write by a LockedWritePoint - see sector_alloc.rs.
 //!
 //! A write names one by a specifier (WritePointSpec): by name - the btree's,
 //! copygc's or reconcile's own - or by a hashed value, bit 0 set, for

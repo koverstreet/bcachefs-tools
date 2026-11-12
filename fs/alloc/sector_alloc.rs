@@ -22,8 +22,7 @@
 //! append_ptrs() gives the write its pointers - or unwritten_extent(), for
 //! fallocate and data updates, an extent of space not written yet - and
 //! whose drop - as alloc_sectors_done() - keeps what's left of the buckets
-//! for the next write. C's callers have it locked by bch2_alloc_sectors_req()
-//! and use foreground.h's own append_ptrs and done, until they convert.
+//! for the next write.
 
 use crate::alloc::disk_groups::Target;
 use crate::alloc::write_point::{WritePointGuard, WritePointSpec};
