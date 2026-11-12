@@ -520,7 +520,7 @@ mod tests {
         let buf = [5u8; 512];
         let mut bio = BioBox::<Bio>::new::<BchError, _>(core::ptr::null_mut(), 1,
                                                         c::req_op_REQ_OP_WRITE, |b| b.init()).unwrap();
-        let m = unsafe { bio.remap_write(&buf) };
+        let m = bio.remap_write(&buf);
         assert_eq!(m.owner.range_all().len(), 512);
         drop(m);
         assert_eq!(bio.range_all().len(), 0);

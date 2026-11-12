@@ -19,8 +19,8 @@
 //!   with a &Bio may read it, and walk its data from a position.
 //! - Mapping a buffer adds it to the bvecs, until they're emptied: reset()
 //!   keeps them, for another IO of the same buffers. A buffer's mapped as the
-//!   bio's made, and the bio holds it (BioBuffersMapped); remapping one made
-//!   otherwise is unsafe (BioOwner::remap_read()).
+//!   bio's made, and the bio holds it (BioBuffersMapped); one whose owner
+//!   puts nothing in its bvecs is remapped (BioOwner::remap_read()).
 //! - In flight: submitted, until its endio. A gathered submit consumes the
 //!   box, and its endio drops it (BioBox::submit_gathered()); or submit()
 //!   borrows it for its BioFuture, which yields the status. Either way nothing
@@ -578,15 +578,12 @@ pub unsafe trait BioOwner {
     /// whose buffer isn't one for its life - the superblock's, which serves its
     /// buffer and the read-back's; node scan's, whose node's buffer read_done
     /// swaps. A bio's buffer is otherwise the one it's made with,
-    /// BioBuffersMapped. Panics if the bio isn't a read, or hasn't the bvecs
-    /// for @buf.
-    ///
-    /// # Safety
-    /// The bvecs are the owner's to replace: its Buffers put nothing there -
-    /// BioBuffersUnmanaged.
-    unsafe fn remap_read<'a>(&'a mut self, buf: &'a mut [u8]) -> Remapped<'a, Self, &'a mut [u8]>
+    /// BioBuffersMapped. The bvecs are the owner's to replace: its Buffers put
+    /// nothing there. Panics if the bio isn't a read, or hasn't the bvecs for
+    /// @buf.
+    fn remap_read<'a>(&'a mut self, buf: &'a mut [u8]) -> Remapped<'a, Self, &'a mut [u8]>
     where
-        Self: Sized,
+        Self: Sized + BioOwner<Buffers = BioBuffersUnmanaged>,
     {
         assert_eq!(self.bio().op(), c::req_op_REQ_OP_READ, "remap_read() of a bio for another op");
         self.bio_mut().truncate_vecs(0);
@@ -596,12 +593,9 @@ pub unsafe trait BioOwner {
     }
 
     /// Panics if the bio isn't a write, or hasn't the bvecs for @buf.
-    ///
-    /// # Safety
-    /// As remap_read()'s.
-    unsafe fn remap_write<'a>(&'a mut self, buf: &'a [u8]) -> Remapped<'a, Self, &'a [u8]>
+    fn remap_write<'a>(&'a mut self, buf: &'a [u8]) -> Remapped<'a, Self, &'a [u8]>
     where
-        Self: Sized,
+        Self: Sized + BioOwner<Buffers = BioBuffersUnmanaged>,
     {
         assert_eq!(self.bio().op(), c::req_op_REQ_OP_WRITE, "remap_write() of a bio for another op");
         self.bio_mut().truncate_vecs(0);

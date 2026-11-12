@@ -1236,7 +1236,7 @@ impl c::bch_sb_io {
     fn read(&mut self, dev: &c::bch_sb_bdev, sector: u64, bytes: usize) -> Result<(), BchError> {
         let (bio, buf) = self.bio(dev, c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META, sector);
         // bound, so the Remapped drops before the bio it borrows
-        let ret = unsafe { bio.remap_read(&mut buf[..bytes]) }.submit_wait();
+        let ret = bio.remap_read(&mut buf[..bytes]).submit_wait();
         ret
     }
 
@@ -1245,7 +1245,7 @@ impl c::bch_sb_io {
         let (bio, buf) = self.bio(dev, c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_META | c::REQ_FUA,
                                   sector);
         // as read()'s
-        let ret = unsafe { bio.remap_write(&buf[..bytes]) }.submit_wait();
+        let ret = bio.remap_write(&buf[..bytes]).submit_wait();
         ret
     }
 }
@@ -2202,11 +2202,10 @@ c_const! {
 /// ca->sb_read_scratch: read into by the write's own bio, so aligned as
 /// kmalloc() aligns its size - what O_DIRECT, in userspace, needs.
 #[repr(C, align(4096))]
+#[derive(::pin_init::Zeroable)]
 pub struct SbReadScratch {
     buf: core::cell::UnsafeCell<[u8; BCH_SB_READ_SCRATCH_BUF_SIZE as usize]>,
 }
-
-unsafe impl ::pin_init::Zeroable for SbReadScratch {}
 
 impl SbReadScratch {
     /// Zeroed in place: 4096 bytes aren't built on the stack.
