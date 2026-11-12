@@ -197,8 +197,6 @@ c_enum! {
 c_const! {
     /* Number of nodes btree coalesce will try to coalesce at once */
     pub const GC_MERGE_NODES: u32 = 4;
-
-    pub const BTREE_NODE_OPEN_BUCKET_RESERVE: u32 = c::BTREE_RESERVE_MAX * c::BCH_REPLICAS_MAX;
 }
 
 #[repr(C)]

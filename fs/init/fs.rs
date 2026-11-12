@@ -325,12 +325,6 @@ impl Fs {
         self.write_super_flags(sb, c::bch_sb_write_flags::empty())
     }
 
-    /// Allowed before start, for a nostart open that starts later
-    #[track_caller]
-    pub fn write_super_bringup(&self, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        self.write_super_flags(sb, c::bch_sb_write_flags::BCH_SB_WRITE_bringup)
-    }
-
     /// c->sb and member info updated from the superblock, without writing it
     pub fn sb_update(&self, sb: &mut SbLockGuard<'_>) {
         crate::sb::io::sb_update(self, sb)

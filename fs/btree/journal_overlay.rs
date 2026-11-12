@@ -49,7 +49,6 @@ use crate::init::recovery::NotRw;
 use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy};
 use crate::util::projections::{Volatile, VolatilePublish};
 use crate::util::alloc::{darray_exit, DArrayLoan, KVVec};
-use crate::util::ffi::Opaque;
 use crate::data_structures::gap_buffer::GapBuffer;
 use crate::util::kernel::cond_resched;
 use crate::util::log::{LogLevel, LogMsg};
@@ -58,12 +57,11 @@ use crate::util::rcu::{self, ReadGuard, RcuArray, RcuElement};
 use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
 use crate::{bch_err, prt, new_lock, published};
 use core::cmp::Ordering;
-use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
 use core::pin::Pin;
 use core::ptr;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{c_export, bitfield, CStruct, Init};
+use cstruct_macros::{bitfield, CStruct, Init};
 use c::bch_errcode as e;
 use c::bch_fs_flags as f;
 use crate::journal::JournalEntries;
@@ -687,17 +685,6 @@ pub(crate) fn check_or_overwrite(jk: &c::journal_keys, g: &mut OverwriteGuard<'_
 pub(crate) unsafe fn journal_key_overwrite(fs: &Fs, btree: Btree, level: u32, pos: Bpos) {
     let jk = unsafe { fs.journal_keys_held() };
     check_or_overwrite(jk, &mut jk.overwrites.lock(), btree, level, pos, false);
-}
-
-/// check_or_overwrite(), for C, which holds overwrite_lock: -1 for its true.
-///
-/// # Safety
-/// As bch2_journal_keys_peek_max()'s.
-#[c_export]
-pub unsafe fn bch2_journal_key_check_or_overwrite(c: &Opaque<Fs>, btree: Btree, level: c_uint,
-                                                  pos: Bpos, check: bool) -> c_int {
-    let jk = unsafe { Fs::from_c(c).journal_keys_held() };
-    -(check_or_overwrite(jk, &mut unsafe { jk.overwrites.held() }, btree, level, pos, check) as c_int)
 }
 
 // ── Inserts, by recovery before the btree's read-write ───────────────────

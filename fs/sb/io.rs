@@ -1607,25 +1607,15 @@ impl Holder {
 /// sb_lock, so changes go through it; dropped, it writes - if anything was
 /// dirtied - before the lock goes.
 pub struct SbWrite<'a> {
-    fs:       &'a Fs,
-    sb:       SbLockGuard<'a>,
-    dirty:    bool,
-    replicas: bool,
-    flags:    c::bch_sb_write_flags,
+    fs:    &'a Fs,
+    sb:    SbLockGuard<'a>,
+    dirty: bool,
+    flags: c::bch_sb_write_flags,
 }
 
 impl Fs {
     pub fn sb_write(&self) -> SbWrite<'_> {
-        SbWrite { fs: self, sb: self.sb_lock(), dirty: false, replicas: false,
-                  flags: c::bch_sb_write_flags::empty() }
-    }
-
-    /// sb_write(), for a write whose only reason is a replicas entry coming
-    /// or going: it may leave the slow disks behind.
-    pub fn sb_write_replicas(&self) -> SbWrite<'_> {
-        let mut w = self.sb_write();
-        w.replicas = true;
-        w
+        SbWrite { fs: self, sb: self.sb_lock(), dirty: false, flags: c::bch_sb_write_flags::empty() }
     }
 }
 
@@ -1705,11 +1695,7 @@ impl<'a> SbWrite<'a> {
         if !core::mem::take(&mut self.dirty) {
             return Ok(());
         }
-        if self.replicas {
-            self.fs.write_super_replicas_ret(&mut self.sb)
-        } else {
-            self.fs.write_super_flags(&mut self.sb, self.flags)
-        }
+        self.fs.write_super_flags(&mut self.sb, self.flags)
     }
 }
 

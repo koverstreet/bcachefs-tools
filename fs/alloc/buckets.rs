@@ -58,8 +58,6 @@ pub struct disk_reservation_destructable {
 
 c_const! {
     #[c_int]
-    pub const BUCKET_JOURNAL_SEQ_BITS: u32 = 16;
-    #[c_int]
     pub const RESERVE_FACTOR: u32 = 6;
 
     /* A device position as a 32.32 fixed point fraction of its size: see
