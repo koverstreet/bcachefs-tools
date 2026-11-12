@@ -20,7 +20,7 @@ use crate::btree::iter::{is_restart, BtreeTrans, CommitFlags, CommitOpts, TransA
 use crate::btree::journal_overlay;
 use crate::btree::key_cache::{bch2_btree_insert_key_cached, bch2_btree_key_cache_drop};
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{NodePtr, PathIdx, Paths, PathsUpdates};
+use crate::btree::path::{LockedNode, NodePtr, PathIdx, Paths, PathsUpdates};
 use crate::btree::trigger::{run_mem_triggers, run_trans_triggers, verify_update_old_key};
 use crate::btree::types::BtreeNodeType;
 use crate::c;
@@ -70,11 +70,8 @@ fn same_leaf_as_next(paths: &Paths<'_>, u: &[c::btree_insert_entry], idx: usize)
     idx + 1 < u.len() && insert_l(paths, &u[idx]) == insert_l(paths, &u[idx + 1])
 }
 
-/// # Safety
-/// @i's path holds its node locked - for as long as the reference is used.
-unsafe fn leaf<'a>(paths: &Paths<'_>, i: &c::btree_insert_entry) -> &'a BtreeNode {
-    let b = paths[i.path].locked_btree_node(i.level().into()).expect("an update's path has its node locked");
-    unsafe { &*ptr::from_ref(b.node()) }
+fn leaf<'t>(paths: &Paths<'t>, i: &c::btree_insert_entry) -> LockedNode<'t, BtreeNode> {
+    paths.held_btree_node(i.path, i.level().into()).expect("an update's path has its node locked")
 }
 
 fn cached_entry(paths: &Paths<'_>, idx: PathIdx) -> *mut cs::bkey_cached {
@@ -774,8 +771,8 @@ impl BtreeTrans<'_> {
             u64s += usize::from(i.key().k.u64s);
 
             let ret = if !i.cached() {
-                let b = unsafe { leaf(&pu.paths, i) };
-                if b.insert_fits(unsafe { b.contents() }, u64s) {
+                let b = leaf(&pu.paths, i);
+                if b.insert_fits(b.contents(), u64s) {
                     Ok(())
                 } else {
                     fs.throw(bch_errcode::BCH_ERR_btree_insert_btree_node_full)
@@ -1078,9 +1075,9 @@ impl BtreeTrans<'_> {
                 u64s_delta -= i32::from(i.old_btree_u64s);
 
                 if !same_leaf_as_next(&pu.paths, pu.updates, idx) && !self.has_interior_updates() {
-                    let b = unsafe { leaf(&pu.paths, i) };
+                    let b = leaf(&pu.paths, i);
 
-                    if unlikely(b.needs_merge(unsafe { b.contents() }, fs, u64s_delta)) {
+                    if unlikely(b.needs_merge(b.contents(), fs, u64s_delta)) {
                         drop(pu);
                         self.commit_merge(t, &mut paths, flags, &mut idx, &mut dst)?;
                         pu = paths.paths_and_updates();

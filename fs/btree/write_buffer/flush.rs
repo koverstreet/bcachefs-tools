@@ -23,7 +23,6 @@ use crate::util::par::{self, Backend};
 use crate::util::projections::VolatileWriter;
 use crate::util::time_stats::TimeStats;
 use crate::{btree_trans, fs_fatal_error, prt};
-use core::ptr;
 use core::sync::atomic::fence;
 
 /*
@@ -188,7 +187,7 @@ fn flush_one<'a>(
         return Ok(());
     }
 
-    let b = unsafe { &*ptr::from_ref(path.locked_btree_node(0).expect("a traversed path has its leaf").node()) };
+    let b = paths.held_btree_node(iter.path, 0).expect("a traversed path has its leaf");
     drop(paths);
 
     if !*write_locked {
@@ -199,7 +198,7 @@ fn flush_one<'a>(
         *write_locked = true;
     }
 
-    if !b.insert_fits(unsafe { b.contents() }, usize::from(wb.k().k.u64s)) {
+    if !b.insert_fits(b.contents(), usize::from(wb.k().k.u64s)) {
         *write_locked = false;
         return flush_one_slowpath(t, iter, wb);
     }
@@ -210,9 +209,9 @@ fn flush_one<'a>(
     trans.insert_key_leaf(t, &mut trans.paths().paths_and_updates(), iter.path, wb.k_mut(), seq);
     cnt.fast += 1;
 
-    let contents = unsafe { b.contents() };
+    let contents = b.contents();
     if b.needs_merge(contents, fs, 0) {
-        fs.async_btree_op(b, contents, AsyncBtreeOp::Merge);
+        fs.async_btree_op(b.node(), contents, AsyncBtreeOp::Merge);
     }
 
     Ok(())
