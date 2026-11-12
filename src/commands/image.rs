@@ -232,12 +232,12 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
     let mut buf = Printbuf::new();
     buf.set_human_readable(true);
 
-    let ca = unsafe { &*fs.dev_raw(0) };
+    let ca = fs.dev_get(0).expect("an image has device 0");
     let usage = ca.usage_full_read_fast();
 
-    print_data_type_usage(&mut buf, ca, &usage, DataType::sb);
-    print_data_type_usage(&mut buf, ca, &usage, DataType::journal);
-    print_data_type_usage(&mut buf, ca, &usage, DataType::btree);
+    print_data_type_usage(&mut buf, &ca, &usage, DataType::sb);
+    print_data_type_usage(&mut buf, &ca, &usage, DataType::journal);
+    print_data_type_usage(&mut buf, &ca, &usage, DataType::btree);
 
     {
         let mut indented = buf.indent(2);
@@ -345,7 +345,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     }
 
     // Truncate image to used size
-    let ca = unsafe { &*fs.dev_raw(0) };
+    let ca = fs.dev_get(0).expect("an image has device 0");
     let image_size = nbuckets * ca.bucket_bytes();
     let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw((*ca.disk_sb.bdev).bd_fd) };
     rustix::fs::ftruncate(fd, image_size)

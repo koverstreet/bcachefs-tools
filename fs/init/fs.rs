@@ -338,12 +338,6 @@ impl Fs {
         self.journal.flush_pins(self.journal_cur_seq())
     }
 
-    /// # Safety
-    /// The device exists.
-    pub unsafe fn dev_raw(&self, dev: u32) -> *mut Dev {
-        self.devs[dev as usize].as_ptr()
-    }
-
     pub fn block_bytes(&self) -> u64 {
         self.opts().block_size.get() as u64
     }
