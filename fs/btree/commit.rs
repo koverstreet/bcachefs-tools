@@ -952,7 +952,7 @@ impl BtreeTrans<'_> {
 
         self.lock_updates_write(t, paths)?;
 
-        let jk = unlikely(self.journal_replay_not_finished()).then(|| unsafe { self.fs().journal_keys_held() });
+        let jk = t.journal_keys();
         let overwrites = match jk {
             Some(jk) => Some(self.commit_to_journal_replay_pre(t, paths, jk, flags)?),
             None     => None,

@@ -55,8 +55,8 @@ fn insert_fixup_btree_ptr(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path:
         assert!(p.v().sectors_written != 0, "a btree_ptr_v2 with no sectors written: {}", k.to_text(fs));
     }
 
-    if trans.journal_replay_not_finished() {
-        unsafe { journal_key_overwrite(fs, Btree(b.c.btree_id.into()), b.c.level.into(), insert.k().p) };
+    if let Some(jk) = t.journal_keys() {
+        journal_key_overwrite(jk, Btree(b.c.btree_id.into()), b.c.level.into(), insert.k().p);
     }
 
     let from = validate_from(&b, ValidateFlags::commit);

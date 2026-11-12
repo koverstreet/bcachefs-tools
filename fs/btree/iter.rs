@@ -741,60 +741,54 @@ impl<'t> BtreeIter<'t> {
         }
     }
 
-    fn journal_peek(&mut self, paths: &Paths<'_>, search_pos: Bpos, end_pos: Bpos) -> Option<&'t BkeyI> {
-        let trans = self.trans_c();
-
+    fn journal_peek<'k>(&mut self, t: &TransAttempt<'k, '_>, paths: &Paths<'_>, search_pos: Bpos, end_pos: Bpos)
+        -> Option<&'k BkeyI>
+    {
         /*
          * BTREE_ITER_with_journal is the iterator's from its init; trans_begin()
          * puts the transaction's ref on the journal keys once replay is done,
          * and can't clear the flag on iterators it can't see - so the
          * transaction's ref, not the iterator's flag, says the keys are there:
          */
-        if !trans.journal_replay_not_finished() {
-            return None;
-        }
-
+        let jk = t.journal_keys()?;
         let level = u32::from(paths[self.path].level());
 
-        journal_overlay::peek_max(unsafe { trans.fs().journal_keys_held() }, self.btree(), level,
-                                  search_pos, end_pos, &mut self.journal_idx)
+        journal_overlay::peek_max(jk, self.btree(), level, search_pos, end_pos, &mut self.journal_idx)
     }
 
     #[inline(never)]
-    fn trans_peek_slot_journal(&mut self, paths: &Paths<'_>) -> Option<KeyVal> {
+    fn trans_peek_slot_journal(&mut self, t: &TransAttempt<'_, '_>, paths: &Paths<'_>) -> Option<KeyVal> {
         let pos = paths[self.path].pos;
 
-        self.journal_peek(paths, pos, pos).map(|k| self.found_i(k))
+        self.journal_peek(t, paths, pos, pos).map(|k| self.found_i(k))
     }
 
     #[inline(never)]
-    fn trans_peek_journal(&mut self, paths: &Paths<'_>, search_key: Bpos, k: &mut Option<KeyVal>) {
+    fn trans_peek_journal(&mut self, t: &TransAttempt<'_, '_>, paths: &Paths<'_>, search_key: Bpos,
+                          k: &mut Option<KeyVal>) {
         let end = if k.is_some() {
             self.k.p
         } else {
             let path = &paths[self.path];
             path.locked_btree_node(path.level() as usize).expect("a path peeked is locked").contents().key_i().k.p
         };
-        if let Some(next_journal) = self.journal_peek(paths, search_key, end) {
+        if let Some(next_journal) = self.journal_peek(t, paths, search_key, end) {
             *k = Some(self.found_i(next_journal));
         }
     }
 
-    fn journal_peek_prev(&mut self, paths: &Paths<'_>, search_key: Bpos, end_pos: Bpos) -> Option<&'t BkeyI> {
-        let trans = self.trans_c();
-
-        if !trans.journal_replay_not_finished() {
-            return None;
-        }
-
+    fn journal_peek_prev<'k>(&mut self, t: &TransAttempt<'k, '_>, paths: &Paths<'_>, search_key: Bpos,
+                             end_pos: Bpos) -> Option<&'k BkeyI>
+    {
+        let jk = t.journal_keys()?;
         let level = u32::from(paths[self.path].level());
 
-        journal_overlay::peek_prev_min(unsafe { trans.fs().journal_keys_held() }, self.btree(), level,
-                                       search_key, end_pos, &mut self.journal_idx)
+        journal_overlay::peek_prev_min(jk, self.btree(), level, search_key, end_pos, &mut self.journal_idx)
     }
 
     #[inline(never)]
-    fn trans_peek_prev_journal(&mut self, paths: &Paths<'_>, search_key: Bpos, k: &mut Option<KeyVal>) {
+    fn trans_peek_prev_journal(&mut self, t: &TransAttempt<'_, '_>, paths: &Paths<'_>, search_key: Bpos,
+                               k: &mut Option<KeyVal>) {
         let end = if k.is_some() {
             self.k.p
         } else {
@@ -802,7 +796,7 @@ impl<'t> BtreeIter<'t> {
             path.locked_btree_node(path.level() as usize).expect("a path peeked is locked")
                 .contents().data().min_key
         };
-        if let Some(next_journal) = self.journal_peek_prev(paths, search_key, end) {
+        if let Some(next_journal) = self.journal_peek_prev(t, paths, search_key, end) {
             *k = Some(self.found_i(next_journal));
         }
     }
@@ -908,7 +902,7 @@ impl<'t> BtreeIter<'t> {
             }
 
             if flags.contains(BtreeIterFlags::WITH_JOURNAL) {
-                self.trans_peek_journal(paths, *search_key, &mut k);
+                self.trans_peek_journal(t, paths, *search_key, &mut k);
             }
 
             if trans.nr_updates.get() != 0 && !flags.contains(BtreeIterFlags::COMMITTED) {
@@ -1246,7 +1240,7 @@ impl<'t> BtreeIter<'t> {
             }
 
             if flags.contains(BtreeIterFlags::WITH_JOURNAL) {
-                self.trans_peek_prev_journal(paths, search_key, &mut k);
+                self.trans_peek_prev_journal(t, paths, search_key, &mut k);
             }
 
             if trans.nr_updates.get() != 0 && !flags.contains(BtreeIterFlags::COMMITTED) {
@@ -1554,7 +1548,7 @@ impl<'t> BtreeIter<'t> {
                     }
 
                     if flags.contains(BtreeIterFlags::WITH_JOURNAL) {
-                        if let Some(j) = self.trans_peek_slot_journal(paths) {
+                        if let Some(j) = self.trans_peek_slot_journal(t, paths) {
                             v = Some(j);
                         }
                     }

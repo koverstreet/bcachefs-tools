@@ -633,21 +633,13 @@ pub(crate) fn peek_prev_min<'a>(jk: &'a c::journal_keys, btree: Btree, level: u3
     }
 }
 
-/// # Safety
-/// The caller's transaction holds a ref on the journal keys:
-/// journal_replay_not_finished.
-pub(crate) unsafe fn peek_slot(fs: &Fs, btree: Btree, level: u32, pos: Bpos) -> Option<&BkeyI> {
-    peek_max(unsafe { fs.journal_keys_held() }, btree, level, pos, pos, &mut 0)
+pub(crate) fn peek_slot(jk: &c::journal_keys, btree: Btree, level: u32, pos: Bpos) -> Option<&BkeyI> {
+    peek_max(jk, btree, level, pos, pos, &mut 0)
 }
 
 /// Whether the journal deletes @pos, before replay's done.
 pub(crate) fn key_deleted_in_journal(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, pos: Bpos) -> bool {
-    let trans = t.trans();
-    if !trans.journal_replay_not_finished() {
-        return false;
-    }
-
-    let jk = unsafe { trans.c.journal_keys_held() };
+    let Some(jk) = t.journal_keys() else { return false };
     let Some(k) = jk.keys().get(jk.search(btree, level, pos)) else { return false };
     if k.btree_id() != btree || u32::from(k.level()) != level {
         return false;
@@ -680,11 +672,7 @@ pub(crate) fn check_or_overwrite(jk: &c::journal_keys, g: &mut OverwriteGuard<'_
 
 /// The journal's key at @pos overwritten, if it has one that isn't: the btree
 /// has its update now, before replay's done.
-///
-/// # Safety
-/// As bch2_journal_keys_peek_max()'s.
-pub(crate) unsafe fn journal_key_overwrite(fs: &Fs, btree: Btree, level: u32, pos: Bpos) {
-    let jk = unsafe { fs.journal_keys_held() };
+pub(crate) fn journal_key_overwrite(jk: &c::journal_keys, btree: Btree, level: u32, pos: Bpos) {
     check_or_overwrite(jk, &mut jk.overwrites.lock(), btree, level, pos, false);
 }
 
@@ -819,6 +807,7 @@ impl c::journal_iter {
 #[derive(Clone, Copy)]
 pub(crate) struct BtreeAndJournalIter<'a, 't> {
     trans: &'a BtreeTrans<'t>,
+    jk: Option<&'a c::journal_keys>,
     b: LockedNode<'a, BtreeNode>,
     node_iter: KeyIter,
     unpacked: c::bkey,
@@ -835,9 +824,10 @@ impl<'a, 't> BtreeAndJournalIter<'a, 't> {
     /// Over node @b's keys, from @node_iter, and the journal's from @pos.
     pub(crate) fn new(t: &TransAttempt<'a, 't>, b: LockedNode<'a, BtreeNode>, node_iter: KeyIter,
                       pos: Bpos) -> Self {
-        let trans = t.trans();
+        let jk = t.journal_keys();
         let mut iter = Self {
-            trans,
+            trans: t.trans(),
+            jk,
             b,
             node_iter,
             unpacked: c::bkey::new(),
@@ -849,9 +839,8 @@ impl<'a, 't> BtreeAndJournalIter<'a, 't> {
             fail_if_too_many_whiteouts: false,
         };
 
-        if trans.journal_replay_not_finished() {
-            iter.journal = c::journal_iter::new(unsafe { trans.fs().journal_keys_held() },
-                                                Btree(b.c.btree_id.into()), b.c.level.into(), pos);
+        if let Some(jk) = jk {
+            iter.journal = c::journal_iter::new(jk, Btree(b.c.btree_id.into()), b.c.level.into(), pos);
         }
         iter
     }
@@ -895,7 +884,6 @@ impl<'a, 't> BtreeAndJournalIter<'a, 't> {
 
     fn peek_raw(&mut self) -> c::bkey_s_c {
         let null = c::bkey_s_c { k: ptr::null_mut(), v: ptr::null_mut() };
-        let fs = self.trans.fs();
         let mut iters = 0;
 
         if self.prefetch && self.journal.level != 0 {
@@ -922,8 +910,7 @@ impl<'a, 't> BtreeAndJournalIter<'a, 't> {
             };
 
             let mut journal_k = ptr::null();
-            if self.trans.journal_replay_not_finished() {
-                let jk = unsafe { fs.journal_keys_held() };
+            if let Some(jk) = self.jk {
                 journal_k = loop {
                     let k = self.journal.peek(jk, self.pos);
                     // SAFETY: a journal key

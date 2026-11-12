@@ -70,7 +70,6 @@ impl BtreeTrans<'_> {
 
     pub(in crate::btree) fn revalidate_updates_in_node(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
                                                        b: LockedNode<'_, BtreeNode>) {
-        let fs = t.fs();
         let data = b.contents().data();
         let btree = Btree(b.c.btree_id.into());
         let PathsUpdates { paths, updates } = pu;
@@ -86,8 +85,8 @@ impl BtreeTrans<'_> {
             let mut old_k = e.old_k;
             let mut old_v = paths[e.path].peek_slot(&mut old_k).map_or(ptr::null(), |KeyVal(v)| v);
 
-            if self.journal_replay_not_finished() {
-                if let Some(j_k) = unsafe { peek_slot(fs, btree, b.c.level.into(), pos) } {
+            if let Some(jk) = t.journal_keys() {
+                if let Some(j_k) = peek_slot(jk, btree, b.c.level.into(), pos) {
                     old_k = j_k.k;
                     old_v = (&raw const j_k.v).cast();
                 }

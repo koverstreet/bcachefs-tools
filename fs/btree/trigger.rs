@@ -161,9 +161,9 @@ pub unsafe fn bch2_verify_update_old_key(trans: &BtreeTrans<'_>, i: &c::btree_in
         }
     };
 
-    if trans.journal_replay_not_finished() {
-        if let Some(j) = unsafe { crate::btree::journal_overlay::peek_slot(
-            trans.fs(), i.bits.btree_id(), i.bits.level().into(), i.key().k.p) } {
+    if let Some(jk) = unsafe { trans.attempt_in_progress() }.journal_keys() {
+        if let Some(j) = crate::btree::journal_overlay::peek_slot(jk, i.bits.btree_id(), i.bits.level().into(),
+                                                                  i.key().k.p) {
             k = c::bkey_s_c { k: &j.k, v: (&raw const j.v).cast() };
         }
     }

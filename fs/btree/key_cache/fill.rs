@@ -157,10 +157,10 @@ impl BtreeTrans<'_> {
 
             let mut needs_immediate_flush = k.k.key_type().is_deleted();
 
-            if self.journal_replay_not_finished() {
+            if let Some(jk) = t.journal_keys() {
                 let mut idx = 0;
-                if let Some(jk) = peek_max(unsafe { fs.journal_keys_held() }, btree, 0, pos, pos, &mut idx) {
-                    k = BkeySC::from(jk);
+                if let Some(j_k) = peek_max(jk, btree, 0, pos, pos, &mut idx) {
+                    k = BkeySC::from(j_k);
                     needs_immediate_flush |= k.k.key_type().is_deleted();
                 }
             }

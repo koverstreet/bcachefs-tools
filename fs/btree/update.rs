@@ -879,8 +879,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
             u.old_v = old_v;
             u.old_btree_u64s = if !old_k.key_type().is_deleted() { old_k.u64s } else { 0 };
 
-            if unlikely(t.journal_replay_not_finished()) {
-                if let Some(j_k) = unsafe { journal_overlay::peek_slot(fs, btree, level, k_p) } {
+            if let Some(jk) = self.journal_keys() {
+                if let Some(j_k) = journal_overlay::peek_slot(jk, btree, level, k_p) {
                     u.old_k = j_k.k;
                     u.old_v = (&raw const j_k.v).cast();
                 }

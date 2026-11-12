@@ -46,6 +46,7 @@ use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::types::Le64;
 use crate::util::ffi::Opaque;
+use crate::util::kernel::unlikely;
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
 use core::fmt;
@@ -285,6 +286,13 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     pub(crate) fn fs(&self) -> &'t Fs {
         self.trans.fs()
+    }
+
+    /// The journal keys, till replay's done: the transaction's ref -
+    /// journal_replay_not_finished - holds them, and only begin, which ends
+    /// the attempt, lets it go.
+    pub(crate) fn journal_keys(&self) -> Option<&'a c::journal_keys> {
+        unlikely(self.trans.journal_replay_not_finished()).then(|| unsafe { self.fs().journal_keys_held() })
     }
 
     /// What the commit in progress changes usage by, as its triggers
