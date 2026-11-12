@@ -401,7 +401,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         flags:    impl Into<CommitOpts>,
     ) -> Result<(), BchError> {
         assert!(self.live.get(), "commit in an attempt that ended");
-        self.trans.commit(disk_res, flags)
+        self.trans.commit_inner(self, disk_res, None, flags.into(), false)
     }
 
     /// commit(), with a ref on @flush until the commit's journal entry is
@@ -413,7 +413,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         flags:    impl Into<CommitOpts>,
     ) -> Result<(), BchError> {
         assert!(self.live.get(), "commit in an attempt that ended");
-        self.trans.commit_inner(disk_res, flush, flags.into(), false)
+        self.trans.commit_inner(self, disk_res, flush, flags.into(), false)
     }
 
     /// Commit what's queued, if anything - and having committed, return
@@ -426,7 +426,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             return Ok(());
         }
 
-        self.trans.commit_inner(disk_res, None, flags.into(), true)
+        self.trans.commit_inner(self, disk_res, None, flags.into(), true)
     }
 
     /// End this attempt for @f, work that runs loops of its own: commit what's

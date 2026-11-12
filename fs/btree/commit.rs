@@ -1154,9 +1154,8 @@ impl BtreeTrans<'_> {
         Ok(())
     }
 
-    pub(crate) fn commit_trans(&self, flags: CommitOpts, lazy: bool) -> Result<(), BchError> {
-        let t = unsafe { self.attempt_in_progress() };
-        let ret = self.commit_updates(&t, flags, lazy);
+    pub(crate) fn commit_trans(&self, t: &TransAttempt<'_, '_>, flags: CommitOpts, lazy: bool) -> Result<(), BchError> {
+        let ret = self.commit_updates(t, flags, lazy);
         self.reset_updates(&mut self.paths());
         ret
     }
@@ -1168,5 +1167,6 @@ unsafe extern "C" fn commit_journal_pin_flush(_j: *mut c::journal, _pin: *mut c:
 
 #[c_export]
 pub fn __bch2_trans_commit(trans: &BtreeTrans<'_>, flags: c::bch_trans_commit_flags, lazy: bool) -> c_int {
-    ret_to_c(trans.commit_trans(flags.into(), lazy))
+    let t = unsafe { trans.attempt_in_progress() };
+    ret_to_c(trans.commit_trans(&t, flags.into(), lazy))
 }

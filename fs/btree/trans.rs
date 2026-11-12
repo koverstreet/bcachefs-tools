@@ -308,20 +308,13 @@ impl<'f> BtreeTrans<'f> {
         }
     }
 
-    pub fn commit(
-        &self,
-        disk_res: Option<&DiskReservation<'_>>,
-        flags: impl Into<CommitOpts>,
-    ) -> Result<(), BchError> {
-        self.commit_inner(disk_res, None, flags.into(), false)
-    }
-
     /// The static inline bch2_trans_commit_flush(), with
     /// __bch2_trans_commit()'s @lazy. journal_seq and flush are set, as C's
     /// every commit does: a C commit before ours, in the same transaction, may
     /// have left a pointer to its stack there.
     pub(super) fn commit_inner(
         &self,
+        t:        &TransAttempt<'_, '_>,
         disk_res: Option<&DiskReservation<'_>>,
         flush:    Option<&Opaque<c::closure>>,
         flags:    CommitOpts,
@@ -330,7 +323,7 @@ impl<'f> BtreeTrans<'f> {
         self.disk_res.set(disk_res.map_or(core::ptr::null_mut(), |r| r.as_mut_ptr()));
         self.journal_seq.set(core::ptr::null_mut());
         self.flush.set(flush.map_or(core::ptr::null_mut(), Opaque::as_ptr));
-        self.commit_trans(flags, lazy)
+        self.commit_trans(t, flags, lazy)
     }
 }
 
