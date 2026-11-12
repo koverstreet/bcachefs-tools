@@ -264,14 +264,14 @@ struct StartNode {
 type GcReadLock = SharedGuard<'static, c::rw_semaphore>;
 
 /// gc.lock, held for read from start() until the update's done, or freed.
-fn gc_read_lock(trans: &BtreeTrans<'_>, fs: &'static Fs) -> Result<GcReadLock, BchError> {
+fn gc_read_lock(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, fs: &'static Fs) -> Result<GcReadLock, BchError> {
     if let Some(g) = fs.gc.lock.try_read() {
         return Ok(g);
     }
 
-    trans.unlock();
+    trans.unlock_from(paths, crate::ret_ip!());
     let g = fs.gc.lock.read();
-    trans.relock()?;
+    trans.relock_from(paths)?;
     Ok(g)
 }
 
@@ -575,12 +575,11 @@ impl<'t> InteriorUpdate<'t> {
     /// level above splitting, up to a new root.
     pub(crate) fn start(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
                         opts: StartOpts) -> Result<Self, BchError> {
-        // the reserve's allocated from Rust's allocator, which takes the path table
         let ip = crate::ret_ip!();
-        paths.lend(|| Self::start_in(trans, path, level, opts, ip))
+        Self::start_in(trans, paths, path, level, opts, ip)
     }
 
-    fn start_in(trans: &'t BtreeTrans<'t>, path: PathIdx, level_start: usize,
+    fn start_in(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, path: PathIdx, level_start: usize,
                 StartOpts { mut split, target, mut commit, write, new_key_u64s, range }: StartOpts,
                 ip_started: c_ulong) -> Result<Self, BchError>
     {
@@ -590,8 +589,8 @@ impl<'t> InteriorUpdate<'t> {
         let start_time = local_clock();
         let restart_count = trans.restart_count();
 
-        trans.verify_paths(&mut trans.paths());
-        assert!(trans.paths()[path].should_be_locked(), "an interior update on a path that isn't locked");
+        trans.verify_paths(paths);
+        assert!(paths[path].should_be_locked(), "an interior update on a path that isn't locked");
 
         let mut watermark = commit.get_watermark();
         if watermark == wm::stripe {
@@ -623,9 +622,9 @@ impl<'t> InteriorUpdate<'t> {
              * returns the error (tools#971 - rewrite workers queued after a
              * failed mount waited here forever, holding up bch2_fs_stop()):
              */
-            trans.unlock();
-            trans.wait_event(&fs.journal.async_wait, || !journal_low() || fs.journal.error().is_err());
-            trans.relock()?;
+            trans.unlock_from(paths, crate::ret_ip!());
+            trans.wait_event_in(paths, &fs.journal.async_wait, || !journal_low() || fs.journal.error().is_err());
+            trans.relock_from(paths)?;
         }
 
         let mut nr_nodes = [0usize; 2];
@@ -634,8 +633,7 @@ impl<'t> InteriorUpdate<'t> {
             nr_nodes[usize::from(level_end != 0)] += 1 + usize::from(split);
             level_end += 1;
 
-            let mut paths = trans.paths();
-            trans.path_upgrade(&mut paths, path, level_end + 1, crate::ret_ip!())?;
+            trans.path_upgrade(paths, path, level_end + 1, crate::ret_ip!())?;
 
             let Some(b) = paths.held_btree_node(path, level_end) else {
                 /* Allocating new root? */
@@ -659,10 +657,9 @@ impl<'t> InteriorUpdate<'t> {
         // its ref on it
         let fs_ref = unsafe { BackRef::new(fs).get() };
 
-        let gc_lock = gc_read_lock(trans, fs_ref)?;
+        let gc_lock = gc_read_lock(trans, paths, fs_ref)?;
 
         let node = {
-            let paths = trans.paths();
             let b = paths.held_btree_node(path, level_start).expect("an interior update's node");
             let contents = b.contents();
             let data = contents.data();
@@ -677,7 +674,7 @@ impl<'t> InteriorUpdate<'t> {
             }
         };
 
-        let btree = trans.paths()[path].btree_id();
+        let btree = paths[path].btree_id();
         // made in place: the arrays are kilobytes
         let Ok(owner) = fs_ref.btree.interior_updates.pool.alloc_box(c::GFP_NOIO, init!(BtreeUpdate {
             fs:           unsafe { BackRef::new(fs) },
@@ -725,8 +722,8 @@ impl<'t> InteriorUpdate<'t> {
          * __bch2_fs_read_only().
          */
         let ret = fs.journal.error()
-            .and_then(|()| update.reserve(nr_nodes, target, commit, write))
-            .and_then(|()| trans.relock());
+            .and_then(|()| update.reserve(paths, nr_nodes, target, commit, write))
+            .and_then(|()| trans.relock_from(paths));
         if let Err(e) = ret {
             if crate::util::log::should_print_err(&e) &&
                !e.matches(c::ENOSPC) &&

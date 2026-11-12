@@ -108,7 +108,7 @@ fn can_use_btree_node(fs: &Fs, res: &DiskReservation<'_>, target: u32, k: BkeySC
 impl InteriorUpdate<'_> {
     /// The disk space, and the nodes, leaf and interior, that @nr_nodes says
     /// the update might need, reserved.
-    pub(super) fn reserve(&self, nr_nodes: [usize; 2], target: u32, commit: CommitOpts,
+    pub(super) fn reserve(&self, paths: &mut Paths<'_>, nr_nodes: [usize; 2], target: u32, commit: CommitOpts,
                           write: c::bch_write_flags) -> Result<(), BchError> {
         use c::bch_watermark as wm;
 
@@ -130,10 +130,10 @@ impl InteriorUpdate<'_> {
         let mut devs_have = c::bch_devs_list::default();
         let nr_replicas = self.disk_res.nr_replicas.get();
         let t = unsafe { trans.attempt_in_progress() };
-        let mut req = t.alloc_request(target, false, &mut devs_have, nr_replicas, nr_replicas,
-                                      watermark, write, ptr::null_mut())?;
+        let mut req = paths.lend(|| t.alloc_request(target, false, &mut devs_have, nr_replicas, nr_replicas,
+                                                    watermark, write, ptr::null_mut()))?;
 
-        let ret = match self.reserve_get(nr_nodes, &mut req) {
+        let ret = match self.reserve_get(paths, nr_nodes, &mut req) {
             Err(e) if e.matches(c::EAGAIN) || e.matches(c::ENOMEM) => {
                 /*
                  * XXX: this should probably be a separate BTREE_INSERT_NONBLOCK
@@ -149,9 +149,9 @@ impl InteriorUpdate<'_> {
                 req.cl = cl.as_ptr();
 
                 let ret = loop {
-                    match self.reserve_get(nr_nodes, &mut req) {
+                    match self.reserve_get(paths, nr_nodes, &mut req) {
                         Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {
-                            if let Err(e) = t.wait_on_allocator(&mut req, e, cl.as_opaque()) {
+                            if let Err(e) = paths.lend(|| t.wait_on_allocator(&mut req, e, cl.as_opaque())) {
                                 break Err(e);
                             }
                         }
@@ -166,7 +166,7 @@ impl InteriorUpdate<'_> {
                  * without waking up the waitlist:
                  */
                 if cl.nr_remaining() > 1 {
-                    trans.unlock();
+                    trans.unlock_from(paths, crate::ret_ip!());
                 }
                 ret
             }
@@ -182,7 +182,9 @@ impl InteriorUpdate<'_> {
         ret
     }
 
-    fn reserve_get(&self, nr_nodes: [usize; 2], req: &mut c::alloc_request) -> Result<(), BchError> {
+    fn reserve_get(&self, paths: &mut Paths<'_>, nr_nodes: [usize; 2], req: &mut c::alloc_request)
+        -> Result<(), BchError>
+    {
         let trans = self.trans;
 
         assert!(nr_nodes[0] + nr_nodes[1] <= BTREE_RESERVE_MAX as usize,
@@ -197,7 +199,7 @@ impl InteriorUpdate<'_> {
         let ret = (|| {
             for (interior, &nr) in nr_nodes.iter().enumerate() {
                 while self.owned.borrow().reserve[interior].len() < nr {
-                    let b = self.node_alloc_from_allocator(interior != 0, req)?;
+                    let b = self.node_alloc_from_allocator(paths, interior != 0, req)?;
                     self.owned.borrow_mut().reserve[interior].push(b);
                 }
             }
@@ -208,18 +210,20 @@ impl InteriorUpdate<'_> {
         ret
     }
 
-    fn node_alloc_from_allocator(&self, interior: bool, req: &mut c::alloc_request) -> Result<Reserved, BchError> {
+    fn node_alloc_from_allocator(&self, paths: &mut Paths<'_>, interior: bool, req: &mut c::alloc_request)
+        -> Result<Reserved, BchError>
+    {
         let trans = self.trans;
         let fs = self.fs();
 
-        let b = trans.btree_node_mem_alloc(&mut trans.paths(), interior)?;
+        let b = trans.btree_node_mem_alloc(paths, interior)?;
         let n: &BtreeNode = &b;
         let mut ob = c::open_buckets::default();
 
         let ret: Result<(), BchError> = (|| {
             let t = unsafe { trans.attempt_in_progress() };
             let mut wp = loop {
-                let wp = t.alloc_sectors(req, writepoint_ptr(&fs.allocator.btree_write_point))?;
+                let wp = paths.lend(|| t.alloc_sectors(req, writepoint_ptr(&fs.allocator.btree_write_point)))?;
                 if wp.sectors_free() >= fs.btree_sectors() {
                     break wp;
                 }

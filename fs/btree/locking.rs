@@ -1228,6 +1228,11 @@ impl BtreeTrans<'_> {
         })
     }
 
+    pub(in crate::btree) fn wait_event_in(&self, paths: &mut Paths<'_>, list: &c::closure_waitlist,
+                                          cond: impl FnMut() -> bool) {
+        self.wait_event_timeout_in(paths, list, cond, c_long::MAX);
+    }
+
     /// @l locked, waited for under SRCU as wait_until() waits. The caller
     /// must have dropped its btree locks.
     pub fn lock_timed<'l, R: RawTimedLock, G, P>(&self, l: &'l Locked<R, G, P>) -> ExclusiveGuard<'l, R, G, P> {
