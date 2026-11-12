@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use crate::util::place::{Contained, Path, Placed};
 use crate::util::projections::Publish;
 use core::cell::UnsafeCell;
 use core::ffi::{c_ulong, c_void, CStr};
@@ -521,30 +522,55 @@ impl<R: RawLockBase, G, P, U: Unlock<R>> Drop for SharedGuard<'_, R, G, P, U> {
     }
 }
 
+/// A guard, shared or exclusive: the lock it holds, for a placed LockedBy to
+/// check it's the one it's under.
+pub trait Held {
+    type Raw: RawLockBase;
+    fn held(&self) -> *const Self::Raw;
+}
+
+impl<R: RawLockBase, G, P, U: Unlock<R>> Held for SharedGuard<'_, R, G, P, U> {
+    type Raw = R;
+    fn held(&self) -> *const R {
+        self.lock.raw()
+    }
+}
+
+impl<R: RawLockBase, G, P, U: Unlock<R>> Held for ExclusiveGuard<'_, R, G, P, U> {
+    type Raw = R;
+    fn held(&self) -> *const R {
+        self.lock.raw()
+    }
+}
+
 /// Locked's two halves, for data that can't live in its lock: @G, reached only
-/// with that lock held, and @P, published - anyone's, it derefs to it. Which
-/// lock that is, only the owner of both knows: G is reached through the
-/// owner's methods, which check - here, only unsafely. Laid out as G then P,
-/// as Locked's are.
+/// with that lock held, and @P, published - anyone's, it derefs to it. Laid
+/// out as G then P, as Locked's are.
+///
+/// Which lock that is, @L says: a path - field!(capacity.mark_lock) - from the
+/// struct it's placed in, a Placed<LockedBy, at!(...)>, whose protected()
+/// checks the guard it's shown is that lock's. With none, () - only the owner
+/// knows, and checks only unsafely.
 #[repr(C)]
-pub struct LockedBy<G, P = ()> {
+pub struct LockedBy<G, P = (), L = ()> {
     protected: UnsafeCell<G>,
     published: P,
+    _lock:     PhantomData<fn() -> L>,
 }
 
 // As Locked's.
-unsafe impl<G: Send, P: Send> Send for LockedBy<G, P> {}
-unsafe impl<G: Send, P: Sync> Sync for LockedBy<G, P> {}
+unsafe impl<G: Send, P: Send, L> Send for LockedBy<G, P, L> {}
+unsafe impl<G: Send, P: Sync, L> Sync for LockedBy<G, P, L> {}
 
 // SAFETY: as each half
-unsafe impl<G: ::pin_init::Zeroable, P: ::pin_init::Zeroable> ::pin_init::Zeroable for LockedBy<G, P> {}
+unsafe impl<G: ::pin_init::Zeroable, P: ::pin_init::Zeroable, L> ::pin_init::Zeroable for LockedBy<G, P, L> {}
 
-impl<G, P> LockedBy<G, P> {
+impl<G, P, L> LockedBy<G, P, L> {
     /// Where the G is in a LockedBy.
     pub const PROTECTED_OFFSET: usize = core::mem::offset_of!(Self, protected);
 
     pub const fn new(protected: G, published: P) -> Self {
-        LockedBy { protected: UnsafeCell::new(protected), published }
+        LockedBy { protected: UnsafeCell::new(protected), published, _lock: PhantomData }
     }
 
     /// What it protects, unlocked: for a racy peek, as Locked::data_ptr().
@@ -572,7 +598,7 @@ impl<G, P> LockedBy<G, P> {
     }
 }
 
-impl<G, P: crate::util::projections::Publish> LockedBy<G, P> {
+impl<G, P: crate::util::projections::Publish, L> LockedBy<G, P, L> {
     /// @P as its writer has it: the owner's to hand out, to whoever shows it
     /// holds the lock.
     ///
@@ -584,7 +610,7 @@ impl<G, P: crate::util::projections::Publish> LockedBy<G, P> {
     }
 }
 
-impl<G, P> Deref for LockedBy<G, P> {
+impl<G, P, L> Deref for LockedBy<G, P, L> {
     type Target = P;
 
     fn deref(&self) -> &P {
@@ -592,8 +618,51 @@ impl<G, P> Deref for LockedBy<G, P> {
     }
 }
 
+/// A LockedBy placed in its parent, its lock at @L from there: its G, had by
+/// showing a guard of that lock.
+impl<C, A, G, P, L> Placed<C, A>
+where
+    C: Deref<Target = LockedBy<G, P, L>>,
+{
+    fn check<H: Held, LG, LP>(&self, guard: &H)
+    where
+        Self: Contained,
+        L: Path<<Self as Contained>::Parent, To = Locked<H::Raw, LG, LP>>,
+    {
+        let lock = L::get(self.container());
+        assert!(core::ptr::eq(guard.held(), lock.raw()), "a LockedBy shown a guard of another lock");
+    }
+
+    /// G, while @guard holds its lock.
+    pub(crate) fn protected<'g, H: Held, LG, LP>(&'g self, guard: &'g H) -> &'g G
+    where
+        Self: Contained,
+        L: Path<<Self as Contained>::Parent, To = Locked<H::Raw, LG, LP>> + 'g,
+        P: 'g,
+    {
+        self.check(guard);
+        let locked: &LockedBy<G, P, L> = self;
+        unsafe { locked.protected() }
+    }
+
+    /// G alone, while @guard holds its lock exclusively.
+    pub(crate) fn protected_mut<'g, R: RawLockBase, LG, LP, U: Unlock<R>>(
+        &'g self,
+        guard: &'g mut ExclusiveGuard<'_, R, LG, LP, U>,
+    ) -> &'g mut G
+    where
+        Self: Contained,
+        L: Path<<Self as Contained>::Parent, To = Locked<R, LG, LP>> + 'g,
+        P: 'g,
+    {
+        self.check(&*guard);
+        let locked: &LockedBy<G, P, L> = self;
+        unsafe { locked.protected_mut() }
+    }
+}
+
 // Opaque to TypeInfo, size only: G is the owner's to read.
-impl<G, P> crate::typeinfo::TypeInfo for LockedBy<G, P> {
+impl<G, P, L> crate::typeinfo::TypeInfo for LockedBy<G, P, L> {
     const INFO: &'static crate::typeinfo::StructInfo = &crate::typeinfo::StructInfo {
         name:   "LockedBy",
         size:   core::mem::size_of::<Self>(),
