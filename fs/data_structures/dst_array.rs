@@ -14,7 +14,7 @@
 //! kvfree_rcu() of an rcu_head before the header.
 
 use crate::c;
-use crate::util::alloc::{flags, Alloc, AllocError, AllocMode, KVmalloc};
+use crate::util::alloc::{flags, AllocError, AllocGfp, AllocMode, KVmalloc};
 use core::alloc::Layout;
 use crate::util::rcu::FreeAnytime;
 use core::marker::PhantomData;
@@ -102,7 +102,7 @@ impl<H: DstHead, T> DstArray<H, T> {
             .ok_or(AllocError)?;
         let layout = Layout::from_size_align(bytes, 8).map_err(|_| AllocError)?;
 
-        let p = unsafe { KVmalloc::alloc_mode(layout, mode)?.byte_add(prefix) }.cast::<H>();
+        let p = unsafe { KVmalloc.alloc_zeroed_mode(layout, mode)?.byte_add(prefix) }.cast::<H>();
         unsafe { p.write(head) };
         Ok(p)
     }

@@ -71,83 +71,133 @@ pub enum AllocMode {
     Nofail,
 }
 
-/// An allocator, as both builds have it: in-kernel, ours above - the task's
-/// memalloc scope applied - and in userspace, std's, which takes no flags.
+/// An allocator, as both builds have it: in-kernel, ours above, and in
+/// userspace, std's. GFP_KERNEL, as the task's memalloc scope says - NOIO,
+/// NOFS, or NORECLAIM, where what would wait fails instead.
+///
+/// What alloc() gives is at least @layout's bytes, as many as it says: free()
+/// is told the size it gave. As Rust's Allocator: alloc() gives them as they
+/// are, alloc_zeroed() zeroed.
 ///
 /// # Safety
-/// alloc() gives @layout's bytes, zeroed and aligned to it; realloc() the
-/// new layout's, what was there kept up to the smaller of the two; free(),
-/// and in-kernel kvfree(), free them, from any context.
+/// alloc() gives @layout's bytes or more, aligned to it - alloc_zeroed()
+/// zeroed; free() frees them, and in-kernel kvfree() too, from any context. A
+/// zero-sized one has no state: stateless() makes it from nothing.
 pub unsafe trait Alloc {
-    fn alloc(layout: Layout, gfp: Flags) -> Result<NonNull<u8>, AllocError>;
+    fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError>;
+
+    fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError>;
+
+    /// # Safety
+    /// @p is alloc()'s, or realloc()'s, @layout's size what it gave, and
+    /// nothing uses it after.
+    unsafe fn free(&self, p: NonNull<u8>, layout: Layout);
+}
+
+/// kmalloc() and kvmalloc(), for what knows its context better than its
+/// scope does: GFP_ATOMIC, GFP_NOWAIT.
+///
+/// # Safety
+/// As Alloc's; realloc() gives the new layout's bytes, what was there kept up
+/// to the smaller of the two.
+pub unsafe trait AllocGfp: Alloc {
+    fn alloc_zeroed_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError>;
 
     /// @p - None for a new allocation - as @layout, not zeroed: @p freed if
     /// it moves, and kept if this fails.
     ///
     /// # Safety
     /// @p is this allocator's, of @old.
-    unsafe fn realloc(p: Option<NonNull<u8>>, layout: Layout, old: Layout, gfp: Flags)
-        -> Result<NonNull<u8>, AllocError>;
+    unsafe fn realloc(&self, p: Option<NonNull<u8>>, layout: Layout, old: Layout, gfp: Flags)
+        -> Result<NonNull<[u8]>, AllocError>;
 
-    /// # Safety
-    /// @p is alloc()'s or realloc()'s, of @layout, and nothing uses it after.
-    unsafe fn free(p: NonNull<u8>, layout: Layout);
+    /// alloc_zeroed(), __GFP_NOFAIL: through C's kzalloc() and kvzalloc(), as
+    /// the kernel's Rust has no __GFP_NOFAIL - aligned as kmalloc() aligns, to
+    /// 8. Userspace's allocator aborts rather than fail.
+    fn alloc_zeroed_nofail(&self, layout: Layout) -> NonNull<[u8]>;
 
-    /// alloc(), __GFP_NOFAIL: through C, as the kernel's Rust has no
-    /// __GFP_NOFAIL - aligned as kmalloc() aligns, to 8. Userspace's
-    /// allocator aborts rather than fail.
-    fn alloc_nofail(layout: Layout) -> NonNull<u8>;
-
-    fn alloc_mode(layout: Layout, mode: AllocMode) -> Result<NonNull<u8>, AllocError> {
+    fn alloc_zeroed_mode(&self, layout: Layout, mode: AllocMode) -> Result<NonNull<[u8]>, AllocError> {
         match mode {
-            AllocMode::Gfp(gfp) => Self::alloc(layout, gfp),
+            AllocMode::Gfp(gfp) => self.alloc_zeroed_gfp(layout, gfp),
             AllocMode::Nofail => {
                 // checked whether the fallback's needed or not: a misaligned
                 // caller would otherwise find out only under memory pressure
                 assert!(layout.align() <= 8, "a __GFP_NOFAIL allocation aligned past kmalloc()'s");
-                Ok(Self::alloc(layout, flags::GFP_KERNEL).unwrap_or_else(|_| Self::alloc_nofail(layout)))
+                Ok(self.alloc_zeroed(layout).unwrap_or_else(|_| self.alloc_zeroed_nofail(layout)))
             }
         }
     }
 }
 
+/// The allocator of what keeps none - Vec, MaybeRcuAlloc: zero-sized, made
+/// where it's used. Only those, for now.
+pub fn stateless<A: Alloc>() -> A {
+    const { assert!(size_of::<A>() == 0, "an allocator with state, where nothing keeps it") };
+    unsafe { NonNull::<A>::dangling().read() }
+}
+
 macro_rules! allocs {
     ($($a:ident => $nofail:expr),*) => {$(
         unsafe impl Alloc for $a {
-            fn alloc_nofail(layout: Layout) -> NonNull<u8> {
+            fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
                 #[cfg(kernel)]
                 {
-                    NonNull::new($nofail(layout.size()).cast()).expect("__GFP_NOFAIL allocation returned NULL")
+                    use kernel::alloc::{Allocator, NumaNode};
+
+                    <$a as Allocator>::alloc(layout, flags::GFP_KERNEL, NumaNode::NO_NODE)
                 }
                 #[cfg(not(kernel))]
                 {
-                    NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) })
-                        .unwrap_or_else(|| std::alloc::handle_alloc_error(layout))
+                    let p = NonNull::new(unsafe { std::alloc::alloc(layout) }).ok_or(AllocError)?;
+                    Ok(NonNull::slice_from_raw_parts(p, layout.size()))
                 }
             }
 
-            fn alloc(layout: Layout, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
+            fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+                self.alloc_zeroed_gfp(layout, flags::GFP_KERNEL)
+            }
+
+            unsafe fn free(&self, p: NonNull<u8>, layout: Layout) {
+                #[cfg(kernel)]
+                unsafe { <$a as kernel::alloc::Allocator>::free(p, layout) };
+                #[cfg(not(kernel))]
+                unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
+            }
+        }
+
+        unsafe impl AllocGfp for $a {
+            fn alloc_zeroed_nofail(&self, layout: Layout) -> NonNull<[u8]> {
+                #[cfg(kernel)]
+                let p = NonNull::new($nofail(layout.size()).cast()).expect("__GFP_NOFAIL allocation returned NULL");
+                #[cfg(not(kernel))]
+                let p = NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) })
+                    .unwrap_or_else(|| std::alloc::handle_alloc_error(layout));
+                NonNull::slice_from_raw_parts(p, layout.size())
+            }
+
+            fn alloc_zeroed_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
                 #[cfg(kernel)]
                 {
                     use kernel::alloc::{flags::__GFP_ZERO, Allocator, NumaNode};
 
-                    Ok(<$a as Allocator>::alloc(layout, gfp | __GFP_ZERO, NumaNode::NO_NODE)?.cast())
+                    <$a as Allocator>::alloc(layout, gfp | __GFP_ZERO, NumaNode::NO_NODE)
                 }
                 #[cfg(not(kernel))]
                 {
                     let _ = gfp;
-                    NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }).ok_or(AllocError)
+                    let p = NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }).ok_or(AllocError)?;
+                    Ok(NonNull::slice_from_raw_parts(p, layout.size()))
                 }
             }
 
-            unsafe fn realloc(p: Option<NonNull<u8>>, layout: Layout, old: Layout, gfp: Flags)
-                -> Result<NonNull<u8>, AllocError>
+            unsafe fn realloc(&self, p: Option<NonNull<u8>>, layout: Layout, old: Layout, gfp: Flags)
+                -> Result<NonNull<[u8]>, AllocError>
             {
                 #[cfg(kernel)]
                 {
                     use kernel::alloc::{Allocator, NumaNode};
 
-                    Ok(unsafe { <$a as Allocator>::realloc(p, layout, old, gfp, NumaNode::NO_NODE) }?.cast())
+                    unsafe { <$a as Allocator>::realloc(p, layout, old, gfp, NumaNode::NO_NODE) }
                 }
                 #[cfg(not(kernel))]
                 {
@@ -156,15 +206,8 @@ macro_rules! allocs {
                         Some(p) => unsafe { std::alloc::realloc(p.as_ptr(), old, layout.size()) },
                         None    => unsafe { std::alloc::alloc(layout) },
                     };
-                    NonNull::new(p).ok_or(AllocError)
+                    Ok(NonNull::slice_from_raw_parts(NonNull::new(p).ok_or(AllocError)?, layout.size()))
                 }
-            }
-
-            unsafe fn free(p: NonNull<u8>, layout: Layout) {
-                #[cfg(kernel)]
-                unsafe { <$a as kernel::alloc::Allocator>::free(p, layout) };
-                #[cfg(not(kernel))]
-                unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
             }
         }
     )*};
@@ -461,7 +504,7 @@ pub unsafe fn kvmalloc_realloc_gfp(p: Option<NonNull<u8>>, layout: Layout, old: 
     #[cfg(not(kernel))]
     {
         let _ = gfp;
-        unsafe { <KVmalloc as Alloc>::realloc(p, layout, old, flags::GFP_KERNEL) }
+        unsafe { KVmalloc.realloc(p, layout, old, flags::GFP_KERNEL) }.map(NonNull::cast)
     }
 }
 

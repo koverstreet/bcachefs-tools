@@ -5,8 +5,8 @@
 //! allocates. KVec and KVVec are it: the same in both builds.
 
 use crate::data_structures::array_vec::LenUint;
-use crate::util::alloc::{assert_may_reclaim, flags, kvmalloc_realloc_gfp, kvrealloc_nofail_fallback, Alloc,
-                         AllocError, Flags, KVmalloc};
+use crate::util::alloc::{assert_may_reclaim, flags, kvmalloc_realloc_gfp, kvrealloc_nofail_fallback, stateless,
+                         AllocError, AllocGfp, Flags, KVmalloc};
 use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::mem::{size_of, ManuallyDrop, MaybeUninit};
@@ -15,26 +15,26 @@ use core::ptr::{self, NonNull};
 use core::slice;
 
 #[repr(C)]
-pub struct Vec<T, A: Alloc, L: LenUint = usize> {
+pub struct Vec<T, A: AllocGfp, L: LenUint = usize> {
     nr:   L,
     size: L,
     data: Option<NonNull<T>>,
     _p:   PhantomData<(T, A)>,
 }
 
-unsafe impl<T: Send, A: Alloc, L: LenUint> Send for Vec<T, A, L> {}
-unsafe impl<T: Sync, A: Alloc, L: LenUint> Sync for Vec<T, A, L> {}
+unsafe impl<T: Send, A: AllocGfp, L: LenUint> Send for Vec<T, A, L> {}
+unsafe impl<T: Sync, A: AllocGfp, L: LenUint> Sync for Vec<T, A, L> {}
 
 // Its elements are on the heap, and don't move with it: as a Box's
-impl<T, A: Alloc, L: LenUint> Unpin for Vec<T, A, L> {}
+impl<T, A: AllocGfp, L: LenUint> Unpin for Vec<T, A, L> {}
 
 // zeroed is empty: nr and size 0, data NULL - as a kzalloc()'d darray
-unsafe impl<T, A: Alloc, L: LenUint> ::pin_init::Zeroable for Vec<T, A, L> {}
+unsafe impl<T, A: AllocGfp, L: LenUint> ::pin_init::Zeroable for Vec<T, A, L> {}
 
 /// push_within_capacity()'s, with what wasn't pushed.
 pub struct PushError<T>(pub T);
 
-impl<T, A: Alloc, L: LenUint> Vec<T, A, L> {
+impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
     const ZST: bool = size_of::<T>() == 0;
 
     pub const fn new() -> Self {
@@ -84,7 +84,7 @@ impl<T, A: Alloc, L: LenUint> Vec<T, A, L> {
 
     fn reserve_gfp(&mut self, additional: usize, gfp: Flags) -> Result<(), AllocError> {
         // SAFETY: @p is A's, of @old
-        self.grow(additional, |p, layout, old| unsafe { A::realloc(p, layout, old, gfp) })
+        self.grow(additional, |p, layout, old| unsafe { stateless::<A>().realloc(p, layout, old, gfp) }.map(NonNull::cast))
     }
 
     /// Room for @additional more, reallocated by @realloc - A's, as
@@ -283,30 +283,30 @@ impl<T, L: LenUint> Vec<T, KVmalloc, L> {
     pub fn push_nofail(&mut self, v: T) {
         assert_may_reclaim();
         self.grow(1, |p, layout, old| Ok(unsafe {
-            <KVmalloc as Alloc>::realloc(p, layout, old, flags::GFP_KERNEL)
+            KVmalloc.realloc(p, layout, old, flags::GFP_KERNEL).map(NonNull::cast)
                 .unwrap_or_else(|_| kvrealloc_nofail_fallback(p, old.size(), layout.size()))
         })).expect("a vector grown past its length type");
         unsafe { self.push_unchecked(v) };
     }
 }
 
-impl<T, A: Alloc, L: LenUint> Drop for Vec<T, A, L> {
+impl<T, A: AllocGfp, L: LenUint> Drop for Vec<T, A, L> {
     fn drop(&mut self) {
         self.clear();
         if let Some(p) = self.data {
             let layout = Self::layout(self.capacity()).expect("its own layout");
-            unsafe { A::free(p.cast(), layout) };
+            unsafe { stateless::<A>().free(p.cast(), layout) };
         }
     }
 }
 
-impl<T, A: Alloc, L: LenUint> Default for Vec<T, A, L> {
+impl<T, A: AllocGfp, L: LenUint> Default for Vec<T, A, L> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T, A: Alloc, L: LenUint> Deref for Vec<T, A, L> {
+impl<T, A: AllocGfp, L: LenUint> Deref for Vec<T, A, L> {
     type Target = [T];
 
     fn deref(&self) -> &[T] {
@@ -314,7 +314,7 @@ impl<T, A: Alloc, L: LenUint> Deref for Vec<T, A, L> {
     }
 }
 
-impl<T, A: Alloc, L: LenUint> DerefMut for Vec<T, A, L> {
+impl<T, A: AllocGfp, L: LenUint> DerefMut for Vec<T, A, L> {
     fn deref_mut(&mut self) -> &mut [T] {
         unsafe { slice::from_raw_parts_mut(self.as_mut_ptr(), self.len()) }
     }
@@ -346,13 +346,13 @@ impl<T> Drop for DrainAll<'_, T> {
 }
 
 /// A Vec by value: its elements, then its allocation freed.
-pub struct IntoIter<T, A: Alloc, L: LenUint = usize> {
+pub struct IntoIter<T, A: AllocGfp, L: LenUint = usize> {
     v:     ManuallyDrop<Vec<T, A, L>>,
     start: usize,
     end:   usize,
 }
 
-impl<T, A: Alloc, L: LenUint> Iterator for IntoIter<T, A, L> {
+impl<T, A: AllocGfp, L: LenUint> Iterator for IntoIter<T, A, L> {
     type Item = T;
 
     fn next(&mut self) -> Option<T> {
@@ -368,7 +368,7 @@ impl<T, A: Alloc, L: LenUint> Iterator for IntoIter<T, A, L> {
     }
 }
 
-impl<T, A: Alloc, L: LenUint> DoubleEndedIterator for IntoIter<T, A, L> {
+impl<T, A: AllocGfp, L: LenUint> DoubleEndedIterator for IntoIter<T, A, L> {
     fn next_back(&mut self) -> Option<T> {
         if self.start == self.end {
             return None;
@@ -378,9 +378,9 @@ impl<T, A: Alloc, L: LenUint> DoubleEndedIterator for IntoIter<T, A, L> {
     }
 }
 
-impl<T, A: Alloc, L: LenUint> ExactSizeIterator for IntoIter<T, A, L> {}
+impl<T, A: AllocGfp, L: LenUint> ExactSizeIterator for IntoIter<T, A, L> {}
 
-impl<T, A: Alloc, L: LenUint> Drop for IntoIter<T, A, L> {
+impl<T, A: AllocGfp, L: LenUint> Drop for IntoIter<T, A, L> {
     fn drop(&mut self) {
         unsafe {
             let rest = self.v.as_mut_ptr().add(self.start);
@@ -392,7 +392,7 @@ impl<T, A: Alloc, L: LenUint> Drop for IntoIter<T, A, L> {
     }
 }
 
-impl<T, A: Alloc, L: LenUint> IntoIterator for Vec<T, A, L> {
+impl<T, A: AllocGfp, L: LenUint> IntoIterator for Vec<T, A, L> {
     type Item = T;
     type IntoIter = IntoIter<T, A, L>;
 
