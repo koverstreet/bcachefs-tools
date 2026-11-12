@@ -503,7 +503,7 @@ fn pack_into_dsts(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>], dsts: &mut [NewNo
         n.contents().reset_sib_u64s();
         n.keys_mut().verify_btree_nr_keys();
 
-        assert!(check_topology(t, n.locked()).is_ok(), "a packed node's topology bad:\n{}", n.to_text(t.fs()));
+        assert!(check_topology(t, n.held()).is_ok(), "a packed node's topology bad:\n{}", n.to_text(t.fs()));
     }
 }
 
@@ -528,7 +528,7 @@ fn btree_node_op_log(out: &mut Printbuf, fs: &Fs, srcs: &[Node<'_>], dsts: &[New
     }
     for (i, d) in dsts.iter().enumerate() {
         prt!(out, "dst {i}: ");
-        btree_node_op_log_one(out, fs, d.locked());
+        btree_node_op_log_one(out, fs, d.held());
     }
 }
 
@@ -1346,7 +1346,7 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
             bch2_btree_sort_into(fs, n, s);
         }
 
-        assert!(check_topology(update.t(), n.locked()).is_ok(), "a merged node's topology bad:\n{}", n.to_text(fs));
+        assert!(check_topology(update.t(), n.held()).is_ok(), "a merged node's topology bad:\n{}", n.to_text(fs));
         n.contents().reset_sib_u64s();
     } else {
         let dsts: &mut [NewNode<'_>; 2] = dsts.as_mut_slice().try_into().expect("a merge into two nodes");
@@ -1383,7 +1383,7 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
     let (mut si, mut di) = (0, 0);
     while si < nodes.len() || di < dsts.len() {
         let src_p = nodes.get(si).map(|&s| pos(s));
-        let dst_p = dsts.get(di).map(|n| pos(n.locked()));
+        let dst_p = dsts.get(di).map(|n| pos(n.held()));
 
         match (src_p, dst_p) {
             (Some(s), Some(d)) if s == d => {

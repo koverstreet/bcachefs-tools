@@ -104,7 +104,7 @@ impl InteriorUpdate<'_> {
         {
             let mut o = self.owned.borrow_mut();
             let super::Owned { consumed, open_buckets, .. } = &mut *o;
-            let r = consumed.iter_mut().find(|r| r.b == n.b).expect("a new node, consumed from the reserve");
+            let r = consumed.iter_mut().find(|r| r.b == NonNull::from(n.node())).expect("a new node, consumed from the reserve");
             for ob in r.ob.drain(fs) {
                 open_buckets.push(ob);
             }

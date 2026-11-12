@@ -8,7 +8,6 @@
 #![allow(non_camel_case_types)]
 
 use core::ffi::{c_uint, c_ulong};
-use core::marker::PhantomData;
 use core::mem::{size_of, ManuallyDrop};
 use core::ops::Deref;
 use core::ptr::{self, NonNull};
@@ -17,10 +16,9 @@ use cstruct_macros::{placed, CStruct, Init, Late, c_const, TypeInfo};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::OpenBucket;
 use crate::btree::iter::{BtreeTrans, CommitOpts, TransAttempt, Watermark};
-use crate::btree::node::{BtreeNode, NodeContents};
-use crate::btree::node::keys::KeysMut;
+use crate::btree::node::BtreeNode;
 use crate::btree::bkey::{BkeyI, BkeyV, BKEY_U64S};
-use crate::btree::path::{LockedNode, PathIdx, Paths};
+use crate::btree::path::{LockedNode, PathIdx, Paths, Write};
 use crate::c;
 use crate::data::keylist::{Keylist, PaddedKey};
 use crate::data_structures::array_vec::ArrayVec;
@@ -550,37 +548,7 @@ impl Deref for InteriorUpdate<'_> {
 
 /// A node from an interior update's reserve: intent and write locked, not yet
 /// reachable.
-pub(crate) struct NewNode<'u> {
-    b:       NonNull<BtreeNode>,
-    _update: PhantomData<&'u ()>,
-}
-
-impl Deref for NewNode<'_> {
-    type Target = BtreeNode;
-
-    fn deref(&self) -> &BtreeNode {
-        unsafe { self.b.as_ref() }
-    }
-}
-
-impl NewNode<'_> {
-    pub(crate) fn locked(&self) -> LockedNode<'_, BtreeNode> {
-        unsafe { LockedNode::new(self.b.as_ref()) }
-    }
-
-    pub(crate) fn contents(&self) -> &NodeContents {
-        unsafe { self.b.as_ref().contents() }
-    }
-
-    pub(crate) fn contents_mut(&mut self) -> &mut NodeContents {
-        unsafe { self.b.as_ref().contents_mut() }
-    }
-
-    pub(crate) fn keys_mut(&mut self) -> KeysMut<'_> {
-        let b = unsafe { self.b.as_ref() };
-        b.keys_mut(unsafe { b.contents_mut() })
-    }
-}
+pub(crate) type NewNode<'u> = LockedNode<'u, BtreeNode, Write>;
 
 impl<'t> InteriorUpdate<'t> {
     /// An update for @path's node at @level, its reserve the worst case: every
@@ -822,7 +790,7 @@ impl<'t> InteriorUpdate<'t> {
 
     /// The parent keys that go in @n inserted into it, @path's at its level.
     fn insert_parent_keys(&self, paths: &mut Paths<'_>, path: PathIdx, n: &NewNode<'_>) -> Result<(), BchError> {
-        split_merge::split_insert_keys(self.t, paths, path, n.locked(), &mut self.owned.borrow_mut().parent_keys)
+        split_merge::split_insert_keys(self.t, paths, path, n.held(), &mut self.owned.borrow_mut().parent_keys)
     }
 
     /// The parent keys that go in @b inserted into it from @path's iterator
@@ -863,7 +831,7 @@ impl<'t> InteriorUpdate<'t> {
             self.node_free_inmem(paths, idx, b);
         }
         for n in new {
-            self.trans().node_add(self.t, &mut paths.paths_and_updates(), n.locked());
+            self.trans().node_add(self.t, &mut paths.paths_and_updates(), n.held());
         }
         for &(_, b) in old {
             self.trans().node_verify_not_in_iters(paths, &b);

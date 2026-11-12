@@ -334,7 +334,7 @@ impl<'t> InteriorUpdate<'t> {
 
         fs.event_inc_trace(events::btree_node_alloc, |out| prt!(out, "{}", n.pos_to_text(fs)));
         fs.io_clock[WRITE].increment(fs.btree_sectors().into());
-        NewNode { b, _update: core::marker::PhantomData }
+        unsafe { NewNode::new_write(b.as_ref()) }
     }
 
     /// A copy of @b, compacted.
@@ -425,7 +425,7 @@ impl<'t> InteriorUpdate<'t> {
         };
         paths[path].put_level(level, &n.c, hold);
         paths[path].lock_taken(level);
-        self.trans().path_level_init(paths, path, level, n.locked());
+        self.trans().path_level_init(paths, path, level, n.held());
     }
 
     /// @b, freed by the update, freed in memory: @path holds it write locked.

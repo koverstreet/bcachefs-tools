@@ -8,7 +8,7 @@ use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_le, BkeyI, BKEY_U64S};
 use crate::btree::cache::bch2_btree_id_level_to_text;
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
 use crate::btree::node::iter::KeyIter;
-use crate::btree::node::keys::Keys;
+use crate::btree::node::keys::{Keys, KeysMut};
 use crate::btree::locking::btree_node_locked_type::{self, *};
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::btree::traverse::advance_to_pos;
@@ -1684,10 +1684,16 @@ impl PathNodeContents for BtreeNode {
     }
 }
 
+/// How a LockedNode's node is held: Held any way, its contents had by &; or
+/// for Write, by &mut.
+pub struct Held;
+pub struct Write;
+
 /// A node a path has locked, borrowed from the attempt as a key is: good until
 /// the attempt's next unlock or error, which nothing checks (see TransRef).
-pub struct LockedNode<'p, T: PathNode> {
-    node: &'p T,
+pub struct LockedNode<'p, T: PathNode, M = Held> {
+    node:  &'p T,
+    _mode: PhantomData<M>,
 }
 copy!([T: PathNode] LockedNode<'_, T>);
 
@@ -1695,21 +1701,58 @@ impl<'p, T: PathNode> LockedNode<'p, T> {
     /// # Safety
     /// @node is locked, any way, for 'p.
     pub unsafe fn new(node: &'p T) -> Self {
-        LockedNode { node }
+        LockedNode { node, _mode: PhantomData }
     }
 
+    pub fn contents(&self) -> &'p T::Contents
+    where
+        T: PathNodeContents,
+    {
+        unsafe { self.node.locked_contents().protected() }
+    }
+}
+
+impl<'p, T: PathNode> LockedNode<'p, T, Write> {
+    /// # Safety
+    /// @node is locked for write, for 'p, and nothing else has it as Write.
+    pub unsafe fn new_write(node: &'p T) -> Self {
+        LockedNode { node, _mode: PhantomData }
+    }
+
+    /// Held, for as long as this is borrowed.
+    pub fn held(&self) -> LockedNode<'_, T> {
+        LockedNode { node: self.node, _mode: PhantomData }
+    }
+
+    pub fn contents(&self) -> &T::Contents
+    where
+        T: PathNodeContents,
+    {
+        unsafe { self.node.locked_contents().protected() }
+    }
+
+    pub fn contents_mut(&mut self) -> &mut T::Contents
+    where
+        T: PathNodeContents,
+    {
+        unsafe { self.node.locked_contents().protected_mut() }
+    }
+}
+
+impl LockedNode<'_, BtreeNode, Write> {
+    pub fn keys_mut(&mut self) -> KeysMut<'_> {
+        let b = self.node;
+        b.keys_mut(self.contents_mut())
+    }
+}
+
+impl<'p, T: PathNode, M> LockedNode<'p, T, M> {
     pub fn node(&self) -> &'p T {
         self.node
     }
 }
 
-impl<'p, T: PathNodeContents> LockedNode<'p, T> {
-    pub fn contents(&self) -> &'p T::Contents {
-        unsafe { self.node.locked_contents().protected() }
-    }
-}
-
-impl<T: PathNode> Deref for LockedNode<'_, T> {
+impl<T: PathNode, M> Deref for LockedNode<'_, T, M> {
     type Target = T;
 
     fn deref(&self) -> &T {
