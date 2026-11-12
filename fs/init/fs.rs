@@ -425,10 +425,8 @@ impl Fs {
                  out: &mut Printbuf) -> Result<(), BchError> {
         let p = self.as_ptr();
 
-        unsafe {
-            (*p).stdio.store(opts.stdio as usize as *mut c::stdio_redirect, Relaxed);
-            (*p).recovery_task.store(sched::current(), Relaxed);
-        }
+        self.stdio.store(opts.stdio as usize as *mut c::stdio_redirect, Relaxed);
+        self.recovery_task.store(sched::current(), Relaxed);
 
         #[cfg(kernel)]
         unsafe { c::__module_get(&raw mut kernel::bindings::__this_module) };
