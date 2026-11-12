@@ -35,14 +35,14 @@ use crate::locking::{ExclusiveGuard, Locked, LockedBy, SharedGuard};
 use crate::new_lock;
 use crate::types::{rust_only, Fifo, Le64, Lent, RustOnly};
 use crate::util::Printbuf;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::{AllocBox, KVVec, Kmalloc};
 use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_symbol;
 use crate::util::closure::{closure_wait_event, closure_wake_up};
 use crate::util::kernel::local_clock;
 use crate::util::place::Contained;
 use crate::util::time_stats::TimeStats;
-use crate::util::{late::Late, mempool::{Mempool, PoolBox}, workqueue::{run_raw, RawWork, Workqueue, WqFlags}};
+use crate::util::{late::Late, mempool::Mempool, workqueue::{run_raw, RawWork, Workqueue, WqFlags}};
 use crate::prt;
 use pin_init::{init, init_zeroed, pin_data};
 use zerocopy::IntoBytes;
@@ -132,7 +132,7 @@ pub(crate) struct Updates {
      * Made visible, in the order they were: completed in that order. Each its
      * update's owner, from updated_node() or updated_root() to its free
      */
-    unwritten: Fifo<PoolBox<'static, BtreeUpdate>>,
+    unwritten: Fifo<UpdateBox>,
 }
 
 // The updates are reached through the lock, from any thread
@@ -150,7 +150,7 @@ fn write_blocked<'a>(b: &'a BtreeNode, _updates: &'a mut Updates) -> &'a mut Wri
 pub struct bch_fs_btree_interior_updates {
     #[late(Mempool::kmalloc(1, size_of::<BtreeUpdate>()), ENOMEM_btree_interior_update_pool_init)]
     #[c("mempool_t pool")]
-    pub pool: Late<Mempool>,
+    pub pool: Late<Mempool<Kmalloc>>,
     #[pin]
     #[init(RustOnly::new(new_lock!(Updates::default(), (), "&c->btree.interior_updates.lock")))]
     lock: rust_only!(Locked<c::mutex, Updates>),
@@ -394,6 +394,9 @@ macro_rules! rewrite_reason_strs {
 }
 c::btree_node_rewrite_reason_arms!(rewrite_reason_strs);
 
+/// An update, in an element of the interior updates' pool.
+type UpdateBox = AllocBox<BtreeUpdate, &'static Mempool<Kmalloc>>;
+
 impl BtreeUpdate {
     fn fs(&self) -> &Fs {
         &self.fs
@@ -525,7 +528,7 @@ pub(crate) struct InteriorUpdate<'t> {
      * The update, until updated_node() or updated_root() makes it visible and
      * hands it to its entry on unwritten: our ref on pending keeps it there
      */
-    owner: RefCell<Option<PoolBox<'static, BtreeUpdate>>>,
+    owner: RefCell<Option<UpdateBox>>,
 }
 
 impl Deref for InteriorUpdate<'_> {
@@ -676,7 +679,7 @@ impl<'t> InteriorUpdate<'t> {
 
         let btree = paths[path].btree_id();
         // made in place: the arrays are kilobytes
-        let Ok(owner) = fs_ref.btree.interior_updates.pool.alloc_box(c::GFP_NOIO, init!(BtreeUpdate {
+        let owner = AllocBox::new(&*fs_ref.btree.interior_updates.pool, init!(BtreeUpdate {
             fs:           unsafe { BackRef::new(fs) },
             start_time,
             ip_started,
@@ -701,7 +704,7 @@ impl<'t> InteriorUpdate<'t> {
             new_nodes    <- init_zeroed(),
             mode:               LockedBy::new(None, ()),
             write_blocked_list: ListLinks::new(),
-        }));
+        }? BchError))?;
         let raw = owner.as_ptr();
 
         {
@@ -896,7 +899,7 @@ impl Drop for InteriorUpdate<'_> {
 /// # Safety
 /// @update is live, and nothing uses it after.
 unsafe fn update_free(update: NonNull<BtreeUpdate>, trans: &BtreeTrans<'_>, paths: &mut Paths<'_>,
-                      rollback: Option<PoolBox<'static, BtreeUpdate>>) {
+                      rollback: Option<UpdateBox>) {
     let u = unsafe { update.as_ref() };
     let fs = unsafe { u.fs.get() };
 

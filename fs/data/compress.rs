@@ -47,8 +47,7 @@ use crate::{bch_err, btree::iter::lockrestart_do, btree_trans, fs::{Fs, SbLockGu
 use crate::errcode::{ret_to_c, BchError};
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
-use crate::locking::MemallocFlags;
-use crate::util::{alloc::{kmalloc, KVVec}, bio::{Bio, BioRange},
+use crate::util::{alloc::{AllocBox, KVmalloc}, bio::{Bio, BioRange},
                   ffi::Opaque, kernel::{unlikely, READ, WRITE}, late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
                   volatile::VolatileSlice, Printbuf, ToText};
 use core::ffi::{c_int, c_uint, c_void};
@@ -129,8 +128,7 @@ c_enum! {
     pub enum bbuf_type: u32 {
         BB_none,
         BB_vmap,
-        BB_kmalloc,
-        BB_mempool,
+        BB_pool,
     }
 }
 
@@ -208,24 +206,26 @@ fn extent_max(fs: &Fs) -> usize {
 /// read pay the write side's footprint. lz4 decompresses with no workspace.
 #[derive(::pin_init::Zeroable)]
 pub struct Compress {
-    bounce:     [Late<Mempool, SbLock>; 2],
-    workspace:  [Late<Mempool, SbLock>; OPT_NR],
-    decompress: [Late<Mempool, SbLock>; OPT_NR],
+    bounce:     [Late<Mempool<KVmalloc>, SbLock>; 2],
+    workspace:  [Late<Mempool<KVmalloc>, SbLock>; OPT_NR],
+    decompress: [Late<Mempool<KVmalloc>, SbLock>; OPT_NR],
 }
 
 // ── Bounce buffers ───────────────────────────────────────────────────────
 
 /// Freed on drop. 'a is what it borrows: the bio whose pages it maps, or the
-/// filesystem whose pool it's from.
+/// filesystem whose pool it's from - a BB_pool's memory, which it holds.
 pub(crate) struct Bbuf<'a> {
-    raw: c::bbuf,
-    len: usize,
-    _a:  PhantomData<&'a ()>,
+    raw:    c::bbuf,
+    len:    usize,
+    pooled: Option<AllocBox<[MaybeUninit<u8>], &'a Mempool<KVmalloc>>>,
+    _a:     PhantomData<&'a ()>,
 }
 
 impl<'a> Bbuf<'a> {
     fn new(fs: &'a Fs, b: NonNull<u8>, type_: bb, rw: usize, len: usize) -> Self {
-        Bbuf { raw: c::bbuf { c: fs.as_ptr(), b: b.as_ptr().cast(), type_, rw: rw as c_int }, len, _a: PhantomData }
+        Bbuf { raw: c::bbuf { c: fs.as_ptr(), b: b.as_ptr().cast(), type_, rw: rw as c_int }, len, pooled: None,
+               _a: PhantomData }
     }
 
     /// Ours, or the bio's - which may be written meanwhile.
@@ -250,18 +250,15 @@ impl Drop for Bbuf<'_> {
 /// # Safety
 /// @buf is one of ours, not used after.
 unsafe fn bbuf_exit(buf: &mut c::bbuf) {
-    let Some(p) = NonNull::new(buf.b.cast::<u8>()) else { return };
     // SAFETY: the caller's; its type is how it was allocated
-    unsafe {
-        match buf.type_ {
-            bb::BB_none => {}
-            #[cfg(kernel)]
-            bb::BB_vmap => c::vunmap(p.as_ptr().map_addr(|a| a & !(crate::util::kernel::PAGE_SIZE - 1)).cast()),
-            #[cfg(not(kernel))]
-            bb::BB_vmap => unreachable!(),
-            bb::BB_kmalloc => c::rust_kfree(p.as_ptr().cast()),
-            bb::BB_mempool => Fs::borrow_raw(buf.c).compress.bounce[buf.rw as usize].free_raw(p),
-        }
+    match buf.type_ {
+        bb::BB_none => {}
+        #[cfg(kernel)]
+        bb::BB_vmap => unsafe { c::vunmap(buf.b.map_addr(|a| a & !(crate::util::kernel::PAGE_SIZE - 1))) },
+        #[cfg(not(kernel))]
+        bb::BB_vmap => unreachable!(),
+        /* its Bbuf's AllocBox's */
+        bb::BB_pool => {}
     }
 }
 
@@ -269,9 +266,9 @@ pub(crate) fn bounce_alloc(fs: &Fs, size: usize, rw: usize) -> Bbuf<'_> {
     assert!(size <= extent_max(fs), "bounce buffer of {size} bytes, past encoded_extent_max {}", extent_max(fs));
 
     /*
-     * Not zeroed - kmalloc()'s, or a mempool element reused - and it needn't
-     * be: every bounce is either fully overwritten before it is read, or its
-     * unwritten tail is never consumed. By case:
+     * Not zeroed - the pool's memory as it is - and it needn't be: every
+     * bounce is either fully overwritten before it is read, or its unwritten
+     * tail is never consumed. By case:
      *
      *  - READ bounces (compression input, decompression compressed-input):
      *    bio_bounce() copies the entire buffer from the bio before anything
@@ -292,14 +289,11 @@ pub(crate) fn bounce_alloc(fs: &Fs, size: usize, rw: usize) -> Bbuf<'_> {
      * userspace - but it is root-only and explicitly unsafe, so we ignore
      * it.
      */
-    let p = {
-        let _nowarn = MemallocFlags::nowarn();
-        kmalloc(size)
-    };
-    match p {
-        Ok(p) => Bbuf::new(fs, p, bb::BB_kmalloc, rw, size),
-        Err(_) => Bbuf::new(fs, fs.compress.bounce[rw].alloc_raw(c::GFP_KERNEL), bb::BB_mempool, rw, size),
-    }
+    let pooled = AllocBox::new_uninit_slice(&*fs.compress.bounce[rw], size)
+        .expect("a pool's allocation: it waits for an element");
+    let mut b = Bbuf::new(fs, pooled.as_ptr().cast(), bb::BB_pool, rw, size);
+    b.pooled = Some(pooled);
+    b
 }
 
 pub(crate) fn bio_bounce<'f>(fs: &'f Fs, r: BioRange<'_>, rw: usize) -> Bbuf<'f> {
@@ -330,6 +324,7 @@ fn virt_contig(r: BioRange<'_>) -> Option<NonNull<u8>> {
 /// ends.
 #[cfg(kernel)]
 fn vmap<'a>(fs: &'a Fs, r: BioRange<'a>, rw: usize) -> Option<Bbuf<'a>> {
+    use crate::util::alloc::KVVec;
     use crate::util::bio::{nth_page, Segment};
     use crate::util::kernel::PAGE_SIZE;
 
@@ -425,8 +420,11 @@ pub(crate) fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice
     let (src, dst) = (src.as_ptr().cast_const(), dst.as_ptr());
     // none for lz4, and for gzip in userspace, whose workspace is 0 bytes
     let pool = &fs.compress.decompress[opt];
-    let ws = pool.is_made().then(|| pool.alloc());
-    let ws = ws.as_ref().map_or(ptr::null_mut(), |b| b.as_ptr().cast());
+    let ws = pool.is_made().then(|| {
+        AllocBox::<[MaybeUninit<u8>], _>::new_uninit_slice(&**pool, pool.element_size())
+            .expect("a pool's allocation: it waits for an element")
+    });
+    let ws = ws.as_ref().map_or(ptr::null_mut(), |b| b.as_ptr().as_ptr().cast());
 
     // SAFETY: @src and @dst crc's sizes, apart
     unsafe {
@@ -661,27 +659,19 @@ fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], sr
     }
 
     /*
-     * Try for what this compression actually needs before falling back to
-     * the pool. The pool element is sized for the worst case, so taking one
+     * What this compression actually needs, which the pool tries for before
+     * its element. The element is sized for the worst case, so taking one
      * for an ordinary write costs far more memory than the write needs -
      * compression=zstd:3 was being handed a level-22 workspace. The pool is
      * the reserve that guarantees forward progress when memory is tight,
-     * which is the only reason it has to exist at all.
-     *
-     * NORECLAIM because we're in the write path: if this can't be had
-     * cheaply, the reserve is right there.
+     * which is the only reason it has to exist at all - and without reclaim
+     * first, as we're in the write path: if this can't be had cheaply, the
+     * reserve is right there.
      */
     let ws_size = compress_workspace_size(fs, t, level);
-    let (mut owned, mut pooled) = (None, None);
-    let owned_ws = {
-        let _noreclaim = MemallocFlags::noreclaim();
-        let _nowarn = MemallocFlags::nowarn();
-        KVVec::with_capacity(ws_size)
-    };
-    let ws: &mut [MaybeUninit<u8>] = match owned_ws {
-        Ok(v) => &mut owned.insert(v).spare_capacity_mut()[..ws_size],
-        Err(_) => pooled.insert(fs.compress.workspace[t].alloc()).as_uninit_mut(),
-    };
+    let mut ws = AllocBox::new_uninit_slice(&*fs.compress.workspace[t], ws_size)
+        .expect("a pool's allocation: it waits for an element");
+    let ws: &mut [MaybeUninit<u8>] = &mut ws;
 
     /*
      * XXX: this algorithm sucks when the compression code doesn't tell us
@@ -842,7 +832,7 @@ fn init_features(fs: &Fs, sb: &SbLockGuard<'_>, features: u64) -> Result<(), Bch
         return Ok(());
     }
 
-    let pool = |p: &Late<Mempool, SbLock>, size, err: e| p.init(sb, || Mempool::kvmalloc(1, size)).map_err(|_| fs.err(err));
+    let pool = |p: &Late<Mempool<KVmalloc>, SbLock>, size, err: e| p.init(sb, || Mempool::kvmalloc(1, size)).map_err(|_| fs.err(err));
     let pools = &fs.compress;
     pool(&pools.bounce[READ], extent_max(fs), e::BCH_ERR_ENOMEM_compression_bounce_read_init)?;
     pool(&pools.bounce[WRITE], extent_max(fs), e::BCH_ERR_ENOMEM_compression_bounce_write_init)?;

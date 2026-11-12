@@ -96,6 +96,7 @@ mod state;
 use bufs::{cache_node_struct_alloc, cached_node, new_node_lock, NodeBufs};
 pub(crate) use alloc::UnhashedNode;
 pub use bufs::{node_data_free, node_mem_alloc, node_mem_free, node_scratch_alloc, node_struct_free, Bounce};
+pub(crate) use bufs::bounce_pool_alloc;
 pub use pins::BtreeCachePins;
 pub(crate) use state::NodeTable;
 

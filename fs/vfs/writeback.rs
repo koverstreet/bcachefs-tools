@@ -11,6 +11,8 @@ use crate::data::write::bch2_write;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::inode_opts;
+use crate::locking::MemallocFlags;
+use crate::util::alloc::AllocBox;
 use crate::util::bio::{plugged, Bio, BioBuffersUnmanaged, BioOwner};
 use crate::util::closure::{self, closure_wait, StackClosure};
 use crate::util::kernel::{local_clock, unlikely, PAGE_SIZE};
@@ -362,10 +364,14 @@ pub(super) fn writepages(mapping: Mapping, wbc: Wbc) -> c_int {
     let inode = mapping.inode();
     let fs = inode.fs();
     let pool = &fs.vfs.writepage_buf_pool;
+    let tmp = {
+        let _noio = MemallocFlags::noio();
+        AllocBox::<[core::mem::MaybeUninit<u8>], _>::new_uninit_slice(&**pool, pool.element_size())
+    }.expect("a pool's allocation: it waits for an element");
     let mut w = WritepageState {
         io:   None,
         opts: inode_opts::get_inode(fs, &inode.inode()),
-        tmp:  pool.alloc_raw(c::GFP_NOIO).as_ptr().cast(),
+        tmp:  tmp.as_ptr().as_ptr().cast(),
     };
 
     let ret = plugged(|| {
@@ -387,7 +393,7 @@ pub(super) fn writepages(mapping: Mapping, wbc: Wbc) -> c_int {
         ret
     });
 
-    unsafe { pool.free_raw(NonNull::new_unchecked(w.tmp.cast())) };
+    drop(tmp);
 
     if ret < 0 { BchError::from_raw(ret).class() } else { ret }
 }

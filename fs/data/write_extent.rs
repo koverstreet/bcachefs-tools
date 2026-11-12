@@ -10,6 +10,7 @@ use crate::data::ptrs::{crc_is_compressed, extent_crc_append, extent_nonce};
 use crate::data::write::{to_wbio, wbio_init, write_op_error};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
+use crate::locking::MemallocFlags;
 use crate::util::bio::{pages, Bio};
 use crate::util::kernel::{unlikely, PAGE_SECTORS, PAGE_SIZE, READ, WRITE};
 use c::bch_write_flags as w;
@@ -111,7 +112,8 @@ fn write_bio_alloc(fs: &Fs, wp: &LockedWritePoint<'_>, src: *mut c::bio, buf: *m
     let required = output_available.min(fs.opts().encoded_extent_max.get());
 
     if unlikely(wbio.bio.bi_iter.bi_size < required) {
-        fs.bio_bounce.alloc(&mut wbio.bio, required as usize, c::GFP_NOIO | c::__GFP_SKIP_ZERO);
+        let _noio = MemallocFlags::noio();
+        fs.bio_bounce.alloc(&mut wbio.bio, required as usize).expect("a write's bounce pages, outside NORECLAIM");
     }
 
     bio

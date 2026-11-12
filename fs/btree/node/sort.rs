@@ -10,9 +10,11 @@ use crate::c;
 use crate::fs::Fs;
 use crate::types::Le64;
 use crate::util::kernel::{copy_u64s_small, local_clock, mem_alloc_profiling_enabled};
-use crate::util::mempool::PoolBufZeroed;
+use crate::locking::MemallocFlags;
+use crate::util::alloc::{AllocBox, Kmalloc};
+use crate::util::mempool::Mempool;
 use crate::util::time_stats::TimeStats;
-use crate::util::vstructs::{cast_plain_slice_mut, plain_bytes, Head};
+use crate::util::vstructs::{plain_bytes, Head};
 use crate::data_structures::array_vec::ArrayVec;
 use core::cmp::Ordering;
 use core::ffi::c_uint;
@@ -23,7 +25,7 @@ use cstruct_macros::{c_enum, Plain};
 /// [k, end), offsets into the node's buffer: u32s, as the unwritten whiteouts
 /// run to its end, past a 512k node's last u16.
 #[repr(C)]
-#[derive(Clone, Copy, Default, Plain)]
+#[derive(Clone, Copy, Default, Plain, ::pin_init::Zeroable)]
 pub struct SortRun {
     pub k:   u32,
     pub end: u32,
@@ -51,17 +53,21 @@ impl WriteSortRuns {
 /// The runs a node read merges, in a fill_iter element: room for a run per
 /// block of the node, twice over.
 pub struct SortRuns<'p> {
-    buf:  PoolBufZeroed<'p>,
+    buf:  AllocBox<[SortRun], &'p Mempool<Kmalloc>>,
     used: usize,
 }
 
 impl<'p> SortRuns<'p> {
     pub fn new(fs: &'p Fs) -> Self {
-        Self { buf: fs.btree.fill_iter.alloc_zeroed(c::GFP_NOIO), used: 0 }
+        let pool = &fs.btree.fill_iter;
+        let _noio = MemallocFlags::noio();
+        let buf = AllocBox::new_zeroed_slice(pool, pool.element_size() / size_of::<SortRun>())
+            .expect("a pool's allocation: it waits for an element");
+        Self { buf, used: 0 }
     }
 
     fn runs(&mut self) -> &mut [SortRun] {
-        cast_plain_slice_mut(self.buf.as_bytes_mut()).expect("a fill_iter element, sized in runs")
+        &mut self.buf
     }
 
     /// The node's keys at offsets @keys, to merge.

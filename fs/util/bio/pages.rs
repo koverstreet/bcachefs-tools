@@ -22,7 +22,7 @@ use crate::errcode::BchError;
 use crate::util::alloc::{current_gfp_context_raw, AllocError};
 use crate::util::ffi::Opaque;
 use crate::util::kernel::PAGE_SIZE;
-use crate::util::mempool::Mempool;
+use crate::util::mempool::{Mempool, Raw};
 use pin_init::{pin_data, pin_init, PinInit};
 use cstruct_macros::c_export;
 
@@ -39,7 +39,7 @@ pub struct BouncePool {
     #[pin]
     lock: Locked<c::mutex>,
     #[pin]
-    pool: Mempool,
+    pool: Mempool<Raw>,
 }
 
 impl BouncePool {
@@ -51,22 +51,25 @@ impl BouncePool {
         }? BchError)
     }
 
-    /// Allocates the rest of @size into @bio, waiting rather than failing.
-    /// It hands out whole elements, so the bio's size is trimmed to @size
-    /// after.
-    pub fn alloc(&self, bio: &mut c::bio, size: usize, gfp: c::gfp_t) {
+    /// Allocates the rest of @size into @bio, waiting for elements - in a
+    /// NORECLAIM scope, where it can't, failing, with what it had allocated
+    /// left on the bio. It hands out whole elements, so the bio's size is
+    /// trimmed to @size after.
+    pub fn alloc(&self, bio: &mut c::bio, size: usize) -> Result<(), AllocError> {
         let _lock = self.lock.lock();
 
         while (bio.bi_iter.bi_size as usize) < size {
-            let p = self.pool.alloc_raw(gfp);
+            let p = self.pool.alloc_raw()?;
             unsafe { c::bio_add_virt_nofail(bio, p.as_ptr().cast(), POOL_LEN as u32) };
         }
         bio.bi_iter.bi_size = bio.bi_iter.bi_size.min(size as u32);
+        Ok(())
     }
 }
 
+/// Data buffers, overwritten before they're read: not zeroed.
 unsafe extern "C" fn bounce_alloc(gfp: c::gfp_t, _: *mut c_void) -> *mut c_void {
-    unsafe { c::rust_bio_pages_alloc(POOL_LEN, gfp) }
+    unsafe { c::rust_bio_pages_alloc(POOL_LEN, gfp | c::__GFP_SKIP_ZERO) }
 }
 
 unsafe extern "C" fn bounce_free(p: *mut c_void, _: *mut c_void) {
@@ -93,13 +96,17 @@ pub fn alloc_pages(bio: &mut c::bio, bs: u32, size: usize, gfp: c::gfp_t) -> Res
 }
 
 /// Allocates @size bytes into @bio with alloc_pages(), and the rest from
-/// @pool. The bio must have the bvecs for them.
-pub fn alloc_pages_pool(pool: &BouncePool, bio: &mut c::bio, bs: u32, size: usize, gfp: c::gfp_t) {
+/// @pool - failing as the pool does, what was allocated left on the bio. The
+/// bio must have the bvecs for them.
+pub fn alloc_pages_pool(pool: &BouncePool, bio: &mut c::bio, bs: u32, size: usize, gfp: c::gfp_t)
+    -> Result<(), AllocError>
+{
     // short is fine: the pool has the rest
     let _ = alloc_pages(bio, bs, size, gfp);
     if (bio.bi_iter.bi_size as usize) < size {
-        pool.alloc(bio, size, gfp);
+        pool.alloc(bio, size)?;
     }
+    Ok(())
 }
 
 /// The most bvecs @size takes, from alloc_pages() and the bounce pool: one an
@@ -146,7 +153,7 @@ unsafe fn free(pool: Option<&BouncePool>, bio: &mut c::bio) {
 
 #[c_export]
 pub fn bch2_bio_alloc_pages_pool(fs: &Fs, bio: &mut c::bio, bs: c_uint, size: usize, gfp: c::gfp_t) {
-    alloc_pages_pool(&fs.bio_bounce, bio, bs, size, gfp)
+    alloc_pages_pool(&fs.bio_bounce, bio, bs, size, gfp).expect("bounce pages for C, outside NORECLAIM")
 }
 
 #[c_export]

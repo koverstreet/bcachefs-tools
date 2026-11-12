@@ -6,7 +6,7 @@ use crate::cstructs::c;
 #[cfg(not(NO_BCACHEFS_FS))]
 use crate::types::{RustOnly, rust_only};
 #[cfg(not(NO_BCACHEFS_FS))]
-use crate::util::{bio::BioSet, late::Late, mempool::Mempool, workqueue::{Workqueue, WqFlags}};
+use crate::util::{alloc::KVmalloc, bio::BioSet, late::Late, mempool::Mempool, workqueue::{Workqueue, WqFlags}};
 use cstruct_macros::{CStruct, Init, Late, TypeInfo};
 use pin_init::pin_data;
 
@@ -41,7 +41,7 @@ pub struct bch_fs_vfs {
     #[cfg(not(NO_BCACHEFS_FS))]
     #[late(Mempool::kvmalloc(4, c::BCH_WRITEPAGE_BUF_BYTES), ENOMEM_writepage_buf_pool_init)]
     #[c("mempool_t writepage_buf_pool")]
-    pub writepage_buf_pool: Late<Mempool>,
+    pub writepage_buf_pool: Late<Mempool<KVmalloc>>,
     #[cfg(not(NO_BCACHEFS_FS))]
     #[late(Workqueue::new(c"bcachefs_vfs_writeback",
                           WqFlags::MEM_RECLAIM | WqFlags::FREEZABLE | WqFlags::UNBOUND, 1),

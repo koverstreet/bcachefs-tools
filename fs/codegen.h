@@ -118,6 +118,10 @@ const blk_status_t RUST_CONST_HELPER_BLK_STS_INVAL		= BLK_STS_INVAL;
 const gfp_t RUST_CONST_HELPER_GFP_NOIO			= GFP_NOIO;
 const gfp_t RUST_CONST_HELPER___GFP_SKIP_ZERO		= __GFP_SKIP_ZERO;
 const gfp_t RUST_CONST_HELPER___GFP_NORETRY		= __GFP_NORETRY;
+/* util/mempool.rs's first try, mempool_alloc()'s */
+const gfp_t RUST_CONST_HELPER___GFP_DIRECT_RECLAIM	= __GFP_DIRECT_RECLAIM;
+const gfp_t RUST_CONST_HELPER___GFP_IO			= __GFP_IO;
+const gfp_t RUST_CONST_HELPER___GFP_NOMEMALLOC		= __GFP_NOMEMALLOC;
 /* btree/cache/'s node buffers */
 const gfp_t RUST_CONST_HELPER___GFP_ACCOUNT		= __GFP_ACCOUNT;
 const gfp_t RUST_CONST_HELPER___GFP_RECLAIM		= __GFP_RECLAIM;

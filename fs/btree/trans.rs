@@ -20,7 +20,7 @@ use crate::journal::validate::journal_entry_to_text;
 use crate::locking::MemallocFlags;
 use crate::prt;
 use crate::types::bits_to_longs;
-use crate::util::alloc::{AllocError, Vec};
+use crate::util::alloc::{AllocError, Kmalloc, Vec};
 use crate::util::mempool::Mempool;
 use super::types::TransMem;
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -438,7 +438,10 @@ fn bch2_trans_alloc(c: &Fs) -> NonNull<BtreeTrans<'_>> {
         }
     }
 
-    let trans = c.btree.trans.pool.alloc_raw(c::GFP_NOIO).cast::<BtreeTrans<'_>>();
+    let trans = {
+        let _noio = MemallocFlags::noio();
+        c.btree.trans.pool.alloc_raw()
+    }.expect("a transaction outside NORECLAIM").cast::<BtreeTrans<'_>>();
     let p = trans.as_ptr();
     unsafe {
         p.write_bytes(0, 1);
@@ -711,7 +714,7 @@ impl TransMem {
     }
 
     /// Its buffer freed: given back to the pool, if it's one of its elements.
-    fn free(self, pool: &Mempool) {
+    fn free(self, pool: &Mempool<Kmalloc>) {
         if self.used_mempool {
             let (p, _, _) = self.buf.into_raw_parts();
             unsafe { pool.free_raw(NonNull::new_unchecked(p).cast()) };
@@ -974,7 +977,7 @@ impl BtreeTrans<'_> {
             self.mem_with(|m| m.reserve(new_bytes as usize)).ok()
         });
         if reserved.is_none() {
-            let p = self.fs().btree.trans.malloc_pool.alloc_raw(c::GFP_KERNEL);
+            let p = self.fs().btree.trans.malloc_pool.alloc_raw().expect("transaction memory, its locks dropped");
             self.mem_with(|m| m.adopt_pool_buf(p));
         }
     }

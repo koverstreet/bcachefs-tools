@@ -18,7 +18,7 @@ use crate::util::alloc::{DArrayLoan, KVVec, Kmalloc};
 use crate::util::bio::{BioSet, Either};
 use crate::util::late::Late;
 use crate::util::Printbuf;
-use crate::util::mempool::Mempool;
+use crate::util::mempool::{Mempool, Raw};
 use crate::util::rcu::Srcu;
 use crate::util::workqueue::{Workqueue, WqFlags};
 use crate::types::{CacheAligned, DArray, NeBytes, RustOnly, bits_to_longs, c_default, rust_only};
@@ -990,11 +990,11 @@ pub struct bch_fs_btree_trans {
     #[pin]
     #[init(Mempool::kmalloc(1, core::mem::size_of::<BtreeTrans<'_>>()))]
     #[c("mempool_t pool")]
-    pub pool: Mempool,
+    pub pool: Mempool<Kmalloc>,
     #[pin]
     #[init(Mempool::kmalloc(1, c::BTREE_TRANS_MEM_MAX as usize))]
     #[c("mempool_t malloc_pool")]
-    pub malloc_pool: Mempool,
+    pub malloc_pool: Mempool<Kmalloc>,
     #[pin]
     #[init(PerCpu::alloc(), ENOMEM_fs_other_alloc)]
     #[c("struct btree_trans_buf __percpu *bufs")]
@@ -1155,9 +1155,10 @@ pub struct bch_fs_btree {
     pub foreground_merge_threshold: u16,
 
     #[pin]
-    #[init(Mempool::kvmalloc(1, opts.btree_node_size as usize), ENOMEM_fs_other_alloc)]
+    #[init(Mempool::with(1, crate::btree::cache::bounce_pool_alloc, c::mempool_kvfree,
+                         opts.btree_node_size as usize), ENOMEM_fs_other_alloc)]
     #[c("mempool_t bounce_pool")]
-    pub bounce_pool: Mempool,
+    pub bounce_pool: Mempool<Raw>,
 
     pub write_stats: [cs::btree_write_stats; cs::BTREE_WRITE_TYPE_NR as usize],
 
@@ -1168,7 +1169,7 @@ pub struct bch_fs_btree {
     #[pin]
     #[init(fill_iter_pool(opts), ENOMEM_fs_other_alloc)]
     #[c("mempool_t fill_iter")]
-    pub fill_iter: Mempool,
+    pub fill_iter: Mempool<Kmalloc>,
     #[pin]
     #[init(Workqueue::new(c"bcachefs_btree_read_complete",
                           WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::PERCPU, 512),
@@ -1257,7 +1258,7 @@ pub fn btree_max_u64s(btree_node_size: u32) -> usize {
     (btree_node_size as usize - size_of::<crate::util::vstructs::Head<cs::btree_node>>()) / size_of::<u64>()
 }
 
-fn fill_iter_pool(opts: &c::bch_opts) -> impl PinInit<Mempool, BchError> {
+fn fill_iter_pool(opts: &c::bch_opts) -> impl PinInit<Mempool<Kmalloc>, BchError> {
     let btree_blocks = (opts.btree_node_size as usize >> 9) >> (opts.block_size as usize >> 9).ilog2();
     Mempool::kmalloc(1, (btree_blocks + 1) * 2 * size_of::<SortRun>())
 }

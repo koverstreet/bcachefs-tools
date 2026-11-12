@@ -15,8 +15,14 @@ use core::alloc::Layout;
 use core::ffi::c_void;
 use core::ptr::NonNull;
 
+/// The bounce pool's elements, kvmalloc()'d as a bounce buffer is: accounted
+/// and reclaimable.
+pub(crate) unsafe extern "C" fn bounce_pool_alloc(gfp: c::gfp_t, size: *mut c_void) -> *mut c_void {
+    unsafe { c::mempool_kvmalloc(gfp | c::__GFP_ACCOUNT | c::__GFP_RECLAIMABLE, size) }
+}
+
 /// Up to a node's size, to sort a node's keys into: kvmalloc()'d, or the
-/// bounce pool's, so it never fails. Freed when dropped - whichever buffer it
+/// bounce pool's, so it never fails outside NORECLAIM. Freed when dropped - whichever buffer it
 /// holds then: swap() trades it for a node's, which it's allocated as.
 pub struct Bounce<'f> {
     fs:      &'f Fs,
@@ -31,10 +37,10 @@ impl<'f> Bounce<'f> {
                 "a {bytes} byte bounce buffer, past the {} byte node size", fs.opts.btree_node_size.get());
 
         let _noio = MemallocFlags::noio();
-        let gfp = c::__GFP_ACCOUNT | c::__GFP_RECLAIMABLE;
-        let (p, mempool) = match NonNull::new(alloc_raw(Mem::Kvmalloc, bytes, c::GFP_NOWAIT | gfp)) {
+        let gfp = c::GFP_NOWAIT | c::__GFP_ACCOUNT | c::__GFP_RECLAIMABLE;
+        let (p, mempool) = match NonNull::new(alloc_raw(Mem::Kvmalloc, bytes, gfp)) {
             Some(p) => (p.cast(), false),
-            None    => (fs.btree.bounce_pool.alloc_raw(c::GFP_NOIO | gfp).cast(), true),
+            None    => (fs.btree.bounce_pool.alloc_raw().expect("a bounce buffer outside NORECLAIM").cast(), true),
         };
         Self { fs, p, bytes, mempool }
     }
