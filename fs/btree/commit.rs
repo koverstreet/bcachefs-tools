@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use core::ffi::{c_int, CStr};
+use core::ffi::c_int;
 use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ptr;
@@ -692,7 +692,7 @@ impl BtreeTrans<'_> {
             if names {
                 invariant!(w.room() >= jset_u64s(JSET_ENTRY_LOG_U64S));
                 let log = w.add_entry(c::bch_jset_entry_type::log, 0, 0, JSET_ENTRY_LOG_U64S)?.as_mut_bytes();
-                let name = unsafe { CStr::from_ptr(self.fn_.get().cast()) }.to_bytes();
+                let name = self.fn_name().as_bytes();
                 let (n, pad) = log.split_at_mut(name.len().min(log.len()));
                 n.copy_from_slice(&name[..n.len()]);
                 pad.fill(0);

@@ -27,7 +27,7 @@ use crate::btree::path::BtreePath;
 use crate::new_lock;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::Validated;
-use crate::util::ffi::{c_char, Opaque};
+use crate::util::ffi::Opaque;
 use crate::util::percpu::PerCpu;
 use crate::util::shrinker::Shrinker;
 use core::cell::Cell;
@@ -854,8 +854,6 @@ pub struct BtreeTrans<'f> {
      * node IO (see bch2_btree_node_wait_on_write()).
      */
     pub queued_write_bios: Cell<*mut cs::bio>,
-
-    pub fn_: Cell<*const c_char>,
 
     /* update path: */
     pub journal_entries: Cell<cs::btree_trans_subbuf<c::jset_entry<Validated>>>,

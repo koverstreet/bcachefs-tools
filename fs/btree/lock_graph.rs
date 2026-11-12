@@ -28,7 +28,7 @@ use crate::util::percpu::{bch2_raw_smp_processor_id, bch2_set_current_wake_cpu, 
 use crate::util::log::{print_str, LogLevel};
 use crate::util::rcu::{self, ReadGuard};
 use crate::util::Printbuf;
-use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
+use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::mem::offset_of;
 use core::ptr::{self, null_mut};
 use core::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering::{Acquire, Relaxed, Release, SeqCst}};
@@ -78,7 +78,7 @@ impl Trans {
     }
 
     fn fn_name(self) -> &'static str {
-        unsafe { CStr::from_ptr((*self.0).fn_.get().cast()) }.to_str().unwrap_or("?")
+        crate::btree::trans::transaction_fn_name(unsafe { (*self.0).fn_idx.get() })
     }
 
     /// For the waiting transaction's own thread: the one the walk starts from.

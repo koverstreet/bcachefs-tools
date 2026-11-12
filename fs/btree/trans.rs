@@ -157,10 +157,9 @@ impl<'f> BtreeTrans<'f> {
         self.journal_res_seq.get()
     }
 
-    /// The function that got it, for messages: trans->fn.
-    pub fn fn_name(&self) -> &str {
-        // SAFETY: a string literal, set when it's got
-        unsafe { CStr::from_ptr(self.fn_.get().cast()) }.to_str().unwrap_or("?")
+    /// The function that got it, for messages.
+    pub fn fn_name(&self) -> &'static str {
+        transaction_fn_name(self.fn_idx.get())
     }
 
     /// Journal space for keys a trigger adds in the commit's atomic phase,
@@ -537,7 +536,6 @@ impl<'f> TransGuard<'f> {
 
         t.fn_idx.set(fn_idx as u8);
         if let Some(s) = stats {
-            t.fn_.set(transaction_fn(fn_idx as usize).map_or(ptr::null(), |f| f.as_ptr().cast()));
             t.nr_paths_max.set(s.lock.nr_max_paths.get() as _);
         }
         t.shard_cpu.set(if c.opts().shard_inode_numbers_bits.get() != 0 {
@@ -1115,6 +1113,11 @@ static TRANSACTION_FNS: [AtomicPtr<c_char>; c::BCH_TRANSACTIONS_NR as usize] = {
 pub fn transaction_fn(idx: usize) -> Option<&'static CStr> {
     let p = TRANSACTION_FNS.get(idx)?.load(Ordering::Acquire);
     (!p.is_null()).then(|| unsafe { CStr::from_ptr(p.cast()) })
+}
+
+/// The name registered at @idx, for messages.
+pub fn transaction_fn_name(idx: u8) -> &'static str {
+    transaction_fn(idx.into()).and_then(|s| s.to_str().ok()).unwrap_or("?")
 }
 
 /// The names registered, by index, up to the first slot that isn't.
