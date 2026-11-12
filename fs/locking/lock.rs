@@ -618,46 +618,84 @@ impl<G, P, L> Deref for LockedBy<G, P, L> {
     }
 }
 
-/// A LockedBy placed in its parent, its lock at @L from there: its G, had by
-/// showing a guard of that lock.
-impl<C, A, G, P, L> Placed<C, A>
+/// A LockedBy as a Placed holds it: itself, or - in a struct C shares - a
+/// RustOnly of it.
+pub trait AsLockedBy {
+    type G;
+    type P;
+    type L;
+    fn locked_by(&self) -> &LockedBy<Self::G, Self::P, Self::L>;
+}
+
+impl<G, P, L> AsLockedBy for LockedBy<G, P, L> {
+    type G = G;
+    type P = P;
+    type L = L;
+    fn locked_by(&self) -> &Self {
+        self
+    }
+}
+
+impl<G, P, L, const U64S: usize, const ALIGN: usize> AsLockedBy for crate::types::RustOnly<LockedBy<G, P, L>, U64S, ALIGN>
 where
-    C: Deref<Target = LockedBy<G, P, L>>,
+    crate::types::Align<ALIGN>: crate::types::AlignMarker,
 {
+    type G = G;
+    type P = P;
+    type L = L;
+    fn locked_by(&self) -> &LockedBy<G, P, L> {
+        self
+    }
+}
+
+/// A LockedBy placed in its parent, its lock at its L from there: its G, had
+/// by showing a guard of that lock.
+impl<C: AsLockedBy, A> Placed<C, A> {
+    #[track_caller]
     fn check<H: Held, LG, LP>(&self, guard: &H)
     where
         Self: Contained,
-        L: Path<<Self as Contained>::Parent, To = Locked<H::Raw, LG, LP>>,
+        C::L: Path<<Self as Contained>::Parent, To = Locked<H::Raw, LG, LP>>,
     {
-        let lock = L::get(self.container());
+        let lock = C::L::get(self.container());
         assert!(core::ptr::eq(guard.held(), lock.raw()), "a LockedBy shown a guard of another lock");
     }
 
     /// G, while @guard holds its lock.
-    pub(crate) fn protected<'g, H: Held, LG, LP>(&'g self, guard: &'g H) -> &'g G
+    #[track_caller]
+    pub(crate) fn protected<'g, H: Held, LG, LP>(&'g self, guard: &'g H) -> &'g C::G
     where
         Self: Contained,
-        L: Path<<Self as Contained>::Parent, To = Locked<H::Raw, LG, LP>> + 'g,
-        P: 'g,
+        C::L: Path<<Self as Contained>::Parent, To = Locked<H::Raw, LG, LP>>,
     {
         self.check(guard);
-        let locked: &LockedBy<G, P, L> = self;
-        unsafe { locked.protected() }
+        unsafe { self.locked_by().protected() }
     }
 
     /// G alone, while @guard holds its lock exclusively.
+    #[track_caller]
     pub(crate) fn protected_mut<'g, R: RawLockBase, LG, LP, U: Unlock<R>>(
         &'g self,
         guard: &'g mut ExclusiveGuard<'_, R, LG, LP, U>,
-    ) -> &'g mut G
+    ) -> &'g mut C::G
     where
         Self: Contained,
-        L: Path<<Self as Contained>::Parent, To = Locked<R, LG, LP>> + 'g,
-        P: 'g,
+        C::L: Path<<Self as Contained>::Parent, To = Locked<R, LG, LP>>,
     {
         self.check(&*guard);
-        let locked: &LockedBy<G, P, L> = self;
-        unsafe { locked.protected_mut() }
+        unsafe { self.locked_by().protected_mut() }
+    }
+
+    /// P as its writer has it, while @guard holds its lock.
+    #[track_caller]
+    pub(crate) fn published_writer<'g, H: Held, LG, LP>(&'g self, guard: &'g H) -> &'g <C::P as Publish>::Writer
+    where
+        Self: Contained,
+        C::L: Path<<Self as Contained>::Parent, To = Locked<H::Raw, LG, LP>>,
+        C::P: Publish,
+    {
+        self.check(guard);
+        unsafe { self.locked_by().published_writer() }
     }
 }
 
