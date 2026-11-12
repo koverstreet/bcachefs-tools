@@ -10,7 +10,6 @@
 #include "btree/node_gen.h"
 #include "btree/bkey.h"
 #include "btree/bkey/ops_gen.h"
-#include "btree/trigger_gen.h"
 #include "btree/cache_gen.h"
 
 static inline u64 btree_ptr_hash_val(const struct bkey_i *k)

@@ -4,7 +4,6 @@
 
 #include "btree/bkey.h"
 #include "btree/bkey/ops_gen.h"
-#include "btree/trigger_gen.h"
 #include "snapshots/snapshot.h"
 
 #include <linux/hash.h>

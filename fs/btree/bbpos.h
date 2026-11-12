@@ -5,7 +5,6 @@
 #include "btree/bbpos_gen.h"
 #include "btree/bkey.h"
 #include "btree/bkey/ops_gen.h"
-#include "btree/trigger_gen.h"
 #include "btree/cache.h"
 
 static inline int bbpos_cmp(struct bbpos l, struct bbpos r)

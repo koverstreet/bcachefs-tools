@@ -5,11 +5,10 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{BtreeTrans, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::path::KeyVal;
 use crate::c;
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::format::{Btree, BkeyType};
 use crate::prt;
 use crate::util::Printbuf;
-use core::ffi::c_int;
 use core::marker::PhantomData;
 use cstruct_macros::c_export;
 
@@ -29,7 +28,7 @@ pub struct TriggerOp<'a> {
     pub old:   BkeySC<'a>,
     pub new:   BkeyS<'a>,
     pub flags: UpdateTriggerFlags,
-    /// The room @new has - for a C trigger it's handed back to
+    /// The room @new has
     new_buf_u64s: u32,
 }
 
@@ -39,21 +38,6 @@ impl<'a> TriggerOp<'a> {
     pub(crate) fn new(btree: Btree, level: u32, old: BkeySC<'a>, new: BkeyS<'a>, flags: UpdateTriggerFlags,
                       new_buf_u64s: u32) -> Self {
         TriggerOp { btree, level, old, new, flags, new_buf_u64s }
-    }
-
-    /// # Safety
-    /// @op is the one the trigger was called with: both keys valid, and @new
-    /// the trigger's to edit, for 'a.
-    pub unsafe fn from_raw(op: &'a mut c::btree_trigger_op) -> Self {
-        let new = unsafe { &mut op.new.split.kv };
-        TriggerOp {
-            btree: op.btree,
-            level: op.level,
-            old:   unsafe { BkeySC::from_c(&op.old) },
-            new:   BkeyS { k: unsafe { &mut *new.k }, v: new.v, val: PhantomData },
-            flags: UpdateTriggerFlags::from_bits_retain(op.flags.bits()),
-            new_buf_u64s: op.new_buf_u64s,
-        }
     }
 
     /// @new with room for @needed_u64s, to edit: the queued update moved to a
@@ -306,17 +290,8 @@ fn trans_triggers_run(i: &c::btree_insert_entry) -> bool {
         (i.bits.insert_trigger_run() && i.bits.overwrite_trigger_run())
 }
 
-/// bch2_trans_commit_run_triggers(): the commit's transactional triggers -
-/// its updates', and those of the updates they queue.
-///
-/// # Safety
-/// In @trans's commit.
-#[c_export]
-pub unsafe fn bch2_trans_commit_run_triggers(trans: &BtreeTrans<'_>) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(unsafe { run_trans_triggers(trans, &t) })
-}
-
+/// The commit's transactional triggers - its updates', and those of the
+/// updates they queue.
 pub(crate) unsafe fn run_trans_triggers(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
     let mut sort_id_start = 0;
 
