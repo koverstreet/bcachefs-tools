@@ -8,7 +8,6 @@ use core::ffi::c_ulong;
 use core::ptr::{self, NonNull};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
-use crate::btree::node::bset::bch2_bset_init_first;
 use crate::btree::node::sort::build_aux_trees;
 use crate::btree::path::{PathIdx, Paths};
 use crate::btree::bkey::{BkeyI, BkeyV};
@@ -159,7 +158,7 @@ pub(crate) fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level:
     k.k_mut().p = SPOS_MAX;
     contents.key.u64s_mut()[crate::btree::bkey::BKEY_U64S] = u64::MAX - u64::from(btree.0);
 
-    bch2_bset_init_first(n, (&raw mut contents.data_mut().keys).cast());
+    n.keys_mut(contents).bset_init_first();
     build_aux_trees(n, contents);
 
     contents.data_mut().flags = Default::default();

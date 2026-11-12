@@ -13,7 +13,6 @@ use crate::btree::bkey::{BkeySC, BkeyV, BkeyVMut};
 use crate::btree::cache::UnhashedNode;
 use crate::btree::iter::CommitOpts;
 use crate::btree::node::BtreeNode;
-use crate::btree::node::bset::bch2_bset_init_first;
 use crate::btree::node::sort::{btree_sort_into, build_aux_trees};
 use crate::btree::path::{LockedNode, PathIdx, Paths};
 use crate::c;
@@ -304,7 +303,7 @@ impl<'t> InteriorUpdate<'t> {
         n.flags.set_accessed(true);
 
         let contents = unsafe { n.contents_mut() };
-        bch2_bset_init_first(n, (&raw mut contents.data_mut().keys).cast());
+        n.keys_mut(contents).bset_init_first();
         contents.version_ondisk = fs.sb.version.get();
 
         contents.nr = Default::default();

@@ -103,7 +103,7 @@ pub(crate) use state::NodeTable;
 use crate::btree::bkey::{bkey_val_to_text, val_to_text, BkeySC, BkeyVal, BKEY_U64S};
 use crate::data::keylist::PaddedKey;
 use crate::btree::iter::BtreeTrans;
-use crate::btree::node::bset::{bch2_btree_keys_stats, BsetStats};
+use crate::btree::node::bset::BsetStats;
 use crate::btree::node::BtreeNode;
 use crate::util::alloc::{kvfree_sized, kvzalloc};
 use crate::util::place::{Contained, PlacedDrop};
@@ -433,11 +433,10 @@ pub fn bch2_btree_pos_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
 
 #[cold]
 pub fn btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
-    let mut stats = BsetStats::default();
-
-    bch2_btree_keys_stats(b, &mut stats);
-
     let contents = unsafe { b.contents() };
+    let mut stats = BsetStats::default();
+    b.keys(contents).btree_keys_stats(&mut stats);
+
     let data = contents.data();
     prt!(out, "l {} {} - {}:\n", b.c.level, data.min_key, data.max_key);
     prt!(out, "    ptrs: ");

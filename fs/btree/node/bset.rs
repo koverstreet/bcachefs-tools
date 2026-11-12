@@ -20,7 +20,7 @@ use crate::util::Printbuf;
 use core::cmp::Ordering;
 use core::fmt;
 use core::mem::offset_of;
-use cstruct_macros::{c_name, CStruct, c_const, c_enum, c_export};
+use cstruct_macros::{c_name, CStruct, c_const, c_enum};
 
 /*
  * BKEYS:
@@ -585,10 +585,12 @@ impl KeysMut<'_> {
         self.set_bset(set, offset);
     }
 
-    pub fn bset_init_first(&mut self, offset: u16) {
+    /// The node's first bset, in its header.
+    pub fn bset_init_first(&mut self) {
         assert!(self.sets.is_empty(), "first bset of a node with {} already", self.sets.len());
 
-        self.bset_init(offset, Le64::new(random_u64()));
+        let offset = offset_of!(Head<c::btree_node>, keys) / size_of::<u64>();
+        self.bset_init(offset as u16, Le64::new(random_u64()));
     }
 
     /// @bne the offset of a btree_node_entry, its bset after its csum.
@@ -780,21 +782,4 @@ impl NodeContents {
             t.set_no_aux_tree();
         }
     }
-}
-
-/*
- * For C: pointers into the node in, offsets inside. A node C passes is
- * locked, so its contents can be read - and written, by those that change
- * the node, which C calls with it held for write.
- */
-
-pub fn bch2_bset_init_first(b: &BtreeNode, i: *mut Head<c::bset>) {
-    let mut keys = b.keys_mut(unsafe { b.contents_mut() });
-    let offset = keys.as_keys().offset_of(i);
-    keys.bset_init_first(offset);
-}
-
-#[c_export]
-pub fn bch2_btree_keys_stats(b: &BtreeNode, stats: &mut BsetStats) {
-    b.keys(unsafe { b.contents() }).btree_keys_stats(stats);
 }
