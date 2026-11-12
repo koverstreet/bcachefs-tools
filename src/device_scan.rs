@@ -13,7 +13,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    ffi::{CStr, OsString, OsStr},
+    ffi::{OsString, OsStr},
     fs,
     os::fd::{AsRawFd, BorrowedFd},
     os::unix::ffi::OsStringExt,
@@ -222,14 +222,7 @@ fn read_sbs_matching_label(
 }
 
 fn sb_handle_path(sb: &bch_sb_handle) -> PathBuf {
-	if sb.dev.sb_name.is_null() {
-		PathBuf::new()
-	} else {
-		unsafe {
-			PathBuf::from(OsString::from_vec(
-				CStr::from_ptr(sb.dev.sb_name).to_bytes().to_vec()))
-		}
-	}
+	PathBuf::from(OsString::from_vec(sb.dev.name().to_bytes().to_vec()))
 }
 
 pub fn filter_current_sbs(

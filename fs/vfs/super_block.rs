@@ -11,7 +11,7 @@
 //!
 //! SUPER_OPS is ours, the table mount (vfs/fs_type.rs) sets s_op to.
 
-use core::ffi::{c_int, CStr};
+use core::ffi::c_int;
 use core::ptr::NonNull;
 
 use crate::accounting;
@@ -157,8 +157,7 @@ impl SuperOps for Fs {
             if i > 0 {
                 m.write(b":");
             }
-            // SAFETY: an online device's, set while it's open
-            m.write(unsafe { CStr::from_ptr(ca.disk_sb.sb_name.cast()) }.to_bytes());
+            m.write(ca.disk_sb.name().to_bytes());
         }
         Ok(())
     }

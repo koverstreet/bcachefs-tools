@@ -1193,10 +1193,7 @@ impl bch_sb_handle {
 
     /// What it holds released, and it zeroed: bch2_free_super().
     pub fn free(&mut self) {
-        self.io.free();
-        self.dev.free();
-        // SAFETY: all zeroes is a handle that holds nothing
-        unsafe { core::ptr::write_bytes(core::ptr::from_mut(self), 0, 1) };
+        *self = Self::default();
     }
 }
 
@@ -1216,7 +1213,8 @@ impl core::ops::DerefMut for bch_sb_handle {
 
 impl Drop for bch_sb_handle {
     fn drop(&mut self) {
-        self.free();
+        self.io.free();
+        self.dev.free();
     }
 }
 
