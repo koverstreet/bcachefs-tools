@@ -498,6 +498,14 @@ impl<C, A> Placed<C, A> {
     }
 }
 
+impl<C: Unpin, A> Placed<C, A> {
+    /// C, through the only reference to the field: what it holds may change,
+    /// but not where it is - its At stays.
+    pub(crate) fn value_mut(&mut self) -> &mut C {
+        &mut self.value
+    }
+}
+
 impl<C, A> core::ops::Deref for Placed<C, A> {
     type Target = C;
 
@@ -526,15 +534,15 @@ macro_rules! at {
 ///
 /// A path of every step but Through stays within what the value it starts
 /// from is in: Within.
-pub(crate) struct Here;
+pub struct Here;
 
-pub(crate) struct Up<P>(PhantomData<P>);
+pub struct Up<P>(PhantomData<P>);
 
-pub(crate) struct FieldOf<P, const N: u64>(PhantomData<P>);
+pub struct FieldOf<P, const N: u64>(PhantomData<P>);
 
-pub(crate) struct ElemOf<P, const I: usize>(PhantomData<P>);
+pub struct ElemOf<P, const I: usize>(PhantomData<P>);
 
-pub(crate) struct Through<P>(PhantomData<P>);
+pub struct Through<P>(PhantomData<P>);
 
 /// A path within what the value it starts from is in: no Through - so a ref
 /// on a count it reaches keeps the value.
