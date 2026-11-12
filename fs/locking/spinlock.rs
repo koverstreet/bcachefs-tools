@@ -9,7 +9,7 @@
 use super::raw::{rust_spin_lock_assert_held, rust_spin_lock_init};
 #[cfg(not(kernel))]
 use super::raw::{rust_raw_spin_lock, rust_raw_spin_unlock};
-use super::{MemallocFlags, RawLock, RawLockBase};
+use super::{MemallocFlags, RawLock, RawLockBase, RawMovableLock};
 use super::spinlock_t;
 use core::convert::Infallible;
 use core::ffi::{c_void, CStr};
@@ -32,6 +32,8 @@ unsafe impl RawLockBase for SpinLock {
         Ok(())
     }
 }
+
+unsafe impl RawMovableLock for SpinLock {}
 
 unsafe impl RawLock for SpinLock {
     unsafe fn lock(&self) -> MemallocFlags {

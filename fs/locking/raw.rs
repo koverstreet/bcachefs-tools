@@ -15,7 +15,7 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{RawLock, RawLockBase};
+use super::{RawLock, RawLockBase, RawMovableLock};
 use super::{RawReadLock, RawRwLock, RawTryReadLock};
 use super::{MemallocFlags, RawNestedLock, RawTryLock};
 use crate::c;
@@ -146,6 +146,9 @@ unsafe impl RawLockBase for c::spinlock_t {
     }
 }
 
+// unlocked, nothing points at one: userspace's is a futex word for that
+unsafe impl RawMovableLock for c::spinlock_t {}
+
 unsafe impl RawLock for c::spinlock_t {
     unsafe fn lock(&self) -> (c_ulong, MemallocFlags) {
         let flags = unsafe { rust_spin_lock_irqsave(self.as_ptr().cast()) };
@@ -181,6 +184,8 @@ unsafe impl RawLockBase for c::raw_spinlock_t {
         Ok(())
     }
 }
+
+unsafe impl RawMovableLock for c::raw_spinlock_t {}
 
 unsafe impl RawLock for c::raw_spinlock_t {
     unsafe fn lock(&self) -> MemallocFlags {

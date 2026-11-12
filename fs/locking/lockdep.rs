@@ -14,7 +14,7 @@
 //! LOCK_CONTENDED() takes a mutex. Not for what there are millions of: a
 //! ByteLock in an array stays one byte.
 
-use super::{RawLock, RawLockBase, RawTimedLock, RawTryLock};
+use super::{RawLock, RawLockBase, RawMovableLock, RawTimedLock, RawTryLock};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
 
@@ -93,6 +93,9 @@ pub struct Lockdep<R> {
     raw:     R,
     dep_map: LockdepMap,
 }
+
+// lockdep points at a map only while its lock is held
+unsafe impl<R: RawMovableLock> RawMovableLock for Lockdep<R> {}
 
 unsafe impl<R: RawLockBase> RawLockBase for Lockdep<R> {
     type GuardState = R::GuardState;

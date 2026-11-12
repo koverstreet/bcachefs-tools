@@ -36,6 +36,15 @@ pub unsafe trait RawLockBase {
     unsafe fn destroy(&self) {}
 }
 
+/// A lock that may move while nothing holds it or waits on it: nothing but
+/// its holders and waiters points at it - as a kernel spinlock, which C
+/// builds by value, __SPIN_LOCK_UNLOCKED(). Not a mutex: with
+/// CONFIG_DEBUG_MUTEXES, its magic is its own address.
+///
+/// # Safety
+/// Moved with nothing holding or waiting on it, it's the same lock.
+pub unsafe trait RawMovableLock: RawLockBase {}
+
 /// A lock taken and released whole, by one holder at a time.
 ///
 /// # Safety
@@ -134,7 +143,8 @@ pub struct Locked<R: RawLockBase, G = (), P = ()> {
     raw:       R,
     protected: UnsafeCell<G>,
     published: P,
-    // pinned - a kernel lock mustn't move - in a PhantomData: a bare
+    // pinned - a kernel lock mustn't move, but a RawMovableLock made by
+    // value, new_movable() - in a PhantomData: a bare
     // PhantomPinned isn't FFI-safe in a repr(C) struct, and C's hold these
     _pin:      PhantomData<PhantomPinned>,
 }
@@ -190,6 +200,20 @@ impl<R: RawLockBase, G, P> Locked<R, G, P> {
                 Ok(())
             })
         }
+    }
+
+    /// new(), by value: for a lock that may move - new_lock!(move g).
+    ///
+    /// # Safety
+    /// As new()'s.
+    #[doc(hidden)]
+    pub unsafe fn new_movable(g: G, p: P, name: &'static CStr, key: *mut c_void) -> Self
+    where
+        R: RawMovableLock<InitError = core::convert::Infallible>,
+    {
+        let mut l = core::mem::MaybeUninit::<Self>::uninit();
+        let Ok(()) = unsafe { crate::util::alloc::init_at(Self::new(g, p, name, key), l.as_mut_ptr()) };
+        unsafe { l.assume_init() }
     }
 
     /// A Locked for a static: @g and @p, the raw lock zeroed - a C lock can't
@@ -986,6 +1010,19 @@ macro_rules! new_lock {
         let name = const { $crate::util::ffi::c_str($name) };
         unsafe { $crate::locking::Locked::new_init(g, p, name, key) }
     }};
+    (@init_movable $g:expr, $p:expr, $name:expr) => {{
+        let key = $crate::new_lock!(@key);
+        let g = $g;
+        let p = $p;
+        let name = const { $crate::util::ffi::c_str($name) };
+        unsafe { $crate::locking::Locked::new_movable(g, p, name, key) }
+    }};
+    (move $g:expr $(,)?) => {
+        $crate::new_lock!(@init_movable $g, (), ::core::concat!(::core::file!(), ":", ::core::line!(), "\0"))
+    };
+    (move $g:expr, $name:literal $(,)?) => {
+        $crate::new_lock!(@init_movable $g, (), ::core::concat!($name, "\0"))
+    };
     (<- $g:expr $(,)?) => {
         $crate::new_lock!(@init_in_place $g, (), ::core::concat!(::core::file!(), ":", ::core::line!(), "\0"))
     };
