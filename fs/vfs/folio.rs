@@ -13,7 +13,8 @@
 //! Folio until it's dropped, which unlocks and puts it. A FolioRef is one
 //! not locked, kept by a ref someone else has - a walk's batch, walk_folios()'s,
 //! or a fault's page - for its holder to lock: a FolioGuard, a Folio until
-//! it's dropped.
+//! it's dropped, or until start_writeback() - a Writeback, the folio unlocked
+//! and under writeback till the last count on that is dropped.
 //!
 //! A Mapping is an inode's page cache: where a read finds and adds folios - a
 //! NewFolio, alloc_folio()'s, with a ref of its own till it's in. A Readahead
@@ -35,6 +36,7 @@ use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
 use core::ops::{ControlFlow, Deref, DerefMut};
 use core::ptr::NonNull;
+use core::sync::atomic::Ordering::{AcqRel, Relaxed};
 use kernel::page::PAGE_SHIFT;
 use cstruct_macros::c_extern;
 
@@ -156,16 +158,14 @@ impl Folio {
         unsafe { c::folio_end_read(self.as_ptr(), uptodate) }
     }
 
-    /// folio_end_writeback().
-    ///
-    /// # Safety
-    /// Its writeback is ours: FolioGuard::start_writeback()'s, ended once.
-    pub unsafe fn end_writeback(self) {
-        unsafe { c::folio_end_writeback(self.as_ptr()) }
-    }
-
     pub(super) fn state_ptr(self) -> Option<NonNull<c::bch_folio>> {
         NonNull::new(unsafe { c::folio_get_private(self.as_ptr()) }.cast())
+    }
+
+    /// Its bcachefs state, if it has any: what's atomic of it - the rest is
+    /// lock_state()'s.
+    pub(super) fn state(&self) -> Option<&c::bch_folio> {
+        self.state_ptr().map(|s| unsafe { s.as_ref() })
     }
 
     /// Its bcachefs state freed.
@@ -184,8 +184,7 @@ impl Folio {
 
     /// Its bcachefs state, locked, if it has any.
     pub fn lock_state_if_any(&self) -> Option<FolioStateGuard<'_>> {
-        let s = unsafe { self.state_ptr()?.as_ref() };
-        Some(FolioStateGuard { guard: s.state.lock(), sectors: self.nr_sectors() })
+        Some(FolioStateGuard { guard: self.state()?.state.lock(), sectors: self.nr_sectors() })
     }
 
     /// Its bcachefs state, locked: its caller made it first. Panics if it
@@ -335,14 +334,57 @@ impl FolioGuard<'_> {
     }
 
     /// Under writeback, and unlocked: folio_start_writeback(), then
-    /// folio_unlock(). Its writeback is ours to end - end_writeback().
-    pub fn start_writeback(self) -> Folio {
+    /// folio_unlock(). Panics if it has no bcachefs state, or writes in
+    /// flight.
+    pub fn start_writeback(self) -> Writeback {
+        let s = self.state().expect("a folio written back with no bch_folio");
+        assert!(s.write_count.load(Relaxed) == 0, "a folio with writes in flight, written back again");
+        assert!(!self.writeback(), "a folio already under writeback, written back again");
+        s.write_count.store(1, Relaxed);
+
         let folio = self.keep_locked();
         unsafe {
             c::rust_folio_start_writeback(folio.as_ptr());
             c::folio_unlock(folio.as_ptr());
         }
-        folio
+        Writeback(folio)
+    }
+}
+
+/// A count on a folio's writeback, write_count's - which keeps it in the
+/// page cache, as a lock does: start_writeback()'s, and one for each io it's
+/// added to, share()'s. Its writeback is ended when the last is dropped.
+pub struct Writeback(Folio);
+
+impl Writeback {
+    /// A count for an io the folio's added to, given back by from_io().
+    pub fn share(&self) {
+        self.state().expect("a folio in writeback with no bch_folio").write_count.fetch_add(1, Relaxed);
+    }
+
+    /// An io's count, share()'s, from the io's bio as it ends.
+    ///
+    /// # Safety
+    /// @folio is one share() counted for this io, taken back once.
+    pub unsafe fn from_io(folio: NonNull<c::folio>) -> Self {
+        Writeback(Folio(folio))
+    }
+}
+
+impl Deref for Writeback {
+    type Target = Folio;
+
+    fn deref(&self) -> &Folio {
+        &self.0
+    }
+}
+
+impl Drop for Writeback {
+    fn drop(&mut self) {
+        let s = self.state().expect("a folio in writeback with no bch_folio");
+        if s.write_count.fetch_sub(1, AcqRel) == 1 {
+            unsafe { c::folio_end_writeback(self.0.as_ptr()) }
+        }
     }
 }
 

@@ -18,14 +18,13 @@ use crate::util::closure::{self, closure_wait, StackClosure};
 use crate::util::kernel::{local_clock, unlikely, PAGE_SIZE};
 use crate::util::ops::from_raw;
 use crate::util::time_stats::TimeStats;
-use crate::vfs::folio::{Folio, FolioGuard, FolioSpan, Mapping};
+use crate::vfs::folio::{Folio, FolioGuard, FolioSpan, Mapping, Writeback};
 use crate::vfs::inode::InodeInfo;
 use c::bch_folio_sector_state as SectorState;
 use c::bch_write_flags as w;
 use core::ffi::c_int;
 use core::pin::Pin;
 use core::ptr::NonNull;
-use core::sync::atomic::Ordering::{AcqRel, Relaxed};
 
 type Io = c::bch_writepage_io;
 
@@ -151,12 +150,7 @@ unsafe fn writepage_io_done(op: *mut c::bch_write_op) {
     inode.i_sectors_acct(None, io.op.i_sectors_delta);
 
     for f in io.range_all().folios() {
-        let folio = unsafe { Folio::from_raw(f.folio.as_ptr()) };
-        let s = unsafe { folio.state_ptr().expect("a folio in writeback with no bch_folio").as_ref() };
-
-        if s.write_count.fetch_sub(1, AcqRel) == 1 {
-            unsafe { folio.end_writeback() };
-        }
+        drop(unsafe { Writeback::from_io(f.folio) });
     }
 
     unsafe { c::bio_put(&mut io.op.wbio.bio) };
@@ -267,7 +261,6 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState) -> c_int 
     }
 
     let f_sectors = folio.nr_sectors();
-    let s = unsafe { folio.state_ptr().expect("a dirty folio with no bch_folio").as_ref() };
 
     /*
      * Things get really hairy with errors during writeback:
@@ -295,10 +288,6 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState) -> c_int 
         u32::from(st.replicas_reserved_at)
     };
 
-    assert!(s.write_count.load(Relaxed) == 0, "a folio with writes in flight, written back again");
-    s.write_count.store(1, Relaxed);
-
-    assert!(!folio.writeback(), "a folio already under writeback, written back again");
     let folio = folio.start_writeback();
 
     let mut offset = 0;
@@ -341,7 +330,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState) -> c_int 
             writepage_io_alloc(fs, wbc, w, inode, sector, nr_replicas_this_write, res_nr_replicas);
         }
 
-        s.write_count.fetch_add(1, Relaxed);
+        folio.share();
 
         let io = unsafe { w.io.expect("an io, just made").as_mut() };
         assert!(core::ptr::eq(io.inode, inode.raw()), "a writepage io of another inode");
@@ -354,10 +343,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState) -> c_int 
         offset += sectors;
     }
 
-    if s.write_count.fetch_sub(1, AcqRel) == 1 {
-        unsafe { folio.end_writeback() };
-    }
-
+    drop(folio);
     0
 }
 
