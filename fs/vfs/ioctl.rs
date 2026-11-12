@@ -42,6 +42,9 @@ use crate::util::printbuf::Printbuf;
 use crate::init::chardev::{copy_err_msg, fs_ioctl, ErrMsg, V2};
 use crate::locking::{Locked, RawLockBase};
 use crate::vfs::dentry::Dentry;
+use crate::util::iov_iter::IovIter;
+use crate::vfs::direct::direct_io_read;
+use crate::vfs::kiocb::Kiocb;
 use crate::vfs::idmap::MntIdmap;
 use crate::vfs::inode::{InodeInfo, InodeRef};
 use crate::vfs::mount::WriteAccess;
@@ -49,7 +52,6 @@ use crate::vfs::path::{Creating, Removing, UserPath};
 use crate::{bch_err, btree_trans, prt};
 use core::ffi::{c_int, c_void};
 use core::mem::{offset_of, MaybeUninit};
-use cstruct_macros::c_extern;
 use kernel::ffi::{c_long, c_uint, c_ulong};
 use kernel::uaccess::UserPtr;
 
@@ -79,12 +81,6 @@ impl Ioctl for FS_IOC_SETFSLABEL {
 }
 
 /* The dispatch */
-
-c_extern! {
-    // direct.c's, until it's Rust:
-    fn bch2_direct_IO_read(req: *mut c::kiocb, iter: *mut c::iov_iter, flags: c::bch_read_flags,
-                           err_report: *mut c::bch_read_err_report) -> c_int;
-}
 
 fn file_ioctl(file: &File, inode: &InodeInfo, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError> {
     let fs = inode.fs();
@@ -387,8 +383,8 @@ fn pread_raw(file: &File, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_ra
     report.msg = Printbuf::new();
     unsafe { <c::mutex as RawLockBase>::init(&raw mut report.lock, c"bch_read_err_report", crate::new_lock!(@key)) };
 
-    let ret = unsafe { bch2_direct_IO_read(kiocb.as_mut_ptr(), iter.as_mut_ptr(), flags, &mut report) };
-    let mut ret = if ret < 0 { Err(BchError::from_raw(-ret)) } else { Ok(ret as c_long) };
+    let (mut kiocb, mut iter) = unsafe { (Kiocb::from_raw(kiocb.as_mut_ptr()), IovIter::from_raw(iter.as_mut_ptr())) };
+    let mut ret = direct_io_read(&mut kiocb, &mut iter, flags, Some(&report)).map(|n| n as c_long);
 
     if user.write_at(offset_of!(c::bch_ioctl_pread_raw, errors), &report.errors).is_err() {
         ret = Err(c::EFAULT.into());

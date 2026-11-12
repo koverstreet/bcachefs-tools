@@ -180,6 +180,7 @@ pub(super) fn free(inode: NonNull<InodeInfo>) {
 /// At module init: the inode cache, then the filesystem type.
 pub fn vfs_init() -> Result<(), BchError> {
     INODE_CACHE.create(c"bch_inode_info", c::SLAB_RECLAIM_ACCOUNT | c::SLAB_ACCOUNT)?;
+    super::direct::pools_init()?;
     if let Err(e) = ret_to_result_void(super::fs_type::bch2_fs_type_register()) {
         vfs_exit();
         return Err(e);

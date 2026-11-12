@@ -5,29 +5,8 @@
 #![cfg(not(NO_BCACHEFS_FS))]
 
 use crate::cstructs::c;
-use crate::types::c_default;
-use core::ffi::c_long;
 use cstruct_macros::{bitfield, CStruct};
 use nestify::nest;
-
-#[repr(C)]
-#[derive(CStruct)]
-pub struct dio_read {
-    pub cl: c::closure,
-    pub req: *mut c::kiocb,
-    pub ret: c_long,
-    pub should_dirty: bool,
-    /*
-     * The read's flags. rbio->flags is only set on the rbio the read path
-     * picks for an extent - a split, whenever the read bounces - so the
-     * dio's own rbio doesn't carry them, and the endio has nowhere else to
-     * look.
-     */
-    pub flags: c::bch_read_flags,
-    pub rbio: c::bch_read_bio,
-}
-c_default!(dio_read);
-crate::has_bio!(dio_read, rbio.bio);
 
 nest! {
     #[repr(C)]

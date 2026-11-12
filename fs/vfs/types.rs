@@ -30,11 +30,6 @@ pub struct bch_fs_vfs {
     #[c("struct bio_set dio_write_bioset")]
     pub dio_write_bioset: Late<BioSet<c::dio_write>>,
     #[cfg(not(NO_BCACHEFS_FS))]
-    #[pin]
-    #[init(BioSet::new(4, true), ENOMEM_dio_read_bioset_init)]
-    #[c("struct bio_set dio_read_bioset")]
-    pub dio_read_bioset: BioSet<c::dio_read>,
-    #[cfg(not(NO_BCACHEFS_FS))]
     #[late(BioSet::new(1, false), ENOMEM_nocow_flush_bioset_init)]
     #[c("struct bio_set nocow_flush_bioset")]
     pub nocow_flush_bioset: Late<BioSet<crate::vfs::io::NocowFlush>>,

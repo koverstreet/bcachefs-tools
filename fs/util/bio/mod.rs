@@ -126,8 +126,6 @@ pub use iter::{FolioVec, Folios};
 pub use iter::{bvec_offset, reset_bvec_offset, BioRange, Chunk, Chunks, Segment, Segments, Walk};
 #[cfg(kernel)]
 pub(crate) use iter::nth_page;
-#[cfg(kernel)]
-pub(crate) use user_pages::{dirty_pages_exit, dirty_pages_init};
 pub use buffers::{BioBuffersMapped, BioBuffersOwned, BioBuffersPages, BioBuffersUnmanaged, BioClone,
                   Buffers, MapBuf};
 pub use owned::{inline_bio, inline_vecs, BioBox, BioInPlace, BioLend, BioSet, Either, FrontPad, Gathered, Lent};

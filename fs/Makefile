@@ -78,8 +78,7 @@ bcachefs-y		:=			\
 	util/util.o				\
 	vendor/bio_iov_iter.o			\
 	vendor/closure.o			\
-	vfs/buffered.o				\
-	vfs/direct.o
+	vfs/buffered.o
 
 ifdef KBUILD_EXTMOD
 ifneq ($(wildcard $(src)/module-version.c),)

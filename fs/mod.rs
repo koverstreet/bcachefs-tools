@@ -205,6 +205,7 @@ pub mod vfs {
     #[cfg(kernel)] pub mod buffered_write;
     #[cfg(kernel)] pub mod dentry;
     #[cfg(kernel)] pub mod dir;
+    #[cfg(kernel)] pub mod direct;
     #[cfg(kernel)] pub mod direct_write;
     #[cfg(kernel)] pub mod export;
     #[cfg(kernel)] pub mod fdm;
@@ -267,6 +268,7 @@ pub mod data {
     pub mod nocow_locking;
     pub mod promote;
     pub mod ptrs;
+    pub mod read;
     pub mod reconcile {
         pub mod check;
         pub mod needs_reconcile;

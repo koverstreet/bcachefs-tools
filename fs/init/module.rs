@@ -73,8 +73,6 @@ fn bcachefs_exit() {
     #[cfg(not(NO_BCACHEFS_FS))]
     crate::vfs::new_inode::vfs_exit();
     #[cfg(kernel)]
-    crate::util::bio::dirty_pages_exit();
-    #[cfg(kernel)]
     crate::init::chardev::bch2_chardev_exit();
     crate::btree::key_cache::btree_key_cache_module_exit();
     crate::btree::lock_graph::graphs_exit();
@@ -82,6 +80,8 @@ fn bcachefs_exit() {
     // what's freed a grace period on runs our code
     crate::util::maybe_rcu_alloc::barrier();
     crate::util::maybe_rcu_alloc::free_exit();
+    #[cfg(not(NO_BCACHEFS_FS))]
+    unsafe { crate::vfs::direct::pools_exit() };
 }
 
 #[cfg_attr(kernel, unsafe(link_section = ".init.text"))]
@@ -89,8 +89,6 @@ fn bcachefs_init() -> c_int {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     crate::btree::bkey::pack_test();
 
-    #[cfg(kernel)]
-    crate::util::bio::dirty_pages_init();
     crate::util::futex::bch2_futex_init();
     unsafe { bch2_dirent_init() };
     crate::init::registry::bch2_fs_registry_init();

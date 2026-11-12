@@ -177,7 +177,6 @@ static inline u64 u64_bitmask(unsigned bits)
 }
 
 void bch2_bio_set_pages_dirty(struct bio *);
-void bch2_bio_check_pages_dirty(struct bio *);
 
 #ifdef CONFIG_BCACHEFS_DEBUG
 void bch2_corrupt_bio(struct bio *);

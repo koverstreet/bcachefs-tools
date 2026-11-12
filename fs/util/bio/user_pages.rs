@@ -5,22 +5,18 @@
 //!
 //! A read dirties the pages it reads into before it's submitted, and checks
 //! them when it's done: one cleaned under it - by writeback - is dirtied
-//! again, which takes its folio lock, so from process context - a read's task
-//! requeued there, or C's from a work item, the check being an endio's.
+//! again, which takes its folio lock, so the read's task does it from process
+//! context, requeued there if the check was an endio's.
 //! bio_set_pages_dirty() and bio_check_pages_dirty(), which 7.2 unexported.
 
 use super::Bio;
 use crate::c;
 use crate::errcode::BchError;
-use crate::util::alloc::init_at;
 use crate::util::iov_iter::IovIter;
 use crate::util::task::requeue;
-use crate::util::workqueue::{flush_work, Queue};
-use core::cell::UnsafeCell;
+use crate::util::workqueue::Queue;
 use core::ffi::{c_int, c_uint};
 use core::pin::Pin;
-use core::ptr::{null_mut, NonNull};
-use core::sync::atomic::{AtomicPtr, Ordering::{Acquire, Relaxed, Release}};
 use cstruct_macros::{c_export, c_extern};
 
 c_extern! {
@@ -64,62 +60,4 @@ impl Bio {
 #[c_export]
 pub unsafe fn bch2_bio_set_pages_dirty(bio: *mut c::bio) {
     unsafe { Bio::from_raw_mut(bio) }.set_pages_dirty()
-}
-
-/// @bio given back, its pages released - those cleaned since
-/// set_pages_dirty() dirtied again first, from DIRTY_WORK.
-#[c_export]
-pub unsafe fn bch2_bio_check_pages_dirty(bio: *mut c::bio) {
-    let all_dirty = unsafe { Bio::from_raw(bio) }.range_all().folios()
-        .all(|f| unsafe { c::folio_test_dirty(f.folio.as_ptr()) });
-
-    if all_dirty {
-        unsafe {
-            c::bio_release_pages(bio, false);
-            c::bio_put(bio);
-        }
-        return;
-    }
-
-    let mut head = DIRTY.load(Relaxed);
-    loop {
-        unsafe { (*bio).bi_private = head.cast() };
-        match DIRTY.compare_exchange_weak(head, bio, Release, Relaxed) {
-            Ok(_)  => break,
-            Err(h) => head = h,
-        }
-    }
-    unsafe { Queue::system().queue_work(DIRTY_WORK.0.get()) };
-}
-
-/// Bios to dirty the pages of again, through bi_private: pushed from endios,
-/// taken all at once by DIRTY_WORK.
-static DIRTY: AtomicPtr<c::bio> = AtomicPtr::new(null_mut());
-
-/// Initialized at module init, flushed at exit.
-struct DirtyWork(UnsafeCell<c::work_struct>);
-
-unsafe impl Sync for DirtyWork {}
-
-static DIRTY_WORK: DirtyWork = DirtyWork(UnsafeCell::new(::pin_init::zeroed()));
-
-unsafe extern "C" fn dirty_fn(_: *mut c::work_struct) {
-    let mut next = DIRTY.swap(null_mut(), Acquire);
-    while let Some(bio) = NonNull::new(next) {
-        let bio = bio.as_ptr();
-        unsafe {
-            next = (*bio).bi_private.cast();
-            c::bio_release_pages(bio, true);
-            c::bio_put(bio);
-        }
-    }
-}
-
-pub(crate) fn dirty_pages_init() {
-    let Ok(()) = unsafe { init_at(crate::new_work!(dirty_fn, "bio_dirty"), DIRTY_WORK.0.get()) };
-}
-
-/// After the last direct IO: none left to queue it.
-pub(crate) fn dirty_pages_exit() {
-    unsafe { flush_work(DIRTY_WORK.0.get()) }
 }
