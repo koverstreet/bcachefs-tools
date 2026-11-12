@@ -328,6 +328,9 @@ pub struct Dev {
     #[c("u32 ref_outer")]
     pub ref_outer: AtomicRef<()>,
     #[c("struct enumerated_ref io_ref[2]")]
+    #[pin]
+    #[init(::pin_init::pin_init_array_from_fn(|i| crate::util::enumerated_ref::EnumeratedRef::new(
+        if i == WRITE { c::bch_dev_write_ref::NR } else { c::bch_dev_read_ref::NR }, None)))]
     pub io_ref: [crate::util::enumerated_ref::EnumeratedRef; 2],
 
     /// Its filesystem, from the start, attached or not: bch2_dev_add()
@@ -642,6 +645,9 @@ pub struct Fs {
 
     /* Counts outstanding writes, for clean transition to read-only */
     #[c("struct enumerated_ref writes")]
+    #[init(crate::util::alloc::init_or(
+        crate::util::enumerated_ref::EnumeratedRef::new(c::bch_write_ref::NR, Some(crate::init::rw::writes_disabled)),
+        c::bch_errcode::BCH_ERR_ENOMEM_fs_other_alloc))]
     #[pin]
     pub writes: crate::util::enumerated_ref::EnumeratedRef,
 

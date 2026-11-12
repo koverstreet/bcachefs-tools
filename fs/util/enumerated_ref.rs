@@ -70,7 +70,7 @@ const _: () = assert!(c::bch_write_ref::rust as u32 == 0);
 const _: () = assert!(c::bch_dev_read_ref::rust as u32 == 0);
 const _: () = assert!(c::bch_dev_write_ref::rust as u32 == 0);
 
-/// Zeroed with what it's in, for C's enumerated_ref_init().
+/// Made by new(), its field's initializer; dropped, it's exited.
 #[repr(transparent)]
 pub struct EnumeratedRef {
     r: core::cell::UnsafeCell<c::enumerated_ref>,
@@ -105,20 +105,17 @@ impl EnumeratedRef {
         unsafe { enumerated_ref_stop(self.r.get(), names) }
     }
 
-    /// @nr kinds of ref, @stop_fn called when the last is put after stopping.
-    ///
-    /// # Safety
-    /// Once, before anything takes a ref.
-    pub unsafe fn init(&self, nr: u32, stop_fn: Option<unsafe extern "C" fn(*mut c::enumerated_ref)>)
-        -> Result<(), BchError>
+    /// @nr kinds of ref, @stop_fn called when the last is put after stopping:
+    /// its field's initializer.
+    pub fn new(nr: u32, stop_fn: Option<unsafe extern "C" fn(*mut c::enumerated_ref)>)
+        -> impl ::pin_init::PinInit<Self, BchError>
     {
-        ret_to_result_void(unsafe { enumerated_ref_init(self.r.get(), nr, stop_fn) })
-    }
-
-    /// # Safety
-    /// Nothing uses it after.
-    pub unsafe fn exit(&self) {
-        unsafe { enumerated_ref_exit(self.r.get()) }
+        unsafe {
+            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
+                slot.write_bytes(0, 1);
+                ret_to_result_void(enumerated_ref_init(slot.cast(), nr, stop_fn))
+            })
+        }
     }
 
     /// The refs held, by kind - @names the kinds', NULL terminated.
@@ -151,6 +148,13 @@ impl EnumeratedRef {
             let _ = idx;
             unsafe { self.dec() }
         }
+    }
+}
+
+/// Nothing uses it after: zeroed - never initialized - it frees nothing.
+impl Drop for EnumeratedRef {
+    fn drop(&mut self) {
+        unsafe { enumerated_ref_exit(self.r.get()) }
     }
 }
 

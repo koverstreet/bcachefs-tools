@@ -508,11 +508,6 @@ impl PinnedDrop for Dev {
 
         ca.io_done.free();
         ca.buckets_free();
-
-        unsafe {
-            ca.io_ref[WRITE].exit();
-            ca.io_ref[READ].exit();
-        }
     }
 }
 
@@ -639,9 +634,7 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<NewDev> {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     ca.ref_.store(1, Relaxed);
 
-    let ok = unsafe { ca.io_ref[READ].init(c::bch_dev_read_ref::NR, None) }.is_ok() &&
-        unsafe { ca.io_ref[WRITE].init(c::bch_dev_write_ref::NR, None) }.is_ok() &&
-        kbox_pin_init(SbReadScratch::new())
+    let ok = kbox_pin_init(SbReadScratch::new())
             .map(|s| *ca.sb_read_scratch = Some(Pin::into_inner(s))).is_ok() &&
         ca.buckets_alloc().is_ok() &&
         PerCpu::alloc().map(|io_done| ca.io_done = io_done).is_ok();

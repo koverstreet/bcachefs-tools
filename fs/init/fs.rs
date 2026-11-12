@@ -21,7 +21,6 @@ use crate::debug::sysfs::{FsDir, FS_GROUPS};
 use crate::init::dev::{dev_exit, dev_in_fs};
 use crate::init::error::free_fsck_errs;
 use crate::init::registry::register;
-use crate::init::rw::writes_disabled;
 use crate::inode::shard_cpu_init;
 use crate::journal::seq_blacklist::blacklist_table_initialize;
 use crate::locking::{Exclusive, ExclusiveGuard, Guard, Noio, PercpuRwsemNoio, Shared, SharedGuard};
@@ -464,10 +463,6 @@ impl Fs {
             *d = s as c_char;
         }
         dst[len] = 0;
-
-        if unsafe { self.writes.init(c::bch_write_ref::NR, Some(writes_disabled)) }.is_err() {
-            return self.throw(bch_errcode::BCH_ERR_ENOMEM_fs_other_alloc);
-        }
 
         blacklist_table_initialize(self)?;
         crate::debug::async_objs::lists::async_obj_init(self)?;
@@ -924,7 +919,6 @@ unsafe fn release(p: *mut Fs) {
     }
     crate::debug::async_objs::lists::async_obj_exit(fs);
     unsafe {
-        fs.writes.exit();
         fs.disk_groups.free();
         crate::util::alloc::free_pinned(p);
     }
