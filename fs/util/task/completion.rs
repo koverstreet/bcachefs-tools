@@ -11,7 +11,7 @@
 //! on it - the Completion's drop waits, too:
 //!
 //! ```ignore
-//! let c = Completion::new(&mut slot, waiter::Async::current().await);
+//! let c = Completion::new(&mut done, waiter::Async::current().await);
 //! c.complete();               // its end, once - by the IO's completer
 //! c.resume_on(at).await;      // a thread: waiter::Sync::current(), c.wait(how)
 //! ```
@@ -142,7 +142,8 @@ impl<W: Waiter> Done<W> {
         Done { word: AtomicPtr::new(waiter.as_ptr().as_ptr()), _w: PhantomData }
     }
 
-    pub(super) fn completed() -> Self {
+    /// Not owed: a wait's, before it's begun or once it's done.
+    pub fn completed() -> Self {
         Done { word: AtomicPtr::new(null_mut()), _w: PhantomData }
     }
 
@@ -164,7 +165,7 @@ impl<W: Waiter> Done<W> {
     pub fn complete(&self) {
         let _rcu = rcu::read_lock();
         // Relaxed: stored at the Done's birth, before the IO was handed out
-        let w = NonNull::new(self.word.load(Ordering::Relaxed)).expect("Done completed twice");
+        let w = NonNull::new(self.word.load(Ordering::Relaxed)).expect("Done completed when not owed: twice, or never born");
         self.word.store(null_mut(), Ordering::Release);
         // seeing null, the waiter may return and be freed: RCU keeps it
         unsafe { W::wake(w, NonNull::from(self).cast()) };
@@ -190,9 +191,11 @@ pub struct Completion<'a, W: Waiter = waiter::Async> {
 }
 
 impl<'a, W: Waiter> Completion<'a, W> {
-    /// A Done in @slot, born with @waiter, and the wait on it.
-    pub fn new(slot: &'a mut Option<Done<W>>, waiter: W) -> Self {
-        Completion { d: slot.insert(Done::new(waiter)), _w: PhantomData }
+    /// @d, not owed, born with @waiter, and the wait on it.
+    pub fn new(d: &'a mut Done<W>, waiter: W) -> Self {
+        assert!(d.done(), "a Done born while it's owed");
+        *d = Done::new(waiter);
+        Completion { d, _w: PhantomData }
     }
 
     /// new(), the Done at @p: a bi_private.

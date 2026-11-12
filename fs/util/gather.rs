@@ -177,10 +177,9 @@ impl<T: Send> Fold for KVVec<T> {
     }
 }
 
-/// The width of a Gather's state word: its low half counts refs, and above
-/// that are two flags. usize by default; u32 to save space, where 2^16 refs
-/// will do; u64 for 2^32 refs on 32 bit targets that have 64 bit atomics.
-/// Worked in as u64.
+/// The width of a Gather's state word: its top two bits are flags, and the
+/// rest count refs. u32 by default, 2^30 refs; u64 or usize for more. Worked
+/// in as u64.
 pub trait Width: sealed::Sealed {
     type Atomic: Send + Sync;
     const BITS: u32;
@@ -229,10 +228,10 @@ width!(usize, AtomicUsize);
 /// Everything in it is atomic: refs reach it through a pointer, and its
 /// waiter by &.
 #[pin_data(PinnedDrop)]
-pub struct Gather<T: Fold, Wt: Waiter, W: Width = usize> {
+pub struct Gather<T: Fold, Wt: Waiter, W: Width = u32> {
     state:  W::Atomic,
     /// Born in the wait, with its waiter
-    done:   UnsafeCell<Option<Done<Wt>>>,
+    done:   UnsafeCell<Done<Wt>>,
     #[pin]
     acc:    T::Acc,
     #[pin]
@@ -246,16 +245,16 @@ unsafe impl<T: Fold, Wt: Waiter, W: Width> Sync for Gather<T, Wt, W> {}
 impl<T: Fold, Wt: Waiter, W: Width> Gather<T, Wt, W> {
     /* The state word: */
     /// Refs not put: the owner's, until it waits, and every GatherRef's.
-    const COUNT:   u64 = (1 << (W::BITS / 2)) - 1;
+    const COUNT:   u64 = (1 << (W::BITS - 2)) - 1;
     /// The owner has waited: its ref is dropped, and the Done born.
-    const WAITED:  u64 = 1 << (W::BITS / 2);
+    const WAITED:  u64 = 1 << (W::BITS - 2);
     /// A wait is under way, and the Done is its: one at a time.
     const IN_WAIT: u64 = Self::WAITED << 1;
 
     pub fn new() -> impl PinInit<Self> {
         pin_init!(Self {
             state:  W::new(1),
-            done:   UnsafeCell::new(None),
+            done:   UnsafeCell::new(Done::completed()),
             acc     <- T::acc(),
             _pin:   PhantomPinned,
         })
@@ -321,7 +320,7 @@ impl<T: Fold, Wt: Waiter, W: Width> Gather<T, Wt, W> {
 
     /// Its Done, once WAITED's been seen.
     fn done(&self) -> &Done<Wt> {
-        unsafe { (*self.done.get()).as_ref() }.expect("a Gather's Done, before its wait")
+        unsafe { &*self.done.get() }
     }
 
     /// A wait begun: the Done ours, till it's dropped.
@@ -443,7 +442,7 @@ impl<T: Fold, Wt: Waiter, W: Width> PinnedDrop for Gather<T, Wt, W> {
 
 /// A ref on a Gather: put with a value, or dropped without one.
 #[must_use = "a ref is put as soon as it's dropped"]
-pub struct GatherRef<T: Fold, Wt: Waiter, W: Width = usize>(NonNull<Gather<T, Wt, W>>);
+pub struct GatherRef<T: Fold, Wt: Waiter, W: Width = u32>(NonNull<Gather<T, Wt, W>>);
 
 // SAFETY: a Gather is atomics, and stays where it is until every ref is put;
 // what's put crosses to the owner's thread, so T::Item: Send
@@ -531,7 +530,7 @@ where
 /// A GatherRef with no one holder - a count's, put by the count's last put,
 /// from any context: so taken through &, once, by whoever takes it first.
 /// Send and Sync as the ref is.
-pub struct GatherRefSlot<T: Fold, Wt: Waiter, W: Width = usize> {
+pub struct GatherRefSlot<T: Fold, Wt: Waiter, W: Width = u32> {
     r:  AtomicPtr<Gather<T, Wt, W>>,
     _r: PhantomData<GatherRef<T, Wt, W>>,
 }

@@ -68,8 +68,8 @@ unsafe impl Sync for Update {}
 #[pin_data(PinnedDrop)]
 pub struct Update {
     /// Born with their waiters, as their IOs are submitted
-    read:      Option<Done>,
-    write:     Option<Done>,
+    read:      Done,
+    write:     Done,
     /// A mover's turn to write - moving_update.rs; a promote's is never used
     #[pin]
     turn:      Gather<(), waiter::Async>,
@@ -96,8 +96,8 @@ where
     let fs = t.fs();
     t.allocate_dropping_locks(|| {
         let init = pin_init!(Update {
-            read:      None,
-            write:     None,
+            read:      Done::completed(),
+            write:     Done::completed(),
             turn <- Gather::new(),
             found:     None,
             listed:    AsyncObjSlot::none(),
@@ -208,7 +208,7 @@ impl Update {
         // touch only read_done, an atomic, and the slot
         unsafe {
             (*u).read_done.store(true, core::sync::atomic::Ordering::Relaxed);
-            (*Self::of(u)).read.as_ref().expect("a data update's read done, never issued").complete();
+            (*Self::of(u)).read.complete();
         }
     }
 }
@@ -228,7 +228,7 @@ unsafe fn write_done(op: *mut c::bch_write_op) {
     // SAFETY: the caller's; as in read_done()
     unsafe {
         let u = op.byte_sub(core::mem::offset_of!(c::data_update, op)).cast::<c::data_update>();
-        (*Update::of(u)).write.as_ref().expect("a data update's write done, never issued").complete();
+        (*Update::of(u)).write.complete();
     }
 }
 
@@ -303,7 +303,7 @@ impl Body {
         if let Err(e) = issue(self) {
             // ended at submit: completed, as its endio would, so the drop
             // doesn't wait
-            unsafe { (*self.up.as_ptr()).read.as_ref() }.expect("the read's Done, just made").complete();
+            unsafe { (*self.up.as_ptr()).read.complete() };
             drop(read);
             return Err(e);
         }

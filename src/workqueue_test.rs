@@ -132,8 +132,8 @@ fn a_task_is_never_polled_concurrently() {
             for _ in 0..99 {
                 // Woken from inside the poll: the wake lands while this run is
                 // still in progress, which is the whole point.
-                let mut slot = None;
-                let done = AtomicPtr::<Option<Done>>::new(&raw mut slot);
+                let mut slot = Done::completed();
+                let done = AtomicPtr::<Done>::new(&raw mut slot);
                 let mut c = Completion::new(&mut slot, waiter::Async::current().await);
                 let mut woken = false;
                 poll_fn(|cx| {
@@ -143,7 +143,7 @@ fn a_task_is_never_polled_concurrently() {
                     woken = true;
                     let _ = Pin::new(&mut c).poll_resume(cx);
                     // SAFETY: by its address, as an endio completes one
-                    unsafe { (*done.load(Ordering::Relaxed)).as_ref() }.unwrap().complete();
+                    unsafe { (*done.load(Ordering::Relaxed)).complete() };
                     Poll::Pending
                 })
                 .await;
