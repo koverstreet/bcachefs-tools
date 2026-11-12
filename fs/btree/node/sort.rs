@@ -312,7 +312,7 @@ fn sort_bkey_ptrs(keys: &Keys<'_>, ptrs: &mut [u64]) {
     }
 }
 
-pub fn bch2_sort_whiteouts(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents) {
+pub fn sort_whiteouts(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents) {
     let u64s = b.whiteout_u64s.get() as usize;
 
     if u64s == 0 {
@@ -500,7 +500,7 @@ pub fn btree_node_sort(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, star
     keys.verify_btree_nr_keys();
 }
 
-pub fn bch2_btree_sort_into(fs: &Fs, dst: &mut LockedNode<'_, BtreeNode, Write>, src: LockedNode<'_, BtreeNode>) {
+pub fn btree_sort_into(fs: &Fs, dst: &mut LockedNode<'_, BtreeNode, Write>, src: LockedNode<'_, BtreeNode>) {
     let start_time = local_clock();
 
     let nsets = dst.contents().nsets;
@@ -560,7 +560,7 @@ pub fn bch2_btree_sort_into(fs: &Fs, dst: &mut LockedNode<'_, BtreeNode, Write>,
  * We're about to add another bset to the btree node, so if there's currently
  * too many bsets - sort some of them together:
  */
-pub fn bch2_btree_node_compact(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, Write>) -> bool {
+pub fn btree_node_compact(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, Write>) -> bool {
     let (b, contents) = (b.node(), b.contents_mut());
     let nsets = contents.nsets as usize;
     let unwritten_idx = contents.sets().iter().position(|t| !b.bset_written(t)).unwrap_or(nsets);
@@ -604,11 +604,11 @@ impl WriteSortRuns {
     }
 }
 
-pub fn bch2_btree_node_set_needs_whiteout(b: &mut LockedNode<'_, BtreeNode, Write>) {
+pub fn btree_node_set_needs_whiteout(b: &mut LockedNode<'_, BtreeNode, Write>) {
     b.keys_mut().iter_mut().for_each(|k| k.set_needs_whiteout(true));
 }
 
-pub fn bch2_maybe_compact_whiteouts(_fs: &Fs, b: &mut LockedNode<'_, BtreeNode, Write>) -> bool {
+pub fn maybe_compact_whiteouts(b: &mut LockedNode<'_, BtreeNode, Write>) -> bool {
     let (b, contents) = (b.node(), b.contents_mut());
     let compact = contents.sets().iter().enumerate().any(|(set, t)| should_compact_bset_lazy(&contents.nr, set, t));
 

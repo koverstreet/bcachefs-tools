@@ -15,7 +15,7 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIte
 use crate::btree::journal_overlay::{journal_key_overwrite, key_deleted_in_journal, BtreeAndJournalIter};
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::btree::node::iter::KeyIter;
-use crate::btree::node::sort::{bch2_btree_sort_into, bch2_maybe_compact_whiteouts, build_aux_trees};
+use crate::btree::node::sort::{btree_sort_into, build_aux_trees, maybe_compact_whiteouts};
 use crate::btree::path::{LockedNode, PathIdx, Paths, Write};
 use crate::btree::shard::key_is_shard_boundary;
 use crate::btree::types::BtreeWriteType;
@@ -746,7 +746,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
     }
 
     let added_dead_u64s = u64s + usize::from(old_live_u64s) > old_u64s + usize::from(live_u64s);
-    if added_dead_u64s && bch2_maybe_compact_whiteouts(fs, &mut b) {
+    if added_dead_u64s && maybe_compact_whiteouts(&mut b) {
         trans.node_reinit_iter(update.t(), &mut paths.paths_and_updates(), b.held());
     }
 
@@ -1346,7 +1346,7 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
 
     if let [n] = &mut dsts[..] {
         for &s in &nodes {
-            bch2_btree_sort_into(fs, n, s);
+            btree_sort_into(fs, n, s);
         }
 
         assert!(check_topology(update.t(), n.held()).is_ok(), "a merged node's topology bad:\n{}", n.to_text(fs));

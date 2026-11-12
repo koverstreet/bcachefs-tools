@@ -5,8 +5,8 @@ use crate::btree::bkey::{bkey_validate, BkeyS, BkeySC, ValidateFlags, BKEY_U64S}
 use crate::btree::cache::Bounce;
 use crate::btree::iter::{lockrestart_do, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt, Watermark};
 use crate::btree::node::sort::{
-    bch2_btree_node_compact, bch2_btree_node_set_needs_whiteout, bch2_sort_whiteouts, btree_node_sort,
-    build_aux_trees, drop_whiteouts, CompactMode, WriteSortRuns,
+    btree_node_compact, btree_node_set_needs_whiteout, btree_node_sort, build_aux_trees, drop_whiteouts,
+    sort_whiteouts, CompactMode, WriteSortRuns,
 };
 use crate::btree::node::bset::MAX_BSETS;
 use crate::btree::node::{BtreeNode, NodeContents};
@@ -386,7 +386,7 @@ pub(crate) fn node_write(trans: &BtreeTrans<'_>, b: &BtreeNode, mut ty: BtreeWri
     assert!(contents.data().magic.get() == fs.bset_magic());
     assert!(plain_bytes(&contents.data().format) == plain_bytes(&contents.format));
 
-    bch2_sort_whiteouts(fs, b, unsafe { b.contents_mut() });
+    sort_whiteouts(fs, b, unsafe { b.contents_mut() });
 
     let contents = unsafe { b.contents() };
     let Some(mut w) = BsetWrite::build(unsafe { Fs::borrow_raw(fs.as_ptr()) }, b, contents) else {
@@ -709,7 +709,7 @@ pub fn bch2_btree_post_write_cleanup(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, 
         drop_whiteouts(b.node(), b.contents_mut(), CompactMode::COMPACT_ALL)
     };
 
-    bch2_btree_node_set_needs_whiteout(b);
+    btree_node_set_needs_whiteout(b);
 
     /*
      * If later we don't unconditionally sort down to a single bset, we have
@@ -799,7 +799,7 @@ pub(in crate::btree) fn bch2_btree_init_next(t: &TransAttempt<'_, '_>, pu: &mut 
     }
 
     if b.contents().nsets as u32 == MAX_BSETS &&
-        bch2_btree_node_compact(fs, b)
+        btree_node_compact(fs, b)
     {
         reinit_iter = true;
     }

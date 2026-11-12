@@ -14,7 +14,7 @@ use crate::btree::cache::UnhashedNode;
 use crate::btree::iter::CommitOpts;
 use crate::btree::node::BtreeNode;
 use crate::btree::node::bset::bch2_bset_init_first;
-use crate::btree::node::sort::{bch2_btree_sort_into, build_aux_trees};
+use crate::btree::node::sort::{btree_sort_into, build_aux_trees};
 use crate::btree::path::{LockedNode, PathIdx, Paths};
 use crate::c;
 use crate::data::durability::BkeyVDurability;
@@ -360,7 +360,7 @@ impl<'t> InteriorUpdate<'t> {
         contents.data_mut().format = format;
         contents.set_format(format);
 
-        bch2_btree_sort_into(fs, &mut n, b);
+        btree_sort_into(fs, &mut n, b);
 
         n.contents().reset_sib_u64s();
         n

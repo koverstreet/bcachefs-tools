@@ -10,7 +10,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use super::aux_tree::pack_pos_or_unpacked;
 use super::iter::KeyIter;
 use super::keys::key_at;
-use super::sort::bch2_maybe_compact_whiteouts;
+use super::sort::maybe_compact_whiteouts;
 use super::{BtreeNode, NodeContents};
 use crate::btree::bkey::{BkeyI, BkeyP, BKEY_U64S};
 use crate::btree::trans_attempt::lockrestart_do;
@@ -300,7 +300,7 @@ impl BtreeTrans<'_> {
             }
         }
 
-        if u64s_added > live_u64s_added && unlikely(bch2_maybe_compact_whiteouts(fs, &mut b)) {
+        if u64s_added > live_u64s_added && unlikely(maybe_compact_whiteouts(&mut b)) {
             self.node_reinit_iter(t, pu, b.held());
         }
     }
