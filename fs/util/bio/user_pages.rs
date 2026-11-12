@@ -5,15 +5,16 @@
 //!
 //! A read dirties the pages it reads into before it's submitted, and checks
 //! them when it's done: one cleaned under it - by writeback - is dirtied
-//! again, which takes its folio lock, so from a work item - the check is an
-//! endio's. bio_set_pages_dirty() and bio_check_pages_dirty(), which 7.2
-//! unexported.
+//! again, which takes its folio lock, so from process context - a read's task
+//! requeued there, or C's from a work item, the check being an endio's.
+//! bio_set_pages_dirty() and bio_check_pages_dirty(), which 7.2 unexported.
 
-use super::{Bio, BioBox, HasBio};
+use super::Bio;
 use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::init_at;
 use crate::util::iov_iter::IovIter;
+use crate::util::task::requeue;
 use crate::util::workqueue::{flush_work, Queue};
 use core::cell::UnsafeCell;
 use core::ffi::{c_int, c_uint};
@@ -28,8 +29,8 @@ c_extern! {
 
 impl Bio {
     /// Its bvecs the pages of @iter's next bytes, pinned, as many as it has
-    /// room for - @iter advanced past them. Its box gives them back, with
-    /// release_user_pages().
+    /// room for - @iter advanced past them. release_user_pages() gives them
+    /// back.
     pub fn pin_user_pages(self: Pin<&mut Self>, iter: &mut IovIter<'_>) -> Result<(), BchError> {
         let ret = unsafe { bch2_bio_iov_iter_get_pages(self.raw_mut(), iter.as_ptr(), 0) };
         if ret < 0 { Err(BchError::from_raw(ret)) } else { Ok(()) }
@@ -46,22 +47,17 @@ impl Bio {
             }
         }
     }
-}
 
-impl<T: HasBio> BioBox<T> {
-    /// The bio given back, with the user's pages it pinned - @dirtied, if
-    /// set_pages_dirty() dirtied them, as they're checked dirty still:
-    /// bio_check_or_release().
-    pub fn release_user_pages(self, dirtied: bool) {
-        let bio = self.into_bio();
-        unsafe {
-            if dirtied {
-                bch2_bio_check_pages_dirty(bio);
-            } else {
-                c::bio_release_pages(bio, false);
-                c::bio_put(bio);
-            }
+    /// The user's pages it pinned, given back - @dirtied, if set_pages_dirty()
+    /// dirtied them, as they're checked dirty still: those cleaned since are
+    /// dirtied again first, under their folio locks.
+    pub async fn release_user_pages(mut self: Pin<&mut Self>, dirtied: bool) {
+        let redirty = dirtied && !self.as_ref().get_ref().range_all().folios()
+            .all(|f| unsafe { c::folio_test_dirty(f.folio.as_ptr()) });
+        if redirty {
+            requeue(Queue::system_dfl()).await;
         }
+        unsafe { c::bio_release_pages(self.as_mut().raw_mut(), redirty) };
     }
 }
 

@@ -355,18 +355,6 @@ impl<T: HasBio, B: Buffers> BioBox<T, B> {
 }
 
 impl<T: HasBio> BioBox<T> {
-    /// The T dropped, and the bio's ref given up raw, for a put that may come
-    /// later - bch2_bio_check_pages_dirty()'s, from a workqueue. A bioset's
-    /// bio: bio_put() can't free one with its bvecs inline.
-    #[cfg(kernel)]
-    pub(super) fn into_bio(self) -> *mut c::bio {
-        let t = core::mem::ManuallyDrop::new(self).t;
-        let bio = bio_of(t.as_ptr());
-        assert!(unsafe { !(*bio).bi_pool.is_null() }, "into_bio() of a bio with its bvecs inline");
-        unsafe { core::ptr::drop_in_place(t.as_ptr()) };
-        bio
-    }
-
     /// As BioSet::alloc(), the bvecs inline. kzalloc(), not kvzalloc(): an
     /// endio may drop it, and kvfree() isn't safe in interrupt context.
     pub fn new<E, I>(bdev: *mut c::block_device, nr_vecs: u16, opf: u32,
