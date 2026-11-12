@@ -62,6 +62,8 @@
 //!   #[args_stored_once]  an async fn as fn -> impl Future { async move }, so
 //!                        its by-value arguments are stored once in its
 //!                        future, not twice (args_stored_once.rs)
+//!   #[in_place(Fut)]     an async fn whose future is named Fut, for a task
+//!                        held in place, or a box's pool, by type (in_place.rs)
 //!
 //! On syn and quote - vendor/kernel-rust's: the kernel build compiles this
 //! with a bare rustc.
@@ -80,6 +82,7 @@ use cstruct::{bitfield_type, bitfield_wrapper, enum_text, expand_enum_list, pars
 
 mod args_stored_once;
 mod atomic_bitfield;
+mod in_place;
 mod detach;
 mod rcu_head;
 mod fieldwise;
@@ -486,6 +489,15 @@ pub fn vtable(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> p
 #[proc_macro_attribute]
 pub fn args_stored_once(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand_syn("#[args_stored_once]", || args_stored_once::args_stored_once(attr.into(), syn::parse(item)?))
+}
+
+/// `#[in_place(Fut)]` on an async fn: the same fn, its future named Fut - a
+/// type alias impl Trait the fn defines - for a struct to hold its task by
+/// type, InPlace<'q, Fut>, or a pool to be sized for its box; its args stored
+/// once, as #[args_stored_once] stores them. See in_place.rs.
+#[proc_macro_attribute]
+pub fn in_place(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[in_place]", || in_place::in_place(syn::parse(attr)?, syn::parse(item)?))
 }
 
 /// `#[placed(Base.field)]`, ahead of `#[pin_data]` and the derives, on a

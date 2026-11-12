@@ -22,6 +22,14 @@ pub(crate) fn args_stored_once(attr: TokenStream, mut f: ItemFn) -> syn::Result<
     if !attr.is_empty() {
         return Err(Error::new_spanned(attr, "takes no arguments"));
     }
+    let ret = store_args_once(&mut f)?;
+    f.sig.output = parse_quote!(-> impl ::core::future::Future<Output = #ret>);
+    Ok(quote!(#f))
+}
+
+/// @f, an async fn, as a fn whose body is an async block: the output of its
+/// future, for the caller to give @f the return type of.
+pub(crate) fn store_args_once(f: &mut ItemFn) -> syn::Result<TokenStream> {
     if f.sig.asyncness.take().is_none() {
         return Err(Error::new_spanned(&f.sig, "expected an async fn"));
     }
@@ -38,8 +46,7 @@ pub(crate) fn args_stored_once(attr: TokenStream, mut f: ItemFn) -> syn::Result<
         ReturnType::Default => quote!(()),
         ReturnType::Type(_, t) => quote!(#t),
     };
-    f.sig.output = parse_quote!(-> impl ::core::future::Future<Output = #ret>);
     let block = &f.block;
     f.block = parse_quote!({ async move #block });
-    Ok(quote!(#f))
+    Ok(ret)
 }

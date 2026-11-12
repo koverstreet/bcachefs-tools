@@ -23,6 +23,10 @@ pub trait TaskEnd {
 #[derive(::pin_init::Zeroable)]
 pub struct InPlace<'q, F: Future>(UnsafeCell<MaybeUninit<Task<'q, F>>>);
 
+// The task once it's started, as Task is: only the executor touches it
+unsafe impl<F: Future + Send> Send for InPlace<'_, F> where F::Output: Send {}
+unsafe impl<F: Future + Send> Sync for InPlace<'_, F> where F::Output: Send {}
+
 impl<'q, F: Future> InPlace<'q, F> {
     /// No task in it yet: nothing written.
     pub fn new() -> impl Init<Self> {

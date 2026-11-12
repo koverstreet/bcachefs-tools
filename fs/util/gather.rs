@@ -52,7 +52,7 @@
 //!
 //! What's in flight can be tasks, put with what they return. A task in place -
 //! in the memory of what it's the task of - carries its ref in its output,
-//! gathering(), and its output's end, GatherEnd, puts, or tail calls: the ref
+//! and its output's end, GatherEnd, puts, or tail calls: the ref
 //! is handed to the start of a task that goes on in its place, wherever that
 //! one's memory is, once the first's is done with.
 
@@ -63,7 +63,6 @@ use crate::new_lock;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::task::{waiter, Completion, Done, Resumable, Resume, TaskEnd, Waiter};
-use core::future::Future;
 use core::cell::UnsafeCell;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::ManuallyDrop;
@@ -525,17 +524,6 @@ where
         match out.end() {
             Tail::Done(v) => r.put(v),
             Tail::Call(start) => start(r),
-        }
-    }
-}
-
-impl<T: Fold, Wt: Waiter, W: Width> GatherRef<T, Wt, W> {
-    /// @future, its output carrying the ref: a gathered task's, for its end -
-    /// GatherEnd - to put or tail call with.
-    pub fn gathering<F: Future>(self, future: F) -> impl Future<Output = (Self, F::Output)> {
-        async move {
-            let out = future.await;
-            (self, out)
         }
     }
 }
