@@ -94,7 +94,6 @@ pub mod c {
     pub(crate) use crate::btree::path::__btree_path_bits_forward;
     pub use crate::dirent::format::*;
     pub use crate::format::accounting::*;
-    pub use crate::alloc::backpointers::{bp_scan_iter};
     pub use crate::alloc::buckets::{BCH_DISK_RESERVATION_NOFAIL, BCH_DISK_RESERVATION_PARTIAL, bch_reservation_flags, disk_reservation_destructable};
     pub use crate::alloc::buckets::{BCH_DEV_POS_FRAC_BITS, BucketData, BucketGensArray, BucketGensHead, DiskReservation, RESERVE_FACTOR, bch_dev_usage, bch_dev_usage_full, bch_dev_usage_type, bch_fs_placeable, bch_fs_usage_base, bch_fs_usage_short, bucket, disk_reservation};
     pub use crate::alloc::disk_groups::{TARGET_DEV, TARGET_DEV_START, TARGET_GROUP, TARGET_GROUP_START, TARGET_NULL, bch_target_type, target, target_id};

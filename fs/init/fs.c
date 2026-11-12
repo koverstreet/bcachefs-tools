@@ -16,7 +16,6 @@
 #include "btree/update.h"
 #include "data/reconcile/trigger.h"
 #include "init/error.h"
-#include "alloc/backpointers_gen.h"
 #include "alloc/disk_groups.h"
 #include "alloc/foreground.h"
 #include "alloc/replicas.h"

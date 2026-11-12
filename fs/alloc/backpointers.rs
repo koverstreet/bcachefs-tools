@@ -62,24 +62,8 @@ use crate::data_structures::sort::heapsort_by;
 use crate::util::vstructs::plain_bytes;
 use crate::util::{Printbuf, ToText};
 use crate::{bkey_fsck_err_on, fsck_err, prt};
-use core::marker::PhantomData;
 use core::ops::{ControlFlow, RangeInclusive};
-use cstruct_macros::CStruct;
 use crate::format::{Bpos, Btree, DataType, BkeyType, MetadataVersion};
-
-/// A backpointer scan in progress: alloc/backpointers.rs's BpScanIter.
-#[repr(C)]
-#[derive(CStruct)]
-pub struct bp_scan_iter {
-    /* BTREE_ID_backpointers, BTREE_ID_stripe_backpointers */
-    pub btree: Btree,
-    pub pos: Bpos,
-    pub nr_flushes: u64,
-    pub progress: *mut c::progress_indicator,
-    pub batch: KVVec<BkeyI<c::Backpointer>>,
-    /* a refill found nothing: the scan's at its end */
-    pub done: bool,
-}
 
 /// A backpointer btree position, ordered as the bpos it's encoded in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -537,11 +521,26 @@ pub fn backpointer_get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, 
 
 // ── Backpointers in the order of what they point to ──────────────────────
 
-impl c::bp_scan_iter {
-    fn new(btree: Btree, pos: Bpos, progress: *mut c::progress_indicator) -> Self {
-        Self { btree, pos, nr_flushes: 0, progress, batch: KVVec::new(), done: false }
-    }
+/// A backpointer btree walked in the order of what its backpointers point to: read
+/// in batches as big as memory allows, sorted by target. What it hands out are
+/// copies in its batch, which a restart doesn't invalidate.
+///
+/// A peek is in its caller's attempt, and refilling the batch is a nested
+/// attempt: it walks the btree in attempts of its own, then returns
+/// transaction_restart_nested - and the caller's retry is served from the
+/// batch, so it converges.
+pub struct BpScanIter<'p> {
+    /* BTREE_ID_backpointers, BTREE_ID_stripe_backpointers */
+    btree:      Btree,
+    pos:        Bpos,
+    nr_flushes: u64,
+    progress:   Option<&'p Progress<'p>>,
+    batch:      KVVec<BkeyI<c::Backpointer>>,
+    /* a refill found nothing: the scan's at its end */
+    done:       bool,
+}
 
+impl BpScanIter<'_> {
     /// The next backpointer, or None past @end: in the caller's attempt @t,
     /// which a refill ends - see BpScanIter.
     fn peek(&mut self, t: &TransAttempt<'_, '_>, end: Bpos, last_flushed: &WbFlush<'_>)
@@ -577,8 +576,7 @@ impl c::bp_scan_iter {
     fn refill(&mut self, trans: &TransGuard<'_>, end: Bpos) -> Result<(), BchError> {
         let bp_size = size_of::<BkeyI<c::Backpointer>>();
         let max = totalram_bytes() / 16 / bp_size;
-        // SAFETY: init()'s caller's, which outlives the scan
-        let progress = unsafe { self.progress.as_ref() };
+        let progress = self.progress;
 
         let mut iter = BtreeIter::new(trans, self.btree, self.pos, BtreeIterFlags::PREFETCH);
         iter.for_each_max(trans, end, |t, iter, k| {
@@ -622,23 +620,9 @@ impl c::bp_scan_iter {
     }
 }
 
-/// A backpointer btree walked in the order of what its backpointers point to: read
-/// in batches as big as memory allows, sorted by target. What it hands out are
-/// copies in its batch, which a restart doesn't invalidate.
-///
-/// A peek is in its caller's attempt, and refilling the batch is a nested
-/// attempt: it walks the btree in attempts of its own, then returns
-/// transaction_restart_nested - and the caller's retry is served from the
-/// batch, so it converges.
-pub struct BpScanIter<'p> {
-    raw:       c::bp_scan_iter,
-    _progress: PhantomData<&'p c::progress_indicator>,
-}
-
 impl<'p> BpScanIter<'p> {
-    pub fn new(btree: Btree, start: Bpos, progress: Option<&'p Progress<'_>>) -> Self {
-        let progress = progress.map_or(core::ptr::null_mut(), Progress::as_raw);
-        Self { raw: c::bp_scan_iter::new(btree, start, progress), _progress: PhantomData }
+    pub fn new(btree: Btree, pos: Bpos, progress: Option<&'p Progress<'_>>) -> Self {
+        Self { btree, pos, nr_flushes: 0, progress, batch: KVVec::new(), done: false }
     }
 
     /// Each backpointer in an attempt of its own, retried on restart; the peek and @f
@@ -650,11 +634,11 @@ impl<'p> BpScanIter<'p> {
             -> Result<(), BchError>,
     {
         while lockrestart_do(trans, |t| {
-            let Some(bp) = self.raw.peek(t, end, &last_flushed)? else { return Ok(false) };
+            let Some(bp) = self.peek(t, end, &last_flushed)? else { return Ok(false) };
             f(t, bp, last_flushed.reborrow())?;
             Ok(true)
         })? {
-            self.raw.advance();
+            self.advance();
         }
         Ok(())
     }

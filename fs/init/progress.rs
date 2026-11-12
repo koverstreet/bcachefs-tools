@@ -341,8 +341,4 @@ impl<'f> Progress<'f> {
     pub fn update<'a, 't>(&self, t: &TransAttempt<'a, 't>, iter: &BtreeIter<'t>) -> Result<(), BchError> {
         self.p.update(t, iter)
     }
-
-    pub fn as_raw(&self) -> *mut c::progress_indicator {
-        core::ptr::from_ref(self.p).cast_mut()
-    }
 }
