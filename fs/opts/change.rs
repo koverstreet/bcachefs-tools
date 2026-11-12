@@ -40,6 +40,16 @@ fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: opt_id, v: u64, post: b
     let dev = || u32::from(ca.expect("a device option").dev_idx);
 
     match id {
+        // Reconcile sees foreground_target only through the targets that
+        // default to it: an extent's background_target (fixups()), and the
+        // metadata's, without a metadata_target (get_fs()). With a filesystem
+        // wide background_target, no extent's reconcile state depends on it,
+        // and a filesystem scan would walk every extent for nothing
+        opt_id::Opt_foreground_target if inum == 0 && fs.opts.background_target.get() != 0 => {
+            if fs.opts.metadata_target.get() == 0 {
+                bracket(scan::from_arm(c::reconcile_scan_metadata {}))?;
+            }
+        }
         opt_id::Opt_foreground_target |
         opt_id::Opt_background_target |
         opt_id::Opt_promote_target |
