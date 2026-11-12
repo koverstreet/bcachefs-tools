@@ -46,7 +46,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::fs::{btree_id_is_alloc, Fs};
 use crate::init::recovery::NotRw;
-use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy};
+use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy, Mut, Ref};
 use crate::util::projections::{Volatile, VolatilePublish};
 use crate::util::alloc::KVVec;
 use crate::data_structures::gap_buffer::GapBuffer;
@@ -55,7 +55,7 @@ use crate::util::log::{LogLevel, LogMsg};
 use crate::util::place::Placed;
 use crate::util::rcu::{self, ReadGuard, RcuArray, RcuElement};
 use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
-use crate::{bch_err, prt, new_lock, published};
+use crate::{bch_err, field, prt, new_lock, published};
 use core::cmp::Ordering;
 use core::mem::size_of;
 use core::pin::Pin;
@@ -377,18 +377,6 @@ impl c::journal_keys {
         unsafe { self.keys.protected_mut() }
     }
 
-    /// What sorting works on, not rw, had at once: the keys and pre_sort, and
-    /// the journal's rewind ranges, read.
-    fn sort_parts<'a>(&'a self, not_rw: &'a mut NotRw<'_>)
-        -> (&'a mut GapBuffer<c::journal_key>, &'a mut KVVec<c::journal_key>, &'a [c::journal_rewind_range])
-    {
-        let fs = not_rw.fs;
-        let rewind_ranges: *const KVVec<c::journal_rewind_range> = not_rw.get_of(&fs.journal.rewind_ranges);
-        let keys: *mut GapBuffer<c::journal_key> = not_rw.get_mut_of(&self.keys);
-        let pre_sort = not_rw.get_mut_of(&self.pre_sort);
-        unsafe { (&mut *keys, pre_sort, &*rewind_ranges) }
-    }
-
     fn seq(&self) -> u64 {
         self.seq.load(Relaxed)
     }
@@ -693,7 +681,7 @@ unsafe fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: *mut 
     let n = c::journal_key::new_allocated(btree, level, k);
 
     if !fs.flags.get(f::btree_running) {
-        return jk.sort_parts(not_rw).1.push(n)
+        return not_rw.get_mut_of(&jk.pre_sort).push(n)
             .map_err(|_| fs.err(e::BCH_ERR_ENOMEM_journal_key_insert));
     }
 
@@ -1008,7 +996,9 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
     let jk = fs.journal_keys_get().expect("journal keys sorted after recovery was done with them");
     let jk = jk.value();
     let mut not_rw = fs.not_rw();
-    let (keys, pre_sort, rewind_ranges) = jk.sort_parts(&mut not_rw);
+    let (keys, pre_sort, rewind_ranges) = not_rw.split::<(Mut<field!(journal_keys.*.keys)>,
+                                                          Mut<field!(journal_keys.*.pre_sort)>,
+                                                          Ref<field!(journal.rewind_ranges)>)>();
     let (mut nr_read, mut nr_extra_sorts) = (0usize, 0usize);
     let start_seq = match fs.journal_scrub_seq.get() { 0 => fs.journal_replay_seq_start.get(), s => s };
 

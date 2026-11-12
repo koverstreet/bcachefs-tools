@@ -62,6 +62,11 @@ unsafe impl crate::locking::Guard for NotRw<'_> {
 
 unsafe impl crate::locking::Alone for NotRw<'_> {}
 
+// Recovery's ref on the journal keys - their AtomicRef's first - is put by
+// journal_keys_put_initial(): in journal_replay, a pass after set_may_go_rw,
+// or at the filesystem's release
+unsafe impl crate::locking::HoldsRef<crate::at!(Fs.journal_keys)> for NotRw<'_> {}
+
 impl Fs {
     /// The asserts are that nothing else runs: called before the filesystem
     /// can go rw, on the recovery task.

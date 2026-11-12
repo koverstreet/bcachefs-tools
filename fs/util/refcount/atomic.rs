@@ -33,6 +33,9 @@ unsafe impl<T: Send + Sync> Send for AtomicRef<T> {}
 unsafe impl<T: Send + Sync> Sync for AtomicRef<T> {}
 
 impl<T> AtomicRef<T> {
+    /// Where the value is in an AtomicRef.
+    pub(crate) const VALUE_OFFSET: usize = core::mem::offset_of!(Self, value);
+
     pub const fn new(value: T) -> Self {
         AtomicRef { count: AtomicU32::new(1), value: UnsafeCell::new(ManuallyDrop::new(value)) }
     }

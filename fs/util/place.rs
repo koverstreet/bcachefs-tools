@@ -492,6 +492,9 @@ unsafe impl<C, A: Place<Type = Self, Base: Enclosing>> Contained for Placed<C, A
 }
 
 impl<C, A> Placed<C, A> {
+    /// Where the C is in a Placed.
+    pub(crate) const VALUE_OFFSET: usize = core::mem::offset_of!(Self, value);
+
     #[doc(hidden)]
     pub fn new<E: From<F>, F>(at: A, value: impl PinInit<C, F>) -> impl PinInit<Self, E> {
         pin_init!(Self { value <- value, _placed_at: at }? E)
@@ -542,6 +545,10 @@ pub struct ElemOf<P, const I: usize>(PhantomData<P>);
 
 pub struct Through<P>(PhantomData<P>);
 
+/// The value of the AtomicRef P reaches: no Path - it's live only while a ref
+/// is held - but a GuardPath, for a guard that holds one.
+pub struct RefValue<P>(PhantomData<P>);
+
 /// A path within what the value it starts from is in: no Through - so a ref
 /// on a count it reaches keeps the value.
 pub(crate) trait Within {}
@@ -565,8 +572,9 @@ impl<P> OnePath for Through<P> {}
 
 /// A path from the struct a field's in, as a type: its fields by name,
 /// elements of an array field by index, what a pointer field points to by ->,
-/// and super for its parent - `field!(super.writes)`, `field!(super.super.c)`,
-/// `field!(io_ref[WRITE])`, `field!(fs->writes)`.
+/// the value of an AtomicRef by *, and super for its parent -
+/// `field!(super.writes)`, `field!(super.super.c)`, `field!(io_ref[WRITE])`,
+/// `field!(fs->writes)`, `field!(journal_keys.*.keys)`.
 #[macro_export]
 macro_rules! field {
     ($($path:tt)+) => {
@@ -582,6 +590,9 @@ macro_rules! __field_path {
     };
     ($p:ty; super $(. $($rest:tt)+)?) => {
         $crate::__field_path!($crate::util::place::Up<$p>; $($($rest)+)?)
+    };
+    ($p:ty; * $(. $($rest:tt)+)?) => {
+        $crate::__field_path!($crate::util::place::RefValue<$p>; $($($rest)+)?)
     };
     ($p:ty; $f:ident -> $($rest:tt)+) => {
         $crate::__field_path!(

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::util::place::{Contained, Path, Place, Placed};
+use crate::util::place::{Contained, Field, FieldOf, Here, Path, Place, Placed, RefValue};
+use crate::util::refcount::AtomicRef;
 use crate::util::projections::Publish;
 use core::cell::UnsafeCell;
 use core::ffi::{c_ulong, c_void, CStr};
@@ -660,6 +661,17 @@ pub(crate) unsafe trait Guard {
     {
         unsafe { c.locked_by().published_writer() }
     }
+
+    /// Several of what it covers at once, by path from the root: @S a tuple of
+    /// Mut<field!(..)> and Ref<field!(..)>, whose bytes are checked when it's
+    /// compiled not to overlap - but two Refs'.
+    fn split<'g, S: Split<'g, Self>>(&'g mut self) -> S::Out
+    where
+        Self: Sized + 'g,
+    {
+        let () = S::DISJOINT;
+        unsafe { S::get(self) }
+    }
 }
 
 /// A Guard held alone: what it covers is had by &mut.
@@ -667,6 +679,155 @@ pub(crate) unsafe trait Guard {
 /// # Safety
 /// While one lives, nothing else holds what it names.
 pub(crate) unsafe trait Alone: Guard {}
+
+// ── Splits: several pieces under one guard ──────────────────────────────────
+
+/// A Guard holding a ref on the AtomicRef placed at @A: its value is live
+/// while the guard is.
+///
+/// # Safety
+/// While one lives, a ref on the AtomicRef at A is held.
+pub(crate) unsafe trait HoldsRef<A>: Guard {}
+
+/// A path from a guard's root down to what a split of it hands out - as
+/// field!() writes one, of fields and the values of refs the guard holds: at
+/// OFFSET of the root, as many bytes as a To.
+///
+/// # Safety
+/// get() follows the path, to the To at OFFSET of the guard's root.
+pub(crate) unsafe trait GuardPath<G: Guard> {
+    type To;
+    const OFFSET: usize;
+    fn get(g: &G) -> &Self::To;
+}
+
+unsafe impl<G: Guard> GuardPath<G> for Here {
+    type To = G::Root;
+    const OFFSET: usize = 0;
+    fn get(g: &G) -> &G::Root {
+        g.root()
+    }
+}
+
+unsafe impl<G: Guard, P: GuardPath<G>, const N: u64> GuardPath<G> for FieldOf<P, N>
+where
+    P::To: Field<N>,
+{
+    type To = <P::To as Field<N>>::Type;
+    const OFFSET: usize = P::OFFSET + <P::To as Field<N>>::OFFSET;
+    fn get(g: &G) -> &Self::To {
+        unsafe { &*core::ptr::from_ref(P::get(g)).byte_add(<P::To as Field<N>>::OFFSET).cast() }
+    }
+}
+
+unsafe impl<G, P, T, A: 'static> GuardPath<G> for RefValue<P>
+where
+    G: HoldsRef<A>,
+    P: GuardPath<G, To = Placed<AtomicRef<T>, A>>,
+{
+    type To = T;
+    const OFFSET: usize = P::OFFSET + Placed::<AtomicRef<T>, A>::VALUE_OFFSET + AtomicRef::<T>::VALUE_OFFSET;
+    fn get(g: &G) -> &T {
+        unsafe { P::get(g).value_held() }
+    }
+}
+
+/// A piece of a split: Mut<P>, what the LockedBy at P protects, by &mut - of
+/// a guard held alone - and Ref<P>, by &.
+pub(crate) struct Mut<P>(PhantomData<P>);
+pub(crate) struct Ref<P>(PhantomData<P>);
+
+/// # Safety
+/// get() hands out what's in [OFFSET, OFFSET + SIZE) of the guard's root, and
+/// only that: by &mut if MUT.
+pub(crate) unsafe trait Piece<'g, G: Guard + 'g> {
+    type Out;
+    const OFFSET: usize;
+    const SIZE: usize;
+    const MUT: bool;
+
+    /// # Safety
+    /// Nothing else refers to what it hands out while that lives - or, but
+    /// for MUT, nothing by &mut.
+    unsafe fn get(g: &'g G) -> Self::Out;
+}
+
+unsafe impl<'g, G: Alone + 'g, P: GuardPath<G>> Piece<'g, G> for Mut<P>
+where
+    P::To: AsLockedBy<L = G::Name> + 'g,
+    <P::To as AsLockedBy>::G: 'g,
+{
+    type Out = &'g mut <P::To as AsLockedBy>::G;
+    const OFFSET: usize = P::OFFSET;
+    const SIZE: usize = size_of::<P::To>();
+    const MUT: bool = true;
+
+    unsafe fn get(g: &'g G) -> Self::Out {
+        unsafe { P::get(g).locked_by().protected_mut() }
+    }
+}
+
+unsafe impl<'g, G: Guard + 'g, P: GuardPath<G>> Piece<'g, G> for Ref<P>
+where
+    P::To: AsLockedBy<L = G::Name> + 'g,
+    <P::To as AsLockedBy>::G: 'g,
+{
+    type Out = &'g <P::To as AsLockedBy>::G;
+    const OFFSET: usize = P::OFFSET;
+    const SIZE: usize = size_of::<P::To>();
+    const MUT: bool = false;
+
+    unsafe fn get(g: &'g G) -> Self::Out {
+        unsafe { P::get(g).locked_by().protected() }
+    }
+}
+
+/// A tuple of Pieces, Guard::split()'s.
+///
+/// # Safety
+/// DISJOINT evaluates only if the pieces' bytes don't overlap, but two
+/// shared pieces'; get() hands out each piece.
+pub(crate) unsafe trait Split<'g, G: Guard + 'g> {
+    type Out;
+    const DISJOINT: ();
+
+    /// # Safety
+    /// As Piece::get()'s, for every piece.
+    unsafe fn get(g: &'g G) -> Self::Out;
+}
+
+/// Whether pieces (offset, size, mut) overlap only where both are shared.
+const fn pieces_disjoint(p: &[(usize, usize, bool)]) -> bool {
+    let mut i = 0;
+    while i < p.len() {
+        let mut j = i + 1;
+        while j < p.len() {
+            let ((a, a_len, a_mut), (b, b_len, b_mut)) = (p[i], p[j]);
+            if (a_mut || b_mut) && a < b + b_len && b < a + a_len {
+                return false;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    true
+}
+
+macro_rules! split_tuple {
+    ($($p:ident),+) => {
+        unsafe impl<'g, G: Guard + 'g, $($p: Piece<'g, G>),+> Split<'g, G> for ($($p,)+) {
+            type Out = ($($p::Out,)+);
+            const DISJOINT: () = assert!(pieces_disjoint(&[$(($p::OFFSET, $p::SIZE, $p::MUT)),+]),
+                                         "a split's pieces overlap");
+
+            unsafe fn get(g: &'g G) -> Self::Out {
+                unsafe { ($($p::get(g),)+) }
+            }
+        }
+    };
+}
+split_tuple!(A, B);
+split_tuple!(A, B, C);
 
 unsafe impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A: Place + 'a> Guard for SharedGuard<'a, R, G, P, U, A>
 where
