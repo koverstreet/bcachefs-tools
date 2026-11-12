@@ -38,7 +38,6 @@ use crate::sb::io::SbState;
 use crate::prt;
 use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, plain_bytes_mut, Unvalidated};
 use crate::sb::members;
-use crate::util::ffi::c_char;
 use crate::util::log::{log_no_fs, LogLevel};
 use crate::util::names::{self, Names};
 use crate::util::{HumanReadable, Printbuf};
@@ -1472,6 +1471,3 @@ impl Fs {
 mod change;
 pub use change::OptChange;
 pub(crate) use change::opts_hooks_pre_set;
-
-#[path = "opts_c_export.rs"]
-pub mod c_export;
