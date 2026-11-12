@@ -16,7 +16,8 @@ use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts,
 use crate::btree::node::BtreeNode;
 use crate::btree::path::Paths;
 use crate::btree::trigger::{key_trigger, TriggerOp};
-use crate::btree::write::{bch2_btree_node_write_trans, node_write_if_need};
+use crate::btree::write::{node_write_if_need, node_write_trans, BtreeWriteFlags};
+use crate::cstructs::c::BtreeWriteType;
 use crate::c;
 use crate::c::six_lock_type::{SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
 use crate::data::ptrs::{BkeyVPtrs, ExtentEntry, Ptrs};
@@ -110,7 +111,7 @@ impl InteriorUpdate<'_> {
             }
         }
 
-        bch2_btree_node_write_trans(self.trans(), paths, n, SIX_LOCK_write, 0);
+        node_write_trans(self.trans(), paths, n, SIX_LOCK_write, BtreeWriteType::initial, BtreeWriteFlags::empty());
     }
 
     /*

@@ -727,13 +727,6 @@ pub fn bch2_btree_post_write_cleanup(fs: &Fs, b: &BtreeNode) -> bool {
     invalidated_iter
 }
 
-#[c_export]
-pub fn bch2_btree_node_write_trans(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, b: &BtreeNode,
-                                   lock_type_held: c::six_lock_type, flags: c_uint) {
-    let (ty, flags) = unpack(flags);
-    node_write_trans(trans, paths, b, lock_type_held, ty, flags)
-}
-
 /// btree_node_write_if_need()
 pub(crate) fn node_write_if_need(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode,
                                  lock_type_held: c::six_lock_type) {
