@@ -251,11 +251,9 @@ TAGS:
 tags:
 	ctags -R .
 
-# Not the kernel-only C: fs/vendor/kernel-rust (the vendored kernel Rust
-# stack's helpers) and dkms/ (module-version.c).
-SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' ! -path './vendor/*' ! -path './fs/vendor/kernel-rust/*' ! -path './dkms/*' ! -path './debian/*' ! -path './target/*' ! -path './build/*' ! -path './ktest-out/*' -iname '*.c'))
-# Strip find(1)'s leading './' so objects land at build/<path>, not build/./<path>.
-SRCS:=$(patsubst ./%,%,$(SRCS))
+# Named directories, not '.', so a nested checkout (git worktree) isn't compiled in.
+# Not the kernel-only C: fs/vendor/kernel-rust (the vendored kernel Rust stack's helpers).
+SRCS:=$(sort $(shell find c_src fs linux raid -type f ! -path '*/.*/*' ! -path 'fs/vendor/kernel-rust/*' -iname '*.c'))
 
 # Objects and depfiles live under build/, never beside the source. fs/*.c is
 # shared with the kernel module build, which compiles it -mcmodel=kernel (non-PIC);
