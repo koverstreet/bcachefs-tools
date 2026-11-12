@@ -517,10 +517,12 @@ pub fn current_task() -> impl Future<Output = TaskRef> {
 /// is the task's when it's awaited: an await of something already done
 /// doesn't move the task.
 ///
-///     let read = pin!(read::read(rbio, inum, flags, ()));
-///     let read = eager!(read);
-///     ...
-///     read.await
+/// ```ignore
+/// let read = pin!(read::read(rbio, inum, flags, ()));
+/// let read = eager!(read);
+/// ...
+/// read.await
+/// ```
 #[macro_export]
 macro_rules! eager {
     ($f:expr) => {
