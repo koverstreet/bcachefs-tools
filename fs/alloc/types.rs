@@ -350,23 +350,6 @@ pub struct WritePointWrites {
     pub last_runtime: u64,
 }
 
-impl WritePointWrites {
-    /// Empty: the list pointing at itself, INIT_LIST_HEAD() - in place, and
-    /// pinned, so it stays pointing there.
-    fn init() -> impl ::pin_init::PinInit<Self> {
-        // SAFETY: all of it written, in place
-        unsafe {
-            ::pin_init::pin_init_from_closure(|slot: *mut Self| {
-                let writes = &raw mut (*slot).writes;
-                writes.write_bytes(0, 1);
-                (*writes).init();
-                (&raw mut (*slot).last_state_change).write(0);
-                (&raw mut (*slot).last_runtime).write(0);
-                Ok(())
-            })
-        }
-    }
-}
 
 published! {
     /// What state the write point's writes are in, and how long it's spent
@@ -390,7 +373,7 @@ pub struct write_point_io {
     pub index_update_work: c::work_struct,
 
     #[pin]
-    #[init(new_lock!(<- WritePointWrites::init(), ::pin_init::zeroed(), "&wp->writes_lock"))]
+    #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&wp->writes_lock"))]
     #[c_lock("spinlock_t writes_lock")]
     pub writes_lock: Locked<c::spinlock_t, WritePointWrites, WritePointState>,
 }
