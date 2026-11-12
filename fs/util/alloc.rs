@@ -34,7 +34,9 @@ use crate::util::rcu::FreeAnytime;
 // KBox and everything built on them honour NORECLAIM and NOWARN, which the
 // page allocator doesn't know. In userspace, std's allocator takes no flags.
 
+#[derive(Clone, Copy)]
 pub struct Kmalloc;
+#[derive(Clone, Copy)]
 pub struct KVmalloc;
 
 #[cfg(kernel)]
@@ -81,9 +83,13 @@ pub enum AllocMode {
 ///
 /// # Safety
 /// alloc() gives @layout's bytes or more, aligned to it - alloc_zeroed()
-/// zeroed; free() frees them, and in-kernel kvfree() too, from any context. A
-/// zero-sized one has no state: stateless() makes it from nothing.
+/// zeroed; free() frees them - and in-kernel kvfree() too, if KVFREE - from
+/// any context. A zero-sized one has no state: stateless() makes it from
+/// nothing.
 pub unsafe trait Alloc {
+    /// Its memory is kvfree()'s to free: so kvfree_rcu()'s, a grace period on.
+    const KVFREE: bool = false;
+
     fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError>;
 
     fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError>;
@@ -138,6 +144,8 @@ pub fn stateless<A: Alloc>() -> A {
 
 /// An allocator by reference: what keeps one keeps &A - a pool's.
 unsafe impl<A: Alloc + ?Sized> Alloc for &A {
+    const KVFREE: bool = A::KVFREE;
+
     fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         (**self).alloc(layout)
     }
@@ -229,6 +237,8 @@ impl<T: ?Sized, A: Alloc> Drop for AllocBox<T, A> {
 macro_rules! allocs {
     ($($a:ident => $nofail:expr),*) => {$(
         unsafe impl Alloc for $a {
+            const KVFREE: bool = true;
+
             fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
                 #[cfg(kernel)]
                 {

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A task (util::task) in a kmalloc()'d MaybeRcuAlloc with what it's the task
-//! of - its home, which its future borrows - its memory freed after a grace
-//! period: what's in it may be found under RCU. A TaskSlot is the box before
+//! A task (util::task) in one allocation with what it's the task of - its
+//! home, which its future borrows - its memory freed after a grace period:
+//! what's in it may be found under RCU. A TaskSlot is the box before
 //! its task: the home made, and the future, which may consume what can't be
 //! dropped, like a guard to be ended, made only once there's memory for it.
 //!
@@ -13,12 +13,13 @@
 //! is one started at once. A Join is a task its spawner awaits, for what it
 //! returns, through a CompletionReturn.
 
+use crate::c;
 use crate::errcode::BchError;
-use crate::util::alloc::Kmalloc;
-use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
-use crate::util::rcu::RcuHead;
+use crate::util::alloc::{init_at, Alloc, Kmalloc};
+use crate::util::rcu::{Flavor, HasRcuHead, RcuHead};
 use crate::util::workqueue::Queue;
 use super::{waiter, CompletionReturn, DoneWith, Spawn, Task, TaskRef};
+use core::alloc::Layout;
 use core::future::Future;
 use core::marker::PhantomData;
 use core::mem::{ManuallyDrop, MaybeUninit};
@@ -31,19 +32,25 @@ use pin_init::PinInit;
 /// the box keeps it.
 type FutureOf<M, H> = <M as AsyncFnOnce<(&'static H,)>>::CallOnceFuture;
 
-/// One allocation: the task of a future borrowing @home, then the home. The
-/// task's head is the free's, so the task goes first: tiny RCU's kvfree_rcu()
-/// wants it in the first page.
+/// A TaskSlot's allocation: of @M's task, from @A.
+type Mem<'q, H, M, A> = WithTask<'q, H, FutureOf<M, H>, A>;
+
+/// One allocation, from @A: the task of a future borrowing @home, then the
+/// home, and what frees it - A, and the size it gave. The task's head is the
+/// free's, so the task goes first: tiny RCU's kvfree_rcu() wants it in the
+/// first page.
 #[repr(C)]
 #[derive(RcuHead)]
-struct WithTask<'q, H, F: Future<Output = ()>> {
+struct WithTask<'q, H, F: Future<Output = ()>, A: Alloc + Copy> {
     #[rcu_head]
-    task: MaybeUninit<Task<'q, F>>,
-    home: H,
-    done: Option<unsafe fn(NonNull<H>)>,
+    task:  MaybeUninit<Task<'q, F>>,
+    home:  H,
+    done:  Option<unsafe fn(NonNull<H>)>,
+    alloc: A,
+    given: usize,
 }
 
-impl<H, F: Future<Output = ()>> WithTask<'_, H, F> {
+impl<H, F: Future<Output = ()>, A: Alloc + Copy> WithTask<'_, H, F, A> {
     /// # Safety
     /// @home is a WithTask<H, F>'s.
     unsafe fn of_home(home: NonNull<H>) -> NonNull<Self> {
@@ -56,11 +63,11 @@ impl<H, F: Future<Output = ()>> WithTask<'_, H, F> {
 /// future would. Not bounded by @M's AsyncFnOnce: a bound naming its future
 /// type would be what rustc infers the closure's signature from, and that's
 /// for one lifetime, not every one.
-pub struct TaskSlot<'q, H, M> {
+pub struct TaskSlot<'q, H, M, A: Alloc + Copy = Kmalloc> {
     home: NonNull<H>,
     /// The home dropped, and the memory freed
     free: unsafe fn(NonNull<H>),
-    _p:   PhantomData<(&'q Queue, fn() -> M)>,
+    _p:   PhantomData<(&'q Queue, fn() -> M, A)>,
 }
 
 impl<'q, H, M> TaskSlot<'q, H, M>
@@ -73,17 +80,38 @@ where
     where
         BchError: From<E>,
     {
-        let init = unsafe {
-            pin_init::pin_init_from_closure(move |w: *mut WithTask<'q, H, FutureOf<M, H>>| {
-                crate::util::alloc::init_at(home, &raw mut (*w).home).map_err(BchError::from)
+        Self::alloc_in(Kmalloc, home)
+    }
+}
+
+impl<'q, H, M, A: Alloc + Copy> TaskSlot<'q, H, M, A>
+where
+    H: Send + Sync + 'static,
+    M: for<'h> AsyncFnOnce<(&'h H,), Output = ()>,
+    for<'h> <M as AsyncFnOnce<(&'h H,)>>::CallOnceFuture: Send,
+{
+    /// alloc(), from @alloc.
+    pub fn alloc_in<E>(alloc: A, home: impl PinInit<H, E>) -> Result<Self, BchError>
+    where
+        BchError: From<E>,
+    {
+        let layout = Layout::new::<Mem<'q, H, M, A>>();
+        // Not zeroed: each of its fields is written
+        let mem = alloc.alloc(layout)?;
+        let w = mem.cast::<Mem<'q, H, M, A>>().as_ptr();
+        unsafe {
+            (&raw mut (*w).alloc).write(alloc);
+            (&raw mut (*w).given).write(mem.len());
+            if let Err(e) = init_at(home, &raw mut (*w).home) {
+                alloc.free(mem.cast(), Layout::from_size_align_unchecked(mem.len(), layout.align()));
+                return Err(e.into());
+            }
+            Ok(Self {
+                home: NonNull::new_unchecked(&raw mut (*w).home),
+                free: free_slot::<H, FutureOf<M, H>, A>,
+                _p:   PhantomData,
             })
-        };
-        let w = MaybeRcuAlloc::<WithTask<'q, H, FutureOf<M, H>>, Kmalloc>::new(init)?.into_raw();
-        Ok(Self {
-            home: unsafe { NonNull::new_unchecked(&raw mut (*w.as_ptr()).home) },
-            free: free_slot::<H, FutureOf<M, H>>,
-            _p:   PhantomData,
-        })
+        }
     }
 
     /// The home, before there's a task to borrow it.
@@ -94,7 +122,7 @@ where
     /// The task to be, for a Done its owner arms before it starts: where it
     /// will be.
     pub fn task(&self) -> TaskRef {
-        let w = unsafe { WithTask::<'q, H, FutureOf<M, H>>::of_home(self.home) }.as_ptr();
+        let w = unsafe { WithTask::<'q, H, FutureOf<M, H>, A>::of_home(self.home) }.as_ptr();
         TaskRef(unsafe { NonNull::new_unchecked(&raw mut (*w).task).cast() })
     }
 
@@ -109,58 +137,80 @@ where
     {
         let home = ManuallyDrop::new(self).home;
         unsafe {
-            let w = WithTask::<'q, H, FutureOf<M, H>>::of_home(home).as_ptr();
+            let w = Mem::<'q, H, M, A>::of_home(home).as_ptr();
             (&raw mut (*w).done).write(done);
             let future = make(&*(&raw const (*w).home));
             let task = Task::new(at, future, Self::task_done);
-            if let Err(e) = crate::util::alloc::init_at(task, (&raw mut (*w).task).cast()) {
-                free_slot::<H, FutureOf<M, H>>(home);
+            if let Err(e) = init_at(task, (&raw mut (*w).task).cast()) {
+                free_slot::<H, FutureOf<M, H>, A>(home);
                 return Err(e);
             }
             Ok(TaskBox { home,
                          task: (*w).task.assume_init_ref().task(),
-                         free: free::<H, FutureOf<M, H>>,
+                         free: free::<H, FutureOf<M, H>, A>,
                          _q:   PhantomData })
         }
     }
 
     unsafe fn task_done(task: NonNull<Task<'q, FutureOf<M, H>>>, (): ()) {
         unsafe {
-            let w = task.as_ptr().byte_sub(core::mem::offset_of!(WithTask<'q, H, FutureOf<M, H>>, task))
-                .cast::<WithTask<'q, H, FutureOf<M, H>>>();
+            let w = task.as_ptr().byte_sub(core::mem::offset_of!(Mem<'q, H, M, A>, task))
+                .cast::<Mem<'q, H, M, A>>();
             let home = NonNull::new_unchecked(&raw mut (*w).home);
             match (*w).done {
                 Some(done) => done(home),
-                None => free::<H, FutureOf<M, H>>(home),
+                None => free::<H, FutureOf<M, H>, A>(home),
             }
         }
     }
 }
 
-impl<H, M> Drop for TaskSlot<'_, H, M> {
+impl<H, M, A: Alloc + Copy> Drop for TaskSlot<'_, H, M, A> {
     fn drop(&mut self) {
         unsafe { (self.free)(self.home) }
     }
 }
 
-/// A TaskSlot's free: the home made, the task never.
+/// A TaskSlot's free: the home made, the task never. The home is dropped now,
+/// and the memory given back to A a grace period on: what's in it may be
+/// found under RCU - by kvfree_rcu(), batched, if kvfree() frees it.
 ///
 /// # Safety
-/// @home is a WithTask<H, F>'s, its task not made.
-unsafe fn free_slot<H, F: Future<Output = ()>>(home: NonNull<H>) {
-    drop(unsafe { MaybeRcuAlloc::<WithTask<'_, H, F>, Kmalloc>::from_raw(WithTask::of_home(home)) })
+/// @home is a WithTask<H, F, A>'s, its task not made or dropped.
+unsafe fn free_slot<H, F: Future<Output = ()>, A: Alloc + Copy>(home: NonNull<H>) {
+    unsafe {
+        let w = WithTask::<'_, H, F, A>::of_home(home);
+        core::ptr::drop_in_place(home.as_ptr());
+        let head = w.byte_add(<WithTask<'_, H, F, A> as HasRcuHead>::HEAD).as_ptr().cast::<c::rcu_head>();
+        #[cfg(kernel)]
+        if A::KVFREE {
+            // tiny RCU passes the head's offset as its callback
+            const { assert!(<WithTask<'_, H, F, A> as HasRcuHead>::HEAD < 4096) };
+            return c::rust_kvfree_rcu(w.as_ptr().cast(), head.cast());
+        }
+        Flavor::RCU.call(head, free_mem::<H, F, A>);
+    }
+}
+
+unsafe extern "C" fn free_mem<H, F: Future<Output = ()>, A: Alloc + Copy>(head: *mut c::rcu_head) {
+    unsafe {
+        let w = head.byte_sub(<WithTask<'_, H, F, A> as HasRcuHead>::HEAD).cast::<WithTask<'_, H, F, A>>();
+        let (alloc, given) = ((*w).alloc, (*w).given);
+        alloc.free(NonNull::new_unchecked(w).cast(),
+                   Layout::from_size_align_unchecked(given, align_of::<WithTask<'_, H, F, A>>()));
+    }
 }
 
 /// The task first - an unstarted one's future borrows the home - then the
 /// home.
 ///
 /// # Safety
-/// @home is a WithTask<H, F>'s, its task made and not running.
-unsafe fn free<H, F: Future<Output = ()>>(home: NonNull<H>) {
+/// @home is a WithTask<H, F, A>'s, its task made and not running.
+unsafe fn free<H, F: Future<Output = ()>, A: Alloc + Copy>(home: NonNull<H>) {
     unsafe {
-        let w = WithTask::<'_, H, F>::of_home(home);
+        let w = WithTask::<'_, H, F, A>::of_home(home);
         core::ptr::drop_in_place((*w.as_ptr()).task.as_mut_ptr());
-        drop(MaybeRcuAlloc::<WithTask<'_, H, F>, Kmalloc>::from_raw(w));
+        free_slot::<H, F, A>(home);
     }
 }
 
