@@ -905,8 +905,9 @@ fn merge_topology_check(fs: &Fs, srcs: &[Node<'_>]) -> Result<(), BchError> {
  * Ok on push or any skip; Err a real error (trans restart from path
  * traverse), the path put before returning.
  */
-fn merge_push_pos<'n>(trans: &BtreeTrans<'_>, paths: &mut Paths<'n>, srcs: &mut ArrayVec<Src<'n>, 3>,
+fn merge_push_pos<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, srcs: &mut ArrayVec<Src<'n>, 3>,
                       level: usize, pivot_path: PathIdx, sib: usize) -> Result<(), BchError> {
+    let trans = t.trans();
     let fs = trans.fs();
     let pivot = paths.held_btree_node(pivot_path, level).expect("a merge's pivot, held by its path");
     let data = pivot.contents().data();
@@ -926,7 +927,7 @@ fn merge_push_pos<'n>(trans: &BtreeTrans<'_>, paths: &mut Paths<'n>, srcs: &mut 
     let path = trans.path_get(paths, Btree(pivot.c.btree_id.into()), pos, level as u32 + 1, level as u32,
                               BtreeIterFlags::INTENT, crate::ret_ip!());
 
-    match merge_sibling(trans, paths, path, level) {
+    match merge_sibling(t, paths, path, level) {
         Ok(Some((b, live_u64s))) if b.is_none_or(|_| parent(paths, path, level) == parent_b) => {
             if b.is_some() {
                 trans.path_set_should_be_locked(paths, path);
@@ -947,9 +948,10 @@ fn merge_push_pos<'n>(trans: &BtreeTrans<'_>, paths: &mut Paths<'n>, srcs: &mut 
 /// The node @path is at, traversed, with its live u64s - or with no node, an
 /// estimate of them from the evicted-size table; None if its parent has no key
 /// there.
-fn merge_sibling<'n>(trans: &BtreeTrans<'_>, paths: &mut Paths<'n>, path: PathIdx,
+fn merge_sibling<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx,
                      level: usize) -> Result<Option<(Option<Node<'n>>, u16)>, BchError> {
-    match trans.path_traverse(paths, path, BtreeIterFlags::NOFILL) {
+    let trans = t.trans();
+    match trans.path_traverse(t, paths, path, BtreeIterFlags::NOFILL) {
         Err(e) if e.matches(bch_errcode::BCH_ERR_no_btree_node_nofill) => {
             /*
              * Nofill failure dropped all of the path's locks, but left
@@ -981,7 +983,7 @@ fn merge_sibling<'n>(trans: &BtreeTrans<'_>, paths: &mut Paths<'n>, path: PathId
             if let Some(est) = (hash != 0).then(|| trans.fs().btree.evicted_size.lookup(hash)).flatten() {
                 return Ok(Some((None, est)));
             }
-            trans.path_traverse(paths, path, BtreeIterFlags::empty())?;
+            trans.path_traverse(t, paths, path, BtreeIterFlags::empty())?;
         }
         ret => ret?,
     }
@@ -1191,12 +1193,12 @@ fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, 
      * sibling (if merging right). The caller's path takes an extra ref so
      * the cleanup can put it uniformly with helper-acquired paths.
      */
-    merge_push_pos(trans, paths, srcs, level, path, PREV_SIB)?;
+    merge_push_pos(t, paths, srcs, level, path, PREV_SIB)?;
 
     paths.get_ll(path, true);
     srcs.push(Src { b: Some(b), path, live_u64s: b.contents().nr.live_u64s });
 
-    merge_push_pos(trans, paths, srcs, level, path, NEXT_SIB)?;
+    merge_push_pos(t, paths, srcs, level, path, NEXT_SIB)?;
 
     if srcs.len() == 1 {
         return Ok(false);
@@ -1248,7 +1250,7 @@ fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, 
             continue;
         }
 
-        trans.path_traverse(paths, src_path, BtreeIterFlags::empty())?;
+        trans.path_traverse(t, paths, src_path, BtreeIterFlags::empty())?;
 
         let sb = paths.held_btree_node(src_path, level).expect("a merge src, traversed");
 

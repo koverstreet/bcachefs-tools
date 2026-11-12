@@ -133,9 +133,9 @@ impl Keys {
     {
         match self {
             Keys::Max(end, flags) | Keys::InSubvolume(end, flags, _) =>
-                iter.peek_with(t, paths, |iter, paths| iter.peek_max_type_in(paths, *end, *flags)),
+                iter.peek_with(t, paths, |iter, t, paths| iter.peek_max_type_in(t, paths, *end, *flags)),
             Keys::Reverse(min) =>
-                iter.peek_with(t, paths, |iter, paths| iter.peek_prev_min_in(paths, *min)),
+                iter.peek_with(t, paths, |iter, t, paths| iter.peek_prev_min_in(t, paths, *min)),
         }
     }
 
@@ -509,8 +509,8 @@ impl<'t> BtreeNodeIter<'t> {
     {
         let mut paths = trans.paths();
         loop {
-            let step = lockrestart_do_in(trans, &mut paths, |_, paths| {
-                let Some(b) = self.raw.peek_node_in(paths)? else { return Ok(None) };
+            let step = lockrestart_do_in(trans, &mut paths, |t, paths| {
+                let Some(b) = self.raw.peek_node_in(t, paths)? else { return Ok(None) };
                 let end = b.contents().key.k.p;
                 Ok(Some((end, paths.lend(|| f(b))?.into_step())))
             })?;

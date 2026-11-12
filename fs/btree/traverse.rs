@@ -13,7 +13,7 @@ use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV, BKEY_U64S, POS_
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::cache::bch2_btree_id_level_to_text;
 use crate::btree::interior::check_topology_msg;
-use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
+use crate::btree::iter::{BtreeIterFlags, BtreeTrans, TransAttempt};
 use crate::btree::journal_overlay::BtreeAndJournalIter;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::keys::Keys;
@@ -144,13 +144,13 @@ impl BtreeTrans<'_> {
         k
     }
 
-    pub(crate) fn path_traverse(&self, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags)
-        -> Result<(), BchError>
+    pub(crate) fn path_traverse(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, idx: PathIdx,
+                                flags: BtreeIterFlags) -> Result<(), BchError>
     {
         self.verify_not_unlocked_or_in_restart();
 
         if paths[idx].nodes_locked == 0 {
-            self.path_traverse_one(paths, idx, flags)
+            self.path_traverse_one(t, paths, idx, flags)
         } else {
             Ok(())
         }
@@ -585,7 +585,12 @@ impl BtreeTrans<'_> {
                 }
             }
 
-            /* Now, redo traversals in correct order: */
+            /*
+             * Now, redo traversals in correct order. Each pass is an attempt of
+             * its own: one from before a retry would be stale, and a key cache
+             * fill relocking against it would restart forever.
+             */
+            let t = TransAttempt::new(self, self.restart_count());
             let mut i = 0;
             while i < paths.sorted().len() {
                 let idx = paths.sorted()[i];
@@ -597,7 +602,7 @@ impl BtreeTrans<'_> {
                  */
                 if path.nodes_locked == 0 && !path.node(path.level() as usize).is_null() {
                     paths.get_ll(idx, false);
-                    let ret = self.path_traverse_one(paths, idx, BtreeIterFlags::empty());
+                    let ret = self.path_traverse_one(&t, paths, idx, BtreeIterFlags::empty());
                     paths.put_ll(idx, false);
 
                     match ret {
@@ -683,22 +688,22 @@ impl BtreeTrans<'_> {
     /// fill traverses a btree path from inside the cached traverse, and that
     /// shouldn't be under the btree walk's frame.
     #[inline]
-    pub(crate) fn path_traverse_one(&self, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags)
-        -> Result<(), BchError>
+    pub(crate) fn path_traverse_one(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, idx: PathIdx,
+                                    flags: BtreeIterFlags) -> Result<(), BchError>
     {
         if paths[idx].cached() {
-            self.path_traverse_cached(paths, idx, flags)
+            self.path_traverse_cached(t, paths, idx, flags)
         } else {
             self.path_traverse_btree(paths, idx, flags)
         }
     }
 
     #[inline(never)]
-    fn path_traverse_cached(&self, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags)
-        -> Result<(), BchError>
+    fn path_traverse_cached(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, idx: PathIdx,
+                            flags: BtreeIterFlags) -> Result<(), BchError>
     {
         let ret = self.path_traverse_start(paths, idx)
-            .unwrap_or_else(|| self.btree_path_traverse_cached(paths, idx, flags));
+            .unwrap_or_else(|| self.btree_path_traverse_cached(t, paths, idx, flags));
         self.path_traverse_done(paths, idx, &ret);
         ret
     }
@@ -831,6 +836,7 @@ impl BtreeTrans<'_> {
 #[c_export]
 pub fn bch2_btree_path_traverse_one(trans: &BtreeTrans<'_>, #[lent(trans)] paths: &mut Paths<'_>, path: PathIdx,
                                     flags: c::btree_iter_update_trigger_flags) -> c_int {
-    ret_to_c(trans.path_traverse_one(paths, path, BtreeIterFlags::from_bits_retain(flags.bits())))
+    let t = unsafe { trans.attempt_in_progress() };
+    ret_to_c(trans.path_traverse_one(&t, paths, path, BtreeIterFlags::from_bits_retain(flags.bits())))
 }
 

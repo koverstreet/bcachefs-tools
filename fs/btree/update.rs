@@ -624,7 +624,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                                       BtreeIterFlags::NOFILTER_WHITEOUTS);
 
         'out: {
-            let Some((it, k)) = iter.peek_with(self, &mut self.trans().paths(), |i, p| i.peek_max_in(p, end))?
+            let Some((it, k)) = iter.peek_with(self, &mut self.trans().paths(), |i, t, p| i.peek_max_in(t, p, end))?
             else { break 'out };
 
             let mut advance = false;
@@ -642,7 +642,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 }
                 advance = true;
 
-                let Some((it, k)) = iter.peek_with(self, &mut self.trans().paths(), |i, p| i.peek_max_in(p, end))?
+                let Some((it, k)) = iter.peek_with(self, &mut self.trans().paths(), |i, t, p| i.peek_max_in(t, p, end))?
                 else { break 'out };
 
                 assert!(bkey_gt(k.k.p, insert.k().start_pos()),
@@ -678,7 +678,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 }
             }
 
-            let Some((it, k)) = iter.peek_with(self, &mut self.trans().paths(), |i, p| i.peek_max_in(p, end))?
+            let Some((it, k)) = iter.peek_with(self, &mut self.trans().paths(), |i, t, p| i.peek_max_in(t, p, end))?
             else { break 'out };
             if bch2_bkey_maybe_mergable(insert.k(), k.k) {
                 self.extent_back_merge(it, &mut insert, k)?;
@@ -952,7 +952,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             iter.key_cache_path.set(t.path_set_pos(paths, iter.key_cache_path.get(), iter.pos(), intent,
                                                    crate::ret_ip!()));
 
-            t.path_traverse(paths, iter.key_cache_path.get(), BtreeIterFlags::CACHED)?;
+            t.path_traverse(self, paths, iter.key_cache_path.get(), BtreeIterFlags::CACHED)?;
 
             if paths[iter.key_cache_path.get()].key_cached().expect("a traversed key cache path's entry").dirty() {
                 self.fs().event_inc_trace(events::trans_restart_key_cache_raced, |out| prt!(out, "{}", t.fn_name()));
@@ -1064,7 +1064,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             let pos = Bpos { snapshot: id, ..new_pos };
 
             let mut iter = BtreeIter::new(self, btree, pos, BtreeIterFlags::NOT_EXTENTS | BtreeIterFlags::INTENT);
-            let Some((it, k)) = iter.peek_with(self, &mut self.trans().paths(), |i, p| i.peek_slot_in(p))? else {
+            let Some((it, k)) = iter.peek_with(self, &mut self.trans().paths(), |i, t, p| i.peek_slot_in(t, p))? else {
                 panic!("peek_slot() at {pos} in {btree}: no key, not even a deleted one");
             };
 
@@ -1284,7 +1284,7 @@ impl BtreeTrans<'_> {
 fn delete_range_one<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>, end: Bpos, flags: UpdateTriggerFlags)
     -> Result<(), BchError>
 {
-    let Some((it, k)) = iter.peek_with(t, &mut t.trans().paths(), |i, p| i.peek_max_in(p, end))? else {
+    let Some((it, k)) = iter.peek_with(t, &mut t.trans().paths(), |i, t, p| i.peek_max_in(t, p, end))? else {
         return Err(bch_errcode::BCH_ERR_delete_range_done.into());
     };
 

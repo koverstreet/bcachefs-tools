@@ -280,7 +280,7 @@ fn node_at<'t>(t: &TransAttempt<'t, 't>, btree: Btree, level: usize, k: &BkeyI,
                flags: BtreeIterFlags) -> Result<BtreeNodeIter<'t>, BchError> {
     let locks_want = if flags.contains(BtreeIterFlags::INTENT) { level as u32 + 1 } else { 0 };
     let mut iter = BtreeNodeIter::new(t, btree, k.k.p, locks_want, level as u32, flags);
-    iter.peek()?.expect("a node, at its key");
+    iter.peek(t)?.expect("a node, at its key");
     Ok(iter)
 }
 

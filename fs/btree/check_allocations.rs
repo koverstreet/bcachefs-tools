@@ -75,7 +75,7 @@ fn gc_btree_root(t: &TransAttempt<'_, '_>, btree: Btree) -> Result<(), BchError>
     let level = fs.btree_id_root(btree.0).expect("a btree gc walks, with a root").c.level;
     let mut iter = BtreeNodeIter::new(t, btree, POS_MIN, 0, level.into(), BtreeIterFlags::empty());
 
-    if !iter.peek()?.is_some_and(|b| fs.btree_id_root(btree.0).is_some_and(|r| ptr::eq(r, &*b))) {
+    if !iter.peek(t)?.is_some_and(|b| fs.btree_id_root(btree.0).is_some_and(|r| ptr::eq(r, &*b))) {
         return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_lock_root_race));
     }
     let b = t.trans().paths().held_btree_node(iter.iter().path, level.into()).expect("the node it peeked");

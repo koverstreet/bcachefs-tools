@@ -861,7 +861,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         -> Result<(), BchError>
     {
         let mut node_iter = BtreeNodeIter::new(self, btree, pos, 0, level - 1, BtreeIterFlags::empty());
-        let b = node_iter.peek_ref()?.expect("the node a btree node pointer points to");
+        let b = node_iter.peek_ref(self)?.expect("the node a btree node pointer points to");
         let mut n = self.bkey_reassemble_room(b.key_sc(), c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?
             .into();
         f(&mut n)?;
@@ -875,7 +875,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         -> Result<(), BchError>
     {
         let mut node_iter = BtreeNodeIter::new(self, btree, key.k().p, 0, level - 1, BtreeIterFlags::INTENT);
-        let b = node_iter.peek_ref()?.expect("the node a btree node pointer points to");
+        let b = node_iter.peek_ref(self)?.expect("the node a btree node pointer points to");
         self.btree_node_update_key(node_iter.iter(), b, key, CommitFlags::NO_ENOSPC, true)
     }
 
@@ -900,7 +900,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let lvl = level as usize;
 
         let mut iter = BtreeNodeIter::new(self, btree, key.k().p, level + 1, level, BtreeIterFlags::INTENT);
-        if iter.peek()?.is_none() {
+        if iter.peek(self)?.is_none() {
             return Err(fs.err(bch_errcode::BCH_ERR_no_btree_node_shallow));
         }
 
@@ -940,7 +940,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let trans = self.trans();
 
         let mut iter = BtreeNodeIter::new(self, btree, pos, level + 1, level, BtreeIterFlags::INTENT);
-        if iter.peek()?.is_none() {
+        if iter.peek(self)?.is_none() {
             return Err(self.fs().err(bch_errcode::BCH_ERR_no_btree_node_shallow));
         }
 
@@ -979,7 +979,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     ) -> Result<(), BchError> {
         assert!(level > 0, "btree_node_rewrite_pos() of a leaf");
         let mut node_iter = BtreeNodeIter::new(self, btree, pos, level + 1, level - 1, BtreeIterFlags::empty());
-        let b = node_iter.peek_ref()?.expect("the node a btree node pointer points to");
+        let b = node_iter.peek_ref(self)?.expect("the node a btree node pointer points to");
         self.btree_node_rewrite(node_iter.iter(), b, target, flags, write_flags)
     }
 
@@ -988,7 +988,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn btree_node_rewrite_key<V: ?Sized + BkeyVal>(&self, btree: Btree, level: u32, k: BkeySC<'_, V>,
                                                        flags: impl Into<CommitOpts>) -> Result<(), BchError> {
         let mut node_iter = BtreeNodeIter::new(self, btree, k.k.p, c::BTREE_MAX_DEPTH, level, BtreeIterFlags::empty());
-        match node_iter.peek_ref()? {
+        match node_iter.peek_ref(self)? {
             Some(b) if btree_ptr_hash_val(b.key_sc()) == btree_ptr_hash_val(k) =>
                 self.btree_node_rewrite(node_iter.iter(), b, 0, flags, c::bch_write_flags::empty()),
             _ => Err(BchError::from(c::ENOENT)),

@@ -30,7 +30,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         assert!(key.k().is_btree_ptr(), "a node's key made one that isn't a btree pointer");
 
         let mut iter = BtreeNodeIter::new(self, btree, key.k().p, 0, level - 1, BtreeIterFlags::empty());
-        let b = iter.peek_ref()?.expect("the node a btree node pointer points to");
+        let b = iter.peek_ref(self)?.expect("the node a btree node pointer points to");
         self.node_update_key(iter.iter(), b, key, CommitFlags::NO_ENOSPC.into(), false)
     }
 

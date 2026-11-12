@@ -290,7 +290,7 @@ fn test_peek_extent_past_leaf(fs: &Fs, nr: u64) -> TestRet {
         let trans = crate::btree_trans!(fs);
         lockrestart_do(&trans, |t| {
             let mut iter = BtreeNodeIter::new(t, Btree::extents, POS_MIN, 0, 0, BtreeIterFlags::empty());
-            let b = iter.peek()?.expect("the extents btree has a leaf");
+            let b = iter.peek(t)?.expect("the extents btree has a leaf");
             Ok(b.contents().key.k.p.offset)
         })?
     };
@@ -560,7 +560,7 @@ fn test_btree_ptr_stale_dirty(fs: &Fs, _nr: u64) -> TestRet {
         );
 
         let fs = t.fs();
-        let k = fs.require(iter.peek_max_type(SPOS_MAX, BtreeIterFlags::empty())?, ENOENT_bkey_type_mismatch)?;
+        let k = fs.require(iter.peek_max_type(t, SPOS_MAX, BtreeIterFlags::empty())?, ENOENT_bkey_type_mismatch)?;
         fs.ensure(k.k.is_btree_ptr(), ENOENT_bkey_type_mismatch)?;
 
         test_btree_ptr_stale_dirty_key(t, k)

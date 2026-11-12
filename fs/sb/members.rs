@@ -860,8 +860,8 @@ impl Fs {
                 let root = self.btree_id_root(btree).expect("a root for every btree");
                 let mut iter = BtreeNodeIter::new(&trans, btree, POS_MIN, 0, root.c.level.into(),
                                                   BtreeIterFlags::empty());
-                lockrestart_do(&trans, |_| {
-                    let b = iter.peek()?.expect("the root node");
+                lockrestart_do(&trans, |t| {
+                    let b = iter.peek(t)?.expect("the root node");
                     self.btree_bitmap_mark_if_unmarked(b.contents().key_i().as_sc());
                     Ok(())
                 })?;

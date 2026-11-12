@@ -2,7 +2,7 @@
 
 use super::NewKey;
 use crate::btree::bkey::{bkey_val_to_text, BkeySC};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt};
 use crate::btree::journal_overlay::peek_max;
 use crate::btree::locking::btree_node_locked_type::BTREE_NODE_UNLOCKED;
 use crate::btree::path::{NodePtr, PathIdx, Paths};
@@ -25,8 +25,8 @@ impl BtreeTrans<'_> {
     }
 
     /// Whether it made one: false if it raced with another fill.
-    fn btree_key_cache_create(&self, paths: &mut Paths<'_>, path: PathIdx, ck_path: PathIdx, k: BkeySC<'_>)
-        -> Result<bool, BchError>
+    fn btree_key_cache_create(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx,
+                              ck_path: PathIdx, k: BkeySC<'_>) -> Result<bool, BchError>
     {
         let fs = self.fs();
         let bc = &fs.btree.key_cache;
@@ -43,7 +43,7 @@ impl BtreeTrans<'_> {
         let key_u64s = (key_u64s * 3 / 2).min(256).next_power_of_two();
 
         let srcu;
-        let mut ck = match self.bkey_cached_alloc(paths, btree, key_u64s)? {
+        let mut ck = match self.bkey_cached_alloc(t, paths, btree, key_u64s)? {
             Some(got) => got,
             None => {
                 srcu = fs.btree.trans.barrier.read_lock();
@@ -68,7 +68,6 @@ impl BtreeTrans<'_> {
         ck.key        = c::bkey_cached_key { btree_id: btree.0, pos };
         ck.flags.store(1 << c::BKEY_CACHED_ACCESSED, Relaxed);
 
-        let t = unsafe { self.attempt_in_progress() };
         let ret = (|| {
             if key_u64s > usize::from(ck.u64s) {
                 paths[ck_path].mark_locked_noreset(0, BTREE_NODE_UNLOCKED);
@@ -135,8 +134,8 @@ impl BtreeTrans<'_> {
 
     /// Whether the path has its entry: false if another fill raced it in.
     #[inline(never)]
-    fn btree_key_cache_fill(&self, paths: &mut Paths<'_>, ck_path: PathIdx, flags: BtreeIterFlags)
-        -> Result<bool, BchError>
+    fn btree_key_cache_fill(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, ck_path: PathIdx,
+                            flags: BtreeIterFlags) -> Result<bool, BchError>
     {
         if flags.contains(BtreeIterFlags::CACHED_NOFILL) {
             paths[ck_path].l[0].b = NodePtr::null();
@@ -144,7 +143,6 @@ impl BtreeTrans<'_> {
         }
 
         let fs = self.fs();
-        let t = unsafe { self.attempt_in_progress() };
         let (btree, pos) = { let p = &paths[ck_path]; (p.btree_id(), p.pos) };
 
         let mut iter = BtreeIter::init_in(self, paths, btree, pos,
@@ -154,7 +152,7 @@ impl BtreeTrans<'_> {
                                           BtreeIterFlags::CACHED_NOFILL, 0);
         iter.clear_flags(BtreeIterFlags::WITH_JOURNAL);
         let ret = (|| {
-            let (iter_ref, mut k) = iter.peek_with(&t, paths, |iter, paths| iter.peek_slot_in(paths))?
+            let (iter_ref, mut k) = iter.peek_with(t, paths, |iter, t, paths| iter.peek_slot_in(t, paths))?
                 .expect("a slot always has a key");
 
             let mut needs_immediate_flush = k.k.key_type().is_deleted();
@@ -170,7 +168,7 @@ impl BtreeTrans<'_> {
             /* Recheck after btree lookup, before allocating: */
             let created = self.btree_key_cache_find(btree, pos).is_none();
             if created {
-                if !self.btree_key_cache_create(paths, iter_ref.path, ck_path, k)? {
+                if !self.btree_key_cache_create(t, paths, iter_ref.path, ck_path, k)? {
                     return Ok(false);
                 }
 
@@ -220,15 +218,15 @@ impl BtreeTrans<'_> {
         }
     }
 
-    pub(crate) fn btree_path_traverse_cached(&self, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags)
-        -> Result<(), BchError>
+    pub(crate) fn btree_path_traverse_cached(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, idx: PathIdx,
+                                             flags: BtreeIterFlags) -> Result<(), BchError>
     {
         ebug_assert!(paths[idx].level() == 0);
 
         let ret = loop {
             match self.btree_path_traverse_cached_fast(paths, idx) {
                 Ok(true)  => break Ok(()),
-                Ok(false) => match self.btree_key_cache_fill(paths, idx, flags) {
+                Ok(false) => match self.btree_key_cache_fill(t, paths, idx, flags) {
                     Ok(true)  => break Ok(()),
                     Ok(false) => continue,
                     Err(e)    => break Err(e),

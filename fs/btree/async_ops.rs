@@ -88,7 +88,7 @@ impl Op {
          */
         let flags = if self.op == AsyncBtreeOp::MergeNoRead { BtreeIterFlags::NOFILL } else { BtreeIterFlags::empty() };
         let mut iter = BtreeNodeIter::new(t, btree, pos, c::BTREE_MAX_DEPTH, level, flags);
-        let Some(b) = iter.peek()?
+        let Some(b) = iter.peek(t)?
             .filter(|b| b.contents().data().keys.seq.get() == self.seq)
             .map(BtreeNodeRef::from)
         else {

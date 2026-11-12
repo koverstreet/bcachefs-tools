@@ -66,7 +66,7 @@ fn btree_ptr_unreadable<'a>(t: &TransAttempt<'a, '_>, btree: Btree, level: u32, 
     let fs = t.fs();
 
     let mut node_iter = BtreeNodeIter::new(t, btree, n.k.p, level + 1, level - 1, BtreeIterFlags::NOFILL);
-    match node_iter.peek_ref() {
+    match node_iter.peek_ref(t) {
         Ok(b) => {
             cached(node_iter.iter(), b.expect("the node a btree node pointer points to"))?;
             return Ok(true);

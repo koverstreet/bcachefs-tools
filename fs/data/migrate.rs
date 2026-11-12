@@ -285,7 +285,7 @@ impl DevDrop<'_> {
                     progress.update(t, iter)?;
 
                     let mut node_iter = BtreeNodeIter::new(t, btree, k.k.p, 0, level - 1, BtreeIterFlags::empty());
-                    let b = node_iter.peek_ref()?.expect("the node a btree node pointer points to");
+                    let b = node_iter.peek_ref(t)?.expect("the node a btree node pointer points to");
                     self.btree_node(t, node_iter.iter(), b)
                 })?;
         }
