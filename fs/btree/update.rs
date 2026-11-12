@@ -235,10 +235,11 @@ impl Fs {
 // ── A transaction's updates, and log entries with its commit ────────────
 
 impl<T: ?Sized> c::btree_trans_subbuf<T> {
+    /// All of it, for @f: growing it moves it, so it's only lent for the call.
     #[inline]
-    fn u64s_in<'s>(self, t: &'s TransAttempt<'_, '_>) -> &'s mut [u64] {
+    pub fn with_u64s<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(&mut [u64]) -> R) -> R {
         let mut p = t.trans().mem_with(|m| m.range(usize::from(self.base), usize::from(self.u64s)));
-        unsafe { p.as_mut() }
+        f(unsafe { p.as_mut() })
     }
 }
 
@@ -248,18 +249,19 @@ impl<T: ?Sized> c::btree_trans_subbuf<T> {
  * validated, as C walks them.
  */
 impl c::btree_trans_subbuf<c::bkey_i> {
-    pub fn iter<'s>(self, t: &'s TransAttempt<'_, '_>) -> ViewEntries<'s, c::bkey_i> {
-        unsafe { ViewEntries::new(self.u64s_in(t).as_bytes()) }
+    pub fn iter<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ViewEntries<'_, c::bkey_i>) -> R) -> R {
+        self.with_u64s(t, |b| f(unsafe { ViewEntries::new(b.as_bytes()) }))
     }
 
-    pub fn iter_mut<'s>(self, t: &'s TransAttempt<'_, '_>) -> ViewEntriesMut<'s, c::bkey_i> {
-        unsafe { ViewEntriesMut::new(self.u64s_in(t).as_mut_bytes()) }
+    pub fn iter_mut<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ViewEntriesMut<'_, c::bkey_i>) -> R) -> R {
+        self.with_u64s(t, |b| f(unsafe { ViewEntriesMut::new(b.as_mut_bytes()) }))
     }
 }
 
 impl c::btree_trans_subbuf<c::jset_entry<Validated>> {
-    pub fn iter<'s>(self, t: &'s TransAttempt<'_, '_>) -> ValidatedEntries<'s, c::jset_entry<Validated>> {
-        ValidatedEntries::new(self.u64s_in(t).as_bytes())
+    pub fn iter<R>(self, t: &TransAttempt<'_, '_>,
+                   f: impl FnOnce(ValidatedEntries<'_, c::jset_entry<Validated>>) -> R) -> R {
+        self.with_u64s(t, |b| f(ValidatedEntries::new(b.as_bytes())))
     }
 }
 
@@ -269,13 +271,6 @@ impl TransAttempt<'_, '_> {
     pub fn updates_to_text(&self, out: &mut Printbuf) {
         // SAFETY: the transaction's, read
         self.trans().updates_to_text(out)
-    }
-
-    /// The sub-buffer, all of it, for @f: growing it moves it, so it's only
-    /// lent for the call.
-    pub fn subbuf_with<T: ?Sized, R>(&self, buf: &Cell<c::btree_trans_subbuf<T>>,
-                                     f: impl FnOnce(&mut [u64]) -> R) -> R {
-        f(buf.get().u64s_in(self))
     }
 
     /// @u64s more at the sub-buffer's end, for @f to fill.
@@ -332,7 +327,7 @@ impl TransAttempt<'_, '_> {
 
     pub fn subbuf_remove<T: ?Sized>(&self, cell: &Cell<c::btree_trans_subbuf<T>>, range: Range<usize>) {
         let len = range.len();
-        self.subbuf_with(cell, |buf| buf.copy_within(range.end.., range.start));
+        cell.get().with_u64s(self, |buf| buf.copy_within(range.end.., range.start));
         cell.set(c::btree_trans_subbuf { u64s: cell.get().u64s - len as u16, ..cell.get() });
     }
 

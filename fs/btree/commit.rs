@@ -87,7 +87,7 @@ fn for_each_journal_entry(t: &TransAttempt<'_, '_>,
                           f: impl FnMut(&c::jset_entry<Validated>) -> Result<(), BchError>)
     -> Result<(), BchError>
 {
-    t.trans().journal_entries.get().iter(t).try_for_each(f)
+    t.trans().journal_entries.get().iter(t, |mut entries| entries.try_for_each(f))
 }
 
 fn is_keys_entry(e: &c::jset_entry<Validated>) -> bool {
@@ -267,13 +267,15 @@ impl BtreeTrans<'_> {
     #[cold]
     #[inline(never)]
     fn accounting_revert(&self, t: &TransAttempt<'_, '_>, mark: &mut MarkRead<'_>, flags: CommitOpts, end: usize) {
-        for (at, k) in self.accounting.get().iter(t).with_offsets() {
-            if at >= end {
-                break;
+        self.accounting.get().iter(t, |keys| {
+            for (at, k) in keys.with_offsets() {
+                if at >= end {
+                    break;
+                }
+                let a = k.key().arm::<Accounting>().expect("an accounting key");
+                accounting_mem::trans_commit_revert(t, mark, a.k.p, &a.v.d, flags);
             }
-            let a = k.key().arm::<Accounting>().expect("an accounting key");
-            accounting_mem::trans_commit_revert(t, mark, a.k.p, &a.v.d, flags);
-        }
+        })
     }
 
     #[cold]
@@ -467,12 +469,12 @@ impl BtreeTrans<'_> {
             return Ok(());
         }
 
-        for (at, k) in self.accounting.get().iter(t).with_offsets() {
+        self.accounting.get().iter(t, |keys| keys.with_offsets().try_for_each(|(at, k)| {
             let a = k.key().arm::<Accounting>().expect("an accounting key");
             let usage = mem_add(self.fs(), Delta { p: a.k.p, d: &a.v.d }, false, mark).map_err(|err| (err, at))?;
             self.fs_usage_delta_add(usage);
-        }
-        Ok(())
+            Ok(())
+        }))
     }
 
     fn journal_replay_insert_keys(&self, t: &TransAttempt<'_, '_>, not_rw: &mut NotRw<'_>) -> Result<(), BchError> {
@@ -496,7 +498,9 @@ impl BtreeTrans<'_> {
             Ok(())
         })?;
 
-        self.accounting.get().iter(t).try_for_each(|k| journal_overlay::insert(not_rw, Btree::accounting, 0, k.key()))
+        self.accounting.get().iter(t, |mut keys| {
+            keys.try_for_each(|k| journal_overlay::insert(not_rw, Btree::accounting, 0, k.key()))
+        })
     }
 
     /*
@@ -725,12 +729,12 @@ impl BtreeTrans<'_> {
                     .as_mut_bytes().copy_from_slice(k.as_bytes());
             }
 
-            t.subbuf_with(&self.journal_entries, |e| {
+            self.journal_entries.get().with_u64s(t, |e| {
                 invariant!(w.room() >= e.len());
                 w.push_entries(e)
             })?;
 
-            t.subbuf_with(&self.accounting, |a| -> Result<(), NoRoom> {
+            self.accounting.get().with_u64s(t, |a| -> Result<(), NoRoom> {
                 if !a.is_empty() {
                     invariant!(w.room() >= jset_u64s(a.len()));
                     w.add_entry(c::bch_jset_entry_type::write_buffer_keys, Btree::accounting.0 as u8, 0, a.len())?
@@ -837,11 +841,11 @@ impl BtreeTrans<'_> {
         {
             let mut mark = fs.mark_lock().read();
 
-            let hooked = self.accounting.get().iter_mut(t).with_offsets().try_for_each(|(at, mut k)| {
+            let hooked = self.accounting.get().iter_mut(t, |keys| keys.with_offsets().try_for_each(|(at, mut k)| {
                 let a = k.key_mut().arm::<Accounting>().expect("an accounting key");
                 accounting_mem::trans_commit_hook(t, &mut mark, res, &mut a.k, &a.v.d, at / size_of::<u64>(), flags)
                     .map_err(|err| (err, at))
-            });
+            }));
             if let Err((err, at)) = hooked {
                 self.accounting_revert(t, &mut mark, flags, at);
                 return Err(err);
@@ -863,7 +867,7 @@ impl BtreeTrans<'_> {
                 validate_context.set_flags(ValidateFlags::write | ValidateFlags::commit);
             }
 
-            t.subbuf_with(&self.journal_entries, |buf| {
+            self.journal_entries.get().with_u64s(t, |buf| {
                 let mut buf = buf.as_mut_bytes();
                 while !buf.is_empty() {
                     let u64s = u16::from_le_bytes([buf[0], buf[1]]);

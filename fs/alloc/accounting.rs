@@ -334,7 +334,7 @@ pub(crate) fn mod_normal(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &
     let p = normalized_bpos(pos);
 
     let accounting = &t.trans().accounting;
-    let queued = accounting.get().iter_mut(t).with_offsets().find_map(|(at, mut k)| {
+    let queued = accounting.get().iter_mut(t, |keys| keys.with_offsets().find_map(|(at, mut k)| {
         let k = k.key_mut();
         if k.k.p != p {
             return None;
@@ -349,7 +349,7 @@ pub(crate) fn mod_normal(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &
             }
             (range, counters.iter().all(|&c| c == 0))
         })
-    });
+    }));
 
     match queued {
         Some((range, true)) => t.subbuf_remove(accounting, range),
@@ -412,7 +412,7 @@ pub fn add_at(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &[i64], gc: 
  * applicable (i.e. replicas updates)
  */
 pub(crate) fn update_sb(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
-    t.trans().accounting.get().iter(t).try_for_each(|k| update_sb_one(t.fs(), k.key().k.p))
+    t.trans().accounting.get().iter(t, |mut keys| keys.try_for_each(|k| update_sb_one(t.fs(), k.key().k.p)))
 }
 
 pub fn mod_dev_cached_sectors(t: &TransAttempt<'_, '_>, dev: u32, sectors: i64, gc: bool)
