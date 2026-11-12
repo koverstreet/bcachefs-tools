@@ -78,16 +78,13 @@
 //!
 //! Also here: completion.rs, the Done and Completion an IO's end is waited on
 //! through; queue.rs, the RunQueue; box.rs, a task in a box with what it's
-//! the task of (TaskBox); in_place.rs, a task in a field of what it's the
-//! task of (InPlace).
+//! the task of (TaskBox).
 
 mod r#box;
 pub mod completion;
-mod in_place;
 mod queue;
 
 pub use completion::{waiter, Completion, CompletionReturn, Done, DoneWith, Return, Waiter};
-pub use in_place::{InPlace, TaskEnd};
 pub use queue::RunQueue;
 pub use r#box::{exclusive_size, spawn_detached, spawn_static, Exclusive, Join, Shared, TaskBox, TaskSlot};
 

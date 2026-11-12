@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 //! #[in_place(Fut)]: an async fn whose future is named Fut, for what has to
-//! say its task's type: the struct that holds the task in place -
-//! InPlace<'q, Fut> - or the pool a task's box comes from, sized for it. Fut
+//! say its task's type: the pool a task's box comes from, sized for it. Fut
 //! is a type alias impl Trait, the fn its defining use, so a call is any call.
 //!
 //! By type, not by a size: a struct whose field's type holds the future's

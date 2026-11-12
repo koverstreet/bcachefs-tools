@@ -501,8 +501,8 @@ pub fn args_stored_once(attr: proc_macro::TokenStream, item: proc_macro::TokenSt
 }
 
 /// `#[in_place(Fut)]` on an async fn: the same fn, its future named Fut - a
-/// type alias impl Trait the fn defines - for a struct to hold its task by
-/// type, InPlace<'q, Fut>, or a pool to be sized for its box; its args stored
+/// type alias impl Trait the fn defines - for a pool to be sized for its
+/// task's box; its args stored
 /// once, as #[args_stored_once] stores them. See in_place.rs.
 #[proc_macro_attribute]
 pub fn in_place(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
