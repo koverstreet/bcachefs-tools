@@ -50,11 +50,16 @@ pub(crate) enum WritePointSpec<'a> {
 }
 
 impl c::write_point_specifier {
-    /// The filesystem's own write points, by name; hashed specifiers - bit 0
-    /// set - are writepoint_hashed()'s.
+    /// The filesystem's own write points, by name.
     pub const BTREE: Self     = Self { v: 2 };
     pub const COPYGC: Self    = Self { v: 4 };
     pub const RECONCILE: Self = Self { v: 6 };
+
+    /// One of write_points[] - the same for the same @v, while it's in use:
+    /// bit 0 marks it hashed.
+    pub const fn hashed(v: usize) -> Self {
+        Self { v: (v | 1) as c_ulong }
+    }
 
     pub(crate) fn spec(self, fs: &Fs) -> WritePointSpec<'_> {
         match self {

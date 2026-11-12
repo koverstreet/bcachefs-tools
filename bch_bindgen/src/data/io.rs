@@ -21,7 +21,7 @@ use bcachefs_kernel::btree::bkey::spos;
 use bcachefs_kernel::btree::trans::BtreeTrans;
 use bcachefs_kernel::data::write::bch2_write;
 use bcachefs_kernel::errcode::{self, BchError};
-use bcachefs_kernel::fs::{writepoint_hashed, Fs};
+use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::inode_opts;
 use bcachefs_kernel::util::bio::Bio;
 use bcachefs_kernel::util::closure;
@@ -101,7 +101,7 @@ impl WriteOp {
         };
         let WriteState { op, .. } = &mut *state;
         op.end_io      = Some(write_endio);
-        op.write_point = writepoint_hashed(0);
+        op.write_point = c::write_point_specifier::hashed(0);
         op.bits.set_nr_replicas(replicas as u8);
         op.subvol      = subvol;
         op.pos         = spos(inum, offset >> 9, u32::MAX);

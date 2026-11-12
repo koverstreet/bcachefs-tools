@@ -25,7 +25,7 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::update::bch2_read_bio_to_text;
 use crate::data::update_task::{self, Body, Update};
 use crate::errcode::{err_ptr, BchError};
-use crate::fs::{writepoint_hashed, Fs, WriteRef};
+use crate::fs::{Fs, WriteRef};
 use crate::prt;
 use crate::debug::trace::events;
 use crate::util::backref::BackRef;
@@ -209,7 +209,7 @@ fn promote_new(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC<'_>,
     }?;
     // On error - such as nocow_lock_blocked, ENOSPC_disk_reservation - the
     // task goes unstarted
-    let mut u = task.init(t, None, None, writepoint_hashed(current_id()), opts, update_opts, btree, k)?;
+    let mut u = task.init(t, None, None, c::write_point_specifier::hashed(current_id()), opts, update_opts, btree, k)?;
     let failed = failed.map_or(core::ptr::null_mut(), core::ptr::from_mut);
     u.rbio.init_fragment(orig, failed);
     u.rbio.bits_mut().set_bounce(1);

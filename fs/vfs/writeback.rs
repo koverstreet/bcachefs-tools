@@ -9,7 +9,7 @@ use crate::btree::bkey::pos;
 use crate::c;
 use crate::data::write::bch2_write;
 use crate::errcode::BchError;
-use crate::fs::{writepoint_hashed, Fs};
+use crate::fs::Fs;
 use crate::inode_opts;
 use crate::util::bio::{plugged, Bio, BioBuffersUnmanaged, BioOwner};
 use crate::util::closure::{self, closure_wait, StackClosure};
@@ -185,7 +185,7 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, inode: &InodeI
     op.target          = w.opts.foreground_target;
     op.bits.set_nr_replicas(nr_replicas as u8);
     op.res.nr_replicas.set(res_nr_replicas);
-    op.write_point     = writepoint_hashed(inode.ei_last_dirtied.get() as usize);
+    op.write_point     = c::write_point_specifier::hashed(inode.ei_last_dirtied.get() as usize);
     op.subvol          = inode.inum().subvol as u32;
     op.pos             = pos(inode.inum().inum, sector);
     op.end_io          = Some(writepage_io_done);

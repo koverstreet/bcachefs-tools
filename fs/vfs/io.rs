@@ -15,7 +15,7 @@ use crate::data::extents::BkeyVExtents;
 use crate::data::{io_misc, reflink};
 use crate::errcode::{bch_errcode, ret_to_class, BchError};
 use crate::format::{Bpos, Btree};
-use crate::fs::{writepoint_hashed, Fs};
+use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::{inode, inode_opts};
 use crate::debug::trace::events;
@@ -554,7 +554,7 @@ impl InodeInfo {
                 }
 
                 io_misc::extent_fallocate(t, inum, &mut iter, sectors, &opts, &mut i_sectors_delta,
-                                          writepoint_hashed(current_id()))?;
+                                          c::write_point_specifier::hashed(current_id()))?;
 
                 self.i_sectors_acct(Some(&mut *quota_res), i_sectors_delta);
 

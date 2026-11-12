@@ -1236,11 +1236,6 @@ macro_rules! fs_delayed_work {
 #[cfg(kernel)]
 pub(crate) type RoRef = RefGuard<Placed<AtomicRef<()>, crate::at!(Fs.ro_ref)>>;
 
-/// The low bit marks it hashed
-pub fn writepoint_hashed(v: usize) -> c::write_point_specifier {
-    c::write_point_specifier { v: (v | 1) as _ }
-}
-
 pub fn btree_id_is_alloc(id: u32) -> bool {
     matches!(
         Btree::from_raw(id),

@@ -13,7 +13,7 @@ use crate::data::durability::BkeyVDurability;
 use crate::data::write::bch2_write;
 use crate::errcode::{bch_errcode, BchError};
 use crate::format::Btree;
-use crate::fs::{writepoint_hashed, Fs};
+use crate::fs::Fs;
 use crate::inode_opts;
 use crate::snapshots::subvolume;
 use crate::util::alloc::kmalloc;
@@ -256,7 +256,7 @@ unsafe fn dio_write_loop(dio: *mut Dio) -> isize {
         let op = &mut d.op;
         op.end_io      = Some(if sync { dio_write_sync_done } else { dio_write_loop_async });
         op.target      = op.opts.foreground_target;
-        op.write_point = writepoint_hashed(current_id());
+        op.write_point = c::write_point_specifier::hashed(current_id());
         op.bits.set_nr_replicas(op.opts.data_replicas);
         op.subvol      = inode.inum().subvol as u32;
         op.pos         = pos(inode.inum().inum, ki_pos >> 9);

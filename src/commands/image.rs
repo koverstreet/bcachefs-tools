@@ -21,7 +21,7 @@ use bcachefs_kernel::util::vstructs::Head;
 use crate::copy_fs::{CopyFsState, copy_fs};
 use bcachefs_kernel::data::moving::{MoveStats, MovingCtxt};
 use bcachefs_kernel::alloc::disk_groups::Target;
-use bcachefs_kernel::fs::{Fs, btree_id_is_alloc, writepoint_hashed};
+use bcachefs_kernel::fs::{Fs, btree_id_is_alloc};
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::sb::sb_field_type;
 use bcachefs_kernel::{POS_MIN, SPOS_MAX, pos};
@@ -146,7 +146,7 @@ fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::
 
     let target = Target::Dev(target_dev).encode();
     let stats = MoveStats::default();
-    let ctxt = MovingCtxt::new(fs, &stats, writepoint_hashed(1), false)
+    let ctxt = MovingCtxt::new(fs, &stats, c::write_point_specifier::hashed(1), false)
         .map_err(|_| anyhow!("allocating a moving context"))?;
     let btree_id_nr = btree_id::NR;
 

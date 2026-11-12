@@ -52,7 +52,7 @@ use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::data::scrub_journal::BadRef;
 use crate::data::update::{fail_should_trace, is_scrub};
 use crate::errcode::{ret_to_c, BchError};
-use crate::fs::{writepoint_hashed, Fs};
+use crate::fs::Fs;
 use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
 use crate::debug::trace::events;
 use crate::util::kernel::current_id;
@@ -511,7 +511,7 @@ impl Moving<'_> {
 /// Scrub: one replica on @arg's device read and checked - of a btree node,
 /// any; of an extent, a checksummed one.
 fn scrub(fs: &Fs, stats: &MoveStats, arg: c::bch_ioctl_data_scrub) -> Result<(), BchError> {
-    let ctxt = MovingCtxt::new(fs, stats, writepoint_hashed(current_id()), false)?;
+    let ctxt = MovingCtxt::new(fs, stats, c::write_point_specifier::hashed(current_id()), false)?;
     stats.at.data_type.set(DataType(c::DATA_PROGRESS_DATA_TYPE_phys));
 
     let _ = ctxt.trans().write_buffer_flush_sync();
