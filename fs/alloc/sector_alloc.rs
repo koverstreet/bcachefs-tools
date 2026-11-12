@@ -256,7 +256,6 @@ impl<'f> TransAttempt<'_, 'f> {
         assert!(req.nr_replicas != 0, "allocating for no copies");
 
         loop {
-            req.ca = core::ptr::null_mut();
             req.wake_all_counter_snapshot = a.wake_all_counter.load(Relaxed) as u32;
             req.bits.set_will_retry_all_devices(req.may_widen());
             req.bits.set_will_retry_target_devices(!req.flags.contains(w::alloc_nowait));

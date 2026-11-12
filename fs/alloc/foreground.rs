@@ -193,9 +193,6 @@ nest! {
         pub domain_keys: [u64; c::BCH_SB_MEMBERS_MAX as usize],
         pub usage: c::bch_dev_usage,
 
-        /* bch2_bucket_alloc_trans(): */
-        pub ca: *mut Dev,
-
         /*
          * Allocate the free bucket nearest this device position (a 32.32
          * fixed point fraction of the device, see dev_frac_to_offset()),
