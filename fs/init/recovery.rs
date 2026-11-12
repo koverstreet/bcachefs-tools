@@ -63,10 +63,10 @@ unsafe impl crate::locking::Guard for NotRw<'_> {
 unsafe impl crate::locking::Alone for NotRw<'_> {}
 
 impl Fs {
-    /// # Safety
-    /// No other NotRw lives meanwhile. The asserts are that nothing else runs:
-    /// called before the filesystem can go rw, on the recovery task.
-    pub(crate) unsafe fn not_rw(&self) -> NotRw<'_> {
+    /// The asserts are that nothing else runs: called before the filesystem
+    /// can go rw, on the recovery task.
+    // XXX: NotRw isn't linear - nothing stops one being held past going rw
+    pub(crate) fn not_rw(&self) -> NotRw<'_> {
         assert!(!self.flags.get(Flag::may_go_rw));
         assert!(!self.flags.get(Flag::rw));
         /* the journal keys are frozen for the scrub, whose reads run on workqueues */
@@ -621,7 +621,7 @@ fn set_may_go_rw(fs: &Fs) -> Result<(), BchError> {
      * threads
      */
     if let Some(jk) = fs.journal_keys_get() {
-        unsafe { fs.not_rw() }.get_mut_of(&jk.value().keys).make_contiguous();
+        fs.not_rw().get_mut_of(&jk.value().keys).make_contiguous();
     }
 
     fs.flags.set(Flag::may_go_rw, true);
@@ -773,7 +773,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     }
 
     if fs.opts.journal_rewind.get() != 0 {
-        unsafe { fs.not_rw() }.journal_add_rewind_range(journal_start.replay_end, fs.opts.journal_rewind.get())?;
+        fs.not_rw().journal_add_rewind_range(journal_start.replay_end, fs.opts.journal_rewind.get())?;
         ignore_journal_rewind_errors(fs);
         journal_reread_for_rewind(fs)?;
     }
@@ -864,7 +864,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
                 w.fsck.set(1);
             }
 
-            unsafe { fs.not_rw() }.journal_add_rewind_range(journal_start.replay_end, rewind_seq)?;
+            fs.not_rw().journal_add_rewind_range(journal_start.replay_end, rewind_seq)?;
             ignore_journal_rewind_errors(fs);
 
             /*

@@ -723,7 +723,7 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
     let k = unsafe { &mut *BkeyI::from_raw_mut(k) };
     let idx = jk.search(btree, level, k.k.p);
 
-    let mut not_rw = unsafe { fs.not_rw() };
+    let mut not_rw = fs.not_rw();
     let keys = not_rw.get_mut_of(&jk.keys);
 
     if let Some(o) = keys.get_mut(idx).filter(|o| jk.key_cmp(&n, o).is_eq()) {
@@ -1042,7 +1042,7 @@ fn journal_seq_is_rewound(fs: &Fs, seq: u64) -> bool {
 pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
     let jk = fs.journal_keys_get().expect("journal keys sorted after recovery was done with them");
     let jk = jk.value();
-    let mut not_rw = unsafe { fs.not_rw() };
+    let mut not_rw = fs.not_rw();
     let keys = not_rw.get_mut_of(&jk.keys);
     let (mut nr_read, mut nr_extra_sorts) = (0usize, 0usize);
     let start_seq = match fs.journal_scrub_seq.get() { 0 => fs.journal_replay_seq_start.get(), s => s };

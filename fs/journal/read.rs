@@ -296,7 +296,7 @@ pub fn journal_pos_from_member_info_set(fs: &Fs, sb: &mut crate::fs::SbLockGuard
 
 pub fn journal_pos_from_member_info_resume(fs: &Fs) {
     let sb = fs.sb_lock();
-    let not_rw = unsafe { fs.not_rw() };
+    let not_rw = fs.not_rw();
 
     for ca in fs.members() {
         let m = crate::sb::members::sb_member(sb.sb(), ca.dev_idx.into()).unwrap_or_default();
@@ -1167,7 +1167,7 @@ fn journal_print_checksum_error(fs: &Fs, j: &Replay) {
  * and re-read any buckets containing entries we need.
  */
 pub fn journal_reread_for_rewind(fs: &Fs) -> Result<(), BchError> {
-    let not_rw = unsafe { fs.not_rw() };
+    let not_rw = fs.not_rw();
     let entries = unsafe { not_rw.journal_entries() };
     let mut need_from = u64::MAX;
 
@@ -1286,7 +1286,7 @@ fn newest_flush(fs: &Fs, entries: &mut JournalEntries) -> Result<Newest, BchErro
 pub fn journal_read(fs: &Fs) -> Result<c::journal_start_info, BchError> {
     let bsearch_used = fs.opts.read_entire_journal.get() == 0;
 
-    let not_rw = unsafe { fs.not_rw() };
+    let not_rw = fs.not_rw();
     stack_pin_init!(let read: ReadLock<'_> = new_lock!(ReadState {
         entries:   unsafe { not_rw.journal_entries() },
         last_seq:  0,

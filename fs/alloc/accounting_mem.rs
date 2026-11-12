@@ -689,7 +689,7 @@ fn read_mem_fixups(trans: &TransGuard<'_>) -> Result<(), BchError> {
  * journal)
  */
 fn read(fs: &Fs) -> Result<(), BchError> {
-    let mut not_rw = unsafe { fs.not_rw() };
+    let mut not_rw = fs.not_rw();
     let trans = btree_trans!(fs);
 
     /*
@@ -724,8 +724,6 @@ fn read(fs: &Fs) -> Result<(), BchError> {
 
     trans.unlock();
     journal_keys.drop_overwritten(&mut not_rw);
-    /* the fixups' commits insert journal keys, under a NotRw of their own */
-    drop(not_rw);
 
     /* Assert no duplicates - the btree/journal walk must produce unique keys */
     {
