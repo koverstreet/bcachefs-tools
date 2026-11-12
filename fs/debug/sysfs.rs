@@ -314,7 +314,7 @@ static COUNTER_FILES: ListAttrs<{ c::BCH_COUNTER_NR as usize }> = ListAttrs::new
 
 fn counter_to_text(c: &Fs, i: usize, out: &mut Printbuf) {
     let count = c.counter_read(i);
-    let since_mount = count.wrapping_sub(c.counters.mount[i]);
+    let since_mount = count.wrapping_sub(c.counters.mount(i));
 
     out.tabstop_push(32);
     if COUNTERS[i].is_sectors {

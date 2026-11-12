@@ -28,6 +28,7 @@ use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::sb::io::SbResize;
 use crate::util::percpu::PerCpu;
+use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 c_const! {
     #[c_int]
@@ -37,11 +38,11 @@ c_const! {
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_counters {
-    pub mount: [u64; c::BCH_COUNTER_NR as usize],
+    mount: [AtomicU64; c::BCH_COUNTER_NR as usize],
     #[c("u64 __percpu *now")]
     pub now: PerCpu<[u64; c::BCH_COUNTER_NR as usize]>,
 
-    pub recent: [[u64; c::BCH_COUNTER_NR as usize]; c::NR_RECENT_COUNTERS as usize],
+    recent: [[AtomicU64; c::BCH_COUNTER_NR as usize]; c::NR_RECENT_COUNTERS as usize],
 }
 c_default!(bch_fs_counters);
 
@@ -140,8 +141,8 @@ impl Fs {
 // ── The counters, in memory and in the superblock ──────────────────────────
 //
 // In memory by BCH_COUNTER_* index, COUNTERS' order; in the superblock and the
-// ioctl by stable id. mount[] and recent[] are plain u64s, written racing
-// readers that only print them, as in C.
+// ioctl by stable id. mount[] and recent[] are written racing readers that
+// only print them, as in C: each a u64 on its own, so relaxed atomics.
 
 const NR: usize = c::BCH_COUNTER_NR as usize;
 const NR_STABLE: usize = c::BCH_COUNTER_STABLE_NR as usize;
@@ -152,9 +153,30 @@ impl c::bch_fs_counters {
         self.now.at(i).sum()
     }
 
-    /// For mount[] and recent[], which change under shared references.
-    fn raw(&self) -> *mut Self {
-        core::ptr::from_ref(self).cast_mut()
+    /// Counter @i at mount.
+    pub fn mount(&self, i: usize) -> u64 {
+        self.mount[i].load(Relaxed)
+    }
+
+    /// The counts now, as recent[]'s newest sample, the rest moved down one.
+    fn sample(&self) {
+        for j in (1..self.recent.len()).rev() {
+            for (to, from) in self.recent[j].iter().zip(&self.recent[j - 1]) {
+                to.store(from.load(Relaxed), Relaxed);
+            }
+        }
+        for (i, v) in self.recent[0].iter().enumerate() {
+            v.store(self.now(i), Relaxed);
+        }
+    }
+
+    /// What's relative to counter @i zeroed with it: its count at mount and
+    /// its recent samples.
+    fn reset_relative(&self, i: usize) {
+        self.mount[i].store(0, Relaxed);
+        for sample in &self.recent {
+            sample[i].store(0, Relaxed);
+        }
     }
 
     /// The counters that changed in the last ten seconds: each with what
@@ -164,14 +186,15 @@ impl c::bch_fs_counters {
 
         for (i, ctr) in COUNTERS.iter().enumerate() {
             let mut prev = self.now(i);
-            if oldest[i] == prev {
+            if oldest[i].load(Relaxed) == prev {
                 continue;
             }
 
             prt!(out, "{}:", ctr.name);
             for sample in &self.recent {
-                prt!(out, "\t{}", prev.wrapping_sub(sample[i]));
-                prev = sample[i];
+                let s = sample[i].load(Relaxed);
+                prt!(out, "\t{}", prev.wrapping_sub(s));
+                prev = s;
             }
             prt!(out, "\n");
         }
@@ -193,14 +216,7 @@ impl Fs {
 
         // SAFETY: an event counted as it's reset may as well not have been
         unsafe { self.counters.now.at(idx).set(0) };
-        let ctrs = self.counters.raw();
-        // SAFETY: see the top of the section
-        unsafe {
-            (*ctrs).mount[idx] = 0;
-            for sample in &mut (*ctrs).recent {
-                sample[idx] = 0;
-            }
-        }
+        self.counters.reset_relative(idx);
     }
 }
 
@@ -249,15 +265,7 @@ crate::fs_delayed_work! {
     pub(crate) work RecentCounters: field counters_recent;
 
     fn run(fs: &Fs) {
-        let ctrs = fs.counters.raw();
-        // SAFETY: see the top of the section
-        let recent = unsafe { &mut (*ctrs).recent };
-        let n = recent.len();
-        recent.copy_within(..n - 1, 1);
-        for (i, v) in recent[0].iter_mut().enumerate() {
-            *v = fs.counters.now(i);
-        }
-
+        fs.counters.sample();
         Self::queue(fs);
     }
 }
@@ -275,10 +283,8 @@ pub fn counters_init(fs: &Fs) {
     let _ = c::bch_sb_field_counters::to_cpu(fs, &mut sb);
 
     let d: &[Le64] = sb.field::<c::bch_sb_field_counters>().map_or(&[], |f| &f.d);
-    let ctrs = fs.counters.raw();
     for (i, ctr) in COUNTERS.iter().enumerate() {
-        // SAFETY: filesystem init, before anything reads them
-        unsafe { (*ctrs).mount[i] = d.get(ctr.stable_id as usize).map_or(0, |v| v.get()) };
+        fs.counters.mount[i].store(d.get(ctr.stable_id as usize).map_or(0, |v| v.get()), Relaxed);
     }
 }
 
@@ -310,7 +316,7 @@ pub mod ioctl {
         let d = user.tail(&arg);
         for (i, ctr) in COUNTERS.iter().enumerate() {
             if ctr.stable_id < arg.nr {
-                let v = if mount { fs.counters.mount[i] } else { fs.counters.now(i) };
+                let v = if mount { fs.counters.mount(i) } else { fs.counters.now(i) };
                 d.set(ctr.stable_id.into(), &v)?;
             }
         }
