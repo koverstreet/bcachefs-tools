@@ -48,7 +48,7 @@ use crate::fs::{btree_id_is_alloc, Fs};
 use crate::init::recovery::NotRw;
 use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy};
 use crate::util::projections::{Volatile, VolatilePublish};
-use crate::util::alloc::{darray_exit, DArrayLoan, KVVec};
+use crate::util::alloc::KVVec;
 use crate::data_structures::gap_buffer::GapBuffer;
 use crate::util::kernel::cond_resched;
 use crate::util::log::{LogLevel, LogMsg};
@@ -65,7 +65,7 @@ use cstruct_macros::{bitfield, CStruct, Init};
 use c::bch_errcode as e;
 use c::bch_fs_flags as f;
 use crate::journal::JournalEntries;
-use crate::types::{DArray, c_default, rust_only};
+use crate::types::{c_default, rust_only};
 use crate::util::vstructs::Head;
 use core::sync::atomic::{AtomicU64, AtomicUsize};
 use nestify::nest;
@@ -195,8 +195,7 @@ pub struct journal_keys {
      * the reset in journal_keys_sort and get merged into the main
      * array after sorting. Written as the keys are.
      */
-    #[c_anon("DARRAY(struct journal_key) pre_sort")]
-    pub pre_sort: LockedBy<DArray<c::journal_key>, (), NotRw<'static>>,
+    pub pre_sort: rust_only!(LockedBy<KVVec<c::journal_key>, (), NotRw<'static>>),
 
     /*
      * What the journal read kept, by seq from journal_entries_base_seq: the
@@ -381,14 +380,13 @@ impl c::journal_keys {
     /// What sorting works on, not rw, had at once: the keys and pre_sort, and
     /// the journal's rewind ranges, read.
     fn sort_parts<'a>(&'a self, not_rw: &'a mut NotRw<'_>)
-        -> (&'a mut GapBuffer<c::journal_key>, DArrayLoan<'a, c::journal_key>, &'a [c::journal_rewind_range])
+        -> (&'a mut GapBuffer<c::journal_key>, &'a mut KVVec<c::journal_key>, &'a [c::journal_rewind_range])
     {
         let fs = not_rw.fs;
         let rewind_ranges: *const KVVec<c::journal_rewind_range> = not_rw.get_of(&fs.journal.rewind_ranges);
         let keys: *mut GapBuffer<c::journal_key> = not_rw.get_mut_of(&self.keys);
         let pre_sort = not_rw.get_mut_of(&self.pre_sort);
-        // pre_sort is kvmalloc()'d, if allocated
-        unsafe { (&mut *keys, DArrayLoan::new(pre_sort), &*rewind_ranges) }
+        unsafe { (&mut *keys, pre_sort, &*rewind_ranges) }
     }
 
     fn seq(&self) -> u64 {
@@ -1010,7 +1008,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
     let jk = fs.journal_keys_get().expect("journal keys sorted after recovery was done with them");
     let jk = jk.value();
     let mut not_rw = fs.not_rw();
-    let (keys, mut pre_sort, rewind_ranges) = jk.sort_parts(&mut not_rw);
+    let (keys, pre_sort, rewind_ranges) = jk.sort_parts(&mut not_rw);
     let (mut nr_read, mut nr_extra_sorts) = (0usize, 0usize);
     let start_seq = match fs.journal_scrub_seq.get() { 0 => fs.journal_replay_seq_start.get(), s => s };
 
@@ -1083,7 +1081,6 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
         keys.reserve().map_err(|_| fs.err(e::BCH_ERR_ENOMEM_journal_keys_sort))?;
         keys.insert(keys.len(), pre_sort.pop().expect("not empty"));
     }
-    drop(pre_sort);
 
     sort_dedup(jk, keys);
 
@@ -1112,10 +1109,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
 impl PinnedDrop for c::journal_keys {
     fn drop(self: Pin<&mut Self>) {
         // SAFETY: the last ref's
-        unsafe {
-            self.reset(self.keys_mut());
-            darray_exit(self.pre_sort.protected_mut());
-        }
+        unsafe { self.reset(self.keys_mut()) };
     }
 }
 
