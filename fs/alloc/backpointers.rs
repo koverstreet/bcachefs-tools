@@ -343,8 +343,7 @@ pub fn bucket_backpointer_mod(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, bp: 
         bp.k.set_val_bytes(0);
     }
 
-    let n = t.bkey_copy(bp.as_ref())?;
-    t.update_buffered(bp.v.bp_btree(), &n)
+    t.update_buffered(bp.v.bp_btree(), &*bp)
 }
 
 // ── What a backpointer points to ─────────────────────────────────────────

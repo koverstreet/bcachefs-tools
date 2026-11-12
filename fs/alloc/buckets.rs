@@ -538,7 +538,7 @@ fn trigger_pointer(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeySC
                 bp.k.set_key_type(BkeyType::deleted);
                 bp.k.set_val_bytes(0);
             }
-            t.update_buffered(Btree::stripe_backpointers, &t.bkey_copy(bp.as_ref())?)?;
+            t.update_buffered(Btree::stripe_backpointers, &bp)?;
         }
         return Ok(sectors);
     }
