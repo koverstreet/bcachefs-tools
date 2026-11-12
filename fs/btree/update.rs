@@ -134,7 +134,7 @@ fn insert_entry_cmp(l: &c::btree_insert_entry, r: &c::btree_insert_entry) -> Ord
  * bch2_btree_path_peek_slot() for a cached iterator might return a key in a
  * different snapshot:
  */
-fn peek_slot_exact(path: &BtreePath, u: &mut c::bkey) -> *const c::bch_val {
+pub(crate) fn peek_slot_exact(path: &BtreePath, u: &mut c::bkey) -> *const c::bch_val {
     match path.peek_slot(u) {
         Some(KeyVal(v)) if u.p == path.pos => v,
         _ => {

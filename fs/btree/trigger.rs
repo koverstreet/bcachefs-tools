@@ -2,15 +2,16 @@
 
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
-use crate::btree::iter::{BtreeTrans, TransAttempt, TransBkey, UpdateTriggerFlags};
-use crate::btree::path::KeyVal;
+use crate::btree::iter::{TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::btree::journal_overlay;
+use crate::btree::path::Paths;
+use crate::btree::update::peek_slot_exact;
 use crate::c;
 use crate::errcode::BchError;
 use crate::format::{Btree, BkeyType};
 use crate::prt;
 use crate::util::Printbuf;
 use core::marker::PhantomData;
-use cstruct_macros::c_export;
 
 /// What a key type's trigger is called with. @new is mutable: an atomic
 /// trigger can edit the key going in, in place.
@@ -121,46 +122,30 @@ pub(crate) fn key_trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> R
 
 /// verify_update_old_key(): @i's old key is the one at its position - the
 /// btree's, or before replay's done, the journal's. Debug builds only.
-///
-/// # Safety
-/// @i is an update of @trans's.
-#[c_export]
-pub unsafe fn bch2_verify_update_old_key(trans: &BtreeTrans<'_>, i: &c::btree_insert_entry) {
+pub(crate) fn verify_update_old_key(t: &TransAttempt<'_, '_>, paths: &Paths<'_>, i: &c::btree_insert_entry) {
     if !cfg!(CONFIG_BCACHEFS_DEBUG) || i.bits.key_cache_flushing() {
         return;
     }
 
-    let path = unsafe { trans.paths.get().add(i.path as usize) };
     let mut u = c::bkey::new();
-    let v = unsafe { (*path).peek_slot(&mut u) };
+    let mut v = peek_slot_exact(&paths[i.path], &mut u);
+    let mut k = &u;
 
-    // bch2_btree_path_peek_slot() for a cached iterator might return a key in a
-    // different snapshot:
-    let pos = unsafe { (*path).pos };
-    let mut k = match v {
-        Some(KeyVal(v)) if u.p == pos => c::bkey_s_c { k: &u, v },
-        _ => {
-            u = c::bkey { p: pos, ..c::bkey::new() };
-            c::bkey_s_c { k: &u, v: core::ptr::null() }
-        }
-    };
-
-    if let Some(jk) = unsafe { trans.attempt_in_progress() }.journal_keys() {
-        if let Some(j) = crate::btree::journal_overlay::peek_slot(jk, i.bits.btree_id(), i.bits.level().into(),
-                                                                  i.key().k.p) {
-            k = c::bkey_s_c { k: &j.k, v: (&raw const j.v).cast() };
+    if let Some(jk) = t.journal_keys() {
+        if let Some(j) = journal_overlay::peek_slot(jk, i.bits.btree_id(), i.bits.level().into(), i.key().k.p) {
+            k = &j.k;
+            v = (&raw const j.v).cast();
         }
     }
 
     // when updating btree ptrs, mem_ptr may change underneath us, unlocked
-    let k_k = unsafe { &*k.k };
-    if !k_k.fields_eq(&i.old_k) || k.v != i.old_v {
+    if !k.fields_eq(&i.old_k) || v != i.old_v {
         let mut out = Printbuf::new();
         prt!(&mut out, "updated cached old key doesn't match\ncached: ");
         crate::btree::bkey::bkey_to_text(&mut out, &i.old_k);
         prt!(&mut out, " {:p}\nreal:   ", i.old_v);
-        crate::btree::bkey::bkey_to_text(&mut out, k_k);
-        prt!(&mut out, " {:p}", k.v);
+        crate::btree::bkey::bkey_to_text(&mut out, k);
+        prt!(&mut out, " {:p}", v);
         panic!("{out}");
     }
 }
@@ -169,7 +154,8 @@ pub unsafe fn bch2_verify_update_old_key(trans: &BtreeTrans<'_>, i: &c::btree_in
 /// out - a trigger can queue updates, and move the entry.
 ///
 /// # Safety
-/// As run_one_mem_trigger().
+/// @i is queued: its key is the triggers' to edit while the commit runs, and
+/// may be one the update's caller lent.
 unsafe fn update_op<'a>(i: &c::btree_insert_entry, old_k: &'a c::bkey, flags: UpdateTriggerFlags) -> TriggerOp<'a> {
     TriggerOp {
         btree:        i.bits.btree_id(),
@@ -185,13 +171,10 @@ unsafe fn update_op<'a>(i: &c::btree_insert_entry, old_k: &'a c::bkey, flags: Up
 /// @flags - its snapshot's count of keys first, from its old key to its new,
 /// then its key type's trigger, once, with both keys, where the old and new
 /// types share one.
-///
-/// # Safety
-/// @i is an update of @trans's, in its commit.
-unsafe fn run_one_mem_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>, i: &mut c::btree_insert_entry,
-                              flags: UpdateTriggerFlags) -> Result<(), BchError>
+fn run_one_mem_trigger(t: &TransAttempt<'_, '_>, paths: &Paths<'_>, i: &c::btree_insert_entry,
+                       flags: UpdateTriggerFlags) -> Result<(), BchError>
 {
-    unsafe { bch2_verify_update_old_key(trans, i) };
+    verify_update_old_key(t, paths, i);
 
     let p = i.key().k.p;
     let (no_old, mut no_new) = (BkeyI::<c::Deleted>::at(p), BkeyI::<c::Deleted>::at(p));
@@ -229,15 +212,13 @@ unsafe fn run_one_mem_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>, 
 /// run_one_trans_trigger(): the next of @i's transactional triggers not run -
 /// both at once where the old and new types share one, else the overwrite,
 /// then the insert - then its snapshot's count of keys. A trigger can queue
-/// more updates, so it's handed copies, not @i.
-///
-/// # Safety
-/// As run_one_mem_trigger().
-unsafe fn run_one_trans_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>, i: &mut c::btree_insert_entry)
-    -> Result<(), BchError>
-{
-    unsafe { bch2_verify_update_old_key(trans, i) };
+/// more updates, so it's handed copies, and the updates aren't borrowed while
+/// it runs.
+fn run_one_trans_trigger(t: &TransAttempt<'_, '_>, idx: usize) -> Result<(), BchError> {
+    let mut paths = t.trans().paths();
+    verify_update_old_key(t, &paths, &paths.updates()[idx]);
 
+    let i = paths.update_mut(idx);
     let mut deleted = BkeyI::<c::Deleted>::at(i.key().k.p);
     let old_k = i.old_k;
     let mut flags = UpdateTriggerFlags::from_bits_retain(i.flags) | UpdateTriggerFlags::TRANSACTIONAL;
@@ -262,6 +243,7 @@ unsafe fn run_one_trans_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>
         trigger = new_ops.trigger;
     }
     op.flags = flags;
+    drop(paths);
 
     run_trigger(t, trigger, &mut op)?;
     if op.btree.has_snapshots() {
@@ -270,18 +252,15 @@ unsafe fn run_one_trans_trigger(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>
     Ok(())
 }
 
-/// @trans's updates - looked up by index each time, as C's loops do: a
-/// transactional trigger queues more, and a path it allocates can move them
-/// all, to a bigger array.
-fn nr_updates(trans: &BtreeTrans<'_>) -> usize {
-    trans.nr_updates.get().into()
+fn nr_updates(t: &TransAttempt<'_, '_>) -> usize {
+    t.trans().nr_updates.get().into()
 }
 
-/// # Safety
-/// @idx is below nr_updates(), and the update not otherwise borrowed.
-#[allow(clippy::mut_from_ref)]
-unsafe fn update<'a>(trans: &'a BtreeTrans<'_>, idx: usize) -> &'a mut c::btree_insert_entry {
-    unsafe { &mut *trans.updates.get().add(idx) }
+/// @t's update @idx, for @f - looked up by index each time, as C's loops do:
+/// a transactional trigger queues more, and a path it allocates can move them
+/// all, to a bigger array.
+fn with_update<R>(t: &TransAttempt<'_, '_>, idx: usize, f: impl FnOnce(&c::btree_insert_entry) -> R) -> R {
+    f(&t.trans().paths().updates()[idx])
 }
 
 fn trans_triggers_run(i: &c::btree_insert_entry) -> bool {
@@ -292,11 +271,11 @@ fn trans_triggers_run(i: &c::btree_insert_entry) -> bool {
 
 /// The commit's transactional triggers - its updates', and those of the
 /// updates they queue.
-pub(crate) unsafe fn run_trans_triggers(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
+pub(crate) fn run_trans_triggers(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
     let mut sort_id_start = 0;
 
-    while sort_id_start < nr_updates(trans) {
-        let sort_id = unsafe { update(trans, sort_id_start) }.sort_order;
+    while sort_id_start < nr_updates(t) {
+        let sort_id = with_update(t, sort_id_start, |i| i.sort_order);
         let mut idx;
 
         /*
@@ -312,12 +291,16 @@ pub(crate) unsafe fn run_trans_triggers(trans: &BtreeTrans<'_>, t: &TransAttempt
             let mut trans_trigger_run = false;
 
             idx = sort_id_start;
-            while idx < nr_updates(trans) && unsafe { update(trans, idx) }.sort_order <= sort_id {
-                let i = unsafe { update(trans, idx) };
-                if i.sort_order < sort_id {
+            while idx < nr_updates(t) {
+                let (sort_order, run) = with_update(t, idx, |i| (i.sort_order, trans_triggers_run(i)));
+                if sort_order > sort_id {
+                    break;
+                }
+
+                if sort_order < sort_id {
                     sort_id_start = idx;
-                } else if !trans_triggers_run(i) {
-                    unsafe { run_one_trans_trigger(trans, t, i) }?;
+                } else if !run {
+                    run_one_trans_trigger(t, idx)?;
                     trans_trigger_run = true;
                 }
                 idx += 1;
@@ -332,46 +315,41 @@ pub(crate) unsafe fn run_trans_triggers(trans: &BtreeTrans<'_>, t: &TransAttempt
     }
 
     if cfg!(CONFIG_BCACHEFS_DEBUG) {
-        for idx in 0..nr_updates(trans) {
-            assert!(trans_triggers_run(unsafe { update(trans, idx) }),
-                    "update {idx} of {}: transactional triggers not run", nr_updates(trans));
+        for idx in 0..nr_updates(t) {
+            assert!(with_update(t, idx, trans_triggers_run),
+                    "update {idx} of {}: transactional triggers not run", nr_updates(t));
         }
     }
     Ok(())
 }
 
 /// The commit's atomic triggers, then gc's, if it's running: those for the
-/// updates its walk has passed.
-///
-/// # Safety
-/// In @trans's commit, its atomic phase.
-pub(crate) unsafe fn run_mem_triggers(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
-    for idx in 0..nr_updates(trans) {
-        let i = unsafe { update(trans, idx) };
+/// updates its walk has passed. In the atomic phase, which has @paths.
+pub(crate) fn run_mem_triggers(t: &TransAttempt<'_, '_>, paths: &Paths<'_>) -> Result<(), BchError> {
+    for i in paths.updates() {
         let flags = UpdateTriggerFlags::from_bits_retain(i.flags);
 
         if i.has_atomic_triggers() && !flags.contains(UpdateTriggerFlags::NORUN) {
-            unsafe { run_one_mem_trigger(trans, t, i, flags | UpdateTriggerFlags::ATOMIC) }?;
+            run_one_mem_trigger(t, paths, i, flags | UpdateTriggerFlags::ATOMIC)?;
         }
     }
 
-    if trans.fs().gc.phase() != c::gc_phase::not_running {
-        unsafe { run_gc_triggers(trans, t) }?;
+    if t.fs().gc.phase() != c::gc_phase::not_running {
+        run_gc_triggers(t, paths)?;
     }
     Ok(())
 }
 
 #[cold]
-unsafe fn run_gc_triggers(trans: &BtreeTrans<'_>, t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
-    let gc = &trans.fs().gc;
+fn run_gc_triggers(t: &TransAttempt<'_, '_>, paths: &Paths<'_>) -> Result<(), BchError> {
+    let gc = &t.fs().gc;
 
-    for idx in 0..nr_updates(trans) {
-        let i = unsafe { update(trans, idx) };
+    for i in paths.updates() {
         let flags = UpdateTriggerFlags::from_bits_retain(i.flags);
 
         if i.has_triggers() && !flags.contains(UpdateTriggerFlags::NORUN) &&
            gc.visited(c::gc_pos::in_btree(i.bits.btree_id(), i.bits.level().into(), i.key().k.p)) {
-            unsafe { run_one_mem_trigger(trans, t, i, flags | UpdateTriggerFlags::GC) }?;
+            run_one_mem_trigger(t, paths, i, flags | UpdateTriggerFlags::GC)?;
         }
     }
     Ok(())

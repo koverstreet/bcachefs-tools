@@ -21,7 +21,7 @@ use crate::btree::journal_overlay;
 use crate::btree::key_cache::{bch2_btree_insert_key_cached, bch2_btree_key_cache_drop};
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{NodePtr, PathIdx, Paths, PathsUpdates};
-use crate::btree::trigger::{bch2_verify_update_old_key, run_mem_triggers, run_trans_triggers};
+use crate::btree::trigger::{run_mem_triggers, run_trans_triggers, verify_update_old_key};
 use crate::btree::types::BtreeNodeType;
 use crate::c;
 use crate::c::journal_flags as Journal;
@@ -708,7 +708,7 @@ impl BtreeTrans<'_> {
                     continue;
                 }
 
-                unsafe { bch2_verify_update_old_key(self, i) };
+                verify_update_old_key(t, paths, i);
 
                 let (btree, level) = (i.btree_id().0 as u8, i.level());
                 if names {
@@ -857,7 +857,7 @@ impl BtreeTrans<'_> {
             }
         }
 
-        unsafe { run_mem_triggers(self, t) }.map_err(|err| self.commit_fatal_err(err))?;
+        run_mem_triggers(t, paths).map_err(|err| self.commit_fatal_err(err))?;
 
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
             let mut validate_context = c::bkey_validate_context::default();
@@ -1017,7 +1017,7 @@ impl BtreeTrans<'_> {
             flags = flags.watermark_hipri();
         }
 
-        unsafe { run_trans_triggers(self, t) }?;
+        run_trans_triggers(t)?;
 
         let mut journal_u64s = 0;
 
