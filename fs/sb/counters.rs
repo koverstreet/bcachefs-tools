@@ -153,6 +153,12 @@ impl c::bch_fs_counters {
         self.now.at(i).sum()
     }
 
+    /// Counter @i set to @v: an event counted as it's set may as well not
+    /// have been.
+    fn set_now(&self, i: usize, v: u64) {
+        unsafe { self.now.at(i).set(v) }
+    }
+
     /// Counter @i at mount.
     pub fn mount(&self, i: usize) -> u64 {
         self.mount[i].load(Relaxed)
@@ -214,8 +220,7 @@ impl Fs {
             return;
         }
 
-        // SAFETY: an event counted as it's reset may as well not have been
-        unsafe { self.counters.now.at(idx).set(0) };
+        self.counters.set_now(idx, 0);
         self.counters.reset_relative(idx);
     }
 }
@@ -235,8 +240,7 @@ impl SbFieldOps for c::bch_sb_field_counters {
         let d: &[Le64] = sb.field::<c::bch_sb_field_counters>().map_or(&[], |f| &f.d);
         for (i, ctr) in COUNTERS.iter().enumerate() {
             if let Some(v) = d.get(ctr.stable_id as usize) {
-                // SAFETY: an event counted as it's set may as well not have been
-                unsafe { fs.counters.now.at(i).set(v.get()) };
+                fs.counters.set_now(i, v.get());
             }
         }
         Ok(())
