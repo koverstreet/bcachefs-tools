@@ -6,7 +6,7 @@
 
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bch2_bkey_maybe_mergable, bkey_eq, bkey_gt, bkey_le, bkey_lt, bkey_merge, BkeyI,
-                         BkeyS, BkeySC, BkeyWhole, MutBkey, BKEY_U64S};
+                         BkeyS, BkeySC, BkeyWhole, MutBkey, ValidatedVal, BKEY_U64S};
 use crate::btree::iter::{btree_id_cached, commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
 use crate::btree::journal_overlay;
@@ -28,7 +28,6 @@ use crate::util::vstructs::{Validated, ValidatedEntries, ViewEntries, ViewEntrie
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
 use core::ffi::{c_int, c_uint, c_ulong};
-use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ops::Range;
 use core::ptr::NonNull;
@@ -81,42 +80,46 @@ pub fn extent_whiteout_type(fs: &Fs, btree: Btree, k: &c::bkey) -> BkeyType {
 
 /// The key an update queues: the caller's, which the update only reads, until
 /// it has to change it - then its copy, in transaction memory, made once.
-struct UpdateKey<'k, 'a, 't> {
-    k:       TransBkey<'a, 't>,
-    owned:   bool,
-    _borrow: PhantomData<&'k BkeyI>,
+enum UpdateKey<'k, 'a, 't> {
+    Borrowed(&'k BkeyI, QueuedKey),
+    Owned(TransBkey<'a, 't>),
 }
 
 impl<'k, 'a, 't> UpdateKey<'k, 'a, 't> {
-    fn borrowed<V: ?Sized>(t: &TransAttempt<'a, 't>, k: &'k TransBkey<'_, 't, V>) -> Self {
-        unsafe { Self::from_raw(t, k.as_ptr(), k.buf_u64s) }
+    fn borrowed<V: ?Sized + ValidatedVal>(k: &'k TransBkey<'_, 't, V>) -> Self {
+        UpdateKey::Borrowed(k.as_ref(), QueuedKey::from(k))
     }
 
-    /// # Safety
-    /// @k is a key, @buf_u64s of room, that stays where it is, unchanged,
-    /// until @t's attempt is over: the update points at it.
-    unsafe fn from_raw(t: &TransAttempt<'a, 't>, k: *mut c::bkey_i, buf_u64s: u32) -> Self {
-        UpdateKey { k: unsafe { TransBkey::from_raw_room(t, k, buf_u64s) }, owned: false, _borrow: PhantomData }
-    }
-
-    fn owned(k: TransBkey<'a, 't>) -> Self {
-        UpdateKey { k, owned: true, _borrow: PhantomData }
+    fn key(&self) -> &BkeyI {
+        match self {
+            UpdateKey::Borrowed(k, _) => k,
+            UpdateKey::Owned(k)       => k.as_ref(),
+        }
     }
 
     fn k(&self) -> &c::bkey {
-        self.k.k()
+        &self.key().k
     }
 
     fn as_sc(&self) -> BkeySC<'_> {
-        BkeySC::from(&self.k)
+        BkeySC::from(self.key())
+    }
+
+    fn queued(&self) -> QueuedKey {
+        match self {
+            UpdateKey::Borrowed(_, q) => *q,
+            UpdateKey::Owned(k)       => QueuedKey::from(k),
+        }
     }
 
     fn to_mut(&mut self, t: &TransAttempt<'a, 't>) -> Result<&mut TransBkey<'a, 't>, BchError> {
-        if !self.owned {
-            self.k = t.bkey_copy(self.k.as_ref())?;
-            self.owned = true;
+        if let UpdateKey::Borrowed(k, _) = *self {
+            *self = UpdateKey::Owned(t.bkey_copy(k)?);
         }
-        Ok(&mut self.k)
+        match self {
+            UpdateKey::Owned(k)     => Ok(k),
+            UpdateKey::Borrowed(..) => unreachable!("copied, above"),
+        }
     }
 }
 
@@ -213,7 +216,7 @@ impl Fs {
     ) -> Result<(), BchError> {
         let trans = crate::btree_trans!(self);
         commit_do(&trans, disk_res, commit_flags,
-                  |t| t.insert_raw(btree_id, UpdateKey::owned(t.bkey_copy(key)?), iter_flags))
+                  |t| t.insert_raw(btree_id, UpdateKey::Owned(t.bkey_copy(key)?), iter_flags))
     }
 
     pub fn fs_log_msg(&self, msg: &dyn ToText) -> Result<(), BchError> {
@@ -393,8 +396,8 @@ pub unsafe fn bch2_trans_update_ip<'t>(trans: &'t BtreeTrans<'t>, iter: &BtreeIt
                                        k_buf_u64s: c_uint, flags: c::btree_iter_update_trigger_flags,
                                        ip: c_ulong) -> c_int {
     let t = unsafe { trans.attempt_in_progress() };
-    let k = unsafe { UpdateKey::from_raw(&t, k, k_buf_u64s) };
-    ret_to_c(t.update_ip(iter, k, UpdateTriggerFlags::from_bits_retain(flags.bits()), ip))
+    let k = unsafe { TransBkey::from_raw_room(&t, k, k_buf_u64s) };
+    ret_to_c(t.update_ip(iter, UpdateKey::borrowed(&k), UpdateTriggerFlags::from_bits_retain(flags.bits()), ip))
 }
 
 /// # Safety
@@ -403,8 +406,8 @@ pub unsafe fn bch2_trans_update_ip<'t>(trans: &'t BtreeTrans<'t>, iter: &BtreeIt
 pub unsafe fn bch2_btree_insert_trans(trans: &BtreeTrans<'_>, btree: Btree, k: *mut c::bkey_i,
                                       flags: c::btree_iter_update_trigger_flags) -> c_int {
     let t = unsafe { trans.attempt_in_progress() };
-    let k = unsafe { UpdateKey::from_raw(&t, k, (*k).k.u64s.into()) };
-    ret_to_c(t.insert_raw(btree, k, flags.bits()))
+    let k = unsafe { TransBkey::from_raw_room(&t, k, (*k).k.u64s.into()) };
+    ret_to_c(t.insert_raw(btree, UpdateKey::borrowed(&k), flags.bits()))
 }
 
 impl<'a, 't> TransAttempt<'a, 't> {
@@ -482,7 +485,10 @@ impl<'a, 't> TransAttempt<'a, 't> {
         iter:  &BtreeIter<'a>,
         k:     BkeySC<'_, V>,
         flags: UpdateTriggerFlags,
-    ) -> Result<TransBkey<'a, 't, V::Mut>, BchError> {
+    ) -> Result<TransBkey<'a, 't, V::Mut>, BchError>
+    where
+        V::Mut: ValidatedVal,
+    {
         let k = self.bkey_make_mut_noupdate(k)?;
         self.update(iter, &k, flags)?;
         Ok(k)
@@ -711,7 +717,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         self.delete_at(iter, flags)?;
 
-        *insert = UpdateKey::owned(update);
+        *insert = UpdateKey::Owned(update);
         Ok(())
     }
 
@@ -744,13 +750,13 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// path, is the iterator's own business. @key is borrowed too: it's in
     /// transaction memory, where the update points, and the caller can go on
     /// reading it - where it went, say.
-    pub fn update<V: ?Sized>(
+    pub fn update<V: ?Sized + ValidatedVal>(
         &self,
         iter:  &BtreeIter<'a>,
         key:   &TransBkey<'_, 't, V>,
         flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
-        self.update_ip(iter, UpdateKey::borrowed(self, key), flags, crate::ret_ip!())
+        self.update_ip(iter, UpdateKey::borrowed(key), flags, crate::ret_ip!())
     }
 
     fn update_ip(&self, iter: &BtreeIter<'a>, mut key: UpdateKey<'_, 'a, 't>,
@@ -795,7 +801,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             path_idx = iter.key_cache_path.get();
         }
 
-        let i = self.update_by_path(&mut paths, path_idx, QueuedKey::from(&key.k), flags, ip);
+        let i = self.update_by_path(&mut paths, path_idx, key.queued(), flags, ip);
 
         /*
          * If a key is present in the key cache, it must also exist in the
@@ -1171,7 +1177,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.journal_entry_add(c::bch_jset_entry_type::write_buffer_keys, btree.0 as u8, 0, k.as_bytes())
     }
 
-    pub fn insert<V: ?Sized>(
+    pub fn insert<V: ?Sized + ValidatedVal>(
         &self,
         btree: impl Into<u32>,
         key:   TransBkey<'_, 't, V>,
@@ -1181,14 +1187,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     /// As insert(), with flags for the iterator the insert goes through, too.
-    pub fn insert_with<V: ?Sized>(
+    pub fn insert_with<V: ?Sized + ValidatedVal>(
         &self,
         btree:      impl Into<u32>,
         key:        TransBkey<'_, 't, V>,
         iter_flags: BtreeIterFlags,
         flags:      UpdateTriggerFlags,
     ) -> Result<(), BchError> {
-        self.insert_raw(Btree(btree.into()), UpdateKey::borrowed(self, &key), iter_flags.bits() | flags.bits())
+        self.insert_raw(Btree(btree.into()), UpdateKey::borrowed(&key), iter_flags.bits() | flags.bits())
     }
 
     /// @flags are the iterator's and the update's, one enum, as C has them.
@@ -1199,13 +1205,13 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.update_ip(&iter, k, UpdateTriggerFlags::from_bits_retain(flags), crate::ret_ip!())
     }
 
-    pub fn insert_nonextent<V: ?Sized>(
+    pub fn insert_nonextent<V: ?Sized + ValidatedVal>(
         &self,
         btree: impl Into<u32>,
         key:   TransBkey<'_, 't, V>,
         flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
-        self.insert_nonextent_raw(Btree(btree.into()), UpdateKey::borrowed(self, &key), flags)
+        self.insert_nonextent_raw(Btree(btree.into()), UpdateKey::borrowed(&key), flags)
     }
 
     fn insert_nonextent_raw(&self, btree: Btree, k: UpdateKey<'_, 'a, 't>, flags: UpdateTriggerFlags)
