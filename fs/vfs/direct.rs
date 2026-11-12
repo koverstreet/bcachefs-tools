@@ -134,33 +134,25 @@ async fn dio_task<'h>(mut dio: Pin<&'h mut DioBio>, end: End, mut iter: CallersI
             let own = pin!(read::read(&mut dio.rbio, inum, flags));
             let own = crate::eager!(own);
 
-            let failed = loop {
-                if iter.get().count() == 0 {
-                    break None;
-                }
-                let nr_vecs = iter.get().bio_vecs();
-                let mut split = TaskSlot::exclusive_bio_in(&SPLITS, ptr::null_mut(), nr_vecs, c::req_op_REQ_OP_READ, |b| {
-                    pin_init!(DioBio { rbio <- c::bch_read_bio::new(fs, opts, subvol, err_report, b) }? BchError)
-                }).expect("a split's box: its pool waits for an element, and an Rbio's init can't fail");
+            // A split takes as much of @iter as its pages pin into; one that
+            // fails pinned none, and has nothing to release
+            let started = core::iter::from_fn(|| (iter.get().count() != 0).then(|| {
+                    let mut split = TaskSlot::exclusive_bio_in(&SPLITS, ptr::null_mut(), iter.get().bio_vecs(),
+                                                               c::req_op_REQ_OP_READ, |b| {
+                        pin_init!(DioBio { rbio <- c::bch_read_bio::new(fs, opts, subvol, err_report, b) }? BchError)
+                    }).expect("a split's box: its pool waits for an element, and an Rbio's init can't fail");
+                    set_up(split.home().bio_mut(), iter.get(), &mut offset, should_dirty).map(|()| split)
+                }))
+                .try_for_each(|split| {
+                    let r = splits.get();
+                    unsafe {
+                        split?.start_inline(Queue::system_dfl(), move |s| split_task(s, r, inum, flags, should_dirty))
+                    };
+                    Ok(())
+                });
 
-                if let Err(e) = set_up(split.home().bio_mut(), iter.get(), &mut offset, should_dirty) {
-                    break Some((split, e));
-                }
-                let r = splits.get();
-                unsafe {
-                    split.start_inline(Queue::system_dfl(), move |s| split_task(s, r, inum, flags, should_dirty))
-                };
-            };
-
-            let ret = match failed {
-                None => Ok(()),
-                Some((mut split, e)) => {
-                    split.home().bio_mut().release_user_pages(should_dirty).await;
-                    Err(e)
-                }
-            };
             let splits = splits.wait(Resume::Inline).await;
-            own.await.and(splits).and(ret)
+            own.await.and(splits).and(started)
         }
     };
 
