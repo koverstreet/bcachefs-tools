@@ -134,7 +134,7 @@ use crate::debug::trace::events;
 use crate::errcode::{bch_errcode, BchError};
 use crate::format::{BkeyType, SbFeature};
 use crate::journal::pins::PinsRead;
-use crate::locking::MemallocFlags;
+use crate::locking::{Guard as _, MemallocFlags};
 use crate::init::recovery::NotRw;
 use crate::journal::entries::EntryWriter;
 use crate::util::alloc::KVVec;
@@ -1724,11 +1724,12 @@ crate::fs_delayed_work! {
 }
 
 impl NotRw<'_> {
-    pub(crate) fn journal_add_rewind_range(&self, from: u64, to: u64) -> Result<(), BchError> {
-        unsafe { self.journal_rewind_ranges() }.push(c::journal_rewind_range { from, to })?;
+    pub(crate) fn journal_add_rewind_range(&mut self, from: u64, to: u64) -> Result<(), BchError> {
+        let fs = self.fs;
+        self.get_mut_of(&fs.journal.rewind_ranges).push(c::journal_rewind_range { from, to })?;
 
-        self.fs.journal.early_entry_add(c::bch_jset_entry_type::rewind, 0, 0,
-                                        [from.to_le(), to.to_le()].as_bytes())
+        fs.journal.early_entry_add(c::bch_jset_entry_type::rewind, 0, 0,
+                                   [from.to_le(), to.to_le()].as_bytes())
     }
 }
 

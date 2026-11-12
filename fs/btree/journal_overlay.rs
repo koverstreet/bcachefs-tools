@@ -378,14 +378,17 @@ impl c::journal_keys {
         unsafe { self.keys.protected_mut() }
     }
 
-    /// The keys and pre_sort, not rw: two fields, had at once.
-    fn keys_and_pre_sort<'a>(&'a self, not_rw: &'a mut NotRw<'_>)
-        -> (&'a mut GapBuffer<c::journal_key>, DArrayLoan<'a, c::journal_key>)
+    /// What sorting works on, not rw, had at once: the keys and pre_sort, and
+    /// the journal's rewind ranges, read.
+    fn sort_parts<'a>(&'a self, not_rw: &'a mut NotRw<'_>)
+        -> (&'a mut GapBuffer<c::journal_key>, DArrayLoan<'a, c::journal_key>, &'a [c::journal_rewind_range])
     {
+        let fs = not_rw.fs;
+        let rewind_ranges: *const KVVec<c::journal_rewind_range> = not_rw.get_of(&fs.journal.rewind_ranges);
         let keys: *mut GapBuffer<c::journal_key> = not_rw.get_mut_of(&self.keys);
         let pre_sort = not_rw.get_mut_of(&self.pre_sort);
         // pre_sort is kvmalloc()'d, if allocated
-        unsafe { (&mut *keys, DArrayLoan::new(pre_sort)) }
+        unsafe { (&mut *keys, DArrayLoan::new(pre_sort), &*rewind_ranges) }
     }
 
     fn seq(&self) -> u64 {
@@ -692,7 +695,7 @@ unsafe fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: *mut 
     let n = c::journal_key::new_allocated(btree, level, k);
 
     if !fs.flags.get(f::btree_running) {
-        return jk.keys_and_pre_sort(not_rw).1.push(n)
+        return jk.sort_parts(not_rw).1.push(n)
             .map_err(|_| fs.err(e::BCH_ERR_ENOMEM_journal_key_insert));
     }
 
@@ -997,8 +1000,8 @@ fn sort_dedup(jk: &c::journal_keys, keys: &mut GapBuffer<c::journal_key>) {
     keys.truncate(dst);
 }
 
-fn journal_seq_is_rewound(fs: &Fs, seq: u64) -> bool {
-    fs.journal.rewind_ranges.iter().any(|r| seq > r.to && seq <= r.from)
+fn journal_seq_is_rewound(rewind_ranges: &[c::journal_rewind_range], seq: u64) -> bool {
+    rewind_ranges.iter().any(|r| seq > r.to && seq <= r.from)
 }
 
 /// The keys, from the journal entries read - again, if they were already,
@@ -1007,7 +1010,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
     let jk = fs.journal_keys_get().expect("journal keys sorted after recovery was done with them");
     let jk = jk.value();
     let mut not_rw = fs.not_rw();
-    let (keys, mut pre_sort) = jk.keys_and_pre_sort(&mut not_rw);
+    let (keys, mut pre_sort, rewind_ranges) = jk.sort_parts(&mut not_rw);
     let (mut nr_read, mut nr_extra_sorts) = (0usize, 0usize);
     let start_seq = match fs.journal_scrub_seq.get() { 0 => fs.journal_replay_seq_start.get(), s => s };
 
@@ -1017,7 +1020,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
         cond_resched();
 
         let seq = j.seq.get();
-        let seq_rewound = journal_seq_is_rewound(fs, seq);
+        let seq_rewound = journal_seq_is_rewound(rewind_ranges, seq);
 
         if seq_rewound && !j.has_overwrites() {
             bch_err!(fs, "cannot rewind journal seq {seq}: no overwrite entries (journal_transaction_names was off)");

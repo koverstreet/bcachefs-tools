@@ -21,7 +21,7 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Dev, Fs};
 use crate::init::error::id;
 use crate::init::recovery::NotRw;
-use crate::locking::Locked;
+use crate::locking::{Guard as _, Locked};
 use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
 use crate::util::alloc::{init_at, kvzalloc, ABox, AVec, AllocError, ConstAlign, KVVec};
@@ -274,12 +274,6 @@ impl NotRw<'_> {
     /// No other reference to it lives meanwhile.
     unsafe fn journal_device<'d>(&self, ca: &'d Dev) -> &'d mut c::journal_device {
         unsafe { &mut *(&raw const ca.journal).cast_mut() }
-    }
-
-    /// # Safety
-    /// As journal_device()'s.
-    pub(crate) unsafe fn journal_rewind_ranges(&self) -> &mut KVVec<c::journal_rewind_range> {
-        unsafe { &mut *self.fs.journal.rewind_ranges.as_ptr() }
     }
 }
 
@@ -1171,7 +1165,7 @@ pub fn journal_reread_for_rewind(fs: &Fs) -> Result<(), BchError> {
     let entries = unsafe { not_rw.journal_entries() };
     let mut need_from = u64::MAX;
 
-    for range in fs.journal.rewind_ranges.iter() {
+    for range in not_rw.get_of(&fs.journal.rewind_ranges).iter() {
         let Some(p) = entries.get(fs, range.to) else {
             bch_err!(fs, "journal rewind: flush entry at seq {} not found", range.to);
             return fs.throw(bch_errcode::BCH_ERR_EINVAL_journal_rewind_before_discard);
@@ -1286,7 +1280,7 @@ fn newest_flush(fs: &Fs, entries: &mut JournalEntries) -> Result<Newest, BchErro
 pub fn journal_read(fs: &Fs) -> Result<c::journal_start_info, BchError> {
     let bsearch_used = fs.opts.read_entire_journal.get() == 0;
 
-    let not_rw = fs.not_rw();
+    let mut not_rw = fs.not_rw();
     stack_pin_init!(let read: ReadLock<'_> = new_lock!(ReadState {
         entries:   unsafe { not_rw.journal_entries() },
         last_seq:  0,
@@ -1392,11 +1386,13 @@ pub fn journal_read(fs: &Fs) -> Result<c::journal_start_info, BchError> {
     }
 
     journal_check_for_missing(fs, state.entries, drop_before, info.replay_end)?;
-    validate_kept(fs, &not_rw, state.entries, drop_before)?;
+    validate_kept(fs, &mut not_rw, state.entries, drop_before)?;
     Ok(info)
 }
 
-fn validate_kept(fs: &Fs, not_rw: &NotRw<'_>, entries: &mut JournalEntries, drop_before: u64) -> Result<(), BchError> {
+fn validate_kept(fs: &Fs, not_rw: &mut NotRw<'_>, entries: &mut JournalEntries, drop_before: u64)
+    -> Result<(), BchError>
+{
     for i in entries.slots_mut() {
         let Some(i) = i.as_mut().filter(|i| !i.ignored()) else { continue };
 
@@ -1435,7 +1431,7 @@ fn validate_kept(fs: &Fs, not_rw: &NotRw<'_>, entries: &mut JournalEntries, drop
                 }
                 Ok(c::JsetEntryRef::rewind(r)) => {
                     let range = c::journal_rewind_range { from: r.from.get(), to: r.to.get() };
-                    let _ = unsafe { not_rw.journal_rewind_ranges() }.push(range);
+                    let _ = not_rw.get_mut_of(&fs.journal.rewind_ranges).push(range);
                 }
                 _ => {}
             }

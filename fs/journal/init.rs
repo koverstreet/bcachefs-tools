@@ -221,7 +221,7 @@ impl c::journal {
         let j = unsafe { &mut *j };
 
         drop(core::mem::take(&mut *j.lock.get_mut().early_journal_entries));
-        drop(core::mem::take(&mut *j.rewind_ranges));
+        drop(core::mem::take(j.rewind_ranges.get_mut()));
     }
 }
 

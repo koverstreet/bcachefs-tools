@@ -4,6 +4,7 @@
 
 use crate::btree::bkey::BKEY_U64S;
 use crate::fs::{Dev, Fs};
+use crate::init::recovery::NotRw;
 use crate::cstructs::c;
 use crate::data::keylist::PaddedKey;
 use crate::data::ptrs::IoFailures;
@@ -544,7 +545,7 @@ type FsWrites = crate::field!(super.writes);
 /* And its ro refs, for what doesn't need it rw */
 type FsRoRef = crate::field!(super.ro_ref);
 pub type ReclaimThread = rust_only!(Daemon);
-pub type RewindRanges = rust_only!(KVVec<c::journal_rewind_range>);
+pub type RewindRanges = rust_only!(LockedBy<KVVec<c::journal_rewind_range>, (), NotRw<'static>>);
 
 /* Embedded in struct bch_fs */
 nest! {
