@@ -226,7 +226,6 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, StateLockWrite};
 use crate::format::{DataType, MemberInitialized, MemberState, MetadataVersion, SbFeature};
 use crate::locking::MemallocFlags;
-use crate::opts::c_export::__bch2_data_types;
 use crate::sb::io::{read_super, SbReadScratch};
 use crate::sb::members::{member_exists, member_state_str, mi_field_upgrades, sb_member,
                          sb_member_alloc, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
@@ -1136,9 +1135,7 @@ impl StateLockWrite<'_> {
 
             let data = ca.has_data();
             if data != 0 {
-                prt!(err, "Remove failed, still has data (");
-                unsafe { err.prt_bitflags(__bch2_data_types.as_ptr(), data.into()) };
-                prt!(err, ")\n");
+                prt!(err, "Remove failed, still has data ({})\n", names::set::<DataType>(data.into()));
                 return Err(BchError::from(c::EBUSY));
             }
 
