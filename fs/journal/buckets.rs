@@ -275,7 +275,7 @@ impl Splice {
 }
 
 /* The ring, and its nr for those without the lock */
-pub type JournalBuckets = LockedBy<JournalRing, Volatile<u32>>;
+pub type JournalBuckets = LockedBy<JournalRing, Volatile<u32>, crate::field!(super.fs->journal.lock)>;
 
 pub fn new() -> JournalBuckets {
     let ring = JournalRing {
@@ -289,13 +289,11 @@ pub fn new() -> JournalBuckets {
 
 impl Dev {
     pub fn journal_ring<'g>(&'g self, j: &'g JournalGuard<'_>) -> &'g JournalRing {
-        assert!(core::ptr::eq(j.lock(), &self.fs().journal.lock), "journal_ring(): another filesystem's journal lock");
-        unsafe { self.journal.buckets.protected() }
+        self.journal.buckets.protected(j)
     }
 
     pub fn journal_ring_mut<'g>(&'g self, j: &'g mut JournalGuard<'_>) -> &'g mut JournalRing {
-        assert!(core::ptr::eq(j.lock(), &self.fs().journal.lock), "journal_ring(): another filesystem's journal lock");
-        unsafe { self.journal.buckets.protected_mut() }
+        self.journal.buckets.protected_mut(j)
     }
 
     pub fn with_journal_ring<R>(&self, f: impl FnOnce(&mut JournalRing) -> R) -> R {
@@ -324,7 +322,7 @@ impl c::journal_device {
 
     /// Before the journal starts: through the only reference to it.
     pub fn ring_mut(&mut self) -> &mut JournalRing {
-        self.buckets.get_mut()
+        self.buckets.value_mut().get_mut()
     }
 }
 

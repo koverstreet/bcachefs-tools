@@ -11,7 +11,7 @@ use crate::data::write::DevWriteRef;
 use crate::types::{CacheAligned, RustOnly, c_default, rust_only};
 use crate::util::alloc::{kvfree_sized, kvzalloc_gfp, AllocError, KVVec};
 use crate::data_structures::fixed_fifo::FixedFifo;
-use crate::util::place::Contained;
+use crate::util::place::{Contained, Placed};
 use crate::util::projections::Volatile;
 use crate::util::vstructs::{from_ffi, from_ffi_mut, Head, Unvalidated};
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
@@ -716,7 +716,7 @@ impl journal {
 pub struct journal_device {
     #[pin]
     #[init(RustOnly::new(crate::journal::buckets::new()))]
-    pub buckets: rust_only!(JournalBuckets),
+    pub buckets: Placed<rust_only!(JournalBuckets), crate::at!(journal_device.buckets)>,
 
     pub sectors_free: Volatile<c_uint>,
 
