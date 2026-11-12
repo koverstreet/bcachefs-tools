@@ -38,6 +38,7 @@ use crate::util::backtrace::{prt_symbol, prt_task_backtrace};
 use crate::util::kernel::{likely, prefetch, unlikely};
 use crate::util::log::LogMsg;
 use crate::util::refcount::TryRefcount;
+use crate::init::recovery::NotRw;
 use crate::util::sched;
 use crate::util::time_stats::TimeStats;
 use crate::util::vstructs::{plain_bytes, EntryWalk, Unsized, Unvalidated, Validated};
@@ -473,16 +474,17 @@ impl BtreeTrans<'_> {
         Ok(())
     }
 
-    fn journal_replay_insert_keys(&self, t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
+    fn journal_replay_insert_keys(&self, t: &TransAttempt<'_, '_>, not_rw: &mut NotRw<'_>) -> Result<(), BchError> {
         let fs = self.fs();
 
         for (i, k) in self.paths().update_keys() {
-            journal_overlay::insert(fs, i.btree_id(), i.level().into(), k)?;
+            journal_overlay::insert(not_rw, i.btree_id(), i.level().into(), k)?;
         }
 
         for_each_journal_entry(t, |i| {
             if is_keys_entry(i) {
-                for_each_entry_key(i, |k| journal_overlay::insert(fs, Btree(i.btree_id.into()), i.level.into(), k))?;
+                let btree = Btree(i.btree_id.into());
+                for_each_entry_key(i, |k| journal_overlay::insert(not_rw, btree, i.level.into(), k))?;
             }
 
             if c::bch_jset_entry_type(i.type_.into()) == c::bch_jset_entry_type::btree_root {
@@ -493,7 +495,7 @@ impl BtreeTrans<'_> {
             Ok(())
         })?;
 
-        self.accounting.get().iter(t).try_for_each(|k| journal_overlay::insert(fs, Btree::accounting, 0, k.key()))
+        self.accounting.get().iter(t).try_for_each(|k| journal_overlay::insert(not_rw, Btree::accounting, 0, k.key()))
     }
 
     /*
@@ -510,7 +512,7 @@ impl BtreeTrans<'_> {
             return fs.throw(bch_errcode::BCH_ERR_erofs_trans_commit);
         }
 
-        assert!(sched::current() == fs.recovery_task.load(Relaxed));
+        let mut not_rw = fs.not_rw();
 
         loop {
             self.fs_usage_delta.set(Default::default());
@@ -524,7 +526,7 @@ impl BtreeTrans<'_> {
                         account_disk_usage_change(t);
                         drop(mark);
 
-                        match self.journal_replay_insert_keys(t) {
+                        match self.journal_replay_insert_keys(t, &mut not_rw) {
                             Ok(()) => {
                                 fs.event_inc_trace(events::transaction_commit, |out| {
                                     prt!(out, "{}\nseq {}\n", self.fn_name(), self.journal_res_seq.get());

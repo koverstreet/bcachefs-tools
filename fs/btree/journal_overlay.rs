@@ -708,7 +708,8 @@ pub unsafe fn bch2_journal_key_check_or_overwrite(c: &Opaque<Fs>, btree: Btree, 
 ///
 /// # Safety
 /// @k is a key, kmalloc()'d, the caller's to give.
-unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> Result<(), BchError> {
+unsafe fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: *mut c::bkey_i) -> Result<(), BchError> {
+    let fs = not_rw.fs;
     let jk = fs.journal_keys_get().expect("journal keys inserted after recovery was done with them");
     let jk = jk.value();
     let n = c::journal_key::new_allocated(btree, level, k);
@@ -723,7 +724,6 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
     let k = unsafe { &mut *BkeyI::from_raw_mut(k) };
     let idx = jk.search(btree, level, k.k.p);
 
-    let mut not_rw = fs.not_rw();
     let keys = not_rw.get_mut_of(&jk.keys);
 
     if let Some(o) = keys.get_mut(idx).filter(|o| jk.key_cmp(&n, o).is_eq()) {
@@ -750,19 +750,19 @@ unsafe fn insert_take(fs: &Fs, btree: Btree, level: u32, k: *mut c::bkey_i) -> R
 }
 
 /// insert_take() of a copy of @k.
-pub(crate) fn insert(fs: &Fs, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
+pub(crate) fn insert(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
     let bytes = k.k.bytes();
-    let n = crate::util::alloc::kmalloc(bytes).map_err(|_| fs.err(e::BCH_ERR_ENOMEM_journal_key_insert))?;
+    let n = crate::util::alloc::kmalloc(bytes).map_err(|_| not_rw.fs.err(e::BCH_ERR_ENOMEM_journal_key_insert))?;
     // SAFETY: @bytes of key, into as many of ours; then ours to hand over
     unsafe {
         ptr::copy_nonoverlapping(k.as_ffi().cast::<u8>(), n.as_ptr(), bytes);
-        insert_take(fs, btree, level, n.as_ptr().cast())
+        insert_take(not_rw, btree, level, n.as_ptr().cast())
     }
 }
 
 /// A deleted key at @pos: what's there in the btree, gone.
-pub(crate) fn delete(fs: &Fs, btree: Btree, level: u32, pos: Bpos) -> Result<(), BchError> {
-    insert(fs, btree, level, BkeyI::<c::Deleted>::at(pos).as_ref())
+pub(crate) fn delete(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, pos: Bpos) -> Result<(), BchError> {
+    insert(not_rw, btree, level, BkeyI::<c::Deleted>::at(pos).as_ref())
 }
 
 /// Only from the recovery thread while we're still RO - once we're RW, the
@@ -774,7 +774,7 @@ pub(crate) fn delete(fs: &Fs, btree: Btree, level: u32, pos: Bpos) -> Result<(),
 pub unsafe fn bch2_journal_key_insert(c: &Opaque<Fs>, btree: Btree, level: c_uint,
                                       k: *const c::bkey_i) -> c_int {
     // SAFETY: the caller's
-    ret_to_c(insert(Fs::from_c(c), btree, level, unsafe { &*BkeyI::from_raw(k) }))
+    ret_to_c(insert(&mut Fs::from_c(c).not_rw(), btree, level, unsafe { &*BkeyI::from_raw(k) }))
 }
 
 // ── Iterating: a btree node's keys, with the journal's overlaid ──────────

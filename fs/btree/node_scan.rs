@@ -516,7 +516,7 @@ pub(crate) fn get_scanned_nodes(fs: &Fs, btree: Btree, level: u32, node_min: Bpo
             _    => {}
         }
 
-        journal_overlay::insert(fs, btree, level + 1, k.as_bkey_i())?;
+        journal_overlay::insert(&mut fs.not_rw(), btree, level + 1, k.as_bkey_i())?;
     }
 
     if *nodes_found != 0 {
